@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { API_BASE } from "@/lib/api";
 import { Panel } from "@/components/panel";
 import { QualityBadge } from "@/components/quality-badge";
-import { getLimitUpPool, getMarketOverview } from "@/lib/api";
+import { getLimitUpPool, getMarketOverview, getSentiment, type Sentiment } from "@/lib/api";
 
 interface Breadth {
   up: number; down: number; flat: number; limit_up: number; limit_down: number;
@@ -13,25 +13,37 @@ interface Breadth {
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
 import type { LimitUpRecord, Quote } from "@/types/market";
 
+const PHASE_STYLE: Record<string, string> = {
+  冰点: "bg-sky-500/15 text-sky-300 border-sky-500/40",
+  修复: "bg-teal-500/15 text-teal-300 border-teal-500/40",
+  发酵: "bg-amber-500/15 text-amber-300 border-amber-500/40",
+  高潮: "bg-up/20 text-up border-up/50",
+  分歧: "bg-orange-500/15 text-orange-300 border-orange-500/40",
+  退潮: "bg-down/20 text-down border-down/50",
+};
+
 export default function MarketPage() {
   const [indices, setIndices] = useState<Quote[]>([]);
   const [totalAmount, setTotalAmount] = useState<number | null>(null);
   const [pool, setPool] = useState<LimitUpRecord[]>([]);
   const [breadth, setBreadth] = useState<Breadth | null>(null);
+  const [sent, setSent] = useState<Sentiment | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState("");
 
   const load = useCallback(async () => {
     try {
-      const [overview, zt, breadthRes] = await Promise.all([
+      const [overview, zt, breadthRes, sentRes] = await Promise.all([
         getMarketOverview(),
         getLimitUpPool().catch(() => [] as LimitUpRecord[]),
         fetch(`${API_BASE}/api/market/breadth`).then((r) => r.json()).catch(() => null),
+        fetch(`${API_BASE}/api/market/sentiment`).then((r) => r.json()).catch(() => null),
       ]);
       setIndices(overview.indices);
       setTotalAmount(overview.total_amount);
       setPool(zt.slice(0, 10));
       setBreadth(breadthRes?.data?.breadth ?? null);
+      setSent(sentRes?.data ?? null);
       setError(null);
       setUpdatedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
     } catch {
@@ -95,6 +107,26 @@ export default function MarketPage() {
           宽度口径：全市场快照价格法（{breadth.total} 只）；涨停 {breadth.limit_up} 只含收盘贴板未封住者，
           权威封板口径见涨停池页（东财）。两市总额（含北交所）{fmtAmount(breadth.total_amount)}。
         </p>
+      )}
+
+      {sent && (
+        <div className="shrink-0 rounded-xl border border-zinc-200 px-4 py-3 dark:border-zinc-800">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+            <span className={`rounded-md border px-2.5 py-1 text-sm font-semibold ${PHASE_STYLE[sent.phase] ?? ""}`}>
+              {sent.phase}
+            </span>
+            <span className="text-xs text-zinc-400">
+              情绪温度 <span className="font-mono text-base font-semibold text-zinc-100">{sent.temperature}</span>/100
+            </span>
+            <span className="text-xs text-zinc-400">置信度 {sent.confidence}</span>
+            <span className="text-xs text-zinc-400">
+              {sent.indicators.slice(0, 6).map((i) => `${i.name} ${i.value ?? "--"}`).join(" · ")}
+            </span>
+            <span className="ml-auto text-xs text-zinc-500" title={`${sent.reasons.join("；")}｜误判：${sent.misjudge_caveats.join("；")}｜切换：${sent.switch_conditions}`}>
+              判定依据：{sent.reasons[0]}…
+            </span>
+          </div>
+        </div>
       )}
 
       <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-2">

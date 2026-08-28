@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date
 
@@ -22,6 +23,45 @@ def _meta(hub: QuoteHub) -> dict:
         "last_success_refresh": hub.last_success_refresh.isoformat() if hub.last_success_refresh else None,
         "generated_at": utcnow().isoformat(),
     }
+
+
+@router.get("/market/sentiment")
+async def market_sentiment(request: Request, hub: QuoteHub = Depends(get_hub)) -> dict:
+    """情绪周期判定（§5.5）：阶段+温度+指标依据+置信度+误判原因+切换条件。结果缓存 60s。"""
+    import time as _time
+
+    from app.sentiment.engine import compute_sentiment
+    from datetime import timedelta
+
+    svc = request.app.state.snapshot_service
+    if svc.breadth is None:
+        raise HTTPException(status_code=503, detail="全市场快照尚未就绪")
+    cache = getattr(request.app.state, "_sent_cache", None)
+    if cache and _time.time() - cache[0] < 60:
+        return cache[1]
+
+    today = date.today()
+    yesterday = today - timedelta(days=2 if today.weekday() == 0 else 1)  # 跳过周一的周末
+
+    async def _pool(d: date) -> list:
+        try:
+            return await hub.provider.get_limit_up_pool(d)
+        except Exception as exc:
+            log.warning("sentiment pool %s failed: %s", d, exc)
+            return []
+
+    pool_today, pool_yesterday = await asyncio.gather(_pool(today), _pool(yesterday))
+    result = compute_sentiment(svc.breadth, pool_today, pool_yesterday, svc.snapshot)
+    payload = {
+        "data": {
+            **result,
+            "pool_today_count": len(pool_today),
+            "pool_yesterday_count": len(pool_yesterday),
+        },
+        "meta": _meta(hub),
+    }
+    request.app.state._sent_cache = (_time.time(), payload)
+    return payload
 
 
 @router.get("/market/breadth")

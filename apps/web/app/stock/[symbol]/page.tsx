@@ -4,14 +4,15 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { KlineChart } from "@/components/kline-chart";
+import { MinuteChart } from "@/components/minute-chart";
 import { Panel } from "@/components/panel";
 import { QualityBadge } from "@/components/quality-badge";
 import { PriceFlash } from "@/components/price-flash";
-import { addToWatchlist, getKline, getOrderBook, getQuotes, getTrades } from "@/lib/api";
 import { fmt, fmtAmount, fmtVolume, pctColor, pctText, timeText } from "@/lib/format";
+import { addToWatchlist, getKline, getMinuteLine, getOrderBook, getQuotes, getTrades, type MinutePoint } from "@/lib/api";
 import type { Kline, OrderBook, Quote, Trade } from "@/types/market";
 
-type Tab = "kline" | "book" | "trades";
+type Tab = "kline" | "minute" | "book" | "trades";
 
 export default function StockPage() {
   const params = useParams<{ symbol: string }>();
@@ -20,6 +21,7 @@ export default function StockPage() {
   const [bars, setBars] = useState<Kline[]>([]);
   const [book, setBook] = useState<OrderBook | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
+  const [minutes, setMinutes] = useState<MinutePoint[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("kline");
   const [inWatchlist, setInWatchlist] = useState(false);
@@ -45,14 +47,16 @@ export default function StockPage() {
 
   const loadDetail = useCallback(async () => {
     if (!/^\d{6}$/.test(symbol)) return;
-    const [b, ob, tr] = await Promise.all([
+    const [b, ob, tr, minutes] = await Promise.all([
       getKline(symbol, "1d", 250).catch(() => [] as Kline[]),
       getOrderBook(symbol).catch(() => null),
       getTrades(symbol, 50).catch(() => [] as Trade[]),
+      getMinuteLine(symbol).catch(() => [] as MinutePoint[]),
     ]);
     setBars(b);
     setBook(ob);
     setTrades(tr);
+    setMinutes(minutes);
   }, [symbol]);
 
   useEffect(() => {
@@ -153,6 +157,7 @@ export default function StockPage() {
         {(
           [
             ["kline", "K 线"],
+            ["minute", "分时"],
             ["book", "盘口"],
             ["trades", "逐笔成交"],
           ] as const
@@ -177,6 +182,16 @@ export default function StockPage() {
             <KlineChart bars={bars} height={420} />
           ) : (
             <p className="px-4 py-10 text-center text-sm text-zinc-400">等待 K 线数据…</p>
+          )}
+        </Panel>
+      )}
+
+      {tab === "minute" && (
+        <Panel title="当日分时（1 分钟）" source={minutes[0]?.source} className="min-h-[420px]">
+          {minutes.length > 0 ? (
+            <MinuteChart points={minutes} className="h-[420px]" />
+          ) : (
+            <p className="px-4 py-10 text-center text-sm text-zinc-400">暂无分时数据</p>
           )}
         </Panel>
       )}

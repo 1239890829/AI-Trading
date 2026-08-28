@@ -68,6 +68,36 @@ export async function searchSymbols(q: string): Promise<SymbolSearchItem[]> {
   return (await getJson<SymbolSearchItem[]>(`/api/search?q=${encodeURIComponent(q)}`)).data;
 }
 
+export interface MinutePoint {
+  ts: string;
+  price: number;
+  volume?: number | null;
+  cum_amount?: number | null;
+  source: string;
+}
+
+export interface Sentiment {
+  phase: string;
+  temperature: number;
+  confidence: string;
+  reasons: string[];
+  misjudge_caveats: string[];
+  switch_conditions: string;
+  indicators: { name: string; value: string | number | null; note?: string }[];
+  ladder: Record<string, number>;
+  judged_at: string;
+  pool_today_count?: number;
+  pool_yesterday_count?: number;
+}
+
+export async function getMinuteLine(symbol: string): Promise<MinutePoint[]> {
+  return (await getJson<{ symbol: string; points: MinutePoint[] }>(`/api/minute-line/${symbol}`)).data.points;
+}
+
+export async function getSentiment(): Promise<Sentiment> {
+  return (await getJson<Sentiment>("/api/market/sentiment")).data;
+}
+
 export async function getWatchlist(): Promise<WatchlistItem[]> {
   return (await getJson<WatchlistItem[]>("/api/watchlist")).data;
 }
