@@ -121,6 +121,16 @@ async def trades(symbol: str, limit: int = Query(default=50, ge=1, le=200), hub:
     return {"data": [t.model_dump(mode="json") for t in rows], "meta": _meta(hub)}
 
 
+@router.get("/minute-line/{symbol}")
+async def minute_line(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
+    """当日 1 分钟分时（价格/成交量/累计成交额）。逐笔成交不可用时，这是盘中细粒度的替代口径。"""
+    try:
+        points = await hub.provider.get_minute_line(symbol)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"分时数据源失败：{exc}")
+    return {"data": {"symbol": symbol, "points": points}, "meta": _meta(hub)}
+
+
 @router.get("/limit-up")
 async def limit_up(
     date_str: str | None = Query(default=None, alias="date", description="YYYY-MM-DD，默认今天"),

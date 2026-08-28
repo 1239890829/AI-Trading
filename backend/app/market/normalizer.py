@@ -210,7 +210,9 @@ def normalize_longhu(raw: dict) -> LongHuRecord | None:
 
 def normalize_search(raw: dict) -> tuple[str, str | None, str | None] | None:
     code = raw.get("Code")
-    if not code:
+    # 只收 A 股/指数：6 位数字代码（东财 suggest 会混入港股等 5 位代码）
+    if not code or len(str(code)) != 6 or not str(code).isdigit():
         return None
-    mkt = {1: "SH", 0: "SZ"}.get(int(_num(raw.get("MktNum")) or -1))
+    m = _num(raw.get("MktNum"))
+    mkt = {1: "SH", 0: "SZ"}.get(int(m)) if m is not None else None  # 注意 0=深市，勿用 or 短路
     return str(code), raw.get("Name"), mkt

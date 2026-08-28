@@ -298,3 +298,22 @@ class MockProvider:
             if q in code or (name and q in name):
                 items.append(SymbolSearchItem(symbol=code, name=name, market=market, source=SOURCE))
         return items[:10]
+
+    async def get_minute_line(self, symbol: str) -> list[dict]:
+        """确定性分钟分时（当日 09:30 起 240 分钟随机游走）。"""
+        today = self._clock().date()
+        base = _base_price(symbol)
+        rnd = random.Random(_seed("ml", symbol, today))
+        price = round(base * (1 + rnd.uniform(-0.01, 0.01)), 2)
+        points = []
+        minutes = (self._clock() - datetime(today.year, today.month, today.day)).seconds // 60
+        minutes = max(min(minutes, 240), 5)
+        cum = 0.0
+        for i in range(minutes):
+            hh, mm = divmod(9 * 60 + 30 + i, 60)
+            price = round(price * (1 + rnd.uniform(-0.002, 0.002)), 2)
+            vol = rnd.randint(10, 800) * 100
+            cum += vol * price
+            ts = datetime(today.year, today.month, today.day, hh % 24, mm, tzinfo=timezone.utc)
+            points.append({"ts": ts.isoformat(), "price": price, "volume": vol, "cum_amount": round(cum, 2), "source": SOURCE})
+        return points

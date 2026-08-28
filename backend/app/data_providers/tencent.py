@@ -267,7 +267,43 @@ class TencentProvider:
         return parse_order_book(symbol, entry[1])
 
     async def get_trades(self, symbol: str) -> list:
-        return []  # 腾讯免费逐笔无稳定端点；链上由东财 details 或同花顺分时补齐
+        return []  # 腾讯免费逐笔无稳定端点；逐笔走东财 details，分钟级分时走 get_minute_line
+
+    async def get_minute_line(self, symbol: str) -> list[dict]:
+        """当日 1 分钟分时：[{ts, price, volume(股), cum_amount(元)}]，来源 minute/query。"""
+        resp = await self._client.get(
+            "https://web.ifzq.gtimg.cn/appstock/app/minute/query",
+            params={"code": to_tencent_symbol(symbol)},
+        )
+        if resp.status_code != 200:
+            raise ProviderError(f"tencent minute HTTP {resp.status_code}")
+        node = ((resp.json().get("data") or {}).get(to_tencent_symbol(symbol)) or {}).get("data") or {}
+        rows = node.get("data") or []
+        points: list[dict] = []
+        for row in rows:
+            parts = str(row).split()
+            if len(parts) < 4:
+                continue
+            try:
+                ts = datetime.strptime(f"{datetime.now(_TZ_BJ).date()} {parts[0]}", "%Y-%m-%d %H%M")
+            except ValueError:
+                continue
+            price = _num(parts[1])
+            if price is None or price <= 0:
+                continue
+            vol_hand = _num(parts[2])
+            points.append(
+                {
+                    "ts": ts.replace(tzinfo=_TZ_BJ).astimezone(timezone.utc).isoformat(),
+                    "price": price,
+                    "volume": vol_hand * 100 if vol_hand is not None else None,
+                    "cum_amount": _num(parts[3]),
+                    "source": SOURCE,
+                }
+            )
+        if not points:
+            raise ProviderError(f"tencent minute line empty for {symbol}")
+        return points
 
     async def get_limit_up_pool(self, trade_date) -> list:
         return []  # 由链上东财 push2ex 提供

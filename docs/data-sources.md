@@ -22,6 +22,7 @@
 | 实时快照/五档 | `qt.gtimg.cn/q=sh600519,...` (GBK, `~` 分隔) | 字段(0起): 1名 3现价 4昨收 5开 6量(手) **9-18买五档价量 19-28卖五档价量** 30时间(北京) 31涨跌 32涨跌% 33高 34低 36量(手) 37额(**万**) 38换手% |
 | 日/周 K 线 | `web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=sh600519,day,,,320,qfq` | `data.sh600519.qfqday` 行=`[日期,开,收,高,低,量(手)]`，qfq=前复权 |
 | 分钟 K 线 | `ifzq.gtimg.cn/appstock/app/kline/mkline?param=sh600519,m5,,320` | `[YYYYMMDDHHMM,开,收,高,低,量]`，m1~m60 |
+| 当日分时 | `web.ifzq.gtimg.cn/appstock/app/minute/query?code=sh600519` | 行=`HHMM 价格 量(手) 累计额(元)`，1 分钟粒度 → `/api/minute-line/{symbol}` |
 | 搜索 | `smartbox.gtimg.cn/s3/?v=2&q=...&t=all` (GBK) | `^`分组 `~`字段：名称/代码(sh600519) |
 
 单位：成交量手（×100 转股），成交额万（×1e4 转元）——已用茅台盘后数据双重验证

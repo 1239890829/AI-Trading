@@ -88,3 +88,6 @@ class CompositeProvider:
 
     async def search(self, query: str) -> list:
         return await self._call("search", query)
+
+    async def get_minute_line(self, symbol: str) -> list:
+        return await self._call("get_minute_line", symbol)

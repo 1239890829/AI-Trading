@@ -42,3 +42,14 @@ docker compose up --build
 - `/api/health` 报告数据源健康（consecutive_failures / last_error / is_stale），可接监控告警。
 - 结构化日志 + 每个后台任务的名称/起止/状态/重试统计在 Phase 8 补全（当前轮询协程有日志与失败计数）。
 - 免费数据源被限流（空回复）属预期：系统自动进入 stale 降级，调大 ASHARE_POLL_INTERVAL_SECONDS 或换备源。
+
+## 已踩过的坑（务必记住）
+
+1. **pip 必须走清华镜像**：`pip install -i https://pypi.tuna.tsinghua.edu.cn/simple <pkg>`。
+   直连 pypi.org 在本网络会超时；系统代理（SOCKS）会导致 pip 卡死——不要让 pip 读 ALL_PROXY。
+2. **行情源客户端已设 `trust_env=False`**（直连国内站）。若给后端配了系统代理环境变量，
+   httpx 会尝试走 SOCKS 并因缺 `socksio` 直接启动失败——保持现状，勿全局代理后端。
+3. **Next.js dev 运行时禁止执行 `npm run build`**：两者共用 `.next` 目录会互相破坏（前端 500）。
+   构建验证只在停掉 dev server 后进行，或 `rm -rf .next` 后重启 dev。
+4. 逐笔成交仅东财 details 源（本机被限流时 `/api/trades` 返回 502，前端显示空态）；
+   盘中细粒度数据用 `/api/minute-line/{symbol}`（腾讯 1 分钟分时）。

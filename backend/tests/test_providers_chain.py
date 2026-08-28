@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from datetime import date
 
+from datetime import datetime
+
 from app.data_providers.composite import CompositeProvider
 from app.data_providers.eastmoney import ProviderError
 from app.data_providers.mock import MockProvider
@@ -167,3 +169,50 @@ def test_composite_skips_empty_results():
     chain = CompositeProvider([Empty(), Full()])
     pool = asyncio.run(chain.get_limit_up_pool(date(2026, 8, 28)))
     assert pool == [{"ok": True}]
+
+
+FIXED_CLOCK = lambda: datetime(2026, 8, 28, 10, 30, 45)  # noqa: E731
+
+
+def test_normalize_search_filters_non_six_digit():
+    from app.market.normalizer import normalize_search
+
+    # 东财 suggest 会混入港股（5 位代码）——必须过滤
+    assert normalize_search({"Code": "03750", "Name": "宁德时代"}) is None
+    ok = normalize_search({"Code": "300750", "Name": "宁德时代", "MktNum": 0})
+    assert ok == ("300750", "宁德时代", "SZ")
+
+
+def test_mock_minute_line_shape():
+    from datetime import datetime
+
+    from app.data_providers.mock import MockProvider
+
+    pts = asyncio.run(MockProvider(clock=FIXED_CLOCK).get_minute_line("600519"))
+    assert 5 <= len(pts) <= 240
+    assert pts[0]["price"] > 0 and pts[0]["source"] == "mock"
+    assert pts[0]["ts"] <= pts[-1]["ts"]
+
+
+def test_hub_broadcasts_stale_on_provider_failure():
+    from app.services.quote_hub import QuoteHub
+
+    class Down:
+        name = "down"
+
+        async def get_indices(self):
+            raise ProviderError("blocked")
+
+        async def get_quotes(self, symbols):
+            raise ProviderError("blocked")
+
+    hub = QuoteHub(provider=Down(), poll_interval=5, get_watchlist=lambda: ["600519"])
+    from app.schemas.market import Quote
+
+    hub.indices = {"000001": Quote(symbol="000001", price=3300.0, source="down")}
+    hub.quotes = {"600519": Quote(symbol="600519", price=100.0, source="down")}
+    q = hub.subscribe()
+    asyncio.run(hub.refresh())
+    msg = q.get_nowait()
+    assert msg["type"] == "stale"
+    assert hub.consecutive_failures == 1

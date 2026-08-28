@@ -73,7 +73,11 @@ export function useQuoteStream(symbols: string[]) {
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data as string) as { type: string; data?: Quote[] };
-          if ((msg.type === "snapshot" || msg.type === "quotes") && msg.data) apply(msg.data);
+          // stale：数据源故障时后端推送 quality=stale 的缓存数据，必须覆盖渲染以显示过期标识
+          if ((msg.type === "snapshot" || msg.type === "quotes" || msg.type === "stale") && msg.data) {
+            apply(msg.data);
+            if (msg.type === "stale") setStatus("polling");
+          }
         } catch {}
       };
       ws.onclose = () => {
