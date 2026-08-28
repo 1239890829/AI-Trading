@@ -54,7 +54,7 @@ export default function WatchlistPage() {
   }
 
   return (
-    <main className="py-6">
+    <main className="h-full flex flex-col px-4 py-3 max-w-[1600px] mx-auto w-full">
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-xl font-semibold">自选股管理</h1>
         <p className="text-xs text-zinc-400">用顶部搜索框添加（回车选中第一个结果即可进入个股页，个股页可加自选）</p>
@@ -64,7 +64,7 @@ export default function WatchlistPage() {
           {error}
         </div>
       )}
-      <Panel title={`共 ${items.length} 只`}>
+      <Panel className="min-h-0 flex-1 overflow-hidden" title={`共 ${items.length} 只`}>
         <div className="flex items-center gap-2 border-b border-zinc-100 px-3 py-2 dark:border-zinc-800/60">
           <input
             value={newSymbol}

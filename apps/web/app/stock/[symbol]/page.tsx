@@ -87,7 +87,7 @@ export default function StockPage() {
   }
 
   return (
-    <main className="py-6">
+    <main className="h-full flex flex-col overflow-y-auto px-4 py-3 max-w-[1600px] mx-auto w-full">
       <nav className="mb-4 text-xs text-zinc-400">
         <Link href="/workbench" className="hover:underline">
           工作台

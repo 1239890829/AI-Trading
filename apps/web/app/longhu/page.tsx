@@ -29,7 +29,7 @@ export default function LonghuPage() {
   }, [load]);
 
   return (
-    <main className="py-6">
+    <main className="h-full flex flex-col px-4 py-3 max-w-[1600px] mx-auto w-full">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-semibold">龙虎榜 · {tradeDate || "…"}</h1>
         <div className="flex items-center gap-2 text-xs text-zinc-400">
@@ -49,7 +49,7 @@ export default function LonghuPage() {
         </div>
       )}
 
-      <Panel title={`共 ${records.length} 条（按榜内净买额排序）`} source={records[0]?.source}>
+      <Panel className="min-h-0 flex-1 overflow-hidden" title={`共 ${records.length} 条（按榜内净买额排序）`} source={records[0]?.source}>
         {records.length === 0 && !error ? (
           <p className="px-4 py-10 text-center text-sm text-zinc-400">暂无数据（龙虎榜盘后披露，当日数据需收盘后查询）</p>
         ) : (

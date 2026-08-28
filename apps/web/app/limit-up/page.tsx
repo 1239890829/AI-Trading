@@ -29,7 +29,7 @@ export default function LimitUpPage() {
   }, [load]);
 
   return (
-    <main className="py-6">
+    <main className="h-full flex flex-col px-4 py-3 max-w-[1600px] mx-auto w-full">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-semibold">涨停池 · {tradeDate || "…"}</h1>
         <div className="flex items-center gap-2 text-xs text-zinc-400">
@@ -49,7 +49,7 @@ export default function LimitUpPage() {
         </div>
       )}
 
-      <Panel title={`共 ${records.length} 只（按连板数排序）`} source={records[0]?.source}>
+      <Panel className="min-h-0 flex-1 overflow-hidden" title={`共 ${records.length} 只（按连板数排序）`} source={records[0]?.source}>
         {records.length === 0 && !error ? (
           <p className="px-4 py-10 text-center text-sm text-zinc-400">今日暂无涨停（或非交易日）</p>
         ) : (

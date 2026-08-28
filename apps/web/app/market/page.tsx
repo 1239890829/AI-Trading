@@ -50,7 +50,7 @@ export default function MarketPage() {
   const advancing = "市场宽度（涨跌家数/炸板率/情绪周期）按开发顺序在 Phase 3 接入";
 
   return (
-    <main className="py-6">
+    <main className="h-full flex flex-col gap-4 px-4 py-3 max-w-[1600px] mx-auto w-full overflow-y-auto">
       {error && (
         <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-600 dark:text-amber-300">
           {error}
@@ -97,7 +97,7 @@ export default function MarketPage() {
         </p>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid min-h-[320px] flex-1 gap-4 lg:grid-cols-2">
         <Panel title="两市成交额" source={sh?.source} dataTimestamp={sh?.data_timestamp}>
           <div className="px-4 py-6">
             <p className="font-mono text-3xl font-semibold">{fmtAmount(totalAmount)}</p>
@@ -107,7 +107,7 @@ export default function MarketPage() {
           </div>
         </Panel>
 
-        <Panel title="涨停速览（今日连板前列）" source={pool[0]?.source}>
+        <Panel title="涨停速览（今日连板前列）" source={pool[0]?.source} className="min-h-0 overflow-hidden">
           {pool.length > 0 ? (
             <table className="w-full text-sm">
               <tbody>

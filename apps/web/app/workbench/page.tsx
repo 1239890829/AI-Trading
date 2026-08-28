@@ -63,7 +63,6 @@ export default function WorkbenchPage() {
     return () => clearInterval(t);
   }, [loadBase]);
 
-  // 若 WS 尚未覆盖到的 symbol（如刚加自选），用 REST 兜底拉一次
   useEffect(() => {
     if (symbols.length === 0) return;
     const missing = symbols.filter((s) => !(s in merged));
@@ -81,7 +80,11 @@ export default function WorkbenchPage() {
     if (!selected) return;
     let alive = true;
     setDetailError(null);
-    Promise.all([getKline(selected, "1d", 120), getOrderBook(selected).catch(() => null), getTrades(selected, 30).catch(() => [])])
+    Promise.all([
+      getKline(selected, "1d", 120),
+      getOrderBook(selected).catch(() => null),
+      getTrades(selected, 30).catch(() => []),
+    ])
       .then(([b, ob, tr]) => {
         if (!alive) return;
         setBars(b);
@@ -104,52 +107,60 @@ export default function WorkbenchPage() {
     } catch {}
   }
 
+  const stats = d
+    ? ([
+        ["今开", fmt(d.open)],
+        ["最高", fmt(d.high)],
+        ["最低", fmt(d.low)],
+        ["昨收", fmt(d.prev_close)],
+        ["成交量", fmtVolume(d.volume) + " 手"],
+        ["成交额", fmtAmount(d.amount)],
+        ["换手率", d.turnover_rate != null ? `${fmt(d.turnover_rate)}%` : "--"],
+        ["来源", d.source],
+      ] as const)
+    : [];
+
   return (
-    <main className="py-6">
+    <main className="h-full flex flex-col gap-3 px-4 py-3 max-w-[1600px] mx-auto w-full">
       {error && (
-        <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-600 dark:text-amber-300">
+        <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-600 dark:text-amber-300">
           {error}
         </div>
       )}
 
-      {/* 指数行情 */}
-      <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+      {/* 指数行情：单行 6 卡 */}
+      <div className="grid shrink-0 grid-cols-3 gap-3 md:grid-cols-6">
         {indices.map((q) => (
-          <div key={q.symbol} className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
-            <div className="flex items-baseline justify-between">
+          <div key={q.symbol} className="rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+            <div className="flex items-center justify-between">
               <span className="text-xs text-zinc-400">{q.name ?? q.symbol}</span>
               <QualityBadge quality={q.quality} reasons={q.quality_reasons} />
             </div>
-            <div className="mt-1 font-mono text-lg font-semibold">{fmt(q.price)}</div>
-            <div className={`font-mono text-xs ${pctColor(q.change_pct)}`}>
-              {pctText(q.change_pct)} · {q.source}
+            <div className="mt-0.5 flex items-baseline justify-between tabular-nums">
+              <span className="font-mono text-lg font-semibold">{fmt(q.price)}</span>
+              <span className={`font-mono text-xs ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</span>
             </div>
           </div>
         ))}
         {indices.length === 0 && !error && <div className="col-span-6 text-sm text-zinc-400">加载中…</div>}
       </div>
 
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
         <span>
-          两市成交额合计：<span className="font-mono text-zinc-200">{fmtAmount(totalAmount)}</span>
+          两市成交额合计：<span className="font-mono tabular-nums text-zinc-200">{fmtAmount(totalAmount)}</span>
         </span>
-        <span>
-          行情状态：<span className={STATUS_LABEL[status].cls}>{STATUS_LABEL[status].text}</span> · 指数刷新{" "}
-          {updatedAt || "--"} · 数据来源 {indices[0]?.source ?? "--"}
+        <span className="flex items-center gap-3">
+          <span>
+            行情状态：<span className={STATUS_LABEL[status].cls}>{STATUS_LABEL[status].text}</span>
+          </span>
+          <span>指数刷新 {updatedAt || "--"}</span>
+          <span className="hidden lg:inline text-zinc-500">数据仅供投研与模拟交易参考</span>
         </span>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[360px,1fr]">
-        {/* 自选股 */}
-        <Panel
-          title="自选股"
-          extra={
-            <Link href="/watchlist" className="text-sky-400 hover:underline">
-              管理
-            </Link>
-          }
-          className="max-h-[640px]"
-        >
+      <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[340px,minmax(0,1fr)]">
+        {/* 自选股：内部滚动 */}
+        <Panel title="自选股" extra={<Link href="/watchlist" className="text-sky-400 hover:underline">管理</Link>} className="min-h-0 overflow-hidden">
           {watchQuotes.length === 0 ? (
             <p className="px-4 py-8 text-center text-sm text-zinc-400">
               自选为空或行情未就绪。
@@ -169,12 +180,16 @@ export default function WorkbenchPage() {
                   >
                     <td className="px-3 py-2">
                       <div className="font-mono text-xs text-zinc-400">{q.symbol}</div>
-                      <div className="text-sm">{q.name ?? "--"}</div>
+                      <div>{q.name ?? "--"}</div>
                     </td>
-                    <td className="px-2 py-2 text-right font-mono">{fmt(q.price)}</td>
-                    <td className={`px-2 py-2 text-right font-mono ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</td>
-                    <td className="px-2 py-2 text-right font-mono text-xs text-zinc-400">{fmtAmount(q.amount)}</td>
-                    <td className="px-2 py-2 text-right">
+                    <td className="px-2 py-2 text-right font-mono tabular-nums">{fmt(q.price)}</td>
+                    <td className={`px-2 py-2 text-right font-mono text-xs tabular-nums ${pctColor(q.change_pct)}`}>
+                      {pctText(q.change_pct)}
+                    </td>
+                    <td className="hidden px-2 py-2 text-right font-mono text-xs tabular-nums text-zinc-400 md:table-cell">
+                      {fmtAmount(q.amount)}
+                    </td>
+                    <td className="px-1 py-2 text-right">
                       {q.quality !== "high" && <QualityBadge quality={q.quality} reasons={q.quality_reasons} />}
                     </td>
                     <td className="pr-2 text-right">
@@ -196,65 +211,67 @@ export default function WorkbenchPage() {
           )}
         </Panel>
 
-        {/* 个股详情 */}
-        <div className="flex flex-col gap-4">
+        {/* 右侧：个股详情 */}
+        <div className="flex min-h-0 min-w-0 flex-col gap-3">
           {d && (
-            <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
-              <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-                <h1 className="text-lg font-semibold">
-                  {d.name ?? "--"} <span className="ml-1 font-mono text-sm text-zinc-400">{d.market}.{d.symbol}</span>
-                </h1>
-                <span className={`font-mono text-2xl font-semibold ${pctColor(d.change_pct)}`}>{fmt(d.price)}</span>
-                <span className={`font-mono ${pctColor(d.change)}`}>
-                  {d.change != null ? `${d.change > 0 ? "+" : ""}${fmt(d.change)}` : "--"}（{pctText(d.change_pct)}）
-                </span>
-                <QualityBadge quality={d.quality} reasons={d.quality_reasons} />
+            <div className="shrink-0 rounded-xl border border-zinc-200 dark:border-zinc-800">
+              {/* 价格主区块 */}
+              <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-4 pt-3">
+                <div className="flex items-baseline gap-2">
+                  <h1 className="text-lg font-semibold">{d.name ?? "--"}</h1>
+                  <span className="font-mono text-sm text-zinc-400">
+                    {d.market}.{d.symbol}
+                  </span>
+                  <QualityBadge quality={d.quality} reasons={d.quality_reasons} />
+                </div>
+                <div className="flex items-baseline gap-3">
+                  <span className={`font-mono text-3xl font-semibold tabular-nums ${pctColor(d.change_pct)}`}>
+                    {fmt(d.price)}
+                  </span>
+                  <span className={`font-mono text-sm tabular-nums ${pctColor(d.change)}`}>
+                    {d.change != null ? `${d.change > 0 ? "+" : ""}${fmt(d.change)}` : "--"}（{pctText(d.change_pct)}）
+                  </span>
+                </div>
               </div>
-              <dl className="mt-3 grid grid-cols-3 gap-x-6 gap-y-1 text-sm md:grid-cols-6">
-                {(
-                  [
-                    ["今开", fmt(d.open)],
-                    ["最高", fmt(d.high)],
-                    ["最低", fmt(d.low)],
-                    ["昨收", fmt(d.prev_close)],
-                    ["成交量(手)", fmtVolume(d.volume)],
-                    ["成交额", fmtAmount(d.amount)],
-                    ["换手率", d.turnover_rate != null ? `${fmt(d.turnover_rate)}%` : "--"],
-                  ] as const
-                ).map(([k, v]) => (
-                  <div key={k} className="flex justify-between gap-2">
-                    <dt className="text-zinc-400">{k}</dt>
-                    <dd className="font-mono">{v}</dd>
+              {/* 指标分栏：4 栏 × 2 行，竖线分隔 */}
+              <div className="mt-2 grid grid-cols-4 divide-x divide-zinc-100 border-t border-zinc-100 dark:divide-zinc-800/60 dark:border-zinc-800/60">
+                {stats.map(([k, v], i) => (
+                  <div key={k} className={`px-3 py-2 ${i < 4 ? "border-b border-zinc-100 dark:border-zinc-800/60" : ""}`}>
+                    <div className="text-xs text-zinc-400">{k}</div>
+                    <div className="font-mono text-sm tabular-nums">{v}</div>
                   </div>
                 ))}
-              </dl>
-              <p className="mt-2 text-xs text-zinc-400">
+              </div>
+              <div className="border-t border-zinc-100 px-4 py-1.5 text-right text-xs text-zinc-400 dark:border-zinc-800/60">
                 数据时间 {timeText(d.data_timestamp)} · 来源 {d.source} · 接收 {timeText(d.received_at)}
-              </p>
+              </div>
             </div>
           )}
 
           {detailError && (
-            <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-500">
+            <div className="shrink-0 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2 text-sm text-red-500">
               K线加载失败：{detailError}
             </div>
           )}
 
-          <Panel title={`日 K 线（近 120 日 · 前复权）`} className="min-h-[400px]">
+          {/* K 线：占据剩余全部高度 */}
+          <Panel title="日 K 线（近 120 日 · 前复权）" className="min-h-0 flex-1 overflow-hidden">
             {bars.length > 0 ? (
-              <KlineChart bars={bars} />
+              <KlineChart bars={bars} className="h-full" />
             ) : (
               <p className="px-4 py-10 text-center text-sm text-zinc-400">等待 K 线数据…</p>
             )}
           </Panel>
 
-          <div className="grid gap-4 md:grid-cols-2">
+          {/* 盘口 + 逐笔：定高，内部滚动 */}
+          <div className="grid h-[240px] shrink-0 grid-cols-1 gap-3 md:grid-cols-2">
             <Panel
               title="五档盘口"
               source={book?.source}
               dataTimestamp={book?.data_timestamp}
               quality={book?.quality}
               qualityReasons={book?.quality_reasons}
+              className="min-h-0 overflow-hidden"
             >
               {book ? (
                 <table className="w-full text-sm">
@@ -262,44 +279,42 @@ export default function WorkbenchPage() {
                     {[...book.asks].reverse().map((lv, i) => (
                       <tr key={`a${i}`} className="border-b border-zinc-100 dark:border-zinc-800/60">
                         <td className="px-3 py-1 text-xs text-zinc-400">卖{book.asks.length - i}</td>
-                        <td className="px-2 py-1 text-right font-mono text-down">{fmt(lv.price)}</td>
-                        <td className="px-3 py-1 text-right font-mono text-zinc-400">{fmt(lv.volume, 0)}</td>
+                        <td className="px-2 py-1 text-right font-mono tabular-nums text-down">{fmt(lv.price)}</td>
+                        <td className="px-3 py-1 text-right font-mono text-xs tabular-nums text-zinc-400">{fmt(lv.volume, 0)}</td>
                       </tr>
                     ))}
                     {[...book.bids].map((lv, i) => (
                       <tr key={`b${i}`}>
                         <td className="px-3 py-1 text-xs text-zinc-400">买{i + 1}</td>
-                        <td className="px-2 py-1 text-right font-mono text-up">{fmt(lv.price)}</td>
-                        <td className="px-3 py-1 text-right font-mono text-zinc-400">{fmt(lv.volume, 0)}</td>
+                        <td className="px-2 py-1 text-right font-mono tabular-nums text-up">{fmt(lv.price)}</td>
+                        <td className="px-3 py-1 text-right font-mono text-xs tabular-nums text-zinc-400">{fmt(lv.volume, 0)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               ) : (
-                <p className="px-4 py-8 text-center text-sm text-zinc-400">盘口数据不可用（免费源仅盘中提供）</p>
+                <p className="px-4 py-6 text-center text-sm text-zinc-400">盘口数据不可用（免费源仅盘中提供）</p>
               )}
             </Panel>
 
-            <Panel title="逐笔成交（最近 30 笔）" source={trades[0]?.source}>
+            <Panel title="逐笔成交（最近 30 笔）" source={trades[0]?.source} className="min-h-0 overflow-hidden">
               {trades.length > 0 ? (
                 <table className="w-full text-sm">
                   <tbody>
                     {trades.map((t, i) => (
                       <tr key={i} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                        <td className="px-3 py-1 font-mono text-xs text-zinc-400">{timeText(t.ts)}</td>
-                        <td className={`px-2 py-1 text-right font-mono ${t.side === "buy" ? "text-up" : t.side === "sell" ? "text-down" : "text-zinc-300"}`}>
+                        <td className="px-3 py-1 font-mono text-xs tabular-nums text-zinc-400">{timeText(t.ts)}</td>
+                        <td className={`px-2 py-1 text-right font-mono tabular-nums ${t.side === "buy" ? "text-up" : t.side === "sell" ? "text-down" : "text-zinc-300"}`}>
                           {fmt(t.price)}
                         </td>
-                        <td className="px-2 py-1 text-right font-mono text-zinc-400">{fmtVolume(t.volume)}</td>
-                        <td className="px-3 py-1 text-right text-xs text-zinc-400">
-                          {t.side === "buy" ? "B" : t.side === "sell" ? "S" : "·"}
-                        </td>
+                        <td className="px-2 py-1 text-right font-mono text-xs tabular-nums text-zinc-400">{fmtVolume(t.volume)}</td>
+                        <td className="px-3 py-1 text-right text-xs text-zinc-400">{t.side === "buy" ? "B" : t.side === "sell" ? "S" : "·"}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               ) : (
-                <p className="px-4 py-8 text-center text-sm text-zinc-400">暂无逐笔数据</p>
+                <p className="px-4 py-6 text-center text-sm text-zinc-400">暂无逐笔数据（东财源限流时以分时线替代，见个股页）</p>
               )}
             </Panel>
           </div>

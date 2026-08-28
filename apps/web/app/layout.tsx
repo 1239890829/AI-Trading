@@ -20,16 +20,14 @@ const themeInit = `
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="zh-CN" className="dark" suppressHydrationWarning>
+    <html lang="zh-CN" className="dark h-full" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInit }} />
       </head>
-      <body className="min-h-screen bg-zinc-50 text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100">
+      <body className="h-screen overflow-hidden flex flex-col bg-zinc-50 text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100">
         <NavBar />
-        <div className="mx-auto max-w-7xl px-4 pb-12">{children}</div>
-        <footer className="border-t border-zinc-200 py-4 text-center text-xs text-zinc-400 dark:border-zinc-800 dark:text-zinc-600">
-          数据仅供投研与模拟交易参考 · 本系统第一阶段禁止连接真实券商与自动下单
-        </footer>
+        {/* 内容区是唯一滚动域：单页布局锁定在可视区内，溢出交给容器内部滚动 */}
+        <div className="flex-1 min-h-0">{children}</div>
       </body>
     </html>
   );

@@ -12,10 +12,11 @@ import type { Kline } from "@/types/market";
 interface Props {
   bars: Kline[];
   height?: number;
+  className?: string;
 }
 
-/** K 线图（lightweight-charts）。A 股配色：红涨绿跌。 */
-export function KlineChart({ bars, height = 360 }: Props) {
+/** K 线图（lightweight-charts）。A 股配色：红涨绿跌。传 height 定高，或传 className="h-full" 随容器自适应。 */
+export function KlineChart({ bars, height, className }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
 
@@ -23,7 +24,7 @@ export function KlineChart({ bars, height = 360 }: Props) {
     if (!containerRef.current) return;
     const chart = createChart(containerRef.current, {
       height,
-      autoSize: true,
+      autoSize: !height,
       layout: {
         background: { color: "transparent" },
         textColor: "#a1a1aa",
@@ -62,5 +63,11 @@ export function KlineChart({ bars, height = 360 }: Props) {
     };
   }, [bars, height]);
 
-  return <div ref={containerRef} className="w-full" style={{ minHeight: height }} />;
+  return (
+    <div
+      ref={containerRef}
+      className={`w-full ${className ?? ""}`}
+      style={height ? { minHeight: height, height } : undefined}
+    />
+  );
 }
