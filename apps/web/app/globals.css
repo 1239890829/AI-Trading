@@ -2,6 +2,63 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ===== Design tokens（Operate 模式：可扫读性优先，品牌在细节） ===== */
 :root {
   color-scheme: dark;
+  --accent: #f43f5e; /* A 股红涨 */
+  --accent-down: #10b981;
+}
+
+/* ===== 浏览器原生面主题化（craft-floor：built vs assembled 的分水岭） ===== */
+::selection {
+  background: rgba(244, 63, 94, 0.35);
+  color: #fafafa;
+}
+
+:focus-visible {
+  outline: 2px solid rgba(56, 189, 248, 0.7);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* 细滚动条，融入 zinc 体系 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3f3f46 transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
+  background-clip: content-box;
+}
+
+/* ===== 排版 ===== */
+html {
+  font-feature-settings: "tnum" 0; /* 默认比例数字；数据处用 font-mono + tabular-nums */
+  text-rendering: optimizeLegibility;
+}
+.font-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 面板标题：上紧下松的呼吸感 */
+h1, h2 {
+  letter-spacing: -0.01em;
+}
+
+/* 交互状态：卡片与行的过渡（interaction-states） */
+button, a, tr, input {
+  transition: background-color 140ms ease-out, border-color 140ms ease-out, color 140ms ease-out;
 }

@@ -131,7 +131,7 @@ export default function WorkbenchPage() {
       {/* 指数行情：单行 6 卡 */}
       <div className="grid shrink-0 grid-cols-3 gap-3 md:grid-cols-6">
         {indices.map((q) => (
-          <div key={q.symbol} className="rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+          <div key={q.symbol} className="rounded-xl border border-zinc-200 px-3 py-2 transition-colors hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-600">
             <div className="flex items-center justify-between">
               <span className="text-xs text-zinc-400">{q.name ?? q.symbol}</span>
               <QualityBadge quality={q.quality} reasons={q.quality_reasons} />
