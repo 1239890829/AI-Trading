@@ -198,10 +198,13 @@ export default function WorkbenchPage() {
                           e.stopPropagation();
                           void remove(q.symbol);
                         }}
-                        className="text-xs text-zinc-400 hover:text-red-400"
+                        className="text-zinc-400 hover:text-red-400"
                         title="移出自选"
+                        aria-label={`移出自选 ${q.symbol}`}
                       >
-                        ✕
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+                          <path d="M18 6 6 18M6 6l12 12" />
+                        </svg>
                       </button>
                     </td>
                   </tr>
