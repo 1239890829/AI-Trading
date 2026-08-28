@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { KlineChart } from "@/components/kline-chart";
 import { Panel } from "@/components/panel";
 import { QualityBadge } from "@/components/quality-badge";
+import { PriceFlash } from "@/components/price-flash";
 import { addToWatchlist, getKline, getOrderBook, getQuotes, getTrades } from "@/lib/api";
 import { fmt, fmtAmount, fmtVolume, pctColor, pctText, timeText } from "@/lib/format";
 import type { Kline, OrderBook, Quote, Trade } from "@/types/market";
@@ -108,7 +109,7 @@ export default function StockPage() {
             <h1 className="text-xl font-semibold">
               {quote.name ?? "--"} <span className="ml-1 font-mono text-sm text-zinc-400">{quote.market}.{quote.symbol}</span>
             </h1>
-            <span className={`font-mono text-3xl font-semibold ${pctColor(quote.change_pct)}`}>{fmt(quote.price)}</span>
+            <PriceFlash value={quote.price} className={`font-mono text-3xl font-semibold ${pctColor(quote.change_pct)}`}>{fmt(quote.price)}</PriceFlash>
             <span className={`font-mono ${pctColor(quote.change)}`}>
               {quote.change != null ? `${quote.change > 0 ? "+" : ""}${fmt(quote.change)}` : "--"}（{pctText(quote.change_pct)}）
             </span>

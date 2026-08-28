@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { KlineChart } from "@/components/kline-chart";
+import { PriceFlash } from "@/components/price-flash";
 import { Panel } from "@/components/panel";
 import { QualityBadge } from "@/components/quality-badge";
 import { useQuoteStream, StreamStatus } from "@/hooks/use-quote-stream";
@@ -151,7 +152,9 @@ export default function WorkbenchPage() {
         </span>
         <span className="flex items-center gap-3">
           <span>
-            行情状态：<span className={STATUS_LABEL[status].cls}>{STATUS_LABEL[status].text}</span>
+            行情状态：
+            {status === "live" && <span className="pulse-dot mx-1 align-middle" />}
+            <span className={STATUS_LABEL[status].cls}>{STATUS_LABEL[status].text}</span>
           </span>
           <span>指数刷新 {updatedAt || "--"}</span>
           <span className="hidden lg:inline text-zinc-500">数据仅供投研与模拟交易参考</span>
@@ -182,7 +185,7 @@ export default function WorkbenchPage() {
                       <div className="font-mono text-xs text-zinc-400">{q.symbol}</div>
                       <div>{q.name ?? "--"}</div>
                     </td>
-                    <td className="px-2 py-2 text-right font-mono tabular-nums">{fmt(q.price)}</td>
+                    <td className="px-2 py-2 text-right font-mono tabular-nums"><PriceFlash value={q.price}>{fmt(q.price)}</PriceFlash></td>
                     <td className={`px-2 py-2 text-right font-mono text-xs tabular-nums ${pctColor(q.change_pct)}`}>
                       {pctText(q.change_pct)}
                     </td>
@@ -228,9 +231,9 @@ export default function WorkbenchPage() {
                   <QualityBadge quality={d.quality} reasons={d.quality_reasons} />
                 </div>
                 <div className="flex items-baseline gap-3">
-                  <span className={`font-mono text-3xl font-semibold tabular-nums ${pctColor(d.change_pct)}`}>
+                  <PriceFlash value={d.price} className={`font-mono text-3xl font-semibold tabular-nums ${pctColor(d.change_pct)}`}>
                     {fmt(d.price)}
-                  </span>
+                  </PriceFlash>
                   <span className={`font-mono text-sm tabular-nums ${pctColor(d.change)}`}>
                     {d.change != null ? `${d.change > 0 ? "+" : ""}${fmt(d.change)}` : "--"}（{pctText(d.change_pct)}）
                   </span>

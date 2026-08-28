@@ -62,3 +62,35 @@ h1, h2 {
 button, a, tr, input {
   transition: background-color 140ms ease-out, border-color 140ms ease-out, color 140ms ease-out;
 }
+
+/* ===== 署名动效：价格 tick 闪烁（impeccable animate: 让状态变化可读，非装饰） ===== */
+@keyframes tick-flash-up {
+  from { color: #fda4af; text-shadow: 0 0 14px rgba(244, 63, 94, 0.5); }
+  to   { color: inherit; text-shadow: 0 0 0 rgba(244, 63, 94, 0); }
+}
+@keyframes tick-flash-down {
+  from { color: #6ee7b7; text-shadow: 0 0 14px rgba(16, 185, 129, 0.45); }
+  to   { color: inherit; text-shadow: 0 0 0 rgba(16, 185, 129, 0); }
+}
+.tick-up   { animation: tick-flash-up 550ms cubic-bezier(0.16, 1, 0.3, 1); }
+.tick-down { animation: tick-flash-down 550ms cubic-bezier(0.16, 1, 0.3, 1); }
+
+/* WS 连接状态呼吸点 */
+@keyframes dot-breathe {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50%      { opacity: 1; transform: scale(1); }
+}
+.pulse-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: #34d399;
+  animation: dot-breathe 1.8s ease-in-out infinite;
+}
+
+/* 无障碍：偏好减弱动效时全部关闭 */
+@media (prefers-reduced-motion: reduce) {
+  .tick-up, .tick-down, .pulse-dot { animation: none; }
+  button, a, tr, input { transition: none !important; }
+}
