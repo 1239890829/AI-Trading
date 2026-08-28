@@ -128,6 +128,50 @@ def parse_search_row(code_field: str, name: str) -> SymbolSearchItem | None:
     )
 
 
+def parse_kline_payload(symbol: str, timeframe: str, payload: dict) -> list[Kline]:
+    """解析 fqkline/mkline 响应。键规则：日/周线前复权为 qfqday/qfqweek（无则回退不复权），分钟线直取 m5 等。"""
+    spec = _TIMEFRAME_PARAM.get(timeframe)
+    if spec is None:
+        raise ProviderError(f"tencent unsupported timeframe: {timeframe}")
+    minute = not isinstance(spec, tuple)
+    key = spec if minute else spec[0]
+    node = (payload.get("data") or {}).get(to_tencent_symbol(symbol)) or {}
+    if not isinstance(node, dict):
+        raise ProviderError(f"tencent kline bad payload for {symbol}")
+    rows = node.get(key) if minute else (node.get(f"qfq{key}") or node.get(key)) or []
+    bars: list[Kline] = []
+    for row in rows:
+        if not isinstance(row, (list, tuple)) or len(row) < 6:
+            continue
+        ts_raw = str(row[0])
+        if minute:
+            try:
+                ts = datetime.strptime(ts_raw, "%Y%m%d%H%M").replace(tzinfo=_TZ_BJ).astimezone(timezone.utc)
+            except ValueError:
+                continue
+        else:
+            try:
+                ts = datetime.strptime(ts_raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+        vol_hand = _num(str(row[5]))
+        bars.append(
+            Kline(
+                symbol=symbol,
+                timeframe=timeframe,
+                ts=ts,
+                open=_num(str(row[1])),
+                close=_num(str(row[2])),
+                high=_num(str(row[3])),
+                low=_num(str(row[4])),
+                volume=vol_hand * 100 if vol_hand is not None else None,
+                source=SOURCE,
+            )
+        )
+    bars.sort(key=lambda b: b.ts)
+    return bars
+
+
 class TencentProvider:
     name = SOURCE
     realtime = True
@@ -199,52 +243,14 @@ class TencentProvider:
             raise ProviderError(f"tencent unsupported timeframe: {timeframe}")
         if isinstance(spec, tuple):  # day/week
             param = f"{to_tencent_symbol(symbol)},{spec[0]},,,320,{spec[1]}"
-            key = spec[0]
             url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
-            minute = False
-        else:  # 分钟线
+        else:  # 分钟线 m1~m60
             param = f"{to_tencent_symbol(symbol)},{spec},,320"
-            key = spec
             url = "https://ifzq.gtimg.cn/appstock/app/kline/mkline"
-            minute = True
         resp = await self._client.get(url, params={"param": param})
         if resp.status_code != 200:
             raise ProviderError(f"tencent kline HTTP {resp.status_code}")
-        payload = resp.json()
-        node = (payload.get("data") or {}).get(to_tencent_symbol(symbol)) or {}
-        rows = node.get(f"{key}qfq" if not minute and "qfqday" in node else key) or node.get(key) or []
-        if minute and not rows:
-            rows = node.get(key.replace("m", "m", 1)) or []
-        bars: list[Kline] = []
-        for row in rows:
-            if not isinstance(row, (list, tuple)) or len(row) < 6:
-                continue
-            ts_raw = str(row[0])
-            if minute:
-                try:
-                    ts = datetime.strptime(ts_raw, "%Y%m%d%H%M").replace(tzinfo=_TZ_BJ).astimezone(timezone.utc)
-                except ValueError:
-                    continue
-            else:
-                try:
-                    ts = datetime.strptime(ts_raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-                except ValueError:
-                    continue
-            vol_hand = _num(str(row[5]))
-            bars.append(
-                Kline(
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    ts=ts,
-                    open=_num(str(row[1])),
-                    close=_num(str(row[2])),
-                    high=_num(str(row[3])),
-                    low=_num(str(row[4])),
-                    volume=vol_hand * 100 if vol_hand is not None else None,
-                    source=SOURCE,
-                )
-            )
-        bars.sort(key=lambda b: b.ts)
+        bars = parse_kline_payload(symbol, timeframe, resp.json())
         if start is not None:
             bars = [b for b in bars if b.ts >= start]
         if end is not None:

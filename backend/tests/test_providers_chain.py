@@ -57,6 +57,51 @@ def test_tencent_search_row():
     assert item and item.symbol == "600519" and item.market == "SH"
 
 
+# 2026-08-28 fqkline 实测响应结构（截取）
+KLINE_PAYLOAD = {
+    "code": 0,
+    "data": {"sh600519": {"qfqday": [
+        ["2025-05-09", "1499.409", "1511.599", "1517.869", "1495.469", "23672.000"],
+        ["2025-05-12", "1518.419", "1524.919", "1539.349", "1517.029", "24735.000"],
+    ], "qt": {"time": "20260828161500"}}},
+}
+
+MKLINE_PAYLOAD = {
+    "code": 0,
+    "data": {"sh600519": {"m5": [
+        ["202608280935", "1289.10", "1289.90", "1290.00", "1288.80", "3100.000"],
+        ["202608280940", "1289.90", "1290.50", "1291.00", "1289.70", "2800.000"],
+    ]}},
+}
+
+
+def test_tencent_parse_kline_day_uses_qfqday_key():
+    from app.data_providers.tencent import parse_kline_payload
+
+    bars = parse_kline_payload("600519", "1d", KLINE_PAYLOAD)
+    assert len(bars) == 2
+    assert bars[0].ts.isoformat().startswith("2025-05-09")
+    assert bars[0].open == 1499.409 and bars[0].close == 1511.599
+    assert bars[0].volume == 2_367_200  # 手 → 股
+    assert bars == sorted(bars, key=lambda b: b.ts)
+
+
+def test_tencent_parse_kline_minute():
+    from app.data_providers.tencent import parse_kline_payload
+
+    bars = parse_kline_payload("600519", "5m", MKLINE_PAYLOAD)
+    assert len(bars) == 2
+    assert bars[1].close == 1290.5
+    assert bars[1].ts.hour == 1  # UTC 01:40 = 北京 09:40
+
+
+def test_tencent_parse_kline_empty_data_returns_empty():
+    # 空 data → 空列表；"empty" 异常由 provider.get_kline 统一抛出
+    from app.data_providers.tencent import parse_kline_payload
+
+    assert parse_kline_payload("600519", "1d", {"code": 0, "data": {}}) == []
+
+
 def test_composite_failover_to_fallback():
     class FlakyThenDown:
         name = "broken"
