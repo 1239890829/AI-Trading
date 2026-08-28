@@ -1,0 +1,160 @@
+from __future__ import annotations
+
+import logging
+from datetime import date
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from app.api.deps import get_hub
+from app.data_quality.validator import validate_order_book
+from app.schemas.market import utcnow
+from app.services.quote_hub import QuoteHub
+
+log = logging.getLogger(__name__)
+router = APIRouter(tags=["market"])
+
+
+def _meta(hub: QuoteHub) -> dict:
+    return {
+        "provider": hub.provider.name,
+        "is_realtime": bool(getattr(hub.provider, "realtime", False)) and not hub.is_stale(),
+        "is_stale": hub.is_stale(),
+        "last_success_refresh": hub.last_success_refresh.isoformat() if hub.last_success_refresh else None,
+        "generated_at": utcnow().isoformat(),
+    }
+
+
+@router.get("/market/overview")
+async def market_overview(hub: QuoteHub = Depends(get_hub)) -> dict:
+    """指数行情 + 两市成交额合计。市场宽度/情绪等指标按开发顺序在后续阶段接入。"""
+    indices = hub.get_indices()
+    total_amount = sum(q.amount or 0 for q in indices if q.market in {"SH", "SZ"})
+    return {
+        "data": {
+            "indices": [q.model_dump(mode="json") for q in indices],
+            "total_amount": round(total_amount, 2),
+        },
+        "meta": _meta(hub),
+    }
+
+
+@router.get("/quotes")
+async def quotes(
+    symbols: str | None = Query(default=None, description="逗号分隔的股票代码"),
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    wanted = [s.strip() for s in symbols.split(",") if s.strip()] if symbols else None
+    data = hub.get_quotes(wanted)
+    return {"data": [q.model_dump(mode="json") for q in data], "meta": _meta(hub)}
+
+
+@router.get("/quotes/{symbol}")
+async def quote(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
+    found = hub.get_quotes([symbol])
+    if not found:
+        raise HTTPException(status_code=404, detail=f"{symbol} 不在缓存中，请先加入自选")
+    return {"data": found[0].model_dump(mode="json"), "meta": _meta(hub)}
+
+
+async def _kline_payload(hub: QuoteHub, symbol: str, timeframe: str, limit: int, start, end) -> dict:
+    try:
+        bars = await hub.provider.get_kline(symbol, timeframe, start, end)
+    except Exception as exc:
+        log.warning("kline failed for %s: %s", symbol, exc)
+        raise HTTPException(status_code=502, detail=f"K线数据源失败：{exc}")
+    bars = bars[-limit:]
+    return {
+        "data": {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "bars": [b.model_dump(mode="json") for b in bars],
+        },
+        "meta": _meta(hub),
+    }
+
+
+@router.get("/kline/{symbol}")
+async def kline(
+    symbol: str,
+    timeframe: str = Query(default="1d", description="1m/5m/15m/30m/60m/1d/1w"),
+    limit: int = Query(default=250, ge=1, le=1000),
+    start: date | None = None,
+    end: date | None = None,
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    from datetime import datetime, timezone as tz
+
+    start_dt = datetime(start.year, start.month, start.day, tzinfo=tz.utc) if start else None
+    end_dt = datetime(end.year, end.month, end.day, 23, 59, tzinfo=tz.utc) if end else None
+    return await _kline_payload(hub, symbol, timeframe, limit, start_dt, end_dt)
+
+
+@router.get("/order-book/{symbol}")
+async def order_book(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
+    try:
+        ob = await hub.provider.get_order_book(symbol)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"盘口数据源失败：{exc}")
+    if ob is None:
+        raise HTTPException(status_code=404, detail=f"{symbol} 无盘口数据")
+    validate_order_book(ob)
+    return {"data": ob.model_dump(mode="json"), "meta": _meta(hub)}
+
+
+@router.get("/trades/{symbol}")
+async def trades(symbol: str, limit: int = Query(default=50, ge=1, le=200), hub: QuoteHub = Depends(get_hub)) -> dict:
+    try:
+        rows = await hub.provider.get_trades(symbol)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"逐笔数据源失败：{exc}")
+    rows = rows[-limit:]
+    return {"data": [t.model_dump(mode="json") for t in rows], "meta": _meta(hub)}
+
+
+@router.get("/limit-up")
+async def limit_up(
+    date_str: str | None = Query(default=None, alias="date", description="YYYY-MM-DD，默认今天"),
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    trade_date = date.fromisoformat(date_str) if date_str else date.today()
+    try:
+        records = await hub.provider.get_limit_up_pool(trade_date)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"涨停池数据源失败：{exc}")
+    records.sort(key=lambda r: (r.consecutive_boards or 0), reverse=True)
+    return {
+        "data": {"trade_date": trade_date.isoformat(), "pool": [r.model_dump(mode="json") for r in records]},
+        "meta": _meta(hub),
+    }
+
+
+@router.get("/longhu")
+async def longhu(
+    date_str: str | None = Query(default=None, alias="date", description="YYYY-MM-DD，默认今天"),
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    trade_date = date.fromisoformat(date_str) if date_str else date.today()
+    try:
+        records = await hub.provider.get_longhu_records(trade_date)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"龙虎榜数据源失败：{exc}")
+    return {
+        "data": {"trade_date": trade_date.isoformat(), "records": [r.model_dump(mode="json") for r in records]},
+        "meta": _meta(hub),
+    }
+
+
+@router.get("/search")
+async def search(q: str = Query(min_length=1, max_length=20), hub: QuoteHub = Depends(get_hub)) -> dict:
+    from app.data_providers.mock import MockProvider
+    from app.data_providers import build_provider  # noqa: F401  (仅类型提示用)
+
+    try:
+        items = await hub.provider.search(q)
+    except Exception as exc:
+        log.warning("search failed: %s", exc)
+        items = []
+    if not items:
+        fallback = MockProvider()
+        items = await fallback.search(q)
+    return {"data": [i.model_dump() for i in items], "meta": _meta(hub)}

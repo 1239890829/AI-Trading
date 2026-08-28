@@ -1,0 +1,145 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+from app.schemas.market import OrderBook, Quote, Quality, utcnow
+
+# 质量判定优先级：invalid > low > high。
+# medium 预留给延迟数据源；stale 由 QuoteHub 在刷新失败/超时时统一标记。
+
+_INVALID_SYMBOL_DIGITS = 6
+_FUTURE_TOLERANCE = timedelta(minutes=5)
+_PCT_MISMATCH_TOLERANCE = 1.0  # 涨跌幅与昨收反推值允许的百分点误差
+
+
+def board_limit_pct(quote: Quote) -> float:
+    """涨跌停幅度：主板 ±10%，创业板/科创板 ±20%，北交所 ±30%，ST ±5%。
+
+    新股上市初期等特殊阶段未在此展开，由后续交易规则模块接管。
+    """
+    sym = quote.symbol
+    if sym.startswith(("300", "301", "688", "689")):
+        return 0.20
+    if sym.startswith(("43", "83", "87", "92")):
+        return 0.30
+    if quote.name and "ST" in quote.name.upper():
+        return 0.05
+    return 0.10
+
+
+def _add(reasons: list[str], invalid: list[str], reason: str, is_invalid: bool) -> None:
+    reasons.append(reason)
+    if is_invalid:
+        invalid.append(reason)
+
+
+def validate_quote(new: Quote, prev: Quote | None = None) -> Quote:
+    """按 §2.3 校验一条行情，直接在 new 上落 quality / quality_reasons 并返回。"""
+    reasons: list[str] = []
+    invalid: list[str] = []
+
+    if len(new.symbol) != _INVALID_SYMBOL_DIGITS or not new.symbol.isdigit():
+        _add(reasons, invalid, "invalid_symbol", True)
+
+    if new.price is None:
+        _add(reasons, invalid, "missing_price", False)
+    elif new.price <= 0:
+        _add(reasons, invalid, "non_positive_price", True)
+
+    for field in ("volume", "amount"):
+        v = getattr(new, field)
+        if v is not None and v < 0:
+            _add(reasons, invalid, f"negative_{field}", True)
+
+    if new.high is not None and new.low is not None and new.high < new.low:
+        _add(reasons, invalid, "high_below_low", True)
+    if new.price is not None and new.high is not None and new.price > new.high:
+        _add(reasons, invalid, "price_above_high", True)
+    if new.price is not None and new.low is not None and new.price < new.low:
+        _add(reasons, invalid, "price_below_low", True)
+
+    if new.data_timestamp is not None:
+        now = utcnow()
+        if new.data_timestamp.tzinfo is None:
+            new.data_timestamp = new.data_timestamp.replace(tzinfo=timezone.utc)
+        if new.data_timestamp > now + _FUTURE_TOLERANCE:
+            _add(reasons, invalid, "timestamp_in_future", True)
+
+    if (
+        new.price is not None
+        and new.price > 0
+        and new.prev_close is not None
+        and new.prev_close > 0
+        and new.change_pct is not None
+    ):
+        implied_pct = (new.price - new.prev_close) / new.prev_close * 100
+        if abs(implied_pct - new.change_pct) > _PCT_MISMATCH_TOLERANCE:
+            _add(reasons, invalid, "change_pct_mismatch", False)
+
+    if prev is not None and not invalid:
+        if prev.data_timestamp is not None and new.data_timestamp is not None:
+            prev_ts = prev.data_timestamp if prev.data_timestamp.tzinfo else prev.data_timestamp.replace(tzinfo=timezone.utc)
+            new_ts = new.data_timestamp if new.data_timestamp.tzinfo else new.data_timestamp.replace(tzinfo=timezone.utc)
+            if new_ts < prev_ts:  # 严格早于才算倒退；同秒更新不判罚
+                _add(reasons, invalid, "time_regress", False)
+        if prev.price is not None and prev.price > 0 and new.price is not None:
+            drift = abs(new.price - prev.price) / prev.price
+            limit = board_limit_pct(new)
+            if drift > limit:
+                _add(reasons, invalid, f"tick_jump_gt_{int(limit * 100)}pct", False)
+
+    if invalid:
+        new.quality = Quality.invalid
+    elif reasons:
+        new.quality = Quality.low
+    else:
+        new.quality = Quality.high
+    new.quality_reasons = reasons
+    return new
+
+
+def validate_order_book(ob: OrderBook) -> OrderBook:
+    reasons: list[str] = []
+    invalid: list[str] = []
+    bid_prices = [lv.price for lv in ob.bids if lv.price is not None]
+    ask_prices = [lv.price for lv in ob.asks if lv.price is not None]
+    if not bid_prices or not ask_prices:
+        _add(reasons, invalid, "empty_order_book", False)
+    else:
+        if any(p <= 0 for p in bid_prices + ask_prices):
+            _add(reasons, invalid, "non_positive_price", True)
+        if any(lv.volume is not None and lv.volume < 0 for lv in ob.bids + ob.asks):
+            _add(reasons, invalid, "negative_volume", True)
+        if bid_prices[0] > ask_prices[0]:
+            _add(reasons, invalid, "bid1_above_ask1", True)
+        # 买档必须严格降序，卖档必须严格升序
+        for seq, descending in ((bid_prices, True), (ask_prices, False)):
+            broken = any(
+                (seq[i] <= seq[i + 1]) if descending else (seq[i] >= seq[i + 1])
+                for i in range(len(seq) - 1)
+            )
+            if broken:
+                _add(reasons, invalid, "level_order_broken", True)
+                break
+    if invalid:
+        ob.quality = Quality.invalid
+    elif reasons:
+        ob.quality = Quality.low
+    else:
+        ob.quality = Quality.high
+    ob.quality_reasons = reasons
+    return ob
+
+
+def mark_stale(quote: Quote, reason: str) -> Quote:
+    quote.quality = Quality.stale
+    quote.quality_reasons = [reason]
+    return quote
+
+
+def is_future(ts: datetime | None) -> bool:
+    if ts is None:
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts > utcnow() + _FUTURE_TOLERANCE
