@@ -25,6 +25,11 @@ class Settings(BaseSettings):
 
     database_url: str = f"sqlite:///{REPO_ROOT / 'data' / 'ashare.db'}"
 
+    # 全市场快照（市场宽度/情绪底座）
+    snapshot_poll_interval_seconds: float = 60.0
+    snapshot_save_interval_seconds: float = 300.0
+    parquet_dir: str = str(REPO_ROOT / "data" / "parquet")
+
     @property
     def watchlist_symbols(self) -> list[str]:
         return [s.strip() for s in self.watchlist.split(",") if s.strip()]

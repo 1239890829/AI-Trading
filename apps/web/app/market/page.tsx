@@ -1,9 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { API_BASE } from "@/lib/api";
 import { Panel } from "@/components/panel";
 import { QualityBadge } from "@/components/quality-badge";
 import { getLimitUpPool, getMarketOverview } from "@/lib/api";
+
+interface Breadth {
+  up: number; down: number; flat: number; limit_up: number; limit_down: number;
+  total: number; total_amount: number; suspended: number;
+}
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
 import type { LimitUpRecord, Quote } from "@/types/market";
 
@@ -11,18 +17,21 @@ export default function MarketPage() {
   const [indices, setIndices] = useState<Quote[]>([]);
   const [totalAmount, setTotalAmount] = useState<number | null>(null);
   const [pool, setPool] = useState<LimitUpRecord[]>([]);
+  const [breadth, setBreadth] = useState<Breadth | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState("");
 
   const load = useCallback(async () => {
     try {
-      const [overview, zt] = await Promise.all([
+      const [overview, zt, breadthRes] = await Promise.all([
         getMarketOverview(),
         getLimitUpPool().catch(() => [] as LimitUpRecord[]),
+        fetch(`${API_BASE}/api/market/breadth`).then((r) => r.json()).catch(() => null),
       ]);
       setIndices(overview.indices);
       setTotalAmount(overview.total_amount);
       setPool(zt.slice(0, 10));
+      setBreadth(breadthRes?.data?.breadth ?? null);
       setError(null);
       setUpdatedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
     } catch {
@@ -65,6 +74,28 @@ export default function MarketPage() {
           </div>
         ))}
       </div>
+
+      <div className="mb-4 grid grid-cols-3 gap-3 lg:grid-cols-6">
+        {[
+          ["上涨", breadth?.up, "text-up"],
+          ["下跌", breadth?.down, "text-down"],
+          ["涨停", breadth?.limit_up, "text-up"],
+          ["跌停", breadth?.limit_down, "text-down"],
+          ["平盘/停牌", breadth ? `${breadth.flat}/${breadth.suspended}` : null, ""],
+          ["沪深京总数", breadth?.total, ""],
+        ].map(([label, value, cls]) => (
+          <div key={String(label)} className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+            <div className="text-xs text-zinc-400">{label}</div>
+            <div className={`mt-1 font-mono text-xl font-semibold ${cls}`}>{value ?? "--"}</div>
+          </div>
+        ))}
+      </div>
+      {breadth && (
+        <p className="mb-4 text-xs text-zinc-500">
+          宽度口径：全市场快照价格法（{breadth.total} 只）；涨停 {breadth.limit_up} 只含收盘贴板未封住者，
+          权威封板口径见涨停池页（东财）。两市总额（含北交所）{fmtAmount(breadth.total_amount)}。
+        </p>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Panel title="两市成交额" source={sh?.source} dataTimestamp={sh?.data_timestamp}>

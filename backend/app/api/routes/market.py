@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.deps import get_hub
 from app.data_quality.validator import validate_order_book
@@ -22,6 +22,16 @@ def _meta(hub: QuoteHub) -> dict:
         "last_success_refresh": hub.last_success_refresh.isoformat() if hub.last_success_refresh else None,
         "generated_at": utcnow().isoformat(),
     }
+
+
+@router.get("/market/breadth")
+async def market_breadth(request: Request) -> dict:
+    """市场宽度：涨跌家数、涨跌停家数、两市成交额（来源：新浪全市场快照）。"""
+    svc = request.app.state.snapshot_service
+    payload = svc.breadth_payload()
+    if payload["breadth"] is None:
+        raise HTTPException(status_code=503, detail="全市场快照尚未就绪（冷启动抓取约需数秒）")
+    return {"data": payload, "meta": _meta(request.app.state.hub)}
 
 
 @router.get("/market/overview")

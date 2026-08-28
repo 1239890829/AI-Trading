@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,6 +17,7 @@ from app.core.db import get_engine, get_session_factory
 from app.data_providers import build_provider
 from app.models.watchlist import Base
 from app.repositories.watchlist_repo import WatchlistRepository
+from app.services.snapshot_service import MarketSnapshotService
 from app.services.quote_hub import QuoteHub
 from app.websocket.routes import router as ws_router
 
@@ -38,15 +40,26 @@ async def lifespan(app: FastAPI):
     app.state.hub = hub
     app.state.watchlist_repo = repo
 
+    snapshot_service = MarketSnapshotService(
+        poll_interval=settings.snapshot_poll_interval_seconds,
+        save_interval=settings.snapshot_save_interval_seconds,
+        parquet_dir=Path(settings.parquet_dir),
+    )
+    app.state.snapshot_service = snapshot_service
+
     poller = asyncio.create_task(hub.run(), name="quote-poller")
+    snapshotter = asyncio.create_task(snapshot_service.run(), name="market-snapshot")
     try:
         await hub.refresh()  # 冷启动立即填充，接口首次调用即有数据
     except Exception:
         log.exception("initial refresh failed; serving stale/empty until next cycle")
     yield
     poller.cancel()
+    snapshotter.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await poller
+    with contextlib.suppress(asyncio.CancelledError):
+        await snapshotter
     with contextlib.suppress(Exception):
         await provider.aclose()
 
