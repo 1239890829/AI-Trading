@@ -50,20 +50,20 @@ export default function MarketPage() {
   const advancing = "市场宽度（涨跌家数/炸板率/情绪周期）按开发顺序在 Phase 3 接入";
 
   return (
-    <main className="h-full flex flex-col gap-4 px-4 py-3 max-w-[1600px] mx-auto w-full overflow-y-auto">
+    <main className="h-full flex flex-col gap-3 px-4 py-3 max-w-[1600px] mx-auto w-full">
       {error && (
         <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-600 dark:text-amber-300">
           {error}
         </div>
       )}
-      <div className="mb-4 flex flex-wrap items-end justify-between gap-2">
-        <h1 className="text-xl font-semibold">市场总览</h1>
+      <div className="flex shrink-0 flex-wrap items-end justify-between gap-2">
+        <h1 className="text-lg font-semibold">市场总览</h1>
         <span className="text-xs text-zinc-400">更新 {updatedAt || "--"}</span>
       </div>
 
-      <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+      <div className="grid shrink-0 grid-cols-3 gap-3 md:grid-cols-6">
         {indices.map((q) => (
-          <div key={q.symbol} className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+          <div key={q.symbol} className="rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800">
             <div className="flex items-baseline justify-between">
               <span className="text-xs text-zinc-400">{q.name ?? q.symbol}</span>
               <QualityBadge quality={q.quality} reasons={q.quality_reasons} />
@@ -75,7 +75,7 @@ export default function MarketPage() {
         ))}
       </div>
 
-      <div className="mb-4 grid grid-cols-3 gap-3 lg:grid-cols-6">
+      <div className="grid shrink-0 grid-cols-3 gap-3 lg:grid-cols-6">
         {[
           ["上涨", breadth?.up, "text-up"],
           ["下跌", breadth?.down, "text-down"],
@@ -84,9 +84,9 @@ export default function MarketPage() {
           ["平盘/停牌", breadth ? `${breadth.flat}/${breadth.suspended}` : null, ""],
           ["沪深京总数", breadth?.total, ""],
         ].map(([label, value, cls]) => (
-          <div key={String(label)} className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+          <div key={String(label)} className="rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800">
             <div className="text-xs text-zinc-400">{label}</div>
-            <div className={`mt-1 font-mono text-xl font-semibold ${cls}`}>{value ?? "--"}</div>
+            <div className={`font-mono text-lg font-semibold ${cls}`}>{value ?? "--"}</div>
           </div>
         ))}
       </div>
@@ -97,8 +97,8 @@ export default function MarketPage() {
         </p>
       )}
 
-      <div className="grid min-h-[320px] flex-1 gap-4 lg:grid-cols-2">
-        <Panel title="两市成交额" source={sh?.source} dataTimestamp={sh?.data_timestamp}>
+      <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-2">
+        <Panel title="两市成交额" className="min-h-0 overflow-hidden" source={sh?.source} dataTimestamp={sh?.data_timestamp}>
           <div className="px-4 py-6">
             <p className="font-mono text-3xl font-semibold">{fmtAmount(totalAmount)}</p>
             <p className="mt-2 text-xs text-zinc-400">
@@ -128,7 +128,7 @@ export default function MarketPage() {
         </Panel>
       </div>
 
-      <p className="mt-6 rounded-lg border border-zinc-200 px-4 py-3 text-xs text-zinc-400 dark:border-zinc-800">
+      <p className="shrink-0 truncate rounded-lg border border-zinc-200 px-4 py-2 text-xs text-zinc-400 dark:border-zinc-800" title="{advancing}">
         说明：{advancing}。本页所有数据均标注来源与数据时间；免费数据源失败时接口返回 502，前端展示错误态，不伪造实时数据。
       </p>
     </main>
