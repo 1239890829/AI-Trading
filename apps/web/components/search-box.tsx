@@ -48,6 +48,7 @@ export function SearchBox() {
     try {
       await addToWatchlist(item.symbol, item.name ?? undefined);
       setItems((prev) => prev.map((i) => (i.symbol === item.symbol ? { ...i, is_realtime: true } : i)));
+      window.dispatchEvent(new CustomEvent("watchlist-changed"));
     } catch {}
   }
 

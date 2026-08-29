@@ -1,14 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CandlestickData, createChart, HistogramData, IChartApi, LineData, SeriesMarker, Time } from "lightweight-charts";
+import { CandlestickData, createChart, HistogramData, IChartApi, LineData, Time } from "lightweight-charts";
 import { calcEMA } from "@/lib/technical-analysis";
 import type { Kline } from "@/types/market";
 
 interface Props {
   bars: Kline[];
   className?: string;
-  lhbDates?: { date: string; note?: string }[];
 }
 
 type Indicators = { ma5: boolean; ma10: boolean; ma20: boolean; ma60: boolean; vol: boolean; macd: boolean; boll: boolean; amt: boolean; bs: boolean };
@@ -50,10 +49,11 @@ function calcBOLL(closes: number[], n = 20, k = 2) {
   return { ma, up, low };
 }
 
-/** K 线图（专业版）：MA5/10/20/60、BOLL(20,2)、成交量+均量线(5/10/20)、MACD 副图、
- * 金叉死叉技术信号、龙虎榜日标记、指标开关。默认聚焦最近 20 根。 */
-export function KlineChartPro({ bars, className, lhbDates }: Props) {
+/** K 线图（专业版）：MA5/10/20/60、BOLL(20,2)、成交量+均量线(5/10/20)、MACD/成交额副图、
+ * 指标开关、缩放按钮。默认聚焦最近 20 根。 */
+export function KlineChartPro({ bars, className }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
   const [ind, setInd] = useState<Indicators>({ ma5: true, ma10: true, ma20: true, ma60: true, vol: true, macd: false, boll: false, amt: false, bs: true });
 
   useEffect(() => {
@@ -65,6 +65,7 @@ export function KlineChartPro({ bars, className, lhbDates }: Props) {
       timeScale: { timeVisible: false, borderVisible: false },
       rightPriceScale: { borderVisible: false },
     });
+    chartRef.current = chart;
     const candle = chart.addCandlestickSeries({
       upColor: "#f43f5e", downColor: "#10b981", borderUpColor: "#f43f5e", borderDownColor: "#10b981",
       wickUpColor: "#f43f5e", wickDownColor: "#10b981",
@@ -138,30 +139,13 @@ export function KlineChartPro({ bars, className, lhbDates }: Props) {
       chart.priceScale("macd").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
     }
 
-    // 标记：金叉死叉技术信号 + 龙虎榜日
-    const markers: SeriesMarker<Time>[] = [];
-    if (ind.bs) {
-      const ma5 = calcMA(closes, 5);
-      const ma10 = calcMA(closes, 10);
-      for (let i = 1; i < data.length; i++) {
-        const a0 = ma5[i - 1], b0 = ma10[i - 1], a1 = ma5[i], b1 = ma10[i];
-        if (a0 == null || b0 == null || a1 == null || b1 == null) continue;
-        if (a0 <= b0 && a1 > b1) markers.push({ time: times[i], position: "belowBar", color: "#f43f5e", shape: "arrowUp", text: "金叉" });
-        else if (a0 >= b0 && a1 < b1) markers.push({ time: times[i], position: "aboveBar", color: "#10b981", shape: "arrowDown", text: "死叉" });
-      }
-    }
-    for (const lhb of lhbDates ?? []) {
-      if (!markers.some((mk) => mk.time === (lhb.date as Time))) {
-        markers.push({ time: lhb.date as Time, position: "aboveBar", color: "#a855f7", shape: "circle", text: "榜" });
-      }
-    }
-    markers.sort((a, b) => String(a.time).localeCompare(String(b.time)));
-    candle.setMarkers(markers.slice(-80));
-
     // 默认聚焦最近 20 根
     chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, data.length - 20), to: data.length + 2 });
-    return () => chart.remove();
-  }, [bars, ind, lhbDates]);
+    return () => {
+      chart.remove();
+      chartRef.current = null;
+    };
+  }, [bars, ind]);
 
   const toggles: [keyof Indicators, string, string?][] = [
     ["ma5", "MA5", "#facc15"],
@@ -172,11 +156,34 @@ export function KlineChartPro({ bars, className, lhbDates }: Props) {
     ["boll", "BOLL"],
     ["amt", "成交额"],
     ["macd", "MACD"],
-    ["bs", "技术信号"],
   ];
 
+  function zoomTime(factor: number) {
+    const ts = chartRef.current?.timeScale();
+    if (!ts) return;
+    const range = ts.getVisibleLogicalRange();
+    if (!range) return;
+    const center = (range.from + range.to) / 2;
+    const half = ((range.to - range.from) / 2) * factor;
+    ts.setVisibleLogicalRange({ from: center - half, to: center + half });
+  }
+
   return (
-    <div className={`flex min-h-0 flex-col ${className ?? ""}`}>
+    <div className={`relative flex min-h-0 flex-col ${className ?? ""}`}>
+      <div className="absolute right-2 top-2 z-10 flex gap-1">
+        <button onClick={() => zoomTime(0.7)} className="h-6 w-6 rounded border border-zinc-700 bg-zinc-900/80 text-xs text-zinc-300 hover:bg-zinc-800" aria-label="放大">＋</button>
+        <button onClick={() => zoomTime(1.4)} className="h-6 w-6 rounded border border-zinc-700 bg-zinc-900/80 text-xs text-zinc-300 hover:bg-zinc-800" aria-label="缩小">−</button>
+        <button
+          onClick={() => {
+            const n = bars.length;
+            chartRef.current?.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 20), to: n + 2 });
+          }}
+          className="h-6 rounded border border-zinc-700 bg-zinc-900/80 px-1.5 text-[10px] text-zinc-300 hover:bg-zinc-800"
+          aria-label="回到最近20日"
+        >
+          20D
+        </button>
+      </div>
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-zinc-100 px-3 py-1 text-[11px] dark:border-zinc-800/60">
         <span className="text-zinc-400">指标：</span>
         {toggles.map(([key, label, color]) => (

@@ -270,7 +270,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                     </div>
                   )}
                   <div className="min-h-0 flex-1">
-                    <KlineChartPro bars={bars} lhbDates={lhbDates} className="h-full" />
+                    <KlineChartPro bars={bars} className="h-full" />
                   </div>
                 </div>
               ) : (
@@ -344,31 +344,33 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
         <div className="flex min-h-0 flex-col gap-2">
 
         <Panel
-          title={
-            <span className="flex gap-2">
-              {(
-                [
-                  ["book", "盘口"],
-                  ["trades", "逐笔"],
-                  ["profile", "资料"],
-                  ["info", "资讯"],
-                ] as const
-              ).map(([k, label]) => (
-                <button
-                  key={k}
-                  onClick={() => setRightTab(k)}
-                  className={`rounded px-1.5 py-0.5 text-xs ${rightTab === k ? "bg-zinc-100 font-semibold text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100" : "text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
-                >
-                  {label}
-                </button>
-              ))}
-            </span>
-          }
-          source={rightTab === "trades" ? trades[0]?.source : "eastmoney"}
-          dataTimestamp={rightTab === "book" ? book?.data_timestamp : undefined}
+          title={rightTab === "book" ? "五档盘口" : rightTab === "trades" ? "逐笔成交" : rightTab === "profile" ? "公司资料" : "资讯"}
           bodyClassName="overflow-y-auto"
           className="min-h-0 flex-1 overflow-hidden"
         >
+          <div className="flex shrink-0 gap-1 border-b border-zinc-100 px-2 py-1 dark:border-zinc-800/60">
+            {(
+              [
+                ["book", "盘口"],
+                ["trades", "逐笔"],
+                ["profile", "资料"],
+                ["info", "资讯"],
+              ] as const
+            ).map(([k, label]) => (
+              <button
+                key={k}
+                onClick={() => setRightTab(k)}
+                className={`rounded px-2 py-0.5 text-xs ${rightTab === k ? "bg-zinc-100 font-medium dark:bg-zinc-800" : "text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
+              >
+                {label}
+              </button>
+            ))}
+            {rightTab === "book" && book?.data_timestamp && (
+              <span className="ml-auto self-center pr-1 text-[10px] text-zinc-500">
+                {book.source} · {new Date(book.data_timestamp).toLocaleTimeString("zh-CN", { hour12: false })}
+              </span>
+            )}
+          </div>
           {rightTab === "profile" && (
             <div className="px-3 py-2 text-xs">
               {company?.boards && company.boards.length > 0 && (

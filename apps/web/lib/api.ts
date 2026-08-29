@@ -102,11 +102,11 @@ export async function getWatchlist(): Promise<WatchlistItem[]> {
   return (await getJson<WatchlistItem[]>("/api/watchlist")).data;
 }
 
-export async function addToWatchlist(symbol: string, name?: string): Promise<WatchlistItem> {
+export async function addToWatchlist(symbol: string, name?: string, group?: string): Promise<WatchlistItem> {
   const res = await fetch(`${API_BASE}/api/watchlist`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ symbol, name }),
+    body: JSON.stringify({ symbol, name, group: group ?? "默认" }),
   });
   if (!res.ok) throw new Error(`addToWatchlist: HTTP ${res.status}`);
   return (await res.json()).data;
