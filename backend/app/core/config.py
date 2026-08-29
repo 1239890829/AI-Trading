@@ -32,6 +32,24 @@ class Settings(BaseSettings):
     snapshot_save_interval_seconds: float = 300.0
     parquet_dir: str = str(REPO_ROOT / "data" / "parquet")
 
+    # ---- 盘后复盘 Agent ----
+    # 分析器：rules（默认，确定性、零成本）| llm（需配 base_url + api_key）
+    review_model: str = "rules"
+    review_methodology_version: str = "v1"
+    # 调度：北京时间几点几分触发收盘复盘
+    review_run_hour: int = 15
+    review_run_minute: int = 30
+    review_scheduler_enabled: bool = True
+    review_check_interval_seconds: float = 60.0
+    # LLM 分析器（未配置时自动降级到 rules）
+    review_llm_base_url: str = ""
+    review_llm_api_key: str = ""
+    review_llm_model: str = ""
+
+    @property
+    def review_dir(self) -> str:
+        return str(REPO_ROOT / "data" / "review")
+
     @property
     def watchlist_symbols(self) -> list[str]:
         return [s.strip() for s in self.watchlist.split(",") if s.strip()]

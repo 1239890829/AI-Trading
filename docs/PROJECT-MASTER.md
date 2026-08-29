@@ -53,7 +53,8 @@ ashare-ai-trader/
 │   │   │       ├── health.py          # GET /api/health（含 provider 链/stale/失败计数）
 │   │   │       ├── market.py          # 行情/宽度/情绪/K线/盘口/分时/逐笔/资金/财务/公司/公告/新闻/板块/涨停/炸板/龙虎榜/搜索
 │   │   │       ├── watchlist.py       # 自选 CRUD + 分组
-│   │   │       └── paper.py           # 模拟交易（账户/持仓/委托/撤单/成交）
+│   │   │       ├── paper.py           # 模拟交易（账户/持仓/委托/撤单/成交）
+│   │   │       └── review.py          # 盘后复盘（run/reports/compare/versions/effectiveness）
 │   │   ├── core/
 │   │   │   ├── config.py              # Settings（ASHARE_* 环境变量）
 │   │   │   └── db.py                  # 引擎(:memory:→StaticPool) + 幂等迁移 + session
@@ -80,8 +81,19 @@ ashare-ai-trader/
 │   │   ├── data_quality/validator.py  # 5级质量 + 全部规则
 │   │   ├── sentiment/engine.py        # 情绪阶段判定（可解释）
 │   │   ├── paper/engine.py            # 模拟交易撮合引擎
+│   │   ├── review/                    # 盘后复盘 Agent（每日收盘自动复盘）
+│   │   │   ├── schemas.py             # 核心数据结构（DataGap 是一等公民）
+│   │   │   ├── config.py              # 方法论配置（可版本化 yaml 外置）
+│   │   │   ├── models.py              # 持久化三表（reports/action_items/meta_insights）
+│   │   │   ├── collector.py           # 数据自采（缺失标 gap，不臆测）
+│   │   │   ├── analyzers.py           # Analyzer 协议 + RulesAnalyzer(默认) + LLMAnalyzer(占位)
+│   │   │   ├── model_router.py        # 分析器路由（配置切换+降级+成本记录）
+│   │   │   ├── synthesis.py           # 改进项合成（优先级+预期影响）
+│   │   │   ├── methodology.py         # 元结论 + 历史效果统计（自我迭代）
+│   │   │   ├── storage.py             # 落库+落盘+检索+对比
+│   │   │   └── service.py             # 编排 + 调度器（含收盘后自动触发）
 │   │   └── websocket/routes.py        # /ws/quotes
-│   ├── tests/（9 文件 81 用例）
+│   ├── tests/（10 文件 89 用例；含 test_review 8 用例）
 │   ├── requirements.txt / Dockerfile / .env（key，gitignored）
 ├── apps/web/
 │   ├── app/（7 路由页面）
@@ -125,7 +137,7 @@ ashare-ai-trader/
 
 ---
 
-# 五、REST API 全表（32 端点）
+# 五、REST API 全表（38 端点）
 
 | 方法 | 路径 | 说明 | 数据源 |
 |---|---|---|---|
@@ -152,6 +164,12 @@ ashare-ai-trader/
 | GET/POST/DELETE | /api/paper/* | 模拟交易（account/positions/orders/fills/cancel） | 撮合引擎 |
 | POST | /api/paper/reset | 重置模拟账户：清仓+清委托与成交历史+资金回初始额度（可传 initial_cash） | 撮合引擎 |
 | WS | /ws/quotes | snapshot/quotes/stale/pong + subscribe | Hub |
+| POST | /api/review/run | 手动触发复盘（可带 trade_date / methodology_version；调度器之外的补跑入口） | 自采+分析 |
+| GET | /api/review/reports | 复盘报告列表（结构化摘要） | SQLite |
+| GET | /api/review/reports/{trade_date} | 某交易日完整复盘报告 | SQLite+JSON |
+| GET | /api/review/compare?from=&to= | 两日报告对比（缺口修复/情绪迁移/改进项处置） | SQLite |
+| GET | /api/review/methodology/versions | 可用方法论版本列表 | yaml |
+| GET | /api/review/effectiveness?version= | 改进项采纳率/回退率 + 演进建议（自我迭代证据面） | SQLite |
 
 规划中（§阶段）：/api/backtests、/api/paper 撮合增强、/api/news 全市场流、/api/screeners。
 
@@ -267,7 +285,8 @@ ashare-ai-trader/
 1. ~~**交易前端打磨**：持仓成本线画上K线、成交记录列表页~~ ✅ 已完成（2026-08-29）
 2. ~~**重置账户入口**~~ ✅ 已完成（2026-08-29）
 3. ~~**概念题材 chips 过滤风格标签**（"大盘股/MSCI中国"混入"白酒"）~~ ✅ 已完成（2026-08-29）
-4. **新闻/公告 AI 摘要**（Phase 7 前哨）
+4. ~~**盘后复盘 Agent 模块**~~ ✅ 已完成（2026-08-29）：`app/review/`（自采/规则分析/模型路由降级/方法论版本化/元结论自我迭代/落库检索对比）+ 调度器（交易日 15:30 自动触发）+ 6 个 REST 端点。详见 docs/review-agent.md
+5. **新闻/公告 AI 摘要**（Phase 7 前哨）
 5. Phase 5：选股器（快照+因子扫描）→ 评分系统
 6. Phase 6 后半：回测引擎（按 docs/backtest-rules.md 强制禁令）
 
