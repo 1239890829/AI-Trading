@@ -75,6 +75,28 @@ async def place_order(body: OrderIn, request: Request):
                      "filled_price": order.filled_price, "fee": order.fee, "reason": order.reason}}
 
 
+@router.get("/paper/fills")
+async def paper_fills(request: Request, symbol: str | None = None):
+    """已成交记录（K线 B/S 标记数据源）：date/side/price/quantity。"""
+    engine = _engine(request)
+    from app.models.paper import PaperOrder
+
+    with engine._sf() as db:
+        q = db.query(PaperOrder).filter(PaperOrder.status == "filled")
+        if symbol:
+            q = q.filter(PaperOrder.symbol == symbol)
+        q = q.order_by(PaperOrder.id.desc()).limit(200)
+        rows = q.all()
+        return {"data": [
+            {"symbol": o.symbol,
+             "date": (o.created_at.replace(tzinfo=__import__("datetime").timezone.utc).astimezone().strftime("%Y-%m-%d") if o.created_at else ""),
+             "side": o.side,
+             "price": o.filled_price or o.price,
+             "quantity": o.quantity}
+            for o in rows
+        ]}
+
+
 @router.delete("/paper/orders/{order_id}")
 async def cancel_order(order_id: int, request: Request):
     engine = _engine(request)

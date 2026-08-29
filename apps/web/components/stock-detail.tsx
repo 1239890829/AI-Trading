@@ -3,17 +3,37 @@
 import { useEffect, useState } from "react";
 import { MinuteChart } from "@/components/minute-chart";
 import { KlineChartPro } from "@/components/kline-chart-pro";
+import { TradeForm } from "@/components/trade-form";
 import { Panel } from "@/components/panel";
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
 import { useQuoteStream } from "@/hooks/use-quote-stream";
 import { analyze } from "@/lib/technical-analysis";
-import { addToWatchlist, API_BASE, getKline, getMinuteLine, getOrderBook, getQuotes, getTrades, type MinutePoint } from "@/lib/api";
+import {
+  addToWatchlist,
+  API_BASE,
+  cancelPaperOrder,
+  getKline,
+  getMinuteLine,
+  getOrderBook,
+  getPaperAccount,
+  getPaperFills,
+  getPaperOrders,
+  getPaperPositions,
+  getQuotes,
+  getTrades,
+  getWatchlist,
+  placePaperOrder,
+  type MinutePoint,
+  type PaperAccountInfo,
+  type PaperOrderInfo,
+  type PaperPositionInfo,
+} from "@/lib/api";
 import { fmt, fmtAmount, fmtVolume, pctColor, pctText, timeText } from "@/lib/format";
 import type { Kline, OrderBook, Quote, Trade } from "@/types/market";
 
 type ChartTab = "kline" | "minute" | "flow";
-type RightTab = "book" | "trades" | "profile" | "info";
+type RightTab = "book" | "trades" | "trade" | "profile" | "info";
 
 interface LonghuSeat { seat?: string | null; seat_type: string; buy?: number | null; sell?: number | null; net?: number | null; rise_probability_3day?: number | null }
 interface LonghuDetail { trade_date: string; buy_seats: LonghuSeat[]; sell_seats: LonghuSeat[]; empty?: boolean }
@@ -53,6 +73,8 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   const [anns, setAnns] = useState<InfoItem[] | null>(null);
   const [news, setNews] = useState<InfoItem[] | null>(null);
   const [company, setCompany] = useState<CompanyProfile | null>(null);
+  const [fills, setFills] = useState<{ date: string; side: string; price: number; quantity: number }[]>([]);
+  const [paper, setPaper] = useState<{ acc: PaperAccountInfo; positions: PaperPositionInfo[]; orders: PaperOrderInfo[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [inWatchlist, setInWatchlist] = useState(false);
   const [quote, setQuote] = useState<Quote | null>(null);
@@ -105,6 +127,25 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   }, [symbol]);
 
   useEffect(() => {
+    if (!symbol) return;
+    let alive = true;
+    const loadPaper = async () => {
+      try {
+        const [acc, positions, orders] = await Promise.all([getPaperAccount(), getPaperPositions(), getPaperOrders()]);
+        if (alive) setPaper({ acc, positions, orders });
+      } catch {}
+    };
+    void loadPaper();
+    const t = setInterval(loadPaper, 10000);
+    window.addEventListener("paper-changed", loadPaper);
+    return () => {
+      alive = false;
+      clearInterval(t);
+      window.removeEventListener("paper-changed", loadPaper);
+    };
+  }, [symbol]);
+
+  useEffect(() => {
     let alive = true;
     getWatchlistSymbols().then((list) => alive && setInWatchlist(list.includes(symbol)));
     return () => {
@@ -133,8 +174,9 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
       fetch(`${API_BASE}/api/company/${symbol}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
       fetch(`${API_BASE}/api/announcements/${symbol}?limit=8`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
       fetch(`${API_BASE}/api/news/${symbol}?limit=8`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      getPaperFills(symbol).catch(() => [] as { date: string; side: string; price: number; quantity: number }[]),
     ])
-      .then(([b, ob, tr, min, lh, cf, fins, comp, anns, news]) => {
+      .then(([b, ob, tr, min, lh, cf, fins, comp, anns, news, fills]) => {
         if (!alive) return;
         setBars(b);
         setBook(ob);
@@ -146,6 +188,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
         if (comp?.data) setCompany(comp.data);
         if (anns?.data) setAnns(anns.data.items);
         if (news?.data) setNews(news.data.items);
+        setFills(fills);
       })
       .catch((e: Error) => alive && setError(e.message));
     return () => {
@@ -270,7 +313,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                     </div>
                   )}
                   <div className="min-h-0 flex-1">
-                    <KlineChartPro bars={bars} className="h-full" />
+                    <KlineChartPro bars={bars} tradeMarks={fills} className="h-full" />
                   </div>
                 </div>
               ) : (
@@ -344,7 +387,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
         <div className="flex min-h-0 flex-col gap-2">
 
         <Panel
-          title={rightTab === "book" ? "五档盘口" : rightTab === "trades" ? "逐笔成交" : rightTab === "profile" ? "公司资料" : "资讯"}
+          title={rightTab === "book" ? "五档盘口" : rightTab === "trades" ? "逐笔成交" : rightTab === "trade" ? "模拟交易" : rightTab === "profile" ? "公司资料" : "资讯"}
           bodyClassName="overflow-y-auto"
           className="min-h-0 flex-1 overflow-hidden"
         >
@@ -353,6 +396,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
               [
                 ["book", "盘口"],
                 ["trades", "逐笔"],
+                ["trade", "交易"],
                 ["profile", "资料"],
                 ["info", "资讯"],
               ] as const
@@ -371,6 +415,65 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
               </span>
             )}
           </div>
+          {rightTab === "trade" && paper && (
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div className="grid shrink-0 grid-cols-2 gap-1 border-b border-zinc-100 px-3 py-2 text-xs dark:border-zinc-800/60">
+                <span className="text-zinc-400">
+                  总资产 <span className="font-mono text-sm text-zinc-100">{fmt(paper.acc.total)}</span>
+                </span>
+                <span className="text-zinc-400">
+                  现金 <span className="font-mono text-sm text-zinc-100">{fmt(paper.acc.cash)}</span>
+                </span>
+                <span className="text-zinc-400">
+                  持仓市值 <span className="font-mono text-sm text-zinc-100">{fmt(paper.acc.market_value)}</span>
+                </span>
+                <span className={paper.acc.total_pnl >= 0 ? "text-up" : "text-down"}>
+                  总盈亏 <span className="font-mono text-sm">{fmt(paper.acc.total_pnl)}（{fmt(paper.acc.total_pnl_pct)}%）</span>
+                </span>
+              </div>
+              <TradeForm symbol={symbol} price={quote?.price ?? null} limitUp={quote?.limit_up_price ?? null} limitDown={quote?.limit_down_price ?? null} />
+              <h3 className="shrink-0 px-3 pb-1 pt-2 text-xs font-medium text-zinc-300">持仓</h3>
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <table className="w-full text-sm">
+                  <tbody>
+                    {paper.positions.map((pos) => (
+                      <tr key={pos.symbol} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
+                        <td className="px-3 py-1.5">
+                          <div className="font-mono text-xs">{pos.symbol}</div>
+                          <div className="text-[11px] text-zinc-400">{pos.quantity}股 · 可卖{pos.available}</div>
+                        </td>
+                        <td className="px-2 py-1.5 text-right font-mono text-xs">{fmt(pos.cost_price)}</td>
+                        <td className={`px-3 py-1.5 text-right font-mono text-xs ${(pos.pnl ?? 0) > 0 ? "text-up" : (pos.pnl ?? 0) < 0 ? "text-down" : "text-zinc-400"}`}>
+                          {pos.pnl != null ? fmt(pos.pnl) : "--"}
+                        </td>
+                      </tr>
+                    ))}
+                    {paper.positions.length === 0 && (
+                      <tr><td colSpan={3} className="px-3 py-4 text-center text-xs text-zinc-500">空仓</td></tr>
+                    )}
+                  </tbody>
+                </table>
+                {paper.orders.filter((o) => o.status === "pending").length > 0 && (
+                  <>
+                    <h3 className="px-3 pb-1 pt-2 text-xs font-medium text-zinc-300">挂单</h3>
+                    {paper.orders.filter((o) => o.status === "pending").map((o) => (
+                      <div key={o.id} className="flex items-center justify-between border-b border-zinc-100 px-3 py-1 text-xs dark:border-zinc-800/60">
+                        <span className={o.side === "buy" ? "text-up" : "text-down"}>{o.side === "buy" ? "买" : "卖"} {o.symbol}</span>
+                        <span className="font-mono text-zinc-400">{fmt(o.price)} × {o.quantity}</span>
+                        <button
+                          onClick={async () => { await cancelPaperOrder(o.id).catch(() => {}); window.dispatchEvent(new CustomEvent("paper-changed")); }}
+                          className="rounded border border-zinc-300 px-1.5 text-zinc-400 hover:text-red-400 dark:border-zinc-600"
+                        >
+                          撤
+                        </button>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
           {rightTab === "profile" && (
             <div className="px-3 py-2 text-xs">
               {company?.boards && company.boards.length > 0 && (

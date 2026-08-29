@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CandlestickData, createChart, HistogramData, IChartApi, LineData, Time } from "lightweight-charts";
+import { CandlestickData, createChart, HistogramData, IChartApi, LineData, SeriesMarker, Time } from "lightweight-charts";
 import { calcEMA } from "@/lib/technical-analysis";
 import type { Kline } from "@/types/market";
 
 interface Props {
   bars: Kline[];
   className?: string;
+  tradeMarks?: { date: string; side: string; price: number; quantity: number }[];
 }
 
 type Indicators = { ma5: boolean; ma10: boolean; ma20: boolean; ma60: boolean; vol: boolean; macd: boolean; boll: boolean; amt: boolean; bs: boolean };
@@ -51,7 +52,7 @@ function calcBOLL(closes: number[], n = 20, k = 2) {
 
 /** K 线图（专业版）：MA5/10/20/60、BOLL(20,2)、成交量+均量线(5/10/20)、MACD/成交额副图、
  * 指标开关、缩放按钮。默认聚焦最近 20 根。 */
-export function KlineChartPro({ bars, className }: Props) {
+export function KlineChartPro({ bars, className, tradeMarks }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const [ind, setInd] = useState<Indicators>({ ma5: true, ma10: true, ma20: true, ma60: true, vol: true, macd: false, boll: false, amt: false, bs: true });
@@ -139,13 +140,38 @@ export function KlineChartPro({ bars, className }: Props) {
       chart.priceScale("macd").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
     }
 
+    const markers: SeriesMarker<Time>[] = [];
+    // 真实 B/S 点：模拟交易成交记录（B=买入日 红上箭头，S=卖出日 绿下箭头）
+    for (const t of tradeMarks ?? []) {
+      if (!bars.some((b) => b.ts.slice(0, 10) === t.date)) continue;
+      markers.push({
+        time: t.date as Time,
+        position: t.side === "buy" ? "belowBar" : "aboveBar",
+        color: t.side === "buy" ? "#f43f5e" : "#10b981",
+        shape: t.side === "buy" ? "arrowUp" : "arrowDown",
+        text: `${t.side === "buy" ? "B" : "S"} ${t.quantity}股`,
+      });
+    }
+
+    // 真实 B/S 点：模拟交易成交记录（B=买入日 红上箭头，S=卖出日 绿下箭头）
+    for (const t of tradeMarks ?? []) {
+      if (!bars.some((b) => b.ts.slice(0, 10) === t.date)) continue;
+      markers.push({
+        time: t.date as Time,
+        position: t.side === "buy" ? "belowBar" : "aboveBar",
+        color: t.side === "buy" ? "#f43f5e" : "#10b981",
+        shape: t.side === "buy" ? "arrowUp" : "arrowDown",
+        text: `${t.side === "buy" ? "B" : "S"} ${t.quantity}股`,
+      });
+    }
+
     // 默认聚焦最近 20 根
     chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, data.length - 20), to: data.length + 2 });
     return () => {
       chart.remove();
       chartRef.current = null;
     };
-  }, [bars, ind]);
+  }, [bars, ind, tradeMarks]);
 
   const toggles: [keyof Indicators, string, string?][] = [
     ["ma5", "MA5", "#facc15"],

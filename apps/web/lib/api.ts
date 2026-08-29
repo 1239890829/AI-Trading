@@ -128,6 +128,68 @@ export async function getCompanyProfile(symbol: string): Promise<CompanyProfile>
   return (await getJson<CompanyProfile>(`/api/company/${symbol}`)).data;
 }
 
+export interface PaperAccountInfo {
+  cash: number;
+  market_value: number;
+  total: number;
+  total_pnl: number;
+  total_pnl_pct: number;
+}
+
+export interface PaperPositionInfo {
+  symbol: string;
+  quantity: number;
+  available: number;
+  cost_price: number;
+  last_price?: number | null;
+  pnl?: number | null;
+  pnl_pct?: number | null;
+}
+
+export interface PaperOrderInfo {
+  id: number;
+  symbol: string;
+  side: string;
+  price: number;
+  quantity: number;
+  status: string;
+  filled_price?: number | null;
+  fee?: number | null;
+  reason?: string | null;
+  created_at?: string | null;
+}
+
+export interface PaperFill {
+  symbol: string;
+  date: string;
+  side: string;
+  price: number;
+  quantity: number;
+}
+
+export const getPaperAccount = () => getJson<PaperAccountInfo>("/api/paper/account").then((b) => b.data);
+export const getPaperPositions = () => getJson<PaperPositionInfo[]>("/api/paper/positions").then((b) => b.data);
+export const getPaperOrders = (status?: string) =>
+  getJson<PaperOrderInfo[]>(`/api/paper/orders${status ? `?status=${status}` : ""}`).then((b) => b.data);
+export const getPaperFills = (symbol: string) =>
+  getJson<PaperFill[]>(`/api/paper/fills?symbol=${symbol}`).then((b) => b.data);
+
+export async function placePaperOrder(symbol: string, side: string, price: number, quantity: number) {
+  const res = await fetch(`${API_BASE}/api/paper/orders`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ symbol, side, price, quantity }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? `HTTP ${res.status}`);
+  return body.data as { id: number; status: string; filled_price?: number | null; fee?: number | null };
+}
+
+export async function cancelPaperOrder(id: number) {
+  const res = await fetch(`${API_BASE}/api/paper/orders/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
 export async function getWatchlistGroups(): Promise<string[]> {
   return (await getJson<string[]>("/api/watchlist/groups")).data;
 }
