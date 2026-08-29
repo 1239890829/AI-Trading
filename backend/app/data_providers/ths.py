@@ -138,13 +138,23 @@ class ThsFuyaoProvider:
             source=SOURCE,
         )
 
+    INDEX_NAMES = {
+        "000001.SH": "上证指数", "399001.SZ": "深证成指", "399006.SZ": "创业板指",
+        "000688.SH": "科创50", "000300.SH": "沪深300", "000852.SH": "中证1000",
+    }
+
     async def get_indices(self) -> list[Quote]:
         data = await self._get(
             "/api/a-share/prices/snapshot",
-            {"thscodes": "000001.SH,399001.SZ,399006.SZ,000688.SH,000300.SH,000852.SH"},
+            {"thscodes": ",".join(self.INDEX_NAMES)},
         )
-        quotes = [self._parse_quote(it) for it in data.get("item") or []]
-        quotes = [q for q in quotes if q is not None]
+        quotes = []
+        for it in data.get("item") or []:
+            q = self._parse_quote(it)
+            if q is None:
+                continue
+            q.name = self.INDEX_NAMES.get(it.get("thscode"), q.name)
+            quotes.append(q)
         if not quotes:
             raise ProviderError("ths indices empty")
         return quotes

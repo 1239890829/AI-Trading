@@ -7,6 +7,7 @@ import type { Kline } from "@/types/market";
 interface Props {
   bars: Kline[];
   className?: string;
+  lhbDates?: { date: string; note?: string }[];
 }
 
 type Indicators = { ma5: boolean; ma10: boolean; ma20: boolean; ma30: boolean; vol: boolean; bs: boolean };
@@ -29,8 +30,8 @@ function calcMA(closes: number[], n: number): (number | null)[] {
   return out;
 }
 
-/** K 线图（专业版）：均线 MA5/10/20/30、成交量副图、MA 金叉死叉 BS 点、指标开关。 */
-export function KlineChartPro({ bars, className }: { bars: Kline[]; className?: string }) {
+/** K 线图（专业版）：均线 MA5/10/20/30、成交量副图、金叉死叉技术信号、龙虎榜日标记、指标开关。 */
+export function KlineChartPro({ bars, className, lhbDates }: { bars: Kline[]; className?: string; lhbDates?: { date: string; note?: string }[] }) {
   const ref = useRef<HTMLDivElement>(null);
   const [ind, setInd] = useState<Indicators>({ ma5: true, ma10: true, ma20: true, ma30: false, vol: true, bs: true });
 
@@ -75,23 +76,31 @@ export function KlineChartPro({ bars, className }: { bars: Kline[]; className?: 
       chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
     }
 
-    // BS 点：MA5 上穿/下穿 MA10（金叉买、死叉卖，纯技术信号仅供参考）
+    const markers: SeriesMarker<Time>[] = [];
+    // 技术信号：MA5 上穿/下穿 MA10（金叉/死叉）。真实 BS 点=模拟交易成交记录，Phase 6 接入
     if (ind.bs) {
       const ma5 = calcMA(closes, 5);
       const ma10 = calcMA(closes, 10);
-      const markers: SeriesMarker<Time>[] = [];
       for (let i = 1; i < data.length; i++) {
         const a0 = ma5[i - 1], b0 = ma10[i - 1], a1 = ma5[i], b1 = ma10[i];
         if (a0 == null || b0 == null || a1 == null || b1 == null) continue;
-        if (a0 <= b0 && a1 > b1) markers.push({ time: times[i], position: "belowBar", color: "#f43f5e", shape: "arrowUp", text: "B" });
-        else if (a0 >= b0 && a1 < b1) markers.push({ time: times[i], position: "aboveBar", color: "#10b981", shape: "arrowDown", text: "S" });
+        if (a0 <= b0 && a1 > b1) markers.push({ time: times[i], position: "belowBar", color: "#f43f5e", shape: "arrowUp", text: "金叉" });
+        else if (a0 >= b0 && a1 < b1) markers.push({ time: times[i], position: "aboveBar", color: "#10b981", shape: "arrowDown", text: "死叉" });
       }
-      candle.setMarkers(markers.slice(-40));
     }
+
+    // 龙虎榜日标记（紫点，hover 显示上榜原因）
+    for (const lhb of lhbDates ?? []) {
+      if (!markers.some((mk) => mk.time === (lhb.date as Time))) {
+        markers.push({ time: lhb.date as Time, position: "aboveBar", color: "#a855f7", shape: "circle", text: "榜" });
+      }
+    }
+    markers.sort((a, b) => String(a.time).localeCompare(String(b.time)));
+    candle.setMarkers(markers.slice(-80));
 
     chart.timeScale().fitContent();
     return () => chart.remove();
-  }, [bars, ind]);
+  }, [bars, ind, lhbDates]);
 
   const toggles: [keyof Indicators, string, string?][] = [
     ["ma5", "MA5", "#facc15"],
@@ -99,7 +108,7 @@ export function KlineChartPro({ bars, className }: { bars: Kline[]; className?: 
     ["ma20", "MA20", "#c084fc"],
     ["ma30", "MA30", "#fb923c"],
     ["vol", "成交量"],
-    ["bs", "BS点"],
+    ["bs", "技术信号"],
   ];
 
   return (
@@ -118,7 +127,7 @@ export function KlineChartPro({ bars, className }: { bars: Kline[]; className?: 
             {label}
           </button>
         ))}
-        <span className="ml-auto text-[10px] text-zinc-500">B/S 为 MA5×MA10 金叉死叉信号，仅供参考</span>
+        <span className="ml-auto text-[10px] text-zinc-500">金叉/死叉为 MA5×MA10 技术信号 · 紫[榜]=龙虎榜日 · 真实BS点随模拟交易上线</span>
       </div>
       <div ref={ref} className={`min-h-0 w-full flex-1 ${className ?? ""}`} />
     </div>

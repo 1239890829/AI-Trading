@@ -3,8 +3,9 @@ import { QualityBadge } from "@/components/quality-badge";
 import { timeText } from "@/lib/format";
 import type { Quality } from "@/types/market";
 
+
 interface PanelProps {
-  title: string;
+  title: ReactNode;
   children: ReactNode;
   source?: string;
   dataTimestamp?: string | null;
