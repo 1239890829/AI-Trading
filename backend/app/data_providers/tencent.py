@@ -66,9 +66,20 @@ def _price_raw(v: str | None) -> float | None:
 
 
 def to_tencent_symbol(symbol: str) -> str:
-    s = symbol.strip()
-    if s.startswith(("6", "9", "5")):
+    """转腾讯代码（sh/sz/bj + 6 位）。
+
+    ⚠️ 已带市场前缀的代码必须原样返回。此前缺失这个分支，`sh000001` 会走到
+    裸代码逻辑（不以 6/9/5 开头）被拼成 `szsh000001`，响应里根本没有这个键，
+    解析器返回空列表；空结果又被 composite 的 failover 吞掉，最终只表现为
+    "K 线数据源不可用"。2026-08-29 修复。
+    """
+    s = symbol.strip().lower()
+    if s.startswith(("sh", "sz", "bj")):
+        return s
+    if s.startswith(("6", "9", "5")):  # 沪市主板/科创/B 股、沪市 ETF
         return f"sh{s}"
+    if s.startswith(("4", "8")):  # 北交所
+        return f"bj{s}"
     return f"sz{s}"
 
 
@@ -132,6 +143,13 @@ def parse_search_row(code_field: str, name: str) -> SymbolSearchItem | None:
         market=m.group(1).upper(),
         source=SOURCE,
     )
+
+
+def _as_aware(dt: datetime | None) -> datetime | None:
+    """naive datetime 视为 UTC，避免与 bar 的 aware 时间戳比较时抛 TypeError。"""
+    if dt is None or dt.tzinfo is not None:
+        return dt
+    return dt.replace(tzinfo=timezone.utc)
 
 
 def parse_kline_payload(symbol: str, timeframe: str, payload: dict) -> list[Kline]:
@@ -257,6 +275,10 @@ class TencentProvider:
         if resp.status_code != 200:
             raise ProviderError(f"tencent kline HTTP {resp.status_code}")
         bars = parse_kline_payload(symbol, timeframe, resp.json())
+        # 调用方习惯传 naive datetime，而 bar 时间戳是 UTC aware；不归一化的话
+        # 比较会抛 TypeError，表现为"K 线取不到"而非类型错误，极难排查。
+        start = _as_aware(start)
+        end = _as_aware(end)
         if start is not None:
             bars = [b for b in bars if b.ts >= start]
         if end is not None:

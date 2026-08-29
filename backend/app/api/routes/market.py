@@ -28,11 +28,17 @@ def _meta(hub: QuoteHub) -> dict:
 
 @router.get("/market/sentiment")
 async def market_sentiment(request: Request, hub: QuoteHub = Depends(get_hub)) -> dict:
-    """情绪周期判定（§5.5）：阶段+温度+指标依据+置信度+误判原因+切换条件。结果缓存 60s。"""
+    """情绪周期判定（§5.5）：阶段+温度+指标依据+置信度+误判原因+切换条件+次日验证项。
+
+    日期锚定改由 `trade_calendar` 提供（上证日 K 推导），不再用 `date.today()`
+    加减天数猜测——那正是 2026-08-29 把市场误判为「高潮」的根因：东财涨停池对
+    非交易日静默回退，导致"昨日池 × 昨日快照"的自指计算。
+    结果缓存 60s。
+    """
     import time as _time
 
+    from app.market import trade_calendar as tc
     from app.sentiment.engine import compute_sentiment
-    from datetime import timedelta
 
     svc = request.app.state.snapshot_service
     if svc.breadth is None:
@@ -41,8 +47,19 @@ async def market_sentiment(request: Request, hub: QuoteHub = Depends(get_hub)) -
     if cache and _time.time() - cache[0] < 60:
         return cache[1]
 
-    today = date.today()
-    yesterday = today - timedelta(days=2 if today.weekday() == 0 else 1)  # 跳过周一的周末
+    try:
+        days = await tc.trading_days(hub.provider)
+    except Exception as exc:
+        log.warning("trading calendar unavailable: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="交易日历不可用，拒绝输出情绪判定（猜测日期会产生自指计算）",
+        ) from exc
+
+    anchor = tc.last_trade_date(days)
+    prev = tc.prev_trade_date(days, anchor)
+    if not anchor or not prev:
+        raise HTTPException(status_code=503, detail="无法定位最近两个交易日")
 
     async def _pool(d: date) -> list:
         try:
@@ -51,13 +68,37 @@ async def market_sentiment(request: Request, hub: QuoteHub = Depends(get_hub)) -
             log.warning("sentiment pool %s failed: %s", d, exc)
             return []
 
-    pool_today, pool_yesterday = await asyncio.gather(_pool(today), _pool(yesterday))
-    result = compute_sentiment(svc.breadth, pool_today, pool_yesterday, svc.snapshot)
+    async def _breaks(d: date) -> list:
+        try:
+            return await hub.provider.get_limit_break_pool(d)
+        except Exception as exc:
+            log.warning("sentiment break pool %s failed: %s", d, exc)
+            return []
+
+    pool_today, pool_yesterday, breaks = await asyncio.gather(
+        _pool(anchor), _pool(prev), _breaks(anchor)
+    )
+
+    max_board_prev = max(
+        (int(r.consecutive_boards or 1) for r in pool_yesterday), default=0
+    )
+
+    result = compute_sentiment(
+        breadth=svc.breadth,
+        pool_today=pool_today,
+        pool_yesterday=pool_yesterday,
+        snapshot=svc.snapshot,
+        trade_date=anchor,
+        prev_trade_date=prev,
+        max_board_prev=max_board_prev,
+        break_count=len(breaks) if breaks else None,
+    )
     payload = {
         "data": {
             **result,
             "pool_today_count": len(pool_today),
             "pool_yesterday_count": len(pool_yesterday),
+            "is_last_trade_date_today": anchor == date.today(),
         },
         "meta": _meta(hub),
     }

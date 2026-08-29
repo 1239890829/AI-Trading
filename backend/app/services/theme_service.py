@@ -31,6 +31,13 @@ import logging
 from collections import defaultdict
 from datetime import date, timedelta
 
+from app.services.dragon_service import (
+    dragon_score,
+    news_persistence,
+    stock_sentiment,
+    theme_core,
+)
+
 log = logging.getLogger(__name__)
 
 
@@ -813,6 +820,32 @@ def _build_card(
         primary = theme == (stock_themes.get(rec.symbol) or [theme])[0] or (
             min(stock_themes.get(rec.symbol, [theme]), key=lambda t: rank_index.get(t, 999)) == theme
         )
+        # 龙头前瞻打分 + 个股情绪：在首板/二板阶段就给出偏向，而不是等涨到高位
+        # 再用高度倒推（那是结果归因）。第二高判定用于区分前排与跟风。
+        second_highest = boards == theme_max_boards - 1 and theme_max_boards >= 3
+        dragon = dragon_score(
+            boards=boards,
+            seal_amount=rec.seal_amount,
+            float_market_cap=cap,
+            first_seal_time=(em.first_seal_time if em else None) or rec.first_seal_time,
+            break_count=(em.break_count if em else None),
+            turnover_rate=(em.turnover_rate if em else None),
+            is_theme_highest=(boards == theme_max_boards and theme_max_boards >= 2),
+            is_second_highest=second_highest,
+            boards_stat=rec.boards_stat,
+        )
+        senti = stock_sentiment(
+            boards=boards,
+            seal_amount=rec.seal_amount,
+            float_market_cap=cap,
+            first_seal_time=(em.first_seal_time if em else None) or rec.first_seal_time,
+            last_seal_time=(em.last_seal_time if em else None) or rec.last_seal_time,
+            break_count=(em.break_count if em else None),
+            turnover_rate=(em.turnover_rate if em else None),
+            is_theme_highest=(boards == theme_max_boards and theme_max_boards >= 2),
+            is_primary_theme=bool(primary),
+            boards_stat=rec.boards_stat,
+        )
         ladder.append(
             {
                 "symbol": rec.symbol,
@@ -832,6 +865,8 @@ def _build_card(
                 "last_seal_time": (em.last_seal_time if em else None) or rec.last_seal_time,
                 "seal_phase": phase,
                 "change_pct": rec.change_pct,
+                "dragon": dragon,
+                "sentiment": senti,
             }
         )
 
@@ -900,6 +935,21 @@ def _build_card(
     middle_weights = [r for r in ladder if r["role"] == "中军"]
     candidates = [r for r in ladder if r["role"] in ("补涨", "反包")]
 
+    # 炒作内核 + 持续性：回答「这个题材在炒什么」和「还值不值得跟」。
+    # 位置判据用 active_days 而非板块多周期涨幅，原因见 dragon_service.news_persistence ②。
+    reasons = [r.reason for r in members if r.reason]
+    core = theme_core(theme, reasons)
+    persistence = news_persistence(
+        theme=theme,
+        core_type=core["type"],
+        limit_up_count=total,
+        active_days=active_days,
+        board_change_pct=(board or {}).get("change_pct"),
+        main_net_inflow=(board or {}).get("main_net_inflow"),
+        has_second_board=theme_max_boards >= 2,
+        reasons=reasons,
+    )
+
     return {
         "theme": theme,
         "raw_tags": sorted({t for r in members for t in parse_theme_tags(r.reason)}) or [],
@@ -910,6 +960,8 @@ def _build_card(
         "formation": formation,
         "health_note": note,
         "risks": risks,
+        "core": core,
+        "persistence": persistence,
         "board": board,
         "board_matched": board is not None,
         "performance": {
