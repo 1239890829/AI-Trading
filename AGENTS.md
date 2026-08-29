@@ -86,7 +86,8 @@ agent-browser close                     # 收尾必须关，否则留僵尸 Chro
 | docs/data-sources.md | 四源字段口径实测记录（改 Provider 前必读） |
 | docs/api.md / websocket.md | API 与 WS 契约 |
 | docs/backtest-rules.md | 回测强制禁令（做回测前必读，代码级禁令） |
-| docs/sentiment.md / longhu.md | 情绪与龙虎榜口径 |
+| docs/sentiment.md / longhu.md | 情绪与龙虎榜口径（**改情绪模块前先读下面的复盘**） |
+| **docs/sentiment-phase-review.md** | **情绪周期：业界判据调研 + 2026-08-29「高潮」误判复盘 + P0/P1/P2 优化清单** |
 | docs/risk-management.md / mcp.md | 风控红线 / MCP 规划 |
 | docs/ui-redesign-plan.md | 布局 v3 规划与 L2 边界结论 |
 | docs/retro-and-gaps.md | **欠缺清单（你的待办池）** |
