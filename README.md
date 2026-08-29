@@ -71,3 +71,4 @@ docs/           11 篇文档（architecture / data-sources / data-dictionary / a
 - 回测强制禁令（代码级）：[docs/backtest-rules.md](docs/backtest-rules.md)
 - AI 多 Agent 与 MCP 工具：[docs/mcp.md](docs/mcp.md) · [docs/architecture.md](docs/architecture.md)
 - 其余：data-dictionary / api / websocket / longhu / sentiment / risk-management / deployment
+- UI/产品规划 v3（终端范式布局/持仓与自选分立/行情等级边界）：docs/ui-redesign-plan.md
