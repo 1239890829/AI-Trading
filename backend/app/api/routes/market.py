@@ -300,6 +300,16 @@ async def capital_flow(
     }
 
 
+@router.get("/financials/{symbol}")
+async def financials(symbol: str, periods: int = Query(default=8, ge=1, le=20), hub: QuoteHub = Depends(get_hub)) -> dict:
+    """财务摘要（东财业绩报表：营收/净利/同比/毛利率/ROE/EPS，按报告期倒序）。"""
+    try:
+        rows = await hub.provider.get_financials(symbol, periods)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"财务数据源失败：{exc}")
+    return {"data": {"symbol": symbol, "periods": rows}, "meta": _meta(hub)}
+
+
 @router.get("/search")
 async def search(q: str = Query(min_length=1, max_length=20), hub: QuoteHub = Depends(get_hub)) -> dict:
     from app.data_providers.mock import MockProvider

@@ -89,6 +89,12 @@ def parse_quote(prefix: str, fields: list[str]) -> Quote:
         volume=volume_hands * 100 if volume_hands is not None else None,
         amount=amount_wan * 1e4 if amount_wan is not None else None,
         turnover_rate=_num(fields[38] if len(fields) > 38 else None),
+        pe_ttm=_num(fields[39] if len(fields) > 39 else None),
+        pb=_num(fields[46] if len(fields) > 46 else None),
+        total_mktcap_yi=_num(fields[45] if len(fields) > 45 else None),
+        float_mktcap_yi=_num(fields[44] if len(fields) > 44 else None),
+        limit_up_price=_num(fields[47] if len(fields) > 47 else None),
+        limit_down_price=_num(fields[48] if len(fields) > 48 else None),
         data_timestamp=_bj(fields[30] if len(fields) > 30 else None),
         source=SOURCE,
     )

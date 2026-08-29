@@ -269,3 +269,25 @@ def normalize_longhu_history(raw: dict) -> dict | None:
         "after_10d": num(raw.get("D10_CLOSE_ADJCHRATE")),
         "source": EASTMONEY_SOURCE,
     }
+
+
+def normalize_financial(raw: dict) -> dict | None:
+    code = str(raw.get("SECURITY_CODE") or "")
+    rd = str(raw.get("REPORTDATE") or "")[:10]
+    if not code or not rd:
+        return None
+    num = lambda v: float(v) if v is not None else None  # noqa: E731
+    return {
+        "symbol": code,
+        "report_date": rd,
+        "revenue": num(raw.get("TOTAL_OPERATE_INCOME")),
+        "revenue_yoy": num(raw.get("YSTZ")),
+        "net_profit": num(raw.get("PARENT_NETPROFIT")),
+        "profit_yoy": num(raw.get("SJLTZ")),
+        "gross_margin": num(raw.get("XSMLL")),
+        "roe": num(raw.get("WEIGHTAVG_ROE")),
+        "eps": num(raw.get("BASIC_EPS")),
+        "debt_ratio": num(raw.get("DEBT_ASSET_RATIO")),
+        "netcash_operate_ps": num(raw.get("PER_NETCASH_OPERATE")),
+        "source": EASTMONEY_SOURCE,
+    }

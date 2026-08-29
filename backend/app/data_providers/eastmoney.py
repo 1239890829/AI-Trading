@@ -276,3 +276,21 @@ class EastmoneyProvider:
         rows = (payload.get("result") or {}).get("data") or []
         out = [nz.normalize_longhu_history(r) for r in rows]
         return [r for r in out if r is not None]
+
+    async def get_financials(self, symbol: str, periods: int = 8) -> list[dict]:
+        payload = await self._get_json(
+            "https://datacenter-web.eastmoney.com/api/data/v1/get",
+            {
+                "reportName": "RPT_LICO_FN_CPD",
+                "columns": "ALL",
+                "filter": f"(SECURITY_CODE=\"{symbol}\")",
+                "pagesize": str(periods),
+                "sort": "REPORTDATE",
+                "order": "desc",
+                "source": "WEB",
+                "client": "WEB",
+            },
+        )
+        rows = (payload.get("result") or {}).get("data") or []
+        out = [nz.normalize_financial(r) for r in rows]
+        return [r for r in out if r is not None]

@@ -21,6 +21,12 @@ export interface Quote extends AuditFields {
   volume?: number | null;
   amount?: number | null;
   turnover_rate?: number | null;
+  pe_ttm?: number | null;
+  pb?: number | null;
+  total_mktcap_yi?: number | null;
+  float_mktcap_yi?: number | null;
+  limit_up_price?: number | null;
+  limit_down_price?: number | null;
   data_timestamp?: string | null;
 }
 

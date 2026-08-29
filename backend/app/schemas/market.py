@@ -46,11 +46,18 @@ class Quote(AuditFields):
     volume: float | None = None  # 单位见 docs/data-sources.md
     amount: float | None = None  # 元
     turnover_rate: float | None = None
+    pe_ttm: float | None = None
+    pb: float | None = None
+    total_mktcap_yi: float | None = None  # 亿元
+    float_mktcap_yi: float | None = None  # 亿元
+    limit_up_price: float | None = None
+    limit_down_price: float | None = None
     data_timestamp: datetime | None = None
 
     def model_post_init(self, __context) -> None:
         for f in ("price", "open", "high", "low", "prev_close", "change", "change_pct",
-                  "volume", "amount", "turnover_rate"):
+                  "volume", "amount", "turnover_rate", "pe_ttm", "pb",
+                  "total_mktcap_yi", "float_mktcap_yi", "limit_up_price", "limit_down_price"):
             setattr(self, f, _clean(getattr(self, f)))
 
 

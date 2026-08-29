@@ -10,7 +10,9 @@ import { addToWatchlist, API_BASE, getKline, getMinuteLine, getOrderBook, getQuo
 import { fmt, fmtAmount, fmtVolume, pctColor, pctText, timeText } from "@/lib/format";
 import type { Kline, OrderBook, Quote, Trade } from "@/types/market";
 
-type Tab = "kline" | "minute" | "book" | "trades" | "longhu" | "flow";
+type Tab = "kline" | "minute" | "book" | "trades" | "longhu" | "flow" | "fin";
+
+interface FinRow { report_date: string; revenue?: number | null; revenue_yoy?: number | null; net_profit?: number | null; profit_yoy?: number | null; gross_margin?: number | null; roe?: number | null; eps?: number | null; debt_ratio?: number | null; source: string }
 
 interface FlowRow { date: string; close?: number | null; change_pct?: number | null; net_main?: number | null; net_super?: number | null; net_big?: number | null; net_mid?: number | null; net_small?: number | null; source: string }
 interface CapitalFlow { days: number; flow: FlowRow[]; streak_in: number; definition: string }
@@ -32,6 +34,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   const [minutes, setMinutes] = useState<MinutePoint[]>([]);
   const [longhu, setLonghu] = useState<{ detail: LonghuDetail; history: LonghuHistory[]; stats: LonghuStats } | null>(null);
   const [flow, setFlow] = useState<CapitalFlow | null>(null);
+  const [fins, setFins] = useState<FinRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [inWatchlist, setInWatchlist] = useState(false);
 
@@ -85,8 +88,9 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
       getMinuteLine(symbol).catch(() => [] as MinutePoint[]),
       fetch(`${API_BASE}/api/longhu/${symbol}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
       fetch(`${API_BASE}/api/capital-flow/${symbol}?days=30`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(`${API_BASE}/api/financials/${symbol}?periods=8`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ])
-      .then(([bars2, ob2, tr2, minutes2, lh, cf]) => {
+      .then(([bars2, ob2, tr2, minutes2, lh, cf, fins]) => {
         if (!alive) return;
         setBars(bars2);
         setBook(ob2);
@@ -94,6 +98,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
         setMinutes(minutes2);
         if (lh?.data) setLonghu(lh.data);
         if (cf?.data) setFlow(cf.data);
+        if (fins?.data) setFins(fins.data.periods);
       })
       .catch((e: Error) => alive && setError(e.message));
     return () => {
@@ -117,6 +122,10 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
         ["成交量", fmtVolume(d.volume) + " 手"],
         ["成交额", fmtAmount(d.amount)],
         ["换手率", d.turnover_rate != null ? `${fmt(d.turnover_rate)}%` : "--"],
+        ["PE(TTM)", d.pe_ttm != null ? fmt(d.pe_ttm) : "--"],
+        ["PB", d.pb != null ? fmt(d.pb) : "--"],
+        ["总市值", d.total_mktcap_yi != null ? `${fmt(d.total_mktcap_yi)} 亿` : "--"],
+        ["涨停价", d.limit_up_price != null ? fmt(d.limit_up_price) : "--"],
         ["来源", d.source],
       ] as const)
     : [];
@@ -156,7 +165,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
           </div>
           <div className="mt-2 grid grid-cols-4 divide-x divide-zinc-100 border-t border-zinc-100 dark:divide-zinc-800/60 dark:border-zinc-800/60">
             {stats.map(([k, v], i) => (
-              <div key={k} className={`px-3 py-2 ${i < 4 ? "border-b border-zinc-100 dark:border-zinc-800/60" : ""}`}>
+              <div key={k} className={`px-3 py-2 ${i < 8 ? "border-b border-zinc-100 dark:border-zinc-800/60" : ""}`}>
                 <div className="text-xs text-zinc-400">{k}</div>
                 <div className="font-mono text-sm tabular-nums">{v}</div>
               </div>
@@ -178,6 +187,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
             ["trades", "逐笔"],
             ["longhu", "龙虎榜"],
             ["flow", "资金"],
+            ["fin", "财务"],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -261,6 +271,36 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
       {tab === "kline" && (
         <Panel title="日 K 线（近 120 日 · 前复权）" className="min-h-0 flex-1 overflow-hidden">
           {bars.length > 0 ? <KlineChart bars={bars} className="h-full" /> : <p className="px-4 py-10 text-center text-sm text-zinc-400">等待 K 线数据…</p>}
+        </Panel>
+      )}
+
+      {tab === "fin" && (
+        <Panel title="财务摘要（按报告期倒序 · 东财业绩报表）" source={fins?.[0]?.source} className="min-h-0 flex-1 overflow-hidden">
+          {!fins || fins.length === 0 ? (
+            <p className="px-4 py-10 text-center text-sm text-zinc-400">暂无财务数据</p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="bg-zinc-50 text-left text-xs text-zinc-400 dark:bg-zinc-900/50">
+                <tr>{["报告期","营收(亿)","营收同比","归母净利(亿)","净利同比","毛利率","ROE","EPS"].map((h) => (
+                  <th key={h} className={`px-3 py-2 font-medium ${h === "报告期" ? "" : "text-right"}`}>{h}</th>
+                ))}</tr>
+              </thead>
+              <tbody>
+                {fins.map((r) => (
+                  <tr key={r.report_date} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
+                    <td className="px-3 py-1.5 font-mono text-xs">{r.report_date}</td>
+                    <td className="px-2 py-1.5 text-right font-mono">{r.revenue != null ? fmt(r.revenue / 1e8) : "--"}</td>
+                    <td className={`px-2 py-1.5 text-right font-mono text-xs ${pctColor(r.revenue_yoy)}`}>{pctText(r.revenue_yoy)}</td>
+                    <td className="px-2 py-1.5 text-right font-mono">{r.net_profit != null ? fmt(r.net_profit / 1e8) : "--"}</td>
+                    <td className={`px-2 py-1.5 text-right font-mono text-xs ${pctColor(r.profit_yoy)}`}>{pctText(r.profit_yoy)}</td>
+                    <td className="px-3 py-1.5 text-right font-mono text-xs">{r.gross_margin != null ? `${fmt(r.gross_margin)}%` : "--"}</td>
+                    <td className="px-2 py-1.5 text-right font-mono text-xs">{r.roe != null ? `${fmt(r.roe)}%` : "--"}</td>
+                    <td className="px-2 py-1.5 text-right font-mono text-xs">{r.eps != null ? fmt(r.eps) : "--"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </Panel>
       )}
 

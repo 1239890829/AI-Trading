@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 _ROUTED = (
     "get_indices", "get_quotes", "get_quote", "get_kline", "get_order_book",
     "get_trades", "get_limit_up_pool", "get_longhu_records", "search", "get_board_rankings",
-    "get_longhu_detail", "get_longhu_history", "get_capital_flow",
+    "get_longhu_detail", "get_longhu_history", "get_capital_flow", "get_financials",
 )
 
 
@@ -104,3 +104,6 @@ class CompositeProvider:
 
     async def get_capital_flow(self, symbol: str, days: int = 30) -> list:
         return await self._call("get_capital_flow", symbol, days)
+
+    async def get_financials(self, symbol: str, periods: int = 8) -> list:
+        return await self._call("get_financials", symbol, periods)
