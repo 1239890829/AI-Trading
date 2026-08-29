@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CandlestickData, createChart, HistogramData, IChartApi, LineData, SeriesMarker, Time } from "lightweight-charts";
+import { calcEMA } from "@/lib/technical-analysis";
 import type { Kline } from "@/types/market";
 
 interface Props {
@@ -10,7 +11,7 @@ interface Props {
   lhbDates?: { date: string; note?: string }[];
 }
 
-type Indicators = { ma5: boolean; ma10: boolean; ma20: boolean; ma30: boolean; vol: boolean; bs: boolean };
+type Indicators = { ma5: boolean; ma10: boolean; ma20: boolean; ma30: boolean; vol: boolean; macd: boolean; bs: boolean };
 
 const MA_DEFS: [keyof Indicators, number, string][] = [
   ["ma5", 5, "#facc15"],
@@ -33,7 +34,7 @@ function calcMA(closes: number[], n: number): (number | null)[] {
 /** K 线图（专业版）：均线 MA5/10/20/30、成交量副图、金叉死叉技术信号、龙虎榜日标记、指标开关。 */
 export function KlineChartPro({ bars, className, lhbDates }: { bars: Kline[]; className?: string; lhbDates?: { date: string; note?: string }[] }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [ind, setInd] = useState<Indicators>({ ma5: true, ma10: true, ma20: true, ma30: false, vol: true, bs: true });
+  const [ind, setInd] = useState<Indicators>({ ma5: true, ma10: true, ma20: true, ma30: false, vol: true, macd: false, bs: true });
 
   useEffect(() => {
     if (!ref.current || bars.length === 0) return;
@@ -98,7 +99,8 @@ export function KlineChartPro({ bars, className, lhbDates }: { bars: Kline[]; cl
     markers.sort((a, b) => String(a.time).localeCompare(String(b.time)));
     candle.setMarkers(markers.slice(-80));
 
-    chart.timeScale().fitContent();
+    // 默认聚焦最近 20 根（可自行缩放查看全部 120 根）
+    chart.timeScale().setVisibleLogicalRange({ from: data.length - 20, to: data.length + 2 });
     return () => chart.remove();
   }, [bars, ind, lhbDates]);
 
@@ -108,6 +110,7 @@ export function KlineChartPro({ bars, className, lhbDates }: { bars: Kline[]; cl
     ["ma20", "MA20", "#c084fc"],
     ["ma30", "MA30", "#fb923c"],
     ["vol", "成交量"],
+    ["macd", "MACD"],
     ["bs", "技术信号"],
   ];
 

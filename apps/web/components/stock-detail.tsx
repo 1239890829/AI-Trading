@@ -7,13 +7,14 @@ import { Panel } from "@/components/panel";
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
 import { useQuoteStream } from "@/hooks/use-quote-stream";
+import { analyze } from "@/lib/technical-analysis";
 import { addToWatchlist, API_BASE, getKline, getMinuteLine, getOrderBook, getQuotes, getTrades, type MinutePoint } from "@/lib/api";
 import { fmt, fmtAmount, fmtVolume, pctColor, pctText, timeText } from "@/lib/format";
 import type { Kline, OrderBook, Quote, Trade } from "@/types/market";
 
 type ChartTab = "kline" | "minute" | "flow";
 type RightTab = "book" | "trades";
-type BottomTab = "fin" | "longhu" | "flowtable";
+type BottomTab = "fin" | "longhu";
 
 interface LonghuSeat { seat?: string | null; seat_type: string; buy?: number | null; sell?: number | null; net?: number | null; rise_probability_3day?: number | null }
 interface LonghuDetail { trade_date: string; buy_seats: LonghuSeat[]; sell_seats: LonghuSeat[]; empty?: boolean }
@@ -97,6 +98,9 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   }
 
   const lhbDates = (longhu?.history ?? []).map((h) => ({ date: h.trade_date, note: h.reason ?? "" }));
+  const tech = analyze(
+    bars.map((b) => ({ ts: b.ts, open: b.open ?? 0, high: b.high ?? 0, low: b.low ?? 0, close: b.close ?? 0, volume: b.volume, change_pct: b.change_pct }))
+  );
 
   const strip = quote
     ? ([
@@ -176,9 +180,36 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
           </div>
 
           {chartTab === "kline" && (
-            <Panel title="日 K 线（近 120 日 · 前复权）" source={bars[0]?.source} bodyClassName="overflow-hidden" className="min-h-0 flex-1">
+            <Panel title="日 K 线（前复权 · 默认聚焦最近 20 日，可缩放看全部）" source={bars[0]?.source} bodyClassName="overflow-hidden" className="min-h-0 flex-1">
               {bars.length > 0 ? (
-                <KlineChartPro bars={bars} lhbDates={lhbDates} className="h-full" />
+                <div className="flex h-full min-h-0 flex-col">
+                  {tech && (
+                    <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-zinc-100 px-3 py-1.5 text-[11px] dark:border-zinc-800/60">
+                      <span
+                        className={`rounded px-1.5 py-0.5 font-medium ${
+                          tech.bias === "bull"
+                            ? "bg-up/15 text-up"
+                            : tech.bias === "bear"
+                              ? "bg-down/15 text-down"
+                              : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-300"
+                        }`}
+                      >
+                        技术评估：{tech.bias === "bull" ? "偏多" : tech.bias === "bear" ? "偏空" : "中性"}（{tech.bullCount}多/{tech.bearCount}空）
+                      </span>
+                      <span
+                        className="text-zinc-400"
+                        title={tech.signals.map((sg) => sg.name + "：" + sg.detail).join("\n")}
+                      >
+                        {tech.signals.filter((sg) => sg.bias !== "neutral").slice(0, 4).map((sg) => sg.name).join(" · ")}
+                        <span className="ml-1 underline decoration-dotted">依据ⓘ</span>
+                      </span>
+                      <span className="ml-auto text-zinc-500">多因子技术信号汇总，不构成买卖建议</span>
+                    </div>
+                  )}
+                  <div className="min-h-0 flex-1">
+                    <KlineChartPro bars={bars} lhbDates={lhbDates} className="h-full" />
+                  </div>
+                </div>
               ) : (
                 <p className="px-4 py-10 text-center text-sm text-zinc-400">等待 K 线数据…</p>
               )}
@@ -196,7 +227,8 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
               {!flow || flow.flow.length === 0 ? (
                 <p className="px-4 py-10 text-center text-sm text-zinc-400">暂无资金流数据</p>
               ) : (
-                <div className="flex h-full min-w-0 flex-col px-3 py-2">
+                <div className="grid h-full grid-cols-1 overflow-hidden md:grid-cols-[minmax(0,1fr),minmax(0,1fr)]">
+                <div className="flex min-w-0 flex-col border-r border-zinc-200 px-3 py-2 dark:border-zinc-800">
                   <div className="flex shrink-0 flex-wrap items-center gap-x-4 text-xs text-zinc-400">
                     <span>
                       连续净流入 <span className="font-mono text-sm text-zinc-100">{flow.streak_in}</span> 天
@@ -217,6 +249,28 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                     })}
                   </div>
                   <div className="shrink-0 border-t border-zinc-100 pt-1 text-[10px] text-zinc-500 dark:border-zinc-800/60">{flow.definition}</div>
+                </div>
+                {/* 右：明细表 */}
+                <div className="min-h-0 overflow-auto">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-zinc-50 text-left text-xs text-zinc-400 dark:bg-zinc-900/50">
+                      <tr>{["日期", "主力净流入", "超大单", "大单", "中单", "小单"].map((h) => (
+                        <th key={h} className={`px-3 py-2 font-medium ${h === "日期" ? "" : "text-right"}`}>{h}</th>
+                      ))}</tr>
+                    </thead>
+                    <tbody>
+                      {[...flow.flow].reverse().map((r) => (
+                        <tr key={r.date} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
+                          <td className="px-3 py-1.5 font-mono text-xs">{r.date}</td>
+                          <td className={`px-2 py-1.5 text-right font-mono text-xs ${(r.net_main ?? 0) > 0 ? "text-up" : "text-down"}`}>{fmtAmount(r.net_main)}</td>
+                          {[r.net_super, r.net_big, r.net_mid, r.net_small].map((v, j) => (
+                            <td key={j} className={`px-3 py-1.5 text-right font-mono text-xs ${(v ?? 0) > 0 ? "text-up" : "text-down"}`}>{fmtAmount(v)}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
                 </div>
               )}
             </Panel>
@@ -298,7 +352,6 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
               [
                 ["fin", "财务"],
                 ["longhu", "龙虎榜"],
-                ["flowtable", "资金明细"],
               ] as const
             ).map(([k, label]) => (
               <button
@@ -402,34 +455,8 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                 </table>
               </>
             ))}
-
-          {bottomTab === "flowtable" &&
-            (!flow || flow.flow.length === 0 ? (
-              <p className="px-4 py-8 text-center text-sm text-zinc-400">暂无资金明细</p>
-            ) : (
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-zinc-50 text-left text-xs text-zinc-400 dark:bg-zinc-900/50">
-                  <tr>{["日期", "收盘", "涨跌幅", "主力净流入", "超大单", "大单", "中单", "小单"].map((h) => (
-                    <th key={h} className={`px-3 py-2 font-medium ${h === "日期" ? "" : "text-right"}`}>{h}</th>
-                  ))}</tr>
-                </thead>
-                <tbody>
-                  {flow.flow.map((r) => (
-                    <tr key={r.date} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                      <td className="px-3 py-1.5 font-mono text-xs">{r.date}</td>
-                      <td className="px-2 py-1.5 text-right font-mono">{fmt(r.close)}</td>
-                      <td className={`px-2 py-1.5 text-right font-mono ${pctColor(r.change_pct)}`}>{pctText(r.change_pct)}</td>
-                      <td className={`px-2 py-1.5 text-right font-mono text-xs ${(r.net_main ?? 0) > 0 ? "text-up" : "text-down"}`}>{fmtAmount(r.net_main)}</td>
-                      {[r.net_super, r.net_big, r.net_mid, r.net_small].map((v, j) => (
-                        <td key={j} className={`px-3 py-1.5 text-right font-mono text-xs ${(v ?? 0) > 0 ? "text-up" : "text-down"}`}>{fmtAmount(v)}</td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ))}
         </div>
-      </Panel>
+        </Panel>
     </div>
   );
 }
