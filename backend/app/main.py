@@ -11,12 +11,15 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import health as health_route
 from app.api.routes import market as market_route
+from app.api.routes import paper as paper_route
 from app.api.routes import watchlist as watchlist_route
 from app.core.config import settings
 from app.core.db import get_engine, get_session_factory
 from app.data_providers import build_provider
+from app.models.paper import PaperAccount, PaperOrder, PaperPosition  # noqa: F401
 from app.models.watchlist import Base
 from app.repositories.watchlist_repo import WatchlistRepository
+from app.paper.engine import PaperTradingEngine
 from app.services.snapshot_service import MarketSnapshotService
 from app.services.quote_hub import QuoteHub
 from app.websocket.routes import router as ws_router
@@ -40,6 +43,42 @@ async def lifespan(app: FastAPI):
     app.state.hub = hub
     app.state.watchlist_repo = repo
 
+    async def live_quote(symbol: str):
+        try:
+            from app.data_quality.validator import validate_quote
+
+            q = await provider.get_quote(symbol)
+            if q is None:
+                return None
+            # ths 快照无涨跌停价：从腾讯源补齐（撮合的涨跌停校验依赖它）
+            if (q.limit_up_price is None or q.limit_down_price is None) and provider.name != "tencent":
+                chain = provider.providers if hasattr(provider, "providers") else []
+                tencent = next((p for p in chain if p.name == "tencent"), None)
+                if tencent is not None:
+                    try:
+                        tq = await tencent.get_quote(symbol)
+                        if tq is not None:
+                            q.limit_up_price = q.limit_up_price or tq.limit_up_price
+                            q.limit_down_price = q.limit_down_price or tq.limit_down_price
+                    except Exception:
+                        pass
+            return validate_quote(q)
+        except Exception:
+            return None
+
+    async def hub_trading_days():
+        providers = [hub.provider] + (hub.provider.providers if hasattr(hub.provider, "providers") else [])
+        for prov in providers:
+            if hasattr(prov, "get_trading_days"):
+                try:
+                    return await prov.get_trading_days()
+                except Exception:
+                    continue
+        return None
+
+    paper = PaperTradingEngine(get_session_factory(), live_quote, hub_trading_days)
+    app.state.paper = paper
+
     snapshot_service = MarketSnapshotService(
         poll_interval=settings.snapshot_poll_interval_seconds,
         save_interval=settings.snapshot_save_interval_seconds,
@@ -49,6 +88,16 @@ async def lifespan(app: FastAPI):
 
     poller = asyncio.create_task(hub.run(), name="quote-poller")
     snapshotter = asyncio.create_task(snapshot_service.run(), name="market-snapshot")
+
+    async def paper_matcher():
+        while True:
+            try:
+                await paper.match_pending()
+            except Exception:
+                log.exception("paper match_pending failed")
+            await asyncio.sleep(5)
+
+    matcher = asyncio.create_task(paper_matcher(), name="paper-matcher")
     try:
         await hub.refresh()  # 冷启动立即填充，接口首次调用即有数据
     except Exception:
@@ -58,8 +107,11 @@ async def lifespan(app: FastAPI):
     snapshotter.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await poller
+    matcher.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await snapshotter
+    with contextlib.suppress(asyncio.CancelledError):
+        await matcher
     with contextlib.suppress(Exception):
         await provider.aclose()
 
@@ -77,4 +129,5 @@ app.add_middleware(
 app.include_router(health_route.router, prefix="/api")
 app.include_router(market_route.router, prefix="/api")
 app.include_router(watchlist_route.router, prefix="/api")
+app.include_router(paper_route.router, prefix="/api")
 app.include_router(ws_router)
