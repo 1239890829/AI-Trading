@@ -286,7 +286,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
           )}
 
           {chartTab === "flow" && (
-            <Panel title="主力资金净流入（近 30 日柱状 · 明细见底部）" source={flow?.flow[0]?.source} bodyClassName="overflow-hidden" className="min-h-0 flex-1">
+            <Panel title="主力资金净流入（近 30 日 · 左图右明细）" source={flow?.flow[0]?.source} bodyClassName="overflow-hidden" className="min-h-0 flex-1">
               {!flow || flow.flow.length === 0 ? (
                 <p className="px-4 py-10 text-center text-sm text-zinc-400">暂无资金流数据</p>
               ) : (
