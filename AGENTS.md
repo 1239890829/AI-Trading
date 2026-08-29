@@ -37,6 +37,7 @@ cd backend && .venv/bin/python -m pyflakes app tests
 - **长内容写脚本文件执行**，不要超长 heredoc（终止符/引号嵌套踩过多次）。
 - pip 装包走清华镜像 `-i https://pypi.tuna.tsinghua.edu.cn/simple`；行情 httpx 客户端保持 `trust_env=False`。
 - 用户系统代理在 127.0.0.1:7897（SOCKS）：只用于 GitHub 等外网；curl 本地 API 记得 `--noproxy '*'` 或 `env -u http_proxy`。
+- **改完后端必须验证「用户正在跑的那个实例」**，不能只在临时端口起新实例验完就交付。8000 上若不是 `--reload` 启动，改完不重启就仍是旧代码；而前端一旦有兜底分支（如缺 `board_groups` 回退扁平列表），页面会与改动前**一模一样**，看起来像"功能没生效"而非"后端没重启"。验收要先打 8000：`curl -s --noproxy '*' http://127.0.0.1:8000/api/xxx` 看新字段在不在。
 - 每阶段收尾：更新 `docs/PROJECT-MASTER.md` §十二阶段表 + README 路线图 + 清扫页面过时提示。
 
 ### 2.1 接新数据源五步法（改 Provider / 加字段前必走）
