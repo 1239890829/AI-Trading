@@ -1,0 +1,294 @@
+# AShare AI Trader · 项目总整理（MASTER）
+
+> 生成于 2026-08-29。本文档是**全项目唯一总览**：事无巨细覆盖技术栈/架构/数据源/模块/API/前端/交易系统/质量/测试/配置/部署/安全/阶段状态/欠缺。细节文档在各节标注链接。
+> 当前快照：**70 测试全绿 · 前端 build 通过 · 33 次提交 · 后端 5255 行 + 前端 2941 行**。
+
+---
+
+# 一、项目概览
+
+## 1.1 定位
+A 股实时行情 + AI 量化投研 + 模拟交易工作台。**只做**行情展示/数据分析/投研/选股观察/模拟交易/回测。**第一阶段禁止**：连接真实券商、自动真实下单、无数据依据的确定性买卖结论、mock 冒充实盘。
+
+## 1.2 当前状态快照
+- 后端：FastAPI（Python 3.11），32 个 REST 端点 + 1 个 WebSocket，**四源 Provider 链**（ths→tencent→eastmoney→sina）+ mock
+- 前端：Next.js 15 App Router，7 页面 + 10 组件，终端式工作台
+- 数据：全市场快照（5550 只）落 Parquet；SQLite 业务库
+- 测试：70 用例全绿；ESLint/pyflakes 门禁零问题
+- 运行：双端本地运行中（8000/3000）
+
+---
+
+# 二、技术栈全表
+
+| 层 | 技术 | 版本/说明 |
+|---|---|---|
+| 后端框架 | FastAPI | ≥0.115 |
+| 数据校验 | Pydantic v2 | schemas + settings |
+| ORM/DB | SQLAlchemy 2 + SQLite | 业务库（自选/账户/持仓/订单）|
+| 行情存储 | Parquet（polars） | 全市场快照时点落库 |
+| HTTP 客户端 | httpx（AsyncClient, trust_env=False） | 行情源直连不走系统代理 |
+| 实时推送 | WebSocket（uvicorn[standard]） | /ws/quotes |
+| 测试 | pytest | 70 用例 |
+| 静态检查 | pyflakes | 后端门禁 |
+| 前端框架 | Next.js 15.5.24 (App Router) + React 19 | |
+| 样式 | Tailwind CSS 3.4（darkMode class） | 自定义 up=红涨 down=绿跌 |
+| 图表 | lightweight-charts 4.2 | K线/分时/副图 |
+| 字体/对齐 | 系统栈 + tabular-nums | 数据等宽 |
+| 前端检查 | ESLint（next/core-web-vitals） | 零告警门禁 |
+| 部署 | Dockerfile + docker-compose（开发用） | |
+
+---
+
+# 三、目录结构（逐文件说明）
+
+```text
+ashare-ai-trader/
+├── backend/
+│   ├── app/
+│   │   ├── main.py                    # FastAPI 组装：lifespan(建库/种子/引擎/3后台任务) + 路由挂载 + CORS
+│   │   ├── api/
+│   │   │   ├── deps.py                # get_hub / get_watchlist_repository
+│   │   │   └── routes/
+│   │   │       ├── health.py          # GET /api/health（含 provider 链/stale/失败计数）
+│   │   │       ├── market.py          # 行情/宽度/情绪/K线/盘口/分时/逐笔/资金/财务/公司/公告/新闻/板块/涨停/炸板/龙虎榜/搜索
+│   │   │       ├── watchlist.py       # 自选 CRUD + 分组
+│   │   │       └── paper.py           # 模拟交易（账户/持仓/委托/撤单/成交）
+│   │   ├── core/
+│   │   │   ├── config.py              # Settings（ASHARE_* 环境变量）
+│   │   │   └── db.py                  # 引擎(:memory:→StaticPool) + 幂等迁移 + session
+│   │   ├── models/
+│   │   │   ├── watchlist.py           # 自选（含 group_name）
+│   │   │   └── paper.py               # 模拟账户/持仓/订单
+│   │   ├── schemas/market.py          # Quote/OrderBook/Trade/Kline/LimitUp/LongHu/Board/Quality + 审计字段
+│   │   ├── repositories/watchlist_repo.py
+│   │   ├── services/
+│   │   │   ├── quote_hub.py           # 行情轮询/缓存/校验/订阅广播/seq/stale 降级
+│   │   │   └── snapshot_service.py    # 全市场快照(新浪)→宽度→Parquet
+│   │   ├── market/
+│   │   │   ├── normalizer.py          # 东财全族字段→统一 schema（含财务/席位/公告/新闻/搜索）
+│   │   │   ├── sina_market.py         # 新浪全市场快照（Market Center）
+│   │   │   └── breadth.py             # 涨跌/涨跌停家数/成交额（N/C 新股排除）
+│   │   ├── data_providers/
+│   │   │   ├── base.py                # MarketDataProvider 协议
+│   │   │   ├── ths.py                 # 同花顺官方 fuyao（链首）
+│   │   │   ├── tencent.py             # 腾讯（快照/五档/K线/分时/K线搜索）
+│   │   │   ├── sina.py                # 新浪（快照备源/板块排行/资金流）
+│   │   │   ├── eastmoney.py           # 东财（涨停池/龙虎榜/席位/财务/公司/公告/新闻/搜索/K线备源）
+│   │   │   ├── mock.py                # 确定性演示（clock 可注入）
+│   │   │   └── composite.py           # 链式 failover + 切换日志
+│   │   ├── data_quality/validator.py  # 5级质量 + 全部规则
+│   │   ├── sentiment/engine.py        # 情绪阶段判定（可解释）
+│   │   ├── paper/engine.py            # 模拟交易撮合引擎
+│   │   └── websocket/routes.py        # /ws/quotes
+│   ├── tests/（8 文件 70 用例）
+│   ├── requirements.txt / Dockerfile / .env（key，gitignored）
+├── apps/web/
+│   ├── app/（7 路由页面）
+│   ├── components/（10 组件，见 §九）
+│   ├── hooks/use-quote-stream.ts      # WS+降级轮询
+│   ├── lib/api.ts + format.ts + technical-analysis.ts
+│   └── types/market.ts
+├── data/（ashare.db + parquet/snapshots/）
+├── docs/（12 篇 + 本文档）
+├── scripts/bootstrap.sh
+├── docker-compose.yml / .env.example / README.md
+```
+
+---
+
+# 四、数据管线与 Provider 链
+
+## 4.1 管线
+```text
+数据源 → Provider Adapter → Data Normalizer → Data Quality Validator → Cache/QuoteHub → REST/WebSocket → 前端
+```
+- 前端零直连；后端批量轮询（5s 行情 / 60s 快照 / 5min Parquet）
+- 每条数据必带 `source / quality(high|medium|low|stale|invalid) / quality_reasons / received_at / data_timestamp`
+
+## 4.2 Provider 链（当前 `chain(ths→tencent→eastmoney→sina)`）
+| 优先 | Provider | 能力 | 认证 | 备注 |
+|---|---|---|---|---|
+| 1 | **ths**（同花顺官方 fuyao） | 快照/指数/涨停池(含原因)/炸板池/龙虎榜(含概念)/交易日历；财务三表+估值+竞价待接 | X-api-key（.env） | 官方 59 端点；**不含 L2/分钟K/tick** |
+| 2 | **tencent** | 快照+五档(PE/PB/市值/涨跌停价)/日周K+分钟K/分时+量/搜索 | 无 | 主行情源（ths 失败时） |
+| 3 | **eastmoney** | 涨停池/龙虎榜/席位/F10公司/公告/新闻/搜索/财务/K线 | 无 | push2 系本机被 WAF 限流；datacenter 正常 |
+| 4 | **sina** | 快照备源/五档/板块排行/资金流/全市场快照 | Referer | |
+| 尾 | **mock** | 确定性演示 | - | 只能单独用，永不混链 |
+- **逐方法 failover**：空结果/异常自动切下一源；切换写 `switch_log`；全链失败 → 全部标 `stale`、health=degraded
+- 详见 docs/data-sources.md（字段口径全部实测记录）
+
+## 4.3 数据质量规则（data_quality/validator.py）
+- 结构非法 → **invalid**：代码非6位、价格≤0、负量/额、high<low、价出区间、时间戳在未来、盘口交叉/乱序
+- 可疑 → **low**：跳价>板块涨跌停幅（主板10/双创20/北交30/ST5）、涨跌幅与昨收矛盾>1pct、时间倒退、缺价
+- 系统 → **stale**（Hub 刷新失败）、**medium**（预留延迟源）
+- 低质量后果：AI 禁用、回测禁用、前端强制风险标识
+
+---
+
+# 五、REST API 全表（32 端点）
+
+| 方法 | 路径 | 说明 | 数据源 |
+|---|---|---|---|
+| GET | /api/health | 健康：链名/last_success/失败计数/last_error/stale | - |
+| GET | /api/market/overview | 六指数+两市成交额 | ths→tencent |
+| GET | /api/market/breadth | 宽度（涨跌/涨停跌家数/总额） | 新浪全市场 |
+| GET | /api/market/sentiment | 情绪判定（阶段/温度/依据/置信/切换条件，60s缓存） | 快照+涨停池 |
+| GET | /api/quotes?symbols= | 批量缓存行情 | 链 |
+| GET | /api/quotes/{symbol} | 单只；缓存 miss → 实时链；`?source=` 指定源 | 链 |
+| GET | /api/kline/{symbol} | K线 timeframe 1m~1w 前复权 | tencent→东财 |
+| GET | /api/minute-line/{symbol} | 当日1分钟分时+量 | 腾讯 |
+| GET | /api/order-book/{symbol} | 五档（交叉校验后返回） | 腾讯→东财 |
+| GET | /api/trades/{symbol} | 逐笔（东财 details；本机限流→502 显性化） | 东财 |
+| GET | /api/capital-flow/{symbol} | 资金流30日（主力/超大/大/中/小单+口径） | 新浪 MoneyFlow |
+| GET | /api/financials/{symbol} | 财务摘要8期（去重+倒序） | 东财业绩报表 |
+| GET | /api/company/{symbol} | 公司资料+所属板块/概念 chips | 东财 F10+CoreConception |
+| GET | /api/limit-up / limit-break | 涨停池(含原因)/炸板池 | ths→东财 |
+| GET | /api/longhu | 龙虎榜总览 | ths→东财 datacenter |
+| GET | /api/longhu/{symbol} | 席位明细(买5卖5+胜率)+上榜历史(T+1/3/5/10) | 东财 datacenter |
+| GET | /api/boards?type= | 行业84/概念排行（60s缓存） | 新浪闪电排行 |
+| GET | /api/search?q= | 股票搜索（仅6位A股） | 东财suggest→腾讯smartbox→mock |
+| GET/POST/DELETE | /api/watchlist… | 自选 CRUD + groups + 改组 | SQLite |
+| GET/POST/DELETE | /api/paper/* | 模拟交易（account/positions/orders/fills） | 撮合引擎 |
+| WS | /ws/quotes | snapshot/quotes/stale/pong + subscribe | Hub |
+
+规划中（§阶段）：/api/backtests、/api/paper 撮合增强、/api/news 全市场流、/api/screeners。
+
+---
+
+# 六、前端明细
+
+## 6.1 页面（7）
+| 路由 | 内容 | 状态 |
+|---|---|---|
+| /workbench | 终端主页面：左栏[指数迷你卡(可收起)+自选分组+列表] │ 右[详情终端] | ✅ |
+| /market | 总览+宽度卡+情绪面板+涨停速览 | ✅ |
+| /watchlist | 自选管理（分组输入/改组/删除） | ✅ |
+| /boards | 板块排行（行业/概念切换） | ✅ |
+| /limit-up | 涨停池（含涨停原因、日期查询） | ✅ |
+| /longhu | 龙虎榜总览（净买额排序） | ✅ |
+| /stock/[symbol] | 307 重定向 → /workbench?symbol= | ✅（已合并） |
+
+## 6.2 详情终端（StockDetailPanel，工作台右栏 300px，单卡片）
+- 顶部紧凑行情条：名称/代码/质量/＋自选 │ 大字价格(tick闪烁) + 涨跌 │ 11项指标小字条 │ 数据时间/来源
+- 中部左（图表区，页签）：**K线**（K线Pro：MA5/10/20/60+BOLL+成交量+均量线+MACD/成交额副图开关、默认聚焦20日、＋/−/20D 缩放按钮、技术评估条）│ **分时**（面积图+量能副图）│ **资金图**（30日主力柱状）
+- 中部右（常驻列，页签）：**盘口**（五档）│ **逐笔** │ **交易**（账户摘要+买卖表单[涨跌停提示/费用预估]+持仓+挂单撤单）│ **资料**（板块概念chips+主营+简介+最近财报摘要卡）│ **资讯**（公告/新闻原文链接）
+- 滚动纪律：容器 overflow-hidden，仅表格/列表内部滚动
+
+## 6.3 关键机制
+- useQuoteStream：WS snapshot/quotes/stale + 15s 心跳 + 指数退避重连 + 3 失败降级 REST 轮询
+- `watchlist-changed` / `paper-changed` 全局事件 → 即时刷新
+- PriceFlash：价格 tick 闪红/绿（prefers-reduced-motion 全关）
+- 主题切换（dark 默认）/ 全局搜索（防抖+快捷加自选）/ 骨架与空态/错误态全覆盖
+
+---
+
+# 七、模拟交易系统（paper/engine.py）
+
+- 模型：PaperAccount(cash) / PaperPosition(quantity, frozen_today[T+1], cost_price) / PaperOrder(状态机)
+- 撮合规则：涨停拒买、跌停拒卖、停牌拒、买入100股整手、资金/可卖校验、限价≥现价按现价成交否则挂单（5s 轮询）、撤单全额退款（含预扣佣金）
+- 费用：佣金万2.5最低5元 + 卖出印花税0.05%（配置化 FEE dict）
+- T+1 解冻：官方交易日历（ths，24h缓存）→ 回退自然日
+- 已知边界：仅限价单；无部分成交；滑点=0（配置保留）；单账户
+- 测试：7 引擎用例（成交/T+1阻断与放行/涨停跌停拒/碎股拒/资金拒/挂单撤单）
+
+---
+
+# 八、测试与门禁
+
+| 套件 | 覆盖 |
+|---|---|
+| test_quality_validator(11) | 全部质量规则与板块阈值 |
+| test_normalizer(9) | 腾讯/东财/新浪/THS 真实fixture解析 |
+| test_api(11) | 全端点 + WS + watchlist + live fallback |
+| test_providers_chain(8) | failover/空结果/搜索过滤/K线fixture |
+| test_paper_engine(7) | 撮合全规则 |
+| test_sentiment(4) | 冰点/高潮/退潮/指标结构 |
+| test_market_breadth(5) | 宽度/涨跌停/N/C排除 |
+| test_mock_provider(6) | 演示数据确定性 |
+| test_watchlist_repo(2) | CRUD+分组 |
+- 门禁：pytest 70 全绿 + tsc 0 + ESLint 0 + pyflakes 0 + Next徽章 0 + 截图验收
+
+---
+
+# 九、配置与环境变量（.env，gitignored）
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| ASHARE_DATA_PROVIDER | tencent | 主源（ths/tencent/sina/eastmoney/mock） |
+| ASHARE_PROVIDER_FALLBACKS | tencent,eastmoney,sina | 备源链 |
+| ASHARE_THS_API_KEY | - | 同花顺官方 key（已配于 backend/.env） |
+| ASHARE_POLL_INTERVAL_SECONDS | 5 | 行情轮询 |
+| ASHARE_SNAPSHOT_POLL/SAVE_INTERVAL_SECONDS | 60/300 | 全市场快照与Parquet |
+| ASHARE_DATABASE_URL | data/ashare.db | 业务库 |
+| ASHARE_PARQUET_DIR | data/parquet | 快照落库 |
+| NEXT_PUBLIC_API_BASE | http://127.0.0.1:8000 | 前端连后端 |
+
+---
+
+# 十、部署运维与已知坑（全部踩过）
+
+1. pip 必须清华镜像（`-i https://pypi.tuna.tsinghua.edu.cn/simple`）；系统代理会让 pip/httpx 卡死
+2. 行情客户端 `trust_env=False`（国内直连）；勿给后端配代理
+3. dev 运行时禁止 `next build`（.next 冲突，已踩两次）
+4. 东财 push2 本机 WAF 限流 → 已由腾讯/新浪链路兜底
+5. SQLite 迁移用 `engine.begin()`（2.0 无 engine.execute）
+6. 前端金额/数量字段合并注意 undefined 覆盖（估值补源 bug）
+
+---
+
+# 十一、安全
+
+- API Key 只存 backend/.env（gitignored）；.env.example 只放占位
+- 前端零密钥；无真实券商接口（系统层面不提供）
+- 撮合风控硬拦截不可绕过（§七）
+
+---
+
+# 十二、阶段状态（Phase 1-8 逐项）
+
+| 阶段 | 子项 | 状态 |
+|---|---|---|
+| 1 基础框架 | 目录/配置/SQLite/日志/健康检查/布局/搜索/主题 | ✅ 全部 |
+| 2 行情基础设施 | Provider协议/四源链/Normalizer/5级质量/QuoteHub/REST/WS/指数/个股/K线/分时/盘口/逐笔 | ✅ 全部 |
+| 3 市场与板块 | 全市场快照/宽度/情绪周期判定/板块排行/涨停池/炸板池 | ✅；余：题材事件树/生命周期、左栏sparkline |
+| 4 投研数据 | 龙虎榜总览+席位+历史/资金流/财务/估值/公司资料/公告/新闻 | ✅；余：营业部关系图谱、筹码、解禁、两融、大宗 |
+| 5 量化系统 | 多因子技术评估(MA/MACD/KDJ/RSI/形态) | 🔶；余：选股器/评分系统/市场状态/仓位建议/风控引擎/更多副图 |
+| 6 模拟交易与回测 | 撮合引擎(T+1/涨跌停/费用/挂单) | 🔶；余：回测引擎/历史回放 |
+| 7 AI 系统 | Researcher/Critic/Strategist/Auditor/MCP/Skills/记忆/审计 | ⬜（多因子评估是其地基） |
+| 8 通知与部署 | 预警/通知/生产部署/监控 | ⬜（开发compose已有） |
+
+## 近期路线（下一刀优先级）
+1. **交易前端打磨**：持仓成本线画上K线、成交记录列表页
+2. **新闻/公告 AI 摘要**（Phase 7 前哨）
+3. Phase 5：选股器（快照+因子扫描）→ 评分系统
+4. Phase 6 后半：回测引擎（按 docs/backtest-rules.md 强制禁令）
+
+---
+
+# 十三、欠缺与技术债（完整清单 → docs/retro-and-gaps.md）
+
+- 功能欠缺 10 项、布局待优化 6 项、技术债 7 项——全部表格式记录，完成划一项
+- 关键：StockDetailPanel 拆分、前端 vitest、Next 升级、新闻缓存、交易日历兜底
+
+---
+
+# 十四、行为基线（不可回退）
+
+1. 一屏锁定，滚动只在容器内
+2. 红涨绿跌、tabular-nums、数据带来源/时间/质量
+3. mock 永不冒充实盘；失败标 stale 不伪造
+4. 撮合规则硬拦截不可绕过；第一阶段无真实券商接口
+5. 技术结论只给偏向+依据，禁止确定性买卖建议
+6. API key 只在 .env；每阶段完成跑全部门禁 + 截图验收 + git checkpoint
+
+---
+
+# 十五、里程碑（33 commits 精选）
+
+`d3856d7` P1-2基线 → `8ecfdb5` P6撮合 → `842bb68` 同花顺官方源 → `ed97223` 布局v3 → `9735649` 自选分组 → `2d67147` 图表增强 → `7114006` P4收尾 → `0e80811` P6-s2 交易页签+B/S → `11e8552` 盘点 → 当前 HEAD `0e80811`+docs×3
+
+---
+
+# 十六、文档索引
+
+architecture / data-sources / data-dictionary / api / websocket / backtest-rules / longhu / sentiment / risk-management / mcp / deployment / ui-redesign-plan / retro-and-gaps / **PROJECT-MASTER（本文档）**
