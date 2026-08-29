@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { ThemeCardView } from "@/components/theme-card";
 import { getThemes } from "@/lib/api";
-import { fmt } from "@/lib/format";
 import type { ThemeBoardPayload } from "@/types/market";
 
 /**
@@ -12,6 +11,10 @@ import type { ThemeBoardPayload } from "@/types/market";
  *
  * 与 /limit-up 的区别：涨停池是平铺列表，这里以题材为容器重组，
  * 回答三个问题——题材是否成建制、梯队是否健康、资金是否持续。
+ *
+ * 滚动约定（2026-08-29 修复）：全局 body 锁屏（h-screen overflow-hidden），
+ * 每页自管滚动。本页此前根容器缺 h-full 且无滚动容器，内容超出视口后不可达。
+ * 现在结构为：固定头部 + 单一大滚动容器（flex-1 min-h-0 overflow-y-auto）承载全部卡片。
  */
 
 type SortKey = "strength" | "boards" | "count";
@@ -31,6 +34,9 @@ const COUNT_FILTERS = [
   { v: 3, label: "≥3 家" },
   { v: 5, label: "仅成建制" },
 ];
+
+/** 强弱分级图例：与后端 strength_tier 的判定规则一一对应 */
+const TIER_LEGEND = "领涨 = 成建制·发酵/高潮·封板牢　|　强势 = 发酵/高潮或成建制高位分歧　|　活跃 = 有连板梯队　|　观察 = 暂无梯队结构";
 
 export default function ThemesPage() {
   const searchParams = useSearchParams();
@@ -118,9 +124,9 @@ export default function ThemesPage() {
   const broken = useMemo(() => data?.broken_ladder ?? [], [data]);
 
   return (
-    <main className="mx-auto w-full max-w-[1600px] px-4 py-4">
-      {/* ── 头部 ─────────────────────────────────────────────── */}
-      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+    <main className="mx-auto flex h-full w-full max-w-[1600px] flex-col px-4 py-3">
+      {/* ── 固定头部 ──────────────────────────────────────────── */}
+      <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
             强势题材梯队看板
@@ -129,7 +135,7 @@ export default function ThemesPage() {
             {data ? `${data.trade_date}` : "…"}
             {data?.prev_trade_date && ` · 对照 ${data.prev_trade_date}`}
             {data &&
-              ` · 涨停 ${data.summary.limit_up_total} 只 / 识别题材 ${data.summary.theme_count} 个 / 最高 ${data.summary.market_max_boards} 板`}
+              ` · 涨停 ${data.summary.limit_up_total} 只 / 识别题材 ${data.summary.theme_count} 个（当前展示 ≥${minCount} 家的 ${data.themes.length} 张卡片）/ 最高 ${data.summary.market_max_boards} 板`}
             {data?.summary.market_break_rate != null &&
               ` / 全市场炸板率 ${(data.summary.market_break_rate * 100).toFixed(1)}%`}
           </p>
@@ -199,8 +205,12 @@ export default function ThemesPage() {
         </div>
       </div>
 
+      <p className="mb-3 text-[11px] text-zinc-400" title="分级规则由后端 strength_tier 规则化判定，鼠标悬停卡片分级徽标可看判定依据">
+        分级：{TIER_LEGEND}
+      </p>
+
       {error && (
-        <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+        <div className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
           题材看板加载失败：{error}
         </div>
       )}
@@ -213,73 +223,76 @@ export default function ThemesPage() {
         </p>
       )}
 
-      {/* ── 题材卡片 ─────────────────────────────────────────── */}
-      <div className={`space-y-3 ${loading ? "opacity-60 transition-opacity" : ""}`}>
-        {data?.themes.map((c, i) => (
-          <ThemeCardView key={c.theme} card={c} rank={i + 1} />
-        ))}
-      </div>
-
-      {/* ── 断板股 ───────────────────────────────────────────── */}
-      {broken.length > 0 && (
-        <section className="mt-4 overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
-          <header className="border-b border-zinc-200 bg-zinc-50 px-4 py-2.5 dark:border-zinc-800 dark:bg-zinc-900/40">
-            <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
-              断板股
-              <span className="ml-2 text-xs font-normal text-zinc-400">
-                昨日连板、今日未封板 —— 梯队断层与情绪退潮的先行信号（{broken.length} 只）
-              </span>
-            </h2>
-          </header>
-          <div className="overflow-x-auto px-4 py-3">
-            <table className="w-full min-w-[560px] text-sm">
-              <thead>
-                <tr className="border-b border-zinc-200 text-left text-[11px] text-zinc-400 dark:border-zinc-800">
-                  <th className="py-1.5 font-medium">名称</th>
-                  <th className="py-1.5 font-medium">昨日连板</th>
-                  <th className="py-1.5 font-medium">所属题材</th>
-                </tr>
-              </thead>
-              <tbody>
-                {broken.map((b) => (
-                  <tr key={b.symbol} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                    <td className="py-1.5">
-                      <span className="text-zinc-700 dark:text-zinc-200">{b.name ?? b.symbol}</span>
-                      <span className="ml-1.5 font-mono text-[11px] text-zinc-400">{b.symbol}</span>
-                    </td>
-                    <td className="py-1.5 font-mono text-rose-600 dark:text-rose-400">{b.prev_boards} 板</td>
-                    <td className="py-1.5 text-xs text-zinc-500 dark:text-zinc-400">{b.themes.join("、")}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
-
-      {/* ── 口径说明 ─────────────────────────────────────────── */}
-      {data?.caveats && data.caveats.length > 0 && (
-        <div className="mt-4 rounded-lg border border-zinc-200 px-4 py-2.5 text-xs text-zinc-400 dark:border-zinc-800">
-          <button onClick={() => setShowCaveats((v) => !v)} className="flex items-center gap-1.5 hover:text-zinc-600 dark:hover:text-zinc-200">
-            <span>{showCaveats ? "▾" : "▸"}</span>
-            <span>口径与已知边界（{data.caveats.length} 条）</span>
-          </button>
-          {showCaveats && (
-            <ul className="mt-2 space-y-1">
-              {data.caveats.map((c) => (
-                <li key={c} className="flex gap-1.5">
-                  <span className="text-zinc-300 dark:text-zinc-600">·</span>
-                  <span>{c}</span>
-                </li>
-              ))}
-            </ul>
-          )}
+      {/* ── 唯一滚动容器：全部卡片 + 断板股 + 口径说明 ─────────── */}
+      <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+        <div className={`space-y-3 ${loading && data ? "opacity-60 transition-opacity" : ""}`}>
+          {data?.themes.map((c, i) => (
+            <ThemeCardView key={c.theme} card={c} rank={i + 1} tradeDate={data.trade_date} />
+          ))}
         </div>
-      )}
 
-      <p className="mt-4 text-[11px] leading-4 text-zinc-400">
-        本页为技术面结构分析，不构成投资建议。题材阶段与健康度为规则化推断，需结合盘中实际走势与个股基本面独立判断。
-      </p>
+        {/* ── 断板股 ─────────────────────────────────────────── */}
+        {broken.length > 0 && (
+          <section className="mt-4 overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
+            <header className="border-b border-zinc-200 bg-zinc-50 px-4 py-2.5 dark:border-zinc-800 dark:bg-zinc-900/40">
+              <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+                断板股
+                <span className="ml-2 text-xs font-normal text-zinc-400">
+                  昨日连板、今日未封板 —— 梯队断层与情绪退潮的先行信号（{broken.length} 只）
+                </span>
+              </h2>
+            </header>
+            <div className="overflow-x-auto px-4 py-3">
+              <table className="w-full min-w-[560px] text-sm">
+                <thead>
+                  <tr className="border-b border-zinc-200 text-left text-[11px] text-zinc-400 dark:border-zinc-800">
+                    <th className="py-1.5 font-medium">名称</th>
+                    <th className="py-1.5 font-medium">昨日连板</th>
+                    <th className="py-1.5 font-medium">所属题材</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {broken.map((b) => (
+                    <tr key={b.symbol} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
+                      <td className="py-1.5">
+                        <span className="text-zinc-700 dark:text-zinc-200">{b.name ?? b.symbol}</span>
+                        <span className="ml-1.5 font-mono text-[11px] text-zinc-400">{b.symbol}</span>
+                      </td>
+                      <td className="py-1.5 font-mono text-rose-600 dark:text-rose-400">{b.prev_boards} 板</td>
+                      <td className="py-1.5 text-xs text-zinc-500 dark:text-zinc-400">{b.themes.join("、")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {/* ── 口径说明 ───────────────────────────────────────── */}
+        {data?.caveats && data.caveats.length > 0 && (
+          <div className="mb-4 mt-4 rounded-lg border border-zinc-200 px-4 py-2.5 text-xs text-zinc-400 dark:border-zinc-800">
+            <button onClick={() => setShowCaveats((v) => !v)} className="flex items-center gap-1.5 hover:text-zinc-600 dark:hover:text-zinc-200">
+              <span>{showCaveats ? "▾" : "▸"}</span>
+              <span>口径与已知边界（{data.caveats.length} 条）</span>
+            </button>
+            {showCaveats && (
+              <ul className="mt-2 space-y-1">
+                {data.caveats.map((c) => (
+                  <li key={c} className="flex gap-1.5">
+                    <span className="text-zinc-300 dark:text-zinc-600">·</span>
+                    <span>{c}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        <p className="pb-2 text-[11px] leading-4 text-zinc-400">
+          本页为技术面结构分析，不构成投资建议。题材阶段与健康度为规则化推断，需结合盘中实际走势与个股基本面独立判断。
+          梯队归属按当日涨停联动唯一判定（连板密度优先），一只票只出现在一张卡片。
+        </p>
+      </div>
     </main>
   );
 }

@@ -145,11 +145,16 @@ export interface ThemeCard {
   raw_tags: string[];
   is_unclassified: boolean;
   strength_score: number;
+  strength_tier: string; // 领涨/强势/活跃/观察
+  tier_basis: string;
+  sort_basis: string;
   stage: string; // 启动/发酵/高潮/分歧/退潮
   stage_basis: string[];
   formation: string; // 成建制/初步成形/零散/个股行情
   health_note: string;
   risks: string[];
+  core?: { type: string; label: string; basis?: string; votes?: Record<string, number> };
+  persistence?: Record<string, unknown>;
   board?: ThemeBoardMetrics | null;
   board_matched: boolean;
   performance: ThemePerformance;

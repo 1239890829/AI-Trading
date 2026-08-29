@@ -7,11 +7,14 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from app.services.theme_service import (
     MIDDLE_WEIGHT_MIN_CAP,
     UNCLASSIFIED,
+    assign_primary_themes,
     classify_role,
     echelon_completeness,
     formation_level,
@@ -20,9 +23,14 @@ from app.services.theme_service import (
     parse_theme_tags,
     seal_phase,
     seal_quality_score,
+    strength_tier,
     theme_health_note,
     theme_strength_score,
 )
+
+
+def _rec(symbol: str, reason: str | None, boards: int = 1):
+    return SimpleNamespace(symbol=symbol, reason=reason, consecutive_boards=boards)
 
 
 # ---------------------------------------------------------------- 题材解析
@@ -368,3 +376,144 @@ def test_seal_quality_prefers_early():
 def test_unclassified_constant_stable():
     assert UNCLASSIFIED == "未分类"
     assert parse_theme_tags(None) == []
+
+
+# ---------------------------------------------------------------- 梯队联动归属
+
+
+def test_attribution_echelon_beats_big_generic_tag():
+    """核心回归：3 板龙头不能被大杂烩题材吸收。
+
+    2026-08-28 实拍：千金药业（3 板，标签含创新药）被「业绩驱动 41 家」
+    按成员总数吸走，创新药梯队被拆散。连板密度判据下必须归属创新药。
+    """
+    pool = [
+        _rec("600479", "业绩驱动+创新药+女性健康+药材种植", boards=3),  # 千金
+        _rec("c1", "创新药", boards=1),
+        _rec("c2", "创新药", boards=1),
+        _rec("b1", "业绩驱动", boards=1),
+        _rec("b2", "业绩驱动", boards=1),
+        _rec("b3", "业绩驱动", boards=1),
+        _rec("b4", "业绩驱动", boards=1),
+    ]
+    primary = assign_primary_themes(pool)
+    # 业绩驱动密度 0.2（1/5）< 创新药密度 0.33（1/3）→ 千金归创新药
+    assert primary["600479"] == "创新药"
+    assert primary["c1"] == "创新药" and primary["c2"] == "创新药"
+    assert primary["b1"] == "业绩驱动"
+
+
+def test_attribution_solo_theme_cannot_steal_member():
+    """1 只票的题材没有吸成员资格：中安科(2板) 必须留在算力，而不是
+    自立「安保安防」伪题材把算力梯队拆掉一格。"""
+    pool = [
+        _rec("zake", "安保安防+算力", boards=2),
+        _rec("s1", "算力", boards=1),
+        _rec("s2", "算力", boards=1),
+        _rec("s3", "算力", boards=1),
+    ]
+    primary = assign_primary_themes(pool)
+    assert primary["zake"] == "算力"
+
+
+def test_attribution_all_solo_candidates_falls_back_to_first_tag():
+    """全部候选都是 1 家（个股行情）时：回退首个标签，结果仍唯一。"""
+    pool = [_rec("x", "客户拓展+折叠屏", boards=7)]
+    primary = assign_primary_themes(pool)
+    assert primary["x"] == "客户拓展"
+
+
+def test_attribution_two_member_theme_beats_solo_tag():
+    """候选里存在 ≥2 家的题材时，1 家的伪题材无资格当主属性。"""
+    pool = [
+        _rec("x", "客户拓展+折叠屏", boards=7),
+        _rec("y", "折叠屏", boards=1),
+    ]
+    primary = assign_primary_themes(pool)
+    assert primary["x"] == "折叠屏"
+    assert primary["y"] == "折叠屏"
+
+
+def test_attribution_member_count_ties_break_by_boards_then_first_tag():
+    """同密度（都是 1.0）时按家数 → 最高板 → 首标签决定，保证确定性。"""
+    pool = [
+        _rec("a", "甲+乙", boards=2),
+        _rec("a2", "甲", boards=1),
+        _rec("a3", "甲", boards=1),  # 甲：3 家 2 连板，密度 0.67
+        _rec("b2", "乙", boards=2),  # 乙：2 家 2 连板，密度 1.0
+    ]
+    primary = assign_primary_themes(pool)
+    # 乙密度 1.0 > 甲 0.67 → a 归乙
+    assert primary["a"] == "乙"
+
+
+def test_attribution_no_tags_goes_unclassified():
+    primary = assign_primary_themes([_rec("n", None), _rec("n2", "")])
+    assert primary["n"] == UNCLASSIFIED and primary["n2"] == UNCLASSIFIED
+
+
+def test_attribution_every_stock_has_exactly_one_primary():
+    """归属结果必须覆盖全部股票且值唯一——这是「梯队不拆散」的结构保证。"""
+    pool = [
+        _rec("p1", "黄金+珠宝加工+黄金概念", boards=3),
+        _rec("p2", "黄金概念", boards=2),
+        _rec("p3", "液冷服务器+算力", boards=2),
+        _rec("p4", "算力", boards=1),
+        _rec("p5", "算力", boards=1),
+    ]
+    primary = assign_primary_themes(pool)
+    assert set(primary) == {"p1", "p2", "p3", "p4", "p5"}
+    # 每个主归属都是规范化后的题材名
+    for t in primary.values():
+        assert t == normalize_theme(t)
+
+
+# ---------------------------------------------------------------- 强弱分级
+
+
+def test_tier_leader_requires_formation_stage_and_firm_seal():
+    tier, basis = strength_tier(
+        formation="成建制", stage="发酵", max_boards=4,
+        reopen_rate=0.1, premium_median=3.0,
+    )
+    assert tier == "领涨" and "封板牢" in basis
+
+
+def test_tier_losing_premium_caps_at_active():
+    """接力亏钱一票否决：家数再多最高也只能是「活跃」。"""
+    for formation in ("成建制", "初步成形"):
+        tier, basis = strength_tier(
+            formation=formation, stage="高潮", max_boards=5,
+            reopen_rate=0.1, premium_median=-1.0,
+        )
+        assert tier == "活跃", formation
+        assert "溢价为负" in basis
+
+
+def test_tier_strong_on_stage_even_without_full_formation():
+    tier, _ = strength_tier(
+        formation="初步成形", stage="高潮", max_boards=4,
+        reopen_rate=0.2, premium_median=1.0,
+    )
+    assert tier == "强势"
+
+
+def test_tier_active_needs_a_real_ladder():
+    tier, _ = strength_tier(
+        formation="零散", stage="启动", max_boards=2,
+        reopen_rate=0.2, premium_median=None,
+    )
+    assert tier == "活跃"
+
+
+def test_tier_observe_when_retreat_or_all_first_boards():
+    tier, _ = strength_tier(
+        formation="初步成形", stage="退潮", max_boards=4,
+        reopen_rate=0.1, premium_median=2.0,
+    )
+    assert tier == "观察"
+    tier2, _ = strength_tier(
+        formation="零散", stage="启动", max_boards=1,
+        reopen_rate=0.0, premium_median=None,
+    )
+    assert tier2 == "观察"

@@ -215,6 +215,114 @@ def seal_phase(first_seal_time: str | None) -> str | None:
     return phase
 
 
+# ---------------------------------------------------------------- 纯函数：梯队联动归属
+
+
+def assign_primary_themes(records: list) -> dict[str, str]:
+    """梯队联动归属：每只涨停股**只归属一个**主题材。
+
+    为什么不能按静态标签硬套：一只票的涨停原因常带 3~5 个题材标签，
+    旧实现把它塞进每个标签对应的卡片，导致同一梯队被拆散、题材重复计数
+    （2026-08-28 实测拆散率 22%）；且主属性按「成员总数」判定时，
+    「业绩驱动」这类 41 只的大杂烩会把「创新药 3 连板梯队」整队吸收——
+    3 板龙头在自己的题材里是龙头，被吸走后沦为别家「跟风」。
+
+    用户原则：**当日形成涨停梯队的个股必定归属同一题材板块**。
+    归属判据（依次比较，取最优候选，全部可从数据反推）：
+
+    1. **连板密度** = 题材内连板(≥2板)成员数 / 题材内涨停成员数。
+       这是「当日真实联动」的度量：3 只里 1 只 3 板（密度 0.33）说明这批票
+       在并肩打高度；41 只里 10 只连板（密度 0.24）说明是松散堆料。
+    2. 题材涨停家数（同密度下成建制优先）。
+    3. 题材最高连板（同家数下高度优先）。
+    4. 是否为该股涨停原因的**首个标签**（ths reason 首标签通常即主属性，
+       作为最终 tiebreaker 保证结果确定性）。
+
+    约束：**家数 ≥2 的题材才有资格吸走成员**。1 只票的「题材」是个股行情，
+    它的存在本身就依赖这只股票——让它当主属性会造出无数伪题材卡片。
+    全部候选都是 1 家时，回退为该股首个标签（结果仍是唯一的）。
+
+    :return: symbol -> 主题材名（规范化后）
+    """
+    # 先按原始标签口径统计每个题材的成员结构（不依赖归属结果，无循环依赖）
+    stats: dict[str, dict] = {}
+    for rec in records:
+        boards = rec.consecutive_boards or 0
+        for t in [normalize_theme(x) for x in parse_theme_tags(rec.reason)] or [UNCLASSIFIED]:
+            st = stats.setdefault(t, {"count": 0, "lianban": 0, "max_boards": 0})
+            st["count"] += 1
+            if boards >= 2:
+                st["lianban"] += 1
+            st["max_boards"] = max(st["max_boards"], boards)
+
+    primary: dict[str, str] = {}
+    for rec in records:
+        tags = [normalize_theme(x) for x in parse_theme_tags(rec.reason)]
+        candidates = []
+        for t in tags:
+            if t not in candidates:
+                candidates.append(t)
+        if not candidates:
+            primary[rec.symbol] = UNCLASSIFIED
+            continue
+
+        # 家数 ≥2 的题材才有吸成员资格；全是个股行情时保留原候选
+        eligible = [t for t in candidates if stats[t]["count"] >= 2]
+        pool_c = eligible or candidates
+
+        def rank_key(t: str) -> tuple:
+            st = stats[t]
+            density = st["lianban"] / st["count"] if st["count"] else 0.0
+            is_first_tag = 1 if t == candidates[0] else 0
+            return (density, st["count"], st["max_boards"], is_first_tag)
+
+        primary[rec.symbol] = max(pool_c, key=rank_key)
+    return primary
+
+
+# ---------------------------------------------------------------- 纯函数：强弱分级
+
+
+def strength_tier(
+    *,
+    formation: str,
+    stage: str,
+    max_boards: int,
+    reopen_rate: float,
+    premium_median: float | None,
+) -> tuple[str, str]:
+    """题材强弱分级：回答「今天最强、最确定、最有参与机会的是谁」。
+
+    与 strength_score 的分工：score 是连续量（排序用），tier 是离散档位
+    （视觉标识用）。tier 必须规则化可解释，每档附带判定依据。
+
+    判定顺序：领涨 → 强势 → 活跃 → 观察。赚钱效应是一票否决项——
+    接力亏钱（溢价为负）的题材无论家数多都不能进「领涨/强势」
+    （与 judge_theme_stage 的分歧优先原则同源，防止热度压过赚钱效应）。
+    """
+    losing = premium_median is not None and premium_median < 0
+    firm_seal = reopen_rate < 0.3
+
+    if formation == "成建制" and stage in ("高潮", "发酵") and firm_seal and not losing:
+        return "领涨", f"成建制+{stage}+封板牢（开板率 {reopen_rate:.0%}）"
+    if stage in ("高潮", "发酵") and not losing:
+        return "强势", f"{stage}期，赚钱效应仍在"
+    if formation == "成建制" and stage == "分歧" and max_boards >= 3 and not losing:
+        return "强势", "成建制题材高位分歧，高度未塌"
+    if max_boards >= 2 and stage != "退潮":
+        tier = "活跃"
+        if losing:
+            return tier, f"最高 {max_boards} 板，但接力溢价为负，只看不动"
+        return tier, f"最高 {max_boards} 板，梯队初成"
+    if losing:
+        return "观察", f"接力溢价 {premium_median:.2f}%，接力亏钱"
+    return "观察", f"{formation}·{stage}，暂无梯队结构"
+
+
+#: 分级展示排序（前端配色与排序参考）
+TIER_ORDER = {"领涨": 0, "强势": 1, "活跃": 2, "观察": 3}
+
+
 # ---------------------------------------------------------------- 纯函数：角色判定
 
 
@@ -549,7 +657,9 @@ async def build_theme_board(
     # ---- 7. 断板股：昨日连板、今日不在涨停池 ----
     market_max_boards = max((r.consecutive_boards or 0) for r in today_pool)
 
-    # 题材 → 成员（含主属性判定：一只票归属多个题材时，选强度最高的作主属性）
+    # 题材 → 成员（梯队联动归属：每只票只归属一个主题材，见 assign_primary_themes。
+    # 旧实现按标签全量塞入，同一梯队被拆散到多张卡片、题材重复计数，实测拆散率 22%）
+    primary_of = assign_primary_themes(today_pool)
     theme_members: dict[str, list] = defaultdict(list)
     stock_themes: dict[str, list[str]] = defaultdict(list)
     for rec in today_pool:
@@ -564,15 +674,7 @@ async def build_theme_board(
         if not themes:
             themes = [UNCLASSIFIED]
         stock_themes[rec.symbol] = themes
-        for th in themes:
-            theme_members[th].append(rec)
-
-    # 题材强度排序（决定主属性归属）
-    theme_rank = sorted(
-        theme_members.keys(),
-        key=lambda t: (-len(theme_members[t]), -max((r.consecutive_boards or 0) for r in theme_members[t])),
-    )
-    rank_index = {t: i for i, t in enumerate(theme_rank)}
+        theme_members[primary_of[rec.symbol]].append(rec)
 
     cards: list[dict] = []
     for theme, members in theme_members.items():
@@ -581,7 +683,6 @@ async def build_theme_board(
                 theme=theme,
                 members=members,
                 stock_themes=stock_themes,
-                rank_index=rank_index,
                 enhance=enhance,
                 board_index=board_index,
                 prev_boards_map=prev_boards_map,
@@ -763,7 +864,6 @@ def _build_card(
     theme: str,
     members: list,
     stock_themes: dict[str, list[str]],
-    rank_index: dict[str, int],
     enhance: dict[str, dict],
     board_index: dict[str, dict],
     prev_boards_map: dict[str, int],
@@ -817,9 +917,9 @@ def _build_card(
             seal_phase_value=phase,
             break_count=bc,
         )
-        primary = theme == (stock_themes.get(rec.symbol) or [theme])[0] or (
-            min(stock_themes.get(rec.symbol, [theme]), key=lambda t: rank_index.get(t, 999)) == theme
-        )
+        # 梯队联动归属后，卡片成员就是「主题材为本题材」的股票（assign_primary_themes），
+        # 不再有从属行——旧版在这里按 rank_index 判 is_primary，导致同一梯队拆散展示。
+        primary = True
         # 龙头前瞻打分 + 个股情绪：在首板/二板阶段就给出偏向，而不是等涨到高位
         # 再用高度倒推（那是结果归因）。第二高判定用于区分前排与跟风。
         second_highest = boards == theme_max_boards - 1 and theme_max_boards >= 3
@@ -917,6 +1017,19 @@ def _build_card(
         active_days=active_days,
     )
 
+    tier, tier_basis = strength_tier(
+        formation=formation_level(total),
+        stage=stage,
+        max_boards=theme_max_boards,
+        reopen_rate=reopen_rate,
+        premium_median=premium_median,
+    )
+    sort_basis = (
+        f"涨停 {total} 家 · 最高 {theme_max_boards} 板 · 完整度 {completeness:.0%}"
+        f" · 开板率 {reopen_rate:.0%} · 活跃 {active_days} 天"
+        + (f" · 接力溢价 {premium_median:+.2f}%" if premium_median is not None else "")
+    )
+
     note, risks = theme_health_note(
         theme=theme,
         stage=stage,
@@ -955,6 +1068,9 @@ def _build_card(
         "raw_tags": sorted({t for r in members for t in parse_theme_tags(r.reason)}) or [],
         "is_unclassified": theme == UNCLASSIFIED,
         "strength_score": score,
+        "strength_tier": tier,
+        "tier_basis": tier_basis,
+        "sort_basis": sort_basis,
         "stage": stage,
         "stage_basis": stage_basis,
         "formation": formation,
