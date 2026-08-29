@@ -207,73 +207,69 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
           {!flow || flow.flow.length === 0 ? (
             <p className="px-4 py-10 text-center text-sm text-zinc-400">暂无资金流数据</p>
           ) : (
-            <>
-              <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-4 py-2 text-xs text-zinc-400">
-                <span>
-                  连续净流入 <span className="font-mono text-sm text-zinc-100">{flow.streak_in}</span> 天
-                </span>
-                <span>
-                  最新主力净流入{" "}
-                  <span className={`font-mono text-sm ${(flow.flow[0].net_main ?? 0) > 0 ? "text-up" : "text-down"}`}>
-                    {fmtAmount(flow.flow[0].net_main)}
+            <div className="grid h-[430px] grid-cols-1 overflow-hidden md:grid-cols-[minmax(0,2fr),minmax(0,3fr)]">
+              {/* 左：柱状图 */}
+              <div className="flex min-w-0 flex-col border-b border-zinc-200 md:border-b-0 md:border-r dark:border-zinc-800">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2 text-xs text-zinc-400">
+                  <span>
+                    连续净流入 <span className="font-mono text-sm text-zinc-100">{flow.streak_in}</span> 天
                   </span>
-                </span>
-                <span className="ml-auto" title={flow.definition}>
-                  口径说明 ⓘ
-                </span>
+                  <span>
+                    最新主力净流入{" "}
+                    <span className={`font-mono text-sm ${(flow.flow[0].net_main ?? 0) > 0 ? "text-up" : "text-down"}`}>
+                      {fmtAmount(flow.flow[0].net_main)}
+                    </span>
+                  </span>
+                </div>
+                <div className="flex min-w-0 flex-1 items-end gap-[2px] px-3 py-2">
+                  {[...flow.flow].reverse().map((r) => {
+                    const max = Math.max(...flow.flow.map((x) => Math.abs(x.net_main ?? 0)), 1);
+                    const v = r.net_main ?? 0;
+                    const h = Math.max(2, (Math.abs(v) / max) * 48);
+                    return (
+                      <div key={r.date} className="group relative flex h-full min-w-0 flex-1 flex-col justify-center">
+                        <div className="flex h-1/2 items-end">
+                          {v > 0 && <div className="w-full rounded-t bg-[rgba(244,63,94,0.75)]" style={{ height: `${h}%` }} />}
+                        </div>
+                        <div className="flex h-1/2 items-start">
+                          {v < 0 && <div className="w-full rounded-b bg-[rgba(16,185,129,0.75)]" style={{ height: `${h}%` }} />}
+                        </div>
+                        <div className="pointer-events-none absolute -top-1 left-1/2 z-10 hidden -translate-x-1/2 whitespace-nowrap rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-100 group-hover:block">
+                          {r.date} {fmtAmount(v)}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="border-t border-zinc-200 px-4 py-2 text-xs text-zinc-500 dark:border-zinc-800">{flow.definition}</p>
               </div>
-              <div className="flex items-end gap-[3px] px-4 pb-2" style={{ height: 160 }}>
-                {[...flow.flow].reverse().map((r) => {
-                  const max = Math.max(...flow.flow.map((x) => Math.abs(x.net_main ?? 0)), 1);
-                  const v = r.net_main ?? 0;
-                  const h = Math.max(2, (Math.abs(v) / max) * 70);
-                  return (
-                    <div key={r.date} className="group relative flex-1" style={{ height: "100%" }}>
-                      <div className="absolute bottom-1/2 w-full" style={{ height: `${v > 0 ? h : 0}%` }}>
-                        <div className="h-full w-full rounded-t bg-up/70" />
-                      </div>
-                      <div className="absolute top-1/2 w-full" style={{ height: `${v < 0 ? h : 0}%` }}>
-                        <div className="h-full w-full rounded-b bg-down/70" />
-                      </div>
-                      <div className="pointer-events-none absolute -top-1 left-1/2 z-10 hidden -translate-x-1/2 whitespace-nowrap rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-100 group-hover:block">
-                        {r.date} {fmtAmount(v)}
-                      </div>
-                    </div>
-                  );
-                })}
+              {/* 右：明细表 */}
+              <div className="min-h-0 overflow-auto">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-zinc-50 text-left text-xs text-zinc-400 dark:bg-zinc-900/50">
+                    <tr>{["日期", "收盘", "涨跌幅", "主力净流入", "超大单", "大单", "中单", "小单"].map((h) => (
+                      <th key={h} className={`px-3 py-2 font-medium ${h === "日期" ? "" : "text-right"}`}>{h}</th>
+                    ))}</tr>
+                  </thead>
+                  <tbody>
+                    {flow.flow.map((r) => (
+                      <tr key={r.date} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
+                        <td className="px-3 py-1.5 font-mono text-xs">{r.date}</td>
+                        <td className="px-2 py-1.5 text-right font-mono">{fmt(r.close)}</td>
+                        <td className={`px-2 py-1.5 text-right font-mono ${pctColor(r.change_pct)}`}>{pctText(r.change_pct)}</td>
+                        <td className={`px-2 py-1.5 text-right font-mono text-xs ${(r.net_main ?? 0) > 0 ? "text-up" : "text-down"}`}>{fmtAmount(r.net_main)}</td>
+                        {[r.net_super, r.net_big, r.net_mid, r.net_small].map((v, j) => (
+                          <td key={j} className={`px-3 py-1.5 text-right font-mono text-xs ${(v ?? 0) > 0 ? "text-up" : "text-down"}`}>{fmtAmount(v)}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-              <table className="w-full text-sm">
-                <thead className="bg-zinc-50 text-left text-xs text-zinc-400 dark:bg-zinc-900/50">
-                  <tr>{["日期", "收盘", "涨跌幅", "主力净流入", "超大单", "大单", "中单", "小单"].map((h) => (
-                    <th key={h} className={`px-3 py-2 font-medium ${h === "日期" ? "" : "text-right"}`}>{h}</th>
-                  ))}</tr>
-                </thead>
-                <tbody>
-                  {flow.flow.slice(0, 10).map((r) => (
-                    <tr key={r.date} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                      <td className="px-3 py-1.5 font-mono text-xs">{r.date}</td>
-                      <td className="px-2 py-1.5 text-right font-mono">{fmt(r.close)}</td>
-                      <td className={`px-2 py-1.5 text-right font-mono ${pctColor(r.change_pct)}`}>{pctText(r.change_pct)}</td>
-                      <td className={`px-2 py-1.5 text-right font-mono text-xs ${(r.net_main ?? 0) > 0 ? "text-up" : "text-down"}`}>{fmtAmount(r.net_main)}</td>
-                      {[r.net_super, r.net_big, r.net_mid, r.net_small].map((v, j) => (
-                        <td key={j} className={`px-3 py-1.5 text-right font-mono text-xs ${(v ?? 0) > 0 ? "text-up" : "text-down"}`}>{fmtAmount(v)}</td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <p className="border-t border-zinc-200 px-4 py-2 text-xs text-zinc-500 dark:border-zinc-800">{flow.definition}</p>
-            </>
+            </div>
           )}
         </Panel>
       )}
-
-      {tab === "kline" && (
-        <Panel title="日 K 线（近 120 日 · 前复权）" className="min-h-0 flex-1 overflow-hidden">
-          {bars.length > 0 ? <KlineChart bars={bars} className="h-full" /> : <p className="px-4 py-10 text-center text-sm text-zinc-400">等待 K 线数据…</p>}
-        </Panel>
-      )}
-
       {tab === "fin" && (
         <Panel title="财务摘要（按报告期倒序 · 东财业绩报表）" source={fins?.[0]?.source} className="min-h-0 flex-1 overflow-hidden">
           {!fins || fins.length === 0 ? (

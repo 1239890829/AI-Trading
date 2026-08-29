@@ -293,4 +293,8 @@ class EastmoneyProvider:
         )
         rows = (payload.get("result") or {}).get("data") or []
         out = [nz.normalize_financial(r) for r in rows]
-        return [r for r in out if r is not None]
+        out = [r for r in out if r is not None]
+        dedup: dict = {}
+        for r in out:  # 同一报告期可能有预告/正式两行，保留 API 顺序中的首行
+            dedup.setdefault(r["report_date"], r)
+        return sorted(dedup.values(), key=lambda r: r["report_date"], reverse=True)
