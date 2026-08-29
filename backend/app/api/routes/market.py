@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -171,12 +171,18 @@ async def minute_line(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
     return {"data": {"symbol": symbol, "points": points}, "meta": _meta(hub)}
 
 
+def _default_trade_date() -> date:
+    """最近交易日：周末回退到周五（节假日日历在后续阶段接入）。"""
+    d = date.today()
+    return {5: d - timedelta(days=1), 6: d - timedelta(days=2)}.get(d.weekday(), d)
+
+
 @router.get("/limit-up")
 async def limit_up(
-    date_str: str | None = Query(default=None, alias="date", description="YYYY-MM-DD，默认今天"),
+    date_str: str | None = Query(default=None, alias="date", description="YYYY-MM-DD，默认最近交易日"),
     hub: QuoteHub = Depends(get_hub),
 ) -> dict:
-    trade_date = date.fromisoformat(date_str) if date_str else date.today()
+    trade_date = date.fromisoformat(date_str) if date_str else _default_trade_date()
     try:
         records = await hub.provider.get_limit_up_pool(trade_date)
     except Exception as exc:
@@ -190,10 +196,10 @@ async def limit_up(
 
 @router.get("/longhu")
 async def longhu(
-    date_str: str | None = Query(default=None, alias="date", description="YYYY-MM-DD，默认今天"),
+    date_str: str | None = Query(default=None, alias="date", description="YYYY-MM-DD，默认最近交易日（T-1 盘后披露）"),
     hub: QuoteHub = Depends(get_hub),
 ) -> dict:
-    trade_date = date.fromisoformat(date_str) if date_str else date.today()
+    trade_date = date.fromisoformat(date_str) if date_str else _default_trade_date()
     try:
         records = await hub.provider.get_longhu_records(trade_date)
     except Exception as exc:
