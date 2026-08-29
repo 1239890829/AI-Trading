@@ -8,9 +8,12 @@ import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
 import { addToWatchlist, API_BASE, getKline, getMinuteLine, getOrderBook, getQuotes, getTrades, type MinutePoint } from "@/lib/api";
 import { fmt, fmtAmount, fmtVolume, pctColor, pctText, timeText } from "@/lib/format";
-import type { Kline, OrderBook, Trade } from "@/types/market";
+import type { Kline, OrderBook, Quote, Trade } from "@/types/market";
 
-type Tab = "kline" | "minute" | "book" | "trades" | "longhu";
+type Tab = "kline" | "minute" | "book" | "trades" | "longhu" | "flow";
+
+interface FlowRow { date: string; close?: number | null; change_pct?: number | null; net_main?: number | null; net_super?: number | null; net_big?: number | null; net_mid?: number | null; net_small?: number | null; source: string }
+interface CapitalFlow { days: number; flow: FlowRow[]; streak_in: number; definition: string }
 
 interface LonghuSeat { seat?: string | null; seat_type: string; buy?: number | null; sell?: number | null; net?: number | null; rise_probability_3day?: number | null }
 interface LonghuDetail { trade_date: string; buy_seats: LonghuSeat[]; sell_seats: LonghuSeat[]; empty?: boolean }
@@ -28,6 +31,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [minutes, setMinutes] = useState<MinutePoint[]>([]);
   const [longhu, setLonghu] = useState<{ detail: LonghuDetail; history: LonghuHistory[]; stats: LonghuStats } | null>(null);
+  const [flow, setFlow] = useState<CapitalFlow | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [inWatchlist, setInWatchlist] = useState(false);
 
@@ -80,14 +84,16 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
       getTrades(symbol, 30).catch(() => [] as Trade[]),
       getMinuteLine(symbol).catch(() => [] as MinutePoint[]),
       fetch(`${API_BASE}/api/longhu/${symbol}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(`${API_BASE}/api/capital-flow/${symbol}?days=30`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ])
-      .then(([bars2, ob2, tr2, minutes2, lh]) => {
+      .then(([bars2, ob2, tr2, minutes2, lh, cf]) => {
         if (!alive) return;
         setBars(bars2);
         setBook(ob2);
         setTrades(tr2);
         setMinutes(minutes2);
         if (lh?.data) setLonghu(lh.data);
+        if (cf?.data) setFlow(cf.data);
       })
       .catch((e: Error) => alive && setError(e.message));
     return () => {
@@ -171,6 +177,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
             ["book", "盘口"],
             ["trades", "逐笔"],
             ["longhu", "龙虎榜"],
+            ["flow", "资金"],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -184,6 +191,72 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
           </button>
         ))}
       </div>
+
+      {tab === "flow" && (
+        <Panel title="资金流向（近 30 日 · 主力口径）" source={flow?.flow[0]?.source} className="min-h-0 flex-1 overflow-hidden">
+          {!flow || flow.flow.length === 0 ? (
+            <p className="px-4 py-10 text-center text-sm text-zinc-400">暂无资金流数据</p>
+          ) : (
+            <>
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-4 py-2 text-xs text-zinc-400">
+                <span>
+                  连续净流入 <span className="font-mono text-sm text-zinc-100">{flow.streak_in}</span> 天
+                </span>
+                <span>
+                  最新主力净流入{" "}
+                  <span className={`font-mono text-sm ${(flow.flow[0].net_main ?? 0) > 0 ? "text-up" : "text-down"}`}>
+                    {fmtAmount(flow.flow[0].net_main)}
+                  </span>
+                </span>
+                <span className="ml-auto" title={flow.definition}>
+                  口径说明 ⓘ
+                </span>
+              </div>
+              <div className="flex items-end gap-[3px] px-4 pb-2" style={{ height: 160 }}>
+                {[...flow.flow].reverse().map((r) => {
+                  const max = Math.max(...flow.flow.map((x) => Math.abs(x.net_main ?? 0)), 1);
+                  const v = r.net_main ?? 0;
+                  const h = Math.max(2, (Math.abs(v) / max) * 70);
+                  return (
+                    <div key={r.date} className="group relative flex-1" style={{ height: "100%" }}>
+                      <div className="absolute bottom-1/2 w-full" style={{ height: `${v > 0 ? h : 0}%` }}>
+                        <div className="h-full w-full rounded-t bg-up/70" />
+                      </div>
+                      <div className="absolute top-1/2 w-full" style={{ height: `${v < 0 ? h : 0}%` }}>
+                        <div className="h-full w-full rounded-b bg-down/70" />
+                      </div>
+                      <div className="pointer-events-none absolute -top-1 left-1/2 z-10 hidden -translate-x-1/2 whitespace-nowrap rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-100 group-hover:block">
+                        {r.date} {fmtAmount(v)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <table className="w-full text-sm">
+                <thead className="bg-zinc-50 text-left text-xs text-zinc-400 dark:bg-zinc-900/50">
+                  <tr>{["日期", "收盘", "涨跌幅", "主力净流入", "超大单", "大单", "中单", "小单"].map((h) => (
+                    <th key={h} className={`px-3 py-2 font-medium ${h === "日期" ? "" : "text-right"}`}>{h}</th>
+                  ))}</tr>
+                </thead>
+                <tbody>
+                  {flow.flow.slice(0, 10).map((r) => (
+                    <tr key={r.date} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
+                      <td className="px-3 py-1.5 font-mono text-xs">{r.date}</td>
+                      <td className="px-2 py-1.5 text-right font-mono">{fmt(r.close)}</td>
+                      <td className={`px-2 py-1.5 text-right font-mono ${pctColor(r.change_pct)}`}>{pctText(r.change_pct)}</td>
+                      <td className={`px-2 py-1.5 text-right font-mono text-xs ${(r.net_main ?? 0) > 0 ? "text-up" : "text-down"}`}>{fmtAmount(r.net_main)}</td>
+                      {[r.net_super, r.net_big, r.net_mid, r.net_small].map((v, j) => (
+                        <td key={j} className={`px-3 py-1.5 text-right font-mono text-xs ${(v ?? 0) > 0 ? "text-up" : "text-down"}`}>{fmtAmount(v)}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="border-t border-zinc-200 px-4 py-2 text-xs text-zinc-500 dark:border-zinc-800">{flow.definition}</p>
+            </>
+          )}
+        </Panel>
+      )}
 
       {tab === "kline" && (
         <Panel title="日 K 线（近 120 日 · 前复权）" className="min-h-0 flex-1 overflow-hidden">

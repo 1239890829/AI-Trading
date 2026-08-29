@@ -161,6 +161,20 @@ class SinaProvider:
         text = resp.content.decode("gbk", errors="replace")
         return parse_board_list(text, source=self.name)
 
+    async def get_capital_flow(self, symbol: str, days: int = 30) -> list[dict]:
+        """个股资金流（新浪 MoneyFlow，按单笔成交额四级拆分）。symbol 为 6 位代码。"""
+        to_tencent_symbol(symbol)  # 校验并获取 sh/sz 前缀
+        resp = await self._client.get(
+            "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_qsfx_lscjfb",
+            params={"page": "1", "num": str(days), "sort": "opendate", "asc": "0", "daima": to_tencent_symbol(symbol)},
+        )
+        if resp.status_code != 200:
+            raise ProviderError(f"sina moneyflow HTTP {resp.status_code}")
+        import json as _json
+
+        rows = _json.loads(resp.content.decode("utf-8", errors="replace"))
+        return parse_money_flow(rows, source=self.name)
+
 
 def parse_board_list(text: str, source: str = SOURCE) -> list[dict]:
     """解析 S_Finance_bankuai_* JS 变量为板块排行列表。
@@ -196,4 +210,30 @@ def parse_board_list(text: str, source: str = SOURCE) -> list[dict]:
         })
     if not out:
         raise ProviderError("sina boards parsed empty")
+    return out
+
+
+
+def parse_money_flow(rows: list[dict], source: str = SOURCE) -> list[dict]:
+    """lscjfb 字段：opendate/trade/changeratio/turnover/netamount(主力净流入)/r0..r3(超大/大/中/小单额)/r0_net..r3_net。"""
+    num = lambda v: float(v) if v not in (None, "", "--") else None  # noqa: E731
+    out = []
+    for r in rows:
+        out.append({
+            "date": str(r.get("opendate") or "")[:10],
+            "close": num(r.get("trade")),
+            "change_pct": round(num(r.get("changeratio")) * 100, 2) if num(r.get("changeratio")) is not None else None,
+            "turnover_rate": num(r.get("turnover")),
+            "net_main": num(r.get("netamount")),  # 主力净流入（超大+大单，新浪口径）
+            "main_ratio": num(r.get("ratioamount")),
+            "net_super": num(r.get("r0_net")),
+            "net_big": num(r.get("r1_net")),
+            "net_mid": num(r.get("r2_net")),
+            "net_small": num(r.get("r3_net")),
+            "amount_super": num(r.get("r0")),
+            "amount_big": num(r.get("r1")),
+            "amount_mid": num(r.get("r2")),
+            "amount_small": num(r.get("r3")),
+            "source": source,
+        })
     return out

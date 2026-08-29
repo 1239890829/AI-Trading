@@ -271,6 +271,35 @@ async def longhu_detail(
     return {"data": {"detail": detail, "history": history, "stats": stats}, "meta": _meta(hub)}
 
 
+@router.get("/capital-flow/{symbol}")
+async def capital_flow(
+    symbol: str,
+    days: int = Query(default=30, ge=1, le=100),
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    """个股资金流（新浪口径：主力=超大单+大单；按单笔成交额四级拆分，见页面口径说明）。"""
+    try:
+        rows = await hub.provider.get_capital_flow(symbol, days)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"资金流数据源失败：{exc}")
+    streak = 0
+    for r in rows:  # rows 按日期倒序
+        if (r.get("net_main") or 0) > 0:
+            streak += 1
+        else:
+            break
+    return {
+        "data": {
+            "symbol": symbol,
+            "days": len(rows),
+            "flow": rows,
+            "streak_in": streak,
+            "definition": "主力净流入 = 超大单净额 + 大单净额（新浪按单笔成交金额划分：≥50万股或100万元视为大单级别，具体阈值为新浪口径，属估算数据非交易所披露）",
+        },
+        "meta": _meta(hub),
+    }
+
+
 @router.get("/search")
 async def search(q: str = Query(min_length=1, max_length=20), hub: QuoteHub = Depends(get_hub)) -> dict:
     from app.data_providers.mock import MockProvider
