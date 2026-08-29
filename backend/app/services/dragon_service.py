@@ -84,7 +84,10 @@ THEME_CORE_RULES = [
     ("外围传导", ("美股", "隔夜", "海外", "英伟达", "美联储", "外盘", "出口", "关税", "地缘")),
     ("产业趋势", ("算力", "液冷", "光模块", "固态电池", "机器人", "创新药", "AI", "储能", "半导体")),
     ("涨价周期", ("涨价", "提价", "报价", "供需", "库存", "黄金", "有色", "稀土")),
-    ("事件传闻", ("传闻", "消息", "或", "拟", "传闻")),
+    # ⚠️ 这里原本还有「或」「拟」两个关键词，2026-08-29 移除：
+    # 「控制权拟变更」「或增资」这类表述在涨停原因里极常见，等于给事件传闻
+    # 开了万能匹配，几乎任何题材都会被带上"弱内核"标签。
+    ("事件传闻", ("传闻", "消息", "疑似", "未证实", "市场传闻")),
 ]
 
 # 内核 → 持续性倾向（业界共识：能兑现业绩的最硬，纯概念的最弱）
@@ -443,27 +446,70 @@ def entry_checklist(
 # ---------------------------------------------------------------- 题材内核
 
 
+def _match_cores(text: str) -> list[str]:
+    """一段文本命中的全部内核类型（不取首个，保留全部以便投票）。"""
+    return [core for core, kws in THEME_CORE_RULES if any(k in text for k in kws)]
+
+
 def theme_core(theme: str | None, reasons: list[str] | None = None) -> dict:
     """题材炒作内核归因：这个题材到底在炒什么。
 
     内核决定了**资金愿意给多久的耐心**：业绩兑现型可以被反复做，事件传闻型
     大多一日游。归不出来就明说"无法归因"，不硬套。
+
+    ⚠️ 2026-08-29 重写原实现，原逻辑有两个叠加缺陷：
+
+    1. **把全部成分股的涨停原因拼成一个大字符串，再按规则表顺序返回首个命中**。
+       实测把「算力」「创新药」都归成了「业绩兑现」——因为 41 条原因里只要有
+       一条含"业绩"二字就命中，而"业绩兑现"在规则表里排第一。
+       **任意一只符合 ≠ 这个题材符合**，但原逻辑分不清这两件事。
+    2. 规则表里的关键词含「或」「拟」这类高频字，等于给"事件传闻"开了万能匹配。
+
+    现在改为：**题材名优先（它是最权威的分类标签），名未命中时按成员原因多数票**，
+    并回报票型分布 `votes`，让归因结论可复核而不是黑箱。
     """
-    text = f"{theme or ''} {' '.join(reasons or [])}"
-    if not text.strip():
+    reasons = [r.strip() for r in (reasons or []) if r and r.strip()]
+    name = (theme or "").strip()
+    if not name and not reasons:
         return {"type": "无法归因", "persistence": None, "confidence": "低",
+                "votes": {}, "members": 0,
                 "note": "无题材名与涨停原因，无法归因"}
 
-    for core, kws in THEME_CORE_RULES:
-        if any(k in text for k in kws):
-            return {
-                "type": core,
-                "persistence": THEME_CORE_PERSISTENCE.get(core),
-                "confidence": "中",
-                "note": f"命中关键词：{next(k for k in kws if k in text)}",
-            }
-    return {"type": "无法归因", "persistence": None, "confidence": "低",
-            "note": "题材名与原因均未命中已知内核类型"}
+    # 成员投票：逐条 reason 独立归因，一条 reason 命中多类时每类各记一票
+    votes: dict[str, int] = {}
+    for r in reasons:
+        for c in _match_cores(r):
+            votes[c] = votes.get(c, 0) + 1
+
+    name_hits = _match_cores(name) if name else []
+    if name_hits:
+        core = name_hits[0]
+        basis = f"题材名命中：{next((k for core2, kws in THEME_CORE_RULES if core2 == core for k in kws if k in name), core)}"
+        # 名称命中但成员票压倒性地指向别处 → 说明标签与实质背离，降置信度
+        rival = max((v, c) for c, v in votes.items() if c != core) if any(
+            c != core for c in votes) else (0, None)
+        confidence = "中" if not rival[1] or rival[0] <= len(reasons) / 2 else "低"
+        if confidence == "低":
+            basis += f"；但成员原因中「{rival[1]}」占 {rival[0]}/{len(reasons)}，标签与实质可能背离"
+    elif votes:
+        core = max(votes.items(), key=lambda kv: (kv[1], -list(
+            c for c, _ in THEME_CORE_RULES).index(kv[0])))[0]
+        share = votes[core] / len(reasons)
+        confidence = "中" if share >= 0.5 else "低"
+        basis = f"成员原因多数票 {votes[core]}/{len(reasons)}（占比 {share:.0%}）"
+    else:
+        return {"type": "无法归因", "persistence": None, "confidence": "低",
+                "votes": votes, "members": len(reasons),
+                "note": "题材名与原因均未命中已知内核类型"}
+
+    return {
+        "type": core,
+        "persistence": THEME_CORE_PERSISTENCE.get(core),
+        "confidence": confidence,
+        "votes": votes,
+        "members": len(reasons),
+        "note": basis,
+    }
 
 
 def news_persistence(

@@ -23,7 +23,7 @@ _LIMIT_TOLERANCE = 0.15
 
 
 def compute_breadth(rows: list[dict]) -> dict:
-    up = down = flat = limit_up = limit_down = 0
+    up = down = flat = limit_up = limit_down = limit_anomaly = 0
     suspended = 0
     total_amount = 0.0
     for r in rows:
@@ -49,10 +49,19 @@ def compute_breadth(rows: list[dict]) -> dict:
         name_head = (r.get("name") or " ")[:1]
         if name_head in {"N", "C"}:
             continue
-        if pct >= limit - _LIMIT_TOLERANCE:
+        # 双边判定：涨跌停是「价格落在限价上」，不是「比限价更极端」。
+        #
+        # 单边写法（pct >= limit-tol / pct <= -(limit-tol)）会把「限价口径失配」
+        # 静默吃成涨跌停。2026-08-28 实测：`*ST萃华` 被 `_limit_pct` 按名称判为
+        # 5% 限制，实际却跌了 9.574%——5% 限制下这根本不可能发生，说明该股的
+        # 限价口径与名称不符，但单边判定把它算成了跌停，且不报错、不留痕。
+        # 超出限价的单独计 `limit_anomaly`，既不冒充涨跌停，也不悄悄丢掉。
+        if (limit - _LIMIT_TOLERANCE) <= pct <= (limit + _LIMIT_TOLERANCE):
             limit_up += 1
-        elif pct <= -(limit - _LIMIT_TOLERANCE):
+        elif -(limit + _LIMIT_TOLERANCE) <= pct <= -(limit - _LIMIT_TOLERANCE):
             limit_down += 1
+        elif pct > (limit + _LIMIT_TOLERANCE) or pct < -(limit + _LIMIT_TOLERANCE):
+            limit_anomaly += 1
     return {
         "total": len(rows),
         "up": up,
@@ -61,6 +70,7 @@ def compute_breadth(rows: list[dict]) -> dict:
         "suspended": suspended,
         "limit_up": limit_up,
         "limit_down": limit_down,
+        "limit_anomaly": limit_anomaly,
         "limit_up_ratio": round(limit_up / max(up, 1), 4),
         "total_amount": round(total_amount, 2),
         "generated_at": datetime.now(timezone.utc).isoformat(),

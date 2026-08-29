@@ -59,3 +59,48 @@ def test_breadth_excludes_new_stocks_from_limit_counts():
     b = compute_breadth([_row("301999", "N 新股", 500.0), _row("688999", "C 次新", 120.0)])
     assert b["limit_up"] == 0
     assert b["up"] == 2
+
+
+# ---------------------------------------------------------------- 限价口径
+
+
+def _limit_row(symbol, name, pct, price=10.0):
+    """构造带真实价格量级的行（price 影响一档跳的大小，进而影响限价判定）。"""
+    return {"symbol": symbol, "name": name, "price": price,
+            "prev_close": round(price / (1 + pct / 100), 2), "change_pct": pct,
+            "amount": 1e6}
+
+
+def test_limit_down_uses_two_sided_band():
+    """跌停是「落在限价上」，不是「跌得比限价还多」。
+
+    回归 2026-08-28 实测：`*ST萃华` 按名称判为 5% 限制，实际跌 9.574%。
+    5% 限制下不可能跌 9.57%，说明该股限价口径与名称不符；
+    旧的单边判定（pct <= -(limit-0.15)）把它算成了跌停，且不报错。
+    """
+    rows = [_limit_row("002731", "*ST萃华", -9.574, 0.85)]
+    b = compute_breadth(rows)
+    assert b["limit_down"] == 0, "超出限价的不得计入跌停"
+    assert b["limit_anomaly"] == 1, "必须单独标记为口径存疑，而不是悄悄丢掉"
+
+
+def test_real_limit_down_still_counted():
+    """真跌停（价格落在限价上）必须照常计入。"""
+    rows = [_limit_row("002963", "豪尔赛", -10.009, 19.15)]
+    assert compute_breadth(rows)["limit_down"] == 1
+
+
+def test_limit_up_uses_two_sided_band():
+    """涨停同理：涨停是落在 +limit 上。"""
+    assert compute_breadth([_limit_row("600519", "贵州茅台", 10.0, 1300.0)])["limit_up"] == 1
+    # 新股无涨跌幅（N 字头）本就被排除；这里验证超额涨幅不冒充涨停
+    b = compute_breadth([_limit_row("600123", "某主板", 15.0, 12.0)])
+    assert b["limit_up"] == 0
+    assert b["limit_anomaly"] == 1
+
+
+def test_creatboard_20pct_limit_not_miscounted():
+    """创业板 20% 限制：跌 11% 只是普通下跌，不是跌停。"""
+    b = compute_breadth([_limit_row("300750", "宁德时代", -11.29, 200.0)])
+    assert b["limit_down"] == 0
+    assert b["limit_anomaly"] == 0, "20% 限制下 -11.29% 完全正常，不算存疑"

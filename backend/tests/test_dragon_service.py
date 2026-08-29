@@ -188,8 +188,17 @@ def test_theme_core_earnings():
     assert theme_core("业绩预增", ["中报预增"])["type"] == "业绩兑现"
 
 
-def test_theme_core_policy():
-    assert theme_core("固态电池", ["工信部标准立项"])["type"] == "政策驱动"
+def test_theme_core_prefers_theme_name_over_single_catalyst():
+    """题材名说的是"这个题材是什么"，涨停原因说的是"这次为什么涨"。
+
+    「固态电池 + 工信部标准立项」：题材本身是产业趋势，标准立项只是当次催化剂。
+    旧实现（顺序取首个命中）会因为原因里出现"标准"而归成政策驱动，
+    把题材的持久性从 +1 错降到 0。内核应回答"在炒什么"而非"这次因何而起"。
+    """
+    r = theme_core("固态电池", ["工信部标准立项"])
+    assert r["type"] == "产业趋势"
+    # 分歧不隐藏：票型里要能看到「政策驱动」这一票
+    assert r["votes"] == {"政策驱动": 1}
 
 
 def test_theme_core_rumor_is_weakest():
@@ -201,6 +210,59 @@ def test_theme_core_unknown_is_explicit():
     r = theme_core("维尔萨塔", [])
     assert r["type"] == "无法归因"
     assert r["confidence"] == "低"
+
+
+def test_theme_core_is_not_hijacked_by_a_single_reason():
+    """核心回归：不能因为**任意一只**成分股提到"业绩"就把整个题材归成业绩兑现。
+
+    2026-08-29 实测：原实现把全部成分股的涨停原因拼成一个大字符串，再按规则表
+    顺序返回首个命中，而"业绩兑现"排第一——于是「算力」「创新药」被双双归成
+    「业绩兑现」。任意一只符合 ≠ 这个题材符合，这两件事原逻辑分不清。
+    """
+    # 成员票型打平（产业2 : 业绩2），但题材名明确指向产业趋势
+    r = theme_core("算力", ["算力订单落地", "中报业绩预增", "数据中心液冷", "业绩超预期"])
+    assert r["type"] == "产业趋势", "题材名优先，不被成员票带偏"
+    assert r["votes"] == {"产业趋势": 2, "业绩兑现": 2}, "票型必须回报以便复核"
+
+    r2 = theme_core("创新药", ["创新药出海授权", "业绩预增", "临床试验获批"])
+    assert r2["type"] == "产业趋势"
+
+
+def test_theme_core_name_priority_over_member_majority():
+    """题材名是最权威的分类标签，优先于成员原因多数票。"""
+    r = theme_core("黄金珠宝", ["国际金价上涨", "黄金提价", "业绩增长", "业绩预增"])
+    assert r["type"] == "涨价周期"
+
+
+def test_theme_core_flags_label_vs_substance_divergence():
+    """名称命中但成员票压倒性指向别处 → 降置信度并说明，而不是假装一致。"""
+    r = theme_core("算力", ["中报预增"] * 9 + ["算力订单"])  # 9/10 指向业绩
+    assert r["type"] == "产业趋势"
+    assert r["confidence"] == "低", "标签与实质背离必须显式提示"
+    assert "背离" in r["note"]
+
+
+def test_theme_core_falls_back_to_member_majority_vote():
+    """题材名没命中时，按成员原因多数票归因。"""
+    r = theme_core("某某概念", ["并购重组", "资产注入", "业绩预增"])
+    assert r["type"] == "资产重组", "重组 2 票 > 业绩 1 票"
+    assert r["confidence"] == "中", "2/3 过半，置信度中"
+
+
+def test_theme_core_low_confidence_when_votes_split():
+    """票型分散（没有过半）时置信度必须降低。"""
+    r = theme_core("某某概念", ["并购重组", "涨价", "业绩预增", "美股大涨"])
+    assert r["confidence"] == "低", "1/4 票不足以支撑结论"
+
+
+def test_theme_core_generic_particles_are_not_rumor_keywords():
+    """「或」「拟」是中文高频字，不能当"事件传闻"的关键词。
+
+    原规则里这两个字导致"控制权拟变更""或增资"这类正常表述被判成传闻题材，
+    给几乎任何题材都扣上"弱内核"的帽子。
+    """
+    r = theme_core("控制权变更", ["控制权拟变更", "董事会通过或增资方案"])
+    assert r["type"] != "事件传闻"
 
 
 def test_theme_core_persistence_ranking():

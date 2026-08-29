@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from app.data_providers.composite import CompositeProvider
 from app.market import trade_calendar as tc
 
 
@@ -86,3 +87,119 @@ def test_normalize_dedups_and_sorts():
     assert tc._normalize([date(2026, 8, 28), date(2026, 8, 26), date(2026, 8, 28)]) == [
         date(2026, 8, 26), date(2026, 8, 28),
     ]
+
+
+# ---------------------------------------------------------------- 主源选择
+
+
+class _FakeOfficial:
+    """只提供 get_trading_days 的 provider（模拟 ths）。"""
+
+    name = "ths"
+
+    def __init__(self, days):
+        self._days = days
+
+    async def get_trading_days(self):
+        return self._days
+
+
+class _FakeKlineOnly:
+    """只提供 get_kline 的 provider（模拟腾讯）。"""
+
+    name = "tencent"
+
+    def __init__(self, days):
+        self._days = days
+
+    async def get_kline(self, symbol, timeframe, start, end):
+        assert symbol == tc.INDEX_SYMBOL, "备源必须用上证综指"
+        return [type("B", (), {"ts": __import__("datetime").datetime.combine(
+            d, __import__("datetime").time(8, 0))})() for d in self._days]
+
+
+def _run(coro):
+    import asyncio
+
+    tc.invalidate_cache()
+    try:
+        return asyncio.run(coro)
+    finally:
+        tc.invalidate_cache()
+
+
+def test_parse_official_accepts_yyyymmdd_and_date():
+    """官方端点返回 'YYYYMMDD' 字符串，也可能已是 date——两种都要能吃。"""
+    assert tc._parse_official(["20260827", "20260828"]) == [
+        date(2026, 8, 27), date(2026, 8, 28)]
+    assert tc._parse_official([date(2026, 8, 28)]) == [date(2026, 8, 28)]
+    assert tc._parse_official(["", None, "bad", "2026082"]) == []
+    assert tc._parse_official(None) == []
+
+
+def test_official_calendar_is_preferred_over_index_kline():
+    """核心回归：官方端点必须优先于日 K 推导。
+
+    首个版本只实现了日 K 推导，绕开了早就存在且 main.py 已在用的官方端点。
+    实测官方 242 天是推导 124 天的完全超集，用推导的等于白白少一半历史。
+    """
+    official = ["20260826", "20260827", "20260828"] + [
+        f"2026{d:02d}{x:02d}" for d in range(1, 8) for x in range(1, 3)]
+    kline_days = [date(2026, 8, 27), date(2026, 8, 28)]   # 故意给得更少
+
+    # 用真实 CompositeProvider：生产环境传的就是它，自制壳会漏测方法转发
+    chain = CompositeProvider([_FakeOfficial(official), _FakeKlineOnly(kline_days)])
+
+    got = _run(tc.trading_days(chain))
+    assert len(got) > len(kline_days), "必须采用官方那份更长的日历"
+    assert date(2026, 8, 26) in got, "官方独有日期必须出现在结果里"
+
+
+def test_falls_back_to_index_kline_when_official_missing():
+    """没有 provider 提供官方日历时，回退到上证日 K 推导。"""
+    kline_days = [
+        date(2026, 8, 24), date(2026, 8, 25), date(2026, 8, 26),
+        date(2026, 8, 27), date(2026, 8, 28),
+    ]
+
+    chain = CompositeProvider([_FakeKlineOnly(kline_days)])
+    assert _run(tc.trading_days(chain)) == kline_days
+
+
+def test_official_failure_falls_back():
+    """官方端点抛异常时不能让日历整体挂掉。"""
+
+    class _BrokenOfficial:
+        name = "ths"
+
+        async def get_trading_days(self):
+            raise RuntimeError("boom")
+
+    kline_days = [
+        date(2026, 8, 24), date(2026, 8, 25), date(2026, 8, 26),
+        date(2026, 8, 27), date(2026, 8, 28),
+    ]
+
+    chain = CompositeProvider([_BrokenOfficial(), _FakeKlineOnly(kline_days)])
+    assert _run(tc.trading_days(chain)) == kline_days
+
+
+def test_both_sources_fail_raises():
+    """两条路都拿不到 → 抛错，绝不退回「只跳周末」的猜测逻辑。"""
+    import pytest
+
+    class _Nothing:
+        name = "empty"
+        providers = []
+
+    with pytest.raises(RuntimeError):
+        _run(tc.trading_days(_Nothing()))
+
+
+def test_iter_providers_expands_composite_and_bare():
+    """CompositeProvider 展开 .providers，裸 provider 包一层。"""
+    p = _FakeOfficial([])
+    assert tc._iter_providers(p) == [p]
+    assert tc._iter_providers(None) == []
+    comp = type("C", (), {"providers": [p]})()
+    assert tc._iter_providers(comp) == [p]
