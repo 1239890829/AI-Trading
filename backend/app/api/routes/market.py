@@ -380,6 +380,26 @@ async def company(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
     return {"data": profile, "meta": _meta(hub)}
 
 
+@router.get("/announcements/{symbol}")
+async def announcements(symbol: str, limit: int = Query(default=10, ge=1, le=30), hub: QuoteHub = Depends(get_hub)) -> dict:
+    """个股公告（东财，title/date/类型/原文链接）。"""
+    try:
+        rows = await hub.provider.get_announcements(symbol, limit)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"公告数据源失败：{exc}")
+    return {"data": {"symbol": symbol, "items": rows}, "meta": _meta(hub)}
+
+
+@router.get("/news/{symbol}")
+async def news(symbol: str, limit: int = Query(default=10, ge=1, le=30), hub: QuoteHub = Depends(get_hub)) -> dict:
+    """个股相关新闻（东财资讯检索，含正文摘要）。"""
+    try:
+        rows = await hub.provider.get_news(symbol, limit)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"新闻数据源失败：{exc}")
+    return {"data": {"symbol": symbol, "items": rows}, "meta": _meta(hub)}
+
+
 @router.get("/search")
 async def search(q: str = Query(min_length=1, max_length=20), hub: QuoteHub = Depends(get_hub)) -> dict:
     from app.data_providers.mock import MockProvider

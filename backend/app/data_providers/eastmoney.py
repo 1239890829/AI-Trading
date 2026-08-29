@@ -329,3 +329,43 @@ class EastmoneyProvider:
         except Exception as exc:
             log.warning("conception fetch failed for %s: %s", symbol, exc)
         return profile
+
+    async def get_announcements(self, symbol: str, limit: int = 10) -> list[dict]:
+        payload = await self._get_json(
+            "https://np-anotice-stock.eastmoney.com/api/security/ann",
+            {
+                "sr": "-1", "page_size": str(limit), "page_index": "1",
+                "ann_type": "A", "client_source": "web",
+                "stock_list": symbol, "f_node": "0", "s_node": "0",
+            },
+        )
+        items = (payload.get("data") or {}).get("list") or []
+        out = [nz.normalize_announcement(r, symbol) for r in items]
+        return [r for r in out if r is not None]
+
+    async def get_news(self, symbol: str, limit: int = 10) -> list[dict]:
+        import json as _json
+
+        param = {
+            "uid": "",
+            "keyword": symbol,
+            "type": ["cmsArticleWebOld"],
+            "client": "web",
+            "clientVersion": "curr",
+            "param": {"cmsArticleWebOld": {"searchScope": "default", "sort": "default",
+                                            "pageIndex": 1, "pageSize": limit,
+                                            "preTag": "", "postTag": ""}},
+        }
+        resp = await self._client.get(
+            "https://search-api-web.eastmoney.com/search/jsonp",
+            params={"cb": "cb", "param": _json.dumps(param, ensure_ascii=False)},
+        )
+        if resp.status_code != 200:
+            raise ProviderError(f"news HTTP {resp.status_code}")
+        text = resp.text.strip()
+        if text.startswith("cb("):
+            text = text[3:-1]
+        payload = _json.loads(text)
+        arts = ((payload.get("result") or {}).get("cmsArticleWebOld")) or []
+        out = [nz.normalize_news(r, symbol) for r in arts]
+        return [r for r in out if r is not None]

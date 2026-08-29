@@ -13,7 +13,7 @@ import { fmt, fmtAmount, fmtVolume, pctColor, pctText, timeText } from "@/lib/fo
 import type { Kline, OrderBook, Quote, Trade } from "@/types/market";
 
 type ChartTab = "kline" | "minute" | "flow";
-type RightTab = "book" | "trades" | "profile";
+type RightTab = "book" | "trades" | "profile" | "info";
 
 interface LonghuSeat { seat?: string | null; seat_type: string; buy?: number | null; sell?: number | null; net?: number | null; rise_probability_3day?: number | null }
 interface LonghuDetail { trade_date: string; buy_seats: LonghuSeat[]; sell_seats: LonghuSeat[]; empty?: boolean }
@@ -33,6 +33,8 @@ interface CompanyProfile {
   source: string;
 }
 
+interface InfoItem { title: string; date: string; url: string; type?: string | null; summary?: string | null; source: string }
+
 interface FinRow { report_date: string; revenue?: number | null; revenue_yoy?: number | null; net_profit?: number | null; profit_yoy?: number | null; gross_margin?: number | null; roe?: number | null; eps?: number | null; source: string }
 
 /** 个股详情终端 v3（工作台右栏 / 个股页共用）：
@@ -48,6 +50,8 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   const [longhu, setLonghu] = useState<{ detail: LonghuDetail; history: LonghuHistory[]; stats: LonghuStats } | null>(null);
   const [flow, setFlow] = useState<CapitalFlow | null>(null);
   const [fins, setFins] = useState<FinRow[] | null>(null);
+  const [anns, setAnns] = useState<InfoItem[] | null>(null);
+  const [news, setNews] = useState<InfoItem[] | null>(null);
   const [company, setCompany] = useState<CompanyProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [inWatchlist, setInWatchlist] = useState(false);
@@ -127,8 +131,10 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
       fetch(`${API_BASE}/api/capital-flow/${symbol}?days=30`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
       fetch(`${API_BASE}/api/financials/${symbol}?periods=8`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
       fetch(`${API_BASE}/api/company/${symbol}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(`${API_BASE}/api/announcements/${symbol}?limit=8`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(`${API_BASE}/api/news/${symbol}?limit=8`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ])
-      .then(([b, ob, tr, min, lh, cf, fins, comp]) => {
+      .then(([b, ob, tr, min, lh, cf, fins, comp, anns, news]) => {
         if (!alive) return;
         setBars(b);
         setBook(ob);
@@ -138,6 +144,8 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
         if (cf?.data) setFlow(cf.data);
         if (fins?.data) setFins(fins.data.periods);
         if (comp?.data) setCompany(comp.data);
+        if (anns?.data) setAnns(anns.data.items);
+        if (news?.data) setNews(news.data.items);
       })
       .catch((e: Error) => alive && setError(e.message));
     return () => {
@@ -343,6 +351,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                   ["book", "盘口"],
                   ["trades", "逐笔"],
                   ["profile", "资料"],
+                  ["info", "资讯"],
                 ] as const
               ).map(([k, label]) => (
                 <button
@@ -406,6 +415,41 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                 </div>
               ))}
               {(fins ?? []).length === 0 && <p className="text-zinc-500">暂无财报数据</p>}
+            </div>
+          )}
+
+          {rightTab === "info" && (
+            <div className="min-h-0 overflow-y-auto">
+              <h3 className="px-3 py-1.5 text-xs font-medium text-zinc-300">近期公告</h3>
+              {(anns ?? []).map((a, i) => (
+                <a
+                  key={i}
+                  href={a.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="block border-b border-zinc-100 px-3 py-1.5 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900"
+                >
+                  <div className="truncate text-xs text-zinc-200">{a.title}</div>
+                  <div className="text-[11px] text-zinc-500">
+                    {a.date} {a.type ? `· ${a.type}` : ""}
+                  </div>
+                </a>
+              ))}
+              {anns && anns.length === 0 && <p className="px-3 py-3 text-xs text-zinc-500">暂无公告</p>}
+              <h3 className="border-t border-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-300 dark:border-zinc-800/60">相关新闻</h3>
+              {(news ?? []).map((n, i) => (
+                <a
+                  key={i}
+                  href={n.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="block border-b border-zinc-100 px-3 py-1.5 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900"
+                >
+                  <div className="truncate text-xs text-zinc-200">{n.title}</div>
+                  <div className="text-[11px] text-zinc-500">{n.date}</div>
+                </a>
+              ))}
+              {news && news.length === 0 && <p className="px-3 py-3 text-xs text-zinc-500">暂无新闻</p>}
             </div>
           )}
 

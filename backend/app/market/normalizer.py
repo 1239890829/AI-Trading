@@ -309,3 +309,35 @@ def normalize_company_profile(raw: dict) -> dict | None:
         "core_themes": [],
         "source": EASTMONEY_SOURCE,
     }
+
+
+def normalize_announcement(raw: dict, symbol: str) -> dict | None:
+    title = raw.get("title")
+    code = str(raw.get("art_code") or "")
+    if not title or not code:
+        return None
+    dt = str(raw.get("notice_date") or "")[:10]
+    cols = ",".join(c.get("column_name", "") for c in (raw.get("columns") or [])[:2]) or None
+    return {
+        "symbol": symbol,
+        "title": title,
+        "date": dt,
+        "type": cols,
+        "url": f"https://data.eastmoney.com/notices/detail/{symbol}/{code}.html",
+        "source": EASTMONEY_SOURCE,
+    }
+
+
+def normalize_news(raw: dict, symbol: str) -> dict | None:
+    title = raw.get("title")
+    code = str(raw.get("code") or "")
+    if not title or not code:
+        return None
+    return {
+        "symbol": symbol,
+        "title": title,
+        "date": str(raw.get("date") or "")[:16],
+        "summary": (raw.get("content") or "")[:120] or None,
+        "url": f"https://finance.eastmoney.com/a/{code}.html",
+        "source": EASTMONEY_SOURCE,
+    }
