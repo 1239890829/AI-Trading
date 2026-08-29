@@ -14,7 +14,6 @@ import type { Kline, OrderBook, Quote, Trade } from "@/types/market";
 
 type ChartTab = "kline" | "minute" | "flow";
 type RightTab = "book" | "trades";
-type BottomTab = "fin" | "longhu";
 
 interface LonghuSeat { seat?: string | null; seat_type: string; buy?: number | null; sell?: number | null; net?: number | null; rise_probability_3day?: number | null }
 interface LonghuDetail { trade_date: string; buy_seats: LonghuSeat[]; sell_seats: LonghuSeat[]; empty?: boolean }
@@ -25,12 +24,11 @@ interface CapitalFlow { days: number; flow: FlowRow[]; streak_in: number; defini
 interface FinRow { report_date: string; revenue?: number | null; revenue_yoy?: number | null; net_profit?: number | null; profit_yoy?: number | null; gross_margin?: number | null; roe?: number | null; eps?: number | null; source: string }
 
 /** 个股详情终端 v3（工作台右栏 / 个股页共用）：
- * 顶部紧凑行情条 → 中部 [左：图表区(K线/分时/资金图) | 右：盘口↔逐笔] → 底部资讯 tabs(财务/龙虎榜/资金明细)。
+ * 顶部紧凑行情条 → 中部 [左：图表区(K线/分时/资金图) | 右：盘口↔逐笔] → 右列：盘口↔逐笔 + 财务摘要。龙虎榜见独立页面。
  * K线带龙虎榜日标记与金叉死叉技术信号；滚动只存在于表格/列表容器内部。 */
 export function StockDetailPanel({ symbol }: { symbol: string }) {
   const [chartTab, setChartTab] = useState<ChartTab>("kline");
   const [rightTab, setRightTab] = useState<RightTab>("book");
-  const [bottomTab, setBottomTab] = useState<BottomTab>("fin");
   const [bars, setBars] = useState<Kline[]>([]);
   const [book, setBook] = useState<OrderBook | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
@@ -385,36 +383,9 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
             <p className="px-3 py-8 text-center text-xs text-zinc-400">暂无逐笔（盘中看分时）</p>
           )}
         </Panel>
-
-      <Panel
-        title={
-          <span className="flex gap-2">
-            {(
-              [
-                ["fin", "财务"],
-                ["longhu", "龙虎榜"],
-              ] as const
-            ).map(([k, label]) => (
-              <button
-                key={k}
-                onClick={() => setBottomTab(k)}
-                className={`rounded px-1.5 py-0.5 text-xs ${bottomTab === k ? "bg-zinc-100 font-semibold text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100" : "text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
-              >
-                {label}
-              </button>
-            ))}
-          </span>
-        }
-        source={bottomTab === "fin" ? fins?.[0]?.source : bottomTab === "longhu" ? "eastmoney" : flow?.flow[0]?.source}
-        bodyClassName="overflow-hidden"
-        className="h-[150px] shrink-0"
-      >
-        <div className="h-full overflow-y-auto">
-          {bottomTab === "fin" &&
-            (!fins || fins.length === 0 ? (
-              <p className="px-4 py-8 text-center text-sm text-zinc-400">暂无财务数据</p>
-            ) : (
-              <table className="w-full text-sm">
+        <Panel title="财务摘要（按报告期倒序）" source="eastmoney" bodyClassName="overflow-y-auto" className="h-[42%] shrink-0">
+          {fins && fins.length > 0 ? (
+            <table className="w-full text-sm">
                 <thead className="sticky top-0 bg-zinc-50 text-left text-xs text-zinc-400 dark:bg-zinc-900/50">
                   <tr>{["报告期", "营收(亿)", "营收同比", "净利(亿)", "净利同比", "毛利率", "ROE", "EPS"].map((h) => (
                     <th key={h} className={`px-3 py-2 font-medium ${h === "报告期" ? "" : "text-right"}`}>{h}</th>
@@ -435,69 +406,12 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                   ))}
                 </tbody>
               </table>
-            ))}
-
-          {bottomTab === "longhu" &&
-            (!longhu ? (
-              <p className="px-4 py-8 text-center text-sm text-zinc-400">加载中…</p>
-            ) : (
-              <>
-                {longhu.detail.empty ? (
-                  <p className="px-4 py-4 text-center text-xs text-zinc-400">最近交易日未上榜（历史记录见下方）</p>
-                ) : (
-                  <div className="grid gap-3 p-2 md:grid-cols-2">
-                    {(["buy", "sell"] as const).map((side) => (
-                      <div key={side}>
-                        <h3 className={`px-2 py-1 text-xs font-medium ${side === "buy" ? "text-up" : "text-down"}`}>{side === "buy" ? "买入席位" : "卖出席位"}</h3>
-                        <table className="w-full text-sm">
-                          <tbody>
-                            {longhu.detail[side === "buy" ? "buy_seats" : "sell_seats"].map((st, i) => (
-                              <tr key={i} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                                <td className="px-2 py-1 text-xs text-zinc-400">{i + 1}</td>
-                                <td className="px-2 py-1">
-                                  <div className="truncate" title={st.seat ?? ""}>{st.seat}</div>
-                                  <div className="text-[11px] text-zinc-400">{st.seat_type}{st.rise_probability_3day != null ? ` · 3日胜率 ${st.rise_probability_3day.toFixed(1)}%` : ""}</div>
-                                </td>
-                                <td className={`px-2 py-1 text-right font-mono text-xs tabular-nums ${side === "buy" ? "text-up" : "text-down"}`}>{fmtAmount(side === "buy" ? st.buy : st.sell)}</td>
-                                <td className={`px-3 py-1 text-right font-mono text-xs tabular-nums ${(st.net ?? 0) > 0 ? "text-up" : "text-down"}`}>{fmtAmount(st.net)}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div className="border-t border-zinc-200 px-4 py-2 text-xs text-zinc-400 dark:border-zinc-800">
-                  历史上榜 <span className="font-mono text-zinc-200">{longhu.stats.count}</span> 次 · 5日平均{" "}
-                  <span className={`font-mono ${pctColor(longhu.stats.avg_after_5d)}`}>{pctText(longhu.stats.avg_after_5d)}</span> · 胜率{" "}
-                  <span className="font-mono text-zinc-200">{longhu.stats.win_rate_5d != null ? `${(longhu.stats.win_rate_5d * 100).toFixed(1)}%` : "--"}</span>
-                </div>
-                <table className="w-full text-sm">
-                  <thead className="bg-zinc-50 text-left text-xs text-zinc-400 dark:bg-zinc-900/50">
-                    <tr>{["日期", "收盘", "涨跌幅", "净买额", "上榜原因", "T+1", "T+3", "T+5", "T+10"].map((h) => (
-                      <th key={h} className={`px-3 py-2 font-medium ${["日期", "上榜原因"].includes(h) ? "" : "text-right"}`}>{h}</th>
-                    ))}</tr>
-                  </thead>
-                  <tbody>
-                    {longhu.history.slice(0, 15).map((h, i) => (
-                      <tr key={`${h.trade_date}-${i}`} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                        <td className="px-3 py-1 font-mono text-xs">{h.trade_date}</td>
-                        <td className="px-2 py-1 text-right font-mono">{fmt(h.close)}</td>
-                        <td className={`px-2 py-1 text-right font-mono ${pctColor(h.change_pct)}`}>{pctText(h.change_pct)}</td>
-                        <td className={`px-2 py-1 text-right font-mono text-xs ${(h.net_buy ?? 0) > 0 ? "text-up" : "text-down"}`}>{fmtAmount(h.net_buy)}</td>
-                        <td className="max-w-[200px] truncate px-2 py-1 text-xs text-zinc-400" title={h.reason ?? ""}>{h.reason ?? "--"}</td>
-                        {[h.after_1d, h.after_3d, h.after_5d, h.after_10d].map((v, j) => (
-                          <td key={j} className={`px-3 py-1 text-right font-mono text-xs ${pctColor(v)}`}>{pctText(v)}</td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </>
-            ))}
-        </div>
+          ) : (
+            <p className="px-4 py-8 text-center text-sm text-zinc-400">暂无财务数据</p>
+          )}
         </Panel>
+
+      
         </div>
       </div>
     </div>
