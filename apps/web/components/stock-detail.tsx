@@ -24,8 +24,10 @@ import {
   getTrades,
   getWatchlist,
   placePaperOrder,
+  resetPaperAccount,
   type MinutePoint,
   type PaperAccountInfo,
+  type PaperFill,
   type PaperOrderInfo,
   type PaperPositionInfo,
 } from "@/lib/api";
@@ -73,7 +75,8 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   const [anns, setAnns] = useState<InfoItem[] | null>(null);
   const [news, setNews] = useState<InfoItem[] | null>(null);
   const [company, setCompany] = useState<CompanyProfile | null>(null);
-  const [fills, setFills] = useState<{ date: string; side: string; price: number; quantity: number }[]>([]);
+  const [fills, setFills] = useState<PaperFill[]>([]);
+  const [resetBusy, setResetBusy] = useState(false);
   const [paper, setPaper] = useState<{ acc: PaperAccountInfo; positions: PaperPositionInfo[]; orders: PaperOrderInfo[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [inWatchlist, setInWatchlist] = useState(false);
@@ -131,8 +134,16 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     let alive = true;
     const loadPaper = async () => {
       try {
-        const [acc, positions, orders] = await Promise.all([getPaperAccount(), getPaperPositions(), getPaperOrders()]);
-        if (alive) setPaper({ acc, positions, orders });
+        const [acc, positions, orders, fs] = await Promise.all([
+          getPaperAccount(),
+          getPaperPositions(),
+          getPaperOrders(),
+          getPaperFills(symbol),
+        ]);
+        if (alive) {
+          setPaper({ acc, positions, orders });
+          setFills(fs);
+        }
       } catch {}
     };
     void loadPaper();
@@ -174,9 +185,8 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
       fetch(`${API_BASE}/api/company/${symbol}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
       fetch(`${API_BASE}/api/announcements/${symbol}?limit=8`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
       fetch(`${API_BASE}/api/news/${symbol}?limit=8`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-      getPaperFills(symbol).catch(() => [] as { date: string; side: string; price: number; quantity: number }[]),
     ])
-      .then(([b, ob, tr, min, lh, cf, fins, comp, anns, news, fills]) => {
+      .then(([b, ob, tr, min, lh, cf, fins, comp, anns, news]) => {
         if (!alive) return;
         setBars(b);
         setBook(ob);
@@ -188,7 +198,6 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
         if (comp?.data) setCompany(comp.data);
         if (anns?.data) setAnns(anns.data.items);
         if (news?.data) setNews(news.data.items);
-        setFills(fills);
       })
       .catch((e: Error) => alive && setError(e.message));
     return () => {
@@ -207,6 +216,23 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   const tech = analyze(
     bars.map((b) => ({ ts: b.ts, open: b.open ?? 0, high: b.high ?? 0, low: b.low ?? 0, close: b.close ?? 0, volume: b.volume, change_pct: b.change_pct }))
   );
+
+  // 当前个股的模拟持仓（用于 K 线成本线）
+  const myPosition = paper?.positions.find((p) => p.symbol === symbol) ?? null;
+  const costPrice = myPosition && myPosition.quantity > 0 ? myPosition.cost_price : null;
+
+  async function handleResetAccount() {
+    if (!window.confirm("重置模拟账户？当前全部持仓、挂单与成交记录将清空，资金回到初始额度。此操作不可撤销。")) return;
+    setResetBusy(true);
+    try {
+      await resetPaperAccount();
+      window.dispatchEvent(new CustomEvent("paper-changed"));
+    } catch (e) {
+      window.alert(`重置失败：${(e as Error).message}`);
+    } finally {
+      setResetBusy(false);
+    }
+  }
 
   const strip = quote
     ? ([
@@ -313,7 +339,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                     </div>
                   )}
                   <div className="min-h-0 flex-1">
-                    <KlineChartPro bars={bars} tradeMarks={fills} className="h-full" />
+                    <KlineChartPro bars={bars} tradeMarks={fills} costPrice={costPrice} className="h-full" />
                   </div>
                 </div>
               ) : (
@@ -470,6 +496,44 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                     ))}
                   </>
                 )}
+
+                <h3 className="shrink-0 px-3 pb-1 pt-2 text-xs font-medium text-zinc-300">成交记录</h3>
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-[10px] text-zinc-500">
+                      <th className="px-3 pb-1 text-left font-normal">日期</th>
+                      <th className="px-2 pb-1 text-left font-normal">方向</th>
+                      <th className="px-2 pb-1 text-right font-normal">价格</th>
+                      <th className="px-2 pb-1 text-right font-normal">数量</th>
+                      <th className="px-3 pb-1 text-right font-normal">费用</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fills.map((f, i) => (
+                      <tr key={`${f.date}-${f.side}-${f.price}-${i}`} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
+                        <td className="px-3 py-1 font-mono text-zinc-400">{f.date || "--"}</td>
+                        <td className={`px-2 py-1 ${f.side === "buy" ? "text-up" : "text-down"}`}>{f.side === "buy" ? "买入" : "卖出"}</td>
+                        <td className="px-2 py-1 text-right font-mono">{fmt(f.price)}</td>
+                        <td className="px-2 py-1 text-right font-mono">{f.quantity}</td>
+                        <td className="px-3 py-1 text-right font-mono text-zinc-500">{fmt(f.fee ?? 0)}</td>
+                      </tr>
+                    ))}
+                    {fills.length === 0 && (
+                      <tr><td colSpan={5} className="px-3 py-3 text-center text-zinc-500">本股暂无成交</td></tr>
+                    )}
+                  </tbody>
+                </table>
+
+                <div className="shrink-0 px-3 py-2">
+                  <button
+                    onClick={() => void handleResetAccount()}
+                    disabled={resetBusy}
+                    className="w-full rounded border border-zinc-300 py-1 text-xs text-zinc-400 hover:border-red-400 hover:text-red-400 disabled:opacity-40 dark:border-zinc-600"
+                  >
+                    {resetBusy ? "重置中…" : "重置模拟账户"}
+                  </button>
+                  <p className="mt-1 text-[10px] leading-relaxed text-zinc-500">清空全部持仓、挂单与成交记录，资金回到初始额度</p>
+                </div>
               </div>
             </div>
           )}

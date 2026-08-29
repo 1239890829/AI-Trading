@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CandlestickData, createChart, HistogramData, IChartApi, LineData, SeriesMarker, Time } from "lightweight-charts";
+import { CandlestickData, createChart, HistogramData, IChartApi, LineData, LineStyle, SeriesMarker, Time } from "lightweight-charts";
 import { calcEMA } from "@/lib/technical-analysis";
 import type { Kline } from "@/types/market";
 
@@ -9,6 +9,8 @@ interface Props {
   bars: Kline[];
   className?: string;
   tradeMarks?: { date: string; side: string; price: number; quantity: number }[];
+  /** 当前持仓摊薄成本，>0 时在主图画虚线 */
+  costPrice?: number | null;
 }
 
 type Indicators = { ma5: boolean; ma10: boolean; ma20: boolean; ma60: boolean; vol: boolean; macd: boolean; boll: boolean; amt: boolean; bs: boolean };
@@ -52,7 +54,7 @@ function calcBOLL(closes: number[], n = 20, k = 2) {
 
 /** K 线图（专业版）：MA5/10/20/60、BOLL(20,2)、成交量+均量线(5/10/20)、MACD/成交额副图、
  * 指标开关、缩放按钮。默认聚焦最近 20 根。 */
-export function KlineChartPro({ bars, className, tradeMarks }: Props) {
+export function KlineChartPro({ bars, className, tradeMarks, costPrice }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const [ind, setInd] = useState<Indicators>({ ma5: true, ma10: true, ma20: true, ma60: true, vol: true, macd: false, boll: false, amt: false, bs: true });
@@ -142,26 +144,30 @@ export function KlineChartPro({ bars, className, tradeMarks }: Props) {
 
     const markers: SeriesMarker<Time>[] = [];
     // 真实 B/S 点：模拟交易成交记录（B=买入日 红上箭头，S=卖出日 绿下箭头）
-    for (const t of tradeMarks ?? []) {
-      if (!bars.some((b) => b.ts.slice(0, 10) === t.date)) continue;
-      markers.push({
-        time: t.date as Time,
-        position: t.side === "buy" ? "belowBar" : "aboveBar",
-        color: t.side === "buy" ? "#f43f5e" : "#10b981",
-        shape: t.side === "buy" ? "arrowUp" : "arrowDown",
-        text: `${t.side === "buy" ? "B" : "S"} ${t.quantity}股`,
-      });
+    if (ind.bs) {
+      for (const t of tradeMarks ?? []) {
+        if (!bars.some((b) => b.ts.slice(0, 10) === t.date)) continue;
+        markers.push({
+          time: t.date as Time,
+          position: t.side === "buy" ? "belowBar" : "aboveBar",
+          color: t.side === "buy" ? "#f43f5e" : "#10b981",
+          shape: t.side === "buy" ? "arrowUp" : "arrowDown",
+          text: `${t.side === "buy" ? "B" : "S"} ${t.quantity}股`,
+        });
+      }
+      markers.sort((a, b) => String(a.time).localeCompare(String(b.time)));
+      candle.setMarkers(markers);
     }
 
-    // 真实 B/S 点：模拟交易成交记录（B=买入日 红上箭头，S=卖出日 绿下箭头）
-    for (const t of tradeMarks ?? []) {
-      if (!bars.some((b) => b.ts.slice(0, 10) === t.date)) continue;
-      markers.push({
-        time: t.date as Time,
-        position: t.side === "buy" ? "belowBar" : "aboveBar",
-        color: t.side === "buy" ? "#f43f5e" : "#10b981",
-        shape: t.side === "buy" ? "arrowUp" : "arrowDown",
-        text: `${t.side === "buy" ? "B" : "S"} ${t.quantity}股`,
+    // 持仓成本线：模拟交易摊薄成本（无持仓则不画）
+    if (costPrice != null && costPrice > 0) {
+      candle.createPriceLine({
+        price: costPrice,
+        color: "#fbbf24",
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: "成本",
       });
     }
 
@@ -171,7 +177,7 @@ export function KlineChartPro({ bars, className, tradeMarks }: Props) {
       chart.remove();
       chartRef.current = null;
     };
-  }, [bars, ind, tradeMarks]);
+  }, [bars, ind, tradeMarks, costPrice]);
 
   const toggles: [keyof Indicators, string, string?][] = [
     ["ma5", "MA5", "#facc15"],
@@ -182,6 +188,7 @@ export function KlineChartPro({ bars, className, tradeMarks }: Props) {
     ["boll", "BOLL"],
     ["amt", "成交额"],
     ["macd", "MACD"],
+    ["bs", "BS点"],
   ];
 
   function zoomTime(factor: number) {
@@ -222,7 +229,7 @@ export function KlineChartPro({ bars, className, tradeMarks }: Props) {
             {label}
           </button>
         ))}
-        <span className="ml-auto text-[10px] text-zinc-500">金叉/死叉为 MA5×MA10 技术信号 · 紫[榜]=龙虎榜日 · 真实BS点随模拟交易上线</span>
+        <span className="ml-auto text-[10px] text-zinc-500">金叉/死叉为 MA5×MA10 技术信号 · 紫[榜]=龙虎榜日 · B/S=模拟交易成交 · 黄虚线=持仓成本</span>
       </div>
       <div ref={containerRef} className={`min-h-0 w-full flex-1 ${className ?? ""}`} />
     </div>

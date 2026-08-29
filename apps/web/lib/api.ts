@@ -165,6 +165,7 @@ export interface PaperFill {
   side: string;
   price: number;
   quantity: number;
+  fee: number;
 }
 
 export const getPaperAccount = () => getJson<PaperAccountInfo>("/api/paper/account").then((b) => b.data);
@@ -188,6 +189,18 @@ export async function placePaperOrder(symbol: string, side: string, price: numbe
 export async function cancelPaperOrder(id: number) {
   const res = await fetch(`${API_BASE}/api/paper/orders/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
+/** 重置模拟账户：清仓 + 清委托历史 + 资金回到初始额度。不可撤销。 */
+export async function resetPaperAccount(initialCash?: number): Promise<PaperAccountInfo> {
+  const res = await fetch(`${API_BASE}/api/paper/reset`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(initialCash ? { initial_cash: initialCash } : {}),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? `HTTP ${res.status}`);
+  return body.data as PaperAccountInfo;
 }
 
 export async function getWatchlistGroups(): Promise<string[]> {

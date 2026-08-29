@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 
+from datetime import timezone
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -18,6 +20,10 @@ class OrderIn(BaseModel):
     side: str = Field(pattern=r"^(buy|sell)$")
     price: float = Field(gt=0)
     quantity: int = Field(gt=0)
+
+
+class ResetIn(BaseModel):
+    initial_cash: float | None = Field(default=None, gt=0, le=1_000_000_000)
 
 
 async def _positions_with_live(request):
@@ -89,10 +95,11 @@ async def paper_fills(request: Request, symbol: str | None = None):
         rows = q.all()
         return {"data": [
             {"symbol": o.symbol,
-             "date": (o.created_at.replace(tzinfo=__import__("datetime").timezone.utc).astimezone().strftime("%Y-%m-%d") if o.created_at else ""),
+             "date": (o.created_at.replace(tzinfo=timezone.utc).astimezone().strftime("%Y-%m-%d") if o.created_at else ""),
              "side": o.side,
              "price": o.filled_price or o.price,
-             "quantity": o.quantity}
+             "quantity": o.quantity,
+             "fee": o.fee}
             for o in rows
         ]}
 
@@ -104,3 +111,13 @@ async def cancel_order(order_id: int, request: Request):
     if o is None:
         raise HTTPException(status_code=404, detail="挂单不存在或已成交")
     return {"data": {"id": o.id, "status": o.status}}
+
+
+@router.post("/paper/reset")
+async def reset_account(body: ResetIn, request: Request):
+    """重置模拟账户：清仓、清委托与成交历史、资金回到初始额度。"""
+    engine = _engine(request)
+    acc = engine.reset(body.initial_cash)
+    return {"data": {"cash": round(acc.cash, 2), "initial_cash": round(acc.initial_cash, 2),
+                     "total": round(acc.cash, 2), "total_pnl": 0.0, "total_pnl_pct": 0.0,
+                     "market_value": 0.0}}

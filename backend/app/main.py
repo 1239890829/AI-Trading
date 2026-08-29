@@ -16,13 +16,16 @@ from app.api.routes import watchlist as watchlist_route
 from app.core.config import settings
 from app.core.db import get_engine, get_session_factory
 from app.data_providers import build_provider
-from app.models.paper import PaperAccount, PaperOrder, PaperPosition  # noqa: F401
+from app.models.paper import PaperAccount, PaperOrder, PaperPosition
 from app.models.watchlist import Base
 from app.repositories.watchlist_repo import WatchlistRepository
 from app.paper.engine import PaperTradingEngine
 from app.services.snapshot_service import MarketSnapshotService
 from app.services.quote_hub import QuoteHub
 from app.websocket.routes import router as ws_router
+
+# 显式持有引用：确保三张模拟交易表注册进 Base.metadata，否则 create_all 不会建表
+_REGISTERED_MODELS = (PaperAccount, PaperOrder, PaperPosition)
 
 logging.basicConfig(level=settings.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)

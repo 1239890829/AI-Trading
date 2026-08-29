@@ -10,7 +10,7 @@ A股规则落地（full.md §14/§2.4，配置化）：
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -55,6 +55,30 @@ class PaperTradingEngine:
                 db.add(acc)
                 db.commit()
                 db.refresh(acc)
+            return acc
+
+    # ---------- 重置 ----------
+
+    def reset(self, initial_cash: float | None = None) -> PaperAccount:
+        """清空全部持仓与委托，账户资金回到初始额度。
+
+        硬约束：仅重置模拟账户，不触碰任何外部接口；重置后账单历史一并清空，
+        因为成交记录挂靠在订单表上，保留订单会导致持仓与历史不一致。
+        """
+        with self._sf() as db:
+            db.query(PaperPosition).delete()
+            db.query(PaperOrder).delete()
+            acc = db.query(PaperAccount).first()
+            if acc is None:
+                acc = PaperAccount(cash=1_000_000.0, initial_cash=1_000_000.0)
+            if initial_cash is not None and initial_cash > 0:
+                acc.initial_cash = float(initial_cash)
+            acc.cash = acc.initial_cash
+            acc.updated_at = utcnow()
+            db.add(acc)
+            db.commit()
+            db.refresh(acc)
+            log.info("paper account reset: cash=%s", acc.cash)
             return acc
 
     # ---------- T+1 解冻 ----------
@@ -237,7 +261,6 @@ class PaperTradingEngine:
 
     def positions_with_pnl(self, price_map: dict[str, float]) -> list[dict]:
         with self._sf() as db:
-            await_freeze = None
             positions = db.query(PaperPosition).all()
             out = []
             for pos in positions:

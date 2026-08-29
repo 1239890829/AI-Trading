@@ -14,7 +14,7 @@ A 股实时行情 + AI 量化投研 + 模拟交易工作台。**只做**行情�
 - 后端：FastAPI（Python 3.11），32 个 REST 端点 + 1 个 WebSocket，**四源 Provider 链**（ths→tencent→eastmoney→sina）+ mock
 - 前端：Next.js 15 App Router，7 页面 + 10 组件，终端式工作台
 - 数据：全市场快照（5550 只）落 Parquet；SQLite 业务库
-- 测试：70 用例全绿；ESLint/pyflakes 门禁零问题
+- 测试：73 用例全绿；ESLint/pyflakes/tsc 门禁零问题
 - 运行：双端本地运行中（8000/3000）
 
 ---
@@ -148,7 +148,8 @@ ashare-ai-trader/
 | GET | /api/boards?type= | 行业84/概念排行（60s缓存） | 新浪闪电排行 |
 | GET | /api/search?q= | 股票搜索（仅6位A股） | 东财suggest→腾讯smartbox→mock |
 | GET/POST/DELETE | /api/watchlist… | 自选 CRUD + groups + 改组 | SQLite |
-| GET/POST/DELETE | /api/paper/* | 模拟交易（account/positions/orders/fills） | 撮合引擎 |
+| GET/POST/DELETE | /api/paper/* | 模拟交易（account/positions/orders/fills/cancel） | 撮合引擎 |
+| POST | /api/paper/reset | 重置模拟账户：清仓+清委托与成交历史+资金回初始额度（可传 initial_cash） | 撮合引擎 |
 | WS | /ws/quotes | snapshot/quotes/stale/pong + subscribe | Hub |
 
 规划中（§阶段）：/api/backtests、/api/paper 撮合增强、/api/news 全市场流、/api/screeners。
@@ -170,8 +171,8 @@ ashare-ai-trader/
 
 ## 6.2 详情终端（StockDetailPanel，工作台右栏 300px，单卡片）
 - 顶部紧凑行情条：名称/代码/质量/＋自选 │ 大字价格(tick闪烁) + 涨跌 │ 11项指标小字条 │ 数据时间/来源
-- 中部左（图表区，页签）：**K线**（K线Pro：MA5/10/20/60+BOLL+成交量+均量线+MACD/成交额副图开关、默认聚焦20日、＋/−/20D 缩放按钮、技术评估条）│ **分时**（面积图+量能副图）│ **资金图**（30日主力柱状）
-- 中部右（常驻列，页签）：**盘口**（五档）│ **逐笔** │ **交易**（账户摘要+买卖表单[涨跌停提示/费用预估]+持仓+挂单撤单）│ **资料**（板块概念chips+主营+简介+最近财报摘要卡）│ **资讯**（公告/新闻原文链接）
+- 中部左（图表区，页签）：**K线**（K线Pro：MA5/10/20/60+BOLL+成交量+均量线+MACD/成交额副图开关、默认聚焦20日、＋/−/20D 缩放按钮、技术评估条、B/S 成交标记、持仓成本黄虚线）│ **分时**（面积图+量能副图）│ **资金图**（30日主力柱状）
+- 中部右（常驻列，页签）：**盘口**（五档）│ **逐笔** │ **交易**（账户摘要+买卖表单[涨跌停提示/费用预估]+持仓+挂单撤单+成交记录[日期/方向/价格/数量/费用]+重置账户[二次确认]）│ **资料**（板块概念chips+主营+简介+最近财报摘要卡）│ **资讯**（公告/新闻原文链接）
 - 滚动纪律：容器 overflow-hidden，仅表格/列表内部滚动
 
 ## 6.3 关键机制
@@ -188,8 +189,9 @@ ashare-ai-trader/
 - 撮合规则：涨停拒买、跌停拒卖、停牌拒、买入100股整手、资金/可卖校验、限价≥现价按现价成交否则挂单（5s 轮询）、撤单全额退款（含预扣佣金）
 - 费用：佣金万2.5最低5元 + 卖出印花税0.05%（配置化 FEE dict）
 - T+1 解冻：官方交易日历（ths，24h缓存）→ 回退自然日
+- 重置：`POST /api/paper/reset` → 清仓 + 清委托与成交历史 + 资金回到 `initial_cash`（可传自定义额度）
 - 已知边界：仅限价单；无部分成交；滑点=0（配置保留）；单账户
-- 测试：7 引擎用例（成交/T+1阻断与放行/涨停跌停拒/碎股拒/资金拒/挂单撤单）
+- 测试：9 引擎用例（成交/T+1阻断与放行/涨停跌停拒/碎股拒/资金拒/挂单撤单/reset×2）
 
 ---
 
@@ -199,14 +201,15 @@ ashare-ai-trader/
 |---|---|
 | test_quality_validator(11) | 全部质量规则与板块阈值 |
 | test_normalizer(9) | 腾讯/东财/新浪/THS 真实fixture解析 |
-| test_api(11) | 全端点 + WS + watchlist + live fallback |
+| test_api(12) | 全端点 + WS + watchlist + live fallback + paper 成交/重置 |
 | test_providers_chain(8) | failover/空结果/搜索过滤/K线fixture |
-| test_paper_engine(7) | 撮合全规则 |
+| test_paper_engine(9) | 撮合全规则 + reset 清仓/自定义初始资金 |
 | test_sentiment(4) | 冰点/高潮/退潮/指标结构 |
 | test_market_breadth(5) | 宽度/涨跌停/N/C排除 |
 | test_mock_provider(6) | 演示数据确定性 |
 | test_watchlist_repo(2) | CRUD+分组 |
-- 门禁：pytest 70 全绿 + tsc 0 + ESLint 0 + pyflakes 0 + Next徽章 0 + 截图验收
+- 门禁：pytest 73 全绿 + tsc 0 + ESLint 0 + pyflakes 0 + Next徽章 0 + 截图验收
+- 注：pyflakes 此前从未真正为 0（6 处既存未用导入/变量），2026-08-29 清理至 0，后续按 0 卡
 
 ---
 
@@ -253,15 +256,17 @@ ashare-ai-trader/
 | 3 市场与板块 | 全市场快照/宽度/情绪周期判定/板块排行/涨停池/炸板池 | ✅；余：题材事件树/生命周期、左栏sparkline |
 | 4 投研数据 | 龙虎榜总览+席位+历史/资金流/财务/估值/公司资料/公告/新闻 | ✅；余：营业部关系图谱、筹码、解禁、两融、大宗 |
 | 5 量化系统 | 多因子技术评估(MA/MACD/KDJ/RSI/形态) | 🔶；余：选股器/评分系统/市场状态/仓位建议/风控引擎/更多副图 |
-| 6 模拟交易与回测 | 撮合引擎(T+1/涨跌停/费用/挂单) | 🔶；余：回测引擎/历史回放 |
+| 6 模拟交易与回测 | 撮合引擎(T+1/涨跌停/费用/挂单) + 交易页签(买卖/持仓/挂单撤单/成交记录) + K线B/S点与持仓成本线 + 重置账户 | 🔶；余：回测引擎/历史回放/左栏持仓组 |
 | 7 AI 系统 | Researcher/Critic/Strategist/Auditor/MCP/Skills/记忆/审计 | ⬜（多因子评估是其地基） |
 | 8 通知与部署 | 预警/通知/生产部署/监控 | ⬜（开发compose已有） |
 
 ## 近期路线（下一刀优先级）
-1. **交易前端打磨**：持仓成本线画上K线、成交记录列表页
-2. **新闻/公告 AI 摘要**（Phase 7 前哨）
-3. Phase 5：选股器（快照+因子扫描）→ 评分系统
-4. Phase 6 后半：回测引擎（按 docs/backtest-rules.md 强制禁令）
+1. ~~**交易前端打磨**：持仓成本线画上K线、成交记录列表页~~ ✅ 已完成（2026-08-29）
+2. ~~**重置账户入口**~~ ✅ 已完成（2026-08-29）
+3. **概念题材 chips 过滤风格标签**（"大盘股/MSCI中国"混入"白酒"）
+4. **新闻/公告 AI 摘要**（Phase 7 前哨）
+5. Phase 5：选股器（快照+因子扫描）→ 评分系统
+6. Phase 6 后半：回测引擎（按 docs/backtest-rules.md 强制禁令）
 
 ---
 

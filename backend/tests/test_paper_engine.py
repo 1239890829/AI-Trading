@@ -4,7 +4,6 @@ sys.path.insert(0, ".")
 import asyncio
 
 from app.core.db import get_session_factory
-from app.data_providers.mock import MockProvider
 from app.paper.engine import PaperTradingEngine
 
 FIXED = lambda: __import__("datetime").datetime(2026, 8, 28, 10, 30)  # noqa: E731
@@ -118,3 +117,36 @@ def test_pending_limit_order_and_cancel():
     assert cancelled.status == "cancelled"
     acc = engine.ensure_account()
     assert abs(acc.cash - 1_000_000) < 1
+
+
+def test_reset_clears_positions_and_restores_cash():
+    reset()
+    from app.models.paper import PaperOrder, PaperPosition
+
+    q = __import__("app.schemas.market", fromlist=["Quote"]).Quote(symbol="600519", price=100.0, limit_up_price=110.0, limit_down_price=90.0, source="t")
+    engine = make_engine({"600519": q})
+    asyncio.run(engine.place_order("600519", "buy", 100.0, 200))
+    with engine._sf() as db:
+        assert db.query(PaperPosition).count() == 1
+        assert db.query(PaperOrder).count() == 1
+
+    acc = engine.reset()
+    assert abs(acc.cash - 1_000_000) < 1
+
+    with engine._sf() as db:
+        assert db.query(PaperPosition).count() == 0
+        assert db.query(PaperOrder).count() == 0
+    assert engine.positions_with_pnl({}) == []
+
+
+def test_reset_with_custom_initial_cash():
+    reset()
+    q = __import__("app.schemas.market", fromlist=["Quote"]).Quote(symbol="600519", price=100.0, source="t")
+    engine = make_engine({"600519": q})
+    asyncio.run(engine.place_order("600519", "buy", 100.0, 100))
+    acc = engine.reset(initial_cash=500_000.0)
+    assert acc.initial_cash == 500_000.0
+    assert abs(acc.cash - 500_000) < 1
+    summary = engine.account_summary(0.0)
+    assert summary["total"] == 500_000.0
+    assert summary["total_pnl"] == 0.0

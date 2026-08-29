@@ -113,3 +113,36 @@ def test_websocket_snapshot_and_ping():
             ws.send_json({"action": "ping"})
             pong = ws.receive_json()
             assert pong["type"] == "pong"
+
+
+def test_paper_fills_and_reset():
+    """成交记录带费用字段；重置后持仓/委托清空、资金回到初始额度。"""
+    with TestClient(app) as client:
+        before = client.get("/api/paper/account").json()["data"]
+        assert before["cash"] > 0
+
+        quote = client.get("/api/quotes/600519").json()["data"]
+        price = quote["price"]
+        placed = client.post("/api/paper/orders", json={
+            "symbol": "600519", "side": "buy", "price": price + 1, "quantity": 100,
+        })
+        assert placed.status_code == 200, placed.text
+        assert placed.json()["data"]["status"] == "filled"
+
+        fills = client.get("/api/paper/fills?symbol=600519").json()["data"]
+        assert fills, "成交后应有 fills 记录"
+        top = fills[0]
+        for key in ("symbol", "date", "side", "price", "quantity", "fee"):
+            assert key in top
+
+        positions = client.get("/api/paper/positions").json()["data"]
+        assert any(p["symbol"] == "600519" for p in positions)
+
+        reset = client.post("/api/paper/reset", json={})
+        assert reset.status_code == 200, reset.text
+        body = reset.json()["data"]
+        assert body["market_value"] == 0
+        assert body["total_pnl"] == 0
+
+        assert client.get("/api/paper/positions").json()["data"] == []
+        assert client.get("/api/paper/fills?symbol=600519").json()["data"] == []
