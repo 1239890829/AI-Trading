@@ -99,7 +99,26 @@ async def quotes(
 
 
 @router.get("/quotes/{symbol}")
-async def quote(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
+async def quote(
+    symbol: str,
+    source: str | None = Query(default=None, description="指定数据源（如 tencent，用于补估值字段）"),
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    if source:
+        chain = hub.provider if hasattr(hub.provider, "providers") else None
+        target = next((p for p in (chain.providers if chain else [hub.provider]) if p.name == source), None)
+        if target is None:
+            raise HTTPException(status_code=400, detail=f"source {source} 不在链中")
+        try:
+            from app.data_quality.validator import validate_quote
+
+            q = await target.get_quote(symbol)
+            if q is not None:
+                return {"data": validate_quote(q).model_dump(mode="json"), "meta": _meta(hub)}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"{source} 行情失败：{exc}")
     found = hub.get_quotes([symbol])
     if not found:
         # 非自选股：实时经 Provider 链拉取（不进缓存，质量校验照常）

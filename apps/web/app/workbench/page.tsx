@@ -102,7 +102,7 @@ function WorkbenchInner() {
           <button
             key={q.symbol}
             onClick={() => setSelected(q.symbol === "000001" ? "600519" : q.symbol)}
-            className="rounded-xl border border-zinc-200 px-3 py-2 text-left transition-colors hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-600"
+            className="rounded-xl border border-zinc-200 px-3 py-1.5 text-left transition-colors hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-600"
             title="点击在右侧查看详情（指数暂以代表股展示）"
           >
             <div className="flex items-center justify-between">

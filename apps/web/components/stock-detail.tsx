@@ -126,7 +126,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
 
       {/* ① 紧凑行情条 */}
       {quote && (
-        <div className="shrink-0 rounded-xl border border-zinc-200 px-4 py-2 dark:border-zinc-800">
+        <div className="shrink-0 rounded-xl border border-zinc-200 px-4 py-1.5 dark:border-zinc-800">
           <div className="flex flex-wrap items-baseline justify-between gap-x-4">
             <div className="flex items-baseline gap-2">
               <span className="text-base font-semibold">{quote.name ?? "--"}</span>
@@ -184,7 +184,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
               {bars.length > 0 ? (
                 <div className="flex h-full min-h-0 flex-col">
                   {tech && (
-                    <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-zinc-100 px-3 py-1.5 text-[11px] dark:border-zinc-800/60">
+                    <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-zinc-100 px-3 py-1 text-[11px] dark:border-zinc-800/60">
                       <span
                         className={`rounded px-1.5 py-0.5 font-medium ${
                           tech.bias === "bull"
@@ -366,7 +366,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
         }
         source={bottomTab === "fin" ? fins?.[0]?.source : bottomTab === "longhu" ? "eastmoney" : flow?.flow[0]?.source}
         bodyClassName="overflow-hidden"
-        className="h-[236px] shrink-0"
+        className="h-[150px] shrink-0"
       >
         <div className="h-full overflow-y-auto">
           {bottomTab === "fin" &&
