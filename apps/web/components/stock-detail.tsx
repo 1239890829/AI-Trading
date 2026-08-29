@@ -44,7 +44,32 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
 
   const { quotes } = useQuoteStream([symbol]);
   useEffect(() => {
-    if (quotes[symbol]) setQuote(quotes[symbol]);
+    if (quotes[symbol]) setQuote((prev) => ({ ...(prev ?? quotes[symbol]), ...quotes[symbol] }));
+
+  // 估值补充：ths 快照无 PE/PB/市值，每 30s 从腾讯源低频补齐（价格仍以 WS 为准）
+  useEffect(() => {
+    if (!symbol) return;
+    let alive = true;
+    const pull = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/quotes/${symbol}?source=tencent`, { cache: "no-store" });
+        if (!res.ok) return;
+        const body = await res.json();
+        const q = body.data as Quote;
+        setQuote((prev) =>
+          prev
+            ? { ...q, price: prev.price, change: prev.change, change_pct: prev.change_pct, data_timestamp: prev.data_timestamp, quality: prev.quality, quality_reasons: prev.quality_reasons }
+            : q
+        );
+      } catch {}
+    };
+    void pull();
+    const t = setInterval(pull, 30000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [symbol]);
   }, [quotes, symbol]);
 
   useEffect(() => {
