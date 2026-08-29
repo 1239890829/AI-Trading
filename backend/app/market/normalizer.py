@@ -183,6 +183,10 @@ def normalize_limit_up(raw: dict, trade_date: date) -> LimitUpRecord | None:
         turnover_rate=_num(raw.get("hs")),
         consecutive_boards=int(_num(raw.get("lbc")) or 0),
         boards_stat=boards_stat,
+        float_market_cap=_num(raw.get("ltsz")),
+        total_market_cap=_num(raw.get("tshare")),
+        amount=_num(raw.get("amount")),
+        industry_board=raw.get("hybk") or None,
         source=EASTMONEY_SOURCE,
     )
 

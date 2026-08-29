@@ -6,6 +6,7 @@ import type {
   OrderBook,
   Quote,
   SymbolSearchItem,
+  ThemeBoardPayload,
   Trade,
   WatchlistItem,
 } from "@/types/market";
@@ -62,6 +63,24 @@ export async function getLimitUpPool(dateStr?: string): Promise<LimitUpRecord[]>
 export async function getLonghu(dateStr?: string): Promise<LongHuRecord[]> {
   const qs = dateStr ? `?date=${dateStr}` : "";
   return (await getJson<{ trade_date: string; records: LongHuRecord[] }>(`/api/longhu${qs}`)).data.records;
+}
+
+/** 题材梯队看板。首次加载较慢（需回溯 5 日涨停池），后端缓存 60s。 */
+export async function getThemes(opts?: {
+  date?: string;
+  sort?: "strength" | "boards" | "count";
+  minBoards?: number;
+  minCount?: number;
+  limit?: number;
+}): Promise<ThemeBoardPayload> {
+  const p = new URLSearchParams();
+  if (opts?.date) p.set("date", opts.date);
+  if (opts?.sort) p.set("sort", opts.sort);
+  if (opts?.minBoards) p.set("min_boards", String(opts.minBoards));
+  if (opts?.minCount) p.set("min_count", String(opts.minCount));
+  if (opts?.limit) p.set("limit", String(opts.limit));
+  const qs = p.toString() ? `?${p.toString()}` : "";
+  return (await getJson<ThemeBoardPayload>(`/api/themes${qs}`)).data;
 }
 
 export async function searchSymbols(q: string): Promise<SymbolSearchItem[]> {

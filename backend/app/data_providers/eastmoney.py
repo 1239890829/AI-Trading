@@ -48,6 +48,21 @@ class ProviderError(RuntimeError):
     """数据源请求失败。调用方必须停止将其当作实时数据使用。"""
 
 
+def _num(v) -> float | None:
+    """东财大量字段以 '-' 表示缺失，且数值/字符串混用。"""
+    if v is None or v == "-":
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int(v) -> int | None:
+    n = _num(v)
+    return int(n) if n is not None else None
+
+
 def to_secid(symbol: str) -> str:
     s = symbol.strip()
     if not s:
@@ -187,6 +202,85 @@ class EastmoneyProvider:
         pool = (payload.get("data") or {}).get("pool") or []
         records = [nz.normalize_limit_up(r, trade_date) for r in pool]
         return [r for r in records if r is not None]
+
+    # ---- 板块（概念/行业）行情与资金 ----
+    # 注意：push2 主域在本机被 WAF 拦截（空回复），只有 push2delay 延迟域可用。
+    # 详见 docs/data-sources.md §3.2。
+    BOARD_HOST = "https://push2delay.eastmoney.com"
+    BOARD_FIELDS = (
+        "f2,f3,f6,f8,f12,f13,f14,f20,f62,f104,f105,f128,f140,f141,f184,"
+        "f160,f109,f110,f24,f25"
+    )
+
+    async def get_board_metrics(self, kind: str = "concept") -> list[dict]:
+        """板块行情+资金指标。kind: concept(概念) | industry(行业)。
+
+        返回 dict 列表，字段见 docs/data-sources.md §3.2。
+        注意 f160/f109/f110 的 3/5/10 日口径为字段序推断，**未经 K 线交叉验证**。
+
+        坑：**单页上限 100 条**，概念板块 total=504 但 pz=600 也只回 100 条，
+        必须按 total 翻页，否则会静默丢掉 80% 的板块。
+        """
+        fs = "m:90+t:3+f:!50" if kind == "concept" else "m:90+t:2+f:!50"
+        url = f"{self.BOARD_HOST}/api/qt/clist/get"
+        base_params = {
+            "po": "1",
+            "np": "1",
+            "fltt": "2",
+            "invt": "2",
+            "fid": "f3",
+            "fs": fs,
+            "fields": self.BOARD_FIELDS,
+        }
+
+        async def _page(pn: int, pz: int) -> dict:
+            return await self._get_json(url, {**base_params, "pn": str(pn), "pz": str(pz)})
+
+        first = await _page(1, 100)
+        data = first.get("data") or {}
+        total = int(data.get("total") or 0)
+        diff = list(data.get("diff") or [])
+        pages = max(1, (total + 99) // 100)
+        if pages > 1:
+            rest = await asyncio.gather(
+                *[_page(pn, 100) for pn in range(2, pages + 1)], return_exceptions=True
+            )
+            for r in rest:
+                if isinstance(r, dict):
+                    diff += list((r.get("data") or {}).get("diff") or [])
+
+        out: list[dict] = []
+        for it in diff:
+            name = it.get("f14")
+            if not name:
+                continue
+            out.append(
+                {
+                    "board_code": it.get("f12"),
+                    "name": str(name),
+                    "kind": kind,
+                    "price": _num(it.get("f2")),
+                    "change_pct": _num(it.get("f3")),
+                    "amount": _num(it.get("f6")),
+                    "turnover_rate": _num(it.get("f8")),
+                    "total_market_cap": _num(it.get("f20")),
+                    "main_net_inflow": _num(it.get("f62")),
+                    "main_net_ratio": _num(it.get("f184")),
+                    "up_count": _int(it.get("f104")),
+                    "down_count": _int(it.get("f105")),
+                    "leader_name": it.get("f128"),
+                    "leader_symbol": it.get("f140"),
+                    # 多周期涨跌幅：字段序推断，待验证
+                    "chg_3d": _num(it.get("f160")),
+                    "chg_5d": _num(it.get("f109")),
+                    "chg_10d": _num(it.get("f110")),
+                    "chg_60d": _num(it.get("f24")),
+                    "chg_ytd": _num(it.get("f25")),
+                }
+            )
+        if not out:
+            raise ProviderError(f"empty board metrics for kind={kind}")
+        return out
 
     async def get_longhu_records(self, trade_date: date) -> list[LongHuRecord]:
         payload = await self._get_json(

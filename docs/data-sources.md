@@ -39,6 +39,7 @@
 
 - **涨停池** `push2ex.eastmoney.com/getTopicZTPool`：p=价格×100、fbt/lbt=HHMMSS、fund=封单额(元)、zbc=炸板、lbc=连板、zttj={days,ct}（"7天7板"）。实测 2026-08-28：82 只。
 - **炸板池** `push2ex.eastmoney.com/getTopicZBPool`（同 ut/dpt 参数）：实测 2026-08-28：16 只。炸板率 = 炸板 ÷（涨停＋炸板）。
+- **板块列表** `push2delay.eastmoney.com/api/qt/clist/get`：本机 `push2` 主域被 WAF 拦截，只有 `push2delay` 延迟域可用。单页上限 **100 条**（即使传 `pz=600` 也只回 100），必须按 `total` 分页。板块名体系与 ths 涨停原因标签不同（如 ths「黄金珠宝」↔ 东财「黄金概念」），精确匹配命中率极低，需做剥离后缀 + 双向包含模糊匹配。
 - **龙虎榜** `datacenter-web.eastmoney.com/api/data/v1/get` (RPT_DAILYBILLBOARD_DETAILSNEW)：SECURITY_CODE / BILLBOARD_* / **EXPLAIN**(上榜原因)。
 - 行情族 `push2/push2his`：本机直连与经代理均被 WAF 拦（空回复，疑似共享出口 IP 风控），保留为链上 search/K线/逐笔的备源；家庭宽带通常可用。
 - `ulist` 与 `stock/get` 字段编号**不一致**，不可混用映射表。
@@ -71,7 +72,15 @@ date=20260827（周四）→ 77 条
 3. 加哨兵断言：`再涨停率 == 1.0` / `翻红率 == 1.0` 在正常市场不可能出现，
    出现即说明日期串了。
 
-### 3.2 公司资料 / 所属板块（F10 CoreConception）— 2026-08-29 实测
+### 3.2 ⚠️ 板块列表：push2delay 可用 / 分页上限 100 / 板块名与 ths 标签体系不一致
+
+- `push2.eastmoney.com` 主域在本机被 WAF 拦截（空回复），`push2delay.eastmoney.com` 可用。
+- 板块列表接口单页最多返回 **100 条**（total=504 时传 `pz=600` 仍只回 100），必须按 `total` 分页。
+- 东财板块名与 ths 涨停原因标签体系不同：精确匹配命中率极低（如 ths「黄金珠宝」vs 东财「黄金概念」）。
+  实践中采用「剥离概念/行业后缀 + 双向包含」模糊匹配，并取最长匹配作为最具体板块。
+- 板块 3/5/10 日涨跌幅字段（f160/f109/f110）为字段序推断，**未经 K 线交叉验证**，应作为参考值并显式标注待验证。
+
+### 3.3 公司资料 / 所属板块（F10 CoreConception）— 2026-08-29 实测
 
 - **公司档案** `datacenter-web.eastmoney.com/api/data/v1/get` (RPT_F10_BASIC_ORGINFO)：
   filter 用 `SECUCODE="600519.SH"`（代码在前、市场在后）。

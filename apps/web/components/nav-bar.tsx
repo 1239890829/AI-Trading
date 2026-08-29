@@ -11,6 +11,7 @@ const LINKS = [
   { href: "/watchlist", label: "自选" },
   { href: "/boards", label: "板块" },
   { href: "/limit-up", label: "涨停池" },
+  { href: "/themes", label: "题材梯队" },
   { href: "/longhu", label: "龙虎榜" },
 ];
 

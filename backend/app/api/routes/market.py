@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import date, timedelta
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -413,3 +414,123 @@ async def search(q: str = Query(min_length=1, max_length=20), hub: QuoteHub = De
         fallback = MockProvider()
         items = await fallback.search(q)
     return {"data": [i.model_dump() for i in items], "meta": _meta(hub)}
+
+
+# ---------------------------------------------------------------- 题材梯队看板
+
+
+def _load_snapshot_map(request: Request, trade_date: date | None = None) -> dict[str, dict]:
+    """读指定交易日（默认最新）的全市场快照 → ``symbol -> {"change_pct": ...}``。
+
+    接力赚钱效应（昨日涨停股今日溢价）需要覆盖全市场的当日涨跌幅，
+    逐只拉行情太慢，快照 Parquet 是现成的数据底座。读不到就返回空（溢价指标降级为 None）。
+
+    **必须按 trade_date 取，不能永远取最新一份**：溢价问的是「该交易日的涨跌幅」，
+    拿最新快照（例如周六回看上周五，快照目录却是周六）会在非交易日或回看历史日期时
+    把错误的涨跌幅当成溢价——数字照样出得来，但结论是错的，属于「错了也看不出来」。
+    找不到当天目录时，退到不晚于该日期的最近一份，并记 warning。
+    """
+    try:
+        import polars as pl
+
+        svc = getattr(request.app.state, "snapshot_service", None)
+        base = Path(getattr(svc, "parquet_dir", "")) / "snapshots" if svc else None
+        if base is None or not Path(base).exists():
+            return {}
+        day_dirs = sorted((p for p in Path(base).iterdir() if p.is_dir()), reverse=True)
+
+        chosen: Path | None = None
+        if trade_date is not None:
+            want = trade_date.strftime("%Y%m%d")
+            exact = base / want
+            if exact.is_dir() and sorted(exact.glob("*.parquet")):
+                chosen = exact
+            else:
+                # 退到不晚于目标日期的最近一份
+                for d in day_dirs:
+                    if d.name <= want and sorted(d.glob("*.parquet")):
+                        chosen = d
+                        log.warning(
+                            "snapshot for %s not found, falling back to %s "
+                            "(溢价口径可能偏移)", want, d.name,
+                        )
+                        break
+        if chosen is None:
+            for d in day_dirs:
+                if sorted(d.glob("*.parquet")):
+                    chosen = d
+                    break
+        if chosen is None:
+            return {}
+
+        files = sorted(chosen.glob("*.parquet"))
+        df = pl.read_parquet(files[-1], columns=["symbol", "change_pct"])
+        out: dict[str, dict] = {}
+        for sym, pct in zip(df["symbol"].to_list(), df["change_pct"].to_list()):
+            if sym is None:
+                continue
+            out[str(sym).zfill(6)] = {"change_pct": pct}
+        return out
+    except Exception as exc:  # 快照缺失不应让看板整体失败
+        log.warning("snapshot map unavailable: %s", exc)
+        return {}
+
+
+@router.get("/themes")
+async def themes(
+    date_str: str | None = Query(default=None, alias="date", description="YYYY-MM-DD，默认最近交易日"),
+    min_boards: int = Query(default=0, ge=0, le=20, description="仅保留最高连板 ≥ 该值的题材"),
+    min_count: int = Query(
+        default=2, ge=1, le=50,
+        description="仅保留涨停家数 ≥ 该值的题材；默认 2 以滤掉个股独立行情",
+    ),
+    sort: str = Query(default="strength", description="strength(综合强度) | boards(连板高度) | count(涨停家数)"),
+    limit: int = Query(default=30, ge=1, le=100),
+    request: Request = None,
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    """题材梯队看板：涨停池按题材容器重组，输出连板天梯 + 强度指标 + 阶段判断。
+
+    与 /api/limit-up 的区别：涨停池是平铺列表，本接口以题材为容器，
+    给出「梯队是否成建制、资金是否持续」的结构化结论。结果缓存 60s。
+    """
+    import time as _time
+
+    if sort not in ("strength", "boards", "count"):
+        raise HTTPException(status_code=400, detail="sort 仅支持 strength / boards / count")
+    trade_date = date.fromisoformat(date_str) if date_str else await _default_trade_date_async(hub)
+
+    key = f"_themes_cache_{trade_date}"
+    cache = getattr(request.app.state, key, None)
+    if cache and _time.time() - cache[0] < 60:
+        payload = cache[1]
+    else:
+        from app.services.theme_service import build_theme_board
+
+        # 读 Parquet 是同步阻塞调用，必须丢到线程池，否则会卡住事件循环
+        # （曾导致整个服务无响应，连 /api/health 都超时）。
+        try:
+            board = await build_theme_board(
+                hub.provider,
+                trade_date,
+                snapshot_map=await asyncio.to_thread(_load_snapshot_map, request, trade_date),
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+        payload = {"data": board, "meta": _meta(hub)}
+        setattr(request.app.state, key, (_time.time(), payload))
+
+    themes_list = list(payload["data"]["themes"])
+    if min_boards > 0:
+        themes_list = [t for t in themes_list if t["performance"]["max_boards"] >= min_boards]
+    if min_count > 1:
+        themes_list = [t for t in themes_list if t["performance"]["limit_up_count"] >= min_count]
+    if sort == "boards":
+        themes_list.sort(key=lambda t: (-t["performance"]["max_boards"], -t["strength_score"]))
+    elif sort == "count":
+        themes_list.sort(key=lambda t: (-t["performance"]["limit_up_count"], -t["strength_score"]))
+
+    out = dict(payload["data"])
+    out["themes"] = themes_list[:limit]
+    out["filters"] = {"sort": sort, "min_boards": min_boards, "min_count": min_count, "limit": limit}
+    return {"data": out, "meta": payload["meta"]}

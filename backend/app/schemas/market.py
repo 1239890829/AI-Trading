@@ -110,6 +110,11 @@ class LimitUpRecord(AuditFields):
     consecutive_boards: int | None = None  # 连板数
     boards_stat: str | None = None  # 如 "3天2板"
     reason: str | None = None  # 涨停原因/题材（ths 官方口径）
+    # --- 东财 push2ex 特有、ths 不提供的增强维度（题材梯队看板用）---
+    float_market_cap: float | None = None  # 流通市值（元）ltsz
+    total_market_cap: float | None = None  # 总市值（元）tshare
+    amount: float | None = None  # 成交额（元）amount
+    industry_board: str | None = None  # 所属行业板块 hybk（东财口径）
 
 
 class LongHuRecord(AuditFields):
