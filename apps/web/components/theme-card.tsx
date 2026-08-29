@@ -188,6 +188,15 @@ export function ThemeCardView({
   const boardPct = board?.change_pct;
   const tier = card.strength_tier ?? "观察";
 
+  // 涨停池下钻：带日期 + 本题材梯队成员，涨停池页将高亮这些行（证据核对）
+  const poolQuery = (() => {
+    const q = new URLSearchParams();
+    if (tradeDate) q.set("date", tradeDate);
+    q.set("theme", card.theme);
+    q.set("symbols", card.ladder.map((r) => r.symbol).join(","));
+    return `?${q.toString()}`;
+  })();
+
   return (
     <section className={`overflow-hidden rounded-xl border bg-white dark:bg-zinc-950 ${CARD_BORDER[tier] ?? CARD_BORDER["观察"]}`}>
       {/* ── 顶部：分级 + 名称 + 当日涨跌幅 + 阶段 + 强度 ─────────── */}
@@ -229,9 +238,9 @@ export function ThemeCardView({
         <span>{card.sort_basis}</span>
         <div className="flex-1" />
         <Link
-          href={`/limit-up${tradeDate ? `?date=${tradeDate}` : ""}`}
+          href={`/limit-up${poolQuery}`}
           className="hover:text-zinc-600 dark:hover:text-zinc-300"
-          title="在原始涨停池中核对该题材成员（含涨停原因原文）"
+          title="在原始涨停池中核对该题材成员（含涨停原因原文，成员高亮）"
         >
           涨停池 ↗
         </Link>

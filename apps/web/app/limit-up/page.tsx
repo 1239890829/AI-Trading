@@ -1,16 +1,37 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Panel } from "@/components/panel";
 import { getLimitUpPool } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
 import type { LimitUpRecord } from "@/types/market";
 
+/**
+ * 涨停池 —— 题材梯队的证据/审计下钻页。
+ *
+ * 定位（2026-08-29）：题材梯队看板负责"结构"，本页负责"证据"——
+ * 每只票的涨停原因原文（ths 官方口径）是题材归属的唯一依据，
+ * 归属争议回到这里核对。
+ *
+ * URL 联动（来自题材卡片「涨停池↗」）：
+ * - `?date=YYYY-MM-DD`    初始日期
+ * - `?theme=名称&symbols=a,b,c` 高亮该题材梯队成员（不隐藏非成员，
+ *   上下文对比是审计页的本分；可切换「只看成员」）
+ */
+
 export default function LimitUpPage() {
+  const searchParams = useSearchParams();
   const [records, setRecords] = useState<LimitUpRecord[]>([]);
   const [tradeDate, setTradeDate] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // 题材联动状态：本地持有，URL 仅做初始注入与可分享快照
+  const [theme, setTheme] = useState(() => searchParams.get("theme") ?? "");
+  const [memberSymbols, setMemberSymbols] = useState<Set<string>>(
+    () => new Set((searchParams.get("symbols") ?? "").split(",").filter(Boolean))
+  );
+  const [onlyMembers, setOnlyMembers] = useState(false);
 
   const load = useCallback(async (date?: string) => {
     try {
@@ -25,23 +46,86 @@ export default function LimitUpPage() {
   }, []);
 
   useEffect(() => {
-    void load();
+    void load(searchParams.get("date") || undefined);
+    // 仅挂载时按 URL 初始日期拉一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [load]);
+
+  function syncUrl(next: { date?: string; theme?: string; symbols?: string }) {
+    const p = new URLSearchParams();
+    if (next.date) p.set("date", next.date);
+    if (next.theme) p.set("theme", next.theme);
+    if (next.symbols) p.set("symbols", next.symbols);
+    const qs = p.toString();
+    window.history.replaceState({}, "", qs ? `?${qs}` : window.location.pathname);
+  }
+
+  const onDate = (v: string) => {
+    void load(v || undefined);
+    syncUrl({ date: v, theme: theme, symbols: [...memberSymbols].join(",") });
+  };
+
+  function clearTheme() {
+    setTheme("");
+    setMemberSymbols(new Set());
+    setOnlyMembers(false);
+    syncUrl({ date: tradeDate });
+  }
+
+  const membersInPool = useMemo(
+    () => records.filter((r) => memberSymbols.has(r.symbol)),
+    [records, memberSymbols]
+  );
+
+  const shown = onlyMembers && memberSymbols.size > 0 ? membersInPool : records;
 
   return (
     <main className="h-full flex flex-col px-4 py-3 max-w-[1600px] mx-auto w-full">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-semibold">涨停池 · {tradeDate || "…"}</h1>
         <div className="flex items-center gap-2 text-xs text-zinc-400">
           <label htmlFor="zt-date">按日期查询：</label>
           <input
             id="zt-date"
             type="date"
-            onChange={(e) => void load(e.target.value || undefined)}
+            value={tradeDate}
+            onChange={(e) => onDate(e.target.value)}
             className="rounded-md border border-zinc-200 bg-transparent px-2 py-1 text-sm dark:border-zinc-700"
           />
         </div>
       </div>
+
+      {/* ── 题材联动横幅：来自题材卡片「涨停池↗」 ───────────────── */}
+      {theme && (
+        <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm">
+          <span className="text-zinc-700 dark:text-zinc-200">
+            题材 <span className="font-semibold">{theme}</span> 梯队成员：
+            <span className="font-mono">
+              {membersInPool.length}/{memberSymbols.size}
+            </span>{" "}
+            只在池中（高亮行）
+          </span>
+          <label className="flex cursor-pointer items-center gap-1 text-xs text-zinc-500 dark:text-zinc-300">
+            <input
+              type="checkbox"
+              checked={onlyMembers}
+              onChange={(e) => setOnlyMembers(e.target.checked)}
+              className="accent-rose-500"
+            />
+            只看成员
+          </label>
+          <div className="flex-1" />
+          <Link href="/themes" className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200">
+            返回题材梯队 ↩
+          </Link>
+          <button
+            onClick={clearTheme}
+            className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+          >
+            清除高亮 ✕
+          </button>
+        </div>
+      )}
 
       {error && (
         <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-600 dark:text-amber-300">
@@ -49,9 +133,17 @@ export default function LimitUpPage() {
         </div>
       )}
 
-      <Panel className="min-h-0 flex-1 overflow-hidden" title={`共 ${records.length} 只（按连板数排序）`} source={records[0]?.source}>
+      <Panel
+        className="min-h-0 flex-1 overflow-hidden"
+        title={`共 ${shown.length} 只（按连板数排序${theme && !onlyMembers ? "，成员高亮" : ""}）`}
+        source={records[0]?.source}
+      >
         {records.length === 0 && !error ? (
           <p className="px-4 py-10 text-center text-sm text-zinc-400">今日暂无涨停（或非交易日）</p>
+        ) : shown.length === 0 ? (
+          <p className="px-4 py-10 text-center text-sm text-zinc-400">
+            「{theme}」的梯队成员均不在 {tradeDate || "当日"} 的涨停池中
+          </p>
         ) : (
           <table className="w-full text-sm">
             <thead className="text-left text-xs text-zinc-400">
@@ -64,30 +156,46 @@ export default function LimitUpPage() {
               </tr>
             </thead>
             <tbody>
-              {records.map((r) => (
-                <tr key={r.symbol} className="border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900">
-                  <td className="px-2 py-2 font-mono text-xs text-zinc-400">
-                    <Link href={`/stock/${r.symbol}`} className="hover:text-sky-400 hover:underline">
-                      {r.symbol}
-                    </Link>
-                  </td>
-                  <td className="px-2 py-2">{r.name}</td>
-                  <td className="px-2 py-2 text-right font-mono">{fmt(r.price)}</td>
-                  <td className={`px-2 py-2 text-right font-mono ${pctColor(r.change_pct)}`}>{pctText(r.change_pct)}</td>
-                  <td className="px-2 py-2 text-right font-mono">{r.consecutive_boards ?? "--"}</td>
-                  <td className="px-2 py-2 text-right text-xs text-zinc-400">{r.boards_stat ?? "--"}</td>
-                  <td className="max-w-[260px] truncate px-2 py-2 text-xs text-zinc-300" title={r.reason ?? ""}>{r.reason ?? "--"}</td>
-                  <td className="px-2 py-2 text-right font-mono text-xs">{(r.break_count ?? 0) > 0 ? <span className="text-amber-400">{r.break_count}</span> : "0"}</td>
-                  <td className="px-2 py-2 text-right font-mono text-xs">{fmtAmount(r.seal_amount)}</td>
-                  <td className="px-2 py-2 text-right font-mono text-xs">{r.turnover_rate != null ? `${fmt(r.turnover_rate)}%` : "--"}</td>
-                </tr>
-              ))}
+              {shown.map((r) => {
+                const isMember = memberSymbols.has(r.symbol);
+                return (
+                  <tr
+                    key={r.symbol}
+                    className={`border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900 ${
+                      isMember ? "bg-rose-500/[0.07]" : ""
+                    }`}
+                  >
+                    <td className="px-2 py-2 font-mono text-xs text-zinc-400">
+                      <Link href={`/stock/${r.symbol}`} className="hover:text-sky-400 hover:underline">
+                        {r.symbol}
+                      </Link>
+                    </td>
+                    <td className="px-2 py-2">
+                      {isMember && (
+                        <span
+                          className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-rose-500 align-middle"
+                          title={`「${theme}」梯队成员`}
+                        />
+                      )}
+                      {r.name}
+                    </td>
+                    <td className="px-2 py-2 text-right font-mono">{fmt(r.price)}</td>
+                    <td className={`px-2 py-2 text-right font-mono ${pctColor(r.change_pct)}`}>{pctText(r.change_pct)}</td>
+                    <td className="px-2 py-2 text-right font-mono">{r.consecutive_boards ?? "--"}</td>
+                    <td className="px-2 py-2 text-right text-xs text-zinc-400">{r.boards_stat ?? "--"}</td>
+                    <td className="max-w-[260px] truncate px-2 py-2 text-xs text-zinc-300" title={r.reason ?? ""}>{r.reason ?? "--"}</td>
+                    <td className="px-2 py-2 text-right font-mono text-xs">{(r.break_count ?? 0) > 0 ? <span className="text-amber-400">{r.break_count}</span> : "0"}</td>
+                    <td className="px-2 py-2 text-right font-mono text-xs">{fmtAmount(r.seal_amount)}</td>
+                    <td className="px-2 py-2 text-right font-mono text-xs">{r.turnover_rate != null ? `${fmt(r.turnover_rate)}%` : "--"}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
       </Panel>
       <p className="mt-4 text-xs text-zinc-400">
-        涨停原因已接入（同花顺官方口径）；次日表现统计/题材标签随历史数据积累在后续版本提供。
+        涨停原因已接入（同花顺官方口径），是题材梯队归属的证据来源；次日表现统计/题材标签随历史数据积累在后续版本提供。
       </p>
     </main>
   );
