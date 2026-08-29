@@ -14,7 +14,7 @@ A 股实时行情 + AI 量化投研 + 模拟交易工作台。**只做**行情�
 - 后端：FastAPI（Python 3.11），32 个 REST 端点 + 1 个 WebSocket，**四源 Provider 链**（ths→tencent→eastmoney→sina）+ mock
 - 前端：Next.js 15 App Router，7 页面 + 10 组件，终端式工作台
 - 数据：全市场快照（5550 只）落 Parquet；SQLite 业务库
-- 测试：73 用例全绿；ESLint/pyflakes/tsc 门禁零问题
+- 测试：81 用例全绿；ESLint/pyflakes/tsc 门禁零问题
 - 运行：双端本地运行中（8000/3000）
 
 ---
@@ -29,7 +29,7 @@ A 股实时行情 + AI 量化投研 + 模拟交易工作台。**只做**行情�
 | 行情存储 | Parquet（polars） | 全市场快照时点落库 |
 | HTTP 客户端 | httpx（AsyncClient, trust_env=False） | 行情源直连不走系统代理 |
 | 实时推送 | WebSocket（uvicorn[standard]） | /ws/quotes |
-| 测试 | pytest | 70 用例 |
+| 测试 | pytest | 81 用例 |
 | 静态检查 | pyflakes | 后端门禁 |
 | 前端框架 | Next.js 15.5.24 (App Router) + React 19 | |
 | 样式 | Tailwind CSS 3.4（darkMode class） | 自定义 up=红涨 down=绿跌 |
@@ -81,7 +81,7 @@ ashare-ai-trader/
 │   │   ├── sentiment/engine.py        # 情绪阶段判定（可解释）
 │   │   ├── paper/engine.py            # 模拟交易撮合引擎
 │   │   └── websocket/routes.py        # /ws/quotes
-│   ├── tests/（8 文件 70 用例）
+│   ├── tests/（9 文件 81 用例）
 │   ├── requirements.txt / Dockerfile / .env（key，gitignored）
 ├── apps/web/
 │   ├── app/（7 路由页面）
@@ -141,7 +141,7 @@ ashare-ai-trader/
 | GET | /api/trades/{symbol} | 逐笔（东财 details；本机限流→502 显性化） | 东财 |
 | GET | /api/capital-flow/{symbol} | 资金流30日（主力/超大/大/中/小单+口径） | 新浪 MoneyFlow |
 | GET | /api/financials/{symbol} | 财务摘要8期（去重+倒序） | 东财业绩报表 |
-| GET | /api/company/{symbol} | 公司资料+所属板块/概念 chips | 东财 F10+CoreConception |
+| GET | /api/company/{symbol} | 公司资料 + `boards`(全量混合标签) + `board_groups`(行业/地域/概念/风格指数四组) | 东财 F10+CoreConception |
 | GET | /api/limit-up / limit-break | 涨停池(含原因)/炸板池 | ths→东财 |
 | GET | /api/longhu | 龙虎榜总览 | ths→东财 datacenter |
 | GET | /api/longhu/{symbol} | 席位明细(买5卖5+胜率)+上榜历史(T+1/3/5/10) | 东财 datacenter |
@@ -208,7 +208,8 @@ ashare-ai-trader/
 | test_market_breadth(5) | 宽度/涨跌停/N/C排除 |
 | test_mock_provider(6) | 演示数据确定性 |
 | test_watchlist_repo(2) | CRUD+分组 |
-- 门禁：pytest 73 全绿 + tsc 0 + ESLint 0 + pyflakes 0 + Next徽章 0 + 截图验收
+| test_board_classifier(8) | 东财板块四分类（真实茅台 fixture + 字符串 IS_PRECISE 回归） |
+- 门禁：pytest 81 全绿 + tsc 0 + ESLint 0 + pyflakes 0 + Next徽章 0 + 截图验收
 - 注：pyflakes 此前从未真正为 0（6 处既存未用导入/变量），2026-08-29 清理至 0，后续按 0 卡
 
 ---
@@ -263,7 +264,7 @@ ashare-ai-trader/
 ## 近期路线（下一刀优先级）
 1. ~~**交易前端打磨**：持仓成本线画上K线、成交记录列表页~~ ✅ 已完成（2026-08-29）
 2. ~~**重置账户入口**~~ ✅ 已完成（2026-08-29）
-3. **概念题材 chips 过滤风格标签**（"大盘股/MSCI中国"混入"白酒"）
+3. ~~**概念题材 chips 过滤风格标签**（"大盘股/MSCI中国"混入"白酒"）~~ ✅ 已完成（2026-08-29）
 4. **新闻/公告 AI 摘要**（Phase 7 前哨）
 5. Phase 5：选股器（快照+因子扫描）→ 评分系统
 6. Phase 6 后半：回测引擎（按 docs/backtest-rules.md 强制禁令）

@@ -42,6 +42,32 @@
 - 行情族 `push2/push2his`：本机直连与经代理均被 WAF 拦（空回复，疑似共享出口 IP 风控），保留为链上 search/K线/逐笔的备源；家庭宽带通常可用。
 - `ulist` 与 `stock/get` 字段编号**不一致**，不可混用映射表。
 
+### 3.1 公司资料 / 所属板块（F10 CoreConception）— 2026-08-29 实测
+
+- **公司档案** `datacenter-web.eastmoney.com/api/data/v1/get` (RPT_F10_BASIC_ORGINFO)：
+  filter 用 `SECUCODE="600519.SH"`（代码在前、市场在后）。
+- **所属板块** `emweb.securities.eastmoney.com/PC_HSF10/CoreConception/PageAjax?code=...`：
+  需带 `Referer: https://emweb.securities.eastmoney.com/`。
+  **code 两种格式都可用**：`SH600519`（市场在前）与 `600519.SH`（与 RPT 接口同格式）实测均返回相同 27 条。
+- 响应结构：`{ssbk: [...], hxtc: [...]}`，`ssbk` 单条字段为
+  `SECUCODE / SECURITY_CODE / SECURITY_NAME_ABBR / BOARD_CODE / BOARD_NAME / IS_PRECISE / BOARD_RANK`。
+
+**坑（已踩）：`IS_PRECISE` 是字符串 `'0'`/`'1'`，不是整数，也可能为 `null`。**
+写 `== 1` 会静默全部失配、不报错。比较前必须 `str(x) == "1"`。
+
+**`ssbk` 无类别字段，但按 `BOARD_RANK` 升序天然分段**（实测 600519/000001/600036/601318/300750/002594 六只一致）：
+
+| 段位 | 内容 | 例 |
+|---|---|---|
+| 1–3 | 东财行业三级（大类/Ⅱ/Ⅲ） | 食品饮料 → 白酒Ⅱ → 白酒Ⅲ |
+| 4 | 地域（名称以「板块」结尾） | 贵州板块 |
+| 中段 | 风格标签 + 指数成分 | 大盘股、茅指数、MSCI中国、融资融券 |
+| 尾部 | 概念题材 | 味蕾经济、白酒、乡村振兴 |
+
+据此实现 `normalizer.classify_boards()`：行业按 `BOARD_RANK≤3`、地域按「板块」后缀、
+概念按**首个 `IS_PRECISE='1'` 及其之后**（尾部规则可正确收进 `IS_PRECISE='0'` 的「酿酒概念」），
+其余归风格/指数。属启发式，边界个股可能有误差，故 `boards` 仍保留全量混合列表不丢数据。
+
 ## 4. 同花顺（分时候选，已验证可达）
 
 `d.10jqka.com.cn/v6/line/hs_600519/01/today.js`（JSONP）返回当日分时：开/高/低/现价/量/额/均价等。

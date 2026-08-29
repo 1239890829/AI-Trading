@@ -51,6 +51,7 @@ interface CompanyProfile {
   csrc_industry?: string | null;
   region?: string | null;
   boards?: string[];
+  board_groups?: { industry: string[]; region: string[]; concept: string[]; style_index: string[] };
   core_themes?: string[];
   source: string;
 }
@@ -220,6 +221,19 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   // 当前个股的模拟持仓（用于 K 线成本线）
   const myPosition = paper?.positions.find((p) => p.symbol === symbol) ?? null;
   const costPrice = myPosition && myPosition.quantity > 0 ? myPosition.cost_price : null;
+
+  // 板块标签分组：把风格/指数成分与概念题材分开，避免"大盘股/MSCI中国"混进题材
+  const boardGroups = company?.board_groups;
+  const boardRows: [string, string[], string][] = boardGroups
+    ? [
+        ["行业", boardGroups.industry ?? [], "text-zinc-200"],
+        ["地域", boardGroups.region ?? [], "text-zinc-300"],
+        ["概念题材", boardGroups.concept ?? [], "text-amber-600 dark:text-amber-300"],
+        ["风格 / 指数成分", boardGroups.style_index ?? [], "text-zinc-500"],
+      ]
+    : company?.boards?.length
+      ? [["板块", company.boards, "text-zinc-300"]] // 无分组数据（旧缓存）时回退扁平全量
+      : [];
 
   async function handleResetAccount() {
     if (!window.confirm("重置模拟账户？当前全部持仓、挂单与成交记录将清空，资金回到初始额度。此操作不可撤销。")) return;
@@ -540,18 +554,20 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
 
           {rightTab === "profile" && (
             <div className="px-3 py-2 text-xs">
-              {company?.boards && company.boards.length > 0 && (
-                <div className="mb-3">
-                  <div className="mb-1 text-zinc-400">所属板块 / 概念题材</div>
-                  <div className="flex flex-wrap gap-1">
-                    {company.boards.map((b) => (
-                      <span key={b} className="rounded bg-zinc-100 px-1.5 py-0.5 text-zinc-300 dark:bg-zinc-800">
-                        {b}
-                      </span>
-                    ))}
+              {boardRows
+                .filter(([, items]) => items.length > 0)
+                .map(([label, items, tone]) => (
+                  <div key={label} className="mb-2.5">
+                    <div className="mb-1 text-zinc-400">{label}</div>
+                    <div className="flex flex-wrap gap-1">
+                      {items.map((b) => (
+                        <span key={b} className={`rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800 ${tone}`}>
+                          {b}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )}
+                ))}
               {company?.main_business && (
                 <div className="mb-2">
                   <div className="mb-1 text-zinc-400">主营业务</div>

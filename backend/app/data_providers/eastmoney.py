@@ -324,7 +324,10 @@ class EastmoneyProvider:
             )
             if cc.status_code == 200:
                 cc_data = cc.json()
-                profile["boards"] = [b.get("BOARD_NAME") for b in cc_data.get("ssbk") or [] if b.get("BOARD_NAME")]
+                ssbk_rows = [b for b in cc_data.get("ssbk") or [] if b.get("BOARD_NAME")]
+                # boards 保留全量混合标签（不丢数据），board_groups 提供 行业/地域/概念/风格指数 分类
+                profile["boards"] = [b.get("BOARD_NAME") for b in ssbk_rows]
+                profile["board_groups"] = nz.classify_boards(ssbk_rows)
                 profile["core_themes"] = [t for t in (x.get("KEY_THEME") or x.get("BOARD_NAME") for x in cc_data.get("hxtc") or []) if t]
         except Exception as exc:
             log.warning("conception fetch failed for %s: %s", symbol, exc)

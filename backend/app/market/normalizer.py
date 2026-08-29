@@ -306,9 +306,52 @@ def normalize_company_profile(raw: dict) -> dict | None:
         "csrc_industry": raw.get("INDUSTRYCSRC1"),
         "region": raw.get("REGION") or None,
         "boards": [],
+        "board_groups": {"industry": [], "region": [], "concept": [], "style_index": []},
         "core_themes": [],
         "source": EASTMONEY_SOURCE,
     }
+
+
+# 板块分类判定依据（东财 F10 CoreConception / ssbk，2026-08-29 实测 6 只样本）
+# ssbk 返回按 BOARD_RANK 升序，天然分段：行业三级 → 地域 → 风格/指数成分 → 概念题材。
+# 注意 IS_PRECISE 是字符串 '0'/'1'（不是整数），比较前必须 str() 转换。
+# 该分类是启发式：东财未在响应里给出类别字段，边界个股可能有误差，故仍保留 boards 全量列表。
+_REGION_SUFFIX = "板块"
+
+
+def classify_boards(ssbk_rows: list[dict]) -> dict[str, list[str]]:
+    """把东财 ssbk 混合标签拆成 行业/地域/概念/风格指数 四组。
+
+    判定顺序：
+      1. BOARD_RANK ≤ 3 且非地域后缀 → 行业（东财行业三级：大类/Ⅱ/Ⅲ）
+      2. 名称以「板块」结尾 → 地域
+      3. 位于首个 IS_PRECISE='1' 之后（含）→ 概念题材
+      4. 其余 → 风格与指数成分
+    """
+    groups: dict[str, list[str]] = {"industry": [], "region": [], "concept": [], "style_index": []}
+    rows = [r for r in ssbk_rows or [] if r.get("BOARD_NAME")]
+    if not rows:
+        return groups
+
+    first_precise = next((i for i, r in enumerate(rows) if str(r.get("IS_PRECISE")) == "1"), None)
+
+    for i, r in enumerate(rows):
+        name = str(r["BOARD_NAME"])
+        rank = r.get("BOARD_RANK")
+        try:
+            rank = int(rank) if rank is not None else None
+        except (TypeError, ValueError):
+            rank = None
+
+        if rank is not None and rank <= 3 and not name.endswith(_REGION_SUFFIX):
+            groups["industry"].append(name)
+        elif name.endswith(_REGION_SUFFIX):
+            groups["region"].append(name)
+        elif first_precise is not None and i >= first_precise:
+            groups["concept"].append(name)
+        else:
+            groups["style_index"].append(name)
+    return groups
 
 
 def normalize_announcement(raw: dict, symbol: str) -> dict | None:
