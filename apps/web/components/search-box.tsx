@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { searchSymbols } from "@/lib/api";
+import { addToWatchlist, searchSymbols } from "@/lib/api";
 import type { SymbolSearchItem } from "@/types/market";
 
 export function SearchBox() {
@@ -40,7 +40,15 @@ export function SearchBox() {
   function go(item: SymbolSearchItem) {
     setOpen(false);
     setQ("");
-    router.push(`/stock/${item.symbol}`);
+    router.push(`/workbench?symbol=${item.symbol}`);
+  }
+
+  async function quickAdd(e: React.MouseEvent, item: SymbolSearchItem) {
+    e.stopPropagation();
+    try {
+      await addToWatchlist(item.symbol, item.name ?? undefined);
+      setItems((prev) => prev.map((i) => (i.symbol === item.symbol ? { ...i, is_realtime: true } : i)));
+    } catch {}
   }
 
   return (
@@ -60,14 +68,24 @@ export function SearchBox() {
         <ul className="absolute left-0 right-0 top-10 z-50 overflow-hidden rounded-md border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
           {items.map((it) => (
             <li key={`${it.source}-${it.symbol}`}>
-              <button
+              <div
+                role="button"
+                tabIndex={0}
                 onClick={() => go(it)}
-                className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                onKeyDown={(e) => e.key === "Enter" && go(it)}
+                className="flex w-full cursor-pointer items-center justify-between px-3 py-2 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"
               >
                 <span className="font-mono text-xs text-zinc-400">{it.symbol}</span>
                 <span className="flex-1 px-2">{it.name}</span>
+                {it.is_realtime ? (
+                  <span className="text-xs text-zinc-400">已加自选 ✓</span>
+                ) : (
+                  <button onClick={(e) => void quickAdd(e, it)} className="mr-2 rounded border border-up/50 px-1.5 text-xs text-up hover:bg-up/10" title="加入自选">
+                    ＋
+                  </button>
+                )}
                 <span className="text-xs text-zinc-400">{it.market}</span>
-              </button>
+              </div>
             </li>
           ))}
         </ul>

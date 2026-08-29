@@ -39,10 +39,13 @@ def test_quotes_endpoint():
         assert {q["symbol"] for q in data} == {"600519", "000001"}
 
 
-def test_quote_not_cached_returns_404():
+def test_quote_not_cached_falls_back_to_live():
+    # 非自选股走 Provider 实时链（mock 对任意 6 位代码均可生成行情）
     with TestClient(app) as client:
         resp = client.get("/api/quotes/999999")
-        assert resp.status_code == 404
+        assert resp.status_code == 200
+        body = resp.json()["data"]
+        assert body["symbol"] == "999999" and body["source"] == "mock"
 
 
 def test_kline_endpoint():

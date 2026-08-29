@@ -1,23 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
-import { KlineChart } from "@/components/kline-chart";
-import { PriceFlash } from "@/components/price-flash";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Panel } from "@/components/panel";
 import { QualityBadge } from "@/components/quality-badge";
+import { StockDetailPanel } from "@/components/stock-detail";
+import { PriceFlash } from "@/components/price-flash";
 import { useQuoteStream, StreamStatus } from "@/hooks/use-quote-stream";
-import {
-  getKline,
-  getMarketOverview,
-  getOrderBook,
-  getQuotes,
-  getTrades,
-  getWatchlist,
-  removeFromWatchlist,
-} from "@/lib/api";
-import { fmt, fmtAmount, fmtVolume, pctColor, pctText, timeText } from "@/lib/format";
-import type { Kline, OrderBook, Quote, Trade } from "@/types/market";
+import { getMarketOverview, getQuotes, removeFromWatchlist } from "@/lib/api";
+import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
+import type { Quote } from "@/types/market";
 
 const STATUS_LABEL: Record<StreamStatus, { text: string; cls: string }> = {
   connecting: { text: "连接中", cls: "text-zinc-400" },
@@ -26,29 +19,32 @@ const STATUS_LABEL: Record<StreamStatus, { text: string; cls: string }> = {
   error: { text: "连接失败", cls: "text-red-400" },
 };
 
-export default function WorkbenchPage() {
+function WorkbenchInner() {
+  const router = useRouter();
+  const sp = useSearchParams();
+  const paramSymbol = sp.get("symbol");
   const [symbols, setSymbols] = useState<string[]>([]);
   const [indices, setIndices] = useState<Quote[]>([]);
   const [totalAmount, setTotalAmount] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string>("");
-  const [selected, setSelected] = useState<string>("600519");
-
-  const [bars, setBars] = useState<Kline[]>([]);
-  const [book, setBook] = useState<OrderBook | null>(null);
-  const [trades, setTrades] = useState<Trade[]>([]);
-  const [detailError, setDetailError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string>(paramSymbol ?? "600519");
 
   const { quotes, status } = useQuoteStream(symbols);
-
-  // WS 尚未覆盖的 symbol（如刚加自选）用 REST 兜底
   const [extra, setExtra] = useState<Record<string, Quote>>({});
   const merged: Record<string, Quote> = { ...extra, ...quotes };
 
+  useEffect(() => {
+    if (paramSymbol) setSelected(paramSymbol);
+  }, [paramSymbol]);
+
   const loadBase = useCallback(async () => {
     try {
-      const [wl, overview] = await Promise.all([getWatchlist(), getMarketOverview()]);
-      setSymbols(wl.map((i) => i.symbol));
+      const [wl, overview] = await Promise.all([
+        fetch(`${process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000"}/api/watchlist`, { cache: "no-store" }).then((r) => r.json()),
+        getMarketOverview(),
+      ]);
+      setSymbols((wl.data as { symbol: string }[]).map((i) => i.symbol));
       setIndices(overview.indices);
       setTotalAmount(overview.total_amount);
       setError(null);
@@ -69,37 +65,13 @@ export default function WorkbenchPage() {
     const missing = symbols.filter((s) => !(s in merged));
     if (missing.length > 0) {
       getQuotes(missing)
-        .then((qs) =>
-          setExtra((prev) => Object.fromEntries([...Object.entries(prev), ...qs.map((q) => [q.symbol, q])]))
-        )
+        .then((qs) => setExtra((prev) => Object.fromEntries([...Object.entries(prev), ...qs.map((q) => [q.symbol, q])])))
         .catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbols]);
 
-  useEffect(() => {
-    if (!selected) return;
-    let alive = true;
-    setDetailError(null);
-    Promise.all([
-      getKline(selected, "1d", 120),
-      getOrderBook(selected).catch(() => null),
-      getTrades(selected, 30).catch(() => []),
-    ])
-      .then(([b, ob, tr]) => {
-        if (!alive) return;
-        setBars(b);
-        setBook(ob);
-        setTrades(tr);
-      })
-      .catch((e: Error) => alive && setDetailError(e.message));
-    return () => {
-      alive = false;
-    };
-  }, [selected]);
-
   const watchQuotes: Quote[] = symbols.map((s) => merged[s]).filter(Boolean);
-  const d = merged[selected];
 
   async function remove(symbol: string) {
     try {
@@ -108,31 +80,20 @@ export default function WorkbenchPage() {
     } catch {}
   }
 
-  const stats = d
-    ? ([
-        ["今开", fmt(d.open)],
-        ["最高", fmt(d.high)],
-        ["最低", fmt(d.low)],
-        ["昨收", fmt(d.prev_close)],
-        ["成交量", fmtVolume(d.volume) + " 手"],
-        ["成交额", fmtAmount(d.amount)],
-        ["换手率", d.turnover_rate != null ? `${fmt(d.turnover_rate)}%` : "--"],
-        ["来源", d.source],
-      ] as const)
-    : [];
-
   return (
-    <main className="h-full flex flex-col gap-3 px-4 py-3 max-w-[1600px] mx-auto w-full">
+    <main className="mx-auto flex h-full w-full max-w-[1600px] flex-col gap-3 px-4 py-3">
       {error && (
-        <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-600 dark:text-amber-300">
-          {error}
-        </div>
+        <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-600 dark:text-amber-300">{error}</div>
       )}
 
-      {/* 指数行情：单行 6 卡 */}
       <div className="grid shrink-0 grid-cols-3 gap-3 md:grid-cols-6">
         {indices.map((q) => (
-          <div key={q.symbol} className="rounded-xl border border-zinc-200 px-3 py-2 transition-colors hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-600">
+          <button
+            key={q.symbol}
+            onClick={() => setSelected(q.symbol === "000001" ? "600519" : q.symbol)}
+            className="rounded-xl border border-zinc-200 px-3 py-2 text-left transition-colors hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-600"
+            title="点击在右侧查看详情（指数暂以代表股展示）"
+          >
             <div className="flex items-center justify-between">
               <span className="text-xs text-zinc-400">{q.name ?? q.symbol}</span>
               <QualityBadge quality={q.quality} reasons={q.quality_reasons} />
@@ -141,7 +102,7 @@ export default function WorkbenchPage() {
               <span className="font-mono text-lg font-semibold">{fmt(q.price)}</span>
               <span className={`font-mono text-xs ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</span>
             </div>
-          </div>
+          </button>
         ))}
         {indices.length === 0 && !error && <div className="col-span-6 text-sm text-zinc-400">加载中…</div>}
       </div>
@@ -157,18 +118,25 @@ export default function WorkbenchPage() {
             <span className={STATUS_LABEL[status].cls}>{STATUS_LABEL[status].text}</span>
           </span>
           <span>指数刷新 {updatedAt || "--"}</span>
-          <span className="hidden lg:inline text-zinc-500">数据仅供投研与模拟交易参考</span>
+          <span className="hidden text-zinc-500 lg:inline">数据仅供投研与模拟交易参考</span>
         </span>
       </div>
 
       <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[340px,minmax(0,1fr)]">
-        {/* 自选股：内部滚动 */}
-        <Panel title="自选股" extra={<Link href="/watchlist" className="text-sky-400 hover:underline">管理</Link>} className="min-h-0 overflow-hidden">
+        <Panel
+          title="自选股"
+          extra={
+            <Link href="/watchlist" className="text-sky-400 hover:underline">
+              管理
+            </Link>
+          }
+          className="min-h-0 overflow-hidden"
+        >
           {watchQuotes.length === 0 ? (
             <p className="px-4 py-8 text-center text-sm text-zinc-400">
               自选为空或行情未就绪。
               <br />
-              可在顶部搜索框添加股票。
+              在顶部搜索框选择结果即可查看并加自选。
             </p>
           ) : (
             <table className="w-full text-sm">
@@ -176,7 +144,10 @@ export default function WorkbenchPage() {
                 {watchQuotes.map((q) => (
                   <tr
                     key={q.symbol}
-                    onClick={() => setSelected(q.symbol)}
+                    onClick={() => {
+                      setSelected(q.symbol);
+                      router.replace(`/workbench?symbol=${q.symbol}`, { scroll: false });
+                    }}
                     className={`cursor-pointer border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900 ${
                       selected === q.symbol ? "bg-zinc-50 dark:bg-zinc-900" : ""
                     }`}
@@ -186,15 +157,9 @@ export default function WorkbenchPage() {
                       <div>{q.name ?? "--"}</div>
                     </td>
                     <td className="px-2 py-2 text-right font-mono tabular-nums"><PriceFlash value={q.price}>{fmt(q.price)}</PriceFlash></td>
-                    <td className={`px-2 py-2 text-right font-mono text-xs tabular-nums ${pctColor(q.change_pct)}`}>
-                      {pctText(q.change_pct)}
-                    </td>
-                    <td className="hidden px-2 py-2 text-right font-mono text-xs tabular-nums text-zinc-400 md:table-cell">
-                      {fmtAmount(q.amount)}
-                    </td>
-                    <td className="px-1 py-2 text-right">
-                      {q.quality !== "high" && <QualityBadge quality={q.quality} reasons={q.quality_reasons} />}
-                    </td>
+                    <td className={`px-2 py-2 text-right font-mono text-xs tabular-nums ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</td>
+                    <td className="hidden px-2 py-2 text-right font-mono text-xs tabular-nums text-zinc-400 md:table-cell">{fmtAmount(q.amount)}</td>
+                    <td className="px-1 py-2 text-right">{q.quality !== "high" && <QualityBadge quality={q.quality} reasons={q.quality_reasons} />}</td>
                     <td className="pr-2 text-right">
                       <button
                         onClick={(e) => {
@@ -217,115 +182,16 @@ export default function WorkbenchPage() {
           )}
         </Panel>
 
-        {/* 右侧：个股详情 */}
-        <div className="flex min-h-0 min-w-0 flex-col gap-3">
-          {d && (
-            <div className="shrink-0 rounded-xl border border-zinc-200 dark:border-zinc-800">
-              {/* 价格主区块 */}
-              <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-4 pt-3">
-                <div className="flex items-baseline gap-2">
-                  <h1 className="text-lg font-semibold">{d.name ?? "--"}</h1>
-                  <span className="font-mono text-sm text-zinc-400">
-                    {d.market}.{d.symbol}
-                  </span>
-                  <QualityBadge quality={d.quality} reasons={d.quality_reasons} />
-                </div>
-                <div className="flex items-baseline gap-3">
-                  <PriceFlash value={d.price} className={`font-mono text-3xl font-semibold tabular-nums ${pctColor(d.change_pct)}`}>
-                    {fmt(d.price)}
-                  </PriceFlash>
-                  <span className={`font-mono text-sm tabular-nums ${pctColor(d.change)}`}>
-                    {d.change != null ? `${d.change > 0 ? "+" : ""}${fmt(d.change)}` : "--"}（{pctText(d.change_pct)}）
-                  </span>
-                </div>
-              </div>
-              {/* 指标分栏：4 栏 × 2 行，竖线分隔 */}
-              <div className="mt-2 grid grid-cols-4 divide-x divide-zinc-100 border-t border-zinc-100 dark:divide-zinc-800/60 dark:border-zinc-800/60">
-                {stats.map(([k, v], i) => (
-                  <div key={k} className={`px-3 py-2 ${i < 4 ? "border-b border-zinc-100 dark:border-zinc-800/60" : ""}`}>
-                    <div className="text-xs text-zinc-400">{k}</div>
-                    <div className="font-mono text-sm tabular-nums">{v}</div>
-                  </div>
-                ))}
-              </div>
-              <div className="border-t border-zinc-100 px-4 py-1.5 text-right text-xs text-zinc-400 dark:border-zinc-800/60">
-                数据时间 {timeText(d.data_timestamp)} · 来源 {d.source} · 接收 {timeText(d.received_at)}
-              </div>
-            </div>
-          )}
-
-          {detailError && (
-            <div className="shrink-0 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2 text-sm text-red-500">
-              K线加载失败：{detailError}
-            </div>
-          )}
-
-          {/* K 线：占据剩余全部高度 */}
-          <Panel title="日 K 线（近 120 日 · 前复权）" className="min-h-0 flex-1 overflow-hidden">
-            {bars.length > 0 ? (
-              <KlineChart bars={bars} className="h-full" />
-            ) : (
-              <p className="px-4 py-10 text-center text-sm text-zinc-400">等待 K 线数据…</p>
-            )}
-          </Panel>
-
-          {/* 盘口 + 逐笔：定高，内部滚动 */}
-          <div className="grid h-[240px] shrink-0 grid-cols-1 gap-3 md:grid-cols-2">
-            <Panel
-              title="五档盘口"
-              source={book?.source}
-              dataTimestamp={book?.data_timestamp}
-              quality={book?.quality}
-              qualityReasons={book?.quality_reasons}
-              className="min-h-0 overflow-hidden"
-            >
-              {book ? (
-                <table className="w-full text-sm">
-                  <tbody>
-                    {[...book.asks].reverse().map((lv, i) => (
-                      <tr key={`a${i}`} className="border-b border-zinc-100 dark:border-zinc-800/60">
-                        <td className="px-3 py-1 text-xs text-zinc-400">卖{book.asks.length - i}</td>
-                        <td className="px-2 py-1 text-right font-mono tabular-nums text-down">{fmt(lv.price)}</td>
-                        <td className="px-3 py-1 text-right font-mono text-xs tabular-nums text-zinc-400">{fmt(lv.volume, 0)}</td>
-                      </tr>
-                    ))}
-                    {[...book.bids].map((lv, i) => (
-                      <tr key={`b${i}`}>
-                        <td className="px-3 py-1 text-xs text-zinc-400">买{i + 1}</td>
-                        <td className="px-2 py-1 text-right font-mono tabular-nums text-up">{fmt(lv.price)}</td>
-                        <td className="px-3 py-1 text-right font-mono text-xs tabular-nums text-zinc-400">{fmt(lv.volume, 0)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : (
-                <p className="px-4 py-6 text-center text-sm text-zinc-400">盘口数据不可用（免费源仅盘中提供）</p>
-              )}
-            </Panel>
-
-            <Panel title="逐笔成交（最近 30 笔）" source={trades[0]?.source} className="min-h-0 overflow-hidden">
-              {trades.length > 0 ? (
-                <table className="w-full text-sm">
-                  <tbody>
-                    {trades.map((t, i) => (
-                      <tr key={i} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                        <td className="px-3 py-1 font-mono text-xs tabular-nums text-zinc-400">{timeText(t.ts)}</td>
-                        <td className={`px-2 py-1 text-right font-mono tabular-nums ${t.side === "buy" ? "text-up" : t.side === "sell" ? "text-down" : "text-zinc-300"}`}>
-                          {fmt(t.price)}
-                        </td>
-                        <td className="px-2 py-1 text-right font-mono text-xs tabular-nums text-zinc-400">{fmtVolume(t.volume)}</td>
-                        <td className="px-3 py-1 text-right text-xs text-zinc-400">{t.side === "buy" ? "B" : t.side === "sell" ? "S" : "·"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : (
-                <p className="px-4 py-6 text-center text-sm text-zinc-400">暂无逐笔数据（东财源限流时以分时线替代，见个股页）</p>
-              )}
-            </Panel>
-          </div>
-        </div>
+        <StockDetailPanel symbol={selected} />
       </div>
     </main>
+  );
+}
+
+export default function WorkbenchPage() {
+  return (
+    <Suspense fallback={<main className="p-6 text-sm text-zinc-400">加载中…</main>}>
+      <WorkbenchInner />
+    </Suspense>
   );
 }

@@ -102,7 +102,19 @@ async def quotes(
 async def quote(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
     found = hub.get_quotes([symbol])
     if not found:
-        raise HTTPException(status_code=404, detail=f"{symbol} 不在缓存中，请先加入自选")
+        # 非自选股：实时经 Provider 链拉取（不进缓存，质量校验照常）
+        import logging as _log
+
+        from app.data_quality.validator import validate_quote
+
+        try:
+            live = await hub.provider.get_quote(symbol)
+        except Exception as exc:
+            _log.getLogger(__name__).warning("live quote %s failed: %s", symbol, exc)
+            live = None
+        if live is None:
+            raise HTTPException(status_code=404, detail=f"{symbol} 无行情（缓存与数据源均未命中）")
+        return {"data": validate_quote(live).model_dump(mode="json"), "meta": _meta(hub)}
     return {"data": found[0].model_dump(mode="json"), "meta": _meta(hub)}
 
 
