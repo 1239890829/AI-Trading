@@ -64,8 +64,8 @@ export default function LonghuPage() {
               </tr>
             </thead>
             <tbody>
-              {records.map((r) => (
-                <tr key={`${r.symbol}-${r.net_buy}`} className="border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900">
+              {records.map((r, i) => (
+                <tr key={`${r.symbol}-${r.reason ?? ""}-${i}`} className="border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900">
                   <td className="px-2 py-2 font-mono text-xs text-zinc-400">
                     <Link href={`/stock/${r.symbol}`} className="hover:text-sky-400 hover:underline">
                       {r.symbol}
