@@ -14,9 +14,11 @@ class Settings(BaseSettings):
     version: str = "0.1.0"
     log_level: str = "INFO"
 
-    # 主源 + 备源（逗号分隔）：tencent | sina | eastmoney | mock；mock 只能单独使用
-    data_provider: str = "tencent"
-    provider_fallbacks: str = "eastmoney,sina"
+    # 主源 + 备源（逗号分隔）：ths | tencent | sina | eastmoney | mock；mock 只能单独使用
+    data_provider: str = "ths"
+    provider_fallbacks: str = "tencent,eastmoney,sina"
+    ths_api_key: str = ""  # 同花顺 fuyao 官方 API Key（放 .env，勿提交）
+    ths_base_url: str = "https://fuyao.aicubes.cn"
     poll_interval_seconds: float = 5.0
     request_timeout_seconds: float = 5.0
 

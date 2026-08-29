@@ -109,6 +109,7 @@ class LimitUpRecord(AuditFields):
     turnover_rate: float | None = None
     consecutive_boards: int | None = None  # 连板数
     boards_stat: str | None = None  # 如 "3天2板"
+    reason: str | None = None  # 涨停原因/题材（ths 官方口径）
 
 
 class LongHuRecord(AuditFields):

@@ -5,9 +5,11 @@ from app.data_providers.composite import CompositeProvider
 from app.data_providers.eastmoney import EastmoneyProvider
 from app.data_providers.mock import MockProvider
 from app.data_providers.sina import SinaProvider
+from app.data_providers.ths import ThsFuyaoProvider
 from app.data_providers.tencent import TencentProvider
 
 _REGISTRY = {
+    "ths": ThsFuyaoProvider,
     "tencent": TencentProvider,
     "sina": SinaProvider,
     "eastmoney": EastmoneyProvider,
@@ -16,11 +18,17 @@ _REGISTRY = {
 
 
 def _build(name: str, settings: Settings):
-    cls = _REGISTRY.get(name.strip())
+    name = name.strip()
+    if name == "mock":
+        return MockProvider()
+    if name == "ths":
+        if not settings.ths_api_key:
+            raise ValueError("ths 需要 ASHARE_THS_API_KEY（见 .env.example）")
+        return ThsFuyaoProvider(api_key=settings.ths_api_key, base_url=settings.ths_base_url,
+                                timeout=settings.request_timeout_seconds)
+    cls = _REGISTRY.get(name)
     if cls is None:
         raise ValueError(f"unknown provider: {name}")
-    if name.strip() == "mock":
-        return MockProvider()
     return cls(timeout=settings.request_timeout_seconds)
 
 

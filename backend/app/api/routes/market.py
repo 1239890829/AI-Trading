@@ -183,8 +183,35 @@ async def minute_line(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
     return {"data": {"symbol": symbol, "points": points}, "meta": _meta(hub)}
 
 
+async def _default_trade_date_async(hub) -> date:
+    """最近交易日：优先官方交易日历（ths，缓存 24h），失败回退周末规则。"""
+    import time as _time
+
+    cache = getattr(hub, "_tdays_cache", None)
+    days: list[str] | None = None
+    if cache and _time.time() - cache[0] < 86400:
+        days = cache[1]
+    if days is None:
+        for p in hub.providers if hasattr(hub, "providers") else [hub.provider]:
+            if hasattr(p, "get_trading_days"):
+                try:
+                    days = await p.get_trading_days()
+                    setattr(hub, "_tdays_cache", (_time.time(), days))
+                    break
+                except Exception:
+                    continue
+    if days:
+        today = date.today().strftime("%Y%m%d")
+        past = [d for d in days if d <= today]
+        if past:
+            latest = past[-1]
+            return date(int(latest[:4]), int(latest[4:6]), int(latest[6:]))
+    d = date.today()
+    return {5: d - timedelta(days=1), 6: d - timedelta(days=2)}.get(d.weekday(), d)
+
+
 def _default_trade_date() -> date:
-    """最近交易日：周末回退到周五（节假日日历在后续阶段接入）。"""
+    """周末回退规则（交易日历不可用时的兜底）。"""
     d = date.today()
     return {5: d - timedelta(days=1), 6: d - timedelta(days=2)}.get(d.weekday(), d)
 
@@ -194,7 +221,7 @@ async def limit_up(
     date_str: str | None = Query(default=None, alias="date", description="YYYY-MM-DD，默认最近交易日"),
     hub: QuoteHub = Depends(get_hub),
 ) -> dict:
-    trade_date = date.fromisoformat(date_str) if date_str else _default_trade_date()
+    trade_date = date.fromisoformat(date_str) if date_str else await _default_trade_date_async(hub)
     try:
         records = await hub.provider.get_limit_up_pool(trade_date)
     except Exception as exc:
@@ -211,7 +238,7 @@ async def longhu(
     date_str: str | None = Query(default=None, alias="date", description="YYYY-MM-DD，默认最近交易日（T-1 盘后披露）"),
     hub: QuoteHub = Depends(get_hub),
 ) -> dict:
-    trade_date = date.fromisoformat(date_str) if date_str else _default_trade_date()
+    trade_date = date.fromisoformat(date_str) if date_str else await _default_trade_date_async(hub)
     try:
         records = await hub.provider.get_longhu_records(trade_date)
     except Exception as exc:
@@ -308,6 +335,20 @@ async def financials(symbol: str, periods: int = Query(default=8, ge=1, le=20), 
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"财务数据源失败：{exc}")
     return {"data": {"symbol": symbol, "periods": rows}, "meta": _meta(hub)}
+
+
+@router.get("/limit-break")
+async def limit_break(
+    date_str: str | None = Query(default=None, alias="date"),
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    """炸板池（涨停后开板未回封）。"""
+    trade_date = date.fromisoformat(date_str) if date_str else await _default_trade_date_async(hub)
+    try:
+        rows = await hub.provider.get_limit_break_pool(trade_date)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"炸板池数据源失败：{exc}")
+    return {"data": {"trade_date": trade_date.isoformat(), "pool": [r.model_dump(mode="json") for r in rows]}, "meta": _meta(hub)}
 
 
 @router.get("/search")

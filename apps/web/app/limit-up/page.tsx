@@ -56,7 +56,7 @@ export default function LimitUpPage() {
           <table className="w-full text-sm">
             <thead className="text-left text-xs text-zinc-400">
               <tr className="border-b border-zinc-200 dark:border-zinc-800">
-                {["代码", "名称", "价格", "涨幅", "连板", "梯队", "首封", "末封", "炸板", "封单额", "换手"].map((h) => (
+                {["代码", "名称", "价格", "涨幅", "连板", "梯队", "涨停原因", "炸板", "封单额", "换手"].map((h) => (
                   <th key={h} className={`px-2 py-2 font-medium ${["名称"].includes(h) ? "" : "text-right"}`}>
                     {h}
                   </th>
@@ -76,8 +76,7 @@ export default function LimitUpPage() {
                   <td className={`px-2 py-2 text-right font-mono ${pctColor(r.change_pct)}`}>{pctText(r.change_pct)}</td>
                   <td className="px-2 py-2 text-right font-mono">{r.consecutive_boards ?? "--"}</td>
                   <td className="px-2 py-2 text-right text-xs text-zinc-400">{r.boards_stat ?? "--"}</td>
-                  <td className="px-2 py-2 text-right font-mono text-xs">{r.first_seal_time ?? "--"}</td>
-                  <td className="px-2 py-2 text-right font-mono text-xs">{r.last_seal_time ?? "--"}</td>
+                  <td className="max-w-[260px] truncate px-2 py-2 text-xs text-zinc-300" title={r.reason ?? ""}>{r.reason ?? "--"}</td>
                   <td className="px-2 py-2 text-right font-mono text-xs">{(r.break_count ?? 0) > 0 ? <span className="text-amber-400">{r.break_count}</span> : "0"}</td>
                   <td className="px-2 py-2 text-right font-mono text-xs">{fmtAmount(r.seal_amount)}</td>
                   <td className="px-2 py-2 text-right font-mono text-xs">{r.turnover_rate != null ? `${fmt(r.turnover_rate)}%` : "--"}</td>

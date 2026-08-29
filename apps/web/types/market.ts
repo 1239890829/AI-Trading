@@ -77,6 +77,7 @@ export interface LimitUpRecord extends AuditFields {
   turnover_rate?: number | null;
   consecutive_boards?: number | null;
   boards_stat?: string | null;
+  reason?: string | null;
 }
 
 export interface LongHuRecord extends AuditFields {
