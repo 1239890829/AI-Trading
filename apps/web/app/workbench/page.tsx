@@ -4,9 +4,10 @@ import Link from "next/link";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Panel } from "@/components/panel";
-import { QualityBadge } from "@/components/quality-badge";
+import { IndexCards } from "@/components/index-cards";
 import { StockDetailPanel } from "@/components/stock-detail";
 import { PriceFlash } from "@/components/price-flash";
+import { QualityBadge } from "@/components/quality-badge";
 import { useQuoteStream, StreamStatus } from "@/hooks/use-quote-stream";
 import { getMarketOverview, getQuotes, removeFromWatchlist } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
@@ -97,27 +98,6 @@ function WorkbenchInner() {
         <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-600 dark:text-amber-300">{error}</div>
       )}
 
-      <div className="grid shrink-0 grid-cols-3 gap-3 md:grid-cols-6">
-        {indices.map((q) => (
-          <button
-            key={q.symbol}
-            onClick={() => setSelected(q.symbol === "000001" ? "600519" : q.symbol)}
-            className="rounded-xl border border-zinc-200 px-3 py-1.5 text-left transition-colors hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-600"
-            title="点击在右侧查看详情（指数暂以代表股展示）"
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-zinc-400">{q.name ?? q.symbol}</span>
-              <QualityBadge quality={q.quality} reasons={q.quality_reasons} />
-            </div>
-            <div className="mt-0.5 flex items-baseline justify-between tabular-nums">
-              <span className="font-mono text-lg font-semibold">{fmt(q.price)}</span>
-              <span className={`font-mono text-xs ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</span>
-            </div>
-          </button>
-        ))}
-        {indices.length === 0 && !error && <div className="col-span-6 text-sm text-zinc-400">加载中…</div>}
-      </div>
-
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
         <span>
           两市成交额合计：<span className="font-mono tabular-nums text-zinc-200">{fmtAmount(totalAmount)}</span>
@@ -135,6 +115,7 @@ function WorkbenchInner() {
 
       <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[340px,minmax(0,1fr)]">
         <div className="flex min-h-0 min-w-0 flex-col gap-1.5">
+        <IndexCards indices={indices} />
         <div className="flex shrink-0 flex-wrap gap-1">
           {["全部", ...groups.filter((g) => g !== "默认")].map((g) => (
             <button

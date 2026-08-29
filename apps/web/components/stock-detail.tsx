@@ -44,7 +44,25 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
 
   const { quotes } = useQuoteStream([symbol]);
   useEffect(() => {
-    if (quotes[symbol]) setQuote((prev) => ({ ...(prev ?? quotes[symbol]), ...quotes[symbol] }));
+    if (quotes[symbol]) {
+      setQuote((prev) => {
+        const live = quotes[symbol];
+        const base = prev ?? live;
+        // ths 快照不含估值字段：合并时保留已补源的估值，避免被 undefined 覆盖
+        return {
+          ...base,
+          ...live,
+          pe_ttm: live.pe_ttm ?? base.pe_ttm ?? null,
+          pb: live.pb ?? base.pb ?? null,
+          total_mktcap_yi: live.total_mktcap_yi ?? base.total_mktcap_yi ?? null,
+          float_mktcap_yi: live.float_mktcap_yi ?? base.float_mktcap_yi ?? null,
+          limit_up_price: live.limit_up_price ?? base.limit_up_price ?? null,
+          limit_down_price: live.limit_down_price ?? base.limit_down_price ?? null,
+        };
+      });
+    }
+  }, [quotes, symbol]);
+
 
   // 估值补充：ths 快照无 PE/PB/市值，每 30s 从腾讯源低频补齐（价格仍以 WS 为准）
   useEffect(() => {
@@ -70,7 +88,6 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
       clearInterval(t);
     };
   }, [symbol]);
-  }, [quotes, symbol]);
 
   useEffect(() => {
     let alive = true;
@@ -184,7 +201,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
       )}
 
       {/* ② 中部：左图表区 + 右盘口/逐笔 */}
-      <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr),248px]">
+      <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr),300px]">
         <div className="flex min-h-0 min-w-0 flex-col gap-1.5">
           <div className="flex shrink-0 gap-1">
             {(
@@ -302,7 +319,8 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
           )}
         </div>
 
-        {/* 右列：盘口 ↔ 逐笔（盘口默认） */}
+        {/* 右列：盘口↔逐笔 + 资讯 tabs */}
+        <div className="flex min-h-0 flex-col gap-2">
         <Panel
           title={
             <span className="flex gap-2">
@@ -325,7 +343,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
           source={rightTab === "book" ? book?.source : trades[0]?.source}
           dataTimestamp={rightTab === "book" ? book?.data_timestamp : undefined}
           bodyClassName="overflow-y-auto"
-          className="min-h-0 overflow-hidden"
+          className="min-h-0 flex-1 overflow-hidden"
         >
           {rightTab === "book" ? (
             book ? (
@@ -367,9 +385,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
             <p className="px-3 py-8 text-center text-xs text-zinc-400">暂无逐笔（盘中看分时）</p>
           )}
         </Panel>
-      </div>
 
-      {/* ③ 底部资讯 tabs：财务 | 龙虎榜 | 资金明细 */}
       <Panel
         title={
           <span className="flex gap-2">
@@ -482,6 +498,8 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
             ))}
         </div>
         </Panel>
+        </div>
+      </div>
     </div>
   );
 }
