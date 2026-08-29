@@ -13,7 +13,7 @@ import { fmt, fmtAmount, fmtVolume, pctColor, pctText, timeText } from "@/lib/fo
 import type { Kline, OrderBook, Quote, Trade } from "@/types/market";
 
 type ChartTab = "kline" | "minute" | "flow";
-type RightTab = "book" | "trades";
+type RightTab = "book" | "trades" | "profile";
 
 interface LonghuSeat { seat?: string | null; seat_type: string; buy?: number | null; sell?: number | null; net?: number | null; rise_probability_3day?: number | null }
 interface LonghuDetail { trade_date: string; buy_seats: LonghuSeat[]; sell_seats: LonghuSeat[]; empty?: boolean }
@@ -28,6 +28,8 @@ interface CompanyProfile {
   main_business?: string | null;
   csrc_industry?: string | null;
   region?: string | null;
+  boards?: string[];
+  core_themes?: string[];
   source: string;
 }
 
@@ -332,37 +334,15 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
 
         {/* 右列：盘口↔逐笔 + 资讯 tabs */}
         <div className="flex min-h-0 flex-col gap-2">
-        {company && (
-          <Panel title="公司资料" source={company.source} bodyClassName="overflow-y-auto" className="h-[34%] shrink-0">
-            <div className="px-3 py-2 text-xs leading-relaxed text-zinc-300">
-              {company.profile && <p className="mb-2 line-clamp-4">{company.profile}</p>}
-              <div className="space-y-1 text-zinc-400">
-                {company.industry && (
-                  <p>
-                    所属行业：<span className="text-zinc-200">{company.industry}</span>
-                  </p>
-                )}
-                {company.main_business && (
-                  <p>
-                    主营业务：<span className="text-zinc-200">{company.main_business}</span>
-                  </p>
-                )}
-                {company.region && (
-                  <p>
-                    所属地域：<span className="text-zinc-200">{company.region}</span>
-                  </p>
-                )}
-              </div>
-            </div>
-          </Panel>
-        )}
+
         <Panel
           title={
             <span className="flex gap-2">
               {(
                 [
-                  ["book", "五档盘口"],
+                  ["book", "盘口"],
                   ["trades", "逐笔"],
+                  ["profile", "资料"],
                 ] as const
               ).map(([k, label]) => (
                 <button
@@ -375,11 +355,60 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
               ))}
             </span>
           }
-          source={rightTab === "book" ? book?.source : trades[0]?.source}
+          source={rightTab === "trades" ? trades[0]?.source : "eastmoney"}
           dataTimestamp={rightTab === "book" ? book?.data_timestamp : undefined}
           bodyClassName="overflow-y-auto"
           className="min-h-0 flex-1 overflow-hidden"
         >
+          {rightTab === "profile" && (
+            <div className="px-3 py-2 text-xs">
+              {company?.boards && company.boards.length > 0 && (
+                <div className="mb-3">
+                  <div className="mb-1 text-zinc-400">所属板块 / 概念题材</div>
+                  <div className="flex flex-wrap gap-1">
+                    {company.boards.map((b) => (
+                      <span key={b} className="rounded bg-zinc-100 px-1.5 py-0.5 text-zinc-300 dark:bg-zinc-800">
+                        {b}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {company?.main_business && (
+                <div className="mb-2">
+                  <div className="mb-1 text-zinc-400">主营业务</div>
+                  <div className="leading-relaxed text-zinc-200">{company.main_business}</div>
+                </div>
+              )}
+              {company?.profile && (
+                <div className="mb-3">
+                  <div className="mb-1 text-zinc-400">公司简介</div>
+                  <div className="line-clamp-5 leading-relaxed text-zinc-300" title={company.profile}>
+                    {company.profile}
+                  </div>
+                </div>
+              )}
+              <div className="mb-1 text-zinc-400">最近财报</div>
+              {(fins ?? []).slice(0, 2).map((r) => (
+                <div key={r.report_date} className="mb-1.5 rounded-lg border border-zinc-100 px-2 py-1.5 dark:border-zinc-800/60">
+                  <div className="flex justify-between">
+                    <span className="font-mono text-zinc-300">{r.report_date}</span>
+                    <span className={`font-mono ${pctColor(r.profit_yoy)}`}>净利同比 {pctText(r.profit_yoy)}</span>
+                  </div>
+                  <div className="mt-0.5 flex justify-between text-zinc-400">
+                    <span>
+                      营收 <span className="font-mono text-zinc-200">{r.revenue != null ? fmt(r.revenue / 1e8) : "--"}</span> 亿
+                    </span>
+                    <span>
+                      归母净利 <span className="font-mono text-zinc-200">{r.net_profit != null ? fmt(r.net_profit / 1e8) : "--"}</span> 亿
+                    </span>
+                  </div>
+                </div>
+              ))}
+              {(fins ?? []).length === 0 && <p className="text-zinc-500">暂无财报数据</p>}
+            </div>
+          )}
+
           {rightTab === "book" ? (
             book ? (
               <table className="w-full text-sm">
@@ -420,33 +449,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
             <p className="px-3 py-8 text-center text-xs text-zinc-400">暂无逐笔（盘中看分时）</p>
           )}
         </Panel>
-        <Panel title="财务摘要（按报告期倒序）" source="eastmoney" bodyClassName="overflow-y-auto" className="h-[42%] shrink-0">
-          {fins && fins.length > 0 ? (
-            <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-zinc-50 text-left text-xs text-zinc-400 dark:bg-zinc-900/50">
-                  <tr>{["报告期", "营收(亿)", "营收同比", "净利(亿)", "净利同比", "毛利率", "ROE", "EPS"].map((h) => (
-                    <th key={h} className={`px-3 py-2 font-medium ${h === "报告期" ? "" : "text-right"}`}>{h}</th>
-                  ))}</tr>
-                </thead>
-                <tbody>
-                  {fins.map((r) => (
-                    <tr key={r.report_date} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                      <td className="px-3 py-1.5 font-mono text-xs">{r.report_date}</td>
-                      <td className="px-2 py-1.5 text-right font-mono">{r.revenue != null ? fmt(r.revenue / 1e8) : "--"}</td>
-                      <td className={`px-2 py-1.5 text-right font-mono text-xs ${pctColor(r.revenue_yoy)}`}>{pctText(r.revenue_yoy)}</td>
-                      <td className="px-2 py-1.5 text-right font-mono">{r.net_profit != null ? fmt(r.net_profit / 1e8) : "--"}</td>
-                      <td className={`px-2 py-1.5 text-right font-mono text-xs ${pctColor(r.profit_yoy)}`}>{pctText(r.profit_yoy)}</td>
-                      <td className="px-3 py-1.5 text-right font-mono text-xs">{r.gross_margin != null ? `${fmt(r.gross_margin)}%` : "--"}</td>
-                      <td className="px-2 py-1.5 text-right font-mono text-xs">{r.roe != null ? `${fmt(r.roe)}%` : "--"}</td>
-                      <td className="px-2 py-1.5 text-right font-mono text-xs">{r.eps != null ? fmt(r.eps) : "--"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-          ) : (
-            <p className="px-4 py-8 text-center text-sm text-zinc-400">暂无财务数据</p>
-          )}
-        </Panel>
+
 
       
         </div>

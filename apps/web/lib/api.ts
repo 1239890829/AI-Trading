@@ -112,6 +112,22 @@ export async function addToWatchlist(symbol: string, name?: string): Promise<Wat
   return (await res.json()).data;
 }
 
+export interface CompanyProfile {
+  symbol: string;
+  name?: string | null;
+  industry?: string | null;
+  profile?: string | null;
+  main_business?: string | null;
+  region?: string | null;
+  boards?: string[];
+  core_themes?: string[];
+  source: string;
+}
+
+export async function getCompanyProfile(symbol: string): Promise<CompanyProfile> {
+  return (await getJson<CompanyProfile>(`/api/company/${symbol}`)).data;
+}
+
 export async function getWatchlistGroups(): Promise<string[]> {
   return (await getJson<string[]>("/api/watchlist/groups")).data;
 }

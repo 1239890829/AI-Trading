@@ -315,4 +315,17 @@ class EastmoneyProvider:
         profile = nz.normalize_company_profile(rows[0]) if rows else None
         if profile is None:
             raise ProviderError(f"{symbol} 无公司资料")
+        # 所属板块/概念（emweb CoreConception：ssbk=行业/地域/风格/概念混合标签，hxtc=核心题材文字）
+        try:
+            cc = await self._client.get(
+                "https://emweb.securities.eastmoney.com/PC_HSF10/CoreConception/PageAjax",
+                params={"code": secucode},
+                headers={"Referer": "https://emweb.securities.eastmoney.com/"},
+            )
+            if cc.status_code == 200:
+                cc_data = cc.json()
+                profile["boards"] = [b.get("BOARD_NAME") for b in cc_data.get("ssbk") or [] if b.get("BOARD_NAME")]
+                profile["core_themes"] = [t for t in (x.get("KEY_THEME") or x.get("BOARD_NAME") for x in cc_data.get("hxtc") or []) if t]
+        except Exception as exc:
+            log.warning("conception fetch failed for %s: %s", symbol, exc)
         return profile

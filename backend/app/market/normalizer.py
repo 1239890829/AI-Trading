@@ -305,5 +305,7 @@ def normalize_company_profile(raw: dict) -> dict | None:
         "main_business": raw.get("MAIN_BUSINESS"),
         "csrc_industry": raw.get("INDUSTRYCSRC1"),
         "region": raw.get("REGION") or None,
+        "boards": [],
+        "core_themes": [],
         "source": EASTMONEY_SOURCE,
     }
