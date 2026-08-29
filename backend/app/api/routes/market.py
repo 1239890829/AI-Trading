@@ -213,7 +213,6 @@ async def longhu(
 @router.get("/search")
 async def search(q: str = Query(min_length=1, max_length=20), hub: QuoteHub = Depends(get_hub)) -> dict:
     from app.data_providers.mock import MockProvider
-    from app.data_providers import build_provider  # noqa: F401  (仅类型提示用)
 
     try:
         items = await hub.provider.search(q)

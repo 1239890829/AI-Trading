@@ -9,7 +9,7 @@ import { Panel } from "@/components/panel";
 import { QualityBadge } from "@/components/quality-badge";
 import { PriceFlash } from "@/components/price-flash";
 import { fmt, fmtAmount, fmtVolume, pctColor, pctText, timeText } from "@/lib/format";
-import { addToWatchlist, getKline, getMinuteLine, getOrderBook, getQuotes, getTrades, type MinutePoint } from "@/lib/api";
+import { addToWatchlist, getKline, getMinuteLine, getOrderBook, getQuotes, getTrades, getWatchlist, type MinutePoint } from "@/lib/api";
 import type { Kline, OrderBook, Quote, Trade } from "@/types/market";
 
 type Tab = "kline" | "minute" | "book" | "trades";
@@ -70,18 +70,14 @@ export default function StockPage() {
   }, [loadDetail]);
 
   useEffect(() => {
-    getWatchlistSafe().then(setInWatchlist);
+    let alive = true;
+    getWatchlist()
+      .then((list) => alive && setInWatchlist(list.some((i) => i.symbol === symbol)))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
   }, [symbol]);
-
-  async function getWatchlistSafe() {
-    try {
-      const { getWatchlist } = await import("@/lib/api");
-      const list = await getWatchlist();
-      return list.some((i) => i.symbol === symbol);
-    } catch {
-      return false;
-    }
-  }
 
   async function add() {
     try {

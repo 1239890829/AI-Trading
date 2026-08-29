@@ -7,7 +7,6 @@ from datetime import datetime
 
 from app.data_providers.composite import CompositeProvider
 from app.data_providers.eastmoney import ProviderError
-from app.data_providers.mock import MockProvider
 from app.data_providers.tencent import parse_quote, parse_order_book, parse_search_row
 
 # 2026-08-28 盘后实测（sh600519）
@@ -184,8 +183,6 @@ def test_normalize_search_filters_non_six_digit():
 
 
 def test_mock_minute_line_shape():
-    from datetime import datetime
-
     from app.data_providers.mock import MockProvider
 
     pts = asyncio.run(MockProvider(clock=FIXED_CLOCK).get_minute_line("600519"))

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import deque
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Callable
 
 from app.data_quality.validator import mark_stale, validate_quote
