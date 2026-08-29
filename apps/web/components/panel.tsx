@@ -1,6 +1,6 @@
 import { ReactNode } from "react";
 import { QualityBadge } from "@/components/quality-badge";
-import { timeText } from "@/lib/format";
+import { sourceLabel, timeText } from "@/lib/format";
 import type { Quality } from "@/types/market";
 
 
@@ -24,7 +24,7 @@ export function Panel({ title, children, source, dataTimestamp, quality, quality
         <div className="flex items-center gap-3 text-xs text-zinc-400">
           {extra}
           {quality && <QualityBadge quality={quality} reasons={qualityReasons} />}
-          {source && <span title="数据来源">{source}</span>}
+          {source && <span title="数据来源">{sourceLabel(source)}</span>}
           {dataTimestamp && <span title="数据时间">{timeText(dataTimestamp)}</span>}
         </div>
       </div>

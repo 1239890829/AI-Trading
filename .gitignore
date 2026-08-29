@@ -30,3 +30,6 @@ data/imports/*
 .DS_Store
 .idea/
 .vscode/
+
+# Agent memory / workspace state
+.workbuddy/

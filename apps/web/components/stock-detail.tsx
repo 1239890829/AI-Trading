@@ -31,7 +31,7 @@ import {
   type PaperOrderInfo,
   type PaperPositionInfo,
 } from "@/lib/api";
-import { fmt, fmtAmount, fmtVolume, pctColor, pctText, timeText } from "@/lib/format";
+import { fmt, fmtAmount, fmtVolume, pctColor, pctText, sourceLabel, timeText } from "@/lib/format";
 import type { Kline, OrderBook, Quote, Trade } from "@/types/market";
 
 type ChartTab = "kline" | "minute" | "flow";
@@ -298,7 +298,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
               </span>
             ))}
             <span className="ml-auto text-zinc-500">
-              {timeText(quote.data_timestamp)} · {quote.source}
+              {timeText(quote.data_timestamp)} · {sourceLabel(quote.source)}
             </span>
           </div>
         </div>
@@ -429,6 +429,8 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
         <Panel
           title={rightTab === "book" ? "五档盘口" : rightTab === "trades" ? "逐笔成交" : rightTab === "trade" ? "模拟交易" : rightTab === "profile" ? "公司资料" : "资讯"}
           bodyClassName="overflow-y-auto"
+          source={rightTab === "book" ? book?.source : undefined}
+          dataTimestamp={rightTab === "book" ? book?.data_timestamp : null}
           className="min-h-0 flex-1 overflow-hidden"
         >
           <div className="flex shrink-0 gap-1 border-b border-zinc-100 px-2 py-1 dark:border-zinc-800/60">
@@ -449,11 +451,6 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                 {label}
               </button>
             ))}
-            {rightTab === "book" && book?.data_timestamp && (
-              <span className="ml-auto self-center pr-1 text-[10px] text-zinc-500">
-                {book.source} · {new Date(book.data_timestamp).toLocaleTimeString("zh-CN", { hour12: false })}
-              </span>
-            )}
           </div>
           {rightTab === "trade" && paper && (
             <div className="flex min-h-0 flex-1 flex-col">

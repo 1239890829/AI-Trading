@@ -33,6 +33,20 @@ export function timeText(iso: string | null | undefined): string {
   return d.toLocaleTimeString("zh-CN", { hour12: false });
 }
 
+const SOURCE_LABELS: Record<string, string> = {
+  ths: "同花顺",
+  tencent: "腾讯",
+  eastmoney: "东方财富",
+  sina: "新浪",
+  mock: "演示数据",
+};
+
+/** 数据源 key → 中文名。后端返回的是 provider 内部标识（如 tencent），不可直接展示。 */
+export function sourceLabel(s: string | null | undefined): string {
+  if (!s) return "--";
+  return SOURCE_LABELS[s] ?? s;
+}
+
 export function qualityLabel(q: string): string {
   const map: Record<string, string> = {
     high: "正常",
