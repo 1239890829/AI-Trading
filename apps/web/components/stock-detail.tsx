@@ -85,23 +85,24 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
 
   const { quotes } = useQuoteStream([symbol]);
   useEffect(() => {
-    if (quotes[symbol]) {
-      setQuote((prev) => {
-        const live = quotes[symbol];
-        const base = prev ?? live;
-        // ths 快照不含估值字段：合并时保留已补源的估值，避免被 undefined 覆盖
-        return {
-          ...base,
-          ...live,
-          pe_ttm: live.pe_ttm ?? base.pe_ttm ?? null,
-          pb: live.pb ?? base.pb ?? null,
-          total_mktcap_yi: live.total_mktcap_yi ?? base.total_mktcap_yi ?? null,
-          float_mktcap_yi: live.float_mktcap_yi ?? base.float_mktcap_yi ?? null,
-          limit_up_price: live.limit_up_price ?? base.limit_up_price ?? null,
-          limit_down_price: live.limit_down_price ?? base.limit_down_price ?? null,
-        };
-      });
-    }
+    const live = quotes[symbol];
+    if (!live) return;
+    setQuote((prev) => {
+      // 跨股票切换时直接采用新行情：base 必须与当前 symbol 一致，
+      // 否则旧股残留字段会混进新股的合并结果
+      const base = prev && prev.symbol === live.symbol ? prev : null;
+      // ths 快照不含估值字段：合并时保留已补源的估值，避免被 undefined 覆盖
+      return {
+        ...(base ?? live),
+        ...live,
+        pe_ttm: live.pe_ttm ?? base?.pe_ttm ?? null,
+        pb: live.pb ?? base?.pb ?? null,
+        total_mktcap_yi: live.total_mktcap_yi ?? base?.total_mktcap_yi ?? null,
+        float_mktcap_yi: live.float_mktcap_yi ?? base?.float_mktcap_yi ?? null,
+        limit_up_price: live.limit_up_price ?? base?.limit_up_price ?? null,
+        limit_down_price: live.limit_down_price ?? base?.limit_down_price ?? null,
+      };
+    });
   }, [quotes, symbol]);
 
 
@@ -115,11 +116,21 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
         if (!res.ok) return;
         const body = await res.json();
         const q = body.data as Quote;
-        setQuote((prev) =>
-          prev
-            ? { ...q, price: prev.price, change: prev.change, change_pct: prev.change_pct, data_timestamp: prev.data_timestamp, quality: prev.quality, quality_reasons: prev.quality_reasons }
-            : q
-        );
+        setQuote((prev) => {
+          // 同股才合并：保留 WS 的最新价（腾讯 REST 可能滞后）。
+          // 旧实现无条件沿用 prev.price——切股后 prev 还是上一只股票的，
+          // 会把旧价格持续盖在新股票的报价上（串价主因）。
+          if (!prev || prev.symbol !== q.symbol) return q;
+          return {
+            ...q,
+            price: prev.price,
+            change: prev.change,
+            change_pct: prev.change_pct,
+            data_timestamp: prev.data_timestamp,
+            quality: prev.quality,
+            quality_reasons: prev.quality_reasons,
+          };
+        });
       } catch {}
     };
     void pull();
@@ -133,6 +144,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   useEffect(() => {
     if (!symbol) return;
     let alive = true;
+    setFills([]); // 成交记录按 symbol 过滤，切股先清空防残留
     const loadPaper = async () => {
       try {
         const [acc, positions, orders, fs] = await Promise.all([
@@ -159,6 +171,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
 
   useEffect(() => {
     let alive = true;
+    setInWatchlist(false); // 切股先归零，防止上一只的加自选状态残留
     getWatchlistSymbols().then((list) => alive && setInWatchlist(list.includes(symbol)));
     return () => {
       alive = false;
@@ -168,6 +181,14 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   useEffect(() => {
     if (!symbol) return;
     let alive = true;
+    // 切股即清场：行情与资料类状态一并归零。旧实现只清了图表类，
+    // quote/company/anns/news 会残留上一只股票的数据——
+    // 在新 WS 快照/新请求返回前，界面渲染的是旧股票的价格与资料。
+    setQuote(null);
+    setCompany(null);
+    setAnns(null);
+    setNews(null);
+    setError(null);
     setBars([]);
     setBook(null);
     setTrades([]);

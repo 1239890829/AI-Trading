@@ -189,7 +189,9 @@ function WorkbenchInner() {
         </Panel>
         </div>
 
-        <StockDetailPanel symbol={selected} />
+        {/* key 随代码变化：切股时整面板重挂载，所有内部状态归零——
+            否则 useQuoteStream 订阅切换的窗口期里会残留上一只股票的行情 */}
+        <StockDetailPanel key={selected} symbol={selected} />
       </div>
     </main>
   );
