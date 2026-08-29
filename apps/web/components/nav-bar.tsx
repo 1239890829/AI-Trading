@@ -9,6 +9,7 @@ const LINKS = [
   { href: "/workbench", label: "工作台" },
   { href: "/market", label: "市场" },
   { href: "/watchlist", label: "自选" },
+  { href: "/boards", label: "板块" },
   { href: "/limit-up", label: "涨停池" },
   { href: "/longhu", label: "龙虎榜" },
 ];

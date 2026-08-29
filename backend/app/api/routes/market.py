@@ -210,6 +210,29 @@ async def longhu(
     }
 
 
+@router.get("/boards")
+async def boards(
+    type: str = Query(default="hangye", description="hangye(行业) | concept(概念)"),
+    request: Request = None,
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    """板块排行：涨跌幅/成交额/领涨股（新浪闪电排行，一次请求全量）。结果缓存 60s。"""
+    import time as _time
+
+    key = f"_boards_cache_{type}"
+    cache = getattr(request.app.state, key, None)
+    if cache and _time.time() - cache[0] < 60:
+        return cache[1]
+    try:
+        rows = await hub.provider.get_board_rankings(type)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"板块数据源失败：{exc}")
+    rows.sort(key=lambda r: (r.get("change_pct") or 0), reverse=True)
+    payload = {"data": {"type": type, "boards": rows}, "meta": _meta(hub)}
+    setattr(request.app.state, key, (_time.time(), payload))
+    return payload
+
+
 @router.get("/search")
 async def search(q: str = Query(min_length=1, max_length=20), hub: QuoteHub = Depends(get_hub)) -> dict:
     from app.data_providers.mock import MockProvider

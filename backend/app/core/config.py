@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     # 主源 + 备源（逗号分隔）：tencent | sina | eastmoney | mock；mock 只能单独使用
     data_provider: str = "tencent"
-    provider_fallbacks: str = "eastmoney"
+    provider_fallbacks: str = "eastmoney,sina"
     poll_interval_seconds: float = 5.0
     request_timeout_seconds: float = 5.0
 

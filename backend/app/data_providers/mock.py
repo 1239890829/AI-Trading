@@ -317,3 +317,19 @@ class MockProvider:
             ts = datetime(today.year, today.month, today.day, hh % 24, mm, tzinfo=timezone.utc)
             points.append({"ts": ts.isoformat(), "price": price, "volume": vol, "cum_amount": round(cum, 2), "source": SOURCE})
         return points
+
+
+    async def get_board_rankings(self, board_type: str = "hangye") -> list[dict]:
+        names = ["半导体", "算力租赁", "光伏", "白酒", "创新药", "军工", "机器人", "证券"] if board_type == "concept" else ["电子元件", "酿酒行业", "半导体", "医疗器械", "证券", "银行", "汽车整车", "电力行业"]
+        rnd = random.Random(_seed("board", board_type, *_now_minute_key(self._clock())))
+        out = []
+        for i, name in enumerate(names):
+            pct = round(rnd.uniform(-4, 6), 2)
+            out.append({
+                "name": name, "count": rnd.randint(20, 300), "change_pct": pct,
+                "volume": rnd.randint(1, 50) * 1e7, "amount": rnd.randint(5, 300) * 1e8,
+                "leader_symbol": UNIVERSE[i][0], "leader_name": UNIVERSE[i][1],
+                "leader_change_pct": round(pct + rnd.uniform(1, 5), 2),
+                "leader_price": _base_price(UNIVERSE[i][0]), "source": SOURCE,
+            })
+        return out

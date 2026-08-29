@@ -149,3 +149,51 @@ class SinaProvider:
 
     async def search(self, query: str) -> list[SymbolSearchItem]:
         return []
+
+    async def get_board_rankings(self, board_type: str = "hangye") -> list[dict]:
+        """行业(hangye)/概念(concept)板块排行，一次请求全量（新浪闪电排行）。"""
+        param = {"hangye": "hangye", "concept": "class"}.get(board_type)
+        if param is None:
+            raise ProviderError(f"sina unknown board_type: {board_type}")
+        resp = await self._client.get(f"https://vip.stock.finance.sina.com.cn/q/view/newFLJK.php?param={param}")
+        if resp.status_code != 200:
+            raise ProviderError(f"sina boards HTTP {resp.status_code}")
+        text = resp.content.decode("gbk", errors="replace")
+        return parse_board_list(text, source=self.name)
+
+
+def parse_board_list(text: str, source: str = SOURCE) -> list[dict]:
+    """解析 S_Finance_bankuai_* JS 变量为板块排行列表。
+
+    字段序（~分隔，实测 2026-08-29）：node,名称,成分股数,均价,价格变动,涨跌幅%,
+    总量(股),总额(元),领涨股(含市场前缀),领涨停幅%,领涨股价,领涨涨跌,领涨股名
+    """
+    import json as _json
+    import re as _re
+
+    m = _re.search(r"=\s*(\{.*\})", text, _re.S)
+    if not m:
+        raise ProviderError("sina boards empty payload")
+    data = _json.loads(m.group(1))
+    out = []
+    for raw in data.values():
+        f = raw.split(",")
+        if len(f) < 13:
+            continue
+        num = lambda v: float(v) if v not in ("", "--") else None  # noqa: E731
+        leader = f[8]
+        out.append({
+            "name": f[1],
+            "count": int(float(f[2])) if f[2] else None,
+            "change_pct": num(f[5]),
+            "volume": num(f[6]),
+            "amount": num(f[7]),
+            "leader_symbol": leader[2:] if len(leader) > 2 else None,
+            "leader_name": f[12] if len(f) > 12 else None,
+            "leader_change_pct": num(f[9]) if len(f) > 9 else None,
+            "leader_price": num(f[10]) if len(f) > 10 else None,
+            "source": source,
+        })
+    if not out:
+        raise ProviderError("sina boards parsed empty")
+    return out

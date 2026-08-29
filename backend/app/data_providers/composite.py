@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 
 _ROUTED = (
     "get_indices", "get_quotes", "get_quote", "get_kline", "get_order_book",
-    "get_trades", "get_limit_up_pool", "get_longhu_records", "search",
+    "get_trades", "get_limit_up_pool", "get_longhu_records", "search", "get_board_rankings",
 )
 
 
@@ -91,3 +91,6 @@ class CompositeProvider:
 
     async def get_minute_line(self, symbol: str) -> list:
         return await self._call("get_minute_line", symbol)
+
+    async def get_board_rankings(self, board_type: str = "hangye") -> list:
+        return await self._call("get_board_rankings", board_type)
