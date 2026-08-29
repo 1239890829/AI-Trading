@@ -39,6 +39,19 @@ cd backend && .venv/bin/python -m pyflakes app tests
 - 用户系统代理在 127.0.0.1:7897（SOCKS）：只用于 GitHub 等外网；curl 本地 API 记得 `--noproxy '*'` 或 `env -u http_proxy`。
 - 每阶段收尾：更新 `docs/PROJECT-MASTER.md` §十二阶段表 + README 路线图 + 清扫页面过时提示。
 
+### 2.1 接新数据源五步法（改 Provider / 加字段前必走）
+
+1. **curl 先行**：带齐 header（`Referer`/`User-Agent`）直打，把响应存文件再分析，别凭印象写解析。
+2. **记录字段口径，尤其是类型**：同一响应里类型可能不一致。实测教训——东财 `ssbk` 的
+   `IS_PRECISE` 是**字符串** `'0'/'1'`（还可能 `null`），而同级的 `BOARD_RANK` 是整数。
+   写 `== 1` 会静默全部失配、不抛错，症状是分类结果全落进兜底组。比较前一律 `str(x) == "1"`。
+3. **找规律要多采样**：至少拉 5–6 只不同行业/市场的股票交叉验证，看排序与分段是否稳定。
+   数据源常不给类别字段，但可能**按序号天然分段**（详见 docs/data-sources.md §3.1）。
+4. **fixture 从实抓数据生成，不要手写**：用 `json.load` 后裁掉无关字段再落盘。
+   手写 fixture 极易编出不存在的形状——已踩过：把地域放在 rank 2、风格放在 rank 3，
+   结果 2 个用例失败，而失败的是 fixture 不是代码。
+5. **写进 docs/data-sources.md**：字段口径、类型陷阱、分段规律，下一个人别再踩一遍。
+
 ## 3. 文档地图（按需读）
 
 | 文档 | 内容 |
