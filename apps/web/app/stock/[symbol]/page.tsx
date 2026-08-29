@@ -29,7 +29,7 @@ export default function StockPage() {
       </nav>
       <StockDetailPanel symbol={symbol} />
       <p className="shrink-0 text-xs text-zinc-500">
-        财务 / 估值 / 筹码 / AI 分析等标签页按开发顺序在后续阶段接入（数据模型与 API 契约见 docs/api.md）。
+        筹码 / 研报 / AI 分析等随 Phase 5-7 推入；完整财务表与资金明细见工作台右栏对应页签。
       </p>
     </main>
   );

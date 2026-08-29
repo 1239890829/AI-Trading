@@ -118,7 +118,7 @@ export default function BoardsPage() {
       </Panel>
 
       <p className="shrink-0 text-xs text-zinc-500">
-        板块内个股筛选/题材事件树/生命周期按开发顺序在后续阶段接入；数据源：新浪闪电排行（{TYPE_LABEL[type]}，一次请求全量），经 QuoteHub 链路。
+        题材事件树/生命周期随新闻模块联动（Phase 4+）；数据源：新浪闪电排行（{TYPE_LABEL[type]}，一次请求全量），经 QuoteHub 链路。
       </p>
     </main>
   );

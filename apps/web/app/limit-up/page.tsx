@@ -87,7 +87,7 @@ export default function LimitUpPage() {
         )}
       </Panel>
       <p className="mt-4 text-xs text-zinc-400">
-        连板梯队 / 涨停原因 / 题材标签 / 次日表现统计等深度字段按开发顺序在 Phase 3 接入。
+        涨停原因已接入（同花顺官方口径）；次日表现统计/题材标签随历史数据积累在后续版本提供。
       </p>
     </main>
   );

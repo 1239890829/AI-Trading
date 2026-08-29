@@ -91,7 +91,7 @@ export default function LonghuPage() {
         )}
       </Panel>
       <p className="mt-4 text-xs text-zinc-400">
-        席位明细 / 营业部追踪 / 关系图谱按开发顺序在 Phase 4 接入；上榜原因阈值将按交易所规则配置化。
+        个股席位明细已可在工作台详情「龙虎榜」页签查看；营业部追踪 / 关系图谱在 Phase 4 深度版提供；上榜原因阈值将按交易所规则配置化。
       </p>
     </main>
   );

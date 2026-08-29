@@ -59,7 +59,7 @@ export default function MarketPage() {
 
   const sh = indices.find((q) => q.market === "SH" && q.symbol === "000001");
   const sz = indices.find((q) => q.symbol === "399001");
-  const advancing = "市场宽度（涨跌家数/炸板率/情绪周期）按开发顺序在 Phase 3 接入";
+  const advancing = "市场宽度已上线（上方涨跌/涨停卡片，全市场快照实时计算）；情绪周期判定见情绪面板，炸板率精细化在后续版本提供";
 
   return (
     <main className="h-full flex flex-col gap-3 px-4 py-3 max-w-[1600px] mx-auto w-full">
@@ -134,7 +134,7 @@ export default function MarketPage() {
           <div className="px-4 py-6">
             <p className="font-mono text-3xl font-semibold">{fmtAmount(totalAmount)}</p>
             <p className="mt-2 text-xs text-zinc-400">
-              上证 {fmtAmount(sh?.amount)} + 深证成指口径 {fmtAmount(sz?.amount)}；成交额历史趋势与宽度指标随行情落库（Parquet）后在后续阶段提供。
+              含北交所成交额；历史趋势图随 Parquet 数据积累（已开始落库）逐步提供。
             </p>
           </div>
         </Panel>
