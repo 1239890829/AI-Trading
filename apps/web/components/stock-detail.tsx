@@ -21,6 +21,16 @@ interface LonghuHistory { trade_date: string; close?: number | null; change_pct?
 interface LonghuStats { count: number; avg_after_5d?: number | null; win_rate_5d?: number | null }
 interface FlowRow { date: string; close?: number | null; change_pct?: number | null; net_main?: number | null; net_super?: number | null; net_big?: number | null; net_mid?: number | null; net_small?: number | null; source: string }
 interface CapitalFlow { days: number; flow: FlowRow[]; streak_in: number; definition: string }
+interface CompanyProfile {
+  name?: string | null;
+  industry?: string | null;
+  profile?: string | null;
+  main_business?: string | null;
+  csrc_industry?: string | null;
+  region?: string | null;
+  source: string;
+}
+
 interface FinRow { report_date: string; revenue?: number | null; revenue_yoy?: number | null; net_profit?: number | null; profit_yoy?: number | null; gross_margin?: number | null; roe?: number | null; eps?: number | null; source: string }
 
 /** 个股详情终端 v3（工作台右栏 / 个股页共用）：
@@ -36,6 +46,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   const [longhu, setLonghu] = useState<{ detail: LonghuDetail; history: LonghuHistory[]; stats: LonghuStats } | null>(null);
   const [flow, setFlow] = useState<CapitalFlow | null>(null);
   const [fins, setFins] = useState<FinRow[] | null>(null);
+  const [company, setCompany] = useState<CompanyProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [inWatchlist, setInWatchlist] = useState(false);
   const [quote, setQuote] = useState<Quote | null>(null);
@@ -113,8 +124,9 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
       fetch(`${API_BASE}/api/longhu/${symbol}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
       fetch(`${API_BASE}/api/capital-flow/${symbol}?days=30`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
       fetch(`${API_BASE}/api/financials/${symbol}?periods=8`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(`${API_BASE}/api/company/${symbol}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ])
-      .then(([b, ob, tr, min, lh, cf, fins]) => {
+      .then(([b, ob, tr, min, lh, cf, fins, comp]) => {
         if (!alive) return;
         setBars(b);
         setBook(ob);
@@ -123,6 +135,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
         if (lh?.data) setLonghu(lh.data);
         if (cf?.data) setFlow(cf.data);
         if (fins?.data) setFins(fins.data.periods);
+        if (comp?.data) setCompany(comp.data);
       })
       .catch((e: Error) => alive && setError(e.message));
     return () => {
@@ -319,6 +332,30 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
 
         {/* 右列：盘口↔逐笔 + 资讯 tabs */}
         <div className="flex min-h-0 flex-col gap-2">
+        {company && (
+          <Panel title="公司资料" source={company.source} bodyClassName="overflow-y-auto" className="h-[34%] shrink-0">
+            <div className="px-3 py-2 text-xs leading-relaxed text-zinc-300">
+              {company.profile && <p className="mb-2 line-clamp-4">{company.profile}</p>}
+              <div className="space-y-1 text-zinc-400">
+                {company.industry && (
+                  <p>
+                    所属行业：<span className="text-zinc-200">{company.industry}</span>
+                  </p>
+                )}
+                {company.main_business && (
+                  <p>
+                    主营业务：<span className="text-zinc-200">{company.main_business}</span>
+                  </p>
+                )}
+                {company.region && (
+                  <p>
+                    所属地域：<span className="text-zinc-200">{company.region}</span>
+                  </p>
+                )}
+              </div>
+            </div>
+          </Panel>
+        )}
         <Panel
           title={
             <span className="flex gap-2">

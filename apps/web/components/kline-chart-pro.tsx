@@ -11,7 +11,7 @@ interface Props {
   lhbDates?: { date: string; note?: string }[];
 }
 
-type Indicators = { ma5: boolean; ma10: boolean; ma20: boolean; ma60: boolean; vol: boolean; macd: boolean; boll: boolean; bs: boolean };
+type Indicators = { ma5: boolean; ma10: boolean; ma20: boolean; ma60: boolean; vol: boolean; macd: boolean; boll: boolean; amt: boolean; bs: boolean };
 
 const MA_DEFS: [keyof Indicators, number, string][] = [
   ["ma5", 5, "#facc15"],
@@ -54,7 +54,7 @@ function calcBOLL(closes: number[], n = 20, k = 2) {
  * 金叉死叉技术信号、龙虎榜日标记、指标开关。默认聚焦最近 20 根。 */
 export function KlineChartPro({ bars, className, lhbDates }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [ind, setInd] = useState<Indicators>({ ma5: true, ma10: true, ma20: true, ma60: true, vol: true, macd: false, boll: false, bs: true });
+  const [ind, setInd] = useState<Indicators>({ ma5: true, ma10: true, ma20: true, ma60: true, vol: true, macd: false, boll: false, amt: false, bs: true });
 
   useEffect(() => {
     if (!containerRef.current || bars.length === 0) return;
@@ -114,6 +114,17 @@ export function KlineChartPro({ bars, className, lhbDates }: Props) {
       chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
     }
 
+    // 成交额副图
+    if (ind.amt) {
+      const amtSeries = chart.addHistogramSeries({ priceScaleId: "amt", priceFormat: { type: "volume" }, priceLineVisible: false, lastValueVisible: false });
+      amtSeries.setData(
+        bars
+          .filter((b) => b.amount != null)
+          .map((b) => ({ time: b.ts.slice(0, 10) as Time, value: b.amount as number, color: (b.close ?? 0) >= (b.open ?? 0) ? "rgba(244,63,94,0.45)" : "rgba(16,185,129,0.45)" }))
+      );
+      chart.priceScale("amt").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+    }
+
     // MACD 副图
     if (ind.macd) {
       const ema12 = calcEMA(closes, 12);
@@ -159,6 +170,7 @@ export function KlineChartPro({ bars, className, lhbDates }: Props) {
     ["ma60", "MA60", "#fb923c"],
     ["vol", "成交量"],
     ["boll", "BOLL"],
+    ["amt", "成交额"],
     ["macd", "MACD"],
     ["bs", "技术信号"],
   ];

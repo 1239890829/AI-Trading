@@ -17,7 +17,7 @@ _ROUTED = (
     "get_indices", "get_quotes", "get_quote", "get_kline", "get_order_book",
     "get_trades", "get_limit_up_pool", "get_longhu_records", "search", "get_board_rankings",
     "get_longhu_detail", "get_longhu_history", "get_capital_flow", "get_financials",
-    "get_limit_break_pool", "get_trading_days",
+    "get_limit_break_pool", "get_trading_days", "get_company_profile",
 )
 
 
@@ -114,3 +114,6 @@ class CompositeProvider:
 
     async def get_trading_days(self) -> list:
         return await self._call("get_trading_days")
+
+    async def get_company_profile(self, symbol: str) -> dict:
+        return await self._call("get_company_profile", symbol)

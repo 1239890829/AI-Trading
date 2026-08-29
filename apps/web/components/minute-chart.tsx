@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { createChart, IChartApi } from "lightweight-charts";
+import { createChart, HistogramData, IChartApi } from "lightweight-charts";
 import type { MinutePoint as P } from "@/lib/api";
 
 /** 当日分时图（面积线）。数据来自 /api/minute-line（腾讯 1 分钟）。 */
@@ -28,6 +28,20 @@ export function MinuteChart({ points, className }: { points: P[]; className?: st
       priceLineVisible: false,
     });
     series.setData(points.map((p) => ({ time: Math.floor(new Date(p.ts).getTime() / 1000) as never, value: p.price })));
+
+    // 量能副图
+    const vol = chart.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" }, priceLineVisible: false, lastValueVisible: false });
+    vol.setData(
+      points
+        .filter((p) => p.volume != null)
+        .map((p) => ({
+          time: Math.floor(new Date(p.ts).getTime() / 1000) as never,
+          value: p.volume as number,
+          color: "rgba(244,63,94,0.4)",
+        })) as HistogramData[]
+    );
+    chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
+
     chart.timeScale().fitContent();
     return () => chart.remove();
   }, [points]);

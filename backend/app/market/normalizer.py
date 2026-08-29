@@ -291,3 +291,19 @@ def normalize_financial(raw: dict) -> dict | None:
         "netcash_operate_ps": num(raw.get("PER_NETCASH_OPERATE")),
         "source": EASTMONEY_SOURCE,
     }
+
+
+def normalize_company_profile(raw: dict) -> dict | None:
+    code = str(raw.get("SECURITY_CODE") or "")
+    if not code:
+        return None
+    return {
+        "symbol": code,
+        "name": raw.get("SECURITY_NAME_ABBR"),
+        "industry": raw.get("EM2016"),
+        "profile": (raw.get("ORG_PROFILE") or "").strip() or None,
+        "main_business": raw.get("MAIN_BUSINESS"),
+        "csrc_industry": raw.get("INDUSTRYCSRC1"),
+        "region": raw.get("REGION") or None,
+        "source": EASTMONEY_SOURCE,
+    }

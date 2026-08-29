@@ -298,3 +298,21 @@ class EastmoneyProvider:
         for r in out:  # 同一报告期可能有预告/正式两行，保留 API 顺序中的首行
             dedup.setdefault(r["report_date"], r)
         return sorted(dedup.values(), key=lambda r: r["report_date"], reverse=True)
+
+    async def get_company_profile(self, symbol: str) -> dict:
+        secucode = f"{symbol}.SH" if symbol.startswith(("6", "9", "5")) else f"{symbol}.SZ"
+        payload = await self._get_json(
+            "https://datacenter-web.eastmoney.com/api/data/v1/get",
+            {
+                "reportName": "RPT_F10_BASIC_ORGINFO",
+                "columns": "ALL",
+                "filter": f"(SECUCODE=\"{secucode}\")",
+                "source": "HSF10",
+                "client": "PC",
+            },
+        )
+        rows = (payload.get("result") or {}).get("data") or []
+        profile = nz.normalize_company_profile(rows[0]) if rows else None
+        if profile is None:
+            raise ProviderError(f"{symbol} 无公司资料")
+        return profile

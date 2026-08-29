@@ -370,6 +370,16 @@ async def limit_break(
     return {"data": {"trade_date": trade_date.isoformat(), "pool": [r.model_dump(mode="json") for r in rows]}, "meta": _meta(hub)}
 
 
+@router.get("/company/{symbol}")
+async def company(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
+    """公司资料：简介/行业/主营业务（东财 F10）。"""
+    try:
+        profile = await hub.provider.get_company_profile(symbol)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"公司资料数据源失败：{exc}")
+    return {"data": profile, "meta": _meta(hub)}
+
+
 @router.get("/search")
 async def search(q: str = Query(min_length=1, max_length=20), hub: QuoteHub = Depends(get_hub)) -> dict:
     from app.data_providers.mock import MockProvider
