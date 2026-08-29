@@ -233,6 +233,32 @@ async def boards(
     return payload
 
 
+@router.get("/longhu/{symbol}")
+async def longhu_detail(
+    symbol: str,
+    date_str: str | None = Query(default=None, alias="date"),
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    """个股龙虎榜：当日席位明细（买5/卖5+类型识别）+ 上榜历史（含 T+1/3/5/10 表现）。"""
+    trade_date = date.fromisoformat(date_str) if date_str else _default_trade_date()
+
+    async def _detail():
+        try:
+            return await hub.provider.get_longhu_detail(symbol, trade_date)
+        except Exception as exc:
+            log.warning("longhu detail %s: %s", symbol, exc)
+            return {"symbol": symbol, "trade_date": trade_date.isoformat(), "buy_seats": [], "sell_seats": [], "empty": True}
+
+    detail, history = await asyncio.gather(_detail(), hub.provider.get_longhu_history(symbol))
+    win = [h for h in history if (h.get("after_5d") is not None)]
+    stats = {
+        "count": len(history),
+        "avg_after_5d": round(sum(h["after_5d"] for h in win) / len(win), 2) if win else None,
+        "win_rate_5d": round(sum(1 for h in win if h["after_5d"] > 0) / len(win), 3) if win else None,
+    }
+    return {"data": {"detail": detail, "history": history, "stats": stats}, "meta": _meta(hub)}
+
+
 @router.get("/search")
 async def search(q: str = Query(min_length=1, max_length=20), hub: QuoteHub = Depends(get_hub)) -> dict:
     from app.data_providers.mock import MockProvider

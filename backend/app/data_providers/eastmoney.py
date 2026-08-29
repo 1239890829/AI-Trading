@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date, datetime
 
@@ -221,3 +222,57 @@ class EastmoneyProvider:
             code, name, market = parsed
             items.append(SymbolSearchItem(symbol=code, name=name, market=market, source=self.name))
         return items
+
+    async def get_longhu_detail(self, symbol: str, trade_date) -> dict:
+        """个股龙虎榜席位明细（买5/卖5 + 席位类型识别）。非交易日/未上榜返回空 dict。"""
+        async def _side(report: str) -> list:
+            payload = await self._get_json(
+                "https://datacenter-web.eastmoney.com/api/data/v1/get",
+                {
+                    "reportName": report,
+                    "columns": "ALL",
+                    "filter": f"(TRADE_DATE='{trade_date.isoformat()}')(SECURITY_CODE=\"{symbol}\")",
+                    "pagesize": "10",
+                    "source": "WEB",
+                    "client": "WEB",
+                },
+            )
+            rows = (payload.get("result") or {}).get("data") or []
+            out: list = []
+            seen: set = set()
+            for r in rows:
+                seat = nz.normalize_longhu_seat(r, "buy" if "BUY" in report else "sell")
+                if not seat:
+                    continue
+                # 东财按上榜原因等多维度可能返回同席位重复行
+                sig = (seat["seat"], seat["buy"], seat["sell"], seat["net"])
+                if sig in seen:
+                    continue
+                seen.add(sig)
+                out.append(seat)
+            return out
+
+        buy, sell = await asyncio.gather(
+            _side("RPT_BILLBOARD_DAILYDETAILSBUY"), _side("RPT_BILLBOARD_DAILYDETAILSSELL")
+        )
+        if not buy and not sell:
+            raise ProviderError(f"{symbol} {trade_date} 无龙虎榜席位数据")
+        return {"symbol": symbol, "trade_date": trade_date.isoformat(), "buy_seats": buy, "sell_seats": sell}
+
+    async def get_longhu_history(self, symbol: str, limit: int = 30) -> list[dict]:
+        payload = await self._get_json(
+            "https://datacenter-web.eastmoney.com/api/data/v1/get",
+            {
+                "reportName": "RPT_DAILYBILLBOARD_DETAILSNEW",
+                "columns": "ALL",
+                "filter": f"(SECURITY_CODE=\"{symbol}\")",
+                "pagesize": str(limit),
+                "sort": "TRADE_DATE",
+                "order": "desc",
+                "source": "WEB",
+                "client": "WEB",
+            },
+        )
+        rows = (payload.get("result") or {}).get("data") or []
+        out = [nz.normalize_longhu_history(r) for r in rows]
+        return [r for r in out if r is not None]

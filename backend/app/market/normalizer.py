@@ -216,3 +216,56 @@ def normalize_search(raw: dict) -> tuple[str, str | None, str | None] | None:
     m = _num(raw.get("MktNum"))
     mkt = {1: "SH", 0: "SZ"}.get(int(m)) if m is not None else None  # 注意 0=深市，勿用 or 短路
     return str(code), raw.get("Name"), mkt
+
+
+def _seat_type(name: str | None) -> str:
+    n = name or ""
+    if "机构专用" in n:
+        return "机构专用"
+    if "沪股通" in n or "深股通" in n:
+        return "互联互通"
+    if "量化" in n:
+        return "量化席位"
+    return "营业部"
+
+
+def normalize_longhu_seat(raw: dict, side: str) -> dict | None:
+    name = raw.get("OPERATEDEPT_NAME")
+    code = str(raw.get("SECURITY_CODE") or "")
+    if not code:
+        return None
+    num = lambda v: float(v) if v is not None else None  # noqa: E731
+    return {
+        "symbol": code,
+        "side": side,  # buy / sell
+        "seat": name,
+        "seat_type": _seat_type(name),
+        "buy": num(raw.get("BUY")),
+        "sell": num(raw.get("SELL")),
+        "net": num(raw.get("NET")),
+        "reason": raw.get("EXPLANATION"),
+        "rise_probability_3day": num(raw.get("RISE_PROBABILITY_3DAY")),
+        "source": EASTMONEY_SOURCE,
+    }
+
+
+def normalize_longhu_history(raw: dict) -> dict | None:
+    code = str(raw.get("SECURITY_CODE") or "")
+    raw_date = str(raw.get("TRADE_DATE") or "")[:10]
+    if not code or not raw_date:
+        return None
+    num = lambda v: float(v) if v is not None else None  # noqa: E731
+    return {
+        "symbol": code,
+        "trade_date": raw_date,
+        "close": num(raw.get("CLOSE_PRICE")),
+        "change_pct": num(raw.get("CHANGE_RATE")),
+        "net_buy": num(raw.get("BILLBOARD_NET_AMT")),
+        "amount": num(raw.get("BILLBOARD_DEAL_AMT")),
+        "reason": raw.get("EXPLAIN") or raw.get("EXPLANATION"),
+        "after_1d": num(raw.get("D1_CLOSE_ADJCHRATE")),
+        "after_3d": num(raw.get("D3_CLOSE_ADJCHRATE")),
+        "after_5d": num(raw.get("D5_CLOSE_ADJCHRATE")),
+        "after_10d": num(raw.get("D10_CLOSE_ADJCHRATE")),
+        "source": EASTMONEY_SOURCE,
+    }

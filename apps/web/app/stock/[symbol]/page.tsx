@@ -9,10 +9,15 @@ import { Panel } from "@/components/panel";
 import { QualityBadge } from "@/components/quality-badge";
 import { PriceFlash } from "@/components/price-flash";
 import { fmt, fmtAmount, fmtVolume, pctColor, pctText, timeText } from "@/lib/format";
-import { addToWatchlist, getKline, getMinuteLine, getOrderBook, getQuotes, getTrades, getWatchlist, type MinutePoint } from "@/lib/api";
+import { addToWatchlist, API_BASE, getKline, getMinuteLine, getOrderBook, getQuotes, getTrades, getWatchlist, type MinutePoint } from "@/lib/api";
 import type { Kline, OrderBook, Quote, Trade } from "@/types/market";
 
-type Tab = "kline" | "minute" | "book" | "trades";
+interface LonghuSeat { symbol: string; side: string; seat?: string | null; seat_type: string; buy?: number | null; sell?: number | null; net?: number | null; reason?: string | null; rise_probability_3day?: number | null; source: string }
+interface LonghuDetail { symbol: string; trade_date: string; buy_seats: LonghuSeat[]; sell_seats: LonghuSeat[]; empty?: boolean }
+interface LonghuHistory { trade_date: string; close?: number | null; change_pct?: number | null; net_buy?: number | null; reason?: string | null; after_1d?: number | null; after_3d?: number | null; after_5d?: number | null; after_10d?: number | null }
+interface LonghuStats { count: number; avg_after_5d?: number | null; win_rate_5d?: number | null }
+
+type Tab = "kline" | "minute" | "book" | "trades" | "longhu";
 
 export default function StockPage() {
   const params = useParams<{ symbol: string }>();
@@ -22,6 +27,7 @@ export default function StockPage() {
   const [book, setBook] = useState<OrderBook | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [minutes, setMinutes] = useState<MinutePoint[]>([]);
+  const [longhu, setLonghu] = useState<{ detail: LonghuDetail; history: LonghuHistory[]; stats: LonghuStats } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("kline");
   const [inWatchlist, setInWatchlist] = useState(false);
@@ -47,16 +53,18 @@ export default function StockPage() {
 
   const loadDetail = useCallback(async () => {
     if (!/^\d{6}$/.test(symbol)) return;
-    const [b, ob, tr, minutes] = await Promise.all([
+    const [b, ob, tr, minutes, lh] = await Promise.all([
       getKline(symbol, "1d", 250).catch(() => [] as Kline[]),
       getOrderBook(symbol).catch(() => null),
       getTrades(symbol, 50).catch(() => [] as Trade[]),
       getMinuteLine(symbol).catch(() => [] as MinutePoint[]),
+      fetch(`${API_BASE}/api/longhu/${symbol}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     setBars(b);
     setBook(ob);
     setTrades(tr);
     setMinutes(minutes);
+    if (lh?.data) setLonghu(lh.data);
   }, [symbol]);
 
   useEffect(() => {
@@ -156,6 +164,7 @@ export default function StockPage() {
             ["minute", "分时"],
             ["book", "盘口"],
             ["trades", "逐笔成交"],
+            ["longhu", "龙虎榜"],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -248,6 +257,73 @@ export default function StockPage() {
             </table>
           ) : (
             <p className="px-4 py-10 text-center text-sm text-zinc-400">暂无逐笔数据</p>
+          )}
+        </Panel>
+      )}
+
+      {tab === "longhu" && (
+        <Panel title={`龙虎榜席位（${longhu?.detail.trade_date ?? "--"}）`} source={longhu?.detail.buy_seats[0]?.source} className="min-h-0">
+          {!longhu ? (
+            <p className="px-4 py-10 text-center text-sm text-zinc-400">加载中…</p>
+          ) : (
+            <>
+              {longhu.detail.empty ? (
+                <p className="px-4 py-6 text-center text-sm text-zinc-400">该交易日未上榜</p>
+              ) : (
+                <div className="grid gap-4 md:grid-cols-2">
+                  {(["buy", "sell"] as const).map((side) => (
+                    <div key={side}>
+                      <h3 className={`px-3 py-1.5 text-xs font-medium ${side === "buy" ? "text-up" : "text-down"}`}>
+                        {side === "buy" ? "买入席位" : "卖出席位"}
+                      </h3>
+                      <table className="w-full text-sm">
+                        <tbody>
+                          {longhu.detail[side === "buy" ? "buy_seats" : "sell_seats"].map((st, i) => (
+                            <tr key={i} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
+                              <td className="px-3 py-1.5 text-xs text-zinc-400">{i + 1}</td>
+                              <td className="px-2 py-1.5">
+                                <div className="truncate" title={st.seat ?? ""}>{st.seat}</div>
+                                <div className="text-xs text-zinc-400">{st.seat_type}{st.rise_probability_3day != null ? ` · 席位3日胜率 ${st.rise_probability_3day.toFixed(1)}%` : ""}</div>
+                              </td>
+                              <td className={`px-2 py-1.5 text-right font-mono text-xs tabular-nums ${side === "buy" ? "text-up" : "text-down"}`}>
+                                {fmtAmount(side === "buy" ? st.buy : st.sell)}
+                              </td>
+                              <td className={`px-3 py-1.5 text-right font-mono text-xs tabular-nums ${(st.net ?? 0) > 0 ? "text-up" : "text-down"}`}>
+                                {fmtAmount(st.net)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="border-t border-zinc-200 px-4 py-3 text-xs text-zinc-400 dark:border-zinc-800">
+                历史上榜 <span className="font-mono text-zinc-200">{longhu.stats.count}</span> 次 · 上榜后5日平均{" "}
+                <span className={`font-mono ${pctColor(longhu.stats.avg_after_5d)}`}>{pctText(longhu.stats.avg_after_5d)}</span> · 5日胜率{" "}
+                <span className="font-mono text-zinc-200">{longhu.stats.win_rate_5d != null ? `${(longhu.stats.win_rate_5d * 100).toFixed(1)}%` : "--"}</span>
+              </div>
+              <table className="w-full text-sm">
+                <thead className="bg-zinc-50 text-left text-xs text-zinc-400 dark:bg-zinc-900/50">
+                  <tr>{["日期","收盘","涨跌幅","净买额","上榜原因","T+1","T+3","T+5","T+10"].map(h => <th key={h} className={`px-3 py-2 font-medium ${["日期","上榜原因"].includes(h) ? "" : "text-right"}`}>{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {longhu.history.slice(0, 15).map((h, i) => (
+                    <tr key={`${h.trade_date}-${i}`} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
+                      <td className="px-3 py-1.5 font-mono text-xs">{h.trade_date}</td>
+                      <td className="px-2 py-1.5 text-right font-mono">{fmt(h.close)}</td>
+                      <td className={`px-2 py-1.5 text-right font-mono ${pctColor(h.change_pct)}`}>{pctText(h.change_pct)}</td>
+                      <td className={`px-2 py-1.5 text-right font-mono text-xs ${(h.net_buy ?? 0) > 0 ? "text-up" : "text-down"}`}>{fmtAmount(h.net_buy)}</td>
+                      <td className="px-2 py-1.5 max-w-[220px] truncate text-xs text-zinc-400" title={h.reason ?? ""}>{h.reason ?? "--"}</td>
+                      {[h.after_1d, h.after_3d, h.after_5d, h.after_10d].map((v, j) => (
+                        <td key={j} className={`px-3 py-1.5 text-right font-mono text-xs ${pctColor(v)}`}>{pctText(v)}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
           )}
         </Panel>
       )}
