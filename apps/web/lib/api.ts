@@ -112,6 +112,19 @@ export async function addToWatchlist(symbol: string, name?: string): Promise<Wat
   return (await res.json()).data;
 }
 
+export async function getWatchlistGroups(): Promise<string[]> {
+  return (await getJson<string[]>("/api/watchlist/groups")).data;
+}
+
+export async function updateWatchlistGroup(symbol: string, group: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/watchlist/${symbol}/group`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ group }),
+  });
+  if (!res.ok) throw new Error(`updateWatchlistGroup: HTTP ${res.status}`);
+}
+
 export async function removeFromWatchlist(symbol: string): Promise<void> {
   const res = await fetch(`${API_BASE}/api/watchlist/${symbol}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`removeFromWatchlist: HTTP ${res.status}`);

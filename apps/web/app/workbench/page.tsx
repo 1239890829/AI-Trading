@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Panel } from "@/components/panel";
 import { QualityBadge } from "@/components/quality-badge";
@@ -27,6 +27,9 @@ function WorkbenchInner() {
   const [indices, setIndices] = useState<Quote[]>([]);
   const [totalAmount, setTotalAmount] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const groupMapRef = useRef<Record<string, string>>({});
+  const [groups, setGroups] = useState<string[]>([]);
+  const [activeGroup, setActiveGroup] = useState<string>("全部");
   const [updatedAt, setUpdatedAt] = useState<string>("");
   const [selected, setSelected] = useState<string>(paramSymbol ?? "600519");
 
@@ -40,10 +43,14 @@ function WorkbenchInner() {
 
   const loadBase = useCallback(async () => {
     try {
-      const [wl, overview] = await Promise.all([
+      const [wl, overview, gs] = await Promise.all([
         fetch(`${process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000"}/api/watchlist`, { cache: "no-store" }).then((r) => r.json()),
         getMarketOverview(),
+        fetch(`${process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000"}/api/watchlist/groups`, { cache: "no-store" }).then((r) => r.json()).catch(() => ({ data: [] })),
       ]);
+      groupMapRef.current = Object.fromEntries(
+        (wl.data as { symbol: string; group_name?: string }[]).map((i) => [i.symbol, i.group_name ?? "默认"])
+      );
       setSymbols((wl.data as { symbol: string }[]).map((i) => i.symbol));
       setIndices(overview.indices);
       setTotalAmount(overview.total_amount);
@@ -71,7 +78,11 @@ function WorkbenchInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbols]);
 
-  const watchQuotes: Quote[] = symbols.map((s) => merged[s]).filter(Boolean);
+  const groupMap = groupMapRef.current;
+  const watchQuotes: Quote[] = symbols
+    .filter((s) => activeGroup === "全部" || groupMap[s] === activeGroup)
+    .map((s) => merged[s])
+    .filter(Boolean);
 
   async function remove(symbol: string) {
     try {
@@ -123,6 +134,20 @@ function WorkbenchInner() {
       </div>
 
       <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[340px,minmax(0,1fr)]">
+        <div className="flex min-h-0 min-w-0 flex-col gap-1.5">
+        <div className="flex shrink-0 flex-wrap gap-1">
+          {["全部", ...groups.filter((g) => g !== "默认")].map((g) => (
+            <button
+              key={g}
+              onClick={() => setActiveGroup(g)}
+              className={`rounded-full border px-2.5 py-0.5 text-xs ${
+                activeGroup === g ? "border-up/60 bg-up/10 text-up" : "border-zinc-200 text-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100"
+              }`}
+            >
+              {g}
+            </button>
+          ))}
+        </div>
         <Panel
           title="自选股"
           extra={
@@ -130,7 +155,7 @@ function WorkbenchInner() {
               管理
             </Link>
           }
-          className="min-h-0 overflow-hidden"
+          className="min-h-0 flex-1 overflow-hidden"
         >
           {watchQuotes.length === 0 ? (
             <p className="px-4 py-8 text-center text-sm text-zinc-400">
@@ -181,6 +206,7 @@ function WorkbenchInner() {
             </table>
           )}
         </Panel>
+        </div>
 
         <StockDetailPanel symbol={selected} />
       </div>

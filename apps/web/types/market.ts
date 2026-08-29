@@ -114,6 +114,7 @@ export interface WatchlistItem {
   symbol: string;
   name?: string | null;
   note?: string | null;
+  group_name?: string;
   source: string;
   created_at: string | null;
   updated_at: string | null;

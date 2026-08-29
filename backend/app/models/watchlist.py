@@ -19,6 +19,7 @@ class WatchlistItem(Base):
     symbol: Mapped[str] = mapped_column(String(12), unique=True, index=True)
     name: Mapped[str | None] = mapped_column(String(64), default=None)
     note: Mapped[str | None] = mapped_column(String(256), default=None)
+    group_name: Mapped[str] = mapped_column(String(32), default="默认")
     source: Mapped[str] = mapped_column(String(32), default="user")
     quality: Mapped[str] = mapped_column(String(16), default="high")
     version: Mapped[int] = mapped_column(Integer, default=1)

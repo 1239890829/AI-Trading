@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { Panel } from "@/components/panel";
-import { addToWatchlist, getQuotes, getWatchlist, removeFromWatchlist } from "@/lib/api";
+import { addToWatchlist, getQuotes, getWatchlist, removeFromWatchlist, updateWatchlistGroup } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
 import type { Quote, WatchlistItem } from "@/types/market";
 
@@ -13,11 +13,13 @@ export default function WatchlistPage() {
   const [error, setError] = useState<string | null>(null);
   const [newSymbol, setNewSymbol] = useState("");
   const [addError, setAddError] = useState<string | null>(null);
+  const [allGroups, setAllGroups] = useState<string[]>(["默认"]);
 
   const load = useCallback(async () => {
     try {
       const list = await getWatchlist();
       setItems(list);
+      setAllGroups([...new Set(["默认", ...list.map((i) => i.group_name ?? "默认")])]);
       const qs = await getQuotes(list.map((i) => i.symbol));
       setQuotes(Object.fromEntries(qs.map((q) => [q.symbol, q])));
       setError(null);
@@ -93,6 +95,7 @@ export default function WatchlistPage() {
                 <th className="px-2 py-2 text-right font-medium">涨跌幅</th>
                 <th className="px-2 py-2 text-right font-medium">成交额</th>
                 <th className="px-2 py-2 text-right font-medium">来源</th>
+                <th className="px-2 py-2 text-right font-medium">分组</th>
                 <th className="px-3 py-2 text-right font-medium">操作</th>
               </tr>
             </thead>
@@ -106,7 +109,20 @@ export default function WatchlistPage() {
                     <td className="px-2 py-2 text-right font-mono">{fmt(q?.price)}</td>
                     <td className={`px-2 py-2 text-right font-mono ${pctColor(q?.change_pct)}`}>{pctText(q?.change_pct)}</td>
                     <td className="px-2 py-2 text-right font-mono text-zinc-400">{fmtAmount(q?.amount)}</td>
-                    <td className="px-2 py-2 text-right text-xs text-zinc-400">{q?.source ?? "--"}</td>
+                    <td className="px-2 py-2 text-right text-xs text-zinc-400">
+                      <select
+                        value={it.group_name ?? "默认"}
+                        onChange={async (e) => {
+                          await updateWatchlistGroup(it.symbol, e.target.value).catch(() => {});
+                          void load();
+                        }}
+                        className="rounded border border-zinc-200 bg-transparent px-1 py-0.5 text-xs dark:border-zinc-700"
+                      >
+                        {[...new Set([...allGroups, it.group_name ?? "默认"])].map((g) => (
+                          <option key={g} value={g}>{g}</option>
+                        ))}
+                      </select>
+                    </td>
                     <td className="px-3 py-2 text-right">
                       <Link href={`/stock/${it.symbol}`} className="mr-3 text-xs text-sky-400 hover:underline">
                         详情
