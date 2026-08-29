@@ -31,6 +31,9 @@ cd backend && .venv/bin/python -m pyflakes app tests
 
 ## 2. 工作方式（前任验证过的教训，勿重蹈覆辙）
 
+- **第一原则：验收以实际看到的为准，不靠推理。** 涉及 UI / 布局，不清楚就截图看。
+  禁止用"读代码 + 算宽度 + 想当然"代替观察——同一天在这上面栽过两次（后端没重启以为没生效、
+  tab 行被挤爆没看出来）。详见 §2.2 截图验收。
 - **每阶段流程**：实测数据源（curl 先行）→ 小切片实现 → pytest 全绿 → 浏览器截图验收（Next 徽章必须 0 issues）→ git checkpoint（可回退）。
 - **禁止在 dev server 运行时执行 `next build`**（.next 冲突已踩两次）。类型检查用 `npx tsc --noEmit`。
 - **复杂 JSX 改动整文件重写**，不要字符串补丁（已三次把结构改坏，靠 git checkout 止损）。
@@ -52,6 +55,27 @@ cd backend && .venv/bin/python -m pyflakes app tests
    手写 fixture 极易编出不存在的形状——已踩过：把地域放在 rank 2、风格放在 rank 3，
    结果 2 个用例失败，而失败的是 fixture 不是代码。
 5. **写进 docs/data-sources.md**：字段口径、类型陷阱、分段规律，下一个人别再踩一遍。
+
+### 2.2 截图验收（UI 改动的唯一验收标准）
+
+**只要动了前端，交付前必须截图看一眼。** 用户 2026-08-29 明确要求："不清楚布局就截图看，
+以后都要这样，以实际看到的为准。"
+
+```bash
+agent-browser open "http://127.0.0.1:3000/workbench?symbol=600519"
+agent-browser wait --load load          # networkidle 在 SPA 上会挂，用 load
+agent-browser screenshot /tmp/xxx.png   # 位置参数，不是 --path
+agent-browser close                     # 收尾必须关，否则留僵尸 Chromium
+```
+
+要点：
+- **看内容，别看代码**。本项目有过 markers 数组构建完却从未调 `setMarkers()` 的情况——
+  代码看着齐全，界面上一个点都没有。
+- **布局问题必须截图**。右列固定 300px，往里塞东西前先截图确认放不放得下，
+  不要靠心算宽度。曾因在 5 个 tab 后 `ml-auto` 塞来源时间把整行挤变形。
+- 交互态（tab 切换、展开收起、弹窗）要切过去截，初始页面看不到。
+- `agent-browser click "text=资料"` 这类文本选择器可能匹配不到或匹配多个，
+  先用 `agent-browser snapshot -i` 拿 ref 再点。
 
 ## 3. 文档地图（按需读）
 
