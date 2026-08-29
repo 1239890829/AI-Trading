@@ -299,4 +299,4 @@ ashare-ai-trader/
 
 # 十六、文档索引
 
-architecture / data-sources / data-dictionary / api / websocket / backtest-rules / longhu / sentiment / risk-management / mcp / deployment / ui-redesign-plan / retro-and-gaps / **PROJECT-MASTER（本文档）**
+architecture / data-sources / **data-source-comparison** / data-dictionary / api / websocket / backtest-rules / longhu / sentiment / **theme-sentiment-methodology** / risk-management / mcp / deployment / ui-redesign-plan / retro-and-gaps / **PROJECT-MASTER（本文档）**

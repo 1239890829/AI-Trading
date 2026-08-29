@@ -84,6 +84,8 @@ agent-browser close                     # 收尾必须关，否则留僵尸 Chro
 | **docs/PROJECT-MASTER.md** | 总览：技术栈/目录逐文件/数据源口径/32 API/前端/交易系统/测试/配置/坑/阶段状态 |
 | docs/architecture.md | 分层架构与数据管线 |
 | docs/data-sources.md | 四源字段口径实测记录（改 Provider 前必读） |
+| **docs/data-source-comparison.md** | **四源能力实测对比与选型**（谁最强/缺什么/用什么补；改数据源前必读） |
+| **docs/theme-sentiment-methodology.md** | **题材与情绪方法论**：自我检视/四层情绪/题材梯队/介入时机/消息风险/抓龙思路（每章含判据·失效条件·验证方式·反问） |
 | docs/api.md / websocket.md | API 与 WS 契约 |
 | docs/backtest-rules.md | 回测强制禁令（做回测前必读，代码级禁令） |
 | docs/sentiment.md / longhu.md | 情绪与龙虎榜口径（**改情绪模块前先读下面的复盘**） |
