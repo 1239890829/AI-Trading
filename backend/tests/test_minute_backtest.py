@@ -145,3 +145,31 @@ def test_run_backtest_applies_injected_adjustments():
         assert "复权" in report["note"]
     finally:
         shutil.rmtree(TMP, ignore_errors=True)
+
+
+# ---------------------------------------------------------------- TDX 数据源
+
+def test_tdx_row_to_points_schema_and_day_reset():
+    """TDX DataFrame → 引擎 schema：cum 按日重置、vol=股 直通、avg=累计额/累计量。"""
+    import pandas as pd
+
+    from app.market.minute_backfill import tdx_row_to_points
+
+    df = pd.DataFrame([
+        {"datetime": pd.Timestamp("2026-08-27 09:35:00"), "open": 10.0, "high": 10.1, "low": 9.9,
+         "close": 10.0, "vol": 1000.0, "amount": 10000.0, "float_shares": 0.0},
+        {"datetime": pd.Timestamp("2026-08-27 09:40:00"), "open": 10.0, "high": 10.1, "low": 9.9,
+         "close": 10.2, "vol": 500.0, "amount": 5100.0, "float_shares": 0.0},
+        {"datetime": pd.Timestamp("2026-08-28 09:35:00"), "open": 10.3, "high": 10.3, "low": 10.2,
+         "close": 10.3, "vol": 400.0, "amount": 4120.0, "float_shares": 0.0},
+    ]).set_index("datetime")  # 实测 get_stock_kline 亦兼容平表形态——两种都吃
+
+    pts = tdx_row_to_points(df)
+    assert len(pts) == 3
+    # 当日 cum：1000 → 1500；跨日重置：第三点 400
+    assert pts[0]["cum_volume"] == 1000 and pts[1]["cum_volume"] == 1500 and pts[2]["cum_volume"] == 400
+    assert pts[1]["avg"] == round(15100.0 / 1500, 3)
+    assert pts[2]["avg"] == 10.3  # 新一日 cum 重置后 avg=首价
+    assert pts[0]["source"] == "tdx"
+    # vol 直通（股），无 ×100 换算
+    assert pts[0]["volume"] == 1000.0

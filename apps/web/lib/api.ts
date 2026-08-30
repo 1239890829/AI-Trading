@@ -240,6 +240,18 @@ export async function getMinuteLine(symbol: string): Promise<MinutePoint[]> {
   return (await getJson<{ symbol: string; points: MinutePoint[] }>(`/api/minute-line/${symbol}`, 20_000)).data.points;
 }
 
+/** 分时 + 精确量比基线（最近 5 个完整交易日逐 5min 槽同期累计量均值；TDX 历史缺失时为 null）。 */
+export async function getMinuteLineWithBaseline(symbol: string): Promise<{
+  points: MinutePoint[];
+  vr_baseline_5m: number[] | null;
+}> {
+  return (
+    await getJson<{ symbol: string; points: MinutePoint[]; vr_baseline_5m: number[] | null }>(
+      `/api/minute-line/${symbol}`, 20_000
+    )
+  ).data;
+}
+
 /** 集合竞价快照（最近交易日终态；auction_volume 单位为手）。 */
 export interface AuctionData {
   symbol: string;

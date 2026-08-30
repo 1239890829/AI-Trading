@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   createChart,
   CrosshairMode,
@@ -49,6 +49,7 @@ export function MinuteChart({
   yesterdayVol,
   index,
   auction,
+  exactBaseline,
   className,
 }: {
   points: P[];
@@ -56,19 +57,39 @@ export function MinuteChart({
   yesterdayVol?: number | null;
   index?: { points: P[]; prevClose: number } | null;
   auction?: { price: number; pct: number | null } | null;
+  /** 精确量比基线（最近 5 个完整交易日逐 5min 槽同期累计量均值）。缺失回退近似口径。 */
+  exactBaseline?: number[] | null;
   className?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const tipRef = useRef<HTMLDivElement>(null);
   const badgeRef = useRef<HTMLDivElement>(null);
 
+  // 量比统一计算：精确口径（TDX 5 日同期基线）优先，缺失回退近似（昨日量×时间占比）。
+  const computeLB = useCallback(
+    (cum: number | null | undefined, bjIso: string): number | null => {
+      if (!cum) return null;
+      const elapsed = tradingMinutesElapsed(bjIso);
+      if (elapsed <= 0) return null;
+      if (exactBaseline && exactBaseline.length > 0) {
+        const slot = Math.min(Math.max(Math.floor(elapsed / 5) - 1, 0), exactBaseline.length - 1);
+        // 基线已是「5 日同期累计量均值」（后端除过 5），直接除即得量比；再除 5 会虚高 5 倍
+        const base5 = exactBaseline[slot];
+        if (base5 > 0) return cum / base5;
+      }
+      if (yesterdayVol && yesterdayVol > 0) return cum / (yesterdayVol * (elapsed / 240));
+      return null;
+    },
+    [exactBaseline, yesterdayVol]
+  );
+
   // 角标数据：当前量比 + 上证涨跌幅（从最后一点派生，纯计算不走请求）
   const badges = useMemo(() => {
     const last = points[points.length - 1];
     let lb: number | null = null;
-    if (last && yesterdayVol && yesterdayVol > 0 && last.cum_volume) {
-      const elapsed = tradingMinutesElapsed(new Date(new Date(last.ts).getTime() + 8 * 3600 * 1000).toISOString());
-      lb = last.cum_volume / (yesterdayVol * (elapsed / 240));
+    if (last) {
+      const bjIso = new Date(new Date(last.ts).getTime() + 8 * 3600 * 1000).toISOString();
+      lb = computeLB(last.cum_volume, bjIso);
     }
     let idxPct: number | null = null;
     if (index && index.points.length > 0) {
@@ -76,7 +97,7 @@ export function MinuteChart({
       idxPct = ((lastIdx.price - index.prevClose) / index.prevClose) * 100;
     }
     return { lb, idxPct };
-  }, [points, yesterdayVol, index]);
+  }, [points, index, computeLB]);
 
   useEffect(() => {
     if (!ref.current || points.length === 0) return;
@@ -257,10 +278,7 @@ export function MinuteChart({
       const bjIso = new Date(new Date(d.ts).getTime() + 8 * 3600 * 1000).toISOString();
       const changePct = hasBase ? ((d.price - prevClose!) / prevClose!) * 100 : null;
       const avgDevPct = d.avg != null && d.avg > 0 ? ((d.price - d.avg) / d.avg) * 100 : null;
-      const lb =
-        yesterdayVol && yesterdayVol > 0 && d.cum_volume
-          ? d.cum_volume / (yesterdayVol * (tradingMinutesElapsed(bjIso) / 240))
-          : null;
+      const lb = computeLB(d.cum_volume, bjIso);
       const minuteAmount =
         d.cum_amount != null && bestDiff >= 0
           ? (() => {
@@ -301,7 +319,7 @@ export function MinuteChart({
       chart.remove();
       void unsub;
     };
-  }, [points, prevClose, yesterdayVol, index, auction]);
+  }, [points, prevClose, yesterdayVol, index, auction, exactBaseline, computeLB]);
 
   return (
     <div className="relative h-full w-full">

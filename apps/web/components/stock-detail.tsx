@@ -20,6 +20,7 @@ import {
   getKline,
   getMarketOverview,
   getMinuteLine,
+  getMinuteLineWithBaseline,
   getNews,
   getOrderBook,
   getPaperAccount,
@@ -70,6 +71,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   const [inWatchlist, setInWatchlist] = useState(false);
   const [quote, setQuote] = useState<Quote | null>(null);
   const [auction, setAuction] = useState<AuctionData | null>(null);
+  const [vrBaseline, setVrBaseline] = useState<number[] | null>(null);
 
   const { quotes } = useQuoteStream([symbol]);
   useEffect(() => {
@@ -213,13 +215,19 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     setTrades([]);
     setMinutes([]);
     setAuction(null); // 竞价数据按 symbol 归属，切股先清空防残留
+    setVrBaseline(null); // 精确量比基线同理
     setFlow(null);
     setFins(null);
     Promise.all([
       getKline(symbol, "1d", 120),
       getOrderBook(symbol).catch(() => null),
       getTrades(symbol, 30).catch(() => [] as Trade[]),
-      getMinuteLine(symbol).catch(() => [] as MinutePoint[]),
+      getMinuteLineWithBaseline(symbol)
+        .then((r) => {
+          setVrBaseline(r.vr_baseline_5m);
+          return r.points;
+        })
+        .catch(() => [] as MinutePoint[]),
       getCapitalFlow<CapitalFlow>(symbol, 30).catch(() => null),
       getFinancials<FinRow>(symbol, 8).catch(() => null),
       getCompanyProfile<CompanyProfile>(symbol).catch(() => null),
@@ -361,6 +369,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                   yesterdayVol={bars.length >= 2 ? (bars[bars.length - 2]?.volume ?? null) : null}
                   index={indexOverlay}
                   auction={auction?.auction_price ? { price: auction.auction_price, pct: auction.auction_pct } : null}
+                  exactBaseline={vrBaseline}
                   className="h-full"
                 />
               ) : (

@@ -142,10 +142,12 @@ def run_backtest(
     parquet_dir: Path | None = None,
     in_ratio: float = 2 / 3,
     adjustment_events: dict[str, list[dict]] | None = None,
+    adjusted: bool = False,
 ) -> dict:
     """按日回测全部样本池，聚合样本内/外统计。
 
     adjustment_events: symbol → 复权事件流（由调用方异步拉取注入；None=不做复权修正）。
+    adjusted: 数据源已前复权（TDX QFQ 路径）——跳过事件流修正，避免双重调整。
     """
     # 1. 全量信号（逐日 as_of 跑引擎）+ 窗口结算
     entries: list[dict] = []
@@ -157,7 +159,7 @@ def run_backtest(
         if not pts:
             log.warning("no backfill data for %s, skipped", sym)
             continue
-        if adjustment_events:
+        if adjustment_events and not adjusted:
             pts, applied = apply_adjustments(pts, adjustment_events.get(sym) or [])
             if applied:
                 adjustments_applied[sym] = applied
@@ -220,10 +222,15 @@ def run_backtest(
         "granularity": "5min (sina, 1023-bar 上限)",
         "threshold_pct": THRESHOLD_PCT,
         "adjustments_applied": adjustments_applied,
+        "source_adjusted": adjusted,
         "sample_in": _aggregate(in_entries),
         "sample_out": _aggregate(out_entries),
         "overall": _aggregate(entries),
-        "note": "阈值未经校准——本报告只产出证据；校准需在样本内完成后再看样本外。价格已按复权事件流前复权（窗口内除权日修正）",
+        "note": (
+            "数据源已前复权（TDX QFQ），无需事件流修正"
+            if adjusted
+            else "阈值未经校准——本报告只产出证据；校准需在样本内完成后再看样本外。价格已按复权事件流前复权（窗口内除权日修正）"
+        ),
     }
     return report
 
@@ -253,51 +260,70 @@ def save_report(report: dict, out_dir: Path | None = None) -> Path:
 
 
 def main() -> None:
-    """CLI 入口：python -m app.market.minute_backtest [symbol ...]（回拉+复权+回测一步到位）"""
+    """CLI 入口：python -m app.market.minute_backtest [--source sina|tdx] [--period 5min|1min] [symbol ...]"""
     import asyncio
     import sys
 
     from app.market.minute_backfill import backfill
 
-    symbols = sys.argv[1:] or ["600519", "000001", "300750", "601318"]
-    pulled = asyncio.run(backfill(symbols))
-    failures = pulled.pop("_failures", {})
-    log.info("backfill done: %s, failures: %s", pulled, failures)
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    source = "tdx"
+    period = "5min"
+    for a in sys.argv[1:]:
+        if a.startswith("--source="):
+            source = a.split("=", 1)[1]
+        elif a.startswith("--period="):
+            period = a.split("=", 1)[1]
+    symbols = args or ["600519", "000001", "300750", "601318"]
 
-    ok_symbols = [s for s in symbols if s in pulled]
+    if source == "tdx":
+        from app.market.minute_backfill import backfill_tdx, parquet_dir_tdx
 
-    async def _fetch_events() -> dict[str, list[dict]]:
-        """复权事件流（ths 官方，全历史事件量级极小）；失败不阻断回测（报告注明）。"""
-        try:
-            from app.core.config import settings
-            from app.data_providers.ths import ThsFuyaoProvider
+        pulled = asyncio.run(backfill_tdx(symbols, period=period))
+        failures = pulled.pop("_failures", {})
+        ok_symbols = [s for s in symbols if s in pulled]
+        # TDX QFQ 数据已前复权 → adjusted=True，跳过事件流修正
+        report = run_backtest(ok_symbols, parquet_dir=parquet_dir_tdx, adjusted=True)
+        report["granularity"] = f"{period} (tdx, QFQ)"
+    else:
+        pulled = asyncio.run(backfill(symbols))
+        failures = pulled.pop("_failures", {})
+        ok_symbols = [s for s in symbols if s in pulled]
 
-            prov = ThsFuyaoProvider(settings.ths_api_key, settings.ths_base_url)
+        async def _fetch_events() -> dict[str, list[dict]]:
+            """复权事件流（ths 官方，全历史事件量级极小）；失败不阻断回测（报告注明）。"""
             try:
-                out: dict[str, list[dict]] = {}
-                for s in ok_symbols:
-                    try:
-                        evs = await prov.get_adjustment_events(s)
-                        if evs:
-                            out[s] = evs
-                    except Exception as exc:
-                        log.warning("adjustment events failed for %s: %s", s, exc)
-                return out
-            finally:
-                await prov.aclose()
-        except Exception as exc:
-            log.warning("adjustment events unavailable: %s", exc)
-            return {}
+                from app.core.config import settings
+                from app.data_providers.ths import ThsFuyaoProvider
 
-    events_by_sym = asyncio.run(_fetch_events())
-    report = run_backtest(ok_symbols, adjustment_events=events_by_sym or None)
+                prov = ThsFuyaoProvider(settings.ths_api_key, settings.ths_base_url)
+                try:
+                    out: dict[str, list[dict]] = {}
+                    for s in ok_symbols:
+                        try:
+                            evs = await prov.get_adjustment_events(s)
+                            if evs:
+                                out[s] = evs
+                        except Exception as exc:
+                            log.warning("adjustment events failed for %s: %s", s, exc)
+                    return out
+                finally:
+                    await prov.aclose()
+            except Exception as exc:
+                log.warning("adjustment events unavailable: %s", exc)
+                return {}
+
+        events_by_sym = asyncio.run(_fetch_events())
+        report = run_backtest(ok_symbols, adjustment_events=events_by_sym or None)
+
     report["backfill_failures"] = failures
     path = save_report(report)
     print(json.dumps({
         "report": str(path),
+        "source": source,
         "days": f"{report['from']}→{report['to']} ({report['data_days']}d)",
         "pulled": pulled,
-        "adjustments": report["adjustments_applied"],
+        "adjustments": report.get("adjustments_applied", {}),
         "overall": report["overall"],
         "sample_in": report["sample_in"],
         "sample_out": report["sample_out"],

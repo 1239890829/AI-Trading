@@ -3,13 +3,18 @@
 数据源边界（2026-08-30 实测）：
 - 腾讯 mkline：单次 320 根封顶、**无翻页能力**（偏移参数返回 0 bars）
   → 1 分钟历史最深 1.3 天，60 日不可得；
-- 新浪 CN_MarketDataService 5 分钟 K：datalen=1023 → **22 个交易日**，
-  是免费渠道能拿到的最深分钟历史；
-- 60 日 1 分钟需 miniQMT / 掘金（见 docs/orderbook-source-evaluation.md）——
-  数据深度受限是数据源硬边界，本模块按可得数据显式降级，不臆造。
+- 新浪 CN_MarketDataService 5 分钟 K：datalen=1023 → **22 个交易日**；
+- **TDX 协议（easy-tdx，本轮接入）**：5 分钟 **495 交易日（约 2 年）**、
+  1 分钟 **94 交易日（4.5 个月）**——回测底座主源；免费、免 Key、vol 单位=股
+  （与腾讯口径一致，实测 1,612,600 vs 1,613,900 股）；`Adjust.QFQ` 内置前复权
+  （茅台 6/26 除权实测：NONE 1212.10 vs QFQ 1184.08，衔接正确）。
 
-落地：新浪 5 分钟 K → 引擎分钟点 schema（含 cum_volume/avg，口径与
-/api/minute-line 一致）→ Parquet `data/parquet/minutes/{symbol}.parquet`。
+落地：
+- sina 路径：5 分钟 → `data/parquet/minutes/{symbol}.parquet`（未复权，回测时用
+  ths 复权事件流修正）；
+- tdx 路径：分钟 K（QFQ）→ `data/parquet/minutes-tdx/{symbol}.parquet`
+  （**已前复权**，回测标记 adjusted=True 跳过事件流修正，避免双重调整）。
+两者均为引擎分钟点 schema（含 cum_volume/avg，口径与 /api/minute-line 一致）。
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ SINA_URL = ("https://quotes.sina.cn/cn/api/jsonp_v2.php/var%20_data=/"
             "CN_MarketDataService.getKLineData?symbol={symbol}&scale=5&ma=no&datalen=1023")
 
 parquet_dir_default = Path(__file__).resolve().parents[3] / "data" / "parquet" / "minutes"
+parquet_dir_tdx = Path(__file__).resolve().parents[3] / "data" / "parquet" / "minutes-tdx"
 
 
 def to_sina_symbol(symbol: str) -> str:
@@ -120,3 +126,128 @@ def load_symbol(out_dir: Path | None, symbol: str) -> list[dict]:
     rows = df.to_dicts()
     rows.sort(key=lambda r: r["ts"])
     return rows
+
+
+# ================================================================ TDX（easy-tdx）
+
+def _tdx_market(symbol: str):
+    """6 位裸码 → easy-tdx Market 枚举。"""
+    from easy_tdx import Market
+
+    return Market.SH if symbol[0] in "69" else Market.SZ
+
+
+def tdx_row_to_points(df, source: str = "tdx") -> list[dict]:
+    """TDX 分钟 K DataFrame → 引擎分钟点 schema（纯函数，可单测）。
+
+    量纲实测：vol 单位=股（与腾讯一致，600519 同日总量 1,612,600 vs 1,613,900）。
+    QFQ 由数据源内置（Adjust.QFQ），此处不做二次复权。
+    """
+    import pandas as pd
+
+    points: list[dict] = []
+    cum_vol = 0
+    cum_amt = 0.0
+    cur_day = None
+    for idx, row in df.iterrows():
+        # 双形态兼容：get_stock_kline 返回平表（datetime 为列）；容忍 datetime 作索引的形态
+        raw_ts = row["datetime"] if "datetime" in df.columns else idx
+        ts_val = pd.to_datetime(raw_ts)
+        day = ts_val.strftime("%Y-%m-%d")
+        if day != cur_day:
+            cur_day = day
+            cum_vol = 0
+            cum_amt = 0.0
+        vol = float(row["vol"])
+        amt = float(row["amount"])
+        cum_vol += vol
+        cum_amt += amt
+        # df.datetime 已是北京时间 naive Timestamp；编码伪 UTC 与 minute-line 口径一致
+        ts = (ts_val.to_pydatetime().replace(tzinfo=timezone.utc) - BJ_OFFSET).isoformat()
+        points.append({
+            "ts": ts,
+            "price": round(float(row["close"]), 4),
+            "volume": vol,
+            "cum_amount": round(cum_amt, 2),
+            "cum_volume": int(cum_vol),
+            "avg": round(cum_amt / cum_vol, 3) if cum_vol else None,
+            "source": source,
+        })
+    return points
+
+
+def fetch_tdx_minutes(symbol: str, *, period: str = "5min", count: int = 24000) -> list[dict]:
+    """TDX 拉分钟 K（同步阻塞，分页+QFQ 内置）→ 引擎分钟点 schema。
+
+    period: "1min"（≈94 交易日）/ "5min"（≈495 交易日，约 2 年）。
+    QFQ：数据源已前复权——回测侧须以 adjusted=True 语义消费，勿再叠加事件流修正。
+    """
+    from easy_tdx import Adjust, MacClient, Period
+
+    period_map = {"1min": Period.MIN_1, "5min": Period.MIN_5}
+    with MacClient() as client:
+        df = client.get_stock_kline(
+            _tdx_market(symbol).value, symbol,
+            period=period_map[period], start=0, count=count, adjust=Adjust.QFQ,
+        )
+    if df is None or df.empty:
+        raise ValueError(f"tdx kline empty for {symbol}")
+    return tdx_row_to_points(df)
+
+
+async def backfill_tdx(
+    symbols: list[str],
+    out_dir: Path | None = None,
+    *,
+    period: str = "5min",
+    count: int = 24000,
+) -> dict:
+    """TDX 批量回拉（asyncio.to_thread 包同步 TCP IO）并落独立 Parquet。
+
+    返回 {symbol: 点数}；失败 symbol 记入 `_failures`（与 sina backfill 同契约）。
+    """
+    import asyncio
+
+    import polars as pl
+
+    out = out_dir or parquet_dir_tdx
+    out.mkdir(parents=True, exist_ok=True)
+    result: dict[str, int] = {}
+    failures: dict[str, str] = {}
+    for sym in symbols:
+        try:
+            pts = await asyncio.to_thread(fetch_tdx_minutes, sym, period=period, count=count)
+            pl.DataFrame(pts).write_parquet(out / f"{sym}.parquet")
+            result[sym] = len(pts)
+            log.info("tdx backfill %s: %d points", sym, len(pts))
+        except Exception as exc:
+            failures[sym] = str(exc)[:120]
+            log.warning("tdx backfill %s failed: %s", sym, exc)
+    result["_failures"] = failures  # type: ignore[assignment]
+    return result
+
+
+def load_vr_baseline(symbol: str, days: int = 5, out_dir: Path | None = None) -> list[float] | None:
+    """精确量比基线（分时计划遗留②）：当日之前 N 个完整交易日的逐 bar 累计量均值。
+
+    从 minutes-tdx parquet 读（量纲不受复权影响）。返回按 bar 序号对齐的
+    同期累计量列表（N 日均，调用方按 slot 索引取用）；数据不足返回 None。
+    **基线不含当日**——标准量比定义的分母是"过去 N 日"，含当日会被自身稀释。
+    """
+    rows = load_symbol(out_dir or parquet_dir_tdx, symbol)
+    if not rows:
+        return None
+    by_day: dict[str, list[int]] = {}
+    for r in rows:
+        d = (datetime.fromisoformat(r["ts"]) + BJ_OFFSET).strftime("%Y%m%d")
+        by_day.setdefault(d, []).append(int(r["cum_volume"]))
+    all_days = sorted(by_day, reverse=True)
+    if len(all_days) < days + 1:
+        return None  # 不足 N+1 天（N 基线日 + 当日），无法构成同期基线
+    complete = all_days[1:days + 1]  # 跳过最新一天（=当日），取其前 N 个完整日
+    lengths = [len(by_day[d]) for d in complete]
+    n = min(lengths)
+    if n < 12:  # 完整日至少应有 48 bar（5m）；过短视为停牌/异常日
+        return None
+    baseline = [sum(by_day[d][i] for d in complete) / days for i in range(n)]
+    return baseline

@@ -145,7 +145,7 @@ AGPL 终端产品（企业版闭源收费，社区版月更）。功能与 workb
 |---|---|---|---|
 | ~~P0~~ ✅ | ~~回测正确性：接 ths 公司行动+复权因子~~ 已完成（2026-08-30）：get_adjustment_events + apply_adjustments 前复权修正，茅台实测 30 条事件（最新 2026-06-26 每股分红 28.02 元在窗口内） | Financial-API 盘点 | 1 天 |
 | ~~P0~~ ✅ | ~~预判模块接 ths 集合竞价端点~~ 已完成（2026-08-30）：竞价前兆证据（定性 0 权重）+ D1 竞价一致性验证（一字判定/失效条件#1/风向标联动），实测我爱我家周五竞价 +3.75% 量比 1.81 → 当日涨停，证据链闭环 | Financial-API 盘点 | 0.5 天 |
-| **P1** | ~~easy_tdx 试点：实测~~ ✅ 实测完成（2026-08-30，easy-tdx 1.20.12）：**5 分钟 23760 根=495 交易日（约 2 年）、1 分钟 22560 根=94 交易日（4.5 个月）**，vs 新浪 22 天为 22×/4.3×；TDX→引擎 schema 转换冒烟通过（240 点/日，avg 无越界，引擎直接消费）。**待办立项：TDX 分钟历史 Provider 接入回测底座**（1.5 天） | easy_tdx | 接入 1.5 天 |
+| **P1** | ~~easy_tdx 试点：实测~~ ✅ 实测完成（2026-08-30，easy-tdx 1.20.12）：**5 分钟 23760 根=495 交易日（约 2 年）、1 分钟 22560 根=94 交易日（4.5 个月）**，vs 新浪 22 天为 22×/4.3×；TDX→引擎 schema 转换冒烟通过（240 点/日，avg 无越界，引擎直接消费）。**接入已完成（2026-08-30）**：backfill_tdx→minutes-tdx parquet（QFQ）+ run_backtest adjusted 标记 + CLI --source=tdx；2 年窗口实测 4 票 **1753 信号、样本外 hit_rate 0.662 ≥ 样本内 0.641**（无过拟合迹象），错误主因 avg_dev 519/536；精确量比基线同批上线 | easy_tdx | ✅
 | **P1.5** | /heatmap 云图页（treemap，复用全市场快照；自选云图差异化） | a-share-heatmap | 2 天 |
 | **P2** | 复盘 Agent LLM 升级时按 TradingAgents 角色编排 + 决策日志；报告推送通道（企微/飞书/TG）按 daily_stock_analysis 架构 | TradingAgents / daily_stock_analysis | 升级时并入 |
 | **P2** | 回测配置 mandate 化（yaml 声明） | ai-hedge-fund | 0.5 天 |

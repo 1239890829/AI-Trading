@@ -198,12 +198,24 @@ async def trades(symbol: str, limit: int = Query(default=50, ge=1, le=200), hub:
 
 @router.get("/minute-line/{symbol}")
 async def minute_line(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
-    """当日 1 分钟分时（价格/成交量/累计成交额）。逐笔成交不可用时，这是盘中细粒度的替代口径。"""
+    """当日 1 分钟分时（价格/成交量/累计成交额）。逐笔成交不可用时，这是盘中细粒度的替代口径。
+
+    `vr_baseline_5m`：精确量比基线（最近 5 个完整交易日逐 5min 槽同期累计量均值，
+    来自 TDX 落地历史）——前端量比优先用精确口径（cum_i / (baseline[slot]/5)），
+    缺失时回退近似口径。
+    """
     try:
         points = await hub.provider.get_minute_line(symbol)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"分时数据源失败：{exc}")
-    return {"data": {"symbol": symbol, "points": points}, "meta": _meta(hub)}
+    baseline = None
+    try:
+        from app.market.minute_backfill import load_vr_baseline
+
+        baseline = load_vr_baseline(symbol)
+    except Exception as exc:
+        log.warning("vr baseline failed for %s: %s", symbol, exc)
+    return {"data": {"symbol": symbol, "points": points, "vr_baseline_5m": baseline}, "meta": _meta(hub)}
 
 
 @router.get("/minute-signals/{symbol}")
