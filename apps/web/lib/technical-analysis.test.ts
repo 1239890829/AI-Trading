@@ -77,13 +77,65 @@ describe("analyze", () => {
     }
   });
 
-  it("trend-following vs oscillator conflict keeps bias neutral in strong trend", () => {
-    // 单边上行：KDJ/RSI 超买反向，bull 领先不足 2 → neutral（既有设计，勿"修"）
+  it("oscillator conflict: overbought KDJ/RSI stay bear even in strong uptrend", () => {
+    // 趋势指标看多、振荡指标看空的冲突不应被抹平（勿为了让结论变多而"修"振荡指标）
     const r = analyze(mkBars(trend(120, 0.012)))!;
     const overshoot = r.signals.filter((s) => s.bias === "bear" && (s.name === "KDJ" || s.name === "RSI14"));
-    if (overshoot.length > 0) {
-      expect(r.bullCount - r.bearCount).toBeLessThan(2);
-    }
+    expect(overshoot.length).toBeGreaterThan(0);
+    expect(r.signals.find((s) => s.name === "MACD")?.bias).toBe("bull");
+  });
+
+  it("volume confirmation is what tips a strong uptrend over the bull threshold", () => {
+    const bars = mkBars(trend(120, 0.012));
+    const withVol = analyze(bars)!;
+    // volume 全 null → 量价维度跳过，领先优势应回落
+    const noVol = analyze(bars.map((b) => ({ ...b, volume: null })))!;
+    expect(withVol.signals.some((s) => s.name === "量价")).toBe(true);
+    expect(noVol.signals.some((s) => s.name === "量价")).toBe(false);
+    expect(withVol.bullCount - withVol.bearCount).toBeGreaterThan(noVol.bullCount - noVol.bearCount);
+  });
+
+  describe("量价维度（防飞刀修正之三，阈值对齐后端 tech_score）", () => {
+    it("放量下杀 is bear, never counted as 温和放量", () => {
+      const bars = mkBars(trend(120, -0.011));
+      bars[bars.length - 1].volume = 1_800_000; // 量比 1.8，落在 [1.0, 2.5]，且当日收跌
+      const v = analyze(bars)!.signals.find((s) => s.name === "量价");
+      expect(v?.bias).toBe("bear");
+      expect(v?.detail).toContain("放量下杀");
+    });
+
+    it("温和放量上行 is bull", () => {
+      const bars = mkBars(trend(120, 0.012));
+      bars[bars.length - 1].volume = 1_800_000; // 量比 1.8 且当日收涨
+      const v = analyze(bars)!.signals.find((s) => s.name === "量价");
+      expect(v?.bias).toBe("bull");
+      expect(v?.detail).toContain("温和放量上行");
+    });
+
+    it("量比显示精度不违背判定分支（回归：0.9986 曾显示成 1.00 却判为平稳）", () => {
+      // 阈值沿用后端（<1.0 即量能平稳），因此量比必须显示到 3 位，
+      // 否则会出现"量比 1.00 → 量能平稳"的自相矛盾文案
+      const bars = mkBars(trend(120, 0.012));
+      bars[bars.length - 1].volume = 998_637; // 量比 0.9986 < 1.0
+      const v = analyze(bars)!.signals.find((s) => s.name === "量价");
+      expect(v?.bias).toBe("neutral");
+      expect(v?.detail).toContain("0.999");
+      expect(v?.detail).not.toContain("1.00");
+    });
+
+    it("爆量 neutral / 显著缩量 bear", () => {
+      const boom = mkBars(trend(120, 0.012));
+      boom[boom.length - 1].volume = 5_000_000; // 量比 5.0
+      const b = analyze(boom)!.signals.find((s) => s.name === "量价");
+      expect(b?.bias).toBe("neutral");
+      expect(b?.detail).toContain("爆量");
+
+      const quiet = mkBars(trend(120, 0.012));
+      quiet[quiet.length - 1].volume = 300_000; // 量比 0.3
+      const q = analyze(quiet)!.signals.find((s) => s.name === "量价");
+      expect(q?.bias).toBe("bear");
+      expect(q?.detail).toContain("缩量");
+    });
   });
 
   it("never emits buy/sell advice (red line 3)", () => {

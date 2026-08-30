@@ -163,7 +163,37 @@ export function analyze(bars: Bar[]): TechConclusion | null {
     signals.push(rsiSignal);
   }
 
-  // 5) 形态（最近 3 日）
+  // 5) 量价：当日量 / 前 5 日均量（防飞刀修正之三，与后端 tech_score 同阈值）
+  //    放量方向必须结合当日涨跌——放量下杀不是"温和放量"。
+  //    历史回放逐 bar 重算时这条尤其重要：放量下杀的 bar 必须有量能维度的偏空信号，
+  //    否则回放里看到的是"跌了但技术面没提示"，正是低吸接飞刀的回测主亏形态。
+  const vols = bars.map((b) => b.volume ?? 0);
+  const prev5 = vols.slice(-6, -1);
+  const v5 = prev5.length > 0 ? prev5.reduce((s, v) => s + v, 0) / prev5.length : 0;
+  const vol0 = vols[vols.length - 1] ?? 0;
+  if (v5 > 0 && vol0 > 0) {
+    const ratio = vol0 / v5;
+    const dayUp = closes.length >= 2 && closes[closes.length - 1] > closes[closes.length - 2];
+    // 阈值与后端一致（4.0/2.5/1.0/0.6），故量比必须显示到 3 位：
+    // 实测 600105 量比 0.9986，两位小数会显示成 "1.00" 却落进「<1.0 → 量能平稳」分支，
+    // 文案自相矛盾。保留后端阈值不动，只提高显示精度。
+    const r = ratio.toFixed(3);
+    if (ratio > 4.0) {
+      signals.push({ name: "量价", bias: "neutral", detail: `爆量（量比 ${r}），警惕分歧` });
+    } else if (ratio < 0.6) {
+      signals.push({ name: "量价", bias: "bear", detail: `显著缩量（量比 ${r}）` });
+    } else if (ratio >= 1.0 && ratio <= 2.5) {
+      signals.push(
+        dayUp
+          ? { name: "量价", bias: "bull", detail: `温和放量上行（量比 ${r}）` }
+          : { name: "量价", bias: "bear", detail: `放量下杀（量比 ${r} 且当日收跌）` }
+      );
+    } else {
+      signals.push({ name: "量价", bias: "neutral", detail: `量能平稳（量比 ${r}，未达放量区间）` });
+    }
+  }
+
+  // 6) 形态（最近 3 日）
   const A = bars[bars.length - 3];
   const B = bars[bars.length - 2];
   const C = bars[bars.length - 1];
