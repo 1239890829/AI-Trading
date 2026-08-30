@@ -43,7 +43,7 @@
 |---|---|---|---|
 | ~~1~~ | ~~StockDetailPanel ~600 行单文件~~ | ✅ 已完成（F3：424 行壳 + components/detail/ 6 个子组件） | — |
 | ~~2~~ | ~~前端零测试~~ | ✅ 已完成基建（2026-08-30）：vitest（node 环境）+ lib 纯函数 18 测试（technical-analysis 8 + format 10）+ CI frontend job 纳入 `npx vitest run` 门禁；**标注已知缺陷：analyze 下跌中 KDJ/RSI 超卖计 bull（与后端 tech_score 防飞刀不一致，对齐修复需单独任务）**；组件渲染测试待引入 jsdom 后扩展 | — |
-| 3 | Next 15.5.24 outdated | 安全/功能更新 | Phase 8 统一升级 |
+| 3 | Next 15.5.24 outdated | **升级=专项工程**（2026-08-30 评估）：npm outdated 全线跨大版本——next 16.3.3（`next lint` 移除需迁 eslint-cli）+ eslint 10 + tailwind 4（配置重写）+ lightweight-charts 5（series API 大改）连锁，估 2-3 天。**安全动因**：npm audit 报 Next 内嵌 postcss ≤8.5.22 有 high 漏洞（CSS XSS/sourceMap 读取）——但攻击向量需 attacker-controlled CSS，本项目 CSS 全自写无外部输入，运行时不可达，风险可缓释；Phase 8 升级时优先处理 | Phase 8 专项（连动 eslint/tailwind/charts） |
 | ~~4~~ | ~~新闻/公告每次切股重新拉取~~ | ✅ 已完成（2026-08-30）：announcements/news 进程内 60s TTL 缓存（meta.cached 标注），源只打一次 | — |
 | ~~5~~ | ~~paper_matcher 5s 轮询挂单~~ | ✅ 已完成（2026-08-30）：match_pending 返回剩余挂单数，无挂单 30s 降频、有挂单 5s 密集轮询 | — |
 | ~~6~~ | ~~全局仅一个模拟账户，无重置入口~~ | ✅ 已完成：`POST /api/paper/reset` + 交易页签重置按钮（二次确认） | — |

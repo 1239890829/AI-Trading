@@ -1,33 +1,109 @@
 # REST API
 
-Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。统一响应：`{"data": ..., "meta": {...}}`，
-meta 含 `provider / is_realtime / is_stale / last_success_refresh / generated_at`。
-数据源失败返回 **HTTP 502**（前端显示错误态，绝不降级伪造）。
+Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**56 个端点**（2026-08-30 与代码同步）。
 
-## 已实现（Phase 1-2）
+统一响应：`{"data": ..., "meta": {...}}`（Envelope[T]，meta 含 `provider / is_realtime / is_stale / last_success_refresh / generated_at`）。
+数据源失败返回 **HTTP 502**（前端显示错误态，绝不降级伪造）；错误统一契约 `{detail, code}`。
+
+## 鉴权（B6 opt-in）
+
+写端点（下表标 🔒）在 `ASHARE_API_TOKEN` 配置后要求 `X-API-Token` 头（或 `?token=`）；
+后端未配置 token = 全放行（本地 dev 零配置）。前端部署时配 `NEXT_PUBLIC_API_TOKEN` 自动携带。
+
+## 健康与市场总览
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/health` | 健康检查：provider、last_success_refresh、consecutive_failures、last_error、is_stale |
+| GET | `/api/health` | 健康：provider 链、last_success_refresh、失败计数、is_stale |
 | GET | `/api/market/overview` | 六大指数 + 两市成交额合计 |
-| GET | `/api/quotes?symbols=600519,000001` | 缓存行情批量；缺省返回全部自选 |
-| GET | `/api/quotes/{symbol}` | 单只（缓存） |
-| GET | `/api/kline/{symbol}?timeframe=1d&limit=250&start=&end=` | K 线，timeframe: 1m/5m/15m/30m/60m/1d/1w |
+| GET | `/api/market/breadth` | 市场宽度（涨跌/涨跌停家数，全市场快照口径） |
+| GET | `/api/market/sentiment` | 情绪周期判定（阶段/温度/依据/置信/切换条件，60s 缓存） |
+| GET | `/api/market/sentiment-history?days=10` | 情绪周期序列 + 周期起点定位（retro #17） |
+| GET | `/api/market/heatmap` | A 股云图（行业分组 treemap 载荷） |
+
+## 行情与个股
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/quotes?symbols=` | 批量缓存行情；缺省返回全部自选 |
+| GET | `/api/quotes/{symbol}` | 单只；缓存 miss → 实时链；`?source=` 指定源 |
+| GET | `/api/kline/{symbol}?timeframe=1d&limit=250` | K 线（1m~1w，前复权） |
 | GET | `/api/order-book/{symbol}` | 五档盘口（经交叉校验） |
 | GET | `/api/trades/{symbol}?limit=50` | 逐笔成交 |
-| GET | `/api/limit-up?date=YYYY-MM-DD` | 涨停池（按连板数排序） |
-| GET | `/api/longhu?date=YYYY-MM-DD` | 龙虎榜（按净买额排序） |
-| GET | `/api/search?q=` | 股票搜索（eastmoney suggest，失败回退内置词表，source 标注） |
-| GET/POST/DELETE | `/api/watchlist[/{symbol}]` | 自选股 CRUD（SQLite） |
+| GET | `/api/minute-line/{symbol}` | 当日分时（含均价/精确量比基线） |
+| GET | `/api/minute-signals/{symbol}` | 做 T 信号（5 指标共振，可解释依据） |
+| GET | `/api/minute-decisions?symbol=` | 做 T 决策链（读取时惰性结算） |
+| GET | `/api/limit-up?date=` | 涨停池（按连板数排序） |
+| GET | `/api/limit-break?date=` | 炸板池 |
+| GET | `/api/themes?date=&min_boards=&sort=` | 题材梯队看板（连板天梯/成建制/健康度） |
+| GET | `/api/auction/{symbol}` | 集合竞价快照（量比/未匹配量） |
+| GET | `/api/auction-benchmark` | 短线风向标竞价基准 |
+| GET | `/api/adjustment-events/{symbol}` | 复权事件（分红/送股，回测修正用） |
+| GET | `/api/sparkline?symbols=&days=30` | 批量迷你走势（TDX 日K收盘，5min 缓存） |
+| GET | `/api/search?q=` | 股票搜索（失败回退内置词表） |
 
-## 规划（按开发顺序 §23）
+## 投研数据
 
-Phase 3：`/api/market/breadth` `/api/market/sentiment` `/api/boards`
-Phase 4：`/api/capital-flow` `/api/news` `/api/announcements` `/api/financials/{symbol}`
-`/api/valuation/{symbol}` `/api/shareholders/{symbol}` `/api/margin/{symbol}`
-Phase 5：`POST /api/screeners/run`（评分输出统一结构 §10）
-Phase 6：`GET/POST /api/backtests`、`/api/backtests/{id}`、`/api/paper/orders`、`/api/paper/account`、`/api/paper/positions`
-Phase 7：`POST /api/research/analyze`（多 Agent 流水线）、`/api/audit`
-Phase 8：`POST /api/alerts`
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/longhu?date=` | 龙虎榜（按净买额排序） |
+| GET | `/api/longhu/{symbol}` | 个股龙虎榜历史 |
+| GET | `/api/capital-flow/{symbol}` | 资金流 |
+| GET | `/api/financials/{symbol}` | 财务三表 |
+| GET | `/api/company/{symbol}` | 公司资料（F10） |
+| GET | `/api/announcements/{symbol}?limit=` | 公告（60s 缓存） |
+| GET | `/api/news/{symbol}?limit=` | 相关新闻（60s 缓存） |
+| GET | `/api/boards` | 板块排行（行业/地域/概念题材/风格分组） |
 
-错误约定：`4xx` 参数/资源问题；`502` 上游数据源失败（body.detail 含原因）；`503` 未实现占位。
+## 模拟交易（paper）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/paper/account` | 账户（现金/市值/总资产） |
+| GET | `/api/paper/positions` | 持仓（数量/成本/盈亏；休市日 last_price 为 null） |
+| GET | `/api/paper/orders?status=` | 委托列表 |
+| GET | `/api/paper/fills?symbol=` | 成交记录 |
+| 🔒 POST | `/api/paper/orders` | 下单（限价；撮合 T+1/涨跌停拒/整手/费用） |
+| 🔒 DELETE | `/api/paper/orders/{id}` | 撤单 |
+| 🔒 POST | `/api/paper/reset` | 重置账户（清仓+清委托+资金复位，二次确认） |
+
+## 量化工具
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/screener` | 全市场选股器：截面过滤（涨幅带/成交额/换手/排 ST·北交·次新）→ TDX 日K 六维评分卡（防飞刀口径），缓存 30 分钟，首跑约 20s |
+| POST | `/api/backtest/run` | 单标的日线策略回测（防泄露引擎：as_of 视图/T+1/一字板拒/费用配置化；ma_cross / ma_breakout） |
+| GET | `/api/backtest/strategies` | 可用策略清单 |
+
+## 盘后复盘与预判（AI）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| 🔒 POST | `/api/review/run` | 触发盘后复盘（数据自采→规则分析→落库） |
+| GET | `/api/review/reports` | 报告列表 |
+| GET | `/api/review/reports/{trade_date}` | 单日报告（payload 完整 JSON） |
+| GET | `/api/review/compare?a=&b=` | 两日报告对比 |
+| GET | `/api/review/methodology/versions` | 方法论版本与采纳率 |
+| GET | `/api/review/effectiveness` | 改进项历史效果统计 |
+| 🔒 POST | `/api/predict/run` | 新题材预判（热榜候选→六维评分→梯队推演） |
+| GET | `/api/predict/predictions` | 预判列表 |
+| GET | `/api/predict/predictions/{target_date}` | 单日预判（证据链/介入计划） |
+| 🔒 POST | `/api/predict/verify/{target_date}` | D1 四问验证（题材成立?/人气?/梯队对照?） |
+| GET | `/api/predict/stats` | 命中率分层统计 |
+
+## 自选股
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/watchlist` | 自选列表（含分组） |
+| 🔒 POST | `/api/watchlist` | 加自选 |
+| GET | `/api/watchlist/groups` | 分组列表 |
+| 🔒 PUT | `/api/watchlist/{symbol}/group` | 改分组 |
+| 🔒 DELETE | `/api/watchlist/{symbol}` | 删自选 |
+
+## 错误约定
+
+- `4xx`：参数/资源问题（body `{detail, code}`，code 如 `validation_error`）
+- `502`：上游数据源失败（`upstream_failed` / `tdx_unavailable` / `snapshot_unavailable` 等）
+- `503`：服务未就绪（冷启动/日历不可用）
+- `401`：写端点 token 缺失/错误（配置 ASHARE_API_TOKEN 后）
