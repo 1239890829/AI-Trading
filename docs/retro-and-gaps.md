@@ -42,7 +42,7 @@
 | # | 项 | 风险 | 处置 |
 |---|---|---|---|
 | ~~1~~ | ~~StockDetailPanel ~600 行单文件~~ | ✅ 已完成（F3：424 行壳 + components/detail/ 6 个子组件） | — |
-| 2 | 前端零测试 | UI 回归靠人工截图 | 引入 vitest + 关键组件测试 |
+| ~~2~~ | ~~前端零测试~~ | ✅ 已完成基建（2026-08-30）：vitest（node 环境）+ lib 纯函数 18 测试（technical-analysis 8 + format 10）+ CI frontend job 纳入 `npx vitest run` 门禁；**标注已知缺陷：analyze 下跌中 KDJ/RSI 超卖计 bull（与后端 tech_score 防飞刀不一致，对齐修复需单独任务）**；组件渲染测试待引入 jsdom 后扩展 | — |
 | 3 | Next 15.5.24 outdated | 安全/功能更新 | Phase 8 统一升级 |
 | ~~4~~ | ~~新闻/公告每次切股重新拉取~~ | ✅ 已完成（2026-08-30）：announcements/news 进程内 60s TTL 缓存（meta.cached 标注），源只打一次 | — |
 | ~~5~~ | ~~paper_matcher 5s 轮询挂单~~ | ✅ 已完成（2026-08-30）：match_pending 返回剩余挂单数，无挂单 30s 降频、有挂单 5s 密集轮询 | — |

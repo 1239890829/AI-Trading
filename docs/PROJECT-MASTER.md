@@ -51,10 +51,13 @@ ashare-ai-trader/
 │   │   │   ├── deps.py                # get_hub / get_watchlist_repository
 │   │   │   └── routes/
 │   │   │       ├── health.py          # GET /api/health（含 provider 链/stale/失败计数）
-│   │   │       ├── market.py          # 行情/宽度/情绪/K线/盘口/分时/逐笔/资金/财务/公司/公告/新闻/板块/涨停/炸板/龙虎榜/搜索
+│   │   │       ├── market.py          # 行情/宽度/情绪(+历史序列)/K线/盘口/分时/逐笔/资金/财务/公司/公告/新闻(60s缓存)/板块/涨停/炸板/龙虎榜/搜索/竞价/复权/sparkline
 │   │   │       ├── watchlist.py       # 自选 CRUD + 分组
-│   │   │       ├── paper.py           # 模拟交易（账户/持仓/委托/撤单/成交）
-│   │   │       └── review.py          # 盘后复盘（run/reports/compare/versions/effectiveness）
+│   │   │       ├── paper.py           # 模拟交易（账户/持仓/委托/撤单/成交/重置）
+│   │   │       ├── review.py          # 盘后复盘（run/reports/compare/versions/effectiveness）
+│   │   │       ├── screener.py        # GET /screener 全市场选股器（快照过滤+TDX日K评分）
+│   │   │       ├── backtest.py        # POST /backtest/run + GET /backtest/strategies
+│   │   │       └── predict.py         # 新题材预判（run/list/get/verify/themes）
 │   │   ├── core/
 │   │   │   ├── config.py              # Settings（ASHARE_* 环境变量）
 │   │   │   └── db.py                  # 引擎(:memory:→StaticPool) + 幂等迁移 + session
@@ -64,12 +67,24 @@ ashare-ai-trader/
 │   │   ├── schemas/market.py          # Quote/OrderBook/Trade/Kline/LimitUp/LongHu/Board/Quality + 审计字段
 │   │   ├── repositories/watchlist_repo.py
 │   │   ├── services/
-│   │   │   ├── quote_hub.py           # 行情轮询/缓存/校验/订阅广播/seq/stale 降级
-│   │   │   └── snapshot_service.py    # 全市场快照(新浪)→宽度→Parquet
+│   │   │   ├── quote_hub.py           # 行情轮询/缓存/校验/订阅广播/seq/stale 降级（含休市日 mark_all_stale）
+│   │   │   ├── snapshot_service.py    # 全市场快照(新浪)→宽度→Parquet
+│   │   │   ├── screener_service.py    # 选股器编排：截面过滤→TDX日K→评分（TTL 30min+single-flight）
+│   │   │   ├── heatmap_service.py     # 云图聚合（快照×TDX HY 行业映射，24h 缓存）
+│   │   │   └── market_context.py      # 大盘上下文 + compute_market_sentiment（实时情绪，复盘共用）
 │   │   ├── market/
 │   │   │   ├── normalizer.py          # 东财全族字段→统一 schema（含财务/席位/公告/新闻/搜索）
 │   │   │   ├── sina_market.py         # 新浪全市场快照（Market Center）
-│   │   │   └── breadth.py             # 涨跌/涨跌停家数/成交额（N/C 新股排除）
+│   │   │   ├── breadth.py             # 涨跌/涨跌停家数/成交额（N/C 新股排除）
+│   │   │   ├── tech_score.py          # 选股器六维评分卡（防飞刀口径，SCORER_VERSION 版本化）
+│   │   │   ├── backtest.py            # 日线回测引擎（代码级防泄露+内置双策略+报告）
+│   │   │   ├── tdx_kline.py           # TDX 日K公共拉取（QFQ；选股器/回测共用数据路径）
+│   │   │   ├── trade_calendar.py      # 交易日历（ths 官方→指数K线→持久化兜底）
+│   │   │   ├── sentiment_history.py   # 情绪周期序列（落库/回填/周期定位）
+│   │   │   ├── minute_signals.py      # 做 T 信号引擎（5 指标 as_of 流式）
+│   │   │   ├── minute_decisions.py    # 做 T 决策链记录与结算（leave-one-out 归因）
+│   │   │   ├── minute_backfill.py     # 分时历史落盘（新浪 5m→Parquet）
+│   │   │   └── minute_backtest.py     # 做 T 回测底座（as_of 逐日+样本内外）
 │   │   ├── data_providers/
 │   │   │   ├── base.py                # MarketDataProvider 协议
 │   │   │   ├── ths.py                 # 同花顺官方 fuyao（链首）
@@ -100,18 +115,20 @@ ashare-ai-trader/
 │   │   │   ├── storage.py             # 落库+落盘+检索+命中率分层统计
 │   │   │   └── service.py             # 编排 + 目标日四问验证 + 复盘钩子
 │   │   └── websocket/routes.py        # /ws/quotes
-│   ├── tests/（19 文件 266 用例；含 test_predict 15、test_theme_service 49、test_error_contract 5 用例）
-│   ├── requirements.txt + requirements.lock / alembic.ini + migrations/（B5）/ Dockerfile / .env（key，gitignored）
+│   ├── tests/（27 文件 329 用例；含 test_backtest 12 防泄露、test_screener 8、test_sentiment_history 8、test_write_token 4）
+│   ├── requirements.txt + requirements.lock / alembic.ini + migrations/（baseline 91f8ea3c3a3e + a7c3e91d2f44 情绪序列）/ Dockerfile / .env（key，gitignored）
 ├── apps/web/
-│   ├── app/（7 路由页面）
-│   ├── components/（10 组件，见 §九）
+│   ├── app/（10 路由页面：workbench/market/watchlist/boards/heatmap/limit-up/themes/screener/backtest/longhu）
+│   ├── components/（15 组件：图表族 kline-chart-pro/minute-chart/replay-chart、detail/ 六子件、sparkline、nav-bar 等）
 │   ├── hooks/use-quote-stream.ts      # WS+降级轮询
-│   ├── lib/api.ts + format.ts + technical-analysis.ts
+│   ├── lib/api.ts（ApiError+超时+token）+ format.ts + technical-analysis.ts（防飞刀口径）
+│   ├── lib/*.test.ts（vitest 18 用例）+ vitest.config.ts
 │   └── types/market.ts
-├── data/（ashare.db + parquet/snapshots/）
-├── docs/（12 篇 + 本文档）
+├── data/（ashare.db + parquet/snapshots/ + parquet/minutes-tdx/ + trade_calendar.json）
+├── docs/（14 篇 + 本文档）
 ├── scripts/bootstrap.sh
 ├── docker-compose.yml / .env.example / README.md
+└── .github/workflows/ci.yml  # 四门禁：pytest/pyflakes + tsc/vitest/ESLint
 ```
 
 ---

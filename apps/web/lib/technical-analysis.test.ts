@@ -61,17 +61,19 @@ describe("analyze", () => {
     expect(macd?.bias).toBe("bull");
   });
 
-  it("downtrend: MA排列 bearish; known gap — oversold KDJ/RSI read bull (fly-catching)", () => {
-    // 已知缺陷（与后端 tech_score 的防飞刀修正不一致）：持续下跌中 KDJ/RSI 超卖
-    // 计为 bull，可反超趋势信号。此处锁定现状；对齐修复需单独任务（会影响徽章行为）。
+  it("downtrend: trend signals bear, oversold oscillators decayed (fly-catching guard)", () => {
+    // 防飞刀对齐（与后端 tech_score 同口径）：空头排列时 KDJ/RSI 超卖降 neutral
     const r = analyze(mkBars(trend(120, -0.011)))!;
     const ma = r.signals.find((s) => s.name === "MA排列");
     expect(ma?.bias).toBe("bear");
     const ma20 = r.signals.find((s) => s.name === "MA20位置");
     expect(ma20?.bias).toBe("bear");
-    const kdj = r.signals.find((s) => s.name === "KDJ");
-    if (kdj && kdj.detail.includes("超卖")) {
-      expect(kdj.bias).toBe("bull"); // 当前行为：超卖=修复需求
+    for (const s of r.signals) {
+      if (s.bias === "bull") {
+        // 空头排列下不允许残留超卖类 bull（衰减后应为 neutral）
+        expect(s.name === "KDJ" && s.detail.includes("超卖")).toBe(false);
+        expect(s.name === "RSI14" && s.detail.includes("超卖")).toBe(false);
+      }
     }
   });
 

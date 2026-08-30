@@ -89,9 +89,10 @@ export function analyze(bars: Bar[]): TechConclusion | null {
   const l10 = ma10[ma10.length - 1];
   const l20 = ma20[ma20.length - 1];
   const l30 = ma30[ma30.length - 1];
+  // 提升到函数级：后续 KDJ/RSI 的防飞刀衰减需要读取空头排列状态
+  const bullish = l5 != null && l10 != null && l20 != null && l30 != null && l5 > l10 && l10 > l20 && l20 > l30;
+  const bearish = l5 != null && l10 != null && l20 != null && l30 != null && l5 < l10 && l10 < l20 && l20 < l30;
   if (l5 != null && l10 != null && l20 != null && l30 != null) {
-    const bullish = l5 > l10 && l10 > l20 && l20 > l30;
-    const bearish = l5 < l10 && l10 < l20 && l20 < l30;
     signals.push(
       bullish
         ? { name: "MA排列", bias: "bull", detail: `MA5>${l5}>MA10>${l10}>MA20>${l20}>MA30>${l30} 多头排列` }
@@ -115,38 +116,51 @@ export function analyze(bars: Bar[]): TechConclusion | null {
   const n = dif.length - 1;
   const crossedUp = dif[n - 1] <= dea[n - 1] && dif[n] > dea[n];
   const crossedDown = dif[n - 1] >= dea[n - 1] && dif[n] < dea[n];
-  signals.push(
-    crossedUp
-      ? { name: "MACD", bias: "bull", detail: `DIF ${dif[n].toFixed(2)} 金叉 DEA ${dea[n].toFixed(2)}（近1日）` }
-      : crossedDown
-        ? { name: "MACD", bias: "bear", detail: `DIF ${dif[n].toFixed(2)} 死叉 DEA ${dea[n].toFixed(2)}（近1日）` }
-        : { name: "MACD", bias: dif[n] > dea[n] ? "bull" : "bear", detail: `DIF ${dif[n].toFixed(2)} ${dif[n] > dea[n] ? ">" : "<"} DEA ${dea[n].toFixed(2)}（未交叉）` }
-  );
+    // 零轴位置参与判定（与后端 tech_score 对齐）：DIF<0 时的 DIF>DEA 只是
+    // 死叉后的常态反弹，不计 bull
+    signals.push(
+      crossedUp
+        ? { name: "MACD", bias: "bull", detail: `DIF ${dif[n].toFixed(2)} 金叉 DEA ${dea[n].toFixed(2)}（近1日）` }
+        : crossedDown
+          ? { name: "MACD", bias: "bear", detail: `DIF ${dif[n].toFixed(2)} 死叉 DEA ${dea[n].toFixed(2)}（近1日）` }
+          : dif[n] > dea[n] && dif[n] > 0
+            ? { name: "MACD", bias: "bull", detail: `DIF ${dif[n].toFixed(2)} > DEA ${dea[n].toFixed(2)}（零轴上方多头运行）` }
+            : dif[n] > dea[n]
+              ? { name: "MACD", bias: "neutral", detail: `DIF ${dif[n].toFixed(2)} > DEA ${dea[n].toFixed(2)}（零轴下方，反弹存疑）` }
+              : { name: "MACD", bias: "bear", detail: `DIF ${dif[n].toFixed(2)} < DEA ${dea[n].toFixed(2)}（空头运行）` }
+    );
 
-  // 3) KDJ
+  // 3) KDJ + 4) RSI：防飞刀衰减（与后端 tech_score 口径对齐）——空头排列（bearish）时
+  //    "超卖"不构成 bull 依据：下降趋势中超卖可以更超卖（低吸接飞刀是回测主因亏损形态）
   const kdj = calcKDJ(bars);
   if (kdj) {
-    signals.push(
+    let kdjSignal: Signal =
       kdj.j < 20
         ? { name: "KDJ", bias: "bull", detail: `J ${kdj.j} 超卖区（<20），存在修复需求` }
         : kdj.j > 80
           ? { name: "KDJ", bias: "bear", detail: `J ${kdj.j} 超买区（>80），注意回撤` }
           : kdj.k > kdj.d
             ? { name: "KDJ", bias: "bull", detail: `K ${kdj.k} > D ${kdj.d}，多头运行` }
-            : { name: "KDJ", bias: "bear", detail: `K ${kdj.k} < D ${kdj.d}，空头运行` }
-    );
+            : { name: "KDJ", bias: "bear", detail: `K ${kdj.k} < D ${kdj.d}，空头运行` };
+    if (bearish && kdjSignal.bias === "bull") {
+      kdjSignal = { ...kdjSignal, bias: "neutral", detail: kdjSignal.detail + "；空头排列下超卖依据衰减" };
+    }
+    signals.push(kdjSignal);
   }
 
-  // 4) RSI
+  // 4) RSI（防飞刀衰减同 KDJ）
   const rsi = calcRSI(closes);
   if (rsi != null) {
-    signals.push(
+    let rsiSignal: Signal =
       rsi < 30
         ? { name: "RSI14", bias: "bull", detail: `RSI ${rsi} 超卖（<30）` }
         : rsi > 70
           ? { name: "RSI14", bias: "bear", detail: `RSI ${rsi} 超买（>70）` }
-          : { name: "RSI14", bias: "neutral", detail: `RSI ${rsi} 中性区间` }
-    );
+          : { name: "RSI14", bias: "neutral", detail: `RSI ${rsi} 中性区间` };
+    if (bearish && rsiSignal.bias === "bull") {
+      rsiSignal = { ...rsiSignal, bias: "neutral", detail: rsiSignal.detail + "；空头排列下超卖依据衰减" };
+    }
+    signals.push(rsiSignal);
   }
 
   // 5) 形态（最近 3 日）

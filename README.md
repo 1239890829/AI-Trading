@@ -32,13 +32,15 @@ cd backend && pytest
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | 1 基础框架 | 目录/配置/SQLite/日志/健康检查/基础布局/全局搜索/主题切换 | ✅ |
-| 2 行情基础设施 | Provider 协议 + 东方财富/Mock 双实现、Normalizer、5 级质量校验、QuoteHub、REST、WS 推送、指数/个股/K线/盘口/逐笔 | ✅（涨停池、龙虎榜总览提前接入） |
-| 3 市场与板块 | 市场宽度、情绪周期、板块排行、概念题材 | 🔶 slice 1+2 完成（快照/宽度/Parquet/情绪周期判定/分时图）；余：板块排行、题材生命周期 |
-| 4 投研数据 | 龙虎榜深度（席位/关系图）、资金流、新闻、公告、财务、估值、股东、解禁、两融、大宗 | ⬜ |
-| 5 量化系统 | 技术指标、因子库、选股器、可解释评分、市场状态、仓位建议、风险引擎 | 🔶 多因子技术评估条已上线（MA/MACD/KDJ/RSI/双响炮/之星）；剩：选股器、评分系统 |
-| 6 模拟交易与回测 | 模拟账户、撮合引擎（T+1/涨跌停/停牌/费用）、无未来函数回测引擎、历史回放 | ⬜ |
-| 7 AI 系统 | Researcher/Critic/Strategist/Auditor 四角色、MCP 工具、Skills、研究记忆、预测审计 | ⬜ |
-| 8 通知与部署 | 预警、通知渠道、Docker 生产化、监控 | ⬜（开发用 compose 已有） |
+| 2 行情基础设施 | Provider 链 ths→tencent→eastmoney→sina、Normalizer、5 级质量校验、QuoteHub、REST 34 端点、WS 推送、指数/个股/K线/分时/盘口/逐笔 | ✅ |
+| 3 市场与板块 | 市场宽度、情绪周期判定+历史序列、板块排行、题材梯队看板、涨停池、云图、新题材预判 | ✅；余：题材事件树/生命周期 |
+| 4 投研数据 | 龙虎榜深度（席位/历史）、资金流、新闻、公告、财务、估值、公司资料、集合竞价、复权因子 | ✅；余：营业部关系图谱、筹码、解禁、两融、大宗 |
+| 5 量化系统 | 多因子技术评估（单股+全市场选股器+六维评分卡，防飞刀口径） | ✅；余：市场状态/仓位建议/风险引擎 |
+| 6 模拟交易与回测 | 撮合引擎（T+1/涨跌停/费用/挂单）+ 交易页签 + B/S 点 + 成本线 + 重置 + 日线回测引擎（代码级防泄露）+ 历史回放 | ✅ |
+| 7 AI 系统 | 盘后复盘 Agent（规则分析/模型路由/方法论版本化/元结论迭代）+ 新题材预判 | 🔶；余：LLM 接入升级、四角色编排 |
+| 8 通知与部署 | 预警、通知渠道、Docker 生产化、监控 | ⬜（写接口 opt-in 鉴权已就绪，等部署决策） |
+
+测试：后端 pytest 329 例 + 前端 vitest 18 例，CI（GitHub Actions）四门禁全绿。
 
 ## 数据管线（核心设计）
 
@@ -56,19 +58,27 @@ cd backend && pytest
 ## 目录
 
 ```text
-apps/web        Next.js 工作台（workbench / market / watchlist / stock/[symbol] / limit-up / longhu）
-backend/app     FastAPI（api / core / models / repositories / services / data_providers / data_quality / websocket / market）
-backend/tests   pytest（40 例：质量校验、Normalizer、API、Mock、仓库）
-data/           SQLite 业务库 + 规划中的 parquet/raw/cache
-docs/           11 篇文档（architecture / data-sources / data-dictionary / api / websocket /
-                backtest-rules / longhu / sentiment / risk-management / mcp / deployment）
+apps/web        Next.js 工作台（workbench / market / watchlist / boards / heatmap / limit-up /
+                themes / screener / backtest / longhu / predict 等，components 含图表与回放）
+backend/app     FastAPI（api / core / models / repositories / services / data_providers /
+                data_quality / websocket / market / paper / review / predict / schemas / migrations）
+backend/tests   pytest 329 例（防泄露回测/迁移三态/情绪序列/选股器/复盘/预判/鉴权…）
+data/           SQLite 业务库 + parquet 快照与分时 + trade_calendar.json 日历兜底
+docs/           14 篇文档（architecture / data-sources / data-source-comparison / api / websocket /
+                backtest-rules / longhu / sentiment / sentiment-phase-review / review-agent /
+                theme-prediction / risk-management / mcp / deployment / retro-and-gaps 等）
+skills/         仓库随行技能（hithink-finance / impeccable / design-taste / gsap-skills 等）
+.github/workflows  CI（pytest/pyflakes + tsc/vitest/ESLint 四门禁）
 ```
 
 ## 文档索引
 
+- 总览与交接：[AGENTS.md](AGENTS.md) · [docs/PROJECT-MASTER.md](docs/PROJECT-MASTER.md)
 - 架构与数据流：[docs/architecture.md](docs/architecture.md)
-- 数据源实测口径（含限流与降级）：[docs/data-sources.md](docs/data-sources.md)
+- 数据源实测口径（含限流与降级）：[docs/data-sources.md](docs/data-sources.md) · 四源对比 [docs/data-source-comparison.md](docs/data-source-comparison.md)
 - 回测强制禁令（代码级）：[docs/backtest-rules.md](docs/backtest-rules.md)
-- AI 多 Agent 与 MCP 工具：[docs/mcp.md](docs/mcp.md) · [docs/architecture.md](docs/architecture.md)
-- 其余：data-dictionary / api / websocket / longhu / sentiment / risk-management / deployment
+- 复盘 Agent：[docs/review-agent.md](docs/review-agent.md) · 新题材预判：[docs/theme-prediction.md](docs/theme-prediction.md)
+- 情绪判定与误判复盘：[docs/sentiment-phase-review.md](docs/sentiment-phase-review.md)
+- 欠缺清单（待办池）：[docs/retro-and-gaps.md](docs/retro-and-gaps.md)
+- 其余：api / websocket / longhu / sentiment / risk-management / mcp / deployment
 - UI/产品规划 v3（终端范式布局/持仓与自选分立/行情等级边界）：docs/ui-redesign-plan.md
