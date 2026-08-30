@@ -83,6 +83,34 @@ async def market_breadth(request: Request) -> dict:
     return {"data": payload, "meta": _meta(request.app.state.hub)}
 
 
+@router.get("/market/heatmap")
+async def market_heatmap(request: Request, hub: QuoteHub = Depends(get_hub)) -> dict:
+    """A 股云图载荷：全市场快照 × 行业映射（TDX HY）→ 分组 treemap 数据。
+
+    - 面积权重 = 流通市值（快照 nmc）；颜色 = 当日涨跌幅；
+    - 组内仅保留流通市值 Top 12，其余并入「其他(n只)」聚合块（市值加权涨跌幅）；
+    - 行业映射 24h 缓存，TDX 不可用时个股归「未分类」并在 industry_coverage 标注覆盖率。
+    """
+    import time as _time
+
+    svc = request.app.state.snapshot_service
+    rows = svc.snapshot or []
+    if not rows:
+        raise HTTPException(status_code=503, detail="全市场快照尚未就绪（冷启动抓取约需数秒）")
+
+    cache = getattr(request.app.state, "_heatmap_cache", None)
+    if cache and _time.time() - cache[0] < 60:
+        return cache[1]
+
+    from app.services.heatmap_service import build_heatmap, get_industry_map_async
+
+    industry_map = await get_industry_map_async()
+    data = build_heatmap(rows, industry_map)
+    payload = {"data": data, "meta": _meta(hub)}
+    request.app.state._heatmap_cache = (_time.time(), payload)
+    return payload
+
+
 @router.get("/market/overview", response_model=Envelope[OverviewPayload])
 async def market_overview(hub: QuoteHub = Depends(get_hub)) -> dict:
     """指数行情 + 两市成交额合计。市场宽度/情绪等指标按开发顺序在后续阶段接入。"""

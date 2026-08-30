@@ -10,6 +10,7 @@ const LINKS = [
   { href: "/market", label: "市场" },
   { href: "/watchlist", label: "自选" },
   { href: "/boards", label: "板块" },
+  { href: "/heatmap", label: "云图" },
   { href: "/limit-up", label: "涨停池" },
   { href: "/themes", label: "题材梯队" },
   { href: "/longhu", label: "龙虎榜" },

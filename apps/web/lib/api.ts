@@ -190,6 +190,39 @@ export async function getBreadth(): Promise<Breadth> {
   return (await getJson<{ breadth: Breadth }>("/api/market/breadth", 15_000)).data.breadth;
 }
 
+/** 云图载荷：行业分组 treemap 数据（组内个股截断为流通市值 Top12，其余并入「其他」）。 */
+export interface HeatmapStock {
+  symbol: string;
+  name: string;
+  change_pct: number;
+  price: number | null;
+  float_cap_yi: number;
+  amount_yi: number;
+  is_aggregate?: boolean;
+}
+
+export interface HeatmapGroup {
+  industry: string;
+  float_cap_yi: number;
+  change_pct_w: number;
+  count: number;
+  stocks: HeatmapStock[];
+}
+
+export interface HeatmapPayload {
+  updated_at: string;
+  count: number;
+  skipped_no_quote: number;
+  industry_coverage: number;
+  breadth_summary: { up: number; down: number; flat: number };
+  total_amount_yi: number;
+  groups: HeatmapGroup[];
+}
+
+export async function getHeatmap(): Promise<HeatmapPayload> {
+  return (await getJson<HeatmapPayload>("/api/market/heatmap", 30_000)).data;
+}
+
 /** 题材梯队看板。首次加载较慢（需回溯 5 日涨停池），后端缓存 60s。 */
 export async function getThemes(opts?: {
   date?: string;
