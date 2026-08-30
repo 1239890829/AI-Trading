@@ -13,6 +13,7 @@ const LINKS = [
   { href: "/heatmap", label: "云图" },
   { href: "/limit-up", label: "涨停池" },
   { href: "/themes", label: "题材梯队" },
+  { href: "/screener", label: "选股器" },
   { href: "/longhu", label: "龙虎榜" },
 ];
 

@@ -289,7 +289,7 @@ ashare-ai-trader/
 | 2 行情基础设施 | Provider协议/四源链/Normalizer/5级质量/QuoteHub/REST/WS/指数/个股/K线/分时/盘口/逐笔 | ✅ 全部 |
 | 3 市场与板块 | 全市场快照/宽度/情绪周期判定/板块排行/涨停池/炸板池 | ✅；余：题材事件树/生命周期、左栏sparkline |
 | 4 投研数据 | 龙虎榜总览+席位+历史/资金流/财务/估值/公司资料/公告/新闻 | ✅；余：营业部关系图谱、筹码、解禁、两融、大宗 |
-| 5 量化系统 | 多因子技术评估(MA/MACD/KDJ/RSI/形态) | 🔶；余：选股器/评分系统/市场状态/仓位建议/风控引擎/更多副图 |
+| 5 量化系统 | 多因子技术评估(MA/MACD/KDJ/RSI/形态) + 全市场选股器（截面过滤→TDX日K→六维评分卡，防飞刀修正） | 🔶；余：市场状态/仓位建议/风控引擎/更多副图 |
 | 6 模拟交易与回测 | 撮合引擎(T+1/涨跌停/费用/挂单) + 交易页签(买卖/持仓/挂单撤单/成交记录) + K线B/S点与持仓成本线 + 重置账户 | 🔶；余：回测引擎/历史回放/左栏持仓组 |
 | 7 AI 系统 | Researcher/Critic/Strategist/Auditor/MCP/Skills/记忆/审计 | ⬜（多因子评估是其地基） |
 | 8 通知与部署 | 预警/通知/生产部署/监控 | ⬜（开发compose已有） |
@@ -303,8 +303,8 @@ ashare-ai-trader/
 6. ~~**新题材预判模块**~~ ✅ 已完成（2026-08-30）：`app/predict/` 六维评分卡（热榜/消息级别/新闻联动/环境/新鲜度/资金，权重版本化）+ 梯队推演 + 介入计划（成功率校准区间）+ D1 四问自动验证（挂复盘 Agent）。周末房产政策实测：我爱我家 #5 热榜 → 龙头候选、0.635 可能成立。详见 docs/theme-prediction.md
 7. ~~**B1 统一错误契约 + B2 出参 schema 首批**~~ ✅ 已完成（2026-08-30）：`core/errors.py`（AppError/UpstreamError + 四层 handler，全部错误统一 `{detail, code}`）+ `schemas/envelope.py`（Envelope[T] 泛型信封），首批 9 端点挂 response_model（quotes/kline/order-book/trades/limit-up/limit-break/longhu/search，与既有模型 1:1 零丢字段）；themes/sentiment 等聚合形态第二批
 8. **新闻/公告 AI 摘要**（Phase 7 前哨）
-5. Phase 5：选股器（快照+因子扫描）→ 评分系统
-6. Phase 6 后半：回测引擎（按 docs/backtest-rules.md 强制禁令）
+9. ~~**Phase 5 选股器 + 评分系统**~~ ✅ 已完成 v1（2026-08-30）：`app/market/tech_score.py`（六维评分卡：趋势0.25/MACD0.20/KDJ0.15/RSI0.10/量价0.15/流动性0.15，可解释依据+失效条件，SCORER_VERSION 版本化）+ `app/services/screener_service.py`（快照截面过滤→候选池 Top150→TDX 日K QFQ→评分，TTL 30min 缓存+single-flight）+ `/api/screener`（Envelope 严格建模）+ `/screener` 页（条件工具条+评分排行表+依据 chips，行点击跳个股）。**防飞刀三修正**（零轴下 MACD 不计 bull、空头排列超卖衰减×0.3、放量下杀≠温和放量——2 年回测 avg_dev 主因的针对性防御）。真实跑：5550→150→148 评分 0 失败 17.6s。测试 287→295
+10. Phase 6 后半：回测引擎（按 docs/backtest-rules.md 强制禁令）
 
 ---
 

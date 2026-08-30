@@ -14,6 +14,7 @@ from app.api.routes import market as market_route
 from app.api.routes import paper as paper_route
 from app.api.routes import predict as predict_route
 from app.api.routes import review as review_route
+from app.api.routes import screener as screener_route
 from app.api.routes import watchlist as watchlist_route
 from app.core.config import settings
 from app.core.db import get_engine, get_session_factory
@@ -32,6 +33,7 @@ from app.review.models import (  # noqa: F401  注册复盘三张表
 )
 from app.review.service import ReviewService, review_scheduler
 from app.services.snapshot_service import MarketSnapshotService
+from app.services.screener_service import ScreenerService
 from app.services.quote_hub import QuoteHub
 from app.websocket.routes import router as ws_router
 
@@ -107,6 +109,9 @@ async def lifespan(app: FastAPI):
         parquet_dir=Path(settings.parquet_dir),
     )
     app.state.snapshot_service = snapshot_service
+
+    # --- 全市场选股器（Phase 5）：快照截面过滤 + TDX 日K 技术评分卡 ---
+    app.state.screener_service = ScreenerService(parquet_dir=Path(settings.parquet_dir))
 
     # --- 盘后复盘 Agent：服务实例 + 收盘后调度 ---
     review_svc = ReviewService(
@@ -187,6 +192,7 @@ app.add_middleware(
 
 app.include_router(health_route.router, prefix="/api")
 app.include_router(market_route.router, prefix="/api")
+app.include_router(screener_route.router, prefix="/api")
 app.include_router(watchlist_route.router, prefix="/api")
 app.include_router(paper_route.router, prefix="/api")
 app.include_router(review_route.router, prefix="/api")

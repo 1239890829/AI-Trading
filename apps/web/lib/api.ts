@@ -230,6 +230,70 @@ export async function getHeatmap(): Promise<HeatmapPayload> {
   return (await getJson<HeatmapPayload>("/api/market/heatmap", 30_000)).data;
 }
 
+/** ---------------------------------------------------------------- 选股器（Phase 5） */
+
+export interface ScreenerSignal {
+  name: string;
+  bias: "bull" | "bear" | "neutral";
+  score: number;
+  detail: string;
+}
+
+export interface ScreenerItem {
+  symbol: string;
+  name: string;
+  price: number;
+  change_pct: number;
+  turnover_rate: number | null;
+  amount_yi: number;
+  float_cap_yi: number | null;
+  score: number;
+  grade: "A" | "B" | "C" | "D";
+  bias: "bull" | "bear" | "neutral";
+  signals: ScreenerSignal[];
+  summary: string;
+  fail_conditions: string[];
+}
+
+export interface ScreenerPayload {
+  items: ScreenerItem[];
+  scanned: number;
+  filtered: number;
+  scored: number;
+  failed: number;
+  snapshot_time: string | null;
+  computed_at: string;
+  cached: boolean;
+  scorer_version: string;
+  disclaimers: string[];
+}
+
+export interface ScreenerOpts {
+  changeLow?: number;
+  changeHigh?: number;
+  minAmountYi?: number;
+  minTurnover?: number;
+  excludeSt?: boolean;
+  excludeBj?: boolean;
+  excludeNew?: boolean;
+  limit?: number;
+}
+
+/** 全市场选股器：快照过滤 + TDX 日K评分。首跑约 15-25 秒（重操作），后端缓存 30 分钟。 */
+export async function getScreener(opts?: ScreenerOpts): Promise<ScreenerPayload> {
+  const p = new URLSearchParams();
+  if (opts?.changeLow != null) p.set("change_low", String(opts.changeLow));
+  if (opts?.changeHigh != null) p.set("change_high", String(opts.changeHigh));
+  if (opts?.minAmountYi != null) p.set("min_amount_yi", String(opts.minAmountYi));
+  if (opts?.minTurnover != null) p.set("min_turnover", String(opts.minTurnover));
+  if (opts?.excludeSt != null) p.set("exclude_st", String(opts.excludeSt));
+  if (opts?.excludeBj != null) p.set("exclude_bj", String(opts.excludeBj));
+  if (opts?.excludeNew != null) p.set("exclude_new", String(opts.excludeNew));
+  if (opts?.limit != null) p.set("limit", String(opts.limit));
+  const qs = p.toString() ? `?${p.toString()}` : "";
+  return (await getJson<ScreenerPayload>(`/api/screener${qs}`, 90_000)).data;
+}
+
 /** 题材梯队看板。首次加载较慢（需回溯 5 日涨停池），后端缓存 60s。 */
 export async function getThemes(opts?: {
   date?: string;
