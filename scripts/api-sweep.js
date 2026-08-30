@@ -55,6 +55,48 @@ const QUERY_VALUES = {
   top: "20",
 };
 
+/**
+ * 载荷体检：找出"HTTP 200 但没数据"的静默失败。
+ * 这类比 500 危险——监控看不到、页面也不报错，用户只觉得"功能没了"。
+ *
+ * 空列表未必是缺陷（今天没有预警规则/复盘报告是合法的），
+ * 所以这里只**列出并分类**，由人判定，脚本不做自动断言。
+ */
+function inspect(body) {
+  const out = { counts: [], empties: [], stale: null };
+  let j;
+  try { j = JSON.parse(body); } catch { return null; }
+  const data = j && typeof j === "object" && "data" in j ? j.data : j;
+
+  const walk = (node, prefix, depth) => {
+    if (depth > 2 || node === null || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      out.counts.push(`${prefix}=${node.length}`);
+      if (node.length === 0) out.empties.push(prefix);
+      return;
+    }
+    for (const [k, v] of Object.entries(node)) {
+      const p = prefix ? `${prefix}.${k}` : k;
+      if (Array.isArray(v)) {
+        out.counts.push(`${p}=${v.length}`);
+        if (v.length === 0) out.empties.push(p);
+      } else if (v && typeof v === "object") {
+        walk(v, p, depth + 1);
+      } else if (v === null) {
+        out.empties.push(`${p}:null`);
+      }
+    }
+  };
+  walk(data, "", 0);
+
+  const meta = j && j.meta;
+  if (meta && typeof meta === "object") {
+    if (meta.is_stale === true) out.stale = "is_stale=true";
+    if (typeof meta.quality === "string") out.stale = `quality=${meta.quality}`;
+  }
+  return out;
+}
+
 async function main() {
   const spec = await (await fetch(`${BASE}/openapi.json`)).json();
   const targets = [];
@@ -98,9 +140,9 @@ async function main() {
       const body = await r.text();
       let note = "";
       if (!r.ok) note = body.slice(0, 160).replace(/\s+/g, " ");
-      results.push({ ...t, status: r.status, ms: Date.now() - t0, note });
+      results.push({ ...t, status: r.status, ms: Date.now() - t0, note, body: r.ok ? body : "" });
     } catch (e) {
-      results.push({ ...t, status: -1, ms: Date.now() - t0, note: e.message });
+      results.push({ ...t, status: -1, ms: Date.now() - t0, note: e.message, body: "" });
     }
   }
 
@@ -123,6 +165,33 @@ async function main() {
   if (slow.length) {
     console.log("\n=== 慢端点 (>5s) ===");
     for (const r of slow) console.log(`${String(r.ms).padStart(6)}ms  ${r.path}`);
+  }
+
+  // ---- 载荷体检：空数据 / 过期数据
+  console.log("\n=== 200 但数据为空（需人工判定是否真实原因）===");
+  let emptyN = 0;
+  for (const r of ok) {
+    const ins = inspect(r.body);
+    if (!ins) continue;
+    if (ins.empties.length) {
+      emptyN++;
+      console.log(`${r.path}\n        空: ${ins.empties.join(", ")}`);
+    }
+  }
+  if (!emptyN) console.log("（无）");
+
+  console.log("\n=== 200 但数据过期/降级 ===");
+  let staleN = 0;
+  for (const r of ok) {
+    const ins = inspect(r.body);
+    if (ins && ins.stale) { staleN++; console.log(`${r.path}  ${ins.stale}`); }
+  }
+  if (!staleN) console.log("（无）");
+
+  console.log("\n=== 各端点返回条数 ===");
+  for (const r of ok) {
+    const ins = inspect(r.body);
+    if (ins && ins.counts.length) console.log(`${r.path.padEnd(42)} ${ins.counts.join(" ")}`);
   }
 }
 

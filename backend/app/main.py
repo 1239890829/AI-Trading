@@ -87,22 +87,14 @@ async def lifespan(app: FastAPI):
     async def live_quote(symbol: str):
         try:
             from app.data_quality.validator import validate_quote
+            from app.services.quote_enrich import fill_limit_prices
 
             q = await provider.get_quote(symbol)
             if q is None:
                 return None
-            # ths 快照无涨跌停价：从腾讯源补齐（撮合的涨跌停校验依赖它）
-            if (q.limit_up_price is None or q.limit_down_price is None) and provider.name != "tencent":
-                chain = provider.providers if hasattr(provider, "providers") else []
-                tencent = next((p for p in chain if p.name == "tencent"), None)
-                if tencent is not None:
-                    try:
-                        tq = await tencent.get_quote(symbol)
-                        if tq is not None:
-                            q.limit_up_price = q.limit_up_price or tq.limit_up_price
-                            q.limit_down_price = q.limit_down_price or tq.limit_down_price
-                    except Exception:
-                        pass
+            # ths 快照无涨跌停价：从腾讯源补齐（撮合的涨跌停校验依赖它）。
+            # 补全逻辑只有一份（quote_enrich），REST 单只行情端点共用，避免两边口径漂移。
+            q = await fill_limit_prices(provider, q)
             return validate_quote(q)
         except Exception:
             return None
