@@ -8,8 +8,16 @@ import { IndexCards } from "@/components/index-cards";
 import { StockDetailPanel } from "@/components/stock-detail";
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
+import { Sparkline } from "@/components/sparkline";
 import { useQuoteStream, StreamStatus } from "@/hooks/use-quote-stream";
-import { getMarketOverview, getQuotes, getWatchlist, removeFromWatchlist } from "@/lib/api";
+import {
+  getMarketOverview,
+  getQuotes,
+  getSparklines,
+  getWatchlist,
+  removeFromWatchlist,
+  type SparklinePayload,
+} from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
 import type { Quote } from "@/types/market";
 
@@ -73,6 +81,20 @@ function WorkbenchInner() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbols]);
+
+  // 迷你走势（retro #9）：日K 级别，随自选变化拉取，独立 5 分钟刷新
+  const [sparks, setSparks] = useState<SparklinePayload | null>(null);
+  const sparkKey = symbols.join(",");
+  useEffect(() => {
+    if (symbols.length === 0) {
+      setSparks(null);
+      return;
+    }
+    void getSparklines(symbols, 30).then(setSparks).catch(() => {});
+    const t = setInterval(() => void getSparklines(symbols, 30).then(setSparks).catch(() => {}), 300_000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sparkKey]);
 
   const groupMap = groupMapRef.current;
   const watchQuotes: Quote[] = symbols
@@ -156,6 +178,9 @@ function WorkbenchInner() {
                     <td className="px-3 py-2">
                       <div className="font-mono text-xs text-zinc-400">{q.symbol}</div>
                       <div>{q.name ?? "--"}</div>
+                    </td>
+                    <td className="hidden px-1 py-2 sm:table-cell">
+                      <Sparkline closes={sparks?.items.find((i) => i.symbol === q.symbol)?.closes ?? []} />
                     </td>
                     <td className="px-2 py-2 text-right font-mono tabular-nums"><PriceFlash value={q.price}>{fmt(q.price)}</PriceFlash></td>
                     <td className={`px-2 py-2 text-right font-mono text-xs tabular-nums ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</td>

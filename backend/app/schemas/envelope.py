@@ -210,3 +210,19 @@ class SentimentHistoryPayload(BaseModel):
     cycle: dict = Field(default_factory=dict)  # {start_date, start_phase, days, current_group}
     backfilled: int = 0  # 本次调用从复盘报告回填的条数
     notes: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------- 自选 sparkline（retro #9）
+
+
+class SparklineItem(BaseModel):
+    symbol: str
+    closes: list[float]  # 近 N 个交易日收盘（升序，供前端自绘迷你曲线）
+    period_change_pct: float  # 区间涨跌幅 %（末根/首根-1）
+
+
+class SparklinePayload(BaseModel):
+    """GET /sparkline 的 data。拉取失败的标的不出现在 items 里（前端显示占位）。"""
+
+    items: list[SparklineItem] = Field(default_factory=list)
+    cached: bool = False

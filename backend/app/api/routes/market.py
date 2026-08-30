@@ -24,6 +24,8 @@ from app.schemas.envelope import (
     SentimentHistoryItem,
     SentimentHistoryPayload,
     SentimentPayload,
+    SparklineItem,
+    SparklinePayload,
     ThemeBoardPayload,
 )
 from app.schemas.market import (
@@ -77,6 +79,53 @@ async def market_sentiment(request: Request, hub: QuoteHub = Depends(get_hub)) -
 
 
 _sent_hist_backfilled = {"done": False}
+
+
+@router.get("/sparkline", response_model=Envelope[SparklinePayload])
+async def sparkline(
+    request: Request,
+    hub: QuoteHub = Depends(get_hub),
+    symbols: str = Query(description="逗号分隔的 6 位代码，最多 50 只"),
+    days: int = Query(default=30, ge=10, le=90),
+) -> dict:
+    """自选列表迷你走势（retro #9）：批量 TDX 日K 收盘序列。
+
+    进程内缓存 5 分钟（日K 级别无需更短）；单只拉取失败直接跳过（不臆造）。
+    """
+    syms = [s.strip().zfill(6) for s in symbols.split(",") if s.strip()]
+    syms = [s for s in syms if s.isdigit() and len(s) == 6][:50]
+    if not syms:
+        raise HTTPException(status_code=400, detail="symbols 非法")
+
+    from app.market.tdx_kline import tdx_daily_bars
+
+    cache = _route_cache(request.app.state, "sparkline")
+    key = (tuple(syms), days)
+    hit = cache.get(key)
+    if hit and time.monotonic() - hit[0] < 300:
+        payload = hit[1]
+        payload.cached = True
+        return {"data": payload, "meta": _meta(hub)}
+
+    items = []
+    for sym in syms:
+        try:
+            bars = tdx_daily_bars(sym, count=days + 2)
+        except Exception as exc:
+            log.warning("sparkline %s failed: %s", sym, exc)
+            continue
+        closes = [b["close"] for b in (bars or [])][-days:]
+        if len(closes) < 5 or not closes[0]:
+            continue
+        items.append(SparklineItem(
+            symbol=sym,
+            closes=closes,
+            period_change_pct=round((closes[-1] / closes[0] - 1) * 100, 2),
+        ))
+
+    payload = SparklinePayload(items=items)
+    cache[key] = (time.monotonic(), payload)
+    return {"data": payload, "meta": _meta(hub)}
 
 
 @router.get("/market/sentiment-history", response_model=Envelope[SentimentHistoryPayload])

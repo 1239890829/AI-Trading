@@ -296,6 +296,24 @@ export async function runBacktest(req: {
   return (await sendJson<BacktestPayload>("/api/backtest/run", "POST", req, 60_000)).data;
 }
 
+/** ---------------------------------------------------------------- 自选 sparkline（retro #9） */
+
+export interface SparklineItem {
+  symbol: string;
+  closes: number[];
+  period_change_pct: number;
+}
+
+export interface SparklinePayload {
+  items: SparklineItem[];
+  cached: boolean;
+}
+
+/** 批量迷你走势：近 N 日 TDX 日K收盘。后端缓存 5 分钟；失败标的缺省。 */
+export async function getSparklines(symbols: string[], days = 30): Promise<SparklinePayload> {
+  return (await getJson<SparklinePayload>(`/api/sparkline?symbols=${symbols.join(",")}&days=${days}`, 30_000)).data;
+}
+
 /** ---------------------------------------------------------------- 选股器（Phase 5） */
 
 export interface ScreenerSignal {
