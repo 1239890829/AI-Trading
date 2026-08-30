@@ -44,6 +44,7 @@ import { TradePanel, type PaperBundle } from "@/components/detail/trade-panel";
 import { ProfilePanel, type CompanyProfile, type FinRow, type BoardRows } from "@/components/detail/profile-panel";
 import { InfoPanel, type InfoItem } from "@/components/detail/info-panel";
 import { BookTradesView } from "@/components/detail/book-trades-view";
+import { ReplayChart } from "@/components/replay-chart";
 import { FlowChart, type CapitalFlow } from "@/components/detail/flow-chart";
 
 type ChartTab = "kline" | "minute" | "flow";
@@ -62,6 +63,8 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     const saved = Number(localStorage.getItem("ashare-right-w"));
     if (saved >= 260 && saved <= 480) setRightW(saved);
   }, []);
+  // 历史回放（Phase 6 收官）：K 线页签内切换回放模式
+  const [replayMode, setReplayMode] = useState(false);
   const [bars, setBars] = useState<Kline[]>([]);
   const [book, setBook] = useState<OrderBook | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
@@ -334,8 +337,17 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
           </div>
 
           {chartTab === "kline" && (
-            <Panel title="日 K 线（前复权 · 默认聚焦最近 20 日，可缩放看全部）" source={bars[0]?.source} bodyClassName="overflow-hidden" className="min-h-0 flex-1">
+            <Panel title="日 K 线（前复权 · 默认聚焦最近 20 日，可缩放看全部）" source={bars[0]?.source} bodyClassName="overflow-hidden" className="min-h-0 flex-1" extra={
+              !replayMode && bars.length >= 60 && (
+                <button onClick={() => setReplayMode(true)} className="rounded border border-sky-500/50 px-2 py-0.5 text-xs text-sky-400 hover:bg-sky-500/10">
+                  ▶ 历史回放
+                </button>
+              )
+            }>
               {bars.length > 0 ? (
+                replayMode ? (
+                  <ReplayChart bars={bars} fills={fills} onExit={() => setReplayMode(false)} />
+                ) : (
                 <div className="flex h-full min-h-0 flex-col">
                   {tech && (
                     <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-zinc-100 px-3 py-1 text-[11px] dark:border-zinc-800/60">
@@ -364,6 +376,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                     <KlineChartPro bars={bars} tradeMarks={fills} costPrice={costPrice} className="h-full" />
                   </div>
                 </div>
+                )
               ) : (
                 <p className="px-4 py-10 text-center text-sm text-zinc-400">等待 K 线数据…</p>
               )}
