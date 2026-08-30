@@ -12,7 +12,7 @@ A 股实时行情 + AI 量化投研 + 模拟交易工作台。**只做**行情�
 
 ## 1.2 当前状态快照
 - 后端：FastAPI（Python 3.11），32 个 REST 端点 + 1 个 WebSocket，**四源 Provider 链**（ths→tencent→eastmoney→sina）+ mock
-- 前端：Next.js 15 App Router，7 页面 + 10 组件，终端式工作台
+- 前端：Next.js 16 App Router，9 页面 + 10+ 组件，终端式工作台
 - 数据：全市场快照（5550 只）落 Parquet；SQLite 业务库
 - 测试：118 用例全绿；ESLint/pyflakes/tsc 门禁零问题
 - 运行：双端本地运行中（8000/3000）
@@ -31,7 +31,7 @@ A 股实时行情 + AI 量化投研 + 模拟交易工作台。**只做**行情�
 | 实时推送 | WebSocket（uvicorn[standard]） | /ws/quotes |
 | 测试 | pytest | 118 用例 |
 | 静态检查 | pyflakes | 后端门禁 |
-| 前端框架 | Next.js 15.5.24 (App Router) + React 19 | |
+| 前端框架 | Next.js 16.3.3 (App Router) + React 19 + ESLint 9 flat config | |
 | 样式 | Tailwind CSS 3.4（darkMode class） | 自定义 up=红涨 down=绿跌 |
 | 图表 | lightweight-charts 4.2 | K线/分时/副图 |
 | 字体/对齐 | 系统栈 + tabular-nums | 数据等宽 |
@@ -260,7 +260,7 @@ ashare-ai-trader/
 | test_mock_provider(6) | 演示数据确定性 |
 | test_watchlist_repo(2) | CRUD+分组 |
 | test_board_classifier(8) | 东财板块四分类（真实茅台 fixture + 字符串 IS_PRECISE 回归） |
-- 门禁：pytest 118 全绿 + tsc 0 + ESLint 0 + pyflakes 0 + Next徽章 0 + 截图验收
+- 门禁：pytest 326 全绿 + tsc 0 + ESLint 0 error（20 warn 挂账） + pyflakes 0 + next build 0 + 截图验收
 - 注：pyflakes 此前从未真正为 0（6 处既存未用导入/变量），2026-08-29 清理至 0，后续按 0 卡
 
 ---
