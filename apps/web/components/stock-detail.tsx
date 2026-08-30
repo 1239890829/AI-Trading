@@ -29,6 +29,7 @@ import {
   getPaperPositions,
   getQuote,
   getQuotes,
+  getNewsDigest,
   getTrades,
   getWatchlist,
   placePaperOrder,
@@ -241,10 +242,13 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
       getCapitalFlow<CapitalFlow>(symbol, 30).catch(() => null),
       getFinancials<FinRow>(symbol, 8).catch(() => null),
       getCompanyProfile<CompanyProfile>(symbol).catch(() => null),
-      getAnnouncements<InfoItem>(symbol, 8).catch(() => null),
-      getNews<InfoItem>(symbol, 8).catch(() => null),
+      // 资讯走摘要端点：一次拿回公告+新闻，并附带重要度/情绪/事实摘要。
+      // 摘要失败不拖垮整页——降级成空列表，页面其余部分照常。
+      getNewsDigest(symbol, 8)
+        .then((d) => ({ anns: d.announcements as unknown as InfoItem[], news: d.news as unknown as InfoItem[] }))
+        .catch(() => null),
     ])
-      .then(([b, ob, tr, min, cf, fins, comp, anns, news]) => {
+      .then(([b, ob, tr, min, cf, fins, comp, info]) => {
         if (!alive) return;
         setBars(b);
         setBook(ob);
@@ -253,8 +257,8 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
         if (cf) setFlow(cf);
         if (fins) setFins(fins);
         if (comp) setCompany(comp);
-        if (anns) setAnns(anns);
-        if (news) setNews(news);
+        setAnns(info ? info.anns : []);
+        setNews(info ? info.news : []);
       })
       .catch((e: Error) => alive && setError(e.message));
     return () => {

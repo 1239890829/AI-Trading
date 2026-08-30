@@ -171,6 +171,48 @@ export async function getNews<T = InfoItem>(symbol: string, limit = 8): Promise<
   return (await getJson<{ symbol: string; items: T[] }>(`/api/news/${symbol}?limit=${limit}`, 15_000)).data.items;
 }
 
+/** 资讯摘要项：原字段 + 规则摘要结果（重要度/情绪/事实摘要/关键数字）。 */
+export interface NewsDigestItem {
+  title: string;
+  date: string | null;
+  url: string | null;
+  source: string | null;
+  type?: string | null;
+  importance: "高" | "中" | "普通" | "低";
+  importance_score: number;
+  importance_reasons: string[];
+  sentiment: "偏正面" | "偏负面" | "分歧" | "中性";
+  sentiment_reasons: string[];
+  digest: string;
+  digest_source: string;
+  numbers: string[];
+}
+
+export interface NewsDigestModel {
+  requested: string;
+  actual: string;
+  fallback_chain: string[];
+  degraded: boolean;
+  reason: string;
+  latency_ms: number;
+}
+
+export interface NewsDigest {
+  symbol: string;
+  news: NewsDigestItem[];
+  announcements: NewsDigestItem[];
+  model: NewsDigestModel;
+}
+
+/**
+ * 个股新闻+公告摘要，按重要度倒序。
+ * 规则摘要器永远可用；`model.degraded` 为真表示曾尝试 LLM 并降级，
+ * 前端应据此标注来源，别让读者误以为摘要出自模型。
+ */
+export async function getNewsDigest(symbol: string, limit = 8): Promise<NewsDigest> {
+  return (await getJson<NewsDigest>(`/api/news/digest/${symbol}?limit=${limit}`, 15_000)).data;
+}
+
 /** 板块排行（新浪闪电口径）。结构见 /api/boards。 */
 export interface BoardRow {
   name: string;

@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import backtest as backtest_route
 from app.api.routes import health as health_route
 from app.api.routes import market as market_route
+from app.api.routes import news as news_route
 from app.api.routes import paper as paper_route
 from app.api.routes import predict as predict_route
 from app.api.routes import review as review_route
@@ -253,4 +254,5 @@ app.include_router(review_route.router, prefix="/api")
 app.include_router(predict_route.router, prefix="/api")
 app.include_router(alert_route.router, prefix="/api")
 app.include_router(risk_route.router, prefix="/api")
+app.include_router(news_route.router, prefix="/api")
 app.include_router(ws_router)

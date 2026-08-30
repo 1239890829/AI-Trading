@@ -47,6 +47,14 @@ class Settings(BaseSettings):
     review_llm_api_key: str = ""
     review_llm_model: str = ""
 
+    # ---- 新闻/公告摘要 ----
+    # 摘要器：rules（默认，确定性、零成本、永远可用）| llm（需配 base_url + api_key）
+    # 规则层已能产出 重要度/情绪/事实摘要/关键数字，LLM 是增强层而非前置依赖
+    news_model: str = "rules"
+    news_llm_base_url: str = ""
+    news_llm_api_key: str = ""
+    news_llm_model: str = ""
+
     # ---- 写接口鉴权（B6，opt-in）----
     # 留空 = 本地开发全放行；部署到公网/NAS 时配置任意随机值，
     # 之后所有写请求必须带 X-API-Token 头（前端 NEXT_PUBLIC_API_TOKEN 自动携带）
