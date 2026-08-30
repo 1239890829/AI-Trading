@@ -299,6 +299,87 @@ class ThsFuyaoProvider:
             raise ProviderError(f"ths hot stock list history empty for {d}")
         return out
 
+    async def get_auction_snapshot(self, symbols: list[str], stage: str = "final") -> list[dict]:
+        """集合竞价快照（stage=final 终态 / live 实时）。单次 ≤100 只。
+
+        返回 [{symbol, name, auction_price, auction_pct, auction_volume(手), auction_amount,
+        auction_volume_ratio, auction_unmatched, data_status}]。data_status 表示就绪状态
+        （ready/final/suspended/not_ready），非就绪条目照常返回、由调用方决定是否标 gap。
+        """
+        if not symbols:
+            return []
+        codes = ",".join(to_thscode(s) for s in symbols[:100])
+        data = await self._get("/api/a-share/auction/snapshot", {"thscodes": codes, "stage": stage})
+        num = lambda v: float(v) if v is not None else None  # noqa: E731
+        out = []
+        for it in data.get("item") or []:
+            code = from_thscode(str(it.get("thscode") or ""))
+            if len(code) != 6:
+                continue
+            out.append({
+                "symbol": code,
+                "name": it.get("name"),
+                "auction_price": num(it.get("auction_price")),
+                "auction_pct": num(it.get("auction_pct")),
+                "auction_volume": num(it.get("auction_volume")),
+                "auction_amount": num(it.get("auction_amount")),
+                "auction_volume_ratio": num(it.get("auction_volume_ratio")),
+                "auction_unmatched": num(it.get("auction_unmatched")),
+                "pre_close_price": num(it.get("pre_close_price")),
+                "data_status": it.get("data_status"),
+                "source": SOURCE,
+            })
+        if not out:
+            raise ProviderError("ths auction snapshot empty")
+        return out
+
+    async def get_auction_benchmark(self, d: date) -> list[dict]:
+        """短线风向标竞价基准（按日）：[{symbol, name, auction_pct, tags[]}]。"""
+        data = await self._get(
+            "/api/a-share/auction/short-term-benchmark", {"date": d.strftime("%Y-%m-%d")}
+        )
+        num = lambda v: float(v) if v is not None else None  # noqa: E731
+        out = []
+        for it in data.get("item") or []:
+            code = from_thscode(str(it.get("thscode") or ""))
+            if len(code) != 6:
+                continue
+            out.append({
+                "symbol": code,
+                "name": it.get("name"),
+                "auction_pct": num(it.get("auction_pct")),
+                "tags": list(it.get("tags") or []),
+                "source": SOURCE,
+            })
+        if not out:
+            raise ProviderError(f"ths auction benchmark empty for {d}")
+        return out
+
+    async def get_adjustment_events(self, symbol: str, start: date | None = None, end: date | None = None) -> list[dict]:
+        """复权事件流（现金分红/送股，单只）：[{ex_date, dividend, bonus}]，ex_date 降序。
+
+        官方只给原始事件，复权因子由调用方推导（避免误当服务端已算好的每日因子）。
+        """
+        params: dict = {"thscode": to_thscode(symbol)}
+        if start:
+            params["from"] = start.strftime("%Y-%m-%d")
+        if end:
+            params["to"] = end.strftime("%Y-%m-%d")
+        data = await self._get("/api/a-share/corporate-actions/adjustment-factors", params)
+        num = lambda v: float(v) if v is not None else 0.0  # noqa: E731
+        out = []
+        for it in data.get("item") or []:
+            ex_ms = it.get("ex_date_ms")
+            if not ex_ms:
+                continue
+            out.append({
+                "ex_date": datetime.fromtimestamp(ex_ms / 1000, tz=_TZ_SH).date(),
+                "dividend": num(it.get("dividend_per_share")),
+                "bonus": num(it.get("per_share_bonus")),
+                "source": SOURCE,
+            })
+        return out  # 事件可为空（无分红送股），不抛错
+
     # ---- 协议其余方法：链上由其他 Provider 负责 ----
 
     async def get_kline(self, *args, **kwargs) -> list:

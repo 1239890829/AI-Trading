@@ -131,3 +131,15 @@ class CompositeProvider:
     async def get_hot_stock_list_history(self, d: date) -> list:
         """历史热股榜（仅 ths 实现）。"""
         return await self._call("get_hot_stock_list_history", d)
+
+    async def get_auction_snapshot(self, symbols: list[str], stage: str = "final") -> list:
+        """集合竞价快照（仅 ths 实现）。"""
+        return await self._call("get_auction_snapshot", symbols, stage)
+
+    async def get_auction_benchmark(self, d: date) -> list:
+        """短线风向标竞价基准（仅 ths 实现）。"""
+        return await self._call("get_auction_benchmark", d)
+
+    async def get_adjustment_events(self, symbol: str, start: date | None = None, end: date | None = None) -> list:
+        """复权事件流（仅 ths 实现，单只；空事件流合法）。"""
+        return await self._call("get_adjustment_events", symbol, start, end)

@@ -44,3 +44,35 @@ class LongHuPayload(BaseModel):
 
     trade_date: str
     records: list[LongHuRecord]
+
+
+class AuctionSnapshot(BaseModel):
+    """集合竞价快照条目（/api/auction/{symbol}）。auction_volume 单位为手。"""
+
+    symbol: str
+    name: str | None = None
+    auction_price: float | None = None
+    auction_pct: float | None = None
+    auction_volume: float | None = None
+    auction_amount: float | None = None
+    auction_volume_ratio: float | None = None
+    auction_unmatched: float | None = None
+    pre_close_price: float | None = None
+    data_status: str | None = None  # ready|final|suspended|not_ready
+
+
+class AuctionBenchmarkItem(BaseModel):
+    """短线风向标竞价基准条目（/api/auction-benchmark）。"""
+
+    symbol: str
+    name: str | None = None
+    auction_pct: float | None = None
+    tags: list[str] = Field(default_factory=list)
+
+
+class AdjustmentEvent(BaseModel):
+    """复权事件（/api/adjustment-events/{symbol}）；factor 由调用方推导。"""
+
+    ex_date: str  # YYYY-MM-DD
+    dividend: float  # 每股现金分红（税前）
+    bonus: float  # 每股送股比例

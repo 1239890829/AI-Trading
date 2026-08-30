@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import logging
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from app.market.minute_backfill import load_symbol
@@ -37,6 +37,49 @@ def _split_days(days: list[str], in_ratio: float = 2 / 3) -> tuple[list[str], li
     ordered = sorted(days)
     cut = max(1, int(len(ordered) * in_ratio))
     return ordered[:cut], ordered[cut:]
+
+
+def apply_adjustments(points: list[dict], events: list[dict]) -> tuple[list[dict], int]:
+    """复权修正（前复权，纯函数）：把除权日**之前**的价格调整到除权日口径。
+
+    factor = (C_prev - dividend) / (C_prev * (1 + bonus))，C_prev 取除权日前
+    最后一根分钟点的价格（≈前日收盘，数据自洽、无需额外日 K 请求）。
+    价格类字段（price/avg/cum_amount）同步缩放；量不变。
+    事件可乱序传入；多个事件独立叠加（乘法交换）。空事件流原样返回。
+
+    :param events: [{ex_date: date, dividend: float, bonus: float}]（ths 事件流口径）
+    :return: (修正后的 points, 实际生效的事件数)
+    """
+    if not points or not events:
+        return points, 0
+    out = [dict(p) for p in points]
+    applied = 0
+    for ev in events:
+        ex = ev.get("ex_date")
+        dividend = float(ev.get("dividend") or 0.0)
+        bonus = float(ev.get("bonus") or 0.0)
+        if ex is None or (dividend <= 0 and bonus <= 0):
+            continue
+        ex_date = ex if isinstance(ex, date) else datetime.strptime(str(ex)[:10], "%Y-%m-%d").date()
+        prev_pts = [p for p in out if (datetime.fromisoformat(p["ts"]) + timedelta(hours=8)).date() < ex_date]
+        if not prev_pts:
+            continue  # 除权日在窗口之前：窗口内价格已是新口径
+        c_prev = prev_pts[-1]["price"]
+        if not c_prev or c_prev <= 0:
+            continue
+        factor = (c_prev - dividend) / (c_prev * (1 + bonus))
+        if abs(factor - 1.0) < 1e-9:
+            continue
+        for p in out:
+            if (datetime.fromisoformat(p["ts"]) + timedelta(hours=8)).date() < ex_date:
+                if p.get("price") is not None:
+                    p["price"] = round(p["price"] * factor, 4)
+                if p.get("avg") is not None:
+                    p["avg"] = round(p["avg"] * factor, 4)
+                if p.get("cum_amount") is not None:
+                    p["cum_amount"] = round(p["cum_amount"] * factor, 2)
+        applied += 1
+    return out, applied
 
 
 def _evaluate(signal: dict, points: list[dict]) -> dict:
@@ -98,17 +141,27 @@ def run_backtest(
     *,
     parquet_dir: Path | None = None,
     in_ratio: float = 2 / 3,
+    adjustment_events: dict[str, list[dict]] | None = None,
 ) -> dict:
-    """按日回测全部样本池，聚合样本内/外统计。"""
+    """按日回测全部样本池，聚合样本内/外统计。
+
+    adjustment_events: symbol → 复权事件流（由调用方异步拉取注入；None=不做复权修正）。
+    """
     # 1. 全量信号（逐日 as_of 跑引擎）+ 窗口结算
     entries: list[dict] = []
     day_index: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
+    adjustments_applied: dict[str, int] = {}
     per_symbol_days: dict[str, dict[str, list[dict]]] = {}
     for sym in symbols:
         pts = load_symbol(parquet_dir, sym)
         if not pts:
             log.warning("no backfill data for %s, skipped", sym)
             continue
+        if adjustment_events:
+            pts, applied = apply_adjustments(pts, adjustment_events.get(sym) or [])
+            if applied:
+                adjustments_applied[sym] = applied
+                log.info("adjustment applied for %s: %d events", sym, applied)
         by_day: dict[str, list[dict]] = defaultdict(list)
         for p in pts:
             by_day[(datetime.fromisoformat(p["ts"]) + timedelta(hours=8)).strftime("%Y%m%d")].append(p)
@@ -166,10 +219,11 @@ def run_backtest(
         "split": {"in_days": len(in_days), "out_days": len(out_days)},
         "granularity": "5min (sina, 1023-bar 上限)",
         "threshold_pct": THRESHOLD_PCT,
+        "adjustments_applied": adjustments_applied,
         "sample_in": _aggregate(in_entries),
         "sample_out": _aggregate(out_entries),
         "overall": _aggregate(entries),
-        "note": "阈值未经校准——本报告只产出证据；校准需在样本内完成后再看样本外",
+        "note": "阈值未经校准——本报告只产出证据；校准需在样本内完成后再看样本外。价格已按复权事件流前复权（窗口内除权日修正）",
     }
     return report
 
@@ -199,7 +253,7 @@ def save_report(report: dict, out_dir: Path | None = None) -> Path:
 
 
 def main() -> None:
-    """CLI 入口：python -m app.market.minute_backtest [symbol ...]（回拉+回测一步到位）"""
+    """CLI 入口：python -m app.market.minute_backtest [symbol ...]（回拉+复权+回测一步到位）"""
     import asyncio
     import sys
 
@@ -211,13 +265,39 @@ def main() -> None:
     log.info("backfill done: %s, failures: %s", pulled, failures)
 
     ok_symbols = [s for s in symbols if s in pulled]
-    report = run_backtest(ok_symbols)
+
+    async def _fetch_events() -> dict[str, list[dict]]:
+        """复权事件流（ths 官方，全历史事件量级极小）；失败不阻断回测（报告注明）。"""
+        try:
+            from app.core.config import settings
+            from app.data_providers.ths import ThsFuyaoProvider
+
+            prov = ThsFuyaoProvider(settings.ths_api_key, settings.ths_base_url)
+            try:
+                out: dict[str, list[dict]] = {}
+                for s in ok_symbols:
+                    try:
+                        evs = await prov.get_adjustment_events(s)
+                        if evs:
+                            out[s] = evs
+                    except Exception as exc:
+                        log.warning("adjustment events failed for %s: %s", s, exc)
+                return out
+            finally:
+                await prov.aclose()
+        except Exception as exc:
+            log.warning("adjustment events unavailable: %s", exc)
+            return {}
+
+    events_by_sym = asyncio.run(_fetch_events())
+    report = run_backtest(ok_symbols, adjustment_events=events_by_sym or None)
     report["backfill_failures"] = failures
     path = save_report(report)
     print(json.dumps({
         "report": str(path),
         "days": f"{report['from']}→{report['to']} ({report['data_days']}d)",
         "pulled": pulled,
+        "adjustments": report["adjustments_applied"],
         "overall": report["overall"],
         "sample_in": report["sample_in"],
         "sample_out": report["sample_out"],

@@ -170,6 +170,21 @@ async def verify_predictions(
         log.warning("verify: hot history failed for %s: %s", target_date, exc)
         hot_d1 = []
 
+    # 竞价验证数据面：D1 风向标基准 + 候选股竞价终态（D1 09:25 的一致性判定）
+    bench_d1: list[dict] = []
+    try:
+        bench_d1 = await provider.get_auction_benchmark(d)
+    except Exception as exc:
+        log.warning("verify: auction benchmark failed for %s: %s", target_date, exc)
+    auction_map: dict[str, dict] = {}
+    echelon_syms = sorted({c.symbol for p in report.predictions for c in p.echelon})
+    if echelon_syms:
+        try:
+            rows = await provider.get_auction_snapshot(echelon_syms, stage="final")
+            auction_map = {r["symbol"]: r for r in rows}
+        except Exception as exc:
+            log.warning("verify: auction snapshot failed for %s: %s", target_date, exc)
+
     verify: dict = {"verified_at": _now_iso(), "themes": [], "note": ""}
     for p in report.predictions:
         if p.verdict == "不预判":
@@ -200,6 +215,30 @@ async def verify_predictions(
         else:
             outcome, note = "miss", f"题材未成立：目标日关联涨停 {len(theme_stocks)} 只（<3）"
 
+        # 竞价一致性（失效条件 #1 的自动核对）：候选最高竞价涨幅 / 一字判定 / 风向标联动
+        auction_note = ""
+        if pool and auction_map:
+            cand_auctions = [(c, auction_map.get(c.symbol)) for c in p.echelon]
+            with_a = [(c, a) for c, a in cand_auctions if a and a.get("auction_pct") is not None]
+            if with_a:
+                best_c, best_a = max(with_a, key=lambda x: x[1]["auction_pct"] or 0)
+                best_pct = best_a["auction_pct"] or 0.0
+                bits = [f"候选最高竞价 {best_c.name} {best_pct:+.2f}%"]
+                if best_pct >= 9.8:
+                    bits.append("≈一字/顶格开盘（近似口径 |auction_pct|≥9.8）")
+                elif best_pct < 2:
+                    bits.append("竞价一致性不足——失效条件 #1 命中")
+                bench_hits = [
+                    b for b in bench_d1
+                    if any(k in b.get("name", "") or k in " ".join(b.get("tags") or []) for k in kws)
+                ]
+                if bench_hits:
+                    names = "、".join(f"{b['name']}({b['auction_pct']:+.1f}%)" for b in bench_hits[:3])
+                    bits.append(f"风向标竞价联动 {len(bench_hits)} 只：{names}")
+                auction_note = "竞价验证：" + "；".join(bits)
+            elif cand_auctions:
+                auction_note = "竞价验证：候选股竞价数据未就绪（停牌或源缺失）"
+
         verify["themes"].append({
             "theme": p.theme,
             "verdict": p.verdict,
@@ -210,6 +249,7 @@ async def verify_predictions(
             "leader_hit": leader_hit,
             "hot_kept_top50": [f"{c.name}({c.symbol})" for c in hot_kept],
             "note": note,
+            "auction_note": auction_note,
         })
 
     verify["note"] = (

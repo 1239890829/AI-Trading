@@ -165,6 +165,16 @@ def judge_theme(hint: str, keywords: list[str], pack: dict, heuristic: bool = Fa
         capital_score = 0.4
         gaps.append("capital: 候选股未上最近交易日龙虎榜（首板未触发上榜条件属常见，非负面信号）")
 
+    # ---- 7. 竞价前兆（定性证据，不进 v1 权重——权重版本化约束，样本积累后再评估升维）----
+    auction_hot = [c for c in related if c.get("auction_pct") is not None and (c["auction_pct"] or 0) >= 2 and (c.get("auction_volume_ratio") or 0) >= 1.5]
+    if auction_hot:
+        names = "、".join(f"{c['name']}(竞价 {c['auction_pct']:+.2f}%·量比 {c['auction_volume_ratio']:.2f})" for c in auction_hot[:3])
+        evidence.append(EvidenceItem(
+            kind="auction", source="ths_auction",
+            content=f"上一交易日竞价放量上攻：{names}——消息日前的资金先手迹象",
+            symbol=auction_hot[0]["symbol"], contribution=0.0,
+        ))
+
     total = (
         WEIGHTS["policy_level"] * pol_score
         + WEIGHTS["hot_presence"] * hot_score

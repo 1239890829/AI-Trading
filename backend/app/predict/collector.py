@@ -156,6 +156,19 @@ async def collect_predict_evidence(
         except Exception as exc:
             gaps.append(f"ths_longhu({last_td}): {exc}")
 
+    # ---- 集合竞价快照（最近交易日终态）：消息日前兆证据 ----
+    # 周末/盘后拉到的是最近交易日的终态——"预判日前一竞价"的放量上攻是资金提前行动信号。
+    if candidates:
+        try:
+            auction_rows = await provider.get_auction_snapshot([c["symbol"] for c in candidates], stage="final")
+            a_map = {r["symbol"]: r for r in auction_rows}
+            for c in candidates:
+                a = a_map.get(c["symbol"])
+                c["auction_pct"] = a.get("auction_pct") if a else None
+                c["auction_volume_ratio"] = a.get("auction_volume_ratio") if a else None
+        except Exception as exc:
+            gaps.append(f"ths_auction: {exc}")
+
     # ---- 市场环境 ----
     env: dict = {}
     try:

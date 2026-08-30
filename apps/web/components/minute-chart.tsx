@@ -48,12 +48,14 @@ export function MinuteChart({
   prevClose,
   yesterdayVol,
   index,
+  auction,
   className,
 }: {
   points: P[];
   prevClose?: number | null;
   yesterdayVol?: number | null;
   index?: { points: P[]; prevClose: number } | null;
+  auction?: { price: number; pct: number | null } | null;
   className?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -107,12 +109,33 @@ export function MinuteChart({
     });
     series.setData(points.map((p) => ({ time: toTime(p), value: p.price })));
 
+    // ---- 集合竞价点（09:25，金色）：独立单点 series，不参与量比/浮层查点 ----
+    if (auction?.price && points.length > 0) {
+      // 首个分钟点为 09:30（伪 UTC 时基），前推 5 分钟即 09:25
+      const auctionTime = (Math.floor(new Date(points[0].ts).getTime() / 1000) + BJ_OFFSET - 300) as never;
+      const auctionSeries = chart.addLineSeries({
+        color: "#f59e0b",
+        lineWidth: 1,
+        pointMarkersVisible: true,
+        pointMarkersRadius: 4,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      });
+      auctionSeries.setData([{ time: auctionTime, value: auction.price }]);
+    }
+
     if (hasBase) {
       let hi = -Infinity;
       let lo = Infinity;
       for (const p of points) {
         if (p.price > hi) hi = p.price;
         if (p.price < lo) lo = p.price;
+      }
+      // 竞价点纳入对称区间，防止被裁剪出可视区
+      if (auction?.price) {
+        if (auction.price > hi) hi = auction.price;
+        if (auction.price < lo) lo = auction.price;
       }
       const half = Math.max(Math.abs(hi - prevClose!), Math.abs(lo - prevClose!), prevClose! * 0.005);
       series.applyOptions({
@@ -278,13 +301,24 @@ export function MinuteChart({
       chart.remove();
       void unsub;
     };
-  }, [points, prevClose, yesterdayVol, index]);
+  }, [points, prevClose, yesterdayVol, index, auction]);
 
   return (
     <div className="relative h-full w-full">
       <div ref={ref} className={`h-full w-full ${className ?? ""}`} />
-      {/* 角标：量比 + 上证叠加图例 */}
+      {/* 角标：量比 + 竞价 + 上证叠加图例 */}
       <div ref={badgeRef} className="pointer-events-none absolute right-2 top-1.5 z-10 flex items-center gap-2 text-[11px]">
+        {auction?.pct != null && (
+          <span
+            className={`rounded border px-1.5 py-0.5 font-mono tabular-nums ${
+              auction.pct >= 2 ? "border-amber-500/40 bg-amber-500/10 text-amber-500" : "border-zinc-500/40 bg-zinc-500/10 text-zinc-400"
+            }`}
+            title="集合竞价（09:25 终态）：图中金色点为竞价价格；放量上攻（≥2% 且量比≥1.5）为资金先手信号"
+          >
+            竞价 {auction.pct > 0 ? "+" : ""}
+            {auction.pct.toFixed(2)}%
+          </span>
+        )}
         {badges.lb != null && (
           <span
             className={`rounded border px-1.5 py-0.5 font-mono tabular-nums ${

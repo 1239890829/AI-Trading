@@ -149,7 +149,10 @@ def apply_verify(session_factory, target_date: str, verify: dict) -> None:
             tr.limit_up_count_d1 = t.get("limit_up_count")
             tr.leader_actual = t.get("leader_actual")
             tr.leader_hit = 1 if t.get("leader_hit") else 0
-            tr.verify_note = t.get("note", "")
+            note = t.get("note", "")
+            if t.get("auction_note"):
+                note = f"{note}；{t['auction_note']}" if note else t["auction_note"]
+            tr.verify_note = note
         db.commit()
     except Exception:
         db.rollback()

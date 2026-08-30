@@ -113,6 +113,24 @@ def test_heuristic_auto_theme_capped_confidence():
     assert p.confidence != "high", "自动发现的主题不允许 high 置信度"
 
 
+def test_auction_prehand_evidence_zero_weight():
+    """竞价放量上攻 = 定性证据（contribution=0，v1 权重版本化不动）。"""
+    cands = [
+        _cand("000560", "我爱我家", 5, news=["住房新政"]),
+        _cand("600162", "香江控股", 10, news=[]),
+    ]
+    cands[0]["auction_pct"] = 3.75
+    cands[0]["auction_volume_ratio"] = 1.8
+    cands[1]["auction_pct"] = -0.5
+    cands[1]["auction_volume_ratio"] = 0.8
+    p = judge_theme("房地产", KEYWORDS, _pack(cands))
+    auc = [e for e in p.evidence if e.kind == "auction"]
+    assert len(auc) == 1
+    assert auc[0].contribution == 0.0
+    assert "我爱我家" in auc[0].content and "香江控股" not in auc[0].content
+    assert p.score < 0.72 + 1e-9  # 竞价证据不改变总分（权重外）
+
+
 # ---------------------------------------------------------------- 梯队与介入
 
 def test_echelon_ranking_prefers_rank_and_news():
@@ -187,14 +205,21 @@ def _report(target: str = "20991201", outcome_ready: bool = True) -> PredictionR
 
 
 class _FakeProvider:
-    def __init__(self, pool: list[LimitUpRecord], hot: list[dict]):
+    def __init__(self, pool: list[LimitUpRecord], hot: list[dict], auction: list[dict] | None = None, bench: list[dict] | None = None):
         self._pool, self._hot = pool, hot
+        self._auction, self._bench = auction or [], bench or []
 
     async def get_limit_up_pool(self, d):
         return self._pool
 
     async def get_hot_stock_list_history(self, d):
         return self._hot
+
+    async def get_auction_snapshot(self, symbols, stage="final"):
+        return [a for a in self._auction if a["symbol"] in symbols]
+
+    async def get_auction_benchmark(self, d):
+        return self._bench
 
 
 class _FakeHub:
@@ -295,3 +320,39 @@ def test_maybe_auto_verify_hook(sf):
     assert note and "hit" in note
     # 已验证 → 钩子返回 None（幂等）
     assert asyncio.run(maybe_auto_verify(hub, None, sf, date(2099, 12, 5))) is None
+
+
+def test_verify_auction_consistency_note(sf):
+    """D1 竞价验证：候选最高竞价 +3.8% 写入 auction_note；风向标联动计数。"""
+    target = "20991206"
+    save_report(sf, _report(target))
+    pool = [_lu("000560", "我爱我家", 2, "住房政策"), _lu("600162", "香江控股", 1, "住房"), _lu("000017", "深中华A", 1, "住房")]
+    auction = [
+        {"symbol": "000560", "auction_pct": 3.8, "data_status": "final"},
+        {"symbol": "600162", "auction_pct": 1.0, "data_status": "final"},
+    ]
+    bench = [{"symbol": "600721", "name": "某医药", "auction_pct": -2.1, "tags": ["医疗研发外包"]}]
+    hub = _FakeHub(_FakeProvider(pool, hot=[], auction=auction, bench=bench))
+    import asyncio
+
+    v = asyncio.run(verify_predictions(hub, None, sf, target))
+    t = v["themes"][0]
+    assert "竞价验证" in t["auction_note"]
+    assert "+3.80%" in t["auction_note"] and "一字" not in t["auction_note"]
+    assert "风向标竞价联动" not in t["auction_note"]  # bench 无题材相关标的
+    # 落库 verify_note 合并竞价段
+    got = get_report(sf, target)
+    assert got and "竞价验证" in (got.verify or {}).get("themes", [{}])[0].get("auction_note", "")
+
+
+def test_verify_auction_fail_condition_flagged(sf):
+    """候选最高竞价 <2% → 失效条件 #1 命中标注。"""
+    target = "20991207"
+    save_report(sf, _report(target))
+    pool = [_lu("600127", "金健米业", 2, "粮食安全")]  # 题材未成立
+    auction = [{"symbol": "000560", "auction_pct": 1.2, "data_status": "final"}]
+    hub = _FakeHub(_FakeProvider(pool, hot=[], auction=auction, bench=[]))
+    import asyncio
+
+    v = asyncio.run(verify_predictions(hub, None, sf, target))
+    assert v["themes"][0]["auction_note"] and "失效条件 #1 命中" in v["themes"][0]["auction_note"]

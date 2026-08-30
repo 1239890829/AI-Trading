@@ -12,6 +12,7 @@ import { analyze } from "@/lib/technical-analysis";
 import {
   addToWatchlist,
   cancelPaperOrder,
+  getAuction,
   getAnnouncements,
   getCapitalFlow,
   getCompanyProfile,
@@ -31,6 +32,7 @@ import {
   getWatchlist,
   placePaperOrder,
   resetPaperAccount,
+  type AuctionData,
   type MinutePoint,
   type PaperFill,
 } from "@/lib/api";
@@ -67,6 +69,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   const [error, setError] = useState<string | null>(null);
   const [inWatchlist, setInWatchlist] = useState(false);
   const [quote, setQuote] = useState<Quote | null>(null);
+  const [auction, setAuction] = useState<AuctionData | null>(null);
 
   const { quotes } = useQuoteStream([symbol]);
   useEffect(() => {
@@ -182,6 +185,18 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     };
   }, []);
 
+  // 集合竞价（09:25 终态）：分时图竞价点 + 角标。随 symbol 拉一次（当日不变）。
+  useEffect(() => {
+    if (!symbol) return;
+    let alive = true;
+    getAuction(symbol)
+      .then((a) => alive && setAuction(a))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [symbol]);
+
   useEffect(() => {
     if (!symbol) return;
     let alive = true;
@@ -197,6 +212,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     setBook(null);
     setTrades([]);
     setMinutes([]);
+    setAuction(null); // 竞价数据按 symbol 归属，切股先清空防残留
     setFlow(null);
     setFins(null);
     Promise.all([
@@ -344,6 +360,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                   prevClose={quote?.prev_close ?? null}
                   yesterdayVol={bars.length >= 2 ? (bars[bars.length - 2]?.volume ?? null) : null}
                   index={indexOverlay}
+                  auction={auction?.auction_price ? { price: auction.auction_price, pct: auction.auction_pct } : null}
                   className="h-full"
                 />
               ) : (

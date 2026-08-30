@@ -10,6 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.api.deps import get_hub
 from app.data_quality.validator import validate_order_book
 from app.schemas.envelope import (
+    AuctionBenchmarkItem,
+    AuctionSnapshot,
+    AdjustmentEvent,
     Envelope,
     KlinePayload,
     LimitUpPoolPayload,
@@ -346,6 +349,53 @@ async def longhu(
         raise HTTPException(status_code=502, detail=f"龙虎榜数据源失败：{exc}")
     return {
         "data": {"trade_date": trade_date.isoformat(), "records": [r.model_dump(mode="json") for r in records]},
+        "meta": _meta(hub),
+    }
+
+
+@router.get("/auction/{symbol}", response_model=Envelope[AuctionSnapshot])
+async def auction(symbol: str, stage: str = Query(default="final", description="final 终态 / live 实时"), hub: QuoteHub = Depends(get_hub)) -> dict:
+    """集合竞价快照（ths 官方）：竞价价/涨跌幅/量/量比/未匹配量。
+
+    非竞价时段返回最近一次终态；data_status 标识就绪状态，客户端据此决定展示策略。
+    """
+    try:
+        rows = await hub.provider.get_auction_snapshot([symbol], stage=stage)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"竞价数据源失败：{exc}")
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"{symbol} 无竞价数据")
+    return {"data": rows[0], "meta": _meta(hub)}
+
+
+@router.get("/auction-benchmark", response_model=Envelope[list[AuctionBenchmarkItem]])
+async def auction_benchmark(
+    date_str: str | None = Query(default=None, alias="date", description="YYYY-MM-DD，默认当日（Asia/Shanghai）"),
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    """短线风向标竞价基准（按日，含题材 tags）——新题材预判与竞价联动验证的数据面。"""
+    d = date.fromisoformat(date_str) if date_str else date.today()
+    try:
+        rows = await hub.provider.get_auction_benchmark(d)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"竞价基准数据源失败：{exc}")
+    return {"data": rows, "meta": _meta(hub)}
+
+
+@router.get("/adjustment-events/{symbol}", response_model=Envelope[list[AdjustmentEvent]])
+async def adjustment_events(
+    symbol: str,
+    start: date | None = None,
+    end: date | None = None,
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    """复权事件流（现金分红/送股，单只）——回测前复权修正的数据面。"""
+    try:
+        rows = await hub.provider.get_adjustment_events(symbol, start, end)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"复权事件数据源失败：{exc}")
+    return {
+        "data": [{"ex_date": e["ex_date"].isoformat(), "dividend": e["dividend"], "bonus": e["bonus"]} for e in rows],
         "meta": _meta(hub),
     }
 

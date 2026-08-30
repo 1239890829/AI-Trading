@@ -14,7 +14,7 @@ sys.path.insert(0, ".")
 import polars as pl
 
 from app.market.minute_backfill import strip_jsonp, to_sina_symbol
-from app.market.minute_backtest import run_backtest
+from app.market.minute_backtest import apply_adjustments, run_backtest
 
 T0 = datetime(2026, 8, 28, 1, 30, tzinfo=timezone.utc)  # 北京 09:30
 TMP = Path(__file__).resolve().parent.parent / "data" / "tmp-backtest"
@@ -88,5 +88,60 @@ def test_run_backtest_no_data_symbol_skipped():
         report = run_backtest(["999999"], parquet_dir=TMP)
         assert report["overall"]["signals"] == 0
         assert report["data_days"] == 0
+    finally:
+        shutil.rmtree(TMP, ignore_errors=True)
+
+
+# ---------------------------------------------------------------- 复权修正
+
+def _adj_points():
+    """两天各 6 根：day1 收盘 10.00，day2 全天 9.90（除权日 8/27）。"""
+    pts = _day_points("20260826", [10.0] * 6)
+    pts += _day_points("20260827", [9.9] * 6)
+    return pts
+
+
+def test_apply_adjustments_cash_dividend_scales_only_before_ex_date():
+    """10 派 5（每股 0.5 元），C_prev=10.00 → factor=0.95：除权日前 ×0.95，除权日当日不变。"""
+    events = [{"ex_date": "2026-08-27", "dividend": 0.5, "bonus": 0.0}]
+    out, applied = apply_adjustments(_adj_points(), events)
+    assert applied == 1
+    d1, d2 = out[:6], out[6:]  # ts 为 UTC，跨日按切片取
+    assert all(abs(p["price"] - 9.5) < 1e-6 for p in d1)
+    assert all(abs(p["price"] - 9.9) < 1e-6 for p in d2)
+    # avg/cum_amount 同步缩放，volume 不变
+    assert abs(d1[0]["avg"] - d1[0]["price"]) < 1e-3
+    assert d1[0]["volume"] == d2[0]["volume"]
+
+
+def test_apply_adjustments_bonus_and_noop():
+    """10 送 10（bonus=1）→ factor=0.5；空事件流/除权日在窗口前 → 原样返回。"""
+    pts = _adj_points()
+    out, applied = apply_adjustments(pts, [{"ex_date": "2026-08-27", "dividend": 0.0, "bonus": 1.0}])
+    assert applied == 1
+    d1 = [p for p in out if "20260826" in p["ts"]]
+    assert all(abs(p["price"] - 5.0) < 1e-6 for p in d1)
+
+    out2, applied2 = apply_adjustments(pts, [])
+    assert applied2 == 0 and out2 == pts
+    # 除权日在窗口之前（事件已生效过）→ 无点可修
+    out3, applied3 = apply_adjustments(pts, [{"ex_date": "2026-08-20", "dividend": 0.5, "bonus": 0.0}])
+    assert applied3 == 0 and out3 == pts
+
+
+def test_run_backtest_applies_injected_adjustments():
+    """事件注入路径：run_backtest 内部完成修正并记录 adjustments_applied。"""
+    if TMP.exists():
+        shutil.rmtree(TMP)
+    try:
+        pts = _day_points("20260827", [10.0] * 48)
+        TMP.mkdir(parents=True, exist_ok=True)
+        pl.DataFrame(pts).write_parquet(TMP / "600519.parquet")
+        report = run_backtest(
+            ["600519"], parquet_dir=TMP, in_ratio=0.5,
+            adjustment_events={"600519": [{"ex_date": "2026-08-28", "dividend": 0.5, "bonus": 0.0}]},
+        )
+        assert report["adjustments_applied"] == {"600519": 1}
+        assert "复权" in report["note"]
     finally:
         shutil.rmtree(TMP, ignore_errors=True)

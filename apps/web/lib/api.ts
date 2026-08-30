@@ -240,6 +240,23 @@ export async function getMinuteLine(symbol: string): Promise<MinutePoint[]> {
   return (await getJson<{ symbol: string; points: MinutePoint[] }>(`/api/minute-line/${symbol}`, 20_000)).data.points;
 }
 
+/** 集合竞价快照（最近交易日终态；auction_volume 单位为手）。 */
+export interface AuctionData {
+  symbol: string;
+  name?: string | null;
+  auction_price: number | null;
+  auction_pct: number | null;
+  auction_volume: number | null;
+  auction_volume_ratio: number | null;
+  auction_unmatched: number | null;
+  pre_close_price: number | null;
+  data_status: string | null;
+}
+
+export async function getAuction(symbol: string): Promise<AuctionData> {
+  return (await getJson<AuctionData>(`/api/auction/${symbol}`, 10_000)).data;
+}
+
 export async function getSentiment(): Promise<Sentiment> {
   return (await getJson<Sentiment>("/api/market/sentiment", 30_000)).data;
 }
