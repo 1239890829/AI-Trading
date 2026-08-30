@@ -151,7 +151,7 @@ async def lifespan(app: FastAPI):
         interval = 5.0
         while True:
             try:
-                pending = paper.match_pending()
+                pending = await paper.match_pending()
                 interval = 5.0 if pending > 0 else 30.0
             except Exception:
                 log.exception("paper match_pending failed")

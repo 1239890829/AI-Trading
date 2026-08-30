@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { getQuotes, WS_BASE } from "@/lib/api";
 import type { Quote } from "@/types/market";
 
@@ -14,9 +14,8 @@ export type StreamStatus = "connecting" | "live" | "polling" | "error";
 export function useQuoteStream(symbols: string[]) {
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [status, setStatus] = useState<StreamStatus>("connecting");
+  // 轮询回调用 symbols 的前提：effect 依赖 key，symbols 一变连接整体重建，闭包天然是最新值
   const key = [...symbols].sort().join(",");
-  const symbolsRef = useRef(symbols);
-  symbolsRef.current = symbols;
 
   useEffect(() => {
     if (!key) {
@@ -39,7 +38,7 @@ export function useQuoteStream(symbols: string[]) {
       setStatus("polling");
       const tick = async () => {
         try {
-          apply(await getQuotes(symbolsRef.current));
+          apply(await getQuotes(symbols));
         } catch {
           setStatus("error");
         }

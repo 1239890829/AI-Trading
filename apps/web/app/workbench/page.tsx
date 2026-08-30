@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Panel } from "@/components/panel";
 import { IndexCards } from "@/components/index-cards";
@@ -38,8 +38,8 @@ function WorkbenchInner() {
   const [indices, setIndices] = useState<Quote[]>([]);
   const [totalAmount, setTotalAmount] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const groupMapRef = useRef<Record<string, string>>({});
-  const [groups, setGroups] = useState<string[]>([]);
+  // 以前用 ref 装着再在渲染期读（React 并发渲染下不可靠，且 Next16 的 lint 直接判错）——改为状态
+  const [groupMap, setGroupMap] = useState<Record<string, string>>({});
   const [activeGroup, setActiveGroup] = useState<string>("全部");
   const [updatedAt, setUpdatedAt] = useState<string>("");
   const [selected, setSelected] = useState<string>(paramSymbol ?? "600519");
@@ -61,7 +61,7 @@ function WorkbenchInner() {
         getMarketOverview(),
         getPaperPositions().catch(() => []),
       ]);
-      groupMapRef.current = Object.fromEntries(wl.map((i) => [i.symbol, i.group_name ?? "默认"]));
+      setGroupMap(Object.fromEntries(wl.map((i) => [i.symbol, i.group_name ?? "默认"])));
       setSymbols(wl.map((i) => i.symbol));
       setIndices(overview.indices);
       setTotalAmount(overview.total_amount);
@@ -104,7 +104,8 @@ function WorkbenchInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sparkKey]);
 
-  const groupMap = groupMapRef.current;
+  // 分组清单由 groupMap 派生（旧代码是独立的 groups 状态，从未被赋值，chips 永远只有「全部」）
+  const groups = useMemo(() => Array.from(new Set(Object.values(groupMap))).sort(), [groupMap]);
   const watchQuotes: Quote[] = symbols
     .filter((s) => activeGroup === "全部" || groupMap[s] === activeGroup)
     .map((s) => merged[s])

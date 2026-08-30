@@ -13,10 +13,7 @@ export function SearchBox() {
   const boxRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (q.trim().length < 2) {
-      setItems([]);
-      return;
-    }
+    if (q.trim().length < 2) return;
     const t = setTimeout(async () => {
       try {
         const res = await searchSymbols(q.trim());
@@ -28,6 +25,9 @@ export function SearchBox() {
     }, 250);
     return () => clearTimeout(t);
   }, [q]);
+
+  // 少于 2 字时直接派生空列表（旧写法在 effect 里同步 setItems([])，会触发级联渲染）
+  const results = q.trim().length >= 2 ? items : [];
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
@@ -57,17 +57,17 @@ export function SearchBox() {
       <input
         value={q}
         onChange={(e) => setQ(e.target.value)}
-        onFocus={() => items.length > 0 && setOpen(true)}
+        onFocus={() => results.length > 0 && setOpen(true)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && items.length > 0) go(items[0]);
+          if (e.key === "Enter" && results.length > 0) go(results[0]);
           if (e.key === "Escape") setOpen(false);
         }}
         placeholder="搜索代码 / 名称"
         className="w-full rounded-md border border-zinc-200 bg-transparent px-3 py-1.5 text-sm outline-none placeholder:text-zinc-400 focus:border-up/60 dark:border-zinc-700"
       />
-      {open && items.length > 0 && (
+      {open && results.length > 0 && (
         <ul className="absolute left-0 right-0 top-10 z-50 overflow-hidden rounded-md border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
-          {items.map((it) => (
+          {results.map((it) => (
             <li key={`${it.source}-${it.symbol}`}>
               <div
                 role="button"
