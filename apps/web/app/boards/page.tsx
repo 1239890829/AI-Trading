@@ -3,19 +3,8 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { Panel } from "@/components/panel";
-import { API_BASE } from "@/lib/api";
+import { getBoards, type BoardRow } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
-
-interface BoardRow {
-  name: string;
-  count?: number | null;
-  change_pct?: number | null;
-  amount?: number | null;
-  leader_symbol?: string | null;
-  leader_name?: string | null;
-  leader_change_pct?: number | null;
-  source?: string;
-}
 
 const TYPE_LABEL: Record<string, string> = { hangye: "行业板块", concept: "概念板块" };
 
@@ -27,9 +16,7 @@ export default function BoardsPage() {
 
   const load = useCallback(async (t: string) => {
     try {
-      const res = await fetch(`${API_BASE}/api/boards?type=${t}`, { cache: "no-store" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setRows((await res.json()).data.boards);
+      setRows(await getBoards(t as "hangye" | "concept"));
       setError(null);
       setUpdatedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
     } catch (e) {

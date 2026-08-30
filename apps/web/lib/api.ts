@@ -17,21 +17,87 @@ export const WS_BASE = (
   process.env.NEXT_PUBLIC_WS_BASE ?? API_BASE.replace(/^http/, "ws")
 ) as string;
 
-async function getJson<T>(path: string): Promise<{ data: T; meta: Meta }> {
-  const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`${path}: HTTP ${res.status} ${detail.slice(0, 120)}`);
+/**
+ * 统一错误类型（对接后端 B1 错误契约 `{detail, code}`）：
+ * - `code` 用于程序化分支：`timeout` / `network_error` 可重试或提示启动后端；
+ *   `upstream_failed` 数据源降级；`validation_error` 入参问题；其余按后端返回。
+ * - `message` 即 detail（人可读），既有 catch(e).message 展示零破坏。
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+
+  constructor(status: number, detail: string, code: string) {
+    super(detail);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
   }
-  return res.json();
+}
+
+/** 默认超时：后端卡住时前端不再永远 pending。慢端点在各自 helper 里显式放宽。 */
+const DEFAULT_TIMEOUT_MS = 8000;
+
+async function request<T>(
+  path: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<{ data: T; meta: Meta }> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, { cache: "no-store", ...init, signal: ctrl.signal });
+  } catch (e) {
+    const aborted = e instanceof DOMException && e.name === "AbortError";
+    throw new ApiError(
+      0,
+      aborted ? `${path}：请求超时（${timeoutMs}ms）` : `${path}：网络错误（后端未启动或连接被拒）`,
+      aborted ? "timeout" : "network_error",
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+  const body = (await res.json().catch(() => ({}))) as { data?: T; detail?: string; code?: string };
+  if (!res.ok) {
+    throw new ApiError(res.status, body.detail ?? `HTTP ${res.status}`, body.code ?? `http_${res.status}`);
+  }
+  return body as { data: T; meta: Meta };
+}
+
+async function getJson<T>(path: string, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<{ data: T; meta: Meta }> {
+  return request<T>(path, {}, timeoutMs);
+}
+
+async function sendJson<T = unknown>(
+  path: string,
+  method: string,
+  body?: unknown,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Promise<{ data: T; meta: Meta }> {
+  return request<T>(
+    path,
+    {
+      method,
+      headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    },
+    timeoutMs,
+  );
 }
 
 export async function getMarketOverview(): Promise<{
   indices: Quote[];
   total_amount: number;
 }> {
-  const body = await getJson<{ indices: Quote[]; total_amount: number }>("/api/market/overview");
+  const body = await getJson<{ indices: Quote[]; total_amount: number }>("/api/market/overview", 10_000);
   return body.data;
+}
+
+/** 单只行情（可指定数据源补估值字段，如 tencent）。 */
+export async function getQuote(symbol: string, source?: string): Promise<Quote> {
+  const qs = source ? `?source=${source}` : "";
+  return (await getJson<Quote>(`/api/quotes/${symbol}${qs}`, 10_000)).data;
 }
 
 export async function getQuotes(symbols?: string[]): Promise<Quote[]> {
@@ -42,7 +108,7 @@ export async function getQuotes(symbols?: string[]): Promise<Quote[]> {
 export async function getKline(symbol: string, timeframe = "1d", limit = 250): Promise<Kline[]> {
   return (
     await getJson<{ symbol: string; timeframe: string; bars: Kline[] }>(
-      `/api/kline/${symbol}?timeframe=${timeframe}&limit=${limit}`
+      `/api/kline/${symbol}?timeframe=${timeframe}&limit=${limit}`, 15_000
     )
   ).data.bars;
 }
@@ -57,12 +123,71 @@ export async function getTrades(symbol: string, limit = 50): Promise<Trade[]> {
 
 export async function getLimitUpPool(dateStr?: string): Promise<LimitUpRecord[]> {
   const qs = dateStr ? `?date=${dateStr}` : "";
-  return (await getJson<{ trade_date: string; pool: LimitUpRecord[] }>(`/api/limit-up${qs}`)).data.pool;
+  return (await getJson<{ trade_date: string; pool: LimitUpRecord[] }>(`/api/limit-up${qs}`, 20_000)).data.pool;
 }
 
 export async function getLonghu(dateStr?: string): Promise<LongHuRecord[]> {
   const qs = dateStr ? `?date=${dateStr}` : "";
-  return (await getJson<{ trade_date: string; records: LongHuRecord[] }>(`/api/longhu${qs}`)).data.records;
+  return (await getJson<{ trade_date: string; records: LongHuRecord[] }>(`/api/longhu${qs}`, 20_000)).data.records;
+}
+
+/** 个股龙虎榜明细 + 历史（/api/longhu/{symbol}）。类型随消费方窄化。 */
+export async function getLonghuDetail<T = unknown>(symbol: string): Promise<T> {
+  return (await getJson<T>(`/api/longhu/${symbol}`, 20_000)).data;
+}
+
+/** 个股资金流（N 日）。 */
+export async function getCapitalFlow<T = unknown>(symbol: string, days = 30): Promise<T> {
+  return (await getJson<T>(`/api/capital-flow/${symbol}?days=${days}`, 15_000)).data;
+}
+
+/** 个股财务指标（periods=8 即近 8 期）。 */
+export async function getFinancials<T = unknown>(symbol: string, periods = 8): Promise<T[]> {
+  return (await getJson<{ symbol: string; periods: T[] }>(`/api/financials/${symbol}?periods=${periods}`, 15_000)).data.periods;
+}
+
+export interface InfoItem {
+  title: string;
+  date?: string | null;
+  source?: string | null;
+  url?: string | null;
+  summary?: string | null;
+}
+
+/** 个股公告列表。类型随消费方窄化（后端字段为超集）。 */
+export async function getAnnouncements<T = InfoItem>(symbol: string, limit = 8): Promise<T[]> {
+  return (await getJson<{ symbol: string; items: T[] }>(`/api/announcements/${symbol}?limit=${limit}`, 15_000)).data.items;
+}
+
+/** 个股新闻列表。类型随消费方窄化（后端字段为超集）。 */
+export async function getNews<T = InfoItem>(symbol: string, limit = 8): Promise<T[]> {
+  return (await getJson<{ symbol: string; items: T[] }>(`/api/news/${symbol}?limit=${limit}`, 15_000)).data.items;
+}
+
+/** 板块排行（新浪闪电口径）。结构见 /api/boards。 */
+export interface BoardRow {
+  name: string;
+  count?: number | null;
+  change_pct?: number | null;
+  amount?: number | null;
+  leader_symbol?: string | null;
+  leader_name?: string | null;
+  leader_change_pct?: number | null;
+  source?: string;
+}
+
+export async function getBoards(type: "hangye" | "concept"): Promise<BoardRow[]> {
+  return (await getJson<{ type: string; boards: BoardRow[] }>(`/api/boards?type=${type}`, 15_000)).data.boards;
+}
+
+/** 市场宽度（全市场快照价格法）。 */
+export interface Breadth {
+  up: number; down: number; flat: number; limit_up: number; limit_down: number;
+  total: number; total_amount: number; suspended: number;
+}
+
+export async function getBreadth(): Promise<Breadth> {
+  return (await getJson<{ breadth: Breadth }>("/api/market/breadth", 15_000)).data.breadth;
 }
 
 /** 题材梯队看板。首次加载较慢（需回溯 5 日涨停池），后端缓存 60s。 */
@@ -80,7 +205,7 @@ export async function getThemes(opts?: {
   if (opts?.minCount) p.set("min_count", String(opts.minCount));
   if (opts?.limit) p.set("limit", String(opts.limit));
   const qs = p.toString() ? `?${p.toString()}` : "";
-  return (await getJson<ThemeBoardPayload>(`/api/themes${qs}`)).data;
+  return (await getJson<ThemeBoardPayload>(`/api/themes${qs}`, 60_000)).data;
 }
 
 export async function searchSymbols(q: string): Promise<SymbolSearchItem[]> {
@@ -112,11 +237,11 @@ export interface Sentiment {
 }
 
 export async function getMinuteLine(symbol: string): Promise<MinutePoint[]> {
-  return (await getJson<{ symbol: string; points: MinutePoint[] }>(`/api/minute-line/${symbol}`)).data.points;
+  return (await getJson<{ symbol: string; points: MinutePoint[] }>(`/api/minute-line/${symbol}`, 20_000)).data.points;
 }
 
 export async function getSentiment(): Promise<Sentiment> {
-  return (await getJson<Sentiment>("/api/market/sentiment")).data;
+  return (await getJson<Sentiment>("/api/market/sentiment", 30_000)).data;
 }
 
 export async function getWatchlist(): Promise<WatchlistItem[]> {
@@ -124,13 +249,9 @@ export async function getWatchlist(): Promise<WatchlistItem[]> {
 }
 
 export async function addToWatchlist(symbol: string, name?: string, group?: string): Promise<WatchlistItem> {
-  const res = await fetch(`${API_BASE}/api/watchlist`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ symbol, name, group: group ?? "默认" }),
-  });
-  if (!res.ok) throw new Error(`addToWatchlist: HTTP ${res.status}`);
-  return (await res.json()).data;
+  return (
+    await sendJson<WatchlistItem>("/api/watchlist", "POST", { symbol, name, group: group ?? "默认" })
+  ).data;
 }
 
 export interface CompanyProfile {
@@ -145,8 +266,8 @@ export interface CompanyProfile {
   source: string;
 }
 
-export async function getCompanyProfile(symbol: string): Promise<CompanyProfile> {
-  return (await getJson<CompanyProfile>(`/api/company/${symbol}`)).data;
+export async function getCompanyProfile<T = CompanyProfile>(symbol: string): Promise<T> {
+  return (await getJson<T>(`/api/company/${symbol}`, 15_000)).data;
 }
 
 export interface PaperAccountInfo {
@@ -197,31 +318,22 @@ export const getPaperFills = (symbol: string) =>
   getJson<PaperFill[]>(`/api/paper/fills?symbol=${symbol}`).then((b) => b.data);
 
 export async function placePaperOrder(symbol: string, side: string, price: number, quantity: number) {
-  const res = await fetch(`${API_BASE}/api/paper/orders`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ symbol, side, price, quantity }),
-  });
-  const body = await res.json();
-  if (!res.ok) throw new Error(body.detail ?? `HTTP ${res.status}`);
-  return body.data as { id: number; status: string; filled_price?: number | null; fee?: number | null };
+  return (
+    await sendJson<{ id: number; status: string; filled_price?: number | null; fee?: number | null }>(
+      "/api/paper/orders", "POST", { symbol, side, price, quantity }, 15_000
+    )
+  ).data;
 }
 
 export async function cancelPaperOrder(id: number) {
-  const res = await fetch(`${API_BASE}/api/paper/orders/${id}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  await sendJson(`/api/paper/orders/${id}`, "DELETE", undefined, 15_000);
 }
 
 /** 重置模拟账户：清仓 + 清委托历史 + 资金回到初始额度。不可撤销。 */
 export async function resetPaperAccount(initialCash?: number): Promise<PaperAccountInfo> {
-  const res = await fetch(`${API_BASE}/api/paper/reset`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(initialCash ? { initial_cash: initialCash } : {}),
-  });
-  const body = await res.json();
-  if (!res.ok) throw new Error(body.detail ?? `HTTP ${res.status}`);
-  return body.data as PaperAccountInfo;
+  return (
+    await sendJson<PaperAccountInfo>("/api/paper/reset", "POST", initialCash ? { initial_cash: initialCash } : {}, 30_000)
+  ).data;
 }
 
 export async function getWatchlistGroups(): Promise<string[]> {
@@ -229,15 +341,9 @@ export async function getWatchlistGroups(): Promise<string[]> {
 }
 
 export async function updateWatchlistGroup(symbol: string, group: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/watchlist/${symbol}/group`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ group }),
-  });
-  if (!res.ok) throw new Error(`updateWatchlistGroup: HTTP ${res.status}`);
+  await sendJson(`/api/watchlist/${symbol}/group`, "PUT", { group });
 }
 
 export async function removeFromWatchlist(symbol: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/watchlist/${symbol}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`removeFromWatchlist: HTTP ${res.status}`);
+  await sendJson(`/api/watchlist/${symbol}`, "DELETE");
 }

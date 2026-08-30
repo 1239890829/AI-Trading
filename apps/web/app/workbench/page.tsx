@@ -9,7 +9,7 @@ import { StockDetailPanel } from "@/components/stock-detail";
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
 import { useQuoteStream, StreamStatus } from "@/hooks/use-quote-stream";
-import { getMarketOverview, getQuotes, removeFromWatchlist } from "@/lib/api";
+import { getMarketOverview, getQuotes, getWatchlist, removeFromWatchlist } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
 import type { Quote } from "@/types/market";
 
@@ -44,15 +44,10 @@ function WorkbenchInner() {
 
   const loadBase = useCallback(async () => {
     try {
-      const [wl, overview, gs] = await Promise.all([
-        fetch(`${process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000"}/api/watchlist`, { cache: "no-store" }).then((r) => r.json()),
-        getMarketOverview(),
-        fetch(`${process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000"}/api/watchlist/groups`, { cache: "no-store" }).then((r) => r.json()).catch(() => ({ data: [] })),
-      ]);
-      groupMapRef.current = Object.fromEntries(
-        (wl.data as { symbol: string; group_name?: string }[]).map((i) => [i.symbol, i.group_name ?? "默认"])
-      );
-      setSymbols((wl.data as { symbol: string }[]).map((i) => i.symbol));
+      // 原 groups 裸 fetch 从未被消费（gs 解构后无人用）——随收口一并删除
+      const [wl, overview] = await Promise.all([getWatchlist(), getMarketOverview()]);
+      groupMapRef.current = Object.fromEntries(wl.map((i) => [i.symbol, i.group_name ?? "默认"]));
+      setSymbols(wl.map((i) => i.symbol));
       setIndices(overview.indices);
       setTotalAmount(overview.total_amount);
       setError(null);

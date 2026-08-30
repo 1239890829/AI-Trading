@@ -11,15 +11,22 @@ import { useQuoteStream } from "@/hooks/use-quote-stream";
 import { analyze } from "@/lib/technical-analysis";
 import {
   addToWatchlist,
-  API_BASE,
   cancelPaperOrder,
+  getAnnouncements,
+  getCapitalFlow,
+  getCompanyProfile,
+  getFinancials,
   getKline,
+  getLonghuDetail,
+  getMarketOverview,
   getMinuteLine,
+  getNews,
   getOrderBook,
   getPaperAccount,
   getPaperFills,
   getPaperOrders,
   getPaperPositions,
+  getQuote,
   getQuotes,
   getTrades,
   getWatchlist,
@@ -112,10 +119,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     let alive = true;
     const pull = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/quotes/${symbol}?source=tencent`, { cache: "no-store" });
-        if (!res.ok) return;
-        const body = await res.json();
-        const q = body.data as Quote;
+        const q = await getQuote(symbol, "tencent");
         setQuote((prev) => {
           // 同股才合并：保留 WS 的最新价（腾讯 REST 可能滞后）。
           // 旧实现无条件沿用 prev.price——切股后 prev 还是上一只股票的，
@@ -187,9 +191,9 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
       try {
         const [idxPoints, overview] = await Promise.all([
           getMinuteLine("sh000001").catch(() => [] as MinutePoint[]),
-          fetch(`${API_BASE}/api/market/overview`, { cache: "no-store" }).then((r) => r.json()).catch(() => null),
+          getMarketOverview().catch(() => null),
         ]);
-        const sh = (overview?.data?.indices ?? []).find((i: { symbol: string }) => i.symbol === "000001");
+        const sh = overview?.indices.find((i) => i.symbol === "000001");
         if (alive && idxPoints.length > 0 && sh?.prev_close) {
           setIndexOverlay({ points: idxPoints, prevClose: sh.prev_close });
         }
@@ -223,12 +227,12 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
       getOrderBook(symbol).catch(() => null),
       getTrades(symbol, 30).catch(() => [] as Trade[]),
       getMinuteLine(symbol).catch(() => [] as MinutePoint[]),
-      fetch(`${API_BASE}/api/longhu/${symbol}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-      fetch(`${API_BASE}/api/capital-flow/${symbol}?days=30`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-      fetch(`${API_BASE}/api/financials/${symbol}?periods=8`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-      fetch(`${API_BASE}/api/company/${symbol}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-      fetch(`${API_BASE}/api/announcements/${symbol}?limit=8`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-      fetch(`${API_BASE}/api/news/${symbol}?limit=8`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      getLonghuDetail<{ detail: LonghuDetail; history: LonghuHistory[]; stats: LonghuStats }>(symbol).catch(() => null),
+      getCapitalFlow<CapitalFlow>(symbol, 30).catch(() => null),
+      getFinancials<FinRow>(symbol, 8).catch(() => null),
+      getCompanyProfile<CompanyProfile>(symbol).catch(() => null),
+      getAnnouncements<InfoItem>(symbol, 8).catch(() => null),
+      getNews<InfoItem>(symbol, 8).catch(() => null),
     ])
       .then(([b, ob, tr, min, lh, cf, fins, comp, anns, news]) => {
         if (!alive) return;
@@ -236,12 +240,12 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
         setBook(ob);
         setTrades(tr);
         setMinutes(min);
-        if (lh?.data) setLonghu(lh.data);
-        if (cf?.data) setFlow(cf.data);
-        if (fins?.data) setFins(fins.data.periods);
-        if (comp?.data) setCompany(comp.data);
-        if (anns?.data) setAnns(anns.data.items);
-        if (news?.data) setNews(news.data.items);
+        if (lh) setLonghu(lh);
+        if (cf) setFlow(cf);
+        if (fins) setFins(fins);
+        if (comp) setCompany(comp);
+        if (anns) setAnns(anns);
+        if (news) setNews(news);
       })
       .catch((e: Error) => alive && setError(e.message));
     return () => {
@@ -739,9 +743,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
 
 async function getWatchlistSymbols(): Promise<string[]> {
   try {
-    const res = await fetch(`${API_BASE}/api/watchlist`, { cache: "no-store" });
-    if (!res.ok) return [];
-    return ((await res.json()).data as { symbol: string }[]).map((i) => i.symbol);
+    return (await getWatchlist()).map((i) => i.symbol);
   } catch {
     return [];
   }

@@ -1,15 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { API_BASE } from "@/lib/api";
 import { Panel } from "@/components/panel";
 import { QualityBadge } from "@/components/quality-badge";
-import { getLimitUpPool, getMarketOverview, getSentiment, type Sentiment } from "@/lib/api";
-
-interface Breadth {
-  up: number; down: number; flat: number; limit_up: number; limit_down: number;
-  total: number; total_amount: number; suspended: number;
-}
+import {
+  getBreadth,
+  getLimitUpPool,
+  getMarketOverview,
+  getSentiment,
+  type Breadth,
+  type Sentiment,
+} from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
 import type { LimitUpRecord, Quote } from "@/types/market";
 
@@ -36,14 +37,14 @@ export default function MarketPage() {
       const [overview, zt, breadthRes, sentRes] = await Promise.all([
         getMarketOverview(),
         getLimitUpPool().catch(() => [] as LimitUpRecord[]),
-        fetch(`${API_BASE}/api/market/breadth`).then((r) => r.json()).catch(() => null),
-        fetch(`${API_BASE}/api/market/sentiment`).then((r) => r.json()).catch(() => null),
+        getBreadth().catch(() => null),
+        getSentiment().catch(() => null),
       ]);
       setIndices(overview.indices);
       setTotalAmount(overview.total_amount);
       setPool(zt.slice(0, 10));
-      setBreadth(breadthRes?.data?.breadth ?? null);
-      setSent(sentRes?.data ?? null);
+      setBreadth(breadthRes);
+      setSent(sentRes);
       setError(null);
       setUpdatedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
     } catch {
