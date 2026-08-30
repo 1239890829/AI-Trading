@@ -309,13 +309,19 @@ class MockProvider:
         minutes = (self._clock() - datetime(today.year, today.month, today.day)).seconds // 60
         minutes = max(min(minutes, 240), 5)
         cum = 0.0
+        cum_vol = 0
         for i in range(minutes):
             hh, mm = divmod(9 * 60 + 30 + i, 60)
             price = round(price * (1 + rnd.uniform(-0.002, 0.002)), 2)
             vol = rnd.randint(10, 800) * 100
+            cum_vol += vol
             cum += vol * price
             ts = datetime(today.year, today.month, today.day, hh % 24, mm, tzinfo=timezone.utc)
-            points.append({"ts": ts.isoformat(), "price": price, "volume": vol, "cum_amount": round(cum, 2), "source": SOURCE})
+            points.append({
+                "ts": ts.isoformat(), "price": price, "volume": vol,
+                "cum_amount": round(cum, 2), "cum_volume": cum_vol,
+                "avg": round(cum / cum_vol, 3), "source": SOURCE,
+            })
         return points
 
 

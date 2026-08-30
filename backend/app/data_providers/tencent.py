@@ -65,6 +65,56 @@ def _price_raw(v: str | None) -> float | None:
     return n
 
 
+def build_minute_points(rows: list, trade_date: str, fallback_date) -> list[dict]:
+    """腾讯 minute 行数组 → 分时点列表（纯函数，可单测）。
+
+    :param rows: 形如 ``["0930 1289.00 81 10440900.00", ...]``——
+        第 2 列是价格，**第 3 列是累计量（手）而非该分钟量**，第 4 列是累计额（元）。
+        （2026-08-30 用茅台两行数据交叉验证确认：旧实现把累计量当分钟量，
+        量能柱画成了"递增的累计柱"；均价线也因此算出荒谬值。）
+    :param trade_date: 响应自带的真实交易日（YYYYMMDD）；缺失/非法时回退 fallback_date
+    :param fallback_date: date 对象（旧口径：本地"今天"），仅在响应无日期时兜底
+    """
+    use_official = len(trade_date) == 8 and trade_date.isdigit()
+    date_str = trade_date if use_official else fallback_date.strftime("%Y-%m-%d")
+    date_fmt = "%Y%m%d %H%M" if use_official else "%Y-%m-%d %H%M"
+
+    points: list[dict] = []
+    prev_cum_vol: float | None = None
+    for row in rows:
+        parts = str(row).split()
+        if len(parts) < 4:
+            continue
+        try:
+            ts = datetime.strptime(f"{date_str} {parts[0]}", date_fmt)
+        except ValueError:
+            continue
+        price = _num(parts[1])
+        if price is None or price <= 0:
+            continue
+        cum_hand = _num(parts[2])
+        cum_vol = cum_hand * 100 if cum_hand is not None else None  # 手→股
+        cum_amount = _num(parts[3])
+        avg = None
+        minute_vol = None
+        if cum_vol:
+            avg = round(cum_amount / cum_vol, 3) if cum_amount is not None else None
+            minute_vol = cum_vol - prev_cum_vol if prev_cum_vol is not None else cum_vol
+            prev_cum_vol = cum_vol
+        points.append(
+            {
+                "ts": ts.replace(tzinfo=_TZ_BJ).astimezone(timezone.utc).isoformat(),
+                "price": price,
+                "volume": minute_vol,
+                "cum_amount": cum_amount,
+                "cum_volume": cum_vol,
+                "avg": avg,
+                "source": SOURCE,
+            }
+        )
+    return points
+
+
 def to_tencent_symbol(symbol: str) -> str:
     """转腾讯代码（sh/sz/bj + 6 位）。
 
@@ -298,37 +348,26 @@ class TencentProvider:
         return []  # 腾讯免费逐笔无稳定端点；逐笔走东财 details，分钟级分时走 get_minute_line
 
     async def get_minute_line(self, symbol: str) -> list[dict]:
-        """当日 1 分钟分时：[{ts, price, volume(股), cum_amount(元)}]，来源 minute/query。"""
+        """当日 1 分钟分时：[{ts, price, volume(股), cum_amount(元), cum_volume(股), avg(元)}]。
+
+        2026-08-30 修正（docs/minute-chart-plan.md 模块 0）：
+        - ts 改用响应里的 ``data.date``（真实交易日）。旧实现用 ``datetime.now()``
+          拼日期——非交易日请求会把最近交易日的分时打上今天日期（X 轴错位）。
+        - 新增 ``cum_volume``（累计量，股）与 ``avg``（均价线）。
+          均价线 = cum_amount / cum_volume，是行情软件均价线的标准定义，无需额外数据源。
+        """
+        code_sym = to_tencent_symbol(symbol)
         resp = await self._client.get(
             "https://web.ifzq.gtimg.cn/appstock/app/minute/query",
-            params={"code": to_tencent_symbol(symbol)},
+            params={"code": code_sym},
         )
         if resp.status_code != 200:
             raise ProviderError(f"tencent minute HTTP {resp.status_code}")
-        node = ((resp.json().get("data") or {}).get(to_tencent_symbol(symbol)) or {}).get("data") or {}
+        payload = ((resp.json().get("data") or {}).get(code_sym) or {})
+        node = payload.get("data") or {}
         rows = node.get("data") or []
-        points: list[dict] = []
-        for row in rows:
-            parts = str(row).split()
-            if len(parts) < 4:
-                continue
-            try:
-                ts = datetime.strptime(f"{datetime.now(_TZ_BJ).date()} {parts[0]}", "%Y-%m-%d %H%M")
-            except ValueError:
-                continue
-            price = _num(parts[1])
-            if price is None or price <= 0:
-                continue
-            vol_hand = _num(parts[2])
-            points.append(
-                {
-                    "ts": ts.replace(tzinfo=_TZ_BJ).astimezone(timezone.utc).isoformat(),
-                    "price": price,
-                    "volume": vol_hand * 100 if vol_hand is not None else None,
-                    "cum_amount": _num(parts[3]),
-                    "source": SOURCE,
-                }
-            )
+        trade_date = str(node.get("date") or "")
+        points = build_minute_points(rows, trade_date, datetime.now(_TZ_BJ).date())
         if not points:
             raise ProviderError(f"tencent minute line empty for {symbol}")
         return points

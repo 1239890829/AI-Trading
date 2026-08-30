@@ -92,6 +92,8 @@ export interface MinutePoint {
   price: number;
   volume?: number | null;
   cum_amount?: number | null;
+  cum_volume?: number | null;
+  avg?: number | null;
   source: string;
 }
 

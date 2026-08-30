@@ -385,7 +385,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
 
           {chartTab === "minute" && (
             <Panel title="当日分时（1 分钟）" source={minutes[0]?.source} bodyClassName="overflow-hidden" className="min-h-0 flex-1">
-              {minutes.length > 0 ? <MinuteChart points={minutes} className="h-full" /> : <p className="px-4 py-10 text-center text-sm text-zinc-400">暂无分时数据</p>}
+              {minutes.length > 0 ? <MinuteChart points={minutes} prevClose={quote?.prev_close ?? null} className="h-full" /> : <p className="px-4 py-10 text-center text-sm text-zinc-400">暂无分时数据</p>}
             </Panel>
           )}
 
