@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MinuteChart } from "@/components/minute-chart";
 import { KlineChartPro } from "@/components/kline-chart-pro";
 import { TradeForm } from "@/components/trade-form";
@@ -55,6 +55,13 @@ type RightTab = "book" | "trades" | "trade" | "profile" | "info";
 export function StockDetailPanel({ symbol }: { symbol: string }) {
   const [chartTab, setChartTab] = useState<ChartTab>("kline");
   const [rightTab, setRightTab] = useState<RightTab>("book");
+  // 布局 #1：右列宽度可拖拽（localStorage 持久化；260-480px 防极限）
+  const [rightW, setRightW] = useState(300);
+  const rightColRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const saved = Number(localStorage.getItem("ashare-right-w"));
+    if (saved >= 260 && saved <= 480) setRightW(saved);
+  }, []);
   const [bars, setBars] = useState<Kline[]>([]);
   const [book, setBook] = useState<OrderBook | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
@@ -302,8 +309,11 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
       {/* ① 紧凑行情条 */}
       {quote && <QuoteStrip quote={quote} inWatchlist={inWatchlist} onAdd={() => void add()} />}
 
-      {/* ② 中部：左图表区 + 右盘口/逐笔 */}
-      <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr),300px]">
+      {/* ② 中部：左图表区 + 右盘口/逐笔（右列宽度可拖拽，--right-w 由 state 注入） */}
+      <div
+        className="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr),var(--right-w)]"
+        style={{ "--right-w": `${rightW}px` } as React.CSSProperties}
+      >
         <div className="flex min-h-0 min-w-0 flex-col gap-1.5">
           <div className="flex shrink-0 gap-1">
             {(
@@ -389,8 +399,35 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
           )}
         </div>
 
-        {/* 右列：盘口↔逐笔 + 资讯 tabs */}
-        <div className="flex min-h-0 flex-col gap-2">
+        {/* 右列：盘口↔逐笔 + 资讯 tabs（左缘拖拽条调宽，宽度持久化 localStorage） */}
+        <div ref={rightColRef} className="relative flex min-h-0 flex-col gap-2">
+          <div
+            onMouseDown={(e) => {
+              e.preventDefault();
+              const rect = rightColRef.current?.getBoundingClientRect();
+              if (!rect) return;
+              document.body.style.userSelect = "none";
+              const move = (ev: MouseEvent) => {
+                setRightW(Math.min(480, Math.max(260, Math.round(rect.right - ev.clientX))));
+              };
+              // mouseup 必须挂 window：释放时鼠标通常已离开拖拽条，
+              // 元素级 onMouseUp 永远不会触发（首测实抓：宽度变了但 localStorage 为 null）
+              const up = () => {
+                document.body.style.userSelect = "";
+                window.removeEventListener("mousemove", move);
+                window.removeEventListener("mouseup", up);
+                setRightW((w) => {
+                  localStorage.setItem("ashare-right-w", String(w));
+                  return w;
+                });
+              };
+              window.addEventListener("mousemove", move);
+              window.addEventListener("mouseup", up);
+            }}
+            className="absolute -left-2 top-0 z-10 h-full w-2 cursor-col-resize hover:bg-sky-500/25"
+            title="拖拽调整右列宽度"
+            aria-label="拖拽调整右列宽度"
+          />
 
         <Panel
           title={rightTab === "book" ? "五档盘口" : rightTab === "trades" ? "逐笔成交" : rightTab === "trade" ? "模拟交易" : rightTab === "profile" ? "公司资料" : "资讯"}
