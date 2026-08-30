@@ -68,7 +68,17 @@ def run_migrations_online() -> None:
     In this scenario we need to create an Engine
     and associate a connection with the context.
 
+    支持连接共享：调用方（app.core.migrations）可通过
+    ``config.attributes["connection"]`` 传入既有连接——
+    使 :memory:/测试库与迁移在同一连接上执行。
     """
+    shared = config.attributes.get("connection")
+    if shared is not None:
+        context.configure(connection=shared, target_metadata=target_metadata)
+        with context.begin_transaction():
+            context.run_migrations()
+        return
+
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
