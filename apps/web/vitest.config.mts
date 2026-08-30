@@ -2,10 +2,12 @@ import { defineConfig } from "vitest/config";
 import path from "path";
 
 export default defineConfig({
+  // 注：vitest 4 默认用 oxc 转译（会自动处理 JSX），不要再设 esbuild 选项，
+  // 否则会报 "Both esbuild and oxc options were set... esbuild options will be ignored"
   test: {
-    // 前端测试只覆盖 lib/ 纯函数（技术指标/格式化）——组件渲染测试待引入 jsdom 后扩展
-    include: ["lib/**/*.test.ts"],
-    environment: "node",
+    include: ["lib/**/*.test.ts", "components/**/*.test.tsx"],
+    // 统一 jsdom：组件测试需要 DOM，纯函数测试在 jsdom 下同样可跑
+    environment: "jsdom",
   },
   resolve: {
     alias: {

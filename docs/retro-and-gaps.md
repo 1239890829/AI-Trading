@@ -45,7 +45,7 @@
 | # | 项 | 风险 | 处置 |
 |---|---|---|---|
 | ~~1~~ | ~~StockDetailPanel ~600 行单文件~~ | ✅ 已完成（F3：424 行壳 + components/detail/ 6 个子组件） | — |
-| ~~2~~ | ~~前端零测试~~ | ✅ 已完成基建（2026-08-30）：vitest（node 环境）+ lib 纯函数 24 测试（technical-analysis 12 + format 12）+ CI frontend job 纳入 `npx vitest run` 门禁。~~**已知缺陷：analyze 下跌中 KDJ/RSI 超卖计 bull**~~ ✅ 已修复并补测（commit 9bf74e7 + 2026-08-30 补量价维度）：防飞刀三条修正现与后端 `tech_score` 完全对齐——① 零轴下 MACD 不计 bull；② 空头排列下 KDJ/RSI 超卖衰减为 neutral；③ **放量下杀 ≠ 温和放量**（新增量价维度，量比阈值 4.0/2.5/1.0/0.6 与后端一致）。组件渲染测试待引入 jsdom 后扩展 | — |
+| ~~2~~ | ~~前端零测试~~ | ✅ 已完成基建（2026-08-30）：vitest + lib 纯函数 25 测试 + **组件渲染测试 5 个**（jsdom + @testing-library/react，TradeForm 覆盖千分位解析/整手校验/风控拦截禁用/可买上限展示）。~~**已知缺陷：analyze 下跌中 KDJ/RSI 超卖计 bull**~~ ✅ 已修复并补测（commit 9bf74e7 + 2026-08-30 补量价维度）：防飞刀三条修正现与后端 `tech_score` 完全对齐——① 零轴下 MACD 不计 bull；② 空头排列下 KDJ/RSI 超卖衰减为 neutral；③ **放量下杀 ≠ 温和放量**（新增量价维度，量比阈值 4.0/2.5/1.0/0.6 与后端一致）。组件渲染测试 ✅ 已扩展（jsdom + RTL，5 个 TradeForm 用例）；更多组件按需增补 | — |
 | ~~3~~ | ~~Next 15.5.24 outdated~~ | ✅ 已完成（2026-08-30）：升级到 next@16.3.3 + eslint@9.39.4 + eslint-config-next@16.3.3；`.eslintrc.json` 迁移为 `eslint.config.mjs` 原生 flat 配置；`next lint` 被移除，CI 改为 `npx eslint .`；加 `allowedDevOrigins: ['127.0.0.1']` 允许 127.0.0.1 来源访问 dev HMR/chunk；tsc/eslint/vitest/next build 全绿，CI 绿。**挂账**：20 条 `react-hooks/set-state-in-effect` warn（全部在 effect 异步回调写状态的经典取数模式），已降为 warn 并注释在 `eslint.config.mjs`；彻底清零需把取数收敛到 use()/Suspense 或数据层，独立重构 | — |
 | ~~4~~ | ~~新闻/公告每次切股重新拉取~~ | ✅ 已完成（2026-08-30）：announcements/news 进程内 60s TTL 缓存（meta.cached 标注），源只打一次 | — |
 | ~~5~~ | ~~paper_matcher 5s 轮询挂单~~ | ✅ 已完成（2026-08-30）：match_pending 返回剩余挂单数，无挂单 30s 降频、有挂单 5s 密集轮询 | — |

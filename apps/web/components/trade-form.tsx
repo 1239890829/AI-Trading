@@ -124,7 +124,7 @@ export function TradeForm({
         {riskCheck && (
           <div className="flex justify-between text-zinc-500">
             <span>{side === "buy" ? "风控可买上限" : "可卖（T+1）"}</span>
-            <span className="font-mono">{riskCheck.max_qty} 股</span>
+            <span className="font-mono">{fmt(riskCheck.max_qty, 0)} 股</span>
           </div>
         )}
         {limitUp != null && side === "buy" && (
