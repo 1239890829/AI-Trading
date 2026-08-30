@@ -774,7 +774,7 @@ def _load_snapshot_map(request: Request, trade_date: date | None = None) -> dict
     找不到当天目录时，退到不晚于该日期的最近一份，并记 warning。
     """
     try:
-        import polars as pl
+        from app.services.parquet_store import read_latest_in_dir
 
         svc = getattr(request.app.state, "snapshot_service", None)
         base = Path(getattr(svc, "parquet_dir", "")) / "snapshots" if svc else None
@@ -806,8 +806,12 @@ def _load_snapshot_map(request: Request, trade_date: date | None = None) -> dict
         if chosen is None:
             return {}
 
-        files = sorted(chosen.glob("*.parquet"))
-        df = pl.read_parquet(files[-1], columns=["symbol", "change_pct"])
+        # 取该日目录里最新一份**可读**的快照：损坏文件会被跳过而不是让整个端点 502
+        read = read_latest_in_dir(chosen, columns=["symbol", "change_pct"])
+        if not read.ok:
+            log.warning("snapshot unreadable for %s: %s", chosen, read.error)
+            return {}
+        df = read.df
         out: dict[str, dict] = {}
         for sym, pct in zip(df["symbol"].to_list(), df["change_pct"].to_list()):
             if sym is None:

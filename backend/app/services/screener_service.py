@@ -20,6 +20,7 @@ from pathlib import Path
 
 from app.schemas.screener import ScreenerItem, ScreenerPayload, ScreenerSignal
 from app.market.tech_score import SCORER_VERSION, score_stock
+from app.services.parquet_store import read_latest_snapshot
 
 log = logging.getLogger(__name__)
 
@@ -29,22 +30,21 @@ BJ_PREFIXES = ("43", "83", "87", "92")  # 北交所代码前缀（科创板 688 
 
 
 def load_snapshot_rows(parquet_dir: Path) -> tuple[list[dict], str | None]:
-    """最新快照全列行 + 数据时点（ticktime）。找不到快照返回空。"""
-    import polars as pl
+    """最新快照全列行 + 数据时点（ticktime）。
 
-    base = parquet_dir / "snapshots"
-    if not base.exists():
-        return [], None
-    for day_dir in sorted((p for p in base.iterdir() if p.is_dir()), reverse=True):
-        files = sorted(day_dir.glob("*.parquet"))
-        if not files:
-            continue
-        df = pl.read_parquet(files[-1])
-        tick = None
-        if "ticktime" in df.columns:
-            tick = df["ticktime"].drop_nulls()[-1] if df["ticktime"].drop_nulls().len() else None
-        return df.to_dicts(), str(tick) if tick is not None else None
-    return [], None
+    改走 parquet_store.read_latest_snapshot：最新那份损坏时自动回退到更早的
+    可读快照，而不是整个 502——实测快照目录里混有损坏文件（写入被中断所致）。
+    全部不可读才抛 RuntimeError，由路由映射为 snapshot_unavailable（诚实口径：
+    这是本地快照问题，不是 TDX 源问题）。
+    """
+    read = read_latest_snapshot(Path(parquet_dir))
+    if not read.ok:
+        raise RuntimeError(read.error or "快照不可用")
+    df = read.df
+    tick = None
+    if "ticktime" in df.columns:
+        tick = df["ticktime"].drop_nulls()[-1] if df["ticktime"].drop_nulls().len() else None
+    return df.to_dicts(), str(tick) if tick is not None else None
 
 
 def filter_universe(

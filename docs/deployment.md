@@ -70,6 +70,18 @@ BACKEND_ORIGIN=http://127.0.0.1:8000 npx next start -p 3100
 curl http://127.0.0.1:3100/backend/api/health   # 应返回后端健康信息
 ```
 
+## 运维工具：全 GET 端点巡检
+
+```bash
+node scripts/api-sweep.js                    # 默认打 http://127.0.0.1:8000
+node scripts/api-sweep.js http://nas:8000    # 指定目标
+```
+
+从 `/openapi.json` 取权威清单（不会漏也不会多），自动替换路径参数、填必需查询参数，
+逐个打真实后端并输出非 2xx 明细与慢端点。**只读**，不触碰写接口。
+2026-08-30 首次运行：52 个 GET 端点，47 通过；5 个异常均为真实原因而非代码缺陷
+（东财逐笔被限流、非交易日无竞价数据、复盘报告/预判/预警规则本就不存在）。
+
 ## 运维要点
 
 - SQLite 文件在 `data/ashare.db`，行情/因子/回测结果规划写入 `data/parquet/`，注意备份 data/ 目录。
@@ -94,3 +106,9 @@ curl http://127.0.0.1:3100/backend/api/health   # 应返回后端健康信息
 6. **`.env.example` 会与 `config.py` 漂移**：曾缺 alert/review/news 三组共 11 项，
    且"写接口鉴权"整段重复两次。已加 `backend/tests/test_env_docs.py`
    守护（缺项/重复/已失效键都会红）。
+7. **Parquet 快照必须原子写**。直接 `write_parquet(目标路径)` 时进程被 kill
+   （重启/部署/崩溃）会留下**大小正常但内容损坏**的文件——2026-08-30 实测产生 7 个，
+   只要最新那份落在其中，选股器与情绪端点全线 502，且错误信息还误报成"TDX 源不可用"。
+   现在写入改为临时文件 + `os.replace()`，读取侧由 `app/services/parquet_store.py`
+   从最新往回跳过损坏文件。发现既有损坏文件时应手工清理
+   `data/parquet/snapshots/*/`（该目录不入库，属本地数据）。
