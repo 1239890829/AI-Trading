@@ -9,7 +9,19 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.deps import get_hub
 from app.data_quality.validator import validate_order_book
-from app.schemas.market import utcnow
+from app.schemas.envelope import (
+    Envelope,
+    KlinePayload,
+    LimitUpPoolPayload,
+    LongHuPayload,
+)
+from app.schemas.market import (
+    OrderBook,
+    Quote,
+    SymbolSearchItem,
+    Trade,
+    utcnow,
+)
 from app.services.quote_hub import QuoteHub
 
 log = logging.getLogger(__name__)
@@ -77,7 +89,7 @@ async def market_overview(hub: QuoteHub = Depends(get_hub)) -> dict:
     }
 
 
-@router.get("/quotes")
+@router.get("/quotes", response_model=Envelope[list[Quote]])
 async def quotes(
     symbols: str | None = Query(default=None, description="逗号分隔的股票代码"),
     hub: QuoteHub = Depends(get_hub),
@@ -87,7 +99,7 @@ async def quotes(
     return {"data": [q.model_dump(mode="json") for q in data], "meta": _meta(hub)}
 
 
-@router.get("/quotes/{symbol}")
+@router.get("/quotes/{symbol}", response_model=Envelope[Quote])
 async def quote(
     symbol: str,
     source: str | None = Query(default=None, description="指定数据源（如 tencent，用于补估值字段）"),
@@ -143,7 +155,7 @@ async def _kline_payload(hub: QuoteHub, symbol: str, timeframe: str, limit: int,
     }
 
 
-@router.get("/kline/{symbol}")
+@router.get("/kline/{symbol}", response_model=Envelope[KlinePayload])
 async def kline(
     symbol: str,
     timeframe: str = Query(default="1d", description="1m/5m/15m/30m/60m/1d/1w"),
@@ -159,7 +171,7 @@ async def kline(
     return await _kline_payload(hub, symbol, timeframe, limit, start_dt, end_dt)
 
 
-@router.get("/order-book/{symbol}")
+@router.get("/order-book/{symbol}", response_model=Envelope[OrderBook])
 async def order_book(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
     try:
         ob = await hub.provider.get_order_book(symbol)
@@ -171,7 +183,7 @@ async def order_book(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
     return {"data": ob.model_dump(mode="json"), "meta": _meta(hub)}
 
 
-@router.get("/trades/{symbol}")
+@router.get("/trades/{symbol}", response_model=Envelope[list[Trade]])
 async def trades(symbol: str, limit: int = Query(default=50, ge=1, le=200), hub: QuoteHub = Depends(get_hub)) -> dict:
     try:
         rows = await hub.provider.get_trades(symbol)
@@ -305,7 +317,7 @@ def _default_trade_date() -> date:
     return {5: d - timedelta(days=1), 6: d - timedelta(days=2)}.get(d.weekday(), d)
 
 
-@router.get("/limit-up")
+@router.get("/limit-up", response_model=Envelope[LimitUpPoolPayload])
 async def limit_up(
     date_str: str | None = Query(default=None, alias="date", description="YYYY-MM-DD，默认最近交易日"),
     hub: QuoteHub = Depends(get_hub),
@@ -322,7 +334,7 @@ async def limit_up(
     }
 
 
-@router.get("/longhu")
+@router.get("/longhu", response_model=Envelope[LongHuPayload])
 async def longhu(
     date_str: str | None = Query(default=None, alias="date", description="YYYY-MM-DD，默认最近交易日（T-1 盘后披露）"),
     hub: QuoteHub = Depends(get_hub),
@@ -426,7 +438,7 @@ async def financials(symbol: str, periods: int = Query(default=8, ge=1, le=20), 
     return {"data": {"symbol": symbol, "periods": rows}, "meta": _meta(hub)}
 
 
-@router.get("/limit-break")
+@router.get("/limit-break", response_model=Envelope[LimitUpPoolPayload])
 async def limit_break(
     date_str: str | None = Query(default=None, alias="date"),
     hub: QuoteHub = Depends(get_hub),
@@ -471,6 +483,7 @@ async def news(symbol: str, limit: int = Query(default=10, ge=1, le=30), hub: Qu
 
 
 @router.get("/search")
+@router.get("/search", response_model=Envelope[list[SymbolSearchItem]])
 async def search(q: str = Query(min_length=1, max_length=20), hub: QuoteHub = Depends(get_hub)) -> dict:
     from app.data_providers.mock import MockProvider
 

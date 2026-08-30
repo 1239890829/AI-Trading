@@ -100,7 +100,7 @@ ashare-ai-trader/
 │   │   │   ├── storage.py             # 落库+落盘+检索+命中率分层统计
 │   │   │   └── service.py             # 编排 + 目标日四问验证 + 复盘钩子
 │   │   └── websocket/routes.py        # /ws/quotes
-│   ├── tests/（17 文件 255 用例；含 test_predict 15、test_theme_service 49 用例）
+│   ├── tests/（19 文件 266 用例；含 test_predict 15、test_theme_service 49、test_error_contract 5 用例）
 │   ├── requirements.txt / Dockerfile / .env（key，gitignored）
 ├── apps/web/
 │   ├── app/（7 路由页面）
@@ -300,7 +300,8 @@ ashare-ai-trader/
 4. ~~**盘后复盘 Agent 模块**~~ ✅ 已完成（2026-08-29）：`app/review/`（自采/规则分析/模型路由降级/方法论版本化/元结论自我迭代/落库检索对比）+ 调度器（交易日 15:30 自动触发）+ 6 个 REST 端点。详见 docs/review-agent.md
 5. ~~**题材梯队模块重构**~~ ✅ 已完成（2026-08-29）：梯队联动归属 `assign_primary_themes`（连板密度多数票，唯一归属，8/28 实测拆散率 22%→0、创新药 3 板龙头回归本队）；强弱分级 `strength_tier`（领涨/强势/活跃/观察，溢价为负一票否决）；卡片重排（顶部分级+当日涨跌幅，底部梯队列表，重指标折叠）；滚动修复（页面根容器缺 h-full）；涨停池保留为证据下钻页。测试 204→216
 6. ~~**新题材预判模块**~~ ✅ 已完成（2026-08-30）：`app/predict/` 六维评分卡（热榜/消息级别/新闻联动/环境/新鲜度/资金，权重版本化）+ 梯队推演 + 介入计划（成功率校准区间）+ D1 四问自动验证（挂复盘 Agent）。周末房产政策实测：我爱我家 #5 热榜 → 龙头候选、0.635 可能成立。详见 docs/theme-prediction.md
-7. **新闻/公告 AI 摘要**（Phase 7 前哨）
+7. ~~**B1 统一错误契约 + B2 出参 schema 首批**~~ ✅ 已完成（2026-08-30）：`core/errors.py`（AppError/UpstreamError + 四层 handler，全部错误统一 `{detail, code}`）+ `schemas/envelope.py`（Envelope[T] 泛型信封），首批 9 端点挂 response_model（quotes/kline/order-book/trades/limit-up/limit-break/longhu/search，与既有模型 1:1 零丢字段）；themes/sentiment 等聚合形态第二批
+8. **新闻/公告 AI 摘要**（Phase 7 前哨）
 5. Phase 5：选股器（快照+因子扫描）→ 评分系统
 6. Phase 6 后半：回测引擎（按 docs/backtest-rules.md 强制禁令）
 

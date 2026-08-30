@@ -1,0 +1,120 @@
+"""B2 response_model 兼容性：声明了 response_model 的端点，其真实输出
+必须能无损解析进声明的模型——任何字段丢失都会被这里抓住。
+
+直接调用路由函数（绕过 Depends），再 model_validate 进 Envelope。
+"""
+from __future__ import annotations
+
+from datetime import date, datetime, timezone
+
+from app.api.routes import market as market_route
+from app.schemas.envelope import (
+    Envelope,
+    KlinePayload,
+    LimitUpPoolPayload,
+    LongHuPayload,
+)
+from app.schemas.market import (
+    Kline,
+    LimitUpRecord,
+    LongHuRecord,
+    Quote,
+    SymbolSearchItem,
+    Trade,
+)
+
+
+class _FakeProvider:
+    name = "chain(mock)"
+
+    async def get_kline(self, symbol, timeframe, start, end):
+        return [_kline("600519")]
+
+    async def get_limit_up_pool(self, d):
+        return [_limit_up()]
+
+    async def get_limit_break_pool(self, d):
+        return [_limit_up()]
+
+    async def get_longhu_records(self, d):
+        return [_longhu()]
+
+
+class _FakeHub:
+    provider = _FakeProvider()
+    last_success_refresh = datetime.now(timezone.utc)
+
+    def is_stale(self):
+        return False
+
+    def get_quotes(self, symbols=None):
+        return [_quote()]
+
+
+def _quote() -> Quote:
+    return Quote(symbol="600519", name="贵州茅台", price=1500.0, source="mock")
+
+
+def _kline(symbol: str) -> Kline:
+    return Kline(symbol=symbol, timeframe="1d", ts=datetime(2026, 8, 28, 8, 0, tzinfo=timezone.utc), close=1500.0, source="mock")
+
+
+def _limit_up() -> LimitUpRecord:
+    return LimitUpRecord(symbol="000560", name="我爱我家", trade_date=date(2026, 8, 28), consecutive_boards=2, reason="住房政策", source="mock")
+
+
+def _longhu() -> LongHuRecord:
+    return LongHuRecord(symbol="000560", name="我爱我家", trade_date=date(2026, 8, 28), net_buy=1.2e8, source="mock")
+
+
+def test_quotes_envelope_no_field_loss():
+    import asyncio
+
+    payload = asyncio.run(market_route.quotes(symbols="600519", hub=_FakeHub()))
+    env = Envelope[list[Quote]].model_validate(payload)
+    assert env.data[0].symbol == "600519"
+    # 关键不变式：model_dump 产生的字段集 == 模型字段集（丢字段 = 前端断粮）
+    assert set(payload["data"][0].keys()) == set(Quote.model_fields.keys())
+
+
+def test_kline_envelope():
+    import asyncio
+
+    payload = asyncio.run(market_route._kline_payload(_FakeHub(), "600519", "1d", 10, None, None))
+    env = Envelope[KlinePayload].model_validate(payload)
+    assert env.data.bars[0].close == 1500.0
+    assert env.data.timeframe == "1d"
+
+
+def test_limit_up_and_break_envelope():
+    import asyncio
+
+    hub = _FakeHub()
+    p1 = asyncio.run(market_route.limit_up(date_str=None, hub=hub))
+    p2 = asyncio.run(market_route.limit_break(date_str=None, hub=hub))
+    for payload in (p1, p2):
+        env = Envelope[LimitUpPoolPayload].model_validate(payload)
+        assert env.data.pool[0].consecutive_boards == 2
+        assert set(payload["data"]["pool"][0].keys()) == set(LimitUpRecord.model_fields.keys())
+
+
+def test_longhu_envelope():
+    import asyncio
+
+    payload = asyncio.run(market_route.longhu(date_str=None, hub=_FakeHub()))
+    env = Envelope[LongHuPayload].model_validate(payload)
+    assert env.data.records[0].net_buy == 1.2e8
+
+
+def test_search_envelope():
+    import asyncio
+
+    payload = asyncio.run(market_route.search(q="茅台", hub=_FakeHub()))
+    env = Envelope[list[SymbolSearchItem]].model_validate(payload)
+    assert isinstance(env.data, list)
+
+
+def test_trade_envelope():
+    payload = {"data": [Trade(symbol="600519", price=1500.0, side="buy", source="mock").model_dump(mode="json")], "meta": {}}
+    env = Envelope[list[Trade]].model_validate(payload)
+    assert env.data[0].side == "buy"

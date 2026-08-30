@@ -169,6 +169,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
 
+# 统一错误契约：所有错误响应形态 {detail, code}（技术评审 B1）
+from app.core.errors import register_error_handlers  # noqa: E402
+
+register_error_handlers(app)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
