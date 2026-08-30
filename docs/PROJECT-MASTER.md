@@ -161,46 +161,48 @@ ashare-ai-trader/
 
 ---
 
-# 五、REST API 全表（46 端点，15 个已挂 response_model）
+# 五、REST API 全表（56 端点，**完整清单与鉴权说明见 docs/api.md**，此处保留增量与要点）
 
+核心入口速查（🔒=B6 写鉴权）：
 | 方法 | 路径 | 说明 | 数据源 |
 |---|---|---|---|
 | GET | /api/health | 健康：链名/last_success/失败计数/last_error/stale | - |
 | GET | /api/market/overview | 六指数+两市成交额 | ths→tencent |
 | GET | /api/market/breadth | 宽度（涨跌/涨停跌家数/总额） | 新浪全市场 |
 | GET | /api/market/sentiment | 情绪判定（阶段/温度/依据/置信/切换条件，60s缓存） | 快照+涨停池 |
+| GET | /api/market/sentiment-history | 情绪周期序列+周期起点定位（retro #17） | sentiment_history 表 |
+| GET | /api/market/heatmap | A 股云图（行业 treemap 载荷，24h 行业缓存） | 快照+TDX HY |
 | GET | /api/quotes?symbols= | 批量缓存行情 | 链 |
-| GET | /api/quotes/{symbol} | 单只；缓存 miss → 实时链；`?source=` 指定源 | 链 |
 | GET | /api/kline/{symbol} | K线 timeframe 1m~1w 前复权 | tencent→东财 |
-| GET | /api/minute-line/{symbol} | 当日1分钟分时+量 | 腾讯 |
+| GET | /api/minute-line/{symbol} | 当日1分钟分时+均价+精确量比基线 | 腾讯 |
+| GET | /api/minute-signals/{symbol} | 做 T 信号（5 指标共振+依据） | 分时+快照 |
+| GET | /api/minute-decisions | 做 T 决策链（读取时惰性结算） | minute_decisions 表 |
 | GET | /api/order-book/{symbol} | 五档（交叉校验后返回） | 腾讯→东财 |
 | GET | /api/trades/{symbol} | 逐笔（东财 details；本机限流→502 显性化） | 东财 |
 | GET | /api/capital-flow/{symbol} | 资金流30日（主力/超大/大/中/小单+口径） | 新浪 MoneyFlow |
 | GET | /api/financials/{symbol} | 财务摘要8期（去重+倒序） | 东财业绩报表 |
 | GET | /api/company/{symbol} | 公司资料 + `boards`(全量混合标签) + `board_groups`(行业/地域/概念/风格指数四组) | 东财 F10+CoreConception |
 | GET | /api/limit-up / limit-break | 涨停池(含原因)/炸板池 | ths→东财 |
+| GET | /api/auction/{symbol} · /auction-benchmark | 集合竞价快照/风向标基准 | ths 官方 |
+| GET | /api/adjustment-events/{symbol} | 复权事件（分红/送股，回测修正用） | ths 官方 |
+| GET | /api/sparkline?symbols= | 自选迷你走势（批量 TDX 日K收盘，5min 缓存） | TDX |
 | GET | /api/themes | 强势题材梯队看板（题材容器/连板天梯/阶段/强度/断板股） | ths+东财+Parquet快照 |
-| GET | /api/longhu | 龙虎榜总览 | ths→东财 datacenter |
-| GET | /api/longhu/{symbol} | 席位明细(买5卖5+胜率)+上榜历史(T+1/3/5/10) | 东财 datacenter |
+| GET | /api/longhu · /longhu/{symbol} | 龙虎榜总览/席位明细+上榜历史 | ths→东财 datacenter |
 | GET | /api/boards?type= | 行业84/概念排行（60s缓存） | 新浪闪电排行 |
 | GET | /api/search?q= | 股票搜索（仅6位A股） | 东财suggest→腾讯smartbox→mock |
+| GET | /api/announcements/{symbol} · /news/{symbol} | 公告/新闻（60s TTL 缓存，技术债#4） | 东财 |
 | GET/POST/DELETE | /api/watchlist… | 自选 CRUD + groups + 改组 | SQLite |
-| GET/POST/DELETE | /api/paper/* | 模拟交易（account/positions/orders/fills/cancel） | 撮合引擎 |
-| POST | /api/paper/reset | 重置模拟账户：清仓+清委托与成交历史+资金回初始额度（可传 initial_cash） | 撮合引擎 |
+| GET/🔒POST | /api/paper/* | 模拟交易（account/positions/orders/fills） | 撮合引擎 |
+| 🔒 POST | /api/paper/reset | 重置模拟账户（可传 initial_cash） | 撮合引擎 |
+| GET | /api/screener | 全市场选股器（截面过滤→TDX日K六维评分卡，30min 缓存） | Parquet+TDX |
+| POST | /api/backtest/run · GET /backtest/strategies | 日线策略回测（防泄露引擎） | TDX 日K |
+| 🔒 POST | /api/review/run | 手动触发复盘（调度器之外的补跑入口） | 自采+分析 |
+| GET | /api/review/reports[/{date}] · /compare · /methodology/versions · /effectiveness | 复盘检索/对比/方法论演进 | SQLite+JSON |
+| 🔒 POST | /api/predict/run · /predict/verify/{date} | 新题材预判与 D1 验证 | ths热榜+东财新闻 |
+| GET | /api/predict/predictions[/{date}] · /stats | 预判检索与命中率分层 | SQLite |
 | WS | /ws/quotes | snapshot/quotes/stale/pong + subscribe | Hub |
-| POST | /api/review/run | 手动触发复盘（可带 trade_date / methodology_version；调度器之外的补跑入口） | 自采+分析 |
-| GET | /api/review/reports | 复盘报告列表（结构化摘要） | SQLite |
-| GET | /api/review/reports/{trade_date} | 某交易日完整复盘报告 | SQLite+JSON |
-| GET | /api/review/compare?from=&to= | 两日报告对比（缺口修复/情绪迁移/改进项处置） | SQLite |
-| GET | /api/review/methodology/versions | 可用方法论版本列表 | yaml |
-| GET | /api/review/effectiveness?version= | 改进项采纳率/回退率 + 演进建议（自我迭代证据面） | SQLite |
-| POST | /api/predict/run | 新题材预判（定向 theme_hint+keywords / 自动发现；评分卡+梯队+介入计划） | ths热榜+东财新闻 |
-| GET | /api/predict/predictions | 预判报告列表 | SQLite |
-| GET | /api/predict/predictions/{target_date} | 预判详情（含 D1 四问验证结果） | SQLite+JSON |
-| POST | /api/predict/verify/{target_date} | 预判验证回填（复盘 Agent 自动调用；幂等补验） | ths+SQLite |
-| GET | /api/predict/stats | 预判命中率分层统计（verdict/context） | SQLite |
 
-规划中（§阶段）：/api/backtests、/api/paper 撮合增强、/api/news 全市场流、/api/screeners。
+完整 56 端点逐条说明：**docs/api.md**（与代码同步维护）。
 
 ---
 

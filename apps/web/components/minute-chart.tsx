@@ -110,7 +110,7 @@ export function MinuteChart({
         vertLines: { color: "rgba(120,120,130,0.12)" },
         horzLines: { color: "rgba(120,120,130,0.12)" },
       },
-      timeScale: { timeVisible: true, secondsVisible: false, borderVisible: false },
+      timeScale: { timeVisible: true, secondsVisible: false, borderVisible: false, rightOffset: 1 },
       rightPriceScale: { borderVisible: false },
       leftPriceScale: hasBase ? { visible: true, borderVisible: false } : { visible: false },
       crosshair: { mode: CrosshairMode.Normal },
@@ -311,6 +311,8 @@ export function MinuteChart({
 
     const unsub = chart.subscribeCrosshairMove(onMove);
     chart.timeScale().fitContent();
+    // 逻辑范围左端延伸到负区：给 09:25 竞价金点（首 bar 之前）留出完整圆的空间，不再贴边被裁
+    chart.timeScale().setVisibleLogicalRange({ from: -1.5, to: points.length + 0.5 });
 
     return () => {
       try {
