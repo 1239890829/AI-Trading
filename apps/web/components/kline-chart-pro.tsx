@@ -53,11 +53,21 @@ function calcBOLL(closes: number[], n = 20, k = 2) {
 }
 
 /** K 线图（专业版）：MA5/10/20/60、BOLL(20,2)、成交量+均量线(5/10/20)、MACD/成交额副图、
- * 指标开关、缩放按钮。默认聚焦最近 20 根。 */
+ * 指标开关、缩放按钮、副图高度拖拽（布局 #2）。默认聚焦最近 20 根。 */
 export function KlineChartPro({ bars, className, tradeMarks, costPrice }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const [ind, setInd] = useState<Indicators>({ ma5: true, ma10: true, ma20: true, ma60: true, vol: true, macd: false, boll: false, amt: false, bs: true });
+  // 布局 #2：副图高度占比可拖拽（0.10-0.45，localStorage 持久化）
+  const [subH, setSubH] = useState(0.18);
+  const subHRef = useRef(subH);
+  useEffect(() => {
+    const saved = Number(localStorage.getItem("ashare-sub-h"));
+    if (saved >= 0.1 && saved <= 0.45) {
+      setSubH(saved);
+      subHRef.current = saved;
+    }
+  }, []);
 
   useEffect(() => {
     if (!containerRef.current || bars.length === 0) return;
@@ -115,7 +125,7 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice }: Props)
           .filter((x) => x.value != null) as LineData[];
         chart.addLineSeries({ priceScaleId: "vol", color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false }).setData(line);
       }
-      chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+      chart.priceScale("vol").applyOptions({ scaleMargins: { top: 1 - subHRef.current, bottom: 0 } });
     }
 
     // 成交额副图
@@ -126,7 +136,7 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice }: Props)
           .filter((b) => b.amount != null)
           .map((b) => ({ time: b.ts.slice(0, 10) as Time, value: b.amount as number, color: (b.close ?? 0) >= (b.open ?? 0) ? "rgba(244,63,94,0.45)" : "rgba(16,185,129,0.45)" }))
       );
-      chart.priceScale("amt").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+      chart.priceScale("amt").applyOptions({ scaleMargins: { top: 1 - subHRef.current, bottom: 0 } });
     }
 
     // MACD 副图
@@ -139,7 +149,7 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice }: Props)
       hist.setData(data.map((d, i) => ({ time: d.time, value: (dif[i] - dea[i]) * 2, color: dif[i] > dea[i] ? "rgba(244,63,94,0.6)" : "rgba(16,185,129,0.6)" })));
       chart.addLineSeries({ priceScaleId: "macd", color: "#facc15", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }).setData(data.map((d, i) => ({ time: d.time, value: dif[i] })));
       chart.addLineSeries({ priceScaleId: "macd", color: "#38bdf8", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }).setData(data.map((d, i) => ({ time: d.time, value: dea[i] })));
-      chart.priceScale("macd").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+      chart.priceScale("macd").applyOptions({ scaleMargins: { top: 1 - subHRef.current, bottom: 0 } });
     }
 
     const markers: SeriesMarker<Time>[] = [];
@@ -178,6 +188,25 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice }: Props)
       chartRef.current = null;
     };
   }, [bars, ind, tradeMarks, costPrice]);
+
+  // 布局 #2：副图高度变化 → applyOptions 动态调整（不重建 chart），主图 bottom 随之让位
+  useEffect(() => {
+    const c = chartRef.current;
+    if (!c) return;
+    const subTop = 1 - subH;
+    for (const id of ["vol", "amt", "macd"]) {
+      try {
+        c.priceScale(id).applyOptions({ scaleMargins: { top: subTop, bottom: 0 } });
+      } catch {
+        // 该副图未开启时 scale 不存在，跳过
+      }
+    }
+    try {
+      c.priceScale("right").applyOptions({ scaleMargins: { top: 0.08, bottom: Math.min(subH + 0.02, 0.5) } });
+    } catch {
+      // 防御
+    }
+  }, [subH, ind]);
 
   const toggles: [keyof Indicators, string, string?][] = [
     ["ma5", "MA5", "#facc15"],
@@ -231,7 +260,39 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice }: Props)
         ))}
         <span className="ml-auto text-[10px] text-zinc-500">金叉/死叉为 MA5×MA10 技术信号 · 紫[榜]=龙虎榜日 · B/S=模拟交易成交 · 黄虚线=持仓成本</span>
       </div>
-      <div ref={containerRef} className={`min-h-0 w-full flex-1 ${className ?? ""}`} />
+      <div className={`relative min-h-0 w-full flex-1 ${className ?? ""}`}>
+        <div ref={containerRef} className="h-full w-full" />
+        {/* 副图高度拖拽条：贴在副图区顶缘（mouseup 挂 window——释放时鼠标已离开拖拽条） */}
+        <div
+          onMouseDown={(e) => {
+            e.preventDefault();
+            const rect = containerRef.current?.getBoundingClientRect();
+            if (!rect) return;
+            document.body.style.userSelect = "none";
+            const move = (ev: MouseEvent) => {
+              const ratio = 1 - (ev.clientY - rect.top) / rect.height;
+              const v = Math.min(0.45, Math.max(0.1, +ratio.toFixed(3)));
+              setSubH(v);
+              subHRef.current = v;
+            };
+            const up = () => {
+              document.body.style.userSelect = "";
+              window.removeEventListener("mousemove", move);
+              window.removeEventListener("mouseup", up);
+              setSubH((v) => {
+                localStorage.setItem("ashare-sub-h", String(v));
+                return v;
+              });
+            };
+            window.addEventListener("mousemove", move);
+            window.addEventListener("mouseup", up);
+          }}
+          className="absolute left-0 right-0 z-10 h-2 cursor-row-resize hover:bg-sky-500/20"
+          style={{ top: `calc(${((1 - subH) * 100).toFixed(2)}% - 4px)` }}
+          title="拖拽调整副图高度"
+          aria-label="拖拽调整副图高度"
+        />
+      </div>
     </div>
   );
 }
