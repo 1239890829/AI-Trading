@@ -115,7 +115,7 @@ agent-browser close                     # 收尾必须关，否则留僵尸 Chro
 2. **Phase 4 补漏**：概念题材 chips 过滤风格标签；新闻/公告已接（东财），缺 AI 摘要（Phase 7）
 3. **Phase 5**：全市场选股器（快照已有，5550 只）→ 评分系统（复用 `lib/technical-analysis.ts` 与后端 sentiment 模式：可解释+依据+置信度）
 4. **Phase 6 后半**：回测引擎——**先读 docs/backtest-rules.md 强制禁令，防泄露测试先行**
-5. **Phase 8**：预警通知、Next 升级、error.tsx 错误边界
+5. **Phase 8**：预警通知（规则引擎/通知抽象/管理页已就绪，真实通道待接入）、Next 升级 ✅、error.tsx 错误边界 ✅
 6. 技术债清 单见 docs/retro-and-gaps.md §三（StockDetailPanel 拆分优先）
 
 ## 6. 关键常识

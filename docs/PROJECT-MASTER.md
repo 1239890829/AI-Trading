@@ -161,7 +161,7 @@ ashare-ai-trader/
 
 ---
 
-# 五、REST API 全表（56 端点，**完整清单与鉴权说明见 docs/api.md**，此处保留增量与要点）
+# 五、REST API 全表（63 端点，**完整清单与鉴权说明见 docs/api.md**，此处保留增量与要点）
 
 核心入口速查（🔒=B6 写鉴权）：
 | 方法 | 路径 | 说明 | 数据源 |
@@ -202,7 +202,7 @@ ashare-ai-trader/
 | GET | /api/predict/predictions[/{date}] · /stats | 预判检索与命中率分层 | SQLite |
 | WS | /ws/quotes | snapshot/quotes/stale/pong + subscribe | Hub |
 
-完整 56 端点逐条说明：**docs/api.md**（与代码同步维护）。
+完整 63 端点逐条说明：**docs/api.md**（与代码同步维护）。
 
 ---
 
