@@ -11,11 +11,32 @@ import type {
   WatchlistItem,
 } from "@/types/market";
 
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
+/**
+ * API 基址。默认走**同源相对路径** `/backend`（由 next.config.ts 的 rewrite
+ * 反向代理到后端），而不是硬编码 `http://127.0.0.1:8000`。
+ *
+ * 原因：`NEXT_PUBLIC_*` 在**构建期**内联。硬编码地址部署到 NAS/云主机后，
+ * 浏览器会去连"访问者自己电脑的 8000 端口"，前端直接废掉，且换主机必须重新构建。
+ * 走同源后，真实后端地址由服务端环境变量 `BACKEND_ORIGIN` 在**运行时**决定。
+ */
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "/backend";
 
-export const WS_BASE = (
-  process.env.NEXT_PUBLIC_WS_BASE ?? API_BASE.replace(/^http/, "ws")
-) as string;
+/**
+ * WebSocket 基址。相对路径无法用协议字符串替换推导，必须基于当前页面 origin，
+ * 因此做成函数（要读 window，不能在模块顶层求值）。
+ *
+ * 注意：Next 的 rewrite 不代理 WebSocket 升级。同源模式下若没有前置反代处理
+ * upgrade，WS 会连接失败——`useQuoteStream` 会自动降级为 HTTP 轮询，功能不受影响。
+ * 要在生产用上 WS，前置 nginx 反代 /backend 并放开 Upgrade 头，或显式设置
+ * `NEXT_PUBLIC_WS_BASE`。
+ */
+export function wsBase(): string {
+  if (process.env.NEXT_PUBLIC_WS_BASE) return process.env.NEXT_PUBLIC_WS_BASE;
+  if (API_BASE.startsWith("http")) return API_BASE.replace(/^http/, "ws");
+  if (typeof window === "undefined") return "";
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${window.location.host}${API_BASE}`;
+}
 
 /**
  * 统一错误类型（对接后端 B1 错误契约 `{detail, code}`）：

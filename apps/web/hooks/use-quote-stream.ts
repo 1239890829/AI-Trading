@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getQuotes, WS_BASE } from "@/lib/api";
+import { getQuotes, wsBase } from "@/lib/api";
 import type { Quote } from "@/types/market";
 
 export type StreamStatus = "connecting" | "live" | "polling" | "error";
@@ -56,7 +56,7 @@ export function useQuoteStream(symbols: string[]) {
       if (closed) return;
       setStatus(retry === 0 ? "connecting" : status);
       try {
-        ws = new WebSocket(`${WS_BASE}/ws/quotes?symbols=${key}`);
+        ws = new WebSocket(`${wsBase()}/ws/quotes?symbols=${key}`);
       } catch {
         startPolling();
         return;
