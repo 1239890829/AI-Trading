@@ -18,12 +18,14 @@ from app.api.routes import review as review_route
 from app.api.routes import screener as screener_route
 from app.api.routes import watchlist as watchlist_route
 from app.api.routes import alert as alert_route
+from app.api.routes import risk as risk_route
 from app.core.config import settings
 from app.core.db import get_engine, get_session_factory
 from app.data_providers import build_provider
 from app.market.alert_engine import AlertEngine
 from app.models.alert import AlertEvent, AlertRule
 from app.models.paper import PaperAccount, PaperOrder, PaperPosition
+from app.risk.engine import RiskEngine
 from app.predict.models import (  # noqa: F401  注册预判两张表
     PredictionReportRow,
     PredictionThemeRow,
@@ -127,6 +129,10 @@ async def lifespan(app: FastAPI):
     # --- 全市场选股器（Phase 5）：快照截面过滤 + TDX 日K 技术评分卡 ---
     app.state.screener_service = ScreenerService(parquet_dir=Path(settings.parquet_dir))
 
+    # --- 风险引擎（Phase 5）：市场状态 + 仓位参数 + 订单预检 ---
+    risk_engine = RiskEngine(hub=hub, snapshot_service=snapshot_service, session_factory=get_session_factory())
+    app.state.risk_engine = risk_engine
+
     # --- 盘后复盘 Agent：服务实例 + 收盘后调度 ---
     review_svc = ReviewService(
         hub=hub,
@@ -181,8 +187,19 @@ async def lifespan(app: FastAPI):
     alert_feeder = asyncio.create_task(alert_quotes_feeder(), name="alert-quotes-feeder")
     alert_engine.start()
 
+    async def risk_refresher():
+        while True:
+            try:
+                await risk_engine.refresh()
+            except Exception:
+                log.exception("risk engine refresh failed")
+            await asyncio.sleep(60.0)
+
+    risk_task = asyncio.create_task(risk_refresher(), name="risk-refresher")
+
     try:
         await hub.refresh()  # 冷启动立即填充，接口首次调用即有数据
+        await risk_engine.refresh()
     except Exception:
         log.exception("initial refresh failed; serving stale/empty until next cycle")
     yield
@@ -191,6 +208,7 @@ async def lifespan(app: FastAPI):
     matcher.cancel()
     alert_feeder.cancel()
     alert_engine.stop()
+    risk_task.cancel()
     if review_task is not None:
         review_stop.set()
     with contextlib.suppress(asyncio.CancelledError):
@@ -201,6 +219,8 @@ async def lifespan(app: FastAPI):
         await matcher
     with contextlib.suppress(asyncio.CancelledError):
         await alert_feeder
+    with contextlib.suppress(asyncio.CancelledError):
+        await risk_task
     if review_task is not None:
         with contextlib.suppress(asyncio.CancelledError):
             await review_task
@@ -232,4 +252,5 @@ app.include_router(paper_route.router, prefix="/api")
 app.include_router(review_route.router, prefix="/api")
 app.include_router(predict_route.router, prefix="/api")
 app.include_router(alert_route.router, prefix="/api")
+app.include_router(risk_route.router, prefix="/api")
 app.include_router(ws_router)

@@ -288,6 +288,8 @@ class PaperTradingEngine:
             "cash": round(acc.cash, 2),
             "market_value": round(market_value, 2),
             "total": round(total, 2),
+            # 回撤保护依赖此项：缺它时风控会把 initial 退回 equity，pnl 恒为 0、保护永不触发
+            "initial_cash": round(acc.initial_cash, 2),
             "total_pnl": round(total - acc.initial_cash, 2),
             "total_pnl_pct": round((total - acc.initial_cash) / acc.initial_cash * 100, 2),
         }

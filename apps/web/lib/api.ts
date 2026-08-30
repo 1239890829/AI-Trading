@@ -670,3 +670,44 @@ export async function ackAlertEvent(eventId: number): Promise<void> {
   await sendJson(`/api/alerts/events/${eventId}/ack`, "POST");
 }
 
+/** ---------------------------------------------------------------- 风控（Phase 5） */
+
+export interface RiskState {
+  state: string;
+  reasons: string[];
+  params: {
+    single_stock_max_pct: number;
+    total_position_max_pct: number;
+    strategy_weights: Record<string, number>;
+    stop_loss_pct: number;
+    add_position_limit: string;
+    high_position_stock_limit: string;
+    drawdown_protection_pct: number;
+  };
+  updated_at: string | null;
+}
+
+export interface OrderCheckResult {
+  allowed: boolean;
+  max_qty: number;
+  reasons: string[];
+  warnings: string[];
+  state: string;
+}
+
+export interface OrderCheckRequest {
+  symbol: string;
+  side: "buy" | "sell";
+  price: number;
+  quantity: number;
+}
+
+export async function getRiskState(): Promise<RiskState> {
+  return (await getJson<RiskState>("/api/risk/state")).data;
+}
+
+export async function checkOrderRisk(req: OrderCheckRequest): Promise<OrderCheckResult> {
+  return (await sendJson<OrderCheckResult>("/api/risk/check-order", "POST", req)).data;
+}
+
+

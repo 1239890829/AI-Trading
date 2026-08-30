@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { fmt } from "@/lib/format";
-import { placePaperOrder } from "@/lib/api";
+import { fmt, parseNum } from "@/lib/format";
+import { checkOrderRisk, placePaperOrder } from "@/lib/api";
+import type { OrderCheckResult } from "@/lib/api";
 
 /** 模拟交易下单表单：买/卖切换、价格默认现价、数量、预估金额与费用、涨跌停提示。 */
 export function TradeForm({
@@ -21,20 +22,46 @@ export function TradeForm({
   const [qty, setQty] = useState("100");
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [riskCheck, setRiskCheck] = useState<OrderCheckResult | null>(null);
+  const [checking, setChecking] = useState(false);
 
   useEffect(() => {
     if (price) setP(fmt(price));
   }, [price, symbol]);
 
-  const pv = parseFloat(p) || 0;
-  const qv = parseInt(qty) || 0;
+  const pv = parseNum(p);
+  const qv = Math.trunc(parseNum(qty));
   const est = pv * qv;
   const fee = Math.max(est * 0.00025, 5) + (side === "sell" ? est * 0.0005 : 0);
+
+  useEffect(() => {
+    if (pv <= 0 || qv <= 0) {
+      setRiskCheck(null);
+      return;
+    }
+    const t = setTimeout(() => {
+      setChecking(true);
+      void checkOrderRisk({ symbol, side, price: pv, quantity: qv })
+        .then(setRiskCheck)
+        .catch(() => setRiskCheck(null))
+        .finally(() => setChecking(false));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [symbol, side, pv, qv]);
 
   async function submit() {
     setSubmitting(true);
     setMsg(null);
     try {
+      // 风控预检：未通过则阻止下单
+      if (!riskCheck || !riskCheck.allowed) {
+        setMsg({
+          ok: false,
+          text: riskCheck?.reasons[0] ?? "风控预检未通过",
+        });
+        setSubmitting(false);
+        return;
+      }
       const r = await placePaperOrder(symbol, side, pv, qv);
       setMsg({
         ok: true,
@@ -53,7 +80,8 @@ export function TradeForm({
     qv <= 0 ||
     (side === "buy" && qv % 100 !== 0) ||
     (limitUp != null && side === "buy" && pv >= limitUp) ||
-    (limitDown != null && side === "sell" && pv <= limitDown);
+    (limitDown != null && side === "sell" && pv <= limitDown) ||
+    (riskCheck?.allowed === false);
 
   return (
     <div className="shrink-0 border-b border-zinc-100 px-3 py-2 dark:border-zinc-800/60">
@@ -93,6 +121,12 @@ export function TradeForm({
           <span>预估金额</span>
           <span className="font-mono">{fmt(est)} + 费 {fmt(fee)}</span>
         </div>
+        {riskCheck && (
+          <div className="flex justify-between text-zinc-500">
+            <span>{side === "buy" ? "风控可买上限" : "可卖（T+1）"}</span>
+            <span className="font-mono">{riskCheck.max_qty} 股</span>
+          </div>
+        )}
         {limitUp != null && side === "buy" && (
           <div className="flex justify-between text-zinc-500">
             <span>涨停价</span>
@@ -114,6 +148,13 @@ export function TradeForm({
         {submitting ? "提交中…" : `${side === "buy" ? "买入" : "卖出"} ${symbol}`}
       </button>
       {msg && <p className={`mt-1.5 text-xs ${msg.ok ? "text-emerald-400" : "text-red-400"}`}>{msg.text}</p>}
+      {checking && !riskCheck && <p className="mt-1 text-[11px] text-zinc-500">风控预检中…</p>}
+      {riskCheck && riskCheck.warnings.length > 0 && (
+        <p className="mt-1 text-[11px] text-amber-400">⚠ {riskCheck.warnings.join("；")}</p>
+      )}
+      {riskCheck?.allowed === false && (
+        <p className="mt-1 text-[11px] text-red-400">⛔ {riskCheck.reasons.join("；")}</p>
+      )}
       {bad && pv > 0 && !submitting && (
         <p className="mt-1 text-[11px] text-zinc-500">
           {side === "buy" && qv % 100 !== 0 ? "买入须为 100 股整数倍 " : ""}

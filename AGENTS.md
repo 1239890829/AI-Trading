@@ -106,17 +106,20 @@ agent-browser close                     # 收尾必须关，否则留僵尸 Chro
 
 ## 5. 当前状态与你的待办（按优先级）
 
-**已完成**：Phase 1-4 全部；Phase 5 部分（多因子技术评估）；Phase 6 核心（撮合引擎 + 交易页签 + 真实 B/S 点）。
-快照：70 测试全绿 · 32 REST + 1 WS · 四源链 `ths→tencent→eastmoney→sina` · 33+ commits。
+**已完成**：Phase 1-4 全部；Phase 5（多因子技术评估 + 全市场选股器/评分系统 + 风控引擎 v1）；Phase 6（撮合引擎 + 交易页签 + 真实 B/S 点 + 日线回测 + 历史回放）；Phase 8（预警规则/触发/通知抽象/管理页、Next 16 升级、error.tsx）。
+快照：**344 后端测试 + 20 前端测试全绿** · **65 REST + 1 WS** · 四源链 `ths→tencent→eastmoney→sina` · 40+ commits。
 
 **你的待办（按序，做完一项在 docs/retro-and-gaps.md 划一项并 git checkpoint）**：
 
-1. **Phase 6 收尾**：持仓成本线画上 K 线 / 成交记录列表 / 重置账户按钮（engine/positions API 已就绪，`app/paper/engine.py`）
-2. **Phase 4 补漏**：概念题材 chips 过滤风格标签；新闻/公告已接（东财），缺 AI 摘要（Phase 7）
-3. **Phase 5**：全市场选股器（快照已有，5550 只）→ 评分系统（复用 `lib/technical-analysis.ts` 与后端 sentiment 模式：可解释+依据+置信度）
-4. **Phase 6 后半**：回测引擎——**先读 docs/backtest-rules.md 强制禁令，防泄露测试先行**
-5. **Phase 8**：预警通知（规则引擎/通知抽象/管理页已就绪，真实通道待接入）、Next 升级 ✅、error.tsx 错误边界 ✅
-6. 技术债清 单见 docs/retro-and-gaps.md §三（StockDetailPanel 拆分优先）
+1. ~~Phase 6 收尾：持仓成本线 / 成交记录 / 重置账户~~ ✅ 已完成
+2. ~~Phase 4 补漏：概念题材 chips 过滤风格标签~~ ✅ 已完成；新闻/公告 AI 摘要（Phase 7）**阻塞于 LLM 凭据**
+3. ~~Phase 5：全市场选股器 + 六维评分系统~~ ✅ 已完成
+4. ~~Phase 6 后半：回测引擎（含防泄露测试先行）~~ ✅ 已完成
+5. ~~Phase 8：预警通知核心 + Next 16 升级 + error.tsx~~ ✅ 已完成；**真实推送通道接入阻塞于用户选择**（email/企微/飞书/Telegram/webhook/短信）
+6. ~~Phase 5 风控引擎 v1（市场状态 → 仓位建议 → 下单预检）~~ ✅ 已完成（2026-08-30）
+7. **新闻/公告 AI 摘要**（Phase 7）— 阻塞：需 LLM API Key
+8. **生产部署**（NAS / 云服务器 / Vercel+Railway）— 阻塞：需用户定环境，决定 B8 打包与 token 激活
+9. 技术债清单见 docs/retro-and-gaps.md §三
 
 ## 6. 关键常识
 

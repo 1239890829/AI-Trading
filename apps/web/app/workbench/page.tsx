@@ -14,10 +14,12 @@ import {
   getMarketOverview,
   getPaperPositions,
   getQuotes,
+  getRiskState,
   getSparklines,
   getWatchlist,
   removeFromWatchlist,
   type PaperPositionInfo,
+  type RiskState,
   type SparklinePayload,
 } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
@@ -48,6 +50,7 @@ function WorkbenchInner() {
   const [extra, setExtra] = useState<Record<string, Quote>>({});
   const merged: Record<string, Quote> = { ...extra, ...quotes };
   const [positions, setPositions] = useState<PaperPositionInfo[]>([]);
+  const [risk, setRisk] = useState<RiskState | null>(null);
 
   useEffect(() => {
     if (paramSymbol) setSelected(paramSymbol);
@@ -56,16 +59,18 @@ function WorkbenchInner() {
   const loadBase = useCallback(async () => {
     try {
       // 原 groups 裸 fetch 从未被消费（gs 解构后无人用）——随收口一并删除
-      const [wl, overview, positions] = await Promise.all([
+      const [wl, overview, positions, riskState] = await Promise.all([
         getWatchlist(),
         getMarketOverview(),
         getPaperPositions().catch(() => []),
+        getRiskState().catch(() => null),
       ]);
       setGroupMap(Object.fromEntries(wl.map((i) => [i.symbol, i.group_name ?? "默认"])));
       setSymbols(wl.map((i) => i.symbol));
       setIndices(overview.indices);
       setTotalAmount(overview.total_amount);
       setPositions(positions);
+      setRisk(riskState);
       setError(null);
       setUpdatedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
     } catch {
@@ -134,6 +139,18 @@ function WorkbenchInner() {
             {status === "live" && <span className="pulse-dot mx-1 align-middle" />}
             <span className={STATUS_LABEL[status].cls}>{STATUS_LABEL[status].text}</span>
           </span>
+          {risk && (
+            <span title={risk.reasons.join("；")} className="cursor-help">
+              市场状态：
+              <span className={`rounded px-1.5 py-0.5 ${
+                risk.state === "强势多头" ? "bg-up/10 text-up" :
+                risk.state === "下跌趋势" || risk.state === "恐慌/极端波动" ? "bg-down/10 text-down" :
+                "bg-zinc-100 text-zinc-500 dark:bg-zinc-800"
+              }`}>
+                {risk.state}
+              </span>
+            </span>
+          )}
           <span>指数刷新 {updatedAt || "--"}</span>
           <span className="hidden text-zinc-500 lg:inline">数据仅供投研与模拟交易参考</span>
         </span>

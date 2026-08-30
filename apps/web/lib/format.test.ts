@@ -1,6 +1,6 @@
 /** 格式化工具测试：空值/边界/单位换算/红涨绿跌语义。 */
 import { describe, expect, it } from "vitest";
-import { fmt, fmtAmount, fmtVolume, pctColor, pctText, qualityLabel, sourceLabel, timeText } from "./format";
+import { fmt, fmtAmount, fmtVolume, parseNum, pctColor, pctText, qualityLabel, sourceLabel, timeText } from "./format";
 
 describe("fmt", () => {
   it("null/undefined/NaN → --", () => {
@@ -63,5 +63,24 @@ describe("sourceLabel / qualityLabel / timeText", () => {
   it("invalid time string → --", () => {
     expect(timeText("not-a-date")).toBe("--");
     expect(timeText(null)).toBe("--");
+  });
+});
+
+describe("parseNum", () => {
+  it("strips thousands separators (regression: parseFloat 会在逗号处截断)", () => {
+    // fmt(1297.4) === "1,297.40"；直接 parseFloat 得到 1，会让下单价变成 1 元
+    expect(parseNum(fmt(1297.4))).toBe(1297.4);
+    expect(parseNum("1,234,568")).toBe(1234568);
+    expect(parseNum("12,345,678.90")).toBe(12345678.9);
+  });
+
+  it("handles plain numbers, empty and garbage", () => {
+    expect(parseNum(42)).toBe(42);
+    expect(parseNum("39.8")).toBe(39.8);
+    expect(parseNum("")).toBe(0);
+    expect(parseNum(null)).toBe(0);
+    expect(parseNum(undefined)).toBe(0);
+    expect(parseNum("abc")).toBe(0);
+    expect(parseNum(Number.NaN)).toBe(0);
   });
 });

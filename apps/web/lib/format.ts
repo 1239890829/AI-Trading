@@ -3,6 +3,19 @@ export function fmt(v: number | null | undefined, digits = 2): string {
   return v.toLocaleString("zh-CN", { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
+/**
+ * 解析用户输入的数字。
+ *
+ * 输入框回填的是 fmt() 的结果（zh-CN 千分位），直接 parseFloat("1,297.40")
+ * 会在逗号处截断成 1 —— 下单价因此变成 1 元。所有读回数字的地方都走这里。
+ */
+export function parseNum(s: string | number | null | undefined): number {
+  if (typeof s === "number") return Number.isFinite(s) ? s : 0;
+  if (s === null || s === undefined || s === "") return 0;
+  const n = parseFloat(String(s).replace(/,/g, ""));
+  return Number.isFinite(n) ? n : 0;
+}
+
 export function fmtAmount(v: number | null | undefined): string {
   if (v === null || v === undefined || Number.isNaN(v)) return "--";
   if (Math.abs(v) >= 1e8) return `${fmt(v / 1e8)} 亿`;
