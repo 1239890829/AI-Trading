@@ -252,6 +252,53 @@ class ThsFuyaoProvider:
         data = await self._get("/api/a-share/calendar/trading-days")
         return [str(it.get("date")) for it in data.get("item") or []]
 
+    async def get_hot_stock_list(self, period: str = "day") -> list[dict]:
+        """当前热股榜（period=day 24小时榜 / hour）。[{rank, symbol, name, heat, rank_change}]。"""
+        data = await self._get("/api/a-share/special-data/hot-stock-list", {"period": period})
+        ts = data.get("timestamp")
+        ts_iso = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).isoformat() if ts else None
+        out = []
+        for it in data.get("item") or []:
+            code = from_thscode(str(it.get("thscode") or ""))
+            if len(code) != 6:
+                continue
+            num = lambda v: float(v) if v is not None else None  # noqa: E731
+            out.append({
+                "rank": int(it.get("rank") or 0),
+                "symbol": code,
+                "name": it.get("name"),
+                "heat": num(it.get("heat")),
+                "rank_change": num(it.get("rank_change")),
+                "ts": ts_iso,
+                "source": SOURCE,
+            })
+        if not out:
+            raise ProviderError("ths hot stock list empty")
+        return out
+
+    async def get_hot_stock_list_history(self, d: date) -> list[dict]:
+        """指定自然日的历史热股排名（D1 收盘验证用）。字段同 get_hot_stock_list 无 heat。"""
+        data = await self._get(
+            "/api/a-share/special-data/hot-stock-list-history", {"date": d.strftime("%Y-%m-%d")}
+        )
+        out = []
+        for it in data.get("item") or []:
+            code = from_thscode(str(it.get("thscode") or ""))
+            if len(code) != 6:
+                continue
+            out.append({
+                "rank": int(it.get("rank") or 0),
+                "symbol": code,
+                "name": it.get("name"),
+                "heat": None,
+                "rank_change": None,
+                "ts": None,
+                "source": SOURCE,
+            })
+        if not out:
+            raise ProviderError(f"ths hot stock list history empty for {d}")
+        return out
+
     # ---- 协议其余方法：链上由其他 Provider 负责 ----
 
     async def get_kline(self, *args, **kwargs) -> list:

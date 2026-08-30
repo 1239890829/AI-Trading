@@ -91,9 +91,16 @@ ashare-ai-trader/
 │   │   │   ├── synthesis.py           # 改进项合成（优先级+预期影响）
 │   │   │   ├── methodology.py         # 元结论 + 历史效果统计（自我迭代）
 │   │   │   ├── storage.py             # 落库+落盘+检索+对比
-│   │   │   └── service.py             # 编排 + 调度器（含收盘后自动触发）
+│   │   │   └── service.py             # 编排 + 调度器（含收盘后自动触发 + 预判验证钩子）
+│   │   ├── predict/                   # 新题材预判（周末/盘后，docs/theme-prediction.md）
+│   │   │   ├── schemas.py             # 预判报告/证据/梯队/介入计划（fail_conditions 一等公民）
+│   │   │   ├── models.py              # 持久化两表（reports + themes 明细行）
+│   │   │   ├── collector.py           # 热榜+个股新闻+涨停史+龙虎榜+情绪交叉采集
+│   │   │   ├── engine.py              # 六维评分卡 + 梯队推演 + 介入计划（权重版本化）
+│   │   │   ├── storage.py             # 落库+落盘+检索+命中率分层统计
+│   │   │   └── service.py             # 编排 + 目标日四问验证 + 复盘钩子
 │   │   └── websocket/routes.py        # /ws/quotes
-│   ├── tests/（15 文件 216 用例；含 test_review 8、test_theme_service 49 用例）
+│   ├── tests/（17 文件 255 用例；含 test_predict 15、test_theme_service 49 用例）
 │   ├── requirements.txt / Dockerfile / .env（key，gitignored）
 ├── apps/web/
 │   ├── app/（7 路由页面）
@@ -137,7 +144,7 @@ ashare-ai-trader/
 
 ---
 
-# 五、REST API 全表（38 端点）
+# 五、REST API 全表（43 端点）
 
 | 方法 | 路径 | 说明 | 数据源 |
 |---|---|---|---|
@@ -170,6 +177,11 @@ ashare-ai-trader/
 | GET | /api/review/compare?from=&to= | 两日报告对比（缺口修复/情绪迁移/改进项处置） | SQLite |
 | GET | /api/review/methodology/versions | 可用方法论版本列表 | yaml |
 | GET | /api/review/effectiveness?version= | 改进项采纳率/回退率 + 演进建议（自我迭代证据面） | SQLite |
+| POST | /api/predict/run | 新题材预判（定向 theme_hint+keywords / 自动发现；评分卡+梯队+介入计划） | ths热榜+东财新闻 |
+| GET | /api/predict/predictions | 预判报告列表 | SQLite |
+| GET | /api/predict/predictions/{target_date} | 预判详情（含 D1 四问验证结果） | SQLite+JSON |
+| POST | /api/predict/verify/{target_date} | 预判验证回填（复盘 Agent 自动调用；幂等补验） | ths+SQLite |
+| GET | /api/predict/stats | 预判命中率分层统计（verdict/context） | SQLite |
 
 规划中（§阶段）：/api/backtests、/api/paper 撮合增强、/api/news 全市场流、/api/screeners。
 
@@ -287,7 +299,8 @@ ashare-ai-trader/
 3. ~~**概念题材 chips 过滤风格标签**（"大盘股/MSCI中国"混入"白酒"）~~ ✅ 已完成（2026-08-29）
 4. ~~**盘后复盘 Agent 模块**~~ ✅ 已完成（2026-08-29）：`app/review/`（自采/规则分析/模型路由降级/方法论版本化/元结论自我迭代/落库检索对比）+ 调度器（交易日 15:30 自动触发）+ 6 个 REST 端点。详见 docs/review-agent.md
 5. ~~**题材梯队模块重构**~~ ✅ 已完成（2026-08-29）：梯队联动归属 `assign_primary_themes`（连板密度多数票，唯一归属，8/28 实测拆散率 22%→0、创新药 3 板龙头回归本队）；强弱分级 `strength_tier`（领涨/强势/活跃/观察，溢价为负一票否决）；卡片重排（顶部分级+当日涨跌幅，底部梯队列表，重指标折叠）；滚动修复（页面根容器缺 h-full）；涨停池保留为证据下钻页。测试 204→216
-6. **新闻/公告 AI 摘要**（Phase 7 前哨）
+6. ~~**新题材预判模块**~~ ✅ 已完成（2026-08-30）：`app/predict/` 六维评分卡（热榜/消息级别/新闻联动/环境/新鲜度/资金，权重版本化）+ 梯队推演 + 介入计划（成功率校准区间）+ D1 四问自动验证（挂复盘 Agent）。周末房产政策实测：我爱我家 #5 热榜 → 龙头候选、0.635 可能成立。详见 docs/theme-prediction.md
+7. **新闻/公告 AI 摘要**（Phase 7 前哨）
 5. Phase 5：选股器（快照+因子扫描）→ 评分系统
 6. Phase 6 后半：回测引擎（按 docs/backtest-rules.md 强制禁令）
 

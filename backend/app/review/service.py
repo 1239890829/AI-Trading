@@ -108,6 +108,21 @@ class ReviewService:
 
         meta_insights = build_meta_insights(data, dimensions, method)
 
+        # --- 预判验证钩子：存在针对本交易日的 pending 预判则自动回填四问 ---
+        predict_note = None
+        try:
+            from app.predict.service import maybe_auto_verify
+
+            predict_note = await maybe_auto_verify(
+                self.hub, self.snapshot_service, self.session_factory, anchor
+            )
+        except Exception:
+            log.exception("prediction auto-verify failed")
+
+        summary = self._summarize(dimensions, action_items, data)
+        if predict_note:
+            summary = f"{summary}；{predict_note}"
+
         report = ReviewReport(
             trade_date=data.trade_date,
             methodology_version=version,
@@ -116,7 +131,7 @@ class ReviewService:
             dimensions=dimensions,
             action_items=action_items,
             meta_insights=meta_insights,
-            summary=self._summarize(dimensions, action_items, data),
+            summary=summary,
         )
         return save_report(self.session_factory, report)
 

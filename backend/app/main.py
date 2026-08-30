@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import health as health_route
 from app.api.routes import market as market_route
 from app.api.routes import paper as paper_route
+from app.api.routes import predict as predict_route
 from app.api.routes import review as review_route
 from app.api.routes import watchlist as watchlist_route
 from app.core.config import settings
@@ -19,6 +20,10 @@ from app.core.db import get_engine, get_session_factory
 from app.data_providers import build_provider
 from app.models.paper import PaperAccount, PaperOrder, PaperPosition
 from app.models.watchlist import Base
+from app.predict.models import (  # noqa: F401  注册预判两张表
+    PredictionReportRow,
+    PredictionThemeRow,
+)
 from app.repositories.watchlist_repo import WatchlistRepository
 from app.paper.engine import PaperTradingEngine
 from app.review.models import (  # noqa: F401  注册复盘三张表
@@ -35,6 +40,7 @@ from app.websocket.routes import router as ws_router
 _REGISTERED_MODELS = (
     PaperAccount, PaperOrder, PaperPosition,
     ReviewReportRow, ReviewActionItemRow, ReviewMetaInsightRow,
+    PredictionReportRow, PredictionThemeRow,
 )
 
 logging.basicConfig(level=settings.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -176,4 +182,5 @@ app.include_router(market_route.router, prefix="/api")
 app.include_router(watchlist_route.router, prefix="/api")
 app.include_router(paper_route.router, prefix="/api")
 app.include_router(review_route.router, prefix="/api")
+app.include_router(predict_route.router, prefix="/api")
 app.include_router(ws_router)

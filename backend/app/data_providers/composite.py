@@ -123,3 +123,11 @@ class CompositeProvider:
 
     async def get_news(self, symbol: str, limit: int = 10) -> list:
         return await self._call("get_news", symbol, limit)
+
+    async def get_hot_stock_list(self, period: str = "day") -> list:
+        """热股榜（仅 ths 实现；无备源，失败向上抛由调用方标 gap）。"""
+        return await self._call("get_hot_stock_list", period)
+
+    async def get_hot_stock_list_history(self, d: date) -> list:
+        """历史热股榜（仅 ths 实现）。"""
+        return await self._call("get_hot_stock_list_history", d)
