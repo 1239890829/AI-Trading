@@ -178,6 +178,28 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     };
   }, [symbol]);
 
+  // 大盘叠加（分时图 P1）：上证分时 + 昨收，归一化成 % 曲线叠加在左轴。
+  // 指数不随个股切换变化，只在挂载时拉一次（分时当日不变）。
+  const [indexOverlay, setIndexOverlay] = useState<{ points: MinutePoint[]; prevClose: number } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const [idxPoints, overview] = await Promise.all([
+          getMinuteLine("sh000001").catch(() => [] as MinutePoint[]),
+          fetch(`${API_BASE}/api/market/overview`, { cache: "no-store" }).then((r) => r.json()).catch(() => null),
+        ]);
+        const sh = (overview?.data?.indices ?? []).find((i: { symbol: string }) => i.symbol === "000001");
+        if (alive && idxPoints.length > 0 && sh?.prev_close) {
+          setIndexOverlay({ points: idxPoints, prevClose: sh.prev_close });
+        }
+      } catch {}
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   useEffect(() => {
     if (!symbol) return;
     let alive = true;
@@ -385,7 +407,17 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
 
           {chartTab === "minute" && (
             <Panel title="当日分时（1 分钟）" source={minutes[0]?.source} bodyClassName="overflow-hidden" className="min-h-0 flex-1">
-              {minutes.length > 0 ? <MinuteChart points={minutes} prevClose={quote?.prev_close ?? null} className="h-full" /> : <p className="px-4 py-10 text-center text-sm text-zinc-400">暂无分时数据</p>}
+              {minutes.length > 0 ? (
+                <MinuteChart
+                  points={minutes}
+                  prevClose={quote?.prev_close ?? null}
+                  yesterdayVol={bars.length >= 2 ? (bars[bars.length - 2]?.volume ?? null) : null}
+                  index={indexOverlay}
+                  className="h-full"
+                />
+              ) : (
+                <p className="px-4 py-10 text-center text-sm text-zinc-400">暂无分时数据</p>
+              )}
             </Panel>
           )}
 
