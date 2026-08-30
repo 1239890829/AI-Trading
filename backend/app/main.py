@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.routes import backtest as backtest_route
 from app.api.routes import health as health_route
 from app.api.routes import market as market_route
 from app.api.routes import paper as paper_route
@@ -192,6 +193,7 @@ app.add_middleware(
 
 app.include_router(health_route.router, prefix="/api")
 app.include_router(market_route.router, prefix="/api")
+app.include_router(backtest_route.router, prefix="/api")
 app.include_router(screener_route.router, prefix="/api")
 app.include_router(watchlist_route.router, prefix="/api")
 app.include_router(paper_route.router, prefix="/api")

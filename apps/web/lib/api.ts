@@ -230,6 +230,72 @@ export async function getHeatmap(): Promise<HeatmapPayload> {
   return (await getJson<HeatmapPayload>("/api/market/heatmap", 30_000)).data;
 }
 
+/** ---------------------------------------------------------------- 回测（Phase 6 后半） */
+
+export interface BacktestTrade {
+  signal_ts: string;
+  fill_ts: string;
+  side: "buy" | "sell";
+  price: number;
+  ref_price: number;
+  qty: number;
+  fee: number;
+  ok: boolean;
+  reason: string;
+}
+
+export interface BacktestEquityPoint {
+  ts: string;
+  value: number;
+  benchmark: number;
+}
+
+export interface BacktestMetrics {
+  total_return: number;
+  benchmark_return: number;
+  excess_return: number;
+  annual_return: number;
+  max_drawdown: number;
+  max_drawdown_days: number;
+  sharpe: number;
+  sortino: number;
+  calmar: number;
+  win_rate: number;
+  profit_loss_ratio: number;
+  in_return: number;
+  out_return: number;
+}
+
+export interface BacktestPayload {
+  symbol: string;
+  strategy_id: string;
+  bars_count: number;
+  metrics: BacktestMetrics;
+  equity: BacktestEquityPoint[];
+  trades: BacktestTrade[];
+  config: Record<string, number>;
+  notes: string[];
+}
+
+export interface StrategyInfo {
+  id: string;
+  name: string;
+  params: Record<string, number>;
+}
+
+export async function getBacktestStrategies(): Promise<StrategyInfo[]> {
+  return (await getJson<StrategyInfo[]>("/api/backtest/strategies")).data;
+}
+
+export async function runBacktest(req: {
+  symbol: string;
+  strategy_id: string;
+  params?: Record<string, number>;
+  bars?: number;
+}): Promise<BacktestPayload> {
+  return (await sendJson<BacktestPayload>("/api/backtest/run", "POST", req, 60_000)).data;
+}
+
 /** ---------------------------------------------------------------- 选股器（Phase 5） */
 
 export interface ScreenerSignal {

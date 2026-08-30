@@ -85,32 +85,10 @@ def filter_universe(
 
 
 def _tdx_daily_bars(symbol: str, count: int = 250) -> list[dict] | None:
-    """TDX 日K（QFQ）→ tech_score bars；失败返回 None（调用方跳过）。
+    """TDX 日K（QFQ）；公共实现在 app/market/tdx_kline.py（回测引擎共用同一数据路径）。"""
+    from app.market.tdx_kline import tdx_daily_bars
 
-    market 参数必须是整数枚举值（Market.SH.value / Market.SZ.value）——
-    传字符串会报 "required argument is not an integer"（首跑全 150 只失败的实锤）。
-    """
-    from easy_tdx import Adjust, MacClient, Market, Period
-
-    market = (Market.SH if symbol[0] in "69" else Market.SZ).value
-    with MacClient() as client:
-        df = client.get_stock_kline(
-            market, symbol, period=Period.DAILY, start=0, count=count, adjust=Adjust.QFQ
-        )
-    if df is None or len(df) == 0:
-        return None
-    bars: list[dict] = []
-    for _, row in df.iterrows():
-        raw_ts = row["datetime"] if "datetime" in df.columns else row.name
-        bars.append({
-            "ts": str(raw_ts),
-            "open": float(row["open"]),
-            "high": float(row["high"]),
-            "low": float(row["low"]),
-            "close": float(row["close"]),
-            "volume": float(row.get("volume") or 0),
-        })
-    return bars
+    return tdx_daily_bars(symbol, count=count)
 
 
 def _rank_pct(values: list[float], v: float) -> float:
