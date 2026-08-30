@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Panel } from "@/components/panel";
 import { addToWatchlist, getQuotes, getWatchlist, removeFromWatchlist, updateWatchlistGroup } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
+import { workbenchUrl } from "@/lib/routing";
 import type { Quote, WatchlistItem } from "@/types/market";
 
 export default function WatchlistPage() {
@@ -124,7 +125,7 @@ export default function WatchlistPage() {
                       </select>
                     </td>
                     <td className="px-3 py-2 text-right">
-                      <Link href={`/stock/${it.symbol}`} className="mr-3 text-xs text-sky-400 hover:underline">
+                      <Link href={workbenchUrl(it.symbol)} className="mr-3 text-xs text-sky-400 hover:underline">
                         详情
                       </Link>
                       <button onClick={() => void remove(it.symbol)} className="text-xs text-zinc-400 hover:text-red-400">

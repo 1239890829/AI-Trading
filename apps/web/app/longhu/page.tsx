@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Panel } from "@/components/panel";
 import { getLonghu } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
+import { workbenchUrl } from "@/lib/routing";
 import type { LongHuRecord } from "@/types/market";
 
 export default function LonghuPage() {
@@ -67,7 +68,7 @@ export default function LonghuPage() {
               {records.map((r, i) => (
                 <tr key={`${r.symbol}-${r.reason ?? ""}-${i}`} className="border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900">
                   <td className="px-2 py-2 font-mono text-xs text-zinc-400">
-                    <Link href={`/stock/${r.symbol}`} className="hover:text-sky-400 hover:underline">
+                    <Link href={workbenchUrl(r.symbol)} className="hover:text-sky-400 hover:underline">
                       {r.symbol}
                     </Link>
                   </td>

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Panel } from "@/components/panel";
 import { getBoards, type BoardRow } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
+import { workbenchUrl } from "@/lib/routing";
 
 const TYPE_LABEL: Record<string, string> = { hangye: "行业板块", concept: "概念板块" };
 
@@ -81,7 +82,7 @@ export default function BoardsPage() {
                 <td className="px-2 py-2 text-right font-mono text-xs tabular-nums text-zinc-400">{fmtAmount(b.amount)}</td>
                 <td className="px-2 py-2 text-right">
                   {b.leader_symbol ? (
-                    <Link href={`/stock/${b.leader_symbol}`} className="text-sky-400 hover:underline">
+                    <Link href={workbenchUrl(b.leader_symbol)} className="text-sky-400 hover:underline">
                       {b.leader_name}
                     </Link>
                   ) : (

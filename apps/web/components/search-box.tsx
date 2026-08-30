@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { addToWatchlist, searchSymbols } from "@/lib/api";
+import { workbenchUrl } from "@/lib/routing";
 import type { SymbolSearchItem } from "@/types/market";
 
 export function SearchBox() {
@@ -40,7 +41,7 @@ export function SearchBox() {
   function go(item: SymbolSearchItem) {
     setOpen(false);
     setQ("");
-    router.push(`/workbench?symbol=${item.symbol}`);
+    router.push(workbenchUrl(item.symbol));
   }
 
   async function quickAdd(e: React.MouseEvent, item: SymbolSearchItem) {

@@ -7,6 +7,7 @@ import {
   type ScreenerItem,
   type ScreenerPayload,
 } from "@/lib/api";
+import { workbenchUrl } from "@/lib/routing";
 
 /** 全市场选股器（Phase 5）：截面条件过滤 → TDX 日K 技术评分卡。
  * 评分=多因子共振强度（可解释依据+失效条件），仅描述技术面状态，不构成买卖建议。
@@ -178,7 +179,7 @@ export default function ScreenerPage() {
                   <tr
                     key={it.symbol}
                     className="cursor-pointer border-t border-zinc-100 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-800/40"
-                    onClick={() => window.open(`/workbench?symbol=${it.symbol}`, "_self")}
+                    onClick={() => window.open(workbenchUrl(it.symbol), "_self")}
                   >
                     <td className="px-2 py-1.5 tabular-nums text-zinc-400">{idx + 1}</td>
                     <td className="px-2 py-1.5">

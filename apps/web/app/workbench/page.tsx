@@ -23,6 +23,7 @@ import {
   type SparklinePayload,
 } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
+import { LAST_SYMBOL_KEY, workbenchUrl } from "@/lib/routing";
 import type { Quote } from "@/types/market";
 
 const STATUS_LABEL: Record<StreamStatus, { text: string; cls: string }> = {
@@ -44,7 +45,9 @@ function WorkbenchInner() {
   const [groupMap, setGroupMap] = useState<Record<string, string>>({});
   const [activeGroup, setActiveGroup] = useState<string>("全部");
   const [updatedAt, setUpdatedAt] = useState<string>("");
-  const [selected, setSelected] = useState<string>(paramSymbol ?? "600519");
+  // 选中标的：URL 参数是唯一真相源；无参数时回退「上次查看的标的」，
+  // 都没有再落默认 600519（此前硬编码回退是跨页面联动 bug 的一半根因）
+  const [selected, setSelected] = useState<string>(paramSymbol ?? "");
 
   const { quotes, status } = useQuoteStream(symbols);
   const [extra, setExtra] = useState<Record<string, Quote>>({});
@@ -53,8 +56,22 @@ function WorkbenchInner() {
   const [risk, setRisk] = useState<RiskState | null>(null);
 
   useEffect(() => {
-    if (paramSymbol) setSelected(paramSymbol);
+    if (paramSymbol) {
+      setSelected(paramSymbol);
+      return;
+    }
+    // 无参数进入（导航栏点「工作台」）：恢复上次查看的标的，避免永远回到默认股
+    const last = window.sessionStorage.getItem(LAST_SYMBOL_KEY);
+    if (last) setSelected(last);
   }, [paramSymbol]);
+
+  // 记住最近查看的标的（会话内有效；路由规范见 lib/routing.ts）
+  useEffect(() => {
+    if (selected) window.sessionStorage.setItem(LAST_SYMBOL_KEY, selected);
+  }, [selected]);
+
+  // 渲染兜底：selected 尚未就绪（首帧/回退解析中）时保持原默认标的，避免空 symbol 取数
+  const activeSymbol = selected || "600519";
 
   const loadBase = useCallback(async () => {
     try {
@@ -171,7 +188,7 @@ function WorkbenchInner() {
                       key={p.symbol}
                       onClick={() => {
                         setSelected(p.symbol);
-                        router.replace(`/workbench?symbol=${p.symbol}`, { scroll: false });
+                        router.replace(workbenchUrl(p.symbol), { scroll: false });
                       }}
                       className="cursor-pointer border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900"
                     >
@@ -226,10 +243,10 @@ function WorkbenchInner() {
                     key={q.symbol}
                     onClick={() => {
                       setSelected(q.symbol);
-                      router.replace(`/workbench?symbol=${q.symbol}`, { scroll: false });
+                      router.replace(workbenchUrl(q.symbol), { scroll: false });
                     }}
                     className={`cursor-pointer border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900 ${
-                      selected === q.symbol ? "bg-zinc-50 dark:bg-zinc-900" : ""
+                      activeSymbol === q.symbol ? "bg-zinc-50 dark:bg-zinc-900" : ""
                     }`}
                   >
                     <td className="px-3 py-2">
@@ -268,7 +285,7 @@ function WorkbenchInner() {
 
         {/* key 随代码变化：切股时整面板重挂载，所有内部状态归零——
             否则 useQuoteStream 订阅切换的窗口期里会残留上一只股票的行情 */}
-        <StockDetailPanel key={selected} symbol={selected} />
+        <StockDetailPanel key={activeSymbol} symbol={activeSymbol} />
       </div>
     </main>
   );
