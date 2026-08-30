@@ -117,7 +117,7 @@ agent-browser close                     # 收尾必须关，否则留僵尸 Chro
 4. ~~Phase 6 后半：回测引擎（含防泄露测试先行）~~ ✅ 已完成
 5. ~~Phase 8：预警通知核心 + Next 16 升级 + error.tsx~~ ✅ 已完成；**真实推送通道接入阻塞于用户选择**（email/企微/飞书/Telegram/webhook/短信）
 6. ~~Phase 5 风控引擎 v1（市场状态 → 仓位建议 → 下单预检）~~ ✅ 已完成（2026-08-30）
-7. **新闻/公告 AI 摘要**（Phase 7）— 阻塞：需 LLM API Key
+7. ~~**新闻/公告摘要 v1**~~ ✅ 已完成（2026-08-30）：`app/news/` 规则摘要器（重要度/情绪/事实摘要/关键数字）+ `GET /api/news/digest/{symbol}` + 资讯页签渲染。**剩余的 LLM 增强层仍阻塞于凭据**——但不再是前置依赖，规则层已能交付绝大部分价值
 8. **生产部署**（NAS / 云服务器 / Vercel+Railway）— 阻塞：需用户定环境，决定 B8 打包与 token 激活
 9. 技术债清单见 docs/retro-and-gaps.md §三
 
