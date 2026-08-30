@@ -213,7 +213,10 @@ export function MinuteChart({
         tooltip.style.opacity = "0";
         return;
       }
-      const sec = (param.time as unknown as number) * 1000;
+      // param.time 是编码后的伪 UTC（真实 ts + 8h，见 toTime）；
+      // 匹配数据点必须先减回 8h 还原真实时基——否则所有点与光标恒差 8h，
+      // "最近点"永远收敛到最后一根（收盘价），浮层每个位置都显示同一条数据。
+      const sec = (param.time as unknown as number) * 1000 - BJ_OFFSET * 1000;
       let best: P | null = null;
       let bestDiff = Infinity;
       for (const p of points) {
