@@ -77,3 +77,36 @@ class ReviewMetaInsightRow(Base):
     evidence: Mapped[str] = mapped_column(Text, default="")
     suggestion: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class MinuteDecisionRow(Base):
+    """做 T 信号决策链（docs/minute-chart-plan.md 模块 5）。
+
+    三段式生命周期：触发即记录（open）→ 30 分钟窗口后结算（correct|wrong|invalid|expired）。
+    结算含 leave-one-out 错误归因——剔除哪个指标会翻转结论，那个就是错误主因。
+    """
+    __tablename__ = "minute_decisions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    decision_id: Mapped[str] = mapped_column(String(48), unique=True, index=True)
+    symbol: Mapped[str] = mapped_column(String(12), index=True)
+    trade_date: Mapped[str] = mapped_column(String(8), index=True)
+    trigger_ts: Mapped[str] = mapped_column(String(32), index=True)  # 触发时刻（UTC ISO）
+    signal_price: Mapped[float] = mapped_column(Float)
+    bias: Mapped[str] = mapped_column(String(8))                     # 低吸偏向|高抛偏向
+    score: Mapped[float] = mapped_column(Float)
+    confidence: Mapped[str] = mapped_column(String(8), default="medium")
+    triggered: Mapped[str] = mapped_column(Text, default="[]")       # JSON: IndicatorHit 列表
+    invalidate_condition: Mapped[str] = mapped_column(Text, default="")
+    # —— 执行链（结算时自动关联 paper 成交）——
+    executed: Mapped[int] = mapped_column(Integer, default=0)
+    executed_price: Mapped[float | None] = mapped_column(Float, default=None)
+    realized_spread_pct: Mapped[float | None] = mapped_column(Float, default=None)
+    # —— 窗口结算 ——
+    best_price: Mapped[float | None] = mapped_column(Float, default=None)
+    worst_price: Mapped[float | None] = mapped_column(Float, default=None)
+    optimal_spread_pct: Mapped[float | None] = mapped_column(Float, default=None)
+    outcome: Mapped[str | None] = mapped_column(String(12), default=None, index=True)  # correct|wrong|invalid|expired
+    error_attribution: Mapped[str | None] = mapped_column(Text, default=None)  # JSON
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)

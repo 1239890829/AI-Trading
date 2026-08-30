@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -228,13 +228,48 @@ async def minute_signals(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
         pass  # 缺昨日量 → 引擎内指标 4 降级并在 degraded 里标注
 
     from app.market.minute_signals import compute_minute_signals
+    from app.market.minute_decisions import record_signals, settle_due, list_decisions
 
     result = compute_minute_signals(points, yesterday_vol=yesterday_vol, daily_vol_pct=daily_vol_pct)
     result["symbol"] = symbol
     result["prev_close"] = prev_close  # 前端涨跌幅与坐标锚定用
     result["daily_vol_pct"] = daily_vol_pct
     result["signal_count"] = len(result["signals"])
+
+    # 决策链：触发即记录（(symbol, trigger_ts) 去重；引擎 as_of 前缀属性保证重算稳定）
+    try:
+        from app.core.db import get_session_factory
+
+        sf = get_session_factory()
+        if points:
+            trade_date = (datetime.fromisoformat(points[0]["ts"]) + timedelta(hours=8)).strftime("%Y%m%d")
+            result["trade_date"] = trade_date
+            result["recorded"] = record_signals(sf, symbol, result["signals"])
+        settle_due(sf, lambda sym: hub.provider.get_minute_line(sym))
+        result["decisions"] = list_decisions(sf, symbol=symbol, limit=20)
+    except Exception:
+        log.exception("minute decision record/settle failed for %s", symbol)
+        result["recorded"] = 0
+        result["decisions"] = []
     return {"data": result, "meta": _meta(hub)}
+
+
+@router.get("/minute-decisions")
+async def minute_decisions(
+    symbol: str | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    """做 T 信号决策链列表（惰性结算：读取时先结算所有到期记录）。"""
+    from app.core.db import get_session_factory
+    from app.market.minute_decisions import settle_due, list_decisions
+
+    sf = get_session_factory()
+    try:
+        settle_due(sf, lambda sym: hub.provider.get_minute_line(sym))
+    except Exception:
+        log.exception("lazy settle failed")
+    return {"data": list_decisions(sf, symbol=symbol, limit=limit), "meta": _meta(hub)}
 
 
 async def _default_trade_date_async(hub) -> date:
