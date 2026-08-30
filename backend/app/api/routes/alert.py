@@ -1,0 +1,92 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+
+from app.api.deps import require_write_token
+from app.repositories.alert_repo import AlertRepository
+from app.schemas.alert import (
+    AlertChannelsOut,
+    AlertEventOut,
+    AlertRuleCreate,
+    AlertRuleOut,
+    AlertRuleUpdate,
+)
+from app.schemas.envelope import Envelope
+
+router = APIRouter(tags=["alerts"])
+
+
+def _serialize_rule(rule) -> AlertRuleOut:
+    return AlertRuleOut.model_validate(rule)
+
+
+def _serialize_event(event) -> AlertEventOut:
+    return AlertEventOut.model_validate(event)
+
+
+def get_alert_repo(request: Request) -> AlertRepository:
+    return request.app.state.alert_repo
+
+
+@router.get("/alerts/channels")
+async def list_channels() -> Envelope[AlertChannelsOut]:
+    from app.notifiers import get_notifier_registry
+
+    registry = get_notifier_registry()
+    return Envelope(data=AlertChannelsOut(available=registry.names(), default=["in_app", "log"]))
+
+
+@router.get("/alerts/rules")
+async def list_rules(repo: AlertRepository = Depends(get_alert_repo)) -> Envelope[list[AlertRuleOut]]:
+    return Envelope(data=[_serialize_rule(r) for r in repo.list_rules()])
+
+
+@router.post("/alerts/rules", status_code=201, dependencies=[Depends(require_write_token)])
+async def create_rule(body: AlertRuleCreate, repo: AlertRepository = Depends(get_alert_repo)) -> Envelope[AlertRuleOut]:
+    rule = repo.create_rule(**body.model_dump())
+    return Envelope(data=_serialize_rule(rule))
+
+
+@router.get("/alerts/rules/{rule_id}")
+async def get_rule(rule_id: int, repo: AlertRepository = Depends(get_alert_repo)) -> Envelope[AlertRuleOut]:
+    rule = repo.get_rule(rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="规则不存在")
+    return Envelope(data=_serialize_rule(rule))
+
+
+@router.put("/alerts/rules/{rule_id}", dependencies=[Depends(require_write_token)])
+async def update_rule(
+    rule_id: int,
+    body: AlertRuleUpdate,
+    repo: AlertRepository = Depends(get_alert_repo),
+) -> Envelope[AlertRuleOut]:
+    update = {k: v for k, v in body.model_dump().items() if v is not None}
+    rule = repo.update_rule(rule_id, **update)
+    if not rule:
+        raise HTTPException(status_code=404, detail="规则不存在")
+    return Envelope(data=_serialize_rule(rule))
+
+
+@router.delete("/alerts/rules/{rule_id}", status_code=200, dependencies=[Depends(require_write_token)])
+async def delete_rule(rule_id: int, repo: AlertRepository = Depends(get_alert_repo)) -> Envelope[dict]:
+    if not repo.delete_rule(rule_id):
+        raise HTTPException(status_code=404, detail="规则不存在")
+    return Envelope(data={"deleted": True})
+
+
+@router.get("/alerts/events")
+async def list_events(
+    limit: int = 50,
+    rule_id: int | None = None,
+    repo: AlertRepository = Depends(get_alert_repo),
+) -> Envelope[list[AlertEventOut]]:
+    events = repo.list_events(limit=limit, rule_id=rule_id)
+    return Envelope(data=[_serialize_event(e) for e in events])
+
+
+@router.post("/alerts/events/{event_id}/ack", dependencies=[Depends(require_write_token)])
+async def ack_event(event_id: int, repo: AlertRepository = Depends(get_alert_repo)) -> Envelope[dict]:
+    if not repo.acknowledge_event(event_id):
+        raise HTTPException(status_code=404, detail="事件不存在")
+    return Envelope(data={"acknowledged": True})

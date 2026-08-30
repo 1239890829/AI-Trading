@@ -8,6 +8,8 @@ from alembic import context
 # ---- 本项目接线：URL 来自 app settings（ASHARE_DATABASE_URL），metadata 为全量 Base ----
 from app.core.config import settings
 from app.models import watchlist as _watchlist  # noqa: F401  Base 所在模块
+from app.market.sentiment_history import SentimentHistoryRow  # noqa: F401
+from app.models.alert import AlertEvent, AlertRule  # noqa: F401
 from app.models.paper import PaperAccount, PaperOrder, PaperPosition  # noqa: F401
 from app.models.watchlist import Base
 from app.predict.models import PredictionReportRow, PredictionThemeRow  # noqa: F401
@@ -20,10 +22,9 @@ from app.review.models import (  # noqa: F401
 
 config = context.config
 
-# URL 默认来自 app settings（ASHARE_DATABASE_URL）；程序化调用（run_migrations）
-# 可预先 set_main_option 覆盖——此处仅在未设置时回填，避免覆盖调用方目标库
-if not config.get_main_option("sqlalchemy.url"):
-    config.set_main_option("sqlalchemy.url", settings.database_url)
+# URL 强制来自 app settings：alembic.ini 中占位 driver://... 无法连接，
+# 而 run_migrations 通过 connection 共享连接时不走此处 URL。
+config.set_main_option("sqlalchemy.url", settings.database_url)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.

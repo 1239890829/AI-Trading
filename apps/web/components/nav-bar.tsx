@@ -15,6 +15,7 @@ const LINKS = [
   { href: "/screener", label: "选股器" },
   { href: "/longhu", label: "龙虎榜" },
   { href: "/backtest", label: "回测" },
+  { href: "/alerts", label: "预警" },
 ];
 
 export function NavBar() {

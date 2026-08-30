@@ -1,6 +1,6 @@
 # REST API
 
-Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**56 个端点**（2026-08-30 与代码同步）。
+Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**63 个端点**（2026-08-30 与代码同步）。
 
 统一响应：`{"data": ..., "meta": {...}}`（Envelope[T]，meta 含 `provider / is_realtime / is_stale / last_success_refresh / generated_at`）。
 数据源失败返回 **HTTP 502**（前端显示错误态，绝不降级伪造）；错误统一契约 `{detail, code}`。
@@ -74,6 +74,19 @@ Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**56 个端点**（2026-
 | GET | `/api/screener` | 全市场选股器：截面过滤（涨幅带/成交额/换手/排 ST·北交·次新）→ TDX 日K 六维评分卡（防飞刀口径），缓存 30 分钟，首跑约 20s |
 | POST | `/api/backtest/run` | 单标的日线策略回测（防泄露引擎：as_of 视图/T+1/一字板拒/费用配置化；ma_cross / ma_breakout） |
 | GET | `/api/backtest/strategies` | 可用策略清单 |
+
+## 预警通知
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/alerts/channels` | 可用通知通道 + 默认通道 |
+| GET | `/api/alerts/rules` | 规则列表 |
+| 🔒 POST | `/api/alerts/rules` | 创建规则（价格/涨跌幅阈值，自选/指定/全市场范围） |
+| GET | `/api/alerts/rules/{id}` | 单条规则 |
+| 🔒 PUT | `/api/alerts/rules/{id}` | 更新规则 |
+| 🔒 DELETE | `/api/alerts/rules/{id}` | 删除规则 |
+| GET | `/api/alerts/events?limit=&rule_id=` | 触发记录 |
+| 🔒 POST | `/api/alerts/events/{id}/ack` | 确认事件 |
 
 ## 盘后复盘与预判（AI）
 

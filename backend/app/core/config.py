@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     ths_api_key: str = ""  # 同花顺 fuyao 官方 API Key（放 .env，勿提交）
     ths_base_url: str = "https://fuyao.aicubes.cn"
     poll_interval_seconds: float = 5.0
+    alert_poll_interval_seconds: float = 5.0
     request_timeout_seconds: float = 5.0
 
     watchlist: str = "600519,000001,300750,601318"

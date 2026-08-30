@@ -590,3 +590,83 @@ export async function updateWatchlistGroup(symbol: string, group: string): Promi
 export async function removeFromWatchlist(symbol: string): Promise<void> {
   await sendJson(`/api/watchlist/${symbol}`, "DELETE");
 }
+
+/** ---------------------------------------------------------------- 预警通知（Phase 8） */
+
+export type AlertConditionType = "price_above" | "price_below" | "change_pct_above" | "change_pct_below";
+export type AlertScope = "watchlist" | "symbols" | "all";
+
+export interface AlertRule {
+  id: number;
+  name: string;
+  condition_type: AlertConditionType;
+  threshold: number;
+  symbols: string[];
+  scope: AlertScope;
+  cooldown_seconds: number;
+  channels: string[];
+  enabled: boolean;
+  last_triggered_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface AlertEvent {
+  id: number;
+  rule_id: number;
+  symbol: string;
+  trigger_value: number;
+  threshold: number;
+  triggered_at: string;
+  acknowledged: boolean;
+  delivered_channels: string[];
+  snapshot: Quote | null;
+}
+
+export interface AlertChannels {
+  available: string[];
+  default: string[];
+}
+
+export interface AlertRuleCreate {
+  name: string;
+  condition_type: AlertConditionType;
+  threshold: number;
+  symbols?: string[];
+  scope?: AlertScope;
+  cooldown_seconds?: number;
+  channels?: string[];
+  enabled?: boolean;
+}
+
+export async function getAlertChannels(): Promise<AlertChannels> {
+  return (await getJson<AlertChannels>("/api/alerts/channels")).data;
+}
+
+export async function listAlertRules(): Promise<AlertRule[]> {
+  return (await getJson<AlertRule[]>("/api/alerts/rules")).data;
+}
+
+export async function createAlertRule(rule: AlertRuleCreate): Promise<AlertRule> {
+  return (await sendJson<AlertRule>("/api/alerts/rules", "POST", rule)).data;
+}
+
+export async function updateAlertRule(id: number, rule: Partial<AlertRuleCreate>): Promise<AlertRule> {
+  return (await sendJson<AlertRule>(`/api/alerts/rules/${id}`, "PUT", rule)).data;
+}
+
+export async function deleteAlertRule(id: number): Promise<void> {
+  await sendJson(`/api/alerts/rules/${id}`, "DELETE");
+}
+
+export async function listAlertEvents(limit = 50, ruleId?: number): Promise<AlertEvent[]> {
+  const qs = new URLSearchParams();
+  qs.set("limit", String(limit));
+  if (ruleId != null) qs.set("rule_id", String(ruleId));
+  return (await getJson<AlertEvent[]>(`/api/alerts/events?${qs.toString()}`)).data;
+}
+
+export async function ackAlertEvent(eventId: number): Promise<void> {
+  await sendJson(`/api/alerts/events/${eventId}/ack`, "POST");
+}
+

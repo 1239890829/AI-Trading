@@ -17,15 +17,19 @@ from app.api.routes import predict as predict_route
 from app.api.routes import review as review_route
 from app.api.routes import screener as screener_route
 from app.api.routes import watchlist as watchlist_route
+from app.api.routes import alert as alert_route
 from app.core.config import settings
 from app.core.db import get_engine, get_session_factory
 from app.data_providers import build_provider
+from app.market.alert_engine import AlertEngine
+from app.models.alert import AlertEvent, AlertRule
 from app.models.paper import PaperAccount, PaperOrder, PaperPosition
 from app.predict.models import (  # noqa: F401  注册预判两张表
     PredictionReportRow,
     PredictionThemeRow,
 )
 from app.repositories.watchlist_repo import WatchlistRepository
+from app.repositories.alert_repo import AlertRepository
 from app.paper.engine import PaperTradingEngine
 from app.review.models import (  # noqa: F401  注册复盘三张表
     ReviewActionItemRow,
@@ -45,6 +49,7 @@ _REGISTERED_MODELS = (
     ReviewReportRow, ReviewActionItemRow, ReviewMetaInsightRow,
     PredictionReportRow, PredictionThemeRow,
     SentimentHistoryRow,
+    AlertRule, AlertEvent,
 )
 
 logging.basicConfig(level=settings.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -69,6 +74,12 @@ async def lifespan(app: FastAPI):
     )
     app.state.hub = hub
     app.state.watchlist_repo = repo
+
+    # --- 预警引擎（Phase 8）：规则轮询 + 通知通道抽象 ---
+    alert_repo = AlertRepository(get_session_factory())
+    alert_engine = AlertEngine(alert_repo, repo, interval=settings.alert_poll_interval_seconds)
+    app.state.alert_repo = alert_repo
+    app.state.alert_engine = alert_engine
 
     async def live_quote(symbol: str):
         try:
@@ -158,6 +169,18 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(interval)
 
     matcher = asyncio.create_task(paper_matcher(), name="paper-matcher")
+
+    async def alert_quotes_feeder():
+        while True:
+            try:
+                alert_engine.update_quotes({s: q.model_dump() for s, q in hub.quotes.items()})
+            except Exception:
+                log.exception("alert quotes feeder failed")
+            await asyncio.sleep(settings.alert_poll_interval_seconds)
+
+    alert_feeder = asyncio.create_task(alert_quotes_feeder(), name="alert-quotes-feeder")
+    alert_engine.start()
+
     try:
         await hub.refresh()  # 冷启动立即填充，接口首次调用即有数据
     except Exception:
@@ -166,6 +189,8 @@ async def lifespan(app: FastAPI):
     poller.cancel()
     snapshotter.cancel()
     matcher.cancel()
+    alert_feeder.cancel()
+    alert_engine.stop()
     if review_task is not None:
         review_stop.set()
     with contextlib.suppress(asyncio.CancelledError):
@@ -174,6 +199,8 @@ async def lifespan(app: FastAPI):
         await snapshotter
     with contextlib.suppress(asyncio.CancelledError):
         await matcher
+    with contextlib.suppress(asyncio.CancelledError):
+        await alert_feeder
     if review_task is not None:
         with contextlib.suppress(asyncio.CancelledError):
             await review_task
@@ -204,4 +231,5 @@ app.include_router(watchlist_route.router, prefix="/api")
 app.include_router(paper_route.router, prefix="/api")
 app.include_router(review_route.router, prefix="/api")
 app.include_router(predict_route.router, prefix="/api")
+app.include_router(alert_route.router, prefix="/api")
 app.include_router(ws_router)
