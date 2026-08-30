@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     review_llm_api_key: str = ""
     review_llm_model: str = ""
 
+    # ---- 写接口鉴权（B6，opt-in）----
+    # 留空 = 本地开发全放行；部署到公网/NAS 时配置任意随机值，
+    # 之后所有写请求必须带 X-API-Token 头（前端 NEXT_PUBLIC_API_TOKEN 自动携带）
+    api_token: str = ""
+
     @property
     def review_dir(self) -> str:
         return str(REPO_ROOT / "data" / "review")

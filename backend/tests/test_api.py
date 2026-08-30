@@ -10,9 +10,10 @@ def test_health():
         resp = client.get("/api/health")
         assert resp.status_code == 200
         body = resp.json()
-        assert body["status"] == "ok"
+        # 休市日/盘后 hub 会把最近交易日数据标 stale（红线 2）→ degraded 是正确行为；
+        # 交易日盘中 → ok。两者均合法，本断言只锁结构与 provider。
+        assert body["status"] in ("ok", "degraded")
         assert body["provider"] == "mock"
-        assert body["is_stale"] is False
         assert body["last_success_refresh"] is not None
 
 

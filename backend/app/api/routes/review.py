@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import Depends, APIRouter, HTTPException, Query, Request
+
+from app.api.deps import require_write_token
 from pydantic import BaseModel, Field
 
 from app.review.config import available_versions
@@ -45,7 +47,7 @@ class RunIn(BaseModel):
     methodology_version: str | None = Field(None, description="可选，覆盖默认方法论版本")
 
 
-@router.post("/review/run")
+@router.post("/review/run", dependencies=[Depends(require_write_token)])
 async def run_review(body: RunIn, request: Request):
     """手动触发一次盘后复盘（调度器之外的补充入口）。
 

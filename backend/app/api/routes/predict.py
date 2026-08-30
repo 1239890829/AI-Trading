@@ -5,7 +5,9 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import Depends, APIRouter, HTTPException, Query, Request
+
+from app.api.deps import require_write_token
 from pydantic import BaseModel, Field
 
 from app.core.db import get_session_factory
@@ -31,7 +33,7 @@ class PredictIn(BaseModel):
     keywords: list[str] = Field(default_factory=list, description="题材关键词（新闻/涨停原因匹配用）")
 
 
-@router.post("/predict/run")
+@router.post("/predict/run", dependencies=[Depends(require_write_token)])
 async def run(body: PredictIn, request: Request):
     """跑一次新题材预判（周末/节假日/盘后）。
 
@@ -69,7 +71,7 @@ async def detail(target_date: str, request: Request):
     return {"data": report.model_dump()}
 
 
-@router.post("/predict/verify/{target_date}")
+@router.post("/predict/verify/{target_date}", dependencies=[Depends(require_write_token)])
 async def verify(target_date: str, request: Request):
     """目标日收盘后验证预判（题材成立?/人气兑现?/梯队对照?）并回填命中率。
 

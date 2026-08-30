@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from app.api.deps import get_watchlist_repository
+from app.api.deps import get_watchlist_repository, require_write_token
 from app.repositories.watchlist_repo import WatchlistRepository
 
 router = APIRouter(tags=["watchlist"])
@@ -37,7 +37,7 @@ async def list_watchlist(repo: WatchlistRepository = Depends(get_watchlist_repos
     return {"data": [_serialize(i) for i in repo.list_items()]}
 
 
-@router.post("/watchlist", status_code=201)
+@router.post("/watchlist", status_code=201, dependencies=[Depends(require_write_token)])
 async def add_watchlist(body: WatchlistAdd, repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
     item = repo.add(body.symbol, body.name, body.note, body.group)
     return {"data": _serialize(item)}
@@ -48,14 +48,14 @@ async def list_groups(repo: WatchlistRepository = Depends(get_watchlist_reposito
     return {"data": repo.list_groups()}
 
 
-@router.put("/watchlist/{symbol}/group")
+@router.put("/watchlist/{symbol}/group", dependencies=[Depends(require_write_token)])
 async def update_group(symbol: str, body: GroupUpdate, repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
     if not repo.update_group(symbol, body.group):
         raise HTTPException(status_code=404, detail=f"{symbol} 不在自选中")
     return {"data": {"symbol": symbol, "group": body.group}}
 
 
-@router.delete("/watchlist/{symbol}")
+@router.delete("/watchlist/{symbol}", dependencies=[Depends(require_write_token)])
 async def remove_watchlist(symbol: str, repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
     if not repo.remove(symbol):
         raise HTTPException(status_code=404, detail=f"{symbol} 不在自选中")

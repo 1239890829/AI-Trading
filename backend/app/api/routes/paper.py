@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from datetime import timezone
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import Depends, APIRouter, HTTPException, Request
+
+from app.api.deps import require_write_token
 from pydantic import BaseModel, Field
 
 from app.paper.engine import PaperTradingEngine
@@ -71,7 +73,7 @@ async def paper_orders(request: Request, status: str | None = None):
         ]}
 
 
-@router.post("/paper/orders")
+@router.post("/paper/orders", dependencies=[Depends(require_write_token)])
 async def place_order(body: OrderIn, request: Request):
     engine = _engine(request)
     order = await engine.place_order(body.symbol, body.side, body.price, body.quantity)
@@ -104,7 +106,7 @@ async def paper_fills(request: Request, symbol: str | None = None):
         ]}
 
 
-@router.delete("/paper/orders/{order_id}")
+@router.delete("/paper/orders/{order_id}", dependencies=[Depends(require_write_token)])
 async def cancel_order(order_id: int, request: Request):
     engine = _engine(request)
     o = engine.cancel(order_id)
@@ -113,7 +115,7 @@ async def cancel_order(order_id: int, request: Request):
     return {"data": {"id": o.id, "status": o.status}}
 
 
-@router.post("/paper/reset")
+@router.post("/paper/reset", dependencies=[Depends(require_write_token)])
 async def reset_account(body: ResetIn, request: Request):
     """重置模拟账户：清仓、清委托与成交历史、资金回到初始额度。"""
     engine = _engine(request)

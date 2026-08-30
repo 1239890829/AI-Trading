@@ -3,13 +3,23 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from app.data_quality.validator import mark_stale, validate_quote
 from app.schemas.market import Quote, utcnow
 
 log = logging.getLogger(__name__)
+
+
+def _cst_now() -> datetime:
+    return datetime.now(timezone.utc) + timedelta(hours=8)
+
+
+def _in_market_hours(dt: datetime) -> bool:
+    """含集合竞价与收盘定价时段的宽松交易窗口（09:15-15:05）。"""
+    t = dt.hour * 100 + dt.minute
+    return 915 <= t <= 1505
 
 
 class QuoteHub:
@@ -39,6 +49,8 @@ class QuoteHub:
         self.last_attempt: datetime | None = None
         self.last_error: str | None = None
         self.consecutive_failures = 0
+        # 休市状态沿触发（红线 2：休市日数据不得冒充实时）
+        self._closed_marked = False
 
     # ---------- 刷新 ----------
 
@@ -70,7 +82,30 @@ class QuoteHub:
         self.consecutive_failures = 0
         self.last_error = None
         self.last_success_refresh = utcnow()
+        await self._refresh_closed_state()
         self._broadcast("quotes")
+
+    async def _refresh_closed_state(self) -> None:
+        """休市判定（红线 2）：非交易日或非交易时段的数据一律标 stale，
+        防止休市日"刷新一直成功"把周五收盘数据冒充实时（待办池 #16）。
+        日历不可用时返回 None → 不干预（未知不判，保持原行为）。"""
+        from app.market import trade_calendar as tc
+
+        verdict: bool | None = None
+        try:
+            now = _cst_now()
+            days = await tc.trading_days(self.provider)
+            if days:
+                verdict = tc.is_trade_day(days, now.date()) and _in_market_hours(now)
+        except Exception as exc:
+            log.debug("market-open check unavailable: %s", exc)
+            return
+        if verdict is False and not self._closed_marked:
+            self._closed_marked = True
+            self._mark_all_stale(reason="market_closed")
+        elif verdict is True and self._closed_marked:
+            # 重新开盘：恢复由下次校验决定，这里只清标记（数据会被本轮 refresh 刷新）
+            self._closed_marked = False
 
     def _safe_watchlist(self) -> list[str]:
         try:
@@ -79,8 +114,7 @@ class QuoteHub:
             log.exception("watchlist lookup failed; keeping previous watchlist")
             return list(self.quotes.keys())
 
-    def _mark_all_stale(self) -> None:
-        reason = "refresh_failed"
+    def _mark_all_stale(self, reason: str = "refresh_failed") -> None:
         for q in self.indices.values():
             mark_stale(q, reason)
         for q in self.quotes.values():
@@ -90,6 +124,8 @@ class QuoteHub:
     def is_stale(self) -> bool:
         if self.last_success_refresh is None:
             return True
+        if self._closed_marked:
+            return True  # 休市：最近交易日数据，绝不冒充实时（红线 2）
         return utcnow() - self.last_success_refresh > timedelta(seconds=self.poll_interval * 3)
 
     # ---------- 读取 ----------
