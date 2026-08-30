@@ -191,6 +191,52 @@ async def minute_line(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
     return {"data": {"symbol": symbol, "points": points}, "meta": _meta(hub)}
 
 
+@router.get("/minute-signals/{symbol}")
+async def minute_signals(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
+    """做 T 分时信号（docs/minute-chart-plan.md 模块 4 引擎核心）。
+
+    只输出「偏向 + 依据 + 失效条件」（红线 3，非确定性结论）。
+    as_of 严格推进：信号触发时刻 = 确认完成的那根 bar。
+    阈值未经历史校准——回测（模块 4.3）跑完前置信度一律按 medium 封顶。
+    """
+    try:
+        points = await hub.provider.get_minute_line(symbol)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"分时数据源失败：{exc}")
+
+    prev_close = None
+    yesterday_vol = None
+    daily_vol_pct = None
+    try:
+        q = await hub.provider.get_quote(symbol)
+        if q is not None:
+            prev_close = q.prev_close
+    except Exception:
+        pass  # 昨收缺失 → 信号照常（引擎不依赖它），仅前端涨跌幅显示降级
+    try:
+        bars = await hub.provider.get_kline(symbol, "1d", None, None)
+        # bars[-1] 盘中是今日实时 bar / 休市日是分时日本身——两种场景 bars[-2]
+        # 都是"分时日的上一交易日"（与前端量比口径一致）
+        if len(bars) >= 2:
+            yesterday_vol = bars[-2].volume
+        # 近 5 日日振幅均值（%）：偏离阈值波动率自适应的输入
+        if len(bars) >= 6:
+            rngs = [(b.high - b.low) / b.close * 100 for b in bars[-6:-1] if b.close]
+            if rngs:
+                daily_vol_pct = round(sum(rngs) / len(rngs), 3)
+    except Exception:
+        pass  # 缺昨日量 → 引擎内指标 4 降级并在 degraded 里标注
+
+    from app.market.minute_signals import compute_minute_signals
+
+    result = compute_minute_signals(points, yesterday_vol=yesterday_vol, daily_vol_pct=daily_vol_pct)
+    result["symbol"] = symbol
+    result["prev_close"] = prev_close  # 前端涨跌幅与坐标锚定用
+    result["daily_vol_pct"] = daily_vol_pct
+    result["signal_count"] = len(result["signals"])
+    return {"data": result, "meta": _meta(hub)}
+
+
 async def _default_trade_date_async(hub) -> date:
     """最近交易日：优先官方交易日历（ths，缓存 24h），失败回退周末规则。"""
     import time as _time
