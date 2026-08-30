@@ -63,5 +63,8 @@ jobs:
       - name: TypeScript 类型检查
         run: npx tsc --noEmit
 
+      - name: 单元测试（vitest，lib 纯函数）
+        run: npx vitest run
+
       - name: ESLint
         run: npx next lint
