@@ -12,10 +12,12 @@ import { Sparkline } from "@/components/sparkline";
 import { useQuoteStream, StreamStatus } from "@/hooks/use-quote-stream";
 import {
   getMarketOverview,
+  getPaperPositions,
   getQuotes,
   getSparklines,
   getWatchlist,
   removeFromWatchlist,
+  type PaperPositionInfo,
   type SparklinePayload,
 } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
@@ -45,6 +47,7 @@ function WorkbenchInner() {
   const { quotes, status } = useQuoteStream(symbols);
   const [extra, setExtra] = useState<Record<string, Quote>>({});
   const merged: Record<string, Quote> = { ...extra, ...quotes };
+  const [positions, setPositions] = useState<PaperPositionInfo[]>([]);
 
   useEffect(() => {
     if (paramSymbol) setSelected(paramSymbol);
@@ -53,11 +56,16 @@ function WorkbenchInner() {
   const loadBase = useCallback(async () => {
     try {
       // 原 groups 裸 fetch 从未被消费（gs 解构后无人用）——随收口一并删除
-      const [wl, overview] = await Promise.all([getWatchlist(), getMarketOverview()]);
+      const [wl, overview, positions] = await Promise.all([
+        getWatchlist(),
+        getMarketOverview(),
+        getPaperPositions().catch(() => []),
+      ]);
       groupMapRef.current = Object.fromEntries(wl.map((i) => [i.symbol, i.group_name ?? "默认"]));
       setSymbols(wl.map((i) => i.symbol));
       setIndices(overview.indices);
       setTotalAmount(overview.total_amount);
+      setPositions(positions);
       setError(null);
       setUpdatedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
     } catch {
@@ -133,6 +141,37 @@ function WorkbenchInner() {
       <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[340px,minmax(0,1fr)]">
         <div className="flex min-h-0 min-w-0 flex-col gap-1.5">
         <IndexCards indices={indices} />
+        {/* 持仓组（retro #3 遗留）：仅有持仓时渲染，空仓零占用；行点击选中该股 */}
+        {positions.length > 0 && (
+          <Panel title={`模拟持仓 (${positions.length})`} className="max-h-36 shrink-0 overflow-hidden">
+            <table className="w-full text-xs">
+              <tbody>
+                {positions.map((p) => {
+                  const pct = p.pnl_pct;
+                  return (
+                    <tr
+                      key={p.symbol}
+                      onClick={() => {
+                        setSelected(p.symbol);
+                        router.replace(`/workbench?symbol=${p.symbol}`, { scroll: false });
+                      }}
+                      className="cursor-pointer border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900"
+                    >
+                      <td className="px-3 py-1.5">
+                        <span className="font-mono text-[10px] text-zinc-400">{p.symbol}</span>
+                        <span className="ml-1.5">{merged[p.symbol]?.name ?? ""}</span>
+                      </td>
+                      <td className="px-2 py-1.5 text-right font-mono tabular-nums text-zinc-400">{p.quantity}股</td>
+                      <td className={`px-3 py-1.5 text-right font-mono tabular-nums ${pct == null ? "text-zinc-500" : pctColor(pct)}`}>
+                        {pct == null ? "--" : `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </Panel>
+        )}
         <div className="flex shrink-0 flex-wrap gap-1">
           {["全部", ...groups.filter((g) => g !== "默认")].map((g) => (
             <button
