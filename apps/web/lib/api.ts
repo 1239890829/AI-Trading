@@ -443,6 +443,32 @@ export async function getSentiment(): Promise<Sentiment> {
   return (await getJson<Sentiment>("/api/market/sentiment", 30_000)).data;
 }
 
+export interface SentimentHistoryItem {
+  trade_date: string;
+  phase: string;
+  temperature: number | null;
+  confidence: string | null;
+  phase_unreliable: boolean;
+  source: "review" | "live";
+}
+
+export interface SentimentHistoryPayload {
+  items: SentimentHistoryItem[];
+  cycle: {
+    start_date: string | null;
+    start_phase?: string;
+    days: number;
+    current_group: string | null;
+  };
+  backfilled: number;
+  notes: string[];
+}
+
+/** 情绪周期序列（retro #17）：近 N 个交易日判定 + 周期起点定位。 */
+export async function getSentimentHistory(days = 10): Promise<SentimentHistoryPayload> {
+  return (await getJson<SentimentHistoryPayload>(`/api/market/sentiment-history?days=${days}`, 30_000)).data;
+}
+
 export async function getWatchlist(): Promise<WatchlistItem[]> {
   return (await getJson<WatchlistItem[]>("/api/watchlist")).data;
 }

@@ -20,6 +20,8 @@ from app.schemas.envelope import (
     LongHuPayload,
     MinuteLinePayload,
     OverviewPayload,
+    SentimentHistoryItem,
+    SentimentHistoryPayload,
     SentimentPayload,
     ThemeBoardPayload,
 )
@@ -71,6 +73,86 @@ async def market_sentiment(request: Request, hub: QuoteHub = Depends(get_hub)) -
     payload = {"data": result, "meta": _meta(hub)}
     request.app.state._sent_cache = (_time.time(), payload)
     return payload
+
+
+_sent_hist_backfilled = {"done": False}
+
+
+@router.get("/market/sentiment-history", response_model=Envelope[SentimentHistoryPayload])
+async def market_sentiment_history(
+    request: Request,
+    hub: QuoteHub = Depends(get_hub),
+    days: int = Query(default=10, ge=2, le=60),
+) -> dict:
+    """情绪周期序列（retro #17）：近 N 个交易日情绪判定 + 周期起点定位。
+
+    数据三路合一（口径全部来自 compute_market_sentiment，与实时端点一致）：
+    ① 复盘报告回填（进程内一次，幂等只补缺）；② 惰性补录——交易日 15:00 后
+    缺当日记录则现算落库；③ 历史表已有数据。已存在的日期不覆盖。
+    """
+    from app.core.db import get_session_factory
+    from app.market.sentiment_history import (
+        backfill_from_reports,
+        get_history,
+        locate_cycle,
+        upsert_if_absent,
+    )
+
+    sf = get_session_factory()
+
+    # ① 历史报告回填（进程内只跑一次；表空且无报告时零成本）
+    backfilled = 0
+    if not _sent_hist_backfilled["done"]:
+        try:
+            backfilled = backfill_from_reports(sf)
+        except Exception:
+            log.warning("sentiment history backfill failed", exc_info=True)
+        _sent_hist_backfilled["done"] = True
+
+    # ② 惰性补录：交易日 15:05 后缺当日记录 → 现算落库
+    now_bj = datetime.utcnow() + timedelta(hours=8)
+    today_key = now_bj.strftime("%Y%m%d")
+    try:
+        from app.market.trade_calendar import trading_days
+
+        days_list = await trading_days(hub.provider)
+        is_trade_day = now_bj.date() in days_list
+    except Exception:
+        is_trade_day = now_bj.weekday() < 5
+    if is_trade_day and (now_bj.hour, now_bj.minute) >= (15, 5):
+        try:
+            from app.services.market_context import compute_market_sentiment
+
+            existing = {h["trade_date"] for h in get_history(sf, days=days)}
+            if today_key not in existing:
+                result = await compute_market_sentiment(hub, request.app.state.snapshot_service)
+                entry = {
+                    "trade_date": today_key,
+                    "phase": result.get("phase") or "分歧",
+                    "temperature": result.get("temperature"),
+                    "confidence": result.get("confidence"),
+                    "phase_unreliable": bool(result.get("phase_unreliable")),
+                    "source": "live",
+                    "detail": result,
+                }
+                if upsert_if_absent(sf, entry):
+                    backfilled += 1
+        except Exception:
+            log.warning("sentiment history lazy capture failed", exc_info=True)
+
+    # ③ 序列 + 周期定位
+    history = get_history(sf, days=days)
+    cycle = locate_cycle(history)
+    payload = SentimentHistoryPayload(
+        items=[SentimentHistoryItem(**h) for h in history],
+        cycle=cycle,
+        backfilled=backfilled,
+        notes=[
+            "序列自功能上线起积累；复盘报告里已有的历史判定会自动回填",
+            "周期起点 = 最近一次 强(回暖/升温/高潮)·中(分歧)·弱(退潮/冰点) 分段切换日",
+        ],
+    )
+    return {"data": payload, "meta": _meta(hub)}
 
 
 @router.get("/market/breadth", response_model=Envelope[BreadthData])

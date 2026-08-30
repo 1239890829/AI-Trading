@@ -8,8 +8,10 @@ import {
   getLimitUpPool,
   getMarketOverview,
   getSentiment,
+  getSentimentHistory,
   type Breadth,
   type Sentiment,
+  type SentimentHistoryPayload,
 } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
 import type { LimitUpRecord, Quote } from "@/types/market";
@@ -29,22 +31,25 @@ export default function MarketPage() {
   const [pool, setPool] = useState<LimitUpRecord[]>([]);
   const [breadth, setBreadth] = useState<Breadth | null>(null);
   const [sent, setSent] = useState<Sentiment | null>(null);
+  const [sentHist, setSentHist] = useState<SentimentHistoryPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState("");
 
   const load = useCallback(async () => {
     try {
-      const [overview, zt, breadthRes, sentRes] = await Promise.all([
+      const [overview, zt, breadthRes, sentRes, histRes] = await Promise.all([
         getMarketOverview(),
         getLimitUpPool().catch(() => [] as LimitUpRecord[]),
         getBreadth().catch(() => null),
         getSentiment().catch(() => null),
+        getSentimentHistory(10).catch(() => null),
       ]);
       setIndices(overview.indices);
       setTotalAmount(overview.total_amount);
       setPool(zt.slice(0, 10));
       setBreadth(breadthRes);
       setSent(sentRes);
+      setSentHist(histRes);
       setError(null);
       setUpdatedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
     } catch {
@@ -57,6 +62,12 @@ export default function MarketPage() {
     const t = setInterval(load, 10000);
     return () => clearInterval(t);
   }, [load]);
+
+  // 历史序列变化慢（日频），独立 60s 轮询，不跟随 10s 行情刷新
+  useEffect(() => {
+    const t = setInterval(() => void getSentimentHistory(10).then(setSentHist).catch(() => {}), 60000);
+    return () => clearInterval(t);
+  }, []);
 
   const sh = indices.find((q) => q.market === "SH" && q.symbol === "000001");
   const sz = indices.find((q) => q.symbol === "399001");
@@ -126,6 +137,44 @@ export default function MarketPage() {
             <span className="ml-auto text-xs text-zinc-500" title={`${sent.reasons.join("；")}｜误判：${sent.misjudge_caveats.join("；")}｜切换：${sent.switch_conditions}`}>
               判定依据：{sent.reasons[0]}…
             </span>
+          </div>
+        </div>
+      )}
+
+      {sentHist && sentHist.items.length > 0 && (
+        <div className="shrink-0 rounded-xl border border-zinc-200 px-4 py-3 dark:border-zinc-800">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <span className="text-xs font-medium text-zinc-400">近 {sentHist.items.length} 日情绪序列</span>
+            {(() => {
+              const cy = sentHist.cycle;
+              if (!cy.start_date) return null;
+              const groupLabel = cy.current_group === "strong" ? "强区间" : cy.current_group === "weak" ? "弱区间" : "中性段";
+              return (
+                <span className="text-xs text-zinc-500">
+                  本轮自 <span className="font-mono text-zinc-300">{cy.start_date}</span> 起
+                  （{cy.start_phase ?? ""}→{sentHist.items[sentHist.items.length - 1]?.phase}），已持续 {cy.days} 日（{groupLabel}）
+                </span>
+              );
+            })()}
+            <div className="flex items-end gap-1.5">
+              {sentHist.items.map((h) => {
+                const t = h.temperature ?? 0;
+                const height = 6 + Math.round((t / 100) * 30);
+                const color =
+                  t >= 75 ? "bg-red-500/70" : t >= 60 ? "bg-amber-500/70" : t >= 45 ? "bg-zinc-500/60" : "bg-sky-500/70";
+                return (
+                  <div
+                    key={h.trade_date}
+                    className="flex w-7 flex-col items-center gap-0.5"
+                    title={`${h.trade_date}｜${h.phase}｜温度 ${t ?? "--"}｜置信 ${h.confidence ?? "--"}｜${h.source === "review" ? "复盘" : "实时"}`}
+                  >
+                    <span className="text-[10px] tabular-nums text-zinc-400">{t ? Math.round(t) : "--"}</span>
+                    <div className={`w-full rounded-t ${color}`} style={{ height }} />
+                    <span className="text-[9px] text-zinc-500">{h.trade_date.slice(4, 6)}/{h.trade_date.slice(6, 8)}</span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}

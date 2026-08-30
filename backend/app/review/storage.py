@@ -116,6 +116,17 @@ def save_report(session_factory, report: ReviewReport) -> ReviewReport:
     finally:
         db.close()
 
+    # 情绪周期序列钩子（retro #17）：报告里的情绪判定落 sentiment_history（幂等，已存在跳过）。
+    # 放在报告提交之后、独立 session——情绪落库失败不影响复盘报告本身。
+    try:
+        from app.market.sentiment_history import extract_from_review_payload, upsert_if_absent
+
+        entry = extract_from_review_payload(report.model_dump())
+        if entry and upsert_if_absent(session_factory, entry):
+            log.info("sentiment history added: %s (%s)", entry["trade_date"], entry["phase"])
+    except Exception:
+        log.warning("sentiment history hook failed (报告已落库，不影响复盘)", exc_info=True)
+
     log.info("review saved: %s (%s)", report.review_id, path)
     return report
 
