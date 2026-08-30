@@ -118,3 +118,62 @@ def test_trade_envelope():
     payload = {"data": [Trade(symbol="600519", price=1500.0, side="buy", source="mock").model_dump(mode="json")], "meta": {}}
     env = Envelope[list[Trade]].model_validate(payload)
     assert env.data[0].side == "buy"
+
+
+# ---------------------------------------------------------------- B2 第二批：聚合载荷
+
+def test_sentiment_payload_keeps_extra_fields():
+    """extra="allow"：引擎新增字段透传不丢（聚合载荷的演进安全阀）。"""
+    from app.schemas.envelope import Envelope, SentimentPayload
+
+    payload = {"data": {"phase": "分歧", "temperature": 62.0, "some_future_field": {"x": 1}}, "meta": {}}
+    env = Envelope[SentimentPayload].model_validate(payload)
+    dumped = env.model_dump()
+    assert dumped["data"]["phase"] == "分歧"
+    assert dumped["data"]["some_future_field"] == {"x": 1}, "extra 字段必须透传"
+
+
+def test_theme_board_envelope_skeleton():
+    from app.schemas.envelope import Envelope, ThemeBoardPayload
+
+    payload = {
+        "data": {
+            "trade_date": "2026-08-28",
+            "themes": [{"theme": "房地产", "strength_score": 6.5, "anything_new": 1}],
+            "summary": {"limit_up_total": 81, "theme_count": 39, "market_max_boards": 7, "brand_new_key": True},
+            "caveats": ["x"],
+        },
+        "meta": {},
+    }
+    env = Envelope[ThemeBoardPayload].model_validate(payload)
+    assert env.data.summary.limit_up_total == 81
+    assert env.data.summary.market_max_boards == 7
+    # 卡片 dict 透传（字段级契约由前端镜像维护）
+    assert env.data.themes[0]["anything_new"] == 1
+
+
+def test_minute_line_envelope():
+    from app.schemas.envelope import Envelope, MinuteLinePayload
+
+    payload = {
+        "data": {
+            "symbol": "600519",
+            "points": [{"ts": "2026-08-28T01:30:00+00:00", "price": 1289.0, "volume": 8100.0, "source": "tdx"}],
+            "vr_baseline_5m": [220600.0, 2643500.0],
+        },
+        "meta": {},
+    }
+    env = Envelope[MinuteLinePayload].model_validate(payload)
+    assert env.data.points[0].price == 1289.0
+    assert env.data.vr_baseline_5m == [220600.0, 2643500.0]
+
+
+def test_overview_envelope():
+    from app.schemas.envelope import Envelope, OverviewPayload
+
+    from tests.test_response_envelope import _quote
+
+    payload = {"data": {"indices": [_quote().model_dump(mode="json")], "total_amount": 123.4}, "meta": {}}
+    env = Envelope[OverviewPayload].model_validate(payload)
+    assert env.data.indices[0].symbol == "600519"
+    assert env.data.total_amount == 123.4

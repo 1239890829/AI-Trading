@@ -101,7 +101,7 @@ ashare-ai-trader/
 │   │   │   └── service.py             # 编排 + 目标日四问验证 + 复盘钩子
 │   │   └── websocket/routes.py        # /ws/quotes
 │   ├── tests/（19 文件 266 用例；含 test_predict 15、test_theme_service 49、test_error_contract 5 用例）
-│   ├── requirements.txt / Dockerfile / .env（key，gitignored）
+│   ├── requirements.txt + requirements.lock / alembic.ini + migrations/（B5）/ Dockerfile / .env（key，gitignored）
 ├── apps/web/
 │   ├── app/（7 路由页面）
 │   ├── components/（10 组件，见 §九）
@@ -144,7 +144,7 @@ ashare-ai-trader/
 
 ---
 
-# 五、REST API 全表（46 端点）
+# 五、REST API 全表（46 端点，15 个已挂 response_model）
 
 | 方法 | 路径 | 说明 | 数据源 |
 |---|---|---|---|

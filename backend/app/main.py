@@ -19,7 +19,6 @@ from app.core.config import settings
 from app.core.db import get_engine, get_session_factory
 from app.data_providers import build_provider
 from app.models.paper import PaperAccount, PaperOrder, PaperPosition
-from app.models.watchlist import Base
 from app.predict.models import (  # noqa: F401  注册预判两张表
     PredictionReportRow,
     PredictionThemeRow,
@@ -49,7 +48,11 @@ log = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(get_engine())
+    # schema 唯一归 alembic 管（B5）：三态 stamp-or-upgrade 替代裸 create_all
+    from app.core.migrations import run_migrations
+
+    migration_action = run_migrations(get_engine())
+    log.info("database migration: %s", migration_action)
     repo = WatchlistRepository(get_session_factory())
     repo.ensure_seeded(settings.watchlist_symbols)
 

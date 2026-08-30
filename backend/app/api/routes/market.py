@@ -13,10 +13,15 @@ from app.schemas.envelope import (
     AuctionBenchmarkItem,
     AuctionSnapshot,
     AdjustmentEvent,
+    BreadthData,
     Envelope,
     KlinePayload,
     LimitUpPoolPayload,
     LongHuPayload,
+    MinuteLinePayload,
+    OverviewPayload,
+    SentimentPayload,
+    ThemeBoardPayload,
 )
 from app.schemas.market import (
     OrderBook,
@@ -41,7 +46,7 @@ def _meta(hub: QuoteHub) -> dict:
     }
 
 
-@router.get("/market/sentiment")
+@router.get("/market/sentiment", response_model=Envelope[SentimentPayload])
 async def market_sentiment(request: Request, hub: QuoteHub = Depends(get_hub)) -> dict:
     """情绪周期判定（§5.5）：阶段+温度+指标依据+置信度+误判原因+切换条件+次日验证项。
 
@@ -68,7 +73,7 @@ async def market_sentiment(request: Request, hub: QuoteHub = Depends(get_hub)) -
     return payload
 
 
-@router.get("/market/breadth")
+@router.get("/market/breadth", response_model=Envelope[BreadthData])
 async def market_breadth(request: Request) -> dict:
     """市场宽度：涨跌家数、涨跌停家数、两市成交额（来源：新浪全市场快照）。"""
     svc = request.app.state.snapshot_service
@@ -78,7 +83,7 @@ async def market_breadth(request: Request) -> dict:
     return {"data": payload, "meta": _meta(request.app.state.hub)}
 
 
-@router.get("/market/overview")
+@router.get("/market/overview", response_model=Envelope[OverviewPayload])
 async def market_overview(hub: QuoteHub = Depends(get_hub)) -> dict:
     """指数行情 + 两市成交额合计。市场宽度/情绪等指标按开发顺序在后续阶段接入。"""
     indices = hub.get_indices()
@@ -196,7 +201,7 @@ async def trades(symbol: str, limit: int = Query(default=50, ge=1, le=200), hub:
     return {"data": [t.model_dump(mode="json") for t in rows], "meta": _meta(hub)}
 
 
-@router.get("/minute-line/{symbol}")
+@router.get("/minute-line/{symbol}", response_model=Envelope[MinuteLinePayload])
 async def minute_line(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
     """当日 1 分钟分时（价格/成交量/累计成交额）。逐笔成交不可用时，这是盘中细粒度的替代口径。
 
@@ -620,7 +625,7 @@ def _load_snapshot_map(request: Request, trade_date: date | None = None) -> dict
         return {}
 
 
-@router.get("/themes")
+@router.get("/themes", response_model=Envelope[ThemeBoardPayload])
 async def themes(
     date_str: str | None = Query(default=None, alias="date", description="YYYY-MM-DD，默认最近交易日"),
     min_boards: int = Query(default=0, ge=0, le=20, description="仅保留最高连板 ≥ 该值的题材"),

@@ -1,20 +1,24 @@
-"""统一出参信封（技术评审 B2 首批）。
+"""统一出参信封（技术评审 B2）。
 
 `Envelope[T]` 是所有端点 `{data, meta}` 形态的类型化表达：
 - `data` 用具体模型类型化（/docs 自动文档从此准确）
 - `meta` 保持 dict（链名/stale 等运维字段按端点自有节奏演进，不强行建模）
 
-首批只覆盖与既有 Pydantic 模型 1:1 对应的端点组（quotes/kline/order-book/
-trades/limit-up/limit-break/longhu/search）——路由返回的就是 model_dump()，
-加 response_model 零丢字段风险。themes/sentiment 等聚合形态留第二批单独建模。
+建模分层：
+- **严格模型**（extra 默认 ignore）：与既有模型 1:1 的稳定端点
+  （quotes/kline/order-book/trades/limit-up/limit-break/longhu/search/overview/minute-line）；
+- **宽容模型**（extra="allow"）：高频演进的聚合载荷（sentiment/breadth/themes）——
+  已知字段文档化，未知字段**保留透传**，服务端加字段不破坏前端；
+- themes 的卡片字段面大且高频重构，字段级模型由前端 types/market.ts 镜像维护，
+  后端只锁 summary 与 envelope 骨架——这是显式取舍，不是遗漏。
 """
 from __future__ import annotations
 
-from typing import Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from app.schemas.market import Kline, LimitUpRecord, LongHuRecord
+from app.schemas.market import Kline, LimitUpRecord, LongHuRecord, Quote
 
 T = TypeVar("T")
 
@@ -44,6 +48,107 @@ class LongHuPayload(BaseModel):
 
     trade_date: str
     records: list[LongHuRecord]
+
+
+# ---------------------------------------------------------------- B2 第二批：聚合载荷
+
+
+class OverviewPayload(BaseModel):
+    """GET /market/overview 的 data。"""
+
+    indices: list[Quote]
+    total_amount: float
+
+
+class MinutePointModel(BaseModel):
+    """分钟分时点（与 /api/minute-line points 元素一致）。"""
+
+    ts: str
+    price: float
+    volume: float | None = None
+    cum_amount: float | None = None
+    cum_volume: int | None = None
+    avg: float | None = None
+    source: str
+
+
+class MinuteLinePayload(BaseModel):
+    """GET /minute-line/{symbol} 的 data。
+
+    vr_baseline_5m：精确量比基线（最近 5 个完整交易日逐 5min 槽同期累计量均值，
+    不含当日）；TDX 历史未落地时为 null，前端回退近似口径。
+    """
+
+    symbol: str
+    points: list[MinutePointModel]
+    vr_baseline_5m: list[float] | None = None
+
+
+class SentimentIndicator(BaseModel):
+    name: str
+    value: str | float | int | None = None
+    note: str | None = None
+
+
+class SentimentPayload(BaseModel):
+    """GET /market/sentiment 的 data（情绪引擎输出 + 池计数）。
+
+    情绪引擎字段面随方法论演进（**result 展开**），extra="allow" 透传新字段。
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    phase: str | None = None
+    temperature: float | None = None
+    confidence: str | None = None
+    reasons: list[str] = Field(default_factory=list)
+    misjudge_caveats: list[str] = Field(default_factory=list)
+    switch_conditions: str | list | None = None
+    indicators: list[SentimentIndicator] = Field(default_factory=list)
+    ladder: dict[str, float] = Field(default_factory=dict)
+    judged_at: str | None = None
+    pool_today_count: int | None = None
+    pool_yesterday_count: int | None = None
+    is_last_trade_date_today: bool | None = None
+
+
+class BreadthData(BaseModel):
+    """GET /market/breadth 的 data（全市场快照口径）。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    breadth: dict[str, Any] | None = None
+    snapshot_age_seconds: float | None = None
+    rows: int | None = None
+
+
+class ThemeSummary(BaseModel):
+    """题材看板 summary（路由按 min_count/min_boards 过滤，theme_count 为过滤前识别总数）。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    limit_up_total: int = 0
+    theme_count: int = 0
+    market_max_boards: int | None = None
+    market_break_rate: float | None = None
+    top_theme: str | None = None
+
+
+class ThemeBoardPayload(BaseModel):
+    """GET /themes 的 data 骨架。
+
+    卡片（themes[]）字段面大且高频重构：此处以 dict 透传，
+    字段级契约由前端 types/market.ts 镜像维护。
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    trade_date: str | None = None
+    prev_trade_date: str | None = None
+    themes: list[dict[str, Any]] = Field(default_factory=list)
+    broken_ladder: list[dict[str, Any]] = Field(default_factory=list)
+    summary: ThemeSummary = Field(default_factory=ThemeSummary)
+    caveats: list[str] = Field(default_factory=list)
 
 
 class AuctionSnapshot(BaseModel):
