@@ -36,6 +36,51 @@ class SnapshotRead:
         return self.df is not None
 
 
+def write_parquet_atomic(df: object, path: Path) -> None:
+    """原子写 parquet：临时文件 + os.replace。
+
+    直接 write_parquet(目标路径) 时，进程被 kill（重启/部署/崩溃）会留下一个
+    **大小正常但内容损坏**的文件，后续任何读取方都会炸。
+    临时文件用 .tmp 后缀，不会被 glob("*.parquet") 扫到。
+    """
+    import os
+    import tempfile
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        df.write_parquet(tmp_path)  # type: ignore[attr-defined]
+        os.replace(tmp_path, path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
+def read_parquet_safe(
+    path: Path,
+    *,
+    columns: list[str] | None = None,
+) -> tuple[object | None, str | None]:
+    """读 parquet，损坏时返回 (None, 错误说明) 而不是让异常炸穿调用方。
+
+    适用于"没有这份数据也能继续跑"的场景（如量比基线、分钟缓存）。
+    缺了就不能算的（如全市场快照）请用 read_latest_*，它们会显式报错。
+    """
+    import polars as pl
+
+    path = Path(path)
+    if not path.exists():
+        return None, f"文件不存在：{path}"
+    try:
+        return (pl.read_parquet(path, columns=columns) if columns else pl.read_parquet(path)), None
+    except Exception as exc:  # noqa: BLE001 - 损坏文件的异常类型由底层库决定
+        log.warning("parquet 不可读，按缺失处理：%s | %s", path, exc)
+        return None, f"{type(exc).__name__}: {exc}"
+
+
 def read_latest_in_dir(
     day_dir: Path,
     *,

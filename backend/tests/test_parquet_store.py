@@ -94,3 +94,49 @@ def test_snapshot_write_is_atomic_and_leaves_no_temp(tmp_path: Path):
     # 每一份都必须可读（不然后续读取方仍会踩到损坏文件）
     for f in files:
         assert pl.read_parquet(f).height == 1
+
+
+def test_write_parquet_atomic_leaves_no_temp(tmp_path: Path):
+    from app.services.parquet_store import write_parquet_atomic
+
+    target = tmp_path / "sub" / "600519.parquet"
+    write_parquet_atomic(pl.DataFrame([{"symbol": "600519", "p": 1.0}]), target)
+
+    assert target.exists()
+    assert not list((tmp_path / "sub").glob("*.tmp")), "临时文件残留"
+    assert pl.read_parquet(target).height == 1
+
+
+def test_read_parquet_safe_handles_missing_and_corrupt(tmp_path: Path):
+    from app.services.parquet_store import read_parquet_safe
+
+    miss = tmp_path / "nope.parquet"
+    df, err = read_parquet_safe(miss)
+    assert df is None and "不存在" in (err or "")
+
+    good = tmp_path / "ok.parquet"
+    pl.DataFrame([{"a": 1}]).write_parquet(good)
+    df, err = read_parquet_safe(good)
+    assert df is not None and err is None
+
+    bad = tmp_path / "bad.parquet"
+    pl.DataFrame([{"a": 1}]).write_parquet(bad)
+    _corrupt(bad)
+    df, err = read_parquet_safe(bad)
+    assert df is None and err, "损坏文件应返回 (None, 错误说明) 而不是抛异常"
+
+
+def test_load_symbol_returns_empty_on_corrupt_instead_of_raising(tmp_path: Path):
+    """分钟缓存损坏时按无数据处理，不能把 /api/minute-line 整个打挂。"""
+    from app.market.minute_backfill import load_symbol
+
+    sym_dir = tmp_path
+    p = sym_dir / "600519.parquet"
+    pl.DataFrame([{"ts": "2026-08-28T01:30:00", "price": 10.0, "cum_volume": 100}]) \
+        .write_parquet(p)
+
+    assert len(load_symbol(sym_dir, "600519")) == 1
+
+    _corrupt(p)
+    assert load_symbol(sym_dir, "600519") == [], "损坏文件应退化为空列表"
+    assert load_symbol(sym_dir, "000001") == [], "不存在的文件同样返回空"

@@ -47,28 +47,18 @@ class MarketSnapshotService:
             if elapsed < self.save_interval:
                 return
         try:
-            import os
-            import tempfile
-
             import polars as pl
 
+            from app.services.parquet_store import write_parquet_atomic
+
             day_dir = self.parquet_dir / "snapshots" / datetime.now(timezone.utc).strftime("%Y%m%d")
-            day_dir.mkdir(parents=True, exist_ok=True)
             path = day_dir / f"{datetime.now(timezone.utc).strftime('%H%M%S')}.parquet"
-            # 原子写：先落临时文件再 rename。
-            # 直接写目标路径时，进程被 kill（重启/部署/崩溃）会留下一个大小正常、
-            # 内容却损坏的 parquet——实测 2026-08-30 就产生了 7 个这样的文件，
+            # 原子写（临时文件 + rename）：直接写目标路径时，进程被 kill
+            # 会留下大小正常、内容却损坏的 parquet——实测 2026-08-30 就产生了 7 个，
             # 只要最新那份落在其中，选股器与情绪端点就全线 502。
-            # 临时文件用 .tmp 后缀，不会被 glob("*.parquet") 扫到。
-            fd, tmp_name = tempfile.mkstemp(dir=day_dir, suffix=".tmp")
-            os.close(fd)
-            tmp_path = Path(tmp_name)
-            try:
-                pl.DataFrame(self.snapshot, infer_schema_length=None).write_parquet(tmp_path)
-                os.replace(tmp_path, path)
-            except Exception:
-                tmp_path.unlink(missing_ok=True)
-                raise
+            write_parquet_atomic(
+                pl.DataFrame(self.snapshot, infer_schema_length=None), path
+            )
             self._last_save = datetime.now(timezone.utc)
             self.saved_files += 1
             log.info("snapshot saved: %s (%s rows)", path.name, len(self.snapshot))

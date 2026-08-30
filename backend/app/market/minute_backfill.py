@@ -27,6 +27,8 @@ from pathlib import Path
 
 import httpx
 
+from app.services.parquet_store import read_parquet_safe, write_parquet_atomic
+
 log = logging.getLogger(__name__)
 
 BJ_OFFSET = timedelta(hours=8)
@@ -105,7 +107,8 @@ async def backfill(symbols: list[str], out_dir: Path | None = None) -> dict:
         for sym in symbols:
             try:
                 pts = await fetch_sina_m5(client, sym)
-                pl.DataFrame(pts).write_parquet(out / f"{sym}.parquet")
+                # 原子写：进程被 kill 会留下"大小正常但内容损坏"的 parquet
+                write_parquet_atomic(pl.DataFrame(pts), out / f"{sym}.parquet")
                 result[sym] = len(pts)
                 log.info("backfill %s: %d points", sym, len(pts))
             except Exception as exc:
@@ -116,13 +119,17 @@ async def backfill(symbols: list[str], out_dir: Path | None = None) -> dict:
 
 
 def load_symbol(out_dir: Path | None, symbol: str) -> list[dict]:
-    """读回 Parquet → 引擎点列表（按 ts 升序）。"""
-    import polars as pl
+    """读回 Parquet → 引擎点列表（按 ts 升序）。
 
+    文件不存在**或损坏**都返回 []：分钟缓存是可选的，量比基线拿不到就退化，
+    不该让一个坏文件把 /api/minute-line 整个打挂。
+    """
     path = (out_dir or parquet_dir_default) / f"{symbol}.parquet"
-    if not path.exists():
+    df, err = read_parquet_safe(path)
+    if df is None:
+        if err and "不存在" not in err:
+            log.warning("minutes parquet 不可读，按无数据处理：%s | %s", path, err)
         return []
-    df = pl.read_parquet(path)
     rows = df.to_dicts()
     rows.sort(key=lambda r: r["ts"])
     return rows
@@ -217,7 +224,7 @@ async def backfill_tdx(
     for sym in symbols:
         try:
             pts = await asyncio.to_thread(fetch_tdx_minutes, sym, period=period, count=count)
-            pl.DataFrame(pts).write_parquet(out / f"{sym}.parquet")
+            write_parquet_atomic(pl.DataFrame(pts), out / f"{sym}.parquet")
             result[sym] = len(pts)
             log.info("tdx backfill %s: %d points", sym, len(pts))
         except Exception as exc:
