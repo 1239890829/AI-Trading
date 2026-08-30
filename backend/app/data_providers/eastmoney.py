@@ -203,6 +203,68 @@ class EastmoneyProvider:
         records = [nz.normalize_limit_up(r, trade_date) for r in pool]
         return [r for r in records if r is not None]
 
+    @staticmethod
+    def _fmt_hhmmss(v) -> str | None:
+        """push2ex 的时间为整数 92501 ↔ 09:25:01。"""
+        n = _int(v)
+        if n is None or n < 0 or n > 235959:
+            return None
+        return f"{n:06d}"[:2] + ":" + f"{n:06d}"[2:4] + ":" + f"{n:06d}"[4:6]
+
+    async def get_limit_break_pool(self, trade_date: date) -> list[LimitUpRecord]:
+        """炸板池备源（数据源方案 B5）：push2ex getTopicZBPool，消除炸板率单点。
+
+        ⚠️ 字段缩放与涨停池（getTopicZTPool）**不同**，不能复用 normalize_limit_up：
+        - p / ztp 为 **×1000**：600103 p=3850 ↔ 实际收盘 3.85（已与 TDX 日K交叉验证，
+          而 ZT 池是 ×100）
+        - zdp 已是百分数（0.785 ≈ +0.79%）
+        - zbc=炸板次数、hs=换手率%、amount=成交额(元)、ltsz/tshare=市值(元)、fbt=首次封板时间
+
+        池子很小（8/28 全市场 16 只），pagesize=500 一页足够；
+        若未来 tc > 500 需翻页，此处以日志暴露而不是静默截断。
+        """
+        payload = await self._get_json(
+            "https://push2ex.eastmoney.com/getTopicZBPool",
+            {
+                "ut": "7eea3edcaed734bea9cbfc24409ed989",
+                "dpt": "wz.ztzt",
+                "Pageindex": "0",
+                "pagesize": "500",
+                "sort": "fbt:asc",
+                "date": trade_date.strftime("%Y%m%d"),
+            },
+        )
+        data = payload.get("data") or {}
+        pool = data.get("pool") or []
+        total = _int(data.get("tc")) or 0
+        if total > len(pool):
+            log.warning("limit-break pool truncated: tc=%s got=%d", total, len(pool))
+
+        out: list[LimitUpRecord] = []
+        for r in pool:
+            symbol = str(r.get("c") or "")
+            if not symbol:
+                continue
+            raw_price = _num(r.get("p"))
+            out.append(
+                LimitUpRecord(
+                    symbol=symbol,
+                    name=r.get("n"),
+                    trade_date=trade_date,
+                    price=raw_price / 1000 if raw_price is not None else None,
+                    change_pct=_num(r.get("zdp")),
+                    first_seal_time=self._fmt_hhmmss(r.get("fbt")),
+                    break_count=_int(r.get("zbc")),
+                    turnover_rate=_num(r.get("hs")),
+                    amount=_num(r.get("amount")),
+                    float_market_cap=_num(r.get("ltsz")),
+                    total_market_cap=_num(r.get("tshare")),
+                    industry_board=r.get("hybk") or None,
+                    source="eastmoney",
+                )
+            )
+        return out
+
     # ---- 板块（概念/行业）行情与资金 ----
     # 注意：push2 主域在本机被 WAF 拦截（空回复），只有 push2delay 延迟域可用。
     # 详见 docs/data-sources.md §3.2。
