@@ -9,8 +9,10 @@ import {
 } from "lightweight-charts";
 import { Panel } from "@/components/panel";
 import {
+  getBacktestMandates,
   getBacktestStrategies,
   runBacktest,
+  type BacktestMandate,
   type BacktestPayload,
   type StrategyInfo,
 } from "@/lib/api";
@@ -30,6 +32,9 @@ function pctCls(v: number): string {
 
 export default function BacktestPage() {
   const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
+  const [mandates, setMandates] = useState<BacktestMandate[]>([]);
+  const [mandate, setMandate] = useState("");
+  const [applied, setApplied] = useState<string[] | null>(null);
   const [symbol, setSymbol] = useState("600519");
   const [strategyId, setStrategyId] = useState("ma_cross");
   const [paramsText, setParamsText] = useState('{"fast": 5, "slow": 20}');
@@ -44,7 +49,20 @@ export default function BacktestPage() {
 
   useEffect(() => {
     getBacktestStrategies().then(setStrategies).catch(() => {});
+    getBacktestMandates().then(setMandates).catch(() => {});
   }, []);
+
+  // 选 mandate → 表单完整预填；运行时带上 mandate id（后端按 默认<mandate<显式 分层）
+  const applyMandate = (id: string) => {
+    setMandate(id);
+    const m = mandates.find((x) => x.id === id);
+    if (m?.valid) {
+      setSymbol(m.symbol);
+      setStrategyId(m.strategy_id);
+      setBars(String(m.bars));
+      setParamsText(JSON.stringify(m.params ?? {}));
+    }
+  };
 
   // 净值曲线（data 到位后容器 div 才存在——依赖 [hasData] 保证 chart 在 div 渲染后创建）
   const hasData = !!data;
@@ -95,13 +113,21 @@ export default function BacktestPage() {
       } catch {
         throw new Error("参数 JSON 格式错误");
       }
-      setData(await runBacktest({ symbol, strategy_id: strategyId, params, bars: Number(bars) || 500 }));
+      const res = await runBacktest({
+        symbol,
+        strategy_id: strategyId,
+        params,
+        bars: Number(bars) || 500,
+        mandate: mandate || undefined,
+      });
+      setData(res.payload);
+      setApplied(res.meta?.applied ?? null);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setLoading(false);
     }
-  }, [symbol, strategyId, paramsText, bars]);
+  }, [symbol, strategyId, paramsText, bars, mandate]);
 
   const m = data?.metrics;
 
@@ -121,6 +147,23 @@ export default function BacktestPage() {
       >
         {/* 工具条 */}
         <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-zinc-200 px-3 py-2 text-xs dark:border-zinc-800">
+          <label className="flex items-center gap-1">
+            Mandate
+            <select
+              value={mandate}
+              onChange={(e) => applyMandate(e.target.value)}
+              className="rounded border border-zinc-300 bg-transparent px-1.5 py-0.5 dark:border-zinc-700"
+              title="yaml 声明的可复跑配置；选中后表单预填，显式改动仍会覆盖"
+            >
+              <option value="">（不使用）</option>
+              {mandates.map((m) => (
+                <option key={m.id} value={m.id} disabled={!m.valid}>
+                  {m.name}
+                  {m.valid ? "" : "（无效）"}
+                </option>
+              ))}
+            </select>
+          </label>
           <label className="flex items-center gap-1">
             代码
             <input
@@ -176,6 +219,11 @@ export default function BacktestPage() {
             </span>
           )}
         </div>
+        {applied && applied.length > 0 && (
+          <div className="shrink-0 border-b border-zinc-200 px-3 py-1 text-[10px] text-zinc-400 dark:border-zinc-800" title="参数分层：代码默认 < mandate < 请求显式字段">
+            取值来源：{applied.join(" · ")}
+          </div>
+        )}
 
         {/* 指标卡 */}
         {m && (

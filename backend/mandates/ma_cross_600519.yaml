@@ -1,0 +1,23 @@
+# 示例 mandate：一份文件完整描述一次可复跑的回测。
+# 分层规则：代码默认 < mandate < 请求显式字段（POST /api/backtest/run 的显式参数可覆盖此处）。
+# 只允许以下顶层字段：name/description/symbol/strategy/data/costs；未知字段会报错。
+
+name: 茅台双均线
+description: 600519 日线 ma_cross（5/20），费用全默认，样本内 70%
+symbol: "600519"
+
+strategy:
+  id: ma_cross
+  params:
+    fast: 5
+    slow: 20
+
+data:
+  bars: 300
+
+costs:
+  initial_cash: 1000000
+  commission_rate: 0.00025
+  commission_min: 5.0
+  stamp_tax: 0.001
+  slippage_bp: 5.0

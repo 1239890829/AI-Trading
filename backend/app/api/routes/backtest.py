@@ -11,7 +11,6 @@ from pydantic import BaseModel, Field
 from app.core.errors import AppError
 from app.market.backtest import (
     STRATEGY_REGISTRY,
-    BacktestConfig,
     build_strategy,
     run_backtest,
 )
@@ -27,43 +26,55 @@ router = APIRouter(tags=["backtest"])
 
 
 class BacktestRunRequest(BaseModel):
-    symbol: str
-    strategy_id: str
-    params: dict = Field(default_factory=dict)
-    bars: int = Field(default=500, ge=100, le=500, description="回看日K根数")
+    # 全部可选：给了 mandate 时可省略，由 mandate 提供；显式字段优先级高于 mandate
+    symbol: str | None = None
+    strategy_id: str | None = None
+    params: dict | None = None
+    bars: int | None = Field(default=None, ge=100, le=500, description="回看日K根数")
+    mandate: str | None = Field(default=None, description="mandate 文件名（不含 .yaml）")
 
 
 @router.post("/backtest/run", response_model=Envelope[BacktestPayload])
 async def run_symbol_backtest(req: BacktestRunRequest) -> dict:
     """单标的日线策略回测（TDX QFQ 日K）。
 
+    参数解析分层：代码默认 < mandate 文件 < 请求显式字段；
+    结果 meta.applied 逐字段说明来源（可解释，不做黑箱合并）。
     报告含基准对比/超额/最大回撤/夏普系/胜率/盈亏比与样本内外分离
     （docs/backtest-rules.md §5）；结果为统计事实，不构成买卖建议。
     """
-    symbol = req.symbol.strip().zfill(6)
-    if not symbol.isdigit() or len(symbol) != 6:
-        raise AppError(f"非法代码：{req.symbol}", code="validation_error", status_code=400)
+    from app.market.mandate import resolve_backtest_request
+
     try:
-        strategy = build_strategy(req.strategy_id, req.params)
+        r = resolve_backtest_request(
+            symbol=req.symbol, strategy_id=req.strategy_id, params=req.params,
+            bars=req.bars, mandate_name=req.mandate,
+        )
+    except ValueError as exc:
+        raise AppError(str(exc), code="validation_error", status_code=400) from exc
+
+    symbol = r.symbol
+    try:
+        strategy = build_strategy(r.strategy_id, r.params)
     except ValueError as exc:
         raise AppError(str(exc), code="validation_error", status_code=400) from exc
 
     from app.market.tdx_kline import tdx_daily_bars
 
-    bars = tdx_daily_bars(symbol, count=req.bars)
+    bars = tdx_daily_bars(symbol, count=r.bars)
     if not bars or len(bars) < 60:
         raise AppError(
             f"{symbol} 日K数据不足（拿到 {len(bars) if bars else 0} 根）",
             code="data_insufficient", status_code=502,
         )
     try:
-        report = run_backtest(bars, strategy, BacktestConfig())
+        report = run_backtest(bars, strategy, r.config)
     except ValueError as exc:
         raise AppError(str(exc), code="backtest_failed", status_code=400) from exc
 
     payload = BacktestPayload(
         symbol=symbol,
-        strategy_id=req.strategy_id,
+        strategy_id=r.strategy_id,
         bars_count=len(bars),
         metrics=BacktestMetrics(
             total_return=report.total_return,
@@ -95,7 +106,15 @@ async def run_symbol_backtest(req: BacktestRunRequest) -> dict:
         config=report.config,
         notes=report.notes,
     )
-    return {"data": payload, "meta": {}}
+    return {"data": payload, "meta": {"applied": r.applied, "mandate": r.mandate}}
+
+
+@router.get("/backtest/mandates", response_model=Envelope[list])
+async def list_mandates() -> dict:
+    """可用回测 mandate 清单（yaml 声明文件，backend/mandates/）。"""
+    from app.market.mandate import list_mandates as _list
+
+    return {"data": _list(), "meta": {}}
 
 
 @router.get("/backtest/strategies", response_model=Envelope[list])

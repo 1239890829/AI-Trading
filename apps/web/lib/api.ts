@@ -350,13 +350,41 @@ export async function getBacktestStrategies(): Promise<StrategyInfo[]> {
   return (await getJson<StrategyInfo[]>("/api/backtest/strategies")).data;
 }
 
-export async function runBacktest(req: {
+/** 回测 mandate：yaml 声明的可复跑配置（backend/mandates/）。id 是 load 标识符，file 仅展示。 */
+export interface BacktestMandate {
+  id: string;
+  name: string;
+  file: string;
+  description: string;
   symbol: string;
   strategy_id: string;
+  params: Record<string, number>;
+  bars: number;
+  valid: boolean;
+  error?: string;
+}
+
+export async function getBacktestMandates(): Promise<BacktestMandate[]> {
+  return (await getJson<BacktestMandate[]>("/api/backtest/mandates")).data;
+}
+
+/** 回测运行结果：payload + meta（meta.applied 逐字段说明 默认/mandate/请求 的取值来源）。 */
+export interface BacktestRunResult {
+  payload: BacktestPayload;
+  meta: { applied?: string[]; mandate?: string | null; [k: string]: unknown };
+}
+
+export async function runBacktest(req: {
+  symbol?: string;
+  strategy_id?: string;
   params?: Record<string, number>;
   bars?: number;
-}): Promise<BacktestPayload> {
-  return (await sendJson<BacktestPayload>("/api/backtest/run", "POST", req, 60_000)).data;
+  /** 给了 mandate 时其余字段可省略；显式字段优先级高于 mandate（meta.applied 说明来源） */
+  mandate?: string;
+}): Promise<BacktestRunResult> {
+  const env = await sendJson<BacktestPayload>("/api/backtest/run", "POST", req, 60_000);
+  const meta = env.meta as unknown as BacktestRunResult["meta"];
+  return { payload: env.data, meta: meta ?? {} };
 }
 
 /** ---------------------------------------------------------------- 自选 sparkline（retro #9） */
