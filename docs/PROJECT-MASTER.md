@@ -253,6 +253,7 @@ ashare-ai-trader/
 | ASHARE_DATA_PROVIDER | tencent | 主源（ths/tencent/sina/eastmoney/mock） |
 | ASHARE_PROVIDER_FALLBACKS | tencent,eastmoney,sina | 备源链 |
 | ASHARE_THS_API_KEY | - | 同花顺官方 key（已配于 backend/.env） |
+| - | 远端 | github.com/1239890829/AI-Trading（SSH，master 已跟踪）；CI 见 .github/workflows/ci.yml |
 | ASHARE_POLL_INTERVAL_SECONDS | 5 | 行情轮询 |
 | ASHARE_SNAPSHOT_POLL/SAVE_INTERVAL_SECONDS | 60/300 | 全市场快照与Parquet |
 | ASHARE_DATABASE_URL | data/ashare.db | 业务库 |
