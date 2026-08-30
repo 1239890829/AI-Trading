@@ -69,6 +69,10 @@ async function getJson<T>(path: string, timeoutMs: number = DEFAULT_TIMEOUT_MS):
   return request<T>(path, {}, timeoutMs);
 }
 
+/** B6 写接口鉴权配套：部署时配置 NEXT_PUBLIC_API_TOKEN 后写请求自动携带；
+ *  留空=不带 header（本地 dev 零影响），与后端 settings.api_token 的 opt-in 语义对称。 */
+const API_WRITE_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN;
+
 async function sendJson<T = unknown>(
   path: string,
   method: string,
@@ -79,7 +83,10 @@ async function sendJson<T = unknown>(
     path,
     {
       method,
-      headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+      headers: {
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...(API_WRITE_TOKEN ? { "X-API-Token": API_WRITE_TOKEN } : {}),
+      },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     },
     timeoutMs,
