@@ -59,13 +59,23 @@ class PaperTradingEngine:
 
     # ---------- 重置 ----------
 
-    def reset(self, initial_cash: float | None = None) -> PaperAccount:
+    def reset(self, initial_cash: float | None = None, *, source: str = "engine") -> PaperAccount:
         """清空全部持仓与委托，账户资金回到初始额度。
 
         硬约束：仅重置模拟账户，不触碰任何外部接口；重置后账单历史一并清空，
         因为成交记录挂靠在订单表上，保留订单会导致持仓与历史不一致。
+
+        审计：重置是破坏性操作且曾出现过"账户莫名被清空、无法定位来源"的情况，
+        因此必须单行记录 **重置前状态**（持仓数/委托数/资金）+ 触发来源，
+        而不是只记结果——事后定位全靠这条。
         """
         with self._sf() as db:
+            pos_before = db.query(PaperPosition).count()
+            ord_before = db.query(PaperOrder).count()
+            old = db.query(PaperAccount).first()
+            cash_before = old.cash if old else None
+            initial_before = old.initial_cash if old else None
+
             db.query(PaperPosition).delete()
             db.query(PaperOrder).delete()
             acc = db.query(PaperAccount).first()
@@ -78,7 +88,13 @@ class PaperTradingEngine:
             db.add(acc)
             db.commit()
             db.refresh(acc)
-            log.info("paper account reset: cash=%s", acc.cash)
+            log.info(
+                "paper account RESET audit: source=%s custom_initial=%s | "
+                "before: positions=%d orders=%d cash=%s initial=%s | after: cash=%s initial=%s",
+                source, initial_cash is not None,
+                pos_before, ord_before, cash_before, initial_before,
+                acc.cash, acc.initial_cash,
+            )
             return acc
 
     # ---------- T+1 解冻 ----------

@@ -117,9 +117,12 @@ async def cancel_order(order_id: int, request: Request):
 
 @router.post("/paper/reset", dependencies=[Depends(require_write_token)])
 async def reset_account(body: ResetIn, request: Request):
-    """重置模拟账户：清仓、清委托与成交历史、资金回到初始额度。"""
+    """重置模拟账户：清仓、清委托与成交历史、资金回到初始额度。
+
+    source="api" 进入审计日志——重置是破坏性操作，事后必须能定位是谁在何时触发。
+    """
     engine = _engine(request)
-    acc = engine.reset(body.initial_cash)
+    acc = engine.reset(body.initial_cash, source="api")
     return {"data": {"cash": round(acc.cash, 2), "initial_cash": round(acc.initial_cash, 2),
                      "total": round(acc.cash, 2), "total_pnl": 0.0, "total_pnl_pct": 0.0,
                      "market_value": 0.0}}

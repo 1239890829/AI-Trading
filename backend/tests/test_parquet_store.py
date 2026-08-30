@@ -141,3 +141,4 @@ def test_load_symbol_returns_empty_on_corrupt_instead_of_raising(tmp_path: Path)
     assert load_symbol(sym_dir, "600519") == [], "损坏文件应退化为空列表"
     assert load_symbol(sym_dir, "000001") == [], "不存在的文件同样返回空"
 
+
