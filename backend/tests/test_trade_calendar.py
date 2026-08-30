@@ -184,9 +184,12 @@ def test_official_failure_falls_back():
     assert _run(tc.trading_days(chain)) == kline_days
 
 
-def test_both_sources_fail_raises():
-    """两条路都拿不到 → 抛错，绝不退回「只跳周末」的猜测逻辑。"""
+def test_both_sources_fail_raises(tmp_path, monkeypatch):
+    """两条路都拿不到且无持久化兜底 → 抛错，绝不退回「只跳周末」的猜测逻辑。"""
     import pytest
+
+    # 兜底文件若存在（真实后端跑过就会写），持久化路径会接管——本用例必须隔离
+    monkeypatch.setattr(tc, "_PERSIST_PATH", tmp_path / "nonexistent.json")
 
     class _Nothing:
         name = "empty"
@@ -203,3 +206,42 @@ def test_iter_providers_expands_composite_and_bare():
     assert tc._iter_providers(None) == []
     comp = type("C", (), {"providers": [p]})()
     assert tc._iter_providers(comp) == [p]
+
+
+
+def test_persisted_calendar_fallback(tmp_path, monkeypatch):
+    """技术债 #10：双源全挂时读持久化日历（带时间戳的权威快照，非猜测）；
+    无兜底文件才抛错——"拒绝猜测"语义保持不变。"""
+    import json
+    import pytest
+
+    persist = tmp_path / "trade_calendar.json"
+    monkeypatch.setattr(tc, "_PERSIST_PATH", persist)
+    monkeypatch.setattr(tc, "_cached_days", [])
+    monkeypatch.setattr(tc, "_cached_at", 0.0)
+
+    async def no_official(provider):
+        return []
+
+    async def no_kline(provider, lookback_days=120):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(tc, "_official_days", no_official)
+    monkeypatch.setattr(tc, "_index_kline_days", no_kline)
+
+    async def call():
+        return await tc.trading_days(None)
+
+    # 1) 无兜底文件 → 照旧抛错（拒绝猜测）
+    with pytest.raises(RuntimeError):
+        _run(call())
+
+    # 2) 有兜底文件 → 双源全挂也能用，且周末不在日历里
+    persist.write_text(json.dumps({
+        "source": "official",
+        "fetched_at": "2026-08-28T08:00:00+00:00",
+        "days": [d.isoformat() for d in DAYS],
+    }), encoding="utf-8")
+    days = _run(call())
+    assert date(2026, 8, 28) in days
+    assert date(2026, 8, 29) not in days

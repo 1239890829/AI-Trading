@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -639,27 +640,61 @@ async def company(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
     return {"data": profile, "meta": _meta(hub)}
 
 
+def _route_cache(holder, name: str) -> dict:
+    """holder（进程级单例）上挂一个命名 TTL 缓存 dict。"""
+    attr = f"_cache_{name}"
+    cache = getattr(holder, attr, None)
+    if cache is None:
+        cache = {}
+        setattr(holder, attr, cache)
+    return cache
+
+
+def _ttl_hit(cache: dict, key) -> tuple[bool, object]:
+    hit = cache.get(key)
+    if hit and time.monotonic() - hit[0] < 60:
+        return True, hit[1]
+    return False, None
+
+
 @router.get("/announcements/{symbol}")
 async def announcements(symbol: str, limit: int = Query(default=10, ge=1, le=30), hub: QuoteHub = Depends(get_hub)) -> dict:
-    """个股公告（东财，title/date/类型/原文链接）。"""
+    """个股公告（东财，title/date/类型/原文链接）。进程内缓存 60s（切股回看不闪加载）。"""
+    import time
+
+    cache = _route_cache(hub, "announcements")
+    key = (symbol, limit)
+    hit, cached = _ttl_hit(cache, key)
+    if hit:
+        return {"data": cached, "meta": {**_meta(hub), "cached": True}}
     try:
         rows = await hub.provider.get_announcements(symbol, limit)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"公告数据源失败：{exc}")
-    return {"data": {"symbol": symbol, "items": rows}, "meta": _meta(hub)}
+    data = {"symbol": symbol, "items": rows}
+    cache[key] = (time.monotonic(), data)
+    return {"data": data, "meta": _meta(hub)}
 
 
 @router.get("/news/{symbol}")
 async def news(symbol: str, limit: int = Query(default=10, ge=1, le=30), hub: QuoteHub = Depends(get_hub)) -> dict:
-    """个股相关新闻（东财资讯检索，含正文摘要）。"""
+    """个股相关新闻（东财资讯检索，含正文摘要）。进程内缓存 60s（技术债 #4）。"""
+    import time
+
+    cache = _route_cache(hub, "news")
+    key = (symbol, limit)
+    hit, cached = _ttl_hit(cache, key)
+    if hit:
+        return {"data": cached, "meta": {**_meta(hub), "cached": True}}
     try:
         rows = await hub.provider.get_news(symbol, limit)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"新闻数据源失败：{exc}")
-    return {"data": {"symbol": symbol, "items": rows}, "meta": _meta(hub)}
+    data = {"symbol": symbol, "items": rows}
+    cache[key] = (time.monotonic(), data)
+    return {"data": data, "meta": _meta(hub)}
 
 
-@router.get("/search")
 @router.get("/search", response_model=Envelope[list[SymbolSearchItem]])
 async def search(q: str = Query(min_length=1, max_length=20), hub: QuoteHub = Depends(get_hub)) -> dict:
     from app.data_providers.mock import MockProvider

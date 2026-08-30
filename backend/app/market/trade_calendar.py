@@ -38,9 +38,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +57,33 @@ _cached_at = 0.0
 
 def _normalize(days: list[date]) -> list[date]:
     return sorted({d for d in days if isinstance(d, date)})
+
+
+# ---- 技术债 #10：日历持久化兜底（data/trade_calendar.json）----
+
+_PERSIST_PATH = Path(__file__).resolve().parents[2] / "data" / "trade_calendar.json"
+
+
+def _persist(days: list[date], source: str) -> None:
+    """成功抓取后落盘，供双源全挂时兜底。失败只告警（缓存是优化不是依赖）。"""
+    try:
+        _PERSIST_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _PERSIST_PATH.write_text(json.dumps({
+            "source": source,
+            "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "days": [d.isoformat() for d in days],
+        }, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        log.warning("trading calendar persist failed", exc_info=True)
+
+
+def _load_persisted() -> list[date] | None:
+    try:
+        raw = json.loads(_PERSIST_PATH.read_text(encoding="utf-8"))
+        days = _normalize([date.fromisoformat(s) for s in raw.get("days", [])])
+        return days if len(days) >= _MIN_DAYS else None
+    except Exception:
+        return None
 
 
 def _iter_providers(provider):
@@ -141,11 +170,24 @@ async def trading_days(provider, lookback_days: int = 120) -> list[date]:
                 log.warning("index kline calendar failed: %s", exc)
 
         if len(days) < _MIN_DAYS:
-            raise RuntimeError(
-                f"交易日历拉取异常：仅得 {len(days)} 个交易日（<{_MIN_DAYS}），拒绝使用"
-            )
+            # 技术债 #10 兜底：双源都挂 → 读上次成功抓取的持久化日历（带时间戳的
+            # 权威快照，不是猜测）。文件不存在才抛错——"拒绝猜测"语义保持不变。
+            persisted = _load_persisted()
+            if persisted is not None:
+                days, source = persisted, "persisted"
+                log.warning(
+                    "trading calendar sources unavailable, using persisted calendar "
+                    "(last fetched file)——建议检查 ths / 指数K线连通性"
+                )
+            else:
+                raise RuntimeError(
+                    f"交易日历拉取异常：仅得 {len(days)} 个交易日（<{_MIN_DAYS}），"
+                    "且无持久化兜底文件，拒绝使用"
+                )
         _cached_days = days
         _cached_at = time.monotonic()
+        if source != "persisted":
+            _persist(days, source)
         log.info("trading calendar loaded: %s days from %s, last=%s",
                  len(days), source, days[-1])
         return list(days)

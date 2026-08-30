@@ -147,12 +147,15 @@ async def lifespan(app: FastAPI):
     snapshotter = asyncio.create_task(snapshot_service.run(), name="market-snapshot")
 
     async def paper_matcher():
+        # 技术债 #5：无挂单时空转降频（30s 查一次挂单表），有挂单才 5s 密集轮询
+        interval = 5.0
         while True:
             try:
-                await paper.match_pending()
+                pending = paper.match_pending()
+                interval = 5.0 if pending > 0 else 30.0
             except Exception:
                 log.exception("paper match_pending failed")
-            await asyncio.sleep(5)
+            await asyncio.sleep(interval)
 
     matcher = asyncio.create_task(paper_matcher(), name="paper-matcher")
     try:

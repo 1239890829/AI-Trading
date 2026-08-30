@@ -217,11 +217,14 @@ class PaperTradingEngine:
     # ---------- 挂单轮询撮合 ----------
 
     async def match_pending(self) -> int:
-        """对全部挂单重试撮合（价格到位即成交）。返回成交笔数。"""
+        """对全部挂单重试撮合（价格到位即成交）。返回**剩余挂单数**（技术债 #5：
+        调用方据此自适应降频——无挂单时空转降频，有挂单才密集轮询）。"""
         with self._sf() as db:
             pending = db.query(PaperOrder).filter(PaperOrder.status == "pending").all()
             symbols = {o.symbol for o in pending}
-        matched = 0
+            pending_left = len(pending)
+        if not symbols:
+            return pending_left
         for sym in symbols:
             try:
                 quote = await self._quote_fn(sym)
@@ -234,11 +237,11 @@ class PaperTradingEngine:
                     acc = self.ensure_account()
                     if o.side == "buy" and o.price >= quote.price:
                         await self._fill(db, acc, o, quote.price, o.quantity)
-                        matched += 1
                     elif o.side == "sell" and o.price <= quote.price:
                         await self._fill_sell(db, acc, o, quote.price, o.quantity)
-                        matched += 1
-        return matched
+        with self._sf() as db:
+            pending_left = db.query(PaperOrder).filter(PaperOrder.status == "pending").count()
+        return pending_left
 
     # ---------- 撤单 ----------
 
