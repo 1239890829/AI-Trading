@@ -121,6 +121,10 @@ agent-browser close                     # 收尾必须关，否则留僵尸 Chro
 8. **生产部署**（NAS / 云服务器 / Vercel+Railway）— 阻塞：需用户定环境，决定 B8 打包与 token 激活
 9. 技术债清单见 docs/retro-and-gaps.md §三
 
+> **账本约定**：待办明细以 `docs/retro-and-gaps.md` 为唯一账本（README/PROJECT-MASTER 只留阶段级索引）；
+> 跨计划复盘、依赖关系与优先级整合见 `docs/plan-review.md`（2026-08-31 全盘复盘产出）。
+> 开工前先看 plan-review 的 P0 清单。
+
 ## 6. 关键常识
 
 - Provider 链 `ths→tencent→eastmoney→sina` 逐方法 failover；加新数据源 = 实现协议 + 注册 factory + 加链
