@@ -282,3 +282,83 @@ def test_hub_get_quotes_falls_back_to_indices():
     assert [x.symbol for x in hub.get_quotes(["000001"])] == ["000001"]
     # 双源都缺失的 symbol 返回空列表而不是 KeyError
     assert hub.get_quotes(["999999"]) == []
+
+
+# ---------------------------------------------------------------- 熔断（circuit breaker）
+
+
+def _mk_quote(sym: str):
+    from app.schemas.market import Quote
+
+    return Quote(symbol=sym, price=10.0, source="good")
+
+
+def test_breaker_opens_after_consecutive_failures():
+    """连续失败 3 次 → 进入冷却，后续请求跳过坏源不再往上撞。
+
+    2026-08-31 腾讯 WAF 封禁期间，每个 K 线请求都在向已知挂掉的源撞一遍
+    （白白增加延迟与封禁期），熔断就是为这种情况准备的。
+    """
+    from app.data_providers.composite import CompositeProvider, FAILURE_THRESHOLD
+
+    calls = {"fail": 0}
+
+    class FailP:
+        name = "fail"
+
+        async def get_quotes(self, symbols):
+            calls["fail"] += 1
+            raise Exception("boom")
+
+    class GoodP:
+        name = "good"
+
+        async def get_quotes(self, symbols):
+            return [_mk_quote(s) for s in symbols]
+
+    comp = CompositeProvider([FailP(), GoodP()])
+
+    async def drive(n):
+        for _ in range(n):
+            await comp.get_quote("600519")
+
+    asyncio.run(drive(FAILURE_THRESHOLD))
+    assert calls["fail"] == FAILURE_THRESHOLD
+    # 冷却已开启：再请求时坏源不被调用，好源直接顶上
+    q = asyncio.run(comp.get_quote("600519"))
+    assert calls["fail"] == FAILURE_THRESHOLD  # 没有增加
+    assert q.symbol == "600519"
+    st = comp.breaker_state()
+    assert "get_quotes@fail" in st and st["get_quotes@fail"]["cooldown_left"] > 0
+
+
+def test_breaker_resets_on_success_and_empty_counts_as_failure():
+    """成功清零计数；空结果同样计入失败（空往往是源异常的前兆）。"""
+    import asyncio
+
+    from app.data_providers.composite import CompositeProvider
+
+    state = {"n": 0}
+
+    class FlakyP:
+        name = "flaky"
+
+        async def get_quotes(self, symbols):
+            state["n"] += 1
+            if state["n"] <= 2:
+                return None  # 空结果：计失败
+            return [_mk_quote(s) for s in symbols]
+
+    comp = CompositeProvider([FlakyP()])
+    # 单源且空结果 → 全链失败抛 ProviderError（预期），但失败计数仍要累计
+    for _ in range(2):
+        try:
+            asyncio.run(comp.get_quote("600519"))
+        except Exception:
+            pass
+    st = comp.breaker_state()
+    assert st["get_quotes@flaky"]["failures"] == 2
+    # 第三次成功 → 计数清零、无熔断残留
+    q = asyncio.run(comp.get_quote("600519"))
+    assert comp.breaker_state() == {}
+    assert q.symbol == "600519"

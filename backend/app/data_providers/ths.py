@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 import httpx
 
 from app.data_providers.eastmoney import ProviderError
-from app.schemas.market import LimitUpRecord, LongHuRecord, Quote
+from app.schemas.market import Kline, LimitUpRecord, LongHuRecord, Quote
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +31,11 @@ def to_thscode(symbol: str) -> str:
 
 def from_thscode(thscode: str) -> str:
     return thscode.split(".")[0]
+
+
+def _as_shanghai(dt: datetime) -> datetime:
+    """naive datetime 统一按上海时区解释（与腾讯 K 线的 _as_aware 同款处理）。"""
+    return dt.replace(tzinfo=_TZ_SH) if dt.tzinfo is None else dt.astimezone(_TZ_SH)
 
 
 def date_ms(d: date) -> int:
@@ -412,8 +417,74 @@ class ThsFuyaoProvider:
 
     # ---- 协议其余方法：链上由其他 Provider 负责 ----
 
-    async def get_kline(self, *args, **kwargs) -> list:
-        raise ProviderError("ths kline via fuyao 未在本轮接入（腾讯已覆盖）")
+    async def get_kline(
+        self,
+        symbol: str,
+        timeframe: str,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> list[Kline]:
+        """A 股历史日 K（fuyao `/api/a-share/prices/historical`）。
+
+        为什么补它：K 线此前只有腾讯一条可用通路，2026-08-31 腾讯 WAF 封禁
+        后全链路中断（东财同时不可用），技术面评分与详情页 K 线图一起降级。
+        ths 是官方源且不受腾讯 WAF 影响，是天然的第三源。
+
+        官方限制（见 skills/hithink-finance/docs/api/endpoints-prices.md）：
+        - 每次请求**仅一个 thscode**，不接受逗号
+        - 仅支持 `interval=1d`（日线）→ 分钟/周线直接抛错交由链上下沉
+        - 时间窗口 ≤ 10 年，超出返回 code=1003
+        - `adjust` 默认 forward（前复权），与腾讯口径一致
+        """
+        if timeframe != "1d":
+            raise ProviderError(f"ths kline 仅支持日线 1d，收到 {timeframe}")
+        end_dt = _as_shanghai(end) if end is not None else datetime.now(_TZ_SH)
+        start_dt = _as_shanghai(start) if start is not None else end_dt - timedelta(days=730)
+        if start_dt > end_dt:
+            raise ProviderError(f"ths kline 时间区间非法：{start_dt} > {end_dt}")
+        if (end_dt - start_dt).days > 3650:
+            raise ProviderError("ths kline 时间窗口 ≤10 年（code=1003）")
+
+        data = await self._get(
+            "/api/a-share/prices/historical",
+            {
+                "thscode": to_thscode(symbol),
+                "interval": "1d",
+                "start": int(start_dt.timestamp() * 1000),
+                "end": int(end_dt.timestamp() * 1000),
+                "adjust": "forward",
+            },
+        )
+        bars: list[Kline] = []
+        prev_close: float | None = None
+        for it in data.get("item") or []:
+            ms = it.get("date_ms")
+            if not ms:
+                continue
+            close = it.get("close_price")
+            change_pct = None
+            if close is not None and prev_close:
+                change_pct = round((close - prev_close) / prev_close * 100, 2)
+            bars.append(
+                Kline(
+                    symbol=symbol,
+                    timeframe="1d",
+                    ts=datetime.fromtimestamp(ms / 1000, tz=_TZ_SH),
+                    open=it.get("open_price"),
+                    high=it.get("high_price"),
+                    low=it.get("low_price"),
+                    close=close,
+                    volume=it.get("volume"),
+                    amount=it.get("turnover"),
+                    change_pct=change_pct,
+                    source=SOURCE,
+                )
+            )
+            if close is not None:
+                prev_close = close
+        if not bars:
+            raise ProviderError(f"ths kline empty for {symbol}")
+        return bars
 
     async def get_order_book(self, symbol: str):
         return None  # fuyao 无五档盘口，链上由腾讯提供

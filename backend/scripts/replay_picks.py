@@ -17,7 +17,7 @@ import argparse
 import asyncio
 import sys
 from collections import Counter
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -50,7 +50,46 @@ W_TECH = 0.4
 CONCURRENCY = 6
 
 
-async def _daily_context(provider, d: date) -> dict:
+class RateLimiter:
+    """极简间隔限流：两次请求之间至少间隔 1/rps 秒。
+
+    存在的理由：2026-08-31 批量回放的高频请求触发腾讯 WAF 封禁，
+    在线选股与详情页的 K 线一起遭殃。批量任务必须自带节流阀，
+    绝不与在线服务抢配额。
+    """
+
+    def __init__(self, rps: float):
+        self._interval = 1.0 / rps if rps and rps > 0 else 0.0
+        self._last = 0.0
+
+    async def wait(self) -> None:
+        if self._interval <= 0:
+            return
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        delay = self._last + self._interval - now
+        if delay > 0:
+            await asyncio.sleep(delay)
+        self._last = loop.time()
+
+
+def _assert_off_hours(force: bool) -> None:
+    """交易时段（09:15–15:05）默认拒绝运行批量任务。
+
+    批量回放的请求量足以触发数据源限流（腾讯 WAF 已实证一次），
+    而限流影响的是**所有在线用户**。收盘后跑是默认纪律；确需盘中跑加 --force。
+    """
+    now = datetime.now()
+    minutes = now.hour * 60 + now.minute
+    if 9 * 60 + 15 <= minutes <= 15 * 60 + 5 and not force:
+        raise SystemExit(
+            "当前处于 A 股交易时段（09:15–15:05），批量回放默认拒绝运行"
+            "（会与在线服务抢数据源配额，曾触发腾讯 WAF 封禁）。"
+            "收盘后再跑，或加 --force 强制（后果自负）。"
+        )
+
+
+async def _daily_context(provider, d: date, limiter=None) -> dict:
     """某交易日的涨停生态：个股记录 + 全市场最高板 + 题材统计。"""
     try:
         pool = await provider.get_limit_up_pool(d)
@@ -166,13 +205,15 @@ def _carryover_echelon(
     }
 
 
-async def _tech_scores(provider, symbols, days) -> tuple[dict, dict]:
+async def _tech_scores(provider, symbols, days, limiter=None) -> tuple[dict, dict]:
     """每只股票按交易日切片的技术分 + 当日涨跌幅。K 线只拉一次全量，内存里按日切。"""
     out: dict[str, dict[date, float]] = {s: {} for s in symbols}
     chg: dict[str, dict[date, float]] = {s: {} for s in symbols}
     sem = asyncio.Semaphore(CONCURRENCY)
 
     async def one(sym: str) -> None:
+        if limiter:
+            await limiter.wait()
         async with sem:
             try:
                 bars = await provider.get_kline(sym, "1d", None, None)
@@ -194,7 +235,7 @@ async def _tech_scores(provider, symbols, days) -> tuple[dict, dict]:
     return out, chg
 
 
-async def build_daily_ranked(days_n: int, top_n: int) -> dict:
+async def build_daily_ranked(days_n: int, top_n: int, limiter=None) -> dict:
     """拉取历史数据并构建每日候选评分（与策略参数无关，供 sweep 复用）。
 
     拆出来的原因：拉一次数据可以评估多组参数（换股上限/门槛），
@@ -210,7 +251,9 @@ async def build_daily_ranked(days_n: int, top_n: int) -> dict:
     # ① 逐日涨停生态
     ctxs: dict[date, dict] = {}
     for d in days:
-        ctxs[d] = await _daily_context(provider, d)
+        if limiter:
+            await limiter.wait()
+        ctxs[d] = await _daily_context(provider, d, limiter)
         print(f"  {d}: 涨停 {len(ctxs[d]['records'])} 家 / 最高 {ctxs[d]['market_max_boards']} 板", file=sys.stderr)
 
     # ② 候选池：每日涨停股按"连板数优先"取前 top_n，跨日取并集
@@ -224,7 +267,7 @@ async def build_daily_ranked(days_n: int, top_n: int) -> dict:
     universe = sorted({s for v in per_day_syms.values() for s in v})
     print(f"候选并集 {len(universe)} 只，开始拉 K 线…", file=sys.stderr)
 
-    tech, changes = await _tech_scores(provider, universe, days)
+    tech, changes = await _tech_scores(provider, universe, days, limiter)
 
     # ③ 逐日评分（梯队 + 技术）。carryover 版本额外把昨日组合成员纳入重评。
     stage_counter: Counter = Counter()
@@ -303,9 +346,10 @@ async def run(
     threshold: float,
     max_picks: int = MAX_PICKS,
     max_swaps: int | None = MAX_SWAPS_PER_DAY,
+    limiter=None,
 ) -> dict:
     """跑一次完整回放：拉数据 + 按给定策略参数评估。"""
-    built = await build_daily_ranked(days_n, top_n)
+    built = await build_daily_ranked(days_n, top_n, limiter)
     return evaluate(built, threshold=threshold, max_picks=max_picks, max_swaps=max_swaps)
 
 
@@ -434,10 +478,16 @@ def main() -> None:
     ap.add_argument("--top", type=int, default=15, help="每日候选池上限")
     ap.add_argument("--threshold", type=float, default=15.0)
     ap.add_argument("--max-swaps", type=int, default=MAX_SWAPS_PER_DAY, help="每日最多换入几只；0 表示不限")
+    ap.add_argument("--rate-limit", type=float, default=8.0, help="每秒最多发起几个数据请求（批量任务节流阀）")
+    ap.add_argument("--force", action="store_true", help="交易时段内强制运行（默认拒绝）")
     ap.add_argument("--out", type=str, default="")
     args = ap.parse_args()
 
-    result = asyncio.run(run(args.days, args.top, args.threshold, max_swaps=(args.max_swaps or None)))
+    _assert_off_hours(args.force)
+    limiter = RateLimiter(args.rate_limit)
+    result = asyncio.run(
+        run(args.days, args.top, args.threshold, max_swaps=(args.max_swaps or None), limiter=limiter)
+    )
     report = render(result)
     print(report)
     if args.out:
