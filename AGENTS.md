@@ -1,7 +1,8 @@
-# AGENTS.md — AI 开发者交接入口（workbuddy 必读）
+# AGENTS.md — AI 开发者交接手册（必读，2026-08-31 全量重写）
 
-你接手的是 **AShare AI Trader**：A 股实时行情 + 量化投研 + 模拟交易工作台。
-本文件是你的作业手册。**动手前先读完，然后读 `docs/PROJECT-MASTER.md`（全项目总整理，唯一总览）。**
+你接手的是 **AShare AI Trader**：A 股实时行情 + 量化投研 + 模拟交易 + 事件驱动选股的一体化工作台。
+本文件是你的作业手册：现状、待办、阶段安排、工作纪律全在这里。
+**动手前先读完本文件，再按需查 `docs/PROJECT-MASTER.md`（技术总览）与 `docs/plan-review.md`（计划与优先级）。**
 
 ---
 
@@ -9,126 +10,194 @@
 
 1. **禁止**连接真实券商 / 自动真实下单。系统只有模拟交易（`/api/paper/*`）。
 2. **禁止**把 mock 数据、过期缓存冒充实盘。数据源失败 → 标 `stale` + health=degraded。
-3. **禁止**输出确定性买卖结论（必涨/稳赚）。技术结论只给偏向 + 依据 + 失效条件。
+3. **禁止**输出确定性买卖结论（必涨/稳赚）。一切结论 = 偏向 + 依据 + 失效条件；
+   事件标的池等"机会输出"必须带「不构成买卖建议」声明。
 4. **API Key 只存 `backend/.env`**（已 gitignored），绝不入库/入前端/入文档。
 5. 撮合规则（T+1/涨跌停拒/整手/费用/停牌拒）是硬拦截，不可绕过。
+6. **新增页面/板块需先论证**：默认通过复用、扩展、联动实现需求（联动设计原则，见 docs/linkage-design.md §0）。
+
+---
 
 ## 1. 快速启动
 
 ```bash
-# 后端（Python 3.11，venv 已建好）
+# 后端（Python 3.11，venv 已建好；.env 含 THS key / 新闻 LLM 留空占位）
 cd backend && source .venv/bin/activate
-uvicorn app.main:app --reload --port 8000        # 读 backend/.env（含 THS key）
+uvicorn app.main:app --reload --port 8000
 
 # 前端（node_modules 已装）
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
-# 测试与门禁（每次改动全部跑，全绿才算完）
-cd backend && .venv/bin/pytest                    # 70 用例
-cd apps/web && npx tsc --noEmit && npx next lint  # 双零
-cd backend && .venv/bin/python -m pyflakes app tests
+# 测试与门禁（每次改动全部跑，全绿才算完；当前基线：后端 418 / 前端 51）
+cd backend && .venv/bin/pytest                    # 418 用例
+cd apps/web && npx tsc --noEmit                   # 类型 0 错误
+cd apps/web && npx eslint .                       # 0 error（24 warn 是挂账项，见 eslint.config.mjs 注释）
+cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 51 用例
+cd backend && .venv/bin/python -m pyflakes app tests            # 0
+# 生产构建前必须先停 dev server（.next 冲突已踩两次）：
+lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-## 2. 工作方式（前任验证过的教训，勿重蹈覆辙）
+CI（GitHub Actions）：后端 pytest+pyflakes、前端 tsc+eslint+vitest+build。推送后**自查 CI**
+（`source ~/.zshenv` 拿 GITHUB_TOKEN → `/actions/runs?head_sha=<完整SHA>` → jobs → logs），绝不问用户。
 
-- **第一原则：验收以实际看到的为准，不靠推理。** 涉及 UI / 布局，不清楚就截图看。
-  禁止用"读代码 + 算宽度 + 想当然"代替观察——同一天在这上面栽过两次（后端没重启以为没生效、
-  tab 行被挤爆没看出来）。详见 §2.2 截图验收。
-- **每阶段流程**：实测数据源（curl 先行）→ 小切片实现 → pytest 全绿 → 浏览器截图验收（Next 徽章必须 0 issues）→ git checkpoint（可回退）。
-- **禁止在 dev server 运行时执行 `next build`**（.next 冲突已踩两次）。类型检查用 `npx tsc --noEmit`。
-- **复杂 JSX 改动整文件重写**，不要字符串补丁（已三次把结构改坏，靠 git checkout 止损）。
-- **长内容写脚本文件执行**，不要超长 heredoc（终止符/引号嵌套踩过多次）。
-- pip 装包走清华镜像 `-i https://pypi.tuna.tsinghua.edu.cn/simple`；行情 httpx 客户端保持 `trust_env=False`。
-- 用户系统代理在 127.0.0.1:7897（SOCKS）：只用于 GitHub 等外网；curl 本地 API 记得 `--noproxy '*'` 或 `env -u http_proxy`。
-- **改完后端必须验证「用户正在跑的那个实例」**，不能只在临时端口起新实例验完就交付。8000 上若不是 `--reload` 启动，改完不重启就仍是旧代码；而前端一旦有兜底分支（如缺 `board_groups` 回退扁平列表），页面会与改动前**一模一样**，看起来像"功能没生效"而非"后端没重启"。验收要先打 8000：`curl -s --noproxy '*' http://127.0.0.1:8000/api/xxx` 看新字段在不在。
-- 每阶段收尾：更新 `docs/PROJECT-MASTER.md` §十二阶段表 + README 路线图 + 清扫页面过时提示。
+## 2. 当前状态快照（2026-08-31，commit 310c70e）
 
-### 2.1 接新数据源五步法（改 Provider / 加字段前必走）
+**418 后端测试 + 51 前端测试全绿 · 79 REST + 1 WS 端点 · 124 commits · 四源链 `ths→tencent→eastmoney→sina`**
 
-1. **curl 先行**：带齐 header（`Referer`/`User-Agent`）直打，把响应存文件再分析，别凭印象写解析。
-2. **记录字段口径，尤其是类型**：同一响应里类型可能不一致。实测教训——东财 `ssbk` 的
-   `IS_PRECISE` 是**字符串** `'0'/'1'`（还可能 `null`），而同级的 `BOARD_RANK` 是整数。
-   写 `== 1` 会静默全部失配、不抛错，症状是分类结果全落进兜底组。比较前一律 `str(x) == "1"`。
-3. **找规律要多采样**：至少拉 5–6 只不同行业/市场的股票交叉验证，看排序与分段是否稳定。
-   数据源常不给类别字段，但可能**按序号天然分段**（详见 docs/data-sources.md §3.1）。
-4. **fixture 从实抓数据生成，不要手写**：用 `json.load` 后裁掉无关字段再落盘。
-   手写 fixture 极易编出不存在的形状——已踩过：把地域放在 rank 2、风格放在 rank 3，
-   结果 2 个用例失败，而失败的是 fixture 不是代码。
-5. **写进 docs/data-sources.md**：字段口径、类型陷阱、分段规律，下一个人别再踩一遍。
-
-### 2.2 截图验收（UI 改动的唯一验收标准）
-
-**只要动了前端，交付前必须截图看一眼。** 用户 2026-08-29 明确要求："不清楚布局就截图看，
-以后都要这样，以实际看到的为准。"
-
-```bash
-agent-browser open "http://127.0.0.1:3000/workbench?symbol=600519"
-agent-browser wait --load load          # networkidle 在 SPA 上会挂，用 load
-agent-browser screenshot /tmp/xxx.png   # 位置参数，不是 --path
-agent-browser close                     # 收尾必须关，否则留僵尸 Chromium
-```
-
-要点：
-- **看内容，别看代码**。本项目有过 markers 数组构建完却从未调 `setMarkers()` 的情况——
-  代码看着齐全，界面上一个点都没有。
-- **布局问题必须截图**。右列固定 300px，往里塞东西前先截图确认放不放得下，
-  不要靠心算宽度。曾因在 5 个 tab 后 `ml-auto` 塞来源时间把整行挤变形。
-- 交互态（tab 切换、展开收起、弹窗）要切过去截，初始页面看不到。
-- `agent-browser click "text=资料"` 这类文本选择器可能匹配不到或匹配多个，
-  先用 `agent-browser snapshot -i` 拿 ref 再点。
-
-## 3. 文档地图（按需读）
-
-| 文档 | 内容 |
+| 阶段 | 状态 |
 |---|---|
-| **docs/PROJECT-MASTER.md** | 总览：技术栈/目录逐文件/数据源口径/32 API/前端/交易系统/测试/配置/坑/阶段状态 |
-| docs/architecture.md | 分层架构与数据管线 |
-| docs/data-sources.md | 四源字段口径实测记录（改 Provider 前必读） |
-| **docs/data-source-comparison.md** | **四源能力实测对比与选型**（谁最强/缺什么/用什么补；改数据源前必读） |
-| **docs/theme-sentiment-methodology.md** | **题材与情绪方法论**：自我检视/四层情绪/题材梯队/介入时机/消息风险/抓龙思路（每章含判据·失效条件·验证方式·反问） |
-| docs/api.md / websocket.md | API 与 WS 契约 |
-| docs/backtest-rules.md | 回测强制禁令（做回测前必读，代码级禁令） |
-| docs/sentiment.md / longhu.md | 情绪与龙虎榜口径（**改情绪模块前先读下面的复盘**） |
-| **docs/sentiment-phase-review.md** | **情绪周期：业界判据调研 + 2026-08-29「高潮」误判复盘 + P0/P1/P2 优化清单** |
-| docs/risk-management.md / mcp.md | 风控红线 / MCP 规划 |
-| docs/ui-redesign-plan.md | 布局 v3 规划与 L2 边界结论 |
-| docs/retro-and-gaps.md | **欠缺清单（你的待办池）** |
-| docs/deployment.md | 部署 + 已踩坑清单 |
+| 1 基础框架（布局/搜索/主题/错误边界） | ✅ |
+| 2 行情基础设施（四源链/质量五级/QuoteHub/WS/K线/分时/盘口 + 数据可靠性：Parquet 原子写与容错读、涨跌停价补全共享化、交易日历兜底） | ✅ |
+| 3 市场与板块（宽度/情绪周期+历史序列/涨停池/炸板池/题材梯队看板/云图/官方题材目录与成分） | ✅（余：题材事件树，P2） |
+| 4 投研数据（龙虎榜/资金流/财务/公司资料/新闻公告摘要 v1/集合竞价/复权因子） | ✅（余：营业部图谱/筹码/解禁/两融/大宗，P2） |
+| 5 量化系统（多因子评估+防飞刀三修正 / 全市场选股器+六维评分 / 风控引擎 v1：7 档市场状态→下单预检） | ✅ |
+| 6 模拟交易与回测（撮合引擎/交易页签/B/S 点+成本线/回测引擎+mandate 化+历史回放/分钟级 TDX 底座） | ✅ |
+| 7 AI 系统（盘后复盘 Agent 规则层 / 新题材预判 / 新闻摘要 v1 / 事件驱动选股规则层） | 🔶 规则层全部完成；余 LLM 增强（等凭据）、MCP 封装（等调用方） |
+| 8 通知与部署（预警规则+引擎+通道抽象+管理页 / 同源反代 / api-sweep 巡检 / reset 审计） | 🔶 余真实推送通道、Docker 生产化、监控（等部署决策） |
+| 9 联动系统（跨页面选中标的统一路由 / 题材⇄个股双向联动 / 官方 K 线交叉验证 / 事件面板） | 🔶 核心闭环全部打通；余切片 E 跳转（P2） |
 
-## 4. 技能库（skills/，随仓库走）
+---
 
-| 技能 | 用途 | 触发时机 |
+## 3. 已完成模块清单（索引级；细节看对应文档）
+
+**行情与数据**：Provider 协议 + 四源 failover 链；质量五级校验；QuoteHub（WS 推送+REST 轮询降级）；
+K 线（TDX 2 年分钟级底座）；分时（均价线+量比基线）；盘口/逐笔；Parquet 快照（原子写+损坏容错读）；
+官方题材目录/成分/板块 K 线（fuyao，T1）；交易日历持久化兜底。
+
+**市场分析**：情绪周期判定（防自指修复/晋级率/中位数/真实炸板池）+ 10 日历史序列；
+题材梯队看板（唯一归属/强弱分级/健康度/官方成分徽标/官方 K 线验证的多日涨幅）；
+板块排行；龙虎榜；全市场快照。
+
+**量化**：前端 `analyze` 与后端 `tech_score` 防飞刀口径完全对齐（含量价维度）；
+全市场选股器（截面过滤→TDX 日K→六维评分卡，5550 只冷跑 ~20s）；风控引擎（市场状态分类→仓位参数→7 项下单预检，拦截时禁用提交）。
+
+**交易与回测**：撮合引擎（T+1/涨跌停/费用，全部硬拦截）；交易页签（含风控实时预检、parseNum 千分位修复）；
+日线回测（代码级防泄露 + mandate yaml 配置化 + meta.applied 来源分层）；历史回放（逐 bar 重算）。
+
+**AI 与事件**：盘后复盘 Agent（规则分析器+模型路由降级+方法论版本化+元结论迭代）；
+新题材预判（六维评分+D1 四问验证）；新闻/公告摘要（规则层，表格正文丢弃纪律）；
+**事件驱动选股 v1**（EventCard 规则抽取：来源分级/事实与解读/半衰期模板/方向词典+国产替代对冲；
+标的池=题材官方成分反查；market 页事件面板 + 详情页相关事件行）。
+
+**联动系统**（docs/linkage-design.md）：统一路由 `lib/routing.ts`（URL 唯一真相源）；
+`/stock/[symbol]` 中转修复（路径参数 bug）；题材归属 chips ⇄ 题材看板 focus 聚焦（L4/L5）；
+板块多日涨幅官方 K 线交叉验证（B3 关闭，实测推断值方向都反）；预警→详情跳转（L6）。
+
+**工程化**：Next 16 升级（flat config）；错误边界；vitest+RTL 组件测试基建（含变异验证纪律）；
+`scripts/api-sweep.js` 全端点巡检（载荷体检）；alembic 三态迁移（手写对齐 ORM）；
+`.env.example` 漂移守护测试；同源反代（Route Handler 运行时代理）。
+
+---
+
+## 4. 后续规划（分阶段；明细账本 docs/retro-and-gaps.md，优先级依据 docs/plan-review.md）
+
+### 阶段 A · P0 无阻塞，可立即做（plan-review P0 残留）
+1. **sentiment 阈值配置化 + 历史分位校准**（P0-3）：≥5板/≥60家 等改配置，用本地数据算分位。
+   来源：docs/sentiment-phase-review.md P2 #13。
+2. **统一 provider 缓存层**（P0-5 / 数据源 C3）：收敛 news 60s / screener 30min / sparkline 5min 等自写缓存。
+
+### 阶段 B · 等用户触发（外部条件成熟即做）
+| 项 | 触发条件 | 一举关闭 |
 |---|---|---|
-| `skills/impeccable/` | UI 设计语言（v4.1，23 命令）。本项目定位 **Operate 模式**：可扫读性>表达，品牌在细节 | 任何 UI 改动前读 craft-floor；动效读 animate.md（"一个署名动效"原则已用于价格 tick 闪烁） |
-| `skills/design-taste/` + `skills/taste-skill/` | Anti-Slop 设计审计、极简协议 | UI 改动后对照禁令清单（禁 emoji 图标/渐变/玻璃拟态/大阴影） |
-| `skills/gsap-skills/` | GSAP 动画（8 子技能） | Phase 6 历史回放的时间线控制时启用；现在不要引入 gsap 依赖 |
-| `skills/hithink-finance/` | 同花顺官方数据服务（59 端点，REST/MCP/CLI/SDK） | 扩展数据能力时；**不含 L2/tick/分钟K**（官方声明） |
+| 推送通道接入（email/企微/飞书/TG） | 用户选通道 | Phase 8 收尾 + 复盘推送 + 盘中情绪监控 |
+| LLM 接入（LLMAnalyzer + 新闻摘要增强 + 事件方向 LLM 分类） | 用户给凭据 | 复盘四角色编排 + 事件 E3 |
+| 生产部署（Docker/编排/监控） | 用户定环境 | Phase 8 全收尾；需有 Docker 的环境实测 |
+| 事件复盘回写（E4：T+N 胜率回写事件权重） | 上线运行积累数据后 | 事件模板自校准 |
 
-## 5. 当前状态与你的待办（按优先级）
+### 阶段 C · P1 功能项（无外部阻塞，按价值排）
+1. **B1 热股榜**（ths hot_stock_list）→ 题材卡人气热度+排名变化（plan-review P1-3，最快出效果）。
+2. **B4 seal_nextday 交叉验证晋级率**（P1-4，数据源自证闭环）。
+3. **新闻/公告事件点画上 K 线**（P1-8；新闻+摘要+事件数据已就绪）。
+4. **题材指数与板块内资金合力**（P1-5 残留：成分表已建，指数计算未做）。
 
-**已完成**：Phase 1-4 全部；Phase 5（多因子技术评估 + 全市场选股器/评分系统 + 风控引擎 v1）；Phase 6（撮合引擎 + 交易页签 + 真实 B/S 点 + 日线回测 + 历史回放）；Phase 8（预警规则/触发/通知抽象/管理页、Next 16 升级、error.tsx）。
-快照：**344 后端测试 + 20 前端测试全绿** · **65 REST + 1 WS** · 四源链 `ths→tencent→eastmoney→sina` · 40+ commits。
+### 阶段 D · P2 远期/触发式（维持观察）
+marketdb DuckDB 日级底座 · qlib 因子挖掘 · L2 盘口（无免费源） · 逐笔历史+主动买卖比 ·
+题材事件树/生命周期 · 营业部图谱/筹码/解禁/两融/大宗 · MCP 工具层封装（API 契约已就绪） ·
+切片 E 跳转（热力图/回测/总览→详情） · 组件渲染测试按需增补。
 
-**你的待办（按序，做完一项在 docs/retro-and-gaps.md 划一项并 git checkpoint）**：
+### 明确不做（防复发）
+C2 全市场日 K dump（已被 TDX 替代）；"等 LLM 再做摘要"（规则先行范式）；next.config rewrites 反代（已被 Route Handler 替代）。
 
-1. ~~Phase 6 收尾：持仓成本线 / 成交记录 / 重置账户~~ ✅ 已完成
-2. ~~Phase 4 补漏：概念题材 chips 过滤风格标签~~ ✅ 已完成；新闻/公告 AI 摘要（Phase 7）**阻塞于 LLM 凭据**
-3. ~~Phase 5：全市场选股器 + 六维评分系统~~ ✅ 已完成
-4. ~~Phase 6 后半：回测引擎（含防泄露测试先行）~~ ✅ 已完成
-5. ~~Phase 8：预警通知核心 + Next 16 升级 + error.tsx~~ ✅ 已完成；**真实推送通道接入阻塞于用户选择**（email/企微/飞书/Telegram/webhook/短信）
-6. ~~Phase 5 风控引擎 v1（市场状态 → 仓位建议 → 下单预检）~~ ✅ 已完成（2026-08-30）
-7. ~~**新闻/公告摘要 v1**~~ ✅ 已完成（2026-08-30）：`app/news/` 规则摘要器（重要度/情绪/事实摘要/关键数字）+ `GET /api/news/digest/{symbol}` + 资讯页签渲染。**剩余的 LLM 增强层仍阻塞于凭据**——但不再是前置依赖，规则层已能交付绝大部分价值
-8. **生产部署**（NAS / 云服务器 / Vercel+Railway）— 阻塞：需用户定环境，决定 B8 打包与 token 激活
-9. 技术债清单见 docs/retro-and-gaps.md §三
+---
 
-> **账本约定**：待办明细以 `docs/retro-and-gaps.md` 为唯一账本（README/PROJECT-MASTER 只留阶段级索引）；
-> 跨计划复盘、依赖关系与优先级整合见 `docs/plan-review.md`（2026-08-31 全盘复盘产出）。
-> 开工前先看 plan-review 的 P0 清单。
+## 5. 文档地图（核对过的事实源）
 
-## 6. 关键常识
+| 文档 | 内容 / 地位 |
+|---|---|
+| **docs/PROJECT-MASTER.md** | 技术总览：目录逐文件/数据源口径/79 API/阶段状态表 |
+| **docs/plan-review.md** | 计划复盘：10 份方案逐项盘点 + P0/P1/P2 整合清单（§六）+ 遗留用户决策（§八） |
+| **docs/linkage-design.md** | 联动系统总纲：状态管理规范/路由规范/联动矩阵 L1-L10/题材三层归属/事件 SOP；切片标记在此 |
+| **docs/retro-and-gaps.md** | 唯一明细账本（§一功能欠缺 20 项全清 / §二布局 / §三技术债 / §四行为基线勿回退） |
+| docs/api.md | API 契约（79 端点，按域分节） |
+| docs/data-sources.md + data-source-comparison.md | 字段口径实测记录 + 四源能力选型（改 Provider 前必读） |
+| docs/sentiment-phase-review.md + sentiment.md | 情绪方法论调研 + 误判复盘 + 优化清单 |
+| docs/theme-prediction.md / review-agent.md / theme-sentiment-methodology.md | 预判 / 复盘 Agent / 题材情绪方法论 |
+| docs/backtest-rules.md | 回测代码级禁令（做回测前必读） |
+| docs/deployment.md | 部署 + 环境变量全表 + 已踩坑 |
+| docs/github-stars-trading-analysis.md / mcp.md / orderbook-source-evaluation.md / minute-chart-plan.md | 星标方案 / MCP 规划 / 盘口评估 / 分时图方案（均已完成或触发式） |
+| docs/architecture.md / websocket.md / risk-management.md / longhu.md / data-dictionary.md | 架构 / WS 契约 / 风控红线 / 龙虎榜口径 / 数据字典 |
 
-- Provider 链 `ths→tencent→eastmoney→sina` 逐方法 failover；加新数据源 = 实现协议 + 注册 factory + 加链
+**账本约定**：待办明细以 retro-and-gaps 为唯一账本；跨计划优先级看 plan-review §六；
+联动需求看 linkage-design；README/PROJECT-MASTER 只留阶段级索引。**完成一项划一项并 git checkpoint。**
+
+---
+
+## 6. 工作方式（前任验证过的教训，勿重蹈覆辙）
+
+### 6.1 交付纪律
+- **验收以实际看到的为准**：UI 改动用 `agent-browser snapshot`（无障碍树文本）+ `eval` 直读 DOM 验收；
+  当前模型读不了 PNG，截图拍了无法目视。布局类问题如实说明"需人工目视"。
+- **每阶段流程**：实测数据源（curl 先行）→ 小切片实现 → 全量门禁 → 浏览器文本验收 → commit/push → CI 自查 → 文档同步 → 记忆。
+- **改完后端必须重启验证 8000 上的实例**（无 --reload 时改完不重启=旧代码）；起服务必须用
+  `run_in_background`，bash 子 shell `( &)` 会被沙箱收割（踩过 3 次）。
+- 禁止 dev server 运行时 `next build`；pytest/build 需要 `CODEBUDDY_SAFE_DELETE_ENABLED=0`（沙箱批量删除保护）。
+- 复杂 JSX 整文件重写；长内容写脚本文件；**文档/代码编辑一律用 Edit/Write 工具**（node -e 撞 shell 引号已翻车 3 次）。
+
+### 6.2 接新数据源五步法（见 docs/data-sources.md）
+curl 先行 → 记录字段口径与类型陷阱 → 多采样找规律 → fixture 从实抓数据生成 → 写进文档。
+**缩放陷阱实例**：东财涨停池价格 ×100、炸板池 ×1000——用自家 TDX 日 K 交叉验证。
+
+### 6.3 工程教训（2026-08-30/31 两轮密集迭代沉淀）
+- **Next.js**：`[symbol]` 路径参数在 page 里是 `params`（Promise），`searchParams` 是查询参数——
+  两者不匹配**不报错只静默丢参**（跨页面联动 bug 根因）；`NEXT_PUBLIC_*` 构建期内联；
+  `rewrites()` 构建期求值，运行时代理必须用 Route Handler。
+- **React/vitest**：未开 globals 时 RTL 自动 cleanup 不注册（症状：单跑过全量红）；防抖组件断言等真变的值；
+  回归测试要做**变异验证**（临时改回 bug 版本确认测试变红）。
+- **SQLAlchemy**：`query.delete()` 绕过 ORM 级联留孤儿行；删有关联对象走 `session.delete(obj)`；
+  sessionmaker 不支持 with 语法（用 `sf()` 返回的 Session）。
+- **pytest**：共享内存库跨文件污染——测试用独立代码/变体标题，断言锁行为不锁顺序；
+  `logging.basicConfig` 会破坏后续 caplog（审计断言打桩 logger）。
+- **排查**：页面 `performance.getEntriesByType('resource')` 看真实请求 URL；
+  bash grep 在沙箱不可靠——查代码用 Grep 工具或 node -e。
+- **词表/规则类功能**：漏词是常态，靠真实数据发现并补测试；错误归类不要信 catch-all（Parquet 损坏曾被误报为"TDX 源不可用"）。
+
+### 6.4 行为基线（勿回退）
+红涨绿跌 · tabular-nums · 所有数据带来源/时间/质量标注 · mock 不冒充实盘 ·
+布局锁一屏（容器内滚动）· 每处可解释输出带 basis · 右列宽度用户可调（260-480px）。
+
+---
+
+## 7. 待用户决策（阻塞项，勿催促，列清单等待）
+
+| # | 决策 | 阻塞的联动项 |
+|---|---|---|
+| 1 | 推送通道（email/企微/飞书/TG/webhook） | 预警真实推送 + 复盘推送 + 盘中情绪监控 |
+| 2 | LLM 凭据 | 复盘 LLM 编排 + 摘要增强 + 事件方向 LLM 分类（E3） |
+| 3 | 部署环境（NAS/云服务器/Vercel+Railway） | Docker/编排/监控；需有 Docker 的环境实测 |
+| 4 | 是否物理删除 `data/parquet/snapshots/20260830/` 下 7 个损坏文件 | 无（读取已容错，新快照自动覆盖） |
+
+---
+
+## 8. 关键常识
+
+- Provider 链 `ths→tencent→eastmoney→sina` 逐方法 failover；加数据源 = 实现协议 + 注册 factory + 加链；
+  特殊数据直取特定 Provider（`_pick_provider`），避免 composite 串行重试拖垮事件循环
 - 质量五级：high/medium/low/stale/invalid；low 及以下 AI 禁用、回测禁用、前端强制标识
-- 交易撮合在 `app/paper/engine.py`（费用/T+1/涨跌停全配置化）；涨跌停价 ths 缺失时由 main.py live_quote 从腾讯补
-- Parquet 快照每 5 分钟落 `data/parquet/snapshots/`（回测地基）
-- 东财 push2 本机被 WAF 限流：行情走腾讯，特殊数据走 datacenter/push2ex（稳定）
+- 交易撮合 `app/paper/engine.py`；风控引擎 `app/risk/`（状态分类→参数→预检）；
+  事件引擎 `app/events/`（抽取/存储/标的池）；题材目录 `app/services/theme_catalog_service.py`
+- fuyao 官方端点：题材目录（cn_concept 390 个）/成分/板块 K 线，key 在 settings.ths_api_key
+- 东财 push2 本机被 WAF 限流：行情走腾讯，特殊数据走 datacenter/push2ex；
+  涨停池价格 ×100、炸板池 ×1000（缩放已用 TDX 交叉验证）
+- 非交易日/盘前语义：当日涨停池为空、归因空是正确语义（`?date=` 回看历史）
+- Parquet 快照每 5 分钟落 `data/parquet/snapshots/`（选股器/情绪地基），写入必须走 `parquet_store.write_parquet_atomic`
