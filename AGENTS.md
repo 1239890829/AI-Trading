@@ -93,7 +93,7 @@ K 线（TDX 2 年分钟级底座）；分时（均价线+量比基线）；盘�
 ## 4. 后续规划（分阶段；明细账本 docs/retro-and-gaps.md，优先级依据 docs/plan-review.md）
 
 ### 阶段 A · P0 无阻塞，可立即做（plan-review P0 残留）
-1. **sentiment 阈值配置化 + 历史分位校准**（P0-3）：≥5板/≥60家 等改配置，用本地数据算分位。
+1. **sentiment 历史分位校准**（P0-3 残留；阈值配置化 ✅ 已完成 2026-08-31：`band_config.py` + `ASHARE_SENTIMENT_HEAT_BANDS_JSON`/`ASHARE_SENTIMENT_EARNING_BANDS_JSON` 覆盖，非法配置启动即失败）：等 Parquet 快照积累后用本地数据算分位，替换照搬网络的阈值。
    来源：docs/sentiment-phase-review.md P2 #13。
 2. **统一 provider 缓存层**（P0-5 / 数据源 C3）：收敛 news 60s / screener 30min / sparkline 5min 等自写缓存。
 

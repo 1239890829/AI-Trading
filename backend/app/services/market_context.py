@@ -10,10 +10,23 @@ import asyncio
 import logging
 from datetime import date
 
+from app.core.config import settings
 from app.market import trade_calendar as tc
-from app.sentiment.engine import compute_sentiment
+from app.sentiment.band_config import load_bands
+from app.sentiment.engine import EARNING_BANDS, HEAT_BANDS, compute_sentiment
 
 log = logging.getLogger(__name__)
+
+# 阈值覆盖在模块加载时解析一次：非法配置直接让启动失败，
+# 而不是每次请求才发现（band_config 的设计原则：配置错误不可静默回退）。
+_HEAT_BANDS, _EARNING_BANDS, _BANDS_SOURCE = load_bands(
+    settings.sentiment_heat_bands_json,
+    settings.sentiment_earning_bands_json,
+    HEAT_BANDS,
+    EARNING_BANDS,
+)
+if _BANDS_SOURCE == "env_override":
+    log.info("sentiment bands: env override active")
 
 
 class CalendarUnavailable(Exception):
@@ -72,6 +85,7 @@ async def compute_market_sentiment(hub, snapshot_service) -> dict:
         prev_trade_date=prev,
         max_board_prev=max_board_prev,
         break_count=len(breaks) if breaks else None,
+        bands={"heat": _HEAT_BANDS, "earning": _EARNING_BANDS},
     )
     return {
         **result,

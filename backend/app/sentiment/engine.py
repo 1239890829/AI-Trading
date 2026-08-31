@@ -237,11 +237,15 @@ def self_check(prev_perf: dict, trade_date: date, prev_trade_date: date) -> list
 # ---------------------------------------------------------------- 分轴打分
 
 
-def heat_axis(limit_up: int, max_board: int, break_rate: float | None) -> dict:
-    """热度轴：市场热不热。不回答"能不能赚到"。"""
-    p_lu, l_lu = _band(limit_up, HEAT_BANDS["limit_up"])
-    p_mb, l_mb = _band(max_board, HEAT_BANDS["max_board"])
-    p_br, l_br = _band(break_rate, HEAT_BANDS["break_rate"])
+def heat_axis(limit_up: int, max_board: int, break_rate: float | None, bands: dict | None = None) -> dict:
+    """热度轴：市场热不热。不回答"能不能赚到"。
+
+    bands 缺省用模块默认（业界经验值）；配置化覆盖见 band_config.load_bands。
+    """
+    b = bands or HEAT_BANDS
+    p_lu, l_lu = _band(limit_up, b["limit_up"])
+    p_mb, l_mb = _band(max_board, b["max_board"])
+    p_br, l_br = _band(break_rate, b["break_rate"])
     raw = p_lu + p_mb + p_br
     lvl = _level(raw, HEAT_LEVEL_CUTS)
     return {
@@ -261,12 +265,14 @@ def earning_axis(
     median_pct: float | None,
     red_rate: float | None,
     limit_down: int | None,
+    bands: dict | None = None,
 ) -> dict:
-    """赚钱效应轴：接力盘能不能赚到钱。可否决热度轴。"""
-    p_p, l_p = _band(promo_1to2, EARNING_BANDS["promo_1to2"])
-    p_m, l_m = _band(median_pct, EARNING_BANDS["median_pct"])
-    p_r, l_r = _band(red_rate, EARNING_BANDS["red_rate"])
-    p_d, l_d = _band(limit_down, EARNING_BANDS["limit_down"])
+    """赚钱效应轴：接力盘能不能赚到钱。可否决热度轴。bands 覆盖同 heat_axis。"""
+    b = bands or EARNING_BANDS
+    p_p, l_p = _band(promo_1to2, b["promo_1to2"])
+    p_m, l_m = _band(median_pct, b["median_pct"])
+    p_r, l_r = _band(red_rate, b["red_rate"])
+    p_d, l_d = _band(limit_down, b["limit_down"])
     raw = p_p + p_m + p_r + p_d
     lvl = _level(raw, EARNING_LEVEL_CUTS)
     return {
@@ -323,8 +329,13 @@ def compute_sentiment(
     prev_trade_date: date,
     max_board_prev: int | None = None,
     break_count: int | None = None,
+    bands: dict | None = None,
 ) -> dict:
-    """计算市场情绪。所有日期参数必须由 `trade_calendar` 校验后传入。"""
+    """计算市场情绪。所有日期参数必须由 `trade_calendar` 校验后传入。
+
+    bands: {"heat": {...}, "earning": {...}} 可选覆盖（P0-3 配置化）；
+    缺省用模块默认（业界经验值）。
+    """
     prev = prev_zt_performance(pool_yesterday, snapshot)
     promo = promotion_rates(pool_today, pool_yesterday)
 
@@ -350,8 +361,11 @@ def compute_sentiment(
         break_rate = round(breaks / max((breadth.get("limit_up") or 0) + breaks, 1), 3) or None
         break_note = "近似（价格法−封单法）"
 
-    heat = heat_axis(limit_up, max_board, break_rate)
-    earn = earning_axis(promo["promo_1to2"], prev["median_pct"], prev["red_rate"], limit_down)
+    heat = heat_axis(limit_up, max_board, break_rate, (bands or {}).get("heat"))
+    earn = earning_axis(
+        promo["promo_1to2"], prev["median_pct"], prev["red_rate"], limit_down,
+        (bands or {}).get("earning"),
+    )
     height_dropped = bool(max_board_prev and max_board < max_board_prev)
     phase, phase_basis = decide_phase(
         heat["level"],

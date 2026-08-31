@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     snapshot_save_interval_seconds: float = 300.0
     parquet_dir: str = str(REPO_ROOT / "data" / "parquet")
 
+    # ---- 情绪阈值覆盖（P0-3，留空 = 用 engine 默认业界经验值）----
+    # JSON 字符串，结构与 app/sentiment/engine.py 的 HEAT_BANDS / EARNING_BANDS 一致：
+    # 每指标为 [[上界, 得分, 标签], ...] 升序，末档上界用 null。
+    # 非法配置启动即失败（band_config 校验），绝不静默回退默认值。
+    sentiment_heat_bands_json: str = ""
+    sentiment_earning_bands_json: str = ""
+
     # ---- 盘后复盘 Agent ----
     # 分析器：rules（默认，确定性、零成本）| llm（需配 base_url + api_key）
     review_model: str = "rules"

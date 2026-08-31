@@ -209,7 +209,7 @@
 |---|---|---|---|
 | **P0-1** | **统一待办真相源**：修 README/PROJECT-MASTER 过时状态，retro 编号重排，宣布 retro 为唯一明细账本 | 本次复盘 | 防止下次复盘再花一小时对账 |
 | ~~**P0-2**~~ | ~~**回测配置 mandate 化**~~ ✅ 已完成（2026-08-31，commit 7f80c95）：backend/mandates/ + 分层解析（默认<mandate<请求）+ meta.applied 来源展示 + /backtest 下拉预填 | 星标 P2 | 源选择（tdx/sina）留待后续 mandate 字段扩展 |
-| **P0-3** | **sentiment 阈值配置化 + 历史分位校准**（≥5板/≥60家 等改配置，用本地数据算分位） | 情绪 P2 #13 | 让"高潮/分歧"阈值有本地依据而非照搬网络 |
+| **P0-3** | **sentiment 历史分位校准**（阈值配置化 ✅ 已完成 2026-08-31：`band_config.py` + settings JSON 覆盖，校验失败启动即报错；分位校准等快照样本积累） | 情绪 P2 #13 | 让"高潮/分歧"阈值有本地依据而非照搬网络 |
 | ~~**P0-4**~~ | ~~**东财 get_limit_break_pool 备源**~~ ✅ 已完成（2026-08-31）：push2ex getTopicZBPool；字段缩放 ×1000 已用 600103 与 TDX 日K交叉验证（与 ZT 池 ×100 不同，独立解析） | 数据源 B5 | 链上 ths → eastmoney 双源 |
 | **P0-5** | **统一 provider 缓存层（C3）** | 数据源 C3 | 收敛 news 60s/screener 30min/sparkline 5min/quote 等自写缓存；同时给缓存键加告警 |
 | ~~**P0-6**~~ | ~~`/api/paper/reset` 加审计日志~~ ✅ 已完成（2026-08-31）：单行记录 重置前状态（持仓/委托/资金）+ source=api/engine + custom_initial 标记 | 本次复盘 | 审计断言直接打桩 logger（basicConfig 会破坏后续 caplog，见 test_paper_audit.py 注释） |
