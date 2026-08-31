@@ -62,7 +62,9 @@ function WorkbenchInner() {
 
   const { quotes, status } = useQuoteStream([...new Set([...symbols, ...realSymbols])]);
   const [extra, setExtra] = useState<Record<string, Quote>>({});
-  const merged: Record<string, Quote> = { ...extra, ...quotes };
+  // WS 每 5s tick 全量替换 quotes：merged/列表/spark 查找都必须 memo 化，
+  // 否则每次 tick 触发整列表 O(n²) 重算（评审 F2）
+  const merged: Record<string, Quote> = useMemo(() => ({ ...extra, ...quotes }), [extra, quotes]);
   const [positions, setPositions] = useState<PaperPositionInfo[]>([]);
   const [risk, setRisk] = useState<RiskState | null>(null);
 
@@ -182,14 +184,26 @@ function WorkbenchInner() {
   );
   // 管理模式下分组下拉的可选项（含「默认」兜底）
   const allGroups = useMemo(() => Array.from(new Set(["默认", ...allGroupNames])), [allGroupNames]);
-  const watchQuotes: Quote[] = symbols
-    .filter((s) => activeGroup === "全部" || groupMap[s] === activeGroup)
-    .map((s) => merged[s])
-    .filter(Boolean);
+  // 列表派生 memo 化（评审 F2）：WS tick → merged 变化 → 未 memo 时每 tick 重 filter+map
+  const watchQuotes: Quote[] = useMemo(
+    () =>
+      symbols
+        .filter((s) => activeGroup === "全部" || groupMap[s] === activeGroup)
+        .map((s) => merged[s])
+        .filter(Boolean),
+    [symbols, activeGroup, groupMap, merged]
+  );
   // 「持仓」分类（Holdings Group）：独立于自选，直接列真实持仓标的
-  const holdingQuotes: Quote[] = realSymbols
-    .map((s) => merged[s])
-    .filter(Boolean);
+  const holdingQuotes: Quote[] = useMemo(
+    () => realSymbols.map((s) => merged[s]).filter(Boolean),
+    [realSymbols, merged]
+  );
+  // spark 数据按 symbol 建索引，行内 O(1) 取（评审 F2：行内 find 是 O(n²)）
+  const sparkBySymbol = useMemo(() => {
+    const m = new Map<string, number[]>();
+    for (const item of sparks?.items ?? []) m.set(item.symbol, item.closes);
+    return m;
+  }, [sparks]);
 
   async function remove(symbol: string) {
     try {
@@ -472,7 +486,7 @@ function WorkbenchInner() {
                           ))}
                         </select>
                       ) : (
-                        <Sparkline closes={sparks?.items.find((i) => i.symbol === q.symbol)?.closes ?? []} />
+                        <Sparkline closes={sparkBySymbol.get(q.symbol) ?? []} />
                       )}
                     </td>
                     <td className="px-2 py-2 text-right font-mono tabular-nums"><PriceFlash value={q.price}>{fmt(q.price)}</PriceFlash></td>

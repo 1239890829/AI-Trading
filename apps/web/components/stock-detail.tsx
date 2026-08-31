@@ -380,9 +380,13 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     } catch {}
   }
 
-  const tech = analyze(
-    displayBars.map((b) => ({ ts: b.ts, open: b.open ?? 0, high: b.high ?? 0, low: b.low ?? 0, close: b.close ?? 0, volume: b.volume, change_pct: b.change_pct }))
+  // 技术评估：displayBars 随 WS 秒级 tick 变化，必须 memo——否则每 tick
+  // 全量重算 MA/MACD/KDJ（评审 F1，replay-chart 同口径示范）
+  const techInput = useMemo(
+    () => displayBars.map((b) => ({ ts: b.ts, open: b.open ?? 0, high: b.high ?? 0, low: b.low ?? 0, close: b.close ?? 0, volume: b.volume, change_pct: b.change_pct })),
+    [displayBars]
   );
+  const tech = useMemo(() => analyze(techInput), [techInput]);
 
   // 当前个股的模拟持仓（用于 K 线成本线）
   const myPosition = paper?.positions.find((p) => p.symbol === symbol) ?? null;

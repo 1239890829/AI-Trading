@@ -362,7 +362,7 @@ def review_entry_quality(
 
 def classify_failure(
     *,
-    excess_pct: float,
+    excess_pct: float | None,
     entry: dict,
     market_phase: str | None = None,
 ) -> tuple[str, str]:
@@ -372,9 +372,13 @@ def classify_failure(
     区分依据是**可观测的事实**，不是猜测：
     - 买点不对：盘中冲高超过买入区间上沿 3% 以上，收盘却回落至区间下方（典型追高即套）
     - 情绪误判：持有期市场相位处于退潮/冰点（个股再强也难逆势）
+    - 基准缺失（excess_pct=None，2026-09-01 评审 B21）：归因挂起记 data_issue，
+      绝不把个股涨幅冒充超额（否则归因统计被系统性污染）
     """
     if entry.get("filled") is False:
         return "missed", f"{entry['basis']}；非选股失误，属踏空"
+    if excess_pct is None:
+        return "data_issue", "市场基准缺失，超额收益无法计算——归因挂起（诚实降级，不猜测）"
     if excess_pct <= -2:
         if entry.get("filled") and (entry.get("advantage_pct") or 0) > 1.5:
             return (

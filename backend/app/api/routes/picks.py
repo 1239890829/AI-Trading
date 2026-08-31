@@ -732,7 +732,14 @@ async def generate_review(request: Request, hub: QuoteHub = Depends(get_hub), _:
         sym = it["symbol"]
         q = quotes.get(sym)
         change = q.change_pct if q is not None else None
-        excess = round(change - market_pct, 2) if (change is not None and market_pct is not None) else (change or 0.0)
+        # 基准缺失时 excess 必须为 None（评审 B21）：此前回退成个股涨幅本身，
+        # 会把"大盘 +2% 时个股 +2%"记成超额 0、把"大盘 -2% 时个股 0%"记成 +2——
+        # classify_failure 的归因统计被系统性污染。None 让下游显式处理"基准缺失"。
+        excess = (
+            round(change - market_pct, 2)
+            if (change is not None and market_pct is not None)
+            else None
+        )
         # 买点质量：把「选错了」与「选对了但买点不对」分开，否则迭代方向会被污染
         entry = review_entry_quality(
             buy_range=it.get("buy_range"),
