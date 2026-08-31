@@ -46,6 +46,7 @@ from app.picks.engine import (
 from app.picks.gate import apply_gate_to_picks, evaluate_stand_aside
 from app.picks.regime import detect_regime, earnings_event_ratio, weights_for
 from app.picks.risk import build_invalidations, exit_discipline, risk_tier_of, stop_loss_reference
+from app.services.quote_enrich import fill_valuation
 from app.services.quote_hub import QuoteHub
 
 log = logging.getLogger(__name__)
@@ -438,17 +439,24 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
             # 消息
             bull, bear, top_title, top_dir = _active_event_hits(store, sym)
             sub["news"], bases["news"] = score_news(bull, bear, top_title, top_dir)
-            # 基本面
-            pe = rev = None
+            # 基本面：成长性来自财务报告（revenue_yoy 等），估值来自行情快照
+            rev = None
             try:
                 fin = await hub.provider.get_financials(sym, 4)
                 if fin:
                     latest = fin[0] if isinstance(fin, list) else fin
                     d_ = latest if isinstance(latest, dict) else getattr(latest, "__dict__", {})
-                    pe = d_.get("pe_ttm")
                     rev = d_.get("revenue_yoy")
             except Exception:
                 pass
+            # ⚠️ PE 需要现价，财务报告里本来就没有（此前从 financials 取 pe_ttm → 恒 None）。
+            # 估值应取自行情快照；链首 ths 不带该字段，用 fill_valuation 从腾讯补。
+            pe = None
+            q_snap = quotes.get(sym)
+            if q_snap is not None:
+                if q_snap.pe_ttm is None:
+                    q_snap = await fill_valuation(hub.provider, q_snap)
+                pe = q_snap.pe_ttm if q_snap is not None else None
             sub["fundamental"], bases["fundamental"] = score_fundamental(pe, rev)
             # 资金
             net_inflow = None
@@ -457,7 +465,10 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
                 if flow:
                     last = flow[-1] if isinstance(flow, list) else flow
                     d_ = last if isinstance(last, dict) else getattr(last, "__dict__", {})
-                    net_inflow = d_.get("net_amount")
+                    # ⚠️ 新浪资金流字段名是 net_main（主力净额，元），不是 net_amount。
+                    # 此前写错字段名 → 恒为 None → 资金面永远显示"数据缺失"，
+                    # 被静默降级掩盖成了"数据源问题"（2026-08-31 修复）。
+                    net_inflow = d_.get("net_main")
             except Exception:
                 pass
             sub["capital"], bases["capital"] = score_capital(net_inflow, None, on_lhb=False)
