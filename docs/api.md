@@ -180,9 +180,9 @@ Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**82 个端点**（2026-
 
 ## 每日精选（/api/picks/*，五维规则版多角色评分；≤5 只；收盘定次日+换股门槛 15 分）
 
-- `GET /api/picks/today` — 当日组合（含五维子分/basis/买入范围/关联消息）
-- `POST /api/picks/generate` — 生成/刷新组合（写鉴权；候选池=事件标的池∪涨停池∪热股榜 → 深评 24 → 精选 ≤5）
+- `GET /api/picks/today` — 当日组合（含 meta：六维权重/炒作阶段 regime/空仓闸门 gate；items 含梯队地位/题材阶段/风险档位/止损参考位/失效条件/observation_only）
+- `POST /api/picks/generate` — 生成/刷新组合（写鉴权）：候选池 → 题材基准超额判梯队 → 六维评分（权重按炒作阶段切换）→ 换股门槛 → 空仓闸门处理
 - `GET /api/picks/history` — 历史组合（一致性回溯）
-- `POST /api/picks/review/generate` — 生成复盘（逐只超额 vs 上证 + 走坏原因归类）
+- `POST /api/picks/review/generate` — 生成复盘：逐只超额 vs 上证 + 九类归因（含买点质量/情绪误判/踏空）
 - `GET /api/picks/review?date=` — 复盘日志
 - `GET /api/picks/meta` — 走坏原因分布（周末调权建议输入）

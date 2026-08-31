@@ -11,7 +11,9 @@ import {
   getTodayPicks,
   type DailyPicksPayload,
   type PickReviewRow,
+  type StandAsideGate,
 } from "@/lib/api";
+import { PickCard, StandAsideBanner } from "@/components/picks/pick-card";
 import { fmt, pctColor, pctText } from "@/lib/format";
 
 /**
@@ -23,14 +25,6 @@ import { fmt, pctColor, pctText } from "@/lib/format";
  * 全页不构成买卖建议。
  */
 
-const SUB_LABELS: [string, string][] = [
-  ["sentiment", "情绪"],
-  ["news", "消息"],
-  ["tech", "技术"],
-  ["fundamental", "基本"],
-  ["capital", "资金"],
-];
-
 const REASON_LABELS: Record<string, string> = {
   event_expired: "事件失效",
   board_receding: "板块退潮",
@@ -39,84 +33,10 @@ const REASON_LABELS: Record<string, string> = {
   news_gap: "消息卡顿",
   logic_failed: "入选逻辑失效",
   gone_well: "走势健康",
+  entry_bad: "买点不对",
+  sentiment_misread: "情绪误判",
+  missed: "踏空未介入",
 };
-
-function PickCard({ item }: { item: DailyPicksPayload["items"][number] }) {
-  return (
-    <div className="mb-3 break-inside-avoid rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
-      {/* 头：名称代码 + 现价 + 综合分 */}
-      <div className="flex items-baseline justify-between gap-2">
-        <div>
-          <span className="text-sm font-semibold">{item.name ?? "--"}</span>
-          <span className="ml-1.5 font-mono text-[10px] text-zinc-400">{item.symbol}</span>
-        </div>
-        <div className="text-right">
-          <div className="font-mono text-base font-semibold tabular-nums">{fmt(item.price)}</div>
-          <div className={`font-mono text-[10px] tabular-nums ${pctColor(item.change_pct)}`}>{pctText(item.change_pct)}</div>
-        </div>
-      </div>
-
-      {/* 综合分 + 五维子评分条 */}
-      <div className="mt-2 flex items-center gap-2">
-        <span className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-xs font-semibold dark:bg-zinc-800" title="五维加权综合分（一票否决后）">
-          {item.score}
-        </span>
-        <div className="flex flex-1 gap-1">
-          {SUB_LABELS.map(([key, label]) => {
-            const v = item.sub_scores[key];
-            return (
-              <div key={key} className="flex-1" title={`${label}：${item.bases[key] ?? "--"}`}>
-                <div className="h-1 w-full overflow-hidden rounded bg-zinc-100 dark:bg-zinc-800">
-                  <div className="h-full rounded bg-sky-500/80" style={{ width: `${v ?? 50}%` }} />
-                </div>
-                <div className="mt-0.5 text-center text-[9px] text-zinc-400">{label}</div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* 买入范围 */}
-      <div className="mt-2 rounded-lg bg-sky-500/5 px-2 py-1.5 text-[11px]" title={item.buy_range.basis}>
-        <span className="text-zinc-400">买入参考区间</span>{" "}
-        <span className="font-mono font-medium tabular-nums">
-          {fmt(item.buy_range.low)} – {fmt(item.buy_range.high)}
-        </span>
-      </div>
-
-      {/* 买入原因：各维度 basis 摘要（一票否决显式标红） */}
-      <div className="mt-2 space-y-0.5 text-[11px] leading-relaxed">
-        {SUB_LABELS.map(([key, label]) => {
-          const b = item.bases[key];
-          if (!b) return null;
-          return (
-            <div key={key} className="flex gap-1.5">
-              <span className="shrink-0 text-zinc-400">{label}</span>
-              <span className="text-zinc-600 dark:text-zinc-300">{b}</span>
-            </div>
-          );
-        })}
-        {item.vetoes.map((v) => (
-          <div key={v} className="text-red-500">
-            ⚠ {v}
-          </div>
-        ))}
-      </div>
-
-      {/* 关联消息 */}
-      {item.related_events.length > 0 && (
-        <div className="mt-2 border-t border-zinc-100 pt-1.5 text-[11px] dark:border-zinc-800/60">
-          <span className="text-zinc-400">关联消息：</span>
-          {item.related_events.map((e) => (
-            <div key={e} className="text-zinc-600 dark:text-zinc-300">
-              · {e}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 function PicksInner() {
   const sp = useSearchParams();
@@ -187,6 +107,24 @@ function PicksInner() {
         <span title="收盘定次日；换股门槛：新候选综合分需超出组合内最弱者 ≥15 分；盘中仅硬性失效提前移除">
           组合纪律：收盘定次日 · 换股门槛 15 分 · 硬性失效盘中移除
         </span>
+        {data?.meta?.regime && (
+          <span
+            className="rounded border border-violet-500/40 bg-violet-500/10 px-1.5 py-0.5 text-[10px] text-violet-600 dark:text-violet-300"
+            title={`炒作阶段（Speculation Regime）决定六维权重：${data.meta.regime.basis}`}
+          >
+            {data.meta.regime.regime}
+          </span>
+        )}
+        {data?.meta?.market_phase && (
+          <span className="rounded border border-zinc-300 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:border-zinc-700">
+            情绪 {data.meta.market_phase}
+          </span>
+        )}
+        {data?.meta?.limit_up_count !== undefined && (
+          <span className="text-[10px] text-zinc-400">
+            涨停 {data.meta.limit_up_count} 家 · 最高 {data.meta.market_max_boards ?? 0} 板
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-1.5">
           <button
             onClick={() => void runGenerate()}
@@ -207,6 +145,7 @@ function PicksInner() {
         </div>
       </div>
 
+      {data?.meta?.gate && data.meta.gate.stand_aside && <StandAsideBanner gate={data.meta.gate} />}
       {error && (
         <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-600 dark:text-amber-300">{error}</div>
       )}
@@ -278,7 +217,12 @@ function PicksInner() {
       </div>
 
       <div className="shrink-0 text-[10px] text-zinc-500">
-        五维权重：情绪 20% / 消息 25% / 技术 25% / 基本面 15% / 资金 15% · 一票否决 ×0.4 ·
+        {data?.meta?.weights
+          ? `当前权重（${data.meta.regime?.regime ?? "平衡"}）：${Object.entries(data.meta.weights)
+              .map(([k, v]) => `${{ sentiment: "情绪", news: "消息", tech: "技术", fundamental: "基本", capital: "资金", echelon: "梯队" }[k] ?? k} ${Math.round(v * 100)}%`)
+              .join(" / ")}`
+          : "五维权重：情绪 20% / 消息 25% / 技术 25% / 基本面 15% / 资金 15%"}
+        {" · 一票否决 ×0.4 · "}
         全部输出为可解释依据，不构成买卖建议 · 数据有延迟
       </div>
     </main>

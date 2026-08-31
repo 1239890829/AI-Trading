@@ -1,0 +1,229 @@
+"use client";
+
+import { fmt, pctColor, pctText } from "@/lib/format";
+import type { DailyPickItem, StandAsideGate } from "@/lib/api";
+
+/**
+ * 每日精选卡片（瀑布流单元）。
+ *
+ * 三块信息，缺一不可：
+ * 1. **六维评分**：情绪/消息/技术/基本面/资金 + 梯队（第六维）
+ * 2. **联合研判**：梯队地位 × 题材阶段 —— 同一个人角色在不同题材阶段价值完全不同
+ * 3. **风险与出场**：风险档位 / 止损参考位 / 跟踪止盈 / 失效条件
+ *    （借鉴 freqtrade 的出场纪律；是"能盈利"在规则层面的唯一落点）
+ *
+ * 红线 3：全部为可解释依据与条件陈述，不构成买卖建议。
+ */
+
+export const SUB_LABELS: [string, string][] = [
+  ["sentiment", "情绪"],
+  ["news", "消息"],
+  ["tech", "技术"],
+  ["fundamental", "基本"],
+  ["capital", "资金"],
+  ["echelon", "梯队"],
+];
+
+/** 梯队地位配色：越靠前（空间板/龙头）越"热"，补涨跟风降温 */
+export const ROLE_STYLE: Record<string, string> = {
+  空间板: "border-red-500/50 bg-red-500/10 text-red-600 dark:text-red-300",
+  龙头: "border-orange-500/50 bg-orange-500/10 text-orange-600 dark:text-orange-300",
+  反包: "border-amber-500/50 bg-amber-500/10 text-amber-600 dark:text-amber-300",
+  中军: "border-sky-500/50 bg-sky-500/10 text-sky-600 dark:text-sky-300",
+  领涨: "border-teal-500/50 bg-teal-500/10 text-teal-600 dark:text-teal-300",
+  补涨: "border-violet-500/50 bg-violet-500/10 text-violet-600 dark:text-violet-300",
+  首板: "border-zinc-400/50 bg-zinc-500/10 text-zinc-600 dark:text-zinc-300",
+  同步: "border-zinc-300/50 bg-zinc-500/5 text-zinc-500",
+  跟风: "border-zinc-300/50 bg-zinc-500/5 text-zinc-400",
+  滞涨: "border-zinc-300/50 bg-zinc-500/5 text-zinc-400",
+  断板: "border-zinc-300/50 bg-zinc-500/5 text-zinc-400",
+};
+
+export const TIER_STYLE: Record<string, string> = {
+  龙头博弈: "border-red-500/50 bg-red-500/10 text-red-600 dark:text-red-300",
+  趋势跟随: "border-sky-500/50 bg-sky-500/10 text-sky-600 dark:text-sky-300",
+  情绪低位: "border-amber-500/50 bg-amber-500/10 text-amber-600 dark:text-amber-300",
+};
+
+function Chip({ text, title, className }: { text: string; title?: string; className?: string }) {
+  return (
+    <span
+      title={title}
+      className={`rounded border px-1.5 py-0.5 text-[10px] ${className ?? "border-zinc-300 text-zinc-500 dark:border-zinc-700"}`}
+    >
+      {text}
+    </span>
+  );
+}
+
+export function PickCard({ item }: { item: DailyPickItem }) {
+  return (
+    <div className="mb-3 break-inside-avoid rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+      {/* 头：名称代码 + 现价 + 综合分 */}
+      <div className="flex items-baseline justify-between gap-2">
+        <div>
+          <span className="text-sm font-semibold">{item.name ?? "--"}</span>
+          <span className="ml-1.5 font-mono text-[10px] text-zinc-400">{item.symbol}</span>
+        </div>
+        <div className="text-right">
+          <div className="font-mono text-base font-semibold tabular-nums">{fmt(item.price)}</div>
+          <div className={`font-mono text-[10px] tabular-nums ${pctColor(item.change_pct)}`}>{pctText(item.change_pct)}</div>
+        </div>
+      </div>
+
+      {/* 综合分 + 六维子评分条 */}
+      <div className="mt-2 flex items-center gap-2">
+        <span className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-xs font-semibold dark:bg-zinc-800" title="六维加权综合分（一票否决后）">
+          {item.score}
+        </span>
+        <div className="flex flex-1 gap-1">
+          {SUB_LABELS.map(([key, label]) => {
+            const v = item.sub_scores[key];
+            return (
+              <div key={key} className="flex-1" title={`${label}：${item.bases[key] ?? "--"}`}>
+                <div className="h-1 w-full overflow-hidden rounded bg-zinc-100 dark:bg-zinc-800">
+                  <div className="h-full rounded bg-sky-500/80" style={{ width: `${v ?? 50}%` }} />
+                </div>
+                <div className="mt-0.5 text-center text-[9px] text-zinc-400">{label}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 梯队地位 + 题材阶段 + 风险档位：联合研判（不只是五维） */}
+      {(item.echelon_role || item.theme || item.risk_tier) && (
+        <div className="mt-2 flex flex-wrap items-center gap-1">
+          {item.echelon_role && (
+            <Chip
+              text={item.echelon_role}
+              title={`梯队地位（Echelon Role）：${item.echelon_basis ?? ""}`}
+              className={ROLE_STYLE[item.echelon_role]}
+            />
+          )}
+          {item.theme && (
+            <Chip
+              text={`${item.theme}${item.theme_stage ? ` · ${item.theme_stage}` : ""}`}
+              title="所属题材与题材天梯阶段（启动/发酵/高潮/分歧/退潮）——同一个梯队角色在不同阶段价值不同"
+              className="border-zinc-300 text-zinc-600 dark:border-zinc-600 dark:text-zinc-300"
+            />
+          )}
+          {item.risk_tier && (
+            <Chip
+              text={item.risk_tier}
+              title={`风险档位（Risk Tier）：决定止损宽严与仓位保守程度。${item.exit_discipline?.note ?? ""}`}
+              className={TIER_STYLE[item.risk_tier]}
+            />
+          )}
+          {item.observation_only && (
+            <Chip
+              text="仅观察"
+              title="空仓闸门已触发：本条不给买入范围，仅供复盘与观察"
+              className="border-red-500/50 bg-red-500/10 text-red-600 dark:text-red-300"
+            />
+          )}
+        </div>
+      )}
+
+      {/* 买入范围（空仓闸门触发时撤除，不给出手依据） */}
+      {item.buy_range ? (
+        <div className="mt-2 rounded-lg bg-sky-500/5 px-2 py-1.5 text-[11px]" title={item.buy_range.basis}>
+          <span className="text-zinc-400">买入参考区间</span>{" "}
+          <span className="font-mono font-medium tabular-nums">
+            {fmt(item.buy_range.low)} – {fmt(item.buy_range.high)}
+          </span>
+        </div>
+      ) : (
+        <div className="mt-2 rounded-lg bg-red-500/5 px-2 py-1.5 text-[11px] text-red-500 dark:text-red-300">
+          空仓闸门已触发：本条不给出买入参考区间
+        </div>
+      )}
+
+      {/* 止损参考位与失效条件：出场纪律（freqtrade 的止损/跟踪止盈/ROI 分档 的 A 股映射） */}
+      {(item.stop_loss || (item.invalidations && item.invalidations.length > 0)) && (
+        <div className="mt-2 space-y-1 rounded-lg border border-zinc-100 p-2 text-[11px] dark:border-zinc-800">
+          {item.stop_loss && (
+            <div title={item.stop_loss.basis}>
+              <span className="text-zinc-400">止损参考</span>{" "}
+              <span className="font-mono tabular-nums text-red-500">
+                {fmt(item.stop_loss.price)}（-{item.stop_loss.pct}%）
+              </span>
+              {item.exit_discipline && (
+                <span className="ml-1.5 text-zinc-400" title={item.exit_discipline.disclaimer}>
+                  · 跟踪回撤 {item.exit_discipline.trailing_pct}%
+                  {item.exit_discipline.roi_ladder.length > 0 &&
+                    ` · 目标 ${item.exit_discipline.roi_ladder.map((r) => `+${r.gain_pct}%${r.action}`).join("/")}`}
+                </span>
+              )}
+            </div>
+          )}
+          {item.invalidations && item.invalidations.length > 0 && (
+            <div>
+              <span className="text-zinc-400">失效条件</span>
+              {item.invalidations.slice(0, 3).map((v) => (
+                <div key={v} className="text-zinc-500 dark:text-zinc-400">
+                  · {v}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 买入原因：各维度 basis 摘要（一票否决显式标红） */}
+      <div className="mt-2 space-y-0.5 text-[11px] leading-relaxed">
+        {SUB_LABELS.map(([key, label]) => {
+          const b = item.bases[key];
+          if (!b) return null;
+          return (
+            <div key={key} className="flex gap-1.5">
+              <span className="shrink-0 text-zinc-400">{label}</span>
+              <span className="text-zinc-600 dark:text-zinc-300">{b}</span>
+            </div>
+          );
+        })}
+        {item.vetoes.map((v) => (
+          <div key={v} className="text-red-500">
+            ⚠ {v}
+          </div>
+        ))}
+      </div>
+
+      {/* 关联消息 */}
+      {item.related_events.length > 0 && (
+        <div className="mt-2 border-t border-zinc-100 pt-1.5 text-[11px] dark:border-zinc-800/60">
+          <span className="text-zinc-400">关联消息：</span>
+          {item.related_events.map((e) => (
+            <div key={e} className="text-zinc-600 dark:text-zinc-300">
+              · {e}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 空仓闸门横幅：情绪转弱时主动提示规避（红线 3：只提示，不下指令） */
+export function StandAsideBanner({ gate }: { gate: StandAsideGate }) {
+  if (!gate.stand_aside) return null;
+  const strong = gate.level === "strong";
+  return (
+    <div
+      role="alert"
+      className={`shrink-0 rounded-lg border px-3 py-2 text-xs ${
+        strong
+          ? "border-red-500/50 bg-red-500/10 text-red-600 dark:text-red-300"
+          : "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-300"
+      }`}
+    >
+      <div className="font-medium">⚠ {gate.advice}</div>
+      <ul className="mt-1 space-y-0.5">
+        {gate.reasons.map((r) => (
+          <li key={r}>· {r}</li>
+        ))}
+      </ul>
+      {gate.disclaimer && <div className="mt-1 text-[10px] opacity-70">{gate.disclaimer}</div>}
+    </div>
+  );
+}

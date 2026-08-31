@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 
 import pytest
 from fastapi.testclient import TestClient
@@ -139,7 +138,7 @@ def test_events_api_lifecycle(monkeypatch: pytest.MonkeyPatch):
 
         monkeypatch.setattr(svc, "fetch_catalog", fake_catalog)
         client.app.state.theme_catalog = svc
-        asyncio.run(svc.sync_catalog())
+        client.portal.call(svc.sync_catalog)
 
         # 手动注册：方向抽取依赖目录名
         r = client.post("/api/events", json={"title": "长鑫 LPDDR6 全球首发量产", "source": "财联社"})
@@ -199,8 +198,8 @@ def test_events_for_symbol_api(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(svc, "fetch_catalog", fake_catalog)
         monkeypatch.setattr(svc, "fetch_members", fake_members)
         client.app.state.theme_catalog = svc
-        asyncio.run(svc.sync_catalog())
-        asyncio.run(svc.sync_members("990001.TI"))
+        client.portal.call(svc.sync_catalog)
+        client.portal.call(svc.sync_members, "990001.TI")
 
         # 事件 A：方向命中 600171 的归属题材（标题用变体，避免与前面用例指纹去重）
         r = client.post("/api/events", json={"title": "长鑫 LPDDR6 量产全面爬坡"})

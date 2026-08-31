@@ -22,6 +22,11 @@
 
 from __future__ import annotations
 
+#: 第一版五维权重（历史组合已持久化此表，复盘回溯时仍按它还原当时的口径）。
+#: **新六维权重由 `app.picks.regime.weights_for` 按炒作阶段提供**——
+#: Regime 是权重选择器而非评分维度：业绩驱动期基本面主导，业绩空窗期
+#: 情绪与题材梯队主导（CONTEXT.md: Speculation Regime）。新增维度 echelon
+#: 见 `app.picks.echelon`（个股在题材天梯中的地位，与题材阶段联合读取）。
 WEIGHTS = {
     "sentiment": 0.20,   # 情绪面：市场阶段 + 题材合力
     "news": 0.25,        # 消息面：EventCard 方向命中（利好/利空/强度）
@@ -41,6 +46,9 @@ REASON_CATEGORIES = {
     "news_gap": "消息卡顿（关键消息未及时入库）",
     "logic_failed": "入选逻辑失效（技术/资金依据证伪）",
     "gone_well": "走势健康（符合或超预期）",
+    "entry_bad": "买点不对（未按买入范围介入，追高被套）",
+    "sentiment_misread": "情绪误判（持有期市场相位转弱）",
+    "missed": "未介入（全天价格高于买入区间，踏空而非失误）",
 }
 
 
@@ -248,3 +256,85 @@ def classify_review(excess_pct: float, note_hint: str | None = None) -> tuple[st
             cat = note_hint if note_hint in REASON_CATEGORIES else "logic_failed"
         return "bad", REASON_CATEGORIES[cat]
     return "flat", "与大盘同步，无显著超额"
+
+
+def review_entry_quality(
+    *,
+    buy_range: dict | None,
+    day_open: float | None,
+    day_high: float | None,
+    day_low: float | None,
+    day_close: float | None,
+) -> dict:
+    """买点质量：把「选错了」与「选对了但买点不对」分开。
+
+    复盘最有价值的区分正是这一条——同一只票，按买入范围介入是赚的、追高介入
+    是亏的，前者是执行问题，后者才是选股问题。混在一起统计会污染迭代方向。
+
+    :return: {filled, entry_cost, entry_pnl_pct, open_pnl_pct, advantage_pct, basis}
+             filled=None 表示不可评（无买入范围或行情缺失）
+    """
+    if not buy_range or None in (day_open, day_high, day_low, day_close):
+        return {
+            "filled": None,
+            "entry_cost": None,
+            "entry_pnl_pct": None,
+            "open_pnl_pct": None,
+            "advantage_pct": None,
+            "basis": "无买入范围（空仓闸门撤除）或行情缺失 → 买点质量不可评",
+        }
+    high_edge = float(buy_range["high"])
+    if day_low > high_edge:
+        return {
+            "filled": False,
+            "entry_cost": None,
+            "entry_pnl_pct": None,
+            "open_pnl_pct": round((day_close - day_open) / day_open * 100, 2) if day_open else None,
+            "advantage_pct": None,
+            "basis": f"全天最低 {day_low} 高于买入区间上沿 {high_edge} → 按纪律未介入（踏空）",
+        }
+    # 可介入：开盘在区间内按开盘价，否则按上沿（保守成本）
+    cost = day_open if day_open <= high_edge else high_edge
+    entry_pnl = round((day_close - cost) / cost * 100, 2) if cost else None
+    open_pnl = round((day_close - day_open) / day_open * 100, 2) if day_open else None
+    return {
+        "filled": True,
+        "entry_cost": round(cost, 2),
+        "entry_pnl_pct": entry_pnl,
+        "open_pnl_pct": open_pnl,
+        "advantage_pct": round(entry_pnl - open_pnl, 2) if (entry_pnl is not None and open_pnl is not None) else None,
+        "basis": f"按买入范围介入成本 {cost}（区间上沿 {high_edge}），收益 {entry_pnl}%；"
+        f"开盘追入收益 {open_pnl}%",
+    }
+
+
+def classify_failure(
+    *,
+    excess_pct: float,
+    entry: dict,
+    market_phase: str | None = None,
+) -> tuple[str, str]:
+    """走坏原因归类（第一版规则；LLM 接入后按维度增强，接口不变）。
+
+    判定优先级：踏空 → 买点不对 → 情绪误判 → 逻辑失效。
+    区分依据是**可观测的事实**，不是猜测：
+    - 买点不对：盘中冲高超过买入区间上沿 3% 以上，收盘却回落至区间下方（典型追高即套）
+    - 情绪误判：持有期市场相位处于退潮/冰点（个股再强也难逆势）
+    """
+    if entry.get("filled") is False:
+        return "missed", f"{entry['basis']}；非选股失误，属踏空"
+    if excess_pct <= -2:
+        if entry.get("filled") and (entry.get("advantage_pct") or 0) > 1.5:
+            return (
+                "entry_bad",
+                f"按买入范围介入优于追高 {entry['advantage_pct']}pct —— 属买点执行问题，非选股逻辑失效",
+            )
+        if market_phase in ("退潮", "冰点"):
+            return (
+                "sentiment_misread",
+                f"持有期市场相位「{market_phase}」，系统性下行压过个股逻辑 —— 属情绪误判",
+            )
+        return "logic_failed", "超额显著为负且无踏空/买点/情绪解释，视为入选逻辑失效"
+    if excess_pct >= 2:
+        return "gone_well", "超额为正且显著，走势健康"
+    return "gone_well", "与大盘同步，无显著超额"

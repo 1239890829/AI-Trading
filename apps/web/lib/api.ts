@@ -411,18 +411,61 @@ export async function deleteRealPosition(symbol: string): Promise<void> {
 
 /** ===== 每日精选（CONTEXT.md: Daily Picks 域；≤5 只，收盘定次日+换股门槛 15 分）===== */
 
+/** 止损参考位（CONTEXT.md: Risk Tier 的出场纪律；不是操作指令） */
+export interface StopLossRef {
+  pct: number;
+  price: number;
+  basis: string;
+}
+
+/** 出场纪律参考（借鉴 freqtrade 的 trailing stop / ROI table，参数按 A 股重设） */
+export interface ExitDiscipline {
+  trailing_pct: number;
+  roi_ladder: { gain_pct: number; action: string }[];
+  note: string;
+  disclaimer: string;
+}
+
 export interface DailyPickItem {
   symbol: string;
   name: string | null;
   price: number | null;
   change_pct: number | null;
   score: number;
-  sub_scores: Record<string, number>; // sentiment/news/tech/fundamental/capital
+  sub_scores: Record<string, number>; // sentiment/news/tech/fundamental/capital/echelon
   bases: Record<string, string>;      // 各维度可解释依据
   vetoes: string[];
-  buy_range: { low: number; high: number; basis: string };
+  buy_range: { low: number; high: number; basis: string } | null; // 空仓闸门触发时为 null
   themes: string[];
   related_events: string[];
+  // --- 联合研判（梯队地位 × 题材阶段）与风险档位 ---
+  echelon_role?: string | null;   // 空间板/龙头/中军/反包/领涨/补涨/首板/同步/跟风/滞涨/断板
+  echelon_basis?: string;
+  theme?: string | null;
+  theme_stage?: string | null;    // 启动/发酵/高潮/分歧/退潮
+  risk_tier?: string | null;      // 龙头博弈/趋势跟随/情绪低位
+  stop_loss?: StopLossRef | null;
+  exit_discipline?: ExitDiscipline | null;
+  invalidations?: string[];
+  observation_only?: boolean;     // 空仓闸门触发：仅观察，不给买入范围
+}
+
+/** 炒作阶段（CONTEXT.md: Speculation Regime）—— 六维权重的选择器 */
+export interface PickRegime {
+  regime: string;
+  weights: Record<string, number>;
+  basis: string;
+  calendar_window: boolean;
+  earnings_ratio: number | null;
+}
+
+/** 空仓闸门（CONTEXT.md: Stand-aside Gate） */
+export interface StandAsideGate {
+  stand_aside: boolean;
+  level: "none" | "mild" | "strong";
+  reasons: string[];
+  advice: string;
+  disclaimer?: string;
 }
 
 export interface DailyPicksPayload {
@@ -431,6 +474,15 @@ export interface DailyPicksPayload {
   stale?: boolean;
   replaced?: { out: string; in: string; delta: number }[];
   note?: string;
+  meta?: {
+    weights: Record<string, number>;
+    regime?: PickRegime;
+    gate?: StandAsideGate;
+    market_phase?: string | null;
+    candidate_count?: number;
+    limit_up_count?: number;
+    market_max_boards?: number;
+  } | null;
 }
 
 export interface PickReviewRow {

@@ -117,3 +117,109 @@ def test_classify_review_reason_categories_complete():
 
     for cat in ("event_expired", "board_receding", "market_drag", "data_issue", "news_gap", "logic_failed", "gone_well"):
         assert cat in REASON_CATEGORIES
+
+
+# ---------------------------------------------------------------- 买点质量与失败归因
+
+
+def _entry(**kw):
+    from app.picks.engine import review_entry_quality
+
+    defaults = dict(
+        buy_range={"low": 9.7, "high": 10.3},
+        day_open=10.0,
+        day_high=11.0,
+        day_low=9.5,
+        day_close=10.8,
+    )
+    defaults.update(kw)
+    return review_entry_quality(**defaults)
+
+
+def test_entry_quality_filled_at_open_when_inside_range():
+    """开盘在买入区间内 → 成本按开盘价，介入成功。"""
+    e = _entry()
+    assert e["filled"] is True
+    assert e["entry_cost"] == 10.0
+    assert e["entry_pnl_pct"] == 8.0
+    assert e["open_pnl_pct"] == 8.0
+    assert e["advantage_pct"] == 0.0
+
+
+def test_entry_quality_cost_capped_at_range_high():
+    """高开越过区间上沿 → 按纪律只按上沿计价，不美化收益。
+
+    本例：高开 11.0 后回落收 10.5。追开盘亏 4.55%，按上沿 10.3 计入则盈 1.94%
+    ——差额正是"不追高"的价值，advantage 为正。
+    """
+    e = _entry(day_open=11.0, day_close=10.5)
+    assert e["entry_cost"] == 10.3
+    assert e["open_pnl_pct"] == -4.55
+    assert e["entry_pnl_pct"] == 1.94
+    assert e["advantage_pct"] > 0  # 纪律介入优于追高
+
+
+def test_entry_quality_not_filled_is_missed_not_failure():
+    """全天高于买入区间上沿 → 未介入，属踏空而非选股失误。"""
+    e = _entry(day_open=11.0, day_high=11.5, day_low=10.5, day_close=11.2)
+    assert e["filled"] is False
+    assert "未介入" in e["basis"]
+    from app.picks.engine import classify_failure
+
+    cat, note = classify_failure(excess_pct=5.0, entry=e)
+    assert cat == "missed"
+    assert "踏空" in note
+
+
+def test_entry_quality_unknown_without_buy_range():
+    """空仓闸门撤除买入范围 / 行情缺失 → 不可评（不硬凑一个结论）。"""
+    e = _entry(buy_range=None)
+    assert e["filled"] is None
+    assert "不可评" in e["basis"]
+
+
+def test_classify_failure_separates_entry_problem_from_logic_failure():
+    """按买点介入明显优于追高 → 归「买点不对」，不是选股逻辑失效。"""
+    from app.picks.engine import classify_failure
+
+    # 冲高回落：盘中冲到 11.5，收盘跌回 9.6（低于开盘 10.5）
+    e = _entry(
+        buy_range={"low": 9.7, "high": 10.3},
+        day_open=10.5,
+        day_high=11.5,
+        day_low=9.4,
+        day_close=9.6,
+    )
+    cat, note = classify_failure(excess_pct=-4.0, entry=e)
+    assert cat == "entry_bad"
+    assert "买点" in note
+
+
+def test_classify_failure_sentiment_misread_when_phase_weak():
+    """持有期市场相位退潮 → 归情绪误判（个股再强也难逆势）。"""
+    from app.picks.engine import classify_failure
+
+    # 开盘落在买入区间内（成本=开盘，advantage=0 → 不会被归为买点问题），
+    # 且最低价在区间内才算介入；此时走坏只可能是情绪或逻辑问题
+    e = _entry(day_open=10.0, day_high=10.2, day_low=9.5, day_close=9.2)
+    assert e["filled"] is True
+    assert e["advantage_pct"] == 0.0
+    cat, note = classify_failure(excess_pct=-5.0, entry=e, market_phase="退潮")
+    assert cat == "sentiment_misread"
+    assert "退潮" in note
+
+
+def test_classify_failure_falls_back_to_logic_failed():
+    from app.picks.engine import classify_failure
+
+    e = _entry(day_open=10.0, day_high=10.2, day_low=9.0, day_close=9.2)
+    cat, _ = classify_failure(excess_pct=-5.0, entry=e, market_phase="发酵")
+    assert cat == "logic_failed"
+
+
+def test_classify_failure_good_and_flat():
+    from app.picks.engine import classify_failure
+
+    e = _entry()
+    assert classify_failure(excess_pct=3.0, entry=e)[0] == "gone_well"
+    assert classify_failure(excess_pct=0.5, entry=e)[0] == "gone_well"

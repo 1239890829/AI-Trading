@@ -1,7 +1,11 @@
 # GitHub Stars「trading」分组深度分析报告
 
-> 生成：2026-08-30 · 分析对象：GitHub 用户 `1239890829` 的 Stars（共 23 个）
-> 说明：GitHub Stars Lists 无公开 API、页面动态渲染探测不稳定，「trading」分组按**交易相关性**划定为 13 个仓库（crypto 2 个单独备查，非交易类 8 个一行带过）。若与实际列表成员有出入，逐仓库结论按仓库本身成立，不受分组方式影响。
+> 生成：2026-08-30 · **复核更新：2026-08-31（按真实 star 分组精确校正）**
+> 分析对象：**GitHub 用户 `1239890829` 的 star 分组 `trading`——GraphQL `viewer.lists` 精确拉取，共 14 个仓库**
+> 2026-08-31 复核结论：首版因 GitHub Star Lists 无 REST API 而改用"交易相关性"人工划定 13 个，
+> 与真实分组相比 **漏 3 个**（freqtrade 53.9k / last30days-skill 60.7k / PolymarketBTC15mAssistant 1.0k）、
+> **误收 2 个**（a-share-heatmap、FinceptTerminal 不在该分组）。漏掉的三者恰恰覆盖了首版缺失的
+> 三块能力：**出场纪律**、**消息面扫描**、**另类市场打法**——见下表第 14–16 行。结论按仓库本身成立，不受分组方式影响。
 > 对标基准：本项目 AShare AI Trader 现状（四源行情链 / 模拟撮合 / 题材梯队 / 情绪引擎 / 复盘 Agent / 新题材预判 / 做T信号+分钟回测底座 / 266 测试）。红线不变：禁实盘接入、禁确定性结论。
 
 ---
@@ -23,9 +27,11 @@
 | 11 | Fincept-Corporation/FinceptTerminal | 30.8k | 暂不采用 | AGPL 终端产品，功能与 workbench 重叠，引入≈重写 |
 | 12 | quantskills/quantskills | 2.2k | 暂不采用（收录观察） | 量化 Skill 社区目录，可当索引用 |
 | 13 | rosemarycox5334-debug/AlphaMaster | 553 | 暂不采用 | MT5/加密强化学习因子挖掘，域不符 |
+| 14 ✅ | freqtrade/freqtrade | 53.9k | **已择优落地（出场纪律）** | 值钱的不是选币而是**出场**：止损/跟踪止盈/ROI 分档/仓位管理/dry-run。已映射为本项目「风险档位 + 止损参考位 + 失效条件」（`app/picks/risk.py`，参数按 A 股重设）——这是"即使不涨停也能盈利"在规则层面的唯一落点 |
+| 15 ✅ | mvanhorn/last30days-skill | 60.7k | **方法论内化（消息面）** | 跨 Reddit/X/YouTube/HN/Polymarket 的"近 30 天"主题研究范式。不引其依赖，把**滚动 30 天窗口 + 衰减**思想用在自有事件流上（EventCard 半衰期已是同构设计），Polymarket 源留待阶段 B |
+| 16 | FrondEnt/PolymarketBTC15mAssistant | 1.0k | 观察（另类市场） | 预测市场隐含概率可作宏观/地缘事件的**前瞻信号**——这是"美股期货等其他市场打法"里唯一对我们有信息增量的部分；但事件→A 股题材映射需规则维护，且国内可访问性待验证，**暂不接入** |
 
-**加密货币（暂缓备查，2）**：freqtrade/freqtrade（★53.8k，加密交易 bot）、FrondEnt/PolymarketBTC15mAssistant（★993，Polymarket BTC 助手）。
-**非交易类（8）**：FreeToken、LongHorizon-Harness、last30days-skill、agency-agents、Cyber-Lobster-Soul、edict、autoresearch、Agent-Reach——AI/Agent 通用工具，不在本轮范围。
+**非交易类（原 8 个中的 7 个，已从 trading 分组中剔除 last30days-skill）**：FreeToken、LongHorizon-Harness、agency-agents、Cyber-Lobster-Soul、edict、autoresearch、Agent-Reach——AI/Agent 通用工具，不在本轮范围。
 
 ---
 
