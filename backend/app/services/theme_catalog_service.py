@@ -137,6 +137,64 @@ def reconcile(
     }
 
 
+def aggregate_hot_themes(
+    stocks: list[dict],
+    official_by_symbol: dict[str, list[dict]],
+) -> dict:
+    """热股榜 × 官方成分 → 题材级人气聚合（纯函数，B1 热股榜消费端）。
+
+    归属口径 = 官方成分反查（linkage-design L3），不用关键词猜题材。
+    - 题材热度 = 题材内热股 heat 合计；热股家数与榜内最高排名成员一并给出；
+    - rank_change 沿用榜内最高排名成员的值——不单造「题材排名变化」指标，保持可解释；
+    - 无官方归属的热股只留在 stocks 列表（附空 themes），不参与题材聚合（诚实口径）。
+
+    :param stocks: provider.get_hot_stock_list 归一化行（rank/symbol/name/heat/rank_change/ts）
+    :param official_by_symbol: symbol → [{theme_code, theme_name, source}]（get_official_for_symbol）
+    """
+    stock_rows: list[dict] = []
+    theme_acc: dict[str, dict] = {}
+    for s in stocks:
+        officials = official_by_symbol.get(s["symbol"]) or []
+        theme_names = [o["theme_name"] for o in officials]
+        row = {
+            "rank": s["rank"],
+            "symbol": s["symbol"],
+            "name": s.get("name"),
+            "heat": s.get("heat"),
+            "rank_change": s.get("rank_change"),
+            "themes": theme_names,
+        }
+        stock_rows.append(row)
+        for o in officials:
+            acc = theme_acc.setdefault(
+                o["theme_name"],
+                {"theme": o["theme_name"], "theme_code": o.get("theme_code"),
+                 "heat": 0.0, "hot_count": 0, "best": None},
+            )
+            acc["heat"] += s.get("heat") or 0.0
+            acc["hot_count"] += 1
+            if acc["best"] is None or s["rank"] < acc["best"]["rank"]:
+                acc["best"] = {
+                    "symbol": s["symbol"], "name": s.get("name"),
+                    "rank": s["rank"], "rank_change": s.get("rank_change"),
+                }
+    themes = []
+    for acc in theme_acc.values():
+        best = acc.pop("best") or {}
+        acc["best"] = best
+        acc["basis"] = (
+            f"{acc['hot_count']} 只官方成分热股人气合计；榜内最高"
+            f" {best.get('name') or best.get('symbol')} 第 {best.get('rank')} 名"
+        ) if best else ""
+        themes.append(acc)
+    themes.sort(key=lambda t: -t["heat"])
+    return {
+        "ts": next((s.get("ts") for s in stocks if s.get("ts")), None),
+        "stocks": stock_rows,
+        "themes": themes,
+    }
+
+
 def apply_overrides(
     members: list[dict],
     overrides: list[ThemeOverride],

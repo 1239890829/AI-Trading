@@ -28,11 +28,11 @@ uvicorn app.main:app --reload --port 8000
 # 前端（node_modules 已装）
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
-# 测试与门禁（每次改动全部跑，全绿才算完；当前基线：后端 441 / 前端 51）
-cd backend && .venv/bin/pytest                    # 441 用例
+# 测试与门禁（每次改动全部跑，全绿才算完；当前基线：后端 447 / 前端 52）
+cd backend && .venv/bin/pytest                    # 447 用例
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
 cd apps/web && npx eslint .                       # 0 error（24 warn 是挂账项，见 eslint.config.mjs 注释）
-cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 51 用例
+cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 52 用例
 cd backend && .venv/bin/python -m pyflakes app tests            # 0
 # 生产构建前必须先停 dev server（.next 冲突已踩两次）：
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
@@ -43,7 +43,7 @@ CI（GitHub Actions）：后端 pytest+pyflakes、前端 tsc+eslint+vitest+build
 
 ## 2. 当前状态快照（2026-08-31，commit 310c70e）
 
-**441 后端测试 + 51 前端测试全绿 · 80 REST + 1 WS 端点 · 四源链 `ths→tencent→eastmoney→sina`**
+**447 后端测试 + 52 前端测试全绿 · 81 REST + 1 WS 端点 · 四源链 `ths→tencent→eastmoney→sina`**
 
 | 阶段 | 状态 |
 |---|---|
@@ -110,7 +110,9 @@ K 线（TDX 2 年分钟级底座）；分时（均价线+量比基线）；盘�
 | 事件复盘回写（E4：T+N 胜率回写事件权重） | 上线运行积累数据后 | 事件模板自校准 |
 
 ### 阶段 C · P1 功能项（无外部阻塞，按价值排）
-1. **B1 热股榜**（ths hot_stock_list）→ 题材卡人气热度+排名变化（plan-review P1-3，最快出效果）。
+1. ~~**B1 热股榜**（ths hot_stock_list）→ 题材卡人气热度+排名变化~~ ✅ 已完成（2026-08-31）：
+   `GET /api/themes/hot`（ths 24h 热股榜 × 官方成分反查聚合，60s 缓存）+ /themes 页头人气榜条
+   + 题材卡「人气」徽标（heat 合计 + 榜内最高成员的 rank_change，basis 可解释）。
 2. **B4 seal_nextday 交叉验证晋级率**（P1-4，数据源自证闭环）。
 3. **新闻/公告事件点画上 K 线**（P1-8；新闻+摘要+事件数据已就绪）。
 4. **题材指数与板块内资金合力**（P1-5 残留：成分表已建，指数计算未做）。

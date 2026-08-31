@@ -1,6 +1,6 @@
 # REST API
 
-Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**80 个端点**（2026-08-31 与代码同步）。
+Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**81 个端点**（2026-08-31 与代码同步）。
 
 统一响应：`{"data": ..., "meta": {...}}`（Envelope[T]，meta 含 `provider / is_realtime / is_stale / last_success_refresh / generated_at`）。
 数据源失败返回 **HTTP 502**（前端显示错误态，绝不降级伪造）；错误统一契约 `{detail, code}`。
@@ -100,6 +100,7 @@ Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**80 个端点**（2026-
 | GET | `/api/themes/catalog/{code}/members?refresh=` | 官方成分快照（当前成分）；缺失/超 TTL 懒同步 |
 | POST | `/api/themes/sync` | 触发同步（写鉴权）：目录 + 可选成分 + 过期补齐 |
 | GET | `/api/themes/reconciliation?date=` | 涨停归因 × 官方成分校验：归因冲突 + 目录外题材 |
+| GET | `/api/themes/hot?limit=30` | 题材人气（B1）：ths 热股 24h 榜 × 官方成分反查聚合（heat 合计/热股家数/榜内最高成员），60s 缓存 |
 
 归属置信度分层与纠错机制见 docs/linkage-design.md §3.2-§3.4。
 

@@ -1,6 +1,6 @@
 /** 格式化工具测试：空值/边界/单位换算/红涨绿跌语义。 */
 import { describe, expect, it } from "vitest";
-import { fmt, fmtAmount, fmtVolume, parseNum, pctColor, pctText, qualityLabel, sourceLabel, timeText } from "./format";
+import { fmt, fmtAmount, fmtHeat, fmtVolume, parseNum, pctColor, pctText, qualityLabel, sourceLabel, timeText } from "./format";
 
 describe("fmt", () => {
   it("null/undefined/NaN → --", () => {
@@ -30,6 +30,16 @@ describe("fmtAmount", () => {
 describe("fmtVolume", () => {
   it("converts shares to lots", () => {
     expect(fmtVolume(83880000)).toBe("838,800");
+  });
+});
+
+describe("fmtHeat", () => {
+  it("compacts heat counts with 万/亿 (ths 人气口径)", () => {
+    // 真实样本：2026-08-31 实抓 榜首 heat="6002184"（接口为字符串，后端已转数值）
+    expect(fmtHeat(6002184)).toBe("600.2万");
+    expect(fmtHeat(1.2e8)).toBe("1.20亿");
+    expect(fmtHeat(999)).toBe("999");
+    expect(fmtHeat(null)).toBe("--");
   });
 });
 

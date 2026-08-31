@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
+import { fmt, fmtAmount, fmtHeat, pctColor, pctText } from "@/lib/format";
+import type { HotTheme } from "@/lib/api";
 import { workbenchUrl } from "@/lib/routing";
 import type { ThemeCard as ThemeCardType } from "@/types/market";
 
@@ -80,6 +81,16 @@ function Badge({ className, children, title }: { className?: string; children: R
     >
       {children}
     </span>
+  );
+}
+
+/** 热榜排名变化：↑红 / ↓绿 / —持平（红涨绿跌口径）。 */
+export function RankDelta({ v }: { v: number | null | undefined }) {
+  if (v === null || v === undefined || v === 0) return <span className="text-zinc-400">—</span>;
+  return v > 0 ? (
+    <span className="text-rose-600 dark:text-rose-400">↑{Math.abs(v)}</span>
+  ) : (
+    <span className="text-emerald-600 dark:text-emerald-400">↓{Math.abs(v)}</span>
   );
 }
 
@@ -170,10 +181,12 @@ export function ThemeCardView({
   card,
   rank,
   tradeDate,
+  hot,
 }: {
   card: ThemeCardType;
   rank: number;
   tradeDate?: string;
+  hot?: HotTheme | null;
 }) {
   const p = card.performance;
   const board = card.board;
@@ -226,6 +239,21 @@ export function ThemeCardView({
         <Badge className={STAGE_STYLE[card.stage]} title={card.stage_basis.join("；") || undefined}>
           {card.stage}
         </Badge>
+
+        {/* 题材人气（B1）：官方成分热股人气合计，ths 24 小时榜口径（估算数据）；失败静默不显示 */}
+        {hot && (
+          <Badge
+            className="border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300"
+            title={hot.basis ? `${hot.basis}（ths 热股榜 24 小时口径，人气为估算数据）` : "ths 热股榜（估算数据）"}
+          >
+            人气 {fmtHeat(hot.heat)} · {hot.hot_count} 只
+            {hot.best && (
+              <span className="ml-1 inline-flex items-center gap-0.5">
+                <RankDelta v={hot.best.rank_change} />
+              </span>
+            )}
+          </Badge>
+        )}
 
         <div className="flex-1" />
         <div className="text-right">

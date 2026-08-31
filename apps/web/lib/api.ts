@@ -487,6 +487,37 @@ export async function getThemes(opts?: {
   return (await getJson<ThemeBoardPayload>(`/api/themes${qs}`, 60_000)).data;
 }
 
+/** ---------------------------------------------------------------- 题材人气（B1 热股榜） */
+
+export interface HotStock {
+  rank: number;
+  symbol: string;
+  name: string | null;
+  heat: number | null;
+  rank_change: number | null;
+  themes: string[];
+}
+
+export interface HotTheme {
+  theme: string;
+  theme_code: string | null;
+  heat: number;
+  hot_count: number;
+  best: { symbol: string; name: string | null; rank: number; rank_change: number | null } | null;
+  basis: string;
+}
+
+export interface ThemesHotPayload {
+  ts: string | null;
+  stocks: HotStock[];
+  themes: HotTheme[];
+}
+
+/** ths 热股榜 × 官方成分聚合的题材人气（24 小时榜，后端缓存 60s；人气为估算数据）。 */
+export async function getThemesHot(limit = 30): Promise<ThemesHotPayload> {
+  return (await getJson<ThemesHotPayload>(`/api/themes/hot?limit=${limit}`, 15_000)).data;
+}
+
 export async function searchSymbols(q: string): Promise<SymbolSearchItem[]> {
   return (await getJson<SymbolSearchItem[]>(`/api/search?q=${encodeURIComponent(q)}`)).data;
 }

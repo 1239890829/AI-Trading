@@ -1,9 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { ThemeCardView } from "@/components/theme-card";
-import { getThemes } from "@/lib/api";
+import { RankDelta, ThemeCardView } from "@/components/theme-card";
+import { getThemes, getThemesHot } from "@/lib/api";
+import { fmtHeat, timeText } from "@/lib/format";
+import { workbenchUrl } from "@/lib/routing";
+import type { ThemesHotPayload } from "@/lib/api";
 import type { ThemeBoardPayload } from "@/types/market";
 
 /**
@@ -54,6 +58,8 @@ export default function ThemesPage() {
     return v ? Number(v) : 2;
   });
   const [showCaveats, setShowCaveats] = useState(false);
+  // 题材人气（B1 热股榜）：best-effort 增强，拉取失败静默降级（看板主体不依赖它）
+  const [hot, setHot] = useState<ThemesHotPayload | null>(null);
   // 聚焦题材（L4 联动：详情页题材 chip → /themes?focus=名称）
   const [focus, setFocus] = useState(searchParams.get("focus") ?? "");
 
@@ -84,6 +90,10 @@ export default function ThemesPage() {
     // 首屏必须带上 URL 里的 date——此前裸 load() 只用默认日期，
     // /themes?date=2026-08-28 打开时实际取的是"今天"（盘前为降级数据）。
     void load(date || undefined);
+    // 人气榜独立拉取（实时口径，不看 date 参数——历史日期没有人气数据）
+    getThemesHot()
+      .then(setHot)
+      .catch(() => setHot(null));
     // 仅在挂载时拉一次；后续筛选由各自的 onChange 触发
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -126,6 +136,9 @@ export default function ThemesPage() {
   };
 
   const broken = useMemo(() => data?.broken_ladder ?? [], [data]);
+
+  /** 题材名 → 人气聚合（官方成分口径，与卡片题材名精确匹配；对不上就不显示徽标） */
+  const hotByTheme = useMemo(() => new Map((hot?.themes ?? []).map((t) => [t.theme, t])), [hot]);
 
   /** 聚焦过滤：题材名精确/包含 + 原始归因标签匹配（官方成分名与归因串口径可能不同） */
   const visibleThemes = useMemo(() => {
@@ -231,6 +244,33 @@ export default function ThemesPage() {
         分级：{TIER_LEGEND}
       </p>
 
+      {/* ── 人气榜条（B1）：ths 热股 24 小时榜 Top10，点击跳详情；失败静默不显示 ── */}
+      {hot && hot.stocks.length > 0 && (
+        <div
+          className="mb-3 flex shrink-0 items-center gap-x-3 gap-y-1 overflow-x-auto rounded-lg border border-zinc-200 px-3 py-1.5 dark:border-zinc-800"
+          title="同花顺热股榜（24 小时口径，人气为估算数据）；题材归属为官方成分反查"
+        >
+          <span className="shrink-0 text-[11px] text-zinc-400">人气榜</span>
+          {hot.stocks.slice(0, 10).map((s) => (
+            <Link
+              key={s.symbol}
+              href={workbenchUrl(s.symbol)}
+              className="flex shrink-0 items-center gap-1 text-xs hover:text-rose-600 dark:hover:text-rose-400"
+              title={s.themes.length ? `官方题材：${s.themes.join("、")}` : "无官方题材归属"}
+            >
+              <span className="font-mono text-zinc-400">#{s.rank}</span>
+              <span className="text-zinc-700 dark:text-zinc-200">{s.name ?? s.symbol}</span>
+              <span className="font-mono tabular-nums text-zinc-400">{fmtHeat(s.heat)}</span>
+              <RankDelta v={s.rank_change} />
+            </Link>
+          ))}
+          <div className="flex-1" />
+          <span className="shrink-0 font-mono text-[10px] text-zinc-300 dark:text-zinc-600">
+            同花顺 {timeText(hot.ts)}
+          </span>
+        </div>
+      )}
+
       {error && (
         <div className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
           题材看板加载失败：{error}
@@ -267,7 +307,13 @@ export default function ThemesPage() {
       <div className="min-h-0 flex-1 overflow-y-auto pr-1">
         <div className={`space-y-3 ${loading && data ? "opacity-60 transition-opacity" : ""}`}>
           {visibleThemes.map((c, i) => (
-            <ThemeCardView key={c.theme} card={c} rank={i + 1} tradeDate={data?.trade_date ?? ""} />
+            <ThemeCardView
+              key={c.theme}
+              card={c}
+              rank={i + 1}
+              tradeDate={data?.trade_date ?? ""}
+              hot={hotByTheme.get(c.theme)}
+            />
           ))}
         </div>
 

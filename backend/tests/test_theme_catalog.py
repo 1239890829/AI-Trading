@@ -393,3 +393,145 @@ def test_reconciliation_without_date_resolves_trade_date(monkeypatch: pytest.Mon
     assert r.status_code == 200
     assert isinstance(seen["date"], date), "池拉取收到的是解析后的交易日"
     assert r.json()["data"]["pool_size"] == 1
+
+
+# ------------------------------------------------- B1 热股榜：题材人气聚合
+
+
+def test_ths_hot_stock_list_parses_real_payload(monkeypatch: pytest.MonkeyPatch):
+    """provider 归一化（fixture 取自 2026-08-31 实抓）：heat 是字符串数字，rank_change 整数。"""
+    from app.data_providers.ths import ThsFuyaoProvider
+
+    real = {
+        "timestamp": 1788147857073,
+        "item": [
+            {"thscode": "000560.SZ", "ticker": "000560", "name": "我爱我家",
+             "rank": 1, "heat": "6002184", "rank_change": 0, "rank_trend": "flat"},
+            {"thscode": "600722.SH", "ticker": "600722", "name": "金牛化工",
+             "rank": 2, "heat": "4487024", "rank_change": 1, "rank_trend": "up"},
+            {"thscode": "x.SH", "ticker": "ABC", "name": "坏代码",
+             "rank": 3, "heat": "1", "rank_change": 0, "rank_trend": "flat"},
+        ],
+    }
+
+    async def fake_get(self, path, params=None):
+        return real
+
+    monkeypatch.setattr(ThsFuyaoProvider, "_get", fake_get)
+    rows = asyncio.run(ThsFuyaoProvider(api_key="k").get_hot_stock_list("day"))
+
+    assert [r["symbol"] for r in rows] == ["000560", "600722"], "坏代码剔除"
+    assert rows[0]["heat"] == 6002184.0, "heat 字符串 → 数值（真实接口是字符串）"
+    assert rows[1]["rank_change"] == 1
+    assert rows[0]["ts"] is not None and rows[0]["source"] == "ths"
+
+
+def test_ths_hot_stock_list_empty_raises(monkeypatch: pytest.MonkeyPatch):
+    from app.data_providers.eastmoney import ProviderError
+    from app.data_providers.ths import ThsFuyaoProvider
+
+    async def fake_get(self, path, params=None):
+        return {"timestamp": None, "item": []}
+
+    monkeypatch.setattr(ThsFuyaoProvider, "_get", fake_get)
+    with pytest.raises(ProviderError):
+        asyncio.run(ThsFuyaoProvider(api_key="k").get_hot_stock_list("day"))
+
+
+def test_aggregate_hot_themes_sums_and_picks_best():
+    from app.services.theme_catalog_service import aggregate_hot_themes
+
+    stocks = [
+        {"rank": 1, "symbol": "000560", "name": "我爱我家", "heat": 100.0, "rank_change": 0, "ts": "t1"},
+        {"rank": 5, "symbol": "000019", "name": "深粮控股", "heat": 50.0, "rank_change": 3, "ts": "t1"},
+        {"rank": 7, "symbol": "300001", "name": "无归属股", "heat": 30.0, "rank_change": -2, "ts": "t1"},
+    ]
+    official = {
+        "000560": [{"theme_code": "A", "theme_name": "物业管理", "source": "ths_official"}],
+        "000019": [{"theme_code": "B", "theme_name": "粮食概念", "source": "ths_official"}],
+        # 300001 无官方归属
+    }
+    r = aggregate_hot_themes(stocks, official)
+
+    assert r["ts"] == "t1"
+    assert r["stocks"][2]["themes"] == [], "无归属热股保留在 stocks，themes 为空"
+
+    assert len(r["themes"]) == 2
+    assert r["themes"][0]["theme"] == "物业管理" and r["themes"][0]["heat"] == 100.0, "按人气倒序"
+    assert r["themes"][0]["hot_count"] == 1
+    assert r["themes"][0]["best"]["symbol"] == "000560"
+    assert "第 1 名" in r["themes"][0]["basis"]
+
+
+def test_aggregate_hot_themes_best_is_highest_rank_member():
+    from app.services.theme_catalog_service import aggregate_hot_themes
+
+    stocks = [
+        {"rank": 2, "symbol": "000560", "name": "我爱我家", "heat": 80.0, "rank_change": -1, "ts": None},
+        {"rank": 9, "symbol": "000505", "name": "京粮控股", "heat": 60.0, "rank_change": 4, "ts": None},
+    ]
+    same = [{"theme_code": "B", "theme_name": "粮食概念", "source": "ths_official"}]
+    r = aggregate_hot_themes(stocks, {"000560": same, "000505": same})
+
+    t = r["themes"][0]
+    assert t["heat"] == 140.0 and t["hot_count"] == 2, "同题材 heat 合计"
+    assert t["best"]["rank"] == 2 and t["best"]["symbol"] == "000560", "best 取榜内排名最高成员"
+    assert t["best"]["rank_change"] == -1, "rank_change 沿用 best 成员，不造题材级指标"
+    assert "2 只官方成分热股人气合计" in t["basis"]
+
+
+def test_themes_hot_route(monkeypatch: pytest.MonkeyPatch):
+    """路由：ths 榜 × 官方成分 → 200；60s 缓存命中时 provider 只打一次。"""
+    calls = {"n": 0}
+
+    class ThsFuyaoProvider:
+        name = "ths"
+
+        async def get_hot_stock_list(self, period="day"):
+            calls["n"] += 1
+            return [
+                {"rank": 1, "symbol": "000019", "name": "深粮控股", "heat": 100.0,
+                 "rank_change": 2, "ts": "2026-08-31T03:00:00+00:00", "source": "ths"},
+                {"rank": 4, "symbol": "000505", "name": "京粮控股", "heat": 40.0,
+                 "rank_change": 0, "ts": "2026-08-31T03:00:00+00:00", "source": "ths"},
+            ]
+
+    class _FakeHub:
+        name = "fake"
+        provider = ThsFuyaoProvider()
+
+    svc = _svc()
+
+    async def fake_catalog():
+        return [{"code": "889902.TI", "name": "热股路由题材"}]
+
+    async def fake_members(code):
+        return [{"symbol": "000019", "name": "深粮控股"}]
+
+    monkeypatch.setattr(svc, "fetch_catalog", fake_catalog)
+    monkeypatch.setattr(svc, "fetch_members", fake_members)
+    asyncio.run(svc.sync_catalog())
+    asyncio.run(svc.sync_members("889902.TI"))
+
+    from fastapi import FastAPI
+
+    from app.api.routes import theme_catalog as route
+
+    a = FastAPI()
+    a.include_router(route.router, prefix="/api")
+    a.state.hub = _FakeHub()
+    a.state.theme_catalog = svc
+    with TestClient(a) as client:
+        r1 = client.get("/api/themes/hot")
+        client.get("/api/themes/hot")  # 命中缓存
+
+    assert r1.status_code == 200
+    data = r1.json()["data"]
+    theme_entry = next(t for t in data["themes"] if t["theme"] == "热股路由题材")
+    assert theme_entry["hot_count"] == 1 and theme_entry["heat"] == 100.0
+    assert theme_entry["best"]["symbol"] == "000019"
+    # 共享内存库：000019 可能被其他用例加进别的题材，断言锁成员关系不锁全量（账本教训）
+    assert "热股路由题材" in data["stocks"][0]["themes"]
+    assert "热股路由题材" not in data["stocks"][1]["themes"], "无官方归属的京粮控股不入题材聚合"
+    assert calls["n"] == 1, "第二次请求命中 60s 缓存，provider 不重打"
+    assert client.get("/api/themes/hot").status_code == 200

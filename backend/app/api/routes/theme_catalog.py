@@ -210,6 +210,48 @@ async def theme_sync(body: ThemeSyncIn, svc: ThemeCatalogService = Depends(get_s
     return {"data": {"catalog": catalog_count, "members": synced, "stale_synced": stale}, "meta": {}}
 
 
+@router.get("/themes/hot")
+async def themes_hot(
+    request: Request,
+    limit: int = Query(default=30, ge=5, le=50, description="热股榜截取条数（官方榜共 30 只）"),
+    svc: ThemeCatalogService = Depends(get_service),
+) -> dict:
+    """题材人气（B1 热股榜消费端）：ths 热股榜 × 官方成分反查 → 题材级人气聚合。
+
+    - stocks：热股原榜（24 小时榜，含 rank/heat/rank_change），附官方归属题材名；
+    - themes：按官方成分聚合（heat 合计 / 热股家数 / 榜内最高排名成员），按人气倒序；
+    - 归属只用官方成分反查，不用关键词猜；无归属热股仅出现在 stocks（诚实口径）。
+    人气为 ths 口径的估算数据，60s 缓存；ths 源不可用时 502，前端静默降级（看板不依赖它）。
+    """
+    from app.services.theme_catalog_service import aggregate_hot_themes
+    from app.services.theme_service import _pick_provider
+
+    cache = cache_on(request.app.state, "themes.hot", 60, maxsize=1)
+    hit, payload = cache.get(limit)
+    if hit:
+        return payload
+
+    hub = request.app.state.hub
+    ths = _pick_provider(hub.provider, "ThsFuyaoProvider")
+    if ths is None:
+        raise HTTPException(status_code=503, detail="同花顺源不可用，无热股榜数据")
+    try:
+        stocks = await ths.get_hot_stock_list("day")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"热股榜数据源失败：{exc}") from exc
+
+    stocks = stocks[:limit]
+    official_by_symbol: dict[str, list[dict]] = {}
+    for s in stocks:
+        try:
+            official_by_symbol[s["symbol"]] = svc.get_official_for_symbol(s["symbol"])
+        except Exception:  # noqa: BLE001 — 归属查询失败按无归属处理，不让目录问题拖垮热股榜
+            official_by_symbol[s["symbol"]] = []
+    payload = {"data": aggregate_hot_themes(stocks, official_by_symbol), "meta": {}}
+    cache.set(limit, payload)
+    return payload
+
+
 @router.get("/themes/reconciliation")
 async def theme_reconciliation(
     request: Request,

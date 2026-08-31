@@ -51,7 +51,7 @@
 | ~~5~~ | ~~paper_matcher 5s 轮询挂单~~ | ✅ 已完成（2026-08-30）：match_pending 返回剩余挂单数，无挂单 30s 降频、有挂单 5s 密集轮询 | — |
 | ~~6~~ | ~~全局仅一个模拟账户，无重置入口~~ | ✅ 已完成：`POST /api/paper/reset` + 交易页签重置按钮（二次确认） | — |
 | ~~7~~ | ~~error.tsx 全局错误边界未做~~ | ✅ 已完成（F1：error.tsx/global-error.tsx/loading.tsx） | — |
-| 8 | 🔶 `GET /api/themes/reconciliation` 不带 `?date=` 必 502 | 路由把 `trade_date=None` 直传 `ths.get_limit_up_pool`，`date_ms(None)` 崩 `'NoneType' object has no attribute 'year'`（2026-08-31 api-sweep 发现，既有 bug 非 P0-5 引入；带 `?date=` 正常）。修法：与其它路由一致先过 `_default_trade_date_async` | 待修（一行级） |
+| ~~8~~ | ~~`GET /api/themes/reconciliation` 不带 `?date=` 必 502~~ | ✅ 已修复（2026-08-31，commit fb833f1）：路由先过 `_default_trade_date_async` 再拉池；回归测试的桩复刻真实契约（None 即抛），不解析日期时必红 | — |
 
 ## 四、已确认的行为基线（勿回退）
 

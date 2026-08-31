@@ -29,6 +29,14 @@ export function fmtVolume(v: number | null | undefined): string {
   return fmt(v / 100, 0);
 }
 
+/** 热度值压缩展示（ths 人气为无量纲计数，如 6002184 → 600.2万）。 */
+export function fmtHeat(v: number | null | undefined): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "--";
+  if (Math.abs(v) >= 1e8) return `${fmt(v / 1e8, 2)}亿`;
+  if (Math.abs(v) >= 1e4) return `${fmt(v / 1e4, 1)}万`;
+  return fmt(v, 0);
+}
+
 export function pctColor(v: number | null | undefined): string {
   if (v === null || v === undefined || Number.isNaN(v) || v === 0) return "text-zinc-400";
   return v > 0 ? "text-up" : "text-down";
