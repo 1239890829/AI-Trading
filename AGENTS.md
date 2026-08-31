@@ -43,7 +43,7 @@ CI（GitHub Actions）：后端 pytest+pyflakes、前端 tsc+eslint+vitest+build
 
 ## 2. 当前状态快照（2026-08-31，实时行情修复后更新）
 
-**481 后端测试 + 77 前端测试全绿 · 90 REST + 1 WS 端点 · 四源链 `ths→tencent→eastmoney→sina`**
+**494 后端测试 + 77 前端测试全绿 · 96 REST + 1 WS 端点 · 四源链 `ths→tencent→eastmoney→sina`**
 
 本日已完成：P0-5 统一缓存层（`3315c3f`）→ reconciliation 502 修复（`fb833f1`）→
 B1 题材人气（`5abeabd`）→ B4 晋级率源自证（`f0d10b0`）→ P1-8 K线事件点（`ca15f74`）→
@@ -90,6 +90,10 @@ cum_amount/cum_volume 对指数给出 ~15 元荒谬值，该 series 拉爆 Y 轴
 日线回测（代码级防泄露 + mandate yaml 配置化 + meta.applied 来源分层）；历史回放（逐 bar 重算）。
 
 **AI 与事件**：盘后复盘 Agent（规则分析器+模型路由降级+方法论版本化+元结论迭代）；
+**每日精选**（`app/picks/`，grill-with-docs 澄清五决策）：≤5 只瀑布流卡片（/picks），
+五维规则版多角色评分（情绪/消息/技术/基本面/资金，TradingAgents 编排思想的规则落地），
+收盘定次日+换股门槛 15 分+盘中硬性失效；每日自动复盘（走坏原因七类归类）
++ 周末元结论建议调权（人工确认生效）；参考仓库择优见 docs/github-stars-trading-analysis.md；
 新题材预判（六维评分+D1 四问验证）；新闻/公告摘要（规则层，表格正文丢弃纪律）；
 **事件驱动选股 v1**（EventCard 规则抽取：来源分级/事实与解读/半衰期模板/方向词典+国产替代对冲；
 标的池=题材官方成分反查；market 页事件面板 + 详情页相关事件行）。
@@ -154,7 +158,7 @@ C2 全市场日 K dump（已被 TDX 替代）；"等 LLM 再做摘要"（规则�
 | **docs/plan-review.md** | 计划复盘：10 份方案逐项盘点 + P0/P1/P2 整合清单（§六）+ 遗留用户决策（§八） |
 | **docs/linkage-design.md** | 联动系统总纲：状态管理规范/路由规范/联动矩阵 L1-L10/题材三层归属/事件 SOP；切片标记在此 |
 | **docs/retro-and-gaps.md** | 唯一明细账本（§一功能欠缺 20 项全清 / §二布局 / §三技术债 / §四行为基线勿回退） |
-| docs/api.md | API 契约（90 端点，按域分节） |
+| docs/api.md | API 契约（96 端点，按域分节） |
 | docs/data-sources.md + data-source-comparison.md | 字段口径实测记录 + 四源能力选型（改 Provider 前必读） |
 | docs/sentiment-phase-review.md + sentiment.md | 情绪方法论调研 + 误判复盘 + 优化清单 |
 | docs/theme-prediction.md / review-agent.md / theme-sentiment-methodology.md | 预判 / 复盘 Agent / 题材情绪方法论 |

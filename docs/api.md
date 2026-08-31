@@ -177,3 +177,12 @@ Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**82 个端点**（2026-
 - `DELETE /api/real/trades/{id}` — 删除流水（修正历史）
 - `PATCH /api/real/positions/{symbol}` — 手动覆盖持仓数量/总成本（覆盖后以覆盖为准）
 - `DELETE /api/real/positions/{symbol}` — 整只删除（清空该标的流水与覆盖）
+
+## 每日精选（/api/picks/*，五维规则版多角色评分；≤5 只；收盘定次日+换股门槛 15 分）
+
+- `GET /api/picks/today` — 当日组合（含五维子分/basis/买入范围/关联消息）
+- `POST /api/picks/generate` — 生成/刷新组合（写鉴权；候选池=事件标的池∪涨停池∪热股榜 → 深评 24 → 精选 ≤5）
+- `GET /api/picks/history` — 历史组合（一致性回溯）
+- `POST /api/picks/review/generate` — 生成复盘（逐只超额 vs 上证 + 走坏原因归类）
+- `GET /api/picks/review?date=` — 复盘日志
+- `GET /api/picks/meta` — 走坏原因分布（周末调权建议输入）

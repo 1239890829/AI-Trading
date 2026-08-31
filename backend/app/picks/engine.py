@@ -1,0 +1,250 @@
+"""每日精选引擎（CONTEXT.md: Daily Picks；grill-with-docs 五决策落地）。
+
+设计原则：
+1. **规则版多角色**（TradingAgents 编排思想的规则落地）：五个"分析师"各自产出
+   0-100 子评分 + basis，合成器加权求和 + 一票否决。全程可解释，LLM 接入后
+   按维度逐个增强（子评分接口不变）。
+2. **参考仓库择优**（docs/github-stars-trading-analysis.md）：TradingAgents 的
+   角色分工与决策日志、ai-hedge-fund 的 mandate 解耦（已落地回测）、
+   daily_stock_analysis 的每日节奏；其"买卖点位/确定性结论"风格一律不引（红线 3）。
+3. **组合稳定**（换股门槛）：新候选综合分超出被换成员 ≥15 分才替换；
+   盘中仅硬性失效（炸板/跌停/黑天鹅）提前移除。
+4. 维度数据全部来自既有管线：情绪=情绪引擎+题材合力；消息=EventCard 方向命中；
+   技术=tech_score.score_stock（防飞刀口径）；基本面=财务摘要；资金=资金流+快照。
+
+参考仓库 → 本项目能力映射（择优依据，防"主观臆测选股"）：
+- 消息因子：EventCard 方向词典（本系统独有，外部仓库无 A 股事件结构化）
+- 技术指标：score_stock 六维卡（前端 analyze 同口径，带防飞刀）+ easy_tdx 缠论候选（远期）
+- 情绪：情绪引擎（防自指哨兵）——TradingAgents 无此概念，是 A 股特色维度
+- 资金：资金流净额+快照量能（daily_stock_analysis 用免费源做同类事的垂直版）
+- 基本面：估值/财务快照（ai-hedge-fund 的 fundamentals 分析师角色对应）
+"""
+
+from __future__ import annotations
+
+WEIGHTS = {
+    "sentiment": 0.20,   # 情绪面：市场阶段 + 题材合力
+    "news": 0.25,        # 消息面：EventCard 方向命中（利好/利空/强度）
+    "tech": 0.25,        # 技术面：score_stock 六维卡
+    "fundamental": 0.15, # 基本面：估值与盈利趋势
+    "capital": 0.15,     # 资金面：净流入/量能/龙虎榜
+}
+REPLACE_THRESHOLD = 15.0
+MAX_PICKS = 5
+BUY_RANGE_PCT = 0.03  # 买入范围：现价 ±3%
+
+REASON_CATEGORIES = {
+    "event_expired": "事件失效（利好证伪/落地即出货）",
+    "board_receding": "板块退潮（题材合力消散）",
+    "market_drag": "大盘拖累（系统性下行）",
+    "data_issue": "数据源问题（行情/消息卡顿导致误判）",
+    "news_gap": "消息卡顿（关键消息未及时入库）",
+    "logic_failed": "入选逻辑失效（技术/资金依据证伪）",
+    "gone_well": "走势健康（符合或超预期）",
+}
+
+
+def score_sentiment(market_phase: str | None, theme_up_ratio: float | None) -> tuple[float, str]:
+    """情绪面：市场阶段（情绪引擎）为主、题材内涨跌家数比为辅。
+
+    market_phase ∈ 冰点/修复/发酵/高潮/分歧/退潮（sentiment 引擎输出）。
+    """
+    if market_phase:
+        phase_score = {"修复": 80, "发酵": 90, "高潮": 70, "分歧": 55, "退潮": 30, "冰点": 25}[market_phase]
+        parts = [f"市场阶段「{market_phase}」→ {phase_score} 分"]
+        score = phase_score * 0.7  # 有相位：相位主导，题材比例只做微调
+    else:
+        parts = ["市场阶段缺失 → 中性 50 分"]
+        score = 50.0  # 缺失=中性，不打折（"缺失=中性"的承诺不能被权重打折）
+    if theme_up_ratio is not None:
+        # 题材内涨家数占比 0-1 → ±15 分修正
+        adj = round((theme_up_ratio - 0.5) * 30, 1)
+        score = max(0, min(100, score + adj))
+        parts.append(f"题材涨家占比 {round(theme_up_ratio * 100)}% → {'+' if adj >= 0 else ''}{adj}")
+    return round(score, 1), "；".join(parts)
+
+
+def score_news(bull_events: int, bear_events: int, top_title: str | None, top_direction: str | None) -> tuple[float, str]:
+    """消息面：活跃 EventCard 方向命中。
+
+    利好每条 +18（封顶 90），利空每条 −25（利空权重更高——突发利空的反身性更强）；
+    无事件=中性 50 分（不臆测）。top 事件标题进 basis 供卡片「关联消息」。
+    """
+    if bull_events == 0 and bear_events == 0:
+        return 50.0, "无活跃事件命中，消息面中性"
+    score = max(0, min(100, 50 + bull_events * 18 - bear_events * 25))
+    parts = [f"利好事件 {bull_events} 条 / 利空事件 {bear_events} 条 → {score} 分"]
+    if top_title:
+        parts.append(f"主事件：{top_title}（{top_direction or '方向待判'}）")
+    return round(score, 1), "；".join(parts)
+
+
+def score_tech(tech_card: dict | None) -> tuple[float, str]:
+    """技术面：score_stock 六维卡总分（0-100 已归一），basis 用其信号摘要。"""
+    if tech_card is None:
+        return 50.0, "技术样本不足（<60 根日K），中性处理"
+    return round(float(tech_card.get("score") or 50), 1), tech_card.get("summary") or "技术评分卡"
+
+
+def score_fundamental(pe_ttm: float | None, revenue_growth: float | None) -> tuple[float, str]:
+    """基本面：估值 + 盈利趋势的粗规则（第一版；LLM 接入后由基本面分析师增强）。
+
+    - PE：0<pe≤30 → 70 分带；30-60 → 55；>60 或负 → 35（亏损/高估）
+    - 营收增速（如可得）：>20% +15 / 0-20% +8 / 负 -10
+    """
+    parts: list[str] = []
+    score = 50.0
+    if pe_ttm is not None and pe_ttm > 0:
+        if pe_ttm <= 30:
+            score = 70.0
+            parts.append(f"PE {round(pe_ttm, 1)}（≤30 合理带）")
+        elif pe_ttm <= 60:
+            score = 55.0
+            parts.append(f"PE {round(pe_ttm, 1)}（30-60 中性带）")
+        else:
+            score = 35.0
+            parts.append(f"PE {round(pe_ttm, 1)}（偏高）")
+    else:
+        parts.append("PE 缺失，估值中性")
+    if revenue_growth is not None:
+        if revenue_growth > 20:
+            score = min(100, score + 15)
+            parts.append(f"营收增速 +{round(revenue_growth, 1)}%")
+        elif revenue_growth >= 0:
+            score = min(100, score + 8)
+            parts.append(f"营收增速 +{round(revenue_growth, 1)}%")
+        else:
+            score = max(0, score - 10)
+            parts.append(f"营收增速 {round(revenue_growth, 1)}%")
+    return round(score, 1), "；".join(parts)
+
+
+def score_capital(net_inflow: float | None, volume_ratio: float | None, on_lhb: bool) -> tuple[float, str]:
+    """资金面：主力净流入（亿）+ 量能 + 龙虎榜。
+
+    - 净流入：≥2 亿 +30 / 0.5-2 亿 +18 / −0.5-0.5 亿 中性 / <−1 亿 −20
+    - 量比：≥1.5 +12 / 0.8-1.5 +5 / <0.5 −8（缩量）
+    - 龙虎榜上榜 +8（有公开资金关注；不区分买卖净额，basis 注明）
+    """
+    parts: list[str] = []
+    score = 50.0
+    if net_inflow is not None:
+        yi = net_inflow / 1e8
+        if yi >= 2:
+            score += 30
+            parts.append(f"主力净流入 {round(yi, 2)} 亿")
+        elif yi >= 0.5:
+            score += 18
+            parts.append(f"主力净流入 {round(yi, 2)} 亿")
+        elif yi < -1:
+            score -= 20
+            parts.append(f"主力净流出 {round(abs(yi), 2)} 亿")
+        else:
+            parts.append(f"资金净额 {round(yi, 2)} 亿（中性）")
+    if volume_ratio is not None:
+        if volume_ratio >= 1.5:
+            score += 12
+            parts.append(f"量比 {volume_ratio}（放量）")
+        elif volume_ratio >= 0.8:
+            score += 5
+            parts.append(f"量比 {volume_ratio}")
+        elif volume_ratio < 0.5:
+            score -= 8
+            parts.append(f"量比 {volume_ratio}（显著缩量）")
+    if on_lhb:
+        score += 8
+        parts.append("龙虎榜上榜（有公开资金关注）")
+    return round(max(0, min(100, score)), 1), "；".join(parts) if parts else "资金数据缺失，中性"
+
+
+def synthesize(sub: dict[str, float], weights: dict[str, float] | None = None, vetoes: list[str] | None = None) -> tuple[float, list[str]]:
+    """加权合成 + 一票否决。返回 (综合分, 否决说明列表)。
+
+    否决不直接归零（保留可解释性），而是 ×0.4 重罚并显式记录——
+    风控引擎「强空」状态、ST/退市风险警示等触发。
+    """
+    w = weights or WEIGHTS
+    total = sum(w.get(k, 0) * v for k, v in sub.items())
+    reasons = []
+    for v in vetoes or []:
+        total *= 0.4
+        reasons.append(f"一票否决：{v}（综合分 ×0.4）")
+    return round(max(0, min(100, total)), 1), reasons
+
+
+def apply_replacement_threshold(
+    prev_symbols: list[str],
+    ranked: list[dict],
+    threshold: float = REPLACE_THRESHOLD,
+    max_picks: int = MAX_PICKS,
+) -> tuple[list[dict], list[dict]]:
+    """换股门槛：昨日成员优先保留，除非新候选综合分超出组合内最弱者 ≥threshold 分。
+
+    :param prev_symbols: 昨日组合 symbol（顺序无关）
+    :param ranked: 今日候选按综合分降序（dict 需含 symbol/score）
+    :return: (新组合 ≤max_picks, 换股记录 [{out, in, delta}])
+    """
+    by_symbol = {c["symbol"]: c for c in ranked}
+    kept: list[dict] = []
+    replaced: list[dict] = []
+    prev_kept_scores: list[float] = []
+    for sym in prev_symbols:
+        c = by_symbol.get(sym)
+        if c is not None:
+            kept.append(c)
+            prev_kept_scores.append(float(c["score"]))
+    kept = sorted(kept, key=lambda c: -c["score"])[:max_picks]
+
+    floor = min(prev_kept_scores) if prev_kept_scores else 0.0
+    for c in ranked:
+        if any(c["symbol"] == k["symbol"] for k in kept):
+            continue
+        if len(kept) < max_picks:
+            # 组合未满：补位仍需过门槛（新候选 ≥ 昨日最低分+threshold），宁缺毋滥
+            if prev_kept_scores and c["score"] < floor + threshold:
+                continue
+            kept.append(c)
+        else:
+            # 已满：只与组合内最弱者比，超出 threshold 才换（组合稳定性的机制保证）
+            weakest = min(kept, key=lambda k: k["score"])
+            if c["score"] >= weakest["score"] + threshold:
+                kept.remove(weakest)
+                replaced.append(
+                    {"out": weakest["symbol"], "in": c["symbol"], "delta": round(c["score"] - weakest["score"], 1)}
+                )
+                kept.append(c)
+    kept = sorted(kept, key=lambda c: -c["score"])[:max_picks]
+    return kept, replaced
+
+
+def build_buy_range(price: float, support: float | None, resistance: float | None) -> dict:
+    """买入范围（CONTEXT.md: Buy Range）：现价 ±3% 与技术位的交集提示。
+
+    区间 = [max(现价×0.97, 支撑), min(现价×1.03, 压力)]；无技术位时退化为 ±3%。
+    纯提示，不构成买卖建议。
+    """
+    lo = price * (1 - BUY_RANGE_PCT)
+    hi = price * (1 + BUY_RANGE_PCT)
+    if support is not None and support > 0:
+        lo = max(lo, support)
+    if resistance is not None and resistance > 0:
+        hi = min(hi, resistance)
+    if lo > hi:  # 技术位与现价区间无交集：回到纯 ±3%，basis 说明
+        lo, hi = price * (1 - BUY_RANGE_PCT), price * (1 + BUY_RANGE_PCT)
+    return {"low": round(lo, 2), "high": round(hi, 2), "basis": "现价 ±3%，参考支撑/压力位收敛；不构成买卖建议"}
+
+
+def classify_review(excess_pct: float, note_hint: str | None = None) -> tuple[str, str]:
+    """复盘归类：超额收益 + 走坏原因启发式（第一版规则，LLM 接入后增强）。
+
+    :param excess_pct: 个股当日涨跌幅 − 上证涨跌幅（百分点）
+    """
+    if excess_pct >= 2:
+        return "good", "超额为正且显著，走势健康"
+    if excess_pct <= -2:
+        # 无更细数据时默认归「入选逻辑失效」，具体归因由复盘角色结合事件/板块数据在 note 补充
+        cat = "logic_failed"
+        if note_hint:
+            cat = note_hint if note_hint in REASON_CATEGORIES else "logic_failed"
+        return "bad", REASON_CATEGORIES[cat]
+    return "flat", "与大盘同步，无显著超额"

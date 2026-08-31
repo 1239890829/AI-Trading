@@ -22,6 +22,7 @@ from app.api.routes import alert as alert_route
 from app.api.routes import risk as risk_route
 from app.api.routes import theme_catalog as theme_catalog_route
 from app.api.routes import events as events_route
+from app.api.routes import picks as picks_route
 from app.api.routes import real_position as real_position_route
 from app.core.config import settings
 from app.core.db import get_engine, get_session_factory
@@ -274,4 +275,5 @@ app.include_router(news_route.router, prefix="/api")
 app.include_router(theme_catalog_route.router, prefix="/api")
 app.include_router(events_route.router, prefix="/api")
 app.include_router(real_position_route.router, prefix="/api")
+app.include_router(picks_route.router, prefix="/api")
 app.include_router(ws_router)

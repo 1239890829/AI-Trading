@@ -409,6 +409,65 @@ export async function deleteRealPosition(symbol: string): Promise<void> {
   await sendJson(`/api/real/positions/${symbol}`, "DELETE");
 }
 
+/** ===== 每日精选（CONTEXT.md: Daily Picks 域；≤5 只，收盘定次日+换股门槛 15 分）===== */
+
+export interface DailyPickItem {
+  symbol: string;
+  name: string | null;
+  price: number | null;
+  change_pct: number | null;
+  score: number;
+  sub_scores: Record<string, number>; // sentiment/news/tech/fundamental/capital
+  bases: Record<string, string>;      // 各维度可解释依据
+  vetoes: string[];
+  buy_range: { low: number; high: number; basis: string };
+  themes: string[];
+  related_events: string[];
+}
+
+export interface DailyPicksPayload {
+  date: string | null;
+  items: DailyPickItem[];
+  stale?: boolean;
+  replaced?: { out: string; in: string; delta: number }[];
+  note?: string;
+}
+
+export interface PickReviewRow {
+  date: string;
+  symbol: string;
+  name: string | null;
+  verdict: "good" | "flat" | "bad";
+  reason_category: string;
+  excess_pct: number;
+  note: string;
+}
+
+export async function getTodayPicks(): Promise<DailyPicksPayload> {
+  return (await getJson<DailyPicksPayload>("/api/picks/today", 15_000)).data;
+}
+
+export async function generatePicks(): Promise<DailyPicksPayload> {
+  return (await sendJson<DailyPicksPayload>("/api/picks/generate", "POST", {}, 60_000)).data;
+}
+
+export async function getPicksHistory(limit = 10): Promise<{ date: string; symbols: (string | null)[]; score_avg: number }[]> {
+  return (await getJson<{ date: string; symbols: (string | null)[]; score_avg: number }[]>(`/api/picks/history?limit=${limit}`, 10_000)).data;
+}
+
+export async function getPickReviews(date?: string): Promise<PickReviewRow[]> {
+  const qs = date ? `?date=${date}` : "";
+  return (await getJson<PickReviewRow[]>(`/api/picks/review${qs}`, 15_000)).data;
+}
+
+export async function generatePickReview(): Promise<{ reviews: PickReviewRow[]; market_pct: number | null }> {
+  return (await sendJson<{ reviews: PickReviewRow[]; market_pct: number | null }>("/api/picks/review/generate", "POST", {}, 30_000)).data;
+}
+
+export async function getPicksMeta(): Promise<{ reason_distribution: Record<string, number>; note: string }> {
+  return (await getJson<{ reason_distribution: Record<string, number>; note: string }>("/api/picks/meta", 10_000)).data;
+}
+
 /** 市场宽度（全市场快照价格法）。 */
 export interface Breadth {
   up: number; down: number; flat: number; limit_up: number; limit_down: number;
