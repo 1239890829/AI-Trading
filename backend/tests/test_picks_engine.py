@@ -49,6 +49,32 @@ def test_fundamental_revenue_growth_adjusts():
     assert score_fundamental(20.0, -5.0)[0] == 60.0
 
 
+def test_fundamental_profit_quality_adjusts():
+    # 净利同比 >20% +5；<0 −8（增收不增利在 basis 里点名）
+    s, basis = score_fundamental(20.0, 30.0, profit_yoy=25.0)
+    assert s == 90.0
+    assert "净利同比 +25.0%" in basis
+    s2, basis2 = score_fundamental(20.0, 30.0, profit_yoy=-10.0)
+    assert s2 == 77.0
+    assert "增收不增利" in basis2
+    # 营收也负时表述改为"利润下滑"，不冤枉
+    _, basis3 = score_fundamental(20.0, -5.0, profit_yoy=-10.0)
+    assert "利润下滑" in basis3 and "增收不增利" not in basis3
+
+
+def test_fundamental_roe_and_gross_margin():
+    # ROE：≥15 +8 / 8-15 +4 / <0 −8；毛利率：≥40 +6 / 20-40 +3（只加分不扣分）
+    s, _ = score_fundamental(20.0, None, roe=18.0, gross_margin=45.0)
+    assert s == 84.0
+    s2, _ = score_fundamental(20.0, None, roe=10.0, gross_margin=25.0)
+    assert s2 == 77.0
+    s3, basis3 = score_fundamental(20.0, None, roe=-5.0)
+    assert s3 == 62.0
+    assert "亏损" in basis3
+    # 低毛利率不扣分（行业属性差异大）
+    assert score_fundamental(20.0, None, gross_margin=5.0)[0] == 70.0
+
+
 def test_sentiment_phase_and_theme_ratio():
     s, basis = score_sentiment("发酵", 0.7)
     assert s == round(90 * 0.7 + 6.0, 1)

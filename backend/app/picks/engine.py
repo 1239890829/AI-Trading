@@ -97,11 +97,20 @@ def score_tech(tech_card: dict | None) -> tuple[float, str]:
     return round(float(tech_card.get("score") or 50), 1), tech_card.get("summary") or "技术评分卡"
 
 
-def score_fundamental(pe_ttm: float | None, revenue_growth: float | None) -> tuple[float, str]:
+def score_fundamental(
+    pe_ttm: float | None,
+    revenue_growth: float | None,
+    profit_yoy: float | None = None,
+    roe: float | None = None,
+    gross_margin: float | None = None,
+) -> tuple[float, str]:
     """基本面：估值 + 盈利趋势的粗规则（第一版；LLM 接入后由基本面分析师增强）。
 
     - PE：0<pe≤30 → 70 分带；30-60 → 55；>60 或负 → 35（亏损/高估）
     - 营收增速（如可得）：>20% +15 / 0-20% +8 / 负 -10
+    - 净利同比（2026-09-01 补，东财 SJLTZ）：>20% +5 / <0 −8（增收不增利或利润下滑）
+    - ROE 加权（2026-09-01 补，WEIGHTAVG_ROE）：≥15% +8 / 8-15% +4 / <0 −8
+    - 毛利率（2026-09-01 补，XSMLL；行业差异大，只加分不扣分）：≥40% +6 / 20-40% +3
     """
     parts: list[str] = []
     score = 50.0
@@ -127,6 +136,33 @@ def score_fundamental(pe_ttm: float | None, revenue_growth: float | None) -> tup
         else:
             score = max(0, score - 10)
             parts.append(f"营收增速 {round(revenue_growth, 1)}%")
+    if profit_yoy is not None:
+        if profit_yoy > 20:
+            score = min(100, score + 5)
+            parts.append(f"净利同比 +{round(profit_yoy, 1)}%")
+        elif profit_yoy < 0:
+            score = max(0, score - 8)
+            if revenue_growth is not None and revenue_growth > 0:
+                parts.append(f"净利同比 {round(profit_yoy, 1)}%（增收不增利警讯）")
+            else:
+                parts.append(f"净利同比 {round(profit_yoy, 1)}%（利润下滑）")
+    if roe is not None:
+        if roe >= 15:
+            score = min(100, score + 8)
+            parts.append(f"ROE {round(roe, 1)}%（≥15 优质）")
+        elif roe >= 8:
+            score = min(100, score + 4)
+            parts.append(f"ROE {round(roe, 1)}%")
+        elif roe < 0:
+            score = max(0, score - 8)
+            parts.append(f"ROE {round(roe, 1)}%（亏损）")
+    if gross_margin is not None:
+        if gross_margin >= 40:
+            score = min(100, score + 6)
+            parts.append(f"毛利率 {round(gross_margin, 1)}%（≥40 高毛利）")
+        elif gross_margin >= 20:
+            score = min(100, score + 3)
+            parts.append(f"毛利率 {round(gross_margin, 1)}%")
     return round(score, 1), "；".join(parts)
 
 

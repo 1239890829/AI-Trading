@@ -452,14 +452,21 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
                     f"命中 {linked} 条关联事件（标题无方向词，方向待判），消息面中性；"
                     f"最近：「{(top_title or '')[:40]}」"
                 )
-            # 基本面：成长性来自财务报告（revenue_yoy 等），估值来自行情快照
+            # 基本面：成长性/盈利质量来自财务报告（营收增速、净利同比、ROE、毛利率——
+            # normalizer 早已提取这四个字段，2026-09-01 起评分全部消费），估值来自行情快照
             rev = None
+            profit = None
+            roe_v = None
+            gm = None
             try:
                 fin = await hub.provider.get_financials(sym, 4)
                 if fin:
                     latest = fin[0] if isinstance(fin, list) else fin
                     d_ = latest if isinstance(latest, dict) else getattr(latest, "__dict__", {})
                     rev = d_.get("revenue_yoy")
+                    profit = d_.get("profit_yoy")
+                    roe_v = d_.get("roe")
+                    gm = d_.get("gross_margin")
             except Exception:
                 pass
             # ⚠️ PE 需要现价，财务报告里本来就没有（此前从 financials 取 pe_ttm → 恒 None）。
@@ -470,7 +477,9 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
                 if q_snap.pe_ttm is None:
                     q_snap = await fill_valuation(hub.provider, q_snap)
                 pe = q_snap.pe_ttm if q_snap is not None else None
-            sub["fundamental"], bases["fundamental"] = score_fundamental(pe, rev)
+            sub["fundamental"], bases["fundamental"] = score_fundamental(
+                pe, rev, profit_yoy=profit, roe=roe_v, gross_margin=gm
+            )
             # 资金
             net_inflow = None
             try:
