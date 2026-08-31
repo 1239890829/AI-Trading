@@ -250,11 +250,15 @@ async def extract_events(body: EventExtractIn, request: Request, store: EventSto
     return {"data": {"created": created, "duplicated": duplicated, "received": len(body.items)}, "meta": {}}
 
 
-async def collect_news_events(app_state) -> dict:
+async def collect_news_events(app_state, include_limit_up: bool = False) -> dict:
     """自选股新闻批量抽取：对每个自选标的拉最近新闻，抽取事件卡（指纹去重）。
 
     路由与定时调度共用这一份实现——事件采集此前只有 HTTP 端点、没有调度，
     活跃事件长期只有手工录入的几条，选股消息面近乎空转（2026-08-31 盘点结论）。
+
+    include_limit_up（2026-09-01 校验规则 R6）：非盘中轮次把最近交易日涨停股
+    纳入采集范围（按连板数 Top30，控上游配额）。此前范围只有 自选∪昨日组合∪持仓，
+    86 只涨停仅 5 只有入库消息——涨停归因 × 消息面三方核实"无料可对"。
     """
     svc = getattr(app_state, "theme_catalog", None)
     if svc is not None and svc.catalog_size() == 0:
@@ -306,7 +310,27 @@ async def collect_news_events(app_state) -> dict:
                 symbols.append(pos.symbol)
     except Exception as exc:  # noqa: BLE001
         log.warning("events collect: 持仓读取失败 %s", exc)
-    symbols = symbols[:30]  # 有界
+    if include_limit_up:
+        try:
+            from app.market import trade_calendar as tc
+
+            days = await tc.trading_days(hub.provider)
+            td = tc.last_trade_date(days)
+            if td:
+                pool = await hub.provider.get_limit_up_pool(td)
+                pool = sorted(pool or [], key=lambda r: (r.consecutive_boards or 0), reverse=True)
+                added = 0
+                for r in pool:
+                    if len(symbols) >= 60 or added >= 30:  # 涨停 Top30、总量有界
+                        break
+                    if r.symbol not in symbols:
+                        symbols.append(r.symbol)
+                        added += 1
+                if added:
+                    log.info("events collect: 盘后轮次纳入涨停股 %d 只（%s）", added, td)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("events collect: 涨停股范围扩展失败 %s", exc)
+    symbols = symbols[:60]  # 有界
     created = duplicated = fetched = 0
     for symbol in symbols:
         try:
@@ -337,9 +361,16 @@ async def collect_news_events(app_state) -> dict:
 
 
 @router.post("/events/collect", dependencies=[Depends(require_write_token)])
-async def collect_events(request: Request) -> dict:
-    """手动触发一轮采集（写鉴权）；定时调度直接调 collect_news_events，不走 HTTP。"""
-    return {"data": await collect_news_events(request.app.state), "meta": {}}
+async def collect_events(request: Request, include_limit_up: bool = Query(default=False)) -> dict:
+    """手动触发一轮采集（写鉴权）；定时调度直接调 collect_news_events，不走 HTTP。
+
+    include_limit_up 调试/复盘用途：与调度器的非盘中轮次同路径，把最近交易日
+    涨停股 Top30 纳入采集（R6 校验规则，2026-09-01）。
+    """
+    return {
+        "data": await collect_news_events(request.app.state, include_limit_up=include_limit_up),
+        "meta": {},
+    }
 
 
 @router.post("/events/{event_id}/review", dependencies=[Depends(require_write_token)])

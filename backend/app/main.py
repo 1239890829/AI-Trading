@@ -218,13 +218,20 @@ async def lifespan(app: FastAPI):
         此前事件只有手工/半自动录入，活跃事件长期个位数，选股消息面近乎
         空转（2026-08-31 盘点）。30 分钟一轮：新闻源本身更新频率低，
         去重后重复采集只产生 duplicated 计数，无害。
+
+        非盘中轮次（≥15:05 或 <09:15）附带把最近交易日涨停股纳入采集范围
+        （R6，2026-09-01）：盘中轮次范围保持 自选∪组合∪持仓，控上游配额。
         """
         await asyncio.sleep(45)  # 启动先让目录同步/行情填充完成
         while True:
             try:
+                from datetime import datetime as _dt, time as _time
+
                 from app.api.routes.events import collect_news_events
 
-                stats = await collect_news_events(app.state)
+                now = _dt.now().time()
+                after_hours = now >= _time(15, 5) or now < _time(9, 15)
+                stats = await collect_news_events(app.state, include_limit_up=after_hours)
                 if stats.get("created"):
                     log.info("event collector: +%s 新事件（duplicated %s）", stats["created"], stats["duplicated"])
             except Exception:
