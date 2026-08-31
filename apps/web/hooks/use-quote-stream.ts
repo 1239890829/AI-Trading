@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getQuotes, wsBase } from "@/lib/api";
 import type { Quote } from "@/types/market";
 
@@ -9,21 +9,33 @@ export type StreamStatus = "connecting" | "live" | "polling" | "error";
 /**
  * 行情流：优先 WebSocket（/ws/quotes），断线自动重连；
  * 连续失败 3 次后降级为 REST 轮询（5s），并在恢复时切回 WS。
- * mock 数据源的 is_realtime 恒为 false，状态展示由 meta/quality 字段负责。
+ *
+ * 订阅更新（2026-09-01 架构方案 P1，修复实锤断点 P2）：后端支持
+ * {"action":"subscribe"} 动态切换订阅集——自选集合变化时发送 subscribe 消息
+ * 而非整条重连。此前 symbols 每次变化 → effect 重建 → WS 重连，产生行情空窗，
+ * 重连失败 3 次还会误入降级轮询。
  */
 export function useQuoteStream(symbols: string[]) {
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [status, setStatus] = useState<StreamStatus>("connecting");
-  // 轮询回调用 symbols 的前提：effect 依赖 key，symbols 一变连接整体重建，闭包天然是最新值
+
   const key = [...symbols].sort().join(",");
+  const hasSymbols = key.length > 0;
+
+  // symbols 的实时值供重连/订阅使用（effect 闭包不可靠，渲染期写 ref 在并发渲染下同样不可靠）
+  const symbolsRef = useRef<string[]>(symbols);
+  useEffect(() => {
+    symbolsRef.current = symbols;
+  }, [symbols]);
+
+  const wsRef = useRef<WebSocket | null>(null);
+  const connectedRef = useRef(false);
 
   useEffect(() => {
-    if (!key) {
-      setQuotes({});
-      return;
-    }
+    if (!hasSymbols || connectedRef.current) return;
+    connectedRef.current = true;
+
     let closed = false;
-    let ws: WebSocket | null = null;
     let retry = 0;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -38,7 +50,7 @@ export function useQuoteStream(symbols: string[]) {
       setStatus("polling");
       const tick = async () => {
         try {
-          apply(await getQuotes(symbols));
+          apply(await getQuotes(symbolsRef.current));
         } catch {
           setStatus("error");
         }
@@ -54,19 +66,23 @@ export function useQuoteStream(symbols: string[]) {
 
     const connect = () => {
       if (closed) return;
-      setStatus(retry === 0 ? "connecting" : status);
+      // 重连时保持当前状态显示（不闪回 connecting 误导用户）
+      setStatus((prev) => (retry === 0 ? "connecting" : prev));
       try {
-        ws = new WebSocket(`${wsBase()}/ws/quotes?symbols=${key}`);
+        wsRef.current = new WebSocket(`${wsBase()}/ws/quotes?symbols=${symbolsRef.current.join(",")}`);
       } catch {
         startPolling();
         return;
       }
+      const ws = wsRef.current;
       ws.onopen = () => {
         retry = 0;
         stopPolling();
         setStatus("live");
         pingTimer = setInterval(() => {
-          if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: "ping" }));
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ action: "ping" }));
+          }
         }, 15000);
       };
       ws.onmessage = (ev) => {
@@ -88,7 +104,7 @@ export function useQuoteStream(symbols: string[]) {
         reconnectTimer = setTimeout(connect, Math.min(1000 * 2 ** retry, 10000));
       };
       ws.onerror = () => {
-        ws?.close();
+        wsRef.current?.close();
       };
     };
 
@@ -96,13 +112,24 @@ export function useQuoteStream(symbols: string[]) {
 
     return () => {
       closed = true;
+      connectedRef.current = false;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (pingTimer) clearInterval(pingTimer);
       stopPolling();
-      ws?.close();
+      wsRef.current?.close();
+      wsRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [hasSymbols]);
+
+  // 订阅更新：连接存活时发 subscribe 消息切换订阅集（不重连）
+  useEffect(() => {
+    const ws = wsRef.current;
+    if (!connectedRef.current || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!key) return;
+    try {
+      ws.send(JSON.stringify({ action: "subscribe", symbols: [...new Set(symbols)] }));
+    } catch {}
+  }, [key, symbols]);
 
   return { quotes, status };
 }

@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { addToWatchlist, searchSymbols } from "@/lib/api";
+import { APP_EVENTS, emitAppEvent } from "@/lib/events";
 import { workbenchUrl } from "@/lib/routing";
 import type { SymbolSearchItem } from "@/types/market";
 
@@ -49,7 +50,7 @@ export function SearchBox() {
     try {
       await addToWatchlist(item.symbol, item.name ?? undefined);
       setItems((prev) => prev.map((i) => (i.symbol === item.symbol ? { ...i, is_realtime: true } : i)));
-      window.dispatchEvent(new CustomEvent("watchlist-changed"));
+      emitAppEvent(APP_EVENTS.watchlistChanged);
     } catch {}
   }
 

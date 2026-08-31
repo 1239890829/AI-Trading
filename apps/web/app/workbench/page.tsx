@@ -25,6 +25,7 @@ import {
   type SparklinePayload,
 } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
+import { APP_EVENTS, onAppEvent } from "@/lib/events";
 import { LAST_SYMBOL_KEY, workbenchUrl } from "@/lib/routing";
 import type { Quote } from "@/types/market";
 
@@ -102,7 +103,9 @@ function WorkbenchInner() {
   useEffect(() => {
     void loadBase();
     const t = setInterval(loadBase, 10000);
-    return () => clearInterval(t);
+    // 修复 2026-09-01 实锤断点（架构方案 P1）：search-box 快捷加自选会派发
+    // watchlist-changed，但此前全站无监听方——加自选后左栏要等 10s 轮询才出现。
+    return onAppEvent(APP_EVENTS.watchlistChanged, () => void loadBase());
   }, [loadBase]);
 
   useEffect(() => {
@@ -141,11 +144,11 @@ function WorkbenchInner() {
     };
     void load();
     const t = setInterval(load, 15_000);
-    window.addEventListener("real-changed", load);
+    const off = onAppEvent(APP_EVENTS.realChanged, () => void load());
     return () => {
       alive = false;
       clearInterval(t);
-      window.removeEventListener("real-changed", load);
+      off();
     };
   }, []);
 

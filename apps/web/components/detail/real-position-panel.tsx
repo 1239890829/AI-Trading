@@ -10,6 +10,7 @@ import {
   type RealPositionRow,
 } from "@/lib/api";
 import { fmt, pctColor, pctText } from "@/lib/format";
+import { APP_EVENTS, emitAppEvent, onAppEvent } from "@/lib/events";
 
 /**
  * 真实持仓面板（CONTEXT.md: Real Position 域；与模拟交易 tab 完全独立）。
@@ -63,15 +64,14 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
   useEffect(() => {
     void load();
     const t = setInterval(load, 15_000);
-    const onChange = () => void load();
-    window.addEventListener("real-changed", onChange);
+    const off = onAppEvent(APP_EVENTS.realChanged, () => void load());
     return () => {
       clearInterval(t);
-      window.removeEventListener("real-changed", onChange);
+      off();
     };
   }, [load]);
 
-  const notify = () => window.dispatchEvent(new CustomEvent("real-changed"));
+  const notify = () => emitAppEvent(APP_EVENTS.realChanged);
 
   async function submitTrade() {
     const pv = Number(price.replace(/,/g, ""));

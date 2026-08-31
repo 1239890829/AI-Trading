@@ -12,6 +12,7 @@ import { analyze } from "@/lib/technical-analysis";
 import { buildEventMarks } from "@/lib/event-markers";
 import { mergeQuoteIntoBars } from "@/lib/kline-live";
 import { isIndexSymbol } from "@/lib/api";
+import { APP_EVENTS, emitAppEvent, onAppEvent } from "@/lib/events";
 import { ThemeChipsRow } from "@/components/detail/theme-chips";
 import { StockEventsRow } from "@/components/detail/stock-events";
 import {
@@ -178,11 +179,11 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     };
     void loadPaper();
     const t = setInterval(loadPaper, 10000);
-    window.addEventListener("paper-changed", loadPaper);
+    const offPaper = onAppEvent(APP_EVENTS.paperChanged, loadPaper);
     return () => {
       alive = false;
       clearInterval(t);
-      window.removeEventListener("paper-changed", loadPaper);
+      offPaper();
     };
   }, [symbol]);
 
@@ -390,7 +391,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     setResetBusy(true);
     try {
       await resetPaperAccount();
-      window.dispatchEvent(new CustomEvent("paper-changed"));
+      emitAppEvent(APP_EVENTS.paperChanged);
     } catch (e) {
       window.alert(`重置失败：${(e as Error).message}`);
     } finally {

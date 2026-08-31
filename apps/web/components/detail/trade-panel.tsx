@@ -3,6 +3,7 @@
  * 数据加载（paper 轮询）在壳内；本组件只做展示与直接交互（撤单/重置）。
  */
 import { cancelPaperOrder } from "@/lib/api";
+import { APP_EVENTS, emitAppEvent } from "@/lib/events";
 import type { PaperFill, PaperOrderInfo, PaperPositionInfo, PaperAccountInfo } from "@/lib/api";
 import type { Quote } from "@/types/market";
 import { TradeForm } from "@/components/trade-form";
@@ -75,7 +76,7 @@ export function TradePanel({
                 <span className={o.side === "buy" ? "text-up" : "text-down"}>{o.side === "buy" ? "买" : "卖"} {o.symbol}</span>
                 <span className="font-mono text-zinc-400">{fmt(o.price)} × {o.quantity}</span>
                 <button
-                  onClick={async () => { await cancelPaperOrder(o.id).catch(() => {}); window.dispatchEvent(new CustomEvent("paper-changed")); }}
+                  onClick={async () => { await cancelPaperOrder(o.id).catch(() => {}); emitAppEvent(APP_EVENTS.paperChanged); }}
                   className="rounded border border-zinc-300 px-1.5 text-zinc-400 hover:text-red-400 dark:border-zinc-600"
                 >
                   撤
