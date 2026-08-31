@@ -235,6 +235,11 @@ async def theme_reconciliation(
             trade_date = datetime.strptime(date_str, "%Y%m%d").date()
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=f"日期格式应为 YYYYMMDD：{date_str!r}") from exc
+    if trade_date is None:
+        # ths 端点要求具体日期（date_ms(None) 会崩），与其它路由一致先解析最近交易日
+        from app.api.routes.market import _default_trade_date_async
+
+        trade_date = await _default_trade_date_async(hub)
     try:
         pool = await ths.get_limit_up_pool(trade_date)
     except Exception as exc:  # noqa: BLE001

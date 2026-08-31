@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date
 from types import SimpleNamespace
 
 import pytest
@@ -338,3 +339,57 @@ def test_verify_board_multi_day_replaces_and_flags(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(svc, "fetch_board_bars", counting)
     asyncio.run(_verify_board_multi_day(request, payload))
     assert calls["n"] == 0, "已验证的 payload 直接跳过"
+
+
+# ------------------------------------------------- 回归：reconciliation 默认日期（retro §三 #8）
+
+
+def test_reconciliation_without_date_resolves_trade_date(monkeypatch: pytest.MonkeyPatch):
+    """不带 ?date= 时路由必须先解析最近交易日，不得把 None 直传 ths 池端点。
+
+    真实契约：ths.get_limit_up_pool 要求具体 date（date_ms(None) 崩
+    'NoneType' object has no attribute 'year'）。桩复刻该契约（None 即抛），
+    路由不解析日期时本测试必红。
+    """
+    seen = {}
+
+    class ThsFuyaoProvider:  # 类型名匹配 _pick_provider
+        name = "ths"
+
+        async def get_limit_up_pool(self, trade_date):
+            if trade_date is None:
+                raise TypeError("'NoneType' object has no attribute 'year'")
+            seen["date"] = trade_date
+            return [SimpleNamespace(symbol="600103", name="青山纸业", reason="热股测试题材+造纸")]
+
+    class _FakeHub:
+        name = "fake"
+        provider = ThsFuyaoProvider()
+
+    svc = _svc()
+
+    async def fake_catalog():
+        return [{"code": "889901.TI", "name": "热股测试题材"}]
+
+    async def fake_members(code):
+        return [{"symbol": "000019", "name": "深粮控股"}]
+
+    monkeypatch.setattr(svc, "fetch_catalog", fake_catalog)
+    monkeypatch.setattr(svc, "fetch_members", fake_members)
+    asyncio.run(svc.sync_catalog())
+    asyncio.run(svc.sync_members("889901.TI"))
+
+    from fastapi import FastAPI
+
+    from app.api.routes import theme_catalog as route
+
+    a = FastAPI()
+    a.include_router(route.router, prefix="/api")
+    a.state.hub = _FakeHub()
+    a.state.theme_catalog = svc
+    with TestClient(a) as client:
+        r = client.get("/api/themes/reconciliation")
+
+    assert r.status_code == 200
+    assert isinstance(seen["date"], date), "池拉取收到的是解析后的交易日"
+    assert r.json()["data"]["pool_size"] == 1
