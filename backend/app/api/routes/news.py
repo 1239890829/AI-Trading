@@ -5,34 +5,17 @@
 """
 from __future__ import annotations
 
-import time
-
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.deps import get_hub
 from app.core.config import settings
+from app.core.ttl_cache import cache_on
 from app.news.llm import LLMSummarizer
 from app.news.router import SummaryRouter
 from app.schemas.envelope import Envelope
 from app.schemas.news_digest import DigestItem, NewsDigestPayload
 
 router = APIRouter(tags=["news"])
-
-
-def _router_cached(hub, name: str) -> dict:
-    attr = f"_cache_{name}"
-    cache = getattr(hub, attr, None)
-    if cache is None:
-        cache = {}
-        setattr(hub, attr, cache)
-    return cache
-
-
-def _ttl_hit(cache: dict, key) -> tuple[bool, object]:
-    hit = cache.get(key)
-    if hit and time.monotonic() - hit[0] < 60:
-        return True, hit[1]
-    return False, None
 
 
 def _to_item(row: dict) -> DigestItem:
@@ -47,6 +30,7 @@ def _to_item(row: dict) -> DigestItem:
 @router.get("/news/digest/{symbol}", response_model=Envelope[NewsDigestPayload])
 async def news_digest(
     symbol: str,
+    request: Request,
     limit: int = Query(default=10, ge=1, le=30),
     hub=Depends(get_hub),
 ) -> dict:
@@ -54,9 +38,9 @@ async def news_digest(
 
     按重要度倒序返回。摘要只做事实抽取，不含任何买卖建议。
     """
-    cache = _router_cached(hub, "news_digest")
+    cache = cache_on(request.app.state, "news.digest", 60, maxsize=512)
     key = (symbol, limit)
-    hit, cached = _ttl_hit(cache, key)
+    hit, cached = cache.get(key)
     if hit:
         return {"data": cached, "meta": {"cached": True}}
 
@@ -86,5 +70,5 @@ async def news_digest(
         model=usage,
     )
     data = payload.model_dump()
-    cache[key] = (time.monotonic(), data)
+    cache.set(key, data)
     return {"data": data, "meta": {}}

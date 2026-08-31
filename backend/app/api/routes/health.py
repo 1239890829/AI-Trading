@@ -24,3 +24,16 @@ async def health(hub: QuoteHub = Depends(get_hub)) -> dict:
         "last_error": hub.last_error,
         "is_stale": stale,
     }
+
+
+@router.get("/system/caches")
+async def system_caches() -> dict:
+    """进程内 TTL 缓存观测（P0-5 统一缓存层）：命中率/容量/逐出。
+
+    逐出数持续上涨 = 键空间在膨胀（"缓存键漂移"类隐患的信号）；
+    命中率异常低 = 缓存可能没起作用。实例挂在 app.state/服务单例上，
+    随其回收自动退出注册表（弱引用）。
+    """
+    from app.core.ttl_cache import live_caches
+
+    return {"caches": live_caches()}

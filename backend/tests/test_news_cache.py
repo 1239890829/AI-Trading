@@ -10,7 +10,7 @@ from app.core.errors import register_error_handlers
 
 
 class _FakeHub:
-    """最小 hub：provider 可数调用次数；TTL 缓存挂在 hub 上（与真实挂载一致）。"""
+    """最小 hub：provider 可数调用次数（TTL 缓存现挂在 app.state 上，P0-5 统一缓存层）。"""
 
     name = "fake"
     last_success_refresh = None
@@ -61,11 +61,12 @@ def test_different_symbol_not_shared(client):
 
 def test_ttl_expiry_refetches(client, monkeypatch):
     client.get("/api/announcements/600519")
-    # 时间前进 61s → 缓存过期
-    import app.api.routes.market as m
+    # 时间前进 61s → 缓存过期（补丁打在 ttl_cache 模块级 monotonic 上；
+    # 不能打 tc.time.monotonic——那会连事件循环时钟一起冻结）
+    import app.core.ttl_cache as ttl_cache
 
-    real = m.time.monotonic
-    monkeypatch.setattr(m.time, "monotonic", lambda: real() + 61)
+    real = ttl_cache.monotonic
+    monkeypatch.setattr(ttl_cache, "monotonic", lambda: real() + 61)
     r = client.get("/api/announcements/600519")
     assert "cached" not in r.json()["meta"]
     assert client.hub.calls == 2

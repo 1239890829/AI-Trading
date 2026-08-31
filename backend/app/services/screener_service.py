@@ -8,16 +8,16 @@
 失败纪律：单只日K拉取失败 → 跳过并计入 failed，不臆造评分；
 TDX 整体不可用 → 404 语义交由路由（code=tdx_unavailable），不返回半假结果。
 缓存：结果按参数组合 TTL 30 分钟（评分随日K日频变化，无需更短），
-single-flight 防同 key 并发重复计算。
+single-flight 防同 key 并发重复计算——实现在 app.core.ttl_cache.TTLCache（P0-5 统一缓存层）。
 """
 from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.core.ttl_cache import TTLCache
 from app.schemas.screener import ScreenerItem, ScreenerPayload, ScreenerSignal
 from app.market.tech_score import SCORER_VERSION, score_stock
 from app.services.parquet_store import read_latest_snapshot
@@ -180,35 +180,28 @@ def build_payload(
 
 
 class ScreenerService:
-    """带 TTL 缓存与 single-flight 的选股器入口。"""
+    """带 TTL 缓存与 single-flight 的选股器入口（缓存实现在 app.core.ttl_cache）。"""
 
     def __init__(self, parquet_dir: Path):
         self.parquet_dir = parquet_dir
-        self._cache: dict[tuple, tuple[float, ScreenerPayload]] = {}
-        self._locks: dict[tuple, asyncio.Lock] = {}
+        self._cache = TTLCache("screener.run", CACHE_TTL, maxsize=16)
 
     def _cache_key(self, **kw) -> tuple:
         return tuple(sorted(kw.items()))
 
     async def run(self, **params) -> ScreenerPayload:
         key = self._cache_key(**params)
-        now = time.monotonic()
-        hit = self._cache.get(key)
-        if hit and now - hit[0] < CACHE_TTL:
-            payload = hit[1]
-            payload.cached = True
-            return payload
-        lock = self._locks.setdefault(key, asyncio.Lock())
-        async with lock:
-            hit = self._cache.get(key)
-            if hit and time.monotonic() - hit[0] < CACHE_TTL:
-                payload = hit[1]
-                payload.cached = True
-                return payload
+
+        async def _build() -> ScreenerPayload:
             rows, tick = await asyncio.to_thread(load_snapshot_rows, self.parquet_dir)
             if not rows:
                 raise RuntimeError("snapshot unavailable")
             payload = await asyncio.to_thread(build_payload, rows, **params)
             payload.snapshot_time = tick
-            self._cache[key] = (time.monotonic(), payload)
             return payload
+
+        hit, payload = await self._cache.get_or_set(key, _build)
+        if hit:
+            # model_copy 标注 cached，不改共享缓存对象
+            return payload.model_copy(update={"cached": True})
+        return payload

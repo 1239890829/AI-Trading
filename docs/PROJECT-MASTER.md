@@ -11,7 +11,7 @@
 A 股实时行情 + AI 量化投研 + 模拟交易工作台。**只做**行情展示/数据分析/投研/选股观察/模拟交易/回测。**第一阶段禁止**：连接真实券商、自动真实下单、无数据依据的确定性买卖结论、mock 冒充实盘。
 
 ## 1.2 当前状态快照
-- 后端：FastAPI（Python 3.11），32 个 REST 端点 + 1 个 WebSocket，**四源 Provider 链**（ths→tencent→eastmoney→sina）+ mock
+- 后端：FastAPI（Python 3.11），80 个 REST 端点 + 1 个 WebSocket，**四源 Provider 链**（ths→tencent→eastmoney→sina）+ mock
 - 前端：Next.js 16 App Router，9 页面 + 10+ 组件，终端式工作台
 - 数据：全市场快照（5550 只）落 Parquet；SQLite 业务库
 - 测试：118 用例全绿；ESLint/pyflakes/tsc 门禁零问题
@@ -60,7 +60,10 @@ ashare-ai-trader/
 │   │   │       └── predict.py         # 新题材预判（run/list/get/verify/themes）
 │   │   ├── core/
 │   │   │   ├── config.py              # Settings（ASHARE_* 环境变量）
-│   │   │   └── db.py                  # 引擎(:memory:→StaticPool) + 幂等迁移 + session
+│   │   │   ├── db.py                  # 引擎(:memory:→StaticPool) + 幂等迁移 + session
+│   │   │   ├── errors.py              # 统一错误契约（AppError + handler 注册）
+│   │   │   ├── migrations.py          # alembic 三态 stamp-or-upgrade
+│   │   │   └── ttl_cache.py           # 统一 TTL 缓存（LRU 有界/异步单飞/命中统计，P0-5）
 │   │   ├── models/
 │   │   │   ├── watchlist.py           # 自选（含 group_name）
 │   │   │   └── paper.py               # 模拟账户/持仓/订单
@@ -161,7 +164,7 @@ ashare-ai-trader/
 
 ---
 
-# 五、REST API 全表（63 端点，**完整清单与鉴权说明见 docs/api.md**，此处保留增量与要点）
+# 五、REST API 全表（80 端点，**完整清单与鉴权说明见 docs/api.md**，此处保留增量与要点）
 
 核心入口速查（🔒=B6 写鉴权）：
 | 方法 | 路径 | 说明 | 数据源 |
@@ -305,7 +308,7 @@ ashare-ai-trader/
 | 阶段 | 子项 | 状态 |
 |---|---|---|
 | 1 基础框架 | 目录/配置/SQLite/日志/健康检查/布局/搜索/主题 | ✅ 全部 |
-| 2 行情基础设施 | Provider协议/四源链/Normalizer/5级质量/QuoteHub/REST 79端点/WS/指数/个股/K线/分时/盘口/逐笔 + **数据可靠性**（Parquet 原子写/容错读、涨跌停价补全共享化） | ✅ 全部 |
+| 2 行情基础设施 | Provider协议/四源链/Normalizer/5级质量/QuoteHub/REST 80端点/WS/指数/个股/K线/分时/盘口/逐笔 + **数据可靠性**（Parquet 原子写/容错读、涨跌停价补全共享化、统一缓存层 ttl_cache） | ✅ 全部 |
 | 3 市场与板块 | 全市场快照/宽度/情绪周期判定+历史序列/板块排行/涨停池/炸板池/云图 | ✅；余：题材事件树/生命周期 |
 | 4 投研数据 | 龙虎榜总览+席位+历史/资金流/财务/估值/公司资料/公告/新闻 + **新闻·公告摘要 v1**（规则摘要器 + LLM 可插拔降级）+ 复权因子 + 集合竞价 | ✅；余：营业部关系图谱、筹码、解禁、两融、大宗 |
 | 5 量化系统 | 多因子技术评估(MA/MACD/KDJ/RSI/量价/形态) + 全市场选股器（截面过滤→TDX日K→六维评分卡，防飞刀修正） + **风控引擎 v1**（7 档市场状态→仓位建议参数→下单预检） | ✅ |

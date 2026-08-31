@@ -1,6 +1,6 @@
 # REST API
 
-Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**79 个端点**（2026-08-31 与代码同步）。
+Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**80 个端点**（2026-08-31 与代码同步）。
 
 统一响应：`{"data": ..., "meta": {...}}`（Envelope[T]，meta 含 `provider / is_realtime / is_stale / last_success_refresh / generated_at`）。
 数据源失败返回 **HTTP 502**（前端显示错误态，绝不降级伪造）；错误统一契约 `{detail, code}`。
@@ -15,6 +15,7 @@ Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**79 个端点**（2026-
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/health` | 健康：provider 链、last_success_refresh、失败计数、is_stale |
+| GET | `/api/system/caches` | 进程内 TTL 缓存观测（P0-5）：各命名缓存的命中率/容量/逐出 |
 | GET | `/api/market/overview` | 六大指数 + 两市成交额合计 |
 | GET | `/api/market/breadth` | 市场宽度（涨跌/涨跌停家数，全市场快照口径） |
 | GET | `/api/market/sentiment` | 情绪周期判定（阶段/温度/依据/置信/切换条件，60s 缓存） |

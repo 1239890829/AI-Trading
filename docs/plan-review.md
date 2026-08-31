@@ -48,7 +48,7 @@
 | B5 东财补 `get_limit_break_pool` 备源 | ❌ **未做**（炸板率仍单点，仅东财） | eastmoney.py 无该方法 |
 | C1 `index/constituents` 板块成分表 | ❌ 未做 | — |
 | C2 全市场历史日 K dump（回测地基） | 🔶 已被**替代**：easy_tdx 已提供 2 年分钟级历史（见 §2.4），此条降级 | — |
-| C3 统一 provider 缓存层 | ❌ 未做（news 60s / screener 30min / sparkline 5min 各写各的） | — |
+| C3 统一 provider 缓存层 | ✅ 已完成（2026-08-31，P0-5）：`app/core/ttl_cache.py` 统一抽象 + /api/system/caches 观测，11 处自写缓存收敛 | — |
 
 ### 3. 情绪方案（`sentiment-phase-review.md` P0–P3）
 
@@ -126,7 +126,7 @@
 | 2 | **风控状态判定自建** | 情绪引擎已产出 阶段/温度/置信度 + 涨跌比/涨停跌停 | **已联动**（风控引擎 v1 就是复用情绪输出），无需动作，列为正确范例 |
 | 3 | **新闻摘要等 LLM** | `app/review/` 的 ModelRouter"规则先行+显式降级"范式 | **已推广**到 `app/news/`；后续所有 AI 能力统一此范式，LLM 只做增强层 |
 | 4 | **板块位置用 `active_days` 代理**（B3） | ths `index/prices/historical` 可给真实板块区间涨幅 | **待替代**：需先核验现状数据源（comparison B3 标记待核） |
-| 5 | **各模块自写缓存**（60s/30min/5min 三套实现） | 无统一抽象 | **待替代**：C3 统一缓存层，顺带解决"缓存键漂移"类隐患（选股器自定义筛选绕过缓存触发 20s 重算，就是这类问题的实例） |
+| ~~5~~ | ~~**各模块自写缓存**（60s/30min/5min 三套实现）~~ | ✅ 已替代（2026-08-31，P0-5）：`app/core/ttl_cache.py` 统一抽象，11 处收敛 | **已替代**：C3 统一缓存层落地；键空间有界化 + 逐出计数让"缓存键漂移"类隐患可见（经 /api/system/caches 观测） |
 | 6 | **`write_parquet` 直写** | `parquet_store.write_parquet_atomic` | **已替代**（快照 + 分钟两处全部切换；实测 7 个损坏文件的教训） |
 | 7 | **`except Exception` 兜底报错文案** | 错误分类细化（snapshot_unavailable ≠ tdx_unavailable） | **已替代**；选股器 502 曾把本地文件损坏误报成数据源问题 |
 
@@ -173,7 +173,7 @@
 快照 Parquet ─→ 选股器截面 ─→ TDX 日K ─→ 评分卡 ─→ 风控下单预检
 情绪引擎(阶段/温度) ─→ 风控状态档位 ─→ 仓位参数        （已联动）
 交易日历 ─→ 情绪回退防护 / 撮合 T+1 / 预判验证        （已联动）
-统一缓存层(C3) ─→ news/screener/sparkline/quote       （待建）
+统一缓存层(C3) ─→ news/screener/sparkline/quote       （已建，P0-5）
 推送通道(B) ─→ 预警/复盘/情绪监控                      （待建）
 ```
 
@@ -211,7 +211,7 @@
 | ~~**P0-2**~~ | ~~**回测配置 mandate 化**~~ ✅ 已完成（2026-08-31，commit 7f80c95）：backend/mandates/ + 分层解析（默认<mandate<请求）+ meta.applied 来源展示 + /backtest 下拉预填 | 星标 P2 | 源选择（tdx/sina）留待后续 mandate 字段扩展 |
 | **P0-3** | **sentiment 历史分位校准**（阈值配置化 ✅ 已完成 2026-08-31：`band_config.py` + settings JSON 覆盖，校验失败启动即报错；分位校准等快照样本积累） | 情绪 P2 #13 | 让"高潮/分歧"阈值有本地依据而非照搬网络 |
 | ~~**P0-4**~~ | ~~**东财 get_limit_break_pool 备源**~~ ✅ 已完成（2026-08-31）：push2ex getTopicZBPool；字段缩放 ×1000 已用 600103 与 TDX 日K交叉验证（与 ZT 池 ×100 不同，独立解析） | 数据源 B5 | 链上 ths → eastmoney 双源 |
-| **P0-5** | **统一 provider 缓存层（C3）** | 数据源 C3 | 收敛 news 60s/screener 30min/sparkline 5min/quote 等自写缓存；同时给缓存键加告警 |
+| ~~**P0-5**~~ | ~~**统一 provider 缓存层（C3）**~~ ✅ 已完成（2026-08-31）：`app/core/ttl_cache.py`（TTLCache：monotonic/LRU 有界/异步单飞/命中统计 + 弱引用注册表）+ `GET /api/system/caches` 观测；收敛 sentiment/heatmap/boards/themes/sparkline/announcements/news/digest/tdays/attribution/screener 共 11 处自写缓存，删除 market.py/news.py 两份拷贝的 `_route_cache`/`_ttl_hit`，键空间全部有界化（逐出计数让"缓存键漂移"可见） | 数据源 C3 | trade_calendar/heatmap 行业映射/ths 代码表三处保留模块内缓存（有失败冷却/增量填充等专用语义，非键漂移风险点） |
 | ~~**P0-6**~~ | ~~`/api/paper/reset` 加审计日志~~ ✅ 已完成（2026-08-31）：单行记录 重置前状态（持仓/委托/资金）+ source=api/engine + custom_initial 标记 | 本次复盘 | 审计断言直接打桩 logger（basicConfig 会破坏后续 caplog，见 test_paper_audit.py 注释） |
 | ~~**P0-7**~~ | ~~`sentiment.md` 与实现对齐~~ ✅ 已完成（2026-08-31）：判定纠错段改为"已修复"状态并保留开放项指引 | 情绪 P3 #15 | — |
 

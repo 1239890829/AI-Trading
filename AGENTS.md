@@ -28,8 +28,8 @@ uvicorn app.main:app --reload --port 8000
 # 前端（node_modules 已装）
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
-# 测试与门禁（每次改动全部跑，全绿才算完；当前基线：后端 418 / 前端 51）
-cd backend && .venv/bin/pytest                    # 418 用例
+# 测试与门禁（每次改动全部跑，全绿才算完；当前基线：后端 441 / 前端 51）
+cd backend && .venv/bin/pytest                    # 441 用例
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
 cd apps/web && npx eslint .                       # 0 error（24 warn 是挂账项，见 eslint.config.mjs 注释）
 cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 51 用例
@@ -43,7 +43,7 @@ CI（GitHub Actions）：后端 pytest+pyflakes、前端 tsc+eslint+vitest+build
 
 ## 2. 当前状态快照（2026-08-31，commit 310c70e）
 
-**418 后端测试 + 51 前端测试全绿 · 79 REST + 1 WS 端点 · 124 commits · 四源链 `ths→tencent→eastmoney→sina`**
+**441 后端测试 + 51 前端测试全绿 · 80 REST + 1 WS 端点 · 四源链 `ths→tencent→eastmoney→sina`**
 
 | 阶段 | 状态 |
 |---|---|
@@ -86,7 +86,9 @@ K 线（TDX 2 年分钟级底座）；分时（均价线+量比基线）；盘�
 
 **工程化**：Next 16 升级（flat config）；错误边界；vitest+RTL 组件测试基建（含变异验证纪律）；
 `scripts/api-sweep.js` 全端点巡检（载荷体检）；alembic 三态迁移（手写对齐 ORM）；
-`.env.example` 漂移守护测试；同源反代（Route Handler 运行时代理）。
+`.env.example` 漂移守护测试；同源反代（Route Handler 运行时代理）；
+统一缓存层 `app/core/ttl_cache.py`（TTL/LRU 有界/异步单飞/命中率统计，11 处自写缓存收敛，
+`/api/system/caches` 可观测——新缓存一律用它，勿再手写 TTL 元组）。
 
 ---
 
@@ -95,7 +97,9 @@ K 线（TDX 2 年分钟级底座）；分时（均价线+量比基线）；盘�
 ### 阶段 A · P0 无阻塞，可立即做（plan-review P0 残留）
 1. **sentiment 历史分位校准**（P0-3 残留；阈值配置化 ✅ 已完成 2026-08-31：`band_config.py` + `ASHARE_SENTIMENT_HEAT_BANDS_JSON`/`ASHARE_SENTIMENT_EARNING_BANDS_JSON` 覆盖，非法配置启动即失败）：等 Parquet 快照积累后用本地数据算分位，替换照搬网络的阈值。
    来源：docs/sentiment-phase-review.md P2 #13。
-2. **统一 provider 缓存层**（P0-5 / 数据源 C3）：收敛 news 60s / screener 30min / sparkline 5min 等自写缓存。
+2. ~~**统一 provider 缓存层**（P0-5 / 数据源 C3）~~ ✅ 已完成（2026-08-31）：`app/core/ttl_cache.py`
+   （TTLCache：monotonic/LRU 有界/异步单飞/命中统计 + 弱引用注册表）+ `GET /api/system/caches` 观测；
+   11 处自写缓存收敛，端点 79→80。
 
 ### 阶段 B · 等用户触发（外部条件成熟即做）
 | 项 | 触发条件 | 一举关闭 |
@@ -125,7 +129,7 @@ C2 全市场日 K dump（已被 TDX 替代）；"等 LLM 再做摘要"（规则�
 
 | 文档 | 内容 / 地位 |
 |---|---|
-| **docs/PROJECT-MASTER.md** | 技术总览：目录逐文件/数据源口径/79 API/阶段状态表 |
+| **docs/PROJECT-MASTER.md** | 技术总览：目录逐文件/数据源口径/80 API/阶段状态表 |
 | **docs/plan-review.md** | 计划复盘：10 份方案逐项盘点 + P0/P1/P2 整合清单（§六）+ 遗留用户决策（§八） |
 | **docs/linkage-design.md** | 联动系统总纲：状态管理规范/路由规范/联动矩阵 L1-L10/题材三层归属/事件 SOP；切片标记在此 |
 | **docs/retro-and-gaps.md** | 唯一明细账本（§一功能欠缺 20 项全清 / §二布局 / §三技术债 / §四行为基线勿回退） |

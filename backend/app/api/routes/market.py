@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.deps import get_hub
+from app.core.ttl_cache import cache_on
 from app.data_quality.validator import validate_order_book
 from app.schemas.envelope import (
     AuctionBenchmarkItem,
@@ -60,22 +60,19 @@ async def market_sentiment(request: Request, hub: QuoteHub = Depends(get_hub)) -
     与复盘 Agent 共用同一实现——口径只有一个，避免两边漂移。
     结果缓存 60s。
     """
-    import time as _time
-
     from app.services.market_context import CalendarUnavailable, compute_market_sentiment
 
     svc = request.app.state.snapshot_service
-    cache = getattr(request.app.state, "_sent_cache", None)
-    if cache and _time.time() - cache[0] < 60:
-        return cache[1]
+    cache = cache_on(request.app.state, "market.sentiment", 60, maxsize=1)
 
-    try:
-        result = await compute_market_sentiment(hub, svc)
-    except CalendarUnavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    async def _build() -> dict:
+        try:
+            result = await compute_market_sentiment(hub, svc)
+        except CalendarUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return {"data": result, "meta": _meta(hub)}
 
-    payload = {"data": result, "meta": _meta(hub)}
-    request.app.state._sent_cache = (_time.time(), payload)
+    _, payload = await cache.get_or_set((), _build)
     return payload
 
 
@@ -100,13 +97,12 @@ async def sparkline(
 
     from app.market.tdx_kline import tdx_daily_bars
 
-    cache = _route_cache(request.app.state, "sparkline")
+    cache = cache_on(request.app.state, "market.sparkline", 300, maxsize=64)
     key = (tuple(syms), days)
-    hit = cache.get(key)
-    if hit and time.monotonic() - hit[0] < 300:
-        payload = hit[1]
-        payload.cached = True
-        return {"data": payload, "meta": _meta(hub)}
+    hit, payload = cache.get(key)
+    if hit:
+        # model_copy 标注 cached，不改共享缓存对象
+        return {"data": payload.model_copy(update={"cached": True}), "meta": _meta(hub)}
 
     items = []
     for sym in syms:
@@ -125,7 +121,7 @@ async def sparkline(
         ))
 
     payload = SparklinePayload(items=items)
-    cache[key] = (time.monotonic(), payload)
+    cache.set(key, payload)
     return {"data": payload, "meta": _meta(hub)}
 
 
@@ -224,23 +220,22 @@ async def market_heatmap(request: Request, hub: QuoteHub = Depends(get_hub)) -> 
     - 组内仅保留流通市值 Top 12，其余并入「其他(n只)」聚合块（市值加权涨跌幅）；
     - 行业映射 24h 缓存，TDX 不可用时个股归「未分类」并在 industry_coverage 标注覆盖率。
     """
-    import time as _time
-
     svc = request.app.state.snapshot_service
     rows = svc.snapshot or []
     if not rows:
         raise HTTPException(status_code=503, detail="全市场快照尚未就绪（冷启动抓取约需数秒）")
 
-    cache = getattr(request.app.state, "_heatmap_cache", None)
-    if cache and _time.time() - cache[0] < 60:
-        return cache[1]
+    cache = cache_on(request.app.state, "market.heatmap", 60, maxsize=1)
+    hit, payload = cache.get(())
+    if hit:
+        return payload
 
     from app.services.heatmap_service import build_heatmap, get_industry_map_async
 
     industry_map = await get_industry_map_async()
     data = build_heatmap(rows, industry_map)
     payload = {"data": data, "meta": _meta(hub)}
-    request.app.state._heatmap_cache = (_time.time(), payload)
+    cache.set((), payload)
     return payload
 
 
@@ -473,19 +468,17 @@ async def minute_decisions(
 
 async def _default_trade_date_async(hub) -> date:
     """最近交易日：优先官方交易日历（ths，缓存 24h），失败回退周末规则。"""
-    import time as _time
-
-    cache = getattr(hub, "_tdays_cache", None)
-    days: list[str] | None = None
-    if cache and _time.time() - cache[0] < 86400:
-        days = cache[1]
-    if days is None:
+    cache = cache_on(hub, "provider.trading_days", 86400, maxsize=1)
+    hit, days = cache.get("days")
+    if not hit:
         for p in hub.providers if hasattr(hub, "providers") else [hub.provider]:
             if hasattr(p, "get_trading_days"):
                 try:
-                    days = await p.get_trading_days()
-                    setattr(hub, "_tdays_cache", (_time.time(), days))
-                    break
+                    got = await p.get_trading_days()
+                    if got:  # 失败/空结果不缓存，下次请求换源重试
+                        days = got
+                        cache.set("days", days)
+                        break
                 except Exception:
                     continue
     if days:
@@ -591,19 +584,17 @@ async def boards(
     hub: QuoteHub = Depends(get_hub),
 ) -> dict:
     """板块排行：涨跌幅/成交额/领涨股（新浪闪电排行，一次请求全量）。结果缓存 60s。"""
-    import time as _time
-
-    key = f"_boards_cache_{type}"
-    cache = getattr(request.app.state, key, None)
-    if cache and _time.time() - cache[0] < 60:
-        return cache[1]
+    cache = cache_on(request.app.state, "market.boards", 60, maxsize=4)
+    hit, payload = cache.get(type)
+    if hit:
+        return payload
     try:
         rows = await hub.provider.get_board_rankings(type)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"板块数据源失败：{exc}")
     rows.sort(key=lambda r: (r.get("change_pct") or 0), reverse=True)
     payload = {"data": {"type": type, "boards": rows}, "meta": _meta(hub)}
-    setattr(request.app.state, key, (_time.time(), payload))
+    cache.set(type, payload)
     return payload
 
 
@@ -696,31 +687,17 @@ async def company(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
     return {"data": profile, "meta": _meta(hub)}
 
 
-def _route_cache(holder, name: str) -> dict:
-    """holder（进程级单例）上挂一个命名 TTL 缓存 dict。"""
-    attr = f"_cache_{name}"
-    cache = getattr(holder, attr, None)
-    if cache is None:
-        cache = {}
-        setattr(holder, attr, cache)
-    return cache
-
-
-def _ttl_hit(cache: dict, key) -> tuple[bool, object]:
-    hit = cache.get(key)
-    if hit and time.monotonic() - hit[0] < 60:
-        return True, hit[1]
-    return False, None
-
-
 @router.get("/announcements/{symbol}")
-async def announcements(symbol: str, limit: int = Query(default=10, ge=1, le=30), hub: QuoteHub = Depends(get_hub)) -> dict:
+async def announcements(
+    symbol: str,
+    request: Request,
+    limit: int = Query(default=10, ge=1, le=30),
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
     """个股公告（东财，title/date/类型/原文链接）。进程内缓存 60s（切股回看不闪加载）。"""
-    import time
-
-    cache = _route_cache(hub, "announcements")
+    cache = cache_on(request.app.state, "market.announcements", 60, maxsize=512)
     key = (symbol, limit)
-    hit, cached = _ttl_hit(cache, key)
+    hit, cached = cache.get(key)
     if hit:
         return {"data": cached, "meta": {**_meta(hub), "cached": True}}
     try:
@@ -728,18 +705,21 @@ async def announcements(symbol: str, limit: int = Query(default=10, ge=1, le=30)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"公告数据源失败：{exc}")
     data = {"symbol": symbol, "items": rows}
-    cache[key] = (time.monotonic(), data)
+    cache.set(key, data)
     return {"data": data, "meta": _meta(hub)}
 
 
 @router.get("/news/{symbol}")
-async def news(symbol: str, limit: int = Query(default=10, ge=1, le=30), hub: QuoteHub = Depends(get_hub)) -> dict:
+async def news(
+    symbol: str,
+    request: Request,
+    limit: int = Query(default=10, ge=1, le=30),
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
     """个股相关新闻（东财资讯检索，含正文摘要）。进程内缓存 60s（技术债 #4）。"""
-    import time
-
-    cache = _route_cache(hub, "news")
+    cache = cache_on(request.app.state, "market.news", 60, maxsize=512)
     key = (symbol, limit)
-    hit, cached = _ttl_hit(cache, key)
+    hit, cached = cache.get(key)
     if hit:
         return {"data": cached, "meta": {**_meta(hub), "cached": True}}
     try:
@@ -747,7 +727,7 @@ async def news(symbol: str, limit: int = Query(default=10, ge=1, le=30), hub: Qu
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"新闻数据源失败：{exc}")
     data = {"symbol": symbol, "items": rows}
-    cache[key] = (time.monotonic(), data)
+    cache.set(key, data)
     return {"data": data, "meta": _meta(hub)}
 
 
@@ -943,17 +923,13 @@ async def themes(
     与 /api/limit-up 的区别：涨停池是平铺列表，本接口以题材为容器，
     给出「梯队是否成建制、资金是否持续」的结构化结论。结果缓存 60s。
     """
-    import time as _time
-
     if sort not in ("strength", "boards", "count"):
         raise HTTPException(status_code=400, detail="sort 仅支持 strength / boards / count")
     trade_date = date.fromisoformat(date_str) if date_str else await _default_trade_date_async(hub)
 
-    key = f"_themes_cache_{trade_date}"
-    cache = getattr(request.app.state, key, None)
-    if cache and _time.time() - cache[0] < 60:
-        payload = cache[1]
-    else:
+    cache = cache_on(request.app.state, "market.themes", 60, maxsize=16)
+    hit, payload = cache.get(trade_date)
+    if not hit:
         from app.services.theme_service import build_theme_board
 
         # 读 Parquet 是同步阻塞调用，必须丢到线程池，否则会卡住事件循环
@@ -967,7 +943,7 @@ async def themes(
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc))
         payload = {"data": board, "meta": _meta(hub)}
-        setattr(request.app.state, key, (_time.time(), payload))
+        cache.set(trade_date, payload)
 
     # T3/B3：官方板块 K 线交叉验证（缓存的 payload 已验证过时内部直接跳过）
     await _verify_board_multi_day(request, payload["data"])

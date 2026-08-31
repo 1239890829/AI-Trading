@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.api.deps import require_write_token
+from app.core.ttl_cache import cache_on
 from app.services.theme_catalog_service import ThemeCatalogService, reconcile
 from app.services.theme_service import parse_theme_tags
 
@@ -42,19 +43,18 @@ async def _attribution_for_symbol(request: Request, symbol: str, trade_date: dat
 
     整个涨停池一次拉取按 symbol 建倒排，多次个股查询共享。
     ths 源不可用（链上无该 provider / 拉取失败）时返回空——归因是 best-effort，
-    不让它拖垮官方成分的展示。注意：交易日盘中当日池随行情增长，盘前为空是正常语义。
+    不让它拖垮官方成分的展示（失败不缓存，下次请求重试）。
+    注意：交易日盘中当日池随行情增长，盘前为空是正常语义。
     """
-    import time as _time
-
     from app.services.theme_service import _pick_provider
 
     hub = request.app.state.hub
-    cache_key = f"_stock_attribution_cache_{trade_date or 'default'}"
-    cache = getattr(request.app.state, cache_key, None)
-    now = _time.time()
-    if cache and now - cache[0] < 60:
-        amap: dict[str, list[str]] = cache[1]
-        date_iso: str = cache[2]
+    cache = cache_on(request.app.state, "themes.attribution", 60, maxsize=8)
+    key = trade_date or "default"
+    hit, cached = cache.get(key)
+    if hit:
+        amap: dict[str, list[str]] = cached[0]
+        date_iso: str = cached[1]
     else:
         ths = _pick_provider(hub.provider, "ThsFuyaoProvider")
         if ths is None:
@@ -74,7 +74,7 @@ async def _attribution_for_symbol(request: Request, symbol: str, trade_date: dat
             if tags:
                 amap[row.symbol] = tags
         date_iso = trade_date.isoformat()
-        request.app.state.__setattr__(cache_key, (now, amap, date_iso))
+        cache.set(key, (amap, date_iso))
     return [{"theme_name": t, "date": date_iso} for t in amap.get(symbol, [])]
 
 
