@@ -28,11 +28,11 @@ uvicorn app.main:app --reload --port 8000
 # 前端（node_modules 已装）
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
-# 测试与门禁（每次改动全部跑，全绿才算完；当前基线：后端 455 / 前端 52）
-cd backend && .venv/bin/pytest                    # 455 用例
+# 测试与门禁（每次改动全部跑，全绿才算完；当前基线：后端 456 / 前端 56）
+cd backend && .venv/bin/pytest                    # 456 用例
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
 cd apps/web && npx eslint .                       # 0 error（24 warn 是挂账项，见 eslint.config.mjs 注释）
-cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 52 用例
+cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 56 用例
 cd backend && .venv/bin/python -m pyflakes app tests            # 0
 # 生产构建前必须先停 dev server（.next 冲突已踩两次）：
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
@@ -43,7 +43,7 @@ CI（GitHub Actions）：后端 pytest+pyflakes、前端 tsc+eslint+vitest+build
 
 ## 2. 当前状态快照（2026-08-31，commit 310c70e）
 
-**455 后端测试 + 52 前端测试全绿 · 82 REST + 1 WS 端点 · 四源链 `ths→tencent→eastmoney→sina`**
+**456 后端测试 + 56 前端测试全绿 · 82 REST + 1 WS 端点 · 四源链 `ths→tencent→eastmoney→sina`**
 
 | 阶段 | 状态 |
 |---|---|
@@ -116,7 +116,9 @@ K 线（TDX 2 年分钟级底座）；分时（均价线+量比基线）；盘�
 2. ~~**B4 seal_nextday 交叉验证晋级率**（P1-4，数据源自证闭环）~~ ✅ 已完成（2026-08-31）：
    `GET /api/market/ladder-check`（ths 天梯 seal_nextday 对照自算晋级率，逐日 match/drift/
    insufficient + 漂移 warning）；实测 5 可比日逐日一致、零漂移（1进2 首板不在天梯不可验）。
-3. **新闻/公告事件点画上 K 线**（P1-8；新闻+摘要+事件数据已就绪）。
+3. ~~**新闻/公告事件点画上 K 线**（P1-8）~~ ✅ 已完成（2026-08-31）：`lib/event-markers.ts`
+   纯函数 + KlineChartPro「事件」开关——公告琥珀●在柱上方、新闻蓝●在下方、重要度「高」加 !；
+   复用 digest 数据零新增请求；非交易日披露不顺延（不臆测归属日）。
 4. **题材指数与板块内资金合力**（P1-5 残留：成分表已建，指数计算未做）。
 
 ### 阶段 D · P2 远期/触发式（维持观察）

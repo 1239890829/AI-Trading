@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MinuteChart } from "@/components/minute-chart";
 import { KlineChartPro } from "@/components/kline-chart-pro";
 import { TradeForm } from "@/components/trade-form";
@@ -9,6 +9,7 @@ import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
 import { useQuoteStream } from "@/hooks/use-quote-stream";
 import { analyze } from "@/lib/technical-analysis";
+import { buildEventMarks } from "@/lib/event-markers";
 import { ThemeChipsRow } from "@/components/detail/theme-chips";
 import { StockEventsRow } from "@/components/detail/stock-events";
 import {
@@ -300,6 +301,12 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   const myPosition = paper?.positions.find((p) => p.symbol === symbol) ?? null;
   const costPrice = myPosition && myPosition.quantity > 0 ? myPosition.cost_price : null;
 
+  // 新闻/公告 → K 线事件点（P1-8）：复用 digest 已取回的数据，零新增请求
+  const eventMarks = useMemo(
+    () => buildEventMarks(bars.map((b) => b.ts.slice(0, 10)), anns ?? [], news ?? []),
+    [bars, anns, news],
+  );
+
   // 板块标签分组：把风格/指数成分与概念题材分开，避免"大盘股/MSCI中国"混进题材
   const boardGroups = company?.board_groups;
   const boardRows: BoardRows = boardGroups
@@ -402,7 +409,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                     </div>
                   )}
                   <div className="min-h-0 flex-1">
-                    <KlineChartPro bars={bars} tradeMarks={fills} costPrice={costPrice} className="h-full" />
+                    <KlineChartPro bars={bars} tradeMarks={fills} costPrice={costPrice} eventMarks={eventMarks} className="h-full" />
                   </div>
                 </div>
                 )

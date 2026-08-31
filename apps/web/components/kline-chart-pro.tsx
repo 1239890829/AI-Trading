@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CandlestickData, createChart, HistogramData, IChartApi, LineData, LineStyle, SeriesMarker, Time } from "lightweight-charts";
 import { calcEMA } from "@/lib/technical-analysis";
+import type { EventMark } from "@/lib/event-markers";
 import type { Kline } from "@/types/market";
 
 interface Props {
@@ -11,9 +12,11 @@ interface Props {
   tradeMarks?: { date: string; side: string; price: number; quantity: number }[];
   /** 当前持仓摊薄成本，>0 时在主图画虚线 */
   costPrice?: number | null;
+  /** 新闻/公告事件点（P1-8）：已按 bar 日期对齐 */
+  eventMarks?: EventMark[];
 }
 
-type Indicators = { ma5: boolean; ma10: boolean; ma20: boolean; ma60: boolean; vol: boolean; macd: boolean; boll: boolean; amt: boolean; bs: boolean };
+type Indicators = { ma5: boolean; ma10: boolean; ma20: boolean; ma60: boolean; vol: boolean; macd: boolean; boll: boolean; amt: boolean; bs: boolean; events: boolean };
 
 const MA_DEFS: [keyof Indicators, number, string][] = [
   ["ma5", 5, "#facc15"],
@@ -54,10 +57,10 @@ function calcBOLL(closes: number[], n = 20, k = 2) {
 
 /** K 线图（专业版）：MA5/10/20/60、BOLL(20,2)、成交量+均量线(5/10/20)、MACD/成交额副图、
  * 指标开关、缩放按钮、副图高度拖拽（布局 #2）。默认聚焦最近 20 根。 */
-export function KlineChartPro({ bars, className, tradeMarks, costPrice }: Props) {
+export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMarks }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const [ind, setInd] = useState<Indicators>({ ma5: true, ma10: true, ma20: true, ma60: true, vol: true, macd: false, boll: false, amt: false, bs: true });
+  const [ind, setInd] = useState<Indicators>({ ma5: true, ma10: true, ma20: true, ma60: true, vol: true, macd: false, boll: false, amt: false, bs: true, events: true });
   // 布局 #2：副图高度占比可拖拽（0.10-0.45，localStorage 持久化）
   const [subH, setSubH] = useState(0.18);
   const subHRef = useRef(subH);
@@ -165,6 +168,22 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice }: Props)
           text: `${t.side === "buy" ? "B" : "S"} ${t.quantity}股`,
         });
       }
+    }
+    // 新闻/公告事件点（P1-8）：公告=琥珀圆点在上方，新闻=天蓝圆点在下方；重要度「高」加 !
+    if (ind.events) {
+      for (const m of eventMarks ?? []) {
+        if (!bars.some((b) => b.ts.slice(0, 10) === m.date)) continue;
+        const isAnn = m.kind === "公告";
+        markers.push({
+          time: m.date as Time,
+          position: isAnn ? "aboveBar" : "belowBar",
+          color: isAnn ? "#f59e0b" : "#38bdf8",
+          shape: "circle",
+          text: `${m.kind}${m.important ? "!" : ""}`,
+        });
+      }
+    }
+    if (markers.length > 0) {
       markers.sort((a, b) => String(a.time).localeCompare(String(b.time)));
       candle.setMarkers(markers);
     }
@@ -187,7 +206,7 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice }: Props)
       chart.remove();
       chartRef.current = null;
     };
-  }, [bars, ind, tradeMarks, costPrice]);
+  }, [bars, ind, tradeMarks, costPrice, eventMarks]);
 
   // 布局 #2：副图高度变化 → applyOptions 动态调整（不重建 chart），主图 bottom 随之让位
   useEffect(() => {
@@ -218,6 +237,7 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice }: Props)
     ["amt", "成交额"],
     ["macd", "MACD"],
     ["bs", "BS点"],
+    ["events", "事件"],
   ];
 
   function zoomTime(factor: number) {
@@ -258,7 +278,7 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice }: Props)
             {label}
           </button>
         ))}
-        <span className="ml-auto text-[10px] text-zinc-500">金叉/死叉为 MA5×MA10 技术信号 · 紫[榜]=龙虎榜日 · B/S=模拟交易成交 · 黄虚线=持仓成本</span>
+        <span className="ml-auto text-[10px] text-zinc-500">金叉/死叉为 MA5×MA10 技术信号 · 紫[榜]=龙虎榜日 · B/S=模拟交易成交 · 黄虚线=持仓成本 · 琥珀●=公告 蓝●=新闻(!=重要度高)</span>
       </div>
       <div className={`relative min-h-0 w-full flex-1 ${className ?? ""}`}>
         <div ref={containerRef} className="h-full w-full" />
