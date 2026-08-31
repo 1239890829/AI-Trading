@@ -688,13 +688,14 @@ async def generate_review(request: Request, hub: QuoteHub = Depends(get_hub), _:
             day_high=q.high if q is not None else None,
             day_low=q.low if q is not None else None,
             day_close=q.price if q is not None else None,
+            observation_only=bool(it.get("observation_only")),
         )
         category, note = classify_failure(
             excess_pct=excess, entry=entry, market_phase=review_phase
         )
-        if entry.get("filled") is not None:
-            # 买点质量并入 note：不额外加列（克制新增），但复盘必须能看到这段证据
-            note = f"{note}；{entry['basis']}"
+        # 买点质量并入 note：不额外加列（克制新增），但复盘必须能看到这段证据。
+        # 闸门日也会带上——"本就不建议出手"本身就是需要留档的结论。
+        note = f"{note}；{entry['basis']}"
         verdict = {"missed": "flat", "entry_bad": "bad", "sentiment_misread": "bad",
                    "logic_failed": "bad", "gone_well": "good"}.get(category, "flat")
         reviews.append(

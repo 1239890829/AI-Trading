@@ -223,3 +223,13 @@ def test_classify_failure_good_and_flat():
     e = _entry()
     assert classify_failure(excess_pct=3.0, entry=e)[0] == "gone_well"
     assert classify_failure(excess_pct=0.5, entry=e)[0] == "gone_well"
+
+
+def test_entry_quality_distinguishes_gate_day_from_missing_data():
+    """闸门日"没给买点"与"数据缺失"必须区分——前者是设计，后者是缺陷。"""
+    e = _entry(buy_range=None, observation_only=True)
+    assert e["filled"] is None
+    assert "空仓闸门日" in e["basis"]
+    assert "不适用买点评析" in e["basis"]
+    # 同样无买入范围但非闸门日 → 归为数据缺失
+    assert "无买入范围或行情缺失" in _entry(buy_range=None)["basis"]

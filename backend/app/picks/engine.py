@@ -265,23 +265,30 @@ def review_entry_quality(
     day_high: float | None,
     day_low: float | None,
     day_close: float | None,
+    observation_only: bool = False,
 ) -> dict:
     """买点质量：把「选错了」与「选对了但买点不对」分开。
 
     复盘最有价值的区分正是这一条——同一只票，按买入范围介入是赚的、追高介入
     是亏的，前者是执行问题，后者才是选股问题。混在一起统计会污染迭代方向。
 
+    :param observation_only: 该标的是否为空仓闸门日的「仅观察」条目。闸门日
+        本就不给买入范围，此时不适用买点评析——必须区分于"数据缺失导致不可评"。
     :return: {filled, entry_cost, entry_pnl_pct, open_pnl_pct, advantage_pct, basis}
              filled=None 表示不可评（无买入范围或行情缺失）
     """
     if not buy_range or None in (day_open, day_high, day_low, day_close):
+        if observation_only:
+            basis = "空仓闸门日：本就未给出买入范围（不建议出手），不适用买点评析"
+        else:
+            basis = "无买入范围或行情缺失 → 买点质量不可评"
         return {
             "filled": None,
             "entry_cost": None,
             "entry_pnl_pct": None,
             "open_pnl_pct": None,
             "advantage_pct": None,
-            "basis": "无买入范围（空仓闸门撤除）或行情缺失 → 买点质量不可评",
+            "basis": basis,
         }
     high_edge = float(buy_range["high"])
     if day_low > high_edge:

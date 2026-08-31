@@ -97,7 +97,6 @@ function PicksInner() {
   }
 
   const items = data?.items ?? [];
-  const badReviews = reviews.filter((r) => r.verdict === "bad");
 
   return (
     <main className="mx-auto flex h-full w-full max-w-[1400px] flex-col gap-2 overflow-hidden px-4 py-3">
@@ -187,17 +186,37 @@ function PicksInner() {
                 </div>
               </div>
             )}
-            {badReviews.length > 0 && (
+            {reviews.length > 0 && (
               <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
-                <div className="mb-1 font-medium">当日复盘（走坏逐只归因）</div>
-                {badReviews.map((r) => (
-                  <div key={r.symbol + r.date} className="flex gap-2 border-b border-zinc-100 py-1 last:border-0 dark:border-zinc-800/60">
-                    <span className="font-mono text-zinc-400">{r.symbol}</span>
-                    <span>{r.name ?? ""}</span>
-                    <span className={`font-mono tabular-nums ${pctColor(r.excess_pct)}`}>超额 {pctText(r.excess_pct)}</span>
-                    <span className="text-zinc-500">{REASON_LABELS[r.reason_category] ?? r.reason_category}：{r.note}</span>
-                  </div>
-                ))}
+                <div className="mb-1 font-medium">
+                  当日复盘（逐只归因：对在哪、错在哪）
+                  <span className="ml-1.5 font-normal text-zinc-400">
+                    走坏 {reviews.filter((r) => r.verdict === "bad").length} / 共 {reviews.length}
+                  </span>
+                </div>
+                {reviews.map((r) => {
+                  const label = REASON_LABELS[r.reason_category] ?? r.reason_category;
+                  const tone =
+                    r.verdict === "good"
+                      ? "text-up"
+                      : r.verdict === "bad"
+                        ? "text-down"
+                        : "text-zinc-400";
+                  return (
+                    <div
+                      key={r.symbol + r.date}
+                      className="flex flex-wrap gap-2 border-b border-zinc-100 py-1 last:border-0 dark:border-zinc-800/60"
+                    >
+                      <span className="font-mono text-zinc-400">{r.symbol}</span>
+                      <span>{r.name ?? ""}</span>
+                      <span className={`font-mono tabular-nums ${pctColor(r.excess_pct)}`}>
+                        超额 {pctText(r.excess_pct)}
+                      </span>
+                      <span className={tone}>{label}</span>
+                      <span className="w-full text-zinc-500">{r.note}</span>
+                    </div>
+                  );
+                })}
               </div>
             )}
             {history.length > 0 && (
