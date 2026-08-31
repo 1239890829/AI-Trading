@@ -302,7 +302,6 @@ function WorkbenchInner() {
                     </td>
                     <td className="px-2 py-2 text-right font-mono tabular-nums"><PriceFlash value={q.price}>{fmt(q.price)}</PriceFlash></td>
                     <td className={`px-2 py-2 text-right font-mono text-xs tabular-nums ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</td>
-                    <td className="hidden px-2 py-2 text-right font-mono text-xs tabular-nums text-zinc-400 md:table-cell">{fmtAmount(q.amount)}</td>
                     <td className="px-1 py-2 text-right">{q.quality !== "high" && <QualityBadge quality={q.quality} reasons={q.quality_reasons} />}</td>
                     <td className="pr-2 text-right">
                       <button
