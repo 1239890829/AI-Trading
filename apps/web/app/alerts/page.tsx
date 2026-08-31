@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { Panel } from "@/components/panel";
+import { workbenchUrl } from "@/lib/routing";
 import {
   ackAlertEvent,
   createAlertRule,
@@ -319,7 +321,11 @@ export default function AlertsPage() {
                       <td className="px-3 py-2 font-mono text-zinc-400">
                         {new Date(e.triggered_at).toLocaleTimeString("zh-CN")}
                       </td>
-                      <td className="px-3 py-2 font-mono">{e.symbol}</td>
+                      <td className="px-3 py-2 font-mono">
+                        <Link href={workbenchUrl(e.symbol)} className="hover:text-sky-400 hover:underline" title="查看行情详情">
+                          {e.symbol}
+                        </Link>
+                      </td>
                       <td className="px-3 py-2">{rules.find((r) => r.id === e.rule_id)?.name ?? e.rule_id}</td>
                       <td className={`px-3 py-2 font-mono tabular-nums ${e.snapshot ? pctColor(e.snapshot.change_pct) : ""}`}>
                         {e.trigger_value.toFixed(2)}

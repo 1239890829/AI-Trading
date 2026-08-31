@@ -179,3 +179,46 @@ def test_events_api_lifecycle(monkeypatch: pytest.MonkeyPatch):
 
         # 非法状态
         assert client.post(f"/api/events/{eid}/review", json={"status": "whatever"}).status_code == 400
+
+
+def test_events_for_symbol_api(monkeypatch: pytest.MonkeyPatch):
+    """E2：详情页事件标签——按官方归属题材 + source_symbol 两条路径匹配。"""
+    with TestClient(app) as client:
+        from app.services.theme_catalog_service import ThemeCatalogService
+
+        svc = ThemeCatalogService(get_session_factory(), api_key="t")
+
+        async def fake_catalog():
+            return [{"code": "990001.TI", "name": "存储芯片"}]
+
+        async def fake_members(code):
+            if code == "990001.TI":
+                return [{"symbol": "600171", "name": "上海贝岭"}]
+            return []
+
+        monkeypatch.setattr(svc, "fetch_catalog", fake_catalog)
+        monkeypatch.setattr(svc, "fetch_members", fake_members)
+        client.app.state.theme_catalog = svc
+        asyncio.run(svc.sync_catalog())
+        asyncio.run(svc.sync_members("990001.TI"))
+
+        # 事件 A：方向命中 600171 的归属题材（标题用变体，避免与前面用例指纹去重）
+        r = client.post("/api/events", json={"title": "长鑫 LPDDR6 量产全面爬坡"})
+        assert r.json()["data"]["created"] is True
+        # 事件 B：来源个股即 600171（source_symbol 路径）
+        r = client.post("/api/events", json={"title": "上海贝岭发布业绩预增公告", "source_symbol": "600171"})
+        assert r.json()["data"]["created"] is True
+        # 事件 C：题材无关（不应命中）
+        client.post("/api/events", json={"title": "某机场旅客吞吐量创新高"})
+
+        r = client.get("/api/events/symbol/600171")
+        assert r.status_code == 200
+        data = r.json()["data"]
+        assert data["themes"] == ["存储芯片"]
+        ids = {i["id"] for i in data["items"]}
+        assert len(ids) == 2, "题材命中 + source_symbol 两条路径各命中一个"
+        reasons = {i["match_reason"] for i in data["items"]}
+        assert reasons == {"theme", "source"}
+
+        # 非法代码
+        assert client.get("/api/events/symbol/xyz").status_code == 400

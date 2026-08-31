@@ -648,6 +648,17 @@ export async function getEvents(active = true, limit = 20): Promise<EventSummary
   return r.data.items;
 }
 
+/** 个股相关活跃事件（E2：方向题材命中官方归属 或 事件源自该股）。 */
+export async function getEventsForSymbol(
+  symbol: string,
+): Promise<{ symbol: string; themes: string[]; count: number; items: EventSummary[] }> {
+  const r = await getJson<{ symbol: string; themes: string[]; count: number; items: EventSummary[] }>(
+    `/api/events/symbol/${symbol}`,
+    30_000,
+  );
+  return r.data;
+}
+
 export async function getEventStocks(id: number): Promise<EventStockPool[]> {
   return (await getJson<{ pools: EventStockPool[] }>(`/api/events/${id}/stocks`, 60_000)).data.pools;
 }

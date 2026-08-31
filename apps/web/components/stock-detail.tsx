@@ -10,6 +10,7 @@ import { QualityBadge } from "@/components/quality-badge";
 import { useQuoteStream } from "@/hooks/use-quote-stream";
 import { analyze } from "@/lib/technical-analysis";
 import { ThemeChipsRow } from "@/components/detail/theme-chips";
+import { StockEventsRow } from "@/components/detail/stock-events";
 import {
   addToWatchlist,
   cancelPaperOrder,
@@ -336,6 +337,9 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
 
       {/* ①½ 题材归属 chips（官方成分 / 涨停归因双源）→ 题材看板聚焦 */}
       <ThemeChipsRow themes={stockThemes} />
+
+      {/* ①¾ 相关事件（E2/L9）：方向题材命中归属 或 事件源自该股 */}
+      <StockEventsRow symbol={symbol} />
 
       {/* ② 中部：左图表区 + 右盘口/逐笔（右列宽度可拖拽，--right-w 由 state 注入） */}
       <div

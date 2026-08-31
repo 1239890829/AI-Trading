@@ -1,6 +1,6 @@
 # REST API
 
-Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**78 个端点**（2026-08-31 与代码同步）。
+Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**79 个端点**（2026-08-31 与代码同步）。
 
 统一响应：`{"data": ..., "meta": {...}}`（Envelope[T]，meta 含 `provider / is_realtime / is_stale / last_success_refresh / generated_at`）。
 数据源失败返回 **HTTP 502**（前端显示错误态，绝不降级伪造）；错误统一契约 `{detail, code}`。
@@ -82,6 +82,7 @@ Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**78 个端点**（2026-
 |---|---|---|
 | GET | `/api/events?active=&limit=` | 活跃事件列表（时效=半衰期×2 实时计算） |
 | GET | `/api/events/{id}` | 事件详情（含方向映射行） |
+| GET | `/api/events/symbol/{symbol}` | 个股相关活跃事件（方向题材命中官方归属 or 事件源自该股） |
 | GET | `/api/events/{id}/stocks` | 标的池：方向题材 → 官方成分反查 + override |
 | POST | `/api/events` | 手动注册事件（写鉴权），规则抽取方向 |
 | POST | `/api/events/extract` | 批量注册 items[]（写鉴权） |

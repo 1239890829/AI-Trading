@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.api.deps import require_write_token
+from app.api.routes.theme_catalog import _normalize_symbol  # 同包复用：代码归一
 from app.events.store import EventStore
 
 log = logging.getLogger(__name__)
@@ -147,6 +148,51 @@ async def event_stocks(event_id: int, request: Request, store: EventStore = Depe
     return {
         "data": {"event": _serialize(row, store.directions_of(event_id)), "pools": pools},
         "meta": {"disclaimer": "标的池仅为事件关联成分，不构成买卖建议"},
+    }
+
+
+@router.get("/events/symbol/{symbol}")
+async def events_for_symbol(
+    symbol: str,
+    request: Request,
+    limit: int = Query(default=5, ge=1, le=20),
+    store: EventStore = Depends(get_store),
+) -> dict:
+    """与个股相关的活跃事件（E2 残留：详情页事件标签的数据源）。
+
+    命中两条路径之一：
+    - 方向题材 ∈ 该股官方归属题材（linkage-design §3.2 L3 归属反查）
+    - 事件抽取自该股的新闻（source_symbol）
+    """
+    sym = _normalize_symbol(symbol)
+    svc = getattr(request.app.state, "theme_catalog", None)
+    theme_names: set[str] = set()
+    if svc is not None:
+        theme_names = {m["theme_name"] for m in svc.get_official_for_symbol(sym)}
+
+    matched = []
+    for row in store.list_events(active_only=True, limit=50):
+        dirs = store.directions_of(row.id)
+        if row.source_symbol == sym:
+            matched.append({"event": row, "directions": dirs, "match_reason": "source"})
+        else:
+            hit = [d for d in dirs if d.target_type == "theme" and d.target in theme_names]
+            if hit:
+                matched.append({"event": row, "directions": hit, "match_reason": "theme"})
+        if len(matched) >= limit:
+            break
+
+    return {
+        "data": {
+            "symbol": sym,
+            "themes": sorted(theme_names),
+            "count": len(matched),
+            "items": [
+                {**_serialize(m["event"], m["directions"]), "match_reason": m["match_reason"]}
+                for m in matched
+            ],
+        },
+        "meta": {},
     }
 
 
