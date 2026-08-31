@@ -1,0 +1,51 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { IndexCards } from "@/components/index-cards";
+import type { Quote } from "@/types/market";
+
+// vitest 未开 globals 时 RTL 自动 cleanup 不注册，必须手动（见 trade-form.test.tsx 注释）
+afterEach(cleanup);
+
+const baseAudit = { source: "ths", quality: "high" as const, quality_reasons: [], received_at: "t0" };
+
+function idx(symbol: string, name: string, market: string, price: number): Quote {
+  return { ...baseAudit, symbol, name, market, price, change_pct: 0.5 };
+}
+
+const indices = [
+  idx("000001", "上证指数", "SH", 3300.5),
+  idx("399001", "深证成指", "SZ", 10500.2),
+  idx("399006", "创业板指", "SZ", 2100.8),
+];
+
+describe("IndexCards 指数点击交互", () => {
+  it("点击指数卡 → 回调收到带市场前缀的详情 symbol（与自选股点击同一交互）", () => {
+    const onSelect = vi.fn();
+    render(<IndexCards indices={indices} onSelect={onSelect} />);
+    fireEvent.click(screen.getByTitle(/上证指数/));
+    expect(onSelect).toHaveBeenCalledWith("sh000001");
+    fireEvent.click(screen.getByTitle(/深证成指/));
+    expect(onSelect).toHaveBeenCalledWith("sz399001");
+    fireEvent.click(screen.getByTitle(/创业板指/));
+    expect(onSelect).toHaveBeenCalledWith("sz399006");
+  });
+
+  it("已带前缀的指数 symbol（腾讯源形态）原样透传，不二次加前缀", () => {
+    const onSelect = vi.fn();
+    render(<IndexCards indices={[idx("sh000001", "上证指数", "SH", 3300.5)]} onSelect={onSelect} />);
+    fireEvent.click(screen.getByTitle(/上证指数/));
+    expect(onSelect).toHaveBeenCalledWith("sh000001");
+  });
+
+  it("未传 onSelect 时卡片渲染但不报错（静默降级为纯展示）", () => {
+    render(<IndexCards indices={indices} />);
+    expect(screen.getByText("3,300.50")).toBeTruthy(); // fmt 带千分位
+  });
+
+  it("选中态：selected 匹配的指数卡获得高亮（aria/title 无关，验证样式类切换）", () => {
+    const { container } = render(<IndexCards indices={indices} selected="sz399001" onSelect={vi.fn()} />);
+    const active = container.querySelector("button.bg-zinc-200\\/80");
+    expect(active).not.toBeNull();
+    expect(active?.getAttribute("title")).toContain("深证成指");
+  });
+});

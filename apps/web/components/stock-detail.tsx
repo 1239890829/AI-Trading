@@ -10,6 +10,8 @@ import { QualityBadge } from "@/components/quality-badge";
 import { useQuoteStream } from "@/hooks/use-quote-stream";
 import { analyze } from "@/lib/technical-analysis";
 import { buildEventMarks } from "@/lib/event-markers";
+import { mergeQuoteIntoBars } from "@/lib/kline-live";
+import { isIndexSymbol } from "@/lib/api";
 import { ThemeChipsRow } from "@/components/detail/theme-chips";
 import { StockEventsRow } from "@/components/detail/stock-events";
 import {
@@ -88,6 +90,15 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   const [quote, setQuote] = useState<Quote | null>(null);
   const [auction, setAuction] = useState<AuctionData | null>(null);
   const [vrBaseline, setVrBaseline] = useState<number[] | null>(null);
+  // 指数 symbol（sh000001 等）：禁用个股专属面板（加自选/交易/资料/资金图）
+  const isIndex = isIndexSymbol(symbol);
+  // 指数下个股专属 tab 不可用：残留的 flow/trade/profile 选中态强制归位
+  //（workbench 切股走 key 重挂载不会残留，这里是 /stock/[symbol] 等复用方的防御）
+  useEffect(() => {
+    if (!isIndex) return;
+    setChartTab((t) => (t === "flow" ? "kline" : t));
+    setRightTab((t) => (t === "trade" || t === "profile" ? "book" : t));
+  }, [isIndex]);
 
   const { quotes } = useQuoteStream([symbol]);
   useEffect(() => {
@@ -286,7 +297,55 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     };
   }, [symbol]);
 
+  // ---- 盘中实时刷新（2026-08-31 修复"K线/分时/盘口/逐笔拉一次就死"）----
+  // 此前所有图表数据只在切股时拉取一次，盘中永不更新——K 线最后一根
+  // 停在进场时刻，跟不上行情。频率依据：K 线/分时数据源粒度是分钟级，
+  // 60s 校准已超过够用；盘口变化最快对齐 WS 降级轮询的 5s；逐笔走东财
+  // （WAF 限流）10s 保守。实时性主力是下面的 WS 合成，不靠轮询。
+  // ① K 线当日 bar 的秒级合成：渲染期派生（外部状态订阅的官方推荐模式），
+  //    WS quote 更新 → 最后一根 bar 实时跟进；价格未动时 mergeQuoteIntoBars
+  //    返回 null → 引用不变 → 下游图表不重渲染。
+  const liveQuote = quotes[symbol];
+  const displayBars = useMemo(() => mergeQuoteIntoBars(bars, liveQuote) ?? bars, [bars, liveQuote]);
+  // ② K 线 REST 校准：60s 全量重拉，纠正合成漂移并接住新交易日首根 bar
+  // ③ 分时 60s 轮询（逐分钟追加新点）
+  useEffect(() => {
+    if (!symbol) return;
+    const kline = setInterval(() => {
+      void getKline(symbol, "1d", 120)
+        .then((b) => b.length > 0 && setBars(b))
+        .catch(() => {});
+    }, 60_000);
+    const minute = setInterval(() => {
+      void getMinuteLineWithBaseline(symbol)
+        .then((r) => {
+          setMinutes(r.points);
+          setVrBaseline(r.vr_baseline_5m);
+        })
+        .catch(() => {});
+    }, 60_000);
+    return () => {
+      clearInterval(kline);
+      clearInterval(minute);
+    };
+  }, [symbol]);
+  // ④ 盘口 5s / 逐笔 10s 轮询（失败静默保留上一次快照，别清空面板）
+  useEffect(() => {
+    if (!symbol) return;
+    const book = setInterval(() => {
+      void getOrderBook(symbol).then(setBook).catch(() => {});
+    }, 5_000);
+    const trades = setInterval(() => {
+      void getTrades(symbol, 30).then(setTrades).catch(() => {});
+    }, 10_000);
+    return () => {
+      clearInterval(book);
+      clearInterval(trades);
+    };
+  }, [symbol]);
+
   async function add() {
+    if (isIndex) return; // 指数不入自选（sh000001 不是合法自选股代码）
     try {
       await addToWatchlist(symbol);
       setInWatchlist(true);
@@ -294,7 +353,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   }
 
   const tech = analyze(
-    bars.map((b) => ({ ts: b.ts, open: b.open ?? 0, high: b.high ?? 0, low: b.low ?? 0, close: b.close ?? 0, volume: b.volume, change_pct: b.change_pct }))
+    displayBars.map((b) => ({ ts: b.ts, open: b.open ?? 0, high: b.high ?? 0, low: b.low ?? 0, close: b.close ?? 0, volume: b.volume, change_pct: b.change_pct }))
   );
 
   // 当前个股的模拟持仓（用于 K 线成本线）
@@ -303,8 +362,8 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
 
   // 新闻/公告 → K 线事件点（P1-8）：复用 digest 已取回的数据，零新增请求
   const eventMarks = useMemo(
-    () => buildEventMarks(bars.map((b) => b.ts.slice(0, 10)), anns ?? [], news ?? []),
-    [bars, anns, news],
+    () => buildEventMarks(displayBars.map((b) => b.ts.slice(0, 10)), anns ?? [], news ?? []),
+    [displayBars, anns, news],
   );
 
   // 板块标签分组：把风格/指数成分与概念题材分开，避免"大盘股/MSCI中国"混进题材
@@ -339,8 +398,8 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
         <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-600 dark:text-amber-300">{error}</div>
       )}
 
-      {/* ① 紧凑行情条 */}
-      {quote && <QuoteStrip quote={quote} inWatchlist={inWatchlist} onAdd={() => void add()} />}
+      {/* ① 紧凑行情条（指数隐藏加自选：sh000001 不是合法自选股代码） */}
+      {quote && <QuoteStrip quote={quote} inWatchlist={inWatchlist} onAdd={() => void add()} hideWatchlist={isIndex} />}
 
       {/* ①½ 题材归属 chips（官方成分 / 涨停归因双源）→ 题材看板聚焦 */}
       <ThemeChipsRow themes={stockThemes} />
@@ -356,11 +415,14 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
         <div className="flex min-h-0 min-w-0 flex-col gap-1.5">
           <div className="flex shrink-0 gap-1">
             {(
-              [
-                ["kline", "K线"],
-                ["minute", "分时"],
-                ["flow", "资金图"],
-              ] as const
+              (
+                [
+                  ["kline", "K线"],
+                  ["minute", "分时"],
+                  // 指数无个股资金流数据：隐藏资金图 tab，避免常空误导
+                  ["flow", "资金图"],
+                ] as const
+              ).filter(([key]) => !(isIndex && key === "flow")) as [ChartTab, string][]
             ).map(([key, label]) => (
               <button
                 key={key}
@@ -373,14 +435,14 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
           </div>
 
           {chartTab === "kline" && (
-            <Panel title="日 K 线（前复权 · 默认聚焦最近 20 日，可缩放看全部）" source={bars[0]?.source} bodyClassName="overflow-hidden" className="min-h-0 flex-1" extra={
-              !replayMode && bars.length >= 60 && (
+            <Panel title="日 K 线（前复权 · 默认聚焦最近 20 日，可缩放看全部）" source={displayBars[0]?.source} bodyClassName="overflow-hidden" className="min-h-0 flex-1" extra={
+              !replayMode && displayBars.length >= 60 && (
                 <button onClick={() => setReplayMode(true)} className="rounded border border-sky-500/50 px-2 py-0.5 text-xs text-sky-400 hover:bg-sky-500/10">
                   ▶ 历史回放
                 </button>
               )
             }>
-              {bars.length > 0 ? (
+              {displayBars.length > 0 ? (
                 replayMode ? (
                   <ReplayChart bars={bars} fills={fills} onExit={() => setReplayMode(false)} />
                 ) : (
@@ -409,7 +471,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                     </div>
                   )}
                   <div className="min-h-0 flex-1">
-                    <KlineChartPro bars={bars} tradeMarks={fills} costPrice={costPrice} eventMarks={eventMarks} className="h-full" />
+                    <KlineChartPro bars={displayBars} tradeMarks={fills} costPrice={costPrice} eventMarks={eventMarks} className="h-full" />
                   </div>
                 </div>
                 )
@@ -425,7 +487,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                 <MinuteChart
                   points={minutes}
                   prevClose={quote?.prev_close ?? null}
-                  yesterdayVol={bars.length >= 2 ? (bars[bars.length - 2]?.volume ?? null) : null}
+                  yesterdayVol={displayBars.length >= 2 ? (displayBars[displayBars.length - 2]?.volume ?? null) : null}
                   index={indexOverlay}
                   auction={auction?.auction_price ? { price: auction.auction_price, pct: auction.auction_pct } : null}
                   exactBaseline={vrBaseline}
@@ -487,13 +549,15 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
         >
           <div className="flex shrink-0 gap-1 border-b border-zinc-100 px-2 py-1 dark:border-zinc-800/60">
             {(
-              [
-                ["book", "盘口"],
-                ["trades", "逐笔"],
-                ["trade", "交易"],
-                ["profile", "资料"],
-                ["info", "资讯"],
-              ] as const
+              (
+                [
+                  ["book", "盘口"],
+                  ["trades", "逐笔"],
+                  ["trade", "交易"],
+                  ["profile", "资料"],
+                  ["info", "资讯"],
+                ] as const
+              ).filter(([k]) => !(isIndex && (k === "trade" || k === "profile"))) as [RightTab, string][]
             ).map(([k, label]) => (
               <button
                 key={k}

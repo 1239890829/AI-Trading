@@ -1,7 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CandlestickData, createChart, HistogramData, IChartApi, LineData, LineStyle, SeriesMarker, Time } from "lightweight-charts";
+import {
+  CandlestickData,
+  createChart,
+  HistogramData,
+  IChartApi,
+  IPriceLine,
+  ISeriesApi,
+  LineData,
+  LineStyle,
+  SeriesMarker,
+  Time,
+} from "lightweight-charts";
 import { calcEMA } from "@/lib/technical-analysis";
 import type { EventMark } from "@/lib/event-markers";
 import type { Kline } from "@/types/market";
@@ -14,6 +25,8 @@ interface Props {
   costPrice?: number | null;
   /** 新闻/公告事件点（P1-8）：已按 bar 日期对齐 */
   eventMarks?: EventMark[];
+  /** 数据更新时重聚焦最近 20 根（历史回放跟随进度）；详情页 false，保用户缩放位置 */
+  followLatest?: boolean;
 }
 
 type Indicators = { ma5: boolean; ma10: boolean; ma20: boolean; ma60: boolean; vol: boolean; macd: boolean; boll: boolean; amt: boolean; bs: boolean; events: boolean };
@@ -55,9 +68,15 @@ function calcBOLL(closes: number[], n = 20, k = 2) {
   return { ma, up, low };
 }
 
-/** K 线图（专业版）：MA5/10/20/60、BOLL(20,2)、成交量+均量线(5/10/20)、MACD/成交额副图、
- * 指标开关、缩放按钮、副图高度拖拽（布局 #2）。默认聚焦最近 20 根。 */
-export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMarks }: Props) {
+/**
+ * K 线图（专业版）：MA5/10/20/60、BOLL(20,2)、成交量+均量线(5/10/20)、MACD/成交额副图、
+ * 指标开关、缩放按钮、副图高度拖拽（布局 #2）。默认聚焦最近 20 根。
+ *
+ * 创建与填充分离（2026-08-31）：此前 bars 一变（盘中 WS 合成当日 bar，秒级）整个 chart
+ * 销毁重建——闪烁且丢失用户的缩放/平移位置，实时刷新根本没法用。现在 chart/series
+ * 只随指标开关重建，数据变化走 fill() 对既有 series setData。
+ */
+export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMarks, followLatest = false }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const [ind, setInd] = useState<Indicators>({ ma5: true, ma10: true, ma20: true, ma60: true, vol: true, macd: false, boll: false, amt: false, bs: true, events: true });
@@ -72,91 +91,92 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
     }
   }, []);
 
-  useEffect(() => {
-    if (!containerRef.current || bars.length === 0) return;
-    const chart = createChart(containerRef.current, {
-      autoSize: true,
-      layout: { background: { color: "transparent" }, textColor: "#a1a1aa" },
-      grid: { vertLines: { color: "rgba(120,120,130,0.10)" }, horzLines: { color: "rgba(120,120,130,0.10)" } },
-      timeScale: { timeVisible: false, borderVisible: false },
-      rightPriceScale: { borderVisible: false },
-    });
-    chartRef.current = chart;
-    const candle = chart.addCandlestickSeries({
-      upColor: "#f43f5e", downColor: "#10b981", borderUpColor: "#f43f5e", borderDownColor: "#10b981",
-      wickUpColor: "#f43f5e", wickDownColor: "#10b981",
-    });
+  // series 引用：创建 effect 按当前指标开关建好，fill() 只往里 setData
+  const seriesRef = useRef<{
+    candle: ISeriesApi<"Candlestick"> | null;
+    ma: (ISeriesApi<"Line"> | null)[];
+    boll: { up: ISeriesApi<"Line"> | null; low: ISeriesApi<"Line"> | null; mid: ISeriesApi<"Line"> | null };
+    vol: ISeriesApi<"Histogram"> | null;
+    vma: (ISeriesApi<"Line"> | null)[];
+    amt: ISeriesApi<"Histogram"> | null;
+    macd: { hist: ISeriesApi<"Histogram"> | null; dif: ISeriesApi<"Line"> | null; dea: ISeriesApi<"Line"> | null };
+  }>({ candle: null, ma: [], boll: { up: null, low: null, mid: null }, vol: null, vma: [], amt: null, macd: { hist: null, dif: null, dea: null } });
+  const priceLineRef = useRef<IPriceLine | null>(null);
+
+  // fill：把当前 props 数据灌入已存在的 series（幂等，全量 setData；bars 只有 120 根，成本低）。
+  // 存进 ref 供创建 effect 调用最新版本，避免把 bars 放进创建依赖导致整图重建。
+  const fill = () => {
+    const chart = chartRef.current;
+    const s = seriesRef.current;
+    if (!chart || !s.candle || bars.length === 0) return;
+
     const data: CandlestickData[] = bars
       .filter((b) => b.open != null && b.close != null)
       .map((b) => ({ time: b.ts.slice(0, 10) as Time, open: b.open as number, high: (b.high ?? b.open) as number, low: (b.low ?? b.open) as number, close: b.close as number }));
-    candle.setData(data);
+    s.candle.setData(data);
     const closes = data.map((d) => d.close);
     const times = data.map((d) => d.time);
 
     // 主图均线
-    for (const [key, n, color] of MA_DEFS) {
-      if (!ind[key]) continue;
-      const line = calcMA(closes, n)
-        .map((v, i) => ({ time: times[i], value: v }))
-        .filter((x) => x.value != null) as LineData[];
-      chart.addLineSeries({ color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false }).setData(line);
-    }
+    MA_DEFS.forEach(([key], i) => {
+      const line = s.ma[i];
+      if (!line) return;
+      const n = MA_DEFS[i][1];
+      s.ma[i]!.setData(
+        calcMA(closes, n).map((v, j) => ({ time: times[j], value: v })).filter((x) => x.value != null) as LineData[]
+      );
+    });
 
     // BOLL(20,2)
-    if (ind.boll) {
+    if (s.boll.up && s.boll.low && s.boll.mid) {
       const boll = calcBOLL(closes);
       const mk = (vals: (number | null)[]): LineData[] =>
         vals.map((v, i) => ({ time: times[i], value: v })).filter((x) => x.value != null) as LineData[];
-      chart.addLineSeries({ color: "#e879f9", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }).setData(mk(boll.up));
-      chart.addLineSeries({ color: "#e879f9", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }).setData(mk(boll.low));
-      chart.addLineSeries({ color: "rgba(161,161,170,0.7)", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }).setData(mk(boll.ma));
+      s.boll.up.setData(mk(boll.up));
+      s.boll.low.setData(mk(boll.low));
+      s.boll.mid.setData(mk(boll.ma));
     }
 
     // 成交量副图 + 均量线 5/10/20
-    if (ind.vol) {
-      const vol = chart.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" }, priceLineVisible: false, lastValueVisible: false });
+    if (s.vol) {
       const vd: HistogramData[] = bars
         .filter((b) => b.volume != null)
         .map((b) => ({ time: b.ts.slice(0, 10) as Time, value: b.volume as number, color: (b.close ?? 0) >= (b.open ?? 0) ? "rgba(244,63,94,0.45)" : "rgba(16,185,129,0.45)" }));
-      vol.setData(vd);
+      s.vol.setData(vd);
       const vols = vd.map((d) => d.value as number);
       const volTimes = vd.map((d) => d.time);
-      for (const [n, color] of [[5, "#facc15"], [10, "#38bdf8"], [20, "#c084fc"]] as const) {
-        const vma = calcMA(vols, n);
-        const line = vma
-          .map((v, i) => ({ time: volTimes[i], value: v }))
-          .filter((x) => x.value != null) as LineData[];
-        chart.addLineSeries({ priceScaleId: "vol", color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false }).setData(line);
-      }
-      chart.priceScale("vol").applyOptions({ scaleMargins: { top: 1 - subHRef.current, bottom: 0 } });
+      s.vma.forEach((line, i) => {
+        if (!line) return;
+        const n = [5, 10, 20][i];
+        line.setData(
+          calcMA(vols, n).map((v, j) => ({ time: volTimes[j], value: v })).filter((x) => x.value != null) as LineData[]
+        );
+      });
     }
 
     // 成交额副图
-    if (ind.amt) {
-      const amtSeries = chart.addHistogramSeries({ priceScaleId: "amt", priceFormat: { type: "volume" }, priceLineVisible: false, lastValueVisible: false });
-      amtSeries.setData(
+    if (s.amt) {
+      s.amt.setData(
         bars
           .filter((b) => b.amount != null)
           .map((b) => ({ time: b.ts.slice(0, 10) as Time, value: b.amount as number, color: (b.close ?? 0) >= (b.open ?? 0) ? "rgba(244,63,94,0.45)" : "rgba(16,185,129,0.45)" }))
       );
-      chart.priceScale("amt").applyOptions({ scaleMargins: { top: 1 - subHRef.current, bottom: 0 } });
     }
 
     // MACD 副图
-    if (ind.macd) {
+    if (s.macd.hist && s.macd.dif && s.macd.dea) {
       const ema12 = calcEMA(closes, 12);
       const ema26 = calcEMA(closes, 26);
       const dif = closes.map((_, i) => ema12[i] - ema26[i]);
       const dea = calcEMA(dif, 9);
-      const hist = chart.addHistogramSeries({ priceScaleId: "macd", priceLineVisible: false, lastValueVisible: false });
-      hist.setData(data.map((d, i) => ({ time: d.time, value: (dif[i] - dea[i]) * 2, color: dif[i] > dea[i] ? "rgba(244,63,94,0.6)" : "rgba(16,185,129,0.6)" })));
-      chart.addLineSeries({ priceScaleId: "macd", color: "#facc15", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }).setData(data.map((d, i) => ({ time: d.time, value: dif[i] })));
-      chart.addLineSeries({ priceScaleId: "macd", color: "#38bdf8", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }).setData(data.map((d, i) => ({ time: d.time, value: dea[i] })));
-      chart.priceScale("macd").applyOptions({ scaleMargins: { top: 1 - subHRef.current, bottom: 0 } });
+      s.macd.hist.setData(data.map((d, i) => ({ time: d.time, value: (dif[i] - dea[i]) * 2, color: dif[i] > dea[i] ? "rgba(244,63,94,0.6)" : "rgba(16,185,129,0.6)" })));
+      s.macd.dif.setData(data.map((d, i) => ({ time: d.time, value: dif[i] })));
+      s.macd.dea.setData(data.map((d, i) => ({ time: d.time, value: dea[i] })));
     }
 
+    // 标记：真实 B/S 点 + 新闻/公告事件点。总是调用（含空数组）——
+    // 数据切换后旧标记必须清掉，原实现只在非空时 set 会残留上一标的的标记
     const markers: SeriesMarker<Time>[] = [];
-    // 真实 B/S 点：模拟交易成交记录（B=买入日 红上箭头，S=卖出日 绿下箭头）
     if (ind.bs) {
       for (const t of tradeMarks ?? []) {
         if (!bars.some((b) => b.ts.slice(0, 10) === t.date)) continue;
@@ -169,7 +189,6 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
         });
       }
     }
-    // 新闻/公告事件点（P1-8）：公告=琥珀圆点在上方，新闻=天蓝圆点在下方；重要度「高」加 !
     if (ind.events) {
       for (const m of eventMarks ?? []) {
         if (!bars.some((b) => b.ts.slice(0, 10) === m.date)) continue;
@@ -183,14 +202,16 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
         });
       }
     }
-    if (markers.length > 0) {
-      markers.sort((a, b) => String(a.time).localeCompare(String(b.time)));
-      candle.setMarkers(markers);
-    }
+    markers.sort((a, b) => String(a.time).localeCompare(String(b.time)));
+    s.candle.setMarkers(markers);
 
-    // 持仓成本线：模拟交易摊薄成本（无持仓则不画）
+    // 持仓成本线：先移除旧线再按需创建（costPrice 变化/清除时同步）
+    if (priceLineRef.current) {
+      s.candle.removePriceLine(priceLineRef.current);
+      priceLineRef.current = null;
+    }
     if (costPrice != null && costPrice > 0) {
-      candle.createPriceLine({
+      priceLineRef.current = s.candle.createPriceLine({
         price: costPrice,
         color: "#fbbf24",
         lineWidth: 1,
@@ -200,13 +221,86 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
       });
     }
 
-    // 默认聚焦最近 20 根
-    chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, data.length - 20), to: data.length + 2 });
+    if (followLatest) {
+      const n = data.length;
+      chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 20), to: n + 2 });
+    }
+  };
+  // fill 的引用经 effect 同步到 ref（渲染期写 ref 会被 react-hooks 规则拦截）；
+  // 本 effect 声明在创建 effect 之前，保证创建 effect 每次跑时拿到的是最新 fill
+  const fillRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    fillRef.current = fill;
+  });
+
+  // 创建 effect：只随指标开关/数据有无变化重建；数据更新走 fillRef（不重建）
+  const hasBars = bars.length > 0;
+  useEffect(() => {
+    if (!containerRef.current || !hasBars) return;
+    const chart = createChart(containerRef.current, {
+      autoSize: true,
+      layout: { background: { color: "transparent" }, textColor: "#a1a1aa" },
+      grid: { vertLines: { color: "rgba(120,120,130,0.10)" }, horzLines: { color: "rgba(120,120,130,0.10)" } },
+      timeScale: { timeVisible: false, borderVisible: false },
+      rightPriceScale: { borderVisible: false },
+    });
+    chartRef.current = chart;
+    const s = seriesRef.current;
+    s.candle = chart.addCandlestickSeries({
+      upColor: "#f43f5e", downColor: "#10b981", borderUpColor: "#f43f5e", borderDownColor: "#10b981",
+      wickUpColor: "#f43f5e", wickDownColor: "#10b981",
+    });
+    s.ma = MA_DEFS.map(([key]) => (ind[key] ? chart.addLineSeries({ color: MA_DEFS.find((k) => k[0] === key)![2], lineWidth: 1, priceLineVisible: false, lastValueVisible: false }) : null));
+    if (ind.boll) {
+      s.boll = {
+        up: chart.addLineSeries({ color: "#e879f9", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
+        low: chart.addLineSeries({ color: "#e879f9", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
+        mid: chart.addLineSeries({ color: "rgba(161,161,170,0.7)", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
+      };
+    } else {
+      s.boll = { up: null, low: null, mid: null };
+    }
+    if (ind.vol) {
+      s.vol = chart.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" }, priceLineVisible: false, lastValueVisible: false });
+      s.vma = [5, 10, 20].map((n) => chart.addLineSeries({ priceScaleId: "vol", color: n === 5 ? "#facc15" : n === 10 ? "#38bdf8" : "#c084fc", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }));
+      chart.priceScale("vol").applyOptions({ scaleMargins: { top: 1 - subHRef.current, bottom: 0 } });
+    } else {
+      s.vol = null;
+      s.vma = [];
+    }
+    s.amt = ind.amt ? chart.addHistogramSeries({ priceScaleId: "amt", priceFormat: { type: "volume" }, priceLineVisible: false, lastValueVisible: false }) : null;
+    if (ind.amt) chart.priceScale("amt").applyOptions({ scaleMargins: { top: 1 - subHRef.current, bottom: 0 } });
+    if (ind.macd) {
+      s.macd = {
+        hist: chart.addHistogramSeries({ priceScaleId: "macd", priceLineVisible: false, lastValueVisible: false }),
+        dif: chart.addLineSeries({ priceScaleId: "macd", color: "#facc15", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
+        dea: chart.addLineSeries({ priceScaleId: "macd", color: "#38bdf8", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
+      };
+      chart.priceScale("macd").applyOptions({ scaleMargins: { top: 1 - subHRef.current, bottom: 0 } });
+    } else {
+      s.macd = { hist: null, dif: null, dea: null };
+    }
+
+    fillRef.current();
+    // 首次聚焦最近 20 根（followLatest 时 fill 内每次都会重设，这里不必重复）
+    if (!followLatest) {
+      const n = Math.min(20, bars.length);
+      chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, bars.length - n), to: bars.length + 2 });
+    }
     return () => {
       chart.remove();
       chartRef.current = null;
+      seriesRef.current = { candle: null, ma: [], boll: { up: null, low: null, mid: null }, vol: null, vma: [], amt: null, macd: { hist: null, dif: null, dea: null } };
+      priceLineRef.current = null;
     };
-  }, [bars, ind, tradeMarks, costPrice, eventMarks]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ind, hasBars]);
+
+  // 数据更新 effect：bars（含 WS 合成的当日 bar）/标记/成本线变化 → 原地重灌数据
+  useEffect(() => {
+    if (!chartRef.current) return;
+    fillRef.current();
+  }, [bars, tradeMarks, costPrice, eventMarks]);
 
   // 布局 #2：副图高度变化 → applyOptions 动态调整（不重建 chart），主图 bottom 随之让位
   useEffect(() => {
@@ -225,7 +319,7 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
     } catch {
       // 防御
     }
-  }, [subH, ind]);
+  }, [subH, ind, hasBars]);
 
   const toggles: [keyof Indicators, string, string?][] = [
     ["ma5", "MA5", "#facc15"],

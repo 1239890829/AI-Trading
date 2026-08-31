@@ -269,7 +269,17 @@ class TencentProvider:
         found = _ROW_RE.findall(text)
         if not found:
             raise ProviderError("tencent snapshot empty reply")
-        return {code: (prefix, fields) for prefix, code, raw in found if (fields := raw.split("~"))}
+        by_code = {code: (prefix, fields) for prefix, code, raw in found if (fields := raw.split("~"))}
+        # key 用调用方传入的原始 symbol：个股（裸 6 位）与指数（sh000001 等带前缀）
+        # 都能命中。旧实现 key 是响应里的裸代码，带前缀查询永远 miss——
+        # 表现为"tencent snapshot no rows"假象而非"不支持"，2026-08-31 修复。
+        out: dict[str, tuple[str, list[str]]] = {}
+        for s in symbols:
+            code = to_tencent_symbol(s)
+            bare = code[2:] if code[:2] in ("sh", "sz", "bj") else code
+            if bare in by_code:
+                out[s] = by_code[bare]
+        return out
 
     async def get_quotes(self, symbols: list[str]) -> list[Quote]:
         if not symbols:
@@ -279,7 +289,10 @@ class TencentProvider:
         for s in symbols:
             entry = snap.get(s)
             if entry:
-                quotes.append(parse_quote(entry[0], entry[1]))
+                q = parse_quote(entry[0], entry[1])
+                if s.lower().startswith(("sh", "sz", "bj")) and q.symbol != s:
+                    q.symbol = s  # 带前缀查询（指数）保持调用方形态，前端全链路一致
+                quotes.append(q)
         if not quotes:
             raise ProviderError("tencent snapshot no rows")
         return quotes

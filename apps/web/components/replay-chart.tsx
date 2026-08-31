@@ -106,9 +106,10 @@ export function ReplayChart({ bars, fills = [], onExit }: Props) {
         </button>
       </div>
 
-      {/* 图表：传切片 bars——B/S 点由 KlineChartPro 内部按可见 bars 过滤，天然随回放出现 */}
+      {/* 图表：传切片 bars——B/S 点由 KlineChartPro 内部按可见 bars 过滤，天然随回放出现。
+          followLatest：回放逐 bar 前进时重聚焦最近 20 根（跟随进度；详情页不重置用户视口） */}
       <div className="min-h-0 flex-1">
-        <KlineChartPro bars={visible} tradeMarks={fills} className="h-full" />
+        <KlineChartPro bars={visible} tradeMarks={fills} followLatest className="h-full" />
       </div>
     </div>
   );

@@ -175,7 +175,14 @@ function WorkbenchInner() {
 
       <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[340px,minmax(0,1fr)]">
         <div className="flex min-h-0 min-w-0 flex-col gap-1.5">
-        <IndexCards indices={indices} />
+        <IndexCards
+          indices={indices}
+          selected={activeSymbol}
+          onSelect={(s) => {
+            setSelected(s);
+            router.replace(workbenchUrl(s), { scroll: false });
+          }}
+        />
         {/* 持仓组（retro #3 遗留）：仅有持仓时渲染，空仓零占用；行点击选中该股 */}
         {positions.length > 0 && (
           <Panel title={`模拟持仓 (${positions.length})`} className="max-h-36 shrink-0 overflow-hidden">

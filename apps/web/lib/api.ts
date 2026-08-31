@@ -59,6 +59,26 @@ export class ApiError extends Error {
 /** 默认超时：后端卡住时前端不再永远 pending。慢端点在各自 helper 里显式放宽。 */
 const DEFAULT_TIMEOUT_MS = 8000;
 
+/**
+ * 指数详情 symbol 规范化：overview.indices 里的 symbol 是裸 6 位（000001/399001），
+ * 直接喂给行情链路会被规范化成个股——裸 "000001" 在深市语境是平安银行，
+ * 上证指数必须用 "sh000001"（腾讯源口径，kline/minute-line/quote 均原生支持带前缀代码）。
+ *
+ * 规则：已带 sh/sz/bj 前缀原样返回（腾讯源时 indices 可能已带前缀）；
+ * 否则按市场字段（SH/SZ），缺市场时按号码规则兜底（399/395 开头=深指，其余=沪指）。
+ */
+export function indexDetailSymbol(symbol: string, market?: string | null): string {
+  const s = symbol.trim().toLowerCase();
+  if (/^(sh|sz|bj)/.test(s)) return s;
+  const prefix = market?.toUpperCase() === "SZ" || s.startsWith("399") ? "sz" : "sh";
+  return `${prefix}${s}`;
+}
+
+/** 是否为指数形态的 symbol（带市场前缀；个股 symbol 在本系统内恒为裸 6 位）。 */
+export function isIndexSymbol(symbol: string): boolean {
+  return /^(sh|sz|bj)/i.test(symbol.trim());
+}
+
 async function request<T>(
   path: string,
   init: RequestInit,

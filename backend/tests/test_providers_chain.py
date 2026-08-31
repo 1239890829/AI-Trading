@@ -58,6 +58,47 @@ def test_tencent_search_row():
     assert item and item.symbol == "600519" and item.market == "SH"
 
 
+class _FakeResp:
+    def __init__(self, text: str):
+        self.status_code = 200
+        self._text = text
+
+    @property
+    def content(self):
+        return self._text.encode("gbk")
+
+
+class _FakeClient:
+    def __init__(self, text: str):
+        self._text = text
+
+    async def get(self, url, params=None):
+        return _FakeResp(self._text)
+
+    async def aclose(self):
+        return None
+
+
+def test_tencent_get_quotes_prefixed_index_symbol_roundtrip():
+    """带前缀指数查询（sh000001）必须命中并保持调用方形态——
+    旧实现 _snapshot 的 key 是响应里的裸代码，snap.get("sh000001") 永远 miss，
+    报"tencent snapshot no rows"假象（2026-08-31 指数详情面板实测抓到）。"""
+    from app.data_providers.tencent import TencentProvider
+
+    # 腾讯真实指数行：v_sh000001="1~上证指数~000001~3986.30~..."
+    text = 'v_sh000001="1~上证指数~000001~3986.30~3952.18~3926.53~576656606~0~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~~20260831155302~34.12~0.86~3986.30~3926.50~3986.30/576656606/1014292552054~576656606~101429255~1.19~17.34~~3986.30~3926.50~1.51~623529.54~706919.43~0.00~-1~-1~1.17~0~3949.79~~~~~~101429255.2054~0.0000~0~ ~ZS~0.44~2.69~~~~4258.86~3732.84~0.09~4.64~-1.03~48481";'
+    p = TencentProvider()
+    p._client = _FakeClient(text)  # type: ignore[assignment]
+    try:
+        quotes = asyncio.run(p.get_quotes(["sh000001"]))
+        assert len(quotes) == 1
+        assert quotes[0].symbol == "sh000001"  # 查询形态，非响应里的裸 000001
+        assert quotes[0].name == "上证指数"
+        assert quotes[0].price == 3986.30
+    finally:
+        asyncio.run(p.aclose())
+
+
 # 2026-08-28 fqkline 实测响应结构（截取）
 KLINE_PAYLOAD = {
     "code": 0,
@@ -213,3 +254,31 @@ def test_hub_broadcasts_stale_on_provider_failure():
     msg = q.get_nowait()
     assert msg["type"] == "stale"
     assert hub.consecutive_failures == 1
+
+
+def test_hub_get_quotes_falls_back_to_indices():
+    """指数行情兜底：indices 缓存的 key 是裸 000001（与腾讯/ths 的 get_indices 一致），
+    而 WS 订阅/详情链路查询用的是带前缀形态 sh000001——不兜底则指数永远收不到行情。
+    返回的 Quote 必须带查询形态的 symbol（model_copy，不变异共享缓存对象）。"""
+    from app.schemas.market import Quote
+    from app.services.quote_hub import QuoteHub
+
+    class Up:
+        name = "up"
+
+        async def get_indices(self):
+            return []
+
+        async def get_quotes(self, symbols):
+            return []
+
+    hub = QuoteHub(provider=Up(), poll_interval=5, get_watchlist=lambda: ["600519"])
+    hub.indices = {"000001": Quote(symbol="000001", name="上证指数", price=3300.0, source="up")}
+    hub.quotes = {"600519": Quote(symbol="600519", price=100.0, source="up")}
+    got = hub.get_quotes(["600519", "sh000001"])
+    assert [x.symbol for x in got] == ["600519", "sh000001"]
+    assert got[1].name == "上证指数"
+    # 裸查询也命中 indices（broadcast 对裸形态订阅同样可达）
+    assert [x.symbol for x in hub.get_quotes(["000001"])] == ["000001"]
+    # 双源都缺失的 symbol 返回空列表而不是 KeyError
+    assert hub.get_quotes(["999999"]) == []

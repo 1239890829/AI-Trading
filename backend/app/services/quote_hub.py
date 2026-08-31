@@ -134,8 +134,22 @@ class QuoteHub:
         return list(self.indices.values())
 
     def get_quotes(self, symbols: list[str] | None = None) -> list[Quote]:
+        # 指数兜底：indices 的 symbol（裸 000001）不在 self.quotes（自选股缓存）里，
+        # 不查 indices 的话 WS 订阅/REST 批量行情对指数永远返回空——
+        # 表现为指数详情面板收不到实时行情推送。
+        # 带前缀查询（sh000001，指数详情链路的规范形态）归一化成裸代码查 indices，
+        # 并以查询形态返回（model_copy 不变异共享缓存对象），保证前端按 symbol 索引一致。
         if symbols:
-            return [self.quotes[s] for s in symbols if s in self.quotes]
+            out = []
+            for s in symbols:
+                q = self.quotes.get(s) or self.indices.get(s)
+                if q is None and len(s) >= 3 and s[:2].lower() in ("sh", "sz", "bj"):
+                    q = self.indices.get(s[2:])
+                    if q is not None:
+                        q = q.model_copy(update={"symbol": s})
+                if q is not None:
+                    out.append(q)
+            return out
         return list(self.quotes.values())
 
     def next_seq(self) -> int:
