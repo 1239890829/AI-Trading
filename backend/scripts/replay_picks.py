@@ -34,7 +34,12 @@ from app.picks.echelon import (  # noqa: E402
     score_echelon,
     theme_ladder_health,
 )
-from app.picks.engine import MAX_PICKS, MAX_SWAPS_PER_DAY, apply_replacement_threshold  # noqa: E402
+from app.picks.engine import (  # noqa: E402
+    MAX_PICKS,
+    MAX_SWAPS_PER_DAY,
+    REPLACE_THRESHOLD,
+    apply_replacement_threshold,
+)
 from app.picks.replay import replay_picks  # noqa: E402
 from app.services.theme_service import parse_theme_tags  # noqa: E402
 
@@ -189,7 +194,12 @@ async def _tech_scores(provider, symbols, days) -> tuple[dict, dict]:
     return out, chg
 
 
-async def run(days_n: int, top_n: int, threshold: float, max_picks: int = MAX_PICKS, max_swaps: int | None = MAX_SWAPS_PER_DAY) -> dict:
+async def build_daily_ranked(days_n: int, top_n: int) -> dict:
+    """拉取历史数据并构建每日候选评分（与策略参数无关，供 sweep 复用）。
+
+    拆出来的原因：拉一次数据可以评估多组参数（换股上限/门槛），
+    避免每组参数都重跑一遍网络请求。
+    """
     provider = build_provider(settings)
     all_days = await tc.trading_days(provider)
     days = all_days[-days_n:] if len(all_days) > days_n else all_days
@@ -269,17 +279,55 @@ async def run(days_n: int, top_n: int, threshold: float, max_picks: int = MAX_PI
 
         base_ranked.append((d.isoformat(), base_cands))
         carry_ranked.append((d.isoformat(), carry_cands))
-        kept, _ = apply_replacement_threshold(prev_combo, carry_cands, threshold, max_picks, max_swaps)
+        # 这里的调用只为维护 prev_combo（carryover 需要知道昨日组合是谁），
+        # 与 sweep 的策略参数无关，故用默认常量；真正的评估在 evaluate() 里按参数跑
+        kept, _ = apply_replacement_threshold(
+            prev_combo, carry_cands, REPLACE_THRESHOLD, MAX_PICKS, MAX_SWAPS_PER_DAY
+        )
         prev_combo = [k["symbol"] for k in kept]
 
-    # 主结果：carryover + 门槛
-    result = replay_picks(carry_ranked, threshold=threshold, max_swaps=max_swaps)
+    return {
+        "days": days,
+        "base_ranked": base_ranked,
+        "carry_ranked": carry_ranked,
+        "universe_size": len(universe),
+        "stage_distribution": dict(stage_counter),
+        "role_distribution": dict(role_counter),
+        "weights": {"echelon": W_ECHELON, "tech": W_TECH},
+    }
+
+
+async def run(
+    days_n: int,
+    top_n: int,
+    threshold: float,
+    max_picks: int = MAX_PICKS,
+    max_swaps: int | None = MAX_SWAPS_PER_DAY,
+) -> dict:
+    """跑一次完整回放：拉数据 + 按给定策略参数评估。"""
+    built = await build_daily_ranked(days_n, top_n)
+    return evaluate(built, threshold=threshold, max_picks=max_picks, max_swaps=max_swaps)
+
+
+def evaluate(built: dict, *, threshold: float, max_picks: int, max_swaps: int | None) -> dict:
+    """对已构建的每日候选评分按给定参数评估（纯计算，可反复调用——sweep 依赖这点）。"""
+    days = built["days"]
+    base_ranked, carry_ranked = built["base_ranked"], built["carry_ranked"]
+
+    # 主结果：carryover + 门槛 + 换股上限
+    result = replay_picks(carry_ranked, threshold=threshold, max_picks=max_picks, max_swaps=max_swaps)
     # 对照 A：有门槛但无 carryover（昨日成员不兜底）
-    result["no_carryover"] = replay_picks(base_ranked, threshold=threshold, max_swaps=max_swaps)["stats"]
+    result["no_carryover"] = replay_picks(
+        base_ranked, threshold=threshold, max_picks=max_picks, max_swaps=max_swaps
+    )["stats"]
     # 对照 C：仅门槛、无每日换股上限（验证上限到底贡献了多少稳定性）
-    result["threshold_only"] = replay_picks(carry_ranked, threshold=threshold, max_swaps=None)["stats"]
+    result["threshold_only"] = replay_picks(
+        carry_ranked, threshold=threshold, max_picks=max_picks, max_swaps=None
+    )["stats"]
     # 对照 B：无门槛纯排序（无 carryover）
-    result["baseline"] = replay_picks(base_ranked, threshold=0.0, max_swaps=None)["stats"]
+    result["baseline"] = replay_picks(
+        base_ranked, threshold=0.0, max_picks=max_picks, max_swaps=None
+    )["stats"]
     result["threshold_effect"]["swaps_avoided"] = (
         result["baseline"]["replacements_total"] - result["stats"]["replacements_total"]
     )
@@ -291,10 +339,10 @@ async def run(days_n: int, top_n: int, threshold: float, max_picks: int = MAX_PI
         if result["baseline"]["replacements_total"]
         else None
     )
-    result["stage_distribution"] = dict(stage_counter)
-    result["role_distribution"] = dict(role_counter)
-    result["universe_size"] = len(universe)
-    result["weights"] = {"echelon": W_ECHELON, "tech": W_TECH}
+    result["stage_distribution"] = built["stage_distribution"]
+    result["role_distribution"] = built["role_distribution"]
+    result["universe_size"] = built["universe_size"]
+    result["weights"] = built["weights"]
     result["daily_detail"] = [
         {
             "date": d.isoformat(),
