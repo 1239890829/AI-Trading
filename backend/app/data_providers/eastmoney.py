@@ -332,7 +332,9 @@ class EastmoneyProvider:
                     "down_count": _int(it.get("f105")),
                     "leader_name": it.get("f128"),
                     "leader_symbol": it.get("f140"),
-                    # 多周期涨跌幅：字段序推断，待验证
+                    # 多周期涨跌幅：字段序推断。题材看板路由会用同花顺官方板块
+                    # K 线交叉验证并覆盖（market.py _verify_board_multi_day），
+                    # 这里保留推断值作为无官方目录时的兜底
                     "chg_3d": _num(it.get("f160")),
                     "chg_5d": _num(it.get("f109")),
                     "chg_10d": _num(it.get("f110")),

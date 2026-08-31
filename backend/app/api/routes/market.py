@@ -36,6 +36,7 @@ from app.schemas.market import (
     utcnow,
 )
 from app.services.quote_hub import QuoteHub
+from app.services.theme_catalog_service import official_multi_day_changes
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["market"])
@@ -829,6 +830,76 @@ def _load_snapshot_map(request: Request, trade_date: date | None = None) -> dict
         return {}
 
 
+async def _verify_board_multi_day(request: Request, board_payload: dict) -> None:
+    """T3/B3（linkage-design §3.5）：用同花顺官方板块 K 线交叉验证/替换
+    板块 3/5/10 日涨跌幅（东财字段序推断值）。
+
+    - 题材名（ths 体系）直接映射官方概念目录 → 板块 K 线 → 重算涨跌幅
+    - 官方可得 → 覆盖 chg_3d/5d/10d + multi_day_verified=true（推断值保留在 *_inferred 供审计）
+    - 不可用（无目录服务/题材不在目录/拉取失败）→ 保留推断值 + false，caveats 如实说明
+    - 缓存命中的 payload 已验证过则直接跳过，避免每请求重复拉 K 线
+    """
+    svc = getattr(request.app.state, "theme_catalog", None)
+    if svc is None:
+        return
+    cards = board_payload.get("themes") or []
+    if any(((c.get("board") or {}).get("multi_day_verified")) for c in cards):
+        return
+
+    name_to_code = {t.name: t.code for t in svc.get_catalog(limit=1000)}
+    targets: dict[str, list[dict]] = {}  # 目录代码 → 需要验证的 board dict 列表
+    for card in cards:
+        board = card.get("board")
+        if not board:
+            continue
+        code = name_to_code.get(card.get("theme") or "") or name_to_code.get(board.get("name") or "")
+        if code:
+            targets.setdefault(code, []).append(board)
+    if not targets:
+        return
+
+    sem = asyncio.Semaphore(4)
+    bars_by_code: dict[str, list[dict]] = {}
+
+    async def _fetch(code: str) -> None:
+        async with sem:
+            try:
+                bars_by_code[code] = await svc.fetch_board_bars(code)
+            except Exception as exc:  # noqa: BLE001 - 单板块失败保留推断值
+                log.warning("board bars %s unavailable: %s", code, exc)
+
+    await asyncio.gather(*(_fetch(c) for c in targets))
+
+    verified = 0
+    for code, boards in targets.items():
+        bars = bars_by_code.get(code)
+        if not bars:
+            continue
+        official = official_multi_day_changes(bars)
+        for board in boards:
+            for n in (3, 5, 10):
+                key = f"chg_{n}d"
+                if official.get(key) is not None:
+                    board[f"{key}_inferred"] = board.get(key)
+                    board[key] = official[key]
+            board["multi_day_verified"] = all(
+                official.get(f"chg_{n}d") is not None for n in (3, 5, 10)
+            )
+            if board["multi_day_verified"]:
+                board["multi_day_source"] = "ths_official_kline"
+                verified += 1
+
+    if verified:
+        caveats = board_payload.setdefault("caveats", [])
+        for i, text in enumerate(caveats):
+            if "board_multi_day_verified" in text:
+                caveats[i] = (
+                    f"板块 3/5/10 日涨跌幅已用同花顺官方板块 K 线交叉验证"
+                    f"（{verified}/{len(targets)} 张卡片）；未命中的题材保留东财字段序推断"
+                )
+                break
+
+
 def _attach_official_flags(request: Request, themes_list: list[dict]) -> None:
     """L5（linkage-design §3.2）：给看板梯队成员标注是否为 THS 官方成分。
 
@@ -897,6 +968,9 @@ async def themes(
             raise HTTPException(status_code=502, detail=str(exc))
         payload = {"data": board, "meta": _meta(hub)}
         setattr(request.app.state, key, (_time.time(), payload))
+
+    # T3/B3：官方板块 K 线交叉验证（缓存的 payload 已验证过时内部直接跳过）
+    await _verify_board_multi_day(request, payload["data"])
 
     themes_list = list(payload["data"]["themes"])
     _attach_official_flags(request, themes_list)

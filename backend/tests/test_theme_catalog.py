@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -250,3 +251,85 @@ def test_stock_themes_api(monkeypatch: pytest.MonkeyPatch):
 
         # 非法代码
         assert client.get("/api/themes/stock/abc").status_code == 400
+
+
+# ---------------------------------------------------------------- T3/B3：官方 K 线交叉验证
+
+
+def test_parse_board_bars_sorts_and_skips_incomplete():
+    from app.services.theme_catalog_service import parse_board_bars
+
+    payload = {"data": {"item": [
+        {"date_ms": 1787846400000, "close_price": 2632.18},
+        {"date_ms": 1787673600000, "close_price": 2554.496},
+        {"date_ms": 1787760000000, "close_price": None},   # 缺收盘 → 跳过
+        {"close_price": 100.0},                              # 缺时间 → 跳过
+    ]}}
+    bars = parse_board_bars(payload)
+    assert [b["close"] for b in bars] == [2554.496, 2632.18], "按日期升序"
+    assert bars[0]["date"] < bars[1]["date"]
+
+
+def test_official_multi_day_changes():
+    from app.services.theme_catalog_service import official_multi_day_changes
+
+    # 12 个交易日：close 100 → 111
+    bars = [{"date": f"2026-08-{d:02d}", "close": 100 + i} for i, d in enumerate(range(10, 22))]
+    r = official_multi_day_changes(bars)
+    assert r["chg_3d"] == round((111 / 108 - 1) * 100, 2)
+    assert r["chg_5d"] == round((111 / 106 - 1) * 100, 2)
+    assert r["chg_10d"] == round((111 / 101 - 1) * 100, 2)
+    # 10 根 K 线：10 日涨幅需 11 根以上，不足时 None（不硬凑）
+    r10 = official_multi_day_changes(bars[:10])
+    assert r10["chg_10d"] is None
+    assert r10["chg_3d"] == round((109 / 106 - 1) * 100, 2)
+
+
+def test_verify_board_multi_day_replaces_and_flags(monkeypatch: pytest.MonkeyPatch):
+    """官方值覆盖推断值、保留 *_inferred、verified 标志与 caveats 同步更新。"""
+    svc = _svc()
+
+    async def fake_catalog():
+        return [{"code": GRAIN, "name": "粮食概念"}]
+
+    # 12 根：100..111 → chg_3d = 111/108-1
+    async def fake_bars(code):
+        return [{"date": f"2026-08-{d:02d}", "close": 100 + i} for i, d in enumerate(range(10, 22))]
+
+    monkeypatch.setattr(svc, "fetch_catalog", fake_catalog)
+    monkeypatch.setattr(svc, "fetch_board_bars", fake_bars)
+
+    from app.api.routes.market import _verify_board_multi_day
+
+    payload = {
+        "themes": [
+            {"theme": "粮食概念", "board": {"name": "粮食概念", "chg_3d": 99.0, "chg_5d": 88.0, "chg_10d": 77.0}},
+            {"theme": "目录外题材", "board": {"name": "目录外题材", "chg_3d": 1.0}},
+        ],
+        "caveats": ["板块 3/5/10 日涨跌幅为东财字段序推断，未经 K 线交叉验证（board_multi_day_verified=false）"],
+    }
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(theme_catalog=svc)))
+    asyncio.run(_verify_board_multi_day(request, payload))
+
+    board = payload["themes"][0]["board"]
+    assert board["multi_day_verified"] is True
+    assert board["chg_3d"] == round((111 / 108 - 1) * 100, 2), "官方值覆盖推断值"
+    assert board["chg_3d_inferred"] == 99.0, "推断值保留供审计"
+    assert board["multi_day_source"] == "ths_official_kline"
+
+    other = payload["themes"][1]["board"]
+    assert "multi_day_verified" not in other, "目录外题材保留推断值、不打验证标"
+    assert any("已用同花顺官方板块 K 线交叉验证" in c for c in payload["caveats"])
+    assert any("board_multi_day_verified=false" in c for c in payload["caveats"]) is False
+
+    # 缓存命中短路：再次调用不再重复拉取（fetch 计数不变）
+    calls = {"n": 0}
+    orig = svc.fetch_board_bars
+
+    async def counting(code):
+        calls["n"] += 1
+        return await orig(code)
+
+    monkeypatch.setattr(svc, "fetch_board_bars", counting)
+    asyncio.run(_verify_board_multi_day(request, payload))
+    assert calls["n"] == 0, "已验证的 payload 直接跳过"

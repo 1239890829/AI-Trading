@@ -119,6 +119,8 @@ export interface ThemeBoardMetrics {
   chg_3d?: number | null;
   chg_5d?: number | null;
   chg_10d?: number | null;
+  /** 3/5/10 日涨幅已经同花顺官方板块 K 线交叉验证（T3/B3）；缺省 = 仍为东财字段序推断 */
+  multi_day_verified?: boolean;
 }
 
 export interface ThemePerformance {

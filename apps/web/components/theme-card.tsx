@@ -361,8 +361,24 @@ export function ThemeCardView({
                 value={<span className={pctColor(board.main_net_inflow)}>{fmtAmount(board.main_net_inflow)}</span>}
                 hint="东财口径主力资金净流入"
               />
-              <Stat label="近 3 日" value={<span className={pctColor(board.chg_3d)}>{pctText(board.chg_3d)}</span>} hint="字段序推断，未经 K 线交叉验证" />
-              <Stat label="近 5 日" value={<span className={pctColor(board.chg_5d)}>{pctText(board.chg_5d)}</span>} hint="字段序推断，未经 K 线交叉验证" />
+              <Stat
+                label="近 3 日"
+                value={<span className={pctColor(board.chg_3d)}>{pctText(board.chg_3d)}</span>}
+                hint={
+                  board.multi_day_verified
+                    ? "同花顺官方板块 K 线口径（已交叉验证）"
+                    : "东财字段序推断，未经 K 线交叉验证"
+                }
+              />
+              <Stat
+                label="近 5 日"
+                value={<span className={pctColor(board.chg_5d)}>{pctText(board.chg_5d)}</span>}
+                hint={
+                  board.multi_day_verified
+                    ? "同花顺官方板块 K 线口径（已交叉验证）"
+                    : "东财字段序推断，未经 K 线交叉验证"
+                }
+              />
             </div>
           )}
 

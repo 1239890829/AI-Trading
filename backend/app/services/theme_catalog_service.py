@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import timedelta
+import time
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import func, select
@@ -31,6 +32,42 @@ CATALOG_TAG = "cn_concept"
 
 
 # ---------------------------------------------------------------- 纯函数：解析
+
+
+def parse_board_bars(payload: dict) -> list[dict]:
+    """板块历史 K 线响应 → 按日期升序的 [{date, close}]；缺字段条目跳过。
+
+    官方字段：date_ms（毫秒）/ close_price 等（指数无复权概念）。
+    """
+    items = ((payload or {}).get("data") or {}).get("item") or []
+    bars: list[dict] = []
+    for it in items:
+        ts = it.get("date_ms")
+        close = it.get("close_price")
+        if not ts or close is None:
+            continue
+        bars.append({
+            "date": datetime.fromtimestamp(ts / 1000, tz=timezone.utc).date().isoformat(),
+            "close": float(close),
+        })
+    bars.sort(key=lambda b: b["date"])
+    return bars
+
+
+def official_multi_day_changes(bars: list[dict]) -> dict:
+    """官方板块 K 线 → 3/5/10 日涨跌幅（纯函数，linkage-design §3.5 T3）。
+
+    N 日涨幅 = close[-1] / close[-1-N] - 1（%）。交易日不足或除数为 0 → None，
+    不用部分数据硬凑。
+    """
+    closes = [b["close"] for b in bars if b.get("close")]
+    out: dict[str, float | None] = {}
+    for n in (3, 5, 10):
+        if len(closes) > n and closes[-1 - n]:
+            out[f"chg_{n}d"] = round((closes[-1] / closes[-1 - n] - 1) * 100, 2)
+        else:
+            out[f"chg_{n}d"] = None
+    return out
 
 
 def parse_catalog_items(payload: dict) -> list[dict]:
@@ -166,6 +203,17 @@ class ThemeCatalogService:
                                    params={"thscode": code})
         r.raise_for_status()
         return parse_member_items(r.json())
+
+    async def fetch_board_bars(self, code: str, calendar_days: int = 35) -> list[dict]:
+        """官方板块日 K（close 序列），供 3/5/10 日涨跌幅交叉验证（T3/B3）。"""
+        end = int(time.time() * 1000)
+        start = end - calendar_days * 86400_000
+        r = await self._client.get(
+            f"{self._base}/api/a-share-index/prices/historical",
+            params={"thscode": code, "interval": "1d", "start": start, "end": end},
+        )
+        r.raise_for_status()
+        return parse_board_bars(r.json())
 
     # -- sync ------------------------------------------------------------
 
