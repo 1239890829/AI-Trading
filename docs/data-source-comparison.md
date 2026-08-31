@@ -329,9 +329,9 @@ elif pct < -(limit + tol):                    限价口径存疑，单独计数�
 - **B2** 接 `auction/short-term-benchmark` → 龙头打分增加"竞价强弱"维度。
 - **B3** 接 `index/prices/historical` → `news_persistence` ②「位置」
   从 `active_days` 代理升级为真实板块区间涨幅（**替换掉无法验证的东财 f109**）。
-- **B4** 用 `limit-up-ladder.seal_nextday` 交叉验证自算的晋级率，
-  对不上就说明拼接逻辑还有问题。
-- **B5** 东财补 `get_limit_break_pool`（文档已"实测"过却没落地），消除炸板率单点。
+- **B4** ✅ 已完成（2026-08-31）：`GET /api/market/ladder-check` 用 seal_nextday 交叉验证
+  自算晋级率，实抓 5 可比日 2进3/高位存活逐日一致、零漂移。
+- **B5** ✅ 已完成（2026-08-31，P0-4）：getTopicZBPool 双源已落地。
 
 ### C. 中期
 

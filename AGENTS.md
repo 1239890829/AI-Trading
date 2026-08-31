@@ -28,8 +28,8 @@ uvicorn app.main:app --reload --port 8000
 # 前端（node_modules 已装）
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
-# 测试与门禁（每次改动全部跑，全绿才算完；当前基线：后端 447 / 前端 52）
-cd backend && .venv/bin/pytest                    # 447 用例
+# 测试与门禁（每次改动全部跑，全绿才算完；当前基线：后端 455 / 前端 52）
+cd backend && .venv/bin/pytest                    # 455 用例
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
 cd apps/web && npx eslint .                       # 0 error（24 warn 是挂账项，见 eslint.config.mjs 注释）
 cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 52 用例
@@ -43,7 +43,7 @@ CI（GitHub Actions）：后端 pytest+pyflakes、前端 tsc+eslint+vitest+build
 
 ## 2. 当前状态快照（2026-08-31，commit 310c70e）
 
-**447 后端测试 + 52 前端测试全绿 · 81 REST + 1 WS 端点 · 四源链 `ths→tencent→eastmoney→sina`**
+**455 后端测试 + 52 前端测试全绿 · 82 REST + 1 WS 端点 · 四源链 `ths→tencent→eastmoney→sina`**
 
 | 阶段 | 状态 |
 |---|---|
@@ -113,7 +113,9 @@ K 线（TDX 2 年分钟级底座）；分时（均价线+量比基线）；盘�
 1. ~~**B1 热股榜**（ths hot_stock_list）→ 题材卡人气热度+排名变化~~ ✅ 已完成（2026-08-31）：
    `GET /api/themes/hot`（ths 24h 热股榜 × 官方成分反查聚合，60s 缓存）+ /themes 页头人气榜条
    + 题材卡「人气」徽标（heat 合计 + 榜内最高成员的 rank_change，basis 可解释）。
-2. **B4 seal_nextday 交叉验证晋级率**（P1-4，数据源自证闭环）。
+2. ~~**B4 seal_nextday 交叉验证晋级率**（P1-4，数据源自证闭环）~~ ✅ 已完成（2026-08-31）：
+   `GET /api/market/ladder-check`（ths 天梯 seal_nextday 对照自算晋级率，逐日 match/drift/
+   insufficient + 漂移 warning）；实测 5 可比日逐日一致、零漂移（1进2 首板不在天梯不可验）。
 3. **新闻/公告事件点画上 K 线**（P1-8；新闻+摘要+事件数据已就绪）。
 4. **题材指数与板块内资金合力**（P1-5 残留：成分表已建，指数计算未做）。
 

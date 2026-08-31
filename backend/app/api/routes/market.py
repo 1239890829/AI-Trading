@@ -79,6 +79,31 @@ async def market_sentiment(request: Request, hub: QuoteHub = Depends(get_hub)) -
 _sent_hist_backfilled = {"done": False}
 
 
+@router.get("/market/ladder-check")
+async def ladder_check(request: Request, hub: QuoteHub = Depends(get_hub)) -> dict:
+    """B4 数据源自证：ths 连板天梯 seal_nextday 交叉验证自算晋级率。
+
+    可验 2进3 与高位存活（首板不在天梯，1进2 不可验）。逐日给出
+    match/drift/insufficient，drift 说明两日池拼接逻辑有问题（服务端同时 warning）。
+    结果缓存 10 分钟（数据日频更新）。
+    """
+    from app.sentiment.ladder_check import run_ladder_check
+
+    cache = cache_on(request.app.state, "sentiment.ladder_check", 600, maxsize=1)
+    hit, payload = cache.get(())
+    if hit:
+        return payload
+    try:
+        data = await run_ladder_check(hub)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"天梯交叉验证失败：{exc}") from exc
+    payload = {"data": data, "meta": _meta(hub)}
+    cache.set((), payload)
+    return payload
+
+
 @router.get("/sparkline", response_model=Envelope[SparklinePayload])
 async def sparkline(
     request: Request,

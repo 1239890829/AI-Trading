@@ -192,6 +192,36 @@ class ThsFuyaoProvider:
             raise ProviderError(f"ths limit-up-pool empty for {trade_date}")
         return out
 
+    async def get_limit_up_ladder(self) -> list[dict]:
+        """连板天梯近 30 交易日矩阵，展平为行 [{date, tier, board_num, symbol, name, seal_nextday}]。
+
+        B4 交叉验证数据面：seal_nextday 即源方算好的"次日是否封板"。
+        文档写 string|null、每梯队最多 4 只——2026-08-31 实抓两者均不符：
+        实际是布尔 true/false（最近交易日为 null），梯队只数无上限（二板 10+ 只）；
+        sign_level 实测恒为整数 0，无信息量，丢弃。
+        """
+        data = await self._get("/api/a-share/special-data/limit-up-ladder", {})
+        out: list[dict] = []
+        for day in data.get("item") or []:
+            d = day.get("date")
+            for tier, members in (day.get("boards") or {}).items():
+                for it in members or []:
+                    code = from_thscode(str(it.get("thscode") or ""))
+                    if len(code) != 6:
+                        continue
+                    out.append({
+                        "date": d,
+                        "tier": tier,
+                        "board_num": int(it.get("board_num") or 0),
+                        "symbol": code,
+                        "name": it.get("name"),
+                        "seal_nextday": it.get("seal_nextday"),  # bool | None（最近交易日无次日参考）
+                        "source": SOURCE,
+                    })
+        if not out:
+            raise ProviderError("ths limit-up ladder empty")
+        return out
+
     async def get_limit_break_pool(self, trade_date: date) -> list[LimitUpRecord]:
         """炸板池（涨停后开板未回封）。"""
         data = await self._get(

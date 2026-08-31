@@ -44,7 +44,7 @@
 | ~~B1 热股榜 → 题材卡片人气热度~~ | ✅ 已完成（2026-08-31）：`GET /api/themes/hot`（ths 热股 24h 榜 × 官方成分反查聚合）+ /themes 页头人气榜条 + 题材卡人气徽标 | 消费端已落地（provider 方法此前已有） |
 | B2 竞价基准 → 预判模块 | ✅ | 预判引擎已含竞价证据 + `/api/auction-benchmark`（非交易日 502 属预期） |
 | B3 板块真实区间涨幅替换 f109 | 🔶 代码有"区间涨幅"字样，**需确认数据源是否已换 ths** | 待核 |
-| B4 `seal_nextday` 交叉验证晋级率 | ❌ **未做** | dragon_service 无 seal_nextday |
+| ~~B4 `seal_nextday` 交叉验证晋级率~~ | ✅ 已完成（2026-08-31）：`GET /api/market/ladder-check`——实抓 5 个可比日 2进3/高位存活与 ths 天梯**逐日完全一致**，拼接逻辑被源方数据证实（1进2 首板不在天梯，不可验） | dragon_service 之外新增 `app/sentiment/ladder_check.py` |
 | B5 东财补 `get_limit_break_pool` 备源 | ❌ **未做**（炸板率仍单点，仅东财） | eastmoney.py 无该方法 |
 | C1 `index/constituents` 板块成分表 | ❌ 未做 | — |
 | C2 全市场历史日 K dump（回测地基） | 🔶 已被**替代**：easy_tdx 已提供 2 年分钟级历史（见 §2.4），此条降级 | — |
@@ -222,7 +222,7 @@
 | **P1-1** | **推送通道接入**（notifiers 加 email/企微/飞书/TG 实现） | **用户选通道** | 一举关闭：Phase 8 收尾 + 复盘推送（星标 P2）+ 盘中情绪监控（情绪 P2 #14） |
 | **P1-2** | **LLM 接入**（实现 `LLMAnalyzer`） | **用户给凭据** | 一举关闭：复盘四角色编排（星标 P2）+ 新闻摘要增强 + 未来 AI 能力底座 |
 | ~~**P1-3**~~ | ~~B1 热股榜 → 题材卡片"人气热度+排名变化"~~ ✅ 已完成（2026-08-31）：`aggregate_hot_themes` 纯函数 + `GET /api/themes/hot`（60s TTL 缓存）+ /themes 人气榜条与卡片徽标；rank_change 沿用榜内最高排名成员（不造题材级指标） | 无（ths 已具备） | ths 独占能力，欠用清单中最快出效果的 |
-| **P1-4** | B4 `seal_nextday` 交叉验证晋级率 | 无 | 数据源方案的自证闭环：对不上说明拼接仍有问题 |
+| ~~**P1-4**~~ | ~~B4 `seal_nextday` 交叉验证晋级率~~ ✅ 已完成（2026-08-31）：`app/sentiment/ladder_check.py` + `GET /api/market/ladder-check`（60→10min 缓存）；实测 5 可比日逐日一致、零漂移 | 无 | 数据源方案的自证闭环：对不上说明拼接仍有问题 |
 | **P1-5** | C1 `index/constituents` 板块成分表 | 无 | 解锁题材指数、板块内资金合力 |
 | **P1-6** | B3 核验板块区间涨幅数据源是否已换 ths | 无 | 0.5 天核验；未换则替换 f109 |
 | **P1-7** | 部署（Docker/编排/监控） | **用户定环境** | 有 Docker 的环境才能实测交付 |
