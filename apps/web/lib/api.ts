@@ -1077,6 +1077,21 @@ export async function getWatchlistGroups(): Promise<string[]> {
   return (await getJson<string[]>("/api/watchlist/groups")).data;
 }
 
+/** 新建空分组（重名 409 → 抛错给调用方提示）。 */
+export async function createWatchlistGroup(name: string): Promise<void> {
+  await sendJson("/api/watchlist/groups", "POST", { name });
+}
+
+/** 重命名分组（后端级联成员）。 */
+export async function renameWatchlistGroup(name: string, newName: string): Promise<void> {
+  await sendJson(`/api/watchlist/groups/${encodeURIComponent(name)}`, "PUT", { new_name: newName });
+}
+
+/** 删除分组（后端把成员回落「默认」）。 */
+export async function deleteWatchlistGroup(name: string): Promise<void> {
+  await sendJson(`/api/watchlist/groups/${encodeURIComponent(name)}`, "DELETE");
+}
+
 export async function updateWatchlistGroup(symbol: string, group: string): Promise<void> {
   await sendJson(`/api/watchlist/${symbol}/group`, "PUT", { group });
 }

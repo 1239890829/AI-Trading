@@ -27,3 +27,18 @@ class WatchlistItem(Base):
     received_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class WatchlistGroup(Base):
+    """自选分组（2026-09-01 分组管理，评审报告 A1）。
+
+    此前分组完全由 watchlist.group_name 派生——空分组直接消失，
+    "先建组再放股"的操作路径不存在。本表持久化空分组；
+    成员仍然以 watchlist.group_name 为准（两表并集即分组清单）。
+    """
+
+    __tablename__ = "watchlist_group"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

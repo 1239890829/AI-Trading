@@ -10,7 +10,8 @@ const nextConfig: NextConfig = {
     return [
       { source: "/themes", destination: "/tape?tab=themes", permanent: false },
       { source: "/limit-up", destination: "/tape?tab=limitup", permanent: false },
-      { source: "/boards", destination: "/tape?tab=boards", permanent: false },
+      // 评审 D1（2026-09-01）：盘面页板块 tab 移除，板块能力在工作台详情
+      { source: "/boards", destination: "/workbench", permanent: false },
       { source: "/longhu", destination: "/tape?tab=longhu", permanent: false },
       { source: "/heatmap", destination: "/market?tab=heatmap", permanent: false },
       { source: "/watchlist", destination: "/workbench", permanent: false },

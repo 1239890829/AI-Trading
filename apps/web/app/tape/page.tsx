@@ -4,13 +4,16 @@ import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ThemesTab } from "@/components/tape/themes-tab";
 import { LimitUpTab } from "@/components/tape/limit-up-tab";
-import { BoardsTab } from "@/components/tape/boards-tab";
 import { LonghuTab } from "@/components/tape/longhu-tab";
 
 /**
  * 盘面页（2026-09-01 系统重构，docs/architecture-redesign.md §一.1.2）：
- * 涨停池 / 题材 / 板块 / 龙虎榜 四页合并为一个入口的四个 tab——
- * 它们同属"盘面生态"参考，分开看要来回切，且除龙虎榜外都消费同一份涨停数据。
+ * 涨停池 / 题材 / 龙虎榜 合并为一个入口的三个 tab——
+ * 同属"盘面生态"参考，分开看要来回切，且除龙虎榜外都消费同一份涨停数据。
+ *
+ * 2026-09-01 评审 D1：「板块排行」tab 移除——板块数据与工作台详情右列
+ * 「板块」页签同源重复（同一条 /api/boards 链路），板块是行业横截面，
+ * 与盘面页的短线生态定位不契合；能力保留在工作台详情，零损失。
  *
  * tab 以 ?tab= 查询参数为真相源（可分享、可回退）；其余查询参数由各 tab 自治。
  */
@@ -18,7 +21,6 @@ import { LonghuTab } from "@/components/tape/longhu-tab";
 const TABS = [
   { key: "themes", label: "题材梯队" },
   { key: "limitup", label: "涨停生态" },
-  { key: "boards", label: "板块排行" },
   { key: "longhu", label: "龙虎榜" },
 ] as const;
 
@@ -60,15 +62,12 @@ function TapeInner() {
             ))}
           </nav>
         </div>
-        <span className="hidden text-xs text-zinc-400 lg:inline">
-          梯队结构 · 涨停证据 · 板块排行 · 资金关注
-        </span>
+        <span className="hidden text-xs text-zinc-400 lg:inline">梯队结构 · 涨停证据 · 资金关注</span>
       </div>
 
       <div className="min-h-0 flex-1">
         {tab === "themes" && <ThemesTab />}
         {tab === "limitup" && <LimitUpTab />}
-        {tab === "boards" && <BoardsTab />}
         {tab === "longhu" && <LonghuTab />}
       </div>
     </main>

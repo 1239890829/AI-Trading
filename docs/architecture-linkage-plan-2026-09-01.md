@@ -236,7 +236,7 @@ T+1 收盘: 复盘 Agent → 九类归因 + 角色胜率 + 事件收益回写(�
 
 ## 六、分阶段实施路径（每步含验证标准；全程 pytest 全绿 + tsc/eslint 门禁 + 浏览器截图验收 + 提交前还原 trade_calendar.json）
 
-### Phase 1 · 联动止血（1 次迭代，纯前端 + 0 后端）
+### Phase 1 · 联动止血（1 次迭代，纯前端 + 0 后端）✅ 已完成 2026-09-01（db98366）
 - **内容**：P1 watchlist-changed 补监听；P2 前端接入 WS `subscribe` 消息（后端已就绪）；P4 `lib/events.ts` 类型化事件；picks 卡"梯队来源"跳转链接。
 - **验证**：① vitest：加自选 → `watchlist-changed` 断言左栏刷新被调用；② 浏览器 devtools WS 面板：加/删自选连接不重连（Network→WS 只有一条）；③ 截图：加自选后左栏 ≤1s 出现新行。
 

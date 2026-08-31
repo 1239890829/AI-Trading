@@ -20,6 +20,14 @@ class GroupUpdate(BaseModel):
     group: str = Field(min_length=1, max_length=32)
 
 
+class GroupCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=32)
+
+
+class GroupRename(BaseModel):
+    new_name: str = Field(min_length=1, max_length=32)
+
+
 def _serialize(item) -> dict:
     return {
         "symbol": item.symbol,
@@ -46,6 +54,36 @@ async def add_watchlist(body: WatchlistAdd, repo: WatchlistRepository = Depends(
 @router.get("/watchlist/groups")
 async def list_groups(repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
     return {"data": repo.list_groups()}
+
+
+@router.post("/watchlist/groups", status_code=201, dependencies=[Depends(require_write_token)])
+async def create_group(body: GroupCreate, repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
+    row = repo.create_group(body.name)
+    if row is None:
+        raise HTTPException(status_code=409, detail=f"分组「{body.name}」已存在或名称无效")
+    return {"data": {"name": row.name}}
+
+
+@router.put("/watchlist/groups/{name}", dependencies=[Depends(require_write_token)])
+async def rename_group(name: str, body: GroupRename, repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
+    result = repo.rename_group(name, body.new_name)
+    if result == "protected":
+        raise HTTPException(status_code=400, detail=f"分组「{name}」是保留分组，不可重命名")
+    if result == "missing":
+        raise HTTPException(status_code=404, detail=f"分组「{name}」不存在")
+    if result == "conflict":
+        raise HTTPException(status_code=409, detail=f"分组「{body.new_name}」已存在")
+    return {"data": {"old": name, "new": body.new_name}}
+
+
+@router.delete("/watchlist/groups/{name}", dependencies=[Depends(require_write_token)])
+async def delete_group(name: str, repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
+    result = repo.delete_group(name)
+    if result == "protected":
+        raise HTTPException(status_code=400, detail=f"分组「{name}」是保留分组，不可删除")
+    if result == "missing":
+        raise HTTPException(status_code=404, detail=f"分组「{name}」不存在")
+    return {"data": {"name": name, "deleted": True, "members_moved_to": "默认"}}
 
 
 @router.put("/watchlist/{symbol}/group", dependencies=[Depends(require_write_token)])

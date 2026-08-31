@@ -11,6 +11,8 @@ import { Sparkline } from "@/components/sparkline";
 import { useQuoteStream, StreamStatus } from "@/hooks/use-quote-stream";
 import {
   addToWatchlist,
+  createWatchlistGroup,
+  deleteWatchlistGroup,
   getMarketOverview,
   getPaperPositions,
   getQuotes,
@@ -18,14 +20,16 @@ import {
   getRiskState,
   getSparklines,
   getWatchlist,
+  getWatchlistGroups,
   removeFromWatchlist,
+  renameWatchlistGroup,
   updateWatchlistGroup,
   type PaperPositionInfo,
   type RiskState,
   type SparklinePayload,
 } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
-import { APP_EVENTS, onAppEvent } from "@/lib/events";
+import { APP_EVENTS, emitAppEvent, onAppEvent } from "@/lib/events";
 import { LAST_SYMBOL_KEY, workbenchUrl } from "@/lib/routing";
 import type { Quote } from "@/types/market";
 
@@ -48,6 +52,8 @@ function WorkbenchInner() {
   const [error, setError] = useState<string | null>(null);
   // 以前用 ref 装着再在渲染期读（React 并发渲染下不可靠，且 Next16 的 lint 直接判错）——改为状态
   const [groupMap, setGroupMap] = useState<Record<string, string>>({});
+  // 分组清单（持久表 ∪ 成员派生，后端并集）：空分组也可见（评审 A1 分组管理）
+  const [allGroupNames, setAllGroupNames] = useState<string[]>(["默认"]);
   const [activeGroup, setActiveGroup] = useState<string>("全部");
   const [updatedAt, setUpdatedAt] = useState<string>("");
   // 选中标的：URL 参数是唯一真相源；无参数时回退「上次查看的标的」，
@@ -81,14 +87,17 @@ function WorkbenchInner() {
   const loadBase = useCallback(async () => {
     try {
       // 原 groups 裸 fetch 从未被消费（gs 解构后无人用）——随收口一并删除
-      const [wl, overview, positions, riskState] = await Promise.all([
+      const [wl, overview, positions, riskState, groupNames] = await Promise.all([
         getWatchlist(),
         getMarketOverview(),
         getPaperPositions().catch(() => []),
         getRiskState().catch(() => null),
+        getWatchlistGroups().catch(() => [] as string[]),
       ]);
       setGroupMap(Object.fromEntries(wl.map((i) => [i.symbol, i.group_name ?? "默认"])));
       setSymbols(wl.map((i) => i.symbol));
+      // 分组清单 = 持久分组表 ∪ 成员派生（后端并集；空分组也可存在，评审 A1）
+      setAllGroupNames(["默认", ...groupNames]);
       setIndices(overview.indices);
       setTotalAmount(overview.total_amount);
       setPositions(positions);
@@ -153,9 +162,12 @@ function WorkbenchInner() {
   }, []);
 
   // 分组清单由 groupMap 派生（旧代码是独立的 groups 状态，从未被赋值，chips 永远只有「全部」）
-  const groups = useMemo(() => Array.from(new Set(Object.values(groupMap))).sort(), [groupMap]);
+  const groups = useMemo(
+    () => allGroupNames.filter((g, i) => g !== "默认" && allGroupNames.indexOf(g) === i).sort(),
+    [allGroupNames]
+  );
   // 管理模式下分组下拉的可选项（含「默认」兜底）
-  const allGroups = useMemo(() => Array.from(new Set(["默认", ...groups])), [groups]);
+  const allGroups = useMemo(() => Array.from(new Set(["默认", ...allGroupNames])), [allGroupNames]);
   const watchQuotes: Quote[] = symbols
     .filter((s) => activeGroup === "全部" || groupMap[s] === activeGroup)
     .map((s) => merged[s])
@@ -190,6 +202,7 @@ function WorkbenchInner() {
       setNewSymbol("");
       setAddError(null);
       setSymbols((prev) => (prev.includes(s) ? prev : [...prev, s]));
+      emitAppEvent(APP_EVENTS.watchlistChanged); // 写操作必广播（lib/events.ts 契约）
     } catch {
       setAddError("添加失败，请确认后端已启动");
     }
@@ -200,6 +213,43 @@ function WorkbenchInner() {
       await updateWatchlistGroup(symbol, group);
       setGroupMap((prev) => ({ ...prev, [symbol]: group }));
     } catch {}
+  }
+
+  // ── 分组管理（评审 A1：新建 / 重命名 / 删除）────────────────
+  // 保护规则在后端（「默认」不可动、重名 409），前端透出错误信息即可。
+  async function handleCreateGroup() {
+    const name = window.prompt("新建分组名称：");
+    if (!name || !name.trim()) return;
+    try {
+      await createWatchlistGroup(name.trim());
+      setActiveGroup(name.trim());
+      await loadBase();
+    } catch (e) {
+      window.alert(`新建失败：${(e as Error).message}`);
+    }
+  }
+
+  async function handleRenameGroup(oldName: string) {
+    const newName = window.prompt(`重命名分组「${oldName}」为：`, oldName);
+    if (!newName || !newName.trim() || newName.trim() === oldName) return;
+    try {
+      await renameWatchlistGroup(oldName, newName.trim());
+      if (activeGroup === oldName) setActiveGroup(newName.trim());
+      await loadBase();
+    } catch (e) {
+      window.alert(`重命名失败：${(e as Error).message}`);
+    }
+  }
+
+  async function handleDeleteGroup(name: string) {
+    if (!window.confirm(`删除分组「${name}」？组内成员将回到「默认」。`)) return;
+    try {
+      await deleteWatchlistGroup(name);
+      if (activeGroup === name) setActiveGroup("全部");
+      await loadBase();
+    } catch (e) {
+      window.alert(`删除失败：${(e as Error).message}`);
+    }
   }
 
   return (
@@ -276,20 +326,6 @@ function WorkbenchInner() {
             </table>
           </Panel>
         )}
-        <div className="flex shrink-0 flex-wrap gap-1">
-          {["全部", "持仓", ...groups.filter((g) => g !== "默认")].map((g) => (
-            <button
-              key={g}
-              onClick={() => setActiveGroup(g)}
-              className={`rounded-full border px-2.5 py-0.5 text-xs ${
-                activeGroup === g ? "border-up/60 bg-up/10 text-up" : "border-zinc-200 text-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100"
-              }`}
-            >
-              {g}
-              {g === "持仓" && realSymbols.length > 0 && <span className="ml-1 text-[10px] text-zinc-400">{realSymbols.length}</span>}
-            </button>
-          ))}
-        </div>
         <Panel
           title={activeGroup === "持仓" ? `真实持仓 (${holdingQuotes.length})` : "自选股"}
           extra={
@@ -326,6 +362,54 @@ function WorkbenchInner() {
           }
           className="min-h-0 flex-1 overflow-hidden"
         >
+          {/* ── 视图切换 + 分组（M1/A1 2026-09-01）：chips 移入面板内部——
+              「全部」是自选股的默认视图而非页面级筛选；持仓与自选分组用
+              竖线区隔（持仓不是分组，是真实持仓账本视角）；管理模式下
+              提供 新建 / 重命名 / 删除 分组（保护规则在后端）。────── */}
+          <div className="sticky top-0 z-10 flex flex-wrap items-center gap-1 border-b border-zinc-100 bg-white/95 px-3 py-1.5 dark:border-zinc-800/60 dark:bg-zinc-950/95">
+            {["全部", "持仓", "默认", ...groups].map((g, idx) => (
+              <span key={g} className="flex items-center gap-1">
+                {(idx === 1 || idx === 2) && <span className="mx-0.5 h-4 w-px bg-zinc-200 dark:bg-zinc-800" aria-hidden />}
+                <button
+                  onClick={() => setActiveGroup(g)}
+                  className={`rounded-full border px-2.5 py-0.5 text-xs ${
+                    activeGroup === g ? "border-up/60 bg-up/10 text-up" : "border-zinc-200 text-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100"
+                  }`}
+                >
+                  {g}
+                  {g === "持仓" && realSymbols.length > 0 && <span className="ml-1 text-[10px] text-zinc-400">{realSymbols.length}</span>}
+                </button>
+              </span>
+            ))}
+            {managing && (
+              <button
+                onClick={() => void handleCreateGroup()}
+                title="新建分组"
+                className="rounded-full border border-dashed border-zinc-300 px-2 py-0.5 text-xs text-zinc-400 hover:border-up/60 hover:text-up dark:border-zinc-700"
+              >
+                ＋ 组
+              </button>
+            )}
+            {managing && activeGroup !== "全部" && activeGroup !== "持仓" && activeGroup !== "默认" && (
+              <span className="flex items-center gap-1">
+                <span className="mx-0.5 h-4 w-px bg-zinc-200 dark:bg-zinc-800" aria-hidden />
+                <button
+                  onClick={() => void handleRenameGroup(activeGroup)}
+                  title={`重命名分组「${activeGroup}」`}
+                  className="rounded px-1 text-xs text-zinc-400 hover:text-sky-400"
+                >
+                  ✎
+                </button>
+                <button
+                  onClick={() => void handleDeleteGroup(activeGroup)}
+                  title={`删除分组「${activeGroup}」`}
+                  className="rounded px-1 text-xs text-zinc-400 hover:text-red-400"
+                >
+                  🗑
+                </button>
+              </span>
+            )}
+          </div>
           {(activeGroup === "持仓" ? holdingQuotes : watchQuotes).length === 0 ? (
             <p className="px-4 py-8 text-center text-sm text-zinc-400">
               {activeGroup === "持仓" ? (
