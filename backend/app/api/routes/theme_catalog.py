@@ -30,6 +30,116 @@ def get_service(request: Request) -> ThemeCatalogService:
     return svc
 
 
+def _normalize_symbol(symbol: str) -> str:
+    sym = (symbol or "").strip().replace(".SH", "").replace(".SZ", "")
+    if not sym.isdigit() or len(sym) != 6:
+        raise HTTPException(status_code=400, detail=f"非法代码：{symbol!r}")
+    return sym
+
+
+async def _attribution_for_symbol(request: Request, symbol: str, trade_date: date | None = None) -> list[dict]:
+    """涨停归因（ths reason 串，行为性归属 L2 层），按日期微缓存 60s。
+
+    整个涨停池一次拉取按 symbol 建倒排，多次个股查询共享。
+    ths 源不可用（链上无该 provider / 拉取失败）时返回空——归因是 best-effort，
+    不让它拖垮官方成分的展示。注意：交易日盘中当日池随行情增长，盘前为空是正常语义。
+    """
+    import time as _time
+
+    from app.services.theme_service import _pick_provider
+
+    hub = request.app.state.hub
+    cache_key = f"_stock_attribution_cache_{trade_date or 'default'}"
+    cache = getattr(request.app.state, cache_key, None)
+    now = _time.time()
+    if cache and now - cache[0] < 60:
+        amap: dict[str, list[str]] = cache[1]
+        date_iso: str = cache[2]
+    else:
+        ths = _pick_provider(hub.provider, "ThsFuyaoProvider")
+        if ths is None:
+            return []
+        try:
+            if trade_date is None:
+                from app.api.routes.market import _default_trade_date_async
+
+                trade_date = await _default_trade_date_async(hub)
+            pool = await ths.get_limit_up_pool(trade_date)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("stock attribution: 涨停池拉取失败（跳过归因展示）: %s", exc)
+            return []
+        amap = {}
+        for row in pool:
+            tags = parse_theme_tags(getattr(row, "reason", None))
+            if tags:
+                amap[row.symbol] = tags
+        date_iso = trade_date.isoformat()
+        request.app.state.__setattr__(cache_key, (now, amap, date_iso))
+    return [{"theme_name": t, "date": date_iso} for t in amap.get(symbol, [])]
+
+
+@router.get("/themes/stock/{symbol}")
+async def stock_themes(
+    symbol: str,
+    request: Request,
+    date_str: str | None = Query(default=None, alias="date", description="YYYYMMDD，默认最近交易日"),
+    svc: ThemeCatalogService = Depends(get_service),
+) -> dict:
+    """个股题材反查（linkage-design §3.2）：官方成分（L3）+ 涨停归因（L2）。
+
+    首次访问时目录为空会自动同步一次。归因为 best-effort：ths 源不可用时
+    官方成分照常返回；交易日盘前当日池为空属正常语义（?date= 可回看）。
+    """
+    sym = _normalize_symbol(symbol)
+    trade_date: date | None = None
+    if date_str:
+        try:
+            trade_date = datetime.strptime(date_str, "%Y%m%d").date()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"日期格式应为 YYYYMMDD：{date_str!r}") from exc
+    if svc.catalog_size() == 0:
+        try:
+            await svc.sync_catalog()
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"题材目录同步失败：{exc}") from exc
+
+    official = svc.get_official_for_symbol(sym)
+    attribution = await _attribution_for_symbol(request, sym, trade_date)
+
+    # 有界懒同步：官方归属为空但当日有归因时，只补齐归因题材的成分再反查一次
+    # （归因给了精确的题材名，避免为"查无归属"全量同步 390 个题材）。
+    if not official and attribution:
+        names = {t.name: t.code for t in svc.get_catalog(limit=1000)}
+        codes = list({names[a["theme_name"]] for a in attribution if a["theme_name"] in names})
+        if codes:
+            with svc._sf() as db:  # noqa: SLF001 - 同包内复用会话工厂
+                from sqlalchemy import select as _select
+
+                from app.models.theme_catalog import ThemeMember as _TM
+
+                synced = set(
+                    db.execute(
+                        _select(_TM.theme_code).where(_TM.theme_code.in_(codes))
+                    ).scalars()
+                )
+            for code in codes:
+                if code not in synced:
+                    try:
+                        await svc.sync_members(code)
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("stock themes: 成分懒同步失败 %s: %s", code, exc)
+            official = svc.get_official_for_symbol(sym)
+
+    return {
+        "data": {
+            "symbol": sym,
+            "official": official,
+            "attribution": attribution,
+        },
+        "meta": {},
+    }
+
+
 @router.get("/themes/catalog")
 async def theme_catalog(
     search: str | None = Query(default=None, max_length=32),

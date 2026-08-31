@@ -167,3 +167,86 @@ def test_theme_catalog_api(monkeypatch: pytest.MonkeyPatch):
 
         # 非法代码被拒
         assert client.get("/api/themes/catalog/../secret/members").status_code in (400, 404)
+
+
+# ---------------------------------------------------------------- T2-a：个股反查
+
+
+def test_apply_overrides_excludes_and_includes():
+    from app.models.theme_catalog import ThemeOverride
+    from app.services.theme_catalog_service import apply_overrides
+
+    members = [
+        {"theme_code": GRAIN, "theme_name": "粮食概念", "source": "ths_official"},
+        {"theme_code": "886042.TI", "theme_name": "存储芯片", "source": "ths_official"},
+    ]
+    overrides = [
+        ThemeOverride(theme_code="886042.TI", symbol="000019", action="exclude", reason="口径争议"),
+        ThemeOverride(theme_code="881001.TI", symbol="000019", action="include", reason="人工确认"),
+    ]
+    out = apply_overrides(members, overrides, {"881001.TI": "测试题材"})
+    codes = {m["theme_code"] for m in out}
+    assert "886042.TI" not in codes, "exclude 必须剔除官方归属"
+    added = next(m for m in out if m["theme_code"] == "881001.TI")
+    assert added["theme_name"] == "测试题材" and added["source"] == "manual"
+
+    # 目录里查不到 include 的题材：以代码兜底命名，不静默丢弃人工修正
+    out2 = apply_overrides(members, [overrides[1]], {})
+    assert out2[-1]["theme_name"] == "881001.TI"
+
+
+def test_get_official_for_symbol_applies_overrides(monkeypatch: pytest.MonkeyPatch):
+    svc = _svc()
+
+    async def fake_catalog():
+        return [{"code": GRAIN, "name": "粮食概念"}]
+
+    async def fake_members(code):
+        return [{"symbol": "000019", "name": "深粮控股"}] if code == GRAIN else []
+
+    monkeypatch.setattr(svc, "fetch_catalog", fake_catalog)
+    monkeypatch.setattr(svc, "fetch_members", fake_members)
+    asyncio.run(svc.sync_catalog())
+    asyncio.run(svc.sync_members(GRAIN))
+
+    base = svc.get_official_for_symbol("000019", apply_manual=False)
+    assert base == [{"theme_code": GRAIN, "theme_name": "粮食概念", "source": "ths_official"}]
+
+    with svc._sf() as db:
+        from app.models.theme_catalog import ThemeOverride
+
+        db.add(ThemeOverride(theme_code=GRAIN, symbol="000019", action="exclude", reason="测试"))
+        db.commit()
+
+    assert svc.get_official_for_symbol("000019") == [], "活跃 exclude 必须生效"
+
+
+def test_stock_themes_api(monkeypatch: pytest.MonkeyPatch):
+    with TestClient(app) as client:
+        svc = _svc()
+
+        async def fake_catalog():
+            return [{"code": GRAIN, "name": "粮食概念"}]
+
+        async def fake_members(code):
+            if code != GRAIN:
+                return []
+            return [{"symbol": "000019", "name": "深粮控股"}, {"symbol": "000505", "name": "京粮控股"}]
+
+        monkeypatch.setattr(svc, "fetch_catalog", fake_catalog)
+        monkeypatch.setattr(svc, "fetch_members", fake_members)
+        client.app.state.theme_catalog = svc
+
+        asyncio.run(svc.sync_catalog())
+        asyncio.run(svc.sync_members(GRAIN))
+
+        # 用 000505：上一条测试写入的 000019 override 会泄漏到共享内存库
+        r = client.get("/api/themes/stock/000505")
+        assert r.status_code == 200
+        data = r.json()["data"]
+        assert data["official"] == [{"theme_code": GRAIN, "theme_name": "粮食概念", "source": "ths_official"}]
+        # 测试环境 provider 链是 mock（无 ThsFuyaoProvider）→ 归因为空但不报错
+        assert data["attribution"] == []
+
+        # 非法代码
+        assert client.get("/api/themes/stock/abc").status_code == 400

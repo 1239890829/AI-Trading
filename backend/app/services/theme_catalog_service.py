@@ -100,6 +100,32 @@ def reconcile(
     }
 
 
+def apply_overrides(
+    members: list[dict],
+    overrides: list[ThemeOverride],
+    theme_names: dict[str, str],
+) -> list[dict]:
+    """人工纠错裁决（纯函数）：exclude 从官方归属里剔除，include 追加。
+
+    members: [{theme_code, theme_name, source}]；overrides 为该 symbol 的活跃记录。
+    include 的题材若不在目录（theme_names 无此代码），以代码兜底命名并在 source 标 manual——
+    不静默丢弃人工修正。
+    """
+    out = list(members)
+    for ov in overrides:
+        if ov.action == "exclude":
+            out = [m for m in out if m["theme_code"] != ov.theme_code]
+        elif ov.action == "include":
+            if any(m["theme_code"] == ov.theme_code for m in out):
+                continue
+            out.append({
+                "theme_code": ov.theme_code,
+                "theme_name": theme_names.get(ov.theme_code, ov.theme_code),
+                "source": "manual",
+            })
+    return out
+
+
 # ---------------------------------------------------------------- IO：同步与查询
 
 
@@ -253,6 +279,40 @@ class ThemeCatalogService:
             if code:
                 q = q.where(ThemeOverride.theme_code == code)
             return list(db.execute(q).scalars())
+
+    def get_active_overrides_for_symbol(self, symbol: str) -> list[ThemeOverride]:
+        """该 symbol 的未过期人工纠错记录。"""
+        now = utcnow()
+        with self._sf() as db:
+            rows = db.execute(select(ThemeOverride).where(ThemeOverride.symbol == symbol)).scalars()
+            return [
+                r for r in rows
+                if r.expires_at is None or r.expires_at.replace(tzinfo=None) >= now.replace(tzinfo=None)
+            ]
+
+    def get_official_for_symbol(self, symbol: str, *, apply_manual: bool = True) -> list[dict]:
+        """反查：该股票属于哪些官方题材（linkage-design §3.2 L3 层）。
+
+        返回 [{theme_code, theme_name, source}]；默认叠加人工 override（exclude 剔除 /
+        include 追加），来源徽标由前端按 source 渲染。
+        """
+        with self._sf() as db:
+            rows = db.execute(
+                select(ThemeMember, Theme.name)
+                .join(Theme, Theme.code == ThemeMember.theme_code)
+                .where(ThemeMember.symbol == symbol)
+                .order_by(ThemeMember.theme_code)
+            ).all()
+        members = [
+            {"theme_code": m.theme_code, "theme_name": name, "source": m.attribution_source}
+            for m, name in rows
+        ]
+        if not apply_manual:
+            return members
+        overrides = self.get_active_overrides_for_symbol(symbol)
+        if not overrides:
+            return members
+        return apply_overrides(members, overrides, {})
 
     def catalog_size(self) -> int:
         with self._sf() as db:

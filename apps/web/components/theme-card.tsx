@@ -303,6 +303,14 @@ export function ThemeCardView({
                       <Link href={workbenchUrl(r.symbol)} className="hover:text-rose-600 dark:hover:text-rose-400">
                         <span className="text-zinc-800 dark:text-zinc-100">{r.name ?? r.symbol}</span>
                         <span className="ml-1.5 font-mono text-[11px] text-zinc-400">{r.symbol}</span>
+                        {r.official && (
+                          <span
+                            className="ml-1.5 rounded bg-sky-500/10 px-1 align-middle text-[10px] text-sky-600 dark:text-sky-300"
+                            title="THS 官方概念成分（结构性归属，区别于仅当日涨停归因）"
+                          >
+                            官方成分
+                          </span>
+                        )}
                       </Link>
                       {r.other_themes.length > 0 && (
                         <div className="mt-0.5 truncate text-[11px] text-zinc-400" title={`同时具有标签：${r.other_themes.join("、")}`}>

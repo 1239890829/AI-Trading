@@ -829,6 +829,31 @@ def _load_snapshot_map(request: Request, trade_date: date | None = None) -> dict
         return {}
 
 
+def _attach_official_flags(request: Request, themes_list: list[dict]) -> None:
+    """L5（linkage-design §3.2）：给看板梯队成员标注是否为 THS 官方成分。
+
+    纯展示增强：题材目录服务不可用/目录为空时静默跳过（无徽标 ≠ 非成分，
+    前端不得把缺徽标当负面信号）。
+    """
+    svc = getattr(request.app.state, "theme_catalog", None)
+    if svc is None or svc.catalog_size() == 0:
+        return
+    try:
+        name_to_code = {t.name: t.code for t in svc.get_catalog(limit=1000)}
+        members_by_code: dict[str, set[str]] = {}
+        for card in themes_list:
+            code = name_to_code.get(card.get("theme") or "")
+            if not code:
+                continue
+            if code not in members_by_code:
+                members_by_code[code] = {m.symbol for m in svc.get_members(code)}
+            official = members_by_code[code]
+            for it in card.get("ladder") or []:
+                it["official"] = it.get("symbol") in official
+    except Exception:  # noqa: BLE001 - 徽标失败不影响看板
+        log.exception("attach official flags failed")
+
+
 @router.get("/themes", response_model=Envelope[ThemeBoardPayload])
 async def themes(
     date_str: str | None = Query(default=None, alias="date", description="YYYY-MM-DD，默认最近交易日"),
@@ -874,6 +899,7 @@ async def themes(
         setattr(request.app.state, key, (_time.time(), payload))
 
     themes_list = list(payload["data"]["themes"])
+    _attach_official_flags(request, themes_list)
     if min_boards > 0:
         themes_list = [t for t in themes_list if t["performance"]["max_boards"] >= min_boards]
     if min_count > 1:

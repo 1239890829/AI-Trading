@@ -54,6 +54,8 @@ export default function ThemesPage() {
     return v ? Number(v) : 2;
   });
   const [showCaveats, setShowCaveats] = useState(false);
+  // 聚焦题材（L4 联动：详情页题材 chip → /themes?focus=名称）
+  const [focus, setFocus] = useState(searchParams.get("focus") ?? "");
 
   const load = useCallback(
     async (d?: string, s: SortKey = sort, mb = minBoards, mc = minCount) => {
@@ -79,7 +81,9 @@ export default function ThemesPage() {
   );
 
   useEffect(() => {
-    void load();
+    // 首屏必须带上 URL 里的 date——此前裸 load() 只用默认日期，
+    // /themes?date=2026-08-28 打开时实际取的是"今天"（盘前为降级数据）。
+    void load(date || undefined);
     // 仅在挂载时拉一次；后续筛选由各自的 onChange 触发
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -122,6 +126,24 @@ export default function ThemesPage() {
   };
 
   const broken = useMemo(() => data?.broken_ladder ?? [], [data]);
+
+  /** 聚焦过滤：题材名精确/包含 + 原始归因标签匹配（官方成分名与归因串口径可能不同） */
+  const visibleThemes = useMemo(() => {
+    if (!data) return [];
+    if (!focus) return data.themes;
+    return data.themes.filter(
+      (c) => c.theme === focus || c.theme.includes(focus) || (c.raw_tags ?? []).includes(focus)
+    );
+  }, [data, focus]);
+
+  function clearFocus() {
+    setFocus("");
+    // 从 URL 移除 focus（沿用本页 replaceState 口径）
+    const params = new URLSearchParams(window.location.search);
+    params.delete("focus");
+    const qs = params.toString();
+    window.history.replaceState({}, "", qs ? `?${qs}` : window.location.pathname);
+  }
 
   return (
     <main className="mx-auto flex h-full w-full max-w-[1600px] flex-col px-4 py-3">
@@ -215,6 +237,18 @@ export default function ThemesPage() {
         </div>
       )}
 
+      {/* 聚焦条：详情页题材 chip 跳转进来时的上下文提示 */}
+      {focus && (
+        <div className="mb-3 flex shrink-0 items-center gap-2 rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-1.5 text-xs text-sky-700 dark:text-sky-300">
+          <span>
+            聚焦题材：<span className="font-medium">{focus}</span>
+          </span>
+          <button onClick={clearFocus} className="rounded border border-sky-500/40 px-1.5 py-0.5 hover:bg-sky-500/10">
+            显示全部
+          </button>
+        </div>
+      )}
+
       {loading && !data && <p className="py-16 text-center text-sm text-zinc-400">加载中…</p>}
 
       {data && data.themes.length === 0 && (
@@ -223,11 +257,17 @@ export default function ThemesPage() {
         </p>
       )}
 
+      {data && data.themes.length > 0 && visibleThemes.length === 0 && (
+        <p className="py-16 text-center text-sm text-zinc-400">
+          题材「{focus}」今日没有梯队卡片——可能今日无涨停、未成建制，或归属名称与看板口径不一致（可在涨停池核对该股涨停原因原文）
+        </p>
+      )}
+
       {/* ── 唯一滚动容器：全部卡片 + 断板股 + 口径说明 ─────────── */}
       <div className="min-h-0 flex-1 overflow-y-auto pr-1">
         <div className={`space-y-3 ${loading && data ? "opacity-60 transition-opacity" : ""}`}>
-          {data?.themes.map((c, i) => (
-            <ThemeCardView key={c.theme} card={c} rank={i + 1} tradeDate={data.trade_date} />
+          {visibleThemes.map((c, i) => (
+            <ThemeCardView key={c.theme} card={c} rank={i + 1} tradeDate={data?.trade_date ?? ""} />
           ))}
         </div>
 

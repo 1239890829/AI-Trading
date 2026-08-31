@@ -491,6 +491,28 @@ export async function searchSymbols(q: string): Promise<SymbolSearchItem[]> {
   return (await getJson<SymbolSearchItem[]>(`/api/search?q=${encodeURIComponent(q)}`)).data;
 }
 
+/** 个股题材归属（linkage-design §3.2）：官方成分（L3 结构性）+ 当日涨停归因（L2 行为性）。 */
+export interface StockThemeLink {
+  theme_code: string;
+  theme_name: string;
+  source: string; // ths_official | manual
+}
+
+export interface StockThemeAttribution {
+  theme_name: string;
+  date: string;
+}
+
+export interface StockThemes {
+  symbol: string;
+  official: StockThemeLink[];
+  attribution: StockThemeAttribution[];
+}
+
+export async function getStockThemes(symbol: string): Promise<StockThemes> {
+  return (await getJson<StockThemes>(`/api/themes/stock/${symbol}`, 30_000)).data;
+}
+
 export interface MinutePoint {
   ts: string;
   price: number;

@@ -9,6 +9,7 @@ import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
 import { useQuoteStream } from "@/hooks/use-quote-stream";
 import { analyze } from "@/lib/technical-analysis";
+import { ThemeChipsRow } from "@/components/detail/theme-chips";
 import {
   addToWatchlist,
   cancelPaperOrder,
@@ -30,6 +31,7 @@ import {
   getQuote,
   getQuotes,
   getNewsDigest,
+  getStockThemes,
   getTrades,
   getWatchlist,
   placePaperOrder,
@@ -37,6 +39,7 @@ import {
   type AuctionData,
   type MinutePoint,
   type PaperFill,
+  type StockThemes,
 } from "@/lib/api";
 import { fmt, pctColor, pctText } from "@/lib/format";
 import type { Kline, OrderBook, Quote, Trade } from "@/types/market";
@@ -210,6 +213,21 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     };
   }, [symbol]);
 
+  // 题材归属（L4 联动）：官方成分 + 当日涨停归因，chip 点击跳题材看板聚焦。
+  // 独立请求 + 静默失败：归属缺失只影响这一行，不拖垮详情页。
+  const [stockThemes, setStockThemes] = useState<StockThemes | null>(null);
+  useEffect(() => {
+    if (!symbol) return;
+    let alive = true;
+    setStockThemes(null); // 切股先清空，防残留上一只的题材
+    getStockThemes(symbol)
+      .then((t) => alive && setStockThemes(t))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [symbol]);
+
   useEffect(() => {
     if (!symbol) return;
     let alive = true;
@@ -315,6 +333,9 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
 
       {/* ① 紧凑行情条 */}
       {quote && <QuoteStrip quote={quote} inWatchlist={inWatchlist} onAdd={() => void add()} />}
+
+      {/* ①½ 题材归属 chips（官方成分 / 涨停归因双源）→ 题材看板聚焦 */}
+      <ThemeChipsRow themes={stockThemes} />
 
       {/* ② 中部：左图表区 + 右盘口/逐笔（右列宽度可拖拽，--right-w 由 state 注入） */}
       <div

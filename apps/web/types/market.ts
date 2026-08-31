@@ -99,6 +99,8 @@ export interface LadderRung {
   last_seal_time?: string | null;
   seal_phase?: string | null; // 早盘/上午/午后/尾盘
   change_pct?: number | null;
+  /** 是否为 THS 官方概念成分（L5 徽标）；缺省 = 目录服务未同步，不得当负面信号 */
+  official?: boolean;
 }
 
 export interface ThemeBoardMetrics {
