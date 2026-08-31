@@ -41,14 +41,16 @@ lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=
 CI（GitHub Actions）：后端 pytest+pyflakes、前端 tsc+eslint+vitest+build。推送后**自查 CI**
 （`source ~/.zshenv` 拿 GITHUB_TOKEN → `/actions/runs?head_sha=<完整SHA>` → jobs → logs），绝不问用户。
 
-## 2. 当前状态快照（2026-08-31，实时行情修复后更新）
+## 2. 当前状态快照（2026-09-01，系统重构完成后更新）
 
-**549 后端测试 + 83 前端测试全绿 · 94 REST + 1 WS 端点 · 四源链 `ths→tencent→eastmoney→sina`**
+**551 后端测试 + 83 前端测试全绿 · 96 REST + 1 WS 端点 · 四源链 `ths→tencent→eastmoney→sina`（含熔断）**
+**前端导航 5 项：工作台 / 盘面 /tape / 市场 /market / 每日精选 /picks / 研究 /research**（2026-09-01 页面合并，旧路由 302）
 
-本日已完成：P0-5 统一缓存层（`3315c3f`）→ reconciliation 502 修复（`fb833f1`）→
-B1 题材人气（`5abeabd`）→ B4 晋级率源自证（`f0d10b0`）→ P1-8 K线事件点（`ca15f74`）→
-实时行情修复（K线/分时/盘口/逐笔盘中刷新 + 指数点击详情）+ 指数详情页改造（分时Y轴修复/名称显示/涨速榜/板块涨幅 tab）。
-**P0 只剩 P0-3b（等 Parquet 快照积累）；阶段 C 只剩题材指数。**
+08-31 ~ 09-01 已完成：实时行情修复 → 真实持仓账本 → 题材合力 → 每日精选五维评分+梯队/阶段/闸门/出场纪律 →
+跨日回放+参数扫描（组合稳定性：MAX_SWAPS_PER_DAY=2）→ **系统盘点（docs/architecture-redesign.md）全清单清零**：
+P0 K线三源+熔断+回放限流（`e77971f`）→ 事件采集调度+消息面六维打通（`d8e4e52`）→ 角色胜率（`2b719f3`）→
+盘点清理（`50d5b8d`）→ **页面合并：盘面四合一/云图入市场/研究折叠/自选入工作台（`a9d42fa`）** →
+基本面 ROE/毛利率评分补全（`ede98be`）。
 
 | 阶段 | 状态 |
 |---|---|
@@ -143,9 +145,14 @@ sh000001）；QuoteHub.get_quotes 兜底 indices + 前缀归一化（model_copy�
 
 ## 4. 后续规划（分阶段；明细账本 docs/retro-and-gaps.md，优先级依据 docs/plan-review.md）
 
-> **接手者看这里**：无阻塞待办只剩阶段 C 第 4 项（题材指数）。其余全部在等外部触发
-> （阶段 B 的用户决策）或等数据（P0-3b）。**继续推进须等用户明确指令**（工作模式，
-> 用户 2026-08-31 定）；用户说"继续"时按阶段 C 剩余项顺序做，动手前先读 §6。
+> **接手者看这里**：系统盘点与重构清单（docs/architecture-redesign.md）已于 2026-09-01 **全部清零**，
+> 导航已收敛为 5 项。无阻塞待办；剩余在等外部触发的阶段 B 与远期阶段 D。
+> **继续推进须等用户明确指令**（工作模式，用户 2026-08-31 定）；动手前先读 §6。
+
+### 阶段 E · 系统重构（✅ 全部完成 2026-09-01，记录见 docs/architecture-redesign.md §五）
+P0 K线多源冗余+熔断+回放限流 · P1 事件采集调度+角色胜率分布 · P1/P2 页面合并（/tape 四合一、
+云图入市场、/research 折叠、自选入工作台，导航 13→5）· P2 screener 冻结+分钟信号删除 ·
+P2 基本面 ROE/毛利率 · P3 skills 归档。
 
 ### 阶段 A · P0（只剩一项，等数据）
 1. **sentiment 历史分位校准**（P0-3 残留；阈值配置化 ✅ 已完成 2026-08-31：`band_config.py` + `ASHARE_SENTIMENT_HEAT_BANDS_JSON`/`ASHARE_SENTIMENT_EARNING_BANDS_JSON` 覆盖，非法配置启动即失败）：等 Parquet 快照积累后用本地数据算分位，替换照搬网络的阈值。快照目录在**项目根** `data/parquet/snapshots/`（按日分目录），2026-08-31 时只有 2 个交易日样本，需数十个交易日。

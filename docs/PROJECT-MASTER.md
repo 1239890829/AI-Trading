@@ -11,11 +11,12 @@
 A 股实时行情 + AI 量化投研 + 模拟交易工作台。**只做**行情展示/数据分析/投研/选股观察/模拟交易/回测。**第一阶段禁止**：连接真实券商、自动真实下单、无数据依据的确定性买卖结论、mock 冒充实盘。
 
 ## 1.2 当前状态快照
-- 后端：FastAPI（Python 3.11），82 个 REST 端点 + 1 个 WebSocket，**四源 Provider 链**（ths→tencent→eastmoney→sina）+ mock
-- 前端：Next.js 16 App Router，9 页面 + 10+ 组件，终端式工作台
+- 后端：FastAPI（Python 3.11），96 个 REST 端点 + 1 个 WebSocket，**四源 Provider 链**（ths→tencent→eastmoney→sina）+ mock + 熔断
+- 前端：Next.js 16 App Router，**导航 5 项**（工作台/盘面/市场/每日精选/研究，2026-09-01 页面合并），终端式工作台
 - 数据：全市场快照（5550 只）落 Parquet；SQLite 业务库
-- 测试：118 用例全绿；ESLint/pyflakes/tsc 门禁零问题
+- 测试：后端 551 用例全绿 + 前端 vitest 83；tsc/eslint(0 error)/pyflakes 门禁
 - 运行：双端本地运行中（8000/3000）
+> 注：本文档为 2026-08-29 基线 + 增量修补；2026-08-31 起的系统盘点与重构全记录见 docs/architecture-redesign.md
 
 ---
 
@@ -211,17 +212,16 @@ ashare-ai-trader/
 
 # 六、前端明细
 
-## 6.1 页面（7）
+## 6.1 页面（2026-09-01 系统重构后：导航 5 项，旧路由 302 见 next.config.ts）
 | 路由 | 内容 | 状态 |
 |---|---|---|
-| /workbench | 终端主页面：左栏[指数迷你卡(可收起)+自选分组+列表] │ 右[详情终端] | ✅ |
-| /market | 总览+宽度卡+情绪面板+涨停速览 | ✅ |
-| /watchlist | 自选管理（分组输入/改组/删除） | ✅ |
-| /boards | 板块排行（行业/概念切换） | ✅ |
-| /themes | 题材梯队看板（单容器纵向滚动；卡片=强弱分级+当日涨跌幅+个股梯队[层级+角色]；归属按当日联动唯一判定，拆散率 22%→0；涨停池降级为证据下钻页，卡片「涨停池↗」带日期直达） | ✅ 新增 2026-08-29 重构 |
-| /limit-up | 涨停池（含涨停原因、日期查询） | ✅ |
-| /longhu | 龙虎榜总览（净买额排序） | ✅ |
+| /workbench | 终端主页面：左栏[指数迷你卡(可收起)+模拟持仓+自选分组 chips（含「持仓」分类）+列表（管理模式：代码添加/改分组）] │ 右[详情终端（含真实持仓 tab）] | ✅（自选页已并入） |
+| /tape | **盘面**四 tab：题材梯队（默认）│ 涨停生态 │ 板块排行 │ 龙虎榜；tab 组件在 components/tape/，URL ?tab= 共享 | ✅ 2026-09-01 合并（原 /themes /limit-up /boards /longhu） |
+| /market | **市场**双视图：总览（指数/宽度/情绪相位+序列/成交额/涨停速览/事件驱动）│ 云图（treemap）；tab 组件 components/market/heatmap-tab.tsx | ✅ 2026-09-01 吸收云图（原 /heatmap） |
+| /picks | 每日精选：风险横幅+空仓闸门+≤5 卡片瀑布流（梯队/风险档位/止损/失效）+复盘归因+角色胜率 | ✅ |
+| /research | **研究**折叠页：回测 │ 预警 两 tab；低频工具不占导航黄金位 | ✅ 2026-09-01 合并（原 /backtest /alerts） |
 | /stock/[symbol] | 307 重定向 → /workbench?symbol= | ✅（已合并） |
+| /screener | 冻结（导航移除，页面保留） | ⏸ 2026-08-31 |
 
 ## 6.2 详情终端（StockDetailPanel，工作台右栏 300px，单卡片）
 - 顶部紧凑行情条：名称/代码/质量/＋自选 │ 大字价格(tick闪烁) + 涨跌 │ 11项指标小字条 │ 数据时间/来源
@@ -331,6 +331,7 @@ ashare-ai-trader/
 9. ~~**Phase 5 选股器 + 评分系统**~~ ✅ 已完成 v1（2026-08-30）：`app/market/tech_score.py`（六维评分卡：趋势0.25/MACD0.20/KDJ0.15/RSI0.10/量价0.15/流动性0.15，可解释依据+失效条件，SCORER_VERSION 版本化）+ `app/services/screener_service.py`（快照截面过滤→候选池 Top150→TDX 日K QFQ→评分，TTL 30min 缓存+single-flight）+ `/api/screener`（Envelope 严格建模）+ `/screener` 页（条件工具条+评分排行表+依据 chips，行点击跳个股）。**防飞刀三修正**（零轴下 MACD 不计 bull、空头排列超卖衰减×0.3、放量下杀≠温和放量——2 年回测 avg_dev 主因的针对性防御）。真实跑：5550→150→148 评分 0 失败 17.6s。测试 287→295
 10. ~~**Phase 6 后半：回测引擎**~~ ✅ 已完成（2026-08-30）：`app/market/backtest.py` 代码级防泄露（as_of 视图越界抛 FutureDataError / T+1 / 一字板拒 / 停牌无 bar / 费用全配置化）+ 12 个防泄露测试先于引擎合入 + `/api/backtest/run` + `/backtest` 页；同步完成历史回放
 11. ~~**Phase 5 风控引擎 v1**~~ ✅ 已完成（2026-08-30）：`app/risk/`（`state_classifier.py` 七档市场状态：强势多头/震荡偏多/震荡/震荡偏空/下跌趋势/恐慌·极端波动/数据不足 → `config.py` 每档仓位建议参数 → `engine.py` 七项下单预检：数据质量/市场状态禁买/单票上限/总仓位上限/回撤保护/现金/流动性）+ `GET /api/risk/state`、`POST /api/risk/check-order`；工作台头部状态徽章、交易表单实时预检与拦截。测试 341→344。实测修正两处口径缺陷：持仓缺实时价时回退**成本价**而非订单价（否则总仓位被低估成 0%），`account_summary` 补 `initial_cash` 使回撤保护真正生效。顺带修复 `parseNum` 千分位截断（下单价曾按 ¥1 计算，见下文）
+12. ~~**系统盘点与重构（architecture-redesign 全清单）**~~ ✅ 已完成（2026-08-31 ~ 09-01）：P0 K线三源+熔断+回放限流（e77971f）、P1 事件采集调度（d8e4e52）、P1 角色胜率（2b719f3）、P1+P2 页面合并——导航 13→5（a9d42fa：/tape 四合一、云图入市场、/research 折叠、自选入工作台）、P2 基本面 ROE/毛利率评分补全（ede98be）、P2 screener 冻结+分钟信号删除+P3 skills 归档（50d5b8d）。全记录见 docs/architecture-redesign.md
 
 
 ---
