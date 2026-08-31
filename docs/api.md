@@ -56,6 +56,7 @@ Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**82 个端点**（2026-
 | GET | `/api/announcements/{symbol}?limit=` | 公告（60s 缓存） |
 | GET | `/api/news/{symbol}?limit=` | 相关新闻（60s 缓存） |
 | GET | `/api/boards` | 板块排行（行业/地域/概念题材/风格分组） |
+- `GET /api/speed-rank` — 题材/成分股 5 分钟涨速榜（同花顺涨速口径；theme 或 symbols 参数；惰性采样）
 
 ## 模拟交易（paper）
 

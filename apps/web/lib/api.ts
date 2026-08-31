@@ -270,6 +270,45 @@ export async function getBoards(type: "hangye" | "concept"): Promise<BoardRow[]>
   return (await getJson<{ type: string; boards: BoardRow[] }>(`/api/boards?type=${type}`, 15_000)).data.boards;
 }
 
+/** 官方题材目录条目（themes/catalog）。 */
+export interface ThemeCatalogItem {
+  code: string;
+  name: string;
+}
+
+export async function getThemesCatalog(search?: string): Promise<ThemeCatalogItem[]> {
+  const qs = search ? `?search=${encodeURIComponent(search)}` : "";
+  return (await getJson<{ items: ThemeCatalogItem[] }>(`/api/themes/catalog${qs}`, 30_000)).data.items;
+}
+
+/** 涨速榜（/api/speed-rank）：最近 5 分钟涨跌幅，同花顺行情"涨速"列同口径。
+ *  sampled=false 表示采样历史不足 5 分钟（后端刚启动/标的刚进入关注），显示"采样中"。 */
+export interface SpeedRankRow {
+  symbol: string;
+  name?: string | null;
+  price?: number | null;
+  change_pct?: number | null;
+  speed: number | null;
+  sampled: boolean;
+  sample_span_sec?: number | null;
+}
+
+export interface SpeedRankPayload {
+  theme: string | null;
+  theme_name: string | null;
+  window: string;
+  basis: string;
+  items: SpeedRankRow[];
+  note?: string;
+}
+
+export async function getSpeedRank(theme?: string, symbols?: string[]): Promise<SpeedRankPayload> {
+  const p = new URLSearchParams();
+  if (theme) p.set("theme", theme);
+  if (symbols && symbols.length > 0) p.set("symbols", symbols.join(","));
+  return (await getJson<SpeedRankPayload>(`/api/speed-rank?${p.toString()}`, 20_000)).data;
+}
+
 /** 市场宽度（全市场快照价格法）。 */
 export interface Breadth {
   up: number; down: number; flat: number; limit_up: number; limit_down: number;

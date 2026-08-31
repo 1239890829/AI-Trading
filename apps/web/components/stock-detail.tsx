@@ -54,9 +54,11 @@ import { InfoPanel, type InfoItem } from "@/components/detail/info-panel";
 import { BookTradesView } from "@/components/detail/book-trades-view";
 import { ReplayChart } from "@/components/replay-chart";
 import { FlowChart, type CapitalFlow } from "@/components/detail/flow-chart";
+import { SpeedPanel } from "@/components/detail/speed-panel";
+import { BoardRankPanel } from "@/components/detail/board-rank-panel";
 
 type ChartTab = "kline" | "minute" | "flow";
-type RightTab = "book" | "trades" | "trade" | "profile" | "info";
+type RightTab = "book" | "trades" | "trade" | "profile" | "info" | "speed" | "boards";
 
 /** 个股详情终端 v3（工作台右栏 / 个股页共用）：
  * 顶部紧凑行情条 → 中部 [左：图表区(K线/分时/资金图) | 右：盘口↔逐笔] → 右列：盘口↔逐笔 + 财务摘要。龙虎榜见独立页面。
@@ -97,7 +99,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   useEffect(() => {
     if (!isIndex) return;
     setChartTab((t) => (t === "flow" ? "kline" : t));
-    setRightTab((t) => (t === "trade" || t === "profile" ? "book" : t));
+    setRightTab((t) => (t === "trade" || t === "profile" || t === "trades" ? "book" : t));
   }, [isIndex]);
 
   const { quotes } = useQuoteStream([symbol]);
@@ -194,8 +196,10 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
 
   // 大盘叠加（分时图 P1）：上证分时 + 昨收，归一化成 % 曲线叠加在左轴。
   // 指数不随个股切换变化，只在挂载时拉一次（分时当日不变）。
+  // 指数详情页不叠加（自己叠自己，紫虚线与红线重合纯噪音）。
   const [indexOverlay, setIndexOverlay] = useState<{ points: MinutePoint[]; prevClose: number } | null>(null);
   useEffect(() => {
+    if (!symbol || isIndex) return;
     let alive = true;
     (async () => {
       try {
@@ -212,7 +216,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [symbol, isIndex]);
 
   // 集合竞价（09:25 终态）：分时图竞价点 + 角标。随 symbol 拉一次（当日不变）。
   useEffect(() => {
@@ -260,10 +264,11 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     setVrBaseline(null); // 精确量比基线同理
     setFlow(null);
     setFins(null);
+    const skipStockOnly = isIndexSymbol(symbol); // 指数无盘口/逐笔/资金流等个股数据源，直接跳过省一次失败请求
     Promise.all([
       getKline(symbol, "1d", 120),
-      getOrderBook(symbol).catch(() => null),
-      getTrades(symbol, 30).catch(() => [] as Trade[]),
+      skipStockOnly ? Promise.resolve(null) : getOrderBook(symbol).catch(() => null),
+      skipStockOnly ? Promise.resolve([] as Trade[]) : getTrades(symbol, 30).catch(() => [] as Trade[]),
       getMinuteLineWithBaseline(symbol)
         .then((r) => {
           setVrBaseline(r.vr_baseline_5m);
@@ -329,9 +334,9 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
       clearInterval(minute);
     };
   }, [symbol]);
-  // ④ 盘口 5s / 逐笔 10s 轮询（失败静默保留上一次快照，别清空面板）
+  // ④ 盘口 5s / 逐笔 10s 轮询（失败静默保留上一次快照，别清空面板）；指数无此数据源，跳过
   useEffect(() => {
-    if (!symbol) return;
+    if (!symbol || isIndex) return;
     const book = setInterval(() => {
       void getOrderBook(symbol).then(setBook).catch(() => {});
     }, 5_000);
@@ -342,7 +347,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
       clearInterval(book);
       clearInterval(trades);
     };
-  }, [symbol]);
+  }, [symbol, isIndex]);
 
   async function add() {
     if (isIndex) return; // 指数不入自选（sh000001 不是合法自选股代码）
@@ -435,7 +440,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
           </div>
 
           {chartTab === "kline" && (
-            <Panel title="日 K 线（前复权 · 默认聚焦最近 20 日，可缩放看全部）" source={displayBars[0]?.source} bodyClassName="overflow-hidden" className="min-h-0 flex-1" extra={
+            <Panel title={`${quote?.name ? `${quote.name} · ` : ""}日 K 线（前复权 · 默认聚焦最近 20 日，可缩放看全部）`} source={displayBars[0]?.source} bodyClassName="overflow-hidden" className="min-h-0 flex-1" extra={
               !replayMode && displayBars.length >= 60 && (
                 <button onClick={() => setReplayMode(true)} className="rounded border border-sky-500/50 px-2 py-0.5 text-xs text-sky-400 hover:bg-sky-500/10">
                   ▶ 历史回放
@@ -482,7 +487,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
           )}
 
           {chartTab === "minute" && (
-            <Panel title="当日分时（1 分钟）" source={minutes[0]?.source} bodyClassName="overflow-hidden" className="min-h-0 flex-1">
+            <Panel title={`${quote?.name ? `${quote.name} · ` : ""}当日分时（1 分钟）`} source={minutes[0]?.source} bodyClassName="overflow-hidden" className="min-h-0 flex-1">
               {minutes.length > 0 ? (
                 <MinuteChart
                   points={minutes}
@@ -541,7 +546,21 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
           />
 
         <Panel
-          title={rightTab === "book" ? "五档盘口" : rightTab === "trades" ? "逐笔成交" : rightTab === "trade" ? "模拟交易" : rightTab === "profile" ? "公司资料" : "资讯"}
+          title={
+            rightTab === "book"
+              ? "五档盘口"
+              : rightTab === "trades"
+                ? "逐笔成交"
+                : rightTab === "trade"
+                  ? "模拟交易"
+                  : rightTab === "profile"
+                    ? "公司资料"
+                    : rightTab === "speed"
+                      ? "题材涨速榜（5 分钟）"
+                      : rightTab === "boards"
+                        ? "板块涨幅"
+                        : "资讯"
+          }
           bodyClassName="overflow-y-auto"
           source={rightTab === "book" ? book?.source : undefined}
           dataTimestamp={rightTab === "book" ? book?.data_timestamp : null}
@@ -549,15 +568,22 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
         >
           <div className="flex shrink-0 gap-1 border-b border-zinc-100 px-2 py-1 dark:border-zinc-800/60">
             {(
-              (
-                [
-                  ["book", "盘口"],
-                  ["trades", "逐笔"],
-                  ["trade", "交易"],
-                  ["profile", "资料"],
-                  ["info", "资讯"],
-                ] as const
-              ).filter(([k]) => !(isIndex && (k === "trade" || k === "profile"))) as [RightTab, string][]
+              isIndex
+                ? ([
+                    // 指数右列（参考同花顺指数页：分时/盘口/涨速/相关板块/资讯）：
+                    // 无五档与逐笔数据源，保留 tab 显示空态；涨速/板块为指数专属价值 tab
+                    ["book", "盘口"],
+                    ["speed", "涨速"],
+                    ["boards", "板块"],
+                    ["info", "资讯"],
+                  ] as const)
+                : ([
+                    ["book", "盘口"],
+                    ["trades", "逐笔"],
+                    ["trade", "交易"],
+                    ["profile", "资料"],
+                    ["info", "资讯"],
+                  ] as const)
             ).map(([k, label]) => (
               <button
                 key={k}
@@ -568,6 +594,8 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
               </button>
             ))}
           </div>
+          {rightTab === "speed" && <SpeedPanel className="h-full" />}
+          {rightTab === "boards" && <BoardRankPanel className="h-full" />}
           {rightTab === "trade" && paper && (
             <TradePanel
               symbol={symbol}

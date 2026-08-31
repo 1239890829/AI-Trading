@@ -43,11 +43,11 @@ CI（GitHub Actions）：后端 pytest+pyflakes、前端 tsc+eslint+vitest+build
 
 ## 2. 当前状态快照（2026-08-31，实时行情修复后更新）
 
-**458 后端测试 + 69 前端测试全绿 · 82 REST + 1 WS 端点 · 四源链 `ths→tencent→eastmoney→sina`**
+**467 后端测试 + 73 前端测试全绿 · 83 REST + 1 WS 端点 · 四源链 `ths→tencent→eastmoney→sina`**
 
 本日已完成：P0-5 统一缓存层（`3315c3f`）→ reconciliation 502 修复（`fb833f1`）→
 B1 题材人气（`5abeabd`）→ B4 晋级率源自证（`f0d10b0`）→ P1-8 K线事件点（`ca15f74`）→
-实时行情修复（K线/分时/盘口/逐笔盘中刷新 + 指数点击详情，见 §3 联动系统）。
+实时行情修复（K线/分时/盘口/逐笔盘中刷新 + 指数点击详情）+ 指数详情页改造（分时Y轴修复/名称显示/涨速榜/板块涨幅 tab）。
 **P0 只剩 P0-3b（等 Parquet 快照积累）；阶段 C 只剩题材指数。**
 
 | 阶段 | 状态 |
@@ -75,6 +75,13 @@ K 线（TDX 2 年分钟级底座）；分时（均价线+量比基线）；盘�
 题材人气（B1：`GET /api/themes/hot`，ths 热股榜 × 官方成分反查聚合）；晋级率源自证
 （B4：`GET /api/market/ladder-check`，seal_nextday 对照，实测 5 可比日零漂移）；
 板块排行；龙虎榜；全市场快照。
+**指数详情改造（2026-08-31）**：分时 Y 轴修复（指数无均价概念，`avg` 数学上不成立——
+cum_amount/cum_volume 对指数给出 ~15 元荒谬值，该 series 拉爆 Y 轴致"分时一条直线"；
+腾讯分钟线对指数 avg 置 null，`is_index_minute_symbol`）；分时/K线标题带标的名称；
+右列指数专属 tabs：涨速榜（`GET /api/speed-rank`，口径=最近 5 分钟涨跌幅，同花顺行情
+"涨速"列同口径；ths 无涨速数值字段故自算，腾讯批量快照惰性采样 `speed_sampler.py`，
+采样历史不足如实显示"采样中"）+ 板块涨幅（复用 /api/boards）；指数页关闭自我叠加、
+跳过盘口/逐笔数据源。
 
 **量化**：前端 `analyze` 与后端 `tech_score` 防飞刀口径完全对齐（含量价维度）；
 全市场选股器（截面过滤→TDX 日K→六维评分卡，5550 只冷跑 ~20s）；风控引擎（市场状态分类→仓位参数→7 项下单预检，拦截时禁用提交）。
@@ -150,7 +157,7 @@ C2 全市场日 K dump（已被 TDX 替代）；"等 LLM 再做摘要"（规则�
 | **docs/plan-review.md** | 计划复盘：10 份方案逐项盘点 + P0/P1/P2 整合清单（§六）+ 遗留用户决策（§八） |
 | **docs/linkage-design.md** | 联动系统总纲：状态管理规范/路由规范/联动矩阵 L1-L10/题材三层归属/事件 SOP；切片标记在此 |
 | **docs/retro-and-gaps.md** | 唯一明细账本（§一功能欠缺 20 项全清 / §二布局 / §三技术债 / §四行为基线勿回退） |
-| docs/api.md | API 契约（82 端点，按域分节） |
+| docs/api.md | API 契约（83 端点，按域分节） |
 | docs/data-sources.md + data-source-comparison.md | 字段口径实测记录 + 四源能力选型（改 Provider 前必读） |
 | docs/sentiment-phase-review.md + sentiment.md | 情绪方法论调研 + 误判复盘 + 优化清单 |
 | docs/theme-prediction.md / review-agent.md / theme-sentiment-methodology.md | 预判 / 复盘 Agent / 题材情绪方法论 |

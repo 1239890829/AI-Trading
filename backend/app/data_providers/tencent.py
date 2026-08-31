@@ -133,6 +133,27 @@ def to_tencent_symbol(symbol: str) -> str:
     return f"sz{s}"
 
 
+def is_index_minute_symbol(symbol: str) -> bool:
+    """指数形态判定（分时 avg 置 null 的依据）。
+
+    指数"价格"是成分股价格加权点位，cum_amount/cum_volume（元/股）与点位在
+    数学上无关——套同一公式会得到 ~15 元的荒谬"均价"，该 series 挂在主图坐标上
+    会把 Y 轴拉爆约 250 倍，价格曲线被压成一条直线（2026-08-31 实测：上证分时
+    均价 14.8 vs 价格 3986，用户报告"分时一条直线"的真根因）。
+    指数没有均价概念，宁缺毋错——avg 置 null，前端不画该线。
+    """
+    s = symbol.strip().lower()
+    m = re.match(r"^(sh|sz|bj)(\d{6})$", s)
+    if not m:
+        return False
+    mkt, code = m.group(1), m.group(2)
+    return (
+        (mkt == "sh" and code.startswith("000"))
+        or (mkt == "sz" and code.startswith("399"))
+        or (mkt == "bj" and code.startswith("899"))
+    )
+
+
 def parse_quote(prefix: str, fields: list[str]) -> Quote:
     volume_hands = _num(fields[36] if len(fields) > 36 else None)
     amount_wan = _num(fields[37] if len(fields) > 37 else None)
@@ -381,6 +402,10 @@ class TencentProvider:
         rows = node.get("data") or []
         trade_date = str(node.get("date") or "")
         points = build_minute_points(rows, trade_date, datetime.now(_TZ_BJ).date())
+        if is_index_minute_symbol(symbol):
+            # 指数无均价概念（点位≠成交额/成交量），avg 留空防分时 Y 轴被拉爆
+            for p in points:
+                p["avg"] = None
         if not points:
             raise ProviderError(f"tencent minute line empty for {symbol}")
         return points

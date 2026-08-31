@@ -36,6 +36,7 @@ from app.schemas.market import (
     utcnow,
 )
 from app.services.quote_hub import QuoteHub
+from app.services.speed_sampler import SpeedSampler
 from app.services.theme_catalog_service import official_multi_day_changes
 
 log = logging.getLogger(__name__)
@@ -621,6 +622,106 @@ async def boards(
     payload = {"data": {"type": type, "boards": rows}, "meta": _meta(hub)}
     cache.set(type, payload)
     return payload
+
+
+# ---------------------------------------------------------------- 涨速榜（指数/题材详情"涨速"标签）
+
+
+def _speed_sampler(request: Request) -> SpeedSampler:
+    if not hasattr(request.app.state, "speed_sampler"):
+        request.app.state.speed_sampler = SpeedSampler()
+    return request.app.state.speed_sampler
+
+
+async def _batch_quotes(hub: QuoteHub, symbols: list[str]) -> list[Quote]:
+    """批量快照，腾讯直取（涨速只认这一条价格链），50 只/请求分批。
+
+    不走 composite 全链：ths 批量失败一次纯属浪费一跳，且涨速口径要求
+    价格源单一——腾讯快照与前端个股行情同源。
+    """
+    composite = hub.provider if hasattr(hub.provider, "providers") else None
+    target = next(
+        (p for p in (composite.providers if composite else [hub.provider]) if p.name == "tencent"),
+        hub.provider,
+    )
+    out: list[Quote] = []
+    for i in range(0, len(symbols), 50):
+        batch = symbols[i : i + 50]
+        try:
+            out.extend(await target.get_quotes(batch))
+        except Exception as exc:
+            log.warning("speed-rank batch %s failed: %s", i // 50, exc)
+    return out
+
+
+@router.get("/speed-rank")
+async def speed_rank(
+    request: Request,
+    theme: str | None = Query(default=None, description="官方题材代码（88xxxx.TI），与 symbols 二选一"),
+    symbols: str | None = Query(default=None, description="逗号分隔标的列表（≤200，优先于 theme）"),
+    limit: int = Query(default=20, ge=1, le=50),
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    """板块/题材成分股 5 分钟涨速榜。
+
+    口径（行业通行）：**涨速 = (当前价 − 5 分钟前价) / 5 分钟前价 × 100%**——
+    同花顺/东财/通达信行情列表"涨速"列均为此口径；东财 clist f22 同源实测对照。
+    ths 官方 API 无涨速数值字段（飙升榜/热股榜为热度排名），故基于腾讯批量快照自算。
+
+    采样为惰性模式：本端点每次调用写入一批采样，前端 30s 轮询自然把历史攒到
+    5 分钟窗口。历史不足的标的返回 sampled=false（前端显示"采样中"），
+    绝不拿当日涨跌幅冒充涨速。
+    """
+    sampler = _speed_sampler(request)
+    theme_name: str | None = None
+    if symbols:
+        sym_list = [s.strip() for s in symbols.split(",") if s.strip()][:200]
+    elif theme:
+        svc = getattr(request.app.state, "theme_catalog", None)
+        if svc is None:
+            raise HTTPException(status_code=503, detail="题材目录服务未启用（缺 THS key）")
+        sym_list = [m.symbol for m in svc.get_members(theme)][:200]
+        th = next((t for t in svc.get_catalog() if t.code == theme), None)
+        theme_name = th.name if th else theme
+        if not sym_list:
+            return {
+                "data": {"theme": theme, "theme_name": theme_name, "window": "5m",
+                         "items": [], "note": "题材成分尚未同步，稍后再试"},
+                "meta": _meta(hub),
+            }
+    else:
+        raise HTTPException(status_code=400, detail="theme 与 symbols 至少给一个")
+
+    quotes = await _batch_quotes(hub, sym_list)
+    prices = {q.symbol: q.price for q in quotes}
+    sampler.record(prices)
+
+    items = []
+    for q in quotes:
+        sp, span = sampler.speed(q.symbol)
+        items.append(
+            {
+                "symbol": q.symbol,
+                "name": q.name,
+                "price": q.price,
+                "change_pct": q.change_pct,
+                "speed": sp,
+                "sampled": sp is not None,
+                "sample_span_sec": None if sp is not None else round(span),
+            }
+        )
+    # 已有完整采样的按涨速降序在前；采样不足的按跨度降序垫底（尽快变可用）
+    items.sort(key=lambda r: (not r["sampled"], -(r["speed"] or 0)))
+    return {
+        "data": {
+            "theme": theme,
+            "theme_name": theme_name,
+            "window": "5m",
+            "basis": "涨速 = 最近 5 分钟涨跌幅（同花顺行情口径）",
+            "items": items[:limit],
+        },
+        "meta": _meta(hub),
+    }
 
 
 @router.get("/longhu/{symbol}")
