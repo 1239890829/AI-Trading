@@ -56,9 +56,10 @@ import { ReplayChart } from "@/components/replay-chart";
 import { FlowChart, type CapitalFlow } from "@/components/detail/flow-chart";
 import { SpeedPanel } from "@/components/detail/speed-panel";
 import { BoardRankPanel } from "@/components/detail/board-rank-panel";
+import { RealPositionPanel } from "@/components/detail/real-position-panel";
 
 type ChartTab = "kline" | "minute" | "flow";
-type RightTab = "book" | "trades" | "trade" | "profile" | "info" | "speed" | "boards";
+type RightTab = "book" | "trades" | "trade" | "real" | "profile" | "info" | "speed" | "boards";
 
 /** 个股详情终端 v3（工作台右栏 / 个股页共用）：
  * 顶部紧凑行情条 → 中部 [左：图表区(K线/分时/资金图) | 右：盘口↔逐笔] → 右列：盘口↔逐笔 + 财务摘要。龙虎榜见独立页面。
@@ -94,12 +95,12 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   const [vrBaseline, setVrBaseline] = useState<number[] | null>(null);
   // 指数 symbol（sh000001 等）：禁用个股专属面板（加自选/交易/资料/资金图）
   const isIndex = isIndexSymbol(symbol);
-  // 指数下个股专属 tab 不可用：残留的 flow/trade/profile 选中态强制归位
+  // 指数下个股专属 tab 不可用：残留的 flow/trade/real/profile 选中态强制归位
   //（workbench 切股走 key 重挂载不会残留，这里是 /stock/[symbol] 等复用方的防御）
   useEffect(() => {
     if (!isIndex) return;
     setChartTab((t) => (t === "flow" ? "kline" : t));
-    setRightTab((t) => (t === "trade" || t === "profile" || t === "trades" ? "book" : t));
+    setRightTab((t) => (t === "trade" || t === "real" || t === "profile" || t === "trades" ? "book" : t));
   }, [isIndex]);
 
   const { quotes } = useQuoteStream([symbol]);
@@ -553,13 +554,15 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                 ? "逐笔成交"
                 : rightTab === "trade"
                   ? "模拟交易"
-                  : rightTab === "profile"
-                    ? "公司资料"
-                    : rightTab === "speed"
-                      ? "题材涨速榜（5 分钟）"
-                      : rightTab === "boards"
-                        ? "板块涨幅"
-                        : "资讯"
+                  : rightTab === "real"
+                    ? "真实持仓（券商实际成交记账）"
+                    : rightTab === "profile"
+                      ? "公司资料"
+                      : rightTab === "speed"
+                        ? "题材涨速榜（5 分钟）"
+                        : rightTab === "boards"
+                          ? "板块涨幅"
+                          : "资讯"
           }
           bodyClassName="overflow-y-auto"
           source={rightTab === "book" ? book?.source : undefined}
@@ -580,7 +583,9 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                 : ([
                     ["book", "盘口"],
                     ["trades", "逐笔"],
-                    ["trade", "交易"],
+                    ["trade", "模拟交易"],
+                    // 真实持仓：券商实际成交的手工账本，与模拟交易完全独立
+                    ["real", "真实持仓"],
                     ["profile", "资料"],
                     ["info", "资讯"],
                   ] as const)
@@ -596,6 +601,9 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
           </div>
           {rightTab === "speed" && <SpeedPanel className="h-full" />}
           {rightTab === "boards" && <BoardRankPanel className="h-full" />}
+          {rightTab === "real" && (
+            <RealPositionPanel symbol={symbol} currentPrice={quote?.price ?? null} currentName={quote?.name ?? null} className="h-full" />
+          )}
           {rightTab === "trade" && paper && (
             <TradePanel
               symbol={symbol}

@@ -169,3 +169,11 @@ Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**82 个端点**（2026-
 - `502`：上游数据源失败（`upstream_failed` / `tdx_unavailable` / `snapshot_unavailable` 等）
 - `503`：服务未就绪（冷启动/日历不可用）
 - `401`：写端点 token 缺失/错误（配置 ASHARE_API_TOKEN 后）
+
+## 真实持仓（/api/real/*，与 /api/paper/* 模拟账户完全独立）
+
+- `GET /api/real/positions` — 持仓视图：流水加权聚合 + 手动覆盖 + 行情补现价/市值/浮动盈亏；含 cleared（已清仓）与 total 汇总
+- `POST /api/real/trades` — 记一笔买入/卖出（实际成交价 fill_price 必填）
+- `DELETE /api/real/trades/{id}` — 删除流水（修正历史）
+- `PATCH /api/real/positions/{symbol}` — 手动覆盖持仓数量/总成本（覆盖后以覆盖为准）
+- `DELETE /api/real/positions/{symbol}` — 整只删除（清空该标的流水与覆盖）

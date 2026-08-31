@@ -14,6 +14,7 @@ import {
   getMarketOverview,
   getPaperPositions,
   getQuotes,
+  getRealPositions,
   getRiskState,
   getSparklines,
   getWatchlist,
@@ -38,6 +39,8 @@ function WorkbenchInner() {
   const sp = useSearchParams();
   const paramSymbol = sp.get("symbol");
   const [symbols, setSymbols] = useState<string[]>([]);
+  // 真实持仓标的（CONTEXT.md: Holdings Group）：独立于自选，行情订阅与「持仓」分类共用
+  const [realSymbols, setRealSymbols] = useState<string[]>([]);
   const [indices, setIndices] = useState<Quote[]>([]);
   const [totalAmount, setTotalAmount] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +52,7 @@ function WorkbenchInner() {
   // 都没有再落默认 600519（此前硬编码回退是跨页面联动 bug 的一半根因）
   const [selected, setSelected] = useState<string>(paramSymbol ?? "");
 
-  const { quotes, status } = useQuoteStream(symbols);
+  const { quotes, status } = useQuoteStream([...new Set([...symbols, ...realSymbols])]);
   const [extra, setExtra] = useState<Record<string, Quote>>({});
   const merged: Record<string, Quote> = { ...extra, ...quotes };
   const [positions, setPositions] = useState<PaperPositionInfo[]>([]);
@@ -126,10 +129,33 @@ function WorkbenchInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sparkKey]);
 
+  // 真实持仓标的列表：15s 轮询 + 记账事件刷新（「持仓」分类与行情订阅共用）
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const d = await getRealPositions();
+        if (alive) setRealSymbols(d.items.map((i) => i.symbol));
+      } catch {}
+    };
+    void load();
+    const t = setInterval(load, 15_000);
+    window.addEventListener("real-changed", load);
+    return () => {
+      alive = false;
+      clearInterval(t);
+      window.removeEventListener("real-changed", load);
+    };
+  }, []);
+
   // 分组清单由 groupMap 派生（旧代码是独立的 groups 状态，从未被赋值，chips 永远只有「全部」）
   const groups = useMemo(() => Array.from(new Set(Object.values(groupMap))).sort(), [groupMap]);
   const watchQuotes: Quote[] = symbols
     .filter((s) => activeGroup === "全部" || groupMap[s] === activeGroup)
+    .map((s) => merged[s])
+    .filter(Boolean);
+  // 「持仓」分类（Holdings Group）：独立于自选，直接列真实持仓标的
+  const holdingQuotes: Quote[] = realSymbols
     .map((s) => merged[s])
     .filter(Boolean);
 
@@ -215,7 +241,7 @@ function WorkbenchInner() {
           </Panel>
         )}
         <div className="flex shrink-0 flex-wrap gap-1">
-          {["全部", ...groups.filter((g) => g !== "默认")].map((g) => (
+          {["全部", "持仓", ...groups.filter((g) => g !== "默认")].map((g) => (
             <button
               key={g}
               onClick={() => setActiveGroup(g)}
@@ -224,11 +250,12 @@ function WorkbenchInner() {
               }`}
             >
               {g}
+              {g === "持仓" && realSymbols.length > 0 && <span className="ml-1 text-[10px] text-zinc-400">{realSymbols.length}</span>}
             </button>
           ))}
         </div>
         <Panel
-          title="自选股"
+          title={activeGroup === "持仓" ? `真实持仓 (${holdingQuotes.length})` : "自选股"}
           extra={
             <Link href="/watchlist" className="text-sky-400 hover:underline">
               管理
@@ -236,16 +263,26 @@ function WorkbenchInner() {
           }
           className="min-h-0 flex-1 overflow-hidden"
         >
-          {watchQuotes.length === 0 ? (
+          {(activeGroup === "持仓" ? holdingQuotes : watchQuotes).length === 0 ? (
             <p className="px-4 py-8 text-center text-sm text-zinc-400">
-              自选为空或行情未就绪。
-              <br />
-              在顶部搜索框选择结果即可查看并加自选。
+              {activeGroup === "持仓" ? (
+                <>
+                  暂无真实持仓。在个股详情页「真实持仓」tab 记一笔买入
+                  <br />
+                  （按你在券商的实际成交价）。
+                </>
+              ) : (
+                <>
+                  自选为空或行情未就绪。
+                  <br />
+                  在顶部搜索框选择结果即可查看并加自选。
+                </>
+              )}
             </p>
           ) : (
             <table className="w-full text-sm">
               <tbody>
-                {watchQuotes.map((q) => (
+                {(activeGroup === "持仓" ? holdingQuotes : watchQuotes).map((q) => (
                   <tr
                     key={q.symbol}
                     onClick={() => {

@@ -309,6 +309,72 @@ export async function getSpeedRank(theme?: string, symbols?: string[]): Promise<
   return (await getJson<SpeedRankPayload>(`/api/speed-rank?${p.toString()}`, 20_000)).data;
 }
 
+/** ===== 真实持仓（CONTEXT.md: Real Position 域；与 /api/paper/* 模拟账户完全独立）=====
+ *  记账必须用实际成交价（fill_price），行情现价只是录入默认值。 */
+
+export interface RealPositionRow {
+  symbol: string;
+  name: string | null;
+  quantity: number;
+  avg_cost: number | null; // 摊薄成本价（含买入费用；覆盖后以覆盖为准）
+  cost_total: number; // 总成本
+  last_price: number | null; // 实时价，缺行情回退成本价
+  day_change_pct: number | null;
+  market_value: number | null;
+  unrealized_pnl: number | null;
+  unrealized_pct: number | null;
+  realized_pnl: number;
+  overridden: boolean; // 是否被手动修正过
+  trade_count: number;
+  last_traded_at: string | null;
+}
+
+export interface RealClearedRow {
+  symbol: string;
+  name: string | null;
+  realized_pnl: number;
+  trade_count: number;
+  last_traded_at: string | null;
+}
+
+export interface RealPositionsPayload {
+  items: RealPositionRow[];
+  cleared: RealClearedRow[];
+  total: { market_value: number; cost_total: number; unrealized_pnl: number; realized_pnl: number };
+  count: number;
+}
+
+export interface RealTradeIn {
+  symbol: string;
+  name?: string | null;
+  side: "buy" | "sell";
+  fill_price: number;
+  quantity: number;
+  fee?: number;
+  traded_at?: string;
+  note?: string | null;
+}
+
+export async function getRealPositions(): Promise<RealPositionsPayload> {
+  return (await getJson<RealPositionsPayload>("/api/real/positions", 15_000)).data;
+}
+
+export async function createRealTrade(t: RealTradeIn): Promise<void> {
+  await sendJson("/api/real/trades", "POST", t);
+}
+
+export async function deleteRealTrade(id: number): Promise<void> {
+  await sendJson(`/api/real/trades/${id}`, "DELETE");
+}
+
+export async function overrideRealPosition(symbol: string, quantity: number, total_cost: number): Promise<void> {
+  await sendJson(`/api/real/positions/${symbol}`, "PATCH", { quantity, total_cost });
+}
+
+export async function deleteRealPosition(symbol: string): Promise<void> {
+  await sendJson(`/api/real/positions/${symbol}`, "DELETE");
+}
+
 /** 市场宽度（全市场快照价格法）。 */
 export interface Breadth {
   up: number; down: number; flat: number; limit_up: number; limit_down: number;
