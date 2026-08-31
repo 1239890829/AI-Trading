@@ -604,6 +604,54 @@ export async function getWatchlist(): Promise<WatchlistItem[]> {
   return (await getJson<WatchlistItem[]>("/api/watchlist")).data;
 }
 
+/** 事件驱动（linkage-design §4）：EventCard 摘要与方向映射。 */
+export interface EventDirectionRow {
+  target_type: string;
+  target: string;
+  direction: number; // -1 利空 / 0 待判 / +1 利好
+  strength: number;
+  chain: string;
+  basis: string;
+}
+
+export interface EventSummary {
+  id: number;
+  title: string;
+  url: string | null;
+  source: string;
+  source_tier: number;
+  published_at: string | null;
+  fact_kind: string; // fact / opinion / rumor
+  certainty: string; // done / proposed / rumor
+  category: string; // policy / statement / data / rumor / corporate / other
+  half_life_hours: number;
+  source_symbol: string | null;
+  is_active: boolean;
+  directions: EventDirectionRow[];
+}
+
+export interface EventStockPool {
+  target: string;
+  direction?: number;
+  strength?: number;
+  chain?: string;
+  basis?: string;
+  stocks: { symbol: string; name: string }[];
+  note?: string;
+}
+
+export async function getEvents(active = true, limit = 20): Promise<EventSummary[]> {
+  const r = await getJson<{ count: number; items: EventSummary[] }>(
+    `/api/events?active=${active}&limit=${limit}`,
+    30_000,
+  );
+  return r.data.items;
+}
+
+export async function getEventStocks(id: number): Promise<EventStockPool[]> {
+  return (await getJson<{ pools: EventStockPool[] }>(`/api/events/${id}/stocks`, 60_000)).data.pools;
+}
+
 export async function addToWatchlist(symbol: string, name?: string, group?: string): Promise<WatchlistItem> {
   return (
     await sendJson<WatchlistItem>("/api/watchlist", "POST", { symbol, name, group: group ?? "默认" })

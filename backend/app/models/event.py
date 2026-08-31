@@ -1,0 +1,73 @@
+from __future__ import annotations
+
+from datetime import datetime
+
+from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.core.db import utcnow
+from app.models.watchlist import Base
+
+
+class EventCard(Base):
+    """事件卡（linkage-design §4.3）：新闻事件 → 个股机会链路的注册单元。
+
+    抽取自规则引擎（app/events/extract.py），LLM 增强层未接入前全部字段
+    由规则产出并带 basis；status 仅存人工裁决（resolved/rejected），
+    active/expired 由读取方按 half_life 实时计算。
+    """
+
+    __tablename__ = "event_card"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # 标题指纹（归一化后 sha1），去重键：同一事件多源/重复推送只注册一次
+    fingerprint: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(512))
+    url: Mapped[str | None] = mapped_column(String(512), default=None)
+    source: Mapped[str] = mapped_column(String(64), default="")
+    # 来源分级 1-5：官方公告 5 / 一线权威 4 / 主流财经 3 / 聚合转载 2 / 自媒体 1
+    source_tier: Mapped[int] = mapped_column(Integer, default=3)
+    published_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # fact=事实 / opinion=解读 / rumor=传闻（事实与解读分离，不得混写）
+    fact_kind: Mapped[str] = mapped_column(String(8), default="fact")
+    # done=已落地 / proposed=拟议 / rumor=传闻
+    certainty: Mapped[str] = mapped_column(String(8), default="done")
+    # policy=政策 / statement=发言 / data=数据 / rumor=传闻 / corporate=公司 / other
+    category: Mapped[str] = mapped_column(String(16), default="other")
+    half_life_hours: Mapped[int] = mapped_column(Integer, default=48)
+    # 抽取该事件的来源个股（自选新闻采集链路携带；人工注册可为空）
+    source_symbol: Mapped[str | None] = mapped_column(String(6), default=None)
+    # active 为默认态（不落库，读取方计算）；这里只存人工裁决
+    status: Mapped[str] = mapped_column(String(12), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    directions: Mapped[list["EventDirection"]] = relationship(
+        "EventDirection", back_populates="event", cascade="all, delete-orphan"
+    )
+
+
+class EventDirection(Base):
+    """事件 → 题材/个股 的方向映射行（linkage-design §4.3 direction_map）。
+
+    同一事件可对 A 题材 +1、对 B 题材 -1（方向成对分析）；direction=0 表示
+    仅确认关联、方向待判（不猜）。每行必带 basis（命中了什么词/规则）。
+    """
+
+    __tablename__ = "event_direction"
+    __table_args__ = (UniqueConstraint("event_id", "target_type", "target", name="uq_event_direction"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("event_card.id"), index=True)
+    # theme=题材 / symbol=个股 / macro=宏观
+    target_type: Mapped[str] = mapped_column(String(8), default="theme")
+    target: Mapped[str] = mapped_column(String(64))
+    # -1 利空 / 0 关联待判 / +1 利好
+    direction: Mapped[int] = mapped_column(Integer, default=0)
+    strength: Mapped[int] = mapped_column(Integer, default=1)
+    # 传导链一句话，如 "海外算力受限 → 国产替代需求抬升"
+    chain: Mapped[str] = mapped_column(String(256), default="")
+    # 判定依据（命中词/规则名），可解释要求
+    basis: Mapped[str] = mapped_column(String(256), default="")
+    matched_by: Mapped[str] = mapped_column(String(16), default="name")  # name | alias
+
+    event: Mapped[EventCard] = relationship("EventCard", back_populates="directions")

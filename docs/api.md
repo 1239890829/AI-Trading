@@ -1,6 +1,6 @@
 # REST API
 
-Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**70 个端点**（2026-08-31 与代码同步）。
+Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**78 个端点**（2026-08-31 与代码同步）。
 
 统一响应：`{"data": ..., "meta": {...}}`（Envelope[T]，meta 含 `provider / is_realtime / is_stale / last_success_refresh / generated_at`）。
 数据源失败返回 **HTTP 502**（前端显示错误态，绝不降级伪造）；错误统一契约 `{detail, code}`。
@@ -75,6 +75,20 @@ Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**70 个端点**（2026-
 - **降级必须显式**：`model.degraded=true` 时带 `reason`，前端须标注来源——否则读者会以为摘要出自模型，实际出自关键词匹配
 - **不臆造**：摘要只能截取原文；东财部分 `summary` 是行情表原文（如"计算机 688041 海光信息 -0.47 20875.30…"），检测到即整段丢弃并回退到标题，`digest_source` 会说明原因
 - 输出只含 重要度/情绪/事实/数字，**不含任何买卖建议**（红线 3）
+
+## 事件驱动（linkage-design §4）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/events?active=&limit=` | 活跃事件列表（时效=半衰期×2 实时计算） |
+| GET | `/api/events/{id}` | 事件详情（含方向映射行） |
+| GET | `/api/events/{id}/stocks` | 标的池：方向题材 → 官方成分反查 + override |
+| POST | `/api/events` | 手动注册事件（写鉴权），规则抽取方向 |
+| POST | `/api/events/extract` | 批量注册 items[]（写鉴权） |
+| POST | `/api/events/collect` | 自选新闻批量抽取（写鉴权） |
+| POST | `/api/events/{id}/review` | 人工裁决 resolved/rejected（写鉴权） |
+
+方向判定为规则词典 v1（利好/利空动词 + 国产替代对冲），实体来自官方目录名与人工别名表；每行带 basis。LLM 增强层未接入。
 
 ## 题材目录与官方成分（linkage-design §3）
 

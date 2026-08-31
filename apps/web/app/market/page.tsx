@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Panel } from "@/components/panel";
 import { QualityBadge } from "@/components/quality-badge";
+import { EventPanel } from "@/components/event-panel";
 import {
   getBreadth,
   getLimitUpPool,
@@ -208,6 +209,11 @@ export default function MarketPage() {
             <p className="px-4 py-8 text-center text-sm text-zinc-400">今日暂无涨停数据（或非交易日）</p>
           )}
         </Panel>
+      </div>
+
+      {/* 事件驱动（E1⑥/E2）：事件 → 方向 → 标的池 → 题材/详情联动 */}
+      <div className="min-h-0 flex-1 overflow-hidden">
+        <EventPanel />
       </div>
 
       <p className="shrink-0 truncate rounded-lg border border-zinc-200 px-4 py-2 text-xs text-zinc-400 dark:border-zinc-800" title="{advancing}">

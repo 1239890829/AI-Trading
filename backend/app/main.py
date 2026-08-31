@@ -21,11 +21,14 @@ from app.api.routes import watchlist as watchlist_route
 from app.api.routes import alert as alert_route
 from app.api.routes import risk as risk_route
 from app.api.routes import theme_catalog as theme_catalog_route
+from app.api.routes import events as events_route
 from app.core.config import settings
 from app.core.db import get_engine, get_session_factory
 from app.data_providers import build_provider
+from app.events.store import EventStore
 from app.market.alert_engine import AlertEngine
 from app.models.alert import AlertEvent, AlertRule
+from app.models.event import EventCard, EventDirection
 from app.models.paper import PaperAccount, PaperOrder, PaperPosition
 from app.models.theme_catalog import Theme, ThemeMember, ThemeOverride
 from app.risk.engine import RiskEngine
@@ -57,6 +60,7 @@ _REGISTERED_MODELS = (
     SentimentHistoryRow,
     AlertRule, AlertEvent,
     Theme, ThemeMember, ThemeOverride,
+    EventCard, EventDirection,
 )
 
 logging.basicConfig(level=settings.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -138,6 +142,9 @@ async def lifespan(app: FastAPI):
         log.warning("theme catalog disabled: %s", exc)
         theme_catalog = None
     app.state.theme_catalog = theme_catalog
+
+    # --- 事件驱动（linkage-design §4 E1）：EventCard 存储/查询 ---
+    app.state.event_store = EventStore(get_session_factory())
 
     # --- 盘后复盘 Agent：服务实例 + 收盘后调度 ---
     review_svc = ReviewService(
@@ -264,4 +271,5 @@ app.include_router(alert_route.router, prefix="/api")
 app.include_router(risk_route.router, prefix="/api")
 app.include_router(news_route.router, prefix="/api")
 app.include_router(theme_catalog_route.router, prefix="/api")
+app.include_router(events_route.router, prefix="/api")
 app.include_router(ws_router)
