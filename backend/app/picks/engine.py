@@ -36,6 +36,9 @@ WEIGHTS = {
 }
 REPLACE_THRESHOLD = 15.0
 MAX_PICKS = 5
+#: 每日最多换入几只。稳定性的真正保障——分差门槛在涨停股主导的候选池下
+#: 拦不住换股（梯队分差动辄 30+），必须再设数量上限。详见函数 docstring。
+MAX_SWAPS_PER_DAY = 2
 BUY_RANGE_PCT = 0.03  # 买入范围：现价 ±3%
 
 REASON_CATEGORIES = {
@@ -185,33 +188,38 @@ def apply_replacement_threshold(
     ranked: list[dict],
     threshold: float = REPLACE_THRESHOLD,
     max_picks: int = MAX_PICKS,
+    max_swaps: int | None = MAX_SWAPS_PER_DAY,
 ) -> tuple[list[dict], list[dict]]:
-    """换股门槛：昨日成员优先保留，除非新候选综合分超出组合内最弱者 ≥threshold 分。
+    """换股门槛 + 每日换股上限。返回 (新组合 ≤max_picks, 换股记录 [{out, in, delta}])。
 
-    :param prev_symbols: 昨日组合 symbol（顺序无关）
-    :param ranked: 今日候选按综合分降序（dict 需含 symbol/score）
-    :return: (新组合 ≤max_picks, 换股记录 [{out, in, delta}])
+    两道约束，缺一不可（2026-08-31 跨日回放实证）：
+    - **门槛**（分数差）：防止小幅波动引发无谓换股
+    - **每日换股上限**（数量）：这才是稳定性的真正保障。涨停股的梯队分
+      （龙头 88 分）远高于非涨停成员（领涨 70/同步 52/滞涨 35），分差动辄
+      30+，15 分门槛形同虚设——回放实测纯门槛策略日均换手仍达 60%。
+      限制每日换入只数后，组合才会真正"精挑细选并保持一致性"。
+
+    :param max_swaps: 每日最多换入几只（None = 不限）。首次建仓（prev 为空）不受限。
     """
     by_symbol = {c["symbol"]: c for c in ranked}
     kept: list[dict] = []
     replaced: list[dict] = []
-    prev_kept_scores: list[float] = []
     for sym in prev_symbols:
         c = by_symbol.get(sym)
         if c is not None:
             kept.append(c)
-            prev_kept_scores.append(float(c["score"]))
     kept = sorted(kept, key=lambda c: -c["score"])[:max_picks]
 
-    floor = min(prev_kept_scores) if prev_kept_scores else 0.0
+    capped = max_swaps if (max_swaps is not None and prev_symbols) else None
+    added = 0
     for c in ranked:
+        if capped is not None and added >= capped:
+            break
         if any(c["symbol"] == k["symbol"] for k in kept):
             continue
         if len(kept) < max_picks:
-            # 组合未满：补位仍需过门槛（新候选 ≥ 昨日最低分+threshold），宁缺毋滥
-            if prev_kept_scores and c["score"] < floor + threshold:
-                continue
             kept.append(c)
+            added += 1
         else:
             # 已满：只与组合内最弱者比，超出 threshold 才换（组合稳定性的机制保证）
             weakest = min(kept, key=lambda k: k["score"])
@@ -221,6 +229,7 @@ def apply_replacement_threshold(
                     {"out": weakest["symbol"], "in": c["symbol"], "delta": round(c["score"] - weakest["score"], 1)}
                 )
                 kept.append(c)
+                added += 1
     kept = sorted(kept, key=lambda c: -c["score"])[:max_picks]
     return kept, replaced
 

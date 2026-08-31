@@ -261,6 +261,22 @@ def _theme_stage_of(lu_ctx: dict, theme_name: str | None) -> dict:
     )
 
 
+def _prev_combo_symbols() -> list[str]:
+    """上一份组合的成员（换股门槛与 carryover 都依赖它）。"""
+    with _db() as db:
+        from app.models.daily_pick import DailyPickSet
+
+        row = db.execute(
+            select(DailyPickSet).order_by(DailyPickSet.date.desc()).limit(1)
+        ).scalar_one_or_none()
+        if not row:
+            return []
+        try:
+            return [i["symbol"] for i in json.loads(row.items)]
+        except Exception:
+            return []
+
+
 def _parse_meta(raw: str | None) -> dict:
     """组合 meta（权重/炒作阶段/空仓闸门）解析。损坏时返回空字典而不是 500。"""
     try:
@@ -305,6 +321,18 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
     # ① 候选池
     candidates = await _candidate_pool(hub, store, svc, request)
 
+    # ①a 昨日组合成员兜底纳入（carryover）：
+    # 组合稳定性要求 incumbent 有"被重新评估的权利"——否则一只票今天没涨停、
+    # 没上热榜、事件又过期，就会被静默踢出，组合天天大换血（跨日回放实测：
+    # 纯涨停股候选池下日均换手 60%）。纳入后它仍要重新评分，分数不够照样被换，
+    # 只是不再因为"没进榜"而消失。
+    prev_symbols = _prev_combo_symbols()
+    have = {c["symbol"] for c in candidates}
+    for s in prev_symbols:
+        if s not in have:
+            candidates.append({"symbol": s, "from": "carryover", "prio": 1})
+    carryover_set = set(prev_symbols) - have
+
     # ①b 涨停板生态上下文（梯队地位判定的题材级证据）
     lu_ctx = await _limit_up_context(hub)
 
@@ -331,7 +359,8 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
         c.update({"name": name, "price": q.price, "change_pct": q.change_pct, "amount": q.amount})
         c["_prio"] = c.get("prio", 0) * 1000 + (q.change_pct or 0)
         deep.append(c)
-    deep.sort(key=lambda c: -c["_prio"])
+    # 昨日成员优先进入深度评估：它们已经有仓位逻辑在身，不该因涨幅不高被截断
+    deep.sort(key=lambda c: (-(1 if c["symbol"] in carryover_set else 0), -c["_prio"]))
     deep = deep[:DEEP_DIVE_CAP]
 
     # ③ 全局情绪（一次）
@@ -496,17 +525,7 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
     ranked = [r for r in results if r is not None]
     ranked.sort(key=lambda r: -r["score"])
 
-    # ⑤ 换股门槛（昨日组合）
-    prev_symbols: list[str] = []
-    with _db() as db:
-        from app.models.daily_pick import DailyPickSet
-
-        rows = db.execute(select(DailyPickSet).order_by(DailyPickSet.date.desc()).limit(1)).scalars().all()
-        if rows:
-            try:
-                prev_symbols = [i["symbol"] for i in json.loads(rows[0].items)]
-            except Exception:
-                prev_symbols = []
+    # ⑤ 换股门槛（昨日组合；prev_symbols 已在 ①a 载入，此处不重复查库）
     kept, replaced = apply_replacement_threshold(prev_symbols, ranked)
 
     # ⑥ 卡片组装（含风险档位与出场纪律参考）+ 空仓闸门处理 + 持久化

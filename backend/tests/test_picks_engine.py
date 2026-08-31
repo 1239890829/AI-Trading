@@ -233,3 +233,56 @@ def test_entry_quality_distinguishes_gate_day_from_missing_data():
     assert "不适用买点评析" in e["basis"]
     # 同样无买入范围但非闸门日 → 归为数据缺失
     assert "无买入范围或行情缺失" in _entry(buy_range=None)["basis"]
+
+
+def test_combo_stays_full_when_prev_members_drop_out():
+    """回归（2026-08-31 跨日回放实测发现的缺陷）：
+    昨日成员掉出候选池后，组合要能**补位**而不是让门槛把空位锁死。
+
+    原实现把换股门槛也套在补位上：留下的高分成员把门槛抬高，新候选永远
+    够不着 → 6 天回放里组合从 5 只缩到 1 只。门槛只该约束"替换"，不该阻止"填空"。
+    """
+    from app.picks.engine import apply_replacement_threshold
+
+    prev = ["A", "B", "C", "D", "E"]
+    ranked = [
+        {"symbol": "A", "score": 90.0},
+        {"symbol": "N1", "score": 75.0},
+        {"symbol": "N2", "score": 74.0},
+        {"symbol": "N3", "score": 73.0},
+        {"symbol": "N4", "score": 72.0},
+        {"symbol": "N5", "score": 71.0},
+    ]
+    # 不设每日换股上限时：空位全部补上（A + N1..N4），且无人被踢
+    kept, replaced = apply_replacement_threshold(prev, ranked, 15.0, 5, max_swaps=None)
+    assert [k["symbol"] for k in kept] == ["A", "N1", "N2", "N3", "N4"]
+    assert replaced == []
+
+
+def test_daily_swap_cap_limits_turnover():
+    """每日换股上限：极端情况（昨日成员几乎全消失）也只换入 2 只。
+
+    取舍：稳定性优先于"每天都满员"——成员消失后渐进补位（分几天补满），
+    好过一天之内把组合全换成陌生的票。
+    """
+    from app.picks.engine import MAX_SWAPS_PER_DAY, apply_replacement_threshold
+
+    assert MAX_SWAPS_PER_DAY == 2
+    prev = ["A", "B", "C", "D", "E"]
+    ranked = [
+        {"symbol": "A", "score": 90.0},
+        {"symbol": "N1", "score": 75.0},
+        {"symbol": "N2", "score": 74.0},
+        {"symbol": "N3", "score": 73.0},
+    ]
+    kept, _ = apply_replacement_threshold(prev, ranked, 15.0, 5)
+    assert [k["symbol"] for k in kept] == ["A", "N1", "N2"]
+
+
+def test_swap_cap_does_not_apply_to_first_build():
+    """首次建仓（无昨日组合）不受换股上限约束——否则第一天只能选出 2 只。"""
+    from app.picks.engine import apply_replacement_threshold
+
+    ranked = [{"symbol": s, "score": 90.0 - i} for i, s in enumerate(["A", "B", "C", "D", "E"])]
+    kept, _ = apply_replacement_threshold([], ranked, 15.0, 5)
+    assert len(kept) == 5
