@@ -309,6 +309,40 @@ export async function getSpeedRank(theme?: string, symbols?: string[]): Promise<
   return (await getJson<SpeedRankPayload>(`/api/speed-rank?${p.toString()}`, 20_000)).data;
 }
 
+/** 题材内资金合力（P1-5）：官方成分批量快照聚合（涨跌家数/等权涨幅/成交额/涨停家数）。 */
+export interface ThemeStrengthRow {
+  name: string;
+  count: number;
+  up: number;
+  down: number;
+  flat: number;
+  missing: number;
+  limit_up_count: number;
+  avg_change_pct: number | null;
+  total_amount: number;
+  top_gainers: { symbol: string; name: string | null; change_pct: number }[];
+  basis: string;
+}
+
+export async function getThemeStrength(codes?: string[]): Promise<Record<string, ThemeStrengthRow>> {
+  const qs = codes && codes.length > 0 ? `?codes=${codes.join(",")}` : "";
+  return (await getJson<{ themes: Record<string, ThemeStrengthRow> }>(`/api/themes/catalog/strength${qs}`, 20_000)).data.themes;
+}
+
+/** 官方板块指数日 K（ths 发布的 88xxxx.TI 指数序列，非自算）。 */
+export interface ThemeIndexPayload {
+  code: string;
+  series: { date: string; close: number }[];
+  chg_3d: number | null;
+  chg_5d: number | null;
+  chg_10d: number | null;
+  basis: string;
+}
+
+export async function getThemeIndex(code: string, days = 60): Promise<ThemeIndexPayload> {
+  return (await getJson<ThemeIndexPayload>(`/api/themes/catalog/index?code=${code}&days=${days}`, 20_000)).data;
+}
+
 /** ===== 真实持仓（CONTEXT.md: Real Position 域；与 /api/paper/* 模拟账户完全独立）=====
  *  记账必须用实际成交价（fill_price），行情现价只是录入默认值。 */
 

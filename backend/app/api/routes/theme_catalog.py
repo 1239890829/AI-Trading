@@ -14,9 +14,15 @@ from datetime import date, datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from app.api.deps import require_write_token
+from app.api.deps import get_hub, require_write_token
 from app.core.ttl_cache import cache_on
-from app.services.theme_catalog_service import ThemeCatalogService, reconcile
+from app.services.quote_hub import QuoteHub
+from app.services.theme_catalog_service import (
+    ThemeCatalogService,
+    aggregate_theme_strength,
+    official_multi_day_changes,
+    reconcile,
+)
 from app.services.theme_service import parse_theme_tags
 
 log = logging.getLogger(__name__)
@@ -161,6 +167,104 @@ async def theme_catalog(
         },
         "meta": {},
     }
+
+
+@router.get("/themes/catalog/strength")
+async def theme_strength(
+    request: Request,
+    codes: str = Query(default="", description="逗号分隔题材代码（88xxxx.TI）；缺省=全部有成分的题材"),
+    hub: QuoteHub = Depends(get_hub),
+    svc: ThemeCatalogService = Depends(get_service),
+) -> dict:
+    """题材内资金合力（P1-5）：批量快照成分股，按题材聚合涨跌家数/等权涨幅/成交额/涨停家数。
+
+    归属口径 = 官方成分反查；行情 = 腾讯批量快照（与个股行情同源）。成分跨题材去重，
+    一次快照多方复用；结果缓存 60s（合力是分钟级感知，不必秒级刷新）。
+    """
+    code_list = [c.strip() for c in codes.split(",") if c.strip()]
+    theme_members: dict[str, list[str]] = {}
+    for c in (code_list or [t.code for t in svc.get_catalog()]):
+        members = [m.symbol for m in svc.get_members(c)]
+        if members:
+            theme_members[c] = members[:200]
+    if not theme_members:
+        return {"data": {"themes": {}, "note": "题材成分尚未同步"}, "meta": {}}
+
+    cache = cache_on(request.app.state, "themes.catalog.strength", 60, maxsize=8)
+    cache_key = ",".join(sorted(theme_members))[:512]
+    hit, payload = cache.get(cache_key)
+    if hit:
+        return payload
+
+    all_symbols = sorted({s for members in theme_members.values() for s in members})
+    quotes_raw: dict[str, dict] = {}
+    composite = hub.provider if hasattr(hub.provider, "providers") else None
+    target = next(
+        (p for p in (composite.providers if composite else [hub.provider]) if p.name == "tencent"),
+        hub.provider,
+    )
+    for i in range(0, len(all_symbols), 50):
+        batch = all_symbols[i : i + 50]
+        try:
+            for q in await target.get_quotes(batch):
+                quotes_raw[q.symbol] = {
+                    "symbol": q.symbol,
+                    "name": q.name,
+                    "price": q.price,
+                    "change_pct": q.change_pct,
+                    "amount": q.amount,
+                }
+        except Exception as exc:
+            log.warning("theme strength batch %s failed: %s", i // 50, exc)
+
+    strength = aggregate_theme_strength(theme_members, quotes_raw)
+    names = {t.code: t.name for t in svc.get_catalog()}
+    payload = {
+        "data": {
+            "themes": {
+                code: {**s, "name": names.get(code, code)} for code, s in strength.items()
+            }
+        },
+        "meta": {"basis": "合力=官方成分批量快照聚合（涨跌家数/等权涨幅/成交额合计），数据有延迟"},
+    }
+    cache.set(cache_key, payload)
+    return payload
+
+
+@router.get("/themes/catalog/index")
+async def theme_index(
+    request: Request,
+    code: str = Query(..., description="题材代码（88xxxx.TI）"),
+    days: int = Query(default=60, ge=10, le=250),
+    svc: ThemeCatalogService = Depends(get_service),
+) -> dict:
+    """官方板块指数日 K（ths 发布的 88xxxx.TI 指数序列，非自算）+ 多日涨跌幅。"""
+    cache = cache_on(request.app.state, "themes.catalog.index", 120, maxsize=64)
+    key = f"{code}:{days}"
+    hit, payload = cache.get(key)
+    if hit:
+        return payload
+    try:
+        bars = await svc.fetch_board_bars(code)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"板块指数数据源失败：{exc}")
+    if not bars:
+        raise HTTPException(status_code=404, detail=f"{code} 无板块指数数据")
+    recent = bars[-days:]
+    multi = official_multi_day_changes(bars)
+    payload = {
+        "data": {
+            "code": code,
+            "series": [{"date": b["date"], "close": b["close"]} for b in recent],
+            "chg_3d": multi.get("chg_3d"),
+            "chg_5d": multi.get("chg_5d"),
+            "chg_10d": multi.get("chg_10d"),
+            "basis": "同花顺官方板块指数日 K（ths 发布序列）",
+        },
+        "meta": {},
+    }
+    cache.set(key, payload)
+    return payload
 
 
 @router.get("/themes/catalog/{code}/members")

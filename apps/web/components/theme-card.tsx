@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { fmt, fmtAmount, fmtHeat, pctColor, pctText } from "@/lib/format";
-import type { HotTheme } from "@/lib/api";
+import type { HotTheme, ThemeStrengthRow } from "@/lib/api";
 import { workbenchUrl } from "@/lib/routing";
 import type { ThemeCard as ThemeCardType } from "@/types/market";
 
@@ -182,11 +182,14 @@ export function ThemeCardView({
   rank,
   tradeDate,
   hot,
+  strength,
 }: {
   card: ThemeCardType;
   rank: number;
   tradeDate?: string;
   hot?: HotTheme | null;
+  /** 资金合力（P1-5）：官方成分批量快照聚合，按题材名匹配；无数据静默 */
+  strength?: ThemeStrengthRow | null;
 }) {
   const p = card.performance;
   const board = card.board;
@@ -252,6 +255,19 @@ export function ThemeCardView({
                 <RankDelta v={hot.best.rank_change} />
               </span>
             )}
+          </Badge>
+        )}
+
+        {/* 资金合力（P1-5）：官方成分批量快照聚合——涨跌家数/涨停家数/板块成交额。
+            按题材名匹配 strength 数据，匹配不到（成分未同步）静默不显示 */}
+        {strength && (
+          <Badge
+            className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+            title={`${strength.basis}（官方成分批量快照聚合，60s 缓存）`}
+          >
+            {strength.up}涨/{strength.down}跌
+            {strength.limit_up_count > 0 && ` · 涨停${strength.limit_up_count}`}
+            {` · 题材额 ${fmtAmount(strength.total_amount)}`}
           </Badge>
         )}
 

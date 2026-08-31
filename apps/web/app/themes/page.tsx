@@ -4,10 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { RankDelta, ThemeCardView } from "@/components/theme-card";
-import { getThemes, getThemesHot } from "@/lib/api";
+import { getThemes, getThemesHot, getThemeStrength } from "@/lib/api";
 import { fmtHeat, timeText } from "@/lib/format";
 import { workbenchUrl } from "@/lib/routing";
-import type { ThemesHotPayload } from "@/lib/api";
+import type { ThemeStrengthRow, ThemesHotPayload } from "@/lib/api";
 import type { ThemeBoardPayload } from "@/types/market";
 
 /**
@@ -60,6 +60,7 @@ export default function ThemesPage() {
   const [showCaveats, setShowCaveats] = useState(false);
   // 题材人气（B1 热股榜）：best-effort 增强，拉取失败静默降级（看板主体不依赖它）
   const [hot, setHot] = useState<ThemesHotPayload | null>(null);
+  const [strength, setStrength] = useState<Map<string, ThemeStrengthRow> | null>(null);
   // 聚焦题材（L4 联动：详情页题材 chip → /themes?focus=名称）
   const [focus, setFocus] = useState(searchParams.get("focus") ?? "");
 
@@ -94,6 +95,14 @@ export default function ThemesPage() {
     getThemesHot()
       .then(setHot)
       .catch(() => setHot(null));
+    // 资金合力（P1-5）：官方成分批量快照聚合，按题材名匹配卡片；60s 后端缓存
+    getThemeStrength()
+      .then((s) => {
+        const byName = new Map<string, ThemeStrengthRow>();
+        for (const row of Object.values(s)) byName.set(row.name, row);
+        setStrength(byName);
+      })
+      .catch(() => setStrength(null));
     // 仅在挂载时拉一次；后续筛选由各自的 onChange 触发
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -313,6 +322,7 @@ export default function ThemesPage() {
               rank={i + 1}
               tradeDate={data?.trade_date ?? ""}
               hot={hotByTheme.get(c.theme)}
+              strength={strength?.get(c.theme) ?? null}
             />
           ))}
         </div>

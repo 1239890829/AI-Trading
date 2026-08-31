@@ -223,7 +223,7 @@
 | **P1-2** | **LLM 接入**（实现 `LLMAnalyzer`） | **用户给凭据** | 一举关闭：复盘四角色编排（星标 P2）+ 新闻摘要增强 + 未来 AI 能力底座 |
 | ~~**P1-3**~~ | ~~B1 热股榜 → 题材卡片"人气热度+排名变化"~~ ✅ 已完成（2026-08-31）：`aggregate_hot_themes` 纯函数 + `GET /api/themes/hot`（60s TTL 缓存）+ /themes 人气榜条与卡片徽标；rank_change 沿用榜内最高排名成员（不造题材级指标） | 无（ths 已具备） | ths 独占能力，欠用清单中最快出效果的 |
 | ~~**P1-4**~~ | ~~B4 `seal_nextday` 交叉验证晋级率~~ ✅ 已完成（2026-08-31）：`app/sentiment/ladder_check.py` + `GET /api/market/ladder-check`（60→10min 缓存）；实测 5 可比日逐日一致、零漂移 | 无 | 数据源方案的自证闭环：对不上说明拼接仍有问题 |
-| **P1-5** | C1 `index/constituents` 板块成分表 | 无 | 解锁题材指数、板块内资金合力 |
+| ~~**P1-5**~~ | ~~C1 `index/constituents` 板块成分表 → 题材指数、板块内资金合力~~ ✅ 已完成（2026-08-31）：`GET /api/themes/catalog/strength`（官方成分批量快照聚合：涨跌家数/等权涨幅/成交额/涨停家数，60s 缓存）+ `GET /api/themes/catalog/index`（ths 官方板块指数日 K + 3/5/10 日涨跌幅）+ 看板卡片合力条 | 无 | 阶段 C 全清 |
 | **P1-6** | B3 核验板块区间涨幅数据源是否已换 ths | 无 | 0.5 天核验；未换则替换 f109 |
 | **P1-7** | 部署（Docker/编排/监控） | **用户定环境** | 有 Docker 的环境才能实测交付 |
 | ~~**P1-8**~~ | ~~新闻/公告图上事件点（K 线标记）~~ ✅ 已完成（2026-08-31）：`lib/event-markers.ts` 纯函数（日期对齐 bar/非交易日不顺延/同日同类型合并）+ KlineChartPro「事件」开关（公告=琥珀●上、新闻=蓝●下、重要度高加!，与 B/S 点合并排序后一次 setMarkers） | 无（新闻+摘要已就绪） | ui-redesign §2 第 4 行，现在有数据了 |

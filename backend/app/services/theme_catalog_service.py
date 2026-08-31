@@ -423,3 +423,72 @@ class ThemeCatalogService:
     def catalog_size(self) -> int:
         with self._sf() as db:
             return int(db.execute(select(func.count(Theme.id))).scalar_one() or 0)
+
+
+def aggregate_theme_strength(
+    theme_members: dict[str, list[str]],
+    quotes: dict[str, dict],
+) -> dict[str, dict]:
+    """题材内资金合力聚合（纯函数，P1-5）。
+
+    归属口径 = 官方成分（theme_member 反查），不用关键词猜。
+    输入行情为腾讯批量快照（与个股行情同源）的归一化行：
+    {symbol: {change_pct, amount, price, name, last_price}}。
+
+    合力指标（可解释、不臆造）：
+    - up/down/flat：涨/跌/平家数（涨跌家数比是最直观的资金合力证据）
+    - avg_change_pct：成分等权平均涨幅（少数大票不会绑架题材观感）
+    - total_amount：板块成交额合计（元）
+    - limit_up_count：涨停家数（change_pct ≥ 9.8 近似口径，20cm 板剔除）
+    - top_gainers：涨幅前 3（name/symbol/change_pct）
+    每项带 basis；成分无行情的按缺失计数（missing），不冒充 0。
+    """
+    out: dict[str, dict] = {}
+    for code, members in theme_members.items():
+        up = down = flat = missing = 0
+        limit_up = 0
+        total_amount = 0.0
+        chg_sum = 0.0
+        chg_n = 0
+        gainers: list[dict] = []
+        for sym in members:
+            q = quotes.get(sym)
+            if q is None or q.get("change_pct") is None:
+                missing += 1
+                continue
+            chg = float(q["change_pct"])
+            chg_sum += chg
+            chg_n += 1
+            if chg > 0.005:
+                up += 1
+            elif chg < -0.005:
+                down += 1
+            else:
+                flat += 1
+            # 20cm 板（300/301/688/689 开头）阈值 19.8，其余 9.8
+            is_20cm = sym.startswith(("300", "301", "688", "689"))
+            if chg >= (19.8 if is_20cm else 9.8):
+                limit_up += 1
+            amount = q.get("amount")
+            if amount is not None:
+                total_amount += float(amount)
+            gainers.append({"symbol": sym, "name": q.get("name"), "change_pct": chg})
+        gainers.sort(key=lambda g: -(g["change_pct"] or 0))
+        basis_parts = [f"{up}涨/{down}跌/{flat}平"]
+        if missing:
+            basis_parts.append(f"{missing} 只无行情")
+        if chg_n:
+            basis_parts.append(f"等权平均 {round(chg_sum / chg_n, 2)}%")
+        out[code] = {
+            "count": len(members),
+            "up": up,
+            "down": down,
+            "flat": flat,
+            "missing": missing,
+            "limit_up_count": limit_up,
+            "avg_change_pct": round(chg_sum / chg_n, 2) if chg_n else None,
+            "total_amount": round(total_amount, 0) if total_amount else 0.0,
+            "top_gainers": gainers[:3],
+            "basis": "；".join(basis_parts),
+        }
+    return out

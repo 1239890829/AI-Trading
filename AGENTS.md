@@ -43,7 +43,7 @@ CI（GitHub Actions）：后端 pytest+pyflakes、前端 tsc+eslint+vitest+build
 
 ## 2. 当前状态快照（2026-08-31，实时行情修复后更新）
 
-**479 后端测试 + 77 前端测试全绿 · 88 REST + 1 WS 端点 · 四源链 `ths→tencent→eastmoney→sina`**
+**481 后端测试 + 77 前端测试全绿 · 90 REST + 1 WS 端点 · 四源链 `ths→tencent→eastmoney→sina`**
 
 本日已完成：P0-5 统一缓存层（`3315c3f`）→ reconciliation 502 修复（`fb833f1`）→
 B1 题材人气（`5abeabd`）→ B4 晋级率源自证（`f0d10b0`）→ P1-8 K线事件点（`ca15f74`）→
@@ -74,7 +74,7 @@ K 线（TDX 2 年分钟级底座）；分时（均价线+量比基线）；盘�
 题材梯队看板（唯一归属/强弱分级/健康度/官方成分徽标/官方 K 线验证的多日涨幅）；
 题材人气（B1：`GET /api/themes/hot`，ths 热股榜 × 官方成分反查聚合）；晋级率源自证
 （B4：`GET /api/market/ladder-check`，seal_nextday 对照，实测 5 可比日零漂移）；
-板块排行；龙虎榜；全市场快照。
+板块排行（含题材内资金合力 P1-5：官方成分批量快照聚合，`GET /api/themes/catalog/strength` + 官方板块指数 `GET /api/themes/catalog/index`，卡片合力条）；龙虎榜；全市场快照。
 **指数详情改造（2026-08-31）**：分时 Y 轴修复（指数无均价概念，`avg` 数学上不成立——
 cum_amount/cum_volume 对指数给出 ~15 元荒谬值，该 series 拉爆 Y 轴致"分时一条直线"；
 腾讯分钟线对指数 avg 置 null，`is_index_minute_symbol`）；分时/K线标题带标的名称；
@@ -133,11 +133,8 @@ sh000001）；QuoteHub.get_quotes 兜底 indices + 前缀归一化（model_copy�
 | 生产部署（Docker/编排/监控） | 用户定环境 | Phase 8 全收尾；需有 Docker 的环境实测 |
 | 事件复盘回写（E4：T+N 胜率回写事件权重） | 上线运行积累数据后 | 事件模板自校准 |
 
-### 阶段 C · P1 功能项（只剩最后一项）
-1. ~~**B1 热股榜**~~ ✅ 2. ~~**B4 seal_nextday 交叉验证晋级率**~~ ✅ 3. ~~**新闻/公告事件点画上 K 线**~~ ✅（均 2026-08-31 完成，实现要点见 git log 与各处 docstring）
-4. **题材指数与板块内资金合力**（P1-5 残留：成分表已建，指数计算未做）——**下一个无阻塞项**。
-   思路：theme_member 表反查成分 → 快照/日K 聚合题材级指数与资金净流入合计；
-   归属口径沿用官方成分反查（勿关键词猜），输出带 basis 与「不构成买卖建议」声明。
+### 阶段 C · P1 功能项（✅ 全部完成 2026-08-31）
+1. ~~**B1 热股榜**~~ ✅ 2. ~~**B4 seal_nextday 交叉验证晋级率**~~ ✅ 3. ~~**新闻/公告事件点画上 K 线**~~ ✅ 4. ~~**题材指数与板块内资金合力**~~ ✅（`GET /api/themes/catalog/strength` 合力聚合 + `GET /api/themes/catalog/index` 官方指数日 K + 卡片合力条；归属=官方成分反查，行情=腾讯批量快照）
 
 ### 阶段 D · P2 远期/触发式（维持观察）
 marketdb DuckDB 日级底座 · qlib 因子挖掘 · L2 盘口（无免费源） · 逐笔历史+主动买卖比 ·
@@ -157,7 +154,7 @@ C2 全市场日 K dump（已被 TDX 替代）；"等 LLM 再做摘要"（规则�
 | **docs/plan-review.md** | 计划复盘：10 份方案逐项盘点 + P0/P1/P2 整合清单（§六）+ 遗留用户决策（§八） |
 | **docs/linkage-design.md** | 联动系统总纲：状态管理规范/路由规范/联动矩阵 L1-L10/题材三层归属/事件 SOP；切片标记在此 |
 | **docs/retro-and-gaps.md** | 唯一明细账本（§一功能欠缺 20 项全清 / §二布局 / §三技术债 / §四行为基线勿回退） |
-| docs/api.md | API 契约（88 端点，按域分节） |
+| docs/api.md | API 契约（90 端点，按域分节） |
 | docs/data-sources.md + data-source-comparison.md | 字段口径实测记录 + 四源能力选型（改 Provider 前必读） |
 | docs/sentiment-phase-review.md + sentiment.md | 情绪方法论调研 + 误判复盘 + 优化清单 |
 | docs/theme-prediction.md / review-agent.md / theme-sentiment-methodology.md | 预判 / 复盘 Agent / 题材情绪方法论 |
