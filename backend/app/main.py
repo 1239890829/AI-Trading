@@ -212,6 +212,27 @@ async def lifespan(app: FastAPI):
 
     risk_task = asyncio.create_task(risk_refresher(), name="risk-refresher")
 
+    async def event_collector():
+        """事件采集调度（P1）：自选新闻 → 事件卡，指纹去重保证幂等。
+
+        此前事件只有手工/半自动录入，活跃事件长期个位数，选股消息面近乎
+        空转（2026-08-31 盘点）。30 分钟一轮：新闻源本身更新频率低，
+        去重后重复采集只产生 duplicated 计数，无害。
+        """
+        await asyncio.sleep(45)  # 启动先让目录同步/行情填充完成
+        while True:
+            try:
+                from app.api.routes.events import collect_news_events
+
+                stats = await collect_news_events(app.state)
+                if stats.get("created"):
+                    log.info("event collector: +%s 新事件（duplicated %s）", stats["created"], stats["duplicated"])
+            except Exception:
+                log.exception("event collector failed")
+            await asyncio.sleep(1800.0)
+
+    event_task = asyncio.create_task(event_collector(), name="event-collector")
+
     try:
         await hub.refresh()  # 冷启动立即填充，接口首次调用即有数据
         await risk_engine.refresh()
@@ -224,6 +245,7 @@ async def lifespan(app: FastAPI):
     alert_feeder.cancel()
     alert_engine.stop()
     risk_task.cancel()
+    event_task.cancel()
     if review_task is not None:
         review_stop.set()
     with contextlib.suppress(asyncio.CancelledError):

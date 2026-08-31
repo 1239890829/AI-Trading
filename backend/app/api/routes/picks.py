@@ -286,20 +286,23 @@ def _parse_meta(raw: str | None) -> dict:
         return {}
 
 
-def _active_event_hits(store: EventStore, symbol: str) -> tuple[int, int, str | None, str | None]:
-    """该标的的活跃事件方向命中：(利好数, 利空数, 主事件标题, 主方向文案)。"""
-    bull = bear = 0
+def _active_event_hits(store: EventStore, symbol: str) -> tuple[int, int, str | None, str | None, int]:
+    """该标的的活跃事件命中：(利好数, 利空数, 主事件标题, 主方向文案, 关联数)。
+
+    关联数含 direction=0 的方向行——「来源标的关联、方向待判」也是证据，
+    丢掉它会让消息面对有新闻但无方向词的标的显示"无命中"（误导）。
+    """
+    bull = bear = linked = 0
     top_title = top_dir = None
+    pending_title: str | None = None
     try:
         for row in store.list_events(active_only=True, limit=30):
             for d in store.directions_of(row.id):
-                hit = (d.target_type == "symbol" and d.target == symbol) or (
-                    d.target_type == "theme"
-                )  # theme 方向对该标的的传导第一版不逐股判定（见 basis），symbol 直击为主
                 if d.target_type == "theme":
                     continue  # 题材方向的个股传导第一版不计入单股消息分（防过度外推）
-                if not hit:
+                if d.target_type != "symbol" or d.target != symbol:
                     continue
+                linked += 1
                 if d.direction == 1:
                     bull += d.strength
                 elif d.direction == -1:
@@ -307,9 +310,13 @@ def _active_event_hits(store: EventStore, symbol: str) -> tuple[int, int, str | 
                 if top_title is None and d.direction != 0:
                     top_title = row.title
                     top_dir = "利好" if d.direction == 1 else "利空"
+                if pending_title is None and d.direction == 0:
+                    pending_title = row.title
     except Exception as exc:
         log.warning("picks event hits %s failed: %s", symbol, exc)
-    return bull, bear, top_title, top_dir
+    if top_title is None and pending_title is not None:
+        top_title = pending_title  # 无方向词时也给出关联标题（证据可见）
+    return bull, bear, top_title, top_dir, linked
 
 
 @router.post("/generate")
@@ -437,8 +444,14 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
             ma10 = _ma_value(dicts, 10)
             sub["tech"], bases["tech"] = s_tech, b_tech
             # 消息
-            bull, bear, top_title, top_dir = _active_event_hits(store, sym)
+            bull, bear, top_title, top_dir, linked = _active_event_hits(store, sym)
             sub["news"], bases["news"] = score_news(bull, bear, top_title, top_dir)
+            if bull == bear == 0 and linked:
+                # 有关联但无方向词：诚实说"命中了但待判"，而不是"无命中"
+                bases["news"] = (
+                    f"命中 {linked} 条关联事件（标题无方向词，方向待判），消息面中性；"
+                    f"最近：「{(top_title or '')[:40]}」"
+                )
             # 基本面：成长性来自财务报告（revenue_yoy 等），估值来自行情快照
             rev = None
             try:

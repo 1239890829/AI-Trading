@@ -13,14 +13,17 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import select
 from pydantic import BaseModel, Field
 
 from app.api.deps import require_write_token
 from app.api.routes.theme_catalog import _normalize_symbol  # 同包复用：代码归一
+from app.core.db import get_session_factory
 from app.events.store import EventStore
 
 log = logging.getLogger(__name__)
@@ -32,9 +35,9 @@ def get_store(request: Request) -> EventStore:
     return request.app.state.event_store
 
 
-def _theme_names(request: Request) -> list[str]:
+def _theme_names(app_state) -> list[str]:
     """官方目录题材名（抽取实体用）；目录未同步时为空（方向行会缺，但不臆造）。"""
-    svc = getattr(request.app.state, "theme_catalog", None)
+    svc = getattr(app_state, "theme_catalog", None)
     if svc is None or svc.catalog_size() == 0:
         return []
     return [t.name for t in svc.get_catalog(limit=1000)]
@@ -222,14 +225,14 @@ async def register_event(body: EventItemIn, request: Request, store: EventStore 
         published_at=_parse_published(body.published_at),
         source_symbol=body.source_symbol,
         is_announcement=body.is_announcement,
-        theme_names=_theme_names(request),
+        theme_names=_theme_names(request.app.state),
     )
     return {"data": {**_serialize(row, store.directions_of(row.id)), "created": created}, "meta": {}}
 
 
 @router.post("/events/extract", dependencies=[Depends(require_write_token)])
 async def extract_events(body: EventExtractIn, request: Request, store: EventStore = Depends(get_store)) -> dict:
-    theme_names = _theme_names(request)
+    theme_names = _theme_names(request.app.state)
     created = 0
     duplicated = 0
     for item in body.items:
@@ -247,19 +250,52 @@ async def extract_events(body: EventExtractIn, request: Request, store: EventSto
     return {"data": {"created": created, "duplicated": duplicated, "received": len(body.items)}, "meta": {}}
 
 
-@router.post("/events/collect", dependencies=[Depends(require_write_token)])
-async def collect_events(request: Request, store: EventStore = Depends(get_store)) -> dict:
-    """自选股新闻批量抽取：对每个自选标的拉最近新闻，抽取事件卡（去重）。"""
-    svc = getattr(request.app.state, "theme_catalog", None)
+async def collect_news_events(app_state) -> dict:
+    """自选股新闻批量抽取：对每个自选标的拉最近新闻，抽取事件卡（指纹去重）。
+
+    路由与定时调度共用这一份实现——事件采集此前只有 HTTP 端点、没有调度，
+    活跃事件长期只有手工录入的几条，选股消息面近乎空转（2026-08-31 盘点结论）。
+    """
+    svc = getattr(app_state, "theme_catalog", None)
     if svc is not None and svc.catalog_size() == 0:
         try:
             await svc.sync_catalog()
         except Exception as exc:  # noqa: BLE001
             log.warning("events collect: 目录同步失败 %s", exc)
-    theme_names = _theme_names(request)
-    hub = request.app.state.hub
-    repo = request.app.state.watchlist_repo
-    symbols = repo.list_symbols()[:20]  # 有界：自选过大时截断
+    theme_names = _theme_names(app_state)
+    hub = app_state.hub
+    repo = app_state.watchlist_repo
+    store = app_state.event_store
+    # 采集范围 = 自选（前 20）∪ 昨日精选组合 ∪ 真实持仓。
+    # 只采自选的话，精选成员/持仓标的的新闻永远不入库 → 消息面评分对它们
+    # 永远空转（2026-08-31 实测：事件 23 条但组合成员零命中）。
+    symbols: list[str] = []
+    for s in repo.list_symbols()[:20]:
+        if s not in symbols:
+            symbols.append(s)
+    try:
+        from app.models.daily_pick import DailyPickSet
+
+        with get_session_factory()() as db:
+            row = (
+                db.execute(select(DailyPickSet).order_by(DailyPickSet.date.desc()).limit(1))
+                .scalar_one_or_none()
+            )
+        if row:
+            for item in json.loads(row.items):
+                if item.get("symbol") and item["symbol"] not in symbols:
+                    symbols.append(item["symbol"])
+    except Exception as exc:  # noqa: BLE001
+        log.warning("events collect: 昨日组合读取失败 %s", exc)
+    try:
+        from app.services.real_position_service import load_positions
+
+        for pos in load_positions(get_session_factory()):
+            if pos.symbol not in symbols:
+                symbols.append(pos.symbol)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("events collect: 持仓读取失败 %s", exc)
+    symbols = symbols[:30]  # 有界
     created = duplicated = fetched = 0
     for symbol in symbols:
         try:
@@ -286,8 +322,13 @@ async def collect_events(request: Request, store: EventStore = Depends(get_store
             )
             created += 1 if is_new else 0
             duplicated += 0 if is_new else 1
-    return {"data": {"symbols": len(symbols), "fetched": fetched, "created": created, "duplicated": duplicated},
-            "meta": {}}
+    return {"symbols": len(symbols), "fetched": fetched, "created": created, "duplicated": duplicated}
+
+
+@router.post("/events/collect", dependencies=[Depends(require_write_token)])
+async def collect_events(request: Request) -> dict:
+    """手动触发一轮采集（写鉴权）；定时调度直接调 collect_news_events，不走 HTTP。"""
+    return {"data": await collect_news_events(request.app.state), "meta": {}}
 
 
 @router.post("/events/{event_id}/review", dependencies=[Depends(require_write_token)])

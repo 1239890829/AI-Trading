@@ -158,6 +158,44 @@ def extract_directions(title: str, theme_names: list[str]) -> list[dict]:
     return rows
 
 
+def extract_symbol_direction(title: str, symbol: str) -> dict | None:
+    """新闻来源标的的方向行（target_type="symbol"）。
+
+    为什么必须有这一行：新闻是**按标的拉取**的（source_symbol 就是权威关联），
+    但此前 extract_directions 只产 theme 方向行，而选股消息面评分只认
+    symbol 方向行（防题材过度外推）——两段各自合理，拼起来互斥，导致
+    消息面评分永远中性（2026-08-31 实测：事件 46 条、组合成员零命中）。
+
+    方向判定复用同一套利好/利空词典；无动词命中 → direction=0（关联待判，
+    仍然计数命中但不加分不扣分）。
+    """
+    if not symbol or not symbol.isdigit() or len(symbol) != 6:
+        return None
+    negative = _NEGATIVE.search(title)
+    positive = _POSITIVE.search(title)
+    direction, strength = 0, 1
+    chain = ""
+    if negative:
+        word = negative.group(0)
+        direction, strength = -1, 2
+        chain = f"来源标的新闻命中利空词「{word}」→ 利空"
+    elif positive:
+        word = positive.group(0)
+        direction, strength = 1, 2
+        chain = f"来源标的新闻命中利好词「{word}」→ 利好"
+    else:
+        chain = "来源标的关联（标题无方向词，待判）"
+    return {
+        "target_type": "symbol",
+        "target": symbol,
+        "direction": direction,
+        "strength": strength,
+        "chain": chain,
+        "basis": f"新闻来源标的 {symbol}（东财按标的拉取，权威关联）；{chain}",
+        "matched_by": "source",
+    }
+
+
 def build_event(title: str, *, source: str | None = None, url: str | None = None,
                 published_at: datetime | None = None, source_symbol: str | None = None,
                 is_announcement: bool = False, theme_names: list[str] | None = None) -> dict:
@@ -177,5 +215,6 @@ def build_event(title: str, *, source: str | None = None, url: str | None = None
         "half_life_hours": HALF_LIFE.get(category, HALF_LIFE["other"]),
         "source_symbol": source_symbol,
         "status": "active",
-        "directions": extract_directions(title, theme_names or []),
+        "directions": extract_directions(title, theme_names or [])
+        + ([extract_symbol_direction(title, source_symbol)] if source_symbol else []),
     }
