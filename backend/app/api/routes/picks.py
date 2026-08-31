@@ -803,13 +803,63 @@ async def list_reviews(date_str: str | None = Query(default=None, alias="date"),
 
 @router.get("/meta")
 async def picks_meta() -> dict:
-    """元结论：走坏原因分布（周末权重微调建议的输入；权重变更需人工确认）。"""
+    """元结论：走坏原因分布 + 按梯队角色的胜率分布。
+
+    角色胜率是回答「能不能按题材抓妖」的直接证据：龙头/补涨/滞涨各自的
+    实际胜率与平均超额，比任何主观判断都硬。样本不足时如实标注。
+    """
     with _db() as db:
         from sqlalchemy import func
 
-        from app.models.daily_pick import DailyPickReview
+        from app.models.daily_pick import DailyPickReview, DailyPickSet
 
         rows = db.execute(
             select(DailyPickReview.reason_category, func.count(DailyPickReview.id)).group_by(DailyPickReview.reason_category)
         ).all()
-    return {"data": {"reason_distribution": {r[0]: r[1] for r in rows}, "note": "分布供周末权重微调建议参考；权重变更需人工确认"}, "meta": {}}
+        reviews = db.execute(
+            select(DailyPickReview).order_by(DailyPickReview.date.desc()).limit(300)
+        ).scalars().all()
+        sets = db.execute(
+            select(DailyPickSet).order_by(DailyPickSet.date.desc()).limit(90)
+        ).scalars().all()
+
+    # (date, symbol) → 梯队角色（角色存在组合 items JSON 里）
+    role_of: dict[tuple[str, str], str] = {}
+    for s in sets:
+        try:
+            for item in json.loads(s.items):
+                if item.get("echelon_role"):
+                    role_of[(s.date, item["symbol"])] = item["echelon_role"]
+        except Exception:
+            continue
+
+    agg: dict[str, dict] = {}
+    for r in reviews:
+        role = role_of.get((r.date, r.symbol))
+        if role is None:
+            continue  # 该条复盘早于梯队维度上线（8-31 前），角色未知不硬凑
+        a = agg.setdefault(role, {"count": 0, "good": 0, "bad": 0, "flat": 0, "excess_sum": 0.0})
+        a["count"] += 1
+        a[r.verdict if r.verdict in ("good", "bad") else "flat"] += 1
+        a["excess_sum"] += r.excess_pct or 0.0
+    role_performance = []
+    for role, a in sorted(agg.items(), key=lambda kv: -kv[1]["count"]):
+        role_performance.append(
+            {
+                "role": role,
+                "count": a["count"],
+                "good": a["good"],
+                "bad": a["bad"],
+                "flat": a["flat"],
+                "win_rate": round(a["good"] / a["count"] * 100, 1),
+                "avg_excess": round(a["excess_sum"] / a["count"], 2),
+            }
+        )
+    return {
+        "data": {
+            "reason_distribution": {r[0]: r[1] for r in rows},
+            "role_performance": role_performance,
+            "note": "分布与角色胜率供周末权重微调建议参考；权重变更需人工确认",
+        },
+        "meta": {},
+    }

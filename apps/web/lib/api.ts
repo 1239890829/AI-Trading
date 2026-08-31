@@ -516,8 +516,29 @@ export async function generatePickReview(): Promise<{ reviews: PickReviewRow[]; 
   return (await sendJson<{ reviews: PickReviewRow[]; market_pct: number | null }>("/api/picks/review/generate", "POST", {}, 30_000)).data;
 }
 
-export async function getPicksMeta(): Promise<{ reason_distribution: Record<string, number>; note: string }> {
-  return (await getJson<{ reason_distribution: Record<string, number>; note: string }>("/api/picks/meta", 10_000)).data;
+/** 按梯队角色的胜率分布（回答"能不能按题材抓妖"的直接证据） */
+export interface RolePerformance {
+  role: string;
+  count: number;
+  good: number;
+  bad: number;
+  flat: number;
+  win_rate: number;
+  avg_excess: number;
+}
+
+export async function getPicksMeta(): Promise<{
+  reason_distribution: Record<string, number>;
+  role_performance?: RolePerformance[];
+  note: string;
+}> {
+  return (
+    await getJson<{
+      reason_distribution: Record<string, number>;
+      role_performance?: RolePerformance[];
+      note: string;
+    }>("/api/picks/meta", 10_000)
+  ).data;
 }
 
 /** 市场宽度（全市场快照价格法）。 */

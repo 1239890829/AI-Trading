@@ -43,7 +43,10 @@ function PicksInner() {
   const [data, setData] = useState<DailyPicksPayload | null>(null);
   const [history, setHistory] = useState<{ date: string; symbols: (string | null)[]; score_avg: number }[]>([]);
   const [reviews, setReviews] = useState<PickReviewRow[]>([]);
-  const [meta, setMeta] = useState<{ reason_distribution: Record<string, number> } | null>(null);
+  const [meta, setMeta] = useState<{
+    reason_distribution: Record<string, number>;
+    role_performance?: { role: string; count: number; win_rate: number; avg_excess: number }[];
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const showReview = sp.get("review") === "1";
@@ -174,6 +177,37 @@ function PicksInner() {
         {/* 复盘区：走坏原因归类 + 历史组合 */}
         {showReview && (
           <div className="mt-4 space-y-3">
+            {meta && meta.role_performance && meta.role_performance.length > 0 && (
+              <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+                <div className="mb-1 font-medium">
+                  梯队角色胜率（回答「能不能按题材抓妖」的直接证据；样本随交易日积累）
+                </div>
+                <table className="w-full">
+                  <thead>
+                    <tr className="text-zinc-400">
+                      <th className="text-left font-normal">角色</th>
+                      <th className="text-right font-normal">样本</th>
+                      <th className="text-right font-normal">胜率</th>
+                      <th className="text-right font-normal">平均超额</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {meta.role_performance.map((r) => (
+                      <tr key={r.role} className="border-t border-zinc-100 dark:border-zinc-800/60">
+                        <td className="py-1">{r.role}</td>
+                        <td className="text-right font-mono tabular-nums">{r.count}</td>
+                        <td className={`text-right font-mono tabular-nums ${r.win_rate >= 50 ? "text-up" : "text-down"}`}>
+                          {r.win_rate}%
+                        </td>
+                        <td className={`text-right font-mono tabular-nums ${pctColor(r.avg_excess)}`}>
+                          {pctText(r.avg_excess)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
             {meta && Object.keys(meta.reason_distribution).length > 0 && (
               <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
                 <div className="mb-1 font-medium">复盘元结论：走坏原因分布（周末权重微调建议的输入；权重变更需人工确认）</div>

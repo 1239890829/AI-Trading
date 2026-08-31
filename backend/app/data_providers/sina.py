@@ -223,7 +223,8 @@ def parse_money_flow(rows: list[dict], source: str = SOURCE) -> list[dict]:
             "date": str(r.get("opendate") or "")[:10],
             "close": num(r.get("trade")),
             "change_pct": round(num(r.get("changeratio")) * 100, 2) if num(r.get("changeratio")) is not None else None,
-            "turnover_rate": num(r.get("turnover")),
+            # 新浪 turnover 为万分比（实测 002396: 1857.13 ↔ 腾讯 18.57%），换算成百分数对齐
+            "turnover_rate": round(num(r.get("turnover")) / 100, 2) if num(r.get("turnover")) is not None else None,
             "net_main": num(r.get("netamount")),  # 主力净流入（超大+大单，新浪口径）
             "main_ratio": num(r.get("ratioamount")),
             "net_super": num(r.get("r0_net")),
