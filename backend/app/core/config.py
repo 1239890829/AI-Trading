@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     provider_fallbacks: str = "tencent,eastmoney,sina"
     ths_api_key: str = ""  # 同花顺 fuyao 官方 API Key（放 .env，勿提交）
     ths_base_url: str = "https://fuyao.aicubes.cn"
+    # 题材官方成分视为有效的时长（linkage-design §3）；过期后懒同步
+    theme_members_ttl_hours: int = 168
     poll_interval_seconds: float = 5.0
     alert_poll_interval_seconds: float = 5.0
     request_timeout_seconds: float = 5.0

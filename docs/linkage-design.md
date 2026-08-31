@@ -180,7 +180,7 @@ Theme（题材字典）            ThemeMember（归属）              梯队 =
 
 ### 3.5 实施切片
 
-- **T1（中）**：`theme` / `theme_member` / `theme_override` 三表（alembic）+ 同步 job + `GET /api/themes/catalog|members|reconciliation`。验收：题材全集含"粮食概念"，其成分与 THS 官网抽样一致。
+- ~~**T1（中）**：三表 + 同步 + catalog/members/sync/reconciliation 端点~~ ✅ 已完成（2026-08-31）：目录 390 题材含粮食概念 885995.TI（成分 49 只）；reconciliation 真实数据（20260828）抓到 1 条归因冲突（000560 我爱我家←AI应用，不在官方成分）与 8 个目录外事件标签（半年报增长/中报扭亏等）——验证了「归因串混事件标签」需与概念板块区分，后续归一化走 THEME_ALIASES。
 - **T2（小，依赖 T1）**：详情页题材 chips 换官方成分源（L4/L5 联动一起做）。
 - **T3（小，依赖 T1）**：题材 K 线替代东财字段序推断（B3 收尾）。
 

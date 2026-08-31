@@ -20,12 +20,14 @@ from app.api.routes import screener as screener_route
 from app.api.routes import watchlist as watchlist_route
 from app.api.routes import alert as alert_route
 from app.api.routes import risk as risk_route
+from app.api.routes import theme_catalog as theme_catalog_route
 from app.core.config import settings
 from app.core.db import get_engine, get_session_factory
 from app.data_providers import build_provider
 from app.market.alert_engine import AlertEngine
 from app.models.alert import AlertEvent, AlertRule
 from app.models.paper import PaperAccount, PaperOrder, PaperPosition
+from app.models.theme_catalog import Theme, ThemeMember, ThemeOverride
 from app.risk.engine import RiskEngine
 from app.predict.models import (  # noqa: F401  注册预判两张表
     PredictionReportRow,
@@ -42,6 +44,7 @@ from app.review.models import (  # noqa: F401  注册复盘三张表
 from app.review.service import ReviewService, review_scheduler
 from app.services.snapshot_service import MarketSnapshotService
 from app.services.screener_service import ScreenerService
+from app.services.theme_catalog_service import ThemeCatalogService
 from app.services.quote_hub import QuoteHub
 from app.market.sentiment_history import SentimentHistoryRow  # noqa: F401  注册情绪序列表
 from app.websocket.routes import router as ws_router
@@ -53,6 +56,7 @@ _REGISTERED_MODELS = (
     PredictionReportRow, PredictionThemeRow,
     SentimentHistoryRow,
     AlertRule, AlertEvent,
+    Theme, ThemeMember, ThemeOverride,
 )
 
 logging.basicConfig(level=settings.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -125,6 +129,15 @@ async def lifespan(app: FastAPI):
     # --- 风险引擎（Phase 5）：市场状态 + 仓位参数 + 订单预检 ---
     risk_engine = RiskEngine(hub=hub, snapshot_service=snapshot_service, session_factory=get_session_factory())
     app.state.risk_engine = risk_engine
+
+    # --- 题材字典/官方成分（linkage-design §3 T1）：fuyao 官方目录与成分同步 ---
+    try:
+        theme_catalog = ThemeCatalogService(get_session_factory())
+    except RuntimeError as exc:
+        # 未配置 ths key 时降级为 None：题材端点返回 503，其余功能不受影响
+        log.warning("theme catalog disabled: %s", exc)
+        theme_catalog = None
+    app.state.theme_catalog = theme_catalog
 
     # --- 盘后复盘 Agent：服务实例 + 收盘后调度 ---
     review_svc = ReviewService(
@@ -219,6 +232,9 @@ async def lifespan(app: FastAPI):
             await review_task
     with contextlib.suppress(Exception):
         await provider.aclose()
+    if app.state.theme_catalog is not None:
+        with contextlib.suppress(Exception):
+            await app.state.theme_catalog.aclose()
 
 
 app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
@@ -247,4 +263,5 @@ app.include_router(predict_route.router, prefix="/api")
 app.include_router(alert_route.router, prefix="/api")
 app.include_router(risk_route.router, prefix="/api")
 app.include_router(news_route.router, prefix="/api")
+app.include_router(theme_catalog_route.router, prefix="/api")
 app.include_router(ws_router)
