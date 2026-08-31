@@ -8,7 +8,9 @@ import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
 import { workbenchUrl } from "@/lib/routing";
 import type { LongHuRecord } from "@/types/market";
 
-export default function LonghuPage() {
+/** 盘面页 · 龙虎榜 tab（原 /longhu 页迁移，2026-09-01 系统重构）。 */
+
+export function LonghuTab() {
   const [records, setRecords] = useState<LongHuRecord[]>([]);
   const [tradeDate, setTradeDate] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -30,9 +32,9 @@ export default function LonghuPage() {
   }, [load]);
 
   return (
-    <main className="h-full flex flex-col px-4 py-3 max-w-[1600px] mx-auto w-full">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-xl font-semibold">龙虎榜 · {tradeDate || "…"}</h1>
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="mb-4 flex shrink-0 flex-wrap items-center justify-between gap-2">
+        <h2 className="text-base font-semibold">龙虎榜 · {tradeDate || "…"}</h2>
         <div className="flex items-center gap-2 text-xs text-zinc-400">
           <label htmlFor="lh-date">按日期查询（T-1 盘后披露）：</label>
           <input
@@ -45,7 +47,7 @@ export default function LonghuPage() {
       </div>
 
       {error && (
-        <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-600 dark:text-amber-300">
+        <div className="mb-4 shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-600 dark:text-amber-300">
           龙虎榜加载失败：{error}（数据源为东方财富 datacenter 免费接口）
         </div>
       )}
@@ -91,9 +93,9 @@ export default function LonghuPage() {
           </table>
         )}
       </Panel>
-      <p className="mt-4 text-xs text-zinc-400">
-        个股席位明细已可在工作台详情「龙虎榜」页签查看；营业部追踪 / 关系图谱在 Phase 4 深度版提供；上榜原因阈值将按交易所规则配置化。
+      <p className="mt-4 shrink-0 text-xs text-zinc-400">
+        个股席位明细已可在工作台详情「龙虎榜」页签查看；上榜原因阈值将按交易所规则配置化。
       </p>
-    </main>
+    </div>
   );
 }

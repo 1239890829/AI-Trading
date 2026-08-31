@@ -21,7 +21,7 @@ describe("ThemeChipsRow", () => {
     // 同一题材双源各渲染一个 chip（官方成分 + 涨停归因），互不覆盖
     const chips = screen.getAllByText("粮食概念");
     expect(chips.length).toBe(2);
-    expect(chips[0].closest("a")?.getAttribute("href")).toBe("/themes?focus=%E7%B2%AE%E9%A3%9F%E6%A6%82%E5%BF%B5");
+    expect(chips[0].closest("a")?.getAttribute("href")).toBe("/tape?tab=themes&focus=%E7%B2%AE%E9%A3%9F%E6%A6%82%E5%BF%B5");
     expect(screen.getByText("官方成分")).toBeTruthy();
     expect(screen.getByText("涨停归因")).toBeTruthy();
   });

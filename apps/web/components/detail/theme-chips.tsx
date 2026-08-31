@@ -28,7 +28,7 @@ export function ThemeChipsRow({ themes }: { themes: StockThemes | null }) {
       {official.map((t) => (
         <Link
           key={`o-${t.theme_code}`}
-          href={`/themes?focus=${encodeURIComponent(t.theme_name)}`}
+          href={`/tape?tab=themes&focus=${encodeURIComponent(t.theme_name)}`}
           title={`THS 官方概念成分（${t.theme_code}）· 点击查看该题材当下梯队`}
           className="inline-flex items-center rounded border border-sky-500/30 bg-sky-500/5 px-1.5 py-0.5 text-zinc-700 hover:border-sky-500/60 dark:border-sky-400/30 dark:bg-sky-400/5 dark:text-zinc-200"
         >
@@ -41,7 +41,7 @@ export function ThemeChipsRow({ themes }: { themes: StockThemes | null }) {
       {attribution.map((a) => (
         <Link
           key={`a-${a.theme_name}`}
-          href={`/themes?focus=${encodeURIComponent(a.theme_name)}`}
+          href={`/tape?tab=themes&focus=${encodeURIComponent(a.theme_name)}`}
           title={`${a.date} 涨停归因（来自涨停原因原文）· 点击查看该题材当下梯队`}
           className="inline-flex items-center rounded border border-amber-500/30 bg-amber-500/5 px-1.5 py-0.5 text-zinc-700 hover:border-amber-500/60 dark:border-amber-400/30 dark:bg-amber-400/5 dark:text-zinc-200"
         >

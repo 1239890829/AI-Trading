@@ -56,9 +56,9 @@ describe("EventPanel", () => {
     expect(screen.getByText("已落地 · 事实")).toBeTruthy();
     expect(screen.getByText("来源 3/5")).toBeTruthy();
 
-    // 方向 chip：存储芯片 利好 → /themes?focus=存储芯片（L9 联动）
+    // 方向 chip：存储芯片 利好 → /tape?tab=themes&focus=存储芯片（L9 联动）
     const chip = screen.getByText("存储芯片").closest("a");
-    expect(chip?.getAttribute("href")).toBe("/themes?focus=%E5%AD%98%E5%82%A8%E8%8A%AF%E7%89%87");
+    expect(chip?.getAttribute("href")).toBe("/tape?tab=themes&focus=%E5%AD%98%E5%82%A8%E8%8A%AF%E7%89%87");
     expect(screen.getByText("利好")).toBeTruthy();
   });
 

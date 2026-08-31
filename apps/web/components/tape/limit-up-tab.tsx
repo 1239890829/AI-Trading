@@ -10,9 +10,9 @@ import { workbenchUrl } from "@/lib/routing";
 import type { LimitUpRecord } from "@/types/market";
 
 /**
- * 涨停池 —— 题材梯队的证据/审计下钻页。
+ * 盘面页 · 涨停生态 tab（原 /limit-up 页迁移，2026-09-01 系统重构）。
  *
- * 定位（2026-08-29）：题材梯队看板负责"结构"，本页负责"证据"——
+ * 定位：题材梯队 tab 负责"结构"，本 tab 负责"证据"——
  * 每只票的涨停原因原文（ths 官方口径）是题材归属的唯一依据，
  * 归属争议回到这里核对。
  *
@@ -22,7 +22,7 @@ import type { LimitUpRecord } from "@/types/market";
  *   上下文对比是审计页的本分；可切换「只看成员」）
  */
 
-export default function LimitUpPage() {
+export function LimitUpTab() {
   const searchParams = useSearchParams();
   const [records, setRecords] = useState<LimitUpRecord[]>([]);
   const [tradeDate, setTradeDate] = useState("");
@@ -53,10 +53,14 @@ export default function LimitUpPage() {
   }, [load]);
 
   function syncUrl(next: { date?: string; theme?: string; symbols?: string }) {
-    const p = new URLSearchParams();
+    // 在现有 URL 上增删参数（保留 tab= 等盘面页参数）
+    const p = new URLSearchParams(window.location.search);
     if (next.date) p.set("date", next.date);
+    else p.delete("date");
     if (next.theme) p.set("theme", next.theme);
+    else p.delete("theme");
     if (next.symbols) p.set("symbols", next.symbols);
+    else p.delete("symbols");
     const qs = p.toString();
     window.history.replaceState({}, "", qs ? `?${qs}` : window.location.pathname);
   }
@@ -81,9 +85,9 @@ export default function LimitUpPage() {
   const shown = onlyMembers && memberSymbols.size > 0 ? membersInPool : records;
 
   return (
-    <main className="h-full flex flex-col px-4 py-3 max-w-[1600px] mx-auto w-full">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-xl font-semibold">涨停池 · {tradeDate || "…"}</h1>
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2">
+        <h2 className="text-base font-semibold">涨停池 · {tradeDate || "…"}</h2>
         <div className="flex items-center gap-2 text-xs text-zinc-400">
           <label htmlFor="zt-date">按日期查询：</label>
           <input
@@ -98,7 +102,7 @@ export default function LimitUpPage() {
 
       {/* ── 题材联动横幅：来自题材卡片「涨停池↗」 ───────────────── */}
       {theme && (
-        <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm">
+        <div className="mb-3 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm">
           <span className="text-zinc-700 dark:text-zinc-200">
             题材 <span className="font-semibold">{theme}</span> 梯队成员：
             <span className="font-mono">
@@ -116,7 +120,7 @@ export default function LimitUpPage() {
             只看成员
           </label>
           <div className="flex-1" />
-          <Link href="/themes" className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200">
+          <Link href="/tape?tab=themes" className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200">
             返回题材梯队 ↩
           </Link>
           <button
@@ -129,7 +133,7 @@ export default function LimitUpPage() {
       )}
 
       {error && (
-        <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-600 dark:text-amber-300">
+        <div className="mb-4 shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-600 dark:text-amber-300">
           涨停池加载失败：{error}（数据源为东方财富 push2ex 免费接口）
         </div>
       )}
@@ -195,9 +199,9 @@ export default function LimitUpPage() {
           </table>
         )}
       </Panel>
-      <p className="mt-4 text-xs text-zinc-400">
+      <p className="mt-4 shrink-0 text-xs text-zinc-400">
         涨停原因已接入（同花顺官方口径），是题材梯队归属的证据来源；次日表现统计/题材标签随历史数据积累在后续版本提供。
       </p>
-    </main>
+    </div>
   );
 }

@@ -11,14 +11,17 @@ import type { ThemeStrengthRow, ThemesHotPayload } from "@/lib/api";
 import type { ThemeBoardPayload } from "@/types/market";
 
 /**
- * 强势题材梯队看板。
+ * 盘面页 · 题材梯队 tab（原 /themes 页迁移，2026-09-01 系统重构）。
  *
- * 与 /limit-up 的区别：涨停池是平铺列表，这里以题材为容器重组，
+ * 与涨停生态 tab 的区别：涨停池是平铺列表，这里以题材为容器重组，
  * 回答三个问题——题材是否成建制、梯队是否健康、资金是否持续。
  *
  * 滚动约定（2026-08-29 修复）：全局 body 锁屏（h-screen overflow-hidden），
- * 每页自管滚动。本页此前根容器缺 h-full 且无滚动容器，内容超出视口后不可达。
- * 现在结构为：固定头部 + 单一大滚动容器（flex-1 min-h-0 overflow-y-auto）承载全部卡片。
+ * 盘面页自管滚动。本 tab 结构为：固定头部 + 单一大滚动容器承载全部卡片。
+ *
+ * URL 同步注意：盘面页的 tab 参数在同一个 URL 上，updateUrl 必须在
+ * window.location.search 基础上增删（不能新建空 URLSearchParams），
+ * 否则切 tab/筛选会把 ?tab=themes 冲掉。
  */
 
 type SortKey = "strength" | "boards" | "count";
@@ -42,7 +45,7 @@ const COUNT_FILTERS = [
 /** 强弱分级图例：与后端 strength_tier 的判定规则一一对应 */
 const TIER_LEGEND = "领涨 = 成建制·发酵/高潮·封板牢　|　强势 = 发酵/高潮或成建制高位分歧　|　活跃 = 有连板梯队　|　观察 = 暂无梯队结构";
 
-export default function ThemesPage() {
+export function ThemesTab() {
   const searchParams = useSearchParams();
   const [data, setData] = useState<ThemeBoardPayload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -61,7 +64,7 @@ export default function ThemesPage() {
   // 题材人气（B1 热股榜）：best-effort 增强，拉取失败静默降级（看板主体不依赖它）
   const [hot, setHot] = useState<ThemesHotPayload | null>(null);
   const [strength, setStrength] = useState<Map<string, ThemeStrengthRow> | null>(null);
-  // 聚焦题材（L4 联动：详情页题材 chip → /themes?focus=名称）
+  // 聚焦题材（L4 联动：详情页题材 chip → /tape?tab=themes&focus=名称）
   const [focus, setFocus] = useState(searchParams.get("focus") ?? "");
 
   const load = useCallback(
@@ -89,7 +92,7 @@ export default function ThemesPage() {
 
   useEffect(() => {
     // 首屏必须带上 URL 里的 date——此前裸 load() 只用默认日期，
-    // /themes?date=2026-08-28 打开时实际取的是"今天"（盘前为降级数据）。
+    // ?date=2026-08-28 打开时实际取的是"今天"（盘前为降级数据）。
     void load(date || undefined);
     // 人气榜独立拉取（实时口径，不看 date 参数——历史日期没有人气数据）
     getThemesHot()
@@ -113,14 +116,18 @@ export default function ThemesPage() {
     mb = minBoards,
     mc = minCount,
   ) {
-    const params = new URLSearchParams();
-    if (d) params.set("date", d);
-    if (s !== "strength") params.set("sort", s);
-    if (mb) params.set("min_boards", String(mb));
-    if (mc !== 2) params.set("min_count", String(mc));
+    // 在现有 URL 上增删参数（保留 tab= 等盘面页参数）
+    const params = new URLSearchParams(window.location.search);
+    const setOrDel = (k: string, v?: string) => {
+      if (v) params.set(k, v);
+      else params.delete(k);
+    };
+    setOrDel("date", d);
+    setOrDel("sort", s !== "strength" ? s : undefined);
+    setOrDel("min_boards", mb ? String(mb) : undefined);
+    setOrDel("min_count", mc !== 2 ? String(mc) : undefined);
     const qs = params.toString();
-    const url = qs ? `?${qs}` : window.location.pathname;
-    window.history.replaceState({}, "", url);
+    window.history.replaceState({}, "", qs ? `?${qs}` : window.location.pathname);
   }
 
   const onSort = (s: SortKey) => {
@@ -160,7 +167,7 @@ export default function ThemesPage() {
 
   function clearFocus() {
     setFocus("");
-    // 从 URL 移除 focus（沿用本页 replaceState 口径）
+    // 从 URL 移除 focus（保留 tab 等其余参数）
     const params = new URLSearchParams(window.location.search);
     params.delete("focus");
     const qs = params.toString();
@@ -168,22 +175,17 @@ export default function ThemesPage() {
   }
 
   return (
-    <main className="mx-auto flex h-full w-full max-w-[1600px] flex-col px-4 py-3">
-      {/* ── 固定头部 ──────────────────────────────────────────── */}
-      <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-            强势题材梯队看板
-          </h1>
-          <p className="mt-0.5 text-xs text-zinc-400">
-            {data ? `${data.trade_date}` : "…"}
-            {data?.prev_trade_date && ` · 对照 ${data.prev_trade_date}`}
-            {data &&
-              ` · 涨停 ${data.summary.limit_up_total} 只 / 识别题材 ${data.summary.theme_count} 个（当前展示 ≥${minCount} 家的 ${data.themes.length} 张卡片）/ 最高 ${data.summary.market_max_boards} 板`}
-            {data?.summary.market_break_rate != null &&
-              ` / 全市场炸板率 ${(data.summary.market_break_rate * 100).toFixed(1)}%`}
-          </p>
-        </div>
+    <div className="flex h-full min-h-0 flex-col">
+      {/* ── 固定头部：摘要 + 筛选 ────────────────────────────── */}
+      <div className="mb-3 flex shrink-0 flex-wrap items-end justify-between gap-3">
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+          {data ? `${data.trade_date}` : "…"}
+          {data?.prev_trade_date && ` · 对照 ${data.prev_trade_date}`}
+          {data &&
+            ` · 涨停 ${data.summary.limit_up_total} 只 / 识别题材 ${data.summary.theme_count} 个（当前展示 ≥${minCount} 家的 ${data.themes.length} 张卡片）/ 最高 ${data.summary.market_max_boards} 板`}
+          {data?.summary.market_break_rate != null &&
+            ` / 全市场炸板率 ${(data.summary.market_break_rate * 100).toFixed(1)}%`}
+        </p>
 
         <div className="flex flex-wrap items-center gap-3 text-xs">
           <label className="flex items-center gap-1.5">
@@ -249,7 +251,7 @@ export default function ThemesPage() {
         </div>
       </div>
 
-      <p className="mb-3 text-[11px] text-zinc-400" title="分级规则由后端 strength_tier 规则化判定，鼠标悬停卡片分级徽标可看判定依据">
+      <p className="mb-3 shrink-0 text-[11px] text-zinc-400" title="分级规则由后端 strength_tier 规则化判定，鼠标悬停卡片分级徽标可看判定依据">
         分级：{TIER_LEGEND}
       </p>
 
@@ -281,7 +283,7 @@ export default function ThemesPage() {
       )}
 
       {error && (
-        <div className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+        <div className="mb-3 shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
           题材看板加载失败：{error}
         </div>
       )}
@@ -308,7 +310,7 @@ export default function ThemesPage() {
 
       {data && data.themes.length > 0 && visibleThemes.length === 0 && (
         <p className="py-16 text-center text-sm text-zinc-400">
-          题材「{focus}」今日没有梯队卡片——可能今日无涨停、未成建制，或归属名称与看板口径不一致（可在涨停池核对该股涨停原因原文）
+          题材「{focus}」今日没有梯队卡片——可能今日无涨停、未成建制，或归属名称与看板口径不一致（可在涨停生态 tab 核对该股涨停原因原文）
         </p>
       )}
 
@@ -389,6 +391,6 @@ export default function ThemesPage() {
           梯队归属按当日涨停联动唯一判定（连板密度优先），一只票只出现在一张卡片。
         </p>
       </div>
-    </main>
+    </div>
   );
 }

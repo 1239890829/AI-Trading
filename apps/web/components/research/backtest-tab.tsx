@@ -17,7 +17,8 @@ import {
   type StrategyInfo,
 } from "@/lib/api";
 
-/** 日线策略回测页（Phase 6 后半）：TDX QFQ 日K + 代码级防泄露引擎。
+/** 研究页 · 回测 tab（原 /backtest 页迁移，2026-09-01 系统重构）。
+ * 日线策略回测（Phase 6 后半）：TDX QFQ 日K + 代码级防泄露引擎。
  * 撮合口径与全部禁令见 docs/backtest-rules.md；结果为统计事实，不构成买卖建议。 */
 
 function pct(v: number): string {
@@ -30,7 +31,7 @@ function pctCls(v: number): string {
   return "text-zinc-400";
 }
 
-export default function BacktestPage() {
+export function BacktestTab() {
   const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
   const [mandates, setMandates] = useState<BacktestMandate[]>([]);
   const [mandate, setMandate] = useState("");

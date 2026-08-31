@@ -7,9 +7,11 @@ import { getBoards, type BoardRow } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
 import { workbenchUrl } from "@/lib/routing";
 
+/** 盘面页 · 板块排行 tab（原 /boards 页迁移，2026-09-01 系统重构）。 */
+
 const TYPE_LABEL: Record<string, string> = { hangye: "行业板块", concept: "概念板块" };
 
-export default function BoardsPage() {
+export function BoardsTab() {
   const [type, setType] = useState<"hangye" | "concept">("hangye");
   const [rows, setRows] = useState<BoardRow[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -32,10 +34,10 @@ export default function BoardsPage() {
   }, [type, load]);
 
   return (
-    <main className="h-full flex flex-col px-4 py-3 max-w-[1600px] mx-auto w-full gap-3">
+    <div className="flex h-full min-h-0 flex-col gap-3">
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <h1 className="text-lg font-semibold">板块排行</h1>
+          <h2 className="text-base font-semibold">板块排行</h2>
           {(["hangye", "concept"] as const).map((t) => (
             <button
               key={t}
@@ -106,8 +108,8 @@ export default function BoardsPage() {
       </Panel>
 
       <p className="shrink-0 text-xs text-zinc-500">
-        题材事件树/生命周期随新闻模块联动（Phase 4+）；数据源：新浪闪电排行（{TYPE_LABEL[type]}，一次请求全量），经 QuoteHub 链路。
+        数据源：新浪闪电排行（{TYPE_LABEL[type]}，一次请求全量），经 QuoteHub 链路；题材事件树/生命周期见题材梯队 tab。
       </p>
-    </main>
+    </div>
   );
 }

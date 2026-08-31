@@ -44,7 +44,7 @@ function DirectionChip({ d }: { d: EventDirectionRow }) {
   const tip = [d.chain, d.basis].filter(Boolean).join(" ｜ ");
   return (
     <Link
-      href={`/themes?focus=${encodeURIComponent(d.target)}`}
+      href={`/tape?tab=themes&focus=${encodeURIComponent(d.target)}`}
       title={tip || `关联题材 ${d.target}`}
       className="inline-flex items-center gap-1 rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200"
     >

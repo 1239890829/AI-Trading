@@ -20,6 +20,8 @@ import {
 } from "@/lib/api";
 import { pctColor } from "@/lib/format";
 
+/** 研究页 · 预警 tab（原 /alerts 页迁移，2026-09-01 系统重构）。 */
+
 const CONDITION_LABEL: Record<AlertConditionType, string> = {
   price_above: "现价 ≥",
   price_below: "现价 ≤",
@@ -33,7 +35,7 @@ const SCOPE_LABEL: Record<AlertScope, string> = {
   all: "全市场（有行情即检）",
 };
 
-export default function AlertsPage() {
+export function AlertsTab() {
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [events, setEvents] = useState<AlertEvent[]>([]);
   const [channels, setChannels] = useState<string[]>([]);
@@ -132,16 +134,16 @@ export default function AlertsPage() {
   const unresolved = useMemo(() => events.filter((e) => !e.acknowledged).length, [events]);
 
   return (
-    <main className="mx-auto flex h-full w-full max-w-[1600px] flex-col gap-3 px-4 py-3">
+    <div className="flex h-full min-h-0 flex-col gap-3">
       <div className="flex shrink-0 items-center justify-between">
-        <h1 className="text-lg font-semibold">预警通知</h1>
+        <h2 className="text-base font-semibold">预警通知</h2>
         <span className="text-xs text-zinc-400">
           {unresolved > 0 ? <span className="mr-2 text-up">● {unresolved} 条未确认</span> : null}
           自动 10 秒刷新
         </span>
       </div>
 
-      {error && <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-600">{error}</div>}
+      {error && <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-600">{error}</div>}
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[360px,minmax(0,1fr)]">
         <Panel title="新建规则" className="flex flex-col gap-3 overflow-auto">
@@ -349,6 +351,6 @@ export default function AlertsPage() {
           </Panel>
         </div>
       </div>
-    </main>
+    </div>
   );
 }

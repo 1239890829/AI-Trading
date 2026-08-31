@@ -11,8 +11,13 @@ import {
 } from "@/lib/api";
 import { fmtAmount } from "@/lib/format";
 
-/** A 股云图：行业分组 treemap。面积=流通市值，颜色=当日涨跌幅（红涨绿跌）。
- * squarified 算法自研（Bruls et al.），零依赖；组点击下钻、范围切换、hover 详情。 */
+/**
+ * 市场页 · 云图 tab（原 /heatmap 页迁移，2026-09-01 系统重构）。
+ *
+ * A 股云图：行业分组 treemap。面积=流通市值，颜色=当日涨跌幅（红涨绿跌）。
+ * squarified 算法自研（Bruls et al.），零依赖；组点击下钻、范围切换、hover 详情。
+ * 无独立数据源（复用市场快照），故降级为市场页 tab 而非一级导航。
+ */
 
 interface SqItem {
   key: string;
@@ -100,7 +105,7 @@ function pctText(pct: number | null | undefined): string {
   return `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`;
 }
 
-export default function HeatmapPage() {
+export function HeatmapTab() {
   const [data, setData] = useState<HeatmapPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState("");

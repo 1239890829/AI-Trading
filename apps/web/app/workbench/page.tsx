@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Panel } from "@/components/panel";
@@ -11,6 +10,7 @@ import { QualityBadge } from "@/components/quality-badge";
 import { Sparkline } from "@/components/sparkline";
 import { useQuoteStream, StreamStatus } from "@/hooks/use-quote-stream";
 import {
+  addToWatchlist,
   getMarketOverview,
   getPaperPositions,
   getQuotes,
@@ -19,6 +19,7 @@ import {
   getSparklines,
   getWatchlist,
   removeFromWatchlist,
+  updateWatchlistGroup,
   type PaperPositionInfo,
   type RiskState,
   type SparklinePayload,
@@ -150,6 +151,8 @@ function WorkbenchInner() {
 
   // 分组清单由 groupMap 派生（旧代码是独立的 groups 状态，从未被赋值，chips 永远只有「全部」）
   const groups = useMemo(() => Array.from(new Set(Object.values(groupMap))).sort(), [groupMap]);
+  // 管理模式下分组下拉的可选项（含「默认」兜底）
+  const allGroups = useMemo(() => Array.from(new Set(["默认", ...groups])), [groups]);
   const watchQuotes: Quote[] = symbols
     .filter((s) => activeGroup === "全部" || groupMap[s] === activeGroup)
     .map((s) => merged[s])
@@ -163,6 +166,36 @@ function WorkbenchInner() {
     try {
       await removeFromWatchlist(symbol);
       setSymbols((prev) => prev.filter((s) => s !== symbol));
+    } catch {}
+  }
+
+  // ── 自选管理模式（2026-09-01 自选页并入工作台）──────────────
+  // 原 /watchlist 页仅剩两项独有能力：手动输代码添加、修改分组——
+  // 收进这里后独立页面删除（docs/architecture-redesign.md §一.1.2）。
+  const [managing, setManaging] = useState(false);
+  const [newSymbol, setNewSymbol] = useState("");
+  const [addError, setAddError] = useState<string | null>(null);
+
+  async function addWatch() {
+    const s = newSymbol.trim();
+    if (!/^\d{6}$/.test(s)) {
+      setAddError("请输入 6 位数字代码");
+      return;
+    }
+    try {
+      await addToWatchlist(s);
+      setNewSymbol("");
+      setAddError(null);
+      setSymbols((prev) => (prev.includes(s) ? prev : [...prev, s]));
+    } catch {
+      setAddError("添加失败，请确认后端已启动");
+    }
+  }
+
+  async function changeGroup(symbol: string, group: string) {
+    try {
+      await updateWatchlistGroup(symbol, group);
+      setGroupMap((prev) => ({ ...prev, [symbol]: group }));
     } catch {}
   }
 
@@ -257,9 +290,36 @@ function WorkbenchInner() {
         <Panel
           title={activeGroup === "持仓" ? `真实持仓 (${holdingQuotes.length})` : "自选股"}
           extra={
-            <Link href="/watchlist" className="text-sky-400 hover:underline">
-              管理
-            </Link>
+            <div className="flex items-center gap-1.5">
+              {managing && activeGroup !== "持仓" && (
+                <>
+                  <input
+                    value={newSymbol}
+                    onChange={(e) => setNewSymbol(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void addWatch();
+                    }}
+                    placeholder="代码添加"
+                    maxLength={6}
+                    aria-label="输入 6 位代码添加自选"
+                    className="w-20 rounded border border-zinc-200 bg-transparent px-1.5 py-0.5 font-mono outline-none focus:border-up/60 dark:border-zinc-700"
+                  />
+                  <button onClick={() => void addWatch()} className="text-up hover:underline">
+                    添加
+                  </button>
+                  {addError && <span className="text-red-400">{addError}</span>}
+                </>
+              )}
+              <button
+                onClick={() => {
+                  setManaging((v) => !v);
+                  setAddError(null);
+                }}
+                className="text-sky-400 hover:underline"
+              >
+                {managing ? "完成" : "管理"}
+              </button>
+            </div>
           }
           className="min-h-0 flex-1 overflow-hidden"
         >
@@ -298,7 +358,21 @@ function WorkbenchInner() {
                       <div>{q.name ?? "--"}</div>
                     </td>
                     <td className="hidden px-1 py-2 sm:table-cell">
-                      <Sparkline closes={sparks?.items.find((i) => i.symbol === q.symbol)?.closes ?? []} />
+                      {managing && activeGroup !== "持仓" ? (
+                        <select
+                          value={groupMap[q.symbol] ?? "默认"}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => void changeGroup(q.symbol, e.target.value)}
+                          className="rounded border border-zinc-200 bg-transparent px-1 py-0.5 text-xs dark:border-zinc-700"
+                          aria-label={`修改 ${q.symbol} 分组`}
+                        >
+                          {allGroups.map((g) => (
+                            <option key={g} value={g}>{g}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <Sparkline closes={sparks?.items.find((i) => i.symbol === q.symbol)?.closes ?? []} />
+                      )}
                     </td>
                     <td className="px-2 py-2 text-right font-mono tabular-nums"><PriceFlash value={q.price}>{fmt(q.price)}</PriceFlash></td>
                     <td className={`px-2 py-2 text-right font-mono text-xs tabular-nums ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</td>

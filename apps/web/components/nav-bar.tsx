@@ -6,18 +6,15 @@ import { SearchBox } from "@/components/search-box";
 
 const LINKS = [
   { href: "/workbench", label: "工作台" },
-  { href: "/picks", label: "每日精选" },
+  { href: "/tape", label: "盘面" },
   { href: "/market", label: "市场" },
-  { href: "/themes", label: "题材梯队" },
-  { href: "/limit-up", label: "涨停池" },
-  { href: "/boards", label: "板块" },
-  { href: "/longhu", label: "龙虎榜" },
-  { href: "/watchlist", label: "自选" },
-  { href: "/backtest", label: "回测" },
-  { href: "/alerts", label: "预警" },
-  // 已冻结/移除（2026-08-31 系统盘点，见 docs/architecture-redesign.md）：
+  { href: "/picks", label: "每日精选" },
+  { href: "/research", label: "研究" },
+  // 2026-09-01 系统重构（docs/architecture-redesign.md），13 页 → 5 导航：
+  // /themes /limit-up /boards /longhu → 盘面页四 tab（/tape?tab=…）
+  // /heatmap → 市场页云图 tab；/watchlist → 工作台管理模式
+  // /backtest /alerts → 研究页（/research?tab=…）；旧路由经 next.config 302
   // /screener（与每日精选定位冲突，页面保留、导航移除）
-  // /heatmap（无独立数据源，待并入市场页 tab）
 ];
 
 export function NavBar() {
