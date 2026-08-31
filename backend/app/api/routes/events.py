@@ -262,6 +262,17 @@ async def collect_news_events(app_state) -> dict:
             await svc.sync_catalog()
         except Exception as exc:  # noqa: BLE001
             log.warning("events collect: 目录同步失败 %s", exc)
+    # 成分保鲜调度（2026-09-01 校验规则）：成分 TTL 到期的题材每轮补 40 个——
+    # 此前成分只在手工 POST /api/themes/sync 时补，且 sync_catalog 会把
+    # theme.synced_at 刷新导致成分永远不判过期，390 题材 352 个成分空缺。
+    # 30min × 40 个 ⇒ 每天至少全量轮一遍，题材—个股归属不再漂移。
+    if svc is not None:
+        try:
+            stale = await svc.sync_stale_members(max_themes=40)
+            if stale:
+                log.info("events collect: 补齐 %d 个题材的官方成分", len(stale))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("events collect: 成分补齐失败 %s", exc)
     theme_names = _theme_names(app_state)
     hub = app_state.hub
     repo = app_state.watchlist_repo

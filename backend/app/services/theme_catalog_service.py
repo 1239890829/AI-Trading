@@ -276,15 +276,22 @@ class ThemeCatalogService:
     # -- sync ------------------------------------------------------------
 
     async def sync_catalog(self) -> int:
-        """全量 upsert 题材目录；返回目录条数。"""
+        """全量 upsert 题材目录；返回目录条数。
+
+        ⚠️ 已有题材**名称未变化时不刷新 synced_at**：stale_codes 用 theme.synced_at
+        判断成分是否过期，目录刷新若无条件更新时间戳，会把成分 TTL 判断永远"顶掉"
+        ——2026-09-01 审计实锤：390 题材中 352 个（90%）成分从未同步、个股题材归属
+        大面积缺失（永鼎股份查不到官方已标注的「光纤概念」）。
+        """
         items = await self.fetch_catalog()
         with self._sf() as db:
             existing = {c for (c,) in db.execute(select(Theme.code)).all()}
             for it in items:
                 if it["code"] in existing:
                     row = db.execute(select(Theme).where(Theme.code == it["code"])).scalar_one()
-                    row.name = it["name"]
-                    row.synced_at = utcnow()
+                    if row.name != it["name"]:
+                        row.name = it["name"]
+                        row.synced_at = utcnow()
                 else:
                     db.add(Theme(code=it["code"], name=it["name"], source="ths_official"))
             db.commit()
@@ -334,14 +341,27 @@ class ThemeCatalogService:
         codes = self.stale_codes(max_themes)
         sem = asyncio.Semaphore(concurrency)
 
+        empty_after: list[str] = []
+
         async def _one(code: str) -> None:
             async with sem:
                 try:
-                    await self.sync_members(code)
+                    n = await self.sync_members(code)
+                    if n == 0:
+                        empty_after.append(code)
                 except Exception as exc:  # noqa: BLE001 单个题材失败不拖垮整批
                     log.warning("theme members sync failed %s: %s", code, exc)
+                    empty_after.append(code)
 
         await asyncio.gather(*(_one(c) for c in codes))
+        # 空题材告警（校验规则）：成分为空 → 该题材下所有个股归属整体缺失。
+        # 2026-09-01 审计实锤：352/390 题材成分从未同步（永鼎股份查不到官方已标的
+        # 「光纤概念」）。同步后仍为空 = 官方题材确无成分（罕见）或拉取失败（重试）。
+        if empty_after:
+            log.warning(
+                "theme members sync: %d/%d 个题材成分为空（官方无成分或拉取失败，下轮重试）: %s",
+                len(empty_after), len(codes), empty_after[:10],
+            )
         return codes
 
     def stale_codes(self, max_themes: int = 20) -> list[str]:

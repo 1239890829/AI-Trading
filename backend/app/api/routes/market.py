@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dt_time, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -427,10 +427,16 @@ async def _default_trade_date_async(hub) -> date:
                 except Exception:
                     continue
     if days:
-        today = date.today().strftime("%Y%m%d")
-        past = [d for d in days if d <= today]
+        now = datetime.now()
+        today_str = now.strftime("%Y%m%d")
+        past = [d for d in days if d <= today_str]
         if past:
             latest = past[-1]
+            # 盘前（<09:15）当日涨停池/龙虎榜尚未形成，数据源返回的其实是
+            # 最近收盘的池——日期必须一并回溯，否则"内容 8-31、日期标 9-1"
+            # （2026-09-01 00:24 实测：86 只池内容为 8-31 收盘、trade_date 标 09-01）。
+            if latest == now.date().strftime("%Y%m%d") and now.time().replace(tzinfo=None) < dt_time(9, 15) and len(past) >= 2:
+                latest = past[-2]
             return date(int(latest[:4]), int(latest[4:6]), int(latest[6:]))
     d = date.today()
     return {5: d - timedelta(days=1), 6: d - timedelta(days=2)}.get(d.weekday(), d)
