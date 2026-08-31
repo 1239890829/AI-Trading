@@ -6,17 +6,18 @@ import { SearchBox } from "@/components/search-box";
 
 const LINKS = [
   { href: "/workbench", label: "工作台" },
-  { href: "/market", label: "市场" },
-  { href: "/watchlist", label: "自选" },
-  { href: "/boards", label: "板块" },
-  { href: "/heatmap", label: "云图" },
-  { href: "/limit-up", label: "涨停池" },
-  { href: "/themes", label: "题材梯队" },
-  { href: "/screener", label: "选股器" },
   { href: "/picks", label: "每日精选" },
+  { href: "/market", label: "市场" },
+  { href: "/themes", label: "题材梯队" },
+  { href: "/limit-up", label: "涨停池" },
+  { href: "/boards", label: "板块" },
   { href: "/longhu", label: "龙虎榜" },
+  { href: "/watchlist", label: "自选" },
   { href: "/backtest", label: "回测" },
   { href: "/alerts", label: "预警" },
+  // 已冻结/移除（2026-08-31 系统盘点，见 docs/architecture-redesign.md）：
+  // /screener（与每日精选定位冲突，页面保留、导航移除）
+  // /heatmap（无独立数据源，待并入市场页 tab）
 ];
 
 export function NavBar() {
