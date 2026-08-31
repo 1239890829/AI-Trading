@@ -87,11 +87,10 @@ function WorkbenchInner() {
   const loadBase = useCallback(async () => {
     try {
       // 原 groups 裸 fetch 从未被消费（gs 解构后无人用）——随收口一并删除
-      const [wl, overview, positions, riskState, groupNames] = await Promise.all([
+      const [wl, overview, positions, groupNames] = await Promise.all([
         getWatchlist(),
         getMarketOverview(),
         getPaperPositions().catch(() => []),
-        getRiskState().catch(() => null),
         getWatchlistGroups().catch(() => [] as string[]),
       ]);
       setGroupMap(Object.fromEntries(wl.map((i) => [i.symbol, i.group_name ?? "默认"])));
@@ -101,12 +100,27 @@ function WorkbenchInner() {
       setIndices(overview.indices);
       setTotalAmount(overview.total_amount);
       setPositions(positions);
-      setRisk(riskState);
       setError(null);
       setUpdatedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
     } catch {
       setError("无法连接后端行情服务。请先启动：cd backend && uvicorn app.main:app --reload --port 8000");
     }
+  }, []);
+
+  // 风控市场状态（评审 O2）：七档状态变化以日为尺度，独立 30s 轮询——
+  // 混在 loadBase 10s 里纯属浪费（state_classifier 本身走 60s 快照聚合）。
+  useEffect(() => {
+    let alive = true;
+    const loadRisk = async () => {
+      const r = await getRiskState().catch(() => null);
+      if (alive) setRisk(r);
+    };
+    void loadRisk();
+    const t = setInterval(loadRisk, 30_000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
   }, []);
 
   useEffect(() => {

@@ -62,6 +62,24 @@ import { RealPositionPanel } from "@/components/detail/real-position-panel";
 type ChartTab = "kline" | "minute" | "flow";
 type RightTab = "book" | "trades" | "trade" | "real" | "profile" | "info" | "speed" | "boards";
 
+/**
+ * 次屏数据调度（评审 O1，2026-09-01）：切股首屏只需 K 线 + 盘口（各自默认 tab），
+ * 其余数据推到浏览器空闲时拉取——首屏不再被最慢的财务/新闻请求拖住（东财慢时
+ * 2-4s 白屏）。requestIdleCallback 不可用时退化为 900ms setTimeout。
+ */
+function scheduleIdle(fn: () => void): () => void {
+  const w = window as Window & {
+    requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+    cancelIdleCallback?: (id: number) => void;
+  };
+  if (typeof w.requestIdleCallback === "function") {
+    const id = w.requestIdleCallback(fn, { timeout: 2500 });
+    return () => w.cancelIdleCallback?.(id);
+  }
+  const t = window.setTimeout(fn, 900);
+  return () => window.clearTimeout(t);
+}
+
 /** 个股详情终端 v3（工作台右栏 / 个股页共用）：
  * 顶部紧凑行情条 → 中部 [左：图表区(K线/分时/资金图) | 右：盘口↔逐笔] → 右列：盘口↔逐笔 + 财务摘要。龙虎榜见独立页面。
  * K线带龙虎榜日标记与金叉死叉技术信号；滚动只存在于表格/列表容器内部。 */
@@ -160,7 +178,11 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   }, [symbol]);
 
   useEffect(() => {
-    if (!symbol) return;
+    // 模拟账户数据只服务「模拟交易」页签（O2）：不在该页签时不轮询不拉取——
+    // 切入页签时 effect 重跑立即 load 一次；挂单成交等状态变化由
+    // paper-changed 事件兜底（下单/撤单/重置都会派发）。
+    // 轮询 10s → 30s（费率预估与持仓盈亏对实时性不敏感，原 10s 属过密）。
+    if (!symbol || rightTab !== "trade") return;
     let alive = true;
     setFills([]); // 成交记录按 symbol 过滤，切股先清空防残留
     const loadPaper = async () => {
@@ -178,14 +200,14 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
       } catch {}
     };
     void loadPaper();
-    const t = setInterval(loadPaper, 10000);
+    const t = setInterval(loadPaper, 30000);
     const offPaper = onAppEvent(APP_EVENTS.paperChanged, loadPaper);
     return () => {
       alive = false;
       clearInterval(t);
       offPaper();
     };
-  }, [symbol]);
+  }, [symbol, rightTab]);
 
   useEffect(() => {
     let alive = true;
@@ -196,41 +218,9 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     };
   }, [symbol]);
 
-  // 大盘叠加（分时图 P1）：上证分时 + 昨收，归一化成 % 曲线叠加在左轴。
-  // 指数不随个股切换变化，只在挂载时拉一次（分时当日不变）。
-  // 指数详情页不叠加（自己叠自己，紫虚线与红线重合纯噪音）。
+  // 大盘叠加（分时图 P1）：上证分时 + 昨收。当日不变，随切股在次屏 idle 拉取
+  // （评审 O1：不占首屏关键路径；指数详情页不叠加——自己叠自己纯噪音）。
   const [indexOverlay, setIndexOverlay] = useState<{ points: MinutePoint[]; prevClose: number } | null>(null);
-  useEffect(() => {
-    if (!symbol || isIndex) return;
-    let alive = true;
-    (async () => {
-      try {
-        const [idxPoints, overview] = await Promise.all([
-          getMinuteLine("sh000001").catch(() => [] as MinutePoint[]),
-          getMarketOverview().catch(() => null),
-        ]);
-        const sh = overview?.indices.find((i) => i.symbol === "000001");
-        if (alive && idxPoints.length > 0 && sh?.prev_close) {
-          setIndexOverlay({ points: idxPoints, prevClose: sh.prev_close });
-        }
-      } catch {}
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [symbol, isIndex]);
-
-  // 集合竞价（09:25 终态）：分时图竞价点 + 角标。随 symbol 拉一次（当日不变）。
-  useEffect(() => {
-    if (!symbol) return;
-    let alive = true;
-    getAuction(symbol)
-      .then((a) => alive && setAuction(a))
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, [symbol]);
 
   // 题材归属（L4 联动）：官方成分 + 当日涨停归因，chip 点击跳题材看板聚焦。
   // 独立请求 + 静默失败：归属缺失只影响这一行，不拖垮详情页。
@@ -247,60 +237,77 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     };
   }, [symbol]);
 
+  // ---- 切股数据分级加载（2026-09-01 评审 O1）----
+  // 此前切股一次并发 ~14 个请求（Promise.all 8 个 + 竞价/题材/大盘叠加/paper 等），
+  // 首屏 K 线被最慢的财务/新闻拖住（东财慢时 2-4s 白屏）。按可见性分级：
+  //   首屏（立即）：K 线（左图默认 tab）+ 五档盘口（右列默认 tab）+ 题材 chips（首屏行）
+  //   次屏（idle ≤2.5s）：分时/逐笔/资金流/财务/公司/新闻/竞价/大盘叠加——
+  //     切到对应 tab 时通常已就绪；不在首屏路径上，晚到不阻塞交互。
+  // key={activeSymbol} 重挂载下 symbol 在实例内不变，原"切股清空"是死代码；
+  // 各回调的 alive 检查负责防串股（切股后晚到的旧股结果直接丢弃）。
   useEffect(() => {
     if (!symbol) return;
     let alive = true;
-    // 切股即清场：行情与资料类状态一并归零。旧实现只清了图表类，
-    // quote/company/anns/news 会残留上一只股票的数据——
-    // 在新 WS 快照/新请求返回前，界面渲染的是旧股票的价格与资料。
-    setQuote(null);
-    setCompany(null);
-    setAnns(null);
-    setNews(null);
-    setError(null);
-    setBars([]);
-    setBook(null);
-    setTrades([]);
-    setMinutes([]);
-    setAuction(null); // 竞价数据按 symbol 归属，切股先清空防残留
-    setVrBaseline(null); // 精确量比基线同理
-    setFlow(null);
-    setFins(null);
-    const skipStockOnly = isIndexSymbol(symbol); // 指数无盘口/逐笔/资金流等个股数据源，直接跳过省一次失败请求
-    Promise.all([
-      getKline(symbol, "1d", 120),
-      skipStockOnly ? Promise.resolve(null) : getOrderBook(symbol).catch(() => null),
-      skipStockOnly ? Promise.resolve([] as Trade[]) : getTrades(symbol, 30).catch(() => [] as Trade[]),
+    const skipStockOnly = isIndexSymbol(symbol); // 指数无盘口/逐笔/资金流，跳过省失败请求
+    void getKline(symbol, "1d", 120)
+      .then((b) => {
+        if (alive) setBars(b);
+      })
+      .catch(() => {});
+    if (!skipStockOnly) {
+      getOrderBook(symbol)
+        .then((ob) => alive && setBook(ob))
+        .catch(() => {});
+    }
+    const cancelIdle = scheduleIdle(() => {
+      if (!alive) return;
       getMinuteLineWithBaseline(symbol)
         .then((r) => {
+          if (!alive) return;
           setVrBaseline(r.vr_baseline_5m);
-          return r.points;
+          setMinutes(r.points);
         })
-        .catch(() => [] as MinutePoint[]),
-      getCapitalFlow<CapitalFlow>(symbol, 30).catch(() => null),
-      getFinancials<FinRow>(symbol, 8).catch(() => null),
-      getCompanyProfile<CompanyProfile>(symbol).catch(() => null),
-      // 资讯走摘要端点：一次拿回公告+新闻，并附带重要度/情绪/事实摘要。
-      // 摘要失败不拖垮整页——降级成空列表，页面其余部分照常。
+        .catch(() => {});
+      if (!skipStockOnly) {
+        getTrades(symbol, 30)
+          .then((tr) => alive && setTrades(tr))
+          .catch(() => {});
+        getCapitalFlow<CapitalFlow>(symbol, 30)
+          .then((cf) => alive && cf && setFlow(cf))
+          .catch(() => {});
+        // 大盘叠加（分时图）：上证分时 + 昨收（当日不变）
+        getMinuteLine("sh000001")
+          .catch(() => [] as MinutePoint[])
+          .then(async (idxPoints) => {
+            const overview = await getMarketOverview().catch(() => null);
+            const sh = overview?.indices.find((i) => i.symbol === "000001");
+            if (alive && idxPoints.length > 0 && sh?.prev_close) {
+              setIndexOverlay({ points: idxPoints, prevClose: sh.prev_close });
+            }
+          });
+        // 集合竞价（09:25 终态）：分时图竞价点 + 角标（当日不变）
+        getAuction(symbol)
+          .then((a) => alive && setAuction(a))
+          .catch(() => {});
+      }
+      getFinancials<FinRow>(symbol, 8)
+        .then((f) => alive && f && setFins(f))
+        .catch(() => {});
+      getCompanyProfile<CompanyProfile>(symbol)
+        .then((cp) => alive && cp && setCompany(cp))
+        .catch(() => {});
+      // 资讯走摘要端点：一次拿回公告+新闻 + 重要度/情绪/事实摘要；失败降级空列表
       getNewsDigest(symbol, 8)
-        .then((d) => ({ anns: d.announcements as unknown as InfoItem[], news: d.news as unknown as InfoItem[] }))
-        .catch(() => null),
-    ])
-      .then(([b, ob, tr, min, cf, fins, comp, info]) => {
-        if (!alive) return;
-        setBars(b);
-        setBook(ob);
-        setTrades(tr);
-        setMinutes(min);
-        if (cf) setFlow(cf);
-        if (fins) setFins(fins);
-        if (comp) setCompany(comp);
-        setAnns(info ? info.anns : []);
-        setNews(info ? info.news : []);
-      })
-      .catch((e: Error) => alive && setError(e.message));
+        .then((d) => {
+          if (!alive) return;
+          setAnns(d.announcements as unknown as InfoItem[]);
+          setNews(d.news as unknown as InfoItem[]);
+        })
+        .catch(() => {});
+    });
     return () => {
       alive = false;
+      cancelIdle();
     };
   }, [symbol]);
 
@@ -314,42 +321,56 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   //    返回 null → 引用不变 → 下游图表不重渲染。
   const liveQuote = quotes[symbol];
   const displayBars = useMemo(() => mergeQuoteIntoBars(bars, liveQuote) ?? bars, [bars, liveQuote]);
-  // ② K 线 REST 校准：60s 全量重拉，纠正合成漂移并接住新交易日首根 bar
-  // ③ 分时 60s 轮询（逐分钟追加新点）
+  // ② 图表 60s REST 校准（评审 O2：绑定 chartTab——不在 K线/分时 tab 时不校准，
+  //    切入 tab 时 effect 重跑先立即拉一次再启轮询）
   useEffect(() => {
     if (!symbol) return;
-    const kline = setInterval(() => {
-      void getKline(symbol, "1d", 120)
-        .then((b) => b.length > 0 && setBars(b))
-        .catch(() => {});
-    }, 60_000);
-    const minute = setInterval(() => {
-      void getMinuteLineWithBaseline(symbol)
-        .then((r) => {
-          setMinutes(r.points);
-          setVrBaseline(r.vr_baseline_5m);
-        })
-        .catch(() => {});
-    }, 60_000);
-    return () => {
-      clearInterval(kline);
-      clearInterval(minute);
-    };
-  }, [symbol]);
-  // ④ 盘口 5s / 逐笔 10s 轮询（失败静默保留上一次快照，别清空面板）；指数无此数据源，跳过
+    const timers: ReturnType<typeof setInterval>[] = [];
+    if (chartTab === "kline") {
+      const pull = () => {
+        void getKline(symbol, "1d", 120)
+          .then((b) => b.length > 0 && setBars(b))
+          .catch(() => {});
+      };
+      void pull();
+      timers.push(setInterval(pull, 60_000));
+    }
+    if (chartTab === "minute") {
+      const pull = () => {
+        void getMinuteLineWithBaseline(symbol)
+          .then((r) => {
+            setMinutes(r.points);
+            setVrBaseline(r.vr_baseline_5m);
+          })
+          .catch(() => {});
+      };
+      void pull();
+      timers.push(setInterval(pull, 60_000));
+    }
+    return () => timers.forEach((t) => clearInterval(t));
+  }, [symbol, chartTab]);
+
+  // ④ 盘口 5s / 逐笔 10s 轮询（评审 O2：绑定 rightTab——各自页签激活才轮询，
+  //    切入时立即拉一次；失败静默保留上一次快照；指数无此数据源跳过）
   useEffect(() => {
     if (!symbol || isIndex) return;
-    const book = setInterval(() => {
-      void getOrderBook(symbol).then(setBook).catch(() => {});
-    }, 5_000);
-    const trades = setInterval(() => {
-      void getTrades(symbol, 30).then(setTrades).catch(() => {});
-    }, 10_000);
-    return () => {
-      clearInterval(book);
-      clearInterval(trades);
-    };
-  }, [symbol, isIndex]);
+    const timers: ReturnType<typeof setInterval>[] = [];
+    if (rightTab === "book") {
+      const pull = () => {
+        void getOrderBook(symbol).then(setBook).catch(() => {});
+      };
+      void pull();
+      timers.push(setInterval(pull, 5_000));
+    }
+    if (rightTab === "trades") {
+      const pull = () => {
+        void getTrades(symbol, 30).then(setTrades).catch(() => {});
+      };
+      void pull();
+      timers.push(setInterval(pull, 10_000));
+    }
+    return () => timers.forEach((t) => clearInterval(t));
+  }, [symbol, isIndex, rightTab]);
 
   async function add() {
     if (isIndex) return; // 指数不入自选（sh000001 不是合法自选股代码）

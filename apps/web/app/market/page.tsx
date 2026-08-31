@@ -55,21 +55,18 @@ function MarketInner() {
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState("");
 
-  const load = useCallback(async () => {
+  // 快慢轮询拆分（评审 O2，2026-09-01）：指数/涨停速览是盘中变量保 10s；
+  // 宽度/情绪是准日频聚合（后端 60s 缓存 + 全市场快照），10s 拉属于浪费 → 30s；
+  // 情绪历史序列本来就是日频 → 60s。
+  const loadFast = useCallback(async () => {
     try {
-      const [overview, zt, breadthRes, sentRes, histRes] = await Promise.all([
+      const [overview, zt] = await Promise.all([
         getMarketOverview(),
         getLimitUpPool().catch(() => [] as LimitUpRecord[]),
-        getBreadth().catch(() => null),
-        getSentiment().catch(() => null),
-        getSentimentHistory(10).catch(() => null),
       ]);
       setIndices(overview.indices);
       setTotalAmount(overview.total_amount);
       setPool(zt.slice(0, 10));
-      setBreadth(breadthRes);
-      setSent(sentRes);
-      setSentHist(histRes);
       setError(null);
       setUpdatedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
     } catch {
@@ -77,14 +74,32 @@ function MarketInner() {
     }
   }, []);
 
+  const loadSlow = useCallback(async () => {
+    try {
+      const [breadthRes, sentRes] = await Promise.all([
+        getBreadth().catch(() => null),
+        getSentiment().catch(() => null),
+      ]);
+      setBreadth(breadthRes);
+      setSent(sentRes);
+    } catch {}
+  }, []);
+
   useEffect(() => {
-    void load();
-    const t = setInterval(load, 10000);
+    void loadFast();
+    const t = setInterval(loadFast, 10000);
     return () => clearInterval(t);
-  }, [load]);
+  }, [loadFast]);
+
+  useEffect(() => {
+    void loadSlow();
+    const t = setInterval(loadSlow, 30000);
+    return () => clearInterval(t);
+  }, [loadSlow]);
 
   // 历史序列变化慢（日频），独立 60s 轮询，不跟随 10s 行情刷新
   useEffect(() => {
+    void getSentimentHistory(10).then(setSentHist).catch(() => {});
     const t = setInterval(() => void getSentimentHistory(10).then(setSentHist).catch(() => {}), 60000);
     return () => clearInterval(t);
   }, []);
