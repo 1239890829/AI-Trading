@@ -157,8 +157,13 @@ def test_theme_catalog_api(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(svc, "fetch_members", fake_members)
         client.app.state.theme_catalog = svc  # 替换掉 lifespan 建的真服务，杜绝外网
 
-        asyncio.run(svc.sync_catalog())
-        asyncio.run(svc.sync_members(GRAIN))
+        # 用 TestClient 自身的事件循环执行（portal.call），而不是 asyncio.run——
+        # sqlite 文件库是 SingletonThreadPool（同线程同一连接），asyncio.run 的
+        # 第二个循环与 lifespan 后台轮询任务共用连接，同步 commit 时会撞上
+        # 后台任务的未消费游标（"SQL statements in progress"，CI 慢机偶发）。
+        # portal.call 让两者在同一循环内串行让出，连接不再交叠。
+        client.portal.call(svc.sync_catalog)
+        client.portal.call(svc.sync_members, GRAIN)
 
         r = client.get("/api/themes/catalog", params={"search": "粮食"})
         assert r.status_code == 200
@@ -244,8 +249,8 @@ def test_stock_themes_api(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(svc, "fetch_members", fake_members)
         client.app.state.theme_catalog = svc
 
-        asyncio.run(svc.sync_catalog())
-        asyncio.run(svc.sync_members(GRAIN))
+        client.portal.call(svc.sync_catalog)
+        client.portal.call(svc.sync_members, GRAIN)
 
         # 用 000505：上一条测试写入的 000019 override 会泄漏到共享内存库
         r = client.get("/api/themes/stock/000505")
