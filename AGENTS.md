@@ -47,7 +47,7 @@ CI（GitHub Actions）：后端 pytest+pyflakes、前端 tsc+eslint+vitest+build
 
 ## 2. 当前状态快照（2026-09-01，系统重构完成后更新）
 
-**580 后端测试 + 97 前端测试全绿 · 94 REST + 1 WS 端点 · 四源链 `ths→tencent→eastmoney→sina`（含熔断）**
+**584 后端测试 + 97 前端测试全绿 · 94 REST + 1 WS 端点 · 四源链 `ths→tencent→eastmoney→sina`（含熔断）**
 **复盘改进项闭环（2026-09-01）：`PATCH /api/review/action-items/{id}` 处置入口 + 前端四态处置控件，破解"改进项只能产出、无法消费"（107 条全 pending、采纳率恒 0）。注意 `get_report` 会用表行状态覆盖 payload 快照——payload 是生成时快照，不同步就会"点了确认回读仍待处置"。**
 **实时行情秒级化（2026-09-01，`5b0024a`）：QuoteHub 1s 固定节奏 + WS 订阅队列终身复用（换队列孤儿化 writer 是"约 30s 才更新"的真因）+ 实时方法腾讯源优先（realtime_rank，ths 付费配额/8s 超时移出秒级链）+ 瞬时失败 stale_after(10s) 容忍 + 分时/K线 WS tick 实时合成（`lib/kline-live.ts`）。实测：列表/头部/K线/分时全部 0.6~1.3s 更新。**
 **前端导航 5 项：工作台 / 盘面 /tape / 市场 /market / 每日精选 /picks / 研究 /research**（2026-09-01 页面合并，旧路由 302）
@@ -226,6 +226,12 @@ C2 全市场日 K dump（已被 TDX 替代）；"等 LLM 再做摘要"（规则�
 - 禁止 dev server 运行时 `next build`；pytest/build 需要 `CODEBUDDY_SAFE_DELETE_ENABLED=0`（沙箱批量删除保护）；
   **每次跑完 pytest 必须 `git checkout -- backend/data/trade_calendar.json`**（测试会把真实全年官方日历
   覆盖成 5 天残片；另注意重启后端会合法重写该文件的 fetched_at，diff 只有时间戳属正常）。
+- **测试隔离是"库隔离了、文件没隔离"**：`tests/conftest.py` 把库设成 `sqlite:///:memory:`，
+  所以测试改不到生产数据行；但凡写盘的目录（如 `app.review.storage.REPORT_DIR`）必须一并指向临时目录，
+  否则测试垃圾会落进 `data/review/reports/`，且按 trade_date 删文件的清理逻辑会误删真实报告
+  （2026-09-01：测试把 `20990101.json` 留在生产目录，差点删掉 `20260901.json`）。
+  同理，`_cleanup(sf, td)` 只接受 `2099*` 开头——`review_reports.trade_date` **没有唯一约束**
+  （只有 `review_id` 唯一），同一天可并存多行，按日期删会连真实报告一起删。
 - **进程内缓存一律用 `app/core/ttl_cache.py` 的 TTLCache**（`cache_on(holder, name, ttl, maxsize)`），
   勿再手写 `(time.time(), payload)` 元组；键空间必须有界；命中响应标注 cached 用
   `model_copy(update={...})`，不变异共享缓存对象。

@@ -171,29 +171,34 @@ async def review_scheduler(
     判定条件（全部满足才跑）：
     1. 今天是交易日（走 trade_calendar，不用 weekday 猜）
     2. 当前北京时间已过 run_hour:run_minute
-    3. 今天还没跑过（用 `_last_run_date` 去重）
+    3. 今天还没跑过（查库里有没有当日报告，**不能**用内存变量去重）
+
+    第 3 条必须持久化：内存变量在进程重启后清空，而"时间已过触发点"这个条件
+    在重启后天然成立 → 每次重启都重跑当日复盘。重跑会生成新的 review_id，
+    是孤儿改进项行的主要来源（2026-09-01 实测：7 条真实改进项累积成 113 行）。
 
     非交易日或时间未到就跳过，**不补跑历史日期**——
     补跑会让人分不清"这份报告是哪天生成的"。要补跑请用手动触发接口。
     """
     from datetime import datetime, timedelta, timezone
 
+    from app.review.storage import report_exists
+
     cst = timezone(timedelta(hours=8))
     stop = stop or asyncio.Event()
-    last_run: str = ""
 
     log.info("review scheduler started: daily %02d:%02d CST", run_hour, run_minute)
     while not stop.is_set():
         try:
             now = datetime.now(cst)
             today = now.date()
+            ymd = today.strftime("%Y%m%d")
             if (now.hour, now.minute) >= (run_hour, run_minute):
                 days = await tc.trading_days(service.hub.provider)
-                if tc.is_trade_day(days, today) and last_run != today.strftime("%Y%m%d"):
+                if tc.is_trade_day(days, today) and not report_exists(service.session_factory, ymd):
                     log.info("review scheduler trigger: %s", today)
                     try:
                         await service.run(today)
-                        last_run = today.strftime("%Y%m%d")
                     except Exception:
                         log.exception("scheduled review failed: %s", today)
         except asyncio.CancelledError:

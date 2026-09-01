@@ -8,6 +8,13 @@
 
 同一交易日重复生成时**覆盖**而不是追加——复盘是对某一天的判断，
 留两份只会让人分不清该看哪个。
+
+覆盖的两个坑（2026-09-01 实测，都已修）：
+- 清旧行必须按 `trade_date` 过滤，不能按 `review_id`：review_id 每次生成都带新的
+  HHMMSS 后缀，用新 id 过滤永远匹配不到旧行 → 孤儿行只增不减
+  （7 条真实改进项累积成 113 行，采纳率分母虚高约 16 倍）。
+- 覆盖不能把人的处置结论一起抹掉：已确认/已驳回的改进项要按指纹继承状态，
+  否则每天重跑一次，PDCA 的 C 和 A 就被重写一遍，等于没有闭环。
 """
 from __future__ import annotations
 
@@ -36,8 +43,39 @@ def _report_path(trade_date: str) -> Path:
     return REPORT_DIR / f"{trade_date}.json"
 
 
+def _fingerprint(item: object) -> tuple[str, str]:
+    """改进项指纹：重跑时靠它认出"同一条改进项"，从而继承人的处置结论。
+
+    只用 `category + title`——`target` / `proposed_change` 会随数据缺失集合微调
+    （如"补齐阻断级数据缺失：breadth, sentiment"在 breadth 修好后变成只有 sentiment），
+    拿它们做键会导致明明是同一条却认不出来、状态被打回 pending。
+    代价：标题变了就认不出（会有 warning 提示），这是可接受的宽松——
+    认不出最多重置一次状态，认错了才会把处置挂到不相干的改进项上。
+    """
+    return (getattr(item, "category", ""), getattr(item, "title", ""))
+
+
+def _snapshot_disposition(db, trade_date: str) -> dict[tuple[str, str], dict]:
+    """重跑前快照该交易日**已处置**的改进项（pending 无需继承）。
+
+    不做这一步，重新生成当日复盘会把人确认/驳回过的结论全部打回 pending。
+    """
+    rows = db.execute(
+        select(ReviewActionItemRow).where(ReviewActionItemRow.trade_date == trade_date)
+    ).scalars().all()
+    return {
+        (r.category, r.title): {
+            "status": r.status,
+            "resolution_note": r.resolution_note,
+            "resolved_at": r.resolved_at,
+        }
+        for r in rows
+        if r.status != "pending"
+    }
+
+
 def save_report(session_factory, report: ReviewReport) -> ReviewReport:
-    """落库 + 落盘。同一交易日覆盖。"""
+    """落库 + 落盘。同一交易日覆盖（但继承已处置的改进项状态）。"""
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     path = _report_path(report.trade_date)
 
@@ -71,13 +109,6 @@ def save_report(session_factory, report: ReviewReport) -> ReviewReport:
             existing.report_path = str(path)
             existing.generated_at = utcnow()
             row = existing
-            # 旧的改进项与元结论先清掉，避免重复累积
-            db.query(ReviewActionItemRow).filter(
-                ReviewActionItemRow.review_id == report.review_id
-            ).delete()
-            db.query(ReviewMetaInsightRow).filter(
-                ReviewMetaInsightRow.review_id == report.review_id
-            ).delete()
         else:
             row = ReviewReportRow(
                 review_id=report.review_id,
@@ -95,13 +126,32 @@ def save_report(session_factory, report: ReviewReport) -> ReviewReport:
             )
             db.add(row)
 
+        # 清旧行 + 重新插入。两处都不能按 review_id 过滤：
+        # review_id 每次生成都带新的 HHMMSS 后缀，用新 id 匹配旧行永远匹配不到
+        # → 孤儿行只增不减（实测 7 条真实改进项累积成 113 行，采纳率分母虚高 16 倍）。
+        # 删除前先快照已处置的改进项，插入时按指纹继承，避免把人的处置结论打回 pending。
+        carried = _snapshot_disposition(db, report.trade_date)
+        db.query(ReviewActionItemRow).filter(
+            ReviewActionItemRow.trade_date == report.trade_date
+        ).delete()
+        db.query(ReviewMetaInsightRow).filter(
+            ReviewMetaInsightRow.trade_date == report.trade_date
+        ).delete()
+
         for it in report.action_items:
+            old = carried.pop(_fingerprint(it), None)
             db.add(ReviewActionItemRow(
                 review_id=report.review_id, trade_date=report.trade_date,
                 title=it.title, category=it.category, priority=it.priority,
                 expected_impact=it.expected_impact, evidence=it.evidence,
-                target=it.target, proposed_change=it.proposed_change, status=it.status,
+                target=it.target, proposed_change=it.proposed_change,
+                status=old["status"] if old else it.status,
+                resolution_note=old["resolution_note"] if old else "",
+                resolved_at=old["resolved_at"] if old else None,
             ))
+        # 还有剩的说明上次的改进项这次没再产出：处置结论随之失效，记一条提示
+        for fp in carried:
+            log.info("改进项本次未再产出，历史处置记录丢弃：%s / %s", fp[0], fp[1][:40])
         for mi in report.meta_insights:
             db.add(ReviewMetaInsightRow(
                 review_id=report.review_id, trade_date=report.trade_date,
@@ -129,6 +179,25 @@ def save_report(session_factory, report: ReviewReport) -> ReviewReport:
 
     log.info("review saved: %s (%s)", report.review_id, path)
     return report
+
+
+def report_exists(session_factory, trade_date: str) -> bool:
+    """该交易日是否已有复盘报告。
+
+    调度器靠它做"今天跑过了吗"的判定——这个状态必须**持久化**：
+    用内存变量记录的话，每次进程重启都会重跑当日复盘（当前时间已过触发点时
+    条件天然满足），而重跑又会生成新的 review_id，是孤儿改进项的主要来源。
+    """
+    db = session_factory()
+    try:
+        return (
+            db.execute(
+                select(ReviewReportRow.id).where(ReviewReportRow.trade_date == trade_date)
+            ).first()
+            is not None
+        )
+    finally:
+        db.close()
 
 
 def _sync_action_items_from_db(db, report: ReviewReport) -> None:

@@ -1,9 +1,11 @@
 """盘后复盘 Agent 的纯逻辑测试（不触发网络）。
 
 覆盖：规则分析器三维度、阻断维度不产出判断、改进项 P0 优先级、
-模型路由降级、元结论分类、方法论版本加载、报告落库/检索/对比。
+模型路由降级、元结论分类、方法论版本加载、报告落库/检索/对比、
+改进项处置闭环（含重跑不丢状态、不累积孤儿行）。
 """
 import sys
+from types import SimpleNamespace
 
 sys.path.insert(0, ".")
 
@@ -31,6 +33,7 @@ from app.review.storage import (
     compare_reports,
     get_report,
     list_reports,
+    report_exists,
     save_report,
     update_action_item_status,
 )
@@ -214,7 +217,16 @@ def _cleanup(sf, trade_date: str) -> None:
 
     不清理会污染两处：报告列表多出测试日期，以及有效性统计里混入测试数据
     ——而本组测试断言的正是采纳率变化。
+
+    **只接受 `2099*` 的测试日期。** 这个删除是按 `trade_date` 走的，而
+    `review_reports.trade_date` 没有唯一约束（只有 `review_id` 唯一），
+    同一天可以并存多行 → 传真实日期会把测试行和**真实复盘报告**一起删掉。
+    2026-09-01 就写错过一次（把测试报告挪到"今天"再清理），差点删掉真实报告。
     """
+    assert trade_date.startswith("2099"), (
+        f"拒绝清理非测试日期 {trade_date}：_cleanup 按 trade_date 删除，"
+        f"会连带删掉该日的真实复盘报告"
+    )
     from sqlalchemy import select as _select
 
     from app.review.models import (
@@ -260,6 +272,165 @@ def test_get_report_fills_action_item_pk():
         assert len(set(ids)) == len(ids), "id 必须唯一，否则会错配到别的改进项"
     finally:
         _cleanup(sf, _TEST_TD_AI)
+
+
+def _count_action_item_rows(sf, trade_date: str) -> int:
+    from sqlalchemy import select as _select
+
+    from app.review.models import ReviewActionItemRow
+
+    db = sf()
+    try:
+        return len(
+            db.execute(
+                _select(ReviewActionItemRow.id).where(
+                    ReviewActionItemRow.trade_date == trade_date
+                )
+            ).all()
+        )
+    finally:
+        db.close()
+
+
+def test_regenerate_same_day_does_not_accumulate_rows():
+    """重跑同一交易日不能让改进项行越堆越多。
+
+    曾用 `review_id` 过滤清旧行——可 review_id 每次生成都带新的 HHMMSS 后缀，
+    新 id 永远匹配不到旧行，孤儿行只增不减。实测 7 条真实改进项累积成 113 行，
+    采纳率的分母被放大约 16 倍，统计与演进建议全部失真。
+    """
+    sf = get_session_factory()
+
+    # review_id 必须显式给成不同的：不传的话 save_report 用当前 HHMMSS 生成，
+    # 两次保存落在同一秒时 review_id 相同，旧的错误实现也能删掉旧行 → 测不出 bug。
+    # 真实场景的"重跑"是隔一段时间（或重启后）再跑，review_id 必然不同。
+    def _with_rid(seq: int) -> ReviewReport:
+        r = _report_with_action_item()
+        r.review_id = f"RV-{_TEST_TD_AI}-{seq:06d}"
+        return r
+
+    r1 = _with_rid(1)
+    save_report(sf, r1)
+    try:
+        expected = _count_action_item_rows(sf, _TEST_TD_AI)
+        assert expected == len(r1.action_items), "首次落库行数应等于改进项条数"
+
+        save_report(sf, _with_rid(2))
+        save_report(sf, _with_rid(3))
+
+        got = _count_action_item_rows(sf, _TEST_TD_AI)
+        assert got == expected, f"重跑两次后行数应仍是 {expected}，实际 {got}"
+    finally:
+        _cleanup(sf, _TEST_TD_AI)
+
+
+def test_disposition_survives_regeneration():
+    """重跑当日复盘不能把人的处置结论打回 pending。
+
+    覆盖语义是「报告换新的」，但改进项是给人跟进的：已经确认/驳回过的结论
+    被每天重写一次，PDCA 的 C 和 A 就等于不存在。
+    """
+    sf = get_session_factory()
+    save_report(sf, _report_with_action_item())
+    try:
+        first = get_report(sf, _TEST_TD_AI)
+        assert first is not None
+        update_action_item_status(sf, first.action_items[0].id, "rejected", note="测试：暂不处理")
+
+        # 重跑必然带新的 review_id（见 test_regenerate_same_day_does_not_accumulate_rows）
+        again_report = _report_with_action_item()
+        again_report.review_id = f"RV-{_TEST_TD_AI}-999999"
+        save_report(sf, again_report)
+
+        again = get_report(sf, _TEST_TD_AI)
+        assert again is not None
+        assert again.action_items[0].status == "rejected", (
+            "重跑后应继承 rejected；若回到 pending 说明覆盖把处置结论抹掉了"
+        )
+    finally:
+        _cleanup(sf, _TEST_TD_AI)
+
+
+def test_report_exists_reflects_db():
+    """`report_exists` 必须真实查库——它是调度器判重的唯一依据。
+
+    单独测它，是因为调度器那个测试里它被换成桩了（见下）。
+    """
+    sf = get_session_factory()
+    assert report_exists(sf, _TEST_TD_AI) is False, "测试日期不应有报告残留"
+    save_report(sf, _report_with_action_item())
+    try:
+        assert report_exists(sf, _TEST_TD_AI) is True
+    finally:
+        _cleanup(sf, _TEST_TD_AI)
+    assert report_exists(sf, _TEST_TD_AI) is False, "清理后应恢复为无报告"
+
+
+def test_scheduler_skips_when_today_report_exists(monkeypatch):
+    """'今天跑过了'必须查库判定，不能用内存变量。
+
+    内存变量在进程重启后清空，而"当前时间已过触发点"这个条件重启后天然成立
+    → 每次重启都重跑。这是孤儿改进项行的主要来源。
+
+    这里**不能**往库里写真日期来造"今天已有报告"：`review_reports.trade_date`
+    没有唯一约束，同一天可以并存多行；而 `_cleanup` 按 trade_date 删，
+    会把测试行和真实报告一起删掉（2026-09-01 实测踩到，差点删掉真实复盘报告）。
+    所以把 `report_exists` 换成可控桩，只验证"调度器确实去查了库、且听它的结论"。
+    """
+    import asyncio
+
+    from app.market import trade_calendar as tc
+    from app.review import storage
+    from app.review.service import review_scheduler
+
+    calls: list = []
+    consulted: list = []
+    exists = {"v": False}
+
+    def _fake_exists(session_factory, ymd):
+        # 用内存变量去重的实现根本不会走到这里 → consulted 恒为空即证明回归
+        consulted.append(ymd)
+        return exists["v"]
+
+    class _FakeSvc:
+        session_factory = get_session_factory()
+        # 调度器会访问 service.hub.provider 取交易日历；这里用桩顶掉
+        hub = SimpleNamespace(provider=None)
+
+        async def run(self, when):
+            calls.append(when)
+
+    async def _fake_trading_days(provider):
+        return []
+
+    monkeypatch.setattr(storage, "report_exists", _fake_exists)
+    # 让"今天是交易日"恒真，其余走真实调度逻辑
+    monkeypatch.setattr(tc, "trading_days", _fake_trading_days)
+    monkeypatch.setattr(tc, "is_trade_day", lambda days, day: True)
+
+    async def go():
+        """跑几个 tick 就停。无报告时每个 tick 都会重试，所以断言用增量而非绝对次数。"""
+        stop = asyncio.Event()
+        task = asyncio.create_task(
+            review_scheduler(_FakeSvc(), run_hour=0, run_minute=0,
+                             check_interval_seconds=0.01, stop=stop)
+        )
+        await asyncio.sleep(0.05)
+        stop.set()
+        await task
+
+    # ① 库里查不到当日报告 → 应触发（可能连跑几个 tick，只要 >0 即可）
+    asyncio.run(go())
+    assert consulted, "调度器必须查库判重；若退回内存变量去重，这里会是空的"
+    baseline = len(calls)
+    assert baseline >= 1, "当日无报告时调度器应触发复盘"
+
+    # ② 库里查得到 → 一次都不该触发（模拟进程重启后不再重跑）
+    exists["v"] = True
+    asyncio.run(go())
+    assert len(calls) == baseline, (
+        f"当日报告已存在时调度器应跳过，却仍触发了 {len(calls) - baseline} 次"
+    )
 
 
 def test_disposition_survives_report_reread():
