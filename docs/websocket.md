@@ -1,8 +1,16 @@
 # WebSocket 协议
 
+## ⚠️ 部署关键：WS 必须直连后端，不能走 Next 代理
+
+`app/backend/[...path]/route.ts` 是 fetch 型代理，**不支持 WebSocket 升级**。
+前端必须配置 `NEXT_PUBLIC_WS_BASE`（如 `ws://127.0.0.1:8000`）绕过代理直连后端，
+否则 WS 握手失败/假成功，前端全部实时数据冻结（2026-09-01 实测事故，修复 `650d34c`）。
+开发环境配置在 `apps/web/.env.local`（模板见 `.env.local.example`）；改 env 后需清 `.next` 重启。
+
 ## `/ws/quotes`（已实现）
 
 **连接**：`ws://127.0.0.1:8000/ws/quotes?symbols=600519,000001`（缺省订阅全部自选）。
+**注意路径无 `/api` 前缀**（router 挂载时未带 prefix）。
 
 **服务端 → 客户端**
 
@@ -25,6 +33,11 @@
 ```
 
 `subscribe` 更新本连接订阅集并立即回推新快照。
+
+**发送互斥纪律（2026-09-01 修复）**：服务端所有出站消息（hub 推送/pong/subscribe
+快照）必须经**同一条出站队列**由单一 writer task 串行 `send_json`——Starlette
+禁止并发 send，reader 里直接发 pong 会与 writer 推送撞车，令 writer 抛
+RuntimeError 被静默吞掉 → 推送死亡而 ping 存活（连接假活，客户端全量冻结）。
 
 ## 前端行为约定（hooks/use-quote-stream.ts）
 
