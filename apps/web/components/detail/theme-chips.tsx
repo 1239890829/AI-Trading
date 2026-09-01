@@ -22,11 +22,11 @@ function pctText(pct: number | null | undefined): string {
 /**
  * 题材归属行（L4 联动）：个股 → 题材看板。
  *
- * 2026-09-01 改版（用户反馈）：
- * - 官方成分按**官方板块指数当日涨跌幅降序**排前（当天炒什么一目了然），
- *   tag 内直接带涨跌幅（红涨绿跌）——口径与概念目录同源（THS 板块指数），杜绝跨源名称匹配；
- * - 默认只展示涨幅最相关的前 6 个，其余折叠进「展开全部」——避免 29 个概念
- *   全量铺开把分时/K线挤出可视区；涨跌幅拉取失败的排在有值的后面；
+ * 2026-09-01 二次改版（用户反馈 #2）：排序依据从「板块涨跌幅大小」改为
+ * **与今日整体涨跌行情的联动度**（theme_align_1d = 方向一致家数占比，只看
+ * 方向不看数值幅度）——「今天行情最相关的题材排前列」；联动度不可得的
+ * 退回按板块涨跌幅降序。tag 内涨跌幅徽标保留（红涨绿跌）仅作展示。
+ * - 默认只展示前 6 个，其余折叠——避免全量铺开把分时/K线挤出可视区；
  * - 涨停归因（行为性归属）排官方成分之后，同样参与折叠。
  * 双源并列展示、互不覆盖的原则不变；无归属时返回 null（零占用）。
  */
@@ -34,12 +34,15 @@ export function ThemeChipsRow({ themes }: { themes: StockThemes | null }) {
   const [expanded, setExpanded] = useState(false);
   const official: StockThemeLink[] = useMemo(() => {
     const list = [...(themes?.official ?? [])];
-    // 有涨跌幅的按降序在前；无值（拉取失败/新题材）排在有值之后保持原序
-    const withPct = list
-      .filter((t) => t.theme_chg_1d != null)
+    // 主排序：与今日行情联动度降序（只看方向一致占比，不依赖涨跌幅数值）；
+    // 兜底排序：联动度不可得的题材按板块涨跌幅降序（保持信息量），再按原序
+    const withAlign = list
+      .filter((t) => t.theme_align_1d != null)
+      .sort((a, b) => (b.theme_align_1d ?? 0) - (a.theme_align_1d ?? 0));
+    const rest = list
+      .filter((t) => t.theme_align_1d == null)
       .sort((a, b) => (b.theme_chg_1d ?? 0) - (a.theme_chg_1d ?? 0));
-    const without = list.filter((t) => t.theme_chg_1d == null);
-    return [...withPct, ...without];
+    return [...withAlign, ...rest];
   }, [themes]);
   const attribution = themes?.attribution ?? [];
 
@@ -58,7 +61,7 @@ export function ThemeChipsRow({ themes }: { themes: StockThemes | null }) {
         <Link
           key={`o-${t.theme_code}`}
           href={`/tape?tab=themes&focus=${encodeURIComponent(t.theme_name)}`}
-          title={`THS 官方概念成分（${t.theme_code}）· 板块当日涨跌幅 · 点击查看该题材当下梯队`}
+          title={`THS 官方概念成分（${t.theme_code}）· 排序：与今日大盘方向一致家数占比（联动度${t.theme_align_1d != null ? ` ${Math.round(t.theme_align_1d * 100)}%` : "不可得"}）· 点击查看该题材当下梯队`}
           className="inline-flex items-center rounded border border-sky-500/30 bg-sky-500/5 px-1.5 py-0.5 text-zinc-700 hover:border-sky-500/60 dark:border-sky-400/30 dark:bg-sky-400/5 dark:text-zinc-200"
         >
           {t.theme_name}

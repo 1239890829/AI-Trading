@@ -16,7 +16,7 @@ export function QuoteStrip({
   onAdd: () => void;
   hideWatchlist?: boolean;
 }) {
-  const strip: [string, string][] = [
+  const strip: [string, string, string?][] = [
     ["今开", fmt(quote.open)],
     ["最高", fmt(quote.high)],
     ["最低", fmt(quote.low)],
@@ -24,8 +24,10 @@ export function QuoteStrip({
     ["成交量", fmtVolume(quote.volume) + "手"],
     ["成交额", fmtAmount(quote.amount)],
     ["换手", quote.turnover_rate != null ? `${fmt(quote.turnover_rate)}%` : "--"],
-    ["PE", quote.pe_ttm != null ? fmt(quote.pe_ttm) : "--"],
-    ["PB", quote.pb != null ? fmt(quote.pb) : "--"],
+    // PE/PB 兜底（2026-09-01）：后端已补全（fill_valuation），仍缺失说明数据源
+    // 确实未提供（新股/长期亏损/停牌等）——显示「暂无」并注明原因，不留白
+    ["PE", quote.pe_ttm != null ? fmt(quote.pe_ttm) : "暂无", quote.pe_ttm != null ? undefined : "数据源未提供市盈率（常见于新股、亏损或长期停牌个股）"],
+    ["PB", quote.pb != null ? fmt(quote.pb) : "暂无", quote.pb != null ? undefined : "数据源未提供市净率"],
     ["市值", quote.total_mktcap_yi != null ? `${fmt(quote.total_mktcap_yi)}亿` : "--"],
     ["涨停", quote.limit_up_price != null ? fmt(quote.limit_up_price) : "--"],
   ];
@@ -56,8 +58,8 @@ export function QuoteStrip({
         </div>
       </div>
       <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[11px] text-zinc-400">
-        {strip.map(([k, v]) => (
-          <span key={k}>
+        {strip.map(([k, v, title]) => (
+          <span key={k} title={title}>
             {k} <span className="font-mono tabular-nums text-zinc-200">{v}</span>
           </span>
         ))}

@@ -486,6 +486,45 @@ class ThemeCatalogService:
         with self._sf() as db:
             return int(db.execute(select(func.count(Theme.id))).scalar_one() or 0)
 
+    def member_symbols_bulk(self, codes: list[str]) -> dict[str, list[str]]:
+        """批量查题材成分股列表（key=theme_code）。联动度计算用。"""
+        if not codes:
+            return {}
+        with self._sf() as db:
+            rows = db.execute(
+                select(ThemeMember.theme_code, ThemeMember.symbol).where(ThemeMember.theme_code.in_(codes))
+            ).all()
+        out: dict[str, list[str]] = {}
+        for code, sym in rows:
+            out.setdefault(code, []).append(sym)
+        return out
+
+
+def direction_alignment(
+    members: list[str],
+    chg_by_symbol: dict[str, float | None],
+    market_chg: float | None,
+    *,
+    min_n: int = 5,
+) -> float | None:
+    """题材与今日整体涨跌行情的联动度（纯函数，2026-09-01 用户反馈 #2）。
+
+    定义：方向一致家数占比——大盘涨时取成分股上涨家数占比、大盘跌时取下跌家数
+    占比。衡量「该题材今天跟不跟大盘走」：越接近 1 表示成分与大盘同向越整齐
+    （题材就是今天的行情主线），**排序依据只用方向不依赖涨跌幅数值大小**。
+
+    大盘平盘（方向无意义）或有效成分不足 min_n 时返回 None（不臆造）。
+    """
+    if market_chg is None or market_chg == 0:
+        return None
+    n_up = sum(1 for s in members if (chg_by_symbol.get(s) or 0) > 0)
+    n_down = sum(1 for s in members if (chg_by_symbol.get(s) or 0) < 0)
+    n = n_up + n_down
+    if n < min_n:
+        return None
+    same = n_up if market_chg > 0 else n_down
+    return round(same / n, 3)
+
 
 def aggregate_theme_strength(
     theme_members: dict[str, list[str]],

@@ -137,13 +137,44 @@ async def stock_themes(
             official = svc.get_official_for_symbol(sym)
 
     # 题材当日涨跌幅（2026-09-01）：官方板块指数口径（与概念目录同源，杜绝跨源
-    # 名称匹配），附在 official 各项上——前端按涨跌幅排序、徽标展示、只保留
-    # 最相关的少数题材（用户反馈：29 个概念全量展示会把分时/K线挤下去）。
+    # 名称匹配），附在 official 各项上——前端徽标展示、只保留最相关的少数题材
+    # （用户反馈：29 个概念全量展示会把分时/K线挤下去）。
     try:
         changes = await svc.day_changes([o["theme_code"] for o in official])
         official = [{**o, "theme_chg_1d": changes.get(o["theme_code"])} for o in official]
     except Exception as exc:  # noqa: BLE001 涨跌幅是增强信息，失败不拖垮归属展示
         log.warning("stock themes: 板块日涨幅批量获取失败（chips 不带涨跌幅）: %s", exc)
+
+    # 题材与今日整体涨跌行情的联动度（2026-09-01 用户反馈 #2）：方向一致家数占比
+    # ——排序依据只用方向不依赖涨跌幅数值大小，「与今天行情最相关的题材排前列」。
+    # 成分行情来自全市场快照（内存 O(1) 查），大盘方向取上证指数。
+    try:
+        from app.api.deps import get_hub
+        from app.services.theme_catalog_service import direction_alignment
+
+        hub = get_hub(request)
+        snap = getattr(request.app.state, "snapshot_service", None)
+        chg_by_symbol = {
+            r["symbol"]: r.get("change_pct")
+            for r in (snap.snapshot if snap is not None and snap.snapshot else [])
+            if isinstance(r, dict)
+        }
+        sh_chg = next(
+            (q.change_pct for q in hub.get_indices() if q.symbol == "000001" and q.change_pct is not None),
+            None,
+        )
+        members_by = svc.member_symbols_bulk([o["theme_code"] for o in official])
+        official = [
+            {
+                **o,
+                "theme_align_1d": direction_alignment(
+                    members_by.get(o["theme_code"], []), chg_by_symbol, sh_chg
+                ),
+            }
+            for o in official
+        ]
+    except Exception as exc:  # noqa: BLE001 联动度是增强信息，失败不拖垮归属展示
+        log.warning("stock themes: 方向联动度计算失败（chips 按涨跌幅排序兜底）: %s", exc)
 
     return {
         "data": {

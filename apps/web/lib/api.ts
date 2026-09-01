@@ -820,6 +820,8 @@ export interface StockThemeLink {
   source: string; // ths_official | manual
   /** 官方板块指数当日涨跌幅 %（2026-09-01：chips 排序与徽标用；拉取失败为 null） */
   theme_chg_1d?: number | null;
+  /** 与今日整体涨跌行情的联动度（方向一致家数占比 0-1，2026-09-01 排序依据 #2）；不可得为 null */
+  theme_align_1d?: number | null;
 }
 
 export interface StockThemeAttribution {

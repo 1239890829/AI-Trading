@@ -325,7 +325,7 @@ async def quote(
             raise
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"{source} 行情失败：{exc}")
-    from app.services.quote_enrich import fill_limit_prices
+    from app.services.quote_enrich import fill_limit_prices, fill_valuation
 
     found = hub.get_quotes([symbol])
     if not found:
@@ -341,11 +341,14 @@ async def quote(
             live = None
         if live is None:
             raise HTTPException(status_code=404, detail=f"{symbol} 无行情（缓存与数据源均未命中）")
-        # ths 快照缺涨跌停价，从腾讯补齐——撮合与前端拒单提示都依赖它
-        live = await fill_limit_prices(hub.provider, live)
+        # ths 快照缺涨跌停价，从腾讯补齐——撮合与前端拒单提示都依赖它；
+        # 同理缺 pe/pb/市值（2026-09-01：详情行情条 PE 不再缺失）
+        live = await fill_valuation(hub.provider, await fill_limit_prices(hub.provider, live))
         return {"data": validate_quote(live).model_dump(mode="json"), "meta": _meta(hub)}
     # 缓存命中：先拷贝再补价，fill_limit_prices 是原地修改，不能动共享缓存对象
-    cached = await fill_limit_prices(hub.provider, found[0].model_copy())
+    cached = await fill_valuation(
+        hub.provider, await fill_limit_prices(hub.provider, found[0].model_copy())
+    )
     return {"data": cached.model_dump(mode="json"), "meta": _meta(hub)}
 
 

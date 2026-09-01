@@ -256,9 +256,10 @@ def test_stock_themes_api(monkeypatch: pytest.MonkeyPatch):
         r = client.get("/api/themes/stock/000505")
         assert r.status_code == 200
         data = r.json()["data"]
-        # theme_chg_1d：板块日涨跌幅增强字段（测试 key 无法拉官方板块K线 → None）
+        # theme_chg_1d / theme_align_1d：增强字段（测试 key 无法拉官方板块K线/无快照 → None）
         assert data["official"] == [
-            {"theme_code": GRAIN, "theme_name": "粮食概念", "source": "ths_official", "theme_chg_1d": None}
+            {"theme_code": GRAIN, "theme_name": "粮食概念", "source": "ths_official",
+             "theme_chg_1d": None, "theme_align_1d": None}
         ]
         # 测试环境 provider 链是 mock（无 ThsFuyaoProvider）→ 归因为空但不报错
         assert data["attribution"] == []
@@ -543,3 +544,32 @@ def test_themes_hot_route(monkeypatch: pytest.MonkeyPatch):
     assert "热股路由题材" not in data["stocks"][1]["themes"], "无官方归属的京粮控股不入题材聚合"
     assert calls["n"] == 1, "第二次请求命中 60s 缓存，provider 不重打"
     assert client.get("/api/themes/hot").status_code == 200
+
+
+# ---- 方向联动度（2026-09-01 用户反馈 #2：排序依据只用方向不依赖涨跌幅数值）----
+
+
+def test_direction_alignment_market_up():
+    from app.services.theme_catalog_service import direction_alignment
+
+    members = ["a", "b", "c", "d", "e", "f"]
+    chg = {s: 1.0 for s in members[:4]}  # 4 只上涨
+    chg.update({s: -1.0 for s in members[4:]})  # 2 只下跌
+    assert direction_alignment(members, chg, market_chg=2.0) == round(4 / 6, 3)
+
+
+def test_direction_alignment_market_down_uses_down_ratio():
+    from app.services.theme_catalog_service import direction_alignment
+
+    members = ["a", "b", "c", "d", "e", "f"]
+    chg = {s: -1.0 for s in members}
+    # 大盘下跌日：全成分下跌 → 方向一致占比 1.0（跟跌也是强联动）
+    assert direction_alignment(members, chg, market_chg=-1.0) == 1.0
+
+
+def test_direction_alignment_flat_market_or_thin_members_none():
+    from app.services.theme_catalog_service import direction_alignment
+
+    assert direction_alignment(["a"], {"a": 1.0}, market_chg=2.0) is None  # 样本不足
+    assert direction_alignment(["a", "b"], {"a": 1.0}, market_chg=0.0) is None  # 大盘平盘
+    assert direction_alignment(["a", "b"], {"a": None}, market_chg=2.0) is None  # 无有效行情
