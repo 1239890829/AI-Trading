@@ -350,6 +350,51 @@ def test_verify_board_multi_day_replaces_and_flags(monkeypatch: pytest.MonkeyPat
     assert calls["n"] == 0, "已验证的 payload 直接跳过"
 
 
+def test_verify_board_multi_day_upgrades_persistence_position(monkeypatch: pytest.MonkeyPatch):
+    """P1-6：官方 5 日涨幅到位后，持续性评估的位置判定从 active_days 代理升级。
+
+    板块 K 线 8 根 100→121（chg_5d≈+14.2% > 10% 阈值）：代理口径判低位
+    （active_days=2），升级后 position_risk 必须转高——慢牛高位只有真实
+    区间涨幅能抓住。chg_10d 因 K 线不足 11 根为 None → 不打 verified 标，
+    但 chg_5d 可得就足够升级位置判定。
+    """
+    from app.services.dragon_service import news_persistence
+
+    svc = _svc()
+
+    async def fake_catalog():
+        return [{"code": GRAIN, "name": "粮食概念"}]
+
+    async def fake_bars(code):
+        return [{"date": f"2026-08-{d:02d}", "close": 100 + 3 * i} for i, d in enumerate(range(10, 18))]
+
+    monkeypatch.setattr(svc, "fetch_catalog", fake_catalog)
+    asyncio.run(svc.sync_catalog())  # 自同步目录：不依赖其他测试留下的库状态（内存库顺序耦合是隐患）
+    monkeypatch.setattr(svc, "fetch_board_bars", fake_bars)
+
+    from app.api.routes.market import _verify_board_multi_day
+
+    persistence = news_persistence(core_type="业绩兑现", limit_up_count=8,
+                                   has_second_board=True, active_days=2, main_net_inflow=5e8)
+    assert persistence["position_risk"] is False
+    payload = {
+        "themes": [{"theme": "粮食概念", "persistence": persistence,
+                    "board": {"name": "粮食概念", "chg_3d": 1.0, "chg_5d": 1.0}}],
+        "caveats": ["板块 3/5/10 日涨跌幅为东财字段序推断，未经 K 线交叉验证（board_multi_day_verified=false）"],
+    }
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(theme_catalog=svc)))
+    asyncio.run(_verify_board_multi_day(request, payload))
+
+    board = payload["themes"][0]["board"]
+    assert board["chg_5d"] == round((121 / 106 - 1) * 100, 2), "官方值覆盖"
+    assert board.get("multi_day_verified") is not True, "K 线不足 11 根，10 日涨幅缺失不打验证标"
+    card = payload["themes"][0]
+    assert card["persistence"]["position_risk"] is True, "官方 5 日涨幅超阈值 → 位置转高"
+    assert "官方 K 线" in next(c for c in card["persistence"]["checks"] if c["axis"] == "risk")["value"]
+    assert card["persistence"]["grade"] == "主线·位置偏高"
+    assert any("位置判定同步升级" in c for c in payload["caveats"])
+
+
 # ------------------------------------------------- 回归：reconciliation 默认日期（retro §三 #8）
 
 

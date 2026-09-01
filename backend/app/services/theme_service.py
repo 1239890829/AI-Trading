@@ -1052,7 +1052,8 @@ def _build_card(
     candidates = [r for r in ladder if r["role"] in ("补涨", "反包")]
 
     # 炒作内核 + 持续性：回答「这个题材在炒什么」和「还值不值得跟」。
-    # 位置判据用 active_days 而非板块多周期涨幅，原因见 dragon_service.news_persistence ②。
+    # 位置判据此处先用 active_days 代理；路由层用 ths 官方板块 K 线覆盖 chg_5d 后
+    # 会调 apply_position_with_5d 把位置升级为真实区间涨幅（P1-6，见 market.py）。
     reasons = [r.reason for r in members if r.reason]
     core = theme_core(theme, reasons)
     persistence = news_persistence(

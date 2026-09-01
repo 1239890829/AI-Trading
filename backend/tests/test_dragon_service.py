@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from app.services.dragon_service import (
     _hhmmss,
+    apply_position_with_5d,
     dragon_score,
     entry_checklist,
     has_repair,
@@ -368,3 +369,47 @@ def test_news_persistence_requires_breadth():
     narrow = news_persistence(core_type="政策驱动", limit_up_count=1,
                               has_second_board=True, active_days=3)
     assert not next(c for c in narrow["checks"] if "真金白银" in c["q"])["pass"]
+
+
+# ---------------------------------------------------------------- P1-6：官方 5 日涨幅升级位置判定
+
+def test_apply_position_with_5d_upgrades_slow_bull_high_position():
+    """慢牛题材：active_days 代理判低位，但官方板块 5 日涨幅已超阈值 → 位置必须转高。
+
+    代理口径（连续活跃天数）只对"连板型"题材敏感；"每日温和上涨型"题材
+    active_days 不高但板块已悄悄涨了一大段，只有真实区间涨幅能抓住。
+    """
+    base = news_persistence(core_type="业绩兑现", limit_up_count=8, has_second_board=True,
+                            active_days=2, main_net_inflow=5e8)
+    assert base["position_risk"] is False
+    r = apply_position_with_5d(base, 12.3)
+    assert r["position_risk"] is True
+    assert "板块 5 日 +12.3%（官方 K 线）" in next(c for c in r["checks"] if c["axis"] == "risk")["value"]
+    assert r["grade"] == "主线·位置偏高"
+    assert r["evidence"] == 3, "位置是风险轴，只封顶不改证据分"
+
+
+def test_apply_position_with_5d_low_position_unchanged():
+    base = news_persistence(core_type="业绩兑现", limit_up_count=8, has_second_board=True,
+                            active_days=2, main_net_inflow=5e8)
+    r = apply_position_with_5d(base, -3.2)
+    assert r["position_risk"] is False
+    assert r["grade"] == "主线候选"
+
+
+def test_apply_position_with_5d_or_semantics_never_relaxes():
+    """取或语义（只收紧不放松）：代理已判高位（active_days≥4），真实涨幅低位也不得放松。"""
+    base = news_persistence(core_type="业绩兑现", limit_up_count=8, has_second_board=True,
+                            active_days=6, main_net_inflow=5e8)
+    assert base["position_risk"] is True
+    r = apply_position_with_5d(base, 1.0)
+    assert r["position_risk"] is True
+
+
+def test_apply_position_with_5d_keeps_veto():
+    """一票否决优先级最高：位置升级不得把「一日游」洗成别的评级。"""
+    base = news_persistence(core_type="政策驱动", limit_up_count=2,
+                            has_second_board=False, active_days=1)
+    r = apply_position_with_5d(base, 15.0)
+    assert r["grade"] == "一日游"
+    assert r["veto"] is True

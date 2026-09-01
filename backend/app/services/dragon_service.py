@@ -102,6 +102,11 @@ THEME_CORE_PERSISTENCE = {
 # 三板以上，此时接力盘的对手盘从跟风资金变成了前排获利盘。
 ACTIVE_DAYS_HIGH = 4
 
+# 「位置已高」的板块 5 日涨幅门槛（P1-6，官方板块 K 线真实区间涨幅）：
+# 题材指数 5 日涨逾 10% 通常已处主升中后段——用真实涨幅补活跃天数口径的盲区
+# （慢牛题材每日涨停不多、active_days 不高，但板块已悄悄涨了一大段）。
+POSITION_5D_HIGH = 10.0
+
 _BOARDS_STAT_RE = re.compile(r"(\d+)\s*天\s*(\d+)\s*板")
 
 
@@ -512,6 +517,46 @@ def theme_core(theme: str | None, reasons: list[str] | None = None) -> dict:
     }
 
 
+def _grade_of(evidence: int, position_risk: bool, veto: bool) -> tuple[str, bool]:
+    """持续性评级映射（证据定资格，风险只封顶）。news_persistence 与
+    apply_position_with_5d 共用，保证位置升级前后评级口径一致。"""
+    if veto:
+        return "一日游", True
+    if evidence >= 3:
+        return ("主线·位置偏高" if position_risk else "主线候选"), False
+    if evidence == 2:
+        return ("次主线/观察·位置偏高" if position_risk else "次主线/观察"), False
+    return "一日游风险高", False
+
+
+def apply_position_with_5d(persistence: dict, chg_5d: float) -> dict:
+    """官方板块 5 日涨跌幅到位后，把位置判定从 active_days 代理升级为真实区间涨幅（P1-6）。
+
+    T3/B3 在路由层用 ths 官方板块 K 线覆盖了 chg_5d 之后调用本函数。
+    判位取**或**（只收紧不放松）：代理口径（连续活跃 ≥4 天）漏掉的慢牛高位
+    由真实涨幅补上（5 日涨逾 POSITION_5D_HIGH）；两者都不命中才算低位。
+    chg_5d 可得时 evidence 不变——位置是风险轴，只改封顶不改资格（见 news_persistence ②）。
+    """
+    check = next((c for c in persistence.get("checks", []) if c.get("axis") == "risk"), None)
+    if check is None or chg_5d is None:
+        return persistence
+    proxy_high = check.get("pass") is False  # 原 pass = not position_high
+    real_high = chg_5d >= POSITION_5D_HIGH
+    high = proxy_high or real_high
+    check["pass"] = not high
+    check["value"] = f"{check['value']}，板块 5 日 {chg_5d:+.1f}%（官方 K 线）"
+    if real_high and not proxy_high:
+        check["note"] = (
+            f"连续活跃天数未到高位，但板块 5 日已涨逾 {POSITION_5D_HIGH:.0f}%——"
+            "利好发布前价格已提前兑现，按高位处理"
+        )
+    persistence["position_risk"] = high
+    grade, veto = _grade_of(persistence.get("evidence", 0), high, persistence.get("veto", False))
+    persistence["grade"] = grade
+    persistence["veto"] = veto
+    return persistence
+
+
 def news_persistence(
     *,
     theme: str | None = None,
@@ -565,8 +610,10 @@ def news_persistence(
     # ⚠️ 这里刻意不用东财板块的 f109/f110（5 日 / 10 日涨幅）。这两个字段的多周期
     # 口径是字段序推断出来的，本项目一直没能交叉验证；2026-08-29 实测确认东财
     # K 线在本机取不到（push2his 全系列域名不可达，push2delay 的 klines 恒为空），
-    # 因此**无法验证的字段不能当判据**。改用我们自己从涨停池快照算出的
+    # 因此**无法验证的字段不能当判据**。默认改用我们自己从涨停池快照算出的
     # 「题材连续活跃天数」——可追溯、可复盘。
+    # P1-6（2026-09-01）：ths 官方板块 K 线的 chg_5d 在路由层交叉验证到位后，
+    # apply_position_with_5d 会把本项升级为真实区间涨幅（或语义，只收紧不放松）。
     #
     # 也不能用板块「当日」涨幅代替：新题材第一天板块本来就大涨，那是启动而不是
     # 「提前涨过」，用它判位置会把所有刚启动的题材一律误杀。
@@ -615,15 +662,7 @@ def news_persistence(
     # evidence 只统计①③④（位置项 ② 是风险轴，不进计数器，见 docstring）
     evidence = sum(1 for c in checks if c["pass"] and c["axis"] == "evidence")
     position_risk = position_high
-
-    if has_second_board is False and limit_up_count <= 2:
-        grade, veto = "一日游", True
-    elif evidence >= 3:
-        grade, veto = ("主线·位置偏高" if position_risk else "主线候选"), False
-    elif evidence == 2:
-        grade, veto = ("次主线/观察·位置偏高" if position_risk else "次主线/观察"), False
-    else:
-        grade, veto = "一日游风险高", False
+    grade, veto = _grade_of(evidence, position_risk, has_second_board is False and limit_up_count <= 2)
 
     return {
         "grade": grade,

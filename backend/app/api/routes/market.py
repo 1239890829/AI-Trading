@@ -37,6 +37,7 @@ from app.schemas.market import (
 )
 from app.services.quote_hub import QuoteHub
 from app.services.speed_sampler import SpeedSampler
+from app.services.dragon_service import apply_position_with_5d
 from app.services.theme_catalog_service import official_multi_day_changes
 
 log = logging.getLogger(__name__)
@@ -898,14 +899,14 @@ async def _verify_board_multi_day(request: Request, board_payload: dict) -> None
         return
 
     name_to_code = {t.name: t.code for t in svc.get_catalog(limit=1000)}
-    targets: dict[str, list[dict]] = {}  # 目录代码 → 需要验证的 board dict 列表
+    targets: dict[str, list[tuple[dict, dict]]] = {}  # 目录代码 → (卡片, board dict) 列表
     for card in cards:
         board = card.get("board")
         if not board:
             continue
         code = name_to_code.get(card.get("theme") or "") or name_to_code.get(board.get("name") or "")
         if code:
-            targets.setdefault(code, []).append(board)
+            targets.setdefault(code, []).append((card, board))
     if not targets:
         return
 
@@ -922,12 +923,13 @@ async def _verify_board_multi_day(request: Request, board_payload: dict) -> None
     await asyncio.gather(*(_fetch(c) for c in targets))
 
     verified = 0
-    for code, boards in targets.items():
+    position_upgraded = 0
+    for code, pairs in targets.items():
         bars = bars_by_code.get(code)
         if not bars:
             continue
         official = official_multi_day_changes(bars)
-        for board in boards:
+        for card, board in pairs:
             for n in (3, 5, 10):
                 key = f"chg_{n}d"
                 if official.get(key) is not None:
@@ -939,14 +941,22 @@ async def _verify_board_multi_day(request: Request, board_payload: dict) -> None
             if board["multi_day_verified"]:
                 board["multi_day_source"] = "ths_official_kline"
                 verified += 1
+            # P1-6：官方 5 日涨幅到位后，把持续性评估的位置判定从 active_days
+            # 代理升级为真实区间涨幅（chg_5d 不可得时保持代理口径，不硬凑）。
+            persistence = card.get("persistence")
+            if official.get("chg_5d") is not None and persistence:
+                apply_position_with_5d(persistence, official["chg_5d"])
+                position_upgraded += 1
 
-    if verified:
+    if verified or position_upgraded:
         caveats = board_payload.setdefault("caveats", [])
+        card_total = sum(len(v) for v in targets.values())
         for i, text in enumerate(caveats):
             if "board_multi_day_verified" in text:
                 caveats[i] = (
                     f"板块 3/5/10 日涨跌幅已用同花顺官方板块 K 线交叉验证"
-                    f"（{verified}/{len(targets)} 张卡片）；未命中的题材保留东财字段序推断"
+                    f"（{verified}/{card_total} 张卡片），持续性评估位置判定同步升级"
+                    f"（{position_upgraded} 张）；未命中的题材保留东财字段序推断"
                 )
                 break
 
