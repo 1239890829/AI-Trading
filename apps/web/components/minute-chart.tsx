@@ -11,6 +11,7 @@ import {
   Time,
 } from "lightweight-charts";
 import type { MinutePoint as P } from "@/lib/api";
+import type { MinuteNewsEvent } from "@/lib/event-markers";
 
 /**
  * 当日分时图（docs/minute-chart-plan.md 模块 1+2+P1，2026-08-30）。
@@ -50,6 +51,7 @@ export function MinuteChart({
   index,
   auction,
   exactBaseline,
+  newsEvents,
   className,
 }: {
   points: P[];
@@ -59,6 +61,8 @@ export function MinuteChart({
   auction?: { price: number; pct: number | null } | null;
   /** 精确量比基线（最近 5 个完整交易日逐 5min 槽同期累计量均值）。缺失回退近似口径。 */
   exactBaseline?: number[] | null;
+  /** 当日新闻分钟事件点（仅含时刻落在槽区间的条目；公告只有日期不进分时）。 */
+  newsEvents?: MinuteNewsEvent[] | null;
   className?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -164,6 +168,31 @@ export function MinuteChart({
         crosshairMarkerVisible: false,
       });
       auctionSeries.setData([{ time: slotSecs[0] as never, value: auction.price }]);
+    }
+
+    // ---- 当日新闻事件点（蓝圆点，挂在事件分钟的价格上）：只在槽已有行情时画
+    // （未来槽无价格锚，跳过不臆造）；同一分钟多条已在上游合并。
+    const evByHHMM = new Map((newsEvents ?? []).map((e) => [e.hhmm, e]));
+    if (evByHHMM.size > 0) {
+      const evData: { time: Time; value: number }[] = [];
+      for (const e of newsEvents ?? []) {
+        const p = byHHMM.get(e.hhmm);
+        if (!p) continue; // 槽尚无行情点（事件在未来/数据缺口）：不画
+        const sec = base0 + Number(e.hhmm.slice(0, 2)) * 3600 + Number(e.hhmm.slice(3, 5)) * 60;
+        evData.push({ time: sec as Time, value: p.price });
+      }
+      if (evData.length > 0) {
+        const evSeries = chart.addLineSeries({
+          color: "#38bdf8",
+          lineWidth: 1,
+          pointMarkersVisible: true,
+          pointMarkersRadius: 3.5,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        evSeries.setData(evData as never);
+      }
     }
 
     if (hasBase) {
@@ -309,6 +338,20 @@ export function MinuteChart({
           : null;
       const pctCls = (v: number | null) => (v == null ? "" : v > 0 ? "text-red-500" : v < 0 ? "text-emerald-500" : "text-zinc-400");
       const lbCls = lb == null ? "" : lb >= 1.5 ? "text-red-500" : lb >= 0.8 ? "text-amber-500" : "text-sky-500";
+      // 事件行：光标分钟（±1 分钟容差）命中当日新闻时追加，长标题截断
+      const bestHHMM = bjIso.slice(11, 16);
+      const hhmmMins = Number(bestHHMM.slice(0, 2)) * 60 + Number(bestHHMM.slice(3, 5));
+      let ev: MinuteNewsEvent | null = null;
+      for (const cand of evByHHMM.values()) {
+        const cm = Number(cand.hhmm.slice(0, 2)) * 60 + Number(cand.hhmm.slice(3, 5));
+        if (Math.abs(cm - hhmmMins) <= 1) {
+          ev = cand;
+          break;
+        }
+      }
+      const evRow = ev
+        ? `<div class="mt-1 border-t border-zinc-200 pt-1 dark:border-zinc-700"><span class="text-sky-500">📰 ${ev.count > 1 ? `×${ev.count} ` : ""}${ev.title.length > 26 ? ev.title.slice(0, 26) + "…" : ev.title}</span></div>`
+        : "";
       tooltip.innerHTML = `
         <div class="font-mono text-[11px] text-zinc-400">${bjIso.slice(11, 16)}</div>
         <div class="flex items-baseline gap-2"><span class="font-mono text-sm font-semibold tabular-nums">${d.price.toFixed(2)}</span>
@@ -319,7 +362,7 @@ export function MinuteChart({
           <span class="text-zinc-500">分钟量</span><span class="font-mono">${d.volume != null ? Math.round(d.volume / 100).toLocaleString() : "--"} 手</span>
           <span class="text-zinc-500">分钟额</span><span class="font-mono">${minuteAmount != null ? minuteAmount.toFixed(0) + " 万" : "--"}</span>
           <span class="text-zinc-500">累计额</span><span class="font-mono">${d.cum_amount != null ? (d.cum_amount / 1e8).toFixed(2) + " 亿" : "--"}</span>
-        </div>`;
+        </div>${evRow}`;
       tooltip.style.opacity = "1";
       const box = ref.current!;
       const w = tooltip.offsetWidth || 150;
@@ -342,7 +385,7 @@ export function MinuteChart({
       chart.remove();
       void unsub;
     };
-  }, [points, prevClose, yesterdayVol, index, auction, exactBaseline, computeLB]);
+  }, [points, prevClose, yesterdayVol, index, auction, exactBaseline, newsEvents, computeLB]);
 
   return (
     <div className="flex h-full w-full flex-col">
@@ -377,6 +420,14 @@ export function MinuteChart({
         {badges.idxPct != null && (
           <span className="rounded border border-violet-500/40 bg-violet-500/10 px-1.5 py-0.5 font-mono tabular-nums text-violet-400" title="上证指数叠加（左轴 %）">
             上证 {fmtPct(badges.idxPct)}
+          </span>
+        )}
+        {newsEvents && newsEvents.length > 0 && (
+          <span
+            className="rounded border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-sky-500"
+            title={`图中蓝色圆点为当日新闻发布时刻（挂在该分钟价格上）：${newsEvents.map((e) => e.hhmm).join(" / ")}`}
+          >
+            新闻 {newsEvents.length} 点
           </span>
         )}
       </div>

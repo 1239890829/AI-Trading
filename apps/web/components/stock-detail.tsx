@@ -8,7 +8,7 @@ import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
 import { useQuoteStream } from "@/hooks/use-quote-stream";
 import { analyze } from "@/lib/technical-analysis";
-import { buildEventMarks } from "@/lib/event-markers";
+import { buildEventMarks, buildMinuteNewsEvents } from "@/lib/event-markers";
 import { mergeQuoteIntoBars, mergeQuoteIntoMinutes } from "@/lib/kline-live";
 import { isIndexSymbol } from "@/lib/api";
 import { notifyWatchlistChanged } from "@/lib/watchlist-sync";
@@ -403,6 +403,12 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     [displayBars, anns, news],
   );
 
+  // 当日新闻 → 分时图分钟事件点：同样零新增请求；公告只有日期不进分时
+  const minuteNewsEvents = useMemo(
+    () => buildMinuteNewsEvents(news ?? [], displayMinutes),
+    [news, displayMinutes],
+  );
+
   // 板块标签分组：把风格/指数成分与概念题材分开，避免"大盘股/MSCI中国"混进题材
   const boardGroups = company?.board_groups;
   const boardRows: BoardRows = boardGroups
@@ -528,6 +534,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                   index={indexOverlay}
                   auction={auction?.auction_price ? { price: auction.auction_price, pct: auction.auction_pct } : null}
                   exactBaseline={vrBaseline}
+                  newsEvents={minuteNewsEvents}
                   className="h-full"
                 />
               ) : (

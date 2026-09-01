@@ -28,9 +28,9 @@
 | 自选分组 + 分组 chips 四分类 | ✅ 已落地 |
 | 右列拖拽调宽、副图高度拖拽 | ✅ 已落地（retro 二.1/2） |
 | 分时：均价线、昨收基准+对称区间、量能红绿、竞价金点、十字光标 | ✅ 已落地（代码核验通过） |
-| 逐笔聚合（主动买卖比条） | ❌ **未做**（ui-redesign §4.2） |
+| 逐笔聚合（主动买卖比条） | ❌ **未做**（ui-redesign §4.2；中期池 P2-5，与 P2-4 逐笔历史一并做） |
 | 集合竞价阶段页 | 🔶 竞价数据端点已接（`/api/auction/{symbol}`、`/api/auction-benchmark`），独立"阶段页"未做 |
-| 新闻/公告图上事件点（§2 第 4 行） | ❌ 未做（Phase 4/7 计划内，依赖新闻模块——新闻已就绪，**现在具备实施条件**） |
+| 新闻/公告图上事件点（§2 第 4 行） | ✅ 已完成：日 K 侧 `buildEventMarks`（P1-8，公告琥珀 aboveBar/新闻蓝 belowBar，`setMarkers` 已核验真实调用）+ 分时侧 `buildMinuteNewsEvents`（2026-09-01：当日新闻挂分钟价格蓝点，盘前/午休/盘后不顺延，tooltip 事件行 + 角标"新闻 N 点"）；公告无分钟精度，只进日 K 不进分时 |
 | L2 盘口 | ❌ 无免费源，Provider 已预留（`orderbook-source-evaluation.md` 结论"现在不动"） |
 
 ### 2. 数据源方案（`data-source-comparison.md` 行动清单 A/B/C）
@@ -43,9 +43,9 @@
 | A4 data-sources.md qdate 更正 | ✅ | comparison §6 已写明"字段存在但不可信" |
 | ~~B1 热股榜 → 题材卡片人气热度~~ | ✅ 已完成（2026-08-31）：`GET /api/themes/hot`（ths 热股 24h 榜 × 官方成分反查聚合）+ /themes 页头人气榜条 + 题材卡人气徽标 | 消费端已落地（provider 方法此前已有） |
 | B2 竞价基准 → 预判模块 | ✅ | 预判引擎已含竞价证据 + `/api/auction-benchmark`（非交易日 502 属预期） |
-| B3 板块真实区间涨幅替换 f109 | 🔶 代码有"区间涨幅"字样，**需确认数据源是否已换 ths** | 待核 |
+| B3 板块真实区间涨幅替换 f109 | ✅ 已完成（2026-09-01，P1-6）：`_verify_board_multi_day` 用 ths 官方板块 K 线覆盖 chg_3d/5d/10d，官方 chg_5d 到位后 `apply_position_with_5d` 重判位置，f109 仅留 `*_inferred` 审计 | 实测 13 卡 9 张官方验证、4 张位置升级 |
 | ~~B4 `seal_nextday` 交叉验证晋级率~~ | ✅ 已完成（2026-08-31）：`GET /api/market/ladder-check`——实抓 5 个可比日 2进3/高位存活与 ths 天梯**逐日完全一致**，拼接逻辑被源方数据证实（1进2 首板不在天梯，不可验） | dragon_service 之外新增 `app/sentiment/ladder_check.py` |
-| B5 东财补 `get_limit_break_pool` 备源 | ❌ **未做**（炸板率仍单点，仅东财） | eastmoney.py 无该方法 |
+| B5 东财补 `get_limit_break_pool` 备源 | ✅ 已完成（2026-08-31，P0-4）：`eastmoney.py get_limit_break_pool`（push2ex getTopicZBPool）已在 composite 链上，消除炸板率单点 | eastmoney.py:214 |
 | C1 `index/constituents` 板块成分表 | ❌ 未做 | — |
 | C2 全市场历史日 K dump（回测地基） | 🔶 已被**替代**：easy_tdx 已提供 2 年分钟级历史（见 §2.4），此条降级 | — |
 | C3 统一 provider 缓存层 | ✅ 已完成（2026-08-31，P0-5）：`app/core/ttl_cache.py` 统一抽象 + /api/system/caches 观测，11 处自写缓存收敛 | — |
@@ -60,7 +60,7 @@
 | P2 10 情绪周期序列 | ✅（retro #17，`sentiment_history` + market 页曲线） |
 | P2 11 梯队断层检测 | ✅（theme_service 含"断层"） |
 | P2 12 明日验证条件 | ✅（预判模块 D1 四问验证 + `verify_next`） |
-| **P2 13 阈值配置化 + 历史分位校准** | ❌ **未做**（仍硬编码 ≥5板/≥60家 等网络阈值） |
+| **P2 13 阈值配置化 + 历史分位校准** | 🔶 阈值配置化 ✅ 已完成（`app/sentiment/band_config.py` + test_sentiment_band_config.py，plan-review P0-3）；历史分位校准（P0-3b）等快照样本自动积累 | — |
 | **P2 14 盘中情绪监控（P0 事件推送）** | ❌ 未做（**阻塞于推送通道选型**） |
 | P3 15 `sentiment.md` 与实现对齐 | 🔶 文档仍含"未实现/TODO"字样，**未彻底对齐** |
 | P3 16 push2ex 行为记录 | ✅（comparison §6） |
@@ -76,7 +76,7 @@
 | ~~P1.5~~ | /heatmap 云图页 | ✅（路由已存在并随 build 产出） |
 | **P2** | 复盘 Agent LLM 四角色编排（TradingAgents 蓝本） | ❌ **阻塞于 LLM 凭据** |
 | **P2** | 报告推送通道（daily_stock_analysis 架构） | ❌ **阻塞于通道选型** |
-| **P2** | 回测配置 mandate 化（yaml 声明） | ❌ **未做（0.5 天，无阻塞）** |
+| **P2** | 回测配置 mandate 化（yaml 声明） | ✅ 已完成：`app/market/mandate.py` + `backend/mandates/*.yaml` + `/api/backtest/mandates` 端点 + test_mandate.py |
 | 备查 | marketdb DuckDB / qlib / AlphaMaster 触发条件 | 已注明，维持观察 |
 
 ### 5. 做T/分时信号（`minute-chart-plan.md` P2 + 分钟回测底座）
