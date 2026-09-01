@@ -9,6 +9,7 @@ import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
 import { Sparkline } from "@/components/sparkline";
 import { useQuoteStream, StreamStatus } from "@/hooks/use-quote-stream";
+import { useRealPositions } from "@/hooks/use-real-positions";
 import {
   addToWatchlist,
   createWatchlistGroup,
@@ -16,7 +17,6 @@ import {
   getMarketOverview,
   getPaperPositions,
   getQuotes,
-  getRealPositions,
   getRiskState,
   getSparklines,
   getWatchlist,
@@ -47,8 +47,10 @@ function WorkbenchInner() {
   const sp = useSearchParams();
   const paramSymbol = sp.get("symbol");
   const [symbols, setSymbols] = useState<string[]>([]);
-  // 真实持仓标的（CONTEXT.md: Holdings Group）：独立于自选，行情订阅与「持仓」分类共用
-  const [realSymbols, setRealSymbols] = useState<string[]>([]);
+  // 真实持仓（CONTEXT.md: Holdings Group）：共用 hook 一份轮询（评审 M3），
+  // 标的列表派生进 WS 订阅，「持仓」分类共用
+  const { data: realData } = useRealPositions();
+  const realSymbols = useMemo(() => realData?.items.map((i) => i.symbol) ?? [], [realData]);
   const [indices, setIndices] = useState<Quote[]>([]);
   const [totalAmount, setTotalAmount] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -159,25 +161,6 @@ function WorkbenchInner() {
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sparkKey]);
-
-  // 真实持仓标的列表：15s 轮询 + 记账事件刷新（「持仓」分类与行情订阅共用）
-  useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      try {
-        const d = await getRealPositions();
-        if (alive) setRealSymbols(d.items.map((i) => i.symbol));
-      } catch {}
-    };
-    void load();
-    const t = setInterval(load, 15_000);
-    const off = onAppEvent(APP_EVENTS.realChanged, () => void load());
-    return () => {
-      alive = false;
-      clearInterval(t);
-      off();
-    };
-  }, []);
 
   // 分组清单由 groupMap 派生（旧代码是独立的 groups 状态，从未被赋值，chips 永远只有「全部」）
   const groups = useMemo(

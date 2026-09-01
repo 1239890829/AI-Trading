@@ -4,19 +4,21 @@ import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { BacktestTab } from "@/components/research/backtest-tab";
 import { AlertsTab } from "@/components/research/alerts-tab";
+import { ReviewTab } from "@/components/research/review-tab";
 
 /**
  * 研究页（2026-09-01 系统重构，docs/architecture-redesign.md §一.1.3）：
- * 回测 / 预警 等低频研究工具的折叠入口，不占一级导航黄金位——
+ * 回测 / 预警 / 复盘 等低频研究工具的折叠入口，不占一级导航黄金位——
  * 预警的价值在"触发时通知"，回测的价值在"策略验证"，都不需要每天打开。
  *
- * 复盘报告已并入每日精选页（复盘归因区）；参数扫描为后端脚本
- * （backend/scripts/replay_sweep.py），不设页面。
+ * 复盘双轨：每日精选页展示 picks 归因（当日操作层面）；本页复盘 tab 展示
+ * 方法论闭环（报告→改进项→采纳统计，review.py 6 端点，评审 A2）。
  */
 
 const TABS = [
   { key: "backtest", label: "回测" },
   { key: "alerts", label: "预警" },
+  { key: "review", label: "复盘" },
 ] as const;
 
 type TabKey = (typeof TABS)[number]["key"];
@@ -63,6 +65,7 @@ function ResearchInner() {
       <div className="min-h-0 flex-1">
         {tab === "backtest" && <BacktestTab />}
         {tab === "alerts" && <AlertsTab />}
+        {tab === "review" && <ReviewTab />}
       </div>
     </main>
   );

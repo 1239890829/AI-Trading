@@ -1,16 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   createRealTrade,
   deleteRealPosition,
   deleteRealTrade,
-  getRealPositions,
   overrideRealPosition,
   type RealPositionRow,
 } from "@/lib/api";
 import { fmt, pctColor, pctText } from "@/lib/format";
-import { APP_EVENTS, emitAppEvent, onAppEvent } from "@/lib/events";
+import { APP_EVENTS, emitAppEvent } from "@/lib/events";
+import { useRealPositions } from "@/hooks/use-real-positions";
 
 /**
  * 真实持仓面板（CONTEXT.md: Real Position 域；与模拟交易 tab 完全独立）。
@@ -24,7 +24,9 @@ import { APP_EVENTS, emitAppEvent, onAppEvent } from "@/lib/events";
  * 汇总行：总市值 / 总成本 / 总浮动盈亏 / 累计已实现盈亏。
  */
 export function RealPositionPanel({ symbol, currentPrice, currentName, className }: { symbol?: string; currentPrice?: number | null; currentName?: string | null; className?: string }) {
-  const [data, setData] = useState<Awaited<ReturnType<typeof getRealPositions>> | null>(null);
+  // 聚合数据：共用 hook 一份轮询（评审 M3），reload 供表单提交后即时刷新
+  const { data, error: loadError, reload } = useRealPositions();
+  // 表单错误与数据加载错误分开展示（原实现共用一个 state，评审 M3 抽 hook 时拆开）
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -51,26 +53,6 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
     if (currentPrice != null && currentPrice > 0) setPrice((p) => p || String(+currentPrice.toFixed(3)));
   }, [currentPrice]);
 
-  const load = useCallback(async () => {
-    try {
-      const d = await getRealPositions();
-      setData(d);
-      setError(null);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-    const t = setInterval(load, 15_000);
-    const off = onAppEvent(APP_EVENTS.realChanged, () => void load());
-    return () => {
-      clearInterval(t);
-      off();
-    };
-  }, [load]);
-
   const notify = () => emitAppEvent(APP_EVENTS.realChanged);
 
   async function submitTrade() {
@@ -87,7 +69,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
       setQty("");
       setFee("");
       notify();
-      await load();
+      await reload();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -105,7 +87,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
       await overrideRealPosition(row.symbol, qv, cv);
       setEditSymbol(null);
       notify();
-      await load();
+      await reload();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -119,7 +101,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
     try {
       await deleteRealPosition(row.symbol);
       notify();
-      await load();
+      await reload();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -198,7 +180,9 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
         </div>
       </div>
 
-      {error && <div className="shrink-0 px-2 py-1.5 text-xs text-amber-600 dark:text-amber-300">{error}</div>}
+      {(error || loadError) && (
+        <div className="shrink-0 px-2 py-1.5 text-xs text-amber-600 dark:text-amber-300">{error ?? loadError}</div>
+      )}
 
       {/* 持仓视图 */}
       <div className="min-h-0 flex-1 overflow-y-auto">

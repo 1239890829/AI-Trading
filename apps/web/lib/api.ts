@@ -1222,3 +1222,55 @@ export async function checkOrderRisk(req: OrderCheckRequest): Promise<OrderCheck
 }
 
 
+
+// ---- 复盘方法论闭环（研究页复盘 tab，A2）：报告 / 有效性统计 ----
+
+export interface ReviewReportSummary {
+  review_id: string;
+  trade_date: string;
+  methodology_version: string;
+  model_actual: string;
+  model_degraded: boolean;
+  summary: string;
+  gap_count: number;
+  action_item_count: number;
+  generated_at: string;
+}
+
+export interface ReviewReportDetail {
+  review_id: string;
+  trade_date: string;
+  generated_at: string;
+  methodology_version: string;
+  model: { requested?: string; actual?: string; degraded?: boolean; reason?: string };
+  dimensions: { key: string; title: string; status: string; findings: string[]; judgements: string[]; gaps: string[] }[];
+  action_items: {
+    id: string;
+    title: string;
+    category: string;
+    priority: string;
+    expected_impact: string;
+    evidence: string;
+  }[];
+  meta_insights: { dimension: string; observation: string; effectiveness: string; evidence: string; suggestion: string }[];
+  summary: string;
+}
+
+export interface ReviewEffectiveness {
+  by_category: Record<
+    string,
+    { total: number; confirmed: number; reverted: number; rejected: number; pending: number; adoption_rate: number; revert_rate: number | null }
+  >;
+}
+
+export async function getReviewReports(): Promise<ReviewReportSummary[]> {
+  return (await getJson<ReviewReportSummary[]>("/api/review/reports")).data;
+}
+
+export async function getReviewReport(tradeDate: string): Promise<ReviewReportDetail> {
+  return (await getJson<ReviewReportDetail>(`/api/review/reports/${tradeDate}`)).data;
+}
+
+export async function getReviewEffectiveness(): Promise<ReviewEffectiveness> {
+  return (await getJson<ReviewEffectiveness>("/api/review/effectiveness")).data;
+}
