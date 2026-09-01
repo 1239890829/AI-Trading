@@ -340,7 +340,10 @@ elif pct < -(limit + tol):                    限价口径存疑，单独计数�
 
 ### C. 中期
 
-- **C1** `index/constituents` 建板块成分表 → 题材指数、板块内资金合力。
+- **C1** ✅ 已完成（2026-09-01 核验）：`theme_catalog_service.fetch_members` 调 ths `/api/a-share-index/constituents/ths-stock-list`，
+  `sync_members`/`_write_members` 落 `theme_member` 表（成分消失则删除，与官方"当前成分"口径一致），`sync_stale_members` 按 TTL 增量补。
+  实测：390 题材 / 70351 条成分 / 覆盖率 **390/390 无缺失**（2026-09-01 审计发现的「352 个题材成分从未同步」已修复）；
+  UI 消费端 `GET /api/themes/catalog/{code}/members`。
 - **C2** `dump/daily-k` 全市场历史日 K → Phase 6 回测地基。
 - **C3** ✅ 已完成（2026-08-31，P0-5）：`app/core/ttl_cache.py` 统一 TTL/LRU/单飞/统计抽象，
   11 处自写缓存收敛，`GET /api/system/caches` 可观测（详见 docs/plan-review.md P0-5）。

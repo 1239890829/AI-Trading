@@ -46,7 +46,7 @@
 | B3 板块真实区间涨幅替换 f109 | ✅ 已完成（2026-09-01，P1-6）：`_verify_board_multi_day` 用 ths 官方板块 K 线覆盖 chg_3d/5d/10d，官方 chg_5d 到位后 `apply_position_with_5d` 重判位置，f109 仅留 `*_inferred` 审计 | 实测 13 卡 9 张官方验证、4 张位置升级 |
 | ~~B4 `seal_nextday` 交叉验证晋级率~~ | ✅ 已完成（2026-08-31）：`GET /api/market/ladder-check`——实抓 5 个可比日 2进3/高位存活与 ths 天梯**逐日完全一致**，拼接逻辑被源方数据证实（1进2 首板不在天梯，不可验） | dragon_service 之外新增 `app/sentiment/ladder_check.py` |
 | B5 东财补 `get_limit_break_pool` 备源 | ✅ 已完成（2026-08-31，P0-4）：`eastmoney.py get_limit_break_pool`（push2ex getTopicZBPool）已在 composite 链上，消除炸板率单点 | eastmoney.py:214 |
-| C1 `index/constituents` 板块成分表 | ❌ 未做 | — |
+| C1 `index/constituents` 板块成分表 | ✅ 已完成（`theme_catalog_service.fetch_members` 调 ths `/api/a-share-index/constituents/ths-stock-list`，`sync_members`/`_write_members` 落 `theme_member` 表，`sync_stale_members` 按 TTL 增量补） | 2026-09-01 实测：390 题材 / 70351 条成分 / **覆盖率 390 或 390（0 缺失）**，消费端 `GET /api/themes/catalog/{code}/members`（886109.TI 返回 101 只 `ths_official` 成分）；2026-09-01 审计发现的「352 个题材成分从未同步」已修复 |
 | C2 全市场历史日 K dump（回测地基） | 🔶 已被**替代**：easy_tdx 已提供 2 年分钟级历史（见 §2.4），此条降级 | — |
 | C3 统一 provider 缓存层 | ✅ 已完成（2026-08-31，P0-5）：`app/core/ttl_cache.py` 统一抽象 + /api/system/caches 观测，11 处自写缓存收敛 | — |
 
