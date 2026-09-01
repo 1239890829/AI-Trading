@@ -345,10 +345,10 @@ export function MinuteChart({
   }, [points, prevClose, yesterdayVol, index, auction, exactBaseline, computeLB]);
 
   return (
-    <div className="relative h-full w-full">
-      <div ref={ref} className={`h-full w-full ${className ?? ""}`} />
-      {/* 角标：量比 + 竞价 + 上证叠加图例 */}
-      <div ref={badgeRef} className="pointer-events-none absolute right-2 top-1.5 z-10 flex items-center gap-2 text-[11px]">
+    <div className="flex h-full w-full flex-col">
+      {/* 角标行：量比 + 竞价 + 上证叠加图例——独立文档流行（原 absolute right-2 top-1.5
+          浮层压在图表右上角价格标签/最新价区域），不占图表绘制空间、互不遮挡 */}
+      <div ref={badgeRef} className="flex shrink-0 items-center justify-end gap-2 px-2 pb-0.5 pt-1 text-[11px]">
         {auction?.pct != null && (
           <span
             className={`rounded border px-1.5 py-0.5 font-mono tabular-nums ${
@@ -380,10 +380,13 @@ export function MinuteChart({
           </span>
         )}
       </div>
-      <div
-        ref={tipRef}
-        className="pointer-events-none absolute left-0 top-0 z-10 min-w-[150px] rounded-lg border border-zinc-200 bg-white/95 px-2.5 py-1.5 opacity-0 shadow-sm transition-opacity dark:border-zinc-700 dark:bg-zinc-900/95"
-      />
+      <div className="relative min-h-0 w-full flex-1">
+        <div ref={ref} className={`h-full w-full ${className ?? ""}`} />
+        <div
+          ref={tipRef}
+          className="pointer-events-none absolute left-0 top-0 z-10 min-w-[150px] rounded-lg border border-zinc-200 bg-white/95 px-2.5 py-1.5 opacity-0 shadow-sm transition-opacity dark:border-zinc-700 dark:bg-zinc-900/95"
+        />
+      </div>
     </div>
   );
 }

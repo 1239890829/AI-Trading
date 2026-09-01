@@ -400,20 +400,6 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
 
   return (
     <div className={`relative flex min-h-0 flex-col ${className ?? ""}`}>
-      <div className="absolute right-2 top-2 z-10 flex gap-1">
-        <button onClick={() => zoomTime(0.7)} className="h-6 w-6 rounded border border-zinc-300 bg-white/80 text-xs text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900/80 dark:text-zinc-300 dark:hover:bg-zinc-800" aria-label="放大">＋</button>
-        <button onClick={() => zoomTime(1.4)} className="h-6 w-6 rounded border border-zinc-300 bg-white/80 text-xs text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900/80 dark:text-zinc-300 dark:hover:bg-zinc-800" aria-label="缩小">−</button>
-        <button
-          onClick={() => {
-            const n = bars.length;
-            chartRef.current?.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 20), to: n + 2 });
-          }}
-          className="h-6 rounded border border-zinc-300 bg-white/80 px-1.5 text-[10px] text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900/80 dark:text-zinc-300 dark:hover:bg-zinc-800"
-          aria-label="回到最近20日"
-        >
-          20D
-        </button>
-      </div>
       {/* OHLC 信息条（对标同花顺）：hover 切换该日数据，离开回退最新 */}
       {d && (
         <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-0.5 border-b border-zinc-100 px-3 py-1 font-mono text-[11px] tabular-nums dark:border-zinc-800/60">
@@ -449,9 +435,24 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
             {label}
           </button>
         ))}
-        <span className="ml-auto text-[10px] text-zinc-500" title="B/S=模拟交易成交；紫[榜]=龙虎榜日；琥珀●=公告 蓝●=新闻（!=重要度高）——消息面与价格走势对照；hover 信息条显示当日事件标题">
+        <span className="ml-auto hidden text-[10px] text-zinc-500 xl:inline" title="B/S=模拟交易成交；紫[榜]=龙虎榜日；琥珀●=公告 蓝●=新闻（!=重要度高）——消息面与价格走势对照；hover 信息条显示当日事件标题">
           金叉/死叉为 MA5×MA10 技术信号 · 紫[榜]=龙虎榜日 · B/S=模拟交易成交 · 黄虚线=持仓成本 · 琥珀●=公告 蓝●=新闻(!=重要度高)
         </span>
+        {/* 缩放控件：入文档流（原 absolute right-2 top-2 会压住 OHLC 信息条右端的 MA 数值） */}
+        <div className="ml-auto flex shrink-0 items-center gap-1 xl:ml-2">
+          <button onClick={() => zoomTime(0.7)} className="h-6 w-6 rounded border border-zinc-300 bg-white/80 text-xs text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900/80 dark:text-zinc-300 dark:hover:bg-zinc-800" aria-label="放大">＋</button>
+          <button onClick={() => zoomTime(1.4)} className="h-6 w-6 rounded border border-zinc-300 bg-white/80 text-xs text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900/80 dark:text-zinc-300 dark:hover:bg-zinc-800" aria-label="缩小">−</button>
+          <button
+            onClick={() => {
+              const n = bars.length;
+              chartRef.current?.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 20), to: n + 2 });
+            }}
+            className="h-6 rounded border border-zinc-300 bg-white/80 px-1.5 text-[10px] text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900/80 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            aria-label="回到最近20日"
+          >
+            20D
+          </button>
+        </div>
       </div>
       <div className={`relative min-h-0 w-full flex-1 ${className ?? ""}`}>
         <div ref={containerRef} className="h-full w-full" />
