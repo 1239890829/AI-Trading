@@ -18,6 +18,8 @@ export type StreamStatus = "connecting" | "live" | "polling" | "closed" | "stale
 export function useQuoteStream(symbols: string[]) {
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [status, setStatus] = useState<StreamStatus>("connecting");
+  // 已发送的订阅 key（去重用，见下方订阅 effect 注释）
+  const [sentKey, setSentKey] = useState("");
 
   const key = [...symbols].sort().join(",");
   const hasSymbols = key.length > 0;
@@ -84,7 +86,7 @@ export function useQuoteStream(symbols: string[]) {
         retry = 0;
         stopPolling();
         lastMsgAt = Date.now();
-        lastSentKey.current = ""; // 新 socket 允许下一次 key 变化时重发订阅
+        setSentKey(""); // 新 socket 允许下一次 key 变化时重发订阅
         setStatus("live");
         pingTimer = setInterval(() => {
           if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -148,17 +150,17 @@ export function useQuoteStream(symbols: string[]) {
   // ⚠️ 依赖只允许 key（集合的稳定字符串）：symbols 数组每次渲染都是新引用，
   // 放进依赖数组 → 每次渲染重发 subscribe → 后端回快照 → setQuotes →
   // 再渲染 → 死循环（Maximum update depth exceeded，2026-09-01 实测白屏）。
-  // 发送内容读 symbolsRef（连接期最新集合），并与 lastSentKey 去重。
-  const lastSentKey = useRef<string>("");
+  // 去重键用 state（sentKey）：ref 跨 effect 写入触发 react-hooks 编译规则
+  // 报 error（"This value cannot be modified"），且发送后的一次重渲染无副作用。
   useEffect(() => {
     const ws = wsRef.current;
     if (!connectedRef.current || !ws || ws.readyState !== WebSocket.OPEN) return;
-    if (!key || key === lastSentKey.current) return;
-    lastSentKey.current = key;
+    if (!key || key === sentKey) return;
+    setSentKey(key);
     try {
       ws.send(JSON.stringify({ action: "subscribe", symbols: [...new Set(symbolsRef.current)] }));
     } catch {}
-  }, [key]);
+  }, [key, sentKey]);
 
   return { quotes, status };
 }

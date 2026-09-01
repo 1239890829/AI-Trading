@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CandlestickData,
   createChart,
@@ -87,15 +87,21 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
   useEffect(() => {
     const saved = Number(localStorage.getItem("ashare-sub-h"));
     if (saved >= 0.1 && saved <= 0.45) {
-      setSubH(saved);
-      subHRef.current = saved;
+      // rAF 延迟：set-state-in-effect 规则禁止 effect 体内同步 setState
+      const raf = requestAnimationFrame(() => {
+        setSubH(saved);
+        subHRef.current = saved;
+      });
+      return () => cancelAnimationFrame(raf);
     }
   }, []);
 
   // hover 联动（2026-09-01 用户反馈 #2/#3）：十字光标所在 bar 的 OHLC/量额/MA/事件
-  // 显示在顶部信息条；离开图表回退到最新一根。bars 用 ref（创建 effect 闭包拿最新值）
+  // 显示在顶部信息条；离开图表回退到最新一根。bars 用 ref（crosshair 回调闭包拿最新值）
   const barsRef = useRef(bars);
-  barsRef.current = bars;
+  useEffect(() => {
+    barsRef.current = bars;
+  }, [bars]);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   // fill 时算好的 MA 序列快照（按 data 索引），hover 信息条直接取值
   const maSnapRef = useRef<Record<string, (number | null)[]>>({});
@@ -374,6 +380,16 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
   const d = bars.length > 0 ? bars[Math.max(0, Math.min(idx, bars.length - 1))] : null;
   const prev = d && idx > 0 ? bars[idx - 1] : null;
   const dPct = d?.close != null && prev?.close ? ((d.close - prev.close) / prev.close) * 100 : null;
+  // 信息条 MA 值：渲染期从 bars 直算（与 fill() 的 calcMA 同口径）——
+  // 读 maSnapRef 属渲染期访问 ref，react-hooks 规则禁止
+  const hoverMA = useMemo(() => {
+    const closes = bars.filter((b) => b.open != null && b.close != null).map((b) => b.close as number);
+    const out: Record<string, (number | null)[]> = {};
+    MA_DEFS.forEach(([key, n]) => {
+      out[key] = calcMA(closes, n);
+    });
+    return out;
+  }, [bars]);
   const dEvents =
     d && ind.events
       ? (eventMarks ?? []).filter((m) => m.date === d.ts.slice(0, 10))
@@ -411,7 +427,7 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
           {d.amount != null && <span className="text-zinc-400">额 <span className="text-zinc-700 dark:text-zinc-200">{fmtAmount(d.amount)}</span></span>}
           {MA_DEFS.filter(([key]) => ind[key]).map(([key, , color]) => (
             <span key={key} style={{ color }} className="hidden lg:inline">
-              {key.toUpperCase()} <span className="text-zinc-700 dark:text-zinc-200">{maSnapRef.current[key]?.[Math.max(0, Math.min(idx, (maSnapRef.current[key]?.length ?? 1) - 1))] != null ? fmt(maSnapRef.current[key][idx]) : "--"}</span>
+              {key.toUpperCase()} <span className="text-zinc-700 dark:text-zinc-200">{hoverMA[key]?.[Math.max(0, Math.min(idx, (hoverMA[key]?.length ?? 1) - 1))] != null ? fmt(hoverMA[key][Math.max(0, Math.min(idx, (hoverMA[key]?.length ?? 1) - 1))]) : "--"}</span>
             </span>
           ))}
           {dEvents.length > 0 && (
