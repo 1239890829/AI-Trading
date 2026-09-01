@@ -262,6 +262,7 @@ def dragon_score(
     is_theme_highest: bool = False,
     is_second_highest: bool = False,
     boards_stat: str | None = None,
+    auction_gap_pct: float | None = None,
 ) -> dict:
     """龙头前瞻打分：在首板/二板阶段识别"像不像龙头"。
 
@@ -298,7 +299,23 @@ def dragon_score(
     repair = has_repair(boards_stat, boards)
     p_repair = 1 if repair else 0
 
-    total = p_ratio + p_time + p_turn + p_cap + p_break + p_pos + p_repair
+    # 竞价强弱（B2）：当日集合竞价高开幅度。缺失中性（0 分 + 记入 missing）——
+    # 历史回看/非交易日拿不到竞价，不能当成"低开"罚分。分带与介入清单口径一致：
+    # 3%–7% 是有新资金认可的标准接力区间；>8% 超高开（含一字）获利盘抛压剧增。
+    if auction_gap_pct is None:
+        p_auction, l_auction = 0, "竞价缺失（0）"
+    elif auction_gap_pct < 0:
+        p_auction, l_auction = -2, f"竞价低开 {auction_gap_pct:+.1f}%（-2）"
+    elif auction_gap_pct < 3:
+        p_auction, l_auction = 0, f"竞价高开 {auction_gap_pct:.1f}%（0）"
+    elif auction_gap_pct <= 7:
+        p_auction, l_auction = 2, f"竞价高开 {auction_gap_pct:.1f}%（+2，标准接力区间）"
+    elif auction_gap_pct <= 8:
+        p_auction, l_auction = 0, f"竞价高开 {auction_gap_pct:.1f}%（0，偏高开观察）"
+    else:
+        p_auction, l_auction = -2, f"竞价高开 {auction_gap_pct:.1f}%（-2，超高开获利盘抛压剧增）"
+
+    total = p_ratio + p_time + p_turn + p_cap + p_break + p_pos + p_repair + p_auction
     grade = next(label for cut, label in DRAGON_GRADES if total >= cut)
 
     missing = [
@@ -308,6 +325,7 @@ def dragon_score(
             ("封板时间", t is not None),
             ("换手率", turnover_rate is not None),
             ("流通市值", float_market_cap is not None),
+            ("竞价高开", auction_gap_pct is not None),
         )
         if not ok
     ]
@@ -326,6 +344,7 @@ def dragon_score(
             l_bc,
             f"题材地位 {l_pos}（{p_pos:+d}）",
             f"{'反包弱转强（+1）' if repair else '非反包（0）'}",
+            l_auction,
         ],
         "missing": missing,
     }

@@ -326,9 +326,14 @@ elif pct < -(limit + tol):                    限价口径存疑，单独计数�
 ### B. 短期（补齐高价值缺口）
 
 - **B1** 接 `hot-stock-list` → 题材卡片增加"人气热度 + 排名变化"。
-- **B2** 接 `auction/short-term-benchmark` → 龙头打分增加"竞价强弱"维度。
-- **B3** 接 `index/prices/historical` → `news_persistence` ②「位置」
-  从 `active_days` 代理升级为真实板块区间涨幅（**替换掉无法验证的东财 f109**）。
+- **B2** ✅ 已完成（2026-09-01）：龙头打分增加"竞价强弱"维度——`_auction_gaps` 批量拉
+  `auction/snapshot`（当日限定 + mock 桩防御，双守卫防跨日污染），`dragon_score` 按带计分：
+  低开 -2、0–3% 0、3–7% +2（标准接力）、7–8% 0（观察）、>8% -2（超高开抛压），
+  缺失记"竞价高开"缺失维度不惩罚。
+- **B3** ✅ 已完成（2026-09-01，P1-6）：`news_persistence` ②「位置」升级为真实板块区间涨幅——
+  路由层 `_verify_board_multi_day` 用 ths 官方板块 K 线（`index/kline`）验证 chg_3d/5d/10d，
+  官方 chg_5d 到位后 `apply_position_with_5d` 重判位置（POSITION_5D_HIGH=10%，或语义只收紧不放松），
+  f109 仅留 `*_inferred` 审计。
 - **B4** ✅ 已完成（2026-08-31）：`GET /api/market/ladder-check` 用 seal_nextday 交叉验证
   自算晋级率，实抓 5 可比日 2进3/高位存活逐日一致、零漂移。
 - **B5** ✅ 已完成（2026-08-31，P0-4）：getTopicZBPool 双源已落地。

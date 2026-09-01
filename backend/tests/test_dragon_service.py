@@ -7,6 +7,9 @@
 """
 from __future__ import annotations
 
+from datetime import date
+from types import SimpleNamespace
+
 from app.services.dragon_service import (
     _hhmmss,
     apply_position_with_5d,
@@ -93,7 +96,7 @@ def test_dragon_score_identifies_leader_at_second_board():
     d = dragon_score(
         boards=2, seal_amount=3e8, float_market_cap=8e9,  # 封单比 3.75%
         first_seal_time="09:32:00", break_count=0, turnover_rate=11.0,
-        is_theme_highest=True,
+        is_theme_highest=True, auction_gap_pct=3.5,
     )
     assert d["grade"] == "龙头相"
     assert d["score"] >= 12
@@ -120,7 +123,8 @@ def test_dragon_score_missing_dimensions_do_not_punish():
     d = dragon_score(boards=1, seal_amount=None, float_market_cap=None,
                      first_seal_time=None, turnover_rate=None, break_count=None)
     assert d["score"] == 0
-    assert len(d["missing"]) == 4
+    assert len(d["missing"]) == 5  # 封单比/封板时间/换手率/流通市值/竞价高开
+    assert "竞价高开" in d["missing"]
 
 
 def test_dragon_score_cap_fit_penalizes_extremes():
@@ -413,3 +417,95 @@ def test_apply_position_with_5d_keeps_veto():
     r = apply_position_with_5d(base, 15.0)
     assert r["grade"] == "一日游"
     assert r["veto"] is True
+
+
+# ---------------------------------------------------------------- B2：竞价强弱维度
+
+def test_dragon_score_auction_gap_bands():
+    """竞价分带与介入清单口径一致：3–7% 标准接力 +2，>8% 超高开 -2，低开 -2。"""
+    kw = dict(boards=2, seal_amount=5e7, float_market_cap=5e9,
+              first_seal_time="09:40:00", turnover_rate=8.0)
+    base = dragon_score(**kw)  # 无竞价：缺失中性
+    assert next(l for l in base["basis"] if "竞价" in l) == "竞价缺失（0）"
+    assert "竞价高开" in base["missing"]
+
+    good = dragon_score(**kw, auction_gap_pct=5.0)
+    weak = dragon_score(**kw, auction_gap_pct=1.0)
+    ultra = dragon_score(**kw, auction_gap_pct=9.5)
+    low = dragon_score(**kw, auction_gap_pct=-2.0)
+    high_edge = dragon_score(**kw, auction_gap_pct=7.8)
+
+    assert good["score"] == base["score"] + 2, "标准接力区间 +2"
+    assert weak["score"] == base["score"], "弱高开 0 分"
+    assert ultra["score"] == base["score"] - 2, "超高开获利盘抛压 -2"
+    assert low["score"] == base["score"] - 2, "低开 -2"
+    assert high_edge["score"] == base["score"], "7–8% 偏高开观察 0 分"
+    assert "竞价高开" not in good["missing"], "有数据即不计入缺失"
+
+
+def test_dragon_score_auction_tips_grade_at_boundary():
+    """竞价维度应能在阈值附近改变评级（证明它真的参与总分）。"""
+    kw = dict(boards=1, seal_amount=2e7, float_market_cap=8e9,
+              first_seal_time="14:50:00", turnover_rate=3.0)
+    without = dragon_score(**kw)
+    with_gap = dragon_score(**kw, auction_gap_pct=5.0)
+    assert with_gap["score"] > without["score"]
+
+
+# ---------------------------------------------------------------- B2：竞价数据守卫
+
+def test_auction_gaps_guards_against_cross_day_pollution():
+    """历史日期必须返回 None：ths 竞价端点只有当日数据，绝不能让历史回看套上今日竞价。"""
+    import asyncio
+    from datetime import date, timedelta
+
+    from app.services.theme_service import _auction_gaps
+
+    calls = {"n": 0}
+
+    async def fake_snapshot(symbols, stage="final"):
+        calls["n"] += 1
+        return [{"symbol": symbols[0], "auction_pct": 5.0, "data_status": "final"}]
+
+    provider = SimpleNamespace(get_auction_snapshot=fake_snapshot)
+    pool = [SimpleNamespace(symbol="600519")]
+    past = date.today() - timedelta(days=1)
+    assert asyncio.run(_auction_gaps(provider, past, pool)) is None
+    assert calls["n"] == 0, "历史日期不得发起竞价请求"
+
+
+def test_auction_gaps_filters_not_ready_and_batches():
+    """非就绪条目跳过；>100 只分批；provider 异常只降级不抛。"""
+    import asyncio
+
+    from app.services.theme_service import _auction_gaps
+
+    seen_batches: list[int] = []
+
+    async def fake_snapshot(symbols, stage="final"):
+        seen_batches.append(len(symbols))
+        if len(seen_batches) > 1:  # 模拟第二批整批失败
+            raise RuntimeError("boom")
+        return [
+            {"symbol": s, "auction_pct": 3.0, "data_status": "final"} for s in symbols[:2]
+        ] + [{"symbol": "000003", "auction_pct": None, "data_status": "final"},
+             {"symbol": "000004", "auction_pct": 9.0, "data_status": "not_ready"}]
+
+    provider = SimpleNamespace(get_auction_snapshot=fake_snapshot)
+    pool = [SimpleNamespace(symbol=f"{600000 + i:06d}") for i in range(120)]
+    out = asyncio.run(_auction_gaps(provider, date.today(), pool))
+    assert out is not None
+    assert out[f"{600000:06d}"] == 3.0 and out[f"{600001:06d}"] == 3.0
+    assert "000003" not in out and "000004" not in out, "缺失/未就绪不标 gap"
+    assert max(seen_batches) <= 100, "单批 ≤100"
+    assert len(seen_batches) >= 2, "已分批"
+
+
+def test_auction_gaps_skips_for_mock_provider():
+    """provider 无 get_auction_snapshot（mock 桩）→ None，不影响现有链路。"""
+    import asyncio
+
+    from app.services.theme_service import _auction_gaps
+
+    provider = SimpleNamespace()  # 无该方法
+    assert asyncio.run(_auction_gaps(provider, date.today(), [SimpleNamespace(symbol="600519")])) is None

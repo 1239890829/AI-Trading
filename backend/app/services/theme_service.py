@@ -614,13 +614,14 @@ async def build_theme_board(
             "summary": {"limit_up_total": 0, "theme_count": 0, "note": "当日无涨停数据"},
         }
 
-    # ---- 2~5 并发：东财增强维度 / 板块指标 / 历史涨停池 / 炸板率 ----
+    # ---- 2~5 并发：东财增强维度 / 板块指标 / 历史涨停池 / 炸板率 / 竞价强弱 ----
     # 串行会在慢源上叠加耗时（曾把请求拖到 3 分钟并压垮事件循环）。
-    enhance, board_index, history, market_break_rate = await asyncio.gather(
+    enhance, board_index, history, market_break_rate, auction_gaps = await asyncio.gather(
         _em_enhancement_map(provider, trade_date),
         _board_index(provider),
         _load_history(provider, trade_date, lookback_days),
         _market_break_rate(provider, trade_date, len(today_pool)),
+        _auction_gaps(provider, trade_date, today_pool),
     )
     # history 由近及远，第 0 个就是最近的前一交易日
     prev_pool = history[0][1] if history else None
@@ -696,6 +697,7 @@ async def build_theme_board(
                 market_break_rate=market_break_rate,
                 snapshot_map=snapshot_map,
                 prev_theme_symbols=prev_theme_symbols.get(theme, set()),
+                auction_gaps=auction_gaps,
             )
         )
 
@@ -849,6 +851,44 @@ async def _market_break_rate(provider, trade_date: date, limit_up_count: int) ->
     return round(len(broken) / (len(broken) + limit_up_count), 4)
 
 
+async def _auction_gaps(provider, trade_date: date, pool: list) -> dict[str, float] | None:
+    """当日集合竞价高开幅度 map（B2：龙头打分竞价强弱维度的数据源）。
+
+    双守卫，任一不满足返回 None（打分缺口中性）：
+    - trade_date 必须是**今天**——ths 竞价端点只有当日数据，历史回看若套上
+      今日竞价就是跨日污染（本项目数据源日期回退的坑踩过多次）；
+    - provider 需实现 get_auction_snapshot（mock 桩/旧链可能没有）。
+    分批 ≤100 只（ths 单次上限）；非就绪条目（not_ready/suspended）跳过不标 gap。
+    """
+    if trade_date != date.today():
+        return None
+    fn = getattr(provider, "get_auction_snapshot", None)
+    if fn is None:
+        return None
+    symbols: list[str] = []
+    for rec in pool:
+        if rec.symbol not in symbols:
+            symbols.append(rec.symbol)
+    out: dict[str, float] = {}
+    for i in range(0, len(symbols), 100):
+        batch = symbols[i : i + 100]
+        try:
+            rows = await fn(batch, stage="final")
+        except Exception as exc:  # noqa: BLE001 - 竞价缺失只降级不阻断看板
+            log.warning("auction snapshot unavailable: %s", exc)
+            continue
+        for r in rows or []:
+            status = r.get("data_status")
+            pct = r.get("auction_pct")
+            if status not in (None, "ready", "final") or pct is None:
+                continue
+            try:
+                out[r["symbol"]] = float(pct)
+            except (TypeError, ValueError):
+                continue
+    return out or None
+
+
 def _theme_stats(pool: list) -> dict[str, dict]:
     """统计一批涨停池中各题材的 (家数, 最高板)。"""
     stats: dict[str, dict] = {}
@@ -877,6 +917,7 @@ def _build_card(
     market_break_rate: float | None,
     snapshot_map: dict[str, dict] | None,
     prev_theme_symbols: set[str],
+    auction_gaps: dict[str, float] | None = None,
 ) -> dict:
     """构建单张题材卡片。"""
     theme_max_boards = max((r.consecutive_boards or 0) for r in members)
@@ -936,6 +977,7 @@ def _build_card(
             is_theme_highest=(boards == theme_max_boards and theme_max_boards >= 2),
             is_second_highest=second_highest,
             boards_stat=rec.boards_stat,
+            auction_gap_pct=(auction_gaps or {}).get(rec.symbol),
         )
         senti = stock_sentiment(
             boards=boards,
