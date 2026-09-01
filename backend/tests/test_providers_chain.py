@@ -259,7 +259,11 @@ def test_hub_broadcasts_stale_on_provider_failure():
 def test_hub_get_quotes_falls_back_to_indices():
     """指数行情兜底：indices 缓存的 key 是裸 000001（与腾讯/ths 的 get_indices 一致），
     而 WS 订阅/详情链路查询用的是带前缀形态 sh000001——不兜底则指数永远收不到行情。
-    返回的 Quote 必须带查询形态的 symbol（model_copy，不变异共享缓存对象）。"""
+    返回的 Quote 必须带查询形态的 symbol（model_copy，不变异共享缓存对象）。
+
+    ⚠️ 2026-09-01 语义收紧（P0 撞码修复）：**只有带 sh/sz/bj 前缀的查询**才回退
+    indices——裸 6 位代码是股票（000001 平安银行↔上证指数、000688 国城矿业↔科创50
+    撞码），裸查询命中指数曾是"指数数据冒充股票行情"事故的根因。"""
     from app.schemas.market import Quote
     from app.services.quote_hub import QuoteHub
 
@@ -278,8 +282,10 @@ def test_hub_get_quotes_falls_back_to_indices():
     got = hub.get_quotes(["600519", "sh000001"])
     assert [x.symbol for x in got] == ["600519", "sh000001"]
     assert got[1].name == "上证指数"
-    # 裸查询也命中 indices（broadcast 对裸形态订阅同样可达）
-    assert [x.symbol for x in hub.get_quotes(["000001"])] == ["000001"]
+    # 裸 000001（平安银行）绝不命中指数缓存——宁可空返回也不冒充
+    assert hub.get_quotes(["000001"]) == []
+    # 带前缀指数查询可达（broadcast 对 sh000001 形态订阅可达）
+    assert [x.symbol for x in hub.get_quotes(["sh000001"])] == ["sh000001"]
     # 双源都缺失的 symbol 返回空列表而不是 KeyError
     assert hub.get_quotes(["999999"]) == []
 
