@@ -57,7 +57,8 @@ class OverviewPayload(BaseModel):
     """GET /market/overview 的 data。"""
 
     indices: list[Quote]
-    total_amount: float
+    # 两市成交额（元）：全市场快照求和口径；快照未就绪时为 None（前端显示 --）
+    total_amount: float | None
 
 
 class MinutePointModel(BaseModel):

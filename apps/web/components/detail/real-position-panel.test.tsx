@@ -70,7 +70,7 @@ describe("RealPositionPanel 真实持仓", () => {
     await waitFor(() => expect(screen.getByText("共进股份")).toBeTruthy());
     const t = document.body.textContent ?? "";
     expect(t).toContain("18.48"); // 摊薄成本 18.479 按两位小数展示
-    expect(t).toContain("已手动修正");
+    expect(t).toContain("已修正"); // 卡片化（2026-09-01）后徽标文案缩短
     expect(t).toContain("不构成买卖建议");
   });
 

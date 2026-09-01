@@ -272,14 +272,23 @@ async def market_heatmap(request: Request, hub: QuoteHub = Depends(get_hub)) -> 
 
 
 @router.get("/market/overview", response_model=Envelope[OverviewPayload])
-async def market_overview(hub: QuoteHub = Depends(get_hub)) -> dict:
-    """指数行情 + 两市成交额合计。市场宽度/情绪等指标按开发顺序在后续阶段接入。"""
+async def market_overview(request: Request, hub: QuoteHub = Depends(get_hub)) -> dict:
+    """指数行情 + 两市成交额合计。
+
+    成交额口径（2026-09-01 修正，对标同花顺）：原实现把 indices 里 SH/SZ 全部
+    指数的成交额求和——沪深300/中证1000/创业板指与上证指数/深证成指成分互相
+    重叠，重复求和导致总额虚高 40%+。同花顺口径 = 沪市全市场 + 深市全市场，
+    与全市场快照求和一致（compute_breadth.total_amount 同源），故改用快照。
+    快照未就绪（冷启动数秒）时诚实返回 null，前端显示 --。"""
     indices = hub.get_indices()
-    total_amount = sum(q.amount or 0 for q in indices if q.market in {"SH", "SZ"})
+    total_amount = None
+    snap = getattr(request.app.state, "snapshot_service", None)
+    if snap is not None and snap.snapshot:
+        total_amount = round(sum(r.get("amount") or 0 for r in snap.snapshot), 2)
     return {
         "data": {
             "indices": [q.model_dump(mode="json") for q in indices],
-            "total_amount": round(total_amount, 2),
+            "total_amount": total_amount,
         },
         "meta": _meta(hub),
     }

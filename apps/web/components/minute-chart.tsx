@@ -120,6 +120,28 @@ export function MinuteChart({
     // 伪 UTC（utc_ts + 8h），X 轴才显示 09:30-15:00。crosshair param.time 同时基。
     const toTime = (p: P): Time => (Math.floor(new Date(p.ts).getTime() / 1000) + BJ_OFFSET) as never;
 
+    // ---- 全天分钟槽（对标同花顺，用户反馈 #1）：X 轴从一开始就固定为
+    // 9:25(竞价) + 9:30-11:30 + 13:00-15:00 共 243 槽；已有行情点按北京
+    // 墙钟 HH:MM 映射进槽，未到的槽填 whitespace（{time} 无 value）——
+    // 分时线随行情从左向右填充，不再 fitContent 把已有点拉伸到全宽。
+    const first = points[0];
+    const bjDate = new Date(new Date(first.ts).getTime() + BJ_OFFSET * 1000).toISOString().slice(0, 10);
+    const base0 = Math.floor(new Date(`${bjDate}T00:00:00Z`).getTime() / 1000); // 伪 UTC 当日 00:00
+    const slotSecs: number[] = [base0 + 9 * 3600 + 25 * 60];
+    for (let m = 570; m <= 690; m++) slotSecs.push(base0 + Math.floor(m / 60) * 3600 + (m % 60) * 60);
+    for (let m = 780; m <= 900; m++) slotSecs.push(base0 + Math.floor(m / 60) * 3600 + (m % 60) * 60);
+    const slotHHMM = (sec: number) => new Date(sec * 1000).toISOString().slice(11, 16);
+    const byHHMM = new Map<string, P>();
+    for (const p of points) byHHMM.set(new Date(new Date(p.ts).getTime() + BJ_OFFSET * 1000).toISOString().slice(11, 16), p);
+
+    /** 槽序列 → series 数据：有行情的槽填值，其余 whitespace。pick 从点里取字段。 */
+    const seriesOverSlots = <T,>(pick: (p: P) => T | null): { time: Time; value?: T }[] =>
+      slotSecs.map((sec) => {
+        const p = byHHMM.get(slotHHMM(sec));
+        const v = p ? pick(p) : null;
+        return (v == null ? { time: sec as Time } : { time: sec as Time, value: v }) as { time: Time; value?: T };
+      });
+
     // ---- 价格面积线：昨收锚定的对称区间 ----
     const series = chart.addAreaSeries({
       lineColor: "#f43f5e",
@@ -128,12 +150,10 @@ export function MinuteChart({
       lineWidth: 2,
       priceLineVisible: false,
     });
-    series.setData(points.map((p) => ({ time: toTime(p), value: p.price })));
+    series.setData(seriesOverSlots((p) => p.price) as never);
 
-    // ---- 集合竞价点（09:25，金色）：独立单点 series，不参与量比/浮层查点 ----
+    // ---- 集合竞价点（09:25，金色）：槽序列首点即 9:25 ----
     if (auction?.price && points.length > 0) {
-      // 首个分钟点为 09:30（伪 UTC 时基），前推 5 分钟即 09:25
-      const auctionTime = (Math.floor(new Date(points[0].ts).getTime() / 1000) + BJ_OFFSET - 300) as never;
       const auctionSeries = chart.addLineSeries({
         color: "#f59e0b",
         lineWidth: 1,
@@ -143,7 +163,7 @@ export function MinuteChart({
         lastValueVisible: false,
         crosshairMarkerVisible: false,
       });
-      auctionSeries.setData([{ time: auctionTime, value: auction.price }]);
+      auctionSeries.setData([{ time: slotSecs[0] as never, value: auction.price }]);
     }
 
     if (hasBase) {
@@ -183,7 +203,7 @@ export function MinuteChart({
         priceFormat: { type: "percent", precision: 2, minMove: 0.01 },
       });
       const halfPct = (half / prevClose!) * 100;
-      pctSeries.setData(points.map<LineData>((p) => ({ time: toTime(p), value: ((p.price - prevClose!) / prevClose!) * 100 })));
+      pctSeries.setData(seriesOverSlots((p) => (p.price != null ? ((p.price - prevClose!) / prevClose!) * 100 : null)) as never);
       pctSeries.applyOptions({
         autoscaleInfoProvider: () => ({
           priceRange: { minValue: -halfPct, maxValue: halfPct },
@@ -203,10 +223,13 @@ export function MinuteChart({
           priceFormat: { type: "percent", precision: 2, minMove: 0.01 },
         });
         idxSeries.setData(
-          index.points.map<LineData>((p) => ({
-            time: toTime(p),
-            value: ((p.price - index.prevClose) / index.prevClose) * 100,
-          }))
+          seriesOverSlots((p) => {
+            const i = index.points.find((q) => {
+              const t1 = new Date(new Date(q.ts).getTime() + BJ_OFFSET * 1000).toISOString().slice(11, 16);
+              return t1 === new Date(new Date(p.ts).getTime() + BJ_OFFSET * 1000).toISOString().slice(11, 16);
+            });
+            return i ? ((i.price - index.prevClose) / index.prevClose) * 100 : null;
+          }) as never
         );
         // 叠加曲线不得撑破个股的对称区间：钳制到 ±halfPct 视觉带内
         idxSeries.applyOptions({
@@ -217,18 +240,15 @@ export function MinuteChart({
       }
     }
 
-    // ---- 均价线（黄）----
-    const avgPoints = points.filter((p) => p.avg != null);
-    if (avgPoints.length > 0) {
-      const avgSeries = chart.addLineSeries({
-        color: "#eab308",
-        lineWidth: 1,
-        priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerVisible: false,
-      });
-      avgSeries.setData(avgPoints.map((p) => ({ time: toTime(p), value: p.avg! })));
-    }
+    // ---- 均价线（黄）：avg 缺失的槽（盘前/未生成）为 whitespace ----
+    const avgSeries = chart.addLineSeries({
+      color: "#eab308",
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    });
+    avgSeries.setData(seriesOverSlots((p) => p.avg) as never);
 
     // ---- 量能副图：红涨绿跌 ----
     const vol = chart.addHistogramSeries({
@@ -237,16 +257,16 @@ export function MinuteChart({
       priceLineVisible: false,
       lastValueVisible: false,
     });
-    const volData: HistogramData[] = [];
-    for (let i = 0; i < points.length; i++) {
-      const v = points[i].volume;
-      if (v == null) continue;
+    const volData: { time: Time; value?: number; color?: string }[] = slotSecs.map((sec) => {
+      const p = byHHMM.get(slotHHMM(sec));
+      if (!p || p.volume == null) return { time: sec as Time }; // whitespace
+      const i = points.indexOf(p);
       const prevP = i > 0 ? points[i - 1].price : null;
       const color =
-        prevP == null || points[i].price === prevP ? FLAT : points[i].price > prevP ? "rgba(239,68,68,0.5)" : "rgba(16,185,129,0.5)";
-      volData.push({ time: toTime(points[i]), value: v, color });
-    }
-    vol.setData(volData);
+        prevP == null || p.price === prevP ? FLAT : p.price > prevP ? "rgba(239,68,68,0.5)" : "rgba(16,185,129,0.5)";
+      return { time: sec as Time, value: p.volume, color };
+    });
+    vol.setData(volData as never);
     chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
 
     // ---- 十字光标浮层 ----
@@ -310,9 +330,10 @@ export function MinuteChart({
     };
 
     const unsub = chart.subscribeCrosshairMove(onMove);
+    // 全天槽已在数据集里（whitespace 撑满 9:25-15:00），fitContent 即完整交易时段；
+    // 左端 -1.5 给 9:25 竞价金点留出圆的空间
     chart.timeScale().fitContent();
-    // 逻辑范围左端延伸到负区：给 09:25 竞价金点（首 bar 之前）留出完整圆的空间，不再贴边被裁
-    chart.timeScale().setVisibleLogicalRange({ from: -1.5, to: points.length + 0.5 });
+    chart.timeScale().setVisibleLogicalRange({ from: -1.5, to: slotSecs.length + 0.5 });
 
     return () => {
       try {

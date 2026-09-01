@@ -14,6 +14,7 @@ import {
   Time,
 } from "lightweight-charts";
 import { calcEMA } from "@/lib/technical-analysis";
+import { fmt, fmtAmount } from "@/lib/format";
 import type { EventMark } from "@/lib/event-markers";
 import type { Kline } from "@/types/market";
 
@@ -91,6 +92,14 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
     }
   }, []);
 
+  // hover 联动（2026-09-01 用户反馈 #2/#3）：十字光标所在 bar 的 OHLC/量额/MA/事件
+  // 显示在顶部信息条；离开图表回退到最新一根。bars 用 ref（创建 effect 闭包拿最新值）
+  const barsRef = useRef(bars);
+  barsRef.current = bars;
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  // fill 时算好的 MA 序列快照（按 data 索引），hover 信息条直接取值
+  const maSnapRef = useRef<Record<string, (number | null)[]>>({});
+
   // series 引用：创建 effect 按当前指标开关建好，fill() 只往里 setData
   const seriesRef = useRef<{
     candle: ISeriesApi<"Candlestick"> | null;
@@ -117,15 +126,19 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
     const closes = data.map((d) => d.close);
     const times = data.map((d) => d.time);
 
-    // 主图均线
+    // 主图均线（MA 序列快照供 hover 信息条取值）
+    const maSnap: Record<string, (number | null)[]> = {};
     MA_DEFS.forEach(([key], i) => {
       const line = s.ma[i];
-      if (!line) return;
       const n = MA_DEFS[i][1];
+      const vals = calcMA(closes, n);
+      maSnap[key] = vals;
+      if (!line) return;
       s.ma[i]!.setData(
-        calcMA(closes, n).map((v, j) => ({ time: times[j], value: v })).filter((x) => x.value != null) as LineData[]
+        vals.map((v, j) => ({ time: times[j], value: v })).filter((x) => x.value != null) as LineData[]
       );
     });
+    maSnapRef.current = maSnap;
 
     // BOLL(20,2)
     if (s.boll.up && s.boll.low && s.boll.mid) {
@@ -287,6 +300,18 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
       const n = Math.min(20, bars.length);
       chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, bars.length - n), to: bars.length + 2 });
     }
+    // hover 联动（用户反馈 #2/#3）：十字光标 → 顶部信息条切换到该日数据；
+    // 离开图表（param.time 为空）回退最新。param.time 即 bar 的 'YYYY-MM-DD'。
+    const onCross = (param: { time?: Time }) => {
+      if (!param.time) {
+        setHoverIdx(null);
+        return;
+      }
+      const d = String(param.time).slice(0, 10);
+      const idx = barsRef.current.findIndex((b) => b.ts.slice(0, 10) === d);
+      setHoverIdx(idx >= 0 ? idx : null);
+    };
+    chart.subscribeCrosshairMove(onCross);
     return () => {
       chart.remove();
       chartRef.current = null;
@@ -344,6 +369,19 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
     ts.setVisibleLogicalRange({ from: center - half, to: center + half });
   }
 
+  // 信息条数据（用户反馈 #2/#3）：hover 的 bar，未 hover 取最新一根
+  const idx = hoverIdx ?? bars.length - 1;
+  const d = bars.length > 0 ? bars[Math.max(0, Math.min(idx, bars.length - 1))] : null;
+  const prev = d && idx > 0 ? bars[idx - 1] : null;
+  const dPct = d?.close != null && prev?.close ? ((d.close - prev.close) / prev.close) * 100 : null;
+  const dEvents =
+    d && ind.events
+      ? (eventMarks ?? []).filter((m) => m.date === d.ts.slice(0, 10))
+      : [];
+  const pctCls = (v: number | null) => (v == null ? "text-zinc-400" : v > 0 ? "text-up" : v < 0 ? "text-down" : "text-zinc-400");
+  const dClose = d?.close ?? null;
+  const dOpen = d?.open ?? null;
+
   return (
     <div className={`relative flex min-h-0 flex-col ${className ?? ""}`}>
       <div className="absolute right-2 top-2 z-10 flex gap-1">
@@ -360,6 +398,29 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
           20D
         </button>
       </div>
+      {/* OHLC 信息条（对标同花顺）：hover 切换该日数据，离开回退最新 */}
+      {d && (
+        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-0.5 border-b border-zinc-100 px-3 py-1 font-mono text-[11px] tabular-nums dark:border-zinc-800/60">
+          <span className="text-zinc-400">{d.ts.slice(0, 10)}{hoverIdx != null && hoverIdx !== bars.length - 1 && <span className="ml-1 text-zinc-300 dark:text-zinc-600">（历史）</span>}</span>
+          <span className="text-zinc-400">开 <span className={pctCls(dOpen != null && dClose != null ? dClose - dOpen : null)}>{fmt(d.open)}</span></span>
+          <span className="text-zinc-400">高 <span className="text-up">{fmt(d.high)}</span></span>
+          <span className="text-zinc-400">低 <span className="text-down">{fmt(d.low)}</span></span>
+          <span className="text-zinc-400">收 <span className={pctCls(dPct)}>{fmt(d.close)}</span></span>
+          <span className={pctCls(dPct)}>{dPct != null ? `${dPct > 0 ? "+" : ""}${dPct.toFixed(2)}%` : "--"}</span>
+          {d.volume != null && <span className="text-zinc-400">量 <span className="text-zinc-700 dark:text-zinc-200">{(d.volume / 100).toLocaleString()}手</span></span>}
+          {d.amount != null && <span className="text-zinc-400">额 <span className="text-zinc-700 dark:text-zinc-200">{fmtAmount(d.amount)}</span></span>}
+          {MA_DEFS.filter(([key]) => ind[key]).map(([key, , color]) => (
+            <span key={key} style={{ color }} className="hidden lg:inline">
+              {key.toUpperCase()} <span className="text-zinc-700 dark:text-zinc-200">{maSnapRef.current[key]?.[Math.max(0, Math.min(idx, (maSnapRef.current[key]?.length ?? 1) - 1))] != null ? fmt(maSnapRef.current[key][idx]) : "--"}</span>
+            </span>
+          ))}
+          {dEvents.length > 0 && (
+            <span className="max-w-[280px] truncate text-sky-500" title={dEvents.map((m) => `${m.kind}${m.important ? "（重要）" : ""}：${m.title}`).join("\n")}>
+              ◆ {dEvents[0].title}
+            </span>
+          )}
+        </div>
+      )}
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-zinc-100 px-3 py-1 text-[11px] dark:border-zinc-800/60">
         <span className="text-zinc-400">指标：</span>
         {toggles.map(([key, label, color]) => (
@@ -372,7 +433,9 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
             {label}
           </button>
         ))}
-        <span className="ml-auto text-[10px] text-zinc-500">金叉/死叉为 MA5×MA10 技术信号 · 紫[榜]=龙虎榜日 · B/S=模拟交易成交 · 黄虚线=持仓成本 · 琥珀●=公告 蓝●=新闻(!=重要度高)</span>
+        <span className="ml-auto text-[10px] text-zinc-500" title="B/S=模拟交易成交；紫[榜]=龙虎榜日；琥珀●=公告 蓝●=新闻（!=重要度高）——消息面与价格走势对照；hover 信息条显示当日事件标题">
+          金叉/死叉为 MA5×MA10 技术信号 · 紫[榜]=龙虎榜日 · B/S=模拟交易成交 · 黄虚线=持仓成本 · 琥珀●=公告 蓝●=新闻(!=重要度高)
+        </span>
       </div>
       <div className={`relative min-h-0 w-full flex-1 ${className ?? ""}`}>
         <div ref={containerRef} className="h-full w-full" />

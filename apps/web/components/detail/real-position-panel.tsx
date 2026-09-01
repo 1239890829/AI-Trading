@@ -179,83 +179,95 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
         <div className="shrink-0 px-2 py-1.5 text-xs text-amber-600 dark:text-amber-300">{error ?? loadError}</div>
       )}
 
-      {/* 持仓视图 */}
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <table className="w-full text-xs">
-          <thead className="sticky top-0 bg-zinc-50 text-zinc-400 dark:bg-zinc-900">
-            <tr className="text-left">
-              <th className="px-2 py-1.5 font-normal">标的</th>
-              <th className="px-2 py-1.5 text-right font-normal">数量</th>
-              <th className="px-2 py-1.5 text-right font-normal">摊薄成本</th>
-              <th className="px-2 py-1.5 text-right font-normal">现价</th>
-              <th className="px-2 py-1.5 text-right font-normal">市值</th>
-              <th className="px-2 py-1.5 text-right font-normal">浮动盈亏</th>
-              <th className="px-2 py-1.5 text-right font-normal">已实现</th>
-              <th className="px-2 py-1.5 text-right font-normal">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(data?.items ?? []).map((r) => (
-              <tr key={r.symbol} className={`border-b border-zinc-100 last:border-0 dark:border-zinc-800/60 ${r.symbol === symbol ? "bg-sky-500/5" : ""}`}>
-                <td className="px-2 py-1.5">
-                  <div className="font-mono text-[10px] text-zinc-400">
-                    {r.symbol}
-                    {r.overridden && <span className="ml-1 rounded bg-amber-500/15 px-1 text-amber-600 dark:text-amber-300">已手动修正</span>}
-                  </div>
-                  <div>{r.name ?? "--"}</div>
-                </td>
-                <td className="px-2 py-1.5 text-right font-mono tabular-nums">{r.quantity}</td>
-                <td className="px-2 py-1.5 text-right font-mono tabular-nums">{fmt(r.avg_cost)}</td>
-                <td className="px-2 py-1.5 text-right font-mono tabular-nums">
-                  {fmt(r.last_price)}
-                  {r.day_change_pct != null && <span className={`ml-1 text-[10px] ${pctColor(r.day_change_pct)}`}>{pctText(r.day_change_pct)}</span>}
-                </td>
-                <td className="px-2 py-1.5 text-right font-mono tabular-nums">{fmt(r.market_value)}</td>
-                <td className={`px-2 py-1.5 text-right font-mono font-medium tabular-nums ${pctColor(r.unrealized_pnl)}`}>
-                  {r.unrealized_pnl != null ? `${r.unrealized_pnl > 0 ? "+" : ""}${fmt(r.unrealized_pnl)}` : "--"}
-                  <span className="ml-1 text-[10px]">{pctText(r.unrealized_pct)}</span>
-                </td>
-                <td className={`px-2 py-1.5 text-right font-mono tabular-nums ${r.realized_pnl > 0 ? "text-up" : r.realized_pnl < 0 ? "text-down" : "text-zinc-400"}`}>
-                  {r.realized_pnl !== 0 ? `${r.realized_pnl > 0 ? "+" : ""}${fmt(r.realized_pnl)}` : "--"}
-                </td>
-                <td className="px-2 py-1.5 text-right">
-                  <button
-                    onClick={() => {
-                      setEditSymbol(editSymbol === r.symbol ? null : r.symbol);
-                      setEditQty(String(r.quantity));
-                      setEditCost(String(r.cost_total));
-                    }}
-                    className="text-zinc-400 hover:text-sky-400"
-                    title="手动修正数量/总成本"
-                  >
-                    改
-                  </button>
-                  <button onClick={() => void removeRow(r)} className="ml-1.5 text-zinc-400 hover:text-red-400" title="删除全部流水">
-                    删
-                  </button>
-                  {editSymbol === r.symbol && (
-                    <div className="mt-1 flex justify-end gap-1">
-                      <input value={editQty} onChange={(e) => setEditQty(e.target.value)} className="w-14 rounded border border-zinc-200 bg-transparent px-1 py-0.5 font-mono dark:border-zinc-700" aria-label="修正数量" />
-                      <input value={editCost} onChange={(e) => setEditCost(e.target.value)} className="w-20 rounded border border-zinc-200 bg-transparent px-1 py-0.5 font-mono dark:border-zinc-700" aria-label="修正总成本" />
-                      <button onClick={() => void submitOverride(r)} disabled={busy} className="rounded bg-sky-500/90 px-1.5 text-white disabled:opacity-50">
-                        保存
-                      </button>
-                    </div>
-                  )}
-                </td>
-              </tr>
-            ))}
-            {(data?.items.length ?? 0) === 0 && (
-              <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-zinc-400">
-                  {data ? "暂无真实持仓。在上方记一笔买入（按你在券商的实际成交价）。" : "加载中…"}
-                </td>
-              </tr>
+      {/* 持仓视图：卡片式（2026-09-01 用户反馈 #5——原 8 列表格在 300px 右列挤成竖条，
+          全部信息不可读；卡片每只一张、3 行结构，窄列完整呈现） */}
+      <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-1.5 py-1">
+        {(data?.items ?? []).map((r) => (
+          <div
+            key={r.symbol}
+            className={`rounded-lg border px-2 py-1.5 ${
+              r.symbol === symbol ? "border-sky-500/40 bg-sky-500/5" : "border-zinc-200 dark:border-zinc-800"
+            }`}
+          >
+            {/* 行1：名称/代码 + 修正标记 + 操作 */}
+            <div className="flex items-center justify-between gap-1">
+              <div className="flex min-w-0 items-baseline gap-1.5">
+                <span className="truncate text-xs font-medium text-zinc-800 dark:text-zinc-100">{r.name ?? "--"}</span>
+                <span className="shrink-0 font-mono text-[10px] text-zinc-400">{r.symbol}</span>
+                {r.overridden && <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[10px] text-amber-600 dark:text-amber-300">已修正</span>}
+              </div>
+              <div className="shrink-0 text-[11px]">
+                <button
+                  onClick={() => {
+                    setEditSymbol(editSymbol === r.symbol ? null : r.symbol);
+                    setEditQty(String(r.quantity));
+                    setEditCost(String(r.cost_total));
+                  }}
+                  className="text-zinc-400 hover:text-sky-400"
+                  title="手动修正数量/总成本"
+                >
+                  改
+                </button>
+                <button onClick={() => void removeRow(r)} className="ml-1.5 text-zinc-400 hover:text-red-400" title="删除全部流水">
+                  删
+                </button>
+              </div>
+            </div>
+            {/* 行2：持仓结构 → 现价（成本 → 现价语义，同花顺习惯） */}
+            <div className="mt-1 flex items-baseline justify-between gap-2 font-mono text-[11px] tabular-nums">
+              <span className="text-zinc-400">
+                {r.quantity}股 @ <span className="text-zinc-700 dark:text-zinc-200">{fmt(r.avg_cost)}</span>
+              </span>
+              <span>
+                现价 <span className="text-zinc-700 dark:text-zinc-200">{fmt(r.last_price)}</span>
+                {r.day_change_pct != null && <span className={`ml-1 text-[10px] ${pctColor(r.day_change_pct)}`}>{pctText(r.day_change_pct)}</span>}
+              </span>
+            </div>
+            {/* 行3：市值 + 浮动盈亏（主盈亏数字放大强调） */}
+            <div className="mt-0.5 flex items-baseline justify-between gap-2 font-mono text-[11px] tabular-nums">
+              <span className="text-zinc-400">
+                市值 <span className="text-zinc-700 dark:text-zinc-200">{fmt(r.market_value)}</span>
+              </span>
+              <span className={pctColor(r.unrealized_pnl)}>
+                {r.unrealized_pnl != null ? (
+                  <>
+                    <span className="text-sm font-semibold">{r.unrealized_pnl > 0 ? "+" : ""}{fmt(r.unrealized_pnl)}</span>
+                    <span className="ml-1 text-[10px]">{pctText(r.unrealized_pct)}</span>
+                  </>
+                ) : (
+                  "--"
+                )}
+              </span>
+            </div>
+            {/* 行4（有已实现才显示）+ 修正编辑态 */}
+            {r.realized_pnl !== 0 && (
+              <div className="mt-0.5 font-mono text-[10px] tabular-nums text-zinc-400">
+                累计已实现{" "}
+                <span className={r.realized_pnl > 0 ? "text-up" : "text-down"}>
+                  {r.realized_pnl > 0 ? "+" : ""}
+                  {fmt(r.realized_pnl)}
+                </span>
+              </div>
             )}
-          </tbody>
-        </table>
+            {editSymbol === r.symbol && (
+              <div className="mt-1 flex items-center gap-1 border-t border-zinc-100 pt-1 dark:border-zinc-800/60">
+                <span className="text-[10px] text-zinc-400">修正</span>
+                <input value={editQty} onChange={(e) => setEditQty(e.target.value)} className="w-14 rounded border border-zinc-200 bg-transparent px-1 py-0.5 font-mono dark:border-zinc-700" aria-label="修正数量" />
+                <input value={editCost} onChange={(e) => setEditCost(e.target.value)} className="w-20 rounded border border-zinc-200 bg-transparent px-1 py-0.5 font-mono dark:border-zinc-700" aria-label="修正总成本" />
+                <button onClick={() => void submitOverride(r)} disabled={busy} className="rounded bg-sky-500/90 px-1.5 text-white disabled:opacity-50">
+                  保存
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+        {(data?.items.length ?? 0) === 0 && (
+          <p className="px-4 py-8 text-center text-xs text-zinc-400">
+            {data ? "暂无真实持仓。在上方记一笔买入（按你在券商的实际成交价）。" : "加载中…"}
+          </p>
+        )}
         {(data?.cleared.length ?? 0) > 0 && (
-          <div className="border-t border-zinc-100 px-2 py-1.5 text-[11px] text-zinc-400 dark:border-zinc-800/60">
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 text-[11px] text-zinc-400 dark:border-zinc-800">
             已清仓：
             {(data?.cleared ?? []).map((c) => (
               <span key={c.symbol} className="mr-2">
