@@ -896,6 +896,26 @@ export async function getAuction(symbol: string): Promise<AuctionData> {
   return (await getJson<AuctionData>(`/api/auction/${symbol}`, 10_000)).data;
 }
 
+/** 竞价基准条目（ths 短线风向标竞价基准，按日）：auction_pct 为竞价涨幅 %。 */
+export interface AuctionBenchmarkItem {
+  symbol: string;
+  name: string | null;
+  /** 竞价涨幅 %；0 是真实"平开"，与 null（缺失）语义不同，不可互相替代 */
+  auction_pct: number | null;
+  tags: string[];
+}
+
+/**
+ * 短线风向标竞价基准（按日，含题材 tags）。
+ *
+ * 非交易日/无数据返回 **502**（后端 provider 抛 ProviderError），调用方须静默降级。
+ * date 参数真实有效、非静默回退（2026-09-01 实测：08-31 / 08-28 / 07-15 内容各不相同）。
+ */
+export async function getAuctionBenchmark(date?: string): Promise<AuctionBenchmarkItem[]> {
+  const qs = date ? `?date=${encodeURIComponent(date)}` : "";
+  return (await getJson<AuctionBenchmarkItem[]>(`/api/auction-benchmark${qs}`, 15_000)).data;
+}
+
 export async function getSentiment(): Promise<Sentiment> {
   return (await getJson<Sentiment>("/api/market/sentiment", 30_000)).data;
 }

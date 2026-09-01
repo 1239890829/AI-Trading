@@ -4,10 +4,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { RankDelta, ThemeCardView } from "@/components/theme-card";
-import { getThemes, getThemesHot, getThemeStrength } from "@/lib/api";
-import { fmtHeat, timeText } from "@/lib/format";
+import { getThemes, getThemesHot, getThemeStrength, getAuctionBenchmark } from "@/lib/api";
+import { fmtHeat, pctColor, pctText, timeText } from "@/lib/format";
 import { workbenchUrl } from "@/lib/routing";
-import type { ThemeStrengthRow, ThemesHotPayload } from "@/lib/api";
+import { sortAuctionBenchmark } from "@/lib/auction";
+import type { AuctionBenchmarkItem, ThemeStrengthRow, ThemesHotPayload } from "@/lib/api";
 import type { ThemeBoardPayload } from "@/types/market";
 
 /**
@@ -66,6 +67,13 @@ export function ThemesTab() {
   const [strength, setStrength] = useState<Map<string, ThemeStrengthRow> | null>(null);
   // 聚焦题材（L4 联动：详情页题材 chip → /tape?tab=themes&focus=名称）
   const [focus, setFocus] = useState(searchParams.get("focus") ?? "");
+  // 竞价标杆（ths 短线风向标）：best-effort，非交易日/无数据后端返回 502 → 静默不显示。
+  // 把 date 一并存进 state：切日期时新数据到达前，靠 date 比对拒绝渲染上一日的榜单
+  // （不同步 setBenchmark(null) 清空，避免 effect 内同步 setState 触发级联渲染）。
+  const [benchmark, setBenchmark] = useState<{
+    date: string;
+    rows: AuctionBenchmarkItem[];
+  } | null>(null);
 
   const load = useCallback(
     async (d?: string, s: SortKey = sort, mb = minBoards, mc = minCount) => {
@@ -109,6 +117,23 @@ export function ThemesTab() {
     // 仅在挂载时拉一次；后续筛选由各自的 onChange 触发
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 竞价标杆随 date 联动——与人气榜不同，竞价基准**有**历史数据：
+  // 2026-09-01 实测 date 参数真实有效（08-31 / 08-28 / 07-15 内容各不相同，非静默回退），
+  // 故这里跟随日期筛选；非交易日后端返回 502，catch 后静默不显示。
+  useEffect(() => {
+    let alive = true;
+    getAuctionBenchmark(date || undefined)
+      .then((rows) => {
+        if (alive) setBenchmark(rows.length > 0 ? { date, rows } : null);
+      })
+      .catch(() => {
+        if (alive) setBenchmark(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [date]);
 
   function updateUrl(
     d?: string,
@@ -155,6 +180,15 @@ export function ThemesTab() {
 
   /** 题材名 → 人气聚合（官方成分口径，与卡片题材名精确匹配；对不上就不显示徽标） */
   const hotByTheme = useMemo(() => new Map((hot?.themes ?? []).map((t) => [t.theme, t])), [hot]);
+
+  /**
+   * 竞价标杆按竞价涨幅降序（缺失沉底、不原地变异，规则见 lib/auction.ts）。
+   * date 不匹配时返回空——切日期后新数据到达前，不展示上一日的榜单。
+   */
+  const benchmarkSorted = useMemo(
+    () => sortAuctionBenchmark(benchmark?.date === date ? benchmark.rows : null),
+    [benchmark, date]
+  );
 
   /** 聚焦过滤：题材名精确/包含 + 原始归因标签匹配（官方成分名与归因串口径可能不同） */
   const visibleThemes = useMemo(() => {
@@ -254,6 +288,34 @@ export function ThemesTab() {
       <p className="mb-3 shrink-0 text-[11px] text-zinc-400" title="分级规则由后端 strength_tier 规则化判定，鼠标悬停卡片分级徽标可看判定依据">
         分级：{TIER_LEGEND}
       </p>
+
+      {/* ── 竞价标杆条：ths 短线风向标竞价基准（B2 数据面 → UI 消费）──
+          按竞价涨幅降序；非交易日/无数据后端 502，此时不渲染本条 ── */}
+      {benchmarkSorted.length > 0 && (
+        <div
+          className="mb-3 flex shrink-0 items-center gap-x-3 gap-y-1 overflow-x-auto rounded-lg border border-zinc-200 px-3 py-1.5 dark:border-zinc-800"
+          title="同花顺短线风向标竞价基准：该交易日 09:25 集合竞价终态的标杆个股；题材为官方 tags"
+        >
+          <span className="shrink-0 text-[11px] text-zinc-400">竞价标杆</span>
+          {benchmarkSorted.map((b) => (
+            <Link
+              key={b.symbol}
+              href={workbenchUrl(b.symbol)}
+              className="flex shrink-0 items-center gap-1 text-xs hover:opacity-70"
+              title={b.tags.length ? `官方题材：${b.tags.join("、")}` : "无官方题材归属"}
+            >
+              <span className="text-zinc-700 dark:text-zinc-200">{b.name ?? b.symbol}</span>
+              <span className={`font-mono tabular-nums ${pctColor(b.auction_pct)}`}>
+                {pctText(b.auction_pct)}
+              </span>
+            </Link>
+          ))}
+          <div className="flex-1" />
+          <span className="shrink-0 font-mono text-[10px] text-zinc-400 dark:text-zinc-600">
+            同花顺 · 竞价 {date || "当日"}
+          </span>
+        </div>
+      )}
 
       {/* ── 人气榜条（B1）：ths 热股 24 小时榜 Top10，点击跳详情；失败静默不显示 ── */}
       {hot && hot.stocks.length > 0 && (
