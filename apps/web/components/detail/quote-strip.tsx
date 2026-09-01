@@ -45,7 +45,11 @@ export function QuoteStrip({
             ))}
         </div>
         <div className="flex items-baseline gap-2">
-          <PriceFlash value={quote.price} className={`font-mono text-2xl font-semibold tabular-nums ${pctColor(quote.change_pct)}`}>{fmt(quote.price)}</PriceFlash>
+          {quote.price == null ? (
+            <span className="text-sm text-zinc-400">未开盘</span>
+          ) : (
+            <PriceFlash value={quote.price} className={`font-mono text-2xl font-semibold tabular-nums ${pctColor(quote.change_pct)}`}>{fmt(quote.price)}</PriceFlash>
+          )}
           <span className={`font-mono text-xs tabular-nums ${pctColor(quote.change)}`}>
             {quote.change != null ? `${quote.change > 0 ? "+" : ""}${fmt(quote.change)}` : "--"}（{pctText(quote.change_pct)}）
           </span>

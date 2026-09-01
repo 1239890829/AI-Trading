@@ -100,8 +100,13 @@ class QuoteHub:
         except Exception as exc:
             log.debug("market-open check unavailable: %s", exc)
             return
-        if verdict is False and not self._closed_marked:
-            self._closed_marked = True
+        if verdict is False:
+            # 每轮重标（2026-09-01 修复：原沿触发只在首轮标 stale，之后 refresh()
+            # 又把 validator 判定的新数据存回缓存——盘前质量在 stale/low/invalid
+            # 之间震荡，出现"可疑/非法"误标）。休市态稳定为 stale("market_closed")。
+            if not self._closed_marked:
+                self._closed_marked = True
+                log.info("market closed: cached quotes marked stale")
             self._mark_all_stale(reason="market_closed")
         elif verdict is True and self._closed_marked:
             # 重新开盘：恢复由下次校验决定，这里只清标记（数据会被本轮 refresh 刷新）

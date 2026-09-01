@@ -50,7 +50,7 @@ def test_normalize_quote_handles_suspended_dash_values():
     # 质量判定属于 validator：停牌缺价 → low（missing_price）
     from app.data_quality.validator import validate_quote
 
-    validate_quote(q)
+    validate_quote(q, live=True)  # 停牌缺价罚分仅交易时段生效，显式盘中语境
     assert q.quality is Quality.low
     assert "missing_price" in q.quality_reasons
 

@@ -33,30 +33,31 @@ def _add(reasons: list[str], invalid: list[str], reason: str, is_invalid: bool) 
         invalid.append(reason)
 
 
-def validate_quote(new: Quote, prev: Quote | None = None) -> Quote:
-    """按 §2.3 校验一条行情，直接在 new 上落 quality / quality_reasons 并返回。"""
+def validate_quote(new: Quote, prev: Quote | None = None, *, live: bool | None = None) -> Quote:
+    """按 §2.3 校验一条行情，直接在 new 上落 quality / quality_reasons 并返回。
+
+    时段感知（2026-09-01 用户反馈）：非交易时段（盘前/收盘后/周末/节假日），
+    数据源返回空字段或「昨收 + 0」快照是常态，不是数据质量问题——此前盘前
+    全部标的被标 low("可疑")/invalid("非法") 纯属误判。因此完整性罚分
+    （missing_price/price 越界/涨跌幅不匹配/与上一条对比）仅在交易时段生效；
+    结构性错误（symbol 非法、负成交量、时间戳在未来）任何时段都判。
+    live 缺省自动判定（trade_calendar.in_trading_window），测试可显式传。
+    """
+    if live is None:
+        from app.market.trade_calendar import in_trading_window
+
+        live = in_trading_window()
+
     reasons: list[str] = []
     invalid: list[str] = []
 
     if len(new.symbol) != _INVALID_SYMBOL_DIGITS or not new.symbol.isdigit():
         _add(reasons, invalid, "invalid_symbol", True)
 
-    if new.price is None:
-        _add(reasons, invalid, "missing_price", False)
-    elif new.price <= 0:
-        _add(reasons, invalid, "non_positive_price", True)
-
     for field in ("volume", "amount"):
         v = getattr(new, field)
         if v is not None and v < 0:
             _add(reasons, invalid, f"negative_{field}", True)
-
-    if new.high is not None and new.low is not None and new.high < new.low:
-        _add(reasons, invalid, "high_below_low", True)
-    if new.price is not None and new.high is not None and new.price > new.high:
-        _add(reasons, invalid, "price_above_high", True)
-    if new.price is not None and new.low is not None and new.price < new.low:
-        _add(reasons, invalid, "price_below_low", True)
 
     if new.data_timestamp is not None:
         now = utcnow()
@@ -65,28 +66,41 @@ def validate_quote(new: Quote, prev: Quote | None = None) -> Quote:
         if new.data_timestamp > now + _FUTURE_TOLERANCE:
             _add(reasons, invalid, "timestamp_in_future", True)
 
-    if (
-        new.price is not None
-        and new.price > 0
-        and new.prev_close is not None
-        and new.prev_close > 0
-        and new.change_pct is not None
-    ):
-        implied_pct = (new.price - new.prev_close) / new.prev_close * 100
-        if abs(implied_pct - new.change_pct) > _PCT_MISMATCH_TOLERANCE:
-            _add(reasons, invalid, "change_pct_mismatch", False)
+    if live:
+        if new.price is None:
+            _add(reasons, invalid, "missing_price", False)
+        elif new.price <= 0:
+            _add(reasons, invalid, "non_positive_price", True)
 
-    if prev is not None and not invalid:
-        if prev.data_timestamp is not None and new.data_timestamp is not None:
-            prev_ts = prev.data_timestamp if prev.data_timestamp.tzinfo else prev.data_timestamp.replace(tzinfo=timezone.utc)
-            new_ts = new.data_timestamp if new.data_timestamp.tzinfo else new.data_timestamp.replace(tzinfo=timezone.utc)
-            if new_ts < prev_ts:  # 严格早于才算倒退；同秒更新不判罚
-                _add(reasons, invalid, "time_regress", False)
-        if prev.price is not None and prev.price > 0 and new.price is not None:
-            drift = abs(new.price - prev.price) / prev.price
-            limit = board_limit_pct(new)
-            if drift > limit:
-                _add(reasons, invalid, f"tick_jump_gt_{int(limit * 100)}pct", False)
+        if new.high is not None and new.low is not None and new.high < new.low:
+            _add(reasons, invalid, "high_below_low", True)
+        if new.price is not None and new.high is not None and new.price > new.high:
+            _add(reasons, invalid, "price_above_high", True)
+        if new.price is not None and new.low is not None and new.price < new.low:
+            _add(reasons, invalid, "price_below_low", True)
+
+        if (
+            new.price is not None
+            and new.price > 0
+            and new.prev_close is not None
+            and new.prev_close > 0
+            and new.change_pct is not None
+        ):
+            implied_pct = (new.price - new.prev_close) / new.prev_close * 100
+            if abs(implied_pct - new.change_pct) > _PCT_MISMATCH_TOLERANCE:
+                _add(reasons, invalid, "change_pct_mismatch", False)
+
+        if prev is not None and not invalid:
+            if prev.data_timestamp is not None and new.data_timestamp is not None:
+                prev_ts = prev.data_timestamp if prev.data_timestamp.tzinfo else prev.data_timestamp.replace(tzinfo=timezone.utc)
+                new_ts = new.data_timestamp if new.data_timestamp.tzinfo else new.data_timestamp.replace(tzinfo=timezone.utc)
+                if new_ts < prev_ts:  # 严格早于才算倒退；同秒更新不判罚
+                    _add(reasons, invalid, "time_regress", False)
+            if prev.price is not None and prev.price > 0 and new.price is not None:
+                drift = abs(new.price - prev.price) / prev.price
+                limit = board_limit_pct(new)
+                if drift > limit:
+                    _add(reasons, invalid, f"tick_jump_gt_{int(limit * 100)}pct", False)
 
     if invalid:
         new.quality = Quality.invalid
@@ -94,17 +108,27 @@ def validate_quote(new: Quote, prev: Quote | None = None) -> Quote:
         new.quality = Quality.low
     else:
         new.quality = Quality.high
-    new.quality_reasons = reasons
+    if not live and new.quality == Quality.high:
+        new.quality_reasons = ["off_session"]  # 供展示层提示"休市"，不参与降级
+    else:
+        new.quality_reasons = reasons
     return new
 
 
-def validate_order_book(ob: OrderBook) -> OrderBook:
+def validate_order_book(ob: OrderBook, *, live: bool | None = None) -> OrderBook:
+    """盘口校验。空盘口在非交易时段是常态（挂单已清空），不判罚分。"""
+    if live is None:
+        from app.market.trade_calendar import in_trading_window
+
+        live = in_trading_window()
+
     reasons: list[str] = []
     invalid: list[str] = []
     bid_prices = [lv.price for lv in ob.bids if lv.price is not None]
     ask_prices = [lv.price for lv in ob.asks if lv.price is not None]
     if not bid_prices or not ask_prices:
-        _add(reasons, invalid, "empty_order_book", False)
+        if live:
+            _add(reasons, invalid, "empty_order_book", False)
     else:
         if any(p <= 0 for p in bid_prices + ask_prices):
             _add(reasons, invalid, "non_positive_price", True)
@@ -127,7 +151,10 @@ def validate_order_book(ob: OrderBook) -> OrderBook:
         ob.quality = Quality.low
     else:
         ob.quality = Quality.high
-    ob.quality_reasons = reasons
+    if not live and ob.quality == Quality.high:
+        ob.quality_reasons = ["off_session"]
+    else:
+        ob.quality_reasons = reasons
     return ob
 
 

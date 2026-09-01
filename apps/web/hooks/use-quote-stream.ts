@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { getQuotes, wsBase } from "@/lib/api";
 import type { Quote } from "@/types/market";
 
-export type StreamStatus = "connecting" | "live" | "polling" | "error";
+export type StreamStatus = "connecting" | "live" | "polling" | "closed" | "stale" | "error";
 
 /**
  * 行情流：优先 WebSocket（/ws/quotes），断线自动重连；
@@ -88,10 +88,18 @@ export function useQuoteStream(symbols: string[]) {
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data as string) as { type: string; data?: Quote[] };
-          // stale：数据源故障时后端推送 quality=stale 的缓存数据，必须覆盖渲染以显示过期标识
+          // stale：后端推送 quality=stale 的缓存数据（休市 market_closed / 刷新失败），
+          // 必须覆盖渲染以显示过期标识。注意这与"WS 断线"无关——消息本身说明连接是通的：
+          // 休市显示"休市"，刷新失败显示"数据过期"；恢复 quotes 推送时切回 live
+          // （2026-09-01 修复：原实现把 stale 误标成 polling，且开盘后永不恢复 live）。
           if ((msg.type === "snapshot" || msg.type === "quotes" || msg.type === "stale") && msg.data) {
             apply(msg.data);
-            if (msg.type === "stale") setStatus("polling");
+            if (msg.type === "stale") {
+              const closed = msg.data.some((q) => q.quality_reasons?.includes("market_closed"));
+              setStatus(closed ? "closed" : "stale");
+            } else if (msg.type === "quotes") {
+              setStatus("live");
+            }
           }
         } catch {}
       };

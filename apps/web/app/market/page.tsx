@@ -169,8 +169,14 @@ function MarketInner() {
                   <QualityBadge quality={q.quality} reasons={q.quality_reasons} />
                 </div>
                 <div className="mt-0.5 flex items-baseline justify-between gap-2">
-                  <span className="font-mono text-lg font-semibold">{fmt(q.price)}</span>
-                  <span className={`shrink-0 font-mono text-xs ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</span>
+                  {q.price == null ? (
+                    <span className="text-xs text-zinc-400">未开盘</span>
+                  ) : (
+                    <>
+                      <span className="font-mono text-lg font-semibold">{fmt(q.price)}</span>
+                      <span className={`shrink-0 font-mono text-xs ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</span>
+                    </>
+                  )}
                 </div>
                 <div className="font-mono text-[11px] text-zinc-500" title="成交额">
                   额 {fmtAmount(q.amount)}

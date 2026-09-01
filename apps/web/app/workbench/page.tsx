@@ -37,6 +37,8 @@ const STATUS_LABEL: Record<StreamStatus, { text: string; cls: string }> = {
   connecting: { text: "连接中", cls: "text-zinc-400" },
   live: { text: "WS 实时推送", cls: "text-sky-400" },
   polling: { text: "WS 断线 · REST 轮询", cls: "text-amber-400" },
+  closed: { text: "休市 · 展示最近交易日数据", cls: "text-zinc-400" },
+  stale: { text: "数据过期 · 后端刷新异常", cls: "text-amber-400" },
   error: { text: "连接失败", cls: "text-red-400" },
 };
 
@@ -288,7 +290,7 @@ function WorkbenchInner() {
 
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
         <span>
-          两市成交额合计：<span className="font-mono tabular-nums text-zinc-200">{fmtAmount(totalAmount)}</span>
+          两市成交额合计：<span className="font-mono tabular-nums text-zinc-200">{totalAmount ? fmtAmount(totalAmount) : "--"}</span>
         </span>
         <span className="flex items-center gap-3">
           <span>
@@ -489,7 +491,9 @@ function WorkbenchInner() {
                         <Sparkline closes={sparkBySymbol.get(q.symbol) ?? []} />
                       )}
                     </td>
-                    <td className="px-2 py-2 text-right font-mono tabular-nums"><PriceFlash value={q.price}>{fmt(q.price)}</PriceFlash></td>
+                    <td className="px-2 py-2 text-right font-mono tabular-nums">
+                      {q.price == null ? <span className="text-xs font-sans text-zinc-400">未开盘</span> : <PriceFlash value={q.price}>{fmt(q.price)}</PriceFlash>}
+                    </td>
                     <td className={`px-2 py-2 text-right font-mono text-xs tabular-nums ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</td>
                     <td className="px-1 py-2 text-right">{q.quality !== "high" && <QualityBadge quality={q.quality} reasons={q.quality_reasons} />}</td>
                     <td className="pr-2 text-right">

@@ -45,7 +45,9 @@ export function IndexCards({ indices, selected, onSelect }: Props) {
                   <span className="truncate text-[10px] text-zinc-400">{q.name ?? q.symbol}</span>
                   <QualityBadge quality={q.quality} reasons={q.quality_reasons} />
                 </div>
-                <div className="font-mono text-sm font-semibold tabular-nums">{fmt(q.price)}</div>
+                <div className="font-mono text-sm font-semibold tabular-nums">
+                  {q.price == null ? <span className="text-xs font-normal text-zinc-400">未开盘</span> : fmt(q.price)}
+                </div>
                 <div className={`font-mono text-[11px] tabular-nums ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</div>
               </button>
             );

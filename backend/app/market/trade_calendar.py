@@ -201,6 +201,30 @@ def is_trade_day(days: list[date], d: date) -> bool:
     return i < len(days) and days[i] == d
 
 
+# ---- 交易时段判定（2026-09-01：盘前空数据不再误标"可疑"，validator/QuoteHub 共用）----
+
+def in_trading_window(now: datetime | None = None) -> bool:
+    """同步判定当前是否处于**连续竞价**时段（交易日 09:30–11:30 / 13:00–15:00，北京时间）。
+
+    完整性罚分（missing_price/price 越界等）只应在连续竞价生效：集合竞价
+    （09:15–09:25）与开盘前形态一样不完整——价格在撮合、high/low 未建立，
+    2026-09-01 09:21 实测竞价时段再次全体误标"可疑/非法"，故窗口缩到连续竞价。
+    交易日判断用持久化日历兜底（trading_days() 成功抓取后落盘的
+    data/trade_calendar.json）；日历缺失或未覆盖今天时退化为
+    「工作日 + 时刻」判定——节假日少量误放行可接受，宁可放行也不因
+    日历故障把盘中误判成休市。注意与 QuoteHub._in_market_hours（09:15–15:05，
+    管休市 stale 标记）口径不同、各司其职。
+    """
+    now = now or datetime.now(timezone.utc) + timedelta(hours=8)
+    if now.weekday() >= 5:
+        return False
+    days = _load_persisted()
+    if days and days[-1] >= now.date() and not is_trade_day(days, now.date()):
+        return False  # 日历明确今天休市（节假日）
+    hhmm = now.hour * 100 + now.minute  # 模块级 import time 遮蔽 datetime.time，用 hhmm 整数比较
+    return (930 <= hhmm <= 1130) or (1300 <= hhmm <= 1500)
+
+
 def last_trade_date(days: list[date], asof: date | None = None) -> date | None:
     """返回 <= asof 的最后一个交易日。asof 默认为今天。"""
     import bisect
