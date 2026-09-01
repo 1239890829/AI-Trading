@@ -9,7 +9,6 @@ import {
   type RealPositionRow,
 } from "@/lib/api";
 import { fmt, pctColor, pctText } from "@/lib/format";
-import { APP_EVENTS, emitAppEvent } from "@/lib/events";
 import { useRealPositions } from "@/hooks/use-real-positions";
 
 /**
@@ -53,7 +52,6 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
     if (currentPrice != null && currentPrice > 0) setPrice((p) => p || String(+currentPrice.toFixed(3)));
   }, [currentPrice]);
 
-  const notify = () => emitAppEvent(APP_EVENTS.realChanged);
 
   async function submitTrade() {
     const pv = Number(price.replace(/,/g, ""));
@@ -68,7 +66,6 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
       await createRealTrade({ symbol: formSymbol.trim(), name: formSymbol === symbol ? currentName ?? null : null, side, fill_price: pv, quantity: qv, fee: fv, traded_at: tradedAt });
       setQty("");
       setFee("");
-      notify();
       await reload();
     } catch (e) {
       setError((e as Error).message);
@@ -86,7 +83,6 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
     try {
       await overrideRealPosition(row.symbol, qv, cv);
       setEditSymbol(null);
-      notify();
       await reload();
     } catch (e) {
       setError((e as Error).message);
@@ -100,7 +96,6 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
     setBusy(true);
     try {
       await deleteRealPosition(row.symbol);
-      notify();
       await reload();
     } catch (e) {
       setError((e as Error).message);

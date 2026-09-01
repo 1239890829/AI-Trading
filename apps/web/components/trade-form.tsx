@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { fmt, parseNum } from "@/lib/format";
 import { checkOrderRisk, placePaperOrder } from "@/lib/api";
-import { APP_EVENTS, emitAppEvent } from "@/lib/events";
 import type { OrderCheckResult } from "@/lib/api";
 
 /** 模拟交易下单表单：买/卖切换、价格默认现价、数量、预估金额与费用、涨跌停提示。 */
@@ -12,11 +11,14 @@ export function TradeForm({
   price,
   limitUp,
   limitDown,
+  onTraded,
 }: {
   symbol: string;
   price: number | null;
   limitUp?: number | null;
   limitDown?: number | null;
+  /** 下单成功（成交或挂单）后回调——父组件刷新模拟账户数据（2026-09-01：替代全局事件）。 */
+  onTraded?: () => void;
 }) {
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [p, setP] = useState("");
@@ -68,7 +70,7 @@ export function TradeForm({
         ok: true,
         text: r.status === "filled" ? `已成交 @ ${fmt(r.filled_price)}（费 ${fmt(r.fee)}）` : "已挂单，等待撮合",
       });
-      emitAppEvent(APP_EVENTS.paperChanged);
+      onTraded?.();
     } catch (e) {
       setMsg({ ok: false, text: (e as Error).message });
     } finally {

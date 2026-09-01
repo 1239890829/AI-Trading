@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MinuteChart } from "@/components/minute-chart";
 import { KlineChartPro } from "@/components/kline-chart-pro";
-import { TradeForm } from "@/components/trade-form";
 import { Panel } from "@/components/panel";
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
@@ -12,7 +11,7 @@ import { analyze } from "@/lib/technical-analysis";
 import { buildEventMarks } from "@/lib/event-markers";
 import { mergeQuoteIntoBars } from "@/lib/kline-live";
 import { isIndexSymbol } from "@/lib/api";
-import { APP_EVENTS, emitAppEvent, onAppEvent } from "@/lib/events";
+import { notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import { ThemeChipsRow } from "@/components/detail/theme-chips";
 import { StockEventsRow } from "@/components/detail/stock-events";
 import {
@@ -89,6 +88,9 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   // 布局 #1：右列宽度可拖拽（localStorage 持久化；260-480px 防极限）
   const [rightW, setRightW] = useState(300);
   const rightColRef = useRef<HTMLDivElement>(null);
+  // 模拟交易数据刷新（2026-09-01 简化：原 paperChanged 全局事件改为 ref 直调——
+  // trade-form/trade-panel 都在本组件子树内，props 回调 + ref 即可，无需全局广播）
+  const loadPaperRef = useRef<() => void>(() => {});
   useEffect(() => {
     const saved = Number(localStorage.getItem("ashare-right-w"));
     if (saved >= 260 && saved <= 480) setRightW(saved);
@@ -199,13 +201,12 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
         }
       } catch {}
     };
+    loadPaperRef.current = loadPaper;
     void loadPaper();
     const t = setInterval(loadPaper, 30000);
-    const offPaper = onAppEvent(APP_EVENTS.paperChanged, loadPaper);
     return () => {
       alive = false;
       clearInterval(t);
-      offPaper();
     };
   }, [symbol, rightTab]);
 
@@ -377,6 +378,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     try {
       await addToWatchlist(symbol);
       setInWatchlist(true);
+      notifyWatchlistChanged(); // 工作台左栏立即出现新自选（此前详情面板加自选不通知）
     } catch {}
   }
 
@@ -416,7 +418,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     setResetBusy(true);
     try {
       await resetPaperAccount();
-      emitAppEvent(APP_EVENTS.paperChanged);
+      loadPaperRef.current();
     } catch (e) {
       window.alert(`重置失败：${(e as Error).message}`);
     } finally {
@@ -638,6 +640,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
               quote={quote}
               resetBusy={resetBusy}
               onResetAccount={() => void handleResetAccount()}
+              onPaperChanged={() => loadPaperRef.current()}
             />
           )}
 

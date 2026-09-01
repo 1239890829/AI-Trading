@@ -3,7 +3,6 @@
  * 数据加载（paper 轮询）在壳内；本组件只做展示与直接交互（撤单/重置）。
  */
 import { cancelPaperOrder } from "@/lib/api";
-import { APP_EVENTS, emitAppEvent } from "@/lib/events";
 import type { PaperFill, PaperOrderInfo, PaperPositionInfo, PaperAccountInfo } from "@/lib/api";
 import type { Quote } from "@/types/market";
 import { TradeForm } from "@/components/trade-form";
@@ -22,6 +21,7 @@ export function TradePanel({
   quote,
   resetBusy,
   onResetAccount,
+  onPaperChanged,
 }: {
   symbol: string;
   paper: PaperBundle;
@@ -29,24 +29,26 @@ export function TradePanel({
   quote: Quote | null;
   resetBusy: boolean;
   onResetAccount: () => void;
+  /** 下单/撤单/重置后刷新模拟账户数据（壳内 loadPaper，2026-09-01 替代全局事件）。 */
+  onPaperChanged: () => void;
 }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="grid shrink-0 grid-cols-2 gap-1 border-b border-zinc-100 px-3 py-2 text-xs dark:border-zinc-800/60">
         <span className="text-zinc-400">
-          总资产 <span className="font-mono text-sm text-zinc-100">{fmt(paper.acc.total)}</span>
+          总资产 <span className="font-mono text-sm text-zinc-700 dark:text-zinc-100">{fmt(paper.acc.total)}</span>
         </span>
         <span className="text-zinc-400">
-          现金 <span className="font-mono text-sm text-zinc-100">{fmt(paper.acc.cash)}</span>
+          现金 <span className="font-mono text-sm text-zinc-700 dark:text-zinc-100">{fmt(paper.acc.cash)}</span>
         </span>
         <span className="text-zinc-400">
-          持仓市值 <span className="font-mono text-sm text-zinc-100">{fmt(paper.acc.market_value)}</span>
+          持仓市值 <span className="font-mono text-sm text-zinc-700 dark:text-zinc-100">{fmt(paper.acc.market_value)}</span>
         </span>
         <span className={paper.acc.total_pnl >= 0 ? "text-up" : "text-down"}>
           总盈亏 <span className="font-mono text-sm">{fmt(paper.acc.total_pnl)}（{fmt(paper.acc.total_pnl_pct)}%）</span>
         </span>
       </div>
-      <TradeForm symbol={symbol} price={quote?.price ?? null} limitUp={quote?.limit_up_price ?? null} limitDown={quote?.limit_down_price ?? null} />
+      <TradeForm symbol={symbol} price={quote?.price ?? null} limitUp={quote?.limit_up_price ?? null} limitDown={quote?.limit_down_price ?? null} onTraded={onPaperChanged} />
       <h3 className="shrink-0 px-3 pb-1 pt-2 text-xs font-medium text-zinc-300">持仓</h3>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <table className="w-full text-sm">
@@ -76,7 +78,7 @@ export function TradePanel({
                 <span className={o.side === "buy" ? "text-up" : "text-down"}>{o.side === "buy" ? "买" : "卖"} {o.symbol}</span>
                 <span className="font-mono text-zinc-400">{fmt(o.price)} × {o.quantity}</span>
                 <button
-                  onClick={async () => { await cancelPaperOrder(o.id).catch(() => {}); emitAppEvent(APP_EVENTS.paperChanged); }}
+                  onClick={async () => { await cancelPaperOrder(o.id).catch(() => {}); onPaperChanged(); }}
                   className="rounded border border-zinc-300 px-1.5 text-zinc-400 hover:text-red-400 dark:border-zinc-600"
                 >
                   撤

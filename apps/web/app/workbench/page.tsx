@@ -29,7 +29,7 @@ import {
   type SparklinePayload,
 } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
-import { APP_EVENTS, emitAppEvent, onAppEvent } from "@/lib/events";
+import { subscribeWatchlist, notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import { LAST_SYMBOL_KEY, workbenchUrl } from "@/lib/routing";
 import type { Quote } from "@/types/market";
 
@@ -132,9 +132,9 @@ function WorkbenchInner() {
   useEffect(() => {
     void loadBase();
     const t = setInterval(loadBase, 10000);
-    // 修复 2026-09-01 实锤断点（架构方案 P1）：search-box 快捷加自选会派发
-    // watchlist-changed，但此前全站无监听方——加自选后左栏要等 10s 轮询才出现。
-    return onAppEvent(APP_EVENTS.watchlistChanged, () => void loadBase());
+    // 自选集合变化（search-box 快捷加自选 / 详情面板 ＋自选）→ 立即刷新
+    // （2026-09-01 简化：原 CustomEvent 契约改为 lib/watchlist-sync 模块通知）
+    return subscribeWatchlist(() => void loadBase());
   }, [loadBase]);
 
   useEffect(() => {
@@ -215,7 +215,7 @@ function WorkbenchInner() {
       setNewSymbol("");
       setAddError(null);
       setSymbols((prev) => (prev.includes(s) ? prev : [...prev, s]));
-      emitAppEvent(APP_EVENTS.watchlistChanged); // 写操作必广播（lib/events.ts 契约）
+      notifyWatchlistChanged(); // 其他订阅方同步（本页 loadBase 已被订阅回调覆盖）
     } catch {
       setAddError("添加失败，请确认后端已启动");
     }

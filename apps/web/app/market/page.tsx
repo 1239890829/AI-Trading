@@ -25,10 +25,10 @@ import type { LimitUpRecord, Quote } from "@/types/market";
  * 云图无独立数据源（复用市场快照，纯视图），故并入本页为 tab 而非一级导航
  * （docs/architecture-redesign.md §一.1.2 减负原则 2）。
  *
- * 布局 v2（2026-09-01 用户反馈）：成交额/涨停速览/事件驱动曾被顶部 shrink-0
- * 区块挤成只剩标题栏。重排：顶部指标带紧凑化（指数卡 4 行→3 行、宽度卡压扁、
- * 情绪条与情绪序列合并一块），中部三板块给保底 min-h + 固定 flex 比例，
- * 整页 overflow-y-auto 兜底（小视口可滚动，板块永不被压没）。
+ * 布局 v3（2026-09-01 用户要求）：**一屏完整展示，严禁页面级滚动**——
+ * 顶部指标带全部紧凑化（指数卡 2 行、宽度卡 py-1、情绪卡降高、低价值说明行
+ * 删除），中部成交额+涨停速览与事件驱动按 flex 比例吸收剩余高度（各带
+ * min-h 保底），内容超长只在面板内部滚动。633px 小视口实测也无需页面滚动。
  */
 
 const PHASE_STYLE: Record<string, string> = {
@@ -111,11 +111,6 @@ function MarketInner() {
   }, []);
 
   const sh = indices.find((q) => q.market === "SH" && q.symbol === "000001");
-  const staticNote =
-    "市场宽度已上线（涨跌/涨停卡片，全市场快照实时计算）；情绪周期判定见情绪面板，炸板率精细化在后续版本提供。本页所有数据均标注来源与数据时间；免费数据源失败时接口返回 502，前端展示错误态，不伪造实时数据。";
-  const breadthNote = breadth
-    ? `宽度口径：全市场快照价格法（${breadth.total} 只）；涨停 ${breadth.limit_up} 只含收盘贴板未封住者，权威封板口径见盘面页涨停生态 tab（东财）。两市总额（含北交所）${fmtAmount(breadth.total_amount)}。`
-    : "";
 
   function switchView(k: ViewKey) {
     const p = new URLSearchParams(sp.toString());
@@ -124,7 +119,7 @@ function MarketInner() {
   }
 
   return (
-    <main className="mx-auto flex h-full w-full max-w-[1600px] flex-col gap-3 overflow-y-auto px-4 py-3">
+    <main className="mx-auto flex h-full w-full max-w-[1600px] flex-col gap-2 overflow-hidden px-4 py-3">
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-4">
           <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">市场</h1>
@@ -153,40 +148,40 @@ function MarketInner() {
           <HeatmapTab />
         </div>
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col gap-3">
+        <div className="flex min-h-0 flex-1 flex-col gap-2">
           {error && (
-            <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-600 dark:text-amber-300">
+            <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-600 dark:text-amber-300">
               {error}
             </div>
           )}
 
-          {/* 指数带：紧凑 3 行（名称+质量 / 价格+涨跌幅 / 成交额） */}
-          <div className="grid shrink-0 grid-cols-3 gap-3 md:grid-cols-6">
+          {/* 指数带：紧凑 2 行（名称+质量+涨跌幅 / 价格+成交额） */}
+          <div className="grid shrink-0 grid-cols-3 gap-2 md:grid-cols-6">
             {indices.map((q) => (
-              <div key={q.symbol} className="rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+              <div
+                key={q.symbol}
+                className="rounded-lg border border-zinc-200 px-2.5 py-1.5 dark:border-zinc-800"
+                title={q.quality_reasons?.length ? q.quality_reasons.join("；") : undefined}
+              >
                 <div className="flex items-center justify-between gap-1">
                   <span className="truncate text-xs text-zinc-400">{q.name ?? q.symbol}</span>
-                  <QualityBadge quality={q.quality} reasons={q.quality_reasons} />
+                  <span className="flex items-center gap-1">
+                    <QualityBadge quality={q.quality} reasons={q.quality_reasons} />
+                    <span className={`shrink-0 font-mono text-xs ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</span>
+                  </span>
                 </div>
                 <div className="mt-0.5 flex items-baseline justify-between gap-2">
-                  {q.price == null ? (
-                    <span className="text-xs text-zinc-400">未开盘</span>
-                  ) : (
-                    <>
-                      <span className="font-mono text-lg font-semibold">{fmt(q.price)}</span>
-                      <span className={`shrink-0 font-mono text-xs ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</span>
-                    </>
-                  )}
-                </div>
-                <div className="font-mono text-[11px] text-zinc-500" title="成交额">
-                  额 {fmtAmount(q.amount)}
+                  <span className="font-mono text-base font-semibold">{q.price == null ? "未开盘" : fmt(q.price)}</span>
+                  <span className="shrink-0 font-mono text-[10px] text-zinc-500" title="成交额">
+                    额 {fmtAmount(q.amount)}
+                  </span>
                 </div>
               </div>
             ))}
           </div>
 
-          {/* 宽度带：压扁为两行小卡 */}
-          <div className="grid shrink-0 grid-cols-3 gap-3 lg:grid-cols-6">
+          {/* 宽度带 */}
+          <div className="grid shrink-0 grid-cols-3 gap-2 lg:grid-cols-6">
             {[
               ["上涨", breadth?.up, "text-up"],
               ["下跌", breadth?.down, "text-down"],
@@ -195,76 +190,71 @@ function MarketInner() {
               ["平盘/停牌", breadth ? `${breadth.flat}/${breadth.suspended}` : null, ""],
               ["沪深京总数", breadth?.total, ""],
             ].map(([label, value, cls]) => (
-              <div key={String(label)} className="rounded-xl border border-zinc-200 px-3 py-1.5 dark:border-zinc-800">
-                <div className="text-[11px] text-zinc-400">{label}</div>
-                <div className={`font-mono text-base font-semibold ${cls}`}>{value ?? "--"}</div>
+              <div key={String(label)} className="rounded-lg border border-zinc-200 px-2.5 py-1 dark:border-zinc-800">
+                <span className="text-[11px] text-zinc-400">{label}</span>
+                <div className={`font-mono text-sm font-semibold ${cls}`}>{value ?? "--"}</div>
               </div>
             ))}
           </div>
 
-          {/* 情绪合并卡：左相位/温度/指标，右近 10 日序列柱状（原两块 shrink-0 合一，省一行高度） */}
+          {/* 情绪合并卡：左相位/温度/指标，右近 10 日序列柱状（紧凑高度） */}
           {sent && (
-            <div className="flex shrink-0 flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border border-zinc-200 px-4 py-2.5 dark:border-zinc-800">
-              <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1.5">
-                <span className={`rounded-md border px-2.5 py-1 text-sm font-semibold ${PHASE_STYLE[sent.phase] ?? ""}`}>
+            <div className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-1.5 rounded-lg border border-zinc-200 px-3.5 py-1.5 dark:border-zinc-800">
+              <div className="flex min-w-0 flex-wrap items-center gap-x-3.5 gap-y-1">
+                <span className={`rounded-md border px-2 py-0.5 text-xs font-semibold ${PHASE_STYLE[sent.phase] ?? ""}`}>
                   {sent.phase}
                 </span>
                 <span className="text-xs text-zinc-400">
-                  情绪温度 <span className="font-mono text-base font-semibold text-zinc-900 dark:text-zinc-100">{sent.temperature}</span>/100
+                  情绪温度 <span className="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100">{sent.temperature}</span>/100
                 </span>
                 <span className="text-xs text-zinc-400">置信度 {sent.confidence}</span>
-                <span className="text-xs text-zinc-400">
+                <span className="hidden text-xs text-zinc-400 xl:inline">
                   {sent.indicators.slice(0, 6).map((i) => `${i.name} ${i.value ?? "--"}`).join(" · ")}
                 </span>
                 <span
-                  className="max-w-[280px] truncate text-xs text-zinc-500"
+                  className="max-w-[260px] truncate text-xs text-zinc-500"
                   title={`${sent.reasons.join("；")}｜误判：${sent.misjudge_caveats.join("；")}｜切换：${sent.switch_conditions}`}
                 >
                   判定依据：{sent.reasons[0]}…
                 </span>
               </div>
               {sentHist && sentHist.items.length > 0 && (
-                <div className="ml-auto flex items-end gap-2" title={(() => {
-                  const cy = sentHist.cycle;
-                  return cy.start_date
-                    ? `本轮自 ${cy.start_date} 起（${cy.start_phase ?? ""}→${sentHist.items[sentHist.items.length - 1]?.phase}），已持续 ${cy.days} 日`
-                    : "近 10 日情绪序列";
-                })()}>
-                  <span className="mb-1 whitespace-nowrap text-[10px] leading-tight text-zinc-500">
-                    近{sentHist.items.length}日
-                    <br />
-                    情绪
-                  </span>
-                  <div className="flex items-end gap-1.5">
-                    {sentHist.items.map((h) => {
-                      const t = h.temperature ?? 0;
-                      const height = 6 + Math.round((t / 100) * 30);
-                      const color =
-                        t >= 75 ? "bg-red-500/70" : t >= 60 ? "bg-amber-500/70" : t >= 45 ? "bg-zinc-500/60" : "bg-sky-500/70";
-                      return (
-                        <div
-                          key={h.trade_date}
-                          className="flex w-7 flex-col items-center gap-0.5"
-                          title={`${h.trade_date}｜${h.phase}｜温度 ${t ?? "--"}｜置信 ${h.confidence ?? "--"}｜${h.source === "review" ? "复盘" : "实时"}`}
-                        >
-                          <span className="text-[10px] tabular-nums text-zinc-400">{t ? Math.round(t) : "--"}</span>
-                          <div className={`w-full rounded-t ${color}`} style={{ height }} />
-                          <span className="text-[9px] text-zinc-500">{h.trade_date.slice(4, 6)}/{h.trade_date.slice(6, 8)}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
+                <div
+                  className="ml-auto flex items-end gap-1.5"
+                  title={(() => {
+                    const cy = sentHist.cycle;
+                    return cy.start_date
+                      ? `近 ${sentHist.items.length} 日情绪序列；本轮自 ${cy.start_date} 起（${cy.start_phase ?? ""}→${sentHist.items[sentHist.items.length - 1]?.phase}），已持续 ${cy.days} 日`
+                      : `近 ${sentHist.items.length} 日情绪序列`;
+                  })()}
+                >
+                  {sentHist.items.map((h) => {
+                    const t = h.temperature ?? 0;
+                    const height = 5 + Math.round((t / 100) * 22);
+                    const color =
+                      t >= 75 ? "bg-red-500/70" : t >= 60 ? "bg-amber-500/70" : t >= 45 ? "bg-zinc-500/60" : "bg-sky-500/70";
+                    return (
+                      <div
+                        key={h.trade_date}
+                        className="flex w-6 flex-col items-center gap-px"
+                        title={`${h.trade_date}｜${h.phase}｜温度 ${t ?? "--"}｜置信 ${h.confidence ?? "--"}｜${h.source === "review" ? "复盘" : "实时"}`}
+                      >
+                        <span className="text-[9px] tabular-nums text-zinc-400">{t ? Math.round(t) : "--"}</span>
+                        <div className={`w-full rounded-t ${color}`} style={{ height }} />
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
           )}
 
-          {/* 中部：成交额 1/3 + 涨停速览 2/3（min-h 保底，flex-[3] 优先撑高让 10 行表格尽量完整） */}
-          <div className="grid min-h-[240px] flex-[3] gap-3 lg:grid-cols-[minmax(260px,1fr)_2fr]">
+          {/* 中部：成交额 1/3 + 涨停速览 2/3（flex-[5] 优先撑高；表格超高时面板内滚动） */}
+          <div className="grid min-h-[168px] flex-[5] gap-2 lg:grid-cols-[minmax(250px,1fr)_2fr]">
             <Panel title="两市成交额" className="min-h-0 overflow-hidden" source={sh?.source} dataTimestamp={sh?.data_timestamp}>
-              <div className="flex h-full flex-col justify-center px-4 py-4">
-                <p className="font-mono text-4xl font-semibold tracking-tight">{totalAmount ? fmtAmount(totalAmount) : "--"}</p>
-                <p className="mt-3 text-xs leading-relaxed text-zinc-400">
+              <div className="flex h-full flex-col justify-center px-4 py-3">
+                <p className="font-mono text-3xl font-semibold tracking-tight">{totalAmount ? fmtAmount(totalAmount) : "--"}</p>
+                <p className="mt-2 text-[11px] leading-relaxed text-zinc-400">
                   沪深京两市合计（含北交所）。历史趋势图随 Parquet 快照数据积累逐步提供。
                 </p>
               </div>
@@ -285,33 +275,25 @@ function MarketInner() {
                   <tbody>
                     {pool.map((r) => (
                       <tr key={r.symbol} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                        <td className="px-3 py-2 font-mono text-xs text-zinc-400">{r.symbol}</td>
-                        <td className="px-2 py-2">{r.name}</td>
-                        <td className="px-2 py-2 text-right font-mono">{fmt(r.price)}</td>
-                        <td className={`px-2 py-2 text-right font-mono ${pctColor(r.change_pct)}`}>{pctText(r.change_pct)}</td>
-                        <td className="px-3 py-2 text-right text-xs text-zinc-400">{r.boards_stat ?? ""}</td>
+                        <td className="px-3 py-1.5 font-mono text-xs text-zinc-400">{r.symbol}</td>
+                        <td className="px-2 py-1.5">{r.name}</td>
+                        <td className="px-2 py-1.5 text-right font-mono">{fmt(r.price)}</td>
+                        <td className={`px-2 py-1.5 text-right font-mono ${pctColor(r.change_pct)}`}>{pctText(r.change_pct)}</td>
+                        <td className="px-3 py-1.5 text-right text-xs text-zinc-400">{r.boards_stat ?? ""}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               ) : (
-                <p className="px-4 py-8 text-center text-sm text-zinc-400">今日暂无涨停数据（或非交易日）</p>
+                <p className="px-4 py-6 text-center text-sm text-zinc-400">今日暂无涨停数据（或非交易日）</p>
               )}
             </Panel>
           </div>
 
-          {/* 事件驱动（E1⑥/E2）：事件 → 方向 → 标的池 → 题材/详情联动；全宽 + min-h 保底 */}
-          <div className="min-h-[240px] flex-[2] overflow-hidden">
+          {/* 事件驱动（E1⑥/E2）：全宽 + flex-[4]；列表超长时面板内部滚动 */}
+          <div className="min-h-[148px] flex-[4] overflow-hidden">
             <EventPanel />
           </div>
-
-          <p
-            className="shrink-0 truncate rounded-lg border border-zinc-200 px-4 py-2 text-xs text-zinc-400 dark:border-zinc-800"
-            title={`${breadthNote}${staticNote}`}
-          >
-            说明：{breadthNote}
-            {staticNote}
-          </p>
         </div>
       )}
     </main>
