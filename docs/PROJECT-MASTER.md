@@ -198,7 +198,7 @@ ashare-ai-trader/
 | GET/POST/DELETE | /api/watchlist… | 自选 CRUD + groups + 改组 | SQLite |
 | GET/🔒POST | /api/paper/* | 模拟交易（account/positions/orders/fills） | 撮合引擎 |
 | 🔒 POST | /api/paper/reset | 重置模拟账户（可传 initial_cash） | 撮合引擎 |
-| GET | /api/screener | 全市场选股器（截面过滤→TDX日K六维评分卡，30min 缓存） | Parquet+TDX |
+| ~~GET | /api/screener~~ | 已删除（2026-09-01 用户拍板，与每日精选定位冲突） | — |
 | POST | /api/backtest/run · GET /backtest/strategies | 日线策略回测（防泄露引擎） | TDX 日K |
 | 🔒 POST | /api/review/run | 手动触发复盘（调度器之外的补跑入口） | 自采+分析 |
 | GET | /api/review/reports[/{date}] · /compare · /methodology/versions · /effectiveness | 复盘检索/对比/方法论演进 | SQLite+JSON |
@@ -221,7 +221,7 @@ ashare-ai-trader/
 | /picks | 每日精选：风险横幅+空仓闸门+≤5 卡片瀑布流（梯队/风险档位/止损/失效）+复盘归因+角色胜率 | ✅ |
 | /research | **研究**折叠页：回测 │ 预警 两 tab；低频工具不占导航黄金位 | ✅ 2026-09-01 合并（原 /backtest /alerts） |
 | /stock/[symbol] | 307 重定向 → /workbench?symbol= | ✅（已合并） |
-| /screener | 冻结（导航移除，页面保留） | ⏸ 2026-08-31 |
+| /screener | **已彻底删除**（页面/端点/service 全清，tech_score 评分内核被每日精选复用保留） | 🗑 2026-09-01 用户拍板 |
 
 ## 6.2 详情终端（StockDetailPanel，工作台右栏 300px，单卡片）
 - 顶部紧凑行情条：名称/代码/质量/＋自选 │ 大字价格(tick闪烁) + 涨跌 │ 11项指标小字条 │ 数据时间/来源

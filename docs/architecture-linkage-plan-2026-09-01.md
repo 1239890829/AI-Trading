@@ -240,11 +240,16 @@ T+1 收盘: 复盘 Agent → 九类归因 + 角色胜率 + 事件收益回写(�
 - **内容**：P1 watchlist-changed 补监听；P2 前端接入 WS `subscribe` 消息（后端已就绪）；P4 `lib/events.ts` 类型化事件；picks 卡"梯队来源"跳转链接。
 - **验证**：① vitest：加自选 → `watchlist-changed` 断言左栏刷新被调用；② 浏览器 devtools WS 面板：加/删自选连接不重连（Network→WS 只有一条）；③ 截图：加自选后左栏 ≤1s 出现新行。
 
-### Phase 2 · 数据聚合（1 次迭代，后端 1 端点 + 前端 store）
+### Phase 2 · 数据聚合（1 次迭代，后端 1 端点 + 前端 store）❌ 2026-09-01 用户拍板不做（与简化方向冲突，各页本地展示已覆盖；正式关闭）
 - **内容**：`GET /api/system/context`（ttl_cache 30s）；WS `type:"context"` 推送；`lib/app-context.ts` store；workbench+market 接入（gate 徽章进工作台头部，market 低频请求降频——O2 一并做）。
 - **验证**：① pytest：context 端点字段契约（trade_date/phase/gate/regime 四键必有）；② Network 计数：market 页常态请求 5/10s → 指数 10s + context 推送（实测对比截图）；③ 工作台头部 gate 徽章在人工构造 stand_aside 数据时显示（测试 fixture）。
 
-### Phase 3 · 消融地基与复盘消费（1-2 迭代）
+### Phase 3 · 消融地基与复盘消费（1-2 迭代）🔶 地基已落 2026-09-01（c38cb05，用户批准启动）
+> 已落：daily_pick_set.rejected 列（迁移 b7d4f8a2e6c9，落选者摘要含 tech 分 ≤20 条）+
+> generate_picks 写入 + replay_picks.py `--weight-mode tech_only` / `--compare-ablation` 对照表。
+> **验收路径**：自然积累 30 个交易日后（约 2026-10 中旬）跑
+> `.venv/bin/python scripts/replay_picks.py --days 30 --compare-ablation --out docs/ablation-report.md`
+> 出「六维组合 vs 单维」正式验收报告。剩余未做：事件收益回写表、复盘页对比结论展示。
 - **内容**：P6 候选池全量分落库（alembic）；replay 消融策略组；"落选 vs 入选"对比进复盘；自选∩组合差集提示；事件收益回写表（3.1③，bounds ±20%）。
 - **验证**：① pytest：落库行包含候选池 24 只 sub 分；② 回放脚本产出五策略对照表（T+3 超额中位数/胜率/回撤），六维组不劣于单维组；③ 复盘页（A2 研究页 tab）能看到对比结论。
 

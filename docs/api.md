@@ -1,6 +1,6 @@
 # REST API
 
-Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**96 个端点**（2026-09-01 与代码同步；端点数以 `/openapi.json` 为权威，本文档按域分节供检索）。
+Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**92 个端点**（2026-09-01 与代码同步；端点数以 `/openapi.json` 为权威，本文档按域分节供检索）。
 
 统一响应：`{"data": ..., "meta": {...}}`（Envelope[T]，meta 含 `provider / is_realtime / is_stale / last_success_refresh / generated_at`）。
 数据源失败返回 **HTTP 502**（前端显示错误态，绝不降级伪造）；错误统一契约 `{detail, code}`。
@@ -120,7 +120,6 @@ Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**96 个端点**（2026-
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/screener` | 全市场选股器：截面过滤（涨幅带/成交额/换手/排 ST·北交·次新）→ TDX 日K 六维评分卡（防飞刀口径），缓存 30 分钟，首跑约 20s |
 | POST | `/api/backtest/run` | 单标的日线策略回测（防泄露引擎：as_of 视图/T+1/一字板拒/费用配置化；ma_cross / ma_breakout） |
 | GET | `/api/backtest/strategies` | 可用策略清单 |
 
