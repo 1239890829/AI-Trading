@@ -16,6 +16,7 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 
 from app.market.trade_calendar import last_trade_date, recent_trade_dates, trading_days
+from app.schemas.market import LongHuRecord
 from app.services.theme_service import parse_theme_tags
 
 log = logging.getLogger(__name__)
@@ -49,6 +50,39 @@ def next_weekday_after(d: date) -> date:
     while nxt.weekday() >= 5:
         nxt += timedelta(days=1)
     return nxt
+
+
+def pick_daily_board(records: list[LongHuRecord]) -> dict[str, LongHuRecord]:
+    """从龙虎榜记录中按 symbol 选出**当日榜**（range_days == 1）。
+
+    ⚠️ 为什么不能简单写 `{r.symbol: r for r in records}`：
+    交易所对同一只股票可同时披露「当日榜」（如日涨幅偏离值达 7%）与
+    「三日榜」（如连续三日涨幅偏离值累计达 20%），两者是**两条独立记录**、
+    buy/sell/net 是不同区间的累计值，相加或互相替代都是错的。
+    用 dict 建映射会静默覆盖，保留哪条取决于服务端返回顺序——不报错、
+    不可复现，是典型的静默失效。
+
+    实测 2026-08-31：002396 星网锐捷 日榜净额 −9783 万 / 三日榜 +7252 万，
+    **符号相反**。若取到三日榜，"游资净买入"证据会给出与事实相反的方向。
+
+    选榜口径：优先 range_days == 1（当日榜，"当日游资净买入"才是资金验证语义）；
+    只有当日榜缺席时才回退到其他区间，调用方须用返回记录的 `.range_days`
+    标注口径，不得把三日榜数字当当日数读。
+    """
+    daily: dict[str, LongHuRecord] = {}
+    fallback: dict[str, LongHuRecord] = {}
+    for r in records:
+        if not r.symbol:
+            continue
+        if r.range_days == 1:
+            daily[r.symbol] = r
+        else:
+            # range_days 缺失（老数据源/东财口径）时按当日榜处理：
+            # 东财 datacenter 本身就是日榜口径，且该分支下不存在多榜并存。
+            fallback.setdefault(r.symbol, r)
+    for sym, rec in fallback.items():
+        daily.setdefault(sym, rec)
+    return daily
 
 
 async def collect_predict_evidence(
@@ -131,6 +165,11 @@ async def collect_predict_evidence(
             "news_sample": [],
             "tags": sorted(tags_by_symbol.get(sym, set())),
             "dragon_net_buy": None,
+            # 龙虎榜口径标注：range_days=1 当日榜 / 3 三日榜。
+            # 资金验证的语义是"当日净买入"，取到三日榜必须在证据文案里声明。
+            "dragon_range_days": None,
+            "dragon_hot_money_net": None,  # 游资净额（"游资"验证的准确口径）
+            "dragon_org_net": None,  # 机构净额（为负=机构派发，对游资接力是负向）
         }
         try:
             news = await provider.get_news(sym, news_limit)
@@ -148,11 +187,17 @@ async def collect_predict_evidence(
     if last_td:
         try:
             dragon = await provider.get_longhu_records(last_td)
-            dragon_map = {r.symbol: r for r in dragon}
+            # ⚠️ 同股可能同时有当日榜与三日榜两条记录，不可 {r.symbol: r} 覆盖
+            # （静默丢失一条且取到哪条取决于服务端顺序，曾致结论方向反转）。
+            dragon_map = pick_daily_board(dragon)
             for c in candidates:
                 r = dragon_map.get(c["symbol"])
-                if r:
-                    c["dragon_net_buy"] = r.net_buy
+                if r is None:
+                    continue
+                c["dragon_net_buy"] = r.net_buy
+                c["dragon_range_days"] = r.range_days
+                c["dragon_hot_money_net"] = r.hot_money_net_value
+                c["dragon_org_net"] = r.org_net_value
         except Exception as exc:
             gaps.append(f"ths_longhu({last_td}): {exc}")
 

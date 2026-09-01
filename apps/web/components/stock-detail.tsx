@@ -22,7 +22,7 @@ import {
   getCapitalFlow,
   getCompanyProfile,
   getFinancials,
-  getKline,
+  getKlinePayload,
   getMarketOverview,
   getMinuteLine,
   getMinuteLineWithBaseline,
@@ -46,7 +46,7 @@ import {
   type StockThemes,
 } from "@/lib/api";
 import { fmt, pctColor, pctText } from "@/lib/format";
-import type { Kline, OrderBook, Quote, Trade } from "@/types/market";
+import type { Kline, OrderBook, Quote, Trade, TradingStatusInfo } from "@/types/market";
 import { QuoteStrip } from "@/components/detail/quote-strip";
 import { TradePanel, type PaperBundle } from "@/components/detail/trade-panel";
 import { ProfilePanel, type CompanyProfile, type FinRow, type BoardRows } from "@/components/detail/profile-panel";
@@ -57,6 +57,7 @@ import { FlowChart, type CapitalFlow } from "@/components/detail/flow-chart";
 import { SpeedPanel } from "@/components/detail/speed-panel";
 import { BoardRankPanel } from "@/components/detail/board-rank-panel";
 import { RealPositionPanel } from "@/components/detail/real-position-panel";
+import { SuspendedBadge, SuspendedNotice, isSuspended } from "@/components/detail/suspended-badge";
 
 type ChartTab = "kline" | "minute" | "flow";
 type RightTab = "book" | "trades" | "trade" | "real" | "profile" | "info" | "speed" | "boards";
@@ -97,7 +98,13 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   }, []);
   // 历史回放（Phase 6 收官）：K 线页签内切换回放模式
   const [replayMode, setReplayMode] = useState(false);
+  // 技术评估条默认**折叠**（2026-09-02 评审 #5：K 线图被周边元素挤占）。
+  // 折叠后只留一行多空结论，把垂直空间还给 K 线；要看信号明细再点开。
+  // 采用保守方案：不改整体布局与右列宽度，随时可一键还原为常显。
+  const [techOpen, setTechOpen] = useState(false);
   const [bars, setBars] = useState<Kline[]>([]);
+  // 停牌判定（UI 缺陷 #1）：随日K 一同返回，非日线为 null（未判定，非"正常"）
+  const [tradingStatus, setTradingStatus] = useState<TradingStatusInfo | null>(null);
   const [book, setBook] = useState<OrderBook | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [minutes, setMinutes] = useState<MinutePoint[]>([]);
@@ -250,9 +257,13 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     if (!symbol) return;
     let alive = true;
     const skipStockOnly = isIndexSymbol(symbol); // 指数无盘口/逐笔/资金流，跳过省失败请求
-    void getKline(symbol, "1d", 120)
-      .then((b) => {
-        if (alive) setBars(b);
+    // 切股无需手动清空 tradingStatus：page.tsx 用 key={activeSymbol} 挂载，
+    // 切股即重挂载、state 复位（同上方的 stockThemes 注释）
+    void getKlinePayload(symbol, "1d", 120)
+      .then((p) => {
+        if (!alive) return;
+        setBars(p.bars);
+        setTradingStatus(p.trading_status);
       })
       .catch(() => {});
     if (!skipStockOnly) {
@@ -332,8 +343,12 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     const timers: ReturnType<typeof setInterval>[] = [];
     if (chartTab === "kline") {
       const pull = () => {
-        void getKline(symbol, "1d", 120)
-          .then((b) => b.length > 0 && setBars(b))
+        void getKlinePayload(symbol, "1d", 120)
+          .then((p) => {
+            if (p.bars.length === 0) return;
+            setBars(p.bars);
+            setTradingStatus(p.trading_status);
+          })
           .catch(() => {});
       };
       void pull();
@@ -442,7 +457,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
       )}
 
       {/* ① 紧凑行情条（指数隐藏加自选：sh000001 不是合法自选股代码） */}
-      {quote && <QuoteStrip quote={quote} inWatchlist={inWatchlist} onAdd={() => void add()} hideWatchlist={isIndex} />}
+      {quote && <QuoteStrip quote={quote} inWatchlist={inWatchlist} onAdd={() => void add()} hideWatchlist={isIndex} tradingStatus={tradingStatus} />}
 
       {/* ①½ 题材归属 chips（官方成分 / 涨停归因双源）→ 题材看板聚焦 */}
       <ThemeChipsRow themes={stockThemes} />
@@ -475,21 +490,30 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                 {label}
               </button>
             ))}
+
+            {/* 历史回放：原挂在 K 线 Panel 头部 extra，与长标题挤在同一行、把标题挤成
+                省略号。移入图表工具栏右侧（与 K线/分时/资金图 同一行），
+                头部只留标题，释放横向空间（2026-09-02）。 */}
+            {chartTab === "kline" && !replayMode && displayBars.length >= 60 && (
+              <button
+                onClick={() => setReplayMode(true)}
+                className="ml-auto rounded border border-sky-500/50 px-2 py-0.5 text-xs text-sky-400 hover:bg-sky-500/10"
+                title="按日逐根推进 K 线，回放历史买卖点与成交（需要 ≥60 根日 K）"
+              >
+                ▶ 历史回放
+              </button>
+            )}
           </div>
 
           {chartTab === "kline" && (
-            <Panel title={`${quote?.name ? `${quote.name} · ` : ""}日 K 线（前复权 · 默认聚焦最近 20 日，可缩放看全部）`} source={displayBars[0]?.source} bodyClassName="overflow-hidden" className="min-h-0 flex-1" extra={
-              !replayMode && displayBars.length >= 60 && (
-                <button onClick={() => setReplayMode(true)} className="rounded border border-sky-500/50 px-2 py-0.5 text-xs text-sky-400 hover:bg-sky-500/10">
-                  ▶ 历史回放
-                </button>
-              )
-            }>
+            <Panel title={`${quote?.name ? `${quote.name} · ` : ""}日 K 线（前复权）`} source={displayBars[0]?.source} bodyClassName="overflow-hidden" className="min-h-0 flex-1">
               {displayBars.length > 0 ? (
                 replayMode ? (
                   <ReplayChart bars={bars} fills={fills} onExit={() => setReplayMode(false)} />
                 ) : (
                 <div className="flex h-full min-h-0 flex-col">
+                  {/* 停牌提示条：日K 缺 bar 推导，判据随附（UI 缺陷 #1） */}
+                  <SuspendedNotice status={tradingStatus} />
                   {tech && (
                     <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-zinc-100 px-3 py-1 text-[11px] dark:border-zinc-800/60">
                       <span
@@ -503,14 +527,33 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                       >
                         技术评估：{tech.bias === "bull" ? "偏多" : tech.bias === "bear" ? "偏空" : "中性"}（{tech.bullCount}多/{tech.bearCount}空）
                       </span>
-                      <span
-                        className="text-zinc-400"
-                        title={tech.signals.map((sg) => sg.name + "：" + sg.detail).join("\n")}
-                      >
-                        {tech.signals.filter((sg) => sg.bias !== "neutral").slice(0, 4).map((sg) => sg.name).join(" · ")}
-                        <span className="ml-1 underline decoration-dotted">依据ⓘ</span>
-                      </span>
-                      <span className="ml-auto text-zinc-500">多因子技术信号汇总，不构成买卖建议</span>
+                      {techOpen ? (
+                        <>
+                          <span
+                            className="text-zinc-400"
+                            title={tech.signals.map((sg) => sg.name + "：" + sg.detail).join("\n")}
+                          >
+                            {tech.signals.filter((sg) => sg.bias !== "neutral").slice(0, 4).map((sg) => sg.name).join(" · ")}
+                            <span className="ml-1 underline decoration-dotted">依据ⓘ</span>
+                          </span>
+                          <span className="ml-auto text-zinc-500">多因子技术信号汇总，不构成买卖建议</span>
+                          <button
+                            onClick={() => setTechOpen(false)}
+                            className="shrink-0 text-zinc-400 hover:text-zinc-200"
+                            title="收起信号明细，把空间还给 K 线"
+                          >
+                            收起 ▴
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => setTechOpen(true)}
+                          className="shrink-0 text-zinc-400 hover:text-zinc-200"
+                          title={tech.signals.map((sg) => sg.name + "：" + sg.detail).join("\n")}
+                        >
+                          依据 ▸
+                        </button>
+                      )}
                     </div>
                   )}
                   <div className="min-h-0 flex-1">
@@ -527,6 +570,17 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
           {chartTab === "minute" && (
             <Panel title={`${quote?.name ? `${quote.name} · ` : ""}当日分时（1 分钟）`} source={minutes[0]?.source} bodyClassName="overflow-hidden" className="min-h-0 flex-1">
               {minutes.length > 0 ? (
+                <div className="relative h-full">
+                  {/* 停牌遮罩：分时是当日数据，停牌股当日无成交，
+                      空图会被误读成"数据源挂了"，必须显式说明原因 */}
+                  {isSuspended(tradingStatus) && (
+                    <div className="absolute inset-0 z-10 flex items-center justify-center bg-zinc-50/70 backdrop-blur-[1px] dark:bg-zinc-950/70">
+                      <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-center text-xs text-amber-600 dark:text-amber-300">
+                        <div className="text-sm font-medium">该股当前停牌，当日无分时数据</div>
+                        <div className="mt-1 opacity-80">{tradingStatus?.reason}</div>
+                      </div>
+                    </div>
+                  )}
                 <MinuteChart
                   points={displayMinutes}
                   prevClose={quote?.prev_close ?? null}
@@ -537,8 +591,13 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                   newsEvents={minuteNewsEvents}
                   className="h-full"
                 />
+                </div>
               ) : (
-                <p className="px-4 py-10 text-center text-sm text-zinc-400">暂无分时数据</p>
+                <p className="px-4 py-10 text-center text-sm text-zinc-400">
+                  {isSuspended(tradingStatus)
+                    ? `该股当前停牌，当日无分时数据（${tradingStatus?.reason ?? ""}）`
+                    : "暂无分时数据"}
+                </p>
               )}
             </Panel>
           )}

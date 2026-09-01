@@ -362,7 +362,9 @@ export function ReviewTab() {
   }
 
   return (
-    <div className="grid min-h-0 flex-1 grid-rows-[auto_1fr] gap-3 overflow-auto lg:grid-cols-2 lg:grid-rows-1">
+    // minmax(0,…) 而非 auto/1fr：grid 行的 auto 会被长内容无限撑开，把同行面板压扁
+    // 并把滚动推到最外层（窄屏下表现为整页滚动、面板内无滚动条）。
+    <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,auto)_minmax(0,1fr)] gap-3 overflow-auto lg:grid-cols-2 lg:grid-rows-1">
       <Panel title="复盘报告（盘后自动生成）" className="min-h-[240px]">
         {reports.length === 0 ? (
           <p className="px-4 py-8 text-center text-sm text-zinc-400">
@@ -387,7 +389,12 @@ export function ReviewTab() {
                 </button>
                 {openDate === r.trade_date &&
                   (detail ? (
-                    <ReportDetail report={detail} onDisposed={() => void reloadAfterDispose()} />
+                    // 展开的详情（元洞察 + 改进项 + 数据缺口）可能很长：限高并在**面板内**
+                    // 滚动，避免把外层 grid 行撑高、滚动条跑到页面最底部看不见。
+                    // overscroll-contain：滚到边界时不把滚动传导给父容器。
+                    <div className="max-h-[55vh] overflow-y-auto overscroll-contain">
+                      <ReportDetail report={detail} onDisposed={() => void reloadAfterDispose()} />
+                    </div>
                   ) : (
                     <p className="px-4 py-3 text-xs text-zinc-400">详情加载中…</p>
                   ))}

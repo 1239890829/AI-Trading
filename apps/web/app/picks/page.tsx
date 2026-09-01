@@ -49,7 +49,15 @@ function PicksInner() {
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const showReview = sp.get("review") === "1";
+  // 「生成复盘」独立忙碌态：与「生成/刷新组合」共用 busy 会让两个按钮一起转圈，
+  // 且复盘按钮没有 busy 文案分支时，点击后界面零变化 = 用户感知"点了没反应"。
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewOn, setReviewOn] = useState(false);
+  const [reviewHint, setReviewHint] = useState<string | null>(null);
+  // 复盘区原本**只在 URL 带 ?review=1 时渲染**（showReview 直接取自 query）。
+  // 后果：点「生成复盘」→ 接口 0.2s 成功返回 5 条结果 → 但页面不展示 → 用户以为按钮坏了。
+  // 现改为：URL 深链仍可用（?review=1），点击生成后自动展开复盘区。
+  const showReview = sp.get("review") === "1" || reviewOn;
 
   const load = useCallback(async () => {
     try {
@@ -87,15 +95,18 @@ function PicksInner() {
   }
 
   async function runReview() {
-    setBusy(true);
+    setReviewBusy(true);
     setError(null);
     try {
-      await generatePickReview();
+      // 用接口返回值**直接**上屏：即便后续 load() 失败，结果也不会丢
+      const res = await generatePickReview();
+      setReviewOn(true); // 生成成功后展开复盘区，否则用户看不到任何变化
       await load();
+      setReviewHint(`已生成 ${res.reviews.length} 条复盘（${res.date}）`);
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setBusy(false);
+      setReviewBusy(false);
     }
   }
 
@@ -138,12 +149,17 @@ function PicksInner() {
           </button>
           <button
             onClick={() => void runReview()}
-            disabled={busy}
+            disabled={busy || reviewBusy}
             className="rounded border border-zinc-300 px-2 py-0.5 text-zinc-500 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100 disabled:opacity-50"
-            title="对最近组合逐只回顾：实际走势 vs 入选理由，走坏原因归类"
+            title="对最近组合逐只回顾：实际走势 vs 入选理由，走坏原因归类（生成后自动展开复盘区）"
           >
-            生成复盘
+            {reviewBusy ? "生成中…" : "生成复盘"}
           </button>
+          {reviewHint && !error && (
+            <span className="text-[10px] text-emerald-600 dark:text-emerald-400" title="复盘已生成并展开在下方">
+              ✓ {reviewHint}
+            </span>
+          )}
         </div>
       </div>
 

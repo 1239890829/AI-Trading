@@ -2,20 +2,28 @@
  *  hideWatchlist=true 时隐藏加自选区（指数无自选语义，防把 sh000001 之类加进自选）。 */
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
+import { SuspendedBadge } from "@/components/detail/suspended-badge";
 import { fmt, fmtAmount, fmtVolume, pctColor, pctText, sourceLabel, timeText } from "@/lib/format";
-import type { Quote } from "@/types/market";
+import type { Quote, TradingStatusInfo } from "@/types/market";
 
 export function QuoteStrip({
   quote,
   inWatchlist,
   onAdd,
   hideWatchlist = false,
+  tradingStatus = null,
 }: {
   quote: Quote;
   inWatchlist: boolean;
   onAdd: () => void;
   hideWatchlist?: boolean;
+  /** 停牌判定（日K 缺失交易日数推导）。null = 未判定，不渲染徽标。 */
+  tradingStatus?: TradingStatusInfo | null;
 }) {
+  // PE 缺失原因文案：原版把"停牌"写进猜测清单，但那是**猜**的——PE 缺失
+  // 绝大部分是数据源未提供（新股/亏损股），真正的停牌应由 tradingStatus 判定。
+  // 现在停牌状态真实可得，两者各归其位：这里只说"数据源未提供"，停牌由徽标表达。
+  const peMissing = "数据源未提供市盈率（常见于新股、亏损股）";
   const strip: [string, string, string?][] = [
     ["今开", fmt(quote.open)],
     ["最高", fmt(quote.high)],
@@ -25,8 +33,8 @@ export function QuoteStrip({
     ["成交额", fmtAmount(quote.amount)],
     ["换手", quote.turnover_rate != null ? `${fmt(quote.turnover_rate)}%` : "--"],
     // PE/PB 兜底（2026-09-01）：后端已补全（fill_valuation），仍缺失说明数据源
-    // 确实未提供（新股/长期亏损/停牌等）——显示「暂无」并注明原因，不留白
-    ["PE", quote.pe_ttm != null ? fmt(quote.pe_ttm) : "暂无", quote.pe_ttm != null ? undefined : "数据源未提供市盈率（常见于新股、亏损或长期停牌个股）"],
+    // 确实未提供——显示「暂无」并注明原因，不留白
+    ["PE", quote.pe_ttm != null ? fmt(quote.pe_ttm) : "暂无", quote.pe_ttm != null ? undefined : peMissing],
     ["PB", quote.pb != null ? fmt(quote.pb) : "暂无", quote.pb != null ? undefined : "数据源未提供市净率"],
     ["市值", quote.total_mktcap_yi != null ? `${fmt(quote.total_mktcap_yi)}亿` : "--"],
     ["涨停", quote.limit_up_price != null ? fmt(quote.limit_up_price) : "--"],
@@ -39,6 +47,7 @@ export function QuoteStrip({
           <span className="text-base font-semibold">{quote.name ?? "--"}</span>
           <span className="font-mono text-xs text-zinc-400">{quote.market}.{quote.symbol}</span>
           <QualityBadge quality={quote.quality} reasons={quote.quality_reasons} />
+          <SuspendedBadge status={tradingStatus} />
           {!hideWatchlist &&
             (inWatchlist ? (
               <span className="text-xs text-zinc-400">已在自选</span>

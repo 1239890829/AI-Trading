@@ -8,6 +8,7 @@ import type {
   SymbolSearchItem,
   ThemeBoardPayload,
   Trade,
+  TradingStatusInfo,
   WatchlistItem,
 } from "@/types/market";
 
@@ -153,12 +154,24 @@ export async function getQuotes(symbols?: string[]): Promise<Quote[]> {
   return (await getJson<Quote[]>(`/api/quotes${qs}`)).data;
 }
 
-export async function getKline(symbol: string, timeframe = "1d", limit = 250): Promise<Kline[]> {
+export interface KlinePayload {
+  symbol: string;
+  timeframe: string;
+  bars: Kline[];
+  /** 停牌判定。仅 timeframe=1d 有值；null = 未判定（非日线），**不是**"正常交易"。 */
+  trading_status: TradingStatusInfo | null;
+}
+
+export async function getKlinePayload(symbol: string, timeframe = "1d", limit = 250): Promise<KlinePayload> {
   return (
-    await getJson<{ symbol: string; timeframe: string; bars: Kline[] }>(
+    await getJson<KlinePayload>(
       `/api/kline/${symbol}?timeframe=${timeframe}&limit=${limit}`, 15_000
     )
-  ).data.bars;
+  ).data;
+}
+
+export async function getKline(symbol: string, timeframe = "1d", limit = 250): Promise<Kline[]> {
+  return (await getKlinePayload(symbol, timeframe, limit)).bars;
 }
 
 export async function getOrderBook(symbol: string): Promise<OrderBook> {
@@ -431,6 +444,10 @@ export interface DailyPickItem {
   name: string | null;
   price: number | null;
   change_pct: number | null;
+  // 估值（后端 fill_valuation 从腾讯补；链首 ths 快照本身不带这些字段）。
+  // 可能为 null：数据源未提供（新股/亏损/长期停牌），前端显示"暂无"并说明原因，不臆造。
+  pe_ttm?: number | null;
+  pb?: number | null;
   score: number;
   sub_scores: Record<string, number>; // sentiment/news/tech/fundamental/capital/echelon
   bases: Record<string, string>;      // 各维度可解释依据
@@ -512,8 +529,15 @@ export async function getPickReviews(date?: string): Promise<PickReviewRow[]> {
   return (await getJson<PickReviewRow[]>(`/api/picks/review${qs}`, 15_000)).data;
 }
 
-export async function generatePickReview(): Promise<{ reviews: PickReviewRow[]; market_pct: number | null }> {
-  return (await sendJson<{ reviews: PickReviewRow[]; market_pct: number | null }>("/api/picks/review/generate", "POST", {}, 30_000)).data;
+/** 复盘生成结果。date 是服务端实际复盘的交易日（可能与"今天"不同，如休市时复盘最近交易日） */
+export interface PickReviewGenerateResult {
+  date: string;
+  reviews: PickReviewRow[];
+  market_pct: number | null;
+}
+
+export async function generatePickReview(): Promise<PickReviewGenerateResult> {
+  return (await sendJson<PickReviewGenerateResult>("/api/picks/review/generate", "POST", {}, 30_000)).data;
 }
 
 /** 按梯队角色的胜率分布（回答"能不能按题材抓妖"的直接证据） */

@@ -252,29 +252,72 @@ class ThsFuyaoProvider:
         return out
 
     async def get_longhu_records(self, trade_date: date) -> list[LongHuRecord]:
+        """龙虎榜个股明细。
+
+        ⚠️ 2026-09-02 修复（字段名必须按官方文档，不能猜）：
+        原实现用的是凭猜测写的字段名——price_change_ratio_pct / buy_amount /
+        sell_amount / net_buy / last_price / turnover ——**没有一个是响应里真实存在的**
+        （真实字段见 skills/hithink-finance/docs/api/endpoints-special-data.md
+        §dragon-tiger-list，stock_items[] 共 14 个字段）。
+        后果：所有数值字段恒为 None，前端龙虎榜看起来"数据全空"，
+        而接口其实返回了 68 条记录——**静默失败，不报错**。
+
+        请求参数同样订正：文档只支持 `date`(YYYY-MM-DD) 与 `board_type`，
+        原先传的 `date_ms` + `size` 都不是本接口的参数。
+
+        另：原 `reason = it.get("reason") or concepts` 会在真实原因缺失时
+        拿 concept_list 冒充"上榜原因"，导致界面显示"玉米,粮食概念,乳业"。
+        已改为只用真实的 limit_reason；概念标签另存 concept_tags。
+
+        ⚠️ 2026-09-02 二次修复（range_days 是统计区间，不是"上榜天数"）：
+        同一只股票可能同时上「当日榜」与「三日榜」，交易所分别披露，
+        stock_items[] 里就是**两条独立记录**，靠 `range_days` 区分（1 / 3）。
+        两者的 buy/sell/net 是不同区间的累计值，**相加或互相替代都是错的**。
+        此前未解析该字段，下游 `{r.symbol: r}` 建 dict 静默覆盖 → 取到哪条由服务端
+        返回顺序决定。实测 2026-08-31：76 条 / 70 只股票；002396 星网锐捷
+        日榜净额 -9783 万、三日榜 +7252 万**符号相反**，直接导致"游资净买入"
+        证据方向随机反转。故此处必须原样透出 range_days。
+        """
         data = await self._get(
             "/api/a-share/special-data/dragon-tiger-list",
-            {"date_ms": date_ms(trade_date), "size": 200},
+            {"date": trade_date.isoformat(), "board_type": "all"},
         )
         out = []
         for it in data.get("stock_items") or []:
-            code = from_thscode(str(it.get("thscode") or ""))
+            # ticker 是纯代码（文档字段），thscode 需转换，两者都兜底
+            code = str(it.get("ticker") or "") or from_thscode(str(it.get("thscode") or ""))
             if len(code) != 6:
                 continue
             num = lambda v: float(v) if v is not None else None  # noqa: E731
+            # ths 的 change 是**小数比例**（实测：0.0997 = 9.97%、0.2002 = 20.02% 创业板涨停），
+            # 而本项目 change_pct 统一为**百分数**。不换算会让涨停股在界面显示成 0.1%。
+            raw_change = num(it.get("change"))
+            change_pct = raw_change * 100 if raw_change is not None else None
             concepts = ",".join(c.get("name", "") for c in (it.get("concept_list") or [])[:5]) or None
             out.append(
                 LongHuRecord(
                     symbol=code,
                     name=it.get("name"),
                     trade_date=trade_date,
-                    close=num(it.get("last_price")),
-                    change_pct=num(it.get("price_change_ratio_pct")),
-                    amount=num(it.get("turnover")),
-                    net_buy=num(it.get("net_buy")),
-                    buy_amount=num(it.get("buy_amount")),
-                    sell_amount=num(it.get("sell_amount")),
-                    reason=it.get("reason") or concepts,
+                    # stock_items[] **没有收盘价与成交额**字段（hot_money_items[].rows[] 才有 amount）。
+                    # 取不到就置 None，绝不拿其他字段顶替。
+                    close=None,
+                    change_pct=change_pct,
+                    amount=None,
+                    net_buy=num(it.get("net_value")),
+                    buy_amount=num(it.get("buy_value")),
+                    sell_amount=num(it.get("sell_value")),
+                    reason=it.get("limit_reason"),
+                    concept_tags=concepts,
+                    # 统计区间：1=当日榜、3=三日榜。同一股票两榜并存时靠它区分。
+                    range_days=int(num(it.get("range_days"))) if it.get("range_days") is not None else None,
+                    net_rate=num(it.get("net_rate")),
+                    # org_net_value / hot_money_net_value **允许缺失**：
+                    # 缺失表示"该榜单没有机构/游资席位参与"，与"参与但净额为 0"语义不同，
+                    # 故保持 None，绝不用 0 填充。
+                    org_net_value=num(it.get("org_net_value")),
+                    hot_money_net_value=num(it.get("hot_money_net_value")),
+                    hot_rank=int(num(it.get("hot_rank"))) if it.get("hot_rank") is not None else None,
                     source=SOURCE,
                 )
             )

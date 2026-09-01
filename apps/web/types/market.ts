@@ -50,6 +50,20 @@ export interface Trade extends AuditFields {
   side?: string | null;
 }
 
+/** 个股交易状态。只有三态——`unknown` 表示**判不出来**（无K线/日历不可用），
+ *  绝不是"正常交易"，UI 必须如实呈现而不是当无事发生。 */
+export type TradingStatus = "trading" | "suspended" | "unknown";
+
+export interface TradingStatusInfo {
+  status: TradingStatus;
+  suspended_days?: number | null;
+  suspended_since?: string | null;
+  last_bar_date?: string | null;
+  anchor_date?: string | null;
+  /** 判定依据，直接展示给用户看 */
+  reason?: string;
+}
+
 export interface Kline extends AuditFields {
   symbol: string;
   timeframe: string;
@@ -210,6 +224,16 @@ export interface LongHuRecord extends AuditFields {
   buy_amount?: number | null;
   sell_amount?: number | null;
   reason?: string | null;
+  concept_tags?: string | null;
+  /** 统计区间：1=当日榜、3=三日榜。同股两榜并存时靠它区分，买卖净额不可相加。 */
+  range_days?: number | null;
+  /** 净额占区间成交额比（小数）。 */
+  net_rate?: number | null;
+  /** 机构净额；缺失=该榜单无机构席位参与（语义区别于"参与但为 0"）。 */
+  org_net_value?: number | null;
+  /** 游资净额；缺失=该榜单无游资席位参与。 */
+  hot_money_net_value?: number | null;
+  hot_rank?: number | null;
 }
 
 export interface SymbolSearchItem {

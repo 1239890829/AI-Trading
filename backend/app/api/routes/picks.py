@@ -462,6 +462,10 @@ async def _deep_score_candidates(
             score, vetoes = synthesize(sub, weights=weights)
             return {
                 "symbol": sym, "name": c["name"], "price": c["price"], "change_pct": c["change_pct"],
+                # 估值此前**只用于基本面打分，没有透出到卡片**——选股页因此永远看不到 PE，
+                # 而个股详情页有（走 /api/quotes 的 fill_valuation）。同一标的两个口径不一致。
+                "pe_ttm": pe,
+                "pb": getattr(q_snap, "pb", None) if q_snap is not None else None,
                 "score": score, "sub_scores": sub, "bases": bases, "vetoes": vetoes,
                 "related_events": [top_title] if top_title else [],
                 "echelon_role": role,
@@ -490,6 +494,9 @@ def _assemble_card(k: dict) -> dict:
         "name": k["name"],
         "price": k["price"],
         "change_pct": k["change_pct"],
+        # 估值透出（可能为 None：数据源未提供，前端按"暂无+原因"展示，不臆造）
+        "pe_ttm": k.get("pe_ttm"),
+        "pb": k.get("pb"),
         "score": k["score"],
         "sub_scores": k["sub_scores"],
         "bases": k["bases"],

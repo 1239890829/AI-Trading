@@ -18,7 +18,7 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.schemas.market import Kline, LimitUpRecord, LongHuRecord, Quote
+from app.schemas.market import Kline, LimitUpRecord, LongHuRecord, Quote, TradingStatusInfo
 
 T = TypeVar("T")
 
@@ -34,6 +34,9 @@ class KlinePayload(BaseModel):
     symbol: str
     timeframe: str
     bars: list[Kline]
+    # 停牌判定（UI 缺陷 #1）。仅 timeframe=1d 时有值——分钟K/周K 无法做"缺 bar"判定。
+    # None 表示未判定（非日线），不是"正常交易"。
+    trading_status: TradingStatusInfo | None = None
 
 
 class LimitUpPoolPayload(BaseModel):

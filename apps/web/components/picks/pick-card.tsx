@@ -71,6 +71,29 @@ export function PickCard({ item }: { item: DailyPickItem }) {
         </div>
       </div>
 
+      {/* 估值：此前选股页完全没有 PE/PB（个股详情页有，因为走 /api/quotes 的补全）。
+          数据源确实不提供时（新股/亏损/长期停牌）显示"暂无"并注明原因——
+          不留白、不臆造，与个股详情页口径一致。 */}
+      <div className="mt-1 flex items-center gap-2 text-[10px] text-zinc-400">
+        <span
+          className="font-mono"
+          // 负 PE = TTM 净利润为负（亏损）。直接显示 "-78.01" 会被误读成"极低估值"，
+          // 因此负值与缺失分别表述；悬停给出原始数值，信息不丢失。
+          title={
+            item.pe_ttm == null
+              ? "数据源未提供市盈率（常见于新股、亏损或长期停牌个股）"
+              : item.pe_ttm < 0
+                ? `TTM 净利润为负（亏损），市盈率 ${item.pe_ttm} 不适用估值比较`
+                : "市盈率 TTM（后端已用腾讯行情补全；链首 ths 快照不带该字段）"
+          }
+        >
+          PE {item.pe_ttm == null ? "暂无" : item.pe_ttm < 0 ? "亏损" : fmt(item.pe_ttm)}
+        </span>
+        <span className="font-mono" title="市净率">
+          PB {item.pb != null ? fmt(item.pb) : "暂无"}
+        </span>
+      </div>
+
       {/* 综合分 + 六维子评分条 */}
       <div className="mt-2 flex items-center gap-2">
         <span className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-xs font-semibold dark:bg-zinc-800" title="六维加权综合分（一票否决后）">

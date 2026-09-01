@@ -28,11 +28,15 @@ from app.schemas.envelope import (
     SparklinePayload,
     ThemeBoardPayload,
 )
+from app.market.trade_calendar import trading_days
+from app.market.trading_status import bar_date, beijing_now, resolve_trading_status
 from app.schemas.market import (
     OrderBook,
     Quote,
     SymbolSearchItem,
     Trade,
+    TradingStatus,
+    TradingStatusInfo,
     utcnow,
 )
 from app.services.quote_hub import QuoteHub
@@ -353,6 +357,32 @@ async def quote(
     return {"data": cached.model_dump(mode="json"), "meta": _meta(hub)}
 
 
+async def _trading_status_payload(hub: QuoteHub, bars, timeframe: str) -> dict | None:
+    """停牌判定载荷。仅日线有值；判定本身零额外网络请求（bars 已在手上）。
+
+    日历拉取失败时**照常返回 unknown + 原因**，不吞掉异常、不回退成 trading——
+    静默退化会让前端把"不知道"渲染成"正常交易"。
+    """
+    if timeframe != "1d":
+        return None
+    if not bars:
+        return TradingStatusInfo(
+            status=TradingStatus.unknown,
+            reason="无日K数据（数据源不可用，或该标的尚未上市/已退市）",
+        ).model_dump(mode="json")
+    try:
+        days = await trading_days(hub.provider)
+    except Exception as exc:
+        log.warning("trading calendar unavailable for status: %s", exc)
+        return TradingStatusInfo(
+            status=TradingStatus.unknown, reason=f"交易日历不可用：{exc}",
+        ).model_dump(mode="json")
+    info = resolve_trading_status(
+        [bar_date(b.ts) for b in bars], days, now=beijing_now()
+    )
+    return info.model_dump(mode="json")
+
+
 async def _kline_payload(hub: QuoteHub, symbol: str, timeframe: str, limit: int, start, end) -> dict:
     try:
         bars = await hub.provider.get_kline(symbol, timeframe, start, end)
@@ -365,6 +395,7 @@ async def _kline_payload(hub: QuoteHub, symbol: str, timeframe: str, limit: int,
             "symbol": symbol,
             "timeframe": timeframe,
             "bars": [b.model_dump(mode="json") for b in bars],
+            "trading_status": await _trading_status_payload(hub, bars, timeframe),
         },
         "meta": _meta(hub),
     }

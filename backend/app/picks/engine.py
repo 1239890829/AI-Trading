@@ -124,6 +124,11 @@ def score_fundamental(
         else:
             score = 35.0
             parts.append(f"PE {round(pe_ttm, 1)}（偏高）")
+    elif pe_ttm is not None and pe_ttm <= 0:
+        # 负 PE = TTM 净利润为负（亏损），与"数据缺失"含义完全不同。
+        # 原实现并入 else 输出"PE 缺失，估值中性"，会让人误以为没取到数据，
+        # 实际是取到了、但公司处于亏损——损失了这条可解释信息。
+        parts.append(f"PE {round(pe_ttm, 1)}（TTM 亏损，估值维度不适用）")
     else:
         parts.append("PE 缺失，估值中性")
     if revenue_growth is not None:

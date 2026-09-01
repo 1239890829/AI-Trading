@@ -153,12 +153,27 @@ def judge_theme(hint: str, keywords: list[str], pack: dict, heuristic: bool = Fa
     ))
 
     # ---- 6. 资金验证 ----
+    # ⚠️ 口径订正（2026-09-02）：dragon_net_buy 是**全部上榜席位净额合计**，
+    # 并不等于游资净额——原文案写作"龙虎榜游资净买入"属错义（把机构/量化席位也算成游资）。
+    # 游资口径另存 dragon_hot_money_net，有值时单独列出；缺失表示该榜单无游资席位参与。
+    # 另：同股可同时有当日榜与三日榜两条记录，buy/sell/net 是不同区间的累计值，
+    # collector 已按 range_days 显式选当日榜；回退到三日榜时必须标注区间，
+    # 否则用户会把"三日累计"读成"当日"。
     with_dragon = [c for c in related if c.get("dragon_net_buy") is not None and (c["dragon_net_buy"] or 0) > 0]
     if with_dragon:
         capital_score = 1.0
-        names = "、".join(f"{c['name']}(净买 {(c['dragon_net_buy'] or 0) / 1e8:.2f} 亿)" for c in with_dragon[:3])
+        parts: list[str] = []
+        for c in with_dragon[:3]:
+            rd = c.get("dragon_range_days")
+            scope = "日榜" if rd == 1 else f"{rd}日榜" if rd else "区间未知"
+            seg = f"{c['name']}({scope}净买 {(c['dragon_net_buy'] or 0) / 1e8:+.2f} 亿"
+            if c.get("dragon_hot_money_net") is not None:
+                seg += f"·游资 {c['dragon_hot_money_net'] / 1e8:+.2f} 亿"
+            if c.get("dragon_org_net") is not None:
+                seg += f"·机构 {c['dragon_org_net'] / 1e8:+.2f} 亿"
+            parts.append(seg + ")")
         evidence.append(EvidenceItem(
-            kind="capital", source="ths_longhu", content=f"龙虎榜游资净买入：{names}",
+            kind="capital", source="ths_longhu", content=f"龙虎榜上榜席位净买入：{'、'.join(parts)}",
             symbol=with_dragon[0]["symbol"], contribution=WEIGHTS["capital"] * 1.0,
         ))
     else:

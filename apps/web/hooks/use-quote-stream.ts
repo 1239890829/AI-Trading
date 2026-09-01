@@ -42,6 +42,11 @@ export function useQuoteStream(symbols: string[]) {
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     let pingTimer: ReturnType<typeof setInterval> | null = null;
+    let openTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearOpenTimer = () => {
+      if (openTimer) clearTimeout(openTimer);
+      openTimer = null;
+    };
 
     const apply = (list: Quote[]) => {
       setQuotes(Object.fromEntries(list.map((q) => [q.symbol, q])));
@@ -70,19 +75,30 @@ export function useQuoteStream(symbols: string[]) {
       if (closed) return;
       // 重连时保持当前状态显示（不闪回 connecting 误导用户）
       setStatus((prev) => (retry === 0 ? "connecting" : prev));
+      let ws: WebSocket;
       try {
-        wsRef.current = new WebSocket(`${wsBase()}/ws/quotes?symbols=${symbolsRef.current.join(",")}`);
+        ws = new WebSocket(`${wsBase()}/ws/quotes?symbols=${symbolsRef.current.join(",")}`);
+        wsRef.current = ws;
       } catch {
         startPolling();
         return;
       }
-      const ws = wsRef.current;
+      // 握手超时兜底（2026-09-02 实测 P0）：WebSocket API **没有连接超时**。
+      // 当对端接受 TCP 却不完成 upgrade（典型：Next dev 不代理 /backend 的 WS 升级，
+      // 请求被静默挂起），onopen/onclose/onerror 三者都不触发 —— 状态永远停在
+      // "connecting"，retry 永不递增，REST 轮询降级兜底也永远不会启动。
+      // 这里 6s 内未 open 即判定握手失败并主动 close，让既有的重试/降级链路生效。
+      clearOpenTimer();
+      openTimer = setTimeout(() => {
+        if (ws.readyState !== WebSocket.OPEN) ws.close();
+      }, 6000);
       // 半死连接防御（2026-09-01 实测：后端 pong 与推送并发写曾致 writer 静默死亡，
       // 连接 open、ping 有应答、但推送为零——列表冻结在初始值。后端已改为单点发送；
       // 这里再加客户端自愈：32s（2 个心跳周期）内没收到任何消息就主动断开重连，
       // 重连失败 3 次自然落入 REST 轮询兜底）
       let lastMsgAt = Date.now();
       ws.onopen = () => {
+        clearOpenTimer();
         retry = 0;
         stopPolling();
         lastMsgAt = Date.now();
@@ -121,6 +137,7 @@ export function useQuoteStream(symbols: string[]) {
         } catch {}
       };
       ws.onclose = () => {
+        clearOpenTimer();
         if (pingTimer) clearInterval(pingTimer);
         pingTimer = null;
         if (closed) return;
@@ -138,6 +155,7 @@ export function useQuoteStream(symbols: string[]) {
     return () => {
       closed = true;
       connectedRef.current = false;
+      clearOpenTimer();
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (pingTimer) clearInterval(pingTimer);
       stopPolling();

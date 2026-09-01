@@ -80,7 +80,10 @@ function calcBOLL(closes: number[], n = 20, k = 2) {
 export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMarks, followLatest = false }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const [ind, setInd] = useState<Indicators>({ ma5: true, ma10: true, ma20: true, ma60: true, vol: true, macd: false, boll: false, amt: false, bs: true, events: true });
+  // events 默认**关闭**（2026-09-02 改）：新闻/公告圆点逐日刷屏、遮挡 K 线形体，
+  // 且多数条目与走势无关——对标通达信"信息地雷"，做成可开关且默认不打扰。
+  // 需要对照事件与价格时再在工具栏打开（下方工具栏"事件"按钮）。
+  const [ind, setInd] = useState<Indicators>({ ma5: true, ma10: true, ma20: true, ma60: true, vol: true, macd: false, boll: false, amt: false, bs: true, events: false });
   // 布局 #2：副图高度占比可拖拽（0.10-0.45，localStorage 持久化）
   const [subH, setSubH] = useState(0.18);
   const subHRef = useRef(subH);
@@ -217,7 +220,10 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
           position: isAnn ? "aboveBar" : "belowBar",
           color: isAnn ? "#f59e0b" : "#38bdf8",
           shape: "circle",
-          text: `${m.kind}${m.important ? "!" : ""}`,
+          // 只在重要度「高」的条目上标 "!"；普通条目画成**纯色小点不带文字**。
+          // 原实现每个点都渲染"公告/新闻"字样，逐日刷屏且压住 K 线形体（用户反馈太丑）。
+          // 标题仍可通过 hover 信息条与资讯页签查看，信息不丢失。
+          text: m.important ? "!" : "",
         });
       }
     }
