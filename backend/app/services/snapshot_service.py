@@ -13,6 +13,7 @@ from pathlib import Path
 
 from app.market import sina_market
 from app.market.breadth import compute_breadth
+from app.market.trade_calendar import in_trading_window
 
 log = logging.getLogger(__name__)
 
@@ -69,12 +70,21 @@ class MarketSnapshotService:
 
     async def run(self) -> None:
         while True:
+            # 时段感知降频（评审 O6，2026-09-01）：休市时段全市场数据静止
+            # （昨收），仍 60s×56 页拉新浪纯属浪费且有被 WAF 限流风险
+            # （K 线三源全断的前科就是高频请求触发）。连续竞价窗口外统一
+            # 降到 240s 一轮，保底新鲜度（重启后盘前仍有昨收宽度数据）；
+            # 窗口内保持原轮询与失败退避。
+            live = in_trading_window()
             try:
                 await self.refresh()
             except Exception as exc:
                 self.consecutive_failures += 1
                 self.last_error = str(exc)
                 log.warning("snapshot refresh failed (%s): %s", type(exc).__name__, exc)
+            if not live:
+                await asyncio.sleep(240.0)
+                continue
             delay = self.poll_interval if self.consecutive_failures == 0 else min(
                 self.poll_interval * (2 ** min(self.consecutive_failures, 4)), 300.0
             )

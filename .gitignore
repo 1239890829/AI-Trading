@@ -34,3 +34,4 @@ data/review/*
 
 # Agent memory / workspace state
 .workbuddy/
+apps/web/tsconfig.tsbuildinfo

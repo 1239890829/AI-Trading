@@ -325,115 +325,24 @@ def _build_event_hits_index(store: EventStore) -> dict[str, tuple[int, int, str 
     return out
 
 
-@router.post("/generate")
-async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: None = Depends(require_write_token)) -> dict:
-    """生成今日组合（T 日收盘后跑，产出 T+1 组合；重复生成覆盖当日行）。"""
-    store = _store(request)
-    svc = getattr(request.app.state, "theme_catalog", None)
-    today = date.today().isoformat()
+async def _deep_score_candidates(
+    deep: list[dict],
+    *,
+    hub: QuoteHub,
+    svc,
+    lu_ctx: dict,
+    market_pct: float | None,
+    market_phase: str | None,
+    quotes: dict,
+    weights: dict,
+    event_hits_index: dict[str, tuple[int, int, str | None, str | None, int]],
+    concurrency: int,
+) -> list[dict]:
+    """④ 逐只深度评分（并发；每只独立异常兜底）。
 
-    # ① 候选池
-    candidates = await _candidate_pool(hub, store, svc, request)
-
-    # ①a 昨日组合成员兜底纳入（carryover）：
-    # 组合稳定性要求 incumbent 有"被重新评估的权利"——否则一只票今天没涨停、
-    # 没上热榜、事件又过期，就会被静默踢出，组合天天大换血（跨日回放实测：
-    # 纯涨停股候选池下日均换手 60%）。纳入后它仍要重新评分，分数不够照样被换，
-    # 只是不再因为"没进榜"而消失。
-    prev_symbols = _prev_combo_symbols()
-    have = {c["symbol"] for c in candidates}
-    for s in prev_symbols:
-        if s not in have:
-            candidates.append({"symbol": s, "from": "carryover", "prio": 1})
-    carryover_set = set(prev_symbols) - have
-
-    # ①b 涨停板生态上下文（梯队地位判定的题材级证据）
-    lu_ctx = await _limit_up_context(hub)
-
-    # ①c 市场基准（上证当日涨跌幅）：题材基准匹配不到时的诚实回退
-    market_pct = None
-    try:
-        ov = await hub.provider.get_market_overview()
-        for i in getattr(ov, "indices", None) or []:
-            if getattr(i, "symbol", "") in ("000001", "sh000001"):
-                market_pct = getattr(i, "change_pct", None)
-    except Exception as exc:
-        log.warning("picks: market overview failed: %s", exc)
-
-    # ② 批量快照 + 预筛（剔 ST/退/无行情）
-    quotes = await _batch_quotes(hub, [c["symbol"] for c in candidates])
-    deep: list[dict] = []
-    for c in candidates:
-        q = quotes.get(c["symbol"])
-        if q is None or q.price is None or q.price <= 0:
-            continue
-        name = q.name or ""
-        if "ST" in name.upper() or "退" in name:
-            continue
-        c.update({"name": name, "price": q.price, "change_pct": q.change_pct, "amount": q.amount})
-        c["_prio"] = c.get("prio", 0) * 1000 + (q.change_pct or 0)
-        deep.append(c)
-    # 昨日成员优先进入深度评估：它们已经有仓位逻辑在身，不该因涨幅不高被截断
-    deep.sort(key=lambda c: (-(1 if c["symbol"] in carryover_set else 0), -c["_prio"]))
-    deep = deep[:DEEP_DIVE_CAP]
-
-    # ③ 全局情绪（一次）
-    market_phase = None
-    sent: dict = {}
-    try:
-        from app.services.market_context import compute_market_sentiment
-
-        sent = await compute_market_sentiment(hub, request.app.state.snapshot_service) or {}
-        market_phase = sent.get("phase")
-    except Exception as exc:
-        log.warning("picks sentiment failed: %s", exc)
-
-    # ③b 炒作阶段（Regime）：财报日历 + 业绩事件密度 → 六维权重表。
-    # 业绩空窗期必须把基本面权重让给情绪与题材梯队，否则系统性错过妖股。
-    try:
-        ev_texts = [e.title for e in store.list_events(active_only=True, limit=30)]
-    except Exception:
-        ev_texts = []
-    regime = detect_regime(
-        today=date.today(),
-        earnings_ratio=earnings_event_ratio(ev_texts) if ev_texts else None,
-        event_count=len(ev_texts),
-    )
-    weights = weights_for(regime["regime"])
-
-    # ③c 空仓闸门：情绪转弱时主动提示规避（红线 3：只提示，不下指令）
-    break_rate = None
-    try:
-        days = await tc.trading_days(hub.provider)
-        td = tc.last_trade_date(days)
-        if td:
-            breaks = await hub.provider.get_limit_break_pool(td)
-            n_zt, n_br = len(lu_ctx["records"]), len(breaks or [])
-            break_rate = round(n_br / max(n_zt + n_br, 1), 3)
-    except Exception as exc:
-        log.warning("picks gate: break pool failed: %s", exc)
-    limit_down = None
-    try:
-        limit_down = (request.app.state.snapshot_service.breadth or {}).get("limit_down")
-    except Exception:
-        limit_down = None
-    gate = evaluate_stand_aside(
-        phase=market_phase,
-        promotion_1to2=(sent.get("promotion") or {}).get("promo_1to2"),
-        break_rate=break_rate,
-        limit_down=limit_down,
-        prev_zt_median_pct=(sent.get("prev_perf") or {}).get("median_pct"),
-        phase_unreliable=bool(sent.get("phase_unreliable")),
-    )
-    if gate["stand_aside"]:
-        log.warning("picks gate triggered (%s): %s", gate["level"], "；".join(gate["reasons"]))
-
-    # ③d 消息命中索引（B1）：一次遍历活跃事件按 symbol 建索引——
-    # 原实现每候选股在并发任务里重复全量扫事件表（24×~31 次同步查询）
-    event_hits_index = _build_event_hits_index(store)
-
-    # ④ 逐只深度评分（并发；每只独立异常兜底）
-    sem = asyncio.Semaphore(CONCURRENCY)
+    从 generate_picks 拆出（全项目审查 T6：主函数 320 行 → 流水线编排 +
+    本函数）。输入候选已带 name/price/change_pct/amount。"""
+    sem = asyncio.Semaphore(concurrency)
 
     async def _score_one(c: dict) -> dict | None:
         sym = c["symbol"]
@@ -565,52 +474,175 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
             }
 
     results = await asyncio.gather(*[_score_one(c) for c in deep])
-    ranked = [r for r in results if r is not None]
+    return [r for r in results if r is not None]
+
+
+def _assemble_card(k: dict) -> dict:
+    """⑥ 单只入选标的的卡片组装（风险档位 + 买入范围 + 出场纪律 + 失效条件）。"""
+    role = k.get("echelon_role") or ""
+    tier = risk_tier_of(role)
+    ma5, ma10 = k.get("ma5"), k.get("ma10")
+    # 买入范围的技术位收敛：均线在现价下方作支撑、上方作压力
+    support = min([v for v in (ma5, ma10) if v and v < k["price"]], default=None)
+    resistance = max([v for v in (ma5, ma10) if v and v > k["price"]], default=None)
+    return {
+        "symbol": k["symbol"],
+        "name": k["name"],
+        "price": k["price"],
+        "change_pct": k["change_pct"],
+        "score": k["score"],
+        "sub_scores": k["sub_scores"],
+        "bases": k["bases"],
+        "vetoes": k["vetoes"],
+        "buy_range": build_buy_range(k["price"], support, resistance),
+        "echelon_role": role,
+        "echelon_basis": k.get("echelon_basis", ""),
+        "theme": k.get("theme"),
+        "theme_stage": k.get("theme_stage"),
+        "risk_tier": tier,
+        "stop_loss": stop_loss_reference(
+            price=k["price"], tier=tier, atr_pct=k.get("atr_pct")
+        ),
+        "exit_discipline": exit_discipline(tier),
+        "invalidations": build_invalidations(
+            role=role,
+            tier=tier,
+            theme_stage=k.get("theme_stage"),
+            ma_value=(ma5 if tier in ("龙头博弈", "情绪低位") else (ma10 or ma5)),
+            event_titles=k["related_events"],
+        ),
+        "themes": [k["theme"]] if k.get("theme") else [],
+        "related_events": k["related_events"],
+    }
+
+
+@router.post("/generate")
+async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: None = Depends(require_write_token)) -> dict:
+    """生成今日组合（T 日收盘后跑，产出 T+1 组合；重复生成覆盖当日行）。"""
+    store = _store(request)
+    svc = getattr(request.app.state, "theme_catalog", None)
+    today = date.today().isoformat()
+
+    # ① 候选池
+    candidates = await _candidate_pool(hub, store, svc, request)
+
+    # ①a 昨日组合成员兜底纳入（carryover）：
+    # 组合稳定性要求 incumbent 有"被重新评估的权利"——否则一只票今天没涨停、
+    # 没上热榜、事件又过期，就会被静默踢出，组合天天大换血（跨日回放实测：
+    # 纯涨停股候选池下日均换手 60%）。纳入后它仍要重新评分，分数不够照样被换，
+    # 只是不再因为"没进榜"而消失。
+    prev_symbols = _prev_combo_symbols()
+    have = {c["symbol"] for c in candidates}
+    for s in prev_symbols:
+        if s not in have:
+            candidates.append({"symbol": s, "from": "carryover", "prio": 1})
+    carryover_set = set(prev_symbols) - have
+
+    # ①b 涨停板生态上下文（梯队地位判定的题材级证据）
+    lu_ctx = await _limit_up_context(hub)
+
+    # ①c 市场基准（上证当日涨跌幅）：题材基准匹配不到时的诚实回退
+    market_pct = None
+    try:
+        ov = await hub.provider.get_market_overview()
+        for i in getattr(ov, "indices", None) or []:
+            if getattr(i, "symbol", "") in ("000001", "sh000001"):
+                market_pct = getattr(i, "change_pct", None)
+    except Exception as exc:
+        log.warning("picks: market overview failed: %s", exc)
+
+    # ② 批量快照 + 预筛（剔 ST/退/无行情）
+    quotes = await _batch_quotes(hub, [c["symbol"] for c in candidates])
+    deep: list[dict] = []
+    for c in candidates:
+        q = quotes.get(c["symbol"])
+        if q is None or q.price is None or q.price <= 0:
+            continue
+        name = q.name or ""
+        if "ST" in name.upper() or "退" in name:
+            continue
+        c.update({"name": name, "price": q.price, "change_pct": q.change_pct, "amount": q.amount})
+        c["_prio"] = c.get("prio", 0) * 1000 + (q.change_pct or 0)
+        deep.append(c)
+    # 昨日成员优先进入深度评估：它们已经有仓位逻辑在身，不该因涨幅不高被截断
+    deep.sort(key=lambda c: (-(1 if c["symbol"] in carryover_set else 0), -c["_prio"]))
+    deep = deep[:DEEP_DIVE_CAP]
+
+    # ③ 全局情绪（一次）
+    market_phase = None
+    sent: dict = {}
+    try:
+        from app.services.market_context import compute_market_sentiment
+
+        sent = await compute_market_sentiment(hub, request.app.state.snapshot_service) or {}
+        market_phase = sent.get("phase")
+    except Exception as exc:
+        log.warning("picks sentiment failed: %s", exc)
+
+    # ③b 炒作阶段（Regime）：财报日历 + 业绩事件密度 → 六维权重表。
+    # 业绩空窗期必须把基本面权重让给情绪与题材梯队，否则系统性错过妖股。
+    try:
+        ev_texts = [e.title for e in store.list_events(active_only=True, limit=30)]
+    except Exception:
+        ev_texts = []
+    regime = detect_regime(
+        today=date.today(),
+        earnings_ratio=earnings_event_ratio(ev_texts) if ev_texts else None,
+        event_count=len(ev_texts),
+    )
+    weights = weights_for(regime["regime"])
+
+    # ③c 空仓闸门：情绪转弱时主动提示规避（红线 3：只提示，不下指令）
+    break_rate = None
+    try:
+        days = await tc.trading_days(hub.provider)
+        td = tc.last_trade_date(days)
+        if td:
+            breaks = await hub.provider.get_limit_break_pool(td)
+            n_zt, n_br = len(lu_ctx["records"]), len(breaks or [])
+            break_rate = round(n_br / max(n_zt + n_br, 1), 3)
+    except Exception as exc:
+        log.warning("picks gate: break pool failed: %s", exc)
+    limit_down = None
+    try:
+        limit_down = (request.app.state.snapshot_service.breadth or {}).get("limit_down")
+    except Exception:
+        limit_down = None
+    gate = evaluate_stand_aside(
+        phase=market_phase,
+        promotion_1to2=(sent.get("promotion") or {}).get("promo_1to2"),
+        break_rate=break_rate,
+        limit_down=limit_down,
+        prev_zt_median_pct=(sent.get("prev_perf") or {}).get("median_pct"),
+        phase_unreliable=bool(sent.get("phase_unreliable")),
+    )
+    if gate["stand_aside"]:
+        log.warning("picks gate triggered (%s): %s", gate["level"], "；".join(gate["reasons"]))
+
+    # ③d 消息命中索引（B1）：一次遍历活跃事件按 symbol 建索引——
+    # 原实现每候选股在并发任务里重复全量扫事件表（24×~31 次同步查询）
+    event_hits_index = _build_event_hits_index(store)
+
+    # ④ 逐只深度评分（并发；T6 拆分至 _deep_score_candidates）
+    ranked = await _deep_score_candidates(
+        deep,
+        hub=hub,
+        svc=svc,
+        lu_ctx=lu_ctx,
+        market_pct=market_pct,
+        market_phase=market_phase,
+        quotes=quotes,
+        weights=weights,
+        event_hits_index=event_hits_index,
+        concurrency=CONCURRENCY,
+    )
     ranked.sort(key=lambda r: -r["score"])
 
     # ⑤ 换股门槛（昨日组合；prev_symbols 已在 ①a 载入，此处不重复查库）
     kept, replaced = apply_replacement_threshold(prev_symbols, ranked)
 
     # ⑥ 卡片组装（含风险档位与出场纪律参考）+ 空仓闸门处理 + 持久化
-    items = []
-    for k in kept:
-        role = k.get("echelon_role") or ""
-        tier = risk_tier_of(role)
-        ma5, ma10 = k.get("ma5"), k.get("ma10")
-        # 买入范围的技术位收敛：均线在现价下方作支撑、上方作压力
-        support = min([v for v in (ma5, ma10) if v and v < k["price"]], default=None)
-        resistance = max([v for v in (ma5, ma10) if v and v > k["price"]], default=None)
-        items.append(
-            {
-                "symbol": k["symbol"],
-                "name": k["name"],
-                "price": k["price"],
-                "change_pct": k["change_pct"],
-                "score": k["score"],
-                "sub_scores": k["sub_scores"],
-                "bases": k["bases"],
-                "vetoes": k["vetoes"],
-                "buy_range": build_buy_range(k["price"], support, resistance),
-                "echelon_role": role,
-                "echelon_basis": k.get("echelon_basis", ""),
-                "theme": k.get("theme"),
-                "theme_stage": k.get("theme_stage"),
-                "risk_tier": tier,
-                "stop_loss": stop_loss_reference(
-                    price=k["price"], tier=tier, atr_pct=k.get("atr_pct")
-                ),
-                "exit_discipline": exit_discipline(tier),
-                "invalidations": build_invalidations(
-                    role=role,
-                    tier=tier,
-                    theme_stage=k.get("theme_stage"),
-                    ma_value=(ma5 if tier in ("龙头博弈", "情绪低位") else (ma10 or ma5)),
-                    event_titles=k["related_events"],
-                ),
-                "themes": [k["theme"]] if k.get("theme") else [],
-                "related_events": k["related_events"],
-            }
-        )
+    items = [_assemble_card(k) for k in kept]
     items = apply_gate_to_picks(items, gate)
     meta = {
         "weights": weights,

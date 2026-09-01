@@ -219,7 +219,7 @@ C2 全市场日 K dump（已被 TDX 替代）；"等 LLM 再做摘要"（规则�
   勿再手写 `(time.time(), payload)` 元组；键空间必须有界；命中响应标注 cached 用
   `model_copy(update={...})`，不变异共享缓存对象。
 - 复杂 JSX 整文件重写；长内容写脚本文件；**文档/代码编辑一律用 Edit/Write 工具**（node -e 撞 shell 引号已翻车 3+ 次）。
-- 提交前还原 `apps/web/tsconfig.tsbuildinfo`（tsc --noEmit 会改它，且它被 git 跟踪）。
+- `apps/web/tsconfig.tsbuildinfo` 已 gitignore（tsc --noEmit 会改它，不入库）。
 
 ### 6.2 接新数据源五步法（见 docs/data-sources.md）
 curl 先行 → 记录字段口径与类型陷阱 → 多采样找规律 → fixture 从实抓数据生成 → 写进文档。
