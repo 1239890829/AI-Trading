@@ -286,37 +286,43 @@ def _parse_meta(raw: str | None) -> dict:
         return {}
 
 
-def _active_event_hits(store: EventStore, symbol: str) -> tuple[int, int, str | None, str | None, int]:
-    """该标的的活跃事件命中：(利好数, 利空数, 主事件标题, 主方向文案, 关联数)。
+def _build_event_hits_index(store: EventStore) -> dict[str, tuple[int, int, str | None, str | None, int]]:
+    """一次遍历活跃事件 → 按 symbol 索引消息命中（评审 B1）。
 
-    关联数含 direction=0 的方向行——「来源标的关联、方向待判」也是证据，
-    丢掉它会让消息面对有新闻但无方向词的标的显示"无命中"（误导）。
+    返回 {symbol: (利好强度, 利空强度, 主事件标题, 主方向文案, 关联数)}。
+    list_events 已 selectinload 预加载方向行（detached 后仍可安全访问），
+    索引构建零额外查询——原实现每候选股重复全量扫事件表（24 只深评 ×
+    每次约 31 次查询）；关联数含 direction=0（"来源关联、方向待判"也是
+    证据，丢掉它会让消息面对有新闻但无方向词的标的显示"无命中"）。
     """
-    bull = bear = linked = 0
-    top_title = top_dir = None
-    pending_title: str | None = None
+    index: dict[str, dict] = {}
     try:
         for row in store.list_events(active_only=True, limit=30):
-            for d in store.directions_of(row.id):
-                if d.target_type == "theme":
+            for d in row.directions:
+                if d.target_type != "symbol" or not d.target:
                     continue  # 题材方向的个股传导第一版不计入单股消息分（防过度外推）
-                if d.target_type != "symbol" or d.target != symbol:
-                    continue
-                linked += 1
+                agg = index.setdefault(
+                    d.target,
+                    {"bull": 0, "bear": 0, "linked": 0, "top_title": None, "top_dir": None, "pending_title": None},
+                )
+                agg["linked"] += 1
                 if d.direction == 1:
-                    bull += d.strength
+                    agg["bull"] += d.strength
                 elif d.direction == -1:
-                    bear += d.strength
-                if top_title is None and d.direction != 0:
-                    top_title = row.title
-                    top_dir = "利好" if d.direction == 1 else "利空"
-                if pending_title is None and d.direction == 0:
-                    pending_title = row.title
+                    agg["bear"] += d.strength
+                if agg["top_title"] is None and d.direction != 0:
+                    agg["top_title"] = row.title
+                    agg["top_dir"] = "利好" if d.direction == 1 else "利空"
+                if agg["pending_title"] is None and d.direction == 0:
+                    agg["pending_title"] = row.title
     except Exception as exc:
-        log.warning("picks event hits %s failed: %s", symbol, exc)
-    if top_title is None and pending_title is not None:
-        top_title = pending_title  # 无方向词时也给出关联标题（证据可见）
-    return bull, bear, top_title, top_dir, linked
+        log.warning("picks event index failed: %s", exc)
+        return {}
+    out: dict[str, tuple[int, int, str | None, str | None, int]] = {}
+    for sym, agg in index.items():
+        # 无方向词时给出关联标题（证据可见）
+        out[sym] = (agg["bull"], agg["bear"], agg["top_title"] or agg["pending_title"], agg["top_dir"], agg["linked"])
+    return out
 
 
 @router.post("/generate")
@@ -422,6 +428,10 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
     if gate["stand_aside"]:
         log.warning("picks gate triggered (%s): %s", gate["level"], "；".join(gate["reasons"]))
 
+    # ③d 消息命中索引（B1）：一次遍历活跃事件按 symbol 建索引——
+    # 原实现每候选股在并发任务里重复全量扫事件表（24×~31 次同步查询）
+    event_hits_index = _build_event_hits_index(store)
+
     # ④ 逐只深度评分（并发；每只独立异常兜底）
     sem = asyncio.Semaphore(CONCURRENCY)
 
@@ -443,8 +453,8 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
             ma5 = _ma_value(dicts, 5)
             ma10 = _ma_value(dicts, 10)
             sub["tech"], bases["tech"] = s_tech, b_tech
-            # 消息
-            bull, bear, top_title, top_dir, linked = _active_event_hits(store, sym)
+            # 消息（B1：查预构建索引，O(1)——不再逐候选扫事件表）
+            bull, bear, top_title, top_dir, linked = event_hits_index.get(sym, (0, 0, None, None, 0))
             sub["news"], bases["news"] = score_news(bull, bear, top_title, top_dir)
             if bull == bear == 0 and linked:
                 # 有关联但无方向词：诚实说"命中了但待判"，而不是"无命中"

@@ -1,6 +1,6 @@
 # REST API
 
-Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**82 个端点**（2026-08-31 与代码同步）。
+Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**96 个端点**（2026-09-01 与代码同步；端点数以 `/openapi.json` 为权威，本文档按域分节供检索）。
 
 统一响应：`{"data": ..., "meta": {...}}`（Envelope[T]，meta 含 `provider / is_realtime / is_stale / last_success_refresh / generated_at`）。
 数据源失败返回 **HTTP 502**（前端显示错误态，绝不降级伪造）；错误统一契约 `{detail, code}`。
@@ -33,8 +33,6 @@ Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**82 个端点**（2026-
 | GET | `/api/order-book/{symbol}` | 五档盘口（经交叉校验） |
 | GET | `/api/trades/{symbol}?limit=50` | 逐笔成交 |
 | GET | `/api/minute-line/{symbol}` | 当日分时（含均价/精确量比基线） |
-| GET | `/api/minute-signals/{symbol}` | 做 T 信号（5 指标共振，可解释依据） |
-| GET | `/api/minute-decisions?symbol=` | 做 T 决策链（读取时惰性结算） |
 | GET | `/api/limit-up?date=` | 涨停池（按连板数排序） |
 | GET | `/api/limit-break?date=` | 炸板池 |
 | GET | `/api/themes?date=&min_boards=&sort=` | 题材梯队看板（连板天梯/成建制/健康度） |
@@ -103,6 +101,8 @@ Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**82 个端点**（2026-
 | POST | `/api/themes/sync` | 触发同步（写鉴权）：目录 + 可选成分 + 过期补齐 |
 | GET | `/api/themes/reconciliation?date=` | 涨停归因 × 官方成分校验：归因冲突 + 目录外题材 |
 | GET | `/api/themes/hot?limit=30` | 题材人气（B1）：ths 热股 24h 榜 × 官方成分反查聚合（heat 合计/热股家数/榜内最高成员），60s 缓存 |
+| GET | `/api/themes/catalog/strength?themes=` | 题材内资金合力（P1-5）：官方成分批量快照聚合（涨跌家数/等权涨幅/涨停数/成交额），60s 缓存 |
+| GET | `/api/themes/catalog/index?code=&days=30` | 官方板块指数日 K + 3/5/10 日涨跌幅（板块级交叉验证） |
 
 归属置信度分层与纠错机制见 docs/linkage-design.md §3.2-§3.4。
 
@@ -159,7 +159,10 @@ Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**82 个端点**（2026-
 |---|---|---|
 | GET | `/api/watchlist` | 自选列表（含分组） |
 | 🔒 POST | `/api/watchlist` | 加自选 |
-| GET | `/api/watchlist/groups` | 分组列表 |
+| GET | `/api/watchlist/groups` | 分组列表（持久分组表 ∪ 成员派生，空分组也在） |
+| 🔒 POST | `/api/watchlist/groups` | 新建空分组（重名 409） |
+| 🔒 PUT | `/api/watchlist/groups/{name}` | 重命名分组（级联成员；「默认」保护 400，新名冲突 409） |
+| 🔒 DELETE | `/api/watchlist/groups/{name}` | 删除分组（成员回落「默认」；「默认」保护 400） |
 | 🔒 PUT | `/api/watchlist/{symbol}/group` | 改分组 |
 | 🔒 DELETE | `/api/watchlist/{symbol}` | 删自选 |
 

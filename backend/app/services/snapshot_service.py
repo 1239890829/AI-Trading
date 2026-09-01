@@ -37,7 +37,9 @@ class MarketSnapshotService:
         self.last_success = datetime.now(timezone.utc)
         self.last_error = None
         self.consecutive_failures = 0
-        self._maybe_save()
+        # parquet 写盘（polars 建表 + 文件 IO）是同步阻塞（评审 B6）：
+        # 丢线程池执行，5550 行建表最坏数百毫秒不能卡事件循环
+        await asyncio.to_thread(self._maybe_save)
         log.info("market snapshot refreshed: %s stocks, up=%s down=%s limit_up=%s",
                  self.breadth["total"], self.breadth["up"], self.breadth["down"], self.breadth["limit_up"])
 

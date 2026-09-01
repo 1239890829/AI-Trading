@@ -256,7 +256,10 @@ def test_stock_themes_api(monkeypatch: pytest.MonkeyPatch):
         r = client.get("/api/themes/stock/000505")
         assert r.status_code == 200
         data = r.json()["data"]
-        assert data["official"] == [{"theme_code": GRAIN, "theme_name": "粮食概念", "source": "ths_official"}]
+        # theme_chg_1d：板块日涨跌幅增强字段（测试 key 无法拉官方板块K线 → None）
+        assert data["official"] == [
+            {"theme_code": GRAIN, "theme_name": "粮食概念", "source": "ths_official", "theme_chg_1d": None}
+        ]
         # 测试环境 provider 链是 mock（无 ThsFuyaoProvider）→ 归因为空但不报错
         assert data["attribution"] == []
 

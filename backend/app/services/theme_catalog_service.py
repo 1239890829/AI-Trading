@@ -316,31 +316,43 @@ class ThemeCatalogService:
         判断成分是否过期，目录刷新若无条件更新时间戳，会把成分 TTL 判断永远"顶掉"
         ——2026-09-01 审计实锤：390 题材中 352 个（90%）成分从未同步、个股题材归属
         大面积缺失（永鼎股份查不到官方已标注的「光纤概念」）。
+        DB 写入走 to_thread（评审 B2：同步 SQLite 不能跑在事件循环上）。
         """
         items = await self.fetch_catalog()
+        await asyncio.to_thread(self._write_catalog, items)
+        log.info("theme catalog synced: %d themes", len(items))
+        return len(items)
+
+    def _write_catalog(self, items: list[dict]) -> None:
         with self._sf() as db:
-            existing = {c for (c,) in db.execute(select(Theme.code)).all()}
+            # 批量拉全量再内存比对（评审 B2：原循环内逐条 SELECT 是 390 次 N+1）
+            rows: dict[str, Theme] = {r.code: r for r in db.execute(select(Theme)).scalars()}
             for it in items:
-                if it["code"] in existing:
-                    row = db.execute(select(Theme).where(Theme.code == it["code"])).scalar_one()
+                row = rows.get(it["code"])
+                if row is not None:
                     if row.name != it["name"]:
                         row.name = it["name"]
                         row.synced_at = utcnow()
                 else:
                     db.add(Theme(code=it["code"], name=it["name"], source="ths_official"))
             db.commit()
-        log.info("theme catalog synced: %d themes", len(items))
-        return len(items)
 
     async def sync_members(self, code: str) -> int:
-        """upsert 单题材成分（官方口径：当前成分，非历史成分）。"""
+        """upsert 单题材成分（官方口径：当前成分，非历史成分）。DB 写入走 to_thread。"""
         items = await self.fetch_members(code)
-        now = utcnow()
+        n = await asyncio.to_thread(self._write_members, code, items)
+        log.info("theme members synced: %s -> %d stocks", code, n)
+        return n
+
+    def _write_members(self, code: str, items: list[dict]) -> int:
         with self._sf() as db:
             incoming_set = {it["symbol"] for it in items}
-            current = set(
-                db.execute(select(ThemeMember.symbol).where(ThemeMember.theme_code == code)).scalars()
-            )
+            # 批量拉该题材全部成员行（评审 B2：原循环内逐条 SELECT）
+            rows: dict[str, ThemeMember] = {
+                r.symbol: r
+                for r in db.execute(select(ThemeMember).where(ThemeMember.theme_code == code)).scalars()
+            }
+            current = set(rows)
             # 官方成分是"当前"快照：消失的成分删除，保持与官方一致
             if current - incoming_set:
                 from sqlalchemy import delete
@@ -351,13 +363,10 @@ class ThemeCatalogService:
                         ThemeMember.symbol.in_(current - incoming_set),
                     )
                 )
+            now = utcnow()
             for it in items:
-                if it["symbol"] in current:
-                    row = db.execute(
-                        select(ThemeMember).where(
-                            ThemeMember.theme_code == code, ThemeMember.symbol == it["symbol"]
-                        )
-                    ).scalar_one()
+                row = rows.get(it["symbol"])
+                if row is not None:
                     row.name = it["name"]
                     row.synced_at = now
                 else:
@@ -367,7 +376,6 @@ class ThemeCatalogService:
             if theme is not None:
                 theme.synced_at = now
             db.commit()
-        log.info("theme members synced: %s -> %d stocks", code, len(items))
         return len(items)
 
     async def sync_stale_members(self, max_themes: int = 20, concurrency: int = 6) -> list[str]:

@@ -216,7 +216,7 @@ ashare-ai-trader/
 | 路由 | 内容 | 状态 |
 |---|---|---|
 | /workbench | 终端主页面：左栏[指数迷你卡(可收起)+模拟持仓+自选分组 chips（含「持仓」分类）+列表（管理模式：代码添加/改分组）] │ 右[详情终端（含真实持仓 tab）] | ✅（自选页已并入） |
-| /tape | **盘面**四 tab：题材梯队（默认）│ 涨停生态 │ 板块排行 │ 龙虎榜；tab 组件在 components/tape/，URL ?tab= 共享 | ✅ 2026-09-01 合并（原 /themes /limit-up /boards /longhu） |
+| /tape | **盘面**三 tab：题材梯队（默认）│ 涨停生态 │ 龙虎榜；tab 组件在 components/tape/，URL ?tab= 共享（板块排行 tab 已按评审 D1 移除——与工作台详情「板块」页签同源重复） | ✅ 2026-09-01 合并（原 /themes /limit-up /boards /longhu） |
 | /market | **市场**双视图：总览（指数/宽度/情绪相位+序列/成交额/涨停速览/事件驱动）│ 云图（treemap）；tab 组件 components/market/heatmap-tab.tsx | ✅ 2026-09-01 吸收云图（原 /heatmap） |
 | /picks | 每日精选：风险横幅+空仓闸门+≤5 卡片瀑布流（梯队/风险档位/止损/失效）+复盘归因+角色胜率 | ✅ |
 | /research | **研究**折叠页：回测 │ 预警 两 tab；低频工具不占导航黄金位 | ✅ 2026-09-01 合并（原 /backtest /alerts） |

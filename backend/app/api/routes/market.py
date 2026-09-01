@@ -130,21 +130,27 @@ async def sparkline(
         # model_copy 标注 cached，不改共享缓存对象
         return {"data": payload.model_copy(update={"cached": True}), "meta": _meta(hub)}
 
-    items = []
-    for sym in syms:
-        try:
-            bars = tdx_daily_bars(sym, count=days + 2)
-        except Exception as exc:
-            log.warning("sparkline %s failed: %s", sym, exc)
-            continue
+    # TDX 日K 是同步文件读（评审 B4）：50 只串行最坏 50 次磁盘 IO 卡事件循环，
+    # 丢线程池并行（Semaphore 限 8，避免一次性打开过多 TDX 文件句柄）
+    sem = asyncio.Semaphore(8)
+
+    async def load_one(sym: str) -> SparklineItem | None:
+        async with sem:
+            try:
+                bars = await asyncio.to_thread(tdx_daily_bars, sym, days + 2)
+            except Exception as exc:
+                log.warning("sparkline %s failed: %s", sym, exc)
+                return None
         closes = [b["close"] for b in (bars or [])][-days:]
         if len(closes) < 5 or not closes[0]:
-            continue
-        items.append(SparklineItem(
+            return None
+        return SparklineItem(
             symbol=sym,
             closes=closes,
             period_change_pct=round((closes[-1] / closes[0] - 1) * 100, 2),
-        ))
+        )
+
+    items = [it for it in await asyncio.gather(*(load_one(s) for s in syms)) if it is not None]
 
     payload = SparklinePayload(items=items)
     cache.set(key, payload)
@@ -405,7 +411,9 @@ async def minute_line(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
     try:
         from app.market.minute_backfill import load_vr_baseline
 
-        baseline = load_vr_baseline(symbol)
+        # Parquet 读是同步阻塞（评审 B5）：与同文件 themes 路由 986 行同一纪律——
+        # 必须丢线程池，否则卡死事件循环
+        baseline = await asyncio.to_thread(load_vr_baseline, symbol)
     except Exception as exc:
         log.warning("vr baseline failed for %s: %s", symbol, exc)
     return {"data": {"symbol": symbol, "points": points, "vr_baseline_5m": baseline}, "meta": _meta(hub)}
