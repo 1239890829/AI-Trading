@@ -238,6 +238,52 @@ async def lifespan(app: FastAPI):
 
     event_task = asyncio.create_task(event_collector(), name="event-collector")
 
+    async def metric_history_backfiller():
+        """情绪历史指标库的**增量**维护（P0-3b 分位校准的数据底座）。
+
+        没有这个任务，库会停在首次手工回补的那天：半年后界面仍写着"按近 120
+        个交易日分位校准"，实际窗口早已漂移到半年前——这正是"数字看着合理、
+        结论其实是错的"那类静默失效。故必须自动跑；回补是增量的（已在库的
+        日期不重拉），稳态下每轮只拉 1–2 天 × 2 个请求，配额开销可忽略。
+
+        启动延迟 90s：让冷启动的行情/快照先填完，不和其他网络请求抢配额。
+        """
+        await asyncio.sleep(90)
+        while True:
+            try:
+                from app.sentiment import metric_history
+
+                days = await hub_trading_days()
+                if not days:
+                    log.warning("metric history backfill skipped: 交易日历不可用")
+                else:
+                    stats = await metric_history.backfill(
+                        hub.provider,
+                        days,
+                        lookback=settings.sentiment_history_lookback,
+                    )
+                    if stats["added"] or stats["suspicious"]:
+                        log.info(
+                            "metric history backfill: +%s 天（跳过 %s / 共 %s 天）",
+                            stats["added"], stats["skipped"], stats["total"],
+                        )
+                    if stats["suspicious"]:
+                        # 数据源日期回退（东财 push2ex 的前科）会污染整个分布，
+                        # 剔除后宁可少样本。非 0 属异常，必须留痕。
+                        log.warning(
+                            "metric history: %s 天涨停池与前一日完全相同，疑似数据源日期回退，已剔除",
+                            stats["suspicious"],
+                        )
+            except Exception:
+                log.exception("metric history backfill failed")
+            await asyncio.sleep(settings.sentiment_history_backfill_interval_seconds)
+
+    metric_task = None
+    if settings.sentiment_history_backfill_enabled:
+        metric_task = asyncio.create_task(
+            metric_history_backfiller(), name="metric-history-backfill"
+        )
+
     try:
         await hub.refresh()  # 冷启动立即填充，接口首次调用即有数据
         await risk_engine.refresh()
@@ -251,6 +297,8 @@ async def lifespan(app: FastAPI):
     alert_engine.stop()
     risk_task.cancel()
     event_task.cancel()
+    if metric_task is not None:
+        metric_task.cancel()
     if review_task is not None:
         review_stop.set()
     with contextlib.suppress(asyncio.CancelledError):

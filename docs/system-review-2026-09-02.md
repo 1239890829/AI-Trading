@@ -374,6 +374,8 @@ const showReview = sp.get("review") === "1";   // 只在 URL 带 ?review=1 时�
 
 **最大缺口：情绪阶段判定用绝对阈值**（记忆中 P0-3b 已意识到）。券商口径明确指出 **"没有公认阈值，只有社区经验值"**，且涨停家数中枢随市场扩容漂移。
 
+> ✅ **P0-3b 已落地（2026-09-02）**：`app/sentiment/calibration.py` 历史分位校准 + `app/sentiment/metric_history.py` 指标历史库（ths 涨停池/炸板池回补，回退哨兵 + 盘中排除）+ `market_context.resolve_bands()`（env 显式覆盖 > 历史分位校准 > 经验值）。**120 天实测证据**：绝对阈值下 `promo_1to2` ≥40% 档 0% 命中（死档）、负分档占 96.7%；`limit_up` <25 家档 0% 命中——校准后各档占比趋均（见 calibration.py docstring）。`/api/market/sentiment` 已返回 `bands_source` / `calibration`（含 basis、当前分位、窗口首尾与 stale_days）。后台增量回补任务随 lifespan 启动（`ASHARE_SENTIMENT_HISTORY_BACKFILL_ENABLED=1`，绝不回补"今天"防止盘中口径污染）。窗口 2026-03-11 → 2026-09-01，120 样本，`stale_days` 随结论返回。
+
 ### 4.2 建议补充（按优先级）
 
 | 优先级 | 因子 | 公式 | 来源 |

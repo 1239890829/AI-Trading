@@ -47,6 +47,20 @@ class Settings(BaseSettings):
     # 非法配置启动即失败（band_config 校验），绝不静默回退默认值。
     sentiment_heat_bands_json: str = ""
     sentiment_earning_bands_json: str = ""
+    # 历史分位校准（P0-3b）：用近 N 个交易日的等分分位替代业界绝对经验值。
+    # 实测（2026-09-02，120 天样本）绝对阈值下 promo_1to2 的 ≥40% 档 0% 命中、
+    # limit_up <25 家档 0% 命中——死档让指标退化成常量，校准后各档占比趋均。
+    # 关掉（0）即回到 engine 的业界经验值，界面 bands_source 会显示 defaults。
+    # 注意上两条 *_bands_json 优先级更高：显式配置永远压过自动校准。
+    sentiment_calibrate: bool = True
+    # 历史指标库（data/sentiment_metrics.json）的自动增量维护。
+    # 关掉后库停在最后一次回补的日期，校准窗口会随日历漂移 → 界面会显示
+    # window_end 供核对，不会静默假装"近 120 个交易日"。
+    sentiment_history_backfill_enabled: bool = True
+    sentiment_history_lookback: int = 120
+    # 增量回补的巡检间隔（秒）：默认 6 小时。回补是增量的（已有日期不重拉），
+    # 稳态下每轮只拉 1–2 天 × 2 个请求，配额开销可忽略。
+    sentiment_history_backfill_interval_seconds: float = 21600.0
 
     # ---- 盘后复盘 Agent ----
     # 分析器：rules（默认，确定性、零成本）| llm（需配 base_url + api_key）

@@ -12,7 +12,9 @@ from datetime import date
 
 from app.core.config import settings
 from app.market import trade_calendar as tc
+from app.sentiment import metric_history
 from app.sentiment.band_config import load_bands
+from app.sentiment.calibration import MIN_SAMPLES, calibrate_bands, describe
 from app.sentiment.engine import EARNING_BANDS, HEAT_BANDS, compute_sentiment
 
 log = logging.getLogger(__name__)
@@ -27,6 +29,79 @@ _HEAT_BANDS, _EARNING_BANDS, _BANDS_SOURCE = load_bands(
 )
 if _BANDS_SOURCE == "env_override":
     log.info("sentiment bands: env override active")
+
+
+def _stale_trade_days(window_end, days: list[date]) -> int | None:
+    """历史指标库最新一日距最近交易日的**交易日**数。
+
+    窗口尾超出日历覆盖范围时返回 None（判不出来），绝不猜——
+    周末/节假日用自然日差会虚报，日历不够长时虚报为 0 同样是撒谎。
+    """
+    if window_end is None or not days:
+        return None
+    try:
+        we = date.fromisoformat(str(window_end))
+    except ValueError:
+        return None
+    if days[-1] <= we:
+        return 0
+    if we < days[0]:
+        return None  # 日历覆盖不到库尾，无法数交易日
+    return sum(1 for d in days if we < d <= days[-1])
+
+
+def resolve_bands(trade_days: list[date] | None = None) -> tuple[dict, dict, str, dict]:
+    """决定本次判定用哪套分档，并给出可审计的依据。
+
+    优先级：**env 显式覆盖 > 历史分位校准 > 业界经验值**。
+    显式配置必须压过自动校准，否则用户改了配置却没生效，又是一次静默失效。
+
+    Args:
+        trade_days: 交易日历（调用方通常已拉过，传入复用避免重复请求）。
+                    用于把"历史库多少天没更新"换算成交易日。
+
+    Returns:
+        `(heat, earning, source, meta)`。source ∈ env_override | calibrated | defaults
+        | defaults(样本不足)；meta 含校准 basis 与当前分位，未校准时 basis 里
+        逐指标写明原因（沿用"缺失显式标注"纪律，不假装校准过）。
+    """
+    rows = metric_history.history()
+    stale = _stale_trade_days(rows[-1].get("date") if rows else None, trade_days or [])
+    meta: dict = {
+        "samples": len(rows),
+        "basis": None,
+        "percentile": None,
+        # 窗口必须随结论一起返回：只写"按近 N 个交易日校准"而不给首尾日期，
+        # 库一旦停止更新（后台回补任务被关掉 / 数据源挂了），这句话就成了
+        # 一句无人能证伪的漂亮话。stale_days 让"窗口漂移"自己浮出来。
+        "window": {
+            "start": rows[0].get("date") if rows else None,
+            "end": rows[-1].get("date") if rows else None,
+            "stale_days": stale,
+        },
+    }
+    if stale and stale >= 3:
+        meta["stale_reason"] = f"历史库已 {stale} 个交易日未更新，校准窗口变旧"
+
+    if _BANDS_SOURCE == "env_override":
+        meta["reason"] = "已启用 env 显式覆盖，跳过历史分位校准"
+        return _HEAT_BANDS, _EARNING_BANDS, _BANDS_SOURCE, meta
+
+    if not settings.sentiment_calibrate:
+        meta["reason"] = "已由 ASHARE_SENTIMENT_CALIBRATE=0 关闭历史分位校准"
+        return _HEAT_BANDS, _EARNING_BANDS, "defaults", meta
+
+    if len(rows) < MIN_SAMPLES:
+        # 历史库还没回补够——明说"用的仍是经验值"，不要静默假装校准过
+        meta["reason"] = f"历史样本不足（{len(rows)} < {MIN_SAMPLES} 个交易日），沿用业界经验值"
+        return _HEAT_BANDS, _EARNING_BANDS, "defaults", meta
+
+    heat, h_basis = calibrate_bands(rows, HEAT_BANDS)
+    earn, e_basis = calibrate_bands(rows, EARNING_BANDS)
+    meta["basis"] = {"heat": h_basis, "earning": e_basis}
+    meta["percentile"] = describe(rows)
+    meta["reason"] = f"按近 {len(rows)} 个交易日的历史分位校准"
+    return heat, earn, "calibrated", meta
 
 
 class CalendarUnavailable(Exception):
@@ -76,6 +151,7 @@ async def compute_market_sentiment(hub, snapshot_service) -> dict:
 
     max_board_prev = max((int(r.consecutive_boards or 1) for r in pool_yesterday), default=0)
 
+    heat_bands, earning_bands, bands_source, calib_meta = resolve_bands(trade_days=days)
     result = compute_sentiment(
         breadth=snapshot_service.breadth,
         pool_today=pool_today,
@@ -85,8 +161,13 @@ async def compute_market_sentiment(hub, snapshot_service) -> dict:
         prev_trade_date=prev,
         max_board_prev=max_board_prev,
         break_count=len(breaks) if breaks else None,
-        bands={"heat": _HEAT_BANDS, "earning": _EARNING_BANDS},
+        bands={"heat": heat_bands, "earning": earning_bands},
     )
+    # 阈值来源与校准依据**必须随结论一起返回**：让用户看到"这次判定用的是哪套阈值"，
+    # 而不是只看一个阶段标签。分位口径是相对的（见 calibration 模块 docstring
+    # 的"已知代价"），暴露分位数值比暴露标签更能反映真实位置。
+    result["bands_source"] = bands_source
+    result["calibration"] = calib_meta
     return {
         **result,
         "pool_today_count": len(pool_today),
