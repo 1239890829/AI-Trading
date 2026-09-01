@@ -1,4 +1,4 @@
-# AGENTS.md — AI 开发者交接手册（必读，2026-08-31 全量重写，同日五次交付后更新至 commit ca15f74）
+# AGENTS.md — AI 开发者交接手册（必读，2026-08-31 全量重写，2026-09-01 行情秒级化后更新至 commit cba1359）
 
 你接手的是 **AShare AI Trader**：A 股实时行情 + 量化投研 + 模拟交易 + 事件驱动选股的一体化工作台。
 本文件是你的作业手册：现状、待办、阶段安排、工作纪律全在这里。
@@ -28,7 +28,7 @@ uvicorn app.main:app --reload --port 8000
 # 前端（node_modules 已装）
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
-# 测试与门禁（每次改动全部跑，全绿才算完；当前基线：后端 456 / 前端 56）
+# 测试与门禁（每次改动全部跑，全绿才算完；当前基线：后端 564 / 前端 85）
 cd backend && .venv/bin/pytest                    # 后端全量用例（规模见 §2 快照）
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
 cd apps/web && npx eslint .                       # 0 error（24 warn 是挂账项，见 eslint.config.mjs 注释）
@@ -43,7 +43,8 @@ CI（GitHub Actions）：后端 pytest+pyflakes、前端 tsc+eslint+vitest+build
 
 ## 2. 当前状态快照（2026-09-01，系统重构完成后更新）
 
-**552 后端测试 + 83 前端测试全绿 · 92 REST + 1 WS 端点 · 四源链 `ths→tencent→eastmoney→sina`（含熔断）**
+**564 后端测试 + 85 前端测试全绿 · 92 REST + 1 WS 端点 · 四源链 `ths→tencent→eastmoney→sina`（含熔断）**
+**实时行情秒级化（2026-09-01，`5b0024a`）：QuoteHub 1s 固定节奏 + WS 订阅队列终身复用（换队列孤儿化 writer 是"约 30s 才更新"的真因）+ 实时方法腾讯源优先（realtime_rank，ths 付费配额/8s 超时移出秒级链）+ 瞬时失败 stale_after(10s) 容忍 + 分时/K线 WS tick 实时合成（`lib/kline-live.ts`）。实测：列表/头部/K线/分时全部 0.6~1.3s 更新。**
 **前端导航 5 项：工作台 / 盘面 /tape / 市场 /market / 每日精选 /picks / 研究 /research**（2026-09-01 页面合并，旧路由 302）
 
 08-31 ~ 09-01 已完成：实时行情修复 → 真实持仓账本 → 题材合力 → 每日精选五维评分+梯队/阶段/闸门/出场纪律 →
