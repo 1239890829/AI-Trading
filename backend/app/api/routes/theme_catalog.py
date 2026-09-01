@@ -136,6 +136,15 @@ async def stock_themes(
                         log.warning("stock themes: 成分懒同步失败 %s: %s", code, exc)
             official = svc.get_official_for_symbol(sym)
 
+    # 题材当日涨跌幅（2026-09-01）：官方板块指数口径（与概念目录同源，杜绝跨源
+    # 名称匹配），附在 official 各项上——前端按涨跌幅排序、徽标展示、只保留
+    # 最相关的少数题材（用户反馈：29 个概念全量展示会把分时/K线挤下去）。
+    try:
+        changes = await svc.day_changes([o["theme_code"] for o in official])
+        official = [{**o, "theme_chg_1d": changes.get(o["theme_code"])} for o in official]
+    except Exception as exc:  # noqa: BLE001 涨跌幅是增强信息，失败不拖垮归属展示
+        log.warning("stock themes: 板块日涨幅批量获取失败（chips 不带涨跌幅）: %s", exc)
+
     return {
         "data": {
             "symbol": sym,

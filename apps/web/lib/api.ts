@@ -818,6 +818,8 @@ export interface StockThemeLink {
   theme_code: string;
   theme_name: string;
   source: string; // ths_official | manual
+  /** 官方板块指数当日涨跌幅 %（2026-09-01：chips 排序与徽标用；拉取失败为 null） */
+  theme_chg_1d?: number | null;
 }
 
 export interface StockThemeAttribution {

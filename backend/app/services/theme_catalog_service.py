@@ -24,6 +24,7 @@ from sqlalchemy import func, select
 
 from app.core.config import settings
 from app.core.db import utcnow
+from app.core.ttl_cache import TTLCache
 from app.models.theme_catalog import Theme, ThemeMember, ThemeOverride
 
 log = logging.getLogger(__name__)
@@ -244,6 +245,39 @@ class ThemeCatalogService:
             headers={"X-api-key": key, "Accept": "application/json"},
         )
         self._base = (base_url or settings.ths_base_url).rstrip("/")
+        # 板块日涨幅缓存（详情页题材 chips 排序/徽标用）：TTL 120s + 异步单飞 + 并发闸
+        self._day_change_cache = TTLCache("theme_day_change", ttl=120.0, maxsize=512)
+        self._board_fetch_sem = asyncio.Semaphore(6)
+
+    async def day_changes(self, codes: list[str]) -> dict[str, float | None]:
+        """官方板块指数当日涨跌幅（最新日 K close / 前一日 - 1，%）。
+
+        用于详情页题材 chips（2026-09-01）：按涨跌幅排序 + 徽标展示，
+        只显示最相关的少数题材，避免全部概念把分时/K线挤出可视区。
+        单题材失败返回 None（best-effort，不拖垮整行 chips）。
+        """
+        out: dict[str, float | None] = {}
+
+        async def one(code: str) -> None:
+            async def load() -> float | None:
+                # get_or_set 的 factory 是无参闭包；None 是合法值（新题材无样本），
+                # cache_none=True 让它也进缓存，避免每次请求重复回源
+                async with self._board_fetch_sem:
+                    bars = await self.fetch_board_bars(code)
+                closes = [b["close"] for b in bars if b.get("close")]
+                if len(closes) < 2 or not closes[-2]:
+                    return None
+                return round((closes[-1] / closes[-2] - 1) * 100, 2)
+
+            try:
+                _, pct = await self._day_change_cache.get_or_set(code, load, cache_none=True)
+                out[code] = pct
+            except Exception as exc:  # noqa: BLE001 单题材失败不拖垮整批
+                log.warning("theme day change failed %s: %s", code, exc)
+                out[code] = None
+
+        await asyncio.gather(*(one(c) for c in codes if c))
+        return out
 
     async def aclose(self) -> None:
         await self._client.aclose()
