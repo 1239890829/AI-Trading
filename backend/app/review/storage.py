@@ -131,6 +131,45 @@ def save_report(session_factory, report: ReviewReport) -> ReviewReport:
     return report
 
 
+def _sync_action_items_from_db(db, report: ReviewReport) -> None:
+    """把改进项的**数据库主键**与**可变处置状态**覆盖到 payload 快照上。
+
+    两件事都必须做，缺一个改进项闭环就是断的：
+
+    1. **回填主键**：`save_report` 落库时没有持久化 `ActionItem.id`
+       （payload JSON 里的 `AI-xxxxxxxx` 只是报告内的临时编号），而改进项要能被
+       确认/应用/回退，就必须有可唯一定位到行的键——`review_action_items.id`
+       是唯一选择，同时也是前端 PATCH 的寻址键。
+    2. **同步处置状态**：`get_report` 读的是 `ReviewReportRow.payload`，
+       那是**生成时的快照**。改进项被 PATCH 处置后只有表行变了，payload 仍停在
+       pending ——若不同步，界面上就表现为「点了确认，回读还是待处置」
+       （2026-09-01 实测：PATCH 返回 confirmed 200，回读报告详情仍是 pending）。
+       **处置状态的权威来源只能是表行，不是 payload。**
+
+    对齐依据：`save_report` 按 `report.action_items` 的顺序逐条插入，因此表内
+    按 id 升序的行序列与 payload 列表**严格同序**，可按索引对齐。
+    长度不一致说明报告被外部改写过 → 此时整批跳过，
+    宁可让这些条目不可操作，也绝不错配到别的改进项上。
+
+    注：`resolution_note` / `resolved_at` 不进报告模型（报告快照只记生成时的判断），
+    需要处置明细走 `GET /review/action-items`。
+    """
+    rows = db.execute(
+        select(ReviewActionItemRow)
+        .where(ReviewActionItemRow.review_id == report.review_id)
+        .order_by(ReviewActionItemRow.id)
+    ).scalars().all()
+    if len(rows) != len(report.action_items):
+        log.warning(
+            "action item count mismatch for %s: db=%d payload=%d，跳过状态同步",
+            report.review_id, len(rows), len(report.action_items),
+        )
+        return
+    for row, item in zip(rows, report.action_items):
+        item.id = str(row.id)
+        item.status = row.status
+
+
 def get_report(session_factory, trade_date: str) -> ReviewReport | None:
     db = session_factory()
     try:
@@ -139,7 +178,77 @@ def get_report(session_factory, trade_date: str) -> ReviewReport | None:
         ).scalars().first()
         if not row:
             return None
-        return ReviewReport.model_validate_json(row.payload)
+        report = ReviewReport.model_validate_json(row.payload)
+        _sync_action_items_from_db(db, report)
+        return report
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------- 改进项状态变更
+
+
+#: 允许的处置状态。`pending` 保留在内，用于"撤销确认"。
+ALLOWED_STATUSES = ("pending", "confirmed", "applied", "rejected", "reverted")
+
+#: 需要填写处置说明的状态——没有理由的驳回/回退是无法归因的，
+#: 后期统计"哪类改进项总被驳回"时全靠这段文字。
+NOTE_REQUIRED = ("rejected", "reverted")
+
+
+def update_action_item_status(
+    session_factory,
+    item_id: str,
+    status: str,
+    note: str = "",
+) -> dict:
+    """变更单条改进项的处置状态。
+
+    这是 PDCA 闭环的落点：改进项被确认/应用/回退后，
+    `evaluate_historical_effectiveness` 算出的采纳率才有意义
+    （2026-09-01 核查：107 条全部 pending、采纳率 0%，根因就是缺这个入口）。
+
+    :param item_id: `review_action_items.id`（由 `get_report` 回填到 payload）
+    :param status: 见 ALLOWED_STATUSES
+    :param note: 处置说明；rejected/reverted 必填
+    :return: 更新后的行摘要
+    :raises ValueError: item_id 非整数 / 状态非法 / 必填说明缺失
+    :raises LookupError: 找不到对应改进项
+    """
+    if status not in ALLOWED_STATUSES:
+        raise ValueError(f"status 非法：{status!r}，允许值 {ALLOWED_STATUSES}")
+    if status in NOTE_REQUIRED and not note.strip():
+        raise ValueError(f"status={status} 必须填写 note（没有理由的处置无法归因）")
+    try:
+        pk = int(item_id)
+    except (TypeError, ValueError):
+        raise ValueError(f"item_id 需为整数主键，收到 {item_id!r}") from None
+
+    db = session_factory()
+    try:
+        row = db.execute(
+            select(ReviewActionItemRow).where(ReviewActionItemRow.id == pk)
+        ).scalars().first()
+        if row is None:
+            raise LookupError(f"改进项 {pk} 不存在")
+
+        row.status = status
+        row.resolution_note = note.strip()
+        # 回到 pending 视为"撤销处置"，清掉处置时间；其余记当前时间
+        row.resolved_at = None if status == "pending" else utcnow()
+        db.commit()
+        return {
+            "id": row.id,
+            "review_id": row.review_id,
+            "trade_date": row.trade_date,
+            "title": row.title,
+            "status": row.status,
+            "resolution_note": row.resolution_note,
+            "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None,
+        }
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 

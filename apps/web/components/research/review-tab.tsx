@@ -6,6 +6,8 @@ import {
   getReviewEffectiveness,
   getReviewReport,
   getReviewReports,
+  updateActionItemStatus,
+  type ActionItemStatus,
   type ReviewReportDetail,
   type ReviewReportSummary,
 } from "@/lib/api";
@@ -34,6 +36,25 @@ const CATEGORY_LABEL: Record<string, string> = {
   other: "其他",
 };
 
+const STATUS_LABEL: Record<string, string> = {
+  pending: "待处置",
+  confirmed: "已确认",
+  applied: "已实施",
+  rejected: "已驳回",
+  reverted: "已回退",
+};
+
+const STATUS_CLS: Record<string, string> = {
+  pending: "text-zinc-400",
+  confirmed: "text-sky-400",
+  applied: "text-emerald-400",
+  rejected: "text-zinc-500 line-through",
+  reverted: "text-amber-400",
+};
+
+/** 需要填写理由才能提交的状态——后端强制校验，前端同步提示，避免点了才报错。 */
+const NOTE_REQUIRED: ActionItemStatus[] = ["rejected", "reverted"];
+
 /** gaps 元素可能是字符串，也可能是结构化对象（{field,reason,impact,severity}）——统一成可读文本。 */
 function gapText(g: unknown): string {
   if (typeof g === "string") return g;
@@ -49,7 +70,150 @@ function gapText(g: unknown): string {
   return String(g);
 }
 
-function ReportDetail({ report }: { report: ReviewReportDetail }) {
+/**
+ * 单条改进项的处置控件。
+ *
+ * 改进项若只能看不能处置，PDCA 闭环就断在最后一环——2026-09-01 核查时
+ * 107 条改进项全部 pending、采纳率 0%，根因就是缺这个入口。
+ */
+function ActionItemDispose({
+  itemId,
+  status,
+  onDisposed,
+}: {
+  itemId: string;
+  status: string;
+  onDisposed: () => void;
+}) {
+  // 需填理由时展开输入框；null 表示未处于处置中
+  const [pending, setPending] = useState<ActionItemStatus | null>(null);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // 旧报告的改进项 id 是报告内临时编号（AI-xxxxxxxx），不是数据库主键 → 不可寻址
+  const addressable = /^\d+$/.test(itemId);
+
+  async function submit(next: ActionItemStatus, withNote: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await updateActionItemStatus(itemId, next, withNote);
+      setPending(null);
+      setNote("");
+      onDisposed();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function click(next: ActionItemStatus) {
+    if (NOTE_REQUIRED.includes(next)) {
+      setPending(next);
+      return;
+    }
+    void submit(next, "");
+  }
+
+  if (!addressable) {
+    return (
+      <div className="mt-1 text-[11px] text-zinc-500">
+        该改进项来自旧版报告，无数据库主键，需重新生成报告后方可处置
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+      <span className={`text-[11px] ${STATUS_CLS[status] ?? "text-zinc-400"}`}>
+        {STATUS_LABEL[status] ?? status}
+      </span>
+      {status !== "confirmed" && (
+        <button
+          onClick={() => click("confirmed")}
+          disabled={busy}
+          className="rounded border border-zinc-300 px-1.5 py-0.5 text-[11px] text-zinc-400 transition-colors hover:border-sky-500 hover:text-sky-400 disabled:opacity-40 dark:border-zinc-700"
+        >
+          确认
+        </button>
+      )}
+      {status !== "applied" && (
+        <button
+          onClick={() => click("applied")}
+          disabled={busy}
+          className="rounded border border-zinc-300 px-1.5 py-0.5 text-[11px] text-zinc-400 transition-colors hover:border-emerald-500 hover:text-emerald-400 disabled:opacity-40 dark:border-zinc-700"
+        >
+          已实施
+        </button>
+      )}
+      <button
+        onClick={() => click("rejected")}
+        disabled={busy}
+        className="rounded border border-zinc-300 px-1.5 py-0.5 text-[11px] text-zinc-400 transition-colors hover:border-zinc-500 disabled:opacity-40 dark:border-zinc-700"
+      >
+        驳回
+      </button>
+      <button
+        onClick={() => click("reverted")}
+        disabled={busy}
+        className="rounded border border-zinc-300 px-1.5 py-0.5 text-[11px] text-zinc-400 transition-colors hover:border-amber-500 hover:text-amber-400 disabled:opacity-40 dark:border-zinc-700"
+      >
+        回退
+      </button>
+      {status !== "pending" && (
+        <button
+          onClick={() => void submit("pending", "")}
+          disabled={busy}
+          className="text-[11px] text-zinc-500 underline-offset-2 hover:underline disabled:opacity-40"
+        >
+          撤销处置
+        </button>
+      )}
+
+      {pending !== null && (
+        <div className="mt-1 w-full space-y-1">
+          <input
+            autoFocus
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder={pending === "rejected" ? "驳回理由（必填）" : "回退理由（必填）"}
+            className="w-full rounded border border-zinc-300 bg-transparent px-2 py-1 text-[11px] text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-sky-500 dark:border-zinc-700"
+          />
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => void submit(pending, note)}
+              disabled={busy || !note.trim()}
+              className="rounded border border-sky-600 px-2 py-0.5 text-[11px] text-sky-400 disabled:opacity-40"
+            >
+              提交
+            </button>
+            <button
+              onClick={() => {
+                setPending(null);
+                setNote("");
+                setError(null);
+              }}
+              className="text-[11px] text-zinc-500 hover:text-zinc-300"
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      )}
+      {error && <div className="w-full text-[11px] text-red-400">处置失败：{error}</div>}
+    </div>
+  );
+}
+
+function ReportDetail({
+  report,
+  onDisposed,
+}: {
+  report: ReviewReportDetail;
+  onDisposed: () => void;
+}) {
   return (
     <div className="space-y-3 px-4 py-3 text-sm">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-400">
@@ -89,7 +253,10 @@ function ReportDetail({ report }: { report: ReviewReportDetail }) {
 
       {report.action_items.length > 0 && (
         <div>
-          <div className="mb-1 text-xs font-medium text-zinc-200 dark:text-zinc-100">改进项</div>
+          <div className="mb-1 text-xs font-medium text-zinc-200 dark:text-zinc-100">
+            改进项
+            <span className="ml-2 font-normal text-zinc-500">处置后计入采纳率统计</span>
+          </div>
           <div className="space-y-1.5">
             {report.action_items.map((a) => (
               <div key={a.id} className="rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-800">
@@ -99,6 +266,13 @@ function ReportDetail({ report }: { report: ReviewReportDetail }) {
                   <span className="text-zinc-400">[{CATEGORY_LABEL[a.category] ?? a.category}]</span>
                 </div>
                 <div className="mt-0.5 text-[11px] text-zinc-400">{a.expected_impact}</div>
+                {a.proposed_change && (
+                  <div className="mt-0.5 text-[11px] text-zinc-500">
+                    建议：{a.proposed_change}
+                    {a.target && <span className="ml-1 text-zinc-600">（{a.target}）</span>}
+                  </div>
+                )}
+                <ActionItemDispose itemId={a.id} status={a.status ?? "pending"} onDisposed={onDisposed} />
               </div>
             ))}
           </div>
@@ -148,6 +322,21 @@ export function ReviewTab() {
     [openDate],
   );
 
+  /** 处置改进项后刷新三处：报告列表（计数不变但要同步）、当前详情、有效性统计。
+   *  只刷新详情会让右侧"采纳率"停留在旧值，看不出处置效果。 */
+  const reloadAfterDispose = useCallback(async () => {
+    const [r, e] = await Promise.all([
+      getReviewReports().catch(() => null),
+      getReviewEffectiveness().catch(() => null),
+    ]);
+    if (r) setReports(r);
+    if (e) setEffect(e);
+    if (openDate) {
+      const d = await getReviewReport(openDate).catch(() => null);
+      if (d) setDetail(d);
+    }
+  }, [openDate]);
+
   if (error) {
     return (
       <Panel title="复盘报告">
@@ -187,7 +376,12 @@ export function ReviewTab() {
                     {r.model_degraded && <span className="ml-2 text-amber-400">模型降级</span>}
                   </div>
                 </button>
-                {openDate === r.trade_date && (detail ? <ReportDetail report={detail} /> : <p className="px-4 py-3 text-xs text-zinc-400">详情加载中…</p>)}
+                {openDate === r.trade_date &&
+                  (detail ? (
+                    <ReportDetail report={detail} onDisposed={() => void reloadAfterDispose()} />
+                  ) : (
+                    <p className="px-4 py-3 text-xs text-zinc-400">详情加载中…</p>
+                  ))}
               </div>
             ))}
           </div>

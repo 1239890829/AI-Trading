@@ -1273,6 +1273,11 @@ export interface ReviewReportDetail {
     priority: string;
     expected_impact: string;
     evidence: string;
+    target: string;
+    proposed_change: string;
+    /** pending | confirmed | applied | rejected | reverted */
+    status: string;
+    resolution_note: string;
   }[];
   meta_insights: { dimension: string; observation: string; effectiveness: string; evidence: string; suggestion: string }[];
   summary: string;
@@ -1295,4 +1300,43 @@ export async function getReviewReport(tradeDate: string): Promise<ReviewReportDe
 
 export async function getReviewEffectiveness(): Promise<ReviewEffectiveness> {
   return (await getJson<ReviewEffectiveness>("/api/review/effectiveness")).data;
+}
+
+/** 改进项处置状态。pending 表示"撤销处置"。 */
+export type ActionItemStatus = "pending" | "confirmed" | "applied" | "rejected" | "reverted";
+
+export interface ReviewActionItem {
+  id: number;
+  review_id: string;
+  trade_date: string;
+  title: string;
+  category: string;
+  priority: string;
+  target: string;
+  proposed_change: string;
+  status: ActionItemStatus;
+  resolution_note: string;
+  resolved_at: string | null;
+}
+
+export async function listActionItems(status?: ActionItemStatus): Promise<ReviewActionItem[]> {
+  const qs = status ? `?status=${status}` : "";
+  return (await getJson<ReviewActionItem[]>(`/api/review/action-items${qs}`)).data;
+}
+
+/**
+ * 处置单条改进项（PDCA 闭环的落点）。
+ *
+ * 改进项只能产出、无法消费时，"方法论自我迭代"是空转的——2026-09-01 核查时
+ * 107 条改进项全部 pending、采纳率 0%，连带让「采纳率<20% → 该维度疑似产出
+ * 噪音」的演进建议永远触发且毫无意义。
+ *
+ * rejected / reverted 后端强制要求 note：没有理由的处置后期无法归因。
+ */
+export async function updateActionItemStatus(
+  itemId: string,
+  status: ActionItemStatus,
+  note = "",
+): Promise<ReviewActionItem> {
+  return (await sendJson<ReviewActionItem>(`/api/review/action-items/${itemId}`, "PATCH", { status, note })).data;
 }

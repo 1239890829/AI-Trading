@@ -14,9 +14,11 @@ from app.review.methodology import (
     suggest_methodology_changes,
 )
 from app.review.storage import (
+    ALLOWED_STATUSES,
     compare_reports,
     get_report,
     list_reports,
+    update_action_item_status,
 )
 
 router = APIRouter(tags=["review"])
@@ -76,6 +78,74 @@ async def review_detail(trade_date: str, request: Request):
     if report is None:
         raise HTTPException(status_code=404, detail=f"{trade_date} 无复盘报告")
     return {"data": report.model_dump()}
+
+
+class ActionItemPatch(BaseModel):
+    status: str = Field(..., description="pending | confirmed | applied | rejected | reverted")
+    note: str = Field("", description="处置说明；rejected/reverted 必填")
+
+
+@router.patch("/review/action-items/{item_id}", dependencies=[Depends(require_write_token)])
+async def patch_action_item(item_id: str, body: ActionItemPatch, request: Request):
+    """处置单条改进项（PDCA 闭环的落点）。
+
+    改进项只能产出、无法消费时，整个"方法论自我迭代"是空转的——
+    2026-09-01 实测 107 条改进项全部 pending、采纳率 0%，
+    连带让「采纳率<20% → 该维度疑似产出噪音」的演进建议永远触发且无意义。
+
+    `item_id` 取自 `GET /api/review/reports/{trade_date}` 返回的
+    `action_items[].id`（已回填为数据库主键，唯一可寻址）。
+    """
+    svc = _service(request)
+    try:
+        updated = update_action_item_status(
+            svc.session_factory, item_id, body.status, body.note
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    return {"data": updated}
+
+
+@router.get("/review/action-items")
+async def list_action_items(
+    status: str | None = Query(None, description=f"按状态过滤：{' | '.join(ALLOWED_STATUSES)}"),
+    limit: int = Query(100, ge=1, le=500),
+    request: Request = None,
+):
+    """跨报告的改进项清单——"哪些改进项还压着没处置"是这个端点的主用途。
+
+    按 priority 升序（P0 在前）、id 升序，保证高优先级先被看见。
+    """
+    svc = _service(request)
+    if status is not None and status not in ALLOWED_STATUSES:
+        raise HTTPException(
+            status_code=422, detail=f"status 非法：{status!r}，允许值 {ALLOWED_STATUSES}"
+        )
+    from sqlalchemy import select as _select
+
+    from app.review.models import ReviewActionItemRow
+
+    db = svc.session_factory()
+    try:
+        q = _select(ReviewActionItemRow)
+        if status:
+            q = q.where(ReviewActionItemRow.status == status)
+        rows = db.execute(
+            q.order_by(ReviewActionItemRow.priority, ReviewActionItemRow.id).limit(limit)
+        ).scalars().all()
+        return {
+            "data": [{
+                "id": r.id, "review_id": r.review_id, "trade_date": r.trade_date,
+                "title": r.title, "category": r.category, "priority": r.priority,
+                "target": r.target, "proposed_change": r.proposed_change,
+                "status": r.status, "resolution_note": r.resolution_note,
+                "resolved_at": r.resolved_at.isoformat() if r.resolved_at else None,
+            } for r in rows],
+        }
+    finally:
+        db.close()
 
 
 @router.get("/review/compare")
