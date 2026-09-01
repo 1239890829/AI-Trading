@@ -75,17 +75,28 @@ export function useQuoteStream(symbols: string[]) {
         return;
       }
       const ws = wsRef.current;
+      // 半死连接防御（2026-09-01 实测：后端 pong 与推送并发写曾致 writer 静默死亡，
+      // 连接 open、ping 有应答、但推送为零——列表冻结在初始值。后端已改为单点发送；
+      // 这里再加客户端自愈：32s（2 个心跳周期）内没收到任何消息就主动断开重连，
+      // 重连失败 3 次自然落入 REST 轮询兜底）
+      let lastMsgAt = Date.now();
       ws.onopen = () => {
         retry = 0;
         stopPolling();
+        lastMsgAt = Date.now();
         setStatus("live");
         pingTimer = setInterval(() => {
           if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            if (Date.now() - lastMsgAt > 32_000) {
+              wsRef.current.close(); // 触发 onclose 重连
+              return;
+            }
             wsRef.current.send(JSON.stringify({ action: "ping" }));
           }
         }, 15000);
       };
       ws.onmessage = (ev) => {
+        lastMsgAt = Date.now();
         try {
           const msg = JSON.parse(ev.data as string) as { type: string; data?: Quote[] };
           // stale：后端推送 quality=stale 的缓存数据（休市 market_closed / 刷新失败），

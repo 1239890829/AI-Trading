@@ -55,7 +55,12 @@ async def quotes_ws(websocket: WebSocket):
             except ValueError:
                 continue
             if msg.get("action") == "ping":
-                await websocket.send_json({"type": "pong", "ts": _now_iso()})
+                # ⚠️ 2026-09-01 P0 修复：pong 改走出站队列——原实现 reader 直接
+                # await websocket.send_json(pong)，与 writer task 的推送**并发写同一
+                # WebSocket**，Starlette 不允许并发 send → writer 抛 RuntimeError 被
+                # except 静默吞掉 → 推送永久死亡，而 ping/pong 还活着，前端误以为
+                # 连接健康（实测盘中自选列表/详情/图全部冻结在初始值）。
+                slot[0].put_nowait({"type": "pong", "ts": _now_iso()})
             elif msg.get("action") == "subscribe":
                 new_syms = msg.get("symbols") or []
                 symbols = {s for s in new_syms if s} or None
@@ -64,6 +69,8 @@ async def quotes_ws(websocket: WebSocket):
                 slot[0].put_nowait(_snapshot())
 
     async def writer() -> None:
+        # 唯一出站发送点：hub 推送 / pong / subscribe 快照全部经队列串行化，
+        # 从根上消灭并发 send。
         while True:
             msg = await slot[0].get()
             await websocket.send_json(msg)
