@@ -82,6 +82,7 @@ async def lifespan(app: FastAPI):
         provider=provider,
         poll_interval=settings.poll_interval_seconds,
         get_watchlist=repo.list_symbols,
+        stale_after=settings.stale_after_seconds,
     )
     app.state.hub = hub
     app.state.watchlist_repo = repo

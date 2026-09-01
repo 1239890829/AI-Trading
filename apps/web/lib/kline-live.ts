@@ -40,3 +40,38 @@ export function mergeQuoteIntoBars(bars: Kline[], quote: Quote | null | undefine
   const next: Kline = { ...last, close: price, high, low, volume };
   return [...bars.slice(0, -1), next];
 }
+
+/** quote.data_timestamp（UTC ISO）→ 北京时间 HH:MM；缺失返回空串。 */
+function bjHHMM(ts: string | null | undefined): string {
+  if (!ts) return "";
+  return new Date(ts).toLocaleTimeString("sv-SE", { timeZone: "Asia/Shanghai", hour12: false }).slice(0, 5);
+}
+
+/**
+ * 盘中分时实时合成：用 WS 最新 quote 更新最后一根分钟点（对标 K 线合成）。
+ *
+ * 分时数据源粒度是分钟级、走 60s REST 校准；不合成的话曲线右端点一分钟才动
+ * 一次，与 1s 的列表/K线不同步。价格与累计量（quote.volume 与 cum_volume 同为
+ * 股，口径依据见 mergeQuoteIntoBars 注释）跟随 WS；均价线由后端口径算出，
+ * 不在端上臆造，保持 last.avg。跨分钟不新增点（60s 校准负责补点防漂移）。
+ *
+ * 返回新数组（不 mutate）；无需更新返回 null。
+ */
+export function mergeQuoteIntoMinutes<T extends { ts: string; price: number; cum_volume?: number | null }>(
+  points: T[],
+  quote: Quote | null | undefined
+): T[] | null {
+  if (points.length === 0 || !quote) return null;
+  const price = quote.price;
+  if (price == null || price <= 0) return null;
+  const last = points[points.length - 1];
+  // quote 与最后一个分钟点不在同一分钟（刚跨分钟、REST 还没补点）不合成
+  const qHHMM = bjHHMM(quote.data_timestamp);
+  const lastHHMM = bjHHMM(last.ts);
+  if (!qHHMM || qHHMM !== lastHHMM) return null;
+
+  const cumVolume = quote.volume ?? last.cum_volume;
+  if (last.price === price && last.cum_volume === cumVolume) return null; // 无变化不重渲染
+  const next = { ...last, price, cum_volume: cumVolume };
+  return [...points.slice(0, -1), next] as T[];
+}

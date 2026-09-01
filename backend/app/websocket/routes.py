@@ -64,8 +64,12 @@ async def quotes_ws(websocket: WebSocket):
             elif msg.get("action") == "subscribe":
                 new_syms = msg.get("symbols") or []
                 symbols = {s for s in new_syms if s} or None
-                hub.unsubscribe(slot[0])
-                slot[0] = hub.subscribe(symbols)
+                # ⚠️ 2026-09-01 P0：原地更新订阅集（hub.update_symbols）——
+                # 旧实现 unsubscribe + subscribe 换新队列，而 writer 正 parked
+                # 在旧队列的 get() 上：换队列后 writer 永远等在孤儿队列，推送
+                # 静默死亡（前端 32s 心跳自愈重连才见一次快照 = 用户体感
+                # "约 30 秒才更新一次"的根因）。同一队列终身复用，竞态不存在。
+                hub.update_symbols(slot[0], symbols)
                 slot[0].put_nowait(_snapshot())
 
     async def writer() -> None:

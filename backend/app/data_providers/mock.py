@@ -300,18 +300,23 @@ class MockProvider:
         return items[:10]
 
     async def get_minute_line(self, symbol: str) -> list[dict]:
-        """确定性分钟分时（当日 09:30 起 240 分钟随机游走）。"""
-        today = self._clock().date()
+        """确定性分钟分时（240 点随机游走，时间轴终点贴当前分钟）。
+
+        终点对齐当前时间，使最后一分钟与实时 quote 同分钟——前端
+        mergeQuoteIntoMinutes 的秒级合成要求同分钟，否则正确地拒绝合成。
+        """
+        now = self._clock()
+        today = now.date()
         base = _base_price(symbol)
         rnd = random.Random(_seed("ml", symbol, today))
         price = round(base * (1 + rnd.uniform(-0.01, 0.01)), 2)
         points = []
-        minutes = (self._clock() - datetime(today.year, today.month, today.day)).seconds // 60
-        minutes = max(min(minutes, 240), 5)
+        minutes = 240
         cum = 0.0
         cum_vol = 0
+        end_slot = max(now.hour * 60 + now.minute, 9 * 60 + 30 + minutes - 1)
         for i in range(minutes):
-            hh, mm = divmod(9 * 60 + 30 + i, 60)
+            hh, mm = divmod(end_slot - (minutes - 1 - i), 60)
             price = round(price * (1 + rnd.uniform(-0.002, 0.002)), 2)
             vol = rnd.randint(10, 800) * 100
             cum_vol += vol

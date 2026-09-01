@@ -20,6 +20,13 @@ FAILURE_THRESHOLD = 3
 #: 熔断冷却时长（秒）
 COOLDOWN_SECONDS = 60.0
 
+#: 秒级实时方法：Hub 以 1Hz 轮询这些方法，走 realtime_rank 排序——
+#: 免费高频源（腾讯）优先，付费/慢源（ths 配额+8s 超时）不挡在秒级链路上。
+#: 其余方法（K线/龙虎榜/财务等低频）维持构造顺序不变。
+REALTIME_METHODS = frozenset(
+    {"get_quotes", "get_indices", "get_quote", "get_order_book", "get_trades"}
+)
+
 _ROUTED = (
     "get_indices", "get_quotes", "get_quote", "get_kline", "get_order_book",
     "get_trades", "get_limit_up_pool", "get_longhu_records", "search", "get_board_rankings",
@@ -80,7 +87,11 @@ class CompositeProvider:
             await p.aclose()
 
     def _pick(self, method: str):
-        return [p for p in self.providers if hasattr(p, method)]
+        picked = [p for p in self.providers if hasattr(p, method)]
+        if method in REALTIME_METHODS:
+            # 稳定排序：rank 相同保持构造顺序，因此非腾讯源之间的先后不变
+            picked.sort(key=lambda p: getattr(p, "realtime_rank", 100))
+        return picked
 
     async def _call(self, method: str, *args):
         errors: list[str] = []

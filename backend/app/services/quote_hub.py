@@ -22,11 +22,18 @@ def _in_market_hours(dt: datetime) -> bool:
     return 915 <= t <= 1505
 
 
+async def _empty() -> list:
+    """gather 分支占位：自选为空时无 quotes 请求（与旧串行行为一致）。"""
+    return []
+
+
 class QuoteHub:
     """行情缓存与广播中心。
 
     - 轮询 Provider → Normalizer（Provider 内部）→ Quality Validator → 缓存 → WebSocket
     - 刷新失败时：停止伪造实时数据，把缓存数据标记为 stale 并记录原因
+      （2026-09-01 秒级化修订：数据年龄未超 stale_after 的瞬时失败不标不广播——
+      1Hz 节奏下单次网络抖动不该让前端闪"数据过期"）
     - 订阅者通过 asyncio.Queue 接收增量推送，消息带自增 seq
     """
 
@@ -36,14 +43,18 @@ class QuoteHub:
         poll_interval: float,
         get_watchlist: Callable[[], list[str]] | None = None,
         history_len: int = 600,
+        stale_after: float = 10.0,
     ):
         self.provider = provider
-        self.poll_interval = max(1.0, poll_interval)
+        self.poll_interval = max(0.5, poll_interval)
+        self.stale_after = max(self.poll_interval, stale_after)
         self.get_watchlist = get_watchlist or (lambda: [])
         self.indices: dict[str, Quote] = {}
         self.quotes: dict[str, Quote] = {}
         self.quote_history: deque[tuple[str, datetime, float | None]] = deque(maxlen=history_len)
-        self._subscribers: list[tuple[set[str] | None, asyncio.Queue]] = []
+        # 每个元素是 ([symbols_cell], queue)：symbols 装在单元素列表里以便
+        # update_symbols 原地改写（writer 与 reader 共享同一队列，绝不换队列）
+        self._subscribers: list[tuple[list[set[str] | None], asyncio.Queue]] = []
         self._seq = 0
         self.last_success_refresh: datetime | None = None
         self.last_attempt: datetime | None = None
@@ -57,14 +68,32 @@ class QuoteHub:
     async def refresh(self) -> None:
         self.last_attempt = utcnow()
         try:
-            new_indices = await self.provider.get_indices()
+            # 指数与自选并行拉取（2026-09-01 秒级化）：串行两次 HTTP 会把
+            # 1s 固定节奏的实际周期拉长到 ~1.6s，并行后单周期 ≈ 最慢一路
             watchlist = self._safe_watchlist()
-            new_quotes = await self.provider.get_quotes(watchlist) if watchlist else []
+            new_indices, new_quotes = await asyncio.gather(
+                self.provider.get_indices(),
+                self.provider.get_quotes(watchlist) if watchlist else _empty(),
+            )
         except Exception as exc:  # ProviderError、网络错误等一律降级
             self.consecutive_failures += 1
             self.last_error = str(exc)
-            log.warning("quote refresh failed (%s): %s", type(exc).__name__, exc)
-            self._mark_all_stale()
+            age = (
+                (utcnow() - self.last_success_refresh).total_seconds()
+                if self.last_success_refresh is not None
+                else float("inf")
+            )
+            # 数据年龄超过 stale_after 才标 stale 并广播：瞬时失败（单次网络
+            # 抖动、源 5xx 一两轮）期间缓存数据仍远新于阈值，保持 live 语义；
+            # 启动后从未成功（age=inf）立即标，绝不无中生有（红线 2）。
+            if age >= self.stale_after:
+                log.warning(
+                    "quote refresh failed (%s): %s — data age %.0fs >= stale_after, marking stale",
+                    type(exc).__name__, exc, age,
+                )
+                self._mark_all_stale()
+            else:
+                log.warning("quote refresh failed (%s): %s — keeping last good data", type(exc).__name__, exc)
             return
         for q in new_indices:
             prev = self.indices.get(q.symbol)
@@ -83,7 +112,11 @@ class QuoteHub:
         self.last_error = None
         self.last_success_refresh = utcnow()
         await self._refresh_closed_state()
-        self._broadcast("quotes")
+        # 休市：_refresh_closed_state 已广播 stale（market_closed），不再补发
+        # quotes 消息——此前每周期 stale+quotes 连发两条，且 quotes 类型会把
+        # 前端状态从"休市"冲回"实时推送"（状态闪烁）。
+        if not self._closed_marked:
+            self._broadcast("quotes")
 
     async def _refresh_closed_state(self) -> None:
         """休市判定（红线 2）：非交易日或非交易时段的数据一律标 stale，
@@ -131,7 +164,7 @@ class QuoteHub:
             return True
         if self._closed_marked:
             return True  # 休市：最近交易日数据，绝不冒充实时（红线 2）
-        return utcnow() - self.last_success_refresh > timedelta(seconds=self.poll_interval * 3)
+        return utcnow() - self.last_success_refresh > timedelta(seconds=self.stale_after)
 
     # ---------- 读取 ----------
 
@@ -165,17 +198,31 @@ class QuoteHub:
     # ---------- 订阅 ----------
 
     def subscribe(self, symbols: set[str] | None = None) -> asyncio.Queue:
+        """注册订阅者。返回的队列终身复用——**改订阅集用 update_symbols，
+        绝不 unsubscribe+subscribe 换新队列**：writer 正 parked 在旧队列的
+        get() 上，换队列后 writer 永远等在孤儿队列（2026-09-01 实测事故：
+        前端 loadBase 触发 subscribe → 推送静默死亡 → 前端 32s 自愈重连 →
+        用户体感"约 30 秒才更新一次"）。符号集存单元格以便原地更新。"""
         queue: asyncio.Queue = asyncio.Queue()
-        self._subscribers.append((symbols, queue))
+        self._subscribers.append(([symbols, ], queue))
         return queue
 
+    def update_symbols(self, queue: asyncio.Queue, symbols: set[str] | None) -> bool:
+        """原地更新订阅集（同一队列，writer 无感）。队列不存在返回 False。"""
+        for cell, q in self._subscribers:
+            if q is queue:
+                cell[0] = symbols
+                return True
+        return False
+
     def unsubscribe(self, queue: asyncio.Queue) -> None:
-        self._subscribers = [(syms, q) for syms, q in self._subscribers if q is not queue]
+        self._subscribers = [(cell, q) for cell, q in self._subscribers if q is not queue]
 
     def _broadcast(self, msg_type: str) -> None:
         seq = self.next_seq()
         ts = utcnow().isoformat()
-        for symbols, queue in self._subscribers:
+        for cell, queue in self._subscribers:
+            symbols = cell[0]
             payload = self.get_quotes(sorted(symbols) if symbols is not None else None)
             if not payload:
                 continue
@@ -192,9 +239,17 @@ class QuoteHub:
 
     async def run(self) -> None:
         while True:
+            started = utcnow()
             await self.refresh()
+            elapsed = (utcnow() - started).total_seconds()
             delay = self.poll_interval
             if self.consecutive_failures > 0:
                 delay = min(self.poll_interval * (2 ** min(self.consecutive_failures, 4)), 60.0)
                 log.info("provider degraded, next refresh in %.0fs", delay)
-            await asyncio.sleep(delay)
+            elif self._closed_marked:
+                # 休市数据静止：降频到 5s 保活（省 Provider 配额/流量），开盘
+                # 恢复检测延迟 ≤5s；交易时段（含竞价/午间）保持秒级节奏
+                delay = max(delay, 5.0)
+            # 固定节奏：扣除本轮刷新耗时，保证推送周期 = poll_interval 而非
+            # poll_interval + 网络耗时（1s 档位下串行耗时的稀释不可忽略）
+            await asyncio.sleep(max(0.0, delay - elapsed))

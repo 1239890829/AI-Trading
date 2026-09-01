@@ -9,7 +9,7 @@ import { QualityBadge } from "@/components/quality-badge";
 import { useQuoteStream } from "@/hooks/use-quote-stream";
 import { analyze } from "@/lib/technical-analysis";
 import { buildEventMarks } from "@/lib/event-markers";
-import { mergeQuoteIntoBars } from "@/lib/kline-live";
+import { mergeQuoteIntoBars, mergeQuoteIntoMinutes } from "@/lib/kline-live";
 import { isIndexSymbol } from "@/lib/api";
 import { notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import { ThemeChipsRow } from "@/components/detail/theme-chips";
@@ -322,6 +322,9 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   //    返回 null → 引用不变 → 下游图表不重渲染。
   const liveQuote = quotes[symbol];
   const displayBars = useMemo(() => mergeQuoteIntoBars(bars, liveQuote) ?? bars, [bars, liveQuote]);
+  // ①' 分时右端点秒级合成：同 K 线思路，WS quote 跟进最后一根分钟点
+  //    （价格+累计量），与列表/K线保持同一 1s 节奏，不再干等 60s REST 校准
+  const displayMinutes = useMemo(() => mergeQuoteIntoMinutes(minutes, liveQuote) ?? minutes, [minutes, liveQuote]);
   // ② 图表 60s REST 校准（评审 O2：绑定 chartTab——不在 K线/分时 tab 时不校准，
   //    切入 tab 时 effect 重跑先立即拉一次再启轮询）
   useEffect(() => {
@@ -519,7 +522,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
             <Panel title={`${quote?.name ? `${quote.name} · ` : ""}当日分时（1 分钟）`} source={minutes[0]?.source} bodyClassName="overflow-hidden" className="min-h-0 flex-1">
               {minutes.length > 0 ? (
                 <MinuteChart
-                  points={minutes}
+                  points={displayMinutes}
                   prevClose={quote?.prev_close ?? null}
                   yesterdayVol={displayBars.length >= 2 ? (displayBars[displayBars.length - 2]?.volume ?? null) : null}
                   index={indexOverlay}

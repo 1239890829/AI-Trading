@@ -84,6 +84,7 @@ export function useQuoteStream(symbols: string[]) {
         retry = 0;
         stopPolling();
         lastMsgAt = Date.now();
+        lastSentKey.current = ""; // 新 socket 允许下一次 key 变化时重发订阅
         setStatus("live");
         pingTimer = setInterval(() => {
           if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -105,9 +106,12 @@ export function useQuoteStream(symbols: string[]) {
           // （2026-09-01 修复：原实现把 stale 误标成 polling，且开盘后永不恢复 live）。
           if ((msg.type === "snapshot" || msg.type === "quotes" || msg.type === "stale") && msg.data) {
             apply(msg.data);
-            if (msg.type === "stale") {
-              const closed = msg.data.some((q) => q.quality_reasons?.includes("market_closed"));
-              setStatus(closed ? "closed" : "stale");
+            const closedData = msg.data.some((q) => q.quality_reasons?.includes("market_closed"));
+            if (closedData) {
+              // 休市数据可能以 quotes 类型到达（REST 兜底/快照路径），一律置休市态
+              setStatus("closed");
+            } else if (msg.type === "stale") {
+              setStatus("stale");
             } else if (msg.type === "quotes") {
               setStatus("live");
             }
@@ -140,15 +144,21 @@ export function useQuoteStream(symbols: string[]) {
     };
   }, [hasSymbols]);
 
-  // 订阅更新：连接存活时发 subscribe 消息切换订阅集（不重连）
+  // 订阅更新：连接存活时发 subscribe 消息切换订阅集（不重连）。
+  // ⚠️ 依赖只允许 key（集合的稳定字符串）：symbols 数组每次渲染都是新引用，
+  // 放进依赖数组 → 每次渲染重发 subscribe → 后端回快照 → setQuotes →
+  // 再渲染 → 死循环（Maximum update depth exceeded，2026-09-01 实测白屏）。
+  // 发送内容读 symbolsRef（连接期最新集合），并与 lastSentKey 去重。
+  const lastSentKey = useRef<string>("");
   useEffect(() => {
     const ws = wsRef.current;
     if (!connectedRef.current || !ws || ws.readyState !== WebSocket.OPEN) return;
-    if (!key) return;
+    if (!key || key === lastSentKey.current) return;
+    lastSentKey.current = key;
     try {
-      ws.send(JSON.stringify({ action: "subscribe", symbols: [...new Set(symbols)] }));
+      ws.send(JSON.stringify({ action: "subscribe", symbols: [...new Set(symbolsRef.current)] }));
     } catch {}
-  }, [key, symbols]);
+  }, [key]);
 
   return { quotes, status };
 }

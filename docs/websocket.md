@@ -48,3 +48,33 @@ RuntimeError 被静默吞掉 → 推送死亡而 ping 存活（连接假活，�
 
 `/ws/order-book` `/ws/trades` `/ws/market` `/ws/alerts` `/ws/paper-trading`
 （消息结构沿用 type/seq/ts/data 约定。）
+
+## 推送节奏与 30s 冻结根因复盘（2026-09-01 秒级化改造）
+
+**节奏**：`ASHARE_POLL_INTERVAL_SECONDS=1.0`（默认）→ 交易时段 WS 推送周期 1s
+（固定节奏：run() 扣除本轮刷新耗时再 sleep）；休市自动降频 5s 保活；瞬时刷新
+失败（数据年龄 < `ASHARE_STALE_AFTER_SECONDS=10`）不标 stale 不广播，防止
+"数据过期"闪烁。
+
+**"约 30 秒才更新一次"的真因 = 两个 bug 叠加互掩**（实测复盘，勿重蹈）：
+
+1. **后端 subscribe 换队列孤儿化 writer（主因）**：旧实现处理
+   `{"action":"subscribe"}` 时 `hub.unsubscribe(旧队列) + hub.subscribe(新队列)`
+   ——而 writer task 正 `await slot[0].get()` **parked 在旧队列上**。队列被换
+   后 writer 永远等在孤儿队列（get() 的等待目标在 await 开始时就已绑定），
+   hub 往新队列广播无人消费 → 推送静默死亡。前端自选集变化（loadBase 10s
+   轮询 → symbols 数组新引用）必触发一次 subscribe → 必冻结。
+   修复：`hub.update_symbols(queue, symbols)` **原地改订阅集，队列终身复用**。
+
+2. **前端订阅 effect 依赖数组引用死循环（被 1 掩盖）**：订阅 effect 原依赖
+   `[key, symbols]`，而 `symbols` 数组每次渲染都是新引用 → 每次渲染重发
+   subscribe → 后端回快照 → setQuotes → 再渲染 → 死循环（Maximum update
+   depth exceeded，页面白屏）。bug 1 把快照回执吞掉恰好掐断了这个循环，
+   修 1 后循环立刻暴露。修复：依赖只留稳定字符串 `key`，发送内容读
+   `symbolsRef`，`lastSentKey` 去重；onopen 时重置 lastSentKey。
+
+**组合表现**：bug 1 冻结推送 + 前端 32s 心跳自愈重连 → 每次重连回推一条
+快照 → 用户体感"约 30 秒更新一次"（每次看到的都是重连快照，不是实时流）。
+
+**教训**：WS 改动必须用「真实页面 + mock 秒变数据源」做端到端验证——裸
+socket 探针测不出这两类 bug（探针不发 subscribe、不经过 React 渲染）。

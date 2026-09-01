@@ -21,7 +21,13 @@ class Settings(BaseSettings):
     ths_base_url: str = "https://fuyao.aicubes.cn"
     # 题材官方成分视为有效的时长（linkage-design §3）；过期后懒同步
     theme_members_ttl_hours: int = 168
-    poll_interval_seconds: float = 5.0
+    # 自选行情轮询周期（秒）：1s = WS 推送节奏的上限（对标专业行情软件秒级体验）。
+    # 实时方法（quotes/indices 等）固定腾讯源优先——免费高频源扛 1Hz 轮询，
+    # ths 付费配额 + 8s 超时不挡在秒级链路上（composite.REALTIME_METHODS）。
+    poll_interval_seconds: float = 1.0
+    # 连续刷新失败后，数据年龄超过该秒数才标 stale 并广播——单次瞬时失败
+    # （<10s）只算抖动，不闪"数据过期"；红线 2 的"不冒充实时"以 10s 为界。
+    stale_after_seconds: float = 10.0
     alert_poll_interval_seconds: float = 5.0
     request_timeout_seconds: float = 5.0
 

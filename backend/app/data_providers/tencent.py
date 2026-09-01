@@ -270,6 +270,10 @@ def parse_kline_payload(symbol: str, timeframe: str, payload: dict) -> list[Klin
 class TencentProvider:
     name = SOURCE
     realtime = True
+    #: 秒级实时方法的链内优先级（composite.REALTIME_METHODS，值小者优先）：
+    #: 腾讯批量快照免费、高频友好（~300ms），扛得住 Hub 1Hz 轮询；
+    #: ths 付费配额 + 8s 超时不适合挡在秒级链路（默认 rank=100 排其后）。
+    realtime_rank = 0
 
     def __init__(self, timeout: float = 5.0):
         self._client = httpx.AsyncClient(
