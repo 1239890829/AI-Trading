@@ -139,15 +139,16 @@ class QuoteHub:
         return list(self.indices.values())
 
     def get_quotes(self, symbols: list[str] | None = None) -> list[Quote]:
-        # 指数兜底：indices 的 symbol（裸 000001）不在 self.quotes（自选股缓存）里，
-        # 不查 indices 的话 WS 订阅/REST 批量行情对指数永远返回空——
-        # 表现为指数详情面板收不到实时行情推送。
-        # 带前缀查询（sh000001，指数详情链路的规范形态）归一化成裸代码查 indices，
-        # 并以查询形态返回（model_copy 不变异共享缓存对象），保证前端按 symbol 索引一致。
+        # 指数兜底：带前缀查询（sh000001，指数详情链路的规范形态）归一化成裸代码查
+        # indices，并以查询形态返回（model_copy 不变异共享缓存对象）。
+        # ⚠️ 裸 6 位代码**绝不**回退 indices（2026-09-01 P0 修复）：000001 平安银行
+        # 与上证指数、000688 国城矿业与科创50 撞码——裸代码查询曾直接命中
+        # indices 返回指数数据冒充股票行情（实测 000001 返回上证指数 3979.88）。
+        # 项目纪律：裸代码=股票，指数必须带前缀（CONTEXT.md）。
         if symbols:
             out = []
             for s in symbols:
-                q = self.quotes.get(s) or self.indices.get(s)
+                q = self.quotes.get(s)
                 if q is None and len(s) >= 3 and s[:2].lower() in ("sh", "sz", "bj"):
                     q = self.indices.get(s[2:])
                     if q is not None:
