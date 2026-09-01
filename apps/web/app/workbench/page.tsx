@@ -273,7 +273,7 @@ function WorkbenchInner() {
 
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
         <span>
-          两市成交额合计：<span className="font-mono tabular-nums text-zinc-200">{totalAmount ? fmtAmount(totalAmount) : "--"}</span>
+          两市成交额合计：<span className="font-mono tabular-nums text-zinc-700 dark:text-zinc-200">{totalAmount ? fmtAmount(totalAmount) : "--"}</span>
         </span>
         <span className="flex items-center gap-3">
           <span>

@@ -106,7 +106,7 @@ export function TradeForm({
             value={p}
             onChange={(e) => setP(e.target.value)}
             inputMode="decimal"
-            className="w-28 rounded border border-zinc-200 bg-transparent px-2 py-1 text-right font-mono text-zinc-100 outline-none focus:border-up/60 dark:border-zinc-700"
+            className="w-28 rounded border border-zinc-200 bg-transparent px-2 py-1 text-right font-mono text-zinc-900 outline-none focus:border-up/60 dark:border-zinc-700 dark:text-zinc-100"
           />
         </label>
         <label className="flex items-center justify-between gap-2">
@@ -115,7 +115,7 @@ export function TradeForm({
             value={qty}
             onChange={(e) => setQty(e.target.value.replace(/[^0-9]/g, ""))}
             inputMode="numeric"
-            className="w-28 rounded border border-zinc-200 bg-transparent px-2 py-1 text-right font-mono text-zinc-100 outline-none focus:border-up/60 dark:border-zinc-700"
+            className="w-28 rounded border border-zinc-200 bg-transparent px-2 py-1 text-right font-mono text-zinc-900 outline-none focus:border-up/60 dark:border-zinc-700 dark:text-zinc-100"
           />
         </label>
         <div className="flex justify-between text-zinc-500">

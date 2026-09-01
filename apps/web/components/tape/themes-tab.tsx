@@ -276,7 +276,7 @@ export function ThemesTab() {
             </Link>
           ))}
           <div className="flex-1" />
-          <span className="shrink-0 font-mono text-[10px] text-zinc-300 dark:text-zinc-600">
+          <span className="shrink-0 font-mono text-[10px] text-zinc-400 dark:text-zinc-600">
             同花顺 {timeText(hot.ts)}
           </span>
         </div>

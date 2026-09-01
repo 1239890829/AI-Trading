@@ -267,7 +267,7 @@ export function HeatmapTab() {
             {hover && (
               <div className="pointer-events-none absolute right-3 top-3 rounded-lg border border-zinc-200 bg-white/95 px-3 py-2 text-xs shadow-lg dark:border-zinc-700 dark:bg-zinc-900/95">
                 <div className="font-semibold">{hover.name} <span className="font-mono text-zinc-400">{hover.symbol}</span></div>
-                <div className="mt-1 space-y-0.5 font-mono text-zinc-300">
+                <div className="mt-1 space-y-0.5 font-mono text-zinc-500 dark:text-zinc-300">
                   <div>涨跌 <span className={hover.change_pct >= 0 ? "text-red-500" : "text-emerald-500"}>{pctText(hover.change_pct)}</span></div>
                   <div>价格 {hover.price != null ? hover.price : "--"}</div>
                   <div>流通市值 {fmtAmount(hover.float_cap_yi * 1e8)}</div>

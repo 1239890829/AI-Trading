@@ -188,7 +188,7 @@ export function LimitUpTab() {
                     <td className={`px-2 py-2 text-right font-mono ${pctColor(r.change_pct)}`}>{pctText(r.change_pct)}</td>
                     <td className="px-2 py-2 text-right font-mono">{r.consecutive_boards ?? "--"}</td>
                     <td className="px-2 py-2 text-right text-xs text-zinc-400">{r.boards_stat ?? "--"}</td>
-                    <td className="max-w-[260px] truncate px-2 py-2 text-xs text-zinc-300" title={r.reason ?? ""}>{r.reason ?? "--"}</td>
+                    <td className="max-w-[260px] truncate px-2 py-2 text-xs text-zinc-500 dark:text-zinc-300" title={r.reason ?? ""}>{r.reason ?? "--"}</td>
                     <td className="px-2 py-2 text-right font-mono text-xs">{(r.break_count ?? 0) > 0 ? <span className="text-amber-400">{r.break_count}</span> : "0"}</td>
                     <td className="px-2 py-2 text-right font-mono text-xs">{fmtAmount(r.seal_amount)}</td>
                     <td className="px-2 py-2 text-right font-mono text-xs">{r.turnover_rate != null ? `${fmt(r.turnover_rate)}%` : "--"}</td>

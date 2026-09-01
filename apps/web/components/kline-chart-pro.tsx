@@ -347,14 +347,14 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
   return (
     <div className={`relative flex min-h-0 flex-col ${className ?? ""}`}>
       <div className="absolute right-2 top-2 z-10 flex gap-1">
-        <button onClick={() => zoomTime(0.7)} className="h-6 w-6 rounded border border-zinc-700 bg-zinc-900/80 text-xs text-zinc-300 hover:bg-zinc-800" aria-label="放大">＋</button>
-        <button onClick={() => zoomTime(1.4)} className="h-6 w-6 rounded border border-zinc-700 bg-zinc-900/80 text-xs text-zinc-300 hover:bg-zinc-800" aria-label="缩小">−</button>
+        <button onClick={() => zoomTime(0.7)} className="h-6 w-6 rounded border border-zinc-300 bg-white/80 text-xs text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900/80 dark:text-zinc-300 dark:hover:bg-zinc-800" aria-label="放大">＋</button>
+        <button onClick={() => zoomTime(1.4)} className="h-6 w-6 rounded border border-zinc-300 bg-white/80 text-xs text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900/80 dark:text-zinc-300 dark:hover:bg-zinc-800" aria-label="缩小">−</button>
         <button
           onClick={() => {
             const n = bars.length;
             chartRef.current?.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 20), to: n + 2 });
           }}
-          className="h-6 rounded border border-zinc-700 bg-zinc-900/80 px-1.5 text-[10px] text-zinc-300 hover:bg-zinc-800"
+          className="h-6 rounded border border-zinc-300 bg-white/80 px-1.5 text-[10px] text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900/80 dark:text-zinc-300 dark:hover:bg-zinc-800"
           aria-label="回到最近20日"
         >
           20D

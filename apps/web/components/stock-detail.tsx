@@ -402,13 +402,13 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   const boardGroups = company?.board_groups;
   const boardRows: BoardRows = boardGroups
     ? [
-        ["行业", boardGroups.industry ?? [], "text-zinc-200"],
-        ["地域", boardGroups.region ?? [], "text-zinc-300"],
+        ["行业", boardGroups.industry ?? [], "text-zinc-600 dark:text-zinc-200"],
+        ["地域", boardGroups.region ?? [], "text-zinc-500 dark:text-zinc-300"],
         ["概念题材", boardGroups.concept ?? [], "text-amber-600 dark:text-amber-300"],
         ["风格 / 指数成分", boardGroups.style_index ?? [], "text-zinc-500"],
       ]
     : company?.boards?.length
-      ? [["板块", company.boards, "text-zinc-300"]] // 无分组数据（旧缓存）时回退扁平全量
+      ? [["板块", company.boards, "text-zinc-500 dark:text-zinc-300"]] // 无分组数据（旧缓存）时回退扁平全量
       : [];
 
   async function handleResetAccount() {

@@ -21,7 +21,7 @@ export function IndexCards({ indices, selected, onSelect }: Props) {
 
   return (
     <div className="shrink-0 rounded-xl border border-zinc-200 p-2 dark:border-zinc-800">
-      <button onClick={() => setOpen(!open)} className="mb-1 flex w-full items-center justify-between px-1 text-xs text-zinc-400 hover:text-zinc-200">
+      <button onClick={() => setOpen(!open)} className="mb-1 flex w-full items-center justify-between px-1 text-xs text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200">
         <span>指数{!open && indices.length > 0 ? `（${indices.length}）` : ""}</span>
         <span>{open ? "收起 ▲" : "展开 ▼"}</span>
       </button>
