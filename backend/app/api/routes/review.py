@@ -15,6 +15,7 @@ from app.review.methodology import (
 )
 from app.review.storage import (
     ALLOWED_STATUSES,
+    ActionItemStaleError,
     compare_reports,
     get_report,
     list_reports,
@@ -83,6 +84,12 @@ async def review_detail(trade_date: str, request: Request):
 class ActionItemPatch(BaseModel):
     status: str = Field(..., description="pending | confirmed | applied | rejected | reverted")
     note: str = Field("", description="处置说明；rejected/reverted 必填")
+    # id 漂移守卫（2026-09-01）：id 是 SQLite rowid 别名且无 AUTOINCREMENT，
+    # 报告重跑删除重建后 id 会被复用甚至跨交易日串号。三元组对不上 = 该 id
+    # 已不是调用方看到的那条 → 409 而不是静默写到别的改进项上。
+    trade_date: str = Field(..., description="守卫：调用方看到的改进项交易日")
+    category: str = Field(..., description="守卫：调用方看到的改进项类别")
+    title: str = Field(..., description="守卫：调用方看到的改进项标题")
 
 
 @router.patch("/review/action-items/{item_id}", dependencies=[Depends(require_write_token)])
@@ -95,16 +102,23 @@ async def patch_action_item(item_id: str, body: ActionItemPatch, request: Reques
 
     `item_id` 取自 `GET /api/review/reports/{trade_date}` 返回的
     `action_items[].id`（已回填为数据库主键，唯一可寻址）。
+    请求体里的 `trade_date/category/title` 是**乐观并发守卫**：
+    与表行现状不符时返回 409（报告已重新生成，id 已漂移），客户端刷新重取。
     """
     svc = _service(request)
     try:
         updated = update_action_item_status(
-            svc.session_factory, item_id, body.status, body.note
+            svc.session_factory, item_id, body.status, body.note,
+            expect_trade_date=body.trade_date,
+            expect_category=body.category,
+            expect_title=body.title,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
+    except ActionItemStaleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     return {"data": updated}
 
 

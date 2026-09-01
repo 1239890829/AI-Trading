@@ -7,6 +7,8 @@
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 sys.path.insert(0, ".")
 
 from app.core.db import get_engine, get_session_factory
@@ -30,6 +32,7 @@ from app.review.schemas import (
 from app.review.methodology import evaluate_historical_effectiveness
 from app.review.storage import (
     REPORT_DIR,
+    ActionItemStaleError,
     compare_reports,
     get_report,
     list_reports,
@@ -256,6 +259,20 @@ def _cleanup(sf, trade_date: str) -> None:
     (REPORT_DIR / f"{trade_date}.json").unlink(missing_ok=True)
 
 
+def _guard(item) -> dict:
+    """处置调用的守卫三元组——与路由 ActionItemPatch 的守卫字段同源。
+
+    id 漂移守卫（2026-09-01）：id 是 SQLite rowid 别名且无 AUTOINCREMENT，
+    重跑删除重建后会被复用甚至跨日串号；仅凭 id 寻址会把处置写到
+    恰好复用该 id 的别的改进项上（静默错配）。
+    """
+    return dict(
+        expect_trade_date=_TEST_TD_AI,
+        expect_category=item.category,
+        expect_title=item.title,
+    )
+
+
 def test_get_report_fills_action_item_pk():
     """改进项 id 必须回填为数据库主键——前端靠它寻址 PATCH。
 
@@ -335,7 +352,10 @@ def test_disposition_survives_regeneration():
     try:
         first = get_report(sf, _TEST_TD_AI)
         assert first is not None
-        update_action_item_status(sf, first.action_items[0].id, "rejected", note="测试：暂不处理")
+        it0 = first.action_items[0]
+        update_action_item_status(
+            sf, it0.id, "rejected", note="测试：暂不处理", **_guard(it0)
+        )
 
         # 重跑必然带新的 review_id（见 test_regenerate_same_day_does_not_accumulate_rows）
         again_report = _report_with_action_item()
@@ -448,7 +468,7 @@ def test_disposition_survives_report_reread():
         pk = first.action_items[0].id
         assert first.action_items[0].status == "pending"
 
-        update_action_item_status(sf, pk, "confirmed")
+        update_action_item_status(sf, pk, "confirmed", **_guard(first.action_items[0]))
 
         again = get_report(sf, _TEST_TD_AI)
         assert again is not None
@@ -466,13 +486,16 @@ def test_update_action_item_status_lifecycle():
     save_report(sf, _report_with_action_item())
     try:
         got = get_report(sf, _TEST_TD_AI)
-        iid = got.action_items[0].id
+        it = got.action_items[0]
+        iid = it.id
 
-        r1 = update_action_item_status(sf, iid, "confirmed", "认可，待实施")
+        r1 = update_action_item_status(
+            sf, iid, "confirmed", "认可，待实施", **_guard(it)
+        )
         assert r1["status"] == "confirmed"
         assert r1["resolved_at"] is not None
 
-        r2 = update_action_item_status(sf, iid, "applied", "已实施")
+        r2 = update_action_item_status(sf, iid, "applied", "已实施", **_guard(it))
         assert r2["status"] == "applied"
         # 再次读取应持久化，而不是只在内存里
         assert get_report(sf, _TEST_TD_AI).action_items[0].id == iid
@@ -485,11 +508,14 @@ def test_update_action_item_status_guards():
     sf = get_session_factory()
     save_report(sf, _report_with_action_item())
     try:
-        iid = get_report(sf, _TEST_TD_AI).action_items[0].id
+        got = get_report(sf, _TEST_TD_AI)
+        it = got.action_items[0]
+        iid = it.id
+        guard = _guard(it)
 
         for bad in ("done", "", "P0"):
             try:
-                update_action_item_status(sf, iid, bad)
+                update_action_item_status(sf, iid, bad, **guard)
             except ValueError:
                 pass
             else:
@@ -498,21 +524,21 @@ def test_update_action_item_status_guards():
         # 驳回与回退必须写理由——没有理由的处置后期无法归因
         for st in ("rejected", "reverted"):
             try:
-                update_action_item_status(sf, iid, st, "   ")
+                update_action_item_status(sf, iid, st, "   ", **guard)
             except ValueError:
                 pass
             else:
                 raise AssertionError(f"{st} 缺 note 应抛 ValueError")
 
         try:
-            update_action_item_status(sf, "999999999", "confirmed")
+            update_action_item_status(sf, "999999999", "confirmed", **guard)
         except LookupError:
             pass
         else:
             raise AssertionError("不存在的改进项应抛 LookupError")
 
         try:
-            update_action_item_status(sf, "not-a-number", "confirmed")
+            update_action_item_status(sf, "not-a-number", "confirmed", **guard)
         except ValueError:
             pass
         else:
@@ -526,9 +552,52 @@ def test_revert_to_pending_clears_resolved_at():
     sf = get_session_factory()
     save_report(sf, _report_with_action_item())
     try:
-        iid = get_report(sf, _TEST_TD_AI).action_items[0].id
-        assert update_action_item_status(sf, iid, "confirmed", "x")["resolved_at"]
-        assert update_action_item_status(sf, iid, "pending")["resolved_at"] is None
+        it = get_report(sf, _TEST_TD_AI).action_items[0]
+        iid = it.id
+        assert update_action_item_status(
+            sf, iid, "confirmed", "x", **_guard(it)
+        )["resolved_at"]
+        assert update_action_item_status(sf, iid, "pending", **_guard(it))["resolved_at"] is None
+    finally:
+        _cleanup(sf, _TEST_TD_AI)
+
+
+def test_patch_stale_fingerprint_rejected():
+    """id 漂移守卫：陈旧 id 必须显式失败，而不是静默写到别的改进项上。
+
+    id 是 SQLite rowid 别名且无 AUTOINCREMENT——报告重跑删除重建后 id 被
+    复用（实测 111→72），跨交易日还会串号。仅凭 id 寻址，用户拿重跑前的
+    页面点处置，结论会挂到恰好复用该 id 的不相干改进项上，全程无报错。
+    三元组守卫（trade_date/category/title）让这种错配显式失败。
+    """
+    sf = get_session_factory()
+    save_report(sf, _report_with_action_item())
+    try:
+        it = get_report(sf, _TEST_TD_AI).action_items[0]
+
+        # ① 标题对不上：该 id 在重跑后被别的标题的行复用
+        with pytest.raises(ActionItemStaleError):
+            update_action_item_status(
+                sf, it.id, "confirmed",
+                expect_trade_date=_TEST_TD_AI,
+                expect_category=it.category,
+                expect_title="重跑后才出现的另一个改进项标题",
+            )
+
+        # ② 交易日对不上：id 被另一天的行复用（跨日串号）
+        with pytest.raises(ActionItemStaleError):
+            update_action_item_status(
+                sf, it.id, "confirmed",
+                expect_trade_date="20981231",
+                expect_category=it.category,
+                expect_title=it.title,
+            )
+
+        # ③ 三元组全对 → 正常处置
+        r = update_action_item_status(
+            sf, it.id, "confirmed", "认可", **_guard(it)
+        )
+        assert r["status"] == "confirmed"
     finally:
         _cleanup(sf, _TEST_TD_AI)
 
@@ -544,12 +613,15 @@ def test_adoption_rate_reflects_disposition():
     save_report(sf, _report_with_action_item())
     try:
         got = get_report(sf, _TEST_TD_AI)
-        iid, cat = got.action_items[0].id, got.action_items[0].category
+        it = got.action_items[0]
+        iid, cat = it.id, it.category
 
         before = evaluate_historical_effectiveness(sf, None)["by_category"]
         b_cat = before.get(cat) or {"confirmed": 0, "adoption_rate": 0.0}
 
-        update_action_item_status(sf, iid, "confirmed", "认可，待实施")
+        update_action_item_status(
+            sf, iid, "confirmed", "认可，待实施", **_guard(it)
+        )
 
         after = evaluate_historical_effectiveness(sf, None)["by_category"]
         a_cat = after.get(cat)

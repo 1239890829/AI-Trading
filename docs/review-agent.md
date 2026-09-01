@@ -136,7 +136,7 @@
 | GET | `/api/review/compare?from=&to=` | 两日对比（缺口修复/情绪迁移/改进项处置） |
 | GET | `/api/review/methodology/versions` | 可用方法论版本 |
 | GET | `/api/review/effectiveness?version=` | 采纳率/回退率 + 演进建议 |
-| PATCH | `/api/review/action-items/{id}` | 处置单条改进项；body `{status, note}`；`rejected`/`reverted` 必填 note |
+| PATCH | `/api/review/action-items/{id}` | 处置单条改进项；body `{status, note, trade_date, category, title}`；`rejected`/`reverted` 必填 note；守卫三元组不符返回 409 |
 | GET | `/api/review/action-items?status=&limit=` | 改进项清单（默认 pending，按 priority/id 升序） |
 
 **改进项处置（PDCA 闭环的落点）**
@@ -144,6 +144,10 @@
 - 状态取值 `pending | confirmed | applied | rejected | reverted`；回到 `pending` = 撤销处置，清 `resolved_at`。
 - `{id}` 是 `review_action_items.id`（数据库主键），**不是** payload 里的 `AI-xxxxxxxx` 临时编号。
   `GET /api/review/reports/{trade_date}` 会把主键回填到 `action_items[].id`，前端直接拿它寻址。
+- **id 漂移守卫（2026-09-01）**：id 是 SQLite rowid 别名且无 AUTOINCREMENT，报告重跑删除重建后
+  id 会被复用甚至跨交易日串号（实测 111→72）。PATCH 请求体的 `trade_date/category/title`
+  是守卫三元组——与表行现状不符（id 已漂移）返回 **409**，客户端刷新页面重取新 id 再操作；
+  绝不静默写到恰好复用该 id 的别的改进项上。
 - **`get_report` 会用表行状态覆盖 payload 快照**：payload 是生成时快照，处置只改表行；
   不同步的话界面会表现为"点了确认、回读还是待处置"（2026-09-01 实测）。
 - 写接口走 `require_write_token`（未配 `ASHARE_API_TOKEN` 时全放行，本地 dev 零影响）。

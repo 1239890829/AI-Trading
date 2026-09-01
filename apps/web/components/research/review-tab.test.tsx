@@ -92,8 +92,19 @@ describe("ReviewTab 改进项处置闭环", () => {
     const btn = await screen.findByRole("button", { name: "确认" });
     fireEvent.click(btn);
 
+    // 守卫三元组必须随请求携带：报告重跑后 id 会漂移（rowid 复用），
+    // 裸 id 处置会静默挂到不相干的改进项上，后端靠三元组拒绝陈旧寻址
     await waitFor(() => {
-      expect(mocked.updateActionItemStatus).toHaveBeenCalledWith("42", "confirmed", "");
+      expect(mocked.updateActionItemStatus).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "42",
+          trade_date: "20260901",
+          category: "data",
+          title: "补齐阻断级数据缺失：breadth, sentiment",
+        }),
+        "confirmed",
+        "",
+      );
     });
     // 处置后要刷新有效性统计，否则右侧采纳率停留在旧值
     await waitFor(() => {
@@ -118,7 +129,14 @@ describe("ReviewTab 改进项处置闭环", () => {
     fireEvent.click(submit);
     await waitFor(() => {
       expect(mocked.updateActionItemStatus).toHaveBeenCalledWith(
-        "42", "rejected", "该缺口是偶发，不值得改",
+        expect.objectContaining({
+          id: "42",
+          trade_date: "20260901",
+          category: "data",
+          title: "补齐阻断级数据缺失：breadth, sentiment",
+        }),
+        "rejected",
+        "该缺口是偶发，不值得改",
       );
     });
   });

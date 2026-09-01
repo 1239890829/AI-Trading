@@ -265,11 +265,26 @@ ALLOWED_STATUSES = ("pending", "confirmed", "applied", "rejected", "reverted")
 NOTE_REQUIRED = ("rejected", "reverted")
 
 
+class ActionItemStaleError(Exception):
+    """PATCH 的寻址指纹与表行现状不符——id 已随报告重新生成而漂移。
+
+    `review_action_items.id` 是 SQLite rowid 别名且未加 AUTOINCREMENT，
+    `save_report` 重跑时删除重建会把 id 复用甚至跨交易日串号（2026-09-01
+    实测 111→72）。仅凭 id 寻址，用户拿陈旧页面点处置会把结论挂到
+    不相干的改进项上——那是**静默错配**，不报错、无法察觉。
+    守卫让陈旧 id 显式失败（路由映射为 409），刷新页面拿到新 id 再操作。
+    """
+
+
 def update_action_item_status(
     session_factory,
     item_id: str,
     status: str,
     note: str = "",
+    *,
+    expect_trade_date: str,
+    expect_category: str,
+    expect_title: str,
 ) -> dict:
     """变更单条改进项的处置状态。
 
@@ -280,9 +295,13 @@ def update_action_item_status(
     :param item_id: `review_action_items.id`（由 `get_report` 回填到 payload）
     :param status: 见 ALLOWED_STATUSES
     :param note: 处置说明；rejected/reverted 必填
+    :param expect_trade_date: 守卫三元组之一——调用方**看到的**改进项的交易日
+    :param expect_category: 守卫三元组之二——调用方看到的类别
+    :param expect_title: 守卫三元组之三——调用方看到的标题
     :return: 更新后的行摘要
     :raises ValueError: item_id 非整数 / 状态非法 / 必填说明缺失
     :raises LookupError: 找不到对应改进项
+    :raises ActionItemStaleError: 三元组与表行不符（id 已漂移，必须刷新重取）
     """
     if status not in ALLOWED_STATUSES:
         raise ValueError(f"status 非法：{status!r}，允许值 {ALLOWED_STATUSES}")
@@ -300,6 +319,16 @@ def update_action_item_status(
         ).scalars().first()
         if row is None:
             raise LookupError(f"改进项 {pk} 不存在")
+
+        # id 漂移守卫：id 对、内容不对 = 这个 id 已经不是用户看到的那条了。
+        # 只校验 id 会把处置写到重跑后恰好复用该 id 的别的改进项上。
+        fp = (row.trade_date, row.category, row.title)
+        expected = (expect_trade_date, expect_category, expect_title)
+        if fp != expected:
+            raise ActionItemStaleError(
+                f"改进项 {pk} 与请求指纹不符（报告重新生成后 id 会漂移）："
+                f"请求指 {expected}，表行现为 {fp}。请刷新页面后重试"
+            )
 
         row.status = status
         row.resolution_note = note.strip()

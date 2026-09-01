@@ -7,6 +7,7 @@ import {
   getReviewReport,
   getReviewReports,
   updateActionItemStatus,
+  type ActionItemRef,
   type ActionItemStatus,
   type ReviewReportDetail,
   type ReviewReportSummary,
@@ -75,13 +76,17 @@ function gapText(g: unknown): string {
  *
  * 改进项若只能看不能处置，PDCA 闭环就断在最后一环——2026-09-01 核查时
  * 107 条改进项全部 pending、采纳率 0%，根因就是缺这个入口。
+ *
+ * `item` 除 id 外还带 (trade_date, category, title) 守卫三元组：报告重跑后
+ * id 会漂移（rowid 复用），裸 id 处置会静默挂到不相干的改进项上；
+ * 守卫不符时后端返回 409，error 展示"请刷新后重试"。
  */
 function ActionItemDispose({
-  itemId,
+  item,
   status,
   onDisposed,
 }: {
-  itemId: string;
+  item: ActionItemRef;
   status: string;
   onDisposed: () => void;
 }) {
@@ -92,13 +97,13 @@ function ActionItemDispose({
   const [error, setError] = useState<string | null>(null);
 
   // 旧报告的改进项 id 是报告内临时编号（AI-xxxxxxxx），不是数据库主键 → 不可寻址
-  const addressable = /^\d+$/.test(itemId);
+  const addressable = /^\d+$/.test(item.id);
 
   async function submit(next: ActionItemStatus, withNote: string) {
     setBusy(true);
     setError(null);
     try {
-      await updateActionItemStatus(itemId, next, withNote);
+      await updateActionItemStatus(item, next, withNote);
       setPending(null);
       setNote("");
       onDisposed();
@@ -272,7 +277,11 @@ function ReportDetail({
                     {a.target && <span className="ml-1 text-zinc-600">（{a.target}）</span>}
                   </div>
                 )}
-                <ActionItemDispose itemId={a.id} status={a.status ?? "pending"} onDisposed={onDisposed} />
+                <ActionItemDispose
+                  item={{ id: a.id, trade_date: report.trade_date, category: a.category, title: a.title }}
+                  status={a.status ?? "pending"}
+                  onDisposed={onDisposed}
+                />
               </div>
             ))}
           </div>

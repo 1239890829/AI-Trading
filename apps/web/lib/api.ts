@@ -1325,6 +1325,21 @@ export async function listActionItems(status?: ActionItemStatus): Promise<Review
 }
 
 /**
+ * 处置寻址 + id 漂移守卫三元组。
+ *
+ * id 是 SQLite rowid 别名且无 AUTOINCREMENT：报告重跑删除重建后 id 会被
+ * 复用甚至跨日串号（2026-09-01 实测 111→72）。仅凭 id 寻址，重跑前打开的
+ * 页面点处置会把结论挂到恰好复用该 id 的不相干改进项上（静默错配）。
+ * 后端用 (trade_date, category, title) 校验 id 仍指向同一条内容，不符返回 409。
+ */
+export interface ActionItemRef {
+  id: string;
+  trade_date: string;
+  category: string;
+  title: string;
+}
+
+/**
  * 处置单条改进项（PDCA 闭环的落点）。
  *
  * 改进项只能产出、无法消费时，"方法论自我迭代"是空转的——2026-09-01 核查时
@@ -1332,11 +1347,18 @@ export async function listActionItems(status?: ActionItemStatus): Promise<Review
  * 噪音」的演进建议永远触发且毫无意义。
  *
  * rejected / reverted 后端强制要求 note：没有理由的处置后期无法归因。
+ * 守卫三元组不匹配时抛 ApiError(409)，message 即"请刷新后重试"的人读提示。
  */
 export async function updateActionItemStatus(
-  itemId: string,
+  item: ActionItemRef,
   status: ActionItemStatus,
   note = "",
 ): Promise<ReviewActionItem> {
-  return (await sendJson<ReviewActionItem>(`/api/review/action-items/${itemId}`, "PATCH", { status, note })).data;
+  return (await sendJson<ReviewActionItem>(`/api/review/action-items/${item.id}`, "PATCH", {
+    status,
+    note,
+    trade_date: item.trade_date,
+    category: item.category,
+    title: item.title,
+  })).data;
 }
