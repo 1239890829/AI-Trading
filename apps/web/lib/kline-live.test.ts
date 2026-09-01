@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeQuoteIntoBars } from "@/lib/kline-live";
+import { mergeQuoteIntoBars, mergeQuoteIntoMinutes } from "@/lib/kline-live";
 import type { Kline, Quote } from "@/types/market";
 
 const baseAudit = { source: "tencent", quality: "high" as const, quality_reasons: [], received_at: "t0" };
@@ -78,5 +78,83 @@ describe("mergeQuoteIntoBars", () => {
   it("quote.volume 缺失 → 保留原 bar volume", () => {
     const out = mergeQuoteIntoBars(barsToday(), quote(107.5, TODAY, null));
     expect(out![1].volume).toBe(1_000_000);
+  });
+});
+
+// ---- 分时端点实时合成（2026-09-01 秒级化配套）----
+
+interface MinutePointFixture {
+  ts: string;
+  price: number;
+  volume: number;
+  cum_amount: number;
+  cum_volume: number | null;
+  avg: number;
+  source: string;
+}
+
+function point(bjHHMM: string, price: number, cumVolume: number): MinutePointFixture {
+  // 北京时间 → UTC（小时补零：单数字小时的 ISO 串在 V8 是 Invalid Date）
+  const ts = `${TODAY}T${String((Number(bjHHMM.slice(0, 2)) - 8 + 24) % 24).padStart(2, "0")}:${bjHHMM.slice(3)}:00+00:00`;
+  return { ts, price, volume: 100, cum_amount: 5_000_000, cum_volume: cumVolume, avg: 104.8, source: "tencent" };
+}
+
+function minutesFixture(): MinutePointFixture[] {
+  return [point("14:28", 104.9, 900_000), point("14:29", 105.0, 1_000_000)];
+}
+
+function quoteAt(bjHHMM: string, price: number, volume: number | null = 1_100_000): Quote {
+  const hh = Number(bjHHMM.slice(0, 2));
+  return {
+    ...baseAudit,
+    symbol: "600519",
+    price,
+    volume,
+    data_timestamp: `${TODAY}T${String((hh - 8 + 24) % 24).padStart(2, "0")}:${bjHHMM.slice(3)}:30+00:00`,
+  };
+}
+
+describe("mergeQuoteIntoMinutes", () => {
+  it("同分钟 quote → 更新最后一点 price 与 cum_volume，前序点与 avg/source 原样", () => {
+    const out = mergeQuoteIntoMinutes(minutesFixture(), quoteAt("14:29", 105.3));
+    expect(out).not.toBeNull();
+    expect(out![0]).toEqual(minutesFixture()[0]);
+    expect(out![1].price).toBe(105.3);
+    expect(out![1].cum_volume).toBe(1_100_000);
+    expect(out![1].avg).toBe(104.8); // 均价线由后端口径算出，端上不臆造
+    expect(out![1].source).toBe("tencent");
+  });
+
+  it("价格与累计量都没动 → 返回 null（不触发重渲染）", () => {
+    expect(mergeQuoteIntoMinutes(minutesFixture(), quoteAt("14:29", 105.0, 1_000_000))).toBeNull();
+  });
+
+  it("跨分钟（刚跳到下一分钟、REST 未补点）→ 不合成，防串分钟", () => {
+    expect(mergeQuoteIntoMinutes(minutesFixture(), quoteAt("14:30", 105.3))).toBeNull();
+  });
+
+  it("quote.volume 缺失 → 保留原 cum_volume", () => {
+    const out = mergeQuoteIntoMinutes(minutesFixture(), quoteAt("14:29", 105.3, null));
+    expect(out![1].price).toBe(105.3);
+    expect(out![1].cum_volume).toBe(1_000_000);
+  });
+
+  it("无时间戳/无价/非正价 → 返回 null", () => {
+    expect(mergeQuoteIntoMinutes(minutesFixture(), { ...quoteAt("14:29", 105.3), data_timestamp: null })).toBeNull();
+    expect(mergeQuoteIntoMinutes(minutesFixture(), { ...quoteAt("14:29", 105.3), price: null })).toBeNull();
+    expect(mergeQuoteIntoMinutes(minutesFixture(), { ...quoteAt("14:29", 105.3), price: 0 })).toBeNull();
+  });
+
+  it("空数组 / quote 未到达 → 返回 null 不崩溃", () => {
+    expect(mergeQuoteIntoMinutes([], quoteAt("14:29", 105.3))).toBeNull();
+    expect(mergeQuoteIntoMinutes(minutesFixture(), undefined)).toBeNull();
+    expect(mergeQuoteIntoMinutes(minutesFixture(), null)).toBeNull();
+  });
+
+  it("不 mutate 原数组", () => {
+    const src = minutesFixture();
+    mergeQuoteIntoMinutes(src, quoteAt("14:29", 105.3));
+    expect(src[1].price).toBe(105.0);
+    expect(src[1].cum_volume).toBe(1_000_000);
   });
 });
