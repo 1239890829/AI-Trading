@@ -235,7 +235,7 @@ async def _tech_scores(provider, symbols, days, limiter=None) -> tuple[dict, dic
     return out, chg
 
 
-async def build_daily_ranked(days_n: int, top_n: int, limiter=None) -> dict:
+async def build_daily_ranked(days_n: int, top_n: int, limiter=None, weight_mode: str = "blended") -> dict:
     """拉取历史数据并构建每日候选评分（与策略参数无关，供 sweep 复用）。
 
     拆出来的原因：拉一次数据可以评估多组参数（换股上限/门槛），
@@ -295,7 +295,12 @@ async def build_daily_ranked(days_n: int, top_n: int, limiter=None) -> dict:
             else:
                 return None  # 非 carryover 且今日不在涨停池 → 无分可给
             t_score = tech.get(sym, {}).get(d)
-            if t_score is None:
+            # weight_mode（消融验证 P3，2026-09-01 用户批准）：blended=梯队×0.6+技术×0.4
+            # （现行口径）；tech_only=纯技术分（梯队维消融对照）。
+            # 消融口径下技术分缺失给中性 50（不能因缺数据把票变相踢出对照）。
+            if weight_mode == "tech_only":
+                score, note = (round(t_score, 1), "") if t_score is not None else (50.0, "技术分缺失，中性 50")
+            elif t_score is None:
                 # 技术分缺失时只用梯队分，并标注（不臆造）
                 score, note = e_score, "技术分缺失，仅按梯队分"
             else:
@@ -347,9 +352,10 @@ async def run(
     max_picks: int = MAX_PICKS,
     max_swaps: int | None = MAX_SWAPS_PER_DAY,
     limiter=None,
+    weight_mode: str = "blended",
 ) -> dict:
     """跑一次完整回放：拉数据 + 按给定策略参数评估。"""
-    built = await build_daily_ranked(days_n, top_n, limiter)
+    built = await build_daily_ranked(days_n, top_n, limiter, weight_mode=weight_mode)
     return evaluate(built, threshold=threshold, max_picks=max_picks, max_swaps=max_swaps)
 
 
@@ -481,18 +487,68 @@ def main() -> None:
     ap.add_argument("--rate-limit", type=float, default=8.0, help="每秒最多发起几个数据请求（批量任务节流阀）")
     ap.add_argument("--force", action="store_true", help="交易时段内强制运行（默认拒绝）")
     ap.add_argument("--out", type=str, default="")
+    ap.add_argument(
+        "--weight-mode",
+        type=str,
+        default="blended",
+        choices=["blended", "tech_only"],
+        help="blended=梯队×0.6+技术×0.4（现行）；tech_only=纯技术（消融对照）",
+    )
+    ap.add_argument(
+        "--compare-ablation",
+        action="store_true",
+        help="消融对照：blended 与 tech_only 各跑一遍，输出并排对照表（消融验证 P3）",
+    )
     args = ap.parse_args()
 
     _assert_off_hours(args.force)
     limiter = RateLimiter(args.rate_limit)
-    result = asyncio.run(
-        run(args.days, args.top, args.threshold, max_swaps=(args.max_swaps or None), limiter=limiter)
-    )
-    report = render(result)
+
+    if args.compare_ablation:
+        # 消融对照（P3）：同一时段、同一门槛参数，仅权重口径不同。
+        # 差值即「梯队维的边际贡献」；30 个交易日后配合 T+3 超额收益出验收结论。
+        blended = asyncio.run(
+            run(args.days, args.top, args.threshold, max_swaps=(args.max_swaps or None),
+                limiter=limiter, weight_mode="blended")
+        )
+        tech_only = asyncio.run(
+            run(args.days, args.top, args.threshold, max_swaps=(args.max_swaps or None),
+                limiter=limiter, weight_mode="tech_only")
+        )
+        b_stat, t_stat = blended["stats"], tech_only["stats"]
+        lines = [
+            "# 消融对照：六维混合权重 vs 纯技术分（梯队维消融）",
+            "",
+            f"回放区间：{args.days} 个交易日 · 门槛 {args.threshold} · 每日换股上限 {args.max_swaps}",
+            "",
+            "| 指标 | blended（现行） | tech_only（对照） |",
+            "|---|---|---|",
+            f"| 交易日数 | {b_stat['days']} | {t_stat['days']} |",
+            f"| 日均换手% | {b_stat['avg_turnover_pct']} | {t_stat['avg_turnover_pct']} |",
+            f"| 平均持有天数 | {b_stat['avg_holding_days']} | {t_stat['avg_holding_days']} |",
+            f"| 涉及标的数 | {b_stat['unique_symbols']} | {t_stat['unique_symbols']} |",
+            f"| 日均组合分 | {_avg_score(blended)} | {_avg_score(tech_only)} |",
+            "",
+            "（组合收益对照需配合 T+3 超额验收，见联动方案 P3 验收标准；",
+            " 30 个交易日后跑 `--days 30 --compare-ablation --out docs/ablation-report.md` 出正式报告）",
+        ]
+        report = "\n".join(lines)
+    else:
+        result = asyncio.run(
+            run(args.days, args.top, args.threshold, max_swaps=(args.max_swaps or None),
+                limiter=limiter, weight_mode=args.weight_mode)
+        )
+        report = render(result)
     print(report)
     if args.out:
         Path(args.out).write_text(report, encoding="utf-8")
         print(f"\n[已写入 {args.out}]", file=sys.stderr)
+
+
+def _avg_score(result: dict) -> float | None:
+    """回放结果里每日组合分的均值（对照表用；daily 为逐日轨迹）。"""
+    vals = [p.get("score_avg") for p in result.get("daily", []) if isinstance(p.get("score_avg"), (int, float))]
+    return round(sum(vals) / len(vals), 2) if vals else None
 
 
 if __name__ == "__main__":

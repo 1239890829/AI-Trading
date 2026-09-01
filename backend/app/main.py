@@ -16,7 +16,6 @@ from app.api.routes import news as news_route
 from app.api.routes import paper as paper_route
 from app.api.routes import predict as predict_route
 from app.api.routes import review as review_route
-from app.api.routes import screener as screener_route
 from app.api.routes import watchlist as watchlist_route
 from app.api.routes import alert as alert_route
 from app.api.routes import risk as risk_route
@@ -48,7 +47,6 @@ from app.review.models import (  # noqa: F401  注册复盘三张表
 )
 from app.review.service import ReviewService, review_scheduler
 from app.services.snapshot_service import MarketSnapshotService
-from app.services.screener_service import ScreenerService
 from app.services.theme_catalog_service import ThemeCatalogService
 from app.services.quote_hub import QuoteHub
 from app.market.sentiment_history import SentimentHistoryRow  # noqa: F401  注册情绪序列表
@@ -130,7 +128,6 @@ async def lifespan(app: FastAPI):
     app.state.snapshot_service = snapshot_service
 
     # --- 全市场选股器（Phase 5）：快照截面过滤 + TDX 日K 技术评分卡 ---
-    app.state.screener_service = ScreenerService(parquet_dir=Path(settings.parquet_dir))
 
     # --- 风险引擎（Phase 5）：市场状态 + 仓位参数 + 订单预检 ---
     risk_engine = RiskEngine(hub=hub, snapshot_service=snapshot_service, session_factory=get_session_factory())
@@ -293,7 +290,6 @@ app.add_middleware(
 app.include_router(health_route.router, prefix="/api")
 app.include_router(market_route.router, prefix="/api")
 app.include_router(backtest_route.router, prefix="/api")
-app.include_router(screener_route.router, prefix="/api")
 app.include_router(watchlist_route.router, prefix="/api")
 app.include_router(paper_route.router, prefix="/api")
 app.include_router(review_route.router, prefix="/api")

@@ -641,6 +641,22 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
     # ⑤ 换股门槛（昨日组合；prev_symbols 已在 ①a 载入，此处不重复查库）
     kept, replaced = apply_replacement_threshold(prev_symbols, ranked)
 
+    # ⑤a 落选者落库（消融验证 P3 数据地基，2026-09-01 用户批准启动）：
+    # 深评过但未进组合的候选（分数不够/门槛拦截/上限截断），精简摘要 + tech 分——
+    # 30 个交易日积累后，tech-only 对照回放回答「六维组合是否优于单维筛选」
+    kept_symbols = {k["symbol"] for k in kept}
+    rejected = [
+        {
+            "symbol": r["symbol"],
+            "name": r["name"],
+            "score": r["score"],
+            "tech": (r.get("sub_scores") or {}).get("tech"),
+            "rank": i + 1,
+        }
+        for i, r in enumerate(ranked)
+        if r["symbol"] not in kept_symbols
+    ][:20]
+
     # ⑥ 卡片组装（含风险档位与出场纪律参考）+ 空仓闸门处理 + 持久化
     items = [_assemble_card(k) for k in kept]
     items = apply_gate_to_picks(items, gate)
@@ -662,18 +678,21 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
         from app.models.daily_pick import DailyPickSet
 
         row = db.execute(select(DailyPickSet).where(DailyPickSet.date == today)).scalar_one_or_none()
+        rejected_json = json.dumps(rejected, ensure_ascii=False)
         if row is None:
             row = DailyPickSet(
                 date=today,
                 items=json.dumps(items, ensure_ascii=False),
                 meta=json.dumps(meta, ensure_ascii=False),
                 replaced=json.dumps(replaced, ensure_ascii=False),
+                rejected=rejected_json,
             )
             db.add(row)
         else:
             row.items = json.dumps(items, ensure_ascii=False)
             row.meta = json.dumps(meta, ensure_ascii=False)
             row.replaced = json.dumps(replaced, ensure_ascii=False)
+            row.rejected = rejected_json
         db.commit()
     return {"data": {"date": today, "items": items, "replaced": replaced, "meta": meta}, "meta": {}}
 

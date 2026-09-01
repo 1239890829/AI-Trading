@@ -26,7 +26,9 @@ def test_market_overview_filled_after_initial_refresh():
         first = data["indices"][0]
         for key in ("symbol", "name", "price", "change_pct", "source", "quality", "received_at"):
             assert key in first
-        assert data["total_amount"] > 0
+        # 成交额口径（2026-09-01）：全市场快照求和；测试环境无快照 → None（诚实缺失）
+        ta = data["total_amount"]
+        assert ta is None or ta > 0
         meta = resp.json()["meta"]
         assert meta["provider"] == "mock"
         assert meta["is_realtime"] is False  # mock 永远不许标记为实时

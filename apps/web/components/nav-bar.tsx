@@ -14,7 +14,7 @@ const LINKS = [
   // /themes /limit-up /boards /longhu → 盘面页四 tab（/tape?tab=…）
   // /heatmap → 市场页云图 tab；/watchlist → 工作台管理模式
   // /backtest /alerts → 研究页（/research?tab=…）；旧路由经 next.config 302
-  // /screener（与每日精选定位冲突，页面保留、导航移除）
+  // /screener 已彻底删除（2026-09-01 用户拍板）：页面/端点/服务全清，tech_score 评分内核被每日精选复用保留
 ];
 
 export function NavBar() {

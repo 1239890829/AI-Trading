@@ -25,6 +25,9 @@ class DailyPickSet(Base):
     items: Mapped[str] = mapped_column(String(8192), default="[]")  # JSON：精选卡片数组
     meta: Mapped[str] = mapped_column(String(2048), default="{}")  # JSON：权重/市场状态/候选池统计
     replaced: Mapped[str] = mapped_column(String(1024), default="[]")  # JSON：换股记录 [{out, in, delta}]
+    # JSON：深评落选者摘要 [{symbol, name, score, tech, rank}]（≤20 条）——
+    # 消融验证（联动方案 P3）的数据地基：tech-only 对照回放 30 日后验收「组合 vs 单维」
+    rejected: Mapped[str] = mapped_column(String(16384), default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
