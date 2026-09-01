@@ -38,6 +38,10 @@ cd backend && .venv/bin/python -m pyflakes app tests            # 0
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
+**发布前额外做一次接口载荷体检**（plan-review 三.7，2026-09-01 纳入）：
+`node scripts/api-sweep.js`（服务在跑时）——它能抓出"HTTP 200 但数据是空的"这类
+测试与类型检查都发现不了的问题（CI 无真实数据跑不了，只能本地/部署后跑）。
+
 CI（GitHub Actions）：后端 pytest+pyflakes、前端 tsc+eslint+vitest+build。推送后**自查 CI**
 （`source ~/.zshenv` 拿 GITHUB_TOKEN → `/actions/runs?head_sha=<完整SHA>` → jobs → logs），绝不问用户。
 

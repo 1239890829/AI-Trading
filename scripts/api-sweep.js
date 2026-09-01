@@ -101,6 +101,14 @@ async function main() {
   const spec = await (await fetch(`${BASE}/openapi.json`)).json();
   const targets = [];
 
+  // event_id 是自增序列（今天 386，明天就不是了）——写死必然过期，运行时取一个真实值
+  try {
+    const r = await fetch(`${BASE}/api/events?limit=1`);
+    const j = await r.json();
+    const firstId = j?.data?.items?.[0]?.id;
+    if (firstId != null) PATH_VALUES.event_id = String(firstId);
+  } catch {}
+
   for (const [path, ops] of Object.entries(spec.paths)) {
     const get = ops.get;
     if (!get) continue;
