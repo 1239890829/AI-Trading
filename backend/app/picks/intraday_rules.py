@@ -57,6 +57,29 @@ def _theme_threshold(now_minutes: int | None) -> float:
     return CONFIRM_THEME_PCT_LATE
 
 
+def compute_volume_ratio(
+    vol_today: float | None,
+    vol_prev_day: float | None,
+    now_minutes: int | None,
+) -> float | None:
+    """近似量比（§5.1#4 降级口径：板块成交额历史未落库前用，2026-09-02 接线）。
+
+    = 当日累计量 / 昨日全天量 / 已开市时间占比——等价于"当日每分钟均量 vs
+    昨日每分钟均量"（240 分钟基准），与 minute_signals 的 breakout 量比同口径。
+    已开市占比 clamp ≥1/240（开盘首分钟）防除零；vol_today<=0（未开市/停牌）
+    直接 None，不走放大路径。
+    缺任一输入（含昨日量 <=0）→ None（unknown 三态，绝不臆造）。
+    精确同期基线（TDX 5 分钟累计量，load_vr_baseline）待批次 D 落库后切换；
+    本函数纯计算零 IO，输入的量纲一致性（均为股）由调用方保证。
+    """
+    if not vol_today or not vol_prev_day or vol_prev_day <= 0 or now_minutes is None:
+        return None
+    am = min(max(now_minutes - 570, 0), 120)   # 9:30–11:30
+    pm = min(max(now_minutes - 780, 0), 120)   # 13:00–15:00
+    elapsed = min(max((am + pm) / 240, 1 / 240), 1.0)
+    return round(vol_today / vol_prev_day / elapsed, 2)
+
+
 # ---------------------------------------------------------------- 盘前方向排序（§4.2）
 
 
@@ -222,7 +245,7 @@ def entry_mode(theme_stage: str | None, phase: str | None) -> tuple[str, str]:
     if phase in _EBB_PHASES:
         return "观望", f"市场相位「{phase}」，仅记录不提醒"
     if theme_stage == "退潮":
-        return "观望", f"题材阶段「退潮」"
+        return "观望", "题材阶段「退潮」"
     if theme_stage == "分歧":
         return "潜伏", "题材高位分歧，等回调企稳低吸，不追高"
     if theme_stage == "高潮":
@@ -381,7 +404,7 @@ def build_alert(
         f"5. 止损：{stop if stop is not None else '缺数据，不给止损位'}",
         f"6. 仓位建议：{position}%（确认强度 {confirm.get('strength')}）",
         f"7. 风险点：{'；'.join(risks) if risks else '无特别风险标注'}",
-        f"8. 状态：非投资建议，模拟跟踪"
+        "8. 状态：非投资建议，模拟跟踪"
         + (f"；数据缺失项：{'、'.join(unknown_lines)}" if unknown_lines else ""),
     ]
     return "\n".join(lines)

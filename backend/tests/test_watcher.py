@@ -206,6 +206,135 @@ def test_beat_themes_from_pool_aggregation():
     assert themes["种业"]["leader_symbol"] == "600003"   # 4 板 > 3 板，不按出现顺序
     # unknown 字段显式存在（confirm_signal/falsify_signal 按 None 处理）
     assert themes["粮食"]["pct"] is None and themes["粮食"]["limit_down"] is None
+    assert themes["粮食"]["volume_ratio"] is None
+    # members 按板数降序（量比取最强成员用）
+    assert themes["粮食"]["members"] == ["600001", "600002"]
+
+
+# ---------------------------------------------------------------- 量比接线（§5.1#4 降级口径，2026-09-02）
+
+
+def test_compute_volume_ratio_basic_and_clamps():
+    from app.picks.intraday_rules import compute_volume_ratio as vr
+
+    # 11:30（720 分钟）：已开市 120 分钟，当日量 = 昨日量 → 量比 = 1 / (120/240) = 2.0
+    assert vr(1000.0, 1000.0, 720) == 2.0
+    # 收盘（900 分钟）：elapsed=1.0 → 直接比值
+    assert vr(1500.0, 1000.0, 900) == 1.5
+    # 开盘首分钟 clamp：1 分钟量 / (昨日量/240)
+    assert vr(10.0, 2400.0, 571) == 1.0
+    # 缺任一输入 / 未开市无量 / 昨日量非正 → unknown
+    assert vr(None, 1000.0, 600) is None
+    assert vr(100.0, None, 600) is None
+    assert vr(0.0, 1000.0, 600) is None
+    assert vr(100.0, 0.0, 600) is None
+    assert vr(100.0, 1000.0, None) is None
+
+
+def test_attach_volume_ratios_max_of_members_and_daily_cache(monkeypatch):
+    """量比 = 题材成员最大值；昨日量按日缓存（None 也缓存，当日不重试）。"""
+    import asyncio
+
+    import app.picks.watcher as w
+
+    kline_calls: list[str] = []
+
+    class _K(NS):
+        pass
+
+    def _kline(sym):
+        kline_calls.append(sym)
+        # 昨日量 1000 股（最后一根昨日 bar + 一根今日 bar 应被过滤）
+        return [
+            NS(volume=1000.0, ts=__import__("datetime").datetime(2026, 9, 1)),
+            NS(volume=9999.0, ts=__import__("datetime").datetime(2026, 9, 2)),
+        ]
+
+    async def fake_get_kline(self_sym, tf):
+        return _kline(self_sym)
+
+    class _Quote(NS):
+        pass
+
+    async def fake_get_quotes(syms):
+        return [_Quote(symbol=s, volume=500.0) for s in syms]
+
+    hub = NS(provider=NS(get_kline=lambda s, tf: None), get_quotes=fake_get_quotes)
+
+    started = {"n": 0}
+
+    def _prev(s):
+        started["n"] += 1
+        return _kline(s)[-2].volume  # 昨日 1000
+
+    async def _prev_async(hub_, s):
+        return _prev(s)
+
+    monkeypatch.setattr(w, "_prev_day_volume", _prev_async)
+
+    themes = {
+        "粮食": {"members": ["600001", "600002"]},
+        "种业": {"members": ["600003"]},
+    }
+    cache = {"date": "", "vols": {}}
+    # 10:00（600 分钟）已开市 30 分钟：量比 = 500/1000/(30/240) = 4.0
+    asyncio.run(w._attach_volume_ratios(hub, themes, cache, "20260902", 600))
+    assert themes["粮食"]["volume_ratio"] == 4.0
+    assert themes["种业"]["volume_ratio"] == 4.0
+    assert started["n"] == 3 and cache["date"] == "20260902"
+    # 第二拍：昨日量走缓存不重拉，当日量重取
+    asyncio.run(w._attach_volume_ratios(hub, themes, cache, "20260902", 600))
+    assert started["n"] == 3
+
+
+def test_attach_volume_ratios_prev_none_stays_unknown(monkeypatch):
+    """昨日量拉不到（缓存 None）→ 量比 unknown，绝不臆造；换日后重试。"""
+    import asyncio
+
+    import app.picks.watcher as w
+
+    calls = {"n": 0}
+
+    async def no_prev(hub_, s):
+        calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(w, "_prev_day_volume", no_prev)
+
+    async def fake_get_quotes(syms):
+        return [NS(symbol=s, volume=500.0) for s in syms]
+
+    hub = NS(provider=NS(), get_quotes=fake_get_quotes)
+    themes = {"粮食": {"members": ["600001"]}}
+    cache = {"date": "", "vols": {}}
+    asyncio.run(w._attach_volume_ratios(hub, themes, cache, "20260902", 600))
+    assert themes["粮食"]["volume_ratio"] is None
+    assert calls["n"] == 1
+    # 同日不重试
+    asyncio.run(w._attach_volume_ratios(hub, themes, cache, "20260902", 600))
+    assert calls["n"] == 1
+    # 换日重建缓存 → 重试
+    asyncio.run(w._attach_volume_ratios(hub, themes, cache, "20260903", 600))
+    assert calls["n"] == 2
+
+
+def test_attach_volume_ratios_snapshot_failure_stays_unknown(monkeypatch):
+    """快照批量失败 → 全部量比 unknown（不阻断其他判定项）。"""
+    import asyncio
+
+    import app.picks.watcher as w
+
+    async def broken(syms):
+        raise RuntimeError("down")
+
+    async def prev_ok(hub_, s):
+        return 1000.0
+
+    hub = NS(provider=NS(), get_quotes=broken)
+    themes = {"粮食": {"members": ["600001"]}}
+    cache = {"date": "20260902", "vols": {"600001": 1000.0}}
+    asyncio.run(w._attach_volume_ratios(hub, themes, cache, "20260902", 600))
+    assert themes["粮食"]["volume_ratio"] is None
 
 
 def test_refresh_env_cache_and_fallback(monkeypatch):

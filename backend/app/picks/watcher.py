@@ -19,14 +19,17 @@
     {"now_minutes": int, "trading": bool,
      "themes": {题材: {"pct": float|None, "limit_up": int|None, "max_boards": int|None,
                         "leader_symbol": str|None, "leader_name": str|None,
-                        "leader_pct": float|None, "limit_down": int|None}},
+                        "leader_pct": float|None, "limit_down": int|None,
+                        "volume_ratio": float|None, "members": [str, ...]}},
      "env": {"phase": str|None, "promo_percentile": float|None}}
 
-数据源（第一版口径，缺什么在 beat 里显式 unknown，绝不冒充）：
+数据源（缺什么在 beat 里显式 unknown，绝不冒充）：
 - 题材归因：ths 涨停池 parse_theme_tags → 家数/最高板/龙头（连板最高成员）
 - 板块涨幅：东财 get_board_metrics 概念+行业（provider 内已按 total 翻页）；
   题材名 → 板块名精确匹配，失败取"包含关系且板块名最短"，仍无 = unknown
-- volume_ratio：数据源暂缺 → 恒 unknown，确认强度会被压档（设计行为）
+- volume_ratio：近似量比（§5.1#4 降级口径）= 快照当日累计量 / 昨日全天量
+  / 已开市占比，取题材内最强成员（max）；昨日量按日缓存，失败 = unknown。
+  精确基线（TDX 同期累计量）待批次 D 落库后切换
 - limit_down：数据源暂缺 → None，falsify 的 leader_break 触发器不激活
 - 环境：compute_market_sentiment 每 env_refresh_seconds 刷新缓存；
   刷新失败沿用上次值（不猜新值）——盘中60s/拍全量重算情绪太重且浪费配额
@@ -60,6 +63,7 @@ log = logging.getLogger(__name__)
 #: watcher 专用系统规则名（record_trigger 的外键要求 rule 存在；get-or-create）
 WATCHER_RULE_NAME = "__picks_watcher__"
 MAX_ALERTS_PER_DIRECTION = 3   # 每方向每日确认提醒上限（防龙头轮动刷屏）
+VR_MEMBERS_CAP = 5             # 量比计算的题材成员上限（按板数取最强 5 只）
 
 
 # ---------------------------------------------------------------- 纯函数：板块匹配
@@ -276,15 +280,23 @@ class IntradayWatcher:
 
 
 def _beat_themes_from_pool(pool: list) -> dict[str, dict]:
-    """涨停池 → 每题材的盘中节拍（家数/最高板/龙头=连板最高成员）。"""
+    """涨停池 → 每题材的盘中节拍（家数/最高板/龙头=连板最高成员）。
+
+    members：按板数降序的成员代码表（cap VR_MEMBERS_CAP）——量比按
+    "题材内最强成员"计算（max），龙头封板后自身量比衰减不失真。
+    """
     themes: dict[str, dict] = {}
     for r in pool:
         boards = int(r.consecutive_boards or 1)
         for raw in parse_theme_tags(getattr(r, "reason", None)):
             tag = normalize_theme(raw)
-            st = themes.setdefault(tag, {"limit_up": 0, "max_boards": 0, "_leader": None})
+            st = themes.setdefault(
+                tag,
+                {"limit_up": 0, "max_boards": 0, "_leader": None, "_members": []},
+            )
             st["limit_up"] += 1
             st["max_boards"] = max(st["max_boards"], boards)
+            st["_members"].append((boards, r.symbol))
             cur = st["_leader"]
             if cur is None or boards > cur["boards"]:
                 st["_leader"] = {
@@ -295,12 +307,15 @@ def _beat_themes_from_pool(pool: list) -> dict[str, dict]:
                 }
     for st in themes.values():
         ld = st.pop("_leader") or {}
+        members = [s for _, s in sorted(st.pop("_members"), reverse=True)]
+        st["members"] = members[:VR_MEMBERS_CAP]
         st["leader_symbol"] = ld.get("symbol")
         st["leader_name"] = ld.get("name")
         st["leader_boards"] = ld.get("boards")
         st["leader_pct"] = ld.get("pct")
         st.setdefault("pct", None)       # 板块涨幅待东财匹配，先置 unknown
         st.setdefault("limit_down", None)  # 数据源暂缺 → leader_break 触发器不激活
+        st.setdefault("volume_ratio", None)  # 待快照+昨日量计算，先置 unknown
     return themes
 
 
@@ -350,6 +365,69 @@ async def _refresh_env(state, env_cache: dict, refresh_after: float) -> dict:
     return env_cache.get("env") or fresh
 
 
+async def _prev_day_volume(hub, symbol: str) -> float | None:
+    """昨日全天量（股）。腾讯日线 qfqday 盘中含今日未完成 bar——过滤掉
+    ts 日期 ≥ 今日（北京）后取最后一根；过滤后为空 = 无昨日数据 → None。
+    量纲：Kline.volume 已 ×100 成股，与快照 Quote.volume 同单位。
+    失败返回 None（unknown），调用方缓存后当日不重试。
+    """
+    try:
+        from datetime import timedelta
+
+        from app.market.trading_status import beijing_now as _now
+
+        klines = await hub.provider.get_kline(symbol, "1d")
+        today = _now().date()
+        prev = [
+            k for k in (klines or [])
+            if k.volume is not None and (k.ts + timedelta(hours=8)).date() < today
+        ]
+        return float(prev[-1].volume) if prev else None
+    except Exception as exc:
+        log.debug("watcher vr: prev-day volume %s failed: %s", symbol, exc)
+        return None
+
+
+async def _attach_volume_ratios(
+    hub, themes: dict[str, dict], vr_cache: dict, today_key: str, now_minutes: int | None,
+) -> None:
+    """为每题材附 volume_ratio = max(成员近似量比)（§5.1#4 降级口径接线）。
+
+    - 当日累计量：hub.get_quotes 快照（股，腾讯量纲已 ×100）；
+    - 昨日全天量：按日缓存 {date, vols:{symbol: 股|None}}，None 当日不重试；
+    - max 语义 = 题材内最强量能，龙头封板后自身量比衰减不失真；
+    - 任一环失败 → 该题材 volume_ratio 保持 None（unknown），绝不臆造。
+    """
+    from app.picks.intraday_rules import compute_volume_ratio
+
+    symbols = {s for st in themes.values() for s in (st.get("members") or [])}
+    if not symbols:
+        return
+    if vr_cache.get("date") != today_key or "vols" not in vr_cache:
+        vr_cache.clear()
+        vr_cache["date"] = today_key
+        vr_cache["vols"] = {}
+    vols_cache: dict = vr_cache["vols"]
+    for s in sorted(symbols):
+        if s not in vols_cache:
+            vols_cache[s] = await _prev_day_volume(hub, s)
+    try:
+        quotes = await hub.get_quotes(sorted(symbols))
+    except Exception as exc:
+        log.warning("watcher vr: snapshot quotes failed: %s（量比全部 unknown）", exc)
+        quotes = []
+    vol_today = {q.symbol: q.volume for q in quotes or [] if q.volume}
+    for st in themes.values():
+        ratios = [
+            r for r in (
+                compute_volume_ratio(vol_today.get(s), vols_cache.get(s), now_minutes)
+                for s in (st.get("members") or [])
+            )
+            if r is not None
+        ]
+        st["volume_ratio"] = max(ratios) if ratios else None
+
+
 async def collect_beat_inputs(app, env_cache: dict, *, env_refresh_seconds: float) -> dict:
     """一拍取数：交易日历 → ths 涨停池归因 → 东财板块匹配 → 环境缓存。
 
@@ -389,6 +467,14 @@ async def collect_beat_inputs(app, env_cache: dict, *, env_refresh_seconds: floa
     beat["board_count"] = board_count
     for tag, st in themes.items():
         st["pct"] = match_board_pct(tag, board_pct)
+
+    # 量比接线（§5.1#4 降级口径）：快照当日量 + 昨日量按日缓存。
+    # 失败路径全部落 unknown——量比判不出来时 confirm 只是缺一项，不阻断其他判定。
+    vr_cache = getattr(state, "picks_vr_cache", None)
+    if vr_cache is None:
+        vr_cache = {"date": "", "vols": {}}
+        state.picks_vr_cache = vr_cache
+    await _attach_volume_ratios(hub, themes, vr_cache, td.strftime("%Y%m%d"), beat["now_minutes"])
 
     beat["themes"] = themes
     beat["env"] = await _refresh_env(state, env_cache, env_refresh_seconds)
