@@ -21,6 +21,7 @@ data/parquet/*
 data/snapshots/*
 data/cache/*
 data/imports/*
+data/picks/*
 data/review/*
 !data/*/.gitkeep
 *.sqlite3

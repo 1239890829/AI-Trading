@@ -168,9 +168,18 @@
 
 | 批次 | 内容 | 状态 |
 |---|---|---|
-| **A（本次开始）** | `picks/intraday_rules.py` 规则引擎（rank/confirm/falsify/entry_mode/ebb_or_end/entry_plan/build_alert，纯函数+全量测试）；`score_sentiment` 接校准分位；`score_news` 事件强度 | 🚧 本轮 |
-| B | 盘前节拍（morning brief 生成+落库+API）+ `picks/watcher.py` 盘中调度 + 提醒分发与去重 | 待 A 完 |
+| **A** | `picks/intraday_rules.py` 规则引擎（rank/confirm/falsify/entry_mode/ebb_or_end/entry_plan/build_alert，纯函数+全量测试）；`score_sentiment` 接校准分位；`score_news` 事件强度 | ✅ 2026-09-02（commit `482601a`） |
+| **B** | 盘前节拍（morning brief 生成+落盘+API）+ `picks/watcher.py` 盘中调度 + 提醒分发与去重 | ✅ 2026-09-02（见下方实现注记） |
 | C | 复盘对照任务 + 胜率统计 API + 前端「盘中跟踪」页 + predict 页简报卡 | 待 B 完 |
 | D | 板块热度时序落库（前向）+ 回测框架 + 网格调参报告 + `get_capital_flow` 实测定源 | 待 C 完 |
+
+### 批次 B 实现注记（2026-09-02）
+
+- `picks/morning_brief.py`：`collect_evidence`（事件强度/涨停池题材聚合/情绪环境三路证据，失败进 `missing` 显式呈现）→ `assemble_brief`（**纯函数**，rank_directions top3 + 每方向标的池≤10/触发 5 条/证伪 4 条/entry_mode）→ `build_and_save`。盘前证据池日期走 `_evidence_pool_date`：**09:25 前取上一交易日**（当日盘前池必空，直接取 `last_trade_date` 会让题材动能全体归零且界面看不出是口径错）。
+- **持久化改文件**（`data/picks/briefs/YYYYMMDD.json`，原子写），不用 prediction_reports 表——predict 的 `save_report` 按 target_date 单键 upsert，同表共存时周末预判与盘中简报会互相覆盖；`get_report` 也会把简报误当预判返回。批次 C 若需 SQL 检索再加镜像。
+- `picks/watcher.py`：`DirectionTracker` 纯状态机（峰值/转负计数/证伪一次性/确认提醒按 (方向,个股) 当日去重、每方向每日上限 3 条防龙头轮动刷屏）+ `IntradayWatcher` + `collect_beat_inputs`（ths 涨停池归因 + 东财板块涨幅精确/最短包含匹配，匹配不到=unknown）+ `watcher_loop`（`in_trading_window` 内每 60s 一拍）。提醒分发：`append_alert` 去重 → 系统规则 `__picks_watcher__` → `record_trigger` → NotifierRegistry。
+- API：`POST /api/picks/morning-brief/generate`、`GET /api/picks/morning-brief/today`、`GET /api/picks/watcher/state`、`POST /api/picks/watcher/beat`（手动单拍与 watcher_loop 走同一代码路径）。
+- 配置：`premarket_brief_enabled/hour/minute`、`picks_watcher_enabled/interval_seconds/env_refresh_seconds`（env 缓存默认 10 分钟，全量情绪计算不必每拍重算）。
+- 已知边界（第一版诚实降级）：volume_ratio 与板块内跌停数数据源缺 → 恒 unknown（量比压确认强度档位；leader_break 触发器不激活）；沙箱时钟非交易时段无法验证 trading=True 的真实取拍，状态机由 24 条单测锁定，盘中实证待用户重启后端后自然发生。
 
 **依赖与风险**：真实推送通道缺（P1 阻塞，in-app 先顶）；东财个股资金流本机曾测不可达（D 批实测决定）；消息面回测不可行（§8 前向积累）；沙箱内后台进程会被收割（watcher 验证走单调用取证法）。

@@ -62,6 +62,20 @@ class Settings(BaseSettings):
     # 稳态下每轮只拉 1–2 天 × 2 个请求，配额开销可忽略。
     sentiment_history_backfill_interval_seconds: float = 21600.0
 
+    # ---- 盘前简报与盘中跟踪（选股 2.0，批次 B）----
+    # 盘前简报：交易日 08:40 自动生成（方向排序 + 标的池 + 触发/证伪条件），
+    # 落盘 data/picks/briefs/YYYYMMDD.json；POST /api/picks/morning-brief/generate 可手动重跑
+    premarket_brief_enabled: bool = True
+    premarket_brief_hour: int = 8
+    premarket_brief_minute: int = 40
+    # 盘中跟踪：以当日简报为跟踪清单，交易时段内按 interval 取拍（ths 涨停池 +
+    # 东财板块涨幅），确认/证伪判定走 intraday_rules（与回测同一份代码）
+    picks_watcher_enabled: bool = True
+    picks_watcher_interval_seconds: float = 60.0
+    # 环境缓存（phase + promo 分位）刷新间隔：compute_market_sentiment 较重
+    # （全市场宽度 + 两天涨停池），60s/拍全量重算太重且浪费数据源配额
+    picks_watcher_env_refresh_seconds: float = 600.0
+
     # ---- 盘后复盘 Agent ----
     # 分析器：rules（默认，确定性、零成本）| llm（需配 base_url + api_key）
     review_model: str = "rules"
