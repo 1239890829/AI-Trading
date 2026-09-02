@@ -9,12 +9,15 @@ const LINKS = [
   { href: "/tape", label: "盘面" },
   { href: "/market", label: "市场" },
   { href: "/picks", label: "每日精选" },
+  { href: "/intraday", label: "盘中跟踪" },
   { href: "/research", label: "研究" },
   // 2026-09-01 系统重构（docs/architecture-redesign.md），13 页 → 5 导航：
   // /themes /limit-up /boards /longhu → 盘面页四 tab（/tape?tab=…）
   // /heatmap → 市场页云图 tab；/watchlist → 工作台管理模式
   // /backtest /alerts → 研究页（/research?tab=…）；旧路由经 next.config 302
   // /screener 已彻底删除（2026-09-01 用户拍板）：页面/端点/服务全清，tech_score 评分内核被每日精选复用保留
+  // /intraday 为选股 2.0 新增（docs/stock-picking-system-2026-09-02.md §2 呈现层）：
+  // 盘前简报 + 盘中 watcher + 盘后对照三节拍的专属页，与「每日精选」（个股组合）分工不同
 ];
 
 export function NavBar() {

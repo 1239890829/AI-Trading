@@ -1,0 +1,593 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import {
+  generateMorningBrief,
+  getIntradayReview,
+  getMorningBriefToday,
+  getWatcherState,
+  runIntradayReview,
+  runWatcherBeat,
+  type BriefAlert,
+  type BriefDirection,
+  type IntradayReviewStats,
+  type MorningBrief,
+  type WatcherState,
+} from "@/lib/api";
+import { pctColor, pctText, timeText } from "@/lib/format";
+
+/**
+ * 盘中跟踪（/intraday，选股 2.0 §2 呈现层，批次 B/C）：
+ * 盘前简报（方向 top3 + 标的池 + 触发/证伪条件）→ 盘中 watcher 状态与提醒 →
+ * 盘后「盘前 vs 实际」对照表 + 近 30 日胜率统计。
+ * 三节拍共用当日简报文件（data/picks/briefs/YYYYMMDD.json）为唯一事实源。
+ * 全页不构成买卖建议；提醒均为模拟跟踪。
+ */
+
+const OUTCOME_TONE: Record<string, string> = {
+  发酵: "text-up",
+  半发酵: "text-amber-500 dark:text-amber-400",
+  证伪: "text-down",
+  无波动: "text-zinc-400",
+};
+
+const FAILURE_LABELS: Record<string, string> = {
+  逻辑失效: "盘前逻辑未兑现",
+  阈值过敏: "确认后即回撤",
+  数据缺失误导: "缺数据不可信",
+  环境突变: "环境转退潮/冰点",
+};
+
+function outcomeTone(outcome: string): string {
+  return OUTCOME_TONE[outcome] ?? "text-zinc-400";
+}
+
+function EnvStrip({ brief }: { brief: MorningBrief }) {
+  const env = brief.env;
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+      {env.phase && (
+        <span className="rounded border border-zinc-300 px-1.5 py-0.5 text-[10px] dark:border-zinc-700">
+          相位 {env.phase}
+        </span>
+      )}
+      {env.promo_percentile != null && (
+        <span className="text-[10px]" title="promo_1to2 晋级率历史分位（P0-3b 校准）">
+          晋级率分位 {env.promo_percentile}
+        </span>
+      )}
+      {env.pool_date && <span className="text-[10px]">证据池 {env.pool_date}</span>}
+      <span className="text-[10px]">
+        生成于 {timeText(brief.generated_at)}（{brief.trigger === "schedule" ? "调度" : "手动"}）
+      </span>
+      {brief.missing.map((m) => (
+        <span key={m} className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-600 dark:text-amber-300">
+          ⚠ {m}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function DirectionCard({ d }: { d: BriefDirection }) {
+  const rv = d.review;
+  return (
+    <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">{d.direction}</span>
+        {d.defensive && (
+          <span className="rounded border border-sky-500/40 bg-sky-500/10 px-1 py-0.5 text-[10px] text-sky-600 dark:text-sky-300">
+            防守
+          </span>
+        )}
+        <span className="font-mono tabular-nums text-zinc-400" title={d.basis}>
+          {d.score} 分
+        </span>
+        <span
+          className={`rounded px-1.5 py-0.5 text-[10px] ${
+            d.entry_mode === "追涨"
+              ? "bg-up/10 text-up"
+              : d.entry_mode === "追涨减半"
+                ? "bg-amber-500/10 text-amber-600 dark:text-amber-300"
+                : d.entry_mode === "潜伏"
+                  ? "bg-violet-500/10 text-violet-600 dark:text-violet-300"
+                  : "bg-zinc-500/10 text-zinc-500"
+          }`}
+          title={d.entry_basis}
+        >
+          {d.entry_mode}
+        </span>
+        {rv && (
+          <span className={`ml-auto font-medium ${outcomeTone(rv.outcome)}`}>
+            盘后对照：{rv.outcome}
+            {rv.failure_class ? ` · ${FAILURE_LABELS[rv.failure_class] ?? rv.failure_class}` : ""}
+          </span>
+        )}
+      </div>
+      <p className="mt-1.5 text-zinc-500 dark:text-zinc-400">{d.logic}</p>
+      {rv && (
+        <p className="mt-1 text-[11px] text-zinc-400">
+          实际：板块 {rv.actual_pct == null ? "unknown" : `${pctText(rv.actual_pct)}`}
+          {" · "}涨停 {rv.actual_limit_up ?? "?"} 家 / 最高 {rv.actual_max_boards ?? "?"} 板
+          {rv.actual_leader ? ` · 龙头 ${rv.actual_leader}` : ""}
+          {" · "}条件 {rv.closing_met}/{rv.closing_total}
+          {rv.closing_unknown > 0 ? `（unknown ${rv.closing_unknown}）` : ""}
+          {rv.note ? ` · ${rv.note}` : ""}
+        </p>
+      )}
+      {d.pool.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {d.pool.map((p) => (
+            <span
+              key={p.symbol}
+              className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+              title={`${p.role}${p.boards ? ` · ${p.boards} 板` : ""}`}
+            >
+              {p.name || p.symbol}
+              {p.boards >= 2 ? ` ${p.boards}板` : ""}
+              <span className="ml-1 text-zinc-400">{p.role}</span>
+            </span>
+          ))}
+        </div>
+      )}
+      <details className="mt-2 text-[11px] text-zinc-500 dark:text-zinc-400">
+        <summary className="cursor-pointer select-none text-zinc-400">触发 / 证伪条件</summary>
+        <ul className="mt-1 space-y-0.5">
+          {d.trigger_conditions.map((c) => (
+            <li key={c}>确认 · {c}</li>
+          ))}
+          {d.falsify_conditions.map((c) => (
+            <li key={c}>证伪 · {c}</li>
+          ))}
+        </ul>
+      </details>
+    </div>
+  );
+}
+
+function AlertItem({ a }: { a: BriefAlert }) {
+  const ret = a.meta?.returns;
+  const isConfirm = a.kind === "confirm";
+  return (
+    <div className="rounded-lg border border-zinc-200 p-2.5 dark:border-zinc-800">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span
+          className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+            isConfirm ? "bg-up/10 text-up" : "bg-down/10 text-down"
+          }`}
+        >
+          {isConfirm ? "确认" : "证伪"}
+        </span>
+        <span className="font-medium text-zinc-900 dark:text-zinc-50">{a.direction}</span>
+        {a.symbol && (
+          <span className="text-zinc-500 dark:text-zinc-400">
+            {a.name}（{a.symbol}）
+          </span>
+        )}
+        <span className="ml-auto text-[10px] text-zinc-400">{timeText(a.at)}</span>
+        {isConfirm && ret && (ret.t1_return != null || ret.t3_return != null) && (
+          <span className="text-[10px] text-zinc-400">
+            T+1{" "}
+            <span className={`font-mono ${pctColor(ret.t1_return)}`}>
+              {ret.t1_return != null ? pctText(ret.t1_return) : "—"}
+            </span>
+            {" · "}T+3{" "}
+            <span className={`font-mono ${pctColor(ret.t3_return)}`}>
+              {ret.t3_return != null ? pctText(ret.t3_return) : "未到期"}
+            </span>
+          </span>
+        )}
+      </div>
+      <pre className="mt-1.5 whitespace-pre-wrap font-sans text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-300">
+        {a.text}
+      </pre>
+    </div>
+  );
+}
+
+function StatsPanel({ stats }: { stats: IntradayReviewStats }) {
+  const d = stats.directions;
+  const t1 = stats.alert_t1;
+  const t3 = stats.alert_t3;
+  const reviewedDays = stats.daily.filter((x) => x.reviewed > 0);
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
+        <div className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+          <div className="text-zinc-400">已复盘方向</div>
+          <div className="mt-1 font-mono text-lg tabular-nums text-zinc-900 dark:text-zinc-50">{d.total}</div>
+          <div className="mt-0.5 text-[10px] text-zinc-400">
+            发酵 {d.outcomes["发酵"] ?? 0} · 半发酵 {d.outcomes["半发酵"] ?? 0} · 证伪 {d.outcomes["证伪"] ?? 0} · 无波动 {d.outcomes["无波动"] ?? 0}
+          </div>
+        </div>
+        <div className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+          <div className="text-zinc-400">确认提醒 T+1 胜率</div>
+          <div className={`mt-1 font-mono text-lg tabular-nums ${(t1.win_rate ?? 0) >= 50 ? "text-up" : "text-down"}`}>
+            {t1.win_rate != null ? `${t1.win_rate}%` : "—"}
+          </div>
+          <div className="mt-0.5 text-[10px] text-zinc-400">
+            样本 {t1.n} · 均值 {t1.avg_return != null ? pctText(t1.avg_return) : "—"}
+          </div>
+        </div>
+        <div className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+          <div className="text-zinc-400">盈亏比（T+1）</div>
+          <div className="mt-1 font-mono text-lg tabular-nums text-zinc-900 dark:text-zinc-50">
+            {t1.profit_loss_ratio != null ? t1.profit_loss_ratio : "—"}
+          </div>
+          <div className="mt-0.5 text-[10px] text-zinc-400">
+            均盈 {t1.avg_win != null ? pctText(t1.avg_win) : "—"} / 均亏 {t1.avg_loss != null ? pctText(t1.avg_loss) : "—"}
+          </div>
+        </div>
+        <div className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+          <div className="text-zinc-400">T+3 胜率</div>
+          <div className={`mt-1 font-mono text-lg tabular-nums ${(t3.win_rate ?? 0) >= 50 ? "text-up" : "text-down"}`}>
+            {t3.win_rate != null ? `${t3.win_rate}%` : "—"}
+          </div>
+          <div className="mt-0.5 text-[10px] text-zinc-400">样本 {t3.n}（未到期不计）</div>
+        </div>
+      </div>
+
+      {reviewedDays.length >= 2 && (
+        <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+          <div className="mb-2 font-medium text-zinc-900 dark:text-zinc-50">近 30 日方向对照走势</div>
+          <DailyCurve daily={reviewedDays} />
+        </div>
+      )}
+
+      {reviewedDays.length > 0 && (
+        <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+          <div className="mb-1 font-medium text-zinc-900 dark:text-zinc-50">逐日对照</div>
+          <table className="w-full">
+            <thead>
+              <tr className="text-zinc-400">
+                <th className="text-left font-normal">日期</th>
+                <th className="text-right font-normal">方向</th>
+                <th className="text-right font-normal">发酵</th>
+                <th className="text-right font-normal">半发酵</th>
+                <th className="text-right font-normal">证伪</th>
+                <th className="text-right font-normal">无波动</th>
+                <th className="text-right font-normal">提醒</th>
+              </tr>
+            </thead>
+            <tbody>
+              {reviewedDays.map((x) => (
+                <tr key={x.date} className="border-t border-zinc-100 dark:border-zinc-800/60">
+                  <td className="py-1 font-mono text-zinc-400">{x.date}</td>
+                  <td className="text-right font-mono tabular-nums">{x.reviewed}/{x.directions}</td>
+                  <td className="text-right font-mono tabular-nums text-up">{x.fermented}</td>
+                  <td className="text-right font-mono tabular-nums text-amber-500 dark:text-amber-400">{x.half}</td>
+                  <td className="text-right font-mono tabular-nums text-down">{x.falsified}</td>
+                  <td className="text-right font-mono tabular-nums text-zinc-400">{x.flat}</td>
+                  <td className="text-right font-mono tabular-nums">{x.alerts}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {stats.alerts.length > 0 && (
+        <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+          <div className="mb-1 font-medium text-zinc-900 dark:text-zinc-50">确认提醒收益明细（T+1 / T+3，参考价=提醒日收盘）</div>
+          {stats.alerts.map((a) => (
+            <div key={a.date + a.symbol} className="flex flex-wrap gap-2 border-b border-zinc-100 py-1 last:border-0 dark:border-zinc-800/60">
+              <span className="font-mono text-zinc-400">{a.date}</span>
+              <span>{a.name || a.symbol}</span>
+              <span className="text-zinc-400">{a.direction}</span>
+              <span className={`ml-auto font-mono tabular-nums ${pctColor(a.t1_return)}`}>
+                T+1 {a.t1_return != null ? pctText(a.t1_return) : "未到期"}
+              </span>
+              <span className={`w-20 text-right font-mono tabular-nums ${pctColor(a.t3_return)}`}>
+                T+3 {a.t3_return != null ? pctText(a.t3_return) : "—"}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="text-[10px] text-zinc-400">{stats.sample_note}</p>
+    </div>
+  );
+}
+
+/** 极简 SVG 柱带：每日 发酵/半发酵/证伪/无波动 堆叠。样本 ≥2 天才渲染。 */
+function DailyCurve({ daily }: { daily: IntradayReviewStats["daily"] }) {
+  const W = 660;
+  const H = 90;
+  const bw = Math.max(6, Math.min(18, (W - 8) / daily.length - 4));
+  const gap = (W - 8) / daily.length;
+  const max = Math.max(1, ...daily.map((x) => Math.max(1, x.reviewed)));
+  const colors: [string, number][] = [
+    ["var(--color-up, #16a34a)", 0],
+    ["#f59e0b", 0],
+    ["var(--color-down, #dc2626)", 0],
+    ["#a1a1aa", 0],
+  ];
+  return (
+    <svg viewBox={`0 0 ${W} ${H + 14}`} className="w-full" role="img" aria-label="每日方向对照堆叠柱">
+      {daily.map((x, i) => {
+        const segs: [string, number][] = [
+          [colors[0][0], x.fermented],
+          ["#f59e0b", x.half],
+          [colors[2][0], x.falsified],
+          ["#a1a1aa", x.flat],
+        ];
+        let y = H;
+        const bars = segs
+          .filter(([, v]) => v > 0)
+          .map(([c, v], j) => {
+            const h = (v / max) * (H - 8);
+            y -= h;
+            return <rect key={j} x={4 + i * gap} y={y} width={bw} height={Math.max(h - 1, 1)} fill={c} rx={1} />;
+          });
+        return (
+          <g key={x.date}>
+            {bars}
+            <text x={4 + i * gap + bw / 2} y={H + 11} textAnchor="middle" fontSize="8" fill="#a1a1aa">
+              {x.date.slice(4, 6)}/{x.date.slice(6, 8)}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+export default function IntradayPage() {
+  const [brief, setBrief] = useState<MorningBrief | null>(null);
+  const [watcher, setWatcher] = useState<WatcherState | null>(null);
+  const [stats, setStats] = useState<IntradayReviewStats | null>(null);
+  const [briefMissing, setBriefMissing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const [b, w, s] = await Promise.all([
+      getMorningBriefToday().catch(() => null),
+      getWatcherState().catch(() => null),
+      getIntradayReview().catch(() => null),
+    ]);
+    setBrief(b);
+    setBriefMissing(b === null);
+    setWatcher(w);
+    setStats(s);
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function act(kind: "brief" | "beat" | "review") {
+    setBusy(kind);
+    setError(null);
+    setHint(null);
+    try {
+      if (kind === "brief") {
+        const b = await generateMorningBrief();
+        setHint(`简报已生成：${b.directions.length} 个方向（覆盖当日文件，盘中提醒已清空）`);
+      } else if (kind === "beat") {
+        const r = await runWatcherBeat();
+        const n = r.alerts.length;
+        setHint(n > 0 ? `单拍完成：${n} 条提醒（去重后实际分发见日志）` : "单拍完成：本拍无新增提醒");
+      } else {
+        const r = await runIntradayReview();
+        setHint(`对照完成：${r.directions.map((x) => `${x.direction} ${x.outcome}`).join(" · ")}`);
+      }
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const alerts = brief?.alerts ?? [];
+  const reviewed = (brief?.directions ?? []).filter((d) => d.review);
+
+  return (
+    <main className="mx-auto flex h-full w-full max-w-[1400px] flex-col gap-3 overflow-hidden px-4 py-3">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 text-xs text-zinc-400">
+        <h1 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">盘中跟踪</h1>
+        <span title="盘前 08:40 生成简报 → 盘中每 60s 取拍验证 → 盘后 15:35 对照复盘（选股 2.0 §2 三节拍）">
+          盘前简报 · 盘中验证 · 盘后对照
+        </span>
+        <div className="ml-auto flex items-center gap-1.5">
+          <button
+            onClick={() => void act("brief")}
+            disabled={busy !== null}
+            className="rounded border border-sky-500/50 px-2 py-0.5 text-sky-400 hover:bg-sky-500/10 disabled:opacity-50"
+            title="重新采集证据生成/刷新今日简报（覆盖当日文件）"
+          >
+            {busy === "brief" ? "生成中…" : "生成/刷新简报"}
+          </button>
+          <button
+            onClick={() => void act("beat")}
+            disabled={busy !== null || briefMissing}
+            className="rounded border border-zinc-300 px-2 py-0.5 text-zinc-500 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100 disabled:opacity-50"
+            title="手动推进一拍：取数 → 全部方向 confirm/falsify 判定（与盘中 watcher 同代码路径）"
+          >
+            {busy === "beat" ? "取拍中…" : "手动单拍"}
+          </button>
+          <button
+            onClick={() => void act("review")}
+            disabled={busy !== null || briefMissing}
+            className="rounded border border-zinc-300 px-2 py-0.5 text-zinc-500 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100 disabled:opacity-50"
+            title="对照当日盘前方向 vs 实际盘面（四分类+误判分类）并回填提醒收益"
+          >
+            {busy === "review" ? "对照中…" : "运行对照"}
+          </button>
+        </div>
+      </div>
+
+      {hint && (
+        <div className="shrink-0 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-600 dark:text-emerald-300">
+          ✓ {hint}
+        </div>
+      )}
+      {error && (
+        <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-600 dark:text-amber-300">
+          {error}
+        </div>
+      )}
+
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+        {briefMissing ? (
+          <div className="rounded-xl border border-zinc-200 p-6 text-center text-sm text-zinc-400 dark:border-zinc-800">
+            今日尚无盘前简报：点右上「生成/刷新简报」，或等交易日 08:40 自动生成。
+            <br />
+            简报是盘中跟踪与盘后对照的唯一事实源，没有它 watcher 会空转。
+          </div>
+        ) : (
+          brief && (
+            <>
+              <section className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                    盘前简报（{brief.brief_date}）
+                  </h2>
+                  <EnvStrip brief={brief} />
+                </div>
+                <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+                  {brief.directions.map((d) => (
+                    <DirectionCard key={d.direction} d={d} />
+                  ))}
+                </div>
+              </section>
+
+              <section className="space-y-2">
+                <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">盘中 watcher 状态</h2>
+                <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+                  {watcher?.active ? (
+                    <>
+                      <div className="mb-2 flex flex-wrap gap-3 text-[11px] text-zinc-400">
+                        <span>已推进 {watcher.beat_count ?? 0} 拍</span>
+                        <span>启动于 {timeText(watcher.started_at ?? null)}</span>
+                      </div>
+                      <table className="w-full">
+                        <thead>
+                          <tr className="text-zinc-400">
+                            <th className="text-left font-normal">方向</th>
+                            <th className="text-right font-normal">拍数</th>
+                            <th className="text-right font-normal">缺数据拍</th>
+                            <th className="text-right font-normal">峰值涨幅</th>
+                            <th className="text-right font-normal">确认</th>
+                            <th className="text-right font-normal">证伪</th>
+                            <th className="text-right font-normal">已提醒</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(watcher.trackers ?? []).map((t) => (
+                            <tr key={t.direction} className="border-t border-zinc-100 dark:border-zinc-800/60">
+                              <td className="py-1">{t.direction}</td>
+                              <td className="text-right font-mono tabular-nums">{t.beats}</td>
+                              <td className="text-right font-mono tabular-nums text-zinc-400">{t.missing_beats}</td>
+                              <td className={`text-right font-mono tabular-nums ${pctColor(t.peak_pct)}`}>
+                                {t.peak_pct != null ? pctText(t.peak_pct) : "—"}
+                              </td>
+                              <td className="text-right">
+                                {t.confirmed ? <span className="text-up">是</span> : <span className="text-zinc-400">否</span>}
+                              </td>
+                              <td className="text-right">
+                                {t.falsified ? (
+                                  <span className="text-down" title={t.falsify_triggers.map((x) => x.detail).join("；")}>
+                                    是
+                                  </span>
+                                ) : (
+                                  <span className="text-zinc-400">否</span>
+                                )}
+                              </td>
+                              <td className="text-right font-mono text-[11px] text-zinc-400">
+                                {t.alerted_symbols.join("、") || "—"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </>
+                  ) : (
+                    <div className="text-zinc-400">
+                      {watcher?.note ?? "watcher 未启动（后端未运行或开关关闭）——非交易时段属正常"}
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              <section className="space-y-2">
+                <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                  盘中提醒（{alerts.length} 条，当日去重）
+                </h2>
+                {alerts.length === 0 ? (
+                  <div className="rounded-xl border border-zinc-200 p-4 text-xs text-zinc-400 dark:border-zinc-800">
+                    暂无提醒。确认条件五项全过才触发（量比数据源缺 → 会压档）；
+                    证伪任一触发即推送并当日静默。
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {alerts.map((a) => (
+                      <AlertItem key={a.key} a={a} />
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section className="space-y-2">
+                <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                  今日盘前 vs 实际（对照表
+                  {brief.review ? ` · ${timeText(brief.review.reviewed_at)} 复盘）` : " · 未复盘，15:35 自动运行）"}
+                </h2>
+                {reviewed.length === 0 ? (
+                  <div className="rounded-xl border border-zinc-200 p-4 text-xs text-zinc-400 dark:border-zinc-800">
+                    今日尚未对照。点右上「运行对照」或等 15:35 调度（收盘后才有意义）。
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="text-zinc-400">
+                          <th className="text-left font-normal">方向</th>
+                          <th className="text-left font-normal">盘前模式</th>
+                          <th className="text-left font-normal">盘后分类</th>
+                          <th className="text-right font-normal">实际板块</th>
+                          <th className="text-left font-normal">误判归因 / 备注</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {reviewed.map((d) => {
+                          const rv = d.review!;
+                          return (
+                            <tr key={d.direction} className="border-t border-zinc-100 dark:border-zinc-800/60">
+                              <td className="py-1">{d.direction}</td>
+                              <td className="text-zinc-500 dark:text-zinc-400">{d.entry_mode}</td>
+                              <td className={`font-medium ${outcomeTone(rv.outcome)}`}>{rv.outcome}</td>
+                              <td className={`text-right font-mono tabular-nums ${pctColor(rv.actual_pct)}`}>
+                                {rv.actual_pct != null ? pctText(rv.actual_pct) : "unknown"}
+                              </td>
+                              <td className="text-zinc-500 dark:text-zinc-400">
+                                {rv.failure_class ? FAILURE_LABELS[rv.failure_class] ?? rv.failure_class : "—"}
+                                {rv.note ? ` · ${rv.note}` : ""}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+
+              {stats && <section className="space-y-2">
+                <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">近 30 日胜率统计</h2>
+                <StatsPanel stats={stats} />
+              </section>}
+            </>
+          )
+        )}
+      </div>
+
+      <div className="shrink-0 text-[10px] text-zinc-500">
+        三节拍（盘前简报 / 盘中 60s 验证 / 盘后对照）共用当日简报文件 · 阈值集中在
+        intraday_rules 常量表（批次 D 回测调参唯一入口）· 全部输出为模拟跟踪，不构成买卖建议
+      </div>
+    </main>
+  );
+}

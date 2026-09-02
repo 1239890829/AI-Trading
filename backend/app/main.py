@@ -312,6 +312,23 @@ async def lifespan(app: FastAPI):
 
         watcher_task = asyncio.create_task(watcher_loop(app, stop=watcher_stop), name="picks-watcher")
 
+    # --- 盘后方向对照（选股 2.0 批次 C）：15:35 对照当日简报 + 提醒收益回填 ---
+    review_intraday_stop = asyncio.Event()
+    review_intraday_task = None
+    if settings.picks_review_enabled:
+        from app.picks.review_intraday import intraday_review_scheduler
+
+        review_intraday_task = asyncio.create_task(
+            intraday_review_scheduler(
+                app,
+                stop=review_intraday_stop,
+                run_hour=settings.picks_review_hour,
+                run_minute=settings.picks_review_minute,
+                check_interval_seconds=settings.review_check_interval_seconds,
+            ),
+            name="picks-intraday-review",
+        )
+
     try:
         await hub.refresh()  # 冷启动立即填充，接口首次调用即有数据
         await risk_engine.refresh()
@@ -331,6 +348,8 @@ async def lifespan(app: FastAPI):
         premarket_stop.set()
     if watcher_task is not None:
         watcher_stop.set()
+    if review_intraday_task is not None:
+        review_intraday_stop.set()
     if review_task is not None:
         review_stop.set()
     with contextlib.suppress(asyncio.CancelledError):
@@ -352,6 +371,9 @@ async def lifespan(app: FastAPI):
     if watcher_task is not None:
         with contextlib.suppress(asyncio.CancelledError):
             await watcher_task
+    if review_intraday_task is not None:
+        with contextlib.suppress(asyncio.CancelledError):
+            await review_intraday_task
     with contextlib.suppress(Exception):
         await provider.aclose()
     if app.state.theme_catalog is not None:

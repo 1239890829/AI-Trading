@@ -170,7 +170,7 @@
 |---|---|---|
 | **A** | `picks/intraday_rules.py` 规则引擎（rank/confirm/falsify/entry_mode/ebb_or_end/entry_plan/build_alert，纯函数+全量测试）；`score_sentiment` 接校准分位；`score_news` 事件强度 | ✅ 2026-09-02（commit `482601a`） |
 | **B** | 盘前节拍（morning brief 生成+落盘+API）+ `picks/watcher.py` 盘中调度 + 提醒分发与去重 | ✅ 2026-09-02（见下方实现注记） |
-| C | 复盘对照任务 + 胜率统计 API + 前端「盘中跟踪」页 + predict 页简报卡 | 待 B 完 |
+| C | 复盘对照任务 + 胜率统计 API + 前端「盘中跟踪」页（predict 页简报卡不做，见注记） | ✅ 2026-09-02（见下方实现注记） |
 | D | 板块热度时序落库（前向）+ 回测框架 + 网格调参报告 + `get_capital_flow` 实测定源 | 待 C 完 |
 
 ### 批次 B 实现注记（2026-09-02）
@@ -183,3 +183,16 @@
 - 已知边界（第一版诚实降级）：volume_ratio 与板块内跌停数数据源缺 → 恒 unknown（量比压确认强度档位；leader_break 触发器不激活）；沙箱时钟非交易时段无法验证 trading=True 的真实取拍，状态机由 24 条单测锁定，盘中实证待用户重启后端后自然发生。
 
 **依赖与风险**：真实推送通道缺（P1 阻塞，in-app 先顶）；东财个股资金流本机曾测不可达（D 批实测决定）；消息面回测不可行（§8 前向积累）；沙箱内后台进程会被收割（watcher 验证走单调用取证法）。
+
+### 批次 C 实现注记（2026-09-02）
+
+- `picks/review_intraday.py`：15:35 方向级对照（`run_review`）+ 提醒收益回算（`backfill_alert_returns`）+ 胜率统计（`intraday_stats`）+ 调度器。复盘结果写进**当日简报文件** `payload["review"]`、收益写回 `alerts`——续用批次 B 的文件持久化（predict `apply_verify` 按 target_date 撞行、`hit_stats` 会把无 verdict 语义的简报方向混进预判统计，故不进 prediction_themes）。
+- **四分类终态口径**：优先级 证伪 > 发酵 > 半发酵 > 无波动；确认后证伪按证伪归档（`confirmed` 标志保留，不丢信息）。`closing_confirmed` 用收盘宽口径：量比恒 unknown 不阻塞、环境项全方向共享**不构成方向证据**（只认 `key != "environment"` 的方向级可判定项——否则零题材证据的方向会被环境项误判为发酵，end_to_end 测试抓出后修正）。
+- **误判四分类**（确定性映射，顺序即优先级）：环境突变（证伪触发器含 environment）> 阈值过敏（confirmed 且 falsified）> 数据缺失误导（未确认未证伪且 missing_ratio ≥ 0.3）> 逻辑失效（未确认未证伪且收盘涨幅 < 晚期确认线）。输出进对照表，作批次 D 调参输入。
+- **提醒收益回算**：参考价 = 提醒日（D0）收盘价（第一版未存提醒时刻现价，不臆造分时价）；腾讯日 K `ts.date()` 即交易日；T 日无 K 线（停牌）该档留空不冒充；t3 complete 后永不重算，未 complete 每日续算。胜率/盈亏比由 `intraday_stats` 按 verdict 聚合，样本外提示（≥20 条前仅供参考）。
+- **调度持久化幂等**：`should_run_review` 的 already_reviewed 读简报文件里 `review.trigger == "schedule"`（非内存变量——重启清内存 + 时间已过 = 重跑，review_scheduler 同款教训）；manual 触发不拦 schedule；09:25 前拒绝执行（盘前空池自指防护，测试须 monkeypatch `beijing_now` 钉时钟）。配置：`picks_review_enabled/hour/minute`（默认 15:35，`.env.example` 已注释）。
+- API：`GET /api/picks/intraday-review?limit=30`、`POST /api/picks/intraday-review/run`（no_brief → 404，其余失败 → 409）。
+- 前端：`apps/web/app/intraday/page.tsx`「盘中跟踪」页（导航新增）——EnvStrip / 方向卡（盘前模式徽章 + review 徽章）/ watcher 状态 / 提醒八段式 + T+1/T+3 收益 / 对照表 / 四卡统计 + 逐日对照 + 胜率堆叠柱。**predict 页简报卡不做**：前端无 predict 页（grep 确认无预判 UI），简报卡已落新页，重复建卡违背导航收敛。
+- **范围外发现（P1，待用户决策，本批次不动批次 A/B 代码）**：
+  1. **confirm 量比 gate 疑似死代码**：production 中 volume_ratio 恒 unknown → `confirm_signal` 严格门槛（`unmet==0 and met==len(checks)`）使盘中确认**永不触发**，批次 B 文案「会压低确认强度」与实际行为不符。选项 a：批次 D 落板块成交额/量比数据源；选项 b：放宽 gate 允许 unknown 量比按 0.75 强度档确认。
+  2. **premarket_scheduler 内存幂等**：`last_run` 是进程内变量，交易日 12:00 前重启后端会**无条件覆盖当日已有简报**（实测 8011 验证时把 09:15 已有简报覆盖为空 directions/空 alerts）。建议对齐 review 的持久化幂等：due 分支先查磁盘当日简报是否已由 schedule 生成。

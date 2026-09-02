@@ -1386,3 +1386,163 @@ export async function updateActionItemStatus(
     title: item.title,
   })).data;
 }
+
+// ---------------------------------------------------------------- 盘中跟踪（选股 2.0 批次 B/C）
+
+/** 盘前简报单方向（含盘后复盘回填的 review）。 */
+export interface BriefDirectionReview {
+  outcome: string;
+  failure_class: string | null;
+  confirmed: boolean;
+  falsified: boolean;
+  falsify_keys: string[];
+  closing_met: number;
+  closing_total: number;
+  closing_unknown: number;
+  actual_pct: number | null;
+  actual_limit_up: number | null;
+  actual_max_boards: number | null;
+  actual_leader: string | null;
+  missing_ratio: number | null;
+  note: string;
+  source: string;
+}
+
+export interface BriefDirection {
+  direction: string;
+  score: number;
+  basis: string;
+  logic: string;
+  defensive: boolean;
+  stage: string | null;
+  entry_mode: string;
+  entry_basis: string;
+  pool: { symbol: string; name: string; boards: number; role: string }[];
+  trigger_conditions: string[];
+  falsify_conditions: string[];
+  review?: BriefDirectionReview | null;
+}
+
+export interface BriefAlertReturns {
+  ref_date: string;
+  ref_price: number | null;
+  t1_date: string | null;
+  t1_return: number | null;
+  t3_date: string | null;
+  t3_return: number | null;
+  complete: boolean;
+}
+
+export interface BriefAlert {
+  key: string;
+  kind: string;
+  direction: string;
+  symbol: string;
+  name: string;
+  text: string;
+  at: string;
+  meta: { returns?: BriefAlertReturns; [k: string]: unknown };
+}
+
+export interface MorningBrief {
+  brief_date: string;
+  generated_at: string;
+  trigger: string;
+  engine_version: string;
+  env: {
+    phase: string | null;
+    promo_percentile: number | null;
+    bands_source: string | null;
+    pool_date: string | null;
+    is_trading_day: boolean | null;
+  };
+  missing: string[];
+  directions: BriefDirection[];
+  alerts: BriefAlert[];
+  review?: {
+    reviewed_at: string;
+    trigger: string;
+    pool_date: string | null;
+    tracker_source: boolean;
+    outcomes: Record<string, string>;
+    missing: string[];
+  } | null;
+}
+
+export interface WatcherState {
+  active: boolean;
+  enabled?: boolean;
+  brief_exists?: boolean;
+  note?: string;
+  started_at?: string;
+  beat_count?: number;
+  trackers?: {
+    direction: string;
+    beats: number;
+    missing_beats: number;
+    peak_pct: number | null;
+    below_zero_beats: number;
+    confirmed: boolean;
+    falsified: boolean;
+    falsify_triggers: { key: string; detail: string }[];
+    alerted_symbols: string[];
+    last_confirm: { strength?: number } | null;
+  }[];
+}
+
+export interface IntradayReviewStats {
+  daily: {
+    date: string;
+    directions: number;
+    reviewed: number;
+    fermented: number;
+    half: number;
+    falsified: number;
+    flat: number;
+    alerts: number;
+  }[];
+  directions: {
+    total: number;
+    outcomes: Record<string, number>;
+    failures: Record<string, number>;
+  };
+  alert_t1: { n: number; win_rate: number | null; avg_win: number | null; avg_loss: number | null; profit_loss_ratio: number | null; avg_return: number | null };
+  alert_t3: { n: number; win_rate: number | null; avg_win: number | null; avg_loss: number | null; profit_loss_ratio: number | null; avg_return: number | null };
+  alerts: { date: string; direction: string; symbol: string; name: string; t1_return: number | null; t3_return: number | null }[];
+  sample_note: string;
+}
+
+export async function getMorningBriefToday(): Promise<MorningBrief> {
+  return (await getJson<MorningBrief>("/api/picks/morning-brief/today")).data;
+}
+
+/** 生成/刷新今日简报（覆盖当日文件，盘中已产生的 alerts 会丢）。 */
+export async function generateMorningBrief(): Promise<MorningBrief> {
+  return (await sendJson<MorningBrief>("/api/picks/morning-brief/generate", "POST", {}, 60_000)).data;
+}
+
+export async function getWatcherState(): Promise<WatcherState> {
+  return (await getJson<WatcherState>("/api/picks/watcher/state")).data;
+}
+
+/** 手动推进一拍（与盘中 watcher_loop 同代码路径；取证/调试用）。 */
+export async function runWatcherBeat(): Promise<{ alerts: { key: string; dispatched: boolean }[] }> {
+  return (
+    await sendJson<{ alerts: { key: string; dispatched: boolean }[] }>(
+      "/api/picks/watcher/beat", "POST", {}, 30_000,
+    )
+  ).data;
+}
+
+export async function getIntradayReview(limit = 30): Promise<IntradayReviewStats> {
+  return (await getJson<IntradayReviewStats>(`/api/picks/intraday-review?limit=${limit}`)).data;
+}
+
+/** 手动执行当日方向对照 + 提醒收益回填（15:35 调度的同代码路径）。 */
+export async function runIntradayReview(): Promise<{ brief_date: string; directions: { direction: string; outcome: string }[] }> {
+  return (
+    await sendJson<{ brief_date: string; directions: { direction: string; outcome: string }[] }>(
+      "/api/picks/intraday-review/run", "POST", {}, 60_000,
+    )
+  ).data;
+}

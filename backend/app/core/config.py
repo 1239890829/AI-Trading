@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     # 环境缓存（phase + promo 分位）刷新间隔：compute_market_sentiment 较重
     # （全市场宽度 + 两天涨停池），60s/拍全量重算太重且浪费数据源配额
     picks_watcher_env_refresh_seconds: float = 600.0
+    # 盘后对照（批次 C）：交易日 15:35 对照当日简报方向（四分类+误判分类）
+    # 并回填提醒 T+1/T+3 收益；当日已 schedule 复盘过则幂等跳过
+    picks_review_enabled: bool = True
+    picks_review_hour: int = 15
+    picks_review_minute: int = 35
 
     # ---- 盘后复盘 Agent ----
     # 分析器：rules（默认，确定性、零成本）| llm（需配 base_url + api_key）

@@ -1,19 +1,22 @@
-"""盘前简报与盘中跟踪 API（选股 2.0 批次 B，CONTEXT.md: Daily Picks 域）。
+"""盘前简报、盘中跟踪与盘后对照 API（选股 2.0 批次 B/C，CONTEXT.md: Daily Picks 域）。
 
 - POST /api/picks/morning-brief/generate  生成/刷新今日盘前简报（写鉴权）
-- GET  /api/picks/morning-brief/today     今日简报（含盘中追加的 alerts）
+- GET  /api/picks/morning-brief/today     今日简报（含盘中 alerts 与盘后 review）
 - GET  /api/picks/watcher/state           盘中跟踪状态（tracker 级明细）
 - POST /api/picks/watcher/beat            手动推进一拍（写鉴权；取证/调试用）
+- GET  /api/picks/intraday-review         近 30 日方向/提醒胜率统计（批次 C）
+- POST /api/picks/intraday-review/run     手动执行当日方向对照 + 提醒收益回填（写鉴权）
 
 简报 payload 存 data/picks/briefs/YYYYMMDD.json（morning_brief 模块 docstring
 有持久化决策：不进 prediction_reports 表，避免与 predict 按 target_date 的
-单键 upsert 互相覆盖）。
+单键 upsert 互相覆盖；对照结果同样落简报文件，不进 prediction_themes，
+避免 apply_verify 按 target_date/theme 撞行与 hit_stats 语义污染）。
 """
 from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.deps import require_write_token
 from app.core.config import settings
@@ -111,3 +114,38 @@ async def watcher_beat(request: Request, _: None = Depends(require_write_token))
         },
         "meta": {},
     }
+
+
+# ---------------------------------------------------------------- 盘后对照（批次 C）
+
+
+@router.get("/intraday-review")
+async def intraday_review(limit: int = Query(default=30, ge=1, le=90)) -> dict:
+    """近 limit 个简报日的方向四分类与提醒 T+1/T+3 胜率统计（§7.2）。
+
+    统计读 data/picks/briefs/*.json 聚合（文件持久化决策见模块 docstring）；
+    未复盘/未到期的提醒在返回里显式 pending，绝不冒充已验证。
+    """
+    from app.picks.review_intraday import intraday_stats
+
+    return {"data": intraday_stats(limit), "meta": {}}
+
+
+@router.post("/intraday-review/run")
+async def run_intraday_review(
+    request: Request, _: None = Depends(require_write_token)
+) -> dict:
+    """手动执行当日方向对照 + 全量提醒收益回填（15:35 调度的同代码路径）。
+
+    09:25 前拒绝（当日盘面未形成，对照只会产出垃圾）；当日无简报 404。
+    """
+    from app.picks.review_intraday import run_review
+
+    result = await run_review(request.app, trigger="manual")
+    if not result.get("ok"):
+        reason = result.get("reason")
+        detail = result.get("detail") or "当日无盘前简报：先 POST /api/picks/morning-brief/generate"
+        if reason == "no_brief":
+            raise HTTPException(status_code=404, detail=detail)
+        raise HTTPException(status_code=409, detail=detail)
+    return {"data": result, "meta": {}}
