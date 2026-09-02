@@ -527,7 +527,10 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
           </div>
 
           {chartTab === "kline" && (
-            <Panel title={`${quote?.name ? `${quote.name} · ` : ""}日 K 线（前复权）`} source={displayBars[0]?.source} bodyClassName="overflow-hidden" className="min-h-0 flex-1">
+            /* 头部标题行（股票名 · 日 K 线（前复权）+ 来源）已移除：股票名在页面
+               其它位置已展示，这行纯属重复占位，去掉后纵向多出约 41px 给 K 线
+               （2026-09-02 用户要求） */
+            <Panel bodyClassName="overflow-hidden" className="min-h-0 flex-1">
               {displayBars.length > 0 ? (
                 replayMode ? (
                   <ReplayChart bars={bars} fills={fills} onExit={() => setReplayMode(false)} />
