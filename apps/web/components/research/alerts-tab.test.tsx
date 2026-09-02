@@ -65,3 +65,37 @@ describe("AlertsTab 触发记录跳转（切片 C）", () => {
     expect(link.textContent).toBe("600519");
   });
 });
+
+describe("AlertsTab 渠道配置状态（configured 诚实展示）", () => {
+  it("未配置通道显示「未配置」徽标（title 说明后果），已配置的不显示", async () => {
+    vi.mocked(mocked.listAlertRules).mockResolvedValue([]);
+    vi.mocked(mocked.listAlertEvents).mockResolvedValue([]);
+    vi.mocked(mocked.getAlertChannels).mockResolvedValue({
+      available: ["in_app", "feishu"],
+      default: ["in_app"],
+      configured: { in_app: true, feishu: false },
+    });
+
+    const { container } = render(<AlertsTab />);
+    const badge = await screen.findByTitle(
+      "该通道未完成配置（如飞书 webhook），触发时会跳过并在后端日志告警，不会伪装成功",
+    );
+    expect(badge.textContent).toBe("未配置");
+    // 全页只有这一个徽标，且挂在 feishu 的勾选项内（in_app 已配置不显示）
+    expect(container.querySelectorAll("span[title]").length).toBe(1);
+    expect(badge.closest("label")?.textContent).toContain("feishu");
+  });
+
+  it("后端未返回 configured 时不出徽标（缺失≠未配置，不臆测）", async () => {
+    vi.mocked(mocked.listAlertRules).mockResolvedValue([]);
+    vi.mocked(mocked.listAlertEvents).mockResolvedValue([]);
+    vi.mocked(mocked.getAlertChannels).mockResolvedValue({
+      available: ["in_app", "log"],
+      default: ["in_app"],
+    });
+
+    const { container } = render(<AlertsTab />);
+    await screen.findByText("log");
+    expect(container.querySelector('span[title*="webhook"]')).toBeNull();
+  });
+});

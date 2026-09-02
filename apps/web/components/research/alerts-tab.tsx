@@ -39,6 +39,7 @@ export function AlertsTab() {
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [events, setEvents] = useState<AlertEvent[]>([]);
   const [channels, setChannels] = useState<string[]>([]);
+  const [channelConfig, setChannelConfig] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,11 +49,12 @@ export function AlertsTab() {
       const [r, e, ch] = await Promise.all([
         listAlertRules(),
         listAlertEvents(30),
-        getAlertChannels().then((c) => c.available),
+        getAlertChannels(),
       ]);
       setRules(r);
       setEvents(e);
-      setChannels(ch);
+      setChannels(ch.available);
+      setChannelConfig(ch.configured ?? {});
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "加载失败");
@@ -240,6 +242,14 @@ export function AlertsTab() {
                       className="accent-up"
                     />
                     {ch}
+                    {channelConfig[ch] === false && (
+                      <span
+                        title="该通道未完成配置（如飞书 webhook），触发时会跳过并在后端日志告警，不会伪装成功"
+                        className="rounded bg-amber-500/15 px-1 text-[10px] text-amber-600 dark:text-amber-400"
+                      >
+                        未配置
+                      </span>
+                    )}
                   </label>
                 ))}
               </div>

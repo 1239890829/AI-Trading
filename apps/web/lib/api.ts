@@ -1183,6 +1183,8 @@ export interface AlertEvent {
 export interface AlertChannels {
   available: string[];
   default: string[];
+  /** name → 是否已配置到可真正发出（如 feishu 是否配了 webhook）；缺省视为已配置 */
+  configured?: Record<string, boolean>;
 }
 
 export interface AlertRuleCreate {
