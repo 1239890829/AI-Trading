@@ -29,9 +29,14 @@ export function LonghuTab() {
   const [error, setError] = useState<string | null>(null);
   // 数据返回那一刻的客户端时间，用于判断"这份数据是不是盘中未定稿"。
   // 必须在拿到数据后再取（放在渲染期会 SSR 水合不一致，放在挂载 effect 里会被 lint 告警）。
+  // 失败态也要取：判断"查询是否落在披露前"，见 isPreRelease。
   const [now, setNow] = useState<Date | null>(null);
+  // 本次请求的日期参数（空 = 默认查当天，与后端语义一致）。失败时 records/tradeDate
+  // 都是空的，凭它才知道用户查的是不是"披露前的当日"。
+  const [queryDate, setQueryDate] = useState<string | null>(null);
 
   const load = useCallback(async (date?: string) => {
+    setQueryDate(date ?? null);
     try {
       const list = await getLonghu(date);
       setRecords(list);
@@ -41,6 +46,7 @@ export function LonghuTab() {
     } catch (e) {
       setError((e as Error).message);
       setRecords([]);
+      setNow(new Date());
     }
   }, []);
 
@@ -64,12 +70,23 @@ export function LonghuTab() {
   // 同一只股票可同时上当日榜与三日榜 → 记录数多于股票数，标题要分开说，
   // 否则用户会以为"76 条"里有 6 条是脏数据。
   const stockCount = useMemo(() => new Set(records.map((r) => r.symbol)).size, [records]);
-  // 龙虎榜盘后定稿。盘中（15:30 前）查当天会拿到未定稿快照，必须显式标注，
-  // 否则用户会把盘中快照当终稿用。
+  // 龙虎榜盘后定稿。若数据源提前吐出当日快照（tradeDate=今天且未到披露时刻），
+  // 必须显式标注，否则用户会把盘中快照当终稿用。
+  // 分界取 17:00（数据商同步交易所披露的时刻）而非 15:30——2026-09-02 盘中实测：
+  // 15:30 前四源当日数据恒为空，"15:30 前有部分快照"的前提不成立，原分界永远触发不了。
   const isIntradaySnapshot = useMemo(() => {
     if (!now || !tradeDate || tradeDate !== todayISO()) return false;
-    return now.getHours() * 60 + now.getMinutes() < 15 * 60 + 30;
+    return now.getHours() * 60 + now.getMinutes() < 17 * 60;
   }, [now, tradeDate]);
+  // 盘中查当天：四源皆空（当日榜收盘后才披露）→ 后端 502"数据源失败"。
+  // 这不是故障，是还没披露——盘中实测（2026-09-02 14:20）确认渲染成红错误导用户，
+  // 披露前的当日查询改走"尚未披露"提示，只有披露时刻（约 17:00）之后仍拿不到才算失败。
+  const isPreRelease = useMemo(() => {
+    if (!now) return false;
+    const want = queryDate || todayISO(); // 不带日期参数 = 后端默认查当天
+    if (want !== todayISO()) return false;
+    return now.getHours() * 60 + now.getMinutes() < 17 * 60;
+  }, [now, queryDate]);
   // ths 龙虎榜个股明细不含 close / turnover_rate / amount（成交额仅游资榜提供）。
   // 恒空的列直接隐藏并在页脚说明原因，不留一列 "--" 让用户猜是不是又坏了；
   // 换成东财等含这些字段的数据源时会自动恢复。
@@ -97,10 +114,16 @@ export function LonghuTab() {
         </div>
       </div>
 
-      {error && (
+      {error && !isPreRelease && (
         <div className="mb-4 shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-600 dark:text-amber-300">
           {/* 加载失败时 records 为空，无从判断实际数据源，不猜、不写死源名 */}
           龙虎榜加载失败：{error}
+        </div>
+      )}
+
+      {isPreRelease && (
+        <div className="mb-4 shrink-0 rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 py-3 text-sm text-sky-600 dark:text-sky-300">
+          今日榜单尚未披露：龙虎榜由交易所收盘后披露（数据商约 17:00 同步），当前为盘前/盘中查询，非数据源故障。
         </div>
       )}
 
@@ -113,7 +136,7 @@ export function LonghuTab() {
         }
         source={records[0]?.source}
       >
-        {records.length === 0 && !error ? (
+        {records.length === 0 && (!error || isPreRelease) ? (
           <p className="px-4 py-10 text-center text-sm text-zinc-400">暂无数据（龙虎榜盘后披露，当日数据需收盘后查询）</p>
         ) : (
           <table className="w-full text-sm">
