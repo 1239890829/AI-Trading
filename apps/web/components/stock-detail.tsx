@@ -631,7 +631,9 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
           )}
 
           {chartTab === "flow" && (
-            <Panel title="主力资金净流入（近 30 日 · 左图右明细）" source={flow?.flow[0]?.source} bodyClassName="overflow-hidden" className="min-h-0 flex-1">
+            /* 头部标题行已移除（图名 + 近 N 日口径改为图内灰标签，见 flow-chart.tsx），
+               与 K 线/分时两个 tab 统一，纵向多出约 41px 给资金图（2026-09-02） */
+            <Panel bodyClassName="overflow-hidden" className="min-h-0 flex-1">
               {!flow || flow.flow.length === 0 ? (
                 <p className="px-4 py-10 text-center text-sm text-zinc-400">暂无资金流数据</p>
               ) : (

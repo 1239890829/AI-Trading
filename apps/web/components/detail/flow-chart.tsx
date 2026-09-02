@@ -24,7 +24,12 @@ export function FlowChart({ flow }: { flow: CapitalFlow }) {
   return (
     <div className="grid h-full grid-cols-1 overflow-hidden md:grid-cols-[minmax(0,1fr),minmax(0,1fr)]">
       <div className="flex min-w-0 flex-col border-r border-zinc-200 px-3 py-2 dark:border-zinc-800">
-        <div className="flex shrink-0 flex-wrap items-center gap-x-4 text-xs text-zinc-400">
+        {/* 图名与时间口径做成图内灰标签：原挂在 Panel 头部占一整行（约 41px），
+            移入后纵向空间还给柱状图（2026-09-02 用户选方案 2） */}
+        <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-400">
+          <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+            主力资金净流入 · 近 {flow.days} 日
+          </span>
           <span>
             连续净流入 <span className="font-mono text-sm text-zinc-100">{flow.streak_in}</span> 天
           </span>
