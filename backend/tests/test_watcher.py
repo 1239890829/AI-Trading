@@ -51,17 +51,25 @@ def test_confirm_full_alerts_once():
     assert tr.step(dict(theme), ENV_OK, 590) == []
 
 
-def test_unknown_volume_blocks_confirm_but_keeps_strength():
-    """量比缺失（unknown）→ 不确认、不发提醒；但满足率 4/5 → strength 0.75 留档。"""
+def test_unknown_volume_degrades_confirm_to_075_alert():
+    """量比缺失（unknown）+ 其余四项全过 → 0.75 档降级确认，提醒真实发出。
+
+    2026-09-02 选 b 放宽（§5.1#4）：旧实现 confirmed 永假、提醒整条死掉。
+    缺失项在八段式第 7/8 段如实标注，不冒充满强度。
+    """
     tr = DirectionTracker(direction="粮食")
     theme = _theme(pct=2.0, limit_up=3, max_boards=3, leader_pct=7.0,
                    leader_symbol="600000", leader_name="A")
     alerts = tr.step(theme, ENV_OK, 590)
-    assert alerts == []
-    assert tr.confirmed is False
-    assert tr.last_confirm["confirmed"] is False
+    assert len(alerts) == 1
+    assert alerts[0]["kind"] == "confirm"
+    assert tr.confirmed is True
+    assert tr.last_confirm["confirmed"] is True
     assert tr.last_confirm["unknown_count"] == 1
     assert tr.last_confirm["strength"] == 0.75
+    # 仓位按 0.75 系数：10% × 0.75 = 7.5%，且文本标注缺失项
+    assert "7.5" in alerts[0]["text"]
+    assert "数据缺失项" in alerts[0]["text"] and "量能" in alerts[0]["text"]
 
 
 def test_early_late_threshold_switch():

@@ -62,14 +62,41 @@ def test_confirm_uses_early_threshold_before_10am():
     assert r2["confirmed"] is False  # 盘中 2.5 线
 
 
-def test_confirm_missing_volume_ratio_is_unknown_not_pass():
-    """量比缺失 → 该项 unknown：不能确认（全满足才确认），但强度只降一档。"""
+def test_confirm_missing_volume_ratio_degrades_to_075_confirm():
+    """量比缺失 → 该项 unknown，但其余四项全过 → 0.75 档降级确认（§5.1#4）。
+
+    2026-09-02 定案选 b：旧实现 confirmed 永假（量比恒 unknown），盘中提醒
+    整条死掉——实现违背自身 docstring 设计。放宽后按满足率 4/5 → 0.75。
+    """
     r = ir.confirm_signal(**_confirm_kwargs(volume_ratio=None))
     vol = next(c for c in r["checks"] if c["key"] == "volume_ratio")
-    assert vol["met"] is None
-    assert r["confirmed"] is False
+    assert vol["met"] is None  # 三态保留：unknown 不冒充通过
+    assert r["confirmed"] is True
     assert r["unknown_count"] == 1
-    assert r["strength"] == 0.75  # 其余全过，降一档不清零
+    assert r["strength"] == 0.75  # 降一档不清零
+
+
+def test_confirm_missing_volume_ratio_with_unmet_still_rejects():
+    """量比缺失 + 任一项明确不满足 → 不确认（降级确认只兜 unknown，不兜 unmet）。"""
+    r = ir.confirm_signal(**_confirm_kwargs(volume_ratio=None, phase="退潮"))
+    assert r["unmet_count"] == 1
+    assert r["confirmed"] is False
+
+
+def test_confirm_missing_volume_ratio_plus_other_unknown_rejects():
+    """量比缺失 + 另一项也判不出来（两项 unknown）→ 不确认（放宽仅限单项量能）。"""
+    r = ir.confirm_signal(**_confirm_kwargs(volume_ratio=None, leader_pct=None))
+    assert r["unknown_count"] == 2
+    assert r["confirmed"] is False
+    assert r["strength"] == 0.5  # 满足率 3/5 → 0.5 档，但仍不到确认线
+
+
+def test_confirm_missing_non_volume_item_not_degraded():
+    """放宽仅限量能项：龙头强度判不出来（非量比）→ 其余全过也不确认。"""
+    r = ir.confirm_signal(**_confirm_kwargs(leader_pct=None))
+    assert r["unknown_count"] == 1
+    assert r["confirmed"] is False
+    assert r["strength"] == 0.75
 
 
 def test_confirm_environment_ebb_phase_fails():

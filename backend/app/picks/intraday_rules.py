@@ -132,7 +132,7 @@ def confirm_signal(
     phase: str | None,
     now_minutes: int | None,
 ) -> dict:
-    """确认走强：五项全部满足才确认；unknown 不通过也不证伪。
+    """确认走强：五项全部满足才确认；量能项判不出来时按 0.75 档降级确认。
 
     Returns:
         {confirmed, checks, met_count, unknown_count, strength}。
@@ -181,7 +181,16 @@ def confirm_signal(
     met = sum(1 for c in checks if c["met"] is True)
     unmet = sum(1 for c in checks if c["met"] is False)
     unknown = sum(1 for c in checks if c["met"] is None)
-    confirmed = unmet == 0 and met == len(checks)  # 全满足才确认（unknown 视为未满足）
+    # 量能降级确认（§5.1#4）：板块成交额历史未落库前 volume_ratio 恒 unknown，
+    # 若按"unknown 视为未满足"处理，confirmed 永假 → 盘中提醒整条死掉
+    # （2026-09-02 定案：实现违背自身 docstring 设计，选 b 放宽）。
+    # 放宽仅限量能项：量比判不出来且其余四项全部明确满足 → 仍确认，
+    # 强度按满足率 4/5 → 0.75（缺失项在提醒第 7/8 段如实标注）。
+    # 其余项 unknown 不享受此放宽：环境项是证伪入口，缺证据不下确认结论。
+    vr_unknown = any(c["key"] == "volume_ratio" and c["met"] is None for c in checks)
+    confirmed = unmet == 0 and (
+        met == len(checks) or (vr_unknown and met == len(checks) - 1)
+    )
     # 强度系数按全部检查项的满足率算：unknown 与 unmet 同样压低系数（4/5 → 0.75、
     # 3/5 → 0.5），但不区分"明确不满足"与"判不出来"——两者都不该给满强度。
     strength = _STRENGTH_COEF.get(round(met / len(checks), 2), 0.0)
