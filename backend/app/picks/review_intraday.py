@@ -631,6 +631,12 @@ async def intraday_review_scheduler(
                 already_reviewed=(payload or {}).get("review", {}).get("trigger") == "schedule",
             ):
                 await run_review(app, trigger="schedule")
+            # 批次 D：题材热度时序前向落库（独立于复盘成败；自带磁盘幂等，
+            # 已落库的 tick 不会再碰行情配额）。窗口与复盘一致：run_hour–23 点。
+            if run_hour <= now.hour < 23:
+                from app.picks.heat_history import record_daily_heat
+
+                await record_daily_heat(app)
         except Exception:
             log.exception("intraday review scheduler failed")
         with contextlib.suppress(asyncio.TimeoutError):

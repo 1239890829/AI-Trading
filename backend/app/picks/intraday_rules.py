@@ -131,20 +131,32 @@ def confirm_signal(
     promo_percentile: float | None,
     phase: str | None,
     now_minutes: int | None,
+    theme_pct_thr: float | None = None,
+    volume_ratio_thr: float | None = None,
 ) -> dict:
     """确认走强：五项全部满足才确认；量能项判不出来时按 0.75 档降级确认。
+
+    Args:
+        theme_pct_thr / volume_ratio_thr: 阈值覆盖（批次 D 回测网格注入）。
+            None = 用模块常量（线上唯一路径）；回测传入网格值时不走 early/late
+            分段（threshold 文案标注"回测网格"）。除回测框架外禁止传值——
+            阈值必须集中常量表，散落调用方是调参回写时必漏的坑。
 
     Returns:
         {confirmed, checks, met_count, unknown_count, strength}。
         strength ∈ {1.0, 0.75, 0.5, 0.0}——仓位系数（§5.3），unknown 会
         压低系数但不清零（比如量比缺失时其余四项全过，仍可给 0.75 提示）。
     """
-    thr = _theme_threshold(now_minutes)
+    thr = theme_pct_thr if theme_pct_thr is not None else _theme_threshold(now_minutes)
+    thr_note = "回测网格" if theme_pct_thr is not None else (
+        "10:00 前" if thr == CONFIRM_THEME_PCT_EARLY else "10:00 后"
+    )
+    vr_thr = volume_ratio_thr if volume_ratio_thr is not None else CONFIRM_VOLUME_RATIO
     checks = [
         _chk(
             "theme_pct", "板块涨幅",
             None if theme_pct is None else theme_pct >= thr,
-            f"≥{thr}%（{'10:00 前' if thr == CONFIRM_THEME_PCT_EARLY else '10:00 后'}）",
+            f"≥{thr}%（{thr_note}）",
             "缺失" if theme_pct is None else f"{theme_pct}%",
         ),
         _chk(
@@ -164,8 +176,8 @@ def confirm_signal(
         ),
         _chk(
             "volume_ratio", "量能",
-            None if volume_ratio is None else volume_ratio >= CONFIRM_VOLUME_RATIO,
-            f"量比≥{CONFIRM_VOLUME_RATIO}",
+            None if volume_ratio is None else volume_ratio >= vr_thr,
+            f"量比≥{vr_thr}",
             "缺失" if volume_ratio is None else f"{volume_ratio}",
         ),
         _chk(

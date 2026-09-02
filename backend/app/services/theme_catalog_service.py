@@ -36,9 +36,11 @@ CATALOG_TAG = "cn_concept"
 
 
 def parse_board_bars(payload: dict) -> list[dict]:
-    """板块历史 K 线响应 → 按日期升序的 [{date, close}]；缺字段条目跳过。
+    """板块历史 K 线响应 → 按日期升序的 [{date, close, open, turnover, volume}]。
 
-    官方字段：date_ms（毫秒）/ close_price 等（指数无复权概念）。
+    官方字段：date_ms（毫秒）/ close_price / open_price / turnover（成交额）/ volume（股）。
+    open/turnover/volume 为批次 D 回测补充解析（T+1 开盘买入收益、板块量比），
+    缺失时为 None（老消费方只用 close，不受影响）。
     """
     items = ((payload or {}).get("data") or {}).get("item") or []
     bars: list[dict] = []
@@ -50,6 +52,9 @@ def parse_board_bars(payload: dict) -> list[dict]:
         bars.append({
             "date": datetime.fromtimestamp(ts / 1000, tz=timezone.utc).date().isoformat(),
             "close": float(close),
+            "open": float(it["open_price"]) if it.get("open_price") is not None else None,
+            "turnover": float(it["turnover"]) if it.get("turnover") is not None else None,
+            "volume": float(it["volume"]) if it.get("volume") is not None else None,
         })
     bars.sort(key=lambda b: b["date"])
     return bars
