@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app.api.deps import get_hub
 from app.core.config import settings
@@ -27,7 +27,7 @@ async def health(hub: QuoteHub = Depends(get_hub)) -> dict:
 
 
 @router.get("/system/providers")
-async def system_providers(hub: QuoteHub = Depends(get_hub)) -> dict:
+async def system_providers(request: Request, hub: QuoteHub = Depends(get_hub)) -> dict:
     """provider 链可观测（P0-A）：熔断状态/连续失败数/最后服务源/切换记录。
 
     熔断触发（state=open）意味着数据已自动降级到备源——这个端点把"降级"变成
@@ -54,6 +54,9 @@ async def system_providers(hub: QuoteHub = Depends(get_hub)) -> dict:
     from app.core.ttl_cache import live_caches
 
     payload["caches"] = live_caches()
+    # ths 涨停原因单点哨兵（P0-B）：无实例 = 未启用/未到首拍
+    sent = getattr(request.app.state, "ths_sentinel", None)
+    payload["ths_reason_sentinel"] = sent.snapshot() if sent is not None else {"state": "not_started"}
     return payload
 
 

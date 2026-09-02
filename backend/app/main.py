@@ -329,6 +329,14 @@ async def lifespan(app: FastAPI):
             name="picks-intraday-review",
         )
 
+    # --- ths 涨停原因单点哨兵（P0-B）：交易时段探测 reason 非空率，缺原因即告警 ---
+    ths_sentinel_stop = asyncio.Event()
+    ths_sentinel_task = None
+    if settings.ths_sentinel_enabled:
+        from app.services.ths_sentinel import sentinel_loop
+
+        ths_sentinel_task = asyncio.create_task(sentinel_loop(app, stop=ths_sentinel_stop), name="ths-reason-sentinel")
+
     try:
         await hub.refresh()  # 冷启动立即填充，接口首次调用即有数据
         await risk_engine.refresh()
@@ -348,6 +356,8 @@ async def lifespan(app: FastAPI):
         premarket_stop.set()
     if watcher_task is not None:
         watcher_stop.set()
+    if ths_sentinel_task is not None:
+        ths_sentinel_stop.set()
     if review_intraday_task is not None:
         review_intraday_stop.set()
     if review_task is not None:
@@ -374,6 +384,9 @@ async def lifespan(app: FastAPI):
     if review_intraday_task is not None:
         with contextlib.suppress(asyncio.CancelledError):
             await review_intraday_task
+    if ths_sentinel_task is not None:
+        with contextlib.suppress(asyncio.CancelledError):
+            await ths_sentinel_task
     with contextlib.suppress(Exception):
         await provider.aclose()
     if app.state.theme_catalog is not None:

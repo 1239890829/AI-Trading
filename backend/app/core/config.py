@@ -81,6 +81,13 @@ class Settings(BaseSettings):
     picks_review_hour: int = 15
     picks_review_minute: int = 35
 
+    # ---- ths 涨停原因单点哨兵（P0-B）----
+    # 涨停原因/题材标签 100% 依赖 ths（东财 0%，无备源）：交易时段周期探测
+    # reason 非空率，低于阈值/连续拉取失败 → AlertEvent 告警（文案含
+    # "题材标签可能失效"）；状态随 GET /api/system/providers 可见
+    ths_sentinel_enabled: bool = True
+    ths_sentinel_interval_seconds: float = 900.0
+
     # ---- 盘后复盘 Agent ----
     # 分析器：rules（默认，确定性、零成本）| llm（需配 base_url + api_key）
     review_model: str = "rules"
