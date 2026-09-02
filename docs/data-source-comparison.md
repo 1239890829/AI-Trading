@@ -44,7 +44,10 @@ get_quotes / get_quote / get_indices          快照
 get_limit_up_pool / get_limit_break_pool      涨停池 / 炸板池
 get_longhu_records                            龙虎榜
 get_trading_days                              交易日历
-get_kline / get_order_book / get_trades / search  ← 全部是空桩（raise 或返回空）
+get_kline                                     日 K（e77971f 已实现，官方主源；
+                                              2026-09-02 parity 60/60 与腾讯 qfq
+                                              全一致，最大偏差 0.0023%）
+get_order_book / get_trades / search          ← 空桩（fuyao 无对应能力，交链上其他源）
 ```
 
 ---

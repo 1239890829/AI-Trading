@@ -39,6 +39,9 @@ def _ts(date_s: str, time_s: str) -> datetime | None:
 class SinaProvider:
     name = SOURCE
     realtime = True
+    #: 秒级链位次（见 composite.REALTIME_METHODS）：腾讯(0)→新浪(1)→东财(2)。
+    #: 新浪作对冲备源（P1-A），explicit rank 让 failover 顺序与文档意图一致。
+    realtime_rank = 1
 
     def __init__(self, timeout: float = 5.0):
         self._client = httpx.AsyncClient(

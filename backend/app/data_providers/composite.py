@@ -2,10 +2,14 @@
 
 - 逐方法 failover：行情走腾讯→新浪→东财，涨停池/龙虎榜走东财。
 - 切换记录 switch_log（数据源切换日志），供 /api/health 展示。
+- 秒级方法（REALTIME_METHODS）走"主源宽限 + 备源对冲"：主源超时未应答时
+  备源并行起跑，故障周期不吃一整次主源超时（P1-A，realtime-broker §3.2 方案 B）。
 - 全链失败抛 ProviderError → QuoteHub 标记 stale，绝不伪造实时数据。
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import time
 
 import logging
@@ -19,6 +23,9 @@ log = logging.getLogger(__name__)
 FAILURE_THRESHOLD = 3
 #: 熔断冷却时长（秒）
 COOLDOWN_SECONDS = 60.0
+#: 秒级方法主源宽限（秒）：正常应答 ~60ms 远小于此，主源超过宽限仍未归即
+#: 并行打备源（先归者得，主源被放弃记一次失败——连续挂起 3 次同样进熔断）。
+HEDGE_DELAY = 0.20
 
 #: 秒级实时方法：Hub 以 1Hz 轮询这些方法，走 realtime_rank 排序——
 #: 免费高频源（腾讯）优先，付费/慢源（ths 配额+8s 超时）不挡在秒级链路上。
@@ -137,6 +144,7 @@ class CompositeProvider:
 
     async def _call(self, method: str, *args):
         errors: list[str] = []
+        live: list = []
         for p in self._pick(method):
             # 熔断：该源在此方法上连续失败过多 → 冷却期内直接跳过，
             # 不再把请求打给一个已知挂掉的源（雪崩时尤其重要：
@@ -144,27 +152,103 @@ class CompositeProvider:
             if self._in_cooldown(method, p.name):
                 errors.append(f"{p.name}: 熔断冷却中（{self._cooldown_left(method, p.name):.0f}s）")
                 continue
-            try:
-                result = await getattr(p, method)(*args)
-            except Exception as exc:
-                errors.append(f"{p.name}: {exc}")
-                log.warning("provider %s %s failed: %s", p.name, method, exc)
-                self._record_failure(method, p.name)
-                continue
-            if result is None or (isinstance(result, (list, tuple)) and len(result) == 0):
-                errors.append(f"{p.name}: empty")
-                # 空结果同样计入失败：K 线/池子返回空往往是源已异常的前兆
-                self._record_failure(method, p.name)
-                continue
-            self._record_success(method, p.name)
-            if self._last_good.get(method) != p.name:
-                if method in self._last_good:
-                    msg = f"{method}: {self._last_good[method]} -> {p.name}"
-                    self.switch_log.append(msg)
-                    log.info("provider switched: %s", msg)
-                self._last_good[method] = p.name
-            return result
+            live.append(p)
+        if not live:
+            raise ProviderError(f"all providers failed for {method}: " + "; ".join(errors))
+        if method in REALTIME_METHODS and len(live) >= 2:
+            return await self._call_hedged(method, args, live, errors)
+        return await self._call_serial(method, args, live, errors)
+
+    @staticmethod
+    def _is_empty(result) -> bool:
+        # 空结果同样计入失败：K 线/池子返回空往往是源已异常的前兆
+        return result is None or (isinstance(result, (list, tuple)) and len(result) == 0)
+
+    async def _attempt(self, method: str, p, args) -> tuple[object, object, Exception | None]:
+        """单源单次调用，绝不抛（异常作为第三元组项返回，便于并发收割）。"""
+        try:
+            return p, await getattr(p, method)(*args), None
+        except Exception as exc:
+            log.warning("provider %s %s failed: %s", p.name, method, exc)
+            return p, None, exc
+
+    def _note_failure(self, method: str, name: str, exc: Exception | None, errors: list[str]) -> None:
+        errors.append(f"{name}: {'empty' if exc is None else exc}")
+        self._record_failure(method, name)
+
+    def _settle_last_good(self, method: str, name: str) -> None:
+        self._record_success(method, name)
+        if self._last_good.get(method) != name:
+            if method in self._last_good:
+                msg = f"{method}: {self._last_good[method]} -> {name}"
+                self.switch_log.append(msg)
+                log.info("provider switched: %s", msg)
+            self._last_good[method] = name
+
+    async def _call_serial(self, method: str, args: tuple, live: list, errors: list[str]):
+        for p in live:
+            _, result, exc = await self._attempt(method, p, args)
+            if exc is None and not self._is_empty(result):
+                self._settle_last_good(method, p.name)
+                return result
+            self._note_failure(method, p.name, exc, errors)
         raise ProviderError(f"all providers failed for {method}: " + "; ".join(errors))
+
+    async def _call_hedged(self, method: str, args: tuple, live: list, errors: list[str]):
+        """秒级方法对冲（P1-A）：主源宽限 HEDGE_DELAY，超时并行打备源，先归者得。
+
+        - 主源宽限期内应答：成功用之（正常路径，备源零流量、行为与串行一致）；
+          快速失败/空 → 记账后串行走剩余源（主源活着只是这把没给数据，无须并发）。
+        - 主源超宽限：备源起跑，两路先归且可用者得；备源抢先时放弃主源
+          （cancel + 记一次失败，连续挂起 3 次同样进熔断，不会无限挂账）。
+        """
+        primary, backup = live[0], live[1]
+        p_task = asyncio.create_task(self._attempt(method, primary, args))
+        done, _ = await asyncio.wait({p_task}, timeout=HEDGE_DELAY)
+        if done:
+            _, result, exc = p_task.result()
+            if exc is None and not self._is_empty(result):
+                self._settle_last_good(method, primary.name)
+                return result
+            self._note_failure(method, primary.name, exc, errors)
+            return await self._call_serial(method, args, live[1:], errors)
+
+        b_task = asyncio.create_task(self._attempt(method, backup, args))
+        tasks = {p_task: primary, b_task: backup}
+        while tasks:
+            done, _ = await asyncio.wait(set(tasks), return_when=asyncio.FIRST_COMPLETED)
+            for t in done:
+                p = tasks.pop(t)
+                _, result, exc = t.result()
+                if exc is None and not self._is_empty(result):
+                    # 另一路仍在飞：若它是主源（被备源超车），放弃并记一次失败
+                    # （连续挂起 3 次同样进熔断，不会无限挂账）；若是备源被超车，
+                    # cancel 即可，不算它的失败。
+                    other = p_task if t is b_task else b_task
+                    if not other.done():
+                        other.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await other
+                        if other is p_task:
+                            self._note_failure(
+                                method, primary.name,
+                                TimeoutError(f"超 {HEDGE_DELAY:.2f}s 未应答（备源已接手）"), errors,
+                            )
+                    self._settle_last_good(method, p.name)
+                    return result
+                self._note_failure(method, p.name, exc, errors)
+            if tasks == {p_task: primary}:
+                # 只剩挂起的主源：备源已败、主源远超宽限仍未归——放弃，串行下沉
+                p_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await p_task
+                self._note_failure(
+                    method, primary.name,
+                    TimeoutError(f"超 {HEDGE_DELAY:.2f}s 未应答（备源未接住）"), errors,
+                )
+                break
+        # 两路都不可用：继续串行剩余源
+        return await self._call_serial(method, args, live[2:], errors)
 
     async def get_indices(self) -> list:
         return await self._call("get_indices")

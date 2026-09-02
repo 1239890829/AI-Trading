@@ -77,6 +77,10 @@ class EastmoneyProvider:
 
     name = "eastmoney"
     realtime = True
+    #: 秒级链位次（见 composite.REALTIME_METHODS）：腾讯(0)→新浪(1)→东财(2)，
+    #: 与 composite 模块头"行情走腾讯→新浪→东财"的既有意图对齐——
+    #: 此前无显式 rank，构造顺序让东财排在新浪前，属注释与行为的静默漂移。
+    realtime_rank = 2
 
     def __init__(self, timeout: float = 5.0):
         self._client = httpx.AsyncClient(
