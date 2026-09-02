@@ -592,7 +592,11 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
           )}
 
           {chartTab === "minute" && (
-            <Panel title={`${quote?.name ? `${quote.name} · ` : ""}当日分时（1 分钟）`} source={minutes[0]?.source} bodyClassName="overflow-hidden" className="min-h-0 flex-1">
+            /* 头部标题行（股票名 · 当日分时 + 来源）已移除，与 K 线面板保持一致：
+               股票名在页面其它位置已展示，这行纯属重复占位，去掉后纵向多出约
+               41px 给分时图；两个图表 tab 也不再有「一个有头一个无头」的高度跳动
+               （2026-09-02 用户要求） */
+            <Panel bodyClassName="overflow-hidden" className="min-h-0 flex-1">
               {minutes.length > 0 ? (
                 <div className="relative h-full">
                   {/* 停牌遮罩：分时是当日数据，停牌股当日无成交，
