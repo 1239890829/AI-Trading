@@ -534,6 +534,3 @@ class ThsFuyaoProvider:
 
     async def get_trades(self, symbol: str) -> list:
         return []
-
-    async def search(self, query: str) -> list:
-        return []

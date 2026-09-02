@@ -194,4 +194,44 @@ describe("SearchBox 搜索体验（防抖/竞态/loading/失败/空结果）", (
       vi.useRealTimers();
     }
   });
+
+  it("IME 组合期间不搜索、选字 Enter 不搜索（拼音片段是垃圾查询，会消耗上游配额）", () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(searchSymbols).mockResolvedValue([]);
+      render(<SearchBox />);
+      const input = screen.getByPlaceholderText("搜索代码 / 名称");
+      fireEvent.compositionStart(input);
+      fireEvent.change(input, { target: { value: "xingwang" } }); // 组合中的拼音片段
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(searchSymbols).not.toHaveBeenCalled();
+      fireEvent.keyDown(input, { key: "Enter" }); // 选字上屏的 Enter，不是搜索指令
+      expect(searchSymbols).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("组合结束立即用最终上屏词搜索（跳过防抖，星网锐捷场景）", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(searchSymbols).mockResolvedValue([item("002396", "星网锐捷")]);
+      render(<SearchBox />);
+      const input = screen.getByPlaceholderText("搜索代码 / 名称");
+      fireEvent.compositionStart(input);
+      fireEvent.change(input, { target: { value: "星网锐捷" } }); // IME 上屏直接替换值
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(searchSymbols).not.toHaveBeenCalled(); // 组合期间保持静默
+      fireEvent.compositionEnd(input);
+      expect(searchSymbols).toHaveBeenCalledWith("星网锐捷"); // 立即搜索，不等 250ms
+      await act(async () => {});
+      expect(screen.getByText("星网锐捷")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

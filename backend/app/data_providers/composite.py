@@ -150,7 +150,42 @@ class CompositeProvider:
         return await self._call("get_longhu_records", trade_date)
 
     async def search(self, query: str) -> list:
-        return await self._call("search", query)
+        """搜索专用 failover（空结果语义与通用 _call 不同）。
+
+        suggest 类源对生僻词/拼音片段返回空是**正常语义**，不能像 K 线/池子那样
+        把空当失败累计——否则中文 IME 逐字输入产生的垃圾查询（"xing"/"xingw"…）
+        会把 tencent/eastmoney 以连续 3 次空结果打进 60s 熔断，用户上屏真词时
+        两个真源都还在冷却期，任何搜索都秒回空（2026-09-02「星网锐捷搜不出」事故）。
+
+        语义：有源返回非空 → 用它；有源明确"无匹配"（返回空，不计失败）→
+        返回 []；全部异常/全部熔断 → 抛 ProviderError（路由转 502）。
+        """
+        errors: list[str] = []
+        saw_no_match = False
+        for p in self._pick("search"):
+            if self._in_cooldown("search", p.name):
+                errors.append(f"{p.name}: 熔断冷却中（{self._cooldown_left('search', p.name):.0f}s）")
+                continue
+            try:
+                result = await p.search(query)
+            except Exception as exc:
+                errors.append(f"{p.name}: {exc}")
+                log.warning("provider %s search failed: %s", p.name, exc)
+                self._record_failure("search", p.name)
+                continue
+            if result:
+                self._record_success("search", p.name)
+                if self._last_good.get("search") != p.name:
+                    if "search" in self._last_good:
+                        msg = f"search: {self._last_good['search']} -> {p.name}"
+                        self.switch_log.append(msg)
+                        log.info("provider switched: %s", msg)
+                    self._last_good["search"] = p.name
+                return result
+            saw_no_match = True  # 明确的"无匹配"：真实空结果，不计失败
+        if saw_no_match:
+            return []
+        raise ProviderError("all search providers failed: " + "; ".join(errors))
 
     async def get_minute_line(self, symbol: str) -> list:
         return await self._call("get_minute_line", symbol)

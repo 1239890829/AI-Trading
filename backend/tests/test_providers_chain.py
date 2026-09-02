@@ -368,3 +368,118 @@ def test_breaker_resets_on_success_and_empty_counts_as_failure():
     q = asyncio.run(comp.get_quote("600519"))
     assert comp.breaker_state() == {}
     assert q.symbol == "600519"
+
+
+# ---------------------------------------------------------------- search 专用语义（2026-09-02 事故）
+
+def test_search_empty_is_no_match_not_failure():
+    """拼音垃圾前缀连续返回空不得累计熔断：真词上屏时源必须还能用。
+
+    2026-09-02「星网锐捷搜不出」事故：IME 逐字输入的 "xing"/"xingw" 等
+    垃圾查询以连续 3 次空结果把两个真源打进 60s 熔断，真词秒回空。
+    """
+
+    class Smartbox:
+        name = "smartbox"
+        realtime = False
+
+        async def search(self, query):
+            if query in {"xing", "xingw", "xingwang"}:
+                return []
+            return [{"symbol": "002396", "source": "smartbox"}]
+
+    chain = CompositeProvider([Smartbox()])
+    for junk in ("xing", "xingw", "xingwang"):
+        assert asyncio.run(chain.search(junk)) == []
+    # 熔断未触发：真词仍走源拿到结果
+    hits = asyncio.run(chain.search("星网锐捷"))
+    assert hits and hits[0]["symbol"] == "002396"
+    assert ("search", "smartbox") not in chain._failures
+    assert not chain._cooldown_until
+
+
+def test_search_all_no_match_returns_empty():
+    class NoMatch:
+        name = "nomatch"
+        realtime = False
+
+        async def search(self, query):
+            return []
+
+    chain = CompositeProvider([NoMatch()])
+    # 真实无匹配：空列表而非抛错（旧通用语义会把"全空"当"全挂"）
+    assert asyncio.run(chain.search("zzzzzz")) == []
+
+
+def test_search_all_failed_raises():
+    class Down:
+        name = "down"
+        realtime = False
+
+        async def search(self, query):
+            raise ProviderError("blocked")
+
+    chain = CompositeProvider([Down()])
+    try:
+        asyncio.run(chain.search("茅台"))
+        raise AssertionError("should raise")
+    except ProviderError as exc:
+        assert "all search providers failed" in str(exc)
+
+
+def test_search_mixed_raise_and_no_match_returns_empty():
+    """主源异常 + 备源明确无匹配 → 空列表（备源的"没搜到"是有效证据）。"""
+
+    class Flaky:
+        name = "flaky"
+        realtime = False
+
+        async def search(self, query):
+            raise ProviderError("rate limited")
+
+    class Spare:
+        name = "spare"
+        realtime = False
+
+        async def search(self, query):
+            return []
+
+    chain = CompositeProvider([Flaky(), Spare()])
+    assert asyncio.run(chain.search("xing")) == []
+    # 异常计失败，"无匹配"不计
+    assert chain._failures.get(("search", "flaky")) == 1
+    assert ("search", "spare") not in chain._failures
+
+
+def test_search_cools_down_only_on_real_errors():
+    """真实异常（而非空结果）满阈值才熔断；冷却期内跳过 → ProviderError（路由 502）。"""
+
+    class Down:
+        name = "down"
+        realtime = False
+
+        async def search(self, query):
+            raise ProviderError("waf")
+
+    chain = CompositeProvider([Down()])
+    for _ in range(3):  # FAILURE_THRESHOLD
+        try:
+            asyncio.run(chain.search("茅台"))
+        except ProviderError:
+            pass
+    try:
+        asyncio.run(chain.search("茅台"))
+        raise AssertionError("should raise")
+    except ProviderError as exc:
+        assert "熔断冷却中" in str(exc)
+
+
+def test_search_stubs_removed_from_chain():
+    """ths/sina 的 search 空桩已删除：空桩把"我不能搜"伪装成"没匹配"，
+    且每次搜索都给它们记一次失败、污染熔断计数与日志（_pick 按 hasattr 过滤）。"""
+    from app.data_providers.sina import SinaProvider
+    from app.data_providers.ths import ThsFuyaoProvider
+
+    # 类级检查即可（方法不存在于类上）：ThsFuyaoProvider 构造需 api_key，无需实例化
+    assert not hasattr(ThsFuyaoProvider, "search")
+    assert not hasattr(SinaProvider, "search")

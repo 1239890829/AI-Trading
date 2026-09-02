@@ -6,9 +6,11 @@ from datetime import date, datetime, time as dt_time, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 
 from app.api.deps import get_hub
 from app.core.ttl_cache import cache_on
+from app.data_providers.eastmoney import ProviderError
 from app.data_quality.validator import validate_order_book
 from app.schemas.envelope import (
     AuctionBenchmarkItem,
@@ -835,18 +837,31 @@ async def news(
 
 
 @router.get("/search", response_model=Envelope[list[SymbolSearchItem]])
-async def search(q: str = Query(min_length=1, max_length=20), hub: QuoteHub = Depends(get_hub)) -> dict:
-    from app.data_providers.mock import MockProvider
+async def search(q: str = Query(min_length=1, max_length=20), hub: QuoteHub = Depends(get_hub)):
+    """代码/名称搜索（tencent→eastmoney failover，链内语义见 CompositeProvider.search）。
+
+    - 进程内 30s TTL 缓存（挂 hub 单例，LRU 有界）：吸收中文 IME 逐字输入的
+      前缀突发，同词并发单飞；空结果同样缓存（垃圾前缀不再反复打上游）。
+    - 上游全挂（含熔断）→ 502，前端 role=alert 失败提示承接；
+      全链"无匹配"→ 200 []，前端展示空结果提示——两种状态不再混为一谈
+      （旧实现把 ProviderError 吞成 [] 再兜底 MockProvider，故障被伪装成"没搜到"）。
+    - 响应带 Cache-Control: no-store：搜索结果依赖上游实时状态，禁止浏览器
+      （尤其 Safari 的启发式缓存）把瞬断窗口里的空结果缓存下来反复回放。
+    """
+    cache = cache_on(hub, "market.search", 30, maxsize=256)
+    kw = q.strip()
+
+    async def _do() -> list[dict]:
+        items = await hub.provider.search(kw)
+        return [i.model_dump() for i in items]
 
     try:
-        items = await hub.provider.search(q)
-    except Exception as exc:
+        hit, rows = await cache.get_or_set(kw, _do)
+    except ProviderError as exc:
         log.warning("search failed: %s", exc)
-        items = []
-    if not items:
-        fallback = MockProvider()
-        items = await fallback.search(q)
-    return {"data": [i.model_dump() for i in items], "meta": _meta(hub)}
+        raise HTTPException(status_code=502, detail="搜索数据源暂不可用，请稍后重试") from exc
+    payload = {"data": rows, "meta": {**_meta(hub), "cached": hit}}
+    return JSONResponse(content=payload, headers={"Cache-Control": "no-store"})
 
 
 # ---------------------------------------------------------------- 题材梯队看板

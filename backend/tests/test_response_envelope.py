@@ -27,6 +27,13 @@ from app.schemas.market import (
 class _FakeProvider:
     name = "chain(mock)"
 
+    async def search(self, query: str):
+        # 2026-09-02 起路由不再兜底 MockProvider：上游无匹配就是空列表，
+        # envelope 测试用桩给数据，不再借道"吞异常→mock 假数据"的旧路径
+        from app.schemas.market import SymbolSearchItem as _S
+
+        return [_S(symbol="600519", name="贵州茅台", market="SH", source="mock")]
+
     async def get_kline(self, symbol, timeframe, start, end):
         return [_kline("600519")]
 
@@ -108,10 +115,14 @@ def test_longhu_envelope():
 
 def test_search_envelope():
     import asyncio
+    import json
 
-    payload = asyncio.run(market_route.search(q="茅台", hub=_FakeHub()))
+    resp = asyncio.run(market_route.search(q="茅台", hub=_FakeHub()))
+    # 路由返回 JSONResponse（带 no-store 头）：envelope 结构必须不变
+    assert resp.headers["cache-control"] == "no-store"
+    payload = json.loads(resp.body)
     env = Envelope[list[SymbolSearchItem]].model_validate(payload)
-    assert isinstance(env.data, list)
+    assert env.data[0].symbol == "600519"
 
 
 def test_trade_envelope():

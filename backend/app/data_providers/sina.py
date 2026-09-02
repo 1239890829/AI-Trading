@@ -12,7 +12,7 @@ import httpx
 
 from app.data_providers.eastmoney import ProviderError
 from app.data_providers.tencent import to_tencent_symbol  # 同一 sh/sz 前缀规则
-from app.schemas.market import OrderBook, OrderBookLevel, Quote, SymbolSearchItem
+from app.schemas.market import OrderBook, OrderBookLevel, Quote
 
 SOURCE = "sina"
 _TZ_BJ = timezone(timedelta(hours=8))
@@ -145,9 +145,6 @@ class SinaProvider:
         return []
 
     async def get_longhu_records(self, trade_date) -> list:
-        return []
-
-    async def search(self, query: str) -> list[SymbolSearchItem]:
         return []
 
     async def get_board_rankings(self, board_type: str = "hangye") -> list[dict]:

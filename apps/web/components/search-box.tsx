@@ -11,6 +11,9 @@ import type { SymbolSearchItem } from "@/types/market";
 const DEBOUNCE_MS = 250;
 /** 触发搜索的最小关键词长度（少于 2 字符不发请求）。 */
 const MIN_QUERY_LEN = 2;
+// 中文 IME：组合（拼音）期间不调度搜索——拼音片段（"xing"/"xingw"…）是垃圾查询，
+// 搜不到结果还消耗上游配额；选字 Enter 属于 IME 操作不是搜索指令。
+// compositionEnd 后用最终上屏词立即搜索（跳过防抖）。
 
 export function SearchBox() {
   const router = useRouter();
@@ -29,6 +32,8 @@ export function SearchBox() {
    */
   const seqRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 中文 IME 组合中（拼音未上屏）：期间不调度搜索、Enter/Escape 归 IME 所有。 */
+  const composingRef = useRef(false);
 
   const runSearch = useCallback((kw: string) => {
     const seq = ++seqRef.current;
@@ -57,6 +62,15 @@ export function SearchBox() {
 
   useEffect(() => {
     const kw = q.trim();
+    if (composingRef.current) {
+      // IME 组合中：q 是拼音片段，不调度搜索（compositionEnd 会用上屏词立即搜）。
+      // 已有的待发 timer 也要清掉——比如用户先输英文停稳后又切输入法开始组合。
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      return;
+    }
     if (kw.length < MIN_QUERY_LEN) {
       seqRef.current += 1; // 作废飞行中的请求（状态清理在 onChange/go 的 resetTransient）
       return;
@@ -110,6 +124,7 @@ export function SearchBox() {
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (composingRef.current) return; // IME 组合中：Enter=选字上屏、Escape=取消组合，不是搜索指令
     if (e.key === "Enter") {
       if (results.length > 0) {
         go(results[0]);
@@ -144,6 +159,23 @@ export function SearchBox() {
           setQ(v);
           // 删短到阈值以下：立即作废飞行中请求并清理搜索状态
           if (v.trim().length < MIN_QUERY_LEN) resetTransient();
+        }}
+        onCompositionStart={() => {
+          composingRef.current = true;
+        }}
+        onCompositionEnd={(e) => {
+          if (!composingRef.current) return;
+          composingRef.current = false;
+          const v = e.currentTarget.value;
+          if (v !== q) {
+            // 个别环境（Safari 部分版本）组合结束不补发 change：把终值写回状态，
+            // 交给 q 的 effect 走防抖搜索
+            setQ(v);
+            return;
+          }
+          // 常规路径：上屏词已在状态（组合中被门控跳过调度）→ 跳过防抖立即搜
+          const kw = v.trim();
+          if (kw.length >= MIN_QUERY_LEN) runSearch(kw);
         }}
         onFocus={() => results.length > 0 && setOpen(true)}
         onKeyDown={onKeyDown}
