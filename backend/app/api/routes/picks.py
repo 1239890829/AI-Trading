@@ -45,6 +45,7 @@ from app.picks.engine import (
     synthesize,
 )
 from app.picks.gate import apply_gate_to_picks, evaluate_stand_aside
+from app.picks.halt_risk import BENCHMARK_INDEX, assess, benchmark_symbol, board_of, risk_labels, veto_reasons
 from app.picks.regime import detect_regime, earnings_event_ratio, weights_for
 from app.picks.risk import build_invalidations, exit_discipline, risk_tier_of, stop_loss_reference
 from app.services.quote_enrich import fill_valuation
@@ -329,6 +330,30 @@ def _build_event_hits_index(store: EventStore) -> dict[str, tuple[float, float, 
     return out
 
 
+async def _prefetch_index_bars(hub: QuoteHub) -> dict[str, list[dict]]:
+    """预取各板块基准指数日 K（偏离值计算的分母）。
+
+    ⚠️ 必须在并发评分**之前**一次性取完复用：24 只候选股各拉一次指数 = 请求量
+    翻 5 倍，而腾讯源有熔断（实测连续请求直接 502「熔断冷却中 19s」），
+    会把整个选股流程拖垮。指数当日不变，取一次足够。
+
+    取不到时对应板块留空列表——`assess` 会把偏离值类规则降级为「不可评」
+    并显式标注，绝不拿个股涨幅冒充偏离值。
+    """
+    # key 用**指数代码**而非板块名：查询侧是 `index_bars.get(benchmark_symbol(board, sym))`，
+    # 而 benchmark_symbol 返回的是代码。用板块名作 key 会全部 miss → 偏离值恒为 None
+    # （静默降级成"指数数据缺失"，看不出是 key 写错）。
+    out: dict[str, list[dict]] = {}
+    for board, sym in BENCHMARK_INDEX.items():
+        try:
+            bars = await hub.provider.get_kline(sym, "1d", None, None)
+            out[sym] = [b.model_dump() if hasattr(b, "model_dump") else dict(b) for b in bars][-250:]
+        except Exception as exc:
+            log.warning("picks: index kline failed (%s): %s", sym, exc)
+            out[sym] = []
+    return out
+
+
 async def _deep_score_candidates(
     deep: list[dict],
     *,
@@ -342,12 +367,18 @@ async def _deep_score_candidates(
     event_hits_index: dict[str, tuple[float, float, str | None, str | None, int]],
     concurrency: int,
     promo_percentile: float | None = None,
+    index_bars: dict[str, list[dict]] | None = None,
 ) -> list[dict]:
     """④ 逐只深度评分（并发；每只独立异常兜底）。
 
     从 generate_picks 拆出（全项目审查 T6：主函数 320 行 → 流水线编排 +
-    本函数）。输入候选已带 name/price/change_pct/amount。"""
+    本函数）。输入候选已带 name/price/change_pct/amount。
+
+    :param index_bars: 各板块基准指数日 K（`_prefetch_index_bars` 预取），
+        供停牌核查/异动风险评估计算偏离值。
+    """
     sem = asyncio.Semaphore(concurrency)
+    index_bars = index_bars or {}
 
     async def _score_one(c: dict) -> dict | None:
         sym = c["symbol"]
@@ -467,9 +498,24 @@ async def _deep_score_candidates(
                 + (f"；题材「{theme_name}」" if theme_name else "；未匹配到题材（按个股独立评估）")
             )
 
-            score, vetoes = synthesize(sub, weights=weights)
+            # 停牌核查 / 异动风险（docs/halt-check-risk-analysis.md 第一批）：
+            # 只依据已取到的个股日 K + 预取的指数日 K，零新增数据源。
+            # 红线进 veto（×0.4 重罚并显式记录），黄线在合成后按扣分扣减。
+            # ⚠️ R3（当前停牌）暂不接：picks 流程没有可靠的 trading_status 来源，
+            # 硬猜会把"当日无成交"误判成停牌。接口已留，第二批接入（见模块 docstring）。
+            halt = assess(
+                symbol=sym,
+                name=c.get("name"),
+                bars=dicts,
+                index_bars=index_bars.get(benchmark_symbol(board_of(sym, c.get("name")), sym), []),
+            )
+            score, vetoes = synthesize(sub, weights=weights, vetoes=veto_reasons(halt))
+            if halt["penalty"]:
+                score = round(max(0.0, score - halt["penalty"]), 1)
             return {
                 "symbol": sym, "name": c["name"], "price": c["price"], "change_pct": c["change_pct"],
+                "halt_risk": halt,
+                "halt_risk_labels": risk_labels(halt),
                 # 估值此前**只用于基本面打分，没有透出到卡片**——选股页因此永远看不到 PE，
                 # 而个股详情页有（走 /api/quotes 的 fill_valuation）。同一标的两个口径不一致。
                 "pe_ttm": pe,
@@ -528,6 +574,9 @@ def _assemble_card(k: dict) -> dict:
         ),
         "themes": [k["theme"]] if k.get("theme") else [],
         "related_events": k["related_events"],
+        # 停牌核查 / 异动风险（第一批：R1/R2 红线 + Y1/Y2/Y3 黄线 + P1/P2 仓位约束）
+        "halt_risk": k.get("halt_risk"),
+        "halt_risk_labels": k.get("halt_risk_labels") or [],
     }
 
 
@@ -636,6 +685,12 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
 
     # ③d 消息命中索引（B1）：一次遍历活跃事件按 symbol 建索引——
     # 原实现每候选股在并发任务里重复全量扫事件表（24×~31 次同步查询）
+    # ③e 基准指数日 K（停牌核查/异动的偏离值分母）：一次性预取，供全部候选复用。
+    # 24 只候选各拉一次会触发腾讯熔断，必须在这里取完。
+    index_bars = await _prefetch_index_bars(hub)
+
+    # ③d 消息命中索引（B1）：一次遍历活跃事件按 symbol 建索引——
+    # 原实现每候选股在并发任务里重复全量扫事件表（24×~31 次同步查询）
     event_hits_index = _build_event_hits_index(store)
 
     # 晋级率历史分位（选股 2.0 §3）：来自 P0-3b 校准库的 percentile，
@@ -657,6 +712,7 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
         event_hits_index=event_hits_index,
         concurrency=CONCURRENCY,
         promo_percentile=promo_pct,
+        index_bars=index_bars,
     )
     ranked.sort(key=lambda r: -r["score"])
 
