@@ -1,6 +1,19 @@
 /** 格式化工具测试：空值/边界/单位换算/红涨绿跌语义。 */
 import { describe, expect, it } from "vitest";
-import { fmt, fmtAmount, fmtHeat, fmtVolume, parseNum, pctColor, pctText, qualityLabel, sourceLabel, timeText } from "./format";
+import { fmt, fmtAmount, fmtHeat, fmtVolume, isHardQuality, parseNum, pctColor, pctText, qualityLabel, sourceLabel, timeText } from "./format";
+
+describe("isHardQuality", () => {
+  it("低/中质量（盘中瞬态）不渲染徽标，持久态（过期/非法）才渲染", () => {
+    // low/medium 来自盘中源字段瞬时不同步，下一个 tick 即恢复——上界面就闪
+    expect(isHardQuality("high")).toBe(false);
+    expect(isHardQuality("low")).toBe(false);
+    expect(isHardQuality("medium")).toBe(false);
+    // stale/invalid 是持久态，稳定显示不闪
+    expect(isHardQuality("stale")).toBe(true);
+    expect(isHardQuality("invalid")).toBe(true);
+    expect(isHardQuality("unknown-future")).toBe(false);
+  });
+});
 
 describe("fmt", () => {
   it("null/undefined/NaN → --", () => {

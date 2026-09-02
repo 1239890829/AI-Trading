@@ -48,4 +48,16 @@ describe("IndexCards 指数点击交互", () => {
     expect(active).not.toBeNull();
     expect(active?.getAttribute("title")).toContain("深证成指");
   });
+
+  it("质量徽标只对持久问题（stale/invalid）出现，low/medium 瞬态不出（2026-09-02 可疑标签闪烁修复）", () => {
+    const mk = (quality: string, reasons: string[]) =>
+      ({ ...baseAudit, symbol: "000001", name: "上证指数", market: "SH", price: 3300.5, change_pct: 0, quality, quality_reasons: reasons }) as Quote;
+    // 盘中瞬时 low（如 change_pct_mismatch 下一拍即恢复）不显示徽标——显示就闪
+    const low = render(<IndexCards indices={[mk("low", ["change_pct_mismatch"])]} />);
+    expect(low.container.textContent).not.toContain("可疑");
+    low.unmount();
+    // 持久 stale（过期）必须显示，让用户知道数据陈旧
+    const stale = render(<IndexCards indices={[mk("stale", ["refresh_failed"])]} />);
+    expect(stale.container.textContent).toContain("过期");
+  });
 });

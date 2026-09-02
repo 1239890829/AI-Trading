@@ -123,6 +123,8 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
 
   // fill：把当前 props 数据灌入已存在的 series（幂等，全量 setData；bars 只有 120 根，成本低）。
   // 存进 ref 供创建 effect 调用最新版本，避免把 bars 放进创建依赖导致整图重建。
+  // 2026-09-02：markers 与成本线拆到独立 effect——原实现每次 WS 合成 tick（每秒）
+  // 都 setMarkers + removePriceLine/createPriceLine，高频重设造成视觉扰动。
   const fill = () => {
     const chart = chartRef.current;
     const s = seriesRef.current;
@@ -196,8 +198,17 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
       s.macd.dea.setData(data.map((d, i) => ({ time: d.time, value: dea[i] })));
     }
 
-    // 标记：真实 B/S 点 + 新闻/公告事件点。总是调用（含空数组）——
-    // 数据切换后旧标记必须清掉，原实现只在非空时 set 会残留上一标的的标记
+    if (followLatest) {
+      const n = data.length;
+      chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 20), to: n + 2 });
+    }
+  };
+  // markers 与成本线：只随标记/开关/成本变化重设（低频），不进每秒的 fill 路径。
+  // 总是重设（含空数组）——数据切换后旧标记必须清掉，原实现只在非空时 set 会残留上一标的的标记。
+  const applyMarks = () => {
+    const chart = chartRef.current;
+    const s = seriesRef.current;
+    if (!chart || !s.candle || bars.length === 0) return;
     const markers: SeriesMarker<Time>[] = [];
     if (ind.bs) {
       for (const t of tradeMarks ?? []) {
@@ -245,17 +256,14 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
         title: "成本",
       });
     }
-
-    if (followLatest) {
-      const n = data.length;
-      chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 20), to: n + 2 });
-    }
   };
-  // fill 的引用经 effect 同步到 ref（渲染期写 ref 会被 react-hooks 规则拦截）；
-  // 本 effect 声明在创建 effect 之前，保证创建 effect 每次跑时拿到的是最新 fill
+  // fill / applyMarks 的引用经 effect 同步到 ref（渲染期写 ref 会被 react-hooks 规则拦截）；
+  // 本 effect 声明在创建 effect 之前，保证创建 effect 每次跑时拿到的是最新版本
   const fillRef = useRef<() => void>(() => {});
+  const marksRef = useRef<() => void>(() => {});
   useEffect(() => {
     fillRef.current = fill;
+    marksRef.current = applyMarks;
   });
 
   // 创建 effect：只随指标开关/数据有无变化重建；数据更新走 fillRef（不重建）
@@ -307,6 +315,7 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
     }
 
     fillRef.current();
+    marksRef.current();
     // 首次聚焦最近 20 根（followLatest 时 fill 内每次都会重设，这里不必重复）
     if (!followLatest) {
       const n = Math.min(20, bars.length);
@@ -333,11 +342,18 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ind, hasBars]);
 
-  // 数据更新 effect：bars（含 WS 合成的当日 bar）/标记/成本线变化 → 原地重灌数据
+  // 数据更新 effect：bars（含 WS 合成的当日 bar）变化 → 原地重灌序列数据；
+  // 标记/成本线独立 effect（低频）——不进每秒的 fill 路径
   useEffect(() => {
     if (!chartRef.current) return;
     fillRef.current();
-  }, [bars, tradeMarks, costPrice, eventMarks]);
+  }, [bars]);
+
+  useEffect(() => {
+    if (!chartRef.current) return;
+    marksRef.current();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bars.length, tradeMarks, costPrice, eventMarks, ind.bs, ind.events]);
 
   // 布局 #2：副图高度变化 → applyOptions 动态调整（不重建 chart），主图 bottom 随之让位
   useEffect(() => {

@@ -103,15 +103,16 @@ function minutesFixture(): MinutePointFixture[] {
   return [point("14:28", 104.9, 900_000), point("14:29", 105.0, 1_000_000)];
 }
 
-function quoteAt(bjHHMM: string, price: number, volume: number | null = 1_100_000): Quote {
+function quoteAt(bjHHMM: string, price: number, volume: number | null = 1_100_000, amount: number | null = null): Quote {
   const hh = Number(bjHHMM.slice(0, 2));
   return {
     ...baseAudit,
     symbol: "600519",
     price,
     volume,
+    ...(amount != null ? { amount } : {}),
     data_timestamp: `${TODAY}T${String((hh - 8 + 24) % 24).padStart(2, "0")}:${bjHHMM.slice(3)}:30+00:00`,
-  };
+  } as Quote;
 }
 
 describe("mergeQuoteIntoMinutes", () => {
@@ -129,8 +130,35 @@ describe("mergeQuoteIntoMinutes", () => {
     expect(mergeQuoteIntoMinutes(minutesFixture(), quoteAt("14:29", 105.0, 1_000_000))).toBeNull();
   });
 
-  it("跨分钟（刚跳到下一分钟、REST 未补点）→ 不合成，防串分钟", () => {
-    expect(mergeQuoteIntoMinutes(minutesFixture(), quoteAt("14:30", 105.3))).toBeNull();
+  it("跨分钟（刚跳到下一分钟、REST 未补点）→ 追加新点而非放弃（2026-09-02 及时性修复）", () => {
+    const out = mergeQuoteIntoMinutes(minutesFixture(), quoteAt("14:30", 105.3));
+    expect(out).not.toBeNull();
+    expect(out).toHaveLength(3);
+    const added = out![2];
+    expect(added.price).toBe(105.3);
+    expect(added.cum_volume).toBe(1_100_000);
+    // 分钟量 = cum 差；quote 无 amount → avg 回退继承最后点
+    expect((added as { volume?: number }).volume).toBe(100_000);
+    expect((added as { avg?: number }).avg).toBe(104.8);
+    // 新点 ts 是 quote 时间截秒（14:30 北京 = 06:30 UTC）
+    expect(added.ts.startsWith(`${TODAY}T06:30:00`)).toBe(true);
+    // 前序点原样
+    expect(out![0]).toEqual(minutesFixture()[0]);
+    expect(out![1]).toEqual(minutesFixture()[1]);
+  });
+
+  it("跨分钟且 quote 带 amount → avg = amount/volume 精算", () => {
+    const out = mergeQuoteIntoMinutes(minutesFixture(), quoteAt("14:30", 105.3, 1_100_000, 115_830_000));
+    expect(out).not.toBeNull();
+    expect((out![2] as { avg?: number }).avg).toBeCloseTo(115_830_000 / 1_100_000, 3);
+  });
+
+  it("跨分钟超过 2 分钟（午休/断流）→ 不追加，交给 60s 校准", () => {
+    expect(mergeQuoteIntoMinutes(minutesFixture(), quoteAt("14:33", 105.3))).toBeNull();
+  });
+
+  it("quote 分钟早于最后点（快照竞态）→ 不合成", () => {
+    expect(mergeQuoteIntoMinutes(minutesFixture(), quoteAt("14:27", 105.3))).toBeNull();
   });
 
   it("quote.volume 缺失 → 保留原 cum_volume", () => {

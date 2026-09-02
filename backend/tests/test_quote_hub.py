@@ -55,3 +55,41 @@ def test_watchlist_stock_takes_priority():
     assert len(out) == 1
     assert out[0].name == "平安银行"
     assert out[0].price == 12.34
+
+
+# ---- _poll_symbols（2026-09-02）：轮询池 = 自选 ∪ 订阅者订阅集的裸 6 位代码 ----
+
+def test_poll_symbols_merges_subscriber_symbols():
+    """详情面板看非自选股：订阅集里的裸代码必须并入轮询池，否则该股
+    永远不进缓存 → WS/REST 都取不到 → 分时/K线只剩 60s 校准慢通道。"""
+    hub = QuoteHub(provider=None, poll_interval=10, get_watchlist=lambda: ["600105"])
+    hub.subscribe({"002594", "sh000001"})  # 详情页订阅个股 + 大盘指数叠加
+    pool = hub._poll_symbols()
+    assert "600105" in pool  # 自选保留
+    assert "002594" in pool  # 订阅的个股并入
+    assert "sh000001" not in pool  # 带前缀指数不进池（get_indices 单独维护）
+
+
+def test_poll_symbols_excludes_prefixed_and_non_numeric():
+    """防串纪律：裸代码=股票。带前缀/字母/非 6 位形态绝不进 get_quotes 轮询池。"""
+    hub = QuoteHub(provider=None, poll_interval=10, get_watchlist=lambda: [])
+    hub.subscribe({"sz000001", "300750", "abc123", "12345"})
+    assert hub._poll_symbols() == ["300750"]
+
+
+def test_poll_symbols_follows_subscribe_lifecycle():
+    """订阅/退订/改订阅集都即时反映在轮询池（每轮现算，零额外状态）。"""
+    hub = QuoteHub(provider=None, poll_interval=10, get_watchlist=lambda: [])
+    q = hub.subscribe({"002594"})
+    assert hub._poll_symbols() == ["002594"]
+    hub.update_symbols(q, {"600519"})
+    assert hub._poll_symbols() == ["600519"]
+    hub.unsubscribe(q)
+    assert hub._poll_symbols() == []
+
+
+def test_poll_symbols_tolerates_none_subscription():
+    """subscribe(None)（旧协议：全部自选）不影响轮询池合并。"""
+    hub = QuoteHub(provider=None, poll_interval=10, get_watchlist=lambda: ["600105"])
+    hub.subscribe(None)
+    assert hub._poll_symbols() == ["600105"]

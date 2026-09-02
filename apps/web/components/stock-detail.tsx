@@ -120,6 +120,12 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   const [inWatchlist, setInWatchlist] = useState(false);
   const [quote, setQuote] = useState<Quote | null>(null);
   const [auction, setAuction] = useState<AuctionData | null>(null);
+  // MinuteChart 的 auction prop 引用稳定化：行内对象每渲染必新引用，而分时图
+  // 创建 effect 依赖 auction——不 memo 会导致整图每秒销毁重建（闪烁回归）。
+  const auctionProp = useMemo(
+    () => (auction?.auction_price ? { price: auction.auction_price, pct: auction.auction_pct } : null),
+    [auction],
+  );
   const [vrBaseline, setVrBaseline] = useState<number[] | null>(null);
   // 指数 symbol（sh000001 等）：禁用个股专属面板（加自选/交易/资料/资金图）
   const isIndex = isIndexSymbol(symbol);
@@ -412,16 +418,24 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   const myPosition = paper?.positions.find((p) => p.symbol === symbol) ?? null;
   const costPrice = myPosition && myPosition.quantity > 0 ? myPosition.cost_price : null;
 
-  // 新闻/公告 → K 线事件点（P1-8）：复用 digest 已取回的数据，零新增请求
+  // 新闻/公告 → K 线事件点（P1-8）：复用 digest 已取回的数据，零新增请求。
+  // 依赖必须用内容键（日期串）而非 displayBars 引用——WS 合成每秒给最后一根 bar
+  // 换新引用，若直接依赖它，eventMarks 每秒新引用 → KlineChartPro 的标记 effect
+  // 每秒重跑 setMarkers + 成本线重建（2026-09-02 闪烁修复的引用稳定性收口）。
+  const barDatesKey = useMemo(() => displayBars.map((b) => b.ts.slice(0, 10)).join(","), [displayBars]);
   const eventMarks = useMemo(
-    () => buildEventMarks(displayBars.map((b) => b.ts.slice(0, 10)), anns ?? [], news ?? []),
-    [displayBars, anns, news],
+    () => buildEventMarks(barDatesKey ? barDatesKey.split(",") : [], anns ?? [], news ?? []),
+    [barDatesKey, anns, news],
   );
 
-  // 当日新闻 → 分时图分钟事件点：同样零新增请求；公告只有日期不进分时
+  // 当日新闻 → 分时图分钟事件点：零新增请求；公告只有日期不进分时。
+  // buildMinuteNewsEvents 实际只读首点 ts（取北京日期），依赖缩窄为首点 ts 值
+  // （字符串，不随每秒合成变引用）——否则事件点每秒新引用 → MinuteChart
+  // 创建 effect 依赖 newsEvents → 整图每秒销毁重建，闪烁回归。
+  const minuteFirstTs = displayMinutes[0]?.ts ?? "";
   const minuteNewsEvents = useMemo(
-    () => buildMinuteNewsEvents(news ?? [], displayMinutes),
-    [news, displayMinutes],
+    () => (minuteFirstTs ? buildMinuteNewsEvents(news ?? [], [{ ts: minuteFirstTs }]) : []),
+    [news, minuteFirstTs],
   );
 
   // 板块标签分组：把风格/指数成分与概念题材分开，避免"大盘股/MSCI中国"混进题材
@@ -586,7 +600,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                   prevClose={quote?.prev_close ?? null}
                   yesterdayVol={displayBars.length >= 2 ? (displayBars[displayBars.length - 2]?.volume ?? null) : null}
                   index={indexOverlay}
-                  auction={auction?.auction_price ? { price: auction.auction_price, pct: auction.auction_pct } : null}
+                  auction={auctionProp}
                   exactBaseline={vrBaseline}
                   newsEvents={minuteNewsEvents}
                   className="h-full"

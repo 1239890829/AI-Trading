@@ -63,17 +63,18 @@ button, a, tr, input {
   transition: background-color 140ms ease-out, border-color 140ms ease-out, color 140ms ease-out;
 }
 
-/* ===== 署名动效：价格 tick 闪烁（impeccable animate: 让状态变化可读，非装饰） ===== */
+/* ===== 署名动效：价格 tick 过渡（impeccable animate: 让状态变化可读，非装饰）
+   2026-09-02 用户反馈列表频繁闪烁：光晕减弱、时长收紧为 420ms——方向可读但不抢眼 ===== */
 @keyframes tick-flash-up {
-  from { color: #fda4af; text-shadow: 0 0 14px rgba(244, 63, 94, 0.5); }
+  from { color: #fda4af; text-shadow: 0 0 6px rgba(244, 63, 94, 0.3); }
   to   { color: inherit; text-shadow: 0 0 0 rgba(244, 63, 94, 0); }
 }
 @keyframes tick-flash-down {
-  from { color: #6ee7b7; text-shadow: 0 0 14px rgba(16, 185, 129, 0.45); }
+  from { color: #6ee7b7; text-shadow: 0 0 6px rgba(16, 185, 129, 0.28); }
   to   { color: inherit; text-shadow: 0 0 0 rgba(16, 185, 129, 0); }
 }
-.tick-up   { animation: tick-flash-up 550ms cubic-bezier(0.16, 1, 0.3, 1); }
-.tick-down { animation: tick-flash-down 550ms cubic-bezier(0.16, 1, 0.3, 1); }
+.tick-up   { animation: tick-flash-up 420ms ease-out; }
+.tick-down { animation: tick-flash-down 420ms ease-out; }
 
 /* WS 连接状态呼吸点 */
 @keyframes dot-breathe {

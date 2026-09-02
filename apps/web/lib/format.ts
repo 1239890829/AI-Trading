@@ -78,3 +78,13 @@ export function qualityLabel(q: string): string {
   };
   return map[q] ?? q;
 }
+
+/**
+ * 是否值得渲染质量徽标的"硬"质量问题（2026-09-02 用户反馈"偶尔弹出可疑标签"）：
+ * low（可疑）/medium（延迟）来自盘中源字段瞬时不同步（如价格已更新而涨跌幅
+ * 滞后一拍触发 change_pct_mismatch 判 low），下一个 tick 即恢复 high——徽标
+ * 一秒弹现又消失，正是闪烁来源。这两档不再上界面；stale（过期/休市）与
+ * invalid（非法）是持久态，稳定显示不闪。 */
+export function isHardQuality(q: string): boolean {
+  return q === "stale" || q === "invalid";
+}

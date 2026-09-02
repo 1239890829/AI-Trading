@@ -18,12 +18,19 @@ import type { MinuteNewsEvent } from "@/lib/event-markers";
  *
  * 坐标系：以昨收为中心对称展开（涨跌停贴边、横盘日 0.5% 地板防抖）；
  * 右轴绝对价格、左轴涨跌幅（隐藏 % 序列承载）；昨收虚线基准。
- * 曲线：价格（面积）+ 均价线（黄）+ 上证叠加（紫虚线，左轴 % 归一化）+ 量能副图（红涨绿跌）。
- * 量比（近似口径）：点 i 量比 = 当日累计量_i / (昨日全天量 × 已开市分钟/240)；
- * 昨日量由日 K 倒数第二根提供（bars[-1] 在盘中是今日实时 bar，休市日是分时日本身，
+ * 曲线：价格（面积）+ 均价线（黄）+ 上证叠加（紫虚线，左轴 % 归一）+ 量能副图（红涨绿跌）。
+ * 量比：精确口径（TDX 5 日同期基线）优先，缺失回退近似（昨日量 × 已开市分钟/240）。
+ * 昨日量取日 K 倒数第二根提供（bars[-2] 在盘中是今日实时 bar，休市日是分时日本身，
  * 两种场景下 bars[-2] 都恰好是"分时日的上一交易日"）。分子分母同为股，单位已实测一致。
  * 交互：十字光标浮层（触摸同源），ref 直改 DOM 不走 React state。
  * prevClose 缺失时整体降级为库默认自适应坐标 + 浮层隐藏涨跌幅，绝不臆造基准。
+ *
+ * 创建/数据分离（2026-09-02 用户反馈"刷新闪烁"）：原实现 effect 依赖 points——
+ * 每次行情 tick（WS 合成/60s 校准）整个 chart 销毁重建，闪烁且丢十字光标。
+ * 现在 chart/series 只随低频配置（prevClose/叠加/竞价/基线/事件晚到）重建，
+ * points 高频变化走 setData 全量原位重灌（不销毁图表、不闪）。⚠️ 不能用
+ * series.update()：槽位以全天 whitespace 占位，series 最后时间点恒为 15:00，
+ * update(当前分钟) 必抛 "Cannot update oldest data"（实测崩溃，见 fillAll 注释）。
  */
 
 const UP = "#ef4444"; // 中国惯例红涨
@@ -43,6 +50,23 @@ function tradingMinutesElapsed(bjIso: string): number {
 function fmtPct(v: number | null): string {
   return v === null ? "--" : `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
 }
+
+/** 点 ts → 北京墙钟 HH:MM（槽位/游标通用）。 */
+function bjHHMM(p: { ts: string }): string {
+  return new Date(new Date(p.ts).getTime() + BJ_OFFSET * 1000).toISOString().slice(11, 16);
+}
+
+type SeriesBundle = {
+  chart: IChartApi | null;
+  price: ISeriesApi<"Area"> | null;
+  pct: ISeriesApi<"Line"> | null;
+  avg: ISeriesApi<"Line"> | null;
+  vol: ISeriesApi<"Histogram"> | null;
+  slots: number[];
+  base0: number;
+};
+
+const emptyBundle = (): SeriesBundle => ({ chart: null, price: null, pct: null, avg: null, vol: null, slots: [], base0: 0 });
 
 export function MinuteChart({
   points,
@@ -67,7 +91,6 @@ export function MinuteChart({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const tipRef = useRef<HTMLDivElement>(null);
-  const badgeRef = useRef<HTMLDivElement>(null);
 
   // 量比统一计算：精确口径（TDX 5 日同期基线）优先，缺失回退近似（昨日量×时间占比）。
   const computeLB = useCallback(
@@ -103,8 +126,84 @@ export function MinuteChart({
     return { lb, idxPct };
   }, [points, index, computeLB]);
 
+  // points/computeLB 的实时引用（crosshair 回调闭包读 ref，不进依赖触发重建）
+  const pointsRef = useRef(points);
   useEffect(() => {
-    if (!ref.current || points.length === 0) return;
+    pointsRef.current = points;
+  }, [points]);
+  const lbRef = useRef(computeLB);
+  useEffect(() => {
+    lbRef.current = computeLB;
+  }, [computeLB]);
+
+  const seriesRef = useRef<SeriesBundle>(emptyBundle());
+  // 已灌数据的最后槽（HHMM 游标）：""=需要全量
+  const cursorRef = useRef("");
+  // 创建 effect 最近一次灌入的 points 引用（增量 effect 去重，避免同帧重复灌）
+  const lastPointsRef = useRef<P[] | null>(null);
+
+  /** 槽序列：09:25(竞价) + 09:30-11:30 + 13:00-15:00 共 243 槽，当日固定。 */
+  function buildSlots(first: P): { slots: number[]; base0: number } {
+    const bjDate = new Date(new Date(first.ts).getTime() + BJ_OFFSET * 1000).toISOString().slice(0, 10);
+    const base0 = Math.floor(new Date(`${bjDate}T00:00:00Z`).getTime() / 1000); // 伪 UTC 当日 00:00
+    const slotSecs: number[] = [base0 + 9 * 3600 + 25 * 60];
+    for (let m = 570; m <= 690; m++) slotSecs.push(base0 + Math.floor(m / 60) * 3600 + (m % 60) * 60);
+    for (let m = 780; m <= 900; m++) slotSecs.push(base0 + Math.floor(m / 60) * 3600 + (m % 60) * 60);
+    return { slots: slotSecs, base0 };
+  }
+
+  /**
+   * 全量重灌四个数据序列（首灌 / 每帧增量路径）。
+   * ⚠️ 必须用 setData 而非 series.update()：槽位序列以全天 whitespace 占位
+   * （X 轴固定 9:25-15:00 的视觉需求），series 内部"最后时间点"恒为 15:00——
+   * update() 只允许写入不早于最后时间点的数据，盘中 update(当前分钟) 必抛
+   * "Cannot update oldest data"（2026-09-02 实测把页面打进 error boundary）。
+   * setData 无顺序约束且是 Canvas 原位重绘（不重建图表、不闪）：243 槽 ×
+   * 4 序列在 1Hz 节奏下开销可忽略，且天然消除合成点与官方点同槽竞态。
+   */
+  function fillAll(s: SeriesBundle, pts: P[], base: number | null | undefined) {
+    if (!s.price) return;
+    const byHHMM = new Map<string, P>();
+    for (const p of pts) byHHMM.set(bjHHMM(p), p);
+    // 槽序遍历 → 前一有值槽的价格（量能红涨绿跌颜色判定），O(n) 无 indexOf
+    const slotHHMMs = s.slots.map((sec) => new Date(sec * 1000).toISOString().slice(11, 16));
+    const prevPriceByHHMM = new Map<string, number | null>();
+    let prevP: number | null = null;
+    for (let i = 0; i < s.slots.length; i++) {
+      prevPriceByHHMM.set(slotHHMMs[i], prevP);
+      const p = byHHMM.get(slotHHMMs[i]);
+      if (p && p.price != null) prevP = p.price;
+    }
+    const volColor = (p: P): string => {
+      const prevPrice = prevPriceByHHMM.get(bjHHMM(p)) ?? null;
+      return prevPrice == null || p.price === prevPrice ? FLAT : p.price > prevPrice ? "rgba(239,68,68,0.5)" : "rgba(16,185,129,0.5)";
+    };
+    const over = <T,>(pick: (p: P) => T | null): { time: Time; value?: T }[] =>
+      s.slots.map((sec, i) => {
+        const p = byHHMM.get(slotHHMMs[i]);
+        const v = p ? pick(p) : null;
+        return (v == null ? { time: sec as Time } : { time: sec as Time, value: v }) as { time: Time; value?: T };
+      });
+    s.price.setData(over((p) => p.price) as never);
+    if (s.pct && base != null && base > 0) {
+      s.pct.setData(over((p) => (p.price != null ? ((p.price - base) / base) * 100 : null)) as never);
+    }
+    s.avg?.setData(over((p) => p.avg) as never);
+    if (s.vol) {
+      const volData: { time: Time; value?: number; color?: string }[] = s.slots.map((sec, i) => {
+        const p = byHHMM.get(slotHHMMs[i]);
+        if (!p || p.volume == null) return { time: sec as Time }; // whitespace
+        return { time: sec as Time, value: p.volume, color: volColor(p) };
+      });
+      s.vol.setData(volData as never);
+    }
+  }
+
+  const hasPoints = points.length > 0;
+  // 低频配置（晚到即整图重建一次，次数 ≤3）：昨收/大盘叠加/竞价/量比基线/事件点
+  useEffect(() => {
+    if (!ref.current || !hasPoints) return;
+    const cur = pointsRef.current;
     const hasBase = prevClose != null && prevClose > 0;
 
     const chart = createChart(ref.current, {
@@ -119,32 +218,11 @@ export function MinuteChart({
       leftPriceScale: hasBase ? { visible: true, borderVisible: false } : { visible: false },
       crosshair: { mode: CrosshairMode.Normal },
     });
-
-    // X 轴时基：LHC 对 unix 时间戳按 UTC 墙钟渲染，把"北京墙上时刻"编码为
-    // 伪 UTC（utc_ts + 8h），X 轴才显示 09:30-15:00。crosshair param.time 同时基。
-    const toTime = (p: P): Time => (Math.floor(new Date(p.ts).getTime() / 1000) + BJ_OFFSET) as never;
-
-    // ---- 全天分钟槽（对标同花顺，用户反馈 #1）：X 轴从一开始就固定为
-    // 9:25(竞价) + 9:30-11:30 + 13:00-15:00 共 243 槽；已有行情点按北京
-    // 墙钟 HH:MM 映射进槽，未到的槽填 whitespace（{time} 无 value）——
-    // 分时线随行情从左向右填充，不再 fitContent 把已有点拉伸到全宽。
-    const first = points[0];
-    const bjDate = new Date(new Date(first.ts).getTime() + BJ_OFFSET * 1000).toISOString().slice(0, 10);
-    const base0 = Math.floor(new Date(`${bjDate}T00:00:00Z`).getTime() / 1000); // 伪 UTC 当日 00:00
-    const slotSecs: number[] = [base0 + 9 * 3600 + 25 * 60];
-    for (let m = 570; m <= 690; m++) slotSecs.push(base0 + Math.floor(m / 60) * 3600 + (m % 60) * 60);
-    for (let m = 780; m <= 900; m++) slotSecs.push(base0 + Math.floor(m / 60) * 3600 + (m % 60) * 60);
-    const slotHHMM = (sec: number) => new Date(sec * 1000).toISOString().slice(11, 16);
-    const byHHMM = new Map<string, P>();
-    for (const p of points) byHHMM.set(new Date(new Date(p.ts).getTime() + BJ_OFFSET * 1000).toISOString().slice(11, 16), p);
-
-    /** 槽序列 → series 数据：有行情的槽填值，其余 whitespace。pick 从点里取字段。 */
-    const seriesOverSlots = <T,>(pick: (p: P) => T | null): { time: Time; value?: T }[] =>
-      slotSecs.map((sec) => {
-        const p = byHHMM.get(slotHHMM(sec));
-        const v = p ? pick(p) : null;
-        return (v == null ? { time: sec as Time } : { time: sec as Time, value: v }) as { time: Time; value?: T };
-      });
+    const s = seriesRef.current;
+    s.chart = chart;
+    const { slots, base0 } = buildSlots(cur[0]);
+    s.slots = slots;
+    s.base0 = base0;
 
     // ---- 价格面积线：昨收锚定的对称区间 ----
     const series = chart.addAreaSeries({
@@ -154,51 +232,46 @@ export function MinuteChart({
       lineWidth: 2,
       priceLineVisible: false,
     });
-    series.setData(seriesOverSlots((p) => p.price) as never);
+    s.price = series;
 
-    // ---- 集合竞价点（09:25，金色）：槽序列首点即 9:25 ----
-    if (auction?.price && points.length > 0) {
-      const auctionSeries = chart.addLineSeries({
-        color: "#f59e0b",
-        lineWidth: 1,
-        pointMarkersVisible: true,
-        pointMarkersRadius: 4,
-        priceLineVisible: false,
+    // ---- 左轴涨跌幅（隐藏 % 序列）----
+    if (hasBase) {
+      s.pct = chart.addLineSeries({
+        priceScaleId: "left",
+        visible: false,
         lastValueVisible: false,
+        priceLineVisible: false,
         crosshairMarkerVisible: false,
+        priceFormat: { type: "percent", precision: 2, minMove: 0.01 },
       });
-      auctionSeries.setData([{ time: slotSecs[0] as never, value: auction.price }]);
     }
 
-    // ---- 当日新闻事件点（蓝圆点，挂在事件分钟的价格上）：只在槽已有行情时画
-    // （未来槽无价格锚，跳过不臆造）；同一分钟多条已在上游合并。
-    const evByHHMM = new Map((newsEvents ?? []).map((e) => [e.hhmm, e]));
-    if (evByHHMM.size > 0) {
-      const evData: { time: Time; value: number }[] = [];
-      for (const e of newsEvents ?? []) {
-        const p = byHHMM.get(e.hhmm);
-        if (!p) continue; // 槽尚无行情点（事件在未来/数据缺口）：不画
-        const sec = base0 + Number(e.hhmm.slice(0, 2)) * 3600 + Number(e.hhmm.slice(3, 5)) * 60;
-        evData.push({ time: sec as Time, value: p.price });
-      }
-      if (evData.length > 0) {
-        const evSeries = chart.addLineSeries({
-          color: "#38bdf8",
-          lineWidth: 1,
-          pointMarkersVisible: true,
-          pointMarkersRadius: 3.5,
-          priceLineVisible: false,
-          lastValueVisible: false,
-          crosshairMarkerVisible: false,
-        });
-        evSeries.setData(evData as never);
-      }
-    }
+    // ---- 均价线（黄）----
+    s.avg = chart.addLineSeries({
+      color: "#eab308",
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    });
+
+    // ---- 量能副图：红涨绿跌 ----
+    s.vol = chart.addHistogramSeries({
+      priceScaleId: "vol",
+      priceFormat: { type: "volume" },
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
+
+    fillAll(s, cur, prevClose);
+    cursorRef.current = bjHHMM(cur[cur.length - 1]);
+    lastPointsRef.current = cur;
 
     if (hasBase) {
       let hi = -Infinity;
       let lo = Infinity;
-      for (const p of points) {
+      for (const p of cur) {
         if (p.price > hi) hi = p.price;
         if (p.price < lo) lo = p.price;
       }
@@ -222,18 +295,8 @@ export function MinuteChart({
         title: "昨收",
       });
 
-      // ---- 左轴涨跌幅（隐藏 % 序列）----
-      const pctSeries = chart.addLineSeries({
-        priceScaleId: "left",
-        visible: false,
-        lastValueVisible: false,
-        priceLineVisible: false,
-        crosshairMarkerVisible: false,
-        priceFormat: { type: "percent", precision: 2, minMove: 0.01 },
-      });
       const halfPct = (half / prevClose!) * 100;
-      pctSeries.setData(seriesOverSlots((p) => (p.price != null ? ((p.price - prevClose!) / prevClose!) * 100 : null)) as never);
-      pctSeries.applyOptions({
+      s.pct?.applyOptions({
         autoscaleInfoProvider: () => ({
           priceRange: { minValue: -halfPct, maxValue: halfPct },
         }),
@@ -251,13 +314,15 @@ export function MinuteChart({
           crosshairMarkerVisible: false,
           priceFormat: { type: "percent", precision: 2, minMove: 0.01 },
         });
+        const idxByHHMM = new Map<string, P>();
+        for (const q of index.points) idxByHHMM.set(bjHHMM(q), q);
+        const slotHHMM = (sec: number) => new Date(sec * 1000).toISOString().slice(11, 16);
         idxSeries.setData(
-          seriesOverSlots((p) => {
-            const i = index.points.find((q) => {
-              const t1 = new Date(new Date(q.ts).getTime() + BJ_OFFSET * 1000).toISOString().slice(11, 16);
-              return t1 === new Date(new Date(p.ts).getTime() + BJ_OFFSET * 1000).toISOString().slice(11, 16);
-            });
-            return i ? ((i.price - index.prevClose) / index.prevClose) * 100 : null;
+          slots.map((sec) => {
+            const i = idxByHHMM.get(slotHHMM(sec));
+            return i
+              ? ({ time: sec as Time, value: ((i.price - index.prevClose) / index.prevClose) * 100 } as LineData)
+              : ({ time: sec as Time } as LineData);
           }) as never
         );
         // 叠加曲线不得撑破个股的对称区间：钳制到 ±halfPct 视觉带内
@@ -269,34 +334,46 @@ export function MinuteChart({
       }
     }
 
-    // ---- 均价线（黄）：avg 缺失的槽（盘前/未生成）为 whitespace ----
-    const avgSeries = chart.addLineSeries({
-      color: "#eab308",
-      lineWidth: 1,
-      priceLineVisible: false,
-      lastValueVisible: false,
-      crosshairMarkerVisible: false,
-    });
-    avgSeries.setData(seriesOverSlots((p) => p.avg) as never);
+    // ---- 集合竞价点（09:25，金色）：槽序列首点即 9:25 ----
+    if (auction?.price && cur.length > 0) {
+      const auctionSeries = chart.addLineSeries({
+        color: "#f59e0b",
+        lineWidth: 1,
+        pointMarkersVisible: true,
+        pointMarkersRadius: 4,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      });
+      auctionSeries.setData([{ time: slots[0] as never, value: auction.price }]);
+    }
 
-    // ---- 量能副图：红涨绿跌 ----
-    const vol = chart.addHistogramSeries({
-      priceScaleId: "vol",
-      priceFormat: { type: "volume" },
-      priceLineVisible: false,
-      lastValueVisible: false,
-    });
-    const volData: { time: Time; value?: number; color?: string }[] = slotSecs.map((sec) => {
-      const p = byHHMM.get(slotHHMM(sec));
-      if (!p || p.volume == null) return { time: sec as Time }; // whitespace
-      const i = points.indexOf(p);
-      const prevP = i > 0 ? points[i - 1].price : null;
-      const color =
-        prevP == null || p.price === prevP ? FLAT : p.price > prevP ? "rgba(239,68,68,0.5)" : "rgba(16,185,129,0.5)";
-      return { time: sec as Time, value: p.volume, color };
-    });
-    vol.setData(volData as never);
-    chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
+    // ---- 当日新闻事件点（蓝圆点，挂在事件分钟的价格上）：只在槽已有行情时画
+    // （未来槽无价格锚，跳过不臆造）；同一分钟多条已在上游合并。
+    const evByHHMM = new Map((newsEvents ?? []).map((e) => [e.hhmm, e]));
+    if (evByHHMM.size > 0) {
+      const evData: { time: Time; value: number }[] = [];
+      const byHHMM = new Map<string, P>();
+      for (const p of cur) byHHMM.set(bjHHMM(p), p);
+      for (const e of newsEvents ?? []) {
+        const p = byHHMM.get(e.hhmm);
+        if (!p) continue; // 槽尚无行情点（事件在未来/数据缺口）：不画
+        const sec = base0 + Number(e.hhmm.slice(0, 2)) * 3600 + Number(e.hhmm.slice(3, 5)) * 60;
+        evData.push({ time: sec as Time, value: p.price });
+      }
+      if (evData.length > 0) {
+        const evSeries = chart.addLineSeries({
+          color: "#38bdf8",
+          lineWidth: 1,
+          pointMarkersVisible: true,
+          pointMarkersRadius: 3.5,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        evSeries.setData(evData as never);
+      }
+    }
 
     // ---- 十字光标浮层 ----
     const tooltip = tipRef.current;
@@ -306,13 +383,14 @@ export function MinuteChart({
         tooltip.style.opacity = "0";
         return;
       }
-      // param.time 是编码后的伪 UTC（真实 ts + 8h，见 toTime）；
+      // param.time 是编码后的伪 UTC（真实 ts + 8h，见槽位构建）；
       // 匹配数据点必须先减回 8h 还原真实时基——否则所有点与光标恒差 8h，
       // "最近点"永远收敛到最后一根（收盘价），浮层每个位置都显示同一条数据。
       const sec = (param.time as unknown as number) * 1000 - BJ_OFFSET * 1000;
+      const pts = pointsRef.current;
       let best: P | null = null;
       let bestDiff = Infinity;
-      for (const p of points) {
+      for (const p of pts) {
         const d = Math.abs(new Date(p.ts).getTime() - sec);
         if (d < bestDiff) {
           bestDiff = d;
@@ -327,12 +405,12 @@ export function MinuteChart({
       const bjIso = new Date(new Date(d.ts).getTime() + 8 * 3600 * 1000).toISOString();
       const changePct = hasBase ? ((d.price - prevClose!) / prevClose!) * 100 : null;
       const avgDevPct = d.avg != null && d.avg > 0 ? ((d.price - d.avg) / d.avg) * 100 : null;
-      const lb = computeLB(d.cum_volume, bjIso);
+      const lb = lbRef.current(d.cum_volume, bjIso);
       const minuteAmount =
         d.cum_amount != null && bestDiff >= 0
           ? (() => {
-              const i = points.indexOf(d);
-              const prev = i > 0 ? points[i - 1].cum_amount : null;
+              const i = pts.indexOf(d);
+              const prev = i > 0 ? pts[i - 1].cum_amount : null;
               return prev != null ? (d.cum_amount! - prev) / 1e4 : null; // 万
             })()
           : null;
@@ -376,22 +454,41 @@ export function MinuteChart({
     // 全天槽已在数据集里（whitespace 撑满 9:25-15:00），fitContent 即完整交易时段；
     // 左端 -1.5 给 9:25 竞价金点留出圆的空间
     chart.timeScale().fitContent();
-    chart.timeScale().setVisibleLogicalRange({ from: -1.5, to: slotSecs.length + 0.5 });
+    chart.timeScale().setVisibleLogicalRange({ from: -1.5, to: slots.length + 0.5 });
 
     return () => {
       try {
         chart.unsubscribeCrosshairMove(onMove);
       } catch {}
       chart.remove();
+      seriesRef.current = emptyBundle();
+      cursorRef.current = "";
+      lastPointsRef.current = null;
       void unsub;
     };
-  }, [points, prevClose, yesterdayVol, index, auction, exactBaseline, newsEvents, computeLB]);
+    // 低频配置变化才重建；points 走增量 effect（下）。evByHHMM 供 crosshair 闭包。
+  }, [hasPoints, prevClose, index, auction, exactBaseline, newsEvents]);
+
+  // 数据增量 effect：points 高频变化（WS 合成/60s 校准）→ 全量 setData 原地重灌。
+  // 不用 series.update()：槽位序列尾部是全天 whitespace（X 轴固定全程），
+  // series 最后时间点恒为 15:00，update(当前分钟) 必抛 "Cannot update oldest
+  // data"（2026-09-02 实测崩溃）。setData 是 Canvas 原位重绘不闪；每帧全量
+  // 灌入同时天然消除合成点与官方校准点的同槽竞态，图表数据恒为数组真值。
+  // lastPointsRef 去重保留：创建 effect 同帧已灌过同一引用时跳过。
+  useEffect(() => {
+    const s = seriesRef.current;
+    if (!s.chart || !s.price || points.length === 0) return;
+    if (lastPointsRef.current === points) return; // 创建 effect 刚灌过同一份数据
+    lastPointsRef.current = points;
+    fillAll(s, points, prevClose);
+    cursorRef.current = bjHHMM(points[points.length - 1]);
+  }, [points, prevClose]);
 
   return (
     <div className="flex h-full w-full flex-col">
       {/* 角标行：量比 + 竞价 + 上证叠加图例——独立文档流行（原 absolute right-2 top-1.5
           浮层压在图表右上角价格标签/最新价区域），不占图表绘制空间、互不遮挡 */}
-      <div ref={badgeRef} className="flex shrink-0 items-center justify-end gap-2 px-2 pb-0.5 pt-1 text-[11px]">
+      <div className="flex shrink-0 items-center justify-end gap-2 px-2 pb-0.5 pt-1 text-[11px]">
         {auction?.pct != null && (
           <span
             className={`rounded border px-1.5 py-0.5 font-mono tabular-nums ${

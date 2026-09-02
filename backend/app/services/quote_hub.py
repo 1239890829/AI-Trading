@@ -70,7 +70,7 @@ class QuoteHub:
         try:
             # 指数与自选并行拉取（2026-09-01 秒级化）：串行两次 HTTP 会把
             # 1s 固定节奏的实际周期拉长到 ~1.6s，并行后单周期 ≈ 最慢一路
-            watchlist = self._safe_watchlist()
+            watchlist = self._poll_symbols()
             new_indices, new_quotes = await asyncio.gather(
                 self.provider.get_indices(),
                 self.provider.get_quotes(watchlist) if watchlist else _empty(),
@@ -151,6 +151,24 @@ class QuoteHub:
         except Exception:
             log.exception("watchlist lookup failed; keeping previous watchlist")
             return list(self.quotes.keys())
+
+    def _poll_symbols(self) -> list[str]:
+        """轮询池 = 自选 ∪ 各订阅者订阅集中的裸 6 位代码。
+
+        2026-09-02 用户反馈"详情页分时/K线不及时更新"的根因：此前只轮询自选，
+        详情面板看非自选股时该股永远不进缓存 → WS 推送与 REST 轮询都取不到，
+        唯一的 30s 估值补源又被"保留 WS 最新价"的合并逻辑封死更新——图表只剩
+        60s REST 校准一条慢通道。订阅者要什么就拉什么：详情页多看的标的并入
+        1Hz 轮询池（详情页通常只看一只，增量可忽略）。指数（sh000001 等带
+        前缀形态）不进池——指数由 get_indices 单独维护，get_quotes 里有
+        前缀回退逻辑兜底。订阅集每轮从 _subscribers 现算，零额外状态；
+        订阅者断开（unsubscribe）后自动移出。"""
+        symbols = set(self._safe_watchlist())
+        for cell, _ in self._subscribers:
+            sub = cell[0]
+            if sub:
+                symbols.update(s for s in sub if len(s) == 6 and s.isdigit())
+        return sorted(symbols)
 
     def _mark_all_stale(self, reason: str = "refresh_failed") -> None:
         for q in self.indices.values():

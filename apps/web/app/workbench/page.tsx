@@ -28,7 +28,7 @@ import {
   type RiskState,
   type SparklinePayload,
 } from "@/lib/api";
-import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
+import { fmt, fmtAmount, isHardQuality, pctColor, pctText } from "@/lib/format";
 import { subscribeWatchlist, notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import { LAST_SYMBOL_KEY, workbenchUrl } from "@/lib/routing";
 import type { Quote } from "@/types/market";
@@ -64,7 +64,9 @@ function WorkbenchInner() {
   // 都没有再落默认 600519（此前硬编码回退是跨页面联动 bug 的一半根因）
   const [selected, setSelected] = useState<string>(paramSymbol ?? "");
 
-  const { quotes, status } = useQuoteStream([...new Set([...symbols, ...realSymbols])]);
+  // 列表消费侧 3s 节流（2026-09-02 用户反馈：1Hz 刷新整表闪烁跳动）。
+  // 详情面板是独立 hook 实例（不传 throttleMs），K线/分时合成不受影响。
+  const { quotes, status } = useQuoteStream([...new Set([...symbols, ...realSymbols])], { throttleMs: 3000 });
   const [extra, setExtra] = useState<Record<string, Quote>>({});
   // WS 每 5s tick 全量替换 quotes：merged/列表/spark 查找都必须 memo 化，
   // 否则每次 tick 触发整列表 O(n²) 重算（评审 F2）
@@ -478,7 +480,7 @@ function WorkbenchInner() {
                       {q.price == null ? <span className="text-xs font-sans text-zinc-400">未开盘</span> : <PriceFlash value={q.price}>{fmt(q.price)}</PriceFlash>}
                     </td>
                     <td className={`px-2 py-2 text-right font-mono text-xs tabular-nums ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</td>
-                    <td className="px-1 py-2 text-right">{q.quality !== "high" && <QualityBadge quality={q.quality} reasons={q.quality_reasons} />}</td>
+                    <td className="px-1 py-2 text-right">{isHardQuality(q.quality) && <QualityBadge quality={q.quality} reasons={q.quality_reasons} />}</td>
                     <td className="pr-2 text-right">
                       <button
                         onClick={(e) => {

@@ -58,8 +58,15 @@ function bjHHMM(ts: string | null | undefined): string {
  *
  * 分时数据源粒度是分钟级、走 60s REST 校准；不合成的话曲线右端点一分钟才动
  * 一次，与 1s 的列表/K线不同步。价格与累计量（quote.volume 与 cum_volume 同为
- * 股，口径依据见 mergeQuoteIntoBars 注释）跟随 WS；均价线由后端口径算出，
- * 不在端上臆造，保持 last.avg。跨分钟不新增点（60s 校准负责补点防漂移）。
+ * 股，口径依据见 mergeQuoteIntoBars 注释）跟随 WS。
+ *
+ * 同分钟：原地更新价格/累计量；均价线用 quote.amount/quote.volume 精算
+ * （两者同为全日累计口径，实测与后端 avg 偏差 <0.01），不臆造。
+ * 跨分钟（刚过整分、REST 还没补点）：**追加点**而不是放弃——原实现跨分钟
+ * 返回 null，整分钟内右端点静止 50s+（2026-09-02 用户反馈"分时不及时"）。
+ * 分钟量 = quote.volume − 上一点 cum_volume（负值截 0，源快照竞态防护）。
+ * 间隙 >2 分钟（午休/停牌/断流）不追：臆造中间点比缺点更误导，交给 60s 校准。
+ * 追加点的 ts 由 quote 时间截秒（UTC ISO），60s 校准拉到官方点后整体覆盖。
  *
  * 返回新数组（不 mutate）；无需更新返回 null。
  */
@@ -71,13 +78,30 @@ export function mergeQuoteIntoMinutes<T extends { ts: string; price: number; cum
   const price = quote.price;
   if (price == null || price <= 0) return null;
   const last = points[points.length - 1];
-  // quote 与最后一个分钟点不在同一分钟（刚跨分钟、REST 还没补点）不合成
   const qHHMM = bjHHMM(quote.data_timestamp);
   const lastHHMM = bjHHMM(last.ts);
-  if (!qHHMM || qHHMM !== lastHHMM) return null;
+  if (!qHHMM || !lastHHMM) return null;
 
-  const cumVolume = quote.volume ?? last.cum_volume;
-  if (last.price === price && last.cum_volume === cumVolume) return null; // 无变化不重渲染
-  const next = { ...last, price, cum_volume: cumVolume };
-  return [...points.slice(0, -1), next] as T[];
+  if (qHHMM === lastHHMM) {
+    const cumVolume = quote.volume ?? last.cum_volume;
+    if (last.price === price && last.cum_volume === cumVolume) return null; // 无变化不重渲染
+    const next = { ...last, price, cum_volume: cumVolume };
+    return [...points.slice(0, -1), next] as T[];
+  }
+
+  // 跨分钟：quote 分钟晚于最后点 ≤2 分钟才追加（快照竞态/断流防护）
+  const qMin = Number(qHHMM.slice(0, 2)) * 60 + Number(qHHMM.slice(3, 5));
+  const lastMin = Number(lastHHMM.slice(0, 2)) * 60 + Number(lastHHMM.slice(3, 5));
+  if (qMin <= lastMin || qMin - lastMin > 2) return null;
+  const q = quote as Quote & { amount?: number | null };
+  const cumVolume = quote.volume ?? null;
+  const cumAmount = q.amount ?? null;
+  const avg = cumVolume != null && cumVolume > 0 && cumAmount != null && cumAmount > 0 ? +(cumAmount / cumVolume).toFixed(3) : (last as { avg?: number }).avg ?? null;
+  const prevCum = (last as { cum_volume?: number | null }).cum_volume ?? null;
+  const minuteVol = cumVolume != null && prevCum != null ? Math.max(cumVolume - prevCum, 0) : null;
+  const slotTs = new Date(quote.data_timestamp as string);
+  if (isNaN(slotTs.getTime())) return null;
+  slotTs.setSeconds(0, 0);
+  const next = { ...last, ts: slotTs.toISOString(), price, volume: minuteVol, cum_volume: cumVolume, avg } as unknown as T;
+  return [...points, next];
 }

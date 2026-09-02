@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { indexDetailSymbol } from "@/lib/api";
 import { QualityBadge } from "@/components/quality-badge";
-import { fmt, pctColor, pctText, sourceLabel } from "@/lib/format";
+import { fmt, pctColor, pctText, isHardQuality, sourceLabel } from "@/lib/format";
 import type { Quote } from "@/types/market";
 
 interface Props {
@@ -43,7 +43,9 @@ export function IndexCards({ indices, selected, onSelect }: Props) {
               >
                 <div className="flex items-center justify-between">
                   <span className="truncate text-[10px] text-zinc-400">{q.name ?? q.symbol}</span>
-                  <QualityBadge quality={q.quality} reasons={q.quality_reasons} />
+                  {/* 仅硬质量问题（过期/休市/非法）出徽标：正常态徽标是视觉噪音，
+                      low/medium 瞬态抖动会闪（2026-09-02 可疑标签修复，口径同列表行） */}
+                  {isHardQuality(q.quality) && <QualityBadge quality={q.quality} reasons={q.quality_reasons} />}
                 </div>
                 <div className="font-mono text-sm font-semibold tabular-nums">
                   {q.price == null ? <span className="text-xs font-normal text-zinc-400">未开盘</span> : fmt(q.price)}

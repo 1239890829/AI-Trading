@@ -15,11 +15,17 @@ export type StreamStatus = "connecting" | "live" | "polling" | "closed" | "stale
  * 而非整条重连。此前 symbols 每次变化 → effect 重建 → WS 重连，产生行情空窗，
  * 重连失败 3 次还会误入降级轮询。
  */
-export function useQuoteStream(symbols: string[]) {
+export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }) {
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [status, setStatus] = useState<StreamStatus>("connecting");
   // 已发送的订阅 key（去重用，见下方订阅 effect 注释）
   const [sentKey, setSentKey] = useState("");
+  // 展示节流（2026-09-02 用户反馈：自选列表 1Hz 刷新频繁闪烁）：
+  // WS 仍按 1Hz 全量接收（内部状态不丢数据），对外 quotes 状态按
+  // throttleMs 节流应用（trailing——间隔内的最后一条生效），价格类面板
+  // 不必跟着推送节奏逐秒重渲染。首帧（首次应用）不节流，避免白屏等拍。
+  // status 不节流：连接态变化必须即时呈现。不传 throttleMs 行为不变。
+  const throttleMs = opts?.throttleMs ?? 0;
 
   const key = [...symbols].sort().join(",");
   const hasSymbols = key.length > 0;
@@ -43,13 +49,41 @@ export function useQuoteStream(symbols: string[]) {
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     let pingTimer: ReturnType<typeof setInterval> | null = null;
     let openTimer: ReturnType<typeof setTimeout> | null = null;
+    let throttleTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastAppliedAt = 0;
+    let pending: Quote[] | null = null;
     const clearOpenTimer = () => {
       if (openTimer) clearTimeout(openTimer);
       openTimer = null;
     };
-
-    const apply = (list: Quote[]) => {
+    const clearThrottle = () => {
+      if (throttleTimer) clearTimeout(throttleTimer);
+      throttleTimer = null;
+    };
+    const applyNow = (list: Quote[]) => {
+      lastAppliedAt = Date.now();
+      pending = null;
       setQuotes(Object.fromEntries(list.map((q) => [q.symbol, q])));
+    };
+    const apply = (list: Quote[]) => {
+      if (throttleMs <= 0) {
+        applyNow(list);
+        return;
+      }
+      pending = list;
+      const elapsed = Date.now() - lastAppliedAt;
+      if (elapsed >= throttleMs) {
+        if (throttleTimer) clearTimeout(throttleTimer);
+        throttleTimer = null;
+        applyNow(list);
+        return;
+      }
+      if (throttleTimer) return; // 已有待触发的 trailing 应用
+      throttleTimer = setTimeout(() => {
+        throttleTimer = null;
+        if (closed || !pending) return;
+        applyNow(pending);
+      }, throttleMs - elapsed);
     };
 
     const startPolling = () => {
@@ -156,6 +190,7 @@ export function useQuoteStream(symbols: string[]) {
       closed = true;
       connectedRef.current = false;
       clearOpenTimer();
+      clearThrottle();
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (pingTimer) clearInterval(pingTimer);
       stopPolling();
