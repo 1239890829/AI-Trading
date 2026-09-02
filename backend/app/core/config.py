@@ -55,9 +55,11 @@ class Settings(BaseSettings):
     sentiment_calibrate: bool = True
     # 历史指标库（data/sentiment_metrics.json）的自动增量维护。
     # 关掉后库停在最后一次回补的日期，校准窗口会随日历漂移 → 界面会显示
-    # window_end 供核对，不会静默假装"近 120 个交易日"。
+    # window_end 供核对，不会静默假装"近 N 个交易日"。
+    # lookback=250 对齐方法论"滚动分位近 250 日"；ths 日历只回溯一年（~243
+    # 个交易日），backfill 按日历深度自动截短，250 是留有余量的目标值。
     sentiment_history_backfill_enabled: bool = True
-    sentiment_history_lookback: int = 120
+    sentiment_history_lookback: int = 250
     # 增量回补的巡检间隔（秒）：默认 6 小时。回补是增量的（已有日期不重拉），
     # 稳态下每轮只拉 1–2 天 × 2 个请求，配额开销可忽略。
     sentiment_history_backfill_interval_seconds: float = 21600.0
