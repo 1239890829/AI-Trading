@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.picks.engine import (
     REPLACE_THRESHOLD,
     build_buy_range,
@@ -312,3 +314,56 @@ def test_swap_cap_does_not_apply_to_first_build():
     ranked = [{"symbol": s, "score": 90.0 - i} for i, s in enumerate(["A", "B", "C", "D", "E"])]
     kept, _ = apply_replacement_threshold([], ranked, 15.0, 5)
     assert len(kept) == 5
+
+
+# ---------------------------------------------------------------- 选股 2.0 打分增强（2026-09-02）
+
+
+def test_score_sentiment_promo_percentile_adjustment():
+    """晋级率分位 ±10 修正：历史低位压分、高位加分；缺失时不修正。"""
+    from app.picks.engine import score_sentiment
+
+    base, _ = score_sentiment("发酵", None)
+    low, b_low = score_sentiment("发酵", None, promo_percentile=10.0)
+    high, b_high = score_sentiment("发酵", None, promo_percentile=90.0)
+    assert low == pytest.approx(base - 8.0)  # (10-50)*0.2 = -8
+    assert high == pytest.approx(base + 8.0)
+    assert "晋级率历史分位" in b_low
+    none_score, b_none = score_sentiment("发酵", None, promo_percentile=None)
+    assert none_score == pytest.approx(base)
+    assert "晋级率" not in b_none
+
+
+def test_score_sentiment_promo_clamped():
+    """退潮 30×0.7=21 + 修正 −8 → 13；不越界即可。"""
+    from app.picks.engine import score_sentiment
+
+    s, _ = score_sentiment("退潮", None, promo_percentile=0.0)
+    assert 0 <= s <= 100
+
+
+def test_event_weight_tier_and_certainty():
+    """tier1 官方落地 = 1.0；tier5 传闻 = 0.06；缺失按中性档不冒充已判。"""
+    from app.picks.engine import CERTAINTY_WEIGHTS, TIER_WEIGHTS, event_weight
+
+    assert event_weight(1, "done") == pytest.approx(1.0)
+    assert event_weight(5, "rumor") == pytest.approx(0.06)  # 0.2 × 0.3
+    assert event_weight(None, None) == pytest.approx(TIER_WEIGHTS[3] * CERTAINTY_WEIGHTS["done"])
+    # 未知档位逐项回落中性档（0.6 × 0.6 = 0.36），不抛异常也不给满分
+    assert event_weight(9, "nonsense") == pytest.approx(0.36)
+
+
+def test_news_weighted_strength_separates_official_from_rumor():
+    """同样 3 点强度：官方来源得分显著高于传闻来源（同向利好）。"""
+    from app.picks.engine import score_news
+
+    s_official, _ = score_news(3, 0, "政策落地", "利好")   # tier1 done：3×1.0
+    s_rumor, _ = score_news(3 * 0.04, 0, "群里传的", "利好")  # tier5 rumor：3×0.04
+    assert s_official > s_rumor + 10
+
+
+def test_news_negative_dominates_positive():
+    from app.picks.engine import score_news
+
+    s, _ = score_news(2, 3, "暴雷", "利空")
+    assert s < 50

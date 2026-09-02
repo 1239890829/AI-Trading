@@ -55,10 +55,31 @@ REASON_CATEGORIES = {
 }
 
 
-def score_sentiment(market_phase: str | None, theme_up_ratio: float | None) -> tuple[float, str]:
-    """情绪面：市场阶段（情绪引擎）为主、题材内涨跌家数比为辅。
+# ---- 事件可信度权重（选股 2.0 §3 消息面增强：tier × certainty，2026-09-02）----
+# tier：1=官方/监管 … 5=自媒体传闻；certainty：done=已落地 / proposed=提议中 / rumor=传闻
+TIER_WEIGHTS = {1: 1.0, 2: 0.8, 3: 0.6, 4: 0.4, 5: 0.2}
+CERTAINTY_WEIGHTS = {"done": 1.0, "proposed": 0.6, "rumor": 0.3}
+
+
+def event_weight(source_tier: int | None, certainty: str | None) -> float:
+    """单条事件的可信度权重。缺失字段按中性档（tier 3 / done）处理——
+    权重缺失默认取中间值，但会在索引层留下"未加权"的痕迹，不冒充已判。"""
+    return TIER_WEIGHTS.get(int(source_tier or 3), 0.6) * CERTAINTY_WEIGHTS.get(
+        str(certainty or "done"), 0.6
+    )
+
+
+def score_sentiment(
+    market_phase: str | None,
+    theme_up_ratio: float | None,
+    promo_percentile: float | None = None,
+) -> tuple[float, str]:
+    """情绪面：市场阶段（情绪引擎）为主、题材内涨跌家数比为辅、接力环境分位修正。
 
     market_phase ∈ 冰点/修复/发酵/高潮/分歧/退潮（sentiment 引擎输出）。
+    P0-3b 后 phase 本身已按近 120 交易日历史分位校准（绝对阈值死档已消除），
+    这里再把 `promo_1to2` 的**历史分位**作为接力环境修正项（±10 分）——
+    晋级率处在历史低位时，即使相位看着还行，题材接力也应压分。
     """
     if market_phase:
         phase_score = {"修复": 80, "发酵": 90, "高潮": 70, "分歧": 55, "退潮": 30, "冰点": 25}[market_phase]
@@ -67,6 +88,11 @@ def score_sentiment(market_phase: str | None, theme_up_ratio: float | None) -> t
     else:
         parts = ["市场阶段缺失 → 中性 50 分"]
         score = 50.0  # 缺失=中性，不打折（"缺失=中性"的承诺不能被权重打折）
+    if promo_percentile is not None:
+        # 分位 0–100，中位 50 → ±10 分修正
+        adj = round((promo_percentile - 50) * 0.2, 1)
+        score = max(0, min(100, score + adj))
+        parts.append(f"晋级率历史分位 {promo_percentile} → {'+' if adj >= 0 else ''}{adj}")
     if theme_up_ratio is not None:
         # 题材内涨家数占比 0-1 → ±15 分修正
         adj = round((theme_up_ratio - 0.5) * 30, 1)
@@ -76,10 +102,13 @@ def score_sentiment(market_phase: str | None, theme_up_ratio: float | None) -> t
 
 
 def score_news(bull_events: int, bear_events: int, top_title: str | None, top_direction: str | None) -> tuple[float, str]:
-    """消息面：活跃 EventCard 方向命中。
+    """消息面：活跃 EventCard 方向命中的**加权强度和**。
 
-    利好每条 +18（封顶 90），利空每条 −25（利空权重更高——突发利空的反身性更强）；
-    无事件=中性 50 分（不臆测）。top 事件标题进 basis 供卡片「关联消息」。
+    输入 bull/bear 是强度和（事件索引层已乘 `event_weight`：source_tier 越权威、
+    certainty 越确定权重越高，见下方常量），不再是裸条数——
+    一条 tier1 官方落地政策的权重远高于三条 tier5 传闻。
+    利空权重更高（突发利空的反身性更强）；无事件=中性 50 分（不臆测）。
+    top 事件标题进 basis 供卡片「关联消息」。
     """
     if bull_events == 0 and bear_events == 0:
         return 50.0, "无活跃事件命中，消息面中性"

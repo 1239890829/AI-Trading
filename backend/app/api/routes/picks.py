@@ -40,6 +40,7 @@ from app.picks.engine import (
     score_fundamental,
     score_news,
     score_sentiment,
+    event_weight,
     score_tech,
     synthesize,
 )
@@ -286,18 +287,21 @@ def _parse_meta(raw: str | None) -> dict:
         return {}
 
 
-def _build_event_hits_index(store: EventStore) -> dict[str, tuple[int, int, str | None, str | None, int]]:
+def _build_event_hits_index(store: EventStore) -> dict[str, tuple[float, float, str | None, str | None, int]]:
     """一次遍历活跃事件 → 按 symbol 索引消息命中（评审 B1）。
 
-    返回 {symbol: (利好强度, 利空强度, 主事件标题, 主方向文案, 关联数)}。
-    list_events 已 selectinload 预加载方向行（detached 后仍可安全访问），
-    索引构建零额外查询——原实现每候选股重复全量扫事件表（24 只深评 ×
-    每次约 31 次查询）；关联数含 direction=0（"来源关联、方向待判"也是
-    证据，丢掉它会让消息面对有新闻但无方向词的标的显示"无命中"）。
+    返回 {symbol: (利好强度和, 利空强度和, 主事件标题, 主方向文案, 关联数)}。
+    强度和已乘 `event_weight(source_tier, certainty)`（选股 2.0 §3）：
+    tier1 官方落地政策 ≈ 25 条 tier5 自媒体传闻的权重，消息面不再被
+    同质化的条数淹没。list_events 已 selectinload 预加载方向行（detached
+    后仍可安全访问），索引构建零额外查询——原实现每候选股重复全量扫事件表
+    （24 只深评 × 每次约 31 次查询）；关联数含 direction=0（"来源关联、
+    方向待判"也是证据，丢掉它会让消息面对有新闻但无方向词的标的显示"无命中"）。
     """
     index: dict[str, dict] = {}
     try:
         for row in store.list_events(active_only=True, limit=30):
+            w = event_weight(row.source_tier, row.certainty)
             for d in row.directions:
                 if d.target_type != "symbol" or not d.target:
                     continue  # 题材方向的个股传导第一版不计入单股消息分（防过度外推）
@@ -307,9 +311,9 @@ def _build_event_hits_index(store: EventStore) -> dict[str, tuple[int, int, str 
                 )
                 agg["linked"] += 1
                 if d.direction == 1:
-                    agg["bull"] += d.strength
+                    agg["bull"] += d.strength * w
                 elif d.direction == -1:
-                    agg["bear"] += d.strength
+                    agg["bear"] += d.strength * w
                 if agg["top_title"] is None and d.direction != 0:
                     agg["top_title"] = row.title
                     agg["top_dir"] = "利好" if d.direction == 1 else "利空"
@@ -335,8 +339,9 @@ async def _deep_score_candidates(
     market_phase: str | None,
     quotes: dict,
     weights: dict,
-    event_hits_index: dict[str, tuple[int, int, str | None, str | None, int]],
+    event_hits_index: dict[str, tuple[float, float, str | None, str | None, int]],
     concurrency: int,
+    promo_percentile: float | None = None,
 ) -> list[dict]:
     """④ 逐只深度评分（并发；每只独立异常兜底）。
 
@@ -413,8 +418,11 @@ async def _deep_score_candidates(
             except Exception:
                 pass
             sub["capital"], bases["capital"] = score_capital(net_inflow, None, on_lhb=False)
-            # 情绪（全局相位；题材涨家占比第一版缺省）
-            sub["sentiment"], bases["sentiment"] = score_sentiment(market_phase, None)
+            # 情绪（全局相位；题材涨家占比第一版缺省；promo 历史分位为接力环境修正，
+            # 选股 2.0 §3——分位来自 P0-3b 校准库，缺失时不修正、basis 如实呈现）
+            sub["sentiment"], bases["sentiment"] = score_sentiment(
+                market_phase, None, promo_percentile=promo_percentile
+            )
 
             # 梯队（第六维）：个股在题材天梯中的地位 × 题材阶段，联合读取。
             # 没有这一维，退潮期的最后一棒会和发酵期的真龙头拿同样分。
@@ -630,6 +638,12 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
     # 原实现每候选股在并发任务里重复全量扫事件表（24×~31 次同步查询）
     event_hits_index = _build_event_hits_index(store)
 
+    # 晋级率历史分位（选股 2.0 §3）：来自 P0-3b 校准库的 percentile，
+    # 库旧/样本不足时 percentile 为空 → 修正项自动缺席，basis 如实呈现
+    promo_pct = None
+    calib_pct = ((sent.get("calibration") or {}).get("percentile") or {}).get("promo_1to2") or {}
+    promo_pct = calib_pct.get("percentile")
+
     # ④ 逐只深度评分（并发；T6 拆分至 _deep_score_candidates）
     ranked = await _deep_score_candidates(
         deep,
@@ -642,6 +656,7 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
         weights=weights,
         event_hits_index=event_hits_index,
         concurrency=CONCURRENCY,
+        promo_percentile=promo_pct,
     )
     ranked.sort(key=lambda r: -r["score"])
 
