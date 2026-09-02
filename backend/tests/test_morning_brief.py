@@ -138,6 +138,29 @@ def test_assemble_brief_defensive_flag():
     assert "防守方向" in d["logic"]
 
 
+def test_assemble_brief_excludes_performance_tags():
+    """业绩/财报结果型题材不作为方向（无对应板块指数，confirm 永远拿不到
+    板块涨幅，占坑稀释有效方向——2026-09-02 回测 unmatched 28.6% 根因）；
+    被排除的名单落 performance_skipped 如实呈现，不是静默丢弃。"""
+    base = _evidence()
+    ev = _evidence(
+        themes={
+            **base["themes"],
+            "业绩增长": {"limit_up": 9, "max_boards": 1, "avg_change": 9.9,
+                         "stage": "发酵", "stage_basis": [], "completeness": 0.8,
+                         "records": []},
+            "半年报预增": {"limit_up": 4, "max_boards": 2, "avg_change": 9.9,
+                           "stage": "发酵", "stage_basis": [], "completeness": 0.8,
+                           "records": []},
+        },
+        event_strength={**base["event_strength"], "业绩增长": 1.0},
+    )
+    payload = mb.assemble_brief(ev)
+    names = {d["direction"] for d in payload["directions"]}
+    assert "业绩增长" not in names and "半年报预增" not in names
+    assert set(payload["performance_skipped"]) == {"业绩增长", "半年报预增"}
+
+
 def test_assemble_brief_events_only_and_missing():
     """涨停池完全不可用：只剩事件强度一条腿，missing 显式呈现，不崩不冒充。"""
     ev = _evidence(themes={}, missing=["涨停池不可用（超时）"])

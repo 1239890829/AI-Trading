@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.deps import get_hub
@@ -61,7 +63,8 @@ async def news_digest(
             model=settings.news_llm_model,
         ),
     )
-    summarized, usage = rt.summarize(news_rows, ann_rows)
+    # LLM 接入后摘要是同步 HTTP，必须丢线程池，不阻塞事件循环
+    summarized, usage = await asyncio.to_thread(rt.summarize, news_rows, ann_rows)
 
     payload = NewsDigestPayload(
         symbol=symbol,

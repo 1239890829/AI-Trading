@@ -82,6 +82,21 @@ def compute_volume_ratio(
 
 # ---------------------------------------------------------------- 盘前方向排序（§4.2）
 
+#: 业绩/财报结果型题材关键词。这类 tag 是个股财报事实的归因（业绩增长/
+#: 半年报增长/预增…），不是市场驱动题材：官方概念目录里没有对应板块指数，
+#: 板块涨幅/量比永远无法确认，占坑 top3 只会稀释有效样本——2026-09-02
+#: 120 日回测 unmatched 103/360（28.6%）的根因。回测伪预判与线上
+#: rank_directions 必须使用同一过滤（同一份规则代码红线）。
+PERFORMANCE_TAG_HINTS = (
+    "业绩", "中报", "半年报", "年报", "一季报", "三季报", "季报",
+    "预增", "预盈", "扭亏",
+)
+
+
+def is_performance_tag(tag: str | None) -> bool:
+    """题材 tag 是否为业绩/财报结果型（子串匹配，纯函数）。"""
+    return bool(tag) and any(h in tag for h in PERFORMANCE_TAG_HINTS)
+
 
 def rank_directions(evidences: list[dict], phase: str | None = None) -> list[dict]:
     """盘前预判：证据 → 方向排序，取 top 1–3 由调用方截断。
@@ -96,6 +111,9 @@ def rank_directions(evidences: list[dict], phase: str | None = None) -> list[dic
     Returns:
         按 score 降序的列表副本，附 score 与 basis。输入缺失字段按 0 处理
         （盘前证据天然稀疏，缺事件强度≠没有方向，但会在 basis 里露出来）。
+
+    业绩/财报结果型方向（is_performance_tag 命中）由**调用方**在构造
+    evidences 时排除——本函数不做隐式过滤，保持排序器纯打分语义。
     """
     scored = []
     for ev in evidences:

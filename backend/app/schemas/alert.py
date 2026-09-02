@@ -94,3 +94,6 @@ class AlertEventOut(BaseModel):
 class AlertChannelsOut(BaseModel):
     available: list[str]
     default: list[str]
+    # name -> 是否已配置到可真正发出（如 feishu 需配 webhook）；未列出的通道
+    # 选中后只会显式跳过，前端可据此禁用或标灰
+    configured: dict[str, bool] = {}

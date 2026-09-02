@@ -3,37 +3,20 @@
 默认实现：
 - ConsoleNotifier：打印日志（永远可用，便于本地验证）
 - InAppNotifier：把事件写入 AlertEvent 表，前端通过 REST/WS 拉取
-
-真实通道（email/wecom/feishu/telegram/webhook/短信）待用户选择后在此包内新增实现
-并注册到 NotifierRegistry。
+- FeishuNotifier：飞书群自定义机器人 webhook（`notifiers/feishu.py`）
+  —— 配置 ASHARE_ALERT_FEISHU_WEBHOOK 后，规则 channels 里选 "feishu" 即走此通道；
+     未配置时显式 warning 跳过，不静默伪装成功。
 """
 from __future__ import annotations
 
 import json
 import logging
-from abc import ABC, abstractmethod
-from typing import Any
 
 from app.models.alert import AlertEvent, AlertRule
+from app.notifiers.base import Notifier, _symbol_snapshot  # noqa: F401 (re-export)
+from app.notifiers.feishu import FeishuNotifier
 
 log = logging.getLogger(__name__)
-
-
-def _symbol_snapshot(snapshot_str: str | None) -> dict[str, Any]:
-    if not snapshot_str:
-        return {}
-    try:
-        return json.loads(snapshot_str)
-    except Exception:
-        return {}
-
-
-class Notifier(ABC):
-    name: str = ""
-
-    @abstractmethod
-    async def send(self, event: AlertEvent, rule: AlertRule) -> bool:
-        """返回是否发送成功。"""
 
 
 class ConsoleNotifier(Notifier):
@@ -69,6 +52,9 @@ class NotifierRegistry:
         self._notifiers: dict[str, Notifier] = {}
         self.register(ConsoleNotifier())
         self.register(InAppNotifier())
+        # 始终注册：未配置 webhook 时 send() 内显式 warning 并返回 False，
+        # 让 "feishu 不在 delivered_channels" 与日志共同构成可见的跳过事实。
+        self.register(FeishuNotifier())
 
     def register(self, notifier: Notifier) -> None:
         self._notifiers[notifier.name] = notifier

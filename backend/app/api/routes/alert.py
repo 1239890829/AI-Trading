@@ -33,7 +33,18 @@ async def list_channels() -> Envelope[AlertChannelsOut]:
     from app.notifiers import get_notifier_registry
 
     registry = get_notifier_registry()
-    return Envelope(data=AlertChannelsOut(available=registry.names(), default=["in_app", "log"]))
+    configured = {
+        name: bool(getattr(n, "is_available", lambda: True)())
+        for name, n in ((ch, registry.get(ch)) for ch in registry.names())
+        if n is not None
+    }
+    return Envelope(
+        data=AlertChannelsOut(
+            available=registry.names(),
+            default=["in_app", "log"],
+            configured=configured,
+        )
+    )
 
 
 @router.get("/alerts/rules")

@@ -110,6 +110,14 @@ class Settings(BaseSettings):
     news_llm_api_key: str = ""
     news_llm_model: str = ""
 
+    # ---- 告警推送通道：飞书群自定义机器人 ----
+    # webhook 形如 https://open.feishu.cn/open-apis/bot/v2/hook/xxx，
+    # 在飞书群「设置 → 群机器人 → 自定义机器人」添加后复制；留空 = feishu
+    # 通道不可用（规则选了 feishu 会显式 warning 并跳过，不伪装成功）
+    alert_feishu_webhook: str = ""
+    # 机器人开启「签名校验」时填同款密钥；未开启留空
+    alert_feishu_secret: str = ""
+
     # ---- 写接口鉴权（B6，opt-in）----
     # 留空 = 本地开发全放行；部署到公网/NAS 时配置任意随机值，
     # 之后所有写请求必须带 X-API-Token 头（前端 NEXT_PUBLIC_API_TOKEN 自动携带）

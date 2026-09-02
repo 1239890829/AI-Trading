@@ -12,8 +12,11 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Protocol
+
+import httpx
 
 from app.review.config import MethodologyConfig
 from app.review.schemas import (
@@ -364,33 +367,107 @@ class RulesAnalyzer:
         )
 
 
-# ---------------------------------------------------------------- LLM 分析器（占位）
+# ---------------------------------------------------------------- LLM 分析器
+
+
+_LLM_SYSTEM_PROMPT = """\
+你是 A 股盘后复盘的研判增强层。输入是规则引擎产出的各维度事实底稿：
+findings 是已核实的事实，evidence 是数据依据，rules_judgements 是规则引擎的初步判断。
+
+要求：
+1. 只输出一个 JSON 对象，格式：
+   {"judgements": {"trades": ["..."], "market": ["..."], "system": ["..."]}}
+2. 每个维度给出 1-4 条研判判断，每条一句话；可以深化规则判定（讲清为什么、
+   风险在哪、下一步核实什么），但所有事实必须来自底稿，禁止引入底稿之外的
+   数据、行情或猜测。
+3. 不要复述 findings 原文；不给具体的买卖价格、仓位比例建议。
+4. 输入里没有的维度 key 不要输出；某维度没有可判断的内容时输出空数组。\
+"""
 
 
 class LLMAnalyzer:
-    """LLM 分析器占位实现。
+    """LLM 分析器：规则底稿 + LLM 研判增强。
 
     需要配置 `ASHARE_REVIEW_LLM_BASE_URL` / `ASHARE_REVIEW_LLM_API_KEY` /
-    `ASHARE_REVIEW_LLM_MODEL` 后才可用。未配置时 `is_available()` 返回 False，
-    `ModelRouter` 会自动降级到规则分析器。
+    `ASHARE_REVIEW_LLM_MODEL`（OpenAI 兼容接口）后才可用；未配置时
+    `is_available()` 返回 False，`ModelRouter` 自动降级到规则分析器。
 
-    之所以留这个壳而不是直接实现：不同厂商的接口形态差异大（OpenAI 兼容 / Anthropic /
-    各家国产模型），在没有实际凭证时猜测字段只会产出不可用代码。
-    等确定了接口形态再补 `analyze()` 里的调用。
+    原则（沿用本项目"LLM 不直接造数据"的一贯口径）：
+    1. `RulesAnalyzer` 先跑出确定性事实底稿——findings / evidence 一概不动
+    2. LLM 只重写各维度的 judgements（研判层），且只允许基于底稿发挥
+    3. HTTP / 解析失败一律上抛 → ModelRouter 降级规则分析器（degraded 显式）
+    4. LLM 漏答的维度保留规则原判；未知维度 key 自然丢弃（只按底稿维度取）
+    5. 被 LLM 增强过的维度在 evidence 里打 `llm_enhanced` 标记，报告可追溯
     """
 
     name = "llm"
 
-    def __init__(self, base_url: str = "", api_key: str = "", model: str = ""):
+    def __init__(
+        self,
+        base_url: str = "",
+        api_key: str = "",
+        model: str = "",
+        client: httpx.Client | None = None,
+    ):
         self.base_url = base_url
         self.api_key = api_key
         self.model = model or "unknown"
+        self._client = client
 
     def is_available(self) -> bool:
         return bool(self.base_url and self.api_key)
 
     def analyze(self, data: ReviewData, method: MethodologyConfig) -> list[DimensionResult]:
-        raise NotImplementedError(
-            "LLM 分析器尚未接入：需先提供 LLM 接口的 base_url / api_key / model。"
-            "未配置时 ModelRouter 会自动降级到 RulesAnalyzer。"
+        from app.core.llm_client import chat_completion, extract_json_object
+
+        # 1. 规则底稿：事实与证据的唯一定义源
+        draft = RulesAnalyzer().analyze(data, method)
+
+        # 2. 构造 prompt：只喂底稿，不喂原始数据（底稿已做过缺失标注）
+        prompt_dims = [
+            {
+                "key": d.key,
+                "status": d.status,
+                "findings": d.findings,
+                "evidence": d.evidence,
+                "rules_judgements": d.judgements,
+            }
+            for d in draft
+        ]
+        messages = [
+            {"role": "system", "content": _LLM_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {"trade_date": data.trade_date, "dimensions": prompt_dims},
+                    ensure_ascii=False,
+                ),
+            },
+        ]
+        content = chat_completion(
+            self.base_url, self.api_key, self.model, messages, client=self._client,
         )
+
+        # 3. 解析 + 校验：结构不对就上抛（路由层降级），绝不半信半疑地采用
+        payload = extract_json_object(content)
+        raw = payload.get("judgements")
+        if not isinstance(raw, dict):
+            raise ValueError("LLM 回复缺少 judgements 对象")
+
+        out: list[DimensionResult] = []
+        for d in draft:
+            vals = raw.pop(d.key, None)
+            if not isinstance(vals, list):
+                out.append(d)  # 漏答 / 类型不对 → 保留规则原判
+                continue
+            cleaned = [v.strip() for v in vals if isinstance(v, str) and v.strip()]
+            if not cleaned:
+                out.append(d)
+                continue
+            out.append(d.model_copy(update={
+                "judgements": cleaned,
+                "evidence": {**d.evidence, "llm_enhanced": True},
+            }))
+        if raw:  # 剩下的 key 底稿里没有 → 丢弃，但必须留痕
+            log.warning("LLM 回复含未知维度 key，已丢弃：%s", sorted(raw))
+        return out

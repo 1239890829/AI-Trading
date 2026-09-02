@@ -54,6 +54,7 @@ from app.picks.intraday_rules import (
     FALSIFY_DRAWDOWN_PCT,
     FALSIFY_NEGATIVE_BEATS,
     entry_mode,
+    is_performance_tag,
     rank_directions,
 )
 from app.market.trading_status import beijing_now
@@ -217,6 +218,10 @@ def assemble_brief(evidence: dict) -> dict:
     """证据 → 简报 payload（纯函数，可被回测框架直接回放）。
 
     候选方向 = 涨停池题材 ∪ 事件题材方向；排序取 rank_directions top3。
+    业绩/财报结果型题材（is_performance_tag）不作为跟踪方向——官方概念
+    目录无对应板块指数，confirm 的板块涨幅永远拿不到，占坑只会稀释有效
+    方向（回测 120 日 unmatched 28.6% 的根因）；被排除的名单落
+    performance_skipped 如实呈现，不是静默丢弃。
     """
     phase = evidence.get("phase")
     themes: dict[str, dict] = evidence.get("themes") or {}
@@ -226,7 +231,11 @@ def assemble_brief(evidence: dict) -> dict:
     names: dict[str, str] = evidence.get("event_symbol_names") or {}
 
     evidences = []
+    perf_skipped: list[str] = []
     for tag in sorted(set(themes) | set(ev_strength)):
+        if is_performance_tag(tag):
+            perf_skipped.append(tag)
+            continue
         stat = themes.get(tag)
         defensive = any(h in tag for h in DEFENSIVE_HINTS)
         ec = ev_counts.get(tag) or {}
@@ -290,6 +299,7 @@ def assemble_brief(evidence: dict) -> dict:
             "is_trading_day": evidence.get("is_trading_day"),
         },
         "missing": evidence.get("missing") or [],
+        "performance_skipped": perf_skipped,
         "directions": directions,
         "alerts": [],  # 盘中 watcher 追加（append_alert，当日去重）
     }

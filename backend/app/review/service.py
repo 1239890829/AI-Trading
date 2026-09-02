@@ -107,7 +107,9 @@ class ReviewService:
         )
 
         # --- 分析 ---
-        dimensions, usage = self._router.analyze(data, method)
+        # LLM 接入后这里是同步 HTTP（最长 30s），必须丢线程池，
+        # 否则会卡住事件循环上所有的轮询与行情推送
+        dimensions, usage = await asyncio.to_thread(self._router.analyze, data, method)
 
         # --- 合成改进项与元结论 ---
         action_items = build_action_items(data, dimensions, method)
