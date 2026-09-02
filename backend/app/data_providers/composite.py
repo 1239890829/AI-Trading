@@ -34,6 +34,13 @@ _ROUTED = (
     "get_limit_break_pool", "get_trading_days", "get_announcements", "get_news", "get_company_profile",
 )
 
+#: 观测范围 = _ROUTED + 未列入 _ROUTED 但可路由的方法（get_minute_line、ths 专属）。
+#: 仅用于 /api/system/providers 展示"每个源实现了哪些方法"，不参与路由选择。
+_OBSERVABLE_METHODS = _ROUTED + (
+    "get_minute_line", "get_hot_stock_list", "get_hot_stock_list_history",
+    "get_auction_snapshot", "get_auction_benchmark", "get_adjustment_events",
+)
+
 
 class CompositeProvider:
     realtime = True
@@ -76,6 +83,41 @@ class CompositeProvider:
         return {
             f"{m}@{p}": {"failures": n, "cooldown_left": round(self._cooldown_left(m, p), 1)}
             for (m, p), n in self._failures.items()
+        }
+
+    def provider_health(self) -> dict:
+        """provider 链全景快照（GET /api/system/providers，P0-A 可观测）。
+
+        breaker_state() 只列出有失败记录的 (方法, 源)，且看不出"降级发生了没"——
+        东财间歇断连、腾讯 WAF 封禁这类降级过去只能靠事后排查发现。这里补齐：
+        - 每个源实现了哪些方法、秒级优先级（realtime_rank）
+        - 熔断三态：open（冷却中，请求正在被跳过）/ watch（有失败未达阈值）/
+          closed（无记录，键不存在）
+        - 每个方法最后由哪个源成功服务（last_good）+ 最近切换记录
+        """
+        providers = [
+            {
+                "name": p.name,
+                "realtime": bool(getattr(p, "realtime", False)),
+                "realtime_rank": getattr(p, "realtime_rank", None),
+                "methods": [m for m in _OBSERVABLE_METHODS if hasattr(p, m)],
+            }
+            for p in self.providers
+        ]
+        breakers = {}
+        for (m, p), n in sorted(self._failures.items()):
+            left = self._cooldown_left(m, p)
+            breakers[f"{m}@{p}"] = {
+                "failures": n,
+                "cooldown_left": round(left, 1),
+                "state": "open" if left > 0 else "watch",
+            }
+        return {
+            "chain": self.name,
+            "providers": providers,
+            "breakers": breakers,
+            "last_good": dict(self._last_good),
+            "switch_log": list(self.switch_log[-20:]),
         }
 
     @property

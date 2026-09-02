@@ -26,6 +26,37 @@ async def health(hub: QuoteHub = Depends(get_hub)) -> dict:
     }
 
 
+@router.get("/system/providers")
+async def system_providers(hub: QuoteHub = Depends(get_hub)) -> dict:
+    """provider 链可观测（P0-A）：熔断状态/连续失败数/最后服务源/切换记录。
+
+    熔断触发（state=open）意味着数据已自动降级到备源——这个端点把"降级"变成
+    可见的：东财间歇断连、腾讯 WAF 封禁（2026-08-31）过去都只能靠事后排查。
+    缓存命中统计单列在 GET /api/system/caches。
+    """
+    provider = hub.provider
+    if hasattr(provider, "provider_health"):
+        payload = provider.provider_health()
+    else:
+        # 单源部署（mock 或单 provider）没有链状态，给最小结构保持契约稳定
+        payload = {
+            "chain": provider.name,
+            "providers": [{
+                "name": provider.name,
+                "realtime": bool(getattr(provider, "realtime", False)),
+                "realtime_rank": getattr(provider, "realtime_rank", None),
+                "methods": [],
+            }],
+            "breakers": {},
+            "last_good": {},
+            "switch_log": [],
+        }
+    from app.core.ttl_cache import live_caches
+
+    payload["caches"] = live_caches()
+    return payload
+
+
 @router.get("/system/caches")
 async def system_caches() -> dict:
     """进程内 TTL 缓存观测（P0-5 统一缓存层）：命中率/容量/逐出。
