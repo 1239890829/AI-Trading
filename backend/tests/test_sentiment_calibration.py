@@ -8,7 +8,6 @@
 """
 from __future__ import annotations
 
-from app.sentiment import calibration as cal
 from app.sentiment.calibration import (
     CALIBRATABLE,
     MIN_SAMPLES,

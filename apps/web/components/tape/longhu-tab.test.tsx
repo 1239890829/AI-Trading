@@ -25,6 +25,9 @@ const record = (trade_date: string): LongHuRecord => ({
   buy_amount: 3_000_000,
   sell_amount: 2_000_000,
   source: "ths",
+  quality: "high",
+  quality_reasons: [],
+  received_at: "t0",
 });
 
 /** 把客户端时间钉在 2026-09-02（周二，交易日）的指定时刻。组件的 now/todayISO 都取自它。 */

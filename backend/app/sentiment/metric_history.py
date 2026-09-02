@@ -128,7 +128,6 @@ async def backfill(
     days = [d for d in sorted(trade_days) if d < today][-(lookback + 1):]
 
     pool_by_day: dict[date, list] = {}
-    break_by_day: dict[date, list] = {}
     added = skipped = suspicious = 0
 
     # 只在需要时拉：若某日及其前一日都已在库且非 force，跳过网络请求
