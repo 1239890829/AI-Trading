@@ -140,6 +140,37 @@ def test_record_daily_heat_date_mismatch(heat_dir, fake_clock, monkeypatch):
     assert not list(heat_dir.glob("*.jsonl"))
 
 
+def test_record_daily_heat_env_missing_still_records_but_warns(
+    heat_dir, fake_clock, monkeypatch
+):
+    """env 缺失照常落库（题材事实比环境更难重取），但必须 warning 留痕——
+    首跑实测（2026-09-02）：重启补落时快照未预热，env 静默变 null。"""
+    # 不走 caplog：TestClient 测试的 basicConfig 会改 root logger 状态，
+    # 全量跑时 caplog 捕获不到（test_paper_audit 同款坑），直接桩掉模块 log。
+    warnings_seen: list[str] = []
+    _noop = lambda *a, **k: None  # noqa: E731
+    monkeypatch.setattr(
+        hh, "log",
+        SimpleNamespace(
+            warning=lambda fmt, *a: warnings_seen.append(fmt),
+            info=_noop, debug=_noop, error=_noop, exception=_noop,
+        ),
+    )
+    calls: list = []
+    _patch_facts(
+        monkeypatch,
+        _facts(env={"phase": None, "promo_percentile": None},
+               missing=["情绪环境不可用（快照未预热）"]),
+        calls,
+    )
+    out = asyncio.run(hh.record_daily_heat(_state()))
+    assert out["recorded"] == 2  # 不阻断落库
+    path = heat_dir / "20260901.jsonl"
+    lines = [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]
+    assert all(r["phase"] is None and r["promo_percentile"] is None for r in lines)
+    assert any("env missing" in m for m in warnings_seen)
+
+
 # ---------------------------------------------------------------- load_heat_rows
 
 

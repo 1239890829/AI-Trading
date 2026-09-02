@@ -98,6 +98,16 @@ async def record_daily_heat(state) -> dict:
     if not rows:
         return {"recorded": 0, "reason": "empty_themes", "missing": facts.get("missing")}
 
+    env = facts.get("env") or {}
+    if env.get("phase") is None and env.get("promo_percentile") is None:
+        # 环境缺失照常落库（题材事实比环境更难重取），但必须留痕——
+        # 首跑实测（2026-09-02）：重启补落时快照未预热，env 静默变 null，
+        # 题材生命周期统计将整列缺维度，只能靠这行日志发现。
+        log.warning(
+            "heat history env missing for %s（phase/promo_percentile 均为 null）；"
+            "facts missing: %s", td.isoformat(), facts.get("missing"),
+        )
+
     HEAT_DIR.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".jsonl.tmp")
     tmp.write_text(
