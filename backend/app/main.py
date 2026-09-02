@@ -157,6 +157,7 @@ async def lifespan(app: FastAPI):
         llm_api_key=settings.review_llm_api_key,
         llm_model=settings.review_llm_model,
         methodology_version=settings.review_methodology_version,
+        state=app.state,
     )
     app.state.review = review_svc
 

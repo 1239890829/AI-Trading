@@ -500,6 +500,38 @@ async def _is_trading_day(hub, d: date) -> bool:
     return d in (days or [])
 
 
+async def _premarket_tick(
+    app,
+    *,
+    now: datetime,
+    last_run: str | None,
+    run_hour: int,
+    run_minute: int,
+) -> str:
+    """调度单步判定（抽出以便测试）：返回处置后的 last_run key。
+
+    幂等链：内存 last_run（防同进程重复）→ 磁盘当日简报（防重启后覆盖，
+    2026-09-02 实测事故）→ 交易日判定。三层全过才生成。
+    """
+    key = now.strftime("%Y%m%d")
+    due = (now.hour, now.minute) >= (run_hour, run_minute) and now.hour < 12
+    if not due or last_run == key:
+        return last_run or ""
+    existing = load_brief(key)
+    if existing is not None:
+        log.info(
+            "premarket brief skipped: %s 当日简报已存在"
+            "（generated_at=%s, trigger=%s），持久化幂等不覆盖",
+            key, existing.get("generated_at"), existing.get("trigger"),
+        )
+        return key
+    if await _is_trading_day(app.state.hub, now.date()):
+        await build_and_save(app, trigger="schedule")
+    else:
+        log.info("premarket brief skipped: %s 非交易日", key)
+    return key
+
+
 async def premarket_scheduler(
     app,
     *,
@@ -510,21 +542,21 @@ async def premarket_scheduler(
 ) -> None:
     """盘前简报调度（lifespan 任务）：交易日 run_hour:run_minute 后生成，当日幂等。
 
-    先置位 last_run 再跑：失败不整分钟重试风暴（手动端点可重跑）；
+    幂等是**持久化**的：due 分支先查磁盘当日简报（load_brief），已存在则跳过——
+    last_run 是内存态，12:00 前重启后端会清零，若无磁盘幂等会无条件重新生成
+    当日简报，把盘前证据产出的方向/alerts 整体覆盖（2026-09-02 实测事故：
+    09:15 的存储芯片简报被 09:49 重启后盘中池重新生成覆盖）。
+    需要强制重生成走手动端点（显式意图，不受本幂等约束）。
+    先置位 last_run 再跑：失败不整分钟重试风暴；
     12:00 后不再触发（过了盘前窗口的"补跑"只会产出过时证据）。
     """
     last_run: str | None = None
     while not stop.is_set():
         try:
-            now = beijing_now()
-            key = now.strftime("%Y%m%d")
-            due = (now.hour, now.minute) >= (run_hour, run_minute) and now.hour < 12
-            if due and last_run != key:
-                last_run = key
-                if await _is_trading_day(app.state.hub, now.date()):
-                    await build_and_save(app, trigger="schedule")
-                else:
-                    log.info("premarket brief skipped: %s 非交易日", key)
+            last_run = await _premarket_tick(
+                app, now=beijing_now(), last_run=last_run,
+                run_hour=run_hour, run_minute=run_minute,
+            )
         except Exception:
             log.exception("premarket brief scheduler failed")
         with contextlib.suppress(asyncio.TimeoutError):

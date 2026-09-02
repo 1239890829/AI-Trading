@@ -42,11 +42,15 @@ class ReviewService:
         llm_api_key: str = "",
         llm_model: str = "",
         methodology_version: str = "v1",
+        state=None,
     ):
         self.hub = hub
         self.snapshot_service = snapshot_service
         self.session_factory = session_factory
         self.methodology_version = methodology_version
+        #: app.state 引用（可选）：运行时惰性取 ths_sentinel——哨兵实例在
+        #: lifespan 后段才创建，构造时不存在，不能在 __init__ 里取。
+        self.state = state
         self._router = ModelRouter(
             requested=model,
             llm=LLMAnalyzer(base_url=llm_base_url, api_key=llm_api_key, model=llm_model),
@@ -85,7 +89,10 @@ class ReviewService:
         anchor = await self.resolve_trade_date(trade_date)
 
         # --- 采集：市场（异步 IO）与交易（DB 同步）并行 ---
-        market_coro = collect_market(self.hub, self.snapshot_service, anchor)
+        sentinel = getattr(self.state, "ths_sentinel", None) if self.state else None
+        market_coro = collect_market(
+            self.hub, self.snapshot_service, anchor, sentinel=sentinel
+        )
         trading_task = asyncio.to_thread(
             collect_trading, self.session_factory, anchor, self._price_map()
         )

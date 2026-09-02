@@ -288,6 +288,53 @@ class RulesAnalyzer:
                 "建议检查 provider 健康状态与交易日历"
             )
 
+        # 数据链健康（复盘生成时刻的降级可见化）：熔断 open = 当日部分数据
+        # 建立在备源口径上；ths 哨兵 alert = 题材标签可能失效。None = 未采集，
+        # 不冒充"健康"（三态纪律）。今天的四类静默失败共同证明：不主动核对
+        # 数据链，data_issue 归因永远是盲区。
+        ph = data.market.provider_health
+        if ph is not None:
+            breakers = ph.get("breakers") or {}
+            open_breakers = sorted(
+                k for k, v in breakers.items() if v.get("state") == "open"
+            )
+            watch_breakers = sorted(
+                k for k, v in breakers.items() if v.get("state") == "watch"
+            )
+            switches = ph.get("switch_log") or []
+            evidence["provider_health"] = {
+                "chain": ph.get("chain"),
+                "open_breakers": open_breakers,
+                "watch_breakers": watch_breakers,
+                "last_good": ph.get("last_good") or {},
+                "switch_count": len(switches),
+            }
+            if open_breakers:
+                judgements.append(
+                    f"复盘时仍有 {len(open_breakers)} 个熔断打开（{'、'.join(open_breakers)}），"
+                    "对应方法正降级到备源——核对当日结论所依赖的数据口径与备源差异"
+                )
+            elif watch_breakers:
+                findings.append(
+                    f"熔断 watch 状态 {len(watch_breakers)} 个（未达阈值），数据链暂可用但需留意"
+                )
+            if switches:
+                last = switches[-1]
+                findings.append(
+                    f"复盘前共记录 {len(switches)} 次数据源切换（最近：{last}）"
+                )
+            sent = ph.get("ths_reason_sentinel") or {}
+            sstate = sent.get("state")
+            if sstate == "alert":
+                judgements.append(
+                    "ths 涨停原因哨兵告警中（题材标签可能失效且无备源）——"
+                    "题材归因、题材类选股结论需降权，并核对告警时段"
+                )
+            elif sstate in ("degraded", "probe_failed"):
+                findings.append(
+                    f"ths 涨停原因哨兵状态 {sstate}，题材标签可靠性待观察"
+                )
+
         # 信号质量：样本不足时明确不做判定
         sig_samples = (data.market.sentiment or {}).get("pool_today_count")
         evidence["signal_samples"] = sig_samples

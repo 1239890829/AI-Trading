@@ -630,3 +630,124 @@ def test_adoption_rate_reflects_disposition():
         assert (a_cat["adoption_rate"] or 0) > (b_cat["adoption_rate"] or 0)
     finally:
         _cleanup(sf, _TEST_TD_AI)
+
+
+# ---------------------------------------------------------------- 数据链健康（system 维度）
+# 2026-09-02 起复盘采集 provider 健康与 ths 哨兵快照：熔断 open / 哨兵 alert
+# 意味着当日部分数据建立在降级口径上，system 维度必须把这件事说出来——
+# 不主动核对数据链，data_issue 归因永远是盲区（四类静默失败教训）。
+
+
+def _ph(**over) -> dict:
+    base = {
+        "chain": "chain(ths→tencent→eastmoney→sina)",
+        "breakers": {},
+        "last_good": {"get_quotes": "tencent"},
+        "switch_log": [],
+        "ths_reason_sentinel": {"state": "ok", "records": 49, "coverage": 1.0},
+    }
+    base.update(over)
+    return base
+
+
+def _sys_dim(data: ReviewData) -> DimensionResult:
+    return next(d for d in RulesAnalyzer().analyze(data, _method()) if d.key == "system")
+
+
+def test_system_surfaces_open_breakers_and_sentinel_alert():
+    data = _ok_data()
+    data.market.provider_health = _ph(
+        breakers={"get_kline@eastmoney": {"failures": 3, "cooldown_left": 41.0, "state": "open"}},
+        switch_log=[{"at": "2026-09-02T10:00", "method": "get_kline", "to": "tencent"}],
+        ths_reason_sentinel={"state": "alert", "records": 30, "coverage": 0.2},
+    )
+    dim = _sys_dim(data)
+    joined = "\n".join(dim.judgements)
+    assert "get_kline@eastmoney" in joined and "熔断" in joined
+    assert "涨停原因哨兵" in joined and "降权" in joined
+    assert dim.evidence["provider_health"]["open_breakers"] == ["get_kline@eastmoney"]
+    assert dim.evidence["provider_health"]["switch_count"] == 1
+
+
+def test_system_watch_state_is_finding_not_judgement():
+    """watch（未达阈值）只是提示，不上judgement——避免噪音稀释真异常。"""
+    data = _ok_data()
+    data.market.provider_health = _ph(
+        breakers={"get_kline@sina": {"failures": 1, "cooldown_left": 0.0, "state": "watch"}}
+    )
+    dim = _sys_dim(data)
+    assert not any("熔断" in j for j in dim.judgements)
+    assert any("watch" in f for f in dim.findings)
+
+
+def test_system_no_provider_health_stays_silent():
+    """未采集（None）= 不冒充健康也不产出噪音，单源部署不误报。"""
+    dim = _sys_dim(_ok_data())
+    assert "provider_health" not in dim.evidence
+    assert not any("哨兵" in j for j in dim.judgements)
+
+
+def test_collect_market_gathers_provider_health(monkeypatch):
+    """collector 采集 provider 健康 + 哨兵快照；各失败路径单独容错。"""
+    import asyncio
+    from datetime import date as _date
+
+    from app.review.collector import collect_market
+    import app.services.market_context as mc
+    import app.services.theme_service as ts
+
+    async def fake_sentiment(hub, svc):
+        return {}
+
+    async def fake_board(provider, td):
+        return {"themes": [], "broken_ladder": []}
+
+    monkeypatch.setattr(mc, "compute_market_sentiment", fake_sentiment)
+    monkeypatch.setattr(ts, "build_theme_board", fake_board)
+
+    hub = SimpleNamespace(
+        get_indices=lambda: [],
+        provider=SimpleNamespace(
+            provider_health=lambda: {"chain": "chain(a→b)", "breakers": {}, "last_good": {}, "switch_log": []},
+        ),
+    )
+    snap_svc = SimpleNamespace(breadth_payload=lambda: {"breadth": {"up": 1}})
+    sentinel = SimpleNamespace(snapshot=lambda: {"state": "ok", "records": 49})
+
+    snap = asyncio.run(
+        collect_market(hub, snap_svc, _date(2026, 9, 2), sentinel=sentinel)
+    )
+    assert snap.provider_health["chain"] == "chain(a→b)"
+    assert snap.provider_health["ths_reason_sentinel"]["state"] == "ok"
+
+
+def test_collect_market_provider_health_failure_records_gap(monkeypatch):
+    """健康采集自身失败 → provider_health=None（未采集）+ warn gap，绝不给 {} 冒充健康。"""
+    import asyncio
+    from datetime import date as _date
+
+    from app.review.collector import collect_market
+    import app.services.market_context as mc
+    import app.services.theme_service as ts
+
+    async def fake_sentiment(hub, svc):
+        return {}
+
+    async def fake_board(provider, td):
+        return {"themes": [], "broken_ladder": []}
+
+    monkeypatch.setattr(mc, "compute_market_sentiment", fake_sentiment)
+    monkeypatch.setattr(ts, "build_theme_board", fake_board)
+
+    def boom():
+        raise RuntimeError("breaker exploded")
+
+    hub = SimpleNamespace(
+        get_indices=lambda: [],
+        provider=SimpleNamespace(provider_health=boom),
+    )
+    snap_svc = SimpleNamespace(breadth_payload=lambda: {"breadth": {"up": 1}})
+
+    snap = asyncio.run(collect_market(hub, snap_svc, _date(2026, 9, 2)))
+    assert snap.provider_health is None
+    assert any(g.field == "provider_health" for g in snap.gaps)

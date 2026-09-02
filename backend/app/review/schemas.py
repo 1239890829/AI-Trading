@@ -53,6 +53,9 @@ class MarketSnapshot(BaseModel):
     themes: list[dict[str, Any]] = Field(default_factory=list)
     theme_summary: dict[str, Any] = Field(default_factory=dict)
     gaps: list[DataGap] = Field(default_factory=list)
+    #: 数据链健康快照（provider 熔断/切换 + ths 涨停原因哨兵）。
+    #: None = 未采集（单源部署或采集失败）——三态纪律：缺失不冒充"健康"。
+    provider_health: dict[str, Any] | None = None
 
 
 class OrderRecord(BaseModel):

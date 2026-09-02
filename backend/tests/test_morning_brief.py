@@ -128,8 +128,6 @@ def test_assemble_brief_caps_and_conditions():
 
 
 def test_assemble_brief_defensive_flag():
-    payload = mb.assemble_brief(_evidence())
-    all_dirs = {d["direction"]: d for d in payload["directions"]}
     # 银行是防守方向（可能在 top3 外，构造证据单独验证）
     ev = _evidence(themes={"银行": _evidence()["themes"]["银行"]},
                    event_strength={}, event_counts={}, event_symbols={})
@@ -197,3 +195,97 @@ def test_saved_payload_is_valid_json_file(brief_dir):
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["env"]["phase"] == "发酵"
     assert data["alerts"] == []
+
+
+# ---------------------------------------------------------------- 调度幂等（持久化）
+# 2026-09-02 实测事故：premarket_scheduler 的 last_run 是内存态，12:00 前重启后端
+# 清零 → due 分支无条件重新生成当日简报，把盘前方向/alerts 整体覆盖。
+
+
+def _tick_app() -> NS:
+    return NS(state=NS(hub=NS()))
+
+
+def _tick(brief_dir, monkeypatch, *, now, last_run, trading=True):
+    """跑单步调度；返回 (last_run, build_and_save 是否被调用)。"""
+    import asyncio
+
+    calls: list[str] = []
+
+    async def fake_trading(hub, d):
+        return trading
+
+    async def fake_build(app_state, *, trigger):
+        calls.append(trigger)
+        payload = mb.assemble_brief(_evidence(brief_date=now.strftime("%Y%m%d")))
+        mb.save_brief(payload)  # 与真实 build_and_save 同行为：生成即落盘
+        return payload
+
+    monkeypatch.setattr(mb, "_is_trading_day", fake_trading)
+    monkeypatch.setattr(mb, "build_and_save", fake_build)
+    new_last = asyncio.run(
+        mb._premarket_tick(
+            _tick_app(), now=now, last_run=last_run, run_hour=8, run_minute=40
+        )
+    )
+    return new_last, bool(calls)
+
+
+def test_scheduler_persisted_idempotent_no_overwrite_on_restart(brief_dir, monkeypatch):
+    """重启模拟：内存 last_run=None，但磁盘已有当日简报 → 跳过，不覆盖。"""
+    payload = mb.assemble_brief(_evidence())
+    mb.save_brief(payload)
+    new_last, built = _tick(
+        brief_dir, monkeypatch, now=datetime(2026, 9, 2, 9, 49), last_run=None
+    )
+    assert built is False  # 简报未被重新生成
+    assert new_last == "20260902"
+    # 原简报内容未被覆盖（仍是盘前证据的方向，不是盘中池的方向）
+    assert mb.load_brief("20260902")["env"]["pool_date"] == "2026-09-01"
+
+
+def test_scheduler_generates_when_no_brief(brief_dir, monkeypatch):
+    """无当日简报 + 交易日 + due → 正常生成。"""
+    new_last, built = _tick(
+        brief_dir, monkeypatch, now=datetime(2026, 9, 2, 8, 41), last_run=None
+    )
+    assert built is True
+    assert new_last == "20260902"
+    assert mb.load_brief("20260902") is not None
+
+
+def test_scheduler_skip_non_trading_day(brief_dir, monkeypatch):
+    new_last, built = _tick(
+        brief_dir, monkeypatch, now=datetime(2026, 9, 5, 8, 41), last_run=None,
+        trading=False,
+    )
+    assert built is False
+    assert new_last == "20260905"  # 置位防整分钟重试，即便非交易日
+
+
+def test_scheduler_not_due_after_noon(brief_dir, monkeypatch):
+    """12:00 后不再补跑（过时证据无意义）。"""
+    new_last, built = _tick(
+        brief_dir, monkeypatch, now=datetime(2026, 9, 2, 12, 30), last_run=None
+    )
+    assert built is False
+    assert new_last == ""  # last_run 不置位，语义上是"从未到期"
+
+
+def test_scheduler_same_day_inmemory_idempotent(brief_dir, monkeypatch):
+    """同进程内已跑过（last_run==key）→ 不重复生成（原有行为保持）。"""
+    new_last, built = _tick(
+        brief_dir, monkeypatch, now=datetime(2026, 9, 2, 8, 42), last_run="20260902"
+    )
+    assert built is False
+    assert new_last == "20260902"
+
+
+def test_scheduler_corrupt_brief_falls_through_to_generate(brief_dir, monkeypatch):
+    """磁盘简报损坏 → load_brief None → 视同无简报，正常生成（不因坏文件卡死当日）。"""
+    (brief_dir / "20260902.json").write_text("{broken", encoding="utf-8")
+    new_last, built = _tick(
+        brief_dir, monkeypatch, now=datetime(2026, 9, 2, 8, 41), last_run=None
+    )
+    assert built is True
+    assert new_last == "20260902"

@@ -51,8 +51,15 @@ def _date_key(d: date) -> str:
 # ---------------------------------------------------------------- 市场环境
 
 
-async def collect_market(hub, snapshot_service, trade_date: date) -> MarketSnapshot:
-    """采集市场环境数据。每项失败都记 gap，不影响其他项。"""
+async def collect_market(
+    hub, snapshot_service, trade_date: date, *, sentinel=None
+) -> MarketSnapshot:
+    """采集市场环境数据。每项失败都记 gap，不影响其他项。
+
+    :param sentinel: ths 涨停原因哨兵实例（可选，app.state.ths_sentinel）。
+      provider 健康与哨兵快照是**复盘生成时刻**的状态——熔断 open / 哨兵 alert
+      意味着当日部分数据建立在降级口径上，system 维度据此提示核对面。
+    """
     gaps: list[DataGap] = []
     td = _date_key(trade_date)
 
@@ -140,9 +147,36 @@ async def collect_market(hub, snapshot_service, trade_date: date) -> MarketSnaps
             impact="market.题材梯队", severity="warn",
         ))
 
+    # --- 数据链健康（provider 熔断/切换 + ths 涨停原因哨兵）---
+    # 失败记 None（未采集），绝不给 {} 冒充"健康无异常"。
+    provider_health: dict | None = None
+    try:
+        if hasattr(hub.provider, "provider_health"):
+            provider_health = hub.provider.provider_health()
+        else:
+            provider_health = None  # 单源部署无链状态
+    except Exception as exc:
+        log.warning("review collect: provider health failed: %s", exc)
+        provider_health = None
+        gaps.append(DataGap(
+            field="provider_health", source="composite.provider_health",
+            reason=str(exc)[:200], impact="system.数据链健康核对", severity="warn",
+        ))
+    if sentinel is not None:
+        try:
+            provider_health = dict(provider_health or {})
+            provider_health["ths_reason_sentinel"] = sentinel.snapshot()
+        except Exception as exc:
+            log.warning("review collect: sentinel snapshot failed: %s", exc)
+            gaps.append(DataGap(
+                field="ths_reason_sentinel", source="ths_sentinel.snapshot",
+                reason=str(exc)[:200], impact="system.题材标签可靠性核对", severity="warn",
+            ))
+
     return MarketSnapshot(
         trade_date=td, indices=indices, breadth=breadth, sentiment=sentiment,
         themes=themes, theme_summary=theme_summary, gaps=gaps,
+        provider_health=provider_health,
     )
 
 
