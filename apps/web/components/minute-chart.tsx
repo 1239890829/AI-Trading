@@ -31,6 +31,20 @@ import type { MinuteNewsEvent } from "@/lib/event-markers";
  * points 高频变化走 setData 全量原位重灌（不销毁图表、不闪）。⚠️ 不能用
  * series.update()：槽位以全天 whitespace 占位，series 最后时间点恒为 15:00，
  * update(当前分钟) 必抛 "Cannot update oldest data"（实测崩溃，见 fillAll 注释）。
+ *
+ * 红涨绿跌（2026-09-02 用户反馈）：价格线用 BaselineSeries 以昨收为基值——
+ * 高于昨收的时段红、低于绿（A股惯例），渐变填充随基线自动分段；昨收缺失时
+ * 降级为单色面积线（无从判向，不臆造基准）。
+ *
+ * 悬停稳定（2026-09-02 用户反馈"悬浮框/十字线闪烁"）：实测根因是库在每次
+ * 行情更新后经 updateCrosshair 重放 crosshairMove（鼠标静止时也 ~2次/秒），
+ * 原 handler 每次全量重建 tooltip innerHTML（实测 48 节点/秒增删）→ 悬浮框
+ * 内容节点不停撕倒重建即闪烁。修复：① 浮层改为手术式 DOM 更新——骨架只在
+ * 首次写入，之后仅 patch 各字段 textContent/className（零节点增删）；
+ * ② 挂容器原生 pointerenter/leave 跟踪真实悬停态，空 param 事件在悬停中
+ * 一律忽略（数据更新瞬态不再隐藏浮层）；③ 时间轴关闭 whitespace 替换时的
+ * 可视区间右移（allowShiftVisibleRangeOnWhitespaceReplacement=false），
+ * 消除每根新分钟线导致的整图横移跳动。
  */
 
 const UP = "#ef4444"; // 中国惯例红涨
@@ -58,7 +72,8 @@ function bjHHMM(p: { ts: string }): string {
 
 type SeriesBundle = {
   chart: IChartApi | null;
-  price: ISeriesApi<"Area"> | null;
+  /** 有昨收 → BaselineSeries（红涨绿跌分段）；降级（无昨收）→ AreaSeries 单色。 */
+  price: ISeriesApi<"Area"> | ISeriesApi<"Baseline"> | null;
   pct: ISeriesApi<"Line"> | null;
   avg: ISeriesApi<"Line"> | null;
   vol: ISeriesApi<"Histogram"> | null;
@@ -141,6 +156,13 @@ export function MinuteChart({
   const cursorRef = useRef("");
   // 创建 effect 最近一次灌入的 points 引用（增量 effect 去重，避免同帧重复灌）
   const lastPointsRef = useRef<P[] | null>(null);
+  // 悬停稳定（2026-09-02）：容器真实悬停态 + 最近一次有效光标参数 + 浮层补丁状态。
+  // 库会在每次行情更新后重放 crosshairMove（鼠标静止也 ~2次/秒），空 param 的
+  // 瞬态事件不得隐藏浮层；浮层 DOM 走手术式 patch（见创建 effect 内 renderTip）。
+  const insideRef = useRef(false);
+  const lastParamRef = useRef<{ time: Time; point: { x: number; y: number } } | null>(null);
+  const tipPatchRef = useRef<{ key: string; x: number; y: number }>({ key: "", x: -1, y: -1 });
+  const renderTipRef = useRef<((time: Time, point: { x: number; y: number }) => void) | null>(null);
 
   /** 槽序列：09:25(竞价) + 09:30-11:30 + 13:00-15:00 共 243 槽，当日固定。 */
   function buildSlots(first: P): { slots: number[]; base0: number } {
@@ -213,7 +235,16 @@ export function MinuteChart({
         vertLines: { color: "rgba(120,120,130,0.12)" },
         horzLines: { color: "rgba(120,120,130,0.12)" },
       },
-      timeScale: { timeVisible: true, secondsVisible: false, borderVisible: false, rightOffset: 1 },
+      // allowShiftVisibleRangeOnWhitespaceReplacement=false：盘中每根新分钟线
+      // 把 whitespace 槽替换为数据点时，库默认会把可视区间右移 1 槽——悬停中
+      // 图表整体横移一格，视觉上就是周期性跳动。全天槽位固定，无需移动。
+      timeScale: {
+        timeVisible: true,
+        secondsVisible: false,
+        borderVisible: false,
+        rightOffset: 1,
+        allowShiftVisibleRangeOnWhitespaceReplacement: false,
+      },
       rightPriceScale: { borderVisible: false },
       leftPriceScale: hasBase ? { visible: true, borderVisible: false } : { visible: false },
       crosshair: { mode: CrosshairMode.Normal },
@@ -224,14 +255,28 @@ export function MinuteChart({
     s.slots = slots;
     s.base0 = base0;
 
-    // ---- 价格面积线：昨收锚定的对称区间 ----
-    const series = chart.addAreaSeries({
-      lineColor: "#f43f5e",
-      topColor: "rgba(244,63,94,0.28)",
-      bottomColor: "rgba(244,63,94,0.02)",
-      lineWidth: 2,
-      priceLineVisible: false,
-    });
+    // ---- 价格线：红涨绿跌（BaselineSeries 以昨收为基值分段变色）----
+    // 高于昨收的时段红、低于绿；渐变填充同样随基线分段（A股分时惯例）。
+    // 昨收缺失时降级为单色面积线（无从判向，不臆造基准，浮层同步隐藏涨跌幅）。
+    const series: ISeriesApi<"Area"> | ISeriesApi<"Baseline"> = hasBase
+      ? chart.addBaselineSeries({
+          baseValue: { type: "price", price: prevClose! },
+          topLineColor: UP,
+          topFillColor1: "rgba(239,68,68,0.28)",
+          topFillColor2: "rgba(239,68,68,0.02)",
+          bottomLineColor: DOWN,
+          bottomFillColor1: "rgba(16,185,129,0.28)",
+          bottomFillColor2: "rgba(16,185,129,0.02)",
+          lineWidth: 2,
+          priceLineVisible: false,
+        })
+      : chart.addAreaSeries({
+          lineColor: "#f43f5e",
+          topColor: "rgba(244,63,94,0.28)",
+          bottomColor: "rgba(244,63,94,0.02)",
+          lineWidth: 2,
+          priceLineVisible: false,
+        });
     s.price = series;
 
     // ---- 左轴涨跌幅（隐藏 % 序列）----
@@ -375,48 +420,60 @@ export function MinuteChart({
       }
     }
 
-    // ---- 十字光标浮层 ----
+    // ---- 十字光标浮层（手术式 DOM 更新，2026-09-02 悬停闪烁修复）----
+    // 实测根因：库在每次行情更新后经 updateCrosshair 重放 crosshairMove（鼠标
+    // 静止也 ~2次/秒），原 handler 每次全量重建 tooltip innerHTML（48 节点/秒
+    // 增删）→ 悬浮框内容节点不停撕倒重建即闪烁。骨架只写一次，之后仅 patch
+    // 字段 textContent/className（零节点增删）；位置/透明度仅在变化时写。
     const tooltip = tipRef.current;
-    const onMove = (param: { time?: Time; point?: { x: number; y: number } }) => {
-      if (!tooltip) return;
-      if (!param.time || !param.point) {
-        tooltip.style.opacity = "0";
-        return;
-      }
-      // param.time 是编码后的伪 UTC（真实 ts + 8h，见槽位构建）；
-      // 匹配数据点必须先减回 8h 还原真实时基——否则所有点与光标恒差 8h，
-      // "最近点"永远收敛到最后一根（收盘价），浮层每个位置都显示同一条数据。
-      const sec = (param.time as unknown as number) * 1000 - BJ_OFFSET * 1000;
-      const pts = pointsRef.current;
+    const tipSkeleton =
+      `<div class="font-mono text-[11px] text-zinc-400" data-f="hhmm"></div>` +
+      `<div class="flex items-baseline gap-2"><span class="font-mono text-sm font-semibold tabular-nums" data-f="price"></span>` +
+      `<span data-f="pct"></span></div>` +
+      `<div class="mt-0.5 grid grid-cols-[auto,1fr] gap-x-2 gap-y-0.5 text-[11px] tabular-nums">` +
+      `<span class="text-zinc-500">均价</span><span class="font-mono text-amber-500"><span data-f="avg"></span> <span data-f="avgdev"></span></span>` +
+      `<span class="text-zinc-500">量比</span><span class="font-mono" data-f="lb"></span>` +
+      `<span class="text-zinc-500">分钟量</span><span class="font-mono" data-f="vol"></span>` +
+      `<span class="text-zinc-500">分钟额</span><span class="font-mono" data-f="amt"></span>` +
+      `<span class="text-zinc-500">累计额</span><span class="font-mono" data-f="cum"></span>` +
+      `</div>` +
+      `<div data-f="evrow" class="mt-1 border-t border-zinc-200 pt-1 dark:border-zinc-700"><span class="text-sky-500" data-f="ev"></span></div>`;
+
+    /** param.time（伪 UTC 编码）→ 最近数据点；无数据返回 null。 */
+    const nearestPoint = (time: Time): P | null => {
+      const sec = (time as unknown as number) * 1000 - BJ_OFFSET * 1000;
       let best: P | null = null;
       let bestDiff = Infinity;
-      for (const p of pts) {
+      for (const p of pointsRef.current) {
         const d = Math.abs(new Date(p.ts).getTime() - sec);
         if (d < bestDiff) {
           bestDiff = d;
           best = p;
         }
       }
-      if (!best) {
-        tooltip.style.opacity = "0";
-        return;
-      }
-      const d = best;
+      return best;
+    };
+
+    const renderTip = (time: Time, point: { x: number; y: number }) => {
+      if (!tooltip) return;
+      const d = nearestPoint(time);
+      if (!d) return;
       const bjIso = new Date(new Date(d.ts).getTime() + 8 * 3600 * 1000).toISOString();
       const changePct = hasBase ? ((d.price - prevClose!) / prevClose!) * 100 : null;
       const avgDevPct = d.avg != null && d.avg > 0 ? ((d.price - d.avg) / d.avg) * 100 : null;
       const lb = lbRef.current(d.cum_volume, bjIso);
+      const pts = pointsRef.current;
       const minuteAmount =
-        d.cum_amount != null && bestDiff >= 0
+        d.cum_amount != null
           ? (() => {
               const i = pts.indexOf(d);
               const prev = i > 0 ? pts[i - 1].cum_amount : null;
               return prev != null ? (d.cum_amount! - prev) / 1e4 : null; // 万
             })()
           : null;
-      const pctCls = (v: number | null) => (v == null ? "" : v > 0 ? "text-red-500" : v < 0 ? "text-emerald-500" : "text-zinc-400");
-      const lbCls = lb == null ? "" : lb >= 1.5 ? "text-red-500" : lb >= 0.8 ? "text-amber-500" : "text-sky-500";
-      // 事件行：光标分钟（±1 分钟容差）命中当日新闻时追加，长标题截断
+      const pctCls = (v: number | null) => (v == null ? "text-zinc-400" : v > 0 ? "text-red-500" : v < 0 ? "text-emerald-500" : "text-zinc-400");
+      const lbCls = lb == null ? "text-zinc-400" : lb >= 1.5 ? "text-red-500" : lb >= 0.8 ? "text-amber-500" : "text-sky-500";
+      // 事件行：光标分钟（±1 分钟容差）命中当日新闻时显示，长标题截断
       const bestHHMM = bjIso.slice(11, 16);
       const hhmmMins = Number(bestHHMM.slice(0, 2)) * 60 + Number(bestHHMM.slice(3, 5));
       let ev: MinuteNewsEvent | null = null;
@@ -427,28 +484,90 @@ export function MinuteChart({
           break;
         }
       }
-      const evRow = ev
-        ? `<div class="mt-1 border-t border-zinc-200 pt-1 dark:border-zinc-700"><span class="text-sky-500">📰 ${ev.count > 1 ? `×${ev.count} ` : ""}${ev.title.length > 26 ? ev.title.slice(0, 26) + "…" : ev.title}</span></div>`
-        : "";
-      tooltip.innerHTML = `
-        <div class="font-mono text-[11px] text-zinc-400">${bjIso.slice(11, 16)}</div>
-        <div class="flex items-baseline gap-2"><span class="font-mono text-sm font-semibold tabular-nums">${d.price.toFixed(2)}</span>
-        <span class="font-mono text-[11px] tabular-nums ${pctCls(changePct)}">${fmtPct(changePct)}</span></div>
-        <div class="mt-0.5 grid grid-cols-[auto,1fr] gap-x-2 gap-y-0.5 text-[11px] tabular-nums">
-          <span class="text-zinc-500">均价</span><span class="font-mono text-amber-500">${d.avg != null ? d.avg.toFixed(2) : "--"} <span class="${pctCls(avgDevPct)}">${avgDevPct != null ? fmtPct(avgDevPct) : ""}</span></span>
-          <span class="text-zinc-500">量比</span><span class="font-mono ${lbCls}">${lb != null ? lb.toFixed(2) : "--"}</span>
-          <span class="text-zinc-500">分钟量</span><span class="font-mono">${d.volume != null ? Math.round(d.volume / 100).toLocaleString() : "--"} 手</span>
-          <span class="text-zinc-500">分钟额</span><span class="font-mono">${minuteAmount != null ? minuteAmount.toFixed(0) + " 万" : "--"}</span>
-          <span class="text-zinc-500">累计额</span><span class="font-mono">${d.cum_amount != null ? (d.cum_amount / 1e8).toFixed(2) + " 亿" : "--"}</span>
-        </div>${evRow}`;
-      tooltip.style.opacity = "1";
+
+      // 骨架只建一次；之后零节点增删，仅 patch 文本与类名
+      if (tipPatchRef.current.key !== "built") {
+        tooltip.innerHTML = tipSkeleton;
+        tipPatchRef.current.key = "built";
+      }
+      const put = (f: string, text: string, cls?: string) => {
+        const el = tooltip.querySelector<HTMLElement>(`[data-f="${f}"]`);
+        if (!el) return;
+        if (el.textContent !== text) {
+          // 优先直写文本节点（characterData 变更，零节点增删）；textContent
+          // 赋值会替换整个文本子节点（childList 抖动，悬停闪烁的次级来源）
+          const first = el.firstChild;
+          if (first && first === el.lastChild && first.nodeType === Node.TEXT_NODE) {
+            first.nodeValue = text;
+          } else {
+            el.textContent = text;
+          }
+        }
+        if (cls !== undefined && el.getAttribute("class") !== cls) el.setAttribute("class", cls);
+      };
+      put("hhmm", bjIso.slice(11, 16));
+      put("price", d.price.toFixed(2));
+      put("pct", fmtPct(changePct), `font-mono text-[11px] tabular-nums ${pctCls(changePct)}`);
+      put("avg", d.avg != null ? d.avg.toFixed(2) : "--");
+      put("avgdev", avgDevPct != null ? fmtPct(avgDevPct) : "", pctCls(avgDevPct));
+      put("lb", lb != null ? lb.toFixed(2) : "--", `font-mono ${lbCls}`);
+      put("vol", d.volume != null ? Math.round(d.volume / 100).toLocaleString() + " 手" : "--");
+      put("amt", minuteAmount != null ? minuteAmount.toFixed(0) + " 万" : "--");
+      put("cum", d.cum_amount != null ? (d.cum_amount / 1e8).toFixed(2) + " 亿" : "--");
+      const evEl = tooltip.querySelector<HTMLElement>('[data-f="ev"]');
+      const evRowEl = tooltip.querySelector<HTMLElement>('[data-f="evrow"]');
+      if (evEl && evRowEl) {
+        const evText = ev ? `📰 ${ev.count > 1 ? `×${ev.count} ` : ""}${ev.title.length > 26 ? ev.title.slice(0, 26) + "…" : ev.title}` : "";
+        if (evEl.textContent !== evText) evEl.textContent = evText;
+        evRowEl.classList.toggle("hidden", !ev);
+      }
+      if (tooltip.style.opacity !== "1") tooltip.style.opacity = "1";
+      // 位置只在变化时写（悬停中重放事件坐标不变 → 零样式写入）
       const box = ref.current!;
       const w = tooltip.offsetWidth || 150;
-      const x = param.point.x + 14 + w > box.clientWidth ? Math.max(4, param.point.x - 14 - w) : param.point.x + 14;
-      const y = Math.min(Math.max(4, param.point.y - 10), Math.max(4, box.clientHeight - tooltip.offsetHeight - 4));
-      tooltip.style.left = `${x}px`;
-      tooltip.style.top = `${y}px`;
+      const x = point.x + 14 + w > box.clientWidth ? Math.max(4, point.x - 14 - w) : point.x + 14;
+      const y = Math.min(Math.max(4, point.y - 10), Math.max(4, box.clientHeight - tooltip.offsetHeight - 4));
+      if (tipPatchRef.current.x !== x) {
+        tooltip.style.left = `${x}px`;
+        tipPatchRef.current.x = x;
+      }
+      if (tipPatchRef.current.y !== y) {
+        tooltip.style.top = `${y}px`;
+        tipPatchRef.current.y = y;
+      }
     };
+    renderTipRef.current = renderTip;
+
+    const onMove = (param: { time?: Time; point?: { x: number; y: number } }) => {
+      if (!tooltip) return;
+      if (!param.time || !param.point) {
+        // 空 param：真实离开（库 mouseleave）或数据更新瞬态。悬停中一律忽略，
+        // 防止瞬态事件把浮层打隐又由下一拍恢复——即"闪烁"。
+        if (!insideRef.current && tooltip.style.opacity !== "0") tooltip.style.opacity = "0";
+        return;
+      }
+      lastParamRef.current = { time: param.time, point: param.point };
+      renderTip(param.time, param.point);
+    };
+
+    // 容器原生指针跟踪：区分"离开"与"数据更新瞬态"的判据；真实离开时同步
+    // 清掉库的十字线并隐藏浮层（浮层 pointer-events-none 不影响指针事件）。
+    const markInside = () => {
+      insideRef.current = true;
+    };
+    const markOutside = () => {
+      insideRef.current = false;
+      lastParamRef.current = null;
+      if (tooltip && tooltip.style.opacity !== "0") tooltip.style.opacity = "0";
+      try {
+        chart.clearCrosshairPosition();
+      } catch {}
+    };
+    const boxEl = ref.current!;
+    boxEl.addEventListener("pointerenter", markInside);
+    boxEl.addEventListener("pointermove", markInside);
+    boxEl.addEventListener("pointerleave", markOutside);
+    boxEl.addEventListener("pointercancel", markOutside);
 
     const unsub = chart.subscribeCrosshairMove(onMove);
     // 全天槽已在数据集里（whitespace 撑满 9:25-15:00），fitContent 即完整交易时段；
@@ -456,10 +575,28 @@ export function MinuteChart({
     chart.timeScale().fitContent();
     chart.timeScale().setVisibleLogicalRange({ from: -1.5, to: slots.length + 0.5 });
 
+    // 图表低频重建（基线/叠加/竞价晚到）后：若指针仍悬停，恢复十字线与浮层，
+    // 否则重建后十字线消失、浮层停留旧数据，直到下次鼠标移动。
+    if (insideRef.current && lastParamRef.current) {
+      const lp = lastParamRef.current;
+      const best = nearestPoint(lp.time);
+      if (best) {
+        try {
+          chart.setCrosshairPosition(best.price, lp.time, series as never);
+        } catch {}
+      }
+      renderTip(lp.time, lp.point);
+    }
+
     return () => {
       try {
         chart.unsubscribeCrosshairMove(onMove);
       } catch {}
+      boxEl.removeEventListener("pointerenter", markInside);
+      boxEl.removeEventListener("pointermove", markInside);
+      boxEl.removeEventListener("pointerleave", markOutside);
+      boxEl.removeEventListener("pointercancel", markOutside);
+      renderTipRef.current = null;
       chart.remove();
       seriesRef.current = emptyBundle();
       cursorRef.current = "";
@@ -482,6 +619,11 @@ export function MinuteChart({
     lastPointsRef.current = points;
     fillAll(s, points, prevClose);
     cursorRef.current = bjHHMM(points[points.length - 1]);
+    // 悬停中数据被整体替换：主动刷新浮层数值（库的 updateCrosshair 重放通常
+    // 也会触发 onMove，此处兜底保证刷新不依赖重放行为；手术式 patch 零开销）
+    if (insideRef.current && lastParamRef.current) {
+      renderTipRef.current?.(lastParamRef.current.time, lastParamRef.current.point);
+    }
   }, [points, prevClose]);
 
   return (

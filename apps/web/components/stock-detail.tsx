@@ -365,7 +365,14 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
         void getMinuteLineWithBaseline(symbol)
           .then((r) => {
             setMinutes(r.points);
-            setVrBaseline(r.vr_baseline_5m);
+            // 基线内容守卫：数组内容没变就保留旧引用——vrBaseline 是
+            // MinuteChart 创建 effect 的依赖，每 60s 换新引用会把整图
+            // 销毁重建一次（悬停中十字线丢失 + 图表闪跳）。
+            setVrBaseline((prev) => {
+              const next = r.vr_baseline_5m;
+              if (prev && next && prev.length === next.length && prev.every((v, i) => v === next[i])) return prev;
+              return next;
+            });
           })
           .catch(() => {});
       };
