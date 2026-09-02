@@ -1,6 +1,13 @@
 """组装飞书 interactive 卡片：①明日机会观察（盘后）②盘后复盘。
 
-数据全部来自 8000 实例实时 API；输出到 docs/push-templates/*.card.json。
+两种运行模式（automation 按 argv 区分）：
+- 默认（盘后 15:40）：复盘报告取当日，产出 after-close-opportunity.card.json
+  （机会观察，日期头=次日）+ after-close-review.card.json（盘后复盘）
+- --morning（盘前 09:26）：不取复盘报告（当日尚未生成），产出
+  morning-opportunity.card.json（机会观察，日期头=当日，即「今日跟踪清单」）
+- 交易日哨兵：picks.date 非今日（节假日/简报未更新）→ 打印 SKIP 并退出，不推送
+
+数据全部来自 8000 实例实时 API；输出到 docs/push-templates/。
 发送（自动化侧）：lark-cli im +messages-send --user-id <open_id> --as bot \\
     --msg-type interactive --content "$(cat docs/push-templates/xxx.card.json)"
 
@@ -11,8 +18,11 @@
 
 ⚠️ 消息面/新闻模块已按用户 2026-09-02 安排移除：推送不含任何新闻内容，
 个股筛选（多维度综合考量）保留在系统内部持续优化，不进推送卡片。
+后续优化约定：发现可提升效果/美观的改进 → 主动提出（改动+理由+预期效果），
+经用户确认后再执行。
 """
 import json
+import sys
 import urllib.request
 from datetime import datetime, timedelta
 
@@ -28,7 +38,19 @@ def get(path):
 
 picks = get("/api/picks/today")
 sent = get("/api/market/sentiment")
-rev = get("/api/review/reports/20260902")
+
+now = datetime.now()
+today = now.date()
+MORNING = "--morning" in sys.argv
+
+# 交易日哨兵：picks.date 非今日 → 节假日/简报未更新，直接退出不推送
+pick_date = str(picks.get("date") or "")
+if pick_date != f"{today:%Y-%m-%d}":
+    print(f"SKIP: picks date {pick_date!r} != today {today:%Y-%m-%d}（非交易日或未更新，不推送）")
+    sys.exit(0)
+
+# 复盘报告仅盘后模式需要（morning 模式当日复盘尚未生成；日期动态避免定时跑取旧数据）
+rev = None if MORNING else get(f"/api/review/reports/{today:%Y%m%d}")
 
 gate = picks["meta"]["gate"]
 items = picks["items"]
@@ -37,10 +59,11 @@ pct = cal.get("percentile") or {}
 promo_pct = (pct.get("promo_1to2") or {}).get("percentile")
 promo_val = (pct.get("promo_1to2") or {}).get("value", 0) * 100
 
-mkt = (rev.get("data") or {}).get("market") or {}
-idx = {i["name"]: i for i in mkt.get("indices", [])}
-trading = (rev.get("data") or {}).get("trading") or {}
-now = datetime.now()
+mkt = idx = trading = None
+if not MORNING:
+    mkt = (rev.get("data") or {}).get("market") or {}
+    idx = {i["name"]: i for i in mkt.get("indices", [])}
+    trading = (rev.get("data") or {}).get("trading") or {}
 
 
 # ---------- 公共构件（v2 版式） ----------
@@ -92,8 +115,8 @@ def logic_line(it):
     return "；".join(parts) or "—"
 
 
-# ---------- 卡片①：明日机会观察 ----------
-tomorrow = now + timedelta(days=1)
+# ---------- 卡片①：机会观察（morning=当日跟踪清单；盘后=明日清单） ----------
+show = now if MORNING else now + timedelta(days=1)
 el = [
     div("**⛔ 门控：强空仓**　退潮期接力亏钱，以下清单 **🔒 仅跟踪观察，不构成买入依据**"),
     hr(),
@@ -126,47 +149,53 @@ el += [
         f"当前切换条件：{sent.get('switch_conditions')}"),
     note("选股器规则引擎 · 简报 08:40 生成，未含竞价数据 · 门控期清单仅作跟踪 · 非投资建议"),
 ]
-card1 = card(f"📊 明日机会观察 · {tomorrow:%m-%d}（周{WEEKDAY[tomorrow.weekday()]}）", "orange", el)
+card1 = card(f"📊 {'今日' if MORNING else '明日'}机会观察 · {show:%m-%d}（周{WEEKDAY[show.weekday()]}）", "orange", el)
 
-# ---------- 卡片②：盘后复盘 ----------
-dims = {d["key"]: d for d in rev.get("dimensions", [])}
-mkt_dim = dims.get("market") or {}
-trade_count = trading.get("trade_count", 0)
-
-
-def idx_line(name):
-    i = idx.get(name) or {}
-    chg = i.get("change_pct", 0)
-    dot = "🔴" if chg > 0 else ("🟢" if chg < 0 else "⚪")
-    return f"{name} {i.get('close', '-')} ({chg:+.2f}%){dot}"
+# ---------- 卡片②：盘后复盘（仅盘后模式） ----------
+if not MORNING:
+    dims = {d["key"]: d for d in rev.get("dimensions", [])}
+    mkt_dim = dims.get("market") or {}
+    trade_count = trading.get("trade_count", 0)
 
 
-el2 = [
-    fields_grid([
-        ("💼 今日操作", "空仓 ✅ 纪律执行" if trade_count == 0 else f"{trade_count} 笔委托"),
-        ("🤖 系统动作", "3 方向盘中证伪 → 降级观察"),
-        ("💰 账户", "无持仓 · 现金 ¥100.0 万"),
-        ("🩺 数据完整度", "0 缺失 · 信号样本 49"),
-    ]),
-    hr(),
-    div(f"**📈 盘面**　{idx_line('上证指数')}｜{idx_line('深证成指')}｜{idx_line('创业板指')}"),
-    div(f"**🌡️ 情绪**　退潮确认：最高板 7→4 断板；晋级率 {promo_val:.1f}%（分位 {promo_pct}）；昨涨停溢价 -2.60%"),
-]
-for j in (mkt_dim.get("judgements") or [])[:2]:
-    el2.append(div("**💬 研判**　" + j))
-el2 += [
-    hr(),
-    div("**⚠️ 不足与改善**"),
-    div("① 退潮门控下简报仍给 65~84 确定性分，3 方向全部盘中证伪 → **建议：空仓期简报分数自动降权并标注「仅观察」**（待批）"),
-    div("② " + ("；".join((a.get("title") or "") for a in rev.get("action_items", [])[:2]) or "—")),
-    hr(),
-    div("**📌 改善追踪**　昨日 P0「15:35 对照数据缺失」→ ✅ 已修复，今日对照产出完整"),
-    div("**🌅 明日关注**　竞价溢价与晋级率能否回升；冰点触发条件（%s）" % sent.get("switch_conditions")),
-    note("复盘规则引擎 · 全维度无数据缺失 · 非投资建议"),
-]
-card2 = card(f"📝 盘后复盘 · {now:%m-%d}（周{WEEKDAY[now.weekday()]}）", "blue", el2)
+    def idx_line(name):
+        i = idx.get(name) or {}
+        chg = i.get("change_pct", 0)
+        dot = "🔴" if chg > 0 else ("🟢" if chg < 0 else "⚪")
+        return f"{name} {i.get('close', '-')} ({chg:+.2f}%){dot}"
 
-for name, c in (("after-close-opportunity", card1), ("after-close-review", card2)):
-    with open(f"{OUT}/{name}.card.json", "w", encoding="utf-8") as f:
-        json.dump(c, f, ensure_ascii=False)
-print(f"card1 elements: {len(el)} | card2 elements: {len(el2)}")
+
+    el2 = [
+        fields_grid([
+            ("💼 今日操作", "空仓 ✅ 纪律执行" if trade_count == 0 else f"{trade_count} 笔委托"),
+            ("🤖 系统动作", "3 方向盘中证伪 → 降级观察"),
+            ("💰 账户", "无持仓 · 现金 ¥100.0 万"),
+            ("🩺 数据完整度", "0 缺失 · 信号样本 49"),
+        ]),
+        hr(),
+        div(f"**📈 盘面**　{idx_line('上证指数')}｜{idx_line('深证成指')}｜{idx_line('创业板指')}"),
+        div(f"**🌡️ 情绪**　退潮确认：最高板 7→4 断板；晋级率 {promo_val:.1f}%（分位 {promo_pct}）；昨涨停溢价 -2.60%"),
+    ]
+    for j in (mkt_dim.get("judgements") or [])[:2]:
+        el2.append(div("**💬 研判**　" + j))
+    el2 += [
+        hr(),
+        div("**⚠️ 不足与改善**"),
+        div("① 退潮门控下简报仍给 65~84 确定性分，3 方向全部盘中证伪 → **建议：空仓期简报分数自动降权并标注「仅观察」**（待批）"),
+        div("② " + ("；".join((a.get("title") or "") for a in rev.get("action_items", [])[:2]) or "—")),
+        hr(),
+        div("**📌 改善追踪**　昨日 P0「15:35 对照数据缺失」→ ✅ 已修复，今日对照产出完整"),
+        div("**🌅 明日关注**　竞价溢价与晋级率能否回升；冰点触发条件（%s）" % sent.get("switch_conditions")),
+        note("复盘规则引擎 · 全维度无数据缺失 · 非投资建议"),
+    ]
+    card2 = card(f"📝 盘后复盘 · {now:%m-%d}（周{WEEKDAY[now.weekday()]}）", "blue", el2)
+
+if MORNING:
+    with open(f"{OUT}/morning-opportunity.card.json", "w", encoding="utf-8") as f:
+        json.dump(card1, f, ensure_ascii=False)
+    print(f"morning-opportunity.card.json elements: {len(el)}")
+else:
+    for name, c in (("after-close-opportunity", card1), ("after-close-review", card2)):
+        with open(f"{OUT}/{name}.card.json", "w", encoding="utf-8") as f:
+            json.dump(c, f, ensure_ascii=False)
+    print(f"card1 elements: {len(el)} | card2 elements: {len(el2)}")
