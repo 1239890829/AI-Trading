@@ -60,8 +60,8 @@
 | P2 10 情绪周期序列 | ✅（retro #17，`sentiment_history` + market 页曲线） |
 | P2 11 梯队断层检测 | ✅（theme_service 含"断层"） |
 | P2 12 明日验证条件 | ✅（预判模块 D1 四问验证 + `verify_next`） |
-| **P2 13 阈值配置化 + 历史分位校准** | 🔶 阈值配置化 ✅ 已完成（`app/sentiment/band_config.py` + test_sentiment_band_config.py，plan-review P0-3）；历史分位校准（P0-3b）等快照样本自动积累 | — |
-| **P2 14 盘中情绪监控（P0 事件推送）** | ❌ 未做（**阻塞于推送通道选型**） |
+| **P2 13 阈值配置化 + 历史分位校准** | ✅ 全部完成：阈值配置化（`band_config.py`，P0-3）；历史分位校准（P0-3b，2026-09-02 落地 + lookback 120→250、回补 121 天、库 241 天，promo 分位覆盖回测/线上双链路） | — |
+| **P2 14 盘中情绪监控（P0 事件推送）** | ❌ 未做（**阻塞已解除**：推送通道已选飞书并落地 notifier（2026-09-02，8154e47），剩监控触发逻辑本体；维持 P2 触发式） |
 | P3 15 `sentiment.md` 与实现对齐 | ✅ 已完成（2026-09-01 复核）：文档唯一"未实现"是已划掉的历史描述（晋级率/跌停/分层收益均已落地）；**本轮又修掉一处新滞后**——原文称"高度≥5板、涨停≥60家 仍硬编码"，实际阈值配置化已完成（`band_config.py`），只剩分位校准 | 
 | P3 16 push2ex 行为记录 | ✅（comparison §6） |
 | P3 17 "分歧"触发条件说明 | ✅ 已完成（2026-09-01）：`sentiment.md` 阶段判定节补双轴矩阵表 + 「分歧」进入/离开条件 + 冰点退潮边界，全部与 `engine.py` 的 `_PHASE_MATRIX` / `decide_phase` / `switch` 逐条比对 |
@@ -213,7 +213,7 @@
 |---|---|---|---|
 | **P0-1** | **统一待办真相源**：修 README/PROJECT-MASTER 过时状态，retro 编号重排，宣布 retro 为唯一明细账本 | 本次复盘 | 防止下次复盘再花一小时对账 |
 | ~~**P0-2**~~ | ~~**回测配置 mandate 化**~~ ✅ 已完成（2026-08-31，commit 7f80c95）：backend/mandates/ + 分层解析（默认<mandate<请求）+ meta.applied 来源展示 + /backtest 下拉预填 | 星标 P2 | 源选择（tdx/sina）留待后续 mandate 字段扩展 |
-| **P0-3** | **sentiment 历史分位校准**（阈值配置化 ✅ 已完成 2026-08-31：`band_config.py` + settings JSON 覆盖，校验失败启动即报错；分位校准等快照样本积累） | 情绪 P2 #13 | 让"高潮/分歧"阈值有本地依据而非照搬网络 |
+| ~~**P0-3**~~ | ~~**sentiment 历史分位校准**~~ ✅ 已完成（2026-09-02）：阈值配置化（band_config.py）+ P0-3b 分位校准落地（等分分位替代经验值）+ metric_history lookback 120→250、回补 121 天（库 241 天 2025-09-03 起），promo 分位覆盖回测（缺失 80→0）与线上校准双链路 | 情绪 P2 #13 | 让"高潮/分歧"阈值有本地依据而非照搬网络 |
 | ~~**P0-4**~~ | ~~**东财 get_limit_break_pool 备源**~~ ✅ 已完成（2026-08-31）：push2ex getTopicZBPool；字段缩放 ×1000 已用 600103 与 TDX 日K交叉验证（与 ZT 池 ×100 不同，独立解析） | 数据源 B5 | 链上 ths → eastmoney 双源 |
 | ~~**P0-5**~~ | ~~**统一 provider 缓存层（C3）**~~ ✅ 已完成（2026-08-31）：`app/core/ttl_cache.py`（TTLCache：monotonic/LRU 有界/异步单飞/命中统计 + 弱引用注册表）+ `GET /api/system/caches` 观测；收敛 sentiment/heatmap/boards/themes/sparkline/announcements/news/digest/tdays/attribution/screener 共 11 处自写缓存，删除 market.py/news.py 两份拷贝的 `_route_cache`/`_ttl_hit`，键空间全部有界化（逐出计数让"缓存键漂移"可见） | 数据源 C3 | trade_calendar/heatmap 行业映射/ths 代码表三处保留模块内缓存（有失败冷却/增量填充等专用语义，非键漂移风险点） |
 | ~~**P0-6**~~ | ~~`/api/paper/reset` 加审计日志~~ ✅ 已完成（2026-08-31）：单行记录 重置前状态（持仓/委托/资金）+ source=api/engine + custom_initial 标记 | 本次复盘 | 审计断言直接打桩 logger（basicConfig 会破坏后续 caplog，见 test_paper_audit.py 注释） |
@@ -223,8 +223,8 @@
 
 | # | 事项 | 触发条件 | 联动 |
 |---|---|---|---|
-| **P1-1** | **推送通道接入**（notifiers 加 email/企微/飞书/TG 实现） | **用户选通道** | 一举关闭：Phase 8 收尾 + 复盘推送（星标 P2）+ 盘中情绪监控（情绪 P2 #14） |
-| **P1-2** | **LLM 接入**（实现 `LLMAnalyzer`） | **用户给凭据** | 一举关闭：复盘四角色编排（星标 P2）+ 新闻摘要增强 + 未来 AI 能力底座 |
+| ~~**P1-1**~~ | ~~**推送通道接入**~~ ✅ 已完成（2026-09-02，8154e47）：用户选**飞书**——feishu notifier（webhook+可选加签）入 NotifierRegistry + `/api/alerts/channels` 返回 `configured` 诚实展示 + 前端未配置 amber 徽标；`.env` 填 `ASHARE_ALERT_FEISHU_WEBHOOK`（可选 `_SECRET`）即生效 | ~~用户选通道~~ 通道已定 | 一举关闭：Phase 8 通道 ✅ + 复盘推送挂上 + 盘中情绪监控解除阻塞（本体仍 P2） |
+| ~~**P1-2**~~ | ~~**LLM 接入**~~ ✅ 代码完成（2026-09-02，2226147）：`core/llm_client.py` 共享客户端（chat_completion + extract_json_object）+ `LLMAnalyzer`（judgements 重写+漏答回落规则）+ `LLMSummarizer`（白名单校验回填，全无效整体上抛）+ 12 测试；async 侧走 `asyncio.to_thread` 防阻塞 | 剩：用户填 `ASHARE_REVIEW_LLM_*` / `ASHARE_NEWS_LLM_*` 凭据即生效 | 关闭：复盘/新闻 LLM 增强 ✅；四角色编排仍等凭据 |
 | ~~**P1-3**~~ | ~~B1 热股榜 → 题材卡片"人气热度+排名变化"~~ ✅ 已完成（2026-08-31）：`aggregate_hot_themes` 纯函数 + `GET /api/themes/hot`（60s TTL 缓存）+ /themes 人气榜条与卡片徽标；rank_change 沿用榜内最高排名成员（不造题材级指标） | 无（ths 已具备） | ths 独占能力，欠用清单中最快出效果的 |
 | ~~**P1-4**~~ | ~~B4 `seal_nextday` 交叉验证晋级率~~ ✅ 已完成（2026-08-31）：`app/sentiment/ladder_check.py` + `GET /api/market/ladder-check`（60→10min 缓存）；实测 5 可比日逐日一致、零漂移 | 无 | 数据源方案的自证闭环：对不上说明拼接仍有问题 |
 | ~~**P1-5**~~ | ~~C1 `index/constituents` 板块成分表 → 题材指数、板块内资金合力~~ ✅ 已完成（2026-08-31）：`GET /api/themes/catalog/strength`（官方成分批量快照聚合：涨跌家数/等权涨幅/成交额/涨停家数，60s 缓存）+ `GET /api/themes/catalog/index`（ths 官方板块指数日 K + 3/5/10 日涨跌幅）+ 看板卡片合力条 | 无 | 阶段 C 全清 |
