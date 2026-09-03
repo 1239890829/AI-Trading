@@ -445,14 +445,24 @@ async def trades(symbol: str, limit: int = Query(default=50, ge=1, le=200), hub:
 async def minute_line(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
     """当日 1 分钟分时（价格/成交量/累计成交额）。逐笔成交不可用时，这是盘中细粒度的替代口径。
 
-    `vr_baseline_5m`：精确量比基线（最近 5 个完整交易日逐 5min 槽同期累计量均值，
-    来自 TDX 落地历史）——前端量比优先用精确口径（cum_i / (baseline[slot]/5)），
-    缺失时回退近似口径。
+    主源腾讯失败时降级 TDX 直连 m1 取最新交易日段（仅裸 6 位股票码；先例：
+    2026-08-31 腾讯 WAF 封禁分时图真断过）。`vr_baseline_5m`：精确量比基线
+    （最近 5 个完整交易日逐 5min 槽同期累计量均值，来自 TDX 落地历史）——
+    前端量比优先用精确口径（cum_i / (baseline[slot]/5)），缺失时回退近似口径。
     """
     try:
         points = await hub.provider.get_minute_line(symbol)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"分时数据源失败：{exc}")
+        from app.market.minute_backfill import tdx_minute_line_fallback
+
+        try:
+            points = await asyncio.to_thread(tdx_minute_line_fallback, symbol)
+            log.warning("minute-line 主源失败，TDX 备源接管 %s（主源错误：%s）", symbol, exc)
+        except Exception as tdx_exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"分时数据源失败：主源 {exc}；TDX 备源 {tdx_exc}",
+            ) from tdx_exc
     baseline = None
     try:
         from app.market.minute_backfill import load_vr_baseline

@@ -15,6 +15,9 @@
 - tdx 路径：分钟 K（QFQ）→ `data/parquet/minutes-tdx/{symbol}.parquet`
   （**已前复权**，回测标记 adjusted=True 跳过事件流修正，避免双重调整）。
 两者均为引擎分钟点 schema（含 cum_volume/avg，口径与 /api/minute-line 一致）。
+
+运行时降级（2026-09-03）：/api/minute-line 主源（腾讯）失败时，
+`tdx_minute_line_fallback` 直连 m1 取最新交易日段接管（仅裸 6 位股票码）。
 """
 
 from __future__ import annotations
@@ -183,16 +186,19 @@ def tdx_row_to_points(df, source: str = "tdx") -> list[dict]:
     return points
 
 
-def fetch_tdx_minutes(symbol: str, *, period: str = "5min", count: int = 24000) -> list[dict]:
+def fetch_tdx_minutes(
+    symbol: str, *, period: str = "5min", count: int = 24000, timeout: float | None = None
+) -> list[dict]:
     """TDX 拉分钟 K（同步阻塞，分页+QFQ 内置）→ 引擎分钟点 schema。
 
     period: "1min"（≈94 交易日）/ "5min"（≈495 交易日，约 2 年）。
     QFQ：数据源已前复权——回测侧须以 adjusted=True 语义消费，勿再叠加事件流修正。
+    timeout 透传 MacClient（降级路径需要短超时兜底，回填路径用默认值）。
     """
     from easy_tdx import Adjust, MacClient, Period
 
     period_map = {"1min": Period.MIN_1, "5min": Period.MIN_5}
-    with MacClient() as client:
+    with MacClient(timeout=timeout) as client:
         df = client.get_stock_kline(
             _tdx_market(symbol).value, symbol,
             period=period_map[period], start=0, count=count, adjust=Adjust.QFQ,
@@ -258,3 +264,38 @@ def load_vr_baseline(symbol: str, days: int = 5, out_dir: Path | None = None) ->
         return None
     baseline = [sum(by_day[d][i] for d in complete) / days for i in range(n)]
     return baseline
+
+
+# ---------------------------------------------------------- 运行时降级备源
+
+def latest_day_points(points: list[dict]) -> list[dict]:
+    """按 ts 分组取**最新交易日**的全部点（纯函数，可单测）。
+
+    以"数据里最新一天"而非 datetime.now() 取段——非交易日请求回的仍是最近
+    交易日分时（与腾讯 get_minute_line 2026-08-30 修正确立的语义一致）。
+    """
+    by_day: dict[str, list[dict]] = {}
+    for p in points:
+        day = (datetime.fromisoformat(p["ts"]) + BJ_OFFSET).strftime("%Y-%m-%d")
+        by_day.setdefault(day, []).append(p)
+    return by_day[max(by_day)] if by_day else []
+
+
+def tdx_minute_line_fallback(symbol: str, *, timeout: float = 8.0) -> list[dict]:
+    """腾讯分时单点的降级备源（/api/minute-line 路由层，2026-09-03 接入）。
+
+    TDX 直连 m1 取最新交易日段（实测 600519：全日 240 根、约 1.6s 含建连）。
+    仅支持**裸 6 位股票码**——带前缀符号（指数 sh000001/sz399xxx）经
+    _tdx_market 按首位数字判市场必然判错（000001 在 SZ 是平安银行、
+    在 SH 指数域是上证指数），指数由调用方（路由层）拦截维持原错误。
+    抛错 = 降级失败，路由层转 502（主源+备源双错信息）。
+    """
+    if not re.fullmatch(r"\d{6}", symbol or ""):
+        raise ValueError(f"tdx minute 备源仅支持裸 6 位股票码: {symbol!r}")
+    pts = fetch_tdx_minutes(symbol, period="1min", count=300, timeout=timeout)
+    day_pts = latest_day_points(pts)
+    if not day_pts:
+        raise ValueError(f"tdx minute fallback empty for {symbol}")
+    for p in day_pts:
+        p["source"] = "tdx_m1"
+    return day_pts

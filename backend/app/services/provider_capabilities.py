@@ -101,7 +101,7 @@ CAPABILITIES: dict[str, dict[str, dict]] = {
         "get_limit_break_pool": _n("无实现：链上 ths/东财 push2ex 提供"),
         "get_longhu_records": _t("恒空占位：链上东财 datacenter 提供"),
         "search": _s("smartbox 联想搜索主源"),
-        "get_minute_line": _s("当日 1 分钟分时——唯一实现者（单点）"),
+        "get_minute_line": _s("当日 1 分钟分时——链上唯一实现者（单点）；降级备源=TDX 直连 m1（/api/minute-line 路由层，仅裸 6 位股票码，2026-09-03 实测全日 240 根/1.6s）"),
         "get_board_rankings": _n(),
         "get_board_metrics": _n(),
         "get_longhu_detail": _n(),
