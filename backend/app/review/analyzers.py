@@ -18,6 +18,7 @@ from typing import Protocol
 
 import httpx
 
+from app.core.grounding import evidence_pool, grounding_violations
 from app.review.config import MethodologyConfig
 from app.review.schemas import (
     DimensionResult,
@@ -381,7 +382,11 @@ findings 是已核实的事实，evidence 是数据依据，rules_judgements 是
    风险在哪、下一步核实什么），但所有事实必须来自底稿，禁止引入底稿之外的
    数据、行情或猜测。
 3. 不要复述 findings 原文；不给具体的买卖价格、仓位比例建议。
-4. 输入里没有的维度 key 不要输出；某维度没有可判断的内容时输出空数组。\
+4. 输入里没有的维度 key 不要输出；某维度没有可判断的内容时输出空数组。
+5. 证据不足时弃权（空数组 / 少答）是合法输出，不要为凑结论编造数字。
+   每条研判引用的数字必须能在底稿中找到；输出会经接地校验，引用底稿
+   之外的带单位数字或含指令性交易建议（如"建议买入""目标价 X"、
+   "仓位 N%"）的条目会被逐条丢弃。\
 """
 
 
@@ -398,6 +403,8 @@ class LLMAnalyzer:
     3. HTTP / 解析失败一律上抛 → ModelRouter 降级规则分析器（degraded 显式）
     4. LLM 漏答的维度保留规则原判；未知维度 key 自然丢弃（只按底稿维度取）
     5. 被 LLM 增强过的维度在 evidence 里打 `llm_enhanced` 标记，报告可追溯
+    6. LLM 研判逐条过接地校验（app.core.grounding）：指令性建议 / 引用无据
+       数字的条目被丢弃并留痕 `grounding_rejected`；全被拒则回退规则原判
     """
 
     name = "llm"
@@ -460,14 +467,32 @@ class LLMAnalyzer:
             if not isinstance(vals, list):
                 out.append(d)  # 漏答 / 类型不对 → 保留规则原判
                 continue
-            cleaned = [v.strip() for v in vals if isinstance(v, str) and v.strip()]
+            # 3b. 接地校验（评分-动作一致性的 LLM 侧落点）：证据池 = 该维度
+            # 底稿全文（findings/judgements/evidence）。被拒条目逐条丢弃并
+            # 留痕，不整体上抛——LLM 大部分合规、个别越权时仍采用合规部分。
+            pool = evidence_pool(*d.findings, *d.judgements, extra=d.evidence)
+            cleaned: list[str] = []
+            rejected: list[dict] = []
+            for v in vals:
+                if not isinstance(v, str) or not v.strip():
+                    continue
+                t = v.strip()
+                viol = grounding_violations(t, pool)
+                if viol:
+                    rejected.append({"text": t, "violations": viol})
+                    continue
+                cleaned.append(t)
+            if rejected:
+                log.warning(
+                    "LLM 研判 %d 条未通过接地校验，已丢弃：%s", len(rejected), rejected
+                )
             if not cleaned:
-                out.append(d)
+                out.append(d)  # 全被拒 → 保留规则原判，不冒充 LLM 增强
                 continue
-            out.append(d.model_copy(update={
-                "judgements": cleaned,
-                "evidence": {**d.evidence, "llm_enhanced": True},
-            }))
+            ev = {**d.evidence, "llm_enhanced": True}
+            if rejected:
+                ev["grounding_rejected"] = rejected
+            out.append(d.model_copy(update={"judgements": cleaned, "evidence": ev}))
         if raw:  # 剩下的 key 底稿里没有 → 丢弃，但必须留痕
             log.warning("LLM 回复含未知维度 key，已丢弃：%s", sorted(raw))
         return out

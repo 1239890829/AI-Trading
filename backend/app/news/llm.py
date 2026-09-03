@@ -4,7 +4,9 @@
 1. `RulesSummarizer` 先跑出确定性底稿（重要度/情绪/摘要/关键数字）
 2. LLM 基于原文重写每条的重要度、情绪与事实摘要；`numbers` 保留规则层
    的正则抽取结果（确定性，LLM 抄数字反而容易错）
-3. 字段校验不过（重要度/情绪取值非法、digest 非字符串）的单条保留规则原判
+3. 字段校验不过（重要度/情绪取值非法、digest 非字符串）的单条保留规则原判；
+   digest 另过接地校验（app.core.grounding）：含指令性建议或引用原文没有的
+   数字 → 该字段不采用，保留规则摘要
 4. LLM 回复里**没有任何一条可应用**时整体上抛 → SummaryRouter 降级
    规则摘要器——否则"来源标着 LLM、内容全是规则"就是又一类静默失真
 5. 被 LLM 改写的条目 `digest_source="LLM"`，来源可追溯
@@ -18,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 
+from app.core.grounding import grounding_violations
 from app.news.rules import RulesSummarizer
 
 log = logging.getLogger(__name__)
@@ -31,7 +34,8 @@ _LLM_SYSTEM_PROMPT = """\
    "importance_reasons": ["判定依据"], "sentiment": "偏正面|偏负面|分歧|中性",
    "sentiment_reasons": ["命中依据"], "digest": "一句话事实摘要"}]}
 2. digest 只能复述原文已有的事实，禁止引入原文没有的信息、禁止推断与建议，
-   不超过 90 字；原文为表格数据时概括标题即可。
+   不超过 90 字；原文为表格数据时概括标题即可。digest 中的数字必须是原文
+   出现过的数字；原文信息量不足时直接概括标题，不要编造细节。
 3. importance_score 参考：监管/退市风险与定期业绩 40 上下，资本运作 35 上下，
    再融资/股东行为 20-25，例行事项（说明会/权益分派实施）为负。
 4. 每条输入都必须返回，id 原样带回。\
@@ -109,7 +113,11 @@ class LLMSummarizer:
                 row = by_id.pop(f"{kind}:{i}", None)
                 if row is None:
                     continue
-                patch = self._valid_patch(row)
+                # digest 的接地校验以原文（标题+摘要）为证据池
+                src_text = " ".join(
+                    t for t in ((it.get("title") or ""), (it.get("summary") or "")) if t
+                )
+                patch = self._valid_patch(row, source_text=src_text)
                 if patch:
                     result[kind][i] = {**it, **patch}
                     applied += 1
@@ -131,8 +139,12 @@ class LLMSummarizer:
         return result
 
     @staticmethod
-    def _valid_patch(row: dict) -> dict:
-        """从 LLM 单条回复中挑出合法字段；非法字段一律不采用。"""
+    def _valid_patch(row: dict, source_text: str = "") -> dict:
+        """从 LLM 单条回复中挑出合法字段；非法字段一律不采用。
+
+        digest 另过接地校验（app.core.grounding）：含指令性交易建议、
+        或引用原文中不存在的带单位数字 → 该字段不采用，保留规则摘要。
+        """
         patch: dict = {}
         if row.get("importance") in _VALID_IMPORTANCE:
             patch["importance"] = row["importance"]
@@ -151,6 +163,11 @@ class LLMSummarizer:
                 patch[field] = [v for v in vals if isinstance(v, str) and v.strip()]
         digest = row.get("digest")
         if isinstance(digest, str) and digest.strip():
-            patch["digest"] = digest.strip()[:_DIGEST_MAX]
-            patch["digest_source"] = "LLM"
+            dig = digest.strip()[:_DIGEST_MAX]
+            viol = grounding_violations(dig, [source_text] if source_text else [])
+            if viol:
+                log.warning("digest 未通过接地校验，保留规则摘要：%s -> %s", dig, viol)
+            else:
+                patch["digest"] = dig
+                patch["digest_source"] = "LLM"
         return patch

@@ -6,6 +6,8 @@
    解析失败上抛 → ModelRouter 显式降级
 3. `LLMSummarizer`：字段校验回填、非法值保留规则原判、全部无效整体上抛、
    空输入不发请求 → SummaryRouter 显式降级
+4. 接地校验接入（app/core/grounding）：指令性建议 / 无据数字被逐条丢弃
+   并留痕 grounding_rejected，全被拒回退规则原判；digest 校验失败保留规则摘要
 """
 from __future__ import annotations
 
@@ -262,3 +264,93 @@ def test_llm_summarizer_failure_falls_back_with_degraded():
     # 降级产物 = 完整规则输出
     assert result["news"] and result["announcements"]
     assert all(r["digest_source"] != "LLM" for r in result["news"])
+
+
+# ---------------------------------------------------------------- 接地校验接入
+# grounding gate：LLM 输出中的指令性建议 / 无据数字被逐条丢弃并留痕。
+
+
+def test_llm_analyzer_grounding_rejects_bad_entries_and_marks_evidence():
+    llm_judgements = {
+        "market": [
+            "情绪处于分歧阶段，宜等待方向明朗后再评估参与度",  # 合规 → 采用
+            "建议逢低买入，把握分歧转一致的节奏",              # 指令性建议 → 拒
+            "涨停家数 88 家，情绪已经过热",                    # 编造数字 → 拒
+        ],
+        "unknown_key": ["这层应该被丢弃"],
+    }
+    client = _json_client({"judgements": llm_judgements})
+    dims = LLMAnalyzer(base_url="https://x", api_key="k", model="m", client=client).analyze(
+        _review_data(), _method()
+    )
+    market = next(d for d in dims if d.key == "market")
+    assert market.judgements == ["情绪处于分歧阶段，宜等待方向明朗后再评估参与度"]
+    assert market.evidence.get("llm_enhanced") is True
+    rejected = market.evidence.get("grounding_rejected") or []
+    assert {v["violations"][0]["code"] for v in rejected} == {
+        "OUT_OF_SCOPE_INFERENCE", "EVIDENCE_NOT_FOUND",
+    }
+
+
+def test_llm_analyzer_grounding_all_rejected_keeps_rules():
+    client = _json_client({"judgements": {"market": ["建议立即清仓，全部离场观望"]}})
+    dims = LLMAnalyzer(base_url="https://x", api_key="k", model="m", client=client).analyze(
+        _review_data(), _method()
+    )
+    market = next(d for d in dims if d.key == "market")
+    rules_market = next(
+        d for d in RulesAnalyzer().analyze(_review_data(), _method()) if d.key == "market"
+    )
+    # 全被拒 → 规则原判，且不冒充 LLM 增强
+    assert market.judgements == rules_market.judgements
+    assert market.evidence.get("llm_enhanced") is None
+    assert market.evidence.get("grounding_rejected") is None
+
+
+def test_llm_analyzer_grounding_spares_rule_wording():
+    """LLM 深化规则判定的合法措辞（不宜追高/建议控制仓位）不能被误杀。"""
+    client = _json_client({"judgements": {
+        "market": ["分歧加剧但不宜追高，建议控制仓位、减少出手频率"],
+    }})
+    dims = LLMAnalyzer(base_url="https://x", api_key="k", model="m", client=client).analyze(
+        _review_data(), _method()
+    )
+    market = next(d for d in dims if d.key == "market")
+    assert market.judgements == ["分歧加剧但不宜追高，建议控制仓位、减少出手频率"]
+    assert market.evidence.get("llm_enhanced") is True
+    assert market.evidence.get("grounding_rejected") is None
+
+
+def test_llm_summarizer_digest_grounding_rejects():
+    news = [{
+        "title": "公司收到证监会立案告知书",
+        "summary": "因涉嫌信息披露违规被立案调查", "date": "2026-09-01",
+    }]
+    payload = {"items": [{
+        "id": "news:0", "importance": "高", "importance_score": 50,
+        "sentiment": "偏负面",
+        "digest": "建议清仓规避风险，违规减持 3% 股份",  # 建议+清仓 & 无据的 3%
+    }]}
+    client = _json_client(payload)
+    out = LLMSummarizer(base_url="https://x", api_key="k", model="m", client=client).summarize(news, [])
+    n0 = out["news"][0]
+    # 合法字段照常采用；digest 被拒 → 保留规则摘要
+    assert n0["importance"] == "高" and n0["importance_score"] == 50
+    assert n0["digest_source"] != "LLM"
+    assert n0["digest"] != "建议清仓规避风险，违规减持 3% 股份"
+
+
+def test_llm_summarizer_digest_grounding_allows_source_facts():
+    news = [{
+        "title": "公司中标日常经营重大合同",
+        "summary": "中标金额 12.5 亿元，占上年营收的 8.3%", "date": "2026-09-01",
+    }]
+    payload = {"items": [{
+        "id": "news:0", "importance": "中", "importance_score": 30,
+        "sentiment": "偏正面", "digest": "公司中标金额 12.5 亿元，占上年营收 8.3%",
+    }]}
+    client = _json_client(payload)
+    out = LLMSummarizer(base_url="https://x", api_key="k", model="m", client=client).summarize(news, [])
+    n0 = out["news"][0]
+    assert n0["digest_source"] == "LLM"
+    assert n0["digest"] == "公司中标金额 12.5 亿元，占上年营收 8.3%"
