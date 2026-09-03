@@ -1,7 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { workbenchUrlWithBack } from "@/lib/routing";
 import {
   generatePickReview,
   generatePicks,
@@ -257,7 +259,9 @@ function PicksInner() {
                       key={r.symbol + r.date}
                       className="flex flex-wrap gap-2 border-b border-zinc-100 py-1 last:border-0 dark:border-zinc-800/60"
                     >
-                      <span className="font-mono text-zinc-400">{r.symbol}</span>
+                      <Link href={workbenchUrlWithBack(r.symbol)} title="查看个股详情" className="font-mono text-zinc-400 hover:text-sky-400 hover:underline">
+                        {r.symbol}
+                      </Link>
                       <span>{r.name ?? ""}</span>
                       <span className={`font-mono tabular-nums ${pctColor(r.excess_pct)}`}>
                         超额 {pctText(r.excess_pct)}

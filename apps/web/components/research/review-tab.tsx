@@ -1,7 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { Panel } from "@/components/panel";
+import { workbenchUrlWithBack } from "@/lib/routing";
 import {
   getReviewEffectiveness,
   getReviewReport,
@@ -69,6 +71,34 @@ function gapText(g: unknown): string {
     return parts.join("：") || JSON.stringify(o);
   }
   return String(g);
+}
+
+/**
+ * 报告文本内嵌 6 位代码 → 详情链接（联动切片 F P2）。
+ * 复盘判据/缺口文本里提到的标的（如「600519 冲高回落」）此前无法跳转查看；
+ * 独立 6 位数字在本系统语境下几乎恒为股票代码，误链风险可接受。
+ */
+function LinkedSymbols({ text }: { text: string }) {
+  const parts = text.split(/(\b\d{6}\b)/g);
+  if (parts.length === 1) return <>{text}</>;
+  return (
+    <>
+      {parts.map((p, i) =>
+        /^\d{6}$/.test(p) ? (
+          <Link
+            key={i}
+            href={workbenchUrlWithBack(p)}
+            title="查看标的详情"
+            className="font-mono text-sky-400 hover:underline"
+          >
+            {p}
+          </Link>
+        ) : (
+          <span key={i}>{p}</span>
+        ),
+      )}
+    </>
+  );
 }
 
 /**
@@ -239,7 +269,9 @@ function ReportDetail({
           {d.judgements.length > 0 && (
             <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-zinc-400">
               {d.judgements.map((j, i) => (
-                <li key={i}>{j}</li>
+                <li key={i}>
+                  <LinkedSymbols text={j} />
+                </li>
               ))}
             </ul>
           )}
@@ -248,7 +280,9 @@ function ReportDetail({
               缺口：
               <ul className="list-disc pl-4">
                 {d.gaps.map((g, i) => (
-                  <li key={i}>{gapText(g)}</li>
+                  <li key={i}>
+                    <LinkedSymbols text={gapText(g)} />
+                  </li>
                 ))}
               </ul>
             </div>

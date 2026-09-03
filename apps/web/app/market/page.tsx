@@ -7,6 +7,8 @@ import { Panel } from "@/components/panel";
 import { QualityBadge } from "@/components/quality-badge";
 import { EventPanel } from "@/components/event-panel";
 import { HeatmapTab } from "@/components/market/heatmap-tab";
+import { indexDetailSymbol } from "@/lib/api";
+import { workbenchUrlWithBack } from "@/lib/routing";
 import {
   getBreadth,
   getLimitUpPool,
@@ -155,13 +157,16 @@ function MarketInner() {
             </div>
           )}
 
-          {/* 指数带：紧凑 2 行（名称+质量+涨跌幅 / 价格+成交额） */}
+          {/* 指数带：紧凑 2 行（名称+质量+涨跌幅 / 价格+成交额）。
+              联动切片 F（L 指数入口）：点击 → 工作台指数详情（带前缀规范形态），
+              带 from 返回——指数与个股同一跳转纪律，不裸拼 URL。 */}
           <div className="grid shrink-0 grid-cols-3 gap-2 md:grid-cols-6">
             {indices.map((q) => (
-              <div
+              <button
                 key={q.symbol}
-                className="rounded-lg border border-zinc-200 px-2.5 py-1.5 dark:border-zinc-800"
-                title={q.quality_reasons?.length ? q.quality_reasons.join("；") : undefined}
+                onClick={() => router.push(workbenchUrlWithBack(indexDetailSymbol(q.symbol, q.market)))}
+                title={`查看 ${q.name ?? q.symbol} 指数详情${q.quality_reasons?.length ? "｜" + q.quality_reasons.join("；") : ""}`}
+                className="cursor-pointer rounded-lg border border-zinc-200 px-2.5 py-1.5 text-left transition-colors hover:bg-zinc-100/60 dark:border-zinc-800 dark:hover:bg-zinc-800/40"
               >
                 <div className="flex items-center justify-between gap-1">
                   <span className="truncate text-xs text-zinc-400">{q.name ?? q.symbol}</span>
@@ -176,7 +181,7 @@ function MarketInner() {
                     额 {fmtAmount(q.amount)}
                   </span>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
 
@@ -274,7 +279,12 @@ function MarketInner() {
                 <table className="w-full text-sm">
                   <tbody>
                     {pool.map((r) => (
-                      <tr key={r.symbol} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
+                      <tr
+                        key={r.symbol}
+                        onClick={() => router.push(workbenchUrlWithBack(r.symbol))}
+                        title="查看个股详情"
+                        className="cursor-pointer border-b border-zinc-100 last:border-0 transition-colors hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900/60"
+                      >
                         <td className="px-3 py-1.5 font-mono text-xs text-zinc-400">{r.symbol}</td>
                         <td className="px-2 py-1.5">{r.name}</td>
                         <td className="px-2 py-1.5 text-right font-mono">{fmt(r.price)}</td>

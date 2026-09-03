@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { workbenchUrlWithBack } from "@/lib/routing";
 import { fmt, pctColor, pctText } from "@/lib/format";
 import type { DailyPickItem, StandAsideGate } from "@/lib/api";
 
@@ -59,11 +61,13 @@ function Chip({ text, title, className }: { text: string; title?: string; classN
 export function PickCard({ item }: { item: DailyPickItem }) {
   return (
     <div className="mb-3 break-inside-avoid rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
-      {/* 头：名称代码 + 现价 + 综合分 */}
+      {/* 头：名称代码 + 现价 + 综合分（名称/代码可点 → 工作台详情，联动切片 F） */}
       <div className="flex items-baseline justify-between gap-2">
         <div>
-          <span className="text-sm font-semibold">{item.name ?? "--"}</span>
-          <span className="ml-1.5 font-mono text-[10px] text-zinc-400">{item.symbol}</span>
+          <Link href={workbenchUrlWithBack(item.symbol)} title="查看个股详情" className="hover:text-sky-400 hover:underline">
+            <span className="text-sm font-semibold">{item.name ?? "--"}</span>
+            <span className="ml-1.5 font-mono text-[10px] text-zinc-400">{item.symbol}</span>
+          </Link>
         </div>
         <div className="text-right">
           <div className="font-mono text-base font-semibold tabular-nums">{fmt(item.price)}</div>
