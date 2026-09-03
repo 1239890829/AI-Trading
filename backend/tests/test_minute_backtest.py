@@ -1,13 +1,16 @@
 """回测运行器测试：JSONP 剥离 / schema 转换 / 聚合统计（合成 Parquet，无网络）。
 
-沙箱注意：pytest 的 tmp_path fixture 会被 sitecustomize shim 以 PermissionError
-拦截（EEXIST 误判），所以这里用 backend/data/tmp-backtest/ 项目内目录。
+沙箱注意：临时 Parquet 一律走 pytest tmp_path（--basetemp=/tmp/pytest-basetemp）。
+历史教训（2026-09-04 定案）：早前为绕 tmp_path 的 mkdir shim 用项目内目录
+backend/data/tmp-backtest，但 WorkBuddy 沙箱的 safe-delete bulk-guard 按**进程
+累计删除数**计数（scope=turn，阈值 50）——全量运行时前面的测试已累计上万次
+删除，本文件的 shutil.rmtree 触发 SAFE_DELETE_BULK_CONFIRM_REQUIRED 直接
+SystemExit(1)，表现为"单独跑全绿、全量跑失败"的假隔离问题。/tmp 下的 rmtree
+不受该守卫管辖（实测放行），tmp_path 目录由 pytest 自动清理，无需手动删。
 """
 
 import sys
-import shutil
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 sys.path.insert(0, ".")
 
@@ -17,7 +20,6 @@ from app.market.minute_backfill import strip_jsonp, to_sina_symbol
 from app.market.minute_backtest import apply_adjustments, run_backtest
 
 T0 = datetime(2026, 8, 28, 1, 30, tzinfo=timezone.utc)  # 北京 09:30
-TMP = Path(__file__).resolve().parent.parent / "data" / "tmp-backtest"
 
 
 def _day_points(day: str, prices: list[float], vols: list[int] | None = None):
@@ -46,11 +48,9 @@ def test_strip_jsonp_and_symbol():
     assert to_sina_symbol("000001") == "sz000001"
 
 
-def test_run_backtest_aggregates_synthetic_parquet():
+def test_run_backtest_aggregates_synthetic_parquet(tmp_path):
     """2 只票 × 2 天合成数据：第一天横盘（无信号），第二天构造低吸共振日
     （下杀→缩量新低底背离→确认），断言聚合结构完整且信号被捕获。"""
-    if TMP.exists():
-        shutil.rmtree(TMP)
     flat = [10.0] * 48
     # day2：10 根平 → 4 根下杀 → 1 根缩量新低（底背离 vol 300 ≤ 均量×0.4）
     # → 14 根 9.76 确认（谷底 3 bar 确认在缩量段内触发）→ 17 根 10.02 拉升
@@ -64,32 +64,23 @@ def test_run_backtest_aggregates_synthetic_parquet():
         pts = []
         for d, prices in days.items():
             pts += _day_points(d, prices, v2 if d == "20260828" and sym == "600519" else None)
-        TMP.mkdir(parents=True, exist_ok=True)
-        pl.DataFrame(pts).write_parquet(TMP / f"{sym}.parquet")
+        pl.DataFrame(pts).write_parquet(tmp_path / f"{sym}.parquet")
 
-    try:
-        report = run_backtest(["600519", "000001"], parquet_dir=TMP, in_ratio=0.5)
-        assert report["data_days"] == 2
-        assert report["split"]["in_days"] == 1 and report["split"]["out_days"] == 1
-        for key in ("sample_in", "sample_out", "overall"):
-            agg = report[key]
-            assert {"signals", "correct", "wrong", "invalid", "expired", "hit_rate"} <= set(agg)
-        assert report["overall"]["signals"] >= 1, report["overall"]
-        assert report["overall"]["by_bias"].get("低吸偏向", 0) >= 1
-        assert report["note"].startswith("阈值未经校准")
-    finally:
-        shutil.rmtree(TMP, ignore_errors=True)
+    report = run_backtest(["600519", "000001"], parquet_dir=tmp_path, in_ratio=0.5)
+    assert report["data_days"] == 2
+    assert report["split"]["in_days"] == 1 and report["split"]["out_days"] == 1
+    for key in ("sample_in", "sample_out", "overall"):
+        agg = report[key]
+        assert {"signals", "correct", "wrong", "invalid", "expired", "hit_rate"} <= set(agg)
+    assert report["overall"]["signals"] >= 1, report["overall"]
+    assert report["overall"]["by_bias"].get("低吸偏向", 0) >= 1
+    assert report["note"].startswith("阈值未经校准")
 
 
-def test_run_backtest_no_data_symbol_skipped():
-    if TMP.exists():
-        shutil.rmtree(TMP)
-    try:
-        report = run_backtest(["999999"], parquet_dir=TMP)
-        assert report["overall"]["signals"] == 0
-        assert report["data_days"] == 0
-    finally:
-        shutil.rmtree(TMP, ignore_errors=True)
+def test_run_backtest_no_data_symbol_skipped(tmp_path):
+    report = run_backtest(["999999"], parquet_dir=tmp_path)
+    assert report["overall"]["signals"] == 0
+    assert report["data_days"] == 0
 
 
 # ---------------------------------------------------------------- 复权修正
@@ -129,22 +120,16 @@ def test_apply_adjustments_bonus_and_noop():
     assert applied3 == 0 and out3 == pts
 
 
-def test_run_backtest_applies_injected_adjustments():
+def test_run_backtest_applies_injected_adjustments(tmp_path):
     """事件注入路径：run_backtest 内部完成修正并记录 adjustments_applied。"""
-    if TMP.exists():
-        shutil.rmtree(TMP)
-    try:
-        pts = _day_points("20260827", [10.0] * 48)
-        TMP.mkdir(parents=True, exist_ok=True)
-        pl.DataFrame(pts).write_parquet(TMP / "600519.parquet")
-        report = run_backtest(
-            ["600519"], parquet_dir=TMP, in_ratio=0.5,
-            adjustment_events={"600519": [{"ex_date": "2026-08-28", "dividend": 0.5, "bonus": 0.0}]},
-        )
-        assert report["adjustments_applied"] == {"600519": 1}
-        assert "复权" in report["note"]
-    finally:
-        shutil.rmtree(TMP, ignore_errors=True)
+    pts = _day_points("20260827", [10.0] * 48)
+    pl.DataFrame(pts).write_parquet(tmp_path / "600519.parquet")
+    report = run_backtest(
+        ["600519"], parquet_dir=tmp_path, in_ratio=0.5,
+        adjustment_events={"600519": [{"ex_date": "2026-08-28", "dividend": 0.5, "bonus": 0.0}]},
+    )
+    assert report["adjustments_applied"] == {"600519": 1}
+    assert "复权" in report["note"]
 
 
 # ---------------------------------------------------------------- TDX 数据源

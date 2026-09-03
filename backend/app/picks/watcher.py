@@ -389,11 +389,17 @@ async def _prev_day_volume(hub, symbol: str) -> float | None:
 
 
 async def _attach_volume_ratios(
-    hub, themes: dict[str, dict], vr_cache: dict, today_key: str, now_minutes: int | None,
+    hub, snapshot_service, themes: dict[str, dict], vr_cache: dict, today_key: str,
+    now_minutes: int | None,
 ) -> None:
     """为每题材附 volume_ratio = max(成员近似量比)（§5.1#4 降级口径接线）。
 
-    - 当日累计量：hub.get_quotes 快照（股，腾讯量纲已 ×100）；
+    - 当日累计量：**优先 snapshot_service 全市场快照**（约 5500 只、盘中 60s
+      轮询、symbol 裸 6 位 / volume 股，与昨日量同量纲）——题材成员任意覆盖；
+      快照缺失时回退 hub.get_quotes（同步内存读，仅 watchlist 成员在缓存）。
+      2026-09-04 修复：原实现 `await hub.get_quotes(...)` 双重错——hub 方法
+      是同步的（await list 抛 TypeError 被吞成 warning），且 hub 只装 watchlist
+      股票，题材成员多数不在其中 → 量比恒 unknown。
     - 昨日全天量：按日缓存 {date, vols:{symbol: 股|None}}，None 当日不重试；
     - max 语义 = 题材内最强量能，龙头封板后自身量比衰减不失真；
     - 任一环失败 → 该题材 volume_ratio 保持 None（unknown），绝不臆造。
@@ -411,12 +417,15 @@ async def _attach_volume_ratios(
     for s in sorted(symbols):
         if s not in vols_cache:
             vols_cache[s] = await _prev_day_volume(hub, s)
-    try:
-        quotes = await hub.get_quotes(sorted(symbols))
-    except Exception as exc:
-        log.warning("watcher vr: snapshot quotes failed: %s（量比全部 unknown）", exc)
-        quotes = []
-    vol_today = {q.symbol: q.volume for q in quotes or [] if q.volume}
+    # 当日累计量：全市场快照（覆盖任意题材成员）→ hub 缓存回退（仅 watchlist）。
+    # 两条路径都是纯内存读，无 IO，不再包 try/except 吞错。
+    snap = getattr(snapshot_service, "snapshot", None) or []
+    vol_today = {
+        r["symbol"]: r["volume"] for r in snap if r.get("symbol") and r.get("volume")
+    }
+    if not vol_today:
+        quotes = hub.get_quotes(sorted(symbols))
+        vol_today.update({q.symbol: q.volume for q in quotes or [] if q.volume})
     for st in themes.values():
         ratios = [
             r for r in (
@@ -474,7 +483,10 @@ async def collect_beat_inputs(app, env_cache: dict, *, env_refresh_seconds: floa
     if vr_cache is None:
         vr_cache = {"date": "", "vols": {}}
         state.picks_vr_cache = vr_cache
-    await _attach_volume_ratios(hub, themes, vr_cache, td.strftime("%Y%m%d"), beat["now_minutes"])
+    await _attach_volume_ratios(
+        hub, getattr(state, "snapshot_service", None),
+        themes, vr_cache, td.strftime("%Y%m%d"), beat["now_minutes"],
+    )
 
     beat["themes"] = themes
     beat["env"] = await _refresh_env(state, env_cache, env_refresh_seconds)

@@ -240,34 +240,20 @@ def test_compute_volume_ratio_basic_and_clamps():
 
 
 def test_attach_volume_ratios_max_of_members_and_daily_cache(monkeypatch):
-    """量比 = 题材成员最大值；昨日量按日缓存（None 也缓存，当日不重试）。"""
+    """量比 = 题材成员最大值；昨日量按日缓存（None 也缓存，当日不重试）。
+
+    2026-09-04 起当日量优先取 snapshot_service 全市场快照（题材成员任意覆盖）。
+    """
     import asyncio
 
     import app.picks.watcher as w
 
-    kline_calls: list[str] = []
-
-    class _K(NS):
-        pass
-
     def _kline(sym):
-        kline_calls.append(sym)
         # 昨日量 1000 股（最后一根昨日 bar + 一根今日 bar 应被过滤）
         return [
             NS(volume=1000.0, ts=__import__("datetime").datetime(2026, 9, 1)),
             NS(volume=9999.0, ts=__import__("datetime").datetime(2026, 9, 2)),
         ]
-
-    async def fake_get_kline(self_sym, tf):
-        return _kline(self_sym)
-
-    class _Quote(NS):
-        pass
-
-    async def fake_get_quotes(syms):
-        return [_Quote(symbol=s, volume=500.0) for s in syms]
-
-    hub = NS(provider=NS(get_kline=lambda s, tf: None), get_quotes=fake_get_quotes)
 
     started = {"n": 0}
 
@@ -280,19 +266,53 @@ def test_attach_volume_ratios_max_of_members_and_daily_cache(monkeypatch):
 
     monkeypatch.setattr(w, "_prev_day_volume", _prev_async)
 
+    snap_service = NS(snapshot=[
+        {"symbol": "600001", "volume": 500.0},
+        {"symbol": "600002", "volume": 400.0},
+        {"symbol": "600003", "volume": 500.0},
+    ])
+    # hub.get_quotes 是同步内存读（quote_hub 真实形态）；快照可用时不应被调用
+    hub = NS(provider=NS(), get_quotes=lambda syms: (_ for _ in ()).throw(AssertionError("should not be called")))
+
     themes = {
         "粮食": {"members": ["600001", "600002"]},
         "种业": {"members": ["600003"]},
     }
     cache = {"date": "", "vols": {}}
     # 10:00（600 分钟）已开市 30 分钟：量比 = 500/1000/(30/240) = 4.0
-    asyncio.run(w._attach_volume_ratios(hub, themes, cache, "20260902", 600))
-    assert themes["粮食"]["volume_ratio"] == 4.0
+    asyncio.run(w._attach_volume_ratios(hub, snap_service, themes, cache, "20260902", 600))
+    assert themes["粮食"]["volume_ratio"] == 4.0  # max(4.0, 400/1000/(30/240)=3.2)
     assert themes["种业"]["volume_ratio"] == 4.0
     assert started["n"] == 3 and cache["date"] == "20260902"
     # 第二拍：昨日量走缓存不重拉，当日量重取
-    asyncio.run(w._attach_volume_ratios(hub, themes, cache, "20260902", 600))
+    asyncio.run(w._attach_volume_ratios(hub, snap_service, themes, cache, "20260902", 600))
     assert started["n"] == 3
+
+
+def test_attach_volume_ratios_snapshot_missing_falls_back_to_hub(monkeypatch):
+    """全市场快照缺失 → 回退 hub.get_quotes（同步内存读，watchlist 覆盖）。"""
+    import asyncio
+
+    import app.picks.watcher as w
+
+    async def prev_ok(hub_, s):
+        return 1000.0
+
+    monkeypatch.setattr(w, "_prev_day_volume", prev_ok)
+
+    snap_service = NS(snapshot=[])
+    hub_get_quotes_calls: list[list[str]] = []
+
+    def sync_get_quotes(syms):
+        hub_get_quotes_calls.append(list(syms))
+        return [NS(symbol="600001", volume=500.0)]
+
+    hub = NS(provider=NS(), get_quotes=sync_get_quotes)
+    themes = {"粮食": {"members": ["600001"]}}
+    cache = {"date": "20260902", "vols": {"600001": 1000.0}}
+    asyncio.run(w._attach_volume_ratios(hub, snap_service, themes, cache, "20260902", 600))
+    assert themes["粮食"]["volume_ratio"] == 4.0
+    assert hub_get_quotes_calls == [["600001"]]
 
 
 def test_attach_volume_ratios_prev_none_stays_unknown(monkeypatch):
@@ -309,39 +329,37 @@ def test_attach_volume_ratios_prev_none_stays_unknown(monkeypatch):
 
     monkeypatch.setattr(w, "_prev_day_volume", no_prev)
 
-    async def fake_get_quotes(syms):
-        return [NS(symbol=s, volume=500.0) for s in syms]
-
-    hub = NS(provider=NS(), get_quotes=fake_get_quotes)
+    snap_service = NS(snapshot=[{"symbol": "600001", "volume": 500.0}])
+    hub = NS(provider=NS(), get_quotes=lambda syms: [])
     themes = {"粮食": {"members": ["600001"]}}
     cache = {"date": "", "vols": {}}
-    asyncio.run(w._attach_volume_ratios(hub, themes, cache, "20260902", 600))
+    asyncio.run(w._attach_volume_ratios(hub, snap_service, themes, cache, "20260902", 600))
     assert themes["粮食"]["volume_ratio"] is None
     assert calls["n"] == 1
     # 同日不重试
-    asyncio.run(w._attach_volume_ratios(hub, themes, cache, "20260902", 600))
+    asyncio.run(w._attach_volume_ratios(hub, snap_service, themes, cache, "20260902", 600))
     assert calls["n"] == 1
     # 换日重建缓存 → 重试
-    asyncio.run(w._attach_volume_ratios(hub, themes, cache, "20260903", 600))
+    asyncio.run(w._attach_volume_ratios(hub, snap_service, themes, cache, "20260903", 600))
     assert calls["n"] == 2
 
 
-def test_attach_volume_ratios_snapshot_failure_stays_unknown(monkeypatch):
-    """快照批量失败 → 全部量比 unknown（不阻断其他判定项）。"""
+def test_attach_volume_ratios_no_snapshot_no_hub_hit_stays_unknown(monkeypatch):
+    """快照与 hub 缓存都查无该股 → 量比 unknown（不阻断其他判定项）。"""
     import asyncio
 
     import app.picks.watcher as w
 
-    async def broken(syms):
-        raise RuntimeError("down")
-
     async def prev_ok(hub_, s):
         return 1000.0
 
-    hub = NS(provider=NS(), get_quotes=broken)
+    monkeypatch.setattr(w, "_prev_day_volume", prev_ok)
+
+    snap_service = NS(snapshot=[{"symbol": "000001", "volume": 500.0}])  # 别的股票
+    hub = NS(provider=NS(), get_quotes=lambda syms: [])  # hub 缓存也没有
     themes = {"粮食": {"members": ["600001"]}}
     cache = {"date": "20260902", "vols": {"600001": 1000.0}}
-    asyncio.run(w._attach_volume_ratios(hub, themes, cache, "20260902", 600))
+    asyncio.run(w._attach_volume_ratios(hub, snap_service, themes, cache, "20260902", 600))
     assert themes["粮食"]["volume_ratio"] is None
 
 
