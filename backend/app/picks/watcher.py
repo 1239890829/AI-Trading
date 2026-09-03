@@ -496,8 +496,22 @@ async def collect_beat_inputs(app, env_cache: dict, *, env_refresh_seconds: floa
 # ---------------------------------------------------------------- IO：提醒分发
 
 
+def _default_watcher_channels() -> str:
+    """watcher 规则默认 channels（settings 逗号串 → JSON 列表字符串）。"""
+    import json
+
+    from app.core.config import settings
+
+    return json.dumps([c.strip() for c in settings.picks_watcher_channels.split(",") if c.strip()])
+
+
 def ensure_system_rule(session_factory) -> AlertRule:
-    """watcher 专用系统规则（get-or-create）。detached 后只读 id/name/channels。"""
+    """watcher 专用系统规则（get-or-create）。detached 后只读 id/name/channels。
+
+    升级语义：v1 硬编码默认 ``["in_app", "log"]`` 的旧规则行升级为当前配置默认
+    （feishu 进列）——该值是历史默认而非用户有意定制（用户定制任何其他值不动）；
+    webhook 未配置时 feishu 通道按既有语义显式跳过，不会伪装成功。
+    """
     with session_factory() as db:
         row = db.query(AlertRule).filter(AlertRule.name == WATCHER_RULE_NAME).one_or_none()
         if row is None:
@@ -507,11 +521,13 @@ def ensure_system_rule(session_factory) -> AlertRule:
                 condition_type="picks_intraday",
                 scope="all",
                 threshold=0.0,
-                channels='["in_app", "log"]',
+                channels=_default_watcher_channels(),
             )
             db.add(row)
-            db.commit()
-            db.refresh(row)
+        elif row.channels == '["in_app", "log"]':
+            row.channels = _default_watcher_channels()
+        db.commit()
+        db.refresh(row)
         db.expunge(row)
         return row
 

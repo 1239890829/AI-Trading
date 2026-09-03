@@ -6,7 +6,7 @@ import { KlineChartPro } from "@/components/kline-chart-pro";
 import { Panel } from "@/components/panel";
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
-import { useQuoteStream } from "@/hooks/use-quote-stream";
+import { useQuoteStream, STREAM_STATUS_LABEL } from "@/hooks/use-quote-stream";
 import { analyze } from "@/lib/technical-analysis";
 import { buildEventMarks, buildMinuteNewsEvents } from "@/lib/event-markers";
 import { mergeQuoteIntoBars, mergeQuoteIntoMinutes } from "@/lib/kline-live";
@@ -137,7 +137,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     setRightTab((t) => (t === "trade" || t === "real" || t === "profile" || t === "trades" ? "book" : t));
   }, [isIndex]);
 
-  const { quotes } = useQuoteStream([symbol]);
+  const { quotes, status: streamStatus } = useQuoteStream([symbol]);
   useEffect(() => {
     const live = quotes[symbol];
     if (!live) return;
@@ -479,6 +479,14 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
 
       {/* ① 紧凑行情条（指数隐藏加自选：sh000001 不是合法自选股代码） */}
       {quote && <QuoteStrip quote={quote} inWatchlist={inWatchlist} onAdd={() => void add()} hideWatchlist={isIndex} tradingStatus={tradingStatus} />}
+
+      {/* ①¼ 实时连接状态（2026-09-03 恢复展示：此前 hook 返回的 status 被丢弃，
+          详情页成了唯一"在用 WS 却看不到连接状态"的页面；文案与工作台共享同源） */}
+      <div className="shrink-0 text-[10px]">
+        <span className={STREAM_STATUS_LABEL[streamStatus].cls} title="行情连接状态（WebSocket 主通道，断线自动降级 REST 轮询）">
+          ● {STREAM_STATUS_LABEL[streamStatus].text}
+        </span>
+      </div>
 
       {/* ①½ 题材归属 chips（官方成分 / 涨停归因双源）→ 题材看板聚焦 */}
       <ThemeChipsRow themes={stockThemes} />

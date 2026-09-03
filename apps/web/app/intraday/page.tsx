@@ -546,6 +546,11 @@ function IntradayPageInner() {
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // 数据刷新状态（2026-09-03）：上次成功拉取时间 + 全部失败警示。
+  // 此前页面只在挂载时拉一次且失败全静默——进入页面后数据定格，
+  // watcher 后端每拍推进但界面不跟随，用户以为必须手动刷新。
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   // 展开的题材以 URL query 为真相源（?theme=）：跳工作台后返回，展开态原样保留
   const [expandedTheme, setExpandedTheme] = useState<string | null>(() => sp.get("theme"));
@@ -572,10 +577,31 @@ function IntradayPageInner() {
     setWatcher(w);
     setStats(s);
     setOpps(o);
+    // 全部失败 = 后端不可达/网络断：可见警示（轮询会自动重试）；
+    // 部分成功不警示——briefMissing 等单端点缺失有各自的空态文案。
+    setLoadFailed(b === null && w === null && s === null && o === null);
+    setLoadedAt(Date.now());
   }, []);
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  // 自动刷新（60s，对齐后端 watcher 节拍）：页面不可见时暂停轮询、
+  // 回到可见立即补拉一次——保证切回页面看到的是当前盘面而非陈旧快照。
+  useEffect(() => {
+    const tick = () => {
+      if (document.visibilityState === "visible") void load();
+    };
+    const timer = setInterval(tick, 60_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [load]);
 
   async function act(kind: "brief" | "beat" | "review") {
@@ -612,8 +638,30 @@ function IntradayPageInner() {
         <span title="盘前 08:40 生成简报 → 盘中每 60s 取拍验证 → 盘后 15:35 对照复盘（选股 2.0 §2 三节拍）">
           盘前简报 · 盘中验证 · 盘后对照
         </span>
+        {/* 数据刷新状态（对齐工作台连接状态的可见性纪律：状态必须如实呈现） */}
+        {loadFailed ? (
+          <span
+            className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-600 dark:text-amber-300"
+            title="四个数据端点全部失败（后端不可达或网络中断）。每 60s 自动重试，也可点右侧「刷新数据」。"
+          >
+            ⚠ 数据加载失败 · 自动重试中
+          </span>
+        ) : (
+          loadedAt != null && (
+            <span className="text-[10px]" title="页面每 60s 自动拉取最新数据（对齐后端 watcher 60s 节拍）；切走再切回会立即刷新。">
+              数据 {timeText(new Date(loadedAt).toISOString())} 更新 · 每 60s 自动刷新
+            </span>
+          )
+        )}
         <div className="ml-auto flex items-center gap-1.5">
           <button
+            onClick={() => void load()}
+            disabled={busy !== null}
+            className="rounded border border-zinc-300 px-2 py-0.5 text-zinc-500 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100 disabled:opacity-50"
+            title="立即重新拉取全部数据（通常无需手动点——页面已自动刷新）"
+          >
+            刷新数据
+          </button>          <button
             onClick={() => void act("brief")}
             disabled={busy !== null}
             className="rounded border border-sky-500/50 px-2 py-0.5 text-sky-400 hover:bg-sky-500/10 disabled:opacity-50"

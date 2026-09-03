@@ -61,6 +61,22 @@ def test_format_alert_text_survives_bad_snapshot():
     assert "600519" in text  # 不炸，缺 text 只少一段
 
 
+def test_format_alert_text_includes_beijing_trigger_time():
+    """triggered_at 为 UTC，文案必须换算成北京时间并自带时间行（盘中提醒第一问是何时）。"""
+    ev = _event()
+    ev.triggered_at = datetime(2026, 9, 3, 2, 30, 5)  # UTC → 北京 10:30:05
+    text = format_alert_text(ev, _rule())
+    assert "触发时间：2026-09-03 10:30:05（北京时间）" in text
+
+
+def test_format_alert_text_without_triggered_at_has_no_time_line():
+    """triggered_at 为 None 时不出现时间行，也不炸。"""
+    ev = _event()
+    ev.triggered_at = None
+    text = format_alert_text(ev, _rule())
+    assert "触发时间" not in text
+
+
 # ---------------------------------------------------------------- send
 
 def test_send_success_posts_text_payload():

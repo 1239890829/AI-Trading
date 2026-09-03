@@ -6,6 +6,16 @@ import type { Quote } from "@/types/market";
 
 export type StreamStatus = "connecting" | "live" | "polling" | "closed" | "stale" | "error";
 
+/** 连接状态 → 界面文案（共享：工作台与个股详情同一套，避免两处文案漂移）。 */
+export const STREAM_STATUS_LABEL: Record<StreamStatus, { text: string; cls: string }> = {
+  connecting: { text: "连接中", cls: "text-zinc-400" },
+  live: { text: "WS 实时推送", cls: "text-sky-400" },
+  polling: { text: "WS 断线 · REST 轮询", cls: "text-amber-400" },
+  closed: { text: "休市 · 展示最近交易日数据", cls: "text-zinc-400" },
+  stale: { text: "数据过期 · 后端刷新异常", cls: "text-amber-400" },
+  error: { text: "连接失败", cls: "text-red-400" },
+};
+
 /**
  * 行情流：优先 WebSocket（/ws/quotes），断线自动重连；
  * 连续失败 3 次后降级为 REST 轮询（5s），并在恢复时切回 WS。

@@ -158,3 +158,34 @@ AGPL 终端产品（企业版闭源收费，社区版月更）。功能与 workb
 | 备查 | marketdb DuckDB 评估（日级历史落盘）、quantskills 目录、qlib/AlphaMaster 触发条件已注明 | 各仓库 | — |
 
 **一句话总结**：这批 Stars 里没有能整体替代我们系统的东西——但有三个精准补件（官方未启用能力、TDX 分钟历史、treemap 云图）和四个值得抄的架构（多角色 LLM 编排、推送通道、mandate、PIT 互证）。最意外的发现是第 1 项：**最强的补件一直躺在我们自己已付费的官方服务里**。
+
+## 五、仓库使用状态总表（2026-09-03 收敛）
+
+> 调研采纳清单已于 2026-09-03 全部清零（末项：TDX 分钟 K 备源）。本表把 17 个
+> 已实测仓库收敛成四种去留状态：**持续使用**（代码/数据管线实际依赖）、
+> **保留参考**（后续开发仍要翻它的设计）、**归档**（价值已吸收完毕，留档不再跟进）、
+> **废弃**（明确不用，可从 star 分组移除）。
+
+| 仓库 | 用途一句话 | 状态 | 依据 |
+|---|---|---|---|
+| HiThink-Tech/Financial-API | ths 官方 fuyao API 文档与端点目录 | **持续使用** | 四源链第一优先级；59 端点选型依据（docs/data-source-comparison.md）；`skills/hithink-finance/` 镜像 |
+| handsomejustin/easy_tdx | TDX 协议直连数据通道 | **持续使用** | 回测底座主源（m5 495 日/m1 94 日）+ `/api/minute-line` 分时降级备源（f88b0ed）；钉版本 >=1.20.12,<1.30 |
+| market-dumps | 官方日 K dump 仓库 | **持续使用** | marketdb DuckDB 仓（1025 万行/5544 只）唯一上游，`sync_marketdb.py --full` 24.3s |
+| freqtrade | 出场纪律/回测绩效方法论 | **保留参考** | risk.py 三档出场、performance.py 28 指标、walkforward 已落地；后续调参仍对照其 MaxDrawDown/p-value 设计。GPLv3 代码永不引入 |
+| myhhub/stock | 筹码分布实现（反面教材兼设计参考） | **保留参考** | 自研筹码分布待做时以其 3 个实测缺陷立规格（归一化差 60.8 倍等） |
+| wenyuanw/a-share-heatmap | treemap 云图思想来源 | **归档** | squarified 自研已上线（/market 云图 tab）+ L7 格子跳转（eea9e66）；无剩余未吸收项 |
+| TauricResearch/TradingAgents | 多角色 LLM 编排参考 | **归档** | grounding 拒绝码契约已落地（7bc3f18）；多 agent 编排明确不引入（12 次 LLM 调用/票不可接受） |
+| virattt/ai-hedge-fund | mandate 声明式配置来源 | **归档** | 回测 mandate yaml 化已完成（#63） |
+| OpenBB | provider 能力注册表模式来源 | **归档** | 三档真值矩阵 + 反射锚定测试已落地（ff4307e） |
+| HKUDS/Vibe-Trading | PIT 纪律互证旁证 | **归档** | 互证价值已兑现（§三.5）；Shadow Account 我们有 paper+复盘等价物 |
+| ZhuLinsen/daily_stock_analysis | 推送通道架构参考 | **归档** | 飞书通道已上线（#186，2026-09-03 又补 watcher 异动直推）；其"买卖点位"结论风格违反红线 3 永不引入 |
+| last30days / 各 skill 类 | 滚动窗口+衰减思想 | **归档** | 与 EventCard half_life 同构，无新增采纳项 |
+| microsoft/qlib | 日频多因子框架 | **归档** | 范式与打板/题材流不同构；volume_threshold 与板块化思想已记录备查 |
+| quantskills/quantskills | 方法论目录 | **归档** | 收录观察价值，触发条件已注明 |
+| PolymarketBTC15mAssistant | 预测市场前瞻信号 | **归档** | 信息增量真实但事件→A 股映射维护成本高，留作备选不接入 |
+| vnpy/vnpy | 券商实盘网关 | **废弃** | 与「禁实盘」红线正交；EventEngine 引入评估为负改造 |
+| FinceptTerminal | 终端式看板 | **废弃** | 功能与 workbench 高度重叠，引入≈重写 |
+| AlphaMaster | MT5/加密信号 | **废弃** | 域不符且工程质量低 |
+| QuantMind | 量化全套 | **废弃** | AGPL 许可一票否决 |
+
+**维护约定**：后续新调研产出的采纳项在对应 audit 文档勾账；本表每季度（或采纳清单再次清零时）复核一次状态列。star 分组里「废弃」行可移除，其余保留原仓库链接即可——文档已沉淀全部结论，不依赖继续收藏。

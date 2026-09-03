@@ -8,7 +8,7 @@ import { StockDetailPanel } from "@/components/stock-detail";
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
 import { Sparkline } from "@/components/sparkline";
-import { useQuoteStream, StreamStatus } from "@/hooks/use-quote-stream";
+import { useQuoteStream, STREAM_STATUS_LABEL } from "@/hooks/use-quote-stream";
 import { useRealPositions } from "@/hooks/use-real-positions";
 import {
   addToWatchlist,
@@ -33,14 +33,7 @@ import { subscribeWatchlist, notifyWatchlistChanged } from "@/lib/watchlist-sync
 import { LAST_SYMBOL_KEY, originLabel, workbenchUrl } from "@/lib/routing";
 import type { Quote } from "@/types/market";
 
-const STATUS_LABEL: Record<StreamStatus, { text: string; cls: string }> = {
-  connecting: { text: "连接中", cls: "text-zinc-400" },
-  live: { text: "WS 实时推送", cls: "text-sky-400" },
-  polling: { text: "WS 断线 · REST 轮询", cls: "text-amber-400" },
-  closed: { text: "休市 · 展示最近交易日数据", cls: "text-zinc-400" },
-  stale: { text: "数据过期 · 后端刷新异常", cls: "text-amber-400" },
-  error: { text: "连接失败", cls: "text-red-400" },
-};
+const STATUS_LABEL = STREAM_STATUS_LABEL;
 
 function WorkbenchInner() {
   const router = useRouter();

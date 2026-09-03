@@ -394,3 +394,58 @@ def test_refresh_env_cache_and_fallback(monkeypatch):
     env3 = asyncio.run(w._refresh_env(state, cache, refresh_after=0.0))
     assert env3 == {"phase": "发酵", "promo_percentile": 49.2}
     assert calls["n"] == 1
+
+
+# ---------------------------------------------------------------- 系统规则 channels
+
+def _rule_factory(tmp_path):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.models.watchlist import Base
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'rule.db'}")
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine)
+
+
+def test_ensure_system_rule_new_row_includes_configured_channels(tmp_path, monkeypatch):
+    """新建规则 channels 来自 settings.picks_watcher_channels（默认含 feishu）。"""
+    import json
+
+    from app.core.config import settings
+    from app.picks.watcher import WATCHER_RULE_NAME, ensure_system_rule
+
+    monkeypatch.setattr(settings, "picks_watcher_channels", "in_app,log,feishu")
+    factory = _rule_factory(tmp_path)
+    row = ensure_system_rule(factory)
+    assert json.loads(row.channels) == ["in_app", "log", "feishu"]
+    assert row.name == WATCHER_RULE_NAME
+
+
+def test_ensure_system_rule_upgrades_v1_default_row(tmp_path, monkeypatch):
+    """v1 硬编码默认 ["in_app", "log"] 的旧行升级为配置默认；用户定制值不动。"""
+    import json
+
+    from app.core.config import settings
+    from app.models.alert import AlertRule
+    from app.picks.watcher import ensure_system_rule
+
+    monkeypatch.setattr(settings, "picks_watcher_channels", "in_app,log,feishu")
+    factory = _rule_factory(tmp_path)
+
+    # 旧默认行 → 升级
+    with factory() as db:
+        db.add(AlertRule(name="__picks_watcher__", enabled=1, condition_type="picks_intraday",
+                         scope="all", threshold=0.0, channels='["in_app", "log"]'))
+        db.commit()
+    row = ensure_system_rule(factory)
+    assert json.loads(row.channels) == ["in_app", "log", "feishu"]
+
+    # 用户定制行 → 不动
+    with factory() as db:
+        r = db.query(AlertRule).filter(AlertRule.name == "__picks_watcher__").one()
+        r.channels = '["log"]'
+        db.commit()
+    row2 = ensure_system_rule(factory)
+    assert json.loads(row2.channels) == ["log"]

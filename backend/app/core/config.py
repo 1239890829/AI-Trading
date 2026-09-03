@@ -131,6 +131,10 @@ class Settings(BaseSettings):
     # 机器人开启「签名校验」时填同款密钥；未开启留空
     alert_feishu_secret: str = ""
 
+    # 盘中 watcher 提醒分发通道（逗号分隔：in_app/log/feishu）。
+    # feishu 在列但 webhook 未配置时按通道既有语义显式跳过（warning 日志可见）。
+    picks_watcher_channels: str = "in_app,log,feishu"
+
     # ---- 写接口鉴权（B6，opt-in）----
     # 留空 = 本地开发全放行；部署到公网/NAS 时配置任意随机值，
     # 之后所有写请求必须带 X-API-Token 头（前端 NEXT_PUBLIC_API_TOKEN 自动携带）
