@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Panel } from "@/components/panel";
 import { workbenchUrlWithBack } from "@/lib/routing";
+import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import {
   ackAlertEvent,
   createAlertRule,
@@ -63,11 +64,7 @@ export function AlertsTab() {
     }
   }, []);
 
-  useEffect(() => {
-    void load();
-    const t = setInterval(() => void load(), 10_000);
-    return () => clearInterval(t);
-  }, [load]);
+  usePollingFetch(load, 10_000);
 
   const [form, setForm] = useState<AlertRuleCreate>({
     name: "",

@@ -93,7 +93,10 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   // trade-form/trade-panel 都在本组件子树内，props 回调 + ref 即可，无需全局广播）
   const loadPaperRef = useRef<() => void>(() => {});
   useEffect(() => {
+    // localStorage 恢复必须在 effect 里：渲染期读会把值带进首次 commit，
+    // 与 SSR 输出产生 hydration mismatch（宽度类 inline style 必比对）。
     const saved = Number(localStorage.getItem("ashare-right-w"));
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (saved >= 260 && saved <= 480) setRightW(saved);
   }, []);
   // 历史回放（Phase 6 收官）：K 线页签内切换回放模式
@@ -130,17 +133,24 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   // 指数 symbol（sh000001 等）：禁用个股专属面板（加自选/交易/资料/资金图）
   const isIndex = isIndexSymbol(symbol);
   // 指数下个股专属 tab 不可用：残留的 flow/trade/real/profile 选中态强制归位
-  //（workbench 切股走 key 重挂载不会残留，这里是 /stock/[symbol] 等复用方的防御）
-  useEffect(() => {
-    if (!isIndex) return;
-    setChartTab((t) => (t === "flow" ? "kline" : t));
-    setRightTab((t) => (t === "trade" || t === "real" || t === "profile" || t === "trades" ? "book" : t));
-  }, [isIndex]);
+  //（workbench 切股走 key 重挂载不会残留，这里是 /stock/[symbol] 等复用方的防御）。
+  // 渲染期调整（adjust-state 模式）：prevIsIndex 初始 false，挂载即指数时同样归位。
+  const [prevIsIndex, setPrevIsIndex] = useState(false);
+  if (isIndex !== prevIsIndex) {
+    setPrevIsIndex(isIndex);
+    if (isIndex) {
+      setChartTab((t) => (t === "flow" ? "kline" : t));
+      setRightTab((t) => (t === "trade" || t === "real" || t === "profile" || t === "trades" ? "book" : t));
+    }
+  }
 
   const { quotes, status: streamStatus } = useQuoteStream([symbol]);
-  useEffect(() => {
-    const live = quotes[symbol];
-    if (!live) return;
+  // WS 推送 → 渲染期合并进 quote（adjust-state 模式）：live 引用每拍必变，
+  // 哨兵 appliedLive 保证同一帧只合并一次，语义与原 effect 版完全等价。
+  const live = quotes[symbol];
+  const [appliedLive, setAppliedLive] = useState<Quote | null>(null);
+  if (live && live !== appliedLive) {
+    setAppliedLive(live);
     setQuote((prev) => {
       // 跨股票切换时直接采用新行情：base 必须与当前 symbol 一致，
       // 否则旧股残留字段会混进新股的合并结果
@@ -157,7 +167,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
         limit_down_price: live.limit_down_price ?? base?.limit_down_price ?? null,
       };
     });
-  }, [quotes, symbol]);
+  }
 
 
   // 估值补充：ths 快照无 PE/PB/市值，每 30s 从腾讯源低频补齐（价格仍以 WS 为准）
@@ -199,7 +209,6 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
     // 轮询 10s → 30s（费率预估与持仓盈亏对实时性不敏感，原 10s 属过密）。
     if (!symbol || rightTab !== "trade") return;
     let alive = true;
-    setFills([]); // 成交记录按 symbol 过滤，切股先清空防残留
     const loadPaper = async () => {
       try {
         const [acc, positions, orders, fs] = await Promise.all([
@@ -225,7 +234,6 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
 
   useEffect(() => {
     let alive = true;
-    setInWatchlist(false); // 切股先归零，防止上一只的加自选状态残留
     getWatchlistSymbols().then((list) => alive && setInWatchlist(list.includes(symbol)));
     return () => {
       alive = false;
@@ -239,10 +247,18 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   // 题材归属（L4 联动）：官方成分 + 当日涨停归因，chip 点击跳题材看板聚焦。
   // 独立请求 + 静默失败：归属缺失只影响这一行，不拖垮详情页。
   const [stockThemes, setStockThemes] = useState<StockThemes | null>(null);
+  // 切股清空三件套（渲染期 adjust-state：symbol 变化时同步重置，防上一只残留）——
+  // fills 的按页签拉取、自选/题材的各自 fetch effect 保持不变，只把「清空」前移到渲染期。
+  const [prevResetSymbol, setPrevResetSymbol] = useState<string | null>(null);
+  if (symbol !== prevResetSymbol) {
+    setPrevResetSymbol(symbol);
+    setFills([]);
+    setInWatchlist(false);
+    setStockThemes(null);
+  }
   useEffect(() => {
     if (!symbol) return;
     let alive = true;
-    setStockThemes(null); // 切股先清空，防残留上一只的题材
     getStockThemes(symbol)
       .then((t) => alive && setStockThemes(t))
       .catch(() => {});

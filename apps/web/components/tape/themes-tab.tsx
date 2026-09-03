@@ -8,6 +8,7 @@ import { getThemes, getThemesHot, getThemeStrength, getAuctionBenchmark } from "
 import { fmtHeat, pctColor, pctText, timeText } from "@/lib/format";
 import { workbenchUrlWithBack } from "@/lib/routing";
 import { sortAuctionBenchmark } from "@/lib/auction";
+import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import type { AuctionBenchmarkItem, ThemeStrengthRow, ThemesHotPayload } from "@/lib/api";
 import type { ThemeBoardPayload } from "@/types/market";
 
@@ -98,10 +99,12 @@ export function ThemesTab() {
     [sort, minBoards, minCount]
   );
 
+  // 首屏必须带上 URL 里的 date——此前裸 load() 只用默认日期，
+  // ?date=2026-08-28 打开时实际取的是"今天"（盘前为降级数据）。
+  // 仅挂载时拉一次（latest-ref 拿到当前 date）；后续筛选由各自的 onChange 触发
+  usePollingFetch(() => load(date || undefined), null);
+
   useEffect(() => {
-    // 首屏必须带上 URL 里的 date——此前裸 load() 只用默认日期，
-    // ?date=2026-08-28 打开时实际取的是"今天"（盘前为降级数据）。
-    void load(date || undefined);
     // 人气榜独立拉取（实时口径，不看 date 参数——历史日期没有人气数据）
     getThemesHot()
       .then(setHot)
@@ -114,8 +117,6 @@ export function ThemesTab() {
         setStrength(byName);
       })
       .catch(() => setStrength(null));
-    // 仅在挂载时拉一次；后续筛选由各自的 onChange 触发
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 竞价标杆随 date 联动——与人气榜不同，竞价基准**有**历史数据：

@@ -20,6 +20,7 @@ import {
   type SentimentHistoryPayload,
 } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
+import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import type { LimitUpRecord, Quote } from "@/types/market";
 
 /**
@@ -93,24 +94,14 @@ function MarketInner() {
     } catch {}
   }, []);
 
-  useEffect(() => {
-    void loadFast();
-    const t = setInterval(loadFast, 10000);
-    return () => clearInterval(t);
-  }, [loadFast]);
-
-  useEffect(() => {
-    void loadSlow();
-    const t = setInterval(loadSlow, 30000);
-    return () => clearInterval(t);
-  }, [loadSlow]);
+  usePollingFetch(loadFast, 10_000);
+  usePollingFetch(loadSlow, 30_000);
 
   // 历史序列变化慢（日频），独立 60s 轮询，不跟随 10s 行情刷新
-  useEffect(() => {
-    void getSentimentHistory(10).then(setSentHist).catch(() => {});
-    const t = setInterval(() => void getSentimentHistory(10).then(setSentHist).catch(() => {}), 60000);
-    return () => clearInterval(t);
-  }, []);
+  usePollingFetch(async () => {
+    const h = await getSentimentHistory(10).catch(() => null);
+    if (h) setSentHist(h); // 拉取失败保持上一次序列（原 .catch(()=>{}) 语义）
+  }, 60_000);
 
   const sh = indices.find((q) => q.market === "SH" && q.symbol === "000001");
 

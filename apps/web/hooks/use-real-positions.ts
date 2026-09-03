@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { getRealPositions, type RealPositionsPayload } from "@/lib/api";
+import { usePollingFetch } from "@/hooks/use-polling-fetch";
 
 /**
  * 真实持仓聚合数据的共用 hook（评审 M3，2026-09-01）。
@@ -25,13 +26,7 @@ export function useRealPositions(pollMs = 15_000) {
     }
   }, []);
 
-  useEffect(() => {
-    void load();
-    const t = setInterval(() => void load(), pollMs);
-    return () => {
-      clearInterval(t);
-    };
-  }, [load, pollMs]);
+  usePollingFetch(load, pollMs);
 
   return { data, error, reload: load };
 }

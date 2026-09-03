@@ -12,6 +12,7 @@ import {
 } from "@/lib/api";
 import { fmtAmount } from "@/lib/format";
 import { workbenchUrl } from "@/lib/routing";
+import { usePollingFetch } from "@/hooks/use-polling-fetch";
 
 /**
  * 市场页 · 云图 tab（原 /heatmap 页迁移，2026-09-01 系统重构）。
@@ -127,11 +128,7 @@ export function HeatmapTab() {
     }
   }, []);
 
-  useEffect(() => {
-    void load();
-    const t = setInterval(() => void load(), 30000);
-    return () => clearInterval(t);
-  }, [load]);
+  usePollingFetch(load, 30_000);
 
   const watchSymbols = useMemo(() => new Set<string>(), []);
   const [watchLoaded, setWatchLoaded] = useState(false);

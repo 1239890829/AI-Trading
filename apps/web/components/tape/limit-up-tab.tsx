@@ -7,6 +7,7 @@ import { Panel } from "@/components/panel";
 import { getLimitUpPool } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
 import { workbenchUrlWithBack } from "@/lib/routing";
+import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import type { LimitUpRecord } from "@/types/market";
 
 /**
@@ -46,11 +47,8 @@ export function LimitUpTab() {
     }
   }, []);
 
-  useEffect(() => {
-    void load(searchParams.get("date") || undefined);
-    // 仅挂载时按 URL 初始日期拉一次
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [load]);
+  // 仅挂载时按 URL 初始日期拉一次（latest-ref 保证拿到最新 searchParams）
+  usePollingFetch(() => load(searchParams.get("date") || undefined), null);
 
   function syncUrl(next: { date?: string; theme?: string; symbols?: string }) {
     // 在现有 URL 上增删参数（保留 tab= 等盘面页参数）

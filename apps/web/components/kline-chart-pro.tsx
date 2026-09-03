@@ -352,7 +352,6 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
   useEffect(() => {
     if (!chartRef.current) return;
     marksRef.current();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bars.length, tradeMarks, costPrice, eventMarks, ind.bs, ind.events]);
 
   // 布局 #2：副图高度变化 → applyOptions 动态调整（不重建 chart），主图 bottom 随之让位

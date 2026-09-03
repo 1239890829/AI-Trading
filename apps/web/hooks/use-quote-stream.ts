@@ -219,6 +219,9 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
     const ws = wsRef.current;
     if (!connectedRef.current || !ws || ws.readyState !== WebSocket.OPEN) return;
     if (!key || key === sentKey) return;
+    // setSentKey 必须留在 effect 同步路径：它与下方 ws.send 是同一次订阅切换的
+    // 原子操作（渲染期做会把网络发送放进渲染、拆散两步的原子性）。
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSentKey(key);
     try {
       ws.send(JSON.stringify({ action: "subscribe", symbols: [...new Set(symbolsRef.current)] }));

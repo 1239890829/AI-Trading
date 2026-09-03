@@ -25,11 +25,15 @@ export function ReplayChart({ bars, fills = [], onExit }: Props) {
   const [speed, setSpeed] = useState(300);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // 起点档位变化 → 重置到新起点
-  useEffect(() => {
+  // 起点档位/bars 数量变化 → 渲染期重置到新起点（adjust-state 模式；
+  // prevResetKey 初始 null 保证挂载时同样执行一次）
+  const [prevResetKey, setPrevResetKey] = useState<string | null>(null);
+  const resetKey = `${startOffset}:${bars.length}`;
+  if (resetKey !== prevResetKey) {
+    setPrevResetKey(resetKey);
     setIdx(Math.max(30, bars.length - startOffset));
     setPlaying(false);
-  }, [startOffset, bars.length]);
+  }
 
   // 播放推进（到末尾自动停止）
   useEffect(() => {

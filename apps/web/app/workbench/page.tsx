@@ -9,6 +9,7 @@ import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
 import { Sparkline } from "@/components/sparkline";
 import { useQuoteStream, STREAM_STATUS_LABEL } from "@/hooks/use-quote-stream";
+import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { useRealPositions } from "@/hooks/use-real-positions";
 import {
   addToWatchlist,
@@ -56,6 +57,19 @@ function WorkbenchInner() {
   // 选中标的：URL 参数是唯一真相源；无参数时回退「上次查看的标的」，
   // 都没有再落默认 600519（此前硬编码回退是跨页面联动 bug 的一半根因）
   const [selected, setSelected] = useState<string>(paramSymbol ?? "");
+  // URL 参数变化 → 渲染期同步选中（React 官方 adjust-state-when-props-change 模式，
+  // 替代原 effect 同步——消除 setState-in-effect 级联渲染）。页面在 Suspense 边界内
+  // CSR 渲染，sessionStorage 仅客户端存在：SSR 渲染期守卫跳过，挂载首帧即恢复 last。
+  const [lastAppliedParam, setLastAppliedParam] = useState<string | null>(paramSymbol);
+  if (paramSymbol !== lastAppliedParam) {
+    setLastAppliedParam(paramSymbol);
+    if (paramSymbol) {
+      setSelected(paramSymbol);
+    } else {
+      const last = typeof window !== "undefined" ? window.sessionStorage.getItem(LAST_SYMBOL_KEY) : null;
+      if (last) setSelected(last);
+    }
+  }
 
   // 列表消费侧 3s 节流（2026-09-02 用户反馈：1Hz 刷新整表闪烁跳动）。
   // 详情面板是独立 hook 实例（不传 throttleMs），K线/分时合成不受影响。
@@ -66,16 +80,6 @@ function WorkbenchInner() {
   const merged: Record<string, Quote> = useMemo(() => ({ ...extra, ...quotes }), [extra, quotes]);
   const [positions, setPositions] = useState<PaperPositionInfo[]>([]);
   const [risk, setRisk] = useState<RiskState | null>(null);
-
-  useEffect(() => {
-    if (paramSymbol) {
-      setSelected(paramSymbol);
-      return;
-    }
-    // 无参数进入（导航栏点「工作台」）：恢复上次查看的标的，避免永远回到默认股
-    const last = window.sessionStorage.getItem(LAST_SYMBOL_KEY);
-    if (last) setSelected(last);
-  }, [paramSymbol]);
 
   // 记住最近查看的标的（会话内有效；路由规范见 lib/routing.ts）
   useEffect(() => {
@@ -127,27 +131,15 @@ function WorkbenchInner() {
 
   // 风控市场状态（评审 O2）：七档状态变化以日为尺度，独立 30s 轮询——
   // 混在 loadBase 10s 里纯属浪费（state_classifier 本身走 60s 快照聚合）。
-  useEffect(() => {
-    let alive = true;
-    const loadRisk = async () => {
-      const r = await getRiskState().catch(() => null);
-      if (alive) setRisk(r);
-    };
-    void loadRisk();
-    const t = setInterval(loadRisk, 30_000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-  }, []);
+  usePollingFetch(async () => {
+    const r = await getRiskState().catch(() => null);
+    setRisk(r);
+  }, 30_000);
 
-  useEffect(() => {
-    void loadBase();
-    const t = setInterval(loadBase, 10000);
-    // 自选集合变化（search-box 快捷加自选 / 详情面板 ＋自选）→ 立即刷新
-    // （2026-09-01 简化：原 CustomEvent 契约改为 lib/watchlist-sync 模块通知）
-    return subscribeWatchlist(() => void loadBase());
-  }, [loadBase]);
+  usePollingFetch(loadBase, 10_000);
+  // 自选集合变化（search-box 快捷加自选 / 详情面板 ＋自选）→ 立即刷新
+  // （2026-09-01 简化：原 CustomEvent 契约改为 lib/watchlist-sync 模块通知）
+  useEffect(() => subscribeWatchlist(() => void loadBase()), [loadBase]);
 
   useEffect(() => {
     if (symbols.length === 0) return;
@@ -163,16 +155,21 @@ function WorkbenchInner() {
   // 迷你走势（retro #9）：日K 级别，随自选变化拉取，独立 5 分钟刷新
   const [sparks, setSparks] = useState<SparklinePayload | null>(null);
   const sparkKey = symbols.join(",");
+  // 自选清空 → 渲染期同步清 sparkline 缓存（防上一组残留，adjust-state 模式）
+  if (symbols.length === 0 && sparks !== null) {
+    setSparks(null);
+  }
+  // sparkKey 变化 → 立即拉取（.then 回调里 setState，不在 effect 同步路径）
   useEffect(() => {
-    if (symbols.length === 0) {
-      setSparks(null);
-      return;
-    }
-    void getSparklines(symbols, 30).then(setSparks).catch(() => {});
-    const t = setInterval(() => void getSparklines(symbols, 30).then(setSparks).catch(() => {}), 300_000);
-    return () => clearInterval(t);
+    if (symbols.length === 0) return;
+    getSparklines(symbols, 30).then(setSparks).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sparkKey]);
+  // 5 分钟兜底刷新（拉取失败保持旧序列）
+  usePollingFetch(async () => {
+    const s = await getSparklines(symbols, 30).catch(() => null);
+    if (s) setSparks(s);
+  }, 300_000);
 
   // 分组清单由 groupMap 派生（旧代码是独立的 groups 状态，从未被赋值，chips 永远只有「全部」）
   const groups = useMemo(

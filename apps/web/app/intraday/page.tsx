@@ -23,6 +23,7 @@ import {
 } from "@/lib/api";
 import { workbenchUrlWithBack, themesUrl } from "@/lib/routing";
 import { pctColor, pctText, timeText } from "@/lib/format";
+import { usePollingFetch } from "@/hooks/use-polling-fetch";
 
 /**
  * 盘中跟踪（/intraday，选股 2.0 §2 呈现层，批次 B/C）：
@@ -583,9 +584,8 @@ function IntradayPageInner() {
     setLoadedAt(Date.now());
   }, []);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  // 挂载即拉（轮询由下方 visibility 感知 effect 承担：60s 对齐后端 watcher 节拍）
+  usePollingFetch(load, null);
 
   // 自动刷新（60s，对齐后端 watcher 节拍）：页面不可见时暂停轮询、
   // 回到可见立即补拉一次——保证切回页面看到的是当前盘面而非陈旧快照。

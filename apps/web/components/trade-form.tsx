@@ -28,20 +28,26 @@ export function TradeForm({
   const [riskCheck, setRiskCheck] = useState<OrderCheckResult | null>(null);
   const [checking, setChecking] = useState(false);
 
-  useEffect(() => {
+  // 详情页传入的现价 → 表单价回填（渲染期 adjust-state：价格/标的任一变化即重填，
+  // 语义与原 effect 依赖 [price, symbol] 一致）
+  const [prevPriceKey, setPrevPriceKey] = useState<string | null>(null);
+  const priceKey = price ? `${symbol}:${price}` : null;
+  if (priceKey !== prevPriceKey) {
+    setPrevPriceKey(priceKey);
     if (price) setP(fmt(price));
-  }, [price, symbol]);
+  }
 
   const pv = parseNum(p);
   const qv = Math.trunc(parseNum(qty));
   const est = pv * qv;
   const fee = Math.max(est * 0.00025, 5) + (side === "sell" ? est * 0.0005 : 0);
 
+  // 输入无效 → 渲染期同步清掉旧检查结果（adjust-state 模式）
+  if (pv <= 0 || qv <= 0) {
+    if (riskCheck !== null) setRiskCheck(null);
+  }
   useEffect(() => {
-    if (pv <= 0 || qv <= 0) {
-      setRiskCheck(null);
-      return;
-    }
+    if (pv <= 0 || qv <= 0) return;
     const t = setTimeout(() => {
       setChecking(true);
       void checkOrderRisk({ symbol, side, price: pv, quantity: qv })

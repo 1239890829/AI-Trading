@@ -41,16 +41,22 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
   const [editQty, setEditQty] = useState("");
   const [editCost, setEditCost] = useState("");
 
-  useEffect(() => {
+  // 代码随详情标的联动 + 买卖方向归位（渲染期 adjust-state，替代原 effect 同步）；
+  // 挂载即带 symbol 时同样生效（prevFormSymbol 初始 null）。
+  const [prevFormSymbol, setPrevFormSymbol] = useState<string | null | undefined>(undefined);
+  if (symbol !== prevFormSymbol) {
+    setPrevFormSymbol(symbol);
     if (symbol) {
       setFormSymbol(symbol);
       setSide("buy");
     }
-  }, [symbol]);
+  }
   // 成交价默认现价（录入默认值，可改——改过的才是实际成交价）
-  useEffect(() => {
+  const [prevCp, setPrevCp] = useState<number | null | undefined>(undefined);
+  if (currentPrice !== prevCp) {
+    setPrevCp(currentPrice);
     if (currentPrice != null && currentPrice > 0) setPrice((p) => p || String(+currentPrice.toFixed(3)));
-  }, [currentPrice]);
+  }
 
 
   async function submitTrade() {

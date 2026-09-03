@@ -6,6 +6,7 @@ import { Panel } from "@/components/panel";
 import { getLonghu } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
 import { workbenchUrlWithBack } from "@/lib/routing";
+import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import type { LongHuRecord } from "@/types/market";
 
 /** 盘面页 · 龙虎榜 tab（原 /longhu 页迁移，2026-09-01 系统重构）。 */
@@ -50,9 +51,7 @@ export function LonghuTab() {
     }
   }, []);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  usePollingFetch(load, null);
 
   // 数据源返回的是原序（实测既非升序也非降序），这里显式排序，别让表格标题说谎。
   // 排序口径：日榜(1) 优先于三日榜(3)——两者是不同统计区间的累计值，金额不可直接比大小；

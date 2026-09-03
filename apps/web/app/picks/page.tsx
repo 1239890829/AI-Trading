@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { workbenchUrlWithBack } from "@/lib/routing";
+import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import {
   generatePickReview,
   generatePicks,
@@ -79,9 +80,7 @@ function PicksInner() {
     }
   }, []);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  usePollingFetch(load, null);
 
   async function runGenerate() {
     setBusy(true);

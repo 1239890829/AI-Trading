@@ -24,10 +24,15 @@ const CATEGORY_LABEL: Record<string, string> = {
  */
 export function StockEventsRow({ symbol }: { symbol: string }) {
   const [events, setEvents] = useState<EventSummary[] | null>(null);
+  // 切股先清空（渲染期 adjust-state：symbol 变化即重置，防上一只事件残留一帧）
+  const [prevSymbol, setPrevSymbol] = useState<string | null>(null);
+  if (symbol !== prevSymbol) {
+    setPrevSymbol(symbol);
+    setEvents(null);
+  }
 
   useEffect(() => {
     let alive = true;
-    setEvents(null);
     getEventsForSymbol(symbol)
       .then((r) => alive && setEvents(r.items))
       .catch(() => alive && setEvents([]));
