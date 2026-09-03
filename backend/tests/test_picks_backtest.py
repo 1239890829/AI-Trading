@@ -19,6 +19,8 @@ import asyncio
 from dataclasses import dataclass
 from datetime import date
 
+import pytest
+
 from app.picks import backtest as bt
 
 
@@ -270,6 +272,59 @@ def test_run_grid_missing_vr_uses_degraded_confirm():
     rows = bt.run_grid([_sample(5.0, 3.0, vr=None)], pct_grid=(2.5,), vr_grid=(2.0,))
     assert rows[0]["triggered"]["n"] == 1
     assert rows[0]["excess"] == 0.0  # 全样本只有它自己 → 超额 0
+
+
+# ---------------------------------------------------------------- 等权净值视角
+
+
+def test_curve_stats_known_answers():
+    """已知答案锚定：[+10%, −10%] → equity [1, 1.1, 0.99]。
+
+    total = −1%；mdd = 1 − 0.99/1.1 = 10%；年化为负且 mdd>0 → calmar<0。
+    sharpe 依赖「每笔≈一日」年化假设，只验键不硬断言数值。
+    """
+    c = bt._curve_stats([10.0, -10.0])
+    assert set(c) == {"total_return", "max_drawdown", "sharpe", "calmar"}
+    assert c["total_return"] == pytest.approx(-0.01, abs=1e-9)
+    assert c["max_drawdown"] == pytest.approx(0.10, abs=1e-9)
+    assert c["calmar"] < 0
+
+
+def test_curve_stats_needs_two_samples():
+    """样本 <2 不产曲线（绝不硬凑）——空与单样本都是 None。"""
+    assert bt._curve_stats([]) is None
+    assert bt._curve_stats([5.0]) is None
+
+
+def test_run_grid_rows_carry_curve():
+    """网格行携带 curve：触发 ≥2 笔可算，<2 笔为 None；旧键不受影响。"""
+    samples = [
+        _sample(2.0, 3.0),  # fwd 2.0，全过 → 所有组合触发
+        _sample(-1.0, 1.2, vr=1.4),  # 只 (1.0, 1.3) 触发
+        _sample(0.0, 2.6, vr=1.6),  # pct/vr 过 1.3/1.5 线
+    ]
+    rows = bt.run_grid(samples)
+    r11 = next(r for r in rows if r["pct_thr"] == 1.0 and r["vr_thr"] == 1.3)
+    assert r11["triggered"]["n"] == 3  # 触发 fwd 序列 [2, -1, 0]
+    assert r11["curve"] is not None
+    # 等权乘积：1.02 × 0.99 × 1.00 − 1 = 0.0098
+    assert r11["curve"]["total_return"] == pytest.approx(0.0098, abs=1e-9)
+    assert r11["curve"]["max_drawdown"] == pytest.approx(0.01, abs=1e-9)
+    r22 = next(r for r in rows if r["pct_thr"] == 2.0 and r["vr_thr"] == 2.0)
+    assert r22["triggered"]["n"] == 1
+    assert r22["curve"] is None  # 单笔不产曲线
+
+
+def test_format_report_grid_table_has_curve_column():
+    """报告网格表带「净值回撤」列与等权口径声明；样本不足处显示占位符。"""
+    samples = [_sample(2.0, 3.0), _sample(-1.0, 1.2, vr=1.4)]
+    rows = bt.run_grid(samples)
+    stats = {"days": 130, "unmatched": 0, "no_board_bars": 0, "promo_cover": 0}
+    report = bt.format_report(rows, samples, stats, window=("2026-01-01", "2026-06-30"))
+    assert "净值回撤" in report
+    assert "等权逐笔近似口径" in report
+    # 触发 <2 笔的组合（本例 12 组里多数只触发 1 笔）回撤列显示占位符
+    assert "| — |" in report
 
 
 def test_best_combo_requires_min_triggered():

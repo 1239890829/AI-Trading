@@ -26,6 +26,14 @@
   非臆造）；缺字段 → unknown 三态。
 - 板块涨幅/量比（turnover 比）/前瞻收益：ths 官方板块日 K
   （`theme_catalog_service.parse_board_bars` 已解析 open/turnover）。
+
+## 范式边界（与 app/market/performance.py 的关系）
+
+本模块是**事件研究范式**（逐样本独立前瞻收益 + 网格对比），不是净值曲线范式：
+无成对交易、无组合净值，28 项绩效指标里的交易类/配对类**不适用**。
+唯一接入点是 `_curve_stats`：把每组阈值的触发样本 fwd 按时间序拼成
+**等权逐笔净值近似曲线**，只取曲线类 4 项（total/mdd/sharpe/calmar），
+口径限制见该函数 docstring——样本 <2 不产曲线，绝不硬凑。
 """
 from __future__ import annotations
 
@@ -33,6 +41,7 @@ import asyncio
 import logging
 from datetime import date
 
+from app.market.performance import compute_performance
 from app.picks.intraday_rules import confirm_signal, is_performance_tag
 from app.sentiment.calibration import percentile_of
 from app.services.theme_service import parse_theme_tags
@@ -283,6 +292,35 @@ def _stats_of(fwds: list[float]) -> dict:
     }
 
 
+def _curve_stats(fwds: list[float]) -> dict | None:
+    """触发样本的等权净值视角（近似口径，样本 <2 → None，绝不硬凑）。
+
+    逐笔全仓乘积：equity[k+1] = equity[k] × (1 + fwd/100)，样本保持
+    build_samples 装配的时间序。只复用 performance.compute_performance 的
+    曲线类口径，取 4 项：
+
+    - total_return / max_drawdown：不受年化假设影响，组间可直接比较；
+    - sharpe / calmar：逐笔序列按「每笔≈一日」年化（实际持有 3 交易日），
+      **仅用于组间横向对比**，不做绝对水平解读——报告须随附此口径声明。
+
+    口径边界（为什么是"近似"）：①无并发仓位约束——同日多题材触发视为
+    逐笔独立全仓，名义仓位可超 100%；②无真实成对交易 → 交易类指标
+    （win_rate/profit_factor 等）一律不透出，防伪精度。fwd 单位为 %。
+    """
+    if len(fwds) < 2:
+        return None
+    equity = [1.0]
+    for r in fwds:
+        equity.append(equity[-1] * (1.0 + r / 100.0))
+    perf = compute_performance(equity, None)
+    return {
+        "total_return": perf["total_return"],
+        "max_drawdown": perf["max_drawdown"],
+        "sharpe": perf["sharpe"],
+        "calmar": perf["calmar"],
+    }
+
+
 def evaluate_sample(sample: dict, *, pct_thr: float, vr_thr: float) -> bool:
     """单样本按网格阈值跑确认规则（同一份 confirm_signal 代码）。"""
     c = confirm_signal(
@@ -310,14 +348,16 @@ def run_grid(
             untrig = [
                 s["fwd"] for s in with_fwd if not evaluate_sample(s, pct_thr=p, vr_thr=v)
             ]
+            t_s, b_s = _stats_of(trig), _stats_of(all_fwds)
             rows.append({
                 "pct_thr": p,
                 "vr_thr": v,
-                "triggered": _stats_of(trig),
+                "triggered": t_s,
                 "untriggered": _stats_of(untrig),
-                "baseline_all": _stats_of(all_fwds),
+                "baseline_all": b_s,
+                "curve": _curve_stats(trig),
                 "excess": (
-                    round(_stats_of(trig)["mean"] - _stats_of(all_fwds)["mean"], 2)
+                    round(t_s["mean"] - b_s["mean"], 2)
                     if trig and all_fwds else None
                 ),
             })
@@ -339,21 +379,24 @@ def best_combo(rows: list[dict]) -> dict | None:
 
 
 def _grid_table(rows: list[dict]) -> list[str]:
-    """网格表 markdown 行（含表头）。"""
+    """网格表 markdown 行（含表头）。净值回撤列：等权净值视角的近似口径。"""
     out = [
-        "| 涨幅线 | 量比线 | 触发数 | 触发胜率 | 触发均值% | 未触发均值% | 全样本均值% | 超额% |",
-        "|---|---|---|---|---|---|---|---|",
+        "| 涨幅线 | 量比线 | 触发数 | 触发胜率 | 触发均值% | 未触发均值% | 全样本均值% | 超额% | 净值回撤 |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for r in rows:
         t, u, b = r["triggered"], r["untriggered"], r["baseline_all"]
         wr = "—" if t["win_rate"] is None else f"{t['win_rate']:.1%}"
+        curve = r.get("curve")
+        mdd = "—" if not curve else f"{curve['max_drawdown']:.1%}"
         out.append(
             f"| {r['pct_thr']} | {r['vr_thr']} | {t['n']} "
             f"| {wr} "
             f"| {'—' if t['mean'] is None else t['mean']} "
             f"| {'—' if u['mean'] is None else u['mean']} "
             f"| {'—' if b['mean'] is None else b['mean']} "
-            f"| {'—' if r['excess'] is None else r['excess']} |"
+            f"| {'—' if r['excess'] is None else r['excess']} "
+            f"| {mdd} |"
         )
     return out
 
@@ -435,6 +478,8 @@ def format_report(
         f"- 样本 {len(samples)} 条 / {stats['days']} 交易日"
         + ("（满足 ≥120 交易日协议）" if stats["days"] >= 120 else "（**不足 120 交易日协议**，结果仅供参考）"),
         "- 每组阈值同时呈现触发与未触发基线；超额 = 触发均值 − 全样本均值",
+        "- 净值回撤列为等权逐笔近似口径（触发样本按时间序逐笔全仓乘积，"
+        "无并发仓位约束；回撤可直接比较，sharpe/calmar 仅用于组间横向对比）",
         "- 报告不自动回写常量",
         "- 各执行口径使用同一份 confirm 规则与同一样本集，仅买入执行方式不同",
         "",

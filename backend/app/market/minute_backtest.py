@@ -13,6 +13,16 @@ minute_backfill.py 模块头注）。60 日 1 分钟需 miniQMT/掘金升级后�
 
 输出：JSON 报告落 data/review/backtest/，含命中率、三分类分布、
 按方向拆分、指标触发分布、错误归因主因分布、样本内外对比。
+
+## 范式边界（为什么不用 app/market/performance.py 的 28 项指标）
+
+本运行器是**信号质量评估范式**（窗口三分类 correct/wrong/invalid/expired +
+命中率 + 归因），不是净值曲线范式。`optimal_spread_pct` 用了窗口内事后
+best/worst 价（实盘 T 时点拿不到），据此构建净值曲线属于臆造——**禁止**
+把本模块输出接入 compute_performance 或伪造成对交易。策略级指标
+（回撤/夏普/卡玛等）的统一口径只在有真实净值曲线的回测里使用：
+日线引擎 / Walk-Forward / picks 网格的等权净值近似视角（口径见
+app/picks/backtest.py `_curve_stats`）。
 """
 
 from __future__ import annotations
