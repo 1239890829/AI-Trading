@@ -88,6 +88,47 @@ def test_price_outside_range_is_invalid():
     assert "price_above_high" in q.quality_reasons
 
 
+# ---- 开盘「未建立」形态（2026-09-03：刷新后短暂"非法"的根因修复）----
+# 盘前形态（价格=昨收、high/low=0）不会在 9:30:00 瞬间消失——开盘头几拍
+# in_trading_window 已 True 而源形态未切换，把 0 当越界依据曾全部误判 invalid。
+
+
+def test_live_unset_high_low_not_invalid():
+    """盘中收到 high/low=0 的未建立形态 → 不判 invalid，降为 low 留痕。"""
+    q = validate_quote(
+        make_quote(price=3986.1, prev_close=3986.1, high=0.0, low=0.0, change_pct=0.0), live=True
+    )
+    assert q.quality is not Quality.invalid
+    assert "price_above_high" not in q.quality_reasons
+    assert "unset_high_low" in q.quality_reasons
+
+
+def test_live_half_unset_bounds_not_invalid():
+    """只有一档为 0（半未建立）也不判 high_below_low / price_below_low。"""
+    q = validate_quote(make_quote(high=0.0, low=9.5), live=True)
+    assert q.quality is not Quality.invalid
+    assert "high_below_low" not in q.quality_reasons
+    q2 = validate_quote(make_quote(high=10.5, low=0.0), live=True)
+    assert q2.quality is not Quality.invalid
+
+
+def test_live_real_range_violation_still_invalid():
+    """真实越界（高低价均 >0）判 invalid 的语义保持不变。"""
+    q = validate_quote(make_quote(price=11.0, high=10.5, low=9.8), live=True)
+    assert q.quality is Quality.invalid
+    assert "price_above_high" in q.quality_reasons
+    q2 = validate_quote(make_quote(high=9.0, low=9.5), live=True)
+    assert q2.quality is Quality.invalid
+    assert "high_below_low" in q2.quality_reasons
+
+
+def test_live_bounds_both_missing_no_reason():
+    """源完全不提供 high/low（None）维持原行为：不罚分、不留痕。"""
+    q = validate_quote(make_quote(high=None, low=None), live=True)
+    assert q.quality is Quality.high
+    assert q.quality_reasons == []
+
+
 def test_future_timestamp_is_invalid():
     future = datetime.now(timezone.utc) + timedelta(minutes=10)
     q = validate_quote(make_quote(data_timestamp=future))

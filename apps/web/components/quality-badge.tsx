@@ -25,6 +25,7 @@ const REASON_LABELS: Record<string, string> = {
   negative_volume: "成交量为负",
   negative_amount: "成交额为负",
   invalid_symbol: "代码非法",
+  unset_high_low: "最高/最低未建立（开盘初源形态，降级观察）",
   empty_order_book: "盘口为空",
 };
 

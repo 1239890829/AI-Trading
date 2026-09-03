@@ -72,12 +72,20 @@ def validate_quote(new: Quote, prev: Quote | None = None, *, live: bool | None =
         elif new.price <= 0:
             _add(reasons, invalid, "non_positive_price", True)
 
-        if new.high is not None and new.low is not None and new.high < new.low:
+        # 0 值 = 「未建立」而非「越界」：开盘头几拍源仍返回盘前形态（价格=昨收、
+        # high/low=0），而 9:30 窗口已开——把 0 当越界依据会把这几拍全部误判
+        # invalid"非法"（2026-09-03 用户反馈刷新后短暂显示非法的根因）。
+        # 降为 low 留痕（不上界面徽标），下一拍形态切换后自动恢复。
+        high_set = new.high is not None and new.high > 0
+        low_set = new.low is not None and new.low > 0
+        if high_set and low_set and new.high < new.low:
             _add(reasons, invalid, "high_below_low", True)
-        if new.price is not None and new.high is not None and new.price > new.high:
+        if new.price is not None and high_set and new.price > new.high:
             _add(reasons, invalid, "price_above_high", True)
-        if new.price is not None and new.low is not None and new.price < new.low:
+        if new.price is not None and low_set and new.price < new.low:
             _add(reasons, invalid, "price_below_low", True)
+        if new.price is not None and new.price > 0 and (new.high is not None or new.low is not None) and not (high_set and low_set):
+            reasons.append("unset_high_low")
 
         if (
             new.price is not None
