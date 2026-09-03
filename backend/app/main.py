@@ -67,6 +67,45 @@ _REGISTERED_MODELS = (
 logging.basicConfig(level=settings.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
 
+# lifespan 关闭时给每个后台任务的收尾宽限（秒）。
+_SHUTDOWN_GRACE_SECONDS = 10.0
+
+
+async def _wait_quit(task: asyncio.Task, timeout: float) -> bool:
+    """等任务在 timeout 内结束。True=已结束（正常返回/自行抛错/被取消都算）。"""
+    try:
+        # shield：超时只取消"等待"本身，任务留给调用方决定 cancel 时机——
+        # 避免与"任务早已被 cancel 过"的路径产生隐式取消语义纠缠
+        await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        return True
+    except TimeoutError:
+        return False
+    except asyncio.CancelledError:
+        return True
+    except Exception:
+        return True
+
+
+async def _reap(task: asyncio.Task | None, *, name: str, grace: float = _SHUTDOWN_GRACE_SECONDS) -> None:
+    """停机收割：先给 grace 秒自然退出，超时转 cancel 再收割；异常一律吞掉。
+
+    为什么不能裸 `await task`：cancel()/stop.set() 都打不断 in-flight 的
+    await——调度器 tick 一旦卡在无超时边界的调用上，lifespan 关闭就被单个
+    任务整体挂死。而 TestClient.__exit__ 的语义是"等 lifespan 完全结束"，
+    全量 pytest 因此在首个用例（test_alerts，字母序最先）整场卡死
+    （2026-09-03 两连复现，faulthandler 栈转储实证卡点 wait_shutdown；
+    tests/conftest.py 同日已把测试环境调度器全关，这里是生产侧兜底：
+    任何单任务不得拖死关机）。cancel 后仍杀不掉（sync 调用里僵死）就
+    放弃等待——悬挂任务会在循环关闭时打 "Task was destroyed"，但不阻塞关机。
+    """
+    if task is None or task.done():
+        return
+    if not await _wait_quit(task, grace):
+        log.warning("lifespan shutdown: %s 超过 %.0fs 未退出，强制 cancel", name, grace)
+        task.cancel()
+        if not await _wait_quit(task, grace):
+            log.error("lifespan shutdown: %s cancel 后 %.0fs 仍未退出，放弃等待", name, grace)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -344,6 +383,7 @@ async def lifespan(app: FastAPI):
     except Exception:
         log.exception("initial refresh failed; serving stale/empty until next cycle")
     yield
+    # --- 停机：先发信号（cancel + stop），再限时收割（任何单任务不得拖死关机）---
     poller.cancel()
     snapshotter.cancel()
     matcher.cancel()
@@ -363,36 +403,23 @@ async def lifespan(app: FastAPI):
         review_intraday_stop.set()
     if review_task is not None:
         review_stop.set()
-    with contextlib.suppress(asyncio.CancelledError):
-        await poller
-    with contextlib.suppress(asyncio.CancelledError):
-        await snapshotter
-    with contextlib.suppress(asyncio.CancelledError):
-        await matcher
-    with contextlib.suppress(asyncio.CancelledError):
-        await alert_feeder
-    with contextlib.suppress(asyncio.CancelledError):
-        await risk_task
-    if review_task is not None:
-        with contextlib.suppress(asyncio.CancelledError):
-            await review_task
-    if premarket_task is not None:
-        with contextlib.suppress(asyncio.CancelledError):
-            await premarket_task
-    if watcher_task is not None:
-        with contextlib.suppress(asyncio.CancelledError):
-            await watcher_task
-    if review_intraday_task is not None:
-        with contextlib.suppress(asyncio.CancelledError):
-            await review_intraday_task
-    if ths_sentinel_task is not None:
-        with contextlib.suppress(asyncio.CancelledError):
-            await ths_sentinel_task
-    with contextlib.suppress(Exception):
-        await provider.aclose()
+    await _reap(poller, name="quote-poller")
+    await _reap(snapshotter, name="market-snapshot")
+    await _reap(matcher, name="paper-matcher")
+    await _reap(alert_feeder, name="alert-quotes-feeder")
+    await _reap(risk_task, name="risk-refresher")
+    await _reap(event_task, name="event-collector")
+    await _reap(metric_task, name="metric-history-backfill")
+    await _reap(review_task, name="review-scheduler")
+    await _reap(premarket_task, name="premarket-brief")
+    await _reap(watcher_task, name="picks-watcher")
+    await _reap(review_intraday_task, name="picks-intraday-review")
+    await _reap(ths_sentinel_task, name="ths-reason-sentinel")
+    with contextlib.suppress(Exception, TimeoutError):
+        await asyncio.wait_for(provider.aclose(), timeout=_SHUTDOWN_GRACE_SECONDS)
     if app.state.theme_catalog is not None:
-        with contextlib.suppress(Exception):
-            await app.state.theme_catalog.aclose()
+        with contextlib.suppress(Exception, TimeoutError):
+            await asyncio.wait_for(app.state.theme_catalog.aclose(), timeout=_SHUTDOWN_GRACE_SECONDS)
 
 
 app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
