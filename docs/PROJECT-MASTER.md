@@ -315,7 +315,7 @@ ashare-ai-trader/
 | 6 模拟交易与回测 | 撮合引擎(T+1/涨跌停/费用/挂单) + 交易页签 + K线B/S点与持仓成本线 + 重置账户 + 日线回测引擎(代码级防泄露+双策略+净值曲线页) + 历史回放 + 分钟级 TDX 底座(2年) | ✅ |
 | 7 AI 系统 | 盘后复盘 Agent + 新题材预判 + 新闻摘要 v1（规则层）+ **LLM 接入层代码就绪**（LLMAnalyzer/LLMSummarizer + 共享客户端 + 路由降级，2026-09-02） | 🔶；余：LLM 凭据（填 `.env` 即用）、四角色编排、MCP 封装 |
 | 8 通知与部署 | 预警规则/触发/通知通道抽象/管理页(api-sweep) + 同源反代 + **飞书通道**（feishu notifier + `configured` 诚实展示，2026-09-02） | 🔶；余：webhook 凭据、Docker 生产化、监控（阻塞于部署决策） |
-| 9 联动系统 | 统一路由 lib/routing.ts（URL 唯一真相源）/ 题材⇄个股双向联动（归属 chips+focus 聚焦）/ 官方板块 K 线交叉验证 / 事件驱动面板 + 个股相关事件行 | 🔶 核心闭环 ✅；余切片 E 跳转（P2） |
+| 9 联动系统 | 统一路由 lib/routing.ts（URL 唯一真相源）/ 题材⇄个股双向联动（归属 chips+focus 聚焦）/ 官方板块 K 线交叉验证 / 事件驱动面板 + 个股相关事件行 | ✅ 全部完成（切片 E 2026-09-03：L7/L8/L10 跳转 + themesUrl） |
 
 > 明细账本：`docs/retro-and-gaps.md`；阶段复盘与跨计划依赖：`docs/plan-review.md`。
 

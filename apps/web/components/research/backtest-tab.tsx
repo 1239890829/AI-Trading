@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import {
   createChart,
   IChartApi,
@@ -16,6 +17,7 @@ import {
   type BacktestPayload,
   type StrategyInfo,
 } from "@/lib/api";
+import { workbenchUrl } from "@/lib/routing";
 
 /** 研究页 · 回测 tab（原 /backtest 页迁移，2026-09-01 系统重构）。
  * 日线策略回测（Phase 6 后半）：TDX QFQ 日K + 代码级防泄露引擎。
@@ -216,7 +218,16 @@ export function BacktestTab() {
           </button>
           {data && (
             <span className="ml-auto tabular-nums text-zinc-400">
-              {data.symbol} · {data.bars_count} 根 · {data.trades.filter((t) => t.ok).length} 笔成交
+              {/* L8（切片 E）：回测标的可点进详情，回测完顺手看行情 */}
+              <Link
+                href={workbenchUrl(data.symbol)}
+                className="hover:text-zinc-600 underline decoration-dotted underline-offset-2 dark:hover:text-zinc-200"
+                title="查看该标的行情详情（工作台）"
+              >
+                {data.symbol}
+              </Link>
+              {" · "}
+              {data.bars_count} 根 · {data.trades.filter((t) => t.ok).length} 笔成交
             </span>
           )}
         </div>

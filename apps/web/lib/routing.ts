@@ -46,6 +46,16 @@ export function originLabel(from: string | null): string | null {
 export const LAST_SYMBOL_KEY = "ashare.workbench.lastSymbol";
 
 /**
+ * 题材页地址（盘面页题材梯队 tab；原 /themes 页 2026-09-01 迁入，
+ * /themes 经 next.config.ts 重定向兼容）。focus 传题材名 → 聚焦单题材——
+ * L4 详情题材 chips / L9 事件方向 chip / L10 题材机会卡共用本构造器，不裸拼。
+ */
+export function themesUrl(focus?: string): string {
+  if (!focus) return "/tape?tab=themes";
+  return `/tape?tab=themes&focus=${encodeURIComponent(focus)}`;
+}
+
+/**
  * 解析 /stock/ 中转页的跳转目标。
  * 路径参数（/stock/600103）优先，查询参数（/stock?symbol=600103）兼容保留；
  * 容错剥掉市场前后缀（600105.SH、SH600105 → 600105）；无法解析返回 null。

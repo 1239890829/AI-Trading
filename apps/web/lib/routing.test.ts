@@ -1,9 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { stockRedirectTarget, workbenchUrl } from "./routing";
+import { stockRedirectTarget, themesUrl, workbenchUrl } from "./routing";
 
 describe("workbenchUrl", () => {
   it("拼出带 symbol 的详情地址", () => {
     expect(workbenchUrl("600105")).toBe("/workbench?symbol=600105");
+  });
+});
+
+describe("themesUrl（切片 E：L4/L9/L10 题材跳转统一构造器）", () => {
+  it("无 focus 时是题材 tab 首页（原 /themes 页迁入盘面页后的真实路由）", () => {
+    expect(themesUrl()).toBe("/tape?tab=themes");
+    expect(themesUrl(undefined)).toBe("/tape?tab=themes");
+    expect(themesUrl("")).toBe("/tape?tab=themes");
+  });
+
+  it("focus 聚焦单题材并 encodeURIComponent（与 event-panel 先例 href 一致）", () => {
+    expect(themesUrl("存储芯片")).toBe(
+      "/tape?tab=themes&focus=%E5%AD%98%E5%82%A8%E8%8A%AF%E7%89%87",
+    );
   });
 });
 

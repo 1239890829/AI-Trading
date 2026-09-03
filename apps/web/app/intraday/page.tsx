@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   generateMorningBrief,
@@ -20,7 +21,7 @@ import {
   type OpportunityTheme,
   type WatcherState,
 } from "@/lib/api";
-import { workbenchUrlWithBack } from "@/lib/routing";
+import { workbenchUrlWithBack, themesUrl } from "@/lib/routing";
 import { pctColor, pctText, timeText } from "@/lib/format";
 
 /**
@@ -126,25 +127,35 @@ function ThemeCardView({
   const stage = t.stage ?? "未知";
   return (
     <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
-      <button onClick={onToggle} className="flex w-full flex-wrap items-center gap-2 text-left">
-        <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">{t.theme}</span>
-        <span className={`rounded px-1.5 py-0.5 text-[10px] ${STAGE_TONE[stage] ?? "bg-zinc-500/10 text-zinc-500"}`} title={(t.stage_basis || []).join("；")}>
-          {stage}
-        </span>
-        <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400" title={t.tier_basis ?? ""}>
-          {t.strength_tier ?? "—"}
-        </span>
-        {t.strength_score != null && (
-          <span className="font-mono tabular-nums text-zinc-400" title={`题材强度 ${t.strength_score}`}>
-            {t.strength_score} 分
+      {/* L10（切片 E）：题材页 ↗ 与展开按钮同级（button 内不能嵌 a），点题材名仍是展开/收起 */}
+      <div className="flex w-full items-center gap-2">
+        <button onClick={onToggle} className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-left">
+          <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">{t.theme}</span>
+          <span className={`rounded px-1.5 py-0.5 text-[10px] ${STAGE_TONE[stage] ?? "bg-zinc-500/10 text-zinc-500"}`} title={(t.stage_basis || []).join("；")}>
+            {stage}
           </span>
-        )}
-        <span className="text-[11px] text-zinc-400" title={`梯队：最高 ${t.max_boards ?? "?"} 板，涨停 ${t.limit_up_count ?? "?"} 家${t.has_succession ? "，梯队有接续" : ""}`}>
-          {t.max_boards ?? "?"} 板 · {t.limit_up_count ?? "?"} 家涨停
-          {t.has_succession === false && " · 梯队断层"}
-        </span>
-        <span className="ml-auto text-zinc-400">{expanded ? "收起 ▲" : `${t.stocks.length} 只候选 ▼`}</span>
-      </button>
+          <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400" title={t.tier_basis ?? ""}>
+            {t.strength_tier ?? "—"}
+          </span>
+          {t.strength_score != null && (
+            <span className="font-mono tabular-nums text-zinc-400" title={`题材强度 ${t.strength_score}`}>
+              {t.strength_score} 分
+            </span>
+          )}
+          <span className="text-[11px] text-zinc-400" title={`梯队：最高 ${t.max_boards ?? "?"} 板，涨停 ${t.limit_up_count ?? "?"} 家${t.has_succession ? "，梯队有接续" : ""}`}>
+            {t.max_boards ?? "?"} 板 · {t.limit_up_count ?? "?"} 家涨停
+            {t.has_succession === false && " · 梯队断层"}
+          </span>
+          <span className="ml-auto text-zinc-400">{expanded ? "收起 ▲" : `${t.stocks.length} 只候选 ▼`}</span>
+        </button>
+        <Link
+          href={themesUrl(t.theme)}
+          className="shrink-0 rounded border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-400 transition-colors hover:border-zinc-300 hover:text-zinc-700 dark:border-zinc-700 dark:hover:border-zinc-600 dark:hover:text-zinc-200"
+          title="打开题材梯队看板（盘面页 · 题材梯队 tab），聚焦该题材"
+        >
+          题材页 ↗
+        </Link>
+      </div>
       {t.risks.length > 0 && !expanded && (
         <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-300" title={t.risks.join("；")}>
           ⚠ {t.risks[0]}
