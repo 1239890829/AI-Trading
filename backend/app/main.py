@@ -377,6 +377,16 @@ async def lifespan(app: FastAPI):
 
         ths_sentinel_task = asyncio.create_task(sentinel_loop(app, stop=ths_sentinel_stop), name="ths-reason-sentinel")
 
+    # --- 盘中情绪监控（sentiment P2 #14）：高度板炸板/炸板率破位/指数急杀 → 告警 ---
+    sentiment_monitor_stop = asyncio.Event()
+    sentiment_monitor_task = None
+    if settings.sentiment_monitor_enabled:
+        from app.sentiment.intraday_monitor import sentiment_monitor_loop
+
+        sentiment_monitor_task = asyncio.create_task(
+            sentiment_monitor_loop(app, stop=sentiment_monitor_stop), name="sentiment-monitor"
+        )
+
     # --- marketdb 盘后增量同步（RPS/tech_score 数据地基；子进程隔离 + 磁盘幂等）---
     marketdb_stop = asyncio.Event()
     marketdb_task = None
@@ -418,6 +428,8 @@ async def lifespan(app: FastAPI):
         watcher_stop.set()
     if ths_sentinel_task is not None:
         ths_sentinel_stop.set()
+    if sentiment_monitor_task is not None:
+        sentiment_monitor_stop.set()
     if review_intraday_task is not None:
         review_intraday_stop.set()
     if review_task is not None:
@@ -436,6 +448,7 @@ async def lifespan(app: FastAPI):
     await _reap(watcher_task, name="picks-watcher")
     await _reap(review_intraday_task, name="picks-intraday-review")
     await _reap(ths_sentinel_task, name="ths-reason-sentinel")
+    await _reap(sentiment_monitor_task, name="sentiment-monitor")
     await _reap(marketdb_task, name="marketdb-sync")
     with contextlib.suppress(Exception, TimeoutError):
         await asyncio.wait_for(provider.aclose(), timeout=_SHUTDOWN_GRACE_SECONDS)

@@ -57,6 +57,9 @@ async def system_providers(request: Request, hub: QuoteHub = Depends(get_hub)) -
     # ths 涨停原因单点哨兵（P0-B）：无实例 = 未启用/未到首拍
     sent = getattr(request.app.state, "ths_sentinel", None)
     payload["ths_reason_sentinel"] = sent.snapshot() if sent is not None else {"state": "not_started"}
+    # 盘中情绪监控（sentiment P2 #14）：无实例 = 未启用/未到首拍
+    mon = getattr(request.app.state, "sentiment_monitor", None)
+    payload["sentiment_monitor"] = mon.snapshot() if mon is not None else {"state": "not_started"}
     return payload
 
 

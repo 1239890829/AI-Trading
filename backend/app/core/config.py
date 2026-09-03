@@ -90,6 +90,14 @@ class Settings(BaseSettings):
     ths_sentinel_enabled: bool = True
     ths_sentinel_interval_seconds: float = 900.0
 
+    # ---- 盘中情绪监控（sentiment P2 #14，参考 daben-review）----
+    # 交易时段周期探测三类纯规则 P0 事件：高度板(≥4板)炸板 / 炸板率连续破
+    # 40% / 指数 15min 急杀（上证-0.8%/创业板-1.2%）→ AlertEvent 告警；
+    # 通道 in_app/log/feishu（webhook 未配置时 feishu 显式跳过）
+    sentiment_monitor_enabled: bool = True
+    sentiment_monitor_interval_seconds: float = 60.0
+    sentiment_monitor_channels: str = "in_app,log,feishu"
+
     # ---- marketdb 盘后增量同步（调研采纳第 4 批运维收尾）----
     # marketdb（DuckDB 日K 仓）是 RPS / tech_score v3 第 8 维的数据地基。
     # 开启后每日盘后自动跑 scripts/sync_marketdb.py（近 10 交易日增量 +

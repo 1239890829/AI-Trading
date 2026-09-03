@@ -31,7 +31,7 @@ cd apps/web && npm run dev                        # http://localhost:3000/workbe
 # 测试与门禁（每次改动全部跑，全绿才算完；当前基线：后端 580 / 前端 97）
 cd backend && .venv/bin/pytest                    # 后端全量用例（规模见 §2 快照）
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
-cd apps/web && npx eslint .                       # 0 error（24 warn 是挂账项，见 eslint.config.mjs 注释）
+cd apps/web && npx eslint .                       # 0 error / ≤1 warn（set-state-in-effect 已清零 a155d49，余 1 条既有 exhaustive-deps）
 cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端全量用例（规模见 §2 快照）
 cd backend && .venv/bin/python -m pyflakes app tests            # 0
 # 生产构建前必须先停 dev server（.next 冲突已踩两次）：
@@ -61,6 +61,11 @@ P0 K线三源+熔断+回放限流（`e77971f`）→ 事件采集调度+消息面
 题材 chips 涨跌幅排序（`7ab289b`）→ 时段感知质量判定+P0 撞码修复（`ab2ddba`/`d607756`）→
 市场页一屏化+事件契约简化（`52662dc`/`b893819`）→ 待办清零+六项拍板执行：
 screener 彻底删除、消融验证启动（`07f29a7`/`c38cb05`）。
+**09-03 ~ 09-04 已完成**（明细见 retro-and-gaps.md §五增量账）：联动切片 E/G 全勾账 → 工作台刷新「非法」瞬态修复
+（validator `unset_high_low`）→ ESLint set-state-in-effect 26→0（`use-polling-fetch` + 渲染期 adjust-state）→
+分时图纵轴按板块限制动态设置（涨停/跌停线贴边，`lib/price-limit.ts`）→ 自选动态分组（每日精选/盘中跟踪，
+`top_watch_stocks`+`/api/picks/intraday-top`）→ 复盘新增 picks 准确率维度（逐股归因自动触发+失误 findings）→
+盘中情绪监控本体（sentiment P2 #14：高度板炸板/炸板率/指数急杀三类纯规则告警）。
 **唯一在途：消融数据自然积累（约 2026-10 中旬跑 `--days 30 --compare-ablation` 出验收）。**
 
 | 阶段 | 状态 |

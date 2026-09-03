@@ -60,3 +60,21 @@
 - mock 数据永不冒充实盘；数据源失败标 stale 不伪造
 - 撮合规则：T+1/涨跌停拒/整手/费用/停牌拒——不可绕过
 - 技术结论只给偏向+依据，禁止确定性买卖建议
+
+## 五、增量账（2026-09-03 ~ 09-04，保持唯一账本有效性）
+
+| 日期 | 项 | 说明 |
+|---|---|---|
+| 09-03 | ~~联动切片 E（L7/L8/L10 跳转）~~ | ✅ eea9e66：热力图格/回测条/题材卡 → 详情/题材页，全经 `lib/routing.ts`（+`themesUrl`） |
+| 09-03 | 工作台刷新「非法」瞬态修复 | ✅ a9ea71e：开盘「未建立」形态 high/low=0 不再判越界（validator 落 `unset_high_low` 降级），+4 测试；待下个交易日开盘实测 |
+| 09-03 | ~~联动切片 G（剩余 x→详情入口）~~ | ✅ 6ce8d75：市场页指数卡/涨停速览、每日精选卡片/复盘行、复盘 findings 内嵌代码 → `workbenchUrlWithBack` |
+| 09-03 | 盘中 unknown + 自动刷新/状态条 | ✅ 6dee7fe：intraday 60s 轮询 + 全失败警示 + 数据时间行；飞书异动提醒 v1（`picks_watcher_channels` 含 feishu，等 webhook）；WS 连接状态恢复渲染（stock-detail） |
+| 09-03 | ~~ESLint `set-state-in-effect` 26 warn 清零~~ | ✅ a155d49：B 类 11 处收编 `use-polling-fetch`（latest-ref）、A 类 9 处渲染期 adjust-state、C 类 3 处豁免；现仅剩 1 条既有 exhaustive-deps |
+| 09-04 | 分时图纵轴按板块涨跌幅限制 | ✅ ad74262：`lib/price-limit.ts`（主板±10/创业科创±20/北交±30/ST±5/指数回退），涨停/跌停虚线贴边；canvas 像素采样实测三标的 |
+| 09-04 | 自选动态分组（每日精选/盘中跟踪） | ✅ ba3c201：workbench chips 两动态分组（`top_watch_stocks` + `GET /api/picks/intraday-top`），60s 自动更新 |
+| 09-04 | 复盘新增 picks 准确率维度 | ✅ ba3c201：逐股归因自动触发（复盘前置步）+ 准确率/失误逐股 findings/类别占比建议；review-tab 补 findings 渲染（原整层丢失） |
+| 09-04 | ~~sentiment P2 #14 盘中情绪监控本体~~ | ✅（本轮）：`app/sentiment/intraday_monitor.py` 三类纯规则事件 + 告警链 + /api/system/providers 快照，+9 测试；阻塞解除（飞书通道已落地）后完成 |
+| 09-04 | ~~龙虎榜"数据全空"（system-review §六.3）~~ | ✅ 复核排除：实测 `/api/longhu` 59/77 条正常，非代码缺陷 |
+| 09-04 | ~~AGENTS.md "24 warn 挂账" 过时标注~~ | ✅（本轮）：门禁注释与 eslint.config.mjs 注释同步为实际状态 |
+
+**仍开放（触发条件未到）**：P2-4/5 逐笔历史与聚合、P2-6 题材事件树、P2-7 营业部图谱/筹码/解禁/两融/大宗、P2-8 MCP 封装、Docker 部署（等环境）、LLM 凭据、消融验证（2026-10 中旬）。
