@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from app.core.errors import AppError
 from app.market.backtest import (
     STRATEGY_REGISTRY,
+    BacktestConfig,
     build_strategy,
     run_backtest,
 )
@@ -19,6 +20,8 @@ from app.schemas.backtest import (
     BacktestMetrics,
     BacktestPayload,
     BacktestTrade,
+    WalkForwardPayload,
+    WalkForwardWindow,
 )
 from app.schemas.envelope import Envelope
 
@@ -32,6 +35,80 @@ class BacktestRunRequest(BaseModel):
     params: dict | None = None
     bars: int | None = Field(default=None, ge=100, le=500, description="回看日K根数")
     mandate: str | None = Field(default=None, description="mandate 文件名（不含 .yaml）")
+
+
+class WalkForwardRequest(BaseModel):
+    """Walk-Forward 多窗验证请求。
+
+    param_grid 形如 {"fast": [3, 5, 8], "slow": [20, 30]}（笛卡尔积上限 24）。
+    """
+
+    symbol: str
+    strategy_id: str
+    param_grid: dict = Field(default_factory=dict, description="参数网格：字段名→候选值列表")
+    bars: int = Field(default=500, ge=200, le=1000, description="回看日K根数")
+    n_windows: int = Field(default=4, ge=1, le=6)
+    objective: str = Field(default="max_drawdown", description="样本内选参目标")
+    warmup: int = Field(default=30, ge=0, le=60, description="test 段回测预热根数")
+
+
+@router.post("/backtest/walkforward", response_model=Envelope[WalkForwardPayload])
+async def run_walk_forward(req: WalkForwardRequest) -> dict:
+    """Walk-Forward 多窗验证：样本内网格选参 → 样本外验证，防参数过拟合。
+
+    默认目标 max_drawdown（最小化最大回撤，freqtrade MaxDrawDownHyperOptLoss 口径）；
+    OOS 汇总为逐窗 test 子段日收益拼接；参数稳定性（各窗选中分布）一并回报。
+    结果为统计事实，不构成买卖建议。
+    """
+    from app.market.walkforward import walk_forward
+
+    def factory(params: dict):
+        return build_strategy(req.strategy_id, params)
+
+    from app.market.tdx_kline import tdx_daily_bars
+
+    bars = tdx_daily_bars(req.symbol, req.bars)
+    if not bars or len(bars) < 200:
+        raise AppError(
+            f"{req.symbol} 日K数据不足（拿到 {len(bars) if bars else 0} 根，Walk-Forward 至少 200）",
+            code="data_insufficient", status_code=502,
+        )
+    try:
+        report = walk_forward(
+            bars,
+            factory,
+            req.param_grid,
+            BacktestConfig(),
+            strategy_id=req.strategy_id,
+            n_windows=req.n_windows,
+            objective=req.objective,
+            warmup=req.warmup,
+        )
+    except ValueError as exc:
+        raise AppError(str(exc), code="validation_error", status_code=400) from exc
+
+    payload = WalkForwardPayload(
+        symbol=req.symbol,
+        strategy_id=req.strategy_id,
+        objective=req.objective,
+        windows=[
+            WalkForwardWindow(
+                train_len=w.train_len,
+                test_len=w.test_len,
+                test_start_ts=w.test_start_ts,
+                test_end_ts=w.test_end_ts,
+                best_params=w.best_params,
+                objective_train=w.objective_train,
+                train_metrics=w.train_metrics,
+                test_metrics=w.test_metrics,
+            )
+            for w in report.windows
+        ],
+        oos_metrics=report.oos_metrics,
+        param_stability=report.param_stability,
+        notes=report.notes,
+    )
+    return {"data": payload, "meta": {}}
 
 
 @router.post("/backtest/run", response_model=Envelope[BacktestPayload])
@@ -104,6 +181,7 @@ async def run_symbol_backtest(req: BacktestRunRequest) -> dict:
             for t in report.trades
         ],
         config=report.config,
+        metrics_extra=report.extra_metrics,
         notes=report.notes,
     )
     return {"data": payload, "meta": {"applied": r.applied, "mandate": r.mandate}}

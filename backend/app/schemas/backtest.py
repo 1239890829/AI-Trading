@@ -49,5 +49,32 @@ class BacktestPayload(BaseModel):
     metrics: BacktestMetrics
     equity: list[BacktestEquityPoint] = Field(default_factory=list)
     trades: list[BacktestTrade] = Field(default_factory=list)
+    metrics_extra: dict = Field(default_factory=dict)  # performance 28 项全量
+    config: dict = Field(default_factory=dict)
+    notes: list[str] = Field(default_factory=list)
+
+
+class WalkForwardWindow(BaseModel):
+    """单窗摘要：样本内选参 + 样本外验证。"""
+
+    train_len: int
+    test_len: int
+    test_start_ts: str
+    test_end_ts: str
+    best_params: dict
+    objective_train: float
+    train_metrics: dict = Field(default_factory=dict)
+    test_metrics: dict = Field(default_factory=dict)
+
+
+class WalkForwardPayload(BaseModel):
+    """POST /backtest/walkforward 的 data。"""
+
+    symbol: str
+    strategy_id: str
+    objective: str
+    windows: list[WalkForwardWindow] = Field(default_factory=list)
+    oos_metrics: dict = Field(default_factory=dict)
+    param_stability: dict = Field(default_factory=dict)
     config: dict = Field(default_factory=dict)
     notes: list[str] = Field(default_factory=list)

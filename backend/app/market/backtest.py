@@ -14,9 +14,10 @@
 """
 from __future__ import annotations
 
-import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
+
+from app.market.performance import TradePair, compute_performance, pair_trades_ts
 
 # ---------------------------------------------------------------- 数据视图
 
@@ -122,6 +123,8 @@ class BacktestReport:
     profit_loss_ratio: float = 0.0
     in_return: float = 0.0
     out_return: float = 0.0
+    pairs: list[TradePair] = field(default_factory=list)
+    extra_metrics: dict = field(default_factory=dict)  # performance.py 全量 28 项
     config: dict = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
@@ -317,57 +320,15 @@ def _build_report(
     def _ret(seq: list[float]) -> float:
         return seq[-1] / seq[0] - 1 if seq and seq[0] > 0 else 0.0
 
-    total, bench = _ret(equity), _ret(benchmark)
-    years = max(n / 244, 1e-9)
-    annual = (equity[-1] / equity[0]) ** (1 / years) - 1 if equity[0] > 0 else 0.0
-
-    peak = equity[0]
-    mdd, mdd_days, cur_days = 0.0, 0, 0
-    for v in equity:
-        if v >= peak:
-            peak = v
-            cur_days = 0
-        else:
-            cur_days += 1
-            dd = 1 - v / peak
-            if dd > mdd:
-                mdd, mdd_days = dd, cur_days
-
+    bench = _ret(benchmark)
     in_n = max(int(n * cfg.in_ratio), 1)
     in_ret, out_ret = _ret(equity[:in_n]), _ret(equity[in_n - 1 :])
 
-    daily_ret = [equity[i] / equity[i - 1] - 1 for i in range(1, n) if equity[i - 1] > 0]
-    sharpe = sortino = calmar = 0.0
-    if daily_ret:
-        mean = sum(daily_ret) / len(daily_ret)
-        var = sum((r - mean) ** 2 for r in daily_ret) / len(daily_ret)
-        sd = math.sqrt(var)
-        downside = [r for r in daily_ret if r < 0]
-        dsd = math.sqrt(sum(r**2 for r in downside) / len(downside)) if downside else 0.0
-        ann = math.sqrt(244)
-        sharpe = mean / sd * ann if sd > 0 else 0.0
-        sortino = mean / dsd * ann if dsd > 0 else 0.0
-        calmar = annual / mdd if mdd > 0 else 0.0
-
-    # 胜率/盈亏比：按同向成交配对（buy 后最近一次 ok sell）
-    wins, losses, win_amt, loss_amt = 0, 0, 0.0, 0.0
-    open_cost = 0.0
-    for t in trades:
-        if not t.ok:
-            continue
-        if t.side == "buy":
-            open_cost = t.price * t.qty + t.fee
-        else:
-            proceeds = t.price * t.qty - t.fee
-            pnl = proceeds - open_cost
-            if open_cost > 0:
-                if pnl >= 0:
-                    wins += 1
-                    win_amt += pnl
-                else:
-                    losses += 1
-                    loss_amt += -pnl
-            open_cost = 0.0
+    # 曲线类 + 交易类指标统一来自 performance 模块（单一口径来源）；
+    # 报告字段保持原有 round 精度，extra_metrics 为 28 项全量（round 6）
+    ts_index = {ts: i for i, ts in enumerate(equity_ts)}
+    pairs = pair_trades_ts(trades, ts_index)
+    perf = compute_performance(equity, pairs)
 
     notes = [
         "撮合口径：信号收盘产生→次 bar 开盘±滑点；T+1；一字涨停拒买/跌停拒卖；费用全配置化",
@@ -375,25 +336,28 @@ def _build_report(
     ]
     if refused_delisted:
         notes.append(f"数据流结束时仍有持仓，已按最后收盘强制平仓并标记 delisted（×{refused_delisted}）")
+    notes.append("p_value 为每笔收益率均值 t 检验（正态近似，小样本偏乐观）；avg_holding_bars 单位为交易日")
 
     return BacktestReport(
         trades=trades,
         equity_ts=equity_ts,
         equity=equity,
         benchmark=benchmark,
-        total_return=round(total, 4),
+        total_return=round(perf["total_return"], 4),
         benchmark_return=round(bench, 4),
-        excess_return=round(total - bench, 4),
-        annual_return=round(annual, 4),
-        max_drawdown=round(mdd, 4),
-        max_drawdown_days=mdd_days,
-        sharpe=round(sharpe, 3),
-        sortino=round(sortino, 3),
-        calmar=round(calmar, 3),
-        win_rate=round(wins / (wins + losses), 4) if wins + losses else 0.0,
-        profit_loss_ratio=round((win_amt / wins) / (loss_amt / losses), 3) if wins and losses else 0.0,
+        excess_return=round(round(perf["total_return"], 4) - round(bench, 4), 4),
+        annual_return=round(perf["annual_return"], 4),
+        max_drawdown=round(perf["max_drawdown"], 4),
+        max_drawdown_days=int(perf["max_drawdown_days"]),
+        sharpe=round(perf["sharpe"], 3),
+        sortino=round(perf["sortino"], 3),
+        calmar=round(perf["calmar"], 3),
+        win_rate=round(perf["win_rate"], 4),
+        profit_loss_ratio=round(perf["profit_loss_ratio"], 3),
         in_return=round(in_ret, 4),
         out_return=round(out_ret, 4),
+        pairs=pairs,
+        extra_metrics=perf,
         config={
             "initial_cash": cfg.initial_cash,
             "commission_rate": cfg.commission_rate,
