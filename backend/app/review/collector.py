@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import date, datetime, timedelta, timezone
 
@@ -21,6 +22,9 @@ from app.review.schemas import (
     IndexQuote,
     MarketSnapshot,
     OrderRecord,
+    PickEntry,
+    PickReviewEntry,
+    PicksSnapshot,
     PositionRecord,
     TradingSnapshot,
 )
@@ -287,4 +291,97 @@ def collect_trading(
         trade_date=td, account=account, orders=orders, positions=positions,
         realized_pnl=round(realized, 2) if realized is not None else None,
         trade_count=len(orders), gaps=gaps,
+    )
+
+
+# ---------------------------------------------------------------- 每日精选（2026-09-04 新增维度）
+
+
+def collect_picks(session_factory, trade_date: date) -> "PicksSnapshot":
+    """采集每日精选组合与当日逐股归因（同步，走 DB；调用方丢线程池）。
+
+    组合 T-1 生成、T 日持有：取 date ≤ 复盘日的最新一份（绝不取未来组合——
+    那是还没开始的持有期，对照它就是把计划当结果）。逐股归因行
+    （daily_pick_review）由 generate_daily_review 在复盘前置步写入；
+    缺失时标 gap 降级，不冒充"全部达成"。
+    """
+    from app.models.daily_pick import DailyPickReview, DailyPickSet
+
+    gaps: list[DataGap] = []
+    td = _date_key(trade_date)
+
+    with session_factory() as db:
+        combo_date: str | None = None
+        items_raw: list[dict] = []
+        try:
+            row = (
+                db.execute(
+                    select(DailyPickSet)
+                    .where(DailyPickSet.date <= td)
+                    .order_by(DailyPickSet.date.desc())
+                    .limit(1)
+                )
+                .scalars()
+                .first()
+            )
+            if row is not None:
+                combo_date = row.date
+                items_raw = json.loads(row.items or "[]")
+            if not items_raw:
+                gaps.append(DataGap(
+                    field="picks.combo", source="daily_pick_set",
+                    reason=f"复盘日 {td}（含此前）无任何精选组合",
+                    impact="picks.每日精选对照", severity="warn",
+                ))
+        except Exception as exc:
+            gaps.append(DataGap(
+                field="picks.combo", source="daily_pick_set",
+                reason=str(exc)[:200], impact="picks.每日精选对照", severity="warn",
+            ))
+
+        reviews: list[PickReviewEntry] = []
+        try:
+            rows = (
+                db.execute(
+                    select(DailyPickReview)
+                    .where(DailyPickReview.date == td)
+                    .order_by(DailyPickReview.symbol)
+                )
+                .scalars()
+                .all()
+            )
+            for r in rows:
+                reviews.append(PickReviewEntry(
+                    symbol=r.symbol, name=r.name, verdict=r.verdict,
+                    reason_category=r.reason_category,
+                    excess_pct=r.excess_pct, note=r.note,
+                ))
+            # 归因行缺失但组合存在：归因步没跑成功——诚实降级，不让准确率假装 100%
+            if items_raw and not reviews:
+                gaps.append(DataGap(
+                    field="picks.reviews", source="daily_pick_review",
+                    reason=f"复盘日 {td} 无逐股归因行（generate_daily_review 未成功执行）",
+                    impact="picks.准确率与失误归因", severity="warn",
+                ))
+        except Exception as exc:
+            gaps.append(DataGap(
+                field="picks.reviews", source="daily_pick_review",
+                reason=str(exc)[:200], impact="picks.准确率与失误归因", severity="warn",
+            ))
+
+    return PicksSnapshot(
+        trade_date=td,
+        combo_date=combo_date,
+        items=[
+            PickEntry(
+                symbol=i.get("symbol", "?"),
+                name=i.get("name"),
+                score=i.get("score"),
+                themes=i.get("themes") or [],
+                observation_only=bool(i.get("observation_only")),
+            )
+            for i in items_raw
+        ],
+        reviews=reviews,
+        gaps=gaps,
     )

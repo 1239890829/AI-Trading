@@ -20,7 +20,7 @@ from datetime import date
 
 from app.market import trade_calendar as tc
 from app.review.analyzers import LLMAnalyzer
-from app.review.collector import collect_market, collect_trading
+from app.review.collector import collect_market, collect_picks, collect_trading
 from app.review.config import ensure_default_methodology_file, load_methodology
 from app.review.model_router import ModelRouter
 from app.review.schemas import ReviewData, ReviewReport
@@ -88,7 +88,19 @@ class ReviewService:
 
         anchor = await self.resolve_trade_date(trade_date)
 
-        # --- 采集：市场（异步 IO）与交易（DB 同步）并行 ---
+        # --- 前置步：每日精选逐股归因（2026-09-04 串联）---
+        # 必须先于采集：picks 维度要消费它写入的 daily_pick_review 行。
+        # 失败只记 log——采集层会因归因行缺失标 gap 降级，复盘不因此中断。
+        try:
+            from app.picks.daily_review import generate_daily_review
+
+            await generate_daily_review(self.hub, self.snapshot_service, self.session_factory)
+        except ValueError as exc:
+            log.info("picks review skipped: %s", exc)
+        except Exception:
+            log.exception("picks daily review failed (picks dimension degrades)")
+
+        # --- 采集：市场（异步 IO）与交易、每日精选（DB 同步）并行 ---
         sentinel = getattr(self.state, "ths_sentinel", None) if self.state else None
         market_coro = collect_market(
             self.hub, self.snapshot_service, anchor, sentinel=sentinel
@@ -96,14 +108,15 @@ class ReviewService:
         trading_task = asyncio.to_thread(
             collect_trading, self.session_factory, anchor, self._price_map()
         )
+        picks_task = asyncio.to_thread(collect_picks, self.session_factory, anchor)
         try:
-            market, trading = await asyncio.gather(market_coro, trading_task)
+            market, trading, picks = await asyncio.gather(market_coro, trading_task, picks_task)
         except Exception:
             log.exception("review collection failed")
             raise
 
         data = ReviewData(
-            trade_date=anchor.strftime("%Y%m%d"), market=market, trading=trading
+            trade_date=anchor.strftime("%Y%m%d"), market=market, trading=trading, picks=picks
         )
 
         # --- 分析 ---
@@ -153,6 +166,12 @@ class ReviewService:
         parts.append(f"委托 {data.trading.trade_count} 笔")
         if data.trading.realized_pnl is not None:
             parts.append(f"已实现 {data.trading.realized_pnl:+.2f}")
+        # 每日精选准确率一眼可见（2026-09-04）；口径与 picks 维度一致
+        if data.picks and data.picks.reviews:
+            good = sum(1 for r in data.picks.reviews if r.verdict == "good")
+            bad = sum(1 for r in data.picks.reviews if r.verdict == "bad")
+            if good + bad:
+                parts.append(f"精选准确率 {round(good / (good + bad) * 100)}%")
         gaps = len(data.all_gaps)
         if gaps:
             parts.append(f"数据缺失 {gaps} 处")

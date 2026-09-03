@@ -57,23 +57,34 @@ class MethodologyConfig(BaseModel):
 
 DEFAULT_METHODOLOGY = MethodologyConfig(
     version="v1",
-    note="骨架版：三个维度等权重，规则分析器",
+    note="骨架版：四个维度等权重，规则分析器（picks 维度 2026-09-04 加入）",
     dimensions={
         "trades": DimensionConfig(enabled=True, weight=1.0),
         "market": DimensionConfig(enabled=True, weight=1.0),
         "system": DimensionConfig(enabled=True, weight=1.0),
+        "picks": DimensionConfig(enabled=True, weight=1.0),
     },
     thresholds=Thresholds(),
 )
 
 
 def load_methodology(version: str = "v1") -> MethodologyConfig:
-    """加载指定版本的方法论配置，失败时回退到代码内默认版本。"""
+    """加载指定版本的方法论配置，失败时回退到代码内默认版本。
+
+    保守合并：用户 yaml 里**没写**的维度按代码默认补齐（新维度默认生效，
+    用户显式 `enabled: false` 的维度尊重用户配置不动）——否则每加一个维度
+    都要用户手改 yaml，否则复盘永远看不到它。
+    """
     path = METHODOLOGY_DIR / f"{version}.yaml"
     if path.exists():
         try:
             raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-            return MethodologyConfig(**raw)
+            cfg = MethodologyConfig(**raw)
+            missing = {k: v for k, v in DEFAULT_METHODOLOGY.dimensions.items() if k not in cfg.dimensions}
+            if missing:
+                cfg.dimensions = {**cfg.dimensions, **missing}
+                log.info("methodology %s: dimensions %s filled from defaults", version, list(missing))
+            return cfg
         except Exception as exc:
             log.warning("methodology %s load failed, fallback to default: %s", version, exc)
     return DEFAULT_METHODOLOGY

@@ -15,16 +15,20 @@ import {
   addToWatchlist,
   createWatchlistGroup,
   deleteWatchlistGroup,
+  getIntradayTop,
   getMarketOverview,
   getPaperPositions,
   getQuotes,
   getRiskState,
   getSparklines,
+  getTodayPicks,
   getWatchlist,
   getWatchlistGroups,
   removeFromWatchlist,
   renameWatchlistGroup,
   updateWatchlistGroup,
+  type DailyPickItem,
+  type IntradayTopStock,
   type PaperPositionInfo,
   type RiskState,
   type SparklinePayload,
@@ -54,6 +58,14 @@ function WorkbenchInner() {
   const [allGroupNames, setAllGroupNames] = useState<string[]>(["默认"]);
   const [activeGroup, setActiveGroup] = useState<string>("全部");
   const [updatedAt, setUpdatedAt] = useState<string>("");
+  // ── 动态分组（2026-09-04）：每日精选（/picks/today）+ 盘中跟踪（/picks/intraday-top）──
+  // 数据源是系统推荐口径，不是用户自选——只读展示，不走 watchlist 表；
+  // 60s 轮询随推荐与盘中行情自动更新（intraday-top 后端本身还有 60s 缓存）。
+  const [picksItems, setPicksItems] = useState<DailyPickItem[]>([]);
+  const [picksDate, setPicksDate] = useState<string | null>(null);
+  const [topItems, setTopItems] = useState<IntradayTopStock[]>([]);
+  const picksSymbols = useMemo(() => picksItems.map((i) => i.symbol), [picksItems]);
+  const topSymbols = useMemo(() => topItems.map((i) => i.symbol), [topItems]);
   // 选中标的：URL 参数是唯一真相源；无参数时回退「上次查看的标的」，
   // 都没有再落默认 600519（此前硬编码回退是跨页面联动 bug 的一半根因）
   const [selected, setSelected] = useState<string>(paramSymbol ?? "");
@@ -73,7 +85,11 @@ function WorkbenchInner() {
 
   // 列表消费侧 3s 节流（2026-09-02 用户反馈：1Hz 刷新整表闪烁跳动）。
   // 详情面板是独立 hook 实例（不传 throttleMs），K线/分时合成不受影响。
-  const { quotes, status } = useQuoteStream([...new Set([...symbols, ...realSymbols])], { throttleMs: 3000 });
+  // 动态分组标的并入订阅：精选/跟踪标的的行情与自选同源同节奏。
+  const { quotes, status } = useQuoteStream(
+    [...new Set([...symbols, ...realSymbols, ...picksSymbols, ...topSymbols])],
+    { throttleMs: 3000 },
+  );
   const [extra, setExtra] = useState<Record<string, Quote>>({});
   // WS 每 5s tick 全量替换 quotes：merged/列表/spark 查找都必须 memo 化，
   // 否则每次 tick 触发整列表 O(n²) 重算（评审 F2）
@@ -137,20 +153,40 @@ function WorkbenchInner() {
   }, 30_000);
 
   usePollingFetch(loadBase, 10_000);
+
+  // 动态分组数据源（60s：每日精选每日级变化、intraday-top 后端 60s 缓存对齐）。
+  // 失败保留旧数据（盘中行情仍在跳，下一次轮询补上），不闪空。
+  usePollingFetch(async () => {
+    const p = await getTodayPicks().catch(() => null);
+    if (p) {
+      setPicksItems(p.items ?? []);
+      setPicksDate(p.date ?? null);
+    }
+  }, 60_000);
+  usePollingFetch(async () => {
+    const t = await getIntradayTop().catch(() => null);
+    if (t) setTopItems(t.items ?? []);
+  }, 60_000);
+
   // 自选集合变化（search-box 快捷加自选 / 详情面板 ＋自选）→ 立即刷新
   // （2026-09-01 简化：原 CustomEvent 契约改为 lib/watchlist-sync 模块通知）
   useEffect(() => subscribeWatchlist(() => void loadBase()), [loadBase]);
 
+  // 首帧行情兜底：WS 订阅切换窗口期里，动态分组标的与自选一起走 REST 补拉
+  const feedSymbols = useMemo(
+    () => [...new Set([...symbols, ...picksSymbols, ...topSymbols])],
+    [symbols, picksSymbols, topSymbols],
+  );
   useEffect(() => {
-    if (symbols.length === 0) return;
-    const missing = symbols.filter((s) => !(s in merged));
+    if (feedSymbols.length === 0) return;
+    const missing = feedSymbols.filter((s) => !(s in merged));
     if (missing.length > 0) {
       getQuotes(missing)
         .then((qs) => setExtra((prev) => Object.fromEntries([...Object.entries(prev), ...qs.map((q) => [q.symbol, q])])))
         .catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbols]);
+  }, [feedSymbols]);
 
   // 迷你走势（retro #9）：日K 级别，随自选变化拉取，独立 5 分钟刷新
   const [sparks, setSparks] = useState<SparklinePayload | null>(null);
@@ -172,8 +208,13 @@ function WorkbenchInner() {
   }, 300_000);
 
   // 分组清单由 groupMap 派生（旧代码是独立的 groups 状态，从未被赋值，chips 永远只有「全部」）
+  // 「每日精选」「盘中跟踪」是动态分组的保留名，用户分组里排除（防 chips 重名撞 key）
   const groups = useMemo(
-    () => allGroupNames.filter((g, i) => g !== "默认" && allGroupNames.indexOf(g) === i).sort(),
+    () =>
+      allGroupNames
+        .filter((g, i) => g !== "默认" && allGroupNames.indexOf(g) === i)
+        .filter((g) => g !== "每日精选" && g !== "盘中跟踪")
+        .sort(),
     [allGroupNames]
   );
   // 管理模式下分组下拉的可选项（含「默认」兜底）
@@ -192,6 +233,24 @@ function WorkbenchInner() {
     () => realSymbols.map((s) => merged[s]).filter(Boolean),
     [realSymbols, merged]
   );
+  // ── 动态分组视图（2026-09-04）：标的来自系统推荐口径，行数据=行情(merged)×推荐信息 ──
+  const picksQuotes: Quote[] = useMemo(
+    () => picksSymbols.map((s) => merged[s]).filter(Boolean),
+    [picksSymbols, merged]
+  );
+  const topQuotes: Quote[] = useMemo(
+    () => topSymbols.map((s) => merged[s]).filter(Boolean),
+    [topSymbols, merged]
+  );
+  const pickInfoBySymbol = useMemo(() => new Map(picksItems.map((i) => [i.symbol, i])), [picksItems]);
+  const topInfoBySymbol = useMemo(() => new Map(topItems.map((i) => [i.symbol, i])), [topItems]);
+  // 当前激活视图的行数据（三个特殊视图各走各的数据源）
+  const activeRows: Quote[] =
+    activeGroup === "持仓" ? holdingQuotes
+    : activeGroup === "每日精选" ? picksQuotes
+    : activeGroup === "盘中跟踪" ? topQuotes
+    : watchQuotes;
+  const isDynamicGroup = activeGroup === "每日精选" || activeGroup === "盘中跟踪";
   // spark 数据按 symbol 建索引，行内 O(1) 取（评审 F2：行内 find 是 O(n²)）
   const sparkBySymbol = useMemo(() => {
     const m = new Map<string, number[]>();
@@ -352,7 +411,12 @@ function WorkbenchInner() {
           </Panel>
         )}
         <Panel
-          title={activeGroup === "持仓" ? `真实持仓 (${holdingQuotes.length})` : "自选股"}
+          title={
+            activeGroup === "持仓" ? `真实持仓 (${holdingQuotes.length})`
+            : activeGroup === "每日精选" ? `每日精选 · ${picksDate ?? "未生成"} (${picksQuotes.length})`
+            : activeGroup === "盘中跟踪" ? `盘中跟踪 (${topQuotes.length})`
+            : "自选股"
+          }
           extra={
             <div className="flex items-center gap-1.5">
               {managing && activeGroup !== "持仓" && (
@@ -392,9 +456,11 @@ function WorkbenchInner() {
               竖线区隔（持仓不是分组，是真实持仓账本视角）；管理模式下
               提供 新建 / 重命名 / 删除 分组（保护规则在后端）。────── */}
           <div className="sticky top-0 z-10 flex flex-wrap items-center gap-1 border-b border-zinc-100 bg-white/95 px-3 py-1.5 dark:border-zinc-800/60 dark:bg-zinc-950/95">
-            {["全部", "持仓", "默认", ...groups].map((g, idx) => (
+            {["全部", "持仓", "默认", ...groups, "每日精选", "盘中跟踪"].map((g) => (
               <span key={g} className="flex items-center gap-1">
-                {(idx === 1 || idx === 2) && <span className="mx-0.5 h-4 w-px bg-zinc-200 dark:bg-zinc-800" aria-hidden />}
+                {(g === "持仓" || g === "默认" || g === "每日精选") && (
+                  <span className="mx-0.5 h-4 w-px bg-zinc-200 dark:bg-zinc-800" aria-hidden />
+                )}
                 <button
                   onClick={() => setActiveGroup(g)}
                   className={`rounded-full border px-2.5 py-0.5 text-xs ${
@@ -403,6 +469,8 @@ function WorkbenchInner() {
                 >
                   {g}
                   {g === "持仓" && realSymbols.length > 0 && <span className="ml-1 text-[10px] text-zinc-400">{realSymbols.length}</span>}
+                  {g === "每日精选" && picksItems.length > 0 && <span className="ml-1 text-[10px] text-zinc-400">{picksItems.length}</span>}
+                  {g === "盘中跟踪" && topItems.length > 0 && <span className="ml-1 text-[10px] text-zinc-400">{topItems.length}</span>}
                 </button>
               </span>
             ))}
@@ -415,7 +483,7 @@ function WorkbenchInner() {
                 ＋ 组
               </button>
             )}
-            {managing && activeGroup !== "全部" && activeGroup !== "持仓" && activeGroup !== "默认" && (
+            {managing && activeGroup !== "全部" && activeGroup !== "持仓" && activeGroup !== "默认" && !isDynamicGroup && (
               <span className="flex items-center gap-1">
                 <span className="mx-0.5 h-4 w-px bg-zinc-200 dark:bg-zinc-800" aria-hidden />
                 <button
@@ -435,13 +503,25 @@ function WorkbenchInner() {
               </span>
             )}
           </div>
-          {(activeGroup === "持仓" ? holdingQuotes : watchQuotes).length === 0 ? (
+          {activeRows.length === 0 ? (
             <p className="px-4 py-8 text-center text-sm text-zinc-400">
               {activeGroup === "持仓" ? (
                 <>
                   暂无真实持仓。在个股详情页「真实持仓」tab 记一笔买入
                   <br />
                   （按你在券商的实际成交价）。
+                </>
+              ) : activeGroup === "每日精选" ? (
+                <>
+                  今日尚无精选组合（每日精选在收盘后生成次日名单）。
+                  <br />
+                  生成后本组自动同步，无需手动添加。
+                </>
+              ) : activeGroup === "盘中跟踪" ? (
+                <>
+                  当前没有满足多维筛选的跟踪标的
+                  <br />
+                  （确定性/辨识度未达「高」阈值，宁缺毋滥）。
                 </>
               ) : (
                 <>
@@ -454,7 +534,10 @@ function WorkbenchInner() {
           ) : (
             <table className="w-full text-sm">
               <tbody>
-                {(activeGroup === "持仓" ? holdingQuotes : watchQuotes).map((q) => (
+                {activeRows.map((q) => {
+                  const pick = activeGroup === "每日精选" ? pickInfoBySymbol.get(q.symbol) : undefined;
+                  const top = activeGroup === "盘中跟踪" ? topInfoBySymbol.get(q.symbol) : undefined;
+                  return (
                   <tr
                     key={q.symbol}
                     onClick={() => switchSymbol(q.symbol)}
@@ -463,11 +546,37 @@ function WorkbenchInner() {
                     }`}
                   >
                     <td className="px-3 py-2">
-                      <div className="font-mono text-xs text-zinc-400">{q.symbol}</div>
+                      <div className="font-mono text-xs text-zinc-400">
+                        {q.symbol}
+                        {pick != null && (
+                          <span
+                            className="ml-1.5 rounded bg-up/10 px-1 text-[10px] text-up"
+                            title={`六维综合评分 ${pick.score}；题材：${pick.themes?.join("、") || "--"}`}
+                          >
+                            {pick.score.toFixed(0)} 分
+                          </span>
+                        )}
+                        {top != null && (
+                          <span
+                            className={`ml-1.5 rounded px-1 text-[10px] ${
+                              top.tier <= 2 ? "bg-up/10 text-up" : "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                            }`}
+                            title={`盘中跟踪 T${top.tier}：${top.pick_basis}；题材 ${top.theme ?? "--"}（${top.stage ?? "?"}）`}
+                          >
+                            T{top.tier} {top.theme ?? ""}
+                          </span>
+                        )}
+                      </div>
                       <div>{q.name ?? "--"}</div>
                     </td>
                     <td className="hidden px-1 py-2 sm:table-cell">
-                      {managing && activeGroup !== "持仓" ? (
+                      {pick != null || top != null ? (
+                        <span className="text-[10px] text-zinc-400">
+                          {pick != null
+                            ? pick.echelon_role ?? ""
+                            : `确定性 ${(top?.certainty?.level) ?? "?"} · 辨识度 ${(top?.distinctiveness?.level) ?? "?"}`}
+                        </span>
+                      ) : managing && activeGroup !== "持仓" ? (
                         <select
                           value={groupMap[q.symbol] ?? "默认"}
                           onClick={(e) => e.stopPropagation()}
@@ -489,22 +598,25 @@ function WorkbenchInner() {
                     <td className={`px-2 py-2 text-right font-mono text-xs tabular-nums ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</td>
                     <td className="px-1 py-2 text-right">{isHardQuality(q.quality) && <QualityBadge quality={q.quality} reasons={q.quality_reasons} />}</td>
                     <td className="pr-2 text-right">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void remove(q.symbol);
-                        }}
-                        className="text-zinc-400 hover:text-red-400"
-                        title="移出自选"
-                        aria-label={`移出自选 ${q.symbol}`}
-                      >
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-                          <path d="M18 6 6 18M6 6l12 12" />
-                        </svg>
-                      </button>
+                      {!pick && !top && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void remove(q.symbol);
+                          }}
+                          className="text-zinc-400 hover:text-red-400"
+                          title="移出自选"
+                          aria-label={`移出自选 ${q.symbol}`}
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+                            <path d="M18 6 6 18M6 6l12 12" />
+                          </svg>
+                        </button>
+                      )}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           )}

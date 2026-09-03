@@ -147,7 +147,7 @@ def test_llm_analyzer_overrides_judgements_and_marks_evidence():
     dims = LLMAnalyzer(base_url="https://x", api_key="k", model="m", client=client).analyze(
         _review_data(), _method()
     )
-    assert {d.key for d in dims} == {"trades", "market", "system"}
+    assert {d.key for d in dims} == {"trades", "market", "system", "picks"}
     trades = next(d for d in dims if d.key == "trades")
     assert trades.judgements == ["600519 滑点 50bp 属可接受范围，无需处置"]
     assert trades.evidence.get("llm_enhanced") is True
@@ -186,7 +186,7 @@ def test_llm_analyzer_http_failure_falls_back_with_degraded():
     assert usage.actual == "rules"
     assert usage.degraded is True
     assert "llm" in usage.fallback_chain
-    assert len(dims) == 3
+    assert len(dims) == 4
 
 
 # ---------------------------------------------------------------- LLMSummarizer

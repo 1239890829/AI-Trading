@@ -85,7 +85,10 @@ def _method():
 
 def test_rules_analyzer_three_dimensions():
     dims = RulesAnalyzer().analyze(_ok_data(), _method())
-    assert {d.key for d in dims} == {"trades", "market", "system"}
+    # picks 维度 2026-09-04 加入：无快照时降级输出（不缺席，缺失可见）
+    assert {d.key for d in dims} == {"trades", "market", "system", "picks"}
+    picks = next(d for d in dims if d.key == "picks")
+    assert picks.status == "degraded"
     market = next(d for d in dims if d.key == "market")
     assert market.status == "ok"
     assert any("分歧" in j for j in market.judgements)

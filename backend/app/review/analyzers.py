@@ -57,6 +57,7 @@ class RulesAnalyzer:
             ("trades", self._trades),
             ("market", self._market),
             ("system", self._system),
+            ("picks", self._picks),
         ):
             dim_cfg = method.dimensions.get(key)
             if dim_cfg and not dim_cfg.enabled:
@@ -78,7 +79,115 @@ class RulesAnalyzer:
         "trades": "当日操作评估",
         "market": "市场环境研判",
         "system": "系统表现诊断",
+        "picks": "每日精选对照",
     }
+
+    # ---- 维度 4：每日精选对照（2026-09-04 用户需求：准确率 + 失误归因）----
+
+    #: 失误归因 → 复盘建议方向（六类来自 app.picks.engine.classify_failure）
+    _PICK_CATEGORY_HINT = {
+        "entry_bad": "买点执行问题为主：复核买入区间纪律与追高拦截",
+        "sentiment_misread": "情绪误判为主：复核市场相位判定与推荐时的环境适配",
+        "logic_failed": "入选逻辑失效为主：回看失误个股的入选依据与题材阶段判定",
+        "missed": "踏空为主：方向对但价格未回买入区间，可评估区间上沿是否过紧",
+        "data_issue": "数据缺失型不可评偏多：先修数据链再谈归因",
+    }
+
+    def _picks(self, data: ReviewData, method: MethodologyConfig) -> DimensionResult:
+        p = data.picks
+        findings: list[str] = []
+        judgements: list[str] = []
+        evidence: dict = {}
+
+        if p is None:
+            findings.append("未采集每日精选快照（服务未升级或采集异常），本维度降级")
+            return DimensionResult(
+                key="picks", title=self._TITLES["picks"], status="degraded",
+                findings=findings, judgements=judgements, evidence=evidence, gaps=[],
+            )
+
+        if not p.items:
+            findings.append(f"复盘日（含此前）无精选组合：{p.combo_date or '无记录'}")
+            judgements.append("无推荐可对照。组合缺失属常态（首日部署/未到生成时点），不判失误")
+            return DimensionResult(
+                key="picks", title=self._TITLES["picks"],
+                status="degraded" if p.gaps else "ok",
+                findings=findings, judgements=judgements, evidence=evidence, gaps=p.gaps,
+            )
+
+        findings.append(
+            f"对照组合：{p.combo_date} 生成 {len(p.items)} 只（T-1 生成、T 日持有）"
+        )
+        if not p.reviews:
+            findings.append("逐股归因行缺失：generate_daily_review 未成功执行（见 gaps）")
+            return DimensionResult(
+                key="picks", title=self._TITLES["picks"], status="degraded",
+                findings=findings, judgements=judgements, evidence=evidence, gaps=p.gaps,
+            )
+
+        item_by_symbol = {i.symbol: i for i in p.items}
+        # 闸门日「仅观察」条目：本就未建议出手，误判归因不适用——单列不计入准确率
+        obs_bad = [r for r in p.reviews if (item_by_symbol.get(r.symbol) and item_by_symbol[r.symbol].observation_only) and r.verdict == "bad"]
+        scored = [r for r in p.reviews if r not in obs_bad]
+        good = [r for r in scored if r.verdict == "good"]
+        bad = [r for r in scored if r.verdict == "bad"]
+        flat = [r for r in scored if r.verdict == "flat"]
+        # 准确率口径（显式）：达成 / (达成+失误)。踏空(missed)与数据缺失(data_issue)
+        # 属「不可评」，既不算失误也不算达成——不摊薄也不虚增命中率。
+        total_judgeable = len(good) + len(bad)
+        acc = round(len(good) / total_judgeable * 100, 1) if total_judgeable else None
+
+        by_cat: dict[str, int] = {}
+        for r in bad:
+            by_cat[r.reason_category] = by_cat.get(r.reason_category, 0) + 1
+        evidence.update({
+            "combo_date": p.combo_date,
+            "total": len(p.reviews),
+            "achieved": len(good),
+            "failed": len(bad),
+            "na": len(flat),
+            "observation_only_excluded": len(obs_bad),
+            "accuracy_pct": acc,
+            "accuracy_definition": "达成 / (达成+失误)；踏空与数据缺失不计入",
+            "by_category": by_cat,
+        })
+        if acc is not None:
+            findings.append(
+                f"当日准确率 {acc}%：达成 {len(good)} / 失误 {len(bad)}"
+                f"（不可评 {len(flat)}，仅观察剔除 {len(obs_bad)}）"
+            )
+        else:
+            findings.append("当日无可判定样本（全部踏空/数据缺失/仅观察），准确率不适用")
+
+        # 失误个股逐股归因（用户硬要求：判断失误的必须给出原因分析）
+        for r in bad:
+            findings.append(f"✗ {r.symbol} {r.name or ''}（{r.reason_category}）：{r.note or '无归因注记'}")
+        if good:
+            findings.append("达成：" + "、".join(f"{r.symbol} {r.name or ''}".strip() for r in good))
+
+        th = method.thresholds
+        if acc is not None and total_judgeable >= th.min_signal_samples:
+            if acc < th.signal_hit_rate_floor * 100:
+                judgements.append(
+                    f"准确率 {acc}% 低于信号失效线 {th.signal_hit_rate_floor * 100:.0f}%"
+                    "——复核推荐权重与闸门阈值，而不是单点归责个股"
+                )
+            else:
+                judgements.append(f"准确率 {acc}% 在信号失效线之上，推荐体系暂无需大改")
+        for cat, hint in self._PICK_CATEGORY_HINT.items():
+            if by_cat.get(cat, 0) >= max(1, total_judgeable // 3):
+                judgements.append(f"失误 {by_cat[cat]} 只归因「{cat}」：{hint}")
+        if obs_bad:
+            judgements.append(
+                f"{len(obs_bad)} 只为空仓闸门日「仅观察」条目，不计入准确率"
+                "——本就未建议出手（闸门日看方向验证，不看个股对错）"
+            )
+
+        return DimensionResult(
+            key="picks", title=self._TITLES["picks"],
+            status="degraded" if p.gaps else "ok",
+            findings=findings, judgements=judgements, evidence=evidence, gaps=p.gaps,
+        )
 
     # ---- 维度 1：当日操作评估 ----
 

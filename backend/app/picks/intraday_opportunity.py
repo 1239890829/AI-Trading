@@ -40,6 +40,10 @@ STAGE_CERTAINTY_BASE = {
     "退潮": "低",
 }
 
+#: 盘中跟踪「最推荐标的」默认上限（工作台动态分组容量；题材 2~5 天周期下
+#: 8 只足够覆盖核心梯队，再多就稀释「最推荐」语义）
+TOP_WATCH_LIMIT = 8
+
 #: 角色自带辨识度加持（梯队地位 = 被记住的成本）
 ROLE_NOTABLE = {"空间板", "龙头", "中军", "反包"}
 
@@ -245,4 +249,58 @@ def assemble(
         "hot_available": hot_available,
         "caveats": list(board.get("caveats") or [])
         + (["热股榜不可用：辨识度仅按高度/角色判定"] if not hot_available else []),
+    }
+
+
+def top_watch_stocks(payload: dict, *, limit: int = TOP_WATCH_LIMIT) -> dict:
+    """盘中跟踪「最推荐标的」筛选（2026-09-04 用户需求，工作台动态分组 + 复盘共用口径）。
+
+    多维评估的显式 if 链（可回测、可复盘对照），机会度优先级：
+      1. certainty=高 且 distinctiveness=高 —— 题材核心 + 高辨识，第一梯队
+      2. certainty=高 —— 延续预期最硬（确定性优先：「机会最大」首先看能不能延续）
+      3. certainty=中 且 distinctiveness=高 —— 市场焦点股，题材延续待验证
+    unknown / 低一律不入选（三态纪律：判不出不冒充机会，绝不拿「低」凑数）。
+
+    顺序：tier 升序稳定排序——同 tier 内保持 opportunities 的题材强度序与
+    梯队连板序（sort 稳定性保证，不引入额外权重以免丢失可解释性）。
+    输出是机会度排序，不是买卖建议（红线）；依据文案逐只可追溯。
+    """
+    items: list[dict] = []
+    for t in payload.get("themes") or []:
+        for s in t.get("stocks") or []:
+            cert = (s.get("certainty") or {}).get("level")
+            dist = (s.get("distinctiveness") or {}).get("level")
+            if cert == "高" and dist == "高":
+                tier, basis = 1, "确定性高＋辨识度高：题材核心且延续预期硬"
+            elif cert == "高":
+                tier, basis = 2, "确定性高：题材阶段与封板质量支持延续（辨识度未到高）"
+            elif cert == "中" and dist == "高":
+                tier, basis = 3, "确定性中＋辨识度高：市场焦点股，延续预期待验证"
+            else:
+                continue
+            items.append(
+                {
+                    "symbol": s.get("symbol"),
+                    "name": s.get("name"),
+                    "role": s.get("role"),
+                    "boards": s.get("boards"),
+                    "change_pct": s.get("change_pct"),
+                    "theme": t.get("theme"),
+                    "stage": t.get("stage"),
+                    "strength_tier": t.get("strength_tier"),
+                    "distinctiveness": s.get("distinctiveness"),
+                    "certainty": s.get("certainty"),
+                    "reason": s.get("reason"),
+                    "tier": tier,
+                    "pick_basis": basis,
+                }
+            )
+    items.sort(key=lambda x: x["tier"])
+    return {
+        "trade_date": payload.get("trade_date"),
+        "items": items[:limit],
+        "total_candidates": len(items),
+        "criteria": "机会度＝确定性(题材阶段×封板质量)优先、辨识度(人气×高度×角色)次之；unknown/低不入选",
+        "hot_available": payload.get("hot_available"),
+        "caveats": list(payload.get("caveats") or []),
     }

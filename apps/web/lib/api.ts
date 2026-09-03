@@ -1587,6 +1587,37 @@ export async function getIntradayOpportunities(): Promise<IntradayOpportunities>
   return (await getJson<IntradayOpportunities>(`/api/picks/intraday-opportunities`)).data;
 }
 
+/** 盘中跟踪「最推荐标的」（opportunities 多维筛选切片，tier 1~3 = 机会度梯队）。 */
+export interface IntradayTopStock {
+  symbol: string;
+  name: string | null;
+  role: string | null;
+  boards: number | null;
+  change_pct: number | null;
+  theme: string | null;
+  stage: string | null;
+  strength_tier: string | null;
+  distinctiveness: { level: string; basis: string } | null;
+  certainty: { level: string; basis: string } | null;
+  reason: string | null;
+  tier: number;
+  pick_basis: string;
+}
+
+export interface IntradayTopPayload {
+  trade_date: string | null;
+  items: IntradayTopStock[];
+  total_candidates: number;
+  criteria: string;
+  hot_available: boolean;
+  caveats: string[];
+}
+
+/** 盘中跟踪最推荐标的（工作台动态分组数据源；确定性优先、辨识度次之）。 */
+export async function getIntradayTop(): Promise<IntradayTopPayload> {
+  return (await getJson<IntradayTopPayload>(`/api/picks/intraday-top?limit=8`, 15_000)).data;
+}
+
 /** 手动执行当日方向对照 + 提醒收益回填（15:35 调度的同代码路径）。 */
 export async function runIntradayReview(): Promise<{ brief_date: string; directions: { direction: string; outcome: string }[] }> {
   return (

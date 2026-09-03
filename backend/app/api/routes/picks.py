@@ -35,8 +35,6 @@ from app.picks.engine import (
     REPLACE_THRESHOLD,
     apply_replacement_threshold,
     build_buy_range,
-    classify_failure,
-    review_entry_quality,
     score_capital,
     score_fundamental,
     score_news,
@@ -835,111 +833,18 @@ async def history(limit: int = Query(default=10, ge=1, le=60)) -> dict:
 
 @router.post("/review/generate")
 async def generate_review(request: Request, hub: QuoteHub = Depends(get_hub), _: None = Depends(require_write_token)) -> dict:
-    """对最近一份组合生成/刷新复盘（表现日 = 今天；组合 T-1 生成、T 日持有）。"""
-    with _db() as db:
-        from app.models.daily_pick import DailyPickSet
+    """对最近一份组合生成/刷新复盘（表现日 = 今天；组合 T-1 生成、T 日持有）。
 
-        row = db.execute(select(DailyPickSet).order_by(DailyPickSet.date.desc()).limit(1)).scalar_one_or_none()
-    if row is None:
-        raise HTTPException(status_code=404, detail="尚无组合可复盘")
+    核心逻辑在 app.picks.daily_review.generate_daily_review（与 15:30 全局
+    复盘前置步共用同一条代码路径，2026-09-04 抽出——见该模块 docstring）。
+    """
+    from app.picks.daily_review import generate_daily_review
+
     try:
-        items = json.loads(row.items)
-    except Exception:
-        items = []
-    if not items:
-        raise HTTPException(status_code=404, detail="组合为空")
-
-    # 大盘基准：上证当日涨跌幅
-    market_pct = None
-    try:
-        for q in hub.get_indices():
-            if q.symbol == "000001":
-                market_pct = q.change_pct
-    except Exception:
-        pass
-
-    # 持有期市场相位（情绪误判判定需要）
-    review_phase = None
-    try:
-        from app.services.market_context import compute_market_sentiment
-
-        review_phase = (
-            await compute_market_sentiment(hub, request.app.state.snapshot_service) or {}
-        ).get("phase")
-    except Exception as exc:
-        log.warning("picks review: sentiment failed: %s", exc)
-
-    reviews = []
-    symbols = [i["symbol"] for i in items]
-    quotes = await _batch_quotes(hub, symbols)
-    for it in items:
-        sym = it["symbol"]
-        q = quotes.get(sym)
-        change = q.change_pct if q is not None else None
-        # 基准缺失时 excess 必须为 None（评审 B21）：此前回退成个股涨幅本身，
-        # 会把"大盘 +2% 时个股 +2%"记成超额 0、把"大盘 -2% 时个股 0%"记成 +2——
-        # classify_failure 的归因统计被系统性污染。None 让下游显式处理"基准缺失"。
-        excess = (
-            round(change - market_pct, 2)
-            if (change is not None and market_pct is not None)
-            else None
-        )
-        # 买点质量：把「选错了」与「选对了但买点不对」分开，否则迭代方向会被污染
-        entry = review_entry_quality(
-            buy_range=it.get("buy_range"),
-            day_open=q.open if q is not None else None,
-            day_high=q.high if q is not None else None,
-            day_low=q.low if q is not None else None,
-            day_close=q.price if q is not None else None,
-            observation_only=bool(it.get("observation_only")),
-        )
-        category, note = classify_failure(
-            excess_pct=excess, entry=entry, market_phase=review_phase
-        )
-        # 买点质量并入 note：不额外加列（克制新增），但复盘必须能看到这段证据。
-        # 闸门日也会带上——"本就不建议出手"本身就是需要留档的结论。
-        note = f"{note}；{entry['basis']}"
-        verdict = {"missed": "flat", "entry_bad": "bad", "sentiment_misread": "bad",
-                   "logic_failed": "bad", "gone_well": "good"}.get(category, "flat")
-        reviews.append(
-            {
-                "date": row.date, "symbol": sym, "name": it.get("name"),
-                "verdict": verdict,
-                "reason_category": category,
-                "excess_pct": excess, "note": note,
-                "entry": entry,
-                "market_phase": review_phase,
-            }
-        )
-
-    with _db() as db:
-        from app.models.daily_pick import DailyPickReview
-
-        # ⚠️ 不能用 db.merge：新对象主键为 None，merge 会走 INSERT 而非 UPDATE，
-        # 重复复盘即撞 (date, symbol) 唯一约束。按业务键查询后更新才是正解。
-        for r in reviews:
-            row_r = db.execute(
-                select(DailyPickReview).where(
-                    DailyPickReview.date == r["date"],
-                    DailyPickReview.symbol == r["symbol"],
-                )
-            ).scalar_one_or_none()
-            if row_r is None:
-                db.add(
-                    DailyPickReview(
-                        date=r["date"], symbol=r["symbol"], name=r.get("name"),
-                        verdict=r["verdict"], reason_category=r["reason_category"],
-                        excess_pct=r["excess_pct"], note=r["note"],
-                    )
-                )
-            else:
-                row_r.name = r.get("name")
-                row_r.verdict = r["verdict"]
-                row_r.reason_category = r["reason_category"]
-                row_r.excess_pct = r["excess_pct"]
-                row_r.note = r["note"]
-        db.commit()
-    return {"data": {"date": row.date, "reviews": reviews, "market_pct": market_pct}, "meta": {}}
+        result = await generate_daily_review(hub, request.app.state.snapshot_service, get_session_factory())
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"data": result, "meta": {}}
 
 
 @router.get("/review")

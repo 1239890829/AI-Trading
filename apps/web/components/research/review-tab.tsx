@@ -266,6 +266,16 @@ function ReportDetail({
             {d.title}
             <span className="ml-2 font-normal text-zinc-400">{d.status}</span>
           </div>
+          {/* findings（事实层，2026-09-04 补渲染）：含 picks 维度的失误逐股归因 */}
+          {d.findings.length > 0 && (
+            <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-zinc-600 dark:text-zinc-300">
+              {d.findings.map((f, i) => (
+                <li key={i}>
+                  <LinkedSymbols text={f} />
+                </li>
+              ))}
+            </ul>
+          )}
           {d.judgements.length > 0 && (
             <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-zinc-400">
               {d.judgements.map((j, i) => (

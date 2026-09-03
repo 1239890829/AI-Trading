@@ -93,17 +93,59 @@ class TradingSnapshot(BaseModel):
     gaps: list[DataGap] = Field(default_factory=list)
 
 
+class PickEntry(BaseModel):
+    """每日精选组合条目（daily_pick_set.items 的裁剪视图）。"""
+
+    symbol: str
+    name: str | None = None
+    score: float | None = None
+    themes: list[str] = Field(default_factory=list)
+    observation_only: bool = False
+
+
+class PickReviewEntry(BaseModel):
+    """单只推荐股的复盘归因（daily_pick_review 行）。
+
+    verdict: good=达成 / flat=踏空或数据缺失不可评 / bad=失误；
+    reason_category 六类见 app.picks.engine.classify_failure。
+    """
+
+    symbol: str
+    name: str | None = None
+    verdict: str
+    reason_category: str
+    excess_pct: float | None = None
+    note: str | None = None
+
+
+class PicksSnapshot(BaseModel):
+    """每日精选组合 + 当日逐股归因快照（2026-09-04 新增维度）。
+
+    组合 T-1 生成、T 日持有：复盘日（trade_date）对照的组合是
+    combo_date（=组合生成日）那份；reviews 是当日收盘后 classify_failure 的结果。
+    """
+
+    trade_date: str
+    combo_date: str | None = None
+    items: list[PickEntry] = Field(default_factory=list)
+    reviews: list[PickReviewEntry] = Field(default_factory=list)
+    gaps: list[DataGap] = Field(default_factory=list)
+
+
 class ReviewData(BaseModel):
     """一次复盘采集到的全部原始数据。"""
 
     trade_date: str
     market: MarketSnapshot
     trading: TradingSnapshot
+    #: 每日精选快照。None = 未采集（旧版本服务/采集失败）——三态：缺失不冒充"无组合"。
+    picks: PicksSnapshot | None = None
     collected_at: str = Field(default_factory=lambda: utcnow().isoformat())
 
     @property
     def all_gaps(self) -> list[DataGap]:
-        return [*self.market.gaps, *self.trading.gaps]
+        picks_gaps = self.picks.gaps if self.picks else []
+        return [*self.market.gaps, *self.trading.gaps, *picks_gaps]
 
     def blocked_dimensions(self) -> set[str]:
         """被数据缺失阻断的维度——这些维度不得产出结论。"""

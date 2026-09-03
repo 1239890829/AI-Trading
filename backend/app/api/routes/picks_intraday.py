@@ -7,6 +7,7 @@
 - GET  /api/picks/intraday-review         近 30 日方向/提醒胜率统计（批次 C）
 - POST /api/picks/intraday-review/run     手动执行当日方向对照 + 提醒收益回填（写鉴权）
 - GET  /api/picks/intraday-opportunities  盘中机会：题材强→弱 + 题材内个股辨识度/确定性（2026-09-03）
+- GET  /api/picks/intraday-top           盘中跟踪最推荐标的（多维筛选切片，2026-09-04）
 
 简报 payload 存 data/picks/briefs/YYYYMMDD.json（morning_brief 模块 docstring
 有持久化决策：不进 prediction_reports 表，避免与 predict 按 target_date 的
@@ -155,37 +156,29 @@ async def run_intraday_review(
 # ---------------------------------------------------------------- 盘中机会视图
 
 
-@router.get("/intraday-opportunities")
-async def intraday_opportunities(
-    request: Request,
-    top_themes: int = Query(default=5, ge=1, le=20),
-    stocks_per_theme: int = Query(default=8, ge=1, le=30),
+async def _build_opportunities(
+    request: Request, trade_date, top_themes: int, stocks_per_theme: int
 ) -> dict:
-    """盘中机会：先题材（阶段/强度/依据）后题材内个股（辨识度/确定性 + 判定依据）。
+    """opportunities payload 构建（两处端点共用：全量视图 + 盘中 top 筛选）。
 
-    复用题材梯队看板（build_theme_board）+ 热股榜（人气维度），不在本端点重建题材
-    逻辑；辨识度/确定性判定规则见 app.picks.intraday_opportunity（纯函数，可回测）。
-    热股榜源失败时整体静默降级（hot_available=False，辨识度给 unknown），看板不受影响。
-    结果缓存 60s。
+    读 Parquet 是同步阻塞，丢线程池（market.themes 同款处理，曾卡死事件循环）；
+    结果缓存 60s（cache key 含参数，两端点同 key 命中同一份）。
     """
     import asyncio
-    from datetime import date as _date
 
     from app.core.ttl_cache import cache_on
     from app.picks.intraday_opportunity import assemble
     from app.services.theme_service import _pick_provider, build_theme_board
 
     hub = request.app.state.hub
-    from app.api.routes.market import _default_trade_date_async, _load_snapshot_map
+    from app.api.routes.market import _load_snapshot_map
 
-    trade_date: _date = await _default_trade_date_async(hub)
     cache = cache_on(request.app.state, "picks.opportunities", 60, maxsize=4)
     key = (trade_date, top_themes, stocks_per_theme)
     hit, payload = cache.get(key)
     if hit:
         return payload
 
-    # 读 Parquet 是同步阻塞，丢线程池（market.themes 同款处理，曾卡死事件循环）
     snapshot_map = await asyncio.to_thread(_load_snapshot_map, request, trade_date)
     board = await build_theme_board(hub.provider, trade_date, snapshot_map=snapshot_map)
 
@@ -207,3 +200,42 @@ async def intraday_opportunities(
     }
     cache.set(key, payload)
     return payload
+
+
+@router.get("/intraday-opportunities")
+async def intraday_opportunities(
+    request: Request,
+    top_themes: int = Query(default=5, ge=1, le=20),
+    stocks_per_theme: int = Query(default=8, ge=1, le=30),
+) -> dict:
+    """盘中机会：先题材（阶段/强度/依据）后题材内个股（辨识度/确定性 + 判定依据）。
+
+    复用题材梯队看板（build_theme_board）+ 热股榜（人气维度），不在本端点重建题材
+    逻辑；辨识度/确定性判定规则见 app.picks.intraday_opportunity（纯函数，可回测）。
+    热股榜源失败时整体静默降级（hot_available=False，辨识度给 unknown），看板不受影响。
+    """
+    from app.api.routes.market import _default_trade_date_async
+
+    hub = request.app.state.hub
+    trade_date = await _default_trade_date_async(hub)
+    return await _build_opportunities(request, trade_date, top_themes, stocks_per_theme)
+
+
+@router.get("/intraday-top")
+async def intraday_top(
+    request: Request,
+    limit: int = Query(default=8, ge=1, le=30),
+) -> dict:
+    """盘中跟踪「最推荐标的」：opportunities 的多维筛选切片（工作台动态分组口径）。
+
+    筛选规则与 tier 语义见 app.picks.intraday_opportunity.top_watch_stocks
+    （确定性优先、辨识度次之，unknown/低不入选）；与复盘（picks 维度）共用
+    同一份口径，保证「分组里看到的」和「复盘对照的」是同一批标的。
+    """
+    from app.api.routes.market import _default_trade_date_async
+    from app.picks.intraday_opportunity import top_watch_stocks
+
+    hub = request.app.state.hub
+    trade_date = await _default_trade_date_async(hub)
+    payload = await _build_opportunities(request, trade_date, 5, 8)
+    return {"data": top_watch_stocks(payload["data"], limit=limit), "meta": {}}
