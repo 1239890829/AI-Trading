@@ -6,7 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { RankDelta, ThemeCardView } from "@/components/theme-card";
 import { getThemes, getThemesHot, getThemeStrength, getAuctionBenchmark } from "@/lib/api";
 import { fmtHeat, pctColor, pctText, timeText } from "@/lib/format";
-import { workbenchUrl } from "@/lib/routing";
+import { workbenchUrlWithBack } from "@/lib/routing";
 import { sortAuctionBenchmark } from "@/lib/auction";
 import type { AuctionBenchmarkItem, ThemeStrengthRow, ThemesHotPayload } from "@/lib/api";
 import type { ThemeBoardPayload } from "@/types/market";
@@ -300,7 +300,7 @@ export function ThemesTab() {
           {benchmarkSorted.map((b) => (
             <Link
               key={b.symbol}
-              href={workbenchUrl(b.symbol)}
+              href={workbenchUrlWithBack(b.symbol)}
               className="flex shrink-0 items-center gap-1 text-xs hover:opacity-70"
               title={b.tags.length ? `官方题材：${b.tags.join("、")}` : "无官方题材归属"}
             >
@@ -327,7 +327,7 @@ export function ThemesTab() {
           {hot.stocks.slice(0, 10).map((s) => (
             <Link
               key={s.symbol}
-              href={workbenchUrl(s.symbol)}
+              href={workbenchUrlWithBack(s.symbol)}
               className="flex shrink-0 items-center gap-1 text-xs hover:text-rose-600 dark:hover:text-rose-400"
               title={s.themes.length ? `官方题材：${s.themes.join("、")}` : "无官方题材归属"}
             >

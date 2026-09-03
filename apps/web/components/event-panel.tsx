@@ -10,7 +10,7 @@ import {
   type EventStockPool,
   type EventSummary,
 } from "@/lib/api";
-import { workbenchUrl } from "@/lib/routing";
+import { workbenchUrlWithBack } from "@/lib/routing";
 
 const CATEGORY_LABEL: Record<string, string> = {
   policy: "政策",
@@ -90,7 +90,7 @@ function StockPools({ eventId }: { eventId: number }) {
               {p.stocks.slice(0, 12).map((s) => (
                 <Link
                   key={s.symbol}
-                  href={workbenchUrl(s.symbol)}
+                  href={workbenchUrlWithBack(s.symbol)}
                   className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
                   title={`${s.symbol} ${s.name} · 查看详情`}
                 >

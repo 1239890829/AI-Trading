@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, addToWatchlist, searchSymbols } from "@/lib/api";
 import { notifyWatchlistChanged } from "@/lib/watchlist-sync";
-import { workbenchUrl } from "@/lib/routing";
+import { workbenchUrlWithBack } from "@/lib/routing";
 import type { SymbolSearchItem } from "@/types/market";
 
 /** 输入停稳后的防抖时长（ms）。Enter 可跳过防抖立即搜索。 */
@@ -100,7 +100,7 @@ export function SearchBox() {
     setOpen(false);
     setQ("");
     resetTransient(); // 跳转清空后，飞行中的旧请求若返回不得再弹开面板
-    router.push(workbenchUrl(item.symbol));
+    router.push(workbenchUrlWithBack(item.symbol));
   }
 
   /** 关键词变短到阈值以下时的状态清理（onChange 删字 / go 跳转清空两条路径）。 */

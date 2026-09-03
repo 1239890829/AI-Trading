@@ -6,7 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { Panel } from "@/components/panel";
 import { getLimitUpPool } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
-import { workbenchUrl } from "@/lib/routing";
+import { workbenchUrlWithBack } from "@/lib/routing";
 import type { LimitUpRecord } from "@/types/market";
 
 /**
@@ -171,7 +171,7 @@ export function LimitUpTab() {
                     }`}
                   >
                     <td className="px-2 py-2 font-mono text-xs text-zinc-400">
-                      <Link href={workbenchUrl(r.symbol)} className="hover:text-sky-400 hover:underline">
+                      <Link href={workbenchUrlWithBack(r.symbol)} className="hover:text-sky-400 hover:underline">
                         {r.symbol}
                       </Link>
                     </td>

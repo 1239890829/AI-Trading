@@ -6,6 +6,7 @@
 - POST /api/picks/watcher/beat            手动推进一拍（写鉴权；取证/调试用）
 - GET  /api/picks/intraday-review         近 30 日方向/提醒胜率统计（批次 C）
 - POST /api/picks/intraday-review/run     手动执行当日方向对照 + 提醒收益回填（写鉴权）
+- GET  /api/picks/intraday-opportunities  盘中机会：题材强→弱 + 题材内个股辨识度/确定性（2026-09-03）
 
 简报 payload 存 data/picks/briefs/YYYYMMDD.json（morning_brief 模块 docstring
 有持久化决策：不进 prediction_reports 表，避免与 predict 按 target_date 的
@@ -149,3 +150,60 @@ async def run_intraday_review(
             raise HTTPException(status_code=404, detail=detail)
         raise HTTPException(status_code=409, detail=detail)
     return {"data": result, "meta": {}}
+
+
+# ---------------------------------------------------------------- 盘中机会视图
+
+
+@router.get("/intraday-opportunities")
+async def intraday_opportunities(
+    request: Request,
+    top_themes: int = Query(default=5, ge=1, le=20),
+    stocks_per_theme: int = Query(default=8, ge=1, le=30),
+) -> dict:
+    """盘中机会：先题材（阶段/强度/依据）后题材内个股（辨识度/确定性 + 判定依据）。
+
+    复用题材梯队看板（build_theme_board）+ 热股榜（人气维度），不在本端点重建题材
+    逻辑；辨识度/确定性判定规则见 app.picks.intraday_opportunity（纯函数，可回测）。
+    热股榜源失败时整体静默降级（hot_available=False，辨识度给 unknown），看板不受影响。
+    结果缓存 60s。
+    """
+    import asyncio
+    from datetime import date as _date
+
+    from app.core.ttl_cache import cache_on
+    from app.picks.intraday_opportunity import assemble
+    from app.services.theme_service import _pick_provider, build_theme_board
+
+    hub = request.app.state.hub
+    from app.api.routes.market import _default_trade_date_async, _load_snapshot_map
+
+    trade_date: _date = await _default_trade_date_async(hub)
+    cache = cache_on(request.app.state, "picks.opportunities", 60, maxsize=4)
+    key = (trade_date, top_themes, stocks_per_theme)
+    hit, payload = cache.get(key)
+    if hit:
+        return payload
+
+    # 读 Parquet 是同步阻塞，丢线程池（market.themes 同款处理，曾卡死事件循环）
+    snapshot_map = await asyncio.to_thread(_load_snapshot_map, request, trade_date)
+    board = await build_theme_board(hub.provider, trade_date, snapshot_map=snapshot_map)
+
+    hot_rows: list[dict] = []
+    hot_available = False
+    ths = _pick_provider(hub.provider, "ThsFuyaoProvider")
+    if ths is not None:
+        try:
+            hot_rows = (await ths.get_hot_stock_list("day"))[:50]
+            hot_available = bool(hot_rows)
+        except Exception:  # noqa: BLE001 — 人气维度失败不拖垮机会视图，只降级
+            log.warning("hot stock list unavailable, distinctiveness degrades to unknown")
+
+    payload = {
+        "data": assemble(
+            board, hot_rows, hot_available, top_themes=top_themes, stocks_per_theme=stocks_per_theme
+        ),
+        "meta": {},
+    }
+    cache.set(key, payload)
+    return payload

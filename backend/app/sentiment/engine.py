@@ -441,22 +441,27 @@ def compute_sentiment(
             f"明日需 ≥{int(promo['promo_1to2_base'] * 0.25) + 1} 只晋级才能修复"
         )
 
+    def _pct(v: float | None) -> str:
+        """比率 → 百分比字符串（展示层口径）。promotion dict 里的原始小数不动——
+        分位校准、阶段切换阈值、推送卡片都消费小数口径，只有 indicators 是给人看的。"""
+        return "--" if v is None else f"{v * 100:.1f}%"
+
     indicators = [
         {"name": "涨停家数", "value": limit_up, "note": "封单法（东财涨停池）"},
         {"name": "连板高度", "value": f"{max_board}板", "note": f"昨日最高 {max_board_prev}板" if max_board_prev else ""},
         {"name": "连板家数", "value": sum(1 for b in boards_today if b >= 2), "note": "≥2板"},
         {"name": "首板家数", "value": sum(1 for b in boards_today if b == 1), "note": ""},
-        {"name": "1进2 晋级率", "value": promo["promo_1to2"],
+        {"name": "1进2 晋级率", "value": _pct(promo["promo_1to2"]),
          "note": f"{promo['promo_1to2_hit']}/{promo['promo_1to2_base']}"},
-        {"name": "2进3 晋级率", "value": promo["promo_2to3"],
+        {"name": "2进3 晋级率", "value": _pct(promo["promo_2to3"]),
          "note": f"{promo['promo_2to3_hit']}/{promo['promo_2to3_base']}"},
-        {"name": "高位存活率", "value": promo["high_survival"],
+        {"name": "高位存活率", "value": _pct(promo["high_survival"]),
          "note": f"≥3板 {promo['promo_2to3_hit'] and ''}{promo['high_survival_hit']}/{promo['high_survival_base']}"},
         {"name": "昨日涨停今日中位", "value": prev["median_pct"], "note": f"样本{prev['sample']}只"},
         {"name": "昨日涨停今日均值", "value": prev["avg_pct"], "note": f"与中位背离 {prev['skew_pct']}pct"},
-        {"name": "翻红率", "value": prev["red_rate"], "note": ""},
-        {"name": "再涨停率", "value": prev["re_limit_rate"], "note": ""},
-        {"name": "炸板率", "value": break_rate, "note": break_note},
+        {"name": "翻红率", "value": _pct(prev["red_rate"]), "note": ""},
+        {"name": "再涨停率", "value": _pct(prev["re_limit_rate"]), "note": ""},
+        {"name": "炸板率", "value": _pct(break_rate), "note": break_note},
         {"name": "跌停家数", "value": limit_down if limit_down is not None else "缺失", "note": ""},
         {"name": "上涨/下跌", "value": f"{up}/{down}", "note": ""},
     ]

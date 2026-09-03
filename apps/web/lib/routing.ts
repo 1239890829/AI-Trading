@@ -14,6 +14,34 @@ export function workbenchUrl(symbol: string): string {
   return `/workbench?symbol=${encodeURIComponent(symbol)}`;
 }
 
+/**
+ * 跨页跳工作台并携带来源（2026-09-03 需求：所有与工作台联动的板块都提供返回入口，
+ * 返回后原页面状态保留——来源页的 tab/选中态本来就活在 URL query 里，把整个
+ * 「路径 + 查询串」原样装进 from 参数即可，无需每个页面自己序列化状态）。
+ * SSR/纯函数环境退化为不带 from 的普通跳转。
+ */
+export function workbenchUrlWithBack(symbol: string): string {
+  const base = workbenchUrl(symbol);
+  if (typeof window === "undefined") return base;
+  const from = window.location.pathname + window.location.search;
+  if (!from.startsWith("/")) return base;
+  return `${base}&from=${encodeURIComponent(from)}`;
+}
+
+/** from 路径 → 来源页中文名（返回按钮的文案；未知路径返回 null → 不渲染按钮）。 */
+export function originLabel(from: string | null): string | null {
+  if (!from || !from.startsWith("/")) return null;
+  const path = from.split("?")[0];
+  const labels: Record<string, string> = {
+    "/intraday": "盘中跟踪",
+    "/tape": "盘面",
+    "/market": "市场",
+    "/picks": "每日精选",
+    "/research": "研究",
+  };
+  return labels[path] ?? null;
+}
+
 /** 工作台「上次查看标的」的 sessionStorage 键（无参数进入 /workbench 时的回退）。 */
 export const LAST_SYMBOL_KEY = "ashare.workbench.lastSymbol";
 

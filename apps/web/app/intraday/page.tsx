@@ -1,8 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   generateMorningBrief,
+  getIntradayOpportunities,
   getIntradayReview,
   getMorningBriefToday,
   getWatcherState,
@@ -10,17 +12,22 @@ import {
   runWatcherBeat,
   type BriefAlert,
   type BriefDirection,
+  type IntradayOpportunities,
   type IntradayReviewStats,
   type MorningBrief,
+  type OpportunityJudgement,
+  type OpportunityStock,
+  type OpportunityTheme,
   type WatcherState,
 } from "@/lib/api";
+import { workbenchUrlWithBack } from "@/lib/routing";
 import { pctColor, pctText, timeText } from "@/lib/format";
 
 /**
  * 盘中跟踪（/intraday，选股 2.0 §2 呈现层，批次 B/C）：
- * 盘前简报（方向 top3 + 标的池 + 触发/证伪条件）→ 盘中 watcher 状态与提醒 →
- * 盘后「盘前 vs 实际」对照表 + 近 30 日胜率统计。
- * 三节拍共用当日简报文件（data/picks/briefs/YYYYMMDD.json）为唯一事实源。
+ * 当前机会（题材强→弱 + 题材内候选个股辨识度/确定性，2026-09-03）→ 盘前简报（方向 top3
+ * + 标的池 + 触发/证伪条件）→ 盘中 watcher 状态与提醒 → 盘后「盘前 vs 实际」对照表 +
+ * 近 30 日胜率统计。三节拍共用当日简报文件为唯一事实源。
  * 全页不构成买卖建议；提醒均为模拟跟踪。
  */
 
@@ -42,6 +49,191 @@ function outcomeTone(outcome: string): string {
   return OUTCOME_TONE[outcome] ?? "text-zinc-400";
 }
 
+/* ---------------------------------------------------------------- 当前机会 *
+ * 先题材（强度/阶段/依据）后题材内候选个股（辨识度/确定性）。
+ * 判定全部来自后端 intraday_opportunity 纯函数（等级 + 真实依据，可追溯）；
+ * unknown 表示"判不出"（数据缺失），不是"低"——展示必须区分（三态纪律）。 */
+
+const STAGE_TONE: Record<string, string> = {
+  启动: "bg-sky-500/10 text-sky-600 dark:text-sky-300",
+  发酵: "bg-up/10 text-up",
+  高潮: "bg-rose-500/10 text-rose-600 dark:text-rose-300",
+  分歧: "bg-amber-500/10 text-amber-600 dark:text-amber-300",
+  退潮: "bg-zinc-500/10 text-zinc-500",
+};
+
+/** 辨识度/确定性三态徽标：title 挂完整判定依据（可追溯）。 */
+function JudgeBadge({ label, j }: { label: string; j: OpportunityJudgement }) {
+  const tone =
+    j.level === "高"
+      ? "bg-violet-500/10 text-violet-600 dark:text-violet-300"
+      : j.level === "中"
+        ? "bg-sky-500/10 text-sky-600 dark:text-sky-300"
+        : j.level === "低"
+          ? "bg-zinc-500/10 text-zinc-500"
+          : "bg-amber-500/10 text-amber-600 dark:text-amber-300";
+  return (
+    <span className={`rounded px-1 py-0.5 text-[10px] ${tone}`} title={`${label}判定依据：${j.basis || "—"}`}>
+      {label}·{j.level}
+    </span>
+  );
+}
+
+/** 候选个股行：点击跳工作台定位该股（带 from，工作台可一键返回本页）。 */
+function OpportunityStockRow({ s }: { s: OpportunityStock }) {
+  return (
+    <tr className="border-t border-zinc-100 dark:border-zinc-800/60">
+      <td className="py-1.5">
+        <a
+          href={workbenchUrlWithBack(s.symbol)}
+          className="font-medium text-zinc-900 hover:text-sky-500 hover:underline dark:text-zinc-50"
+          title="在工作台打开（可返回盘中跟踪）"
+        >
+          {s.name || s.symbol} ↗
+        </a>
+        <span className="ml-1 font-mono text-[10px] text-zinc-400">{s.symbol}</span>
+      </td>
+      <td className="text-zinc-500 dark:text-zinc-400">
+        {s.role}
+        {s.boards ? ` · ${s.boards}板` : ""}
+      </td>
+      <td className={`text-right font-mono tabular-nums ${pctColor(s.change_pct)}`}>
+        {s.change_pct != null ? pctText(s.change_pct) : "--"}
+      </td>
+      <td>
+        <span className="flex flex-wrap justify-end gap-1">
+          <JudgeBadge label="辨识度" j={s.distinctiveness} />
+          <JudgeBadge label="确定性" j={s.certainty} />
+        </span>
+      </td>
+      <td className="max-w-[220px] truncate text-[11px] text-zinc-400" title={s.reason ?? ""}>
+        {s.reason || "—"}
+      </td>
+    </tr>
+  );
+}
+
+/** 题材机会卡：头部是结论（阶段+强度+梯队概况），展开是个股明细。 */
+function ThemeCardView({
+  t,
+  expanded,
+  onToggle,
+}: {
+  t: OpportunityTheme;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const stage = t.stage ?? "未知";
+  return (
+    <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+      <button onClick={onToggle} className="flex w-full flex-wrap items-center gap-2 text-left">
+        <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">{t.theme}</span>
+        <span className={`rounded px-1.5 py-0.5 text-[10px] ${STAGE_TONE[stage] ?? "bg-zinc-500/10 text-zinc-500"}`} title={(t.stage_basis || []).join("；")}>
+          {stage}
+        </span>
+        <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400" title={t.tier_basis ?? ""}>
+          {t.strength_tier ?? "—"}
+        </span>
+        {t.strength_score != null && (
+          <span className="font-mono tabular-nums text-zinc-400" title={`题材强度 ${t.strength_score}`}>
+            {t.strength_score} 分
+          </span>
+        )}
+        <span className="text-[11px] text-zinc-400" title={`梯队：最高 ${t.max_boards ?? "?"} 板，涨停 ${t.limit_up_count ?? "?"} 家${t.has_succession ? "，梯队有接续" : ""}`}>
+          {t.max_boards ?? "?"} 板 · {t.limit_up_count ?? "?"} 家涨停
+          {t.has_succession === false && " · 梯队断层"}
+        </span>
+        <span className="ml-auto text-zinc-400">{expanded ? "收起 ▲" : `${t.stocks.length} 只候选 ▼`}</span>
+      </button>
+      {t.risks.length > 0 && !expanded && (
+        <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-300" title={t.risks.join("；")}>
+          ⚠ {t.risks[0]}
+        </p>
+      )}
+      {expanded && (
+        <>
+          {t.stage_basis.length > 0 && (
+            <p className="mt-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">阶段依据：{t.stage_basis.join("；")}</p>
+          )}
+          {t.health_note && <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">{t.health_note}</p>}
+          {t.risks.length > 0 && (
+            <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-300">风险：{t.risks.join("；")}</p>
+          )}
+          {t.stocks.length > 0 ? (
+            <table className="mt-2 w-full">
+              <thead>
+                <tr className="text-zinc-400">
+                  <th className="text-left font-normal">个股（点击进工作台 ↗）</th>
+                  <th className="text-left font-normal">梯队</th>
+                  <th className="text-right font-normal">涨跌幅</th>
+                  <th className="text-right font-normal">判定（悬停看依据）</th>
+                  <th className="text-left font-normal">入选理由</th>
+                </tr>
+              </thead>
+              <tbody>
+                {t.stocks.map((s) => (
+                  <OpportunityStockRow key={s.symbol} s={s} />
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p className="mt-2 text-[11px] text-zinc-400">该题材暂无梯队成员。</p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** 盘中机会区块：结论可解释、可追溯；不构成买卖建议。 */
+function OpportunitySection({
+  opps,
+  expanded,
+  onToggle,
+}: {
+  opps: IntradayOpportunities;
+  expanded: string | null;
+  onToggle: (theme: string) => void;
+}) {
+  return (
+    <section className="space-y-2">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+          当前机会（题材 → 个股，证据池 {opps.trade_date ?? "—"}）
+        </h2>
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-400">
+          <span>
+            涨停 {opps.summary.limit_up_total ?? "—"} 家 · 最高 {opps.summary.market_max_boards ?? "—"} 板
+          </span>
+          {!opps.hot_available && (
+            <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-amber-600 dark:text-amber-300">
+              ⚠ 人气榜不可用：辨识度判定不完整
+            </span>
+          )}
+        </div>
+      </div>
+      {opps.themes.length === 0 ? (
+        <div className="rounded-xl border border-zinc-200 p-4 text-xs text-zinc-400 dark:border-zinc-800">
+          暂无题材机会（当日无涨停数据或题材未成形）。
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {opps.themes.map((t) => (
+            <ThemeCardView key={t.theme} t={t} expanded={expanded === t.theme} onToggle={() => onToggle(t.theme)} />
+          ))}
+        </div>
+      )}
+      {opps.caveats.length > 0 && (
+        <p className="text-[10px] text-zinc-400">口径：{opps.caveats.join("；")}</p>
+      )}
+      <p className="text-[10px] text-zinc-400">
+        辨识度=人气×高度×角色（市场记住它的成本）；确定性=题材阶段基座×封板质量修正（延续预期的支撑）。
+        两者独立判定不合并打分；判定依据悬停可见、等级可回放。仅模拟跟踪，不构成买卖建议。
+      </p>
+    </section>
+  );
+}
+
 function EnvStrip({ brief }: { brief: MorningBrief }) {
   const env = brief.env;
   return (
@@ -52,8 +244,8 @@ function EnvStrip({ brief }: { brief: MorningBrief }) {
         </span>
       )}
       {env.promo_percentile != null && (
-        <span className="text-[10px]" title="promo_1to2 晋级率历史分位（P0-3b 校准）">
-          晋级率分位 {env.promo_percentile}
+        <span className="text-[10px]" title="1进2 晋级率的历史分位（0-100，P0-3b 校准）——是分位不是百分比">
+          晋级率分位 P{env.promo_percentile}
         </span>
       )}
       {env.pool_date && <span className="text-[10px]">证据池 {env.pool_date}</span>}
@@ -332,25 +524,43 @@ function DailyCurve({ daily }: { daily: IntradayReviewStats["daily"] }) {
   );
 }
 
-export default function IntradayPage() {
+function IntradayPageInner() {
+  const router = useRouter();
+  const sp = useSearchParams();
   const [brief, setBrief] = useState<MorningBrief | null>(null);
   const [watcher, setWatcher] = useState<WatcherState | null>(null);
   const [stats, setStats] = useState<IntradayReviewStats | null>(null);
+  const [opps, setOpps] = useState<IntradayOpportunities | null>(null);
   const [briefMissing, setBriefMissing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
+  // 展开的题材以 URL query 为真相源（?theme=）：跳工作台后返回，展开态原样保留
+  const [expandedTheme, setExpandedTheme] = useState<string | null>(() => sp.get("theme"));
+  const toggleTheme = useCallback(
+    (t: string) => {
+      const next = expandedTheme === t ? null : t;
+      setExpandedTheme(next);
+      router.replace(next ? `/intraday?theme=${encodeURIComponent(next)}` : "/intraday", {
+        scroll: false,
+      });
+    },
+    [expandedTheme, router],
+  );
+
   const load = useCallback(async () => {
-    const [b, w, s] = await Promise.all([
+    const [b, w, s, o] = await Promise.all([
       getMorningBriefToday().catch(() => null),
       getWatcherState().catch(() => null),
       getIntradayReview().catch(() => null),
+      getIntradayOpportunities().catch(() => null),
     ]);
     setBrief(b);
     setBriefMissing(b === null);
     setWatcher(w);
     setStats(s);
+    setOpps(o);
   }, []);
 
   useEffect(() => {
@@ -431,6 +641,8 @@ export default function IntradayPage() {
       )}
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+        {/* 当前机会不依赖简报文件（实时涨停池题材），独立于 briefMissing 展示 */}
+        {opps && <OpportunitySection opps={opps} expanded={expandedTheme} onToggle={toggleTheme} />}
         {briefMissing ? (
           <div className="rounded-xl border border-zinc-200 p-6 text-center text-sm text-zinc-400 dark:border-zinc-800">
             今日尚无盘前简报：点右上「生成/刷新简报」，或等交易日 08:40 自动生成。
@@ -589,5 +801,14 @@ export default function IntradayPage() {
         intraday_rules 常量表（批次 D 回测调参唯一入口）· 全部输出为模拟跟踪，不构成买卖建议
       </div>
     </main>
+  );
+}
+
+/** useSearchParams 需要 Suspense 边界（Next 16 约束，workbench 同款结构）。 */
+export default function IntradayPage() {
+  return (
+    <Suspense fallback={<main className="p-6 text-sm text-zinc-400">盘中跟踪加载中…</main>}>
+      <IntradayPageInner />
+    </Suspense>
   );
 }

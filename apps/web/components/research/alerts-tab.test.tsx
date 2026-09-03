@@ -61,7 +61,8 @@ describe("AlertsTab 触发记录跳转（切片 C）", () => {
     render(<AlertsTab />);
     // 规则名在"规则列表"与"触发记录"两处都出现，直接等跳转链接挂载
     const link = await screen.findByTitle("查看行情详情");
-    expect(link.getAttribute("href")).toBe("/workbench?symbol=600519");
+    // 2026-09-03 起跳转带 from 返回参数（workbenchUrlWithBack），断言前缀而非全等
+    expect(link.getAttribute("href")?.startsWith("/workbench?symbol=600519")).toBe(true);
     expect(link.textContent).toBe("600519");
   });
 });

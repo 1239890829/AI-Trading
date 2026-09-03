@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Panel } from "@/components/panel";
-import { workbenchUrl } from "@/lib/routing";
+import { workbenchUrlWithBack } from "@/lib/routing";
 import {
   ackAlertEvent,
   createAlertRule,
@@ -334,7 +334,7 @@ export function AlertsTab() {
                         {new Date(e.triggered_at).toLocaleTimeString("zh-CN")}
                       </td>
                       <td className="px-3 py-2 font-mono">
-                        <Link href={workbenchUrl(e.symbol)} className="hover:text-sky-400 hover:underline" title="查看行情详情">
+                        <Link href={workbenchUrlWithBack(e.symbol)} className="hover:text-sky-400 hover:underline" title="查看行情详情">
                           {e.symbol}
                         </Link>
                       </td>

@@ -30,7 +30,7 @@ import {
 } from "@/lib/api";
 import { fmt, fmtAmount, isHardQuality, pctColor, pctText } from "@/lib/format";
 import { subscribeWatchlist, notifyWatchlistChanged } from "@/lib/watchlist-sync";
-import { LAST_SYMBOL_KEY, workbenchUrl } from "@/lib/routing";
+import { LAST_SYMBOL_KEY, originLabel, workbenchUrl } from "@/lib/routing";
 import type { Quote } from "@/types/market";
 
 const STATUS_LABEL: Record<StreamStatus, { text: string; cls: string }> = {
@@ -91,6 +91,23 @@ function WorkbenchInner() {
 
   // 渲染兜底：selected 尚未就绪（首帧/回退解析中）时保持原默认标的，避免空 symbol 取数
   const activeSymbol = selected || "600519";
+
+  // 页内切股：URL 是唯一真相源；from 参数（来源页，见 lib/routing.workbenchUrlWithBack）
+  // 原样保留——用户切了几只股后「← 返回来源页」入口不能消失
+  const switchSymbol = useCallback(
+    (s: string) => {
+      setSelected(s);
+      const back = sp.get("from");
+      const url = back ? `${workbenchUrl(s)}&from=${encodeURIComponent(back)}` : workbenchUrl(s);
+      router.replace(url, { scroll: false });
+    },
+    [router, sp],
+  );
+
+  // 返回来源页：from 只接受站内绝对路径（防注入），返回即恢复跳转前的 URL（含状态）。
+  // 状态保留原理：各功能页的 tab/选中态本来就以 URL query 为真相源，整串带回即可。
+  const backFrom = sp.get("from");
+  const backLabel = originLabel(backFrom);
 
   const loadBase = useCallback(async () => {
     try {
@@ -274,7 +291,16 @@ function WorkbenchInner() {
       )}
 
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
-        <span>
+        <span className="flex items-center gap-2">
+          {backLabel && backFrom && (
+            <button
+              onClick={() => router.push(backFrom)}
+              className="rounded border border-zinc-300 px-2 py-0.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+              title={`返回${backLabel}（跳转前状态已保留）`}
+            >
+              ← 返回{backLabel}
+            </button>
+          )}
           两市成交额合计：<span className="font-mono tabular-nums text-zinc-700 dark:text-zinc-200">{totalAmount ? fmtAmount(totalAmount) : "--"}</span>
         </span>
         <span className="flex items-center gap-3">
@@ -305,10 +331,7 @@ function WorkbenchInner() {
         <IndexCards
           indices={indices}
           selected={activeSymbol}
-          onSelect={(s) => {
-            setSelected(s);
-            router.replace(workbenchUrl(s), { scroll: false });
-          }}
+          onSelect={switchSymbol}
         />
         {/* 持仓组（retro #3 遗留）：仅有持仓时渲染，空仓零占用；行点击选中该股 */}
         {positions.length > 0 && (
@@ -320,10 +343,7 @@ function WorkbenchInner() {
                   return (
                     <tr
                       key={p.symbol}
-                      onClick={() => {
-                        setSelected(p.symbol);
-                        router.replace(workbenchUrl(p.symbol), { scroll: false });
-                      }}
+                      onClick={() => switchSymbol(p.symbol)}
                       className="cursor-pointer border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900"
                     >
                       <td className="px-3 py-1.5">
@@ -447,10 +467,7 @@ function WorkbenchInner() {
                 {(activeGroup === "持仓" ? holdingQuotes : watchQuotes).map((q) => (
                   <tr
                     key={q.symbol}
-                    onClick={() => {
-                      setSelected(q.symbol);
-                      router.replace(workbenchUrl(q.symbol), { scroll: false });
-                    }}
+                    onClick={() => switchSymbol(q.symbol)}
                     className={`cursor-pointer border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900 ${
                       activeSymbol === q.symbol ? "bg-zinc-50 dark:bg-zinc-900" : ""
                     }`}

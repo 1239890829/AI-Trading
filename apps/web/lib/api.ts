@@ -1540,6 +1540,53 @@ export async function getIntradayReview(limit = 30): Promise<IntradayReviewStats
   return (await getJson<IntradayReviewStats>(`/api/picks/intraday-review?limit=${limit}`)).data;
 }
 
+/** 盘中机会：判定类三态——unknown 表示判不出（数据缺失），不是"低"。 */
+export interface OpportunityJudgement {
+  level: "高" | "中" | "低" | "unknown";
+  basis: string;
+}
+
+export interface OpportunityStock {
+  symbol: string;
+  name: string | null;
+  role: string | null;
+  boards: number | null;
+  change_pct: number | null;
+  reason: string | null;
+  hot_rank: number | null;
+  distinctiveness: OpportunityJudgement;
+  certainty: OpportunityJudgement;
+}
+
+export interface OpportunityTheme {
+  theme: string;
+  stage: string | null;
+  stage_basis: string[];
+  strength_score: number | null;
+  strength_tier: string | null;
+  tier_basis: string | null;
+  formation: string | null;
+  health_note: string | null;
+  risks: string[];
+  max_boards: number | null;
+  limit_up_count: number | null;
+  has_succession: boolean | null;
+  stocks: OpportunityStock[];
+}
+
+export interface IntradayOpportunities {
+  trade_date: string | null;
+  themes: OpportunityTheme[];
+  summary: { limit_up_total: number | null; market_max_boards: number | null; top_theme: string | null };
+  hot_available: boolean;
+  caveats: string[];
+}
+
+/** 盘中机会视图：先题材（强度/阶段/依据）后题材内个股（辨识度/确定性）。 */
+export async function getIntradayOpportunities(): Promise<IntradayOpportunities> {
+  return (await getJson<IntradayOpportunities>(`/api/picks/intraday-opportunities`)).data;
+}
+
 /** 手动执行当日方向对照 + 提醒收益回填（15:35 调度的同代码路径）。 */
 export async function runIntradayReview(): Promise<{ brief_date: string; directions: { direction: string; outcome: string }[] }> {
   return (

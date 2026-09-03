@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { fmt, fmtAmount, fmtHeat, pctColor, pctText } from "@/lib/format";
 import type { HotTheme, ThemeStrengthRow } from "@/lib/api";
-import { workbenchUrl } from "@/lib/routing";
+import { workbenchUrlWithBack } from "@/lib/routing";
 import type { ThemeCard as ThemeCardType } from "@/types/market";
 
 /**
@@ -344,7 +344,7 @@ export function ThemeCardView({
                       <Badge className={ROLE_STYLE[r.role]}>{r.role}</Badge>
                     </td>
                     <td className="py-1.5 align-middle">
-                      <Link href={workbenchUrl(r.symbol)} className="hover:text-rose-600 dark:hover:text-rose-400">
+                      <Link href={workbenchUrlWithBack(r.symbol)} className="hover:text-rose-600 dark:hover:text-rose-400">
                         <span className="text-zinc-800 dark:text-zinc-100">{r.name ?? r.symbol}</span>
                         <span className="ml-1.5 font-mono text-[11px] text-zinc-400">{r.symbol}</span>
                         {r.official && (
@@ -515,7 +515,7 @@ export function ThemeCardView({
               {card.leaders.main ? (
                 <div className="flex items-center gap-2">
                   <Badge className={ROLE_STYLE[card.leaders.main.role]}>龙头</Badge>
-                  <Link href={workbenchUrl(card.leaders.main.symbol)} className="text-zinc-800 hover:text-rose-600 dark:text-zinc-100 dark:hover:text-rose-400">
+                  <Link href={workbenchUrlWithBack(card.leaders.main.symbol)} className="text-zinc-800 hover:text-rose-600 dark:text-zinc-100 dark:hover:text-rose-400">
                     {card.leaders.main.name ?? card.leaders.main.symbol}
                   </Link>
                   <span className="font-mono text-xs text-zinc-400">{card.leaders.main.boards} 板</span>
@@ -527,7 +527,7 @@ export function ThemeCardView({
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge className={ROLE_STYLE["中军"]}>中军</Badge>
                   {card.leaders.middle_weights.map((m) => (
-                    <Link key={m.symbol} href={workbenchUrl(m.symbol)} className="text-zinc-700 hover:text-rose-600 dark:text-zinc-300 dark:hover:text-rose-400">
+                    <Link key={m.symbol} href={workbenchUrlWithBack(m.symbol)} className="text-zinc-700 hover:text-rose-600 dark:text-zinc-300 dark:hover:text-rose-400">
                       {m.name ?? m.symbol}
                       <span className="ml-1 font-mono text-xs text-zinc-400">{m.boards}板</span>
                     </Link>
@@ -540,7 +540,7 @@ export function ThemeCardView({
                   {card.leaders.candidates.map((c) => (
                     <Link
                       key={c.symbol}
-                      href={workbenchUrl(c.symbol)}
+                      href={workbenchUrlWithBack(c.symbol)}
                       title={c.reason}
                       className="text-zinc-700 hover:text-rose-600 dark:text-zinc-300 dark:hover:text-rose-400"
                     >

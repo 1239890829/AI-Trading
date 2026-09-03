@@ -81,7 +81,8 @@ describe("EventPanel", () => {
     fireEvent.click(screen.getByText("标的池 ↗"));
     await waitFor(() => expect(screen.getByText(/600171/)).toBeTruthy());
     const link = screen.getByText(/600171/).closest("a");
-    expect(link?.getAttribute("href")).toBe("/workbench?symbol=600171");
+    // 2026-09-03 起跳转带 from 返回参数（workbenchUrlWithBack），断言前缀而非全等
+    expect(link?.getAttribute("href")?.startsWith("/workbench?symbol=600171")).toBe(true);
     expect(screen.getByText(/不构成买卖建议/)).toBeTruthy();
   });
 
