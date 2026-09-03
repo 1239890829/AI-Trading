@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MinuteChart } from "@/components/minute-chart";
 import { KlineChartPro } from "@/components/kline-chart-pro";
+import { priceLimitPct } from "@/lib/price-limit";
 import { Panel } from "@/components/panel";
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
@@ -641,6 +642,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                   auction={auctionProp}
                   exactBaseline={vrBaseline}
                   newsEvents={minuteNewsEvents}
+                  limitPct={priceLimitPct(symbol, quote?.name ?? null)}
                   className="h-full"
                 />
                 </div>
