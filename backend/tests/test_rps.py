@@ -6,7 +6,6 @@
 import sys
 
 import duckdb
-import pytest
 
 sys.path.insert(0, ".")
 
