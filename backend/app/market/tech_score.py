@@ -3,6 +3,14 @@
 口径与前端 lib/technical-analysis.ts 的 analyze() 严格一致（MA 排列/MACD/KDJ/RSI/形态），
 在此之上叠加权重评分与流动性维度，输出 0-100 分 + 等级 + 逐维依据。
 
+七维：trend / macd / kdj / rsi / volume / liquidity / pattern（v2 起补齐形态维——
+2026-09-04 前后端形态不对齐：前端有双响炮/早晨之星/黄昏之星三个形态而后端缺失，
+docstring却声称含形态，属于口径撒谎，本次修正）。
+
+形态口径差异说明：前端 chgOf 优先取 change_pct（相对昨收涨跌幅）；后端 Bar 无该
+字段，统一用实体涨幅 (close-open)/open —— 阈值 5% 语义近似。一字板实体为 0，
+两种口径都判不出双响炮，属已知盲区。
+
 红线 3 合规：只给技术面偏向 + 依据 + 失效条件，禁止确定性买卖结论；
 summary/evidence 一律描述"多因子共振状态"，不输出"建议买入/卖出"。
 """
@@ -13,14 +21,16 @@ from typing import Literal
 Bar = dict  # {ts, open, high, low, close, volume}
 
 # 评分维度权重（和=1）。版本化：改权重必须递增 SCORER_VERSION。
-SCORER_VERSION = "v1"
+# v2（2026-09-04）：新增 pattern 0.10，其余六维等比缩放。
+SCORER_VERSION = "v2"
 _WEIGHTS = {
-    "trend": 0.25,
-    "macd": 0.20,
-    "kdj": 0.15,
-    "rsi": 0.10,
-    "volume": 0.15,
-    "liquidity": 0.15,
+    "trend": 0.22,
+    "macd": 0.18,
+    "kdj": 0.14,
+    "rsi": 0.09,
+    "volume": 0.13,
+    "liquidity": 0.14,
+    "pattern": 0.10,
 }
 
 
@@ -78,6 +88,48 @@ def kdj(bars: list[Bar]) -> dict | None:
 
 def _sig(name: str, bias: Literal["bull", "bear", "neutral"], score: float, detail: str) -> dict:
     return {"name": name, "bias": bias, "score": round(score, 3), "detail": detail}
+
+
+def patterns(bars: list[Bar]) -> dict | None:
+    """最近 3 日（A/B/C）K 线形态判定，口径同前端 technical-analysis.ts。
+
+    三个形态：双响炮（两阳夹一阴回调）、早晨之星（见底反转）、黄昏之星（见顶反转）。
+    差异：前端 chgOf 优先取 change_pct（相对昨收），后端 Bar 无该字段，
+    统一用实体涨幅 (close-open)/open —— 阈值语义近似（见模块 docstring）。
+    :return: None = 近 3 日无形态；命中返回 {name, bias, detail}
+    """
+    if len(bars) < 3:
+        return None
+    a, b, c = bars[-3], bars[-2], bars[-1]
+    body = lambda x: abs(x["close"] - x["open"])  # noqa: E731
+    is_bull = lambda x: x["close"] > x["open"]  # noqa: E731
+    chg = lambda x: (x["close"] - x["open"]) / max(x["open"], 0.01) * 100  # noqa: E731
+
+    # 双响炮：大阳(≥5%) + 小实体回调/横盘(<2.5%) + 大阳(≥5%)
+    if (
+        is_bull(a) and chg(a) >= 5
+        and body(b) / max(b["open"], 0.01) < 0.025
+        and is_bull(c) and chg(c) >= 5
+    ):
+        return {
+            "name": "形态·双响炮", "bias": "bull",
+            "detail": f"大阳({chg(a):.1f}%)-小实体-大阳({chg(c):.1f}%)，两阳夹一阴结构",
+        }
+    # 早晨之星：阴线(body>2%) - 星线(<1.2%) - 阳线收复 A 实体中点
+    if (
+        not is_bull(a) and body(a) / max(a["open"], 0.01) > 0.02
+        and body(b) / max(b["open"], 0.01) < 0.012
+        and is_bull(c) and c["close"] > (a["open"] + a["close"]) / 2
+    ):
+        return {"name": "形态·早晨之星", "bias": "bull", "detail": "阴线-星线-阳线收复过半，见底反转结构"}
+    # 黄昏之星：阳线(body>2%) - 星线(<1.2%) - 阴线跌破 A 实体中点
+    if (
+        is_bull(a) and body(a) / max(a["open"], 0.01) > 0.02
+        and body(b) / max(b["open"], 0.01) < 0.012
+        and not is_bull(c) and c["close"] < (a["open"] + a["close"]) / 2
+    ):
+        return {"name": "形态·黄昏之星", "bias": "bear", "detail": "阳线-星线-阴线跌破过半，见顶反转结构"}
+    return None
 
 
 def score_stock(
@@ -217,6 +269,23 @@ def score_stock(
         "流动性", "bull" if liq >= 0.6 else ("bear" if liq < 0.3 else "neutral"), liq,
         f"候选池内分位：成交额 {a_pct:.0%} / 换手 {t_pct:.0%}",
     ))
+
+    # 7) 形态（v2 起，口径同前端）：无形态记中性 0.5（无证据≠负面，七维恒齐）；
+    #    空头排列下的 bull 反转形态按"防飞刀"惯例衰减（同 KDJ/RSI 规则）
+    pat = patterns(bars)
+    if pat is None:
+        dim["pattern"] = 0.5
+        signals.append(_sig("形态", "neutral", 0.5, "近 3 日无形态特征"))
+    elif pat["bias"] == "bull":
+        p_s, p_bias, p_detail = 1.0, "bull", pat["detail"]
+        if bearish:
+            p_s, p_bias = 0.3, "neutral"
+            p_detail += "；空头排列下反转形态依据衰减"
+        dim["pattern"] = p_s
+        signals.append(_sig(pat["name"], p_bias, p_s, p_detail))
+    else:
+        dim["pattern"] = 0.0
+        signals.append(_sig(pat["name"], "bear", 0.0, pat["detail"]))
 
     total = sum(_WEIGHTS[k] * v for k, v in dim.items()) * 100
     bull_count = sum(1 for s in signals if s["bias"] == "bull")

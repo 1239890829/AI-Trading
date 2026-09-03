@@ -7,5 +7,6 @@ SQLAlchemy>=2.0
 pytest>=8.0
 polars>=1.0
 # 分钟历史回测源（TDX 协议直连，5min≈2 年/1min≈4.5 月；懒加载，缺失自动降级）
-easy-tdx>=1.20
+# 上限钉 1.30：2026-09-03 调研实测 1.30 起接口有破坏性变更（github-repo-audit-chips-pattern-chanlun.md）
+easy-tdx>=1.20.12,<1.30
 alembic>=1.19

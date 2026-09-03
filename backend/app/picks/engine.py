@@ -14,7 +14,7 @@
 
 参考仓库 → 本项目能力映射（择优依据，防"主观臆测选股"）：
 - 消息因子：EventCard 方向词典（本系统独有，外部仓库无 A 股事件结构化）
-- 技术指标：score_stock 六维卡（前端 analyze 同口径，带防飞刀）+ easy_tdx 缠论候选（远期）
+- 技术指标：score_stock 七维卡（前端 analyze 同口径，带防飞刀，v2 起含形态）+ easy_tdx 缠论候选（远期）
 - 情绪：情绪引擎（防自指哨兵）——TradingAgents 无此概念，是 A 股特色维度
 - 资金：资金流净额+快照量能（daily_stock_analysis 用免费源做同类事的垂直版）
 - 基本面：估值/财务快照（ai-hedge-fund 的 fundamentals 分析师角色对应）
@@ -30,7 +30,7 @@ from __future__ import annotations
 WEIGHTS = {
     "sentiment": 0.20,   # 情绪面：市场阶段 + 题材合力
     "news": 0.25,        # 消息面：EventCard 方向命中（利好/利空/强度）
-    "tech": 0.25,        # 技术面：score_stock 六维卡
+    "tech": 0.25,        # 技术面：score_stock 七维卡（v2 起含形态）
     "fundamental": 0.15, # 基本面：估值与盈利趋势
     "capital": 0.15,     # 资金面：净流入/量能/龙虎榜
 }
@@ -120,7 +120,7 @@ def score_news(bull_events: int, bear_events: int, top_title: str | None, top_di
 
 
 def score_tech(tech_card: dict | None) -> tuple[float, str]:
-    """技术面：score_stock 六维卡总分（0-100 已归一），basis 用其信号摘要。"""
+    """技术面：score_stock 七维卡总分（0-100 已归一），basis 用其信号摘要。"""
     if tech_card is None:
         return 50.0, "技术样本不足（<60 根日K），中性处理"
     return round(float(tech_card.get("score") or 50), 1), tech_card.get("summary") or "技术评分卡"
