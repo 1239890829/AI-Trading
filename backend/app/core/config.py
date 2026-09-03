@@ -90,6 +90,17 @@ class Settings(BaseSettings):
     ths_sentinel_enabled: bool = True
     ths_sentinel_interval_seconds: float = 900.0
 
+    # ---- marketdb 盘后增量同步（调研采纳第 4 批运维收尾）----
+    # marketdb（DuckDB 日K 仓）是 RPS / tech_score v3 第 8 维的数据地基。
+    # 开启后每日盘后自动跑 scripts/sync_marketdb.py（近 10 交易日增量 +
+    # 复权重建，子进程隔离），磁盘幂等（当日成功一次即跳过，重启安全）。
+    # **默认关**：每日全市场 dump 下载（几十 MB）与 ths 配额开销应由使用者
+    # 知情决定；CI / 无 ths_api_key 环境也不应尝试。手动兜底：跑脚本。
+    marketdb_sync_enabled: bool = False
+    marketdb_sync_hour: int = 16
+    marketdb_sync_minute: int = 30
+    marketdb_sync_check_interval_seconds: float = 300.0
+
     # ---- 盘后复盘 Agent ----
     # 分析器：rules（默认，确定性、零成本）| llm（需配 base_url + api_key）
     review_model: str = "rules"

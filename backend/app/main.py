@@ -377,6 +377,25 @@ async def lifespan(app: FastAPI):
 
         ths_sentinel_task = asyncio.create_task(sentinel_loop(app, stop=ths_sentinel_stop), name="ths-reason-sentinel")
 
+    # --- marketdb 盘后增量同步（RPS/tech_score 数据地基；子进程隔离 + 磁盘幂等）---
+    marketdb_stop = asyncio.Event()
+    marketdb_task = None
+    if settings.marketdb_sync_enabled:
+        if not settings.ths_api_key:
+            log.warning("marketdb_sync_enabled but ths_api_key missing, scheduler not started")
+        else:
+            from app.market.marketdb_sync import marketdb_sync_scheduler
+
+            marketdb_task = asyncio.create_task(
+                marketdb_sync_scheduler(
+                    stop=marketdb_stop,
+                    run_hour=settings.marketdb_sync_hour,
+                    run_minute=settings.marketdb_sync_minute,
+                    check_interval_seconds=settings.marketdb_sync_check_interval_seconds,
+                ),
+                name="marketdb-sync",
+            )
+
     try:
         await hub.refresh()  # 冷启动立即填充，接口首次调用即有数据
         await risk_engine.refresh()
@@ -403,6 +422,8 @@ async def lifespan(app: FastAPI):
         review_intraday_stop.set()
     if review_task is not None:
         review_stop.set()
+    if marketdb_task is not None:
+        marketdb_stop.set()
     await _reap(poller, name="quote-poller")
     await _reap(snapshotter, name="market-snapshot")
     await _reap(matcher, name="paper-matcher")
@@ -415,6 +436,7 @@ async def lifespan(app: FastAPI):
     await _reap(watcher_task, name="picks-watcher")
     await _reap(review_intraday_task, name="picks-intraday-review")
     await _reap(ths_sentinel_task, name="ths-reason-sentinel")
+    await _reap(marketdb_task, name="marketdb-sync")
     with contextlib.suppress(Exception, TimeoutError):
         await asyncio.wait_for(provider.aclose(), timeout=_SHUTDOWN_GRACE_SECONDS)
     if app.state.theme_catalog is not None:

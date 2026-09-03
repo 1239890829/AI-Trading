@@ -8,7 +8,7 @@ os.environ["ASHARE_POLL_INTERVAL_SECONDS"] = "3600"
 os.environ["ASHARE_WATCHLIST"] = "600519,000001,300750,601318"
 os.environ["ASHARE_DATABASE_URL"] = "sqlite:///:memory:"
 
-# 调度器全家桶在测试里一律关闭（本机 .env 是生产配置，六个开关全 on）。
+# 调度器全家桶在测试里一律关闭（本机 .env 是生产配置，开关全 on）。
 #
 # 为什么必须关：lifespan 关闭对 stop-aware 调度器是 stop.set() + await task，
 # 而 stop.set() 打不断 in-flight 的 tick await——一旦某 tick 卡在网络调用上
@@ -17,12 +17,15 @@ os.environ["ASHARE_DATABASE_URL"] = "sqlite:///:memory:"
 # （test_alerts，字母序最先）整场挂死。2026-09-03 两连卡死，faulthandler
 # 栈转储实证卡点：test_alerts.py::test_alert_channels 的 wait_shutdown。
 # 测试不应跑生产调度——要测调度器行为就直接调 loop 函数（各测试已如此）。
+#
+# 新增调度开关时必须同步在这里补一行（marketdb-sync 是第七个）。
 os.environ["ASHARE_REVIEW_SCHEDULER_ENABLED"] = "false"
 os.environ["ASHARE_PREMARKET_BRIEF_ENABLED"] = "false"
 os.environ["ASHARE_PICKS_WATCHER_ENABLED"] = "false"
 os.environ["ASHARE_PICKS_REVIEW_ENABLED"] = "false"
 os.environ["ASHARE_THS_SENTINEL_ENABLED"] = "false"
 os.environ["ASHARE_SENTIMENT_HISTORY_BACKFILL_ENABLED"] = "false"
+os.environ["ASHARE_MARKETDB_SYNC_ENABLED"] = "false"
 
 # 复盘报告的**落盘目录**也必须隔离。
 #
