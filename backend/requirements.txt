@@ -10,3 +10,6 @@ polars>=1.0
 # 上限钉 1.30：2026-09-03 调研实测 1.30 起接口有破坏性变更（github-repo-audit-chips-pattern-chanlun.md）
 easy-tdx>=1.20.12,<1.30
 alembic>=1.19
+
+# 本地全市场日K仓（marketdb）：RPS/横截面底座（scripts/sync_marketdb.py 回补；只读单文件 DuckDB）
+duckdb>=1.5

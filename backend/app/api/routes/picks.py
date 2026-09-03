@@ -29,6 +29,7 @@ from app.events.store import EventStore
 from app.market import trade_calendar as tc
 from app.market.tech_score import score_stock, sma
 from app.picks.echelon import classify_echelon_role, score_echelon
+from app.picks.rps import get_rps_service
 from app.picks.engine import (
     MAX_PICKS,
     REPLACE_THRESHOLD,
@@ -379,17 +380,21 @@ async def _deep_score_candidates(
     """
     sem = asyncio.Semaphore(concurrency)
     index_bars = index_bars or {}
+    # RPS 全市场截面（一次查询、服务内当日缓存；marketdb 未建 → {} →
+    # score_stock 的 rps 维自动取中性 0.5，不臆造分位）。同步 DuckDB 查询
+    # 放线程池，不占事件循环。
+    rps_map = await asyncio.to_thread(get_rps_service().snapshot)
 
     async def _score_one(c: dict) -> dict | None:
         sym = c["symbol"]
         async with sem:
             sub: dict[str, float] = {}
             bases: dict[str, str] = {}
-            # 技术（防飞刀口径 score_stock）
+            # 技术（防飞刀口径 score_stock，v3 含 RPS 横截面）
             try:
                 bars = await hub.provider.get_kline(sym, "1d", None, None)
                 dicts = [b.model_dump() if hasattr(b, "model_dump") else dict(b) for b in bars][-250:]
-                s_tech, b_tech = score_tech(score_stock(dicts))
+                s_tech, b_tech = score_tech(score_stock(dicts, rps=rps_map.get(sym)))
             except Exception:
                 dicts = []
                 s_tech, b_tech = 50.0, "K线数据缺失，中性"

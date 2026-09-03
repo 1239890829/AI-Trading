@@ -3,9 +3,13 @@
 口径与前端 lib/technical-analysis.ts 的 analyze() 严格一致（MA 排列/MACD/KDJ/RSI/形态），
 在此之上叠加权重评分与流动性维度，输出 0-100 分 + 等级 + 逐维依据。
 
-七维：trend / macd / kdj / rsi / volume / liquidity / pattern（v2 起补齐形态维——
-2026-09-04 前后端形态不对齐：前端有双响炮/早晨之星/黄昏之星三个形态而后端缺失，
-docstring却声称含形态，属于口径撒谎，本次修正）。
+八维：trend / macd / kdj / rsi / volume / liquidity / pattern / rps。
+- v2（2026-09-04）补齐形态维——此前前后端形态不对齐，docstring 撒谎，已修正。
+- v3（2026-09-04）新增 rps 维（RPS50/RPS120 全市场涨幅分位，来源
+  docs/github-repo-audit-financial-api-sequoia-x.md 采纳项）——既有维度全是
+  「个股自身 vs 自身历史」，rps 补上「个股 vs 全市场」横截面（强者恒强）。
+  数据底座 = 本地 DuckDB marketdb（app/picks/rps.py）；仓未建/未覆盖 → 0.5
+  中性（无证据≠负面），不臆造分位。
 
 形态口径差异说明：前端 chgOf 优先取 change_pct（相对昨收涨跌幅）；后端 Bar 无该
 字段，统一用实体涨幅 (close-open)/open —— 阈值 5% 语义近似。一字板实体为 0，
@@ -21,16 +25,17 @@ from typing import Literal
 Bar = dict  # {ts, open, high, low, close, volume}
 
 # 评分维度权重（和=1）。版本化：改权重必须递增 SCORER_VERSION。
-# v2（2026-09-04）：新增 pattern 0.10，其余六维等比缩放。
-SCORER_VERSION = "v2"
+# v3（2026-09-04）：新增 rps 0.10，其余七维等比缩放（trend .22→.20 等）。
+SCORER_VERSION = "v3"
 _WEIGHTS = {
-    "trend": 0.22,
-    "macd": 0.18,
-    "kdj": 0.14,
-    "rsi": 0.09,
-    "volume": 0.13,
-    "liquidity": 0.14,
+    "trend": 0.20,
+    "macd": 0.16,
+    "kdj": 0.12,
+    "rsi": 0.08,
+    "volume": 0.12,
+    "liquidity": 0.12,
     "pattern": 0.10,
+    "rps": 0.10,
 }
 
 
@@ -137,11 +142,14 @@ def score_stock(
     *,
     amount_rank_pct: float | None = None,
     turnover_rank_pct: float | None = None,
+    rps: dict | None = None,
 ) -> dict | None:
-    """日K（升序、QFQ）+ 截面流动性分位 → 评分卡。
+    """日K（升序、QFQ）+ 截面流动性分位 + 全市场 RPS → 评分卡。
 
     :param amount_rank_pct: 候选池内成交额分位 0-1（None 则流动性维度取中性 0.5）
     :param turnover_rank_pct: 候选池内换手率分位 0-1
+    :param rps: {"rps50": 0-100, "rps120": 0-100} 全市场涨幅分位
+                （app/picks/rps.py 截面；None/缺窗口 → rps 维取中性 0.5）
     :return: None = 样本不足（<60 根，视为次新/长停牌，调用方过滤）
     """
     if len(bars) < 60:
@@ -286,6 +294,32 @@ def score_stock(
     else:
         dim["pattern"] = 0.0
         signals.append(_sig(pat["name"], "bear", 0.0, pat["detail"]))
+
+    # 8) RPS 相对强度（v3 起）：N 日涨幅全市场分位——唯一「个股 vs 全市场」维度。
+    #    score = 可用窗口分位均值 / 100；两窗口全缺 → 0.5 中性（仓未建/次新，
+    #    无证据≠负面）；单一窗口可用时只用该窗口（次新股 rps120 天然缺失是
+    #    事实而非异常，单独提示即可）。
+    rps50 = rps.get("rps50") if isinstance(rps, dict) else None
+    rps120 = rps.get("rps120") if isinstance(rps, dict) else None
+    known: list[int] = [v for v in (rps50, rps120) if isinstance(v, (int, float))]
+    if known:
+        r_s = sum(known) / len(known) / 100.0
+        lo, hi = min(known), max(known)
+        if r_s >= 0.85:
+            rps_bias, rps_detail = "bull", f"RPS {lo}/{hi}，全市场最强梯队（≥85）"
+        elif r_s >= 0.60:
+            rps_bias, rps_detail = "bull", f"RPS {lo}/{hi}，强于市场多数（≥60）"
+        elif r_s < 0.30:
+            rps_bias, rps_detail = "bear", f"RPS {lo}/{hi}，弱于市场多数（<30）"
+        else:
+            rps_bias, rps_detail = "neutral", f"RPS {lo}/{hi}，市场中性带"
+        if len(known) == 1:
+            rps_detail += "（另一窗口样本不足，未计入）"
+    else:
+        r_s, rps_bias = 0.5, "neutral"
+        rps_detail = "RPS 未覆盖（marketdb 仓未建/未回补），中性处理"
+    dim["rps"] = r_s
+    signals.append(_sig("RPS相对强度", rps_bias, r_s, rps_detail))
 
     total = sum(_WEIGHTS[k] * v for k, v in dim.items()) * 100
     bull_count = sum(1 for s in signals if s["bias"] == "bull")

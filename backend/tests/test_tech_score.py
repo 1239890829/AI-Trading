@@ -1,10 +1,13 @@
-"""tech_score 单元测试：七维权重和、形态判定口径（同前端）、防飞刀衰减。
+"""tech_score 单元测试：八维权重和、形态判定口径（同前端）、防飞刀衰减、RPS 维。
 
-2026-09-04 随 pattern 维（v2）新增。形态口径与前端 technical-analysis.ts 一致，
-唯一差异：后端 Bar 无 change_pct，实体涨幅代替（见 tech_score 模块 docstring）。
+2026-09-04 随 pattern 维（v2）新增；v3 起 rps 维（全市场涨幅分位）加入。
+形态口径与前端 technical-analysis.ts 一致，唯一差异：后端 Bar 无 change_pct，
+实体涨幅代替（见 tech_score 模块 docstring）。RPS 数据底座测试见 test_rps.py。
 """
 
 import sys
+
+import pytest
 
 sys.path.insert(0, ".")
 
@@ -22,8 +25,10 @@ def _up_trend_bars(n=60, start=10.0):
 
 def test_weights_sum_to_one_and_version_bumped():
     assert abs(sum(_WEIGHTS.values()) - 1.0) < 1e-9
-    assert set(_WEIGHTS) == {"trend", "macd", "kdj", "rsi", "volume", "liquidity", "pattern"}
-    assert SCORER_VERSION == "v2"  # 改权重必须递增版本（tech_score 头注释约定）
+    assert set(_WEIGHTS) == {
+        "trend", "macd", "kdj", "rsi", "volume", "liquidity", "pattern", "rps",
+    }
+    assert SCORER_VERSION == "v3"  # 改权重必须递增版本（tech_score 头注释约定）
 
 
 # ---------------------------------------------------------------- patterns 纯判定
@@ -117,3 +122,34 @@ def test_score_stock_evening_star_bear_zero():
 
 def test_score_stock_short_sample_returns_none():
     assert score_stock(_up_trend_bars(30)) is None  # <60 根：次新/长停牌过滤
+
+
+# ---------------------------------------------------------------- rps 维（v3）
+
+
+def test_score_stock_rps_missing_is_neutral():
+    """rps 未传（老调用方/仓未建）→ 0.5 中性，无证据≠负面。"""
+    rep = score_stock(_up_trend_bars(70))
+    assert rep["dimensions"]["rps"] == 0.5
+    sig = next(s for s in rep["signals"] if s["name"] == "RPS相对强度")
+    assert sig["bias"] == "neutral" and "未覆盖" in sig["detail"]
+
+
+def test_score_stock_rps_strong_and_weak():
+    bars = _up_trend_bars(70)
+    strong = score_stock(bars, rps={"rps50": 92, "rps120": 88})
+    weak = score_stock(bars, rps={"rps50": 5, "rps120": 12})
+    assert strong["dimensions"]["rps"] == pytest.approx(0.90)
+    assert next(s for s in strong["signals"] if s["name"] == "RPS相对强度")["bias"] == "bull"
+    assert weak["dimensions"]["rps"] == pytest.approx(0.085)
+    assert next(s for s in weak["signals"] if s["name"] == "RPS相对强度")["bias"] == "bear"
+    # 同一根K线，RPS 强弱直接反映到总分（0.90-0.085=0.815 × 权重 0.10 × 100 ≈ 8.2 分）
+    assert strong["score"] - weak["score"] == pytest.approx(8.15, abs=0.1)
+
+
+def test_score_stock_rps_single_window():
+    """次新股 rps120 缺失：只用 rps50，detail 说明未计入另一窗口。"""
+    rep = score_stock(_up_trend_bars(70), rps={"rps50": 70})
+    assert rep["dimensions"]["rps"] == pytest.approx(0.70)
+    sig = next(s for s in rep["signals"] if s["name"] == "RPS相对强度")
+    assert "未计入" in sig["detail"]
