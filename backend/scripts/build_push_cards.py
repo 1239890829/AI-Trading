@@ -39,6 +39,32 @@ def get(path):
 picks = get("/api/picks/today")
 sent = get("/api/market/sentiment")
 
+# 宽度/情绪历史/账户：带来源的真实指标（缺失显式降级为 "--"，绝不硬编码）
+def try_get(path):
+    try:
+        return get(path)
+    except Exception as exc:
+        print(f"WARN: {path} unavailable: {exc}")
+        return None
+
+breadth = (try_get("/api/market/breadth") or {}).get("breadth") or {}
+sent_hist = try_get("/api/market/sentiment-history?days=2") or {}
+hist_items = sent_hist.get("items") or sent_hist.get("history") or []
+prev_sent = hist_items[-2] if len(hist_items) >= 2 else None
+account = try_get("/api/paper/account") or {}
+
+# 情绪指标取值（name → value）：涨停家数/连板家数/连板高度/昨日涨停今日中位
+def ind(name):
+    for i in sent.get("indicators") or []:
+        if i.get("name") == name:
+            return i.get("value")
+    return None
+
+lim_up = ind("涨停家数")
+lim_conn = ind("连板家数")
+max_boards = ind("连板高度")
+yesterday_mid = ind("昨日涨停今日中位")
+
 # 执行闸门（P0-A）：9:25 竞价结束即知的三态执行状态。失败优雅降级——
 # 卡片照发，执行状态整块标"未知"，绝不因闸门端点抖动丢掉整份清单。
 exec_gate = None
@@ -62,8 +88,14 @@ if pick_date != f"{today:%Y-%m-%d}":
     print(f"SKIP: picks date {pick_date!r} != today {today:%Y-%m-%d}（非交易日或未更新，不推送）")
     sys.exit(0)
 
-# 复盘报告仅盘后模式需要（morning 模式当日复盘尚未生成；日期动态避免定时跑取旧数据）
-rev = None if MORNING else get(f"/api/review/reports/{today:%Y%m%d}")
+# 复盘报告仅盘后模式需要（morning 模式当日复盘尚未生成；日期动态避免定时跑取旧数据）。
+# 优雅降级：15:35 复盘延迟/失败时卡片照发，卡②显式标注「复盘数据缺失」，不整卡崩溃。
+rev = None
+if not MORNING:
+    try:
+        rev = get(f"/api/review/reports/{today:%Y%m%d}")
+    except Exception as exc:
+        print(f"WARN: review report unavailable: {exc}")
 
 gate = picks["meta"]["gate"]
 items = picks["items"]
@@ -73,7 +105,7 @@ promo_pct = (pct.get("promo_1to2") or {}).get("percentile")
 promo_val = (pct.get("promo_1to2") or {}).get("value", 0) * 100
 
 mkt = idx = trading = None
-if not MORNING:
+if not MORNING and rev:
     mkt = (rev.get("data") or {}).get("market") or {}
     idx = {i["name"]: i for i in mkt.get("indices", [])}
     trading = (rev.get("data") or {}).get("trading") or {}
@@ -130,19 +162,30 @@ def logic_line(it):
 
 # ---------- 卡片①：机会观察（morning=当日跟踪清单；盘后=明日清单） ----------
 show = now if MORNING else now + timedelta(days=1)
+# 门控横幅接真实 gate 判定（曾经硬编码"强空仓"，会与实际 gate 状态不符）
+gate_level = (gate or {}).get("level")
+gate_stand = bool((gate or {}).get("stand_aside"))
+observe_n = sum(1 for i in items if i.get("observation_only"))
+if gate_stand:
+    gate_head = "**⛔ 门控：强空仓**" if gate_level == "strong" else "**⛔ 门控：空仓观察**"
+    gate_body = "门控条件触发，以下清单 **🔒 仅跟踪观察，不构成买入依据**"
+else:
+    gate_head = "**✅ 门控：正常**"
+    gate_body = "未触发空仓闸门；各标的执行状态以盘前竞价闸门为准"
 el = [
-    div("**⛔ 门控：强空仓**　退潮期接力亏钱，以下清单 **🔒 仅跟踪观察，不构成买入依据**"),
+    div(f"{gate_head}　{gate_body}"),
     hr(),
     fields_grid([
         ("🌡️ 情绪温度", f"{sent.get('temperature')} · {sent.get('phase')}"),
-        ("🚀 涨停 / 昨日", "55 家 / 80 家"),
+        ("🚀 涨停 / 连板", f"{lim_up if lim_up is not None else '--'} 家 / {lim_conn if lim_conn is not None else '--'} 家连板"),
         ("📐 首板晋级率", f"{promo_val:.1f}%（分位 {promo_pct}）"),
-        ("📉 昨涨停溢价", "-2.60%（亏钱效应）"),
-        ("🔎 涨跌家数", "涨 1541 / 跌 3900"),
-        ("🪜 最高板", "4 板（昨 7 断板）"),
+        ("📉 昨涨停溢价", f"{yesterday_mid:+.2f}%（中位）" if yesterday_mid is not None else "--"),
+        ("🔎 涨跌家数", f"涨 {breadth.get('up', '--')} / 跌 {breadth.get('down', '--')}"),
+        ("🪜 最高板", f"{max_boards}" if max_boards is not None else "--"),
     ]),
     hr(),
-    div(f"**🏆 选股器 Top5**　🔒 全部仅观察（{sum(1 for i in items if i.get('observation_only'))}/{len(items)}，门控期不买入）"),
+    div((f"**🏆 选股器 Top{len(items)}**　🔒 全部仅观察（{observe_n}/{len(items)}，门控期不买入）" if gate_stand
+         else f"**🏆 选股器 Top{len(items)}**　仅观察 {observe_n}/{len(items)}")),
 ]
 for n, it in enumerate(items, 1):
     theme = it.get("theme")
@@ -171,43 +214,64 @@ el += [
 ]
 card1 = card(f"📊 {'今日' if MORNING else '明日'}机会观察 · {show:%m-%d}（周{WEEKDAY[show.weekday()]}）", "orange", el)
 
-# ---------- 卡片②：盘后复盘（仅盘后模式） ----------
+# ---------- 卡片②：盘后复盘（仅盘后模式；报告缺失时显式降级，不发旧数据） ----------
 if not MORNING:
-    dims = {d["key"]: d for d in rev.get("dimensions", [])}
-    mkt_dim = dims.get("market") or {}
-    trade_count = trading.get("trade_count", 0)
+    if rev:
+        dims = {d["key"]: d for d in rev.get("dimensions", [])}
+        mkt_dim = dims.get("market") or {}
+        trade_count = trading.get("trade_count", 0)
+        gaps = trading.get("gaps") or []
+        actions = rev.get("action_items") or []
+        status_n = {}
+        for a in actions:
+            status_n[a.get("status") or "pending"] = status_n.get(a.get("status") or "pending", 0) + 1
+        status_line = " / ".join(f"{k} {v}" for k, v in sorted(status_n.items())) or "—"
+        cash = account.get("cash")
+        mv = account.get("market_value")
+        pnl_pct = account.get("total_pnl_pct")
 
+        def idx_line(name):
+            i = idx.get(name) or {}
+            chg = i.get("change_pct")
+            dot = "🔴" if (chg or 0) > 0 else ("🟢" if (chg or 0) < 0 else "⚪")
+            return f"{name} {i.get('close', '-')} ({chg:+.2f}%){dot}" if chg is not None else f"{name} --"
 
-    def idx_line(name):
-        i = idx.get(name) or {}
-        chg = i.get("change_pct", 0)
-        dot = "🔴" if chg > 0 else ("🟢" if chg < 0 else "⚪")
-        return f"{name} {i.get('close', '-')} ({chg:+.2f}%){dot}"
-
-
-    el2 = [
-        fields_grid([
-            ("💼 今日操作", "空仓 ✅ 纪律执行" if trade_count == 0 else f"{trade_count} 笔委托"),
-            ("🤖 系统动作", "3 方向盘中证伪 → 降级观察"),
-            ("💰 账户", "无持仓 · 现金 ¥100.0 万"),
-            ("🩺 数据完整度", "0 缺失 · 信号样本 49"),
-        ]),
-        hr(),
-        div(f"**📈 盘面**　{idx_line('上证指数')}｜{idx_line('深证成指')}｜{idx_line('创业板指')}"),
-        div(f"**🌡️ 情绪**　退潮确认：最高板 7→4 断板；晋级率 {promo_val:.1f}%（分位 {promo_pct}）；昨涨停溢价 -2.60%"),
-    ]
-    for j in (mkt_dim.get("judgements") or [])[:2]:
-        el2.append(div("**💬 研判**　" + j))
-    el2 += [
-        hr(),
-        div("**⚠️ 不足与改善**"),
-        div("① 退潮门控下简报仍给 65~84 确定性分，3 方向全部盘中证伪 → **建议：空仓期简报分数自动降权并标注「仅观察」**（待批）"),
-        div("② " + ("；".join((a.get("title") or "") for a in rev.get("action_items", [])[:2]) or "—")),
-        hr(),
-        div("**📌 改善追踪**　昨日 P0「15:35 对照数据缺失」→ ✅ 已修复，今日对照产出完整"),
-        div("**🌅 明日关注**　竞价溢价与晋级率能否回升；冰点触发条件（%s）" % sent.get("switch_conditions")),
-        note("复盘规则引擎 · 全维度无数据缺失 · 非投资建议"),
-    ]
+        prev_txt = f"（昨 {prev_sent.get('phase')} {prev_sent.get('temperature')}）" if prev_sent else ""
+        el2 = [
+            fields_grid([
+                ("💼 今日操作", "空仓 ✅ 纪律执行" if trade_count == 0 else f"{trade_count} 笔委托"),
+                ("📊 复盘产出", f"{len(dims)} 维度 · 改进项 {len(actions)} 条"),
+                ("💰 账户", (f"现金 ¥{cash/10000:.1f} 万 · 市值 ¥{mv/10000:.1f} 万"
+                             f" · 总盈亏 {pnl_pct:+.1f}%") if pnl_pct is not None else "--"),
+                ("🩺 数据完整度", f"{len(gaps)} 缺失" if gaps else "无缺失"),
+            ]),
+            hr(),
+            div(f"**📈 盘面**　{idx_line('上证指数')}｜{idx_line('深证成指')}｜{idx_line('创业板指')}"),
+            div(f"**🌡️ 情绪**　{sent.get('phase')} {sent.get('temperature')}{prev_txt}"
+                f" · 晋级率 {promo_val:.1f}%（分位 {promo_pct}）"
+                + (f" · 昨涨停中位 {yesterday_mid:+.2f}%" if yesterday_mid is not None else "")),
+        ]
+        for j in (mkt_dim.get("judgements") or [])[:2]:
+            el2.append(div("**💬 研判**　" + j))
+        top_insight = next((m.get("observation") for m in rev.get("meta_insights", [])
+                            if isinstance(m, dict) and m.get("observation")), None)
+        el2 += [
+            hr(),
+            div("**⚠️ 不足与改善**"),
+            div("① " + (top_insight or "—")),
+            div("② " + ("；".join((a.get("title") or "") for a in actions[:2]) or "—")),
+            hr(),
+            div(f"**📌 改进项处置**　{status_line}"),
+            div("**🌅 明日关注**　竞价溢价与晋级率能否回升；切换条件（%s）" % sent.get("switch_conditions")),
+            note(f"复盘规则引擎 · 模型 {rev.get('model', {}).get('actual') or '--'} · 非投资建议"),
+        ]
+    else:
+        el2 = [
+            div("**⚠️ 复盘报告尚未生成**　15:35 自动复盘延迟或失败——本卡片不含当日复盘结论，报告生成后以研究页为准。"),
+            hr(),
+            div(f"**🌡️ 情绪**　{sent.get('phase')} {sent.get('temperature')} · 晋级率 {promo_val:.1f}%（分位 {promo_pct}）"),
+            note("复盘规则引擎 · 数据缺失降级模式 · 非投资建议"),
+        ]
     card2 = card(f"📝 盘后复盘 · {now:%m-%d}（周{WEEKDAY[now.weekday()]}）", "blue", el2)
 
 if MORNING:
