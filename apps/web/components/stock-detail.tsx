@@ -126,6 +126,9 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   const [fins, setFins] = useState<FinRow[] | null>(null);
   const [anns, setAnns] = useState<InfoItem[] | null>(null);
   const [news, setNews] = useState<InfoItem[] | null>(null);
+  // digest 数据源三态：非 null = 该侧降级（InfoPanel 显式提示，非静默空列表）
+  const [annError, setAnnError] = useState<string | null>(null);
+  const [newsError, setNewsError] = useState<string | null>(null);
   const [company, setCompany] = useState<CompanyProfile | null>(null);
   const [fills, setFills] = useState<PaperFill[]>([]);
   const [resetBusy, setResetBusy] = useState(false);
@@ -341,12 +344,15 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
       getCompanyProfile<CompanyProfile>(symbol)
         .then((cp) => alive && cp && setCompany(cp))
         .catch(() => {});
-      // 资讯走摘要端点：一次拿回公告+新闻 + 重要度/情绪/事实摘要；失败降级空列表
+      // 资讯走摘要端点：一次拿回公告+新闻 + 重要度/情绪/事实摘要；
+      // 单侧数据源失败时后端降级（error 字段非 null），前端透出提示而非静默空
       getNewsDigest(symbol, 8)
         .then((d) => {
           if (!alive) return;
           setAnns(d.announcements as unknown as InfoItem[]);
           setNews(d.news as unknown as InfoItem[]);
+          setAnnError(d.announcements_error);
+          setNewsError(d.news_error);
         })
         .catch(() => {});
     });
@@ -812,7 +818,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
 
           {rightTab === "profile" && <ProfilePanel boardRows={boardRows} company={company} fins={fins} />}
 
-          {rightTab === "info" && <InfoPanel anns={anns} news={news} />}
+          {rightTab === "info" && <InfoPanel anns={anns} news={news} annError={annError} newsError={newsError} />}
 
           <BookTradesView book={book} trades={trades} showBook={rightTab === "book"} />
         </Panel>

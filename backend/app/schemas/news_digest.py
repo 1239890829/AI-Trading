@@ -41,3 +41,7 @@ class NewsDigestPayload(BaseModel):
     news: list[DigestItem] = Field(default_factory=list)
     announcements: list[DigestItem] = Field(default_factory=list)
     model: DigestModel
+    # 数据源三态：None=正常；非 None=该侧数据源失败已降级（原因显式透出，
+    # 绝不静默空列表——读者会误以为"没新闻"而非"新闻源挂了"）
+    news_error: str | None = None
+    announcements_error: str | None = None

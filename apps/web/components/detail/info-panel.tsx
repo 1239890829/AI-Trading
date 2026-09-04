@@ -84,13 +84,29 @@ function DigestRow({ item }: { item: InfoItem }) {
   );
 }
 
-export function InfoPanel({ anns, news }: { anns: InfoItem[] | null; news: InfoItem[] | null }) {
+export function InfoPanel({
+  anns,
+  news,
+  annError,
+  newsError,
+}: {
+  anns: InfoItem[] | null;
+  news: InfoItem[] | null;
+  /** 数据源三态：非 null = 该侧数据源失败已降级（显式提示，绝不静默空列表） */
+  annError?: string | null;
+  newsError?: string | null;
+}) {
   const [modalItem, setModalItem] = useState<NewsModalItem | null>(null);
   const openModal = (item: InfoItem, kindLabel: string) =>
     setModalItem({ title: item.title, url: item.url, date: item.date, source: item.source, digest: item.digest ?? null, kindLabel });
   return (
     <div className="min-h-0 overflow-y-auto">
       <h3 className="px-3 py-1.5 text-xs font-medium text-zinc-500 dark:text-zinc-300">近期公告</h3>
+      {annError && (
+        <p className="mx-3 mb-1 rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-600 dark:text-amber-400">
+          公告源暂时不可用（{annError}），稍后自动恢复
+        </p>
+      )}
       {(anns ?? []).map((a, i) => (
         <button
           key={i}
@@ -105,7 +121,12 @@ export function InfoPanel({ anns, news }: { anns: InfoItem[] | null; news: InfoI
         </button>
       ))}
       {anns && anns.length === 0 && <p className="px-3 py-3 text-xs text-zinc-500">暂无公告</p>}
-      <h3 className="border-t border-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-300 dark:border-zinc-800/60">相关新闻</h3>
+      <h3 className="border-t border-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-500 dark:border-zinc-800/60 dark:text-zinc-300">相关新闻</h3>
+      {newsError && (
+        <p className="mx-3 mb-1 rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-600 dark:text-amber-400">
+          新闻源暂时不可用（{newsError}），稍后自动恢复
+        </p>
+      )}
       {(news ?? []).map((n, i) => (
         <button
           key={i}

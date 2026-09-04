@@ -186,3 +186,43 @@ def test_news_digest_api(monkeypatch):
         # 公告："贵州茅台:贵州茅台关于…" 的双层前缀应被剥掉
         ann = data["announcements"][0]
         assert ann["digest"].startswith("关于召开")
+        # 正常路径：双侧数据源错误字段必须为 None（三态显式）
+        assert data["news_error"] is None
+        assert data["announcements_error"] is None
+
+
+def test_news_digest_degrades_when_news_source_fails(monkeypatch):
+    """新闻源失败 → 公告照常返回 + news_error 显式透出（不整体 502）；
+    双侧都挂才 502。东财搜索接口有间歇软封锁（2026-09-04 实测）。
+    注意 digest 有 60s TTL 缓存（键=symbol+limit），换标的避免撞上一个用例的缓存。"""
+
+    async def fail_news(symbol: str, limit: int = 10):
+        raise RuntimeError("empty reply from search-api (可能被限流)")
+
+    async def fake_ann(symbol: str, limit: int = 10):
+        return [dict(r) for r in _ANN_FIXTURE]
+
+    with TestClient(app) as client:
+        monkeypatch.setattr(app.state.hub.provider, "get_news", fail_news, raising=False)
+        monkeypatch.setattr(app.state.hub.provider, "get_announcements", fake_ann, raising=False)
+
+        resp = client.get("/api/news/digest/000001?limit=5")
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["news"] == []
+        assert "可能被限流" in data["news_error"]
+        assert data["announcements_error"] is None
+        assert len(data["announcements"]) == 1
+
+
+def test_news_digest_502_when_both_sources_fail(monkeypatch):
+    async def fail(symbol: str, limit: int = 10):
+        raise RuntimeError("down")
+
+    with TestClient(app) as client:
+        monkeypatch.setattr(app.state.hub.provider, "get_news", fail, raising=False)
+        monkeypatch.setattr(app.state.hub.provider, "get_announcements", fail, raising=False)
+
+        resp = client.get("/api/news/digest/000002?limit=5")
+        assert resp.status_code == 502
+        assert "均失败" in resp.json()["detail"]

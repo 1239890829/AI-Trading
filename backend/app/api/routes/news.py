@@ -46,14 +46,26 @@ async def news_digest(
     if hit:
         return {"data": cached, "meta": {"cached": True}}
 
+    # 数据源单侧失败降级而非整体 502：新闻源（东财搜索）有间歇软封锁，
+    # 若整体失败会把同时可用的公告也吃掉；错误原因显式透出（news_error/
+    # announcements_error 非空 = 该侧已降级），绝不静默空列表。双侧都挂才 502。
+    news_rows: list = []
+    ann_rows: list = []
+    news_error: str | None = None
+    ann_error: str | None = None
     try:
         news_rows = await hub.provider.get_news(symbol, limit)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"新闻数据源失败：{exc}")
+        news_error = str(exc)
     try:
         ann_rows = await hub.provider.get_announcements(symbol, limit)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"公告数据源失败：{exc}")
+        ann_error = str(exc)
+    if news_error and ann_error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"新闻与公告数据源均失败：news({news_error})；announcements({ann_error})",
+        )
 
     rt = SummaryRouter(
         requested=settings.news_model,
@@ -73,6 +85,8 @@ async def news_digest(
         news=[_to_item(r) for r in summarized.get("news", [])],
         announcements=[_to_item(r) for r in summarized.get("announcements", [])],
         model=usage,
+        news_error=news_error,
+        announcements_error=ann_error,
     )
     data = payload.model_dump()
     cache.set(key, data)

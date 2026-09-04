@@ -256,6 +256,9 @@ export interface NewsDigest {
   news: NewsDigestItem[];
   announcements: NewsDigestItem[];
   model: NewsDigestModel;
+  /** 数据源三态：null=正常；非 null=该侧数据源失败已降级（显式提示，非静默空） */
+  news_error: string | null;
+  announcements_error: string | null;
 }
 
 /**
