@@ -83,6 +83,18 @@ def test_limit_up_and_longhu():
         assert len(lh.json()["data"]["records"]) == 5
 
 
+def test_limit_down_endpoint():
+    with TestClient(app) as client:
+        resp = client.get("/api/limit-down?date=2026-08-28")
+        assert resp.status_code == 200
+        body = resp.json()["data"]
+        pool = body["pool"]
+        assert pool and body["trade_date"] == "2026-08-28"
+        # 连续跌停天数降序 + mock 镜像语义（跌停为负涨幅）
+        assert pool[0]["consecutive_days"] >= pool[-1]["consecutive_days"]
+        assert all(r["change_pct"] < 0 for r in pool)
+
+
 def test_search_endpoint():
     with TestClient(app) as client:
         resp = client.get("/api/search?q=600519")

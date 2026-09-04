@@ -18,7 +18,7 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.schemas.market import Kline, LimitUpRecord, LongHuRecord, Quote, TradingStatusInfo
+from app.schemas.market import Kline, LimitDownRecord, LimitUpRecord, LongHuRecord, Quote, TradingStatusInfo
 
 T = TypeVar("T")
 
@@ -44,6 +44,13 @@ class LimitUpPoolPayload(BaseModel):
 
     trade_date: str
     pool: list[LimitUpRecord]
+
+
+class LimitDownPoolPayload(BaseModel):
+    """GET /limit-down 的 data。"""
+
+    trade_date: str
+    pool: list[LimitDownRecord]
 
 
 class LongHuPayload(BaseModel):

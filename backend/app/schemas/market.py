@@ -142,6 +142,30 @@ class LimitUpRecord(AuditFields):
     industry_board: str | None = None  # 所属行业板块 hybk（东财口径）
 
 
+class LimitDownRecord(AuditFields):
+    """跌停池单条记录（东财 push2ex getTopicDTPool）。
+
+    与 LimitUpRecord 刻意分开而非复用：跌停池没有涨停原因/梯队/封板时间等语义，
+    硬塞会产生大量"字段存在但恒空"的错义位；且连续跌停天数（days）与连板数
+    （consecutive_boards）是不同概念。2026-09-04 市场页跌停入口联动新增。
+    """
+
+    symbol: str
+    name: str | None = None
+    trade_date: date
+    price: float | None = None
+    change_pct: float | None = None
+    consecutive_days: int | None = None  # 连续跌停天数 days
+    open_count: int | None = None  # 开板次数 oc（跌停后打开次数）
+    seal_amount: float | None = None  # 封单额（元）fba
+    turnover_rate: float | None = None  # hs
+    # --- 东财 push2ex 增强维度（与涨停池同名字段同义）---
+    float_market_cap: float | None = None  # 流通市值（元）ltsz
+    total_market_cap: float | None = None  # 总市值（元）tshare
+    amount: float | None = None  # 成交额（元）amount
+    industry_board: str | None = None  # 所属行业板块 hybk（东财口径）
+
+
 class LongHuRecord(AuditFields):
     symbol: str
     name: str | None = None

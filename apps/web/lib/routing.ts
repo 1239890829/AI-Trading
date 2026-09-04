@@ -51,8 +51,19 @@ export const LAST_SYMBOL_KEY = "ashare.workbench.lastSymbol";
  * L4 详情题材 chips / L9 事件方向 chip / L10 题材机会卡共用本构造器，不裸拼。
  */
 export function themesUrl(focus?: string): string {
-  if (!focus) return "/tape?tab=themes";
-  return `/tape?tab=themes&focus=${encodeURIComponent(focus)}`;
+  return tapeUrl("themes", focus ? { focus } : undefined);
+}
+
+/**
+ * 盘面页 tab 地址（2026-09-04 市场页涨跌停入口联动新增）。
+ * tab 是盘面页 ?tab= 的真相源 keys；params 为该 tab 自治的附加查询参数。
+ * 所有跨页跳盘面的入口都走这里，不裸拼 ?tab=（与 workbenchUrl 同理）。
+ */
+export type TapeTab = "themes" | "limitup" | "limitdown" | "longhu";
+
+export function tapeUrl(tab: TapeTab, params?: Record<string, string>): string {
+  const sp = new URLSearchParams({ tab, ...params });
+  return `/tape?${sp.toString()}`;
 }
 
 /**

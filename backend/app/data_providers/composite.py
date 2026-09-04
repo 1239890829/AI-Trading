@@ -272,6 +272,9 @@ class CompositeProvider:
     async def get_limit_up_pool(self, trade_date: date) -> list:
         return await self._call("get_limit_up_pool", trade_date)
 
+    async def get_limit_down_pool(self, trade_date: date) -> list:
+        return await self._call("get_limit_down_pool", trade_date)
+
     async def get_longhu_records(self, trade_date: date) -> list:
         return await self._call("get_longhu_records", trade_date)
 

@@ -1,9 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { stockRedirectTarget, themesUrl, workbenchUrl } from "./routing";
+import { stockRedirectTarget, tapeUrl, themesUrl, workbenchUrl } from "./routing";
 
 describe("workbenchUrl", () => {
   it("拼出带 symbol 的详情地址", () => {
     expect(workbenchUrl("600105")).toBe("/workbench?symbol=600105");
+  });
+});
+
+describe("tapeUrl（2026-09-04 市场页涨跌停入口联动统一构造器）", () => {
+  it("tab 是必选真相源", () => {
+    expect(tapeUrl("limitup")).toBe("/tape?tab=limitup");
+    expect(tapeUrl("limitdown")).toBe("/tape?tab=limitdown");
+    expect(tapeUrl("longhu")).toBe("/tape?tab=longhu");
+  });
+
+  it("附加参数自动 encode", () => {
+    expect(tapeUrl("themes", { focus: "存储芯片" })).toBe(
+      "/tape?tab=themes&focus=%E5%AD%98%E5%82%A8%E8%8A%AF%E7%89%87",
+    );
   });
 });
 

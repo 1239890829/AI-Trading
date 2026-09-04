@@ -10,7 +10,7 @@ import { HeatmapTab } from "@/components/market/heatmap-tab";
 import { EventsTab } from "@/components/market/events-tab";
 import { FundTab } from "@/components/market/fund-tab";
 import { indexDetailSymbol } from "@/lib/api";
-import { workbenchUrlWithBack } from "@/lib/routing";
+import { tapeUrl, workbenchUrlWithBack } from "@/lib/routing";
 import {
   getBreadth,
   getLimitUpPool,
@@ -205,25 +205,45 @@ function MarketInner() {
             ))}
           </div>
 
-          {/* 宽度带：未就绪时同构骨架占位（label 已知，只对数值位骨架） */}
+          {/* 宽度带：未就绪时同构骨架占位（label 已知，只对数值位骨架）。
+              涨停/跌停两格可点击 → 盘面页对应 tab（2026-09-04 联动，tapeUrl 统一构造） */}
           <div className="grid shrink-0 grid-cols-3 gap-2 lg:grid-cols-6">
-            {[
-              ["上涨", breadth?.up, "text-up"],
-              ["下跌", breadth?.down, "text-down"],
-              ["涨停", breadth?.limit_up, "text-up"],
-              ["跌停", breadth?.limit_down, "text-down"],
-              ["平盘/停牌", breadth ? `${breadth.flat}/${breadth.suspended}` : null, ""],
-              ["沪深京总数", breadth?.total, ""],
-            ].map(([label, value, cls]) => (
-              <div key={String(label)} className="rounded-lg border border-zinc-200 px-2.5 py-1 dark:border-zinc-800">
-                <span className="text-[11px] text-zinc-400">{label}</span>
-                {value == null && pending ? (
-                  <Skeleton className="mt-0.5 h-4 w-14" />
-                ) : (
-                  <div className={`font-mono text-sm font-semibold ${cls}`}>{value ?? "--"}</div>
-                )}
-              </div>
-            ))}
+            {([
+              ["上涨", breadth?.up, "text-up", null],
+              ["下跌", breadth?.down, "text-down", null],
+              ["涨停", breadth?.limit_up, "text-up", tapeUrl("limitup")],
+              ["跌停", breadth?.limit_down, "text-down", tapeUrl("limitdown")],
+              ["平盘/停牌", breadth ? `${breadth.flat}/${breadth.suspended}` : null, "", null],
+              ["沪深京总数", breadth?.total, "", null],
+            ] as [string, string | number | null | undefined, string, string | null][]).map(([label, value, cls, href]) =>
+              href ? (
+                <Link
+                  key={String(label)}
+                  href={href}
+                  title={`查看${label}池明细（盘面页 · ${label === "涨停" ? "涨停生态" : "跌停"} tab）`}
+                  className="cursor-pointer rounded-lg border border-zinc-200 px-2.5 py-1 transition-colors hover:bg-zinc-100/60 dark:border-zinc-800 dark:hover:bg-zinc-800/40"
+                >
+                  <span className="text-[11px] text-zinc-400">{label}</span>
+                  {value == null && pending ? (
+                    <Skeleton className="mt-0.5 h-4 w-14" />
+                  ) : (
+                    <div className={`font-mono text-sm font-semibold ${cls}`}>
+                      {value ?? "--"}
+                      <span className="ml-1 text-[10px] font-normal text-zinc-400">↗</span>
+                    </div>
+                  )}
+                </Link>
+              ) : (
+                <div key={String(label)} className="rounded-lg border border-zinc-200 px-2.5 py-1 dark:border-zinc-800">
+                  <span className="text-[11px] text-zinc-400">{label}</span>
+                  {value == null && pending ? (
+                    <Skeleton className="mt-0.5 h-4 w-14" />
+                  ) : (
+                    <div className={`font-mono text-sm font-semibold ${cls}`}>{value ?? "--"}</div>
+                  )}
+                </div>
+              )
+            )}
           </div>
 
           {/* 情绪合并卡：左相位/温度/指标，右近 10 日序列柱状（紧凑高度）；未就绪时单行骨架 */}
@@ -302,7 +322,7 @@ function MarketInner() {
               source={pool[0]?.source}
               className="min-h-0 overflow-hidden"
               extra={
-                <Link href="/tape?tab=limitup" className="text-zinc-400 transition-colors hover:text-zinc-900 dark:hover:text-zinc-100">
+                <Link href={tapeUrl("limitup")} className="text-zinc-400 transition-colors hover:text-zinc-900 dark:hover:text-zinc-100">
                   全部 ↗
                 </Link>
               }

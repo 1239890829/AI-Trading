@@ -4,6 +4,7 @@ import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ThemesTab } from "@/components/tape/themes-tab";
 import { LimitUpTab } from "@/components/tape/limit-up-tab";
+import { LimitDownTab } from "@/components/tape/limit-down-tab";
 import { LonghuTab } from "@/components/tape/longhu-tab";
 import { FadeSwap, PageSkeletonFallback } from "@/components/ui/loading";
 
@@ -22,6 +23,7 @@ import { FadeSwap, PageSkeletonFallback } from "@/components/ui/loading";
 const TABS = [
   { key: "themes", label: "题材梯队" },
   { key: "limitup", label: "涨停生态" },
+  { key: "limitdown", label: "跌停" },
   { key: "longhu", label: "龙虎榜" },
 ] as const;
 
@@ -70,6 +72,7 @@ function TapeInner() {
       <FadeSwap swapKey={tab} className="min-h-0 flex-1">
         {tab === "themes" && <ThemesTab />}
         {tab === "limitup" && <LimitUpTab />}
+        {tab === "limitdown" && <LimitDownTab />}
         {tab === "longhu" && <LonghuTab />}
       </FadeSwap>
     </main>

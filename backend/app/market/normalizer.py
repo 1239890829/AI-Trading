@@ -13,6 +13,7 @@ from datetime import date, datetime, timezone
 
 from app.schemas.market import (
     Kline,
+    LimitDownRecord,
     LimitUpRecord,
     LongHuRecord,
     OrderBook,
@@ -183,6 +184,36 @@ def normalize_limit_up(raw: dict, trade_date: date) -> LimitUpRecord | None:
         turnover_rate=_num(raw.get("hs")),
         consecutive_boards=int(_num(raw.get("lbc")) or 0),
         boards_stat=boards_stat,
+        float_market_cap=_num(raw.get("ltsz")),
+        total_market_cap=_num(raw.get("tshare")),
+        amount=_num(raw.get("amount")),
+        industry_board=raw.get("hybk") or None,
+        source=EASTMONEY_SOURCE,
+    )
+
+
+def normalize_limit_down(raw: dict, trade_date: date) -> LimitDownRecord | None:
+    """跌停池 getTopicDTPool（2026-09-04 实测 9 只样本）。
+
+    ⚠️ 字段缩放与涨停池（ZT 池 p×100）**不同**：DTPool 的 p 为 **×1000**
+    （集泰股份 p=7210 ↔ 收盘 7.21、传智教育 p=9720 ↔ 9.72，已与涨跌幅 -10% 交叉验证）；
+    zdp 已是百分数；days=连续跌停天数、oc=开板次数、fba=封单额(元)、
+    fund=封单量（口径存疑不采）、lbt=最后封住时间 HHMMSS。
+    """
+    symbol = str(raw.get("c") or "")
+    if not symbol:
+        return None
+    raw_price = _num(raw.get("p"))
+    return LimitDownRecord(
+        symbol=symbol,
+        name=raw.get("n"),
+        trade_date=trade_date,
+        price=raw_price / 1000 if raw_price is not None else None,
+        change_pct=_num(raw.get("zdp")),
+        consecutive_days=int(_num(raw.get("days")) or 0),
+        open_count=int(_num(raw.get("oc")) or 0),
+        seal_amount=_num(raw.get("fba")),
+        turnover_rate=_num(raw.get("hs")),
         float_market_cap=_num(raw.get("ltsz")),
         total_market_cap=_num(raw.get("tshare")),
         amount=_num(raw.get("amount")),

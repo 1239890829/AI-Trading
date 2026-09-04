@@ -5,6 +5,7 @@ from typing import Protocol, runtime_checkable
 
 from app.schemas.market import (
     Kline,
+    LimitDownRecord,
     LimitUpRecord,
     LongHuRecord,
     OrderBook,
@@ -43,6 +44,8 @@ class MarketDataProvider(Protocol):
     async def get_trades(self, symbol: str) -> list[Trade]: ...
 
     async def get_limit_up_pool(self, trade_date: date) -> list[LimitUpRecord]: ...
+
+    async def get_limit_down_pool(self, trade_date: date) -> list[LimitDownRecord]: ...
 
     async def get_longhu_records(self, trade_date: date) -> list[LongHuRecord]: ...
 

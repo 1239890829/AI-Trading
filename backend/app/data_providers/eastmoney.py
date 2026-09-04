@@ -9,6 +9,7 @@ import httpx
 from app.market import normalizer as nz
 from app.schemas.market import (
     Kline,
+    LimitDownRecord,
     LimitUpRecord,
     LongHuRecord,
     OrderBook,
@@ -205,6 +206,28 @@ class EastmoneyProvider:
         )
         pool = (payload.get("data") or {}).get("pool") or []
         records = [nz.normalize_limit_up(r, trade_date) for r in pool]
+        return [r for r in records if r is not None]
+
+    async def get_limit_down_pool(self, trade_date: date) -> list[LimitDownRecord]:
+        """跌停池（2026-09-04 新增，市场页跌停入口联动）。
+
+        实测：不带 date 参数返回 rc:102 data:null（与 ZT/ZB 池不同），date 必带；
+        空池（data.pool 缺失）返回空列表——是否视为"失败"由 composite._is_empty 统一裁决，
+        与 /limit-up 行为保持一致。
+        """
+        payload = await self._get_json(
+            "https://push2ex.eastmoney.com/getTopicDTPool",
+            {
+                "ut": "7eea3edcaed734bea9cbfc24409ed989",
+                "dpt": "wz.ztzt",
+                "Pageindex": "0",
+                "pagesize": "500",
+                "sort": "fund:asc",
+                "date": trade_date.strftime("%Y%m%d"),
+            },
+        )
+        pool = (payload.get("data") or {}).get("pool") or []
+        records = [nz.normalize_limit_down(r, trade_date) for r in pool]
         return [r for r in records if r is not None]
 
     @staticmethod

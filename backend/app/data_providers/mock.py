@@ -11,6 +11,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from app.schemas.market import (
     Kline,
+    LimitDownRecord,
     LimitUpRecord,
     LongHuRecord,
     OrderBook,
@@ -261,6 +262,29 @@ class MockProvider:
                     turnover_rate=round(rnd.uniform(1, 20), 2),
                     consecutive_boards=rnd.randint(1, 3),
                     boards_stat=f"{rnd.randint(1, 3)}天{rnd.randint(1, 2)}板",
+                    source=SOURCE,
+                )
+            )
+        return records
+
+    async def get_limit_down_pool(self, trade_date: date) -> list[LimitDownRecord]:
+        """mock 跌停池：与涨停池镜像（跌停价、连续跌停天数），供测试环境消费链使用。"""
+        rnd = random.Random(_seed("dt", trade_date))
+        records = []
+        for code, name, mkt in UNIVERSE[:4]:
+            limit_pct = -20.0 if code.startswith(("300", "688")) else -10.0
+            price = round(_base_price(code) * (1 + limit_pct / 100), 2)
+            records.append(
+                LimitDownRecord(
+                    symbol=code,
+                    name=name,
+                    trade_date=trade_date,
+                    price=price,
+                    change_pct=limit_pct,
+                    consecutive_days=rnd.randint(1, 2),
+                    open_count=rnd.randint(0, 3),
+                    seal_amount=rnd.randint(1, 20) * 1e7,
+                    turnover_rate=round(rnd.uniform(1, 20), 2),
                     source=SOURCE,
                 )
             )

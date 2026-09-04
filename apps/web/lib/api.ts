@@ -1,5 +1,6 @@
 import type {
   Kline,
+  LimitDownRecord,
   LimitUpRecord,
   LongHuRecord,
   Meta,
@@ -185,6 +186,11 @@ export async function getTrades(symbol: string, limit = 50): Promise<Trade[]> {
 export async function getLimitUpPool(dateStr?: string): Promise<LimitUpRecord[]> {
   const qs = dateStr ? `?date=${dateStr}` : "";
   return (await getJson<{ trade_date: string; pool: LimitUpRecord[] }>(`/api/limit-up${qs}`, 20_000)).data.pool;
+}
+
+export async function getLimitDownPool(dateStr?: string): Promise<LimitDownRecord[]> {
+  const qs = dateStr ? `?date=${dateStr}` : "";
+  return (await getJson<{ trade_date: string; pool: LimitDownRecord[] }>(`/api/limit-down${qs}`, 20_000)).data.pool;
 }
 
 export async function getLonghu(dateStr?: string): Promise<LongHuRecord[]> {

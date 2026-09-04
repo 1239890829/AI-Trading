@@ -94,6 +94,21 @@ export interface LimitUpRecord extends AuditFields {
   reason?: string | null;
 }
 
+/** 跌停池单条记录（东财 push2ex getTopicDTPool，2026-09-04 市场页跌停入口联动新增）。 */
+export interface LimitDownRecord extends AuditFields {
+  symbol: string;
+  name?: string | null;
+  trade_date: string;
+  price?: number | null;
+  change_pct?: number | null;
+  consecutive_days?: number | null; // 连续跌停天数
+  open_count?: number | null; // 开板次数
+  seal_amount?: number | null; // 封单额（元）
+  turnover_rate?: number | null;
+  amount?: number | null;
+  industry_board?: string | null;
+}
+
 /** 题材梯队看板 —— 一张题材卡片 */
 export interface LadderRung {
   symbol: string;

@@ -417,6 +417,9 @@ class TencentProvider:
     async def get_limit_up_pool(self, trade_date) -> list:
         return []  # 由链上东财 push2ex 提供
 
+    async def get_limit_down_pool(self, trade_date) -> list:
+        return []  # 由链上东财 push2ex 提供
+
     async def get_longhu_records(self, trade_date) -> list:
         return []  # 由链上东财 datacenter 提供
 

@@ -20,6 +20,7 @@ from app.schemas.envelope import (
     BreadthData,
     Envelope,
     KlinePayload,
+    LimitDownPoolPayload,
     LimitUpPoolPayload,
     LongHuPayload,
     MinuteLinePayload,
@@ -624,6 +625,24 @@ async def limit_up(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"涨停池数据源失败：{exc}")
     records.sort(key=lambda r: (r.consecutive_boards or 0), reverse=True)
+    return {
+        "data": {"trade_date": trade_date.isoformat(), "pool": [r.model_dump(mode="json") for r in records]},
+        "meta": _meta(hub),
+    }
+
+
+@router.get("/limit-down", response_model=Envelope[LimitDownPoolPayload])
+async def limit_down(
+    date_str: str | None = Query(default=None, alias="date", description="YYYY-MM-DD，默认最近交易日"),
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    """跌停池（东财 push2ex getTopicDTPool）。市场页跌停入口 → 盘面页跌停 tab 消费。"""
+    trade_date = date.fromisoformat(date_str) if date_str else await _default_trade_date_async(hub)
+    try:
+        records = await hub.provider.get_limit_down_pool(trade_date)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"跌停池数据源失败：{exc}")
+    records.sort(key=lambda r: (r.consecutive_days or 0), reverse=True)
     return {
         "data": {"trade_date": trade_date.isoformat(), "pool": [r.model_dump(mode="json") for r in records]},
         "meta": _meta(hub),
