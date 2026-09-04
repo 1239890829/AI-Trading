@@ -28,6 +28,8 @@ export function LimitUpTab() {
   const [records, setRecords] = useState<LimitUpRecord[]>([]);
   const [tradeDate, setTradeDate] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // 首次拉取在途：区分「加载中」与「今日真无涨停」，避免空态文案抢跑（2026-09-04）
+  const [loading, setLoading] = useState(true);
   // 题材联动状态：本地持有，URL 仅做初始注入与可分享快照
   const [theme, setTheme] = useState(() => searchParams.get("theme") ?? "");
   const [memberSymbols, setMemberSymbols] = useState<Set<string>>(
@@ -44,6 +46,8 @@ export function LimitUpTab() {
     } catch (e) {
       setError((e as Error).message);
       setRecords([]);
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -142,7 +146,19 @@ export function LimitUpTab() {
         source={records[0]?.source}
       >
         {records.length === 0 && !error ? (
-          <p className="px-4 py-10 text-center text-sm text-zinc-400">今日暂无涨停（或非交易日）</p>
+          loading ? (
+            <div className="space-y-2.5 px-3 py-4" aria-hidden>
+              {Array.from({ length: 8 }, (_, i) => (
+                <div key={i} className="flex items-center gap-3">
+                  <div className="h-3.5 w-14 animate-pulse rounded bg-zinc-200/80 dark:bg-zinc-800/70" />
+                  <div className="h-3.5 w-20 animate-pulse rounded bg-zinc-200/80 dark:bg-zinc-800/70" />
+                  <div className="ml-auto h-3.5 w-24 animate-pulse rounded bg-zinc-200/60 dark:bg-zinc-800/50" />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="px-4 py-10 text-center text-sm text-zinc-400">今日暂无涨停（或非交易日）</p>
+          )
         ) : shown.length === 0 ? (
           <p className="px-4 py-10 text-center text-sm text-zinc-400">
             「{theme}」的梯队成员均不在 {tradeDate || "当日"} 的涨停池中

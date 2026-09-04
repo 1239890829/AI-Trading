@@ -35,6 +35,8 @@ export function LonghuTab() {
   // 本次请求的日期参数（空 = 默认查当天，与后端语义一致）。失败时 records/tradeDate
   // 都是空的，凭它才知道用户查的是不是"披露前的当日"。
   const [queryDate, setQueryDate] = useState<string | null>(null);
+  // 首次拉取在途：区分「加载中」与「确认无数据」（2026-09-04 统一加载体验）
+  const [loading, setLoading] = useState(true);
 
   const load = useCallback(async (date?: string) => {
     setQueryDate(date ?? null);
@@ -48,6 +50,8 @@ export function LonghuTab() {
       setError((e as Error).message);
       setRecords([]);
       setNow(new Date());
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -136,7 +140,19 @@ export function LonghuTab() {
         source={records[0]?.source}
       >
         {records.length === 0 && (!error || isPreRelease) ? (
-          <p className="px-4 py-10 text-center text-sm text-zinc-400">暂无数据（龙虎榜盘后披露，当日数据需收盘后查询）</p>
+          loading ? (
+            <div className="space-y-2.5 px-3 py-4" aria-hidden>
+              {Array.from({ length: 8 }, (_, i) => (
+                <div key={i} className="flex items-center gap-3">
+                  <div className="h-3.5 w-14 animate-pulse rounded bg-zinc-200/80 dark:bg-zinc-800/70" />
+                  <div className="h-3.5 w-20 animate-pulse rounded bg-zinc-200/80 dark:bg-zinc-800/70" />
+                  <div className="ml-auto h-3.5 w-24 animate-pulse rounded bg-zinc-200/60 dark:bg-zinc-800/50" />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="px-4 py-10 text-center text-sm text-zinc-400">暂无数据（龙虎榜盘后披露，当日数据需收盘后查询）</p>
+          )
         ) : (
           <table className="w-full text-sm">
             <thead className="text-left text-xs text-zinc-400">

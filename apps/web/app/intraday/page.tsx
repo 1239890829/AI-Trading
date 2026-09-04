@@ -24,6 +24,7 @@ import {
 import { workbenchUrlWithBack, themesUrl } from "@/lib/routing";
 import { pctColor, pctText, timeText } from "@/lib/format";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import { CardListSkeleton, FadeIn, PageSkeletonFallback, StatGridSkeleton, StatsSkeleton, TableSkeleton } from "@/components/ui/loading";
 
 /**
  * 盘中跟踪（/intraday，选股 2.0 §2 呈现层，批次 B/C）：
@@ -213,16 +214,7 @@ function OpportunitySection({
         <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
           当前机会（题材 → 个股，证据池 {opps.trade_date ?? "—"}）
         </h2>
-        <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-400">
-          <span>
-            涨停 {opps.summary.limit_up_total ?? "—"} 家 · 最高 {opps.summary.market_max_boards ?? "—"} 板
-          </span>
-          {!opps.hot_available && (
-            <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-amber-600 dark:text-amber-300">
-              ⚠ 人气榜不可用：辨识度判定不完整
-            </span>
-          )}
-        </div>
+        {/* 涨停家数/最高板/人气榜警示已上移至「今日行情」概览带（2026-09-04） */}
       </div>
       {opps.themes.length === 0 ? (
         <div className="rounded-xl border border-zinc-200 p-4 text-xs text-zinc-400 dark:border-zinc-800">
@@ -243,6 +235,39 @@ function OpportunitySection({
         两者独立判定不合并打分；判定依据悬停可见、等级可回放。仅模拟跟踪，不构成买卖建议。
       </p>
     </section>
+  );
+}
+
+/* ---------------------------------------------------------------- 今日行情 *
+ * 2026-09-04 用户反馈：数据刷新完成前顶部只有一行小字、布局突兀 →
+ * 升级为显式概览指标带（涨停/最高板/题材机会/梯队断层），加载前骨架占位
+ * （高度对齐真实块防跳动），数据到达后淡入。三态：加载中≠失败≠空。 */
+
+function MarketOverviewStrip({ opps }: { opps: IntradayOpportunities | null }) {
+  const brokenLadder = opps
+    ? opps.themes.filter((t) => t.has_succession === false).length
+    : 0;
+  const stats: [string, string | number, string][] = [
+    ["涨停家数", opps?.summary.limit_up_total ?? "--", "ths 封单法口径"],
+    ["最高连板", opps ? `${opps.summary.market_max_boards ?? "--"} 板` : "--", "全市场空间板高度"],
+    ["题材机会", opps ? `${opps.themes.length} 个` : "--", "当日有候选个股的题材数"],
+    ["梯队断层", opps ? `${brokenLadder} 个` : "--", "has_succession=false 的题材（接续风险）"],
+  ];
+  return (
+    <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+      {stats.map(([label, value, tip]) => (
+        <div
+          key={label}
+          className="rounded-lg border border-zinc-200 px-2.5 py-1.5 dark:border-zinc-800"
+          title={tip}
+        >
+          <span className="text-[11px] text-zinc-400">{label}</span>
+          <div className="font-mono text-sm font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
+            {value}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -552,6 +577,9 @@ function IntradayPageInner() {
   // watcher 后端每拍推进但界面不跟随，用户以为必须手动刷新。
   const [loadedAt, setLoadedAt] = useState<number | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
+  // 首轮加载在途（2026-09-04）：区分「加载中」与「确认无数据」——
+  // 加载中渲染骨架占位，加载完成后才允许出现空态/失败态，避免整块内容突然弹出。
+  const [pending, setPending] = useState(true);
 
   // 展开的题材以 URL query 为真相源（?theme=）：跳工作台后返回，展开态原样保留
   const [expandedTheme, setExpandedTheme] = useState<string | null>(() => sp.get("theme"));
@@ -582,6 +610,7 @@ function IntradayPageInner() {
     // 部分成功不警示——briefMissing 等单端点缺失有各自的空态文案。
     setLoadFailed(b === null && w === null && s === null && o === null);
     setLoadedAt(Date.now());
+    setPending(false);
   }, []);
 
   // 挂载即拉（轮询由下方 visibility 感知 effect 承担：60s 对齐后端 watcher 节拍）
@@ -700,117 +729,159 @@ function IntradayPageInner() {
       )}
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+        {/* ── 今日行情概览（2026-09-04）：原 header 一行小字升级为指标带；未就绪时骨架占位 ── */}
+        <section className="space-y-2">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">今日行情</h2>
+            {opps?.hot_available === false && (
+              <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-600 dark:text-amber-300">
+                ⚠ 人气榜不可用：辨识度判定不完整
+              </span>
+            )}
+          </div>
+          {opps ? (
+            <FadeIn>
+              <MarketOverviewStrip opps={opps} />
+            </FadeIn>
+          ) : pending ? (
+            <StatGridSkeleton count={4} />
+          ) : (
+            <div className="rounded-lg border border-zinc-200 px-3 py-2.5 text-xs text-zinc-400 dark:border-zinc-800">
+              当前行情数据不可用（后端不可达或端点失败）——每 60s 自动重试。
+            </div>
+          )}
+        </section>
+
         {/* 当前机会不依赖简报文件（实时涨停池题材），独立于 briefMissing 展示 */}
-        {opps && <OpportunitySection opps={opps} expanded={expandedTheme} onToggle={toggleTheme} />}
+        {opps ? (
+          <FadeIn>
+            <OpportunitySection opps={opps} expanded={expandedTheme} onToggle={toggleTheme} />
+          </FadeIn>
+        ) : (
+          pending && <CardListSkeleton count={3} />
+        )}
         {briefMissing ? (
           <div className="rounded-xl border border-zinc-200 p-6 text-center text-sm text-zinc-400 dark:border-zinc-800">
             今日尚无盘前简报：点右上「生成/刷新简报」，或等交易日 08:40 自动生成。
             <br />
             简报是盘中跟踪与盘后对照的唯一事实源，没有它 watcher 会空转。
           </div>
-        ) : (
-          brief && (
-            <>
-              <section className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                    盘前简报（{brief.brief_date}）
-                  </h2>
-                  <EnvStrip brief={brief} />
-                </div>
-                <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-                  {brief.directions.map((d) => (
-                    <DirectionCard key={d.direction} d={d} />
-                  ))}
-                </div>
-              </section>
-
-              <section className="space-y-2">
-                <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">盘中 watcher 状态</h2>
-                <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
-                  {watcher?.active ? (
-                    <>
-                      <div className="mb-2 flex flex-wrap gap-3 text-[11px] text-zinc-400">
-                        <span>已推进 {watcher.beat_count ?? 0} 拍</span>
-                        <span>启动于 {timeText(watcher.started_at ?? null)}</span>
-                      </div>
-                      <table className="w-full">
-                        <thead>
-                          <tr className="text-zinc-400">
-                            <th className="text-left font-normal">方向</th>
-                            <th className="text-right font-normal">拍数</th>
-                            <th className="text-right font-normal">缺数据拍</th>
-                            <th className="text-right font-normal">峰值涨幅</th>
-                            <th className="text-right font-normal">确认</th>
-                            <th className="text-right font-normal">证伪</th>
-                            <th className="text-right font-normal">已提醒</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {(watcher.trackers ?? []).map((t) => (
-                            <tr key={t.direction} className="border-t border-zinc-100 dark:border-zinc-800/60">
-                              <td className="py-1">{t.direction}</td>
-                              <td className="text-right font-mono tabular-nums">{t.beats}</td>
-                              <td className="text-right font-mono tabular-nums text-zinc-400">{t.missing_beats}</td>
-                              <td className={`text-right font-mono tabular-nums ${pctColor(t.peak_pct)}`}>
-                                {t.peak_pct != null ? pctText(t.peak_pct) : "—"}
-                              </td>
-                              <td className="text-right">
-                                {t.confirmed ? <span className="text-up">是</span> : <span className="text-zinc-400">否</span>}
-                              </td>
-                              <td className="text-right">
-                                {t.falsified ? (
-                                  <span className="text-down" title={t.falsify_triggers.map((x) => x.detail).join("；")}>
-                                    是
-                                  </span>
-                                ) : (
-                                  <span className="text-zinc-400">否</span>
-                                )}
-                              </td>
-                              <td className="text-right font-mono text-[11px] text-zinc-400">
-                                {t.alerted_symbols.join("、") || "—"}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </>
-                  ) : (
-                    <div className="text-zinc-400">
-                      {watcher?.note ?? "watcher 未启动（后端未运行或开关关闭）——非交易时段属正常"}
-                    </div>
-                  )}
-                </div>
-              </section>
-
-              <section className="space-y-2">
-                <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                  盘中提醒（{alerts.length} 条，当日去重）
-                </h2>
-                {alerts.length === 0 ? (
-                  <div className="rounded-xl border border-zinc-200 p-4 text-xs text-zinc-400 dark:border-zinc-800">
-                    暂无提醒。确认条件五项全过才触发（量比数据源缺 → 会压档）；
-                    证伪任一触发即推送并当日静默。
+        ) : pending || brief ? (
+          <>
+            <section className="space-y-2">
+              <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">盘前简报</h2>
+              {brief ? (
+                <FadeIn>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-zinc-400">简报日期 {brief.brief_date}</span>
+                    <EnvStrip brief={brief} />
                   </div>
+                  <div className="mt-2 grid grid-cols-1 gap-3 lg:grid-cols-3">
+                    {brief.directions.map((d) => (
+                      <DirectionCard key={d.direction} d={d} />
+                    ))}
+                  </div>
+                </FadeIn>
+              ) : (
+                <CardListSkeleton count={3} />
+              )}
+            </section>
+
+            <section className="space-y-2">
+              <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">盘中 watcher 状态</h2>
+              <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+                {pending && watcher === null ? (
+                  <TableSkeleton rows={4} />
+                ) : watcher?.active ? (
+                  <FadeIn>
+                    <div className="mb-2 flex flex-wrap gap-3 text-[11px] text-zinc-400">
+                      <span>已推进 {watcher.beat_count ?? 0} 拍</span>
+                      <span>启动于 {timeText(watcher.started_at ?? null)}</span>
+                    </div>
+                    <table className="w-full">
+                      <thead>
+                        <tr className="text-zinc-400">
+                          <th className="text-left font-normal">方向</th>
+                          <th className="text-right font-normal">拍数</th>
+                          <th className="text-right font-normal">缺数据拍</th>
+                          <th className="text-right font-normal">峰值涨幅</th>
+                          <th className="text-right font-normal">确认</th>
+                          <th className="text-right font-normal">证伪</th>
+                          <th className="text-right font-normal">已提醒</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(watcher.trackers ?? []).map((t) => (
+                          <tr key={t.direction} className="border-t border-zinc-100 dark:border-zinc-800/60">
+                            <td className="py-1">{t.direction}</td>
+                            <td className="text-right font-mono tabular-nums">{t.beats}</td>
+                            <td className="text-right font-mono tabular-nums text-zinc-400">{t.missing_beats}</td>
+                            <td className={`text-right font-mono tabular-nums ${pctColor(t.peak_pct)}`}>
+                              {t.peak_pct != null ? pctText(t.peak_pct) : "—"}
+                            </td>
+                            <td className="text-right">
+                              {t.confirmed ? <span className="text-up">是</span> : <span className="text-zinc-400">否</span>}
+                            </td>
+                            <td className="text-right">
+                              {t.falsified ? (
+                                <span className="text-down" title={t.falsify_triggers.map((x) => x.detail).join("；")}>
+                                  是
+                                </span>
+                              ) : (
+                                <span className="text-zinc-400">否</span>
+                              )}
+                            </td>
+                            <td className="text-right font-mono text-[11px] text-zinc-400">
+                              {t.alerted_symbols.join("、") || "—"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </FadeIn>
                 ) : (
+                  <div className="text-zinc-400">
+                    {watcher?.note ?? "watcher 未启动（后端未运行或开关关闭）——非交易时段属正常"}
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <section className="space-y-2">
+              <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                盘中提醒（{alerts.length} 条，当日去重）
+              </h2>
+              {pending && alerts.length === 0 ? (
+                <CardListSkeleton count={1} />
+              ) : alerts.length === 0 ? (
+                <div className="rounded-xl border border-zinc-200 p-4 text-xs text-zinc-400 dark:border-zinc-800">
+                  暂无提醒。确认条件五项全过才触发（量比数据源缺 → 会压档）；
+                  证伪任一触发即推送并当日静默。
+                </div>
+              ) : (
+                <FadeIn>
                   <div className="space-y-2">
                     {alerts.map((a) => (
                       <AlertItem key={a.key} a={a} />
                     ))}
                   </div>
-                )}
-              </section>
+                </FadeIn>
+              )}
+            </section>
 
-              <section className="space-y-2">
-                <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                  今日盘前 vs 实际（对照表
-                  {brief.review ? ` · ${timeText(brief.review.reviewed_at)} 复盘）` : " · 未复盘，15:35 自动运行）"}
-                </h2>
-                {reviewed.length === 0 ? (
-                  <div className="rounded-xl border border-zinc-200 p-4 text-xs text-zinc-400 dark:border-zinc-800">
-                    今日尚未对照。点右上「运行对照」或等 15:35 调度（收盘后才有意义）。
-                  </div>
-                ) : (
+            <section className="space-y-2">
+              <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                今日盘前 vs 实际（对照表
+                {brief?.review ? ` · ${timeText(brief.review.reviewed_at)} 复盘）` : " · 未复盘，15:35 自动运行）"}
+              </h2>
+              {pending && reviewed.length === 0 ? (
+                <TableSkeleton rows={3} />
+              ) : reviewed.length === 0 ? (
+                <div className="rounded-xl border border-zinc-200 p-4 text-xs text-zinc-400 dark:border-zinc-800">
+                  今日尚未对照。点右上「运行对照」或等 15:35 调度（收盘后才有意义）。
+                </div>
+              ) : (
+                <FadeIn>
                   <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
                     <table className="w-full">
                       <thead>
@@ -843,16 +914,27 @@ function IntradayPageInner() {
                       </tbody>
                     </table>
                   </div>
-                )}
-              </section>
+                </FadeIn>
+              )}
+            </section>
 
-              {stats && <section className="space-y-2">
-                <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">近 30 日胜率统计</h2>
-                <StatsPanel stats={stats} />
-              </section>}
-            </>
-          )
-        )}
+            {stats ? (
+              <FadeIn>
+                <section className="space-y-2">
+                  <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">近 30 日胜率统计</h2>
+                  <StatsPanel stats={stats} />
+                </section>
+              </FadeIn>
+            ) : (
+              pending && (
+                <section className="space-y-2">
+                  <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">近 30 日胜率统计</h2>
+                  <StatsSkeleton />
+                </section>
+              )
+            )}
+          </>
+        ) : null}
       </div>
 
       <div className="shrink-0 text-[10px] text-zinc-500">
@@ -866,7 +948,7 @@ function IntradayPageInner() {
 /** useSearchParams 需要 Suspense 边界（Next 16 约束，workbench 同款结构）。 */
 export default function IntradayPage() {
   return (
-    <Suspense fallback={<main className="p-6 text-sm text-zinc-400">盘中跟踪加载中…</main>}>
+    <Suspense fallback={<PageSkeletonFallback label="盘中跟踪加载中" />}>
       <IntradayPageInner />
     </Suspense>
   );

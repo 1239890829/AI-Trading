@@ -10,6 +10,7 @@ import { QualityBadge } from "@/components/quality-badge";
 import { Sparkline } from "@/components/sparkline";
 import { useQuoteStream, STREAM_STATUS_LABEL } from "@/hooks/use-quote-stream";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import { PageSkeletonFallback } from "@/components/ui/loading";
 import { useRealPositions } from "@/hooks/use-real-positions";
 import {
   addToWatchlist,
@@ -633,7 +634,7 @@ function WorkbenchInner() {
 
 export default function WorkbenchPage() {
   return (
-    <Suspense fallback={<main className="p-6 text-sm text-zinc-400">加载中…</main>}>
+    <Suspense fallback={<PageSkeletonFallback label="工作台加载中" />}>
       <WorkbenchInner />
     </Suspense>
   );

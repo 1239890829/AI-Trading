@@ -22,6 +22,7 @@ import {
 } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import { FadeSwap, PageSkeletonFallback, Skeleton } from "@/components/ui/loading";
 import type { LimitUpRecord, Quote } from "@/types/market";
 
 /**
@@ -66,6 +67,9 @@ function MarketInner() {
   const [sentHist, setSentHist] = useState<SentimentHistoryPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState("");
+  // 首轮加载在途：区分「加载中」（骨架占位）与「确认无数据」（空态文案），
+  // 避免内容加载完成后整块突然出现（2026-09-04 统一加载体验）。
+  const [pending, setPending] = useState(true);
 
   // 快慢轮询拆分（评审 O2，2026-09-01）：指数/涨停速览是盘中变量保 10s；
   // 宽度/情绪是准日频聚合（后端 60s 缓存 + 全市场快照），10s 拉属于浪费 → 30s；
@@ -83,6 +87,8 @@ function MarketInner() {
       setUpdatedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
     } catch {
       setError("无法连接后端行情服务（启动方式见工作台页提示）。");
+    } finally {
+      setPending(false);
     }
   }, []);
 
@@ -139,16 +145,18 @@ function MarketInner() {
         {view === "overview" && <span className="text-xs text-zinc-400">更新 {updatedAt || "--"}</span>}
       </div>
 
-      {view === "heatmap" ? (
-        <div className="min-h-0 flex-1">
-          <HeatmapTab />
-        </div>
-      ) : view === "events" ? (
-        <div className="min-h-0 flex-1">
-          <EventsTab />
-        </div>
-      ) : (
-        <div className="flex min-h-0 flex-1 flex-col gap-2">
+      {/* 视图切换统一 fade 过渡（2026-09-04）：h-full 保持各视图内部布局 */}
+      <FadeSwap swapKey={view} className="min-h-0 flex-1">
+        {view === "heatmap" ? (
+          <div className="h-full">
+            <HeatmapTab />
+          </div>
+        ) : view === "events" ? (
+          <div className="h-full">
+            <EventsTab />
+          </div>
+        ) : (
+          <div className="flex h-full min-h-0 flex-col gap-2">
           {error && (
             <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-600 dark:text-amber-300">
               {error}
@@ -159,7 +167,14 @@ function MarketInner() {
               联动切片 F（L 指数入口）：点击 → 工作台指数详情（带前缀规范形态），
               带 from 返回——指数与个股同一跳转纪律，不裸拼 URL。 */}
           <div className="grid shrink-0 grid-cols-3 gap-2 md:grid-cols-6">
-            {indices.map((q) => (
+            {indices.length === 0 && pending
+              ? Array.from({ length: 6 }, (_, i) => (
+                  <div key={i} className="rounded-lg border border-zinc-200 px-2.5 py-1.5 dark:border-zinc-800">
+                    <Skeleton className="h-3 w-16" />
+                    <Skeleton className="mt-1.5 h-5 w-20" />
+                  </div>
+                ))
+              : indices.map((q) => (
               <button
                 key={q.symbol}
                 onClick={() => router.push(workbenchUrlWithBack(indexDetailSymbol(q.symbol, q.market)))}
@@ -183,7 +198,7 @@ function MarketInner() {
             ))}
           </div>
 
-          {/* 宽度带 */}
+          {/* 宽度带：未就绪时同构骨架占位（label 已知，只对数值位骨架） */}
           <div className="grid shrink-0 grid-cols-3 gap-2 lg:grid-cols-6">
             {[
               ["上涨", breadth?.up, "text-up"],
@@ -195,13 +210,17 @@ function MarketInner() {
             ].map(([label, value, cls]) => (
               <div key={String(label)} className="rounded-lg border border-zinc-200 px-2.5 py-1 dark:border-zinc-800">
                 <span className="text-[11px] text-zinc-400">{label}</span>
-                <div className={`font-mono text-sm font-semibold ${cls}`}>{value ?? "--"}</div>
+                {value == null && pending ? (
+                  <Skeleton className="mt-0.5 h-4 w-14" />
+                ) : (
+                  <div className={`font-mono text-sm font-semibold ${cls}`}>{value ?? "--"}</div>
+                )}
               </div>
             ))}
           </div>
 
-          {/* 情绪合并卡：左相位/温度/指标，右近 10 日序列柱状（紧凑高度） */}
-          {sent && (
+          {/* 情绪合并卡：左相位/温度/指标，右近 10 日序列柱状（紧凑高度）；未就绪时单行骨架 */}
+          {sent ? (
             <div className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-1.5 rounded-lg border border-zinc-200 px-3.5 py-1.5 dark:border-zinc-800">
               <div className="flex min-w-0 flex-wrap items-center gap-x-3.5 gap-y-1">
                 <span className={`rounded-md border px-2 py-0.5 text-xs font-semibold ${PHASE_STYLE[sent.phase] ?? ""}`}>
@@ -250,7 +269,14 @@ function MarketInner() {
                 </div>
               )}
             </div>
-          )}
+          ) : pending ? (
+            <div className="flex shrink-0 items-center gap-4 rounded-lg border border-zinc-200 px-3.5 py-2 dark:border-zinc-800">
+              <Skeleton className="h-5 w-14 rounded-md" />
+              <Skeleton className="h-4 w-40" />
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="hidden h-4 w-72 xl:block" />
+            </div>
+          ) : null}
 
           {/* 中部：成交额 1/3 + 涨停速览 2/3（flex-[5] 优先撑高；表格超高时面板内滚动） */}
           <div className="grid min-h-[168px] flex-[5] gap-2 lg:grid-cols-[minmax(250px,1fr)_2fr]">
@@ -292,6 +318,16 @@ function MarketInner() {
                     ))}
                   </tbody>
                 </table>
+              ) : pending ? (
+                <div className="space-y-2.5 px-3 py-3">
+                  {Array.from({ length: 5 }, (_, i) => (
+                    <div key={i} className="flex items-center gap-3">
+                      <Skeleton className="h-3.5 w-14" />
+                      <Skeleton className="h-3.5 w-20" />
+                      <Skeleton className="ml-auto h-3.5 w-14" />
+                    </div>
+                  ))}
+                </div>
               ) : (
                 <p className="px-4 py-6 text-center text-sm text-zinc-400">今日暂无涨停数据（或非交易日）</p>
               )}
@@ -303,14 +339,15 @@ function MarketInner() {
             <EventPanel />
           </div>
         </div>
-      )}
+        )}
+      </FadeSwap>
     </main>
   );
 }
 
 export default function MarketPage() {
   return (
-    <Suspense fallback={<main className="p-6 text-sm text-zinc-400">加载中…</main>}>
+    <Suspense fallback={<PageSkeletonFallback label="市场页加载中" />}>
       <MarketInner />
     </Suspense>
   );

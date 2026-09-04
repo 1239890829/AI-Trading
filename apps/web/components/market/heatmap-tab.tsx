@@ -211,7 +211,15 @@ export function HeatmapTab() {
         }
       >
         {!data ? (
-          <p className="px-4 py-10 text-center text-sm text-zinc-400">加载中…（首次含行业映射构建约需数秒）</p>
+          /* 首次加载（含行业映射构建约需数秒）：同构骨架占位，避免整块突然出现 */
+          <div className="h-full w-full p-4" aria-hidden>
+            <div className="grid h-full grid-cols-6 grid-rows-4 gap-2">
+              {Array.from({ length: 24 }, (_, i) => (
+                <div key={i} className="animate-pulse rounded-md bg-zinc-200/60 dark:bg-zinc-800/50" style={{ opacity: 1 - i * 0.02 }} />
+              ))}
+            </div>
+            <p className="mt-3 text-center text-xs text-zinc-400">云图构建中…（首次含行业映射构建约需数秒）</p>
+          </div>
         ) : (
           <div className="relative h-full w-full">
             <svg viewBox={`0 0 ${W} ${H}`} className="h-full w-full" preserveAspectRatio="xMidYMid meet">

@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { BacktestTab } from "@/components/research/backtest-tab";
 import { AlertsTab } from "@/components/research/alerts-tab";
 import { ReviewTab } from "@/components/research/review-tab";
+import { FadeSwap, PageSkeletonFallback } from "@/components/ui/loading";
 
 /**
  * 研究页（2026-09-01 系统重构，docs/architecture-redesign.md §一.1.3）：
@@ -62,18 +63,18 @@ function ResearchInner() {
         </span>
       </div>
 
-      <div className="min-h-0 flex-1">
+      <FadeSwap swapKey={tab} className="min-h-0 flex-1">
         {tab === "backtest" && <BacktestTab />}
         {tab === "alerts" && <AlertsTab />}
         {tab === "review" && <ReviewTab />}
-      </div>
+      </FadeSwap>
     </main>
   );
 }
 
 export default function ResearchPage() {
   return (
-    <Suspense fallback={<main className="p-6 text-sm text-zinc-400">加载中…</main>}>
+    <Suspense fallback={<PageSkeletonFallback label="研究页加载中" />}>
       <ResearchInner />
     </Suspense>
   );

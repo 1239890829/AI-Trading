@@ -90,8 +90,22 @@ button, a, tr, input {
   animation: dot-breathe 1.8s ease-in-out infinite;
 }
 
+/* ===== 模块切换 fade 过渡（2026-09-04 统一加载体验）：
+   FadeSwap 组件用——旧内容 120ms 淡出、新内容 180ms 淡入 + 轻微上移，
+   时长收紧避免"等动画"迟滞感；骨架 → 真实内容替换复用 anim-fade-in。 ===== */
+@keyframes ui-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes ui-fade-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+.anim-fade-in  { animation: ui-fade-in 180ms ease-out; }
+.anim-fade-out { animation: ui-fade-out 120ms ease-in forwards; }
+
 /* 无障碍：偏好减弱动效时全部关闭 */
 @media (prefers-reduced-motion: reduce) {
-  .tick-up, .tick-down, .pulse-dot { animation: none; }
+  .tick-up, .tick-down, .pulse-dot, .anim-fade-in, .anim-fade-out { animation: none; }
   button, a, tr, input { transition: none !important; }
 }

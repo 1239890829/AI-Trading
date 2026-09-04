@@ -5,6 +5,7 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { workbenchUrlWithBack } from "@/lib/routing";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import { PageSkeletonFallback } from "@/components/ui/loading";
 import {
   generatePickReview,
   generatePicks,
@@ -303,7 +304,7 @@ function PicksInner() {
 
 export default function PicksPage() {
   return (
-    <Suspense fallback={<main className="p-6 text-sm text-zinc-400">加载中…</main>}>
+    <Suspense fallback={<PageSkeletonFallback label="每日精选加载中" />}>
       <PicksInner />
     </Suspense>
   );

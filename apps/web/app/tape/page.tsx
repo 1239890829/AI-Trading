@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { ThemesTab } from "@/components/tape/themes-tab";
 import { LimitUpTab } from "@/components/tape/limit-up-tab";
 import { LonghuTab } from "@/components/tape/longhu-tab";
+import { FadeSwap, PageSkeletonFallback } from "@/components/ui/loading";
 
 /**
  * 盘面页（2026-09-01 系统重构，docs/architecture-redesign.md §一.1.2）：
@@ -65,18 +66,19 @@ function TapeInner() {
         <span className="hidden text-xs text-zinc-400 lg:inline">梯队结构 · 涨停证据 · 资金关注</span>
       </div>
 
-      <div className="min-h-0 flex-1">
+      {/* tab 切换统一 fade 过渡（2026-09-04）：h-full 保持子 tab 内部 flex 布局 */}
+      <FadeSwap swapKey={tab} className="min-h-0 flex-1">
         {tab === "themes" && <ThemesTab />}
         {tab === "limitup" && <LimitUpTab />}
         {tab === "longhu" && <LonghuTab />}
-      </div>
+      </FadeSwap>
     </main>
   );
 }
 
 export default function TapePage() {
   return (
-    <Suspense fallback={<main className="p-6 text-sm text-zinc-400">加载中…</main>}>
+    <Suspense fallback={<PageSkeletonFallback label="盘面页加载中" />}>
       <TapeInner />
     </Suspense>
   );

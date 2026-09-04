@@ -363,7 +363,21 @@ export function ThemesTab() {
         </div>
       )}
 
-      {loading && !data && <p className="py-16 text-center text-sm text-zinc-400">加载中…</p>}
+      {loading && !data && (
+        /* 首次加载：题材卡同构骨架占位（2026-09-04 统一加载体验） */
+        <div className="space-y-3 py-2" aria-hidden>
+          {Array.from({ length: 4 }, (_, i) => (
+            <div key={i} className="animate-pulse rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+              <div className="flex items-center gap-2">
+                <div className="h-4 w-24 rounded bg-zinc-200/80 dark:bg-zinc-800/70" />
+                <div className="h-3.5 w-12 rounded bg-zinc-200/80 dark:bg-zinc-800/70" />
+                <div className="h-3.5 w-16 rounded bg-zinc-200/80 dark:bg-zinc-800/70" />
+              </div>
+              <div className="mt-2 h-3 w-2/3 rounded bg-zinc-200/60 dark:bg-zinc-800/50" />
+            </div>
+          ))}
+        </div>
+      )}
 
       {data && data.themes.length === 0 && (
         <p className="py-16 text-center text-sm text-zinc-400">
