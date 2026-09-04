@@ -546,6 +546,35 @@ async def minute_line(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
     return {"data": {"symbol": symbol, "points": points, "vr_baseline_5m": baseline}, "meta": _meta(hub)}
 
 
+async def _prev_trade_date_async(hub, before: date) -> date | None:
+    """before 之前的最近交易日（交易日历缓存优先，失败回退周末规则）；拿不到返回 None。"""
+    cache = cache_on(hub, "provider.trading_days", 86400, maxsize=1)
+    hit, days = cache.get("days")
+    if not hit:
+        for p in hub.providers if hasattr(hub, "providers") else [hub.provider]:
+            if hasattr(p, "get_trading_days"):
+                try:
+                    got = await p.get_trading_days()
+                    if got:
+                        days = got
+                        cache.set("days", days)
+                        break
+                except Exception:
+                    continue
+    if days:
+        s = before.strftime("%Y%m%d")
+        past = [d for d in days if d < s]
+        if past:
+            latest = past[-1]
+            return date(int(latest[:4]), int(latest[4:6]), int(latest[6:]))
+    cand = before - timedelta(days=1)
+    if cand.weekday() == 6:  # 周日
+        cand -= timedelta(days=2)
+    elif cand.weekday() == 5:  # 周六
+        cand -= timedelta(days=1)
+    return cand
+
+
 async def _default_trade_date_async(hub) -> date:
     """最近交易日：优先官方交易日历（ths，缓存 24h），失败回退周末规则。"""
     cache = cache_on(hub, "provider.trading_days", 86400, maxsize=1)
@@ -606,6 +635,12 @@ async def longhu(
     hub: QuoteHub = Depends(get_hub),
 ) -> dict:
     trade_date = date.fromisoformat(date_str) if date_str else await _default_trade_date_async(hub)
+    # 龙虎榜收盘后 ~17:00 才披露：当日 17:00 前且未显式指定日期时直接回退上一交易日。
+    # 不先打当日"必空"请求——空结果会喂熔断器（四源全体进入冷却），拖累整条链。
+    if date_str is None and trade_date == date.today() and datetime.now().time().replace(tzinfo=None) < dt_time(17, 0):
+        prev = await _prev_trade_date_async(hub, trade_date)
+        if prev is not None:
+            trade_date = prev
     try:
         records = await hub.provider.get_longhu_records(trade_date)
     except Exception as exc:
