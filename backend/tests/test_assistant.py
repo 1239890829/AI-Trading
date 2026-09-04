@@ -173,8 +173,8 @@ def test_chat_route_sse_success(client, monkeypatch):
     captured: list = []
     orig = assistant_routes._build_messages
 
-    def spy(req):
-        msgs = orig(req)
+    def spy(req, market_block=""):
+        msgs = orig(req, market_block)
         captured.append(msgs)
         return msgs
 
@@ -282,3 +282,100 @@ def test_entity_dict_empty_env(client, monkeypatch, tmp_path):
         if saved is not None:
             app.state.theme_catalog = saved
         assistant_routes._entity_cache.update(t=0.0, data=None)
+
+
+# ---------------------------------------------------------------- 实时快照注入
+
+from app.assistant.context import build_market_block, format_quote_line, resolve_symbols
+from app.schemas.market import Quote
+
+_STOCKS = [
+    {"name": "贵州茅台", "code": "600519"},
+    {"name": "平安银行", "code": "000001"},
+    {"name": "芯片设备", "code": "999999"},  # 假题材名混入也应按名解析
+]
+
+
+def test_resolve_symbols_code_and_name():
+    codes = resolve_symbols("600519 和 平安银行 各多少，金额 123456 别认", None, _STOCKS)
+    assert codes == ["600519", "000001"]  # 字典外 6 位数字（金额）不认
+
+
+def test_resolve_symbols_page_first_and_cap():
+    page = assistant_routes.PageContext(symbol="000001")
+    many = _STOCKS + [{"name": f"股票{i}", "code": f"10000{i}"} for i in range(10)]
+    text = "贵州茅台 " + " ".join(f"股票{i}" for i in range(10))
+    codes = resolve_symbols(text, page, many)
+    assert codes[0] == "000001"  # 页面标的优先
+    assert len(codes) == 6       # 上限
+
+
+def test_resolve_symbols_empty_dict():
+    assert resolve_symbols("600519 贵州茅台", None, []) == []
+
+
+def _mk_quote(**kw) -> Quote:
+    base = dict(symbol="600519", source="tencent", name="贵州茅台", price=1500.5, change_pct=2.35,
+                open=1480.0, high=1520.0, low=1470.0, prev_close=1466.0, amount=5.6e9)
+    base.update(kw)
+    return Quote(**base)
+
+
+def test_format_quote_line_fields():
+    line = format_quote_line(_mk_quote())
+    assert "贵州茅台（600519）" in line and "现价 1500.5" in line and "涨跌幅 2.35%" in line
+    assert "成交额 56.00 亿" in line
+    # 缺失字段显示 —，不臆造
+    q = _mk_quote(price=None, change_pct=None, data_timestamp=None)
+    assert "现价 —" in format_quote_line(q)
+
+
+def _run(coro):
+    import asyncio
+    return asyncio.new_event_loop().run_until_complete(coro)
+
+
+def test_build_market_block_ok_and_order():
+    async def fake_get(syms):
+        # 故意乱序返回，验证按请求序输出
+        return [_mk_quote(symbol=s) for s in reversed(syms)]
+
+    block = _run(build_market_block(fake_get, ["000001", "600519"]))
+    assert block.startswith("## 实时数据快照")
+    assert "只准引用" in block
+    assert block.index("（000001）") < block.index("（600519）")
+
+
+def test_build_market_block_degrades():
+    async def boom(_):
+        raise RuntimeError("tencent down")
+
+    assert _run(build_market_block(boom, ["600519"])) == ""
+    assert _run(build_market_block(boom, [])) == ""
+
+
+def test_chat_route_includes_market_block(client, monkeypatch):
+    fake = _FakeStream(["好的"])
+    monkeypatch.setattr(assistant_routes, "_open_stream", lambda msgs: fake)
+    captured: list = []
+    orig = assistant_routes._build_messages
+
+    def spy(req, market_block=""):
+        msgs = orig(req, market_block)
+        captured.append(msgs[0]["content"])
+        return msgs
+
+    monkeypatch.setattr(assistant_routes, "_build_messages", spy)
+    monkeypatch.setattr(assistant_routes, "_entity_payload",
+                        lambda _req: {"stocks": [{"name": "贵州茅台", "code": "600519"}], "themes": []})
+
+    async def fake_batch(hub, syms):  # 与真实 _batch_quotes(hub, symbols) 同签名
+        return [_mk_quote()]
+
+    from app.api.routes import market as market_routes
+    monkeypatch.setattr(market_routes, "_batch_quotes", fake_batch)
+    resp = client.post("/api/assistant/chat", json={
+        "messages": [{"role": "user", "content": "贵州茅台现在多少？"}],
+    })
+    assert resp.status_code == 200
+    assert "## 实时数据快照" in captured[0] and "600519" in captured[0]

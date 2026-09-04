@@ -22,6 +22,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
+from app.assistant.context import build_market_block, resolve_symbols
 from app.assistant.prompt import PageContext, build_system_prompt
 from app.core.config import settings
 from app.core.llm_client import ChatStream, LLMError, stream_chat_completion
@@ -67,8 +68,11 @@ def _sse(obj: dict) -> str:
     return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
 
 
-def _build_messages(req: ChatRequest) -> list[dict[str, str]]:
-    msgs = [{"role": "system", "content": build_system_prompt(req.page)}]
+def _build_messages(req: ChatRequest, market_block: str = "") -> list[dict[str, str]]:
+    system = build_system_prompt(req.page)
+    if market_block:
+        system += "\n" + market_block
+    msgs = [{"role": "system", "content": system}]
     msgs += [{"role": m.role, "content": m.content} for m in req.messages]
     return msgs
 
@@ -92,9 +96,27 @@ async def _close_stream(stream: ChatStream) -> None:
 
 
 @router.post("/assistant/chat")
-async def assistant_chat(req: ChatRequest) -> StreamingResponse:
+async def assistant_chat(req: ChatRequest, request: Request) -> StreamingResponse:
     provider = settings.llm_provider
     model = settings.review_llm_model or settings.news_llm_model or "default"
+
+    # 实时快照注入：解析消息/页面里的标的 → 批量取价 → 提示词块（best-effort）
+    market_block = ""
+    try:
+        entity = await asyncio.to_thread(_entity_payload, request)
+        codes = resolve_symbols(
+            req.messages[-1].content, req.page, entity.get("stocks") or []
+        )
+        if codes:
+            from app.api.routes.market import _batch_quotes
+
+            hub = request.app.state.hub
+            market_block = await build_market_block(
+                lambda syms: _batch_quotes(hub, syms), codes
+            )
+    except Exception as exc:  # noqa: BLE001  上下文构建是增强层，绝不拖垮聊天
+        log.warning("assistant market context skipped: %s", exc)
+        market_block = ""
 
     async def event_stream():
         # 先发 meta：即使 LLM 不可用，前端也能渲染"正在生成"的状态再收到显式错误
@@ -102,7 +124,9 @@ async def assistant_chat(req: ChatRequest) -> StreamingResponse:
         loop = asyncio.get_running_loop()
         stream: ChatStream | None = None
         try:
-            stream = await asyncio.to_thread(_open_stream, _build_messages(req))
+            stream = await asyncio.to_thread(
+                _open_stream, _build_messages(req, market_block)
+            )
             queue: asyncio.Queue = asyncio.Queue()
 
             def _produce() -> None:
