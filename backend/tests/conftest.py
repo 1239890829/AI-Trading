@@ -26,6 +26,7 @@ os.environ["ASHARE_PICKS_REVIEW_ENABLED"] = "false"
 os.environ["ASHARE_THS_SENTINEL_ENABLED"] = "false"
 os.environ["ASHARE_SENTIMENT_HISTORY_BACKFILL_ENABLED"] = "false"
 os.environ["ASHARE_MARKETDB_SYNC_ENABLED"] = "false"
+os.environ["ASHARE_PICKS_SHADOW_ENABLED"] = "false"
 
 # LLM 路由钉回 rules：本机 .env 配了 provider=claude_cli / *_MODEL=llm 时，
 # 走 settings 的测试（如 test_news_digest_api）会真的调起 claude 子进程打

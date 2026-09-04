@@ -40,18 +40,20 @@ def _today() -> str:
 
 
 class PaperTradingEngine:
-    def __init__(self, session_factory, quote_fn, trading_days_fn=None):
+    def __init__(self, session_factory, quote_fn, trading_days_fn=None, *, scope: str = "main"):
         self._sf = session_factory
         self._quote_fn = quote_fn  # async (symbol) -> Quote | None（走实时链）
         self._tdays_fn = trading_days_fn  # async () -> list[str] | None
+        #: 账户域：main=交易页签；shadow=每日精选影子持仓（数据隔离，互不可见）
+        self.scope = scope
 
     # ---------- 账户 ----------
 
     def ensure_account(self) -> PaperAccount:
         with self._sf() as db:
-            acc = db.query(PaperAccount).first()
+            acc = db.query(PaperAccount).filter(PaperAccount.scope == self.scope).first()
             if acc is None:
-                acc = PaperAccount(cash=1_000_000.0, initial_cash=1_000_000.0)
+                acc = PaperAccount(scope=self.scope, cash=1_000_000.0, initial_cash=1_000_000.0)
                 db.add(acc)
                 db.commit()
                 db.refresh(acc)
@@ -70,17 +72,17 @@ class PaperTradingEngine:
         而不是只记结果——事后定位全靠这条。
         """
         with self._sf() as db:
-            pos_before = db.query(PaperPosition).count()
-            ord_before = db.query(PaperOrder).count()
-            old = db.query(PaperAccount).first()
+            pos_before = db.query(PaperPosition).filter(PaperPosition.scope == self.scope).count()
+            ord_before = db.query(PaperOrder).filter(PaperOrder.scope == self.scope).count()
+            old = db.query(PaperAccount).filter(PaperAccount.scope == self.scope).first()
             cash_before = old.cash if old else None
             initial_before = old.initial_cash if old else None
 
-            db.query(PaperPosition).delete()
-            db.query(PaperOrder).delete()
-            acc = db.query(PaperAccount).first()
+            db.query(PaperPosition).filter(PaperPosition.scope == self.scope).delete()
+            db.query(PaperOrder).filter(PaperOrder.scope == self.scope).delete()
+            acc = db.query(PaperAccount).filter(PaperAccount.scope == self.scope).first()
             if acc is None:
-                acc = PaperAccount(cash=1_000_000.0, initial_cash=1_000_000.0)
+                acc = PaperAccount(scope=self.scope, cash=1_000_000.0, initial_cash=1_000_000.0)
             if initial_cash is not None and initial_cash > 0:
                 acc.initial_cash = float(initial_cash)
             acc.cash = acc.initial_cash
@@ -128,7 +130,7 @@ class PaperTradingEngine:
     async def place_order(self, symbol: str, side: str, price: float, qty: int) -> PaperOrder:
         acc = self.ensure_account()
         quote = await self._quote_fn(symbol)
-        order = PaperOrder(symbol=symbol, side=side, price=price, quantity=qty, status="pending")
+        order = PaperOrder(scope=self.scope, symbol=symbol, side=side, price=price, quantity=qty, status="pending")
 
         def reject(reason: str) -> PaperOrder:
             order.status = "rejected"
@@ -191,10 +193,12 @@ class PaperTradingEngine:
             db.commit()
             return order
         acc.cash -= cost
-        pos = db.query(PaperPosition).filter(PaperPosition.symbol == order.symbol).one_or_none()
+        pos = db.query(PaperPosition).filter(
+            PaperPosition.scope == self.scope, PaperPosition.symbol == order.symbol
+        ).one_or_none()
         today = _today()
         if pos is None:
-            pos = PaperPosition(symbol=order.symbol, quantity=0, frozen_today=0, cost_price=0, buy_date=today)
+            pos = PaperPosition(scope=self.scope, symbol=order.symbol, quantity=0, frozen_today=0, cost_price=0, buy_date=today)
             db.add(pos)
         total_cost = pos.cost_price * pos.quantity + fill_price * qty
         pos.quantity += qty
@@ -236,7 +240,9 @@ class PaperTradingEngine:
         """对全部挂单重试撮合（价格到位即成交）。返回**剩余挂单数**（技术债 #5：
         调用方据此自适应降频——无挂单时空转降频，有挂单才密集轮询）。"""
         with self._sf() as db:
-            pending = db.query(PaperOrder).filter(PaperOrder.status == "pending").all()
+            pending = db.query(PaperOrder).filter(
+                PaperOrder.status == "pending", PaperOrder.scope == self.scope
+            ).all()
             symbols = {o.symbol for o in pending}
             pending_left = len(pending)
         if not symbols:
@@ -249,21 +255,29 @@ class PaperTradingEngine:
             if quote is None or quote.price is None:
                 continue
             with self._sf() as db:
-                for o in db.query(PaperOrder).filter(PaperOrder.status == "pending", PaperOrder.symbol == sym).all():
+                for o in db.query(PaperOrder).filter(
+                    PaperOrder.status == "pending", PaperOrder.scope == self.scope,
+                    PaperOrder.symbol == sym,
+                ).all():
                     acc = self.ensure_account()
                     if o.side == "buy" and o.price >= quote.price:
                         await self._fill(db, acc, o, quote.price, o.quantity)
                     elif o.side == "sell" and o.price <= quote.price:
                         await self._fill_sell(db, acc, o, quote.price, o.quantity)
         with self._sf() as db:
-            pending_left = db.query(PaperOrder).filter(PaperOrder.status == "pending").count()
+            pending_left = db.query(PaperOrder).filter(
+                PaperOrder.status == "pending", PaperOrder.scope == self.scope
+            ).count()
         return pending_left
 
     # ---------- 撤单 ----------
 
     def cancel(self, order_id: int) -> PaperOrder | None:
         with self._sf() as db:
-            o = db.query(PaperOrder).filter(PaperOrder.id == order_id, PaperOrder.status == "pending").one_or_none()
+            o = db.query(PaperOrder).filter(
+                PaperOrder.id == order_id, PaperOrder.status == "pending",
+                PaperOrder.scope == self.scope,
+            ).one_or_none()
             if o is None:
                 return None
             o.status = "cancelled"
@@ -280,7 +294,7 @@ class PaperTradingEngine:
 
     def positions_with_pnl(self, price_map: dict[str, float]) -> list[dict]:
         with self._sf() as db:
-            positions = db.query(PaperPosition).all()
+            positions = db.query(PaperPosition).filter(PaperPosition.scope == self.scope).all()
             out = []
             for pos in positions:
                 last = price_map.get(pos.symbol)

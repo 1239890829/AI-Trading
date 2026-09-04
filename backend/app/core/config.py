@@ -83,6 +83,18 @@ class Settings(BaseSettings):
     picks_review_hour: int = 15
     picks_review_minute: int = 35
 
+    # ---- 执行闸门与影子持仓（picks-intraday-fusion-assessment P0-A/P0-B）----
+    # 执行闸门：9:25 竞价 gap 三态（阈值出处：近 60 交易日 4983 样本分桶实测）。
+    # gap ≥ block 禁买（一字/超高开，胜率 12%）；5~block 降级观察；≤ anomaly 异常低开复核
+    picks_gate_block_gap: float = 9.5
+    picks_gate_observe_gap: float = 5.0
+    picks_gate_anomaly_gap: float = -5.0
+    # 影子持仓：每交易日晨窗（09:26）把最新组合进 scope=shadow 独立账户模拟执行
+    # （先卖昨日持仓，再按执行闸门允许的桶开盘买入）——空仓闸门的 A/B 对照组
+    picks_shadow_enabled: bool = True
+    picks_shadow_start_minute: int = 9 * 60 + 26   # 竞价结束（9:25）后一分钟
+    picks_shadow_end_minute: int = 9 * 60 + 45     # 晨窗截止（错过顺延次日，不追价）
+
     # ---- ths 涨停原因单点哨兵（P0-B）----
     # 涨停原因/题材标签 100% 依赖 ths（东财 0%，无备源）：交易时段周期探测
     # reason 非空率，低于阈值/连续拉取失败 → AlertEvent 告警（文案含

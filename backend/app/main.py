@@ -161,6 +161,18 @@ async def lifespan(app: FastAPI):
     paper = PaperTradingEngine(get_session_factory(), live_quote, hub_trading_days)
     app.state.paper = paper
 
+    # --- 影子持仓（picks-intraday-fusion-assessment P0-B）：scope=shadow 独立账户 ---
+    # 每日精选的 A/B 对照组：晨窗把最新组合按执行闸门模拟执行，验证空仓闸门
+    # 机会成本与执行闸门价值。与 main 账户数据完全隔离（scope 列）。
+    paper_shadow = None
+    if settings.picks_shadow_enabled:
+        paper_shadow = PaperTradingEngine(
+            get_session_factory(), live_quote, hub_trading_days, scope="shadow",
+        )
+        from app.picks.shadow import ShadowRunner
+
+        app.state.paper_shadow = ShadowRunner(paper_shadow, get_session_factory())
+
     snapshot_service = MarketSnapshotService(
         poll_interval=settings.snapshot_poll_interval_seconds,
         save_interval=settings.snapshot_save_interval_seconds,
@@ -389,6 +401,14 @@ async def lifespan(app: FastAPI):
             sentiment_monitor_loop(app, stop=sentiment_monitor_stop), name="sentiment-monitor"
         )
 
+    # --- 影子持仓晨窗（P0-B）：09:26 竞价后按执行闸门模拟执行最新组合 ---
+    shadow_stop = asyncio.Event()
+    shadow_task = None
+    if settings.picks_shadow_enabled and app.state.paper_shadow is not None:
+        from app.picks.shadow import shadow_loop
+
+        shadow_task = asyncio.create_task(shadow_loop(app, stop=shadow_stop), name="picks-shadow")
+
     # --- marketdb 盘后增量同步（RPS/tech_score 数据地基；子进程隔离 + 磁盘幂等）---
     marketdb_stop = asyncio.Event()
     marketdb_task = None
@@ -432,6 +452,8 @@ async def lifespan(app: FastAPI):
         ths_sentinel_stop.set()
     if sentiment_monitor_task is not None:
         sentiment_monitor_stop.set()
+    if shadow_task is not None:
+        shadow_stop.set()
     if review_intraday_task is not None:
         review_intraday_stop.set()
     if review_task is not None:
@@ -451,6 +473,7 @@ async def lifespan(app: FastAPI):
     await _reap(review_intraday_task, name="picks-intraday-review")
     await _reap(ths_sentinel_task, name="ths-reason-sentinel")
     await _reap(sentiment_monitor_task, name="sentiment-monitor")
+    await _reap(shadow_task, name="picks-shadow")
     await _reap(marketdb_task, name="marketdb-sync")
     with contextlib.suppress(Exception, TimeoutError):
         await asyncio.wait_for(provider.aclose(), timeout=_SHUTDOWN_GRACE_SECONDS)

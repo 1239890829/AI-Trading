@@ -39,6 +39,19 @@ def get(path):
 picks = get("/api/picks/today")
 sent = get("/api/market/sentiment")
 
+# 执行闸门（P0-A）：9:25 竞价结束即知的三态执行状态。失败优雅降级——
+# 卡片照发，执行状态整块标"未知"，绝不因闸门端点抖动丢掉整份清单。
+exec_gate = None
+try:
+    exec_gate = get("/api/picks/execution-gate")
+except Exception as exc:
+    print(f"WARN: execution-gate unavailable: {exc}")
+exec_by_sym = {}
+if exec_gate:
+    exec_by_sym = {i["symbol"]: i for i in exec_gate.get("items") or []}
+STATE_TAG = {"blocked": "🚫 禁买", "observe": "⚠️ 观察", "normal": "✅ 可买",
+             "anomaly": "❗ 异常", "unknown": "❓ 未知"}
+
 now = datetime.now()
 today = now.date()
 MORNING = "--morning" in sys.argv
@@ -137,17 +150,24 @@ for n, it in enumerate(items, 1):
     if theme:
         head += f" · {theme}（{it.get('theme_stage') or '—'}）"
     sl = it.get("stop_loss") or {}
+    exec_row = exec_by_sym.get(it["symbol"])
+    exec_tag = STATE_TAG.get((exec_row or {}).get("state"), "❓ 未知") if MORNING else ""
+    exec_line = ""
+    if MORNING:
+        reason = (exec_row or {}).get("reason") or "执行闸门无数据"
+        exec_line = f"执行：**{exec_tag}**　{reason}\n"
     el.append(div(
         f"{head}\n"
         f"逻辑：{logic_line(it)}\n"
         f"失效：{(it.get('invalidations') or ['—'])[0]}\n"
-        f"止损：**-{sl.get('pct', 0):.0f}% @ {sl.get('price', 0):.2f}**"
+        f"止损：**-{sl.get('pct', 0):.0f}% @ {sl.get('price', 0):.2f}**\n"
+        f"{exec_line}".rstrip()
     ))
 el += [
     hr(),
     div("**🌅 明日前哨**　涨停回升且晋级率 ≥25% → 修复期重评方向池；涨停 <25 家且最高板 ≤2 板 → 冰点续空仓\n"
         f"当前切换条件：{sent.get('switch_conditions')}"),
-    note("选股器规则引擎 · 简报 08:40 生成，未含竞价数据 · 门控期清单仅作跟踪 · 非投资建议"),
+    note("选股器规则引擎 · 简报 08:40 生成 · 执行状态=9:25 竞价闸门（禁买=一字/超高开）· 非投资建议"),
 ]
 card1 = card(f"📊 {'今日' if MORNING else '明日'}机会观察 · {show:%m-%d}（周{WEEKDAY[show.weekday()]}）", "orange", el)
 

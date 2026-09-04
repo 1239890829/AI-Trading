@@ -928,3 +928,41 @@ async def picks_meta() -> dict:
         },
         "meta": {},
     }
+
+
+# ---------------------------------------------------------------- 执行闸门与影子持仓（picks-intraday-fusion-assessment P0-A/P0-B，2026-09-04）
+
+
+@router.get("/execution-gate")
+async def execution_gate(request: Request, date: str | None = Query(default=None)) -> dict:
+    """最新（或指定）组合成员的 9:25 竞价执行闸门三态判定。
+
+    gap ≥ 9.5% 禁买（一字/超高开，历史胜率 12%）/ 5~9.5% 观察 / ≤-5% 异常复核 /
+    其余可执行；竞价数据缺失 = unknown，绝不冒充可买。60s 缓存（竞价口径 9:25 后不再变）。
+    """
+    from app.core.config import settings
+    from app.core.ttl_cache import cache_on
+    from app.picks.execution_gate import collect_execution_gate
+
+    hub = get_hub(request)
+    cache = cache_on(request.app.state, "picks.execution_gate", 60, maxsize=2)
+    _, payload = await cache.get_or_set(
+        ("execution-gate", date),
+        lambda: collect_execution_gate(
+            hub, get_session_factory(),
+            pick_date=date,
+            block_ge=settings.picks_gate_block_gap,
+            observe_ge=settings.picks_gate_observe_gap,
+            anomaly_le=settings.picks_gate_anomaly_gap,
+        ),
+    )
+    return {"data": payload, "meta": {}}
+
+
+@router.get("/shadow")
+async def shadow_state(request: Request) -> dict:
+    """影子持仓账户状态（scope=shadow，独立于交易页签的 main 账户）。"""
+    runner = getattr(request.app.state, "paper_shadow", None)
+    if runner is None:
+        return {"data": {"enabled": False, "note": "影子持仓未启用（ASHARE_PICKS_SHADOW_ENABLED）"}, "meta": {}}
+    return {"data": {"enabled": True, **runner.state()}, "meta": {}}

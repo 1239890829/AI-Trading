@@ -183,6 +183,38 @@ class RulesAnalyzer:
                 "——本就未建议出手（闸门日看方向验证，不看个股对错）"
             )
 
+        # 影子持仓小节（P0-B）：空仓闸门的 A/B 对照——影子照常执行最新组合，
+        # 其绩效就是"如果不空仓会怎样"的逐日答案
+        sh = p.shadow
+        if sh is not None and sh.enabled:
+            ex = sh.execution or {}
+            if not ex:
+                findings.append("影子持仓：当日无执行日志（晨窗未执行或服务未运行，见 gaps）")
+            else:
+                bought = ex.get("bought") or []
+                skipped = ex.get("skipped") or []
+                filled = [b for b in bought if b.get("status") == "filled"]
+                gate = ex.get("gate_summary") or {}
+                findings.append(
+                    f"影子持仓：买入成交 {len(filled)}/{len(bought)}"
+                    f"（闸门拦下 {len(skipped)}：禁买 {gate.get('blocked', '?')}、"
+                    f"观察 {gate.get('observe', '?')}、异常 {gate.get('anomaly', '?')}、"
+                    f"未知 {gate.get('unknown', '?')}）"
+                )
+                acc = sh.account or {}
+                ret = acc.get("total_return_pct")
+                if ret is not None:
+                    findings.append(
+                        f"影子账户累计收益 {ret:+.2f}%（现金 {acc.get('cash')}）"
+                        "——与真实空仓决策对照，量化 gate 的机会成本"
+                    )
+                for b in skipped[:3]:
+                    findings.append(
+                        f"闸门跳过：{b.get('symbol')} {b.get('name') or ''}（{b.get('state')}）{b.get('reason') or ''}"
+                    )
+        elif sh is None:
+            findings.append("影子持仓未采集（服务旧版本或采集异常，见 gaps）")
+
         return DimensionResult(
             key="picks", title=self._TITLES["picks"],
             status="degraded" if p.gaps else "ok",

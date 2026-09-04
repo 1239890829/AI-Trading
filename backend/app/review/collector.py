@@ -26,6 +26,7 @@ from app.review.schemas import (
     PickReviewEntry,
     PicksSnapshot,
     PositionRecord,
+    ShadowSnapshot,
     TradingSnapshot,
 )
 
@@ -327,7 +328,6 @@ def collect_picks(session_factory, trade_date: date) -> "PicksSnapshot":
     缺失时标 gap 降级，不冒充"全部达成"。
     """
     from app.models.daily_pick import DailyPickReview, DailyPickSet
-
     gaps: list[DataGap] = []
     td = _date_key(trade_date)
 
@@ -390,6 +390,31 @@ def collect_picks(session_factory, trade_date: date) -> "PicksSnapshot":
                 reason=str(exc)[:200], impact="picks.准确率与失误归因", severity="warn",
             ))
 
+    # --- 影子持仓（P0-B）：启用但当日无执行日志才标 gap（未启用属配置常态） ---
+    shadow: "ShadowSnapshot | None" = None
+    try:
+        from app.core.config import settings as _settings
+        from app.picks.shadow import collect_shadow_for_review
+
+        if _settings.picks_shadow_enabled:
+            shadow_raw = collect_shadow_for_review(session_factory, trade_date)
+            if shadow_raw is None:
+                shadow = ShadowSnapshot(enabled=True)
+                gaps.append(DataGap(
+                    field="picks.shadow.execution", source="picks/shadow",
+                    reason=f"影子已启用但复盘日 {td} 无执行日志（晨窗未执行或服务当日未运行）",
+                    impact="picks.影子对照（空仓 A/B）", severity="warn",
+                ))
+            else:
+                shadow = ShadowSnapshot(enabled=True, **shadow_raw)
+    except Exception as exc:
+        log.warning("review collect: shadow snapshot failed: %s", exc)
+        shadow = ShadowSnapshot(enabled=False)
+        gaps.append(DataGap(
+            field="picks.shadow", source="picks/shadow",
+            reason=str(exc)[:200], impact="picks.影子对照（空仓 A/B）", severity="warn",
+        ))
+
     return PicksSnapshot(
         trade_date=td,
         combo_date=combo_date,
@@ -404,5 +429,6 @@ def collect_picks(session_factory, trade_date: date) -> "PicksSnapshot":
             for i in items_raw
         ],
         reviews=reviews,
+        shadow=shadow,
         gaps=gaps,
     )

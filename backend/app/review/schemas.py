@@ -120,6 +120,20 @@ class PickReviewEntry(BaseModel):
     note: str | None = None
 
 
+class ShadowSnapshot(BaseModel):
+    """影子持仓快照（P0-B，picks-intraday-fusion-assessment §4）。
+
+    影子账户 = 每日精选的 A/B 对照组：晨窗按执行闸门模拟执行最新组合，
+    与真实决策（gate 空仓/轻仓）逐日对照——空仓的机会成本由此量化。
+    execution 为 None = 当日无执行日志（未到晨窗/非交易日），不是"执行了零笔"。
+    """
+
+    enabled: bool = False
+    account: dict[str, Any] = Field(default_factory=dict)
+    execution: dict[str, Any] | None = None
+    gaps: list[DataGap] = Field(default_factory=list)
+
+
 class PicksSnapshot(BaseModel):
     """每日精选组合 + 当日逐股归因快照（2026-09-04 新增维度）。
 
@@ -131,6 +145,8 @@ class PicksSnapshot(BaseModel):
     combo_date: str | None = None
     items: list[PickEntry] = Field(default_factory=list)
     reviews: list[PickReviewEntry] = Field(default_factory=list)
+    #: 影子持仓小节。None = 未采集（影子未启用/服务旧版本）——缺失不冒充"无执行"。
+    shadow: ShadowSnapshot | None = None
     gaps: list[DataGap] = Field(default_factory=list)
 
 
