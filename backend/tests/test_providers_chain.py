@@ -483,3 +483,59 @@ def test_search_stubs_removed_from_chain():
     # 类级检查即可（方法不存在于类上）：ThsFuyaoProvider 构造需 api_key，无需实例化
     assert not hasattr(ThsFuyaoProvider, "search")
     assert not hasattr(SinaProvider, "search")
+
+
+# ---------- eastmoney get_news 反爬口径（2026-09-04 实测） ----------
+# search-api 反爬时返回 HTTP 200 空 body（无 UA 恒空、高频访问间歇空）；
+# 空结果是"软封锁"信号，必须显式 ProviderError 而不是裸 JSONDecodeError。
+
+def _news_provider_with(handler):
+    import httpx
+
+    from app.data_providers.eastmoney import EastmoneyProvider
+
+    p = EastmoneyProvider()
+    p._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return p
+
+
+def test_get_news_empty_body_raises_provider_error():
+    import httpx
+
+    p = _news_provider_with(lambda request: httpx.Response(200, text=""))
+    try:
+        try:
+            asyncio.run(p.get_news("600519"))
+            raise AssertionError("should raise")
+        except ProviderError as exc:
+            assert "empty reply" in str(exc)
+    finally:
+        asyncio.run(p._client.aclose())
+
+
+def test_get_news_invalid_json_raises_provider_error():
+    import httpx
+
+    p = _news_provider_with(lambda request: httpx.Response(200, text="cb(not json"))
+    try:
+        try:
+            asyncio.run(p.get_news("600519"))
+            raise AssertionError("should raise")
+        except ProviderError as exc:
+            assert "invalid JSON" in str(exc)
+    finally:
+        asyncio.run(p._client.aclose())
+
+
+def test_get_news_zero_articles_is_legitimate_empty():
+    """合法 JSON 但 0 结果 → 返回空列表（真没新闻的股），不记熔断失败。"""
+    import json as _json
+
+    import httpx
+
+    payload = {"result": {"cmsArticleWebOld": []}}
+    p = _news_provider_with(lambda request: httpx.Response(200, text="cb(" + _json.dumps(payload) + ")"))
+    try:
+        assert asyncio.run(p.get_news("600519")) == []
+    finally:
+        asyncio.run(p._client.aclose())

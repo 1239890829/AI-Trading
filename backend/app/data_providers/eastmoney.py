@@ -528,9 +528,16 @@ class EastmoneyProvider:
         if resp.status_code != 200:
             raise ProviderError(f"news HTTP {resp.status_code}")
         text = resp.text.strip()
+        if not text:
+            # 该接口反爬时返回 HTTP 200 空 body（实测无 UA 恒空、高频访问间歇空），
+            # 必须显式失败而不是让 json.loads 抛裸异常——错误口径与 _get_json 一致
+            raise ProviderError("empty reply from search-api (可能被限流)")
         if text.startswith("cb("):
             text = text[3:-1]
-        payload = _json.loads(text)
+        try:
+            payload = _json.loads(text)
+        except ValueError as exc:
+            raise ProviderError(f"invalid JSON from search-api: {exc}") from exc
         arts = ((payload.get("result") or {}).get("cmsArticleWebOld")) or []
         out = [nz.normalize_news(r, symbol) for r in arts]
         return [r for r in out if r is not None]
