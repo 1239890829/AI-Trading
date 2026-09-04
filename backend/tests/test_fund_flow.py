@@ -156,9 +156,16 @@ def test_flow_total_yi_merges_markets():
 # ---------------------------------------------------------------- 回源节流
 
 def test_backfill_throttle(monkeypatch):
+    # monotonic 绝对值不可依赖（CI 新 runner 可能 < 300s）：注入固定时钟
+    clock = {"t": 10000.0}
+    import time as _time
+    monkeypatch.setattr(_time, "monotonic", lambda: clock["t"])
     monkeypatch.setattr(ff, "_last_backfill_ts", [0.0])
     assert ff._backfill_throttled() is False  # 首次放行
+    clock["t"] += 60
     assert ff._backfill_throttled() is True  # 5 分钟内节流
+    clock["t"] += 301
+    assert ff._backfill_throttled() is False  # 超过节流窗口放行
 
 
 def test_flow_store_read_missing(tmp_path, monkeypatch):
