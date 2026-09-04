@@ -123,10 +123,100 @@ def test_send_rejected_on_http_error():
 
 def test_send_unconfigured_returns_false_without_request():
     calls: list = []
-    n = FeishuNotifier(webhook="", secret="", client=_client(calls, {"code": 0}))
+    # app 凭据也显式置空：本地 .env 可能已配，settings 默认值不可依赖（测试确定性）
+    n = FeishuNotifier(webhook="", secret="", app_id="", app_secret="", open_id="", client=_client(calls, {"code": 0}))
     ok = asyncio.run(n.send(_event(), _rule()))
     assert ok is False
     assert calls == []  # 显式跳过：连请求都不发
+
+
+# ---------------------------------------------------------------- app 凭据 P2P 通道
+
+def _app_client(
+    calls: list,
+    token: str = "t-mock",
+    token_ok: bool = True,
+    msg_body: dict | None = None,
+    msg_status: int = 200,
+) -> httpx.AsyncClient:
+    """Mock 同时应答 token 端点与消息端点；calls 记录 (url, request)。"""
+    msg_body = msg_body or {"code": 0, "data": {"message_id": "om_mock"}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((str(request.url), request))
+        if "tenant_access_token" in str(request.url):
+            if token_ok:
+                return httpx.Response(200, json={"code": 0, "tenant_access_token": token, "expire": 7200})
+            return httpx.Response(200, json={"code": 10003, "msg": "invalid app_id"})
+        return httpx.Response(msg_status, json=msg_body)
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+def _app_notifier(calls: list, app_id: str = "cli_test_a", **kw) -> FeishuNotifier:
+    """app 通道 notifier：webhook 显式置空，凭据齐备，client 为双端点 mock。
+
+    app_id 默认各用例取不同值：token 缓存挂在进程级 registry 上，键隔离防跨用例污染。
+    """
+    return FeishuNotifier(
+        webhook="", secret="", app_id=app_id, app_secret="s3cret", open_id="ou_recv",
+        client=_app_client(calls, **kw),
+    )
+
+
+def test_app_channel_availability_matrix():
+    assert FeishuNotifier(webhook="https://hook.test/abc", secret="", app_id="", app_secret="", open_id="").is_available()
+    assert FeishuNotifier(webhook="", secret="", app_id="cli", app_secret="s", open_id="ou").is_available()
+    # 三件缺一（如只有 id 没有 secret/open_id）= app 路不可用
+    assert not FeishuNotifier(webhook="", secret="", app_id="cli", app_secret="", open_id="ou").is_available()
+    assert not FeishuNotifier(webhook="", secret="", app_id="cli", app_secret="s", open_id="").is_available()
+    assert not FeishuNotifier(webhook="", secret="", app_id="", app_secret="", open_id="").is_available()
+
+
+def test_app_channel_send_success_p2p_text():
+    calls: list = []
+    n = _app_notifier(calls, app_id="cli_test_b1")
+    ok = asyncio.run(n.send(_event(), _rule()))
+    assert ok is True
+    assert len(calls) == 2  # token + message
+    token_url, token_req = calls[0]
+    msg_url, msg_req = calls[1]
+    assert "tenant_access_token" in token_url
+    assert json.loads(token_req.content)["app_id"] == "cli_test_b1"
+    assert "receive_id_type=open_id" in msg_url
+    assert msg_req.headers["Authorization"] == "Bearer t-mock"
+    body = json.loads(msg_req.content)
+    assert body["receive_id"] == "ou_recv"
+    assert body["msg_type"] == "text"
+    # OpenAPI 的 content 是 JSON 字符串，不是对象
+    assert isinstance(body["content"], str)
+    assert "茅台突破" in json.loads(body["content"])["text"]
+
+
+def test_app_channel_token_failure_returns_false_no_message():
+    calls: list = []
+    n = FeishuNotifier(
+        webhook="", secret="", app_id="cli_test_c1", app_secret="s3cret", open_id="ou_recv",
+        client=_app_client(calls, token_ok=False),
+    )
+    ok = asyncio.run(n.send(_event(), _rule()))
+    assert ok is False
+    assert len(calls) == 1  # token 失败后不再发消息
+
+
+def test_app_channel_token_cached_and_invalidated_on_reject():
+    calls: list = []
+    app_id = "cli_test_d1"
+    n = FeishuNotifier(
+        webhook="", secret="", app_id=app_id, app_secret="s3cret", open_id="ou_recv",
+        client=_app_client(calls, msg_body={"code": 99991663, "msg": "token invalid"}),
+    )
+    assert asyncio.run(n.send(_event(), _rule())) is False
+    # token 失效被拒后清缓存：第二次 send 必须重换 token（共 2 次 token 请求）
+    assert asyncio.run(n.send(_event(), _rule())) is False
+    token_calls = [c for c in calls if "tenant_access_token" in c[0]]
+    assert len(token_calls) == 2
+    assert len(calls) == 4  # 2 token + 2 message
 
 
 # ---------------------------------------------------------------- registry
@@ -134,6 +224,9 @@ def test_send_unconfigured_returns_false_without_request():
 def test_registry_dispatch_skips_unconfigured_feishu():
     reg = NotifierRegistry()
     assert "feishu" in reg.names()
+    # 默认 registry 的 feishu 读全局 settings（本地 .env 可能已配 app 凭据），
+    # 这里显式覆写为全空凭据，测试"未配置 → 显式缺席"这一确定性行为
+    reg.register(FeishuNotifier(webhook="", secret="", app_id="", app_secret="", open_id=""))
     delivered = asyncio.run(reg.dispatch(_event(), _rule(channels='["feishu"]')))
     assert "feishu" not in delivered  # 未配置 → 显式缺席，不伪装成功
 

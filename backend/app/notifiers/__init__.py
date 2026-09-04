@@ -3,9 +3,10 @@
 默认实现：
 - ConsoleNotifier：打印日志（永远可用，便于本地验证）
 - InAppNotifier：把事件写入 AlertEvent 表，前端通过 REST/WS 拉取
-- FeishuNotifier：飞书群自定义机器人 webhook（`notifiers/feishu.py`）
-  —— 配置 ASHARE_ALERT_FEISHU_WEBHOOK 后，规则 channels 里选 "feishu" 即走此通道；
-     未配置时显式 warning 跳过，不静默伪装成功。
+- FeishuNotifier：飞书通知（`notifiers/feishu.py`），两条路二选一：
+  · 群自定义机器人 webhook——配置 ASHARE_ALERT_FEISHU_WEBHOOK；
+  · 自建应用凭据 P2P 私聊——配置 ASHARE_FEISHU_APP_ID/_SECRET/_NOTIFY_OPEN_ID。
+  都配置时优先 webhook；都未配置时显式 warning 跳过，不静默伪装成功。
 """
 from __future__ import annotations
 

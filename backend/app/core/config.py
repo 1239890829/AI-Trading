@@ -131,13 +131,21 @@ class Settings(BaseSettings):
     news_llm_api_key: str = ""
     news_llm_model: str = ""
 
-    # ---- 告警推送通道：飞书群自定义机器人 ----
-    # webhook 形如 https://open.feishu.cn/open-apis/bot/v2/hook/xxx，
-    # 在飞书群「设置 → 群机器人 → 自定义机器人」添加后复制；留空 = feishu
-    # 通道不可用（规则选了 feishu 会显式 warning 并跳过，不伪装成功）
+    # ---- 告警推送通道：飞书 ----
+    # 两条路二选一（都配置时优先 webhook）：
+    # A. 群自定义机器人 webhook（https://open.feishu.cn/open-apis/bot/v2/hook/xxx）：
+    #    在飞书群「设置 → 群机器人 → 自定义机器人」添加后复制
+    # B. 自建应用凭据（app_id + app_secret）直发用户 P2P 私信（OpenAPI
+    #    /im/v1/messages），无需建群；notify_open_id 为接收人 open_id（ou_ 开头，
+    #    可用 lark-cli auth status 查看）。凭据来自飞书开放平台「凭证与基础信息」。
+    # 都未配置 = feishu 通道不可用（规则选了 feishu 会显式 warning 并跳过，不伪装成功）
     alert_feishu_webhook: str = ""
     # 机器人开启「签名校验」时填同款密钥；未开启留空
     alert_feishu_secret: str = ""
+    # 自建应用凭据 + P2P 接收人（三件齐备且 webhook 未配置时启用 app 通道）
+    feishu_app_id: str = ""
+    feishu_app_secret: str = ""
+    feishu_notify_open_id: str = ""
 
     # 盘中 watcher 提醒分发通道（逗号分隔：in_app/log/feishu）。
     # feishu 在列但 webhook 未配置时按通道既有语义显式跳过（warning 日志可见）。
