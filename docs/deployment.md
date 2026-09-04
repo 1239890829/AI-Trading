@@ -122,3 +122,71 @@ node scripts/api-sweep.js http://nas:8000    # 指定目标
    现在写入改为临时文件 + `os.replace()`，读取侧由 `app/services/parquet_store.py`
    从最新往回跳过损坏文件。发现既有损坏文件时应手工清理
    `data/parquet/snapshots/*/`（该目录不入库，属本地数据）。
+
+---
+
+## Docker 用户侧验证清单（2026-09-04）
+
+> 配套 `docker-compose.prod.yml`（双镜像构建 + /data 挂载 + healthcheck）。
+> 按顺序执行，每步都给了「预期结果」；任何一步不符，先停下对照排查项。
+
+### 1. 构建与启动
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml ps
+```
+
+预期：backend `Up (healthy)`（healthcheck 30s 间隔，start_period 20s 内别慌）、web `Up`。
+首次 web 构建约 2~5 分钟（多阶段 npm ci + next build）。
+
+### 2. 存活与页面
+
+```bash
+curl http://127.0.0.1:8000/api/health     # 预期 {"status":...}（8000 只绑 127.0.0.1，供本机巡检）
+curl -I http://127.0.0.1:3000/workbench   # 预期 200
+```
+
+浏览器打开 `http://127.0.0.1:3000/workbench`：行情列表应有实时数据。
+
+### 3. 反代与 CORS（最容易踩的坑）
+
+- 浏览器 DevTools 网络面板确认请求全部走 **同源 `/backend/api/*`**，无 CORS 报错；
+- 验证 `BACKEND_ORIGIN` 运行时生效：改 compose 里该变量 → `docker compose -f docker-compose.prod.yml up -d web`
+  （**不需要 --build**，Route Handler 每次请求运行时求值）。
+
+### 4. 数据持久化（重启不丢）
+
+```bash
+ls data/ashare.db data/parquet/snapshots/   # 容器跑起来后宿主侧应出现/更新
+docker compose -f docker-compose.prod.yml restart backend
+```
+
+重启后检查：自选、预警规则、模拟单、复盘报告仍在（SQLite 在挂载卷 `/data`）。
+
+### 5. 密钥注入（红线 4）
+
+- backend/.env 经 `env_file` 注入：`docker compose -f docker-compose.prod.yml exec backend env | grep ASHARE_`；
+- 确认 key **没进镜像层**：`docker history <backend镜像>` 不应出现密钥内容；
+- 严禁 `--build-arg` 传 key。
+
+### 6. 接口载荷体检（发布门禁）
+
+```bash
+node scripts/api-sweep.js http://127.0.0.1:8000
+```
+
+抓「HTTP 200 但数据是空的」——CI 没真实数据跑不了，只能部署后跑。
+
+### 7. WS 与降级
+
+- Route Handler 不代理 WebSocket 升级 → 默认 5s HTTP 轮询自动降级，**功能不受影响**；
+- 要实时 WS：前置 nginx 放开 Upgrade 头，或设 `NEXT_PUBLIC_WS_BASE`
+  （**构建期内联**，改了必须 `--build` 重构 web 镜像）。
+
+### 8. 已知边界
+
+- **公网部署**：8000 目前只绑 127.0.0.1，公网须由反代统一入口，勿直接暴露；
+- **LLM 后端（claude_cli）在容器内不可用**（无 claude 二进制与用户凭据）：复盘/摘要自动降级
+  rules 规则层（显式标注 degraded），`/api/assistant/chat` 会返回显式错误而非静默失败；
+- `data/parquet/snapshots/` 属本地数据不入库；发现损坏 parquet 手工清理即可（读取侧会自动跳过）。
