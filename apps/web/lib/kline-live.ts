@@ -8,6 +8,19 @@ function bjDate(ts: string | null | undefined): string {
   return d.toLocaleDateString("sv-SE", { timeZone: "Asia/Shanghai" });
 }
 
+/** 北京 HH:MM → 当日分钟数；非法（"NaN"/空）返回 -1。 */
+function hhmmToMin(hhmm: string): number {
+  const h = Number(hhmm.slice(0, 2));
+  const m = Number(hhmm.slice(3, 5));
+  if (!Number.isFinite(h) || !Number.isFinite(m) || hhmm.length !== 5) return -1;
+  return h * 60 + m;
+}
+
+/** 连续交易时段内（上午 09:30-11:30 / 下午 13:00-15:00）。竞价 09:25 单独处理不在此列。 */
+function inTradingSession(min: number): boolean {
+  return (min >= 570 && min <= 690) || (min >= 780 && min <= 900);
+}
+
 /**
  * 盘中 K 线实时合成：用 WS 最新 quote 更新最后一根日 K（当日 bar）。
  *
@@ -60,12 +73,25 @@ function bjHHMM(ts: string | null | undefined): string {
  * 一次，与 1s 的列表/K线不同步。价格与累计量（quote.volume 与 cum_volume 同为
  * 股，口径依据见 mergeQuoteIntoBars 注释）跟随 WS。
  *
+ * 时间基座：优先 quote.data_timestamp（源报价时间）；**缺失/非法回退
+ * received_at**（QuoteHub 收到时刻，盘中 ≈ 当前时间）——部分源/降级路径不带
+ * 报价时间戳，没有回退时 merge 恒返回 null，分时在两次校准之间完全冻结。
+ *
  * 同分钟：原地更新价格/累计量；均价线用 quote.amount/quote.volume 精算
  * （两者同为全日累计口径，实测与后端 avg 偏差 <0.01），不臆造。
  * 跨分钟（刚过整分、REST 还没补点）：**追加点**而不是放弃——原实现跨分钟
  * 返回 null，整分钟内右端点静止 50s+（2026-09-02 用户反馈"分时不及时"）。
  * 分钟量 = quote.volume − 上一点 cum_volume（负值截 0，源快照竞态防护）。
- * 间隙 >2 分钟（午休/停牌/断流）不追：臆造中间点比缺点更误导，交给 60s 校准。
+ *
+ * 跨分钟追加门槛（2026-09-04 用户反馈"新线段等很久且与实际涨跌幅不对应"的
+ * 根因修复）：原实现硬编码「quote 分钟 − 尾点分钟 > 2 → 放弃」——只要官方
+ * 分时源滞后超过 2 分钟（腾讯 WAF 封禁、TDX 备源接管、校准连续失败均为本项目
+ * 实测先例），追加通道整个死掉，曲线冻结在旧尾点、只能干等 60s 校准，而校准
+ * 拉回的还是滞后数据 → 线段迟迟不出且与报价对不上。现改为**同交易时段即可
+ * 追加**：上午/下午时段内（含跨午休 11:30→13:00 的相邻衔接）都允许，缺口
+ * 分钟在图表上留空白断线（数据诚实，不臆造直线），官方校准追上后自然弥合。
+ * 时段外的报价（竞价 09:25、盘后 15:00+ 定价成交、跨日旧数据）仍一律拒绝。
+ *
  * 追加点的 ts 由 quote 时间截秒（UTC ISO），60s 校准拉到官方点后整体覆盖。
  *
  * 返回新数组（不 mutate）；无需更新返回 null。
@@ -78,7 +104,7 @@ export function mergeQuoteIntoMinutes<T extends { ts: string; price: number; cum
   const price = quote.price;
   if (price == null || price <= 0) return null;
   const last = points[points.length - 1];
-  const qHHMM = bjHHMM(quote.data_timestamp);
+  const qHHMM = bjHHMM(quote.data_timestamp || quote.received_at);
   const lastHHMM = bjHHMM(last.ts);
   if (!qHHMM || !lastHHMM) return null;
 
@@ -89,17 +115,23 @@ export function mergeQuoteIntoMinutes<T extends { ts: string; price: number; cum
     return [...points.slice(0, -1), next] as T[];
   }
 
-  // 跨分钟：quote 分钟晚于最后点 ≤2 分钟才追加（快照竞态/断流防护）
-  const qMin = Number(qHHMM.slice(0, 2)) * 60 + Number(qHHMM.slice(3, 5));
-  const lastMin = Number(lastHHMM.slice(0, 2)) * 60 + Number(lastHHMM.slice(3, 5));
-  if (qMin <= lastMin || qMin - lastMin > 2) return null;
+  // 跨分钟：同交易日 + 双方都落在连续交易时段内才追加。
+  // （旧门槛「间隔 >2 分钟放弃」在官方分时源滞后时把合成通道整个冻死——
+  // 2026-09-04 受控实验复现：WS quote 每 1s 正常推送，曲线静止 6 分钟不动。）
+  const qDate = bjDate(quote.data_timestamp || quote.received_at);
+  const lastDate = bjDate(last.ts);
+  if (!qDate || !lastDate || qDate !== lastDate) return null;
+  const qMin = hhmmToMin(qHHMM);
+  const lastMin = hhmmToMin(lastHHMM);
+  if (qMin <= lastMin) return null;
+  if (!inTradingSession(qMin) || !inTradingSession(lastMin)) return null;
   const q = quote as Quote & { amount?: number | null };
   const cumVolume = quote.volume ?? null;
   const cumAmount = q.amount ?? null;
   const avg = cumVolume != null && cumVolume > 0 && cumAmount != null && cumAmount > 0 ? +(cumAmount / cumVolume).toFixed(3) : (last as { avg?: number }).avg ?? null;
   const prevCum = (last as { cum_volume?: number | null }).cum_volume ?? null;
   const minuteVol = cumVolume != null && prevCum != null ? Math.max(cumVolume - prevCum, 0) : null;
-  const slotTs = new Date(quote.data_timestamp as string);
+  const slotTs = new Date((quote.data_timestamp || quote.received_at) as string);
   if (isNaN(slotTs.getTime())) return null;
   slotTs.setSeconds(0, 0);
   const next = { ...last, ts: slotTs.toISOString(), price, volume: minuteVol, cum_volume: cumVolume, avg } as unknown as T;

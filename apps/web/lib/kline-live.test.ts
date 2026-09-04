@@ -153,8 +153,42 @@ describe("mergeQuoteIntoMinutes", () => {
     expect((out![2] as { avg?: number }).avg).toBeCloseTo(115_830_000 / 1_100_000, 3);
   });
 
-  it("跨分钟超过 2 分钟（午休/断流）→ 不追加，交给 60s 校准", () => {
-    expect(mergeQuoteIntoMinutes(minutesFixture(), quoteAt("14:33", 105.3))).toBeNull();
+  it("跨分钟超过 2 分钟（同交易时段内，官方源滞后）→ 仍追加（2026-09-04 冻结修复）", () => {
+    // 旧门槛「间隔 >2 分钟放弃」在官方分时源滞后 >2min 时把合成通道整个冻死：
+    // 受控实验复现 WS quote 每秒正常推送、曲线 6 分钟纹丝不动。改为同时段即追加。
+    const out = mergeQuoteIntoMinutes(minutesFixture(), quoteAt("14:33", 105.3));
+    expect(out).not.toBeNull();
+    expect(out).toHaveLength(3);
+    expect(out![2].price).toBe(105.3);
+    expect(out![2].ts.startsWith(`${TODAY}T06:33:00`)).toBe(true);
+  });
+
+  it("跨午休衔接：上午尾点 11:30 + 下午 quote 13:01 → 追加", () => {
+    const am = [point("11:29", 104.9, 900_000), point("11:30", 105.0, 1_000_000)];
+    const out = mergeQuoteIntoMinutes(am, quoteAt("13:01", 105.3));
+    expect(out).not.toBeNull();
+    expect(out).toHaveLength(3);
+    expect(out![2].price).toBe(105.3);
+    expect(out![2].ts.startsWith(`${TODAY}T05:01:00`)).toBe(true); // 13:01 北京 = 05:01 UTC
+  });
+
+  it("午休中（12:30）与收盘后（15:01）的 quote → 时段外不追加", () => {
+    const am = [point("11:29", 104.9, 900_000), point("11:30", 105.0, 1_000_000)];
+    expect(mergeQuoteIntoMinutes(am, quoteAt("12:30", 105.3))).toBeNull();
+    expect(mergeQuoteIntoMinutes(minutesFixture(), quoteAt("15:01", 105.3))).toBeNull();
+  });
+
+  it("quote 与尾点不是同一交易日（昨日尾点 + 今日 quote）→ 不追加", () => {
+    const yesterdayTail = [{ ...point("14:29", 104.9, 900_000), ts: `${YESTERDAY}T06:29:00+00:00` }];
+    expect(mergeQuoteIntoMinutes(yesterdayTail, quoteAt("14:30", 105.3))).toBeNull();
+  });
+
+  it("data_timestamp 缺失 → 回退 received_at 合成（无时间戳源不再冻结分时）", () => {
+    const q = { ...quoteAt("14:29", 105.3), data_timestamp: null, received_at: `${TODAY}T06:29:59+00:00` };
+    const out = mergeQuoteIntoMinutes(minutesFixture(), q);
+    expect(out).not.toBeNull();
+    expect(out![1].price).toBe(105.3);
+    expect(out![1].cum_volume).toBe(1_100_000);
   });
 
   it("quote 分钟早于最后点（快照竞态）→ 不合成", () => {
