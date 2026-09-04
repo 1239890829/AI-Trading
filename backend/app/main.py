@@ -195,6 +195,8 @@ async def lifespan(app: FastAPI):
         llm_base_url=settings.review_llm_base_url,
         llm_api_key=settings.review_llm_api_key,
         llm_model=settings.review_llm_model,
+        llm_provider=settings.llm_provider,
+        llm_cli_path=settings.llm_cli_path,
         methodology_version=settings.review_methodology_version,
         state=app.state,
     )

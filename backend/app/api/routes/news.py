@@ -61,6 +61,8 @@ async def news_digest(
             base_url=settings.news_llm_base_url,
             api_key=settings.news_llm_api_key,
             model=settings.news_llm_model,
+            provider=settings.llm_provider,
+            cli_path=settings.llm_cli_path,
         ),
     )
     # LLM 接入后摘要是同步 HTTP，必须丢线程池，不阻塞事件循环

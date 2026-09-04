@@ -1,8 +1,15 @@
-"""OpenAI 兼容 chat/completions 最小客户端。
+"""OpenAI 兼容 chat/completions 最小客户端 + claude_cli 无头网关。
 
-`LLMAnalyzer` / `LLMSummarizer` 共用。刻意只用**同步** httpx——
+`LLMAnalyzer` / `LLMSummarizer` 共用。刻意只用**同步**实现——
 两个调用点（review service、news 路由）都在事件循环里，同步实现
 由调用方 `asyncio.to_thread` 包裹，不在本模块内引入 async 双轨。
+
+两种后端（`chat_completion` 的 provider 参数二选一）：
+- openai（默认）：HTTP 直连 OpenAI 兼容 /chat/completions 端点
+- claude_cli：子进程调本机 `claude -p` 无头模式——LLM 凭据与网络
+  都由用户自己的 Claude Code 配置承担（适用于只有客户端受限中转
+  key 的场景，如 AgentRouter 的 WAF 只放行官方 CLI）。关工具 +
+  裁剪系统提示后单次调用 ~100 input tokens。
 
 只封装「发请求 + 解析回复」这一层；提示词构造、结果校验、失败降级
 都留在各自分析器里——那是业务语义，混进来会让两边的契约看不清。
@@ -10,6 +17,9 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -24,6 +34,77 @@ def _endpoint(base_url: str) -> str:
     return base_url.rstrip("/") + "/chat/completions"
 
 
+def resolve_cli_path(explicit: str = "") -> str | None:
+    """解析 claude CLI 可执行路径：显式配置 > PATH > nvm 安装目录。
+
+    找不到返回 None（调用方据此判定 claude_cli 后端不可用），绝不抛异常——
+    is_available 语义要求「判不出 = 不可用」而非崩溃。
+    """
+    if explicit.strip():
+        p = Path(explicit.strip()).expanduser()
+        return str(p) if p.is_file() else None
+    which = shutil.which("claude")
+    if which:
+        return which
+    # 沙箱/非交互 shell 常不带 nvm PATH，兜底扫 nvm 各版本取最新
+    candidates = sorted(Path.home().glob(".nvm/versions/node/*/bin/claude"))
+    return str(candidates[-1]) if candidates else None
+
+
+def chat_completion_via_cli(
+    model: str,
+    messages: list[dict[str, str]],
+    *,
+    cli_path: str = "",
+    timeout: float = 120.0,
+) -> str:
+    """子进程调 `claude -p` 无头模式，返回最终回复文本。
+
+    messages 只支持现有两个消费方的单轮形态：system → --system-prompt，
+    其余角色拼接为 prompt。`--tools ""` 关掉全部工具 + 裁剪动态系统提示，
+    否则 Claude Code 自带 agent 提示词会把单次调用撑到 ~18k input tokens。
+    凭据来自用户 ~/.claude 配置，本模块不读不存任何 key。
+    """
+    cli = resolve_cli_path(cli_path)
+    if not cli:
+        raise LLMError("claude_cli 后端不可用：未找到 claude 可执行文件")
+    system = "\n".join(m["content"] for m in messages if m.get("role") == "system")
+    prompt = "\n\n".join(
+        m["content"] for m in messages if m.get("role") != "system"
+    ).strip()
+    if not prompt:
+        raise LLMError("claude_cli 调用缺少 user 消息")
+    cmd = [
+        cli, "-p", prompt,
+        "--output-format", "json",
+        "--model", model,
+        "--tools", "",
+        "--exclude-dynamic-system-prompt-sections",
+    ]
+    if system:
+        cmd += ["--system-prompt", system]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout, check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise LLMError(f"claude_cli 调用失败：{exc}") from exc
+    if proc.returncode != 0:
+        raise LLMError(
+            f"claude_cli 退出码 {proc.returncode}：{(proc.stderr or proc.stdout)[:200]}"
+        )
+    try:
+        body = json.loads(proc.stdout)
+    except ValueError as exc:
+        raise LLMError("claude_cli 输出不是 JSON") from exc
+    if body.get("is_error"):
+        raise LLMError(f"claude_cli 返回错误：{str(body.get('result'))[:200]}")
+    content = body.get("result")
+    if not isinstance(content, str) or not content.strip():
+        raise LLMError("claude_cli 回复为空")
+    return content
+
+
 def chat_completion(
     base_url: str,
     api_key: str,
@@ -33,13 +114,21 @@ def chat_completion(
     temperature: float = 0.2,
     timeout: float = 30.0,
     client: httpx.Client | None = None,
+    provider: str = "openai",
+    cli_path: str = "",
 ) -> str:
-    """同步调用 OpenAI 兼容 /chat/completions，返回首条回复文本。
+    """按 provider 分发调用，返回回复文本。
 
-    任何失败（配置缺失 / 网络 / 非 200 / 响应结构不对 / 空回复）都抛
-    `LLMError`，由路由层统一降级——绝不返回 None 或空串冒充成功。
-    `client` 供测试注入 MockTransport；生产路径自建短连接。
+    openai 路径：任何失败（配置缺失 / 网络 / 非 200 / 响应结构不对 /
+    空回复）都抛 `LLMError`，由路由层统一降级——绝不返回 None 或空串
+    冒充成功。`client` 供测试注入 MockTransport；生产路径自建短连接。
+    claude_cli 路径：CLI 冷启动 + 大 prompt 下 30s 不够，超时下限抬到
+    120s（调用方传更大值则以调用方为准）。
     """
+    if provider == "claude_cli":
+        return chat_completion_via_cli(
+            model, messages, cli_path=cli_path, timeout=max(timeout, 120.0),
+        )
     if not (base_url and api_key and model):
         raise LLMError("LLM 未配置 base_url/api_key/model")
     payload: dict[str, Any] = {

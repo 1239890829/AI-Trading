@@ -41,6 +41,8 @@ class ReviewService:
         llm_base_url: str = "",
         llm_api_key: str = "",
         llm_model: str = "",
+        llm_provider: str = "openai",
+        llm_cli_path: str = "",
         methodology_version: str = "v1",
         state=None,
     ):
@@ -53,7 +55,10 @@ class ReviewService:
         self.state = state
         self._router = ModelRouter(
             requested=model,
-            llm=LLMAnalyzer(base_url=llm_base_url, api_key=llm_api_key, model=llm_model),
+            llm=LLMAnalyzer(
+                base_url=llm_base_url, api_key=llm_api_key, model=llm_model,
+                provider=llm_provider, cli_path=llm_cli_path,
+            ),
         )
         ensure_default_methodology_file()
 

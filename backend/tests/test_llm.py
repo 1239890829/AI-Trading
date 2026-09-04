@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json as _json
 import sys
+from pathlib import Path
 
 import httpx
 import pytest
@@ -133,6 +134,99 @@ def test_extract_json_object_variants():
         extract_json_object("没有任何 JSON")
     with pytest.raises(ValueError):
         extract_json_object('{"a": 1')  # 截断的 JSON
+
+
+# ---------------------------------------------------------------- claude_cli 后端
+
+
+class _FakeProc:
+    def __init__(self, stdout: str = "", stderr: str = "", returncode: int = 0):
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode
+
+
+def _stub_cli(monkeypatch, proc: _FakeProc) -> list:
+    """把 subprocess.run 换成桩，捕获命令行并返回固定结果。"""
+    calls: list = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append({"cmd": cmd, "kwargs": kwargs})
+        return proc
+
+    monkeypatch.setattr("app.core.llm_client.subprocess.run", fake_run)
+    return calls
+
+
+_CLI_STDOUT = _json.dumps({
+    "result": "```json\n{\"judgements\": {\"market\": [\"情绪分歧，建议控制仓位\"]}}\n```",
+    "is_error": False,
+    "usage": {"input_tokens": 123, "output_tokens": 2},
+})
+
+
+def test_cli_completion_success_and_command_shape(monkeypatch):
+    calls = _stub_cli(monkeypatch, _FakeProc(stdout=_CLI_STDOUT))
+    monkeypatch.setattr("app.core.llm_client.resolve_cli_path", lambda p="": p or "/fake/claude")
+    out = chat_completion(
+        "", "", "glm-5.3",
+        [
+            {"role": "system", "content": "你是金融复盘分析器"},
+            {"role": "user", "content": "底稿数据…"},
+        ],
+        provider="claude_cli", cli_path="/fake/claude",
+    )
+    assert "judgements" in out  # 原样返回文本，JSON 抽取交给 extract_json_object
+    cmd = calls[0]["cmd"]
+    assert cmd[0] == "/fake/claude" and cmd[1] == "-p" and cmd[2] == "底稿数据…"
+    assert "--model" in cmd and cmd[cmd.index("--model") + 1] == "glm-5.3"
+    assert "--system-prompt" in cmd
+    assert cmd[cmd.index("--system-prompt") + 1] == "你是金融复盘分析器"
+    assert "--tools" in cmd and cmd[cmd.index("--tools") + 1] == ""  # 关工具省 tokens
+    assert calls[0]["kwargs"]["timeout"] >= 120  # CLI 冷启动下超时下限抬到 120s
+
+
+def test_cli_completion_errors(monkeypatch):
+    # 找不到 CLI
+    monkeypatch.setattr(
+        "app.core.llm_client.resolve_cli_path", lambda p="": None,
+    )
+    with pytest.raises(LLMError, match="不可用"):
+        chat_completion("", "", "m", [{"role": "user", "content": "x"}], provider="claude_cli")
+    # 非 0 退出码（restore：resolve 返回显式路径，绕过文件存在性检查）
+    monkeypatch.setattr("app.core.llm_client.resolve_cli_path", lambda p="": p or "/fake/claude")
+    _stub_cli(monkeypatch, _FakeProc(returncode=1, stderr="boom"))
+    with pytest.raises(LLMError, match="退出码 1"):
+        chat_completion("", "", "m", [{"role": "user", "content": "x"}], provider="claude_cli")
+    # CLI 自报错误 / 空回复 / 输出非 JSON
+    for proc in (
+        _FakeProc(stdout=_json.dumps({"result": "err", "is_error": True})),
+        _FakeProc(stdout=_json.dumps({"result": "  ", "is_error": False})),
+        _FakeProc(stdout="not-json"),
+    ):
+        _stub_cli(monkeypatch, proc)
+        with pytest.raises(LLMError):
+            chat_completion("", "", "m", [{"role": "user", "content": "x"}], provider="claude_cli")
+
+
+def test_cli_is_available_and_analyzer_end_to_end(monkeypatch):
+    from app.core.llm_client import resolve_cli_path
+
+    # is_available：显式路径存在 → True；不存在 → False；openai 语义不受影响
+    real_file = str(Path(__file__).resolve())
+    assert resolve_cli_path(real_file) == real_file
+    assert resolve_cli_path("/nonexistent/claude") is None
+    ok = LLMAnalyzer(model="glm-5.3", provider="claude_cli", cli_path=real_file)
+    bad = LLMAnalyzer(model="glm-5.3", provider="claude_cli", cli_path="/nonexistent/claude")
+    assert ok.is_available() is True
+    assert bad.is_available() is False
+
+    # 端到端：CLI 桩返回 judgements → 分析器正常产出增强维度
+    _stub_cli(monkeypatch, _FakeProc(stdout=_CLI_STDOUT))
+    dims = ok.analyze(_review_data(), _method())
+    market = next(d for d in dims if d.key == "market")
+    assert market.evidence.get("llm_enhanced") is True
+    assert market.judgements == ["情绪分歧，建议控制仓位"]
 
 
 # ---------------------------------------------------------------- LLMAnalyzer

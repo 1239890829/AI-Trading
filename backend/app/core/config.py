@@ -118,6 +118,14 @@ class Settings(BaseSettings):
     review_run_minute: int = 30
     review_scheduler_enabled: bool = True
     review_check_interval_seconds: float = 60.0
+    # LLM 后端：openai（默认，HTTP 直连 /chat/completions 兼容端点）
+    # | claude_cli（子进程调本机 claude 无头模式，凭据走用户 ~/.claude 配置——
+    #   适用于只有客户端受限中转 key 的场景；此时 review/news 各自的
+    #   *_llm_base_url/_api_key 可留空，只填 *_llm_model）
+    llm_provider: str = "openai"
+    # claude_cli 可执行文件路径；留空自动探测（PATH > ~/.nvm/*/bin/claude）
+    llm_cli_path: str = ""
+
     # LLM 分析器（未配置时自动降级到 rules）
     review_llm_base_url: str = ""
     review_llm_api_key: str = ""

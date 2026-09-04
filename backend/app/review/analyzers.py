@@ -548,13 +548,21 @@ class LLMAnalyzer:
         api_key: str = "",
         model: str = "",
         client: httpx.Client | None = None,
+        provider: str = "openai",
+        cli_path: str = "",
     ):
         self.base_url = base_url
         self.api_key = api_key
         self.model = model or "unknown"
         self._client = client
+        self._provider = provider
+        self._cli_path = cli_path
 
     def is_available(self) -> bool:
+        if self._provider == "claude_cli":
+            from app.core.llm_client import resolve_cli_path
+
+            return resolve_cli_path(self._cli_path) is not None
         return bool(self.base_url and self.api_key)
 
     def analyze(self, data: ReviewData, method: MethodologyConfig) -> list[DimensionResult]:
@@ -586,6 +594,7 @@ class LLMAnalyzer:
         ]
         content = chat_completion(
             self.base_url, self.api_key, self.model, messages, client=self._client,
+            provider=self._provider, cli_path=self._cli_path,
         )
 
         # 3. 解析 + 校验：结构不对就上抛（路由层降级），绝不半信半疑地采用

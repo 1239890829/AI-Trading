@@ -55,13 +55,21 @@ class LLMSummarizer:
         api_key: str = "",
         model: str = "",
         client=None,  # httpx.Client，供测试注入 MockTransport
+        provider: str = "openai",
+        cli_path: str = "",
     ):
         self.base_url = base_url
         self.api_key = api_key
         self.model = model or "unknown"
         self._client = client
+        self._provider = provider
+        self._cli_path = cli_path
 
     def is_available(self) -> bool:
+        if self._provider == "claude_cli":
+            from app.core.llm_client import resolve_cli_path
+
+            return resolve_cli_path(self._cli_path) is not None
         return bool(self.base_url and self.api_key)
 
     def summarize(self, news: list[dict], announcements: list[dict]) -> dict:
@@ -94,6 +102,7 @@ class LLMSummarizer:
         ]
         content = chat_completion(
             self.base_url, self.api_key, self.model, messages, client=self._client,
+            provider=self._provider, cli_path=self._cli_path,
         )
 
         # 3. 解析 + 逐条校验回填
