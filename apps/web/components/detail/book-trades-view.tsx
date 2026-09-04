@@ -33,7 +33,7 @@ export function BookTradesView({ book, trades, showBook }: { book: OrderBook | n
         {trades.map((t, i) => (
           <tr key={i} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
             <td className="px-2 py-1 font-mono text-[11px] tabular-nums text-zinc-400">{timeText(t.ts)}</td>
-            <td className={`px-1 py-1 text-right font-mono tabular-nums ${t.side === "buy" ? "text-up" : t.side === "sell" ? "text-down" : "text-zinc-300"}`}>{fmt(t.price)}</td>
+            <td className={`px-1 py-1 text-right font-mono tabular-nums ${t.side === "buy" ? "text-up" : t.side === "sell" ? "text-down" : "text-zinc-400 dark:text-zinc-300"}`}>{fmt(t.price)}</td>
             <td className="px-2 py-1 text-right font-mono text-[11px] tabular-nums text-zinc-400">{fmtVolume(t.volume)}</td>
             <td className="pr-2 text-right text-[11px] text-zinc-400">{t.side === "buy" ? "B" : t.side === "sell" ? "S" : "·"}</td>
           </tr>

@@ -90,7 +90,7 @@ export function InfoPanel({ anns, news }: { anns: InfoItem[] | null; news: InfoI
     setModalItem({ title: item.title, url: item.url, date: item.date, source: item.source, digest: item.digest ?? null, kindLabel });
   return (
     <div className="min-h-0 overflow-y-auto">
-      <h3 className="px-3 py-1.5 text-xs font-medium text-zinc-300">近期公告</h3>
+      <h3 className="px-3 py-1.5 text-xs font-medium text-zinc-500 dark:text-zinc-300">近期公告</h3>
       {(anns ?? []).map((a, i) => (
         <button
           key={i}

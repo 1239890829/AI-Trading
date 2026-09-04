@@ -230,7 +230,7 @@ function ActionItemDispose({
                 setNote("");
                 setError(null);
               }}
-              className="text-[11px] text-zinc-500 hover:text-zinc-300"
+              className="text-[11px] text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-300"
             >
               取消
             </button>

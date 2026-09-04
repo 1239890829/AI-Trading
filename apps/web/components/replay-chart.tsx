@@ -96,8 +96,8 @@ export function ReplayChart({ bars, fills = [], onExit }: Props) {
           <option value={90}>90 根前</option>
           <option value={60}>60 根前</option>
         </select>
-        <span className="font-mono tabular-nums text-zinc-300">
-          {curDate} <span className="text-zinc-500">（{idx - startIdx + 1}/{bars.length - startIdx}）</span>
+        <span className="font-mono tabular-nums text-zinc-600 dark:text-zinc-300">
+          {curDate} <span className="text-zinc-400 dark:text-zinc-500">（{idx - startIdx + 1}/{bars.length - startIdx}）</span>
         </span>
         {tech && (
           <span className={`rounded px-1.5 py-0.5 text-[11px] ${tech.bias === "bull" ? "bg-up/15 text-up" : tech.bias === "bear" ? "bg-down/15 text-down" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-300"}`}>

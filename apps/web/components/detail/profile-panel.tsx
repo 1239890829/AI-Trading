@@ -63,7 +63,7 @@ export function ProfilePanel({
       {company?.profile && (
         <div className="mb-3">
           <div className="mb-1 text-zinc-400">公司简介</div>
-          <div className="line-clamp-5 leading-relaxed text-zinc-300" title={company.profile}>
+          <div className="line-clamp-5 leading-relaxed text-zinc-600 dark:text-zinc-400" title={company.profile}>
             {company.profile}
           </div>
         </div>
@@ -72,7 +72,7 @@ export function ProfilePanel({
       {(fins ?? []).slice(0, 2).map((r) => (
         <div key={r.report_date} className="mb-1.5 rounded-lg border border-zinc-100 px-2 py-1.5 dark:border-zinc-800/60">
           <div className="flex justify-between">
-            <span className="font-mono text-zinc-300">{r.report_date}</span>
+            <span className="font-mono text-zinc-500 dark:text-zinc-400">{r.report_date}</span>
             <span className={`font-mono ${pctColor(r.profit_yoy)}`}>净利同比 {pctText(r.profit_yoy)}</span>
           </div>
           <div className="mt-0.5 flex justify-between text-zinc-400">

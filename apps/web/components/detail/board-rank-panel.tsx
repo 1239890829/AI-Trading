@@ -73,7 +73,7 @@ export function BoardRankPanel({ className }: { className?: string }) {
                 </td>
                 <td className="px-2 py-1.5 text-right font-mono tabular-nums text-zinc-400">{fmtAmount(b.amount)}</td>
                 <td className="px-3 py-1.5 text-right">
-                  <span className="text-zinc-300">{b.leader_name ?? "--"}</span>
+                  <span className="text-zinc-500 dark:text-zinc-300">{b.leader_name ?? "--"}</span>
                   <span className={`ml-1 font-mono tabular-nums ${pctColor(b.leader_change_pct)}`}>
                     {pctText(b.leader_change_pct)}
                   </span>

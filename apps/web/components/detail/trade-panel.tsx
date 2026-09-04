@@ -49,7 +49,7 @@ export function TradePanel({
         </span>
       </div>
       <TradeForm symbol={symbol} price={quote?.price ?? null} limitUp={quote?.limit_up_price ?? null} limitDown={quote?.limit_down_price ?? null} onTraded={onPaperChanged} />
-      <h3 className="shrink-0 px-3 pb-1 pt-2 text-xs font-medium text-zinc-300">持仓</h3>
+      <h3 className="shrink-0 px-3 pb-1 pt-2 text-xs font-medium text-zinc-500 dark:text-zinc-300">持仓</h3>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <table className="w-full text-sm">
           <tbody>
@@ -72,7 +72,7 @@ export function TradePanel({
         </table>
         {paper.orders.filter((o) => o.status === "pending").length > 0 && (
           <>
-            <h3 className="px-3 pb-1 pt-2 text-xs font-medium text-zinc-300">挂单</h3>
+            <h3 className="px-3 pb-1 pt-2 text-xs font-medium text-zinc-500 dark:text-zinc-300">挂单</h3>
             {paper.orders.filter((o) => o.status === "pending").map((o) => (
               <div key={o.id} className="flex items-center justify-between border-b border-zinc-100 px-3 py-1 text-xs dark:border-zinc-800/60">
                 <span className={o.side === "buy" ? "text-up" : "text-down"}>{o.side === "buy" ? "买" : "卖"} {o.symbol}</span>
@@ -88,7 +88,7 @@ export function TradePanel({
           </>
         )}
 
-        <h3 className="shrink-0 px-3 pb-1 pt-2 text-xs font-medium text-zinc-300">成交记录</h3>
+        <h3 className="shrink-0 px-3 pb-1 pt-2 text-xs font-medium text-zinc-500 dark:text-zinc-300">成交记录</h3>
         <table className="w-full text-xs">
           <thead>
             <tr className="text-[10px] text-zinc-500">
