@@ -101,3 +101,60 @@ def test_impact_route_filters_l3(monkeypatch=None):
         assert body["data"]["items"][0]["four_label"] == "原材料涨价"
         body2 = client.get("/api/events/impact?include_l3=true").json()
         assert len(body2["data"]["items"]) == 2
+
+
+# ---------------------------------------------------------------- 事件标签（2026-09-04 任务③）
+
+
+def test_derive_tags_multi_and_none():
+    from app.events.impact import derive_tags
+
+    # 多标签：业绩 + 公告（定增获批复=公告，含业绩词暂无）
+    assert "公告" in derive_tags("金富科技：向特定对象发行股票获证监会同意注册批复", "corporate")
+    assert "业绩" in derive_tags("美诺华2026年中报净利润为6368.91万元", "corporate")
+    assert "异动" in derive_tags("603538，涨停！网红牛散成第四大股东", "other")
+    assert "资金" in derive_tags("杠杆资金大手笔加仓股名单", "other")
+    assert "行业" in derive_tags("培育钻石概念上涨3.80%，主力资金净流入", "other")
+    # 无命中不臆造；公司类兜底归公告
+    assert derive_tags("某公司在海外设立办事处", "other") == []
+    assert derive_tags("某公司签署日常经营合同", "corporate") == ["公告"]
+
+
+def test_impact_route_returns_tags_and_tag_counts():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.routes import events as events_route
+
+    rows = [
+        SimpleNamespace(
+            id=1, title="多晶硅涨价函落地", url=None, source="财联社", source_tier=4,
+            published_at=datetime(2026, 9, 4, 2, 0, tzinfo=timezone.utc),
+            fact_kind="fact", certainty="done", category="corporate",
+            half_life_hours=72, source_symbol=None, status="active",
+            directions=[SimpleNamespace(target_type="theme", target="光伏",
+                                        direction=1, strength=2, chain="", basis="")],
+        ),
+        SimpleNamespace(
+            id=2, title="某公司董事辞职", url=None, source="x", source_tier=2,
+            published_at=datetime(2026, 9, 4, 2, 0, tzinfo=timezone.utc),
+            fact_kind="fact", certainty="done", category="corporate",
+            half_life_hours=72, source_symbol=None, status="active",
+            directions=[],
+        ),
+    ]
+
+    class _Store:
+        def list_events(self, *, active_only=True, limit=30):
+            return rows
+
+    app = FastAPI()
+    app.include_router(events_route.router, prefix="/api")
+    app.dependency_overrides[events_route.get_store] = lambda: _Store()
+    with TestClient(app) as client:
+        body = client.get("/api/events/impact?include_l3=true&sort=time").json()
+        # id=1 corporate 无关键词命中 → 兜底公告；id=2 同理
+        assert body["data"]["tag_counts"] == {"公告": 2}
+        tags_by_id = {it["id"]: it["tags"] for it in body["data"]["items"]}
+        assert tags_by_id[1] == ["公告"]
+        assert tags_by_id[2] == ["公告"]

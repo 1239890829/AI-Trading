@@ -1,37 +1,38 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Panel } from "@/components/panel";
 import {
-  getEvents,
   getEventStocks,
+  getImpactEvents,
   type EventDirectionRow,
   type EventStockPool,
-  type EventSummary,
+  type ImpactEvent,
 } from "@/lib/api";
 import { workbenchUrlWithBack } from "@/lib/routing";
+import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import { Skeleton } from "@/components/ui/loading";
 
-const CATEGORY_LABEL: Record<string, string> = {
-  policy: "政策",
-  statement: "发言",
-  data: "数据",
-  rumor: "传闻",
-  corporate: "公司",
-  other: "其他",
+/**
+ * 事件驱动面板（总览底部，2026-09-04 任务④重设计）。
+ *
+ * 决策：**用「盘面相关性 Top4 摘要」替代原时间序列表**——
+ * - 原形态：12 条时间序个股新闻塞进 ~148px 高的面板，每次只露 2 条且与盘面
+ *   无关（50 条活跃事件 90% 是 other 类个股流水账）= 用户诊断的「毫无价值」；
+ * - 扩数量不可行：总览页一屏纪律（严禁页面级滚动）锁死面板高度；
+ * - 消费 /api/events/impact 的相关性排序（rank_score/理由/相位加权），
+ *   总览给「什么事件在解释今天的盘面」，完整明细在事件 Tab（链接入口）。
+ */
+
+const FOUR_STYLE: Record<string, string> = {
+  international: "bg-sky-500/15 text-sky-700 border-sky-500/40 dark:text-sky-300",
+  policy: "bg-amber-500/15 text-amber-700 border-amber-500/40 dark:text-amber-300",
+  hot: "bg-zinc-500/15 text-zinc-700 border-zinc-500/40 dark:text-zinc-300",
+  material: "bg-teal-500/15 text-teal-700 border-teal-500/40 dark:text-teal-300",
 };
 
-const CERTAINTY_LABEL: Record<string, string> = {
-  done: "已落地",
-  proposed: "拟议",
-  rumor: "传闻",
-};
-
-const FACT_LABEL: Record<string, string> = {
-  fact: "事实",
-  opinion: "解读",
-  rumor: "传闻",
-};
+const TOP_N = 4;
 
 function directionLabel(d: number): { text: string; cls: string } {
   if (d > 0) return { text: "利好", cls: "text-up" };
@@ -40,21 +41,6 @@ function directionLabel(d: number): { text: string; cls: string } {
 }
 
 export { directionLabel };
-
-function DirectionChip({ d }: { d: EventDirectionRow }) {
-  const { text, cls } = directionLabel(d.direction);
-  const tip = [d.chain, d.basis].filter(Boolean).join(" ｜ ");
-  return (
-    <Link
-      href={`/tape?tab=themes&focus=${encodeURIComponent(d.target)}`}
-      title={tip || `关联题材 ${d.target}`}
-      className="inline-flex items-center gap-1 rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200"
-    >
-      <span>{d.target}</span>
-      <span className={`font-medium ${cls}`}>{text}</span>
-    </Link>
-  );
-}
 
 /** 单个事件的标的池展开（E2/L9：事件 → 标的 → 详情）。market 事件 Tab 复用。 */
 export function StockPools({ eventId }: { eventId: number }) {
@@ -109,76 +95,107 @@ export function StockPools({ eventId }: { eventId: number }) {
   );
 }
 
-/**
- * 事件驱动面板（E1⑥/E2）：活跃事件 → 方向 → 标的池 → 详情/题材联动。
- * 自取数：失败静默为空态，不拖垮市场页其余部分。
- */
 export function EventPanel() {
-  const [events, setEvents] = useState<EventSummary[] | null>(null);
+  const [items, setItems] = useState<ImpactEvent[] | null>(null);
+  const [phase, setPhase] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState<number | null>(null);
 
-  useEffect(() => {
-    let alive = true;
-    getEvents(true, 12)
-      .then((list) => alive && setEvents(list))
-      .catch((e: Error) => alive && setError(e.message));
-    return () => {
-      alive = false;
-    };
+  const load = useCallback(async () => {
+    const r = await getImpactEvents(false, 100, "relevance");
+    setItems(r.items.slice(0, TOP_N));
+    // 相位从首条的理由里取（后端 rank_factors.phase），缺省 null 不臆造
+    setPhase(r.items.find((e) => e.rank_factors?.phase)?.rank_factors?.phase ?? null);
+    setError(null);
   }, []);
+
+  usePollingFetch(async () => {
+    try {
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "事件数据加载失败。");
+    }
+  }, 60_000);
 
   return (
     <Panel
       title="事件驱动"
-      extra={<span className="text-[11px] text-zinc-400">事件 → 题材 → 标的池（仅关联，不构成建议）</span>}
+      extra={
+        <span className="flex items-center gap-2 text-[11px] text-zinc-400">
+          {phase && <span title="当前市场情绪相位（影响事件排序权重）">相位 {phase}</span>}
+          <span className="hidden xl:inline">按盘面相关性排序（仅关联，不构成建议）</span>
+          <Link href="/market?tab=events" className="text-zinc-400 transition-colors hover:text-zinc-900 dark:hover:text-zinc-100">
+            完整列表 ↗
+          </Link>
+        </span>
+      }
     >
       {error && <p className="px-4 py-3 text-xs text-amber-600 dark:text-amber-300">{error}</p>}
-      {events !== null && events.length === 0 && (
-        <p className="px-4 py-6 text-center text-xs text-zinc-400">暂无活跃事件（时效 = 半衰期 × 2，过期自动隐去）</p>
+      {items === null && !error && (
+        <ul className="space-y-2.5 px-4 py-3" aria-hidden>
+          {Array.from({ length: 3 }, (_, i) => (
+            <li key={i} className="space-y-1.5">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-3.5 w-9" />
+                <Skeleton className="h-3.5 w-12" />
+                <Skeleton className="h-3.5 flex-1" />
+              </div>
+              <Skeleton className="h-3 w-2/3" />
+            </li>
+          ))}
+        </ul>
       )}
-      {events !== null && events.length > 0 && (
+      {items !== null && items.length === 0 && !error && (
+        <p className="px-4 py-6 text-center text-xs text-zinc-400">
+          暂无活跃事件（时效 = 半衰期 × 2，过期自动隐去）
+        </p>
+      )}
+      {items !== null && items.length > 0 && (
         <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
-          {events.map((e) => (
-            <li key={e.id} className="px-4 py-2.5">
+          {items.map((e) => (
+            <li key={e.id} className="px-4 py-2">
               <div className="flex items-baseline gap-2">
+                {e.rank_score != null && (
+                  <span
+                    className="shrink-0 rounded bg-zinc-900 px-1 py-0.5 font-mono text-[10px] font-semibold text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    title={(e.rank_reasons ?? []).join("\n")}
+                  >
+                    {Math.round(e.rank_score)}分
+                  </span>
+                )}
+                <span className={`shrink-0 rounded border px-1 py-0.5 text-[10px] ${FOUR_STYLE[e.four_category] ?? ""}`}>
+                  {e.four_label}
+                </span>
                 {e.url ? (
-                  <a href={e.url} target="_blank" rel="noreferrer" className="text-sm text-zinc-800 hover:underline dark:text-zinc-100">
+                  <a href={e.url} target="_blank" rel="noreferrer" className="truncate text-sm text-zinc-800 hover:underline dark:text-zinc-100" title={e.title}>
                     {e.title}
                   </a>
                 ) : (
-                  <span className="text-sm text-zinc-800 dark:text-zinc-100">{e.title}</span>
+                  <span className="truncate text-sm text-zinc-800 dark:text-zinc-100" title={e.title}>{e.title}</span>
                 )}
+                <span className="ml-auto shrink-0 text-[11px] text-zinc-400">{e.published_at?.slice(5, 11) ?? ""}</span>
               </div>
-              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-zinc-400">
-                <span className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">{CATEGORY_LABEL[e.category] ?? e.category}</span>
-                <span className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">
-                  {CERTAINTY_LABEL[e.certainty] ?? e.certainty} · {FACT_LABEL[e.fact_kind] ?? e.fact_kind}
-                </span>
-                <span title={`来源分级 ${e.source_tier}/5（5=官方公告 4=一线权威 3=主流财经 2=聚合转载 1=自媒体）`}>
-                  来源 {e.source_tier}/5
-                </span>
-                <span title={`半衰期 ${e.half_life_hours} 小时，过期后自动隐去`}>半衰期 {e.half_life_hours}h</span>
-                {e.source_symbol && <span className="font-mono">via {e.source_symbol}</span>}
+              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                {e.rank_reasons?.[0] && (
+                  <span className="truncate text-[11px] text-zinc-400" title={e.rank_reasons.join("；")}>
+                    {e.rank_reasons[0]}
+                  </span>
+                )}
+                {e.directions.slice(0, 3).map((d) => {
+                  const { text, cls } = directionLabel(d.direction);
+                  return (
+                    <Link
+                      key={`${d.target_type}-${d.target}`}
+                      href={d.target_type === "symbol" ? workbenchUrlWithBack(d.target) : `/tape?tab=themes&focus=${encodeURIComponent(d.target)}`}
+                      title={[d.chain, d.basis].filter(Boolean).join(" ｜ ") || `关联${d.target_type === "symbol" ? "个股" : "题材"} ${d.target}`}
+                      className="inline-flex items-center gap-1 rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200"
+                    >
+                      <span className="text-zinc-400">{d.target_type === "symbol" ? "个股" : "题材"}</span>
+                      <span>{d.target}</span>
+                      <span className={`font-medium ${cls}`}>{text}</span>
+                    </Link>
+                  );
+                })}
               </div>
-              {e.directions.length > 0 && (
-                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                  {e.directions.map((d) => (
-                    <DirectionChip key={`${d.target_type}-${d.target}`} d={d} />
-                  ))}
-                  <button
-                    onClick={() => setExpanded(expanded === e.id ? null : e.id)}
-                    className="rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-500 hover:text-zinc-800 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-100"
-                  >
-                    {expanded === e.id ? "收起标的池" : "标的池 ↗"}
-                  </button>
-                </div>
-              )}
-              {expanded === e.id && (
-                <div className="mt-2">
-                  <StockPools eventId={e.id} />
-                </div>
-              )}
             </li>
           ))}
         </ul>

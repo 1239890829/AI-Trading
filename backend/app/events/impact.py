@@ -30,6 +30,29 @@ FOUR_LABEL = {
     "material": "原材料涨价",
 }
 
+# ---------------------------------------------------------------- 事件标签（2026-09-04 任务③）
+# 四级分类只回答「事件从哪来」，不回答「事件是什么类型」——业绩/公告/异动/资金
+# 是同花顺等产品的常用维度，当前体系覆盖不足，按标题规则派生多标签（一条事件可挂多个）。
+
+_TAG_PATTERNS: list[tuple[str, re.Pattern]] = [
+    ("业绩", re.compile(r"中报|年报|季报|业绩|净利|营收|亏损|预增|预减|扭亏|同比[增下]")),
+    ("公告", re.compile(r"定增|募资|回购|增持|减持|重组|中标|批复|同意注册|招股|分红|股权激励|股东")),
+    ("异动", re.compile(r"涨停|炸板|连板|封板|异动|龙虎榜|直线|天梯|创历史新高|新高")),
+    ("资金", re.compile(r"主力资金|净流入|净流出|加仓|融资|北向|资金大手笔|机构持仓")),
+    ("行业", re.compile(r"概念|板块|行业|产业链|上游|下游")),
+]
+
+TAG_LABELS = ["业绩", "公告", "异动", "资金", "行业"]
+
+
+def derive_tags(title: str | None, category: str | None) -> list[str]:
+    """派生事件标签（多标签）。纯规则、可测；无命中 → 空列表（不臆造）。"""
+    t = title or ""
+    tags = [name for name, pat in _TAG_PATTERNS if pat.search(t)]
+    if not tags and category == "corporate":
+        tags = ["公告"]  # 公司类事件缺标签时归公告（保守兜底，不编业绩/异动）
+    return tags
+
 
 def classify_four(title: str | None, category: str | None) -> str:
     """既有六分类（policy/statement/data/rumor/corporate/other）→ 拍板四分类。"""

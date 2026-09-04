@@ -55,6 +55,19 @@ def _parse_published(value: str | None) -> datetime | None:
     raise HTTPException(status_code=400, detail=f"时间格式无法解析：{value!r}（ISO 或 YYYY-MM-DD）")
 
 
+def _parse_dt(value: str | None) -> datetime | None:
+    """宽松回解析（排序用）：解析失败 → None 降级，不抛 400（与入参校验不同职责）。"""
+    if not value:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f",
+                "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    return None
+
+
 def _serialize(row, directions=None) -> dict:
     out = {
         "id": row.id,
@@ -99,16 +112,28 @@ async def list_events(
 async def impact_events(
     include_l3: bool = Query(default=False, description="是否包含 L3（默认不上）"),
     limit: int = Query(default=100, ge=1, le=200),
+    sort: str = Query(default="relevance", description="relevance(盘面相关性) | time(最新) | impact(影响力)"),
+    request: Request = None,
     store: EventStore = Depends(get_store),
 ) -> dict:
     """事件影响力视图（§六.4 拍板）：四级分类（国际时事/国家政策/市场热点/原材料涨价）
-    + 三级影响力（L1 必上 / L2 选上 / L3 不上）。派生自既有 EventCard，不重建抽取管道。"""
-    from app.events.impact import FOUR_LABEL, classify_four, impact_level
+    + 三级影响力（L1 必上 / L2 选上 / L3 不上）。派生自既有 EventCard，不重建抽取管道。
+
+    sort=relevance（默认，2026-09-04）：与当日盘面/情绪强关联的事件排前，
+    每条附 rank_score/rank_reasons/rank_factors——排序依据可解释、可追溯。
+    上下文不可用 → 显式降级为影响力+时效排序（reasons 注明），绝不冒充共振。
+    """
+    from app.events.impact import FOUR_LABEL, classify_four, derive_tags, impact_level
+
+    if sort not in ("relevance", "time", "impact"):
+        raise HTTPException(status_code=400, detail=f"sort 只支持 relevance/time/impact，收到 {sort!r}")
 
     rows = store.list_events(active_only=True, limit=limit)
-    items: list[dict] = []
+    now = datetime.now()
+    enriched: list[dict] = []
     counts = {"L1": 0, "L2": 0, "L3": 0}
     four_counts: dict[str, int] = {}
+    tag_counts: dict[str, int] = {}
     for r in rows:
         four = classify_four(r.title, r.category)
         level = impact_level(
@@ -119,10 +144,55 @@ async def impact_events(
         four_counts[four] = four_counts.get(four, 0) + 1
         if level == "L3" and not include_l3:
             continue
-        items.append({**_serialize(r), "four_category": four, "four_label": FOUR_LABEL[four],
-                      "impact_level": level})
-    return {"data": {"count": len(items), "counts_all": counts, "four_counts": four_counts,
-                     "items": items}, "meta": {}}
+        tags = derive_tags(r.title, r.category)
+        for t in tags:
+            tag_counts[t] = tag_counts.get(t, 0) + 1
+        enriched.append({**_serialize(r), "four_category": four, "four_label": FOUR_LABEL[four],
+                         "impact_level": level, "tags": tags})
+
+    if sort == "relevance" and enriched:
+        from app.events.ranking import collect_rank_context, score_event
+
+        svc = getattr(request.app.state, "theme_catalog", None) if request else None
+        theme_names = sorted({
+            d["target"] for e in enriched for d in e["directions"] if d["target_type"] == "theme"
+        })
+        symbols = [d["target"] for e in enriched for d in e["directions"] if d["target_type"] == "symbol"]
+        name_to_code = {}
+        if svc is not None:
+            try:
+                name_to_code = {t.name: t.code for t in svc.get_catalog(limit=1000)}
+            except Exception:  # noqa: BLE001
+                name_to_code = {}
+        ctx = await collect_rank_context(
+            request.app.state, [n for n in theme_names if n in name_to_code], symbols,
+        )
+        for e in enriched:
+            theme_dirs = [d["target"] for d in e["directions"] if d["target_type"] == "theme"]
+            symbol_vals = [ctx.stock_chg.get(d["target"]) for d in e["directions"] if d["target_type"] == "symbol"]
+            rank = score_event(
+                impact_level=e["impact_level"],
+                four=e["four_category"],
+                source_tier=e["source_tier"],
+                published_at=_parse_dt(e["published_at"]),
+                half_life_hours=e["half_life_hours"],
+                theme_names=theme_dirs,
+                symbol_chg=symbol_vals,
+                ctx=ctx,
+                now=now,
+            )
+            e["rank_score"] = rank["score"]
+            e["rank_reasons"] = rank["reasons"]
+            e["rank_factors"] = rank["factors"]
+        enriched.sort(key=lambda e: (-e["rank_score"], e["published_at"] or ""), )
+    elif sort == "impact":
+        tier_rank = {"L1": 0, "L2": 1, "L3": 2}
+        enriched.sort(key=lambda e: (tier_rank.get(e["impact_level"], 3),
+                                     -(e["source_tier"] or 0), e["published_at"] or ""))
+    # sort == "time"：保持 store 的 published_at desc 原序
+
+    return {"data": {"count": len(enriched), "counts_all": counts, "four_counts": four_counts,
+                     "tag_counts": tag_counts, "sort": sort, "items": enriched}, "meta": {}}
 
 
 @router.get("/events/{event_id}")

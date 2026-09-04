@@ -1019,25 +1019,52 @@ export async function getEvents(active = true, limit = 20): Promise<EventSummary
 }
 
 /** 事件影响力视图（§六.4 拍板）：四级分类 + L1/L2/L3。 */
+export interface RankFactors {
+  theme_best?: { name: string; chg_pct: number };
+  stock_mean_pct?: number;
+  phase?: string;
+  phase_weight?: number;
+  age_hours?: number;
+  subtotal?: number;
+}
+
 export interface ImpactEvent extends EventSummary {
   four_category: string; // international / policy / hot / material
   four_label: string;
   impact_level: "L1" | "L2" | "L3";
+  tags: string[]; // 业绩/公告/异动/资金/行业（规则派生，可多挂）
+  rank_score?: number; // sort=relevance 时返回
+  rank_reasons?: string[];
+  rank_factors?: RankFactors;
 }
 
-export async function getImpactEvents(includeL3 = false, limit = 100): Promise<{
+export type EventSort = "relevance" | "time" | "impact";
+
+export async function getImpactEvents(
+  includeL3 = false,
+  limit = 100,
+  sort: EventSort = "relevance",
+): Promise<{
   count: number;
   countsAll: Record<string, number>;
   fourCounts: Record<string, number>;
+  tagCounts: Record<string, number>;
   items: ImpactEvent[];
 }> {
   const r = await getJson<{
     count: number;
     counts_all: Record<string, number>;
     four_counts: Record<string, number>;
+    tag_counts: Record<string, number>;
     items: ImpactEvent[];
-  }>(`/api/events/impact?include_l3=${includeL3}&limit=${limit}`, 30_000);
-  return { count: r.data.count, countsAll: r.data.counts_all, fourCounts: r.data.four_counts, items: r.data.items };
+  }>(`/api/events/impact?include_l3=${includeL3}&limit=${limit}&sort=${sort}`, 30_000);
+  return {
+    count: r.data.count,
+    countsAll: r.data.counts_all,
+    fourCounts: r.data.four_counts,
+    tagCounts: r.data.tag_counts,
+    items: r.data.items,
+  };
 }
 
 /** 个股相关活跃事件（E2：方向题材命中官方归属 或 事件源自该股）。 */
