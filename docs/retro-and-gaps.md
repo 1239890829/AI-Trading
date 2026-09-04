@@ -78,3 +78,7 @@
 | 09-04 | ~~AGENTS.md "24 warn 挂账" 过时标注~~ | ✅（本轮）：门禁注释与 eslint.config.mjs 注释同步为实际状态 |
 
 **仍开放（触发条件未到）**：P2-4/5 逐笔历史与聚合、P2-6 题材事件树、P2-7 营业部图谱/筹码/解禁/两融/大宗、P2-8 MCP 封装、Docker 部署（等环境）、LLM 凭据、消融验证（2026-10 中旬）。
+| 09-04 | ~~§六拍板四项~~ | ✅ 97f845f：竞价溢价比因子（P0 第三项补齐，晋级率/情绪分位核实已在）+ 事件影响力 Tab（四级分类+L1/L2/L3）+ K线布局方案 B（评估条入图内浮层+右列可收起，canvas +52%）；停牌标识核实 09-02 已落地 |
+| 09-04 | ~~7 个损坏 parquet~~ | ✅ 全量扫描实为 31 个（kill -9 累积产生），用户确认后全部删除，复扫 8354 文件 0 损坏 |
+| 09-04 | ~~Docker 生产化~~ | ✅ apps/web/Dockerfile 多阶段 + docker-compose.prod.yml；顺带修 dev compose 两处错误（数据卷路径、CORS 直连）。本机无 Docker，用户侧 `docker compose -f docker-compose.prod.yml up -d --build` 验证 |
+| 09-04 | 8000 重启（用户授权） | ✅ 08:05 盘前窗口重启，intraday-top / events-impact / auction-premium 三新端点实测生效；历史生效项全部落地 |
