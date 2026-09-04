@@ -700,14 +700,6 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
           </button>
         ) : (
         <div ref={rightColRef} className="relative flex min-h-0 flex-col gap-2">
-          <button
-            onClick={toggleRightCollapsed}
-            className="absolute right-1 top-1.5 z-20 rounded border border-zinc-200 bg-white/85 px-1.5 py-0.5 text-[10px] text-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900/85 dark:hover:text-zinc-100"
-            title="收起右列，图表获得全宽"
-            aria-label="收起右列"
-          >
-            ▶ 收起
-          </button>
           <div
             onMouseDown={(e) => {
               e.preventDefault();
@@ -758,6 +750,18 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
           source={rightTab === "book" ? book?.source : undefined}
           dataTimestamp={rightTab === "book" ? book?.data_timestamp : null}
           className="min-h-0 flex-1 overflow-hidden"
+          extra={
+            /* 收起按钮走 Panel 头部 extra 槽位（正常文档流）——原 absolute 悬浮
+               定位正好压在头部右侧「数据来源/数据时间」徽标上（2026-09-04 用户反馈） */
+            <button
+              onClick={toggleRightCollapsed}
+              className="rounded border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-400 transition-colors hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100"
+              title="收起右列，图表获得全宽"
+              aria-label="收起右列"
+            >
+              ▶ 收起
+            </button>
+          }
         >
           <div className="flex shrink-0 gap-1 border-b border-zinc-100 px-2 py-1 dark:border-zinc-800/60">
             {(

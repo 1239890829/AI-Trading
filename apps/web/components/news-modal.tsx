@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { getNewsContent, type ArticleContent } from "@/lib/api";
+import { getNewsContent, type ArticleBlock, type ArticleContent } from "@/lib/api";
 
 export interface NewsModalItem {
   title: string;
@@ -30,6 +30,102 @@ const SOURCE_LABEL: Record<string, string> = {
 function sourceText(source?: string | null): string | null {
   if (!source) return null;
   return SOURCE_LABEL[source] ?? source;
+}
+
+/** 表格块：数据类文章的排行榜/涨跌榜按真表格渲染（横向可滚，斑马纹，小字号）。 */
+function TableBlock({ block }: { block: Extract<ArticleBlock, { type: "table" }> }) {
+  if (block.rows.length === 0) return null;
+  const [head, ...body] = block.header ? [block.rows[0], ...block.rows.slice(1)] : [null, ...block.rows];
+  // 数字列右对齐：表头或数据列里数字占比过半则判定
+  const isNumericCol = (col: number) => {
+    const cells = body.map((r) => r[col]).filter(Boolean);
+    if (cells.length === 0) return false;
+    const numCount = cells.filter((c) => /^[-+]?[\d,.%]+$/.test(c)).length;
+    return numCount / cells.length > 0.5;
+  };
+  const colCount = Math.max(...block.rows.map((r) => r.length));
+  return (
+    <div className="-mx-1 overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+      <table className="w-full min-w-[420px] border-collapse text-[11px] leading-5">
+        {head && (
+          <thead>
+            <tr className="bg-zinc-50 dark:bg-zinc-800/60">
+              {Array.from({ length: colCount }, (_, c) => (
+                <th
+                  key={c}
+                  className={`whitespace-nowrap border-b border-zinc-200 px-2 py-1.5 font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-300 ${
+                    isNumericCol(c) ? "text-right" : "text-left"
+                  }`}
+                >
+                  {head[c] ?? ""}
+                </th>
+              ))}
+            </tr>
+          </thead>
+        )}
+        <tbody>
+          {body.map((row, r) => (
+            <tr key={r} className="odd:bg-zinc-50/50 dark:odd:bg-zinc-800/30">
+              {Array.from({ length: colCount }, (_, c) => (
+                <td
+                  key={c}
+                  className={`whitespace-nowrap border-b border-zinc-100 px-2 py-1 text-zinc-700 last:border-0 dark:border-zinc-800/60 dark:text-zinc-300 ${
+                    isNumericCol(c) ? "text-right font-mono tabular-nums" : "text-left"
+                  }`}
+                >
+                  {row[c] ?? ""}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {block.truncated_rows && <p className="px-2 py-1 text-[10px] text-amber-500">表格过长已截断，完整内容见原文</p>}
+    </div>
+  );
+}
+
+/** 图片块：内嵌配图；反盗链/加载失败时优雅降级为占位说明（不破版面）。 */
+function ImageBlock({ src }: { src: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <p className="rounded-md bg-zinc-50 px-3 py-2 text-[11px] text-zinc-400 dark:bg-zinc-800/50">
+        [配图未能加载，可到原文查看]
+      </p>
+    );
+  }
+  return (
+    <figure className="m-0">
+      {/* referrerPolicy：东财 CDN 部分图片校验 Referer，no-referrer 提高加载成功率 */}
+      <img
+        src={src}
+        alt=""
+        referrerPolicy="no-referrer"
+        loading="lazy"
+        onError={() => setFailed(true)}
+        className="mx-auto max-h-96 w-auto max-w-full rounded-lg border border-zinc-200 dark:border-zinc-800"
+      />
+    </figure>
+  );
+}
+
+function ArticleBlocks({ blocks }: { blocks: ArticleBlock[] }) {
+  return (
+    <div className="space-y-3">
+      {blocks.map((b, i) => {
+        if (b.type === "p") {
+          return (
+            <p key={i} className="text-[13px] leading-relaxed text-zinc-700 dark:text-zinc-300">
+              {b.text}
+            </p>
+          );
+        }
+        if (b.type === "table") return <TableBlock key={i} block={b} />;
+        return <ImageBlock key={i} src={b.src} />;
+      })}
+    </div>
+  );
 }
 
 export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClose: () => void }) {
@@ -132,14 +228,18 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
           )}
 
           {!loading && content && (
-            <div className="space-y-3">
-              {content.paragraphs.map((p, i) => (
-                // 正文为纯文本段落（后端已去标签），index 作 key 足够
-                <p key={i} className="text-[13px] leading-relaxed text-zinc-700 dark:text-zinc-300">
-                  {p}
-                </p>
-              ))}
-            </div>
+            // blocks 为空（旧缓存/公告旧响应）时回退 paragraphs，绝不满屏空白
+            content.blocks?.length > 0 ? (
+              <ArticleBlocks blocks={content.blocks} />
+            ) : (
+              <div className="space-y-3">
+                {content.paragraphs.map((p, i) => (
+                  <p key={i} className="text-[13px] leading-relaxed text-zinc-700 dark:text-zinc-300">
+                    {p}
+                  </p>
+                ))}
+              </div>
+            )
           )}
 
           {!loading && !content && (

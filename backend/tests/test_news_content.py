@@ -59,9 +59,47 @@ def test_parse_news_html_extracts_paragraphs_and_meta():
     out = parse_news_html(NEWS_HTML)
     assert out["title"] == "某公司龙虎榜数据(08-27)"
     assert out["paragraphs"] == ["交易所2026年8月27日公布的交易公开信息显示，某公司当日收报12.8元。", "第二条正文内容。"]
+    assert out["blocks"] == [
+        {"type": "p", "text": "交易所2026年8月27日公布的交易公开信息显示，某公司当日收报12.8元。"},
+        {"type": "p", "text": "第二条正文内容。"},
+    ]
     assert out["source_label"] == "东方财富Choice数据"
     assert out["published"] == "2026年08月27日 16:25"
     assert out["truncated"] is False
+
+
+def test_parse_news_html_extract_tables_and_images_in_order():
+    """三类块按文档顺序还原：裸表格（曾整块丢失）与嵌在 <p> 里的表格（曾被压成
+    一串数字挤一行，2026-09-04 用户反馈）都必须还原为真表格。"""
+    html = """<html><head><title>t _ 东方财富网</title></head><body>
+<div id="ContentBody">
+<p>　　截至收盘，概念上涨。</p>
+<table class="cms_autoformat_table"><tr><th>概念</th><th>涨跌幅</th></tr>
+<tr><td>乳业</td><td>2.47</td></tr><tr><td></td><td></td></tr><tr><td>养鸡</td><td>4.57</td></tr></table>
+<p>　　资金流入榜　　<table><tr><th>代码</th><th>简称</th></tr>
+<tr><td><span><a>002385</a></span></td><td>大北农</td></tr></table></p>
+<p>　　配图如下</p><img src="//img.eastmoney.com/news/2026/a.jpg" />
+<p>　　（文章来源：证券时报网）</p>
+<!-- 正文中部 --></div></body></html>"""
+    out = parse_news_html(html)
+    types = [b["type"] for b in out["blocks"]]
+    assert types == ["p", "table", "p", "table", "p", "img", "p"]
+    bare = out["blocks"][1]
+    assert bare["header"] is True
+    assert bare["rows"] == [["概念", "涨跌幅"], ["乳业", "2.47"], ["养鸡", "4.57"]]  # 全空行丢弃
+    nested = out["blocks"][3]
+    assert nested["rows"] == [["代码", "简称"], ["002385", "大北农"]]  # 单元格内链接标签已剥
+    assert out["blocks"][5]["src"] == "https://img.eastmoney.com/news/2026/a.jpg"  # 协议相对补全
+    assert out["paragraphs"] == [b["text"] for b in out["blocks"] if b["type"] == "p"]
+
+
+def test_parse_news_html_table_row_cap_marks_truncated():
+    rows = "".join(f"<tr><td>r{i}</td><td>{i}</td></tr>" for i in range(150))
+    html = f'<html><body><div id="ContentBody"><table>{rows}</table><!-- 正文中部 --></div></body></html>'
+    out = parse_news_html(html)
+    assert out["blocks"][0]["type"] == "table"
+    assert len(out["blocks"][0]["rows"]) == 100
+    assert out["blocks"][0]["truncated_rows"] is True
 
 
 def test_parse_news_html_missing_body_raises():
@@ -84,6 +122,7 @@ def test_parse_notice_payload_splits_lines():
     out = parse_notice_payload({"notice_title": "某公司:2026年半年度报告", "notice_content": "第一段\n  第二段  \n\n第三段"})
     assert out["title"] == "某公司:2026年半年度报告"
     assert out["paragraphs"] == ["第一段", "第二段", "第三段"]
+    assert out["blocks"] == [{"type": "p", "text": t} for t in ("第一段", "第二段", "第三段")]
     assert out["truncated"] is False
 
 

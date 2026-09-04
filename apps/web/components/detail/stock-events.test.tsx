@@ -41,6 +41,7 @@ describe("StockEventsRow", () => {
       source_label: "东方财富",
       published: null,
       paragraphs: ["正文第一段。"],
+      blocks: [{ type: "p", text: "正文第一段。" }],
       truncated: false,
       url: event.url!, // 该用例的 event 必带 url，非空断言成立
     });

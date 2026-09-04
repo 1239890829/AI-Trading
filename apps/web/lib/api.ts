@@ -1778,12 +1778,20 @@ export async function getFundFlowHistory(days = 20): Promise<FundFlowHistory> {
 
 // ---------- 资讯正文（弹窗展示，/api/news/content） ----------
 
+/** 正文有序块：表格/图片按原文档顺序内嵌渲染（2026-09-04 弹窗排版升级） */
+export type ArticleBlock =
+  | { type: "p"; text: string }
+  | { type: "table"; rows: string[][]; header: boolean; truncated_rows?: boolean }
+  | { type: "img"; src: string };
+
 export interface ArticleContent {
   kind: "news" | "notice";
   title: string | null;
   source_label: string | null;
   published: string | null;
+  /** 兼容字段：纯文本段落（= blocks 中 type==="p" 的子集） */
   paragraphs: string[];
+  blocks: ArticleBlock[];
   truncated: boolean;
   cached?: boolean;
   url: string;
