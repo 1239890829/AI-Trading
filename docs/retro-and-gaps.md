@@ -82,3 +82,7 @@
 | 09-04 | ~~7 个损坏 parquet~~ | ✅ 全量扫描实为 31 个（kill -9 累积产生），用户确认后全部删除，复扫 8354 文件 0 损坏 |
 | 09-04 | ~~Docker 生产化~~ | ✅ apps/web/Dockerfile 多阶段 + docker-compose.prod.yml；顺带修 dev compose 两处错误（数据卷路径、CORS 直连）。本机无 Docker，用户侧 `docker compose -f docker-compose.prod.yml up -d --build` 验证 |
 | 09-04 | 8000 重启（用户授权） | ✅ 08:05 盘前窗口重启，intraday-top / events-impact / auction-premium 三新端点实测生效；历史生效项全部落地 |
+| 09-04 | ~~市场页事件 Tab 列表无法滚动（复发 ×2）~~ | ✅ a009f97：根因 = Panel 根节点漏 h-full 被内容撑到 7159px，overflow-y 永不触发、被页面 overflow-hidden 静默裁剪；修复 1 行 + panel.tsx 固化「全高面板契约」防复发（agent-browser 实测 canScroll + scrollTop 持久） |
+| 09-04 | 事件排序与盘面/情绪关联（可解释可追溯） | ✅ a009f97+2b1254f：`app/events/ranking.py`——题材共振 25 分（官方成分等权涨幅）+ 个股联动 10 + 情绪相位乘数（冰点政策×1.5/热点×0.7 等）+ 影响力 45/27/9 + 时效/来源；rank_score/reasons/factors 全程可解释；上下文 60s 缓存、快照整体失败不缓存防粘住；实测冰点期政策类登顶、热点澄清降权 |
+| 09-04 | 事件分类体系 + tag（对照同花顺补覆盖） | ✅ a009f97：derive_tags 派生 业绩/公告/异动/资金/行业 多标签（无命中不臆造）；前端排序 tag 切换（最相关/最新/影响力）+ 标签筛选行 + 条目徽标；顺带修 sort 切换需等 60s 轮询的 UX 缺陷（ref 守卫 effect 立即补拉，实测 2s 生效） |
+| 09-04 | 总览事件驱动面板形态决策 | ✅ a009f97：自主决策改「盘面相关性 Top4 摘要」（原时间序个股流水账在 ~148px 面板只露 2 条；一屏纪律锁死高度扩量不可行）；消费 relevance 排序，总览给结论（分数+依据+相位）、明细走事件 Tab 入口；实测 Top4 = 99/99/75/75 分 相位冰点 |
