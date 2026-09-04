@@ -550,19 +550,64 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
               </button>
             ))}
 
-            {/* 历史回放：原挂在 K 线 Panel 头部 extra，与长标题挤在同一行、把标题挤成
-                省略号。移入图表工具栏右侧（与 K线/分时/资金图 同一行），
-                头部只留标题，释放横向空间（2026-09-02）。 */}
-            {chartTab === "kline" && !replayMode && displayBars.length >= 60 && (
-              <button
-                onClick={() => setReplayMode(true)}
-                className="ml-auto rounded border border-sky-500/50 px-2 py-0.5 text-xs text-sky-400 hover:bg-sky-500/10"
-                title="按日逐根推进 K 线，回放历史买卖点与成交（需要 ≥60 根日 K）"
-              >
-                ▶ 历史回放
-              </button>
-            )}
+            {/* 右侧工具组：技术评估 + 历史回放同行（2026-09-04 用户反馈：技术评估
+                浮层遮挡 K 线，改为工具栏内联，不再覆盖图表） */}
+            <div className="ml-auto flex items-center gap-1">
+              {chartTab === "kline" && !replayMode && tech && (
+                <div className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white/85 px-2 py-1 text-[11px] shadow-sm dark:border-zinc-700 dark:bg-zinc-900/85">
+                  <span
+                    className={`rounded px-1.5 py-0.5 font-medium ${
+                      tech.bias === "bull"
+                        ? "bg-up/15 text-up"
+                        : tech.bias === "bear"
+                          ? "bg-down/15 text-down"
+                          : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-300"
+                    }`}
+                  >
+                    技术评估：{tech.bias === "bull" ? "偏多" : tech.bias === "bear" ? "偏空" : "中性"}（{tech.bullCount}多/{tech.bearCount}空）
+                  </span>
+                  <button
+                    onClick={() => setTechOpen(!techOpen)}
+                    className="shrink-0 text-zinc-400 hover:text-zinc-200"
+                    title={tech.signals.map((sg) => sg.name + "：" + sg.detail).join("\n")}
+                  >
+                    {techOpen ? "收起 ▴" : "依据 ▸"}
+                  </button>
+                </div>
+              )}
+              {chartTab === "kline" && !replayMode && displayBars.length >= 60 && (
+                <button
+                  onClick={() => setReplayMode(true)}
+                  className="rounded border border-sky-500/50 px-2 py-0.5 text-xs text-sky-400 hover:bg-sky-500/10"
+                  title="按日逐根推进 K 线，回放历史买卖点与成交（需要 ≥60 根日 K）"
+                >
+                  ▶ 历史回放
+                </button>
+              )}
+            </div>
           </div>
+
+          {/* 依据明细：正常文档流展开（打开时图表下移让位，不遮挡任何元素） */}
+          {chartTab === "kline" && !replayMode && techOpen && tech && (
+            <div className="shrink-0 rounded-lg border border-zinc-200 bg-white/90 p-2 text-[11px] leading-relaxed shadow-sm dark:border-zinc-700 dark:bg-zinc-900/90">
+              <ul className="space-y-0.5">
+                {tech.signals.map((sg) => (
+                  <li key={sg.name} className="flex items-start gap-1.5">
+                    <span
+                      className={`mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
+                        sg.bias === "bull" ? "bg-up" : sg.bias === "bear" ? "bg-down" : "bg-zinc-400"
+                      }`}
+                    />
+                    <span>
+                      <span className="font-medium text-zinc-700 dark:text-zinc-200">{sg.name}</span>
+                      <span className="ml-1 text-zinc-400">{sg.detail}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1.5 text-[10px] text-zinc-400">多因子技术信号汇总，不构成买卖建议</p>
+            </div>
+          )}
 
           {chartTab === "kline" && (
             /* 头部标题行（股票名 · 日 K 线（前复权）+ 来源）已移除：股票名在页面
@@ -576,54 +621,10 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                 <div className="flex h-full min-h-0 flex-col">
                   {/* 停牌提示条：日K 缺 bar 推导，判据随附（UI 缺陷 #1） */}
                   <SuspendedNotice status={tradingStatus} />
-                  {/* 技术评估：方案 B（2026-09-04 拍板）——从面板顶部条改为图内
-                      左上角半透明浮层，垂直空间全额还给 K 线；展开明细浮层向下延展 */}
+                  {/* 技术评估条已移至图表工具栏（与历史回放同行，2026-09-04 用户
+                      反馈浮层遮挡 K 线）：图区只留图表本身 */}
                   <div className="relative min-h-0 flex-1">
                     <KlineChartPro bars={displayBars} tradeMarks={fills} costPrice={costPrice} eventMarks={eventMarks} className="h-full" />
-                    {tech && (
-                      <div className="absolute left-2 top-2 z-20 max-w-[min(380px,calc(100%-16px))]">
-                        <div className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white/85 px-2 py-1 text-[11px] shadow-sm backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/85">
-                          <span
-                            className={`rounded px-1.5 py-0.5 font-medium ${
-                              tech.bias === "bull"
-                                ? "bg-up/15 text-up"
-                                : tech.bias === "bear"
-                                  ? "bg-down/15 text-down"
-                                  : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-300"
-                            }`}
-                          >
-                            技术评估：{tech.bias === "bull" ? "偏多" : tech.bias === "bear" ? "偏空" : "中性"}（{tech.bullCount}多/{tech.bearCount}空）
-                          </span>
-                          <button
-                            onClick={() => setTechOpen(!techOpen)}
-                            className="shrink-0 text-zinc-400 hover:text-zinc-200"
-                            title={tech.signals.map((sg) => sg.name + "：" + sg.detail).join("\n")}
-                          >
-                            {techOpen ? "收起 ▴" : "依据 ▸"}
-                          </button>
-                        </div>
-                        {techOpen && (
-                          <div className="mt-1 rounded-lg border border-zinc-200 bg-white/90 p-2 text-[11px] leading-relaxed shadow-sm backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/90">
-                            <ul className="space-y-0.5">
-                              {tech.signals.map((sg) => (
-                                <li key={sg.name} className="flex items-start gap-1.5">
-                                  <span
-                                    className={`mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
-                                      sg.bias === "bull" ? "bg-up" : sg.bias === "bear" ? "bg-down" : "bg-zinc-400"
-                                    }`}
-                                  />
-                                  <span>
-                                    <span className="font-medium text-zinc-700 dark:text-zinc-200">{sg.name}</span>
-                                    <span className="ml-1 text-zinc-400">{sg.detail}</span>
-                                  </span>
-                                </li>
-                              ))}
-                            </ul>
-                            <p className="mt-1.5 text-[10px] text-zinc-400">多因子技术信号汇总，不构成买卖建议</p>
-                          </div>
-                        )}
-                      </div>
-                    )}
                   </div>
                 </div>
                 )
