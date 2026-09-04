@@ -71,7 +71,7 @@ export function QuoteStrip({
       <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[11px] text-zinc-400">
         {strip.map(([k, v, title]) => (
           <span key={k} title={title}>
-            {k} <span className="font-mono tabular-nums text-zinc-200">{v}</span>
+            {k} <span className="font-mono tabular-nums text-zinc-800 dark:text-zinc-200">{v}</span>
           </span>
         ))}
         <span className="ml-auto text-zinc-500">

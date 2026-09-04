@@ -97,7 +97,7 @@ export function InfoPanel({ anns, news }: { anns: InfoItem[] | null; news: InfoI
           onClick={() => openModal(a, "公告")}
           className="block w-full border-b border-zinc-100 px-3 py-1.5 text-left hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900"
         >
-          <div className="truncate text-xs text-zinc-200">{a.title}</div>
+          <div className="truncate text-xs text-zinc-900 dark:text-zinc-200">{a.title}</div>
           <div className="text-[11px] text-zinc-500">
             {a.date} {a.type ? `· ${a.type}` : ""}
           </div>
@@ -112,7 +112,7 @@ export function InfoPanel({ anns, news }: { anns: InfoItem[] | null; news: InfoI
           onClick={() => openModal(n, "新闻")}
           className="block w-full border-b border-zinc-100 px-3 py-1.5 text-left hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900"
         >
-          <div className="truncate text-xs text-zinc-200">{n.title}</div>
+          <div className="truncate text-xs text-zinc-900 dark:text-zinc-200">{n.title}</div>
           <div className="text-[11px] text-zinc-500">{n.date}</div>
           <DigestRow item={n} />
         </button>

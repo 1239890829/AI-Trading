@@ -57,7 +57,7 @@ export function ProfilePanel({
       {company?.main_business && (
         <div className="mb-2">
           <div className="mb-1 text-zinc-400">主营业务</div>
-          <div className="leading-relaxed text-zinc-200">{company.main_business}</div>
+          <div className="leading-relaxed text-zinc-800 dark:text-zinc-200">{company.main_business}</div>
         </div>
       )}
       {company?.profile && (
@@ -77,10 +77,10 @@ export function ProfilePanel({
           </div>
           <div className="mt-0.5 flex justify-between text-zinc-400">
             <span>
-              营收 <span className="font-mono text-zinc-200">{r.revenue != null ? fmt(r.revenue / 1e8) : "--"}</span> 亿
+              营收 <span className="font-mono text-zinc-800 dark:text-zinc-200">{r.revenue != null ? fmt(r.revenue / 1e8) : "--"}</span> 亿
             </span>
             <span>
-              归母净利 <span className="font-mono text-zinc-200">{r.net_profit != null ? fmt(r.net_profit / 1e8) : "--"}</span> 亿
+              归母净利 <span className="font-mono text-zinc-800 dark:text-zinc-200">{r.net_profit != null ? fmt(r.net_profit / 1e8) : "--"}</span> 亿
             </span>
           </div>
         </div>

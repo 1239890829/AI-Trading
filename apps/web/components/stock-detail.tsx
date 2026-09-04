@@ -568,7 +568,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                   </span>
                   <button
                     onClick={() => setTechOpen(!techOpen)}
-                    className="shrink-0 text-zinc-400 hover:text-zinc-200"
+                    className="shrink-0 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
                     title={tech.signals.map((sg) => sg.name + "：" + sg.detail).join("\n")}
                   >
                     {techOpen ? "收起 ▴" : "依据 ▸"}
