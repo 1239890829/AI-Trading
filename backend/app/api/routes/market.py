@@ -574,6 +574,30 @@ async def auction_benchmark(
     return {"data": rows, "meta": _meta(hub)}
 
 
+@router.get("/auction-premium")
+async def auction_premium(
+    request: Request,
+    date_str: str | None = Query(default=None, alias="date", description="溢价观察日 YYYY-MM-DD，默认最近交易日"),
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    """竞价溢价比因子（system-review §4.2 P0）：昨日涨停股今日竞价溢价分布。
+
+    口径 = 今日竞价开盘价 / 昨日涨停封板价（昨收即封板价，溢价≈ths auction_pct）。
+    <3% 一日游风险区、≥5% 抢筹；竞价缺失 = unknown 单列，绝不冒充 0。
+    结果缓存 60s；数据面失败折进 caveats 显式降级，不抛 502。
+    """
+    from app.market.auction_premium import collect_premium
+
+    asof = date.fromisoformat(date_str) if date_str else await _default_trade_date_async(hub)
+    cache = cache_on(request.app.state, "market.auction_premium", 60, maxsize=4)
+    hit, payload = cache.get(asof)
+    if hit:
+        return payload
+    payload = {"data": await collect_premium(hub, asof), "meta": _meta(hub)}
+    cache.set(asof, payload)
+    return payload
+
+
 @router.get("/adjustment-events/{symbol}", response_model=Envelope[list[AdjustmentEvent]])
 async def adjustment_events(
     symbol: str,

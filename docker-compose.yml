@@ -1,4 +1,6 @@
-# 开发用 compose；生产部署见 docs/deployment.md
+# 开发容器用 compose；生产部署用 docker-compose.prod.yml（双镜像构建 + /data 挂载）。
+# 注意：web 侧不要设 NEXT_PUBLIC_API_BASE 直连后端端口——浏览器直连会 CORS；
+# 默认同源 /backend 走 Route Handler 反代，BACKEND_ORIGIN 运行时转发。
 services:
   backend:
     build: ./backend
@@ -9,17 +11,18 @@ services:
       ASHARE_POLL_INTERVAL_SECONDS: ${ASHARE_POLL_INTERVAL_SECONDS:-5}
       ASHARE_WATCHLIST: ${ASHARE_WATCHLIST:-600519,000001,300750,601318}
     volumes:
-      - ./data:/app/data
+      # 容器内默认数据路径是 /data（REPO_ROOT 推导），挂 /app/data 不生效
+      - ./data:/data
     restart: unless-stopped
 
   web:
-    image: node:20-alpine
+    image: node:22-alpine
     working_dir: /web
     command: sh -c "npm install --no-fund --no-audit && npm run dev"
     ports:
       - "3000:3000"
     environment:
-      NEXT_PUBLIC_API_BASE: http://localhost:8000
+      BACKEND_ORIGIN: http://backend:8000
     volumes:
       - ./apps/web:/web
     depends_on:

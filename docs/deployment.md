@@ -18,10 +18,20 @@ npm run dev   # http://localhost:3000
 
 ## Docker
 
+**生产部署**（2026-09-04，双镜像构建）：
+
 ```bash
-docker compose up --build
-# backend: http://localhost:8000  web: http://localhost:3000
+docker compose -f docker-compose.prod.yml up -d --build
+# web: http://localhost:3000（同源 /backend 反代 → backend:8000）
+# backend 仅本机暴露 127.0.0.1:8000（巡检/WS 直连）
 ```
+
+- 数据持久化：挂载宿主 `./data` → 容器内 `/data`（`REPO_ROOT` 在容器内推导为 `/`，
+  SQLite/Parquet 默认路径都落在 `/data`）。**不要挂 `/app/data`，不生效。**
+- API Key：`env_file: backend/.env` 注入，绝不进镜像层。
+- WS：Route Handler 不代理升级，默认 5s 轮询降级；要实时 WS 见下文「前端如何连后端」。
+
+**开发容器**（源码挂载 + npm dev）：`docker compose up --build`。
 
 ## 环境变量（敏感配置只走环境变量，禁止入库/入前端/Git）
 

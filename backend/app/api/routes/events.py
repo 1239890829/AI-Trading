@@ -1,6 +1,7 @@
 """事件驱动 API（linkage-design §4.4 E1+E2）。
 
 - GET  /api/events?active=&limit=            活跃事件列表（时效=半衰期×2 实时计算）
+- GET  /api/events/impact                    影响力视图：四级分类 + L1/L2/L3 分级（§六.4 拍板）
 - GET  /api/events/{id}                      事件详情（含方向映射行）
 - GET  /api/events/{id}/stocks               标的池：方向题材 → 官方成分反查 + override
 - POST /api/events                           手动注册单条事件（写鉴权）
@@ -92,6 +93,36 @@ async def list_events(
 ) -> dict:
     rows = store.list_events(active_only=active, limit=limit)
     return {"data": {"count": len(rows), "items": [_serialize(r) for r in rows]}, "meta": {}}
+
+
+@router.get("/events/impact")
+async def impact_events(
+    include_l3: bool = Query(default=False, description="是否包含 L3（默认不上）"),
+    limit: int = Query(default=100, ge=1, le=200),
+    store: EventStore = Depends(get_store),
+) -> dict:
+    """事件影响力视图（§六.4 拍板）：四级分类（国际时事/国家政策/市场热点/原材料涨价）
+    + 三级影响力（L1 必上 / L2 选上 / L3 不上）。派生自既有 EventCard，不重建抽取管道。"""
+    from app.events.impact import FOUR_LABEL, classify_four, impact_level
+
+    rows = store.list_events(active_only=True, limit=limit)
+    items: list[dict] = []
+    counts = {"L1": 0, "L2": 0, "L3": 0}
+    four_counts: dict[str, int] = {}
+    for r in rows:
+        four = classify_four(r.title, r.category)
+        level = impact_level(
+            r.title, four=four, certainty=r.certainty, fact_kind=r.fact_kind,
+            source_tier=r.source_tier, n_directions=len(r.directions or []),
+        )
+        counts[level] += 1
+        four_counts[four] = four_counts.get(four, 0) + 1
+        if level == "L3" and not include_l3:
+            continue
+        items.append({**_serialize(r), "four_category": four, "four_label": FOUR_LABEL[four],
+                      "impact_level": level})
+    return {"data": {"count": len(items), "counts_all": counts, "four_counts": four_counts,
+                     "items": items}, "meta": {}}
 
 
 @router.get("/events/{event_id}")

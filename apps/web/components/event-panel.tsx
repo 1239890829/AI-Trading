@@ -39,6 +39,8 @@ function directionLabel(d: number): { text: string; cls: string } {
   return { text: "待判", cls: "text-zinc-400" };
 }
 
+export { directionLabel };
+
 function DirectionChip({ d }: { d: EventDirectionRow }) {
   const { text, cls } = directionLabel(d.direction);
   const tip = [d.chain, d.basis].filter(Boolean).join(" ｜ ");
@@ -54,8 +56,8 @@ function DirectionChip({ d }: { d: EventDirectionRow }) {
   );
 }
 
-/** 单个事件的标的池展开（E2/L9：事件 → 标的 → 详情）。 */
-function StockPools({ eventId }: { eventId: number }) {
+/** 单个事件的标的池展开（E2/L9：事件 → 标的 → 详情）。market 事件 Tab 复用。 */
+export function StockPools({ eventId }: { eventId: number }) {
   const [pools, setPools] = useState<EventStockPool[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 

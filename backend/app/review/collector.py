@@ -177,10 +177,31 @@ async def collect_market(
                 reason=str(exc)[:200], impact="system.题材标签可靠性核对", severity="warn",
             ))
 
+    # --- 竞价溢价比（昨日涨停股今日竞价承接，P0 因子）---
+    # 失败记 None（未采集），gap 显式降级——绝不冒充"无溢价"。
+    auction_premium: dict | None = None
+    try:
+        from app.market.auction_premium import collect_premium
+
+        auction_premium = await collect_premium(hub, trade_date)
+        if auction_premium.get("caveats"):
+            gaps.append(DataGap(
+                field="auction_premium", source="auction_premium.collect_premium",
+                reason="；".join(auction_premium["caveats"])[:200],
+                impact="market.竞价承接力", severity="warn",
+            ))
+    except Exception as exc:
+        log.warning("review collect: auction premium failed: %s", exc)
+        gaps.append(DataGap(
+            field="auction_premium", source="auction_premium.collect_premium",
+            reason=str(exc)[:200], impact="market.竞价承接力", severity="warn",
+        ))
+
     return MarketSnapshot(
         trade_date=td, indices=indices, breadth=breadth, sentiment=sentiment,
         themes=themes, theme_summary=theme_summary, gaps=gaps,
         provider_health=provider_health,
+        auction_premium=auction_premium,
     )
 
 

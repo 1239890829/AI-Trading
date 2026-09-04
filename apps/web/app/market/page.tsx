@@ -7,6 +7,7 @@ import { Panel } from "@/components/panel";
 import { QualityBadge } from "@/components/quality-badge";
 import { EventPanel } from "@/components/event-panel";
 import { HeatmapTab } from "@/components/market/heatmap-tab";
+import { EventsTab } from "@/components/market/events-tab";
 import { indexDetailSymbol } from "@/lib/api";
 import { workbenchUrlWithBack } from "@/lib/routing";
 import {
@@ -46,6 +47,7 @@ const PHASE_STYLE: Record<string, string> = {
 const VIEWS = [
   { key: "overview", label: "总览" },
   { key: "heatmap", label: "云图" },
+  { key: "events", label: "事件" },
 ] as const;
 
 type ViewKey = (typeof VIEWS)[number]["key"];
@@ -53,7 +55,8 @@ type ViewKey = (typeof VIEWS)[number]["key"];
 function MarketInner() {
   const router = useRouter();
   const sp = useSearchParams();
-  const view: ViewKey = sp.get("tab") === "heatmap" ? "heatmap" : "overview";
+  const raw = sp.get("tab");
+  const view: ViewKey = raw === "heatmap" || raw === "events" ? raw : "overview";
 
   const [indices, setIndices] = useState<Quote[]>([]);
   const [totalAmount, setTotalAmount] = useState<number | null>(null);
@@ -139,6 +142,10 @@ function MarketInner() {
       {view === "heatmap" ? (
         <div className="min-h-0 flex-1">
           <HeatmapTab />
+        </div>
+      ) : view === "events" ? (
+        <div className="min-h-0 flex-1">
+          <EventsTab />
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col gap-2">

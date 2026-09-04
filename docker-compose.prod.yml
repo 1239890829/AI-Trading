@@ -1,0 +1,38 @@
+# 生产部署 compose（2026-09-04）：双镜像构建 + 同源反代，替代根 docker-compose.yml
+# 的「web 跑 npm dev 挂载源码」开发形态。用法：
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# 数据落点：容器内 /data（REPO_ROOT=/ 推导出的默认路径），挂载宿主 ./data 持久化。
+# API Key：只经 backend/.env 注入（env_file），绝不打进镜像层。
+# WebSocket：Route Handler 不代理 WS 升级——默认 5s 轮询降级可用；
+#   要实时 WS，要么前置 nginx 放开 Upgrade 头，要么设 NEXT_PUBLIC_WS_BASE
+#   （注意：该项是构建期内联，改了要 --build 重构 web 镜像）。
+services:
+  backend:
+    build: ./backend
+    env_file:
+      - backend/.env
+    volumes:
+      - ./data:/data
+    ports:
+      # 直接暴露 8000 供本机巡检（api-sweep）/ WS 直连；公网部署应改由反代统一入口
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)"]
+      interval: 30s
+      timeout: 6s
+      retries: 3
+      start_period: 20s
+
+  web:
+    build: ./apps/web
+    environment:
+      # 运行时读取：指向容器网络内的 backend，改后端地址无需重建镜像
+      BACKEND_ORIGIN: http://backend:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped

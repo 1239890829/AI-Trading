@@ -332,6 +332,30 @@ class RulesAnalyzer:
         else:
             findings.append("情绪数据缺失")
 
+        # 竞价溢价比（P0 因子）：昨日涨停股今日竞价承接力
+        if m.auction_premium:
+            summary = m.auction_premium.get("summary") or {}
+            caveats = m.auction_premium.get("caveats") or []
+            if summary and summary.get("judged"):
+                findings.append(
+                    f"竞价溢价（昨日涨停 {summary['judged']} 只可判定）："
+                    f"中位数 {summary['median_pct']:+.2f}%，"
+                    f"弱溢价(<3%)占比 {summary['weak_share']:.0%}，"
+                    f"强溢价(≥5%)占比 {summary['strong_share']:.0%}"
+                )
+                evidence["auction_premium"] = summary
+                if summary["weak_share"] >= 0.5:
+                    judgements.append(
+                        f"昨日涨停股竞价承接弱（弱溢价占比 {summary['weak_share']:.0%}），"
+                        "一日游风险高，接力需缩容到最强前排"
+                    )
+                elif summary["median_pct"] is not None and summary["median_pct"] >= 5:
+                    judgements.append("竞价溢价中位数强（≥5%），承接资金积极，但防高开兑现")
+            elif caveats:
+                findings.append(f"竞价溢价未采集成完：{'；'.join(caveats)}")
+        else:
+            findings.append("竞价溢价未采集（None）")
+
         # 宽度
         if m.breadth:
             findings.append(

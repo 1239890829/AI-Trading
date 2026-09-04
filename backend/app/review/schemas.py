@@ -56,6 +56,8 @@ class MarketSnapshot(BaseModel):
     #: 数据链健康快照（provider 熔断/切换 + ths 涨停原因哨兵）。
     #: None = 未采集（单源部署或采集失败）——三态纪律：缺失不冒充"健康"。
     provider_health: dict[str, Any] | None = None
+    #: 竞价溢价比（昨日涨停股今日竞价承接，P0 因子）。None = 未采集。
+    auction_premium: dict[str, Any] | None = None
 
 
 class OrderRecord(BaseModel):

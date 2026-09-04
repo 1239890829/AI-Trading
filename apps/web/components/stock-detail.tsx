@@ -93,13 +93,23 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
   // 模拟交易数据刷新（2026-09-01 简化：原 paperChanged 全局事件改为 ref 直调——
   // trade-form/trade-panel 都在本组件子树内，props 回调 + ref 即可，无需全局广播）
   const loadPaperRef = useRef<() => void>(() => {});
+  // 布局方案 B（2026-09-04 用户拍板）：右列可整体收起，收起后 K 线/分时获得全宽
+  const [rightCollapsed, setRightCollapsed] = useState(false);
   useEffect(() => {
     // localStorage 恢复必须在 effect 里：渲染期读会把值带进首次 commit，
     // 与 SSR 输出产生 hydration mismatch（宽度类 inline style 必比对）。
     const saved = Number(localStorage.getItem("ashare-right-w"));
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (saved >= 260 && saved <= 480) setRightW(saved);
+    // 右列收起状态同样持久化（字符串比较，避免 hydration 差异）
+    if (localStorage.getItem("ashare-right-collapsed") === "1") setRightCollapsed(true);
   }, []);
+  const toggleRightCollapsed = () => {
+    setRightCollapsed((v) => {
+      localStorage.setItem("ashare-right-collapsed", v ? "0" : "1");
+      return !v;
+    });
+  };
   // 历史回放（Phase 6 收官）：K 线页签内切换回放模式
   const [replayMode, setReplayMode] = useState(false);
   // 技术评估条默认**折叠**（2026-09-02 评审 #5：K 线图被周边元素挤占）。
@@ -511,9 +521,12 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
       {/* ①¾ 相关事件（E2/L9）：方向题材命中归属 或 事件源自该股 */}
       <StockEventsRow symbol={symbol} />
 
-      {/* ② 中部：左图表区 + 右盘口/逐笔（右列宽度可拖拽，--right-w 由 state 注入） */}
+      {/* ② 中部：左图表区 + 右盘口/逐笔（右列宽度可拖拽，--right-w 由 state 注入；
+          方案 B：右列可整体收起为细条，收起后图表获得全宽） */}
       <div
-        className="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr),var(--right-w)]"
+        className={`grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-2 ${
+          rightCollapsed ? "lg:grid-cols-[minmax(0,1fr),28px]" : "lg:grid-cols-[minmax(0,1fr),var(--right-w)]"
+        }`}
         style={{ "--right-w": `${rightW}px` } as React.CSSProperties}
       >
         <div className="flex min-h-0 min-w-0 flex-col gap-1.5">
@@ -563,50 +576,54 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
                 <div className="flex h-full min-h-0 flex-col">
                   {/* 停牌提示条：日K 缺 bar 推导，判据随附（UI 缺陷 #1） */}
                   <SuspendedNotice status={tradingStatus} />
-                  {tech && (
-                    <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-zinc-100 px-3 py-1 text-[11px] dark:border-zinc-800/60">
-                      <span
-                        className={`rounded px-1.5 py-0.5 font-medium ${
-                          tech.bias === "bull"
-                            ? "bg-up/15 text-up"
-                            : tech.bias === "bear"
-                              ? "bg-down/15 text-down"
-                              : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-300"
-                        }`}
-                      >
-                        技术评估：{tech.bias === "bull" ? "偏多" : tech.bias === "bear" ? "偏空" : "中性"}（{tech.bullCount}多/{tech.bearCount}空）
-                      </span>
-                      {techOpen ? (
-                        <>
+                  {/* 技术评估：方案 B（2026-09-04 拍板）——从面板顶部条改为图内
+                      左上角半透明浮层，垂直空间全额还给 K 线；展开明细浮层向下延展 */}
+                  <div className="relative min-h-0 flex-1">
+                    <KlineChartPro bars={displayBars} tradeMarks={fills} costPrice={costPrice} eventMarks={eventMarks} className="h-full" />
+                    {tech && (
+                      <div className="absolute left-2 top-2 z-20 max-w-[min(380px,calc(100%-16px))]">
+                        <div className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white/85 px-2 py-1 text-[11px] shadow-sm backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/85">
                           <span
-                            className="text-zinc-400"
+                            className={`rounded px-1.5 py-0.5 font-medium ${
+                              tech.bias === "bull"
+                                ? "bg-up/15 text-up"
+                                : tech.bias === "bear"
+                                  ? "bg-down/15 text-down"
+                                  : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-300"
+                            }`}
+                          >
+                            技术评估：{tech.bias === "bull" ? "偏多" : tech.bias === "bear" ? "偏空" : "中性"}（{tech.bullCount}多/{tech.bearCount}空）
+                          </span>
+                          <button
+                            onClick={() => setTechOpen(!techOpen)}
+                            className="shrink-0 text-zinc-400 hover:text-zinc-200"
                             title={tech.signals.map((sg) => sg.name + "：" + sg.detail).join("\n")}
                           >
-                            {tech.signals.filter((sg) => sg.bias !== "neutral").slice(0, 4).map((sg) => sg.name).join(" · ")}
-                            <span className="ml-1 underline decoration-dotted">依据ⓘ</span>
-                          </span>
-                          <span className="ml-auto text-zinc-500">多因子技术信号汇总，不构成买卖建议</span>
-                          <button
-                            onClick={() => setTechOpen(false)}
-                            className="shrink-0 text-zinc-400 hover:text-zinc-200"
-                            title="收起信号明细，把空间还给 K 线"
-                          >
-                            收起 ▴
+                            {techOpen ? "收起 ▴" : "依据 ▸"}
                           </button>
-                        </>
-                      ) : (
-                        <button
-                          onClick={() => setTechOpen(true)}
-                          className="shrink-0 text-zinc-400 hover:text-zinc-200"
-                          title={tech.signals.map((sg) => sg.name + "：" + sg.detail).join("\n")}
-                        >
-                          依据 ▸
-                        </button>
-                      )}
-                    </div>
-                  )}
-                  <div className="min-h-0 flex-1">
-                    <KlineChartPro bars={displayBars} tradeMarks={fills} costPrice={costPrice} eventMarks={eventMarks} className="h-full" />
+                        </div>
+                        {techOpen && (
+                          <div className="mt-1 rounded-lg border border-zinc-200 bg-white/90 p-2 text-[11px] leading-relaxed shadow-sm backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/90">
+                            <ul className="space-y-0.5">
+                              {tech.signals.map((sg) => (
+                                <li key={sg.name} className="flex items-start gap-1.5">
+                                  <span
+                                    className={`mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
+                                      sg.bias === "bull" ? "bg-up" : sg.bias === "bear" ? "bg-down" : "bg-zinc-400"
+                                    }`}
+                                  />
+                                  <span>
+                                    <span className="font-medium text-zinc-700 dark:text-zinc-200">{sg.name}</span>
+                                    <span className="ml-1 text-zinc-400">{sg.detail}</span>
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                            <p className="mt-1.5 text-[10px] text-zinc-400">多因子技术信号汇总，不构成买卖建议</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
                 )
@@ -669,8 +686,27 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
           )}
         </div>
 
-        {/* 右列：盘口↔逐笔 + 资讯 tabs（左缘拖拽条调宽，宽度持久化 localStorage） */}
+        {/* 右列：盘口↔逐笔 + 资讯 tabs（左缘拖拽条调宽，宽度持久化 localStorage；
+            方案 B：可整体收起） */}
+        {rightCollapsed ? (
+          <button
+            onClick={toggleRightCollapsed}
+            className="flex min-h-0 w-7 items-center justify-center rounded-lg border border-zinc-200 text-zinc-400 transition-colors hover:text-zinc-900 dark:border-zinc-800 dark:hover:text-zinc-100"
+            title="展开右列（盘口/逐笔/资料/资讯）"
+            aria-label="展开右列"
+          >
+            <span className="text-xs [writing-mode:vertical-lr] tracking-widest">◀ 展开右列</span>
+          </button>
+        ) : (
         <div ref={rightColRef} className="relative flex min-h-0 flex-col gap-2">
+          <button
+            onClick={toggleRightCollapsed}
+            className="absolute right-1 top-1.5 z-20 rounded border border-zinc-200 bg-white/85 px-1.5 py-0.5 text-[10px] text-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900/85 dark:hover:text-zinc-100"
+            title="收起右列，图表获得全宽"
+            aria-label="收起右列"
+          >
+            ▶ 收起
+          </button>
           <div
             onMouseDown={(e) => {
               e.preventDefault();
@@ -776,6 +812,7 @@ export function StockDetailPanel({ symbol }: { symbol: string }) {
           <BookTradesView book={book} trades={trades} showBook={rightTab === "book"} />
         </Panel>
         </div>
+        )}
       </div>
     </div>
   );
