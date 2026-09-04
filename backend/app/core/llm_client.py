@@ -20,7 +20,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterator
 
 import httpx
 
@@ -161,6 +161,219 @@ def chat_completion(
     if not isinstance(content, str) or not content.strip():
         raise LLMError("LLM 回复为空")
     return content
+
+
+class ChatStream:
+    """可关闭的流式补全：迭代产出文本增量，close() 幂等释放底层资源。
+
+    close() 的存在是因为消费方（SSE 路由）要在客户端断开时终止底层
+    传输——openai 路径关 httpx 响应，claude_cli 路径杀子进程。生成器
+    阻塞在 stdout/网络读上时 Python 层无法中断，只有杀掉源头才有效。
+    """
+
+    def __init__(self, iterator: Iterator[str], closer: Callable[[], None]):
+        self._it = iterator
+        self._closer = closer
+        self._closed = False
+
+    def __iter__(self) -> Iterator[str]:
+        return self
+
+    def __next__(self) -> str:
+        return next(self._it)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._closer()
+        except Exception:  # noqa: BLE001  释放失败不影响主流程
+            pass
+
+
+def _stream_openai(
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, str]],
+    *,
+    temperature: float,
+    timeout: float,
+) -> ChatStream:
+    """OpenAI 兼容 SSE 流式。read 超时按「字节间隔」计，思维链长不会误杀。"""
+    if not (base_url and api_key and model):
+        raise LLMError("LLM 未配置 base_url/api_key/model")
+    client = httpx.Client(timeout=httpx.Timeout(timeout, read=max(timeout, 300.0)))
+    req = client.build_request(
+        "POST",
+        _endpoint(base_url),
+        json={"model": model, "messages": messages, "temperature": temperature, "stream": True},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    try:
+        resp = client.send(req, stream=True)
+    except httpx.HTTPError as exc:
+        client.close()
+        raise LLMError(f"LLM 请求失败：{exc}") from exc
+    if resp.status_code != 200:
+        body = resp.read()[:200]
+        resp.close()
+        client.close()
+        raise LLMError(f"LLM HTTP {resp.status_code}: {body!r}")
+
+    def _iter() -> Iterator[str]:
+        try:
+            for line in resp.iter_lines():
+                line = line.strip()
+                if not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if payload == "[DONE]":
+                    return
+                try:
+                    chunk = json.loads(payload)
+                except ValueError:
+                    continue
+                try:
+                    delta = chunk["choices"][0]["delta"].get("content")
+                except (KeyError, IndexError, TypeError):
+                    continue
+                if isinstance(delta, str) and delta:
+                    yield delta
+        finally:
+            resp.close()
+            client.close()
+
+    return ChatStream(_iter(), client.close)
+
+
+def _stream_cli(
+    model: str,
+    messages: list[dict[str, str]],
+    *,
+    cli_path: str = "",
+) -> ChatStream:
+    """claude_cli 流式：stream-json + partial messages，逐 delta 产出。
+
+    事件形态（实测 2.1.259）：
+    - {"type":"stream_event","event":{"type":"content_block_delta",
+      "delta":{"type":"text_delta","text":"…"}}}   ← 文本增量
+    - {"type":"assistant","message":{...content 完整块...}}  ← 整段回包
+    - {"type":"result","is_error":bool,"result":"..."}       ← 终态
+    同时存在增量与整段时只认增量（saw_delta 防二次产出）。
+    """
+    cli = resolve_cli_path(cli_path)
+    if not cli:
+        raise LLMError("claude_cli 后端不可用：未找到 claude 可执行文件")
+    system = "\n".join(m["content"] for m in messages if m.get("role") == "system")
+    prompt = "\n\n".join(
+        m["content"] for m in messages if m.get("role") != "system"
+    ).strip()
+    if not prompt:
+        raise LLMError("claude_cli 调用缺少 user 消息")
+    cmd = [
+        cli, "-p", prompt,
+        "--output-format", "stream-json",
+        "--include-partial-messages",
+        "--verbose",
+        "--model", model,
+        "--tools", "",
+        "--exclude-dynamic-system-prompt-sections",
+    ]
+    if system:
+        cmd += ["--system-prompt", system]
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    except OSError as exc:
+        raise LLMError(f"claude_cli 启动失败：{exc}") from exc
+
+    stderr_tail = [""]
+
+    def _drain_stderr() -> None:
+        if proc.stderr is None:
+            return
+        try:
+            stderr_tail[0] = proc.stderr.read()[-300:]
+        except Exception:  # noqa: BLE001
+            pass
+
+    import threading
+
+    threading.Thread(target=_drain_stderr, daemon=True).start()
+
+    def _close() -> None:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait(timeout=5)
+
+    def _iter() -> Iterator[str]:
+        saw_delta = False
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            etype = ev.get("type")
+            if etype == "stream_event":
+                inner = ev.get("event") or {}
+                if inner.get("type") == "content_block_delta":
+                    delta = inner.get("delta") or {}
+                    if delta.get("type") == "text_delta":
+                        text = delta.get("text") or ""
+                        if text:
+                            saw_delta = True
+                            yield text
+            elif etype == "assistant" and not saw_delta:
+                content = (ev.get("message") or {}).get("content") or []
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text = block.get("text") or ""
+                        if text:
+                            yield text
+            elif etype == "result":
+                if ev.get("is_error"):
+                    raise LLMError(f"claude_cli 返回错误：{str(ev.get('result'))[:200]}")
+                return
+        # stdout 结束但没收到 result：子进程异常退出
+        rc = proc.wait(timeout=10)
+        if rc != 0:
+            raise LLMError(f"claude_cli 退出码 {rc}：{stderr_tail[0][:200]}")
+        if not saw_delta:
+            raise LLMError(f"claude_cli 回复为空：{stderr_tail[0][:200]}")
+
+    return ChatStream(_iter(), _close)
+
+
+def stream_chat_completion(
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, str]],
+    *,
+    temperature: float = 0.2,
+    timeout: float = 30.0,
+    provider: str = "openai",
+    cli_path: str = "",
+) -> ChatStream:
+    """按 provider 分发流式调用，返回 ChatStream。
+
+    与 chat_completion 同参语义；失败同样抛 LLMError（openai 路径在
+    建连/HTTP 状态时抛，claude_cli 路径延迟到迭代时——首个 delta 之前
+    的错误都以 LLMError 形式从 next() 冒出，消费方按同一种异常处理）。
+    """
+    if provider == "claude_cli":
+        return _stream_cli(model, messages, cli_path=cli_path)
+    return _stream_openai(
+        base_url, api_key, model, messages,
+        temperature=temperature, timeout=timeout,
+    )
 
 
 def extract_json_object(text: str) -> dict[str, Any]:

@@ -24,6 +24,7 @@ from app.api.routes import events as events_route
 from app.api.routes import picks as picks_route
 from app.api.routes import picks_intraday as picks_intraday_route
 from app.api.routes import real_position as real_position_route
+from app.api.routes import assistant as assistant_route
 from app.core.config import settings
 from app.core.db import get_engine, get_session_factory
 from app.data_providers import build_provider
@@ -512,4 +513,5 @@ app.include_router(events_route.router, prefix="/api")
 app.include_router(real_position_route.router, prefix="/api")
 app.include_router(picks_route.router, prefix="/api")
 app.include_router(picks_intraday_route.router, prefix="/api")
+app.include_router(assistant_route.router, prefix="/api")
 app.include_router(ws_router)

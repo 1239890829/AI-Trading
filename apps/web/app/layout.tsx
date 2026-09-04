@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { NavBar } from "@/components/nav-bar";
+import { FloatingAssistant } from "@/components/assistant/floating-assistant";
 
 export const metadata: Metadata = {
   title: "AShare AI Trader · A 股量化投研工作台",
@@ -28,6 +29,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <NavBar />
         {/* 内容区是唯一滚动域：单页布局锁定在可视区内，溢出交给容器内部滚动 */}
         <div className="flex-1 min-h-0">{children}</div>
+        <FloatingAssistant />
       </body>
     </html>
   );
