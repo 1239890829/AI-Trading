@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { fmt, fmtAmount, fmtHeat, pctColor, pctText } from "@/lib/format";
 import type { HotTheme, ThemeStrengthRow } from "@/lib/api";
-import { workbenchUrlWithBack } from "@/lib/routing";
+import { tapeUrl, workbenchUrlWithBack } from "@/lib/routing";
 import type { ThemeCard as ThemeCardType } from "@/types/market";
 
 /**
@@ -283,7 +283,7 @@ export function ThemeCardView({
         <span>{card.sort_basis}</span>
         <div className="flex-1" />
         <Link
-          href={`/tape?tab=limitup&${poolQuery.slice(1)}`}
+          href={`${tapeUrl("limitup")}&${poolQuery.slice(1)}`}
           className="hover:text-zinc-600 dark:hover:text-zinc-300"
           title="在原始涨停池中核对该题材成员（含涨停原因原文，成员高亮）"
         >

@@ -11,7 +11,7 @@ import {
   type EventStockPool,
   type ImpactEvent,
 } from "@/lib/api";
-import { workbenchUrlWithBack } from "@/lib/routing";
+import { themesUrl, workbenchUrlWithBack } from "@/lib/routing";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { Skeleton } from "@/components/ui/loading";
 
@@ -193,7 +193,7 @@ export function EventPanel() {
                   return (
                     <Link
                       key={`${d.target_type}-${d.target}`}
-                      href={d.target_type === "symbol" ? workbenchUrlWithBack(d.target) : `/tape?tab=themes&focus=${encodeURIComponent(d.target)}`}
+                      href={d.target_type === "symbol" ? workbenchUrlWithBack(d.target) : themesUrl(d.target)}
                       title={[d.chain, d.basis].filter(Boolean).join(" ｜ ") || `关联${d.target_type === "symbol" ? "个股" : "题材"} ${d.target}`}
                       className="inline-flex items-center gap-1 rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200"
                     >

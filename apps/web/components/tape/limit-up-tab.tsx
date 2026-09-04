@@ -6,7 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { Panel } from "@/components/panel";
 import { getLimitUpPool } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
-import { workbenchUrlWithBack } from "@/lib/routing";
+import { themesUrl, workbenchUrlWithBack } from "@/lib/routing";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import type { LimitUpRecord } from "@/types/market";
 
@@ -122,7 +122,7 @@ export function LimitUpTab() {
             只看成员
           </label>
           <div className="flex-1" />
-          <Link href="/tape?tab=themes" className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200">
+          <Link href={themesUrl()} className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200">
             返回题材梯队 ↩
           </Link>
           <button

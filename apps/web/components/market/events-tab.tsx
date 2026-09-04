@@ -5,6 +5,7 @@ import { NewsModal, type NewsModalItem } from "@/components/news-modal";
 import { Panel } from "@/components/panel";
 import { StockPools, directionLabel } from "@/components/event-panel";
 import { getImpactEvents, type EventSort, type ImpactEvent } from "@/lib/api";
+import { themesUrl, workbenchUrl } from "@/lib/routing";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { Skeleton } from "@/components/ui/loading";
 
@@ -250,7 +251,7 @@ export function EventsTab() {
                     return (
                       <a
                         key={`${d.target_type}-${d.target}`}
-                        href={isStock ? `/workbench?symbol=${encodeURIComponent(d.target)}` : `/tape?tab=themes&focus=${encodeURIComponent(d.target)}`}
+                        href={isStock ? workbenchUrl(d.target) : themesUrl(d.target)}
                         title={tip || `关联${isStock ? "个股" : "题材"} ${d.target}（${d.basis || "入选理由见标的池"}）`}
                         className="inline-flex items-center gap-1 rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200"
                       >
