@@ -42,7 +42,7 @@ describe("StockEventsRow", () => {
       published: null,
       paragraphs: ["正文第一段。"],
       truncated: false,
-      url: event.url,
+      url: event.url!, // 该用例的 event 必带 url，非空断言成立
     });
 
     render(<StockEventsRow symbol="600519" />);
