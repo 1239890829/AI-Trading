@@ -271,5 +271,9 @@ async def collect_rank_context(app_state, theme_names: list[str],
             if avg is not None:
                 ctx.theme_perf[name] = float(avg)
 
+    # 快照整体失败（如腾讯熔断冷启动）→ 不缓存本轮降级结果，下个请求立即重试；
+    # 否则一次瞬时失败会被 60s 缓存粘住，事件页整轮排序都缺共振因子。
+    if all_symbols and not quotes_raw:
+        return ctx
     cache.set(key, ctx)
     return ctx
