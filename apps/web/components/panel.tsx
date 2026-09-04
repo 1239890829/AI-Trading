@@ -39,7 +39,7 @@ export function Panel({ title, children, source, dataTimestamp, quality, quality
       {showHeader && (
         <div className="flex items-center justify-between border-b border-zinc-200 bg-zinc-900/[0.03] px-4 py-2.5 dark:border-zinc-800 dark:bg-zinc-900/40">
           {/* min-w-0+truncate：长标题截断省略，不挤压右侧按钮/来源徽标（右侧 shrink-0 保完整） */}
-          <h2 className="min-w-0 truncate text-sm font-medium text-zinc-200 dark:text-zinc-100">{title}</h2>
+          <h2 className="min-w-0 truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">{title}</h2>
           <div className="flex shrink-0 items-center gap-3 text-xs text-zinc-400">
             {extra}
             {quality && <QualityBadge quality={quality} reasons={qualityReasons} />}
