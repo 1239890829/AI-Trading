@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { getEventsForSymbol, type EventSummary } from "@/lib/api";
+import { NewsModal, type NewsModalItem } from "@/components/news-modal";
 
 const DIRECTION_LABEL: Record<number, { text: string; cls: string }> = {
   1: { text: "利好", cls: "text-up" },
@@ -24,6 +25,7 @@ const CATEGORY_LABEL: Record<string, string> = {
  */
 export function StockEventsRow({ symbol }: { symbol: string }) {
   const [events, setEvents] = useState<EventSummary[] | null>(null);
+  const [modalItem, setModalItem] = useState<NewsModalItem | null>(null);
   // 切股先清空（渲染期 adjust-state：symbol 变化即重置，防上一只事件残留一帧）
   const [prevSymbol, setPrevSymbol] = useState<string | null>(null);
   if (symbol !== prevSymbol) {
@@ -63,16 +65,16 @@ export function StockEventsRow({ symbol }: { symbol: string }) {
           .filter(Boolean)
           .join(" ｜ ");
         return e.url ? (
-          <a
+          <button
             key={e.id}
-            href={e.url}
-            target="_blank"
-            rel="noreferrer"
+            onClick={() =>
+              setModalItem({ title: e.title, url: e.url!, date: e.published_at ?? null, source: e.source ?? null, kindLabel: "事件" })
+            }
             title={tip}
-            className="rounded border border-zinc-200 px-1.5 py-0.5 hover:border-zinc-400 dark:border-zinc-700"
+            className="rounded border border-zinc-200 px-1.5 py-0.5 text-left hover:border-zinc-400 dark:border-zinc-700"
           >
             {title}
-          </a>
+          </button>
         ) : (
           <span
             key={e.id}
@@ -83,6 +85,7 @@ export function StockEventsRow({ symbol }: { symbol: string }) {
           </span>
         );
       })}
+      <NewsModal item={modalItem} onClose={() => setModalItem(null)} />
     </div>
   );
 }

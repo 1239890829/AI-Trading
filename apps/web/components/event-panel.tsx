@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
+import { NewsModal, type NewsModalItem } from "@/components/news-modal";
 import { Panel } from "@/components/panel";
 import {
   getEventStocks,
@@ -99,6 +100,7 @@ export function EventPanel() {
   const [items, setItems] = useState<ImpactEvent[] | null>(null);
   const [phase, setPhase] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [modalItem, setModalItem] = useState<NewsModalItem | null>(null);
 
   const load = useCallback(async () => {
     const r = await getImpactEvents(false, 100, "relevance");
@@ -166,9 +168,15 @@ export function EventPanel() {
                   {e.four_label}
                 </span>
                 {e.url ? (
-                  <a href={e.url} target="_blank" rel="noreferrer" className="truncate text-sm text-zinc-800 hover:underline dark:text-zinc-100" title={e.title}>
+                  <button
+                    onClick={() =>
+                      setModalItem({ title: e.title, url: e.url!, date: e.published_at ?? null, source: e.source ?? null, kindLabel: "快讯" })
+                    }
+                    className="truncate text-left text-sm text-zinc-800 hover:underline dark:text-zinc-100"
+                    title={e.title}
+                  >
                     {e.title}
-                  </a>
+                  </button>
                 ) : (
                   <span className="truncate text-sm text-zinc-800 dark:text-zinc-100" title={e.title}>{e.title}</span>
                 )}
@@ -200,6 +208,7 @@ export function EventPanel() {
           ))}
         </ul>
       )}
+      <NewsModal item={modalItem} onClose={() => setModalItem(null)} />
     </Panel>
   );
 }

@@ -12,6 +12,7 @@ from app.api.deps import get_hub
 from app.core.ttl_cache import cache_on
 from app.data_providers.eastmoney import ProviderError
 from app.data_quality.validator import validate_order_book
+from app.market.article import ArticleFetchError, classify_url, fetch_article
 from app.schemas.envelope import (
     AuctionBenchmarkItem,
     AuctionSnapshot,
@@ -952,6 +953,38 @@ async def announcements(
     data = {"symbol": symbol, "items": rows}
     cache.set(key, data)
     return {"data": data, "meta": _meta(hub)}
+
+
+@router.get("/news/content", response_model=Envelope[dict])
+async def news_content(
+    request: Request,
+    url: str = Query(description="资讯原文链接（仅支持白名单域名）"),
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    """资讯正文抓取（弹窗展示）：新闻/快讯解析文章页正文，公告走官方全文 API。
+
+    必须注册在 /news/{symbol} 之前，否则 content 会被吞成股票代码。
+    域名白名单外的 URL 直接 400（SSRF 防护 + 版权边界）。抓取/解析失败
+    返回 502 与原因，前端据此降级为「摘要 + 原文链接」。
+    """
+    try:
+        classify_url(url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    cache = cache_on(request.app.state, "news.content", 600, maxsize=256)
+    hit, cached = cache.get(url)
+    if hit:
+        return {"data": {**cached, "cached": True}, "meta": {**_meta(hub), "cached": True}}
+
+    try:
+        article = await fetch_article(url)
+    except ArticleFetchError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    except Exception as exc:  # 网络层异常统一收敛为可降级失败
+        raise HTTPException(status_code=502, detail=f"正文抓取失败：{exc}")
+    cache.set(url, article)
+    return {"data": article, "meta": _meta(hub)}
 
 
 @router.get("/news/{symbol}")

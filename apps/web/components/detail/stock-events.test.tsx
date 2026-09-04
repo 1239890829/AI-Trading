@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { StockEventsRow } from "./stock-events";
 import type { EventSummary } from "@/lib/api";
 
@@ -8,10 +8,11 @@ afterEach(cleanup);
 
 vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
-  return { ...actual, getEventsForSymbol: vi.fn() };
+  return { ...actual, getEventsForSymbol: vi.fn(), getNewsContent: vi.fn() };
 });
 
 const mockedGet = vi.mocked((await import("@/lib/api")).getEventsForSymbol);
+const mockedContent = vi.mocked((await import("@/lib/api")).getNewsContent);
 
 const event: EventSummary = {
   id: 7,
@@ -32,21 +33,37 @@ const event: EventSummary = {
 };
 
 describe("StockEventsRow", () => {
-  it("渲染相关事件标题、方向与原文链接", async () => {
+  it("渲染相关事件标题与方向，点击打开弹窗（正文 + 原文链接）", async () => {
     mockedGet.mockResolvedValue({ symbol: "600519", themes: [], count: 1, items: [event] });
+    mockedContent.mockResolvedValue({
+      kind: "news",
+      title: event.title,
+      source_label: "东方财富",
+      published: null,
+      paragraphs: ["正文第一段。"],
+      truncated: false,
+      url: event.url,
+    });
 
     render(<StockEventsRow symbol="600519" />);
     await screen.findByText(/沃什鹰派/);
 
     expect(screen.getByText("利空")).toBeTruthy();
-    const link = screen.getByRole("link");
-    expect(link.getAttribute("href")).toBe("https://example.com/news/7");
+
+    // 弹窗化交互：条目是按钮，点击打开 NewsModal 而非外跳
+    fireEvent.click(screen.getByRole("button", { name: /沃什鹰派/ }));
+    const modal = await screen.findByTestId("news-modal");
+    expect(modal).toBeTruthy();
+    await screen.findByText("正文第一段。");
+    const link = screen.getByText("查看原文 ↗").closest("a");
+    expect(link?.getAttribute("href")).toBe("https://example.com/news/7");
   });
 
   it("无相关事件时零占用", async () => {
     mockedGet.mockResolvedValue({ symbol: "600519", themes: [], count: 0, items: [] });
     const { container } = render(<StockEventsRow symbol="600519" />);
-    await waitFor(() => expect(container.textContent).toBe(""));
+    await new Promise((r) => setTimeout(r, 5));
+    expect(container.textContent).toBe("");
   });
 
   it("加载失败静默（不拖垮详情页）", async () => {

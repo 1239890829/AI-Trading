@@ -1775,3 +1775,20 @@ export async function getFundFlowIntraday(): Promise<FundFlowIntraday> {
 export async function getFundFlowHistory(days = 20): Promise<FundFlowHistory> {
   return (await getJson<FundFlowHistory>(`/api/market/fund-flow/history?days=${days}`, 50_000)).data;
 }
+
+// ---------- 资讯正文（弹窗展示，/api/news/content） ----------
+
+export interface ArticleContent {
+  kind: "news" | "notice";
+  title: string | null;
+  source_label: string | null;
+  published: string | null;
+  paragraphs: string[];
+  truncated: boolean;
+  cached?: boolean;
+  url: string;
+}
+
+export async function getNewsContent(url: string): Promise<ArticleContent> {
+  return (await getJson<ArticleContent>(`/api/news/content?url=${encodeURIComponent(url)}`, 20_000)).data;
+}

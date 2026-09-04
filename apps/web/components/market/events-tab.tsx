@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { NewsModal, type NewsModalItem } from "@/components/news-modal";
 import { Panel } from "@/components/panel";
 import { StockPools, directionLabel } from "@/components/event-panel";
 import { getImpactEvents, type EventSort, type ImpactEvent } from "@/lib/api";
@@ -62,6 +63,7 @@ export function EventsTab() {
   const [four, setFour] = useState<string>("all");
   const [tag, setTag] = useState<string>("all");
   const [sort, setSort] = useState<EventSort>("relevance");
+  const [modalItem, setModalItem] = useState<NewsModalItem | null>(null);
   const [l1Only, setL1Only] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
 
@@ -204,9 +206,14 @@ export function EventsTab() {
                   {e.four_label}
                 </span>
                 {e.url ? (
-                  <a href={e.url} target="_blank" rel="noreferrer" className="text-sm text-zinc-800 hover:underline dark:text-zinc-100">
+                  <button
+                    onClick={() =>
+                      setModalItem({ title: e.title, url: e.url!, date: e.published_at ?? null, source: e.source ?? null, kindLabel: "快讯" })
+                    }
+                    className="text-left text-sm text-zinc-800 hover:underline dark:text-zinc-100"
+                  >
                     {e.title}
-                  </a>
+                  </button>
                 ) : (
                   <span className="text-sm text-zinc-800 dark:text-zinc-100">{e.title}</span>
                 )}
@@ -270,6 +277,7 @@ export function EventsTab() {
           ))}
         </ul>
       </div>
+      <NewsModal item={modalItem} onClose={() => setModalItem(null)} />
     </Panel>
   );
 }
