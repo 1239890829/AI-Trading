@@ -36,6 +36,9 @@ data/review/*
 # Local market DB (DuckDB, 367MB, 不入 git —— CI/他机用 sync_marketdb.py 自行回补)
 backend/data/marketdb/
 
+# 资金流日度落盘（运行时本地自积累 + 东财回源缓存，不入 git）
+backend/data/fundflow/
+
 # Agent memory / workspace state
 .workbuddy/
 apps/web/tsconfig.tsbuildinfo

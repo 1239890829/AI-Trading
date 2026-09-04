@@ -8,6 +8,7 @@ import { QualityBadge } from "@/components/quality-badge";
 import { EventPanel } from "@/components/event-panel";
 import { HeatmapTab } from "@/components/market/heatmap-tab";
 import { EventsTab } from "@/components/market/events-tab";
+import { FundTab } from "@/components/market/fund-tab";
 import { indexDetailSymbol } from "@/lib/api";
 import { workbenchUrlWithBack } from "@/lib/routing";
 import {
@@ -47,6 +48,7 @@ const PHASE_STYLE: Record<string, string> = {
 
 const VIEWS = [
   { key: "overview", label: "总览" },
+  { key: "fund", label: "资金" },
   { key: "heatmap", label: "云图" },
   { key: "events", label: "事件" },
 ] as const;
@@ -57,7 +59,8 @@ function MarketInner() {
   const router = useRouter();
   const sp = useSearchParams();
   const raw = sp.get("tab");
-  const view: ViewKey = raw === "heatmap" || raw === "events" ? raw : "overview";
+  const view: ViewKey =
+    raw === "heatmap" || raw === "events" || raw === "fund" ? raw : "overview";
 
   const [indices, setIndices] = useState<Quote[]>([]);
   const [totalAmount, setTotalAmount] = useState<number | null>(null);
@@ -154,6 +157,10 @@ function MarketInner() {
         ) : view === "events" ? (
           <div className="h-full">
             <EventsTab />
+          </div>
+        ) : view === "fund" ? (
+          <div className="h-full">
+            <FundTab />
           </div>
         ) : (
           <div className="flex h-full min-h-0 flex-col gap-2">
@@ -280,11 +287,12 @@ function MarketInner() {
 
           {/* 中部：成交额 1/3 + 涨停速览 2/3（flex-[5] 优先撑高；表格超高时面板内滚动） */}
           <div className="grid min-h-[168px] flex-[5] gap-2 lg:grid-cols-[minmax(250px,1fr)_2fr]">
-            <Panel title="两市成交额" className="min-h-0 overflow-hidden" source={sh?.source} dataTimestamp={sh?.data_timestamp}>
+            <Panel title="两市成交额" className="min-h-0 overflow-hidden" source={sh?.source} dataTimestamp={sh?.data_timestamp}
+              extra={<Link href="/market?tab=fund" className="text-zinc-400 transition-colors hover:text-zinc-900 dark:hover:text-zinc-100">资金详情 ↗</Link>}>
               <div className="flex h-full flex-col justify-center px-4 py-3">
                 <p className="font-mono text-3xl font-semibold tracking-tight">{totalAmount ? fmtAmount(totalAmount) : "--"}</p>
                 <p className="mt-2 text-[11px] leading-relaxed text-zinc-400">
-                  沪深京两市合计（含北交所）。历史趋势图随 Parquet 快照数据积累逐步提供。
+                  沪深京两市合计（含北交所）。实时对比/全日估算/分钟资金流见「资金」Tab。
                 </p>
               </div>
             </Panel>

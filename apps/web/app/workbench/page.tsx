@@ -23,6 +23,7 @@ import {
   getRiskState,
   getSparklines,
   getTodayPicks,
+  getTurnoverToday,
   getWatchlist,
   getWatchlistGroups,
   removeFromWatchlist,
@@ -52,6 +53,8 @@ function WorkbenchInner() {
   const realSymbols = useMemo(() => realData?.items.map((i) => i.symbol) ?? [], [realData]);
   const [indices, setIndices] = useState<Quote[]>([]);
   const [totalAmount, setTotalAmount] = useState<number | null>(null);
+  // 两市成交额 vs 昨日同一时刻增减（亿元）——资金 Tab 顶摘要（2026-09-04）
+  const [turnDiff, setTurnDiff] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   // 以前用 ref 装着再在渲染期读（React 并发渲染下不可靠，且 Next16 的 lint 直接判错）——改为状态
   const [groupMap, setGroupMap] = useState<Record<string, string>>({});
@@ -154,6 +157,12 @@ function WorkbenchInner() {
   }, 30_000);
 
   usePollingFetch(loadBase, 10_000);
+
+  // 成交额增减摘要（60s：后端 30s 缓存 + 新浪分钟K 300s 缓存，此频率零额外压力）
+  usePollingFetch(async () => {
+    const t = await getTurnoverToday().catch(() => null);
+    if (t) setTurnDiff(t.diff_yi);
+  }, 60_000);
 
   // 动态分组数据源（60s：每日精选每日级变化、intraday-top 后端 60s 缓存对齐）。
   // 失败保留旧数据（盘中行情仍在跳，下一次轮询补上），不闪空。
@@ -351,7 +360,21 @@ function WorkbenchInner() {
               ← 返回{backLabel}
             </button>
           )}
-          两市成交额合计：<span className="font-mono tabular-nums text-zinc-700 dark:text-zinc-200">{totalAmount ? fmtAmount(totalAmount) : "--"}</span>
+          <button
+            onClick={() => router.push("/market?tab=fund")}
+            title="查看资金流向详情：实时对比 / 全日估算 / 分钟资金流 / 历史回看"
+            className="flex cursor-pointer items-center gap-1.5 rounded hover:text-zinc-900 dark:hover:text-zinc-100"
+          >
+            两市成交额合计：<span className="font-mono tabular-nums text-zinc-700 dark:text-zinc-200">{totalAmount ? fmtAmount(totalAmount) : "--"}</span>
+            {turnDiff != null && (
+              <span className={`font-mono text-[11px] tabular-nums ${turnDiff >= 0 ? "text-up" : "text-down"}`}>
+                {turnDiff >= 0 ? "+" : ""}
+                {turnDiff.toLocaleString("zh-CN", { maximumFractionDigits: 0 })}亿
+                <span className="ml-0.5 font-sans text-[10px] text-zinc-400">vs 昨日同时刻</span>
+              </span>
+            )}
+            <span aria-hidden className="text-zinc-300 dark:text-zinc-600">↗</span>
+          </button>
         </span>
         <span className="flex items-center gap-3">
           <span>

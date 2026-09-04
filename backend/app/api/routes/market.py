@@ -278,6 +278,77 @@ async def market_heatmap(request: Request, hub: QuoteHub = Depends(get_hub)) -> 
     return payload
 
 
+@router.get("/market/turnover")
+async def market_turnover(hub: QuoteHub = Depends(get_hub)) -> dict:
+    """今日两市成交额（沪深口径）：实时 + 昨日同一时刻对比 + 全日估算 + 分时曲线。
+
+    数据源与降级策略见 app/market/fund_flow.py 模块头。沪深京口径的市场总览
+    total_amount 各自独立、互不冒充。
+    """
+    from app.market.fund_flow import get_turnover_today
+
+    return {"data": await get_turnover_today(hub), "meta": _meta(hub)}
+
+
+@router.get("/market/turnover/history")
+async def market_turnover_history(
+    hub: QuoteHub = Depends(get_hub),
+    days: int = Query(default=10, ge=2, le=20),
+) -> dict:
+    """近 N 个交易日全日成交额 + vs 前一交易日增减（由近及远）。"""
+    from app.market.fund_flow import get_turnover_history
+
+    return {"data": await get_turnover_history(hub, days), "meta": _meta(hub)}
+
+
+@router.get("/market/turnover/day")
+async def market_turnover_day(
+    hub: QuoteHub = Depends(get_hub),
+    date: str = Query(description="交易日 YYYY-MM-DD"),
+) -> dict:
+    """指定历史交易日 vs 前一交易日：全日成交额增减 + 分时累计曲线对比。"""
+    from app.market.fund_flow import get_turnover_day
+
+    try:
+        d = datetime.strptime(date, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"date 格式须为 YYYY-MM-DD：{date!r}") from exc
+    return {"data": await get_turnover_day(hub, d), "meta": _meta(hub)}
+
+
+@router.get("/market/fund-flow/intraday")
+async def market_fund_flow_intraday() -> dict:
+    """今日分钟级资金流累计曲线（沪深合计，五档；延迟约 15 分钟的东财免费口径）。
+
+    历史日的分钟资金流数据源不提供——历史回看走 /market/fund-flow/history（日度）。
+    """
+    from app.market.fund_flow import get_fund_flow_intraday
+
+    return {"data": await get_fund_flow_intraday(), "meta": {}}
+
+
+@router.get("/market/fund-flow")
+async def market_fund_flow() -> dict:
+    """实时资金流五档净额（东财大盘口径：主力/超大/大/中/小单，沪深合计）。
+
+    机构/游资在实时全市场数据源中不存在拆分（仅龙虎榜日度有），不提供臆造字段。
+    """
+    from app.market.fund_flow import get_fund_flow_realtime
+
+    return {"data": await get_fund_flow_realtime(), "meta": {}}
+
+
+@router.get("/market/fund-flow/history")
+async def market_fund_flow_history(
+    hub: QuoteHub = Depends(get_hub),
+    days: int = Query(default=30, ge=5, le=40),
+) -> dict:
+    """日度资金流序列（沪深合计，由近及远；本地落盘优先，落后时拉东财补齐）。"""
+    from app.market.fund_flow import get_fund_flow_history
+
+    return {"data": await get_fund_flow_history(hub, days), "meta": _meta(hub)}
+
+
 @router.get("/market/overview", response_model=Envelope[OverviewPayload])
 async def market_overview(request: Request, hub: QuoteHub = Depends(get_hub)) -> dict:
     """指数行情 + 两市成交额合计。

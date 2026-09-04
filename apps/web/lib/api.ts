@@ -1675,3 +1675,103 @@ export async function runIntradayReview(): Promise<{ brief_date: string; directi
     )
   ).data;
 }
+
+// ==================================================================== 资金流向（市场页 fund tab，2026-09-04）
+
+/** 五档资金净额（亿元）。main=主力（超大+大单），口径为东财大盘资金流。 */
+export interface FlowTier {
+  main: number | null;
+  super_: number | null;
+  big: number | null;
+  mid: number | null;
+  small: number | null;
+}
+
+export interface TurnoverToday {
+  today_amount_yi: number | null;
+  prev_date: string | null;
+  prev_same_time_yi: number | null;
+  prev_total_yi: number | null;
+  diff_yi: number | null;
+  est_full_day_yi: number | null;
+  est_method: "closed" | "prev-dist" | "linear" | null;
+  today_series: { t: string; cum: number }[] | null;
+  prev_series: { t: string; cum: number }[] | null;
+  sina_available: boolean;
+  updated_at: string;
+  degraded: string[];
+}
+
+export interface FundFlowRealtime {
+  available: boolean;
+  reason?: string;
+  as_of: string | null;
+  items?: { total: FlowTier; sh: FlowTier; sz: FlowTier };
+  degraded: string[];
+}
+
+export type FlowIntradayPoint = { t: string } & FlowTier;
+
+export interface FundFlowIntraday {
+  items: FlowIntradayPoint[];
+  updated_at: string;
+  degraded: string[];
+}
+
+export interface FlowHistoryDay extends FlowTier {
+  date: string;
+  close_pct: number | null;
+}
+
+export interface FundFlowHistory {
+  items: FlowHistoryDay[];
+  updated_at: string | null;
+  refreshed?: boolean;
+  degraded: string[];
+}
+
+export interface TurnoverHistoryDay {
+  date: string;
+  total_yi: number | null;
+  prev_total_yi: number | null;
+  diff_yi: number | null;
+}
+
+export interface TurnoverDayCompare {
+  available: boolean;
+  reason?: string;
+  date: string;
+  prev_date: string | null;
+  total_yi: number | null;
+  prev_total_yi: number | null;
+  diff_yi: number | null;
+  series: { t: string; cum: number }[] | null;
+  prev_series: { t: string; cum: number }[] | null;
+  degraded: string[];
+}
+
+export async function getTurnoverToday(): Promise<TurnoverToday> {
+  return (await getJson<TurnoverToday>("/api/market/turnover", 40_000)).data;
+}
+
+export async function getTurnoverDay(date: string): Promise<TurnoverDayCompare> {
+  return (await getJson<TurnoverDayCompare>(`/api/market/turnover/day?date=${date}`, 40_000)).data;
+}
+
+export async function getTurnoverHistory(days = 10): Promise<{ items: TurnoverHistoryDay[]; degraded: string[] }> {
+  return (await getJson<{ items: TurnoverHistoryDay[]; degraded: string[] }>(
+    `/api/market/turnover/history?days=${days}`, 40_000,
+  )).data;
+}
+
+export async function getFundFlowRealtime(): Promise<FundFlowRealtime> {
+  return (await getJson<FundFlowRealtime>("/api/market/fund-flow", 50_000)).data;
+}
+
+export async function getFundFlowIntraday(): Promise<FundFlowIntraday> {
+  return (await getJson<FundFlowIntraday>("/api/market/fund-flow/intraday", 50_000)).data;
+}
+
+export async function getFundFlowHistory(days = 20): Promise<FundFlowHistory> {
+  return (await getJson<FundFlowHistory>(`/api/market/fund-flow/history?days=${days}`, 50_000)).data;
+}
