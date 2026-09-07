@@ -208,6 +208,43 @@ class AkshareExtService:
         return await self._cached("ext-margin-acct", 43200.0, "all", _fetch)
 
 
+    async def zt_pool_previous(self, trade_date: date_cls) -> list[dict]:
+        """昨日涨停今日表现（东财 push2ex 口径，实测稳定）。
+
+        字段含 昨日封板时间/昨日连板数/涨速/振幅——复盘「昨涨停溢价」的交叉校验源
+        （主口径 = 本系统从快照+涨停池推导；本接口为第二口径，两口径不一致 → 显式呈现，不静默择一）。
+        """
+        ak = self._akshare()
+        fn = getattr(ak, "stock_zt_pool_previous_em", None)
+        if fn is None:
+            raise AkshareExtError("source_error", "akshare 无 stock_zt_pool_previous_em 接口")
+
+        def _fetch() -> list[dict]:
+            try:
+                return _df_records(fn(date=_ymd(trade_date)))
+            except Exception as exc:
+                raise AkshareExtError("source_error",
+                                      f"stock_zt_pool_previous_em({_ymd(trade_date)}) 失败：{exc}") from exc
+
+        # TTL 30min：盘中动态、盘后定稿
+        records = await self._cached("ext-zt-prev", 1800.0, _ymd(trade_date), _fetch)
+        out = []
+        for r in records:
+            out.append(
+                {
+                    "symbol": _norm_code(r.get("代码")),
+                    "name": r.get("名称"),
+                    "price": _clean(r.get("最新价")),
+                    "change_pct": _clean(r.get("涨跌幅")),
+                    "prev_seal_time": _clean(r.get("昨日封板时间")),
+                    "prev_boards": _clean(r.get("昨日连板数")),
+                    "turnover": _clean(r.get("成交额")),
+                    "turnover_ratio_pct": _clean(r.get("换手率")),
+                }
+            )
+        return [x for x in out if x["symbol"]]
+
+
 _service = AkshareExtService()
 
 

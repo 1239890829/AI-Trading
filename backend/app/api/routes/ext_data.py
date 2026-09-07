@@ -96,3 +96,50 @@ async def akshare_pool_crosscheck(
             "note": "composite=ths 主源/东财备源；akshare=东财 push2ex 独立第二源。两口径差 2~4 家属正常（收录口径差异），持续偏离才需排查。",
         }
     }
+
+
+@router.get("/ext/akshare/zt-previous")
+async def akshare_zt_previous(
+    date_str: str = Query(alias="date", description="YYYY-MM-DD（昨日涨停的**今日表现**查询日=今天）"),
+    service: AkshareExtService = Depends(get_akshare_ext),
+) -> dict:
+    """昨日涨停今日表现（东财 push2ex，昨日封板时间/连板数/涨速）。
+
+    复盘「昨涨停溢价」的第二口径交叉源：主口径 = 本系统快照+涨停池推导；
+    本接口独立取数，两口径不一致时显式呈现（不静默择一）。
+    """
+    try:
+        trade_date = date.fromisoformat(date_str)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"日期格式非法：{date_str}（需 YYYY-MM-DD）") from exc
+    try:
+        rows = await service.zt_pool_previous(trade_date)
+    except AkshareExtError as exc:
+        return {
+            "data": {
+                "trade_date": trade_date.isoformat(),
+                "available": False,
+                "kind": exc.kind,
+                "detail": exc.detail,
+            }
+        }
+    # 溢价汇总：均值/中位数/翻红率（change_pct 为今日涨跌幅 %）
+    pcts = [r.get("change_pct") for r in rows if isinstance(r.get("change_pct"), (int, float))]
+    summary = {}
+    if pcts:
+        srt = sorted(pcts)
+        summary = {
+            "count": len(pcts),
+            "mean_pct": round(sum(pcts) / len(pcts), 2),
+            "median_pct": round(srt[len(srt) // 2], 2),
+            "red_ratio": round(sum(1 for p in pcts if p > 0) / len(pcts), 3),
+        }
+    return {
+        "data": {
+            "trade_date": trade_date.isoformat(),
+            "available": True,
+            "summary": summary,
+            "rows": rows,
+            "note": "东财 push2ex 口径；与系统主口径（快照+涨停池推导）互为交叉校验。",
+        }
+    }
