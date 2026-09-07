@@ -26,6 +26,7 @@ from pathlib import Path
 from sqlalchemy import select
 
 from app.core.db import utcnow
+from app.market.trading_status import beijing_now
 from app.review.models import (
     ReviewActionItemRow,
     ReviewMetaInsightRow,
@@ -80,7 +81,7 @@ def save_report(session_factory, report: ReviewReport) -> ReviewReport:
     path = _report_path(report.trade_date)
 
     if not report.review_id:
-        report.review_id = f"RV-{report.trade_date}-{datetime.now().strftime('%H%M%S')}"
+        report.review_id = f"RV-{report.trade_date}-{beijing_now().strftime('%H%M%S')}"
 
     # JSON 先落盘：落盘失败就不该写库，避免"库里有报告但文件找不到"
     path.write_text(

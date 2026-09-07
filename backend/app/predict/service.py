@@ -18,6 +18,7 @@ from app.predict.collector import collect_predict_evidence
 from app.predict.engine import ENGINE_VERSION, judge_theme
 from app.predict.schemas import PredictionReport
 from app.predict.storage import apply_verify, get_report, save_report
+from app.market.trading_status import beijing_now
 from app.services.theme_service import parse_theme_tags
 
 log = logging.getLogger(__name__)
@@ -45,7 +46,7 @@ async def run_prediction(
         if not discovered:
             pack["gaps"].append("auto_discover: 热榜个股新闻无 ≥2 股共享关键词，未发现候选主题——建议给 theme_hint 定向预判")
             report = _empty_report(pack, trigger)
-            report.prediction_id = f"PR-{report.target_date}-{datetime.now().strftime('%H%M%S')}"
+            report.prediction_id = f"PR-{report.target_date}-{beijing_now().strftime('%H%M%S')}"
             return save_report(session_factory, report)
         predictions = [
             judge_theme(theme, kws, pack, heuristic=True) for theme, kws in discovered
@@ -73,7 +74,7 @@ async def run_prediction(
         predictions=predictions,
         summary=_summary_line(predictions, used_pack),
     )
-    report.prediction_id = f"PR-{report.target_date}-{datetime.now().strftime('%H%M%S')}"
+    report.prediction_id = f"PR-{report.target_date}-{beijing_now().strftime('%H%M%S')}"
     # 报告级 gap（采集层共用），逐题材 gap 已在各 ThemePrediction.data_gaps
     return save_report(session_factory, report)
 

@@ -26,6 +26,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from app.core.db import get_session_factory
+from app.market.trading_status import beijing_now
 
 log = logging.getLogger(__name__)
 
@@ -190,7 +191,7 @@ class ShadowRunner:
             "bought": bought,
             "skipped": plan["skipped"],
             "cash_after": round(self.engine.ensure_account().cash, 2),
-            "executed_at": datetime.now().astimezone().isoformat(),
+            "executed_at": beijing_now().isoformat(),
         }
         self._persist(summary)
         return summary

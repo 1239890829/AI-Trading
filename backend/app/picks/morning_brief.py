@@ -423,7 +423,7 @@ async def collect_evidence(app_state) -> dict:
 
     return {
         "brief_date": beijing_today().strftime("%Y%m%d"),
-        "generated_at": datetime.now().isoformat(),
+        "generated_at": beijing_now().isoformat(),
         "is_trading_day": (beijing_today() in days) if days else None,
         "phase": phase,
         "promo_percentile": promo,

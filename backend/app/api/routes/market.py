@@ -683,7 +683,7 @@ async def _default_trade_date_async(hub) -> date:
                 except Exception:
                     continue
     if days:
-        now = datetime.now()
+        now = beijing_now()
         today_str = now.strftime("%Y%m%d")
         past = [d for d in days if d <= today_str]
         if past:
@@ -878,7 +878,8 @@ async def longhu(
     trade_date = date.fromisoformat(date_str) if date_str else await _default_trade_date_async(hub)
     # 龙虎榜收盘后 ~17:00 才披露：当日 17:00 前且未显式指定日期时直接回退上一交易日。
     # 不先打当日"必空"请求——空结果会喂熔断器（四源全体进入冷却），拖累整条链。
-    if date_str is None and trade_date == date.today() and datetime.now().time().replace(tzinfo=None) < dt_time(17, 0):
+    now_bj = beijing_now()
+    if date_str is None and trade_date == now_bj.date() and now_bj.time().replace(tzinfo=None) < dt_time(17, 0):
         prev = await _prev_trade_date_async(hub, trade_date)
         if prev is not None:
             trade_date = prev

@@ -20,6 +20,8 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
+
+from app.market.trading_status import beijing_now
 from pydantic import BaseModel, Field
 
 from app.api.deps import require_write_token
@@ -129,7 +131,9 @@ async def impact_events(
         raise HTTPException(status_code=400, detail=f"sort 只支持 relevance/time/impact，收到 {sort!r}")
 
     rows = store.list_events(active_only=True, limit=limit)
-    now = datetime.now()
+    # naive 北京墙钟：与 _parse_dt 产出的 naive published_at 同语义相减（age_h 衰减），
+    # 且与服务器本地时区解耦（P2-2 时区统一）
+    now = beijing_now().replace(tzinfo=None)
     enriched: list[dict] = []
     counts = {"L1": 0, "L2": 0, "L3": 0}
     four_counts: dict[str, int] = {}

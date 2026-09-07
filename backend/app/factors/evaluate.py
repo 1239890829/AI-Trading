@@ -32,6 +32,7 @@ from app.factors.library import (
     HORIZONS_EXEC,
     FactorDef,
 )
+from app.market.trading_status import beijing_now
 
 log = logging.getLogger(__name__)
 
@@ -495,7 +496,7 @@ def run_full_eval(db_path: str | Path, *, out_path: str | Path | None = None) ->
                     )
 
         report = {
-            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "generated_at": beijing_now().isoformat(timespec="seconds"),
             "protocol": {
                 "signal": "T 收盘", "entry": "T+1 收盘（保守执行口径）",
                 "exit": [f"T+{h} 收盘" for h in HORIZONS_EXEC],

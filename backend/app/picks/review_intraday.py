@@ -379,7 +379,7 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
 
     payload["review"] = {
         "context": REVIEW_CONTEXT,
-        "reviewed_at": datetime.now().isoformat(),
+        "reviewed_at": beijing_now().isoformat(),
         "trigger": trigger,
         "pool_date": facts.get("pool_date"),
         "pool_count": facts.get("pool_count"),

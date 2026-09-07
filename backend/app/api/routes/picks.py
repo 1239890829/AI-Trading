@@ -25,6 +25,7 @@ from sqlalchemy import select
 
 from app.api.deps import get_hub, require_write_token
 from app.core.db import get_session_factory
+from app.market.trading_status import beijing_now
 from app.events.store import EventStore
 from app.market import trade_calendar as tc
 from app.market.tech_score import score_stock, sma
@@ -744,7 +745,7 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
         "market_pct": market_pct,
         "limit_up_count": len(lu_ctx["records"]),
         "market_max_boards": lu_ctx["market_max_boards"],
-        "generated_at": datetime.now().isoformat(),
+        "generated_at": beijing_now().isoformat(),
     }
     with _db() as db:
         from app.models.daily_pick import DailyPickSet
