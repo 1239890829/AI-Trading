@@ -26,6 +26,10 @@ ratio_e = (C_prev - 分红 + 配股价×配股比) / (C_prev × (1 + 送转比 +
 - 预签名 URL 有效期 ~5 分钟，拿到立刻下载，绝不缓存 URL
 - 增量数据落后 >7 个交易日时 daily-k-10d 盖不住缺口，改用 --full
 - 增量入库按 (thscode, date_ms) 去重：本脚本按「重叠交易日整段删除重插」
+
+质量/新鲜度校验（2026-09-07 移植自上游官方 `python/marketdb` SDK，MIT）：
+- 8 条 SQL 质量检查（行数/主键唯一/high≥low/OHLC 非负/复权事件主键），error 级失败 → 同步报错退出
+- freshness：增量同步前按交易日历算滞后天数，>7（与 daily-k-10d 覆盖窗口一致）拒绝增量，提示 --full
 """
 from __future__ import annotations
 
@@ -224,6 +228,81 @@ def rebuild_adj(con: duckdb.DuckDBPyConnection) -> dict:
     return {"rows": total, "rebuild_s": round(time.monotonic() - t0, 1)}
 
 
+# ---- 质量/新鲜度校验（移植自上游官方 marketdb SDK，MIT；适配本仓 date_ms schema）----
+
+#: (check 名, severity, SQL)。SQL 返回行 = 违规；error 级违规 → 同步失败退出。
+_QUALITY_CHECKS: list[tuple[str, str, str]] = [
+    ("daily_k.rowcount_positive", "error",
+     "SELECT 'daily_k empty' FROM (SELECT 1) WHERE NOT EXISTS (SELECT 1 FROM daily_k LIMIT 1)"),
+    ("daily_k.thscode_not_null", "error",
+     "SELECT 'rows missing thscode', COUNT(*) FROM daily_k WHERE thscode IS NULL HAVING COUNT(*) > 0"),
+    ("daily_k.date_not_null", "error",
+     "SELECT 'rows missing date_ms', COUNT(*) FROM daily_k WHERE date_ms IS NULL HAVING COUNT(*) > 0"),
+    ("daily_k.pk_unique", "error",
+     "SELECT thscode, date_ms, COUNT(*) FROM daily_k "
+     "GROUP BY thscode, date_ms HAVING COUNT(*) > 1 LIMIT 10"),
+    ("daily_k.high_ge_low", "error",
+     "SELECT thscode, date_ms, high_price, low_price FROM daily_k "
+     "WHERE high_price < low_price LIMIT 10"),
+    ("daily_k.ohlc_non_negative", "error",
+     "SELECT thscode, date_ms FROM daily_k WHERE open_price < 0 OR high_price < 0 "
+     "OR low_price < 0 OR close_price < 0 LIMIT 10"),
+    ("daily_k.volume_non_negative", "warn",
+     "SELECT thscode, date_ms FROM daily_k WHERE volume < 0 OR turnover < 0 LIMIT 10"),
+    ("adjust_factor.pk_unique", "error",
+     "SELECT thscode, ex_date_ms, COUNT(*) FROM adjust_factor "
+     "GROUP BY thscode, ex_date_ms HAVING COUNT(*) > 1 LIMIT 10"),
+]
+
+
+def run_quality_checks(con: duckdb.DuckDBPyConnection) -> list[dict]:
+    """跑全部质量检查。返回违规列表（空 = 通过）；不抛异常（三态：结果显式呈现）。"""
+    issues: list[dict] = []
+    for name, severity, sql in _QUALITY_CHECKS:
+        try:
+            rows = con.execute(sql).fetchall()
+        except Exception as exc:  # noqa: BLE001 —— 检查自身失败也是显式问题
+            issues.append({"check": name, "severity": "error",
+                           "detail": f"check failed: {exc}", "sample": []})
+            continue
+        if rows:
+            issues.append({"check": name, "severity": severity,
+                           "detail": str(rows[0][0]) if isinstance(rows[0][0], str) else "violations found",
+                           "sample": [list(r) for r in rows[:10]]})
+    return issues
+
+
+def freshness_lag_days(con: duckdb.DuckDBPyConnection, trade_days_ms: list[int]) -> int:
+    """本地最新交易日落后目标日历多少个交易日（目标=日历最后一天）。
+
+    :param trade_days_ms: 升序交易日 date_ms 列表（调用方由 trade_calendar 转换）
+    :return: 滞后交易日数；空表返回 len(trade_days_ms)（全缺）
+    """
+    row = con.execute("SELECT MAX(date_ms) FROM daily_k").fetchone()
+    local_max = row[0] if row and row[0] else None
+    if local_max is None:
+        return len(trade_days_ms)
+    target = trade_days_ms[-1] if trade_days_ms else local_max
+    return sum(1 for d in trade_days_ms if local_max < d <= target)
+
+
+def _calendar_days_ms(limit: int = 400) -> list[int]:
+    """交易日历 → 升序 date_ms 列表（UTC+8 零点，与 dump 口径一致）。失败返回 []（跳过检查）。"""
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        from app.market.trade_calendar import trading_days
+
+        tz8 = timezone(timedelta(hours=8))
+        days = trading_days()
+        out = [int(datetime(d.year, d.month, d.day, tzinfo=tz8).timestamp() * 1000)
+               for d in days]
+        return sorted(out)[-limit:]
+    except Exception as exc:  # noqa: BLE001 —— 日历不可用不阻塞同步，仅跳过新鲜度检查
+        print(f"warn: 交易日历不可用，跳过 freshness 检查：{exc}", file=sys.stderr)
+        return []
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--full", action="store_true", help="全量拉 10 年日K（首次/缺口>7 交易日）")
@@ -246,6 +325,19 @@ def main() -> int:
     con = duckdb.connect(str(DB_PATH))
     con.execute(_SCHEMA)
     report: dict = {}
+
+    # 增量前置新鲜度门槛（官方语义：滞后超覆盖窗口拒绝增量，强制重拉全量）
+    if do_daily and not args.full:
+        days_ms = _calendar_days_ms()
+        if days_ms:
+            lag = freshness_lag_days(con, days_ms)
+            report["freshness_lag_days"] = lag
+            if lag > 7:
+                print(f"拒绝增量：本地数据滞后 {lag} 个交易日（>7，daily-k-10d 盖不住缺口）。"
+                      f"请改用 --full 重拉全量。", file=sys.stderr)
+                con.close()
+                return 3
+
     with httpx.Client(trust_env=False, follow_redirects=True) as client:
         try:
             if do_daily:
@@ -260,7 +352,19 @@ def main() -> int:
             return 1
         if not args.no_adj:
             report["adj"] = rebuild_adj(con)
+
+    # 收尾质量检查：error 级违规 → 同步判定失败（数据不干净 ≠ 同步成功）
+    issues = run_quality_checks(con)
     con.close()
+    if issues:
+        report["quality_issues"] = issues
+        errs = [i for i in issues if i["severity"] == "error"]
+        for i in issues:
+            print(f"[quality:{i['severity']}] {i['check']} — {i['detail']} sample={i['sample'][:3]}",
+                  file=sys.stderr)
+        if errs:
+            print(f"质量检查 {len(errs)} 项 error 级违规，同步判定为失败。", file=sys.stderr)
+            return 4
 
     for k, v in report.items():
         print(f"[{k}] {v}")
