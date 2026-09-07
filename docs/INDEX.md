@@ -75,7 +75,7 @@
 | 文档 | 摘要 |
 |---|---|
 | repo-deep-research-20260907.md | trading 分组 17 仓深度调研 + 功能盘点 + 孤立功能清单 + P0/P1/P2 计划 |
-| live-trading-guosen-plan.md | 国信 miniQMT 实盘接入：门槛/分步/风控红线/灰度序列 |
+| live-trading-guosen-plan.md | 国信 miniQMT 实盘接入：门槛/分步/风控红线/灰度序列（**已搁置 09-07，恢复条件见文档头**） |
 
 ## 5. 健康检查与复盘存档
 
