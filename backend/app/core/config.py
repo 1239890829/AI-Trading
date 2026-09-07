@@ -102,6 +102,14 @@ class Settings(BaseSettings):
     ths_sentinel_enabled: bool = True
     ths_sentinel_interval_seconds: float = 900.0
 
+    # ---- 东财 7x24 快讯流（hotspot-pipeline P0①：G1 全市场快讯源）----
+    # 连续竞价 15s / 盘外 60s 轮询东财宏观快讯 → build_event 指纹去重入
+    # EventStore（事件 tab 即消费层，不开新存储）；双域 failover；失败不缓存
+    # （游标不推进，下轮重拉）。性能红线：单源单端点，抽取纯函数。
+    flash_news_enabled: bool = True
+    flash_news_interval_seconds: float = 15.0
+    flash_news_eod_interval_seconds: float = 60.0
+
     # ---- 盘中情绪监控（sentiment P2 #14，参考 daben-review）----
     # 交易时段周期探测三类纯规则 P0 事件：高度板(≥4板)炸板 / 炸板率连续破
     # 40% / 指数 15min 急杀（上证-0.8%/创业板-1.2%）→ AlertEvent 告警；

@@ -430,6 +430,14 @@ async def lifespan(app: FastAPI):
                 name="marketdb-sync",
             )
 
+    # --- 东财 7x24 快讯流（hotspot-pipeline G1/P0①）：宏观快讯 → build_event → EventStore ---
+    flash_stop = asyncio.Event()
+    flash_task = None
+    if settings.flash_news_enabled:
+        from app.news.flash import flash_news_loop
+
+        flash_task = asyncio.create_task(flash_news_loop(app, stop=flash_stop), name="news-flash")
+
     # --- LLM 网关健康探针（2026-09-06）：区分额度不足/网关失败，避免静默降级 ---
     llm_probe_stop = asyncio.Event()
     llm_probe_task = None
@@ -474,6 +482,8 @@ async def lifespan(app: FastAPI):
         marketdb_stop.set()
     if llm_probe_task is not None:
         llm_probe_stop.set()
+    if flash_task is not None:
+        flash_stop.set()
     await _reap(poller, name="quote-poller")
     await _reap(snapshotter, name="market-snapshot")
     await _reap(matcher, name="paper-matcher")
@@ -490,6 +500,7 @@ async def lifespan(app: FastAPI):
     await _reap(shadow_task, name="picks-shadow")
     await _reap(marketdb_task, name="marketdb-sync")
     await _reap(llm_probe_task, name="llm-gateway-probe")
+    await _reap(flash_task, name="news-flash")
     with contextlib.suppress(Exception, TimeoutError):
         await asyncio.wait_for(provider.aclose(), timeout=_SHUTDOWN_GRACE_SECONDS)
     if app.state.theme_catalog is not None:

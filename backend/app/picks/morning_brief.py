@@ -299,6 +299,7 @@ def assemble_brief(evidence: dict) -> dict:
             "is_trading_day": evidence.get("is_trading_day"),
         },
         "missing": evidence.get("missing") or [],
+        "macro_note": evidence.get("macro_note"),
         "performance_skipped": perf_skipped,
         "directions": directions,
         "alerts": [],  # 盘中 watcher 追加（append_alert，当日去重）
@@ -414,6 +415,15 @@ async def collect_evidence(app_state) -> dict:
         log.warning("brief evidence: sentiment failed: %s", exc)
         missing.append(f"情绪环境不可用（{exc}）")
 
+    # 宏观日历提醒（hotspot-pipeline G6/P0：非农日先验标注，零外呼纯规则）
+    macro_note: str | None = None
+    try:
+        from app.events.chains import macro_calendar_note
+
+        macro_note = macro_calendar_note(beijing_today())
+    except Exception as exc:
+        log.warning("brief evidence: macro calendar failed: %s", exc)
+
     return {
         "brief_date": beijing_today().strftime("%Y%m%d"),
         "generated_at": datetime.now().isoformat(),
@@ -428,6 +438,7 @@ async def collect_evidence(app_state) -> dict:
         "event_symbols": event_symbols,
         "event_symbol_names": names,
         "missing": missing,
+        "macro_note": macro_note,
     }
 
 

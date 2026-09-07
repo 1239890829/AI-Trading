@@ -14,6 +14,8 @@ import hashlib
 import re
 from datetime import datetime, timezone
 
+from app.events.chains import match_chains
+
 # ---------------------------------------------------------------- 人工维护表（显式，非静默推断）
 
 #: 实体别名表：标题关键词 → 官方目录题材名。人工维护（维护成本可控、可审计），
@@ -199,12 +201,47 @@ def extract_symbol_direction(title: str, symbol: str) -> dict | None:
     }
 
 
+def _dedupe_chain_rows(rows: list[dict], chain_rows: list[dict]) -> list[dict]:
+    """合并传导链行，与已有 target 语义重复的跳过。
+
+    「互相包含」判定零依赖（events 不 import services 层）：alias「算力」⊂
+    链行「东数西算(算力)」视为同一关联，保留先到的 alias/name 行。
+    """
+    out = list(rows)
+    for cr in chain_rows:
+        if any(_dedupe_same(cr["target"], r["target"]) for r in out):
+            continue
+        out.append(cr)
+    return out
+
+
+def _dedupe_same(a: str, b: str) -> bool:
+    return bool(a) and bool(b) and (a in b or b in a)
+
+
+def _demote_if_proposed(directions: list[dict], certainty: str) -> None:
+    """论文/实验室级（certainty=proposed）事件整体不给高分（hotspot §3.3/§5）。
+
+    原地修改：direction 保留（含 0 行——关联事实不变），strength 一律压到 1。
+    """
+    if certainty == "proposed":
+        for d in directions:
+            d["strength"] = min(int(d.get("strength") or 1), 1)
+
+
 def build_event(title: str, *, source: str | None = None, url: str | None = None,
                 published_at: datetime | None = None, source_symbol: str | None = None,
                 is_announcement: bool = False, theme_names: list[str] | None = None) -> dict:
     """新闻行 → EventCard + directions 组合 dict（纯函数入口）。"""
     fact_kind, certainty = classify_certainty(title)
     category = classify_category(title)
+    base_rows = extract_directions(title, theme_names or [])
+    directions = _dedupe_chain_rows(base_rows, match_chains(title))
+    if source_symbol:
+        symbol_row = extract_symbol_direction(title, source_symbol)
+        if symbol_row is not None:
+            directions.append(symbol_row)
+    _demote_if_proposed(directions, certainty)
     return {
         "fingerprint": title_fingerprint(title),
         "title": title.strip(),
@@ -218,6 +255,5 @@ def build_event(title: str, *, source: str | None = None, url: str | None = None
         "half_life_hours": HALF_LIFE.get(category, HALF_LIFE["other"]),
         "source_symbol": source_symbol,
         "status": "active",
-        "directions": extract_directions(title, theme_names or [])
-        + ([extract_symbol_direction(title, source_symbol)] if source_symbol else []),
+        "directions": directions,
     }
