@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import date, datetime, timedelta, timezone
@@ -33,6 +34,29 @@ from app.review.schemas import (
 log = logging.getLogger(__name__)
 
 CST = timezone(timedelta(hours=8))
+
+# 等待快照首轮就绪的上界：收盘后数据已不再变化，等一会儿换完整维度更划算，
+# 但不能无限等——复盘是定时任务，卡死比缺数据更糟。
+_SNAPSHOT_WAIT_TIMEOUT = 120.0
+_SNAPSHOT_WAIT_INTERVAL = 5.0
+
+
+async def _await_snapshot_breadth(snapshot_service) -> dict:
+    """有界等待快照服务首轮刷新完成，返回 breadth（超时仍空则返回 {}）。
+
+    只等、不自己触发刷新：refresh 由 snapshot_service.run() 独占调度，
+    复盘侧重复触发会和它抢新浪配额（K 线三源全断的前科就是高频请求触发）。
+    """
+    waited = 0.0
+    while waited < _SNAPSHOT_WAIT_TIMEOUT:
+        await asyncio.sleep(_SNAPSHOT_WAIT_INTERVAL)
+        waited += _SNAPSHOT_WAIT_INTERVAL
+        b = snapshot_service.breadth_payload().get("breadth")
+        if b:
+            log.info("review collector: snapshot ready after %.0fs wait", waited)
+            return b
+    log.warning("review collector: snapshot still empty after %.0fs", waited)
+    return {}
 
 
 def to_cst_date(dt: datetime | None) -> str | None:
@@ -98,12 +122,21 @@ async def collect_market(
     try:
         payload = snapshot_service.breadth_payload()
         b = payload.get("breadth")
+        if not b:
+            # 复盘调度固定 15:30 触发，快照服务是独立异步任务。后端若刚重启过，
+            # 首轮全市场刷新（新浪 56 页）可能尚未完成，此时 breadth 为空 →
+            # 宽度与情绪双双记 block，market 维度整天空转。
+            # 2026-09-07 实测：进程约 15:29 启动，采集 15:30:06 读到空 breadth，
+            # 快照 15:30:07 才落盘——只差 1 秒。#69/#111 曾标 applied 却复发，
+            # 根因就在这里（当时只做了排查建议，没有等待/重试）。
+            b = await _await_snapshot_breadth(snapshot_service)
         if b:
             breadth = dict(b)
         else:
             gaps.append(DataGap(
                 field="breadth", source="snapshot_service.breadth_payload",
-                reason="全市场快照尚未就绪", impact="market.宽度与情绪", severity="block",
+                reason="全市场快照尚未就绪（已等待 %.0fs）" % _SNAPSHOT_WAIT_TIMEOUT,
+                impact="market.宽度与情绪", severity="block",
             ))
     except Exception as exc:
         gaps.append(DataGap(
