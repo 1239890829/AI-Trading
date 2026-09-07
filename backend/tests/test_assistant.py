@@ -569,3 +569,64 @@ def test_chat_route_includes_market_block(client, monkeypatch):
     })
     assert resp.status_code == 200
     assert "## 实时数据快照" in captured[0] and "600519" in captured[0]
+
+
+# ---------------------------------------------------------------- 接地校验 P2-F
+
+
+def _mock_snapshot(client, monkeypatch):
+    """注入茅台快照 → market_block 进入证据池。"""
+    monkeypatch.setattr(assistant_routes, "_entity_payload",
+                        lambda _req: {"stocks": [{"name": "贵州茅台", "code": "600519"}], "themes": []})
+
+    async def fake_batch(hub, syms):
+        return [_mk_quote()]  # 现价 1500.5 / 涨跌幅 2.35%
+
+    from app.api.routes import market as market_routes
+    monkeypatch.setattr(market_routes, "_batch_quotes", fake_batch)
+
+
+def test_chat_route_grounding_flags_fabricated_number(client, monkeypatch):
+    """回答引用快照里不存在的价格 → grounding 事件带 EVIDENCE_NOT_FOUND。"""
+    monkeypatch.setattr(assistant_routes, "_open_stream",
+                        lambda msgs: _FakeStream(["贵州茅台现价 1888.8 元，走势强劲。"]))
+    _mock_snapshot(client, monkeypatch)
+    resp = client.post("/api/assistant/chat", json={
+        "messages": [{"role": "user", "content": "贵州茅台现在多少？"}],
+    })
+    evs = _parse_sse(resp.text)
+    g = [e for e in evs if e.get("type") == "grounding"]
+    assert len(g) == 1
+    assert g[0]["violations"], "编造价格 1888.8 必须被判违例"
+    assert any(v["code"] == "EVIDENCE_NOT_FOUND" and "1888.8" in v["detail"]
+               for v in g[0]["violations"])
+    # 非阻断：done 仍在最后，违例事件在 done 之前
+    assert evs[-1] == {"type": "done"}
+    assert evs.index(g[0]) < len(evs) - 1
+
+
+def test_chat_route_grounding_silent_when_supported(client, monkeypatch):
+    """回答数字全部有据（1500.5 在快照里）→ 无 grounding 事件（零噪音）。"""
+    monkeypatch.setattr(assistant_routes, "_open_stream",
+                        lambda msgs: _FakeStream(["贵州茅台现价 1500.5 元。"]))
+    _mock_snapshot(client, monkeypatch)
+    resp = client.post("/api/assistant/chat", json={
+        "messages": [{"role": "user", "content": "贵州茅台现在多少？"}],
+    })
+    evs = _parse_sse(resp.text)
+    assert not [e for e in evs if e.get("type") == "grounding"]
+    assert evs[-1] == {"type": "done"}
+
+
+def test_chat_route_grounding_skipped_without_evidence(client, monkeypatch):
+    """没有注入任何数据时跳过校验（无基准即校验=全盘误杀，宁缺勿滥）。"""
+    monkeypatch.setattr(assistant_routes, "_open_stream",
+                        lambda msgs: _FakeStream(["今天涨了 88.8 个点，听起来不错 38 家。"]))
+    monkeypatch.setattr(assistant_routes, "_entity_payload",
+                        lambda _req: {"stocks": [], "themes": []})  # 无字典 → 无快照
+    resp = client.post("/api/assistant/chat", json={
+        "messages": [{"role": "user", "content": "随便聊聊"}],
+    })
+    evs = _parse_sse(resp.text)
+    assert not [e for e in evs if e.get("type") == "grounding"]
+    assert evs[-1] == {"type": "done"}

@@ -11,6 +11,18 @@ SSE 事件契约（每事件一行 `data: {json}\n\n`）：
                                             LLMFailure，hint 是可行动提示——
                                             quota 提示充值，gateway_error 提示
                                             稍后重试，不再笼统一句"调用失败"
+- {"type":"grounding","violations":[{code,detail},..]}
+                                            流结束后对完整回答的接地校验结果；
+                                            仅在存在违例时发送（无违例不发，
+                                            零噪音）。非阻断：流式文本已渲染，
+                                            事后撤回会破坏一致性——语义是
+                                            "以下数字未经本次注入数据佐证"，
+                                            前端可据此显示提示徽标（可忽略，
+                                            未知事件类型天然跳过）。校验器：
+                                            app/core/grounding（EVIDENCE_NOT_FOUND
+                                            编造数字 / OUT_OF_SCOPE_INFERENCE
+                                            指令性建议）；证据池 = 注入的行情
+                                            快照块 + 工具真实返回。
 - {"type":"done"}                            终态
 
 客户端断开 → StreamingResponse 取消生成器 → asyncio.CancelledError →
@@ -39,6 +51,7 @@ from app.assistant.tools import (
     strip_tool_calls,
 )
 from app.core.config import settings
+from app.core.grounding import grounding_violations
 from app.core.llm_client import ChatStream, LLMError, hint_for, stream_chat_completion
 
 log = logging.getLogger(__name__)
@@ -235,6 +248,7 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
             "sources": market_sources,
         })
         messages = _build_messages(req, market_block, tools_enabled=tools_enabled)
+        tool_block: str | None = None  # 工具真实返回——grounding 证据池的第二部分
         try:
             sink: list[str] = []
             # 第一轮：启用工具时走收集模式（开头可能是 {{tool:...}}，剥离后才给前端）
@@ -247,6 +261,7 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
                 ctx = tool_ctx
                 if ctx is not None:
                     block, used = await run_tool_calls(calls, ctx)
+                    tool_block = block
                     log.info("assistant tools used=%s", used)
                     yield _sse({"type": "tools", "used": used})
                     followup = messages + [
@@ -258,6 +273,19 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
                     # 第二轮：不再允许工具（防止无限循环）
                     async for chunk in _stream_round(followup, collect=True, sink=sink):
                         yield chunk
+
+            # 接地校验（P2-F，Vibe-Trading grounding gate 思想）：对用户实际看到的
+            # 全部文本（各轮 strip 工具标记后拼接）做数字/指令越权校验。流式场景
+            # 文本已渲染，非阻断留痕——违例发 grounding 事件，无违例零噪音。
+            # 证据池 = 注入的行情快照块 + 工具真实返回；两者都空时跳过（没有
+            # 数据就没有"编造 vs 有据"的判定基准，校验只会全盘误杀）。
+            answer_text = "".join(strip_tool_calls(part) for part in sink)
+            evidence_texts = [t for t in (market_block, tool_block) if t]
+            if answer_text.strip() and evidence_texts:
+                violations = grounding_violations(answer_text, evidence_texts)
+                if violations:
+                    log.warning("assistant grounding violations=%s", violations)
+                    yield _sse({"type": "grounding", "violations": violations})
             yield _sse({"type": "done"})
         except asyncio.CancelledError:
             # 客户端断开（点了停止/关窗/跳页）：底层传输由 _stream_round 的 finally 关闭
