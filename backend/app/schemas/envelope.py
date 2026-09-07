@@ -246,8 +246,8 @@ class SentimentHistoryPayload(BaseModel):
 
 class SparklineItem(BaseModel):
     symbol: str
-    closes: list[float]  # 近 N 个交易日收盘（升序，供前端自绘迷你曲线）
-    period_change_pct: float  # 区间涨跌幅 %（末根/首根-1）
+    closes: list[float]  # daily=近 N 个交易日收盘升序；minute=当日 1 分钟分时价格序列（盘外=最近交易日）
+    period_change_pct: float  # daily=区间涨跌幅 %（末根/首根-1）；minute=相对当日开盘变动 %（口径不同，勿混用）
 
 
 class SparklinePayload(BaseModel):

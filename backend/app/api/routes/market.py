@@ -121,50 +121,90 @@ async def sparkline(
     hub: QuoteHub = Depends(get_hub),
     symbols: str = Query(description="逗号分隔的 6 位代码，最多 50 只"),
     days: int = Query(default=30, ge=10, le=90),
+    period: str = Query(default="daily", description="daily=近 N 日日K收盘 | minute=当日 1 分钟分时价格"),
 ) -> dict:
-    """自选列表迷你走势（retro #9）：批量 TDX 日K 收盘序列。
+    """自选列表迷你走势（retro #9）：批量收盘序列（日K 或当日分时，二选一）。
 
-    进程内缓存 5 分钟（日K 级别无需更短）；单只拉取失败直接跳过（不臆造）。
+    period=daily（默认）：近 N 日 TDX 日K收盘，进程内缓存 5 分钟（日K 级别无需更短）。
+    period=minute：当日 1 分钟分时价格（2026-09-07 用户要求列表迷你图展示当日分时），
+    与 /minute-line 同源同口径（composite 腾讯主源 + TDX 备源），盘外返回最近
+    交易日全天序列；缓存 60s（分钟级数据，前端 60s 轮询打缓存兜底）。
+    单只拉取失败直接跳过（不臆造）。
     """
     syms = [s.strip().zfill(6) for s in symbols.split(",") if s.strip()]
     syms = [s for s in syms if s.isdigit() and len(s) == 6][:50]
     if not syms:
         raise HTTPException(status_code=400, detail="symbols 非法")
+    if period not in ("daily", "minute"):
+        raise HTTPException(status_code=400, detail="period 仅支持 daily/minute")
 
-    from app.market.tdx_kline import tdx_daily_bars
-
-    cache = cache_on(request.app.state, "market.sparkline", 300, maxsize=64)
-    key = (tuple(syms), days)
+    cache = cache_on(request.app.state, "market.sparkline", 300 if period == "daily" else 60, maxsize=64)
+    key = (tuple(syms), days if period == "daily" else 0, period)
     hit, payload = cache.get(key)
     if hit:
         # model_copy 标注 cached，不改共享缓存对象
         return {"data": payload.model_copy(update={"cached": True}), "meta": _meta(hub)}
 
-    # TDX 日K 是同步文件读（评审 B4）：50 只串行最坏 50 次磁盘 IO 卡事件循环，
-    # 丢线程池并行（Semaphore 限 8，避免一次性打开过多 TDX 文件句柄）
+    if period == "minute":
+        items = await _minute_sparkline_items(hub, syms)
+    else:
+        from app.market.tdx_kline import tdx_daily_bars
+
+        # TDX 日K 是同步文件读（评审 B4）：50 只串行最坏 50 次磁盘 IO 卡事件循环，
+        # 丢线程池并行（Semaphore 限 8，避免一次性打开过多 TDX 文件句柄）
+        sem = asyncio.Semaphore(8)
+
+        async def load_one(sym: str) -> SparklineItem | None:
+            async with sem:
+                try:
+                    bars = await asyncio.to_thread(tdx_daily_bars, sym, days + 2)
+                except Exception as exc:
+                    log.warning("sparkline %s failed: %s", sym, exc)
+                    return None
+            closes = [b["close"] for b in (bars or [])][-days:]
+            if len(closes) < 5 or not closes[0]:
+                return None
+            return SparklineItem(
+                symbol=sym,
+                closes=closes,
+                period_change_pct=round((closes[-1] / closes[0] - 1) * 100, 2),
+            )
+
+        items = [it for it in await asyncio.gather(*(load_one(s) for s in syms)) if it is not None]
+
+    payload = SparklinePayload(items=items)
+    cache.set(key, payload)
+    return {"data": payload, "meta": _meta(hub)}
+
+
+async def _minute_sparkline_items(hub, syms: list[str]) -> list[SparklineItem]:
+    """minute 模式：逐只当日分时价格序列（composite 自带腾讯主源 + TDX 备源）。
+
+    Semaphore 限 8：自选集合整批并发直打腾讯分时端点，N 大时可能触发 WAF，
+    与日K 模式的并发纪律一致；单只失败跳过（不臆造），主源异常由 composite 切源。
+    """
     sem = asyncio.Semaphore(8)
 
     async def load_one(sym: str) -> SparklineItem | None:
         async with sem:
             try:
-                bars = await asyncio.to_thread(tdx_daily_bars, sym, days + 2)
+                points = await hub.provider.get_minute_line(sym)
             except Exception as exc:
-                log.warning("sparkline %s failed: %s", sym, exc)
+                log.warning("sparkline(minute) %s failed: %s", sym, exc)
                 return None
-        closes = [b["close"] for b in (bars or [])][-days:]
+        closes = [p["price"] for p in points if p.get("price") is not None]
         if len(closes) < 5 or not closes[0]:
             return None
+        # 口径说明：minute 模式的 period_change_pct 是「相对当日开盘」的变动
+        # （daily 模式才是区间涨跌）；前端列表行定色用的是行情 change_pct（vs 昨收），
+        # 不消费该字段——两口径不混用。
         return SparklineItem(
             symbol=sym,
             closes=closes,
             period_change_pct=round((closes[-1] / closes[0] - 1) * 100, 2),
         )
 
-    items = [it for it in await asyncio.gather(*(load_one(s) for s in syms)) if it is not None]
-
-    payload = SparklinePayload(items=items)
-    cache.set(key, payload)
-    return {"data": payload, "meta": _meta(hub)}
+    return [it for it in await asyncio.gather(*(load_one(s) for s in syms)) if it is not None]
 
 
 @router.get("/market/sentiment-history", response_model=Envelope[SentimentHistoryPayload])

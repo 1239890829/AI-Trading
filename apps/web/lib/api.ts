@@ -715,7 +715,9 @@ export async function runBacktest(req: {
 
 export interface SparklineItem {
   symbol: string;
+  /** daily=近 N 日收盘升序；minute=当日 1 分钟分时价格（盘外=最近交易日全天） */
   closes: number[];
+  /** daily=区间涨跌 %；minute=相对当日开盘变动 %（前端列表定色用行情 change_pct，不消费此字段） */
   period_change_pct: number;
 }
 
@@ -724,9 +726,15 @@ export interface SparklinePayload {
   cached: boolean;
 }
 
-/** 批量迷你走势：近 N 日 TDX 日K收盘。后端缓存 5 分钟；失败标的缺省。 */
-export async function getSparklines(symbols: string[], days = 30): Promise<SparklinePayload> {
-  return (await getJson<SparklinePayload>(`/api/sparkline?symbols=${symbols.join(",")}&days=${days}`, 30_000)).data;
+/** 批量迷你走势（2026-09-07 起自选列表默认 minute=当日分时）：后端缓存 daily 5min / minute 60s；失败标的缺省。 */
+export async function getSparklines(
+  symbols: string[],
+  days = 30,
+  period: "daily" | "minute" = "daily",
+): Promise<SparklinePayload> {
+  return (
+    await getJson<SparklinePayload>(`/api/sparkline?symbols=${symbols.join(",")}&days=${days}&period=${period}`, 30_000)
+  ).data;
 }
 
 /** ---------------------------------------------------------------- 选股器（Phase 5） */

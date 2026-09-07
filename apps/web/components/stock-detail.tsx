@@ -541,13 +541,17 @@ export function StockDetailPanel({
       {/* ① 紧凑行情条（指数隐藏加自选：sh000001 不是合法自选股代码） */}
       {quote && <QuoteStrip quote={quote} inWatchlist={inWatchlist} onAdd={() => void add()} hideWatchlist={isIndex} tradingStatus={tradingStatus} />}
 
-      {/* ①¼ 实时连接状态（2026-09-03 恢复展示：此前 hook 返回的 status 被丢弃，
-          详情页成了唯一"在用 WS 却看不到连接状态"的页面；文案与工作台共享同源） */}
-      <div className="shrink-0 text-[10px]">
-        <span className={STREAM_STATUS_LABEL[streamStatus].cls} title="行情连接状态（WebSocket 主通道，断线自动降级 REST 轮询）">
-          ● {STREAM_STATUS_LABEL[streamStatus].text}
-        </span>
-      </div>
+      {/* ①¼ 实时连接状态：只在异常态显示（2026-09-07 用户要求去掉"● 休市 ·
+          展示最近交易日数据"——休市与正常推送都是"一切正常"的正常态，常驻
+          显示是视觉噪音，数据过期本身已有 QuoteStrip 质量徽标兜底；真正的
+          异常态 connecting/polling/stale/error 必须可见） */}
+      {streamStatus !== "closed" && (
+        <div className="shrink-0 text-[10px]">
+          <span className={STREAM_STATUS_LABEL[streamStatus].cls} title="行情连接状态（WebSocket 主通道，断线自动降级 REST 轮询）">
+            ● {STREAM_STATUS_LABEL[streamStatus].text}
+          </span>
+        </div>
+      )}
 
       {/* ①½ 题材归属 chips（官方成分 / 涨停归因双源）→ 题材看板聚焦 */}
       <ThemeChipsRow themes={stockThemes} />

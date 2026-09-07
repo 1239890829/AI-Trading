@@ -36,6 +36,7 @@ import {
   type SparklinePayload,
 } from "@/lib/api";
 import { fmt, fmtAmount, isHardQuality, pctColor, pctText } from "@/lib/format";
+import { isTradingSession } from "@/lib/market-hours";
 import { subscribeWatchlist, notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import { LAST_SYMBOL_KEY, originLabel, workbenchUrl } from "@/lib/routing";
 import type { Quote } from "@/types/market";
@@ -219,7 +220,10 @@ function WorkbenchInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [feedSymbols]);
 
-  // 迷你走势（retro #9）：日K 级别，随自选变化拉取，独立 5 分钟刷新
+  // 迷你走势（retro #9）：2026-09-07 起为当日分时价格（period=minute，用户要求
+  // 列表迷你图展示当日分钟级走势，而非近 30 日日K 收盘）。盘中 60s 轮询（与
+  // 图表校准同节奏）；盘外分时是最近交易日终态——已有数据时跳过拉取（零外呼，
+  // 时段判定见 lib/market-hours.ts），首帧/自选集合变化仍无条件立即拉。
   const [sparks, setSparks] = useState<SparklinePayload | null>(null);
   const sparkKey = symbols.join(",");
   // 自选清空 → 渲染期同步清 sparkline 缓存（防上一组残留，adjust-state 模式）
@@ -229,14 +233,15 @@ function WorkbenchInner() {
   // sparkKey 变化 → 立即拉取（.then 回调里 setState，不在 effect 同步路径）
   useEffect(() => {
     if (symbols.length === 0) return;
-    getSparklines(symbols, 30).then(setSparks).catch(() => {});
+    getSparklines(symbols, 30, "minute").then(setSparks).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sparkKey]);
-  // 5 分钟兜底刷新（拉取失败保持旧序列）
+  // 盘中 60s 刷新（拉取失败保持旧序列；盘外已有数据时跳过——不重拉不变的数据）
   usePollingFetch(async () => {
-    const s = await getSparklines(symbols, 30).catch(() => null);
+    if (sparks && !isTradingSession()) return;
+    const s = await getSparklines(symbols, 30, "minute").catch(() => null);
     if (s) setSparks(s);
-  }, 300_000);
+  }, 60_000);
 
   // 分组清单由 groupMap 派生（旧代码是独立的 groups 状态，从未被赋值，chips 永远只有「全部」）
   // 「每日精选」「盘中跟踪」是动态分组的保留名，用户分组里排除（防 chips 重名撞 key）
@@ -577,7 +582,11 @@ function WorkbenchInner() {
               )}
             </p>
           ) : (
-            <table className="w-full text-sm">
+            /* 2026-09-07 文字挤压修复：table-fixed + 明确列宽。此前 auto 布局下
+               迷你图(72px)/价格/涨跌/徽标列占满 340px 左栏，名称列被压到 ~51px
+               内容区，4 字简称也换行（行高实测撑到 72px）。名称列 auto 吸收剩余
+               宽度（340px 下 ≈98px，容纳 5 字简称），超长名 truncate + title 兜底。 */
+            <table className="w-full table-fixed text-sm">
               <tbody>
                 {activeRows.map((q) => {
                   const pick = activeGroup === "每日精选" ? pickInfoBySymbol.get(q.symbol) : undefined;
@@ -590,8 +599,8 @@ function WorkbenchInner() {
                       activeSymbol === q.symbol ? "bg-zinc-50 dark:bg-zinc-900" : ""
                     }`}
                   >
-                    <td className="px-3 py-2">
-                      <div className="font-mono text-xs text-zinc-400">
+                    <td className="min-w-0 px-3 py-2">
+                      <div className="truncate font-mono text-xs text-zinc-400">
                         {q.symbol}
                         {pick != null && (
                           <span
@@ -612,11 +621,14 @@ function WorkbenchInner() {
                           </span>
                         )}
                       </div>
-                      <div>{q.name ?? "--"}</div>
+                      <div className="truncate" title={q.name ?? undefined}>{q.name ?? "--"}</div>
                     </td>
-                    <td className="hidden px-1 py-2 sm:table-cell">
+                    <td className="hidden w-[52px] px-1 py-2 sm:table-cell" title="当日分时（盘外展示最近交易日）">
                       {pick != null || top != null ? (
-                        <span className="text-[10px] text-zinc-400">
+                        <span
+                          className="block truncate text-[10px] text-zinc-400"
+                          title={pick != null ? (pick.echelon_role ?? "") : `确定性 ${(top?.certainty?.level) ?? "?"} · 辨识度 ${(top?.distinctiveness?.level) ?? "?"}`}
+                        >
                           {pick != null
                             ? pick.echelon_role ?? ""
                             : `确定性 ${(top?.certainty?.level) ?? "?"} · 辨识度 ${(top?.distinctiveness?.level) ?? "?"}`}
@@ -626,7 +638,7 @@ function WorkbenchInner() {
                           value={groupMap[q.symbol] ?? "默认"}
                           onClick={(e) => e.stopPropagation()}
                           onChange={(e) => void changeGroup(q.symbol, e.target.value)}
-                          className="rounded border border-zinc-200 bg-transparent px-1 py-0.5 text-xs dark:border-zinc-700"
+                          className="w-full min-w-0 rounded border border-zinc-200 bg-transparent px-1 py-0.5 text-xs dark:border-zinc-700"
                           aria-label={`修改 ${q.symbol} 分组`}
                         >
                           {allGroups.map((g) => (
@@ -634,15 +646,19 @@ function WorkbenchInner() {
                           ))}
                         </select>
                       ) : (
-                        <Sparkline closes={sparkBySymbol.get(q.symbol) ?? []} />
+                        <Sparkline
+                          closes={sparkBySymbol.get(q.symbol) ?? []}
+                          up={q.change_pct == null ? undefined : q.change_pct >= 0}
+                          width={44}
+                        />
                       )}
                     </td>
-                    <td className="px-2 py-2 text-right font-mono tabular-nums">
-                      {q.price == null ? <span className="text-xs font-sans text-zinc-400">未开盘</span> : <PriceFlash value={q.price}>{fmt(q.price)}</PriceFlash>}
+                    <td className="w-[76px] px-1.5 py-2 text-right font-mono text-xs tabular-nums">
+                      {q.price == null ? <span className="font-sans text-zinc-400">未开盘</span> : <PriceFlash value={q.price}>{fmt(q.price)}</PriceFlash>}
                     </td>
-                    <td className={`px-2 py-2 text-right font-mono text-xs tabular-nums ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</td>
-                    <td className="px-1 py-2 text-right">{isHardQuality(q.quality) && <QualityBadge quality={q.quality} reasons={q.quality_reasons} />}</td>
-                    <td className="pr-2 text-right">
+                    <td className={`w-[58px] px-1 py-2 text-right font-mono text-xs tabular-nums ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</td>
+                    <td className="w-[44px] px-0.5 py-2 text-right">{isHardQuality(q.quality) && <QualityBadge quality={q.quality} reasons={q.quality_reasons} />}</td>
+                    <td className="w-[22px] pr-1.5 text-right">
                       {!pick && !top && (
                         <button
                           onClick={(e) => {

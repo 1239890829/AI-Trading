@@ -36,7 +36,7 @@ export function QualityBadge({ quality, reasons }: { quality: Quality; reasons?:
   const title = reasons && reasons.length > 0 ? reasons.map((r) => REASON_LABELS[r] ?? r).join("; ") : undefined;
   if (closed) {
     return (
-      <span title={title} className="rounded px-1.5 py-0.5 text-xs text-zinc-400">
+      <span title={title} className="whitespace-nowrap rounded px-1.5 py-0.5 text-xs text-zinc-400">
         休市
       </span>
     );
