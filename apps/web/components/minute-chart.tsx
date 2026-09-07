@@ -332,13 +332,18 @@ export function MinuteChart({
     lastPointsRef.current = cur;
 
     if (hasBase) {
-      // ---- 纵轴区间（2026-09-04 用户需求）----
-      // 有板块涨跌幅限制 → 恒为全限制区间 [跌停价, 涨停价]：涨停虚线贴顶、跌停
-      // 贴底，各板块比例一致；指数/无法识别 → 回退当日波幅对称区间（原口径）。
+      // ---- 纵轴区间（2026-09-04 用户需求；2026-09-07 刻度锚定修正）----
+      // 有板块涨跌幅限制 → 恒为全限制区间：左右轴均按名义 ±lim 精确锚定
+      // （price = prevClose×(1+pct/100) 线性同锚，昨收恒居正中）——左轴刻度
+      // 恰好 ±10/±20/±30/±5。此前用四舍五入后的实际涨跌停价反推百分比，
+      // 低价股出现 ±10.24%/±9.76% 类偏差刻度（2026-09-07 用户指出跌停侧
+      // 仍残留百分之十几）。涨停/跌停虚线画在名义价，与交易所四舍五入后的
+      // 实际涨跌停价差 <0.005 元，视觉无差。指数/无法识别 → 回退当日波幅
+      // 对称区间（原口径）。
       const lim = limitPct != null && limitPct > 0 ? limitPct : null;
-      // 涨停/跌停价按 A 股惯例四舍五入到分，并直接作为可视区间端点——虚线恰好贴边不裁剪
-      const limUp = lim != null ? Math.round(prevClose! * (1 + lim / 100) * 100) / 100 : null;
-      const limDn = lim != null ? Math.max(Math.round(prevClose! * (1 - lim / 100) * 100) / 100, 0) : null;
+      // 名义涨跌停价（仅作坐标锚点与虚线位置，不做分位四舍五入）
+      const limUp = lim != null ? prevClose! * (1 + lim / 100) : null;
+      const limDn = lim != null ? Math.max(prevClose! * (1 - lim / 100), 0) : null;
       let hi = -Infinity;
       let lo = Infinity;
       for (const p of cur) {
@@ -399,20 +404,16 @@ export function MinuteChart({
         });
       }
 
-      // 左轴涨跌幅与右轴价格严格同锚（跌停↔下限、昨收↔0、涨停↔上限），
-      // 十字线/网格两侧一致；回退模式维持 ±halfPct 对称
-      const pctLow = limUp != null && limDn != null ? ((limDn - prevClose!) / prevClose!) * 100 : null;
-      const pctHigh = limUp != null ? ((limUp - prevClose!) / prevClose!) * 100 : null;
-      // 叠加曲线钳制带：限制模式取限制区间两端的较大绝对值，回退模式取对称半幅
-      const halfPct =
-        pctHigh != null && pctLow != null
-          ? Math.max(Math.abs(pctHigh), Math.abs(pctLow))
-          : (half / prevClose!) * 100;
+      // 左轴涨跌幅与右轴价格严格同锚（price = prevClose×(1+pct/100)）：
+      // 限制模式刻度精确等于名义限制（跌停↔-lim、昨收↔0、涨停↔+lim），
+      // 2026-09-07 修正：不再用实际涨跌停价反推（分位四舍五入导致刻度偏差）；
+      // 回退模式维持 ±halfPct 对称
+      const halfPct = lim != null ? lim : (half / prevClose!) * 100;
       s.pct?.applyOptions({
         autoscaleInfoProvider: () => ({
           priceRange:
-            pctHigh != null && pctLow != null
-              ? { minValue: pctLow, maxValue: pctHigh }
+            lim != null
+              ? { minValue: -lim, maxValue: lim }
               : { minValue: -halfPct, maxValue: halfPct },
         }),
       });
