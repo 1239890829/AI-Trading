@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>系统健康度审查报告 · 2026-09-07</title>
+<style>
+  :root{
+    --ink:#1a1f2e; --sub:#5a6478; --bg:#f6f7fa; --card:#ffffff; --line:#e4e8f0;
+    --red:#c2413b; --red-bg:#fdf1f0; --amber:#b26a00; --amber-bg:#fdf6ea;
+    --green:#1f7a4d; --green-bg:#eef7f1; --blue:#2563eb; --blue-bg:#eef3fd;
+    --purple:#6d4fc2; --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;background:var(--bg);color:var(--ink);line-height:1.65;padding:32px 16px}
+  .wrap{max-width:1060px;margin:0 auto}
+  header{margin-bottom:28px}
+  h1{font-size:26px;letter-spacing:.5px}
+  .meta{color:var(--sub);font-size:13px;margin-top:6px}
+  h2{font-size:19px;margin:34px 0 14px;padding-bottom:8px;border-bottom:2px solid var(--line)}
+  h3{font-size:15.5px;margin:18px 0 8px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin-bottom:14px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:16px 0}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .stat .num{font-size:24px;font-weight:700}
+  .stat .lbl{font-size:12px;color:var(--sub);margin-top:2px}
+  .score{display:flex;align-items:center;gap:18px}
+  .score .big{font-size:44px;font-weight:800;color:var(--blue)}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin:10px 0}
+  th{background:#f0f2f7;text-align:left;padding:8px 10px;font-weight:600;border-bottom:2px solid var(--line);white-space:nowrap}
+  td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  code{font-family:var(--mono);font-size:12px;background:#f0f2f7;border:1px solid var(--line);border-radius:4px;padding:1px 5px;word-break:break-all}
+  .tag{display:inline-block;font-size:11px;font-weight:600;border-radius:20px;padding:2px 10px;margin-right:6px;white-space:nowrap}
+  .t-red{background:var(--red-bg);color:var(--red)}
+  .t-amber{background:var(--amber-bg);color:var(--amber)}
+  .t-green{background:var(--green-bg);color:var(--green)}
+  .t-blue{background:var(--blue-bg);color:var(--blue)}
+  .t-gray{background:#eef0f4;color:var(--sub)}
+  .loc{font-family:var(--mono);font-size:12px;color:var(--purple)}
+  .evi{font-family:var(--mono);font-size:12px;background:#f7f8fb;border-left:3px solid var(--line);padding:6px 10px;margin:8px 0;border-radius:0 6px 6px 0;white-space:pre-wrap;word-break:break-all}
+  .warn{background:var(--amber-bg);border-left:3px solid var(--amber);padding:8px 12px;border-radius:0 6px 6px 0;font-size:13px;margin:8px 0}
+  .ok{background:var(--green-bg);border-left:3px solid var(--green);padding:8px 12px;border-radius:0 6px 6px 0;font-size:13px;margin:8px 0}
+  .note{color:var(--sub);font-size:12.5px}
+  .plan-row td:first-child{white-space:nowrap;font-weight:600}
+  footer{margin-top:40px;color:var(--sub);font-size:12px;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>系统健康度审查报告</h1>
+  <div class="meta">审查日期 2026-09-07 · 方法：4 路并行代码扫描（重复实现 / 数据源残留 / 死代码 / 旧决策）+ 关键发现逐项人工复核 · 本报告只评估与规划，不擅自实施任何修改</div>
+</header>
+
+<h2>一、总评</h2>
+<div class="card">
+  <div class="score">
+    <div class="big">86<span style="font-size:20px;color:var(--sub)"> /100</span></div>
+    <div>
+      <div><span class="tag t-green">代码卫生 A−</span>171 个后端 .py 全量双向验证，仅 3 个孤儿函数 + 2 个死端点；0 死配置、0 前端孤儿组件</div>
+      <div style="margin-top:6px"><span class="tag t-amber">数据源治理 B</span>1 处硬规则违规（板块 clist 双调用方绕过 board_flow）+ f109 残留 1 处</div>
+      <div style="margin-top:6px"><span class="tag t-amber">架构重复治理 B+</span>6 个重复簇，最重的是涨跌停判定 5 处、盘中窗口多处口径并存</div>
+      <div style="margin-top:6px"><span class="tag t-amber">决策新鲜度 B+</span>9 项过时模式（多为小成本可修）+ 7 处文档滞后（含 2 项「实际已修但缺陷清单未销账」）</div>
+    </div>
+  </div>
+  <p class="note" style="margin-top:12px">整体判断：系统经过 6 周快速迭代后处于<b>健康偏上</b>状态。前几轮治理（fetch 收口、交易日历单入口、绩效指标共享库、provider 熔断统一）成效显著；本次发现的问题集中在「治理规则的边界外溢」——新模块复制旧模式、规则文档化后代码未跟进。全部发现均附文件：行号证据；标注 <span class="tag t-blue">亲验</span> 的为本轮 grep/读码逐条复核过。</p>
+</div>
+
+<h2>二、系统全貌（盘点基线）</h2>
+<div class="grid">
+  <div class="stat"><div class="num">37,751</div><div class="lbl">后端 app/ 行数（21 个子包）</div></div>
+  <div class="stat"><div class="num">20,219</div><div class="lbl">前端 TS/TSX 行数</div></div>
+  <div class="stat"><div class="num">100</div><div class="lbl">后端测试文件</div></div>
+  <div class="stat"><div class="num">136</div><div class="lbl">API 路由条数</div></div>
+  <div class="stat"><div class="num">60+</div><div class="lbl">docs/ 设计与复盘文档</div></div>
+  <div class="stat"><div class="num">9</div><div class="lbl">运维脚本（3 个被 automation 活跃调度）</div></div>
+</div>
+<div class="card">
+  <b>模块分布</b>：后端最重的五块为 api/ 5515 · market/ 5865 · picks/ 5676 · services/ 4732 · data_providers/ 2789；前端为 components/ 12914 · lib/ 3909 · app/ 2759。核心基建（ttl_cache / trade_calendar / performance / provider 熔断）均已单点化——这是本轮重复扫描确认「非重复」清单里最重要的一条。
+</div>
+
+<h2>三、发现明细</h2>
+
+<h3>维度 1 · 冗余与重复（6 簇）</h3>
+
+<div class="card">
+  <h3>R1 涨跌停幅度判定 — 5 处独立实现 <span class="tag t-red">最散</span> <span class="tag t-blue">亲验</span></h3>
+  <div class="loc">backend/app/data_quality/validator.py:15 · market/breadth.py:9 · sentiment/engine.py:121 · picks/halt_risk.py:90 · apps/web/lib/price-limit.ts:9</div>
+  <div class="evi">breadth.py 与 engine.py 的 _limit_pct 逐行相同（300/301/688/689→20，43/83/87/92→30，ST→5，其余→10）</div>
+  <p><b>差异</b>：单位不一致（validator 0.20 小数 vs 其余 20.0 百分数）；前端含指数段 88 前缀、后端四处均无。breadth 另有 ±0.15 浮点容差与 N/C 新股豁免等实测修正。<b>方案</b>：后端收口单一 <code>limit_pct(symbol, name)</code>（放 market/ 规则模块），breadth/engine 直接 import；halt_risk 的 ST 优先级差异合并前需单独确认。<b>风险</b>：单位不同绝不能盲合；容差/豁免语义必须随迁。</p>
+</div>
+
+<div class="card">
+  <h3>R2 盘中/交易时段窗口 — 后端 6 处口径并存 <span class="tag t-blue">亲验</span></h3>
+  <div class="loc">services/quote_hub.py:19（09:15–15:05 宽窗）· market/board_flow.py:91（与 quote_hub 同口径，真重复）· market/trade_calendar.py:231 in_trading_window()（连续竞价严窗）· market/trading_status.py:46 · market/fund_flow.py（分钟映射）· picks/intraday_rules.py:90</div>
+  <p><b>方案</b>：以 trade_calendar 为唯一时段模块，导出宽窗/严窗两个函数（不强行合一——语义确实不同）；board_flow 改 import。前端 minute-chart.tsx:67 与 intraday_rules.py:90 的分钟 clamp 公式逐字相同，属跨语言重复，留对照测试即可。<b>风险</b>：低，行为等价重构。</p>
+</div>
+
+<div class="card">
+  <h3>R3 「hub 缓存优先→miss 腾讯直查→50/批」补价模式 — 7 处同构循环</h3>
+  <div class="loc">api/routes/real_position.py:49（已局部抽 _quotes_for）· api/routes/picks.py:80 · api/routes/market.py:1067 · picks/daily_review.py:42 · picks/morning_brief.py:324 · api/routes/theme_catalog.py:249 · events/ranking.py:253</div>
+  <p><b>方案</b>：把 real_position._quotes_for 上移为共享（quote_hub 方法或 services/quote_enrich），7 处改用；吞错策略统一为「记日志不中断」。部分处硬编码 <code>p.name == "tencent"</code> 选源需参数化。<b>风险</b>：低。</p>
+</div>
+
+<div class="card">
+  <h3>R4 技术指标前后端双实现 <span class="tag t-gray">有意保留</span></h3>
+  <div class="loc">apps/web/lib/technical-analysis.ts:29-74 vs backend/app/market/tech_score.py:42-91（另 backtest.py:134 _sma_at）</div>
+  <p>口径当前一致（RSI 同为简单均值法）。已知偏差：patterns() 前端 chgOf 优先 change_pct、后端用 (close−open)/open（tech_score.py:102 注释承认近似）。<b>方案</b>：不抽共享（跨语言），补「同一组黄金样本 K 线、前后端输出断言一致」的对照测试防漂移。</p>
+</div>
+
+<div class="card">
+  <h3>R5 TTL 缓存手写旁路（绕过 core/ttl_cache.py）</h3>
+  <div class="loc">market/trade_calendar.py:54-55,170-213（自写 monotonic+Lock）· services/heatmap_service.py:22-75（time.time() 手搓）· services/llm_probe.py:141 · picks/watcher.py:348</div>
+  <p>不进 live_caches() 观测，健康端点统计不到。<b>方案</b>：trade_calendar / heatmap_service 改用 TTLCache（保留 invalidate 钩子与双检锁语义）；llm_probe / watcher 语义特殊可保留。<b>风险</b>：低。</p>
+</div>
+
+<div class="card">
+  <h3>R6 前端百分比格式化 5 处复制</h3>
+  <div class="loc">lib/format.ts:45（正主）· market/heatmap-tab.tsx:107 · detail/theme-chips.tsx:18 · minute-chart.tsx:68 · kline-chart-pro.tsx:432 + workbench/page.tsx:454 内联</div>
+  <p>仅 minute-chart 的 fmtPct 对 +0.00% 有符号口径微差。<b>方案</b>：统一 import format.ts 的 pctText；heatmap 的 pctColor 与 format.ts 同名函数语义不同，建议改名避免混淆。<b>风险</b>：纯展示，低。</p>
+</div>
+
+<div class="ok">排除项（排查过、确认已单点化，不属重复）：provider failover/熔断（composite.py 统一承载）· 回测绩效（market/performance.py 共享库，三处回测各自范式不同）· 交易日历（trade_calendar 单入口）· 前端 fetch（已收口 lib/api.ts）· 行情缓存（QuoteHub 唯一写入口）。</div>
+
+<h3>维度 2 · 数据源治理</h3>
+
+<div class="card">
+  <h3>D1 get_board_metrics 直连东财板块 clist — 资金流向硬规则违规 <span class="tag t-red">P0</span> <span class="tag t-blue">亲验</span></h3>
+  <div class="loc">backend/app/data_providers/eastmoney.py:298-314（BOARD_HOST=push2delay，/api/qt/clist/get，含 f62 资金字段）</div>
+  <div class="evi">调用方 1：theme_service.py:844 _pick_provider(provider,"EastmoneyProvider") → :850 get_board_metrics(kind)
+调用方 2：watcher.py:326-334 p.name=="eastmoney" → get_board_metrics(kind)（概念+行业两轮）
+provider_capabilities.py:146 自述「watcher/theme_service 直调」——已知例外，但违反 fund-flow-redesign.md「任何模块不得自行请求东财板块接口」</div>
+  <p><b>方案</b>：两处调用方改走 board_flow（watcher 只需 f3 涨幅、theme 用 chg_*，board_flow 现值已覆盖；board_flow 有 push2→push2delay 双域 failover，可用性不低于现状）；get_board_metrics 删除或降级为 board_flow 薄封装。<b>影响范围</b>：题材看板 _board_index、选股 watcher _board_pcts。<b>风险</b>：中——两处对 chg_3d/5d/10d 字段名的依赖需同步映射。</p>
+</div>
+
+<div class="card">
+  <h3>D2 f109 字段序推断残留 — 替换不彻底 <span class="tag t-blue">亲验</span></h3>
+  <div class="loc">eastmoney.py:301（字段串）、:366（"chg_5d": _num(it.get("f109"))）</div>
+  <p>P1-6 已实证 f109 推断不可信（创新药官方 +0.10% vs 推断 −4.78%）；board_flow.py:22、dragon_service.py:629 均已弃用自算，仅此处保留兜底。market.py:1400 _verify_board_multi_day 会用 ths 官方 K 线覆盖并标 chg_*_inferred，属<b>有据兜底而非静默残留</b>。<b>方案</b>：随 D1 收敛后整体删除 f109/f110 解析键；ths 未命中的题材降级为 unknown。<b>风险</b>：低。</p>
+</div>
+
+<div class="card">
+  <h3>D3 能力选择绕过注册表 — 硬编码类名/源名</h3>
+  <div class="loc">theme_service.py:792,844,868,886 · watcher.py:326 · ladder_check.py:57 · picks_intraday.py:187 · theme_catalog.py:65</div>
+  <p>「谁有什么能力」应查 provider_capabilities 注册表，这些点按类名字符串选源，注册表变动会静默失效。<b>方案</b>：_pick_provider 改为先查 providers_supporting(method)、类名兜底。<b>风险</b>：低（行为等价）。</p>
+</div>
+
+<div class="card">
+  <h3>D4 文档漂移：data-sources.md §0 默认链已过时 <span class="tag t-blue">亲验</span></h3>
+  <p>文档写「默认链 chain(tencent→eastmoney)」，实际 core/config.py:17-19 默认主源 ths + 备源 tencent,eastmoney,sina，且 sina 已入 1Hz 对冲组（realtime_rank=1）。<b>方案</b>：更新 §0，避免新接手者按旧链路理解路由。</p>
+</div>
+
+<div class="ok">留档无害项（有证据、已标注，不动）：eastmoney get_kline 仍在 composite 第三备源位（本机 0.1s 快速失败+熔断，注册表已如实标注）· minute_backfill.py sina 仅一次性回填 CLI · akshare push2ex 定位为独立交叉校验第二源 · scripts/ 9 个脚本均为 CLI 留档（build_push_cards.py 由外部 automation 15:40 活跃调度）。</div>
+
+<h3>维度 3 · 死代码（总量很小）</h3>
+
+<div class="card">
+  <h3>C1 两个零引用死端点 <span class="tag t-blue">亲验</span></h3>
+  <div class="loc">market.py:1004 /adjustment-events/{symbol}（全仓 0 引用；底层 provider 方法被 minute_backtest.py 调用须保留，死的只是 HTTP 壳）· market.py:1208 /limit-break（仅 test_response_envelope.py 调 handler）</div>
+  <p><b>方案</b>：删除两个路由（约 20 行）；/limit-break 删除需同步改 1 个测试。<b>风险</b>：低；删前建议观察一周 access log 防外部 automation 直连。</p>
+</div>
+
+<div class="card">
+  <h3>C2 前端 api.ts 孤儿导出 5 个（约 49 行）<span class="tag t-blue">亲验</span></h3>
+  <div class="loc">getScreener(13行) · getEvents(1078 行起，16行) · getLonghuDetail · getThemeIndex · listActionItems</div>
+  <p class="note">词边界 grep 全前端 0 外部引用（getKline 疑似孤儿实为 getKlinePayload 前缀误命中，已排除；getEvents 与 getEventsForSymbol 相互独立，后者被 stock-events.tsx 活跃使用须保留）。<b>风险</b>：低，纯删除。</p>
+</div>
+
+<div class="card">
+  <h3>C3 后端孤儿函数 3 个</h3>
+  <div class="loc">heatmap_service.py:26,33 invalidate_industry_cache + get_industry_map 同步版（docstring 称留给「非 async 场景」但该场景不存在，路由只用 async 版）· news/flash.py:126 poll_stats（观测性心跳，0 调用）</div>
+  <p><b>方案</b>：前两个安全删除（约 15 行）；poll_stats 删前确认不再需要人工验收。<b>风险</b>：低。</p>
+</div>
+
+<div class="card">
+  <h3>C4 灰色地带（不建议动，仅记录）</h3>
+  <p><b>factors/candidates.py</b>（239 行，0 import）是因子登记册制度性数据文件，被治理文档引用，建议保留或迁 YAML。<b>data_providers/base.py</b> Protocol（54 行，0 引用）可让各 provider 显式继承以激活类型检查，否则删。<b>vendor wheel jsonpath</b> 疑似传递依赖，需 pipdeptree 反查后再动。<b>ashare.db 0 字节残留</b>（system-review 挂账）可直接删。<b>eslint 在 dependencies</b>（应 devDependencies）是位置错误非死代码。</p>
+</div>
+
+<h3>维度 4 · 旧决策与过时模式（9 项）</h3>
+
+<div class="card">
+  <h3>O1 盘前简报证据池自指 — 09-04 定案缺陷未修 <span class="tag t-red">P0</span> <span class="tag t-blue">亲验</span></h3>
+  <div class="evi">morning_brief.py:177  if anchor == now.date() and (now.hour, now.minute) &lt; (9, 25):  return tc.prev_trade_date(days, anchor)</div>
+  <p>09:25 后生成简报时取当日盘中池冒充「上一交易日」。<b>方案</b>：去掉时间条件，anchor==today 即回退 prev_trade_date，加 evidence_pool_basis 口径字段。约 5 行，风险低。</p>
+</div>
+
+<div class="card">
+  <h3>O2 盘中情绪监控硬编码阈值绕过 band_config <span class="tag t-blue">亲验</span></h3>
+  <div class="loc">sentiment/intraday_monitor.py:89 check_break_rate(threshold=0.40) · :165 break_rate_threshold: float = 0.40</div>
+  <p>P0-3a 已把 engine 阈值配置化+历史分位校准，本模块未跟进；绝对阈值在市场扩容后会漂移（system-review §4.1 已证死档）。<b>方案</b>：走 resolve_bands() 与 engine 同口径。风险低。</p>
+</div>
+
+<div class="card">
+  <h3>O3 fund_flow / board_flow 自建 httpx + 手写重试，绕过 provider 链熔断</h3>
+  <div class="loc">market/fund_flow.py:65（模块级 AsyncClient）+ :396,:552 for attempt in range(3) · board_flow.py:486 同款 <span class="tag t-blue">亲验</span></div>
+  <p>composite.py:64-69 已有统一熔断冷却；fund-flow-redesign.md 自认「不走 provider 链」是已知债，09-07 的 board_flow 复制了同一模式。<b>方案</b>：抽公共 retry 或接入 provider 链；短期至少文档化豁免理由。<b>风险</b>：中——无熔断易复现 08-31 K 线全断事故。</p>
+</div>
+
+<div class="card">
+  <h3>O4 竞价快照 ths 单源（09-04 N2 未修）· O5 影子持仓 skip 不留痕（N4 部分）· O6 梯队阶段系数无大盘相位约束（N7）</h3>
+  <div class="loc">ths.py:436 唯一实现（429 即闸门 5/5 unknown）· picks/shadow.py:134 skipped 早退无 _persist · picks/echelon.py:45-47 系数查表无退潮打压</div>
+  <p>三项均为 09-04 复盘定案缺陷，后续迭代未覆盖。方案维持原定案：竞价增备源+data_status 字段（中成本）；shadow 每分支落盘 skipped_reason（小）；大盘退潮/冰点时梯队系数上限压 1.0（小）。</p>
+</div>
+
+<div class="card">
+  <h3>O7 时区双轨制 — 13 处裸 datetime.now()</h3>
+  <div class="loc">正确范式 market/trading_status.py:52 beijing_now()（9 文件在用）；裸调用残留 api/routes/market.py:687 · picks/review_intraday.py:382 · picks/morning_brief.py:429 等 13 处</div>
+  <p><b>方案</b>：统一 beijing_now()，杜绝服务器时区依赖。机械替换，风险低。</p>
+</div>
+
+<div class="card">
+  <h3>O8 except Exception: pass 静默吞错 — 违反「错误单独计数」纪律</h3>
+  <div class="loc">api/routes/picks.py:428,452 · picks/daily_review.py:76（组合 items 解析失败静默置空）· sentiment/metric_history.py:172 · assistant/tools.py:149（llm_client.py 两处有 noqa 豁免）</div>
+  <p><b>方案</b>：至少 log.debug(exc_info=True) 计数；daily_review.py:76 应降级标注而非静默空列表。风险低。</p>
+</div>
+
+<div class="card">
+  <h3>O9 告警冷却半实现 <span class="tag t-blue">亲验（修正 agent 结论）</span></h3>
+  <div class="loc">models/alert.py:26 cooldown_seconds 字段已落库（default=300）；但 market/alert_engine.py 全文无冷却判定逻辑；盘中情绪监控有自己的 _alert_epochs 冷却（intraday_monitor.py:361-367）</div>
+  <p>即：存储字段建了、通用引擎没接线，只有 intraday_monitor 一处生效。<b>方案</b>：alert_engine 补 last_triggered_at 判定消费 cooldown_seconds 字段。风险低。</p>
+</div>
+
+<h3>文档滞后修正表（防「按文档办事」踩坑）</h3>
+<div class="card">
+<table>
+  <tr><th>文档说</th><th>代码实际</th></tr>
+  <tr><td>daily-review/2026-09-04 §6.4 N1 交易日历质量闸门「待实施」</td><td><b>已实现</b>：trade_calendar.py:83 _persist_if_better（天数&lt;旧值×0.5 拒绝覆盖）+ :215 挂入 trading_days <span class="tag t-blue">亲验</span></td></tr>
+  <tr><td>同 §6.4 N5 告警冷却「待实施」</td><td><b>半实现</b>：intraday_monitor 冷却生效；models/alert.py:26 字段已建但 alert_engine 未消费（见 O9）</td></tr>
+  <tr><td>同 §6.4 N6 复盘未自动调用逐股归因</td><td><b>已接线</b>：review/service.py:99-105 前置串联 generate_daily_review；09-07 复盘记的「未调」实为空组合 ValueError 走 skip 分支</td></tr>
+  <tr><td>system-review §六.2 停牌标识「待拍板」</td><td><b>已完整落地</b>（trading_status.py + 前端 suspended-badge），文档内部自相矛盾</td></tr>
+  <tr><td>architecture-redesign §1.4 竞价端点「不再需要」</td><td><b>被现实推翻</b>：/auction-benchmark（market.py:966）现役，是盘面页与执行闸门核心消费点</td></tr>
+  <tr><td>retro-and-gaps.md 开放清单含 Docker「等环境」</td><td><b>已完成</b>（09-04 Dockerfile + compose），开放清单未剔除</td></tr>
+  <tr><td>data-sources.md §0 默认链 tencent→eastmoney</td><td><b>已过时</b>：实际主源 ths + 三备源 + sina 入对冲组（见 D4）</td></tr>
+</table>
+</div>
+
+<h2>四、执行计划（按优先级；待确认后执行，本轮不改代码）</h2>
+<div class="card">
+<table>
+  <tr><th style="width:70px">级别</th><th>事项</th><th style="width:130px">影响范围</th><th style="width:210px">风险与注意</th></tr>
+  <tr class="plan-row"><td><span class="tag t-red">P0-1</span></td><td><b>get_board_metrics 收敛</b>：theme_service._board_index 与 watcher._board_pcts 改走 board_flow；get_board_metrics 删除或降为薄封装；f109/f110 解析随删（D1+D2 合并执行）</td><td>题材看板、选股 watcher</td><td>中。chg_3d/5d/10d 字段映射需逐一对齐；ths 未命中题材降级 unknown 属预期行为</td></tr>
+  <tr class="plan-row"><td><span class="tag t-red">P0-2</span></td><td><b>证据池自指修复</b>（O1）：morning_brief.py:177 去时间条件 + evidence_pool_basis 字段</td><td>盘前简报</td><td>低。约 5 行；改后需用 09:25 前后两个时刻各跑一次验证锚日</td></tr>
+  <tr class="plan-row"><td><span class="tag t-red">P0-3</span></td><td><b>intraday_monitor 阈值接 band_config</b>（O2）：3 处硬编码走 resolve_bands</td><td>盘中情绪告警</td><td>低。注意薄池 min_pool 判定保留</td></tr>
+  <tr class="plan-row"><td><span class="tag t-amber">P1-1</span></td><td><b>涨跌停判定收口</b>（R1）：market/ 单一 limit_pct，breadth/engine import，halt_risk 差异确认后合并</td><td>宽度统计、情绪引擎、风控</td><td>单位（0.20 vs 20.0）与 ST 优先级不能盲合；改动后跑全量宽度/情绪回归</td></tr>
+  <tr class="plan-row"><td><span class="tag t-amber">P1-2</span></td><td><b>补价模式上移共享</b>（R3）：_quotes_for 提升，7 调用方改用，吞错统一</td><td>持仓/精选/题材/事件 7 处</td><td>低。tencent 硬编码选源参数化</td></tr>
+  <tr class="plan-row"><td><span class="tag t-amber">P1-3</span></td><td><b>时段窗口收口</b>（R2）：trade_calendar 导出宽/严窗函数，board_flow 改 import</td><td>board_flow、quote_hub</td><td>低。保留两个函数不合一</td></tr>
+  <tr class="plan-row"><td><span class="tag t-amber">P1-4</span></td><td><b>alert_engine 冷却接线</b>（O9）+ <b>except:pass 治理</b>（O8）</td><td>告警引擎、5 处吞错点</td><td>低。daily_review.py:76 改降级标注</td></tr>
+  <tr class="plan-row"><td><span class="tag t-amber">P1-5</span></td><td><b>fund_flow/board_flow 重试收敛</b>（O3）：抽公共 retry 或接 provider 链</td><td>资金流向双模块</td><td>中。动核心链路需真实盘面数据回归；短期可先文档化豁免</td></tr>
+  <tr class="plan-row"><td><span class="tag t-gray">P2-1</span></td><td><b>死代码清理</b>（C1-C3）：2 端点 + 5 导出 + 3 函数，约 85 行</td><td>无</td><td>低。/adjustment-events 删前观察 access log 一周</td></tr>
+  <tr class="plan-row"><td><span class="tag t-gray">P2-2</span></td><td><b>时区统一</b>（O7）：13 处裸 now() → beijing_now()</td><td>机械替换</td><td>低。逐文件替换+回归</td></tr>
+  <tr class="plan-row"><td><span class="tag t-gray">P2-3</span></td><td><b>能力选择走注册表</b>（D3）+ <b>TTL 缓存收口</b>（R5）+ <b>pctText 统一</b>（R6）</td><td>多处行为等价重构</td><td>低</td></tr>
+  <tr class="plan-row"><td><span class="tag t-gray">P2-4</span></td><td><b>文档修正包</b>：data-sources §0、architecture-redesign §1.4、system-review §六、retro 开放清单、daily-review §6.4 N1/N5/N6 销账</td><td>纯文档</td><td>无</td></tr>
+  <tr class="plan-row"><td><span class="tag t-gray">P2-5</span></td><td><b>杂物</b>：ashare.db 0 字节删除、eslint 移 devDependencies、tech 指标黄金样本对照测试（R4）、技术债豁免注记</td><td>无</td><td>无</td></tr>
+</table>
+<p class="note" style="margin-top:10px">建议节奏：P0 三项一批（一个 commit）；P1 每项独立 commit 独立回归；P2 随手清理或攒一个 hygiene commit。执行顺序上 P1-1（涨跌停收口）建议排在 P0-1 之后，两者都动 market/ 有合并顺序考量。</p>
+</div>
+
+<h2>五、复核记录</h2>
+<div class="card">
+  <p>本轮 4 路 agent 扫描后，对将进入 P0/P1 的全部关键发现做了逐项 grep/读码复核，共修正 3 处 agent 结论：</p>
+  <p>① <b>告警冷却</b>：agent 报「已实现于 alert_engine.py:110」，实测 alert_engine 无冷却逻辑——真实状态为半实现（字段已建、引擎未接线、仅 intraday_monitor 自带冷却），已按 O9 修正；<br>
+  ② <b>getKline</b>：疑似孤儿实为 getKlinePayload 前缀误命中（stock-detail.tsx 活跃使用后者），已从删除清单剔除；<br>
+  ③ <b>D1 调用方证据</b>：初查 grep 未命中系转义问题，读码实证 theme_service.py:844/850 与 watcher.py:326-334 直调成立。</p>
+</div>
+
+<footer>ashare-ai-trader · 系统健康度审查 · 2026-09-07 · 生成于 Agent 会话</footer>
+</div>
+</body>
+</html>
