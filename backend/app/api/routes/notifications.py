@@ -1,0 +1,260 @@
+"""站内通知中心聚合端点（2026-09-07 用户需求③）。
+
+GET /api/notifications?alert_limit=50&news_limit=15&news_min_score=<settings 默认>
+
+三类来源合并为一条时间线，前端按 盘前/盘中/盘后 tab 分类展示：
+
+1. opportunity 个股机会：盘中 watcher 的确认/证伪提醒（AlertEvent，规则名
+   ``__picks_watcher__`` 专属——用户自建价格规则不进通知中心，研究页已有专属视图）。
+2. daily_picks 每日精选：最近一份组合生成即一条（同日天然去重），标注门控状态。
+3. news 消息面/新闻/政策：事件系统 + ``app.events.ranking.score_event`` 评分，
+   **score ≥ 阈值才通知**（"新闻不逐条推送"）——评分机制与时事新闻板块（事件 tab
+   relevance 排序）完全同源复用，不另起炉灶。
+
+session（盘前/盘中/盘后）按北京时间墙钟划分：<09:30 盘前；09:30–15:05 盘中
+（含午休——通知分类不需要午休粒度）；其余盘后。任何单一来源失败都显式降级
+（errors 字段），绝不静默空列表。
+"""
+from __future__ import annotations
+
+import json
+import logging
+from datetime import datetime, timedelta
+
+from fastapi import APIRouter, Depends, Query, Request
+
+from app.core.config import settings
+from app.core.db import get_session_factory
+from app.market.trading_status import beijing_now
+from app.repositories.alert_repo import AlertRepository
+
+log = logging.getLogger(__name__)
+
+router = APIRouter(tags=["notifications"])
+
+WATCHER_RULE = "__picks_watcher__"
+
+# 时事新闻板块的四级分类标签（app/events/impact.py FOUR_LABEL 同值同源）
+_FOUR_LABEL = {
+    "international": "国际时事",
+    "policy": "国家政策",
+    "hot": "市场热点",
+    "material": "原材料涨价",
+}
+
+
+def _session_of(bj: datetime) -> str:
+    """北京时间 naive 墙钟 → 盘前/盘中/盘后（口径见模块 docstring）。"""
+    hm = bj.hour * 100 + bj.minute
+    if 930 <= hm <= 1505:
+        return "intraday"
+    if hm < 930:
+        return "pre_open"
+    return "after_close"
+
+
+def get_alert_repo(request: Request) -> AlertRepository:
+    return request.app.state.alert_repo
+
+
+def _alert_items(repo: AlertRepository, limit: int) -> list[dict]:
+    """watcher 确认/证伪提醒 → 通知项。triggered_at 是 UTC naive → +8 转北京。"""
+    rules = {r.id: r for r in repo.list_rules()}
+    watcher_rule_ids = {rid for rid, r in rules.items() if r.name == WATCHER_RULE}
+    if not watcher_rule_ids:
+        return []
+    items: list[dict] = []
+    for e in repo.list_events(limit=limit):
+        if e.rule_id not in watcher_rule_ids:
+            continue
+        snap = e.snapshot if isinstance(e.snapshot, dict) else {}
+        if isinstance(e.snapshot, str):
+            try:
+                snap = json.loads(e.snapshot)
+            except Exception:  # noqa: BLE001
+                snap = {}
+        kind = snap.get("kind") or "watcher"
+        direction = snap.get("direction") or ""
+        text = (snap.get("text") or "").strip()
+        bj = (e.triggered_at + timedelta(hours=8)) if e.triggered_at else None
+        kind_label = "确认" if kind == "confirm" else ("证伪" if kind == "falsify" else "跟踪")
+        # 方向级事件（falsify）symbol 是占位 "000000"，不进标题（占位代码泄漏到 UI）
+        sym_part = f" {e.symbol}" if e.symbol and e.symbol != "000000" else ""
+        items.append(
+            {
+                "id": f"alert-{e.id}",
+                "category": "opportunity",
+                "label": kind_label,
+                "session": _session_of(bj) if bj else "intraday",
+                "ts": bj.isoformat(sep=" ") if bj else None,
+                "title": f"【{direction or '盘中跟踪'}】{sym_part} {kind_label}".strip(),
+                "body": text or "（无正文）",
+                "symbol": e.symbol if e.symbol and e.symbol != "000000" else None,
+                "url": None,
+                "score": None,
+            }
+        )
+    return items
+
+
+def _daily_pick_item() -> dict | None:
+    """最近一份每日精选组合 → 一条通知（date 唯一约束 → 同日天然去重）。"""
+    from sqlalchemy import select
+
+    from app.models.daily_pick import DailyPickSet
+
+    with get_session_factory()() as db:
+        row = db.execute(select(DailyPickSet).order_by(DailyPickSet.date.desc()).limit(1)).scalar_one_or_none()
+    if row is None:
+        return None
+    try:
+        items = json.loads(row.items or "[]")
+    except Exception:  # noqa: BLE001
+        items = []
+    top = "、".join(
+        str(it.get("name") or it.get("symbol")) for it in items[:5] if isinstance(it, dict)
+    )
+    try:
+        meta = json.loads(row.meta or "{}") if isinstance(row.meta, str) else (row.meta or {})
+    except Exception:  # noqa: BLE001
+        meta = {}
+    gate_stand = bool((meta.get("gate") or {}).get("stand_aside"))
+    gate_note = "，空仓闸门触发（仅观察）" if gate_stand else ""
+    return {
+        "id": f"picks-{row.date}",
+        "category": "daily_picks",
+        "label": "每日精选",
+        "session": "pre_open",  # 组合盘前/盘后生成，归盘前节拍
+        "ts": f"{row.date} 08:40:00",
+        "title": f"每日精选 · {row.date}（{len(items)} 只{gate_note}）",
+        "body": f"Top：{top or '—'}。名单为盘中跟踪的输入，机会确认以盘中提醒为准，避免开盘即回落被误判。",
+        "symbol": None,
+        "url": "/picks",
+        "score": None,
+    }
+
+
+async def _news_items(store, request: Request, limit: int, min_score: float, now: datetime) -> tuple[list[dict], str | None]:
+    """事件系统 → 评分过滤后的新闻通知。返回 (items, error)。"""
+    try:
+        rows = store.list_events(active_only=False, limit=80)
+    except Exception as exc:  # noqa: BLE001
+        return [], str(exc)
+
+    # 72h 窗口：通知是「新事」视图，老事件再高分也不打扰（score 内新鲜度另有权重）
+    cutoff = now - timedelta(hours=72)
+    recent = [r for r in rows if r.published_at and r.published_at >= cutoff]
+    if not recent:
+        return [], None
+
+    try:
+        from app.events.impact import impact_level
+        from app.events.ranking import collect_rank_context, score_event
+    except Exception as exc:  # noqa: BLE001
+        return [], f"ranking import failed: {exc}"
+
+    theme_names = sorted({
+        d.target for r in recent for d in (r.directions or []) if d.target_type == "theme"
+    })
+    symbols = sorted({
+        d.target for r in recent for d in (r.directions or []) if d.target_type == "symbol"
+    })
+    try:
+        ctx = await collect_rank_context(request.app.state, theme_names, symbols)
+    except Exception as exc:  # noqa: BLE001
+        return [], f"rank context failed: {exc}"
+
+    items: list[dict] = []
+    for r in recent:
+        four = _classify_four_row(r)
+        level = impact_level(
+            r.title, four=four, certainty=r.certainty, fact_kind=r.fact_kind,
+            source_tier=r.source_tier, n_directions=len(r.directions or []),
+        )
+        symbol_vals = [ctx.stock_chg.get(d.target) for d in (r.directions or []) if d.target_type == "symbol"]
+        rank = score_event(
+            impact_level=level,
+            four=four,
+            source_tier=r.source_tier,
+            published_at=r.published_at,
+            half_life_hours=r.half_life_hours,
+            theme_names=[d.target for d in (r.directions or []) if d.target_type == "theme"],
+            symbol_chg=symbol_vals,
+            ctx=ctx,
+            now=now,
+        )
+        if rank["score"] < min_score:
+            continue  # 评分过滤：不逐条推送
+        items.append(
+            {
+                "id": f"event-{r.id}",
+                "category": "news",
+                "label": _FOUR_LABEL.get(four, four),
+                "session": _session_of(r.published_at) if r.published_at else "intraday",
+                "ts": r.published_at.isoformat(sep=" ") if r.published_at else None,
+                "title": r.title or "（无标题）",
+                "body": (r.title or "")[:120],
+                "symbol": None,
+                "url": r.url,
+                "score": rank["score"],
+            }
+        )
+    items.sort(key=lambda x: (-(x["score"] or 0), x["ts"] or ""))
+    return items[:limit], None
+
+
+def _classify_four_row(row) -> str:
+    """与 routes/events 内联逻辑同源的四分类（涨价 → 政策 → 国际 → 热点）。"""
+    from app.events.impact import classify_four
+
+    return classify_four(row.title, row.category)
+
+
+@router.get("/notifications")
+async def notifications(
+    request: Request,
+    alert_limit: int = Query(default=50, ge=1, le=200),
+    news_limit: int = Query(default=15, ge=1, le=50),
+    news_min_score: float | None = Query(default=None, ge=0, le=100),
+    repo: AlertRepository = Depends(get_alert_repo),
+) -> dict:
+    """三类通知合并时间线（来源与分类口径见模块 docstring）。"""
+    min_score = news_min_score if news_min_score is not None else settings.notifications_news_min_score
+    now = beijing_now().replace(tzinfo=None)  # 事件 published_at 是北京 naive，同语义相减
+
+    errors: dict[str, str] = {}
+    alert_items: list[dict] = []
+    try:
+        alert_items = _alert_items(repo, alert_limit)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("notifications: alert source failed")
+        errors["alerts"] = str(exc)
+
+    pick_item: dict | None = None
+    try:
+        pick_item = _daily_pick_item()
+    except Exception as exc:  # noqa: BLE001
+        log.exception("notifications: daily picks source failed")
+        errors["daily_picks"] = str(exc)
+
+    news_items: list[dict] = []
+    store = getattr(request.app.state, "event_store", None)
+    if store is not None:
+        news_items, news_err = await _news_items(store, request, news_limit, min_score, now)
+        if news_err:
+            errors["news"] = news_err
+    else:
+        errors["news"] = "event store unavailable"
+
+    items = [*alert_items, *news_items, *([pick_item] if pick_item else [])]
+    items.sort(key=lambda x: x["ts"] or "", reverse=True)
+    return {
+        "data": {
+            "items": items,
+            "count": len(items),
+            "generated_at": now.isoformat(sep=" "),
+            "news_min_score": min_score,
+            "errors": errors or None,
+        },
+        "meta": {},
+    }

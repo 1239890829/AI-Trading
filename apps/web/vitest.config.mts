@@ -8,6 +8,8 @@ export default defineConfig({
     include: ["lib/**/*.test.ts", "components/**/*.test.tsx"],
     // 统一 jsdom：组件测试需要 DOM，纯函数测试在 jsdom 下同样可跑
     environment: "jsdom",
+    // 全局 mock next/navigation（useRouter 在 jsdom 无 app router 上下文会抛 invariant）
+    setupFiles: ["./test/setup.ts"],
   },
   resolve: {
     alias: {

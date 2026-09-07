@@ -8,8 +8,12 @@
 标注来源、保留跳转、不篡改正文）。 */
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { useRouter } from "next/navigation";
 
-import { getNewsContent, type ArticleBlock, type ArticleContent } from "@/lib/api";
+import { API_BASE, getNewsContent, type ArticleBlock, type ArticleContent } from "@/lib/api";
+import { workbenchUrlWithBack, themesUrl } from "@/lib/routing";
+import { createEntityMatcher, type EntityDict, type EntityMatch, type EntityMatcher } from "@/lib/entity-links";
+import { RichText } from "@/components/assistant/rich-text";
 
 export interface NewsModalItem {
   title: string;
@@ -30,6 +34,23 @@ const SOURCE_LABEL: Record<string, string> = {
 function sourceText(source?: string | null): string | null {
   if (!source) return null;
   return SOURCE_LABEL[source] ?? source;
+}
+
+// ---- 实体词典（新闻正文个股/题材链接化，2026-09-07 用户需求）----
+// 模块级缓存：词典与文章无关，全站共用一份；失败缓存 null（识别是增强层，
+// 失败降级为纯文本，绝不阻塞正文渲染）。
+let entityDictCache: EntityDict | null | undefined;
+
+async function loadEntityDict(): Promise<EntityDict | null> {
+  if (entityDictCache !== undefined) return entityDictCache;
+  try {
+    const r = await fetch(`${API_BASE}/api/assistant/entity-dict`);
+    const j = await r.json();
+    entityDictCache = (j?.data as EntityDict) ?? null;
+  } catch {
+    entityDictCache = null;
+  }
+  return entityDictCache;
 }
 
 /** 表格块：数据类文章的排行榜/涨跌榜按真表格渲染（横向可滚，斑马纹，小字号）。 */
@@ -110,11 +131,31 @@ function ImageBlock({ src }: { src: string }) {
   );
 }
 
-function ArticleBlocks({ blocks }: { blocks: ArticleBlock[] }) {
+function ArticleBlocks({
+  blocks,
+  matcher,
+  onNavigate,
+}: {
+  blocks: ArticleBlock[];
+  matcher: EntityMatcher | null;
+  onNavigate: (m: EntityMatch) => void;
+}) {
   return (
     <div className="space-y-3">
       {blocks.map((b, i) => {
         if (b.type === "p") {
+          // 正文段落经实体匹配渲染：个股/题材命中 → 可点击跳转（识别失败降级纯文本）
+          if (matcher) {
+            return (
+              <RichText
+                key={i}
+                text={b.text}
+                matcher={matcher}
+                onNavigate={onNavigate}
+                className="space-y-3 text-[13px] leading-relaxed text-zinc-700 dark:text-zinc-300"
+              />
+            );
+          }
           return (
             <p key={i} className="text-[13px] leading-relaxed text-zinc-700 dark:text-zinc-300">
               {b.text}
@@ -129,9 +170,12 @@ function ArticleBlocks({ blocks }: { blocks: ArticleBlock[] }) {
 }
 
 export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClose: () => void }) {
+  const router = useRouter();
   const [content, setContent] = useState<ArticleContent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // 实体识别器（新闻正文个股链接化）：词典懒加载一次，失败降级为 null → 纯文本
+  const [matcher, setMatcher] = useState<EntityMatcher | null>(null);
   // 渲染期 adjust-state（React 官方模式）：url 变了立即重置为加载态，防上一条内容残留
   const [fetchedUrl, setFetchedUrl] = useState<string | null>(null);
   if (item && item.url !== fetchedUrl) {
@@ -140,6 +184,30 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
     setError(null);
     setLoading(true);
   }
+
+  // 词典懒加载（模块级缓存后仅首篇触发网络请求）
+  useEffect(() => {
+    if (!item || matcher) return;
+    let alive = true;
+    loadEntityDict().then((d) => {
+      // 必须包一层：createEntityMatcher 返回函数，直接传会被 React 当 updater 调用
+      // （fn(prev) → IDLE 返回 []），matcher state 变成数组导致弹窗崩溃（P0）。
+      if (alive) setMatcher(() => createEntityMatcher(d));
+    });
+    return () => {
+      alive = false;
+    };
+  }, [item, matcher]);
+
+  // 实体点击导航：个股 → 工作台详情（带 from）；题材 → 题材梯队；功能入口 → 白名单 URL
+  const onNavigate = useCallback(
+    (m: EntityMatch) => {
+      if (m.type === "stock" && m.code) router.push(workbenchUrlWithBack(m.code));
+      else if (m.type === "theme") router.push(themesUrl(m.name));
+      else if (m.type === "nav" && m.url) router.push(m.url);
+    },
+    [router],
+  );
 
   // 拉取正文；失败记 error 走降级（setState 仅出现在异步回调，不经 effect 同步触发）
   useEffect(() => {
@@ -230,14 +298,24 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
           {!loading && content && (
             // blocks 为空（旧缓存/公告旧响应）时回退 paragraphs，绝不满屏空白
             content.blocks?.length > 0 ? (
-              <ArticleBlocks blocks={content.blocks} />
+              <ArticleBlocks blocks={content.blocks} matcher={matcher} onNavigate={onNavigate} />
             ) : (
               <div className="space-y-3">
-                {content.paragraphs.map((p, i) => (
-                  <p key={i} className="text-[13px] leading-relaxed text-zinc-700 dark:text-zinc-300">
-                    {p}
-                  </p>
-                ))}
+                {content.paragraphs.map((p, i) =>
+                  matcher ? (
+                    <RichText
+                      key={i}
+                      text={p}
+                      matcher={matcher}
+                      onNavigate={onNavigate}
+                      className="text-[13px] leading-relaxed text-zinc-700 dark:text-zinc-300"
+                    />
+                  ) : (
+                    <p key={i} className="text-[13px] leading-relaxed text-zinc-700 dark:text-zinc-300">
+                      {p}
+                    </p>
+                  ),
+                )}
               </div>
             )
           )}
@@ -249,7 +327,7 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
                 {/* 渲染守卫会跳过同 URL 重取，瞬态失败必须显式重试入口自愈 */}
                 <button
                   onClick={() => setFetchedUrl(null)}
-                  className="font-medium underline underline-offset-2 hover:opacity-80"
+                  className="font-medium text-sky-600 transition-colors hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300"
                   data-testid="news-modal-retry"
                 >
                   重试

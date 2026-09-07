@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { SearchBox } from "@/components/search-box";
+import { NotificationBell } from "@/components/notifications/notification-drawer";
 
 const LINKS = [
   { href: "/workbench", label: "工作台" },
@@ -58,6 +59,7 @@ export function NavBar() {
         </nav>
         <div className="flex-1" />
         <SearchBox />
+        <NotificationBell />
         <button
           onClick={toggleTheme}
           aria-label="切换主题"

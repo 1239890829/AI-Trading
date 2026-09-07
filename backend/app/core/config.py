@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     # 改本配置只影响新建规则与监控判定，不会回写已有 DB 行）。
     sentiment_break_rate_threshold: float = 0.40
 
+    # 站内通知中心（api/routes/notifications.py）：事件评分 ≥ 此阈值才进通知
+    # （"新闻不逐条推送"；评分与时事新闻板块 events ranking 同源复用）。
+    notifications_news_min_score: float = 60.0
+
     # ---- 盘前简报与盘中跟踪（选股 2.0，批次 B）----
     # 盘前简报：交易日 08:40 自动生成（方向排序 + 标的池 + 触发/证伪条件），
     # 落盘 data/picks/briefs/YYYYMMDD.json；POST /api/picks/morning-brief/generate 可手动重跑

@@ -1252,6 +1252,39 @@ export async function ackAlertEvent(eventId: number): Promise<void> {
   await sendJson(`/api/alerts/events/${eventId}/ack`, "POST");
 }
 
+/** ---------------------------------------------------------------- 站内通知中心（2026-09-07） */
+
+/** 通知条目（后端 /api/notifications 三源合并：个股机会/每日精选/新闻评分过滤）。 */
+export interface NotificationItem {
+  id: string;
+  /** opportunity=个股机会（watcher 确认/证伪）| daily_picks=每日精选 | news=消息面/新闻/政策 */
+  category: "opportunity" | "daily_picks" | "news";
+  /** 展示标签：确认/证伪/跟踪/每日精选/国家政策/国际时事/市场热点/原材料涨价 */
+  label: string;
+  /** 盘前/盘中/盘后（北京时间墙钟划分） */
+  session: "pre_open" | "intraday" | "after_close";
+  ts: string | null;
+  title: string;
+  body: string;
+  symbol: string | null;
+  url: string | null;
+  /** 新闻评分为 0-100（与时事新闻板块 events ranking 同源）；其余为 null */
+  score: number | null;
+}
+
+export interface NotificationsPayload {
+  items: NotificationItem[];
+  count: number;
+  generated_at: string;
+  news_min_score: number;
+  /** 单源失败显式透出（降级可见），全部成功为 null */
+  errors: Record<string, string> | null;
+}
+
+export async function getNotifications(): Promise<NotificationsPayload> {
+  return (await getJson<NotificationsPayload>("/api/notifications")).data;
+}
+
 /** ---------------------------------------------------------------- 风控（Phase 5） */
 
 export interface RiskState {
