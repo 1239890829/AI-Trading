@@ -1,4 +1,5 @@
 akshare==1.18.94
+akquant==0.3.58
 alembic==1.19.1
 annotated-doc==0.0.5
 annotated-types==0.8.0
@@ -24,10 +25,12 @@ jsonpath @ ./vendor/wheels/jsonpath-0.82-py3-none-any.whl
 Mako==1.4.1
 MarkupSafe==3.0.3
 mini-racer==0.14.1
+narwhals==2.25.0
 numpy==2.4.6
 openpyxl==3.1.5
 packaging==26.3
 pandas==2.3.3
+plotly==7.0.0
 pluggy==1.6.0
 polars==1.44.1
 polars-runtime-32==1.44.1
