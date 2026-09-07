@@ -8,7 +8,10 @@
 行情/K线/盘口/搜索: 腾讯 → 东财（search suggest / K线）
 涨停池 / 龙虎榜:    东财 push2ex / datacenter（稳定，独立主机）
 逐笔成交:           东财 details（push2his，本机被限流时该能力 502）
-默认链:             chain(tencent→eastmoney)
+默认链:             主源 ths + 备源 tencent, eastmoney, sina（core/config.py；
+                    2026-09-07 修正——ths 官方 API 为主源，sina 已入 1Hz
+                    实时对冲组 realtime_rank=1；「chain(tencent→eastmoney)」
+                    为 2026-08 的旧链路，已被替换）
 ```
 
 - 全部 Provider 客户端 `trust_env=False`：行情源为国内站直连，**不走用户系统代理**（SOCKS 代理会导致 httpx 启动失败或绕道境外）。

@@ -78,7 +78,7 @@ sina:      占位未实现
 | 模块 | 理由 |
 |---|---|
 | **分钟信号 minute-signals / minute-decisions**（2 端点） | 做 T 信号，与"每日精选"的持仓周期（2.2 天）不匹配；无页面、无复盘闭环，属半成品 |
-| **竞价 auction / auction-benchmark**（2 端点） | 有价值但仅作为 predict 的输入；随 predict 合并后不再需要独立端点（保留内部函数） |
+| **竞价 auction / auction-benchmark**（2 端点） | ~~随 predict 合并后不再需要独立端点~~ **2026-09-07 更正：本条已被现实推翻**——两端点现役（market.py /auction-benchmark 等），是盘面页竞价标杆条与执行闸门（9:25 gap 三态判定）的核心消费点，永久保留（原文档判断保留，防止再犯同类误判） |
 | **选股器 screener** | 与 picks 定位冲突：screener 是"用户自己设条件海选"，picks 是"系统给答案"。**二选一**——建议保留 picks，screener 冻结（代码留着，导航移除） |
 
 ---
