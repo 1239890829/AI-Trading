@@ -22,7 +22,7 @@ MANDATE_DIR = Path(__file__).resolve().parents[2] / "mandates"
 # mandate 里 costs/limits/split 段允许的字段 → BacktestConfig 字段
 _COST_KEYS = {
     "initial_cash", "commission_rate", "commission_min",
-    "stamp_tax", "slippage_bp", "limit_pct", "limit_eps", "in_ratio",
+    "stamp_tax", "transfer_fee", "slippage_bp", "limit_pct", "limit_eps", "in_ratio",
 }
 
 _TOP_KEYS = {"name", "description", "symbol", "strategy", "data", "costs"}

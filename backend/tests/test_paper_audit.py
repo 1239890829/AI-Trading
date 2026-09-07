@@ -76,8 +76,9 @@ def test_reset_audit_contains_before_state(audit_lines: list[str]):
     line = lines[-1]
     assert "source=api" in line
     assert (
-        "before: positions=1 orders=1 cash=979995.0 initial=1000000.0" in line
-    ), "必须完整记录重置前状态（持仓/委托/资金/初始额度）"
+        "before: positions=1 orders=1 cash=979994.8 initial=1000000.0" in line
+    ), "必须完整记录重置前状态（持仓/委托/资金/初始额度）。"
+    # 金额口径：2 万买入 = 佣金 max(5) + 过户费 0.2 → 现金 979994.8（过户费 P2-D 起计入）
     assert "after: cash=1000000.0" in line
     assert "custom_initial=False" in line
 
