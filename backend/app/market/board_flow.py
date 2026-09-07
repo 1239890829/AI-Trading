@@ -483,7 +483,11 @@ _BARS_RETENTION = 120     # daykline.json 每板块保留 bar 数
 
 
 async def _fetch_board_dayk(board_code: str) -> list | None:
-    """push2his fflow daykline → [[date, main_yi, close_pct]]（含今日 bar 由快照时机保证收盘后拉取）。重试 3 次。"""
+    """push2his fflow daykline → [[date, main_yi, close_pct]]（含今日 bar 由快照时机保证收盘后拉取）。重试 3 次。
+
+    技术债豁免（同 fund_flow.py O3/P1-5 注记）：自建 httpx 重试不走 provider
+    链统一熔断——板块级低频读与行情主链熔断域隔离；docs/system-health-review-20260907.html P1-5。
+    """
     for attempt in range(3):
         try:
             resp = await _http().get(

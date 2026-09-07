@@ -58,7 +58,12 @@ _FLOW_HIST_CACHE = TTLCache("fundflow-hist", ttl=6 * 3600.0, maxsize=1)
 
 _HTTP = None
 
-
+# 技术债豁免（2026-09-07 健康度审查 O3/P1-5，显式化而非隐瞒）：
+# 本模块自建 httpx + 手写 range(3) 重试，不走 provider 链的统一熔断
+# （composite._cooldown_until）。理由：资金流是大盘/板块级低频读（分钟/日度），
+# 与个股行情链路熔断域隔离，避免单个接口抖动熔断拖累行情主链；代价是
+# 「无统一熔断观测」，若东财长时间故障仅靠 log+缓存降级可见。
+# 收敛为 provider 链调用的方案见 docs/system-health-review-20260907.html P1-5。
 def _http():
     global _HTTP
     if _HTTP is None:
