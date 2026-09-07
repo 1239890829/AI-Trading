@@ -45,6 +45,7 @@ COVERAGE_MIN = 0.90        # 截面覆盖率下限
 IC_CORR_DEDUP = 0.70       # 因子间 IC 相关去重阈值
 MIN_CROSS_SECTION = 30     # 每日截面最少股票数
 DAYS_PER_YEAR = 243        # A 股年均交易日（年化用）
+ROLLING_WINDOW_DAYS = 250  # 滚动衰减监控窗口（约 1 年，制度 §6.1/§7.2）
 
 #: 数据质量硬结论（2026-09-07 marketdb 实测，docs/factor-library-design.md §1.4）
 DATA_QUALITY_NOTES = {
@@ -96,13 +97,13 @@ def _base_cte(factor: FactorDef) -> str:
     return """
 WITH k AS (
     SELECT a.thscode, a.date_ms, a.close_adj,
-           b.open_price, b.high_price, b.low_price, b.close_price, b.turnover
+           b.open_price, b.high_price, b.low_price, b.close_price, b.turnover, b.volume
     FROM daily_k_adj AS a
     JOIN daily_k AS b USING (thscode, date_ms)
 ),
 lvl1 AS (
     SELECT thscode, date_ms, close_adj, open_price, high_price, low_price,
-           close_price, turnover,
+           close_price, turnover, volume,
            LAG(close_adj, 1)   OVER w AS c1,
            LAG(close_adj, 5)   OVER w AS c5,
            LAG(close_adj, 10)  OVER w AS c10,
@@ -110,6 +111,8 @@ lvl1 AS (
            LAG(close_adj, 60)  OVER w AS c60,
            LAG(close_adj, 120) OVER w AS c120,
            LAG(close_price, 1) OVER w AS pc1_raw,
+           LAG(volume, 1)      OVER w AS vol1,
+           ROW_NUMBER() OVER (PARTITION BY thscode ORDER BY date_ms) AS rn,
            LEAD(close_adj, 1)  OVER w AS f1,
            LEAD(close_adj, 3)  OVER w AS f3,
            LEAD(close_adj, 5)  OVER w AS f5,
@@ -123,7 +126,17 @@ lvl1 AS (
     WINDOW w AS (PARTITION BY thscode ORDER BY date_ms)
 ),
 lvl2 AS (
-    SELECT *, close_adj / NULLIF(c1, 0) - 1 AS ret1
+    SELECT *,
+           close_adj / NULLIF(c1, 0) - 1 AS ret1,
+           -- 真实波幅 TR（未复权）：隔夜跳空部分超过 ±25% 判为除权断层 → NULL（与 gap 因子同口径）
+           CASE
+             WHEN pc1_raw IS NULL THEN NULL
+             WHEN abs(high_price - pc1_raw) > pc1_raw * 0.25
+               OR abs(low_price - pc1_raw) > pc1_raw * 0.25 THEN NULL
+             ELSE greatest(high_price - low_price,
+                           abs(high_price - pc1_raw),
+                           abs(low_price - pc1_raw))
+           END AS tr_f
     FROM lvl1
 ),
 lvl3 AS (
@@ -136,16 +149,43 @@ lvl3 AS (
            AVG(abs(ret1) / NULLIF(turnover, 0)) OVER r20c AS amihud_raw,
            COUNT(abs(ret1) / NULLIF(turnover, 0)) OVER r20c AS amihud_n,
            AVG((high_price - low_price) / NULLIF(close_price, 0)) OVER r20c AS range_raw,
-           COUNT((high_price - low_price) / NULLIF(close_price, 0)) OVER r20c AS range_n
+           COUNT((high_price - low_price) / NULLIF(close_price, 0)) OVER r20c AS range_n,
+           -- 2026-09-07 扩展（qlib Alpha158 / TA-Lib 候选因子注入列）：
+           AVG(close_adj) OVER r20c AS ma20_adj,
+           stddev_samp(close_adj) OVER r20c AS std20_raw,
+           COUNT(close_adj) OVER r20c AS w20_n,
+           regr_slope(close_adj, rn) OVER r20c AS slope20,
+           regr_intercept(close_adj, rn) OVER r20c AS icept20,
+           regr_r2(close_adj, rn) OVER r20c AS rsqr20,
+           MAX(high_price) OVER r20c AS max20_h,
+           MIN(low_price) OVER r20c AS min20_l,
+           arg_max(rn, high_price) OVER r20c AS imax_rn20,
+           AVG(CASE WHEN ret1 > 0 THEN 1.0 ELSE 0.0 END) OVER r20c AS cntp20,
+           SUM(CASE WHEN ret1 > 0 THEN ret1 ELSE 0.0 END) OVER r20c AS sump20_num,
+           SUM(abs(ret1)) OVER r20c AS sump20_den,
+           corr(close_adj, ln(volume + 1)) OVER r20c AS corr_pv20,
+           corr(ret1, ln(volume / NULLIF(vol1, 0) + 1)) OVER r20c AS cord20_raw,
+           AVG(volume) OVER r20c AS vma20_raw,
+           stddev_samp(volume) OVER r20c AS vstd20_raw,
+           stddev_samp(abs(ret1) * volume) OVER r20c AS wvma20_num,
+           AVG(abs(ret1) * volume) OVER r20c AS wvma20_den,
+           SUM(CASE WHEN volume > vol1 THEN volume - vol1 ELSE 0.0 END) OVER r20c AS vol_pos20,
+           SUM(CASE WHEN volume < vol1 THEN vol1 - volume ELSE 0.0 END) OVER r20c AS vol_neg20,
+           AVG(tr_f) OVER r14c AS atr14_raw,
+           COUNT(tr_f) OVER r14c AS atr14_n
     FROM lvl2
     WINDOW r20c AS (PARTITION BY thscode ORDER BY date_ms
-                    ROWS BETWEEN 19 PRECEDING AND CURRENT ROW)
+                    ROWS BETWEEN 19 PRECEDING AND CURRENT ROW),
+           r14c AS (PARTITION BY thscode ORDER BY date_ms
+                    ROWS BETWEEN 13 PRECEDING AND CURRENT ROW)
 ),
 lvl4 AS (
     SELECT *,
            CASE WHEN vola_n >= 20 THEN vola_raw END AS vola20_w,
            CASE WHEN amihud_n >= 20 THEN amihud_raw END AS amihud20_w,
-           CASE WHEN range_n >= 20 THEN range_raw END AS range20_w
+           CASE WHEN range_n >= 20 THEN range_raw END AS range20_w,
+           CASE WHEN w20_n >= 20 THEN std20_raw END AS std20_w,
+           CASE WHEN atr14_n >= 14 THEN atr14_raw END AS atr14_w
     FROM lvl3
 )"""
 
@@ -367,6 +407,23 @@ def evaluate_factor(con, factor: FactorDef, market_daily: dict[int, int]) -> dic
     else:
         verdict = "FAIL"
 
+    # 滚动近 250 交易日 IC（衰减监控主指标，制度 §6.1/§7.2 的出库判定输入）：
+    # 与全期 IC 对比，同号占比 <50% 或 |IC| 消失 → 触发观察/出库流程
+    pts_best = ic_series.get(best_h) or []
+    tail = pts_best[-ROLLING_WINDOW_DAYS:]
+    roll_ic = round(_mean([ic for _, ic in tail]), 4) if tail else None
+    roll_icir = None
+    if tail:
+        r_std = _std([ic for _, ic in tail])
+        roll_icir = round(roll_ic / r_std, 4) if roll_ic is not None and r_std and r_std > 0 else None
+    roll_sign_flip = (
+        roll_ic is not None
+        and w.ic_mean != 0
+        and roll_ic != 0
+        and abs(roll_ic) >= IC_ABS_MIN
+        and math.copysign(1, roll_ic) != math.copysign(1, w.ic_mean)
+    )
+
     return {
         "name": factor.name,
         "category": factor.category,
@@ -374,6 +431,13 @@ def evaluate_factor(con, factor: FactorDef, market_daily: dict[int, int]) -> dic
         "min_bars": factor.min_bars,
         "best_horizon": best_h,
         "coverage": coverage,
+        "rolling": {
+            "window_days": ROLLING_WINDOW_DAYS,
+            "n_days": len(tail),
+            "ic_mean": roll_ic,
+            "icir": roll_icir,
+            "sign_flip": roll_sign_flip,  # True = 滚动窗与全期系统性反向（结构性失效信号）
+        },
         "windows": {
             str(h): {
                 "ic_mean": v.ic_mean, "ic_std": v.ic_std, "icir": v.icir,

@@ -104,11 +104,13 @@ marketdb DuckDB（`backend/data/marketdb/market.duckdb`，不入 git）：
 backend/app/factors/
 ├── __init__.py
 ├── library.py      # 因子注册表：名称/SQL定义/类别/窗口/最小样本（唯一口径锚）
+├── candidates.py   # 候选因子登记册（2026-09-07）：来源/原始定义/数据可行性分级/去重预判/状态
 ├── evaluate.py     # 评估引擎：全 DuckDB SQL（RankIC/分层/分年/覆盖率/相关矩阵）+ 三层判定
 └── (P1: daily.py 每日截面计算 + factor_values 落库；P2: 事件/盘中因子)
 backend/scripts/run_factor_eval.py   # 跑批 CLI → backend/data/factors/eval_report.json
 backend/tests/test_factors.py        # 合成小仓验证（三态/防泄露/分层单调）
 ```
+生命周期制度（挖掘→筛选评估→入库→使用→出库→衰减监控）见 **docs/factor-lifecycle-governance.md**（2026-09-07 v1，本文件的姊妹篇）。
 设计约束：纯 DuckDB SQL 向量化（1025 万行全量评估分钟级，性能红线）；无 pandas 依赖（backend venv 硬约束）；缺失=NULL 三态（次新/停牌/除权污染不凑数）；评估是离线批任务，不在请求路径上。
 
 ---
