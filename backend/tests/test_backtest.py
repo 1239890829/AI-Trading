@@ -26,6 +26,7 @@ from app.market.backtest import (
     BarView,
     FutureDataError,
     FundamentalsView,
+    _fees,
     run_backtest,
 )
 
@@ -205,7 +206,7 @@ class TestFees:
         bars = _up_bars(120)
         cfg = BacktestConfig(
             initial_cash=1_000_000, commission_rate=0.00025, commission_min=5.0,
-            stamp_tax=0.001, slippage_bp=5.0,
+            stamp_tax=0.0005, transfer_fee=0.00001, slippage_bp=5.0,
         )
 
         # 单次满仓进出：前半满仓、后半清仓
@@ -217,10 +218,13 @@ class TestFees:
         # 滑点方向：买价 > 开盘参考价，卖价 < 开盘参考价
         assert b.price > b.ref_price
         assert s.price < s.ref_price
-        # 佣金下限与印花税
+        # 佣金下限、印花税与过户费（双边）
         assert b.fee >= cfg.commission_min
         expected_stamp = s.price * s.qty * cfg.stamp_tax
         assert s.fee >= expected_stamp
+        # 过户费双边：买入 fee 至少含 transfer；卖出 fee 至少含 stamp+transfer
+        assert b.fee >= b.price * b.qty * cfg.transfer_fee
+        assert s.fee >= expected_stamp + s.price * s.qty * cfg.transfer_fee
         # 期末现金 = 初始 + 卖出净额 - 买入成本（精确对账）
         cash = cfg.initial_cash
         for t in report.trades:
@@ -230,10 +234,26 @@ class TestFees:
         assert math.isclose(cash, report.equity[-1], rel_tol=1e-9)
 
     def test_zero_fee_config_allowed(self):
-        cfg = BacktestConfig(commission_rate=0.0, commission_min=0.0, stamp_tax=0.0, slippage_bp=0.0)
+        cfg = BacktestConfig(
+            commission_rate=0.0, commission_min=0.0, stamp_tax=0.0,
+            transfer_fee=0.0, slippage_bp=0.0,
+        )
         bars = _up_bars(120)
         report = run_backtest(bars, lambda v: 1.0 if len(v) <= 60 else 0.0, cfg)
         assert all(t.fee == 0.0 for t in report.trades if t.ok)
+
+    def test_fee_matches_china_a_engine_baseline(self):
+        """黄金对照：ChinaAEngine（Vibe-Trading，本轮实测 7/7）同口径费用精确吻合。
+
+        金额 5000：佣金 max(5000×0.00025, 5)=5；过户费 5000×0.00001=0.05 →
+        买入 5.05；卖出再 + 印花税 5000×0.0005=2.5 → 7.55。
+        """
+        cfg = BacktestConfig()  # 全默认口径
+        amount = 5000.0
+        buy_fee = _fees(cfg, amount, "buy")
+        sell_fee = _fees(cfg, amount, "sell")
+        assert math.isclose(buy_fee, 5.05, abs_tol=1e-9)
+        assert math.isclose(sell_fee, 7.55, abs_tol=1e-9)
 
 
 # ---------------------------------------------------------------- §5 可解释性

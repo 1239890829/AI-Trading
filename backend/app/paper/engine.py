@@ -5,7 +5,7 @@ A股规则落地（full.md §14/§2.4，配置化）：
 - 涨停无法买入 / 跌停无法卖出（涨跌停价来自行情源）
 - 停牌（无价格）拒绝；买入数量须为 100 股整数倍；资金/可卖数量校验
 - 限价撮合：买价 ≥ 现价 按现价成交，否则挂单轮询；卖反向
-- 费用：佣金(万2.5, 最低5元) + 卖出印花税(0.05%)；滑点暂为 0（配置化保留）
+- 费用：佣金(万2.5, 最低5元) + 卖出印花税(0.05%) + 过户费(0.001%, 双边)；滑点暂为 0（配置化保留）
 """
 from __future__ import annotations
 
@@ -23,13 +23,14 @@ FEE = {
     "commission_rate": 0.00025,  # 佣金万2.5
     "commission_min": 5.0,
     "stamp_tax": 0.0005,  # 印花税（卖出）
+    "transfer_fee": 0.00001,  # 过户费万0.1（双边）
     "slippage": 0.0,
 }
 
 
 def calc_fee(side: str, price: float, qty: int) -> float:
     commission = max(price * qty * FEE["commission_rate"], FEE["commission_min"])
-    fee = commission
+    fee = commission + price * qty * FEE["transfer_fee"]  # 过户费双边
     if side == "sell":
         fee += price * qty * FEE["stamp_tax"]
     return round(fee + price * qty * FEE["slippage"], 2)

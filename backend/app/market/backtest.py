@@ -84,7 +84,8 @@ class BacktestConfig:
     initial_cash: float = 1_000_000.0
     commission_rate: float = 0.00025  # 佣金万 2.5（双边）
     commission_min: float = 5.0  # 单笔最低佣金（元）
-    stamp_tax: float = 0.001  # 印花税千 1（卖出单边）
+    stamp_tax: float = 0.0005  # 印花税万 5（卖出单边；2023-08-28 起现行，对齐 paper engine）
+    transfer_fee: float = 0.00001  # 过户费万 0.1（买卖双边；对齐 Vibe-Trading ChinaAEngine 实测基准）
     slippage_bp: float = 5.0  # 滑点（双边恶化，bp）
     limit_pct: float = 0.10  # 涨跌停幅度（主板；ST/北交未在 v1 区分）
     limit_eps: float = 0.002  # 涨跌停判定容差（QFQ 价格微偏）
@@ -205,7 +206,8 @@ def _is_one_board(bar: dict, prev_close: float, cfg: BacktestConfig) -> tuple[bo
 def _fees(cfg: BacktestConfig, amount: float, side: str) -> float:
     commission = max(amount * cfg.commission_rate, cfg.commission_min)
     stamp = amount * cfg.stamp_tax if side == "sell" else 0.0
-    return round(commission + stamp, 2)
+    transfer = amount * cfg.transfer_fee  # 过户费双边
+    return round(commission + stamp + transfer, 2)
 
 
 def run_backtest(

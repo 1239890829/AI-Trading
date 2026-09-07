@@ -19,5 +19,6 @@ costs:
   initial_cash: 1000000
   commission_rate: 0.00025
   commission_min: 5.0
-  stamp_tax: 0.001
+  stamp_tax: 0.0005
+  transfer_fee: 0.00001
   slippage_bp: 5.0
