@@ -250,6 +250,20 @@ def in_trading_window(now: datetime | None = None) -> bool:
     return (930 <= hhmm <= 1130) or (1300 <= hhmm <= 1500)
 
 
+def in_wide_market_window(now: datetime | None = None) -> bool:
+    """含集合竞价与收盘定价的**宽松**交易窗口（09:15–15:05，仅时刻判定）。
+
+    与 in_trading_window（连续竞价严窗）各司其职：本函数管「数据新鲜度/
+    缓存节奏」类判定（QuoteHub stale 标记、board_flow 缓存 TTL），不判
+    交易日归属（历史上两处消费方都只判时刻，交易日由调用方自理）——
+    2026-09-07 R2 收口：QuoteHub._in_market_hours 与 board_flow._in_session
+    的同口径时刻判定合并到此处，时段窗口单点。
+    """
+    now = now or datetime.now(timezone.utc) + timedelta(hours=8)
+    hhmm = now.hour * 100 + now.minute
+    return 915 <= hhmm <= 1505
+
+
 def last_trade_date(days: list[date], asof: date | None = None) -> date | None:
     """返回 <= asof 的最后一个交易日。asof 默认为今天。"""
     import bisect

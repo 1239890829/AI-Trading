@@ -17,9 +17,9 @@ def _cst_now() -> datetime:
 
 
 def _in_market_hours(dt: datetime) -> bool:
-    """含集合竞价与收盘定价时段的宽松交易窗口（09:15-15:05）。"""
-    t = dt.hour * 100 + dt.minute
-    return 915 <= t <= 1505
+    """含集合竞价与收盘定价时段的宽松交易窗口（09:15-15:05）。
+    2026-09-07 R2 收口：时刻判定单点在 trade_calendar.in_wide_market_window。"""
+    return tc.in_wide_market_window(dt)
 
 
 async def _empty() -> list:

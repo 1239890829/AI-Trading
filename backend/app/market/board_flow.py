@@ -37,10 +37,11 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, time as dt_time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.core.ttl_cache import TTLCache
+from app.market import trade_calendar
 
 log = logging.getLogger(__name__)
 
@@ -89,8 +90,8 @@ def _now_bj() -> datetime:
 
 
 def _in_session() -> bool:
-    t = _now_bj().time()
-    return dt_time(9, 15) <= t <= dt_time(15, 5)
+    """2026-09-07 R2 收口：时刻判定单点在 trade_calendar.in_wide_market_window。"""
+    return trade_calendar.in_wide_market_window(_now_bj())
 
 
 def _num(v) -> float | None:
