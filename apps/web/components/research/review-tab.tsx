@@ -1,9 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { Panel } from "@/components/panel";
-import { workbenchUrlWithBack } from "@/lib/routing";
+import { StockLink } from "@/components/stock-link";
 import {
   getReviewEffectiveness,
   getReviewReport,
@@ -85,14 +84,9 @@ function LinkedSymbols({ text }: { text: string }) {
     <>
       {parts.map((p, i) =>
         /^\d{6}$/.test(p) ? (
-          <Link
-            key={i}
-            href={workbenchUrlWithBack(p)}
-            title="查看标的详情"
-            className="font-mono text-sky-400 hover:underline"
-          >
+          <StockLink key={i} symbol={p} title="查看标的详情" className="font-mono text-sky-400">
             {p}
-          </Link>
+          </StockLink>
         ) : (
           <span key={i}>{p}</span>
         ),
@@ -201,7 +195,7 @@ function ActionItemDispose({
         <button
           onClick={() => void submit("pending", "")}
           disabled={busy}
-          className="text-[11px] text-zinc-500 underline-offset-2 hover:underline disabled:opacity-40"
+          className="text-[11px] text-zinc-500 transition-colors hover:text-zinc-900 disabled:opacity-40 dark:hover:text-zinc-100"
         >
           撤销处置
         </button>

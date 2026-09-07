@@ -1,9 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { Panel } from "@/components/panel";
-import { workbenchUrlWithBack } from "@/lib/routing";
+import { StockLink } from "@/components/stock-link";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import {
   ackAlertEvent,
@@ -331,9 +330,9 @@ export function AlertsTab() {
                         {new Date(e.triggered_at).toLocaleTimeString("zh-CN")}
                       </td>
                       <td className="px-3 py-2 font-mono">
-                        <Link href={workbenchUrlWithBack(e.symbol)} className="hover:text-sky-400 hover:underline" title="查看行情详情">
+                        <StockLink symbol={e.symbol} title="查看行情详情">
                           {e.symbol}
-                        </Link>
+                        </StockLink>
                       </td>
                       <td className="px-3 py-2">{rules.find((r) => r.id === e.rule_id)?.name ?? e.rule_id}</td>
                       <td className={`px-3 py-2 font-mono tabular-nums ${e.snapshot ? pctColor(e.snapshot.change_pct) : ""}`}>
@@ -345,7 +344,7 @@ export function AlertsTab() {
                         {e.acknowledged ? (
                           <span className="text-zinc-400">已确认</span>
                         ) : (
-                          <button onClick={() => void ack(e.id)} className="text-up hover:underline">
+                          <button onClick={() => void ack(e.id)} className="text-up transition-opacity hover:opacity-75">
                             确认
                           </button>
                         )}

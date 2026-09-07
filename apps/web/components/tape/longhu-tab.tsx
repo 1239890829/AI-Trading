@@ -1,11 +1,10 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Panel } from "@/components/panel";
+import { StockLink } from "@/components/stock-link";
 import { getLonghu, getLonghuThemeTrail, type LonghuTrailPayload } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
-import { workbenchUrlWithBack } from "@/lib/routing";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import type { LongHuRecord } from "@/types/market";
 
@@ -186,9 +185,9 @@ export function LonghuTab() {
                 // 同股多榜并存，key 必须带 range_days，否则 React 复用错行
                 <tr key={`${r.symbol}-${r.range_days ?? "na"}-${i}`} className="border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900">
                   <td className="px-2 py-2 font-mono text-xs text-zinc-400">
-                    <Link href={workbenchUrlWithBack(r.symbol)} className="hover:text-sky-400 hover:underline">
+                    <StockLink symbol={r.symbol}>
                       {r.symbol}
-                    </Link>
+                    </StockLink>
                   </td>
                   <td className="px-2 py-2">{r.name}</td>
                   <td className="px-2 py-2 text-xs text-zinc-400" title="统计区间：交易所按不同触发条件分别披露当日榜与三日榜，两者金额不可相加">

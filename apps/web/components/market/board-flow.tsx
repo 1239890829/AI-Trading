@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Panel } from "@/components/panel";
+import { StockLink } from "@/components/stock-link";
 import { Skeleton } from "@/components/ui/loading";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { pctColor, pctText } from "@/lib/format";
@@ -180,10 +181,10 @@ function BoardFlowDrawer({ row, onClose }: { row: BoardFlowRow; onClose: () => v
                   {memRows.map((m) => (
                     <tr key={m.symbol} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
                       <td className="py-1 font-mono text-zinc-400">
-                        <a href={`/workbench?symbol=${m.symbol}`} className="hover:text-zinc-600 hover:underline dark:hover:text-zinc-300">{m.symbol}</a>
+                        <StockLink symbol={m.symbol} className="font-mono text-zinc-400">{m.symbol}</StockLink>
                       </td>
                       <td className="max-w-[8em] truncate py-1">
-                        <a href={`/workbench?symbol=${m.symbol}`} className="hover:underline">{m.name}</a>
+                        <StockLink symbol={m.symbol}>{m.name}</StockLink>
                       </td>
                       <td className={`py-1 text-right font-mono ${pctColor(m.change_pct)}`}>{pctText(m.change_pct)}</td>
                       <td className={`py-1 text-right font-mono ${m.main_net_yi == null ? "text-zinc-400" : m.main_net_yi >= 0 ? "text-up" : "text-down"}`}>{signedFmt(m.main_net_yi)}</td>
@@ -375,7 +376,7 @@ export function BoardFlowPanel() {
               </table>
             </div>
             {rows.length > 50 && (
-              <button onClick={() => setShowAll((s) => !s)} className="mt-1.5 shrink-0 self-center text-[10px] text-zinc-400 hover:text-zinc-600 hover:underline dark:hover:text-zinc-300">
+              <button onClick={() => setShowAll((s) => !s)} className="mt-1.5 shrink-0 self-center text-[10px] text-zinc-400 transition-colors hover:text-zinc-600 dark:hover:text-zinc-300">
                 {showAll ? "收起" : `展开全部 ${rows.length} 个板块`}
               </button>
             )}

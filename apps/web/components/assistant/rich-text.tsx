@@ -141,7 +141,7 @@ function renderInline({ text, match, onNavigate }: InlineProps): ReactNode[] {
             key={`e${key++}`}
             type="button"
             title={`${h.name} — 点击跳转到${NAV_LABELS[h.key as NavKey] ?? "对应功能"}`}
-            className="mx-0.5 rounded bg-emerald-500/10 px-1 font-medium text-emerald-600 underline decoration-dotted underline-offset-2 hover:bg-emerald-500/20 dark:text-emerald-400"
+            className="mx-0.5 rounded bg-emerald-500/10 px-1 font-medium text-emerald-600 transition-colors hover:bg-emerald-500/20 dark:text-emerald-400"
             onClick={() => onNavigate(h)}
           >
             {h.text}
@@ -165,7 +165,7 @@ function renderInline({ text, match, onNavigate }: InlineProps): ReactNode[] {
               key={`e${key++}`}
               type="button"
               title={`${h.name} — 点击查看题材梯队`}
-              className="mx-0.5 rounded bg-violet-500/10 px-1 font-medium text-violet-600 underline decoration-dotted underline-offset-2 hover:bg-violet-500/20 dark:text-violet-400"
+              className="mx-0.5 rounded bg-violet-500/10 px-1 font-medium text-violet-600 transition-colors hover:bg-violet-500/20 dark:text-violet-400"
               onClick={() => onNavigate(h)}
             >
               {h.text}
@@ -199,7 +199,7 @@ function renderInline({ text, match, onNavigate }: InlineProps): ReactNode[] {
           <a
             key={`l${key++}`}
             href={lm[2]}
-            className="text-sky-600 underline underline-offset-2 dark:text-sky-400"
+            className="rounded text-sky-600 transition-colors hover:bg-sky-500/10 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300"
           >
             {lm[1] || lm[2]}
           </a>,
@@ -226,13 +226,15 @@ interface RichTextProps {
   text: string;
   matcher: EntityMatcher;
   onNavigate: (m: EntityMatch) => void;
+  /** 覆盖根节点排版类（默认 text-sm）。资讯弹窗等调用方用 13px 正文时传入。 */
+  className?: string;
 }
 
-export function RichText({ text, matcher, onNavigate }: RichTextProps) {
+export function RichText({ text, matcher, onNavigate, className }: RichTextProps) {
   const blocks = parseBlocks(text);
   const inline = (t: string) => renderInline({ text: t, match: matcher, onNavigate });
   return (
-    <div className="space-y-2 text-sm leading-relaxed">
+    <div className={className ?? "space-y-2 text-sm leading-relaxed"}>
       {blocks.map((b, i) => {
         switch (b.kind) {
           case "code":

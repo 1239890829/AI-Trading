@@ -211,7 +211,7 @@ export function EventsTab() {
                     onClick={() =>
                       setModalItem({ title: e.title, url: e.url!, date: e.published_at ?? null, source: e.source ?? null, kindLabel: "快讯" })
                     }
-                    className="text-left text-sm text-zinc-800 hover:underline dark:text-zinc-100"
+                    className="text-left text-sm text-zinc-800 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
                   >
                     {e.title}
                   </button>

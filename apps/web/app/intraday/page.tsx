@@ -22,6 +22,7 @@ import {
   type WatcherState,
 } from "@/lib/api";
 import { workbenchUrlWithBack, themesUrl } from "@/lib/routing";
+import { StockLink } from "@/components/stock-link";
 import { pctColor, pctText, timeText } from "@/lib/format";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { CardListSkeleton, FadeIn, PageSkeletonFallback, StatGridSkeleton, StatsSkeleton, TableSkeleton } from "@/components/ui/loading";
@@ -87,13 +88,9 @@ function OpportunityStockRow({ s }: { s: OpportunityStock }) {
   return (
     <tr className="border-t border-zinc-100 dark:border-zinc-800/60">
       <td className="py-1.5">
-        <a
-          href={workbenchUrlWithBack(s.symbol)}
-          className="font-medium text-zinc-900 hover:text-sky-500 hover:underline dark:text-zinc-50"
-          title="在工作台打开（可返回盘中跟踪）"
-        >
+        <StockLink symbol={s.symbol} className="font-medium text-zinc-900 dark:text-zinc-50" title="在工作台打开（可返回盘中跟踪）">
           {s.name || s.symbol} ↗
-        </a>
+        </StockLink>
         <span className="ml-1 font-mono text-[10px] text-zinc-400">{s.symbol}</span>
       </td>
       <td className="text-zinc-500 dark:text-zinc-400">
@@ -347,15 +344,16 @@ function DirectionCard({ d }: { d: BriefDirection }) {
       {d.pool.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1">
           {d.pool.map((p) => (
-            <span
+            <StockLink
               key={p.symbol}
-              className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
-              title={`${p.role}${p.boards ? ` · ${p.boards} 板` : ""}`}
+              symbol={p.symbol}
+              className="bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-600 no-underline dark:bg-zinc-800 dark:text-zinc-300"
+              title={`${p.name || p.symbol} · ${p.role}${p.boards ? ` · ${p.boards} 板` : ""} — 点击进工作台`}
             >
               {p.name || p.symbol}
               {p.boards >= 2 ? ` ${p.boards}板` : ""}
               <span className="ml-1 text-zinc-400">{p.role}</span>
-            </span>
+            </StockLink>
           ))}
         </div>
       )}
@@ -389,9 +387,9 @@ function AlertItem({ a }: { a: BriefAlert }) {
         </span>
         <span className="font-medium text-zinc-900 dark:text-zinc-50">{a.direction}</span>
         {a.symbol && (
-          <span className="text-zinc-500 dark:text-zinc-400">
+          <StockLink symbol={a.symbol} className="text-zinc-500 dark:text-zinc-400" title="点击进工作台看该股详情">
             {a.name}（{a.symbol}）
-          </span>
+          </StockLink>
         )}
         <span className="ml-auto text-[10px] text-zinc-400">{timeText(a.at)}</span>
         {isConfirm && ret && (ret.t1_return != null || ret.t3_return != null) && (

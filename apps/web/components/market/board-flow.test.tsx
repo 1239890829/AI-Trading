@@ -150,8 +150,8 @@ describe("BoardFlowPanel", () => {
     const drawer = screen.getByTestId("board-flow-drawer");
     expect(drawer.textContent).toContain("中际旭创");
     expect(drawer.textContent).toContain("延迟约 15 分钟口径"); // 延迟口径必须标注
-    // 成员代码 → 工作台跳转
-    const link = drawer.querySelector('a[href="/workbench?symbol=300308"]');
+    // 成员代码 → 工作台跳转（统一走 StockLink：href 带 from 参数，锚前缀断言）
+    const link = drawer.querySelector('a[href^="/workbench?symbol=300308"]');
     expect(link).toBeTruthy();
 
     fireEvent.click(screen.getByTestId("drawer-close"));

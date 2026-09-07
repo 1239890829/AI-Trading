@@ -1,10 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { workbenchUrlWithBack } from "@/lib/routing";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import { StockLink } from "@/components/stock-link";
 import { PageSkeletonFallback } from "@/components/ui/loading";
 import {
   generatePickReview,
@@ -259,9 +258,9 @@ function PicksInner() {
                       key={r.symbol + r.date}
                       className="flex flex-wrap gap-2 border-b border-zinc-100 py-1 last:border-0 dark:border-zinc-800/60"
                     >
-                      <Link href={workbenchUrlWithBack(r.symbol)} title="查看个股详情" className="font-mono text-zinc-400 hover:text-sky-400 hover:underline">
+                      <StockLink symbol={r.symbol} className="font-mono text-zinc-400">
                         {r.symbol}
-                      </Link>
+                      </StockLink>
                       <span>{r.name ?? ""}</span>
                       <span className={`font-mono tabular-nums ${pctColor(r.excess_pct)}`}>
                         超额 {pctText(r.excess_pct)}
