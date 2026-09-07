@@ -77,6 +77,31 @@ def _persist(days: list[date], source: str) -> None:
         log.warning("trading calendar persist failed", exc_info=True)
 
 
+_PERSIST_MIN_RATIO = 0.8  # 新结果须 ≥ 现有持久化的 80% 才允许覆盖
+
+
+def _persist_if_better(days: list[date], source: str) -> None:
+    """持久化质量闸门（2026-09-07，修复 09-04 实测缺陷）。
+
+    缺陷：`_persist` 无条件覆盖——ths 官方端点失败退 index-kline 备源时，
+    ~120 自然日推导出的短日历（约 80 交易日）覆盖掉 243 天官方日历。
+    两种失效：① 短日历成为兜底后 `nth_prev_trade_date(n>80)` 返回 None，
+    复盘区间全废；② 兜底末日不含今天 → 今天被判非交易日（08-29 事故路径）。
+
+    规则：已有持久化且新结果明显更短（<80%）→ 拒绝覆盖并告警。
+    首次落盘（无 existing）与正常更新（官方≈官方、更长的备源）都放行。
+    """
+    existing = _load_persisted()
+    if existing is not None and len(days) < len(existing) * _PERSIST_MIN_RATIO:
+        log.warning(
+            "trading calendar persist skipped: %d days from %s < %.0f%% of persisted "
+            "%d days（劣质备源不覆盖官方日历，保留长历史兜底）",
+            len(days), source, _PERSIST_MIN_RATIO * 100, len(existing),
+        )
+        return
+    _persist(days, source)
+
+
 def _load_persisted() -> list[date] | None:
     try:
         raw = json.loads(_PERSIST_PATH.read_text(encoding="utf-8"))
@@ -187,7 +212,7 @@ async def trading_days(provider, lookback_days: int = 120) -> list[date]:
         _cached_days = days
         _cached_at = time.monotonic()
         if source != "persisted":
-            _persist(days, source)
+            _persist_if_better(days, source)
         log.info("trading calendar loaded: %s days from %s, last=%s",
                  len(days), source, days[-1])
         return list(days)

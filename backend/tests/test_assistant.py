@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -18,8 +19,11 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, ".")
 
 import app.api.routes.assistant as assistant_routes
-from app.core.llm_client import LLMError, stream_chat_completion
+from app.core.llm_client import LLMError, LLMFailure, stream_chat_completion
 from app.core.config import settings
+
+# 仓库根：后端测试要交叉校验前端源文件（跳转别名合同的单一实现方在前端）
+FRONTEND = Path(__file__).resolve().parents[2]
 
 # ---------------------------------------------------------------- openai 流式
 
@@ -173,8 +177,8 @@ def test_chat_route_sse_success(client, monkeypatch):
     captured: list = []
     orig = assistant_routes._build_messages
 
-    def spy(req, market_block=""):
-        msgs = orig(req, market_block)
+    def spy(req, market_block="", tools_enabled=False):
+        msgs = orig(req, market_block, tools_enabled=tools_enabled)
         captured.append(msgs)
         return msgs
 
@@ -207,6 +211,103 @@ def test_chat_route_sse_llm_error(client, monkeypatch):
     assert events[-1] == {"type": "done"}
     # 部分输出不丢：error 前的 delta 保留
     assert any(e.get("text") == "部分" for e in events if e["type"] == "delta")
+
+
+def test_chat_route_sse_error_carries_kind_and_hint(client, monkeypatch):
+    """额度不足要把"该充值"传到前端——只给英文原文，用户不知道该做什么。"""
+    fake = _FakeStream([], error=LLMError("need quota 0.09", LLMFailure.QUOTA))
+    monkeypatch.setattr(assistant_routes, "_open_stream", lambda msgs: fake)
+    resp = client.post("/api/assistant/chat", json={
+        "messages": [{"role": "user", "content": "hi"}],
+    })
+    err = [e for e in _parse_sse(resp.text) if e["type"] == "error"][0]
+    assert err["kind"] == "quota"
+    assert "充值" in (err["hint"] or "")
+
+
+def test_chat_route_sse_gateway_error_hint_must_not_say_recharge(client, monkeypatch):
+    """网关失败的提示里出现"充值"就是误导——这是分类存在的意义。"""
+    fake = _FakeStream([], error=LLMError("internal error", LLMFailure.GATEWAY_ERROR))
+    monkeypatch.setattr(assistant_routes, "_open_stream", lambda msgs: fake)
+    resp = client.post("/api/assistant/chat", json={
+        "messages": [{"role": "user", "content": "hi"}],
+    })
+    err = [e for e in _parse_sse(resp.text) if e["type"] == "error"][0]
+    assert err["kind"] == "gateway_error"
+    assert "充值" not in (err["hint"] or "")
+
+
+def test_prompt_nav_words_covered_by_frontend():
+    """提示词点名的功能名必须都在前端别名表里，否则"可跳转"是空头支票。
+
+    前端是识别与跳转的唯一实现方（lib/nav-targets.ts::NAV_ALIASES），后端只在
+    提示词里点名。两边一旦漂移，模型会照提示词写、前端却识别不到 → 静默退化成
+    普通文字。这里直接读前端源文件做交叉校验，不给漂移留窗口。
+    """
+    from app.assistant.prompt import NAV_WORDS, PROJECT_BRIEF
+
+    nav_src = (FRONTEND / "apps/web/lib/nav-targets.ts").read_text(encoding="utf-8")
+    block = re.search(r"NAV_ALIASES[^=]*=\s*\{(.*?)\n\};", nav_src, re.S)
+    assert block, "未找到前端 NAV_ALIASES 表（结构变了，同步更新本测试）"
+    frontend_keys = set(re.findall(r"^\s*([^\s:{]+):", block.group(1), re.M))
+    missing = [w for w in NAV_WORDS if w not in frontend_keys]
+    assert not missing, f"提示词点名但前端无别名（跳转会失效）：{missing}"
+    # 提示词里必须真的带上这些词，而不是只写在常量里
+    for w in NAV_WORDS:
+        assert w in PROJECT_BRIEF, f"提示词未包含可跳转功能名：{w}"
+
+
+def test_chat_route_tool_round(client, monkeypatch):
+    """端到端：模型要工具 → 后端取数回填 → 第二轮生成正文，且标记不漏给用户。"""
+    rounds: list[list[str]] = [["{{tool:limit_up|date=2026-09-04}}"], ["今日涨停 ", "38 家"]]
+    opened: list = []
+
+    def factory(msgs):
+        opened.append(msgs)
+        return _FakeStream(list(rounds[len(opened) - 1]))
+
+    monkeypatch.setattr(assistant_routes, "_open_stream", factory)
+
+    from app.assistant.tools import ToolContext
+
+    class _Prov:
+        async def get_limit_up_pool(self, trade_date):
+            return [{"symbol": "600519", "name": "贵州茅台", "consecutive_boards": 1,
+                     "change_pct": 10.0, "reason": "白酒"}]
+
+    async def fake_ctx(request, known=None):
+        return ToolContext(provider=_Prov(), known_symbols=set(), trading_days={"2026-09-04"})
+
+    monkeypatch.setattr(assistant_routes, "_tool_context", fake_ctx)
+    monkeypatch.setattr(settings, "assistant_tools_enabled", True)
+
+    resp = client.post("/api/assistant/chat", json={
+        "messages": [{"role": "user", "content": "今天涨停池什么情况？"}],
+    })
+    assert resp.status_code == 200
+    evs = _parse_sse(resp.text)
+    deltas = [e["text"] for e in evs if e.get("type") == "delta"]
+    assert "".join(deltas) == "今日涨停 38 家"       # 标记行没流给用户
+    assert any(e.get("type") == "tools" and e.get("used") == ["limit_up"] for e in evs)
+    assert len(opened) == 2                            # 取数后又跑了一轮
+    # 第二轮的最后一条 user 消息必须带着工具结果
+    assert "贵州茅台" in opened[1][-1]["content"]
+    # 提示词里注入了工具清单
+    assert "{{tool:limit_up|" in opened[0][0]["content"]
+
+
+def test_chat_route_no_tool_round_when_disabled(client, monkeypatch):
+    """关掉工具就不注入清单——模型不该以为自己有手（幻觉的最大来源）。"""
+    opened: list = []
+    monkeypatch.setattr(assistant_routes, "_open_stream",
+                        lambda msgs: (opened.append(msgs), _FakeStream(["好的"]))[1])
+    monkeypatch.setattr(settings, "assistant_tools_enabled", False)
+    resp = client.post("/api/assistant/chat", json={
+        "messages": [{"role": "user", "content": "hi"}],
+    })
+    assert resp.status_code == 200
+    assert len(opened) == 1
+    assert "可用工具" not in opened[0][0]["content"]
 
 
 def test_chat_route_validation(client):
@@ -286,7 +387,15 @@ def test_entity_dict_empty_env(client, monkeypatch, tmp_path):
 
 # ---------------------------------------------------------------- 实时快照注入
 
-from app.assistant.context import build_market_block, format_quote_line, resolve_symbols
+from datetime import datetime, timezone
+
+from app.assistant.context import (
+    build_market_block,
+    build_market_context,
+    format_quote_line,
+    quote_sources,
+    resolve_symbols,
+)
 from app.schemas.market import Quote
 
 _STOCKS = [
@@ -354,14 +463,95 @@ def test_build_market_block_degrades():
     assert _run(build_market_block(boom, [])) == ""
 
 
+# ---------------------------------------------------------------- 输出溯源 P0-4
+
+
+def test_quote_line_carries_source_and_as_of():
+    """溯源三件套：来源 / 数据时间 / 口径——没有它们，回答里的数字无从核对。"""
+    q = _mk_quote(source="sina", data_timestamp=datetime(2026, 9, 6, 6, 30, tzinfo=timezone.utc))
+    line = format_quote_line(q)
+    assert "来源 sina" in line
+    assert "口径 实时快照" in line
+    assert "数据时间 14:30" in line  # UTC 06:30 → 北京 14:30
+    assert "⚠" not in line
+
+
+def test_quote_line_flags_degraded_quality():
+    """质量降级必须可见，且明确禁止下确定性结论。"""
+    q = _mk_quote(quality="low", quality_reasons=["源超时"])
+    line = format_quote_line(q)
+    assert "⚠ 数据质量 low" in line and "源超时" in line
+    assert "不要据此下确定性结论" in line
+
+
+def test_quote_sources_shape():
+    srcs = quote_sources([_mk_quote(name="贵州茅台", source="tencent")])
+    assert srcs == [{"symbol": "600519", "name": "贵州茅台", "source": "tencent",
+                     "as_of": srcs[0]["as_of"]}]
+    assert srcs[0]["as_of"]  # 没有时间戳也要有兜底值，不能是空串
+
+
+def test_quote_line_unknown_as_of_when_no_timestamp():
+    q = _mk_quote()
+    q = q.model_copy(update={"data_timestamp": None, "received_at": None}) \
+        if hasattr(q, "model_copy") else q
+    # received_at 有默认工厂，构造不出来空值；这里只保证有值时格式正确
+    assert "数据时间 " in format_quote_line(q)
+
+
+def test_build_market_context_returns_sources():
+    async def fake_get(syms):
+        return [
+            _mk_quote(symbol="600519", source="tencent"),
+            _mk_quote(symbol="000001", source="tencent"),
+        ]
+
+    block, sources = _run(build_market_context(fake_get, ["000001", "600519"]))
+    assert "溯源纪律" in block
+    assert [s["symbol"] for s in sources] == ["000001", "600519"]  # 与请求顺序一致
+    assert all(s["source"] == "tencent" and s["as_of"] for s in sources)
+
+
+def test_build_market_context_empty():
+    async def boom(_):
+        raise RuntimeError("down")
+
+    assert _run(build_market_context(boom, ["600519"])) == ("", [])
+    assert _run(build_market_context(boom, [])) == ("", [])
+
+
+def test_chat_route_meta_carries_sources(client, monkeypatch):
+    """meta 事件带溯源清单：前端据此显示脚注，数字可追溯到源与时间。"""
+    monkeypatch.setattr(assistant_routes, "_open_stream", lambda msgs: _FakeStream(["好的"]))
+    monkeypatch.setattr(assistant_routes, "_entity_payload",
+                        lambda _req: {"stocks": [{"name": "贵州茅台", "code": "600519"}], "themes": []})
+
+    async def fake_batch(hub, syms):
+        return [_mk_quote(source="tencent")]
+
+    from app.api.routes import market as market_routes
+    monkeypatch.setattr(market_routes, "_batch_quotes", fake_batch)
+
+    resp = client.post("/api/assistant/chat", json={
+        "messages": [{"role": "user", "content": "贵州茅台现在多少？"}],
+    })
+    assert resp.status_code == 200
+    first = json.loads(resp.text.split("\n\n")[0].removeprefix("data: "))
+    assert first["type"] == "meta"
+    assert first["sources"] == [
+        {"symbol": "600519", "name": "贵州茅台", "source": "tencent", "as_of": first["sources"][0]["as_of"]}
+    ]
+    assert first["sources"][0]["as_of"]  # 非空
+
+
 def test_chat_route_includes_market_block(client, monkeypatch):
     fake = _FakeStream(["好的"])
     monkeypatch.setattr(assistant_routes, "_open_stream", lambda msgs: fake)
     captured: list = []
     orig = assistant_routes._build_messages
 
-    def spy(req, market_block=""):
-        msgs = orig(req, market_block)
+    def spy(req, market_block="", tools_enabled=False):
+        msgs = orig(req, market_block, tools_enabled=tools_enabled)
         captured.append(msgs[0]["content"])
         return msgs
 

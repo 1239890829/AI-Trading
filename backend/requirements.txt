@@ -13,3 +13,10 @@ alembic>=1.19
 
 # 本地全市场日K仓（marketdb）：RPS/横截面底座（scripts/sync_marketdb.py 回补；只读单文件 DuckDB）
 duckdb>=1.5
+
+# 扩展数据面（akshare，2026-09-07 star 仓库评测整合）：三池交叉校验/宏观 CPI/两融账户/龙虎榜第二源。
+# 仅扩展面不进行情热链路（push2 系个股K/快照/板块本机被墙，见 docs/data-source-comparison.md）。
+# 服务层懒加载（app/services/akshare_ext.py），未安装时 /api/ext/akshare/* 显式降级 kind=not_installed。
+# jsonpath==0.82 的 sdist 在新 pip 严格解包下崩溃（EEXIST），用 vendor wheel（sha256 固定）绕过。
+./vendor/wheels/jsonpath-0.82-py3-none-any.whl
+akshare==1.18.94

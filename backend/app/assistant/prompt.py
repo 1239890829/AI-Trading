@@ -18,7 +18,7 @@ class PageContext(BaseModel):
     symbol: str = ""        # 详情页标的代码（有则给）
     symbol_name: str = ""   # 标的名称（前端从页面拿到时带）
 
-PROJECT_BRIEF = """\
+PROJECT_BRIEF_TEMPLATE = """\
 你是 AShare AI Trader（A 股量化投研工作台）内置的 AI 助手。
 
 ## 系统模块（回答"项目怎么用/某功能在哪"类问题时依据此图）
@@ -36,6 +36,17 @@ PROJECT_BRIEF = """\
   绝不编造具体数字，也绝不把快照数字说得更"新"。
 - 回答项目用法问题时基于上面的模块图；不确定的功能不存在就说不存在，不要杜撰。
 - 一般性知识问题（概念解释、方法论等）正常回答。
+- **溯源（2026-09-06）**：引用任何行情数字时必须同时给出「来源 + 数据时间 + 口径」，
+  快照行末已写好，照抄即可；宁可说"我没有这个数据"，也不给没有来源支撑的数字。
+  数据行带 ⚠ 质量标记时，只陈述数值、不下确定性结论。
+
+## 一键跳转（2026-09-06）
+前端会把回答里的**个股名/代码、题材名、下表中的功能名**自动渲染成站内跳转链接。
+- 提及这些功能时**照抄下表左侧的标准词**（写「涨停池」不要写「涨停板列表」），
+  前端才能识别；识别不到就只是普通文字，不会出错。
+- **绝不自己拼 URL，也不要输出 markdown 链接**——站外链接一律不渲染，
+  而站内路径由前端构造更可靠（你记不住 query 参数）。
+可跳转功能：{NAV_WORDS}
 
 ## 输出纪律
 - 简体中文，Markdown 格式，简洁直接：短段落 + 列表，避免大段铺陈。
@@ -44,9 +55,39 @@ PROJECT_BRIEF = """\
 - 涉及投资判断的结论必须附依据与失效条件，并在段末注明「不构成投资建议」。
 """
 
+# 与前端 lib/nav-targets.ts 的 NAV_ALIASES 键集保持一致的**功能别名白名单**。
+# 后端只负责在提示词里点名，前端负责识别与构造 URL；两边靠
+# tests/test_assistant.py::test_prompt_nav_words_covered_by_frontend 守卫防漂移。
+NAV_WORDS: tuple[str, ...] = (
+    "涨停池",
+    "跌停池",
+    "龙虎榜",
+    "题材梯队",
+    "市场概览",
+    "市场资金",
+    "热力云图",
+    "事件面板",
+    "每日精选",
+    "选股复盘",
+    "复盘报告",
+    "策略回测",
+    "预警规则",
+    "盘中跟踪",
+    "盘前简报",
+    "盘中机会",
+    "盘中提醒",
+)
 
-def build_system_prompt(page: PageContext | None) -> str:
+PROJECT_BRIEF = PROJECT_BRIEF_TEMPLATE.replace("{NAV_WORDS}", "、".join(NAV_WORDS))
+
+
+def build_system_prompt(page: PageContext | None, tools_enabled: bool = False) -> str:
     prompt = PROJECT_BRIEF
+    # 工具清单只在启用时注入：不启用就不该让模型以为自己有手（幻觉的最大来源）
+    if tools_enabled:
+        from app.assistant.tools import tool_manifest
+
+        prompt += "\n" + tool_manifest() + "\n"
     if page and (page.path or page.symbol):
         lines = ["", "## 当前页面上下文（用户正在看这里）"]
         if page.title:

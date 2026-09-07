@@ -14,6 +14,7 @@ from app.data_providers.eastmoney import ProviderError
 from app.data_quality.validator import validate_order_book
 from app.market.article import ArticleFetchError, classify_url, fetch_article
 from app.schemas.envelope import (
+    AnomalyPayload,
     AuctionBenchmarkItem,
     AuctionSnapshot,
     AdjustmentEvent,
@@ -351,6 +352,56 @@ async def market_fund_flow_history(
     return {"data": await get_fund_flow_history(hub, days), "meta": _meta(hub)}
 
 
+@router.get("/market/board-fund-flow")
+async def market_board_fund_flow(
+    kind: str = Query(default="concept", description="concept 概念 / industry 行业"),
+    range: str = Query(default="intraday", description="intraday 今日 / 5d / 10d / 20d"),
+) -> dict:
+    """板块资金流榜（L2 唯一实现，docs/fund-flow-redesign.md 四层级模型）。
+
+    - intraday/5d/10d：一次翻页全量（f62 今日 / f164 5日 / f174 10日，官方字段已实测），
+      前端排序筛选纯内存，切换不回源；
+    - 20d 与连续流入天数：只读落盘（每日收盘后自动沉淀 Top 板块 daykline），读路径零外呼；
+    - 板块 f62 是东财官方板块口径，不与个股新浪口径混算。
+    """
+    from app.market.board_flow import get_board_fund_flow
+
+    if kind not in ("concept", "industry"):
+        raise HTTPException(status_code=422, detail="kind 仅允许 concept / industry")
+    if range not in ("intraday", "5d", "10d", "20d"):
+        raise HTTPException(status_code=422, detail="range 仅允许 intraday / 5d / 10d / 20d")
+    return {"data": await get_board_fund_flow(kind, range), "meta": {}}
+
+
+def _valid_board_code(board_code: str) -> str | None:
+    code = board_code.strip().upper()
+    if code.startswith("BK") and code[2:].isdigit() and len(code) in (5, 6):
+        return code
+    return None
+
+
+@router.get("/market/board-fund-flow/{board_code}/minute")
+async def market_board_flow_minute(board_code: str) -> dict:
+    """板块分钟五档资金流累计曲线（东财延迟 ~15min 口径，available=false 时显式 reason）。"""
+    from app.market.board_flow import get_board_minute
+
+    code = _valid_board_code(board_code)
+    if code is None:
+        raise HTTPException(status_code=422, detail=f"board_code 须为 BKxxxx 形式：{board_code!r}")
+    return {"data": await get_board_minute(code), "meta": {}}
+
+
+@router.get("/market/board-fund-flow/{board_code}/members")
+async def market_board_flow_members(board_code: str) -> dict:
+    """板块成员个股资金排行 Top20（板块内资金龙头；东财成员口径）。"""
+    from app.market.board_flow import get_board_members
+
+    code = _valid_board_code(board_code)
+    if code is None:
+        raise HTTPException(status_code=422, detail=f"board_code 须为 BKxxxx 形式：{board_code!r}")
+    return {"data": await get_board_members(code), "meta": {}}
+
+
 @router.get("/market/overview", response_model=Envelope[OverviewPayload])
 async def market_overview(request: Request, hub: QuoteHub = Depends(get_hub)) -> dict:
     """指数行情 + 两市成交额合计。
@@ -649,6 +700,137 @@ async def limit_down(
     }
 
 
+_ANOMALY_TAG_VALUES = ("LIMIT_UP", "LIMIT_DOWN", "SHARP_RISE", "SHARP_FALL", "RAPID_RALLY", "RAPID_DECLINE")
+
+
+@router.get("/market/anomalies", response_model=Envelope[AnomalyPayload])
+async def market_anomalies(
+    request: Request,
+    tags: str | None = Query(default=None, description="逗号分隔异动标签（LIMIT_UP/SHARP_RISE…），缺省=全量"),
+    limit: int = Query(default=200, ge=1, le=1000),
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    """当日全市场异动原因（ths 独占，today-only）。
+
+    空集是正常语义（非交易日/尚无异动），note 显式说明，绝不静默。
+    60s TTL：全市场一次拉齐 + 内存排序，轮询不回源。
+    """
+    tag_list = [t.strip().upper() for t in (tags or "").split(",") if t.strip()]
+    bad = [t for t in tag_list if t not in _ANOMALY_TAG_VALUES]
+    if bad:
+        raise HTTPException(status_code=422, detail=f"非法异动标签：{','.join(bad)}；允许值 {','.join(_ANOMALY_TAG_VALUES)}")
+
+    cache = cache_on(request.app.state, "market.anomalies", 60, maxsize=8)
+    key = (tuple(tag_list),)
+
+    async def _build() -> dict:
+        try:
+            records = await hub.provider.get_anomaly_list(tag_list or None)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"异动数据源失败：{exc}") from exc
+        return {
+            "records": [r.model_dump(mode="json") for r in records[:limit]],
+            "note": None if records else "当日无匹配异动记录（today-only 端点，非交易日/未产生异动属正常）",
+        }
+
+    _, payload = await cache.get_or_set(key, _build)
+    return {"data": payload, "meta": _meta(hub)}
+
+
+@router.get("/market/anomalies/stock", response_model=Envelope[AnomalyPayload])
+async def market_anomalies_stock(
+    request: Request,
+    symbols: str = Query(description="逗号分隔 6 位代码，≤50（官方单批上限）"),
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    """按代码批量查当日异动原因（自选股行徽标/个股详情「为什么异动」消费）。"""
+    sym_list = [s.strip() for s in symbols.split(",") if s.strip()]
+    if not sym_list:
+        raise HTTPException(status_code=422, detail="symbols 不能为空")
+    if len(sym_list) > 50:
+        raise HTTPException(status_code=422, detail="单批最多 50 个代码（官方上限）")
+
+    cache = cache_on(request.app.state, "market.anomalies.stock", 60, maxsize=64)
+    key = (tuple(sym_list),)
+
+    async def _build() -> dict:
+        try:
+            records = await hub.provider.get_anomaly_stock(sym_list)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"异动数据源失败：{exc}") from exc
+        return {
+            "records": [r.model_dump(mode="json") for r in records],
+            "note": None if records else "所查代码当日无异动记录（非故障）",
+        }
+
+    _, payload = await cache.get_or_set(key, _build)
+    return {"data": payload, "meta": _meta(hub)}
+
+
+@router.get("/market/heat/skyrocket")
+async def market_skyrocket(
+    request: Request,
+    period: str = Query(default="day", description="统计周期：day / hour"),
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    """飙升榜（ths 独有）——「正在变热」的更早信号，排名逻辑与热股榜不同。
+
+    60s TTL：榜单一次拉齐 + 前端内存排序，轮询不回源。
+    """
+    if period not in ("day", "hour"):
+        raise HTTPException(status_code=422, detail="period 仅允许 day / hour")
+
+    cache = cache_on(request.app.state, "market.heat.skyrocket", 60, maxsize=2)
+    key = (period,)
+
+    async def _build() -> dict:
+        try:
+            rows = await hub.provider.get_skyrocket_list(period)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"飙升榜数据源失败：{exc}") from exc
+        return {"rows": rows[:100], "period": period}
+
+    _, payload = await cache.get_or_set(key, _build)
+    return {"data": payload, "meta": _meta(hub)}
+
+
+@router.get("/market/heat/rank-trend")
+async def market_hot_rank_trend(
+    request: Request,
+    symbol: str = Query(description="6 位股票代码"),
+    days: int = Query(default=30, ge=1, le=365, description="回看自然日数（官方窗口 ≤1 年）"),
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    """单股热榜排名走势（ths 独有，官方服务器侧即历史库）。
+
+    区间内未上榜的日期正常缺失；空集 = 该股区间内从未上榜（合法语义，note 说明）。
+    """
+    sym = symbol.strip()
+    if not (len(sym) == 6 and sym.isdigit()):
+        raise HTTPException(status_code=422, detail="symbol 须为 6 位股票代码")
+
+    end = date.today()
+    start = end - timedelta(days=days - 1)
+    cache = cache_on(request.app.state, "market.heat.rank-trend", 300, maxsize=64)
+    key = (sym, days)
+
+    async def _build() -> dict:
+        try:
+            points = await hub.provider.get_hot_rank_trend(sym, start, end)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"排名走势数据源失败：{exc}") from exc
+        return {
+            "symbol": sym,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "points": points,
+            "note": None if points else f"{sym} 在 {start.isoformat()}~{end.isoformat()} 未上榜（非故障）",
+        }
+
+    _, payload = await cache.get_or_set(key, _build)
+    return {"data": payload, "meta": _meta(hub)}
+
+
 @router.get("/longhu", response_model=Envelope[LongHuPayload])
 async def longhu(
     date_str: str | None = Query(default=None, alias="date", description="YYYY-MM-DD，默认最近交易日（T-1 盘后披露）"),
@@ -669,6 +851,61 @@ async def longhu(
         "data": {"trade_date": trade_date.isoformat(), "records": [r.model_dump(mode="json") for r in records]},
         "meta": _meta(hub),
     }
+
+
+@router.get("/market/longhu/theme-trail")
+async def longhu_theme_trail(
+    request: Request,
+    days: int = Query(default=5, ge=1, le=10, description="回看交易日数（≤10 控限流）"),
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    """龙虎榜跨日题材轨迹（B3，官方场景 16 方法学）——资金近 N 日在题材间的轮动。
+
+    - 仅日榜（range_days=1）参与聚合，三日榜跨口径绝不混用；
+    - 概念等分守恒（官方建议口径，非真实拆分——note 显式标注）；
+    - 逐日并发拉取（N≤10），单日失败降级跳过并在 degraded 显式列出；
+    - 300s TTL：榜单 T-1 披露后不变，重复请求不回源。
+    """
+    import asyncio as _asyncio
+    import bisect as _bisect
+
+    from app.market.trade_calendar import trading_days
+    from app.services.longhu_trail import aggregate_concept_trail
+
+    cache = cache_on(request.app.state, "market.longhu.theme-trail", 300, maxsize=4)
+    key = (days,)
+    hit, payload = cache.get(key)
+    if hit:
+        return {"data": payload, "meta": _meta(hub)}
+
+    anchor = await _default_trade_date_async(hub)
+    cal = await trading_days(hub.provider)
+    i = _bisect.bisect_right(cal, anchor)
+    window = cal[max(0, i - days) : i]  # 升序近 N 个交易日（含最近已披露日）
+    if not window:
+        raise HTTPException(status_code=503, detail="交易日历不可用，无法定位区间")
+
+    results = await _asyncio.gather(
+        *(hub.provider.get_longhu_records(d) for d in window), return_exceptions=True
+    )
+    daily: list[tuple[date, list]] = []
+    degraded: list[str] = []
+    for d, res in zip(window, results):
+        if isinstance(res, BaseException):
+            degraded.append(f"{d.isoformat()}: {res}")
+        else:
+            daily.append((d, res))
+    if not daily:
+        raise HTTPException(status_code=502, detail=f"龙虎榜近 {days} 日全部拉取失败：{degraded}")
+
+    payload = {
+        "days": [d.isoformat() for d, _ in daily],
+        "trail": aggregate_concept_trail(daily),
+        "degraded": degraded,
+        "note": "概念等分守恒口径（单股净额按概念数均摊，非真实拆分）；仅统计日榜（range_days=1）",
+    }
+    cache.set(key, payload)
+    return {"data": payload, "meta": _meta(hub)}
 
 
 @router.get("/auction/{symbol}", response_model=Envelope[AuctionSnapshot])

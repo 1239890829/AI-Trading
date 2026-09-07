@@ -14,8 +14,10 @@ import pytest
 from app.services.theme_service import (
     MIDDLE_WEIGHT_MIN_CAP,
     UNCLASSIFIED,
+    _parse_hhmmss,
     assign_primary_themes,
     classify_role,
+    early_seal_rate,
     echelon_completeness,
     formation_level,
     judge_theme_stage,
@@ -23,6 +25,7 @@ from app.services.theme_service import (
     parse_theme_tags,
     seal_phase,
     seal_quality_score,
+    seal_retention_rate,
     strength_tier,
     theme_health_note,
     theme_strength_score,
@@ -81,6 +84,47 @@ def test_seal_phase_returns_none_when_unparsable():
     assert seal_phase(None) is None
     assert seal_phase("") is None
     assert seal_phase("abc") is None
+
+
+# ---------------------------------------------------------------- 封单质量（A2 下半）
+
+
+def test_parse_hhmmss_variants():
+    assert _parse_hhmmss("09:33:00") == 93300
+    assert _parse_hhmmss("093300") == 93300
+    assert _parse_hhmmss("10:30") == 103000  # HHMM 补零成 HHMMSS
+    assert _parse_hhmmss("") is None
+    assert _parse_hhmmss(None) is None
+    assert _parse_hhmmss("abc") is None
+
+
+def test_early_seal_rate_counts_only_before_10am():
+    # 2/3 早封；None 样本（时间缺失）从分母剔除
+    got = early_seal_rate([_parse_hhmmss("09:31"), _parse_hhmmss("10:30"), None, _parse_hhmmss("09:58")])
+    assert got == round(2 / 3, 4)
+
+
+def test_early_seal_rate_none_when_no_samples():
+    """全部成员缺首封时间 → None（三态），绝不冒充 0%。"""
+    assert early_seal_rate([None, None]) is None
+    assert early_seal_rate([]) is None
+
+
+def test_seal_retention_pairs_current_over_max():
+    # 5000 万收盘 / 8000 万最高 = 0.625；缺失对剔除；max=0 防除零
+    got = seal_retention_rate([
+        (5e7, 8e7),
+        (None, 8e7),      # 当前封单缺失 → 成对剔除
+        (3e7, None),      # 最高封单缺失 → 成对剔除
+        (1e7, 0.0),       # max=0 → 剔除（防除零）
+        (2e7, 2e7),       # 收盘=最高 → 留存 1.0
+    ])
+    assert got == round((5e7 + 2e7) / (8e7 + 2e7), 4)
+
+
+def test_seal_retention_none_when_no_valid_pairs():
+    assert seal_retention_rate([(None, None), (1e7, None)]) is None
+    assert seal_retention_rate([]) is None
 
 
 # ---------------------------------------------------------------- 角色判定

@@ -163,6 +163,10 @@ export interface ThemePerformance {
   market_break_rate?: number | null;
   seal_time_distribution: Record<string, number>;
   seal_quality: number;
+  /** 早封率：首封 ≤10:00 占比（官方场景 12 口径）；样本缺失为 null */
+  early_seal_rate?: number | null;
+  /** 封单留存：Σ收盘封单/Σ盘中最高封单；max_seal_money 仅 ths 主源提供，样本不足为 null */
+  seal_retention?: number | null;
   turnover_median?: number | null;
   amount_total?: number | null;
   float_cap_median?: number | null;

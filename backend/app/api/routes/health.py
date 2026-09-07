@@ -60,7 +60,27 @@ async def system_providers(request: Request, hub: QuoteHub = Depends(get_hub)) -
     # 盘中情绪监控（sentiment P2 #14）：无实例 = 未启用/未到首拍
     mon = getattr(request.app.state, "sentiment_monitor", None)
     payload["sentiment_monitor"] = mon.snapshot() if mon is not None else {"state": "not_started"}
+    # LLM 网关体检（2026-09-06）：只回上次结果，不在这里触发真实调用——
+    # 否则轮询该端点就等于反复烧额度。要立刻体检走 GET /api/system/llm-probe?force=1
+    probe = getattr(request.app.state, "llm_probe", None)
+    payload["llm_gateway"] = probe.snapshot(cached=True) if probe is not None else {"state": "not_started"}
     return payload
+
+
+@router.get("/system/llm-probe")
+async def llm_probe(request: Request, force: bool = False) -> dict:
+    """LLM 网关体检（2026-09-06）：把「额度不足」与「网关失败」分开暴露。
+
+    - 默认：回上次体检结果（带 cached 标记），零成本、不阻塞
+    - `force=1`：发一次真实最小调用（约 $0.0006、1~3s，走 to_thread 不堵
+      事件循环），用于充值后/改配置后立刻确认是否恢复
+
+    `last_failure_kind=quota` 就是该充值了；`gateway_error` 充钱也没用。
+    """
+    probe = getattr(request.app.state, "llm_probe", None)
+    if probe is None:
+        return {"state": "not_started"}
+    return await probe.probe_once(force=force)
 
 
 @router.get("/system/caches")

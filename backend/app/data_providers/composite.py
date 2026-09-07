@@ -45,7 +45,9 @@ _ROUTED = (
 #: 仅用于 /api/system/providers 展示"每个源实现了哪些方法"，不参与路由选择。
 _OBSERVABLE_METHODS = _ROUTED + (
     "get_minute_line", "get_hot_stock_list", "get_hot_stock_list_history",
+    "get_skyrocket_list", "get_hot_rank_trend",
     "get_auction_snapshot", "get_auction_benchmark", "get_adjustment_events",
+    "get_anomaly_list", "get_anomaly_stock",
 )
 
 
@@ -353,6 +355,14 @@ class CompositeProvider:
         """热股榜（仅 ths 实现；无备源，失败向上抛由调用方标 gap）。"""
         return await self._call("get_hot_stock_list", period)
 
+    async def get_skyrocket_list(self, period: str = "day") -> list:
+        """飙升榜（仅 ths 实现；排名逻辑与热股榜不同，「正在变热」信号）。"""
+        return await self._call("get_skyrocket_list", period)
+
+    async def get_hot_rank_trend(self, symbol: str, start: date, end: date) -> list:
+        """单股热榜排名走势（仅 ths 实现；区间内未上榜日期正常缺失，空集合法）。"""
+        return await self._call_allow_empty("get_hot_rank_trend", symbol, start, end)
+
     async def get_hot_stock_list_history(self, d: date) -> list:
         """历史热股榜（仅 ths 实现）。"""
         return await self._call("get_hot_stock_list_history", d)
@@ -368,3 +378,34 @@ class CompositeProvider:
     async def get_adjustment_events(self, symbol: str, start: date | None = None, end: date | None = None) -> list:
         """复权事件流（仅 ths 实现，单只；空事件流合法）。"""
         return await self._call("get_adjustment_events", symbol, start, end)
+
+    async def _call_allow_empty(self, method: str, *args):
+        """ths 独占 + 空集合法语义的调用（异动原因 today-only）。
+
+        与 _call 的区别：空结果**不计失败**——异动在非交易日/无异动时段返回空是
+        正常状态，若走 _call 会被连续累计打进熔断（同 search 的历史教训）。
+        仅异常（网络/服务端错）才记失败；全挂抛 ProviderError。
+        """
+        errors: list[str] = []
+        for p in self._pick(method):
+            if self._in_cooldown(method, p.name):
+                errors.append(f"{p.name}: 熔断冷却中（{self._cooldown_left(method, p.name):.0f}s）")
+                continue
+            try:
+                result = await getattr(p, method)(*args)
+            except Exception as exc:
+                log.warning("provider %s %s failed: %s", p.name, method, exc)
+                self._record_failure(method, p.name)
+                errors.append(f"{p.name}: {exc}")
+                continue
+            self._settle_last_good(method, p.name)
+            return result if result is not None else []
+        raise ProviderError(f"all providers failed for {method}: " + "; ".join(errors))
+
+    async def get_anomaly_list(self, tag_codes: list[str] | None = None) -> list:
+        """当日全市场异动原因（仅 ths 实现；空集=当日无记录，属正常语义）。"""
+        return await self._call_allow_empty("get_anomaly_list", tag_codes)
+
+    async def get_anomaly_stock(self, symbols: list[str]) -> list:
+        """按代码批量查当日异动原因（仅 ths 实现；无记录的代码不返回，属正常语义）。"""
+        return await self._call_allow_empty("get_anomaly_stock", symbols)

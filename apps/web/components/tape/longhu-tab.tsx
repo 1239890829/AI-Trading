@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Panel } from "@/components/panel";
-import { getLonghu } from "@/lib/api";
+import { getLonghu, getLonghuThemeTrail, type LonghuTrailPayload } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
 import { workbenchUrlWithBack } from "@/lib/routing";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
@@ -37,6 +37,23 @@ export function LonghuTab() {
   const [queryDate, setQueryDate] = useState<string | null>(null);
   // 首次拉取在途：区分「加载中」与「确认无数据」（2026-09-04 统一加载体验）
   const [loading, setLoading] = useState(true);
+  // 题材迁徙（B3）：best-effort 增强，失败静默降级（主榜不依赖它）
+  const [trail, setTrail] = useState<LonghuTrailPayload | null>(null);
+  const [trailOpen, setTrailOpen] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    getLonghuThemeTrail(5)
+      .then((t) => {
+        if (alive) setTrail(t);
+      })
+      .catch(() => {
+        if (alive) setTrail(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const load = useCallback(async (date?: string) => {
     setQueryDate(date ?? null);
@@ -204,6 +221,53 @@ export function LonghuTab() {
           </table>
         )}
       </Panel>
+
+      {/* ── 题材迁徙（B3）：概念等分守恒口径，回答「资金近 N 日在题材间怎么轮动」── */}
+      {trail && trail.trail.length > 0 && (
+        <details
+          className="mt-4 shrink-0 rounded-xl border border-zinc-200 dark:border-zinc-800"
+          open={trailOpen}
+          onToggle={(e) => setTrailOpen((e.target as HTMLDetailsElement).open)}
+        >
+          <summary className="cursor-pointer select-none px-4 py-2.5 text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">
+            题材迁徙 · 近 {trail.days.length} 日龙虎榜净额按概念聚合（等分守恒口径，非真实拆分；仅日榜）
+          </summary>
+          <div className="space-y-1.5 border-t border-zinc-200 px-4 py-3 dark:border-zinc-800">
+            {trail.trail.slice(0, 12).map((row) => {
+              const maxAbs = Math.max(
+                ...row.daily.map((p) => Math.abs(p.net ?? 0)),
+                1,
+              );
+              return (
+                <div key={row.concept} className="flex items-center gap-2 text-xs">
+                  <span className="w-24 shrink-0 truncate text-zinc-600 dark:text-zinc-300" title={row.concept}>
+                    {row.concept}
+                  </span>
+                  <div className="flex flex-1 items-center gap-1">
+                    {row.daily.map((p) => (
+                      <div key={p.date} className="flex h-7 flex-1 items-center" title={`${p.date}：${p.net == null ? "无记录" : fmtAmount(p.net)}`}>
+                        <div
+                          className={`w-full rounded-sm ${p.net == null ? "bg-zinc-200 dark:bg-zinc-800" : (p.net > 0 ? "bg-rose-500/70" : "bg-emerald-500/70")}`}
+                          style={{ height: p.net == null ? 2 : `${Math.max(8, (Math.abs(p.net) / maxAbs) * 100)}%` }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <span className={`w-20 shrink-0 text-right font-mono tabular-nums ${((row.total ?? 0) > 0 && "text-up") || ((row.total ?? 0) < 0 && "text-down") || "text-zinc-400"}`}>
+                    {fmtAmount(row.total)}
+                  </span>
+                </div>
+              );
+            })}
+            {trail.degraded.length > 0 && (
+              <p className="pt-1 text-[11px] text-amber-500">
+                部分交易日拉取失败已跳过：{trail.degraded.join("；")}
+              </p>
+            )}
+          </div>
+        </details>
+      )}
+
       <div className="mt-4 shrink-0 space-y-1 text-xs text-zinc-400">
         {isIntradaySnapshot && (
           <p className="text-amber-500">

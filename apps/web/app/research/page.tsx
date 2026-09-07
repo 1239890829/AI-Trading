@@ -29,6 +29,9 @@ function ResearchInner() {
   const sp = useSearchParams();
   const raw = sp.get("tab");
   const tab: TabKey = TABS.some((t) => t.key === raw) ? (raw as TabKey) : "backtest";
+  // 复盘深链日期（助手跳转 / 分享）：只接受 YYYY-MM-DD，非法值当没传
+  const rawDate = sp.get("date");
+  const reviewDate = rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : undefined;
 
   function switchTab(k: TabKey) {
     const p = new URLSearchParams(sp.toString());
@@ -66,7 +69,7 @@ function ResearchInner() {
       <FadeSwap swapKey={tab} className="min-h-0 flex-1">
         {tab === "backtest" && <BacktestTab />}
         {tab === "alerts" && <AlertsTab />}
-        {tab === "review" && <ReviewTab />}
+        {tab === "review" && <ReviewTab focusDate={reviewDate} />}
       </FadeSwap>
     </main>
   );

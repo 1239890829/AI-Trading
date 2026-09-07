@@ -60,9 +60,6 @@ import { BoardRankPanel } from "@/components/detail/board-rank-panel";
 import { RealPositionPanel } from "@/components/detail/real-position-panel";
 import { SuspendedBadge, SuspendedNotice, isSuspended } from "@/components/detail/suspended-badge";
 
-type ChartTab = "kline" | "minute" | "flow";
-type RightTab = "book" | "trades" | "trade" | "real" | "profile" | "info" | "speed" | "boards";
-
 /**
  * 次屏数据调度（评审 O1，2026-09-01）：切股首屏只需 K 线 + 盘口（各自默认 tab），
  * 其余数据推到浏览器空闲时拉取——首屏不再被最慢的财务/新闻请求拖住（东财慢时
@@ -84,9 +81,40 @@ function scheduleIdle(fn: () => void): () => void {
 /** 个股详情终端 v3（工作台右栏 / 个股页共用）：
  * 顶部紧凑行情条 → 中部 [左：图表区(K线/分时/资金图) | 右：盘口↔逐笔] → 右列：盘口↔逐笔 + 财务摘要。龙虎榜见独立页面。
  * K线带龙虎榜日标记与金叉死叉技术信号；滚动只存在于表格/列表容器内部。 */
-export function StockDetailPanel({ symbol }: { symbol: string }) {
-  const [chartTab, setChartTab] = useState<ChartTab>("kline");
-  const [rightTab, setRightTab] = useState<RightTab>("book");
+export type ChartTab = "kline" | "minute" | "flow";
+export type RightTab = "book" | "trades" | "trade" | "real" | "profile" | "info" | "speed" | "boards";
+
+/**
+ * 助手「一键跳转」的落点参数（2026-09-06，docs/assistant-optimization-plan.md §1.3）：
+ * 工作台 URL 的 ?ct=（图表区 tab）与 ?rt=（右栏 tab）由调用方（workbench 页）解析后
+ * 传进来。这里只做**初值 + 跟随变化**：内部仍是 state，用户手动切 tab 不回写 URL
+ * （避免每次点击都产生历史/路由噪音），但外部深链进来必须生效——
+ * 面板随 symbol 走 key 重挂载，同一只股票内换 tab 则由 effect 跟随。
+ */
+export interface StockDetailTabs {
+  chartTab?: ChartTab;
+  rightTab?: RightTab;
+}
+
+export function StockDetailPanel({
+  symbol,
+  chartTab: chartTabInit,
+  rightTab: rightTabInit,
+}: { symbol: string } & StockDetailTabs) {
+  const [chartTab, setChartTab] = useState<ChartTab>(chartTabInit ?? "kline");
+  const [rightTab, setRightTab] = useState<RightTab>(rightTabInit ?? "book");
+  // 深链跟随：同一只股票内（面板未重挂载）外部改了 ct/rt 也要生效。
+  // 用「渲染期比对上一轮 props 后调整 state」而非 effect——effect 里 setState 会被
+  // lint 判为级联渲染，且首帧仍会闪一下默认 tab。
+  const [prevInit, setPrevInit] = useState<{ c?: ChartTab; r?: RightTab }>({
+    c: chartTabInit,
+    r: rightTabInit,
+  });
+  if (prevInit.c !== chartTabInit || prevInit.r !== rightTabInit) {
+    setPrevInit({ c: chartTabInit, r: rightTabInit });
+    if (chartTabInit) setChartTab(chartTabInit);
+    if (rightTabInit) setRightTab(rightTabInit);
+  }
   // 布局 #1：右列宽度可拖拽（localStorage 持久化；260-480px 防极限）
   const [rightW, setRightW] = useState(300);
   const rightColRef = useRef<HTMLDivElement>(null);

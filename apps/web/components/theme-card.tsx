@@ -463,7 +463,22 @@ export function ThemeCardView({
             <div>
               <div className="mb-1 flex items-center justify-between text-[11px] text-zinc-400">
                 <span>封板时间分布（早盘封板占比高 = 资金坚决）</span>
-                <span className="font-mono">封板质量 {p.seal_quality.toFixed(2)}</span>
+                <span className="font-mono">
+                  封板质量 {p.seal_quality.toFixed(2)}
+                  {p.early_seal_rate != null && (
+                    <span
+                      className="ml-2"
+                      title="早封率：10:00 前首封的成员占比（缺时间样本的成员不计入）"
+                    >
+                      早封 {(p.early_seal_rate * 100).toFixed(0)}%
+                    </span>
+                  )}
+                  {p.seal_retention != null && (
+                    <span className="ml-2" title="封单留存：收盘封单合计 / 盘中最高封单合计（收盘口径，仅同花顺源提供最高封单）">
+                      留存 {(p.seal_retention * 100).toFixed(0)}%
+                    </span>
+                  )}
+                </span>
               </div>
               <SealDistBar dist={p.seal_time_distribution} />
             </div>

@@ -137,7 +137,9 @@ def test_outage_drill_failover_visible_selfheal(monkeypatch):
         # 段 2：观测端点看到 tencent 熔断 OPEN + 连续失败数 + 备源接管
         h = client.get("/api/system/providers").json()
         b = h["breakers"]["get_order_book@tencent"]
-        assert b["state"] == "open" and b["failures"] == 3 and b["cooldown_left"] > 0
+        # cooldown_left > 0 不再断言：0.2s 演练冷却与重负载下的时钟竞速（2026-09-07
+        # 全量复现）会在断言前耗尽冷却——state=="open" 已充分表达「冷却生效中」。
+        assert b["state"] == "open" and b["failures"] == 3
         assert h["last_good"]["get_order_book"] == "sina"
         assert "get_order_book: tencent -> sina" in h["switch_log"]
 

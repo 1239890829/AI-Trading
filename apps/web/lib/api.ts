@@ -842,6 +842,54 @@ export async function getThemesHot(limit = 30): Promise<ThemesHotPayload> {
   return (await getJson<ThemesHotPayload>(`/api/themes/hot?limit=${limit}`, 15_000)).data;
 }
 
+/** ths 飙升榜行（B1）：与热股榜排名逻辑不同——「正在变热」的更早信号。 */
+export interface SkyrocketRow {
+  rank: number;
+  symbol: string;
+  name: string | null;
+  heat: number | null;
+  rank_change: number | null;
+  ts: string | null;
+  source: string;
+}
+
+/** ths 飙升榜（后端缓存 60s；人气为估算数据，榜单有延迟不构成交易信号）。 */
+export async function getSkyrocket(period: "day" | "hour" = "day"): Promise<SkyrocketRow[]> {
+  return (await getJson<{ rows: SkyrocketRow[]; period: string }>(
+    `/api/market/heat/skyrocket?period=${period}`,
+    15_000,
+  )).data.rows;
+}
+
+/** 龙虎榜跨日题材轨迹（B3）：概念等分守恒口径（非真实拆分），仅日榜参与。 */
+export interface LonghuTrailPoint {
+  date: string;
+  net: number | null; // 当日该概念无净额记录为 null（不冒充 0）
+}
+
+export interface LonghuTrailRow {
+  concept: string;
+  daily: LonghuTrailPoint[];
+  total: number | null;
+  first: number | null;
+  last: number | null;
+}
+
+export interface LonghuTrailPayload {
+  days: string[];
+  trail: LonghuTrailRow[];
+  degraded: string[];
+  note: string;
+}
+
+/** 龙虎榜题材迁徙（后端缓存 300s；榜单 T-1 披露后不变）。 */
+export async function getLonghuThemeTrail(days = 5): Promise<LonghuTrailPayload> {
+  return (await getJson<LonghuTrailPayload>(
+    `/api/market/longhu/theme-trail?days=${days}`,
+    20_000,
+  )).data;
+}
+
 export async function searchSymbols(q: string): Promise<SymbolSearchItem[]> {
   return (await getJson<SymbolSearchItem[]>(`/api/search?q=${encodeURIComponent(q)}`)).data;
 }
@@ -1783,6 +1831,102 @@ export async function getFundFlowIntraday(): Promise<FundFlowIntraday> {
 
 export async function getFundFlowHistory(days = 20): Promise<FundFlowHistory> {
   return (await getJson<FundFlowHistory>(`/api/market/fund-flow/history?days=${days}`, 50_000)).data;
+}
+
+// ---------- 板块资金流（L2 唯一实现 /api/market/board-fund-flow*，docs/fund-flow-redesign.md） ----------
+
+export type BoardFlowKind = "concept" | "industry";
+export type BoardFlowRange = "intraday" | "5d" | "10d" | "20d";
+
+export interface BoardFlowRow {
+  board_code: string;
+  name: string;
+  kind: string;
+  change_pct: number | null;
+  /** 今日主力净额（亿元，东财官方板块口径，不与个股新浪口径混算） */
+  main_net_yi: number | null;
+  /** 主力净额/成交额×100（f184 官方字段） */
+  main_net_ratio: number | null;
+  super_net_yi: number | null;
+  main_net_5d_yi: number | null;
+  main_net_10d_yi: number | null;
+  /** 仅 20d 视图返回 */
+  main_net_20d_yi?: number | null;
+  leader_name: string | null;
+  leader_symbol: string | null;
+  /** 连续净流入天数（null=未沉淀；0=今日净流出，区别于 null） */
+  streak: number | null;
+  rank: number;
+  /** 正=排名上升（vs 昨日落盘榜位；null=无基线） */
+  rank_delta: number | null;
+}
+
+export interface BoardFundFlowPayload {
+  available: boolean;
+  reason?: string;
+  kind: BoardFlowKind;
+  range: BoardFlowRange;
+  rows: BoardFlowRow[];
+  total_boards?: number;
+  /** 20d 视图：本地沉淀板块数 */
+  coverage?: number | null;
+  updated_at?: string;
+  rank_basis_date?: string | null;
+  degraded: string[];
+}
+
+export interface BoardFlowMinutePayload {
+  available: boolean;
+  reason?: string;
+  board_code: string;
+  items: FlowIntradayPoint[];
+  /** 日度主力净额序列（仅收盘快照沉淀过的 Top 板块有，零外呼） */
+  daily_bars: { date: string; main_yi: number | null; close_pct: number | null }[];
+  delayed?: boolean;
+  updated_at?: string;
+  degraded: string[];
+}
+
+export interface BoardFlowMember {
+  symbol: string;
+  name: string;
+  price: number | null;
+  change_pct: number | null;
+  main_net_yi: number | null;
+  super_net_yi: number | null;
+  big_net_yi: number | null;
+  main_net_ratio: number | null;
+}
+
+export interface BoardFlowMembersPayload {
+  available: boolean;
+  reason?: string;
+  board_code: string;
+  rows: BoardFlowMember[];
+  delayed?: boolean;
+  updated_at?: string;
+  degraded: string[];
+}
+
+export async function getBoardFundFlow(
+  kind: BoardFlowKind = "concept",
+  range: BoardFlowRange = "intraday",
+): Promise<BoardFundFlowPayload> {
+  return (await getJson<BoardFundFlowPayload>(
+    `/api/market/board-fund-flow?kind=${kind}&range=${range}`, 30_000,
+  )).data;
+}
+
+export async function getBoardFlowMinute(boardCode: string): Promise<BoardFlowMinutePayload> {
+  return (await getJson<BoardFlowMinutePayload>(
+    `/api/market/board-fund-flow/${boardCode}/minute`, 30_000,
+  )).data;
+}
+
+export async function getBoardFlowMembers(boardCode: string): Promise<BoardFlowMembersPayload> {
+  return (await getJson<BoardFlowMembersPayload>(
+    `/api/market/board-fund-flow/${boardCode}/members`, 30_000,
+  )).data;
 }
 
 // ---------- 资讯正文（弹窗展示，/api/news/content） ----------

@@ -221,3 +221,25 @@ def test_events_for_symbol_api(monkeypatch: pytest.MonkeyPatch):
 
         # 非法代码
         assert client.get("/api/events/symbol/xyz").status_code == 400
+
+
+# ---------------------------------------------------------------- G3 方向词典 v2（hotspot-pipeline §3 固定测试集子集）
+
+def test_g3_benefits_word_drives_direction():
+    """「受益」进 _POSITIVE：厄尔尼诺→电力/化肥 实测 dir=0 的修复。"""
+    names = ["电力", "磷肥及磷化工"]
+    rows = extract_directions("厄尔尼诺超强推升粮价，化肥电力受益", names)
+    assert rows, "题材必须命中"
+    assert all(r["direction"] == 1 for r in rows), "「受益」应给出利好方向"
+
+
+def test_g3_paper_level_proposed():
+    """「论文/实验室」进 _PROPOSED：长存学术消息 certainty=proposed（研究阶段非落地）。"""
+    fact_kind, certainty = classify_certainty("长存 3D NAND 论文披露绕过 EUV 的实验室路径")
+    assert (fact_kind, certainty) == ("fact", "proposed")
+
+
+def test_g3_progress_word():
+    """「进展」进 _POSITIVE：取得进展类消息方向可判。"""
+    rows = extract_directions("国产存储芯片技术取得进展", ["存储芯片"])
+    assert rows and rows[0]["direction"] == 1

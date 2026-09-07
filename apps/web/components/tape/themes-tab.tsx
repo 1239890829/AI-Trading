@@ -4,12 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { RankDelta, ThemeCardView } from "@/components/theme-card";
-import { getThemes, getThemesHot, getThemeStrength, getAuctionBenchmark } from "@/lib/api";
+import { getThemes, getThemesHot, getThemeStrength, getAuctionBenchmark, getSkyrocket } from "@/lib/api";
 import { fmtHeat, pctColor, pctText, timeText } from "@/lib/format";
 import { workbenchUrlWithBack } from "@/lib/routing";
 import { sortAuctionBenchmark } from "@/lib/auction";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
-import type { AuctionBenchmarkItem, ThemeStrengthRow, ThemesHotPayload } from "@/lib/api";
+import type { AuctionBenchmarkItem, SkyrocketRow, ThemeStrengthRow, ThemesHotPayload } from "@/lib/api";
 import type { ThemeBoardPayload } from "@/types/market";
 
 /**
@@ -65,6 +65,8 @@ export function ThemesTab() {
   const [showCaveats, setShowCaveats] = useState(false);
   // 题材人气（B1 热股榜）：best-effort 增强，拉取失败静默降级（看板主体不依赖它）
   const [hot, setHot] = useState<ThemesHotPayload | null>(null);
+  // 飙升榜（B1）：「正在变热」信号，与人气榜口径不同；best-effort 同上
+  const [sky, setSky] = useState<SkyrocketRow[] | null>(null);
   const [strength, setStrength] = useState<Map<string, ThemeStrengthRow> | null>(null);
   // 聚焦题材（L4 联动：详情页题材 chip → /tape?tab=themes&focus=名称）
   const [focus, setFocus] = useState(searchParams.get("focus") ?? "");
@@ -109,6 +111,10 @@ export function ThemesTab() {
     getThemesHot()
       .then(setHot)
       .catch(() => setHot(null));
+    // 飙升榜（B1）：同实时口径独立拉取；空榜/失败静默不显示
+    getSkyrocket("day")
+      .then((rows) => setSky(rows.length ? rows : null))
+      .catch(() => setSky(null));
     // 资金合力（P1-5）：官方成分批量快照聚合，按题材名匹配卡片；60s 后端缓存
     getThemeStrength()
       .then((s) => {
@@ -341,6 +347,31 @@ export function ThemesTab() {
           <div className="flex-1" />
           <span className="shrink-0 font-mono text-[10px] text-zinc-400 dark:text-zinc-600">
             同花顺 {timeText(hot.ts)}
+          </span>
+        </div>
+      )}
+
+      {/* ── 飙升榜条（B1）：排名变化驱动的「正在变热」，先于人气榜的更早信号 ── */}
+      {sky && sky.length > 0 && (
+        <div
+          className="mb-3 flex shrink-0 items-center gap-x-3 gap-y-1 overflow-x-auto rounded-lg border border-zinc-200 px-3 py-1.5 dark:border-zinc-800"
+          title="同花顺飙升榜（排名变化驱动，与人气榜排名逻辑不同；人气为估算数据、榜单有延迟）"
+        >
+          <span className="shrink-0 text-[11px] text-zinc-400">飙升榜</span>
+          {sky.slice(0, 10).map((s) => (
+            <Link
+              key={s.symbol}
+              href={workbenchUrlWithBack(s.symbol)}
+              className="flex shrink-0 items-center gap-1 text-xs hover:text-rose-600 dark:hover:text-rose-400"
+            >
+              <span className="font-mono text-zinc-400">#{s.rank}</span>
+              <span className="text-zinc-700 dark:text-zinc-200">{s.name ?? s.symbol}</span>
+              <RankDelta v={s.rank_change} />
+            </Link>
+          ))}
+          <div className="flex-1" />
+          <span className="shrink-0 font-mono text-[10px] text-zinc-400 dark:text-zinc-600">
+            同花顺
           </span>
         </div>
       )}

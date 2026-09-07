@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 import httpx
 
 from app.data_providers.eastmoney import ProviderError
-from app.schemas.market import Kline, LimitUpRecord, LongHuRecord, Quote
+from app.schemas.market import AnomalyRecord, Kline, LimitUpRecord, LongHuRecord, Quote
 
 log = logging.getLogger(__name__)
 
@@ -23,14 +23,47 @@ _TZ_SH = timezone(timedelta(hours=8))
 
 
 def to_thscode(symbol: str) -> str:
+    """6 位代码 → thscode 后缀，北交所感知（2026-09-07 全局修复）。
+
+    北交所段：430xxx / 83·87·88xxxx / 920xxx → .BJ；
+    沪市：6(A) / 5(基金) / 900(B) → .SH；深市其余（0/1/3）→ .SZ。
+    旧版把 920xxx 错标 .SH、43/8 开头错标 .SZ，导致北交所全部 ths 查询路由错误。
+    """
     s = symbol.strip()
-    if s.startswith(("6", "9", "5")):
+    if s.startswith(("4", "8")) or s.startswith("920"):
+        return f"{s}.BJ"
+    if s.startswith(("5", "6", "9")):
         return f"{s}.SH"
     return f"{s}.SZ"
 
 
 def from_thscode(thscode: str) -> str:
     return thscode.split(".")[0]
+
+
+def _parse_heat_items(data: dict) -> tuple[str | None, list[dict]]:
+    """热股榜/飙升榜共用解析（官方两者 item 结构一致：7 字段）。
+
+    :return: (数据就绪时间 ISO, [{rank, symbol, name, heat, rank_change, ts, source}])
+    """
+    ts = data.get("timestamp")
+    ts_iso = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).isoformat() if ts else None
+    out = []
+    for it in data.get("item") or []:
+        code = from_thscode(str(it.get("thscode") or ""))
+        if len(code) != 6:
+            continue
+        num = lambda v: float(v) if v is not None else None  # noqa: E731
+        out.append({
+            "rank": int(it.get("rank") or 0),
+            "symbol": code,
+            "name": it.get("name"),
+            "heat": num(it.get("heat")),
+            "rank_change": num(it.get("rank_change")),
+            "ts": ts_iso,
+            "source": SOURCE,
+        })
+    return ts_iso, out
 
 
 def _as_shanghai(dt: datetime) -> datetime:
@@ -186,6 +219,7 @@ class ThsFuyaoProvider:
                     change_pct=num(it.get("price_change_ratio_pct")),
                     first_seal_time=str(it.get("limit_up_time") or "") or None,
                     seal_amount=num(it.get("seal_money")),
+                    max_seal_money=num(it.get("max_seal_money")),
                     turnover_rate=num(it.get("turnover_rate")),
                     consecutive_boards=int(num(it.get("continue_day_cnt")) or 1),
                     boards_stat=str(it.get("continue_day_text") or "") or None,
@@ -332,26 +366,48 @@ class ThsFuyaoProvider:
 
     async def get_hot_stock_list(self, period: str = "day") -> list[dict]:
         """当前热股榜（period=day 24小时榜 / hour）。[{rank, symbol, name, heat, rank_change}]。"""
-        data = await self._get("/api/a-share/special-data/hot-stock-list", {"period": period})
-        ts = data.get("timestamp")
-        ts_iso = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).isoformat() if ts else None
+        _, rows = _parse_heat_items(
+            await self._get("/api/a-share/special-data/hot-stock-list", {"period": period})
+        )
+        if not rows:
+            raise ProviderError("ths hot stock list empty")
+        return rows
+
+    async def get_skyrocket_list(self, period: str = "day") -> list[dict]:
+        """飙升榜（period=day/hour）——「正在变热」的更早信号。
+
+        与热股榜排名逻辑不同（官方明确警告勿混淆）；行结构同热股榜。
+        空集视为异常（榜单盘中应有数据），语义与 get_hot_stock_list 一致。
+        """
+        _, rows = _parse_heat_items(
+            await self._get("/api/a-share/special-data/skyrocket-list", {"period": period})
+        )
+        if not rows:
+            raise ProviderError("ths skyrocket list empty")
+        return rows
+
+    async def get_hot_rank_trend(self, symbol: str, start: date, end: date) -> list[dict]:
+        """单股热榜排名走势（区间 ≤1 年，官方服务器侧即历史库，无需自建落盘）。
+
+        区间内未上榜的日期正常缺失（官方行为），空集=该股区间内从未上榜（合法）。
+        """
+        data = await self._get(
+            "/api/a-share/special-data/hot-stock-rank-trend",
+            {
+                "thscode": to_thscode(symbol),
+                "start_date": start.strftime("%Y-%m-%d"),
+                "end_date": end.strftime("%Y-%m-%d"),
+            },
+        )
+        code = from_thscode(to_thscode(symbol))
         out = []
         for it in data.get("item") or []:
-            code = from_thscode(str(it.get("thscode") or ""))
-            if len(code) != 6:
-                continue
-            num = lambda v: float(v) if v is not None else None  # noqa: E731
             out.append({
+                "symbol": from_thscode(str(it.get("thscode") or "")) or code,
+                "date": str(it.get("date") or ""),
                 "rank": int(it.get("rank") or 0),
-                "symbol": code,
-                "name": it.get("name"),
-                "heat": num(it.get("heat")),
-                "rank_change": num(it.get("rank_change")),
-                "ts": ts_iso,
                 "source": SOURCE,
             })
-        if not out:
-            raise ProviderError("ths hot stock list empty")
         return out
 
     async def get_hot_stock_list_history(self, d: date) -> list[dict]:
@@ -534,3 +590,61 @@ class ThsFuyaoProvider:
 
     async def get_trades(self, symbol: str) -> list:
         return []
+
+    # ---- 异动原因（ths 独占口径，today-only；hotspot-pipeline G5 验证环数据源） ----
+
+    _ANOMALY_TAGS = ("LIMIT_UP", "LIMIT_DOWN", "SHARP_RISE", "SHARP_FALL", "RAPID_RALLY", "RAPID_DECLINE")
+
+    async def get_anomaly_list(self, tag_codes: list[str] | None = None) -> list[AnomalyRecord]:
+        """当日全市场异动原因。
+
+        - tag_codes 允许值见 _ANOMALY_TAGS（OR 语义）；非法值服务端 code=1002，此处先过滤。
+        - **空集是合法语义**（非交易日 / 尚无异动），返回 [] 不抛——与池子类端点不同，
+          调用方（composite）必须用"允许空集"语义调用，否则会把正常空打进熔断。
+        """
+        valid = list(dict.fromkeys(
+            t.strip().upper() for t in (tag_codes or []) if t and t.strip().upper() in self._ANOMALY_TAGS
+        ))
+        params: dict = {"tag_codes": ",".join(t.upper() for t in valid)} if valid else {}
+        data = await self._get("/api/a-share/special-data/anomaly-analysis-list", params)
+        out: list[AnomalyRecord] = []
+        for it in data.get("item") or []:
+            code = from_thscode(str(it.get("thscode") or ""))
+            if len(code) != 6:
+                continue
+            out.append(
+                AnomalyRecord(
+                    symbol=code,
+                    name=it.get("stock_name"),
+                    tag=it.get("tag_name"),
+                    analysis=it.get("analysis_content"),
+                    keywords=[str(k) for k in (it.get("keyword_list") or [])],
+                    source=SOURCE,
+                )
+            )
+        return out
+
+    async def get_anomaly_stock(self, symbols: list[str]) -> list[AnomalyRecord]:
+        """按代码批量查当日异动原因（官方 1-50 上限，此处自动分批；支持北交所）。"""
+        if not symbols:
+            return []
+        out: list[AnomalyRecord] = []
+        for i in range(0, len(symbols), 50):
+            batch = symbols[i : i + 50]
+            codes = ",".join(to_thscode(s) for s in batch)
+            data = await self._get("/api/a-share/special-data/anomaly-analysis-stock", {"thscodes": codes})
+            for it in data.get("item") or []:
+                code = from_thscode(str(it.get("thscode") or ""))
+                if len(code) != 6:
+                    continue
+                out.append(
+                    AnomalyRecord(
+                        symbol=code,
+                        name=it.get("stock_name"),
+                        tag=it.get("tag_name"),
+                        analysis=it.get("analysis_content"),
+                        keywords=[str(k) for k in (it.get("keyword_list") or [])],
+                        source=SOURCE,
+                    )
+                )
+        return out

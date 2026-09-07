@@ -4,7 +4,7 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Panel } from "@/components/panel";
 import { IndexCards } from "@/components/index-cards";
-import { StockDetailPanel } from "@/components/stock-detail";
+import { StockDetailPanel, type ChartTab, type RightTab } from "@/components/stock-detail";
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
 import { Sparkline } from "@/components/sparkline";
@@ -42,10 +42,31 @@ import type { Quote } from "@/types/market";
 
 const STATUS_LABEL = STREAM_STATUS_LABEL;
 
+/** ?ct= 白名单解析：非法值一律 undefined（回落默认 kline），不抛错。 */
+function parseChartTab(v: string | null): ChartTab | undefined {
+  return v === "kline" || v === "minute" || v === "flow" ? v : undefined;
+}
+/** ?rt= 白名单解析：同上。 */
+function parseRightTab(v: string | null): RightTab | undefined {
+  return v === "book" ||
+    v === "trades" ||
+    v === "trade" ||
+    v === "real" ||
+    v === "profile" ||
+    v === "info" ||
+    v === "speed" ||
+    v === "boards"
+    ? v
+    : undefined;
+}
+
 function WorkbenchInner() {
   const router = useRouter();
   const sp = useSearchParams();
   const paramSymbol = sp.get("symbol");
+  // 深链 tab（助手一键跳转 / 分享链接）：?ct= 图表区、?rt= 右栏，非法值忽略回落到默认
+  const chartTab = parseChartTab(sp.get("ct"));
+  const rightTab = parseRightTab(sp.get("rt"));
   const [symbols, setSymbols] = useState<string[]>([]);
   // 真实持仓（CONTEXT.md: Holdings Group）：共用 hook 一份轮询（评审 M3），
   // 标的列表派生进 WS 订阅，「持仓」分类共用
@@ -649,7 +670,12 @@ function WorkbenchInner() {
 
         {/* key 随代码变化：切股时整面板重挂载，所有内部状态归零——
             否则 useQuoteStream 订阅切换的窗口期里会残留上一只股票的行情 */}
-        <StockDetailPanel key={activeSymbol} symbol={activeSymbol} />
+        <StockDetailPanel
+          key={activeSymbol}
+          symbol={activeSymbol}
+          chartTab={chartTab}
+          rightTab={rightTab}
+        />
       </div>
     </main>
   );

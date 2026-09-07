@@ -18,7 +18,15 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.schemas.market import Kline, LimitDownRecord, LimitUpRecord, LongHuRecord, Quote, TradingStatusInfo
+from app.schemas.market import (
+    AnomalyRecord,
+    Kline,
+    LimitDownRecord,
+    LimitUpRecord,
+    LongHuRecord,
+    Quote,
+    TradingStatusInfo,
+)
 
 T = TypeVar("T")
 
@@ -51,6 +59,16 @@ class LimitDownPoolPayload(BaseModel):
 
     trade_date: str
     pool: list[LimitDownRecord]
+
+
+class AnomalyPayload(BaseModel):
+    """GET /market/anomalies 与 /market/anomalies/stock 的 data。
+
+    records 为空 = 当日无该类异动记录（today-only 端点的正常语义，非故障）。
+    """
+
+    records: list[AnomalyRecord]
+    note: str | None = None  # 空集时给显式说明，绝不静默
 
 
 class LongHuPayload(BaseModel):

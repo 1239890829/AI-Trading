@@ -633,10 +633,19 @@ async def intraday_review_scheduler(
                 await run_review(app, trigger="schedule")
             # 批次 D：题材热度时序前向落库（独立于复盘成败；自带磁盘幂等，
             # 已落库的 tick 不会再碰行情配额）。窗口与复盘一致：run_hour–23 点。
+            # B1：飙升榜收盘快照同 tick 落库（独立文件、独立去重，失败互不影响）。
             if run_hour <= now.hour < 23:
-                from app.picks.heat_history import record_daily_heat
+                from app.picks.heat_history import record_daily_heat, record_daily_skyrocket
 
                 await record_daily_heat(app)
+                await record_daily_skyrocket(app)
+                # 板块资金流收盘快照（board_flow L2 落盘：≥15:05 内部守卫 + 当日幂等）
+                try:
+                    from app.market.board_flow import snapshot_daily_if_closed
+
+                    await snapshot_daily_if_closed()
+                except Exception:
+                    log.warning("boardflow daily snapshot failed", exc_info=True)
         except Exception:
             log.exception("intraday review scheduler failed")
         with contextlib.suppress(asyncio.TimeoutError):

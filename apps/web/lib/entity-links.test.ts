@@ -60,4 +60,31 @@ describe("createEntityMatcher", () => {
   it("空文本安全", () => {
     expect(createEntityMatcher(dict)("")).toEqual([]);
   });
+
+  // ---- 功能入口别名（2026-09-06 扩面：回答里的功能名可一键跳转） ----
+
+  it("识别功能入口别名并带上站内 URL", () => {
+    const m = createEntityMatcher(null);
+    const hits = m("今日涨停池有 48 家，龙虎榜净买入集中在存储芯片");
+    const navs = hits.filter((h) => h.type === "nav");
+    expect(navs.map((h) => h.text)).toEqual(["涨停池", "龙虎榜"]);
+    expect(navs[0].url).toBe("/tape?tab=limitup");
+    expect(navs[1].url).toBe("/tape?tab=longhu");
+    expect(navs.every((h) => h.url!.startsWith("/"))).toBe(true);
+  });
+
+  it("个股/题材与功能别名可共存且各自带正确类型", () => {
+    const m = createEntityMatcher(dict);
+    const hits = m("贵州茅台的复盘报告见研究页，存储芯片仍在涨停池");
+    expect(hits.map((h) => [h.type, h.text])).toEqual([
+      ["stock", "贵州茅台"],
+      ["nav", "复盘报告"],
+      ["theme", "存储芯片"],
+      ["nav", "涨停池"],
+    ]);
+  });
+
+  it("空词典也识别功能别名（词典没加载不阻塞跳转）", () => {
+    expect(createEntityMatcher(undefined)("看一下盘前简报").map((h) => h.type)).toEqual(["nav"]);
+  });
 });

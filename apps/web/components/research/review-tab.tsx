@@ -335,7 +335,12 @@ function ReportDetail({
   );
 }
 
-export function ReviewTab() {
+/**
+ * @param focusDate 深链日期（/research?tab=review&date=YYYY-MM-DD，助手一键跳转用）。
+ *   命中报告列表则展开它；列表里没有也照样尝试拉一次（可能未生成 → detail 为 null，
+ *   此时回落到最新一份，绝不停在空白态）。
+ */
+export function ReviewTab({ focusDate }: { focusDate?: string } = {}) {
   const [reports, setReports] = useState<ReviewReportSummary[] | null>(null);
   const [effect, setEffect] = useState<Awaited<ReturnType<typeof getReviewEffectiveness>> | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -349,6 +354,15 @@ export function ReviewTab() {
         if (!alive) return;
         setReports(r);
         setEffect(e);
+        if (focusDate) {
+          const d = await getReviewReport(focusDate).catch(() => null);
+          if (!alive) return;
+          if (d) {
+            setOpenDate(focusDate);
+            setDetail(d);
+            return;
+          }
+        }
         // 默认展开最新一份报告并立即拉详情（否则一直停在"加载中"直到手点）
         if (r.length > 0) {
           setOpenDate(r[0].trade_date);
@@ -359,7 +373,7 @@ export function ReviewTab() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [focusDate]);
 
   const toggle = useCallback(
     (date: string) => {

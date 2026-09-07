@@ -583,6 +583,20 @@ function IntradayPageInner() {
 
   // 展开的题材以 URL query 为真相源（?theme=）：跳工作台后返回，展开态原样保留
   const [expandedTheme, setExpandedTheme] = useState<string | null>(() => sp.get("theme"));
+  // 分区深链（助手一键跳转 / 分享）：?sec=overview|opportunity|brief|watcher|reminders|review。
+  // 数据是异步拉的，挂载时目标分区可能还没渲染 → 首帧找不到就在 400ms 后重试一次，
+  // 仍找不到则静默放弃（绝不报错、绝不滚到顶部造成"页面乱跳"的错觉）。
+  const sec = sp.get("sec");
+  const secValid = /^(overview|opportunity|brief|watcher|reminders|review)$/.test(sec ?? "");
+  useEffect(() => {
+    if (!secValid) return;
+    const scroll = () => {
+      document.getElementById(`sec-${sec}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
+    scroll();
+    const t = window.setTimeout(scroll, 400);
+    return () => window.clearTimeout(t);
+  }, [sec, secValid]);
   const toggleTheme = useCallback(
     (t: string) => {
       const next = expandedTheme === t ? null : t;
@@ -730,7 +744,7 @@ function IntradayPageInner() {
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
         {/* ── 今日行情概览（2026-09-04）：原 header 一行小字升级为指标带；未就绪时骨架占位 ── */}
-        <section className="space-y-2">
+        <section id="sec-overview" className="space-y-2 scroll-mt-2">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
             <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">今日行情</h2>
             {opps?.hot_available === false && (
@@ -753,13 +767,15 @@ function IntradayPageInner() {
         </section>
 
         {/* 当前机会不依赖简报文件（实时涨停池题材），独立于 briefMissing 展示 */}
-        {opps ? (
-          <FadeIn>
-            <OpportunitySection opps={opps} expanded={expandedTheme} onToggle={toggleTheme} />
-          </FadeIn>
-        ) : (
-          pending && <CardListSkeleton count={3} />
-        )}
+        <div id="sec-opportunity" className="scroll-mt-2">
+          {opps ? (
+            <FadeIn>
+              <OpportunitySection opps={opps} expanded={expandedTheme} onToggle={toggleTheme} />
+            </FadeIn>
+          ) : (
+            pending && <CardListSkeleton count={3} />
+          )}
+        </div>
         {briefMissing ? (
           <div className="rounded-xl border border-zinc-200 p-6 text-center text-sm text-zinc-400 dark:border-zinc-800">
             今日尚无盘前简报：点右上「生成/刷新简报」，或等交易日 08:40 自动生成。
@@ -768,7 +784,7 @@ function IntradayPageInner() {
           </div>
         ) : pending || brief ? (
           <>
-            <section className="space-y-2">
+            <section id="sec-brief" className="space-y-2 scroll-mt-2">
               <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">盘前简报</h2>
               {brief ? (
                 <FadeIn>
@@ -787,7 +803,7 @@ function IntradayPageInner() {
               )}
             </section>
 
-            <section className="space-y-2">
+            <section id="sec-watcher" className="space-y-2 scroll-mt-2">
               <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">盘中 watcher 状态</h2>
               <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
                 {pending && watcher === null ? (
@@ -847,7 +863,7 @@ function IntradayPageInner() {
               </div>
             </section>
 
-            <section className="space-y-2">
+            <section id="sec-reminders" className="space-y-2 scroll-mt-2">
               <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
                 盘中提醒（{alerts.length} 条，当日去重）
               </h2>
@@ -869,7 +885,7 @@ function IntradayPageInner() {
               )}
             </section>
 
-            <section className="space-y-2">
+            <section id="sec-review" className="space-y-2 scroll-mt-2">
               <h2 className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
                 今日盘前 vs 实际（对照表
                 {brief?.review ? ` · ${timeText(brief.review.reviewed_at)} 复盘）` : " · 未复盘，15:35 自动运行）"}

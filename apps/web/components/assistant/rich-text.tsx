@@ -11,6 +11,7 @@
  */
 import { Fragment, type ReactNode } from "react";
 import type { EntityMatch, EntityMatcher } from "@/lib/entity-links";
+import { NAV_LABELS, isAllowedNav, type NavKey } from "@/lib/nav-targets";
 
 // ---------------------------------------------------------------- 块解析
 
@@ -134,29 +135,44 @@ function renderInline({ text, match, onNavigate }: InlineProps): ReactNode[] {
       const idx = seg.indexOf(h.text, pos);
       if (idx < 0) continue;
       if (idx > pos) nodes.push(seg.slice(pos, idx));
-      nodes.push(
-        h.type === "stock" ? (
+      if (h.type === "nav") {
+        nodes.push(
           <button
             key={`e${key++}`}
             type="button"
-            title={`${h.name}（${h.code}）— 点击打开个股详情`}
-            className="mx-0.5 rounded bg-sky-500/10 px-1 font-medium text-sky-600 underline decoration-dotted underline-offset-2 hover:bg-sky-500/20 dark:text-sky-400"
+            title={`${h.name} — 点击跳转到${NAV_LABELS[h.key as NavKey] ?? "对应功能"}`}
+            className="mx-0.5 rounded bg-emerald-500/10 px-1 font-medium text-emerald-600 underline decoration-dotted underline-offset-2 hover:bg-emerald-500/20 dark:text-emerald-400"
             onClick={() => onNavigate(h)}
           >
             {h.text}
-          </button>
-        ) : (
-          <button
-            key={`e${key++}`}
-            type="button"
-            title={`${h.name} — 点击查看题材梯队`}
-            className="mx-0.5 rounded bg-violet-500/10 px-1 font-medium text-violet-600 underline decoration-dotted underline-offset-2 hover:bg-violet-500/20 dark:text-violet-400"
-            onClick={() => onNavigate(h)}
-          >
-            {h.text}
-          </button>
-        ),
-      );
+            <span aria-hidden className="ml-0.5 text-[0.7em]">↗</span>
+          </button>,
+        );
+      } else {
+        nodes.push(
+          h.type === "stock" ? (
+            <button
+              key={`e${key++}`}
+              type="button"
+              title={`${h.name}（${h.code}）— 点击打开个股详情`}
+              className="mx-0.5 rounded bg-sky-500/10 px-1 font-medium text-sky-600 underline decoration-dotted underline-offset-2 hover:bg-sky-500/20 dark:text-sky-400"
+              onClick={() => onNavigate(h)}
+            >
+              {h.text}
+            </button>
+          ) : (
+            <button
+              key={`e${key++}`}
+              type="button"
+              title={`${h.name} — 点击查看题材梯队`}
+              className="mx-0.5 rounded bg-violet-500/10 px-1 font-medium text-violet-600 underline decoration-dotted underline-offset-2 hover:bg-violet-500/20 dark:text-violet-400"
+              onClick={() => onNavigate(h)}
+            >
+              {h.text}
+            </button>
+          ),
+        );
+      }
       pos = idx + h.text.length;
     }
     if (pos < seg.length) nodes.push(seg.slice(pos));
@@ -175,20 +191,21 @@ function renderInline({ text, match, onNavigate }: InlineProps): ReactNode[] {
       );
     } else if (token.startsWith("[")) {
       const lm = /^\[([^\]]*)\]\(([^)\s]+)\)$/.exec(token);
-      if (lm) {
+      // 守卫（2026-09-06）：模型输出/正文里的链接原本是任意 href + target=_blank，
+      // 等于给回复内容开了站外跳转口子。现在只有**站内白名单路径**才渲染成链接，
+      // 其余一律降级为纯文本（保留可见文字，去掉可点击性）。
+      if (lm && isAllowedNav(lm[2])) {
         nodes.push(
           <a
             key={`l${key++}`}
             href={lm[2]}
-            target="_blank"
-            rel="noreferrer"
             className="text-sky-600 underline underline-offset-2 dark:text-sky-400"
           >
             {lm[1] || lm[2]}
           </a>,
         );
       } else {
-        nodes.push(token);
+        nodes.push(lm ? lm[1] || token : token);
       }
     } else {
       nodes.push(

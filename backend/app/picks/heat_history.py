@@ -34,6 +34,9 @@ log = logging.getLogger(__name__)
 
 HEAT_DIR = REPO_ROOT / "data" / "picks" / "heat"
 
+# 飙升榜收盘快照（B1）：单文件 JSONL append，每行一个 {date, rank, symbol, ...}
+SKYROCKET_PATH = HEAT_DIR / "skyrocket.jsonl"
+
 
 def _heat_path(trade_date_compact: str) -> Path:
     """文件名用紧凑 %Y%m%d（与简报文件同约定）；行内 date 字段保持 isoformat
@@ -117,6 +120,63 @@ async def record_daily_heat(state) -> dict:
     os.replace(tmp, path)
     log.info("heat history recorded: %s（%d 个题材）", td.isoformat(), len(rows))
     return {"recorded": len(rows), "date": td.isoformat(), "path": str(path)}
+
+
+async def record_daily_skyrocket(state) -> dict:
+    """收盘后把飙升榜 Top20 追加进 skyrocket.jsonl（B1 前向积累，与 heat 同哲学）。
+
+    - 前向积累不回补：榜单只有当日口径，历史靠逐日积累；
+    - 去重：文件里已有当日 date 即跳过（重启/多 tick 安全）；
+    - 口径：ths period=day（24 小时榜），行内 date 为交易日归属；
+    - 失败显式返回 reason，绝不静默。
+    """
+    from app.market import trade_calendar as tc
+    from app.market.trading_status import beijing_now
+
+    state = state.state if hasattr(state, "state") else state
+    try:
+        days = await tc.trading_days(state.hub.provider)
+        td = tc.last_trade_date(days, asof=beijing_now().date())
+    except Exception as exc:
+        return {"recorded": 0, "reason": "calendar_unavailable", "detail": str(exc)}
+    if td is None:
+        return {"recorded": 0, "reason": "calendar_unavailable"}
+
+    HEAT_DIR.mkdir(parents=True, exist_ok=True)
+    if SKYROCKET_PATH.exists():
+        try:
+            if f'"date": "{td.isoformat()}"' in SKYROCKET_PATH.read_text(encoding="utf-8"):
+                return {"recorded": 0, "reason": "already_recorded", "date": td.isoformat()}
+        except Exception:
+            log.warning("skyrocket history dedupe check failed", exc_info=True)
+
+    try:
+        rows = (await state.hub.provider.get_skyrocket_list("day"))[:20]
+    except Exception as exc:
+        return {"recorded": 0, "reason": "source_failed", "detail": str(exc)}
+    if not rows:
+        return {"recorded": 0, "reason": "empty_list", "date": td.isoformat()}
+
+    lines = [
+        json.dumps({
+            "date": td.isoformat(),
+            "rank": r.get("rank"),
+            "symbol": r.get("symbol"),
+            "name": r.get("name"),
+            "heat": r.get("heat"),
+            "rank_change": r.get("rank_change"),
+        }, ensure_ascii=False)
+        for r in rows
+    ]
+    tmp = SKYROCKET_PATH.with_suffix(".jsonl.tmp")
+    if SKYROCKET_PATH.exists():
+        prev = SKYROCKET_PATH.read_text(encoding="utf-8")
+    else:
+        prev = ""
+    tmp.write_text(prev + "\n".join(lines) + "\n", encoding="utf-8")
+    os.replace(tmp, SKYROCKET_PATH)
+    log.info("skyrocket history recorded: %s（%d 行）", td.isoformat(), len(lines))
+    return {"recorded": len(lines), "date": td.isoformat()}
 
 
 def load_heat_rows(*, limit_days: int | None = None) -> list[dict]:

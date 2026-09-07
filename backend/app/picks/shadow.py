@@ -22,7 +22,7 @@ import asyncio
 import contextlib
 import json
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from app.core.db import get_session_factory
@@ -111,7 +111,13 @@ class ShadowRunner:
                 PaperOrder.scope == self.engine.scope, PaperOrder.side == "buy"
             ).all()
         for o in rows:
-            if o.created_at and o.created_at.astimezone().date().isoformat() == today_cst:
+            if not o.created_at:
+                continue
+            # created_at 存的是 naive UTC（default=utcnow）。必须先显式打 UTC 标再转本地——
+            # 直接 .astimezone() 会把 naive 当本地时区解释，00:00-08:00 CST 期间
+            # 刚写入的订单会被判成"昨天"，幂等检测失效（2026-09-07 深夜全量测试抓现行）。
+            created_local = o.created_at.replace(tzinfo=timezone.utc).astimezone()
+            if created_local.date().isoformat() == today_cst:
                 return True
         return False
 

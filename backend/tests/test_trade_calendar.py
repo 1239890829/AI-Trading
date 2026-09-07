@@ -245,3 +245,61 @@ def test_persisted_calendar_fallback(tmp_path, monkeypatch):
     days = _run(call())
     assert date(2026, 8, 28) in days
     assert date(2026, 8, 29) not in days
+
+
+# ---------------------------------------------------------------- 持久化质量闸门
+# 09-04 实测缺陷：ths 失败退 index-kline 备源时，~80 天短日历无条件覆盖
+# 243 天官方日历 → nth_prev_trade_date(n>80) 崩、兜底末日不含今天判非交易日。
+
+
+def _read_persist(persist):
+    import json
+
+    return json.loads(persist.read_text(encoding="utf-8"))
+
+
+def test_gate_blocks_short_source_overwriting_long_persist(tmp_path, monkeypatch):
+    """核心回归：短备源（index-kline ~80 天）不得覆盖长官方日历（243 天）。"""
+    import json
+
+    persist = tmp_path / "trade_calendar.json"
+    monkeypatch.setattr(tc, "_PERSIST_PATH", persist)
+
+    long_days = [date(2026, 1, 1) + __import__("datetime").timedelta(days=i) for i in range(243)]
+    persist.write_text(json.dumps({
+        "source": "official", "fetched_at": "2026-09-02T00:00:00+00:00",
+        "days": [d.isoformat() for d in long_days],
+    }), encoding="utf-8")
+
+    tc._persist_if_better(DAYS, "index-kline")  # 10 天 << 243*0.8
+    body = _read_persist(persist)
+    assert body["source"] == "official", "劣质备源不得覆盖官方日历"
+    assert len(body["days"]) == 243
+
+
+def test_gate_allows_comparable_update(tmp_path, monkeypatch):
+    """官方≈官方的正常更新必须放行（否则日历永远不刷新）。"""
+    import json
+
+    persist = tmp_path / "trade_calendar.json"
+    monkeypatch.setattr(tc, "_PERSIST_PATH", persist)
+    persist.write_text(json.dumps({
+        "source": "official", "fetched_at": "2026-09-02T00:00:00+00:00",
+        "days": [d.isoformat() for d in DAYS],  # 10 天
+    }), encoding="utf-8")
+
+    tc._persist_if_better(DAYS, "official")  # 10 天 ≥ 10*0.8
+    body = _read_persist(persist)
+    assert body["source"] == "official"
+    assert len(body["days"]) == 10  # 内容照常刷新
+
+
+def test_gate_allows_first_persist_without_existing(tmp_path, monkeypatch):
+    """无兜底文件时短源也要落盘（首次总得有底）。"""
+    persist = tmp_path / "trade_calendar.json"
+    monkeypatch.setattr(tc, "_PERSIST_PATH", persist)
+
+    tc._persist_if_better(DAYS, "index-kline")
+    body = _read_persist(persist)
+    assert body["source"] == "index-kline"
+    assert len(body["days"]) == len(DAYS)

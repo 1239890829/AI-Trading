@@ -13,7 +13,11 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-vi.mock("@/lib/api", () => ({ getLonghu: vi.fn() }));
+vi.mock("@/lib/api", () => ({
+  getLonghu: vi.fn(),
+  // B3 题材迁徙：best-effort 增强，测试里默认拒绝（静默降级不渲染）
+  getLonghuThemeTrail: vi.fn().mockRejectedValue(new Error("skipped")),
+}));
 
 const record = (trade_date: string): LongHuRecord => ({
   symbol: "600519",

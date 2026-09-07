@@ -137,6 +137,20 @@ class Settings(BaseSettings):
     llm_provider: str = "openai"
     # claude_cli 可执行文件路径；留空自动探测（PATH > ~/.nvm/*/bin/claude）
     llm_cli_path: str = ""
+    # 网关健康探针（2026-09-06）：定时最小调用体检，把「额度不足」与
+    # 「网关失败」分开——两者在系统里都表现为降级到 rules，过去只能人肉分辨。
+    # 单次约 $0.0006，默认半小时一拍；设 0 关闭（仍可走端点手动触发）。
+    llm_probe_enabled: bool = True
+    llm_probe_interval_seconds: float = 1800.0
+    # 探针告警：连续失败几次才发、冷却多久、走哪些通道（冷却是硬要求——
+    # 定时探针不冷却必然刷屏，同 2026-09-04 定案的"预警无冷却"缺陷）
+    llm_probe_alert_after: int = 3
+    llm_probe_alert_cooldown_seconds: float = 3600.0
+    llm_probe_channels: str = "in_app,log,feishu"
+    # 助手受限工具调用（2026-09-06 P0-3）：允许助手按需调用只读数据工具
+    # （涨停池/龙虎榜/复盘报告等白名单）。关掉后提示词不再注入工具清单，
+    # 模型回到"只有注入快照"的状态——宁可少答，也不让它凭空编。
+    assistant_tools_enabled: bool = True
 
     # LLM 分析器（未配置时自动降级到 rules）
     review_llm_base_url: str = ""

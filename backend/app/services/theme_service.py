@@ -218,6 +218,51 @@ def seal_phase(first_seal_time: str | None) -> str | None:
     return phase
 
 
+def _parse_hhmmss(ts: str | None) -> int | None:
+    """``"09:33"`` / ``"093300"`` → HHMMSS 整数；无法解析 → None。"""
+    if not ts:
+        return None
+    digits = "".join(ch for ch in str(ts) if ch.isdigit())
+    if len(digits) < 4:
+        return None
+    return int(digits.ljust(6, "0")[:6])
+
+
+# 官方涨停情绪场景 12 口径：10:00 前首封视为「早封」
+EARLY_SEAL_CUTOFF_HHMMSS = 100000
+
+
+def early_seal_rate(hhmmss_values: list[int | None]) -> float | None:
+    """题材早封率：首封时间 ≤10:00 的成员占比。
+
+    时间缺失的成员从分母剔除（样本缺失≠非早封）；全部缺失 → None
+    （三态纪律：没有样本不冒充 0%）。
+    """
+    valid = [v for v in hhmmss_values if v is not None]
+    if not valid:
+        return None
+    return round(sum(1 for v in valid if v <= EARLY_SEAL_CUTOFF_HHMMSS) / len(valid), 4)
+
+
+def seal_retention_rate(pairs: list[tuple[float | None, float | None]]) -> float | None:
+    """题材封单留存：Σ当前封单 / Σ盘中最高封单（官方场景 12 口径）。
+
+    成对参与：当前封单与最高封单**都非空**且 max>0 的成员才进聚合；
+    无有效样本 → None。留存率≈1 封得实（收盘=全天最高），趋 0 说明
+    尾盘炸板/撤单多。max_seal_money 仅 ths 主源提供（东财池无此字段），
+    样本不足时显式 None，不冒充。盘中调用时当前封单是实时值，指标
+    仅收盘口径有意义——消费方须标注。
+    """
+    num = den = 0.0
+    for cur, mx in pairs:
+        if cur is not None and mx is not None and mx > 0:
+            num += cur
+            den += mx
+    if den <= 0:
+        return None
+    return round(num / den, 4)
+
+
 # ---------------------------------------------------------------- 纯函数：梯队联动归属
 
 
@@ -931,6 +976,9 @@ def _build_card(
     amounts: list[float] = []
     caps: list[float] = []
     has_middle_weight = False
+    # 封单质量（A2 下半）：早封率样本 / 留存率成对样本
+    early_samples: list[int | None] = []
+    retention_pairs: list[tuple[float | None, float | None]] = []
 
     for rec in members:
         boards = rec.consecutive_boards or 0
@@ -940,7 +988,10 @@ def _build_card(
         bc = (em.break_count if em else None) or 0
         if bc > 0:
             reopen_count += 1
-        phase = seal_phase((em.first_seal_time if em else None) or rec.first_seal_time)
+        fst = (em.first_seal_time if em else None) or rec.first_seal_time
+        phase = seal_phase(fst)
+        early_samples.append(_parse_hhmmss(fst))
+        retention_pairs.append((rec.seal_amount, rec.max_seal_money))
         if phase:
             seal_dist[phase] += 1
         if em and em.turnover_rate:
@@ -971,7 +1022,7 @@ def _build_card(
             boards=boards,
             seal_amount=rec.seal_amount,
             float_market_cap=cap,
-            first_seal_time=(em.first_seal_time if em else None) or rec.first_seal_time,
+            first_seal_time=fst,
             break_count=(em.break_count if em else None),
             turnover_rate=(em.turnover_rate if em else None),
             is_theme_highest=(boards == theme_max_boards and theme_max_boards >= 2),
@@ -983,7 +1034,7 @@ def _build_card(
             boards=boards,
             seal_amount=rec.seal_amount,
             float_market_cap=cap,
-            first_seal_time=(em.first_seal_time if em else None) or rec.first_seal_time,
+            first_seal_time=fst,
             last_seal_time=(em.last_seal_time if em else None) or rec.last_seal_time,
             break_count=(em.break_count if em else None),
             turnover_rate=(em.turnover_rate if em else None),
@@ -1006,7 +1057,7 @@ def _build_card(
                 "float_market_cap": cap,
                 "amount": (em.amount if em else None),
                 "industry_board": (em.industry_board if em else None),
-                "first_seal_time": (em.first_seal_time if em else None) or rec.first_seal_time,
+                "first_seal_time": fst,
                 "last_seal_time": (em.last_seal_time if em else None) or rec.last_seal_time,
                 "seal_phase": phase,
                 "change_pct": rec.change_pct,
@@ -1137,6 +1188,8 @@ def _build_card(
             "market_break_rate": market_break_rate,
             "seal_time_distribution": dict(seal_dist),
             "seal_quality": seal_quality,
+            "early_seal_rate": early_seal_rate(early_samples),
+            "seal_retention": seal_retention_rate(retention_pairs),
             "turnover_median": round(_median(turnover_rates), 2) if turnover_rates else None,
             "amount_total": round(sum(amounts), 2) if amounts else None,
             "float_cap_median": round(_median(caps), 2) if caps else None,

@@ -131,6 +131,7 @@ class LimitUpRecord(AuditFields):
     seal_count: int | None = None
     break_count: int | None = None
     seal_amount: float | None = None
+    max_seal_money: float | None = None  # 盘中最高封单（ths seal字段；封单留存率分母）
     turnover_rate: float | None = None
     consecutive_boards: int | None = None  # 连板数
     boards_stat: str | None = None  # 如 "3天2板"
@@ -140,6 +141,21 @@ class LimitUpRecord(AuditFields):
     total_market_cap: float | None = None  # 总市值（元）tshare
     amount: float | None = None  # 成交额（元）amount
     industry_board: str | None = None  # 所属行业板块 hybk（东财口径）
+
+
+class AnomalyRecord(AuditFields):
+    """当日个股异动原因（ths 独占口径，today-only 无历史）。
+
+    analysis/keywords 是官方给出的异动归因文本——热点消息验证环
+    （hotspot-pipeline-design G5）的盘面证据源，也是自选监控「为什么异动」的答案。
+    """
+
+    symbol: str
+    name: str | None = None
+    tag: str | None = None  # 官方 tag_name：涨停/跌停/大幅上涨/大幅下跌/快速反弹/快速下跌
+    analysis: str | None = None  # 官方异动原因分析原文（不得改写）
+    keywords: list[str] = Field(default_factory=list)
+    source: str | None = None
 
 
 class LimitDownRecord(AuditFields):

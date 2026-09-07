@@ -25,6 +25,7 @@ from app.api.routes import picks as picks_route
 from app.api.routes import picks_intraday as picks_intraday_route
 from app.api.routes import real_position as real_position_route
 from app.api.routes import assistant as assistant_route
+from app.api.routes import ext_data as ext_data_route
 from app.core.config import settings
 from app.core.db import get_engine, get_session_factory
 from app.data_providers import build_provider
@@ -429,6 +430,16 @@ async def lifespan(app: FastAPI):
                 name="marketdb-sync",
             )
 
+    # --- LLM 网关健康探针（2026-09-06）：区分额度不足/网关失败，避免静默降级 ---
+    llm_probe_stop = asyncio.Event()
+    llm_probe_task = None
+    if settings.llm_probe_enabled and settings.llm_probe_interval_seconds > 0:
+        from app.services.llm_probe import probe_loop
+
+        llm_probe_task = asyncio.create_task(
+            probe_loop(app, stop=llm_probe_stop), name="llm-gateway-probe"
+        )
+
     try:
         await hub.refresh()  # 冷启动立即填充，接口首次调用即有数据
         await risk_engine.refresh()
@@ -461,6 +472,8 @@ async def lifespan(app: FastAPI):
         review_stop.set()
     if marketdb_task is not None:
         marketdb_stop.set()
+    if llm_probe_task is not None:
+        llm_probe_stop.set()
     await _reap(poller, name="quote-poller")
     await _reap(snapshotter, name="market-snapshot")
     await _reap(matcher, name="paper-matcher")
@@ -476,6 +489,7 @@ async def lifespan(app: FastAPI):
     await _reap(sentiment_monitor_task, name="sentiment-monitor")
     await _reap(shadow_task, name="picks-shadow")
     await _reap(marketdb_task, name="marketdb-sync")
+    await _reap(llm_probe_task, name="llm-gateway-probe")
     with contextlib.suppress(Exception, TimeoutError):
         await asyncio.wait_for(provider.aclose(), timeout=_SHUTDOWN_GRACE_SECONDS)
     if app.state.theme_catalog is not None:
@@ -514,4 +528,5 @@ app.include_router(real_position_route.router, prefix="/api")
 app.include_router(picks_route.router, prefix="/api")
 app.include_router(picks_intraday_route.router, prefix="/api")
 app.include_router(assistant_route.router, prefix="/api")
+app.include_router(ext_data_route.router, prefix="/api")
 app.include_router(ws_router)

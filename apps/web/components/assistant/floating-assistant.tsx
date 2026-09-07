@@ -16,7 +16,9 @@ import { useRouter } from "next/navigation";
 import { API_BASE } from "@/lib/api";
 import { workbenchUrl, themesUrl } from "@/lib/routing";
 import { createEntityMatcher, type EntityDict, type EntityMatch } from "@/lib/entity-links";
+import { isAllowedNav } from "@/lib/nav-targets";
 import { RichText } from "@/components/assistant/rich-text";
+import { AssistantMark } from "@/components/assistant/assistant-mark";
 
 const BALL = 48;
 const MARGIN = 16;
@@ -44,6 +46,10 @@ interface ChatMsg {
   role: "user" | "assistant";
   content: string;
   status: "ok" | "streaming" | "interrupted" | "error";
+  /** 本条回答引用到的实时快照溯源（来源 + 数据时间）；无快照为空 */
+  sources?: { symbol: string; name: string; source: string; as_of: string }[];
+  /** 本条回答实际调用过的工具名（后端白名单内的只读工具） */
+  tools?: string[];
 }
 
 function clampPos(p: { x: number; y: number }): { x: number; y: number } {
@@ -234,8 +240,31 @@ export function FloatingAssistant() {
             } catch {
               continue;
             }
-            if (ev.type === "meta" && typeof ev.model === "string") {
-              setModel(ev.model);
+            if (ev.type === "meta") {
+              if (typeof ev.model === "string") setModel(ev.model);
+              // 溯源清单挂到最后一条（正在生成的 assistant 消息）上
+              const srcs = Array.isArray(ev.sources) ? ev.sources : [];
+              if (srcs.length) {
+                setMessages(syncRef((prev) => {
+                  if (!prev.length) return prev;
+                  const next = [...prev];
+                  const lastMsg = next[next.length - 1];
+                  next[next.length - 1] = {
+                    ...lastMsg,
+                    sources: srcs as ChatMsg["sources"],
+                  };
+                  return next;
+                }));
+              }
+            } else if (ev.type === "tools" && Array.isArray(ev.used)) {
+              // 工具调用回执：让用户知道这条答案取过数，不是模型凭空编的
+              const used = (ev.used as unknown[]).map(String);
+              setMessages(syncRef((prev) => {
+                if (!prev.length) return prev;
+                const next = [...prev];
+                next[next.length - 1] = { ...next[next.length - 1], tools: used };
+                return next;
+              }));
             } else if (ev.type === "delta" && typeof ev.text === "string") {
               setMessages(syncRef((prev) => {
                 if (!prev.length) return prev;
@@ -245,7 +274,13 @@ export function FloatingAssistant() {
                 return next;
               }));
             } else if (ev.type === "error" && typeof ev.message === "string") {
-              patchLast({ status: "error", content: `⚠️ ${ev.message}` });
+              // 后端带 kind/hint：优先显示可行动提示（如"额度不足，需充值"），
+              // 技术原文降为次要行——过去只回英文报错，用户不知道该做什么。
+              const hint = typeof ev.hint === "string" ? ev.hint : "";
+              patchLast({
+                status: "error",
+                content: hint ? `⚠️ ${hint}\n\n${ev.message}` : `⚠️ ${ev.message}`,
+              });
             } else if (ev.type === "done") {
               patchLast({ status: "ok" });
             }
@@ -324,8 +359,16 @@ export function FloatingAssistant() {
   };
 
   // ---- 跳转 ----------------------------------------------------------------
+  // 三类落点：个股 → 工作台；题材 → 盘面题材梯队；功能入口 → 注册表给出的站内深链。
+  // nav 的 URL 在识别阶段已过白名单守卫，这里再过一次（防御渲染期被篡改），
+  // 未过则降级为跳题材页，绝不 push 非常规 URL。
   const onNavigate = (m: EntityMatch) => {
-    router.push(m.type === "stock" && m.code ? workbenchUrl(m.code) : themesUrl(m.name));
+    if (m.type === "nav") {
+      const url = m.url && isAllowedNav(m.url) ? m.url : themesUrl(m.name);
+      router.push(url);
+    } else {
+      router.push(m.type === "stock" && m.code ? workbenchUrl(m.code) : themesUrl(m.name));
+    }
     setOpen(false);
   };
 
@@ -362,23 +405,21 @@ export function FloatingAssistant() {
 
   return (
     <>
-      {/* 悬浮球 */}
+      {/* 悬浮球：墨玉反色（light 深墨 / dark 亮面）在任何页面上都可读；
+          rose 细环是唯一的品牌色——hairline 级克制，不做渐变球 */}
       <div
         data-testid="assistant-ball"
         role="button"
         aria-label="AI 助手"
-        className="fixed z-50 flex cursor-grab select-none items-center justify-center rounded-full border border-sky-400/30 bg-gradient-to-br from-sky-500 to-violet-600 text-white shadow-lg shadow-sky-500/25 transition-shadow hover:shadow-xl hover:shadow-sky-500/40 active:cursor-grabbing"
+        className="fixed z-50 flex cursor-grab select-none items-center justify-center rounded-full bg-zinc-900 text-zinc-50 shadow-[0_2px_8px_rgba(0,0,0,0.18),0_10px_28px_rgba(0,0,0,0.22)] ring-1 ring-rose-500/45 transition-[transform,box-shadow] duration-150 ease-out hover:-translate-y-0.5 hover:shadow-[0_4px_12px_rgba(0,0,0,0.22),0_14px_36px_rgba(0,0,0,0.28)] active:cursor-grabbing dark:bg-zinc-100 dark:text-zinc-950 dark:shadow-[0_2px_8px_rgba(0,0,0,0.4),0_10px_28px_rgba(0,0,0,0.35)] dark:ring-rose-500/55"
         style={{ left: pos.x, top: pos.y, width: BALL, height: BALL }}
         onPointerDown={onBallPointerDown}
         onPointerMove={onBallPointerMove}
         onPointerUp={onBallPointerUp}
       >
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-          <path d="M12 3a7 7 0 0 1 7 7c0 2.5-1.4 4.3-3 5.5V18a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2v-2.5C6.4 14.3 5 12.5 5 10a7 7 0 0 1 7-7z" />
-          <path d="M10 21h4" />
-        </svg>
+        <AssistantMark size={22} />
         {streaming && !open && (
-          <span className="absolute -right-0.5 -top-0.5 h-3 w-3 animate-pulse rounded-full border-2 border-white bg-emerald-400" />
+          <span className="absolute -right-0.5 -top-0.5 h-3 w-3 animate-pulse rounded-full border-2 border-zinc-900 bg-emerald-400 dark:border-zinc-100" />
         )}
       </div>
 
@@ -386,20 +427,18 @@ export function FloatingAssistant() {
       {open && (
         <div
           data-testid="assistant-panel"
-          className="fixed z-50 flex flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white/95 shadow-2xl backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95"
+          className="fixed z-50 flex flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white/95 shadow-2xl shadow-zinc-900/10 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95 dark:shadow-black/50"
           style={panelStyle}
         >
-          {/* 头部 */}
-          <div className="flex items-center gap-2 border-b border-zinc-200 px-4 py-2.5 dark:border-zinc-800">
-            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-br from-sky-500 to-violet-600 text-white">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <path d="M12 3a7 7 0 0 1 7 7c0 2.5-1.4 4.3-3 5.5V18a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2v-2.5C6.4 14.3 5 12.5 5 10a7 7 0 0 1 7-7z" />
-              </svg>
+          {/* 头部：墨玉徽标 + 名称 + 模型（mono 弱化），按钮族统一次要级 */}
+          <div className="flex items-center gap-2.5 border-b border-zinc-200/80 px-4 py-3 dark:border-zinc-800/80">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-zinc-900 text-zinc-50 dark:bg-zinc-100 dark:text-zinc-950">
+              <AssistantMark size={15} strokeWidth={2} />
             </span>
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">AI 助手</div>
+              <div className="text-[13px] font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">AI 助手</div>
               {model && (
-                <div className="truncate text-[10px] text-zinc-400 dark:text-zinc-500">{model}</div>
+                <div className="truncate font-mono text-[10px] leading-tight text-zinc-400 dark:text-zinc-500">{model}</div>
               )}
             </div>
             {messages.length > 0 && (
@@ -432,72 +471,108 @@ export function FloatingAssistant() {
           <div
             ref={scrollRef}
             onScroll={onScroll}
-            className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3"
+            className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3.5"
           >
             {messages.length === 0 && (
-              <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
-                <div className="text-sm text-zinc-500 dark:text-zinc-400">
-                  我是本工作台的 AI 助手，可以讲解各模块功能、
-                  <br />
-                  聊板块与个股（无实时行情），或回答一般问题。
+              <div className="flex h-full flex-col justify-center gap-2.5">
+                <div className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                  问盘面、问个股、问功能。
                 </div>
-                <div className="flex flex-wrap justify-center gap-2">
+                <div className="text-xs leading-relaxed text-zinc-400 dark:text-zinc-500">
+                  可以讲解各模块用法、聊板块与个股（无实时行情），或回答一般问题。
+                </div>
+                <div className="mt-2 space-y-1.5">
                   {SUGGESTIONS.map((s) => (
                     <button
                       key={s}
                       type="button"
                       onClick={() => send(s)}
-                      className="rounded-full border border-zinc-200 px-3 py-1.5 text-xs text-zinc-600 transition-colors hover:border-sky-400 hover:text-sky-600 dark:border-zinc-700 dark:text-zinc-400 dark:hover:border-sky-500 dark:hover:text-sky-400"
+                      className="group flex w-full items-center justify-between rounded-lg border border-zinc-200 px-3 py-2 text-left text-xs text-zinc-600 transition-colors hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:bg-zinc-900"
                     >
-                      {s}
+                      <span>{s}</span>
+                      <span
+                        aria-hidden
+                        className="text-zinc-300 transition-[transform,color] duration-150 ease-out group-hover:translate-x-0.5 group-hover:text-zinc-500 dark:text-zinc-600 dark:group-hover:text-zinc-400"
+                      >
+                        →
+                      </span>
                     </button>
                   ))}
                 </div>
               </div>
             )}
-            {messages.map((m, i) => (
-              <div key={m.id} className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
-                <div
-      className={
-        m.role === "user"
-          ? "max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-sky-600 px-3 py-2 text-sm text-white"
-          : `max-w-[92%] rounded-2xl rounded-bl-md px-3 py-2 text-sm text-zinc-800 dark:text-zinc-200 ${
-              m.status === "error"
-                ? "border border-amber-300 bg-amber-50 dark:border-amber-500/40 dark:bg-amber-500/10"
-                : "bg-zinc-100 dark:bg-zinc-900"
-            }`
-      }
-                >
-                  {m.role === "assistant" && m.content ? (
-                    <RichText text={m.content} matcher={matcher} onNavigate={onNavigate} />
-                  ) : (
-                    m.content
-                  )}
-                  {m.role === "assistant" && m.status === "streaming" && !m.content && (
-                    <span className="inline-flex gap-1 py-1" aria-label="正在思考">
-                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-400 [animation-delay:0ms]" />
-                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-400 [animation-delay:150ms]" />
-                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-400 [animation-delay:300ms]" />
-                    </span>
-                  )}
-                  {m.role === "assistant" && m.status === "interrupted" && (
-                    <div className="mt-1 text-[10px] text-zinc-400 dark:text-zinc-500">已停止生成</div>
-                  )}
-                  {m.role === "assistant" && i === lastAssistantIdx && m.status !== "streaming" && (
-                    <div className="mt-1.5 flex gap-2 text-[10px]">
-                      <button
-                        type="button"
-                        onClick={regenerate}
-                        disabled={streaming}
-                        className="text-zinc-400 underline decoration-dotted underline-offset-2 hover:text-zinc-600 disabled:opacity-40 dark:hover:text-zinc-300"
-                      >
-                        重新生成
-                      </button>
-                    </div>
-                  )}
+            {messages.map((m, i) =>
+              m.role === "user" ? (
+                // user：面板内唯一的大面积品牌色块（--accent 同源 rose），终点感明确
+                <div key={m.id} className="flex justify-end">
+                  <div className="max-w-[85%] whitespace-pre-wrap rounded-xl rounded-br-sm bg-rose-600 px-3.5 py-2 text-sm text-white">
+                    {m.content}
+                  </div>
                 </div>
-              </div>
-            ))}
+              ) : (
+                // assistant：去气泡平铺——回复是"内容"不是"卡片"，信息密度与呼吸感兼得；
+                // 出错时才给 amber 提示条，正常态零底色
+                <div key={m.id} className="max-w-[96%]">
+                  <div
+                    className={
+                      m.status === "error"
+                        ? "rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-2 text-sm text-zinc-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-zinc-200"
+                        : "text-sm text-zinc-800 dark:text-zinc-200"
+                    }
+                  >
+                    {m.content ? (
+                      <RichText text={m.content} matcher={matcher} onNavigate={onNavigate} />
+                    ) : null}
+                    {m.status === "streaming" && !m.content && (
+                      <span
+                        className="inline-block h-4 w-0.5 animate-pulse rounded-full bg-zinc-400 dark:bg-zinc-500"
+                        aria-label="正在思考"
+                      />
+                    )}
+                    {m.status === "interrupted" && (
+                      <div className="mt-1 text-[10px] text-zinc-400 dark:text-zinc-500">已停止生成</div>
+                    )}
+                    {/* 工具回执（P0-3）：这条答案调过哪些只读工具——取过数和没取过
+                        必须能一眼分出来，否则"引用了数字"和"编了数字"长得一样 */}
+                    {!!m.tools?.length && (
+                      <div
+                        data-testid="assistant-tools"
+                        className="mt-1.5 text-[10px] text-zinc-400 dark:text-zinc-500"
+                      >
+                        已取数 · {m.tools.join(" / ")}
+                      </div>
+                    )}
+                    {/* 溯源脚注（P0-4）：本条回答引用了哪些源、几点的数据——
+                        回答里的每个行情数字都能对上这里的某一行 */}
+                    {!!m.sources?.length && (
+                      <div
+                        data-testid="assistant-sources"
+                        className="mt-1.5 border-t border-zinc-200/80 pt-1.5 text-[10px] leading-relaxed text-zinc-400 dark:border-zinc-800/80 dark:text-zinc-500"
+                      >
+                        <span className="font-medium text-zinc-500 dark:text-zinc-400">数据来源</span>
+                        {m.sources.map((s) => (
+                          <span key={s.symbol} className="ml-1">
+                            · {s.name || s.symbol} {s.source} {s.as_of}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {i === lastAssistantIdx && m.status !== "streaming" && (
+                      <div className="mt-1.5 flex gap-2 text-[10px]">
+                        <button
+                          type="button"
+                          onClick={regenerate}
+                          disabled={streaming}
+                          className="text-zinc-400 underline decoration-dotted underline-offset-2 hover:text-zinc-600 disabled:opacity-40 dark:hover:text-zinc-300"
+                        >
+                          重新生成
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ),
+            )}
           </div>
 
           {/* 输入区 */}
@@ -515,7 +590,7 @@ export function FloatingAssistant() {
                 }}
                 rows={2}
                 placeholder="输入问题，Enter 发送 / Shift+Enter 换行"
-                className="max-h-24 min-h-[44px] flex-1 resize-none rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-sky-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-sky-500"
+                className="max-h-24 min-h-[44px] flex-1 resize-none rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-rose-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-rose-500"
               />
               {streaming ? (
                 <button
@@ -523,7 +598,7 @@ export function FloatingAssistant() {
                   onClick={stop}
                   aria-label="停止生成"
                   title="停止生成"
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-zinc-200 text-zinc-500 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-zinc-200 text-zinc-500 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
                 >
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
                     <rect x="5" y="5" width="14" height="14" rx="2" />
@@ -536,7 +611,7 @@ export function FloatingAssistant() {
                   disabled={!input.trim()}
                   aria-label="发送"
                   title="发送"
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-sky-600 text-white transition-opacity hover:bg-sky-500 disabled:opacity-40"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-rose-600 text-white transition-colors hover:bg-rose-500 disabled:opacity-40"
                 >
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                     <path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z" />

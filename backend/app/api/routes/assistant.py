@@ -1,9 +1,16 @@
 """全局 AI 助手 API：POST /assistant/chat（SSE 流式）+ GET /assistant/entity-dict。
 
 SSE 事件契约（每事件一行 `data: {json}\n\n`）：
-- {"type":"meta","provider":..,"model":..}   首事件，模型信息
+- {"type":"meta","provider":..,"model":..,"sources":[..]}
+                                            首事件，模型信息 + 本次注入快照的
+                                            溯源清单（{symbol,name,source,as_of}），
+                                            无快照时为空数组
 - {"type":"delta","text":".."}               文本增量（可能多次）
-- {"type":"error","message":".."}            显式错误（之后仍发 done）
+- {"type":"error","message":"..","kind":"..","hint":".."}
+                                            显式错误（之后仍发 done）。kind 取
+                                            LLMFailure，hint 是可行动提示——
+                                            quota 提示充值，gateway_error 提示
+                                            稍后重试，不再笼统一句"调用失败"
 - {"type":"done"}                            终态
 
 客户端断开 → StreamingResponse 取消生成器 → asyncio.CancelledError →
@@ -22,10 +29,17 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
-from app.assistant.context import build_market_block, resolve_symbols
+from app.assistant.context import build_market_context, resolve_symbols
 from app.assistant.prompt import PageContext, build_system_prompt
+from app.assistant.tools import (
+    ToolContext,
+    has_partial_tool_call,
+    parse_tool_calls,
+    run_tool_calls,
+    strip_tool_calls,
+)
 from app.core.config import settings
-from app.core.llm_client import ChatStream, LLMError, stream_chat_completion
+from app.core.llm_client import ChatStream, LLMError, hint_for, stream_chat_completion
 
 log = logging.getLogger(__name__)
 
@@ -68,8 +82,10 @@ def _sse(obj: dict) -> str:
     return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
 
 
-def _build_messages(req: ChatRequest, market_block: str = "") -> list[dict[str, str]]:
-    system = build_system_prompt(req.page)
+def _build_messages(
+    req: ChatRequest, market_block: str = "", tools_enabled: bool = False
+) -> list[dict[str, str]]:
+    system = build_system_prompt(req.page, tools_enabled=tools_enabled)
     if market_block:
         system += "\n" + market_block
     msgs = [{"role": "system", "content": system}]
@@ -95,38 +111,76 @@ async def _close_stream(stream: ChatStream) -> None:
     await asyncio.to_thread(stream.close)
 
 
+async def _tool_context(
+    request: Request, known_symbols: set[str] | None = None
+) -> ToolContext | None:
+    """构造工具执行上下文；拿不到 provider 返回 None（此时工具不可用，不注入清单）。
+
+    交易日集合只在拿得到时用（trading_days 自带 24h 缓存）；拿不到就退化为
+    只校验日期格式——校验是为了拦错，不能反过来成为工具的可用性瓶颈。
+    """
+    hub = getattr(request.app.state, "hub", None)
+    provider = getattr(hub, "provider", None)
+    if provider is None:
+        return None
+    days: set[str] = set()
+    try:
+        from app.market import trade_calendar as tc
+
+        days = {d.isoformat() for d in await tc.trading_days(provider)}
+    except Exception:  # noqa: BLE001
+        days = set()
+    try:
+        from app.core.db import get_session_factory
+
+        sf = get_session_factory()
+    except Exception:  # noqa: BLE001
+        sf = None
+    return ToolContext(
+        provider=provider,
+        session_factory=sf,
+        known_symbols=known_symbols or set(),
+        trading_days=days,
+    )
+
+
 @router.post("/assistant/chat")
 async def assistant_chat(req: ChatRequest, request: Request) -> StreamingResponse:
     provider = settings.llm_provider
     model = settings.review_llm_model or settings.news_llm_model or "default"
 
-    # 实时快照注入：解析消息/页面里的标的 → 批量取价 → 提示词块（best-effort）
+    # 实时快照注入：解析消息/页面里的标的 → 批量取价 → 提示词块 + 溯源清单（best-effort）
     market_block = ""
+    market_sources: list[dict[str, str]] = []
+    known_symbols: set[str] = set()
     try:
         entity = await asyncio.to_thread(_entity_payload, request)
+        stocks = entity.get("stocks") or []
+        known_symbols = {str(s.get("code")) for s in stocks if s.get("code")}
         codes = resolve_symbols(
-            req.messages[-1].content, req.page, entity.get("stocks") or []
+            req.messages[-1].content, req.page, stocks
         )
         if codes:
             from app.api.routes.market import _batch_quotes
 
             hub = request.app.state.hub
-            market_block = await build_market_block(
+            market_block, market_sources = await build_market_context(
                 lambda syms: _batch_quotes(hub, syms), codes
             )
     except Exception as exc:  # noqa: BLE001  上下文构建是增强层，绝不拖垮聊天
         log.warning("assistant market context skipped: %s", exc)
         market_block = ""
+        market_sources = []
 
-    async def event_stream():
-        # 先发 meta：即使 LLM 不可用，前端也能渲染"正在生成"的状态再收到显式错误
-        yield _sse({"type": "meta", "provider": provider, "model": model})
+    tool_ctx = await _tool_context(request, known_symbols) if settings.assistant_tools_enabled else None
+    tools_enabled = tool_ctx is not None
+
+    async def _stream_round(messages: list[dict[str, str]], collect: bool, sink: list[str] | None = None):
+        """跑一轮流式生成。collect=True 时剥离工具标记，并把原始增量写入 sink。"""
+        raw_parts: list[str] = []
         loop = asyncio.get_running_loop()
-        stream: ChatStream | None = None
+        stream = await asyncio.to_thread(_open_stream, messages)
         try:
-            stream = await asyncio.to_thread(
-                _open_stream, _build_messages(req, market_block)
-            )
             queue: asyncio.Queue = asyncio.Queue()
 
             def _produce() -> None:
@@ -139,31 +193,92 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
                     loop.call_soon_threadsafe(queue.put_nowait, ("eof", None))
 
             threading.Thread(target=_produce, daemon=True).start()
+            pending = ""
             while True:
                 kind, payload = await queue.get()
                 if kind == "eof":
                     break
                 if kind == "raise":
                     raise payload
-                if payload:
+                if not payload:
+                    continue
+                raw_parts.append(payload)
+                if not collect:
                     yield _sse({"type": "delta", "text": payload})
+                    continue
+                # 收集模式：攒住文本，遇到"像是没打完的 {{tool:" 先不吐给用户，
+                # 完整的 {{tool:...}} 直接剥离——标记行绝不能出现在界面上。
+                pending += payload
+                if has_partial_tool_call(pending) and len(pending) < 400:
+                    continue
+                out = strip_tool_calls(pending)
+                pending = ""
+                if out:
+                    yield _sse({"type": "delta", "text": out})
+            if collect and pending:
+                out = strip_tool_calls(pending)
+                if out:
+                    yield _sse({"type": "delta", "text": out})
+        finally:
+            await _close_stream(stream)
+            if sink is not None:
+                sink.append("".join(raw_parts))
+
+    async def event_stream():
+        # 先发 meta：即使 LLM 不可用，前端也能渲染"正在生成"的状态再收到显式错误。
+        # sources = 本次注入的实时快照溯源清单（来源/数据时间），前端据此显示脚注——
+        # 回答里的每个数字都能追到"哪个源、几点的数据"。
+        yield _sse({
+            "type": "meta",
+            "provider": provider,
+            "model": model,
+            "sources": market_sources,
+        })
+        messages = _build_messages(req, market_block, tools_enabled=tools_enabled)
+        try:
+            sink: list[str] = []
+            # 第一轮：启用工具时走收集模式（开头可能是 {{tool:...}}，剥离后才给前端）
+            async for chunk in _stream_round(messages, collect=tools_enabled, sink=sink):
+                yield chunk
+
+            raw = sink[0] if sink else ""
+            calls = parse_tool_calls(raw) if tools_enabled else []
+            if calls:
+                ctx = tool_ctx
+                if ctx is not None:
+                    block, used = await run_tool_calls(calls, ctx)
+                    log.info("assistant tools used=%s", used)
+                    yield _sse({"type": "tools", "used": used})
+                    followup = messages + [
+                        {"role": "assistant", "content": strip_tool_calls(raw) or "（取数）"},
+                        {"role": "user", "content":
+                            "以下是工具返回的真实数据（只读，来源见各行）。"
+                            "基于这些数据回答，并标注来源；工具没给到的信息如实说没有。\n\n" + block},
+                    ]
+                    # 第二轮：不再允许工具（防止无限循环）
+                    async for chunk in _stream_round(followup, collect=True, sink=sink):
+                        yield chunk
             yield _sse({"type": "done"})
         except asyncio.CancelledError:
-            # 客户端断开（点了停止/关窗/跳页）：必须杀掉底层传输
-            if stream is not None:
-                await _close_stream(stream)
+            # 客户端断开（点了停止/关窗/跳页）：底层传输由 _stream_round 的 finally 关闭
             raise
         except LLMError as exc:
-            log.warning("assistant chat LLMError: %s", exc)
-            yield _sse({"type": "error", "message": str(exc)})
+            # 带上分类：额度不足要提示充值，网关失败则提示稍后重试——
+            # 过去两者都只回一句"调用失败"，用户无从判断该做什么。
+            kind = getattr(exc, "kind", None)
+            kind_value = kind.value if kind is not None else None
+            log.warning("assistant chat LLMError kind=%s: %s", kind_value, exc)
+            yield _sse({
+                "type": "error",
+                "message": str(exc),
+                "kind": kind_value,
+                "hint": hint_for(kind_value),
+            })
             yield _sse({"type": "done"})
         except Exception as exc:  # noqa: BLE001  兜底：任何异常都显式报错，绝不裸断流
             log.exception("assistant chat failed")
             yield _sse({"type": "error", "message": f"助手内部错误：{exc}"})
             yield _sse({"type": "done"})
-        finally:
-            if stream is not None:
-                await _close_stream(stream)
 
     return StreamingResponse(
         event_stream(),
