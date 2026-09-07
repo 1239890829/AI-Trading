@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="bdd3E4JwFKPNYBuzqM5MrJ">
+<head data-page-node-id="fMrCwhHfhrfJNoUehfizho">
+<meta charset="UTF-8" data-page-node-id="oum6GcUvubfULBlZC3EGhA">
+<meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="vFZQ88JzLEE6vYlTWWlmzN">
+<title>题材梯队深度归因 · 2026-09-07 午休时点</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+  :root { --bg:#f7f8fa; --card:#ffffff; --ink:#1f2329; --sub:#5f6672; --line:#e5e8ee;
+          --up:#d63031; --down:#0a8043; --accent:#3457d5; --chip:#eef2ff; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--ink); font-family:"PingFang SC","Microsoft YaHei",sans-serif; font-size:14px; line-height:1.65; padding:28px 16px 60px; }
+  .wrap { max-width:1080px; margin:0 auto; }
+  h1 { font-size:22px; margin-bottom:4px; }
+  h2 { font-size:17px; margin:30px 0 12px; padding-left:10px; border-left:4px solid var(--accent); }
+  .meta { color:var(--sub); font-size:12.5px; margin-bottom:18px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin-bottom:14px; }
+  .tldr { border-left:4px solid var(--up); }
+  .tldr b { color:var(--up); }
+  .kpis { display:flex; flex-wrap:wrap; gap:10px; margin:12px 0; }
+  .kpi { flex:1 1 120px; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px; text-align:center; }
+  .kpi .v { font-size:20px; font-weight:700; }
+  .kpi .l { color:var(--sub); font-size:12px; margin-top:2px; }
+  table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden; font-size:13px; }
+  th { background:#f0f3f8; text-align:left; padding:8px 10px; font-size:12.5px; color:var(--sub); white-space:nowrap; }
+  td { padding:8px 10px; border-top:1px solid var(--line); vertical-align:top; }
+  .up { color:var(--up); font-weight:600; } .down { color:var(--down); font-weight:600; }
+  .tag { display:inline-block; background:var(--chip); color:var(--accent); border-radius:4px; padding:0 6px; font-size:12px; margin-right:4px; white-space:nowrap; }
+  .tier0 { color:#b8860b; font-weight:700; } .tier1 { color:var(--up); font-weight:700; } .tier2 { color:var(--accent); font-weight:700; }
+  .warn { color:#b8860b; } .muted { color:var(--sub); }
+  .chain { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:10px 0; }
+  .node { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 12px; font-size:13px; }
+  .node.src { border-color:var(--up); background:#fff5f5; }
+  .node.core { border-color:var(--accent); background:#f2f6ff; font-weight:600; }
+  .arrow { color:var(--sub); }
+  .foot { color:var(--sub); font-size:12px; margin-top:26px; border-top:1px solid var(--line); padding-top:12px; }
+  .disc { margin-top:18px; background:#f0f3f8; border-radius:8px; padding:12px 14px; color:var(--sub); font-size:12.5px; }
+  .chart { width:100%; height:340px; }
+</style>
+</head>
+<body data-page-node-id="BvZa4IloktUFBh4PDCN3Hs">
+<div class="wrap" data-page-node-id="tJjNUowHxQqwr1qliuXnAd">
+  <h1 data-page-node-id="Ca4kU4ND9IRk7x3BwdviDz">题材梯队深度归因报告：算力主线加速，业绩与农业双暗线</h1>
+  <div class="meta" data-page-node-id="EA8qwiz3FBBFKo5Ybts1vN">数据时点：2026-09-07（周一）午休 · 11:30 上午盘快照 ｜ 数据源：本系统 ths 涨停池归因（官方题材口径，72/72 覆盖）+ 板块资金流（东财 clist，延迟口径标注）+ 7×24 快讯流（东财宏观频道）+ agentic_search 交叉确认 ｜ 分析框架：题材周期 × 龙头博弈 × 消息面传导</div>
+
+  <div class="card tldr" data-page-node-id="DqdTgO63OA9UBgy2MMZSxB">
+    <b data-page-node-id="KSJZdDDvvH5Sqm4H0T6XXC">TL;DR</b>：情绪处<b data-page-node-id="pTh4F0Ff2fi4U1leyhxAda">发酵期</b>（温度 69.1、涨停 72 家为昨日 38 家近两倍、炸板率 15.3% 健康、空间板 6 板）。当日资金绝对主线是 <b data-page-node-id="TGYC4ISTFGVSdswPEptHtJ">CPO/光通信</b>——高盛当日光模块深度报告（TAM 三年上调 33%/81%/115%）+ 光博会 9-11 开幕临近 + GPT-6 Astra 十万卡集群 + 上周五美股光通信大涨四重催化共振，主力净流入 192~273 亿级。涨停结构上 <b data-page-node-id="yflNEoXN52mt5NcrXiDusk">业绩驱动（12 家）为第一梯队、机器人第二、农业种业链 4 只 2 板成建制异动为暗线</b>；液冷虽资金大进但接力溢价 -1.41%（一日游结构，不宜追高）。核心风险：CPO 高位兑现（剑桥科技 PE-TTM 162 倍）与龙版传媒 6 板独苗的高度兑现。
+  </div>
+
+  <h2 data-page-node-id="JViX3EP1AHB0VmFBjVOJdX">一、市场环境与情绪周期</h2>
+  <div class="kpis" data-page-node-id="IlEC3nZEYOO45REfQ43nSB">
+    <div class="kpi" data-page-node-id="YuWLdcjvMHNmNKaEfMveFO"><div class="v up" data-page-node-id="9pKNbsw5aM3eEpG4WjJzh7">发酵期</div><div class="l" data-page-node-id="Frky9qkt0wKlF1uLl7VdOY">情绪阶段（置信：高）</div></div>
+    <div class="kpi" data-page-node-id="WOD1VumPuGRd1Xerr5YGkC"><div class="v" data-page-node-id="UifYYjVchMXHVe7iKfFvl5">69.1</div><div class="l" data-page-node-id="2t3zZalXhr3O5NTs0dzcAX">情绪温度</div></div>
+    <div class="kpi" data-page-node-id="9d13wTgu0ewhbAZYGVzoHr"><div class="v up" data-page-node-id="OWP0HfcitWQqOLQEN42lZ6">72 / 38</div><div class="l" data-page-node-id="DKcH4bTkp3kqsleH8QzfTQ">今日/昨日涨停家数</div></div>
+    <div class="kpi" data-page-node-id="Kazpfuj7Tp8CWtXcYGv9kJ"><div class="v" data-page-node-id="ux4hNyhCA2gAomnLrAiabu">6 板</div><div class="l" data-page-node-id="2dr3XTuLhKAFXyqLcsnMRb">空间板（龙版传媒）</div></div>
+    <div class="kpi" data-page-node-id="IUAY2dgUZDAwIYJqiHcmH0"><div class="v up" data-page-node-id="3HDstgpGUU3S3Hs9P1yDpH">15.3%</div><div class="l" data-page-node-id="AWSLs3BI2z21detqSuoYBd">炸板率（≤20% 健康）</div></div>
+    <div class="kpi" data-page-node-id="JjP3pZAC3nMUXyTeIDN4K5"><div class="v" data-page-node-id="FYMZscfljbEuIcez73YhsE">25.8%</div><div class="l" data-page-node-id="BS3E8vFFRhkDwEL02HD8Dr">1进2 晋级率</div></div>
+    <div class="kpi" data-page-node-id="LBOoijLymudVfeVDEIfDOy"><div class="v" data-page-node-id="DH9CBljq6RMA2m7x0Z2lib">+3.04%</div><div class="l" data-page-node-id="pJoqw5XFBKVZuAgDuRllh9">昨涨停今日中位溢价</div></div>
+    <div class="kpi" data-page-node-id="hsRpccPh3lO1E1Bpsa6Kcw"><div class="v" data-page-node-id="hIK59uV7JSpiS9yqVpKUOo">157亿</div><div class="l" data-page-node-id="KDXdW28g4KXnqRouD34d31">封单合计（10点前早封 42/72）</div></div>
+  </div>
+  <div class="card" data-page-node-id="7LjkiAHKQ8C6YCOMUeLUQz">情绪判定依据：涨停 72 家（60–79 档 +2 分）、最高板 6（+1）、炸板率 15.3%（+1）、1进2 晋级率 25.8%（≥40% 档 +2，注意该项未达标但计分口径取近档）、昨涨停溢价 +3.04%、翻红率 68.4%、跌停仅 3 家。<b data-page-node-id="Hs487tKEZriJ2XkJf10S1q">结构特征：高度不塌（6 板）+ 封板质量尚可（早封 58%）+ 亏钱效应未扩散（跌停 3 家）→ 发酵期确认，适合进攻但需防高位分歧。</b>反证信号：摩尔线程（688795）盘初 20% 跌停，次新算力筹码松动，算力内部分歧已现端倪。</div>
+
+  <h2 data-page-node-id="Ps3GxSmWOED2SrgNhJDftr">二、资金合力：板块主力净流入 Top（今日）</h2>
+  <div class="card" data-page-node-id="twQXonU06ryYXNyXIAQ7Dq"><div id="c1" class="chart" data-page-node-id="oaTIk0D2q1rji1OgcoMuqc"></div>
+  <div class="muted" style="font-size:12px" data-page-node-id="lNqJnTn6XBYIUOi2x5PhLz">来源：本系统 /market/board-fund-flow（东财 clist，延迟口径 push2delay，覆盖 504 板块），2026-09-07 11:30 快照。单位：亿元。</div></div>
+  <p data-page-node-id="MA0QZb7Or3P0O8XDtP4ul2">资金口径与涨停口径互相印证：<b data-page-node-id="XtKSMTEwimEjVUseQEsC24">通信技术（+273.4 亿）、5G 概念（+258.1 亿）、CPO 概念（+192.4 亿，占成交 11.07%）、光通信模块（+184.0 亿，占 11.33%）</b>——前四席全是算力光互联链，是当日唯一的"资金级"主线；「百元股」「基金重仓」「大盘成长」同时居前，说明<b data-page-node-id="ZBGWd5unPg4vOtNYIICqGH">机构资金在中军（中际旭创、新易盛等大市值）方向合力，不是纯游资脉冲</b>——这是主线持续性的最重要证据。</p>
+
+  <h2 data-page-node-id="mBzhgS5BbNEuceOafD4c4o">三、题材梯队排序与驱动归因（ths 官方题材口径）</h2>
+  <table data-page-node-id="obu21ABHZHlYgD8Am0NHQK">
+    <tr data-page-node-id="dVHdDN93u7v6rk3WqpplA4"><th data-page-node-id="XMLD1xsApoDi8DCBHfvEgx">档位</th><th data-page-node-id="zw9ng4DFOn5NNOwAcCCGzJ">题材（ths 官方归因）</th><th data-page-node-id="1n9VH0ZMvVXGTB26km0MuL">涨停/高度</th><th data-page-node-id="Wd1KSZ62yeMrGY8ZBlyum6">阶段</th><th data-page-node-id="Ic6X9aWM0YLOwuxCeWzwjl">驱动逻辑（为何形成、为何发酵）</th><th data-page-node-id="skDh8cy4BDpImG1Qn0el6h">消息类型</th></tr>
+    <tr data-page-node-id="I1NNe2w97X46Dge2Mk3ArE">
+      <td class="tier0" data-page-node-id="WLbpSADUiE987bJrwvZQ6T">资金主线</td>
+      <td data-page-node-id="xAfhllL5KktvLuRCGZYZh3">CPO / 光模块 / 800G交换机 / 光通信测试</td>
+      <td class="up" data-page-node-id="P8lhN16iuQbIAjCiZtDtYd">板块涨 5.4%<br data-page-node-id="Wk8L4gQswdgC8NtlzBT8hp">净流入 192 亿</td>
+      <td data-page-node-id="rwvTAyX7AJYGM0rBxn2U4O">发酵加速</td>
+      <td data-page-node-id="fcOh0M2b3lSO03ojpvVB0Y"><b data-page-node-id="lVcs2sgmYpoBLSjDtHSvlM">①当日直接导火索：高盛光模块深度报告</b>——首覆中际旭创H股（03308.HK）目标价 3267 港元，2026-28 全球光模块 TAM 上调 33%/81%/115%，1.6T 出货量预期上调 29%/61%/50%；<b data-page-node-id="oHgKTv4nBDOU0RVSlt5UiR">②事件临近：第27届光博会（CIOE）9-11 深圳开幕</b>，CPO/硅光论坛密集；<b data-page-node-id="z9f8mRjDVByFQtsl2DWTjB">③需求逻辑强化：GPT-6 Astra 十万卡 NVL72 集群</b>（9-04 发布）+ 英伟达 Rubin 平台 Q3 交付、CPO 全面量产；<b data-page-node-id="JVX6XS5IShgMYlKasYCOoy">④海外映射：上周五美股光通信大涨</b>（MRVL+7%、COHR+6%）。中际旭创 H 股先涨 9% 对 A 股定价锚抬升，剑桥科技、共进股份等 800G 标的早盘集体涨停。</td>
+      <td data-page-node-id="4LIaLHf2EyIowX3qpDwCv8"><span class="tag" data-page-node-id="JFxvIAHAIKNJSdyvXCOYyf">业绩预期</span><span class="tag" data-page-node-id="9xinSa9bIKcrxhD3WiNOGK">行业事件</span><span class="tag" data-page-node-id="UG8hSR4G7tAfovNxre7Q8M">海外映射</span></td>
+    </tr>
+    <tr data-page-node-id="vA2tgyqo7130VpxkFiX73A">
+      <td class="tier1" data-page-node-id="37jAvc18fxOo5paXhKD8ir">第一梯队</td>
+      <td data-page-node-id="FpXUCzUGaMn5buYBDbhSBs">业绩驱动（中报增长/业绩扭亏/半年报增长）</td>
+      <td class="up" data-page-node-id="TkCQz3Gq5QaXhN4IQacTOj">12 家 / 2 板</td>
+      <td data-page-node-id="idg24BFM3neSoU7YZywP3m">分歧（开板率 58%）</td>
+      <td data-page-node-id="tk5V7BpiWQgy5SsdnhUzpN"><b data-page-node-id="oL6lPxzf7JvnxGVGEIVUxm">中报季收官的兑现行情</b>：ths 归因里「半年报增长 4 + 中报增长 4 + 业绩扭亏 2」是涨停家数最大的单一聚簇（播恩集团 2板、深南电路、博杰股份等）。驱动是 8 月底中报披露完毕后的业绩重估 + 高盛上调中际旭创业绩预测（超一致预期 25%/42%）的正反馈外溢。活跃 4 天、接力溢价 +9.96%，梯队完整（1~2 板均有承接）。<b data-page-node-id="Cys5MFbHYEKbubljyFK8Yh">注意开板率 58% 封板不牢——业绩线是"暗线"而非情绪主线，靠基本面托底而非连板博弈。</b></td>
+      <td data-page-node-id="bNjpS7GqtdkhxAsUrsDdZA"><span class="tag" data-page-node-id="qGmDCLYfrp5mQbYVFewp2n">业绩预期</span></td>
+    </tr>
+    <tr data-page-node-id="3V1szj3dPvQHXak79CI3za">
+      <td class="tier1" data-page-node-id="W0iaHdL6qr0eDfdOpKoj9t">第二梯队</td>
+      <td data-page-node-id="knoSh1rXd9AtBMEBzNEGzd">人形机器人 / 机器人零部件</td>
+      <td class="up" data-page-node-id="G7pfvD21JRQ64NayOKwXhZ">7 家 / 3 板</td>
+      <td data-page-node-id="hvhFTCsCgoRAYwrF07P8Mb">分歧（梯队断层：3板下无2板）</td>
+      <td data-page-node-id="kFmYMoqfaBoT8cRLTRlZob"><b data-page-node-id="76XYU8o0zDRMK2aePKy9FN">产业趋势型题材（活跃 4 天）</b>：爱仕达 3 板为龙头（人形机器人+炊具小家电双属性），北特科技（行星滚柱丝杠）、斯菱智驱、浙江荣泰、日盈电子、福莱新材、铁流股份等零部件集群跟进——<b data-page-node-id="ol3VwslA8iRu4hTAzG3nfw">特斯拉/华为具身智能产业链的订单验证逻辑</b>（ths 归因「机器人零部件」「行星滚柱丝杠」「定增扩产」）。板块当日 +1.84%、主力净流入 2.2 亿、接力溢价 +10.02%。风险：梯队断层（3 板下方 2 板无承接）+ 位置偏高（连涨 4 天），是"老题材的分歧期"而非新启动。</td>
+      <td data-page-node-id="vp8OG3sY3TUeUGXO0mCHs3"><span class="tag" data-page-node-id="DhB1HyGc9AfNWaDqPjQ4UX">产业趋势</span></td>
+    </tr>
+    <tr data-page-node-id="eF3ka4RyXSYDTam2oD2pWr">
+      <td class="tier2" data-page-node-id="HJTHatCWoZEulEF4TAJJyc">第三梯队</td>
+      <td data-page-node-id="tBqIPq2EVf7VOuqeaOEN6i">农业种业链（玉米制种/种子业务/生猪养殖/饲料/复合肥）</td>
+      <td class="up" data-page-node-id="tAPFpQLqTMxe6d8euov3KG">8 家 / 4 只 2 板</td>
+      <td data-page-node-id="FVMLbxblRyPyY9h0hdtgKq">启动→发酵中</td>
+      <td data-page-node-id="hulTi6jI0MZxzuLmoxmfkg"><b data-page-node-id="xNaQIyJ3LvhE5qF5ED5WC0">当日最值得警惕的成建制新异动</b>：亚盛集团（玉米制种）、敦煌种业（中报增长+种子）、播恩集团（饲料+业绩扭亏）、罗牛山（生猪）4 只 2 板 + 金健米业/道道全/金正大/红四方首板——种子+养殖+化肥三条支线同日齐动，结构上是"低位+政策敏感+厄尔尼诺气候叙事"的标准埋伏形态。<b data-page-node-id="UGDCL4KBsN02r5vdAXOv1K">但本系统快讯流未捕获当日直接催化（消息面归因缺失，如实标注）</b>，需盘后核实是否出现农业政策/农产品涨价/厄尔尼诺新信号；无消息锚的成建制异动，持续性打折。</td>
+      <td data-page-node-id="NwaQAV3PbupnjBmUxtBjGn"><span class="tag" data-page-node-id="lm4Qa2MlnGytQ2S6FyHMYb">催化待核实</span><span class="tag" data-page-node-id="ElDTdFRqgn3jyQvbxfPFpv">可能:政策/气候</span></td>
+    </tr>
+    <tr data-page-node-id="oZLF0CNBoUeQKLNtnL421c">
+      <td class="tier2" data-page-node-id="VJd0rEQD5azWayochip85W">第四梯队</td>
+      <td data-page-node-id="6NB0XuNAPFbB8xPD4JXwj8">国资改革（上海国资/黑龙江国资/北京国资）</td>
+      <td class="up" data-page-node-id="ybheX6EK17QxLZZmDJqsBk">4 家 / 2 板</td>
+      <td data-page-node-id="9qR1w4Y2TlZThasCnrmTUp">启动</td>
+      <td data-page-node-id="3J2jZ8yfFMa9ESaZajgY7l"><b data-page-node-id="nbHSGzPq9EceoUTiqTR0xq">政策驱动：中央财政 3000 亿注资 8 家金融央企</b>（9-06 晚至 9-07 凌晨财政部三连发）——「财政部积极支持中央金融企业补充核心一级资本」。天沃科技 2 板（光热风电+上海国资）、华天酒店、龙版传媒（6 板身兼黑龙江国资）均沾国资属性。结构缺陷：无百亿中军、纯小票，且"无法归因"评分低——注资受益方是金融机构本身，A股映射多为概念外溢，持续性存疑。</td>
+      <td data-page-node-id="VRWDThTNaYf9hANgV6HJI7"><span class="tag" data-page-node-id="J7M7FgdnhsAWDsdzMF7Ukt">政策</span></td>
+    </tr>
+    <tr data-page-node-id="4ewKi6PWnn33hPjGI9kPng">
+      <td class="tier2" data-page-node-id="FDGhgi3N9E8et2bDohIR9p">观察级</td>
+      <td data-page-node-id="nLFFek52WGn7QcGMxorWOD">液冷（液冷服务器/液冷硅油/算力液冷）</td>
+      <td data-page-node-id="5mAlG4ZKCvCM3YQIgvXJa9">3 家 / 全首板</td>
+      <td data-page-node-id="F98d96v61VPYb1aLF8NMrr">分歧（接力溢价 -1.41%）</td>
+      <td data-page-node-id="jtS9Fm8XG79gGYfhMThZEF"><b data-page-node-id="eikyDSPbqX4j8IW9FR4r4K">CPO 主线的伴生扩散方向</b>：共进股份（800G交换机+液冷）、盾安环境、博杰股份、集泰股份（液冷硅油）、金海高科、江南新材（液冷散热）——Rubin 平台单机柜功耗 200kW+ 倒逼液冷刚需，逻辑最硬；但梯队结构差：全部首板无二板、开板率 67%、昨日接力者今亏 1.41%。<b data-page-node-id="nmwJA1wDzQqydmSzzpTVbw">资金大进（板块净流入 34.5 亿）但接力亏钱 = 高位换手，属"扩散候选"而非"可追方向"——等一次分歧再低吸，不追首板。</b></td>
+      <td data-page-node-id="qqJLfZ0RUVkTxGlRH1hWFB"><span class="tag" data-page-node-id="ixBQ7ahnfrW9s6bLb3EerX">产业趋势</span><span class="tag" data-page-node-id="y9ZLAMByniDD0Bj0GI0pK0">资金动向</span></td>
+    </tr>
+    <tr data-page-node-id="oEoelbhycnxg8IYz9s5i4L">
+      <td class="tier2" data-page-node-id="YmiGQH6j5J6N8t4vOoy2SS">观察级</td>
+      <td data-page-node-id="50Rpte3jAezbOObE1dRdDZ">商业零售（硬折扣/罗森便利/物业租赁）</td>
+      <td data-page-node-id="aDSPJBsy3wiKXTrl2MMFBy">2 家 / 3 板</td>
+      <td data-page-node-id="HHFZoWnNFhW0LixqUqbc28">启动（断层）</td>
+      <td data-page-node-id="TJ6kYmd4RRInbBTIzikjx8">百大集团 3 板为空间龙头（商业零售+恒隆租约），中百集团首板补涨（"龙头打出空间后的低位替代"）。催化是「60万亿大市场」消费叙事（快讯 03:19）+中报增长。零散结构、无中军，纯情绪空间博弈，跟龙头不跟板块。</td>
+      <td data-page-node-id="WKcThA1dqgx95Wx97UYkeH"><span class="tag" data-page-node-id="SZoY1OKTJO7msxGQBiePTQ">资金动向</span><span class="tag" data-page-node-id="762hc3nPk0vs6ztFOLtGDW">业绩预期</span></td>
+    </tr>
+    <tr data-page-node-id="XH2n5hAikpD8Y3mNFTvHJF">
+      <td class="warn" data-page-node-id="4kUGHSsYFJxKsUbyxcPq5U">退潮级</td>
+      <td data-page-node-id="TTvE0h8UuUcB47NcyYfrb5">海峡两岸 / AI漫剧（出版发行）</td>
+      <td data-page-node-id="boedH8ZBaMlbzO1flSJWEj">2+1 家</td>
+      <td class="down" data-page-node-id="zO00b1sUWwEAfQWB2PwqsP">退潮</td>
+      <td data-page-node-id="9Hhb82RbJzgUsvHRdp7EGY">海峡两岸：涨停 5→2 骤降，海欣食品/安记食品 2 板是余温，watcher 已发方向证伪信号。<b data-page-node-id="CvgKnbGBIWkl41zXxuILvF">AI漫剧：龙版传媒 6 板是全市场空间板+情绪锚</b>，但已是独苗（无同题材跟随），属"高位孤龙"——它断板之日就是情绪周期检验之时，只作为情绪标尺观察，不作为参与标的。</td>
+      <td data-page-node-id="JE1TORxPfAuGcqlE45bYhe"><span class="tag" data-page-node-id="HAosmbidGnFNFBeM8jl0UW">资金动向</span></td>
+    </tr>
+  </table>
+
+  <h2 data-page-node-id="5g6bO71hw985oksyOYECws">四、消息面系统归类（六类全景）</h2>
+  <table data-page-node-id="sDSSml4rcBsChGQhk9FNaB">
+    <tr data-page-node-id="BBLKWyFecCJ4kNeyU3KaAd"><th data-page-node-id="rmRdHkjv9zwjXueKPyVRwA">消息类型</th><th data-page-node-id="rQY8A9LaIQUDTHVDPhBEhi">具体催化（时间）</th><th data-page-node-id="1LOfRJ1lH2zhFpMIf9kQ5P">指向板块</th><th data-page-node-id="yE9XYqavpEQoA09QUfnYcP">盘面验证（11:30 前）</th></tr>
+    <tr data-page-node-id="nujQPmkYWWGnuPGeIEJCYG"><td data-page-node-id="iqdn8i17y6HEXDld8tdjaR"><b data-page-node-id="5VyXgbdAYUcRQH1dqTuKE1">政策</b></td><td data-page-node-id="av3K7ThLziGoDjFdYAruQD">财政部 3000 亿注资 8 家金融央企、补充核心一级资本（9-06 21:59 ~ 9-07 00:08 三连发）</td><td data-page-node-id="Sp0ycg2CVjqZmtEHLAZvaZ">国资改革、银行保险</td><td data-page-node-id="KqgVXQzDWF2CFjbxnn1gOS">天沃科技/华天酒店 2 板，金融板块本身未见涨停潮——<b data-page-node-id="JMeXkOwW3Fb23zmbnCRp1Z">政策利好的直接受益方（金融机构）与 A 股映射（国资小票）背离，交易价值偏概念外溢</b></td></tr>
+    <tr data-page-node-id="3mIHHsezHR2254nsHbatt2"><td data-page-node-id="jO89TFBqtXbWkMi3I3bTAA"><b data-page-node-id="aWvC7e4E4NF5SCuJyIcg0D">行业事件</b></td><td data-page-node-id="Ioo5SULAhnrJJVh6d9VW6b">第27届光博会 CIOE 9-11 深圳开幕（CPO/硅光论坛 90+ 场，博通/华为海思/新易盛参展）；医保国谈 CAR-T 冲刺（9-06）；华为/苹果/小米折叠屏"72小时对决"超级发布周</td><td data-page-node-id="JLu2oIEhLkicobCPWnwjz9">CPO/光模块；创新药；消费电子</td><td data-page-node-id="6AMP7hlFvoBoufPegxi09Z">CPO 已抢跑发酵；创新药今日未成梯队；折叠屏仅科森科技 1 家首板——<b data-page-node-id="68Tt0sOBiP2izhBEa7C6Dk">光博会是本周确定性最高的日历催化</b></td></tr>
+    <tr data-page-node-id="KRjj2iBDS5YpbmdIrfAoSo"><td data-page-node-id="lD23yuY0clNDBZzpaO4NaR"><b data-page-node-id="63xFM46jTvBJ8Gt6YybaPy">业绩预期</b></td><td data-page-node-id="yJ42wEjLmR4AA4RK7IYITa">高盛首覆中际旭创 H 股（目标价 3267 港元，业绩预测超一致预期 25%/42%）；中报季收官（半年报增长/扭亏归因 8 家涨停）</td><td data-page-node-id="GG33rJPq2OihgtxhsqTKYL">光模块中军；业绩驱动全扩散</td><td data-page-node-id="T4AtSAvCpjxdE7oh5Yegd4">中际旭创 +8.12%（300308）、新易盛 +6.87%（300502）；业绩驱动 12 家涨停居梯队第一</td></tr>
+    <tr data-page-node-id="S5hVZNWGWXMRKd8gHmtxXd"><td data-page-node-id="aeAiollLkn6LaDAYUF2wdo"><b data-page-node-id="M7tQgXZqO69v8vhe0ABnHG">海外映射</b></td><td data-page-node-id="spCXkf4GOzXICj3wlC82z0">GPT-6 Astra 发布（9-04，10万卡 NVL72 集群训练）；英伟达 Rubin 平台 Q3 交付、CPO 全面量产；上周五美股 MRVL+7%/COHR+6%；韩国 AI 半导体出口暴增、KOSPI 高开 3.34%；高盛"存储荒"研判</td><td data-page-node-id="7anVSRJUKHT4F46sw0EroN">算力光互联、存储、AI应用/智能体</td><td data-page-node-id="qNNUVLYHnELaOd8A4higUL">算力硬件十余只涨停；存储仅超声电子（存储PCB）1 家——存储映射弱于光模块</td></tr>
+    <tr data-page-node-id="9p1PrwHZ6qDWzegiLCw8rp"><td data-page-node-id="qRj3mc7mC0BzVCJqY22NP1"><b data-page-node-id="o13u8RX81jinYCq3AsgDhu">资金动向</b></td><td data-page-node-id="IyhWOqmkq3BGti8yBhOF5E">通信技术 +273 亿 / 5G +258 亿 / CPO +192 亿 / 光通信模块 +184 亿（占成交比 9~11%）；基金重仓 +195 亿同步进榜</td><td data-page-node-id="UH7MyMkj2ZJ5uQHePxtwNG">算力光互联中军</td><td data-page-node-id="54YTUh8DtUE4wIq2GWUJAj">"三剑客"合计成交约 462 亿——资金合力在中军而非纯情绪小票</td></tr>
+    <tr data-page-node-id="RFYfQfIrLWAPutvrd5XEiH"><td data-page-node-id="6cTNmNkwkh2nmFBqKKUoXe"><b data-page-node-id="sORMjgWRlCDg5wKtDHT3bO">传闻/分歧信号</b></td><td data-page-node-id="qddn0HYQPuDpHWRtVLYgE7">摩尔线程盘初 20% 跌停（次新算力筹码松动）；「专家泼马斯克冷水：太空数据中心没那么快」（9-07 02:31）</td><td data-page-node-id="BahXOcnLdedGr56MWRDuU2">次新算力、概念型算力</td><td data-page-node-id="Plc53t0nVU468yCOiMBiwg">警示算力内部"真订单"与"远期叙事"的分化正在发生</td></tr>
+  </table>
+
+  <h2 data-page-node-id="WRVWQOpH0eKHmM0w9gPofX">五、算力主线传导链（当日实际定价路径）</h2>
+  <div class="card" data-page-node-id="qabyMpyeGX6BTU5ZLCaheA">
+    <div class="chain" data-page-node-id="hgcUYdf2QCmGoMJCtHmQOD">
+      <div class="node src" data-page-node-id="vO1tmPheMakvLp4O44VEVo">GPT-6 Astra<br data-page-node-id="gCkSaFVDxpHMTGOq5dPmAF"><span class="muted" data-page-node-id="HXjp166jn6zhgYpCLCPG5M">9-04 · 10万卡集群</span></div><span class="arrow" data-page-node-id="by1elKCWfn4QyNAywBScq8">→</span>
+      <div class="node" data-page-node-id="DK8gwLl44eJLlOL3EpJwPD">算力需求再通胀<br data-page-node-id="zYDmkp5MBDDJXWKArIB71H"><span class="muted" data-page-node-id="lyJ3aeECWjyGiaBQ58efQp">高盛上调 TAM 33/81/115%</span></div><span class="arrow" data-page-node-id="W3pDhqmidfKXrCy8EGDn6R">→</span>
+      <div class="node core" data-page-node-id="mV6PGIHJwX5qxRVC6gjIFA">CPO / 光模块（当日主线）<br data-page-node-id="ozDNAhjkn3GAUcKTUNIQ7V"><span class="muted" data-page-node-id="RzXso1OgXjBpy8hBLKPj5T">192~273亿净流入</span></div><span class="arrow" data-page-node-id="zX7rfyrsgdxH2rl3TIjX1J">→</span>
+      <div class="node" data-page-node-id="5C1CH6AznhUFqb0FafdHG9">PCB / 上游材料<br data-page-node-id="FLXk7eSNIQk0ZbXT8xyHgi"><span class="muted" data-page-node-id="LqSEVIkO4nJDKgtASIlOl2">超声·兴森·深南·景旺·博敏·迅捷兴</span></div>
+    </div>
+    <div class="chain" data-page-node-id="3D2rzIFiGRZvS0weml4qBh">
+      <div class="node core" data-page-node-id="EH5vPyO3xurBopjaVoyGEF">液冷（伴生刚需）<br data-page-node-id="WPQMHYJxJBzaHXILQ574gT"><span class="muted" data-page-node-id="J1NBGp8AMHaxy1A6d4aMhL">扩散候选·接力弱</span></div><span class="arrow" data-page-node-id="jhypbAxf1Ia7oE7qaKm3Hh">←</span>
+      <div class="node" data-page-node-id="lfjS1EWeGM7Z4yb3ZZ6lZ7">Rubin 单机柜 200kW+</div><span class="arrow" data-page-node-id="vQfqeTjFWlH9wUEz3bTdCn">←</span>
+      <div class="node" data-page-node-id="Ti0Az2f8miTfKL46bhopxX">英伟达 CPO 全面量产<br data-page-node-id="jkDo0i8Y9KAehSNomwWVL1"><span class="muted" data-page-node-id="ifqMrcCCdoahRtPXvKl51R">6月官宣·Q3交付</span></div><span class="arrow" data-page-node-id="KfnPSzDyVVsgklnW05iPE1">←</span>
+      <div class="node src" data-page-node-id="45hRUjuhzGPu9hE1qHFs1d">光博会 9-11<br data-page-node-id="GmPCGJoB0y6jIy2p2nUrbH"><span class="muted" data-page-node-id="yx1sHRsQe2tLr82bX8T7kP">事件日历锚</span></div>
+    </div>
+    <div class="muted" style="font-size:12px" data-page-node-id="SxbXFNGTad1l3x1TT9dh5b">解读：本条链的两个"消息锚"（GPT-6 需求侧、光博会事件侧）都在本周内，中间环节（光模块→PCB→液冷）是资金沿产业链自上而下的扩散路径。PCB 集群（6 家涨停、ths 归因"AI算力PCB/光模块PCB/高阶HDI"）已是第二级扩散的实锤；液冷是第三级候选但接力结构未过关。</div>
+  </div>
+
+  <h2 data-page-node-id="En1MSVJuTTlXE7HcBelAW3">六、市场风向推断与扩散方向</h2>
+  <div class="card" data-page-node-id="TQVxDwfWJZdypobCieRGTb">
+    <p data-page-node-id="YEIl7GPN0ppNS21wZtBylL"><b data-page-node-id="WL4rOOyH59UiPlUlyQPe7m">风向判断（倾向性结论）</b>：发酵期 + 机构中军合力 + 日历催化在途，算力光互联主线的惯性大概率延续至光博会（9-11），但<b data-page-node-id="Yf6ngHeVyc6oQA1hSg48Z5">节奏是"事件前抢跑 → 事件日兑现"</b>。真正的主线确认指标是中军（中际旭创/新易盛/天孚）能否持续放量而非小票连板数——今日"三剑客" 462 亿成交与「基金重仓」进资金榜前五，说明这轮是机构参与型行情，持续性高于纯游资题材（游资题材通常 3-5 天，机构+产业逻辑可数周）。</p>
+    <p data-page-node-id="X2IcZCOkrZBnz4aUyjt6Ea"><b data-page-node-id="6ZB7DmeQv8tYYkik261xXE">可能扩散方向（按逻辑邻近度排序）</b>：</p>
+    <table data-page-node-id="ZrDYgpSjpnPLUVYZpwyerz">
+      <tr data-page-node-id="1UMjwx5p3ku21srnGDBAFO"><th data-page-node-id="QCVHPFOACjIiouxyNAhY8g">方向</th><th data-page-node-id="yzF3JXxrZoa8NeDedGpuS0">传导逻辑</th><th data-page-node-id="Rgl2AsDTW8cdWVpAjx9dMz">当前证据</th><th data-page-node-id="bTmF45IEqajLjRLKatopFy">参与姿态</th></tr>
+      <tr data-page-node-id="qOaVzfBnewE7yTHDScfuFz"><td data-page-node-id="X8ufyDp9612bqvmwYIQ12Q">① PCB（AI算力/光模块/HDI）</td><td data-page-node-id="nUPngzw6ZFp9in6t0bJrto">光模块放量→高多层板/载板订单（1.6T 对 PCB 层数要求跃升）</td><td data-page-node-id="RILH44XGAoE9sFRDxML7HY">6 家涨停（超声/兴森/深南/景旺/博敏/迅捷兴），ths 归因集中</td><td data-page-node-id="BWDkwHCEVYs5vdjFNEjgFF">已扩散，盯中报增长的深南电路类中军</td></tr>
+      <tr data-page-node-id="IOXxfe8hIXhGgjZl3in305"><td data-page-node-id="qBP0a2xFtIRCluvIUaZqeW">② 液冷</td><td data-page-node-id="wKcyKQGT8spj9CIsH3EjXL">Rubin 单机柜 200kW+ → 液冷从可选变标配</td><td data-page-node-id="VTBJ2CI22ePnDmMe6fJWch">资金大进但全部首板、接力 -1.41%</td><td data-page-node-id="EaO1QAdiq3wXFhPXhVISJ5">等分歧后低吸，不追首板</td></tr>
+      <tr data-page-node-id="ZY7zg5LFEu7e2hPjFpZclv"><td data-page-node-id="ECpQavOCZJNTUMpKF0kskG">③ CPO 上游材料/设备</td><td data-page-node-id="xqd1Nxc7wDImVHOQlEec2X">硅光子量产→测试设备瓶颈（大摩）、铌酸锂/磷化铟调制器</td><td data-page-node-id="irS8HebIy2QQ7A6y0illOS">天通股份（铌酸锂+CPO）、魅视科技（磷化铟）首板；华盛昌（光通信测试+CPO并表）</td><td data-page-node-id="FnxDjV58Vk3GeRzUrCi389">逻辑新、位置低，留意光博会展台信号</td></tr>
+      <tr data-page-node-id="cKwGyNPqkW2DZdcqgQuSBw"><td data-page-node-id="yIKHbKQekD9jXLrrnzF4HO">④ 国产算力</td><td data-page-node-id="vpY5cTRqWCcAxA0MAEc4tB">国模国芯协同、GPT-6 拉大差距倒逼追赶</td><td class="down" data-page-node-id="sz4LLHEPKC9olpMI2awCsz">摩尔线程 20% 跌停——分歧先行</td><td class="down" data-page-node-id="IXdWTi4qacLEmonT6nKoIc">负反馈出现，回避</td></tr>
+      <tr data-page-node-id="BuO8RkJmXlhwvMAPhdAX86"><td data-page-node-id="jHoD68y6y8RMZ5Y5noGjQ4">⑤ 农业种业链</td><td data-page-node-id="kl0enpDaJS4EcmcVvioUPT">若证实气候/政策催化→低位埋伏逻辑成立</td><td data-page-node-id="xRSGFsbDuXCD9zCD68NSQq">4 只 2 板成建制，但催化未捕获</td><td class="warn" data-page-node-id="DSOCCFREPcxVDHOV9yisOF">先核实消息锚，再谈埋伏</td></tr>
+    </table>
+  </div>
+
+  <h2 data-page-node-id="zaWE1ybUPGeHYLiU9qsBIT">七、埋伏机会与离场预案（条件化，非操作指令）</h2>
+  <div class="card" data-page-node-id="7wudhB3SRaq8Fu36HIUwOj">
+    <p data-page-node-id="fI6q840oqyqXEHfIycSP4z"><b data-page-node-id="TFKyDzlpAHWPHO63TwfuiF">条件 → 动作框架</b>：</p>
+    <table data-page-node-id="nkMZfOn1EvlWsH2pulQYUN">
+      <tr data-page-node-id="FrCo4MmLJYM2MNbwHl91WE"><th data-page-node-id="1WlOkYQj1vi56K9vmVvfpF">场景</th><th data-page-node-id="hAaCGG1Xu9s8KJEfECWJwD">条件（可观测变量）</th><th data-page-node-id="DWLlIr62gGWOFkmpi5BGf2">动作倾向</th></tr>
+      <tr data-page-node-id="39NM3VL1chmknTuPFBUJPB"><td data-page-node-id="G1bBGv3SCAE462nemrG1Ia">CPO 主线延续</td><td data-page-node-id="HtLZRnxFmXAfd4cmDSWulm">光博会前中军（中际旭创/新易盛）缩量横盘不破 5 日线 + 前排（剑桥科技/共进股份）晋级 2 板</td><td data-page-node-id="urAXYGqkLZIhHLlPY02Dp9">持有主线仓位，扩散端只做 PCB 中军；事件日（9-11）盘中兑现意识提级</td></tr>
+      <tr data-page-node-id="O7cpEhzFATxSl659StbXEs"><td data-page-node-id="UOx1eaM4y9jG6JzfkILCeb">CPO 高位兑现</td><td data-page-node-id="56SQeeIClgdoAyfkn07pnz">中军放巨量滞涨（成交续创高但涨幅收窄）+ 前排炸板率 &gt;30%</td><td data-page-node-id="tcEgsQWRqsgUcLj70S2Qup">执行离场预案：主线仓位减半，扩散端（PCB/液冷跟风）先清</td></tr>
+      <tr data-page-node-id="G6VjnBSahrKazggLX3Yh0D"><td data-page-node-id="vhV6YaTH79cWJFSF453Sxr">液冷二次启动</td><td data-page-node-id="s2Z2RAJlaDo8KCPakdRRHW">今首板标的（盾安/集泰/金海高科）明日出现 1~2 只 2 板 + 板块接力溢价转正</td><td data-page-node-id="CCVOyeqlyDQMqGCFGHjb3A">分歧转一致的低吸窗口，弹性标的不超过半仓单一题材上限</td></tr>
+      <tr data-page-node-id="1MX8buCjA2ppNbJnjpYGpF"><td data-page-node-id="gtIalyq5Kx5HZDasbk7Q6e">农业链消息落地</td><td data-page-node-id="bUJu7R0OMpN0hCnyssYiC4">盘后/明晨出现农业政策、农产品涨价或厄尔尼诺新信号 + 种业 2 板梯队晋级</td><td data-page-node-id="w4CpcAr0GYH6RtgGF6D2h7">才可按"低位新题材"参与；无消息锚则按超跌反抽对待不接力</td></tr>
+      <tr data-page-node-id="u21RD12YCiqAhVd0oLYgYI"><td data-page-node-id="ICQ8QQy5U7Av6Saj5DqjkW">情绪周期拐点</td><td data-page-node-id="2vUsaNr6qiFzmdkQd4CAmf">龙版传媒（6 板空间锚）断板 + 涨停家数跌回 50 以下 + 昨涨停溢价转负</td><td data-page-node-id="UA1gQlEm6NZDKtHQgZUqL7">全面收缩：只留中军底仓，清全部跟风位</td></tr>
+    </table>
+    <p class="muted" style="font-size:12.5px" data-page-node-id="2z5yg80tPWevDkGwZIKKZ5">风险反证：①高盛目标价兑现后"利好出尽"——中际旭创 TTM PE 已 50.7 倍（来源：westock 行情 2026-09-07 盘中）；②剑桥科技 PE-TTM 162 倍，前排小票估值已透支；③FCC 拟限制中国光模块进口的地缘风险；④开盘今晨资金合力若午后逆转（涨跌家数反转），发酵期判断需即时修正。</p>
+  </div>
+
+  <h2 data-page-node-id="zKWtmgyWSb1kYsQmawQzhw">八、明日（9-08）观察清单</h2>
+  <div class="card" data-page-node-id="QfWYbGC5ZtLs2FrDjtUMhh">
+    <b data-page-node-id="lFyNxWtX9j4SzjNFLaFSOQ">三个核心变量：</b>
+    ① <b data-page-node-id="AcmCjSsBlGpGrxarg30XSE">CPO 前排晋级率</b>——剑桥科技（603083）、共进股份（603118）能否 2 板：决定主线是"发酵加速"还是"一次冲高"；<br data-page-node-id="aDtnsWmfZ817IZBMeZi3kl">
+    ② <b data-page-node-id="AVic5OXy4ThzuJETpPW08V">中军承接质量</b>——中际旭创（300308）/新易盛（300502）量能是否维持 400 亿级合力、尾盘是否回封：机构参与型主线的生命线；<br data-page-node-id="bGTHcf5EJ91KhWSgW5k4JD">
+    ③ <b data-page-node-id="hNNCvFg2l8A57yLB1G0alT">龙版传媒（605577）6 板后的市场反应</b>——空间板溢价决定情绪周期位置：其若晋级 7 板，发酵期升级；断板且无反包，周期进入分歧后段，扩散逻辑全部降级。<br data-page-node-id="4FLFHKJiMAEIhT16cK4G7T">
+    <span class="muted" data-page-node-id="Hsmmy6I36CskmVM5wLUFzs">辅助观察：农业链是否出现可归因催化；摩尔线程跌停是否扩散至次新算力；光博会首日（9-11）前的抢跑节奏。</span>
+  </div>
+
+  <div class="foot" data-page-node-id="ShAukN7uxiDnF7xGr45LsY">
+    <p data-page-node-id="fotRwB12YvXncusFJJBB1T"><b data-page-node-id="3DrVWNRUdz4FnqUZVPeLZ6">数据来源与时点</b>：梯队/涨停/归因——本系统 ths 涨停池（官方题材归因，quality=high 72/72 覆盖）与题材梯队看板，2026-09-07 11:30 快照；板块资金流——本系统 board-fund-flow（东财 clist，push2delay 延迟口径，覆盖 504 板块）；快讯——本系统东财宏观快讯流（7×24，50 条覆盖全天）；主线催化交叉确认——agentic_search（高盛报告/光博会/GPT-6/Rubin，引用来源含同花顺、东方财富、腾讯新闻、中国日报等媒体转述，<b data-page-node-id="ayxzMj3bbVJOfYvkHqsAOv">研报与媒体数据为非一手来源、需核实原文</b>）；个股行情——westock 实时快照 2026-09-07 盘中。今日为午休时点，午后数据将变化，收盘后请以定稿数据复核。</p>
+    <div class="disc" data-page-node-id="Ta1VnqALdZFMOtlx7BYkDt"><b data-page-node-id="kPkVZ2XUFEQBcj6e4hl6mT">免责声明</b>：以上内容基于公开数据和量化分析，仅供参考，不构成投资建议。市场有风险，投资需谨慎。任何投资决策应结合个人风险承受能力、资金状况和投资目标独立判断，必要时咨询持牌专业机构。过往表现不预示未来收益。</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var hosts = ['通信技术', '5G概念', '百元股', '基金重仓', 'CPO概念', '科技风格', '光通信模块', '融资融券', '高市净率', '大盘成长', 'MSCI中国', '深股通'];
+  var flows = [273.4, 258.1, 212.9, 194.7, 192.4, 185.8, 184.0, 157.7, 150.7, 149.7, 142.8, 140.6];
+  var algo = ['通信技术', '5G概念', 'CPO概念', '光通信模块'];
+  var barColor = hosts.map(function (h) { return algo.indexOf(h) >= 0 ? '#d63031' : '#8a94a6'; });
+  var c1 = echarts.init(document.getElementById('c1'));
+  c1.setOption({
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    grid: { left: 90, right: 40, top: 30, bottom: 60 },
+    xAxis: { type: 'value', name: '主力净流入(亿元)' },
+    yAxis: { type: 'category', data: hosts.slice().reverse(), axisLabel: { fontSize: 12 } },
+    series: [{
+      name: '主力净流入',
+      type: 'bar',
+      data: flows.slice().reverse().map(function (v, i) {
+        var idx = hosts.length - 1 - i;
+        return { value: v, itemStyle: { color: barColor[idx] } };
+      }),
+      label: { show: true, position: 'right', formatter: '+{c}' }
+    }]
+  });
+  window.addEventListener('resize', function () { c1.resize(); });
+})();
+</script>
+</body>
+</html>

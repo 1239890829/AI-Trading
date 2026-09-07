@@ -39,6 +39,9 @@ backend/data/marketdb/
 # 资金流日度落盘（运行时本地自积累 + 东财回源缓存，不入 git）
 backend/data/fundflow/
 
+# 因子评估跑批产物（run_factor_eval.py 可复现，结论已进 docs/factor-library-design.md §7）
+backend/data/factors/
+
 # Agent memory / workspace state
 .workbuddy/
 apps/web/tsconfig.tsbuildinfo
