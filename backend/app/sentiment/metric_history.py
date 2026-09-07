@@ -169,8 +169,9 @@ def load(store_path: Path | None = None) -> dict:
         raw = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(raw, dict) and isinstance(raw.get("days"), dict):
             return raw
-    except Exception:
-        pass
+    except Exception as exc:
+        # 库损坏/不可读 → 空库口径继续（校准自然回退 defaults），但必须留痕
+        log.warning("sentiment metric history unreadable, treating as empty: %s", exc)
     return {"updated_at": None, "lookback": None, "days": {}}
 
 

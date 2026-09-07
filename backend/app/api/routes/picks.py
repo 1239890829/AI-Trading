@@ -416,8 +416,8 @@ async def _deep_score_candidates(
                     profit = d_.get("profit_yoy")
                     roe_v = d_.get("roe")
                     gm = d_.get("gross_margin")
-            except Exception:
-                pass
+            except Exception as exc:
+                log.warning("picks financials %s failed: %s", sym, exc)
             # ⚠️ PE 需要现价，财务报告里本来就没有（此前从 financials 取 pe_ttm → 恒 None）。
             # 估值应取自行情快照；链首 ths 不带该字段，用 fill_valuation 从腾讯补。
             pe = None
@@ -440,8 +440,8 @@ async def _deep_score_candidates(
                     # 此前写错字段名 → 恒为 None → 资金面永远显示"数据缺失"，
                     # 被静默降级掩盖成了"数据源问题"（2026-08-31 修复）。
                     net_inflow = d_.get("net_main")
-            except Exception:
-                pass
+            except Exception as exc:
+                log.warning("picks capital flow %s failed: %s", sym, exc)
             sub["capital"], bases["capital"] = score_capital(net_inflow, None, on_lhb=False)
             # 情绪（全局相位；题材涨家占比第一版缺省；promo 历史分位为接力环境修正，
             # 选股 2.0 §3——分位来自 P0-3b 校准库，缺失时不修正、basis 如实呈现）
