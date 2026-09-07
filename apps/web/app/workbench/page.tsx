@@ -8,6 +8,7 @@ import { StockDetailPanel, type ChartTab, type RightTab } from "@/components/sto
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
 import { Sparkline } from "@/components/sparkline";
+import { PickDetailModal, type PickDetailTarget } from "@/components/picks/pick-detail-modal";
 import { useQuoteStream, STREAM_STATUS_LABEL } from "@/hooks/use-quote-stream";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { PageSkeletonFallback } from "@/components/ui/loading";
@@ -294,6 +295,9 @@ function WorkbenchInner() {
     return m;
   }, [sparks]);
 
+  // 选股详情弹窗（2026-09-07 用户需求）：每日精选/盘中跟踪行的「详情」按钮
+  const [detailTarget, setDetailTarget] = useState<PickDetailTarget>(null);
+
   async function remove(symbol: string) {
     try {
       await removeFromWatchlist(symbol);
@@ -482,7 +486,7 @@ function WorkbenchInner() {
                     aria-label="输入 6 位代码添加自选"
                     className="w-20 rounded border border-zinc-200 bg-transparent px-1.5 py-0.5 font-mono outline-none focus:border-up/60 dark:border-zinc-700"
                   />
-                  <button onClick={() => void addWatch()} className="text-up hover:underline">
+                  <button onClick={() => void addWatch()} className="text-up transition-opacity hover:opacity-75">
                     添加
                   </button>
                   {addError && <span className="text-red-400">{addError}</span>}
@@ -493,7 +497,7 @@ function WorkbenchInner() {
                   setManaging((v) => !v);
                   setAddError(null);
                 }}
-                className="text-sky-400 hover:underline"
+                className="text-sky-400 transition-opacity hover:opacity-75"
               >
                 {managing ? "完成" : "管理"}
               </button>
@@ -659,6 +663,22 @@ function WorkbenchInner() {
                     <td className={`w-[58px] px-1 py-2 text-right font-mono text-xs tabular-nums ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</td>
                     <td className="w-[44px] px-0.5 py-2 text-right">{isHardQuality(q.quality) && <QualityBadge quality={q.quality} reasons={q.quality_reasons} />}</td>
                     <td className="w-[22px] pr-1.5 text-right">
+                      {(pick || top) && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDetailTarget(pick ? { kind: "pick", item: pick } : { kind: "top", item: top! });
+                          }}
+                          className="text-zinc-400 transition-colors hover:bg-sky-500/10 hover:text-sky-700 dark:hover:text-sky-300"
+                          title={pick ? "查看选股原因（六维评分/依据/失效条件）" : "查看入选详情（T档/判定/理由）"}
+                          aria-label={`查看 ${q.symbol} 选股详情`}
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+                            <circle cx="12" cy="12" r="10" />
+                            <path d="M12 16v-4M12 8h.01" />
+                          </svg>
+                        </button>
+                      )}
                       {!pick && !top && (
                         <button
                           onClick={(e) => {
@@ -693,6 +713,9 @@ function WorkbenchInner() {
           rightTab={rightTab}
         />
       </div>
+
+      {/* 选股详情弹窗（每日精选/盘中跟踪行「详情」按钮） */}
+      <PickDetailModal target={detailTarget} onClose={() => setDetailTarget(null)} />
     </main>
   );
 }
