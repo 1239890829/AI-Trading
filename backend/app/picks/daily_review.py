@@ -106,7 +106,13 @@ async def generate_daily_review(hub, snapshot_service, session_factory) -> dict:
         )
         # 买点质量并入 note：不额外加列（克制新增），但复盘必须能看到这段证据。
         # 闸门日也会带上——"本就不建议出手"本身就是需要留档的结论。
-        note = f"{note}；{entry['basis']}"
+        # ⚠️ 基准缺失止血：excess_pct 列 NOT NULL DEFAULT 0，None 写入会被 ORM
+        # default 固化成 0.0（与"超额恰为 0"不可区分，污染 CUSUM/均值统计）。
+        # 在 note 打标保留可甄别性；列 nullable 化迁移为 P1（strategy-evolution-plan §方向5）。
+        if excess is None:
+            note = f"[基准缺失] {note}；{entry['basis']}"
+        else:
+            note = f"{note}；{entry['basis']}"
         verdict = {"missed": "flat", "entry_bad": "bad", "sentiment_misread": "bad",
                    "logic_failed": "bad", "gone_well": "good"}.get(category, "flat")
         reviews.append(

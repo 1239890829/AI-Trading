@@ -1,0 +1,95 @@
+"""筹码分布引擎测试：合成 OHLCV 验证形态语义，不依赖真实 marketdb。"""
+
+from __future__ import annotations
+
+import pytest
+
+from app.market.chip import ChipService, simulate_chip_distribution
+
+
+def _row(day: int, low: float, high: float, close: float, vol: float, turnover: float) -> dict:
+    return {
+        "open": low + (high - low) * 0.3, "high": high, "low": low, "close": close,
+        "volume": vol, "turnover": turnover,
+    }
+
+
+def _flat_then_rise(n_flat: int = 60, flat_px: float = 10.0, rise_to: float = 20.0) -> list[dict]:
+    """60 日 10 元横盘（高换手，筹码密集）→ 40 日爬升到 20 元（低换手）。"""
+    rows = [
+        _row(d, flat_px * 0.98, flat_px * 1.02, flat_px, vol=1_000_000, turnover=12_000_000)
+        for d in range(n_flat)
+    ]
+    px = flat_px
+    for d in range(40):
+        px = flat_px + (rise_to - flat_px) * (d + 1) / 40
+        rows.append(_row(60 + d, px * 0.99, px * 1.01, px, vol=200_000, turnover=3_000_000))
+    return rows
+
+
+class TestSimulateChipDistribution:
+    def test_flat_then_rise_profit_ratio_high_and_peak_at_cost_zone(self):
+        out = simulate_chip_distribution(_flat_then_rise())
+        assert out is not None
+        # 现价 20 元：横盘期筹码几乎全部获利（爬升期低换手，旧筹码基本保留）
+        assert out["profit_ratio"] > 0.85
+        # 主峰在横盘成本区（10 元附近 ±15%），支撑≈主峰
+        assert 8.5 <= out["main_peak"]["price"] <= 11.5
+        assert out["support"] is not None and out["support"] <= out["main_peak"]["price"] + 1.0
+        # 集中度：横盘期筹码密集，(p95-p5)/(p95+p5) 应显著小
+        assert out["concentration"] is not None and out["concentration"] < 0.6
+
+    def test_high_level_distribution_signal(self):
+        """高位放量滞涨（派发场景）：新筹码铺在高价区 → 获利盘显著下降。"""
+        rows = _flat_then_rise()
+        # 最后 10 日在 20 元横盘且巨量换手（高位堆筹码）
+        for d in range(10):
+            rows.append(_row(100 + d, 19.8, 20.2, 20.0, vol=5_000_000, turnover=100_000_000))
+        out = simulate_chip_distribution(rows)
+        assert out is not None
+        base = simulate_chip_distribution(_flat_then_rise())
+        # 对比未派发基线：获利盘下降（高位新筹码 = 部分套牢/接盘筹码）
+        assert out["profit_ratio"] < base["profit_ratio"]
+        # 高位派发后上方出现压力峰（现价上方有可观筹码）
+        assert out["resistance"] is not None and out["resistance"] > out["as_of_close"] - 0.5
+
+    def test_one_word_board_no_crash(self):
+        """一字板（high==low）全铺该价位，不除零不炸。"""
+        rows = [_row(d, 10.0, 10.0, 10.0, vol=1_000_000, turnover=10_000_000) for d in range(30)]
+        out = simulate_chip_distribution(rows)
+        assert out is not None
+        assert out["main_peak"]["price"] == pytest.approx(10.0, abs=0.3)
+        assert out["profit_ratio"] in (0.0, 1.0)  # 现价=唯一价位，取整边界二选一
+
+    def test_missing_turnover_rows_skipped_but_old_chips_untouched(self):
+        rows = _flat_then_rise()
+        n_before = len(rows)
+        for d in range(5):  # 停牌样：turnover=None 的行
+            rows.append(_row(200 + d, 20.5, 20.5, 20.5, vol=0, turnover=0))
+            rows[-1]["turnover"] = None
+            rows[-1]["volume"] = 0
+        out = simulate_chip_distribution(rows)
+        assert out is not None
+        assert out["bars"] >= n_before - 10  # 有效行统计不因停牌崩
+
+    def test_insufficient_rows_returns_none(self):
+        assert simulate_chip_distribution([]) is None
+        assert simulate_chip_distribution([_row(0, 10, 10.1, 10.05, 1, 10)] * 3) is None
+
+    def test_grid_sum_normalized(self):
+        out = simulate_chip_distribution(_flat_then_rise())
+        assert out is not None
+        assert sum(out["dist"]) == pytest.approx(1.0, abs=1e-4)
+        assert len(out["dist"]) == 100
+
+
+class TestChipService:
+    def test_missing_db_explicit_degrade(self, tmp_path):
+        svc = ChipService(db_path=tmp_path / "nope.duckdb")
+        out = svc.distribution("000910")
+        assert out["available"] is False
+        assert "marketdb 不存在" in out["reason"]
+
+    def test_bare_symbol_suffix_tolerated(self, tmp_path):
+        svc = ChipService(db_path=tmp_path / "nope.duckdb")
+        assert svc.distribution("000910.SZ")["available"] is False  # 同样显式降级不炸

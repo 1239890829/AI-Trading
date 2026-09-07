@@ -958,3 +958,16 @@ async def shadow_state(request: Request) -> dict:
     if runner is None:
         return {"data": {"enabled": False, "note": "影子持仓未启用（ASHARE_PICKS_SHADOW_ENABLED）"}, "meta": {}}
     return {"data": {"enabled": True, **runner.state()}, "meta": {}}
+
+
+@router.get("/signal-health")
+async def picks_signal_health() -> dict:
+    """信号健康度（方向1×5 反馈环）：每日精选命中记录的滚动胜率 + CUSUM 下漂。
+
+    status: ok | warning | drift | insufficient（样本 <10 组合日，显式不判 ok）| error。
+    预警接线（通知中心/自动 action_items）为 P1，当前仅评估与呈现。
+    """
+    from app.picks.signal_health import collect_signal_health
+
+    payload = collect_signal_health(get_session_factory())
+    return {"data": payload, "meta": {}}

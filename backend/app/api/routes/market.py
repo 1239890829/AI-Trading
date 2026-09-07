@@ -1529,3 +1529,19 @@ async def themes(
     out["themes"] = themes_list[:limit]
     out["filters"] = {"sort": sort, "min_boards": min_boards, "min_count": min_count, "limit": limit}
     return {"data": out, "meta": payload["meta"]}
+
+
+@router.get("/chip")
+async def market_chip(
+    symbol: str = Query(min_length=6, max_length=12, description="裸6位代码或带后缀"),
+    full: bool = Query(default=False, description="回传全网格分布（研究用）"),
+) -> dict:
+    """筹码分布（CYQ 近似）：获利盘/集中度/主密集峰/支撑压力（方向2 数据基础）。
+
+    口径：流通盘=窗口均量/1%假设换手（approx=True 恒标注）；形态稳健、
+    获利盘绝对值仅供参考。marketdb 缺仓时 available=False 显式降级。
+    """
+    from app.market.chip import get_chip_service
+
+    payload = get_chip_service().distribution(symbol, full=full)
+    return {"data": payload, "meta": {}}
