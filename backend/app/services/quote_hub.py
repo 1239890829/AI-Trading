@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from app.data_quality.validator import mark_stale, validate_quote
+from app.market import trade_calendar as tc
 from app.schemas.market import Quote, utcnow
 
 log = logging.getLogger(__name__)
@@ -122,8 +123,6 @@ class QuoteHub:
         """休市判定（红线 2）：非交易日或非交易时段的数据一律标 stale，
         防止休市日"刷新一直成功"把周五收盘数据冒充实时（待办池 #16）。
         日历不可用时返回 None → 不干预（未知不判，保持原行为）。"""
-        from app.market import trade_calendar as tc
-
         verdict: bool | None = None
         try:
             now = _cst_now()

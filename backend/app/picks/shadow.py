@@ -22,7 +22,7 @@ import asyncio
 import contextlib
 import json
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, timezone
 from pathlib import Path
 
 from app.core.db import get_session_factory
