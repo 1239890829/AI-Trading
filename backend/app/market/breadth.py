@@ -1,21 +1,20 @@
 """市场宽度指标：涨跌家数、涨跌停家数、两市成交额（full.md §5.2）。
 
-涨跌停阈值与 data_quality/validator.board_limit_pct 保持同一口径：
-主板 ±10%、创业板/科创板 ±20%、北交所 ±30%、ST ±5%（新股上市特殊阶段后续由规则配置接管）。
+涨跌停阈值单点在 app/market/price_rules.limit_pct（2026-09-07 R1 收口，
+原「与 validator 保持同一口径」的注释约定已由单一实现取代）：
+主板 ±10%、创业板/科创板 ±20%、北交所 ±30%、ST ±5%。
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from app.market import price_rules
+
 
 def _limit_pct(symbol: str, name: str | None) -> float:
-    if symbol.startswith(("300", "301", "688", "689")):
-        return 20.0
-    if symbol.startswith(("43", "83", "87", "92")):
-        return 30.0
-    if name and "ST" in name.upper():
-        return 5.0
-    return 10.0
+    # 2026-09-07 R1 收口：判定逻辑单点化到 price_rules.limit_pct，本文件
+    # 只保留别名（breadth 内部多处调用 + 容差/豁免是本模块自有语义）。
+    return price_rules.limit_pct(symbol, name)
 
 
 # 涨跌停判定的浮点容差（百分点）

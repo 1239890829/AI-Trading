@@ -35,6 +35,8 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from statistics import median
 
+from app.market import price_rules
+
 PHASE_ORDER = ["冰点", "修复", "发酵", "高潮", "分歧", "退潮"]
 
 # ---------------------------------------------------------------- 阈值配置
@@ -119,13 +121,8 @@ def _level(raw: int, cuts: list[tuple]) -> int:
 
 
 def _limit_pct(symbol: str, name: str | None) -> float:
-    if symbol.startswith(("300", "301", "688", "689")):
-        return 20.0
-    if symbol.startswith(("43", "83", "87", "92")):
-        return 30.0
-    if name and "ST" in name.upper():
-        return 5.0
-    return 10.0
+    # 2026-09-07 R1 收口：与 breadth 同源，判定单点在 price_rules.limit_pct。
+    return price_rules.limit_pct(symbol, name)
 
 
 def _boards_of(pool) -> dict[str, int]:

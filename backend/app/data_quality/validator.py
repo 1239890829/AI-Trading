@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from app.market import price_rules
 from app.schemas.market import OrderBook, Quote, Quality, utcnow
 
 # 质量判定优先级：invalid > low > high。
@@ -13,18 +14,13 @@ _PCT_MISMATCH_TOLERANCE = 1.0  # 涨跌幅与昨收反推值允许的百分点�
 
 
 def board_limit_pct(quote: Quote) -> float:
-    """涨跌停幅度：主板 ±10%，创业板/科创板 ±20%，北交所 ±30%，ST ±5%。
+    """涨跌停幅度（小数）：主板 ±10%，创业板/科创板 ±20%，北交所 ±30%，ST ±5%。
 
+    2026-09-07 R1 收口：判定单点在 app/market/price_rules.limit_pct（百分数），
+    本函数保留小数单位对外契约（quote 参数），仅做单位换算委托。
     新股上市初期等特殊阶段未在此展开，由后续交易规则模块接管。
     """
-    sym = quote.symbol
-    if sym.startswith(("300", "301", "688", "689")):
-        return 0.20
-    if sym.startswith(("43", "83", "87", "92")):
-        return 0.30
-    if quote.name and "ST" in quote.name.upper():
-        return 0.05
-    return 0.10
+    return price_rules.limit_pct(quote.symbol, quote.name) / 100.0
 
 
 def _add(reasons: list[str], invalid: list[str], reason: str, is_invalid: bool) -> None:
