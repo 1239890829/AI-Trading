@@ -47,25 +47,10 @@ class OverrideIn(BaseModel):
 
 
 async def _quotes_for(hub: QuoteHub, symbols: list[str]) -> dict[str, Any]:
-    """行情补现价：先查 hub 缓存（自选/指数已订阅），miss 的走腾讯直查（涨速同款通道）。"""
-    found: dict[str, Any] = {}
-    for q in hub.get_quotes(symbols):
-        found[q.symbol] = q
-    missing = [s for s in symbols if s not in found]
-    if not missing:
-        return found
-    composite = hub.provider if hasattr(hub.provider, "providers") else None
-    target = next(
-        (p for p in (composite.providers if composite else [hub.provider]) if p.name == "tencent"),
-        hub.provider,
-    )
-    for i in range(0, len(missing), 50):
-        try:
-            for q in await target.get_quotes(missing[i : i + 50]):
-                found[q.symbol] = q
-        except Exception:
-            continue
-    return found
+    """行情补现价（2026-09-07 R3 收口：实现单点在 quote_enrich.fetch_quotes_batched）。"""
+    from app.services.quote_enrich import fetch_quotes_batched
+
+    return await fetch_quotes_batched(hub, symbols, prefer_cache=True)
 
 
 @router.get("/positions")

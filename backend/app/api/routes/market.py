@@ -1054,20 +1054,12 @@ async def _batch_quotes(hub: QuoteHub, symbols: list[str]) -> list[Quote]:
 
     不走 composite 全链：ths 批量失败一次纯属浪费一跳，且涨速口径要求
     价格源单一——腾讯快照与前端个股行情同源。
+    2026-09-07 R3 收口：分批实现在 quote_enrich.fetch_quotes_batched。
     """
-    composite = hub.provider if hasattr(hub.provider, "providers") else None
-    target = next(
-        (p for p in (composite.providers if composite else [hub.provider]) if p.name == "tencent"),
-        hub.provider,
-    )
-    out: list[Quote] = []
-    for i in range(0, len(symbols), 50):
-        batch = symbols[i : i + 50]
-        try:
-            out.extend(await target.get_quotes(batch))
-        except Exception as exc:
-            log.warning("speed-rank batch %s failed: %s", i // 50, exc)
-    return out
+    from app.services.quote_enrich import fetch_quotes_batched
+
+    found = await fetch_quotes_batched(hub, symbols)
+    return list(found.values())
 
 
 @router.get("/speed-rank")

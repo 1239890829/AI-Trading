@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -25,6 +26,45 @@ def _tencent_of(provider):
         return None
     chain = getattr(provider, "providers", None) or []
     return next((p for p in chain if getattr(p, "name", "") == "tencent"), None)
+
+
+async def fetch_quotes_batched(
+    hub, symbols: list[str], *, prefer_cache: bool = False, batch_size: int = 50
+) -> dict[str, Any]:
+    """批量行情补价（腾讯直查 50/批）——多处同构循环的单一实现（R3 收口）。
+
+    real_position / picks / market(speed-rank) / daily_review / morning_brief /
+    theme_catalog / events.ranking 历史上各写一份「composite 找 tencent →
+    range(0, n, 50) → get_quotes → 吞错 log」，2026-09-07 收口到这里，
+    避免改批大小/换源时漏改某处。
+
+    prefer_cache=True 时先读 hub.get_quotes（自选/指数已订阅标的的内存快照；
+    未订阅代码返回空、不会被冒充），miss 的才直查腾讯。
+    单批失败记 log 继续（错误不静默吞，也不让一批失败打死整体）。
+    返回 dict[symbol → Quote]；展示口径由调用方自行加工。
+    """
+    found: dict[str, Any] = {}
+    if prefer_cache:
+        for q in hub.get_quotes(symbols):
+            found[q.symbol] = q
+    missing = [s for s in symbols if s not in found]
+    if not missing:
+        return found
+    provider = hub.provider
+    if getattr(provider, "name", "") == "tencent":
+        target = provider
+    else:
+        chain = getattr(provider, "providers", None) or []
+        target = next(
+            (p for p in chain if getattr(p, "name", "") == "tencent"), provider
+        )
+    for i in range(0, len(missing), batch_size):
+        try:
+            for q in await target.get_quotes(missing[i : i + batch_size]):
+                found[q.symbol] = q
+        except Exception as exc:
+            log.warning("quotes batch %s failed: %s", i // batch_size, exc)
+    return found
 
 
 async def fill_limit_prices(provider, q):

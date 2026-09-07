@@ -237,25 +237,20 @@ async def theme_strength(
         return payload
 
     all_symbols = sorted({s for members in theme_members.values() for s in members})
-    quotes_raw: dict[str, dict] = {}
-    composite = hub.provider if hasattr(hub.provider, "providers") else None
-    target = next(
-        (p for p in (composite.providers if composite else [hub.provider]) if p.name == "tencent"),
-        hub.provider,
-    )
-    for i in range(0, len(all_symbols), 50):
-        batch = all_symbols[i : i + 50]
-        try:
-            for q in await target.get_quotes(batch):
-                quotes_raw[q.symbol] = {
-                    "symbol": q.symbol,
-                    "name": q.name,
-                    "price": q.price,
-                    "change_pct": q.change_pct,
-                    "amount": q.amount,
-                }
-        except Exception as exc:
-            log.warning("theme strength batch %s failed: %s", i // 50, exc)
+    # 2026-09-07 R3 收口：分批实现在 quote_enrich.fetch_quotes_batched
+    from app.services.quote_enrich import fetch_quotes_batched
+
+    found = await fetch_quotes_batched(hub, all_symbols)
+    quotes_raw: dict[str, dict] = {
+        q.symbol: {
+            "symbol": q.symbol,
+            "name": q.name,
+            "price": q.price,
+            "change_pct": q.change_pct,
+            "amount": q.amount,
+        }
+        for q in found.values()
+    }
 
     strength = aggregate_theme_strength(theme_members, quotes_raw)
     names = {t.code: t.name for t in svc.get_catalog()}

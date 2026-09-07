@@ -68,20 +68,11 @@ def _db():
 
 
 async def _batch_quotes(hub: QuoteHub, symbols: list[str]) -> dict[str, Any]:
-    """腾讯批量快照（与个股行情同源），50 只/批。返回 symbol→Quote。"""
-    composite = hub.provider if hasattr(hub.provider, "providers") else None
-    target = next(
-        (p for p in (composite.providers if composite else [hub.provider]) if p.name == "tencent"),
-        hub.provider,
-    )
-    out: dict[str, Any] = {}
-    for i in range(0, len(symbols), 50):
-        try:
-            for q in await target.get_quotes(symbols[i : i + 50]):
-                out[q.symbol] = q
-        except Exception as exc:
-            log.warning("picks quotes batch %s failed: %s", i // 50, exc)
-    return out
+    """腾讯批量快照（与个股行情同源），50 只/批。返回 symbol→Quote。
+    2026-09-07 R3 收口：实现单点在 quote_enrich.fetch_quotes_batched。"""
+    from app.services.quote_enrich import fetch_quotes_batched
+
+    return await fetch_quotes_batched(hub, symbols)
 
 
 async def _candidate_pool(hub: QuoteHub, store: EventStore, svc, request: Request) -> list[dict]:

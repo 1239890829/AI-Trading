@@ -28,22 +28,12 @@ log = logging.getLogger(__name__)
 async def batch_quotes(hub, symbols: list[str]) -> dict[str, Any]:
     """腾讯批量快照（与个股行情同源），50 只/批。返回 symbol→Quote。
 
-    原 routes/picks.py._batch_quotes 原样搬入（generate/generate_review 两处
-    消费，从 routes 导入 app.picks 属正常依赖方向，反过来才是坏味道）。
+    2026-09-07 R3 收口：实现单点在 quote_enrich.fetch_quotes_batched
+    （generate/generate_review 两处消费，保留本函数为兼容入口）。
     """
-    composite = hub.provider if hasattr(hub.provider, "providers") else None
-    target = next(
-        (p for p in (composite.providers if composite else [hub.provider]) if p.name == "tencent"),
-        hub.provider,
-    )
-    out: dict[str, Any] = {}
-    for i in range(0, len(symbols), 50):
-        try:
-            for q in await target.get_quotes(symbols[i : i + 50]):
-                out[q.symbol] = q
-        except Exception as exc:
-            log.warning("picks quotes batch %s failed: %s", i // 50, exc)
-    return out
+    from app.services.quote_enrich import fetch_quotes_batched
+
+    return await fetch_quotes_batched(hub, symbols)
 
 
 async def generate_daily_review(hub, snapshot_service, session_factory) -> dict:

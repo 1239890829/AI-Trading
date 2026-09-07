@@ -315,24 +315,16 @@ def assemble_brief(evidence: dict) -> dict:
 
 
 async def _resolve_names(hub, symbols: list[str]) -> dict[str, str]:
-    """事件个股名称解析（腾讯批量快照，best-effort；失败返回空表不阻断）。"""
+    """事件个股名称解析（腾讯批量快照，best-effort；失败返回空表不阻断）。
+
+    2026-09-07 R3 收口：分批实现在 quote_enrich.fetch_quotes_batched。
+    """
+    from app.services.quote_enrich import fetch_quotes_batched
+
     if not symbols:
         return {}
-    composite = hub.provider if hasattr(hub.provider, "providers") else None
-    target = next(
-        (p for p in (composite.providers if composite else [hub.provider]) if p.name == "tencent"),
-        hub.provider,
-    )
-    out: dict[str, str] = {}
-    for i in range(0, len(symbols), 50):
-        try:
-            for q in await target.get_quotes(symbols[i : i + 50]):
-                if q.symbol:
-                    out[q.symbol] = q.name or ""
-        except Exception as exc:
-            log.warning("brief name resolve batch %s failed: %s", i // 50, exc)
-            break
-    return out
+    found = await fetch_quotes_batched(hub, symbols)
+    return {q.symbol: (q.name or "") for q in found.values() if q.symbol}
 
 
 async def collect_evidence(app_state) -> dict:
