@@ -1,0 +1,21 @@
+{
+  "_comment": "R4 前后端涨跌停幅度黄金样本（单点共享，双端消费）。后端 price_rules.limit_pct（百分数）vs 前端 priceLimitPct。任一端口径变更必须显式更新本文件并双端同批提交——测试红即口径漂移。divergent 样本是设计内已知分歧，统一时（halt_risk ST 决策）须两端+样本三处同改。",
+  "cases": [
+    {"symbol": "600519", "name": "贵州茅台", "be": 10.0, "fe": 10},
+    {"symbol": "000001", "name": "平安银行", "be": 10.0, "fe": 10},
+    {"symbol": "300750", "name": "宁德时代", "be": 20.0, "fe": 20},
+    {"symbol": "301269", "name": "华大九天", "be": 20.0, "fe": 20},
+    {"symbol": "688981", "name": "中芯国际", "be": 20.0, "fe": 20},
+    {"symbol": "832566", "name": "某北交股", "be": 30.0, "fe": 30},
+    {"symbol": "920075", "name": "柏星龙", "be": 30.0, "fe": 30},
+    {"symbol": "600596", "name": "ST新海", "be": 5.0, "fe": 5, "note": "主板 ST 降档（两端一致）"},
+    {"symbol": "000007", "name": "*ST全新", "be": 5.0, "fe": 5, "note": "*ST 前缀同 ST 判定（两端一致）"},
+    {"symbol": "430047", "name": "ST诺思", "be": 30.0, "fe": 30, "note": "北交所无 ST 5% 规则，不降档（两端一致）"},
+    {"symbol": "300999", "name": "ST某创业", "be": 20.0, "fe": 5, "divergent": "halt_risk 挂账：后端先板块后 ST（注册制不降档 20），前端 ST 收窄 5。统一决策后两端+本样本三处同改"},
+    {"symbol": "688111", "name": "ST某科创", "be": 20.0, "fe": 5, "divergent": "同 ST 创业板"},
+    {"symbol": "sh000001", "name": "上证指数", "be": null, "fe": null, "note": "指数无涨跌停概念；be=null 表示后端不适用（测试跳过），fe=null 表示前端返回 null 回退波幅"},
+    {"symbol": "399001", "name": "深证成指", "be": null, "fe": null},
+    {"symbol": "", "name": null, "be": 10.0, "fe": null, "divergent": "空代码：后端兜底 10（breadth 等消费方需要数值），前端三态 null——设计内差异"},
+    {"symbol": "200011", "name": "某B股", "be": 10.0, "fe": null, "divergent": "B 股段：后端兜底 10，前端判不出 null——设计内差异"}
+  ]
+}
