@@ -1,5 +1,12 @@
 # 国信证券实盘接入方案（miniQMT / xtquant 路线）
 
+> **状态：搁置（2026-09-07 用户决策：不接受 Windows 环境依赖）。**
+> miniQMT/xtquant 只能运行在 Windows，正规无门槛 macOS 程化通道经多轮核实不存在
+> （金太阳条件单非 API；vnpy 股票网关同样依赖 Windows 柜台端）。
+> 本文档保留作为「未来若接受 Windows（实体机/虚拟机/云主机）时的现成蓝图」，
+> 恢复条件：用户接受 Windows 环境 或 国信提供非 Windows 开放 API。系统维持
+> paper trading + real_position 记账现状。
+
 > 2026-09-07 制定。依据：easytrader 新版 miniqmt 模块源码精读（B 级，Windows 环境受限未实测运行）+
 > 2026-09 多来源检索核实国信门槛 + 本系统架构约束（macOS 开发机 + 8000/3000 常驻）。
 > 前序结论修正：easytrader-troubleshoot-20260907 的「平台锁死」仅适用于 THS/银河 UI 自动化路线；
