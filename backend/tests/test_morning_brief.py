@@ -56,18 +56,19 @@ def test_momentum_echelon_bounds():
 
 
 def test_evidence_pool_date_avoids_self_reference():
-    """盘前 <09:25 取上一交易日；盘中/盘后取最近交易日；周末取周五。"""
+    """N3（2026-09-04 定案）：任何时点生成的盘前简报都建立在上一交易日完整
+    收盘数据上——anchor==today 一律回退 prev，并返回口径标注 basis。"""
     days = [date(2026, 8, 27), date(2026, 8, 28), date(2026, 8, 31),
             date(2026, 9, 1), date(2026, 9, 2), date(2026, 9, 4)]
     # 交易日盘前 08:40（简报调度时刻）→ 昨日
-    assert mb._evidence_pool_date(days, datetime(2026, 9, 2, 8, 40)) == date(2026, 9, 1)
-    # 交易日开盘后 → 当日
-    assert mb._evidence_pool_date(days, datetime(2026, 9, 2, 10, 0)) == date(2026, 9, 2)
-    # 周六任意时刻 → 日历内 <= 周六 的最近交易日（周五 9/4）
-    assert mb._evidence_pool_date(days, datetime(2026, 9, 5, 9, 0)) == date(2026, 9, 4)
-    # 边界：09:25 起算当日（集合竞价出价后）
-    assert mb._evidence_pool_date(days, datetime(2026, 9, 2, 9, 25)) == date(2026, 9, 2)
-    assert mb._evidence_pool_date([], datetime(2026, 9, 2, 8, 40)) is None
+    assert mb._evidence_pool_date(days, datetime(2026, 9, 2, 8, 40)) == (date(2026, 9, 1), "prev_trade_date")
+    # 交易日开盘后（原缺陷路径：09:25 后生成拿当日盘中池冒充上一交易日）→ 仍取昨日
+    assert mb._evidence_pool_date(days, datetime(2026, 9, 2, 10, 0)) == (date(2026, 9, 1), "prev_trade_date")
+    # 周六任意时刻 → 日历内 <= 周六 的最近交易日（周五 9/4），basis=last_trade_date
+    assert mb._evidence_pool_date(days, datetime(2026, 9, 5, 9, 0)) == (date(2026, 9, 4), "last_trade_date")
+    # 边界：09:25 整也回退（竞价刚出价、池未定稿）
+    assert mb._evidence_pool_date(days, datetime(2026, 9, 2, 9, 25)) == (date(2026, 9, 1), "prev_trade_date")
+    assert mb._evidence_pool_date([], datetime(2026, 9, 2, 8, 40)) == (None, None)
 
 
 # ---------------------------------------------------------------- 组装

@@ -34,6 +34,7 @@ import logging
 from collections import defaultdict
 from datetime import date, timedelta
 
+from app.market import board_flow
 from app.services.dragon_service import (
     dragon_score,
     news_persistence,
@@ -663,7 +664,7 @@ async def build_theme_board(
     # 串行会在慢源上叠加耗时（曾把请求拖到 3 分钟并压垮事件循环）。
     enhance, board_index, history, market_break_rate, auction_gaps = await asyncio.gather(
         _em_enhancement_map(provider, trade_date),
-        _board_index(provider),
+        _board_index(),
         _load_history(provider, trade_date, lookback_days),
         _market_break_rate(provider, trade_date, len(today_pool)),
         _auction_gaps(provider, trade_date, today_pool),
@@ -839,23 +840,37 @@ def match_board(theme: str, index: dict[str, dict]) -> dict | None:
     return best
 
 
-async def _board_index(provider) -> dict[str, dict]:
-    """板块指标索引：题材名 → 板块指标。行业优先占位，概念补足。"""
-    target = _pick_provider(provider, "EastmoneyProvider")
-    if target is None:
-        return {}
+async def _board_index() -> dict[str, dict]:
+    """板块指标索引：题材名 → 板块指标。行业优先占位，概念补足。
+
+    走 board_flow 唯一入口（板块数据治理规则：任何模块不得自行请求东财板块
+    接口），并复用其盘中 30s 缓存。main_net_inflow 以元为单位
+    （main_net_yi×1e8），保持 news_persistence「净流入 X 元」的展示口径不变。
+    失败返回空 dict → match_board 返回 None → 资金维度按缺失不参与判定（三态）。
+    """
     index: dict[str, dict] = {}
     for kind in ("industry", "concept"):
-        try:
-            rows = await target.get_board_metrics(kind)
-        except Exception as exc:
-            log.warning("board metrics(%s) unavailable: %s", kind, exc)
+        rows, errs = await board_flow.get_board_list(kind)
+        if rows is None:
+            log.warning("board list(%s) unavailable: %s", kind, "; ".join(errs))
             continue
         for row in rows:
+            name = row.get("name")
+            if not name:
+                continue
+            yi = row.get("main_net_yi")
+            mapped = {
+                "board_code": row.get("board_code"),
+                "name": name,
+                "kind": row.get("kind"),
+                "change_pct": row.get("change_pct"),
+                "main_net_inflow": yi * 1e8 if yi is not None else None,
+                "main_net_ratio": row.get("main_net_ratio"),
+            }
             if kind == "industry":
-                index[row["name"]] = row
+                index[name] = mapped
             else:
-                index.setdefault(row["name"], row)
+                index.setdefault(name, mapped)
     return index
 
 

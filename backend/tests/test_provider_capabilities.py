@@ -43,7 +43,7 @@ def test_composite_public_methods_covered_by_every_source():
     """方向②：composite 全部公共消费方法必须在每源条目中显式出现。
 
     UNSUPPORTED 也要列（"链上不会调它"本身是信息，盲区不是）；
-    get_limit_up_ladder/get_board_metrics 是链外直调，允许是注册表多出的键。
+    get_limit_up_ladder 是链外直调，允许是注册表多出的键。
     """
     # composite 自有生命周期/观测面（aclose、breaker_state、provider_health 喂
     # /api/system/providers），不向数据源分发，不属于能力消费面

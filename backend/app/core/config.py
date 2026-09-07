@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     # 增量回补的巡检间隔（秒）：默认 6 小时。回补是增量的（已有日期不重拉），
     # 稳态下每轮只拉 1–2 天 × 2 个请求，配额开销可忽略。
     sentiment_history_backfill_interval_seconds: float = 21600.0
+    # 盘中情绪监控（sentiment/intraday_monitor.py）的炸板率告警阈值。
+    # 原硬编码 0.40 提升为配置（2026-09-07 P0-3：与 *_bands_json 同纪律，
+    # 显式配置压过经验值；注意 AlertRule 存量行的 threshold 是新建时固化的，
+    # 改本配置只影响新建规则与监控判定，不会回写已有 DB 行）。
+    sentiment_break_rate_threshold: float = 0.40
 
     # ---- 盘前简报与盘中跟踪（选股 2.0，批次 B）----
     # 盘前简报：交易日 08:40 自动生成（方向排序 + 标的池 + 触发/证伪条件），

@@ -69,7 +69,7 @@ def _ensure_rule(session_factory) -> AlertRule:
                 enabled=1,
                 condition_type="sentiment_monitor",
                 scope="all",
-                threshold=0.4,
+                threshold=settings.sentiment_break_rate_threshold,
                 channels=_default_monitor_channels(),
             )
             db.add(row)
@@ -86,6 +86,8 @@ def check_break_rate(
     limit_up_count: int,
     break_count: int,
     *,
+    # 纯判定函数保留字面默认（零全局依赖可回测）；线上判定一律由
+    # SentimentMonitor.break_rate_threshold（settings 配置化）显式传入。
     threshold: float = 0.40,
     min_pool: int = 20,
 ) -> float | None:
@@ -161,8 +163,11 @@ class SentimentMonitor:
     """状态机 + 单点 IO：probe_once 注入 now/trade_days/池数据即确定性单测。"""
 
     provider: Any  # composite（需 get_limit_up_pool / get_limit_break_pool / get_quotes）
-    # 炸板率
-    break_rate_threshold: float = 0.40
+    # 炸板率（阈值从 settings 读，2026-09-07 P0-3 配置化；default_factory 惰性
+    # 取值，测试 monkeypatch settings.sentiment_break_rate_threshold 后新实例即生效）
+    break_rate_threshold: float = field(
+        default_factory=lambda: float(settings.sentiment_break_rate_threshold)
+    )
     break_rate_confirm: int = 2          # 连续 N 拍确认
     break_rate_min_pool: int = 20        # 薄池不判定
     # 高度板

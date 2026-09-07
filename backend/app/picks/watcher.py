@@ -25,8 +25,9 @@
 
 数据源（缺什么在 beat 里显式 unknown，绝不冒充）：
 - 题材归因：ths 涨停池 parse_theme_tags → 家数/最高板/龙头（连板最高成员）
-- 板块涨幅：东财 get_board_metrics 概念+行业（provider 内已按 total 翻页）；
-  题材名 → 板块名精确匹配，失败取"包含关系且板块名最短"，仍无 = unknown
+- 板块涨幅：board_flow.get_board_list 概念+行业（板块数据唯一入口，自带
+  盘中 30s 缓存）；题材名 → 板块名精确匹配，失败取"包含关系且板块名最短"，
+  仍无 = unknown
 - volume_ratio：近似量比（§5.1#4 降级口径）= 快照当日累计量 / 昨日全天量
   / 已开市占比，取题材内最强成员（max）；昨日量按日缓存，失败 = unknown。
   精确基线（TDX 同期累计量）待批次 D 落库后切换
@@ -44,6 +45,7 @@ from dataclasses import dataclass, field
 
 from app.core.config import settings
 from app.core.db import get_session_factory
+from app.market import board_flow
 from app.market import trade_calendar as tc
 from app.market.trading_status import beijing_now
 from app.models.alert import AlertRule
@@ -320,22 +322,16 @@ def _beat_themes_from_pool(pool: list) -> dict[str, dict]:
 
 
 async def _board_pcts(hub) -> tuple[dict[str, float], int]:
-    """东财板块涨幅（概念+行业）。失败返回空表 → 全部 pct=unknown，不臆造。"""
-    composite = hub.provider if hasattr(hub.provider, "providers") else None
-    target = next(
-        (p for p in (composite.providers if composite else [hub.provider]) if p.name == "eastmoney"),
-        None,
-    )
-    if target is None:
-        return {}, 0
+    """板块涨幅（概念+行业）。走 board_flow 唯一入口（板块数据治理规则：
+    任何模块不得自行请求东财板块接口）。hub 参数保留以兼容调用方与测试
+    monkeypatch 签名。失败返回空表 → 全部 pct=unknown，不臆造。"""
     out: dict[str, float] = {}
     for kind in ("concept", "industry"):
-        try:
-            rows = await target.get_board_metrics(kind)
-        except Exception as exc:
-            log.warning("watcher beat: board metrics %s failed: %s", kind, exc)
+        rows, errs = await board_flow.get_board_list(kind)
+        if rows is None:
+            log.warning("watcher beat: board list %s unavailable: %s", kind, "; ".join(errs))
             continue
-        for row in rows or []:
+        for row in rows:
             name, pct = row.get("name"), row.get("change_pct")
             if name and pct is not None:
                 out[name] = float(pct)

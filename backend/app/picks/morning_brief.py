@@ -162,21 +162,26 @@ def echelon_score(stat: dict | None) -> float:
     return round(min(100.0, comp * 60 + min(4, stat.get("max_boards", 0)) * 10), 1)
 
 
-def _evidence_pool_date(days: list[date] | None, now: datetime) -> date | None:
-    """盘前证据应取的涨停池日期。开盘前（<09:25）取上一交易日，防自指。
+def _evidence_pool_date(days: list[date] | None, now: datetime) -> tuple[date | None, str | None]:
+    """盘前简报证据池日期 + 口径标注。返回 (pool_date, evidence_pool_basis)。
+
+    N3（2026-09-04 复盘定案，2026-09-07 修复）：只要 `anchor == now.date()`
+    就回退上一交易日——**任何时点生成的盘前简报都建立在上一交易日完整收盘
+    数据上**。原实现只挡 09:25 前，09:25 后生成（调度器补跑/幂等重生成）会
+    拿当日盘中池冒充"上一交易日"，文案自指且题材动能口径错。
 
     09:25 前当日池必然是空的：如果直接取 `last_trade_date`（今天在日历里就
     返回今天），题材动能全体归零，方向排序退化成"只剩事件强度一条腿"，
     且界面上完全看不出是口径错了。
     """
     if not days:
-        return None
+        return None, None
     anchor = tc.last_trade_date(days, asof=now.date())
     if anchor is None:
-        return None
-    if anchor == now.date() and (now.hour, now.minute) < (9, 25):
-        return tc.prev_trade_date(days, anchor)
-    return anchor
+        return None, None
+    if anchor == now.date():
+        return tc.prev_trade_date(days, anchor), "prev_trade_date"
+    return anchor, "last_trade_date"
 
 
 def _direction_pool(
@@ -347,7 +352,7 @@ async def collect_evidence(app_state) -> dict:
     except Exception as exc:
         log.warning("brief evidence: calendar failed: %s", exc)
         missing.append(f"交易日历不可用（{exc}）")
-    pool_date = _evidence_pool_date(days, now)
+    pool_date, pool_basis = _evidence_pool_date(days, now)
     if days and beijing_today() not in days:
         missing.append(f"{beijing_today()} 非交易日（简报仅存档，盘中 watcher 不会跑）")
 
@@ -432,6 +437,7 @@ async def collect_evidence(app_state) -> dict:
         "promo_percentile": promo,
         "bands_source": bands_source,
         "pool_date": pool_date.isoformat() if pool_date else None,
+        "evidence_pool_basis": pool_basis,
         "themes": themes,
         "event_strength": event_strength,
         "event_counts": event_counts,
