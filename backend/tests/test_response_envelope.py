@@ -93,13 +93,12 @@ def test_kline_envelope():
     assert env.data.timeframe == "1d"
 
 
-def test_limit_up_and_break_envelope():
+def test_limit_up_envelope():
     import asyncio
 
     hub = _FakeHub()
     p1 = asyncio.run(market_route.limit_up(date_str=None, hub=hub))
-    p2 = asyncio.run(market_route.limit_break(date_str=None, hub=hub))
-    for payload in (p1, p2):
+    for payload in (p1,):
         env = Envelope[LimitUpPoolPayload].model_validate(payload)
         assert env.data.pool[0].consecutive_boards == 2
         assert set(payload["data"]["pool"][0].keys()) == set(LimitUpRecord.model_fields.keys())

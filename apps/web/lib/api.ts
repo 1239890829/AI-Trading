@@ -198,11 +198,6 @@ export async function getLonghu(dateStr?: string): Promise<LongHuRecord[]> {
   return (await getJson<{ trade_date: string; records: LongHuRecord[] }>(`/api/longhu${qs}`, 20_000)).data.records;
 }
 
-/** 个股龙虎榜明细 + 历史（/api/longhu/{symbol}）。类型随消费方窄化。 */
-export async function getLonghuDetail<T = unknown>(symbol: string): Promise<T> {
-  return (await getJson<T>(`/api/longhu/${symbol}`, 20_000)).data;
-}
-
 /** 个股资金流（N 日）。 */
 export async function getCapitalFlow<T = unknown>(symbol: string, days = 30): Promise<T> {
   return (await getJson<T>(`/api/capital-flow/${symbol}?days=${days}`, 15_000)).data;
@@ -349,20 +344,6 @@ export interface ThemeStrengthRow {
 export async function getThemeStrength(codes?: string[]): Promise<Record<string, ThemeStrengthRow>> {
   const qs = codes && codes.length > 0 ? `?codes=${codes.join(",")}` : "";
   return (await getJson<{ themes: Record<string, ThemeStrengthRow> }>(`/api/themes/catalog/strength${qs}`, 20_000)).data.themes;
-}
-
-/** 官方板块指数日 K（ths 发布的 88xxxx.TI 指数序列，非自算）。 */
-export interface ThemeIndexPayload {
-  code: string;
-  series: { date: string; close: number }[];
-  chg_3d: number | null;
-  chg_5d: number | null;
-  chg_10d: number | null;
-  basis: string;
-}
-
-export async function getThemeIndex(code: string, days = 60): Promise<ThemeIndexPayload> {
-  return (await getJson<ThemeIndexPayload>(`/api/themes/catalog/index?code=${code}&days=${days}`, 20_000)).data;
 }
 
 /** ===== 真实持仓（CONTEXT.md: Real Position 域；与 /api/paper/* 模拟账户完全独立）=====
@@ -737,70 +718,6 @@ export async function getSparklines(
   ).data;
 }
 
-/** ---------------------------------------------------------------- 选股器（Phase 5） */
-
-export interface ScreenerSignal {
-  name: string;
-  bias: "bull" | "bear" | "neutral";
-  score: number;
-  detail: string;
-}
-
-export interface ScreenerItem {
-  symbol: string;
-  name: string;
-  price: number;
-  change_pct: number;
-  turnover_rate: number | null;
-  amount_yi: number;
-  float_cap_yi: number | null;
-  score: number;
-  grade: "A" | "B" | "C" | "D";
-  bias: "bull" | "bear" | "neutral";
-  signals: ScreenerSignal[];
-  summary: string;
-  fail_conditions: string[];
-}
-
-export interface ScreenerPayload {
-  items: ScreenerItem[];
-  scanned: number;
-  filtered: number;
-  scored: number;
-  failed: number;
-  snapshot_time: string | null;
-  computed_at: string;
-  cached: boolean;
-  scorer_version: string;
-  disclaimers: string[];
-}
-
-export interface ScreenerOpts {
-  changeLow?: number;
-  changeHigh?: number;
-  minAmountYi?: number;
-  minTurnover?: number;
-  excludeSt?: boolean;
-  excludeBj?: boolean;
-  excludeNew?: boolean;
-  limit?: number;
-}
-
-/** 全市场选股器：快照过滤 + TDX 日K评分。首跑约 15-25 秒（重操作），后端缓存 30 分钟。 */
-export async function getScreener(opts?: ScreenerOpts): Promise<ScreenerPayload> {
-  const p = new URLSearchParams();
-  if (opts?.changeLow != null) p.set("change_low", String(opts.changeLow));
-  if (opts?.changeHigh != null) p.set("change_high", String(opts.changeHigh));
-  if (opts?.minAmountYi != null) p.set("min_amount_yi", String(opts.minAmountYi));
-  if (opts?.minTurnover != null) p.set("min_turnover", String(opts.minTurnover));
-  if (opts?.excludeSt != null) p.set("exclude_st", String(opts.excludeSt));
-  if (opts?.excludeBj != null) p.set("exclude_bj", String(opts.excludeBj));
-  if (opts?.excludeNew != null) p.set("exclude_new", String(opts.excludeNew));
-  if (opts?.limit != null) p.set("limit", String(opts.limit));
-  const qs = p.toString() ? `?${p.toString()}` : "";
-  return (await getJson<ScreenerPayload>(`/api/screener${qs}`, 90_000)).data;
-}
-
 /** 题材梯队看板。首次加载较慢（需回溯 5 日涨停池），后端缓存 60s。 */
 export async function getThemes(opts?: {
   date?: string;
@@ -1073,14 +990,6 @@ export interface EventStockPool {
   basis?: string;
   stocks: { symbol: string; name: string }[];
   note?: string;
-}
-
-export async function getEvents(active = true, limit = 20): Promise<EventSummary[]> {
-  const r = await getJson<{ count: number; items: EventSummary[] }>(
-    `/api/events?active=${active}&limit=${limit}`,
-    30_000,
-  );
-  return r.data.items;
 }
 
 /** 事件影响力视图（§六.4 拍板）：四级分类 + L1/L2/L3。 */
@@ -1457,11 +1366,6 @@ export interface ReviewActionItem {
   status: ActionItemStatus;
   resolution_note: string;
   resolved_at: string | null;
-}
-
-export async function listActionItems(status?: ActionItemStatus): Promise<ReviewActionItem[]> {
-  const qs = status ? `?status=${status}` : "";
-  return (await getJson<ReviewActionItem[]>(`/api/review/action-items${qs}`)).data;
 }
 
 /**

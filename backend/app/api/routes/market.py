@@ -17,7 +17,6 @@ from app.schemas.envelope import (
     AnomalyPayload,
     AuctionBenchmarkItem,
     AuctionSnapshot,
-    AdjustmentEvent,
     BreadthData,
     Envelope,
     KlinePayload,
@@ -1001,22 +1000,9 @@ async def auction_premium(
     return payload
 
 
-@router.get("/adjustment-events/{symbol}", response_model=Envelope[list[AdjustmentEvent]])
-async def adjustment_events(
-    symbol: str,
-    start: date | None = None,
-    end: date | None = None,
-    hub: QuoteHub = Depends(get_hub),
-) -> dict:
-    """复权事件流（现金分红/送股，单只）——回测前复权修正的数据面。"""
-    try:
-        rows = await hub.provider.get_adjustment_events(symbol, start, end)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"复权事件数据源失败：{exc}")
-    return {
-        "data": [{"ex_date": e["ex_date"].isoformat(), "dividend": e["dividend"], "bonus": e["bonus"]} for e in rows],
-        "meta": _meta(hub),
-    }
+# /adjustment-events/{symbol} 端点已删除（2026-09-07 健康度审查 C1：全仓
+# 0 引用的死端点；底层 provider 方法 get_adjustment_events 仍被
+# minute_backtest 使用，保留）。
 
 
 @router.get("/boards")
@@ -1197,18 +1183,9 @@ async def financials(symbol: str, periods: int = Query(default=8, ge=1, le=20), 
     return {"data": {"symbol": symbol, "periods": rows}, "meta": _meta(hub)}
 
 
-@router.get("/limit-break", response_model=Envelope[LimitUpPoolPayload])
-async def limit_break(
-    date_str: str | None = Query(default=None, alias="date"),
-    hub: QuoteHub = Depends(get_hub),
-) -> dict:
-    """炸板池（涨停后开板未回封）。"""
-    trade_date = date.fromisoformat(date_str) if date_str else await _default_trade_date_async(hub)
-    try:
-        rows = await hub.provider.get_limit_break_pool(trade_date)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"炸板池数据源失败：{exc}")
-    return {"data": {"trade_date": trade_date.isoformat(), "pool": [r.model_dump(mode="json") for r in rows]}, "meta": _meta(hub)}
+# /limit-break 端点已删除（2026-09-07 健康度审查 C1：前端/脚本 0 引用，仅
+# envelope 测试直调 handler；炸板池数据消费方——助手工具/theme_service/
+# 情绪历史库——均走 provider.get_limit_break_pool，不受影响）。
 
 
 @router.get("/company/{symbol}")

@@ -22,17 +22,8 @@ _industry_cache: dict[str, str] = {}
 _industry_cached_at: float = 0.0
 _industry_failed: bool = False
 
-
-def invalidate_industry_cache() -> None:
-    global _industry_cache, _industry_cached_at, _industry_failed
-    _industry_cache = {}
-    _industry_cached_at = 0.0
-    _industry_failed = False
-
-
-def get_industry_map(provider=None) -> dict[str, str]:
-    """（同步版保留给非 async 场景；路由请用 get_industry_map_async。）"""
-    return _industry_cache
+# 同步版 get_industry_map / invalidate_industry_cache 已删除（2026-09-07
+# 健康度审查 C3：全仓 0 引用，路由只用 async 版）。
 
 
 async def get_industry_map_async(provider=None) -> dict[str, str]:
