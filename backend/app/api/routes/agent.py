@@ -13,6 +13,8 @@ P1 参数配置模块接入后按同一套状态机/审计机制扩展。
 """
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -176,3 +178,22 @@ async def list_audit(
     limit: int = Query(50, ge=1, le=500),
 ):
     return {"data": at.list_audit(limit=limit, target=target, task_id=task_id)}
+
+
+# ---------------------------------------------------------------- 元评估周报（P2-①）
+# 正常运行由 evolution_scheduler 周五盘后自动生成（幂等）；此端点为降级备选。
+
+
+@router.get("/agent/meta-review")
+def get_meta_review_status():
+    from app.services import meta_review
+
+    return {"data": {"done": meta_review.meta_review_done(),
+                     "path": str(meta_review.meta_review_path())}}
+
+
+@router.post("/agent/meta-review/run", dependencies=[Depends(require_write_token)])
+async def run_meta_review():
+    from app.services import meta_review
+
+    return {"data": await asyncio.to_thread(meta_review.generate_meta_review)}

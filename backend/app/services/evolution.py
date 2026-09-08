@@ -576,7 +576,7 @@ async def evolution_scheduler(app, stop: asyncio.Event, *, run_hour: int, run_mi
     顺带每日一次实验裁决（后置验证：到期实验对比 signal_health，劣化自动回滚）——
     conclude_due 幂等（只处理 running 且到期的），节流靠 _last_conclude_date。
     """
-    global _LAST_CONCLUDE_DATE
+    global _LAST_CONCLUDE_DATE, _LAST_META_WEEK
     log.info("evolution scheduler started: daily at %02d:%02d", run_hour, run_minute)
     while not stop.is_set():
         try:
@@ -601,6 +601,14 @@ async def evolution_scheduler(app, stop: asyncio.Event, *, run_hour: int, run_mi
                         agenda = await run_evolution_now()
                         log.warning("[EVOLUTION] %s 议程完成：status=%s items=%d",
                                     today, agenda.get("status"), len(agenda.get("items") or []))
+                    # 元评估周报（P2-①）：周五盘后 agenda 之后自动生成（幂等：一周一份）
+                    if now.weekday() == 4 and _LAST_META_WEEK != today.isocalendar()[:2]:
+                        with contextlib.suppress(Exception):
+                            from app.services.meta_review import generate_meta_review
+
+                            meta = await asyncio.to_thread(generate_meta_review)
+                            _LAST_META_WEEK = today.isocalendar()[:2]
+                            log.warning("[EVOLUTION] 元评估周报：%s", meta.get("status"))
         except Exception:
             log.exception("evolution scheduler tick failed")
         with contextlib.suppress(asyncio.TimeoutError):
@@ -608,3 +616,4 @@ async def evolution_scheduler(app, stop: asyncio.Event, *, run_hour: int, run_mi
 
 
 _LAST_CONCLUDE_DATE: str = ""
+_LAST_META_WEEK: tuple = ()  # (ISO 年, 周)——元评估周报进程内幂等（文件存在性兜底）

@@ -203,12 +203,19 @@ async def _h_data_check(rec: _StepRecorder, params: dict, app: Any) -> dict:
 
     snap = getattr(getattr(app, "state", None), "snapshot_service", None) if app is not None else None
     rows = getattr(snap, "snapshot", None) or []
-    age = None
+    # 快照刷新时间：真实属性名 last_success（tz-aware UTC）——曾误写 last_refresh_at
+    # 导致体检永远显示「最近刷新 —」（三态降级正确，但信息丢失）
+    age_text = "—"
     try:
-        age = getattr(snap, "last_refresh_at", None)
-    except Exception:  # noqa: BLE001
-        age = None
-    rec.add(name="全市场快照", input_summary="", output_summary=f"{len(rows)} 只，最近刷新 {age or '—'}",
+        last_ok = getattr(snap, "last_success", None)
+        if last_ok is not None:
+            from datetime import datetime as _dt, timezone as _tz
+
+            age_min = max(0, int((_dt.now(_tz.utc) - last_ok).total_seconds() // 60))
+            age_text = f"{age_min} 分钟前"
+    except Exception:  # noqa: BLE001  显示辅助失败不阻断体检
+        age_text = "—"
+    rec.add(name="全市场快照", input_summary="", output_summary=f"{len(rows)} 只，最近刷新 {age_text}",
             duration_ms=0, ok=bool(rows))
 
     today_events = 0
