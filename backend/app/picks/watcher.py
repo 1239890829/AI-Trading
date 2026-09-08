@@ -598,6 +598,23 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
     target, _ = brief_for_today()
     if not append_alert(target, alert):
         return False
+    # 猎场批次 A（需求 7/8）：盘中确认个股**首见即入台账**（持久化保留，当日唯一）；
+    # 入选依据 = kind/text/direction（入选时刻的证据快照）。失败只记日志不阻断分发。
+    if alert.get("symbol"):
+        with contextlib.suppress(Exception):
+            from app.picks.watch_ledger import record_sighting
+
+            record_sighting(
+                trade_date=beijing_now().date().isoformat(),
+                symbol=str(alert["symbol"]),
+                name=str(alert.get("name") or ""),
+                layer="today_strongest" if (rule_provider is not None) else "quiet_starting",
+                source_theme=str(alert.get("direction") or ""),
+                reason={"kind": alert.get("kind"), "text": (alert.get("text") or "")[:300],
+                        "direction": alert.get("direction") or ""},
+                entry_price=(alert.get("meta") or {}).get("trigger_value"),
+                entry_time=beijing_now().strftime("%H:%M:%S"),
+            )
     state = app.state if hasattr(app, "state") else app
     session_factory = get_session_factory()
     rule = rule_provider(session_factory) if rule_provider is not None else ensure_system_rule(session_factory)

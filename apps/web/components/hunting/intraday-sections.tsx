@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 
 import { ConceptDetailModal } from "@/components/concept-detail-modal";
+import { WatchLedgerPanel } from "@/components/hunting/watch-ledger-panel";
 import { WatchCard } from "@/components/picks/watch-card";
 import { StockLink } from "@/components/stock-link";
 import { pctColor, pctText, timeText } from "@/lib/format";
@@ -75,6 +76,25 @@ export function ThemeCardView({
       <div className="flex w-full items-center gap-2">
         <button onClick={onToggle} className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-left">
           <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">{t.theme}</span>
+          {/* 机会三层（需求 4）：今日最强/悄悄启动/孕育待发酵——择时先分层再定档 */}
+          {t.opportunity_layer && (
+            <span
+              className={`rounded px-1.5 py-0.5 text-[10px] ${
+                t.opportunity_layer === "today_strongest"
+                  ? "bg-rose-500/10 text-rose-600 dark:text-rose-300"
+                  : t.opportunity_layer === "quiet_starting"
+                    ? "bg-amber-500/10 text-amber-600 dark:text-amber-300"
+                    : "bg-zinc-500/10 text-zinc-500"
+              }`}
+              title={`机会分层（规则可解释）：${t.layer_basis ?? ""}`}
+            >
+              {t.opportunity_layer === "today_strongest"
+                ? "今日最强"
+                : t.opportunity_layer === "quiet_starting"
+                  ? "悄悄启动"
+                  : "孕育待发酵"}
+            </span>
+          )}
           {/* 官方概念徽标：只显示归属的大概念（命中数最高），细分在弹窗里 */}
           {(t.official_matches ?? []).length > 0 && (
             <span
@@ -187,6 +207,8 @@ export function OpportunitySection({
         辨识度=人气×高度×角色（市场记住它的成本）；确定性=题材阶段基座×封板质量修正（延续预期的支撑）。
         两者独立判定不合并打分；判定依据悬停可见、等级可回放。仅模拟跟踪，不构成买卖建议。
       </p>
+      {/* 跟踪台账（猎场批次 A）：入选即登记、收盘清算、逐股判定与历史统计 */}
+      <WatchLedgerPanel />
     </section>
   );
 }

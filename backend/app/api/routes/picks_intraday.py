@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -204,8 +205,63 @@ async def _build_opportunities(
     from app.services.official_match import attach_official
 
     attach_official(request, payload["data"].get("themes") or [])
+
+    # 猎场批次 A（需求 7）：机会候选**首见即入台账**——每轮快照的候选是易变的，
+    # 台账保证一旦入选就持久保留（当日唯一，收盘清算）。失败只记日志。
+    with contextlib.suppress(Exception):
+        from app.market.trading_status import beijing_now
+        from app.picks.watch_ledger import record_sighting
+
+        tdate = beijing_now().date().isoformat()
+        tstamp = beijing_now().strftime("%H:%M:%S")
+        for th in payload["data"].get("themes") or []:
+            layer = "today_strongest" if th.get("strength_tier") in ("领涨", "强势") else "quiet_starting"
+            for s in th.get("stocks") or []:
+                if not s.get("symbol"):
+                    continue
+                record_sighting(
+                    trade_date=tdate, symbol=str(s["symbol"]),
+                    name=str(s.get("name") or ""), layer=layer,
+                    source_theme=str(th.get("theme") or ""),
+                    reason={
+                        "theme": th.get("theme"), "stage": th.get("stage"),
+                        "tier": th.get("strength_tier"), "role": s.get("role"),
+                        "certainty": s.get("certainty"),
+                        "basis": (s.get("reason") or "")[:200],
+                    },
+                    is_leader=s.get("role") in ("龙头", "空间板"),
+                    boards=s.get("boards") or 0,
+                    entry_price=None,  # 登记时以告警触发价优先；此处无价格由清算兜底
+                    entry_time=tstamp,
+                )
     cache.set(key, payload)
     return payload
+
+
+@router.get("/watch-ledger")
+async def watch_ledger(
+    request: Request,
+    date: str | None = Query(default=None, description="YYYY-MM-DD，缺省=北京今天"),
+    days: int = Query(default=5, ge=1, le=30, description="历史天数"),
+) -> dict:
+    """盘中跟踪台账（猎场批次 A，需求 7/8/9/10/11）：
+
+    当日全量行（tracking + settled，含入选说明与盈亏）+ 近 N 日历史 + 当日统计。
+    数据源：盘中 watcher 确认/买点触发/机会候选**首见登记**，收盘复盘自动清算。
+    """
+    from app.market.trading_status import beijing_now
+    from app.picks.watch_ledger import day_stats, get_day, get_history
+
+    target = date or beijing_now().date().isoformat()
+    return {
+        "data": {
+            "trade_date": target,
+            "rows": get_day(target),
+            "stats": day_stats(target),
+            "history": get_history(days),
+        },
+        "meta": {},
+    }
 
 
 @router.get("/intraday-opportunities")

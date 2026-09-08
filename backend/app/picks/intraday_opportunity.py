@@ -156,6 +156,23 @@ def certainty(
     return {"level": level, "basis": "；".join(evidence)}
 
 
+def _opportunity_layer(t: dict, perf: dict) -> str:
+    """机会三层判定（需求 4，规则可解释）：
+
+    - today_strongest 今日最强：成建制（≥5 家）或已现高度（≥2 板）的领涨/强势题材
+    - quiet_starting 悄悄启动：2-4 家、以首板为主、阶段在启动/发酵——正在成形
+    - brewing 孕育待发酵：零散（≤1 家）但有题材容器——待事件/资金确认
+    """
+    count = perf.get("limit_up_count") or 0
+    boards = perf.get("max_boards") or 0
+    tier = t.get("strength_tier") or ""
+    if count >= 5 or boards >= 2 or tier == "领涨":
+        return "today_strongest"
+    if count >= 2:
+        return "quiet_starting"
+    return "brewing"
+
+
 def assemble(
     board: dict,
     hot_stocks: list[dict],
@@ -223,6 +240,13 @@ def assemble(
                 "max_boards": perf.get("max_boards"),
                 "limit_up_count": perf.get("limit_up_count"),
                 "has_succession": perf.get("has_succession"),
+                # 机会三层（2026-09-08 用户需求 4）：今日最强 / 悄悄启动 / 孕育待发酵
+                # 规则可解释：家数+高度+阶段+强度档；判定依据落 basis
+                "opportunity_layer": _opportunity_layer(t, perf),
+                "layer_basis": (
+                    f"涨停 {perf.get('limit_up_count')} 家 · 最高 {perf.get('max_boards')} 板 · "
+                    f"阶段 {t.get('stage')} · 强度 {t.get('strength_tier')}"
+                ),
                 "stocks": stocks,
             }
         )

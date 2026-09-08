@@ -54,6 +54,7 @@ from app.services.snapshot_service import MarketSnapshotService
 from app.services.theme_catalog_service import ThemeCatalogService
 from app.services.quote_hub import QuoteHub
 from app.market.sentiment_history import SentimentHistoryRow  # noqa: F401  注册情绪序列表
+from app.models.watch_ledger import WatchLedger  # noqa: F401  注册盘中跟踪台账表（猎场批次 A）
 from app.websocket.routes import router as ws_router
 
 # 显式持有引用：确保各模块的表注册进 Base.metadata，否则 create_all 不会建表
@@ -65,6 +66,7 @@ _REGISTERED_MODELS = (
     AlertRule, AlertEvent,
     Theme, ThemeMember, ThemeOverride,
     EventCard, EventDirection,
+    WatchLedger,
 )
 
 logging.basicConfig(level=settings.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")

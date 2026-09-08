@@ -1689,6 +1689,9 @@ export interface OpportunityTheme {
   limit_up_count: number | null;
   has_succession: boolean | null;
   stocks: OpportunityStock[];
+  /** 机会三层（需求 4）：today_strongest / quiet_starting / brewing */
+  opportunity_layer?: string | null;
+  layer_basis?: string | null;
   /** 簇→官方概念挂靠（09-08「代糖/玉米搜不到」修复）：成分重叠 ≥2、过滤大概念，命中降序 ≤3 */
   official_matches?: { code: string; name: string; hits: number }[];
   /** 概念详情弹窗入口的目录代码（最高命中官方概念 > 簇名精确同名） */
@@ -1704,6 +1707,63 @@ export interface IntradayOpportunities {
 }
 
 /** 盘中机会视图：先题材（强度/阶段/依据）后题材内个股（辨识度/确定性）。 */
+// ============================================================================
+// 盘中跟踪台账（猎场批次 A，需求 7/8/9/10/11）
+// ============================================================================
+
+export interface WatchLedgerRow {
+  id: number;
+  trade_date: string;
+  symbol: string;
+  name: string;
+  /** 机会三层：today_strongest / quiet_starting / brewing */
+  layer: string;
+  source_theme: string;
+  /** 入选依据（首见时刻的证据快照）：题材催化/资金异动/技术形态/龙头角色 */
+  reason: Record<string, unknown>;
+  is_leader: boolean;
+  boards: number;
+  entry_price: number | null;
+  entry_time: string;
+  status: "tracking" | "settled";
+  close_price: number | null;
+  pnl_pct: number | null;
+  verdict: "success" | "fail" | "flat" | null;
+  verdict_reason: string | null;
+  merged_into_picks: boolean;
+}
+
+export interface WatchLedgerStats {
+  trade_date: string;
+  total: number;
+  settled: number;
+  tracking: number;
+  success: number;
+  fail: number;
+  flat: number;
+  win_rate: number | null;
+  avg_pnl_pct: number | null;
+}
+
+export interface WatchLedgerDay {
+  trade_date: string;
+  stats: WatchLedgerStats;
+  rows: WatchLedgerRow[];
+}
+
+export interface WatchLedgerPayload {
+  trade_date: string;
+  rows: WatchLedgerRow[];
+  stats: WatchLedgerStats;
+  history: WatchLedgerDay[];
+}
+
+export async function getWatchLedger(date?: string, days = 5): Promise<WatchLedgerPayload> {
+  const q = new URLSearchParams({ days: String(days) });
+  if (date) q.set("date", date);
+  return (await getJson<WatchLedgerPayload>(`/api/picks/watch-ledger?${q.toString()}`)).data;
+}
+
 export async function getIntradayOpportunities(): Promise<IntradayOpportunities> {
   return (await getJson<IntradayOpportunities>(`/api/picks/intraday-opportunities`)).data;
 }

@@ -392,13 +392,37 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
     save_brief(payload)
 
     backfill = await backfill_alert_returns(state)
+
+    # 猎场批次 A（需求 9/10）：跟踪台账收盘清算——入选价 vs 当日收盘，逐股判定
+    # + 统计。失败只记日志（清算幂等，下一轮补）。
+    ledger_settled = None
+    with contextlib.suppress(Exception):
+        from app.market.trading_status import beijing_now as _bnow
+        from app.picks.watch_ledger import get_day, settle_day
+        from app.core.db import get_session_factory as _gsf
+
+        tdate = _bnow().date().isoformat()
+        provider = _tencent_provider(state.hub) or state.hub.provider
+        closes: dict[str, float] = {}
+        for r in get_day(tdate, _gsf()):
+            if r["status"] != "tracking":
+                continue
+            with contextlib.suppress(Exception):
+                dc = await _daily_closes(provider, r["symbol"])
+                c = dc.get(_bnow().date())
+                if c is not None:
+                    closes[r["symbol"]] = c
+        ledger_settled = settle_day(tdate, closes, _gsf())
+        log.info("watch ledger settle: %s", ledger_settled)
+
     log.info(
         "intraday review saved: %s（%d 方向 %s；提醒回填 %s）",
         target, len(reviews),
         {r["direction"]: r["outcome"] for r in reviews},
         backfill.get("alerts_updated"),
     )
-    return {"ok": True, "brief_date": target, "directions": reviews, "alert_backfill": backfill}
+    return {"ok": True, "brief_date": target, "directions": reviews, "alert_backfill": backfill,
+            "ledger_settled": ledger_settled}
 
 
 # ---------------------------------------------------------------- IO：提醒收益回算
