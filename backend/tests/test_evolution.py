@@ -198,3 +198,22 @@ def test_get_and_list_agendas(sf, monkeypatch):
 
     today, rows = asyncio.run(main())
     assert today is not None and rows[0]["date"] == today["date"]
+
+
+# ---------------------------------------------------------------- 数据健康哨兵（P2-②）
+
+def test_data_health_structure(sf):
+    """哨兵输出结构稳定：checks 全带 name/ok/detail，issues 与 not-ok 集合一致。
+
+    不断言具体 ok 值（依赖宿主机文件状态），只锚定契约——语义异常的判断在议程 LLM。
+    """
+    out = evo._collect_data_health(sf)
+    assert out["available"] is True
+    names = {c["name"] for c in out["checks"]}
+    assert {"trade_calendar", "snapshot_parquet", "marketdb", "alert_pipeline"} <= names
+    for c in out["checks"]:
+        assert isinstance(c["ok"], bool) and c["detail"]
+    not_ok = [c["name"] for c in out["checks"] if not c["ok"]]
+    assert out["n_issues"] == len(not_ok)
+    # issues 每条 = "<name>：<detail>"，且与 not_ok 集合一一对应
+    assert sorted(i.split("：", 1)[0] for i in out["issues"]) == sorted(not_ok)

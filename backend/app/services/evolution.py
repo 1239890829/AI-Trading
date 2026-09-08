@@ -187,15 +187,92 @@ def _collect_triage_stats(session_factory) -> dict:
 
 
 def collect_inputs(session_factory=None) -> dict:
-    """五路证据汇总（factor_ic 月度复核 P1 仍缺席，显式标注）。"""
+    """六路证据汇总（factor_ic 月度复核到期时接入，缺席显式标注）。"""
     sf = session_factory or get_session_factory()
     return {
         "review": _collect_review_improvements(sf),
         "signal_health": _collect_signal_health(sf),
         "triage_stats": _collect_triage_stats(sf),
         "plan_alignment": _collect_plan_alignment(),
-        "factor_ic": {"available": False, "note": "月度复核（factor_ic_review）P1 接入"},
+        "data_health": _collect_data_health(sf),
+        "factor_ic": {"available": False, "note": "月度复核（factor_ic_review）到期接入"},
     }
+
+
+# ---------------------------------------------------------------- 数据健康哨兵（P2-②，第六路证据）
+#
+# 规则层只做**机械合理性**检查（文件/计数/mtime）；「语义异常」的判断交给议程
+# LLM（它有全盘视野）。曾在 2026-09-04 真实发生过：ths 官方端点失败 → 备源
+# 30 天结果覆盖 243 天官方日历——这条哨兵就是那个事故的产物。
+
+
+def _collect_data_health(session_factory) -> dict:
+    checks: list[dict] = []
+
+    def _add(name: str, ok: bool, detail: str) -> None:
+        checks.append({"name": name, "ok": ok, "detail": detail})
+
+    # 1) 交易日历质量：覆盖天数 + 末日新鲜度（30 天覆盖事故的哨兵）
+    try:
+        raw = json.loads((PROJECT_ROOT / "backend" / "data" / "trade_calendar.json").read_text(encoding="utf-8"))
+        days = raw.get("days") if isinstance(raw, dict) else raw
+        tail = max(days) if days else ""
+        stale = tail < (beijing_now().date() - timedelta(days=3)).isoformat()
+        _add("trade_calendar", len(days) >= 200 and not stale,
+             f"{len(days)} 天，末日 {tail}，source={raw.get('source') if isinstance(raw, dict) else '?'}"
+             + ("（⚠️ 陈旧/覆盖不足——检查备源覆盖事故）" if (len(days) < 200 or stale) else ""))
+    except Exception as exc:  # noqa: BLE001
+        _add("trade_calendar", False, f"读取失败：{exc}")
+
+    # 2) 快照落盘新鲜度（REPO_ROOT/data/parquet/snapshots；盘中 >30 分钟 = 停更）
+    try:
+        snaps = PROJECT_ROOT / "data" / "parquet" / "snapshots"
+        today_dir = snaps / beijing_now().strftime("%Y%m%d")
+        if not today_dir.exists():
+            _add("snapshot_parquet", False, "今日快照目录不存在（快照管道可能停更）")
+        else:
+            newest = max(today_dir.glob("*.parquet"), key=lambda p: p.stat().st_mtime, default=None)
+            age_min = (datetime.now().timestamp() - newest.stat().st_mtime) / 60 if newest else 1e9
+            in_session = tc.in_trading_window(beijing_now())
+            too_old = in_session and age_min > 30
+            _add("snapshot_parquet", not too_old,
+                 f"最新文件 {newest.name if newest else '—'}，{age_min:.0f} 分钟前"
+                 + ("（⚠️ 盘中停更）" if too_old else ""))
+    except Exception as exc:  # noqa: BLE001
+        _add("snapshot_parquet", False, f"检查失败：{exc}")
+
+    # 3) marketdb 日 K 仓同步（>26h 未更新 = 增量停跑）
+    try:
+        mdb = PROJECT_ROOT / "backend" / "data" / "marketdb" / "market.duckdb"
+        if not mdb.exists():
+            _add("marketdb", False, "market.duckdb 不存在")
+        else:
+            age_h = (datetime.now().timestamp() - mdb.stat().st_mtime) / 3600
+            _add("marketdb", age_h <= 26,
+                 f"{mdb.stat().st_size // (1024 * 1024)} MB，{age_h:.0f} 小时前更新"
+                 + ("（⚠️ 同步停跑——scripts/sync_marketdb.py）" if age_h > 26 else ""))
+    except Exception as exc:  # noqa: BLE001
+        _add("marketdb", False, f"检查失败：{exc}")
+
+    # 4) 告警与审计心跳（24h 全静默 = 管道可能挂了）
+    try:
+        from app.models.alert import AlertEvent
+
+        cutoff = datetime.utcnow() - timedelta(hours=24)
+        with session_factory() as db:
+            n_events = len(db.execute(select(AlertEvent.id).where(AlertEvent.triggered_at >= cutoff)).scalars().all())
+            n_audits = len(db.execute(select(AgentAudit.id).where(AgentAudit.at >= cutoff)).scalars().all())
+        trading = tc.in_trading_window(beijing_now())
+        quiet_suspect = trading and n_events == 0
+        _add("alert_pipeline", not quiet_suspect,
+             f"24h 告警 {n_events} 条 / 审计 {n_audits} 条"
+             + ("（⚠️ 盘中零告警——watcher 管道疑似静默）" if quiet_suspect else ""))
+    except Exception as exc:  # noqa: BLE001
+        _add("alert_pipeline", False, f"检查失败：{exc}")
+
+    issues = [c for c in checks if not c["ok"]]
+    return {"available": True, "checks": checks, "n_issues": len(issues),
+            "issues": [f"{c['name']}：{c['detail']}" for c in issues]}
 
 
 # ---------------------------------------------------------------- 议程生成
