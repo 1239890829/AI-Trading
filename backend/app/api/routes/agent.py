@@ -130,9 +130,9 @@ async def propose_param_change(body: ParamChangeIn):
 
 @router.post("/agent/params/changes/{change_id}/apply", dependencies=[Depends(require_write_token)])
 async def apply_param_change(change_id: int):
-    """生效变更单：写运行时覆盖层（免重启）+ 审计。"""
+    """生效变更单：写运行时覆盖层（免重启）+ 审计 + 变更留痕任务（mutation_source=user）。"""
     try:
-        return {"data": params_svc.apply_change(change_id)}
+        return {"data": params_svc.apply_change(change_id, mutation_source="user")}
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 

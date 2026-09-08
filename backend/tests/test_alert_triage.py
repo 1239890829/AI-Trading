@@ -156,3 +156,42 @@ def test_old_event_outside_cooldown_still_judged(sf, monkeypatch):
     new = _event(sf)
     asyncio.run(tri.triage_event(new, sf))
     assert calls["n"] == 2
+
+
+def test_triage_auto_acknowledges_event(sf, monkeypatch):
+    """2026-09-08 用户指令「触发记录状态不再需要确认」：判读落库时事件自动
+    置 acknowledged=1——终态即判读态，无人工确认环节。"""
+
+    async def fake(ctx):
+        return ("notify", "测试判读")
+
+    monkeypatch.setattr(tri, "_llm_verdict", fake)
+    ev = _event(sf)
+    assert ev.acknowledged == 0  # 初始未确认
+    out = asyncio.run(tri.triage_event(ev, sf))
+    assert out["verdict"] == "notify"
+    with sf() as db:
+        row = db.get(AlertEvent, ev.id)
+        assert row.acknowledged == 1, "判读完成后事件必须自动 acknowledged"
+
+
+def test_push_policy_matrix():
+    """推送矩阵契约：CRITICAL/ANOMALY/REPORT 允许进飞书，SILENT 一律不允许。"""
+    from app.services.push_policy import PolicyKind, feishu_allowed
+
+    assert feishu_allowed(PolicyKind.CRITICAL) is True
+    assert feishu_allowed(PolicyKind.ANOMALY) is True
+    assert feishu_allowed(PolicyKind.REPORT) is True
+    assert feishu_allowed(PolicyKind.SILENT) is False
+
+
+def test_anomaly_guard_only_pushes_new():
+    """ANOMALY 守卫：同一异常不重复推；恢复后再出现视为新异常。"""
+    from app.services.push_policy import AnomalyPushGuard
+
+    g = AnomalyPushGuard()
+    assert g.filter_new(["marketdb 停更"]) == ["marketdb 停更"]  # 首推
+    assert g.filter_new(["marketdb 停更"]) == []                 # 重复不推
+    assert g.filter_new(["marketdb 停更", "盘中零告警"]) == ["盘中零告警"]  # 只推新增
+    assert g.filter_new([]) == []                                # 恢复清空
+    assert g.filter_new(["marketdb 停更"]) == ["marketdb 停更"]  # 再现=新异常

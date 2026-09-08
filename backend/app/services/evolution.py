@@ -25,6 +25,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import threading
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -493,6 +494,14 @@ def _execute_a(item: dict, sf, agenda_date: str) -> dict:
         return {**item, "status": "rejected", "result": f"参数 {key} 在红线清单，禁止自动修改"}
     try:
         from app.services import agent_params
+        from app.services.agent_tasks import record_mutation, update_mutation_result
+
+        # 2026-09-08 用户指令：改动前必须先创建任务（留痕任务中心可见）
+        mutation_id = record_mutation(
+            source="agenda", kind="param_change",
+            summary=f"A类参数变更 {key}：{json.dumps(param.get('after'), ensure_ascii=False)}",
+            detail={"agenda_date": agenda_date, "evidence": item.get("evidence") or {}},
+        )
 
         change = agent_params.propose(
             key, param.get("after"),
@@ -513,7 +522,9 @@ def _execute_a(item: dict, sf, agenda_date: str) -> dict:
         result = f"变更单 #{applied['id']} 已自动生效"
         if experiment:
             result += f"（实验 #{experiment['id']} 已挂账，{VERIFY_NOTE}）"
+        update_mutation_result(mutation_id, "succeeded", f"{result}；变更单 #{applied['id']}")
         return {**item, "status": "executed", "result": result,
+                "mutation_task_id": mutation_id,
                 "experiment_id": experiment["id"] if experiment else None}
     except ValueError as exc:
         return {**item, "status": "rejected", "result": f"校验拒绝：{exc}"}
@@ -589,7 +600,51 @@ def execute_agenda(agenda: dict, session_factory=None) -> dict:
             out = _agenda_dump(row)
     record_summary_audit(agenda.get("date") or "", items)
     _sync_review_items(agenda, items, sf)
+    _push_agenda_report(agenda.get("date") or "", items)
     return out
+
+
+def _push_agenda_report(agenda_date: str, items: list[dict]) -> None:
+    """REPORT 类推送（push_policy ③）：议程执行完成后一条摘要卡片进飞书。
+
+    全中文、不含买卖建议；线程内发送（execute_agenda 是同步函数，且可能在
+    事件循环中被调用——独立线程跑 asyncio 最安全）；失败只记日志。
+    """
+    try:
+        from app.notifiers import get_notifier_registry
+        from app.services.push_policy import PolicyKind, feishu_allowed
+
+        if not feishu_allowed(PolicyKind.REPORT):
+            return
+        n_ok = sum(1 for i in items if i.get("status") == "executed")
+        n_defer = sum(1 for i in items if i.get("status") == "deferred")
+        n_rej = sum(1 for i in items if i.get("status") in ("rejected", "skipped"))
+        lines = "\n".join(
+            f"· {i.get('finding', '')[:40]}（{i.get('class')}类·{i.get('status')}）"
+            for i in items[:5]
+        )
+        card = {
+            "config": {"wide_screen_mode": True},
+            "header": {"template": "blue",
+                       "title": {"tag": "plain_text", "content": f"复盘完成 · 进化议程 {agenda_date}"}},
+            "elements": [{"tag": "div", "text": {"tag": "lark_md",
+                         "content": f"**执行 {n_ok} / 推迟 {n_defer} / 跳过 {n_rej}**\n{lines}"}}],
+        }
+        notifier = get_notifier_registry().get("feishu")
+        if notifier is None or getattr(notifier, "send_interactive", None) is None:
+            log.warning("feishu notifier 不可用，议程摘要仅落库留痕")
+            return
+
+        def _send() -> None:
+            try:
+                asyncio.run(notifier.send_interactive(card))
+            except Exception:  # noqa: BLE001
+                log.exception("agenda report card send failed")
+
+        threading.Thread(target=_send, daemon=True).start()
+        log.info("agenda report dispatch started (%d items)", len(items))
+    except Exception:  # noqa: BLE001  推送失败不影响议程结果
+        log.exception("agenda report push failed")
 
 
 def _sync_review_items(agenda: dict, items: list[dict], sf) -> None:

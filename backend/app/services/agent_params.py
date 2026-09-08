@@ -136,16 +136,42 @@ def propose(key: str, after: Any, *, source_type: str = "manual", source_id: str
     return out
 
 
-def apply_change(change_id: int, session_factory=None) -> dict:
-    """生效：写覆盖层 + 注入运行时 + 审计。draft/applied 之外不可重复生效。"""
+def apply_change(change_id: int, session_factory=None, *, mutation_source: str | None = None) -> dict:
+    """生效：写覆盖层 + 注入运行时 + 审计。draft/applied 之外不可重复生效。
+
+    mutation_source（2026-09-08 用户指令「改动前必须先建任务」）：人工路径传
+    "user" 自动建留痕任务；A 类自动路径在外层 _execute_a 已建，传 None 跳过。
+    """
     sf = session_factory or get_session_factory()
+    mutation_id = None
+    if mutation_source is not None:
+        from app.services.agent_tasks import record_mutation
+
+        with sf() as db:
+            _row = db.get(AgentParamChange, change_id)
+            _key = _row.key if _row else f"change:{change_id}"
+            _after = _row.after if _row else None
+        mutation_id = record_mutation(
+            source=mutation_source, kind="param_change",
+            summary=f"参数变更 {_key}：{json.dumps(_after, ensure_ascii=False)}",
+            detail={"change_id": change_id},
+        )
     with sf() as db:
         row = db.get(AgentParamChange, change_id)
         if row is None:
+            if mutation_id:
+                from app.services.agent_tasks import update_mutation_result
+                update_mutation_result(mutation_id, "failed", "变更单不存在")
             raise ValueError("变更单不存在")
         if row.status == "applied":
+            if mutation_id:
+                from app.services.agent_tasks import update_mutation_result
+                update_mutation_result(mutation_id, "failed", "变更单已生效（重复 apply）")
             return _dump(row)
         if row.status == "rolled_back":
+            if mutation_id:
+                from app.services.agent_tasks import update_mutation_result
+                update_mutation_result(mutation_id, "failed", "已回滚的变更单不能再次生效（请新建变更单）")
             raise ValueError("已回滚的变更单不能再次生效（请新建变更单）")
         db.merge(AgentParam(key=row.key, value=row.after,
                             updated_at=datetime.utcnow()))
@@ -157,6 +183,9 @@ def apply_change(change_id: int, session_factory=None) -> dict:
     refresh_runtime_overrides(sf)
     record_audit("user", "param.apply", row.key, before=row.before, after=row.after,
                  rollback_ref=f"change:{change_id}")
+    if mutation_id:
+        from app.services.agent_tasks import update_mutation_result
+        update_mutation_result(mutation_id, "succeeded", f"变更单 #{change_id} 已生效")
     return out
 
 

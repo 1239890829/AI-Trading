@@ -227,12 +227,22 @@ def execute_c_item(item: dict, session_factory, agenda_date: str,
         return {**item, "status": "deferred",
                 "result": "主工作区有未提交改动（AI 改码要求干净工作区，避免与人工改动冲突）"}
 
+    # 2026-09-08 用户指令：改动前必须先创建任务（留痕任务中心可见）
+    from app.services.agent_tasks import record_mutation, update_mutation_result
+
+    mutation_id = record_mutation(
+        source="agenda", kind="code_change",
+        summary=f"C类代码改动：{item.get('finding', '')[:60]}（files={files}）",
+        detail={"agenda_date": agenda_date},
+    )
+
     # 2) 沙箱（worktree + 独立分支）
     tag = f"{agenda_date.replace('-', '')}-{uuid.uuid4().hex[:6]}"
     branch = f"evolution/{tag}"
     sandbox = Path("/tmp") / f"evo-sandbox-{tag}"
     rc, out = _git(["worktree", "add", "-b", branch, str(sandbox), "HEAD"], root)
     if rc != 0:
+        update_mutation_result(mutation_id, "failed", f"建沙箱失败：{out[:150]}")
         return {**item, "status": "failed", "result": f"建沙箱失败：{out[:150]}"}
 
     try:
@@ -251,11 +261,13 @@ def execute_c_item(item: dict, session_factory, agenda_date: str,
             return {**item, "status": "rejected", "result": f"diff 无法干净应用：{out[:200]}"}
         rc, out = _git(["apply", str(patch_file)], sandbox)
         if rc != 0:
+            update_mutation_result(mutation_id, "failed", f"diff 应用失败：{out[:200]}")
             return {**item, "status": "failed", "result": f"diff 应用失败：{out[:200]}"}
 
         # 5) 回归门禁
         ok, gate = _run_gate(sandbox, files)
         if not ok:
+            update_mutation_result(mutation_id, "failed", f"回归门禁拦截：{gate}")
             return {**item, "status": "rejected", "result": f"回归门禁拦截：{gate}"}
 
         # 6) 沙箱分支独立 commit（留痕）
@@ -263,6 +275,7 @@ def execute_c_item(item: dict, session_factory, agenda_date: str,
         rc, out = _git(["commit", "-m",
                         f"evolution: {item.get('finding', '')[:80]} (agenda {agenda_date})"], sandbox)
         if rc != 0:
+            update_mutation_result(mutation_id, "failed", f"沙箱 commit 失败：{out[:150]}")
             return {**item, "status": "failed", "result": f"沙箱 commit 失败：{out[:150]}"}
         rc, commit = _git(["rev-parse", "--short", "HEAD"], sandbox)
         rc, diffstat = _git(["diff", "--stat", "HEAD~1..HEAD"], sandbox)
@@ -270,6 +283,7 @@ def execute_c_item(item: dict, session_factory, agenda_date: str,
         # 7) ff-only 合并回主分支（主工作区在预检时已确认干净）
         rc, out = _git(["merge", "--ff-only", branch], root)
         if rc != 0:
+            update_mutation_result(mutation_id, "failed", f"合并失败（改动保留在分支 {branch}）：{out[:150]}")
             return {**item, "status": "failed",
                     "result": f"合并失败（改动保留在分支 {branch}）：{out[:150]}"}
 
@@ -280,8 +294,28 @@ def execute_c_item(item: dict, session_factory, agenda_date: str,
             db.add(AgentAudit(actor="ai", action="code.apply",
                               target=f"{commit}:{','.join(files)}"))
             db.commit()
+        result = f"已合入 {commit}（{gate}）；文件：{', '.join(files)}"
+        # 2026-09-08 用户指令：策略改动必须以回测数据为依据——涉及 picks/ 的
+        # 合入自动跑回放对比（与上一份基线量化对照）；回放失败/超时只附告警，
+        # 不回滚已过门禁的合入（回滚由 experiments 30 日守护承担）。
+        replay_block = None
+        if any(f.startswith("backend/app/picks/") or "/picks/" in f for f in files):
+            try:
+                from app.services.replay_gate import run_comparison
+
+                replay_block = run_comparison(days=10, commit=str(commit), force=True)
+                result += (
+                    f"；回放对比[{replay_block.get('verdict')}]: "
+                    + replay_block.get("report", "").split("\n\n")[0].replace("\n", " ")
+                )
+            except Exception as exc:  # noqa: BLE001  回放失败不吞合入结果
+                log.warning("replay comparison failed: %s", exc)
+                replay_block = {"ok": False, "verdict": "error", "report": str(exc)}
+        update_mutation_result(mutation_id, "succeeded", result)
         return {**item, "status": "executed",
-                "result": f"已合入 {commit}（{gate}）；文件：{', '.join(files)}",
+                "result": result,
+                "mutation_task_id": mutation_id,
+                "replay_comparison": replay_block,
                 "commit": commit, "files_changed": files, "diffstat": diffstat[:400]}
     finally:
         _git(["worktree", "remove", "--force", str(sandbox)], root, timeout=30)

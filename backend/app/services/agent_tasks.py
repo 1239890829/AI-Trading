@@ -44,7 +44,58 @@ TASK_TYPES: dict[str, dict[str, str]] = {
         "risk": "L0",
         "desc": "只读检查数据源能力、全市场快照规模、今日告警计数，输出健康摘要",
     },
+    "mutation": {
+        "label": "系统变更留痕",
+        "risk": "L1",
+        "desc": "任何策略/参数/代码改动的前置登记（2026-09-08 用户指令：改动前必须先建任务）",
+    },
 }
+
+
+def record_mutation(*, source: str, kind: str, summary: str, detail: dict | None = None) -> str:
+    """改动留痕（2026-09-08 用户指令「任何改动前必须先创建对应任务」）。
+
+    与 create_task 不同：纯登记，不启动任何执行；返回 task_id 供执行结果回填
+    （update_mutation_result）。A 类参数变更 / C 类代码执行 / 人工 apply 三个
+    写入口必须先调用本函数，否则变更记录在任务中心不可见（追溯性缺口）。
+    """
+    task_id = uuid.uuid4().hex
+    detail = detail or {}
+    with get_session_factory()() as db:
+        db.add(AgentTask(
+            id=task_id, type="mutation", status="queued",
+            params=json.dumps({
+                "source": source, "kind": kind, "summary": summary, **detail,
+            }, ensure_ascii=False, default=str),
+            risk_level="L1", created_by=source,
+        ))
+        db.commit()
+    record_audit(actor=source, action="mutation.create", target=kind, after={"summary": summary}, task_id=task_id)
+    return task_id
+
+
+def update_mutation_result(task_id: str, status: str, result: str) -> None:
+    """回填留痕任务的执行结果（queued → succeeded/failed）。
+
+    AgentTask 无自由 result 字段：结果文本写进 params JSON 的 `result` 键
+    （前端任务详情展示 params 全量），失败时同时落 error。
+    """
+    with get_session_factory()() as db:
+        row = db.get(AgentTask, task_id)
+        if row is None:
+            return
+        row.status = status if status in ("succeeded", "failed") else "failed"
+        try:
+            params = json.loads(row.params or "{}")
+        except Exception:  # noqa: BLE001
+            params = {}
+        params["result"] = result[:2000]
+        row.params = json.dumps(params, ensure_ascii=False, default=str)
+        if row.status == "failed":
+            row.error = json.dumps({"code": "MutationFailed", "message": result[:500]},
+                                   ensure_ascii=False)
+        row.finished_at = datetime.utcnow()
+        db.commit()
 
 _APP: Any = None
 #: type -> asyncio.Task（同类型互斥）

@@ -5,7 +5,6 @@ import { Panel } from "@/components/panel";
 import { StockLink } from "@/components/stock-link";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import {
-  ackAlertEvent,
   createAlertRule,
   deleteAlertRule,
   getAlertChannels,
@@ -120,25 +119,11 @@ export function AlertsTab() {
     }
   }
 
-  async function ack(id: number) {
-    try {
-      await ackAlertEvent(id);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "确认失败");
-    }
-  }
-
-  const unresolved = useMemo(() => events.filter((e) => !e.acknowledged).length, [events]);
-
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
       <div className="flex shrink-0 items-center justify-between">
         <h2 className="text-base font-semibold">预警通知</h2>
-        <span className="text-xs text-zinc-400">
-          {unresolved > 0 ? <span className="mr-2 text-up">● {unresolved} 条未确认</span> : null}
-          自动 10 秒刷新
-        </span>
+        <span className="text-xs text-zinc-400">判读即终态 · 自动 10 秒刷新</span>
       </div>
 
       {error && <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-600">{error}</div>}
@@ -341,13 +326,9 @@ export function AlertsTab() {
                       <td className="px-3 py-2 font-mono tabular-nums text-zinc-400">{e.threshold}</td>
                       <td className="px-3 py-2 text-zinc-400">{e.delivered_channels.join(", ")}</td>
                       <td className="px-3 py-2">
-                        {e.acknowledged ? (
-                          <span className="text-zinc-400">已确认</span>
-                        ) : (
-                          <button onClick={() => void ack(e.id)} className="text-up transition-opacity hover:opacity-75">
-                            确认
-                          </button>
-                        )}
+                        {/* 2026-09-08 用户指令：触发记录状态不再需要确认——判读完成即自动置
+                            acknowledged，此处只读展示终态，移除人工「确认」按钮 */}
+                        <span className="text-zinc-400">已判读</span>
                       </td>
                     </tr>
                   ))}

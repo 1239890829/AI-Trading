@@ -271,6 +271,13 @@ async def lifespan(app: FastAPI):
     poller = asyncio.create_task(hub.run(), name="quote-poller")
     snapshotter = asyncio.create_task(snapshot_service.run(), name="market-snapshot")
 
+    # 数据健康哨兵盘中循环（push_policy ② ANOMALY：交易时段 15 分钟一轮，
+    # 新异常推飞书摘要卡——2026-09-08 推送矩阵）
+    data_health_stop = asyncio.Event()
+    from app.services.data_health_loop import data_health_loop
+
+    data_health_task = asyncio.create_task(data_health_loop(app, stop=data_health_stop), name="data-health-sentinel")
+
     async def paper_matcher():
         # 技术债 #5：无挂单时空转降频（30s 查一次挂单表），有挂单才 5s 密集轮询
         interval = 5.0
@@ -518,6 +525,7 @@ async def lifespan(app: FastAPI):
         buy_point_stop.set()
     triage_stop.set()
     evolution_stop.set()
+    data_health_stop.set()
     if ths_sentinel_task is not None:
         ths_sentinel_stop.set()
     if sentiment_monitor_task is not None:
@@ -547,6 +555,7 @@ async def lifespan(app: FastAPI):
     await _reap(buy_point_task, name="picks-buy-point")
     await _reap(triage_task, name="alert-triage")
     await _reap(evolution_task, name="evolution-agenda")
+    await _reap(data_health_task, name="data-health-sentinel")
     await _reap(review_intraday_task, name="picks-intraday-review")
     await _reap(ths_sentinel_task, name="ths-reason-sentinel")
     await _reap(sentiment_monitor_task, name="sentiment-monitor")

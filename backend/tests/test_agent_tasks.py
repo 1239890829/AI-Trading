@@ -156,3 +156,30 @@ def test_list_tasks_filter_by_type(monkeypatch, tmp_path):
     assert [t["id"] for t in at.list_tasks()] == ["t2", "t1"]  # 创建时间倒序（同秒按入库序）
     assert [t["id"] for t in at.list_tasks(type_="review")] == ["t1"]
     assert json.loads("{}") == {}
+
+
+def test_mutation_record_and_result(tmp_path, monkeypatch):
+    """2026-09-08 用户指令「改动前必须先创建任务」：mutation 登记 → 结果回填。
+
+    record_mutation 纯登记不执行；update_mutation_result 只接受
+    succeeded/failed，回写进 params.result（AgentTask 无自由 result 列）。
+    """
+
+    from app.services import agent_tasks as at
+
+    factory = _factory(tmp_path)
+    monkeypatch.setattr(at, "get_session_factory", lambda: factory)
+    tid = at.record_mutation(source="agenda", kind="code_change",
+                             summary="C类代码改动：测试", detail={"agenda_date": "2026-09-08"})
+    row = at.get_task(tid)
+    assert row is not None and row["type"] == "mutation" and row["status"] == "queued"
+    assert row["params"]["summary"] == "C类代码改动：测试"
+
+    at.update_mutation_result(tid, "succeeded", "已合入 abc1234")
+    row = at.get_task(tid)
+    assert row["status"] == "succeeded" and row["params"]["result"] == "已合入 abc1234"
+
+    tid2 = at.record_mutation(source="user", kind="param_change", summary="参数变更测试")
+    at.update_mutation_result(tid2, "bogus", "非法状态归为 failed")
+    row2 = at.get_task(tid2)
+    assert row2["status"] == "failed"

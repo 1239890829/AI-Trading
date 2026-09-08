@@ -179,6 +179,11 @@ def _save(event_id: int, verdict: str, reason: str, model: str, sf) -> dict:
     with sf() as db:
         row = AgentTriage(event_id=event_id, verdict=verdict, reason=reason, model=model)
         db.add(row)
+        # 2026-09-08 用户指令「触发记录状态不再需要确认」：判读完成即终态，
+        # 事件自动置 acknowledged——悬浮球/控制台不再有「待确认」人工环节。
+        ev = db.get(AlertEvent, event_id)
+        if ev is not None:
+            ev.acknowledged = 1
         db.commit()
         db.refresh(row)
         return _dump(row)
