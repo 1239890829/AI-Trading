@@ -79,6 +79,8 @@ export function FloatingAssistant() {
   const [model, setModel] = useState("");
   const [dict, setDict] = useState<EntityDict | null>(null);
   const [bubbles, setBubbles] = useState<AgentBubble[]>([]);
+  const [docked, setDocked] = useState<"left" | "right" | null>(null);
+  const [orbHovered, setOrbHovered] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const idRef = useRef(0);
@@ -165,6 +167,18 @@ export function FloatingAssistant() {
   }, [open]);
 
   const matcher = useMemo(() => createEntityMatcher(dict), [dict]);
+
+  // ---- 贴边收纳（2026-09-08 用户需求 10）：吸附到边缘后收进一半，hover 滑出 ----
+  useEffect(() => {
+    if (!pos || open) {
+      setDocked(null);
+      return;
+    }
+    const w = window.innerWidth;
+    if (pos.x <= MARGIN + 2) setDocked("left");
+    else if (pos.x >= w - BALL - MARGIN - 2) setDocked("right");
+    else setDocked(null);
+  }, [pos, open]);
 
   // ---- 拖动 + 吸附 ---------------------------------------------------------
   const drag = useRef<{ px: number; py: number; ox: number; oy: number; moved: boolean } | null>(null);
@@ -444,8 +458,17 @@ export function FloatingAssistant() {
         data-testid="assistant-ball"
         role="button"
         aria-label="AI 助手"
-        className="fixed z-50 flex cursor-grab select-none items-center justify-center rounded-full bg-zinc-900 text-zinc-50 shadow-[0_2px_8px_rgba(0,0,0,0.18),0_10px_28px_rgba(0,0,0,0.22)] ring-1 ring-rose-500/45 transition-[transform,box-shadow] duration-150 ease-out hover:-translate-y-0.5 hover:shadow-[0_4px_12px_rgba(0,0,0,0.22),0_14px_36px_rgba(0,0,0,0.28)] active:cursor-grabbing dark:bg-zinc-100 dark:text-zinc-950 dark:shadow-[0_2px_8px_rgba(0,0,0,0.4),0_10px_28px_rgba(0,0,0,0.35)] dark:ring-rose-500/55"
-        style={{ left: pos.x, top: pos.y, width: BALL, height: BALL }}
+        className="fixed z-50 flex cursor-grab select-none items-center justify-center rounded-full bg-zinc-900 text-zinc-50 shadow-[0_2px_8px_rgba(0,0,0,0.18),0_10px_28px_rgba(0,0,0,0.22)] ring-1 ring-rose-500/45 transition-[transform,box-shadow,opacity] duration-200 ease-out hover:shadow-[0_4px_12px_rgba(0,0,0,0.22),0_14px_36px_rgba(0,0,0,0.28)] active:cursor-grabbing dark:bg-zinc-100 dark:text-zinc-950 dark:shadow-[0_2px_8px_rgba(0,0,0,0.4),0_10px_28px_rgba(0,0,0,0.35)] dark:ring-rose-500/55"
+        style={{
+          left: pos.x, top: pos.y, width: BALL, height: BALL,
+          // 贴边收纳：收进 45% 只露一条边，hover/拖动/面板打开时滑出
+          transform: docked && !orbHovered
+            ? `translateX(${docked === "left" ? "-45%" : "45%"})`
+            : undefined,
+          opacity: docked && !orbHovered ? 0.75 : 1,
+        }}
+        onPointerEnter={() => setOrbHovered(true)}
+        onPointerLeave={() => setOrbHovered(false)}
         onPointerDown={onBallPointerDown}
         onPointerMove={onBallPointerMove}
         onPointerUp={onBallPointerUp}

@@ -30,6 +30,7 @@ const SESSION_TABS: { key: NotificationItem["session"]; label: string }[] = [
 ];
 
 const LAST_SEEN_KEY = "ashare.notifications.lastSeenTs";
+const DISMISSED_KEY = "ashare.notifications.dismissedIds";
 
 const CATEGORY_TONE: Record<NotificationItem["category"], string> = {
   opportunity: "bg-up/10 text-up",
@@ -102,7 +103,35 @@ export function NotificationBell() {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<NotificationItem["session"]>("intraday");
   const [newsItem, setNewsItem] = useState<NewsModalItem | null>(null);
-  const [unread, setUnread] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+
+  const _readDismissed = (): Set<string> => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? "[]") as string[]);
+    } catch {
+      return new Set();
+    }
+  };
+
+  /** 一键已读：推进 last_seen 到最新条目时间戳（未读徽标清零，条目保留） */
+  const markAllRead = () => {
+    try {
+      const latest = (payload?.items ?? []).reduce((m, i) => ((i.ts ?? "") > m ? (i.ts ?? "") : m), "");
+      if (latest) localStorage.setItem(LAST_SEEN_KEY, latest);
+      setUnreadCount(0);
+    } catch {}
+  };
+
+  /** 一键清除：隐藏当前全部条目（dismissed 记 localStorage，按条目 key 永久过滤） */
+  const clearAll = () => {
+    try {
+      const next = new Set(dismissed);
+      for (const i of payload?.items ?? []) next.add(i.id);
+      localStorage.setItem(DISMISSED_KEY, JSON.stringify([...next]));
+      setDismissed(next);
+    } catch {}
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -127,7 +156,7 @@ export function NotificationBell() {
     if (!open || !payload) return;
     try {
       localStorage.setItem(LAST_SEEN_KEY, payload.generated_at);
-      setUnread(false);
+      setUnreadCount(0);
     } catch {}
   }, [open, payload]);
 
@@ -138,7 +167,8 @@ export function NotificationBell() {
         const p = await getNotifications();
         if (!alive) return;
         const last = localStorage.getItem(LAST_SEEN_KEY);
-        setUnread(!!last && p.items.some((i) => (i.ts ?? "") > last));
+        const dismissedSet = _readDismissed();
+        setUnreadCount(p.items.filter((i) => !dismissedSet.has(i.id) && (i.ts ?? "") > (last ?? "")).length);
       } catch {}
     };
     void check();
@@ -151,9 +181,9 @@ export function NotificationBell() {
 
   const bySession = useMemo(() => {
     const m: Record<NotificationItem["session"], NotificationItem[]> = { pre_open: [], intraday: [], after_close: [] };
-    for (const i of payload?.items ?? []) m[i.session].push(i);
+    for (const i of payload?.items ?? []) if (!dismissed.has(i.id)) m[i.session].push(i);
     return m;
-  }, [payload]);
+  }, [payload, dismissed]);
 
   return (
     <>
@@ -167,7 +197,14 @@ export function NotificationBell() {
           <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
           <path d="M13.73 21a2 2 0 0 1-3.46 0" />
         </svg>
-        {unread && <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-up" aria-hidden />}
+        {unreadCount > 0 && (
+          <span
+            className="absolute -right-1.5 -top-1.5 min-w-[16px] rounded-full bg-up px-1 text-center text-[10px] font-semibold leading-4 text-white"
+            aria-label={`${unreadCount} 条未读通知`}
+          >
+            {unreadCount > 99 ? "99+" : unreadCount}
+          </span>
+        )}
       </button>
 
       {open &&
@@ -178,6 +215,20 @@ export function NotificationBell() {
               <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3 dark:border-zinc-800/80">
                 <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">通知中心</h2>
                 <div className="flex items-center gap-2">
+                  <button
+                    onClick={markAllRead}
+                    className="rounded px-1.5 py-0.5 text-[11px] text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                    title="推进已读时间戳，未读徽标清零"
+                  >
+                    全部已读
+                  </button>
+                  <button
+                    onClick={clearAll}
+                    className="rounded px-1.5 py-0.5 text-[11px] text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                    title="隐藏当前全部条目（本地清除，随时可清 storage 恢复）"
+                  >
+                    一键清除
+                  </button>
                   <button
                     onClick={() => void load()}
                     className="rounded p-1 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
