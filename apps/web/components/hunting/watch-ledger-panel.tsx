@@ -9,13 +9,14 @@
  */
 import { useCallback, useEffect, useState } from "react";
 
-import { getWatchLedger, type WatchLedgerPayload } from "@/lib/api";
+import { getWatchLedger, placePaperOrder, type WatchLedgerPayload } from "@/lib/api";
 import { fmt, pctColor, pctText } from "@/lib/format";
 
 export function WatchLedgerPanel() {
   const [data, setData] = useState<WatchLedgerPayload | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [orderNote, setOrderNote] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -31,6 +32,19 @@ export function WatchLedgerPanel() {
     const t = setInterval(() => void load(), 30_000); // 台账 30s 刷新（低频不干扰判断）
     return () => clearInterval(t);
   }, [load]);
+
+  /** 模拟建仓（系统审查 #7：闭环「选出→验证」）：入选价 × 100 股，撮合规则硬拦截 */
+  const quickBuy = async (symbol: string, price: number) => {
+    try {
+      const res = await placePaperOrder(symbol, "buy", price, 100);
+      setOrderNote(`${symbol} 模拟买单已提交（100 股 @ ${price}）——状态见工作台交易页签`);
+      void load();
+      return res;
+    } catch (e) {
+      setOrderNote(`${symbol} 建仓失败：${e instanceof Error ? e.message : String(e)}`);
+      return null;
+    }
+  };
 
   const st = data?.stats;
 
@@ -65,6 +79,7 @@ export function WatchLedgerPanel() {
       </div>
 
       {error && <p className="mb-2 rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-600">台账加载失败：{error}</p>}
+      {orderNote && <p className="mb-2 rounded bg-sky-500/10 px-2 py-1 text-[11px] text-sky-700 dark:text-sky-300">{orderNote}</p>}
 
       {data && (data.rows?.length ?? 0) === 0 && (
         <p className="py-3 text-center text-[11px] text-zinc-400">
@@ -121,6 +136,15 @@ export function WatchLedgerPanel() {
                       <span className="text-zinc-400" title={r.verdict_reason ?? "收盘后清算"}>
                         跟踪中
                       </span>
+                    )}
+                    {r.status === "tracking" && r.entry_price != null && (
+                      <button
+                        onClick={() => void quickBuy(r.symbol, r.entry_price as number)}
+                        className="ml-1 rounded border border-up/40 px-1 text-[10px] text-up transition-colors hover:bg-up/10"
+                        title={`模拟建仓：100 股 @ ${r.entry_price}（撮合引擎硬拦截：T+1/整手/停牌拒）`}
+                      >
+                        模拟建仓
+                      </button>
                     )}
                   </td>
                   <td className="max-w-[16em] py-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">

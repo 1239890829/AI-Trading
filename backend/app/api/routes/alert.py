@@ -91,9 +91,32 @@ async def list_events(
     limit: int = 50,
     rule_id: int | None = None,
     repo: AlertRepository = Depends(get_alert_repo),
-) -> Envelope[list[AlertEventOut]]:
+) -> Envelope[list[dict]]:
+    """事件列表 + AI 判读合并（2026-09-09 告警面板重设计：verdict 徽标数据源）。"""
     events = repo.list_events(limit=limit, rule_id=rule_id)
-    return Envelope(data=[_serialize_event(e) for e in events])
+    out = []
+    triage_map: dict[int, tuple[str, str]] = {}
+    try:
+        from sqlalchemy import select as _sel
+
+        from app.core.db import get_session_factory
+        from app.models.agent import AgentTriage
+
+        ids = [e.id for e in events]
+        if ids:
+            with get_session_factory()() as db:
+                rows = db.execute(
+                    _sel(AgentTriage).where(AgentTriage.event_id.in_(ids))
+                ).scalars().all()
+                triage_map = {t.event_id: (t.verdict, t.reason or "") for t in rows}
+    except Exception:  # noqa: BLE001  判读缺失 → 事件仍可展示（三态）
+        pass
+    for e in events:
+        d = _serialize_event(e).model_dump() if hasattr(_serialize_event(e), 'model_dump') else dict(_serialize_event(e))
+        tri = triage_map.get(e.id)
+        d["triage"] = {"verdict": tri[0], "reason": tri[1]} if tri else None
+        out.append(d)
+    return Envelope(data=out)
 
 
 @router.post("/alerts/events/{event_id}/ack", dependencies=[Depends(require_write_token)])

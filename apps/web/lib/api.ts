@@ -1233,6 +1233,8 @@ export interface AlertRule {
 }
 
 export interface AlertEvent {
+  /** AI 判读合并（告警面板重设计）：notify=提醒 / ignore=已降噪 / escalate=需关注 */
+  triage?: { verdict: string; reason: string } | null;
   id: number;
   rule_id: number;
   symbol: string;

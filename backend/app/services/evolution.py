@@ -188,7 +188,7 @@ def _collect_triage_stats(session_factory) -> dict:
 
 
 def collect_inputs(session_factory=None) -> dict:
-    """六路证据汇总（factor_ic 月度复核到期时接入，缺席显式标注）。"""
+    """七路证据汇总（P1-4：prediction 预判入回路；factor_ic 月度复核到期接入）。"""
     sf = session_factory or get_session_factory()
     return {
         "review": _collect_review_improvements(sf),
@@ -197,7 +197,48 @@ def collect_inputs(session_factory=None) -> dict:
         "plan_alignment": _collect_plan_alignment(),
         "data_health": _collect_data_health(sf),
         "factor_ic": {"available": False, "note": "月度复核（factor_ic_review）到期接入"},
+        "prediction": _collect_recent_prediction(sf),
     }
+
+
+def _collect_recent_prediction(session_factory) -> dict:
+    """第七路（P1-4 消费回路）：最近一份新题材预判进议程——预判产出后不再孤立。
+
+    只带方向名/评分/四问结论摘要（≤3 条），供议程 LLM 评估「是否值得提前埋伏」
+    类改进项。无预判/读取失败显式 unavailable。
+    """
+    sf = session_factory or get_session_factory()
+    try:
+        from sqlalchemy import select as _sel
+
+        from app.predict.models import PredictionReportRow
+
+        with sf() as db:
+            row = db.execute(
+                _sel(PredictionReportRow).order_by(PredictionReportRow.created_at.desc()).limit(1)
+            ).scalars().first()
+        if row is None:
+            return {"available": False, "note": "尚无新题材预判产出"}
+        try:
+            payload = json.loads(row.payload) if row.payload else {}
+        except Exception:  # noqa: BLE001
+            payload = {}
+        themes = []
+        for t in (payload.get("themes") or [])[:3]:
+            themes.append({
+                "theme": t.get("theme") or t.get("name"),
+                "score": t.get("score"),
+                "basis": (t.get("basis") or t.get("logic") or "")[:120],
+            })
+        return {
+            "available": bool(themes),
+            "target_date": row.target_date,
+            "verdict_summary": row.verdict_summary,
+            "themes": themes,
+            "note": "预判数据供参考——采纳前须核对当日盘面是否已启动（防追高）",
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"available": False, "note": f"读取失败：{exc}"}
 
 
 # ---------------------------------------------------------------- 数据健康哨兵（P2-②，第六路证据）
@@ -286,6 +327,28 @@ def _collect_data_health(session_factory) -> dict:
              + ("（⚠️ 成分调整期归属会错——collect_news_events 每轮补 40 个）" if n_stale else ""))
     except Exception as exc:  # noqa: BLE001
         _add("theme_members_fresh", False, f"检查失败：{exc}")
+
+    # 6) 磁盘可用空间（<10G 会导致 parquet 写失败/DB 损坏风险）
+    try:
+        import shutil
+
+        usage = shutil.disk_usage(PROJECT_ROOT)
+        free_g = usage.free / (1024 ** 3)
+        _add("disk_free", free_g >= 10,
+             f"工作卷可用 {free_g:.1f} GB"
+             + ("（⚠️ <10G——parquet/duckdb 写入有损坏风险）" if free_g < 10 else ""))
+    except Exception as exc:  # noqa: BLE001
+        _add("disk_free", False, f"检查失败：{exc}")
+
+    # 7) 快照目录堆积（>120 个 = parquet 保留窗口未执行）
+    try:
+        snaps = PROJECT_ROOT / "data" / "parquet" / "snapshots"
+        n_dirs = len([p for p in snaps.iterdir() if p.is_dir()]) if snaps.exists() else 0
+        _add("snapshot_dirs", n_dirs <= 120,
+             f"{n_dirs} 个交易日目录（≈{n_dirs * 30} MB，保留窗口 90 天→120 个）"
+             + ("（⚠️ 运行 prune_old_snapshots 归档）" if n_dirs > 120 else ""))
+    except Exception as exc:  # noqa: BLE001
+        _add("snapshot_dirs", False, f"检查失败：{exc}")
 
     issues = [c for c in checks if not c["ok"]]
     return {"available": True, "checks": checks, "n_issues": len(issues),
@@ -777,3 +840,33 @@ async def evolution_scheduler(app, stop: asyncio.Event, *, run_hour: int, run_mi
 
 _LAST_CONCLUDE_DATE: str = ""
 _LAST_META_WEEK: tuple = ()  # (ISO 年, 周)——元评估周报进程内幂等（文件存在性兜底）
+
+
+def prune_old_snapshots(days: int = 90, *, dry_run: bool = True) -> dict:
+    """parquet 快照保留窗口（2026-09-09 系统审查 #9）：删除 >N 天的快照目录。
+
+    **默认 dry_run**（只列出待删，不真删）——删除动作必须显式 dry_run=False 触发
+    （automation 或手动）。目录名格式 YYYYMMDD，按日期字符串比较，删前二次确认
+    目标都晚于 20200101（防格式异常整目录误删）。
+    """
+    import shutil as _shutil
+
+    snaps = PROJECT_ROOT / "data" / "parquet" / "snapshots"
+    if not snaps.exists():
+        return {"removed": [], "kept": 0, "dry_run": dry_run}
+    cutoff = (beijing_now().date() - timedelta(days=days)).strftime("%Y%m%d")
+    victims: list[Path] = []
+    for p in sorted(snaps.iterdir()):
+        if not p.is_dir() or not p.name.isdigit() or len(p.name) != 8:
+            continue
+        if p.name < cutoff and p.name >= "20200101":
+            victims.append(p)
+    if not dry_run:
+        for p in victims:
+            _shutil.rmtree(p, ignore_errors=True)
+    return {
+        "removed": [p.name for p in victims] if not dry_run else [],
+        "would_remove": [p.name for p in victims] if dry_run else [],
+        "kept": len([p for p in snaps.iterdir() if p.is_dir()]) - (len(victims) if not dry_run else 0),
+        "cutoff": cutoff, "dry_run": dry_run,
+    }

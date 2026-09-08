@@ -137,7 +137,7 @@ export function AlertsTab() {
                 value={form.name}
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                 required
-                className="w-full rounded-md border border-zinc-200 bg-transparent px-3 py-1.5 outline-none focus:border-up/60 dark:border-zinc-700"
+                className="h-9 w-full rounded-md border border-zinc-200 bg-transparent px-3 outline-none focus:border-up/60 dark:border-zinc-700"
                 placeholder="如：茅台突破 1300"
               />
             </div>
@@ -147,7 +147,7 @@ export function AlertsTab() {
                 <select
                   value={form.condition_type}
                   onChange={(e) => setForm((f) => ({ ...f, condition_type: e.target.value as AlertConditionType }))}
-                  className="w-full rounded-md border border-zinc-200 bg-transparent px-2 py-1.5 outline-none dark:border-zinc-700"
+                  className="h-9 w-full rounded-md border border-zinc-200 bg-transparent px-3 outline-none focus:border-up/60 dark:border-zinc-700"
                 >
                   <option value="price_above">现价 ≥</option>
                   <option value="price_below">现价 ≤</option>
@@ -163,7 +163,7 @@ export function AlertsTab() {
                   value={form.threshold}
                   onChange={(e) => setForm((f) => ({ ...f, threshold: parseFloat(e.target.value) || 0 }))}
                   required
-                  className="w-full rounded-md border border-zinc-200 bg-transparent px-3 py-1.5 outline-none focus:border-up/60 dark:border-zinc-700"
+                  className="h-9 w-full rounded-md border border-zinc-200 bg-transparent px-3 outline-none focus:border-up/60 dark:border-zinc-700"
                 />
               </div>
             </div>
@@ -172,7 +172,7 @@ export function AlertsTab() {
               <select
                 value={form.scope}
                 onChange={(e) => setForm((f) => ({ ...f, scope: e.target.value as AlertScope }))}
-                className="w-full rounded-md border border-zinc-200 bg-transparent px-2 py-1.5 outline-none dark:border-zinc-700"
+                className="h-9 w-full rounded-md border border-zinc-200 bg-transparent px-3 outline-none focus:border-up/60 dark:border-zinc-700"
               >
                 <option value="watchlist">全部自选</option>
                 <option value="symbols">指定标的</option>
@@ -192,7 +192,7 @@ export function AlertsTab() {
                     }));
                   }}
                   placeholder="600519,000001"
-                  className="w-full rounded-md border border-zinc-200 bg-transparent px-3 py-1.5 outline-none focus:border-up/60 dark:border-zinc-700"
+                  className="h-9 w-full rounded-md border border-zinc-200 bg-transparent px-3 outline-none focus:border-up/60 dark:border-zinc-700"
                 />
               </div>
             )}
@@ -203,7 +203,7 @@ export function AlertsTab() {
                 min={0}
                 value={form.cooldown_seconds}
                 onChange={(e) => setForm((f) => ({ ...f, cooldown_seconds: parseInt(e.target.value) || 0 }))}
-                className="w-full rounded-md border border-zinc-200 bg-transparent px-3 py-1.5 outline-none focus:border-up/60 dark:border-zinc-700"
+                className="h-9 w-full rounded-md border border-zinc-200 bg-transparent px-3 outline-none focus:border-up/60 dark:border-zinc-700"
               />
             </div>
             <div>

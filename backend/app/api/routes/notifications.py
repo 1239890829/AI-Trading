@@ -62,15 +62,38 @@ def get_alert_repo(request: Request) -> AlertRepository:
 
 
 def _alert_items(repo: AlertRepository, limit: int) -> list[dict]:
-    """watcher 确认/证伪 + 信号健康度预警 → 通知项。triggered_at 是 UTC naive → +8 转北京。"""
+    """watcher 确认/证伪 + 信号健康度预警 → 通知项。triggered_at 是 UTC naive → +8 转北京。
+
+    P0-2（2026-09-08 用户指令「AI 盘中分析进站内通知」）：合并 AgentTriage
+    判读结论与响应建议进 body——AI 的盘中分析在通知中心直接可见。
+    """
     rules = {r.id: r for r in repo.list_rules()}
     notif_rule_ids = {rid for rid, r in rules.items() if r.name in _NOTIF_RULE_NAMES}
     if not notif_rule_ids:
         return []
+    events = [e for e in repo.list_events(limit=limit) if e.rule_id in notif_rule_ids]
+
+    # AI 判读与响应建议（P0-2）：event_id → (verdict, reason)
+    triage_by_event: dict[int, tuple[str, str]] = {}
+    try:
+        from sqlalchemy import select as _sel
+
+        from app.core.db import get_session_factory
+        from app.models.agent import AgentTriage
+
+        ids = [e.id for e in events]
+        if ids:
+            with get_session_factory()() as db:
+                rows = db.execute(
+                    _sel(AgentTriage).where(AgentTriage.event_id.in_(ids))
+                ).scalars().all()
+                for t in rows:
+                    triage_by_event[t.event_id] = (t.verdict, t.reason or "")
+    except Exception:  # noqa: BLE001  判读缺失 → body 退化为基础文本
+        log.exception("notifications: triage merge failed")
+
     items: list[dict] = []
-    for e in repo.list_events(limit=limit):
-        if e.rule_id not in notif_rule_ids:
-            continue
+    for e in events:
         snap = e.snapshot if isinstance(e.snapshot, dict) else {}
         if isinstance(e.snapshot, str):
             try:
@@ -89,6 +112,12 @@ def _alert_items(repo: AlertRepository, limit: int) -> list[dict]:
         category = "risk" if kind == "signal_health" else "opportunity"
         # 方向级事件（falsify）symbol 是占位 "000000"，不进标题（占位代码泄漏到 UI）
         sym_part = f" {e.symbol}" if e.symbol and e.symbol != "000000" else ""
+        body = text or "（无正文）"
+        # P0-2：AI 盘中分析合入 body（判读结论 + 响应建议）
+        tri = triage_by_event.get(e.id)
+        if tri:
+            verdict_label = {"notify": "提醒", "ignore": "已降噪", "escalate": "需关注"}.get(tri[0], tri[0])
+            body = f"{body}\nAI 判读（{verdict_label}）：{tri[1]}"
         items.append(
             {
                 "id": f"alert-{e.id}",
@@ -97,7 +126,7 @@ def _alert_items(repo: AlertRepository, limit: int) -> list[dict]:
                 "session": _session_of(bj) if bj else "intraday",
                 "ts": bj.isoformat(sep=" ") if bj else None,
                 "title": f"【{direction or '盘中跟踪'}】{sym_part} {kind_label}".strip(),
-                "body": text or "（无正文）",
+                "body": body,
                 "symbol": e.symbol if e.symbol and e.symbol != "000000" else None,
                 "url": None,
                 "score": None,
