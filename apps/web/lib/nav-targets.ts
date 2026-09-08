@@ -21,7 +21,7 @@ export const NAV_ALLOWED_PATHS = [
   "/tape",
   "/market",
   "/hunting",
-  "/research",
+  "/agent", // 2026-09-08：研究页下线，复盘/预警并入 AI 控制台
 ] as const;
 
 /** 入口构造器。参数缺失时落到该板块的默认视图，不报错。 */
@@ -47,9 +47,11 @@ export const NAV_TARGETS = {
   picks: () => "/hunting?tag=pick",
   picks_review: () => "/hunting?review=1&tag=pick",
   hunting: () => "/hunting",
-  research_backtest: () => "/research?tab=backtest",
-  research_alerts: () => "/research?tab=alerts",
-  research_review: (date?: string) => `/research?tab=review${date ? `&date=${encodeURIComponent(date)}` : ""}`,
+  // 2026-09-08 研究页下线：键名保留（助手/既有深链兼容），落点改指 AI 控制台。
+  // 回测取消（research_backtest 落到任务中心，回测能力由任务形态调用）
+  research_backtest: () => "/agent?tab=tasks",
+  research_alerts: () => "/agent?tab=alerts",
+  research_review: (date?: string) => `/agent?tab=review${date ? `&date=${encodeURIComponent(date)}` : ""}`,
   intraday: () => "/hunting?tag=watch",
   intraday_brief: () => "/hunting?sec=brief",
   intraday_opportunity: () => "/hunting?sec=opportunity",
@@ -163,8 +165,8 @@ export const NAV_LABELS: Record<NavKey, string> = {
   picks: "每日精选",
   picks_review: "选股复盘",
   hunting: "猎场",
-  research_backtest: "策略回测",
-  research_alerts: "预警规则",
+  research_backtest: "任务中心", // 回测取消：落点改指任务中心（能力由任务形态提供）
+  research_alerts: "提醒与告警",
   research_review: "复盘报告",
   intraday: "盘中跟踪",
   intraday_brief: "盘前简报",

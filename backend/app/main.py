@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.routes import agent as agent_route
 from app.api.routes import backtest as backtest_route
 from app.api.routes import health as health_route
 from app.api.routes import market as market_route
@@ -215,6 +216,16 @@ async def lifespan(app: FastAPI):
         state=app.state,
     )
     app.state.review = review_svc
+
+    # AI 控制台运行时（任务执行器需要 state 上的服务）+ 启动对账：
+    # 残留 running/queued 任务标为 failed（进程重启=任务已中断，不假装还在跑）
+    from app.services.agent_tasks import init_agent_runtime, reconcile_on_startup
+
+    init_agent_runtime(app)
+    with contextlib.suppress(Exception):
+        interrupted = reconcile_on_startup()
+        if interrupted:
+            log.warning("agent tasks interrupted by restart: %d 条已标 failed", interrupted)
 
     review_stop = asyncio.Event()
     review_task = None
@@ -568,6 +579,7 @@ app.include_router(news_route.router, prefix="/api")
 app.include_router(theme_catalog_route.router, prefix="/api")
 app.include_router(events_route.router, prefix="/api")
 app.include_router(real_position_route.router, prefix="/api")
+app.include_router(agent_route.router, prefix="/api")  # AI 控制台（任务中心/审计）
 app.include_router(picks_route.router, prefix="/api")
 app.include_router(picks_intraday_route.router, prefix="/api")
 app.include_router(assistant_route.router, prefix="/api")

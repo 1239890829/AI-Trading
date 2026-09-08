@@ -42,7 +42,8 @@ describe("buildNav", () => {
     expect(buildNav("limitup")).toBe("/tape?tab=limitup");
     expect(buildNav("longhu")).toBe("/tape?tab=longhu");
     expect(buildNav("market_fund")).toBe("/market?tab=fund");
-    expect(buildNav("research_review")).toBe("/research?tab=review");
+    // 2026-09-08 研究页下线：复盘落点改指 AI 控制台
+    expect(buildNav("research_review")).toBe("/agent?tab=review");
     expect(buildNav("intraday_brief")).toBe("/hunting?sec=brief");
     expect(buildNav("picks")).toBe("/hunting?tag=pick");
     expect(buildNav("intraday")).toBe("/hunting?tag=watch");
@@ -51,7 +52,7 @@ describe("buildNav", () => {
 
   it("带日期/题材参数时正确编码", () => {
     expect(buildNav("limitup", "2026-09-04")).toBe("/tape?tab=limitup&date=2026-09-04");
-    expect(buildNav("research_review", "2026-09-04")).toBe("/research?tab=review&date=2026-09-04");
+    expect(buildNav("research_review", "2026-09-04")).toBe("/agent?tab=review&date=2026-09-04");
     expect(buildNav("intraday_theme", "存储芯片")).toBe(
       `/hunting?theme=${encodeURIComponent("存储芯片")}`,
     );
@@ -73,7 +74,7 @@ describe("navUrlForAlias", () => {
   it("命中无参别名返回 URL", () => {
     expect(navUrlForAlias("涨停池")).toBe("/tape?tab=limitup");
     expect(navUrlForAlias("龙虎榜")).toBe("/tape?tab=longhu");
-    expect(navUrlForAlias("复盘报告")).toBe("/research?tab=review");
+    expect(navUrlForAlias("复盘报告")).toBe("/agent?tab=review");
   });
 
   it("需要参数的别名不参与无参匹配（避免跳到没有标的的空页）", () => {

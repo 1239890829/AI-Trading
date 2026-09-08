@@ -38,7 +38,7 @@ export function originLabel(from: string | null): string | null {
     "/tape": "盘面",
     "/market": "市场",
     "/picks": "每日精选", // 同上
-    "/research": "研究",
+    "/agent": "AI 控制台",
   };
   return labels[path] ?? null;
 }

@@ -2,33 +2,36 @@
 
 import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { BacktestTab } from "@/components/research/backtest-tab";
+
+import { TaskCenter } from "@/components/agent/task-center";
 import { AlertsTab } from "@/components/research/alerts-tab";
 import { ReviewTab } from "@/components/research/review-tab";
 import { FadeSwap, PageSkeletonFallback } from "@/components/ui/loading";
 
 /**
- * 研究页（2026-09-01 系统重构，docs/architecture-redesign.md §一.1.3）：
- * 回测 / 预警 / 复盘 等低频研究工具的折叠入口，不占一级导航黄金位——
- * 预警的价值在"触发时通知"，回测的价值在"策略验证"，都不需要每天打开。
+ * AI 控制台（docs/ai-agent-console-plan.md P0）。
  *
- * 复盘双轨：每日精选页展示 picks 归因（当日操作层面）；本页复盘 tab 展示
- * 方法论闭环（报告→改进项→采纳统计，review.py 6 端点，评审 A2）。
+ * 定位：助手从"只问答"升级为"大脑 + 执行层"的系统侧面板——任务、复盘、告警、
+ * 历史统一收纳在这里；悬浮球保留轻量问答与即时提醒。
+ *
+ * 2026-09-08 研究页（/research）下线：回测取消（后端引擎保留，改由任务中心
+ * 以任务形态调用），复盘与预警原样迁入本面板（避免能力空窗）；AI 判读层、
+ * 数据源、参数配置、审计视图为 P1/P2（见方案 §3.5）。
  */
 
 const TABS = [
-  { key: "backtest", label: "回测" },
-  { key: "alerts", label: "预警" },
+  { key: "tasks", label: "任务中心" },
   { key: "review", label: "复盘" },
+  { key: "alerts", label: "提醒与告警" },
 ] as const;
 
 type TabKey = (typeof TABS)[number]["key"];
 
-function ResearchInner() {
+function AgentInner() {
   const router = useRouter();
   const sp = useSearchParams();
   const raw = sp.get("tab");
-  const tab: TabKey = TABS.some((t) => t.key === raw) ? (raw as TabKey) : "backtest";
+  const tab: TabKey = TABS.some((t) => t.key === raw) ? (raw as TabKey) : "tasks";
   // 复盘深链日期（助手跳转 / 分享）：只接受 YYYY-MM-DD，非法值当没传
   const rawDate = sp.get("date");
   const reviewDate = rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : undefined;
@@ -36,15 +39,15 @@ function ResearchInner() {
   function switchTab(k: TabKey) {
     const p = new URLSearchParams(sp.toString());
     p.set("tab", k);
-    router.replace(`/research?${p.toString()}`, { scroll: false });
+    router.replace(`/agent?${p.toString()}`, { scroll: false });
   }
 
   return (
     <main className="mx-auto flex h-full w-full max-w-[1600px] flex-col px-4 py-3">
       <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-4">
-          <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">研究</h1>
-          <nav className="flex items-center gap-1" aria-label="研究子页签">
+          <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">AI 控制台</h1>
+          <nav className="flex items-center gap-1" aria-label="AI 控制台子页签">
             {TABS.map((t) => (
               <button
                 key={t.key}
@@ -62,23 +65,23 @@ function ResearchInner() {
           </nav>
         </div>
         <span className="hidden text-xs text-zinc-400 lg:inline">
-          低频研究工具 · 复盘归因见每日精选页 · 不构成买卖建议
+          大脑 + 执行层 · 首批仅 L0 只读/生成任务 · 每次执行全程留痕 · 不构成买卖建议
         </span>
       </div>
 
       <FadeSwap swapKey={tab} className="min-h-0 flex-1">
-        {tab === "backtest" && <BacktestTab />}
-        {tab === "alerts" && <AlertsTab />}
+        {tab === "tasks" && <TaskCenter />}
         {tab === "review" && <ReviewTab focusDate={reviewDate} />}
+        {tab === "alerts" && <AlertsTab />}
       </FadeSwap>
     </main>
   );
 }
 
-export default function ResearchPage() {
+export default function AgentPage() {
   return (
-    <Suspense fallback={<PageSkeletonFallback label="研究页加载中" />}>
-      <ResearchInner />
+    <Suspense fallback={<PageSkeletonFallback label="AI 控制台加载中" />}>
+      <AgentInner />
     </Suspense>
   );
 }

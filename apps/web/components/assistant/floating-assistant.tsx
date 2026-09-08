@@ -31,7 +31,7 @@ const PAGE_TITLES: Record<string, string> = {
   "/tape": "盘面",
   "/market": "市场",
   "/hunting": "猎场",
-  "/research": "研究",
+  "/agent": "AI 控制台",
 };
 
 const SUGGESTIONS = [

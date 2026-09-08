@@ -1964,3 +1964,87 @@ export interface ArticleContent {
 export async function getNewsContent(url: string): Promise<ArticleContent> {
   return (await getJson<ArticleContent>(`/api/news/content?url=${encodeURIComponent(url)}`, 20_000)).data;
 }
+
+// ============================================================================
+// AI 控制台（大脑 + 执行层，docs/ai-agent-console-plan.md）
+// ============================================================================
+
+/** 任务状态机：queued → running → succeeded/failed/canceled；needs_confirm 为 L1/L2 预览态（P1 接入） */
+export type AgentTaskStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "canceled"
+  | "needs_confirm";
+
+/** 任务步骤轨迹（可追溯三件套第一件：做过什么、依据什么、花了多久） */
+export interface AgentTaskStep {
+  index: number;
+  name: string;
+  input_summary: string;
+  output_summary: string;
+  duration_ms: number;
+  ok: boolean;
+  llm?: { model: string; prompt_hash: string; enhanced: boolean };
+}
+
+export interface AgentTask {
+  id: string;
+  type: string;
+  status: AgentTaskStatus;
+  params: Record<string, unknown>;
+  steps: AgentTaskStep[];
+  result_ref: { kind: string; id: string } | null;
+  error: { code: string; message: string; retryable: boolean } | null;
+  risk_level: "L0" | "L1" | "L2";
+  created_by: string;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface AgentTaskType {
+  type: string;
+  label: string;
+  risk: "L0" | "L1" | "L2";
+  desc: string;
+}
+
+export interface AgentAuditEntry {
+  id: number;
+  actor: string;
+  action: string;
+  target: string;
+  before: unknown;
+  after: unknown;
+  task_id: string | null;
+  rollback_ref: string | null;
+  at: string | null;
+}
+
+export async function getAgentTaskTypes(): Promise<AgentTaskType[]> {
+  return (await getJson<AgentTaskType[]>("/api/agent/task-types")).data;
+}
+
+export async function getAgentTasks(type?: string): Promise<AgentTask[]> {
+  const q = type ? `?type=${encodeURIComponent(type)}` : "";
+  return (await getJson<AgentTask[]>(`/api/agent/tasks${q}`)).data;
+}
+
+export async function getAgentTask(id: string): Promise<AgentTask> {
+  return (await getJson<AgentTask>(`/api/agent/tasks/${id}`)).data;
+}
+
+export async function createAgentTask(type: string, params: Record<string, unknown> = {}): Promise<AgentTask> {
+  return (await sendJson<AgentTask>("/api/agent/tasks", "POST", { type, params })).data;
+}
+
+export async function cancelAgentTask(id: string): Promise<AgentTask> {
+  return (await sendJson<AgentTask>(`/api/agent/tasks/${id}/cancel`, "POST")).data;
+}
+
+export async function getAgentAudit(taskId?: string): Promise<AgentAuditEntry[]> {
+  const q = taskId ? `?task_id=${encodeURIComponent(taskId)}` : "";
+  return (await getJson<AgentAuditEntry[]>(`/api/agent/audit${q}`)).data;
+}
