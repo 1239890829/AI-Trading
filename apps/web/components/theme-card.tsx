@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { fmt, fmtAmount, fmtHeat, pctColor, pctText } from "@/lib/format";
 import type { HotTheme, ThemeStrengthRow } from "@/lib/api";
 import { tapeUrl } from "@/lib/routing";
 import { StockLink } from "@/components/stock-link";
+import { ConceptDetailModal } from "@/components/concept-detail-modal";
 import type { ThemeCard as ThemeCardType } from "@/types/market";
 
 /**
@@ -194,6 +196,7 @@ export function ThemeCardView({
 }) {
   const p = card.performance;
   const board = card.board;
+  const [detailCode, setDetailCode] = useState<string | null>(null);
 
   const ladderByBoard = new Map<number, typeof card.ladder>();
   for (const r of card.ladder) {
@@ -224,6 +227,22 @@ export function ThemeCardView({
           {tier}
         </Badge>
         <h3 className="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">{card.theme}</h3>
+
+        {/* 概念详情入口（09-08 用户需求）：打开官方成分全量弹窗（默认「全部成分」
+            tab + 官方归因细分 tab）；仅在有目录映射时显示，无映射缺省 */}
+        {card.catalog_code && (
+          <button
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setDetailCode(card.catalog_code!);
+            }}
+            className="shrink-0 rounded border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-400 transition-colors hover:border-sky-400 hover:text-sky-600 dark:border-zinc-700 dark:hover:text-sky-300"
+            title="查看官方成分全量（与同花顺逐符号一致）与涨停细分"
+          >
+            成分 ↗
+          </button>
+        )}
 
         {/* 官方概念挂靠（09-08「代糖/玉米搜不到」修复）：簇按涨停原因标签聚合，
             名称可能与同花顺概念板块不同（功能糖 vs 代糖概念/玉米）；成分重叠 ≥2
@@ -586,6 +605,10 @@ export function ThemeCardView({
           </div>
         </div>
       </details>
+
+      {detailCode && (
+        <ConceptDetailModal code={detailCode} name={card.theme} onClose={() => setDetailCode(null)} />
+      )}
     </section>
   );
 }

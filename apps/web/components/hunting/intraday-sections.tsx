@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 
+import { ConceptDetailModal } from "@/components/concept-detail-modal";
 import { WatchCard } from "@/components/picks/watch-card";
 import { StockLink } from "@/components/stock-link";
 import { pctColor, pctText, timeText } from "@/lib/format";
@@ -66,6 +68,7 @@ export function ThemeCardView({
   onToggle: () => void;
 }) {
   const stage = t.stage ?? "未知";
+  const [detailOpen, setDetailOpen] = useState(false);
   return (
     <div className="rounded-xl border border-zinc-200 p-3 text-xs transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900/50">
       {/* L10（切片 E）：题材页 ↗ 与展开按钮同级（button 内不能嵌 a），点题材名仍是展开/收起 */}
@@ -107,7 +110,19 @@ export function ThemeCardView({
         >
           题材页 ↗
         </Link>
+        {t.catalog_code && (
+          <button
+            onClick={() => setDetailOpen(true)}
+            className="shrink-0 rounded border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-400 transition-colors hover:border-sky-400 hover:text-sky-600 dark:border-zinc-700 dark:hover:text-sky-300"
+            title="查看官方成分全量（与同花顺逐符号一致）与涨停细分"
+          >
+            成分 ↗
+          </button>
+        )}
       </div>
+      {detailOpen && t.catalog_code && (
+        <ConceptDetailModal code={t.catalog_code} name={t.theme} onClose={() => setDetailOpen(false)} />
+      )}
       {t.risks.length > 0 && !expanded && (
         <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-300" title={t.risks.join("；")}>
           ⚠ {t.risks[0]}

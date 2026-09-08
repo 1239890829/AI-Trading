@@ -332,13 +332,109 @@ async def theme_members(
     }
 
 
+@router.get("/themes/catalog/{code}/detail")
+async def theme_catalog_detail(
+    code: str,
+    request: Request,
+    refresh: bool = Query(default=False),
+    svc: ThemeCatalogService = Depends(get_service),
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    """概念详情（2026-09-08 用户需求，参考同花顺概念页设计）：
+
+    - **全部成分**（默认）：官方成分**全量**（已保证与同花顺逐符号一致），带
+      当日行情与涨停标注——补「只有涨停聚合簇、看不到概念全貌」的缺口。
+    - **细分 tab**：当日涨停成员按 **ths 涨停原因官方标签**（parse_theme_tags
+      原始标签，逐字不经改写）分组——同花顺官方归因口径。
+    - 官方 API 无二级概念层级（四类 tag 已实测穷尽，见 09-08 调研），
+      子概念成分待数据源支持后接入，此处不做关键词自创分组。
+    """
+    code = code.strip()
+    if "/" in code or "\\" in code or ".." in code:
+        raise HTTPException(status_code=400, detail=f"非法题材代码：{code!r}")
+    if refresh or not svc.get_members(code):
+        try:
+            await svc.sync_members(code)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"成分同步失败：{exc}") from exc
+
+    cache = cache_on(request.app.state, "themes.catalog.detail", 60, maxsize=16)
+    hit, payload = cache.get(code)
+    if hit:
+        return payload
+
+    rows = svc.get_members(code)
+    theme = next((t for t in svc.get_catalog(limit=1000) if t.code == code), None)
+    symbols = [r.symbol for r in rows]
+
+    # 当日行情批量增强（quote_enrich 分批，强概念 3865 只也安全）
+    change_by_symbol: dict[str, dict] = {}
+    try:
+        from app.services.quote_enrich import fetch_quotes_batched
+
+        found = await fetch_quotes_batched(hub, symbols)
+        change_by_symbol = {
+            q.symbol: {"change_pct": q.change_pct, "price": q.price, "live_name": q.name}
+            for q in found.values()
+        }
+    except Exception as exc:  # noqa: BLE001  行情增强失败 → 成分仍可用（三态降级）
+        log.warning("concept detail quotes failed %s: %s", code, exc)
+
+    # 当日涨停归因（ths 官方 reason，逐字口径）
+    reason_by_symbol: dict[str, str] = {}
+    try:
+        from app.api.routes.market import _default_trade_date_async
+
+        provider = hub.provider
+        pool = await provider.get_limit_up_pool(await _default_trade_date_async(hub))
+        for rec in pool or []:
+            if rec.symbol:
+                reason_by_symbol[rec.symbol] = rec.reason or ""
+    except Exception as exc:  # noqa: BLE001  归因缺失 → 细分 tab 缺席（不臆造）
+        log.warning("concept detail limit-up pool failed %s: %s", code, exc)
+
+    members: list[dict] = []
+    tag_groups: dict[str, list[str]] = {}
+    for r in rows:
+        q = change_by_symbol.get(r.symbol, {})
+        reason = reason_by_symbol.get(r.symbol, "")
+        tags = parse_theme_tags(reason)
+        members.append({
+            "symbol": r.symbol,
+            "name": r.name,
+            "change_pct": q.get("change_pct"),
+            "price": q.get("price"),
+            "limit_up": (q.get("change_pct") or 0) >= 9.7,
+            "reason": reason or None,
+            "tags": tags,
+        })
+        # 细分分组：仅当日涨停成员（官方归因标签直通）
+        if reason:
+            for t in tags:
+                tag_groups.setdefault(t, []).append(r.symbol)
+
+    payload = {
+        "data": {
+            "code": code,
+            "name": theme.name if theme else code,
+            "total": len(members),
+            "limit_up_count": sum(1 for m in members if m["limit_up"]),
+            "members": members,
+            "tag_groups": [{"tag": t, "symbols": syms} for t, syms in
+                           sorted(tag_groups.items(), key=lambda kv: -len(kv[1]))],
+            "meta_note": "成分=同花顺官方目录（逐符号一致）；细分=当日涨停成员的 ths 涨停原因官方标签",
+        },
+        "meta": {},
+    }
+    cache.set(code, payload)
+    return payload
+
+
 class ThemeSyncIn(BaseModel):
     """同步请求：不传 code 只同步目录；传 code 额外同步该题材成分；max_stale 补齐过期成分。"""
 
     code: str | None = None
     max_stale: int = Query(default=0, ge=0, le=100)
-
-
 @router.post("/themes/sync", dependencies=[Depends(require_write_token)])
 async def theme_sync(body: ThemeSyncIn, svc: ThemeCatalogService = Depends(get_service)) -> dict:
     try:

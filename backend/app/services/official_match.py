@@ -86,5 +86,7 @@ def attach_official(request, themes_list: list[dict]) -> None:
             ]
             matches.sort(key=lambda x: -x["hits"])
             card["official_matches"] = matches[:MAX_MATCHES]
+            # 弹窗入口用的目录代码：优先最高命中的官方概念，簇名精确同名次之
+            card["catalog_code"] = (matches[0]["code"] if matches else None) or code
     except Exception:  # noqa: BLE001 - 挂靠失败不影响看板
         log.exception("attach official matches failed")

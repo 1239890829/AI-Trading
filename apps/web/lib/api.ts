@@ -1691,6 +1691,8 @@ export interface OpportunityTheme {
   stocks: OpportunityStock[];
   /** 簇→官方概念挂靠（09-08「代糖/玉米搜不到」修复）：成分重叠 ≥2、过滤大概念，命中降序 ≤3 */
   official_matches?: { code: string; name: string; hits: number }[];
+  /** 概念详情弹窗入口的目录代码（最高命中官方概念 > 簇名精确同名） */
+  catalog_code?: string | null;
 }
 
 export interface IntradayOpportunities {
@@ -2072,6 +2074,34 @@ export async function ackAgentTriage(id: number): Promise<boolean> {
 export async function getAgentAudit(taskId?: string): Promise<AgentAuditEntry[]> {
   const q = taskId ? `?task_id=${encodeURIComponent(taskId)}` : "";
   return (await getJson<AgentAuditEntry[]>(`/api/agent/audit${q}`)).data;
+}
+
+// ============================================================================
+// 概念详情（2026-09-08 用户需求，参考同花顺概念页：全部成分 + 官方归因细分）
+// ============================================================================
+
+export interface ConceptMember {
+  symbol: string;
+  name: string;
+  change_pct: number | null;
+  price: number | null;
+  limit_up: boolean;
+  reason: string | null;
+  tags: string[];
+}
+
+export interface ConceptDetail {
+  code: string;
+  name: string;
+  total: number;
+  limit_up_count: number;
+  members: ConceptMember[];
+  tag_groups: { tag: string; symbols: string[] }[];
+  meta_note: string;
+}
+
+export async function getConceptDetail(code: string): Promise<ConceptDetail> {
+  return (await getJson<ConceptDetail>(`/api/themes/catalog/${encodeURIComponent(code)}/detail`)).data;
 }
 
 // ---- 参数配置（P1-B：变更单 + 回滚 + 证据门槛）----

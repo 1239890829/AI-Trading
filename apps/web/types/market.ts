@@ -214,6 +214,8 @@ export interface ThemeCard {
    * （命中 ≥2 只，过滤成分 >300 的大概念），命中数降序 ≤3 个；无挂靠缺省。
    */
   official_matches?: { code: string; name: string; hits: number }[];
+  /** 弹窗入口的目录代码：最高命中官方概念 > 簇名精确同名；null = 无目录映射 */
+  catalog_code?: string | null;
 }
 
 export interface ThemeBoardPayload {
