@@ -4,11 +4,11 @@
 - GET  /api/events/impact                    影响力视图：四级分类 + L1/L2/L3 分级（§六.4 拍板）
 - GET  /api/events/{id}                      事件详情（含方向映射行）
 - GET  /api/events/{id}/stocks               标的池：方向题材 → 官方成分反查 + override
+- GET  /api/events/symbol/{symbol}           个股相关活跃事件（详情页事件标签）
 - POST /api/events                           手动注册单条事件（写鉴权）
-- POST /api/events/extract                   批量注册（items[]，写鉴权）
-- POST /api/events/collect                   自选新闻批量抽取（写鉴权）
-- POST /api/events/{id}/review               人工裁决 resolved/rejected（写鉴权）
 
+已删（2026-09-08 审查 P0-4，零消费方）：/events/extract、/events/collect（调度器直调
+collect_news_events 函数）、/events/{id}/review。
 红线：标的池只给「关联 + 依据 + 失效条件」，不构成买卖建议。
 """
 
@@ -313,14 +313,6 @@ class EventItemIn(BaseModel):
     is_announcement: bool = False
 
 
-class EventExtractIn(BaseModel):
-    items: list[EventItemIn] = Field(min_length=1, max_length=50)
-
-
-class EventReviewIn(BaseModel):
-    status: str  # resolved / rejected / active
-
-
 @router.post("/events", status_code=201, dependencies=[Depends(require_write_token)])
 async def register_event(body: EventItemIn, request: Request, store: EventStore = Depends(get_store)) -> dict:
     row, created = store.register(
@@ -335,24 +327,8 @@ async def register_event(body: EventItemIn, request: Request, store: EventStore 
     return {"data": {**_serialize(row, store.directions_of(row.id)), "created": created}, "meta": {}}
 
 
-@router.post("/events/extract", dependencies=[Depends(require_write_token)])
-async def extract_events(body: EventExtractIn, request: Request, store: EventStore = Depends(get_store)) -> dict:
-    theme_names = _theme_names(request.app.state)
-    created = 0
-    duplicated = 0
-    for item in body.items:
-        row, is_new = store.register(
-            item.title,
-            source=item.source,
-            url=item.url,
-            published_at=_parse_published(item.published_at),
-            source_symbol=item.source_symbol,
-            is_announcement=item.is_announcement,
-            theme_names=theme_names,
-        )
-        created += 1 if is_new else 0
-        duplicated += 0 if is_new else 1
-    return {"data": {"created": created, "duplicated": duplicated, "received": len(body.items)}, "meta": {}}
+# POST /events/extract 与 /events/{id}/review 已删（2026-09-08 审查 P0-4：
+# 前端与 scripts 零调用；批量抽取走 collect_news_events，人工裁决无消费方）。
 
 
 async def collect_news_events(app_state, include_limit_up: bool = False) -> dict:
@@ -465,25 +441,5 @@ async def collect_news_events(app_state, include_limit_up: bool = False) -> dict
     return {"symbols": len(symbols), "fetched": fetched, "created": created, "duplicated": duplicated}
 
 
-@router.post("/events/collect", dependencies=[Depends(require_write_token)])
-async def collect_events(request: Request, include_limit_up: bool = Query(default=False)) -> dict:
-    """手动触发一轮采集（写鉴权）；定时调度直接调 collect_news_events，不走 HTTP。
-
-    include_limit_up 调试/复盘用途：与调度器的非盘中轮次同路径，把最近交易日
-    涨停股 Top30 纳入采集（R6 校验规则，2026-09-01）。
-    """
-    return {
-        "data": await collect_news_events(request.app.state, include_limit_up=include_limit_up),
-        "meta": {},
-    }
-
-
-@router.post("/events/{event_id}/review", dependencies=[Depends(require_write_token)])
-async def review_event(event_id: int, body: EventReviewIn, store: EventStore = Depends(get_store)) -> dict:
-    try:
-        row = store.set_status(event_id, body.status)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if row is None:
-        raise HTTPException(status_code=404, detail="事件不存在")
-    return {"data": _serialize(row, store.directions_of(event_id)), "meta": {}}
+# POST /events/collect 路由壳已删（2026-09-08 审查 P0-4）：collect_news_events
+# 由盘后调度器直接函数调用，HTTP 壳无用武之地；调试用 pytest 直接调函数。

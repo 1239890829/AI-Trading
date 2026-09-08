@@ -1002,8 +1002,9 @@ async def auction_premium(
 
 
 # /adjustment-events/{symbol} 端点已删除（2026-09-07 健康度审查 C1：全仓
-# 0 引用的死端点；底层 provider 方法 get_adjustment_events 仍被
-# minute_backtest 使用，保留）。
+# 0 引用的死端点；2026-09-08 P0-3 连带删除唯一消费方 minute_backtest 模块。
+# provider 方法 get_adjustment_events 保留——复权事件流是数据能力层的
+# marketdb 因子推算地基，th 端点存在即保留接入能力）。
 
 
 @router.get("/boards")

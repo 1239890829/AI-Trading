@@ -1,9 +1,42 @@
-/** 盘口 / 逐笔 共用视图（右列 book 与 trades 页签的内容区）。纯展示。 */
+/** 盘口 / 逐笔 共用视图（右列 book 与 trades 页签的内容区）。纯展示。
+ *  三态纪律（2026-09-08 审查 F1）：undefined=尚未拉到 → Skeleton 占位；
+ *  null/[] =拉过且确认无 → 空态文案。此前切股重挂载窗口期把"加载中"渲染成
+ *  "盘口数据不可用（免费源仅盘中提供）"——把"还没拉到"说成"不可用"是误导。 */
 import type { OrderBook, Trade } from "@/types/market";
 import { fmt, fmtVolume, timeText } from "@/lib/format";
+import { Skeleton } from "@/components/ui/loading";
 
-export function BookTradesView({ book, trades, showBook }: { book: OrderBook | null; trades: Trade[]; showBook: boolean }) {
+function BookSkeleton() {
+  return (
+    <div className="space-y-1 px-3 py-2" aria-hidden>
+      {Array.from({ length: 10 }, (_, i) => (
+        <div key={i} className="flex items-center gap-4">
+          <Skeleton className="h-3 w-8" />
+          <Skeleton className="h-3 flex-1" />
+          <Skeleton className="h-3 w-14" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TradesSkeleton() {
+  return (
+    <div className="space-y-1.5 px-3 py-2" aria-hidden>
+      {Array.from({ length: 8 }, (_, i) => (
+        <div key={i} className="flex items-center gap-4">
+          <Skeleton className="h-3 w-14" />
+          <Skeleton className="h-3 flex-1" />
+          <Skeleton className="h-3 w-12" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function BookTradesView({ book, trades, showBook }: { book: OrderBook | null | undefined; trades: Trade[] | undefined; showBook: boolean }) {
   if (showBook) {
+    if (book === undefined) return <BookSkeleton />;
     return book ? (
       <table className="w-full text-sm">
         <tbody>
@@ -27,6 +60,7 @@ export function BookTradesView({ book, trades, showBook }: { book: OrderBook | n
       <p className="px-3 py-10 text-center text-xs text-zinc-400">盘口数据不可用（免费源仅盘中提供）</p>
     );
   }
+  if (trades === undefined) return <TradesSkeleton />;
   return trades.length > 0 ? (
     <table className="w-full text-sm">
       <tbody>

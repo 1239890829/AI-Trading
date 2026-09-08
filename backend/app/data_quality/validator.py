@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone
 
 from app.market import price_rules
 from app.schemas.market import OrderBook, Quote, Quality, utcnow
@@ -166,11 +166,3 @@ def mark_stale(quote: Quote, reason: str) -> Quote:
     quote.quality = Quality.stale
     quote.quality_reasons = [reason]
     return quote
-
-
-def is_future(ts: datetime | None) -> bool:
-    if ts is None:
-        return False
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    return ts > utcnow() + _FUTURE_TOLERANCE

@@ -1,3 +1,11 @@
+# 候选因子登记册（原 `backend/app/factors/candidates.py`，2026-09-08 审查 P0-3 迁出）
+
+> 迁移原因：登记册零代码引用、纯文档职责，放在 `app/` 会误导读者以为有运行时消费方。
+> 内容原样保留（Python 源码形式的数据定义），治理流程见 `factor-lifecycle-governance.md`。
+
+原 docstring：
+
+```python
 """候选因子登记册（docs/factor-lifecycle-governance.md §2.3）。
 
 定位：环节①「挖掘」与环节⑥「更新」的承接物——所有从外部来源/系统内准因子
@@ -16,8 +24,11 @@
 - 数据接口候选：HiThink-Tech/Financial-API（财报缺口解锁钥匙）、akshare
 - 其余 15 仓为数据接口/交易平台/LLM 应用/无关，无固定因子公式（详见制度文档 §2.1）
 """
-from __future__ import annotations
+```
 
+以下为原文件的候选定义数据（语义不变，原样保留）：
+
+```python
 from dataclasses import dataclass
 
 
@@ -237,3 +248,5 @@ ALL_CANDIDATES: tuple[CandidateDef, ...] = (
 )
 
 CANDIDATE_BY_NAME: dict[str, CandidateDef] = {c.name: c for c in ALL_CANDIDATES}
+
+```

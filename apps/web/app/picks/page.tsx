@@ -17,6 +17,7 @@ import {
   type StandAsideGate,
 } from "@/lib/api";
 import { PickCard, StandAsideBanner } from "@/components/picks/pick-card";
+import { CardListSkeleton } from "@/components/ui/loading";
 import { fmt, pctColor, pctText } from "@/lib/format";
 
 /**
@@ -51,6 +52,9 @@ function PicksInner() {
     role_performance?: { role: string; count: number; win_rate: number; avg_excess: number }[];
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // pending 三态哨兵（审查 F2/R2）：loaded=false 期间渲染骨架而非"尚无组合"——
+  // 此前 data=null 与确认空同渲染空态文案，数据到达整块替换（空态抢跑闪跳）。
+  const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   // 「生成复盘」独立忙碌态：与「生成/刷新组合」共用 busy 会让两个按钮一起转圈，
   // 且复盘按钮没有 busy 文案分支时，点击后界面零变化 = 用户感知"点了没反应"。
@@ -77,6 +81,8 @@ function PicksInner() {
       setError(null);
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setLoaded(true); // 成败都算"拉过"：失败有 error 提示，不能永远停在骨架
     }
   }, []);
 
@@ -175,9 +181,11 @@ function PicksInner() {
       )}
       {data?.note && <div className="shrink-0 text-xs text-zinc-400">{data.note}</div>}
 
-      {/* 瀑布流卡片：CSS columns，每行多卡自适应 */}
+      {/* 瀑布流卡片：CSS columns，每行多卡自适应（loaded 前渲染骨架，空态文案不抢跑） */}
       <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-        {items.length === 0 ? (
+        {!loaded ? (
+          <CardListSkeleton count={3} className="mt-2" />
+        ) : items.length === 0 ? (
           <p className="py-12 text-center text-sm text-zinc-400">
             尚无精选组合。点右上「生成/刷新组合」跑一次五维评分管线
             <br />

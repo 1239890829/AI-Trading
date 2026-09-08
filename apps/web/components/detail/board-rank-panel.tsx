@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { getBoards, type BoardRow } from "@/lib/api";
 import { fmtAmount, pctColor, pctText } from "@/lib/format";
+import { Skeleton } from "@/components/ui/loading";
 
 /** 板块涨幅榜（指数详情右列"板块"标签）：行业/概念切换，按涨跌幅降序。
  *  复用 /api/boards（新浪闪电口径，后端 60s 缓存），零新增数据源。 */
@@ -10,6 +11,8 @@ export function BoardRankPanel({ className }: { className?: string }) {
   const [type, setType] = useState<"hangye" | "concept">("hangye");
   const [rows, setRows] = useState<BoardRow[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // pending 哨兵（审查 F2/R2）：首拉完成前渲染表体骨架，"暂无数据"不抢跑
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -21,6 +24,8 @@ export function BoardRankPanel({ className }: { className?: string }) {
         setError(null);
       } catch (e) {
         if (alive) setError((e as Error).message);
+      } finally {
+        if (alive) setLoaded(true);
       }
     };
     void load();
@@ -80,7 +85,18 @@ export function BoardRankPanel({ className }: { className?: string }) {
                 </td>
               </tr>
             ))}
-            {rows.length === 0 && !error && (
+            {!loaded && rows.length === 0 && !error ? (
+              <tr aria-hidden>
+                <td colSpan={4} className="px-3 py-2">
+                  <div className="space-y-2.5">
+                    {Array.from({ length: 6 }, (_, i) => (
+                      <Skeleton key={i} className="h-4 w-full" />
+                    ))}
+                  </div>
+                </td>
+              </tr>
+            ) : null}
+            {rows.length === 0 && loaded && !error && (
               <tr>
                 <td colSpan={4} className="px-4 py-8 text-center text-zinc-400">
                   暂无数据

@@ -8,7 +8,6 @@ from fastapi import Depends, APIRouter, HTTPException, Query, Request
 from app.api.deps import require_write_token
 from pydantic import BaseModel, Field
 
-from app.review.config import available_versions
 from app.review.methodology import (
     evaluate_historical_effectiveness,
     suggest_methodology_changes,
@@ -16,7 +15,6 @@ from app.review.methodology import (
 from app.review.storage import (
     ALLOWED_STATUSES,
     ActionItemStaleError,
-    compare_reports,
     get_report,
     list_reports,
     update_action_item_status,
@@ -170,30 +168,9 @@ async def list_action_items(
         db.close()
 
 
-@router.get("/review/compare")
-async def review_compare(
-    fro: str = Query(..., alias="from", description="起始交易日 YYYYMMDD"),
-    to: str = Query(..., description="结束交易日 YYYYMMDD"),
-    request: Request = None,
-):
-    """两日报告对比：看变化（数据缺口修复、情绪迁移、改进项处置），而非绝对值。"""
-    svc = _service(request)
-    _parse_trade_date(fro)
-    _parse_trade_date(to)
-    a = get_report(svc.session_factory, fro)
-    b = get_report(svc.session_factory, to)
-    if a is None or b is None:
-        raise HTTPException(
-            status_code=404, detail=f"对比需要两端都有报告：from={fro}({'有' if a else '无'}) to={to}({'有' if b else '无'})"
-        )
-    return {"data": compare_reports(a, b)}
-
-
-@router.get("/review/methodology/versions")
-async def review_versions(request: Request):
-    """可用的方法论版本（data/review/methodology/*.yaml + 代码内默认）。"""
-    return {"data": available_versions()}
-
+# /review/compare 与 /review/methodology/versions 已删（2026-09-08 审查 P0-4：
+# 前端与 scripts 零调用）。compare_reports 存储层函数保留（复盘对比逻辑可能
+# 随猎场板块复用）；available_versions 同理（methodology 配置的读取入口）。
 
 @router.get("/review/effectiveness")
 async def review_effectiveness(

@@ -96,21 +96,10 @@ async def system_caches() -> dict:
     return {"caches": live_caches()}
 
 
-@router.get("/system/provider-capabilities")
-async def provider_capabilities() -> dict:
-    """provider 能力注册表（代码级静态真值）：谁有真实现、谁是恒空占位、谁是单点。
-
-    与 GET /api/system/providers 分工：那边回答"运行时健康"（熔断/延迟/实时
-    降级），本端点回答"代码里谁实现了什么"。single_points 是单点风险清单——
-    唯一 SUPPORTED 源挂掉即无人兜底（ths 涨停原因哨兵之外可扩展的告警选点依据）。
-    """
-    from app.services.provider_capabilities import CAPABILITIES, LEVELS, single_point_methods
-
-    return {
-        "levels": LEVELS,
-        "capabilities": CAPABILITIES,
-        "single_points": single_point_methods(),
-    }
+# /system/provider-capabilities 端点已删（2026-09-08 审查 P0-4：前端零调用）。
+# 能力注册表本身保留（app/services/provider_capabilities.py）——它是
+# provider 方法面的代码级真值 + 单点风险清单（防腐化测试锚定），P2 告警
+# 扩点时直接消费，无需经 HTTP。
 
 
 @router.get("/system/metrics")

@@ -512,12 +512,6 @@ async def _t_events(ctx: ToolContext, **kw) -> str:
     return _clip("\n".join(lines))
 
 
-def _timedelta_hour8():
-    from datetime import timedelta
-
-    return timedelta(hours=8)
-
-
 TOOL_SPECS: dict[str, ToolSpec] = {
     "quotes": ToolSpec("quotes", "批量实时行情快照", "symbols=600519,000001（≤6 只）", _t_quotes),
     "limit_up": ToolSpec("limit_up", "某交易日涨停池", "date=YYYY-MM-DD（可省略=最近交易日）", _t_limit_up),

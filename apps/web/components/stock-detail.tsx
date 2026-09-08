@@ -53,6 +53,7 @@ import { TradePanel, type PaperBundle } from "@/components/detail/trade-panel";
 import { ProfilePanel, type CompanyProfile, type FinRow, type BoardRows } from "@/components/detail/profile-panel";
 import { InfoPanel, type InfoItem } from "@/components/detail/info-panel";
 import { BookTradesView } from "@/components/detail/book-trades-view";
+import { Skeleton } from "@/components/ui/loading";
 import { ReplayChart } from "@/components/replay-chart";
 import { FlowChart, type CapitalFlow } from "@/components/detail/flow-chart";
 import { SpeedPanel } from "@/components/detail/speed-panel";
@@ -147,11 +148,15 @@ export function StockDetailPanel({
   const [bars, setBars] = useState<Kline[]>([]);
   // 停牌判定（UI 缺陷 #1）：随日K 一同返回，非日线为 null（未判定，非"正常"）
   const [tradingStatus, setTradingStatus] = useState<TradingStatusInfo | null>(null);
-  const [book, setBook] = useState<OrderBook | null>(null);
-  const [trades, setTrades] = useState<Trade[]>([]);
+  // 三态数据纪律（2026-09-08 审查 F1，修"加载中闪现错误文案"）：undefined=尚未
+  // 拉到（渲染 Skeleton），null=拉过且确认无（渲染空态文案）——此前 null 身兼
+  // 两职，切股重挂载的窗口期把"加载中"渲染成"盘口不可用/暂无逐笔"等误导文案。
+  const [book, setBook] = useState<OrderBook | null | undefined>(undefined);
+  const [trades, setTrades] = useState<Trade[] | undefined>(undefined);
   const [minutes, setMinutes] = useState<MinutePoint[]>([]);
   const [flow, setFlow] = useState<CapitalFlow | null>(null);
-  const [fins, setFins] = useState<FinRow[] | null>(null);
+  // fins 三态：undefined=加载中（ProfilePanel 骨架），null=确认无/拉取失败
+  const [fins, setFins] = useState<FinRow[] | null | undefined>(undefined);
   const [anns, setAnns] = useState<InfoItem[] | null>(null);
   const [news, setNews] = useState<InfoItem[] | null>(null);
   // digest 数据源三态：非 null = 该侧降级（InfoPanel 显式提示，非静默空列表）
@@ -160,10 +165,12 @@ export function StockDetailPanel({
   const [company, setCompany] = useState<CompanyProfile | null>(null);
   const [fills, setFills] = useState<PaperFill[]>([]);
   const [resetBusy, setResetBusy] = useState(false);
-  const [paper, setPaper] = useState<PaperBundle | null>(null);
+  const [paper, setPaper] = useState<PaperBundle | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [inWatchlist, setInWatchlist] = useState(false);
-  const [quote, setQuote] = useState<Quote | null>(null);
+  // quote 三态：undefined=WS 快照/REST 均未到达（行情条渲染骨架）；null=两侧都
+  // 确认拉不到（渲染"行情不可用"）；有值=正常。WS 合并与 REST 轮询共用该状态。
+  const [quote, setQuote] = useState<Quote | null | undefined>(undefined);
   const [auction, setAuction] = useState<AuctionData | null>(null);
   // MinuteChart 的 auction prop 引用稳定化：行内对象每渲染必新引用，而分时图
   // 创建 effect 依赖 auction——不 memo 会导致整图每秒销毁重建（闪烁回归）。
@@ -186,7 +193,10 @@ export function StockDetailPanel({
     }
   }
 
-  const { quotes, status: streamStatus } = useQuoteStream([symbol]);
+  // throttleMs=3000（审查 F5/R6）：详情面板价格闪烁与列表侧同口径——WS 仍 1Hz
+  // 全量接收（内部不丢数据），对外状态 3s 应用一次。1Hz PriceFlash 是每秒红绿
+  // 闪的体感噪音源（列表修过、详情漏了的不对称）。
+  const { quotes, status: streamStatus } = useQuoteStream([symbol], { throttleMs: 3000 });
   // WS 推送 → 渲染期合并进 quote（adjust-state 模式）：live 引用每拍必变，
   // 哨兵 appliedLive 保证同一帧只合并一次，语义与原 effect 版完全等价。
   const live = quotes[symbol];
@@ -234,7 +244,11 @@ export function StockDetailPanel({
             quality_reasons: prev.quality_reasons,
           };
         });
-      } catch {}
+      } catch {
+        // REST 失败且 WS 也还没推来快照 → 确认行情拉不到（渲染"不可用"）；
+        // 已有数据（WS 在推）保持不变——30s 轮询偶发失败不该抹掉实时价
+        setQuote((prev) => (prev === undefined ? null : prev));
+      }
     };
     void pull();
     const t = setInterval(pull, 30000);
@@ -263,7 +277,9 @@ export function StockDetailPanel({
           setPaper({ acc, positions, orders });
           setFills(fs);
         }
-      } catch {}
+      } catch {
+        if (alive) setPaper(null); // 拉取失败=确认不可用（渲染提示），与"加载中"分离
+      }
     };
     loadPaperRef.current = loadPaper;
     void loadPaper();
@@ -333,7 +349,15 @@ export function StockDetailPanel({
     if (!skipStockOnly) {
       getOrderBook(symbol)
         .then((ob) => alive && setBook(ob))
-        .catch(() => {});
+        // 首拉失败 = 确认拉不到（切股窗口结束），渲染"不可用"文案而非永远骨架；
+        // 盘中 5s 轮询的失败仍静默保留上次快照（下方轮询 effect，有意设计）
+        .catch(() => alive && setBook(null));
+    } else {
+      // 指数确认无盘口/逐笔数据源：显式置"确认空"，不留加载中转圈
+      if (alive) {
+        setBook(null);
+        setTrades([]);
+      }
     }
     const cancelIdle = scheduleIdle(() => {
       if (!alive) return;
@@ -347,7 +371,7 @@ export function StockDetailPanel({
       if (!skipStockOnly) {
         getTrades(symbol, 30)
           .then((tr) => alive && setTrades(tr))
-          .catch(() => {});
+          .catch(() => alive && setTrades([])); // 首拉失败=确认无，不再闪"暂无逐笔"当加载态
         getCapitalFlow<CapitalFlow>(symbol, 30)
           .then((cf) => alive && cf && setFlow(cf))
           .catch(() => {});
@@ -367,8 +391,8 @@ export function StockDetailPanel({
           .catch(() => {});
       }
       getFinancials<FinRow>(symbol, 8)
-        .then((f) => alive && f && setFins(f))
-        .catch(() => {});
+        .then((f) => alive && setFins(f)) // f=null = 后端确认无财报 → "确认空"态
+        .catch(() => alive && setFins(null));
       getCompanyProfile<CompanyProfile>(symbol)
         .then((cp) => alive && cp && setCompany(cp))
         .catch(() => {});
@@ -538,8 +562,23 @@ export function StockDetailPanel({
         <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-600 dark:text-amber-300">{error}</div>
       )}
 
-      {/* ① 紧凑行情条（指数隐藏加自选：sh000001 不是合法自选股代码） */}
-      {quote && <QuoteStrip quote={quote} inWatchlist={inWatchlist} onAdd={() => void add()} hideWatchlist={isIndex} tradingStatus={tradingStatus} />}
+      {/* ① 紧凑行情条（指数隐藏加自选：sh000001 不是合法自选股代码）
+          三态：undefined=WS/REST 均未到（同构骨架条）；null=确认拉不到；有值=QuoteStrip */}
+      {quote === undefined ? (
+        <div aria-hidden className="shrink-0 rounded-xl border border-zinc-200 px-4 py-1.5 dark:border-zinc-800">
+          <div className="flex items-center gap-3">
+            <Skeleton className="h-5 w-24" />
+            <Skeleton className="h-4 w-20" />
+            <Skeleton className="ml-auto hidden h-4 w-[52rem] lg:block" />
+          </div>
+        </div>
+      ) : quote ? (
+        <QuoteStrip quote={quote} inWatchlist={inWatchlist} onAdd={() => void add()} hideWatchlist={isIndex} tradingStatus={tradingStatus} />
+      ) : (
+        <div className="shrink-0 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-1.5 text-xs text-amber-600 dark:text-amber-300">
+          行情数据暂不可用（数据源失败，稍后自动重试）
+        </div>
+      )}
 
       {/* ①¼ 实时连接状态：只在异常态显示。2026-09-07 去掉"● 休市"常驻；2026-09-08
           用户反馈"● WS 实时推送"同样不该常驻（正常态都不留痕）——条件从
@@ -836,17 +875,26 @@ export function StockDetailPanel({
           {rightTab === "real" && (
             <RealPositionPanel symbol={symbol} currentPrice={quote?.price ?? null} currentName={quote?.name ?? null} className="h-full" />
           )}
-          {rightTab === "trade" && paper && (
-            <TradePanel
-              symbol={symbol}
-              paper={paper}
-              fills={fills}
-              quote={quote}
-              resetBusy={resetBusy}
-              onResetAccount={() => void handleResetAccount()}
-              onPaperChanged={() => loadPaperRef.current()}
-            />
-          )}
+          {rightTab === "trade" &&
+            (paper === undefined ? (
+              <div className="space-y-2 p-1" aria-hidden>
+                <Skeleton className="h-8 w-full rounded-lg" />
+                <Skeleton className="h-24 w-full rounded-xl" />
+                <Skeleton className="h-16 w-full rounded-xl" />
+              </div>
+            ) : paper ? (
+              <TradePanel
+                symbol={symbol}
+                paper={paper}
+                fills={fills}
+                quote={quote ?? null}
+                resetBusy={resetBusy}
+                onResetAccount={() => void handleResetAccount()}
+                onPaperChanged={() => loadPaperRef.current()}
+              />
+            ) : (
+              <p className="px-3 py-10 text-center text-xs text-zinc-400">模拟账户数据加载失败（稍后自动重试）</p>
+            ))}
 
           {rightTab === "profile" && <ProfilePanel boardRows={boardRows} company={company} fins={fins} />}
 

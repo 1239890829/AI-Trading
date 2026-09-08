@@ -170,14 +170,19 @@ def test_events_api_lifecycle(monkeypatch: pytest.MonkeyPatch):
         assert pools[0]["target"] == "存储芯片"
         assert any(s["symbol"] == "600171" for s in pools[0]["stocks"])
 
-        # 人工裁决
-        r = client.post(f"/api/events/{eid}/review", json={"status": "rejected"})
-        assert r.json()["data"]["status"] == "rejected"
+        # 人工裁决（2026-09-08 P0-4 起 /events/{id}/review 端点已删——
+        # store.set_status 是唯一裁决路径，store 层语义由上面的 storage 用例锚定）
+        store = client.app.state.event_store
+        store.set_status(eid, "rejected")
+        assert store.get_event(eid).status == "rejected"
         r = client.get("/api/events")
         assert all(i["id"] != eid for i in r.json()["data"]["items"]), "rejected 不再出现在活跃列表"
 
-        # 非法状态
-        assert client.post(f"/api/events/{eid}/review", json={"status": "whatever"}).status_code == 400
+        # 非法状态在 store 层拒绝
+        import pytest as _pytest
+
+        with _pytest.raises(ValueError):
+            store.set_status(eid, "whatever")
 
 
 def test_events_for_symbol_api(monkeypatch: pytest.MonkeyPatch):

@@ -123,11 +123,6 @@ def _to_event(p: dict) -> dict:
     return build_event(p["title"], source="东财快讯", published_at=published)
 
 
-def poll_stats() -> dict:
-    """轮询观测（心跳/验收用）：最近一轮结果。"""
-    return _FLASH_CURSOR.snapshot()
-
-
 async def poll_once(app) -> int:
     """拉一轮 → 逐条 build_event → EventStore 指纹去重入库。返回新增条数。
 

@@ -102,13 +102,31 @@ def _persist_if_better(days: list[date], source: str) -> None:
     _persist(days, source)
 
 
+# mtime 缓存（2026-09-08 P0-1，审查 §1.4.1 热路径）：_load_persisted 挂在
+# in_trading_window → data_quality/validator.validate_quote 逐行情调用链上，
+# 每次同步读盘+解析 JSON 是事件循环内的纯浪费。key 含 (mtime_ns, path)：
+# 文件被重写（含 pytest 后还原）或测试 monkeypatch 换 _PERSIST_PATH 都会自动失效。
+_persisted_cache: tuple[int, str, list[date] | None] | None = None
+
+
 def _load_persisted() -> list[date] | None:
+    global _persisted_cache
+    try:
+        st = _PERSIST_PATH.stat()
+        key = (st.st_mtime_ns, str(_PERSIST_PATH))
+    except OSError:
+        return None  # 文件不存在（测试频繁建删，不缓存缺失态）
+    cached = _persisted_cache
+    if cached is not None and cached[0] == key[0] and cached[1] == key[1]:
+        return cached[2]
     try:
         raw = json.loads(_PERSIST_PATH.read_text(encoding="utf-8"))
         days = _normalize([date.fromisoformat(s) for s in raw.get("days", [])])
-        return days if len(days) >= _MIN_DAYS else None
+        days = days if len(days) >= _MIN_DAYS else None
     except Exception:
-        return None
+        days = None
+    _persisted_cache = (key[0], key[1], days)
+    return days
 
 
 def _iter_providers(provider):

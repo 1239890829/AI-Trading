@@ -63,10 +63,6 @@ class MinuteSignal(BaseModel):
     basis: str = ""
 
 
-def _bj_hhmm(ts: str) -> str:
-    return (datetime.fromisoformat(ts) + BJ_OFFSET).strftime("%H:%M")
-
-
 def _dev(price: float, avg: float | None) -> float | None:
     if avg is None or avg <= 0:
         return None

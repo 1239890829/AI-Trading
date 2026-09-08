@@ -14,7 +14,6 @@ from app.api.routes import health as health_route
 from app.api.routes import market as market_route
 from app.api.routes import news as news_route
 from app.api.routes import paper as paper_route
-from app.api.routes import predict as predict_route
 from app.api.routes import review as review_route
 from app.api.routes import watchlist as watchlist_route
 from app.api.routes import alert as alert_route
@@ -551,7 +550,8 @@ app.include_router(backtest_route.router, prefix="/api")
 app.include_router(watchlist_route.router, prefix="/api")
 app.include_router(paper_route.router, prefix="/api")
 app.include_router(review_route.router, prefix="/api")
-app.include_router(predict_route.router, prefix="/api")
+# predict 路由已删（2026-09-08 审查 P0-4：REST 5 端点全孤立）；predict 包
+# 瘦成 auto-verify 库保留（review/service.maybe_auto_verify 消费预判引擎）。
 app.include_router(alert_route.router, prefix="/api")
 app.include_router(risk_route.router, prefix="/api")
 app.include_router(news_route.router, prefix="/api")

@@ -48,16 +48,6 @@ TOP_WATCH_LIMIT = 8
 ROLE_NOTABLE = {"空间板", "龙头", "中军", "反包"}
 
 
-def _rank_level(rank: int | None) -> str | None:
-    if rank is None:
-        return None
-    if rank <= HOT_TOP_HIGH:
-        return "高"
-    if rank <= HOT_TOP_MID:
-        return "中"
-    return None
-
-
 def distinctiveness(
     *,
     hot_rank: int | None,

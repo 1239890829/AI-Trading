@@ -56,11 +56,3 @@ def get_session_factory() -> sessionmaker:
     if _session_factory is None:
         _session_factory = sessionmaker(bind=get_engine(), autoflush=False, expire_on_commit=False)
     return _session_factory
-
-
-def get_db():
-    db = get_session_factory()()
-    try:
-        yield db
-    finally:
-        db.close()

@@ -60,11 +60,6 @@ def _bj(v: str | None) -> datetime | None:
         return None
 
 
-def _price_raw(v: str | None) -> float | None:
-    n = _num(v)
-    return n
-
-
 def build_minute_points(rows: list, trade_date: str, fallback_date) -> list[dict]:
     """腾讯 minute 行数组 → 分时点列表（纯函数，可单测）。
 

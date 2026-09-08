@@ -7,8 +7,6 @@
 """
 from __future__ import annotations
 
-import asyncio
-
 from app.data_providers import (
     CompositeProvider,
     EastmoneyProvider,
@@ -86,12 +84,14 @@ def test_stub_not_counted_as_support():
     assert "sina" not in pc.providers_supporting("get_longhu_records")
 
 
-def test_endpoint_shape():
-    """端点直接调路由函数：契约 = {levels, capabilities, single_points}。"""
-    from app.api.routes.health import provider_capabilities
-
-    payload = asyncio.run(provider_capabilities())
-    assert set(payload) == {"levels", "capabilities", "single_points"}
-    assert payload["levels"] == pc.LEVELS
-    assert payload["capabilities"] == pc.CAPABILITIES
-    assert payload["single_points"] == pc.single_point_methods()
+def test_registry_shape():
+    """注册表形状契约（2026-09-08 P0-4 起端点已删——注册表保留为防腐化锚与
+    单点告警选点依据，本用例改为直接锚定注册表自身）。"""
+    for method, src in pc.single_point_methods().items():
+        assert src in pc.CAPABILITIES, f"single_point {method} 的源 {src} 不在注册表"
+        # 单点方法必须真实存在于该源（防空壳注册）
+        entry = pc.CAPABILITIES[src].get(method)
+        assert entry is not None and entry["level"] == pc.SUPPORTED
+    for src, caps in pc.CAPABILITIES.items():
+        for method, entry in caps.items():
+            assert entry.get("level") in pc.LEVELS, f"{src}.{method} level 非法"

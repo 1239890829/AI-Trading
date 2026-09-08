@@ -27,6 +27,10 @@ from app.services.theme_service import parse_theme_tags
 
 log = logging.getLogger(__name__)
 
+# ops-only（2026-09-08 审查 P0-4 标注）：/themes/sync、/themes/reconciliation、
+# /themes/catalog/index、/themes/catalog/{code}/members 前端零调用——它们是
+# 目录运维/诊断端点（人工同步、成分对账、清单核查），保留不删；
+# 其余端点均为前端活跃消费。
 router = APIRouter(tags=["theme-catalog"])
 
 

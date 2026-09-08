@@ -208,6 +208,37 @@ def test_iter_providers_expands_composite_and_bare():
     assert tc._iter_providers(comp) == [p]
 
 
+def test_load_persisted_cache_hit_and_invalidate(tmp_path, monkeypatch):
+    """P0-1 mtime 缓存：同文件未变命中缓存；重写/换路径自动失效。
+
+    缓存挂在 validator 逐行情热路径上，失效错误 = 用过期日历判交易日，
+    后果远大于省的那点 IO——所以失效行为必须有测试锚定。
+    """
+    import json
+
+    persist = tmp_path / "trade_calendar.json"
+    monkeypatch.setattr(tc, "_PERSIST_PATH", persist)
+    monkeypatch.setattr(tc, "_persisted_cache", None)
+
+    def _write(days):
+        persist.write_text(json.dumps({
+            "source": "official", "fetched_at": "2026-09-08T00:00:00+00:00",
+            "days": [d.isoformat() for d in days],
+        }), encoding="utf-8")
+
+    _write(DAYS)
+    first = tc._load_persisted()
+    assert first == DAYS
+    assert tc._load_persisted() is first  # 未变 → 命中缓存（同一对象）
+
+    _write(DAYS[:-1])  # 重写（mtime 变）→ 必须重读
+    second = tc._load_persisted()
+    assert second == DAYS[:-1] and second is not first
+
+    monkeypatch.setattr(tc, "_PERSIST_PATH", tmp_path / "nonexistent.json")
+    assert tc._load_persisted() is None  # 换路径/缺失 → 不返回旧数据
+
+
 
 def test_persisted_calendar_fallback(tmp_path, monkeypatch):
     """技术债 #10：双源全挂时读持久化日历（带时间戳的权威快照，非猜测）；

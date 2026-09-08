@@ -219,17 +219,3 @@ class SymbolSearchItem(BaseModel):
     market: str | None = None
     source: str
     is_realtime: bool = False
-
-
-class BoardQuote(AuditFields):
-    """板块排行条目（新浪行业/概念闪电排行口径）。"""
-
-    name: str
-    count: int | None = None  # 成分股数
-    change_pct: float | None = None
-    volume: float | None = None  # 股
-    amount: float | None = None  # 元
-    leader_symbol: str | None = None
-    leader_name: str | None = None
-    leader_change_pct: float | None = None
-    leader_price: float | None = None

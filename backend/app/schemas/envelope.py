@@ -204,14 +204,6 @@ class AuctionBenchmarkItem(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
-class AdjustmentEvent(BaseModel):
-    """复权事件（/api/adjustment-events/{symbol}）；factor 由调用方推导。"""
-
-    ex_date: str  # YYYY-MM-DD
-    dividend: float  # 每股现金分红（税前）
-    bonus: float  # 每股送股比例
-
-
 # ---------------------------------------------------------------- 情绪周期序列（retro #17）
 
 
@@ -224,12 +216,6 @@ class SentimentHistoryItem(BaseModel):
     confidence: str | None = None
     phase_unreliable: bool = False
     source: str  # review / live
-
-
-class CycleSegment(BaseModel):
-    group: str  # strong / neutral / weak
-    start_date: str
-    days: int
 
 
 class SentimentHistoryPayload(BaseModel):

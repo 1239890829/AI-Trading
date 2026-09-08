@@ -11,7 +11,7 @@ import { Sparkline } from "@/components/sparkline";
 import { PickDetailModal, type PickDetailTarget } from "@/components/picks/pick-detail-modal";
 import { useQuoteStream, STREAM_STATUS_LABEL } from "@/hooks/use-quote-stream";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
-import { PageSkeletonFallback } from "@/components/ui/loading";
+import { PageSkeletonFallback, Skeleton } from "@/components/ui/loading";
 import { useRealPositions } from "@/hooks/use-real-positions";
 import {
   addToWatchlist,
@@ -70,6 +70,8 @@ function WorkbenchInner() {
   const chartTab = parseChartTab(sp.get("ct"));
   const rightTab = parseRightTab(sp.get("rt"));
   const [symbols, setSymbols] = useState<string[]>([]);
+  // 左栏列表 pending 哨兵（审查 F2/R2）：loadBase/dyn 首拉完成前渲染行骨架
+  const [baseLoaded, setBaseLoaded] = useState(false);
   // 真实持仓（CONTEXT.md: Holdings Group）：共用 hook 一份轮询（评审 M3），
   // 标的列表派生进 WS 订阅，「持仓」分类共用
   const { data: realData } = useRealPositions();
@@ -169,6 +171,10 @@ function WorkbenchInner() {
       setUpdatedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
     } catch {
       setError("无法连接后端行情服务。请先启动：cd backend && uvicorn app.main:app --reload --port 8000");
+    } finally {
+      // pending 三态哨兵（审查 F2/R2）：首次拉取完成前左栏渲染行骨架，
+      // 不再抢跑「自选为空或行情未就绪」文案（加载中≠确认空）
+      setBaseLoaded(true);
     }
   }, []);
 
@@ -189,16 +195,20 @@ function WorkbenchInner() {
 
   // 动态分组数据源（60s：每日精选每日级变化、intraday-top 后端 60s 缓存对齐）。
   // 失败保留旧数据（盘中行情仍在跳，下一次轮询补上），不闪空。
+  // dynReady：各自首拉完成哨兵——空态文案（"今日尚无精选组合"）只在确认后渲染。
+  const [dynReady, setDynReady] = useState({ picks: false, top: false });
   usePollingFetch(async () => {
     const p = await getTodayPicks().catch(() => null);
     if (p) {
       setPicksItems(p.items ?? []);
       setPicksDate(p.date ?? null);
     }
+    setDynReady((s) => (s.picks ? s : { ...s, picks: true }));
   }, 60_000);
   usePollingFetch(async () => {
     const t = await getIntradayTop().catch(() => null);
     if (t) setTopItems(t.items ?? []);
+    setDynReady((s) => (s.top ? s : { ...s, top: true }));
   }, 60_000);
 
   // 自选集合变化（search-box 快捷加自选 / 详情面板 ＋自选）→ 立即刷新
@@ -557,7 +567,14 @@ function WorkbenchInner() {
               </span>
             )}
           </div>
-          {activeRows.length === 0 ? (
+          {!baseLoaded || (activeGroup === "每日精选" && !dynReady.picks) || (activeGroup === "盘中跟踪" && !dynReady.top) ? (
+            /* 首拉未完成 → 行骨架占位（同构 table 行高），空态文案不抢跑 */
+            <div className="space-y-2.5 px-3 py-3" aria-hidden>
+              {Array.from({ length: 5 }, (_, i) => (
+                <Skeleton key={i} className="h-9 w-full rounded-lg" />
+              ))}
+            </div>
+          ) : activeRows.length === 0 ? (
             <p className="px-4 py-8 text-center text-sm text-zinc-400">
               {activeGroup === "持仓" ? (
                 <>
