@@ -264,6 +264,23 @@ async def watch_ledger(
     }
 
 
+@router.get("/leader-archive")
+async def leader_archive(request: Request, theme: str | None = Query(default=None)) -> dict:
+    """历史龙头档案（猎场需求 2）：近 30 日涨停池按官方标签聚合的最高连板股。
+
+    theme 传题材名（子串匹配：「代糖」命中「代糖概念」）→ 该题材 top5 龙头；
+    不传 → 全档案（题材 → 龙头列表）。缓存 20h（历史档案盘中不变）。
+    """
+    from app.services.leader_archive import get_archive, leaders_for_theme
+
+    hub = request.app.state.hub
+    if theme:
+        leaders = await leaders_for_theme(hub.provider, theme)
+        return {"data": {"theme": theme, "leaders": leaders}, "meta": {}}
+    archive = await get_archive(hub.provider)
+    return {"data": archive, "meta": {}}
+
+
 @router.get("/intraday-opportunities")
 async def intraday_opportunities(
     request: Request,
