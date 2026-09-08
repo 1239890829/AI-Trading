@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any
 
 #: 各板块的基准指数（偏离值 = 个股区间涨跌幅 − 基准指数区间涨跌幅）。
@@ -39,7 +40,9 @@ BENCHMARK_INDEX: dict[str, str] = {
     "bse": "899050",        # 北交所 → 北证50
 }
 
-#: 普通异常波动阈值（3 日累计偏离值，绝对值）
+#: 普通异常波动阈值（3 日累计偏离值，绝对值）。
+#: "st" 仅指**沪深主板 ST**——双创/北交所的 ST 股票归各自板块口径
+#: （代码前缀优先，见 board_of）。
 ABNORMAL_3D_THRESHOLD: dict[str, float] = {
     "sh_main": 20.0,
     "sz_main": 20.0,
@@ -67,21 +70,34 @@ POSITION_FACTOR_P1 = 0.5      # P1：连板 ≥3 → 仓位上限减半
 POSITION_FACTOR_P2 = 1.0 / 3  # P2：命中 Y1/Y3 → 仓位上限 1/3
 
 
+#: ST 名称判定：ST / *ST / SST / S*ST 前缀，或名称中独立成词的 ST
+#: （部分数据源把标记放尾部，如「国华网安 ST」）。子串匹配会误命中
+#: 无关字母组合，必须按词边界。
+_ST_NAME_RE = re.compile(r"(?:^|[^A-Z])\*?ST(?:$|[^A-Z])")
+
+
+def _is_st(name: str | None) -> bool:
+    nm = (name or "").strip().upper()
+    return nm.startswith(("ST", "*ST", "S*ST", "SST")) or bool(_ST_NAME_RE.search(nm))
+
+
 def board_of(symbol: str, name: str | None = None) -> str:
     """按代码与名称判定板块（决定涨限与基准指数）。
 
-    ST / *ST 单列：涨限 5%、异动阈值 12%，被关概率显著更高。
+    **代码前缀优先于 ST 名称判定**（2026-09-08 修复）：交易所现行规则下
+    创业板/科创板全部股票（含 ST）涨跌幅 20%、北交所 30%，只有沪深主板
+    ST 才适用 5%/12% 口径。旧版把 ST 检查放在最前，300688 这类双创 ST
+    会被按 5% 涨限漏判连板、按 12% 阈值误判异动。
     """
     sym = str(symbol or "")
-    nm = (name or "").upper()
-    if "ST" in nm:
-        return "st"
     if sym.startswith(("300", "301")):
         return "gem"
     if sym.startswith(("688", "689")):
         return "star"
     if sym.startswith(("8", "4", "920")):
         return "bse"
+    if _is_st(name):
+        return "st"
     if sym.startswith("6"):
         return "sh_main"
     return "sz_main"

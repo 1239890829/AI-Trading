@@ -47,11 +47,22 @@ def _flat(n, close=100.0):
         ("830799", "艾融软件", "bse", 30.0),
         ("600122", "*ST 宏图", "st", 5.0),
         ("000004", "国华网安 ST", "st", 5.0),
+        # 2026-09-08 修复：代码前缀优先于 ST 名称——双创/北交所 ST 归各自板块
+        ("300123", "*ST 某某", "gem", 20.0),
+        ("301599", "ST 某某", "gem", 20.0),
+        ("688123", "ST 某某", "star", 20.0),
+        ("833123", "ST 某某", "bse", 30.0),
     ],
 )
 def test_board_and_limit(symbol, name, board, lim):
     assert board_of(symbol, name) == board
     assert limit_pct(board) == lim
+
+
+def test_gem_st_limit_up_counted_at_20pct():
+    """创业板 ST 一根 19.95% 的收盘涨停必须计入连板——按旧的 ST=5% 口径会漏判。"""
+    bars = _bars([19.95, 19.9])
+    assert consecutive_limit_up_days(bars, limit_pct("gem")) == 2
 
 
 def test_benchmark_symbol_maps_every_board():

@@ -516,6 +516,27 @@ from app.core.errors import register_error_handlers  # noqa: E402
 
 register_error_handlers(app)
 
+
+# 性能基线中间件（策略进化 P1 方向4）：逐请求记录「路由模板 → 耗时」，
+# /api/system/metrics 聚合 p50/p95/p99。call_next 返回后 scope["route"] 已被
+# 路由器写入，拿不到（404/中间链异常）退化为数字折叠的原始路径。
+@app.middleware("http")
+async def _perf_middleware(request, call_next):
+    import time as _time
+
+    from app.core import perf as _perf
+
+    t0 = _time.perf_counter()
+    try:
+        response = await call_next(request)
+    finally:
+        route = request.scope.get("route")
+        route_path = getattr(route, "path", None) or _perf.collapse_path(
+            request.scope.get("path", "")
+        )
+        _perf.record_api(route_path, (_time.perf_counter() - t0) * 1000)
+    return response
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,

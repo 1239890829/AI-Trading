@@ -354,6 +354,170 @@ async def _t_anomaly(ctx: ToolContext, **kw) -> str:
     ], total=len(records))
 
 
+async def _t_picks(ctx: ToolContext, **kw) -> str:
+    """最近一次每日精选组合（AI 大脑 P1 工具扩容：让助手读得到选股结论）。"""
+    if ctx.session_factory is None:
+        return "工具不可用：未配置数据库会话"
+    from sqlalchemy import select
+
+    from app.models.daily_pick import DailyPickSet
+
+    def _q():
+        with ctx.session_factory() as db:  # type: ignore[misc]
+            return db.execute(
+                select(DailyPickSet).order_by(DailyPickSet.id.desc()).limit(1)
+            ).scalars().first()
+
+    import asyncio as _asyncio
+
+    row = await _asyncio.to_thread(_q)
+    if row is None:
+        return "尚无每日精选组合"
+    import json as _json
+
+    items = _json.loads(row.items or "[]")
+    meta = _json.loads(row.meta or "{}")
+    lines = [f"【每日精选 {row.date}】相位 {meta.get('market_phase', '—')}｜gate {meta.get('gate', '—')}"]
+    for it in items[:MAX_ROWS]:
+        conf = it.get("confidence")
+        conf_s = f"｜置信 {conf}" if conf else ""
+        obs = "｜仅观察" if it.get("observation_only") else ""
+        lines.append(
+            f"- {it.get('name', '')}({it.get('symbol', '')})：score {it.get('score', '—')}"
+            f"｜{it.get('theme') or '无题材'}{conf_s}{obs}"
+            f"｜止损 {it.get('stop_loss', '—')}"
+        )
+    return _clip("\n".join(lines))
+
+
+async def _t_positions(ctx: ToolContext, **kw) -> str:
+    """当前持仓与浮动盈亏（AI 大脑 P1：助手触达持仓数据资产）。"""
+    from app.services.real_position_service import load_positions
+
+    if ctx.session_factory is None:
+        return "工具不可用：未配置数据库会话"
+
+    import asyncio as _asyncio
+
+    positions = await _asyncio.to_thread(load_positions, ctx.session_factory)
+    if not positions:
+        return "当前无持仓"
+    quotes = {}
+    try:
+        syms = [p.symbol for p in positions][:MAX_SYMBOLS]
+        got = await ctx.provider.get_quotes(syms)
+        quotes = {q.symbol: q for q in got or []}
+    except Exception as exc:  # noqa: BLE001  行情缺失 → 回退成本价口径，如实标注
+        quotes = {}
+        log.warning("positions tool quotes failed: %s", exc)
+    lines = [f"【持仓 {len(positions)} 只】"]
+    total_unreal = 0.0
+    have_price = True
+    for p in positions[:MAX_ROWS]:
+        q = quotes.get(p.symbol)
+        last = getattr(q, "price", None) if q is not None else None
+        if last is None:
+            last = p.avg_cost  # 缺行情回退成本价（与 /api/positions 同口径）
+            have_price = False
+        unreal = round((last - p.avg_cost) * p.quantity, 2)
+        total_unreal += unreal
+        pct = round((last / p.avg_cost - 1) * 100, 2) if p.avg_cost else None
+        lines.append(
+            f"- {p.name or ''}({p.symbol})：{p.quantity} 股｜成本 {p.avg_cost}｜现价 {last}"
+            f"｜浮动 {unreal}（{pct}%）"
+        )
+    tail = f"浮动盈亏合计 {round(total_unreal, 2)}"
+    if not have_price:
+        tail += "（部分缺实时价，按成本价口径，非真实市值）"
+    lines.append(f"- {tail}")
+    return _clip("\n".join(lines))
+
+
+async def _t_sentiment(ctx: ToolContext, **kw) -> str:
+    """近几日情绪相位（AI 大脑 P1：助手读得到市场温度）。"""
+    if ctx.session_factory is None:
+        return "工具不可用：未配置数据库会话"
+    from app.market.sentiment_history import get_history
+
+    import asyncio as _asyncio
+
+    rows = await _asyncio.to_thread(get_history, ctx.session_factory, 5)
+    if not rows:
+        return "尚无情绪历史存档"
+    lines = ["【近 5 日情绪相位】"]
+    for r in rows[:5]:
+        d = _rec(r)
+        lines.append(
+            f"- {d.get('trade_date', '—')}：{d.get('phase', '—')}"
+            f"｜温度 {d.get('temperature') if d.get('temperature') is not None else '—'}"
+            f"｜置信 {d.get('confidence') or '—'}"
+            f"{'（相位不可靠）' if d.get('phase_unreliable') else ''}"
+        )
+    return _clip("\n".join(lines))
+
+
+async def _t_events(ctx: ToolContext, **kw) -> str:
+    """今日 watcher 异动/确认/证伪事件（AI 大脑 P1：助手读得到盘中事件流）。"""
+    if ctx.session_factory is None:
+        return "工具不可用：未配置数据库会话"
+    from datetime import datetime, timedelta, timezone as _tz
+
+    from sqlalchemy import select
+
+    from app.models.alert import AlertEvent, AlertRule
+    from app.picks.watcher import WATCHER_RULE_NAME
+    def _q():
+        with ctx.session_factory() as db:  # type: ignore[misc]
+            rule_ids = db.execute(
+                select(AlertRule.id).where(AlertRule.name == WATCHER_RULE_NAME)
+            ).scalars().all()
+            if not rule_ids:
+                return []
+            rows = db.execute(
+                select(AlertEvent)
+                .where(AlertEvent.rule_id.in_(rule_ids))
+                .order_by(AlertEvent.id.desc())
+                .limit(40)
+            ).scalars().all()
+            return [
+                {"triggered_at": str(r.triggered_at), "snapshot": r.snapshot}
+                for r in rows
+            ]
+
+    import asyncio as _asyncio
+    import json as _json
+
+    rows = await _asyncio.to_thread(_q)
+    today = datetime.now(_tz(timedelta(hours=8))).strftime("%Y-%m-%d")
+    today_rows = []
+    for r in rows:
+        # triggered_at 是 UTC naive → 北京时间比对
+        try:
+            dt = datetime.fromisoformat(r["triggered_at"]) + timedelta(hours=8)
+        except Exception:  # noqa: BLE001
+            continue
+        if dt.strftime("%Y-%m-%d") == today:
+            today_rows.append(r)
+    if not today_rows:
+        return "今日暂无 watcher 事件（含确认/证伪/大单异动）"
+    lines = [f"【今日 watcher 事件 {len(today_rows)} 条】"]
+    for r in today_rows[:10]:
+        snap = r["snapshot"]
+        if isinstance(snap, str):
+            try:
+                snap = _json.loads(snap)
+            except Exception:  # noqa: BLE001
+                snap = {}
+        lines.append(f"- {snap.get('text') or snap.get('kind') or '（无文本）'}")
+    return _clip("\n".join(lines))
+
+
+def _timedelta_hour8():
+    from datetime import timedelta
+
+    return timedelta(hours=8)
+
+
 TOOL_SPECS: dict[str, ToolSpec] = {
     "quotes": ToolSpec("quotes", "批量实时行情快照", "symbols=600519,000001（≤6 只）", _t_quotes),
     "limit_up": ToolSpec("limit_up", "某交易日涨停池", "date=YYYY-MM-DD（可省略=最近交易日）", _t_limit_up),
@@ -365,6 +529,11 @@ TOOL_SPECS: dict[str, ToolSpec] = {
     "anomaly": ToolSpec("anomaly", "当日异动原因（可按代码查为什么异动）", "symbols=可选，逗号分隔≤6只；缺省=全市场榜", _t_anomaly),
     "review": ToolSpec("review", "某交易日复盘报告要点", "date=YYYY-MM-DD（可省略）", _t_review),
     "brief": ToolSpec("brief", "今日盘前简报", "无参数", _t_brief),
+    # AI 大脑 P1 扩容（2026-09-08）：持仓/精选/情绪/事件——系统数据资产对助手开放
+    "picks": ToolSpec("picks", "最近一次每日精选组合（含置信档）", "无参数", _t_picks),
+    "positions": ToolSpec("positions", "当前持仓与浮动盈亏", "无参数", _t_positions),
+    "sentiment": ToolSpec("sentiment", "近 5 日情绪相位", "无参数", _t_sentiment),
+    "events": ToolSpec("events", "今日 watcher 异动/确认/证伪事件", "无参数", _t_events),
 }
 
 

@@ -115,7 +115,10 @@ def test_provider_health_watch_state_below_threshold():
 
 def test_outage_drill_failover_visible_selfheal(monkeypatch):
     """断源演练三段式：降级正确 → 熔断可见 → 自愈回 closed。"""
-    monkeypatch.setattr(composite_mod, "COOLDOWN_SECONDS", 0.2)  # 演练提速，逻辑不变
+    # 演练冷却 2.0s：长到足以让段 2 断言在任意负载下都落在冷却窗内
+    # （0.2s 曾在重负载全量跑时于断言前耗尽——2026-09-07/09-08 两次实锤的时钟竞态）；
+    # 段 3 自愈改为轮询等待，不靠固定 sleep，总时长仍然可控。
+    monkeypatch.setattr(composite_mod, "COOLDOWN_SECONDS", 2.0)
     tencent = FlakyTencent()
     comp = CompositeProvider([tencent, HealthySina()])
 
@@ -137,8 +140,8 @@ def test_outage_drill_failover_visible_selfheal(monkeypatch):
         # 段 2：观测端点看到 tencent 熔断 OPEN + 连续失败数 + 备源接管
         h = client.get("/api/system/providers").json()
         b = h["breakers"]["get_order_book@tencent"]
-        # cooldown_left > 0 不再断言：0.2s 演练冷却与重负载下的时钟竞速（2026-09-07
-        # 全量复现）会在断言前耗尽冷却——state=="open" 已充分表达「冷却生效中」。
+        # 2.0s 演练冷却足以覆盖任意负载下的断言时点（0.2s 版本曾两次被
+        # 全量跑的时钟竞态击穿：2026-09-07 / 2026-09-08）。
         assert b["state"] == "open" and b["failures"] == 3
         assert h["last_good"]["get_order_book"] == "sina"
         assert "get_order_book: tencent -> sina" in h["switch_log"]
@@ -149,7 +152,11 @@ def test_outage_drill_failover_visible_selfheal(monkeypatch):
         assert r.json()["data"]["source"] == "sina"  # 冷却中：坏源不被调用
         import time
 
-        time.sleep(0.3)  # > COOLDOWN_SECONDS
+        deadline = time.monotonic() + 5.0  # 轮询等冷却过期（不靠固定 sleep），负载无关
+        while time.monotonic() < deadline:
+            if client.get("/api/order-book/600519").json()["data"]["source"] == "tencent":
+                break
+            time.sleep(0.2)
         r = client.get("/api/order-book/600519")
         assert r.json()["data"]["source"] == "tencent"  # 自愈：主源回归
         h = client.get("/api/system/providers").json()

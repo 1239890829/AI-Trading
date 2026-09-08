@@ -97,3 +97,39 @@
 - **signal_health**：`backend/app/picks/signal_health.py` + `GET /api/picks/signal-health`。数据源：DailyPickReview 命中记录（verdict/excess_pct）按组合日聚合 + DailyPickSet.meta.market_phase join；滚动 20 组合日胜率/期望超额 + CUSUM 单侧下漂（δ=0.10，阈值 1.5）。三态：`ok|warning|drift|insufficient`（样本 <10 组合日显式 insufficient）。真实库验证：5 组合日 → insufficient（win_rate 0.857 / mean_excess +3.63，样本不足不判 ok）。**预警接线（通知中心/自动 action_items）为 P1**。
 - **chip_service**：`backend/app/market/chip.py` + `GET /api/chip?symbol=`（与 /api/quotes 同挂载风格，full=true 回传全网格）。真实库验证：600865 close=10.32 获利盘 39%/主峰 8.617=支撑/压力 11.405；000910 集中度 0.229 高度密集贴现价。`approx=True` 恒标注近似口径。
 - **额外发现（P0 级数据缺陷，已止血）**：`daily_pick_review.excess_pct` 列 NOT NULL DEFAULT 0——daily_review 在基准缺失时写 None 会被 ORM default 固化成 0.0，与「超额恰为 0」不可区分（违反评审 B21 语义）。真实库暂未被污染（无 0.0 行）。止血：写入侧 note 打 `[基准缺失]` 前缀保留可甄别性；signal_health 输出带 caveat；**列 nullable 化迁移列 P1**。
+
+---
+
+## 4. P1 首批实施记录（2026-09-08 盘前完成，commit dc8ef65）
+
+用户指令「看看还有哪些方案计划还没做的，按优先级执行」→ 按数据依赖链落地 P1 前五项：
+
+1. **excess_pct nullable 迁移**（`f6b2c8e4a9d3`）：列 NULLABLE + 移除遗留 server DEFAULT 0（nullable 列上留默认会让「省略列」的写入方重新引入缺失→0 歧义）；真实库 28 行无损、roundtrip 验证。**顺带修复存量缺陷**：e7a2 迁移用 `get_engine()`（指向 settings 主库）而非迁移连接——全新库/测试库上 daily_pick 两表从未建到正确的库，被旧测试断言盲区掩盖，本次 reflect 时炸出并修复（改 `op.get_bind()`）。
+2. **signal_health 预警接线**：独立系统规则 `__signal_health__`（不混入 watcher 个股事件流；通知中心 `_NOTIF_RULE_NAMES` 扩容 + 新增 risk 类目「策略风险/健康预警」）+ 当日同状态去重（snapshot.status 比对；warning→drift 升级允许再发）+ 复盘 run() 尾部自动调用。
+3. **复盘报告「策略健康」维度**（`review/strategy_health.py`）：信号健康度（滚动胜率/超额/CUSUM）+ 相位对账（`sentiment/reconcile.py`：昨日 switch_conditions 解析目标集 vs 今日实际相位；四态 transition_confirmed/held/off_path/unavailable——「延续」如实标注不冒充命中，今日相位缺失判 unavailable 不判 off_path）。warning→P1 / drift→P0 自动生成改进项（走指纹继承）。
+4. **派发/吸筹规则化**（`picks/chip_signal.py`）：派发警示=获利盘≥85%+集中度≤0.45+高位（窗口≥75%分位）+放量（5/20日均量≥1.3）+滞涨（3日≤1.5%）；启动观察=集中度≤0.40+获利盘30~70%+低位（≤45%）+回踩主峰±3%+缩量（≤0.7）。**只留痕不进权重**（bases.chip + 卡片徽标），滚动验证胜率后再议。量能与价均取 provider 日 K；chip 缺仓显式降级不臆造。
+5. **meta 置信层规则版**（`picks/meta_confidence.py`）：红线 veto/异动扣分/冰点退潮相位/派发警示→最高观察；缺维→最高可执行；score≥75+全维+相位∈{修复,发酵,高潮}→强执行；score≥60→可执行。gate 空仓闸门保留为兜底。卡片透出三档徽标（理由悬停可见）。
+
+**测试**：新增 test_chip_signal / test_meta_confidence / test_phase_reconcile / test_signal_alert + nullable ORM 语义 + 迁移链 nullable 断言；全量 pytest EXIT=0、pyflakes 清零、tsc/eslint 0 错、vitest 211 通过。
+**真实库验证**：健康度 insufficient（5 组合日，胜率 0.857 / 超额 +3.63，三态不判 ok）；600865 主峰支撑、000910 主峰压力，信号无误报。
+**生效条件**：8000 于午休 12:05 重启（one-time automation `0623af0b`）后新代码生效；今晚 /generate 产出的组合卡携带 confidence/chip_signal。
+
+**P1 剩余（未执行）**：个股资金流接入 / tech_score 权重 IC 复核 / 性能基线 / 数据质量门 / applied 半自动写回；AI 大脑 P1（工具白名单扩容/上下文扩展/15:35 LLM 综述）另批。
+
+---
+
+## 5. P1 第二批实施记录（2026-09-08 盘中完成）
+
+用户指令「继续」→ 落地 P1 剩余五项 + AI 大脑 P1 批次 + halt_risk 决策修复：
+
+1. **halt_risk ST 板块判定修复**（用户确认「修复」）：`board_of` 改为**代码前缀优先**——300/301→gem(20%)、688/689→star(20%)、8/4/920→bse(30%)，仅沪深主板 ST 用 5%/12%；ST 名称判定收紧为前缀/词边界匹配（防子串误命中）。双创 ST 此前被按 5% 漏判连板。
+2. **个股资金流接入**（`market/stock_flow.py` + `GET /api/stock-flow`）：东财 ulist 扩 secid 至个股（复用 fund_flow 的 http/解析，同源不漂移）；北交所无个股资金流 → `no_data` 显式列出；失败不缓存。**watcher 大单异动**：题材成员当日主力净额首破 0.3 亿 → `flow_surge` 提醒（首破语义每日一次，流出侧不报——炸板/跌停池覆盖；阈值经验初值未校准）。冒烟：首破→报警、二拍→去重、未破线→静默。
+3. **性能基线**（`core/perf.py` + `GET /api/system/metrics`）：API per-route p50/p95/p99（中间件记路由模板，404 折叠数字段）、DuckDB 慢查询（>300ms 才记）、同步时长趋势（sync_history.json 保留 30 条）。内存环形缓冲零持久化。
+4. **数据质量门**（`market/marketdb_quality.py` + `GET /api/system/marketdb-quality`）：在既有 8 条结构检查之上补近窗业务校验——空值率、**复权序列单日涨跌 >31%**（原始序列跳变可能是除权不能当异常）、零收盘；每次同步落 quality_report.json，error 维持退出码 4、warn 可见不失败。
+5. **applied 半自动写回**（`review/writeback.py` + PATCH applied 响应）：改进项置 applied 时从标题/说明提取「PARAM 旧值→新值」意图，匹配参数注册表（halt_risk/chip_signal/watcher/CUSUM 阈值），**运行时读当前值**生成 diff（含 stale 漂移提示）；不认识/读不到显式 unresolved。全自动写回仍按方案排除——改文件由人执行。
+6. **tech_score 权重 IC 复核**（`scripts/factor_ic_review.py`，报告 `docs/factor-ic-review-20260908.md`）：全市场 500 只 × 近 60 日横截面，Spearman(T+5)。结果：**trend mean IC −0.084（负向显著）**、kdj/rsi 弱负、macd/volume/pattern 噪音区。报告已加解读警示：**全市场截面 ≠ 选股池条件口径**（trend 在强势池内可能是前提而非收益因子），降权前必须先做池内条件 IC——未改任何权重。
+7. **AI 大脑 P1**（ai-brain-plan §3.4 P1 项）：工具白名单 10→14（+picks/positions/sentiment/events）；上下文注入扩展到「持仓+最近精选+watcher 事件摘要」（best-effort、接地校验证据池同步扩展）；**15:35 LLM 收盘综述**（`GET /api/assistant/daily-summary`，叙事层 vs 15:45 审计层分工，LLM 失败 available=False 绝不发占位文）+ automation `00a60b78`（工作日 15:35 飞书 text 推送）。LLM 网关健康前提已核实：09-07 复盘 model_degraded=0。
+
+**测试**：test_stock_flow / test_perf / test_marketdb_quality / test_writeback 新增 + test_halt_risk 扩双创 ST 用例 + **test_provider_health 演练竞态修复**（0.2s 冷却两次被全量跑击穿 → 2.0s 冷却 + 轮询自愈）。pyflakes 清零、tsc 0 错、eslint 0 errors、vitest 211 过。
+**生效条件**：8000 于 12:05 重启（automation `0623af0b` 已扩验证清单：/api/system/metrics、/api/stock-flow）。
+**P1 收官**：strategy-evolution-plan §2 路线图 P1 批次八项全部落地；P2（HMM/席位画像/meta-labeling 数据版/walk-forward 门禁/回测成本建模）按方案依赖数据积累，待排期。

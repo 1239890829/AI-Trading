@@ -188,6 +188,16 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
     tool_ctx = await _tool_context(request, known_symbols) if settings.assistant_tools_enabled else None
     tools_enabled = tool_ctx is not None
 
+    # 上下文注入扩展（AI 大脑 P1）：行情快照之外，把「持仓 + 最近精选 + 今日事件」
+    # 也主动喂给模型——助手回答"我持仓怎么样"不再依赖用户贴数据。全部只读、
+    # best-effort：任何一块缺失都静默跳过（增强层不拖垮聊天）。
+    extra_block = ""
+    try:
+        extra_block = await asyncio.to_thread(_build_extra_context, request)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("assistant extra context skipped: %s", exc)
+    combined_block = market_block + (("\n" + extra_block) if extra_block else "")
+
     async def _stream_round(messages: list[dict[str, str]], collect: bool, sink: list[str] | None = None):
         """跑一轮流式生成。collect=True 时剥离工具标记，并把原始增量写入 sink。"""
         raw_parts: list[str] = []
@@ -247,7 +257,7 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
             "model": model,
             "sources": market_sources,
         })
-        messages = _build_messages(req, market_block, tools_enabled=tools_enabled)
+        messages = _build_messages(req, combined_block, tools_enabled=tools_enabled)
         tool_block: str | None = None  # 工具真实返回——grounding 证据池的第二部分
         try:
             sink: list[str] = []
@@ -280,7 +290,7 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
             # 证据池 = 注入的行情快照块 + 工具真实返回；两者都空时跳过（没有
             # 数据就没有"编造 vs 有据"的判定基准，校验只会全盘误杀）。
             answer_text = "".join(strip_tool_calls(part) for part in sink)
-            evidence_texts = [t for t in (market_block, tool_block) if t]
+            evidence_texts = [t for t in (market_block, extra_block, tool_block) if t]
             if answer_text.strip() and evidence_texts:
                 violations = grounding_violations(answer_text, evidence_texts)
                 if violations:
@@ -375,3 +385,228 @@ def _entity_payload(request: Request) -> dict:
 async def assistant_entity_dict(request: Request) -> dict:
     data = await asyncio.to_thread(_entity_payload, request)
     return {"data": data, "meta": {}}
+
+
+# ---------------------------------------------------------------------------
+# 上下文注入扩展（AI 大脑 P1）：持仓 + 最近精选 + 今日事件
+# ---------------------------------------------------------------------------
+
+_EXTRA_MAX_CHARS = 1200
+
+
+def _build_extra_context(request: Request) -> str:
+    """同步线程内构建「持仓/精选/事件」紧凑块（DB 读路径，零外呼）。
+
+    行情快照已在 market_block 覆盖，这里只补持仓与系统结论类数据。
+    任何一块拿不到就跳过——绝不占位虚构。
+    """
+    from sqlalchemy import select
+
+    from app.core.db import get_session_factory
+    from app.models.alert import AlertEvent, AlertRule
+    from app.models.daily_pick import DailyPickSet
+    from app.picks.watcher import WATCHER_RULE_NAME
+    from app.services.real_position_service import load_positions
+
+    sf = get_session_factory()
+    blocks: list[str] = []
+
+    try:
+        positions = load_positions(sf)
+        if positions:
+            rows = [
+                f"{p.name or ''}({p.symbol}) {p.quantity}股 成本{p.avg_cost}"
+                for p in positions[:5]
+            ]
+            blocks.append("【持仓（成本口径，实时价见行情块）】" + "；".join(rows))
+    except Exception as exc:  # noqa: BLE001
+        log.debug("extra context positions skipped: %s", exc)
+
+    try:
+        with sf() as db:
+            row = db.execute(
+                select(DailyPickSet).order_by(DailyPickSet.id.desc()).limit(1)
+            ).scalars().first()
+        if row is not None:
+            import json as _json
+
+            items = _json.loads(row.items or "[]")[:3]
+            names = "；".join(
+                f"{it.get('name', '')}({it.get('symbol', '')}) {it.get('score', '—')}分"
+                for it in items
+            )
+            blocks.append(f"【最近精选 {row.date}】{names}")
+    except Exception as exc:  # noqa: BLE001
+        log.debug("extra context picks skipped: %s", exc)
+
+    try:
+        with sf() as db:
+            rule_id = db.execute(
+                select(AlertRule.id).where(AlertRule.name == WATCHER_RULE_NAME).limit(1)
+            ).scalars().first()
+            if rule_id is not None:
+                n = len(db.execute(
+                    select(AlertEvent.id).where(AlertEvent.rule_id == rule_id).limit(500)
+                ).scalars().all())
+                blocks.append(f"【watcher 事件】近期累计 {n} 条（详情用 events 工具取）")
+    except Exception as exc:  # noqa: BLE001
+        log.debug("extra context events skipped: %s", exc)
+
+    out = "\n".join(b for b in blocks if b)
+    return out[:_EXTRA_MAX_CHARS]
+
+
+# ---------------------------------------------------------------------------
+# 收盘 LLM 综述（AI 大脑 P1：叙事分析层，每日一次）
+# ---------------------------------------------------------------------------
+
+_SUMMARY_TIMEOUT_S = 180.0
+
+
+def _collect_summary_evidence(request: Request) -> dict:
+    """综述证据收集（同步线程）：相位/精选/事件/持仓/指数。失败块显式缺席。"""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import select
+
+    from app.core.db import get_session_factory
+    from app.market.sentiment_history import get_history
+    from app.models.alert import AlertEvent, AlertRule
+    from app.models.daily_pick import DailyPickSet
+    from app.picks.watcher import WATCHER_RULE_NAME
+    from app.services.real_position_service import load_positions
+
+    sf = get_session_factory()
+    ev: dict = {}
+
+    try:
+        rows = get_history(sf, days=1)
+        if rows:
+            ev["phase"] = {k: rows[0].get(k) for k in ("trade_date", "phase", "temperature", "confidence")}
+    except Exception as exc:  # noqa: BLE001
+        log.debug("summary phase skipped: %s", exc)
+
+    try:
+        with sf() as db:
+            row = db.execute(
+                select(DailyPickSet).order_by(DailyPickSet.id.desc()).limit(1)
+            ).scalars().first()
+        if row is not None:
+            import json as _json
+
+            items = _json.loads(row.items or "[]")
+            ev["picks"] = {
+                "date": row.date,
+                "items": [
+                    {k: it.get(k) for k in ("symbol", "name", "score", "confidence", "theme", "observation_only")}
+                    for it in items[:8]
+                ],
+                "meta": {k: row_meta for k, row_meta in (_json.loads(row.meta or "{}")).items()
+                         if k in ("market_phase", "gate", "limit_up_count", "market_pct", "regime")},
+            }
+    except Exception as exc:  # noqa: BLE001
+        log.debug("summary picks skipped: %s", exc)
+
+    try:
+        with sf() as db:
+            rule_id = db.execute(
+                select(AlertRule.id).where(AlertRule.name == WATCHER_RULE_NAME).limit(1)
+            ).scalars().first()
+            if rule_id is not None:
+                rows = db.execute(
+                    select(AlertEvent).where(AlertEvent.rule_id == rule_id)
+                    .order_by(AlertEvent.id.desc()).limit(60)
+                ).scalars().all()
+            else:
+                rows = []
+        today = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        texts = []
+        for r in rows:
+            try:
+                bj = (r.triggered_at + timedelta(hours=8)).strftime("%Y-%m-%d")
+            except Exception:  # noqa: BLE001
+                continue
+            if bj != today:
+                continue
+            snap = r.snapshot
+            if isinstance(snap, str):
+                try:
+                    snap = json.loads(snap)
+                except Exception:  # noqa: BLE001
+                    snap = {}
+            t = (snap or {}).get("text")
+            if t:
+                texts.append(t)
+        ev["events_today"] = texts[:12]
+        ev["events_today_count"] = len(texts)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("summary events skipped: %s", exc)
+
+    try:
+        positions = load_positions(sf)
+        if positions:
+            ev["positions"] = [
+                {k: getattr(p, k) for k in ("symbol", "name", "quantity", "avg_cost", "realized_pnl")}
+                for p in positions[:8]
+            ]
+    except Exception as exc:  # noqa: BLE001
+        log.debug("summary positions skipped: %s", exc)
+
+    return ev
+
+
+@router.get("/assistant/daily-summary")
+async def assistant_daily_summary(request: Request, force: bool = False) -> dict:
+    """收盘 LLM 综述（15:35 automation 消费）：把当日系统数据变成人话与判断。
+
+    与 15:45 清单式复盘分工：本端点是**叙事层**（相位→盘面→组合→关注点），
+    复盘 automation 是**审计层**（三态判定/操作对账/处置闭环）。
+    LLM 失败显式 available=False——automation 侧跳过发送，绝不发降级占位文。
+    """
+    import time as _time
+
+    from app.core.llm_client import LLMError, chat_completion
+
+    evidence = await asyncio.to_thread(_collect_summary_evidence, request)
+    if not evidence:
+        return {"available": False, "reason": "无可综述数据（相位/精选/事件/持仓全缺）"}
+
+    import json as _json
+
+    prompt = (
+        "你是 A 股交易系统的收盘综述引擎。基于以下系统真实数据写一段 200~300 字的收盘综述：\n"
+        "1) 市场相位与温度；2) 盘面与 watcher 异动的主线；3) 今日精选组合的处境"
+        "（哪些票值得继续跟踪、哪些触发观察）；4) 明日开盘前最该确认的一件事。\n"
+        "纪律：只使用给定数据，不编造数字；不构成买卖建议；语气克制、结论前置。\n\n"
+        "数据（JSON）：\n" + _json.dumps(evidence, ensure_ascii=False)
+    )
+    messages = [
+        {"role": "system", "content": "你是严谨的 A 股收盘综述引擎，输出中文纯文本。"},
+        {"role": "user", "content": prompt},
+    ]
+    t0 = _time.monotonic()
+    try:
+        text = await asyncio.to_thread(
+            chat_completion,
+            settings.review_llm_base_url,
+            settings.review_llm_api_key,
+            settings.review_llm_model or settings.news_llm_model or "default",
+            messages,
+            provider=settings.llm_provider,
+            cli_path=settings.llm_cli_path,
+            timeout=_SUMMARY_TIMEOUT_S,
+        )
+    except LLMError as exc:
+        kind = getattr(exc, "kind", None)
+        return {
+            "available": False,
+            "reason": str(exc)[:200],
+            "kind": kind.value if kind is not None else None,
+        }
+    return {
+        "available": True,
+        "text": text.strip(),
+        "model": settings.review_llm_model or settings.news_llm_model,
+        "elapsed_s": round(_time.monotonic() - t0, 1),
+        "generated_at": _time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }

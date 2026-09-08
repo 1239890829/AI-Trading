@@ -119,7 +119,15 @@ async def patch_action_item(item_id: str, body: ActionItemPatch, request: Reques
         raise HTTPException(status_code=404, detail=str(exc)) from None
     except ActionItemStaleError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
-    return {"data": updated}
+    # applied 半自动写回提示（策略进化 P1 方向5）：识别「参数 当前值→建议值」意图，
+    # 运行时读当前值生成 diff；不认识/读不到 → unresolved，绝不臆造。
+    # 全自动写回被方案排除——实际改文件仍由人执行，这里只负责把证据摆到眼前。
+    param_diff: list[dict] = []
+    if body.status == "applied":
+        from app.review.writeback import build_param_diff
+
+        param_diff = build_param_diff(f"{body.title} {body.note}")
+    return {"data": {**updated, "param_diff": param_diff}}
 
 
 @router.get("/review/action-items")

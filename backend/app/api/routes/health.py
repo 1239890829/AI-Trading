@@ -111,3 +111,42 @@ async def provider_capabilities() -> dict:
         "capabilities": CAPABILITIES,
         "single_points": single_point_methods(),
     }
+
+
+@router.get("/system/metrics")
+async def system_metrics() -> dict:
+    """性能基线（策略进化 P1 方向4）：API p95 延迟 / DuckDB 慢查询 / 同步时长趋势。
+
+    内存环形缓冲读时聚合，零持久化；进程重启即清零（基线观测语义，
+    不是审计账本）。同步历史由 sync_marketdb.py 落盘 data/marketdb/sync_history.json。
+    """
+    from pathlib import Path
+
+    from app.core.perf import api_metrics, duck_slow_queries, read_sync_history
+
+    # backend/data/marketdb（本文件在 app/api/routes/ 下，parents[3]=backend）
+    db_path = Path(__file__).resolve().parents[3] / "data" / "marketdb" / "market.duckdb"
+    return {
+        "api": api_metrics(),
+        "duck_slow": duck_slow_queries(),
+        "sync_history": read_sync_history(db_path),
+    }
+
+
+@router.get("/system/marketdb-quality")
+async def marketdb_quality() -> dict:
+    """marketdb 质量门报告（sync_marketdb.py 每次同步后落盘）。
+
+    available=False = 尚未跑过带质量门的同步（文件不存在）——显式降级，
+    不臆造「质量正常」。
+    """
+    import json
+    from pathlib import Path
+
+    report_file = Path(__file__).resolve().parents[3] / "data" / "marketdb" / "quality_report.json"
+    try:
+        return json.loads(report_file.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"available": False, "reason": "尚未生成质量报告（等待下一次同步）"}
+    except Exception as exc:  # noqa: BLE001  损坏文件显式报错，不冒充正常
+        return {"available": False, "reason": f"质量报告读取失败：{exc}"}

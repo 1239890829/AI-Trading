@@ -304,6 +304,7 @@ def _calendar_days_ms(limit: int = 400) -> list[int]:
 
 
 def main() -> int:
+    t0 = time.monotonic()
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--full", action="store_true", help="全量拉 10 年日K（首次/缺口>7 交易日）")
     ap.add_argument("--factors", action="store_true", help="同步复权因子（全量，量小）")
@@ -355,9 +356,21 @@ def main() -> int:
 
     # 收尾质量检查：error 级违规 → 同步判定失败（数据不干净 ≠ 同步成功）
     issues = run_quality_checks(con)
+    # 近窗业务校验（P1 方向4 数据质量门）：近窗空值率 / 复权单日涨跌超限 / 零收盘
+    from app.market.marketdb_quality import append_sync_history, run_recent_quality_checks, write_quality_report
+
+    issues += run_recent_quality_checks(con)
     con.close()
+
+    # 报告与时长趋势落盘（进程外可见性：/api/system/marketdb-quality、/api/system/metrics）
+    report["total_s"] = round(time.monotonic() - t0, 1)
+    body = write_quality_report(DB_PATH, report, issues)
+    append_sync_history(DB_PATH, {
+        "ts": body["synced_at"], "full": bool(args.full), "factors": bool(args.factors),
+        "total_s": report["total_s"], "status": body["status"],
+    })
+
     if issues:
-        report["quality_issues"] = issues
         errs = [i for i in issues if i["severity"] == "error"]
         for i in issues:
             print(f"[quality:{i['severity']}] {i['check']} — {i['detail']} sample={i['sample'][:3]}",

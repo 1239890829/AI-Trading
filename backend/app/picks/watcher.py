@@ -230,6 +230,11 @@ class DirectionTracker:
         }
 
 
+#: 大单异动阈值：题材成员当日主力净流入首破 0.3 亿（3000 万）提醒。
+#: 经验初值、未经回测校准——校准走复盘 IC/胜率证据后再定稿（同 halt_risk TODO 模式）。
+FLOW_SURGE_YI = 0.3
+
+
 class IntradayWatcher:
     """当日盘前方向的 tracker 组。step(beat) 推进全部方向并汇合提醒。"""
 
@@ -245,6 +250,8 @@ class IntradayWatcher:
         ]
         self.started_at = beijing_now().isoformat()
         self.beat_count = 0
+        # 题材成员主力净额跟踪（P1 方向2）：symbol -> {"peak": 累计净额峰值, "alerted": bool}
+        self.flow_state: dict[str, dict] = {}
 
     def step(self, beat: dict) -> list[dict]:
         self.beat_count += 1
@@ -253,7 +260,42 @@ class IntradayWatcher:
         alerts: list[dict] = []
         for tr in self.trackers:
             alerts.extend(tr.step(themes.get(tr.direction), env, beat.get("now_minutes")))
+        alerts.extend(self._step_flows(beat.get("flows") or {}))
         return alerts
+
+    def _step_flows(self, flows: dict) -> list[dict]:
+        """题材成员主力净额跟踪（P1 方向2）：当日累计首破阈值 → 大单异动提醒。
+
+        f62 是**当日累计**口径，无需差分；「首破」语义让持续流入只报第一拍，
+        同票每日至多一次（append_alert 按 key 去重兜底）。只报流入侧——选股
+        场景的标的在涨停池里，流出异动由炸板池/跌停池覆盖，不重复建设。
+        阈值为经验初值（未经回测校准，同 halt_risk 模式，校准前仅作提示）。
+        """
+        out: list[dict] = []
+        for sym, it in flows.items():
+            if not isinstance(it, dict) or not it.get("available"):
+                continue
+            main = it.get("main")
+            if main is None:
+                continue
+            st = self.flow_state.setdefault(sym, {"peak": None, "alerted": False})
+            st["peak"] = main if st["peak"] is None else max(st["peak"], main)
+            if st["alerted"] or main < FLOW_SURGE_YI:
+                continue
+            st["alerted"] = True
+            name = it.get("name") or ""
+            out.append({
+                "key": f"flow-surge-{sym}",
+                "kind": "flow_surge",
+                "direction": "",
+                "symbol": sym,
+                "text": (
+                    f"💰 大单异动 {name}({sym})：主力净流入 {main:.2f} 亿"
+                    f"（当日累计首破 {FLOW_SURGE_YI} 亿，题材成员跟踪）"
+                ),
+                "meta": {"trigger_value": round(main, 3), "threshold": FLOW_SURGE_YI},
+            })
+        return out
 
     def state(self) -> dict:
         return {
@@ -275,6 +317,8 @@ class IntradayWatcher:
                 }
                 for t in self.trackers
             ],
+            "flow_tracked": len(self.flow_state),
+            "flow_alerted": sorted(s for s, v in self.flow_state.items() if v.get("alerted")),
         }
 
 
@@ -483,6 +527,18 @@ async def collect_beat_inputs(app, env_cache: dict, *, env_refresh_seconds: floa
         hub, getattr(state, "snapshot_service", None),
         themes, vr_cache, td.strftime("%Y%m%d"), beat["now_minutes"],
     )
+
+    # 个股资金流接线（P1 方向2）：题材成员当日主力净额，一次 ulist 覆盖全部成员。
+    # 失败/空 → flows 键缺席，_step_flows 按 unknown 处理（不臆造、不阻断其他判定）。
+    try:
+        from app.market import stock_flow
+
+        flow_syms = sorted({s for st in themes.values() for s in (st.get("members") or [])})
+        if flow_syms:
+            flow_payload = await stock_flow.get_stock_flow(flow_syms[: stock_flow.MAX_SYMBOLS])
+            beat["flows"] = flow_payload.get("items") or {}
+    except Exception as exc:  # noqa: BLE001  资金流是增强信号，失败不影响方向跟踪
+        log.warning("watcher beat: stock flow failed: %s", exc)
 
     beat["themes"] = themes
     beat["env"] = await _refresh_env(state, env_cache, env_refresh_seconds)

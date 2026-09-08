@@ -135,7 +135,13 @@ akshare (备源拉取/补数据, 已有) ──┼──→ akquant.run_backtest
 2. akquant 0.3.58 引入 backend 依赖（requirements.lock 同步）+ `backend/scripts/backtest_picks.py` marketdb→akquant 通路验证
 3. 本方案文档 `docs/ai-brain-plan.md`
 
-## 五、待用户确认项（先提后做）
+## 五、P1 实施记录（2026-09-08 盘中，用户指令「继续」授权）
 
-- P1 批次（assistant 工具扩容 + LLM 盘中综述）是否启动
+- **工具白名单 10→14**：+picks（最近精选组合含置信档）/ positions（持仓+浮动盈亏，缺行情回退成本价口径）/ sentiment（近 5 日相位）/ events（今日 watcher 事件）。只读纪律不变，校验/限额/缓存沿用既有机制。
+- **上下文注入扩展**：行情快照之外主动注入「持仓 + 最近精选 + watcher 事件摘要」（紧凑块 ≤1200 字，best-effort 静默降级）；grounding 证据池同步扩展到该块。
+- **15:35 LLM 收盘综述**：`GET /api/assistant/daily-summary`（相位/精选/事件/持仓/指数 → 200~300 字叙事），automation `00a60b78` 工作日 15:35 飞书 text 推送。与 15:45 复盘分工：本任务=叙事层，复盘=审计层。LLM 失败 available=False → automation 跳过发送，绝不发占位文。前提核实：09-07 复盘 model_degraded=0（09-04 的 glm-5.3 别名问题已不存在）。
+
+## 六、待用户确认项（先提后做）
+
 - 14:40 尾盘卡是否也要改成后端直发（会从 interactive 卡片降级为 text，不建议）
+- P2 批次（原生工具 allowedTools / 会话持久化 / skills 目录 / backtest_picks 进复盘报告）待 P1 运行观察后启动

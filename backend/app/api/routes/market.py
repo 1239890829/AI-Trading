@@ -1545,3 +1545,17 @@ async def market_chip(
 
     payload = get_chip_service().distribution(symbol, full=full)
     return {"data": payload, "meta": {}}
+
+
+@router.get("/stock-flow")
+async def market_stock_flow(symbols: str = Query(default="", description="逗号分隔6位代码，≤60 只")) -> dict:
+    """个股资金流（当日累计五档净额，亿元；方向2 P1）。
+
+    口径见 app/market/stock_flow.py：北交所无个股资金流 → 进 no_data 显式列出；
+    全部失败 → items 空且 degraded 非空（绝不填 0）。
+    """
+    from app.market import stock_flow
+
+    syms = [s.strip() for s in symbols.split(",") if s.strip()]
+    payload = await stock_flow.get_stock_flow(syms)
+    return {"data": payload, "meta": {}}
