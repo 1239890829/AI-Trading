@@ -134,6 +134,32 @@ class AgentAgenda(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
 
 
+class AgentExperiment(Base):
+    """实验记录本（AI 大脑 v2 P1）：A 类参数变更的后置验证载体。
+
+    安全模型=前置放行、后置纠错：变更生效时自动建实验（基线=当时 signal_health
+    快照），验证窗口（默认 30 日）到期后自动对比——胜率劣化超阈值 → **自动回滚**
+    变更单并记录结论；样本不足 → 延长窗口（最多 max_extensions 次），绝不误杀。
+    每条实验回答：假设是什么、基线如何、结果如何、结论是什么。
+    """
+
+    __tablename__ = "agent_experiment"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    change_id: Mapped[int] = mapped_column(Integer, index=True)   # 关联 agent_param_change
+    param_key: Mapped[str] = mapped_column(String(64), index=True)
+    hypothesis: Mapped[str] = mapped_column(Text, default="")     # 预期效果（来自议程项）
+    baseline: Mapped[str] = mapped_column(Text, default="{}")     # JSON：生效时 signal_health 快照
+    verification_date: Mapped[datetime | None] = mapped_column(DateTime, default=None, index=True)
+    status: Mapped[str] = mapped_column(String(16), default="running", index=True)
+    # running / concluded(改善或持平) / rolled_back(劣化自动回滚) / concluded_insufficient
+    result: Mapped[str | None] = mapped_column(Text, default=None)  # JSON：对比结果与结论
+    extensions: Mapped[int] = mapped_column(Integer, default=0)
+    max_extensions: Mapped[int] = mapped_column(Integer, default=2)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    concluded_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+
+
 class AgentAudit(Base):
     """执行层审计：谁在什么时候把什么从什么改成了什么（+ 怎么回滚）。"""
 

@@ -161,6 +161,14 @@ async def run_agenda():
     return {"data": await evo.run_evolution_now()}
 
 
+@router.get("/agent/experiments")
+async def list_experiments(limit: int = Query(30, ge=1, le=200)):
+    """实验记录本：A 类自动变更的后置验证（running/结论/自动回滚记录）。"""
+    from app.services import experiments
+
+    return {"data": experiments.list_experiments(limit=limit)}
+
+
 @router.get("/agent/audit")
 async def list_audit(
     target: str | None = None,

@@ -5,8 +5,10 @@ import { useCallback, useEffect, useState } from "react";
 import {
   getAgentAgenda,
   getAgentAgendas,
+  getAgentExperiments,
   runAgentAgenda,
   type AgentAgenda,
+  type AgentExperiment,
 } from "@/lib/api";
 
 /**
@@ -45,14 +47,18 @@ function timeText(iso: string | null): string {
 export function EvolutionTab() {
   const [agenda, setAgenda] = useState<AgentAgenda | null | undefined>(undefined);
   const [history, setHistory] = useState<AgentAgenda[] | undefined>(undefined);
+  const [experiments, setExperiments] = useState<AgentExperiment[] | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const [a, list] = await Promise.all([getAgentAgenda(), getAgentAgendas()]);
+      const [a, list, exps] = await Promise.all([
+        getAgentAgenda(), getAgentAgendas(), getAgentExperiments(),
+      ]);
       setAgenda(a);
       setHistory(list);
+      setExperiments(exps);
       setError(null);
     } catch (e) {
       setAgenda(null);
@@ -179,6 +185,39 @@ export function EvolutionTab() {
                       {it.result}
                     </p>
                   )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* 实验记录本：A 类自动变更的后置验证（劣化自动回滚） */}
+      <section className="shrink-0 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+        <h3 className="mb-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-200">
+          实验记录本 <span className="text-[10px] text-zinc-400">· 30 日后置验证，劣化自动回滚</span>
+        </h3>
+        {experiments === undefined ? (
+          <div className="h-6 w-full animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
+        ) : experiments.length === 0 ? (
+          <p className="text-[11px] text-zinc-400">暂无进行中的实验（A 类参数自动生效时会自动挂账）。</p>
+        ) : (
+          <div className="space-y-1">
+            {experiments.slice(0, 5).map((e) => {
+              const meta =
+                e.status === "rolled_back"
+                  ? { label: "已自动回滚", cls: "bg-red-500/10 text-red-600 dark:text-red-300" }
+                  : e.status === "concluded"
+                    ? { label: "验证通过", cls: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300" }
+                    : e.status === "concluded_insufficient"
+                      ? { label: "样本不足", cls: "bg-amber-500/10 text-amber-600 dark:text-amber-300" }
+                      : { label: `验证中（${e.verification_date?.slice(5, 10) ?? "--"} 到期）`, cls: "bg-sky-500/10 text-sky-600 dark:text-sky-300" };
+              return (
+                <div key={e.id} className="flex items-center justify-between gap-2 text-[11px]">
+                  <span className="truncate text-zinc-600 dark:text-zinc-300">
+                    #{e.change_id} {e.param_key} · {e.hypothesis.slice(0, 40) || "—"}
+                  </span>
+                  <span className={`shrink-0 rounded px-1 py-0.5 text-[10px] ${meta.cls}`}>{meta.label}</span>
                 </div>
               );
             })}

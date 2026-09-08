@@ -2165,3 +2165,23 @@ export async function getAgentAgendas(limit = 14): Promise<AgentAgenda[]> {
 export async function runAgentAgenda(): Promise<AgentAgenda> {
   return (await sendJson<AgentAgenda>("/api/agent/agenda/run", "POST", {}, 180_000)).data;
 }
+
+// ---- 实验记录本（后置验证：A 类变更的 30 日窗口与自动回滚）----
+
+export interface AgentExperiment {
+  id: number;
+  change_id: number;
+  param_key: string;
+  hypothesis: string;
+  baseline: { status?: string; win_rate?: number | null; mean_excess?: number | null; taken_at?: string };
+  verification_date: string | null;
+  status: "running" | "concluded" | "rolled_back" | "concluded_insufficient";
+  result: { conclusion: string; win_rate_delta?: number; current?: Record<string, unknown>; rollback?: unknown } | null;
+  extensions: number;
+  created_at: string | null;
+  concluded_at: string | null;
+}
+
+export async function getAgentExperiments(): Promise<AgentExperiment[]> {
+  return (await getJson<AgentExperiment[]>("/api/agent/experiments")).data;
+}

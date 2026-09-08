@@ -21,6 +21,7 @@ import asyncio
 import contextlib
 import json
 import logging
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -90,7 +91,12 @@ def _within_budget(budget: dict, *, need_llm: bool, need_task: bool) -> str | No
 
 
 def _collect_review_improvements(session_factory) -> dict:
-    """今日复盘报告的改进项（已有 15:30 复盘产出）。字段按 schemas.ActionItem。"""
+    """今日复盘报告的改进项（已有 15:30 复盘产出）。
+
+    每条带齐**回写三元组**（id/title/category + 顶层 trade_date）——议程裁决
+    为可自动化并执行成功后，用三元组把 action_items 状态回写为 applied
+    （闭环第三段；update_action_item_status 的寻址守卫要求三元组吻合）。
+    """
     try:
         from app.review.storage import get_report
 
@@ -108,6 +114,37 @@ def _collect_review_improvements(session_factory) -> dict:
                 "n": len(items)}
     except Exception as exc:  # noqa: BLE001  证据收集失败不阻断议程
         return {"available": False, "note": f"读取失败：{exc}"}
+
+
+#: 方向校验（P1-④）：关键能力快照——与三份计划的阶段声明对账。
+#: 每项 = (能力名, 检查方式)。缺 = 该计划项尚未落地（诚实标注，不冒充）。
+_PLAN_CAPABILITY_CHECKS: list[tuple[str, Callable[[], bool]]] = [
+    ("console.task_center", lambda: (Path(__file__).resolve().parents[1] / "services" / "agent_tasks.py").exists()),
+    ("console.triage", lambda: (Path(__file__).resolve().parents[1] / "services" / "alert_triage.py").exists()),
+    ("console.params", lambda: (Path(__file__).resolve().parents[1] / "services" / "agent_params.py").exists()),
+    ("brain.agenda", lambda: True),  # 本模块自身
+    ("brain.experiments", lambda: (Path(__file__).resolve().parents[1] / "services" / "experiments.py").exists()),
+    ("signal_health", lambda: (Path(__file__).resolve().parents[1] / "picks" / "signal_health.py").exists()),
+    ("chip_engine", lambda: (Path(__file__).resolve().parents[1] / "market" / "chip.py").exists()
+     or (Path(__file__).resolve().parents[1] / "picks" / "chip_service.py").exists()),
+    ("stock_flow", lambda: (Path(__file__).resolve().parents[1] / "market" / "stock_flow.py").exists()),
+    ("hmm_regime", lambda: (Path(__file__).resolve().parents[1] / "picks" / "regime_hmm.py").exists()
+     or (Path(__file__).resolve().parents[1] / "market" / "regime_hmm.py").exists()),
+]
+
+
+def _collect_plan_alignment() -> dict:
+    """方向校验快照：关键能力存在性 → 差异表（对应三份计划的阶段声明）。"""
+    landed, missing = [], []
+    for name, check in _PLAN_CAPABILITY_CHECKS:
+        try:
+            (landed if check() else missing).append(name)
+        except Exception:  # noqa: BLE001
+            missing.append(name)
+    return {
+        "available": True, "landed": landed, "missing": missing,
+        "note": "与 strategy-evolution/ai-brain/console-plan 的阶段声明对账；missing=计划声明但代码未落地",
+    }
 
 
 def _collect_signal_health(session_factory) -> dict:
@@ -135,32 +172,34 @@ def _collect_triage_stats(session_factory) -> dict:
 
 
 def collect_inputs(session_factory=None) -> dict:
-    """五路证据汇总（P0 三路；factor_ic 与 plan_alignment P1 接入时补位）。"""
+    """五路证据汇总（factor_ic 月度复核 P1 仍缺席，显式标注）。"""
     sf = session_factory or get_session_factory()
-    inputs = {
+    return {
         "review": _collect_review_improvements(sf),
         "signal_health": _collect_signal_health(sf),
         "triage_stats": _collect_triage_stats(sf),
+        "plan_alignment": _collect_plan_alignment(),
         "factor_ic": {"available": False, "note": "月度复核（factor_ic_review）P1 接入"},
-        "plan_alignment": {"available": False, "note": "方向校验器 P1 接入"},
     }
-    return inputs
 
 
 # ---------------------------------------------------------------- 议程生成
 
 
 _SYSTEM_PROMPT = (
-    "你是 A 股交易系统的自主进化大脑。给定今日系统证据（复盘改进项/信号健康/告警判读统计），"
-    "输出**今日进化议程**：找出系统最值得立即改进的点，并给出可直接执行的方案。\n"
-    "只输出 JSON：{\"items\": [{\"class\": \"A|B\", \"finding\": \"发现（一句话）\", "
+    "你是 A 股交易系统的自主进化大脑。给定今日系统证据（复盘改进项/信号健康/告警判读统计/计划对账），"
+    "输出**今日进化议程**：对复盘 action_items 逐条裁决（可自动化的给出方案），并找出其他最值得立即改进的点。\n"
+    "只输出 JSON：{\"items\": [{\"class\": \"A|B|C\", \"finding\": \"发现（一句话）\", "
     "\"evidence\": {…数据依据}, \"action\": \"…\", "
+    "\"review_item\": {\"id\": \"…\", \"title\": \"…\", \"category\": \"…\"}（裁决某条复盘改进项时必带）, "
     "\"param\": {\"key\": \"picks_style_offsets_json\", \"after\": {…}}（仅 A 类必填）, "
+    "\"summary\": \"…\"（仅 B 类）, "
     "\"expected_effect\": \"预期效果\", \"verification\": \"如何验证\", \"priority\": 1}]}\n"
     "纪律：\n"
-    "- class=A 表示改白名单参数（当前仅 picks_style_offsets_json，after 是 {相位:{维度:delta}}，"
-    "|delta|≤0.06）；没有充分数据依据就不要提 A 类\n"
-    "- class=B 表示文档/知识沉淀（summary 字段写结论摘要，系统会落进化日报）\n"
+    "- 复盘的每条 action_items 都要裁决：可自动化的（改白名单参数→A 类并带 review_item 与 param；"
+    "知识沉淀→B 类并带 review_item 与 summary）；不可自动化的**不要输出**（系统会自动标 deferred 并写明能力边界）\n"
+    "- class=A 仅限 picks_style_offsets_json（after 是 {相位:{维度:delta}}，|delta|≤0.06）；"
+    "没有充分数据依据就不要提 A 类\n"
     "- 不确定就不提；宁缺毋滥；最多 3 项；没有值得改的就输出空 items\n"
     "- 不提供买卖建议，不改风控/资金/推送相关任何东西"
 )
@@ -200,6 +239,11 @@ def _parse_items(raw: str) -> list[dict]:
             }
         if cls == "B":
             item["summary"] = str(it.get("summary") or "")[:500]
+        # 复盘改进项裁决回执（闭环回写用）
+        ri = it.get("review_item")
+        if isinstance(ri, dict) and ri.get("id"):
+            item["review_item"] = {"id": str(ri["id"]), "title": str(ri.get("title") or "")[:120],
+                                   "category": str(ri.get("category") or "")}
         out.append(item)
     return out
 
@@ -323,7 +367,10 @@ def _param_change_in_24h(key: str, sf) -> bool:
 
 
 def _execute_a(item: dict, sf, agenda_date: str) -> dict:
-    """A 类：参数变更单自动生效（白名单+红线+频率闸；证据随单落库）。"""
+    """A 类：参数变更单自动生效（白名单+红线+频率闸；证据随单落库）。
+
+    生效成功即挂实验（后置验证：30 日后自动对比 signal_health，劣化自动回滚）。
+    """
     param = item.get("param") or {}
     key = param.get("key") or ""
     if key in REDLINE_KEYS:
@@ -337,12 +384,28 @@ def _execute_a(item: dict, sf, agenda_date: str) -> dict:
             evidence=item.get("evidence") or {}, session_factory=sf,
         )
         applied = agent_params.apply_change(change["id"], session_factory=sf)
-        return {**item, "status": "executed",
-                "result": f"变更单 #{applied['id']} 已自动生效（30 日后置验证 P1 挂账）"}
+        # 后置守护：自动挂实验（30 日窗口，劣化自动回滚——取代人工确认的机制）
+        experiment = None
+        with contextlib.suppress(Exception):
+            from app.services.experiments import attach_experiment
+
+            experiment = attach_experiment(
+                applied["id"], key,
+                hypothesis=item.get("expected_effect") or item.get("finding") or "",
+                session_factory=sf,
+            )
+        result = f"变更单 #{applied['id']} 已自动生效"
+        if experiment:
+            result += f"（实验 #{experiment['id']} 已挂账，{VERIFY_NOTE}）"
+        return {**item, "status": "executed", "result": result,
+                "experiment_id": experiment["id"] if experiment else None}
     except ValueError as exc:
         return {**item, "status": "rejected", "result": f"校验拒绝：{exc}"}
     except Exception as exc:  # noqa: BLE001
         return {**item, "status": "failed", "result": f"{type(exc).__name__}: {exc}"}
+
+
+VERIFY_NOTE = "30 日后置验证：劣化自动回滚"
 
 
 def _execute_b(item: dict, agenda_date: str) -> dict:
@@ -405,7 +468,40 @@ def execute_agenda(agenda: dict, session_factory=None) -> dict:
             db.refresh(row)
             out = _agenda_dump(row)
     record_summary_audit(agenda.get("date") or "", items)
+    _sync_review_items(agenda, items, sf)
     return out
+
+
+def _sync_review_items(agenda: dict, items: list[dict], sf) -> None:
+    """闭环第三段：裁决为可自动化且**执行成功**的议程项 → 对应复盘改进项
+    状态回写 applied（机器全权，无人工流转；review 的 status 枚举本就有 applied）。
+    deferred/rejected 的改进项保持 pending——它们会出现在下次议程的输入里。
+    """
+    review = (agenda.get("inputs") or {}).get("review") or {}
+    if not review.get("available"):
+        return
+    trade_date = review.get("trade_date")
+    by_id = {str(i["id"]): i for i in review.get("action_items") or []}
+    from app.review.storage import ActionItemStaleError, update_action_item_status
+
+    for it in items:
+        if it.get("status") != "executed":
+            continue
+        ri = it.get("review_item") or {}
+        item_id = str(ri.get("id") or "")
+        meta = by_id.get(item_id)
+        if meta is None:
+            continue
+        try:
+            update_action_item_status(
+                sf, item_id, "applied",
+                note=f"AI 大脑自动执行：{it.get('result', '')[:160]}",
+                expect_trade_date=trade_date or "",
+                expect_category=ri.get("category") or meta["category"],
+                expect_title=ri.get("title") or meta["title"],
+            )
+        except (ValueError, LookupError, ActionItemStaleError) as exc:
+            log.warning("review item %s sync failed: %s", item_id, exc)
 
 
 def record_summary_audit(date: str, items: list[dict]) -> None:
@@ -448,12 +544,28 @@ def list_agendas(limit: int = 14, session_factory=None) -> list[dict]:
 
 async def evolution_scheduler(app, stop: asyncio.Event, *, run_hour: int, run_minute: int,
                               check_interval_seconds: float) -> None:
-    """交易日 15:45 盘后议程（接在 15:30 复盘调度之后）——与 premarket_scheduler 同模式。"""
+    """交易日 15:45 盘后议程（接在 15:30 复盘调度之后）——与 premarket_scheduler 同模式。
+
+    顺带每日一次实验裁决（后置验证：到期实验对比 signal_health，劣化自动回滚）——
+    conclude_due 幂等（只处理 running 且到期的），节流靠 _last_conclude_date。
+    """
+    global _LAST_CONCLUDE_DATE
     log.info("evolution scheduler started: daily at %02d:%02d", run_hour, run_minute)
     while not stop.is_set():
         try:
             now = beijing_now()
             today = now.date()
+            # 每日一次：到期实验裁决（劣化自动回滚）
+            if _LAST_CONCLUDE_DATE != today.isoformat() and now.hour >= 16:
+                with contextlib.suppress(Exception):
+                    from app.services.experiments import conclude_due
+
+                    results = conclude_due()
+                    _LAST_CONCLUDE_DATE = today.isoformat()
+                    if results:
+                        log.warning("[EVOLUTION] 实验裁决 %d 条：%s", len(results),
+                                    json.dumps([{r["id"]: r["status"]} for r in results],
+                                               ensure_ascii=False))
             if (now.hour, now.minute) >= (run_hour, run_minute):
                 days = await tc.trading_days(app.state.hub.provider)
                 if tc.last_trade_date(days, asof=today) == today:
@@ -466,3 +578,6 @@ async def evolution_scheduler(app, stop: asyncio.Event, *, run_hour: int, run_mi
             log.exception("evolution scheduler tick failed")
         with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait_for(stop.wait(), timeout=max(60.0, check_interval_seconds))
+
+
+_LAST_CONCLUDE_DATE: str = ""
