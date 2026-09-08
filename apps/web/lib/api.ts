@@ -2071,3 +2071,56 @@ export async function getAgentAudit(taskId?: string): Promise<AgentAuditEntry[]>
   const q = taskId ? `?task_id=${encodeURIComponent(taskId)}` : "";
   return (await getJson<AgentAuditEntry[]>(`/api/agent/audit${q}`)).data;
 }
+
+// ---- 参数配置（P1-B：变更单 + 回滚 + 证据门槛）----
+
+export interface AgentParamInfo {
+  key: string;
+  label: string;
+  desc: string;
+  risk: string;
+  current: string;
+  default: string;
+}
+
+export interface AgentParamChange {
+  id: number;
+  key: string;
+  before: unknown;
+  after: unknown;
+  source_type: string;
+  source_id: string;
+  evidence: Record<string, unknown> | null;
+  status: "draft" | "applied" | "rolled_back";
+  created_at: string | null;
+  applied_at: string | null;
+  rolled_back_at: string | null;
+  task_id: string | null;
+}
+
+export async function getAgentParams(): Promise<AgentParamInfo[]> {
+  return (await getJson<AgentParamInfo[]>("/api/agent/params")).data;
+}
+
+export async function getAgentParamChanges(key?: string): Promise<AgentParamChange[]> {
+  const q = key ? `?key=${encodeURIComponent(key)}` : "";
+  return (await getJson<AgentParamChange[]>(`/api/agent/params/changes${q}`)).data;
+}
+
+export async function createAgentParamChange(
+  key: string,
+  after: string,
+  opts: { source_type?: string; source_id?: string; evidence?: Record<string, unknown> } = {},
+): Promise<AgentParamChange> {
+  return (await sendJson<AgentParamChange>("/api/agent/params/change", "POST", {
+    key, after, ...opts,
+  })).data;
+}
+
+export async function applyAgentParamChange(changeId: number): Promise<AgentParamChange> {
+  return (await sendJson<AgentParamChange>(`/api/agent/params/changes/${changeId}/apply`, "POST")).data;
+}
+
+export async function rollbackAgentParamChange(changeId: number): Promise<AgentParamChange> {
+  return (await sendJson<AgentParamChange>(`/api/agent/params/changes/${changeId}/rollback`, "POST")).data;
+}

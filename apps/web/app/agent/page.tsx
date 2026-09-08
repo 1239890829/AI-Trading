@@ -3,6 +3,7 @@
 import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
+import { ParamsTab } from "@/components/agent/params-tab";
 import { TaskCenter } from "@/components/agent/task-center";
 import { AlertsTab } from "@/components/research/alerts-tab";
 import { ReviewTab } from "@/components/research/review-tab";
@@ -23,6 +24,7 @@ const TABS = [
   { key: "tasks", label: "任务中心" },
   { key: "review", label: "复盘" },
   { key: "alerts", label: "提醒与告警" },
+  { key: "params", label: "参数配置" },
 ] as const;
 
 type TabKey = (typeof TABS)[number]["key"];
@@ -73,6 +75,7 @@ function AgentInner() {
         {tab === "tasks" && <TaskCenter />}
         {tab === "review" && <ReviewTab focusDate={reviewDate} />}
         {tab === "alerts" && <AlertsTab />}
+        {tab === "params" && <ParamsTab />}
       </FadeSwap>
     </main>
   );

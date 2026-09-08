@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import require_write_token
 from app.services import agent_tasks as at
+from app.services import agent_params as params_svc
 from app.services import alert_triage as at_triage
 
 router = APIRouter(tags=["agent"])
@@ -90,6 +91,56 @@ async def ack_triage(triage_id: int):
 async def run_triage(limit: int = Query(20, ge=1, le=100)):
     """手动触发一轮判读（默认由后台 worker 每 30s 自动跑）。"""
     return {"data": await at_triage.triage_pending(limit=limit)}
+
+
+class ParamChangeIn(BaseModel):
+    key: str = Field(..., description="参数 key（白名单见 GET /agent/params）")
+    after: str = Field(..., description="新值（字符串形式；非法值 422）")
+    source_type: str = Field("manual", description="manual / review_action_item / ai_suggestion")
+    source_id: str = Field("", description="来源 ID（如改进项 id）")
+    evidence: dict | None = Field(None, description="采纳依据 {sample_days, ic, win_rate}")
+
+
+@router.get("/agent/params")
+async def list_params():
+    """参数白名单与当前生效值（覆盖层优先于静态配置）。"""
+    return {"data": params_svc.list_params()}
+
+
+@router.get("/agent/params/changes")
+async def list_param_changes(key: str | None = None, limit: int = Query(30, ge=1, le=200)):
+    return {"data": params_svc.list_changes(limit=limit, key=key)}
+
+
+@router.post("/agent/params/change", dependencies=[Depends(require_write_token)])
+async def propose_param_change(body: ParamChangeIn):
+    """生成变更单（draft，不生效）。值域非法 422；与当前值相同 422。"""
+    try:
+        return {"data": params_svc.propose(
+            body.key, body.after,
+            source_type=body.source_type, source_id=body.source_id,
+            evidence=body.evidence,
+        )}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.post("/agent/params/changes/{change_id}/apply", dependencies=[Depends(require_write_token)])
+async def apply_param_change(change_id: int):
+    """生效变更单：写运行时覆盖层（免重启）+ 审计。"""
+    try:
+        return {"data": params_svc.apply_change(change_id)}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.post("/agent/params/changes/{change_id}/rollback", dependencies=[Depends(require_write_token)])
+async def rollback_param_change(change_id: int):
+    """回滚变更单：恢复到 before（覆盖层同步还原）。"""
+    try:
+        return {"data": params_svc.rollback_change(change_id)}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.get("/agent/audit")

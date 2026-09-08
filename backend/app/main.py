@@ -226,6 +226,11 @@ async def lifespan(app: FastAPI):
         interrupted = reconcile_on_startup()
         if interrupted:
             log.warning("agent tasks interrupted by restart: %d 条已标 failed", interrupted)
+    # 参数覆盖层恢复（重启后覆盖仍生效——覆盖表是持久层，provider 是进程内注册）
+    with contextlib.suppress(Exception):
+        from app.services.agent_params import refresh_runtime_overrides
+
+        refresh_runtime_overrides()
 
     # 告警 AI 判读 worker（P1）：规则触发 → AI 判断是否值得提醒 → 悬浮球
     triage_stop = asyncio.Event()

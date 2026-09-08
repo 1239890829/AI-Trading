@@ -24,6 +24,7 @@ regime 按财报日历选基础权重表（业绩驱动期/空窗期），本模
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 
 #: 六维权重的合法维度（与 regime.WEIGHTS_BY_REGIME 同一套键）
 DIMS = ("sentiment", "news", "tech", "fundamental", "capital", "echelon")
@@ -53,11 +54,21 @@ _BASIS = {
 }
 
 
-def _load_override() -> dict[str, dict[str, float]]:
-    """读配置覆盖（settings.picks_style_offsets_json）。非法配置显式抛错。"""
-    from app.core.config import settings
+#: 运行时覆盖注入点（AI 控制台参数模块，2026-09-08 P1-B）：
+#: 参数变更单生效后由 agent_params 调用 set_override_provider 注册取值函数，
+#: 使「改参数免重启」成立——否则每次调参都要重启服务，风险远大于收益。
+_OVERRIDE_PROVIDER: Callable[[], str] | None = None
 
-    raw = (settings.picks_style_offsets_json or "").strip()
+
+def set_override_provider(fn: Callable[[], str] | None) -> None:
+    """注册/注销运行时覆盖取值函数（返回 JSON 字符串；测试可注入）。"""
+    global _OVERRIDE_PROVIDER
+    _OVERRIDE_PROVIDER = fn
+
+
+def parse_overrides(raw: str) -> dict[str, dict[str, float]]:
+    """解析并校验偏移配置（纯函数，供参数模块复用同一套校验）。非法值抛 ValueError。"""
+    raw = (raw or "").strip()
     if not raw:
         return {}
     data = json.loads(raw)  # 非法 JSON → 抛 ValueError（fail fast，不静默回退）
@@ -75,6 +86,15 @@ def _load_override() -> dict[str, dict[str, float]]:
                 raise ValueError(f"偏移 {delta_f} 超出 ±{OFFSET_MAX} 上限（初版纪律）")
             out.setdefault(phase, {})[dim] = delta_f
     return out
+
+
+def _load_override() -> dict[str, dict[str, float]]:
+    """读配置覆盖：运行时覆盖层（AI 控制台）优先，其次 settings 静态配置。"""
+    if _OVERRIDE_PROVIDER is not None:
+        return parse_overrides(_OVERRIDE_PROVIDER() or "")
+    from app.core.config import settings
+
+    return parse_overrides(settings.picks_style_offsets_json or "")
 
 
 def route_style(phase: str | None) -> dict:

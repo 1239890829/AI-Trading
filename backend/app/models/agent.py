@@ -73,6 +73,44 @@ class AgentTriage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
+class AgentParam(Base):
+    """参数运行时覆盖层（AI 控制台参数配置）。
+
+    一行 = 一个被改过的参数。消费方（目前 style_router）通过
+    `set_override_provider` 读取——**改参数免重启**；删除该行即回到静态配置。
+    """
+
+    __tablename__ = "agent_param"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str | None] = mapped_column(Text, default=None)   # JSON 字符串
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, default=utcnow)
+
+
+class AgentParamChange(Base):
+    """参数变更单（可追溯 + 可回滚的最小单元）。
+
+    before/after 存原值，回滚就是把 before 写回覆盖层；source_* 记录这条变更
+    来自哪份复盘的哪条改进项；evidence 记录采纳依据（样本/IC/胜率）——证据
+    不足的变更单不允许自动生效。
+    """
+
+    __tablename__ = "agent_param_change"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(64), index=True)
+    before: Mapped[str | None] = mapped_column(Text, default=None)
+    after: Mapped[str] = mapped_column(Text, default="")
+    source_type: Mapped[str] = mapped_column(String(32), default="manual")
+    source_id: Mapped[str] = mapped_column(String(64), default="")
+    evidence: Mapped[str | None] = mapped_column(Text, default=None)
+    status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
+    task_id: Mapped[str | None] = mapped_column(String(36), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    rolled_back_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+
+
 class AgentAudit(Base):
     """执行层审计：谁在什么时候把什么从什么改成了什么（+ 怎么回滚）。"""
 
