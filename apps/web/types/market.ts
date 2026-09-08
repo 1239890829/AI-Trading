@@ -207,6 +207,13 @@ export interface ThemeCard {
       reason: string;
     }[];
   };
+  /**
+   * 簇 → 官方概念挂靠（09-08「代糖/玉米搜不到」修复）：簇按 ths 涨停原因动态
+   * 标签聚合（如「功能糖」），用户在同花顺 App 看到的是概念板块目录（如
+   * 「代糖概念 885904」「玉米 885811」）——两套口径不同。按成分重叠反查
+   * （命中 ≥2 只，过滤成分 >300 的大概念），命中数降序 ≤3 个；无挂靠缺省。
+   */
+  official_matches?: { code: string; name: string; hits: number }[];
 }
 
 export interface ThemeBoardPayload {

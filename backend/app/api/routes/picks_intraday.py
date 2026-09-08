@@ -198,6 +198,12 @@ async def _build_opportunities(
         ),
         "meta": {},
     }
+    # 簇级官方概念挂靠（09-08「代糖/玉米搜不到」修复）：猎场手风琴与工作台
+    # 题材归属由此获得 official_matches（如「功能糖」→官方「代糖概念/玉米」）；
+    # 缓存前写入，两端点共用同一份。
+    from app.services.official_match import attach_official
+
+    attach_official(request, payload["data"].get("themes") or [])
     cache.set(key, payload)
     return payload
 

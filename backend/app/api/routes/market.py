@@ -1448,28 +1448,13 @@ async def _verify_board_multi_day(request: Request, board_payload: dict) -> None
 
 
 def _attach_official_flags(request: Request, themes_list: list[dict]) -> None:
-    """L5（linkage-design §3.2）：给看板梯队成员标注是否为 THS 官方成分。
+    """L5（linkage-design §3.2）+ 09-08 簇级官方概念挂靠：见 app/services/official_match.py。
 
-    纯展示增强：题材目录服务不可用/目录为空时静默跳过（无徽标 ≠ 非成分，
-    前端不得把缺徽标当负面信号）。
+    盘面题材看板与猎场机会视图共用同一挂靠实现（成分重叠反查，非簇名精确匹配）。
     """
-    svc = getattr(request.app.state, "theme_catalog", None)
-    if svc is None or svc.catalog_size() == 0:
-        return
-    try:
-        name_to_code = {t.name: t.code for t in svc.get_catalog(limit=1000)}
-        members_by_code: dict[str, set[str]] = {}
-        for card in themes_list:
-            code = name_to_code.get(card.get("theme") or "")
-            if not code:
-                continue
-            if code not in members_by_code:
-                members_by_code[code] = {m.symbol for m in svc.get_members(code)}
-            official = members_by_code[code]
-            for it in card.get("ladder") or []:
-                it["official"] = it.get("symbol") in official
-    except Exception:  # noqa: BLE001 - 徽标失败不影响看板
-        log.exception("attach official flags failed")
+    from app.services.official_match import attach_official
+
+    attach_official(request, themes_list)
 
 
 @router.get("/themes", response_model=Envelope[ThemeBoardPayload])

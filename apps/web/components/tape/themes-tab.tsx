@@ -197,12 +197,17 @@ export function ThemesTab() {
     [benchmark, date]
   );
 
-  /** 聚焦过滤：题材名精确/包含 + 原始归因标签匹配（官方成分名与归因串口径可能不同） */
+  /** 聚焦过滤：题材名精确/包含 + 原始归因标签 + 官方概念挂靠名（09-08：搜「代糖」
+   *  命中「功能糖」簇——簇名与同花顺概念板块口径不同，靠 official_matches 桥接） */
   const visibleThemes = useMemo(() => {
     if (!data) return [];
     if (!focus) return data.themes;
     return data.themes.filter(
-      (c) => c.theme === focus || c.theme.includes(focus) || (c.raw_tags ?? []).includes(focus)
+      (c) =>
+        c.theme === focus ||
+        c.theme.includes(focus) ||
+        (c.raw_tags ?? []).includes(focus) ||
+        (c.official_matches ?? []).some((m) => m.name === focus || m.name.includes(focus))
     );
   }, [data, focus]);
 

@@ -1689,6 +1689,8 @@ export interface OpportunityTheme {
   limit_up_count: number | null;
   has_succession: boolean | null;
   stocks: OpportunityStock[];
+  /** 簇→官方概念挂靠（09-08「代糖/玉米搜不到」修复）：成分重叠 ≥2、过滤大概念，命中降序 ≤3 */
+  official_matches?: { code: string; name: string; hits: number }[];
 }
 
 export interface IntradayOpportunities {
