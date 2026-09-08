@@ -233,6 +233,9 @@ async def lifespan(app: FastAPI):
         refresh_runtime_overrides()
 
     # 告警 AI 判读 worker（P1）：规则触发 → AI 判断是否值得提醒 → 悬浮球
+    from app.services.alert_triage import set_app_state as _triage_set_app
+
+    _triage_set_app(app)  # P1-5 响应建议需要 state（题材目录/快照）
     triage_stop = asyncio.Event()
     from app.services.alert_triage import triage_loop
 

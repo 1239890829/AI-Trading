@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime
 
 import pytest
 
@@ -64,8 +63,9 @@ def _fake_llm(monkeypatch, payload):
     monkeypatch.setattr("app.core.llm_client.chat_completion", lambda *a, **k: payload)
 
 
-def test_full_cycle_a_class_auto_applied(sf, monkeypatch):
-    """A 类议程免人工直接生效：变更单 applied + 覆盖层生效 + 免重启。"""
+def test_full_cycle_a_class_shadow_then_applied(sf, monkeypatch):
+    """A 类完整生命周期（P1-4 影子语义）：议程入影子 → 影子评估转正 →
+    覆盖层真实生效（免重启）+ 30 日实验挂账。"""
     _fake_llm(monkeypatch, LLM_OK)
 
     async def main():
@@ -74,15 +74,26 @@ def test_full_cycle_a_class_auto_applied(sf, monkeypatch):
     agenda = asyncio.run(main())
     assert agenda["status"] == "executed"
     statuses = {i["class"]: i["status"] for i in agenda["items"]}
-    assert statuses["A"] == "executed"
+    assert statuses["A"] == "executed"  # executed = 已入影子队列
     assert statuses["B"] == "executed"  # B 类写进化日报
-    # 覆盖层真实生效（style_router 免重启读到新偏移）
+    # 影子阶段：不生效（provider 仍读旧偏移）
     from app.picks.style_router import route_style
 
+    assert route_style("发酵")["offsets"]["echelon"] == pytest.approx(0.06)
+
+    # 影子评估（权重漂移温和）→ 自动转正
+    from app.services.experiments import evaluate_and_promote_shadow
+
+    results = evaluate_and_promote_shadow(sf)
+    assert results and results[0]["verdict"] == "promoted", results
+    # 转正后覆盖层真实生效
     assert route_style("发酵")["offsets"]["echelon"] == pytest.approx(0.04)
-    # 变更单带证据落库
+    # 变更单带证据落库 + 30 日实验挂账
     rows = ap_rows(sf)
     assert rows[0]["evidence"]["sample_days"] == 30
+    assert any(e["change_id"] == rows[0]["id"] for e in
+               __import__("app.services.experiments", fromlist=["list_experiments"])
+               .list_experiments(session_factory=sf))
 
 
 def ap_rows(sf):
@@ -92,7 +103,7 @@ def ap_rows(sf):
 
     with sf() as db:
         return [{
-            "key": r.key, "status": r.status,
+            "id": r.id, "key": r.key, "status": r.status,
             "evidence": json.loads(r.evidence) if r.evidence else {},
         } for r in db.execute(select(C)).scalars().all()]
 
@@ -142,8 +153,10 @@ def test_frequency_gate_defers_second_change(sf, monkeypatch):
     async def main():
         first = await evo.run_evolution_now(sf)
         # 手动清掉今日议程，模拟次日同参数再次被提出
+        # （日期源必须与 generate_agenda 一致用北京日期——UTC/北京午夜前后会差一天）
         with sf() as db:
-            row = db.query(AgentAgenda).filter(AgentAgenda.date == datetime.utcnow().date().isoformat()).one()
+            row = db.query(AgentAgenda).filter(
+                AgentAgenda.date == evo.beijing_now().date().isoformat()).one()
             db.delete(row)
             db.commit()
         second = await evo.run_evolution_now(sf)

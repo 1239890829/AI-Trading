@@ -307,8 +307,85 @@ def assemble_brief(evidence: dict) -> dict:
         "macro_note": evidence.get("macro_note"),
         "performance_skipped": perf_skipped,
         "directions": directions,
+        "daily_plan": _daily_plan(evidence.get("pool_date")),
         "alerts": [],  # 盘中 watcher 追加（append_alert，当日去重）
     }
+
+
+def _daily_plan(prev_pool_date) -> dict | None:
+    """P1-6（2026-09-08 用户指令）：复盘 → 次日计划显式链路。
+
+    三段上下文拼装（规则层，无 LLM）：昨日复盘结论 / 未完成 action_items /
+    昨日进化议程执行结果。任一来源缺失显式标注（三态），不臆造。
+    """
+    import contextlib
+
+    from datetime import date as _date
+
+    if not prev_pool_date:
+        return None
+    try:
+        prev = prev_pool_date if isinstance(prev_pool_date, _date) else _date.fromisoformat(str(prev_pool_date))
+    except ValueError:
+        return None
+    plan: dict = {"based_on": str(prev), "review": None, "open_items": [], "agenda": None}
+
+    # ① 昨日复盘结论（买点质量/失误数）
+    with contextlib.suppress(Exception):
+        from app.picks.review_store import get_report
+
+        rep = get_report(prev)
+        if rep is not None and rep.report:
+            summary = (rep.report.get("summary") or {}) if isinstance(rep.report, dict) else {}
+            plan["review"] = {
+                "trade_date": str(prev),
+                "picks_count": summary.get("picks_count"),
+                "findings": (rep.report.get("findings") or [])[:3] if isinstance(rep.report, dict) else [],
+            }
+
+    # ② 未完成 action_items（pending/deferred，最多 3 条）
+    with contextlib.suppress(Exception):
+        from app.models.review import ReviewReport
+        from sqlalchemy import select
+
+        from app.core.db import get_session_factory
+
+        with get_session_factory()() as db:
+            rows = db.execute(
+                select(ReviewReport).order_by(ReviewReport.id.desc()).limit(5)
+            ).scalars().all()
+            for r in rows:
+                report = r.report or {}
+                for ai in (report.get("action_items") or []):
+                    if ai.get("status") in ("pending", "deferred"):
+                        plan["open_items"].append({
+                            "title": ai.get("title", "")[:60], "category": ai.get("category"),
+                        })
+                if len(plan["open_items"]) >= 3:
+                    break
+
+    # ③ 昨日进化议程执行结果
+    with contextlib.suppress(Exception):
+        from app.models.agent import AgentAgenda
+        from sqlalchemy import select as _sel
+
+        from app.core.db import get_session_factory
+
+        with get_session_factory()() as db:
+            row = db.execute(
+                _sel(AgentAgenda).where(AgentAgenda.date == str(prev))
+            ).scalars().first()
+        if row is not None:
+            items = row.items if isinstance(row.items, list) else []
+            plan["agenda"] = {
+                "date": row.date,
+                "status": row.status,
+                "items": [{"finding": i.get("finding", "")[:50], "class": i.get("class"),
+                           "status": i.get("status")} for i in items[:5]],
+            }
+
+    plan["note"] = "今日计划=昨日复盘结论+未完成改进项+昨日议程执行结果的规则拼装；不构成买卖建议"
+    return plan
 
 
 # ---------------------------------------------------------------- IO：证据采集

@@ -189,6 +189,58 @@ def apply_change(change_id: int, session_factory=None, *, mutation_source: str |
     return out
 
 
+def shadow_change(change_id: int, session_factory=None) -> dict:
+    """变更单进入**影子阶段**（2026-09-08 用户指令：新策略需经数据验证有效后方可启用）。
+
+    影子状态 = 不写运行时覆盖层（provider 仍用旧值）、不生效；影子评估由
+    experiments.evaluate_and_promote_shadow 在议程前执行（权重剧变检测），
+    达标自动 promote（此时才真正 apply + 挂 30 日实验）。
+    影子开始时间记进 evidence JSON（不改表结构）。
+    """
+    sf = session_factory or get_session_factory()
+    with sf() as db:
+        row = db.get(AgentParamChange, change_id)
+        if row is None:
+            raise ValueError("变更单不存在")
+        if row.status not in ("draft", "shadow"):
+            raise ValueError(f"仅 draft 可进入影子阶段（当前 {row.status}）")
+        row.status = "shadow"
+        try:
+            ev = json.loads(row.evidence) if row.evidence else {}
+        except Exception:  # noqa: BLE001
+            ev = {}
+        if "shadow_started_at" not in ev:
+            ev["shadow_started_at"] = datetime.utcnow().isoformat(timespec="seconds")
+        row.evidence = json.dumps(ev, ensure_ascii=False)
+        db.commit()
+        db.refresh(row)
+        return _dump(row)
+
+
+def promote_shadow(change_id: int, session_factory=None) -> dict:
+    """影子达标转正：真正生效（apply_change）——由 experiments 评估器调用。"""
+    out = apply_change(change_id, session_factory)
+    return out
+
+
+def list_shadow_changes(session_factory=None) -> list[dict]:
+    """影子队列：status == shadow 的变更单（含影子开始时间）。"""
+    sf = session_factory or get_session_factory()
+    with sf() as db:
+        rows = db.execute(
+            select(AgentParamChange).where(AgentParamChange.status == "shadow")
+        ).scalars().all()
+        out = []
+        for r in rows:
+            d = _dump(r)
+            try:
+                d["shadow_started_at"] = (json.loads(r.evidence) or {}).get("shadow_started_at")
+            except Exception:  # noqa: BLE001
+                d["shadow_started_at"] = None
+            out.append(d)
+        return out
+
+
 def rollback_change(change_id: int, session_factory=None) -> dict:
     """回滚：恢复到变更前的 before（并留一条回滚记录）。"""
     sf = session_factory or get_session_factory()

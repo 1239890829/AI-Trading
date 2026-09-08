@@ -470,13 +470,17 @@ def _agenda_dump(row: AgentAgenda) -> dict:
 
 
 def _param_change_in_24h(key: str, sf) -> bool:
-    """频率闸：同参数 24h 内是否已有自动变更（applied 或 rolled_back）。"""
+    """频率闸：同参数 24h 内是否已有自动变更（applied / rolled_back / shadow）。
+
+    shadow 必须计入——影子队列在议程前评估转正，若不计入，同参数会每天
+    入队一条影子（堆积且评估重复）。
+    """
     cutoff = datetime.utcnow() - timedelta(hours=24)
     with sf() as db:
         rows = db.execute(
             select(AgentParamChange).where(
                 AgentParamChange.key == key,
-                AgentParamChange.status.in_(("applied", "rolled_back")),
+                AgentParamChange.status.in_(("applied", "rolled_back", "shadow")),
                 AgentParamChange.created_at >= cutoff,
             )
         ).scalars().all()
@@ -484,22 +488,26 @@ def _param_change_in_24h(key: str, sf) -> bool:
 
 
 def _execute_a(item: dict, sf, agenda_date: str) -> dict:
-    """A 类：参数变更单自动生效（白名单+红线+频率闸；证据随单落库）。
+    """A 类：参数变更**进影子队列**（2026-09-08 用户指令：新策略需经数据验证
+    有效后方可启用——不再直接生效）。
 
-    生效成功即挂实验（后置验证：30 日后自动对比 signal_health，劣化自动回滚）。
+    影子流：propose → shadow（不写运行时覆盖层）→ 议程调度器每日评估
+    （experiments.evaluate_and_promote_shadow：权重剧变检测）→ 达标转正
+    （真正生效 + 挂 30 日胜率劣化回滚实验）→ 剧变/灭声拒绝归档。
+    转正后仍受 experiments 30 日劣化自动回滚守护（后置安全网不变）。
     """
     param = item.get("param") or {}
     key = param.get("key") or ""
     if key in REDLINE_KEYS:
         return {**item, "status": "rejected", "result": f"参数 {key} 在红线清单，禁止自动修改"}
+    mutation_id = None
     try:
         from app.services import agent_params
         from app.services.agent_tasks import record_mutation, update_mutation_result
 
-        # 2026-09-08 用户指令：改动前必须先创建任务（留痕任务中心可见）
         mutation_id = record_mutation(
-            source="agenda", kind="param_change",
-            summary=f"A类参数变更 {key}：{json.dumps(param.get('after'), ensure_ascii=False)}",
+            source="agenda", kind="param_shadow",
+            summary=f"A类参数进影子队列 {key}：{json.dumps(param.get('after'), ensure_ascii=False)}",
             detail={"agenda_date": agenda_date, "evidence": item.get("evidence") or {}},
         )
 
@@ -508,27 +516,20 @@ def _execute_a(item: dict, sf, agenda_date: str) -> dict:
             source_type="ai_suggestion", source_id=f"agenda:{agenda_date}",
             evidence=item.get("evidence") or {}, session_factory=sf,
         )
-        applied = agent_params.apply_change(change["id"], session_factory=sf)
-        # 后置守护：自动挂实验（30 日窗口，劣化自动回滚——取代人工确认的机制）
-        experiment = None
-        with contextlib.suppress(Exception):
-            from app.services.experiments import attach_experiment
-
-            experiment = attach_experiment(
-                applied["id"], key,
-                hypothesis=item.get("expected_effect") or item.get("finding") or "",
-                session_factory=sf,
-            )
-        result = f"变更单 #{applied['id']} 已自动生效"
-        if experiment:
-            result += f"（实验 #{experiment['id']} 已挂账，{VERIFY_NOTE}）"
-        update_mutation_result(mutation_id, "succeeded", f"{result}；变更单 #{applied['id']}")
+        shadowed = agent_params.shadow_change(change["id"], sf)
+        result = f"变更单 #{shadowed['id']} 已入影子队列（待数据评估，达标自动转正）"
+        update_mutation_result(mutation_id, "succeeded", f"{result}；变更单 #{shadowed['id']}")
         return {**item, "status": "executed", "result": result,
-                "mutation_task_id": mutation_id,
-                "experiment_id": experiment["id"] if experiment else None}
+                "mutation_task_id": mutation_id, "shadow_change_id": shadowed["id"]}
     except ValueError as exc:
+        if mutation_id:
+            from app.services.agent_tasks import update_mutation_result
+            update_mutation_result(mutation_id, "failed", f"校验拒绝：{exc}")
         return {**item, "status": "rejected", "result": f"校验拒绝：{exc}"}
     except Exception as exc:  # noqa: BLE001
+        if mutation_id:
+            from app.services.agent_tasks import update_mutation_result
+            update_mutation_result(mutation_id, "failed", f"{type(exc).__name__}: {exc}")
         return {**item, "status": "failed", "result": f"{type(exc).__name__}: {exc}"}
 
 
@@ -724,7 +725,7 @@ async def evolution_scheduler(app, stop: asyncio.Event, *, run_hour: int, run_mi
     顺带每日一次实验裁决（后置验证：到期实验对比 signal_health，劣化自动回滚）——
     conclude_due 幂等（只处理 running 且到期的），节流靠 _last_conclude_date。
     """
-    global _LAST_CONCLUDE_DATE, _LAST_META_WEEK
+    global _LAST_CONCLUDE_DATE, _LAST_SHADOW_DATE, _LAST_META_WEEK
     log.info("evolution scheduler started: daily at %02d:%02d", run_hour, run_minute)
     while not stop.is_set():
         try:
@@ -741,6 +742,17 @@ async def evolution_scheduler(app, stop: asyncio.Event, *, run_hour: int, run_mi
                         log.warning("[EVOLUTION] 实验裁决 %d 条：%s", len(results),
                                     json.dumps([{r["id"]: r["status"]} for r in results],
                                                ensure_ascii=False))
+            # 每日一次：影子队列评估（P1-4：剧变检测 → 达标转正 / 剧变拒绝）——
+            # 在议程生成前跑，转正结果进当日议程证据（独立节流标志，不与实验裁决互斥）
+            if _LAST_SHADOW_DATE != today.isoformat() and now.hour >= 15:
+                with contextlib.suppress(Exception):
+                    from app.services.experiments import evaluate_and_promote_shadow
+
+                    shadow_results = evaluate_and_promote_shadow()
+                    _LAST_SHADOW_DATE = today.isoformat()
+                    if shadow_results:
+                        log.warning("[EVOLUTION] 影子队列评估 %d 条：%s", len(shadow_results),
+                                    json.dumps(shadow_results, ensure_ascii=False)[:400])
             if (now.hour, now.minute) >= (run_hour, run_minute):
                 days = await tc.trading_days(app.state.hub.provider)
                 if tc.last_trade_date(days, asof=today) == today:

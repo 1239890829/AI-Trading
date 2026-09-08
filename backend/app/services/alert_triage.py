@@ -21,6 +21,7 @@ import asyncio
 import contextlib
 import json
 import logging
+from typing import Any
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
@@ -172,7 +173,55 @@ async def triage_event(event: AlertEvent, session_factory=None) -> dict | None:
     if got is None:
         return _save(event.id, "notify", "AI 判读不可用，按规则提醒（未做噪音过滤）",
                      "llm_fallback", sf)
-    return _save(event.id, got[0], got[1], "llm", sf)
+    verdict, reason = got
+    # 3) 响应建议（P1-5 盘中回路，只读）：notify/escalate 追加题材上下文与观察指引
+    if verdict in ("notify", "escalate"):
+        with contextlib.suppress(Exception):
+            note = _response_note(event, sf)
+            if note:
+                reason = f"{reason}｜{note}"
+    return _save(event.id, verdict, reason, "llm", sf)
+
+
+def _response_note(event: AlertEvent, sf) -> str | None:
+    """只读响应建议：官方题材归属 + 当日状态 + 观察指引（纯数据拼接，零 LLM）。
+
+    上下文任一缺失 → 返回 None（不臆造）。红线：不含操作指令，只给观察视角。
+    """
+    symbol = event.symbol
+    if not symbol:
+        return None
+    svc = getattr(_app_state_for_triage(), "theme_catalog", None)
+    if svc is None:
+        return None
+    try:
+        themes = [t.get("theme_name") for t in svc.get_official_for_symbol(symbol)]
+        themes = [t for t in themes if t][:2]
+    except Exception:  # noqa: BLE001
+        themes = []
+    snap = getattr(getattr(_app_state_for_triage(), "snapshot_service", None), "snapshot", None) or []
+    pct = next((r.get("change_pct") for r in snap if r.get("symbol") == symbol), None)
+    parts = []
+    if themes:
+        parts.append(f"官方题材：{'、'.join(themes)}")
+    if pct is not None:
+        parts.append(f"今日 {pct:+.2f}%")
+    if parts:
+        parts.append("建议关注所属题材梯队是否延续（看板可查），本提醒不构成买卖建议")
+    return "；".join(parts) if parts else None
+
+
+_APP_STATE: Any = None
+
+
+def set_app_state(app: Any) -> None:
+    """triage 是无 request 上下文的后台服务——app 引用在 lifespan 注入（main.py）。"""
+    global _APP_STATE
+    _APP_STATE = app
+
+
+def _app_state_for_triage():
+    return _APP_STATE
 
 
 def _save(event_id: int, verdict: str, reason: str, model: str, sf) -> dict:

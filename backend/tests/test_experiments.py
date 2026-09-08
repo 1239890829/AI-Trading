@@ -170,3 +170,73 @@ def test_conclude_due_is_sync_callable(sf, monkeypatch):
     _mock_health(monkeypatch, win_rate=0.55)
     out = ex.conclude_due(sf)  # 不用 asyncio.run——同步调用
     assert len(out) == 1 and out[0]["id"] == exp_id and out[0]["status"] == "concluded"
+
+
+# ---------------------------------------------------------------- 影子队列（P1-4）
+
+def _param_change(sf, after, before=None):
+    from app.models.agent import AgentParamChange
+
+    with sf() as db:
+        row = AgentParamChange(key="picks_style_offsets_json", before=before, after=after,
+                               source_type="ai_suggestion", source_id="test",
+                               status="draft")
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        db.expunge(row)
+        return row.id
+
+
+def test_shadow_flow_promotes_mild_change(tmp_path, monkeypatch):
+    """温和影子偏移：评估转正 → 真正生效 + 30 日实验挂账。"""
+    from app.services import agent_params, experiments
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'sh.db'}")
+    Base.metadata.create_all(engine)
+    sf = sessionmaker(bind=engine)
+    monkeypatch.setattr(agent_params, "get_session_factory", lambda: sf)
+    monkeypatch.setattr(experiments, "get_session_factory", lambda: sf)
+
+    cid = _param_change(sf, after='{"启动": {"sentiment": 0.03}}', before="{}")
+    agent_params.shadow_change(cid, sf)
+    assert agent_params.list_shadow_changes(sf)[0]["id"] == cid
+
+    results = experiments.evaluate_and_promote_shadow(sf)
+    assert results[0]["verdict"] == "promoted", results
+    from app.models.agent import AgentParamChange as APC
+
+    with sf() as db:
+        assert db.get(APC, cid).status == "applied"
+    # 转正自动挂 30 日实验
+    assert any(e["change_id"] == cid for e in experiments.list_experiments(session_factory=sf))
+
+
+def test_shadow_flow_rejects_dramatic_change(tmp_path, monkeypatch):
+    """剧变影子偏移（全维度 +0.06）：拒绝归档，不生效。"""
+    from app.services import agent_params, experiments
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'sh2.db'}")
+    Base.metadata.create_all(engine)
+    sf = sessionmaker(bind=engine)
+    monkeypatch.setattr(agent_params, "get_session_factory", lambda: sf)
+    monkeypatch.setattr(experiments, "get_session_factory", lambda: sf)
+
+    big = '{"启动": {"sentiment": 0.06, "tech": 0.06, "fundamental": 0.06, "capital": -0.06, "news": 0.06, "echelon": -0.06}, ' \
+          '"发酵": {"sentiment": 0.06, "tech": 0.06, "fundamental": 0.06, "capital": -0.06, "news": 0.06, "echelon": -0.06}, ' \
+          '"高潮": {"sentiment": 0.06, "tech": 0.06, "fundamental": 0.06, "capital": -0.06, "news": 0.06, "echelon": -0.06}, ' \
+          '"分歧": {"sentiment": 0.06, "tech": 0.06, "fundamental": 0.06, "capital": -0.06, "news": 0.06, "echelon": -0.06}, ' \
+          '"退潮": {"sentiment": 0.06, "tech": 0.06, "fundamental": 0.06, "capital": -0.06, "news": 0.06, "echelon": -0.06}, ' \
+          '"冰点": {"sentiment": 0.06, "tech": 0.06, "fundamental": 0.06, "capital": -0.06, "news": 0.06, "echelon": -0.06}}'
+    cid = _param_change(sf, after=big, before="{}")
+    agent_params.shadow_change(cid, sf)
+    results = experiments.evaluate_and_promote_shadow(sf)
+    assert results[0]["verdict"] == "shadow_rejected", results
+    from app.models.agent import AgentParamChange as APC
+
+    with sf() as db:
+        assert db.get(APC, cid).status == "shadow_rejected"
