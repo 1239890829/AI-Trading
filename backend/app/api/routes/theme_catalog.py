@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date, datetime
 from typing import Any
@@ -366,6 +367,7 @@ async def theme_catalog_detail(
 
     rows = svc.get_members(code)
     theme = next((t for t in svc.get_catalog(limit=1000) if t.code == code), None)
+    symbols = [r.symbol for r in rows]
 
     # 当日行情：全市场快照（内存实时，含换手率/流通市值——fetch_quotes_batched
     # 的 quote 对象没有这两个字段，用户 09-08 反馈弹窗缺「开板/换手/流通市值」）
@@ -378,6 +380,39 @@ async def theme_catalog_detail(
     except Exception as exc:  # noqa: BLE001  快照缺失 → 行情字段三态降级
         log.warning("concept detail snapshot unavailable %s: %s", code, exc)
 
+    # 快照缺失（盘后重启清空/个别股不在快照）→ 两级兜底：
+    # ① 当日 parquet 存档（与盘面题材看板同源，含换手/市值——盘后也有）；
+    # ② 批量行情补涨幅/现价（quote 对象无换手/市值——那两字段只来自快照，
+    #    缺失显式 --，不臆造）
+    missing = [s for s in symbols if s not in snap_by_symbol]
+    if missing:
+        try:
+            from app.api.routes.market import _default_trade_date_async, _load_snapshot_map
+
+            td = await _default_trade_date_async(hub)
+            parquet_rows = await asyncio.to_thread(
+                _load_snapshot_map,
+                request,
+                td,
+                ["symbol", "change_pct", "turnover_rate", "nmc", "price"],
+            )
+            for sym2, row2 in parquet_rows.items():
+                if sym2 not in snap_by_symbol:
+                    snap_by_symbol[sym2] = row2
+        except Exception as exc:  # noqa: BLE001
+            log.warning("concept detail parquet fallback failed %s: %s", code, exc)
+    missing = [s for s in symbols if s not in snap_by_symbol]
+    if missing:
+        try:
+            from app.services.quote_enrich import fetch_quotes_batched
+
+            for q in (await fetch_quotes_batched(hub, missing)).values():
+                snap_by_symbol.setdefault(q.symbol, {
+                    "symbol": q.symbol, "price": q.price, "change_pct": q.change_pct,
+                })
+        except Exception as exc:  # noqa: BLE001
+            log.warning("concept detail quote fallback failed %s: %s", code, exc)
+
     # 当日涨停归因（ths 官方 reason，逐字口径；rec 另带封单/首封时间/连板数）
     # + 东财增强（开板次数）。换手/流通市值以全市场快照为准（口径一致）。
     pool_by_symbol: dict[str, Any] = {}
@@ -386,8 +421,7 @@ async def theme_catalog_detail(
         from app.api.routes.market import _default_trade_date_async
 
         td = await _default_trade_date_async(hub)
-        provider = hub.provider
-        for rec in await provider.get_limit_up_pool(td) or []:
+        for rec in await hub.provider.get_limit_up_pool(td) or []:
             if rec.symbol:
                 pool_by_symbol[rec.symbol] = rec
     except Exception as exc:  # noqa: BLE001  归因缺失 → 细分 tab 缺席（不臆造）
@@ -428,6 +462,10 @@ async def theme_catalog_detail(
         if reason:
             for t in tags:
                 tag_groups.setdefault(t, []).append(r.symbol)
+
+    # 排序（09-08 用户反馈「涨停的靠前」）：涨停在前，组内涨幅降序；
+    # 非涨停组按涨幅降序——看盘直觉顺序
+    members.sort(key=lambda m: (not m["limit_up"], -(m["change_pct"] or -999)))
 
     payload = {
         "data": {

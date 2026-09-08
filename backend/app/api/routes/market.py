@@ -1307,8 +1307,10 @@ async def search(q: str = Query(min_length=1, max_length=20), hub: QuoteHub = De
 # ---------------------------------------------------------------- 题材梯队看板
 
 
-def _load_snapshot_map(request: Request, trade_date: date | None = None) -> dict[str, dict]:
-    """读指定交易日（默认最新）的全市场快照 → ``symbol -> {"change_pct": ...}``。
+def _load_snapshot_map(
+    request: Request, trade_date: date | None = None, columns: list[str] | None = None
+) -> dict[str, dict]:
+    """读指定交易日（默认最新）的全市场快照 → ``symbol -> {列: 值}``。
 
     接力赚钱效应（昨日涨停股今日溢价）需要覆盖全市场的当日涨跌幅，
     逐只拉行情太慢，快照 Parquet 是现成的数据底座。读不到就返回空（溢价指标降级为 None）。
@@ -1317,7 +1319,11 @@ def _load_snapshot_map(request: Request, trade_date: date | None = None) -> dict
     拿最新快照（例如周六回看上周五，快照目录却是周六）会在非交易日或回看历史日期时
     把错误的涨跌幅当成溢价——数字照样出得来，但结论是错的，属于「错了也看不出来」。
     找不到当天目录时，退到不晚于该日期的最近一份，并记 warning。
+
+    columns（2026-09-08 概念详情用）：默认 ["symbol", "change_pct"]；可传更多列
+    （如 turnover_rate/nmc——parquet 存的是完整快照行）。
     """
+    cols = columns or ["symbol", "change_pct"]
     try:
         from app.services.parquet_store import read_latest_in_dir
 
@@ -1352,16 +1358,18 @@ def _load_snapshot_map(request: Request, trade_date: date | None = None) -> dict
             return {}
 
         # 取该日目录里最新一份**可读**的快照：损坏文件会被跳过而不是让整个端点 502
-        read = read_latest_in_dir(chosen, columns=["symbol", "change_pct"])
+        read = read_latest_in_dir(chosen, columns=cols)
         if not read.ok:
             log.warning("snapshot unreadable for %s: %s", chosen, read.error)
             return {}
         df = read.df
         out: dict[str, dict] = {}
-        for sym, pct in zip(df["symbol"].to_list(), df["change_pct"].to_list()):
+        for rec in zip(*[df[c].to_list() for c in cols]):
+            row = dict(zip(cols, rec))
+            sym = row.get("symbol")
             if sym is None:
                 continue
-            out[str(sym).zfill(6)] = {"change_pct": pct}
+            out[str(sym).zfill(6)] = row
         return out
     except Exception as exc:  # 快照缺失不应让看板整体失败
         log.warning("snapshot map unavailable: %s", exc)
