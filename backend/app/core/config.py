@@ -228,6 +228,8 @@ class Settings(BaseSettings):
     # 安全模型=后置守护：证据门槛 + 值域钳制 + 红线 + 预算 + 自动回滚（P1 实验记录本）。
     # **停机开关**：ASHARE_AGENT_AUTONOMY=0 时只生成议程不执行（降级为建议清单）。
     agent_autonomy_enabled: bool = True
+    agent_code_change_enabled: bool = True  # C 类代码执行器独立开关（最危险能力可单独关）
+    agent_venv_python: str = ""             # 沙箱门禁用的 pytest 解释器（默认 backend/.venv/bin/python）
     agent_evolution_hour: int = 15
     agent_evolution_minute: int = 45
     agent_daily_llm_budget: int = 8        # 每日进化相关 LLM 调用上限（防失控烧钱）

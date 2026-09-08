@@ -184,7 +184,8 @@ def test_parse_items_drops_garbage_and_c_class_deferred(sf, monkeypatch):
     agenda = asyncio.run(main())
     by_class = {i["class"]: i for i in agenda["items"]}
     assert by_class["A"]["status"] == "rejected"  # 缺 param/非法值被校验拒绝
-    assert by_class["C"]["status"] == "deferred" and "P1" in by_class["C"]["result"]
+    # C 类已接入执行器（P1-⑤）：缺 files → 预检 rejected（不再 deferred）
+    assert by_class["C"]["status"] == "rejected" and "目标文件" in by_class["C"]["result"]
     assert by_class["B"]["status"] == "executed"
 
 

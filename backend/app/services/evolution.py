@@ -1,19 +1,23 @@
-"""AI 大脑：每日进化议程（docs/evolution-brain-plan.md v2 P0）。
+"""AI 大脑：每日进化议程（docs/evolution-brain-plan.md v2）。
 
-自主进化循环的骨架：**感知 → 诊断 → 议程 → 执行**（验证/记忆 P1 接入）。
+自主进化循环：**感知 → 诊断 → 议程 → 执行 → 验证 → 记忆**。
 
-- 感知：五路证据（P0 接三路：复盘改进项 / signal_health / 告警判读统计；
-  因子 IC 月度复核与计划对账 P1 接入，缺席时显式标注"未到期/未接入"）。
-- 诊断：LLM 汇总证据 → 严格 JSON 议程（class=A 参数 / B 文档；C 代码 P1，
-  议程出现 C 类一律 deferred 并写明原因——不静默忽略）。
+- 感知：五路证据（复盘改进项 / signal_health / 告警判读统计 / 计划对账；
+  因子 IC 月度复核未到期时显式标注）。
+- 诊断：LLM 汇总证据 → 严格 JSON 议程（A 参数 / B 文档 / C 代码），
+  对复盘 action_items 逐条裁决（review_item 回执 → 执行后回写 applied）。
 - 执行：A 类走参数变更单**自动生效**（白名单 + 红线 + 24h 频率闸 + 预算；
-  证据随变更单落库，30 日后置验证 P1）；B 类写进化日报（docs/evolution/）。
+  30 日后置验证劣化自动回滚）；B 类写进化日报（docs/evolution/）；
+  C 类走代码执行器（worktree 沙箱 → LLM patch → git apply --check →
+  回归门禁 → commit → ff-only 合并；app/services/code_executor.py）。
 
 安全模型（后置守护）：
 - **红线清单**：风控/资金/推送/凭据/删除类——即使未来白名单扩张也碰不到。
-- **停机开关**：`ASHARE_AGENT_AUTONOMY=0` → 只生成议程不执行（降级建议清单）。
+- **停机开关**：`ASHARE_AGENT_AUTONOMY=0` → 只生成议程不执行（降级建议清单）；
+  C 类另有独立开关 `ASHARE_AGENT_CODE_CHANGE`（最危险能力可单独关）。
 - **预算**：每日 LLM 调用与自动任务数上限，超限议程照常生成但执行被拦。
 - **频率闸**：同一参数 24h 内只允许一次自动变更（防抖动、防来回翻烧饼）。
+- **C 类每日 ≤1**：audit 计数；文件白名单 + 禁改清单 + 干净工作区 + 回归门禁。
 """
 from __future__ import annotations
 
@@ -55,17 +59,28 @@ def autonomy_enabled() -> bool:
     return bool(settings.agent_autonomy_enabled)
 
 
+def _utc_cutoff_today() -> datetime:
+    """北京今日 0 点对应的 naive UTC 时刻（at/created_at 存 utcnow，naive）。
+
+    ⚠️ 不要用 `>= f"{today}T00:00:00"` 字符串：SQLite 把 datetime 存成
+    "YYYY-MM-DD HH:MM:SS"（空格分隔），' ' < 'T' 使比较恒 False——
+    今日过滤会静默失效（C 类执行器测试抓出的真 bug，防线形同虚设）。
+    """
+    bj = beijing_now()
+    return datetime(bj.year, bj.month, bj.day) - timedelta(hours=8)
+
+
 def _budget_status(session_factory) -> dict:
     """今日预算占用：LLM 调用数（审计计）与自动执行任务数。"""
-    today = beijing_now().date().isoformat()
+    cutoff = _utc_cutoff_today()
     with session_factory() as db:
         tasks = db.execute(
-            select(AgentTask).where(AgentTask.created_at >= f"{today}T00:00:00")
+            select(AgentTask).where(AgentTask.created_at >= cutoff)
         ).scalars().all()
         audits = db.execute(
             select(AgentAudit).where(
                 AgentAudit.action.in_(("agenda.generate", "triage.llm")),
-                AgentAudit.at >= f"{today}T00:00:00",
+                AgentAudit.at >= cutoff,
             )
         ).scalars().all()
     used_tasks = len([t for t in tasks if t.created_by == "ai"])
@@ -194,12 +209,17 @@ _SYSTEM_PROMPT = (
     "\"review_item\": {\"id\": \"…\", \"title\": \"…\", \"category\": \"…\"}（裁决某条复盘改进项时必带）, "
     "\"param\": {\"key\": \"picks_style_offsets_json\", \"after\": {…}}（仅 A 类必填）, "
     "\"summary\": \"…\"（仅 B 类）, "
+    "\"files\": [\"backend/app/…\"]（仅 C 类：1-3 个要改的 .py，相对仓库根）, "
     "\"expected_effect\": \"预期效果\", \"verification\": \"如何验证\", \"priority\": 1}]}\n"
     "纪律：\n"
     "- 复盘的每条 action_items 都要裁决：可自动化的（改白名单参数→A 类并带 review_item 与 param；"
+    "小规模 Python 代码修复→C 类并带 review_item 与 files；"
     "知识沉淀→B 类并带 review_item 与 summary）；不可自动化的**不要输出**（系统会自动标 deferred 并写明能力边界）\n"
     "- class=A 仅限 picks_style_offsets_json（after 是 {相位:{维度:delta}}，|delta|≤0.06）；"
     "没有充分数据依据就不要提 A 类\n"
+    "- class=C 是**代码修改**：仅限 backend/app/、backend/tests/ 下的 .py；改动必须小而聚焦"
+    "（修 bug、补校验、加守卫），禁止改架构、禁止碰 migrations/config/风控/资金/推送逻辑；"
+    "执行器会用回归门禁（全量 pytest+pyflakes）验证，门禁不过会被丢弃\n"
     "- 不确定就不提；宁缺毋滥；最多 3 项；没有值得改的就输出空 items\n"
     "- 不提供买卖建议，不改风控/资金/推送相关任何东西"
 )
@@ -239,6 +259,9 @@ def _parse_items(raw: str) -> list[dict]:
             }
         if cls == "B":
             item["summary"] = str(it.get("summary") or "")[:500]
+        if cls == "C":
+            raw_files = it.get("files")
+            item["files"] = [str(f) for f in raw_files][:3] if isinstance(raw_files, list) else []
         # 复盘改进项裁决回执（闭环回写用）
         ri = it.get("review_item")
         if isinstance(ri, dict) and ri.get("id"):
@@ -435,8 +458,12 @@ def execute_agenda(agenda: dict, session_factory=None) -> dict:
     for item in agenda.get("items") or []:
         cls = item.get("class")
         if cls == "C":
-            items.append({**item, "status": "deferred",
-                          "result": "C 代码类执行器 P1 接入，暂缓（不静默忽略）"})
+            from app.services import code_executor
+
+            new = code_executor.execute_c_item(item, sf, agenda.get("date") or "")
+            items.append(new)
+            if new["status"] == "executed":
+                executed += 1
             continue
         if executed >= settings.agent_daily_task_budget:
             items.append({**item, "status": "deferred",
