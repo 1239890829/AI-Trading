@@ -2085,7 +2085,17 @@ export interface ConceptMember {
   name: string;
   change_pct: number | null;
   price: number | null;
+  /** 换手率 %（全市场快照口径） */
+  turnover_rate: number | null;
+  /** 流通市值（亿元，快照口径） */
+  float_market_cap_yi: number | null;
   limit_up: boolean;
+  /** 开板次数（东财涨停池增强；仅涨停成员，非涨停 null） */
+  break_count: number | null;
+  /** 封单额（元，ths 官方；仅涨停成员） */
+  seal_amount: number | null;
+  /** 连板数（ths 官方；仅涨停成员） */
+  boards: number | null;
   reason: string | null;
   tags: string[];
 }

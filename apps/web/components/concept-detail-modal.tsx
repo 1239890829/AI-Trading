@@ -13,7 +13,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { getConceptDetail, type ConceptDetail } from "@/lib/api";
-import { pctColor, pctText } from "@/lib/format";
+import { fmtAmount, pctColor, pctText } from "@/lib/format";
 
 export function ConceptDetailModal({
   code,
@@ -131,24 +131,49 @@ export function ConceptDetailModal({
           ) : (
             <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
               {members.map((m) => (
-                <li key={m.symbol} className="flex items-center gap-2 py-1.5 text-xs">
-                  <span className="w-14 shrink-0 font-mono text-zinc-400">{m.symbol}</span>
-                  <span className="w-24 shrink-0 truncate font-medium text-zinc-800 dark:text-zinc-100">
-                    {m.name}
-                  </span>
-                  <span
-                    className={`w-16 shrink-0 text-right font-mono tabular-nums ${pctColor(m.change_pct ?? null)}`}
-                  >
-                    {m.change_pct != null ? pctText(m.change_pct) : "--"}
-                  </span>
-                  {m.limit_up && (
-                    <span className="shrink-0 rounded bg-rose-500/10 px-1 py-0.5 text-[10px] text-rose-600 dark:text-rose-300">
-                      涨停
+                <li key={m.symbol} className="py-1.5 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="w-14 shrink-0 font-mono text-zinc-400">{m.symbol}</span>
+                    <span className="w-24 shrink-0 truncate font-medium text-zinc-800 dark:text-zinc-100">
+                      {m.name}
                     </span>
-                  )}
-                  <span className="min-w-0 flex-1 truncate text-right text-[11px] text-zinc-400" title={m.reason ?? ""}>
-                    {m.reason ?? ""}
-                  </span>
+                    <span
+                      className={`w-16 shrink-0 text-right font-mono tabular-nums ${pctColor(m.change_pct ?? null)}`}
+                    >
+                      {m.change_pct != null ? pctText(m.change_pct) : "--"}
+                    </span>
+                    {m.limit_up && (
+                      <span className="shrink-0 rounded bg-rose-500/10 px-1 py-0.5 text-[10px] text-rose-600 dark:text-rose-300">
+                        涨停
+                      </span>
+                    )}
+                    {/* 换手 / 流通市值：全市场快照口径，缺失显式 -- */}
+                    <span className="ml-auto w-20 shrink-0 text-right font-mono tabular-nums text-zinc-500" title="换手率%">
+                      换手 {m.turnover_rate != null ? `${m.turnover_rate.toFixed(2)}%` : "--"}
+                    </span>
+                    <span className="w-24 shrink-0 text-right font-mono tabular-nums text-zinc-500" title="流通市值（亿元）">
+                      流通 {m.float_market_cap_yi != null ? `${m.float_market_cap_yi.toFixed(1)}亿` : "--"}
+                    </span>
+                  </div>
+                  {/* 第二行：涨停成员的官方归因与封板细节（开板/封单/连板；非涨停不显示） */}
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 pl-16 text-[11px] text-zinc-400">
+                    {m.limit_up && (
+                      <span className="font-mono tabular-nums" title="连板数（ths 官方）">
+                        {m.boards != null ? `${m.boards} 板` : "--"}
+                        {m.break_count != null && m.break_count > 0 && (
+                          <span className="ml-1 text-amber-500 dark:text-amber-400">开板 {m.break_count} 次</span>
+                        )}
+                      </span>
+                    )}
+                    {m.seal_amount != null && (
+                      <span className="font-mono tabular-nums" title="封单额（ths 官方 seal_money）">
+                        封单 {fmtAmount(m.seal_amount)}
+                      </span>
+                    )}
+                    <span className="min-w-0 flex-1 truncate" title={m.reason ?? ""}>
+                      {m.reason ?? (m.limit_up ? "（ths 涨停池未提供该股归因）" : "")}
+                    </span>
+                  </div>
                 </li>
               ))}
             </ul>

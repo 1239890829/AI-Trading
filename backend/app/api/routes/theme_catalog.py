@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -365,46 +366,61 @@ async def theme_catalog_detail(
 
     rows = svc.get_members(code)
     theme = next((t for t in svc.get_catalog(limit=1000) if t.code == code), None)
-    symbols = [r.symbol for r in rows]
 
-    # 当日行情批量增强（quote_enrich 分批，强概念 3865 只也安全）
-    change_by_symbol: dict[str, dict] = {}
+    # 当日行情：全市场快照（内存实时，含换手率/流通市值——fetch_quotes_batched
+    # 的 quote 对象没有这两个字段，用户 09-08 反馈弹窗缺「开板/换手/流通市值」）
+    snap_by_symbol: dict[str, dict] = {}
     try:
-        from app.services.quote_enrich import fetch_quotes_batched
+        snap = getattr(request.app.state, "snapshot_service", None)
+        for row in getattr(snap, "snapshot", None) or []:
+            if row.get("symbol"):
+                snap_by_symbol[row["symbol"]] = row
+    except Exception as exc:  # noqa: BLE001  快照缺失 → 行情字段三态降级
+        log.warning("concept detail snapshot unavailable %s: %s", code, exc)
 
-        found = await fetch_quotes_batched(hub, symbols)
-        change_by_symbol = {
-            q.symbol: {"change_pct": q.change_pct, "price": q.price, "live_name": q.name}
-            for q in found.values()
-        }
-    except Exception as exc:  # noqa: BLE001  行情增强失败 → 成分仍可用（三态降级）
-        log.warning("concept detail quotes failed %s: %s", code, exc)
-
-    # 当日涨停归因（ths 官方 reason，逐字口径）
-    reason_by_symbol: dict[str, str] = {}
+    # 当日涨停归因（ths 官方 reason，逐字口径；rec 另带封单/首封时间/连板数）
+    # + 东财增强（开板次数）。换手/流通市值以全市场快照为准（口径一致）。
+    pool_by_symbol: dict[str, Any] = {}
+    em_by_symbol: dict[str, Any] = {}
     try:
         from app.api.routes.market import _default_trade_date_async
 
+        td = await _default_trade_date_async(hub)
         provider = hub.provider
-        pool = await provider.get_limit_up_pool(await _default_trade_date_async(hub))
-        for rec in pool or []:
+        for rec in await provider.get_limit_up_pool(td) or []:
             if rec.symbol:
-                reason_by_symbol[rec.symbol] = rec.reason or ""
+                pool_by_symbol[rec.symbol] = rec
     except Exception as exc:  # noqa: BLE001  归因缺失 → 细分 tab 缺席（不臆造）
         log.warning("concept detail limit-up pool failed %s: %s", code, exc)
+    try:
+        from app.services.theme_service import _em_enhancement_map
+
+        em_by_symbol = await _em_enhancement_map(hub.provider, await _default_trade_date_async(hub))
+    except Exception as exc:  # noqa: BLE001  开板缺失 → 字段 None
+        log.warning("concept detail em enhance failed %s: %s", code, exc)
 
     members: list[dict] = []
     tag_groups: dict[str, list[str]] = {}
     for r in rows:
-        q = change_by_symbol.get(r.symbol, {})
-        reason = reason_by_symbol.get(r.symbol, "")
+        row = snap_by_symbol.get(r.symbol, {})
+        ths_rec = pool_by_symbol.get(r.symbol)
+        em = em_by_symbol.get(r.symbol)
+        change_pct = row.get("change_pct")
+        reason = (ths_rec.reason if ths_rec else "") or ""
         tags = parse_theme_tags(reason)
+        nmc_wan = row.get("nmc")  # 流通市值（万元）
+        seal_amount = getattr(ths_rec, "seal_amount", None) if ths_rec else None
         members.append({
             "symbol": r.symbol,
             "name": r.name,
-            "change_pct": q.get("change_pct"),
-            "price": q.get("price"),
-            "limit_up": (q.get("change_pct") or 0) >= 9.7,
+            "change_pct": change_pct,
+            "price": row.get("price"),
+            "turnover_rate": row.get("turnover_rate"),
+            "float_market_cap_yi": round(nmc_wan / 1e4, 2) if nmc_wan else None,  # 万元→亿
+            "limit_up": bool(reason) or (change_pct or 0) >= 9.7,
+            "break_count": (getattr(em, "break_count", None) if em else None),
+            "seal_amount": seal_amount,  # 原样（元），前端 fmtAmount 自适应
+            "boards": getattr(ths_rec, "consecutive_boards", None) if ths_rec else None,
             "reason": reason or None,
             "tags": tags,
         })
