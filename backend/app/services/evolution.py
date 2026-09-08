@@ -270,6 +270,22 @@ def _collect_data_health(session_factory) -> dict:
     except Exception as exc:  # noqa: BLE001
         _add("alert_pipeline", False, f"检查失败：{exc}")
 
+    # 5) 题材官方成分新鲜度（2026-09-08 用户指令：成分须与同花顺完全一致——
+    #    TTL 内的滞后意味着成分调整期间归属错误。stale = synced_at 超 TTL）
+    try:
+        from app.models.theme_catalog import Theme
+
+        ttl = settings.theme_members_ttl_hours
+        stale_cutoff = datetime.utcnow() - timedelta(hours=ttl)
+        with session_factory() as db:
+            rows = db.execute(select(Theme.code, Theme.synced_at)).all()
+        n_stale = len([c for c, ts in rows if ts is None or ts < stale_cutoff])
+        _add("theme_members_fresh", n_stale == 0,
+             f"官方成分超 {ttl}h 未同步的概念 {n_stale}/{len(rows)} 个"
+             + ("（⚠️ 成分调整期归属会错——collect_news_events 每轮补 40 个）" if n_stale else ""))
+    except Exception as exc:  # noqa: BLE001
+        _add("theme_members_fresh", False, f"检查失败：{exc}")
+
     issues = [c for c in checks if not c["ok"]]
     return {"available": True, "checks": checks, "n_issues": len(issues),
             "issues": [f"{c['name']}：{c['detail']}" for c in issues]}
