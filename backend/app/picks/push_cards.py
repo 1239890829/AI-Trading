@@ -17,6 +17,33 @@ from __future__ import annotations
 WEEKDAY = "一二三四五六日"
 
 
+#: 三态字面量 → 对外中文文案（判不出 ≠ 空，也 ≠ 低）
+_TRI_LABELS = {"unknown": "未判定", "none": "无", "null": "—"}
+#: 缺数据占位（三态纪律：缺失不冒充 0，也不冒充"低"）
+_MISSING = "--"
+
+
+def tri_text(v: str | float | int | None) -> str:
+    """对外文案的三态单点格式化（2026-09-08 修复：unknown 字面量外泄）。
+
+    三态语义：`None/空`= 缺数据 → "--"；`unknown` = 有判定但判不出 → "未判定"；
+    其余原样。
+    ⚠️ 历史 bug：``(x or {}).get("level") or "—"`` 兜不住 unknown——非空字符串
+    是 truthy，字面量 "unknown" 被直接打进飞书卡片（14:40 盘中确认卡实测
+    3 处「辨识度 unknown」）。凡对外展示的判定字段一律走本函数。
+    """
+    if v is None:
+        return _MISSING
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return _MISSING
+        return _TRI_LABELS.get(s.lower(), s)
+    if isinstance(v, float) and v != v:  # NaN
+        return _MISSING
+    return str(v)
+
+
 def ind(sent: dict | None, name: str) -> float | int | None:
     """情绪指标取值（name → value），缺失返回 None，绝不冒充 0。"""
     for i in (sent or {}).get("indicators") or []:
@@ -86,9 +113,9 @@ def sentiment_pairs(sent: dict | None, breadth: dict | None) -> list[tuple[str, 
     promo_pct = (pct.get("promo_1to2") or {}).get("percentile")
     promo_val = (pct.get("promo_1to2") or {}).get("value", 0) * 100
     return [
-        ("🌡️ 情绪温度", f"{(sent or {}).get('temperature')} · {(sent or {}).get('phase')}"),
+        ("🌡️ 情绪温度", f"{tri_text((sent or {}).get('temperature'))} · {tri_text((sent or {}).get('phase'))}"),
         ("🚀 涨停 / 连板", f"{lim_up if lim_up is not None else '--'} 家 / {lim_conn if lim_conn is not None else '--'} 家连板"),
-        ("📐 首板晋级率", f"{promo_val:.1f}%（分位 {promo_pct}）"),
+        ("📐 首板晋级率", f"{promo_val:.1f}%（分位 {tri_text(promo_pct)}）"),
         ("📉 昨涨停溢价", f"{yesterday_mid:+.2f}%（中位）" if yesterday_mid is not None else "--"),
         ("🔎 涨跌家数", f"涨 {(breadth or {}).get('up', '--')} / 跌 {(breadth or {}).get('down', '--')}"),
         ("🪜 最高板", f"{max_boards}" if max_boards is not None else "--"),
@@ -132,9 +159,9 @@ def build_picks_card(picks: dict, sent: dict | None, breadth: dict | None, exec_
     ]
     for n, it in enumerate(items, 1):
         theme = it.get("theme")
-        head = f"**{n}｜{it['name']} {it['symbol']}**　**{it['score']:.1f} 分** · {it.get('echelon_role') or '—'}"
+        head = f"**{n}｜{it['name']} {it['symbol']}**　**{it['score']:.1f} 分** · {tri_text(it.get('echelon_role'))}"
         if theme:
-            head += f" · {theme}（{it.get('theme_stage') or '—'}）"
+            head += f" · {theme}（{tri_text(it.get('theme_stage'))}）"
         sl = it.get("stop_loss") or {}
         exec_line = ""
         if with_exec:
@@ -190,9 +217,9 @@ def build_buy_point_card(hits: list[dict], sent: dict | None, breadth: dict | No
     for n, h in enumerate(hits, 1):
         it = h["item"]
         theme = it.get("theme")
-        head = f"**{n}｜{it['name']} {it['symbol']}**　**{it['score']:.1f} 分** · {it.get('echelon_role') or '—'}"
+        head = f"**{n}｜{it['name']} {it['symbol']}**　**{it['score']:.1f} 分** · {tri_text(it.get('echelon_role'))}"
         if theme:
-            head += f" · {theme}（{it.get('theme_stage') or '—'}）"
+            head += f" · {theme}（{tri_text(it.get('theme_stage'))}）"
         sl = it.get("stop_loss") or {}
         chg = h.get("chg")
         chg_txt = f"{chg:+.2f}%" if chg is not None else "--"

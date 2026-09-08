@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 
 import { CardHead, CardShell } from "@/components/picks/card-shell";
 import { ROLE_STYLE } from "@/components/picks/pick-card";
-import { pctColor, pctText } from "@/lib/format";
+import { pctColor, pctText, triText } from "@/lib/format";
 import type { IntradayTopStock, OpportunityStock } from "@/lib/api";
 
 /**
@@ -49,7 +49,8 @@ export function JudgeChip({ label, level, basis }: { label: string; level: strin
           : "bg-amber-500/10 text-amber-600 dark:text-amber-300"; // unknown：判不出 ≠ 低
   return (
     <span className={`rounded px-1.5 py-0.5 text-[10px] ${tone}`} title={`${label}判定依据：${basis || "—"}`}>
-      {label}·{level}
+      {/* triText：level="unknown"（判不出）→「未判定」，不把内部字面量打上界面 */}
+      {label}·{triText(level)}
     </span>
   );
 }

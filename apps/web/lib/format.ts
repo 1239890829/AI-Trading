@@ -88,3 +88,19 @@ export function qualityLabel(q: string): string {
 export function isHardQuality(q: string): boolean {
   return q === "stale" || q === "invalid";
 }
+
+const TRI_LABELS: Record<string, string> = { unknown: "未判定", none: "无" };
+
+/**
+ * 三态判定字段的对外文案（与后端 push_cards.tri_text 同语义，2026-09-08 修复）。
+ *
+ * `null/undefined/空` = 缺数据 → "--"；`unknown` = 有判定但判不出 → "未判定"
+ * （判不出 ≠ 低）；其余原样。历史 bug：`level || "—"` 兜不住 unknown——非空
+ * 字符串是 truthy，字面量 "unknown" 被直接显示在界面与飞书卡片上。
+ */
+export function triText(v: string | null | undefined): string {
+  if (!v) return "--";
+  const s = v.trim();
+  if (!s) return "--";
+  return TRI_LABELS[s.toLowerCase()] ?? s;
+}

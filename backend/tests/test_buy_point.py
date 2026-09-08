@@ -174,12 +174,12 @@ def _patch_happy_path(monkeypatch, tmp_path, *, items=None, quotes=None, hits_ov
 
     monkeypatch.setattr("app.services.market_context.compute_market_sentiment", fake_sent)
 
-    cards = {"n": 0}
+    cards = {"n": 0, "cards": []}
 
     class FakeFeishu:
         async def send_interactive(self, card):
             cards["n"] += 1
-            cards["card"] = card
+            cards["cards"].append(card)
             return True
 
     monkeypatch.setattr(bp, "get_notifier_registry", lambda: NS(get=lambda name: FakeFeishu()))
@@ -213,8 +213,8 @@ def async_ok(v):
     return _f
 
 
-def test_check_and_dispatch_single_card_for_multi_hits(monkeypatch, tmp_path):
-    """多票同拍命中 → 逐票落库去重，但飞书只发一张聚合卡（用户红线：不连发）。"""
+def test_check_and_dispatch_one_card_per_symbol(monkeypatch, tmp_path):
+    """用户要求：每只股票一张独立卡片（不汇总）；卡内只含该票，命中数为 1。"""
     import app.picks.buy_point as bp
 
     items = [_item("600000"), _item("600001", tier="strong")]
@@ -222,15 +222,16 @@ def test_check_and_dispatch_single_card_for_multi_hits(monkeypatch, tmp_path):
     app, cards, seen = _patch_happy_path(monkeypatch, tmp_path, items=items, quotes=quotes)
     dispatched = asyncio.run(bp.check_and_dispatch(app))
     assert [h["item"]["symbol"] for h in dispatched] == ["600000", "600001"]
-    assert cards["n"] == 1  # 一拍一卡
-    card = cards["card"]
-    body = json.dumps(card, ensure_ascii=False)
-    assert "盘中买点命中 2 只" in body
-    assert card["header"]["template"] == "orange"  # 与每日精选卡同 template
+    assert cards["n"] == 2  # 逐票单卡
+    assert cards["cards"][0] != cards["cards"][1]
+    for card in cards["cards"]:
+        body = json.dumps(card, ensure_ascii=False)
+        assert "盘中买点命中 1 只" in body
+        assert card["header"]["template"] == "orange"  # 与每日精选卡同 template
 
 
 def test_check_and_dispatch_dedup_per_day(monkeypatch, tmp_path):
-    """同票第二拍不再进卡（append_alert key 去重）。"""
+    """同票第二拍不再发卡（append_alert key 去重）。"""
     import app.picks.buy_point as bp
 
     app, cards, seen = _patch_happy_path(monkeypatch, tmp_path)

@@ -14,11 +14,12 @@
   4. 现价落买入区间 [low, high]（build_buy_range ±3% 收敛支撑/压力）——
      「可以上车」的核心定义；无区间不臆造、直接不判
   5. 未触涨停区（change_pct < 9.5%，10cm 保守口径；20cm 高弹性由区间上限约束）
-- 推送形态：飞书 interactive 卡片，**每拍命中多票合并一张聚合卡**（一拍一卡，
-  不连发），版式与每日精选推送卡完全一致（app/picks/push_cards.py 同函数）
+- 推送形态：飞书 interactive 卡片，**每只命中票一张独立卡片**（逐票单卡，
+  不汇总多票在一条消息里），版式与每日精选推送卡完全一致
+  （app/picks/push_cards.py 同函数）；同拍多票按序发送并间隔 0.5s（频控）
 - 去重：每票每日至多一推（简报 append_alert 按 key 去重）；逐票落 AlertEvent
-  （in_app/log 通道）供复盘与 T+1 收益回填；飞书卡片显式单发（不进逐票
-  NotifierRegistry 分发，避免 N 票 N 卡）
+  （in_app/log 通道）供复盘与 T+1 收益回填；卡片经 FeishuNotifier
+  .send_interactive 显式发送（不进逐票 NotifierRegistry 分发，避免 text 形态）
 
 结构：evaluate_buy_points 纯函数（可回测可单测）；check_and_dispatch 服务层
 （取数+分发）；buy_point_loop lifespan 调度（与 watcher_loop 同模式）。
@@ -268,17 +269,26 @@ async def check_and_dispatch(app) -> list[dict]:
     if not dispatched:
         return []
 
-    # 聚合卡显式单发（一拍一卡；不进逐票 registry，避免连发）
+    # 逐票单卡（2026-09-08 用户要求：每只股票对应一张独立卡片，不汇总）：
+    # 先全部落库去重，再按顺序逐票发卡；同拍多票间隔 0.5s 防飞书频控
+    # （自定义机器人/应用消息 5 条/秒上限，真实场景命中票通常 1~3 只）。
     sent = await _sent_with_cache(state, settings.picks_watcher_env_refresh_seconds)
-    breadth_payload = getattr(state, "snapshot_service", None)
-    breadth = getattr(breadth_payload, "breadth", None) or {}
-    card = build_buy_point_card(dispatched, sent, breadth, gate or None, show=now)
+    snap = getattr(state, "snapshot_service", None)
+    breadth = getattr(snap, "breadth", None) or {}
     notifier = get_notifier_registry().get("feishu")
     send_card = getattr(notifier, "send_interactive", None)
-    if send_card is None or not await send_card(card):
-        log.warning("buy point feishu card NOT delivered（%d 票已落库留痕）", len(dispatched))
-    else:
-        log.warning("[PICKS-BUY-POINT] 卡片已推送：%s", "、".join(h["item"].get("symbol") or "" for h in dispatched))
+    if send_card is None:
+        log.warning("feishu notifier 无 send_interactive（%d 票已落库留痕）", len(dispatched))
+        return dispatched
+    for n, h in enumerate(dispatched, 1):
+        if n > 1:
+            await asyncio.sleep(0.5)
+        card = build_buy_point_card([h], sent, breadth, gate or None, show=now)
+        sym = h["item"].get("symbol") or ""
+        if await send_card(card):
+            log.warning("[PICKS-BUY-POINT] 卡片已推送：%s", sym)
+        else:
+            log.warning("buy point feishu card NOT delivered: %s（已落库留痕）", sym)
     return dispatched
 
 

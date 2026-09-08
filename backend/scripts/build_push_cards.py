@@ -53,6 +53,7 @@ from app.picks.push_cards import (  # noqa: E402
     logic_line,
     note,
     sentiment_pairs,
+    tri_text,
 )
 
 
@@ -162,8 +163,10 @@ def build_intraday_card(picks, sent, breadth, now):
     el.append(div(f"**🎯 盘中最推荐**（确定性优先切片 · {len(top)} 只）"))
     if top:
         for s in top:
-            cert = (s.get("certainty") or {}).get("level") or "—"
-            dist = (s.get("distinctiveness") or {}).get("level") or "—"
+            # 三态单点格式化：level="unknown"（判不出）渲染成「未判定」，
+            # 绝不把内部字面量打进卡片（2026-09-08 修复：or "—" 兜不住 truthy）
+            cert = tri_text((s.get("certainty") or {}).get("level"))
+            dist = tri_text((s.get("distinctiveness") or {}).get("level"))
             boards = s.get("boards")
             role = s.get("role") or "—"
             el.append(div(

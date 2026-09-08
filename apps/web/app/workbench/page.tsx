@@ -36,7 +36,7 @@ import {
   type RiskState,
   type SparklinePayload,
 } from "@/lib/api";
-import { fmt, fmtAmount, isHardQuality, pctColor, pctText } from "@/lib/format";
+import { fmt, fmtAmount, isHardQuality, pctColor, pctText, triText } from "@/lib/format";
 import { isTradingSession } from "@/lib/market-hours";
 import { subscribeWatchlist, notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import { LAST_SYMBOL_KEY, originLabel, workbenchUrl } from "@/lib/routing";
@@ -648,11 +648,11 @@ function WorkbenchInner() {
                       {pick != null || top != null ? (
                         <span
                           className="block truncate text-[10px] text-zinc-400"
-                          title={pick != null ? (pick.echelon_role ?? "") : `确定性 ${(top?.certainty?.level) ?? "?"} · 辨识度 ${(top?.distinctiveness?.level) ?? "?"}`}
+                          title={pick != null ? (pick.echelon_role ?? "") : `确定性 ${triText(top?.certainty?.level)} · 辨识度 ${triText(top?.distinctiveness?.level)}`}
                         >
                           {pick != null
                             ? pick.echelon_role ?? ""
-                            : `确定性 ${(top?.certainty?.level) ?? "?"} · 辨识度 ${(top?.distinctiveness?.level) ?? "?"}`}
+                            : `确定性 ${triText(top?.certainty?.level)} · 辨识度 ${triText(top?.distinctiveness?.level)}`}
                         </span>
                       ) : managing && activeGroup !== "持仓" ? (
                         <select

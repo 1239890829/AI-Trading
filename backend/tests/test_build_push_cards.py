@@ -55,7 +55,7 @@ def _pick(symbol="002564", name="天沃科技"):
     }
 
 
-def _fake_env(*, pick_date="2026-09-07", confirm_event=False):
+def _fake_env(*, pick_date="2026-09-07", confirm_event=False, unknown_judgement=False):
     """按 URL 路由的假后端。时间基线：2026-09-07（周一，交易日）。"""
     events = []
     if confirm_event:
@@ -112,8 +112,8 @@ def _fake_env(*, pick_date="2026-09-07", confirm_event=False):
                         "stage": "启动",
                         "tier": 2,
                         "pick_basis": "确定性高：题材阶段与封板质量支持延续",
-                        "certainty": {"level": "高"},
-                        "distinctiveness": {"level": "中"},
+                        "certainty": {"level": "unknown" if unknown_judgement else "高"},
+                        "distinctiveness": {"level": "unknown" if unknown_judgement else "中"},
                     }
                 ]
             }
@@ -268,3 +268,28 @@ def test_pure_helpers():
     fake_text = "【方向证伪】AI漫剧\n触发：接力环境证伪（promo 分位 40.7）\n当前板块涨幅：0.46%"
     assert ns["_text_line"](fake_text, "触发：") == "接力环境证伪（promo 分位 40.7）"
     assert ns["_text_line"](fake_text, "不存在：") is None
+
+
+def test_intraday_card_never_leaks_unknown_literal(monkeypatch, capsys, tmp_path):
+    """实证回归：2026-09-08 14:40 卡出现「辨识度 unknown」——内部三态字面量
+    不可外泄（level="unknown" 是 truthy，`or "—"` 兜不住，必须走 tri_text）。"""
+    monkeypatch.chdir(tmp_path)
+    router = _fake_env(pick_date="2026-09-08", confirm_event=True, unknown_judgement=True)
+    (Path("docs/push-templates")).mkdir(parents=True, exist_ok=True)
+
+    class FakeDT(dt_mod.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return dt_mod.datetime(2026, 9, 8, 14, 40, 0)
+
+    monkeypatch.setattr(dt_mod, "datetime", FakeDT)
+    monkeypatch.setattr(urllib.request, "urlopen", router)
+    monkeypatch.setattr(sys, "argv", ["build_push_cards.py", "--intraday"])
+    g: dict = {"__name__": "__main__", "__file__": str(SCRIPT)}
+    try:
+        exec(compile(SCRIPT.read_text(encoding="utf-8"), str(SCRIPT), "exec"), g)
+    except SystemExit as exc:
+        g["__exit_code__"] = exc.code
+    body = json.dumps(_card(tmp_path, "intraday-tracking.card.json"), ensure_ascii=False)
+    assert "unknown" not in body
+    assert "未判定" in body  # 判不出 → 显式中文
