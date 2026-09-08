@@ -368,6 +368,14 @@ async def lifespan(app: FastAPI):
 
         watcher_task = asyncio.create_task(watcher_loop(app, stop=watcher_stop), name="picks-watcher")
 
+    # --- 盘中买点推送（2026-09-08 用户定稿：唯一保留的盘中飞书推送）---
+    buy_point_stop = asyncio.Event()
+    buy_point_task = None
+    if settings.picks_buy_point_enabled:
+        from app.picks.buy_point import buy_point_loop
+
+        buy_point_task = asyncio.create_task(buy_point_loop(app, stop=buy_point_stop), name="picks-buy-point")
+
     # --- 盘后方向对照（选股 2.0 批次 C）：15:35 对照当日简报 + 提醒收益回填 ---
     review_intraday_stop = asyncio.Event()
     review_intraday_task = None
@@ -468,6 +476,8 @@ async def lifespan(app: FastAPI):
         premarket_stop.set()
     if watcher_task is not None:
         watcher_stop.set()
+    if buy_point_task is not None:
+        buy_point_stop.set()
     if ths_sentinel_task is not None:
         ths_sentinel_stop.set()
     if sentiment_monitor_task is not None:

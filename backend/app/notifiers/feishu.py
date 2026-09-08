@@ -156,19 +156,27 @@ class FeishuNotifier(Notifier):
         _, token = await cache.get_or_set(self.app_id, self._fetch_tenant_token)
         return token
 
-    async def _send_via_app(self, event: AlertEvent, rule: AlertRule) -> bool:
+    async def _send_via_app(self, event: AlertEvent, rule: AlertRule, card: dict | None = None) -> bool:
         try:
             token = await self._get_tenant_token()
         except Exception as exc:
             log.warning("feishu app channel token fetch failed: %s (event=%s)", exc, event.id)
             return False
 
-        # OpenAPI 的 content 字段是 JSON 字符串（与 webhook 的对象形态不同）
-        payload = {
-            "receive_id": self.open_id,
-            "msg_type": "text",
-            "content": json.dumps({"text": format_alert_text(event, rule)}, ensure_ascii=False),
-        }
+        # OpenAPI 的 content 字段是 JSON 字符串（与 webhook 的对象形态不同）；
+        # interactive 卡片同理（content=json.dumps(card)），text 保持原形态。
+        if card is not None:
+            payload = {
+                "receive_id": self.open_id,
+                "msg_type": "interactive",
+                "content": json.dumps(card, ensure_ascii=False),
+            }
+        else:
+            payload = {
+                "receive_id": self.open_id,
+                "msg_type": "text",
+                "content": json.dumps({"text": format_alert_text(event, rule)}, ensure_ascii=False),
+            }
         headers = {"Authorization": f"Bearer {token}"}
         try:
             if self._client is not None:
@@ -204,6 +212,21 @@ class FeishuNotifier(Notifier):
         return True
 
     async def send(self, event: AlertEvent, rule: AlertRule) -> bool:
+        snap = _symbol_snapshot(event.snapshot)
+        card_payload = snap.get("card")
+        if isinstance(card_payload, dict):
+            # 2026-09-08 用户指令：盘中买点推送用 interactive 卡片（与每日精选推送卡同版式，
+            # 构建函数 app/picks/push_cards.py）。snapshot.card 存在 → 卡片形态优先。
+            if self.webhook_available:
+                return await self._send_via_webhook(event, rule, card=card_payload)
+            if self.app_available:
+                return await self._send_via_app(event, rule, card=card_payload)
+            log.warning(
+                "feishu card requested but neither webhook nor app credentials are "
+                "configured; skip (event=%s symbol=%s)",
+                event.id, event.symbol,
+            )
+            return False
         if self.webhook_available:
             return await self._send_via_webhook(event, rule)
         if self.app_available:
@@ -216,11 +239,94 @@ class FeishuNotifier(Notifier):
         )
         return False
 
-    async def _send_via_webhook(self, event: AlertEvent, rule: AlertRule) -> bool:
-        payload: dict[str, Any] = {
-            "msg_type": "text",
-            "content": {"text": format_alert_text(event, rule)},
+    async def send_interactive(self, card: dict) -> bool:
+        """直接发送一张 interactive 卡片（不走 event/rule 模型）。
+
+    盘中买点聚合卡专用（buy_point.check_and_dispatch 显式单发）：多票同拍
+    命中合并一卡，避免逐票分发造成连发。webhook 优先，否则自建应用 P2P；
+    都未配置显式 warning 返回 False。
+    """
+        if self.webhook_available:
+            return await self._send_card_webhook(card)
+        if self.app_available:
+            return await self._send_card_app(card)
+        log.warning("feishu interactive card requested but no channel configured; skip")
+        return False
+
+    async def _send_card_webhook(self, card: dict) -> bool:
+        payload: dict[str, Any] = {"msg_type": "interactive", "card": card}
+        if self.secret:
+            ts = str(int(time.time()))
+            payload["timestamp"] = ts
+            payload["sign"] = feishu_sign(ts, self.secret)
+        try:
+            if self._client is None:
+                async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
+                    resp = await client.post(self.webhook, json=payload)
+            else:
+                resp = await self._client.post(self.webhook, json=payload)
+        except Exception:
+            log.exception("feishu webhook card request failed")
+            return False
+        return self._card_resp_ok(resp, "webhook")
+
+    async def _send_card_app(self, card: dict) -> bool:
+        try:
+            token = await self._get_tenant_token()
+        except Exception as exc:
+            log.warning("feishu app card token fetch failed: %s", exc)
+            return False
+        payload = {
+            "receive_id": self.open_id,
+            "msg_type": "interactive",
+            "content": json.dumps(card, ensure_ascii=False),
         }
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            if self._client is not None:
+                resp = await self._client.post(
+                    _MESSAGE_URL, params={"receive_id_type": "open_id"}, json=payload, headers=headers,
+                )
+            else:
+                async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as hc:
+                    resp = await hc.post(
+                        _MESSAGE_URL, params={"receive_id_type": "open_id"}, json=payload, headers=headers,
+                    )
+        except Exception:
+            log.exception("feishu app card request failed")
+            return False
+        if not self._card_resp_ok(resp, "app"):
+            # token 失效类失败清缓存：下一张卡重换 token
+            from app.notifiers import get_notifier_registry
+
+            cache_on(get_notifier_registry(), "feishu_tenant_token", _TOKEN_TTL_SECONDS, maxsize=4).invalidate(
+                self.app_id
+            )
+            return False
+        return True
+
+    def _card_resp_ok(self, resp: httpx.Response, via: str) -> bool:
+        if resp.status_code != 200:
+            log.warning("feishu %s card http %s", via, resp.status_code)
+            return False
+        try:
+            body = resp.json()
+        except Exception:
+            log.warning("feishu %s card non-json response", via)
+            return False
+        if not _is_success_body(body):
+            log.warning("feishu %s card rejected: %s", via, body)
+            return False
+        return True
+
+    async def _send_via_webhook(self, event: AlertEvent, rule: AlertRule, card: dict | None = None) -> bool:
+        if card is not None:
+            payload: dict[str, Any] = {"msg_type": "interactive", "card": card}
+        else:
+            payload = {
+                "msg_type": "text",
+                "content": {"text": format_alert_text(event, rule)},
+            }
         if self.secret:
             ts = str(int(time.time()))
             payload["timestamp"] = ts

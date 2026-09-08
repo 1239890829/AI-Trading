@@ -143,7 +143,7 @@ def _run_script(monkeypatch, capsys, fake_now, argv, *, pick_date="2026-09-07"):
     monkeypatch.setattr(sys, "argv", argv)
     (Path("docs/push-templates")).mkdir(parents=True, exist_ok=True)
     src = SCRIPT.read_text(encoding="utf-8")
-    g: dict = {"__name__": "__main__"}
+    g: dict = {"__name__": "__main__", "__file__": str(SCRIPT)}  # __file__：脚本 sys.path 注入依赖
     try:
         exec(compile(src, str(SCRIPT), "exec"), g)
     except SystemExit as exc:
@@ -220,7 +220,7 @@ def test_intraday_confirm_event_rendered(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(urllib.request, "urlopen", router)
     monkeypatch.setattr(sys, "argv", ["build_push_cards.py", "--intraday"])
     (Path("docs/push-templates")).mkdir(parents=True, exist_ok=True)
-    g: dict = {"__name__": "__main__"}
+    g: dict = {"__name__": "__main__", "__file__": str(SCRIPT)}  # __file__：脚本 sys.path 注入依赖
     try:
         exec(compile(SCRIPT.read_text(encoding="utf-8"), str(SCRIPT), "exec"), g)
     except SystemExit as exc:
@@ -250,21 +250,21 @@ def test_after_close_writes_single_card_no_review(monkeypatch, capsys, tmp_path)
 
 
 def test_pure_helpers():
-    """纯函数（fmt_chg/chg_tag/_text_line）断言——从源码切两段函数定义 exec 后取用。"""
+    """纯函数断言：fmt_chg 已抽取到 app/picks/push_cards（直接 import）；
+    chg_tag/_text_line 仍在脚本内（切一段 exec）。"""
+    from app.picks.push_cards import fmt_chg
+
     src = SCRIPT.read_text(encoding="utf-8")
-    seg = (
-        src[src.index("def fmt_chg"): src.index("# ---------- 公共构件")]
-        + src[src.index("def pick_chg"): src.index("def build_intraday_card")]
-    )
+    seg = src[src.index("def pick_chg"): src.index("def build_intraday_card")]
     ns: dict = {}
     exec(compile(seg, "helpers", "exec"), ns)
-    fake_text = "【方向证伪】AI漫剧\n触发：接力环境证伪（promo 分位 40.7）\n当前板块涨幅：0.46%"
-    assert ns["fmt_chg"](None) == "--"
-    assert ns["fmt_chg"](1.234) == "+1.23%"
+    assert fmt_chg(None) == "--"
+    assert fmt_chg(1.234) == "+1.23%"
     assert ns["chg_tag"](None) == ""
     assert "回落" in ns["chg_tag"](-3.5)
     assert "微跌" in ns["chg_tag"](-0.5)
     assert ns["chg_tag"](1.0) == ""
     assert "强势" in ns["chg_tag"](6.0)
+    fake_text = "【方向证伪】AI漫剧\n触发：接力环境证伪（promo 分位 40.7）\n当前板块涨幅：0.46%"
     assert ns["_text_line"](fake_text, "触发：") == "接力环境证伪（promo 分位 40.7）"
     assert ns["_text_line"](fake_text, "不存在：") is None

@@ -558,14 +558,15 @@ def _default_watcher_channels() -> str:
 
 
 def ensure_system_rule(session_factory) -> AlertRule:
-    """watcher 专用系统规则（get-or-create）。detached 后只读 id/name/channels。
+    """watcher 专用系统规则（get-or-create + channels 跟随配置默认）。detached 后只读 id/name/channels。
 
-    升级语义：v1 硬编码默认 ``["in_app", "log"]`` 的旧规则行升级为当前配置默认
-    （feishu 进列）——该值是历史默认而非用户有意定制（用户定制任何其他值不动）；
-    webhook 未配置时 feishu 通道按既有语义显式跳过，不会伪装成功。
+    系统规则由系统管理（非用户定制对象）：channels 每次与 settings 默认同步——
+    2026-09-08 用户指令「中间态不再推飞书」落地后，配置默认去 feishu，DB 里
+    历史固化的 feishu 行在下次 ensure 时自动收敛，无需手工迁移。
     """
     with session_factory() as db:
         row = db.query(AlertRule).filter(AlertRule.name == WATCHER_RULE_NAME).one_or_none()
+        default_channels = _default_watcher_channels()
         if row is None:
             row = AlertRule(
                 name=WATCHER_RULE_NAME,
@@ -573,20 +574,23 @@ def ensure_system_rule(session_factory) -> AlertRule:
                 condition_type="picks_intraday",
                 scope="all",
                 threshold=0.0,
-                channels=_default_watcher_channels(),
+                channels=default_channels,
             )
             db.add(row)
-        elif row.channels == '["in_app", "log"]':
-            row.channels = _default_watcher_channels()
+        elif row.channels != default_channels:
+            row.channels = default_channels
         db.commit()
         db.refresh(row)
         db.expunge(row)
         return row
 
 
-async def dispatch_alert(app, alert: dict) -> bool:
+async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
     """去重（append_alert）→ record_trigger → NotifierRegistry 分发。
 
+    rule_provider：返回 AlertRule 的零参函数（如买点事件用 __picks_buy_point__
+    独立规则与通道）；默认 watcher 系统规则。alert["card"]（dict，可选）会进
+    snapshot，FeishuNotifier 见 card 即发 interactive 卡片形态。
     返回 False = 当日重复（key 已存在），调用方无须重试。app 兼容实例或 .state。
     """
     from app.picks.morning_brief import append_alert, brief_for_today
@@ -596,19 +600,22 @@ async def dispatch_alert(app, alert: dict) -> bool:
         return False
     state = app.state if hasattr(app, "state") else app
     session_factory = get_session_factory()
-    rule = ensure_system_rule(session_factory)
+    rule = rule_provider(session_factory) if rule_provider is not None else ensure_system_rule(session_factory)
     repo = getattr(state, "alert_repo", None) or AlertRepository(session_factory)
     meta = alert.get("meta") or {}
+    snapshot: dict = {
+        "kind": alert.get("kind"),
+        "direction": alert.get("direction"),
+        "text": alert.get("text"),
+    }
+    if isinstance(alert.get("card"), dict):
+        snapshot["card"] = alert["card"]
     event = repo.record_trigger(
         rule.id,
         alert.get("symbol") or "000000",
         float(meta.get("trigger_value") or 0.0),
         float(meta.get("threshold") or 0.0),
-        snapshot={
-            "kind": alert.get("kind"),
-            "direction": alert.get("direction"),
-            "text": alert.get("text"),
-        },
+        snapshot=snapshot,
     )
     channels = await get_notifier_registry().dispatch(event, rule)
     repo.update_event_channels(event.id, channels)

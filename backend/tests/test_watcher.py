@@ -424,7 +424,7 @@ def test_ensure_system_rule_new_row_includes_configured_channels(tmp_path, monke
 
 
 def test_ensure_system_rule_upgrades_v1_default_row(tmp_path, monkeypatch):
-    """v1 硬编码默认 ["in_app", "log"] 的旧行升级为配置默认；用户定制值不动。"""
+    """历史行 channels 跟随配置默认（2026-09-08 用户指令：中间态去 feishu，无需手工迁移）。"""
     import json
 
     from app.core.config import settings
@@ -442,10 +442,16 @@ def test_ensure_system_rule_upgrades_v1_default_row(tmp_path, monkeypatch):
     row = ensure_system_rule(factory)
     assert json.loads(row.channels) == ["in_app", "log", "feishu"]
 
-    # 用户定制行 → 不动
+    # 历史遗留的其他值 → 同步为配置默认（系统规则由系统管理，非用户定制对象；
+    # 2026-09-08 用户明确指令后 DB 固化的 feishu 行靠此收敛）
     with factory() as db:
         r = db.query(AlertRule).filter(AlertRule.name == "__picks_watcher__").one()
         r.channels = '["log"]'
         db.commit()
     row2 = ensure_system_rule(factory)
-    assert json.loads(row2.channels) == ["log"]
+    assert json.loads(row2.channels) == ["in_app", "log", "feishu"]
+
+    # 配置默认收敛（去 feishu）→ 已固化的 feishu 行在下次 ensure 时同步去掉
+    monkeypatch.setattr(settings, "picks_watcher_channels", "in_app,log")
+    row3 = ensure_system_rule(factory)
+    assert json.loads(row3.channels) == ["in_app", "log"]

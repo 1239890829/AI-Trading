@@ -129,10 +129,10 @@ class Settings(BaseSettings):
     # ---- 盘中情绪监控（sentiment P2 #14，参考 daben-review）----
     # 交易时段周期探测三类纯规则 P0 事件：高度板(≥4板)炸板 / 炸板率连续破
     # 40% / 指数 15min 急杀（上证-0.8%/创业板-1.2%）→ AlertEvent 告警；
-    # 通道 in_app/log/feishu（webhook 未配置时 feishu 显式跳过）
+    # 2026-09-08 用户指令：预警/异动类不再推飞书，通道收敛 in_app/log
     sentiment_monitor_enabled: bool = True
     sentiment_monitor_interval_seconds: float = 60.0
-    sentiment_monitor_channels: str = "in_app,log,feishu"
+    sentiment_monitor_channels: str = "in_app,log"
 
     # ---- marketdb 盘后增量同步（调研采纳第 4 批运维收尾）----
     # marketdb（DuckDB 日K 仓）是 RPS / tech_score v3 第 8 维的数据地基。
@@ -170,7 +170,8 @@ class Settings(BaseSettings):
     # 定时探针不冷却必然刷屏，同 2026-09-04 定案的"预警无冷却"缺陷）
     llm_probe_alert_after: int = 3
     llm_probe_alert_cooldown_seconds: float = 3600.0
-    llm_probe_channels: str = "in_app,log,feishu"
+    # 2026-09-08 用户指令：系统探针告警不再打扰飞书（in_app/log 留痕）
+    llm_probe_channels: str = "in_app,log"
     # 助手受限工具调用（2026-09-06 P0-3）：允许助手按需调用只读数据工具
     # （涨停池/龙虎榜/复盘报告等白名单）。关掉后提示词不再注入工具清单，
     # 模型回到"只有注入快照"的状态——宁可少答，也不让它凭空编。
@@ -206,8 +207,20 @@ class Settings(BaseSettings):
     feishu_notify_open_id: str = ""
 
     # 盘中 watcher 提醒分发通道（逗号分隔：in_app/log/feishu）。
-    # feishu 在列但 webhook 未配置时按通道既有语义显式跳过（warning 日志可见）。
-    picks_watcher_channels: str = "in_app,log,feishu"
+    # 2026-09-08 用户指令：确认/证伪/大单异动等中间态一律不再推飞书——
+    # 飞书只保留盘中买点卡片（picks_buy_point_channels）；本通道保留
+    # in_app/log 供系统内留痕与复盘（assistant 工具仍可查询事件）。
+    picks_watcher_channels: str = "in_app,log"
+
+    # ---- 盘中买点推送（2026-09-08 用户定稿：唯一保留的盘中飞书推送）----
+    # 仅当当日精选标的满足全部判定（置信档≥可执行 + 无红线否决 + 闸门语义
+    # 通过 + 现价入买入区间 + 未触涨停区）才推飞书 interactive 卡片
+    # （版式与每日精选推送卡完全一致，app/picks/push_cards.py 同函数）。
+    # rule 通道刻意不含 feishu：多票同拍命中时合并**一张聚合卡**显式单发
+    # （buy_point.check_and_dispatch），不走逐票 registry 分发避免连发。
+    picks_buy_point_enabled: bool = True
+    picks_buy_point_interval_seconds: float = 60.0
+    picks_buy_point_channels: str = "in_app,log"
 
     # ---- 写接口鉴权（B6，opt-in）----
     # 留空 = 本地开发全放行；部署到公网/NAS 时配置任意随机值，

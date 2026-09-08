@@ -257,9 +257,11 @@ def _default_probe_channels() -> str:
 
 
 def _ensure_rule(session_factory) -> Any:
-    """get-or-create 探针告警规则。channels 取当前配置默认（新建时固化）。"""
+    """get-or-create 探针告警规则 + channels 跟随配置默认（系统规则由系统管理：
+    2026-09-08 用户指令系统告警不推飞书，配置默认去 feishu 后 DB 固化行自动收敛）。"""
     with session_factory() as db:
         row = db.query(AlertRule).filter(AlertRule.name == LLM_PROBE_RULE_NAME).one_or_none()
+        default_channels = _default_probe_channels()
         if row is None:
             row = AlertRule(
                 name=LLM_PROBE_RULE_NAME,
@@ -267,9 +269,13 @@ def _ensure_rule(session_factory) -> Any:
                 condition_type="llm_gateway_probe",
                 scope="all",
                 threshold=float(settings.llm_probe_alert_after),
-                channels=_default_probe_channels(),
+                channels=default_channels,
             )
             db.add(row)
+            db.commit()
+            db.refresh(row)
+        elif row.channels != default_channels:
+            row.channels = default_channels
             db.commit()
             db.refresh(row)
         db.expunge(row)

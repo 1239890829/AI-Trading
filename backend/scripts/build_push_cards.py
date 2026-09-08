@@ -33,10 +33,31 @@ import json
 import sys
 import urllib.request
 from datetime import datetime, timedelta
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # backend/ → import app.*
+
+# 卡片构建单点：app/picks/push_cards.py（2026-09-08 抽取，盘中买点推送共用同版式）
+from app.picks.push_cards import (  # noqa: E402
+    WEEKDAY,
+    build_picks_card,
+    card,
+    div,
+    fields_grid,
+    field,
+    fmt_chg,
+    first_clause,
+    gate_banner,
+    hr,
+    ind,
+    logic_line,
+    note,
+    sentiment_pairs,
+)
+
 
 BASE = "http://127.0.0.1:8000"
 OUT = "docs/push-templates"
-WEEKDAY = "一二三四五六日"
 WATCHER_RULE_NAME = "__picks_watcher__"
 
 
@@ -51,148 +72,6 @@ def try_get(path):
     except Exception as exc:
         print(f"WARN: {path} unavailable: {exc}")
         return None
-
-
-def ind(sent, name):
-    """情绪指标取值（name → value），缺失返回 None，绝不冒充 0。"""
-    for i in (sent or {}).get("indicators") or []:
-        if i.get("name") == name:
-            return i.get("value")
-    return None
-
-
-def fmt_chg(v):
-    """涨跌幅格式化：None → '--'（三态纪律：缺数据不冒充 0）。"""
-    return f"{v:+.2f}%" if v is not None else "--"
-
-
-# ---------- 公共构件（v2 版式） ----------
-def field(title, body):
-    return {"is_short": True, "text": {"tag": "lark_md", "content": f"**{title}**\n{body}"}}
-
-
-def fields_grid(pairs):
-    return {"tag": "div", "fields": [field(t, b) for t, b in pairs]}
-
-
-def hr():
-    return {"tag": "hr"}
-
-
-def div(md_text):
-    return {"tag": "div", "text": {"tag": "lark_md", "content": md_text}}
-
-
-def note(txt):
-    return {"tag": "note", "elements": [{"tag": "plain_text", "content": txt}]}
-
-
-def card(header, template, elements):
-    return {
-        "config": {"wide_screen_mode": True},
-        "header": {"title": {"tag": "plain_text", "content": header}, "template": template},
-        "elements": elements,
-    }
-
-
-def first_clause(s, sep="；"):
-    return (s or "").split(sep)[0].replace("非涨停：", "")
-
-
-def logic_line(it):
-    bases = it.get("bases") or {}
-    parts = []
-    if bases.get("echelon"):
-        parts.append(first_clause(bases["echelon"]))
-    fun = bases.get("fundamental") or ""
-    seg = next((x for x in fun.split("；") if "净利同比" in x), None)
-    if seg:
-        parts.append(seg)
-    return "；".join(parts) or "—"
-
-
-def sentiment_pairs(sent, breadth):
-    """情绪指标双列栅格（三卡共用），缺失显式 '--'。"""
-    lim_up = ind(sent, "涨停家数")
-    lim_conn = ind(sent, "连板家数")
-    max_boards = ind(sent, "连板高度")
-    yesterday_mid = ind(sent, "昨日涨停今日中位")
-    cal = sent.get("calibration") or {}
-    pct = cal.get("percentile") or {}
-    promo_pct = (pct.get("promo_1to2") or {}).get("percentile")
-    promo_val = (pct.get("promo_1to2") or {}).get("value", 0) * 100
-    return [
-        ("🌡️ 情绪温度", f"{sent.get('temperature')} · {sent.get('phase')}"),
-        ("🚀 涨停 / 连板", f"{lim_up if lim_up is not None else '--'} 家 / {lim_conn if lim_conn is not None else '--'} 家连板"),
-        ("📐 首板晋级率", f"{promo_val:.1f}%（分位 {promo_pct}）"),
-        ("📉 昨涨停溢价", f"{yesterday_mid:+.2f}%（中位）" if yesterday_mid is not None else "--"),
-        ("🔎 涨跌家数", f"涨 {breadth.get('up', '--')} / 跌 {breadth.get('down', '--')}"),
-        ("🪜 最高板", f"{max_boards}" if max_boards is not None else "--"),
-    ]
-
-
-def gate_banner(gate):
-    """门控横幅接真实 gate 判定（曾经硬编码"强空仓"，会与实际 gate 状态不符）。
-
-    返回 (gate_head, gate_body, gate_stand)；gate_stand 决定 TopN 头行的仅观察标注。
-    """
-    gate_level = (gate or {}).get("level")
-    gate_stand = bool((gate or {}).get("stand_aside"))
-    if gate_stand:
-        return ("**⛔ 门控：强空仓**" if gate_level == "strong" else "**⛔ 门控：空仓观察**",
-                "门控条件触发，以下清单 **🔒 仅跟踪观察，不构成买入依据**", gate_stand)
-    return "**✅ 门控：正常**", "未触发空仓闸门；各标的执行状态以盘前竞价闸门为准", gate_stand
-
-
-# ---------- 卡片：每日精选（morning=当日跟踪清单；默认=次日前瞻） ----------
-def build_picks_card(picks, sent, breadth, exec_gate, *, show, title_prefix, with_exec):
-    items = picks["items"]
-    gate = picks["meta"]["gate"]
-    gate_head, gate_body, gate_stand = gate_banner(gate)
-    observe_n = sum(1 for i in items if i.get("observation_only"))
-
-    exec_by_sym = {}
-    if with_exec and exec_gate:
-        exec_by_sym = {i["symbol"]: i for i in exec_gate.get("items") or []}
-    STATE_TAG = {"blocked": "🚫 禁买", "observe": "⚠️ 观察", "normal": "✅ 可买",
-                 "anomaly": "❗ 异常", "unknown": "❓ 未知"}
-
-    el = [
-        div(f"{gate_head}　{gate_body}"),
-        hr(),
-        fields_grid(sentiment_pairs(sent, breadth)),
-        hr(),
-        div((f"**🏆 选股器 Top{len(items)}**　🔒 全部仅观察（{observe_n}/{len(items)}，门控期不买入）" if gate_stand
-             else f"**🏆 选股器 Top{len(items)}**　仅观察 {observe_n}/{len(items)}")),
-    ]
-    for n, it in enumerate(items, 1):
-        theme = it.get("theme")
-        head = f"**{n}｜{it['name']} {it['symbol']}**　**{it['score']:.1f} 分** · {it.get('echelon_role') or '—'}"
-        if theme:
-            head += f" · {theme}（{it.get('theme_stage') or '—'}）"
-        sl = it.get("stop_loss") or {}
-        exec_line = ""
-        if with_exec:
-            exec_row = exec_by_sym.get(it["symbol"])
-            exec_tag = STATE_TAG.get((exec_row or {}).get("state"), "❓ 未知")
-            reason = (exec_row or {}).get("reason") or "执行闸门无数据"
-            exec_line = f"执行：**{exec_tag}**　{reason}\n"
-        el.append(div(
-            f"{head}\n"
-            f"逻辑：{logic_line(it)}\n"
-            f"失效：{(it.get('invalidations') or ['—'])[0]}\n"
-            f"止损：**-{sl.get('pct', 0):.0f}% @ {sl.get('price', 0):.2f}**\n"
-            f"{exec_line}".rstrip()
-        ))
-    el += [
-        hr(),
-        div("**🌅 明日前哨**　涨停回升且晋级率 ≥25% → 修复期重评方向池；涨停 <25 家且最高板 ≤2 板 → 冰点续空仓\n"
-            f"当前切换条件：{sent.get('switch_conditions')}"),
-        note("选股器规则引擎 · 简报 08:40 生成 · 名单为盘中跟踪输入，机会确认以盘中提醒为准 · 非投资建议"
-             if with_exec else
-             "选股器规则引擎 · 次日名单 08:40 生成，本卡为基于今日盘面的前瞻 · 非投资建议"),
-    ]
-    return card(f"📈 {title_prefix} · {show:%m-%d}（周{WEEKDAY[show.weekday()]}）", "orange", el)
 
 
 # ---------- 卡片：盘中确认（watcher 事件 + intraday-top + 每日精选盘中表现） ----------

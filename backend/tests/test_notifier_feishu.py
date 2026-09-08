@@ -238,3 +238,43 @@ def test_registry_dispatch_delivers_configured_feishu():
     delivered = asyncio.run(reg.dispatch(_event(), _rule(channels='["in_app", "feishu"]')))
     assert "feishu" in delivered
     assert len(calls) == 1
+
+
+# ---------------------------------------------------------------- interactive 卡片（2026-09-08 买点推送）
+
+CARD = {"config": {"wide_screen_mode": True},
+        "header": {"title": {"tag": "plain_text", "content": "📈 盘中买点"}, "template": "orange"},
+        "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": "**1｜测试股 600000**"}}]}
+
+
+def test_send_interactive_via_webhook_posts_card_object():
+    calls: list = []
+    notifier = FeishuNotifier(webhook="https://example.invalid/hook", client=_client(calls, {"code": 0}))
+    assert asyncio.run(notifier.send_interactive(CARD))
+    assert calls[0]["msg_type"] == "interactive"
+    assert calls[0]["card"] == CARD  # webhook 形态：card 为对象
+
+
+def test_send_interactive_via_app_posts_content_string():
+    calls: list = []
+    client = _client(calls, {"code": 0, "tenant_access_token": "tok"})
+    notifier = FeishuNotifier(app_id="aid", app_secret="sec", open_id="ou_x", client=client)
+    assert asyncio.run(notifier.send_interactive(CARD))
+    # OpenAPI 形态：content 为 JSON 字符串
+    assert calls[1]["msg_type"] == "interactive"
+    assert json.loads(calls[1]["content"]) == CARD
+
+
+def test_send_interactive_unconfigured_returns_false():
+    notifier = FeishuNotifier(webhook="", app_id="", app_secret="", open_id="")
+    assert not asyncio.run(notifier.send_interactive(CARD))
+
+
+def test_event_with_card_snapshot_renders_interactive():
+    """snapshot 带 card → send() 走 interactive 分支（通用卡片事件能力）。"""
+    calls: list = []
+    ev = _event()
+    ev.snapshot = json.dumps({"kind": "buy_point", "text": "t", "card": CARD})
+    notifier = FeishuNotifier(webhook="https://example.invalid/hook", client=_client(calls, {"code": 0}))
+    assert asyncio.run(notifier.send(ev, _rule()))
+    assert calls[0]["msg_type"] == "interactive" and calls[0]["card"] == CARD
