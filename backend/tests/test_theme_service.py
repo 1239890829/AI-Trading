@@ -50,12 +50,39 @@ def test_parse_theme_tags_handles_empty_and_dupes():
 
 
 def test_normalize_theme_merges_synonyms():
-    """业绩类标签不合并会人为制造碎片题材：8/28 前三大标签全是业绩类。"""
-    for raw in ("业绩增长", "中报增长", "半年报增长", "中报扭亏", "半年报减亏"):
-        assert normalize_theme(raw) == "业绩驱动", raw
-    assert normalize_theme("黄金概念") == "黄金珠宝"
-    assert normalize_theme("液冷服务器") == "液冷"
-    assert normalize_theme("福建国资") == "国资改革"
+    """同义标签归一到**官方概念名**（2026-09-08 官方名称纪律：目标名必须逐字
+    存在于同花顺概念板块目录；官方无统一概念的近似标签一律直通原始标签）。"""
+    assert normalize_theme("黄金概念") == "黄金概念"  # 官方名直通
+    assert normalize_theme("黄金租赁") == "黄金概念"  # 归到官方「黄金概念」
+    assert normalize_theme("AI液冷") == "液冷服务器"  # 官方概念逐字名
+    assert normalize_theme("数据中心业务") == "数据中心(AIDC)"  # 逐字含括号
+    assert normalize_theme("央国企改革") == "央企国企改革"
+    assert normalize_theme("转基因玉米") == "转基因"
+
+
+def test_normalize_theme_passes_through_when_no_official_concept():
+    """官方目录无统一概念的近似标签（业绩类/算力/PTFE/控制权等）→ 直通原始标签。
+
+    曾把它们归并到自创名（业绩驱动/算力/PTFE/控制权变更…）——自创名在同花顺
+    App 里搜不到，违反官方名称纪律。名称准确性优先于碎片化担忧。
+    """
+    for raw in ("业绩增长", "中报增长", "业绩高增长", "半年报预增",
+                "算力服务", "AI算力", "PTFE薄膜", "控制权转让", "并购重组",
+                "新股", "国资背景", "福建国资", "人形机器人", "算力租赁",
+                "液冷服务器", "国企改革"):
+        assert normalize_theme(raw) == raw, raw
+
+
+def test_theme_aliases_targets_are_official_names():
+    """守卫：THEME_ALIASES 的所有 value 必须是官方概念名（本清单为题材目录
+    同步快照中与映射相关的子集；新增映射条目时先把目标名核对进官方目录）。"""
+    from app.services.theme_service import THEME_ALIASES
+
+    official_subset = {
+        "黄金概念", "液冷服务器", "数据中心(AIDC)", "央企国企改革", "转基因",
+    }
+    for raw, target in THEME_ALIASES.items():
+        assert target in official_subset, f"映射 {raw!r}→{target!r}：目标名不在官方概念目录"
 
 
 def test_normalize_theme_keeps_unknown_tags():
@@ -337,16 +364,14 @@ def test_formation_level_buckets():
     assert formation_level(36) == "成建制"
 
 
-def test_normalize_theme_merges_real_world_fragments():
-    """8/28 实测散出的碎片标签，不合并会各成一档伪题材。"""
-    assert normalize_theme("PTFE薄膜") == "PTFE"
-    assert normalize_theme("AI液冷") == "液冷"
-    assert normalize_theme("算力服务") == "算力"
-    assert normalize_theme("黄金租赁") == "黄金珠宝"
-    assert normalize_theme("业绩高增长") == "业绩驱动"
-    assert normalize_theme("半年报预增") == "业绩驱动"
-    assert normalize_theme("人形机器人") == "机器人"
-    assert normalize_theme("数据中心业务") == "数据中心"
+def test_normalize_theme_official_names_over_fragments():
+    """官方名称纪律（2026-09-08）：ths 原发标签逐字直通，归并目标必须是官方概念名。"""
+    assert normalize_theme("PTFE薄膜") == "PTFE薄膜"  # 官方无 PTFE 概念 → 直通
+    assert normalize_theme("AI液冷") == "液冷服务器"  # 官方「液冷服务器」
+    assert normalize_theme("黄金租赁") == "黄金概念"  # 官方「黄金概念」
+    assert normalize_theme("业绩高增长") == "业绩高增长"  # 业绩类直通
+    assert normalize_theme("人形机器人") == "人形机器人"  # 官方概念直通
+    assert normalize_theme("数据中心业务") == "数据中心(AIDC)"  # 官方逐字含括号
 
 
 def test_health_note_calls_out_solo_stock_as_not_a_theme():
