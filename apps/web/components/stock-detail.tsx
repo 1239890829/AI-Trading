@@ -7,7 +7,7 @@ import { priceLimitPct } from "@/lib/price-limit";
 import { Panel } from "@/components/panel";
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
-import { useQuoteStream, STREAM_STATUS_LABEL } from "@/hooks/use-quote-stream";
+import { useQuoteStream, STREAM_STATUS_LABEL, STREAM_ABNORMAL } from "@/hooks/use-quote-stream";
 import { analyze } from "@/lib/technical-analysis";
 import { buildEventMarks, buildMinuteNewsEvents } from "@/lib/event-markers";
 import { mergeQuoteIntoBars, mergeQuoteIntoMinutes } from "@/lib/kline-live";
@@ -541,11 +541,11 @@ export function StockDetailPanel({
       {/* ① 紧凑行情条（指数隐藏加自选：sh000001 不是合法自选股代码） */}
       {quote && <QuoteStrip quote={quote} inWatchlist={inWatchlist} onAdd={() => void add()} hideWatchlist={isIndex} tradingStatus={tradingStatus} />}
 
-      {/* ①¼ 实时连接状态：只在异常态显示（2026-09-07 用户要求去掉"● 休市 ·
-          展示最近交易日数据"——休市与正常推送都是"一切正常"的正常态，常驻
-          显示是视觉噪音，数据过期本身已有 QuoteStrip 质量徽标兜底；真正的
-          异常态 connecting/polling/stale/error 必须可见） */}
-      {streamStatus !== "closed" && (
+      {/* ①¼ 实时连接状态：只在异常态显示。2026-09-07 去掉"● 休市"常驻；2026-09-08
+          用户反馈"● WS 实时推送"同样不该常驻（正常态都不留痕）——条件从
+          `!== "closed"` 收紧为异常态白名单 STREAM_ABNORMAL，避免"上次只去了一半"。
+          异常态 connecting/polling/stale/error 必须可见。 */}
+      {STREAM_ABNORMAL.includes(streamStatus) && (
         <div className="shrink-0 text-[10px]">
           <span className={STREAM_STATUS_LABEL[streamStatus].cls} title="行情连接状态（WebSocket 主通道，断线自动降级 REST 轮询）">
             ● {STREAM_STATUS_LABEL[streamStatus].text}

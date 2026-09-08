@@ -16,6 +16,11 @@ export const STREAM_STATUS_LABEL: Record<StreamStatus, { text: string; cls: stri
   error: { text: "连接失败", cls: "text-red-400" },
 };
 
+/** 需要常驻可见的异常态。live/closed 是"一切正常"的正常态，消费方不得常驻渲染
+ * （2026-09-07 去掉休市提示、2026-09-08 用户反馈 live 同样去掉——正常态不留痕，
+ * 数据过期已有 QuoteStrip 质量徽标兜底）。 */
+export const STREAM_ABNORMAL: readonly StreamStatus[] = ["connecting", "polling", "stale", "error"];
+
 /**
  * 行情流：优先 WebSocket（/ws/quotes），断线自动重连；
  * 连续失败 3 次后降级为 REST 轮询（5s），并在恢复时切回 WS。
