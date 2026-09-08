@@ -222,6 +222,17 @@ class Settings(BaseSettings):
     picks_buy_point_interval_seconds: float = 60.0
     picks_buy_point_channels: str = "in_app,log"
 
+    # ---- AI 大脑自主进化（docs/evolution-brain-plan.md v2）----
+    # 盘后 15:45 自动汇总五路证据（复盘改进项/signal_health/告警判读统计/…）
+    # → LLM 生成「今日进化议程」→ 按变更类别自动执行（A 参数/B 文档；C 代码 P1）。
+    # 安全模型=后置守护：证据门槛 + 值域钳制 + 红线 + 预算 + 自动回滚（P1 实验记录本）。
+    # **停机开关**：ASHARE_AGENT_AUTONOMY=0 时只生成议程不执行（降级为建议清单）。
+    agent_autonomy_enabled: bool = True
+    agent_evolution_hour: int = 15
+    agent_evolution_minute: int = 45
+    agent_daily_llm_budget: int = 8        # 每日进化相关 LLM 调用上限（防失控烧钱）
+    agent_daily_task_budget: int = 3       # 每日自动执行的改进任务数上限
+
     # ---- 写接口鉴权（B6，opt-in）----
     # 留空 = 本地开发全放行；部署到公网/NAS 时配置任意随机值，
     # 之后所有写请求必须带 X-API-Token 头（前端 NEXT_PUBLIC_API_TOKEN 自动携带）

@@ -2124,3 +2124,44 @@ export async function applyAgentParamChange(changeId: number): Promise<AgentPara
 export async function rollbackAgentParamChange(changeId: number): Promise<AgentParamChange> {
   return (await sendJson<AgentParamChange>(`/api/agent/params/changes/${changeId}/rollback`, "POST")).data;
 }
+
+// ---- AI 大脑：每日进化议程（v2）----
+
+export interface AgentAgendaItem {
+  class: "A" | "B" | "C";
+  finding: string;
+  evidence: Record<string, unknown>;
+  action: string;
+  expected_effect: string;
+  verification: string;
+  priority: number;
+  param?: { key: string; after: unknown };
+  summary?: string;
+  status: "pending" | "executed" | "deferred" | "rejected" | "failed";
+  result: string;
+}
+
+export interface AgentAgenda {
+  id: number;
+  date: string;
+  status: "generating" | "ready" | "executed" | "failed" | "skipped";
+  inputs: Record<string, unknown>;
+  items: AgentAgendaItem[];
+  budget: Record<string, unknown>;
+  error: { code: string; message: string } | null;
+  created_at: string | null;
+  finished_at: string | null;
+}
+
+export async function getAgentAgenda(date?: string): Promise<AgentAgenda | null> {
+  const q = date ? `?date=${encodeURIComponent(date)}` : "";
+  return (await getJson<AgentAgenda | null>(`/api/agent/agenda${q}`)).data;
+}
+
+export async function getAgentAgendas(limit = 14): Promise<AgentAgenda[]> {
+  return (await getJson<AgentAgenda[]>(`/api/agent/agendas?limit=${limit}`)).data;
+}
+
+export async function runAgentAgenda(): Promise<AgentAgenda> {
+  return (await sendJson<AgentAgenda>("/api/agent/agenda/run", "POST", {}, 180_000)).data;
+}

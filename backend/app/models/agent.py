@@ -111,6 +111,29 @@ class AgentParamChange(Base):
     rolled_back_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
 
 
+class AgentAgenda(Base):
+    """每日进化议程（AI 大脑 v2，docs/evolution-brain-plan.md）。
+
+    一天一份：LLM 汇总五路证据 → 议程项数组 → 按类别自动执行。
+    items 元素：{class: A|B, finding, evidence, action, priority,
+    expected_effect, verification, status, result}——status 由执行器写：
+    executed / deferred(附原因) / rejected(附原因) / failed(附原因)，
+    **没有"待确认"态**（后置守护模型）。
+    """
+
+    __tablename__ = "agent_agenda"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    date: Mapped[str] = mapped_column(String(10), unique=True, index=True)  # YYYY-MM-DD
+    status: Mapped[str] = mapped_column(String(16), default="generating", index=True)
+    inputs: Mapped[str] = mapped_column(Text, default="{}")   # JSON：五路证据摘要
+    items: Mapped[str] = mapped_column(Text, default="[]")    # JSON：议程项
+    budget: Mapped[str] = mapped_column(Text, default="{}")   # JSON：{llm_calls, tasks}
+    error: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+
+
 class AgentAudit(Base):
     """执行层审计：谁在什么时候把什么从什么改成了什么（+ 怎么回滚）。"""
 

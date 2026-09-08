@@ -1,0 +1,468 @@
+"""AI 大脑：每日进化议程（docs/evolution-brain-plan.md v2 P0）。
+
+自主进化循环的骨架：**感知 → 诊断 → 议程 → 执行**（验证/记忆 P1 接入）。
+
+- 感知：五路证据（P0 接三路：复盘改进项 / signal_health / 告警判读统计；
+  因子 IC 月度复核与计划对账 P1 接入，缺席时显式标注"未到期/未接入"）。
+- 诊断：LLM 汇总证据 → 严格 JSON 议程（class=A 参数 / B 文档；C 代码 P1，
+  议程出现 C 类一律 deferred 并写明原因——不静默忽略）。
+- 执行：A 类走参数变更单**自动生效**（白名单 + 红线 + 24h 频率闸 + 预算；
+  证据随变更单落库，30 日后置验证 P1）；B 类写进化日报（docs/evolution/）。
+
+安全模型（后置守护）：
+- **红线清单**：风控/资金/推送/凭据/删除类——即使未来白名单扩张也碰不到。
+- **停机开关**：`ASHARE_AGENT_AUTONOMY=0` → 只生成议程不执行（降级建议清单）。
+- **预算**：每日 LLM 调用与自动任务数上限，超限议程照常生成但执行被拦。
+- **频率闸**：同一参数 24h 内只允许一次自动变更（防抖动、防来回翻烧饼）。
+"""
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+import logging
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+from sqlalchemy import select
+
+from app.core.config import settings
+from app.core.db import get_session_factory
+from app.market import trade_calendar as tc
+from app.market.trading_status import beijing_now
+from app.models.agent import AgentAgenda, AgentAudit, AgentParamChange, AgentTask
+
+log = logging.getLogger(__name__)
+
+#: 红线参数（不可被任何自动议程触碰；即使未来进入白名单也在此拦截）
+REDLINE_KEYS = {
+    "picks_gate_block_gap", "picks_gate_observe_gap", "picks_gate_anomaly_gap",
+    "picks_gate_block_price", "risk_max_position_pct", "risk_max_total_exposure",
+}
+
+#: B 类文档白名单前缀（进化日报目录；其余路径一律拒绝）。
+#: 锚定项目根（backend/app/services/ → parents[3]），不随进程 cwd 漂移。
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_EVOLUTION_DIR = PROJECT_ROOT / "docs" / "evolution"
+
+
+# ---------------------------------------------------------------- 预算与开关
+
+
+def autonomy_enabled() -> bool:
+    return bool(settings.agent_autonomy_enabled)
+
+
+def _budget_status(session_factory) -> dict:
+    """今日预算占用：LLM 调用数（审计计）与自动执行任务数。"""
+    today = beijing_now().date().isoformat()
+    with session_factory() as db:
+        tasks = db.execute(
+            select(AgentTask).where(AgentTask.created_at >= f"{today}T00:00:00")
+        ).scalars().all()
+        audits = db.execute(
+            select(AgentAudit).where(
+                AgentAudit.action.in_(("agenda.generate", "triage.llm")),
+                AgentAudit.at >= f"{today}T00:00:00",
+            )
+        ).scalars().all()
+    used_tasks = len([t for t in tasks if t.created_by == "ai"])
+    used_llm = len(audits)
+    return {
+        "llm_used": used_llm, "llm_budget": settings.agent_daily_llm_budget,
+        "tasks_used": used_tasks, "task_budget": settings.agent_daily_task_budget,
+        "llm_exhausted": used_llm >= settings.agent_daily_llm_budget,
+        "tasks_exhausted": used_tasks >= settings.agent_daily_task_budget,
+    }
+
+
+def _within_budget(budget: dict, *, need_llm: bool, need_task: bool) -> str | None:
+    """返回拦截原因（None=放行）。议程生成需要 LLM 额度，执行需要任务额度。"""
+    if need_llm and budget.get("llm_exhausted"):
+        return f"今日 LLM 预算已用尽（{budget['llm_used']}/{budget['llm_budget']}）"
+    if need_task and budget.get("tasks_exhausted"):
+        return f"今日自动任务预算已用尽（{budget['tasks_used']}/{budget['task_budget']}）"
+    return None
+
+
+# ---------------------------------------------------------------- 证据收集
+
+
+def _collect_review_improvements(session_factory) -> dict:
+    """今日复盘报告的改进项（已有 15:30 复盘产出）。字段按 schemas.ActionItem。"""
+    try:
+        from app.review.storage import get_report
+
+        today = beijing_now().date().strftime("%Y%m%d")
+        report = get_report(session_factory, today)
+        if report is None:
+            return {"available": False, "note": "今日复盘报告尚未生成"}
+        items = [
+            {"id": a.id, "title": a.title[:120], "category": a.category,
+             "priority": a.priority, "target": a.target[:80],
+             "expected_impact": a.expected_impact[:100]}
+            for a in (report.action_items or [])[:10]
+        ]
+        return {"available": True, "trade_date": today, "action_items": items,
+                "n": len(items)}
+    except Exception as exc:  # noqa: BLE001  证据收集失败不阻断议程
+        return {"available": False, "note": f"读取失败：{exc}"}
+
+
+def _collect_signal_health(session_factory) -> dict:
+    try:
+        from app.picks.signal_health import collect_signal_health
+
+        return {"available": True, "health": collect_signal_health(session_factory)}
+    except Exception as exc:  # noqa: BLE001
+        return {"available": False, "note": f"读取失败：{exc}"}
+
+
+def _collect_triage_stats(session_factory) -> dict:
+    """告警判读统计：哪些规则在产生噪音（ignore 占比）、哪些事件被升级。"""
+    try:
+        from app.models.agent import AgentTriage
+
+        with session_factory() as db:
+            rows = db.execute(select(AgentTriage)).scalars().all()
+        by_verdict: dict[str, int] = {}
+        for r in rows:
+            by_verdict[r.verdict] = by_verdict.get(r.verdict, 0) + 1
+        return {"available": True, "total": len(rows), "by_verdict": by_verdict}
+    except Exception as exc:  # noqa: BLE001
+        return {"available": False, "note": f"读取失败：{exc}"}
+
+
+def collect_inputs(session_factory=None) -> dict:
+    """五路证据汇总（P0 三路；factor_ic 与 plan_alignment P1 接入时补位）。"""
+    sf = session_factory or get_session_factory()
+    inputs = {
+        "review": _collect_review_improvements(sf),
+        "signal_health": _collect_signal_health(sf),
+        "triage_stats": _collect_triage_stats(sf),
+        "factor_ic": {"available": False, "note": "月度复核（factor_ic_review）P1 接入"},
+        "plan_alignment": {"available": False, "note": "方向校验器 P1 接入"},
+    }
+    return inputs
+
+
+# ---------------------------------------------------------------- 议程生成
+
+
+_SYSTEM_PROMPT = (
+    "你是 A 股交易系统的自主进化大脑。给定今日系统证据（复盘改进项/信号健康/告警判读统计），"
+    "输出**今日进化议程**：找出系统最值得立即改进的点，并给出可直接执行的方案。\n"
+    "只输出 JSON：{\"items\": [{\"class\": \"A|B\", \"finding\": \"发现（一句话）\", "
+    "\"evidence\": {…数据依据}, \"action\": \"…\", "
+    "\"param\": {\"key\": \"picks_style_offsets_json\", \"after\": {…}}（仅 A 类必填）, "
+    "\"expected_effect\": \"预期效果\", \"verification\": \"如何验证\", \"priority\": 1}]}\n"
+    "纪律：\n"
+    "- class=A 表示改白名单参数（当前仅 picks_style_offsets_json，after 是 {相位:{维度:delta}}，"
+    "|delta|≤0.06）；没有充分数据依据就不要提 A 类\n"
+    "- class=B 表示文档/知识沉淀（summary 字段写结论摘要，系统会落进化日报）\n"
+    "- 不确定就不提；宁缺毋滥；最多 3 项；没有值得改的就输出空 items\n"
+    "- 不提供买卖建议，不改风控/资金/推送相关任何东西"
+)
+
+
+def _parse_items(raw: str) -> list[dict]:
+    """解析 LLM 议程输出：严格校验，非法项丢弃（丢弃项在返回值里注明原因）。"""
+    from app.core.llm_client import extract_json_object
+
+    data = extract_json_object(raw) or {}
+    items = data.get("items")
+    if not isinstance(items, list):
+        raise ValueError("议程输出缺少 items 数组")
+    out: list[dict] = []
+    for it in items[:3]:  # 上限 3 项（宁缺毋滥）
+        if not isinstance(it, dict):
+            continue
+        cls = str(it.get("class") or "").strip().upper()
+        if cls not in ("A", "B", "C"):
+            continue
+        item = {
+            "class": cls,
+            "finding": str(it.get("finding") or "")[:200],
+            "evidence": it.get("evidence") if isinstance(it.get("evidence"), dict) else {},
+            "action": str(it.get("action") or "")[:200],
+            "expected_effect": str(it.get("expected_effect") or "")[:160],
+            "verification": str(it.get("verification") or "")[:160],
+            "priority": int(it.get("priority") or 9),
+            "status": "pending",
+            "result": "",
+        }
+        if cls == "A":
+            param = it.get("param") or {}
+            item["param"] = {
+                "key": str(param.get("key") or ""),
+                "after": param.get("after"),
+            }
+        if cls == "B":
+            item["summary"] = str(it.get("summary") or "")[:500]
+        out.append(item)
+    return out
+
+
+async def generate_agenda(session_factory=None) -> dict:
+    """生成（或复用）今日议程：预算检查 → 收集证据 → LLM → 解析落库。
+
+    ORM 纪律：实例不跨 session——每次更新都 `db.get` fresh load 后改属性，
+    改完在**同一 session 内** dump（expire_on_commit 下 detached 访问会炸）。
+    """
+    sf = session_factory or get_session_factory()
+    today = beijing_now().date().isoformat()
+    with sf() as db:
+        exist = db.execute(select(AgentAgenda).where(AgentAgenda.date == today)).scalars().first()
+        if exist is not None and exist.status not in ("failed",):
+            return _agenda_dump(exist)
+
+    budget = _budget_status(sf)
+    reason = _within_budget(budget, need_llm=True, need_task=False)
+
+    with sf() as db:
+        row = AgentAgenda(date=today, status="generating")
+        db.add(row)
+        db.commit()
+        agenda_id = row.id
+
+    if reason:
+        with sf() as db:
+            row = db.get(AgentAgenda, agenda_id)
+            row.status = "skipped"
+            row.error = json.dumps({"code": "Budget", "message": reason}, ensure_ascii=False)
+            row.finished_at = datetime.utcnow()
+            db.commit()
+            return _agenda_dump(row)
+
+    inputs = collect_inputs(sf)
+    messages = [
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user", "content": json.dumps(inputs, ensure_ascii=False, default=str)},
+    ]
+    try:
+        from app.core.llm_client import chat_completion
+
+        def _call() -> str:
+            return chat_completion(
+                base_url=settings.review_llm_base_url,
+                api_key=settings.review_llm_api_key,
+                model=settings.review_llm_model,
+                messages=messages,
+                provider=settings.llm_provider,
+                cli_path=settings.llm_cli_path,
+                timeout=120.0,
+            )
+
+        raw = await _llm_call(_call)
+        items = _parse_items(raw)
+        with sf() as db:
+            row = db.get(AgentAgenda, agenda_id)
+            row.inputs = json.dumps(inputs, ensure_ascii=False, default=str)
+            row.items = json.dumps(items, ensure_ascii=False, default=str)
+            row.status = "ready"
+            db.commit()
+            out = _agenda_dump(row)
+    except Exception as exc:
+        with sf() as db:
+            row = db.get(AgentAgenda, agenda_id)
+            row.status = "failed"
+            row.error = json.dumps({"code": type(exc).__name__, "message": str(exc)[:300]},
+                                   ensure_ascii=False)
+            row.finished_at = datetime.utcnow()
+            db.commit()
+            out = _agenda_dump(row)
+        log.warning("evolution agenda failed: %s", exc)
+        return out
+
+    with sf() as db:
+        db.add(AgentAudit(actor="ai", action="agenda.generate", target="evolution"))
+        db.commit()
+    return out
+
+
+async def _llm_call(fn) -> str:
+    """LLM 同步调用包装（to_thread 不阻塞事件循环）。"""
+    return await asyncio.wait_for(asyncio.to_thread(fn), timeout=150.0)
+
+
+def _agenda_dump(row: AgentAgenda) -> dict:
+    def _j(raw: str | None, default: Any) -> Any:
+        if not raw:
+            return default
+        try:
+            return json.loads(raw)
+        except Exception:  # noqa: BLE001
+            return default
+
+    return {
+        "id": row.id, "date": row.date, "status": row.status,
+        "inputs": _j(row.inputs, {}), "items": _j(row.items, []),
+        "budget": _j(row.budget, {}),
+        "error": _j(row.error, None),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+    }
+
+
+# ---------------------------------------------------------------- 议程执行
+
+
+def _param_change_in_24h(key: str, sf) -> bool:
+    """频率闸：同参数 24h 内是否已有自动变更（applied 或 rolled_back）。"""
+    cutoff = datetime.utcnow() - timedelta(hours=24)
+    with sf() as db:
+        rows = db.execute(
+            select(AgentParamChange).where(
+                AgentParamChange.key == key,
+                AgentParamChange.status.in_(("applied", "rolled_back")),
+                AgentParamChange.created_at >= cutoff,
+            )
+        ).scalars().all()
+        return bool(rows)
+
+
+def _execute_a(item: dict, sf, agenda_date: str) -> dict:
+    """A 类：参数变更单自动生效（白名单+红线+频率闸；证据随单落库）。"""
+    param = item.get("param") or {}
+    key = param.get("key") or ""
+    if key in REDLINE_KEYS:
+        return {**item, "status": "rejected", "result": f"参数 {key} 在红线清单，禁止自动修改"}
+    try:
+        from app.services import agent_params
+
+        change = agent_params.propose(
+            key, param.get("after"),
+            source_type="ai_suggestion", source_id=f"agenda:{agenda_date}",
+            evidence=item.get("evidence") or {}, session_factory=sf,
+        )
+        applied = agent_params.apply_change(change["id"], session_factory=sf)
+        return {**item, "status": "executed",
+                "result": f"变更单 #{applied['id']} 已自动生效（30 日后置验证 P1 挂账）"}
+    except ValueError as exc:
+        return {**item, "status": "rejected", "result": f"校验拒绝：{exc}"}
+    except Exception as exc:  # noqa: BLE001
+        return {**item, "status": "failed", "result": f"{type(exc).__name__}: {exc}"}
+
+
+def _execute_b(item: dict, agenda_date: str) -> dict:
+    """B 类：进化日报（路径白名单 docs/evolution/，内容为 LLM 结论摘要）。"""
+    try:
+        day_dir = _EVOLUTION_DIR
+        day_dir.mkdir(parents=True, exist_ok=True)
+        path = day_dir / f"{agenda_date}.md"
+        line = f"- **{item.get('finding', '')}**：{item.get('summary', '')}\n" \
+               f"  依据：{json.dumps(item.get('evidence') or {}, ensure_ascii=False)}\n"
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line)
+        return {**item, "status": "executed", "result": f"已写入 {path}"}
+    except Exception as exc:  # noqa: BLE001
+        return {**item, "status": "failed", "result": f"{type(exc).__name__}: {exc}"}
+
+
+def execute_agenda(agenda: dict, session_factory=None) -> dict:
+    """执行今日议程（autonomy 关闭时只记账不执行）。"""
+    sf = session_factory or get_session_factory()
+    if not autonomy_enabled():
+        return {**agenda, "status": "skipped",
+                "error": {"code": "AutonomyOff", "message": "自主执行已关闭（ASHARE_AGENT_AUTONOMY=0），议程仅作建议"}}
+    budget = _budget_status(sf)
+    items: list[dict] = []
+    executed = 0
+    for item in agenda.get("items") or []:
+        cls = item.get("class")
+        if cls == "C":
+            items.append({**item, "status": "deferred",
+                          "result": "C 代码类执行器 P1 接入，暂缓（不静默忽略）"})
+            continue
+        if executed >= settings.agent_daily_task_budget:
+            items.append({**item, "status": "deferred",
+                          "result": f"今日自动任务预算已用尽（{budget['task_budget']}）"})
+            continue
+        if cls == "A":
+            if _param_change_in_24h(item.get("param", {}).get("key", ""), sf):
+                items.append({**item, "status": "deferred",
+                              "result": "同参数 24h 内已有自动变更（频率闸）"})
+                continue
+            new = _execute_a(item, sf, agenda.get("date") or "")
+        elif cls == "B":
+            new = _execute_b(item, agenda.get("date") or "")
+        else:
+            items.append({**item, "status": "rejected", "result": f"未知类别 {cls!r}"})
+            continue
+        items.append(new)
+        if new["status"] == "executed":
+            executed += 1
+
+    with sf() as db:
+        row = db.execute(select(AgentAgenda).where(AgentAgenda.date == agenda["date"])).scalars().first()
+        if row is not None:
+            row.items = json.dumps(items, ensure_ascii=False, default=str)
+            row.budget = json.dumps(budget, ensure_ascii=False)
+            row.status = "executed"
+            row.finished_at = datetime.utcnow()
+            db.commit()
+            db.refresh(row)
+            out = _agenda_dump(row)
+    record_summary_audit(agenda.get("date") or "", items)
+    return out
+
+
+def record_summary_audit(date: str, items: list[dict]) -> None:
+    executed = [i for i in items if i.get("status") == "executed"]
+    with contextlib.suppress(Exception):
+        from app.services.agent_tasks import record_audit as _ra
+
+        _ra(actor="ai", action="agenda.execute", target="evolution",
+            after={"date": date, "executed": len(executed), "total": len(items)})
+
+
+async def run_evolution_now(session_factory=None) -> dict:
+    """手动/调度触发：生成今日议程 → autonomy 开启时立即执行。"""
+    sf = session_factory or get_session_factory()
+    agenda = await generate_agenda(sf)
+    if agenda["status"] == "ready" and autonomy_enabled():
+        agenda = execute_agenda(agenda, sf)
+    return agenda
+
+
+def get_agenda(date: str | None = None, session_factory=None) -> dict | None:
+    sf = session_factory or get_session_factory()
+    target = date or beijing_now().date().isoformat()
+    with sf() as db:
+        row = db.execute(select(AgentAgenda).where(AgentAgenda.date == target)).scalars().first()
+        return _agenda_dump(row) if row else None
+
+
+def list_agendas(limit: int = 14, session_factory=None) -> list[dict]:
+    sf = session_factory or get_session_factory()
+    with sf() as db:
+        rows = db.execute(
+            select(AgentAgenda).order_by(AgentAgenda.date.desc()).limit(limit)
+        ).scalars().all()
+        return [_agenda_dump(r) for r in rows]
+
+
+# ---------------------------------------------------------------- 调度
+
+
+async def evolution_scheduler(app, stop: asyncio.Event, *, run_hour: int, run_minute: int,
+                              check_interval_seconds: float) -> None:
+    """交易日 15:45 盘后议程（接在 15:30 复盘调度之后）——与 premarket_scheduler 同模式。"""
+    log.info("evolution scheduler started: daily at %02d:%02d", run_hour, run_minute)
+    while not stop.is_set():
+        try:
+            now = beijing_now()
+            today = now.date()
+            if (now.hour, now.minute) >= (run_hour, run_minute):
+                days = await tc.trading_days(app.state.hub.provider)
+                if tc.last_trade_date(days, asof=today) == today:
+                    existing = get_agenda(today.isoformat())
+                    if existing is None or existing["status"] == "failed":
+                        agenda = await run_evolution_now()
+                        log.warning("[EVOLUTION] %s 议程完成：status=%s items=%d",
+                                    today, agenda.get("status"), len(agenda.get("items") or []))
+        except Exception:
+            log.exception("evolution scheduler tick failed")
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(stop.wait(), timeout=max(60.0, check_interval_seconds))

@@ -20,6 +20,7 @@ from app.api.deps import require_write_token
 from app.services import agent_tasks as at
 from app.services import agent_params as params_svc
 from app.services import alert_triage as at_triage
+from app.services import evolution as evo
 
 router = APIRouter(tags=["agent"])
 
@@ -141,6 +142,23 @@ async def rollback_param_change(change_id: int):
         return {"data": params_svc.rollback_change(change_id)}
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/agent/agenda")
+async def get_agenda(date: str | None = None):
+    """今日（或指定日）进化议程；不存在返回 data=null。"""
+    return {"data": evo.get_agenda(date)}
+
+
+@router.get("/agent/agendas")
+async def list_agendas(limit: int = Query(14, ge=1, le=60)):
+    return {"data": evo.list_agendas(limit=limit)}
+
+
+@router.post("/agent/agenda/run", dependencies=[Depends(require_write_token)])
+async def run_agenda():
+    """手动触发一轮进化（正常由 15:45 scheduler 自动跑；此处为降级兜底）。"""
+    return {"data": await evo.run_evolution_now()}
 
 
 @router.get("/agent/audit")

@@ -3,6 +3,7 @@
 import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
+import { EvolutionTab } from "@/components/agent/evolution-tab";
 import { ParamsTab } from "@/components/agent/params-tab";
 import { TaskCenter } from "@/components/agent/task-center";
 import { AlertsTab } from "@/components/research/alerts-tab";
@@ -21,6 +22,7 @@ import { FadeSwap, PageSkeletonFallback } from "@/components/ui/loading";
  */
 
 const TABS = [
+  { key: "evolution", label: "进化" },
   { key: "tasks", label: "任务中心" },
   { key: "review", label: "复盘" },
   { key: "alerts", label: "提醒与告警" },
@@ -33,7 +35,7 @@ function AgentInner() {
   const router = useRouter();
   const sp = useSearchParams();
   const raw = sp.get("tab");
-  const tab: TabKey = TABS.some((t) => t.key === raw) ? (raw as TabKey) : "tasks";
+  const tab: TabKey = TABS.some((t) => t.key === raw) ? (raw as TabKey) : "evolution";
   // 复盘深链日期（助手跳转 / 分享）：只接受 YYYY-MM-DD，非法值当没传
   const rawDate = sp.get("date");
   const reviewDate = rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : undefined;
@@ -72,6 +74,7 @@ function AgentInner() {
       </div>
 
       <FadeSwap swapKey={tab} className="min-h-0 flex-1">
+        {tab === "evolution" && <EvolutionTab />}
         {tab === "tasks" && <TaskCenter />}
         {tab === "review" && <ReviewTab focusDate={reviewDate} />}
         {tab === "alerts" && <AlertsTab />}

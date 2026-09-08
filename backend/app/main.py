@@ -238,6 +238,22 @@ async def lifespan(app: FastAPI):
 
     triage_task = asyncio.create_task(triage_loop(triage_stop), name="alert-triage")
 
+    # --- AI 大脑：每日进化议程（docs/evolution-brain-plan.md，交易日 15:45）---
+    # 无条件挂载：autonomy 关闭时议程照常生成（仅不执行，降级为建议清单）
+    evolution_stop = asyncio.Event()
+    from app.services.evolution import evolution_scheduler
+
+    evolution_task = asyncio.create_task(
+        evolution_scheduler(
+            app,
+            stop=evolution_stop,
+            run_hour=settings.agent_evolution_hour,
+            run_minute=settings.agent_evolution_minute,
+            check_interval_seconds=settings.review_check_interval_seconds,
+        ),
+        name="evolution-agenda",
+    )
+
     review_stop = asyncio.Event()
     review_task = None
     if settings.review_scheduler_enabled:
@@ -501,6 +517,7 @@ async def lifespan(app: FastAPI):
     if buy_point_task is not None:
         buy_point_stop.set()
     triage_stop.set()
+    evolution_stop.set()
     if ths_sentinel_task is not None:
         ths_sentinel_stop.set()
     if sentiment_monitor_task is not None:
@@ -529,6 +546,7 @@ async def lifespan(app: FastAPI):
     await _reap(watcher_task, name="picks-watcher")
     await _reap(buy_point_task, name="picks-buy-point")
     await _reap(triage_task, name="alert-triage")
+    await _reap(evolution_task, name="evolution-agenda")
     await _reap(review_intraday_task, name="picks-intraday-review")
     await _reap(ths_sentinel_task, name="ths-reason-sentinel")
     await _reap(sentiment_monitor_task, name="sentiment-monitor")
