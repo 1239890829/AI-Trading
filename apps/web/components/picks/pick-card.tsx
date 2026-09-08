@@ -1,6 +1,6 @@
 "use client";
 
-import { StockLink } from "@/components/stock-link";
+import { CardHead, CardShell } from "@/components/picks/card-shell";
 import { fmt, pctColor, pctText } from "@/lib/format";
 import type { DailyPickItem, StandAsideGate } from "@/lib/api";
 
@@ -59,20 +59,19 @@ function Chip({ text, title, className }: { text: string; title?: string; classN
 
 export function PickCard({ item }: { item: DailyPickItem }) {
   return (
-    <div className="mb-3 break-inside-avoid rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+    <CardShell flow>
       {/* 头：名称代码 + 现价 + 综合分（名称/代码可点 → 工作台详情，联动切片 F） */}
-      <div className="flex items-baseline justify-between gap-2">
-        <div>
-          <StockLink symbol={item.symbol}>
-            <span className="text-sm font-semibold">{item.name ?? "--"}</span>
-            <span className="ml-1.5 font-mono text-[10px] text-zinc-400">{item.symbol}</span>
-          </StockLink>
-        </div>
-        <div className="text-right">
-          <div className="font-mono text-base font-semibold tabular-nums">{fmt(item.price)}</div>
-          <div className={`font-mono text-[10px] tabular-nums ${pctColor(item.change_pct)}`}>{pctText(item.change_pct)}</div>
-        </div>
-      </div>
+      <CardHead
+        name={item.name}
+        symbol={item.symbol}
+        link
+        right={
+          <>
+            <div className="font-mono text-base font-semibold tabular-nums">{fmt(item.price)}</div>
+            <div className={`font-mono text-[10px] tabular-nums ${pctColor(item.change_pct)}`}>{pctText(item.change_pct)}</div>
+          </>
+        }
+      />
 
       {/* 估值：此前选股页完全没有 PE/PB（个股详情页有，因为走 /api/quotes 的补全）。
           数据源确实不提供时（新股/亏损/长期停牌）显示"暂无"并注明原因——
@@ -260,7 +259,7 @@ export function PickCard({ item }: { item: DailyPickItem }) {
           ))}
         </div>
       )}
-    </div>
+    </CardShell>
   );
 }
 

@@ -20,9 +20,8 @@ export const NAV_ALLOWED_PATHS = [
   "/workbench",
   "/tape",
   "/market",
-  "/picks",
+  "/hunting",
   "/research",
-  "/intraday",
 ] as const;
 
 /** 入口构造器。参数缺失时落到该板块的默认视图，不报错。 */
@@ -44,16 +43,18 @@ export const NAV_TARGETS = {
   market_fund: () => "/market?tab=fund",
   market_heatmap: () => "/market?tab=heatmap",
   market_events: () => "/market?tab=events",
-  picks: () => "/picks",
-  picks_review: () => "/picks?review=1",
+  // 2026-09-08 猎场融合：/picks /intraday → /hunting（tag: pick=精选 watch=跟踪）
+  picks: () => "/hunting?tag=pick",
+  picks_review: () => "/hunting?review=1&tag=pick",
+  hunting: () => "/hunting",
   research_backtest: () => "/research?tab=backtest",
   research_alerts: () => "/research?tab=alerts",
   research_review: (date?: string) => `/research?tab=review${date ? `&date=${encodeURIComponent(date)}` : ""}`,
-  intraday: () => "/intraday",
-  intraday_brief: () => "/intraday?sec=brief",
-  intraday_opportunity: () => "/intraday?sec=opportunity",
-  intraday_reminders: () => "/intraday?sec=reminders",
-  intraday_theme: (theme: string) => `/intraday?theme=${encodeURIComponent(theme)}`,
+  intraday: () => "/hunting?tag=watch",
+  intraday_brief: () => "/hunting?sec=brief",
+  intraday_opportunity: () => "/hunting?sec=opportunity",
+  intraday_reminders: () => "/hunting?sec=reminders",
+  intraday_theme: (theme: string) => `/hunting?theme=${encodeURIComponent(theme)}`,
 } as const;
 
 export type NavKey = keyof typeof NAV_TARGETS;
@@ -84,6 +85,7 @@ export const NAV_ALIASES: Record<string, NavKey> = {
   每日精选: "picks",
   选股复盘: "picks_review",
   精选复盘: "picks_review",
+  猎场: "hunting",
   复盘报告: "research_review",
   方法论复盘: "research_review",
   策略回测: "research_backtest",
@@ -160,6 +162,7 @@ export const NAV_LABELS: Record<NavKey, string> = {
   market_events: "事件面板",
   picks: "每日精选",
   picks_review: "选股复盘",
+  hunting: "猎场",
   research_backtest: "策略回测",
   research_alerts: "预警规则",
   research_review: "复盘报告",

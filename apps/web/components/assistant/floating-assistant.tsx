@@ -30,8 +30,7 @@ const PAGE_TITLES: Record<string, string> = {
   "/workbench": "工作台",
   "/tape": "盘面",
   "/market": "市场",
-  "/picks": "每日精选",
-  "/intraday": "盘中跟踪",
+  "/hunting": "猎场",
   "/research": "研究",
 };
 

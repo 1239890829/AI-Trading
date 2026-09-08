@@ -43,14 +43,17 @@ describe("buildNav", () => {
     expect(buildNav("longhu")).toBe("/tape?tab=longhu");
     expect(buildNav("market_fund")).toBe("/market?tab=fund");
     expect(buildNav("research_review")).toBe("/research?tab=review");
-    expect(buildNav("intraday_brief")).toBe("/intraday?sec=brief");
+    expect(buildNav("intraday_brief")).toBe("/hunting?sec=brief");
+    expect(buildNav("picks")).toBe("/hunting?tag=pick");
+    expect(buildNav("intraday")).toBe("/hunting?tag=watch");
+    expect(buildNav("hunting")).toBe("/hunting");
   });
 
   it("带日期/题材参数时正确编码", () => {
     expect(buildNav("limitup", "2026-09-04")).toBe("/tape?tab=limitup&date=2026-09-04");
     expect(buildNav("research_review", "2026-09-04")).toBe("/research?tab=review&date=2026-09-04");
     expect(buildNav("intraday_theme", "存储芯片")).toBe(
-      `/intraday?theme=${encodeURIComponent("存储芯片")}`,
+      `/hunting?theme=${encodeURIComponent("存储芯片")}`,
     );
   });
 

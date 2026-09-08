@@ -1616,6 +1616,31 @@ export async function getIntradayReview(limit = 30): Promise<IntradayReviewStats
   return (await getJson<IntradayReviewStats>(`/api/picks/intraday-review?limit=${limit}`)).data;
 }
 
+/** 信号健康度（每日精选命中记录的滚动胜率 + CUSUM 下漂，方向 1×5 反馈环）。
+ *  status 三态纪律：insufficient = 样本不足显式不判 ok，绝不显示 0%；
+ *  win_rate 为 0-1 小数（后端 round(good/total,4)），展示层 ×100。 */
+export interface SignalHealthPayload {
+  status: "ok" | "warning" | "drift" | "insufficient" | "error";
+  reason?: string;
+  window: {
+    groups: number;
+    total_picks: number;
+    win_rate: number | null;
+    good: number;
+    bad: number;
+    flat: number;
+    mean_excess: number | null;
+  } | null;
+  cusum: { mu0: number; s_max: number; threshold: number; delta: number; drift: boolean } | null;
+  history: { date: string; phase: string | null; n: number; good: number; bad: number; flat: number; mean_excess: number | null }[];
+  counts: { groups: number };
+}
+
+/** 信号健康度（GET /api/picks/signal-health；猎场批次②统计条转正接入）。 */
+export async function getSignalHealth(): Promise<SignalHealthPayload> {
+  return (await getJson<SignalHealthPayload>("/api/picks/signal-health")).data;
+}
+
 /** 盘中机会：判定类三态——unknown 表示判不出（数据缺失），不是"低"。 */
 export interface OpportunityJudgement {
   level: "高" | "中" | "低" | "unknown";

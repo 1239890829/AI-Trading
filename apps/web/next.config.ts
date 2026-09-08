@@ -17,6 +17,9 @@ const nextConfig: NextConfig = {
       { source: "/watchlist", destination: "/workbench", permanent: false },
       { source: "/backtest", destination: "/research?tab=backtest", permanent: false },
       { source: "/alerts", destination: "/research?tab=alerts", permanent: false },
+      // 2026-09-08 板块融合（docs/system-audit-20260908.md §三）：两页并入猎场
+      { source: "/picks", destination: "/hunting?tag=pick", permanent: false },
+      { source: "/intraday", destination: "/hunting?tag=watch", permanent: false },
     ];
   },
   // 注：后端反代不要用 rewrites() —— 它在构建期求值并烘进产物，next start 不重读

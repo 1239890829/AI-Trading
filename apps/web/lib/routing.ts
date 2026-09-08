@@ -33,10 +33,11 @@ export function originLabel(from: string | null): string | null {
   if (!from || !from.startsWith("/")) return null;
   const path = from.split("?")[0];
   const labels: Record<string, string> = {
-    "/intraday": "盘中跟踪",
+    "/hunting": "猎场",
+    "/intraday": "盘中跟踪", // 旧路径（2026-09-08 并入猎场），302 兜底期残留 from 兼容
     "/tape": "盘面",
     "/market": "市场",
-    "/picks": "每日精选",
+    "/picks": "每日精选", // 同上
     "/research": "研究",
   };
   return labels[path] ?? null;
