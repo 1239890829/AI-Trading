@@ -14,6 +14,7 @@ import { createPortal } from "react-dom";
 
 import { getConceptDetail, type ConceptDetail } from "@/lib/api";
 import { fmtAmount, pctColor, pctText } from "@/lib/format";
+import { useStockRowNav } from "@/components/stock-link";
 
 export function ConceptDetailModal({
   code,
@@ -24,6 +25,7 @@ export function ConceptDetailModal({
   name: string;
   onClose: () => void;
 }) {
+  const stockNav = useStockRowNav();
   const [detail, setDetail] = useState<ConceptDetail | undefined | null>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<string>("__all__");
@@ -131,7 +133,7 @@ export function ConceptDetailModal({
           ) : (
             <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
               {members.map((m) => (
-                <li key={m.symbol} className="py-1.5 text-xs">
+                <li key={m.symbol} onClick={stockNav(m.symbol)} className="cursor-pointer py-1.5 text-xs transition-colors hover:bg-sky-500/5">
                   <div className="flex items-center gap-2">
                     <span className="w-14 shrink-0 font-mono text-zinc-400">{m.symbol}</span>
                     <span className="w-24 shrink-0 truncate font-medium text-zinc-800 dark:text-zinc-100">

@@ -7,7 +7,7 @@ import { Panel } from "@/components/panel";
 import { getLimitUpPool } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
 import { themesUrl } from "@/lib/routing";
-import { StockLink } from "@/components/stock-link";
+import { StockLink, useStockRowNav } from "@/components/stock-link";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import type { LimitUpRecord } from "@/types/market";
 
@@ -25,6 +25,7 @@ import type { LimitUpRecord } from "@/types/market";
  */
 
 export function LimitUpTab() {
+  const stockNav = useStockRowNav();
   const searchParams = useSearchParams();
   const [records, setRecords] = useState<LimitUpRecord[]>([]);
   const [tradeDate, setTradeDate] = useState("");
@@ -181,7 +182,8 @@ export function LimitUpTab() {
                 return (
                   <tr
                     key={r.symbol}
-                    className={`border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900 ${
+                    onClick={stockNav(r.symbol)}
+                    className={`cursor-pointer border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900 ${
                       isMember ? "bg-rose-500/[0.07]" : ""
                     }`}
                   >

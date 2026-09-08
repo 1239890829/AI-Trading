@@ -5,7 +5,7 @@ import { useState } from "react";
 import { fmt, fmtAmount, fmtHeat, pctColor, pctText } from "@/lib/format";
 import type { HotTheme, ThemeStrengthRow } from "@/lib/api";
 import { tapeUrl } from "@/lib/routing";
-import { StockLink } from "@/components/stock-link";
+import { StockLink, useStockRowNav } from "@/components/stock-link";
 import { ConceptDetailModal } from "@/components/concept-detail-modal";
 import type { ThemeCard as ThemeCardType } from "@/types/market";
 
@@ -196,6 +196,7 @@ export function ThemeCardView({
 }) {
   const p = card.performance;
   const board = card.board;
+  const stockNav = useStockRowNav();
   const [detailCode, setDetailCode] = useState<string | null>(null);
 
   const ladderByBoard = new Map<number, typeof card.ladder>();
@@ -374,7 +375,8 @@ export function ThemeCardView({
                 ladderByBoard.get(lv)!.map((r, i) => (
                   <tr
                     key={r.symbol}
-                    className="border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900/50"
+                    onClick={stockNav(r.symbol)}
+                    className="cursor-pointer border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900/50"
                   >
                     <td className="py-1.5 align-middle">
                       <LevelBadge boards={lv} sameLevel={i > 0} />

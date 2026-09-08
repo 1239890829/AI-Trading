@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Panel } from "@/components/panel";
-import { StockLink } from "@/components/stock-link";
+import { StockLink, useStockRowNav } from "@/components/stock-link";
 import { Skeleton } from "@/components/ui/loading";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { pctColor, pctText } from "@/lib/format";
@@ -88,6 +88,7 @@ function BoardDailyBars({ bars }: { bars: { date: string; main_yi: number | null
 
 /** 板块下钻抽屉：分钟五档累计（延迟口径）+ 日度主力净额柱 + 成员个股资金排行 Top20。 */
 function BoardFlowDrawer({ row, onClose }: { row: BoardFlowRow; onClose: () => void }) {
+  const stockNav = useStockRowNav();
   const [minute, setMinute] = useState<BoardFlowMinutePayload | null>(null);
   const [members, setMembers] = useState<BoardFlowMembersPayload | null>(null);
   const [pending, setPending] = useState(true);
@@ -179,7 +180,7 @@ function BoardFlowDrawer({ row, onClose }: { row: BoardFlowRow; onClose: () => v
                 </thead>
                 <tbody>
                   {memRows.map((m) => (
-                    <tr key={m.symbol} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
+                    <tr key={m.symbol} onClick={stockNav(m.symbol)} className="cursor-pointer border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900/50">
                       <td className="py-1 font-mono text-zinc-400">
                         <StockLink symbol={m.symbol} className="font-mono text-zinc-400">{m.symbol}</StockLink>
                       </td>

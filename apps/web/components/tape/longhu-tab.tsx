@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Panel } from "@/components/panel";
-import { StockLink } from "@/components/stock-link";
+import { StockLink, useStockRowNav } from "@/components/stock-link";
 import { getLonghu, getLonghuThemeTrail, type LonghuTrailPayload } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
@@ -24,6 +24,7 @@ function todayISO(): string {
 }
 
 export function LonghuTab() {
+  const stockNav = useStockRowNav();
   const [records, setRecords] = useState<LongHuRecord[]>([]);
   const [tradeDate, setTradeDate] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -183,7 +184,7 @@ export function LonghuTab() {
             <tbody>
               {sorted.map((r, i) => (
                 // 同股多榜并存，key 必须带 range_days，否则 React 复用错行
-                <tr key={`${r.symbol}-${r.range_days ?? "na"}-${i}`} className="border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900">
+                <tr key={`${r.symbol}-${r.range_days ?? "na"}-${i}`} onClick={stockNav(r.symbol)} className="cursor-pointer border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900">
                   <td className="px-2 py-2 font-mono text-xs text-zinc-400">
                     <StockLink symbol={r.symbol}>
                       {r.symbol}

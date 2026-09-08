@@ -12,7 +12,11 @@ afterEach(() => cleanup());
 vi.mock("@/lib/api", () => ({ getLimitDownPool: vi.fn() }));
 
 // 组件用 useSearchParams 读 ?date= 初始日期；裸 jsdom 无 Next 路由，mock 成空参数
-vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams() }));
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => new URLSearchParams(),
+  // 行级整行跳转（useStockRowNav）依赖 useRouter；缺失会连渲染都失败
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn(), prefetch: vi.fn() }),
+}));
 
 const rec = (over: Partial<LimitDownRecord>): LimitDownRecord => ({
   symbol: "002909",

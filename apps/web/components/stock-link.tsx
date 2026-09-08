@@ -1,7 +1,25 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useCallback } from "react";
 import { workbenchUrlWithBack } from "@/lib/routing";
+
+/**
+ * 行级整行跳转（2026-09-08 用户反馈：列表里应该整个行都能点，而不是只能点名字）。
+ * 用法：`<tr onClick={stockNav(r.symbol)} className="cursor-pointer ...">`。
+ * 行内名字的 StockLink 保留（同 URL，重复导航无害）；行内其他可点击元素
+ * （详情按钮等）自行 stopPropagation。
+ */
+export function useStockRowNav() {
+  const router = useRouter();
+  return useCallback(
+    (symbol: string) => () => {
+      void router.push(workbenchUrlWithBack(symbol));
+    },
+    [router],
+  );
+}
 
 /**
  * 全站统一「个股跳转链接」（2026-09-07 用户需求：各板块出现的每只个股均可点击
