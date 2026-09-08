@@ -11,6 +11,7 @@
 | 系统全貌/技术栈/模块清单 | `PROJECT-MASTER.md`（08-29 基线）+ 本 INDEX |
 | 全面审查结论/重构执行计划 | `system-audit-20260908.md`（09-08 四路深扫：死代码/孤立端点/闪现根因/猎场融合方案/P0-P2 计划） |
 | AI 助手怎么升级成"大脑+执行层" | `ai-agent-console-plan.md`（09-08：权限分级 L0-L3/四道拦截/任务中心+复盘+告警+参数+日志模块设计/研究页下线方案） |
+| AI 大脑自主进化（v2，取代人工确认模型） | `evolution-brain-plan.md`（09-08：每日进化议程/盘后自动闭环三类执行/后置验证自动回滚/方向校验/红线与停机开关/10 项延伸能力） |
 | 数据源怎么选、备源顺序 | `data-source-comparison.md`（实测对比）→ `data-sources.md`（接入策略） |
 | 某个 API 端点的参数 | `api.md`（⚠️ 端点计数停在 09-01/92 个，以 `/openapi.json` 为权威） |
 | 每天怎么跑复盘 | `daily-review-sop.md` → `daily-review-checklist.md` → `daily-review/`（逐日存档） |
