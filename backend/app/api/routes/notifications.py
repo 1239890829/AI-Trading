@@ -33,6 +33,10 @@ log = logging.getLogger(__name__)
 router = APIRouter(tags=["notifications"])
 
 WATCHER_RULE = "__picks_watcher__"
+# 信号健康度预警规则（app/picks/signal_health.py）：与 watcher 分立的系统规则，
+# 但同属通知中心应展示的「系统主动提醒」（策略失效预警 vs 个股事件提醒）。
+SIGNAL_HEALTH_RULE = "__signal_health__"
+_NOTIF_RULE_NAMES = (WATCHER_RULE, SIGNAL_HEALTH_RULE)
 
 # 时事新闻板块的四级分类标签（app/events/impact.py FOUR_LABEL 同值同源）
 _FOUR_LABEL = {
@@ -58,14 +62,14 @@ def get_alert_repo(request: Request) -> AlertRepository:
 
 
 def _alert_items(repo: AlertRepository, limit: int) -> list[dict]:
-    """watcher 确认/证伪提醒 → 通知项。triggered_at 是 UTC naive → +8 转北京。"""
+    """watcher 确认/证伪 + 信号健康度预警 → 通知项。triggered_at 是 UTC naive → +8 转北京。"""
     rules = {r.id: r for r in repo.list_rules()}
-    watcher_rule_ids = {rid for rid, r in rules.items() if r.name == WATCHER_RULE}
-    if not watcher_rule_ids:
+    notif_rule_ids = {rid for rid, r in rules.items() if r.name in _NOTIF_RULE_NAMES}
+    if not notif_rule_ids:
         return []
     items: list[dict] = []
     for e in repo.list_events(limit=limit):
-        if e.rule_id not in watcher_rule_ids:
+        if e.rule_id not in notif_rule_ids:
             continue
         snap = e.snapshot if isinstance(e.snapshot, dict) else {}
         if isinstance(e.snapshot, str):
@@ -77,13 +81,18 @@ def _alert_items(repo: AlertRepository, limit: int) -> list[dict]:
         direction = snap.get("direction") or ""
         text = (snap.get("text") or "").strip()
         bj = (e.triggered_at + timedelta(hours=8)) if e.triggered_at else None
-        kind_label = "确认" if kind == "confirm" else ("证伪" if kind == "falsify" else "跟踪")
+        kind_label = (
+            "确认" if kind == "confirm"
+            else ("证伪" if kind == "falsify"
+                  else ("健康预警" if kind == "signal_health" else "跟踪"))
+        )
+        category = "risk" if kind == "signal_health" else "opportunity"
         # 方向级事件（falsify）symbol 是占位 "000000"，不进标题（占位代码泄漏到 UI）
         sym_part = f" {e.symbol}" if e.symbol and e.symbol != "000000" else ""
         items.append(
             {
                 "id": f"alert-{e.id}",
-                "category": "opportunity",
+                "category": category,
                 "label": kind_label,
                 "session": _session_of(bj) if bj else "intraday",
                 "ts": bj.isoformat(sep=" ") if bj else None,

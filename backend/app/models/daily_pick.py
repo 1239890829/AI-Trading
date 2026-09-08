@@ -50,6 +50,9 @@ class DailyPickReview(Base):
     verdict: Mapped[str] = mapped_column(String(8), default="flat")
     # event_expired / board_receding / market_drag / data_issue / news_gap / logic_failed / gone_well
     reason_category: Mapped[str] = mapped_column(String(24), default="gone_well")
-    excess_pct: Mapped[float] = mapped_column(Float, default=0.0)  # 相对上证超额收益
+    # 相对上证超额收益；None = 大盘基准缺失（评审 B21：绝不拿个股涨幅冒充超额）。
+    # 2026-09-08 nullable 化（迁移 f6b2c8e4a9d3）：此前 NOT NULL + default=0.0 会把
+    # 基准缺失固化成 0.0，与「超额恰为 0」不可区分（CUSUM/均值统计被污染）。
+    excess_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     note: Mapped[str] = mapped_column(String(512), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

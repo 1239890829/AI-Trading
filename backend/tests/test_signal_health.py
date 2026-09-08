@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.models.daily_pick import DailyPickReview, DailyPickSet
@@ -107,3 +107,14 @@ class TestCollect:
         out = collect_signal_health(sf)
         assert out["history"][0]["mean_excess"] == 0.0
         assert out["history"][0]["flat"] == 1
+
+    def test_none_excess_stays_none_after_nullable(self, sf):
+        """nullable 化后（模型 + 迁移 f6b2c8e4a9d3）：None 落库读回仍是 None，
+        不再被 ORM default 固化成 0.0（评审 B21 三态纪律的库层保障）。"""
+        with sf() as db:
+            db.add(DailyPickReview(date="2026-08-01", symbol="600000", verdict="flat",
+                                   reason_category="market_drag", excess_pct=None))
+            db.commit()
+        with sf() as db:
+            row = db.execute(select(DailyPickReview)).scalars().one()
+        assert row.excess_pct is None

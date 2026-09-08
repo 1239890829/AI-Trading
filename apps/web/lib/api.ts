@@ -455,6 +455,31 @@ export interface DailyPickItem {
   exit_discipline?: ExitDiscipline | null;
   invalidations?: string[];
   observation_only?: boolean;     // 空仓闸门触发：仅观察，不给买入范围
+  // --- meta 置信层（规则版）：综合分+相位+筹码+红线 → 三档置信 ---
+  confidence?: {
+    tier: "strong" | "executable" | "observe";
+    label: string;
+    reasons: string[];
+  } | null;
+  // --- 筹码信号（CYQ 近似 × 量价；None=未触发，available=false=数据缺失）---
+  chip_signal?: {
+    available: boolean;
+    signal: "distribution_warning" | "launch_watch" | null;
+    label: string | null;
+    reasons: string[];
+    reason?: string;
+    metrics?: {
+      profit_ratio: number | null;
+      concentration: number | null;
+      main_peak: number | null;
+      last_close: number | null;
+      price_pos: number | null;
+      vol_ratio_5_20: number | null;
+      chg3_pct: number | null;
+    } | null;
+    approx?: boolean;
+    as_of?: string | null;
+  } | null;
 }
 
 /** 炒作阶段（CONTEXT.md: Speculation Regime）—— 六维权重的选择器 */
@@ -1257,9 +1282,9 @@ export async function ackAlertEvent(eventId: number): Promise<void> {
 /** 通知条目（后端 /api/notifications 三源合并：个股机会/每日精选/新闻评分过滤）。 */
 export interface NotificationItem {
   id: string;
-  /** opportunity=个股机会（watcher 确认/证伪）| daily_picks=每日精选 | news=消息面/新闻/政策 */
-  category: "opportunity" | "daily_picks" | "news";
-  /** 展示标签：确认/证伪/跟踪/每日精选/国家政策/国际时事/市场热点/原材料涨价 */
+  /** opportunity=个股机会（watcher 确认/证伪）| daily_picks=每日精选 | news=消息面/新闻/政策 | risk=策略风险（信号健康度预警） */
+  category: "opportunity" | "daily_picks" | "news" | "risk";
+  /** 展示标签：确认/证伪/跟踪/健康预警/每日精选/国家政策/国际时事/市场热点/原材料涨价 */
   label: string;
   /** 盘前/盘中/盘后（北京时间墙钟划分） */
   session: "pre_open" | "intraday" | "after_close";

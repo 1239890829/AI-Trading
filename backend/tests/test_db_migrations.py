@@ -36,6 +36,10 @@ def test_fresh_database_created_at_baseline(tmp_path):
         with engine.connect() as conn:
             ver = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
         assert ver, "alembic_version 必须已写入"
+        # excess_pct 必须 nullable（迁移 f6b2c8e4a9d3）：基准缺失 None 不得被固化成 0
+        insp = inspect(engine)
+        col = next(c for c in insp.get_columns("daily_pick_review") if c["name"] == "excess_pct")
+        assert col["nullable"], "excess_pct 迁移后必须 nullable"
     finally:
         engine.dispose()
         path.unlink(missing_ok=True)

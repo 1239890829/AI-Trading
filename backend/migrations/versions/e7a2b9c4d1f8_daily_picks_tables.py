@@ -14,9 +14,14 @@ depends_on = None
 def upgrade() -> None:
     import sqlalchemy as sa
 
-    from app.core.db import get_engine
+    from alembic import op
 
-    engine = get_engine()
+    # ⚠️ 必须走迁移上下文连接（op.get_bind()）——本迁移曾用 get_engine()
+    # （默认指向 settings 主库），全新库/测试库上表被建到**错误的库**，
+    # 整链建完后 daily_pick 两表仍不存在，后续迁移 reflect 时
+    # NoSuchTableError（2026-09-08 excess_pct nullable 迁移实测炸出）。
+    # 真实主库已应用过本迁移，此处修改只影响全新库与测试库路径。
+    bind = op.get_bind()
     metadata = sa.MetaData()
 
     _daily_pick_set = sa.Table(
@@ -46,16 +51,14 @@ def upgrade() -> None:
         sa.UniqueConstraint("date", "symbol", name="uq_daily_pick_review_date_symbol"),
     )
 
-    metadata.create_all(engine)
+    metadata.create_all(bind)
 
 
 def downgrade() -> None:
     import sqlalchemy as sa
 
-    from app.core.db import get_engine
+    from alembic import op
 
-    engine = get_engine()
-    with engine.connect() as conn:
-        conn.execute(sa.text("DROP TABLE IF EXISTS daily_pick_review"))
-        conn.execute(sa.text("DROP TABLE IF EXISTS daily_pick_set"))
-        conn.commit()
+    bind = op.get_bind()
+    bind.execute(sa.text("DROP TABLE IF EXISTS daily_pick_review"))
+    bind.execute(sa.text("DROP TABLE IF EXISTS daily_pick_set"))

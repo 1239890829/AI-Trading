@@ -35,12 +35,14 @@ const CATEGORY_TONE: Record<NotificationItem["category"], string> = {
   opportunity: "bg-up/10 text-up",
   daily_picks: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
   news: "bg-sky-500/10 text-sky-600 dark:text-sky-300",
+  risk: "bg-red-500/10 text-red-600 dark:text-red-300",
 };
 
 const CATEGORY_LABEL: Record<NotificationItem["category"], string> = {
   opportunity: "个股机会",
   daily_picks: "每日精选",
   news: "消息面",
+  risk: "策略风险",
 };
 
 function timeText(ts: string | null): string {

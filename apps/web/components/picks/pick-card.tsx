@@ -97,11 +97,25 @@ export function PickCard({ item }: { item: DailyPickItem }) {
         </span>
       </div>
 
-      {/* 综合分 + 六维子评分条 */}
+      {/* 综合分 + meta 置信档 + 六维子评分条 */}
       <div className="mt-2 flex items-center gap-2">
         <span className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-xs font-semibold dark:bg-zinc-800" title="六维加权综合分（一票否决后）">
           {item.score}
         </span>
+        {item.confidence && (
+          <span
+            className={`rounded border px-1.5 py-0.5 text-[10px] font-medium ${
+              item.confidence.tier === "strong"
+                ? "border-red-500/50 bg-red-500/10 text-red-600 dark:text-red-300"
+                : item.confidence.tier === "executable"
+                  ? "border-sky-500/50 bg-sky-500/10 text-sky-600 dark:text-sky-300"
+                  : "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-300"
+            }`}
+            title={`meta 置信层（综合分+相位+筹码+红线 → 三档）：\n${item.confidence.reasons.join("；")}`}
+          >
+            {item.confidence.label}
+          </span>
+        )}
         <div className="flex flex-1 gap-1">
           {SUB_LABELS.map(([key, label]) => {
             const v = item.sub_scores[key];
@@ -146,6 +160,20 @@ export function PickCard({ item }: { item: DailyPickItem }) {
               text="仅观察"
               title="空仓闸门已触发：本条不给买入范围，仅供复盘与观察"
               className="border-red-500/50 bg-red-500/10 text-red-600 dark:text-red-300"
+            />
+          )}
+          {item.chip_signal?.signal === "distribution_warning" && (
+            <Chip
+              text="派发警示"
+              title={`筹码形态警示（CYQ 近似口径）：${item.chip_signal.reasons.join("；")}`}
+              className="border-red-500/50 bg-red-500/10 text-red-600 dark:text-red-300"
+            />
+          )}
+          {item.chip_signal?.signal === "launch_watch" && (
+            <Chip
+              text="启动观察"
+              title={`筹码形态观察（CYQ 近似口径）：${item.chip_signal.reasons.join("；")}`}
+              className="border-teal-500/50 bg-teal-500/10 text-teal-600 dark:text-teal-300"
             />
           )}
         </div>
@@ -196,7 +224,7 @@ export function PickCard({ item }: { item: DailyPickItem }) {
         </div>
       )}
 
-      {/* 买入原因：各维度 basis 摘要（一票否决显式标红） */}
+      {/* 买入原因：各维度 basis 摘要（一票否决显式标红；筹码为附注维度不进权重） */}
       <div className="mt-2 space-y-0.5 text-[11px] leading-relaxed">
         {SUB_LABELS.map(([key, label]) => {
           const b = item.bases[key];
@@ -208,6 +236,12 @@ export function PickCard({ item }: { item: DailyPickItem }) {
             </div>
           );
         })}
+        {item.bases["chip"] && (
+          <div className="flex gap-1.5">
+            <span className="shrink-0 text-zinc-400">筹码</span>
+            <span className="text-zinc-600 dark:text-zinc-300">{item.bases["chip"]}</span>
+          </div>
+        )}
         {item.vetoes.map((v) => (
           <div key={v} className="text-red-500">
             ⚠ {v}

@@ -29,7 +29,10 @@ from app.market.trading_status import beijing_now
 from app.events.store import EventStore
 from app.market import trade_calendar as tc
 from app.market.tech_score import score_stock, sma
+from app.market.chip import get_chip_service
+from app.picks.chip_signal import chip_basis_text, evaluate_chip_signal
 from app.picks.echelon import classify_echelon_role, score_echelon
+from app.picks.meta_confidence import classify_confidence
 from app.picks.rps import get_rps_service
 from app.picks.engine import (
     MAX_PICKS,
@@ -504,9 +507,26 @@ async def _deep_score_candidates(
                 bars=dicts,
                 index_bars=index_bars.get(benchmark_symbol(board_of(sym, c.get("name")), sym), []),
             )
+            # 筹码形态（P1 派发/吸筹规则化）：marketdb CYQ 近似 × 量价组合。
+            # 只留痕不进权重——先在理由中积累样本，滚动验证胜率后再议进权重
+            # （strategy-evolution-plan §方向2）。DuckDB 同步查询丢线程池；
+            # ChipService 内置 TTLCache（30min），候选重复不重复查库。
+            chip = await asyncio.to_thread(get_chip_service().distribution, sym)
+            chip_sig = evaluate_chip_signal(chip, dicts)
+            bases["chip"] = chip_basis_text(chip_sig, chip)
             score, vetoes = synthesize(sub, weights=weights, vetoes=veto_reasons(halt))
             if halt["penalty"]:
                 score = round(max(0.0, score - halt["penalty"]), 1)
+            # meta 置信层（P1 规则版）：综合分+相位+筹码+红线 → 三档置信
+            # （替代 gate 二值跳变的统一置信语言；gate 保留为兜底）
+            confidence = classify_confidence(
+                score=score,
+                sub_scores=sub,
+                phase=market_phase,
+                chip_signal=chip_sig.get("signal"),
+                halt_penalty=halt.get("penalty") or 0.0,
+                veto_count=len(vetoes),
+            )
             return {
                 "symbol": sym, "name": c["name"], "price": c["price"], "change_pct": c["change_pct"],
                 "halt_risk": halt,
@@ -524,6 +544,9 @@ async def _deep_score_candidates(
                 "atr_pct": atr_pct,
                 "ma5": ma5,
                 "ma10": ma10,
+                # 筹码信号（派发警示/启动观察，None=未触发）与三档置信
+                "chip_signal": chip_sig,
+                "confidence": confidence,
             }
 
     results = await asyncio.gather(*[_score_one(c) for c in deep])
@@ -572,6 +595,9 @@ def _assemble_card(k: dict) -> dict:
         # 停牌核查 / 异动风险（第一批：R1/R2 红线 + Y1/Y2/Y3 黄线 + P1/P2 仓位约束）
         "halt_risk": k.get("halt_risk"),
         "halt_risk_labels": k.get("halt_risk_labels") or [],
+        # 筹码信号（派发警示/启动观察）+ meta 三档置信（规则版）
+        "chip_signal": k.get("chip_signal"),
+        "confidence": k.get("confidence"),
     }
 
 

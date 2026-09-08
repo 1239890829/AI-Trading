@@ -129,8 +129,27 @@ class ReviewService:
         # 否则会卡住事件循环上所有的轮询与行情推送
         dimensions, usage = await asyncio.to_thread(self._router.analyze, data, method)
 
+        # --- 策略健康维度（P1：信号健康度 + 相位对账进报告；同步 DB 丢线程池）---
+        # 失败只记 log——复盘不因该维度中断（与 picks 前置步同一容错语义）。
+        health: dict | None = None
+        try:
+            from app.review.strategy_health import build_strategy_health_dimension
+
+            sh_dim, health = await asyncio.to_thread(
+                build_strategy_health_dimension, self.session_factory, data.market.sentiment
+            )
+            dimensions = [*dimensions, sh_dim]
+        except Exception:
+            log.exception("strategy health dimension failed (degraded)")
+
         # --- 合成改进项与元结论 ---
         action_items = build_action_items(data, dimensions, method)
+        if health is not None:
+            from app.review.strategy_health import build_signal_health_action_item
+
+            health_item = build_signal_health_action_item(health)
+            if health_item is not None:
+                action_items = [*action_items, health_item]
         from app.review.methodology import build_meta_insights
 
         meta_insights = build_meta_insights(data, dimensions, method)
@@ -160,7 +179,21 @@ class ReviewService:
             meta_insights=meta_insights,
             summary=summary,
         )
-        return save_report(self.session_factory, report)
+        return await self._finalize(report, health)
+
+    async def _finalize(self, report: ReviewReport, health: dict | None) -> ReviewReport:
+        saved = save_report(self.session_factory, report)
+
+        # --- 信号健康度预警接线（P1）：warning/drift → 通知中心/飞书 ---
+        # 当日同状态去重在 maybe_alert 内部；失败只记 log（告警不阻断复盘收尾）。
+        if health is not None:
+            try:
+                from app.picks.signal_health import maybe_alert_signal_health
+
+                await maybe_alert_signal_health(self.state, health)
+            except Exception:
+                log.exception("signal health alert dispatch failed")
+        return saved
 
     @staticmethod
     def _summarize(dimensions, action_items, data: ReviewData) -> str:
