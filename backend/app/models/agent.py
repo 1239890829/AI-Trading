@@ -51,6 +51,28 @@ class AgentTask(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
 
 
+class AgentTriage(Base):
+    """告警 AI 判读（方案 P1）：规则触发 → AI 判断"值不值得提醒"。
+
+    verdict：`notify`=值得提醒（进悬浮球）/ `ignore`=噪音，不上界面 /
+    `escalate`=升级，进任务中心待办。
+    model：`llm`=大模型判读 / `rules`=确定性规则（冷却去重等）/
+    `llm_fallback`=LLM 不可用，按规则提醒（界面必须显式标注，不伪装成 AI 判断）。
+
+    一条事件只判读一次（event_id 唯一）。
+    """
+
+    __tablename__ = "agent_triage"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[int] = mapped_column(Integer, index=True, unique=True)
+    verdict: Mapped[str] = mapped_column(String(16), index=True)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    model: Mapped[str] = mapped_column(String(16), default="rules")
+    acked: Mapped[int] = mapped_column(Integer, default=0)   # 悬浮球确认（1=已读）
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
 class AgentAudit(Base):
     """执行层审计：谁在什么时候把什么从什么改成了什么（+ 怎么回滚）。"""
 

@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import require_write_token
 from app.services import agent_tasks as at
+from app.services import alert_triage as at_triage
 
 router = APIRouter(tags=["agent"])
 
@@ -64,6 +65,31 @@ async def cancel_task(task_id: str):
     if row is None:
         raise HTTPException(status_code=404, detail="任务不存在")
     return {"data": row}
+
+
+@router.get("/agent/triage")
+async def list_triage(verdict: str | None = None, limit: int = Query(50, ge=1, le=500)):
+    """告警判读历史（notify/ignore/escalate；model 字段区分 LLM 与规则兜底）。"""
+    return {"data": at_triage.list_triage(limit=limit, verdict=verdict)}
+
+
+@router.get("/agent/triage/pending")
+async def pending_bubbles(limit: int = Query(5, ge=1, le=20)):
+    """悬浮球待提醒：只有 AI 判为"值得提醒"且未确认的才出现（不刷屏）。"""
+    return {"data": at_triage.pending_bubbles(limit=limit)}
+
+
+@router.post("/agent/triage/{triage_id}/ack", dependencies=[Depends(require_write_token)])
+async def ack_triage(triage_id: int):
+    if not at_triage.ack_triage(triage_id):
+        raise HTTPException(status_code=404, detail="判读记录不存在")
+    return {"data": {"ok": True}}
+
+
+@router.post("/agent/triage/run", dependencies=[Depends(require_write_token)])
+async def run_triage(limit: int = Query(20, ge=1, le=100)):
+    """手动触发一轮判读（默认由后台 worker 每 30s 自动跑）。"""
+    return {"data": await at_triage.triage_pending(limit=limit)}
 
 
 @router.get("/agent/audit")

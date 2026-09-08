@@ -227,6 +227,12 @@ async def lifespan(app: FastAPI):
         if interrupted:
             log.warning("agent tasks interrupted by restart: %d 条已标 failed", interrupted)
 
+    # 告警 AI 判读 worker（P1）：规则触发 → AI 判断是否值得提醒 → 悬浮球
+    triage_stop = asyncio.Event()
+    from app.services.alert_triage import triage_loop
+
+    triage_task = asyncio.create_task(triage_loop(triage_stop), name="alert-triage")
+
     review_stop = asyncio.Event()
     review_task = None
     if settings.review_scheduler_enabled:
@@ -489,6 +495,7 @@ async def lifespan(app: FastAPI):
         watcher_stop.set()
     if buy_point_task is not None:
         buy_point_stop.set()
+    triage_stop.set()
     if ths_sentinel_task is not None:
         ths_sentinel_stop.set()
     if sentiment_monitor_task is not None:
@@ -515,6 +522,8 @@ async def lifespan(app: FastAPI):
     await _reap(review_task, name="review-scheduler")
     await _reap(premarket_task, name="premarket-brief")
     await _reap(watcher_task, name="picks-watcher")
+    await _reap(buy_point_task, name="picks-buy-point")
+    await _reap(triage_task, name="alert-triage")
     await _reap(review_intraday_task, name="picks-intraday-review")
     await _reap(ths_sentinel_task, name="ths-reason-sentinel")
     await _reap(sentiment_monitor_task, name="sentiment-monitor")

@@ -13,7 +13,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { API_BASE } from "@/lib/api";
+import { API_BASE, type AgentBubble } from "@/lib/api";
 import { workbenchUrl, themesUrl } from "@/lib/routing";
 import { createEntityMatcher, type EntityDict, type EntityMatch } from "@/lib/entity-links";
 import { isAllowedNav } from "@/lib/nav-targets";
@@ -78,6 +78,7 @@ export function FloatingAssistant() {
   const [streaming, setStreaming] = useState(false);
   const [model, setModel] = useState("");
   const [dict, setDict] = useState<EntityDict | null>(null);
+  const [bubbles, setBubbles] = useState<AgentBubble[]>([]);
 
   const abortRef = useRef<AbortController | null>(null);
   const idRef = useRef(0);
@@ -114,6 +115,39 @@ export function FloatingAssistant() {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+
+  // ---- AI 判读提醒（悬浮球气泡）------------------------------------------
+  // 只有判读为 notify 且未确认的才出现；规则触发本身不冒泡（防刷屏）。
+  // 30s 轮询：告警不是秒级决策，且 triage worker 本身也是 30s 一轮。
+  useEffect(() => {
+    if (!mounted) return;
+    let alive = true;
+    async function loadBubbles() {
+      try {
+        const { getAgentBubbles } = await import("@/lib/api");
+        const list = await getAgentBubbles(5);
+        if (alive) setBubbles(list);
+      } catch {
+        if (alive) setBubbles([]);   // 后端未起/接口异常：静默，不打扰
+      }
+    }
+    void loadBubbles();
+    const id = setInterval(() => void loadBubbles(), 30_000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [mounted]);
+
+  async function ackBubble(id: number) {
+    const { ackAgentTriage } = await import("@/lib/api");
+    try {
+      await ackAgentTriage(id);
+      setBubbles((prev) => prev.filter((b) => b.id !== id));
+    } catch {
+      /* 确认失败只保留气泡，不弹错 */
+    }
+  }
 
   // ---- 实体字典：窗口首开时拉一次，失败静默（识别是增强层） ----------------
   useEffect(() => {
@@ -420,7 +454,59 @@ export function FloatingAssistant() {
         {streaming && !open && (
           <span className="absolute -right-0.5 -top-0.5 h-3 w-3 animate-pulse rounded-full border-2 border-zinc-900 bg-emerald-400 dark:border-zinc-100" />
         )}
+        {/* 告警红点：只统计 AI 判为"值得提醒"的（notify 且未确认） */}
+        {bubbles.length > 0 && !open && (
+          <span
+            data-testid="assistant-alert-dot"
+            className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-semibold text-white ring-2 ring-white dark:ring-zinc-900"
+          >
+            {bubbles.length}
+          </span>
+        )}
       </div>
+
+      {/* 提醒气泡：AI 判读后才出现（规则触发 ≠ 值得提醒）；点开进控制台告警页 */}
+      {bubbles.length > 0 && !open && (
+        <div
+          data-testid="assistant-alert-bubble"
+          className="fixed z-50 w-[280px] rounded-xl border border-zinc-200 bg-white/95 p-3 shadow-xl backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95"
+          style={{
+            left: pos.x - 292 > 8 ? pos.x - 292 : pos.x + BALL + 12,
+            top: Math.max(8, pos.y - 8),
+          }}
+        >
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <span className="text-[11px] font-medium text-zinc-700 dark:text-zinc-200">
+              AI 判读提醒 · {bubbles.length} 条
+            </span>
+            {bubbles[0].model === "llm_fallback" && (
+              <span className="rounded bg-amber-500/10 px-1 py-0.5 text-[10px] text-amber-600 dark:text-amber-300">
+                按规则提醒
+              </span>
+            )}
+          </div>
+          <p className="line-clamp-2 text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-300">
+            {bubbles[0].symbol ? `${bubbles[0].symbol} · ` : ""}
+            {bubbles[0].reason || "触发告警"}
+          </p>
+          <div className="mt-2 flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => router.push("/agent?tab=alerts")}
+              className="rounded-md border border-zinc-300 px-2 py-0.5 text-[11px] text-zinc-700 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
+            >
+              查看
+            </button>
+            <button
+              type="button"
+              onClick={() => void ackBubble(bubbles[0].id)}
+              className="rounded-md px-2 py-0.5 text-[11px] text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+            >
+              忽略
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 聊天窗 */}
       {open && (

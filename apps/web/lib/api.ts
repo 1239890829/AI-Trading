@@ -2044,6 +2044,29 @@ export async function cancelAgentTask(id: string): Promise<AgentTask> {
   return (await sendJson<AgentTask>(`/api/agent/tasks/${id}/cancel`, "POST")).data;
 }
 
+/** 悬浮球提醒气泡（AI 判读为 notify 且未确认的） */
+export interface AgentBubble {
+  id: number;
+  event_id: number;
+  verdict: string;
+  reason: string;
+  /** llm=AI 判读 / rules=确定性去重 / llm_fallback=LLM 不可用按规则提醒（界面须标注） */
+  model: string;
+  acked: boolean;
+  symbol: string;
+  trigger_value: number | null;
+  threshold: number | null;
+  created_at: string | null;
+}
+
+export async function getAgentBubbles(limit = 5): Promise<AgentBubble[]> {
+  return (await getJson<AgentBubble[]>(`/api/agent/triage/pending?limit=${limit}`)).data;
+}
+
+export async function ackAgentTriage(id: number): Promise<boolean> {
+  return (await sendJson<{ ok: boolean }>(`/api/agent/triage/${id}/ack`, "POST")).data.ok;
+}
+
 export async function getAgentAudit(taskId?: string): Promise<AgentAuditEntry[]> {
   const q = taskId ? `?task_id=${encodeURIComponent(taskId)}` : "";
   return (await getJson<AgentAuditEntry[]>(`/api/agent/audit${q}`)).data;
