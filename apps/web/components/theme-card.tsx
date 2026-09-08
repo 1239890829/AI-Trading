@@ -247,16 +247,19 @@ export function ThemeCardView({
         {/* 官方概念挂靠（09-08「代糖/玉米搜不到」修复）：簇按涨停原因标签聚合，
             名称可能与同花顺概念板块不同（功能糖 vs 代糖概念/玉米）；成分重叠 ≥2
             才挂靠，无挂靠缺省不显示 */}
+        {/* 官方概念徽标：只显示**归属的大概念**（命中数最高的一个）——细分在
+            概念详情弹窗里看（09-08 用户反馈：簇上铺一堆细分徽标太乱）；
+            其余挂靠名收进 tooltip */}
         {(card.official_matches ?? []).length > 0 && (
-          <span className="flex flex-wrap items-center gap-1" title="官方概念成分挂靠：簇内成员命中该概念板块 ≥2 只（搜索官方概念名可定位本簇）">
-            {(card.official_matches ?? []).map((m) => (
-              <Badge
-                key={m.code}
-                className="border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300"
-              >
-                官方·{m.name}
-              </Badge>
-            ))}
+          <span
+            className="flex items-center"
+            title={`官方概念挂靠：${(card.official_matches ?? []).map((m) => m.name).join("、")}`}
+          >
+            <Badge
+              className="border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300"
+            >
+              官方·{(card.official_matches ?? [])[0]?.name}
+            </Badge>
           </span>
         )}
 

@@ -93,21 +93,24 @@ export function ConceptDetailModal({
           </button>
         </div>
 
-        {/* 细分 tab + 搜索 */}
-        <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-zinc-100 px-4 py-2 dark:border-zinc-800">
-          <TabBtn active={tab === "__all__"} onClick={() => setTab("__all__")}>
-            全部成分{detail ? ` ${detail.total}` : ""}
-          </TabBtn>
-          {(detail?.tag_groups ?? []).map((g) => (
-            <TabBtn key={g.tag} active={tab === g.tag} onClick={() => setTab(g.tag)}>
-              {g.tag} {g.symbols.length}
+        {/* 细分 tab + 搜索：单行布局——tab 容器横向滚动（概念多时不换行不挤压），
+            搜索框 shrink-0 固定右侧，整行高度恒定 */}
+        <div className="flex shrink-0 items-center gap-2 border-b border-zinc-100 px-4 py-2 dark:border-zinc-800">
+          <div className="flex min-w-0 flex-1 flex-nowrap items-center gap-1.5 overflow-x-auto">
+            <TabBtn active={tab === "__all__"} onClick={() => setTab("__all__")}>
+              全部成分{detail ? ` ${detail.total}` : ""}
             </TabBtn>
-          ))}
+            {(detail?.tag_groups ?? []).map((g) => (
+              <TabBtn key={g.tag} active={tab === g.tag} onClick={() => setTab(g.tag)}>
+                {g.tag} {g.symbols.length}
+              </TabBtn>
+            ))}
+          </div>
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="搜代码/名称"
-            className="ml-auto w-28 rounded-lg border border-zinc-200 bg-transparent px-2 py-1 text-xs text-zinc-700 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-700 dark:text-zinc-200"
+            className="w-28 shrink-0 rounded-lg border border-zinc-200 bg-transparent px-2 py-1 text-xs text-zinc-700 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-700 dark:text-zinc-200"
           />
         </div>
 
@@ -165,7 +168,7 @@ function TabBtn({ active, onClick, children }: { active: boolean; onClick: () =>
   return (
     <button
       onClick={onClick}
-      className={`rounded-full px-2.5 py-1 text-[11px] transition-colors ${
+      className={`shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] transition-colors ${
         active
           ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
           : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
