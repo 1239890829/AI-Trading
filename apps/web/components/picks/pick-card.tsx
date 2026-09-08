@@ -156,9 +156,25 @@ export function PickCard({ item }: { item: DailyPickItem }) {
           )}
           {item.observation_only && (
             <Chip
-              text="仅观察"
-              title="空仓闸门已触发：本条不给买入范围，仅供复盘与观察"
-              className="border-red-500/50 bg-red-500/10 text-red-600 dark:text-red-300"
+              text={
+                item.follow_state === "followable"
+                  ? "可跟"
+                  : item.follow_state === "blocked"
+                    ? "禁买"
+                    : "仅观察"
+              }
+              title={
+                item.follow_state === "followable"
+                  ? `空仓闸门日龙头判据全满足（连板高度+梯队地位+题材催化，无红线）。可跟 ≠ 可买：不给买入范围，参与须经影子持仓先验证。${(item.follow_reasons ?? []).join("；")}`
+                  : item.follow_state === "blocked"
+                    ? `空仓闸门日红线压制（禁买）：${(item.follow_reasons ?? []).join("；") || "命中否决/异动风险"}`
+                    : `空仓闸门已触发：本条不给买入范围，仅供复盘与观察。${(item.follow_reasons ?? []).join("；")}`
+              }
+              className={
+                item.follow_state === "followable"
+                  ? "border-sky-500/50 bg-sky-500/10 text-sky-600 dark:text-sky-300"
+                  : "border-red-500/50 bg-red-500/10 text-red-600 dark:text-red-300"
+              }
             />
           )}
           {item.chip_signal?.signal === "distribution_warning" && (
@@ -187,8 +203,16 @@ export function PickCard({ item }: { item: DailyPickItem }) {
           </span>
         </div>
       ) : (
-        <div className="mt-2 rounded-lg bg-red-500/5 px-2 py-1.5 text-[11px] text-red-500 dark:text-red-300">
-          空仓闸门已触发：本条不给出买入参考区间
+        <div
+          className={`mt-2 rounded-lg px-2 py-1.5 text-[11px] ${
+            item.follow_state === "followable"
+              ? "bg-sky-500/5 text-sky-600 dark:text-sky-300"
+              : "bg-red-500/5 text-red-500 dark:text-red-300"
+          }`}
+        >
+          {item.follow_state === "followable"
+            ? "空仓闸门日：不给买入区间；属「可跟」名单，参与须经影子持仓先验证"
+            : "空仓闸门已触发：本条不给出买入参考区间"}
         </div>
       )}
 

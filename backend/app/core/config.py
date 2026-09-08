@@ -104,6 +104,13 @@ class Settings(BaseSettings):
     picks_shadow_start_minute: int = 9 * 60 + 26   # 竞价结束（9:25）后一分钟
     picks_shadow_end_minute: int = 9 * 60 + 45     # 晨窗截止（错过顺延次日，不追价）
 
+    # ---- 相位→风格路由表（审查报告 §4.1，P1-2 规则版）----
+    # 六相位 → 六维权重偏移。空串 = 用 picks/style_router.py DEFAULT_ROUTES 默认表；
+    # 非空必须是 JSON {"发酵": {"echelon": 0.06, ...}}，仅同名维度覆盖默认表。
+    # 非法 JSON / 未知维度 / |delta|>0.06 启动即抛错（fail fast，不静默回退）。
+    # 偏移是否真提升胜率待 factor_ic_review 月度复核 + 影子 A/B，初版幅度保守。
+    picks_style_offsets_json: str = ""
+
     # ---- ths 涨停原因单点哨兵（P0-B）----
     # 涨停原因/题材标签 100% 依赖 ths（东财 0%，无备源）：交易时段周期探测
     # reason 非空率，低于阈值/连续拉取失败 → AlertEvent 告警（文案含

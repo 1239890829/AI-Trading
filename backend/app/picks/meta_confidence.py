@@ -36,11 +36,14 @@ def classify_confidence(
     chip_signal: str | None = None,
     halt_penalty: float | None = None,
     veto_count: int = 0,
+    style_note: str | None = None,
 ) -> dict:
     """六维合成后的环境特征 → 三档置信（纯函数，供 _score_one 与测试直接调用）。
 
     :param phase: 市场情绪相位（None 时不因相位降档，但也不满足强执行窗——
                   相位缺失不给强执行，诚实降级）。
+    :param style_note: 相位→风格路由的留痕短句（style_router.style_note），
+                       挂相位维度扩展（审查 §4.1）；仅追加到 reasons，不影响档位。
     """
     reasons: list[str] = []
     cap = "strong"  # 当前允许的最高档
@@ -73,6 +76,9 @@ def classify_confidence(
     if tier == "executable" and (score or 0.0) < EXECUTABLE_SCORE:
         tier = "observe"
         reasons.append(f"综合分 {score} < {EXECUTABLE_SCORE}（可执行线）")
+
+    if style_note:
+        reasons.append(style_note)
 
     if not reasons:
         reasons.append("综合分、相位、筹码、红线检查全部通过")

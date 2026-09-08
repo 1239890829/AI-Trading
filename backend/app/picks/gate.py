@@ -87,9 +87,22 @@ def evaluate_stand_aside(
 
 
 def apply_gate_to_picks(picks: list[dict], gate: dict) -> list[dict]:
-    """闸门触发时对组合的处理：标注"仅观察"并撤掉买入范围（记录仍保留）。
+    """闸门触发时对组合的处理：三态分层 + 撤掉买入范围（记录仍保留）。
 
-    不删除条目——删了就无法复盘"今天的推荐到底对不对"。
+    三态（审查报告 §4.2「堵疏结合」：observation_only 单档 → 分层）：
+    - **blocked 禁买**：命中一票否决（红线）或异动风险扣分——连想都不要想；
+    - **followable 可跟**：满足龙头判据（连板高度 ≥2 + 梯队地位 + 题材催化 +
+      无红线）的标的——从「仅观察」升级为「可跟」tag。纪律不破：仍不给买入
+      范围、observation_only 保持 True（影子/复盘等下游消费语义不变）；参与
+      须经影子持仓先验证（picks-intraday-fusion-assessment §3.3 原则）；
+    - **observe 仅观察**：其余标的（闸门日默认档，与历史行为一致）。
+
+    可跟判据的取舍（对照审查报告「连板高度 + 梯队 role + 题材催化」）：
+    - 连板高度 boards ≥2：首板在退潮期被埋概率最高，不够格；
+    - 梯队地位 ∈ {空间板, 龙头, 反包, 中军, 领涨}：跟风/补涨/滞涨/断板不配；
+    - 题材催化 theme 非空：无题材归属的逆势票不在「可跟」语义内；
+    - 三个条件同时满足（AND），且无红线/异动扣分。
+    旧数据兼容：字段缺失（boards=None/role 缺）按不满足判据处理 → observe。
     """
     if not gate.get("stand_aside"):
         return picks
@@ -98,5 +111,55 @@ def apply_gate_to_picks(picks: list[dict], gate: dict) -> list[dict]:
         item = dict(p)
         item["observation_only"] = True
         item.pop("buy_range", None)
+        state, reasons = _follow_state_of(item)
+        item["follow_state"] = state
+        item["follow_reasons"] = reasons
         out.append(item)
     return out
+
+
+#: 可跟档的梯队地位白名单（ROLE_BASE_SCORE 高段：有真实天梯地位的角色）
+FOLLOW_ROLES = {"空间板", "龙头", "反包", "中军", "领涨"}
+#: 可跟档的连板高度下限（首板不够格：闸门日追首板是典型的接飞刀）
+FOLLOW_MIN_BOARDS = 2
+
+_STATE_LABELS = {"blocked": "禁买", "observe": "仅观察", "followable": "可跟"}
+
+
+def _follow_state_of(item: dict) -> tuple[str, list[str]]:
+    """单票三态判定（纯函数）：红线一票否决 > 可跟判据 > 默认观察。"""
+    reasons: list[str] = []
+    vetoes = item.get("vetoes") or []
+    halt_penalty = (item.get("halt_risk") or {}).get("penalty") or 0.0
+    if vetoes:
+        reasons.append(f"命中 {len(vetoes)} 条一票否决（红线压制，禁买）")
+        return "blocked", reasons
+    if halt_penalty:
+        reasons.append(f"异动风险扣分 {halt_penalty}（禁买）")
+        return "blocked", reasons
+
+    boards = item.get("boards")
+    role = item.get("echelon_role") or ""
+    theme = item.get("theme")
+    if boards is None:
+        # 连板高度缺失（非涨停/旧数据）≠ 满足判据：缺失不升级（诚实降级）
+        reasons.append("连板高度缺失（非涨停或旧数据），不满足可跟判据")
+    elif boards < FOLLOW_MIN_BOARDS:
+        reasons.append(f"连板高度 {boards} < {FOLLOW_MIN_BOARDS}")
+    if role not in FOLLOW_ROLES:
+        reasons.append(f"梯队角色「{role or '缺失'}」不在可跟白名单")
+    if not theme:
+        reasons.append("无题材归属（题材催化缺失）")
+    if not reasons:
+        reasons.append(
+            f"龙头判据全满足：{boards} 板 + 角色「{role}」+ 题材「{theme}」；"
+            "可跟 ≠ 可买：不给买入范围，参与须经影子持仓先验证"
+        )
+        return "followable", reasons
+    reasons.append("龙头判据未全满足，保持仅观察")
+    return "observe", reasons
+
+
+def follow_state_label(state: str | None) -> str:
+    """三态 → 中文标签（None/未知 → 空串，调用方按无闸门处理）。"""
+    return _STATE_LABELS.get(state or "", "")

@@ -120,6 +120,8 @@ async def collect_execution_gate(
             "name": it.get("name"),
             "score": it.get("score"),
             "observation_only": bool(it.get("observation_only")),
+            # 空仓闸门三态（审查 §4.2）：blocked/observe/followable；非闸门日缺省
+            "follow_state": it.get("follow_state"),
             "state": verdict["state"],
             "gap_pct": verdict["gap_pct"],
             "reason": verdict["reason"],

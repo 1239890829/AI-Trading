@@ -498,7 +498,7 @@ def _collect_summary_evidence(request: Request) -> dict:
             ev["picks"] = {
                 "date": row.date,
                 "items": [
-                    {k: it.get(k) for k in ("symbol", "name", "score", "confidence", "theme", "observation_only")}
+                    {k: it.get(k) for k in ("symbol", "name", "score", "confidence", "theme", "observation_only", "follow_state")}
                     for it in items[:8]
                 ],
                 "meta": {k: row_meta for k, row_meta in (_json.loads(row.meta or "{}")).items()

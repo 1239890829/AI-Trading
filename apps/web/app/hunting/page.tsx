@@ -27,6 +27,7 @@ import {
   type MorningBrief,
   type PickReviewRow,
   type SignalHealthPayload,
+  type StyleRouting,
   type WatcherState,
 } from "@/lib/api";
 import { PickCard, StandAsideBanner } from "@/components/picks/pick-card";
@@ -348,6 +349,11 @@ function HuntingInner() {
         {/* ── 空仓闸门横幅（风险提示置顶）── */}
         {data?.meta?.gate && data.meta.gate.stand_aside && <StandAsideBanner gate={data.meta.gate} />}
 
+        {/* ── 相位→风格路由（审查 §4.1）：当日风格 + 权重偏移，路由未生效时显式说明 ── */}
+        {data?.meta?.style_routing && (
+          <StyleRoutingChip sr={data.meta.style_routing} />
+        )}
+
         {/* ── 统计条：精选 / 跟踪双口径（三态纪律，insufficient 显式不判 ok）── */}
         <section id="sec-overview" className="space-y-2 scroll-mt-2">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -595,7 +601,7 @@ function HuntingInner() {
 
       <div className="shrink-0 text-[10px] text-zinc-500">
         {data?.meta?.weights
-          ? `精选权重（${data.meta.regime?.regime ?? "平衡"}）：${Object.entries(data.meta.weights)
+          ? `精选权重（${data.meta.regime?.regime ?? "平衡"}${data.meta.style_routing?.routed ? ` · 风格「${data.meta.style_routing.label}」` : ""}）：${Object.entries(data.meta.weights)
               .map(([k, v]) => `${{ sentiment: "情绪", news: "消息", tech: "技术", fundamental: "基本", capital: "资金", echelon: "梯队" }[k] ?? k} ${Math.round(v * 100)}%`)
               .join(" / ")}`
           : "精选五维权重：情绪 20% / 消息 25% / 技术 25% / 基本面 15% / 资金 15%"}
@@ -603,6 +609,36 @@ function HuntingInner() {
         盘中节拍阈值集中在 intraday_rules 常量表 · 全部输出为可解释依据与模拟跟踪，不构成买卖建议 · 数据有延迟
       </div>
     </main>
+  );
+}
+
+/** 相位→风格路由 chip（审查 §4.1）：当日风格与权重偏移，悬停看完整依据；未路由时诚实说明。 */
+function StyleRoutingChip({ sr }: { sr: StyleRouting }) {
+  const dimLabel: Record<string, string> = {
+    sentiment: "情绪", news: "消息", tech: "技术",
+    fundamental: "基本", capital: "资金", echelon: "梯队",
+  };
+  const offsets = Object.entries(sr.offsets);
+  return (
+    <div
+      className="shrink-0 rounded-lg border border-zinc-200 px-3 py-1.5 text-[11px] dark:border-zinc-800"
+      title={`${sr.basis}（${sr.phase ?? "相位缺失"}）· 偏移在 regime 基础权重上叠加，配置可覆盖（picks_style_offsets_json）`}
+    >
+      <span className="text-zinc-400">当日风格</span>{" "}
+      <span className="font-medium text-zinc-700 dark:text-zinc-200">{sr.label}</span>
+      {offsets.length > 0 ? (
+        <span className="ml-1.5 font-mono text-[10px] tabular-nums text-zinc-500 dark:text-zinc-400">
+          {offsets
+            .sort(([, a], [, b]) => Math.abs(b) - Math.abs(a))
+            .map(([d, v]) => `${dimLabel[d] ?? d} ${v > 0 ? "+" : ""}${Math.round(v * 100)}%`)
+            .join(" / ")}
+        </span>
+      ) : (
+        <span className="ml-1.5 text-zinc-400">
+          {sr.routed ? "（均衡，无偏移）" : "（相位缺失，未路由）"}
+        </span>
+      )}
+    </div>
   );
 }
 

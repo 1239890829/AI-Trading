@@ -381,7 +381,11 @@ async def _t_picks(ctx: ToolContext, **kw) -> str:
     for it in items[:MAX_ROWS]:
         conf = it.get("confidence")
         conf_s = f"｜置信 {conf}" if conf else ""
-        obs = "｜仅观察" if it.get("observation_only") else ""
+        obs = ""
+        if it.get("follow_state") == "followable":
+            obs = "｜可跟（闸门日：不给买入范围，参与须经影子持仓验证）"
+        elif it.get("observation_only"):
+            obs = "｜仅观察"
         lines.append(
             f"- {it.get('name', '')}({it.get('symbol', '')})：score {it.get('score', '—')}"
             f"｜{it.get('theme') or '无题材'}{conf_s}{obs}"

@@ -50,6 +50,7 @@ from app.picks.engine import (
 from app.picks.gate import apply_gate_to_picks, evaluate_stand_aside
 from app.picks.halt_risk import BENCHMARK_INDEX, assess, benchmark_symbol, board_of, risk_labels, veto_reasons
 from app.picks.regime import detect_regime, earnings_event_ratio, weights_for
+from app.picks.style_router import apply_style_offsets, route_style, style_note
 from app.picks.risk import build_invalidations, exit_discipline, risk_tier_of, stop_loss_reference
 from app.services.quote_enrich import fill_valuation
 from app.services.quote_hub import QuoteHub
@@ -362,6 +363,7 @@ async def _deep_score_candidates(
     concurrency: int,
     promo_percentile: float | None = None,
     index_bars: dict[str, list[dict]] | None = None,
+    style: dict | None = None,
 ) -> list[dict]:
     """④ 逐只深度评分（并发；每只独立异常兜底）。
 
@@ -518,7 +520,8 @@ async def _deep_score_candidates(
             if halt["penalty"]:
                 score = round(max(0.0, score - halt["penalty"]), 1)
             # meta 置信层（P1 规则版）：综合分+相位+筹码+红线 → 三档置信
-            # （替代 gate 二值跳变的统一置信语言；gate 保留为兜底）
+            # （替代 gate 二值跳变的统一置信语言；gate 保留为兜底）。
+            # 相位维度扩展（审查 §4.1）：当日风格路由结果挂进置信理由留痕。
             confidence = classify_confidence(
                 score=score,
                 sub_scores=sub,
@@ -526,6 +529,7 @@ async def _deep_score_candidates(
                 chip_signal=chip_sig.get("signal"),
                 halt_penalty=halt.get("penalty") or 0.0,
                 veto_count=len(vetoes),
+                style_note=style_note(style),
             )
             return {
                 "symbol": sym, "name": c["name"], "price": c["price"], "change_pct": c["change_pct"],
@@ -541,6 +545,8 @@ async def _deep_score_candidates(
                 "echelon_basis": bases["echelon"],
                 "theme": theme_name,
                 "theme_stage": theme_ctx["stage"],
+                # 连板高度（gate 可跟判据的第一要素；非涨停股 None，不臆造）
+                "boards": lu["consecutive_boards"] if lu else None,
                 "atr_pct": atr_pct,
                 "ma5": ma5,
                 "ma10": ma10,
@@ -578,6 +584,7 @@ def _assemble_card(k: dict) -> dict:
         "echelon_basis": k.get("echelon_basis", ""),
         "theme": k.get("theme"),
         "theme_stage": k.get("theme_stage"),
+        "boards": k.get("boards"),
         "risk_tier": tier,
         "stop_loss": stop_loss_reference(
             price=k["price"], tier=tier, atr_pct=k.get("atr_pct")
@@ -676,6 +683,10 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
         event_count=len(ev_texts),
     )
     weights = weights_for(regime["regime"])
+    # ③b' 相位→风格路由（审查报告 §4.1）：在 regime 基础权重上按市场情绪相位
+    # 做当日微调（叠加不替代）；偏移表配置可覆盖，路由结果随 meta 留痕。
+    style = route_style(market_phase)
+    weights = apply_style_offsets(weights, style["offsets"])
 
     # ③c 空仓闸门：情绪转弱时主动提示规避（红线 3：只提示，不下指令）
     break_rate = None
@@ -734,6 +745,7 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
         concurrency=CONCURRENCY,
         promo_percentile=promo_pct,
         index_bars=index_bars,
+        style=style,
     )
     ranked.sort(key=lambda r: -r["score"])
 
@@ -762,6 +774,7 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
     meta = {
         "weights": weights,
         "regime": regime,
+        "style_routing": style,
         "gate": gate,
         "replace_threshold": REPLACE_THRESHOLD,
         "market_phase": market_phase,

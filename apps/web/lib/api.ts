@@ -450,11 +450,16 @@ export interface DailyPickItem {
   echelon_basis?: string;
   theme?: string | null;
   theme_stage?: string | null;    // 启动/发酵/高潮/分歧/退潮
+  boards?: number | null;         // 连板高度（非涨停/旧数据 null，不臆造）
   risk_tier?: string | null;      // 龙头博弈/趋势跟随/情绪低位
   stop_loss?: StopLossRef | null;
   exit_discipline?: ExitDiscipline | null;
   invalidations?: string[];
-  observation_only?: boolean;     // 空仓闸门触发：仅观察，不给买入范围
+  observation_only?: boolean;     // 空仓闸门触发：不给买入范围（历史字段，三态都为 true）
+  // 空仓闸门三态（审查 §4.2）：blocked 禁买 / observe 仅观察 / followable 可跟。
+  // 可跟 ≠ 可买：仍无买入范围，参与须经影子持仓先验证；非闸门日/旧数据缺省。
+  follow_state?: "blocked" | "observe" | "followable" | null;
+  follow_reasons?: string[];
   // --- meta 置信层（规则版）：综合分+相位+筹码+红线 → 三档置信 ---
   confidence?: {
     tier: "strong" | "executable" | "observe";
@@ -491,6 +496,16 @@ export interface PickRegime {
   earnings_ratio: number | null;
 }
 
+/** 相位→风格路由（审查 §4.1）：当日风格 + 六维权重偏移（routed=false=相位缺失未路由） */
+export interface StyleRouting {
+  phase: string | null;
+  style: string;
+  label: string;
+  offsets: Record<string, number>;
+  basis: string;
+  routed: boolean;
+}
+
 /** 空仓闸门（CONTEXT.md: Stand-aside Gate） */
 export interface StandAsideGate {
   stand_aside: boolean;
@@ -509,6 +524,7 @@ export interface DailyPicksPayload {
   meta?: {
     weights: Record<string, number>;
     regime?: PickRegime;
+    style_routing?: StyleRouting | null;
     gate?: StandAsideGate;
     market_phase?: string | null;
     candidate_count?: number;
