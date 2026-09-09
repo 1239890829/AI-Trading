@@ -187,7 +187,7 @@ def _collect_triage_stats(session_factory) -> dict:
 
 
 def collect_inputs(session_factory=None) -> dict:
-    """七路证据汇总（P1-4：prediction 预判入回路；factor_ic 月度复核到期接入）。"""
+    """八路证据汇总（第八路：知识库健康态；factor_ic 月度复核到期接入）。"""
     sf = session_factory or get_session_factory()
     return {
         "review": _collect_review_improvements(sf),
@@ -197,7 +197,51 @@ def collect_inputs(session_factory=None) -> dict:
         "data_health": _collect_data_health(sf),
         "factor_ic": {"available": False, "note": "月度复核（factor_ic_review）到期接入"},
         "prediction": _collect_recent_prediction(sf),
+        "knowledge_base": _collect_knowledge_base(),
     }
+
+
+def _collect_knowledge_base() -> dict:
+    """第八路（2026-09-09 知识库机制）：docs/kb/ 落地跟踪进议程。
+
+    读 00-INDEX.md 索引表格（| ID | 一句话 | 状态 | 来源日 |），统计各状态条数：
+    ⏳ 待落地条目可成为议程 C 类改进项候选；❌ 被取代条目防止回退；
+    ⏳ 超 14 天未动的列入 stale_pending 复查。知识库缺失/解析失败显式 unavailable（三态）。
+    """
+    import re as _re
+
+    kb_index = PROJECT_ROOT / "docs" / "kb" / "00-INDEX.md"
+    if not kb_index.exists():
+        return {"available": False, "note": "docs/kb/00-INDEX.md 不存在（知识库未初始化）"}
+    try:
+        pattern = _re.compile(
+            r"^\| (KB-(?:STOCK|TRADE|ENG|DEC)-\d+) \| (.+?) \| ([✅🔶⏳❌]) \| (\d{4}-\d{2}-\d{2}) \|"
+        )
+        entries: list[dict] = []
+        for line in kb_index.read_text(encoding="utf-8").splitlines():
+            m = pattern.match(line.strip())
+            if m:
+                entries.append(
+                    {"id": m.group(1), "title": m.group(2), "status": m.group(3), "since": m.group(4)}
+                )
+        if not entries:
+            return {"available": False, "note": "00-INDEX.md 无可解析条目（表格格式漂移？）"}
+        by_status: dict[str, int] = {}
+        for e in entries:
+            by_status[e["status"]] = by_status.get(e["status"], 0) + 1
+        pending = [e for e in entries if e["status"] == "⏳"]
+        stale_cutoff = (beijing_now().date() - timedelta(days=14)).isoformat()
+        stale_pending = [e["id"] for e in pending if e["since"] < stale_cutoff]
+        return {
+            "available": True,
+            "total": len(entries),
+            "by_status": by_status,
+            "pending": [{"id": e["id"], "title": e["title"][:50]} for e in pending[:8]],
+            "stale_pending_14d": stale_pending,
+            "note": "⏳ 待落地条目可成为 C 类改进项候选；❌ 条目防止回退（知识库永不删条目）",
+        }
+    except Exception as exc:  # noqa: BLE001  证据缺席不阻塞议程
+        return {"available": False, "note": f"知识库解析失败: {exc}"}
 
 
 def _collect_recent_prediction(session_factory) -> dict:
