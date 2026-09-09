@@ -82,6 +82,10 @@ class Settings(BaseSettings):
     premarket_brief_enabled: bool = True
     premarket_brief_hour: int = 8
     premarket_brief_minute: int = 40
+    # 每日组合自动生成（2026-09-09：生成归后端时钟，推送纪律不变——KB-DEC-001）
+    picks_autogen_enabled: bool = True
+    picks_autogen_hour: int = 9
+    picks_autogen_minute: int = 26
     # 盘中跟踪：以当日简报为跟踪清单，交易时段内按 interval 取拍（ths 涨停池 +
     # 东财板块涨幅），确认/证伪判定走 intraday_rules（与回测同一份代码）
     picks_watcher_enabled: bool = True

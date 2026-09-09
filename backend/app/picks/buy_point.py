@@ -159,7 +159,7 @@ def _today_picks_payload() -> dict | None:
     from app.models.daily_pick import DailyPickSet
 
     today = beijing_now().date().isoformat()
-    with get_session_factory() as db:
+    with get_session_factory()() as db:
         row = db.execute(select(DailyPickSet).where(DailyPickSet.date == today)).scalar_one_or_none()
         if row is None:
             return None

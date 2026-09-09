@@ -278,6 +278,21 @@ async def lifespan(app: FastAPI):
 
     # 数据健康哨兵盘中循环（push_policy ② ANOMALY：交易时段 15 分钟一轮，
     # 新异常推飞书摘要卡——2026-09-08 推送矩阵）
+    # 每日组合自动生成（09:26，幂等 by DailyPickSet——旧 09:26 automation 停用后的生成接盘者）
+    picks_autogen_stop = asyncio.Event()
+    picks_autogen_task = None
+    if settings.picks_autogen_enabled:
+        from app.picks.picks_autogen import picks_autogen_scheduler
+
+        picks_autogen_task = asyncio.create_task(
+            picks_autogen_scheduler(
+                app, stop=picks_autogen_stop,
+                run_hour=settings.picks_autogen_hour,
+                run_minute=settings.picks_autogen_minute,
+            ),
+            name="picks-autogen",
+        )
+
     data_health_stop = asyncio.Event()
     from app.services.data_health_loop import data_health_loop
 
@@ -537,6 +552,7 @@ async def lifespan(app: FastAPI):
     triage_stop.set()
     evolution_stop.set()
     data_health_stop.set()
+    picks_autogen_stop.set()
     radar_stop.set()
     if ths_sentinel_task is not None:
         ths_sentinel_stop.set()
@@ -568,6 +584,8 @@ async def lifespan(app: FastAPI):
     await _reap(triage_task, name="alert-triage")
     await _reap(evolution_task, name="evolution-agenda")
     await _reap(radar_task, name="pre-limit-radar")
+    if picks_autogen_task is not None:
+        await _reap(picks_autogen_task, name="picks-autogen")
     await _reap(data_health_task, name="data-health-sentinel")
     await _reap(review_intraday_task, name="picks-intraday-review")
     await _reap(ths_sentinel_task, name="ths-reason-sentinel")

@@ -331,7 +331,7 @@ function HuntingInner() {
       )}
       {data?.stale && (
         <div className="shrink-0 rounded-lg border border-zinc-300 px-3 py-1.5 text-xs text-zinc-500 dark:border-zinc-700">
-          当前展示 {data.date} 生成的组合（今日尚未生成）
+          当前展示 {data.date} 生成的组合——今日组合交易日 09:26 自动生成（急用可点右上「生成/刷新组合」立即重算）
         </div>
       )}
       {data?.note && <div className="shrink-0 text-xs text-zinc-400">{data.note}</div>}
