@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
@@ -74,13 +74,8 @@ import { MasonryColumns } from "@/components/masonry-columns";
  * （旧 /picks /intraday 路径经 next.config 302 兜底）。全页不构成买卖建议。
  */
 
-type TagKey = "all" | "pick" | "watch";
-
-const TAG_TABS: { key: TagKey; label: string }[] = [
-  { key: "all", label: "全部" },
-  { key: "pick", label: "每日精选" },
-  { key: "watch", label: "盘中跟踪" },
-];
+// 2026-09-09 用户指令：取消「全部/每日精选/盘中跟踪」tab 分类——单一瀑布流混排，
+// 来源直接标注在条目上（WatchCard=盘中跟踪 / PickCard=盘前选择）。
 
 function HuntingInner() {
   const router = useRouter();
@@ -112,10 +107,7 @@ function HuntingInner() {
   const [busy, setBusy] = useState<string | null>(null);
 
   // —— URL 状态（深链为真相源）——
-  const [tag, setTag] = useState<TagKey>(() => {
-    const t = sp.get("tag");
-    return t === "pick" || t === "watch" ? t : "all";
-  });
+  // ?tag= 深链仍可解析（nav-targets 兼容）但不再分流视图——单一瀑布流（2026-09-09）
   const [expandedTheme, setExpandedTheme] = useState<string | null>(() => sp.get("theme"));
   const sec = sp.get("sec");
   const secValid = /^(overview|opportunity|brief|watcher|reminders|review)$/.test(sec ?? "");
@@ -135,18 +127,6 @@ function HuntingInner() {
     const t = window.setTimeout(scroll, 400);
     return () => window.clearTimeout(t);
   }, [sec, secValid]);
-
-  const switchTag = useCallback(
-    (t: TagKey) => {
-      setTag(t);
-      const params = new URLSearchParams(sp.toString());
-      if (t === "all") params.delete("tag");
-      else params.set("tag", t);
-      const qs = params.toString();
-      router.replace(`/hunting${qs ? `?${qs}` : ""}`, { scroll: false });
-    },
-    [sp, router],
-  );
 
   const toggleTheme = useCallback(
     (t: string) => {
@@ -256,6 +236,16 @@ function HuntingInner() {
   const topItems = top?.items ?? [];
   const briefMissing = picksLoaded && intradayLoaded && brief === null;
   const pending = !picksLoaded || !intradayLoaded;
+
+  // 猎场合并瀑布流（2026-09-09 用户指令：取消 tab，单容器混排——
+  // 盘中跟踪在前（实时优先），盘前选择跟随；同股两者都在时跟踪卡优先（防重 key））
+  const mergedItems = useMemo(() => {
+    const topSyms = new Set(topItems.map((t) => t.symbol));
+    return [
+      ...topItems.map((it) => ({ kind: "watch" as const, it })),
+      ...items.filter((p) => !topSyms.has(p.symbol)).map((it) => ({ kind: "pick" as const, it })),
+    ];
+  }, [topItems, items]);
 
   return (
     <main className="mx-auto flex h-full w-full max-w-[1400px] flex-col gap-3 overflow-hidden px-4 py-3">
@@ -381,78 +371,43 @@ function HuntingInner() {
           )}
         </section>
 
-        {/* ── tag 切换 + 瀑布流（精选 PickCard / 跟踪 WatchCard 同构混排）── */}
+        {/* ── 猎场瀑布流（2026-09-09 用户指令：取消 tab 分类，单容器混排——
+            条目自带「盘中跟踪/盘前选择」来源标注，瀑布流无缝补位）── */}
         <section className="space-y-2">
-          <div className="flex items-center gap-1.5">
-            {TAG_TABS.map((t) => (
-              <button
-                key={t.key}
-                onClick={() => switchTag(t.key)}
-                className={`rounded-full px-3 py-1 text-xs transition-colors ${
-                  tag === t.key
-                    ? "bg-zinc-900 font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
-                    : "border border-zinc-300 text-zinc-500 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-100"
-                }`}
-              >
-                {t.label}
-              </button>
-            ))}
-            <span className="ml-2 text-[10px] text-zinc-400">
-              {tag === "watch" ? "当日实时动态名单，随盘面重算" : tag === "pick" ? "收盘定次日 · 换股门槛 15 分" : "精选与跟踪合并视图"}
-            </span>
-          </div>
-
-          {/* 精选瀑布流 */}
-          {(tag === "all" || tag === "pick") && (
-            <div>
-              {!picksLoaded ? (
-                <CardListSkeleton count={3} />
-              ) : picksFailed ? (
-                <div className="rounded-lg border border-zinc-200 px-3 py-2.5 text-xs text-zinc-400 dark:border-zinc-800">
-                  精选数据不可用（后端不可达或端点失败）——每 60s 自动重试。
-                </div>
-              ) : items.length === 0 ? (
-                <p className="py-8 text-center text-sm text-zinc-400">
-                  尚无精选组合。点右上「生成/刷新组合」跑一次五维评分管线
-                  <br />
-                  （候选池 = 活跃事件标的池 ∪ 当日涨停池 ∪ 热股榜，≤5 只输出，全程可解释不构成买卖建议）。
-                </p>
-              ) : (
-                <FadeIn>
-                  <MasonryColumns>
-                    {items.map((it) => (
-                      <PickCard key={it.symbol} item={it} />
-                    ))}
-                  </MasonryColumns>
-                </FadeIn>
-              )}
+          <p className="text-[10px] text-zinc-400">
+            盘中跟踪 · 当日实时随盘面重算 ｜ 盘前选择 · 收盘定次日（换股门槛 15 分）——来源标注在条目右上角
+          </p>
+          {picksFailed && intradayFailed ? (
+            <div className="rounded-lg border border-zinc-200 px-3 py-2.5 text-xs text-zinc-400 dark:border-zinc-800">
+              精选与跟踪数据均不可用（后端不可达或端点失败）——每 60s 自动重试。
             </div>
+          ) : pending ? (
+            <CardListSkeleton count={3} />
+          ) : mergedItems.length === 0 ? (
+            <p className="py-8 text-center text-sm text-zinc-400">
+              暂无跟踪标的与精选组合——盘中候选成形后自动出现；也可点右上「生成/刷新组合」跑一次五维评分管线
+              <br />
+              （候选池 = 活跃事件标的池 ∪ 当日涨停池 ∪ 热股榜，≤5 只输出，全程可解释不构成买卖建议）。
+            </p>
+          ) : (
+            <FadeIn>
+              <MasonryColumns>
+                {mergedItems.map(({ kind, it }) =>
+                  kind === "watch" ? (
+                    <WatchCard key={it.symbol} item={it} flow />
+                  ) : (
+                    <PickCard key={it.symbol} item={it} />
+                  ),
+                )}
+              </MasonryColumns>
+              {top?.criteria && <p className="mt-1 text-[10px] text-zinc-400">{top.criteria}</p>}
+            </FadeIn>
           )}
-
-          {/* 跟踪瀑布流（intraday-top 最推荐标的，与工作台「盘中跟踪」分组同源） */}
-          {(tag === "all" || tag === "watch") && (
-            <div>
-              {!intradayLoaded ? (
-                <CardListSkeleton count={3} />
-              ) : intradayFailed ? (
-                <div className="rounded-lg border border-zinc-200 px-3 py-2.5 text-xs text-zinc-400 dark:border-zinc-800">
-                  跟踪数据不可用（后端不可达或端点失败）——每 60s 自动重试。
-                </div>
-              ) : topItems.length === 0 ? (
-                <p className="py-8 text-center text-sm text-zinc-400">
-                  暂无跟踪标的（当日无涨停数据或候选未成形）——盘中动态重算，稍后自动更新。
-                </p>
-              ) : (
-                <FadeIn>
-                  <MasonryColumns>
-                    {topItems.map((it) => (
-                      <WatchCard key={it.symbol} item={it} flow />
-                    ))}
-                  </MasonryColumns>
-                  <p className="mt-1 text-[10px] text-zinc-400">{top?.criteria}</p>
-                </FadeIn>
-              )}
-            </div>
+          {(picksFailed || intradayFailed) && (
+            <p className="text-[10px] text-amber-500">
+              {picksFailed ? "盘前选择数据不可用（每 60s 自动重试）" : ""}
+              {intradayFailed ? "盘中跟踪数据不可用（每 60s 自动重试）" : ""}
+            </p>
           )}
         </section>
 

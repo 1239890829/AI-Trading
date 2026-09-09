@@ -255,12 +255,12 @@ function WorkbenchInner() {
   }, 60_000);
 
   // 分组清单由 groupMap 派生（旧代码是独立的 groups 状态，从未被赋值，chips 永远只有「全部」）
-  // 「每日精选」「盘中跟踪」是动态分组的保留名，用户分组里排除（防 chips 重名撞 key）
+  // 「猎场」是动态分组的保留名（2026-09-09 合并原「每日精选」「盘中跟踪」），用户分组里排除（防 chips 重名撞 key）
   const groups = useMemo(
     () =>
       allGroupNames
         .filter((g, i) => g !== "默认" && allGroupNames.indexOf(g) === i)
-        .filter((g) => g !== "每日精选" && g !== "盘中跟踪")
+        .filter((g) => g !== "每日精选" && g !== "盘中跟踪" && g !== "猎场")
         .sort(),
     [allGroupNames]
   );
@@ -281,23 +281,28 @@ function WorkbenchInner() {
     [realSymbols, merged]
   );
   // ── 动态分组视图（2026-09-04）：标的来自系统推荐口径，行数据=行情(merged)×推荐信息 ──
-  const picksQuotes: Quote[] = useMemo(
-    () => picksSymbols.map((s) => merged[s]).filter(Boolean),
-    [picksSymbols, merged]
-  );
-  const topQuotes: Quote[] = useMemo(
-    () => topSymbols.map((s) => merged[s]).filter(Boolean),
-    [topSymbols, merged]
-  );
+  // （2026-09-09 起两源合入「猎场」组——picksQuotes/topQuotes 独立视图已移除，见 huntingQuotes）
+  // 「猎场」合并视图（2026-09-09 用户指令）：每日精选+盘中跟踪合为一组，行内徽标区分来源——
+  // 盘中跟踪在前（实时优先），同股去重（跟踪优先）
+  const huntingQuotes: Quote[] = useMemo(() => {
+    const seen = new Set<string>();
+    const out: Quote[] = [];
+    for (const s of [...topSymbols, ...picksSymbols]) {
+      if (seen.has(s)) continue;
+      seen.add(s);
+      const q = merged[s];
+      if (q) out.push(q);
+    }
+    return out;
+  }, [topSymbols, picksSymbols, merged]);
   const pickInfoBySymbol = useMemo(() => new Map(picksItems.map((i) => [i.symbol, i])), [picksItems]);
   const topInfoBySymbol = useMemo(() => new Map(topItems.map((i) => [i.symbol, i])), [topItems]);
   // 当前激活视图的行数据（三个特殊视图各走各的数据源）
   const activeRows: Quote[] =
     activeGroup === "持仓" ? holdingQuotes
-    : activeGroup === "每日精选" ? picksQuotes
-    : activeGroup === "盘中跟踪" ? topQuotes
+    : activeGroup === "猎场" ? huntingQuotes
     : watchQuotes;
-  const isDynamicGroup = activeGroup === "每日精选" || activeGroup === "盘中跟踪";
+  const isDynamicGroup = activeGroup === "猎场";
   // spark 数据按 symbol 建索引，行内 O(1) 取（评审 F2：行内 find 是 O(n²)）
   const sparkBySymbol = useMemo(() => {
     const m = new Map<string, number[]>();
@@ -477,8 +482,7 @@ function WorkbenchInner() {
         <Panel
           title={
             activeGroup === "持仓" ? `真实持仓 (${holdingQuotes.length})`
-            : activeGroup === "每日精选" ? `每日精选 · ${picksDate ?? "未生成"} (${picksQuotes.length})`
-            : activeGroup === "盘中跟踪" ? `盘中跟踪 (${topQuotes.length})`
+            : activeGroup === "猎场" ? `猎场 · ${picksDate ?? "未生成"} (${huntingQuotes.length})`
             : "自选股"
           }
           extra={
@@ -520,9 +524,9 @@ function WorkbenchInner() {
               竖线区隔（持仓不是分组，是真实持仓账本视角）；管理模式下
               提供 新建 / 重命名 / 删除 分组（保护规则在后端）。────── */}
           <div className="sticky top-0 z-10 flex flex-wrap items-center gap-1 border-b border-zinc-100 bg-white/95 px-3 py-1.5 dark:border-zinc-800/60 dark:bg-zinc-950/95">
-            {["全部", "持仓", "默认", ...groups, "每日精选", "盘中跟踪"].map((g) => (
+            {["全部", "持仓", "默认", ...groups, "猎场"].map((g) => (
               <span key={g} className="flex items-center gap-1">
-                {(g === "持仓" || g === "默认" || g === "每日精选") && (
+                {(g === "持仓" || g === "默认" || g === "猎场") && (
                   <span className="mx-0.5 h-4 w-px bg-zinc-200 dark:bg-zinc-800" aria-hidden />
                 )}
                 <button
@@ -533,8 +537,7 @@ function WorkbenchInner() {
                 >
                   {g}
                   {g === "持仓" && realSymbols.length > 0 && <span className="ml-1 text-[10px] text-zinc-400">{realSymbols.length}</span>}
-                  {g === "每日精选" && picksItems.length > 0 && <span className="ml-1 text-[10px] text-zinc-400">{picksItems.length}</span>}
-                  {g === "盘中跟踪" && topItems.length > 0 && <span className="ml-1 text-[10px] text-zinc-400">{topItems.length}</span>}
+                  {g === "猎场" && huntingQuotes.length > 0 && <span className="ml-1 text-[10px] text-zinc-400">{huntingQuotes.length}</span>}
                 </button>
               </span>
             ))}
@@ -567,7 +570,7 @@ function WorkbenchInner() {
               </span>
             )}
           </div>
-          {!baseLoaded || (activeGroup === "每日精选" && !dynReady.picks) || (activeGroup === "盘中跟踪" && !dynReady.top) ? (
+          {!baseLoaded || (activeGroup === "猎场" && (!dynReady.picks || !dynReady.top)) ? (
             /* 首拉未完成 → 行骨架占位（同构 table 行高），空态文案不抢跑 */
             <div className="space-y-2.5 px-3 py-3" aria-hidden>
               {Array.from({ length: 5 }, (_, i) => (
@@ -582,17 +585,11 @@ function WorkbenchInner() {
                   <br />
                   （按你在券商的实际成交价）。
                 </>
-              ) : activeGroup === "每日精选" ? (
+              ) : activeGroup === "猎场" ? (
                 <>
-                  今日尚无精选组合（每日精选在收盘后生成次日名单）。
+                  猎场暂无标的——盘中跟踪随盘面实时重算（候选成形自动出现，宁缺毋滥）；
                   <br />
-                  生成后本组自动同步，无需手动添加。
-                </>
-              ) : activeGroup === "盘中跟踪" ? (
-                <>
-                  当前没有满足多维筛选的跟踪标的
-                  <br />
-                  （确定性/辨识度未达「高」阈值，宁缺毋滥）。
+                  盘前选择在收盘后生成次日名单（右上「生成/刷新组合」也可手动跑）。
                 </>
               ) : (
                 <>
@@ -610,8 +607,8 @@ function WorkbenchInner() {
             <table className="w-full table-fixed text-sm">
               <tbody>
                 {activeRows.map((q) => {
-                  const pick = activeGroup === "每日精选" ? pickInfoBySymbol.get(q.symbol) : undefined;
-                  const top = activeGroup === "盘中跟踪" ? topInfoBySymbol.get(q.symbol) : undefined;
+                  const pick = activeGroup === "猎场" ? pickInfoBySymbol.get(q.symbol) : undefined;
+                  const top = activeGroup === "猎场" ? topInfoBySymbol.get(q.symbol) : undefined;
                   return (
                   <tr
                     key={q.symbol}
@@ -623,6 +620,19 @@ function WorkbenchInner() {
                     <td className="min-w-0 px-3 py-2">
                       <div className="truncate font-mono text-xs text-zinc-400">
                         {q.symbol}
+                        {/* 猎场合并视图：行内来源徽标（2026-09-09 用户指令，取代分组名区分）——
+                            同股两者都在时按「盘中跟踪」标（实时口径优先） */}
+                        {activeGroup === "猎场" && (
+                          <span
+                            className={`ml-1.5 rounded px-1 text-[10px] ${
+                              top != null
+                                ? "bg-sky-500/10 text-sky-600 dark:text-sky-300"
+                                : "bg-amber-500/10 text-amber-600 dark:text-amber-300"
+                            }`}
+                          >
+                            {top != null ? "盘中跟踪" : "盘前选择"}
+                          </span>
+                        )}
                         {pick != null && (
                           <span
                             className="ml-1.5 rounded bg-up/10 px-1 text-[10px] text-up"

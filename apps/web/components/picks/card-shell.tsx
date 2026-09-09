@@ -20,16 +20,20 @@ import { StockLink } from "@/components/stock-link";
 export function CardShell({
   flow = false,
   className = "",
+  onClick,
   children,
 }: {
   /** 瀑布流单元模式：附加 break-inside-avoid + 底部间距 */
   flow?: boolean;
   className?: string;
+  /** 整卡点击（2026-09-09 用户反馈：盘中跟踪卡点击跳工作台）——传入后整卡 cursor-pointer */
+  onClick?: () => void;
   children: ReactNode;
 }) {
   return (
     <div
-      className={`rounded-xl border border-zinc-200 p-3 dark:border-zinc-800 ${flow ? "mb-3 break-inside-avoid" : ""} ${className}`}
+      onClick={onClick}
+      className={`rounded-xl border border-zinc-200 p-3 dark:border-zinc-800 ${flow ? "mb-3 break-inside-avoid" : ""} ${onClick ? "cursor-pointer transition-colors hover:border-zinc-300 dark:hover:border-zinc-700" : ""} ${className}`}
     >
       {children}
     </div>

@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 
 import { CardHead, CardShell } from "@/components/picks/card-shell";
 import { ROLE_STYLE } from "@/components/picks/pick-card";
+import { useStockRowNav } from "@/components/stock-link";
 import { fmt, pctColor, pctText, triText } from "@/lib/format";
 import type { IntradayTopStock, OpportunityStock } from "@/lib/api";
 
@@ -69,14 +70,24 @@ export function WatchCard({
   /** 弹窗场景的尾部说明（如「多维筛选动态名单」口径注记） */
   children?: ReactNode;
 }) {
+  // 整行点击跳工作台（2026-09-09 用户反馈：盘中跟踪条目点击无响应）——仅瀑布流模式
+  const stockNav = useStockRowNav();
   return (
-    <CardShell flow={flow}>
-      {/* 头：名称代码 + T 档徽标（有 tier 才显示，OpportunityStock 无）+ 涨跌幅（无现价字段，不臆造） */}
+    <CardShell flow={flow} onClick={flow ? stockNav(item.symbol) : undefined}>
+      {/* 头：名称代码 + 来源标注 + T 档徽标（有 tier 才显示，OpportunityStock 无）+ 涨跌幅/现价 */}
       <CardHead
         name={item.name}
         symbol={item.symbol}
         right={
           <>
+            {flow && (
+              <span
+                className="rounded bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-600 dark:text-sky-300"
+                title="来源：盘中跟踪（当日实时随盘面重算）"
+              >
+                盘中跟踪
+              </span>
+            )}
             {item.tier != null && (
               <span
                 className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${

@@ -71,8 +71,10 @@ export function MasonryColumns({
     setLayout(null);
   }, [cols, count]);
 
-  // 列数上限 = ⌈卡数/2⌉：避免「一列只有 1 张卡」的孤悬感（5 卡最多 2 列更饱满）
-  const maxCols = cols == null ? null : Math.min(cols, Math.max(1, Math.ceil(count / 2)));
+  // 2026-09-09 用户反馈：移除「列数 ≤ ⌈卡数/2⌉」上限——该上限让少卡时退化为
+  // 单列独占整行（2 卡=1 列），与「铺满多列」预期相反。实际列数由下方
+  // 「最高列最矮」自动选择决定：列数只有在真正降低总高时才会增加。
+  const maxCols = cols;
   const current = layout ?? roundRobin(count, maxCols ?? 1);
 
   useLayoutEffect(() => {

@@ -1,6 +1,7 @@
 "use client";
 
 import { CardHead, CardShell } from "@/components/picks/card-shell";
+import { useStockRowNav } from "@/components/stock-link";
 import { fmt, pctColor, pctText } from "@/lib/format";
 import type { DailyPickItem, StandAsideGate } from "@/lib/api";
 
@@ -58,15 +59,23 @@ function Chip({ text, title, className }: { text: string; title?: string; classN
 }
 
 export function PickCard({ item }: { item: DailyPickItem }) {
+  // 整行点击跳工作台（与 WatchCard 行为一致；名字 StockLink 同 URL 双触发无害）
+  const stockNav = useStockRowNav();
   return (
-    <CardShell flow>
-      {/* 头：名称代码 + 现价 + 综合分（名称/代码可点 → 工作台详情，联动切片 F） */}
+    <CardShell flow onClick={stockNav(item.symbol)}>
+      {/* 头：名称代码 + 来源标注 + 现价 + 综合分（名称/代码可点 → 工作台详情，联动切片 F） */}
       <CardHead
         name={item.name}
         symbol={item.symbol}
         link
         right={
           <>
+            <span
+              className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-600 dark:text-amber-300"
+              title="来源：盘前选择（收盘后生成次日名单，换股门槛 15 分）"
+            >
+              盘前选择
+            </span>
             <div className="font-mono text-base font-semibold tabular-nums">{fmt(item.price)}</div>
             <div className={`font-mono text-[10px] tabular-nums ${pctColor(item.change_pct)}`}>{pctText(item.change_pct)}</div>
           </>
