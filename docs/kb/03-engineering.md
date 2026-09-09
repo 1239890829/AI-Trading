@@ -62,3 +62,14 @@
 ### KB-ENG-15 memory 日志写入用绝对路径
 - 后台/复合命令里相对路径 `>> .workbuddy/memory/...` 因 cwd 漂移写错位置（09-08 实际发生）。
 - **正确做法**：一律绝对路径 `/Users/hezifeng/Desktop/project/ms/ashare-ai-trader/.workbuddy/memory/YYYY-MM-DD.md`。
+
+
+### KB-ENG-16 flex 高度链：中间层块级元素会让 overflow-y-auto 全部失效
+- **现象**（两次踩坑，用户明令不再犯）：面板内容超高时页面无法滚动——overflow-auto 容器拿到的
+  是「内容高」而非「受限高」，滚动永不触发。
+- **根因**：flex 高度链在中间层断掉。FadeSwap 等 tab wrapper 若是**块级元素**（未设
+  flex flex-col），其子面板的 flex-1/min-h-0 不产生约束高度 → 内部 overflow-y-auto 失效。
+- **正确做法**：高度链每一层都要接力——wrapper `flex min-h-0 flex-1 flex flex-col overflow-hidden`，
+  面板根 `h-full min-h-0` + 自管滚动（overflow-y-auto 或内部分栏各自滚）。
+  **新建任何「左树右详情/上表下详情」面板时，先把高度链从头到尾写对再写内容。**
+- **自查命令**：浏览器 eval `pane.scrollHeight > pane.clientHeight && pane.scrollTop 可设置`。

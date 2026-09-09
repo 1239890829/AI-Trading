@@ -77,7 +77,10 @@ function AgentInner() {
         </span>
       </div>
 
-      <FadeSwap swapKey={tab} className="min-h-0 flex-1">
+            {/* 高度链纪律：wrapper 必须 flex flex-col + bounded——块级会让子面板的
+          overflow-y-auto 全部失效（内容超高不可滚，两次踩坑）。
+          各 tab 根节点约定 h-full min-h-0 + 自管滚动。 */}
+      <FadeSwap swapKey={tab} className="min-h-0 flex-1 flex flex-col overflow-hidden">
         {tab === "evolution" && <EvolutionTab />}
         {tab === "tasks" && <TaskCenter />}
         {tab === "review" && <ReviewTab focusDate={reviewDate} />}
