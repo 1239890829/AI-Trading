@@ -36,11 +36,11 @@ export function NavBar() {
 
   return (
     <header className="sticky top-0 z-40 border-b border-zinc-200 bg-white/90 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/90">
-      <div className="mx-auto flex h-14 max-w-7xl items-center gap-6 px-4">
-        <Link href="/workbench" className="whitespace-nowrap font-semibold tracking-tight">
+      <div className="mx-auto flex h-14 max-w-7xl items-center gap-2 overflow-hidden px-2 sm:gap-4 sm:px-4 lg:gap-6">
+        <Link href="/workbench" className="shrink-0 whitespace-nowrap font-semibold tracking-tight">
           AShare <span className="text-up">AI</span> Trader
         </Link>
-        <nav className="hidden items-center gap-1 md:flex">
+        <nav className="hidden shrink-0 items-center gap-0.5 md:flex lg:gap-1">
           {LINKS.map((l) => {
             const active = pathname.startsWith(l.href);
             return (

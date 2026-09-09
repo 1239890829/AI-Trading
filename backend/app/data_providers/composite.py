@@ -275,7 +275,33 @@ class CompositeProvider:
         return await self._call("get_limit_up_pool", trade_date)
 
     async def get_limit_down_pool(self, trade_date: date) -> list:
-        return await self._call("get_limit_down_pool", trade_date)
+        """跌停池专用 failover（2026-09-09 修复「all providers failed: empty」误报）。
+
+        语义与涨停池不同：**空池是合法状态**——强势日（如 09-08 糖业涨停潮 73 家
+        涨停）跌停 0 家是真实行情，东财上游 rc:0 + tc:0 + pool:[] 即明确证据。
+        通用 _call 的「空=失败累计」会把三源一致的合法空池误报为
+        "all providers failed"，还会把源打进熔断。
+
+        规则：任一源正常返回（无论空否）→ 采用（多源时取第一个非空，否则空）；
+        全部异常/熔断 → ProviderError。
+        """
+        errors: list[str] = []
+        saw_empty = False
+        for p in self._pick("get_limit_down_pool"):
+            if self._in_cooldown("get_limit_down_pool", p.name):
+                errors.append(f"{p.name}: 熔断冷却中（{self._cooldown_left('get_limit_down_pool', p.name):.0f}s）")
+                continue
+            try:
+                rows = await p.get_limit_down_pool(trade_date)
+                if rows:
+                    return rows
+                saw_empty = True  # 该源正常响应但空池——合法，继续看其他源
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{p.name}: {exc}")
+                self._record_failure("get_limit_down_pool", p.name)
+        if saw_empty:
+            return []  # 有源明确返回空池 → 合法空，不报错
+        raise ProviderError(f"all providers failed for get_limit_down_pool: {'; '.join(errors)}")
 
     async def get_longhu_records(self, trade_date: date) -> list:
         return await self._call("get_longhu_records", trade_date)

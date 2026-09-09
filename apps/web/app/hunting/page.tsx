@@ -59,6 +59,7 @@ import {
   TableSkeleton,
 } from "@/components/ui/loading";
 import { timeText } from "@/lib/format";
+import { MasonryColumns } from "@/components/masonry-columns";
 
 /**
  * 猎场（/hunting，2026-09-08 板块融合 docs/system-audit-20260908.md §三）：
@@ -418,11 +419,11 @@ function HuntingInner() {
                 </p>
               ) : (
                 <FadeIn>
-                  <div className="columns-1 gap-3 md:columns-2 xl:columns-3">
+                  <MasonryColumns>
                     {items.map((it) => (
                       <PickCard key={it.symbol} item={it} />
                     ))}
-                  </div>
+                  </MasonryColumns>
                 </FadeIn>
               )}
             </div>
@@ -443,11 +444,11 @@ function HuntingInner() {
                 </p>
               ) : (
                 <FadeIn>
-                  <div className="columns-1 gap-3 md:columns-2 xl:columns-3">
+                  <MasonryColumns>
                     {topItems.map((it) => (
                       <WatchCard key={it.symbol} item={it} flow />
                     ))}
-                  </div>
+                  </MasonryColumns>
                   <p className="mt-1 text-[10px] text-zinc-400">{top?.criteria}</p>
                 </FadeIn>
               )}

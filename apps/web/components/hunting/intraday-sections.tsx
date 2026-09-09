@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 
 import { ConceptDetailModal } from "@/components/concept-detail-modal";
+import { MasonryColumns } from "@/components/masonry-columns";
 import { WatchLedgerPanel } from "@/components/hunting/watch-ledger-panel";
 import { WatchCard } from "@/components/picks/watch-card";
 import { StockLink } from "@/components/stock-link";
@@ -157,10 +158,12 @@ export function ThemeCardView({
           )}
           {t.stocks.length > 0 ? (
             /* 猎场批次③：行式表格 → 与精选同构的 WatchCard 瀑布流（判定/理由在卡上，不再截断） */
-            <div className="mt-2 columns-1 gap-3 md:columns-2 xl:columns-3">
-              {t.stocks.map((s) => (
-                <WatchCard key={s.symbol} item={s} flow />
-              ))}
+            <div className="mt-2">
+              <MasonryColumns gap="gap-2">
+                {t.stocks.map((s) => (
+                  <WatchCard key={s.symbol} item={s} flow />
+                ))}
+              </MasonryColumns>
             </div>
           ) : (
             <p className="mt-2 text-[11px] text-zinc-400">该题材暂无梯队成员。</p>

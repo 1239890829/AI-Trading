@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Panel } from "@/components/panel";
 import { StockLink } from "@/components/stock-link";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
@@ -42,23 +42,29 @@ export function AlertsTab() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const didLoadRef = useRef(false);
   const load = useCallback(async () => {
+    // 平滑刷新（2026-09-09 用户反馈：轮询时页面闪烁）——仅首次加载走 loading
+    // 骨架；轮询时静默拉取，数据变化才 setState（JSON 浅比较跳过相同数据，
+    // 消除无谓重渲染与 sticky thead 抖动）。
+    const first = !didLoadRef.current;
+    didLoadRef.current = true;
     try {
-      setLoading(true);
+      if (first) setLoading(true);
       const [r, e, ch] = await Promise.all([
         listAlertRules(),
         listAlertEvents(30),
         getAlertChannels(),
       ]);
-      setRules(r);
-      setEvents(e);
+      setRules((prev) => (JSON.stringify(prev) === JSON.stringify(r) ? prev : r));
+      setEvents((prev) => (JSON.stringify(prev) === JSON.stringify(e) ? prev : e));
       setChannels(ch.available);
       setChannelConfig(ch.configured ?? {});
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "加载失败");
     } finally {
-      setLoading(false);
+      if (first) setLoading(false);
     }
   }, []);
 

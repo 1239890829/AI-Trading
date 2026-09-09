@@ -165,10 +165,13 @@ async def run_agenda():
 
 @router.get("/agent/experiments")
 async def list_experiments(limit: int = Query(30, ge=1, le=200)):
-    """实验记录本：A 类自动变更的后置验证（running/结论/自动回滚记录）。"""
-    from app.services import experiments
+    """实验记录本 + 影子队列（P1-4）：A 类变更的影子评估状态与后置验证记录。"""
+    from app.services import agent_params, experiments
 
-    return {"data": experiments.list_experiments(limit=limit)}
+    return {
+        "data": experiments.list_experiments(limit=limit),
+        "shadow_queue": agent_params.list_shadow_changes(),
+    }
 
 
 @router.get("/agent/audit")
