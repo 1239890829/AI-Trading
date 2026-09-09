@@ -619,11 +619,23 @@ def test_chat_route_grounding_silent_when_supported(client, monkeypatch):
 
 
 def test_chat_route_grounding_skipped_without_evidence(client, monkeypatch):
-    """没有注入任何数据时跳过校验（无基准即校验=全盘误杀，宁缺勿滥）。"""
+    """没有注入任何数据时跳过校验（无基准即校验=全盘误杀，宁缺勿滥）。
+
+    2026-09-09 起必须显式清空全部上下文源：autogen 让真实库每天都有「最近精选」，
+    _build_extra_context/build_market_context 不 mock 的话会读到真数据，
+    接地校验被触发——本测试验证的是「无基准跳过」分支，不是集成。
+    """
     monkeypatch.setattr(assistant_routes, "_open_stream",
                         lambda msgs: _FakeStream(["今天涨了 88.8 个点，听起来不错 38 家。"]))
     monkeypatch.setattr(assistant_routes, "_entity_payload",
                         lambda _req: {"stocks": [], "themes": []})  # 无字典 → 无快照
+    monkeypatch.setattr(assistant_routes, "_build_extra_context", lambda _req: "")  # 无持仓/精选/事件
+    monkeypatch.setattr(assistant_routes, "_tool_context", lambda *a, **k: None)
+
+    async def _no_market(*a, **k):
+        return ("", [])
+
+    monkeypatch.setattr(assistant_routes, "build_market_context", _no_market)
     resp = client.post("/api/assistant/chat", json={
         "messages": [{"role": "user", "content": "随便聊聊"}],
     })
