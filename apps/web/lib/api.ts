@@ -1785,6 +1785,12 @@ export interface IntradayTopStock {
   reason: string | null;
   tier: number;
   pick_basis: string;
+  /** 现价（全市场快照；缺失 null 显式 --） */
+  price?: number | null;
+  /** 止损参考位（risk.stop_loss_reference：档位基准/1.5ATR clamp 3%~12%） */
+  stop_ref?: { pct: number; price: number; basis: string } | null;
+  /** 出场纪律（risk.exit_discipline：止损/跟踪止盈/ROI 分档） */
+  exit_plan?: Record<string, unknown> | null;
 }
 
 export interface IntradayTopPayload {

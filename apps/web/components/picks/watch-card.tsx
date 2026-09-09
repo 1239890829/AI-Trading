@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 
 import { CardHead, CardShell } from "@/components/picks/card-shell";
 import { ROLE_STYLE } from "@/components/picks/pick-card";
-import { pctColor, pctText, triText } from "@/lib/format";
+import { fmt, pctColor, pctText, triText } from "@/lib/format";
 import type { IntradayTopStock, OpportunityStock } from "@/lib/api";
 
 /**
@@ -35,6 +35,9 @@ export interface WatchCardItem {
   reason?: string | null;
   pick_basis?: string | null;
   tier?: number | null;
+  price?: number | null;
+  stop_ref?: { pct: number; price: number; basis: string } | null;
+  exit_plan?: Record<string, unknown> | null;
 }
 
 /** 三态判定徽标：title 挂完整判定依据（可追溯）。 */
@@ -83,8 +86,15 @@ export function WatchCard({
                 T{item.tier} 跟踪档
               </span>
             )}
-            <div className={`mt-0.5 font-mono text-xs tabular-nums ${pctColor(item.change_pct ?? null)}`}>
-              {item.change_pct != null ? pctText(item.change_pct) : "--"}
+            <div className="mt-0.5 text-right">
+              <div className={`font-mono text-xs tabular-nums ${pctColor(item.change_pct ?? null)}`}>
+                {item.change_pct != null ? pctText(item.change_pct) : "--"}
+              </div>
+              {item.price != null && (
+                <div className="font-mono text-[10px] tabular-nums text-zinc-400" title="现价（全市场快照）">
+                  {fmt(item.price)}
+                </div>
+              )}
             </div>
           </>
         }
@@ -145,6 +155,44 @@ export function WatchCard({
           </div>
         )}
       </div>
+
+      {/* 止损参考 + 出场纪律（与 PickCard 出场分节同构；risk.py 同源计算） */}
+      {(item.stop_ref || item.exit_plan) && (
+        <div className="mt-2 space-y-0.5 rounded-lg border border-zinc-100 p-2 text-[11px] leading-relaxed dark:border-zinc-800">
+          {item.stop_ref && (
+            <div className="flex gap-1.5">
+              <span className="shrink-0 text-zinc-400">止损</span>
+              <span className="text-zinc-600 dark:text-zinc-300">
+                {fmt(item.stop_ref.price)}（-{item.stop_ref.pct}%，{item.stop_ref.basis}）
+              </span>
+            </div>
+          )}
+          {item.exit_plan &&
+            (() => {
+              // exit_discipline 结构：trailing_pct(数)/roi_ladder(阶梯)/note
+              const plan = item.exit_plan as {
+                trailing_pct?: number;
+                roi_ladder?: { gain_pct: number; action: string }[];
+                note?: string;
+              };
+              const rows: [string, string][] = [];
+              if (plan.trailing_pct != null) rows.push(["跟踪止盈", `回落 ${plan.trailing_pct}%`]);
+              if (plan.roi_ladder?.length) {
+                rows.push([
+                  "ROI 阶梯",
+                  plan.roi_ladder.map((r) => `+${r.gain_pct}%→${r.action}`).join("；").slice(0, 80),
+                ]);
+              }
+              if (plan.note) rows.push(["纪律", plan.note]);
+              return rows.map(([k, v]) => (
+                <div key={k} className="flex gap-1.5">
+                  <span className="shrink-0 text-zinc-400">{k}</span>
+                  <span className="text-zinc-600 dark:text-zinc-300">{v}</span>
+                </div>
+              ));
+            })()}
+        </div>
+      )}
 
       {children}
     </CardShell>

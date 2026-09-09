@@ -313,8 +313,27 @@ async def intraday_top(
     """
     from app.api.routes.market import _default_trade_date_async
     from app.picks.intraday_opportunity import top_watch_stocks
+    from app.picks.risk import exit_discipline, risk_tier_of, stop_loss_reference
 
     hub = request.app.state.hub
     trade_date = await _default_trade_date_async(hub)
     payload = await _build_opportunities(request, trade_date, 5, 8)
-    return {"data": top_watch_stocks(payload["data"], limit=limit), "meta": {}}
+    data = top_watch_stocks(payload["data"], limit=limit)
+
+    # 2026-09-09 用户需求「盘中跟踪卡片与每日精选一致」：补现价/止损参考/出场纪律
+    # （与 PickCard 分节同构；现价来自全市场快照，缺失显式 null 不臆造）
+    snap_by: dict[str, dict] = {}
+    try:
+        for row in getattr(request.app.state.snapshot_service, "snapshot", None) or []:
+            if row.get("symbol"):
+                snap_by[row["symbol"]] = row
+    except Exception:  # noqa: BLE001
+        pass
+    for it in data.get("items") or []:
+        price = (snap_by.get(it.get("symbol") or "") or {}).get("price")
+        it["price"] = price
+        tier = risk_tier_of(it.get("role") or "")
+        stop = stop_loss_reference(price=price, tier=tier)
+        it["stop_ref"] = stop
+        it["exit_plan"] = exit_discipline(tier)
+    return {"data": data, "meta": {}}
