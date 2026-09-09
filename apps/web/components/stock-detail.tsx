@@ -197,6 +197,17 @@ export function StockDetailPanel({
   // 全量接收（内部不丢数据），对外状态 3s 应用一次。1Hz PriceFlash 是每秒红绿
   // 闪的体感噪音源（列表修过、详情漏了的不对称）。
   const { quotes, status: streamStatus } = useQuoteStream([symbol], { throttleMs: 3000 });
+  // connecting 防抖（2026-09-09）：WS 秒连场景下"● 连接中"只闪现毫秒级——延迟 2s
+  // 才认为真异常；期间离开 connecting 态则取消。
+  const [connectingDebounced, setConnectingDebounced] = useState(false);
+  useEffect(() => {
+    if (streamStatus !== "connecting") {
+      setConnectingDebounced(false);
+      return;
+    }
+    const t = setTimeout(() => setConnectingDebounced(true), 2000);
+    return () => clearTimeout(t);
+  }, [streamStatus]);
   // WS 推送 → 渲染期合并进 quote（adjust-state 模式）：live 引用每拍必变，
   // 哨兵 appliedLive 保证同一帧只合并一次，语义与原 effect 版完全等价。
   const live = quotes[symbol];
@@ -582,9 +593,12 @@ export function StockDetailPanel({
 
       {/* ①¼ 实时连接状态：只在异常态显示。2026-09-07 去掉"● 休市"常驻；2026-09-08
           用户反馈"● WS 实时推送"同样不该常驻（正常态都不留痕）——条件从
-          `!== "closed"` 收紧为异常态白名单 STREAM_ABNORMAL，避免"上次只去了一半"。
-          异常态 connecting/polling/stale/error 必须可见。 */}
-      {STREAM_ABNORMAL.includes(streamStatus) && (
+          `!== "closed"` 收紧为异常态白名单 STREAM_ABNORMAL。
+          2026-09-09 用户反馈：connecting 只持续毫秒级（WS 秒连），每次进页都在
+          题材归属上方闪一下"● 连接中"——加 2s 防抖：正常快速连接不显示，
+          真卡住（>2s 仍在 connecting）才提示。polling/stale/error 立即显示。 */}
+      {STREAM_ABNORMAL.includes(streamStatus) &&
+        (streamStatus !== "connecting" || connectingDebounced) && (
         <div className="shrink-0 text-[10px]">
           <span className={STREAM_STATUS_LABEL[streamStatus].cls} title="行情连接状态（WebSocket 主通道，断线自动降级 REST 轮询）">
             ● {STREAM_STATUS_LABEL[streamStatus].text}
