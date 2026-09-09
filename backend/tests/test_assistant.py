@@ -630,7 +630,11 @@ def test_chat_route_grounding_skipped_without_evidence(client, monkeypatch):
     monkeypatch.setattr(assistant_routes, "_entity_payload",
                         lambda _req: {"stocks": [], "themes": []})  # 无字典 → 无快照
     monkeypatch.setattr(assistant_routes, "_build_extra_context", lambda _req: "")  # 无持仓/精选/事件
-    monkeypatch.setattr(assistant_routes, "_tool_context", lambda *a, **k: None)
+
+    async def _no_tools(*a, **k):
+        return None
+
+    monkeypatch.setattr(assistant_routes, "_tool_context", _no_tools)
 
     async def _no_market(*a, **k):
         return ("", [])
