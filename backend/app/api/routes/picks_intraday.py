@@ -228,8 +228,16 @@ async def _build_opportunities(
                     boards = s.get("boards") or 0
                     pct = s.get("change_pct")
                     cert_high = (s.get("certainty") or {}).get("level") == "高"
-                    if boards < 1 and (pct is None or pct < 5.0) and not cert_high:
-                        continue  # 量化门槛：无涨停/无显著涨幅/判定不足——不跟踪
+                    # KB-DEC-011（2026-09-09 用户指令，修订 KB-DEC-008）：涨停前识别才准入——
+                    # ① 已封板的候选一律不入册（封板后发现的=迟到，boards≥1 不再是准入条件）；
+                    # ② 未封板但未达临板区（板性×0.65）且判定不足——不跟踪
+                    from app.picks.pre_limit_radar import board_limit_pct, is_sealed, pre_limit_floor
+
+                    limit_pct = board_limit_pct(str(s["symbol"]), str(s.get("name") or ""))
+                    if pct is None or is_sealed(float(pct), limit_pct):
+                        continue
+                    if float(pct) < pre_limit_floor(limit_pct) and not cert_high:
+                        continue  # 未进临板区且判定不足——不跟踪
                     record_sighting(
                         trade_date=tdate, symbol=str(s["symbol"]),
                         name=str(s.get("name") or ""), layer=layer,
@@ -238,7 +246,7 @@ async def _build_opportunities(
                             "theme": th.get("theme"), "stage": th.get("stage"),
                             "tier": th.get("strength_tier"), "role": s.get("role"),
                             "certainty": s.get("certainty"),
-                            "gate": f"boards={boards} pct={pct}",
+                            "gate": f"pre_limit pct={pct} floor={pre_limit_floor(limit_pct)} limit={limit_pct:.0f}cm cert_high={cert_high}",
                             "basis": (s.get("reason") or "")[:200],
                         },
                         is_leader=s.get("role") in ("龙头", "空间板"),
@@ -248,7 +256,7 @@ async def _build_opportunities(
                     )
                     registered += 1
             if registered:
-                log.info("watch ledger: %d candidates registered (gate: boards>=1 or pct>=5 or cert=高)", registered)
+                log.info("watch ledger: %d candidates registered (gate: 临板区 or cert=高, 未封板——KB-DEC-011)", registered)
     cache.set(key, payload)
     return payload
 

@@ -602,32 +602,53 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
     # 入选依据 = kind/text/direction（入选时刻的证据快照）。失败只记日志不阻断分发。
     if alert.get("symbol"):
         with contextlib.suppress(Exception):
+            from app.picks.pre_limit_radar import board_limit_pct, is_sealed
             from app.picks.watch_ledger import record_sighting
 
             # 2026-09-09 用户指令：缺名称=无效提醒——name 空时从快照补，仍空则不登记
+            snap_pct: float | None = None
             if not alert.get("name"):
                 try:
                     snap_rows = getattr(app.state if hasattr(app, "state") else app, "snapshot_service", None)
                     for sr in getattr(snap_rows, "snapshot", None) or []:
                         if sr.get("symbol") == alert["symbol"]:
                             alert["name"] = sr.get("name") or ""
+                            snap_pct = sr.get("change_pct")
                             break
                 except Exception:  # noqa: BLE001
                     pass
             if not alert.get("name"):
                 log.warning("watcher alert %s 无名称且快照缺失——不入台账", alert["symbol"])
                 return False
-            record_sighting(
-                trade_date=beijing_now().date().isoformat(),
-                symbol=str(alert["symbol"]),
-                name=str(alert.get("name") or ""),
-                layer="today_strongest" if (rule_provider is not None) else "quiet_starting",
-                source_theme=str(alert.get("direction") or ""),
-                reason={"kind": alert.get("kind"), "text": (alert.get("text") or "")[:300],
-                        "direction": alert.get("direction") or ""},
-                entry_price=(alert.get("meta") or {}).get("trigger_value"),
-                entry_time=beijing_now().strftime("%H:%M:%S"),
-            )
+            # KB-DEC-011（2026-09-09 用户指令）：只有涨停前提醒过的才入台账——
+            # 提醒时刻已封板（或无行情佐证可证明未封板）→ 只提醒不入册
+            if snap_pct is None:
+                try:
+                    snap_rows = getattr(app.state if hasattr(app, "state") else app, "snapshot_service", None)
+                    for sr in getattr(snap_rows, "snapshot", None) or []:
+                        if sr.get("symbol") == alert["symbol"]:
+                            snap_pct = sr.get("change_pct")
+                            break
+                except Exception:  # noqa: BLE001
+                    pass
+            if snap_pct is None or is_sealed(float(snap_pct), board_limit_pct(str(alert["symbol"]), str(alert["name"]))):
+                log.warning(
+                    "watcher alert %s 提醒时已封板/无行情佐证（pct=%s）——KB-DEC-011 不入台账（提醒照发）",
+                    alert["symbol"], snap_pct,
+                )
+            else:
+                record_sighting(
+                    trade_date=beijing_now().date().isoformat(),
+                    symbol=str(alert["symbol"]),
+                    name=str(alert.get("name") or ""),
+                    layer="pre_limit" if alert.get("kind") == "pre_limit"
+                    else ("today_strongest" if (rule_provider is not None) else "quiet_starting"),
+                    source_theme=str(alert.get("direction") or ""),
+                    reason={"kind": alert.get("kind"), "text": (alert.get("text") or "")[:300],
+                            "direction": alert.get("direction") or ""},
+                    entry_price=(alert.get("meta") or {}).get("trigger_value"),
+                    entry_time=beijing_now().strftime("%H:%M:%S"),
+                )
     state = app.state if hasattr(app, "state") else app
     session_factory = get_session_factory()
     rule = rule_provider(session_factory) if rule_provider is not None else ensure_system_rule(session_factory)
