@@ -30,7 +30,7 @@ const SESSION_TABS: { key: NotificationItem["session"]; label: string }[] = [
 ];
 
 const LAST_SEEN_KEY = "ashare.notifications.lastSeenTs";
-const DISMISSED_KEY = "ashare.notifications.dismissedIds";
+const CLEAR_BEFORE_KEY = "ashare.notifications.clearBeforeTs";
 
 const CATEGORY_TONE: Record<NotificationItem["category"], string> = {
   opportunity: "bg-up/10 text-up",
@@ -104,32 +104,34 @@ export function NotificationBell() {
   const [tab, setTab] = useState<NotificationItem["session"]>("intraday");
   const [newsItem, setNewsItem] = useState<NewsModalItem | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
-  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [clearBefore, setClearBefore] = useState<string | null>(null);
 
-  const _readDismissed = (): Set<string> => {
+  const _readClearBefore = (): string | null => {
     try {
-      return new Set(JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? "[]") as string[]);
+      return localStorage.getItem(CLEAR_BEFORE_KEY);
     } catch {
-      return new Set();
+      return null;
     }
   };
 
-  /** 一键已读：推进 last_seen 到最新条目时间戳（未读徽标清零，条目保留） */
+  /** 一键已读（2026-09-09 用户反馈：连以前的记录也要已读）：
+      last_seen 直接推进到「现在」——时间语义覆盖一切历史条目，而非仅当前拉取窗口。 */
   const markAllRead = () => {
     try {
-      const latest = (payload?.items ?? []).reduce((m, i) => ((i.ts ?? "") > m ? (i.ts ?? "") : m), "");
-      if (latest) localStorage.setItem(LAST_SEEN_KEY, latest);
+      localStorage.setItem(LAST_SEEN_KEY, new Date().toISOString());
       setUnreadCount(0);
     } catch {}
   };
 
-  /** 一键清除：隐藏当前全部条目（dismissed 记 localStorage，按条目 key 永久过滤） */
+  /** 一键清除（同反馈）：记录清除时刻——ts 早于该时刻的条目（含窗口外历史）
+      全部隐藏；之后的新条目正常显示。比 id 集合完备（不漏未见过的旧记录）。 */
   const clearAll = () => {
     try {
-      const next = new Set(dismissed);
-      for (const i of payload?.items ?? []) next.add(i.id);
-      localStorage.setItem(DISMISSED_KEY, JSON.stringify([...next]));
-      setDismissed(next);
+      const ts = new Date().toISOString();
+      localStorage.setItem(CLEAR_BEFORE_KEY, ts);
+      setClearBefore(ts);
+      localStorage.setItem(LAST_SEEN_KEY, ts);
+      setUnreadCount(0);
     } catch {}
   };
 
@@ -148,6 +150,7 @@ export function NotificationBell() {
 
   // 打开抽屉即拉取 + 刷新已读时间戳；关闭后 60s 轮询维持未读点新鲜（轻量：只在打开过一次后启用）
   useEffect(() => {
+    setClearBefore(_readClearBefore());
     if (!open) return;
     void load();
   }, [open, load]);
@@ -167,8 +170,10 @@ export function NotificationBell() {
         const p = await getNotifications();
         if (!alive) return;
         const last = localStorage.getItem(LAST_SEEN_KEY);
-        const dismissedSet = _readDismissed();
-        setUnreadCount(p.items.filter((i) => !dismissedSet.has(i.id) && (i.ts ?? "") > (last ?? "")).length);
+        const cb = _readClearBefore();
+        setUnreadCount(
+          p.items.filter((i) => !((i.ts ?? "") && cb && (i.ts as string) < cb) && (i.ts ?? "") > (last ?? "")).length,
+        );
       } catch {}
     };
     void check();
@@ -181,9 +186,12 @@ export function NotificationBell() {
 
   const bySession = useMemo(() => {
     const m: Record<NotificationItem["session"], NotificationItem[]> = { pre_open: [], intraday: [], after_close: [] };
-    for (const i of payload?.items ?? []) if (!dismissed.has(i.id)) m[i.session].push(i);
+    for (const i of payload?.items ?? []) {
+      if (clearBefore && i.ts && i.ts < clearBefore) continue;
+      m[i.session].push(i);
+    }
     return m;
-  }, [payload, dismissed]);
+  }, [payload, clearBefore]);
 
   return (
     <>
@@ -288,23 +296,21 @@ export function NotificationBell() {
                     {tab === "intraday" ? "盘中暂无通知（watcher 确认/证伪提醒与评分达标新闻会出现在这里）" : "该时段暂无通知"}
                   </p>
                 )}
-                {payload?.items.map((i) =>
-                  i.session === tab ? (
-                    i.symbol ? (
-                      <div key={i.id} className="flex items-start gap-2">
-                        <NotificationRow item={i} onOpenNews={setNewsItem} />
-                        <StockLink
-                          symbol={i.symbol}
-                          className="mt-2.5 shrink-0 rounded border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-400 dark:border-zinc-700"
-                          title={`查看 ${i.symbol} 行情详情`}
-                        >
-                          行情 ↗
-                        </StockLink>
-                      </div>
-                    ) : (
-                      <NotificationRow key={i.id} item={i} onOpenNews={setNewsItem} />
-                    )
-                  ) : null,
+                {bySession[tab].map((i) =>
+                  i.symbol ? (
+                    <div key={i.id} className="flex items-start gap-2">
+                      <NotificationRow item={i} onOpenNews={setNewsItem} />
+                      <StockLink
+                        symbol={i.symbol}
+                        className="mt-2.5 shrink-0 rounded border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-400 dark:border-zinc-700"
+                        title={`查看 ${i.symbol} 行情详情`}
+                      >
+                        行情 ↗
+                      </StockLink>
+                    </div>
+                  ) : (
+                    <NotificationRow key={i.id} item={i} onOpenNews={setNewsItem} />
+                  ),
                 )}
                 {payload?.errors && (
                   <p className="pt-1 text-[10px] text-amber-500/90" title={Object.entries(payload.errors).map(([k, v]) => `${k}: ${v}`).join("；")}>
