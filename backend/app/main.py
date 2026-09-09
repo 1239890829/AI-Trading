@@ -304,6 +304,12 @@ async def lifespan(app: FastAPI):
 
     radar_task = asyncio.create_task(pre_limit_loop(app, stop=radar_stop), name="pre-limit-radar")
 
+    # 持仓监护（闭环「离场」段）：止损/移动止盈/弱转强识别，交易时段 15s 一轮
+    position_stop = asyncio.Event()
+    from app.picks.exit_engine import position_loop
+
+    position_task = asyncio.create_task(position_loop(app, stop=position_stop), name="position-monitor")
+
     async def paper_matcher():
         # 技术债 #5：无挂单时空转降频（30s 查一次挂单表），有挂单才 5s 密集轮询
         interval = 5.0
@@ -554,6 +560,7 @@ async def lifespan(app: FastAPI):
     data_health_stop.set()
     picks_autogen_stop.set()
     radar_stop.set()
+    position_stop.set()
     if ths_sentinel_task is not None:
         ths_sentinel_stop.set()
     if sentiment_monitor_task is not None:
@@ -584,6 +591,7 @@ async def lifespan(app: FastAPI):
     await _reap(triage_task, name="alert-triage")
     await _reap(evolution_task, name="evolution-agenda")
     await _reap(radar_task, name="pre-limit-radar")
+    await _reap(position_task, name="position-monitor")
     if picks_autogen_task is not None:
         await _reap(picks_autogen_task, name="picks-autogen")
     await _reap(data_health_task, name="data-health-sentinel")

@@ -35,6 +35,7 @@ import {
   type PaperPositionInfo,
   type RiskState,
   type SparklinePayload,
+  getPositionLabels,
 } from "@/lib/api";
 import { fmt, fmtAmount, isHardQuality, pctColor, pctText, triText } from "@/lib/format";
 import { isTradingSession } from "@/lib/market-hours";
@@ -295,6 +296,17 @@ function WorkbenchInner() {
     }
     return out;
   }, [topSymbols, picksSymbols, merged]);
+  // 闭环「标签」（2026-09-09）：已模拟持仓/已真实持仓（60s 轮询派生接口）
+  const [posLabels, setPosLabels] = useState<Record<string, string>>({});
+  useEffect(() => {
+    const load = () => {
+      getPositionLabels().then(setPosLabels).catch(() => {});
+    };
+    load();
+    const t = setInterval(load, 60_000);
+    return () => clearInterval(t);
+  }, []);
+
   const pickInfoBySymbol = useMemo(() => new Map(picksItems.map((i) => [i.symbol, i])), [picksItems]);
   const topInfoBySymbol = useMemo(() => new Map(topItems.map((i) => [i.symbol, i])), [topItems]);
   // 当前激活视图的行数据（三个特殊视图各走各的数据源）
@@ -631,6 +643,18 @@ function WorkbenchInner() {
                             }`}
                           >
                             {top != null ? "盘中跟踪" : "盘前选择"}
+                          </span>
+                        )}
+                        {activeGroup === "猎场" && posLabels[q.symbol] && (
+                          <span
+                            className={`ml-1 rounded px-1 text-[10px] font-medium ${
+                              posLabels[q.symbol] === "real"
+                                ? "bg-rose-500/10 text-rose-500"
+                                : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"
+                            }`}
+                            title="持仓状态派生标签；卖出/删流水后自动消失"
+                          >
+                            {posLabels[q.symbol] === "real" ? "已真实持仓" : "已模拟持仓"}
                           </span>
                         )}
                         {pick != null && (

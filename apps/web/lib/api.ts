@@ -2319,3 +2319,8 @@ export async function getAgentKbFile(path: string): Promise<{ path: string; cont
   const q = new URLSearchParams({ path });
   return (await getJson<{ path: string; content: string }>(`/api/agent/kb/file?${q.toString()}`)).data;
 }
+
+/** 闭环「标签」：symbol → 已模拟持仓(sim)/已真实持仓(real)——持仓状态派生，卖出自动消失 */
+export async function getPositionLabels(): Promise<Record<string, "sim" | "real">> {
+  return (await getJson<{ labels: Record<string, "sim" | "real"> }>("/api/picks/position-labels")).data.labels;
+}

@@ -649,6 +649,20 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
                     entry_price=(alert.get("meta") or {}).get("trigger_value"),
                     entry_time=beijing_now().strftime("%H:%M:%S"),
                 )
+    # 仓位引擎（2026-09-09 闭环「持仓」段）：买点/确认触发 → 是否自动开模拟仓由
+    # 引擎按当日盘面裁定（阶段仓位上限/闸门/角色权重/确定性门槛）——嗅到≠买入，
+    # pre_limit 预警不在开仓白名单。
+    if alert.get("kind") in ("buy_point", "confirm"):
+        with contextlib.suppress(Exception):
+            from app.picks.position_engine import maybe_open
+
+            await maybe_open(
+                app,
+                symbol=str(alert["symbol"]), name=str(alert.get("name") or ""),
+                trigger=str(alert["kind"]),
+                price=(alert.get("meta") or {}).get("trigger_value"),
+            )
+
     state = app.state if hasattr(app, "state") else app
     session_factory = get_session_factory()
     rule = rule_provider(session_factory) if rule_provider is not None else ensure_system_rule(session_factory)

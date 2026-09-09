@@ -29,6 +29,7 @@ import {
   type SignalHealthPayload,
   type StyleRouting,
   type WatcherState,
+  getPositionLabels,
 } from "@/lib/api";
 import { PickCard, StandAsideBanner } from "@/components/picks/pick-card";
 import { WatchCard } from "@/components/picks/watch-card";
@@ -239,6 +240,17 @@ function HuntingInner() {
 
   // 猎场合并瀑布流（2026-09-09 用户指令：取消 tab，单容器混排——
   // 盘中跟踪在前（实时优先），盘前选择跟随；同股两者都在时跟踪卡优先（防重 key））
+  // 闭环「标签」：已模拟持仓/已真实持仓（持仓状态派生，60s 轮询）
+  const [posLabels, setPosLabels] = useState<Record<string, string>>({});
+  useEffect(() => {
+    const load = () => {
+      getPositionLabels().then(setPosLabels).catch(() => {});
+    };
+    load();
+    const t = setInterval(load, 60_000);
+    return () => clearInterval(t);
+  }, []);
+
   const mergedItems = useMemo(() => {
     const topSyms = new Set(topItems.map((t) => t.symbol));
     return [
@@ -394,9 +406,9 @@ function HuntingInner() {
               <MasonryColumns>
                 {mergedItems.map(({ kind, it }) =>
                   kind === "watch" ? (
-                    <WatchCard key={it.symbol} item={it} flow />
+                    <WatchCard key={it.symbol} item={it} flow positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />
                   ) : (
-                    <PickCard key={it.symbol} item={it} />
+                    <PickCard key={it.symbol} item={it} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />
                   ),
                 )}
               </MasonryColumns>

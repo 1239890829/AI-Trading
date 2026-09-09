@@ -58,12 +58,12 @@ function Chip({ text, title, className }: { text: string; title?: string; classN
   );
 }
 
-export function PickCard({ item }: { item: DailyPickItem }) {
+export function PickCard({ item, positionLabel = null }: { item: DailyPickItem; positionLabel?: "sim" | "real" | null }) {
   // 整行点击跳工作台（与 WatchCard 行为一致；名字 StockLink 同 URL 双触发无害）
   const stockNav = useStockRowNav();
   return (
     <CardShell flow onClick={stockNav(item.symbol)}>
-      {/* 头：名称代码 + 来源标注 + 现价 + 综合分（名称/代码可点 → 工作台详情，联动切片 F） */}
+      {/* 头：名称代码 + 来源/持仓标注 + 现价 + 综合分（名称/代码可点 → 工作台详情，联动切片 F） */}
       <CardHead
         name={item.name}
         symbol={item.symbol}
@@ -76,6 +76,18 @@ export function PickCard({ item }: { item: DailyPickItem }) {
             >
               盘前选择
             </span>
+            {positionLabel && (
+              <span
+                className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                  positionLabel === "real"
+                    ? "bg-rose-500/10 text-rose-600 dark:text-rose-300"
+                    : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"
+                }`}
+                title="点击打开工作台查看持仓；卖出/删流水后标签自动消失"
+              >
+                {positionLabel === "real" ? "已真实持仓" : "已模拟持仓"}
+              </span>
+            )}
             <div className="font-mono text-base font-semibold tabular-nums">{fmt(item.price)}</div>
             <div className={`font-mono text-[10px] tabular-nums ${pctColor(item.change_pct)}`}>{pctText(item.change_pct)}</div>
           </>

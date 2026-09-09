@@ -195,9 +195,10 @@ def tracking_review_stats(days: int = 5, session_factory=None) -> dict:
     sf = session_factory or get_session_factory()
     cutoff = (beijing_now().date() - timedelta(days=days - 1)).isoformat()
     with sf() as db:
-        rows = db.execute(
-            select(WatchLedger).where(WatchLedger.trade_date >= cutoff, WatchLedger.verdict.is_not(None))
+        all_rows = db.execute(
+            select(WatchLedger).where(WatchLedger.trade_date >= cutoff)
         ).scalars().all()
+    rows = [r for r in all_rows if r.verdict is not None]
 
     def _bucket(rows_for_bucket: list, key: str) -> dict:
         settled = [r for r in rows_for_bucket if r.verdict in ("success", "fail")]
@@ -223,10 +224,68 @@ def tracking_review_stats(days: int = 5, session_factory=None) -> dict:
         gate = str(reason.get("gate") or reason.get("kind") or "unknown").split(" ")[0]
         by_gate.setdefault(gate, []).append(r)
 
+    # 次日持续性验证聚合（闭环「验证」段）：reason.d1 由 validate_previous_day 写回
+    d1_list = []
+    for r in all_rows:
+        try:
+            d1 = (json.loads(r.reason) if r.reason else {}).get("d1")
+        except Exception:  # noqa: BLE001
+            d1 = None
+        if d1:
+            d1_list.append(d1)
+    grades = [d.get("grade") for d in d1_list]
+    d1_stats = {
+        "n": len(d1_list),
+        "仍强": grades.count("仍强"), "持稳": grades.count("持稳"), "走弱": grades.count("走弱"),
+        "strong_rate": round(grades.count("仍强") / len(d1_list), 3) if d1_list else None,
+        "avg_pct": round(sum(d.get("pct") or 0 for d in d1_list) / len(d1_list), 2) if d1_list else None,
+    }
+
     return {
         "days": days,
         "total_settled": len(rows),
         "by_layer": sorted((_bucket(v, k) for k, v in by_layer.items()), key=lambda b: -b["n"]),
         "by_gate": sorted((_bucket(v, k) for k, v in by_gate.items()), key=lambda b: -b["n"]),
+        "d1_validation": d1_stats,
         "note": "跟踪=实时选股：本表是跟踪维度的复盘×进化依据（对照 picks 的 signal_health 同看）",
     }
+
+
+def validate_previous_day(close_map: dict[str, float], session_factory=None) -> int:
+    """T-1 台账行的**次日持续性验证**（闭环「验证」段，2026-09-09 用户指令：
+    当天选出的个股次日继续跟踪是否仍强势）。
+
+    close_map: T 日收盘价（与清算同源）。对 T-1 每行把 T 收盘写回 reason.d1：
+    d1_pct = T 收盘/入选价 - 1；grade = 仍强(≥3%)/持稳(≥0)/走弱(<0)。
+    幂等：reason.d1 已存在跳过。返回写入行数。
+    """
+    sf = session_factory or get_session_factory()
+    today = beijing_now().date().isoformat()
+    n = 0
+    with sf() as db:
+        dates = db.execute(select(WatchLedger.trade_date).distinct()).scalars().all()
+        prev = max((d for d in dates if d < today), default=None)
+        if prev is None:
+            return 0
+        rows = db.execute(select(WatchLedger).where(WatchLedger.trade_date == prev)).scalars().all()
+        for r in rows:
+            try:
+                reason = json.loads(r.reason) if r.reason else {}
+            except Exception:  # noqa: BLE001
+                reason = {}
+            if reason.get("d1"):
+                continue
+            close = close_map.get(r.symbol)
+            if not close or not r.entry_price:
+                continue
+            d1_pct = round((close / r.entry_price - 1) * 100, 2)
+            reason["d1"] = {
+                "close": close, "pct": d1_pct,
+                "grade": "仍强" if d1_pct >= 3 else ("持稳" if d1_pct >= 0 else "走弱"),
+            }
+            r.reason = json.dumps(reason, ensure_ascii=False)
+            n += 1
+        db.commit()
+    if n:
+        log.info("watch ledger D+1 验证：%d 行写回次日表现", n)
+    return n

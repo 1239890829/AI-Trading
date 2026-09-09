@@ -62,11 +62,14 @@ export function JudgeChip({ label, level, basis }: { label: string; level: strin
 export function WatchCard({
   item,
   flow = false,
+  positionLabel = null,
   children,
 }: {
   item: WatchCardItem;
   /** 瀑布流单元模式（猎场页 CSS columns）；弹窗内不带 */
   flow?: boolean;
+  /** 闭环「标签」：sim=已模拟持仓 / real=已真实持仓（持仓状态派生，卖出自动消失） */
+  positionLabel?: "sim" | "real" | null;
   /** 弹窗场景的尾部说明（如「多维筛选动态名单」口径注记） */
   children?: ReactNode;
 }) {
@@ -86,6 +89,18 @@ export function WatchCard({
                 title="来源：盘中跟踪（当日实时随盘面重算）"
               >
                 盘中跟踪
+              </span>
+            )}
+            {flow && positionLabel && (
+              <span
+                className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                  positionLabel === "real"
+                    ? "bg-rose-500/10 text-rose-600 dark:text-rose-300"
+                    : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"
+                }`}
+                title="点击打开工作台查看持仓；卖出/删流水后标签自动消失"
+              >
+                {positionLabel === "real" ? "已真实持仓" : "已模拟持仓"}
               </span>
             )}
             {item.tier != null && (

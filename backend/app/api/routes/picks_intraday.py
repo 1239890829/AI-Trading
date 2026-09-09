@@ -287,6 +287,38 @@ async def watch_ledger(
     }
 
 
+@router.get("/position-labels")
+async def position_labels(request: Request) -> dict:
+    """闭环「标签」（2026-09-09 用户指令 3）：symbol → sim/real。
+
+    sim = 模拟盘有持仓；real = 真实持仓流水净额 > 0（同股 real 优先——风险等级更高）。
+    标签是持仓状态的**派生**：卖出/删流水后自动消失（用户确认卖出→移除标签）。
+    """
+    state = request.app.state
+    engine = getattr(state, "paper", None)
+    labels: dict[str, str] = {}
+    if engine is not None:
+        with contextlib.suppress(Exception):
+            for p in engine.positions_with_pnl({}):
+                if (p.get("quantity") or 0) > 0:
+                    labels[p["symbol"]] = "sim"
+    with contextlib.suppress(Exception):
+        from sqlalchemy import select
+
+        from app.core.db import get_session_factory
+        from app.models.real_position import RealTrade
+
+        with get_session_factory()() as db:
+            trades = db.execute(select(RealTrade.symbol, RealTrade.side, RealTrade.quantity)).all()
+        net: dict[str, int] = {}
+        for sym, side, qty in trades:
+            net[sym] = net.get(sym, 0) + (qty if side == "buy" else -qty)
+        for sym, qty in net.items():
+            if qty > 0:
+                labels[sym] = "real"
+    return {"data": {"labels": labels}, "meta": {}}
+
+
 @router.get("/leader-archive")
 async def leader_archive(request: Request, theme: str | None = Query(default=None)) -> dict:
     """历史龙头档案（猎场需求 2）：近 30 日涨停池按官方标签聚合的最高连板股。

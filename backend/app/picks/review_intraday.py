@@ -398,7 +398,7 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
     ledger_settled = None
     with contextlib.suppress(Exception):
         from app.market.trading_status import beijing_now as _bnow
-        from app.picks.watch_ledger import get_day, settle_day
+        from app.picks.watch_ledger import get_day, settle_day, validate_previous_day
         from app.core.db import get_session_factory as _gsf
 
         tdate = _bnow().date().isoformat()
@@ -413,7 +413,9 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
                 if c is not None:
                     closes[r["symbol"]] = c
         ledger_settled = settle_day(tdate, closes, _gsf())
-        log.info("watch ledger settle: %s", ledger_settled)
+        # 次日持续性验证（闭环「验证」段）：T-1 行写回 T 收盘表现
+        d1_n = validate_previous_day(closes, _gsf())
+        log.info("watch ledger settle: %s | D+1 验证 %s 行", ledger_settled, d1_n)
 
     log.info(
         "intraday review saved: %s（%d 方向 %s；提醒回填 %s）",

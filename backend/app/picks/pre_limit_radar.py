@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from datetime import datetime, timezone
 
@@ -39,6 +40,8 @@ SNAPSHOT_FRESH_SECONDS = 120
 SWEEP_INTERVAL = 6.0
 #: 非活跃窗口的休眠间隔（秒）
 IDLE_INTERVAL = 30.0
+#: 开板重评已通知（进程内去重；重启重复一次可接受）
+_REOPEN: set[str] = set()
 
 # 交易时段（含集合竞价尾段）："HH:MM" 区间
 _ACTIVE_WINDOWS = (("09:20", "11:30"), ("13:00", "15:00"))
@@ -137,9 +140,50 @@ async def pre_limit_sweep(app) -> int:
 
     tdate = beijing_now().date().isoformat()
     tstamp = beijing_now().strftime("%H:%M:%S")
-    registered = {r.get("symbol") for r in get_day(tdate)}
+    day_rows = {r.get("symbol"): r for r in get_day(tdate)}
+    registered = set(day_rows)
     candidates = select_candidates(rows, registered)
-    if not candidates:
+
+    # 特殊情形（用户指令 4）：一字板/秒板**选对但无参与机会**——首见即封板 → 只登记观察
+    # （watch_no_entry，不入持仓池）；某日开板重回临板区 → 通知重新纳入（见下方 board_reopen）
+    n_watch = 0
+    for row in rows:
+        symbol = str(row.get("symbol") or "")
+        pct = row.get("change_pct")
+        if not symbol or pct is None or symbol in registered:
+            continue
+        limit = board_limit_pct(symbol, str(row.get("name") or ""))
+        if not is_sealed(float(pct), limit):
+            continue
+        record_sighting(
+            trade_date=tdate, symbol=symbol, name=str(row.get("name") or ""),
+            layer="watch_no_entry", source_theme="",
+            reason={"gate": "sealed_no_entry", "pct": float(pct),
+                    "note": "首见即封板——无参与机会，保持观察；开板重评（KB-STOCK-21）"},
+            entry_price=None, entry_time=tstamp,
+        )
+        registered.add(symbol)
+        n_watch += 1
+
+    # 开板重评：登记为 no_entry 的票回落临板区 → 通知重新纳入（每票每日一次）
+    for c in candidates:
+        row0 = day_rows.get(c["symbol"]) or {}
+        if ((row0.get("reason") or {}).get("gate")) == "sealed_no_entry" and c["symbol"] not in _REOPEN:
+            _REOPEN.add(c["symbol"])
+            with contextlib.suppress(Exception):
+                from app.picks.morning_brief import append_alert, brief_for_today
+
+                target, _ = brief_for_today()
+                append_alert(target, {
+                    "kind": "board_reopen", "symbol": c["symbol"], "name": c["name"],
+                    "direction": "开板重评",
+                    "text": f"一字板开板回落 {c['pct']:.1f}%（距封板 {c['runway_pct']}pct）——重新纳入候选，"
+                            f"全方位评估（题材阶段/封单/大盘合力）通过后可参与",
+                    "meta": {"trigger_value": c.get("price")},
+                })
+            log.info("[临板雷达] 开板重评 %s %s", c["symbol"], c["name"])
+
+    if not candidates and not n_watch:
         return 0
 
     from app.picks.watcher import dispatch_alert
