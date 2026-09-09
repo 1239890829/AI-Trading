@@ -453,38 +453,63 @@ export function FloatingAssistant() {
   return (
     <>
       {/* 悬浮球：墨玉反色（light 深墨 / dark 亮面）在任何页面上都可读；
-          rose 细环是唯一的品牌色——hairline 级克制，不做渐变球 */}
+          rose 细环是唯一的品牌色——hairline 级克制，不做渐变球。
+          贴边收纳（2026-09-09 用户要求重设计）：不再是被截断的球，morph 成
+          墨玉半胶囊把手贴在屏幕边缘（rose 细竖条提示），hover 平滑展开为完整球 */}
       <div
         data-testid="assistant-ball"
         role="button"
         aria-label="AI 助手"
-        className="fixed z-50 flex cursor-grab select-none items-center justify-center rounded-full bg-zinc-900 text-zinc-50 shadow-[0_2px_8px_rgba(0,0,0,0.18),0_10px_28px_rgba(0,0,0,0.22)] ring-1 ring-rose-500/45 transition-[transform,box-shadow,opacity] duration-200 ease-out hover:shadow-[0_4px_12px_rgba(0,0,0,0.22),0_14px_36px_rgba(0,0,0,0.28)] active:cursor-grabbing dark:bg-zinc-100 dark:text-zinc-950 dark:shadow-[0_2px_8px_rgba(0,0,0,0.4),0_10px_28px_rgba(0,0,0,0.35)] dark:ring-rose-500/55"
-        style={{
-          left: pos.x, top: pos.y, width: BALL, height: BALL,
-          // 贴边收纳：收进 45% 只露一条边，hover/拖动/面板打开时滑出
-          transform: docked && !orbHovered
-            ? `translateX(${docked === "left" ? "-45%" : "45%"})`
-            : undefined,
-          opacity: docked && !orbHovered ? 0.75 : 1,
-        }}
+        className={`fixed z-50 flex cursor-grab select-none items-center justify-center bg-zinc-900 text-zinc-50 shadow-[0_2px_8px_rgba(0,0,0,0.18),0_10px_28px_rgba(0,0,0,0.22)] transition-[left,width,height,border-radius,box-shadow] duration-200 ease-out hover:shadow-[0_4px_12px_rgba(0,0,0,0.22),0_14px_36px_rgba(0,0,0,0.28)] active:cursor-grabbing dark:bg-zinc-100 dark:text-zinc-950 dark:shadow-[0_2px_8px_rgba(0,0,0,0.4),0_10px_28px_rgba(0,0,0,0.35)] ${
+          docked && !orbHovered
+            ? "ring-0"
+            : "ring-1 ring-rose-500/45 dark:ring-rose-500/55"
+        }`}
+        style={
+          docked && !orbHovered
+            ? {
+                // 把手形态：紧贴边缘的半胶囊（22×44），rose 细竖条做呼吸提示
+                left: docked === "left" ? 0 : viewport.w - 22,
+                top: pos.y + (BALL - 44) / 2,
+                width: 22, height: 44,
+                borderRadius: docked === "left" ? "0 22px 22px 0" : "22px 0 0 22px",
+              }
+            : {
+                left: pos.x, top: pos.y, width: BALL, height: BALL,
+                borderRadius: "50%",
+              }
+        }
         onPointerEnter={() => setOrbHovered(true)}
         onPointerLeave={() => setOrbHovered(false)}
         onPointerDown={onBallPointerDown}
         onPointerMove={onBallPointerMove}
         onPointerUp={onBallPointerUp}
       >
-        <AssistantMark size={22} />
-        {streaming && !open && (
-          <span className="absolute -right-0.5 -top-0.5 h-3 w-3 animate-pulse rounded-full border-2 border-zinc-900 bg-emerald-400 dark:border-zinc-100" />
-        )}
-        {/* 告警红点：只统计 AI 判为"值得提醒"的（notify 且未确认） */}
-        {bubbles.length > 0 && !open && (
-          <span
-            data-testid="assistant-alert-dot"
-            className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-semibold text-white ring-2 ring-white dark:ring-zinc-900"
-          >
-            {bubbles.length}
-          </span>
+        {docked && !orbHovered ? (
+          // 把手态：rose 细竖条（hairline 品牌色），有告警时红点计数替代
+          bubbles.length > 0 ? (
+            <span className="flex h-4 min-w-3 items-center justify-center rounded-full bg-rose-500 px-0.5 text-[9px] font-semibold text-white">
+              {bubbles.length}
+            </span>
+          ) : (
+            <span className="h-4 w-[3px] rounded-full bg-rose-400/80" aria-hidden />
+          )
+        ) : (
+          <>
+            <AssistantMark size={22} />
+            {streaming && !open && (
+              <span className="absolute -right-0.5 -top-0.5 h-3 w-3 animate-pulse rounded-full border-2 border-zinc-900 bg-emerald-400 dark:border-zinc-100" />
+            )}
+            {/* 告警红点：只统计 AI 判为"值得提醒"的（notify 且未确认） */}
+            {bubbles.length > 0 && !open && (
+              <span
+                data-testid="assistant-alert-dot"
+                className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-semibold text-white ring-2 ring-white dark:ring-zinc-900"
+              >
+                {bubbles.length}
+              </span>
+            )}
+          </>
         )}
       </div>
 
