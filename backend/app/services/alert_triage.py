@@ -275,22 +275,51 @@ def list_triage(limit: int = 50, verdict: str | None = None, session_factory=Non
         return [_dump(r) for r in db.execute(q.limit(limit)).scalars().all()]
 
 
+#: 气泡时效：超过该窗口的旧判读不再弹出（进控制台告警页仍可查）——
+#: 2026-09-09 用户反馈「上午看到 13:32 的旧提醒」即无时效过滤所致
+BUBBLE_MAX_AGE_HOURS = 6
+
+
 def pending_bubbles(limit: int = 5, session_factory=None) -> list[dict]:
-    """悬浮球待提醒：notify 且未确认的（按事件时间倒序）。"""
+    """悬浮球待提醒：notify 且未确认且**6 小时内**的（按事件时间倒序）。
+
+    时效过滤：昨天的旧判读不再挂在悬浮球（历史进控制台告警页）。
+    每条必须带 symbol+name（2026-09-09 用户指令：缺任一视为无效提醒）——
+    name 从事件快照补，快照也没有则整条过滤（宁缺毋滥）。
+    """
     sf = session_factory or get_session_factory()
+    cutoff = datetime.utcnow() - timedelta(hours=BUBBLE_MAX_AGE_HOURS)
     with sf() as db:
         rows = db.execute(
             select(AgentTriage).where(AgentTriage.verdict == "notify", AgentTriage.acked == 0)
-            .order_by(AgentTriage.id.desc()).limit(limit)
+            .order_by(AgentTriage.id.desc()).limit(limit * 4)
         ).scalars().all()
         out = []
         for t in rows:
             ev = db.get(AlertEvent, t.event_id)
+            if ev is None:
+                continue
+            if ev.triggered_at and ev.triggered_at < cutoff:
+                continue  # 过时效：不弹（历史可查，不打扰）
+            if not ev.symbol or ev.symbol == "000000":
+                continue  # 无代码 = 无效个股提醒（方向级事件走通知中心）
+            snap: dict = {}
+            if isinstance(ev.snapshot, str):
+                with contextlib.suppress(Exception):
+                    snap = json.loads(ev.snapshot)
+            elif isinstance(ev.snapshot, dict):
+                snap = ev.snapshot
+            name = str(snap.get("name") or "").strip()
+            if not name:
+                continue  # 无名称 = 无效提醒（2026-09-09 用户指令：缺任一即无效）
             item = _dump(t)
-            item["symbol"] = ev.symbol if ev else ""
-            item["trigger_value"] = ev.trigger_value if ev else None
-            item["threshold"] = ev.threshold if ev else None
+            item["symbol"] = ev.symbol
+            item["name"] = name
+            item["trigger_value"] = ev.trigger_value
+            item["threshold"] = ev.threshold
             out.append(item)
+            if len(out) >= limit:
+                break
         return out
 
 

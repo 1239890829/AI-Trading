@@ -206,34 +206,49 @@ async def _build_opportunities(
 
     attach_official(request, payload["data"].get("themes") or [])
 
-    # 猎场批次 A（需求 7）：机会候选**首见即入台账**——每轮快照的候选是易变的，
-    # 台账保证一旦入选就持久保留（当日唯一，收盘清算）。失败只记日志。
+    # 猎场批次 A（需求 7）+ 2026-09-09 收紧（用户：跟踪过多且缺乏依据）：
+    # 机会候选登记加**量化硬门槛**，避免盲目大面积跟踪——
+    #   ① 只在交易时段登记（非交易时段端点被调用不产生台账数据）
+    #   ② 候选须满足任一：已涨停(boards≥1) / 涨幅≥5% / 判定 certainty=高
+    # watcher 确认与买点触发（dispatch_alert 路径）不受此门槛限制（本就是强信号）。
     with contextlib.suppress(Exception):
-        from app.market.trading_status import beijing_now
+        from app.market.trading_status import beijing_now, in_trading_window
         from app.picks.watch_ledger import record_sighting
 
-        tdate = beijing_now().date().isoformat()
-        tstamp = beijing_now().strftime("%H:%M:%S")
-        for th in payload["data"].get("themes") or []:
-            layer = "today_strongest" if th.get("strength_tier") in ("领涨", "强势") else "quiet_starting"
-            for s in th.get("stocks") or []:
-                if not s.get("symbol"):
-                    continue
-                record_sighting(
-                    trade_date=tdate, symbol=str(s["symbol"]),
-                    name=str(s.get("name") or ""), layer=layer,
-                    source_theme=str(th.get("theme") or ""),
-                    reason={
-                        "theme": th.get("theme"), "stage": th.get("stage"),
-                        "tier": th.get("strength_tier"), "role": s.get("role"),
-                        "certainty": s.get("certainty"),
-                        "basis": (s.get("reason") or "")[:200],
-                    },
-                    is_leader=s.get("role") in ("龙头", "空间板"),
-                    boards=s.get("boards") or 0,
-                    entry_price=None,  # 登记时以告警触发价优先；此处无价格由清算兜底
-                    entry_time=tstamp,
-                )
+        now = beijing_now()
+        if in_trading_window(now):
+            tdate = now.date().isoformat()
+            tstamp = now.strftime("%H:%M:%S")
+            registered = 0
+            for th in payload["data"].get("themes") or []:
+                layer = "today_strongest" if th.get("strength_tier") in ("领涨", "强势") else "quiet_starting"
+                for s in th.get("stocks") or []:
+                    if not s.get("symbol"):
+                        continue
+                    boards = s.get("boards") or 0
+                    pct = s.get("change_pct")
+                    cert_high = (s.get("certainty") or {}).get("level") == "高"
+                    if boards < 1 and (pct is None or pct < 5.0) and not cert_high:
+                        continue  # 量化门槛：无涨停/无显著涨幅/判定不足——不跟踪
+                    record_sighting(
+                        trade_date=tdate, symbol=str(s["symbol"]),
+                        name=str(s.get("name") or ""), layer=layer,
+                        source_theme=str(th.get("theme") or ""),
+                        reason={
+                            "theme": th.get("theme"), "stage": th.get("stage"),
+                            "tier": th.get("strength_tier"), "role": s.get("role"),
+                            "certainty": s.get("certainty"),
+                            "gate": f"boards={boards} pct={pct}",
+                            "basis": (s.get("reason") or "")[:200],
+                        },
+                        is_leader=s.get("role") in ("龙头", "空间板"),
+                        boards=boards,
+                        entry_price=None,  # 登记时以告警触发价优先；此处无价格由清算兜底
+                        entry_time=tstamp,
+                    )
+                    registered += 1
+            if registered:
+                log.info("watch ledger: %d candidates registered (gate: boards>=1 or pct>=5 or cert=高)", registered)
     cache.set(key, payload)
     return payload
 

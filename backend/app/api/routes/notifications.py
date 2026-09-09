@@ -111,7 +111,14 @@ def _alert_items(repo: AlertRepository, limit: int) -> list[dict]:
         )
         category = "risk" if kind == "signal_health" else "opportunity"
         # 方向级事件（falsify）symbol 是占位 "000000"，不进标题（占位代码泄漏到 UI）
-        sym_part = f" {e.symbol}" if e.symbol and e.symbol != "000000" else ""
+        is_stock = bool(e.symbol and e.symbol != "000000")
+        sym_part = f" {e.symbol}" if is_stock else ""
+        # 2026-09-09 用户指令：提醒必须完整包含代码+名称（缺任一即补全）——
+        # 名称优先取快照（实时），缺失显式「（名称待补）」不臆造
+        stock_name = ""
+        if is_stock:
+            stock_name = (snap.get("name") or "").strip() if isinstance(snap.get("name"), str) else ""
+        name_part = f" {stock_name}" if stock_name else ""
         body = text or "（无正文）"
         # P0-2：AI 盘中分析合入 body（判读结论 + 响应建议）
         tri = triage_by_event.get(e.id)
@@ -125,7 +132,11 @@ def _alert_items(repo: AlertRepository, limit: int) -> list[dict]:
                 "label": kind_label,
                 "session": _session_of(bj) if bj else "intraday",
                 "ts": bj.isoformat(sep=" ") if bj else None,
-                "title": f"【{direction or '盘中跟踪'}】{sym_part} {kind_label}".strip(),
+                "title": (
+                    f"【{direction or '盘中跟踪'}】{sym_part}{name_part} {kind_label}"
+                    if is_stock
+                    else f"【{direction or '题材级'}】{kind_label}（方向级提醒，无个股）"
+                ).strip(),
                 "body": body,
                 "symbol": e.symbol if e.symbol and e.symbol != "000000" else None,
                 "url": None,

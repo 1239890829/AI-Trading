@@ -604,6 +604,19 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
         with contextlib.suppress(Exception):
             from app.picks.watch_ledger import record_sighting
 
+            # 2026-09-09 用户指令：缺名称=无效提醒——name 空时从快照补，仍空则不登记
+            if not alert.get("name"):
+                try:
+                    snap_rows = getattr(app.state if hasattr(app, "state") else app, "snapshot_service", None)
+                    for sr in getattr(snap_rows, "snapshot", None) or []:
+                        if sr.get("symbol") == alert["symbol"]:
+                            alert["name"] = sr.get("name") or ""
+                            break
+                except Exception:  # noqa: BLE001
+                    pass
+            if not alert.get("name"):
+                log.warning("watcher alert %s 无名称且快照缺失——不入台账", alert["symbol"])
+                return False
             record_sighting(
                 trade_date=beijing_now().date().isoformat(),
                 symbol=str(alert["symbol"]),

@@ -26,7 +26,7 @@ def _event(sf, rule_id: int = 1, symbol: str = "600000", **kw) -> AlertEvent:
         ev = AlertEvent(
             rule_id=rule_id, symbol=symbol, trigger_value=kw.get("trigger_value", 12.5),
             threshold=kw.get("threshold", 12.0),
-            snapshot='{"kind": "price_above", "text": "股价 12.50 突破阈值 12.00"}',
+            snapshot='{"kind": "price_above", "text": "股价 12.50 突破阈值 12.00", "name": "贵州茅台"}',
             triggered_at=kw.get("triggered_at") or datetime.utcnow(),
         )
         db.add(ev)

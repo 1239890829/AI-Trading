@@ -2122,6 +2122,8 @@ export interface AgentBubble {
   event_id: number;
   verdict: string;
   reason: string;
+  /** 股票名称（判读合并，缺名称的判读不会进入气泡） */
+  name?: string | null;
   /** llm=AI 判读 / rules=确定性去重 / llm_fallback=LLM 不可用按规则提醒（界面须标注） */
   model: string;
   acked: boolean;

@@ -535,6 +535,7 @@ export function FloatingAssistant() {
           </div>
           <p className="line-clamp-2 text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-300">
             {bubbles[0].symbol ? `${bubbles[0].symbol} · ` : ""}
+            {bubbles[0].name ? `${bubbles[0].name} · ` : ""}
             {bubbles[0].reason || "触发告警"}
           </p>
           <div className="mt-2 flex items-center gap-1.5">
