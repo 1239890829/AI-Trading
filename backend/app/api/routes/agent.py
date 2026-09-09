@@ -200,3 +200,53 @@ async def run_meta_review():
     from app.services import meta_review
 
     return {"data": await asyncio.to_thread(meta_review.generate_meta_review)}
+
+
+# ---------------------------------------------------------------- 知识库/仓库浏览（2026-09-09 用户指令⑤）
+def _docs_root():
+    from pathlib import Path
+
+    return Path(__file__).resolve().parents[4] / "docs"
+
+
+@router.get("/agent/kb/tree")
+async def kb_tree() -> dict:
+    """知识库文档树（AI 控制台「知识库/仓库」面板数据源）。
+
+    docs/ 下全部 .md；KB 文件额外解析其包含的 KB-ID 列表（[[KB-XXX]] 关联跳转用）。
+    """
+    import re
+
+    root = _docs_root()
+    files: list[dict] = []
+    if root.exists():
+        for p in sorted(root.rglob("*.md")):
+            rel = p.relative_to(root).as_posix()
+            try:
+                text = p.read_text(encoding="utf-8")
+            except Exception:  # noqa: BLE001
+                text = ""
+            kb_ids = sorted(set(re.findall(r"KB-(?:STOCK|TRADE|ENG|DEC)-\d+", text)))
+            files.append(
+                {
+                    "path": rel,
+                    "name": p.name,
+                    "dir": p.parent.relative_to(root).as_posix() if p.parent != root else "",
+                    "size": p.stat().st_size,
+                    "kb_ids": kb_ids,
+                }
+            )
+    return {"data": {"root": "docs", "files": files}, "meta": {}}
+
+
+@router.get("/agent/kb/file")
+async def kb_file(path: str = Query(..., description="docs/ 相对路径，仅 .md")) -> dict:
+    """读单篇 Markdown。路径白名单：resolve 后必须仍在 docs/ 内（防目录穿越）。"""
+    root = _docs_root().resolve()
+    target = (root / path).resolve()
+    if not str(target).startswith(str(root)) or target.suffix != ".md" or not target.is_file():
+        raise HTTPException(status_code=404, detail="文档不存在或路径非法")
+    try:
+        return {"data": {"path": path, "content": target.read_text(encoding="utf-8")}, "meta": {}}
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"读取失败: {exc}")

@@ -2297,3 +2297,25 @@ export interface AgentExperiment {
 export async function getAgentExperiments(): Promise<AgentExperiment[]> {
   return (await getJson<AgentExperiment[]>("/api/agent/experiments")).data;
 }
+
+// ============================================================================
+// AI 控制台知识库 / 仓库追踪（2026-09-09 用户指令⑤）
+// ============================================================================
+
+export interface KbFileMeta {
+  path: string;
+  name: string;
+  dir: string;
+  size: number;
+  /** 文件内包含的 KB-ID（[[KB-XXX]] 关联跳转索引） */
+  kb_ids: string[];
+}
+
+export async function getAgentKbTree(): Promise<{ root: string; files: KbFileMeta[] }> {
+  return (await getJson<{ root: string; files: KbFileMeta[] }>("/api/agent/kb/tree")).data;
+}
+
+export async function getAgentKbFile(path: string): Promise<{ path: string; content: string }> {
+  const q = new URLSearchParams({ path });
+  return (await getJson<{ path: string; content: string }>(`/api/agent/kb/file?${q.toString()}`)).data;
+}

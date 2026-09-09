@@ -24,6 +24,7 @@ from typing import Any
 from sqlalchemy import select
 
 from app.core.db import get_session_factory, utcnow
+from app.market.trading_status import beijing_now
 from app.models.watch_ledger import WatchLedger
 
 log = logging.getLogger(__name__)
@@ -180,4 +181,52 @@ def _dump(row: WatchLedger) -> dict:
         "status": row.status, "close_price": row.close_price, "pnl_pct": row.pnl_pct,
         "verdict": row.verdict, "verdict_reason": row.verdict_reason,
         "merged_into_picks": bool(row.merged_into_picks),
+    }
+
+
+def tracking_review_stats(days: int = 5, session_factory=None) -> dict:
+    """跟踪复盘×进化依据（KB-TRADE-13 落地，2026-09-09 用户指令「跟踪本质是实时选股」）。
+
+    近 N 天台账按「来源层 × 判定」与「确定性 × 判定」聚合——暴露系统性误判
+    （如某来源层胜率显著偏低）。数据只有已清算行参与（未清算不计）。
+    字段诚实：台账现无「时事/消息/基本面/情绪/技术」五类归因标注（gap 已挂
+    KB-TRADE-13），此处按 layer/gate/gradable 维度聚合，不冒充五类归因。
+    """
+    sf = session_factory or get_session_factory()
+    cutoff = (beijing_now().date() - timedelta(days=days - 1)).isoformat()
+    with sf() as db:
+        rows = db.execute(
+            select(WatchLedger).where(WatchLedger.trade_date >= cutoff, WatchLedger.verdict.is_not(None))
+        ).scalars().all()
+
+    def _bucket(rows_for_bucket: list, key: str) -> dict:
+        settled = [r for r in rows_for_bucket if r.verdict in ("success", "fail")]
+        success = sum(1 for r in settled if r.verdict == "success")
+        return {
+            "n": len(rows_for_bucket),
+            "judged": len(settled),
+            "win_rate": round(success / len(settled), 3) if settled else None,
+            "avg_pnl_pct": round(sum(r.pnl_pct or 0 for r in rows_for_bucket) / len(rows_for_bucket), 2)
+            if rows_for_bucket else None,
+            "key": key,
+        }
+
+    by_layer: dict[str, dict] = {}
+    by_gate: dict[str, dict] = {}
+    for r in rows:
+        try:
+            reason = json.loads(r.reason) if r.reason else {}
+        except Exception:  # noqa: BLE001
+            reason = {}
+        layer = r.layer or "unknown"
+        by_layer.setdefault(layer, []).append(r)
+        gate = str(reason.get("gate") or reason.get("kind") or "unknown").split(" ")[0]
+        by_gate.setdefault(gate, []).append(r)
+
+    return {
+        "days": days,
+        "total_settled": len(rows),
+        "by_layer": sorted((_bucket(v, k) for k, v in by_layer.items()), key=lambda b: -b["n"]),
+        "by_gate": sorted((_bucket(v, k) for k, v in by_gate.items()), key=lambda b: -b["n"]),
+        "note": "跟踪=实时选股：本表是跟踪维度的复盘×进化依据（对照 picks 的 signal_health 同看）",
     }

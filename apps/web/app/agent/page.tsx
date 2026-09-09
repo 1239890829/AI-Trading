@@ -4,6 +4,8 @@ import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { EvolutionTab } from "@/components/agent/evolution-tab";
+import { KbBrowserTab } from "@/components/agent/kb-browser-tab";
+import { RepoTrackerTab } from "@/components/agent/repo-tracker-tab";
 import { ParamsTab } from "@/components/agent/params-tab";
 import { TaskCenter } from "@/components/agent/task-center";
 import { AlertsTab } from "@/components/research/alerts-tab";
@@ -27,6 +29,8 @@ const TABS = [
   { key: "review", label: "复盘" },
   { key: "alerts", label: "提醒与告警" },
   { key: "params", label: "参数配置" },
+  { key: "repos", label: "仓库追踪" },
+  { key: "kb", label: "知识库" },
 ] as const;
 
 type TabKey = (typeof TABS)[number]["key"];
@@ -79,6 +83,8 @@ function AgentInner() {
         {tab === "review" && <ReviewTab focusDate={reviewDate} />}
         {tab === "alerts" && <AlertsTab />}
         {tab === "params" && <ParamsTab />}
+        {tab === "repos" && <RepoTrackerTab />}
+        {tab === "kb" && <KbBrowserTab />}
       </FadeSwap>
     </main>
   );

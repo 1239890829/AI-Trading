@@ -198,7 +198,23 @@ def collect_inputs(session_factory=None) -> dict:
         "factor_ic": {"available": False, "note": "月度复核（factor_ic_review）到期接入"},
         "prediction": _collect_recent_prediction(sf),
         "knowledge_base": _collect_knowledge_base(),
+        # 第九路（2026-09-09 用户指令「跟踪本质是实时选股」）：台账复盘×进化依据
+        "tracking": _collect_tracking_stats(sf),
     }
+
+
+def _collect_tracking_stats(session_factory) -> dict:
+    """第九路：盘中跟踪台账的复盘×进化依据（对照 signal_health 同看）。
+
+    跟踪=实时选股：台账 5 日按来源层/准入门槛 × 判定聚合胜率与平均盈亏，
+    供议程 LLM 发现「某来源层系统性误判」类改进项（如降某层准入权重）。
+    """
+    try:
+        from app.picks.watch_ledger import tracking_review_stats
+
+        return tracking_review_stats(5, session_factory)
+    except Exception as exc:  # noqa: BLE001
+        return {"available": False, "note": f"台账统计失败: {exc}"}
 
 
 def _collect_knowledge_base() -> dict:
