@@ -12,7 +12,7 @@ get_session_factory）：状态机与告警决策走真实代码，只隔离 SQL
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -22,12 +22,13 @@ from app.api.routes import health as health_route
 from app.schemas.market import LimitUpRecord
 from app.services import ths_sentinel as sentinel_mod
 from app.services.ths_sentinel import ThsReasonSentinel
+from app.core.bjtime import BJ_TZ  # S2-8 时区收敛
 
-_BJT = timezone(timedelta(hours=8))
+
 #: 周三 10:30（连续竞价时段，2026-09-02 为真实交易日）
-WED = datetime(2026, 9, 2, 10, 30, tzinfo=_BJT)
-SAT = datetime(2026, 9, 5, 10, 30, tzinfo=_BJT)  # 周六
-NIGHT = datetime(2026, 9, 2, 20, 0, tzinfo=_BJT)  # 交易日晚间（窗口外）
+WED = datetime(2026, 9, 2, 10, 30, tzinfo=BJ_TZ)
+SAT = datetime(2026, 9, 5, 10, 30, tzinfo=BJ_TZ)  # 周六
+NIGHT = datetime(2026, 9, 2, 20, 0, tzinfo=BJ_TZ)  # 交易日晚间（窗口外）
 TRADE_DAYS = [date(2026, 9, 1), date(2026, 9, 2)]
 
 

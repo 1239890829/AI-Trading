@@ -23,9 +23,9 @@ from typing import Any
 
 from sqlalchemy import select
 
-from app.core.db import beijing_now_naive, get_session_factory, utcnow
-from app.market.trading_status import beijing_now
+from app.core.db import get_session_factory, utcnow
 from app.models.watch_ledger import WatchLedger
+from app.core.bjtime import beijing_now_naive, beijing_now
 
 log = logging.getLogger(__name__)
 

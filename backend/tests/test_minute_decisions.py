@@ -171,7 +171,7 @@ def test_list_decisions_payload():
 import app.market.minute_decisions as md_mod  # noqa: E402
 from app.market.minute_decisions import record_from_points, scan_and_settle_today  # noqa: E402
 from app.picks.watch_ledger import record_sighting  # noqa: E402
-from app.sentiment.metric_history import beijing_today  # noqa: E402
+from app.core.bjtime import beijing_today  # noqa: E402  # S2-8 时区收敛
 from tests.test_minute_signals import mk_series  # noqa: E402
 
 

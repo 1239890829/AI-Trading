@@ -5,8 +5,8 @@ from datetime import datetime
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.db import beijing_now_naive
 from app.models.watchlist import Base
+from app.core.bjtime import beijing_now_naive
 
 
 class AlertRule(Base):

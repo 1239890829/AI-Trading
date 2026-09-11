@@ -25,11 +25,12 @@ dump）。RPS 消费 **复权收盘（daily_k_adj）** 的 N 日涨幅——不�
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime
 from pathlib import Path
 
 from app.core.ttl_cache import TTLCache
 from app.market.marketdb_freshness import MAX_STALE_TRADE_DAYS, freshness as mdb_freshness
+from app.core.bjtime import BJ_TZ  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 
@@ -58,8 +59,7 @@ def _trade_date_ms(trade_date: str | None) -> int:
     if not trade_date:
         return (1 << 62)  # 远未来，等价于无上限
     d = datetime.strptime(trade_date, "%Y%m%d")
-    sh = timezone(timedelta(hours=8))
-    return int(datetime(d.year, d.month, d.day, tzinfo=sh).timestamp() * 1000)
+    return int(datetime(d.year, d.month, d.day, tzinfo=BJ_TZ).timestamp() * 1000)
 
 
 def _asof_date(trade_date: str | None) -> date | None:

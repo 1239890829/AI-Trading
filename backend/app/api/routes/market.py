@@ -37,7 +37,7 @@ from app.schemas.envelope import (
 )
 from app.market.normalizer import main_board
 from app.market.trade_calendar import trading_days
-from app.market.trading_status import bar_date, beijing_now, resolve_trading_status
+from app.market.trading_status import bar_date, resolve_trading_status
 from app.schemas.market import (
     OrderBook,
     Quote,
@@ -57,6 +57,7 @@ from app.services.market_snapshot import (
 from app.services.speed_sampler import SpeedSampler
 from app.services.dragon_service import apply_position_with_5d
 from app.services.theme_catalog_service import official_multi_day_changes
+from app.core.bjtime import beijing_now, beijing_now_naive  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["market"])
@@ -265,7 +266,7 @@ async def market_sentiment_history(
         _sent_hist_backfilled["done"] = True
 
     # ② 惰性补录：交易日 15:05 后缺当日记录 → 现算落库
-    now_bj = datetime.utcnow() + timedelta(hours=8)
+    now_bj = beijing_now_naive()
     today_key = now_bj.strftime("%Y%m%d")
     try:
         from app.market.trade_calendar import trading_days
@@ -723,7 +724,6 @@ async def minute_decisions(
     """
     from app.core.db import get_session_factory
     from app.market import minute_decisions as md
-    from app.market.trading_status import beijing_now
 
     sf = get_session_factory()
     settled = 0

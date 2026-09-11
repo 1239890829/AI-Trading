@@ -21,9 +21,9 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.db import get_session_factory
-from app.market.trading_status import beijing_now
 from app.models.agent import AgentAgenda, AgentAudit, AgentExperiment, AgentParamChange
 from app.services.evolution import PROJECT_ROOT
+from app.core.bjtime import beijing_now, BJ_OFFSET  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ def _week_start_utc() -> datetime:
     """本周周一 0 点（北京）对应的 naive UTC。"""
     bj = beijing_now()
     monday = bj - timedelta(days=bj.weekday())
-    return datetime(monday.year, monday.month, monday.day) - timedelta(hours=8)
+    return datetime(monday.year, monday.month, monday.day) - BJ_OFFSET
 
 
 def meta_review_path(now: datetime | None = None) -> Path:

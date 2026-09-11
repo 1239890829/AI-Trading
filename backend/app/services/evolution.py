@@ -35,8 +35,8 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.db import get_session_factory
 from app.market import trade_calendar as tc
-from app.market.trading_status import beijing_now
 from app.models.agent import AgentAgenda, AgentAudit, AgentParamChange, AgentTask
+from app.core.bjtime import beijing_now, BJ_OFFSET  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ def _utc_cutoff_today() -> datetime:
     今日过滤会静默失效（C 类执行器测试抓出的真 bug，防线形同虚设）。
     """
     bj = beijing_now()
-    return datetime(bj.year, bj.month, bj.day) - timedelta(hours=8)
+    return datetime(bj.year, bj.month, bj.day) - BJ_OFFSET
 
 
 def _budget_status(session_factory) -> dict:

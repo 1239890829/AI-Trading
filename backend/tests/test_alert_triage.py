@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta
 
-from app.core.db import beijing_now_naive
 
 import pytest
 
@@ -12,6 +11,7 @@ import app.services.alert_triage as tri
 from app.models.agent import AgentTriage
 from app.models.alert import AlertEvent, AlertRule
 from app.models.watchlist import Base
+from app.core.bjtime import beijing_now_naive
 
 
 def _factory(tmp_path, name="triage.db"):

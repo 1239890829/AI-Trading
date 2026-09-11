@@ -7,11 +7,11 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from app.core.db import beijing_now_naive
 from app.models.event import EventCard, EventDirection
 from app.models.watchlist import Base
 
 import app.events.llm_aux as la
+from app.core.bjtime import beijing_now_naive
 
 
 def _factory(tmp_path, name="llm_aux.db"):

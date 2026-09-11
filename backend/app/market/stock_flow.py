@@ -20,8 +20,9 @@ import asyncio
 import logging
 from datetime import datetime
 
+from app.core.bjtime import BJ_TZ
 from app.core.ttl_cache import TTLCache
-from app.market.fund_flow import _FLOW_KEYS, _TZ_BJ, _em_num, _http
+from app.market.fund_flow import _FLOW_KEYS, _em_num, _http
 
 log = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ def parse_stock_flow(rows: list[dict]) -> dict[str, dict]:
             "name": row.get("f14"),
             **vals,
             "main_pct": _pct(row.get("f184")),
-            "as_of": datetime.fromtimestamp(ts, _TZ_BJ).strftime("%H:%M:%S") if ts else None,
+            "as_of": datetime.fromtimestamp(ts, BJ_TZ).strftime("%H:%M:%S") if ts else None,
             "available": any(v is not None for v in vals.values()),
         }
     return out

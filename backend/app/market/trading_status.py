@@ -34,23 +34,18 @@ UI 缺陷 #1（docs/system-review-2026-09-02.md §2）：个股页没有任何�
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime
 from typing import Iterable
 
+from app.core.bjtime import BJ_TZ  # S2-8：时区常量收敛到全站唯一权威
 from app.market.trade_calendar import last_trade_date
 from app.schemas.market import TradingStatus, TradingStatusInfo
-
-BJ = timezone(timedelta(hours=8))
 
 # 收盘后日K才稳定可取；留 5 分钟余量（交易所收完到数据源落地有延迟）
 _MARKET_CLOSE_HHMM = 1505
 
 # 缺失跨度超过这么多个交易日（≈1 年）时，多半是退市或长期停牌，reason 里额外提示
 _LONG_GAP_DAYS = 250
-
-
-def beijing_now() -> datetime:
-    return datetime.now(BJ)
 
 
 def bar_date(ts: datetime) -> date:
@@ -62,12 +57,12 @@ def bar_date(ts: datetime) -> date:
     """
     if ts.tzinfo is None:
         return ts.date()
-    return ts.astimezone(BJ).date()
+    return ts.astimezone(BJ_TZ).date()
 
 
 def _market_closed(now: datetime) -> bool:
     """当日是否已收盘（北京时间）。"""
-    bj = now.astimezone(BJ)
+    bj = now.astimezone(BJ_TZ)
     return bj.hour * 100 + bj.minute >= _MARKET_CLOSE_HHMM
 
 
@@ -99,7 +94,7 @@ def resolve_trading_status(
             reason="无日K数据（数据源不可用，或该标的尚未上市/已退市）",
         )
 
-    today = now.astimezone(BJ).date()
+    today = now.astimezone(BJ_TZ).date()
     anchor = last_trade_date(days, today)
     if anchor is None:
         return TradingStatusInfo(status=TradingStatus.unknown, reason="交易日历未覆盖当前日期，无法判定")

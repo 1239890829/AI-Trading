@@ -20,8 +20,8 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from app.core.bjtime import beijing_now
 
-from app.market.trading_status import beijing_now
 
 log = logging.getLogger(__name__)
 

@@ -29,8 +29,8 @@ import json
 import logging
 from datetime import date, datetime, timezone
 from pathlib import Path
+from app.core.bjtime import beijing_today  # S2-8 时区收敛
 
-from app.market.trading_status import beijing_now
 
 log = logging.getLogger(__name__)
 
@@ -40,11 +40,6 @@ _STORE_PATH = Path(__file__).resolve().parents[2] / "data" / "sentiment_metrics.
 _FETCH_GAP = 0.15
 
 METRIC_KEYS = ("limit_up", "max_board", "break_rate", "promo_1to2", "promo_2to3")
-
-
-def beijing_today() -> date:
-    """北京时区的今天。别用 date.today()——容器/本机时区不一定是 CST。"""
-    return beijing_now().date()
 
 
 def _boards_of(pool) -> dict[str, int]:

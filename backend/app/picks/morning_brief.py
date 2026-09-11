@@ -57,9 +57,9 @@ from app.picks.intraday_rules import (
     is_performance_tag,
     rank_directions,
 )
-from app.market.trading_status import beijing_now
-from app.sentiment.metric_history import beijing_today
+from app.core.bjtime import beijing_today  # S2-8 时区收敛（原在 metric_history）
 from app.services.theme_service import normalize_theme, parse_theme_tags
+from app.core.bjtime import beijing_now
 
 log = logging.getLogger(__name__)
 

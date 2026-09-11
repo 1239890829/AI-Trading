@@ -23,7 +23,6 @@ import hmac
 import json
 import logging
 import time
-from datetime import timedelta
 from typing import Any
 
 import httpx
@@ -56,13 +55,14 @@ def feishu_sign(timestamp: str, secret: str) -> str:
 def format_alert_text(event: AlertEvent, rule: AlertRule) -> str:
     """把 AlertEvent 渲染成飞书 text 消息文案（纯函数，便于测试）。
 
-    触发时间行取 event.triggered_at（DB 默认 UTC）转北京时间——提醒发生在盘中，
-    收到消息的人第一反应是「什么时候触发的」，文案必须自带时间。
+    触发时间行取 event.triggered_at——它自 2026-09-09 起就是**北京 naive**
+    （`models/alert.py` 的列默认值即 `beijing_now_naive`），**直接展示即可**。
+    提醒发生在盘中，收到消息的人第一反应是「什么时候触发的」，文案必须自带时间。
     """
     snap = _symbol_snapshot(event.snapshot)
     lines = [f"🚨 {rule.name or f'rule#{rule.id}'} ({rule.condition_type})"]
     if event.triggered_at is not None:
-        bj = event.triggered_at + timedelta(hours=8)
+        bj = event.triggered_at
         lines.append(f"触发时间：{bj.strftime('%Y-%m-%d %H:%M:%S')}（北京时间）")
     if event.symbol:
         lines.append(f"标的：{event.symbol}")

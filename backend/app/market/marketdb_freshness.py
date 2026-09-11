@@ -28,7 +28,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "marketdb" / "m
 #: 调度周期留余量——口径与 evolution 的 _METRIC_HISTORY_MAX_LAG 一致。
 MAX_STALE_TRADE_DAYS = 3
 
-_BJ = timezone(timedelta(hours=8))
+from app.core.bjtime import BJ_TZ, beijing_now  # S2-8 时区收敛
 
 
 def _to_date(ms: int | float | None) -> date | None:
@@ -54,7 +54,7 @@ def _to_date(ms: int | float | None) -> date | None:
     if ts <= 0:
         return None
     try:
-        return datetime.fromtimestamp(ts / 1000.0, tz=_BJ).date()
+        return datetime.fromtimestamp(ts / 1000.0, tz=BJ_TZ).date()
     except (OverflowError, OSError, ValueError):
         return None
 
@@ -120,7 +120,7 @@ def freshness(
               `reason` 仅在不可用/陈旧时非空，中文且带可执行处置。
     """
     path = Path(db_path) if db_path else DEFAULT_DB_PATH
-    base = asof or datetime.now(_BJ).date()
+    base = asof or beijing_now().date()
     out: dict = {
         "db": str(path), "available": False, "latest": None, "asof": base.isoformat(),
         "lag": None, "threshold": max_stale_days, "stale": False, "reason": "",

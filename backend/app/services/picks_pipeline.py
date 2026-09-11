@@ -33,7 +33,6 @@ from app.events.store import EventStore
 from app.market import trade_calendar as tc
 from app.market.chip import get_chip_service
 from app.market.tech_score import score_stock, sma
-from app.market.trading_status import beijing_now
 from app.picks.chip_signal import chip_basis_text, evaluate_chip_signal
 from app.picks.echelon import classify_echelon_role, score_echelon
 from app.picks.engine import (
@@ -65,6 +64,7 @@ from app.picks.rps import get_rps_service
 from app.picks.style_router import apply_style_offsets, route_style, style_note
 from app.services.quote_enrich import fill_valuation
 from app.services.quote_hub import QuoteHub
+from app.core.bjtime import beijing_now
 
 log = logging.getLogger(__name__)
 

@@ -3,19 +3,16 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import deque
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Callable
 
+from app.core.bjtime import beijing_now  # S2-8 时区收敛
 from app.core.freshness import Freshness
 from app.data_quality.validator import mark_stale, validate_quote
 from app.market import trade_calendar as tc
 from app.schemas.market import Quote, utcnow
 
 log = logging.getLogger(__name__)
-
-
-def _cst_now() -> datetime:
-    return datetime.now(timezone.utc) + timedelta(hours=8)
 
 
 def _in_market_hours(dt: datetime) -> bool:
@@ -126,7 +123,7 @@ class QuoteHub:
         日历不可用时返回 None → 不干预（未知不判，保持原行为）。"""
         verdict: bool | None = None
         try:
-            now = _cst_now()
+            now = beijing_now()
             days = await tc.trading_days(self.provider)
             if days:
                 verdict = tc.is_trade_day(days, now.date()) and _in_market_hours(now)

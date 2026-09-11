@@ -32,6 +32,7 @@ from sqlalchemy import select
 
 from app.models.paper import PaperOrder
 from app.review.models import MinuteDecisionRow
+from app.core.bjtime import BJ_OFFSET  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ def _parse(ts: str) -> datetime:
 
 
 def _trade_date_of(ts: str) -> str:
-    return (datetime.fromisoformat(ts) + timedelta(hours=8)).strftime("%Y%m%d")
+    return (datetime.fromisoformat(ts) + BJ_OFFSET).strftime("%Y%m%d")
 
 
 def record_signals(session_factory, symbol: str, signals: list[dict]) -> int:
@@ -100,7 +101,7 @@ def _window_points(points: list[dict], trigger: datetime) -> tuple[list[dict], s
     last_ts = _parse(points[-1]["ts"]) if points else None
     if not points or last_ts is None:
         return win, "pending"
-    last_bj = (last_ts + timedelta(hours=8)).strftime("%H:%M")
+    last_bj = (last_ts + BJ_OFFSET).strftime("%H:%M")
     session_over = last_bj >= "15:00"
     if last_ts >= end:  # 末点恰好落在窗口终点也算窗口完整
         return win, ("ready" if len(win) >= 10 else "expired")
@@ -331,7 +332,7 @@ def scan_and_settle_today(app_state, *, session_factory=None) -> dict:
     零盘中额外行情配额。
     """
     from app.core.db import get_session_factory
-    from app.sentiment.metric_history import beijing_today
+    from app.core.bjtime import beijing_today
 
     sf = session_factory or get_session_factory()
     tdate = beijing_today().isoformat()

@@ -13,6 +13,7 @@ from app.events.extract import (
     build_event,
     judge_state,
 )
+from app.core.bjtime import BJ_TZ  # S2-8 时区收敛
 
 NOW = datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc)
 
@@ -55,7 +56,7 @@ def test_judge_state_transitions():
     st = judge_state(over, [], now=NOW)
     assert st["status"] == "neutral"
     # 2026-09-09 时区口径：judged_at 返回北京 naive（NOW 是 UTC aware → 转换后比较）
-    over_bj = over.astimezone(timezone(timedelta(hours=8))).replace(tzinfo=None)
+    over_bj = over.astimezone(BJ_TZ).replace(tzinfo=None)
     assert st["judged_at"] > over_bj  # 收敛时刻 = 发布 + 超时
     assert judge_state(NOW - timedelta(hours=50), [{"direction": 1, "chain": ""}],
                        now=NOW, half_life_hours=48)["status"] == "expired"

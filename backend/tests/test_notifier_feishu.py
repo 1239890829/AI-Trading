@@ -62,11 +62,20 @@ def test_format_alert_text_survives_bad_snapshot():
 
 
 def test_format_alert_text_includes_beijing_trigger_time():
-    """triggered_at 为 UTC，文案必须换算成北京时间并自带时间行（盘中提醒第一问是何时）。"""
+    """triggered_at 已是**北京 naive**（2026-09-09 口径统一），文案**原样展示**。
+
+    本用例原先写的是 `datetime(2026, 9, 3, 2, 30, 5)  # UTC → 北京 10:30:05`
+    并断言输出 `10:30:05` —— 那断言的是**双重偏移**：`models/alert.py` 的
+    `triggered_at` 列默认值就是 `beijing_now_naive`，库内本就是北京时间，
+    渲染层再 +8h 会让飞书文案晚 8 小时（2026-09-11 实测：库内 14:59 显示成 22:59）。
+    口径统一时只改了写入侧、漏了这里，且旧断言把它固化了下来。
+    """
     ev = _event()
-    ev.triggered_at = datetime(2026, 9, 3, 2, 30, 5)  # UTC → 北京 10:30:05
+    ev.triggered_at = datetime(2026, 9, 3, 10, 30, 5)  # 北京 naive，直接展示
     text = format_alert_text(ev, _rule())
     assert "触发时间：2026-09-03 10:30:05（北京时间）" in text
+    # 防回潮：不得出现 +8h 之后的墙钟
+    assert "18:30:05" not in text
 
 
 def test_format_alert_text_without_triggered_at_has_no_time_line():

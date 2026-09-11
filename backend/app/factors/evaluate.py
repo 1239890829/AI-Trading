@@ -32,7 +32,7 @@ from app.factors.library import (
     HORIZONS_EXEC,
     FactorDef,
 )
-from app.market.trading_status import beijing_now
+from app.core.bjtime import beijing_now  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 

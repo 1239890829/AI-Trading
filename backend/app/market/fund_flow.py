@@ -32,7 +32,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time
 from pathlib import Path
 
 from app.core.ttl_cache import TTLCache
@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 SH_SYMBOL = "sh000001"  # 上证指数 = 沪市全市场
 SZ_SYMBOL = "sz399107"  # 深证A指 = 深市全市场（监管偏离同口径）
 YI = 1e8
-_TZ_BJ = timezone(timedelta(hours=8))
+from app.core.bjtime import BJ_TZ, beijing_now  # S2-8 时区收敛
 
 #: 历史资金流落盘（绕开东财 push2his 间歇拦截：拉一次存本地，读路径零外呼）
 _FLOW_STORE = Path(__file__).resolve().parents[2] / "data" / "fundflow" / "daily.json"
@@ -82,10 +82,6 @@ def _http():
 
 
 # ---------------------------------------------------------------- 时间/进度工具
-
-def _now_bj() -> datetime:
-    return datetime.now(_TZ_BJ)
-
 
 def _market_progress_minutes(now: datetime) -> int | None:
     """开盘以来分钟数（连续竞价口径）：09:30=0 … 11:30/13:00=120 … 15:00=240。
@@ -226,7 +222,7 @@ async def _turnover_today_uncached(hub, degraded: list[str]) -> dict:
         days = []
         degraded.append(f"交易日历不可用({type(exc).__name__})")
     if days:
-        pd_ = prev_trade_date(days, _now_bj().date())
+        pd_ = prev_trade_date(days, beijing_now().date())
         if pd_ is not None:
             prev_date = pd_.isoformat()
             sh_bars, sz_bars = await asyncio.gather(
@@ -240,7 +236,7 @@ async def _turnover_today_uncached(hub, degraded: list[str]) -> dict:
                     prev_total = prev_total_sh + prev_total_sz
                 else:
                     degraded.append("昨日全日成交额缺失")
-                progress = _market_progress_minutes(_now_bj())
+                progress = _market_progress_minutes(beijing_now())
                 if progress is not None:
                     ps_sh = _cum_amount_by_seq(sh_bars, pd_, max_seq=progress)
                     ps_sz = _cum_amount_by_seq(sz_bars, pd_, max_seq=progress)
@@ -253,7 +249,7 @@ async def _turnover_today_uncached(hub, degraded: list[str]) -> dict:
     # --- 全日估算 ---
     est_full_day = None
     est_method = None
-    now = _now_bj()
+    now = beijing_now()
     progress = _market_progress_minutes(now)
     if today_amount is not None:
         if progress is not None and progress >= 240:
@@ -308,9 +304,9 @@ def _yi(v: float | None) -> float | None:
 def _minute_label(ts) -> str:
     """分时点 ts（UTC ISO 串或 datetime）→ 北京时间 HH:MM。"""
     if isinstance(ts, str):
-        dt = datetime.fromisoformat(ts).astimezone(_TZ_BJ)
+        dt = datetime.fromisoformat(ts).astimezone(BJ_TZ)
     else:
-        dt = ts.astimezone(_TZ_BJ)
+        dt = ts.astimezone(BJ_TZ)
     return dt.strftime("%H:%M")
 
 
@@ -388,7 +384,7 @@ async def get_fund_flow_intraday() -> dict:
             items.append(item)
     out = {
         "items": items,  # [{t, main, super_, big, mid, small}]（亿元，累计口径）
-        "updated_at": _now_bj().strftime("%H:%M:%S"),
+        "updated_at": beijing_now().strftime("%H:%M:%S"),
         "degraded": degraded,
     }
     if not out["degraded"]:
@@ -459,7 +455,7 @@ def _snapshot_today_if_closed(rt: dict) -> None:
     （当日累计净额收盘定格 = 日度 bar，口径一致）。
     """
     try:
-        today = _now_bj()
+        today = beijing_now()
         if today.hour < 15 or (today.hour == 15 and today.minute < 5):
             return
         store = _read_flow_store() or {"updated_at": None, "days": {}}
@@ -507,7 +503,7 @@ def _rt_from_ulist(diff: list[dict], degraded: list[str]) -> dict:
         return {"available": False, "reason": "资金流响应缺沪深任一市场", "degraded": ["资金流实时数据不完整"]}
     total = {k: _sum3(by_mkt["sh"].get(k), by_mkt["sz"].get(k)) for k in _FLOW_KEYS.values()}
     ts = next((r.get("f124") for r in diff if r.get("f124")), None)
-    as_of = datetime.fromtimestamp(ts, _TZ_BJ).strftime("%H:%M:%S") if ts else None
+    as_of = datetime.fromtimestamp(ts, BJ_TZ).strftime("%H:%M:%S") if ts else None
     return {
         "available": True,
         "as_of": as_of,
@@ -607,7 +603,7 @@ async def get_fund_flow_history(hub, days: int = 30) -> dict:
         from app.market.trade_calendar import last_trade_date, prev_trade_date, trading_days
 
         cal = await trading_days(_calendar_provider(hub))
-        today = _now_bj().date()
+        today = beijing_now().date()
         lt = last_trade_date(cal, today)
         if lt is not None and lt < today:
             prev_d = lt  # 今日非交易日或未收盘：最近完整交易日=最近交易日
@@ -677,7 +673,7 @@ async def _pull_em_fflow_into_store() -> bool:
                 if len(parts) < 13:
                     continue
                 d = parts[0]
-                if d == _now_bj().date().isoformat():
+                if d == beijing_now().date().isoformat():
                     continue  # 今日进行中数据不落盘
                 rec = store["days"].setdefault(d, {})
                 rec[mkt] = {
@@ -696,7 +692,7 @@ async def _pull_em_fflow_into_store() -> bool:
     if ok:
         try:
             _FLOW_STORE.parent.mkdir(parents=True, exist_ok=True)
-            store["updated_at"] = _now_bj().isoformat(timespec="seconds")
+            store["updated_at"] = beijing_now().isoformat(timespec="seconds")
             _FLOW_STORE.write_text(json.dumps(store, ensure_ascii=False), encoding="utf-8")
             _FLOW_HIST_CACHE.invalidate()
         except Exception:
@@ -750,8 +746,8 @@ async def get_turnover_history(hub, days: int = 10) -> dict:
     from app.market.trade_calendar import last_trade_date, recent_trade_dates, trading_days
 
     cal = await trading_days(_calendar_provider(hub))
-    lt = last_trade_date(cal, _now_bj().date())
-    anchor = lt or _now_bj().date()
+    lt = last_trade_date(cal, beijing_now().date())
+    anchor = lt or beijing_now().date()
     ds = recent_trade_dates(cal, anchor, days + 1)  # 多取一天作对比基数
     sh_bars, sz_bars = await asyncio.gather(_sina_mk_bars(SH_SYMBOL), _sina_mk_bars(SZ_SYMBOL))
     if sh_bars is None or sz_bars is None:

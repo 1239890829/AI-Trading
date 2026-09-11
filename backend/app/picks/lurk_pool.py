@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime
 from pathlib import Path
 
 import duckdb
@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 
 #: 上海时区。`date_ms` 是 UTC+8 零点毫秒，必须按该时区还原日期，
 #: 否则跨零点会差一天（与 marketdb_freshness._to_date 同口径）。
-_BJ = timezone(timedelta(hours=8))
+from app.core.bjtime import BJ_TZ, beijing_now  # S2-8 时区收敛
 
 DB = Path(__file__).resolve().parents[2] / "data" / "marketdb" / "market.duckdb"
 FETCH_DAYS = 55      # 拉取交易日跨度（窗口+确认扫描余量）
@@ -140,8 +140,8 @@ def scan_lurk_pool(db_path: Path | None = None, *, asof: date | None = None) -> 
         items.append({"symbol": code.split(".")[0], "confirm_ms": hit["confirm_ms"]})
     items.sort(key=lambda x: x["confirm_ms"], reverse=True)
 
-    data_date = datetime.fromtimestamp(mx / 1000.0, tz=_BJ).date()
-    stale_days = trading_day_lag(data_date, asof or datetime.now(_BJ).date())
+    data_date = datetime.fromtimestamp(mx / 1000.0, tz=BJ_TZ).date()
+    stale_days = trading_day_lag(data_date, asof or beijing_now().date())
     stale = stale_days > MAX_STALE_TRADE_DAYS
     return {
         "trade_date": data_date.isoformat(),

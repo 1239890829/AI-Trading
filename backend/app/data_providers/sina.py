@@ -6,7 +6,7 @@ hq.sinajs.cn/list=sh600519,sz000001（GBK，需 Referer）。
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import httpx
 
@@ -15,7 +15,7 @@ from app.data_providers.tencent import to_tencent_symbol  # 同一 sh/sz 前缀�
 from app.schemas.market import OrderBook, OrderBookLevel, Quote
 
 SOURCE = "sina"
-_TZ_BJ = timezone(timedelta(hours=8))
+from app.core.bjtime import BJ_TZ  # S2-8 时区收敛
 
 _ROW = None
 
@@ -31,7 +31,7 @@ def _num(v: str | None) -> float | None:
 
 def _ts(date_s: str, time_s: str) -> datetime | None:
     try:
-        return datetime.strptime(f"{date_s} {time_s}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=_TZ_BJ).astimezone(timezone.utc)
+        return datetime.strptime(f"{date_s} {time_s}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=BJ_TZ).astimezone(timezone.utc)
     except ValueError:
         return None
 

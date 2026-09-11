@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime
+from app.core.bjtime import beijing_now_naive  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ def verify_event(
     {status, basis, new_limit_ups, net_inflow_yi, age_minutes}
     status ∈ fermenting / confirmed / faded / unknown；basis 说明判定依据。
     """
-    now = now or datetime.now()
+    now = now or beijing_now_naive()
     age_min = None
     if published_at is not None:
         age_min = round((now - published_at).total_seconds() / 60, 1)

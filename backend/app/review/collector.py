@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import select
 
@@ -33,7 +33,7 @@ from app.review.schemas import (
 
 log = logging.getLogger(__name__)
 
-CST = timezone(timedelta(hours=8))
+from app.core.bjtime import BJ_TZ  # S2-8 时区收敛
 
 # 等待快照首轮就绪的上界：收盘后数据已不再变化，等一会儿换完整维度更划算，
 # 但不能无限等——复盘是定时任务，卡死比缺数据更糟。
@@ -70,7 +70,7 @@ def to_cst_date(dt: datetime | None) -> str | None:
         return None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(CST).strftime("%Y%m%d")
+    return dt.astimezone(BJ_TZ).strftime("%Y%m%d")
 
 
 def _date_key(d: date) -> str:

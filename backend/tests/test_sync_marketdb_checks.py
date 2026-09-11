@@ -15,6 +15,7 @@ from scripts.sync_marketdb import (  # noqa: E402
     freshness_lag_days,
     run_quality_checks,
 )
+from app.core.bjtime import BJ_TZ  # S2-8 时区收敛
 
 SCHEMA = """
 CREATE TABLE daily_k (
@@ -136,24 +137,24 @@ def test_true_duplicate_factor_caught(con):
 
 def test_calendar_days_ms_from_persisted(monkeypatch):
     """持久化日历 → UTC+8 零点毫秒，升序，末元素 = 日历最后一天。"""
-    from datetime import date, datetime, timedelta, timezone
+    from datetime import date, datetime
 
     from app.market import trade_calendar as tc
 
     monkeypatch.setattr(tc, "_load_persisted", lambda: [date(2026, 9, 10), date(2026, 9, 11)])
     out = _calendar_days_ms()
-    tz8 = timezone(timedelta(hours=8))
+    tz8 = BJ_TZ
     assert out == sorted(out)
     assert out[-1] == int(datetime(2026, 9, 11, tzinfo=tz8).timestamp() * 1000)
 
 
 def test_calendar_days_ms_extends_stale_calendar_to_today(monkeypatch):
     """日历停在过去 → 用工作日补足到今天（偏保守：宁可多报滞后，不可静默放行）。"""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from app.market import trade_calendar as tc
 
-    tz8 = timezone(timedelta(hours=8))
+    tz8 = BJ_TZ
     today = datetime.now(tz8).date()
     monkeypatch.setattr(tc, "_load_persisted", lambda: [today - timedelta(days=10)])
     out = _calendar_days_ms()

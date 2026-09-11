@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.ttl_cache import cache_on
-from app.market.trading_status import beijing_now
+from app.core.bjtime import beijing_now
 
 log = logging.getLogger(__name__)
 

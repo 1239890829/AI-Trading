@@ -17,9 +17,8 @@ import json
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
+from app.core.bjtime import beijing_now_naive, beijing_now
 
-from app.core.db import beijing_now_naive
-from app.market.trading_status import beijing_now
 
 log = logging.getLogger(__name__)
 

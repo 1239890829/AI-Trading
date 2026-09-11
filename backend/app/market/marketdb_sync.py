@@ -30,8 +30,8 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from app.core.bjtime import beijing_now
 
-from app.market.trading_status import beijing_now
 
 log = logging.getLogger(__name__)
 

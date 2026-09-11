@@ -37,7 +37,7 @@ import logging
 from datetime import datetime, timezone
 
 from app.market.price_rules import limit_pct as _rules_limit_pct
-from app.market.trading_status import beijing_now
+from app.core.bjtime import beijing_now
 
 log = logging.getLogger(__name__)
 

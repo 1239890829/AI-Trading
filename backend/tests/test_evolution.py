@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import pytest
 
 import app.services.evolution as evo
 from app.models.agent import AgentAgenda
 from app.models.watchlist import Base
+from app.core.bjtime import beijing_now, BJ_TZ  # S2-8 时区收敛
 
 
 def _factory(tmp_path, name="evo.db"):
@@ -252,11 +253,11 @@ def test_scheduler_fires_when_clock_crosses_window(sf, monkeypatch):
     若此测试挂，说明调度逻辑本身有 bug；若过，则当日未触发是进程环境问题，
     须靠调度器 WARNING 日志与 /api/agent/agenda meta 的 liveness 现场取证。
     """
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime
 
     from app.market import trade_calendar as tc
 
-    BJ = timezone(timedelta(hours=8))
+
     today = evo.beijing_now().date()
 
     # 真实持久化日历（与线上同一份数据），保证交易日守卫用的是真实口径
@@ -279,7 +280,7 @@ def test_scheduler_fires_when_clock_crosses_window(sf, monkeypatch):
     class _App:
         state = _State()
 
-    clock = {"now": datetime.now(BJ).replace(hour=14, minute=44, second=0, microsecond=0)}
+    clock = {"now": datetime.now(BJ_TZ).replace(hour=14, minute=44, second=0, microsecond=0)}
     monkeypatch.setattr(evo, "beijing_now", lambda: clock["now"])
     monkeypatch.setattr(evo, "_MIN_TICK_INTERVAL_SEC", 0.01)  # 生产行为不变（60s 下限），测试提速
 
@@ -342,7 +343,6 @@ def test_data_health_flags_stale_sentiment_metrics(sf, tmp_path, monkeypatch):
     """
     from datetime import timedelta
 
-    from app.market.trading_status import beijing_now
 
     data_dir = tmp_path / "backend" / "data"
     data_dir.mkdir(parents=True)
@@ -377,7 +377,6 @@ def test_data_health_marketdb_uses_content_date_not_mtime(sf, tmp_path, monkeypa
     """
     import duckdb
 
-    from app.market.trading_status import beijing_now
 
     mdb_dir = tmp_path / "backend" / "data" / "marketdb"
     mdb_dir.mkdir(parents=True)
@@ -386,7 +385,7 @@ def test_data_health_marketdb_uses_content_date_not_mtime(sf, tmp_path, monkeypa
     con.execute("CREATE TABLE daily_k_adj (thscode VARCHAR, date_ms BIGINT, close_adj DOUBLE)")
     tail = beijing_now().date() - timedelta(days=10)
     ms = int(datetime(tail.year, tail.month, tail.day,
-                      tzinfo=timezone(timedelta(hours=8))).timestamp() * 1000)
+                      tzinfo=BJ_TZ).timestamp() * 1000)
     con.execute("INSERT INTO daily_k_adj VALUES ('600519.SH', ?, 10.0)", [ms])
     con.close()
     db.touch()  # mtime = 现在：旧判据会被骗过

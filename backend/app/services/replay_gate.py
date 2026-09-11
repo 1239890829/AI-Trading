@@ -18,8 +18,8 @@ import json
 import logging
 import re
 import subprocess
-from datetime import datetime
 from pathlib import Path
+from app.core.bjtime import beijing_now_naive  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ def _load_baseline() -> dict | None:
 def _save_baseline(stats: dict, commit: str, days: int) -> None:
     BASELINE_PATH.parent.mkdir(parents=True, exist_ok=True)
     BASELINE_PATH.write_text(json.dumps({
-        "saved_at": datetime.now().isoformat(),
+        "saved_at": beijing_now_naive().isoformat(),
         "commit": commit, "days": days, "stats": stats,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 

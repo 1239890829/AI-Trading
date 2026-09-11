@@ -49,6 +49,7 @@ from app.picks.push_cards import (  # noqa: E402
     sentiment_pairs,
     tri_text,
 )
+from app.core.bjtime import BJ_OFFSET  # S2-8 时区收敛
 
 
 BASE = "http://127.0.0.1:8000"
@@ -113,7 +114,7 @@ def build_intraday_card(picks, sent, breadth, now):
                 t = datetime.fromisoformat(str(e.get("triggered_at", "")))
             except ValueError:
                 continue
-            bj = t + timedelta(hours=8)  # 库内 UTC naive → 北京
+            bj = t + BJ_OFFSET  # 库内 UTC naive → 北京
             if bj.date() != now.date():
                 continue
             snap = e.get("snapshot") or {}

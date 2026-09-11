@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from app.core.ttl_cache import TTLCache
+from app.core.bjtime import beijing_now  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 
@@ -580,7 +581,7 @@ async def _t_events(ctx: ToolContext, **kw) -> str:
     """今日 watcher 异动/确认/证伪事件（AI 大脑 P1：助手读得到盘中事件流）。"""
     if ctx.session_factory is None:
         return "工具不可用：未配置数据库会话"
-    from datetime import datetime, timedelta, timezone as _tz
+    from datetime import datetime
 
     from sqlalchemy import select
 
@@ -608,12 +609,14 @@ async def _t_events(ctx: ToolContext, **kw) -> str:
     import json as _json
 
     rows = await _asyncio.to_thread(_q)
-    today = datetime.now(_tz(timedelta(hours=8))).strftime("%Y-%m-%d")
+    today = beijing_now().strftime("%Y-%m-%d")
     today_rows = []
     for r in rows:
-        # triggered_at 是 UTC naive → 北京时间比对
+        # triggered_at 已是**北京 naive**（2026-09-09 口径统一）→ 直接比对，
+        # 不再 +8h（旧注释「UTC naive」是统一前的残留，双重偏移会让 16:00
+        # 之后的告警落到次日而被过滤掉）。
         try:
-            dt = datetime.fromisoformat(r["triggered_at"]) + timedelta(hours=8)
+            dt = datetime.fromisoformat(r["triggered_at"])
         except Exception:  # noqa: BLE001
             continue
         if dt.strftime("%Y-%m-%d") == today:

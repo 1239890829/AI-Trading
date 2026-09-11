@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import httpx
 
@@ -29,7 +29,7 @@ from app.schemas.market import (
 log = logging.getLogger(__name__)
 
 SOURCE = "tencent"
-_TZ_BJ = timezone(timedelta(hours=8))
+from app.core.bjtime import BJ_TZ, beijing_now  # S2-8 时区收敛
 
 INDEX_SECIDS = ["s_sh000001", "s_sz399001", "s_sz399006", "s_sh000688", "s_sh000300", "s_sh000852"]
 
@@ -55,7 +55,7 @@ def _bj(v: str | None) -> datetime | None:
     if n is None:
         return None
     try:
-        return datetime.strptime(str(int(n)), "%Y%m%d%H%M%S").replace(tzinfo=_TZ_BJ).astimezone(timezone.utc)
+        return datetime.strptime(str(int(n)), "%Y%m%d%H%M%S").replace(tzinfo=BJ_TZ).astimezone(timezone.utc)
     except ValueError:
         return None
 
@@ -98,7 +98,7 @@ def build_minute_points(rows: list, trade_date: str, fallback_date) -> list[dict
             prev_cum_vol = cum_vol
         points.append(
             {
-                "ts": ts.replace(tzinfo=_TZ_BJ).astimezone(timezone.utc).isoformat(),
+                "ts": ts.replace(tzinfo=BJ_TZ).astimezone(timezone.utc).isoformat(),
                 "price": price,
                 "volume": minute_vol,
                 "cum_amount": cum_amount,
@@ -236,7 +236,7 @@ def parse_kline_payload(symbol: str, timeframe: str, payload: dict) -> list[Klin
         ts_raw = str(row[0])
         if minute:
             try:
-                ts = datetime.strptime(ts_raw, "%Y%m%d%H%M").replace(tzinfo=_TZ_BJ).astimezone(timezone.utc)
+                ts = datetime.strptime(ts_raw, "%Y%m%d%H%M").replace(tzinfo=BJ_TZ).astimezone(timezone.utc)
             except ValueError:
                 continue
         else:
@@ -400,7 +400,7 @@ class TencentProvider:
         node = payload.get("data") or {}
         rows = node.get("data") or []
         trade_date = str(node.get("date") or "")
-        points = build_minute_points(rows, trade_date, datetime.now(_TZ_BJ).date())
+        points = build_minute_points(rows, trade_date, beijing_now().date())
         if is_index_minute_symbol(symbol):
             # 指数无均价概念（点位≠成交额/成交量），avg 留空防分时 Y 轴被拉爆
             for p in points:

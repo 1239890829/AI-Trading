@@ -26,7 +26,7 @@ from datetime import date, timezone
 from pathlib import Path
 
 from app.core.db import get_session_factory
-from app.market.trading_status import beijing_now
+from app.core.bjtime import beijing_now
 
 log = logging.getLogger(__name__)
 
@@ -77,7 +77,6 @@ def _shadow_dir() -> Path:
 
 
 def _today_key() -> str:
-    from app.market.trading_status import beijing_now
 
     return beijing_now().date().isoformat()
 
@@ -103,7 +102,6 @@ class ShadowRunner:
     # ---- 幂等 ----
 
     def executed_today(self) -> bool:
-        from app.market.trading_status import beijing_now
         from app.models.paper import PaperOrder
 
         today_cst = beijing_now().date().isoformat()
@@ -288,7 +286,6 @@ async def shadow_loop(app, stop: asyncio.Event) -> None:
     """
     from app.core.config import settings
     from app.market import trade_calendar as tc
-    from app.market.trading_status import beijing_now
 
     interval = 60.0
     log.info("shadow loop started: window %02d:%02d-%02d:%02d",

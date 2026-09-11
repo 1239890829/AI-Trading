@@ -25,8 +25,8 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from app.core.config import settings
 from app.core.db import get_session_factory
-from app.market.trading_status import beijing_now
 from app.repositories.alert_repo import AlertRepository
+from app.core.bjtime import beijing_now
 
 log = logging.getLogger(__name__)
 

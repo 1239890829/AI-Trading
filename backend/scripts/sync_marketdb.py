@@ -45,6 +45,7 @@ import duckdb  # noqa: E402
 import httpx  # noqa: E402
 
 from app.core.config import Settings  # noqa: E402
+from app.core.bjtime import BJ_TZ  # S2-8 时区收敛
 
 DB_PATH = Path(__file__).resolve().parents[1] / "data" / "marketdb" / "market.duckdb"
 
@@ -304,7 +305,7 @@ def _calendar_days_ms(limit: int = 400) -> list[int]:
     与 `app/market/marketdb_freshness.trading_day_lag` 同源，口径单点收口）；日历落后于
     今天时用**工作日**补足到今天——节假日场景偏保守，宁可多报不可静默，同 freshness 模块判据。
     """
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from app.market import trade_calendar as tc
 
@@ -313,7 +314,7 @@ def _calendar_days_ms(limit: int = 400) -> list[int]:
         if not days:
             print("warn: 持久化交易日历不可用/过短，跳过 freshness 检查", file=sys.stderr)
             return []
-        tz8 = timezone(timedelta(hours=8))
+        tz8 = BJ_TZ
         today = datetime.now(tz8).date()
         cur = days[-1]
         while cur < today:  # 日历过期 → 工作日补足（宁可多报滞后）

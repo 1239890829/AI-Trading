@@ -13,7 +13,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 
-from app.market.trading_status import BJ, bar_date, beijing_now, resolve_trading_status
+from app.core.bjtime import BJ_TZ, beijing_now
+from app.market.trading_status import bar_date, resolve_trading_status
 from app.schemas.market import TradingStatus
 
 # 2026-08-24(Mon) … 2026-09-02(Wed)，周末已剔除
@@ -22,9 +23,9 @@ DAYS = [
     date(2026, 8, 28), date(2026, 8, 31), date(2026, 9, 1), date(2026, 9, 2),
 ]
 
-CLOSED = datetime(2026, 9, 2, 15, 30, tzinfo=BJ)     # 收盘后：日K 应已包含当日
-PREOPEN = datetime(2026, 9, 2, 2, 10, tzinfo=BJ)     # 盘中/盘前：当日 bar 通常还没有
-INTRADAY = datetime(2026, 9, 2, 10, 30, tzinfo=BJ)   # 连续竞价中
+CLOSED = datetime(2026, 9, 2, 15, 30, tzinfo=BJ_TZ)     # 收盘后：日K 应已包含当日
+PREOPEN = datetime(2026, 9, 2, 2, 10, tzinfo=BJ_TZ)     # 盘中/盘前：当日 bar 通常还没有
+INTRADAY = datetime(2026, 9, 2, 10, 30, tzinfo=BJ_TZ)   # 连续竞价中
 
 
 def test_normal_stock_with_today_bar_is_trading():
@@ -107,7 +108,7 @@ def test_long_gap_hints_delisting():
     """缺失跨度 > 250 个交易日 → reason 额外提示可能退市/长期停牌。"""
     days = [date(2024, 1, 1) + timedelta(days=i) for i in range(0, 900, 3)]
     bars = days[:5]
-    info = resolve_trading_status(bars, days, now=datetime(2026, 9, 2, 15, 30, tzinfo=BJ))
+    info = resolve_trading_status(bars, days, now=datetime(2026, 9, 2, 15, 30, tzinfo=BJ_TZ))
     assert info.status is TradingStatus.suspended
     assert info.suspended_days > 250
     assert "退市" in info.reason
@@ -115,7 +116,7 @@ def test_long_gap_hints_delisting():
 
 def test_bar_date_handles_offsets():
     """统一按北京时间取日期，避免某个源改存 UTC 午夜导致整体偏一天。"""
-    assert bar_date(datetime(2026, 9, 1, 0, 0, tzinfo=BJ)) == date(2026, 9, 1)
+    assert bar_date(datetime(2026, 9, 1, 0, 0, tzinfo=BJ_TZ)) == date(2026, 9, 1)
     # 同一时刻的 UTC 表示：2026-08-31T16:00Z == 北京时间 9/1 00:00
     assert bar_date(datetime(2026, 8, 31, 16, 0, tzinfo=timezone.utc)) == date(2026, 9, 1)
     # naive 按北京时间理解

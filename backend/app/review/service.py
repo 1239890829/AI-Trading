@@ -26,6 +26,7 @@ from app.review.model_router import ModelRouter
 from app.review.schemas import ReviewData, ReviewReport
 from app.review.storage import save_report
 from app.review.synthesis import build_action_items
+from app.core.bjtime import beijing_now  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 
@@ -257,17 +258,14 @@ async def review_scheduler(
     非交易日或时间未到就跳过，**不补跑历史日期**——
     补跑会让人分不清"这份报告是哪天生成的"。要补跑请用手动触发接口。
     """
-    from datetime import datetime, timedelta, timezone
 
     from app.review.storage import report_exists
-
-    cst = timezone(timedelta(hours=8))
     stop = stop or asyncio.Event()
 
     log.info("review scheduler started: daily %02d:%02d CST", run_hour, run_minute)
     while not stop.is_set():
         try:
-            now = datetime.now(cst)
+            now = beijing_now()
             today = now.date()
             ymd = today.strftime("%Y%m%d")
             if (now.hour, now.minute) >= (run_hour, run_minute):

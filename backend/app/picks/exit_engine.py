@@ -28,9 +28,9 @@ import json
 import logging
 import os
 
-from app.market.trading_status import beijing_now
 from app.picks.position_engine import load_plan, save_plan
 from app.picks.pre_limit_radar import board_limit_pct, is_sealed
+from app.core.bjtime import beijing_now
 
 log = logging.getLogger(__name__)
 

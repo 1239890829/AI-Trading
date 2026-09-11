@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime
 
 import duckdb
 import pytest
 
 from app.market import trade_calendar as tc
 from app.market.chip import ChipService, simulate_chip_distribution
+from app.core.bjtime import BJ_TZ  # S2-8 时区收敛
 
 _MS_DAY = 86_400_000
-_BJ = timezone(timedelta(hours=8))
+
 
 
 def _row(day: int, low: float, high: float, close: float, vol: float, turnover: float) -> dict:
@@ -132,7 +133,7 @@ def _mk_daily_k(tmp_path, *, tail: date, n: int) -> None:
     con.execute("""CREATE TABLE daily_k (
         thscode VARCHAR, date_ms BIGINT, open_price DOUBLE, high_price DOUBLE,
         low_price DOUBLE, close_price DOUBLE, volume DOUBLE, turnover DOUBLE)""")
-    ms = int(datetime(tail.year, tail.month, tail.day, tzinfo=_BJ).timestamp() * 1000)
+    ms = int(datetime(tail.year, tail.month, tail.day, tzinfo=BJ_TZ).timestamp() * 1000)
     con.executemany(
         "INSERT INTO daily_k VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         [("600519.SH", ms - (n - 1 - i) * _MS_DAY, 10.0, 10.2, 9.9, 10.1, 1_000_000, 10_100_000)

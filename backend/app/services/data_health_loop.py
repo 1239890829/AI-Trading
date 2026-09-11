@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from app.core.bjtime import beijing_now
 
 log = logging.getLogger(__name__)
 
@@ -78,7 +79,6 @@ async def data_health_loop(app_state, stop: asyncio.Event) -> None:
     # （先崩 ①，②被 ① 掩盖从未暴露），数据健康检查与飞书 ANOMALY 推送全部失效。
     from app.core.scheduler import wait_or_stop
     from app.market.trade_calendar import in_trading_window
-    from app.market.trading_status import beijing_now
     from app.services.push_policy import AnomalyPushGuard, PolicyKind, feishu_allowed
 
     guard = AnomalyPushGuard()

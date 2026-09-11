@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -34,11 +34,12 @@ from app.sentiment.intraday_monitor import (
     check_high_board_breaks,
     check_index_plunge,
 )
+from app.core.bjtime import BJ_TZ  # S2-8 时区收敛
 
-_BJT = timezone(timedelta(hours=8))
+
 #: 周三 10:30（连续竞价时段，2026-09-02 为真实交易日）
-WED = datetime(2026, 9, 2, 10, 30, tzinfo=_BJT)
-SAT = datetime(2026, 9, 5, 10, 30, tzinfo=_BJT)  # 周六
+WED = datetime(2026, 9, 2, 10, 30, tzinfo=BJ_TZ)
+SAT = datetime(2026, 9, 5, 10, 30, tzinfo=BJ_TZ)  # 周六
 TRADE_DAYS = [date(2026, 9, 1), date(2026, 9, 2)]
 
 

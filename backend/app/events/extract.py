@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 from app.events.chains import match_chains
+from app.core.bjtime import BJ_TZ, beijing_now_naive  # S2-8 时区收敛
 
 # ---------------------------------------------------------------- 人工维护表（显式，非静默推断）
 
@@ -152,13 +153,6 @@ JUDGE_STATUS_LABEL: dict[str, str] = {
 }
 
 
-def _beijing_now_naive() -> datetime:
-    """事件时间口径 = 北京 naive（与 app.core.db.beijing_now_naive 同义，独立实现防循环导入）。"""
-    from datetime import timedelta as _td
-
-    return datetime.now(timezone(_td(hours=8))).replace(tzinfo=None)
-
-
 def judge_state(
     published_at: "datetime | None",
     directions: "list[dict] | None",
@@ -179,13 +173,11 @@ def judge_state(
 
     :returns: {status, judged_at, reason, age_hours}
     """
-    from datetime import timezone as _tz
-
     dirs = directions or []
     # 2026-09-09 时区口径统一：事件时间为北京 naive（见 beijing_now_naive docstring）。
     # 传入 aware 时间统一转北京；naive 直接视为北京（不再按 UTC 解释）。
-    _BJ = _tz(timedelta(hours=8))
-    now = now or _beijing_now_naive()
+    _BJ = BJ_TZ
+    now = now or beijing_now_naive()
     pub = published_at
     if pub is not None and pub.tzinfo is not None:
         pub = pub.astimezone(_BJ).replace(tzinfo=None)
@@ -472,7 +464,7 @@ def build_event(title: str, *, source: str | None = None, url: str | None = None
         "summary": (summary or "").strip() or None,
         "source": source or "",
         "source_tier": classify_source_tier(source, is_announcement=is_announcement),
-        "published_at": published_at or _beijing_now_naive(),
+        "published_at": published_at or beijing_now_naive(),
         "fact_kind": fact_kind,
         "certainty": certainty,
         "category": category,

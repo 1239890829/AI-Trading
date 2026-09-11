@@ -13,20 +13,14 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 
 from app.market.trade_calendar import last_trade_date, recent_trade_dates, trading_days
 from app.schemas.market import LongHuRecord
 from app.services.theme_service import parse_theme_tags
+from app.core.bjtime import beijing_now  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
-
-_BJ_DELTA = timedelta(hours=8)
-
-
-def cst_now() -> datetime:
-    """当前北京时间（内部数据统一 UTC 存储，展示层转 CST）。"""
-    return datetime.now(timezone.utc) + _BJ_DELTA
 
 
 def guess_context(now_cst: datetime) -> str:
@@ -94,7 +88,7 @@ async def collect_predict_evidence(
 ) -> dict:
     """采集预判所需全部数据面。返回 {数据: 值, gaps: [缺失标注]}。"""
     gaps: list[str] = []
-    now_cst = cst_now()
+    now_cst = beijing_now()
     today = now_cst.date()
 
     provider = hub.provider

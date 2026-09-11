@@ -1,10 +1,9 @@
 """fund_flow 纯函数与降级逻辑单测（不外呼——数据源调用一概 monkeypatch/直测纯函数）。"""
 
-from datetime import date, datetime, timezone, timedelta
+from datetime import date, datetime
 
+from app.core.bjtime import BJ_TZ  # S2-8：时区常量唯一权威
 from app.market import fund_flow as ff
-
-_TZ_BJ = timezone(timedelta(hours=8))
 
 
 # ---------------------------------------------------------------- 时间口径
@@ -12,15 +11,15 @@ _TZ_BJ = timezone(timedelta(hours=8))
 def test_market_progress_minutes_sessions():
     mk = ff._market_progress_minutes
     # 盘前
-    assert mk(datetime(2026, 9, 4, 9, 0, tzinfo=_TZ_BJ)) is None
+    assert mk(datetime(2026, 9, 4, 9, 0, tzinfo=BJ_TZ)) is None
     # 早盘 09:31 → 1 分钟
-    assert mk(datetime(2026, 9, 4, 9, 31, tzinfo=_TZ_BJ)) == 1
+    assert mk(datetime(2026, 9, 4, 9, 31, tzinfo=BJ_TZ)) == 1
     # 午休
-    assert mk(datetime(2026, 9, 4, 12, 0, tzinfo=_TZ_BJ)) is None
+    assert mk(datetime(2026, 9, 4, 12, 0, tzinfo=BJ_TZ)) is None
     # 午后 13:01 → 121
-    assert mk(datetime(2026, 9, 4, 13, 1, tzinfo=_TZ_BJ)) == 121
+    assert mk(datetime(2026, 9, 4, 13, 1, tzinfo=BJ_TZ)) == 121
     # 收盘后封顶 240
-    assert mk(datetime(2026, 9, 4, 15, 30, tzinfo=_TZ_BJ)) == 240
+    assert mk(datetime(2026, 9, 4, 15, 30, tzinfo=BJ_TZ)) == 240
     # naive datetime 视作北京时间
     assert mk(datetime(2026, 9, 4, 9, 31)) == 1
 
@@ -128,12 +127,12 @@ def test_snapshot_today_if_closed_persists_once(monkeypatch, tmp_path):
     store_file = tmp_path / "daily.json"
     monkeypatch.setattr(ff, "_FLOW_STORE", store_file)
     # 14:00 不落盘
-    monkeypatch.setattr(ff, "_now_bj", lambda: datetime(2026, 9, 4, 14, 0, tzinfo=_TZ_BJ))
+    monkeypatch.setattr(ff, "beijing_now", lambda: datetime(2026, 9, 4, 14, 0, tzinfo=BJ_TZ))
     rt = {"available": True, "items": {"sh": {"main": -1.0}, "sz": {"main": -2.0}}}
     ff._snapshot_today_if_closed(rt)
     assert not store_file.exists()
     # 15:06 落盘
-    monkeypatch.setattr(ff, "_now_bj", lambda: datetime(2026, 9, 4, 15, 6, tzinfo=_TZ_BJ))
+    monkeypatch.setattr(ff, "beijing_now", lambda: datetime(2026, 9, 4, 15, 6, tzinfo=BJ_TZ))
     ff._snapshot_today_if_closed(rt)
     import json
     data = json.loads(store_file.read_text())

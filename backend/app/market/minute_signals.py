@@ -23,11 +23,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-BJ_OFFSET = timedelta(hours=8)
+from app.core.bjtime import BJ_OFFSET  # S2-8 时区收敛
 WEIGHTS = {"avg_dev": 0.30, "vol_div": 0.25, "surge": 0.20, "breakout": 0.15, "turnover": 0.10}
 ACTIVE_KEYS = ("avg_dev", "vol_div", "surge", "breakout")  # turnover 本轮恒降级
 COOLDOWN_BARS = 30

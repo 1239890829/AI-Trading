@@ -20,8 +20,9 @@ import re
 
 from sqlalchemy import select
 
-from app.core.db import beijing_now_naive, get_session_factory
+from app.core.db import get_session_factory
 from app.models.event import EventCard, EventDirection
+from app.core.bjtime import beijing_now_naive
 
 log = logging.getLogger(__name__)
 

@@ -45,6 +45,7 @@ from app.market.performance import compute_performance
 from app.picks.intraday_rules import confirm_signal, is_performance_tag
 from app.sentiment.calibration import percentile_of
 from app.services.theme_service import parse_theme_tags
+from app.core.bjtime import beijing_now
 
 log = logging.getLogger(__name__)
 
@@ -576,7 +577,6 @@ async def run_backtest(*, days: int = 120, provider, catalog_fetcher, bars_fetch
     今日也不入窗（盘中池是半截数据，且 T+1/T+3 前瞻收益必然缺失）。
     """
     from app.market import trade_calendar as tc
-    from app.market.trading_status import beijing_now
 
     all_days = await tc.trading_days(provider, lookback_days=days + 30)
     today = beijing_now().date()

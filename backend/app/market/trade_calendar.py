@@ -43,6 +43,7 @@ import logging
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from app.core.bjtime import beijing_now  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 
@@ -258,7 +259,7 @@ def in_trading_window(now: datetime | None = None) -> bool:
     日历故障把盘中误判成休市。注意与 QuoteHub._in_market_hours（09:15–15:05，
     管休市 stale 标记）口径不同、各司其职。
     """
-    now = now or datetime.now(timezone.utc) + timedelta(hours=8)
+    now = now or beijing_now()
     if now.weekday() >= 5:
         return False
     days = _load_persisted()
@@ -277,7 +278,7 @@ def in_wide_market_window(now: datetime | None = None) -> bool:
     2026-09-07 R2 收口：QuoteHub._in_market_hours 与 board_flow._in_session
     的同口径时刻判定合并到此处，时段窗口单点。
     """
-    now = now or datetime.now(timezone.utc) + timedelta(hours=8)
+    now = now or beijing_now()
     hhmm = now.hour * 100 + now.minute
     return 915 <= hhmm <= 1505
 

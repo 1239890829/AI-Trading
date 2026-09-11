@@ -24,15 +24,16 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
+from app.core.bjtime import BJ_TZ  # S2-8 时区收敛
 
 ROOT = Path(__file__).resolve().parents[1]  # backend/
 STATE_PATH = ROOT / "data" / "repo-watch" / "state.json"
 REPORT_DIR = ROOT.parent / "docs" / "repo-watch"
 API = "https://api.github.com"
-CST = timezone(timedelta(hours=8))
-NOW = lambda: datetime.now(CST)  # noqa: E731
+
+NOW = lambda: datetime.now(BJ_TZ)  # noqa: E731
 
 # ---------------------------------------------------------------------------
 # 已采纳参考仓库清单（增删仓库只改这里；tier: adopted=成果已吸收/experimental=决策载体）
@@ -413,7 +414,7 @@ def render_report(results: list, window_note: str) -> str:
         L.append("全部仓库拉取成功。")
     L.append("")
     L.append("---")
-    L.append(f"*生成时间 {now.strftime('%Y-%m-%d %H:%M:%S')} CST｜跟踪 {len(WATCH_REPOS)} 个仓库｜纪律：只发现汇总，不引入变更*")
+    L.append(f"*生成时间 {now.strftime('%Y-%m-%d %H:%M:%S')} BJ_TZ｜跟踪 {len(WATCH_REPOS)} 个仓库｜纪律：只发现汇总，不引入变更*")
     return "\n".join(L)
 
 

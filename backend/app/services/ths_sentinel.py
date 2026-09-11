@@ -21,7 +21,7 @@ import contextlib
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime
 from typing import Any
 
 from app.core.config import settings
@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 #: 哨兵专用系统规则名（record_trigger 外键要求 rule 存在；get-or-create）
 SENTINEL_RULE_NAME = "__ths_reason_sentinel__"
 
-_BJT = timezone(timedelta(hours=8))
+from app.core.bjtime import beijing_now  # S2-8 时区收敛
 
 
 def _ensure_rule(session_factory) -> AlertRule:
@@ -115,7 +115,7 @@ class ThsReasonSentinel:
 
     async def probe_once(self, *, now: datetime | None = None, trade_days: list[date] | None = None) -> dict:
         """单次探测。now/trade_days 注入即确定性（测试用）；默认真实时钟 + 日历。"""
-        now = now or datetime.now(_BJT)
+        now = now or beijing_now()
         if self.provider is None:
             self.state = "idle"
             return self.snapshot()
@@ -222,7 +222,7 @@ class ThsReasonSentinel:
         channels = await get_notifier_registry().dispatch(event, rule)
         repo.update_event_channels(event.id, channels)
         self._last_alert_epoch = now_epoch
-        self.last_alert_at = datetime.now(_BJT).isoformat(timespec="seconds")
+        self.last_alert_at = beijing_now().isoformat(timespec="seconds")
         self.last_message = text
         self.alerts_fired += 1
         log.warning("[THS-SENTINEL] %s", text.splitlines()[0])

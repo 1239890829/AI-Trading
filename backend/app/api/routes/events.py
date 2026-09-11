@@ -16,17 +16,17 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 
-from app.market.trading_status import beijing_now
 from pydantic import BaseModel, Field
 
 from app.api.deps import normalize_symbol, require_write_token
 from app.core.db import get_session_factory
 from app.events.store import EventStore
+from app.core.bjtime import beijing_now, beijing_now_naive  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 
@@ -402,7 +402,7 @@ async def backfill_directions(
     幂等：仅对「当前无 direction 行」的事件补抽，绝不覆盖已有判定；category
     仅当旧值为 other 时升级（store.backfill_event 保证）。可重复执行。
     """
-    from datetime import timedelta, timezone as _tz
+    from datetime import timedelta
 
     from app.events.extract import build_event
 
@@ -411,7 +411,7 @@ async def backfill_directions(
         return {"data": {"scanned": 0, "filled": 0, "note": "题材目录未同步，跳过（不臆造方向）"}, "meta": {}}
 
     # 2026-09-09 时区口径：published_at 统一北京 naive，cutoff 也用北京 naive
-    cutoff = datetime.now(_tz(timedelta(hours=8))).replace(tzinfo=None) - timedelta(days=days)
+    cutoff = beijing_now_naive() - timedelta(days=days)
     rows = store.list_events(active_only=False, limit=2000)
     scanned = filled = 0
     for r in rows:
@@ -480,7 +480,7 @@ async def theme_focus(
     from app.events.extract import judge_state
 
     # 2026-09-09 时区口径：published_at 统一北京 naive，cutoff 也用北京 naive
-    cutoff = datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None) - timedelta(days=days)
+    cutoff = beijing_now_naive() - timedelta(days=days)
     rows = store.list_events(active_only=False, limit=2000)
     buckets: dict[str, dict] = {}
     for r in rows:

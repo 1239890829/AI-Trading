@@ -19,7 +19,7 @@ from app.schemas.market import AnomalyRecord, Kline, LimitUpRecord, LongHuRecord
 log = logging.getLogger(__name__)
 
 SOURCE = "ths"
-_TZ_SH = timezone(timedelta(hours=8))
+from app.core.bjtime import BJ_TZ, beijing_now  # S2-8 时区收敛
 
 
 def to_thscode(symbol: str) -> str:
@@ -68,11 +68,11 @@ def _parse_heat_items(data: dict) -> tuple[str | None, list[dict]]:
 
 def _as_shanghai(dt: datetime) -> datetime:
     """naive datetime 统一按上海时区解释（与腾讯 K 线的 _as_aware 同款处理）。"""
-    return dt.replace(tzinfo=_TZ_SH) if dt.tzinfo is None else dt.astimezone(_TZ_SH)
+    return dt.replace(tzinfo=BJ_TZ) if dt.tzinfo is None else dt.astimezone(BJ_TZ)
 
 
 def date_ms(d: date) -> int:
-    return int(datetime(d.year, d.month, d.day, tzinfo=_TZ_SH).timestamp() * 1000)
+    return int(datetime(d.year, d.month, d.day, tzinfo=BJ_TZ).timestamp() * 1000)
 
 
 class ThsFuyaoProvider:
@@ -507,7 +507,7 @@ class ThsFuyaoProvider:
             if not ex_ms:
                 continue
             out.append({
-                "ex_date": datetime.fromtimestamp(ex_ms / 1000, tz=_TZ_SH).date(),
+                "ex_date": datetime.fromtimestamp(ex_ms / 1000, tz=BJ_TZ).date(),
                 "dividend": num(it.get("dividend_per_share")),
                 "bonus": num(it.get("per_share_bonus")),
                 "source": SOURCE,
@@ -537,7 +537,7 @@ class ThsFuyaoProvider:
         """
         if timeframe != "1d":
             raise ProviderError(f"ths kline 仅支持日线 1d，收到 {timeframe}")
-        end_dt = _as_shanghai(end) if end is not None else datetime.now(_TZ_SH)
+        end_dt = _as_shanghai(end) if end is not None else beijing_now()
         start_dt = _as_shanghai(start) if start is not None else end_dt - timedelta(days=730)
         if start_dt > end_dt:
             raise ProviderError(f"ths kline 时间区间非法：{start_dt} > {end_dt}")
@@ -568,7 +568,7 @@ class ThsFuyaoProvider:
                 Kline(
                     symbol=symbol,
                     timeframe="1d",
-                    ts=datetime.fromtimestamp(ms / 1000, tz=_TZ_SH),
+                    ts=datetime.fromtimestamp(ms / 1000, tz=BJ_TZ),
                     open=it.get("open_price"),
                     high=it.get("high_price"),
                     low=it.get("low_price"),

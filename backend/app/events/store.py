@@ -8,14 +8,15 @@ app/api/routes/events.py）。
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.core.db import beijing_now_naive, get_session_factory
+from app.core.db import get_session_factory
 from app.events.extract import build_event, dedupe_directions
 from app.models.event import EventCard, EventDirection
+from app.core.bjtime import beijing_now_naive
 
 log = logging.getLogger(__name__)
 
@@ -132,14 +133,15 @@ class EventStore:
         """
         if row.status != "active":
             return False
-        from app.core.db import beijing_now_naive as _bj
+
+        from app.core.bjtime import BJ_TZ, beijing_now_naive as _bj
 
         now = now or _bj()
         if now.tzinfo is not None:
-            now = now.astimezone(timezone(timedelta(hours=8))).replace(tzinfo=None)
+            now = now.astimezone(BJ_TZ).replace(tzinfo=None)
         published = row.published_at
         if published is not None and published.tzinfo is not None:
-            published = published.astimezone(timezone(timedelta(hours=8))).replace(tzinfo=None)
+            published = published.astimezone(BJ_TZ).replace(tzinfo=None)
         age_hours = (now - published).total_seconds() / 3600
         return age_hours < row.half_life_hours * 2
 

@@ -35,10 +35,10 @@ import time
 from app.core.config import settings
 from app.core.db import get_session_factory
 from app.market import trade_calendar as tc
-from app.market.trading_status import beijing_now
 from app.models.alert import AlertRule
 from app.notifiers import get_notifier_registry
 from app.picks.push_cards import build_buy_point_card
+from app.core.bjtime import beijing_now
 
 log = logging.getLogger(__name__)
 

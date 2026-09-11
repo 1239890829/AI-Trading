@@ -37,7 +37,6 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.core.ttl_cache import TTLCache
@@ -46,7 +45,7 @@ from app.market import trade_calendar
 log = logging.getLogger(__name__)
 
 _YI = 1e8
-_TZ_BJ = timezone(timedelta(hours=8))
+from app.core.bjtime import beijing_now  # S2-8 时区收敛
 
 _STORE_DIR = Path(__file__).resolve().parents[2] / "data" / "boardflow"
 _DAILY_STORE = _STORE_DIR / "daily.json"
@@ -85,13 +84,9 @@ def _http():
     return _HTTP
 
 
-def _now_bj() -> datetime:
-    return datetime.now(_TZ_BJ)
-
-
 def _in_session() -> bool:
     """2026-09-07 R2 收口：时刻判定单点在 trade_calendar.in_wide_market_window。"""
-    return trade_calendar.in_wide_market_window(_now_bj())
+    return trade_calendar.in_wide_market_window(beijing_now())
 
 
 def _num(v) -> float | None:
@@ -234,7 +229,7 @@ async def get_board_minute(board_code: str) -> dict:
         "items": items,  # [{t, main, small, mid, big, super_}]（亿元，累计口径）
         "daily_bars": [{"date": b[0], "main_yi": b[1], "close_pct": b[2]} for b in bars],
         "delayed": True,  # 延迟口径标志（前端必须标注）
-        "updated_at": _now_bj().strftime("%H:%M:%S"),
+        "updated_at": beijing_now().strftime("%H:%M:%S"),
         "degraded": [] if bars else ["日度历史未沉淀（每日收盘后自动累积 Top 板块）"],
     }
     _MINUTE_CACHE.set(board_code, out)
@@ -271,7 +266,7 @@ async def get_board_members(board_code: str) -> dict:
         "board_code": board_code,
         "rows": rows,
         "delayed": host == _HOSTS[1],
-        "updated_at": _now_bj().strftime("%H:%M:%S"),
+        "updated_at": beijing_now().strftime("%H:%M:%S"),
         "degraded": (["主域不可达，使用延迟口径（push2delay）"] if host == _HOSTS[1] else []),
     }
     if out["available"]:
@@ -320,7 +315,7 @@ def _load_dayk_store() -> dict:
 def _yesterday_ranks(kind: str) -> tuple[dict | None, str | None]:
     """最近一个已落盘交易日（< 今日）的板块榜位。返回 (ranks, 日期)。"""
     days = _read_store_memo(_DAILY_STORE, "daily").get("days") or {}
-    today = _now_bj().date().isoformat()
+    today = beijing_now().date().isoformat()
     for d in sorted(days, reverse=True):
         if d >= today:
             continue
@@ -368,7 +363,7 @@ def _sum_n_yi(bars: list, n: int, f62_today: float | None, today_str: str) -> fl
 def get_board_streaks(f62_by_code: dict[str, float | None]) -> dict[str, int | None]:
     """从落盘 daykline 批量算连续流入天数（零外呼）。store 无该板块 → 不在返回里。"""
     store = _load_dayk_store()
-    today_str = _now_bj().date().isoformat()
+    today_str = beijing_now().date().isoformat()
     out: dict[str, int | None] = {}
     for code, bars in store.items():
         bars = bars.get("bars") or []
@@ -401,7 +396,7 @@ async def get_board_fund_flow(kind: str, range_key: str) -> dict:
     if rows is None:
         return {"available": False, "reason": degraded[0] if degraded else "数据源不可用", "rows": [], "degraded": degraded}
 
-    today_str = _now_bj().date().isoformat()
+    today_str = beijing_now().date().isoformat()
 
     if range_key == "20d":
         store = _load_dayk_store()
@@ -438,7 +433,7 @@ async def get_board_fund_flow(kind: str, range_key: str) -> dict:
             "rows": enriched[:50],
             "total_boards": len(rows),
             "coverage": len(store),
-            "updated_at": _now_bj().strftime("%H:%M:%S"),
+            "updated_at": beijing_now().strftime("%H:%M:%S"),
             "rank_basis_date": None,
             "degraded": degraded + [f"20 日区间基于本地沉淀的 {len(store)} 个板块（每日收盘后自动扩充）"],
         }
@@ -466,7 +461,7 @@ async def get_board_fund_flow(kind: str, range_key: str) -> dict:
         "rows": rows,
         "total_boards": len(rows),
         "coverage": None,
-        "updated_at": _now_bj().strftime("%H:%M:%S"),
+        "updated_at": beijing_now().strftime("%H:%M:%S"),
         "rank_basis_date": basis_date,
         "degraded": degraded,
     }
@@ -539,7 +534,7 @@ async def snapshot_daily_if_closed() -> bool:
     由 review_intraday 调度 tick 调用（15:00-23:00 窗口内每分钟尝试，当日幂等）。
     返回是否写入。任何子项失败只跳过该子项并 warning，不阻塞其余沉淀。
     """
-    now = _now_bj()
+    now = beijing_now()
     if (now.hour, now.minute) < (_SNAPSHOT_HOUR, _SNAPSHOT_MINUTE):
         return False
     daily = _read_store_memo(_DAILY_STORE, "daily") or {"days": {}}

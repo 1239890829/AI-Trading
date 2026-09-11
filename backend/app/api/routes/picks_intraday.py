@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.api.deps import require_write_token
 from app.core.config import settings
 from app.services.market_snapshot import default_trade_date, load_snapshot_map
+from app.core.bjtime import beijing_now
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/picks", tags=["picks-intraday"])
@@ -239,7 +240,7 @@ async def _build_opportunities(
     #   ② 候选须满足任一：已涨停(boards≥1) / 涨幅≥5% / 判定 certainty=高
     # watcher 确认与买点触发（dispatch_alert 路径）不受此门槛限制（本就是强信号）。
     with contextlib.suppress(Exception):
-        from app.market.trading_status import beijing_now, in_trading_window
+        from app.market.trading_status import in_trading_window
         from app.picks.watch_ledger import record_sighting
 
         now = beijing_now()
@@ -301,7 +302,6 @@ async def watch_ledger(
     当日全量行（tracking + settled，含入选说明与盈亏）+ 近 N 日历史 + 当日统计。
     数据源：盘中 watcher 确认/买点触发/机会候选**首见登记**，收盘复盘自动清算。
     """
-    from app.market.trading_status import beijing_now
     from app.picks.watch_ledger import day_stats, get_day, get_history
 
     target = date or beijing_now().date().isoformat()
@@ -376,7 +376,6 @@ async def relay_rank(request: Request) -> dict:
     跨日自动失效，不会把昨天榜挂到今天。计算本体也已由串行改有界并发（见 relay_rank.py）。
     """
     from app.core.ttl_cache import cache_on
-    from app.market.trading_status import beijing_now
     from app.picks.relay_rank import compute_relay_rank
 
     hub = request.app.state.hub

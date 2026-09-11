@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from app.core.db import beijing_now_naive
 from app.models.alert import AlertEvent, AlertRule
+from app.core.bjtime import beijing_now_naive
 
 
 class AlertRepository:

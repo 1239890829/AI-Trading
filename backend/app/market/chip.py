@@ -30,7 +30,7 @@ ths 官方 59 端点无筹码分布数据（capability-map.md 已核对），故
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 
 from app.core.ttl_cache import TTLCache
@@ -45,7 +45,7 @@ MAX_DAILY_TURNOVER = 0.85      # 单日最大换手比例（保护上限）
 ASSUMED_AVG_TURNOVER = 0.01    # 自由流通盘代理的假设日均换手
 DEFAULT_WINDOW = 250           # 参与分布的交易日窗口
 GRID = 100                     # 价格网格档数
-_BJ = timezone(timedelta(hours=8))
+from app.core.bjtime import BJ_TZ, beijing_now_naive  # S2-8 时区收敛
 _MS = 1000
 
 
@@ -238,12 +238,12 @@ class ChipService:
         sim["available"] = True
         sim["approx"] = True
         sim["window"] = self._window
-        sim["as_of"] = datetime.fromtimestamp(rows[-1][0] / _MS, tz=_BJ).strftime("%Y-%m-%d")
+        sim["as_of"] = datetime.fromtimestamp(rows[-1][0] / _MS, tz=BJ_TZ).strftime("%Y-%m-%d")
         sim["note"] = (
             "近似口径：流通盘=窗口均量/1%假设换手；形态（主峰/集中度/支撑压力）稳健，"
             "获利盘绝对值仅供参考"
         )
-        sim["generated_at"] = datetime.now().isoformat(timespec="seconds")
+        sim["generated_at"] = beijing_now_naive().isoformat(timespec="seconds")
         return sim
 
 

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.data_quality.validator import board_limit_pct, validate_order_book, validate_quote
 from app.schemas.market import OrderBook, OrderBookLevel, Quality, Quote
+from app.core.bjtime import BJ_TZ  # S2-8 时区收敛
 
 
 def make_quote(**kw) -> Quote:
@@ -235,13 +236,13 @@ def test_in_trading_window_weekend_false():
     from app.market.trade_calendar import in_trading_window
 
     # 2026-09-05 是周六（无论日历如何，周末恒 False）
-    assert in_trading_window(datetime(2026, 9, 5, 10, 0, tzinfo=timezone(timedelta(hours=8)))) is False
+    assert in_trading_window(datetime(2026, 9, 5, 10, 0, tzinfo=BJ_TZ)) is False
 
 
 def test_in_trading_window_weekday_time_bounds():
     from app.market.trade_calendar import in_trading_window
 
-    cst = timezone(timedelta(hours=8))
+    cst = BJ_TZ
     # 周三 2026-09-02；窗口 = 连续竞价（09:30–11:30 / 13:00–15:00），集合竞价豁免
     assert in_trading_window(datetime(2026, 9, 2, 9, 14, tzinfo=cst)) is False
     assert in_trading_window(datetime(2026, 9, 2, 9, 21, tzinfo=cst)) is False  # 集合竞价：形态不完整，豁免

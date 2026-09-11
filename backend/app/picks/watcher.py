@@ -47,7 +47,6 @@ from app.core.config import settings
 from app.core.db import get_session_factory
 from app.market import board_flow
 from app.market import trade_calendar as tc
-from app.market.trading_status import beijing_now
 from app.models.alert import AlertRule
 from app.notifiers import get_notifier_registry
 from app.picks import intraday_rules as rules
@@ -59,6 +58,7 @@ from app.picks.intraday_rules import (
 )
 from app.repositories.alert_repo import AlertRepository
 from app.services.theme_service import normalize_theme, parse_theme_tags
+from app.core.bjtime import beijing_now, to_beijing  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 
@@ -545,15 +545,14 @@ async def _prev_day_volume(hub, symbol: str) -> float | None:
     失败返回 None（unknown），调用方缓存后当日不重试。
     """
     try:
-        from datetime import timedelta
 
-        from app.market.trading_status import beijing_now as _now
+        from app.core.bjtime import beijing_now as _now
 
         klines = await hub.provider.get_kline(symbol, "1d")
         today = _now().date()
         prev = [
             k for k in (klines or [])
-            if k.volume is not None and (k.ts + timedelta(hours=8)).date() < today
+            if k.volume is not None and to_beijing(k.ts).date() < today
         ]
         return float(prev[-1].volume) if prev else None
     except Exception as exc:

@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 from app.core.ttl_cache import TTLCache
 from app.market.trade_calendar import in_trading_window
@@ -30,7 +30,7 @@ from app.news.flash_state import FlashCursor
 
 log = logging.getLogger(__name__)
 
-_TZ_BJ = timezone(timedelta(hours=8))
+from app.core.bjtime import BJ_TZ  # S2-8 时区收敛
 
 _HOSTS = (
     "https://np-weblist.eastmoney.com",
@@ -123,7 +123,7 @@ def _parse_item(item: dict) -> dict | None:
     raw = (item.get("showTime") or "").strip()
     if raw:
         try:
-            show_time = datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").replace(tzinfo=_TZ_BJ)
+            show_time = datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").replace(tzinfo=BJ_TZ)
         except ValueError:
             show_time = None  # 解析不出 → 交由 build_event 用当前时刻（指纹仍可去重）
     code = (item.get("code") or "").strip() or None
@@ -289,7 +289,7 @@ def _to_event(p: dict, theme_names: list[str] | None = None,
         # 2026-09-09 时区修复：此前 astimezone(utc) 入库 → 展示被当北京时间
         # → 全部时间"早了 8 小时"（用户看到的事件全是早上）。事件时间口径
         # 统一为北京 naive（app.core.db.beijing_now_naive docstring）。
-        published = published.astimezone(_TZ_BJ).replace(tzinfo=None)
+        published = published.astimezone(BJ_TZ).replace(tzinfo=None)
     symbols = p.get("symbols") or []
     return build_event(
         p["title"],

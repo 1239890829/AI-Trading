@@ -29,6 +29,7 @@ import os
 from pathlib import Path
 
 from app.picks.morning_brief import REPO_ROOT
+from app.core.bjtime import beijing_now
 
 log = logging.getLogger(__name__)
 
@@ -73,7 +74,6 @@ async def record_daily_heat(state) -> dict:
         calendar_unavailable / date_mismatch / empty_themes / no_pool_date）。
     """
     from app.market import trade_calendar as tc
-    from app.market.trading_status import beijing_now
     from app.picks.review_intraday import collect_closing_facts
 
     state = state.state if hasattr(state, "state") else state
@@ -131,7 +131,6 @@ async def record_daily_skyrocket(state) -> dict:
     - 失败显式返回 reason，绝不静默。
     """
     from app.market import trade_calendar as tc
-    from app.market.trading_status import beijing_now
 
     state = state.state if hasattr(state, "state") else state
     try:

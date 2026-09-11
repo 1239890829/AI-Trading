@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -34,7 +34,7 @@ from app.services.parquet_store import read_parquet_safe, write_parquet_atomic
 
 log = logging.getLogger(__name__)
 
-BJ_OFFSET = timedelta(hours=8)
+from app.core.bjtime import BJ_OFFSET  # S2-8 时区收敛
 SINA_URL = ("https://quotes.sina.cn/cn/api/jsonp_v2.php/var%20_data=/"
             "CN_MarketDataService.getKLineData?symbol={symbol}&scale=5&ma=no&datalen=1023")
 

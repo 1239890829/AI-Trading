@@ -64,6 +64,7 @@ from app.core.config import settings
 from app.core.grounding import grounding_violations
 from app.core.llm_client import ChatStream, LLMError, hint_for, stream_chat_completion
 from app.services.quote_enrich import fetch_quotes_list
+from app.core.bjtime import beijing_now  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 
@@ -516,7 +517,6 @@ _SUMMARY_TIMEOUT_S = 180.0
 
 def _collect_summary_evidence(request: Request) -> dict:
     """综述证据收集（同步线程）：相位/精选/事件/持仓/指数。失败块显式缺席。"""
-    from datetime import datetime, timedelta, timezone
 
     from sqlalchemy import select
 
@@ -570,11 +570,14 @@ def _collect_summary_evidence(request: Request) -> dict:
                 ).scalars().all()
             else:
                 rows = []
-        today = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        today = beijing_now().strftime("%Y-%m-%d")
         texts = []
         for r in rows:
             try:
-                bj = (r.triggered_at + timedelta(hours=8)).strftime("%Y-%m-%d")
+                # 2026-09-11 修复：triggered_at 自 09-09 起已是**北京 naive**，
+                # 原先再 +8h 是沿用了「库内 UTC」的旧口径 —— 16:00 之后的告警
+                # 会被推到次日而整条丢失（「今日告警」恒空）。
+                bj = r.triggered_at.strftime("%Y-%m-%d")
             except Exception:  # noqa: BLE001
                 continue
             if bj != today:

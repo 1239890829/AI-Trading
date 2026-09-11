@@ -24,7 +24,6 @@ import contextlib
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from app.core.config import settings
@@ -36,15 +35,11 @@ from app.repositories.alert_repo import AlertRepository
 
 log = logging.getLogger(__name__)
 
-_BJT = timezone(timedelta(hours=8))
+from app.core.bjtime import beijing_now  # S2-8 时区收敛
 
 # 最小体检请求：三件套裁剪后约 120 input tokens，输出被提示词压到几个字符
 _PROBE_SYSTEM = "你是一个健康检查探针。只回复一个单词 OK，不要任何解释、标点或多余字符。"
 _PROBE_USER = "ping"
-
-def _now() -> datetime:
-    return datetime.now(_BJT)
-
 
 def resolve_target() -> tuple[str, str, str]:
     """解析探针目标 (model, cli_path, provider)。
@@ -171,7 +166,7 @@ class LlmProbe:
             call = runner or run_probe_call
             started = time.monotonic()
             self.probes += 1
-            self.last_probe_at = _now().isoformat(timespec="seconds")
+            self.last_probe_at = beijing_now().isoformat(timespec="seconds")
             try:
                 reply = await asyncio.to_thread(call, model, cli_path, self.probe_timeout)
             except LLMError as exc:
@@ -243,7 +238,7 @@ class LlmProbe:
         if sent:
             self._last_alert_epoch = epoch
             self.alerts_fired += 1
-            self.last_alert_at = _now().isoformat(timespec="seconds")
+            self.last_alert_at = beijing_now().isoformat(timespec="seconds")
 
 
 #: 探针专用系统规则名（get-or-create，与 __sentiment_monitor__ 同模式）

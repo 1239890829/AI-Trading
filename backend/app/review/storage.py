@@ -25,13 +25,13 @@ from pathlib import Path
 from sqlalchemy import select
 
 from app.core.db import utcnow
-from app.market.trading_status import beijing_now
 from app.review.models import (
     ReviewActionItemRow,
     ReviewMetaInsightRow,
     ReviewReportRow,
 )
 from app.review.schemas import ReviewReport
+from app.core.bjtime import beijing_now
 
 log = logging.getLogger(__name__)
 

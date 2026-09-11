@@ -39,9 +39,9 @@ from pathlib import Path
 from typing import Any
 
 from app.market import trade_calendar as tc
-from app.market.trading_status import beijing_now
 from app.picks.intraday_rules import CONFIRM_THEME_PCT_LATE, confirm_signal
 from app.picks.morning_brief import BRIEF_DIR, load_brief, save_brief
+from app.core.bjtime import beijing_now
 
 log = logging.getLogger(__name__)
 
@@ -397,8 +397,8 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
     # + 统计。失败只记日志（清算幂等，下一轮补）。
     ledger_settled = None
     with contextlib.suppress(Exception):
-        from app.market.trading_status import beijing_now as _bnow
         from app.picks.watch_ledger import get_day, settle_day, validate_previous_day
+        from app.core.bjtime import beijing_now as _bnow
         from app.core.db import get_session_factory as _gsf
 
         tdate = _bnow().date().isoformat()

@@ -7,6 +7,7 @@ import json
 import pytest
 
 from app.market import board_flow as bf
+from app.core.bjtime import BJ_TZ  # S2-8 时区收敛
 
 
 def _run(coro):
@@ -74,9 +75,9 @@ def fresh_memo(monkeypatch, tmp_path):
 
 
 def _bj(year=2026, month=9, day=7, hour=15, minute=6):
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime
 
-    return datetime(year, month, day, hour, minute, tzinfo=timezone(timedelta(hours=8)))
+    return datetime(year, month, day, hour, minute, tzinfo=BJ_TZ)
 
 
 # ---------------------------------------------------------------- 解析层
@@ -248,8 +249,8 @@ def test_get_board_fund_flow_20d_from_store(monkeypatch):
     # bar 日期以真实「今日」收尾（末根含今日 → Σ last20 不再追加 f62）
     from datetime import timedelta
 
-    today = bf._now_bj().date().isoformat()
-    dates = [(bf._now_bj().date() - timedelta(days=19 - i)).isoformat() for i in range(20)]
+    today = bf.beijing_now().date().isoformat()
+    dates = [(bf.beijing_now().date() - timedelta(days=19 - i)).isoformat() for i in range(20)]
     store = {
         "BK0001": {"bars": [[d, float(v), None] for d, v in zip(dates, range(1, 21))]},
         "BK0002": {"bars": [[d, 2.0, None] for d in dates]},
@@ -268,13 +269,13 @@ def test_get_board_fund_flow_20d_from_store(monkeypatch):
 # ---------------------------------------------------------------- 收盘快照
 
 def test_snapshot_skipped_before_1505(monkeypatch, fresh_memo):
-    monkeypatch.setattr(bf, "_now_bj", lambda: _bj(hour=14, minute=0))
+    monkeypatch.setattr(bf, "beijing_now", lambda: _bj(hour=14, minute=0))
     assert _run(bf.snapshot_daily_if_closed()) is False
     assert not (fresh_memo / "daily.json").exists()
 
 
 def test_snapshot_happy_path_and_idempotent(monkeypatch, fresh_memo):
-    monkeypatch.setattr(bf, "_now_bj", lambda: _bj())
+    monkeypatch.setattr(bf, "beijing_now", lambda: _bj())
 
     async def fake_list(kind):
         rows = _rows_fixture()
@@ -309,7 +310,7 @@ def test_snapshot_happy_path_and_idempotent(monkeypatch, fresh_memo):
 
 def test_snapshot_daykline_merge_dedup(monkeypatch, fresh_memo):
     """daykline 累计库：旧 bar 保留、同日覆盖、按日期有序。"""
-    monkeypatch.setattr(bf, "_now_bj", lambda: _bj())
+    monkeypatch.setattr(bf, "beijing_now", lambda: _bj())
 
     async def fake_list(kind):
         rows = _rows_fixture()[:1]

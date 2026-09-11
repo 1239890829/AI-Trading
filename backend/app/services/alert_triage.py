@@ -28,17 +28,13 @@ from datetime import timedelta
 
 from sqlalchemy import select
 
-from app.core.db import beijing_now_naive, get_session_factory
+from app.core.db import get_session_factory
 from app.models.agent import AgentTriage
 from app.models.alert import AlertEvent, AlertRule
+from app.core.bjtime import beijing_now_naive
 
 log = logging.getLogger(__name__)
 
-
-def _bj_now():
-    """2026-09-09 时区统一：判读去重/时效/基准一律北京时间 naive（此前误用
-    datetime.utcnow() 与库内 UTC naive 比——库统一北京时间后必须换口径）。"""
-    return beijing_now_naive()
 
 #: 冷却窗口：同一规则在此窗口内已判读过 → 直接 ignore（去重，防刷屏）
 COOLDOWN_MINUTES = 30
@@ -72,7 +68,7 @@ def _event_context(event: AlertEvent, session_factory) -> dict:
         if rule is not None:
             rule_name = rule.name or ""
             condition = rule.condition_type or ""
-        cutoff = _bj_now() - timedelta(hours=1)
+        cutoff = beijing_now_naive() - timedelta(hours=1)
         recent = db.execute(
             select(AlertEvent.id).where(
                 AlertEvent.rule_id == event.rule_id,
@@ -136,7 +132,7 @@ def _already_recent(event: AlertEvent, session_factory) -> bool:
     triage.created_at=现在）会把当前的新事件误判成"冷却期重复"而永久静默
     （2026-09-08 单测抓到）。
     """
-    base = event.triggered_at or _bj_now()
+    base = event.triggered_at or beijing_now_naive()
     lo = base - timedelta(minutes=COOLDOWN_MINUTES)
     hi = base + timedelta(minutes=COOLDOWN_MINUTES)
     with session_factory() as db:
@@ -338,7 +334,7 @@ def pending_bubbles(limit: int = 5, session_factory=None) -> list[dict]:
     name 从事件快照补，快照也没有则整条过滤（宁缺毋滥）。
     """
     sf = session_factory or get_session_factory()
-    cutoff = _bj_now() - timedelta(hours=BUBBLE_MAX_AGE_HOURS)
+    cutoff = beijing_now_naive() - timedelta(hours=BUBBLE_MAX_AGE_HOURS)
     with sf() as db:
         rows = db.execute(
             select(AgentTriage).where(AgentTriage.verdict == "notify", AgentTriage.acked == 0)

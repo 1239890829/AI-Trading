@@ -27,7 +27,7 @@ import logging
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from app.core.config import settings
@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 #: 监控专用系统规则名（get-or-create，与 __ths_reason_sentinel__ 同模式）
 SENTIMENT_MONITOR_RULE_NAME = "__sentiment_monitor__"
 
-_BJT = timezone(timedelta(hours=8))
+from app.core.bjtime import beijing_now  # S2-8 时区收敛
 
 #: 指数监控对象 → 15 分钟急杀阈值（%）。带市场前缀（裸 000001 是平安银行）。
 INDEX_WATCH: dict[str, float] = {
@@ -230,7 +230,7 @@ class SentimentMonitor:
         yst_pool: list | None = None,
     ) -> dict:
         """单拍探测。注入 now/trade_days/yst_pool 即确定性；默认真实时钟 + 日历。"""
-        now = now or datetime.now(_BJT)
+        now = now or beijing_now()
         if self.provider is None:
             self.state = "idle"
             return self.snapshot()

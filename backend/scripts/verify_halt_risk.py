@@ -71,12 +71,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import argparse
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import duckdb
 import pandas as pd
 
 from app.picks import halt_risk as hr
+from app.core.bjtime import BJ_TZ  # S2-8 时区收敛
 
 DB = Path(__file__).resolve().parents[1] / "data" / "marketdb" / "market.duckdb"
 
@@ -97,11 +98,11 @@ HORIZONS = (1, 3, 5, 10)
 #: 主窗口（交易日）——文档要求「近 6 个月」
 WINDOW_DAYS = 120
 
-_BJ = timezone(timedelta(hours=8))
+
 
 
 def _ms_to_date(ms: int) -> str:
-    return datetime.fromtimestamp(int(ms) / 1000, tz=_BJ).date().isoformat()
+    return datetime.fromtimestamp(int(ms) / 1000, tz=BJ_TZ).date().isoformat()
 
 
 def _date_to_ms(d) -> int:
@@ -109,7 +110,7 @@ def _date_to_ms(d) -> int:
         d = datetime.strptime(d, "%Y-%m-%d").date()
     if hasattr(d, "date") and not isinstance(d, datetime):
         d = d.date() if hasattr(d, "date") else d
-    return int(datetime(d.year, d.month, d.day, tzinfo=_BJ).timestamp() * 1000)
+    return int(datetime(d.year, d.month, d.day, tzinfo=BJ_TZ).timestamp() * 1000)
 
 
 # ------------------------------------------------------------------ 取数
@@ -227,8 +228,8 @@ def load_features(idx_ret: pd.DataFrame, years=CHUNK_YEARS) -> pd.DataFrame:
     con.register("idx_ret", idx_ret)
     out = []
     for y in years:
-        lo = datetime(y, 1, 1, tzinfo=_BJ) - timedelta(days=WARMUP_DAYS)
-        hi = datetime(y, 12, 31, tzinfo=_BJ)
+        lo = datetime(y, 1, 1, tzinfo=BJ_TZ) - timedelta(days=WARMUP_DAYS)
+        hi = datetime(y, 12, 31, tzinfo=BJ_TZ)
         ms_lo, ms_hi = int(lo.timestamp() * 1000), int(hi.timestamp() * 1000)
         con.execute(_SQL.format(pool=POOL_DEV10), [ms_lo, ms_hi, ms_lo])
         part = con.execute("SELECT * FROM feat").fetchdf()

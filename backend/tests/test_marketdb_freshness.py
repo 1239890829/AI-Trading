@@ -4,7 +4,7 @@
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 
 import duckdb
 
@@ -15,13 +15,14 @@ from app.market.marketdb_freshness import (
     latest_content_date,
     trading_day_lag,
 )
+from app.core.bjtime import BJ_TZ  # S2-8 时区收敛
 
 _MS_DAY = 86_400_000
-_BJ = timezone(timedelta(hours=8))
+
 
 
 def _ms(d: date) -> int:
-    return int(datetime(d.year, d.month, d.day, tzinfo=_BJ).timestamp() * 1000)
+    return int(datetime(d.year, d.month, d.day, tzinfo=BJ_TZ).timestamp() * 1000)
 
 
 def _mk_db(tmp_path, tables: dict[str, list[int]]):

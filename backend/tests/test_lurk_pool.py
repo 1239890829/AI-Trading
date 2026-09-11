@@ -1,13 +1,14 @@
 """P1-5 lurk_pool 单测：潜伏+试盘+回踩确认判据（mock K 线）+ 陈旧披露（as_of/stale_days）。"""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import duckdb
 import pytest
 
 from app.market.marketdb_freshness import MAX_STALE_TRADE_DAYS
 from app.picks.lurk_pool import _limit_pct, _scan, scan_lurk_pool
+from app.core.bjtime import BJ_TZ  # S2-8 时区收敛
 
 
 _BASE_MS = 1700000000000
@@ -63,8 +64,8 @@ def lurk_db(tmp_path):
     数据日必须是近期，`asof` 才落在日历覆盖区间内（否则退化为工作日计数，
     测不到生产路径）。
     """
-    _BJ = timezone(timedelta(hours=8))
-    today0 = datetime.now(_BJ).replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    today0 = datetime.now(BJ_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
     t0 = int(today0.timestamp() * 1000) - 60 * 86400000
     bars = [_flat_bar(i, base=10.0, v=500_000, t0=t0) for i in range(45)]
     bars.append(_bar(45, 10.0, 11.1, 10.05, 10.60, 2_000_000, t0))
@@ -81,7 +82,7 @@ def lurk_db(tmp_path):
         [(c, t, o, h, low, cl, v, v * 10.0) for c, t, o, h, low, cl, v in bars],
     )
     con.close()
-    data_date = datetime.fromtimestamp(bars[-1][1] / 1000, tz=_BJ).date()
+    data_date = datetime.fromtimestamp(bars[-1][1] / 1000, tz=BJ_TZ).date()
     return path, data_date
 
 

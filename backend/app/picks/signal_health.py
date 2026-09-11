@@ -21,11 +21,11 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
 
 from sqlalchemy import select
 
-from app.core.db import beijing_now_naive, get_session_factory
+from app.core.db import get_session_factory
+from app.core.bjtime import beijing_now_naive
 
 log = logging.getLogger(__name__)
 
@@ -185,7 +185,7 @@ def collect_signal_health(session_factory, window: int = WINDOW_GROUPS) -> dict:
         return {"status": "error", "reason": str(exc)}
 
     out = evaluate_signal_health(groups, window=window)
-    out["generated_at"] = datetime.now().isoformat(timespec="seconds")
+    out["generated_at"] = beijing_now_naive().isoformat(timespec="seconds")
     out["source"] = "daily_pick_review"
     out["caveat"] = (
         "excess_pct 已 nullable 化（迁移 f6b2c8e4a9d3）：基准缺失观测以 None 跳过统计；"

@@ -18,8 +18,8 @@ from app.predict.collector import collect_predict_evidence
 from app.predict.engine import ENGINE_VERSION, judge_theme
 from app.predict.schemas import PredictionReport
 from app.predict.storage import apply_verify, get_report, save_report
-from app.market.trading_status import beijing_now
 from app.services.theme_service import parse_theme_tags
+from app.core.bjtime import beijing_now
 
 log = logging.getLogger(__name__)
 
