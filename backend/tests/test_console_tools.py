@@ -217,3 +217,71 @@ def test_minute_decisions_registered():
     specs = getattr(T, "TOOLS", None) or getattr(T, "TOOL_SPECS", {})
     assert "minute_decisions" in specs
     assert T.tool_label("minute_decisions") == "做T决策"
+
+
+# ---------------------------------------------------------------- 预警触发记录（清单外补登记）
+
+
+def test_alert_events_without_source_is_explicit():
+    out = _run("alert_events", ToolContext(provider=object()))
+    assert "无数据源" in out
+
+
+def test_alert_events_rejects_bad_limit():
+    out = _run("alert_events", ToolContext(provider=object(), session_factory=_sf([])),
+               limit="xyz")
+    assert "参数不合法" in out
+
+
+def test_alert_events_empty_is_stated(monkeypatch):
+    import app.repositories.alert_repo as ar
+
+    monkeypatch.setattr(ar.AlertRepository, "list_events", lambda self, **kw: [])
+    out = _run("alert_events", ToolContext(provider=object(), session_factory=_sf([])))
+    assert "暂无触发记录" in out
+
+
+def test_alert_events_renders_rows_and_declares_beijing_time(monkeypatch):
+    """`triggered_at` 是北京时间（beijing_now_naive），**不得再 +8h**——
+    输出里必须点明"时间为北京时间"，避免模型二次换算。
+    """
+    import datetime as _dt
+
+    import app.repositories.alert_repo as ar
+
+    ev = _Row(id=7, rule_id=1, symbol="600519", trigger_value=10.5, threshold=10.0,
+              triggered_at=_dt.datetime(2026, 9, 11, 14, 59, 31))
+    monkeypatch.setattr(ar.AlertRepository, "list_events", lambda self, **kw: [ev])
+    out = _run("alert_events", ToolContext(provider=object(), session_factory=_sf([])))
+    assert "600519" in out
+    assert "14:59:31" in out, "时间必须原样展示（北京时间），不得被二次偏移"
+    assert "北京时间" in out
+
+
+def test_alert_events_filters_by_symbol(monkeypatch):
+    import app.repositories.alert_repo as ar
+
+    evs = [_Row(id=1, rule_id=1, symbol="600519", trigger_value=1, threshold=1,
+                triggered_at=None),
+            _Row(id=2, rule_id=1, symbol="000001", trigger_value=1, threshold=1,
+                 triggered_at=None)]
+    monkeypatch.setattr(ar.AlertRepository, "list_events", lambda self, **kw: evs)
+    out = _run("alert_events", ToolContext(provider=object(), session_factory=_sf([])),
+               symbol="600519")
+    assert "600519" in out and "000001" not in out
+
+
+def test_alert_events_failure_is_reported():
+    def boom():
+        raise RuntimeError("db down")
+
+    out = _run("alert_events", ToolContext(provider=object(), session_factory=boom))
+    assert "失败" in out
+
+
+def test_alert_events_registered():
+    import app.assistant.tools as T
+
+    specs = getattr(T, "TOOLS", None) or getattr(T, "TOOL_SPECS", {})
+    assert "alert_events" in specs
+    assert T.tool_label("alert_events") == "预警记录"

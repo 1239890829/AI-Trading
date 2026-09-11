@@ -642,6 +642,50 @@ async def _t_minute_decisions(ctx: ToolContext, **kw) -> str:
     return body + "\n注：outcome=open 表示尚未到结算窗口，不是失败。"
 
 
+async def _t_alert_events(ctx: ToolContext, **kw) -> str:
+    """预警触发记录（P2-28① 清单外补登记）。
+
+    数据源是 `alert_event` 表，走 `AlertRepository.list_events`（不自己拼 SQL——
+    仓库层已封装口径）。
+
+    ⚠️ `triggered_at` 是**北京时间**（该列用 `beijing_now_naive`），与 agent 域的
+    UTC naive **不同**（见结转表 #6）——直接展示即可，**不得再 +8h**。
+    """
+    if ctx.session_factory is None:
+        return "预警记录：无数据源（session_factory 未提供）"
+    try:
+        limit = int(kw.get("limit") or 20)
+    except (TypeError, ValueError):
+        return "参数不合法：limit 必须是整数"
+    limit = max(1, min(limit, 50))
+    sym = (kw.get("symbol") or "").strip() or None
+
+    try:
+        from app.repositories.alert_repo import AlertRepository
+
+        events = AlertRepository(ctx.session_factory).list_events(limit=limit)
+    except Exception as exc:  # noqa: BLE001
+        return f"预警记录：读取失败（{exc}）"
+
+    rows = [
+        {"id": e.id, "rule_id": e.rule_id, "symbol": e.symbol,
+         "trigger_value": getattr(e, "trigger_value", None),
+         "threshold": getattr(e, "threshold", None),
+         "at": e.triggered_at.isoformat() if getattr(e, "triggered_at", None) else ""}
+        for e in (events or [])
+        if not sym or str(getattr(e, "symbol", "")) == sym
+    ]
+    if not rows:
+        return f"预警记录：暂无触发记录（symbol={sym or '全部'}）"
+    return _fmt_rows(
+        f"预警触发记录（{sym or '全部'}，最近 {len(rows)} 条 · 时间为北京时间）",
+        rows,
+        [("id", ""), ("symbol", ""), ("trigger_value", "触发值"), ("threshold", "阈值"),
+         ("at", "时间")],
+        total=len(rows),
+    )
+
+
 async def _t_boards(ctx: ToolContext, **kw) -> str:
     btype = (kw.get("board_type") or "hangye").strip()
     if btype not in ("hangye", "gainian"):
@@ -1519,6 +1563,9 @@ TOOL_SPECS: dict[str, ToolSpec] = {
                                  "做T决策库（记录→结算→错误归因；open=未到结算窗口，非失败）",
                                  "symbol=可选，按标的代码过滤｜limit=条数（1~50，默认 20）",
                                  _t_minute_decisions),
+    # P2-28① 清单外补登记（2026-09-11）：预警触发记录。走 AlertRepository，不自己拼 SQL。
+    "alert_events": ToolSpec("alert_events", "预警触发记录（时间为北京时间）",
+                             "symbol=可选｜limit=条数（1~50，默认 20）", _t_alert_events),
     "boards": ToolSpec("boards", "板块排行榜", "board_type=hangye|gainian（默认 hangye）", _t_boards),
     "hot": ToolSpec("hot", "人气热股榜", "period=day|week|month（默认 day）", _t_hot),
     "anomaly": ToolSpec("anomaly", "当日异动原因（可按代码查为什么异动）", "symbols=可选，逗号分隔≤6只；缺省=全市场榜", _t_anomaly),
@@ -1615,6 +1662,7 @@ TOOL_LABELS: dict[str, str] = {
     "param_changes": "参数变更",
     "agent_tasks": "任务中心",
     "minute_decisions": "做T决策",
+    "alert_events": "预警记录",
     "boards": "板块排行",
     "hot": "人气热榜",
     "anomaly": "异动原因",
