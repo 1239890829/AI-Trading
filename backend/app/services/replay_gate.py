@@ -11,6 +11,17 @@ C 类代码改动合入后（涉及 backend/app/picks/ 的文件），自动跑�
 口径诚实声明：回放只覆盖**梯队+技术**两维（消息/情绪/基本面/资金依赖当前
 快照无法回填历史），组合收益与买点胜率需 T+3 验收——报告必须带此注记，
 不得冒充全维对比。
+
+**⚠️ 2026-09-11 首次真实触发发现的缺陷（P2-17）**：
+本门禁自 09-08 实现起**从未被真实执行过**（触发条件是「涉及 backend/app/picks/ 的
+自动代码合入」，此前无此类合入），因此"已实现"一直被当成"可用"。首次触发即失败：
+`run_comparison` 用子进程跑 `scripts/replay_picks.py`，命令把解释器硬编码成系统 python3
+——那是**系统解释器**，没装项目依赖（实测 `ModuleNotFoundError: No module named
+'pydantic_settings'`）⇒ 门禁在任何脱离 venv 的环境里都必然失败，且**失败得无声无息**
+（只在该触发条件满足时才跑，平时看不出来）。
+
+修法：一律用 `sys.executable`（当前解释器；venv 内即 venv python）。
+**教训：用 subprocess 调自家脚本时，绝不能写死 `python3`。**
 """
 from __future__ import annotations
 
@@ -18,6 +29,7 @@ import json
 import logging
 import re
 import subprocess
+import sys
 from pathlib import Path
 from app.core.bjtime import beijing_now_naive  # S2-8 时区收敛
 
@@ -34,11 +46,17 @@ _REPLAY_TIMEOUT = 900  # 10 日回放 + 门禁节流的宽裕上限
 def _parse_stats(report: str) -> dict | None:
     """从回放报告 markdown 提取三指标（缺任一返回 None——解析失败不臆造）。"""
     def _grab(label: str) -> float | None:
-        m = re.search(rf"\|\s*{label}\s*\|\s*([\d.+-]+)\s*\|", report)
+        # `%?`：报告里「日均换手率」写成 `40.0%`，数值后跟的是百分号而不是竖线。
+        # 少了这个 `%?`，该指标**永远解析不到** ⇒ 三缺一 ⇒ 门禁恒为 error
+        # （P2-17 首次真实触发时抓到的第三个缺陷）。
+        m = re.search(rf"\|\s*{label}\s*\|\s*([\d.+-]+)\s*%?\s*\|", report)
         return float(m.group(1)) if m else None
 
+    # ⚠️ 标签必须与 `scripts/replay_picks.py` 报告表格**逐字一致**（P2-17）：
+    # 原写「日均换手%」，而报告实际输出「日均换手率」；「日均组合分」此前报告里
+    # 根本没这一行。两者叠加 ⇒ 门禁自 09-08 起每次都解析失败、从未真正生效过。
     stats = {
-        "avg_turnover_pct": _grab("日均换手%"),
+        "avg_turnover_pct": _grab("日均换手率"),
         "avg_holding_days": _grab("平均持有天数"),
         "avg_score": _grab("日均组合分"),
     }
@@ -63,7 +81,10 @@ def _save_baseline(stats: dict, commit: str, days: int) -> None:
 def run_comparison(days: int = 10, commit: str = "", force: bool = True) -> dict:
     """跑回放并与基线对比。返回 {ok, verdict, report, baseline_was}。"""
     baseline = _load_baseline()
-    cmd = ["python3", str(REPLAY_SCRIPT), "--days", str(days), "--out", "/tmp/evo-replay-latest.md"]
+    # ⚠️ 必须是 sys.executable：把解释器写死成系统 python3 会拿到没有项目依赖的环境，
+    # 而它没有项目依赖 ⇒ 本门禁在 venv 之外必然 ModuleNotFoundError（详见模块 docstring）。
+    cmd = [sys.executable, str(REPLAY_SCRIPT), "--days", str(days),
+           "--out", "/tmp/evo-replay-latest.md"]
     if force:
         cmd.append("--force")
     try:

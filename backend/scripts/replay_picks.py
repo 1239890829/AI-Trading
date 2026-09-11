@@ -414,6 +414,12 @@ def render(result: dict) -> str:
     nc = result["no_carryover"]
     to = result["threshold_only"]
     eff = result["threshold_effect"]
+    # 日均组合分（P2-17）：`result["daily"]` 里早已逐日算好 `score_avg`，
+    # 只是此前**从未输出**，而回放门禁的对比指标之一正是它 ⇒ 门禁自 09-08 起
+    # 一直取不到这个值、永远解析失败。补上这一行，门禁的三个指标才凑齐。
+    _day_scores = [d.get("score_avg") for d in result["daily"]
+                   if isinstance(d.get("score_avg"), (int, float))]
+    avg_score = round(sum(_day_scores) / len(_day_scores), 2) if _day_scores else None
     lines = [
         "# 每日精选 · 跨日回放报告",
         "",
@@ -431,6 +437,8 @@ def render(result: dict) -> str:
         f"| 平均持有天数 | {s['avg_holding_days']} | {to['avg_holding_days']} | {nc['avg_holding_days']} | {b['avg_holding_days']} |",
         f"| 最长连续持有 | {s['max_holding_days']} 天 | {to['max_holding_days']} 天 | {nc['max_holding_days']} 天 | {b['max_holding_days']} 天 |",
         f"| 期间出现过的标的 | {s['unique_symbols']} | {to['unique_symbols']} | {nc['unique_symbols']} | {b['unique_symbols']} |",
+        # 只给完整策略列填值：对照组不参与门禁判定，填 "—" 避免被解析成数值
+        f"| 日均组合分 | {avg_score if avg_score is not None else '—'} | — | — | — |",
         "",
         f"**完整策略较纯排序少换 {eff['swaps_avoided']} 次（减少 {eff['swaps_avoided_pct']}%）。**",
         "",
