@@ -437,6 +437,68 @@ async def _t_theme_members(ctx: ToolContext, **kw) -> str:
                      [("name", ""), ("symbol", "")], total=len(rows))
 
 
+async def _t_orderbook(ctx: ToolContext, **kw) -> str:
+    """盘口五档（P2-28① 批量登记）。
+
+    ⚠️ 仅 L1 五档——不是 L2，工具说明与回答都不得暗示有逐笔委托队列或十档。
+    取不到时如实说"取不到"，不编造档位。
+    """
+    codes, e = _valid_symbols(kw.get("symbols", ""), ctx.known_symbols or None)
+    if e:
+        return f"参数不合法：{e}"
+    ob = await ctx.provider.get_order_book(codes[0])
+    if not ob:
+        return f"盘口：{codes[0]} 取不到（数据源未提供该股的盘口）"
+    rec = _rec(ob)
+    bids = list(rec.get("bids") or rec.get("bid") or [])[:5]
+    asks = list(rec.get("asks") or rec.get("ask") or [])[:5]
+    if not bids and not asks:
+        return f"盘口：{codes[0]} 返回为空（数据源未提供档位数据）"
+    lines = [f"盘口 {codes[0]}（五档，L1）"]
+    for label, rows in (("卖", asks), ("买", bids)):
+        for i, r in enumerate(rows, 1):
+            rr = _rec(r)
+            lines.append(f"{label}{i} {rr.get('price', '')} × {rr.get('volume', rr.get('qty', ''))}")
+    return "\n".join(lines)
+
+
+async def _t_trades(ctx: ToolContext, **kw) -> str:
+    """逐笔成交（P2-28① 批量登记）。"""
+    codes, e = _valid_symbols(kw.get("symbols", ""), ctx.known_symbols or None)
+    if e:
+        return f"参数不合法：{e}"
+    rows = list((await ctx.provider.get_trades(codes[0])) or [])
+    if not rows:
+        return f"逐笔成交：{codes[0]} 取不到（数据源未提供逐笔）"
+    return _fmt_rows(f"逐笔成交 {codes[0]}", rows[:30], [
+        ("time", "时间"), ("price", "价格"), ("volume", "量"), ("side", "方向"),
+    ], total=len(rows))
+
+
+async def _t_auction(ctx: ToolContext, **kw) -> str:
+    """集合竞价快照（P2-28① 批量登记）。
+
+    ⚠️ **仅 ths 一源**（`get_auction_snapshot` 的注释写明）——其他 provider 没有实现。
+    因此取不到是**常态而非异常**：必须明确说"该源未提供"，绝不能让模型据此回答
+    "没有竞价数据"（那是源覆盖问题，不是事实）。见 P2-15 N2（竞价备源）。
+    """
+    codes, e = _valid_symbols(kw.get("symbols", ""), ctx.known_symbols or None)
+    if e:
+        return f"参数不合法：{e}"
+    stage = (kw.get("stage") or "final").strip()
+    try:
+        rows = list((await ctx.provider.get_auction_snapshot(codes, stage)) or [])
+    except Exception as exc:  # noqa: BLE001
+        return f"竞价快照：读取失败（{exc}）——当前仅 ths 一源，非该源可见时取不到属正常"
+    if not rows:
+        return ("竞价快照：取不到（当前仅 ths 一源提供，其他数据源无此能力；"
+                "这不代表该股没有竞价数据）")
+    return _fmt_rows(f"集合竞价 {stage}", rows, [
+        ("name", ""), ("symbol", ""), ("price", "竞价"), ("change_pct", "涨幅"),
+        ("volume", "量"),
+    ], total=len(rows))
+
+
 async def _t_boards(ctx: ToolContext, **kw) -> str:
     btype = (kw.get("board_type") or "hangye").strip()
     if btype not in ("hangye", "gainian"):
@@ -1291,6 +1353,14 @@ TOOL_SPECS: dict[str, ToolSpec] = {
     # 助手被问「某题材有哪些票」时只能凭印象作答。
     "theme_members": ToolSpec("theme_members", "官方题材成分明细（给题材名，返回成分股列表）",
                               "keyword=题材名（如 代糖 / 创新药）", _t_theme_members),
+    # P2-28① 批量（2026-09-11）：盘口 / 逐笔 / 集合竞价——三个都是 provider 直连，
+    # 一次性登记，避免逐个加、每次都动一遍能力清单守卫（KB-ENG-49）。
+    "orderbook": ToolSpec("orderbook", "盘口五档（L1，非 L2）",
+                          "symbols=单只代码", _t_orderbook),
+    "trades": ToolSpec("trades", "逐笔成交明细",
+                       "symbols=单只代码", _t_trades),
+    "auction": ToolSpec("auction", "集合竞价快照（仅 ths 一源，取不到属正常）",
+                        "symbols=逗号分隔代码（≤5）｜stage=final（默认）", _t_auction),
     "boards": ToolSpec("boards", "板块排行榜", "board_type=hangye|gainian（默认 hangye）", _t_boards),
     "hot": ToolSpec("hot", "人气热股榜", "period=day|week|month（默认 day）", _t_hot),
     "anomaly": ToolSpec("anomaly", "当日异动原因（可按代码查为什么异动）", "symbols=可选，逗号分隔≤6只；缺省=全市场榜", _t_anomaly),
@@ -1380,6 +1450,9 @@ TOOL_LABELS: dict[str, str] = {
     "limit_break": "炸板池",
     "longhu": "龙虎榜",
     "theme_members": "题材成分",
+    "orderbook": "盘口",
+    "trades": "逐笔",
+    "auction": "集合竞价",
     "boards": "板块排行",
     "hot": "人气热榜",
     "anomaly": "异动原因",
