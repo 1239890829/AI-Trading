@@ -17,6 +17,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from app.core.bjtime import beijing_now_naive
 from app.core.db import get_session_factory
 from app.models.agent import AgentExperiment
 from app.picks.signal_health import collect_signal_health
@@ -39,12 +40,12 @@ def attach_experiment(change_id: int, param_key: str, hypothesis: str,
 
         health = collect_signal_health(sf)
         baseline = {k: health.get(k) for k in ("status", "win_rate", "mean_excess")}
-        baseline["taken_at"] = datetime.utcnow().isoformat(timespec="seconds")
+        baseline["taken_at"] = beijing_now_naive().isoformat(timespec="seconds")
         with sf() as db:
             row = AgentExperiment(
                 change_id=change_id, param_key=param_key, hypothesis=hypothesis[:300],
                 baseline=json.dumps(baseline, ensure_ascii=False),
-                verification_date=datetime.utcnow() + timedelta(days=VERIFY_WINDOW_DAYS),
+                verification_date=beijing_now_naive() + timedelta(days=VERIFY_WINDOW_DAYS),
                 status="running",
             )
             db.add(row)
@@ -82,7 +83,7 @@ def _j(raw: str | None, default: Any) -> Any:
 def conclude_due(session_factory=None, today: datetime | None = None) -> list[dict]:
     """扫描到期实验并裁决（scheduler 每日调用一次）。返回裁决结果列表。"""
     sf = session_factory or get_session_factory()
-    now = today or datetime.utcnow()
+    now = today or beijing_now_naive()
     out: list[dict] = []
     with sf() as db:
         rows = db.execute(
@@ -111,7 +112,7 @@ def _conclude_one(exp_id: int, sf) -> dict:
         if current.get("status") != "ok" or current.get("win_rate") is None:
             if row.extensions < row.max_extensions:
                 row.extensions += 1
-                row.verification_date = datetime.utcnow() + timedelta(days=VERIFY_WINDOW_DAYS)
+                row.verification_date = beijing_now_naive() + timedelta(days=VERIFY_WINDOW_DAYS)
                 row.result = json.dumps({
                     "conclusion": "样本不足，验证窗口延长",
                     "current": current, "extensions": row.extensions,
@@ -123,7 +124,7 @@ def _conclude_one(exp_id: int, sf) -> dict:
                 "conclusion": "窗口多次延长后仍样本不足，无法裁决（保守不回滚）",
                 "current": current,
             }, ensure_ascii=False)
-            row.concluded_at = datetime.utcnow()
+            row.concluded_at = beijing_now_naive()
             db.commit()
             return _dump(row)
 
@@ -135,7 +136,7 @@ def _conclude_one(exp_id: int, sf) -> dict:
                 "conclusion": "基线样本不足，无法对比（保守不回滚）",
                 "baseline": baseline, "current": current,
             }, ensure_ascii=False)
-            row.concluded_at = datetime.utcnow()
+            row.concluded_at = beijing_now_naive()
             db.commit()
             return _dump(row)
 
@@ -159,7 +160,7 @@ def _conclude_one(exp_id: int, sf) -> dict:
                 "conclusion": f"胜率变化 {delta:+.3f}，未触发回滚阈值",
                 **verdict,
             }, ensure_ascii=False)
-        row.concluded_at = datetime.utcnow()
+        row.concluded_at = beijing_now_naive()
         db.commit()
         return _dump(row)
 
@@ -289,7 +290,7 @@ def evaluate_and_promote_shadow(session_factory=None) -> list[dict]:
                         ev = json.loads(row.evidence) if row.evidence else {}
                     except Exception:  # noqa: BLE001
                         ev = {}
-                    ev["shadow_verdict"] = {"at": datetime.utcnow().isoformat(timespec="seconds"),
+                    ev["shadow_verdict"] = {"at": beijing_now_naive().isoformat(timespec="seconds"),
                                             "note": note}
                     row.evidence = json.dumps(ev, ensure_ascii=False)
                     db.commit()

@@ -36,7 +36,7 @@ from app.core.config import settings
 from app.core.db import get_session_factory
 from app.market import trade_calendar as tc
 from app.models.agent import AgentAgenda, AgentAudit, AgentParamChange, AgentTask
-from app.core.bjtime import beijing_now, BJ_OFFSET  # S2-8 时区收敛
+from app.core.bjtime import beijing_now, beijing_now_naive  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 
@@ -59,20 +59,23 @@ def autonomy_enabled() -> bool:
     return bool(settings.agent_autonomy_enabled)
 
 
-def _utc_cutoff_today() -> datetime:
-    """北京今日 0 点对应的 naive UTC 时刻（at/created_at 存 utcnow，naive）。
+def _bj_cutoff_today() -> datetime:
+    """北京今日 0 点（naive，agent 域 at/created_at 存北京 naive——2026-09-12 方案 A 起）。
 
     ⚠️ 不要用 `>= f"{today}T00:00:00"` 字符串：SQLite 把 datetime 存成
     "YYYY-MM-DD HH:MM:SS"（空格分隔），' ' < 'T' 使比较恒 False——
     今日过滤会静默失效（C 类执行器测试抓出的真 bug，防线形同虚设）。
+
+    原名 `_utc_cutoff_today`（曾返回「北京 0 点 − 8h」对齐 UTC 存储），存储口径
+    迁移北京后同步改名——函数名与口径不符的帮手是下一次事故的种子。
     """
     bj = beijing_now()
-    return datetime(bj.year, bj.month, bj.day) - BJ_OFFSET
+    return datetime(bj.year, bj.month, bj.day)
 
 
 def _budget_status(session_factory) -> dict:
     """今日预算占用：LLM 调用数（审计计）与自动执行任务数。"""
-    cutoff = _utc_cutoff_today()
+    cutoff = _bj_cutoff_today()
     with session_factory() as db:
         tasks = db.execute(
             select(AgentTask).where(AgentTask.created_at >= cutoff)
@@ -598,7 +601,7 @@ def _collect_data_health(session_factory) -> dict:
     try:
         from app.models.alert import AlertEvent
 
-        cutoff = datetime.utcnow() - timedelta(hours=24)
+        cutoff = beijing_now_naive() - timedelta(hours=24)
         with session_factory() as db:
             n_events = len(db.execute(select(AlertEvent.id).where(AlertEvent.triggered_at >= cutoff)).scalars().all())
             n_audits = len(db.execute(select(AgentAudit.id).where(AgentAudit.at >= cutoff)).scalars().all())
@@ -616,7 +619,7 @@ def _collect_data_health(session_factory) -> dict:
         from app.models.theme_catalog import Theme
 
         ttl = settings.theme_members_ttl_hours
-        stale_cutoff = datetime.utcnow() - timedelta(hours=ttl)
+        stale_cutoff = beijing_now_naive() - timedelta(hours=ttl)
         with session_factory() as db:
             rows = db.execute(select(Theme.code, Theme.synced_at)).all()
         n_stale = len([c for c, ts in rows if ts is None or ts < stale_cutoff])
@@ -842,7 +845,7 @@ async def generate_agenda(session_factory=None) -> dict:
             row = db.get(AgentAgenda, agenda_id)
             row.status = "skipped"
             row.error = json.dumps({"code": "Budget", "message": reason}, ensure_ascii=False)
-            row.finished_at = datetime.utcnow()
+            row.finished_at = beijing_now_naive()
             db.commit()
             return _agenda_dump(row)
 
@@ -886,7 +889,7 @@ async def generate_agenda(session_factory=None) -> dict:
             row.status = "failed"
             row.error = json.dumps({"code": type(exc).__name__, "message": str(exc)[:300]},
                                    ensure_ascii=False)
-            row.finished_at = datetime.utcnow()
+            row.finished_at = beijing_now_naive()
             db.commit()
             out = _agenda_dump(row)
         log.warning("evolution agenda failed: %s", exc)
@@ -931,7 +934,7 @@ def _param_change_in_24h(key: str, sf) -> bool:
     shadow 必须计入——影子队列在议程前评估转正，若不计入，同参数会每天
     入队一条影子（堆积且评估重复）。
     """
-    cutoff = datetime.utcnow() - timedelta(hours=24)
+    cutoff = beijing_now_naive() - timedelta(hours=24)
     with sf() as db:
         rows = db.execute(
             select(AgentParamChange).where(
@@ -1060,7 +1063,7 @@ def execute_agenda(agenda: dict, session_factory=None) -> dict:
             row.items = json.dumps(items, ensure_ascii=False, default=str)
             row.budget = json.dumps(budget, ensure_ascii=False)
             row.status = "executed"
-            row.finished_at = datetime.utcnow()
+            row.finished_at = beijing_now_naive()
             db.commit()
             db.refresh(row)
             out = _agenda_dump(row)

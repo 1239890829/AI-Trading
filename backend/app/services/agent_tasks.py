@@ -22,11 +22,11 @@ import json
 import logging
 import time
 import uuid
-from datetime import datetime
 from typing import Any, Awaitable, Callable
 
 from sqlalchemy import select
 
+from app.core.bjtime import beijing_now_naive
 from app.core.db import get_session_factory
 from app.models.agent import TERMINAL_STATUSES, AgentAudit, AgentTask
 
@@ -105,7 +105,7 @@ def update_mutation_result(task_id: str, status: str, result: str) -> None:
         if row.status == "failed":
             row.error = json.dumps({"code": "MutationFailed", "message": result[:500]},
                                    ensure_ascii=False)
-        row.finished_at = datetime.utcnow()
+        row.finished_at = beijing_now_naive()
         db.commit()
 
 
@@ -178,7 +178,7 @@ def resolve_task(task_id: str, outcome: str, note: str = "") -> dict | None:
         params["resolve"] = {"outcome": outcome, "note": note[:500]}
         task.params = json.dumps(params, ensure_ascii=False, default=str)
         task.status = status
-        task.finished_at = datetime.utcnow()
+        task.finished_at = beijing_now_naive()
         db.commit()
     record_audit(actor="user", action="task.resolve", target=row["type"],
                  after={"status": status, "outcome": outcome, "note": note[:200]},
@@ -483,7 +483,9 @@ async def _h_data_check(rec: _StepRecorder, params: dict, app: Any) -> dict:
         from datetime import timedelta
 
         with get_session_factory()() as db:
-            cutoff = datetime.utcnow() - timedelta(hours=12)
+            # triggered_at 是 alert 域的北京 naive（勿与 agent 域旧 UTC 口径混淆）——
+            # cutoff 必须同口径；此前误用 utcnow-12h，实际统计的是近 20h。
+            cutoff = beijing_now_naive() - timedelta(hours=12)
             today_events = len(db.execute(
                 select(AlertEvent.id).where(AlertEvent.triggered_at >= cutoff)
             ).scalars().all())
@@ -536,22 +538,22 @@ def _set_status(task_id: str, status: str, **fields: Any) -> None:
 
 async def _execute(task_id: str, type_: str, params: dict) -> None:
     rec = _StepRecorder(task_id)
-    _set_status(task_id, "running", started_at=datetime.utcnow())
+    _set_status(task_id, "running", started_at=beijing_now_naive())
     try:
         handler = _HANDLERS[type_]
         result = await handler(rec, params, _APP)
-        _set_status(task_id, "succeeded", result_ref=result, finished_at=datetime.utcnow())
+        _set_status(task_id, "succeeded", result_ref=result, finished_at=beijing_now_naive())
         record_audit(actor="ai", action="task.finish", target=type_, after={"status": "succeeded"},
                      task_id=task_id)
         log.warning("[AGENT-TASK] %s %s 完成", type_, task_id)
     except asyncio.CancelledError:
-        _set_status(task_id, "canceled", finished_at=datetime.utcnow())
+        _set_status(task_id, "canceled", finished_at=beijing_now_naive())
         record_audit(actor="user", action="task.cancel", target=type_, after={"status": "canceled"},
                      task_id=task_id)
         raise
     except Exception as exc:
         _set_status(task_id, "failed", error={"code": type(exc).__name__, "message": str(exc),
-                                              "retryable": True}, finished_at=datetime.utcnow())
+                                              "retryable": True}, finished_at=beijing_now_naive())
         record_audit(actor="ai", action="task.fail", target=type_,
                      after={"status": "failed", "error": str(exc)}, task_id=task_id)
         log.warning("[AGENT-TASK] %s %s 失败：%s", type_, task_id, exc)
@@ -631,7 +633,7 @@ def cancel_task(task_id: str) -> dict | None:
     if handle is not None and not handle.done():
         handle.cancel()
     else:
-        _set_status(task_id, "canceled", finished_at=datetime.utcnow())
+        _set_status(task_id, "canceled", finished_at=beijing_now_naive())
         record_audit(actor="user", action="task.cancel", target=row["type"],
                      after={"status": "canceled"}, task_id=task_id)
     return get_task(task_id)
@@ -665,7 +667,7 @@ def reconcile_on_startup() -> int:
             r.status = "failed"
             r.error = json.dumps({"code": "Interrupted", "message": "服务重启，任务中断",
                                   "retryable": True}, ensure_ascii=False)
-            r.finished_at = datetime.utcnow()
+            r.finished_at = beijing_now_naive()
             n += 1
         if n:
             db.commit()

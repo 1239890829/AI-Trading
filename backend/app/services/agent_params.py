@@ -17,11 +17,11 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select
 
+from app.core.bjtime import beijing_now_naive
 from app.core.db import get_session_factory
 from app.models.agent import AgentParam, AgentParamChange
 
@@ -288,9 +288,9 @@ def apply_change(change_id: int, session_factory=None, *, mutation_source: str |
                 update_mutation_result(mutation_id, "failed", "已回滚的变更单不能再次生效（请新建变更单）")
             raise ValueError("已回滚的变更单不能再次生效（请新建变更单）")
         db.merge(AgentParam(key=row.key, value=row.after,
-                            updated_at=datetime.utcnow()))
+                            updated_at=beijing_now_naive()))
         row.status = "applied"
-        row.applied_at = datetime.utcnow()
+        row.applied_at = beijing_now_naive()
         db.commit()
         db.refresh(row)
         out = _dump(row)
@@ -324,7 +324,7 @@ def shadow_change(change_id: int, session_factory=None) -> dict:
         except Exception:  # noqa: BLE001
             ev = {}
         if "shadow_started_at" not in ev:
-            ev["shadow_started_at"] = datetime.utcnow().isoformat(timespec="seconds")
+            ev["shadow_started_at"] = beijing_now_naive().isoformat(timespec="seconds")
         row.evidence = json.dumps(ev, ensure_ascii=False)
         db.commit()
         db.refresh(row)
@@ -381,9 +381,9 @@ def rollback_change(
             if cur is not None:
                 db.delete(cur)
         else:
-            db.merge(AgentParam(key=row.key, value=restored, updated_at=datetime.utcnow()))
+            db.merge(AgentParam(key=row.key, value=restored, updated_at=beijing_now_naive()))
         row.status = "rolled_back"
-        row.rolled_back_at = datetime.utcnow()
+        row.rolled_back_at = beijing_now_naive()
         row.rollback_reason = json.dumps(
             {"code": reason_code, "note": note[:500]}, ensure_ascii=False
         )

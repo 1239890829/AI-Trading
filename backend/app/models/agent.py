@@ -9,7 +9,8 @@
 设计纪律（与项目其余持久化一致）：
 - JSON 字段一律 String 列存文本，读写侧 json 编解码，不引新依赖；
 - 状态/类型是小写枚举字符串，非法值在 service 层拦，不在 DB 层猜；
-- 时间统一 UTC（utcnow），展示侧转北京时间。
+- 事件时间统一北京 naive（beijing_now_naive，2026-09-12 方案 A 收敛，
+  与全系统事件时间口径一致；原 UTC naive 存量已一次性迁移）。
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ from datetime import datetime
 from sqlalchemy import DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.db import utcnow
+from app.core.bjtime import beijing_now_naive
 from app.models.watchlist import Base
 
 #: 任务状态机（方案 §3.2）：
@@ -46,7 +47,7 @@ class AgentTask(Base):
     error: Mapped[str | None] = mapped_column(Text, default=None)   # JSON：{code,message,retryable}
     risk_level: Mapped[str] = mapped_column(String(2), default="L0")
     created_by: Mapped[str] = mapped_column(String(16), default="user")  # user/ai/scheduler
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=beijing_now_naive, index=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
 
@@ -70,7 +71,7 @@ class AgentTriage(Base):
     reason: Mapped[str] = mapped_column(Text, default="")
     model: Mapped[str] = mapped_column(String(16), default="rules")
     acked: Mapped[int] = mapped_column(Integer, default=0)   # 悬浮球确认（1=已读）
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=beijing_now_naive, index=True)
 
 
 class AgentParam(Base):
@@ -84,7 +85,7 @@ class AgentParam(Base):
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str | None] = mapped_column(Text, default=None)   # JSON 字符串
-    updated_at: Mapped[datetime | None] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, default=beijing_now_naive)
 
 
 class AgentParamChange(Base):
@@ -106,7 +107,7 @@ class AgentParamChange(Base):
     evidence: Mapped[str | None] = mapped_column(Text, default=None)
     status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
     task_id: Mapped[str | None] = mapped_column(String(36), default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=beijing_now_naive)
     applied_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     rolled_back_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     #: 回滚归因（2026-09-10 P1-15）：JSON `{"code": ..., "note": ...}`。
@@ -134,7 +135,7 @@ class AgentAgenda(Base):
     items: Mapped[str] = mapped_column(Text, default="[]")    # JSON：议程项
     budget: Mapped[str] = mapped_column(Text, default="{}")   # JSON：{llm_calls, tasks}
     error: Mapped[str | None] = mapped_column(Text, default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=beijing_now_naive)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
 
 
@@ -160,7 +161,7 @@ class AgentExperiment(Base):
     result: Mapped[str | None] = mapped_column(Text, default=None)  # JSON：对比结果与结论
     extensions: Mapped[int] = mapped_column(Integer, default=0)
     max_extensions: Mapped[int] = mapped_column(Integer, default=2)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=beijing_now_naive)
     concluded_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
 
 
@@ -177,4 +178,4 @@ class AgentAudit(Base):
     after: Mapped[str | None] = mapped_column(Text, default=None)    # JSON
     task_id: Mapped[str | None] = mapped_column(String(36), default=None, index=True)
     rollback_ref: Mapped[str | None] = mapped_column(String(64), default=None)
-    at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    at: Mapped[datetime] = mapped_column(DateTime, default=beijing_now_naive, index=True)

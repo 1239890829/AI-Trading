@@ -84,36 +84,37 @@ export function timeText(iso: string | null | undefined): string {
 }
 
 /**
- * **agent 域专用**：把**无时区标记的 UTC 时间戳**正确显示为北京时间。
+ * **agent 域专用**：把北京 naive 时间戳正确显示为北京时间。
  *
- * 背景：库里 `agent_task` / `agent_agenda` / `agent_param_change` 等表存的是
- * `utcnow()` 的 **naive 值**（如 `2026-09-11T07:45:06.541226`，实际是 UTC 07:45
- * = 北京 15:45）。而 `new Date("...")` 对无时区标记的串按**运行环境时区**解释 ⇒
- * 在国内机器上会被当成北京时间 07:45，**整整早 8 小时**。
+ * 背景（2026-09-12 方案 A 起）：agent 域 `agent_task` / `agent_agenda` /
+ * `agent_param_change` 等表的事件时间已统一存**北京 naive**（`beijing_now_naive()`，
+ * 与全系统事件时间口径一致；原 UTC naive 存量已一次性 +8h 迁移）。
+ * 无时区标记的串 `new Date("...")` 会按**运行环境时区**解释 ⇒ 在海外/CI
+ * 机器上错位，因此 naive 串必须补 `+08:00` 显式声明。
  *
  * 与 `timeText` 的两点差异（都不可省）：
- * 1. 无 `Z`/偏移的串**补 `Z` 按 UTC 解释**；已带时区的原样处理，两种输入都安全；
+ * 1. 无 `Z`/偏移的串**补 `+08:00` 按北京解释**；已带时区的原样处理，两种输入都安全；
  * 2. 输出**固定 `Asia/Shanghai`**，不再依赖运行环境时区（`timeText` 没指定
  *    timeZone，在 CI/海外机器上同样会错，属既有隐患）。
  */
-/** 把 agent 域的无时区 UTC 串解析成 Date；非法返回 null。 */
-function parseUtcNaive(iso: string | null | undefined): Date | null {
+/** 把 agent 域的时间串解析成 Date（naive 按北京解释）；非法返回 null。 */
+function parseBjNaive(iso: string | null | undefined): Date | null {
   if (!iso) return null;
   const s = String(iso).trim();
   const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(s);
-  const d = new Date(hasZone ? s : `${s}Z`);
+  const d = new Date(hasZone ? s : `${s}+08:00`);
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-export function timeTextUTC(iso: string | null | undefined): string {
-  const d = parseUtcNaive(iso);
+export function timeTextBJ(iso: string | null | undefined): string {
+  const d = parseBjNaive(iso);
   if (!d) return "--";
   return d.toLocaleTimeString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" });
 }
 
 /** 同上，但带月日：`MM-DD HH:mm`（任务中心用的是这个格式）。 */
-export function dateTimeTextUTC(iso: string | null | undefined): string {
-  const d = parseUtcNaive(iso);
+export function dateTimeTextBJ(iso: string | null | undefined): string {
+  const d = parseBjNaive(iso);
   if (!d) return "--";
   return d.toLocaleString("zh-CN", {
     hour12: false, timeZone: "Asia/Shanghai",

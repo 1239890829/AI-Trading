@@ -23,7 +23,7 @@ from app.core.config import settings
 from app.core.db import get_session_factory
 from app.models.agent import AgentAgenda, AgentAudit, AgentExperiment, AgentParamChange
 from app.services.evolution import PROJECT_ROOT
-from app.core.bjtime import beijing_now, BJ_OFFSET  # S2-8 时区收敛
+from app.core.bjtime import beijing_now  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 
@@ -49,16 +49,16 @@ def _collect_week(sf) -> dict:
     """本周（周一 0 点起）自主改动全量数据。"""
     with sf() as db:
         agendas = db.execute(
-            select(AgentAgenda).where(AgentAgenda.created_at >= _week_start_utc())
+            select(AgentAgenda).where(AgentAgenda.created_at >= _week_start_bj())
         ).scalars().all()
         experiments = db.execute(
-            select(AgentExperiment).where(AgentExperiment.created_at >= _week_start_utc())
+            select(AgentExperiment).where(AgentExperiment.created_at >= _week_start_bj())
         ).scalars().all()
         changes = db.execute(
-            select(AgentParamChange).where(AgentParamChange.created_at >= _week_start_utc())
+            select(AgentParamChange).where(AgentParamChange.created_at >= _week_start_bj())
         ).scalars().all()
         audits = db.execute(
-            select(AgentAudit).where(AgentAudit.at >= _week_start_utc())
+            select(AgentAudit).where(AgentAudit.at >= _week_start_bj())
         ).scalars().all()
 
     item_stats: dict[str, int] = {}
@@ -100,11 +100,11 @@ def _conclusion_of(result_raw: str | None) -> str:
         return ""
 
 
-def _week_start_utc() -> datetime:
-    """本周周一 0 点（北京）对应的 naive UTC。"""
+def _week_start_bj() -> datetime:
+    """本周周一 0 点（北京 naive；agent 域时间列存北京 naive——2026-09-12 方案 A 起）。"""
     bj = beijing_now()
     monday = bj - timedelta(days=bj.weekday())
-    return datetime(monday.year, monday.month, monday.day) - BJ_OFFSET
+    return datetime(monday.year, monday.month, monday.day)
 
 
 def meta_review_path(now: datetime | None = None) -> Path:

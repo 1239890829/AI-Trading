@@ -89,19 +89,19 @@ def _main_worktree_clean(root: Path) -> bool:
 def _c_executed_today(session_factory) -> int:
     """今日已执行的 C 类数（audit 计数；跨 agenda 重生成也稳）。
 
-    cutoff 必须用 datetime 对象（evolution._utc_cutoff_today）——SQLite 存
+    cutoff 必须用 datetime 对象（evolution._bj_cutoff_today，北京 0 点）——SQLite 存
     "YYYY-MM-DD HH:MM:SS" 空格分隔，与 "…T00:00:00" 字符串比较恒 False。
     """
     from sqlalchemy import select
 
     from app.models.agent import AgentAudit
-    from app.services.evolution import _utc_cutoff_today
+    from app.services.evolution import _bj_cutoff_today
 
     with session_factory() as db:
         rows = db.execute(
             select(AgentAudit).where(
                 AgentAudit.action == "code.apply",
-                AgentAudit.at >= _utc_cutoff_today(),
+                AgentAudit.at >= _bj_cutoff_today(),
             )
         ).scalars().all()
         return len(rows)

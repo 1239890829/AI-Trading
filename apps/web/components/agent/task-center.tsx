@@ -13,7 +13,7 @@ import {
   type AgentTaskStatus,
   type AgentTaskType,
 } from "@/lib/api";
-import { dateTimeTextUTC } from "@/lib/format";
+import { dateTimeTextBJ } from "@/lib/format";
 
 /**
  * AI 控制台 · 任务中心（docs/ai-agent-console-plan.md P0）。
@@ -64,10 +64,10 @@ const PARAM_LABEL: Record<string, string> = {
   agenda_date: "议程日期",
 };
 
-// 2026-09-11：agent 域时间戳是**无时区的 UTC naive**，直接 `new Date(...)` 会按
-// 运行环境时区解释 ⇒ 国内机器上早 8 小时。改用 `dateTimeTextUTC`（按 UTC 解释、
-// 固定 Asia/Shanghai 输出），格式保持 `MM-DD HH:mm` 不变。
-const timeText = dateTimeTextUTC;
+// 2026-09-12 方案 A：agent 域时间戳已统一存**北京 naive**（原 UTC naive 已迁移），
+// 但 naive 串仍不能直接 `new Date(...)`（按运行环境时区解释，海外/CI 错位）。
+// 用 `dateTimeTextBJ`（naive 补 +08:00、固定 Asia/Shanghai 输出），格式保持 `MM-DD HH:mm` 不变。
+const timeText = dateTimeTextBJ;
 
 export function TaskCenter() {
   // 三态：undefined=尚未拉到（骨架）/ null=拉过且失败（错误态）/ 有值=渲染
