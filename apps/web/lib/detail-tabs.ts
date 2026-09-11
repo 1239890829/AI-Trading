@@ -23,6 +23,37 @@ export type DetailRightTab =
   | "boards"
   | "dt";
 
+/** 图表区 tab 键（与 components/stock-detail 的 ChartTab 同域）。 */
+export type DetailChartTab = "kline" | "minute" | "flow";
+
+/**
+ * 深链参数解析（2026-09-11 从 app/workbench/page.tsx 抽出）。
+ *
+ * 抽出的动机：这是**跨模块契约**——URL 由 `lib/nav-targets.ts` 的构造器产出
+ * （助手一键跳转 / 分享链接），由这里解析。两边一旦漂移，链接不会报错，
+ * 而是**静默回落到默认 tab**（正是 P2-28② 要修的那类"点不到位"）。
+ * 放在这里才能被 nav-targets.test.ts 交叉断言（同 INDEX_RIGHT_TABS 的理由）。
+ *
+ * 非法值一律 undefined（回落默认），不抛错——URL 是外部输入。
+ */
+export function parseChartTab(v: string | null): DetailChartTab | undefined {
+  return v === "kline" || v === "minute" || v === "flow" ? v : undefined;
+}
+
+export function parseRightTab(v: string | null): DetailRightTab | undefined {
+  return v === "book" ||
+    v === "trades" ||
+    v === "trade" ||
+    v === "real" ||
+    v === "profile" ||
+    v === "info" ||
+    v === "speed" ||
+    v === "boards" ||
+    v === "dt"
+    ? v
+    : undefined;
+}
+
 /** 指数右列可用 tab：精简后只剩这两个。 */
 export const INDEX_RIGHT_TABS: ReadonlySet<DetailRightTab> = new Set<DetailRightTab>([
   "speed",

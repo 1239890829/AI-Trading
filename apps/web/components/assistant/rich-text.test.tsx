@@ -1,7 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { parseBlocks, RichText } from "@/components/assistant/rich-text";
 import { createEntityMatcher, type EntityDict } from "@/lib/entity-links";
+
+// 本文件每个用例都 render 同一段文本（"贵州茅台…"），不清理会让
+// `getByRole` 命中上一个用例遗留的按钮而报 multiple elements
+// （2026-09-11 加「个股+页签」用例时暴露；与 board-flow.test.tsx 同约定）。
+afterEach(cleanup);
 
 const dict: EntityDict = {
   stocks: [{ name: "贵州茅台", code: "600519" }],
@@ -76,5 +81,32 @@ describe("RichText", () => {
       <RichText text={"```\n贵州茅台 600519\n```"} matcher={matcher} onNavigate={onNavigate} />,
     );
     expect(container.querySelectorAll("button")).toHaveLength(0);
+  });
+
+  // ---- 「个股 + 页签」组合（2026-09-11，P2-28②） ----
+
+  it("组合命中时按钮仍是个股名，但 title 与回调都指向页签", () => {
+    const onNav = vi.fn();
+    render(
+      <RichText text="可到贵州茅台的分时图看" matcher={matcher} onNavigate={onNav} />,
+    );
+    const btn = screen.getByRole("button", { name: "贵州茅台" });
+    expect(btn.getAttribute("title")).toContain("分时图");
+    fireEvent.click(btn);
+    expect(onNav).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "stock",
+        code: "600519",
+        key: "stock_minute",
+        url: "/workbench?symbol=600519&ct=minute",
+      }),
+    );
+  });
+
+  it("无页签词时 title 仍是「个股详情」（不谎报落点）", () => {
+    render(<RichText text="贵州茅台今天不错" matcher={matcher} onNavigate={onNavigate} />);
+    expect(screen.getByRole("button", { name: "贵州茅台" }).getAttribute("title")).toContain(
+      "点击打开个股详情",
+    );
   });
 });

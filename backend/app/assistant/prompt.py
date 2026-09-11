@@ -38,7 +38,12 @@ PROJECT_BRIEF_TEMPLATE = """\
   前端才能识别；识别不到就只是普通文字，不会出错。
 - **绝不自己拼 URL，也不要输出 markdown 链接**——站外链接一律不渲染，
   而站内路径由前端构造更可靠（你记不住 query 参数）。
+- **个股页签（2026-09-11）**：引导用户去看某只票的某个页签时，把**个股名与页签名
+  贴着写**（中间最多一个「的」），如「贵州茅台的分时图」「贵州茅台 600519 的资金流向」；
+  前端会据此直达该页签。写成「可到工作台个股详情的分时/资金页签查看」——个股名与页签名
+  离得远或干脆没提个股——只会跳个股首页，点不到页签。
 可跳转功能：{NAV_WORDS}
+个股页签标准词：{STOCK_TAB_WORDS}
 
 ## 输出纪律
 - 简体中文，Markdown 格式，简洁直接：短段落 + 列表，避免大段铺陈。
@@ -97,6 +102,22 @@ NAV_WORDS: tuple[str, ...] = (
     "盘中提醒",
 )
 
+# 与前端 lib/nav-targets.ts 的 STOCK_TAB_ALIASES 键集保持一致的**个股页签标准词**
+# （2026-09-11，P2-28②）。口径同 NAV_WORDS：后端只在提示词里点名，前端负责识别与
+# 构造 URL；漂移由 tests/test_assistant.py::test_prompt_stock_tab_words_covered_by_frontend 守卫。
+# ⚠️ 与 NAV_WORDS 分开的原因：同一个词（如「资金流向」）单独出现指市场资金面，
+# 跟在个股名后指该股资金图 —— 两张表各自是唯一真相源，不要合并。
+STOCK_TAB_WORDS: tuple[str, ...] = (
+    "K线",
+    "分时图",
+    "资金流向",
+    "逐笔成交",
+    "盘口",
+    "财务资料",
+    "公告新闻",
+    "做T",
+)
+
 
 def _render_brief(tools_enabled: bool) -> str:
     """渲染系统提示骨架：能力边界按工具开关二选一，功能名照抄白名单。"""
@@ -107,6 +128,7 @@ def _render_brief(tools_enabled: bool) -> str:
         .replace("{MODULE_MAP}", render_module_map())
         .replace("{CAPABILITY}", CAPABILITY_TOOLS if tools_enabled else CAPABILITY_NO_TOOLS)
         .replace("{NAV_WORDS}", "、".join(NAV_WORDS))
+        .replace("{STOCK_TAB_WORDS}", "、".join(STOCK_TAB_WORDS))
     )
 
 

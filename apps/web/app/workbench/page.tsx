@@ -3,6 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Panel } from "@/components/panel";
+import { parseChartTab, parseRightTab } from "@/lib/detail-tabs";
 import { IndexCards } from "@/components/index-cards";
 import { StockDetailPanel, type ChartTab, type RightTab } from "@/components/stock-detail";
 import { PriceFlash } from "@/components/price-flash";
@@ -48,24 +49,9 @@ import type { Quote } from "@/types/market";
 
 const STATUS_LABEL = STREAM_STATUS_LABEL;
 
-/** ?ct= 白名单解析：非法值一律 undefined（回落默认 kline），不抛错。 */
-function parseChartTab(v: string | null): ChartTab | undefined {
-  return v === "kline" || v === "minute" || v === "flow" ? v : undefined;
-}
-/** ?rt= 白名单解析：同上。 */
-function parseRightTab(v: string | null): RightTab | undefined {
-  return v === "book" ||
-    v === "trades" ||
-    v === "trade" ||
-    v === "real" ||
-    v === "profile" ||
-    v === "info" ||
-    v === "speed" ||
-    v === "boards" ||
-    v === "dt"
-    ? v
-    : undefined;
-}
+// ?ct= / ?rt= 深链参数解析（2026-09-11 抽到 lib/detail-tabs.ts：这是与
+// lib/nav-targets.ts 构造器之间的跨模块契约，放在那里才能被交叉断言——
+// 两边漂移时链接不会报错，只会**静默回落默认 tab**）。
 
 function WorkbenchInner() {
   const router = useRouter();

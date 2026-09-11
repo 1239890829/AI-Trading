@@ -247,24 +247,48 @@ def test_chat_route_sse_gateway_error_hint_must_not_say_recharge(client, monkeyp
     assert "充值" not in (err["hint"] or "")
 
 
-def test_prompt_nav_words_covered_by_frontend():
-    """提示词点名的功能名必须都在前端别名表里，否则"可跳转"是空头支票。
+def _frontend_table_keys(table: str) -> set[str]:
+    """从前端 lib/nav-targets.ts 里抽出一张别名表的键集（两处守卫共用）。
 
-    前端是识别与跳转的唯一实现方（lib/nav-targets.ts::NAV_ALIASES），后端只在
-    提示词里点名。两边一旦漂移，模型会照提示词写、前端却识别不到 → 静默退化成
-    普通文字。这里直接读前端源文件做交叉校验，不给漂移留窗口。
+    直接读源文件做交叉校验：跳转合同（词 → 落点）的**唯一实现方在前端**，
+    后端只在提示词里点名；两边一旦漂移，模型照提示词写、前端却识别不到，
+    静默退化成普通文字——不给这种漂移留窗口。
     """
+    nav_src = (FRONTEND / "apps/web/lib/nav-targets.ts").read_text(encoding="utf-8")
+    block = re.search(rf"{table}[^=]*=\s*\{{(.*?)\n\}};", nav_src, re.S)
+    assert block, f"未找到前端 {table} 表（结构变了，同步更新本测试）"
+    return set(re.findall(r"^\s*([^\s:{]+):", block.group(1), re.M))
+
+
+def test_prompt_nav_words_covered_by_frontend():
+    """提示词点名的功能名必须都在前端别名表里，否则"可跳转"是空头支票。"""
     from app.assistant.prompt import NAV_WORDS, PROJECT_BRIEF
 
-    nav_src = (FRONTEND / "apps/web/lib/nav-targets.ts").read_text(encoding="utf-8")
-    block = re.search(r"NAV_ALIASES[^=]*=\s*\{(.*?)\n\};", nav_src, re.S)
-    assert block, "未找到前端 NAV_ALIASES 表（结构变了，同步更新本测试）"
-    frontend_keys = set(re.findall(r"^\s*([^\s:{]+):", block.group(1), re.M))
+    frontend_keys = _frontend_table_keys("NAV_ALIASES")
     missing = [w for w in NAV_WORDS if w not in frontend_keys]
     assert not missing, f"提示词点名但前端无别名（跳转会失效）：{missing}"
     # 提示词里必须真的带上这些词，而不是只写在常量里
     for w in NAV_WORDS:
         assert w in PROJECT_BRIEF, f"提示词未包含可跳转功能名：{w}"
+
+
+def test_prompt_stock_tab_words_covered_by_frontend():
+    """个股页签标准词同理（2026-09-11，P2-28②）。
+
+    页签跳转是**组合式**的：光有词不够，还要跟个股名贴紧才会命中在前端
+    `STOCK_TAB_ALIASES` 上（见 lib/entity-links.ts::tabAfter）。所以这里守两件事：
+    ①提示词点名的页签词前端都认识；②提示词确实把「贴紧写」这条教给了模型——
+    否则模型写成「个股详情的分时/资金页签」，个股名与页签名离得远，跳转静默失效。
+    """
+    from app.assistant.prompt import PROJECT_BRIEF, STOCK_TAB_WORDS
+
+    frontend_keys = _frontend_table_keys("STOCK_TAB_ALIASES")
+    missing = [w for w in STOCK_TAB_WORDS if w not in frontend_keys]
+    assert not missing, f"提示词点名但前端无页签别名（页签跳转会失效）：{missing}"
+    for w in STOCK_TAB_WORDS:
+        assert w in PROJECT_BRIEF, f"提示词未包含个股页签标准词：{w}"
+    # 教了"贴紧写"才可能命中；只列词不教用法等于没接线
+    assert "贴着写" in PROJECT_BRIEF, "提示词未说明页签词的贴紧写法（组合识别会失效）"
 
 
 def test_chat_route_tool_round(client, monkeypatch):

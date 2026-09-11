@@ -460,18 +460,22 @@ export function FloatingAssistant() {
   };
 
   // ---- 跳转 ----------------------------------------------------------------
-  // 三类落点：个股 → 工作台；题材 → 盘面题材梯队；功能入口 → 注册表给出的站内深链。
-  // nav 的 URL 在识别阶段已过白名单守卫，这里再过一次（防御渲染期被篡改），
-  // 未过则降级为跳题材页，绝不 push 非常规 URL。
+  // 四类落点：个股 → 工作台（命中页签则直达该页签）；题材 → 盘面题材梯队；
+  // 功能入口 → 注册表给出的站内深链。
+  // nav 与「个股 + 页签」的 URL 在识别阶段已过白名单守卫，这里再过一次
+  // （防御渲染期被篡改），未过则按类型降级，绝不 push 非常规 URL。
   //
   // P1-2（2026-09-11）：必须 useCallback —— 它作为 `onNavigate` 传给 RichText，
   // 而 RichText 已包 memo；每次渲染新建函数会让 memo 彻底失效（流式期间
   // 每个 delta 仍重解析全部历史消息，等于白做）。
   const onNavigate = useCallback(
     (m: EntityMatch) => {
-      if (m.type === "nav") {
-        const url = m.url && isAllowedNav(m.url) ? m.url : themesUrl(m.name);
-        router.push(url);
+      if (m.url && isAllowedNav(m.url)) {
+        // 深链优先：功能入口 / 个股+页签走注册表 URL
+        router.push(m.url);
+      } else if (m.type === "nav") {
+        // nav 必有 url，走到这里即守卫未过（防御性降级）
+        router.push(themesUrl(m.name));
       } else {
         router.push(m.type === "stock" && m.code ? workbenchUrl(m.code) : themesUrl(m.name));
       }

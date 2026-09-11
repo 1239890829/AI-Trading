@@ -1,5 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { stockRedirectTarget, tapeUrl, themesUrl, workbenchUrl } from "./routing";
+import { stockRedirectTarget, tapeUrl, themesUrl, withFrom, workbenchUrl } from "./routing";
+
+describe("withFrom（任意站内 URL 追加来源参数；P2-28② 起深链也带返回入口）", () => {
+  it("已有 query 时用 & 追加，不破坏原参数", () => {
+    window.history.pushState({}, "", "/tape?tab=limitup");
+    try {
+      expect(withFrom("/workbench?symbol=600519&ct=minute")).toBe(
+        "/workbench?symbol=600519&ct=minute&from=%2Ftape%3Ftab%3Dlimitup",
+      );
+    } finally {
+      window.history.pushState({}, "", "/");
+    }
+  });
+
+  it("无 query 时用 ? 追加", () => {
+    window.history.pushState({}, "", "/market");
+    try {
+      expect(withFrom("/hunting")).toBe("/hunting?from=%2Fmarket");
+    } finally {
+      window.history.pushState({}, "", "/");
+    }
+  });
+});
 
 describe("workbenchUrl", () => {
   it("拼出带 symbol 的详情地址", () => {

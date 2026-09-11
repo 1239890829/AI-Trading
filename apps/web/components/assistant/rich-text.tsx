@@ -149,12 +149,15 @@ function renderInline({ text, match, onNavigate }: InlineProps): ReactNode[] {
           </button>,
         );
       } else {
+        // 个股：命中「个股 + 页签」时 key 是页签（点进去直达该页签），
+        // 否则落工作台默认视图。文案随之变化，避免"说跳分时、实跳首页"的错位观感。
+        const stockLabel = h.key ? (NAV_LABELS[h.key as NavKey] ?? "个股详情") : "个股详情";
         nodes.push(
           h.type === "stock" ? (
             <button
               key={`e${key++}`}
               type="button"
-              title={`${h.name}（${h.code}）— 点击打开个股详情`}
+              title={`${h.name}（${h.code}）— 点击打开${stockLabel}`}
               className="mx-0.5 rounded bg-sky-500/10 px-1 font-medium text-sky-700 underline decoration-dotted underline-offset-2 hover:bg-sky-500/20 dark:text-sky-400"
               onClick={() => onNavigate(h)}
             >

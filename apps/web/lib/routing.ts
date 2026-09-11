@@ -15,17 +15,27 @@ export function workbenchUrl(symbol: string): string {
 }
 
 /**
+ * 在任意**站内** URL 上追加来源参数（返回入口用）。
+ * 抽出来的动机（2026-09-11，P2-28②）：以前只有"工作台 + from"这一个形态，
+ * 个股深链（`?ct=` / `?rt=`）也要带返回入口，若各自手拼就会出现两种拼法。
+ * SSR/纯函数环境（无 window）原样返回。
+ */
+export function withFrom(url: string): string {
+  if (typeof window === "undefined") return url;
+  const from = window.location.pathname + window.location.search;
+  if (!from.startsWith("/")) return url;
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}from=${encodeURIComponent(from)}`;
+}
+
+/**
  * 跨页跳工作台并携带来源（2026-09-03 需求：所有与工作台联动的板块都提供返回入口，
  * 返回后原页面状态保留——来源页的 tab/选中态本来就活在 URL query 里，把整个
  * 「路径 + 查询串」原样装进 from 参数即可，无需每个页面自己序列化状态）。
  * SSR/纯函数环境退化为不带 from 的普通跳转。
  */
 export function workbenchUrlWithBack(symbol: string): string {
-  const base = workbenchUrl(symbol);
-  if (typeof window === "undefined") return base;
-  const from = window.location.pathname + window.location.search;
-  if (!from.startsWith("/")) return base;
-  return `${base}&from=${encodeURIComponent(from)}`;
+  return withFrom(workbenchUrl(symbol));
 }
 
 /** from 路径 → 来源页中文名（返回按钮的文案；未知路径返回 null → 不渲染按钮）。 */

@@ -32,7 +32,11 @@ export const NAV_TARGETS = {
   stock_minute: (symbol: string) => `${workbenchUrl(symbol)}&ct=minute`,
   stock_flow: (symbol: string) => `${workbenchUrl(symbol)}&ct=flow`,
   // 右栏 tab（rt 与 RightTab 同域：book|trades|trade|real|profile|info|speed|boards|dt）
+  // 口径：只登记**个股研究面**的页签。刻意不登记 trade / real（模拟交易、真实持仓
+  // 是账户面，不是"看这只票"，助手回复里也不该引导去下单）与 speed / boards（指数专属）。
+  stock_book: (symbol: string) => `${workbenchUrl(symbol)}&rt=book`,
   stock_trades: (symbol: string) => `${workbenchUrl(symbol)}&rt=trades`,
+  stock_dt: (symbol: string) => `${workbenchUrl(symbol)}&rt=dt`,
   stock_profile: (symbol: string) => `${workbenchUrl(symbol)}&rt=profile`,
   stock_info: (symbol: string) => `${workbenchUrl(symbol)}&rt=info`,
   theme_ladder: (focus?: string) => themesUrl(focus),
@@ -104,11 +108,65 @@ const PARAM_KEYS: ReadonlySet<NavKey> = new Set<NavKey>([
   "stock_kline",
   "stock_minute",
   "stock_flow",
+  "stock_book",
   "stock_trades",
+  "stock_dt",
   "stock_profile",
   "stock_info",
   "intraday_theme",
 ]);
+
+/**
+ * 「个股 + 页签」组合识别用的页签别名（2026-09-11，P2-28②）。
+ *
+ * **为什么与 NAV_ALIASES 分表**：同一个词在不同上下文里是两个落点——
+ * 「资金流向」单独出现指市场资金面（market_fund，`/market?tab=fund`），
+ * 紧跟个股名时指该股的资金图（stock_flow，`/workbench?…&ct=flow`）。
+ * 合成一张表必然要二选一，只能错一头。
+ *
+ * **识别侧用法**：先扫到个股（名称或字典内代码），再看它**紧后面**——
+ * 只允许夹空白与一个「的」——是否命中本表的词；命中则把页签词一并吃掉
+ * （不再单独成链），产出带参深链。见 `lib/entity-links.ts`。
+ *
+ * **收录口径**：词必须来自**页签真实标签**（图表区 K线/分时/资金图；
+ * 右栏 盘口/逐笔/资料/资讯/做T）或它的常见同义说法，且"说了就该能点进那个页签"。
+ * 刻意不收：模拟交易 / 真实持仓（账户面）、涨速 / 板块（指数专属）、
+ * 单字词（会与正文抢匹配）。
+ */
+export const STOCK_TAB_ALIASES: Record<string, NavKey> = {
+  // 图表区（?ct=）
+  资金流向图: "stock_flow",
+  资金流向: "stock_flow",
+  资金流: "stock_flow",
+  资金图: "stock_flow",
+  资金: "stock_flow",
+  K线图: "stock_kline",
+  日K线: "stock_kline",
+  K线: "stock_kline",
+  日线: "stock_kline",
+  分时图: "stock_minute",
+  分时: "stock_minute",
+  // 右栏（?rt=）
+  逐笔成交: "stock_trades",
+  成交明细: "stock_trades",
+  逐笔: "stock_trades",
+  盘口: "stock_book",
+  财务资料: "stock_profile",
+  财务数据: "stock_profile",
+  基本面: "stock_profile",
+  财务: "stock_profile",
+  资料: "stock_profile",
+  公告新闻: "stock_info",
+  个股资讯: "stock_info",
+  公告: "stock_info",
+  资讯: "stock_info",
+  做T: "stock_dt",
+};
+
+/** 页签别名按长度降序（最长匹配优先："资金流向图" 先于 "资金流向"）。 */
+export function stockTabWords(): string[] {
+  return Object.keys(STOCK_TAB_ALIASES).sort((a, b) => b.length - a.length);
+}
 
 /** 别名按长度降序（最长匹配优先："涨停池" 先于 "涨停"）。 */
 export function navAliasWords(): string[] {
@@ -151,7 +209,9 @@ export const NAV_LABELS: Record<NavKey, string> = {
   stock_kline: "K 线图",
   stock_minute: "分时图",
   stock_flow: "资金流向图",
+  stock_book: "盘口",
   stock_trades: "逐笔成交",
+  stock_dt: "做T",
   stock_profile: "财务资料",
   stock_info: "公告新闻",
   theme_ladder: "题材梯队",

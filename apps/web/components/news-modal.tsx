@@ -11,8 +11,9 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 
 import { API_BASE, getNewsContent, type ArticleBlock, type ArticleContent } from "@/lib/api";
-import { workbenchUrlWithBack, themesUrl } from "@/lib/routing";
+import { withFrom, workbenchUrlWithBack, themesUrl } from "@/lib/routing";
 import { createEntityMatcher, type EntityDict, type EntityMatch, type EntityMatcher } from "@/lib/entity-links";
+import { isAllowedNav } from "@/lib/nav-targets";
 import { RichText } from "@/components/assistant/rich-text";
 import { eventTimeText } from "@/lib/format";
 
@@ -203,12 +204,19 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
     };
   }, [item, matcher]);
 
-  // 实体点击导航：个股 → 工作台详情（带 from）；题材 → 题材梯队；功能入口 → 白名单 URL
+  // 实体点击导航：深链优先（功能入口 / 个股+页签）；个股 → 工作台详情（带 from）；
+  // 题材 → 题材梯队。来源参数走 withFrom，深链与首页两种形态只此一种拼法。
   const onNavigate = useCallback(
     (m: EntityMatch) => {
-      if (m.type === "stock" && m.code) router.push(workbenchUrlWithBack(m.code));
-      else if (m.type === "theme") router.push(themesUrl(m.name));
-      else if (m.type === "nav" && m.url) router.push(m.url);
+      if (m.url && isAllowedNav(m.url)) {
+        router.push(withFrom(m.url));
+      } else if (m.type === "stock" && m.code) {
+        router.push(workbenchUrlWithBack(m.code));
+      } else if (m.type === "theme") {
+        router.push(themesUrl(m.name));
+      } else if (m.type === "nav" && m.url) {
+        router.push(m.url);
+      }
     },
     [router],
   );
