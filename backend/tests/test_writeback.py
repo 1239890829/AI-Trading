@@ -197,3 +197,16 @@ def test_audit_reads_resolution_note_too():
     """参数意图常写在处置说明里（而非标题），两处都要扫。"""
     a = audit_applied_landed([_row(1, "收紧熔断阈值", note="已按建议 PENALTY_Y1 6.0 → 6.0")])
     assert a["landed"] == 1
+
+
+def test_audit_note_counts_no_param_intent_too():
+    """**定点回归**：判空必须按 total_applied（含无参数意图者）。
+
+    第一版用 `total`（只含有参数意图者）⇒ 3 条流程类 applied 改进项被报成
+    "尚无 applied 改进项"——明明采纳了却说没有，比不报更糟。
+    """
+    rows = [_row(1, "把复盘流程改成每日自动跑"), _row(2, "补充数据口径说明")]
+    a = audit_applied_landed(rows)
+    assert a["total_applied"] == 2
+    assert a["with_param_intent"] == 0
+    assert a["note"] is None, "有 applied 项时不得报「尚无」"

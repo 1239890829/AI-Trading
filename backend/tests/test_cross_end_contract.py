@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Callable
 
 REPO = Path(__file__).resolve().parents[2]
 WEB_LIB = REPO / "apps" / "web" / "lib"

@@ -293,6 +293,39 @@ def _collect_strategy_verification() -> dict:
     }
 
 
+def _collect_applied_landed(session_factory) -> dict:
+    """**采纳落地核对**（S2-11 的最后一米）。
+
+    `audit_applied_landed` 在 S2-11 里随 applied 载荷一起写好，却**从头到尾没有
+    生产调用方**——只有测试在调它。这正是本轮反复在治的「产出即死」：
+    写了核对能力，却没人读，于是「采纳率」仍然只是一个状态位的计数。
+
+    接进议程后，每日证据里会带出：标记了 `applied` 的改进项里，有多少**参数真的改了**
+    （`landed`）、多少只是标了状态（`not_landed`）。
+    """
+    try:
+        from sqlalchemy import select
+
+        from app.review.models import ReviewActionItemRow
+        from app.review.writeback import audit_applied_landed
+    except Exception as exc:  # noqa: BLE001
+        return {"available": False, "note": f"模块导入失败：{exc}"}
+
+    try:
+        with session_factory() as db:
+            rows = db.execute(
+                select(ReviewActionItemRow).where(ReviewActionItemRow.status == "applied")
+            ).scalars().all()
+            items = [{"id": r.id, "title": r.title, "status": r.status,
+                      "resolution_note": r.resolution_note or ""} for r in rows]
+    except Exception as exc:  # noqa: BLE001
+        return {"available": False, "note": f"读取失败：{exc}"}
+
+    out = audit_applied_landed(items)
+    out["available"] = True
+    return out
+
+
 def _collect_triage_stats(session_factory) -> dict:
     """告警判读统计：哪些规则在产生噪音（ignore 占比）、哪些事件被升级。"""
     try:
@@ -322,6 +355,7 @@ def collect_inputs(session_factory=None) -> dict:
         # 守卫见 tests/test_factor_report.py（源码里不许再出现那句托辞）。
         "factor_ic": _collect_factor_ic(),
         "strategy_verification": _collect_strategy_verification(),
+        "applied_landed": _collect_applied_landed(sf),
         "prediction": _collect_recent_prediction(sf),
         "knowledge_base": _collect_knowledge_base(),
         # 第九路（2026-09-09 用户指令「跟踪本质是实时选股」）：台账复盘×进化依据

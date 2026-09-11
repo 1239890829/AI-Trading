@@ -224,7 +224,10 @@ def audit_applied_landed(rows: list[dict]) -> dict:
         "not_landed": len(not_landed),
         "no_param_intent": len(no_intent),
         "items": {"landed": landed, "not_landed": not_landed, "no_param_intent": no_intent},
-        "note": None if total else "尚无 applied 改进项",
+        # ⚠️ 判空必须用 **total_applied**（含无参数意图者），不能用 `total`
+        # （只含有参数意图者）：否则 3 条流程类 applied 改进项会被报成
+        # "尚无 applied 改进项"——明明有采纳、却说没有，比不报更糟（2026-09-11 实测）。
+        "note": None if (len(landed) + len(not_landed) + len(no_intent)) else "尚无 applied 改进项",
         "caveat": "`not_landed` = 标记已采纳但运行时值仍不等于建议值；"
                   "参数类改进须以运行时值为准，不以状态位为准",
     }
