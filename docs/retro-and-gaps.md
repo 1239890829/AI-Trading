@@ -358,6 +358,18 @@
 
 ### 6.6 2026-09-12（跨周末门禁修复 · KB 拆分整理 · 收尾自主发现）
 
+### 6.7 2026-09-12 凌晨（接手轮：A 推送首验 CI · B 方案 A · F 口径对齐 · C 改道核查）
+
+| 项 | 结论 |
+|---|---|
+| **A 推送 112+ 提交** | ✅ **已推（含一次推送前事故拦截）**。泄漏扫描发现 `backend/.env.bak-20260911-1050`（真实凭据备份）被 eb92a94 误入库、`.gitignore` 的 `.env` 规则盖不住 `.env.bak-*` ⇒ **filter-branch 从未推送历史裁掉该文件** + 补 `.env.bak*` 规则 + safe-trash 磁盘副本 + 清 refs/original/reflog/gc（本地对象层凭据残留归零）。文档引用的 4 处未推送哈希逐一核对新旧映射（仅 `28b07e9→c410a02` 变化需回填——filter-branch 只改「引入提交及其后代」的哈希，此前的提交哈希不变）。**CI 首验**：docs/frontend(tsc+lint+vitest+build) 首次真实跑过；backend 连环暴露 3 层阻塞并全部修复：①`requirements.lock` 的 `jsonpath @ ./相对路径` 被 pip 当 URL（改裸路径，同 requirements.txt 既有模式）②`easy-tdx` 上游为私有仓 PyPI 不可得 ⇒ **从已验证运行的 site-packages 重打包 vendor wheel**（`python -m wheel pack`，干净 venv 验证可装/可导入/CLI 可用后入库，同 jsonpath 模式；本地 lock 全量 dry-run 65 项全解析）③**三个环境依赖潜伏测试缺陷**（见下行）。**教训：依赖装不上的 job = 测试从未被 CI 验证过；"CI 绿"不能只看本地绿** |
+| **backend 三个 CI 环境差异缺陷** | ✅ **全修（TZ=UTC 本地复现→修→复验）**：①`assistant/context.py _as_of` 用 `.astimezone()` 按进程时区展示「数据时间」⇒ CI 显示 06:30 而非北京 14:30（前端 timeText 同族缺陷的后端版）②`paper_shadow` 幂等日期链：`today_cst`（北京）vs `created_at.astimezone()`（进程本地）在 UTC 环境错位一天 ⇒ 幂等检测失效 ③`lurk-pool` 在 marketdb 文件不存在时 duckdb read_only 直接 IOException→500（CI 无该 367MB 文件）⇒ 补显式降级态 + 回归测试。**修复原则：展示/日期归属一律显式北京（BJ_TZ/beijing_now/beijing_today），在 +8 生产机行为零变化**。连带收敛 `paper/engine._today`（交易日归属的环境依赖变体——**D 项 aware 版**；naive `date.today()` 其余处仍留 D 项逐处核对） |
+| **B 方案 A** | ✅ **已交付**（见 §6.5 #6 行内执行记录：699 值迁移 + 写入侧翻转 + 前端 BJ 化 + 端到端验收） |
+| **F doc-health L0 口径差** | ✅ **已对齐**（KB 条目级 ≤60 升为硬门 + 文件 >800 降为非阻断提示 + 变异验证，见 §6.6 遗留观察行的销账记录） |
+| **C P0-3 数据源改道** | ✅ **已核查定案：不改道**（口径实证同族前复权 + max20 需 adj high 而库只物化 close_adj + 收益所剩无几，见 §6.5 #3 行内证据） |
+| ⏳ **待 CI 绿确认** | 9ef04fe 轮次 |
+| **KB-ENG-57 新立** | 「CI 环境差异三件套：时区（进程本地 vs 北京口径）/ 本地大文件缺位（marketdb 等 gitignored 资产）/ 测试执行顺序」。**判据：凡「依赖安装失败/从未跑过的 job」，其测试面的环境假设一律视为未验证**；修法 = 显示与日期归属显式北京 + 大文件缺位显式降级态 + TZ=UTC 本地复现通道 |
+
 **背景**：P2-5 交付后跑全量，出现 **2 failed / 2507 passed**，且两条失败都指向「当天」。
 实测 `date` = 2026-09-12（**周六**）⇒ 判定为**真实运行日驱动的断言口径缺陷**（非本轮改动引入）。
 
