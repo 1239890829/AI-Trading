@@ -212,6 +212,87 @@ def _collect_signal_health(session_factory) -> dict:
         return {"available": False, "note": f"读取失败：{exc}"}
 
 
+def _collect_factor_ic() -> dict:
+    """因子 IC 证据（S2-11）：读 `factors/report.py` 对评估产物的只读访问层。
+
+    与其它 `_collect_*` 同形：`{"available": ..., ...}`。
+    **不吞异常的业务含义**——读失败就如实 `available: False`，绝不返回空列表
+    让议程误以为"没有有效因子"（三态纪律：判不出 ≠ 没有）。
+    """
+    try:
+        from app.factors.report import ic_evidence
+
+        return ic_evidence()
+    except Exception as exc:  # noqa: BLE001
+        return {"available": False, "note": f"读取失败：{exc}"}
+
+
+def _collect_strategy_verification() -> dict:
+    """战法核验结论（S2-11）：登记册里每个「已否决 / 观察」的状态是否真有证据。
+
+    与 `factor_ic` 同形同因：核验器是离线重计算，结论此前只流向脚本 stdout，
+    登记册状态靠人工誊写 ⇒ 议程一路看不到、也无从追问"凭什么否决"。
+    这里只做**只读汇总**，不触发任何重算（重算走 `scripts/verify_*.py`）。
+
+    `entries` 每条是 `verification_of` 的三态载荷；`without_evidence` 列出
+    **标了 verify_key 却拿不到产物**的键——那才是真正该被追问的缺口
+    （状态有、证据无）。
+    """
+    try:
+        from app.picks.strategy_registry import (
+            STATUS_ACTIVE,
+            STATUS_OBSERVING,
+            STATUS_REJECTED,
+            SPECS,
+        )
+        from app.research.verify_registry import verification_of
+    except Exception as exc:  # noqa: BLE001
+        return {"available": False, "note": f"读取失败：{exc}"}
+
+    #: 登记册状态 ↔ 核验结论的**预期**对应。不符即为「状态与证据打架」，
+    #: 需要人工裁定（可能是重跑后数据变了，也可能是当初拍脑袋定的状态）。
+    expected = {
+        STATUS_ACTIVE: "pass",
+        STATUS_OBSERVING: "observe",
+        STATUS_REJECTED: "reject",
+    }
+
+    entries, missing, conflicts = [], [], []
+    for spec in SPECS:
+        if not spec.verify_key:
+            continue
+        try:
+            v = verification_of(spec.verify_key)
+        except Exception as exc:  # noqa: BLE001
+            v = {"available": False, "verdict": None, "headline": None,
+                 "reason": f"读取失败：{exc}"}
+        v = {**v, "key": spec.verify_key, "name": spec.name, "status": spec.status}
+        entries.append(v)
+        if not v.get("available"):
+            missing.append(spec.verify_key)
+            continue
+        if v.get("verdict") and expected.get(spec.status) != v["verdict"]:
+            conflicts.append({
+                "key": spec.verify_key,
+                "status": spec.status,
+                "verdict": v["verdict"],
+                "headline": v.get("headline"),
+            })
+
+    return {
+        "available": bool(entries),
+        "total": len(entries),
+        "with_evidence": len(entries) - len(missing),
+        "without_evidence": missing,
+        "conflicts": conflicts,
+        "entries": entries,
+        "note": None if entries else "登记册中无走核验的策略键",
+        "caveat": "核验为离线重算（duckdb 全历史），结论随重跑更新；"
+                  "超期产物只标注不删除，判读时须看 recorded_at；"
+                  "`conflicts` 是状态与实测结论打架者，须人工裁定",
+    }
+
+
 def _collect_triage_stats(session_factory) -> dict:
     """告警判读统计：哪些规则在产生噪音（ignore 占比）、哪些事件被升级。"""
     try:
@@ -236,7 +317,11 @@ def collect_inputs(session_factory=None) -> dict:
         "triage_stats": _collect_triage_stats(sf),
         "plan_alignment": _collect_plan_alignment(),
         "data_health": _collect_data_health(sf),
-        "factor_ic": {"available": False, "note": "月度复核（factor_ic_review）到期接入"},
+        # S2-11（2026-09-11）：原先这里是硬编码的「不可用 + 一句托辞」——评估跑完了
+        # 却没人读，闭环断在最后一米。现改读 `factors/report.py`，真实三态见 payload。
+        # 守卫见 tests/test_factor_report.py（源码里不许再出现那句托辞）。
+        "factor_ic": _collect_factor_ic(),
+        "strategy_verification": _collect_strategy_verification(),
         "prediction": _collect_recent_prediction(sf),
         "knowledge_base": _collect_knowledge_base(),
         # 第九路（2026-09-09 用户指令「跟踪本质是实时选股」）：台账复盘×进化依据

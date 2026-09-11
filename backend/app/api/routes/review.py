@@ -120,12 +120,20 @@ async def patch_action_item(item_id: str, body: ActionItemPatch, request: Reques
     # applied 半自动写回提示（策略进化 P1 方向5）：识别「参数 当前值→建议值」意图，
     # 运行时读当前值生成 diff；不认识/读不到 → unresolved，绝不臆造。
     # 全自动写回被方案排除——实际改文件仍由人执行，这里只负责把证据摆到眼前。
+    #
+    # S2-11：原先只回 `param_diff`（一串数字，无风险/无后果/无回滚方式），点是点了，
+    # 事后无从追问"这次采纳到底要改什么"。现改为回**完整载荷**：
+    # `param_diff` 保留（向后兼容，前端已在用），新增 `applied_payload`。
     param_diff: list[dict] = []
+    applied_payload: dict = {"available": False}
     if body.status == "applied":
-        from app.review.writeback import build_param_diff
+        from app.review.writeback import build_applied_payload, build_param_diff
 
-        param_diff = build_param_diff(f"{body.title} {body.note}")
-    return {"data": {**updated, "param_diff": param_diff}}
+        text = f"{body.title} {body.note}"
+        param_diff = build_param_diff(text)
+        applied_payload = build_applied_payload(text)
+    return {"data": {**updated, "param_diff": param_diff,
+                     "applied_payload": applied_payload}}
 
 
 @router.get("/review/action-items")

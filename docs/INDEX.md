@@ -56,6 +56,7 @@
 |---|---|
 | data-source-comparison.md | 四源实测对比与选型（改数据源前必读；改完回填） |
 | data-sources.md | 接入策略：主源→备源→降级链 |
+| external-data-source-survey-2026-09-11.md | **外部付费源调研**（Tushare / FTShare / KlineShare / QuantDash）：价格档位 + 能力矩阵 + 与本项目对比。⚠️ **均为官方公开信息，零实测**；核心结论：**四家均无 L2（最高五档），且两家与我们同源（东财/新浪/ths 二次聚合）**；P0 建议 = KlineShare 旗舰版作 ths 打板备源（须先验「涨停原因」字段） |
 | orderbook-source-evaluation.md | 五档盘口数据源评估（08-29/30，ths 无五档结论）· **已归档** → `archive/orderbook-source-evaluation.md` |
 
 ## 3. 方法论与功能设计（现役）

@@ -1,0 +1,35 @@
+{
+  "key": "pullback_reversal",
+  "verdict": "observe",
+  "headline": "测试段（样本外）T+5：均值 +4.57%（中性 +1.33%）、中性中位 -0.08%、中性跑赢 49.3%、年度为正 4/5、疑似涨停 0.0% ⇒ observe",
+  "metrics": {
+    "n": 8366,
+    "mean": 4.5737,
+    "median": 3.3333,
+    "win_rate": 0.6814,
+    "std": 10.831,
+    "excess": 1.3339,
+    "horizon": 5,
+    "cost_bps": 0.0,
+    "excess_median": -0.08110926734512514,
+    "excess_win_rate": 0.49258905092039207
+  },
+  "sample": {
+    "n_signals": 8366,
+    "split": "2022-01-01",
+    "segment": "测试段（样本外）",
+    "yearly_pos": 4,
+    "yearly_tot": 5,
+    "limit_up_share": 0.0,
+    "caveat": "候选B 系用全样本（含测试段）发现 ⇒ 本成绩不构成干净的样本外证据"
+  },
+  "source": "scripts/verify_candidate_b_oos.py",
+  "cost_bps": 0.0,
+  "recorded_at": "2026-09-11T17:51:48",
+  "gate_failed": [
+    "中性中位 -0.08% ≤ 0（收益右偏）",
+    "中性跑赢比例 49.3% < 50%"
+  ],
+  "rule": "涨幅3~7% | 跌破 3~8% | 大盘涨 >0.5%",
+  "condition": "(chg BETWEEN 3 AND 7) AND (dev_short < -3 AND dev_short >= -8) AND (mchg > 0.5)"
+}

@@ -1,0 +1,36 @@
+{
+  "key": "two_thirty_five",
+  "verdict": "reject",
+  "headline": "五步全通过 T+5：均值 -0.51%（中性 -0.85%）、中位 -1.71%、胜率 39.3%、年度为正 1/11、疑似涨停 0.0% ⇒ reject",
+  "metrics": {
+    "n": 8091,
+    "mean": -0.5081,
+    "median": -1.7061,
+    "win_rate": 0.3928,
+    "std": 9.3646,
+    "excess": -0.8493,
+    "horizon": 5,
+    "cost_bps": 0.0
+  },
+  "sample": {
+    "n_signals": 8091,
+    "trade_days": 2413,
+    "yearly_pos": 1,
+    "yearly_tot": 11,
+    "limit_up_share": 0.0
+  },
+  "source": "scripts/verify_two_thirty_five.py",
+  "cost_bps": 0.0,
+  "recorded_at": "2026-09-11T17:52:18",
+  "gate_failed": [
+    "市场中性超额 -0.85% ≤ 0",
+    "年度为正 1/11 < 60%（不稳定）"
+  ],
+  "conditions": {
+    "S1 涨幅3~5%": "chg BETWEEN 3 AND 5",
+    "S2 量比≥1": "vr >= 1",
+    "S3 换手5~15%": "turn BETWEEN 5 AND 15",
+    "S4 阶梯放大": "vol_step_up = 1",
+    "S5 均线多头": "ma_short > ma_mid AND ma_mid > ma_long AND close > ma_long AND dev_short <= 5"
+  }
+}

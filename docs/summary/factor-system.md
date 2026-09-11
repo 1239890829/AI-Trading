@@ -77,7 +77,30 @@ app/factors/evaluate.py  评估引擎（IC 计算）
 > **另**：原表「不建议采纳」清单（筹码因子 / 商誉现金流 / ATR 仓位 / RSI-MACD 背离 / 量比）
 > 依据的是检索到的反证，**不因时间推移自动失效**；若要重开需提供新实证。
 
-### 5.1 仍未做的因子体系欠债（来自 factor-library-design，与本表不重复）
+### 5.1 评估产物的运行时消费（S2-11，2026-09-11）
+
+**此前闭环断在最后一米**：`app/factors/evaluate.py::run_full_eval` 能产出 37 因子 × 4 窗口的
+IC/ICIR 报告，`data/factors/eval_report.json` 也在磁盘上，但**全站零运行时消费**——
+进化大脑的 `factor_ic` 是硬编码的 `{"available": False, "note": "月度复核到期接入"}`。
+
+现已接通：
+
+| 部件 | 位置 | 职责 |
+|---|---|---|
+| 只读访问层 | `app/factors/report.py` | `load_report` / `freshness` / `top_factors` / `ic_evidence`（三态，40 天超期） |
+| 议程接入 | `evolution.py::factor_ic` → `_collect_factor_ic()` | 实测 16 PASS / 7 conditional / 14 fail 进每日议程 |
+| 月度复核调度 | `evaluate.py::factor_eval_scheduler` | 每月 1 日 17:30；报告缺失或超 40 天才跑；`last_attempt_ymd` 防失败时反复重跑 |
+
+**两条纪律**：
+1. **方向由实测 IC 符号定**（`direction = 1 / -1 / None`），不取 `FactorDef.note` 里的「预期方向」。
+   负 IC 亦是有信息——A 股短周期动量常见反转（实测 `corr_pv20` IC −0.069、ICIR −0.733）。
+2. **样本内声明**：`caveat` 明写「IC 由本地全历史回测算出，样本内结论；**未做样本外验证**前
+   不得直接当选股权重」（准入三级态见 [[KB-DEC-019]]）。消费方不得把这行字吞掉。
+
+**调度注意**：`factor-eval` 的开关 `factor_eval_enabled` **必须留在
+`SCHEDULER_SWITCH_ATTRS`** 里——否则测试环境不会关掉它，会在每个测试里真跑 duckdb 全历史扫描。
+
+### 5.2 仍未做的因子体系欠债（来自 factor-library-design，与本表不重复）
 
 | 项 | 内容 | 阻塞 |
 |---|---|---|

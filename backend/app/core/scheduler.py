@@ -77,6 +77,10 @@ SCHEDULER_SWITCH_ATTRS: tuple[str, ...] = (
     "marketdb_sync_enabled",
     "flash_news_enabled",
     "llm_probe_enabled",
+    # S2-11：因子 IC 月度复核。它会 `asyncio.to_thread` 跑 duckdb 全历史扫描
+    # （数千万行级），**漏登记就会在每个测试里真跑一次**——必须在此登记，
+    # 让 conftest 的「测试环境全关」覆盖到它。
+    "factor_eval_enabled",
 )
 
 #: 环境变量名清单（conftest 直接 `os.environ[x] = "false"`）。

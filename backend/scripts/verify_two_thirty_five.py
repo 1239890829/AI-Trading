@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.research import strategy_verify as sv  # noqa: E402
+from app.research import verify_registry as vr  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SNAPSHOT_DIR = ROOT.parent / "data" / "parquet" / "snapshots" / "20260910"
@@ -144,6 +145,45 @@ def main() -> int:
     print(sv.render(sv.sensitivity(con, band, sub), hz, base=sv.baseline(con, where=f"({sub})")))
     print("\n—— 按跌破 MA5 深度分档")
     print(sv.render(sv.sensitivity(con, depth, sub), hz, base=sv.baseline(con, where=f"({sub})")))
+
+    # ---- ⑧ 结论登记（S2-11）--------------------------------------------------
+    # 此前本脚本的结论只流向 stdout，登记册里那条 ⛔ 靠人工誊写、无时间戳、不可回查。
+    # 落盘后每条状态背后都有一份可复核的证据；**verdict 由 `gate_verdict` 依
+    # KB-DEC-019 判据算出，不在此写死**——重跑后数据变了，结论自己会变。
+    print("\n" + "=" * 118)
+    print("⑧ 结论登记")
+    print("=" * 118)
+    all_row = sv.baseline(con, where=f"({ALL})")
+    m5 = sv.summarize_row(all_row, horizon=5)
+    yrows = sv.yearly(con, f"({ALL})")
+    ypos, ytot = sv.year_counts(yrows, horizon=5)
+    lu = sv.limit_up_share(con, f"({ALL})")
+    gate = sv.gate_verdict(m5, yearly_pos=ypos, yearly_tot=ytot,
+                           limit_up_share=lu.get("limit_up_share"))
+    headline = (
+        f"五步全通过 T+5：均值 {m5['mean']:+.2f}%（中性 {m5['excess']:+.2f}%）、"
+        f"中位 {m5['median']:+.2f}%、胜率 {(m5['win_rate'] or 0) * 100:.1f}%、"
+        f"年度为正 {ypos}/{ytot}、疑似涨停 {(lu.get('limit_up_share') or 0) * 100:.1f}%"
+        f" ⇒ {gate['verdict']}"
+    )
+    path = vr.save_record(
+        "two_thirty_five",
+        verdict=gate["verdict"],
+        headline=headline,
+        metrics=m5,
+        sample={
+            "n_signals": m5["n"],
+            "trade_days": len(dates),
+            "yearly_pos": ypos,
+            "yearly_tot": ytot,
+            "limit_up_share": lu.get("limit_up_share"),
+        },
+        source="scripts/verify_two_thirty_five.py",
+        extra={"gate_failed": gate["failed"], "conditions": CONDS},
+    )
+    print(f"    {headline}")
+    print(f"    判据命中：{gate['note']}")
+    print(f"    已登记 → {path}")
 
     con.close()
     return 0

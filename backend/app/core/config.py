@@ -166,6 +166,15 @@ class Settings(BaseSettings):
     marketdb_sync_minute: int = 30
     marketdb_sync_check_interval_seconds: float = 300.0
 
+    # ---- 因子 IC 月度复核（S2-11）----
+    # 默认开：**自门控**，不会白跑——报告未超 40 天 / 未到 run_day / 今天已尝试过
+    # 三者任一命中即跳过；真正触发是「每月一次、分钟级」的 duckdb 全历史扫描。
+    factor_eval_enabled: bool = True
+    factor_eval_run_day: int = 1
+    factor_eval_hour: int = 17
+    factor_eval_minute: int = 30
+    factor_eval_check_interval_seconds: float = 3600.0
+
     # ---- 盘后复盘 Agent ----
     # 分析器：rules（默认，确定性、零成本）| llm（需配 base_url + api_key）
     review_model: str = "rules"

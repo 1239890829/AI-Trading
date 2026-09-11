@@ -30,6 +30,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.research import strategy_verify as sv  # noqa: E402
+from app.research import verify_registry as vr  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SNAPSHOT_DIR = ROOT.parent / "data" / "parquet" / "snapshots" / "20260910"
@@ -247,6 +248,49 @@ def main() -> int:
     print(sv.render(yr, sv.horizons_of(con)))
     pos, tot = sv.year_counts(yr, horizon=H)
     print(f"   年度中性超额 > 0：{pos}/{tot}")
+
+    # ---- 【6】结论登记（S2-11）------------------------------------------------
+    # 同 `verify_two_thirty_five.py`：结论此前只流向 stdout。这里落的是**测试段**
+    # （样本外）的口径，因为候选B 的登记状态本来就建立在样本外成绩上；
+    # 「数据窥探声明」写进 sample，避免后人把这份产物误读成干净的样本外证据。
+    print("\n" + "=" * 94)
+    print("【6】结论登记")
+    print("=" * 94)
+    m = sv.summarize_row(sv.baseline(con, where=test_where), horizon=H)
+    lu_main = lu or {}
+    # ⚠️ 中位/跑赢比例**必须传中性口径**（上面 `seg_sql` 算出的 med_mkt / win_mkt）。
+    # 用 `m` 里的原始中位（+3.33%）与原始跑赢（68.1%）会把判据变成恒真 —— 大盘上涨时
+    # 人人跑赢，原始胜率天然 >50%，这条闸门就形同虚设了。中性口径是 −0.08% / 49.3%。
+    gate = sv.gate_verdict(m, yearly_pos=pos, yearly_tot=tot,
+                           limit_up_share=lu_main.get("limit_up_share"),
+                           excess_median=med_mkt, excess_win_rate=win_mkt)
+    headline = (
+        f"测试段（样本外）T+{H}：均值 {m['mean']:+.2f}%（中性 {m['excess']:+.2f}%）、"
+        f"中性中位 {med_mkt:+.2f}%、中性跑赢 {(win_mkt or 0) * 100:.1f}%、"
+        f"年度为正 {pos}/{tot}、疑似涨停 {(lu_main.get('limit_up_share') or 0) * 100:.1f}%"
+        f" ⇒ {gate['verdict']}"
+    )
+    path = vr.save_record(
+        "pullback_reversal",
+        verdict=gate["verdict"],
+        headline=headline,
+        # 中性中位/胜率一并入库：它们才是判据依据，落到产物里才能回查
+        metrics={**m, "excess_median": med_mkt, "excess_win_rate": win_mkt},
+        sample={
+            "n_signals": m["n"],
+            "split": "2022-01-01",
+            "segment": "测试段（样本外）",
+            "yearly_pos": pos,
+            "yearly_tot": tot,
+            "limit_up_share": lu_main.get("limit_up_share"),
+            "caveat": "候选B 系用全样本（含测试段）发现 ⇒ 本成绩不构成干净的样本外证据",
+        },
+        source="scripts/verify_candidate_b_oos.py",
+        extra={"gate_failed": gate["failed"], "rule": main_name, "condition": main_cond},
+    )
+    print(f"    {headline}")
+    print(f"    判据命中：{gate['note']}")
+    print(f"    已登记 → {path}")
 
     con.close()
     return 0

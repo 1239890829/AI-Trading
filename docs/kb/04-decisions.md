@@ -261,11 +261,26 @@
 - **决策五 · 纳入路径（复盘新规律怎么进体系）**：
   `复盘提炼 → 量化为可证伪谓词 → 样本内五道检验 → 样本外盲测 → 登记 → 接入`。
   **未过闸不得接入**；复盘提出的新规律默认是**候选假设**，不是结论。
+- **决策六 · 准入判据的可机判部分（2026-09-11，S2-11）**：
+  上表「准入门槛五条」此前只写在文档里，判定时靠人读数字下结论 ⇒ 不可回查、无法复核。
+  现收敛为 `app/research/strategy_verify.py::gate_verdict()`，其中**四条可量化者**由代码判：
+  样本量下限 / 市场中性超额 > 0 / **中性**中位 > 0 且中性跑赢 ≥ 50% / 年度为正比例 ≥ 60% /
+  疑似涨停占比 ≤ 30%。余下两条（样本外盲测、与既有信号不重复计分）依赖人工 ⇒
+  函数只给建议，**终审仍是人**。
+  - ⚠️ **口径铁律（2026-09-11 实测订正）**：中位与跑赢比例**必须取市场中性口径**
+    （`excess_median` / `excess_win_rate`）。初版误用**原始**口径，把候选B 从 observe 判成了
+    pass——原始中位 +3.33%、跑赢 68.1% 看着全达标，中性口径却是 −0.08% / 49.3%。
+    **上涨市里原始胜率天然 >50%，用它当判据形同虚设**（与「PROMO_FLOOR 落在 241 日分布之外、
+    近似恒真」是同一类错误）。拿不到中性口径时记 `unchecked` **跳过**该条，
+    绝不拿原始口径冒充——「没验」必须能被看见，不能伪装成「验过」。
+  - 产物落盘 `data/research/verify/<key>.json`（`app/research/verify_registry.py`），
+    登记册经 `StrategySpec.verify_key` 挂接 ⇒ **每个 ⛔/🟡 背后有一份带时间戳的可回查证据**，
+    议程另做「状态 vs 实测结论」冲突检测。
 - **现状诚实边界（勿把"有制度"当"已闭环"）**：
   | 环节 | 现状 | 缺口 |
   |---|---|---|
-  | 登记 | ✅ 已有**策略/战法**级登记册 `docs/strategy-registry.md` + 代码守卫 `app/picks/strategy_registry.py`（P1-37，2026-09-10） | —（因子登记册另有 `docs/factor-candidates.md`） |
-  | 验证 | ✅ 强：`app/research/strategy_verify.py` 五道检验 + 样本外盲测模板（P1-41） | — |
+  | 登记 | ✅ 已有**策略/战法**级登记册 `docs/strategy-registry.md` + 代码守卫 `app/picks/strategy_registry.py`（P1-37，2026-09-10）；2026-09-11 起带 `verify_key` 与核验产物背书 | —（因子登记册另有 `docs/factor-candidates.md`） |
+  | 验证 | ✅ 强：`app/research/strategy_verify.py` 五道检验 + 样本外盲测模板（P1-41）；2026-09-11 起**判据可机判**（`gate_verdict`）+ **结论落盘可回查**（`verify_registry`） | 结论此前只流向 stdout，现可回查；**判据仍只覆盖五条中的四条** |
   | 监控 | ✅ 已泛化到**策略键级** `GET /api/picks/strategy-health`（`min_picks` + `thin` 档，P1-38，2026-09-10） | 精确度仍受样本量限制（`daily_picks` 常报 insufficient） |
   | 退役 | ✅ 策略级处置台账 = `docs/strategy-registry.md §3`（三行 D-1/D-2/D-3，附证据链与样本边界，P1-39，2026-09-10） | 参数级另有 30 日劣化自动回滚（`experiments.py`） |
 - **关联**：[[KB-DEC-018]] [[KB-DEC-020]] [[KB-STOCK-27]] [[KB-STOCK-28]] [[KB-STOCK-29]] [[KB-STOCK-30]] [[KB-ENG-39]] [[KB-ENG-40]] [[KB-ENG-41]]

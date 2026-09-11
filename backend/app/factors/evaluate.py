@@ -19,9 +19,12 @@
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import math
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -32,7 +35,7 @@ from app.factors.library import (
     HORIZONS_EXEC,
     FactorDef,
 )
-from app.core.bjtime import beijing_now  # S2-8 时区收敛
+from app.core.bjtime import BJ_TZ, beijing_now  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 
@@ -536,3 +539,113 @@ def run_full_eval(db_path: str | Path, *, out_path: str | Path | None = None) ->
         return report
     finally:
         con.close()
+
+
+# ---------------------------------------------------------------- 月度复核调度（S2-11）
+#: 与 `rps.py` / `chip.py` / `strategy_verify.py` 同口径的行情库路径
+DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "marketdb" / "market.duckdb"
+#: 评估产物落盘位置（`factors/report.py::REPORT_PATH` 读的就是它）
+DEFAULT_OUT_PATH = Path(__file__).resolve().parents[2] / "data" / "factors" / "eval_report.json"
+#: 调度状态（记录"上次尝试"的日期，避免失败时每个检查周期都重跑全量评估）
+EVAL_STATE_PATH = Path(__file__).resolve().parents[2] / "data" / "factors" / "eval_state.json"
+
+
+def _load_eval_state() -> dict:
+    try:
+        if EVAL_STATE_PATH.exists():
+            data = json.loads(EVAL_STATE_PATH.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001  状态文件损坏 = 无状态（下次重跑，不阻塞）
+        pass
+    return {}
+
+
+def _save_eval_state(state: dict) -> None:
+    try:
+        EVAL_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = EVAL_STATE_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(EVAL_STATE_PATH)
+    except Exception:  # noqa: BLE001
+        log.warning("factor eval state write failed")
+
+
+def should_run_eval(now, *, run_day: int = 1, max_age_days: int = 40) -> bool:
+    """**纯函数**（便于单测）：此刻是否该跑全量评估。
+
+    三个条件同时满足才跑，缺一不可：
+    1. 报告缺失或已超 `max_age_days`（月度复核口径，宽限 40 天）；
+    2. 当天日期 >= `run_day`（月初跑；设 1 = 每月 1 号之后）；
+    3. 今天还没尝试过（防止评估失败时每个检查周期都重跑——37 因子全历史
+       扫一遍是分钟级开销，不能拿它当心跳）。
+    """
+    rep = None
+    try:
+        if DEFAULT_OUT_PATH.exists():
+            rep = json.loads(DEFAULT_OUT_PATH.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        rep = None
+
+    if isinstance(rep, dict) and rep.get("generated_at"):
+        try:
+            gen = datetime.fromisoformat(str(rep["generated_at"]).replace("Z", ""))
+            # ⚠️ `now` 是 aware（BJ_TZ），产物里的 `generated_at` 是**北京 naive**。
+            # 两者直接相减会抛 TypeError（这是刻意保留的防线：naive/aware 语义不可互换），
+            # 而下面若用 `except: pass` 吞掉，就会**永远按超期处理** ⇒ 每次启动都跑一遍
+            # 37 因子全历史扫描（分钟级）。2026-09-11 实测踩到：报告仅 4 天新鲜却照跑。
+            # 修法是**统一语义**后比较，不是吞异常。
+            if gen.tzinfo is None:
+                gen = gen.replace(tzinfo=BJ_TZ)
+            if (now - gen).days <= max_age_days:
+                return False
+        except (ValueError, TypeError):
+            # 只吞"解析/类型"两类已知问题，且**必须留痕**——静默 pass 是死守卫
+            log.warning("eval_report.generated_at 无法解析（%r）⇒ 按超期处理",
+                        rep.get("generated_at"))
+
+    if now.day < run_day:
+        return False
+
+    if _load_eval_state().get("last_attempt_ymd") == now.date().isoformat():
+        return False
+    return True
+
+
+async def factor_eval_scheduler(
+    *,
+    stop: asyncio.Event,
+    run_day: int = 1,
+    run_hour: int = 17,
+    run_minute: int = 30,
+    check_interval_seconds: float = 3600.0,
+    db_path: Path | None = None,
+) -> None:
+    """月度因子复核调度（lifespan 任务）。
+
+    **为什么必须 `to_thread`**：`run_full_eval` 走 duckdb 全历史扫描，是分钟级
+    同步 CPU/IO 开销；直接在事件循环里跑会卡死整个行情推送（QuoteHub 1s 节奏）。
+    """
+    while not stop.is_set():
+        try:
+            now = beijing_now()
+            if now.hour * 100 + now.minute >= run_hour * 100 + run_minute and should_run_eval(
+                now, run_day=run_day
+            ):
+                _save_eval_state({**_load_eval_state(), "last_attempt_ymd": now.date().isoformat()})
+                log.info("factor eval start (monthly review)")
+                t0 = time.monotonic()
+                rep = await asyncio.to_thread(
+                    run_full_eval, str(db_path or DEFAULT_DB_PATH), out_path=str(DEFAULT_OUT_PATH)
+                )
+                summary = rep.get("summary") or {}
+                log.info(
+                    "factor eval done in %.1fs: pass=%d conditional=%d fail=%d",
+                    time.monotonic() - t0,
+                    len(summary.get("pass") or []),
+                    len(summary.get("conditional") or []),
+                    len(summary.get("fail") or []),
+                )
+        except Exception:  # noqa: BLE001
+            log.exception("factor eval scheduler failed")
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(stop.wait(), timeout=check_interval_seconds)

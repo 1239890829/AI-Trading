@@ -56,6 +56,11 @@ class StrategySpec:
     evaluable: bool
     min_picks: int = STRATEGY_MIN_PICKS
     note: str = ""
+    #: 对应的**战法核验产物键**（`app/research/verify_registry.py` 的产物名）。
+    #: `None` = 该策略不走事件研究式核验（如组合级策略，用滚动健康度监控即可）。
+    #: 有值时 `list_strategy_keys()` 会附带 `verification` 三态——让 `status`
+    #: 背后有一份带时间戳的可回查证据，而不是人工誊写的一句话。
+    verify_key: str | None = None
 
 
 SPECS: tuple[StrategySpec, ...] = (
@@ -85,7 +90,12 @@ SPECS: tuple[StrategySpec, ...] = (
         basis=BASIS_MARKET_NEUTRAL,
         source="scripts/verify_candidate_b_oos.py",
         evaluable=False,
-        note="样本外 +1.33% 但中位 −0.08%、跑赢比例 49.3%（右偏）⇒ 观察不接入",
+        # 2026-09-11 重跑实测（口径已对齐产物）：中性 +1.33% 但**中性**中位 −0.08%、
+        # 中性跑赢 49.3%（右偏）⇒ observe。⚠️ 早期记录写的是"中位/跑赢"未标口径，
+        # 与"原始中位 +3.33%、跑赢 68.1%"混淆过——**判据一律取中性口径**。
+        note="测试段（样本外）T+5 中性 +1.33% 但中性中位 −0.08%、中性跑赢 49.3%（右偏）"
+             "⇒ 观察不接入；结论以 verify_registry 产物为准",
+        verify_key="pullback_reversal",
     ),
     StrategySpec(
         key="triple_volume",
@@ -103,7 +113,11 @@ SPECS: tuple[StrategySpec, ...] = (
         basis=BASIS_MARKET_NEUTRAL,
         source="scripts/verify_two_thirty_five.py",
         evaluable=False,
-        note="五步全通过 −0.51%、胜率 39.3%、年度 2/11 ⇒ 已否决",
+        # 2026-09-11 重跑实测：中性 −0.85%、胜率 39.3%、**年度为正 1/11**
+        # （早期记录的"年度 2/11"与实测不符，已按产物更正）。
+        note="五步全通过 T+5 −0.51%（中性 −0.85%）、胜率 39.3%、年度为正 1/11 ⇒ 已否决；"
+             "结论以 verify_registry 产物为准",
+        verify_key="two_thirty_five",
     ),
 )
 
@@ -179,15 +193,36 @@ COLLECTORS = {
 
 
 def list_strategy_keys() -> list[dict]:
-    """登记册全量策略键（含不可评估者，便于前端/复盘展示"有哪些策略"）。"""
-    return [
-        {
+    """登记册全量策略键（含不可评估者，便于前端/复盘展示"有哪些策略"）。
+
+    S2-11：带 `verify_key` 的条目会附 `verification` 三态——`status` 从此有产物背书。
+    核验产物是**离线**跑出来的（`strategy_verify` 要扫全历史），读取失败或缺失
+    一律显式标注，**不静默省略字段**（三态纪律）。
+    """
+    out = []
+    for s in SPECS:
+        item = {
             "key": s.key, "name": s.name, "status": s.status,
             "basis": s.basis, "source": s.source,
             "evaluable": s.evaluable, "note": s.note,
         }
-        for s in SPECS
-    ]
+        if s.verify_key:
+            item["verification"] = _verification_of(s.verify_key)
+        out.append(item)
+    return out
+
+
+def _verification_of(key: str) -> dict:
+    """读核验产物。任何异常都退化为 `available=False + reason`，
+    绝不让一个坏 JSON 把整个登记册端点拖成 500。"""
+    try:
+        from app.research.verify_registry import verification_of
+
+        return verification_of(key)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("读取核验产物失败 key=%s: %s", key, exc)
+        return {"available": False, "verdict": None, "headline": None,
+                "reason": f"读取失败：{exc}"}
 
 
 def collect_strategy_health(session_factory, key: str, window: int | None = None) -> dict:

@@ -540,6 +540,23 @@ async def lifespan(app: FastAPI):
         reason="marketdb_sync_enabled 但 ths_api_key 缺失",
     )
 
+    # --- 因子 IC 月度复核（S2-11：闭环——评估产物不再只写不读、不再停在 09-07）---
+    factor_eval_stop = asyncio.Event()
+    from app.factors.evaluate import factor_eval_scheduler
+
+    reg.add(
+        "factor-eval",
+        lambda: factor_eval_scheduler(
+            stop=factor_eval_stop,
+            run_day=settings.factor_eval_run_day,
+            run_hour=settings.factor_eval_hour,
+            run_minute=settings.factor_eval_minute,
+            check_interval_seconds=settings.factor_eval_check_interval_seconds,
+        ),
+        stop=factor_eval_stop,
+        switch="factor_eval_enabled",
+    )
+
     # --- 东财 7x24 快讯流（hotspot-pipeline G1/P0①）：宏观快讯 → build_event → EventStore ---
     flash_stop = asyncio.Event()
     from app.news.flash import flash_news_loop

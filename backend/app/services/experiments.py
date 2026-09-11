@@ -234,10 +234,20 @@ def evaluate_and_promote_shadow(session_factory=None) -> list[dict]:
                 before_raw = row.before or ""
 
             if key != "picks_style_offsets_json":
-                # 非权重类参数暂无离线评估器：诚实跳过（累计在影子队列，不假装验证）
+                # S2-11：原先这里一律返回 `shadow_eval_unsupported` —— 白名单 1→5 之后
+                # 其余 4 个参数躺在影子队列里"没人验"，promote 与否全凭人工拍板。
+                # 现改为走 `shadow_eval` 的历史快照对照模拟（仍可能判 insufficient，
+                # 但那是"样本不足"，不是"没有评估器"——两者不可混为一谈）。
+                from app.services.shadow_eval import evaluate_shadow
+
+                ev = evaluate_shadow(key, before=before_raw, after=after_raw,
+                                     session_factory=sf)
                 out.append({"change_id": cid, "key": key,
-                            "verdict": "shadow_eval_unsupported",
-                            "note": "该参数暂无离线对照评估器，需人工拍板"})
+                            "verdict": ev.get("verdict", "shadow_eval_unsupported"),
+                            "note": ev.get("note", ""),
+                            "metrics": ev.get("metrics", {}),
+                            "sample_days": ev.get("sample_days", 0),
+                            "caveat": ev.get("caveat")})
                 continue
 
             shadow_ov = parse_overrides(after_raw)      # 非法 → 拒绝

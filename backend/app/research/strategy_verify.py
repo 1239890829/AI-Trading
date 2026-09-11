@@ -43,6 +43,12 @@ DEFAULT_HORIZONS: tuple[int, ...] = (1, 3, 5, 10)
 #: 仅用于"这一档能不能买进"的量级判断，不作精确判定。
 LIMIT_UP_PCT = 9.5
 
+#: 处置结论（KB-DEC-019 三级态）。`verify_registry` 从此处导入，保持单向依赖：
+#: 核验器是纯计算层，登记层依赖它，反之不成立。
+VERDICT_PASS = "pass"        # 过闸
+VERDICT_OBSERVE = "observe"  # 方向成立但有硬伤
+VERDICT_REJECT = "reject"    # 否决
+
 
 # ---------------------------------------------------------------- 配置 / 连接
 
@@ -315,6 +321,118 @@ def year_counts(rows: list[dict], horizon: int = 5, *, cost_bps: float = 0.0) ->
     key = f"m{horizon}"
     vals = [r[key] for r in rows if r.get(key) is not None]
     return sum(1 for v in vals if v > 0), len(vals)
+
+
+def summarize_row(r: dict, horizon: int = 5, *, cost_bps: float = 0.0) -> dict:
+    """从一行统计结果里抽出**可落盘**的关键量（S2-11 核验登记）。
+
+    核验器本身只负责算与渲染；要落盘就得有稳定字段名，否则每个消费脚本各写一遍
+    `m5/med5/w5/x5` 的映射——那正是 P1-41 之前"每个脚本一份手写 SQL"的翻版。
+
+    六个量刻意**全给**（含中位与胜率）：只看均值会被右偏分布骗（候选 B 样本外
+    +1.33% 但中位 −0.08%、跑赢 49.3%，均值单独看像有效）。`excess` = 市场中性均值，
+    是区分 beta 与 alpha 的唯一正确基准。
+
+    返回键：`n` / `mean` / `median` / `win_rate` / `std` / `excess` / `horizon` / `cost_bps`。
+    """
+    def _f(key: str) -> float | None:
+        v = r.get(key)
+        return None if v is None else round(float(v), 4)
+
+    return {
+        "n": int(r.get(f"n{horizon}") or r.get("n") or 0),
+        "mean": _f(f"m{horizon}"),
+        "median": _f(f"med{horizon}"),
+        "win_rate": _f(f"w{horizon}"),
+        "std": _f(f"s{horizon}"),
+        "excess": _f(f"x{horizon}"),
+        "horizon": horizon,
+        "cost_bps": cost_bps,
+    }
+
+
+def gate_verdict(
+    metrics: dict,
+    *,
+    yearly_pos: int | None = None,
+    yearly_tot: int | None = None,
+    limit_up_share: float | None = None,
+    excess_median: float | None = None,
+    excess_win_rate: float | None = None,
+    min_n: int = 200,
+    yearly_floor: float = 0.6,
+    limit_up_ceiling: float = 0.3,
+) -> dict:
+    """**KB-DEC-019 准入闸门的可机判部分**（S2-11）。
+
+    此前准入五条只写在文档里，判定时靠人读数字下结论——既不可回查，也无法复核。
+    这里把其中**四条能量化的**变成可执行判据；剩下两条（样本外盲测 / 与既有信号
+    不重复计分）依赖人工，故本函数只给建议，**终审仍是人**。
+
+    判定顺序（**先硬后软**，硬伤直接否决）：
+      1. 样本不足 `n < min_n`      → observe（**不是 reject**：样本少 ≠ 无效）
+      2. 市场中性超额 ≤ 0          → reject（连 beta 都跑不赢，无从谈 alpha）
+      3. 中位 ≤ 0 或跑赢比例 < 50% → observe（收益右偏，均值被少数极端样本抬起）
+      4. 年度为正比例 < 60%        → observe（效应不稳定，可能是某几年特例）
+      5. 疑似涨停占比 > 30%        → observe（纸面最优档买不进，可成交性存疑）
+
+    ⚠️ **第 3 条必须用中性口径**（`excess_median` / `excess_win_rate`），
+    不能拿 `metrics` 里的 `median` / `win_rate` 顶替——那是**原始**收益的中位与跑赢比例。
+    教训（2026-09-11 实测）：候选B 测试段原始中位 +3.33%、跑赢 68.1%，看着完全达标；
+    换成中性口径却是 **中位 −0.08%、跑赢 49.3%**，结论从 pass 翻转为 observe。
+    市场上涨时人人跑赢，**原始胜率天然 >50%，用它当判据形同虚设**——
+    与「PROMO_FLOOR=30% 落在 241 日分布之外、近似恒真」是同一类错误。
+
+    中性口径拿不到时，本函数**跳过**第 3 条并记入 `unchecked`，**绝不**用原始口径
+    冒充中性给出 pass——「没验」必须能被看见，不能伪装成「验过」。
+
+    :returns: `{"verdict", "failed", "unchecked", "note"}`，`failed` 是**全部**命中项
+        （不止第一条），因为「哪一项不达标」比「达不达标」更有诊断价值。
+    """
+    n = int(metrics.get("n") or 0)
+    excess = metrics.get("excess")
+    failed: list[str] = []
+    unchecked: list[str] = []
+
+    if n < min_n:
+        failed.append(f"样本不足（n={n} < {min_n}）")
+    if excess is None:
+        failed.append("缺少市场中性超额")
+    elif excess <= 0:
+        failed.append(f"市场中性超额 {excess:+.2f}% ≤ 0")
+
+    if excess_median is not None:
+        if excess_median <= 0:
+            failed.append(f"中性中位 {excess_median:+.2f}% ≤ 0（收益右偏）")
+    else:
+        unchecked.append("中性中位未验（缺 excess_median）")
+    if excess_win_rate is not None:
+        if excess_win_rate < 0.5:
+            failed.append(f"中性跑赢比例 {excess_win_rate * 100:.1f}% < 50%")
+    else:
+        unchecked.append("中性跑赢比例未验（缺 excess_win_rate）")
+    if yearly_tot:
+        ratio = (yearly_pos or 0) / yearly_tot
+        if ratio < yearly_floor:
+            failed.append(f"年度为正 {yearly_pos}/{yearly_tot} < {yearly_floor:.0%}（不稳定）")
+    if limit_up_share is not None and limit_up_share > limit_up_ceiling:
+        failed.append(f"疑似涨停占比 {limit_up_share * 100:.1f}% > {limit_up_ceiling:.0%}（难成交）")
+
+    # 中性超额 ≤ 0 是唯一直接否决项（连同日市场均值都跑不赢，无从谈 alpha）；
+    # 其余命中项一律 observe——"有硬伤"≠"无效"，降级而非否决。
+    if any("市场中性超额" in f and "≤ 0" in f for f in failed):
+        verdict = VERDICT_REJECT
+    elif failed:
+        verdict = VERDICT_OBSERVE
+    else:
+        verdict = VERDICT_PASS
+    note = "；".join(failed) if failed else "已验条款全部通过"
+    if unchecked:
+        # 「没验」优先于「通过」——不能让跳过的条款被读成已通过
+        note = f"{note}（未验：{'；'.join(unchecked)}）" if note else f"未验：{'；'.join(unchecked)}"
+    elif not failed:
+        note = "四条可机判条款全部通过（样本外与重复计分仍需人工终审）"
+    return {"verdict": verdict, "failed": failed, "unchecked": unchecked, "note": note}
 
 
 # ---------------------------------------------------------------- 输出

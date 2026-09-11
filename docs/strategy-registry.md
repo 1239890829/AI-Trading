@@ -114,11 +114,16 @@
 | # | 日期 | 策略键 | 处置 | 证据链（量化） | 样本边界（翻案条件） | 留档 |
 |---|---|---|---|---|---|---|
 | D-1 | 2026-09-10 | `triple_volume` | **否决**（不接入） | 左侧 −0.32%/胜率 33.5%、右侧 −0.44%/35.9% vs 基准 +0.06%/46.8%；位置分层无差异 | 样本 ~1 年 / 未环境分层 / 未剔除权日 / 未含费用 / 参数未扫描 —— **四者齐备可重测** | [[KB-STOCK-27]] + `picks/triple_volume.py` + `scripts/verify_triple_volume*.py`（3 个） |
-| D-2 | 2026-09-10 | `two_thirty_five` 原版 | **否决**（不接入） | 五步全通过 −0.51%/胜率 39.3%/年度 2/11；后三步负贡献 | 换手率为估算值（前视偏差）；全样本 10 年已较长，**翻案需新数据源（真流通股本）** | [[KB-STOCK-29]] + `scripts/verify_two_thirty_five.py` |
-| D-3 | 2026-09-10 | `pullback_reversal` | **降级为观察项**（不接入） | 样本外 +1.33% 但**中位 −0.08%、跑赢比例 49.3%**（右偏） | 网格在同训练段内 48 组比较 → 多重比较残余；**换独立时间窗再盲测可翻案** | [[KB-STOCK-30]] + `scripts/verify_candidate_b_oos.py` |
+| D-2 | 2026-09-10 | `two_thirty_five` 原版 | **否决**（不接入） | 五步全通过 −0.51%/胜率 39.3%/年度为正 1/11；后三步负贡献 | 换手率为估算值（前视偏差）；全样本 10 年已较长，**翻案需新数据源（真流通股本）** | [[KB-STOCK-29]] + `scripts/verify_two_thirty_five.py` |
+| D-3 | 2026-09-10 | `pullback_reversal` | **降级为观察项**（不接入） | 测试段 T+5 中性 +1.33% 但**中性中位 −0.08%、中性跑赢 49.3%**（右偏） | 网格在同训练段内 48 组比较 → 多重比较残余；**换独立时间窗再盲测可翻案** | [[KB-STOCK-30]] + `scripts/verify_candidate_b_oos.py` |
 
 **处置动作三选一**（统一口径，勿自创）：**清除**（代码删除，仅留证据链）｜**归档**（代码保留待复验、停止消费）｜**改造**（改规则后重新走准入闸门）。
 上表 D-1/D-2 均为**归档**（保留纯函数 + 可重跑脚本），D-3 为**观察**（未进入准入流程）。
+
+> **⚠️ 2026-09-11 重跑实测订正**（S2-11）：D-2 原记「年度 **2/11**」，重跑 `verify_two_thirty_five.py` 实测为 **年度为正 1/11**；
+> D-3 原记「中位 −0.08%、跑赢比例 49.3%」**未标口径**，与「原始中位 +3.33%、跑赢 68.1%」长期混淆
+> ——已确认那两个数均为**市场中性口径**（与原始口径差 3 个百分点以上），本表已补注。
+> 教训：结论只写数字不写口径，重跑时就会对不上。**判据一律取中性口径**（见下 §5「核验产物」）。
 
 ---
 
@@ -141,6 +146,32 @@
 
 ---
 
+## 4.5 核验产物（S2-11：状态有证据可回查）
+
+`strategy_verify` 是**离线重计算**（duckdb 全历史特征表），不进请求链；它的结论此前只流向
+脚本 stdout，登记册的 ⛔/🟡 靠人工誊写 ⇒ **无时间戳、不可回查、状态无背书**。
+
+现在补上落盘 → 回读：
+
+| 部件 | 位置 | 职责 |
+|---|---|---|
+| 产物 | `backend/data/research/verify/<key>.json` | 一次核验的结论（verdict / headline / metrics / sample / recorded_at） |
+| 落盘 | `app/research/verify_registry.py` | `save_record` / `load_record` / `verification_of`（三态）/ `list_records` |
+| 判据 | `app/research/strategy_verify.py::gate_verdict` | **[[KB-DEC-019]] 准入五条里可机判的四条**（另两条需人工） |
+| 挂接 | `StrategySpec.verify_key` | 有值 ⇒ `list_strategy_keys()` 附 `verification` 三态 |
+| 消费 | 议程 `strategy_verification` 一路 | 含 `without_evidence`（标了却没产物）与 **`conflicts`（状态与实测结论打架）** |
+
+**重跑**：`python scripts/verify_two_thirty_five.py`、`python scripts/verify_candidate_b_oos.py`
+（各约 12~30s），结尾会打印结论并落盘。**verdict 由 `gate_verdict` 依判据算出，不写死**——
+重跑后数据变了，结论自己会变。
+
+**⚠️ 判据口径（2026-09-11 订正）**：`gate_verdict` 的中位/跑赢比例**只接受中性口径**
+（`excess_median` / `excess_win_rate`）。初版误用原始口径，会把候选B 判成 pass——
+原始胜率在上涨市天然 >50%，用它当判据形同虚设。拿不到中性口径时**跳过该条并记 `unchecked`**，
+绝不拿原始口径冒充。
+
+---
+
 ## 5. 维护规则
 
 1. **新策略入册的前置**：先有可计算规则 → 走 `app/research/strategy_verify.py` 五道检验 → 样本外盲测 → 才可登记为 🟡 观察项；接入线上另需 [[KB-DEC-019]] 准入五条（含扣成本 0.2~0.35% 仍为正）。
@@ -155,5 +186,6 @@
 
 - 制度：[[KB-DEC-019]]（准入—监控—退役）｜[[KB-STOCK-28]]（策略生命周期）｜[[KB-DEC-018]]（示例≠规范）
 - 验证工具：`app/research/strategy_verify.py`｜`scripts/verify_*.py`
+- 核验产物：`app/research/verify_registry.py`｜`data/research/verify/<key>.json`（§4.5）
 - 因子层：`factor-candidates.md`｜`factor-lifecycle-governance.md`
 - 待办：`retro-and-gaps.md` §六（P1-37 本文 / P1-38 监控泛化 / P1-39 处置台账）
