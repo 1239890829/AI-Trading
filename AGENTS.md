@@ -30,7 +30,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2557 项（2496 passed / 61 skipped）· 168 文件（09-11 实测）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2574 项（2513 passed / 61 skipped）· 168 文件（09-12 实测）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。
@@ -52,10 +52,10 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 2557 项（2496 passed / 61 skipped）· 168 文件、前端 415 项 / 51 文件、eslint **0 error / 0 warn**
+> **门禁口径**：后端 2574 项（2513 passed / 61 skipped）· 168 文件、前端 415 项 / 51 文件、eslint **0 error / 0 warn**
 > （25 条回归已按 P1-27 清零；仅 notification-drawer 保留 1 处带理由的 C 类豁免）。
 > **测试规模与告警数同属「会失真的状态标注」**——改动后要实测回填，不要沿用旧数字
-> （此前「≤1 warn / 后端 580 / 前端 97 / 219 / 257 / 263 / 342 / 1925 / 2553 / 2556 / 392」均已被后续改动追过，教训见 `docs/retro-and-gaps.md` §七）。
+> （此前「≤1 warn / 后端 580 / 前端 97 / 219 / 257 / 263 / 342 / 1925 / 2553 / 2556 / 2557 / 392」均已被后续改动追过，教训见 `docs/retro-and-gaps.md` §七）。
 > **加测试文件就会让这里过期**，改测试后请顺手回填。
 
 **发布前额外做一次接口载荷体检**（plan-review 三.7，2026-09-01 纳入）：
@@ -288,7 +288,7 @@ C2 全市场日 K dump（已被 TDX 替代）；"等 LLM 再做摘要"（规则�
 | **docs/PROJECT-MASTER.md** | 技术总览：目录逐文件/数据源口径/API/阶段状态表 |
 | **docs/retro-and-gaps.md** | **唯一待办账本**——§一~§三 历史盘点 / §四 行为基线勿回退 / **§六 全量待办总账（P0/P1/P2）** / §七 偏差更正 / §八 计划文档处置 |
 | **docs/summary/** | 主题汇总 6 份（stock-strategy / factor-system / data-market / architecture-design / ai-evolution / review-governance）——**已完成方案的精华收敛处** |
-| **docs/kb/** | 权威知识库（KB-STOCK/TRADE/ENG/DEC + 00-INDEX）；`07-doc-curation.md` = 文档治理规范（v1.6：§3.2 完成即沉淀删件、`📎 示例` 状态、`scripts/doc-health.py` 一键体检）。**示例/题材案例一律标 `📎`，不得与 `✅ 已落地` 混用** |
+| **docs/kb/** | 权威知识库（KB-STOCK/TRADE/ENG/DEC + 00-INDEX，**全序列唯一登记处**）；`03-engineering.md` = 系统性工程教训（KB-ENG-16 起）/ `08-tooling-pitfalls.md` = 工具与环境陷阱速查（KB-ENG-01~15，09-12 按 §5.2 条件① 拆出）；`07-doc-curation.md` = 文档治理规范（v1.6：§3.2 完成即沉淀删件、`📎 示例` 状态、`scripts/doc-health.py` 一键体检）。**示例/题材案例一律标 `📎`，不得与 `✅ 已落地` 混用** |
 | docs/plan-registry.md | 历史计划去向表 + 文档处理规范（**不再新建计划文档**） |
 | docs/api.md | API 契约（端点数以 /openapi.json 为权威，文档按域分节） |
 | docs/data-sources.md + data-source-comparison.md | 字段口径实测记录 + 四源能力选型（改 Provider 前必读） |

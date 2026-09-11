@@ -262,7 +262,20 @@ def test_scheduler_fires_when_clock_crosses_window(sf, monkeypatch):
 
     # 真实持久化日历（与线上同一份数据），保证交易日守卫用的是真实口径
     real_days = tc._load_persisted()
-    assert real_days and real_days[-1] >= today, "持久化日历必须覆盖今日"
+    assert real_days, "持久化交易日历必须可读"
+
+    # ⚠️ 2026-09-12 修复：受控时钟锚到**日历里真实存在的交易日**（末元素），不再取"真实今天"。
+    # 原写法是 `assert real_days[-1] >= 今天` + 时钟 = 真实今天，这在**周末与法定节假日必然失败**：
+    # 日历只装交易日，周六运行时末元素是周五，于是 ①前提断言挂；②即便绕过前提，
+    # 调度器的交易日守卫也会（正确地）判非交易日而不生成议程——一年里约 1/3 的日子必挂。
+    # 本测试的主题是「时钟跨过 15:45 窗口是否触发」，与"运行日恰为交易日"无关，故把二者解耦：
+    # 锚定日仍取自**真实日历**（保留真实口径），只是不再绑定当天的日历位置。
+    probe_day = real_days[-1]
+    assert probe_day in real_days, "夹具前提：锚定日必须来自真实日历"
+    assert tc.last_trade_date(real_days, asof=probe_day) == probe_day, (
+        "夹具前提：锚定日必须是交易日，否则调度器守卫会（正确地）拒绝生成议程"
+    )
+    today = probe_day
 
     async def fake_trading_days(provider, lookback_days: int = 120):
         return list(real_days)
@@ -280,7 +293,8 @@ def test_scheduler_fires_when_clock_crosses_window(sf, monkeypatch):
     class _App:
         state = _State()
 
-    clock = {"now": datetime.now(BJ_TZ).replace(hour=14, minute=44, second=0, microsecond=0)}
+    clock = {"now": datetime(probe_day.year, probe_day.month, probe_day.day, 14, 44,
+                             tzinfo=BJ_TZ)}
     monkeypatch.setattr(evo, "beijing_now", lambda: clock["now"])
     monkeypatch.setattr(evo, "_MIN_TICK_INTERVAL_SEC", 0.01)  # 生产行为不变（60s 下限），测试提速
 
@@ -316,6 +330,68 @@ def test_scheduler_fires_when_clock_crosses_window(sf, monkeypatch):
         finally:
             stop.set()
             with __import__("contextlib").suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(task), timeout=2)
+
+    asyncio.run(main())
+
+
+def test_scheduler_skips_non_trading_day(sf, monkeypatch):
+    """非交易日跨过 15:45 窗口**不得**生成议程——守卫的另一侧定点回归。
+
+    2026-09-12 补：原有覆盖只测"交易日必须触发"，**"非交易日必须不触发"无人守**。
+    而 09-12（周六）跑全量时正是这一侧暴露的——当时失败被误读为"测试挂了"，
+    实为测试断言写宽（把"日历覆盖交易日"写成了"日历覆盖今天"）。
+    锚定日取真实日历末交易日 **+1 天**（必为周末或隔日，确定性、与运行日无关）。
+    """
+    import contextlib
+
+    from app.market import trade_calendar as tc
+
+    real_days = tc._load_persisted()
+    assert real_days, "持久化交易日历必须可读"
+    probe_day = real_days[-1] + timedelta(days=1)
+    assert tc.last_trade_date(real_days, asof=probe_day) != probe_day, (
+        "夹具前提：锚定日必须**不是**交易日"
+    )
+
+    async def fake_trading_days(provider, lookback_days: int = 120):
+        return list(real_days)
+
+    monkeypatch.setattr(tc, "trading_days", fake_trading_days)
+    monkeypatch.setattr(evo, "autonomy_enabled", lambda: False)
+    monkeypatch.setattr(evo, "_MIN_TICK_INTERVAL_SEC", 0.01)
+    # 中和周五的元评估分支（与本测试主题无关，且会走真实文件 IO）
+    monkeypatch.setattr(evo, "_LAST_META_WEEK", probe_day.isocalendar()[:2])
+
+    class _Hub:
+        provider = None
+
+    class _State:
+        hub = _Hub()
+
+    class _App:
+        state = _State()
+
+    clock = {"now": datetime(probe_day.year, probe_day.month, probe_day.day, 14, 44,
+                             tzinfo=BJ_TZ)}
+    monkeypatch.setattr(evo, "beijing_now", lambda: clock["now"])
+
+    async def main():
+        stop = asyncio.Event()
+        task = asyncio.create_task(
+            evo.evolution_scheduler(_App(), stop, run_hour=15, run_minute=45,
+                                    check_interval_seconds=0.02),
+        )
+        try:
+            await asyncio.sleep(0.1)
+            clock["now"] = clock["now"].replace(hour=15, minute=46)  # 跨过窗口
+            await asyncio.sleep(0.2)  # 给足若干 tick
+            assert evo.get_agenda(probe_day.isoformat(), sf) is None, (
+                "非交易日不得生成议程（否则会在节假日产出无依据的议程）"
+            )
+        finally:
+            stop.set()
+            with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(asyncio.shield(task), timeout=2)
 
     asyncio.run(main())

@@ -37,6 +37,7 @@ import argparse
 import sys
 import tempfile
 import time
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -293,8 +294,12 @@ def freshness_lag_days(con: duckdb.DuckDBPyConnection, trade_days_ms: list[int])
     return sum(1 for d in trade_days_ms if local_max < d <= target)
 
 
-def _calendar_days_ms(limit: int = 400) -> list[int]:
+def _calendar_days_ms(limit: int = 400, *, today: date | None = None) -> list[int]:
     """交易日历 → 升序 date_ms 列表（UTC+8 零点，与 dump 口径一致）。失败返回 []（跳过检查）。
+
+    :param today: 判定基准日；None = 今天（上海）。**仅测试注入用**——周末/长假场景
+                  若不注入就无法定点回归（见下方口径），与 `trading_day_lag(latest, asof)`
+                  / `freshness(asof=)` 的显式基准日约定一致。
 
     🔴 2026-09-11 修复（原为**死代码**）：此处原本调 `trading_days()`，但该函数签名是
     `async def trading_days(provider, lookback_days=120)`——**缺 provider 且未 await**，
@@ -304,6 +309,14 @@ def _calendar_days_ms(limit: int = 400) -> list[int]:
     CLI 既无事件循环也无 provider，故改用**持久化日历**（`trade_calendar._load_persisted()`，
     与 `app/market/marketdb_freshness.trading_day_lag` 同源，口径单点收口）；日历落后于
     今天时用**工作日**补足到今天——节假日场景偏保守，宁可多报不可静默，同 freshness 模块判据。
+
+    🔴 口径澄清（2026-09-12）：补足的是「**≤ 今天的最后一个工作日**」，不是「今天」。
+    今天本身非交易日（周末/法定节假日）时**不追加**——本函数产出的是**交易日**序列，
+    不是自然日序列。故 `out[-1]` 的语义恒为「本仓应当具备数据的最新交易日」。
+    举例：今天 = 2026-09-12（周六）→ `out[-1]` = 2026-09-11（周五）；
+    更早的断言（连同 [[KB-ENG-46]] 里的处方）曾写作 `out[-1] >= 今天`，在**每个周末与
+    长假必然失败**——错的是一句写宽了的断言，不是这里的口径。教训已立为 [[KB-ENG-56]]
+    （真实运行日驱动的断言只在特定日历日变红 ⇒ 一周 5/7 是绿的 ⇒ 守卫等于没写）。
     """
     from datetime import datetime, timedelta
 
@@ -315,9 +328,11 @@ def _calendar_days_ms(limit: int = 400) -> list[int]:
             print("warn: 持久化交易日历不可用/过短，跳过 freshness 检查", file=sys.stderr)
             return []
         tz8 = BJ_TZ
-        today = datetime.now(tz8).date()
+        # 基准日只取一次：测试注入优先，其次真实"今天"。
+        # （此前测试与实现各自 now() 一次，跨零点会落在不同日期——已由注入消除。）
+        base = today or datetime.now(tz8).date()
         cur = days[-1]
-        while cur < today:  # 日历过期 → 工作日补足（宁可多报滞后）
+        while cur < base:  # 日历过期 → 工作日补足（宁可多报滞后）
             cur += timedelta(days=1)
             if cur.weekday() < 5:
                 days.append(cur)

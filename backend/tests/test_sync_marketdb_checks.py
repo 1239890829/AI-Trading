@@ -149,7 +149,12 @@ def test_calendar_days_ms_from_persisted(monkeypatch):
 
 
 def test_calendar_days_ms_extends_stale_calendar_to_today(monkeypatch):
-    """日历停在过去 → 用工作日补足到今天（偏保守：宁可多报滞后，不可静默放行）。"""
+    """日历停在过去 → 用**工作日**补足到「≤ 今天的最后一个工作日」。
+
+    口径（2026-09-12 修正）：补出的是**交易日**序列，不是自然日序列；
+    今天本身非交易日时不追加，故末元素 = ≤ 今天的最后一个工作日。
+    原断言写作 `out[-1] >= 今天`，在周末/长假**必然失败**——一句话写宽了。
+    """
     from datetime import datetime, timedelta
 
     from app.market import trade_calendar as tc
@@ -157,9 +162,75 @@ def test_calendar_days_ms_extends_stale_calendar_to_today(monkeypatch):
     tz8 = BJ_TZ
     today = datetime.now(tz8).date()
     monkeypatch.setattr(tc, "_load_persisted", lambda: [today - timedelta(days=10)])
-    out = _calendar_days_ms()
-    today_ms = int(datetime(today.year, today.month, today.day, tzinfo=tz8).timestamp() * 1000)
-    assert out[-1] >= today_ms
+    out = _calendar_days_ms(today=today)
+
+    def _ms(d):
+        return int(datetime(d.year, d.month, d.day, tzinfo=tz8).timestamp() * 1000)
+
+    last_weekday = today
+    while last_weekday.weekday() >= 5:
+        last_weekday -= timedelta(days=1)
+    assert out == sorted(out)
+    assert out[-1] == _ms(last_weekday)
+    # 上界同样要钉住：日历不得被补到"今天之后"（那会让滞后少算 = 静默放行）
+    assert out[-1] <= _ms(today)
+
+
+def test_calendar_days_ms_weekend_last_day_is_friday(monkeypatch):
+    """定点回归（2026-09-12）：今天 = 周六 → 末元素必须是周五。
+
+    为什么必须定点：真实运行日驱动的断言，**只在周末/长假变红**，
+    即"一周里 5 天是绿的"——这类守卫等于没写（绿 ≠ 有效）。
+    """
+    from datetime import date, datetime, timedelta
+
+    from app.market import trade_calendar as tc
+
+    sat = date(2026, 9, 12)
+    assert sat.weekday() == 5, "夹具前提：2026-09-12 必须是周六"
+    monkeypatch.setattr(tc, "_load_persisted", lambda: [sat - timedelta(days=10)])
+    out = _calendar_days_ms(today=sat)
+    tz8 = BJ_TZ
+    fri = date(2026, 9, 11)
+    assert out[-1] == int(datetime(fri.year, fri.month, fri.day, tzinfo=tz8).timestamp() * 1000)
+
+
+def test_calendar_days_ms_sunday_last_day_is_friday(monkeypatch):
+    """定点回归：今天 = 周日 → 末元素同样是周五（连续两个非交易日不重复追加）。"""
+    from datetime import date, datetime, timedelta
+
+    from app.market import trade_calendar as tc
+
+    sun = date(2026, 9, 13)
+    assert sun.weekday() == 6, "夹具前提：2026-09-13 必须是周日"
+    monkeypatch.setattr(tc, "_load_persisted", lambda: [sun - timedelta(days=11)])
+    out = _calendar_days_ms(today=sun)
+    tz8 = BJ_TZ
+    fri = date(2026, 9, 11)
+    assert out[-1] == int(datetime(fri.year, fri.month, fri.day, tzinfo=tz8).timestamp() * 1000)
+
+
+def test_calendar_days_ms_holiday_weekday_is_appended_on_purpose(monkeypatch):
+    """**刻意**的保守方向：落在工作日的法定节假日会被当作交易日补上。
+
+    这不是缺陷而是判据选择——工作日计数"最多算多"，过期日历按真实交易日计数
+    则"会算少"，而**低估陈旧 = 静默放行**（同 `marketdb_freshness` 模块 docstring）。
+    本用例把该取舍钉住：将来若想改成查真实节假日，必须同时改 freshness 口径，
+    不能只改这里让两边分家。
+    """
+    from datetime import date, datetime, timedelta
+
+    from app.market import trade_calendar as tc
+
+    # 2026-10-01 是周四（国庆），非工作日历意义上的交易日，但实现按工作日补足 → 会追加
+    holiday = date(2026, 10, 1)
+    assert holiday.weekday() < 5, "夹具前提：2026-10-01 必须是周一~周五"
+    monkeypatch.setattr(tc, "_load_persisted", lambda: [holiday - timedelta(days=3)])
+    out = _calendar_days_ms(today=holiday)
+    tz8 = BJ_TZ
+    assert out[-1] == int(
+        datetime(holiday.year, holiday.month, holiday.day, tzinfo=tz8).timestamp() * 1000
+    )
 
 
 def test_calendar_days_ms_empty_when_calendar_missing(monkeypatch, capsys):
