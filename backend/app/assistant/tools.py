@@ -207,6 +207,7 @@ class ToolContext:
     snapshot_service: Any = None     # 全市场快照服务：涨跌家数/成交额（市场概览工具）
     paper_engine: Any = None         # 模拟交易引擎（模拟账户工具）
     event_store: Any = None          # 事件库：全网快讯/资讯流（news 工具）
+    theme_catalog: Any = None        # 官方题材目录服务：题材成分明细（themes 工具）
 
 
 def _latest_trade_day(ctx: ToolContext) -> date:
@@ -383,6 +384,57 @@ async def _longhu_stock(ctx: ToolContext, code: str, raw_date: str | None) -> st
             lines.append(f"- 历史 T+5 均值 {avg:+.2f}%，胜率 {rate:.0%}（样本 {len(win)} 次）")
     lines.append("- 口径：同一日可能同时披露日榜与三日榜（区间不同，不可相加）。")
     return _clip("\n".join(lines))
+
+
+async def _t_theme_members(ctx: ToolContext, **kw) -> str:
+    """题材成分明细：给一个题材名，返回它的官方成分股。
+
+    P2-28① 的第一个工具。此前助手被问「XX 题材有哪些票」时只能凭印象作答——
+    官方题材目录（含成分）后端早已就绪，只是**没有登记给助手**（能力空窗）。
+
+    三条纪律：
+    1. 目录服务不可用/为空时**明确说"取不到"**，绝不凭印象编造成分
+       （编成分比说不知道危险得多）；
+    2. 多个题材同名/模糊命中时，把候选列出来让用户/模型指认，不擅自挑一个；
+    3. 成分过多时截断并如实说明总数，不假装只有这些。
+    """
+    keyword = (kw.get("keyword") or "").strip()
+    if not keyword:
+        return "参数缺失：keyword（题材名，如 代糖 / 玉米 / 创新药）"
+
+    svc = ctx.theme_catalog
+    if svc is None:
+        return "题材成分：官方题材目录服务不可用（不是没有该题材，是取不到）"
+    try:
+        catalog = list(svc.get_catalog(limit=1000) or [])
+    except Exception as exc:  # noqa: BLE001
+        return f"题材成分：目录读取失败（{exc}）"
+    if not catalog:
+        return "题材成分：官方题材目录为空（可能尚未同步）"
+
+    hits = [c for c in catalog if keyword in str(getattr(c, "name", "") or "")]
+    if not hits:
+        sample = "、".join(str(getattr(c, "name", "")) for c in catalog[:8])
+        return f"未找到含「{keyword}」的题材。目录中前几项示例：{sample}"
+
+    if len(hits) > 1:
+        cand = "、".join(f"{getattr(c, 'name', '')}({getattr(c, 'code', '')})" for c in hits[:8])
+        return f"「{keyword}」命中 {len(hits)} 个题材，请指明是哪一个：{cand}"
+
+    one = hits[0]
+    code, name = str(getattr(one, "code", "")), str(getattr(one, "name", "") or keyword)
+    try:
+        members = list(svc.get_members(code) or [])
+    except Exception as exc:  # noqa: BLE001
+        return f"题材成分：{name} 成员读取失败（{exc}）"
+    if not members:
+        return f"题材成分：{name}（{code}）暂无成分数据"
+
+    rows = [{"symbol": str(getattr(m, "symbol", "") or m.get("symbol", "")),
+             "name": str(getattr(m, "name", "") or (m.get("name", "") if isinstance(m, dict) else ""))}
+            for m in members]
+    return _fmt_rows(f"题材成分 {name}（{code}）", rows,
+                     [("name", ""), ("symbol", "")], total=len(rows))
 
 
 async def _t_boards(ctx: ToolContext, **kw) -> str:
@@ -1235,6 +1287,10 @@ TOOL_SPECS: dict[str, ToolSpec] = {
     "limit_down": ToolSpec("limit_down", "某交易日跌停池", "date=YYYY-MM-DD（可省略）", _t_limit_down),
     "limit_break": ToolSpec("limit_break", "某交易日炸板池", "date=YYYY-MM-DD（可省略）", _t_limit_break),
     "longhu": ToolSpec("longhu", "龙虎榜：当日全市场榜；给 symbols 则查个股席位明细", "date=YYYY-MM-DD（可省略）｜symbols=600519（可选，个股维度）", _t_longhu),
+    # P2-28①（2026-09-11）：题材成分明细——此前只有「题材梯队」没有「成分」，
+    # 助手被问「某题材有哪些票」时只能凭印象作答。
+    "theme_members": ToolSpec("theme_members", "官方题材成分明细（给题材名，返回成分股列表）",
+                              "keyword=题材名（如 代糖 / 创新药）", _t_theme_members),
     "boards": ToolSpec("boards", "板块排行榜", "board_type=hangye|gainian（默认 hangye）", _t_boards),
     "hot": ToolSpec("hot", "人气热股榜", "period=day|week|month（默认 day）", _t_hot),
     "anomaly": ToolSpec("anomaly", "当日异动原因（可按代码查为什么异动）", "symbols=可选，逗号分隔≤6只；缺省=全市场榜", _t_anomaly),
@@ -1323,6 +1379,7 @@ TOOL_LABELS: dict[str, str] = {
     "limit_down": "跌停池",
     "limit_break": "炸板池",
     "longhu": "龙虎榜",
+    "theme_members": "题材成分",
     "boards": "板块排行",
     "hot": "人气热榜",
     "anomaly": "异动原因",

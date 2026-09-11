@@ -170,6 +170,7 @@ async def _tool_context(
         snapshot_service=getattr(request.app.state, "snapshot_service", None),
         paper_engine=getattr(request.app.state, "paper", None),
         event_store=getattr(request.app.state, "event_store", None),
+        theme_catalog=getattr(request.app.state, "theme_catalog", None),
     )
 
 
