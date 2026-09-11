@@ -27,6 +27,8 @@ data/review/*
 *.sqlite3
 *.db
 *.log
+# 助手认知缺口留痕（运行时持续追加，不入库）
+cognition_gaps.jsonl
 
 # OS / IDE
 .DS_Store
