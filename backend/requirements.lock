@@ -21,7 +21,8 @@ httptools==0.8.0
 httpx==0.28.1
 idna==3.19
 iniconfig==2.3.0
-jsonpath @ ./vendor/wheels/jsonpath-0.82-py3-none-any.whl
+# 裸路径形式：`name @ ./相对路径` 会被 pip 当 URL（CI 实测 No scheme supplied）
+./vendor/wheels/jsonpath-0.82-py3-none-any.whl
 Mako==1.4.1
 MarkupSafe==3.0.3
 mini-racer==0.14.1
