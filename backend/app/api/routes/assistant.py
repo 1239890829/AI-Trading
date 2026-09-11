@@ -63,6 +63,7 @@ from app.assistant.tools import (
 from app.core.config import settings
 from app.core.grounding import grounding_violations
 from app.core.llm_client import ChatStream, LLMError, hint_for, stream_chat_completion
+from app.services.quote_enrich import fetch_quotes_list
 
 log = logging.getLogger(__name__)
 
@@ -198,11 +199,10 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
     try:
         codes = resolve_symbols(req.messages[-1].content, req.page, stocks)
         if codes:
-            from app.api.routes.market import _batch_quotes
 
             hub = request.app.state.hub
             market_block, market_sources = await build_market_context(
-                lambda syms: _batch_quotes(hub, syms), codes, tools_enabled
+                lambda syms: fetch_quotes_list(hub, syms), codes, tools_enabled
             )
     except Exception as exc:  # noqa: BLE001
         log.warning("assistant market context skipped: %s", exc)

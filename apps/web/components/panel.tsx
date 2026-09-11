@@ -1,5 +1,6 @@
 import { ReactNode } from "react";
 import { QualityBadge } from "@/components/quality-badge";
+import { PanelBoundary } from "@/components/ui/panel-boundary";
 import { sourceLabel, timeText } from "@/lib/format";
 import type { Quality } from "@/types/market";
 
@@ -28,6 +29,18 @@ interface PanelProps {
  *     （如市场页事件 tab——漏掉它 ul 的 overflow-y-auto 永不触发，
  *     内容被页面 overflow-hidden 静默裁掉，且无任何报错）。
  * 自查口诀：Panel 是 tab 视图根节点 → 一定要有 h-full 或 flex-1+min-h-0。
+ *
+ * 错误边界（S2-6，2026-09-11）：**body 已内建 `PanelBoundary`**，单个面板渲染期
+ * 抛错只会让这一块降级为错误卡，头部（标题/来源/质量徽标）与页面其余部分照常。
+ * 此前只有路由级边界，任何面板抛错都会把整页换成错误卡——用户为看一个面板的
+ * 失败丢掉全部已加载内容。
+ *
+ * 边界**只包 body 不包头部**：头部是纯展示（标题 + 徽标），几乎不可能抛错；
+ * 把它留在边界外，失败时用户仍能看到"这是哪个面板坏了"，而不是一块匿名灰卡。
+ * 注意 `title` 是 `ReactNode`，只有字符串形态才作为 label 传给边界。
+ *
+ * 边界抓不到**事件处理器与异步回调**里的异常（React 机制所限），那两类由
+ * `useResource` 三态与根边界兜底，详见 `components/ui/panel-boundary.tsx`。
  */
 
 export function Panel({ title, children, source, dataTimestamp, quality, qualityReasons, extra, className, bodyClassName }: PanelProps) {
@@ -48,7 +61,9 @@ export function Panel({ title, children, source, dataTimestamp, quality, quality
           </div>
         </div>
       )}
-      <div className={"flex-1 " + (bodyClassName ?? "overflow-auto")}>{children}</div>
+      <div className={"flex-1 " + (bodyClassName ?? "overflow-auto")}>
+        <PanelBoundary label={typeof title === "string" ? title : undefined}>{children}</PanelBoundary>
+      </div>
     </section>
   );
 }

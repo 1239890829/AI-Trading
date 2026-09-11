@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import {
   getSpeedRank,
   getThemesCatalog,
@@ -42,31 +43,27 @@ export function SpeedPanel({ className }: { className?: string }) {
     };
   }, []);
 
-  useEffect(() => {
-    if (!theme) return;
-    let alive = true;
-    const load = async () => {
+  // 2026-09-11（S2-5）：裸 setInterval → 统一入口（可见性暂停 + 盘外降频）。
+  // `enabled` 表达原 `if (!theme) return` 门控：题材目录到达前不发请求。
+  usePollingFetch(
+    async () => {
       setLoading(true);
       try {
         const d = await getSpeedRank(theme);
-        if (!alive) return;
         setRows(d.items);
         setThemeName(d.theme_name);
         setNote(d.note ?? null);
         setError(null);
       } catch (e) {
-        if (alive) setError((e as Error).message);
+        setError((e as Error).message);
       } finally {
-        if (alive) setLoading(false);
+        setLoading(false);
       }
-    };
-    void load();
-    const t = setInterval(load, 30_000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-  }, [theme]);
+    },
+    30_000,
+    theme,
+    { enabled: !!theme }
+  );
 
   const sampled = rows.filter((r) => r.sampled).length;
 

@@ -29,14 +29,24 @@ def _dt(h: int, m: int, weekday_offset: int = 0) -> datetime:
     return datetime(2026, 9, 7, h, m) + timedelta(days=weekday_offset)
 
 
+def _app_stub(**state_attrs):
+    """构造带 state 的 app 替身。S2-4 后管线依赖走 `PipelineDeps.from_state`，
+    因此 state 必须提供 event_store（theme_catalog 可缺省）。"""
+    defaults = {"hub": object(), "event_store": object()}
+    state = type("S", (), {**defaults, **state_attrs})()
+    return type("A", (), {"state": state})()
+
+
 def _stub_generate(monkeypatch, counter):
-    import app.api.routes.picks as pr
+    """打桩**服务层管线**（S2-4：调度不再反向 import 路由）。"""
+    import app.services.picks_pipeline as pl
 
     async def _fake(*args, **kwargs):
         counter["n"] += 1
+        counter["last"] = kwargs
         return {}
 
-    monkeypatch.setattr(pr, "generate_picks", _fake)
+    monkeypatch.setattr(pl, "generate_picks_pipeline", _fake)
 
 
 def test_tick_skips_when_row_exists(tmp_path, monkeypatch):
@@ -50,21 +60,25 @@ def test_tick_skips_when_row_exists(tmp_path, monkeypatch):
         db.add(DailyPickSet(date="2026-09-07", items="[]", meta="{}", replaced="[]", rejected="[]"))
         db.commit()
 
-    out = asyncio.run(pa.picks_autogen_tick(object(), now=_dt(9, 40), run_hour=9, run_minute=26))
+    out = asyncio.run(pa.picks_autogen_tick(_app_stub(), now=_dt(9, 40), run_hour=9, run_minute=26))
     assert out is False
     assert counter["n"] == 0
 
 
 def test_tick_weekend_and_after_deadline():
     """周末 / 14:00 截止后 → 不生成。"""
-    out_sat = asyncio.run(pa.picks_autogen_tick(object(), now=_dt(9, 40, 5), run_hour=9, run_minute=26))
-    out_late = asyncio.run(pa.picks_autogen_tick(object(), now=_dt(15, 0, 0), run_hour=9, run_minute=26))
-    out_early = asyncio.run(pa.picks_autogen_tick(object(), now=_dt(9, 0, 0), run_hour=9, run_minute=26))
+    out_sat = asyncio.run(pa.picks_autogen_tick(_app_stub(), now=_dt(9, 40, 5), run_hour=9, run_minute=26))
+    out_late = asyncio.run(pa.picks_autogen_tick(_app_stub(), now=_dt(15, 0, 0), run_hour=9, run_minute=26))
+    out_early = asyncio.run(pa.picks_autogen_tick(_app_stub(), now=_dt(9, 0, 0), run_hour=9, run_minute=26))
     assert out_sat is False and out_late is False and out_early is False
 
 
 def test_tick_generates_when_missing_and_trading_day(tmp_path, monkeypatch):
-    """窗口内 + 交易日 + 当日缺失 → 生成一次。"""
+    """窗口内 + 交易日 + 当日缺失 → 生成一次，且**归属日取窗口判定的那个北京日**。
+
+    KB-TRADE-02：此前窗口判定用 `now`（北京）而管线写入用 `date.today()`（本机），
+    两处日期源不同源。本测试钉住 now 被显式传下去。
+    """
     sf = _factory(tmp_path)
     monkeypatch.setattr(pa, "get_session_factory", lambda: sf)
     counter = {"n": 0}
@@ -74,10 +88,10 @@ def test_tick_generates_when_missing_and_trading_day(tmp_path, monkeypatch):
         return True
 
     monkeypatch.setattr(pa, "_is_trading_day", _trading)
-    app_stub = type("A", (), {"state": type("S", (), {"hub": object()})()})()
-    out = asyncio.run(pa.picks_autogen_tick(app_stub, now=_dt(9, 40), run_hour=9, run_minute=26))
+    out = asyncio.run(pa.picks_autogen_tick(_app_stub(), now=_dt(9, 40), run_hour=9, run_minute=26))
     assert out is True
     assert counter["n"] == 1
+    assert counter["last"]["today"] == "2026-09-07"
 
 
 def test_tick_skips_non_trading_day(tmp_path, monkeypatch):
@@ -91,8 +105,7 @@ def test_tick_skips_non_trading_day(tmp_path, monkeypatch):
         return False
 
     monkeypatch.setattr(pa, "_is_trading_day", _not_trading)
-    app_stub = type("A", (), {"state": type("S", (), {"hub": object()})()})()
-    out = asyncio.run(pa.picks_autogen_tick(app_stub, now=_dt(9, 40), run_hour=9, run_minute=26))
+    out = asyncio.run(pa.picks_autogen_tick(_app_stub(), now=_dt(9, 40), run_hour=9, run_minute=26))
     assert out is False
     assert counter["n"] == 0
 
@@ -107,8 +120,7 @@ def test_wait_snapshot_ready_polls_until_breadth():
             calls["n"] += 1
             return None if calls["n"] < 3 else {"up": 100, "down": 50}
 
-    app_stub = type("A", (), {"state": type("S", (), {"snapshot_service": Svc()})()})()
-    ok = asyncio.run(pa._wait_snapshot_ready(app_stub, timeout=1.0, interval=0.01))
+    ok = asyncio.run(pa._wait_snapshot_ready(_app_stub(snapshot_service=Svc()), timeout=1.0, interval=0.01))
     assert ok is True
     assert calls["n"] >= 3  # 确实等了（不是看一眼就过）
 
@@ -118,8 +130,9 @@ def test_wait_snapshot_ready_times_out_without_blocking():
     class Svc:
         breadth = None
 
-    app_stub = type("A", (), {"state": type("S", (), {"snapshot_service": Svc()})()})()
-    assert asyncio.run(pa._wait_snapshot_ready(app_stub, timeout=0.05, interval=0.01)) is False
+    assert asyncio.run(
+        pa._wait_snapshot_ready(_app_stub(snapshot_service=Svc()), timeout=0.05, interval=0.01)
+    ) is False
 
 
 def test_tick_proceeds_without_snapshot_service(tmp_path, monkeypatch):
@@ -133,7 +146,7 @@ def test_tick_proceeds_without_snapshot_service(tmp_path, monkeypatch):
         return True
 
     monkeypatch.setattr(pa, "_is_trading_day", _trading)
-    app_stub = type("A", (), {"state": type("S", (), {"hub": object()})()})()  # 无 snapshot_service
-    out = asyncio.run(pa.picks_autogen_tick(app_stub, now=_dt(9, 40), run_hour=9, run_minute=26))
+    # 无 snapshot_service：_wait_snapshot_ready 直接返回 False，不阻塞
+    out = asyncio.run(pa.picks_autogen_tick(_app_stub(), now=_dt(9, 40), run_hour=9, run_minute=26))
     assert out is True
     assert counter["n"] == 1

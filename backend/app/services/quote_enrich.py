@@ -67,31 +67,92 @@ async def fetch_quotes_batched(
     return found
 
 
+async def fetch_quotes_list(hub, symbols: list[str], *, prefer_cache: bool = False) -> list:
+    """`fetch_quotes_batched` 的**列表形态**（顺序即 dict 插入序，调用方只做遍历）。
+
+    为什么单列一个入口：`api/routes/market.py` 的私有 `_batch_quotes` 曾被
+    `api/routes/assistant.py` 跨模块当公共 API 用（S2-4）。列表/字典两种形态
+    都收在这里，消费方从服务层取，不再依赖某个路由的私有名。
+    """
+    found = await fetch_quotes_batched(hub, symbols, prefer_cache=prefer_cache)
+    return list(found.values())
+
+
+def _apply_limit_prices(q, tq):
+    """涨跌停价字段映射（唯一实现；两个入口共用，避免口径漂移）。"""
+    q.limit_up_price = q.limit_up_price if q.limit_up_price is not None else tq.limit_up_price
+    q.limit_down_price = q.limit_down_price if q.limit_down_price is not None else tq.limit_down_price
+
+
+def _apply_valuation(q, tq):
+    """估值/市值字段映射（唯一实现）。"""
+    q.pe_ttm = q.pe_ttm if q.pe_ttm is not None else tq.pe_ttm
+    q.pb = q.pb if q.pb is not None else tq.pb
+    q.total_mktcap_yi = q.total_mktcap_yi if q.total_mktcap_yi is not None else tq.total_mktcap_yi
+    q.float_mktcap_yi = q.float_mktcap_yi if q.float_mktcap_yi is not None else tq.float_mktcap_yi
+
+
+async def _tencent_snapshot(provider, q):
+    """取一次腾讯快照（补全失败一律返回 None——尽力而为，不抛）。"""
+    tencent = _tencent_of(provider)
+    if tencent is None:
+        return None
+    try:
+        return await tencent.get_quote(q.symbol)
+    except Exception as exc:  # noqa: BLE001  补全是尽力而为
+        log.warning("tencent 补全失败 %s: %s", q.symbol, exc)
+        return None
+
+
+async def enrich_quote(provider, q):
+    """**一次取数**同时补涨跌停价与估值（P1-4，2026-09-11）。
+
+    背景：`fill_limit_prices` 与 `fill_valuation` 各自 `await tencent.get_quote()`，
+    而 `tencent.get_quote → _snapshot` **无缓存**（每次真实 HTTP）⇒ 详情页在
+    「链首 ths 快照缺涨跌停价 + 缺 pe/pb/市值」时，对**同一 symbol 串行发两次同源请求**。
+    个股详情每次打开、每次切股都走这条路径。
+
+    这里把两类字段的取数合并为一次；需要补的字段全都有值时**一次请求都不发**
+    （与两个原函数各自的短路条件等价）。字段映射仍走 `_apply_*`，
+    与 `fill_limit_prices` / `fill_valuation` 共用同一份实现。
+    """
+    if q is None:
+        return None
+    need_limit = q.limit_up_price is None or q.limit_down_price is None
+    need_val = None in (q.pe_ttm, q.pb, q.total_mktcap_yi)
+    if not (need_limit or need_val):
+        return q
+    if _tencent_of(provider) is None:
+        return q
+    tq = await _tencent_snapshot(provider, q)
+    if tq is None:
+        return q
+    if need_limit:
+        _apply_limit_prices(q, tq)
+    if need_val:
+        _apply_valuation(q, tq)
+    return q
+
+
 async def fill_limit_prices(provider, q):
     """原地补全 quote 的涨跌停价（缺失时从链上的 tencent 源取）。
 
      provider 为 None、链上无 tencent、或取价失败时都保持原样——
      补不上就补不上，绝不臆造限价。
+
+     只补限价、不碰估值。**同时需要估值时请用 `enrich_quote`**——
+     两者串联会对同一 symbol 发两次同源 HTTP（P1-4）。
     """
     if q is None:
         return None
     if q.limit_up_price is not None and q.limit_down_price is not None:
         return q
-    if provider is None or getattr(provider, "name", "") == "tencent":
+    if _tencent_of(provider) is None:
         return q
-
-    tencent = _tencent_of(provider)
-    if tencent is None:
-        return q
-    try:
-        tq = await tencent.get_quote(q.symbol)
-    except Exception as exc:
-        log.warning("tencent 补涨跌停价失败 %s: %s", q.symbol, exc)
-        return q
+    tq = await _tencent_snapshot(provider, q)
     if tq is None:
         return q
-    q.limit_up_price = q.limit_up_price if q.limit_up_price is not None else tq.limit_up_price
-    q.limit_down_price = q.limit_down_price if q.limit_down_price is not None else tq.limit_down_price
+    _apply_limit_prices(q, tq)
     return q
 
 
@@ -102,23 +163,16 @@ async def fill_valuation(provider, q):
     总市值 305.69 亿）。链首是 ths → 估值恒 None → 选股基本面里的 PE 永远"缺失"。
 
     只在字段缺失时发起请求；补不上就保持原样，绝不臆造。
+    **同时需要涨跌停价时请用 `enrich_quote`**（P1-4：避免两次同源请求）。
     """
     if q is None:
         return None
     if None not in (q.pe_ttm, q.pb, q.total_mktcap_yi):
         return q
-    tencent = _tencent_of(provider)
-    if tencent is None:
+    if _tencent_of(provider) is None:
         return q
-    try:
-        tq = await tencent.get_quote(q.symbol)
-    except Exception as exc:
-        log.warning("tencent 补估值失败 %s: %s", q.symbol, exc)
-        return q
+    tq = await _tencent_snapshot(provider, q)
     if tq is None:
         return q
-    q.pe_ttm = q.pe_ttm if q.pe_ttm is not None else tq.pe_ttm
-    q.pb = q.pb if q.pb is not None else tq.pb
-    q.total_mktcap_yi = q.total_mktcap_yi if q.total_mktcap_yi is not None else tq.total_mktcap_yi
-    q.float_mktcap_yi = q.float_mktcap_yi if q.float_mktcap_yi is not None else tq.float_mktcap_yi
+    _apply_valuation(q, tq)
     return q

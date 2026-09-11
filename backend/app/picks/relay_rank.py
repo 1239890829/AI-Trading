@@ -11,12 +11,19 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date
 
 log = logging.getLogger(__name__)
 
 TOP_N = 15
+
+# 池内逐只日 K 的并发上限（P0-3，2026-09-11）。原实现是**串行 await**：
+# 单请求耗时 = 池大小 × RTT，涨停 60+ 只时可达数十秒。8 路并发把耗时压到
+# O(RTT × 池/8)，同时不至于把腾讯源打出限流（该源在四源链里承担日 K 主职）。
+# 用信号量而非无界 gather：池子大时无界并发等于自我 DDoS。
+MAX_CONCURRENCY = 8
 
 
 async def _bars_last_n(provider, symbol: str, n: int, upto: date) -> list[dict] | None:
@@ -43,26 +50,35 @@ def _factors(rows: list[dict]) -> dict[str, float | None]:
 
 
 async def compute_relay_rank(provider, trade_date: date, pool: list | None = None) -> list[dict]:
-    """今日涨停池 → 接力质量排序。pool 可注入（测试）；缺省拉当日池。"""
+    """今日涨停池 → 接力质量排序。pool 可注入（测试）；缺省拉当日池。
+
+    P0-3（2026-09-11）：池内逐只取 K 由串行改**有界并发**（`MAX_CONCURRENCY`）。
+    单只失败仍只降级自己（`_bars_last_n` 返回 None → 该只不进榜），不拖垮整池。
+    """
     if pool is None:
         pool = await provider.get_limit_up_pool(trade_date)
-    out: list[dict] = []
-    for rec in pool:
+    sem = asyncio.Semaphore(MAX_CONCURRENCY)
+
+    async def one(rec) -> dict | None:
         symbol = getattr(rec, "symbol", None)
         if not symbol:
-            continue
-        bars = await _bars_last_n(provider, symbol, 21, trade_date)
+            return None
+        async with sem:
+            bars = await _bars_last_n(provider, symbol, 21, trade_date)
         if not bars:
-            continue
+            return None
         fx = _factors(bars)
-        out.append({
+        return {
             "symbol": symbol,
             "name": getattr(rec, "name", "") or "",
             "boards": getattr(rec, "consecutive_boards", 1) or 1,
             "reason": (getattr(rec, "reason", "") or "").strip(),
             "kmid2": round(fx["kmid2"], 4) if fx["kmid2"] is not None else None,
             "max20": round(fx["max20"], 4) if fx["max20"] is not None else None,
-        })
+        }
+
+    gathered = await asyncio.gather(*(one(rec) for rec in pool))
+    out: list[dict] = [r for r in gathered if r is not None]
     # 主排序 kmid2 降序（封得实），辅 max20 升序（近新高）；因子缺失垫底不臆造
     out.sort(key=lambda x: (
         -(x["kmid2"] if x["kmid2"] is not None else -9),

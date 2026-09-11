@@ -22,6 +22,7 @@ import {
 import { StockLink } from "@/components/stock-link";
 import { IncrementalSentinel } from "@/components/ui/incremental-sentinel";
 import { useIncremental } from "@/hooks/use-incremental";
+import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { useDetailModal } from "@/components/detail/detail-modal";
 import { NewsModal, type NewsModalItem } from "@/components/news-modal";
 
@@ -221,23 +222,22 @@ export function NotificationBell() {
 
   // 60s 轮询：只刷新 payload，**不再在 effect 里改已读状态**
   // （旧实现打开抽屉就写水位，导致"红点一闪即逝"且水位格式两套，见文件头说明）。
-  useEffect(() => {
-    let alive = true;
-    const check = async () => {
+  // 2026-09-11（S2-5）：裸 setInterval → 统一入口（获得可见性暂停）。
+  // `marketHours: false` —— 通知含「盘后」时段条目，盘外正是需要及时看到的时候，
+  // 不能套用行情类的盘外 ×5 降频（60s 会变 120s）。
+  usePollingFetch(
+    async () => {
       try {
         const p = await getNotifications();
-        if (alive) setPayload(p);
+        setPayload(p);
       } catch {
         /* 轮询失败静默：下次再试，不清空已有内容 */
       }
-    };
-    void check();
-    const t = setInterval(check, 60_000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-  }, []);
+    },
+    60_000,
+    undefined,
+    { marketHours: false }
+  );
 
   // 未读数：**派生自当前 payload**（单一真相源是 payload.items + readState），
   // 不再用「上一次轮询算出的数字」——那正是"计数在旧累积上叠加"的来源。

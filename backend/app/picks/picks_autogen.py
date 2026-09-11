@@ -19,7 +19,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from types import SimpleNamespace
 
 from sqlalchemy import select
 
@@ -69,10 +68,14 @@ async def _today_row_exists(today: str) -> bool:
 async def picks_autogen_tick(app, *, now, run_hour: int, run_minute: int) -> bool:
     """调度单步：窗口内 + 交易日 + 当日无组合 → 生成一次。返回是否触发生成。
 
-    生成直接复用 POST /api/picks/generate 的路由函数——它对 request 的使用
-    仅有 ``request.app.state``（3 处），SimpleNamespace 等价替身即可；写鉴权
-    参数传 None 显式跳过（进程内调用，不走 HTTP）。日期统一取 now（北京），
-    不用 date.today()——跨日口径必须同源（KB-TRADE-02）。
+    生成调用 **服务层管线** `services/picks_pipeline.generate_picks_pipeline`
+    （S2-4，2026-09-11）。此前是反向 `import app.api.routes.picks.generate_picks`
+    并伪造 `SimpleNamespace(app=app)` 当 request——那是"业务逻辑住在 route"的直接
+    后果，也是集成链路零测试覆盖的成因；现在依赖以 `PipelineDeps` 显式声明。
+
+    日期统一取 now（北京）并**传给管线**：此前窗口判定用 now、写入用
+    `date.today()`，两处日期源不同源（KB-TRADE-02）。写鉴权参数不再需要
+    （进程内调用本就不走 HTTP）。
     """
     today = now.date().isoformat()
     if now.weekday() >= 5:
@@ -92,12 +95,11 @@ async def picks_autogen_tick(app, *, now, run_hour: int, run_minute: int) -> boo
         log.info("picks autogen: %s 非交易日，跳过", now.date())
         return False
 
-    # 延迟导入防循环（routes.picks 依赖 app.picks.* 各模块）
-    from app.api.routes.picks import generate_picks
+    from app.services.picks_pipeline import PipelineDeps, generate_picks_pipeline
 
     await _wait_snapshot_ready(app)
     log.info("picks autogen: 当日组合缺失，开始自动生成（%s）", now.strftime("%H:%M:%S"))
-    await generate_picks(SimpleNamespace(app=app), hub, None)
+    await generate_picks_pipeline(PipelineDeps.from_state(app.state), hub, today=today)
     log.info("picks autogen: 当日组合生成完成")
     return True
 

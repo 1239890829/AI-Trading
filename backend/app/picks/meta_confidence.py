@@ -19,8 +19,10 @@
 
 from __future__ import annotations
 
-STRONG_PHASES = {"修复", "发酵", "高潮"}
-ADVERSE_PHASES = {"冰点", "退潮"}
+# S2-7：相位语义集合唯一权威在 sentiment 引擎，此处不再自建副本
+# （此前两处各写一份，任一处漏相位就是交易信号级不一致）。
+from app.sentiment.engine import ADVERSE_PHASES, STRONG_PHASES
+
 STRONG_SCORE = 75.0
 EXECUTABLE_SCORE = 60.0
 N_DIMS = 6

@@ -8,6 +8,7 @@ import { StockLink, useStockRowNav } from "@/components/stock-link";
 import { ConceptDetailModal } from "@/components/concept-detail-modal";
 import { EntryChecklist } from "@/components/entry-checklist";
 import { JUMP_PILL_CLASS, JumpLink } from "@/components/ui/jump-link";
+import { roleClass } from "@/lib/role-style";
 import type { ThemeCard as ThemeCardType } from "@/types/market";
 
 /**
@@ -15,7 +16,7 @@ import type { ThemeCard as ThemeCardType } from "@/types/market";
  *
  * 结构约定（2026-08-29 重构）：
  * - 顶部：强弱分级 + 题材名 + 当日涨跌幅 + 成建制/阶段 + 强度分 + 排序依据
- * - 底部：个股梯队列表（层级 = 连板档位，角色 = 龙头/中军/跟风/情绪票/补涨/首板…）
+ * - 底部：个股梯队列表（层级 = 连板档位，角色 = 龙头/中军/反包/补涨/首板…；配色见 `@/lib/role-style`）
  * - 重指标收进 <details>：可扫读性优先，默认折叠不打扰
  *
  * 归属口径：梯队成员已由后端按「当日联动」唯一归属（assign_primary_themes），
@@ -56,18 +57,7 @@ const FORMATION_STYLE: Record<string, string> = {
   个股行情: "border-zinc-200 bg-zinc-50 text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400",
 };
 
-/** 角色色阶：越靠前（定高度/定强度）越暖越亮，跟风/首板退到中性。 */
-const ROLE_STYLE: Record<string, string> = {
-  空间板: "border-rose-500/50 bg-rose-500/15 text-rose-700 dark:text-rose-300",
-  龙头: "border-orange-500/50 bg-orange-500/15 text-orange-800 dark:text-orange-300",
-  情绪票: "border-fuchsia-500/50 bg-fuchsia-500/15 text-fuchsia-700 dark:text-fuchsia-300",
-  中军: "border-amber-500/50 bg-amber-500/15 text-amber-800 dark:text-amber-300",
-  反包: "border-violet-500/50 bg-violet-500/15 text-violet-700 dark:text-violet-300",
-  补涨: "border-sky-500/50 bg-sky-500/15 text-sky-700 dark:text-sky-300",
-  跟风: "border-zinc-300 bg-zinc-100 text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
-  首板: "border-zinc-200 bg-zinc-50 text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400",
-  断板: "border-zinc-300 bg-zinc-100 text-zinc-600 line-through dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400",
-};
+/** 角色色阶：唯一权威表在 `@/lib/role-style`（S2-10 合并，跨端由后端测试守卫）。 */
 
 /** 封板时间分档：越早封板资金越坚决，色阶由暖到冷。 */
 const SEAL_COLORS: Record<string, string> = {
@@ -421,7 +411,7 @@ export function ThemeCardView({
                       <LevelBadge boards={lv} sameLevel={i > 0} />
                     </td>
                     <td className="py-1.5 align-middle">
-                      <Badge className={ROLE_STYLE[r.role]}>{r.role}</Badge>
+                      <Badge className={roleClass(r.role)}>{r.role}</Badge>
                     </td>
                     <td className="py-1.5 align-middle">
                       <StockLink symbol={r.symbol}>
@@ -631,7 +621,7 @@ export function ThemeCardView({
             <div className="space-y-1 text-[13px]">
               {card.leaders.main ? (
                 <div className="flex items-center gap-2">
-                  <Badge className={ROLE_STYLE[card.leaders.main.role]}>龙头</Badge>
+                  <Badge className={roleClass(card.leaders.main.role)}>龙头</Badge>
                   <StockLink symbol={card.leaders.main.symbol} className="text-zinc-800 dark:text-zinc-100">
                     {card.leaders.main.name ?? card.leaders.main.symbol}
                   </StockLink>
@@ -642,7 +632,7 @@ export function ThemeCardView({
               )}
               {card.leaders.middle_weights.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge className={ROLE_STYLE["中军"]}>中军</Badge>
+                  <Badge className={roleClass("中军")}>中军</Badge>
                   {card.leaders.middle_weights.map((m) => (
                     <StockLink key={m.symbol} symbol={m.symbol} className="text-zinc-700 dark:text-zinc-300">
                       {m.name ?? m.symbol}
@@ -653,7 +643,7 @@ export function ThemeCardView({
               )}
               {card.leaders.candidates.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge className={ROLE_STYLE["补涨"]}>可关注</Badge>
+                  <Badge className={roleClass("补涨")}>可关注</Badge>
                   {card.leaders.candidates.map((c) => (
                     <StockLink
                       key={c.symbol}

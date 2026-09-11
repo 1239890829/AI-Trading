@@ -539,8 +539,9 @@ def test_chat_route_meta_carries_sources(client, monkeypatch):
     async def fake_batch(hub, syms):
         return [_mk_quote(source="tencent")]
 
-    from app.api.routes import market as market_routes
-    monkeypatch.setattr(market_routes, "_batch_quotes", fake_batch)
+    # S2-4：批量取数实现已上移到 services/quote_enrich（不再依赖路由私有名）。
+    # 打桩点跟着导入方走——assistant.py 是模块级 `from ... import`，名字绑在它自己的全局里。
+    monkeypatch.setattr(assistant_routes, "fetch_quotes_list", fake_batch)
 
     resp = client.post("/api/assistant/chat", json={
         "messages": [{"role": "user", "content": "贵州茅台现在多少？"}],
@@ -572,8 +573,9 @@ def test_chat_route_includes_market_block(client, monkeypatch):
     async def fake_batch(hub, syms):  # 与真实 _batch_quotes(hub, symbols) 同签名
         return [_mk_quote()]
 
-    from app.api.routes import market as market_routes
-    monkeypatch.setattr(market_routes, "_batch_quotes", fake_batch)
+    # S2-4：批量取数实现已上移到 services/quote_enrich（不再依赖路由私有名）。
+    # 打桩点跟着导入方走——assistant.py 是模块级 `from ... import`，名字绑在它自己的全局里。
+    monkeypatch.setattr(assistant_routes, "fetch_quotes_list", fake_batch)
     resp = client.post("/api/assistant/chat", json={
         "messages": [{"role": "user", "content": "贵州茅台现在多少？"}],
     })
@@ -592,8 +594,9 @@ def _mock_snapshot(client, monkeypatch):
     async def fake_batch(hub, syms):
         return [_mk_quote()]  # 现价 1500.5 / 涨跌幅 2.35%
 
-    from app.api.routes import market as market_routes
-    monkeypatch.setattr(market_routes, "_batch_quotes", fake_batch)
+    # S2-4：批量取数实现已上移到 services/quote_enrich（不再依赖路由私有名）。
+    # 打桩点跟着导入方走——assistant.py 是模块级 `from ... import`，名字绑在它自己的全局里。
+    monkeypatch.setattr(assistant_routes, "fetch_quotes_list", fake_batch)
 
 
 def test_chat_route_grounding_flags_fabricated_number(client, monkeypatch):

@@ -1,6 +1,6 @@
 /** 格式化工具测试：空值/边界/单位换算/红涨绿跌语义。 */
 import { describe, expect, it } from "vitest";
-import { fmt, fmtAmount, fmtHeat, fmtVolume, isHardQuality, parseNum, pctColor, pctText, qualityLabel, sourceLabel, timeText, bjDate, bjHHMM, bjMonthDay } from "./format";
+import { fmt, fmtAmount, fmtHeat, fmtVolume, isHardQuality, parseNum, pctColor, pctText, qualityLabel, sourceLabel, timeText, bjDate, bjHHMM, bjMonthDay, triText } from "./format";
 
 /**
  * 北京时间格式化（2026-09-11 收口）。
@@ -151,5 +151,37 @@ describe("parseNum", () => {
     expect(parseNum(undefined)).toBe(0);
     expect(parseNum("abc")).toBe(0);
     expect(parseNum(Number.NaN)).toBe(0);
+  });
+});
+
+/**
+ * 三态文案（S2-9，2026-09-11）。
+ *
+ * 价值在于**跨端一致**：这组键必须与后端 `picks/push_cards.py::_TRI_LABELS` 逐键对齐，
+ * 否则同一份数据在飞书卡片与界面上显示不同（此前前端漏 `null` 键 ⇒ 界面直接打出 `null`）。
+ * 同时钉住"判不出（unknown）≠ 没有值（--）"这条三态纪律。
+ */
+describe("三态文案 triText", () => {
+  it("三个字面量都有中文文案，且与后端逐键一致", () => {
+    expect(triText("unknown")).toBe("未判定");
+    expect(triText("none")).toBe("无");
+    expect(triText("null")).toBe("—");
+  });
+
+  it("大小写不敏感、两侧空白不影响", () => {
+    expect(triText("UNKNOWN")).toBe("未判定");
+    expect(triText("  None  ")).toBe("无");
+    expect(triText("NULL")).toBe("—");
+  });
+
+  it("真正缺数据 → '--'（与字面量 'null' 区分：前者没有值，后者值是这四个字符）", () => {
+    expect(triText(null)).toBe("--");
+    expect(triText(undefined)).toBe("--");
+    expect(triText("")).toBe("--");
+    expect(triText("   ")).toBe("--");
+  });
+
+  it("未登记的字面量原样透出（不臆造翻译）", () => {
+    expect(triText("strong")).toBe("strong");
   });
 });

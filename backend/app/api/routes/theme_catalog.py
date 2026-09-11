@@ -16,9 +16,10 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from app.api.deps import get_hub, require_write_token
+from app.api.deps import get_hub, normalize_symbol, require_write_token
 from app.core.ttl_cache import cache_on
 from app.services.quote_hub import QuoteHub
+from app.services.market_snapshot import default_trade_date, load_snapshot_map
 from app.services.theme_catalog_service import (
     ThemeCatalogService,
     aggregate_theme_strength,
@@ -41,13 +42,6 @@ def get_service(request: Request) -> ThemeCatalogService:
     if svc is None:
         raise HTTPException(status_code=503, detail="题材目录服务未初始化")
     return svc
-
-
-def _normalize_symbol(symbol: str) -> str:
-    sym = (symbol or "").strip().replace(".SH", "").replace(".SZ", "")
-    if not sym.isdigit() or len(sym) != 6:
-        raise HTTPException(status_code=400, detail=f"非法代码：{symbol!r}")
-    return sym
 
 
 async def _attribution_for_symbol(request: Request, symbol: str, trade_date: date | None = None) -> list[dict]:
@@ -73,9 +67,8 @@ async def _attribution_for_symbol(request: Request, symbol: str, trade_date: dat
             return []
         try:
             if trade_date is None:
-                from app.api.routes.market import _default_trade_date_async
 
-                trade_date = await _default_trade_date_async(hub)
+                trade_date = await default_trade_date(hub)
             pool = await ths.get_limit_up_pool(trade_date)
         except Exception as exc:  # noqa: BLE001
             log.warning("stock attribution: 涨停池拉取失败（跳过归因展示）: %s", exc)
@@ -102,7 +95,7 @@ async def stock_themes(
     首次访问时目录为空会自动同步一次。归因为 best-effort：ths 源不可用时
     官方成分照常返回；交易日盘前当日池为空属正常语义（?date= 可回看）。
     """
-    sym = _normalize_symbol(symbol)
+    sym = normalize_symbol(symbol)
     trade_date: date | None = None
     if date_str:
         try:
@@ -417,12 +410,11 @@ async def theme_catalog_detail(
     missing = [s for s in symbols if s not in snap_by_symbol]
     if missing:
         try:
-            from app.api.routes.market import _default_trade_date_async, _load_snapshot_map
 
-            td = await _default_trade_date_async(hub)
+            td = await default_trade_date(hub)
             parquet_rows = await asyncio.to_thread(
-                _load_snapshot_map,
-                request,
+                load_snapshot_map,
+                request.app.state.snapshot_service,
                 td,
                 ["symbol", "change_pct", "turnover_rate", "nmc", "price"],
             )
@@ -448,9 +440,8 @@ async def theme_catalog_detail(
     pool_by_symbol: dict[str, Any] = {}
     em_by_symbol: dict[str, Any] = {}
     try:
-        from app.api.routes.market import _default_trade_date_async
 
-        td = await _default_trade_date_async(hub)
+        td = await default_trade_date(hub)
         for rec in await hub.provider.get_limit_up_pool(td) or []:
             if rec.symbol:
                 pool_by_symbol[rec.symbol] = rec
@@ -459,7 +450,7 @@ async def theme_catalog_detail(
     try:
         from app.services.theme_service import _em_enhancement_map
 
-        em_by_symbol = await _em_enhancement_map(hub.provider, await _default_trade_date_async(hub))
+        em_by_symbol = await _em_enhancement_map(hub.provider, await default_trade_date(hub))
     except Exception as exc:  # noqa: BLE001  开板缺失 → 字段 None
         log.warning("concept detail em enhance failed %s: %s", code, exc)
 
@@ -602,9 +593,8 @@ async def theme_reconciliation(
             raise HTTPException(status_code=400, detail=f"日期格式应为 YYYYMMDD：{date_str!r}") from exc
     if trade_date is None:
         # ths 端点要求具体日期（date_ms(None) 会崩），与其它路由一致先解析最近交易日
-        from app.api.routes.market import _default_trade_date_async
 
-        trade_date = await _default_trade_date_async(hub)
+        trade_date = await default_trade_date(hub)
     try:
         pool = await ths.get_limit_up_pool(trade_date)
     except Exception as exc:  # noqa: BLE001

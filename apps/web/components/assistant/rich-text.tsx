@@ -9,7 +9,7 @@
  * 解析是纯函数（parseBlocks），行内渲染是组件——流式追加时全量重解析，
  * 聊天文本量级（几 KB）下开销可忽略。
  */
-import { Fragment, type ReactNode } from "react";
+import { Fragment, memo, useMemo, type ReactNode } from "react";
 import type { EntityMatch, EntityMatcher } from "@/lib/entity-links";
 import { NAV_LABELS, isAllowedNav, type NavKey } from "@/lib/nav-targets";
 
@@ -230,8 +230,12 @@ interface RichTextProps {
   className?: string;
 }
 
-export function RichText({ text, matcher, onNavigate, className }: RichTextProps) {
-  const blocks = parseBlocks(text);
+export const RichText = memo(function RichText({ text, matcher, onNavigate, className }: RichTextProps) {
+  // P1-2（2026-09-11）：`text` 不变就不重解析。
+  // 流式回复每个 SSE delta 都会 setMessages → 消息列表整体重渲染 ⇒ 原实现让
+  // **每条历史消息**都重跑一遍分块 + 正则 + 实体词典匹配，累积几十条长回答后
+  // 打字明显拖慢。memo + useMemo 后，只有正在追加的那一条会重新解析。
+  const blocks = useMemo(() => parseBlocks(text), [text]);
   const inline = (t: string) => renderInline({ text: t, match: matcher, onNavigate });
   return (
     <div className={className ?? "space-y-2 text-sm leading-relaxed"}>
@@ -330,4 +334,4 @@ export function RichText({ text, matcher, onNavigate, className }: RichTextProps
       })}
     </div>
   );
-}
+});

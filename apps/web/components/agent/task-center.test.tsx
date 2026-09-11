@@ -91,14 +91,24 @@ describe("任务中心 · 告警升级待办（P1-36）", () => {
 
   it("处置按钮不出现于需要执行的任务（running 走取消，不是处置）", async () => {
     const { getAgentTasks } = await import("@/lib/api");
-    vi.mocked(getAgentTasks).mockResolvedValueOnce([
+    // S2-5（2026-09-11）起轮询由 useResource 承载：「启用轮询」这一跳会**立即补拉一次**
+    // （与 stock-detail「切入页签立即拉一次」同一语义，见 hooks/use-resource.ts）。
+    // 原实现用 setInterval，启动轮询时不补拉 ⇒ mockResolvedValueOnce 只需喂一次。
+    // 现在会连拉两次，故改为 mockImplementation 让"每次拉取都返回运行中任务"成立。
+    const mocked = vi.mocked(getAgentTasks);
+    const original = mocked.getMockImplementation();
+    mocked.mockImplementation(async () => [
       { ...ESCALATION_TODO, id: "run-1", type: "review", status: "running" },
     ]);
-    render(<TaskCenter />);
-    // 同一文案也出现在「新建任务」按钮上：取 DOM 首个（左侧列表在前）
-    const label = (await screen.findAllByText("生成复盘报告"))[0];
-    fireEvent.click(label);
-    await screen.findByRole("button", { name: "取消任务" });
-    expect(screen.queryByRole("button", { name: "已处置" })).toBeNull();
+    try {
+      render(<TaskCenter />);
+      // 同一文案也出现在「新建任务」按钮上：取 DOM 首个（左侧列表在前）
+      const label = (await screen.findAllByText("生成复盘报告"))[0];
+      fireEvent.click(label);
+      await screen.findByRole("button", { name: "取消任务" });
+      expect(screen.queryByRole("button", { name: "已处置" })).toBeNull();
+    } finally {
+      mocked.mockImplementation(original!);
+    }
   });
 });

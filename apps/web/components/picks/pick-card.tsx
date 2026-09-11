@@ -6,6 +6,7 @@ import { CardHead, CardShell } from "@/components/picks/card-shell";
 import { CardEntryRow } from "@/components/picks/card-entries";
 import { useStockRowNav } from "@/components/stock-link";
 import { fmt, pctColor, pctText, triText } from "@/lib/format";
+import { roleClass } from "@/lib/role-style";
 import type {
   DailyPickItem,
   ExitDiscipline,
@@ -49,20 +50,7 @@ export const SUB_LABELS: [string, string][] = [
   ["echelon", "梯队"],
 ];
 
-/** 梯队地位配色：越靠前（空间板/龙头）越"热"，补涨跟风降温 */
-export const ROLE_STYLE: Record<string, string> = {
-  空间板: "border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-300",
-  龙头: "border-orange-500/50 bg-orange-500/10 text-orange-800 dark:text-orange-300",
-  反包: "border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-300",
-  中军: "border-sky-500/50 bg-sky-500/10 text-sky-700 dark:text-sky-300",
-  领涨: "border-teal-500/50 bg-teal-500/10 text-teal-700 dark:text-teal-300",
-  补涨: "border-violet-500/50 bg-violet-500/10 text-violet-700 dark:text-violet-300",
-  首板: "border-zinc-400/50 bg-zinc-500/10 text-zinc-600 dark:text-zinc-300",
-  同步: "border-zinc-300/50 bg-zinc-500/5 text-zinc-600 dark:text-zinc-400",
-  跟风: "border-zinc-300/50 bg-zinc-500/5 text-zinc-600 dark:text-zinc-400",
-  滞涨: "border-zinc-300/50 bg-zinc-500/5 text-zinc-600 dark:text-zinc-400",
-  断板: "border-zinc-300/50 bg-zinc-500/5 text-zinc-600 dark:text-zinc-400",
-};
+/** 梯队地位配色：唯一权威表在 `@/lib/role-style`（S2-10 合并，跨端由后端测试守卫）。 */
 
 export const TIER_STYLE: Record<string, string> = {
   龙头博弈: "border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-300",
@@ -439,7 +427,7 @@ export function PickCard({
             <Chip
               text={`${item.role}${item.boards ? ` · ${item.boards}板` : ""}`}
               title={item.roleBasis ? `梯队地位（Echelon Role）：${item.roleBasis}` : `梯队地位：${item.role}`}
-              className={ROLE_STYLE[item.role]}
+              className={roleClass(item.role)}
             />
           )}
           {item.theme && (

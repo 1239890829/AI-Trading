@@ -127,13 +127,24 @@ def _snapshot_freshness(svc) -> Freshness:
     )
 
 
-async def compute_market_sentiment(hub, snapshot_service) -> dict:
+async def compute_market_sentiment(
+    hub,
+    snapshot_service,
+    *,
+    limit_up_pool: list | None = None,
+    limit_up_date: date | None = None,
+) -> dict:
     """计算市场情绪。
 
     日期锚定一律走 `trade_calendar`——不用 `date.today()` 加减天数。
     东财涨停池对非交易日静默回退到最近交易日，靠猜日期会得到自指计算结果
     （2026-08-29 事故：把市场误判为「高潮」且置信度"高"）。
 
+    :param limit_up_pool: 调用方**已取到**的当日涨停池（P2-4：picks 管线单次
+        生成内该池被拉 3 次，统一为取一次传参复用）。
+    :param limit_up_date: 上面那个池对应的交易日。**只有与本次锚定的交易日
+        一致时才会复用**——否则宁可多打一次上游，也不能拿别的日子的池子
+        冒充今日（时点错配正是本项目最贵的一类缺陷）。
     :raises CalendarUnavailable: 交易日历或最近两个交易日定位失败
     """
     snap_fresh = _snapshot_freshness(snapshot_service)
@@ -165,9 +176,18 @@ async def compute_market_sentiment(hub, snapshot_service) -> dict:
             log.warning("sentiment break pool %s failed: %s", d, exc)
             return []
 
-    pool_today, pool_yesterday, breaks = await asyncio.gather(
-        _pool(anchor), _pool(prev), _breaks(anchor)
+    # P2-4：调用方已为**同一交易日**取过池子 → 直接复用，本次不再打上游。
+    # 日期不一致时不复用（宁可多打一次，也不能拿别的日子的池子冒充今日）。
+    reused_pool = (
+        limit_up_pool is not None and limit_up_date is not None and limit_up_date == anchor
     )
+    if reused_pool:
+        pool_yesterday, breaks = await asyncio.gather(_pool(prev), _breaks(anchor))
+        pool_today = list(limit_up_pool or [])
+    else:
+        pool_today, pool_yesterday, breaks = await asyncio.gather(
+            _pool(anchor), _pool(prev), _breaks(anchor)
+        )
 
     max_board_prev = max((int(r.consecutive_boards or 1) for r in pool_yesterday), default=0)
 
@@ -203,4 +223,46 @@ async def compute_market_sentiment(hub, snapshot_service) -> dict:
         "pool_today_count": len(pool_today),
         "pool_yesterday_count": len(pool_yesterday),
         "is_last_trade_date_today": anchor == date.today(),
+        # P2-4 的可观测出口：本次是否复用了调用方预取的涨停池（少打一次上游）。
+        "limit_up_pool_reused": reused_pool,
     }
+
+
+# --- 共享情绪缓存槽（P1-3，2026-09-11） -------------------------------------
+# 槽名与 TTL 是**跨模块契约**：谁要读情绪都必须经 get_cached_sentiment()，
+# 不得再自建同义槽。改动这两个常量等于全站情绪刷新节奏变更。
+SENTIMENT_CACHE_NAME = "market.sentiment"
+SENTIMENT_CACHE_TTL = 60.0
+
+
+async def get_cached_sentiment(state, hub) -> dict:
+    """全站唯一的情绪判定入口（共享 60s 缓存槽 `market.sentiment`）。
+
+    **为什么必须合一**：`compute_market_sentiment` 是全项目最重的读路径之一
+    （全市场宽度 + 最近两个交易日涨停池 + 炸板池 + 指标库分位校准）。此前有四个
+    消费方各持一份取数逻辑，同一个 60s 窗口内会重复回源：市场页情绪卡、
+    `/market/entry-checklist` 的相位、猎场相位路由、事件排序上下文；风控引擎
+    更是每次 refresh 都全量重算（P1-3 审计点）。槽合一后，一次计算喂四处。
+
+    **槽里存领域对象，不存展示信封**：存 `compute_market_sentiment` 的原样返回值。
+    此前市场页存 `{data, meta}`、猎场存裸 dict，两边形状不同就只能各开一槽——
+    这正是"缓存槽分裂"的成因。信封是展示层形状，谁需要谁自己包（`meta` 里带
+    `generated_at`，各端点本就该有自己的时间戳）。
+
+    异常不写缓存（TTLCache 契约）：`CalendarUnavailable` 原样抛出，由调用方决定
+    是 503、还是降级为"相位未判定"。**不在此处吞异常**——降级姿势是各消费方的
+    业务决策，不该由缓存层替它们选。
+
+    Args:
+        state: 持有缓存的进程级单例（一律传 `request.app.state` / `app.state`；
+            传别的对象等于另开一个槽，就失去了合一的意义）。
+        hub: QuoteHub 实例。
+    """
+    from app.core.ttl_cache import cache_on
+
+    cache = cache_on(state, SENTIMENT_CACHE_NAME, SENTIMENT_CACHE_TTL, maxsize=1)
+    _, result = await cache.get_or_set(
+        (),
+        lambda: compute_market_sentiment(hub, state.snapshot_service),
+    )
+    return result

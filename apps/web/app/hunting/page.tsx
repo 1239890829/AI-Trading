@@ -195,22 +195,10 @@ function HuntingInner() {
     }
   }, []);
 
-  // 挂载即拉 + 60s 轮询（对齐后端 watcher 节拍；页面不可见暂停、回可见补拉）
-  usePollingFetch(load, null);
-  useEffect(() => {
-    const tick = () => {
-      if (document.visibilityState === "visible") void load();
-    };
-    const timer = setInterval(tick, 60_000);
-    const onVisible = () => {
-      if (document.visibilityState === "visible") void load();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [load]);
+  // 挂载即拉 + 60s 轮询（对齐后端 watcher 节拍）。
+  // 2026-09-11（S2-5）：可见性暂停 + 回可见补拉已内建在 usePollingFetch/useResource 里，
+  // 原先手写的那套 visibilitychange 守卫是重复实现，已删除（两个 effect 合一）。
+  usePollingFetch(load, 60_000);
 
   async function act(kind: "picks" | "pickReview" | "brief" | "beat" | "review") {
     setBusy(kind);
@@ -256,15 +244,12 @@ function HuntingInner() {
   // 猎场两条瀑布流（2026-09-10 用户要求分区，取代 09-09 的单容器混排）：
   // 盘中跟踪在前（实时优先）、盘前选择在后；同股两者都在时只出现在盘中组（防重 key）。
   // 闭环「标签」：已模拟持仓/已真实持仓（持仓状态派生，60s 轮询）
+  // 2026-09-11（S2-5）：原为裸 setInterval，已收编到统一入口（与 workbench 同款重复实现）。
   const [posLabels, setPosLabels] = useState<Record<string, string>>({});
-  useEffect(() => {
-    const load = () => {
-      getPositionLabels().then(setPosLabels).catch(() => {});
-    };
-    load();
-    const t = setInterval(load, 60_000);
-    return () => clearInterval(t);
-  }, []);
+  usePollingFetch(async () => {
+    const m = await getPositionLabels().catch(() => null);
+    if (m) setPosLabels(m);
+  }, 60_000);
 
   // 依赖取**状态对象** data/top（引用稳定），不取派生的 items/topItems：
   // `?? []` 每次渲染都会新建数组引用，放进依赖会让 memo 每轮失效

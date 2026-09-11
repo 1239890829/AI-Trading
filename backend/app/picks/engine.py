@@ -25,6 +25,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.sentiment.engine import ADVERSE_PHASES  # S2-7：相位集合唯一权威
+
+#: 相位 → 情绪面基础分（S2-7：从函数体内联字典上移为模块级命名表）。
+#: 键集必须与 `sentiment.engine.PHASE_ORDER` 全等——缺键会让下方的直接索引
+#: `[market_phase]` 抛 KeyError（内联时是"看不见的"）。由
+#: `tests/test_phase_constants.py::test_pick_engine_phase_score_covers_all_phases` 守卫。
+PHASE_SCORE = {"冰点": 25, "修复": 80, "发酵": 90, "高潮": 70, "分歧": 55, "退潮": 30}
+
 #: 第一版五维权重（历史组合已持久化此表，复盘回溯时仍按它还原当时的口径）。
 #: **新六维权重由 `app.picks.regime.weights_for` 按炒作阶段提供**——
 #: Regime 是权重选择器而非评分维度：业绩驱动期基本面主导，业绩空窗期
@@ -133,7 +141,7 @@ def score_sentiment(
     晋级率处在历史低位时，即使相位看着还行，题材接力也应压分。
     """
     if market_phase:
-        phase_score = {"修复": 80, "发酵": 90, "高潮": 70, "分歧": 55, "退潮": 30, "冰点": 25}[market_phase]
+        phase_score = PHASE_SCORE[market_phase]
         parts = [f"市场阶段「{market_phase}」→ {phase_score} 分"]
         score = phase_score * 0.7  # 有相位：相位主导，题材比例只做微调
     else:
@@ -490,7 +498,7 @@ def classify_failure(
                 "entry_bad",
                 f"按买入范围介入优于追高 {entry['advantage_pct']}pct —— 属买点执行问题，非选股逻辑失效",
             )
-        if market_phase in ("退潮", "冰点"):
+        if market_phase in ADVERSE_PHASES:
             return (
                 "sentiment_misread",
                 f"持有期市场相位「{market_phase}」，系统性下行压过个股逻辑 —— 属情绪误判",

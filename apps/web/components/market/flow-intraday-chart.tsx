@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { fmtYi, signedYi } from "@/lib/format";
 import type { FlowIntradayPoint, FlowTier } from "@/lib/api";
 
@@ -47,19 +47,35 @@ export function hmToSeq(t: string): number {
 export function FlowIntradayChart({ items }: { items: FlowIntradayPoint[] }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
-  const maxAbs = Math.max(
-    1,
-    ...items.flatMap((p) => TIER_META.map((m) => Math.abs(p[m.key] ?? 0))),
+
+  // P0-4（2026-09-11）：纵轴归一 + 5 条 SVG path 只在**数据变化**时重建。
+  //
+  // 原实现把它们放在渲染体内（每次渲染都算）⇒ 悬停时每个 mousemove 都触发
+  // setHoverIdx → 重渲染 → 把「N 点 × 5 档」的字符串整批重拼一遍。更贵的是
+  // 紧接着 React 会把这 5 个 <path> 的 d 写回 DOM → 布局失效 → **下一次
+  // mousemove 的 getBoundingClientRect() 被迫同步重排**（正是审查点名的
+  // "每次 move 重算 5 条 path + 同步读布局"组合，后者是前者的后果）。
+  // memo 后悬停只改导引线与圆点：paths 引用不变 → React 跳过这 5 个节点。
+  const maxAbs = useMemo(
+    () => Math.max(1, ...items.flatMap((p) => TIER_META.map((m) => Math.abs(p[m.key] ?? 0)))),
+    [items]
   );
-  const yPct = (v: number) => 50 - (v / maxAbs) * 46; // viewBox 纵向百分比（中轴 50%）
-  const toPath = (key: keyof FlowTier) =>
-    items
-      .map((p, i) => {
-        const v = p[key];
-        if (v == null) return "";
-        return `${i === 0 || items[i - 1][key] == null ? "M" : "L"}${hmToSeq(p.t).toFixed(1)},${yPct(v).toFixed(1)}`;
-      })
-      .join(" ");
+  const yPct = useCallback((v: number) => 50 - (v / maxAbs) * 46, [maxAbs]); // viewBox 纵向百分比（中轴 50%）
+  const paths = useMemo(
+    () =>
+      TIER_META.map((m) =>
+        items
+          .map((p, i) => {
+            const v = p[m.key];
+            if (v == null) return "";
+            return `${i === 0 || items[i - 1][m.key] == null ? "M" : "L"}${hmToSeq(p.t).toFixed(1)},${yPct(v).toFixed(1)}`;
+          })
+          .join(" ")
+      ),
+    [items, yPct]
+  );
+  // 命中测试用的分钟序：同样按数据 memo（原实现每次 move 都对全表重算 hmToSeq）
+  const seqs = useMemo(() => items.map((p) => hmToSeq(p.t)), [items]);
 
   const onMove = useCallback(
     (e: React.MouseEvent) => {
@@ -68,8 +84,8 @@ export function FlowIntradayChart({ items }: { items: FlowIntradayPoint[] }) {
       const seq = Math.round(((e.clientX - rect.left) / rect.width) * 240);
       let best = 0;
       let bestDist = Infinity;
-      items.forEach((p, i) => {
-        const d = Math.abs(hmToSeq(p.t) - seq);
+      seqs.forEach((s, i) => {
+        const d = Math.abs(s - seq);
         if (d < bestDist) {
           bestDist = d;
           best = i;
@@ -77,7 +93,7 @@ export function FlowIntradayChart({ items }: { items: FlowIntradayPoint[] }) {
       });
       setHoverIdx(best);
     },
-    [items],
+    [seqs],
   );
 
   if (items.length === 0) return null;
@@ -97,8 +113,8 @@ export function FlowIntradayChart({ items }: { items: FlowIntradayPoint[] }) {
           <line x1="60" y1="0" x2="60" y2="100" stroke="currentColor" className="text-zinc-900 dark:text-zinc-800/80" strokeWidth="1" vectorEffect="non-scaling-stroke" />
           <line x1="120" y1="0" x2="120" y2="100" stroke="currentColor" className="text-zinc-900 dark:text-zinc-800/80" strokeWidth="1" vectorEffect="non-scaling-stroke" />
           <line x1="180" y1="0" x2="180" y2="100" stroke="currentColor" className="text-zinc-900 dark:text-zinc-800/80" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-          {TIER_META.map((m) => (
-            <path key={m.key} d={toPath(m.key)} fill="none" stroke={m.color} strokeWidth={m.key === "main" ? 2 : 1.1} opacity={m.key === "main" ? 1 : 0.8} vectorEffect="non-scaling-stroke" />
+          {TIER_META.map((m, i) => (
+            <path key={m.key} d={paths[i]} fill="none" stroke={m.color} strokeWidth={m.key === "main" ? 2 : 1.1} opacity={m.key === "main" ? 1 : 0.8} vectorEffect="non-scaling-stroke" />
           ))}
         </svg>
 

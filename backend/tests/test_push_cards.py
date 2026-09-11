@@ -62,3 +62,34 @@ def test_buy_point_card_gate_day_copy_emphasizes_follow_not_buy():
                                 {"stand_aside": True, "level": "strong"}, show=datetime(2026, 9, 8))
     body = json.dumps(card, ensure_ascii=False)
     assert "不给买入范围" in body and "影子持仓" in body
+
+
+def test_tri_labels_match_frontend():
+    """三态文案表必须与前端 `lib/format.ts` 的 `TRI_LABELS` **逐键逐值一致**（S2-9）。
+
+    这是**防漂移机制**，不是一次性检查。历史缺陷正是两表漂移：后端有
+    `"null" → "—"`，前端漏了该键 ⇒ 同一份数据在飞书卡片显示「—」、在界面直接
+    打出 `null`（`TRI_LABELS[s] ?? s` 把未登记字面量原样透出）。
+    任一端加键/删键/改文案，这里立刻失败。
+    """
+    import re
+    from pathlib import Path
+
+    from app.picks.push_cards import _TRI_LABELS
+
+    src = (Path(__file__).resolve().parents[2] / "apps/web/lib/format.ts").read_text(encoding="utf-8")
+    block = re.search(r"const TRI_LABELS[^=]*=\s*\{(.*?)\}", src, re.S)
+    assert block, "未找到前端 TRI_LABELS（结构变了，同步更新本测试）"
+    frontend = dict(re.findall(r'(\w+)\s*:\s*"([^"]*)"', block.group(1)))
+
+    only_backend = sorted(set(_TRI_LABELS) - set(frontend))
+    only_frontend = sorted(set(frontend) - set(_TRI_LABELS))
+    differing = {
+        k: (frontend[k], _TRI_LABELS[k])
+        for k in set(frontend) & set(_TRI_LABELS)
+        if frontend[k] != _TRI_LABELS[k]
+    }
+    assert frontend == _TRI_LABELS, (
+        f"三态文案前后端不一致 —— 仅后端有：{only_backend}；仅前端有：{only_frontend}；"
+        f"值不同（前端, 后端）：{differing}"
+    )

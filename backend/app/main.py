@@ -157,7 +157,12 @@ async def lifespan(app: FastAPI):
     # --- 全市场选股器（Phase 5）：快照截面过滤 + TDX 日K 技术评分卡 ---
 
     # --- 风险引擎（Phase 5）：市场状态 + 仓位参数 + 订单预检 ---
-    risk_engine = RiskEngine(hub=hub, snapshot_service=snapshot_service, session_factory=get_session_factory())
+    risk_engine = RiskEngine(
+        hub=hub,
+        snapshot_service=snapshot_service,
+        session_factory=get_session_factory(),
+        app_state=app.state,  # P1-3：情绪判定并入全站共享 60s 槽
+    )
     app.state.risk_engine = risk_engine
 
     # --- 题材字典/官方成分（linkage-design §3 T1）：fuyao 官方目录与成分同步 ---

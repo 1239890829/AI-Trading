@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, memo, useMemo, useRef, useState } from "react";
 import { MinuteChart } from "@/components/minute-chart";
 import { KlineChartPro } from "@/components/kline-chart-pro";
 import { priceLimitPct } from "@/lib/price-limit";
@@ -8,7 +8,8 @@ import { INDEX_DEFAULT_RIGHT_TAB, INDEX_RIGHT_TABS, rightTabsFor, type DetailRig
 import { Panel } from "@/components/panel";
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
-import { useQuoteStream, STREAM_STATUS_LABEL, STREAM_ABNORMAL } from "@/hooks/use-quote-stream";
+import { useQuoteStream, STREAM_STATUS_LABEL, STREAM_ABNORMAL, type StreamStatus } from "@/hooks/use-quote-stream";
+import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { analyze } from "@/lib/technical-analysis";
 import { buildEventMarks, buildMinuteNewsEvents } from "@/lib/event-markers";
 import { mergeQuoteIntoBars, mergeQuoteIntoMinutes } from "@/lib/kline-live";
@@ -99,11 +100,38 @@ export interface StockDetailTabs {
   rightTab?: RightTab;
 }
 
-export function StockDetailPanel({
+/** P1-5（2026-09-11）：上游已订阅当前标的时，把行情与连接态传下来。
+ *
+ *  背景：workbench 的 `useQuoteStream` 订阅集**已含 activeSymbol**，而详情面板此前
+ *  又为同一只股票自建一条 WS ⇒ 同一标的被两条连接订阅；且面板随 `key={activeSymbol}`
+ *  重挂载，每次切股都要关旧建新，中间有一段行情空窗。
+ *
+ *  两者都传时面板不再建连接；都不传时保持原行为（自带连接）——便于独立嵌入。
+ */
+export interface StockDetailStreamProps {
+  liveQuote?: Quote;
+  streamStatus?: StreamStatus;
+}
+
+/** 空订阅集（引用恒定；`useQuoteStream([])` 的 hasSymbols=false ⇒ 不建连接）。 */
+const NO_SYMBOLS: string[] = [];
+
+/**
+ * 个股详情面板（含 K 线/分时/盘口/逐笔/资金/财务多页签）。
+ *
+ * P1-1（2026-09-11）：包 `memo`。这是工作台里**最重的子树**（图表 + 多张表），
+ * 而它的 props 全是原始值（symbol / chartTab / rightTab）——工作台因行情 3s tick
+ * 重渲染时，这三个值不变 ⇒ 整棵子树可跳过。面板自身的行情更新来自它**自己**的
+ * `useQuoteStream` 实例与内部 state，不依赖父级重渲染。
+ * （切股走 `key={activeSymbol}` 重挂载，与 memo 不冲突。）
+ */
+export const StockDetailPanel = memo(function StockDetailPanel({
   symbol,
   chartTab: chartTabInit,
   rightTab: rightTabInit,
-}: { symbol: string } & StockDetailTabs) {
+  liveQuote: liveQuoteProp,
+  streamStatus: streamStatusProp,
+}: { symbol: string } & StockDetailTabs & StockDetailStreamProps) {
   const [chartTab, setChartTab] = useState<ChartTab>(chartTabInit ?? "kline");
   const [rightTab, setRightTab] = useState<RightTab>(rightTabInit ?? "book");
   // 深链跟随：同一只股票内（面板未重挂载）外部改了 ct/rt 也要生效。
@@ -130,7 +158,12 @@ export function StockDetailPanel({
     // localStorage 恢复必须在 effect 里：渲染期读会把值带进首次 commit，
     // 与 SSR 输出产生 hydration mismatch（宽度类 inline style 必比对）。
     const saved = Number(localStorage.getItem("ashare-right-w"));
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    // ⚠️ 本行原有一条 `eslint-disable-next-line react-hooks/set-state-in-effect`。
+    // 2026-09-11（P1-1）本组件包上 `memo()` 后，React Compiler 的该规则**不再下探
+    // 组件体**——实测同一文件、同一行：不包 memo 时规则照常报（指令被使用），
+    // 包了 memo 后指令变成 "unused directive"（0-warn 门禁会拦）。
+    // 故删除指令。**代价**：本组件体内不再受 set-state-in-effect 约束，
+    // 后续改本组件时必须人工守住「不在 effect 体内同步 setState」。
     if (saved >= 260 && saved <= 480) setRightW(saved);
     // 右列收起状态同样持久化（字符串比较，避免 hydration 差异）
     if (localStorage.getItem("ashare-right-collapsed") === "1") setRightCollapsed(true);
@@ -200,7 +233,13 @@ export function StockDetailPanel({
   // throttleMs=3000（审查 F5/R6）：详情面板价格闪烁与列表侧同口径——WS 仍 1Hz
   // 全量接收（内部不丢数据），对外状态 3s 应用一次。1Hz PriceFlash 是每秒红绿
   // 闪的体感噪音源（列表修过、详情漏了的不对称）。
-  const { quotes, status: streamStatus } = useQuoteStream([symbol], { throttleMs: 3000 });
+  //
+  // P1-5（2026-09-11）：上游传了 liveQuote 就不再自建 WS（见 StockDetailStreamProps）。
+  // 传空订阅集即可——`useQuoteStream` 在 hasSymbols=false 时直接 return，不建连接。
+  const own = useQuoteStream(liveQuoteProp ? NO_SYMBOLS : [symbol], { throttleMs: 3000 });
+  const streamStatus = streamStatusProp ?? own.status;
+  // 行情单一来源：上游推送优先，否则用自带连接的结果
+  const live = liveQuoteProp ?? own.quotes[symbol];
   // connecting 防抖（2026-09-09）：WS 秒连场景下"● 连接中"只闪现毫秒级——延迟 2s
   // 才认为真异常；期间离开 connecting 态则取消。
   const [connectingDebounced, setConnectingDebounced] = useState(false);
@@ -216,7 +255,7 @@ export function StockDetailPanel({
   }, [streamStatus]);
   // WS 推送 → 渲染期合并进 quote（adjust-state 模式）：live 引用每拍必变，
   // 哨兵 appliedLive 保证同一帧只合并一次，语义与原 effect 版完全等价。
-  const live = quotes[symbol];
+  // （live 的来源见上方 P1-5：上游 prop 优先，否则自带连接）
   const [appliedLive, setAppliedLive] = useState<Quote | null>(null);
   if (live && live !== appliedLive) {
     setAppliedLive(live);
@@ -240,10 +279,9 @@ export function StockDetailPanel({
 
 
   // 估值补充：ths 快照无 PE/PB/市值，每 30s 从腾讯源低频补齐（价格仍以 WS 为准）
-  useEffect(() => {
-    if (!symbol) return;
-    let alive = true;
-    const pull = async () => {
+  // 2026-09-11（S2-5）：裸 setInterval → 统一入口（获得可见性暂停 + 盘外降频）。
+  usePollingFetch(
+    async () => {
       try {
         const q = await getQuote(symbol, "tencent");
         setQuote((prev) => {
@@ -266,46 +304,36 @@ export function StockDetailPanel({
         // 已有数据（WS 在推）保持不变——30s 轮询偶发失败不该抹掉实时价
         setQuote((prev) => (prev === undefined ? null : prev));
       }
-    };
-    void pull();
-    const t = setInterval(pull, 30000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-  }, [symbol]);
+    },
+    30_000,
+    symbol,
+    { enabled: !!symbol }
+  );
 
+  // 模拟账户数据只服务「模拟交易」页签（O2）：不在该页签时不轮询不拉取——
+  // `enabled` 表达该门控：切入页签时立即拉一次；挂单成交等状态变化由
+  // paper-changed 事件兜底（下单/撤单/重置都会派发）。
+  // 轮询 10s → 30s（费率预估与持仓盈亏对实时性不敏感，原 10s 属过密）。
+  // 2026-09-11（S2-5）：裸 setInterval → 统一入口。
+  const loadPaper = useCallback(async () => {
+    try {
+      const [acc, positions, orders, fs] = await Promise.all([
+        getPaperAccount(),
+        getPaperPositions(),
+        getPaperOrders(),
+        getPaperFills(symbol),
+      ]);
+      setPaper({ acc, positions, orders });
+      setFills(fs);
+    } catch {
+      setPaper(null); // 拉取失败=确认不可用（渲染提示），与"加载中"分离
+    }
+  }, [symbol]);
+  // 手动刷新入口（下单/撤单后 onPaperChanged 触发）：保持 ref 指向最新闭包
   useEffect(() => {
-    // 模拟账户数据只服务「模拟交易」页签（O2）：不在该页签时不轮询不拉取——
-    // 切入页签时 effect 重跑立即 load 一次；挂单成交等状态变化由
-    // paper-changed 事件兜底（下单/撤单/重置都会派发）。
-    // 轮询 10s → 30s（费率预估与持仓盈亏对实时性不敏感，原 10s 属过密）。
-    if (!symbol || rightTab !== "trade") return;
-    let alive = true;
-    const loadPaper = async () => {
-      try {
-        const [acc, positions, orders, fs] = await Promise.all([
-          getPaperAccount(),
-          getPaperPositions(),
-          getPaperOrders(),
-          getPaperFills(symbol),
-        ]);
-        if (alive) {
-          setPaper({ acc, positions, orders });
-          setFills(fs);
-        }
-      } catch {
-        if (alive) setPaper(null); // 拉取失败=确认不可用（渲染提示），与"加载中"分离
-      }
-    };
     loadPaperRef.current = loadPaper;
-    void loadPaper();
-    const t = setInterval(loadPaper, 30000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-  }, [symbol, rightTab]);
+  }, [loadPaper]);
+  usePollingFetch(loadPaper, 30_000, symbol, { enabled: !!symbol && rightTab === "trade" });
 
   useEffect(() => {
     let alive = true;
@@ -446,72 +474,65 @@ export function StockDetailPanel({
   // ① K 线当日 bar 的秒级合成：渲染期派生（外部状态订阅的官方推荐模式），
   //    WS quote 更新 → 最后一根 bar 实时跟进；价格未动时 mergeQuoteIntoBars
   //    返回 null → 引用不变 → 下游图表不重渲染。
-  const liveQuote = quotes[symbol];
+  const liveQuote = live;
   const displayBars = useMemo(() => mergeQuoteIntoBars(bars, liveQuote) ?? bars, [bars, liveQuote]);
   // ①' 分时右端点秒级合成：同 K 线思路，WS quote 跟进最后一根分钟点
   //    （价格+累计量），与列表/K线保持同一 1s 节奏，不再干等 60s REST 校准
   const displayMinutes = useMemo(() => mergeQuoteIntoMinutes(minutes, liveQuote) ?? minutes, [minutes, liveQuote]);
   // ② 图表 60s REST 校准（评审 O2：绑定 chartTab——不在 K线/分时 tab 时不校准，
-  //    切入 tab 时 effect 重跑先立即拉一次再启轮询）
-  useEffect(() => {
-    if (!symbol) return;
-    const timers: ReturnType<typeof setInterval>[] = [];
-    if (chartTab === "kline") {
-      const pull = () => {
-        void getKlinePayload(symbol, "1d", 120)
-          .then((p) => {
-            if (p.bars.length === 0) return;
-            setBars(p.bars);
-            setTradingStatus(p.trading_status);
-          })
-          .catch(() => {});
-      };
-      void pull();
-      timers.push(setInterval(pull, 60_000));
-    }
-    if (chartTab === "minute") {
-      const pull = () => {
-        void getMinuteLineWithBaseline(symbol)
-          .then((r) => {
-            setMinutes(r.points);
-            // 基线内容守卫：数组内容没变就保留旧引用——vrBaseline 是
-            // MinuteChart 创建 effect 的依赖，每 60s 换新引用会把整图
-            // 销毁重建一次（悬停中十字线丢失 + 图表闪跳）。
-            setVrBaseline((prev) => {
-              const next = r.vr_baseline_5m;
-              if (prev && next && prev.length === next.length && prev.every((v, i) => v === next[i])) return prev;
-              return next;
-            });
-          })
-          .catch(() => {});
-      };
-      void pull();
-      timers.push(setInterval(pull, 60_000));
-    }
-    return () => timers.forEach((t) => clearInterval(t));
-  }, [symbol, chartTab]);
+  //    切入 tab 时立即拉一次再启轮询）。2026-09-11（S2-5）：裸 setInterval → 统一入口，
+  //    原「两个 if + timers 数组 + 手动清理」的样板由 enabled 表达。
+  usePollingFetch(
+    async () => {
+      const p = await getKlinePayload(symbol, "1d", 120).catch(() => null);
+      if (!p || p.bars.length === 0) return;
+      setBars(p.bars);
+      setTradingStatus(p.trading_status);
+    },
+    60_000,
+    symbol,
+    { enabled: !!symbol && chartTab === "kline" }
+  );
+  usePollingFetch(
+    async () => {
+      const r = await getMinuteLineWithBaseline(symbol).catch(() => null);
+      if (!r) return;
+      setMinutes(r.points);
+      // 基线内容守卫：数组内容没变就保留旧引用——vrBaseline 是
+      // MinuteChart 创建 effect 的依赖，每 60s 换新引用会把整图
+      // 销毁重建一次（悬停中十字线丢失 + 图表闪跳）。
+      setVrBaseline((prev) => {
+        const next = r.vr_baseline_5m;
+        if (prev && next && prev.length === next.length && prev.every((v, i) => v === next[i])) return prev;
+        return next;
+      });
+    },
+    60_000,
+    symbol,
+    { enabled: !!symbol && chartTab === "minute" }
+  );
 
   // ④ 盘口 5s / 逐笔 10s 轮询（评审 O2：绑定 rightTab——各自页签激活才轮询，
   //    切入时立即拉一次；失败静默保留上一次快照；指数无此数据源跳过）
-  useEffect(() => {
-    if (!symbol || isIndex) return;
-    const timers: ReturnType<typeof setInterval>[] = [];
-    if (rightTab === "book") {
-      const pull = () => {
-        void getOrderBook(symbol).then(setBook).catch(() => {});
-      };
-      void pull();
-      timers.push(setInterval(pull, 5_000));
-    }
-    if (rightTab === "trades") {
-      const pull = () => {
-        void getTrades(symbol, 30).then(setTrades).catch(() => {});
-      };
-      void pull();
-      timers.push(setInterval(pull, 10_000));
-    }
-    return () => timers.forEach((t) => clearInterval(t));
-  }, [symbol, isIndex, rightTab]);
+  //    2026-09-11（S2-5）：裸 setInterval → 统一入口。
+  usePollingFetch(
+    async () => {
+      const b = await getOrderBook(symbol).catch(() => null);
+      if (b) setBook(b);
+    },
+    5_000,
+    symbol,
+    { enabled: !!symbol && !isIndex && rightTab === "book" }
+  );
+  usePollingFetch(
+    async () => {
+      const t = await getTrades(symbol, 30).catch(() => null);
+      if (t) setTrades(t);
+    },
+    10_000,
+    symbol,
+    { enabled: !!symbol && !isIndex && rightTab === "trades" }
+  );
 
   async function add() {
     if (isIndex) return; // 指数不入自选（sh000001 不是合法自选股代码）
@@ -920,7 +941,7 @@ export function StockDetailPanel({
       </div>
     </div>
   );
-}
+});
 
 async function getWatchlistSymbols(): Promise<string[]> {
   try {

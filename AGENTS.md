@@ -30,24 +30,27 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 1925 项（1923 passed / 2 skipped）· 147 文件（09-11 实测）
-# ⚠️ 耗时强依赖「8000 是否在跑」：后端服务停着 ~67s，服务在跑时 ~330s（5 倍）。
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2187 项（2127 passed / 60 skipped）· 152 文件（09-11 实测）
+# ⚠️ 耗时强依赖「8000 是否在跑」：后端服务停着 ~64s，服务在跑时 ~330s（5 倍）。
 # 原因是常驻调度与测试同时抢 SQLite/网络；**报耗时必须说明前提**，否则会被当成回归。
 # ⚠️ `--basetemp` 不可省：默认临时目录会被沙箱拒绝创建（EEXIST → PermissionError），
 # 表现为几十个 E 而非 F，极易误判成代码回归（2026-09-11 踩，见 kb/03）。
+# ⚠️ **跳过数 2 → 60 是新增守卫的参数化产物，不是覆盖率丢失**：其中 58 项来自
+# `test_import_lint.py:78`「装配层/其他：不受本规则约束」（分层规则表按模块参数化，
+# 非业务层模块显式跳过），另 2 项为既有的「指数无涨跌停概念」后端不适用项。
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
 cd apps/web && npx eslint .                       # 0 error / 0 warn（P1-27 已清零；余 1 处 C 类显式豁免）
-cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 342 项 / 45 文件（09-11 实测）
+cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 380 项 / 50 文件（09-11 实测）
 cd backend && .venv/bin/python -m pyflakes app tests scripts   # 0（scripts 已纳入口径，P2-18）
 python3 scripts/doc-health.py                    # 文档体检：0 待处理（收尾必跑，见 kb/07 §8.2）
 # 生产构建前必须先停 dev server（.next 冲突已踩两次）：
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 1925 项（1923 passed / 2 skipped）· 147 文件、前端 342 项 / 45 文件、eslint **0 error / 0 warn**
+> **门禁口径**：后端 2187 项（2127 passed / 60 skipped）· 152 文件、前端 380 项 / 50 文件、eslint **0 error / 0 warn**
 > （25 条回归已按 P1-27 清零；仅 notification-drawer 保留 1 处带理由的 C 类豁免）。
 > **测试规模与告警数同属「会失真的状态标注」**——改动后要实测回填，不要沿用旧数字
-> （此前「≤1 warn / 后端 580 / 前端 97 / 219 / 257 / 263」均已被后续改动追过，教训见 `docs/retro-and-gaps.md` §七）。
+> （此前「≤1 warn / 后端 580 / 前端 97 / 219 / 257 / 263 / 342 / 1925」均已被后续改动追过，教训见 `docs/retro-and-gaps.md` §七）。
 > **加测试文件就会让这里过期**，改测试后请顺手回填。
 
 **发布前额外做一次接口载荷体检**（plan-review 三.7，2026-09-01 纳入）：
@@ -114,6 +117,24 @@ screener 彻底删除、消融验证启动（`07f29a7`/`c38cb05`）。
 - **文档治理**：09-02 调研的十项候选因子**逐项复核销账**（6 已完成/等价、5 数据阻塞、0 数据具备却未实现；
   核查表在 `docs/summary/factor-system.md §5`）；归档事故教训入 **KB-ENG-36**
   （可执行清单压成一句概括 = 丢失 N 个待办，恢复只能回 git 历史）
+
+**09-11 已完成**（架构改进计划 阶段 0/1/2 全量交付，逐项证据见 `docs/retro-and-gaps.md` §6.5）：
+- **阶段 0**（S1-1 / S1-2 / S1-4 / S1-5 / S1-6 ＋ P0-2）：模拟盘 scope 隔离 + 超卖拒单 ·
+  持仓三态读取 + 哨兵 · **缺价即拒单**（红线 5 的静默失效修复）· 前端列表接口类型谎言 20 处 ·
+  **涨跌停幅度实测两处漂移**（302 段 / 88 段）· 题材强度 N+1 **391 查库 541ms → 2 查库 142ms**
+- **阶段 1**（S2-1 / S2-2 / S2-3）：`Freshness` 契约（失败有类型）· `TaskRegistry`
+  （26 常驻任务收敛为**一份声明**，停机 66 行 → 1 行，`GET /api/system/schedulers`）·
+  四源链**请求级预算**（`REQUEST_BUDGET_SECONDS=12`，按失败进熔断）
+- **阶段 2**（S2-4 / S2-5 / S2-6 / S2-7 / S2-9 / S2-10 ＋ P0-3 / P0-4 / P1-1~P1-6）：
+  **管线抽离**（`services/picks_pipeline.py`，`picks.py` 1161 → 367 行，反向 import 与
+  伪造 `SimpleNamespace` 全解）· **`useResource`**（三态 + 可见性暂停 + 盘外降频封顶 120s，
+  裸 `setInterval` **实收编 10 处**）· **`PanelBoundary`**（集成进 `Panel` body，
+  一处改动覆盖全站）· **相位常量 9 处副本收编**（并实测抓出「启动」误当市场相位导致
+  **「修复」相位从未被覆盖**两处真缺陷）· 角色配色合并为 `lib/role-style.ts` 一份 ·
+  三态文案补 `null` 键 + 前后端逐键守卫 · relay-rank **并发化 8.0x**（2044.7ms → 256.2ms）·
+  情绪**缓存槽合一**（5 消费方 1 次计算）· 同源双取数收口 · 4 处 `memo` · WS 连接复用
+- **唯一未做**：**S2-8 北京时间收敛**——已裁定**拆为阶段 2.5**（改动面是阶段 2 其余项之和，
+  且每处 `date.today()` 携带交易日归属语义，接近「口径变更」红线，需逐处核对）
 
 | 阶段 | 状态 |
 |---|---|

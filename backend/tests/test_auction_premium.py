@@ -181,7 +181,8 @@ def test_route_auction_premium(monkeypatch: pytest.MonkeyPatch):
     async def fake_default_trade_date(_hub):
         return _ASOF
 
-    monkeypatch.setattr(market_route, "_default_trade_date_async", fake_default_trade_date)
+    # S2-4：实现已上移到 services/market_snapshot，打桩点随之改到导入方模块名
+    monkeypatch.setattr(market_route, "default_trade_date", fake_default_trade_date)
 
     app = FastAPI()
     app.include_router(market_route.router, prefix="/api")

@@ -13,10 +13,16 @@
 
 from __future__ import annotations
 
+# S2-7：相位集合唯一权威在 sentiment 引擎。保留本地名（它们各自承载不同语义，
+# 见下），但取值必须来自同一处——此前两个文件各写一份字面量，任一处漏相位就是
+# 「闸门撤区间、仓位引擎照给分」的交易信号级不一致。
+from app.sentiment.engine import ADVERSE_PHASES as _ADVERSE
+from app.sentiment.engine import SEVERE_PHASES as _SEVERE
+
 #: 情绪相位直接触发（这两个相位下赚钱效应最差）
-WEAK_PHASES = ("退潮", "冰点")
+WEAK_PHASES = _ADVERSE
 #: 该相位直接升级为强预警（市场几乎无机会）
-SEVERE_PHASES = ("冰点",)
+SEVERE_PHASES = _SEVERE
 
 #: 涨停晋级率下限：首板→二板的成功率低于此值，说明接力没人接。
 #: ⚠️ **仅在历史分位不可用时兜底**（见 PROMO_PCTL_FLOOR）。
@@ -154,7 +160,7 @@ def evaluate_stand_aside(
 
 
 #: 会**撤除买入范围**的相位（分档口径，2026-09-10 用户拍板）：判定见 should_strip_buy_range。
-STRIP_PHASES = ("退潮", "冰点")
+STRIP_PHASES = _ADVERSE
 #: 撤除买入范围的理由条数下限（多条叠加 = 独立信号相互印证，不再是单点擦线）
 STRIP_MIN_REASONS = 2
 

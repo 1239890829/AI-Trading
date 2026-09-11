@@ -20,6 +20,7 @@ from sqlalchemy import select
 from app.core.db import get_session_factory
 from app.models.agent import AgentExperiment
 from app.picks.signal_health import collect_signal_health
+from app.sentiment.engine import PHASE_ORDER  # S2-7：相位集合唯一权威
 
 log = logging.getLogger(__name__)
 
@@ -198,8 +199,12 @@ def list_experiments(limit: int = 30, session_factory=None) -> list[dict]:
 SHADOW_L1_MAX = 0.25
 #: 维度灭声阈值：影子权重中任一维度低于此值即拒绝（防止某维度被关掉）
 SHADOW_FLOOR = 0.05
-#: 偏移生效的相位集合（影子对照逐相位检查）
-_SHADOW_PHASES = ("启动", "发酵", "高潮", "分歧", "退潮", "冰点")
+#: 偏移生效的相位集合（影子对照逐相位检查）。
+# S2-7 修正（2026-09-11）：原为字面量 `("启动", "发酵", "高潮", "分歧", "退潮", "冰点")`——
+# 含**题材阶段**「启动」（非市场相位，该轮循环恒不命中），却**漏了市场相位「修复」**。
+# 后果：修复期的影子偏移**从未被校验过**就进了转正流程。
+# 现直接取 `PHASE_ORDER`：相位集合只有一处定义，新增相位自动纳入校验（漏检不可再发生）。
+_SHADOW_PHASES = tuple(PHASE_ORDER)
 
 
 def evaluate_and_promote_shadow(session_factory=None) -> list[dict]:

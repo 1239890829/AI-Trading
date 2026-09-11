@@ -7,11 +7,12 @@ import { IndexCards } from "@/components/index-cards";
 import { StockDetailPanel, type ChartTab, type RightTab } from "@/components/stock-detail";
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
-import { Sparkline } from "@/components/sparkline";
+import { Sparkline, NO_CLOSES } from "@/components/sparkline";
 import { PickDetailModal, type PickDetailTarget } from "@/components/picks/pick-detail-modal";
 import { useQuoteStream, STREAM_STATUS_LABEL } from "@/hooks/use-quote-stream";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { PageSkeletonFallback, Skeleton } from "@/components/ui/loading";
+import { PanelBoundary } from "@/components/ui/panel-boundary";
 import { useRealPositions } from "@/hooks/use-real-positions";
 import {
   addToWatchlist,
@@ -116,13 +117,23 @@ function WorkbenchInner() {
     }
   }
 
+  // 渲染兜底：selected 尚未就绪（首帧/回退解析中）时保持原默认标的，避免空 symbol 取数。
+  // （P1-5 起提到订阅之前——订阅集需要并入 activeSymbol）
+  const activeSymbol = selected || "600519";
+
   // 列表消费侧 3s 节流（2026-09-02 用户反馈：1Hz 刷新整表闪烁跳动）。
   // 详情面板是独立 hook 实例（不传 throttleMs），K线/分时合成不受影响。
   // 动态分组标的并入订阅：精选/跟踪标的的行情与自选同源同节奏。
-  const { quotes, status } = useQuoteStream(
-    [...new Set([...symbols, ...realSymbols, ...picksSymbols, ...topSymbols])],
-    { throttleMs: 3000 },
+  //
+  // P1-5（2026-09-11）：订阅集**显式并入 activeSymbol**，详情面板因此可以复用这条
+  // 连接（props 下传），不再为同一只股票另开一条 WS、也不再因切股重挂载而断连。
+  // activeSymbol 可能是深链/搜索进来的、不在任何分组里的标的——必须显式加入，
+  // 否则详情面板会拿不到行情。切股只发 subscribe 消息，不重连（见 useQuoteStream 头注）。
+  const streamSymbols = useMemo(
+    () => [...new Set([...symbols, ...realSymbols, ...picksSymbols, ...topSymbols, activeSymbol])],
+    [symbols, realSymbols, picksSymbols, topSymbols, activeSymbol],
   );
+  const { quotes, status } = useQuoteStream(streamSymbols, { throttleMs: 3000 });
   const [extra, setExtra] = useState<Record<string, Quote>>({});
   // WS 每 5s tick 全量替换 quotes：merged/列表/spark 查找都必须 memo 化，
   // 否则每次 tick 触发整列表 O(n²) 重算（评审 F2）
@@ -134,9 +145,6 @@ function WorkbenchInner() {
   useEffect(() => {
     if (selected) window.sessionStorage.setItem(LAST_SYMBOL_KEY, selected);
   }, [selected]);
-
-  // 渲染兜底：selected 尚未就绪（首帧/回退解析中）时保持原默认标的，避免空 symbol 取数
-  const activeSymbol = selected || "600519";
 
   // 页内切股：URL 是唯一真相源；from 参数（来源页，见 lib/routing.workbenchUrlWithBack）
   // 原样保留——用户切了几只股后「← 返回来源页」入口不能消失
@@ -318,15 +326,12 @@ function WorkbenchInner() {
     return out;
   }, [topSymbols, picksSymbols, merged]);
   // 闭环「标签」（2026-09-09）：已模拟持仓/已真实持仓（60s 轮询派生接口）
+  // 2026-09-11（S2-5）：原为裸 setInterval，绕过统一入口 ⇒ 无可见性暂停、无盘外降频，已收编。
   const [posLabels, setPosLabels] = useState<Record<string, string>>({});
-  useEffect(() => {
-    const load = () => {
-      getPositionLabels().then(setPosLabels).catch(() => {});
-    };
-    load();
-    const t = setInterval(load, 60_000);
-    return () => clearInterval(t);
-  }, []);
+  usePollingFetch(async () => {
+    const m = await getPositionLabels().catch(() => null);
+    if (m) setPosLabels(m); // 失败保持旧值（标签是低频派生数据，偶发失败不该清空）
+  }, 60_000);
 
   const pickInfoBySymbol = useMemo(() => new Map(picksItems.map((i) => [i.symbol, i])), [picksItems]);
   const topInfoBySymbol = useMemo(() => new Map(topItems.map((i) => [i.symbol, i])), [topItems]);
@@ -754,7 +759,7 @@ function WorkbenchInner() {
                         </select>
                       ) : (
                         <Sparkline
-                          closes={sparkBySymbol.get(q.symbol) ?? []}
+                          closes={sparkBySymbol.get(q.symbol) ?? NO_CLOSES}
                           up={q.change_pct == null ? undefined : q.change_pct >= 0}
                           width={44}
                         />
@@ -808,13 +813,26 @@ function WorkbenchInner() {
         </div>
 
         {/* key 随代码变化：切股时整面板重挂载，所有内部状态归零——
-            否则 useQuoteStream 订阅切换的窗口期里会残留上一只股票的行情 */}
-        <StockDetailPanel
-          key={activeSymbol}
-          symbol={activeSymbol}
-          chartTab={chartTab}
-          rightTab={rightTab}
-        />
+            否则 useQuoteStream 订阅切换的窗口期里会残留上一只股票的行情。
+
+            S2-6：key 挂在**边界**上（不是挂在 StockDetailPanel 上）。详情面板顶部
+            的行情头与图表区不在任何 Panel 内，抛错同样会掀掉整页；而错误边界一旦
+            进入错误态不会因为子元素变化自动恢复——key 挂在内层的话，切股重挂了
+            子元素、边界却还卡在错误卡上，把"局部降级"变成"这个位置永久不可用"。
+            挂在外层则切股 = 整块重挂载，边界随之归零，与原语义完全一致。
+
+            刻意**不传 className**：边界健康时 `render()` 直接返回 children，不产生
+            额外 DOM 节点 ⇒ 网格项仍是 StockDetailPanel 自己的 <section>，高度链
+            与改动前逐字一致（全高契约见 components/panel.tsx 头注）。 */}
+        <PanelBoundary key={activeSymbol} label="个股详情">
+          <StockDetailPanel
+            symbol={activeSymbol}
+            chartTab={chartTab}
+            rightTab={rightTab}
+            liveQuote={merged[activeSymbol]}
+            streamStatus={status}
+          />
+        </PanelBoundary>
       </div>
 
       {/* 选股详情弹窗（每日精选/盘中跟踪行「详情」按钮） */}

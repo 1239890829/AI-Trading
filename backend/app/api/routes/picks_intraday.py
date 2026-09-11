@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.deps import require_write_token
 from app.core.config import settings
+from app.services.market_snapshot import default_trade_date, load_snapshot_map
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/picks", tags=["picks-intraday"])
@@ -197,7 +198,6 @@ async def _build_opportunities(
     from app.services.theme_service import _pick_provider, build_theme_board
 
     hub = request.app.state.hub
-    from app.api.routes.market import _load_snapshot_map
 
     cache = cache_on(request.app.state, "picks.opportunities", 60, maxsize=4)
     key = (trade_date, top_themes, stocks_per_theme)
@@ -207,7 +207,7 @@ async def _build_opportunities(
         _attach_risk_to_themes(payload["data"], _snapshot_by(request))
         return payload
 
-    snapshot_map = await asyncio.to_thread(_load_snapshot_map, request, trade_date)
+    snapshot_map = await asyncio.to_thread(load_snapshot_map, request.app.state.snapshot_service, trade_date)
     board = await build_theme_board(hub.provider, trade_date, snapshot_map=snapshot_map)
 
     hot_rows: list[dict] = []
@@ -370,16 +370,27 @@ async def relay_rank(request: Request) -> dict:
     """接力质量排序（P1-6，2026-09-09）：今日涨停池按 kmid2/max20 排序 → 次日
     接力候选顺序参考。数据支撑：P1-3 池内条件 IC（kmid2 +0.060、max20 +0.052，
     可执行 lag1 口径 1466+ 交易日样本）。红线：只排序+依据，非买卖信号。
+
+    P0-3（2026-09-11）：加 300s 缓存。该结果按**日**变化（池 + 日 K 都是日频），
+    而前端按分钟级轮询 ⇒ 原先每轮都把整池逐只日 K 重拉一遍。缓存键含 trade_date，
+    跨日自动失效，不会把昨天榜挂到今天。计算本体也已由串行改有界并发（见 relay_rank.py）。
     """
+    from app.core.ttl_cache import cache_on
     from app.market.trading_status import beijing_now
     from app.picks.relay_rank import compute_relay_rank
 
     hub = request.app.state.hub
     today = beijing_now().date()
-    items = await compute_relay_rank(hub.provider, today)
-    return {"data": {"trade_date": today.isoformat(), "items": items,
-                     "basis": "kmid2=当日实体/全距(封得实)；max20=20日最高/现价(近新高)。池内 T+5 RankIC 实证为正（P1-3）"},
-            "meta": {}}
+
+    async def build() -> dict:
+        items = await compute_relay_rank(hub.provider, today)
+        return {"data": {"trade_date": today.isoformat(), "items": items,
+                         "basis": "kmid2=当日实体/全距(封得实)；max20=20日最高/现价(近新高)。池内 T+5 RankIC 实证为正（P1-3）"},
+                "meta": {}}
+
+    cache = cache_on(request.app.state, "picks.relay_rank", 300, maxsize=4)
+    _, payload = await cache.get_or_set(today, build)
+    return payload
 
 
 @router.get("/lurk-pool")
@@ -407,10 +418,9 @@ async def intraday_opportunities(
     逻辑；辨识度/确定性判定规则见 app.picks.intraday_opportunity（纯函数，可回测）。
     热股榜源失败时整体静默降级（hot_available=False，辨识度给 unknown），看板不受影响。
     """
-    from app.api.routes.market import _default_trade_date_async
-
+    
     hub = request.app.state.hub
-    trade_date = await _default_trade_date_async(hub)
+    trade_date = await default_trade_date(hub)
     return await _build_opportunities(request, trade_date, top_themes, stocks_per_theme)
 
 
@@ -425,11 +435,10 @@ async def intraday_top(
     （确定性优先、辨识度次之，unknown/低不入选）；与复盘（picks 维度）共用
     同一份口径，保证「分组里看到的」和「复盘对照的」是同一批标的。
     """
-    from app.api.routes.market import _default_trade_date_async
     from app.picks.intraday_opportunity import attach_risk_fields, top_watch_stocks
 
     hub = request.app.state.hub
-    trade_date = await _default_trade_date_async(hub)
+    trade_date = await default_trade_date(hub)
     payload = await _build_opportunities(request, trade_date, 5, 8)
     data = top_watch_stocks(payload["data"], limit=limit)
 

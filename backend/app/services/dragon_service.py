@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import re
 
+from app.sentiment.engine import ADVERSE_PHASES  # S2-7：相位集合唯一权威
+
 # ---------------------------------------------------------------- 常量
 
 # 封单比 = 封单额 / 流通市值。业界：>1% 强 / >3% 非常强 / ≥5% 极强
@@ -389,7 +391,7 @@ def entry_checklist(
     b = boards or 1
 
     # --- 市场层 ---
-    market_block = market_phase in {"退潮", "冰点"}
+    market_block = market_phase in ADVERSE_PHASES
     market_note = {
         "退潮": "市场处于退潮期，任何接力都是逆势，首选空仓",
         "冰点": "市场冰点，涨停多为脉冲，不具备接力环境",

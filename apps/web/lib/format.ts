@@ -163,7 +163,16 @@ export function isHardQuality(q: string): boolean {
   return q === "stale" || q === "invalid";
 }
 
-const TRI_LABELS: Record<string, string> = { unknown: "未判定", none: "无" };
+/**
+ * 三态字面量 → 对外中文文案。**必须与后端 `picks/push_cards.py::_TRI_LABELS` 逐键一致**：
+ * `unknown`（有判定但判不出）/ `none`（确实没有）/ `null`（字面量字符串 "null"）。
+ *
+ * S2-9（2026-09-11）：前端此前**漏了 `null` 键** ⇒ 后端若把字面量 `"null"` 送过来，
+ * 飞书卡片显示「—」而界面直接打出 `null`（同一份数据两个端不一致）。
+ * 注意占位符刻意不同源：`null` 用「—」（对齐后端），而真正缺数据用 `--`
+ * （见 `triText` 的 `!v` 分支）——前者是"字段值是这四个字符"，后者是"压根没有值"。
+ */
+const TRI_LABELS: Record<string, string> = { unknown: "未判定", none: "无", null: "—" };
 
 /**
  * 三态判定字段的对外文案（与后端 push_cards.tri_text 同语义，2026-09-08 修复）。

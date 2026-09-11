@@ -100,11 +100,10 @@ export function TaskCenter() {
     () => (tasks ?? []).some((t) => t.status === "queued" || t.status === "running"),
     [tasks],
   );
-  useEffect(() => {
-    if (!hasRunning) return;
-    const id = setInterval(() => void load(), 3000);
-    return () => clearInterval(id);
-  }, [hasRunning, load]);
+  // 2026-09-11（S2-5）：裸 setInterval → 统一入口（获得可见性暂停）。
+  // `marketHours: false` —— 议程自动执行发生在 15:45（盘外），任务中心必须保持
+  // 3s 节奏让用户看到进度，不能套行情类的盘外降频。
+  usePollingFetch(load, 3_000, undefined, { enabled: hasRunning, marketHours: false });
 
   async function submit(type: string) {
     setCreating(type);

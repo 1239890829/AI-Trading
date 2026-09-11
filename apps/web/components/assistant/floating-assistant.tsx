@@ -19,6 +19,7 @@ import { createEntityMatcher, type EntityDict, type EntityMatch } from "@/lib/en
 import { isAllowedNav } from "@/lib/nav-targets";
 import { RichText } from "@/components/assistant/rich-text";
 import { AssistantMark } from "@/components/assistant/assistant-mark";
+import { usePollingFetch } from "@/hooks/use-polling-fetch";
 
 const BALL = 48;
 const MARGIN = 16;
@@ -162,25 +163,22 @@ export function FloatingAssistant() {
   // ---- AI 判读提醒（悬浮球气泡）------------------------------------------
   // 只有判读为 notify 且未确认的才出现；规则触发本身不冒泡（防刷屏）。
   // 30s 轮询：告警不是秒级决策，且 triage worker 本身也是 30s 一轮。
-  useEffect(() => {
-    if (!mounted) return;
-    let alive = true;
-    async function loadBubbles() {
+  // 2026-09-11（S2-5）：裸 setInterval → 统一入口（获得可见性暂停）。
+  // `marketHours: false` —— 判读提醒盘后同样需要及时冒泡，不套行情类降频。
+  usePollingFetch(
+    async () => {
       try {
         const { getAgentBubbles } = await import("@/lib/api");
         const list = await getAgentBubbles(5);
-        if (alive) setBubbles(list);
+        setBubbles(list);
       } catch {
-        if (alive) setBubbles([]);   // 后端未起/接口异常：静默，不打扰
+        setBubbles([]); // 后端未起/接口异常：静默，不打扰
       }
-    }
-    void loadBubbles();
-    const id = setInterval(() => void loadBubbles(), 30_000);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, [mounted]);
+    },
+    30_000,
+    undefined,
+    { enabled: mounted, marketHours: false }
+  );
 
   async function ackBubble(id: number) {
     const { ackAgentTriage } = await import("@/lib/api");
@@ -465,15 +463,22 @@ export function FloatingAssistant() {
   // 三类落点：个股 → 工作台；题材 → 盘面题材梯队；功能入口 → 注册表给出的站内深链。
   // nav 的 URL 在识别阶段已过白名单守卫，这里再过一次（防御渲染期被篡改），
   // 未过则降级为跳题材页，绝不 push 非常规 URL。
-  const onNavigate = (m: EntityMatch) => {
-    if (m.type === "nav") {
-      const url = m.url && isAllowedNav(m.url) ? m.url : themesUrl(m.name);
-      router.push(url);
-    } else {
-      router.push(m.type === "stock" && m.code ? workbenchUrl(m.code) : themesUrl(m.name));
-    }
-    setOpen(false);
-  };
+  //
+  // P1-2（2026-09-11）：必须 useCallback —— 它作为 `onNavigate` 传给 RichText，
+  // 而 RichText 已包 memo；每次渲染新建函数会让 memo 彻底失效（流式期间
+  // 每个 delta 仍重解析全部历史消息，等于白做）。
+  const onNavigate = useCallback(
+    (m: EntityMatch) => {
+      if (m.type === "nav") {
+        const url = m.url && isAllowedNav(m.url) ? m.url : themesUrl(m.name);
+        router.push(url);
+      } else {
+        router.push(m.type === "stock" && m.code ? workbenchUrl(m.code) : themesUrl(m.name));
+      }
+      setOpen(false);
+    },
+    [router],
+  );
 
   // ---- 自动滚动（用户上翻即停止跟随） --------------------------------------
   useEffect(() => {

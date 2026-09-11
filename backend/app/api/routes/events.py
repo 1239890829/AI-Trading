@@ -24,8 +24,7 @@ from sqlalchemy import select
 from app.market.trading_status import beijing_now
 from pydantic import BaseModel, Field
 
-from app.api.deps import require_write_token
-from app.api.routes.theme_catalog import _normalize_symbol  # 同包复用：代码归一
+from app.api.deps import normalize_symbol, require_write_token
 from app.core.db import get_session_factory
 from app.events.store import EventStore
 
@@ -353,7 +352,7 @@ async def events_for_symbol(
     - 方向题材 ∈ 该股官方归属题材（linkage-design §3.2 L3 归属反查）
     - 事件抽取自该股的新闻（source_symbol）
     """
-    sym = _normalize_symbol(symbol)
+    sym = normalize_symbol(symbol)
     svc = getattr(request.app.state, "theme_catalog", None)
     theme_names: set[str] = set()
     if svc is not None:

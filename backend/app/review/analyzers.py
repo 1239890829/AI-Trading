@@ -19,6 +19,7 @@ from typing import Protocol
 import httpx
 
 from app.core.grounding import evidence_pool, grounding_violations
+from app.sentiment.engine import ADVERSE_PHASES  # S2-7：相位集合唯一权威
 from app.review.config import MethodologyConfig
 from app.review.schemas import (
     DimensionResult,
@@ -355,7 +356,7 @@ class RulesAnalyzer:
                     "情绪判定被哨兵标记为不可信（疑似日期串了或数据自指），"
                     "本次结论不作为下一交易日依据"
                 )
-            elif phase in {"退潮", "冰点"}:
+            elif phase in ADVERSE_PHASES:
                 judgements.append(f"市场处于{phase}期，应降低仓位或空仓，不宜新开接力仓")
             elif phase == "分歧":
                 judgements.append("市场分歧期：只做最强前排且严控仓位，回避跟风")

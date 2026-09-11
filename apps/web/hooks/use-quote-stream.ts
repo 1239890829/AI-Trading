@@ -101,16 +101,22 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
       }, throttleMs - elapsed);
     };
 
+    // S2-5（2026-09-11）：降级轮询也纳入可见性门控——WS 断链后若标签页被切走，
+    // 原先每 5s 照发（正是 P0-1「盘口 5s 一路到深夜」的另一半）。tick 在隐藏期
+    // 直接返回（定时器保留，开销为零），回可见时由下面的 visibilitychange 立即补一拍。
+    let pollTick: (() => void) | null = null;
     const startPolling = () => {
       if (pollTimer || closed) return;
       setStatus("polling");
       const tick = async () => {
+        if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
         try {
           apply(await getQuotes(symbolsRef.current));
         } catch {
           setStatus("error");
         }
       };
+      pollTick = tick;
       void tick();
       pollTimer = setInterval(tick, 5000);
     };
@@ -118,7 +124,15 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
     const stopPolling = () => {
       if (pollTimer) clearInterval(pollTimer);
       pollTimer = null;
+      pollTick = null;
     };
+
+    const onVisibility = () => {
+      if (closed || !pollTick) return;
+      if (document.visibilityState === "hidden") return;
+      void pollTick(); // 回可见：立即补一拍，不等下一个 5s
+    };
+    document.addEventListener("visibilitychange", onVisibility);
 
     const connect = () => {
       if (closed) return;
@@ -208,6 +222,7 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
       clearThrottle();
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (pingTimer) clearInterval(pingTimer);
+      document.removeEventListener("visibilitychange", onVisibility);
       stopPolling();
       wsRef.current?.close();
       wsRef.current = null;

@@ -19,6 +19,8 @@
 """
 from __future__ import annotations
 
+from app.sentiment.engine import ADVERSE_PHASES as _EBB_PHASES  # S2-7：唯一权威
+
 # ---------------------------------------------------------------- 确认走强（§5.1）
 CONFIRM_THEME_PCT_EARLY = 1.5   # 10:00 前板块涨幅确认线（早盘冲高回落常态化，阈值放宽）
 CONFIRM_THEME_PCT_LATE = 2.5    # 10:00 后
@@ -28,7 +30,6 @@ CONFIRM_HEIGHT_BOARDS = 3       # 或出现 ≥3 板高度股
 CONFIRM_LEADER_PCT = 5.0        # 龙头（梯队最高者）涨幅
 CONFIRM_VOLUME_RATIO = 1.5      # 量比（板块成交额历史未落库前的降级口径，§5.1#4）
 CONFIRM_PROMO_PCTILE = 20.0     # 环境项：promo_1to2 分位下限（低于 = 接力环境证伪）
-_EBB_PHASES = ("退潮", "冰点")  # 环境项直接否决的相位
 
 # ---------------------------------------------------------------- 证伪放弃（§5.2）
 FALSIFY_DRAWDOWN_PCT = 2.0      # 较盘中峰值回撤
@@ -122,7 +123,10 @@ def rank_directions(evidences: list[dict], phase: str | None = None) -> list[dic
         ech = float(ev.get("echelon") or 0.0)
         defensive = bool(ev.get("defensive"))
         fit = 10.0 if (
-            (defensive and phase in ("退潮", "冰点"))
+            (defensive and phase in _EBB_PHASES)
+            # ⚠️ 非防守方向只认「高潮/发酵」，**不含「修复」**——与 STRONG_PHASES
+            # （修复/发酵/高潮）不一致。此处**刻意不擅自改**：加进「修复」会改变
+            # 排序结果（口径变更），需参数扫描/回测支持后再定。已登记为待验证项。
             or (not defensive and phase in ("高潮", "发酵"))
         ) else 0.0
         score = round(event * 1.0 + momentum * 0.6 + ech * 0.4 + fit * 0.3, 2)

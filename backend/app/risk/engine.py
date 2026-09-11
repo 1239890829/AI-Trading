@@ -24,11 +24,15 @@ def _fmt_pct(pct: float) -> str:
 class RiskEngine:
     """持仓、订单、市场状态三位一体的风险预检。"""
 
-    def __init__(self, hub, snapshot_service, session_factory, alert_engine=None):
+    def __init__(self, hub, snapshot_service, session_factory, alert_engine=None, app_state=None):
         self.hub = hub
         self.snapshot_service = snapshot_service
         self._session_factory = session_factory
         self.alert_engine = alert_engine
+        # P1-3：持有进程级单例（app.state）时，情绪判定走全站共享 60s 槽，
+        # 与市场页/题材/猎场/事件排序共用一次计算。为 None（单测直接构造）时
+        # 退回直算——不为了缓存而给单测塞一个假 state。
+        self._app_state = app_state
         self._state: str = "数据不足"
         self._reasons: list[str] = []
         self._params: PositionParams = get_params("数据不足")
@@ -46,11 +50,26 @@ class RiskEngine:
     def params(self) -> PositionParams:
         return self._params
 
+    async def _sentiment(self) -> dict:
+        """情绪判定：有 app.state 走全站共享槽，否则直算（单测/脚本场景）。"""
+        if self._app_state is None:
+            return await compute_market_sentiment(self.hub, self.snapshot_service)
+        from app.services.market_context import get_cached_sentiment
+
+        return await get_cached_sentiment(self._app_state, self.hub)
+
     async def refresh(self) -> None:
-        """刷新市场状态。失败时保留上一状态或 fallback 到数据不足。"""
+        """刷新市场状态。失败时保留上一状态或 fallback 到数据不足。
+
+        P1-3：情绪判定经共享 60s 缓存槽（`get_cached_sentiment`）。此前每次
+        refresh 都全量重算（全市场宽度 + 两天涨停池 + 炸板池），而盘内本方法
+        60s 跑一次、市场页也在算同一件事——同一个值算了 N 遍。代价是判定最多
+        滞后 60s：这与全站其余消费方看到的是**同一个**值，一致性反而更强
+        （此前风控与市场页可能给出不同相位，因为各自取了不同时刻的快照）。
+        """
         try:
             breadth = self.snapshot_service.breadth
-            sentiment = await compute_market_sentiment(self.hub, self.snapshot_service)
+            sentiment = await self._sentiment()
             state, reasons = classify_market_state(self.hub.indices, breadth, sentiment)
         except CalendarUnavailable as exc:
             state, reasons = "数据不足", [f"日历/数据未就绪：{exc}"]

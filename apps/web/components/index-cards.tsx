@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { memo, useState } from "react";
 import { indexDetailSymbol } from "@/lib/api";
 import { QualityBadge } from "@/components/quality-badge";
 import { fmt, pctColor, pctText, isHardQuality, sourceLabel } from "@/lib/format";
@@ -15,8 +15,12 @@ interface Props {
 }
 
 /** 指数迷你卡（3 列，可展开/收起）——对标 klineshare 左栏范式。
- *  点击卡片与点击自选股行等效：右侧面板展开该指数的分时/K线详情。 */
-export function IndexCards({ indices, selected, onSelect }: Props) {
+ *  点击卡片与点击自选股行等效：右侧面板展开该指数的分时/K线详情。
+ *
+ *  P1-1（2026-09-11）：包 `memo`。行情 3s 一 tick 会让 workbench 整体重渲染，
+ *  而 `indices` 只在 loadBase（10s）时换引用、`onSelect` 是 useCallback、
+ *  `selected` 是字符串 ⇒ 3s tick 上本组件可整体跳过。 */
+export const IndexCards = memo(function IndexCards({ indices, selected, onSelect }: Props) {
   const [open, setOpen] = useState(true);
 
   return (
@@ -58,4 +62,4 @@ export function IndexCards({ indices, selected, onSelect }: Props) {
       )}
     </div>
   );
-}
+});

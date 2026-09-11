@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { getBoards, type BoardRow } from "@/lib/api";
 import { fmtAmount, pctColor, pctText } from "@/lib/format";
 import { Skeleton } from "@/components/ui/loading";
@@ -14,27 +15,22 @@ export function BoardRankPanel({ className }: { className?: string }) {
   // pending 哨兵（审查 F2/R2）：首拉完成前渲染表体骨架，"暂无数据"不抢跑
   const [loaded, setLoaded] = useState(false);
 
-  useEffect(() => {
-    let alive = true;
-    const load = async () => {
+  // 2026-09-11（S2-5）：裸 setInterval → 统一入口（可见性暂停 + 盘外降频）。
+  usePollingFetch(
+    async () => {
       try {
         const b = await getBoards(type);
-        if (!alive) return;
         setRows(b);
         setError(null);
       } catch (e) {
-        if (alive) setError((e as Error).message);
+        setError((e as Error).message);
       } finally {
-        if (alive) setLoaded(true);
+        setLoaded(true);
       }
-    };
-    void load();
-    const t = setInterval(load, 60_000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-  }, [type]);
+    },
+    60_000,
+    type
+  );
 
   return (
     <div className={`flex min-h-0 flex-col ${className ?? ""}`}>

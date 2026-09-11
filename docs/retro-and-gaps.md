@@ -233,13 +233,13 @@
 | ⭐S2-1 | **失败没有类型**（8 种降级字段 + 8 套 stale 口径） | 统一 `Freshness{state,as_of,age_seconds,reason,source}`；先 Quote + snapshot 两个样板，其余渐进 | ✅ **两个样板已完成（09-11）**：`app/core/freshness.py`（`Freshness.from_age` + `is_fresh/note`，含 `missing_reason` 显式「未判定」）→ 接入 `Quote.freshness()`、`QuoteHub.freshness()`、`SnapshotService.freshness()`、`market_context._snapshot_freshness()`。**其余来源渐进迁移**（未做的按需迁，不再单独挂账） |
 | ⭐S2-2 | **调度不可观测**：`main.py` 23 处 `create_task`（共 26 常驻任务），创建清单与停机收割是**两份手写清单**，只有 evolution 暴露调度状态 | 建 `core/scheduler.py` TaskRegistry（声明式 + 每任务 last_tick/error/failures + 统一收割 + `GET /api/system/schedulers`）；conftest 开关表从注册表派生。历史已两次因任务静默死亡出事 | ✅ **已完成（09-11）** 建 `app/core/scheduler.py`（26 个常驻任务收敛为**一份声明**）；停机块从 66 行压到 1 行；conftest 开关表**从注册表派生**；死亡进数据健康哨兵。**并入 P2-9 + P1-3 门控部分**。见 [[KB-DEC-021]]。**收尾（同日实测）**：停机日志暴露「登记了 `stop` 但睡眠不可打断」一类缺陷，共 **4 处**（`data_health_loop` 900s / `pre_limit_loop` 30s / `position_loop` 30s / `llm_aux_loop` **启动等待 300s**，后者在循环体之外、主循环已用 `wait_for` 也救不了）⇒ 统一改 `wait_or_stop`，三次停机白烧的 ~20s 归零；回归 `tests/test_scheduler_shutdown.py`（3 例：未 stop 不自退 + set 后 2s 内退 + 启动等待可打断）。**实测 `/api/system/schedulers`：26/26 running、`dead:[]`、heartbeat 22 external / 4 registry** |
 | S2-3 | 上游调用**无请求级预算** | `data_providers/composite.py:190` `_call_serial` 四源串行无总预算 ⇒ 全挂时单请求 20~30s 悬停（FastAPI 无请求超时） | ✅ **已完成（09-11）**：`REQUEST_BUDGET_SECONDS=12` / `REALTIME_BUDGET_SECONDS=4`（秒级方法 Hub 1Hz 等不起），`_call` 算**一个跨源共享的 deadline**，`_attempt` 用 `wait_for` 掐断并记 `BudgetExhausted`（**按失败进熔断**，不无限挂账）；`budget_for()` + `provider_health()["budget_seconds"]` 可观测。**`search` / `get_limit_down_pool` 刻意不接**——它们的「空结果 = 合法语义」必须建立在问完所有源之上。见 [[KB-ENG-54]] |
-| ⭐S2-4 | **业务逻辑住在 route**：`generate_picks` 单函数 255 行含完整管线；`picks/picks_autogen.py:96` 反向 `import generate_picks` 并伪造 `SimpleNamespace` 当 request；`market.py` 私有函数被 4 模块当公共 API | 抽 `services/picks_pipeline.py` + import-lint 禁反向依赖。后果：管线无法复用 + **集成链路零测试覆盖** | ❌ 未做（阶段 2） |
-| ⭐S2-5 | **前端取数无抽象**：`hooks/use-polling-fetch.ts` 只封装 `setInterval`（不返回三态）⇒ 约 40 个调用点各写一份；并存 4 种取数方式（9 个文件用裸 `setInterval`） | 引入 `useResource{data,pending,error,refresh}` + 内建可见性暂停（同时解掉性能清单 P0-1） | ❌ 未做（阶段 2） |
-| ⭐S2-6 | **错误边界只有根级**（全仓无组件级 ErrorBoundary） | 加 `PanelBoundary` 包住各 tab 与 detail pane，白屏收敛为局部降级 | ❌ 未做（阶段 2） |
-| ⭐S2-7 | **相位集合 5 常量 + 6 处 inline** | 以 `sentiment/engine.py:40 PHASE_ORDER` 派生；漂移会造成**交易信号级不一致**（闸门禁买 vs 仓位引擎给 55%） | ❌ 未做（阶段 2） |
-| ⭐S2-8 | **北京时间 5 个 now 函数 + 39 处手写 +8h**，`date.today()` 仍参与交易日归属 15 处 | `core/db.py` 收敛唯一 `beijing_now()/beijing_today()` | ❌ 未做（阶段 2） |
-| ⭐S2-9 | **三态文案映射表前后端不一致** | 后端 `push_cards.py:21` 有 `"null"→"—"`，前端 `lib/format.ts:166` **无该键** ⇒ 界面直接打出 `null` | ❌ 未做（阶段 2） |
-| ⭐S2-10 | **角色配色前端 2 份 / 后端 7 视图** | `theme-card.tsx:60` 的 9 键表缺 `领涨/滞涨/同步` ⇒ 徽标无色，tsc 因 `Record<string,string>` 放行 | ❌ 未做（阶段 2） |
+| ⭐S2-4 | **业务逻辑住在 route**：`generate_picks` 单函数 255 行含完整管线；`picks/picks_autogen.py:96` 反向 `import generate_picks` 并伪造 `SimpleNamespace` 当 request；`market.py` 私有函数被 4 模块当公共 API | 抽 `services/picks_pipeline.py` + import-lint 禁反向依赖。后果：管线无法复用 + **集成链路零测试覆盖** | ✅ **已完成（09-11）** 见下方「阶段 2 交付」。**三条线全解**：管线抽离（`picks.py` 1161→367 行）＋ 反向依赖消除（`SimpleNamespace` → `PipelineDeps` 显式契约）＋ 跨路由私有名消除（`_load_snapshot_map`/`_default_trade_date*`/`_batch_quotes`/`_normalize_symbol` 上移服务层与 `deps.py`）。**P2-4 一并闭环**（当日涨停池 3 取 → 1 取，按日期计数回归位） |
+| ⭐S2-5 | **前端取数无抽象**：`hooks/use-polling-fetch.ts` 只封装 `setInterval`（不返回三态）⇒ 约 40 个调用点各写一份；并存 4 种取数方式（9 个文件用裸 `setInterval`） | 引入 `useResource{data,pending,error,refresh}` + 内建可见性暂停（同时解掉性能清单 P0-1） | ✅ **已完成（09-11）** 见下方「阶段 2 交付」。`hooks/use-resource.ts` 三态 + 可见性暂停 + **盘外降频 ×5 封顶 120s**；`usePollingFetch` 改薄壳委托（20 余调用点零改动）；**裸 `setInterval` 实收编 10 处**（审计称 7 处，实测多出 `speed-panel`/`board-rank-panel`/`notification-drawer`/`task-center`/`floating-assistant` 五处，逐处判定 `marketHours`）。14 项钩子测试 |
+| ⭐S2-6 | **错误边界只有根级**（全仓无组件级 ErrorBoundary） | 加 `PanelBoundary` 包住各 tab 与 detail pane，白屏收敛为局部降级 | ✅ **已完成（09-11）** `components/ui/panel-boundary.tsx` + **集成进 `Panel` 的 body**（一处改动覆盖全站面板）+ 详情面板整体包一层。`resetKey` 语义与「key 挂边界而非子元素」的坑见交付表。8 项测试 |
+| ⭐S2-7 | **相位集合 5 常量 + 6 处 inline** | 以 `sentiment/engine.py:40 PHASE_ORDER` 派生；漂移会造成**交易信号级不一致**（闸门禁买 vs 仓位引擎给 55%） | ✅ **已完成（09-11）** 权威集 + 三组语义集合落在 `sentiment/engine.py`，**9 处副本全部收编**。**实测漂移出两处真缺陷**：`predict.PHASE_ENV_SCORE` 与 `experiments._SHADOW_PHASES` 里写的 **「启动」是题材阶段不是市场相位** ⇒ 死键 + **「修复」相位从未被覆盖**（预测引擎一直走 `.get` 默认值、影子校验从没查过修复期）。见交付表 |
+| ⭐S2-8 | **北京时间 5 个 now 函数 + 39 处手写 +8h**，`date.today()` 仍参与交易日归属 15 处 | `core/db.py` 收敛唯一 `beijing_now()/beijing_today()` | ❌ 未做（**已拆为阶段 2.5**；拆分理由见编排行自检表：改动面是阶段 2 其余项之和，且每处 `date.today()` 携带交易日归属语义，接近「口径变更」红线） |
+| ⭐S2-9 | **三态文案映射表前后端不一致** | 后端 `push_cards.py:21` 有 `"null"→"—"`，前端 `lib/format.ts:166` **无该键** ⇒ 界面直接打出 `null` | ✅ **已完成（09-11）** 前端补 `null: "—"` 键 + 4 项用例；**并补一道前后端逐键一致守卫**（`test_tri_labels_match_frontend`，正则读前端源码双向比对）——S2-9 的病根就是跨端漂移，单侧断言防不住复发 |
+| ⭐S2-10 | **角色配色前端 2 份 / 后端 7 视图** | `theme-card.tsx:60` 的 9 键表缺 `领涨/滞涨/同步` ⇒ 徽标无色，tsc 因 `Record<string,string>` 放行 | ✅ **已完成（09-11）** 合并为 `apps/web/lib/role-style.ts` 一份（11 键 = `echelon.ROLE_BASE_SCORE`）。**裁定结果**：权威集 = echelon 11 键（它覆盖全部产出方；`theme_service.ROLE_ORDER` 8 键只服务天梯排序且用 `.get(role, 9)` 兜底，非缺陷）。顺带清掉僵尸键 `情绪票`（后端零产出方）+ 渲染侧改 `roleClass()` 兜底。跨端守卫 3 项 + 前端 6 项。⚠️ **立项描述的后果经实测订正**：缺的三键属猎场域、使用该表的组件属题材看板域，**当前数据下并未渲染出无色徽标**——修的是结构性缺陷，详见交付表下方订正段 |
 | ⭐S2-11 | **闭环断裂**：因子库 16 PASS 零运行时消费（`eval_report.json` 停 09-07）；`research/strategy_verify.py` 零生产引用；复盘 `applied` 只产 diff 提示（`review/writeback.py:13-15`）；进化大脑 `factor_ic` **硬编码空值**（`evolution.py:239`）；影子评估只支持 1/5 参数（`experiments.py:231`） | 阶段 3：因子物化+映射+接口 → IC 接入议程 + 挂调度 → 核验注册 → applied 须带载荷 → 决策级记忆 | ❌ 未做（阶段 3，**最高价值**） |
 | ⭐S2-12 | **门禁盲区**：5 道门禁是离线桩单测，测不到集成链路/调度装配/前后端契约/字典缺键/性能回归；`scripts/doc-health.py` **不在 CI** | 阶段 4 六道门禁（集成链路、调度装配、契约 golden、闭包测试、p95 预算、doc-health 进 CI） | ❌ 未做（阶段 4） |
 
@@ -253,22 +253,69 @@
 |---|---|---|---|
 | P0-1 | 全站轮询无「页面隐藏 / 盘外」门控（21 文件唯一入口；另有 7 处原生 `setInterval` 绕过） | `hooks/use-polling-fetch.ts:37` | 🔀 **并入 S2-5**（useResource 内建可见性暂停）。⚠️ 但**盘外降频（`isTradingSession` ×5）与 7 处 setInterval 收编必须一并落实**，只做可见性不够 |
 | P0-2 | `/themes/catalog/strength` 390 次 N+1 查库发生在 `cache.get` **之前** | `api/routes/theme_catalog.py:230-243` | ⭐ **独立**（S 组未覆盖）——复用已存在的 `member_symbols_bulk` + 缓存判断前移 | ✅ **已完成（09-11）**：实测 **391 次查库 / 541ms → 2 次 / 142ms**，缓存命中路径**零查库**；390 个题材成分列表逐元素（含顺序）与改造前完全一致 |
-| P0-3 | `/picks/relay-rank` 遍历全涨停池逐只串行 HTTP、路由无缓存 | `picks/relay_rank.py:45-71` | ⭐ **独立**。⚠️ **S2-3「请求预算」不能替代它**（一个是并发化，一个是超时上界，两个问题） |
-| P0-4 | 分钟资金图悬停每次 move 重算 5 条 SVG path + 同步读布局 | `market/flow-intraday-chart.tsx:50-81` | ⭐ **独立** |
-| P1-1 | 全项目仅 1 处 `React.memo`；行情每 3s tick 触发整页重渲染 | `stock-detail.tsx:102` / `index-cards.tsx:19` / `sparkline.tsx:16` | ⭐ **独立**（渲染层，S 组未覆盖；只做热路径 3-4 处，不撒全站） |
-| P1-2 | RichText 无 memo，SSE 每个 delta 重解析全部历史消息 | `assistant/rich-text.tsx:233` | ⭐ **独立**（与 P1-1 同批做） |
-| P1-3 | 情绪 60s 内重复回源 2~3 次（`picks.live_sentiment` 是第二套槽 + risk 不走缓存） | `risk/engine.py:53` 等 | 🔀 **门控部分已完成（09-11，随 S2-2）**：`risk-refresher` 改 `add_periodic` + `_session_interval(60, 1800)`，盘外 1800s、不再恒定 60s 空转回源。＋ ⭐ **独立未完**（缓存槽合一，S 组未覆盖） |
-| P1-4 | `/api/quotes/{symbol}` 对同一标的串行发两次腾讯 HTTP | `services/quote_enrich.py:87/114` | ⭐ **独立** |
-| P1-5 | 同一只股票被两条 WS 订阅，且切股即重建连接 | `workbench/page.tsx:122` + `stock-detail.tsx:203` | ⭐ **独立** |
-| P1-6 | 首帧双发（立即拉 effect + 轮询首拍各请求一次） | `workbench/page.tsx:249/268` | 🔀 **并入 S2-5**（取数抽象统一「立即拉/轮询」关系时一并解决） |
+| P0-3 | `/picks/relay-rank` 遍历全涨停池逐只串行 HTTP、路由无缓存 | `picks/relay_rank.py:45-71` | ✅ **已完成（09-11）** `asyncio.Semaphore(8)` 并发化 + 路由 300s 按日缓存。**实测 40 只 × RTT 50ms：串行 2044.7ms → 并发 256.2ms = 8.0x**（恰为「池大小/并发上限」的理论上界）。⚠️ **数据源刻意未改**：审计建议的「改读 marketdb `daily_k`」属复权口径变更（腾讯 qfq vs marketdb 口径未知）⇒ 触及红线，只做并发化 + 缓存。3 项回归位 |
+| P0-4 | 分钟资金图悬停每次 move 重算 5 条 SVG path + 同步读布局 | `market/flow-intraday-chart.tsx:50-81` | ✅ **已完成（09-11）** `maxAbs`/`paths`/`seqs` 三处 `useMemo`、`yPct` 改 `useCallback`。根因链：悬停 setState → 重渲染 → 重拼 path → React 写回 `d` → 布局失效 → **下一次 mousemove 的 `getBoundingClientRect()` 被迫同步重排**。4 项渲染契约测试 |
+| P1-1 | 全项目仅 1 处 `React.memo`；行情每 3s tick 触发整页重渲染 | `stock-detail.tsx:102` / `index-cards.tsx:19` / `sparkline.tsx:16` | ✅ **已完成（09-11）** 4 处 `memo`（Sparkline / IndexCards / StockDetailPanel / RichText）+ 导出 `NO_CLOSES` 共享空数组（调用方写 `?? []` 会让 memo 每次失效）。**副作用已处理**：`stock-detail.tsx` 的 `eslint-disable react-hooks/set-state-in-effect` 变 dead directive（实测对照确认该规则不下探 `memo()` 组件体），删除并留注释说明代价 |
+| P1-2 | RichText 无 memo，SSE 每个 delta 重解析全部历史消息 | `assistant/rich-text.tsx:233` | ✅ **核心收益已落实（09-11）**：`RichText` 包 `memo` + `parseBlocks` 上 `useMemo`，配套 `floating-assistant.onNavigate` 改 `useCallback`（否则 memo 形同虚设）；文件头「几 KB 下开销可忽略」的旧结论已更正（只对单条消息成立）。⏳ **残余**：消息项未抽独立 memo 组件（`activity` 流式 props 每 delta 变，须拆组件才生效，风险收益比不佳）——已登记 |
+| P1-3 | 情绪 60s 内重复回源 2~3 次（`picks.live_sentiment` 是第二套槽 + risk 不走缓存） | `risk/engine.py:53` 等 | ✅ **全部完成（09-11）**。门控部分随 S2-2（盘外 1800s）；**缓存槽合一**：新建 `market_context.get_cached_sentiment()`（槽名/TTL 为跨模块契约），**五个消费方共用一个槽**——市场页情绪卡 / 介入条件清单相位 / 猎场相位路由（原 `picks.live_sentiment` 槽**已删除**）/ 事件排序 / 风控刷新。槽内改存**领域对象**而非 `{data,meta}` 信封（信封形状不同正是当初分裂出第二槽的原因）。11 项测试，含「五个消费方共算一次」核心回归位 |
+| P1-4 | `/api/quotes/{symbol}` 对同一标的串行发两次腾讯 HTTP | `services/quote_enrich.py:87/114` | ✅ **已完成（09-11）** 新增 `enrich_quote()` 单次取数补两类字段；字段映射抽 `_apply_limit_prices`/`_apply_valuation` 单点实现；`fill_limit_prices`/`fill_valuation` 保留但委托。6 项测试，核心断点 `calls["n"] == 1`（**原串联实现这里是 2**——P1-4 根因的直接回归位） |
+| P1-5 | 同一只股票被两条 WS 订阅，且切股即重建连接 | `workbench/page.tsx:122` + `stock-detail.tsx:203` | ✅ **已完成（09-11）** 详情面板改 props 下传 `liveQuote`/`streamStatus`，自带订阅集置空（`NO_SYMBOLS`）——`useQuoteStream` 在 `hasSymbols=false` 时直接不建连接。**附带修正**：工作台订阅集此前漏了 `activeSymbol`（详情面板自带连接掩盖了缺口）。2 项契约测试 |
+| P1-6 | 首帧双发（立即拉 effect + 轮询首拍各请求一次） | `workbench/page.tsx:249/268` | ✅ **已完成（09-11，随 S2-5）** `useResource` 的 setTimeout 链把「立即拉一次」与「排下一拍」串成一条链，不存在两个独立触发源 |
 | P2-1~15 | 15 项边角优化：DuckDB 同步调用未 to_thread · `lurk_pool` 无缓存 · `leader_archive` 每请求读盘 · `watch_ledger` N+1 · 渲染体内 filter/sort · 无 `next/dynamic` 等 | 见报告 P2 表 | **P2-4（单次 generate_picks 内涨停池被拉 3 次）并入 S2-4**（管线抽离时自然解决）；**P2-9（AlertEngine 5s 无时段门控）已完成（09-11，随 S2-2）**：盘外只空转不判读（`_idle_interval = max(300.0, interval)`）、`alert-quotes-feeder` 盘外 300s，统一走 `_session_interval(active, idle)`；其余 ⭐ 独立、按需 |
 
 **合并后的统一执行编排**（取代两份清单各自的顺序）：
 - **阶段 0**：S1-1 / S1-2 / S1-5 / S1-6 ＋ **P0-2**（同属「小改动、消大量错误或浪费」）—— ✅ **五项全部完成（2026-09-11）**，交付与证据见下
-- **阶段 1**：S2-1 Freshness 契约 ＋ S2-2 TaskRegistry（含 P2-9、P1-3 的门控部分）＋ S2-3 请求预算
-- **阶段 2**：S2-4 管线抽离（含 P2-4）＋ S2-5 useResource（含 P0-1、P1-6）＋ **性能专项同批：P0-3 / P0-4 / P1-1 / P1-2 / P1-4 / P1-5**
+- **阶段 1**：S2-1 Freshness 契约 ＋ S2-2 TaskRegistry（含 P2-9、P1-3 的门控部分）＋ S2-3 请求预算 —— ✅ **三项全部完成（2026-09-11）**
+- **阶段 2**：S2-4 管线抽离（含 P2-4）＋ S2-5 useResource（含 P0-1、P1-6）＋ **性能专项同批：P0-3 / P0-4 / P1-1 / P1-2 / P1-4 / P1-5** ＋ **S2-9 三态文案**（核实结论见下）—— ✅ **全部完成（2026-09-11）**，并**同批收口尾部两项 S2-7 / S2-10 / S2-6**（自检裁定的「本批尾部」），交付与证据见下
 - **阶段 3**：闭环（S2-11 全组）
 - **阶段 4**：门禁（S2-12）；P2 其余按需插入
+
+> **阶段 2 动手前账本自检（2026-09-11，按 kb/07「动手前两查」逐项 Grep/Read 核实）**
+> 起因：S2-6 ~ S2-10 在 S2 表里标着「阶段 2」，但本编排行原未列它们 ⇒ 需判定归属。
+>
+> | 项 | 核实结论（实测） | 归属裁定 |
+> |---|---|---|
+> | **S2-7** 相位常量 | `sentiment/engine.py:40 PHASE_ORDER` 为唯一权威；**副本 9 处**（5 常量 + 4 inline）：`meta_confidence.py:22-23`、`intraday_rules.py:31` + `:125`、`gate.py:17/19/157`、`picks/engine.py:493`、`dragon_service.py:392`、`review/analyzers.py:358`。与立项描述「5 常量 + 6 处 inline」同量级 | ✅ **并入本批**。S2-4 刚重排过 `picks/` 依赖图，同批做可避免二次触碰；且漂移后果是**交易信号级**不一致（闸门禁买 vs 仓位引擎给 55%），不宜久拖 |
+> | **S2-8** 北京时间收敛 | **实测面远大于立项描述**：`beijing_now*` 同体实现 ≥12 处（`core/db.py:12/19`、`trading_status.py:52`、`metric_history.py:45`、`quote_hub.py:18`、`llm_probe.py:39`、`intraday_monitor.py:45`、`events/extract.py:187`、`predict/collector.py:24`、`ths_sentinel.py:39`、`marketdb_freshness.py:43`、`assistant/tools.py:611`、`lurk_pool.py:39`、`board_flow.py:49/88`、`chip.py:48`、`fund_flow.py:45/86`、`market.py:267` …）；且 `date.today()` 仍参与**交易日归属**的另有 ~15 处（`theme_service.py:950`、`market_context.py:205`、`market.py:807/813/1038/1159`、`picks.py:633/709/928`、`assistant/tools.py:145/218/222`、`normalizer.py:147`、`climate.py:247/249`、`commodity_chain.py:252/254`、`trade_calendar.py:291`、`real_position.py:133` …） | ⚠️ **拆为独立批次（阶段 2.5），不与本批同做**。理由：①**改动面是阶段 2 其余项之和**；②每一处 `date.today()` 都携带**交易日归属语义**，改错 = 跨日错单 / 错池 / 错归因，**接近「口径变更」红线**，需逐处核对而非机械替换；③与阶段 2 的「抽离 + 性能」不同质，混批会让回归归因困难。**先做纯 `now` 函数的收敛（低风险子集），`date.today()` 归属另立一轮** |
+> | **S2-9** 三态文案 | 实测确认：后端 `picks/push_cards.py:20` 有 `_TRI_LABELS = {"unknown":"未判定","none":"无","null":"—"}`；前端 `lib/format.ts:166` **只有两键、缺 `"null"`** ⇒ 界面直接打出 `null`（与立项描述一致） | ✅ **并入本批**。**1 行改动**，同批成本近乎零；且属"用户直接看得见"的正确性缺陷 |
+> | **S2-10** 角色配色 | 实测两份前端表：`theme-card.tsx:60 ROLE_STYLE` **9 键**（缺 `领涨/滞涨/同步`）、`picks/pick-card.tsx:53 ROLE_STYLE` **11 键**（缺 `情绪票`）；后端权威集分裂为二：`picks/echelon.py:29-41 ROLE_BASE_SCORE` **11 键**、`services/theme_service.py:381 ROLE_ORDER` **8 键**（`classify_role` 产出） | ✅ **已完成（09-11）**。**裁定**：权威集 = `echelon.ROLE_BASE_SCORE` **11 键**——它是角色打分表，覆盖后端**全部**产出方（`classify_role` 7 + `broken_ladder` 的断板 + `classify_non_limit_up_role` 的中军/领涨/滞涨/同步）；`theme_service.ROLE_ORDER` 8 键只服务天梯排序且取值用 `.get(role, 9)` 兜底，**不是缺陷**。补充实测：僵尸键 `情绪票` **全仓仅存在于前端**（后端零产出方），已删 |
+> | **S2-6** 组件级错误边界 | 全仓无组件级 ErrorBoundary（仅根级） | ✅ **已完成（09-11）**。集成进 `Panel` 的 **body**（一处改动覆盖全站面板），头部刻意留在边界外（失败时用户仍能看出是哪个面板坏了） |
+>
+> **裁定汇总**：本批 = S2-4 ＋ S2-5 ＋ 性能 6 项 ＋ **S2-9**；本批尾部 = **S2-10 / S2-6**；**拆出 = S2-8**（阶段 2.5）。
+> **补充（09-11 收口）**：自检把 **S2-7 判为「并入本批」**，但主批执行时未排入 ⇒ 本轮**补做**（见交付表末行）。此后 S2-7 亦已完成。
+
+**阶段 2 交付与证据（2026-09-11）**
+
+| 项 | 改了什么 | 实测证据 |
+|---|---|---|
+| **S2-4**（管线抽离） | 新建 `services/picks_pipeline.py`（~840 行）：`generate_picks` 的 255 行管线整体迁出，入口 `generate_picks_pipeline(deps, hub, *, today=None)`；`PipelineDeps`（`frozen dataclass` + `from_state()`）取代 `request.app.state` 隐式读取，管线从此可被调度/脚本/测试直接复用。`api/routes/picks.py` **1161 → 367 行**，只剩依赖装配 | 新增 `tests/test_picks_pipeline.py` **5 项集成链路测试**（卡片字段完整 + 落库 / 闸门档撤区间不删记录 / 单次取数 / 池复用 / 契约形状），**正面对立项理由「集成链路零测试覆盖」** |
+| **S2-4**（反向依赖） | `picks/picks_autogen.py` 删 `from types import SimpleNamespace` 与 `from app.api.routes.picks import generate_picks`；改 `await generate_picks_pipeline(PipelineDeps.from_state(app.state), hub, today=today)`。**顺带修掉跨日口径分裂**：原「窗口判定用 now、写入用 `date.today()`」，现统一取 now（北京）并显式传入 | `tests/test_import_lint.py` 用 **AST**（非文本匹配，docstring 叙述不误判）判 `picks_autogen` 无 `app.api` 导入、无 `types` 导入；`test_picks_autogen.py` 新增断言钉住 `today` 被显式下传 |
+| **S2-4**（跨路由私有名） | 4 处「路由私有函数被当公共 API」全部上移：`_load_snapshot_map` / `_default_trade_date_async` → **新建 `services/market_snapshot.py`**；`_batch_quotes` → `services/quote_enrich.fetch_quotes_list()`（列表形态）；`_normalize_symbol` → `api/deps.py`（**刻意留 HTTP 层**：它抛 `HTTPException`，下沉 service 属层污染）。消费方 5 文件同步改 import | 新增 `test_routes_do_not_import_each_others_privates`（AST 规则）——**首次运行即抓出 2 处真实遗留**（`assistant.py ← market:_batch_quotes`、`events.py ← theme_catalog:_normalize_symbol`），修后转绿 |
+| **P2-4**（单次取数） | 单次 `generate_picks` 内当日涨停池原被拉 **3 次**（候选池 / 梯队上下文 / 情绪引擎）⇒ 收敛为**管线内唯一取数点** `_fetch_limit_up_pool()`，`limit_up_context()` 改纯函数接收池；`compute_market_sentiment()` 新增 `limit_up_pool` / `limit_up_date` 参数 | `test_limit_up_pool_fetched_once_per_run` **按日期计数**（`pool_dates.count(TRADE_DAY)==1` / `count(PREV_DAY)==1`——昨日池本就该单独取一次，不计入重复）；返回值新增可观测出口 `limit_up_pool_reused` |
+| **分层依赖守卫** | 新增 `tests/test_import_lint.py`：业务层（`picks/ services/ market/ events/ review/ sentiment/ factors/ risk/ paper/ news/ predict/ assistant/ notifiers/ data_providers/ research/`）**禁止 `import app.api`**，函数内导入同样命中（AST 遍历，非文本匹配） | 规则表 + 4 条断言；`test_route_picks_delegates_to_pipeline` 兼作**管线残留检查**（防回潮） |
+| **S2-9**（三态文案） | `apps/web/lib/format.ts` 的 `TRI_LABELS` 补 `null: "—"`；后端 `tests/test_push_cards.py` 新增 `test_tri_labels_match_frontend` | 前端 `format.test.ts` +4 项（23 项）；后端 5 passed。守卫用正则读前端源码双向比对，失败信息分列「仅后端有 / 仅前端有 / 值不同」 |
+| **S2-5**（useResource） | 新建 `hooks/use-resource.ts`：`ResourceStatus = unknown\|pending\|ready\|error` + `refresh()`；`nextDelay = min(base×5, max(base, 120_000))`（**封顶**：不封顶时 60s 盘外变 300s，09:00 打开的页面可能到 09:20 才切回盘中节奏）；setTimeout 链而非 setInterval（间隔每轮重算，盘外→盘中切换下一拍自动生效）；`isHidden()` 非 `"hidden"`（含 SSR 无 document）一律按可见——**宁多拉一次不冻住页面**；失败**保留旧值**、`pending` 仅在 refresh 时置位（后台轮询不闪 loading）。`usePollingFetch` 改薄壳委托并保留原签名（20 余调用点是"调用即忘"，改签名波及面大无收益） | 新建 `hooks/use-resource.test.tsx` **14 项**（三态推进 / `intervalMs=null` / 盘外 ×5 / **封顶 120s** / **长间隔不被封顶加速** / `marketHours:false` / 隐藏暂停+回可见补拉 / 失败保留旧值 / 从未成功=error / `key` 变化立即重拉 / `enabled` 门控 / refresh / 卸载）；`vitest.config.mts` 的 `include` 补 `hooks/**/*.test.tsx` |
+| **S2-5**（收编裸 setInterval） | **实收编 10 处**（审计称 7 处）：`workbench` / `hunting`（并删掉手写 `visibilitychange` 守卫）/ `stock-detail` 6 处 / `speed-panel` / `board-rank-panel` / `notification-drawer` / `task-center` / `floating-assistant`；`use-quote-stream` 降级轮询纳入可见性门控。**`marketHours` 逐处判定**：通知抽屉（含盘后条目）、任务中心（15:45 议程）、助手气泡（判读提醒）**盘外正是需要及时看到的时候** ⇒ 一律 `marketHours: false`。**刻意不动** `replay-chart.tsx`（确定性时钟步进动画，非轮询取数） | `task-center.test.tsx` 暴露一处**真实语义变更**：`useResource` 在 `enabled` false→true 时**立即拉一次**（与 `stock-detail`「切入页签立即拉一次」同语义），旧 `setInterval` 不拉 ⇒ 该测试由 `mockResolvedValueOnce` 改 `mockImplementation`，并在注释里写明来源 |
+| **S2-7**（相位常量） | `sentiment/engine.py` 定权威 `PHASE_ORDER` + 三组语义集合（`ADVERSE_PHASES` / `SEVERE_PHASES` / `STRONG_PHASES`），**9 处副本全部收编**：`gate.py`（WEAK/SEVERE/STRIP 三别名绑定权威）、`intraday_rules._EBB_PHASES`、`meta_confidence.STRONG/ADVERSE`、`picks/engine.py`（inline → 模块级 `PHASE_SCORE`）、`dragon_service`、`review/analyzers`、`experiments._SHADOW_PHASES`、`predict.PHASE_ENV_SCORE` | 新建 `tests/test_phase_constants.py` **9 项**。**守卫首次运行即抓出 2 处真实遗留**（`intraday_rules.py:126` 的 `("退潮","冰点")`、`picks/engine.py:138` 的内联字典）——纯人工核对漏掉的。**实测漂移出的两处真缺陷**：① `predict.PHASE_ENV_SCORE` 原为 `{"冰点":1.0,"分歧":0.9,"启动":0.7,"发酵":0.7,"高潮":0.3,"退潮":0.2}`——**「启动」是题材阶段不是市场相位**（`PHASE_ORDER` 无此值）⇒ 死键 + **「修复」缺失**一直走 `.get(phase, 0.5)` 默认值；② `experiments._SHADOW_PHASES` 同病 ⇒ **修复期的影子权重从未被校验过**。修法：前者把 0.5 显式写出（**与修正前实际生效值完全一致，非口径变更**）并去掉死键；后者直接取 `tuple(PHASE_ORDER)`（新增相位自动纳入校验） |
+| **S2-10**（角色配色） | 新建 `apps/web/lib/role-style.ts`（11 键 = `echelon.ROLE_BASE_SCORE`）+ `roleClass()` 兜底访问器；`theme-card.tsx` 与 `picks/pick-card.tsx` 两份表**删除并改导入**。**兜底样式刻意用虚线与透明底**：真实角色里 `同步/滞涨/跟风` 也是中性灰，兜底若同款，"漏配"就伪装成"低档角色"而永远查不出来（未知就该看着像未知） | 后端 `tests/test_role_style.py` **3 项**（键集全等双向诊断 + 单一来源 + **渲染侧禁直接索引**——`ROLE_STYLE[role]` 在 tsc 眼里永远是 `string`，只能文本守卫）；前端 `lib/role-style.test.ts` **6 项**。僵尸键 `情绪票` 全仓实测**仅存在于前端**，已删 |
+| **S2-6**（错误边界） | 新建 `components/ui/panel-boundary.tsx`（class 组件，`getDerivedStateFromError` + `componentDidCatch` 留痕 + 重试 + `resetKey`）；**集成进 `Panel` 的 body**——一处改动覆盖全站面板，头部（标题/来源/质量徽标）刻意留在边界外。边界健康时 `render()` 直接返回 children，**不产生额外 DOM 节点** ⇒ 不触碰全高契约的高度链 | 前端 `components/ui/panel-boundary.test.tsx` **8 项**（就地降级 / 原文透出 / 留痕 / 重试恢复 / `resetKey` 变化清除错误态 / `resetKey` 不变保持错误态 / Panel 集成「头部与页面其余部分照常」/ 正常面板不受影响）。⚠️ **实测踩坑**：详情面板的 `key` 必须挂在**边界**上而非子元素上——错误边界一旦进入错误态不会因 children 变化自动恢复，key 挂内层会变成"这个位置永久不可用" |
+
+> **S2-7 顺带发现（未擅自改，登记为待验证项）**：`picks/intraday_rules.py` 的事件排序
+> 「情绪适配」项里，非防守方向只认 `("高潮","发酵")`，**不含「修复」**——与 `STRONG_PHASES`
+> （修复/发酵/高潮）不一致。加进「修复」会改变排序结果（**口径变更**），需参数扫描/回测支持后
+> 再定，故本轮**只加注释标注、不改值**。
+
+> **S2-10 立项描述的订正（2026-09-11，实测回填）**：立项写的是「缺 `领涨/滞涨/同步` ⇒ 徽标无色」，
+> 但**用真实接口数据核对后，这个用户可见后果在当前数据下并未实际发生**：
+> - `/api/themes`（题材看板域）实测 7 卡 / 6 断板行，角色分布 `{跟风:8, 龙头:6, 断板:6, 中军:4, 首板:1}`
+>   —— **不含** `领涨/滞涨/同步`（那三类是**非涨停股**的相对题材基准超额，属猎场域）；
+> - `/api/picks/today`（猎场域）实测角色 `{同步:1}` —— 而猎场那份表**本来就是全的**（11 键）。
+>
+> 即：**缺的三键与使用该表的组件分属不同域**，当天并没有渲染出无色徽标。
+> 真正的缺陷是**结构性的**——两份各自维护的表 + 僵尸键 `情绪票` + 渲染侧直接索引无兜底：
+> 任何一次跨域复用、或后端新增角色，都会**静默**产出无色徽标（`Record<string,string>` 让 tsc 放行）。
+> 本轮按结构缺陷修复（合并为一份 + `roleClass()` 兜底 + 跨端键集守卫），
+> **不是**"修了一个正在发生的线上问题"。记录此订正以免后续复盘高估该缺陷的实际影响。
 
 **阶段 0 交付与证据（2026-09-11）**
 
@@ -290,6 +337,16 @@
 > ~~③ 参数白名单是否扩更多「组合节奏」类~~ → **已闭环（09-10，P1-15）**：扩至 5 个，「组合节奏/评分/展示容量」类纳入，风控/资金类永久排除。
 
 > ~~88 段真实规则（不臆断）~~ **已闭环（09-11）**：依北交所官方《证券代码、证券简称编制指引》第七条「普通股票首两位 83、87、88」判 30%，非臆断；302 段另有 marketdb 实测触板证据。见「阶段 0 交付」。
+
+**阶段 2 结转（2026-09-11 收尾盘点，均为「已显式标注、未擅自做」项）**：
+
+| # | 项 | 状态与原因 |
+|---|---|---|
+| 1 | **S2-8 北京时间收敛** | ⏳ **阶段 2.5**（唯一整项未做的 S 项）。拆分理由：`beijing_now*` 同体 ≥12 处 + `date.today()` 参与交易日归属 ~15 处，改动面是阶段 2 其余项之和；且每处 `date.today()` 携带**交易日归属语义**，改错 = 跨日错单，**接近「口径变更」红线**，需逐处核对而非机械替换。**建议先做纯 `now` 函数收敛（低风险子集）** |
+| 2 | **P1-2 残余**：消息项未抽独立 `memo` 组件 | ⏳ 未做。`activity` 流式 props 每 delta 变化，须把消息项拆成独立组件才能让 memo 生效；因 `key={m.id}` 稳定、且 `parseBlocks` 重解析已消除，属**边际收益**，风险收益比不佳 |
+| 3 | **P0-3 数据源改道**（marketdb `daily_k` 替代腾讯 qfq） | 🚫 **未做，需用户拍板**。属**复权口径变更**（腾讯 qfq vs marketdb 复权口径未知），触及红线；本轮只做并发化 + 缓存 |
+| 4 | **`intraday_rules` 非防守方向相位集合** | ⏳ **待验证**。非防守只认 `("高潮","发酵")`，不含「修复」（与 `STRONG_PHASES` 不一致）。加进「修复」会改变事件排序结果 = **口径变更**，需参数扫描/回测支持后再定；本轮**只加注释、不改值** |
+| 5 | **`stock-detail.tsx` 不再受 `set-state-in-effect` 规则约束** | ⚠️ **已知代价**（P1-1 引入 memo 的副作用，实测确认该规则不下探 `memo()` 组件体）。原 `eslint-disable` 指令变 dead directive 已删，改为 5 行注释写明「后续改本组件须人工守住」 |
 
 ---
 

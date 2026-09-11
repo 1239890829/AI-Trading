@@ -195,20 +195,14 @@ async def collect_rank_context(app_state, theme_names: list[str],
     if hub is None:
         ctx.degraded.append("行情服务不可用")
 
-    # 情绪（60s 缓存；miss 时与 /api/market/sentiment 同口径构建一次，不重复造轮子）
+    # 情绪（共享 60s 槽：与 /api/market/sentiment、题材相位、猎场相位路由同源，
+    # 一次计算喂多处——P1-3 前此处是第四个自建 build 闭包）
     try:
-        from app.core.ttl_cache import cache_on
-        from app.services.market_context import compute_market_sentiment
+        from app.services.market_context import get_cached_sentiment
 
-        cache = cache_on(app_state, "market.sentiment", 60, maxsize=1)
-
-        async def _build() -> dict:
-            result = await compute_market_sentiment(app_state.hub, app_state.snapshot_service)
-            return {"data": result, "meta": {}}
-
-        _, payload = await cache.get_or_set((), _build)
+        payload = await get_cached_sentiment(app_state, app_state.hub)
         if payload:
-            ctx.phase = (payload.get("data") or {}).get("phase")
+            ctx.phase = payload.get("phase")
     except Exception as exc:  # noqa: BLE001
         ctx.degraded.append(f"情绪不可用({type(exc).__name__})")
 
