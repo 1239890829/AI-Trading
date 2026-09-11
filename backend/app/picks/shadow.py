@@ -92,6 +92,48 @@ def load_execution_log(day: str) -> dict | None:
         return None
 
 
+#: 跳过原因（N4）：把「今天为什么没跑」写进台账，否则事后无法区分
+#: **没执行** 与 **执行了但 0 成交** —— 两者在"文件缺失"时长得一模一样。
+SKIP_NOT_TRADING_DAY = "not_trading_day"
+SKIP_WINDOW_CLOSED = "window_not_open"
+SKIP_GATE_NOT_JUDGEABLE = "gate_not_judgeable"
+SKIP_NO_RUNNER = "runner_not_ready"
+
+
+def persist_shadow_skip(day: str, reason: str, **extra) -> Path | None:
+    """**跳过分支留痕**（N4，2026-09-11）。
+
+    此前 `shadow_loop` 只有「执行完成」会由 `_persist` 落盘，其余分支（非交易日、
+    窗口未到、闸门不可判、runner 未就绪）**只打日志** ⇒ 台账上这些日子是空白，
+    排查时只能翻日志。现在每个跳过分支都写 `data/picks/shadow/<day>.json`。
+
+    两条必须守住的性质：
+    1. **不覆盖已执行的摘要**——若当天已经跑过（文件里有 `bought`/`sold`），
+       绝不能把它覆盖成 "skipped"，那等于把真实执行抹掉；
+    2. **同原因幂等**——循环每 60s 一拍，窗口未到会反复触发；原因没变就不重写，
+       避免每分钟一次无谓 IO。
+
+    :returns: 写入的路径；未写入（应保留原状）时返回 None。
+    """
+    existing = load_execution_log(day)
+    # 已有真实执行记录 ⇒ 保留，绝不覆盖
+    if existing and not existing.get("skipped"):
+        return None
+    # 同一原因已记录 ⇒ 幂等跳过
+    if existing and existing.get("skipped_reason") == reason:
+        return None
+
+    payload = {**(existing or {}), "day": day, "skipped": reason,
+               "skipped_reason": reason, "updated_at": beijing_now().isoformat()}
+    payload.update(extra)
+    d = _shadow_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"{day}.json"
+    p.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+    log.info("[SHADOW] skip recorded: %s (%s) → %s", day, reason, p)
+    return p
+
+
 class ShadowRunner:
     """影子账户的晨窗执行器。持有 scope=shadow 的独立 engine。"""
 
@@ -300,6 +342,9 @@ async def shadow_loop(app, stop: asyncio.Event) -> None:
                 td = tc.last_trade_date(days, asof=now.date()) if days else None
                 if td == now.date():
                     runner = getattr(app.state, "paper_shadow", None)
+                    # N4 留痕：runner 未就绪也要记一笔，否则那天在台账上就是空白
+                    if runner is None:
+                        persist_shadow_skip(now.date().isoformat(), SKIP_NO_RUNNER)
                     if runner is not None and not runner.executed_today():
                         from app.picks.execution_gate import collect_execution_gate
 
@@ -320,8 +365,21 @@ async def shadow_loop(app, stop: asyncio.Event) -> None:
                                             len(summary.get("skipped") or []),
                                             len(summary.get("sold") or []))
                         else:
-                            log.info("[SHADOW] gate not judgeable yet (%s), retry next beat",
-                                     (gate.get("caveats") or ["no data"])[0])
+                            caveat = (gate.get("caveats") or ["no data"])[0]
+                            log.info("[SHADOW] gate not judgeable yet (%s), retry next beat", caveat)
+                            # N4 留痕：闸门不可判是"有原因的没跑"，必须与"跑了但 0 成交"区分
+                            persist_shadow_skip(now.date().isoformat(),
+                                                SKIP_GATE_NOT_JUDGEABLE,
+                                                caveat=caveat,
+                                                gate_summary=gate.get("summary"))
+                else:
+                    # N4 留痕：非交易日（日历不含今日）
+                    persist_shadow_skip(now.date().isoformat(), SKIP_NOT_TRADING_DAY,
+                                        calendar_last_trade_date=td.isoformat() if td else None)
+            else:
+                # N4 留痕：窗口未到/已过。幂等写（同原因只写一次），不产生每分钟的 IO
+                persist_shadow_skip(now.date().isoformat(), SKIP_WINDOW_CLOSED,
+                                    minute_of_day=minutes)
         except Exception:
             log.exception("shadow loop beat failed")
         with contextlib.suppress(asyncio.TimeoutError):
