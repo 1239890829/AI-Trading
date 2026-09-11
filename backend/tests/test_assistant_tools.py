@@ -526,3 +526,85 @@ def test_climate_registered_in_specs_and_manifest():
     assert "climate" in TOOL_SPECS
     assert "climate" in tool_manifest()
     assert "|" not in TOOL_SPECS["climate"].params
+
+
+# ---------------------------------------------------------------- P2-5 传导链检索
+
+def _chain_out(**kw):
+    return _run(run_tool(ToolCall("chain", kw), _ctx(), cache=None))
+
+
+def test_chain_registered_in_specs_and_manifest():
+    from app.assistant.tools import TOOL_LABELS
+
+    assert "chain" in TOOL_SPECS
+    assert "chain" in tool_manifest()
+    assert "chain" in TOOL_LABELS
+    assert "|" not in TOOL_SPECS["chain"].params
+
+
+def test_chain_returns_targets_for_static_chain():
+    out = _chain_out(keyword="厄尔尼诺")
+    assert "磷化工" in out and "化肥" in out
+    assert "方向 +1" in out
+
+
+def test_chain_result_must_carry_unvalidated_caveat():
+    """红线守卫：不带这句，模型会把"厄尔尼诺→化肥"当选股依据讲给用户。
+
+    （与 climate 工具的 both_disclaimers 同类：口径必须随结论一起走。）
+    """
+    out = _chain_out(keyword="厄尔尼诺")
+    assert "人工维护的映射索引" in out
+    assert "不是已验证的行情规律" in out
+    assert "未经数据验证" in out
+    assert "不构成买卖建议" in out
+
+
+def test_chain_dynamic_direction_is_not_fabricated():
+    """非农/利率的方向取决于事件正文，本处无从判定 ⇒ 必须说"不固定"，不许填默认值。
+
+    这是本工具最危险的一处：给个看着像结论的方向，模型就会照讲。
+    """
+    out = _chain_out(keyword="非农")
+    assert "方向不固定" in out
+    # 不得出现任何具体方向数字
+    assert "方向 +1" not in out and "方向 -1" not in out
+    # 动态链不预置目标板块，如实说明
+    assert "动态确定" in out
+
+
+def test_chain_bidirectional_containment():
+    """关键词可带上下文（"美国非农数据"）也可只给触发词本身。"""
+    assert "非农" in _chain_out(keyword="美国非农数据")
+    assert "厄尔尼诺" in _chain_out(keyword="厄尔尼诺")
+    # 反向：给出的是链名也能命中（"农业链"）
+    assert "农业链" in _chain_out(keyword="农业链")
+
+
+def test_chain_unknown_keyword_gives_examples():
+    """未命中要给触发词示例帮模型换个说法，而不是只说"没找到"。"""
+    out = _chain_out(keyword="天顶星")
+    assert "未找到" in out
+    assert "厄尔尼诺" in out and "非农" in out
+
+
+def test_chain_missing_keyword_is_param_error():
+    out = _chain_out()
+    assert "参数缺失" in out
+    assert "厄尔尼诺" in out
+
+
+def test_chain_group_table_is_single_source():
+    """正向 match_chains 与反向 find_chains 必须同源（CHAIN_GROUPS），不各留一份词表。
+
+    若有人再抄一份触发词表，正向命中的链会与反向检索的链不一致——用户看到
+    "新闻里有这条链"却检索不到，且两者都不会报错。
+    """
+    from app.events.chains import CHAIN_GROUPS, chain_keywords
+
+    forward_keys = [k for g in CHAIN_GROUPS for k in g["keys"]]
+    assert set(forward_keys) == set(chain_keywords())
+    for g in CHAIN_GROUPS:
+        assert g["keys"], f"链 {g['id']} 没有触发词，正向永远命中不了"
+        assert g["direction_note"], f"链 {g['id']} 缺方向口径"

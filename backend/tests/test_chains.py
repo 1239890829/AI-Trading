@@ -247,3 +247,53 @@ def test_macro_events_select_attaches_line():
     out = select_macro_events([_row("中国", "中国8月CPI年率(%)", time="09:30", actual="0.8")])
     assert out[0]["line"] == "09:30 中国·CPI（公布 0.8）　中国8月CPI年率(%)"
 
+
+
+# ------------------------------------------------ 反向索引（P2-5，2026-09-12）
+
+
+def test_find_chains_is_inverse_of_match_chains():
+    """同一触发词，正向命中哪些链、反向就该检索到哪些链——两边不能分家。
+
+    这是 P2-5 的核心不变量：抓取时用 match_chains、回答用户时用 find_chains，
+    若两边对不上，会出现"新闻里明明有这条链、助手却检索不到"且**两边都不报错**。
+    """
+    from app.events.chains import CHAIN_GROUPS, find_chains, match_chains
+
+    for g in CHAIN_GROUPS:
+        kw = g["keys"][0]
+        # 正向：用触发词造一条标题，看命中哪些链（动态链按目标类型区分）
+        rows = match_chains(f"{kw}相关消息")
+        assert rows, f"触发词「{kw}」在正向 match_chains 里没有任何输出"
+        # 反向：同一词必须能检索到该组
+        ids = [x["id"] for x in find_chains(kw)]
+        assert g["id"] in ids, f"「{kw}」反向检索不到链 {g['id']}"
+
+
+def test_find_chains_empty_is_safe():
+    from app.events.chains import find_chains
+
+    assert find_chains("") == []
+    assert find_chains("   ") == []
+    assert find_chains("这个关键词与任何链都无关") == []
+
+
+def test_find_chains_dynamic_groups_carry_no_direction():
+    """动态链（非农/利率）在反向索引里**不带具体方向行**——方向取决于事件正文。"""
+    from app.events.chains import find_chains
+
+    for kw in ("非农", "加息"):
+        got = find_chains(kw)
+        assert got, f"「{kw}」应能检索到"
+        for g in got:
+            assert g["targets"] == [], f"链 {g['id']} 不该预置 target（方向动态）"
+            assert "不固定" in g["direction_note"] or "随主导矛盾" in g["direction_note"]
+
+
+def test_find_chains_static_groups_expose_rows():
+    from app.events.chains import find_chains
+
+    got = find_chains("厄尔尼诺")[0]
+    names = [t["target"] for t in got["targets"]]
+    assert "化肥" in names and "磷化工" in names
+    assert all(t["direction"] == 1 for t in got["targets"])

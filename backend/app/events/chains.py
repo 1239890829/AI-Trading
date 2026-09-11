@@ -114,6 +114,105 @@ def _rate_rows(title: str) -> list[dict]:
 
 _RATE_KEYS = ("加息", "降息", "降准", "议息", "FOMC", "美联储决议")
 
+# 非农触发词（原先写死在 match_chains 的 `if "非农" in text` 里）。
+# 抽出来是为了让反向索引与正向匹配**共用同一份**——写死一处、另抄一处必然漂移。
+_NFP_KEYS = ("非农",)
+
+
+# ------------------------------------------------ 链目录（正向/反向的**唯一真相源**，P2-5）
+
+# 每组一条：触发词 keys + 该链指向什么。
+# ⚠️ `direction` 为 None 表示**方向不固定**（依赖事件正文里的意外差/主导矛盾），
+#    反向检索必须如实说"方向待判"，不能给一个看着像结论的方向。
+# ⚠️ 强度/弹性数字沿用表头声明：人工维护的**映射索引**，非已验证规律（KB-DEC-019）。
+CHAIN_GROUPS: tuple[dict, ...] = (
+    {
+        "id": "el_nino",
+        "label": "厄尔尼诺/拉尼娜农业链",
+        "keys": _EL_NINO_KEYS,
+        "rows": _EL_NINO_ROWS,
+        "direction_note": "方向固定为 +1（事件本体即利好源头）；强度为人工弹性排序",
+    },
+    {
+        "id": "gpt",
+        "label": "海外 AI 产品链",
+        "keys": _GPT_KEYS,
+        "rows": _GPT_ROWS,
+        "direction_note": "方向固定为 +1（海外产品事件→A股题材映射）",
+    },
+    {
+        "id": "nfp",
+        "label": "非农宏观传导链",
+        "keys": _NFP_KEYS,
+        "rows": (),
+        "direction_note": (
+            "**方向不固定**：由标题里的意外差决定——强意外→偏空、弱意外→偏多、"
+            "未给方向→显式 0（不猜）。历史回测 t 不显著，仅提示级"
+        ),
+    },
+    {
+        "id": "rate",
+        "label": "加息/降息流动性链",
+        "keys": _RATE_KEYS,
+        "rows": (),
+        "direction_note": (
+            "**方向随主导矛盾切换**：降息/降准→+1、加息→−1、未含方向词→显式 0；"
+            "strength 恒为 1（常识弱方向）"
+        ),
+    },
+)
+
+
+def chain_keywords() -> list[str]:
+    """全部触发词（供"未命中时给示例"，避免用户/模型无从下手）。"""
+    out: list[str] = []
+    for g in CHAIN_GROUPS:
+        out += [k for k in g["keys"] if k not in out]
+    return out
+
+
+def find_chains(keyword: str) -> list[dict]:
+    """关键词 → 相关传导链（**反向索引**，P2-5 的 `chain|keyword=`）。
+
+    与 `match_chains` 的分工（两者语义不同，不可互相替代）：
+    - `match_chains(title)` **正向**：给一条新闻标题，返回它触发哪些链（抽取时用）；
+    - `find_chains(keyword)` **反向**：给一个词，返回它关联哪些链（助手检索时用）。
+
+    双向包含匹配：关键词可以是触发词本身（"厄尔尼诺"），也可以带着上下文
+    （"美国非农数据" → 命中"非农"），还可命中链名（"农业链"）。
+
+    返回每组的 `direction_note` 与静态 target 行；**动态链（非农/利率）不带
+    具体方向**——方向取决于正文，此处无从判定，如实说明而非给个默认值。
+    """
+    kw = (keyword or "").strip()
+    if not kw:
+        return []
+    out: list[dict] = []
+    for g in CHAIN_GROUPS:
+        hit: str | None = None
+        for k in g["keys"]:
+            if k in kw or kw in k:
+                hit = k
+                break
+        if hit is None and (kw in g["label"] or g["label"] in kw):
+            hit = g["label"]
+        if hit is None:
+            continue
+        rows = [
+            {"target": r["target"], "target_type": r["target_type"],
+             "direction": r["direction"], "strength": r["strength"]}
+            for r in g["rows"]
+        ]
+        out.append({
+            "id": g["id"],
+            "label": g["label"],
+            "matched_keyword": hit,
+            "targets": rows,
+            "direction_note": g["direction_note"],
+            "basis": "传导链表 chains（人工维护的映射索引，非已验证行情规律）",
+        })
+    return out
+
 
 def _judge_text(title: str, summary: str | None) -> str:
     """与 extract._judge_text 同义（复制实现避免循环导入：extract import chains）。
@@ -142,19 +241,22 @@ def match_chains(title: str, summary: str | None = None) -> list[dict]:
 
     每组命中一次；组内触发词取第一个命中（不重复产行）；跨组独立累加。
     宏观两组（非农/利率）行内 direction 依赖判定文本动态判定。
+
+    触发词与组序都取自 `CHAIN_GROUPS`（与反向 `find_chains` 同源）——此前每个
+    组各写一个 `if ... in text` 且词表散在各处，加组要改三处、必然漏。
     """
     text = _judge_text(title, summary)
     out: list[dict] = []
-    if any(k in text for k in _EL_NINO_KEYS):
-        hit = next(k for k in _EL_NINO_KEYS if k in text)
-        out += [{**r, "basis": f"{r['basis']}；触发词「{hit}」"} for r in _EL_NINO_ROWS]
-    if any(k in text for k in _GPT_KEYS):
-        hit = next(k for k in _GPT_KEYS if k in text)
-        out += [{**r, "basis": f"{r['basis']}；触发词「{hit}」"} for r in _GPT_ROWS]
-    if "非农" in text:
-        out += _nfp_rows(text)
-    if any(k in text for k in _RATE_KEYS):
-        out += _rate_rows(text)
+    for g in CHAIN_GROUPS:
+        hit = next((k for k in g["keys"] if k in text), None)
+        if hit is None:
+            continue
+        if g["id"] == "nfp":
+            out += _nfp_rows(text)
+        elif g["id"] == "rate":
+            out += _rate_rows(text)
+        else:
+            out += [{**r, "basis": f"{r['basis']}；触发词「{hit}」"} for r in g["rows"]]
     return out
 
 

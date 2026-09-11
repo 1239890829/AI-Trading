@@ -1530,7 +1530,66 @@ async def _t_news(ctx: ToolContext, **kw) -> str:
     return _clip("\n".join(lines))
 
 
+async def _t_chain(ctx: ToolContext, **kw) -> str:  # noqa: ARG001 — 纯函数工具，不需要 ctx
+    """事件→板块传导链检索（P2-5，`chain|keyword=`）。
+
+    需求形态的澄清（账本 P2-5 曾把两件事混为一件）：
+    - `events|hot` **已无必要**——「热榜」由 `hot` 工具覆盖 ⇒ 该子项销账；
+    - `chain|keyword` 是**真的缺**：`chains.py` 原有的是 `match_chains(title)`——
+      **给定一条新闻标题、返回它命中哪些链**（正向，抽取时用）；而需求是
+      **给定一个关键词、返回相关链**（反向索引，检索时用）。两者语义不同，
+      故新增 `find_chains()` 而非改 `match_chains`。
+
+    三条纪律（测试锁住）：
+    1. **必须随结论给口径**——本表是**人工维护的映射索引，不是已验证的行情规律**；
+       其中强度/弹性数字源自单日单案例观察（KB-DEC-019 反固化条款）。只报
+       "厄尔尼诺→化肥" 而不带这句，模型会把它当选股依据讲给用户。
+    2. **方向不固定的链不给方向**——非农/利率的 direction 取决于事件正文里的
+       意外差/主导矛盾，这里无从判定，如实说"待判"，绝不填个默认值。
+    3. 未命中时给**触发词示例**帮模型换个说法，而不是只说"没找到"。
+    """
+    from app.events.chains import chain_keywords, find_chains
+
+    keyword = (kw.get("keyword") or "").strip()
+    if not keyword:
+        return ("参数缺失：keyword（事件关键词，如 厄尔尼诺 / 非农 / 加息 / OpenAI）。"
+                f"当前支持的触发词：{'、'.join(chain_keywords())}")
+
+    hits = find_chains(keyword)
+    if not hits:
+        return (f"未找到与「{keyword}」相关的传导链。传导链按**触发词**建索引，"
+                f"当前支持的触发词：{'、'.join(chain_keywords())}")
+
+    lines = [f"【传导链检索：{keyword}】命中 {len(hits)} 条"]
+    for g in hits:
+        lines.append(f"## {g['label']}（命中触发词「{g['matched_keyword']}」）")
+        if g["targets"]:
+            for t in g["targets"]:
+                lines.append(f"- {t['target']}（类型 {t['target_type']}，"
+                             f"方向 {'+' if t['direction'] > 0 else ''}{t['direction']}，"
+                             f"强度 {t['strength']}）")
+        else:
+            lines.append("- 该链的目标板块随事件正文动态确定，此处不预置")
+        lines.append(f"- 方向口径：{g['direction_note']}")
+    lines.append(
+        "- ⚠️ 口径：本表是**人工维护的映射索引（关键词 → 题材），不是已验证的行情规律**；"
+        "强度/弹性数字源自单日单案例观察、**未经数据验证**，只作线索与可解释性参考，"
+        "不得当结论引用、不得据此跨题材外推。"
+    )
+    lines.append("- ⚠️ 不构成买卖建议。")
+    return _clip("\n".join(lines))
+
+
 TOOL_SPECS: dict[str, ToolSpec] = {
+    # P2-5（2026-09-12）：事件→板块传导链的**反向检索**（关键词 → 链）。
+    # 与 events 工具的分工：events 给「发生了什么」，本工具给「它可能传到哪些板块」。
+    "chain": ToolSpec(
+        "chain",
+        "事件→板块传导链检索（给关键词，返回关联的链条与目标板块；"
+        "映射索引非已验证规律，强度值未经数据验证）",
+        "keyword=事件关键词（如 厄尔尼诺 / 非农 / 加息 / OpenAI）",
+        _t_chain,
+    ),
     "quotes": ToolSpec("quotes", "批量实时行情快照（指数需带前缀，如 sh000001）", "symbols=600519,000001（≤6 只）", _t_quotes),
     "limit_up": ToolSpec("limit_up", "某交易日涨停池", "date=YYYY-MM-DD（可省略=最近交易日）", _t_limit_up),
     "limit_down": ToolSpec("limit_down", "某交易日跌停池", "date=YYYY-MM-DD（可省略）", _t_limit_down),
@@ -1649,6 +1708,7 @@ TOOL_SPECS: dict[str, ToolSpec] = {
 # 工具名 → 中文短标签（"正在取数：龙虎榜" 这类进度提示与工具回执用）。
 # 与 TOOL_SPECS 的键集由 tests/test_assistant.py 守卫，防新增工具漏标签。
 TOOL_LABELS: dict[str, str] = {
+    "chain": "传导链",
     "quotes": "实时行情",
     "limit_up": "涨停池",
     "limit_down": "跌停池",
