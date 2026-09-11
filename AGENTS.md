@@ -30,7 +30,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2523 项（2462 passed / 61 skipped）· 166 文件（09-11 实测）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2537 项（2476 passed / 61 skipped）· 167 文件（09-11 实测）
 # ⚠️ 耗时强依赖「8000 是否在跑」：后端服务停着 ~64s，服务在跑时 ~330s（5 倍）。
 # 原因是常驻调度与测试同时抢 SQLite/网络；**报耗时必须说明前提**，否则会被当成回归。
 # ⚠️ `--basetemp` 不可省：默认临时目录会被沙箱拒绝创建（EEXIST → PermissionError），
@@ -48,7 +48,7 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 2523 项（2462 passed / 61 skipped）· 166 文件、前端 392 项 / 51 文件、eslint **0 error / 0 warn**
+> **门禁口径**：后端 2537 项（2476 passed / 61 skipped）· 167 文件、前端 392 项 / 51 文件、eslint **0 error / 0 warn**
 > （25 条回归已按 P1-27 清零；仅 notification-drawer 保留 1 处带理由的 C 类豁免）。
 > **测试规模与告警数同属「会失真的状态标注」**——改动后要实测回填，不要沿用旧数字
 > （此前「≤1 warn / 后端 580 / 前端 97 / 219 / 257 / 263 / 342 / 1925」均已被后续改动追过，教训见 `docs/retro-and-gaps.md` §七）。

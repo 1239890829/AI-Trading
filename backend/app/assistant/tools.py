@@ -499,6 +499,97 @@ async def _t_auction(ctx: ToolContext, **kw) -> str:
     ], total=len(rows))
 
 
+async def _t_factor_profile(ctx: ToolContext, **kw) -> str:
+    """因子档案：本地全历史 IC/ICIR 评估结论（P2-28① 批量）。
+
+    ⚠️ 口径必须随结论一起给出：**样本内结论，未做样本外验证**，不得直接当选股权重。
+    产物缺失/超期时如实说明（三态），不凭印象说"某因子有效"。
+    """
+    try:
+        from app.factors.report import ic_evidence
+    except Exception as exc:  # noqa: BLE001
+        return f"因子档案：读取失败（{exc}）"
+    try:
+        ev = ic_evidence(limit=8)
+    except Exception as exc:  # noqa: BLE001
+        return f"因子档案：评估产物读取失败（{exc}）"
+
+    if not ev.get("available"):
+        return f"因子档案：当前无可用评估产物（{ev.get('reason') or '尚未生成'}）"
+
+    parts = []
+    if ev.get("stale"):
+        parts.append(f"⚠️ 产物已超期（{ev.get('age_days')} 天 > {ev.get('max_age_days')}），结论可能过时")
+    counts = ev.get("counts") or {}
+    parts.append(
+        f"因子评估：PASS {counts.get('pass', 0)} / 观察 {counts.get('conditional', 0)} "
+        f"/ 未过 {counts.get('fail', 0)}"
+    )
+    for f in (ev.get("top") or [])[:8]:
+        direction = {1: "正向", -1: "反向"}.get(f.get("direction"), "方向未定")
+        parts.append(
+            f"· {f.get('name')}（{f.get('category')}）T+{f.get('horizon')} "
+            f"IC {f.get('ic_mean')} ICIR {f.get('icir')} {direction} · {f.get('verdict')}"
+        )
+    if ev.get("caveat"):
+        parts.append(f"口径：{ev['caveat']}")
+    return "\n".join(parts)
+
+
+async def _t_param_changes(ctx: ToolContext, **kw) -> str:
+    """参数变更单（审计留痕，P2-28① 批量）。
+
+    白名单之外不可改；每次应用/回滚都有留痕。取不到时说明，不编造变更记录。
+    """
+    if ctx.session_factory is None:
+        return "参数变更：无数据源（session_factory 未提供）"
+    try:
+        from sqlalchemy import select
+
+        from app.models.agent import AgentParamChange
+
+        with ctx.session_factory() as db:
+            rows = db.execute(
+                select(AgentParamChange).order_by(AgentParamChange.id.desc()).limit(20)
+            ).scalars().all()
+            recs = [{"id": r.id, "key": r.key, "before": r.before, "after": r.after,
+                     "status": r.status,
+                     "at": r.created_at.isoformat() if r.created_at else ""} for r in rows]
+    except Exception as exc:  # noqa: BLE001
+        return f"参数变更：读取失败（{exc}）"
+    if not recs:
+        return "参数变更：暂无变更记录"
+    return _fmt_rows("参数变更（最近 20 条）", recs, [
+        ("id", ""), ("key", "参数"), ("before", "原值"), ("after", "新值"),
+        ("status", "状态"), ("at", "时间"),
+    ], total=len(recs))
+
+
+async def _t_agent_tasks(ctx: ToolContext, **kw) -> str:
+    """任务中心：最近任务的类型/状态/风险等级（P2-28① 批量）。"""
+    if ctx.session_factory is None:
+        return "任务中心：无数据源（session_factory 未提供）"
+    try:
+        from sqlalchemy import select
+
+        from app.models.agent import AgentTask
+
+        with ctx.session_factory() as db:
+            rows = db.execute(
+                select(AgentTask).order_by(AgentTask.id.desc()).limit(20)
+            ).scalars().all()
+            recs = [{"id": r.id, "type": r.type, "status": r.status,
+                     "risk_level": r.risk_level or "",
+                     "at": r.created_at.isoformat() if r.created_at else ""} for r in rows]
+    except Exception as exc:  # noqa: BLE001
+        return f"任务中心：读取失败（{exc}）"
+    if not recs:
+        return "任务中心：暂无任务"
+    return _fmt_rows("任务中心（最近 20 条）", recs, [
+        ("id", ""), ("type", "类型"), ("status", "状态"), ("risk_level", "风险"), ("at", "时间"),
+    ], total=len(recs))
+
+
 async def _t_boards(ctx: ToolContext, **kw) -> str:
     btype = (kw.get("board_type") or "hangye").strip()
     if btype not in ("hangye", "gainian"):
@@ -1361,6 +1452,16 @@ TOOL_SPECS: dict[str, ToolSpec] = {
                        "symbols=单只代码", _t_trades),
     "auction": ToolSpec("auction", "集合竞价快照（仅 ths 一源，取不到属正常）",
                         "symbols=逗号分隔代码（≤5）｜stage=final（默认）", _t_auction),
+    # P2-28① 第三批（2026-09-11）：因子档案 / 参数变更单 / 任务中心——
+    # 均用既有数据源（factors.report 纯函数 + 已注入的 session_factory），
+    # 一次登记，避免逐个动能力清单守卫。
+    "factor_profile": ToolSpec("factor_profile",
+                               "因子档案：本地全历史 IC/ICIR 评估（样本内，未做样本外验证）",
+                               "无参数", _t_factor_profile),
+    "param_changes": ToolSpec("param_changes", "参数变更单（审计留痕，最近 20 条）",
+                              "无参数", _t_param_changes),
+    "agent_tasks": ToolSpec("agent_tasks", "任务中心：最近任务与状态（最近 20 条）",
+                            "无参数", _t_agent_tasks),
     "boards": ToolSpec("boards", "板块排行榜", "board_type=hangye|gainian（默认 hangye）", _t_boards),
     "hot": ToolSpec("hot", "人气热股榜", "period=day|week|month（默认 day）", _t_hot),
     "anomaly": ToolSpec("anomaly", "当日异动原因（可按代码查为什么异动）", "symbols=可选，逗号分隔≤6只；缺省=全市场榜", _t_anomaly),
@@ -1453,6 +1554,9 @@ TOOL_LABELS: dict[str, str] = {
     "orderbook": "盘口",
     "trades": "逐笔",
     "auction": "集合竞价",
+    "factor_profile": "因子档案",
+    "param_changes": "参数变更",
+    "agent_tasks": "任务中心",
     "boards": "板块排行",
     "hot": "人气热榜",
     "anomaly": "异动原因",

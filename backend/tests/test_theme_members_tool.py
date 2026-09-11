@@ -13,8 +13,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from app.assistant.tools import ToolCall, ToolContext, run_tool
 
 
@@ -125,8 +123,8 @@ def test_no_members_is_stated():
 
 
 def test_members_failure_is_reported():
-    cat = _Catalog([("885904", "代糖概念")], boom=False)
-    # get_members 抛异常
+    """get_members 抛异常 ⇒ 如实报失败，不静默当"无成分"。"""
+
     class _Boom(_Catalog):
         def get_members(self, code):
             raise RuntimeError("members down")
