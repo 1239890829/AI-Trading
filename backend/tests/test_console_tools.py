@@ -157,3 +157,63 @@ def test_all_three_registered():
     for k in ("factor_profile", "param_changes", "agent_tasks"):
         assert k in specs
         assert T.tool_label(k)
+
+
+# ---------------------------------------------------------------- 做T决策库（P2-28① 最后一项）
+
+
+def test_minute_decisions_without_source_is_explicit():
+    out = _run("minute_decisions", ToolContext(provider=object()), symbol="600519")
+    assert "无数据源" in out
+
+
+def test_minute_decisions_rejects_bad_limit(monkeypatch):
+    out = _run("minute_decisions", ToolContext(provider=object(), session_factory=_sf([])),
+               limit="abc")
+    assert "参数不合法" in out
+
+
+def test_minute_decisions_empty_is_stated(monkeypatch):
+    import app.market.minute_decisions as md
+
+    monkeypatch.setattr(md, "list_decisions", lambda *a, **kw: [])
+    out = _run("minute_decisions", ToolContext(provider=object(), session_factory=_sf([])),
+               symbol="600519")
+    assert "暂无记录" in out
+
+
+def test_minute_decisions_explains_open_is_not_failure(monkeypatch):
+    """**关键纪律**：open = 未到结算窗口，不是失败。
+
+    若不加这句，模型看到一堆 open 可能读成"决策全错"。
+    """
+    import app.market.minute_decisions as md
+
+    items = [
+        {"symbol": "600519", "trigger_ts": "10:05", "bias": "buy", "signal_price": 10.1,
+         "realized_spread_pct": 0.4, "outcome": "correct"},
+        {"symbol": "600519", "trigger_ts": "10:30", "bias": "buy", "signal_price": 10.2,
+         "realized_spread_pct": None, "outcome": "open"},
+    ]
+    monkeypatch.setattr(md, "list_decisions", lambda *a, **kw: items)
+    out = _run("minute_decisions", ToolContext(provider=object(), session_factory=_sf([])),
+               symbol="600519")
+    assert "600519" in out
+    assert "correct 1" in out and "open 1" in out, "必须给出各 outcome 的计数"
+    assert "不是失败" in out
+
+
+def test_minute_decisions_failure_is_reported():
+    def boom():
+        raise RuntimeError("db down")
+
+    out = _run("minute_decisions", ToolContext(provider=object(), session_factory=boom))
+    assert "失败" in out
+
+
+def test_minute_decisions_registered():
+    import app.assistant.tools as T
+
+    specs = getattr(T, "TOOLS", None) or getattr(T, "TOOL_SPECS", {})
+    assert "minute_decisions" in specs
+    assert T.tool_label("minute_decisions") == "做T决策"

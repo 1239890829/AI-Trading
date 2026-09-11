@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 from dataclasses import dataclass, field
@@ -588,6 +589,57 @@ async def _t_agent_tasks(ctx: ToolContext, **kw) -> str:
     return _fmt_rows("任务中心（最近 20 条）", recs, [
         ("id", ""), ("type", "类型"), ("status", "状态"), ("risk_level", "风险"), ("at", "时间"),
     ], total=len(recs))
+
+
+async def _t_minute_decisions(ctx: ToolContext, **kw) -> str:
+    """做 T 决策库（记录 → 结算 → 错误归因），P2-28① 最后一项。
+
+    与 `/api/market/minute-decisions` 同口径：读时**惰性结算**到期的 open 记录
+    （12:00 后才结算，盘中到期的那部分也能算）。
+
+    纪律：**outcome=open 表示"还没到结算窗口"，不是失败**——
+    展示时必须给出各 outcome 的计数，避免模型把一堆 open 读成"决策全错"。
+    """
+    if ctx.session_factory is None:
+        return "做T决策：无数据源（session_factory 未提供）"
+    symbol = (kw.get("symbol") or "").strip() or None
+    try:
+        limit = int(kw.get("limit") or 20)
+    except (TypeError, ValueError):
+        return "参数不合法：limit 必须是整数"
+    limit = max(1, min(limit, 50))
+
+    try:
+        from app.core.bjtime import beijing_now
+        from app.market import minute_decisions as md
+
+        # 结算是同步阻塞（查 K 线）⇒ 丢到线程，别卡住事件循环
+        if beijing_now().hour >= 12:
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(md.settle_due, ctx.session_factory,
+                                       md.tdx_points, symbol)
+        items = await asyncio.to_thread(md.list_decisions, ctx.session_factory,
+                                       symbol, limit)
+    except Exception as exc:  # noqa: BLE001
+        return f"做T决策：读取失败（{exc}）"
+
+    if not items:
+        return f"做T决策：暂无记录（symbol={symbol or '全部'}）"
+
+    counts: dict[str, int] = {}
+    for it in items:
+        k = it.get("outcome") or "open"
+        counts[k] = counts.get(k, 0) + 1
+    head = "、".join(f"{k} {v}" for k, v in sorted(counts.items()))
+    body = _fmt_rows(
+        f"做T决策（{symbol or '全部'}，最近 {len(items)} 条 · {head}）",
+        items,
+        [("symbol", ""), ("trigger_ts", "触发"), ("bias", "方向"),
+         ("signal_price", "信号价"), ("realized_spread_pct", "已实现%"),
+         ("outcome", "结果")],
+        total=len(items),
+    )
+    return body + "\n注：outcome=open 表示尚未到结算窗口，不是失败。"
 
 
 async def _t_boards(ctx: ToolContext, **kw) -> str:
@@ -1462,6 +1514,11 @@ TOOL_SPECS: dict[str, ToolSpec] = {
                               "无参数", _t_param_changes),
     "agent_tasks": ToolSpec("agent_tasks", "任务中心：最近任务与状态（最近 20 条）",
                             "无参数", _t_agent_tasks),
+    # P2-28① 最后一项（2026-09-11）：做T决策库。惰性结算与 /api/market/minute-decisions 同口径。
+    "minute_decisions": ToolSpec("minute_decisions",
+                                 "做T决策库（记录→结算→错误归因；open=未到结算窗口，非失败）",
+                                 "symbol=可选，按标的代码过滤｜limit=条数（1~50，默认 20）",
+                                 _t_minute_decisions),
     "boards": ToolSpec("boards", "板块排行榜", "board_type=hangye|gainian（默认 hangye）", _t_boards),
     "hot": ToolSpec("hot", "人气热股榜", "period=day|week|month（默认 day）", _t_hot),
     "anomaly": ToolSpec("anomaly", "当日异动原因（可按代码查为什么异动）", "symbols=可选，逗号分隔≤6只；缺省=全市场榜", _t_anomaly),
@@ -1557,6 +1614,7 @@ TOOL_LABELS: dict[str, str] = {
     "factor_profile": "因子档案",
     "param_changes": "参数变更",
     "agent_tasks": "任务中心",
+    "minute_decisions": "做T决策",
     "boards": "板块排行",
     "hot": "人气热榜",
     "anomaly": "异动原因",
