@@ -329,3 +329,22 @@
 - **附带收益**：门控可统一表达（`AlertEngine` 盘外只空转不判读并降至 300s；`risk-refresher` 盘外 1800s），
   把「恒定刷新」改成「按交易时段」，顺带收掉 P2-9 与 P1-3 的门控部分。
 - **关联**：[[KB-ENG-42]] [[KB-ENG-54]]
+
+### KB-DEC-022 agent 域事件时间存储统一为北京 naive（方案 A，2026-09-12）
+
+- **决策**：agent 域 7 表 14 列（agent_task/triage/param/param_change/agenda/experiment/audit 的全部
+  事件时间列）从「UTC naive」一次性迁移为「北京 naive」（+8h，699 个值），写入侧同步翻转为
+  `beijing_now_naive()`——与全系统事件时间口径（2026-09-09 定）收敛，双口径消除。
+- **背景**：此前显示层用方案 B 修复（前端补 `Z` 按 UTC 解释），但库里仍是 UTC naive——任何
+  **后端时间窗口查询**（预算、cutoff、周报）都得各自记得 `-8h`，漏一处就是静默错判
+  （`_h_data_check` 的 12h 窗口实为 20h 即实例）。
+- **纪律**：
+  1. **写码与写库必须同窗口切换**：新代码上线前存量必须已迁移，否则新写北京、旧存 UTC 混库。
+  2. **一次性迁移必须三重防呆**：marker 文件拒重跑（+8h 不可逆叠加）／迁移前 MAX≤utcnow 断言
+     （数据不像 UTC 就拒绝）／dry-run 默认。
+  3. **回读校验用精确等值（新 MAX==旧 MAX+8h），不用「像不像 UTC」启发式**——陈旧列的 MAX
+     本来就老，启发式必误报。
+  4. **帮手函数名与口径必须一致**：`_utc_cutoff_today`→`_bj_cutoff_today` 等随迁移改名。
+  5. 前端 helper **删除旧版不并存**（timeTextUTC → timeTextBJ），naive 补 `+08:00`、带时区串
+     原样解析（防二次偏移），输出仍固定 Asia/Shanghai。
+- **关联**：[[KB-TRADE-02]] [[KB-ENG-50]] [[KB-ENG-56]]

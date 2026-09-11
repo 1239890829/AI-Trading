@@ -313,8 +313,9 @@ C2 全市场日 K dump（已被 TDX 替代）；"等 LLM 再做摘要"（规则�
 - **改完后端必须重启验证 8000 上的实例**（无 --reload 时改完不重启=旧代码）；起服务必须用
   `run_in_background`，bash 子 shell `( &)` 会被沙箱收割（踩过 3 次）。
 - 禁止 dev server 运行时 `next build`；pytest/build 需要 `CODEBUDDY_SAFE_DELETE_ENABLED=0`（沙箱批量删除保护）；
-  **每次跑完 pytest 必须 `git checkout -- backend/data/trade_calendar.json`**（测试会把真实全年官方日历
-  覆盖成 5 天残片；另注意重启后端会合法重写该文件的 fetched_at，diff 只有时间戳属正常）。
+  **trade_calendar.json 已是未跟踪运行态**（gitignored，git checkout 对它无效）：测试已隔离、不再改写它
+  （2026-09-12 实测 45 项 calendar 测试前后文件无变化），健康判据 = `source:"official"` 且 days ≥ 240；
+  重启后端会合法重写该文件的 fetched_at，diff 只有时间戳属正常。
 - **测试隔离是"库隔离了、文件没隔离"**：`tests/conftest.py` 把库设成 `sqlite:///:memory:`，
   所以测试改不到生产数据行；但凡写盘的目录（如 `app.review.storage.REPORT_DIR`）必须一并指向临时目录，
   否则测试垃圾会落进 `data/review/reports/`，且按 trade_date 删文件的清理逻辑会误删真实报告

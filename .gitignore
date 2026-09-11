@@ -57,6 +57,8 @@ data/*.bak-*
 # 运行时状态文件（缺文件时代码自建/降级；pytest 也会改写 trade_calendar.json）
 backend/data/trade_calendar.json
 backend/data/sentiment_metrics.json
+# 一次性迁移的防重跑 marker（migrate_agent_time_to_bj.py）
+data/.agent_time_migrated*
 
 # 归档审计明细大 JSON（theme_audit.py --audit 可再生）
 docs/archive/theme-audit-2026-09-01.json
