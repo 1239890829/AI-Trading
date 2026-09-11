@@ -69,6 +69,13 @@ jobs:
       - name: ESLint
         run: npx eslint .
 
+      # 构建期才暴露的问题（Next 约定的文件结构、server/client 组件边界、
+      # 构建期导入）tsc 与 vitest 都测不到——tsc 只查类型、vitest 只测 lib 纯函数。
+      # 2026-09-11 本地实测（**移走 .env.local 模拟 CI**，因为它被 gitignore、
+      # CI 上必然不存在）：构建成功，约 31s，8/8 静态页 ⇒ 无需额外环境变量。
+      - name: 生产构建（next build）
+        run: npx next build
+
   docs:
     name: docs (doc-health)
     runs-on: ubuntu-latest
