@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import timezone
 
 from app.assistant.prompt import PageContext
+from app.core.bjtime import BJ_TZ, beijing_now
 from app.schemas.market import Quote
 
 log = logging.getLogger(__name__)
@@ -74,7 +75,8 @@ def _as_of(q: Quote) -> str:
         return "未知"
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone().strftime("%H:%M")
+    # 展示时间固定北京——.astimezone() 按进程时区解释，CI/海外机器会错 8 小时
+    return dt.astimezone(BJ_TZ).strftime("%H:%M")
 
 
 def format_quote_line(q: Quote) -> str:
@@ -144,7 +146,7 @@ async def build_market_context(
     lines = [format_quote_line(q) for q in used]
     if not lines:
         return "", []
-    now = datetime.now(timezone.utc).astimezone()
+    now = beijing_now()  # 文案写明「北京时间」，就必须真的按北京时钟
     if tools_enabled:
         scope = (
             "这是**已提前注入**的快照；快照之外的标的与维度（K线/分时/资金流/龙虎榜/"

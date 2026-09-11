@@ -117,6 +117,14 @@ def scan_lurk_pool(db_path: Path | None = None, *, asof: date | None = None) -> 
     :param asof: 陈旧判定基准日；None = 今天。测试/回放可显式传入以获得确定结果。
     """
     db = str(db_path or DB)
+    if not Path(db).exists():
+        # 仓未建（CI/新机）≠ 停更：没有任何 K 线可依据。返回与正常结构同形的
+        # 显式不可用态——绝不静默 500，也不拿空池冒充「今日无候选」（三态纪律）。
+        return {
+            "trade_date": None, "as_of": None, "stale_days": None, "stale": True,
+            "stale_note": f"marketdb 仓不存在（{db}）——先跑 scripts/sync_marketdb.py 回补",
+            "items": [],
+        }
     con = duckdb.connect(db, read_only=True)
     mx = con.execute("select max(date_ms) from daily_k").fetchone()[0]
     lo = mx - FETCH_DAYS * 86_400_000

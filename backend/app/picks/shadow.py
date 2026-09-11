@@ -26,7 +26,7 @@ from datetime import date, timezone
 from pathlib import Path
 
 from app.core.db import get_session_factory
-from app.core.bjtime import beijing_now
+from app.core.bjtime import BJ_TZ, beijing_now
 
 log = logging.getLogger(__name__)
 
@@ -154,10 +154,10 @@ class ShadowRunner:
         for o in rows:
             if not o.created_at:
                 continue
-            # created_at 存的是 naive UTC（default=utcnow）。必须先显式打 UTC 标再转本地——
-            # 直接 .astimezone() 会把 naive 当本地时区解释，00:00-08:00 CST 期间
-            # 刚写入的订单会被判成"昨天"，幂等检测失效（2026-09-07 深夜全量测试抓现行）。
-            created_local = o.created_at.replace(tzinfo=timezone.utc).astimezone()
+            # created_at 存的是 naive UTC（default=utcnow）。必须先显式打 UTC 标再转
+            # 北京——转「进程本地」在 +8 机器上碰巧正确，在 UTC 环境（CI）与
+            # today_cst（北京日历）错位一天，幂等检测失效（2026-09-07 同类事故）。
+            created_local = o.created_at.replace(tzinfo=timezone.utc).astimezone(BJ_TZ)
             if created_local.date().isoformat() == today_cst:
                 return True
         return False

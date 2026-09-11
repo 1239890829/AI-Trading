@@ -6,6 +6,7 @@ from datetime import timezone
 from fastapi import Depends, APIRouter, HTTPException, Request
 
 from app.api.deps import require_write_token
+from app.core.bjtime import BJ_TZ
 from pydantic import BaseModel, Field
 
 from app.paper.engine import PaperTradingEngine
@@ -97,7 +98,7 @@ async def paper_fills(request: Request, symbol: str | None = None):
         rows = q.all()
         return {"data": [
             {"symbol": o.symbol,
-             "date": (o.created_at.replace(tzinfo=timezone.utc).astimezone().strftime("%Y-%m-%d") if o.created_at else ""),
+             "date": (o.created_at.replace(tzinfo=timezone.utc).astimezone(BJ_TZ).strftime("%Y-%m-%d") if o.created_at else ""),
              "side": o.side,
              "price": o.filled_price or o.price,
              "quantity": o.quantity,

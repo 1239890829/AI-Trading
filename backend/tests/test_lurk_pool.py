@@ -108,3 +108,17 @@ def test_scan_lurk_pool_stale_discloses_but_keeps_items(lurk_db):
     assert data_date.isoformat() in res["stale_note"]
     assert "sync_marketdb.py" in res["stale_note"]
     assert res["items"], "停更不是丢弃理由——只标注，不隐藏"
+
+
+def test_scan_lurk_pool_missing_db_degrades_explicitly(tmp_path):
+    """仓未建（CI/新机）≠ 停更：显式不可用态，绝不 500、绝不冒充「今日无候选」。
+
+    CI 实测（2026-09-12）：无 marketdb 文件时 duckdb.read_only 直接 IOException → 500。
+    """
+    missing = tmp_path / "market.duckdb"
+    res = scan_lurk_pool(missing)
+    assert res["items"] == []
+    assert res["trade_date"] is None and res["as_of"] is None
+    assert res["stale"] is True
+    assert "marketdb 仓不存在" in res["stale_note"]
+    assert "sync_marketdb.py" in res["stale_note"]

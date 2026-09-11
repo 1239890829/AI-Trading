@@ -10,10 +10,10 @@ A股规则落地（full.md §14/§2.4，配置化）：
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from app.core.bjtime import beijing_today
 from app.core.db import utcnow
 from app.models.paper import PaperAccount, PaperOrder, PaperPosition
 
@@ -37,7 +37,9 @@ def calc_fee(side: str, price: float, qty: int) -> float:
 
 
 def _today() -> str:
-    return datetime.now(timezone.utc).astimezone().strftime("%Y%m%d")
+    # 交易日归属固定北京日历——utcnow().astimezone() 按进程时区取日期，
+    # 在 UTC 环境（CI）的北京时间 00:00-08:00 会归属到昨天（行为在 +8 机器不变）
+    return beijing_today().strftime("%Y%m%d")
 
 
 def limit_block_reason(quote, side: str, price: float | None) -> str | None:
