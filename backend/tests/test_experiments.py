@@ -165,7 +165,7 @@ def test_sync_review_items_marks_applied(sf):
 
 
 def test_conclude_due_is_sync_callable(sf, monkeypatch):
-    """conclude_due 是同步函数（scheduler 每日 tick 直接调用），返回裁决列表。"""
+    """conclude_due 是同步函数（scheduler 经 to_thread 调度），返回裁决列表。"""
     exp_id = _seed_experiment(sf, baseline_win_rate=0.48)
     _mock_health(monkeypatch, win_rate=0.55)
     out = ex.conclude_due(sf)  # 不用 asyncio.run——同步调用
@@ -241,21 +241,6 @@ def test_shadow_flow_rejects_dramatic_change(tmp_path, monkeypatch):
     with sf() as db:
         assert db.get(APC, cid).status == "shadow_rejected"
 
-
-def test_shadow_evaluation_runs_off_the_event_loop():
-    """**定点回归**：议程调度器里的影子评估必须走 `asyncio.to_thread`。
-
-    `evaluate_and_promote_shadow` 是同步函数，且内部会跑 **DuckDB 全表查询**
-    （shadow_eval 的落选者补验：1027 万行 + LEAD 窗口函数）。若被 async 的议程
-    调度器直接调用 ⇒ **阻塞事件循环**，连累 QuoteHub 的 1s 行情节奏。
-
-    2026-09-11 接上补验后才暴露（属 P2-1~15「DuckDB 同步调用未 to_thread」）。
-    """
-    from pathlib import Path
-
-    src = Path(__file__).resolve().parents[1] / "app" / "services" / "evolution.py"
-    text = src.read_text(encoding="utf-8")
-    assert "evaluate_and_promote_shadow" in text, "调用点还在吗？（改名了就同步更新本断言）"
-    assert "asyncio.to_thread(evaluate_and_promote_shadow)" in text, (
-        "影子评估未走 to_thread ⇒ 同步 DuckDB 查询会阻塞事件循环"
-    )
+# 注：本文件原有两条「必须 to_thread」的源码级守卫
+# （evaluate_and_promote_shadow / conclude_due）已于 2026-09-11 迁移至
+# tests/test_event_loop_no_block.py —— 同类守卫集中一处，新增调用点只改那张表。

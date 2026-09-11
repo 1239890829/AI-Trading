@@ -294,13 +294,21 @@ def test_scheduler_fires_when_clock_crosses_window(sf, monkeypatch):
             await asyncio.sleep(0.15)  # 窗口前若干 tick
             assert evo.get_agenda(today.isoformat(), sf) is None, "窗口前不应生成议程"
             clock["now"] = clock["now"].replace(hour=15, minute=46)
+            # ⚠️ 必须等**终态**，不能等"row 存在"：generate_agenda 先落一行
+            # status="generating" 再继续异步跑，所以"行已存在"是个中间态。
+            # 2026-09-11 才暴露——此前 collect_inputs 是同步调用、不让出事件循环，
+            # 测试主协程只能在整段跑完后才被唤醒，于是这个脆弱的等待条件
+            # "侥幸通过"；它改走 to_thread 让步点变多后立刻现形（进程侧日志显示
+            # 议程确实完成、status=ready，是断言读早了，不是产品缺陷）。
+            final = ("ready", "skipped", "failed", "executed")
             for _ in range(60):
                 await asyncio.sleep(0.05)
-                if evo.get_agenda(today.isoformat(), sf) is not None:
+                row = evo.get_agenda(today.isoformat(), sf)
+                if row is not None and row["status"] in final:
                     break
             row = evo.get_agenda(today.isoformat(), sf)
             assert row is not None, "跨过 15:45 窗口后调度器必须生成今日议程"
-            assert row["status"] in ("ready", "skipped", "failed", "executed")
+            assert row["status"] in final, f"议程未在窗口内进入终态：{row['status']}"
             # liveness 面：tick 必须刷新（否则 data=null 时无法区分"调度死了"与"真没有"）
             st = evo.scheduler_status()
             assert st["last_tick_at"], "调度器 tick 必须刷新 liveness"

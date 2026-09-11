@@ -93,7 +93,14 @@ async def data_health_loop(app_state, stop: asyncio.Event) -> None:
                 from app.core.db import get_session_factory
                 from app.services.evolution import _collect_data_health
 
-                out = _collect_data_health(get_session_factory())
+                # ⚠️ 必须 to_thread：_collect_data_health 是**同步**函数，内含
+                # `duckdb.connect(market.duckdb)` 的 `MAX(date_ms)`（1027 万行库）
+                # + 多次 SQLite 全表读 + 文件读。本循环 startup 里 create_task
+                # 常驻事件循环，且**只在交易时段**跑 ⇒ 直接调用会卡住 QuoteHub
+                # 的 1s 行情节奏，正是最不能卡的时候。2026-09-11 与 evolution 的
+                # conclude_due / collect_inputs 同批收口（同属"同步函数被 async
+                # 调度器直接调用"，P2-1~15 那一类）。
+                out = await asyncio.to_thread(_collect_data_health, get_session_factory())
                 issues = list(out.get("issues") or [])
                 # S1-4：涨跌停价可得性不并入 _collect_data_health（那是同步函数，
                 # 探测需要发上游请求），在循环里单独补一条，与其余异常同一套去重/推送。

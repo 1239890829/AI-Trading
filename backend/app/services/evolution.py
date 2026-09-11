@@ -846,7 +846,11 @@ async def generate_agenda(session_factory=None) -> dict:
             db.commit()
             return _agenda_dump(row)
 
-    inputs = collect_inputs(sf)
+    # ⚠️ 必须 to_thread：collect_inputs 是同步函数，内部九路证据全是**阻塞 IO**——
+    # 其中 _collect_data_health 会 `duckdb.connect(market.duckdb)` 跑 `MAX(date_ms)`
+    # （1027 万行库），另有多次 SQLite 全表读 + 文件读 + shutil.disk_usage。
+    # 本函数是 async（被 run_evolution_now / API 手动触发），直接调用会阻塞事件循环。
+    inputs = await asyncio.to_thread(collect_inputs, sf)
     messages = [
         {"role": "system", "content": _SYSTEM_PROMPT},
         {"role": "user", "content": json.dumps(inputs, ensure_ascii=False, default=str)},
@@ -1160,7 +1164,12 @@ async def evolution_scheduler(app, stop: asyncio.Event, *, run_hour: int, run_mi
                 with contextlib.suppress(Exception):
                     from app.services.experiments import conclude_due
 
-                    results = conclude_due()
+                    # ⚠️ 同样必须 to_thread：同步函数，内部是 SQLite **全表读**
+                    # （DailyPickReview/DailyPickSet 全量 + 每条到期实验各读一遍）。
+                    # 无 DuckDB，严重度低于下面的影子评估，但：① 该读随逐日累积增长；
+                    # ② 紧跟 15:30 复盘写窗口，SQLite 写锁未释放时会等锁 ⇒ 阻塞事件循环。
+                    # 与影子评估同属「同步函数被 async 调度器直接调用」一类（2026-09-11）。
+                    results = await asyncio.to_thread(conclude_due)
                     _LAST_CONCLUDE_DATE = today.isoformat()
                     if results:
                         log.warning("[EVOLUTION] 实验裁决 %d 条：%s", len(results),

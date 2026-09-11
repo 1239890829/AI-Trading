@@ -63,3 +63,6 @@ docs/archive/theme-audit-2026-09-01.json
 # 工具缓存
 .mypy_cache/
 .ruff_cache/
+
+# Agent 本地状态（同类 .workbuddy/ 见上）
+.workbuddy-ai/
