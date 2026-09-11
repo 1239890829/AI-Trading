@@ -1172,7 +1172,12 @@ async def evolution_scheduler(app, stop: asyncio.Event, *, run_hour: int, run_mi
                 with contextlib.suppress(Exception):
                     from app.services.experiments import evaluate_and_promote_shadow
 
-                    shadow_results = evaluate_and_promote_shadow()
+                    # ⚠️ 必须 to_thread：该函数是同步的，且内部会走 **DuckDB 全表查询**
+                    # （shadow_eval 的落选者补验，1027 万行 + LEAD 窗口）。
+                    # 直接在 async 调度器里调用会**阻塞事件循环**——影响 QuoteHub 的 1s
+                    # 行情节奏。2026-09-11 接上补验后才发现（P2-1~15「DuckDB 同步调用
+                    # 未 to_thread」的另一处）。
+                    shadow_results = await asyncio.to_thread(evaluate_and_promote_shadow)
                     _LAST_SHADOW_DATE = today.isoformat()
                     if shadow_results:
                         log.warning("[EVOLUTION] 影子队列评估 %d 条：%s", len(shadow_results),
