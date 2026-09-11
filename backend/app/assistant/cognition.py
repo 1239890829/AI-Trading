@@ -18,6 +18,10 @@
 """
 from __future__ import annotations
 
+import json
+import logging
+from pathlib import Path
+
 # 「声称自己没有」的表达
 DENIAL_MARKERS: tuple[str, ...] = (
     "我没有",
@@ -35,6 +39,8 @@ DATA_HINTS: tuple[str, ...] = (
     "数据", "行情", "资金", "龙虎榜", "分时", "K线", "K 线",
     "公告", "财务", "指数", "持仓", "自选", "涨停", "板块", "题材",
 )
+
+log = logging.getLogger(__name__)
 
 WINDOW = 40
 LOOKBEHIND = 20
@@ -66,3 +72,55 @@ def describe_gap(answer: str, question: str = "") -> str:
     head = " ".join((question or "").split())[:60]
     tail = " ".join((answer or "").split())[:120]
     return f"q={head!r} answer={tail!r}"
+
+
+# ---------------------------------------------------------------- 缺口台账
+
+#: 缺口留痕文件（JSONL 追加写；与事件存储同风格，便于事后统计而不必翻日志）
+GAP_LOG_PATH = Path(__file__).resolve().parents[2] / "data" / "cognition_gaps.jsonl"
+#: 单次读取的条数上限（防止文件长期增长后一次读入过多）
+GAP_READ_LIMIT = 50
+
+
+def record_gap(answer: str, question: str = "") -> dict | None:
+    """把一条认知缺口**落到台账**（KW-ENG-49："日志即自动产出的缺口清单"）。
+
+    此前只有 `log.warning` —— 日志会滚动、没人聚合，"清单"实际上**没有消费方**
+    （典型的产出即死）。落盘后可被议程/复盘读取，形成闭环。
+
+    :returns: 写入的记录；写入失败返回 None（**留痕失败不得影响回答**）。
+    """
+    from app.core.bjtime import beijing_now_naive
+
+    rec = {
+        "at": beijing_now_naive().isoformat(timespec="seconds"),
+        "question": " ".join((question or "").split())[:120],
+        "answer": " ".join((answer or "").split())[:200],
+    }
+    try:
+        GAP_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with GAP_LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:  # noqa: BLE001 —— 留痕是旁路，失败只记日志
+        log.warning("认知缺口留痕失败（不影响回答）")
+        return None
+    return rec
+
+
+def recent_gaps(limit: int = GAP_READ_LIMIT) -> list[dict]:
+    """读最近 N 条认知缺口（新在后）。缺失/损坏返回空列表（不是错误）。"""
+    if not GAP_LOG_PATH.exists():
+        return []
+    try:
+        lines = GAP_LOG_PATH.read_text(encoding="utf-8").splitlines()
+    except Exception:  # noqa: BLE001
+        return []
+    out: list[dict] = []
+    for ln in lines[-max(1, limit):]:
+        try:
+            rec = json.loads(ln)
+        except Exception:  # noqa: BLE001 —— 单行损坏跳过，不因一行坏掉全表
+            continue
+        if isinstance(rec, dict):
+            out.append(rec)
+    return out

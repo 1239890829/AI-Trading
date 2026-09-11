@@ -12,6 +12,11 @@
 """
 from __future__ import annotations
 
+import json
+
+import pytest
+
+from app.assistant import cognition as cog
 from app.assistant.cognition import (
     DENIAL_MARKERS,
     describe_gap,
@@ -92,3 +97,56 @@ def test_describe_gap_collapses_whitespace():
     out = describe_gap("没有\n\n这项   数据")
     assert "\n" not in out
     assert "这项 数据" in out
+
+
+# ---------------------------------------------------------------- 缺口台账（P2-28③）
+
+
+def test_record_gap_writes_and_recent_gaps_reads_back(tmp_path, monkeypatch):
+    """**定点回归**：落盘后能被读回。
+
+    此前只有 `log.warning` ⇒ 日志会滚动、没人聚合，"缺口清单"实际没有消费方
+    （KB-ENG-49 说"日志即自动产出的缺口清单"，但没人看）。落台账才成形。
+    """
+    monkeypatch.setattr(cog, "GAP_LOG_PATH", tmp_path / "gaps.jsonl")
+    rec = cog.record_gap("我没有该股的分时明细数据", "这只股票分时怎样")
+    assert rec is not None and rec["at"]
+    assert "分时" in rec["answer"]
+
+    gaps = cog.recent_gaps()
+    assert len(gaps) == 1
+    assert gaps[0]["question"] == "这只股票分时怎样"
+
+
+def test_record_gap_never_raises(tmp_path, monkeypatch):
+    """留痕是旁路——写不进去也必须**不影响回答**。"""
+    monkeypatch.setattr(cog, "GAP_LOG_PATH", tmp_path / "no" / "such" / "dir" / "g.jsonl")
+    # 目录不存在且无法创建（父目录是文件）
+    (tmp_path / "no").write_text("x", encoding="utf-8")
+    try:
+        assert cog.record_gap("x", "y") is None
+    except Exception as exc:  # noqa: BLE001
+        pytest.fail(f"record_gap 抛出了异常：{exc}")
+
+
+def test_recent_gaps_missing_file_is_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(cog, "GAP_LOG_PATH", tmp_path / "nope.jsonl")
+    assert cog.recent_gaps() == []
+
+
+def test_recent_gaps_skips_corrupt_lines(tmp_path, monkeypatch):
+    """单行损坏跳过，**不因一行坏掉整张清单**。"""
+    p = tmp_path / "g.jsonl"
+    p.write_text('{"at": "1", "question": "q1", "answer": "a1"}\n{ broken\n{"at": "2", "question": "q2", "answer": "a2"}\n',
+                 encoding="utf-8")
+    monkeypatch.setattr(cog, "GAP_LOG_PATH", p)
+    gaps = cog.recent_gaps()
+    assert [g["at"] for g in gaps] == ["1", "2"]
+
+
+def test_recent_gaps_respects_limit(tmp_path, monkeypatch):
+    p = tmp_path / "g.jsonl"
+    p.write_text("\n".join(json.dumps({"at": str(i)}) for i in range(10)) + "\n", encoding="utf-8")
+    monkeypatch.setattr(cog, "GAP_LOG_PATH", p)
+    assert len(cog.recent_gaps(limit=3)) == 3
+    assert [g["at"] for g in cog.recent_gaps(limit=3)] == ["7", "8", "9"]

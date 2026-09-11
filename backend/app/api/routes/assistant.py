@@ -348,6 +348,16 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
                     "assistant 疑似认知缺口（未调工具却声称无数据）：%s",
                     describe_gap(answer_text, req.messages[-1].content),
                 )
+                # 落台账（P2-28③）：日志会滚动、没人聚合；落盘后才谈得上"缺口清单"。
+                # 留痕是旁路，失败不得影响回答。
+                try:
+                    from app.assistant.cognition import record_gap
+
+                    record_gap(answer_text, req.messages[-1].content)
+                except Exception:  # noqa: BLE001
+                    log.debug("cognition gap record skipped")
+                # 注：这里**刻意不发 SSE 事件**——新增事件类型属协议变更，
+                # 可能影响前端解析。可见化走议程证据（已有展示位），不改协议。
             yield _sse({"type": "done"})
         except asyncio.CancelledError:
             # 客户端断开（点了停止/关窗/跳页）：底层传输由 _stream_round 的 finally 关闭

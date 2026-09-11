@@ -341,6 +341,28 @@ def _collect_decision_ledger(session_factory) -> dict:
         return {"available": False, "note": f"读取失败：{exc}"}
 
 
+def _collect_cognition_gaps() -> dict:
+    """助手认知缺口清单（P2-28③）：此前只 `log.warning`，**没有任何消费方**。
+
+    KB-ENG-49 说"日志即自动产出的缺口清单"——但日志会滚动、没人聚合，
+    那份"清单"实际上没人看。落台账（`data/cognition_gaps.jsonl`）后这里读出来，
+    让"助手哪些地方其实有数据却说没有"成为每日可见的证据。
+    """
+    try:
+        from app.assistant.cognition import recent_gaps
+
+        gaps = recent_gaps()
+    except Exception as exc:  # noqa: BLE001
+        return {"available": False, "note": f"读取失败：{exc}"}
+    return {
+        "available": bool(gaps),
+        "n": len(gaps),
+        "recent": gaps[-10:],
+        "note": None if gaps else "暂无认知缺口记录",
+        "caveat": "命中只是信号不是判据：可能是工具覆盖缺口，也可能是提示词没说清；需人工复核后再改",
+    }
+
+
 def _collect_triage_stats(session_factory) -> dict:
     """告警判读统计：哪些规则在产生噪音（ignore 占比）、哪些事件被升级。"""
     try:
@@ -372,6 +394,7 @@ def collect_inputs(session_factory=None) -> dict:
         "strategy_verification": _collect_strategy_verification(),
         "applied_landed": _collect_applied_landed(sf),
         "decision_ledger": _collect_decision_ledger(sf),
+        "cognition_gaps": _collect_cognition_gaps(),
         "prediction": _collect_recent_prediction(sf),
         "knowledge_base": _collect_knowledge_base(),
         # 第九路（2026-09-09 用户指令「跟踪本质是实时选股」）：台账复盘×进化依据

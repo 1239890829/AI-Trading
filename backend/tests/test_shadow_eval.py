@@ -353,7 +353,6 @@ def test_raising_ignores_market_gains():
 def test_market_gains_missing_keys_are_dropped_not_zeroed():
     """查不到的票必须**剔除**，不能当 0 参与统计（0 = 恰好持平，会稀释结论）。"""
     sets = _sets(6)
-    sim = se.simulate_min_score(sets, 45.0, 5, base_threshold=50.0)
     gains = {}  # 一条都查不到
     out = se.eval_min_pick_score(before=50.0, after=45.0, sets=sets, reviews={},
                                  market_gains=gains)
