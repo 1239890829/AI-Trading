@@ -2620,3 +2620,71 @@ export async function getMinuteDecisions(symbol: string, limit = 30): Promise<Mi
   const q = new URLSearchParams({ symbol, limit: String(limit) });
   return (await getJson<MinuteDecisionsPayload>(`/api/market/minute-decisions?${q.toString()}`)).data;
 }
+
+/* ---------------------------------------------------------------- 策略健康度 / 登记册（#11）
+ *
+ * 后端能力早已就绪（P1-37 登记册 / P1-38 策略级监控），但前端此前**没有任何消费方**，
+ * 整条能力链在界面上是断的。这里补上取数封装，展示位见 `/agent?tab=strategies`。
+ */
+
+/** 单键的滚动窗口统计（后端 `window` 字段）。 */
+export interface StrategyHealthWindow {
+  groups?: number;
+  total_picks?: number;
+  win_rate?: number | null;
+  good?: number;
+  bad?: number;
+  flat?: number;
+  [k: string]: unknown;
+}
+
+/** 健康度一项（真实结构：`data.strategies[]`）。 */
+export interface StrategyHealthItem {
+  strategy_key: string;
+  name?: string;
+  lifecycle?: string;
+  basis?: string;
+  source?: string;
+  note?: string;
+  /** ok / warning / drift = 有判定；insufficient / thin / no_pipeline / unknown / error = **判不出** */
+  status?: string;
+  window?: StrategyHealthWindow;
+  [k: string]: unknown;
+}
+
+/** 策略健康度载荷。⚠️ `ok/warning/drift` 之外的状态都表示「**判不出**」，
+ *  既不是健康也不是失效——渲染时必须区别对待，不得当成 ok。 */
+export interface StrategyHealthPayload {
+  strategies: StrategyHealthItem[];
+  counts?: { total?: number; evaluable?: number; attention?: number };
+  caveat?: string;
+}
+
+/** 登记册条目（/api/picks/strategy-registry 的 strategies[]）。 */
+export interface StrategyRegistryItem {
+  key: string;
+  name?: string;
+  status?: string;
+  basis?: string;
+  source?: string;
+  note?: string;
+  /** 核验结论三态（S2-11）：有值时该条状态背后有可回查证据 */
+  verification?: {
+    available: boolean;
+    stale?: boolean | null;
+    age_days?: number | null;
+    verdict?: string | null;
+    headline?: string | null;
+    reason?: string | null;
+  } | null;
+  [k: string]: unknown;
+}
+
+export async function getStrategyHealth(): Promise<StrategyHealthPayload> {
+  return (await getJson<StrategyHealthPayload>("/api/picks/strategy-health")).data;
+}
+
+export async function getStrategyRegistry(): Promise<StrategyRegistryItem[]> {
+  return (await getJson<{ strategies: StrategyRegistryItem[] }>("/api/picks/strategy-registry"))
+    .data.strategies ?? [];
+}

@@ -41,14 +41,14 @@ cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2498
 # `app/core/bjtime.py` 使 60 → 61），另 2 项为既有的「指数无涨跌停概念」后端不适用项。
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
 cd apps/web && npx eslint .                       # 0 error / 0 warn（P1-27 已清零；余 1 处 C 类显式豁免）
-cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 380 项 / 50 文件（09-11 实测）
+cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 392 项 / 51 文件（09-11 实测）
 cd backend && .venv/bin/python -m pyflakes app tests scripts   # 0（scripts 已纳入口径，P2-18）
 python3 scripts/doc-health.py                    # 文档体检：0 待处理（收尾必跑，见 kb/07 §8.2）
 # 生产构建前必须先停 dev server（.next 冲突已踩两次）：
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 2498 项（2437 passed / 61 skipped）· 164 文件、前端 380 项 / 50 文件、eslint **0 error / 0 warn**
+> **门禁口径**：后端 2498 项（2437 passed / 61 skipped）· 164 文件、前端 392 项 / 51 文件、eslint **0 error / 0 warn**
 > （25 条回归已按 P1-27 清零；仅 notification-drawer 保留 1 处带理由的 C 类豁免）。
 > **测试规模与告警数同属「会失真的状态标注」**——改动后要实测回填，不要沿用旧数字
 > （此前「≤1 warn / 后端 580 / 前端 97 / 219 / 257 / 263 / 342 / 1925」均已被后续改动追过，教训见 `docs/retro-and-gaps.md` §七）。
