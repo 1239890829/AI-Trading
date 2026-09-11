@@ -18,11 +18,11 @@ import type { RolePerformance } from "@/components/hunting/pick-sections";
  */
 
 const HEALTH_TONE: Record<string, string> = {
-  ok: "border-up/40 bg-up/10 text-up",
-  warning: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-300",
-  drift: "border-red-500/50 bg-red-500/10 text-red-600 dark:text-red-300",
-  insufficient: "border-zinc-300 text-zinc-500 dark:border-zinc-700 dark:text-zinc-400",
-  error: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-300",
+  ok: "border-up/40 bg-up/10 text-up-ink dark:text-up",
+  warning: "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300",
+  drift: "border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-300",
+  insufficient: "border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400",
+  error: "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300",
 };
 
 const HEALTH_LABEL: Record<string, string> = {
@@ -49,7 +49,7 @@ function StatCard({
   return (
     <div className="rounded-lg border border-zinc-200 px-2.5 py-1.5 dark:border-zinc-800" title={tip}>
       <div className="flex items-center gap-1.5">
-        <span className="text-[11px] text-zinc-400">{label}</span>
+        <span className="text-[11px] text-zinc-600 dark:text-zinc-400">{label}</span>
         {badge && (
           <span className={`rounded border px-1 py-0.5 text-[9px] font-medium ${badge.tone}`}>{badge.text}</span>
         )}
@@ -86,22 +86,22 @@ export function HuntingStatsBar({
       >
         {health ? (
           health.status === "insufficient" || health.status === "error" ? (
-            <div className="mt-0.5 text-sm font-medium text-zinc-400">{health.reason ?? "样本不足"}</div>
+            <div className="mt-0.5 text-sm font-medium text-zinc-600 dark:text-zinc-400">{health.reason ?? "样本不足"}</div>
           ) : (
             <>
               <div className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
                 {w?.win_rate != null ? `${Math.round(w.win_rate * 1000) / 10}%` : "—"}
-                <span className="ml-1.5 text-[10px] font-normal text-zinc-400">
+                <span className="ml-1.5 text-[10px] font-normal text-zinc-600 dark:text-zinc-400">
                   均超额 {w?.mean_excess != null ? pctText(w.mean_excess) : "—"}
                 </span>
               </div>
-              <div className="mt-0.5 text-[10px] text-zinc-400">
+              <div className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
                 近 {w?.groups ?? 0} 组合日 · {w?.total_picks ?? 0} 只 · 好 {w?.good ?? 0} / 坏 {w?.bad ?? 0} / 平 {w?.flat ?? 0}
               </div>
             </>
           )
         ) : (
-          <div className="mt-0.5 text-sm text-zinc-400">暂不可用</div>
+          <div className="mt-0.5 text-sm text-zinc-600 dark:text-zinc-400">暂不可用</div>
         )}
       </StatCard>
 
@@ -114,15 +114,15 @@ export function HuntingStatsBar({
           {bestRole ? (
             <>
               {bestRole.role}
-              <span className={`ml-1.5 text-[10px] font-normal ${bestRole.win_rate >= 50 ? "text-up" : "text-down"}`}>
+              <span className={`ml-1.5 text-[10px] font-normal ${bestRole.win_rate >= 50 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}`}>
                 胜率 {bestRole.win_rate}%
               </span>
             </>
           ) : (
-            <span className="font-sans font-normal text-zinc-400">样本不足</span>
+            <span className="font-sans font-normal text-zinc-600 dark:text-zinc-400">样本不足</span>
           )}
         </div>
-        <div className="mt-0.5 text-[10px] text-zinc-400">
+        <div className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
           {bestRole ? `平均超额 ${pctText(bestRole.avg_excess)}` : "全量角色胜率表见复盘区"}
         </div>
       </StatCard>
@@ -132,20 +132,20 @@ export function HuntingStatsBar({
         label="跟踪 · T+1 胜率"
         tip="口径：盘中确认提醒次日收益 >0 占比（近 30 日）；与精选口径独立不混算"
       >
-        <div className={`mt-0.5 font-mono text-sm font-semibold tabular-nums ${(t1?.win_rate ?? 0) >= 50 ? "text-up" : "text-down"}`}>
-          {t1?.win_rate != null ? `${t1.win_rate}%` : <span className="font-sans font-normal text-zinc-400">样本不足</span>}
+        <div className={`mt-0.5 font-mono text-sm font-semibold tabular-nums ${(t1?.win_rate ?? 0) >= 50 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}`}>
+          {t1?.win_rate != null ? `${t1.win_rate}%` : <span className="font-sans font-normal text-zinc-600 dark:text-zinc-400">样本不足</span>}
         </div>
-        <div className="mt-0.5 text-[10px] text-zinc-400">
+        <div className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
           样本 {t1?.n ?? 0} · 盈亏比 {t1?.profit_loss_ratio != null ? t1.profit_loss_ratio : "—"}
         </div>
       </StatCard>
 
       {/* 跟踪口径 ②：确认提醒 T+3 */}
       <StatCard label="跟踪 · T+3 胜率" tip="口径：确认提醒三日收益 >0 占比（未到期不计）">
-        <div className={`mt-0.5 font-mono text-sm font-semibold tabular-nums ${(t3?.win_rate ?? 0) >= 50 ? "text-up" : "text-down"}`}>
-          {t3?.win_rate != null ? `${t3.win_rate}%` : <span className="font-sans font-normal text-zinc-400">样本不足</span>}
+        <div className={`mt-0.5 font-mono text-sm font-semibold tabular-nums ${(t3?.win_rate ?? 0) >= 50 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}`}>
+          {t3?.win_rate != null ? `${t3.win_rate}%` : <span className="font-sans font-normal text-zinc-600 dark:text-zinc-400">样本不足</span>}
         </div>
-        <div className="mt-0.5 text-[10px] text-zinc-400">样本 {t3?.n ?? 0}（未到期不计）</div>
+        <div className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">样本 {t3?.n ?? 0}（未到期不计）</div>
       </StatCard>
     </div>
   );

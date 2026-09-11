@@ -23,6 +23,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 #: 第一版五维权重（历史组合已持久化此表，复盘回溯时仍按它还原当时的口径）。
 #: **新六维权重由 `app.picks.regime.weights_for` 按炒作阶段提供**——
 #: Regime 是权重选择器而非评分维度：业绩驱动期基本面主导，业绩空窗期
@@ -36,11 +38,59 @@ WEIGHTS = {
     "capital": 0.15,     # 资金面：净流入/量能/龙虎榜
 }
 REPLACE_THRESHOLD = 15.0
+#: 组合**容量上限**（不是"每天必须凑满"的目标数）。够格的标的不足时名单就该更短——
+#: 名额由质量决定，不由常量决定（2026-09-10 用户要求：不硬凑、也不过多）。
 MAX_PICKS = 5
+#: **入选门槛**（综合分下限）：低于此分一律不入选，名额不兜底。2026-09-10 加。
+#:
+#: 为什么锚在 50：六维综合分以 50 为中性锚点——各维"无事件/数据缺失/相位缺失"的
+#: 兜底分都是 50（见 score_news / score_capital / score_sentiment），且权重和为 1，
+#: 所以 **≥50 ⇔ 多维证据整体净正面**，<50 ⇔ 没有一只维度站得住。这与空仓闸门
+#: 同属一套逻辑（gate.py：「没有赚钱效应的市场里，任何精选都是硬凑，硬凑的结果是
+#: 大面」），只是粒度从"整天要不要出手"下到"单只要不要进组合"。
+#:
+#: 与 REPLACE_THRESHOLD 的分工（不可互相替代）：
+#: - 换股门槛管**换不换**——同池成员之间的相对分差（防小幅波动换股）；
+#: - 入选门槛管**够不够格**——绝对质量线（防拿低分凑满名额）。
+#:
+#: 参数标定：50 有语义锚点、无回测标定。调参唯一入口是本常量。已知取舍——门槛附近
+#: 可能出现"今天 49 出、明天 51 进"的抖动，正解是引入回差（hysteresis，与换股门槛
+#: 同源的防抖手法），但回差幅度需要回放实证（rejected 表 30 交易日样本，约 2026-10
+#: 中旬到齐）才能定，**不预先臆造第二个常量**。
+MIN_PICK_SCORE = 50.0
 #: 每日最多换入几只。稳定性的真正保障——分差门槛在涨停股主导的候选池下
 #: 拦不住换股（梯队分差动辄 30+），必须再设数量上限。详见函数 docstring。
 MAX_SWAPS_PER_DAY = 2
 BUY_RANGE_PCT = 0.03  # 买入范围：现价 ±3%
+
+#: 默认值哨兵：把「未传参」与「显式传 None」区分开。
+#: `max_swaps=None` 在语义上是"不限换股"（首次建仓/回放对照组在用），
+#: 不能拿它兼职表示"未传参"——否则运行时覆盖层一启用就会把"不限"变成"上限"。
+_UNSET: Any = object()
+
+
+def _live(key: str, default: Any) -> Any:
+    """运行时覆盖优先（AI 控制台参数白名单，P1-15），否则代码常量。
+
+    覆盖层为空 ⇒ 行为与改动前**完全一致**（`runtime_params.get` 回落默认值）。
+    读在**调用时**而不是签名默认值里：签名默认在导入时求值，覆盖层永远读不到。
+    """
+    from app.core import runtime_params
+
+    return runtime_params.get(key, default)
+
+
+def effective_limits() -> dict:
+    """当前实际生效的组合节奏参数（运行时覆盖优先）——供 meta 留痕与测试断言。
+
+    为什么单独暴露：`picks.py` 写进 meta 的 `replace_threshold` / `min_pick_score`
+    必须是**生效值**而不是代码常量，否则调参后复盘看到的仍是旧数（口径漂移）。
+    """
+    return {
+        "replace_threshold": _live("picks_replace_threshold", REPLACE_THRESHOLD),
+        "max_swaps_per_day": _live("picks_max_swaps_per_day", MAX_SWAPS_PER_DAY),
+        "min_pick_score": _live("picks_min_pick_score", MIN_PICK_SCORE),
+    }
 
 REASON_CATEGORIES = {
     "event_expired": "事件失效（利好证伪/落地即出货）",
@@ -257,33 +307,53 @@ def synthesize(sub: dict[str, float], weights: dict[str, float] | None = None, v
 def apply_replacement_threshold(
     prev_symbols: list[str],
     ranked: list[dict],
-    threshold: float = REPLACE_THRESHOLD,
+    threshold: float | None = None,
     max_picks: int = MAX_PICKS,
-    max_swaps: int | None = MAX_SWAPS_PER_DAY,
+    max_swaps: int | None = _UNSET,
+    min_score: float | None = None,
 ) -> tuple[list[dict], list[dict]]:
-    """换股门槛 + 每日换股上限。返回 (新组合 ≤max_picks, 换股记录 [{out, in, delta}])。
+    """入选门槛 + 换股门槛 + 每日换股上限。返回 (新组合 ≤max_picks, 换股记录 [{out, in, delta}])。
 
-    两道约束，缺一不可（2026-08-31 跨日回放实证）：
-    - **门槛**（分数差）：防止小幅波动引发无谓换股
+    三道约束，各有分工（2026-09-10 补入选门槛）：
+
+    - **入选门槛**（``min_score``，绝对质量线）：低于线的候选一律不进，
+      **留任成员同样受约束**——门槛的语义是「在组合里就必须够格」，昨天在列不是
+      豁免理由，否则「今日名单」会退化成「昨日名单的惯性延续」。名额因此**不兜底**：
+      够格几只就是几只，不足 max_picks 就留空，绝不拿低分凑数
+      （与盘中 `top_watch_stocks` 的「unknown/低不入选」同一套三态纪律）。
+    - **换股门槛**（分数差）：防止小幅波动引发无谓换股
     - **每日换股上限**（数量）：这才是稳定性的真正保障。涨停股的梯队分
       （龙头 88 分）远高于非涨停成员（领涨 70/同步 52/滞涨 35），分差动辄
       30+，15 分门槛形同虚设——回放实测纯门槛策略日均换手仍达 60%。
       限制每日换入只数后，组合才会真正"精挑细选并保持一致性"。
 
+    :param min_score: 入选门槛（综合分下限）。语义与标定见 MIN_PICK_SCORE。
+    :param threshold / max_swaps / min_score: 三者默认取**运行时生效值**
+        （控制台参数白名单 P1-15 的覆盖层优先，否则回落代码常量）。
+        注意 `max_swaps=None` 仍是"**不限换股**"，与"未传参"用哨兵 `_UNSET` 区分。
     :param max_swaps: 每日最多换入几只（None = 不限）。首次建仓（prev 为空）不受限。
     """
+    if threshold is None:
+        threshold = _live("picks_replace_threshold", REPLACE_THRESHOLD)
+    if min_score is None:
+        min_score = _live("picks_min_pick_score", MIN_PICK_SCORE)
+    if max_swaps is _UNSET:
+        max_swaps = _live("picks_max_swaps_per_day", MAX_SWAPS_PER_DAY)
     by_symbol = {c["symbol"]: c for c in ranked}
     kept: list[dict] = []
     replaced: list[dict] = []
     for sym in prev_symbols:
         c = by_symbol.get(sym)
-        if c is not None:
+        if c is not None and c["score"] >= min_score:
             kept.append(c)
     kept = sorted(kept, key=lambda c: -c["score"])[:max_picks]
 
     capped = max_swaps if (max_swaps is not None and prev_symbols) else None
     added = 0
     for c in ranked:
+        if c["score"] < min_score:
+            # 不够格者既不补位也不换入（`ranked` 若已按分降序，后续必然也不够格）
+            continue
         if capped is not None and added >= capped:
             break
         if any(c["symbol"] == k["symbol"] for k in kept):

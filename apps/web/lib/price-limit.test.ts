@@ -33,13 +33,14 @@ describe("priceLimitPct 板块涨跌幅限制", () => {
     expect(priceLimitPct("sh880001")).toBeNull(); // 同花顺板块指数段
   });
 
-  it("ST/*ST 仅主板/创业/科创收窄 ±5%", () => {
-    expect(priceLimitPct("000001", "ST易联众")).toBe(5);
-    expect(priceLimitPct("300750", "*ST某某")).toBe(5);
+  it("ST/*ST 并轨（2026-07-06）后不再收窄，随板块口径", () => {
+    expect(priceLimitPct("000001", "ST易联众")).toBe(10); // 主板 ST = 主板普通股
     expect(priceLimitPct("600519", "贵州茅台")).toBe(10); // 非 ST 不受影响
+    expect(priceLimitPct("300750", "*ST某某")).toBe(20); // 创业板 ST 维持 20%
+    expect(priceLimitPct("688981", "ST某某")).toBe(20); // 科创板 ST 维持 20%
   });
 
-  it("北交所不受 ST 5% 影响", () => {
+  it("北交所 ST 维持 30%（不受 ST 影响）", () => {
     expect(priceLimitPct("832566", "ST某某")).toBe(30);
   });
 

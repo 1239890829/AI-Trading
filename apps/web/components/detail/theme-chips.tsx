@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import type { StockThemeLink, StockThemes } from "@/lib/api";
-import { pctColor } from "@/lib/format";
+import { pctColor, pctText } from "@/lib/format";
 import { themesUrl } from "@/lib/routing";
 
 /** 来源徽标语义（linkage-design §3.2）：官方成分=结构性归属，涨停归因=行为性归属，人工=override。 */
@@ -15,10 +15,11 @@ const SOURCE_LABEL: Record<string, string> = {
 /** 官方成分默认展示条数（2026-09-01 用户反馈：全量展示会把分时/K线挤下去）。 */
 const OFFICIAL_TOP_N = 6;
 
-function pctText(pct: number | null | undefined): string {
-  if (pct == null) return "";
-  return `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`;
-}
+// 本地 pctText 已删（2026-09-11，P2-20 / 冗余清理）：改用 lib/format.ts 的权威实现。
+// 原实现在 `pct == null` 时返回**空串**、而权威实现返回 `--`——违反项目三态纪律
+// （缺失必须显式标注，不用空白冒充）。之所以是**零可见变更**：唯一调用点外面有
+// `t.theme_chg_1d != null &&` 守卫，null 分支根本到不了；且 |Δ|<1000 时
+// toFixed(2) 与 fmt(v,2)（zh-CN 千分位）输出逐字节相同。
 
 /**
  * 题材归属行（L4 联动）：个股 → 题材看板。
@@ -57,7 +58,7 @@ export function ThemeChipsRow({ themes }: { themes: StockThemes | null }) {
 
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-      <span className="shrink-0 text-zinc-400">题材归属</span>
+      <span className="shrink-0 text-zinc-600 dark:text-zinc-400">题材归属</span>
       {visibleOfficial.map((t) => (
         <Link
           key={`o-${t.theme_code}`}
@@ -81,7 +82,7 @@ export function ThemeChipsRow({ themes }: { themes: StockThemes | null }) {
           className="inline-flex items-center rounded border border-amber-500/30 bg-amber-500/5 px-1.5 py-0.5 text-zinc-700 hover:border-amber-500/60 dark:border-amber-400/30 dark:bg-amber-400/5 dark:text-zinc-200"
         >
           {a.theme_name}
-          <span className="ml-1 rounded bg-amber-500/10 px-1 text-[10px] text-amber-700 dark:text-amber-300">
+          <span className="ml-1 rounded bg-amber-500/10 px-1 text-[10px] text-amber-800 dark:text-amber-300">
             涨停归因
           </span>
         </Link>
@@ -89,7 +90,7 @@ export function ThemeChipsRow({ themes }: { themes: StockThemes | null }) {
       {hidden > 0 && (
         <button
           onClick={() => setExpanded((v) => !v)}
-          className="rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-400 hover:text-zinc-700 dark:border-zinc-700 dark:hover:text-zinc-200"
+          className="rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-600 dark:text-zinc-400 hover:text-zinc-700 dark:border-zinc-700 dark:hover:text-zinc-200"
           title={expanded ? "收起，只显示涨跌幅最相关的题材" : "展开全部归属题材"}
         >
           {expanded ? "收起" : `＋${hidden} 个`}

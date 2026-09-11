@@ -1,0 +1,270 @@
+# 全盘计划复盘与整合清单（2026-08-31）
+> **状态（2026-09-10 核实）**：⚫ 历史盘点（08-31 全盘清单，已被 09 系列审计取代）；引用 15 处 → 暂原位，引用清理后再评估归档｜详情：docs/plan-registry.md
+
+> 触发：用户要求"暂停新阶段开发，完成既有计划未竟事项，并做一次全盘复盘"。
+> 方法：逐份通读 docs/ 全部方案文档 + AGENTS.md + README 路线图 + 代码实测核验，
+> 不是按文档抄文档——每一条"已完成/未完成"都用代码与真实 API 验证过。
+
+---
+
+## 〇、先说结论（三句话）
+
+1. **没有烂尾的计划**：10 份方案文档里没有任何一项"做了一半被扔掉"，所有未完成项
+   都是**被外部条件阻塞**（LLM 凭据、推送通道选型、部署环境）或**按计划排在后面**。
+2. **最大的问题不是遗漏，是"账本分裂"**：待办散落在 4 处（retro / PROJECT-MASTER /
+   AGENTS / README），新鲜度不一，本次已发现 3 处互相矛盾的过期状态（§三.1）。
+3. **有 3 个旧决策应被新成果替代**（§二），有 1 个跨计划联动机会能把 3 个阻塞项
+   合并成 1 个等待项（§四.6）。
+
+---
+
+## 一、逐计划进度盘点（已按代码实测核对）
+
+### 1. K 线/图表方案（`ui-redesign-plan.md` v3 + `minute-chart-plan.md`）
+
+| 项 | 状态 |
+|---|---|
+| 布局 v3（右列盘口/逐笔 tab、上部页签瘦身为图表类、底部资讯 tabs） | ✅ 已落地（现状即 v3 形态） |
+| 技术信号改名（不冒充 BS）、真实 B/S 点、持仓成本线、左栏持仓组 | ✅ 已落地 |
+| 自选分组 + 分组 chips 四分类 | ✅ 已落地 |
+| 右列拖拽调宽、副图高度拖拽 | ✅ 已落地（retro 二.1/2） |
+| 分时：均价线、昨收基准+对称区间、量能红绿、竞价金点、十字光标 | ✅ 已落地（代码核验通过） |
+| 逐笔聚合（主动买卖比条） | ❌ **未做**（ui-redesign §4.2；中期池 P2-5，与 P2-4 逐笔历史一并做） |
+| 集合竞价阶段页 | ✅ 已闭环（2026-09-01 用户拍板「最小方案」）：**独立阶段页不做**——`architecture-redesign.md` §1.4 明载竞价端点"随 predict 合并后不再需要独立端点"，且减负原则 #1（不新增一级导航）/#3（自动任务不占页面）/#4（新维度须有复盘指标）三条同时命中，竞价窗口每天仅 09:15–09:25。改为补真实缺口：`/api/auction-benchmark` **此前前端零消费**，现已接入盘面页题材 tab 顶部「竞价标杆」条——按竞价涨幅降序、点击跳详情、随 `date` 筛选联动（实测 date 参数真实有效：08-31 / 08-28 / 07-15 内容各不相同，非静默回退）、非交易日 502 静默不渲染。**新增一级导航 0 个** |
+| 新闻/公告图上事件点（§2 第 4 行） | ✅ 已完成：日 K 侧 `buildEventMarks`（P1-8，公告琥珀 aboveBar/新闻蓝 belowBar，`setMarkers` 已核验真实调用）+ 分时侧 `buildMinuteNewsEvents`（2026-09-01：当日新闻挂分钟价格蓝点，盘前/午休/盘后不顺延，tooltip 事件行 + 角标"新闻 N 点"）；公告无分钟精度，只进日 K 不进分时 |
+| L2 盘口 | ❌ 无免费源，Provider 已预留（`orderbook-source-evaluation.md` 结论"现在不动"） |
+
+### 2. 数据源方案（`data-source-comparison.md` 行动清单 A/B/C）
+
+| 项 | 状态 | 核验方式 |
+|---|---|---|
+| A1 交易日历主源改 ths + 持久化兜底 | ✅ | `trade_calendar.py` 含 ths、含持久化，无 tencent |
+| A2 东财 get_kline 处置 | ✅ 按结论仅文档标注，不改代码 | — |
+| A3 breadth 双边跌停判定 | ✅ | `limit_anomaly` 已在代码中 |
+| A4 data-sources.md qdate 更正 | ✅ | comparison §6 已写明"字段存在但不可信" |
+| ~~B1 热股榜 → 题材卡片人气热度~~ | ✅ 已完成（2026-08-31）：`GET /api/themes/hot`（ths 热股 24h 榜 × 官方成分反查聚合）+ /themes 页头人气榜条 + 题材卡人气徽标 | 消费端已落地（provider 方法此前已有） |
+| B2 竞价基准 → 预判模块 | ✅ | 预判引擎已含竞价证据 + `/api/auction-benchmark`（非交易日 502 属预期） |
+| B3 板块真实区间涨幅替换 f109 | ✅ 已完成（2026-09-01，P1-6）：`_verify_board_multi_day` 用 ths 官方板块 K 线覆盖 chg_3d/5d/10d，官方 chg_5d 到位后 `apply_position_with_5d` 重判位置，f109 仅留 `*_inferred` 审计 | 实测 13 卡 9 张官方验证、4 张位置升级 |
+| ~~B4 `seal_nextday` 交叉验证晋级率~~ | ✅ 已完成（2026-08-31）：`GET /api/market/ladder-check`——实抓 5 个可比日 2进3/高位存活与 ths 天梯**逐日完全一致**，拼接逻辑被源方数据证实（1进2 首板不在天梯，不可验） | dragon_service 之外新增 `app/sentiment/ladder_check.py` |
+| B5 东财补 `get_limit_break_pool` 备源 | ✅ 已完成（2026-08-31，P0-4）：`eastmoney.py get_limit_break_pool`（push2ex getTopicZBPool）已在 composite 链上，消除炸板率单点 | eastmoney.py:214 |
+| C1 `index/constituents` 板块成分表 | ✅ 已完成（`theme_catalog_service.fetch_members` 调 ths `/api/a-share-index/constituents/ths-stock-list`，`sync_members`/`_write_members` 落 `theme_member` 表，`sync_stale_members` 按 TTL 增量补） | 2026-09-01 实测：390 题材 / 70351 条成分 / **覆盖率 390 或 390（0 缺失）**，消费端 `GET /api/themes/catalog/{code}/members`（886109.TI 返回 101 只 `ths_official` 成分）；2026-09-01 审计发现的「352 个题材成分从未同步」已修复 |
+| C2 全市场历史日 K dump（回测地基） | 🔶 已被**替代**：easy_tdx 已提供 2 年分钟级历史（见 §2.4），此条降级 | — |
+| C3 统一 provider 缓存层 | ✅ 已完成（2026-08-31，P0-5）：`app/core/ttl_cache.py` 统一抽象 + /api/system/caches 观测，11 处自写缓存收敛 | — |
+
+### 3. 情绪方案（`sentiment-phase-review.md` P0–P3）
+
+| 项 | 状态 |
+|---|---|
+| P0 1–4（交易日历回退防护/晋级率/赚钱效应否决/自指哨兵） | ✅ 全部（retro #11–13） |
+| P1 5–8（中位数/真实炸板池/跌停家数/休市标 stale） | ✅ 全部（retro #14–16，代码核验含"跌停"） |
+| P1 9 分层收益接入 engine | ✅（代码含"首板/分层"） |
+| P2 10 情绪周期序列 | ✅（retro #17，`sentiment_history` + market 页曲线） |
+| P2 11 梯队断层检测 | ✅（theme_service 含"断层"） |
+| P2 12 明日验证条件 | ✅（预判模块 D1 四问验证 + `verify_next`） |
+| **P2 13 阈值配置化 + 历史分位校准** | ✅ 全部完成：阈值配置化（`band_config.py`，P0-3）；历史分位校准（P0-3b，2026-09-02 落地 + lookback 120→250、回补 121 天、库 241 天，promo 分位覆盖回测/线上双链路） | — |
+| **P2 14 盘中情绪监控（P0 事件推送）** | ✅ 已完成（2026-09-04，监控本体落地 `app/sentiment/intraday_monitor.py`）：三类纯规则事件——高度板(≥4板)炸板 / 炸板率连续 2 拍破 40% / 指数 15min 急杀（上证-0.8%/创业板-1.2%）→ AlertEvent 告警（in_app/log/feishu，webhook 未配时 feishu 显式跳过）；状态随 GET /api/system/providers 可见；+9 测试 | — |
+| P3 15 `sentiment.md` 与实现对齐 | ✅ 已完成（2026-09-01 复核）：文档唯一"未实现"是已划掉的历史描述（晋级率/跌停/分层收益均已落地）；**本轮又修掉一处新滞后**——原文称"高度≥5板、涨停≥60家 仍硬编码"，实际阈值配置化已完成（`band_config.py`），只剩分位校准 | 
+| P3 16 push2ex 行为记录 | ✅（comparison §6） |
+| P3 17 "分歧"触发条件说明 | ✅ 已完成（2026-09-01）：`sentiment.md` 阶段判定节补双轴矩阵表 + 「分歧」进入/离开条件 + 冰点退潮边界，全部与 `engine.py` 的 `_PHASE_MATRIX` / `decide_phase` / `switch` 逐条比对 |
+
+### 4. 星标仓库方案（`github-stars-trading-analysis.md`）
+
+| 级别 | 事项 | 状态 |
+|---|---|---|
+| ~~P0~~ | 回测正确性：ths 公司行动+复权因子 | ✅（实测茅台 30 条事件） |
+| ~~P0~~ | 预判接 ths 集合竞价 | ✅ |
+| ~~P1~~ | easy_tdx 试点 + 接入 | ✅（5 分钟 495 交易日 vs 新浪 22 天；2 年回测 1753 信号、样本外 0.662） |
+| ~~P1.5~~ | /heatmap 云图页 | ✅（路由已存在并随 build 产出） |
+| **P2** | 复盘 Agent LLM 四角色编排（TradingAgents 蓝本） | ❌ **阻塞于 LLM 凭据** |
+| **P2** | 报告推送通道（daily_stock_analysis 架构） | ❌ **阻塞于通道选型** |
+| **P2** | 回测配置 mandate 化（yaml 声明） | ✅ 已完成：`app/market/mandate.py` + `backend/mandates/*.yaml` + `/api/backtest/mandates` 端点 + test_mandate.py |
+| 备查 | marketdb DuckDB / qlib / AlphaMaster 触发条件 | 已注明，维持观察 |
+
+### 5. 做T/分时信号（`minute-chart-plan.md` P2 + 分钟回测底座）
+
+- 信号计算 + 分钟回测（sina 22 天 + TDX 2 年）✅；精确量比基线 ✅。
+- 遗留：**逐笔历史**（TDX `transaction --date`）未接——做T撮合精度可升级；与 §1"逐笔聚合"同属盘口/逐笔域。
+
+### 6. 风控（`risk-management.md` + 风控引擎 v1）
+
+- ✅ 已完成（commit 361a9c1）：7 档市场状态 → 仓位参数 → 七项下单预检；实测修正口径缺陷。
+- 引擎文档声明的"未来可接入 Auditor 与 AI 结论有效期"→ 属 Phase 7，未做（合理）。
+
+### 7. 回测（`backtest-rules.md`）
+
+- ✅ 引擎 + 防泄露测试 + 页面 + TDX 2 年数据；禁令文档为"代码级禁令"，无开放项。
+- 遗留：mandate 化（见 §1.4）。
+
+### 8. 盘口（`orderbook-source-evaluation.md`）
+
+- ✅ 结论"现在不动"已执行；L2 Provider 预留。无开放项。
+
+### 9. MCP（`mcp.md`，Phase 7）
+
+- ❌ 完全未开始（工具清单/统一信封/权限审计）。**先有 API 契约再做 MCP 封装**——API 已就绪 66 个端点，MCP 是纯封装层，**无阻塞、可做**，但优先级取决于是否有 AI 调用方。
+
+### 10. 部署（`deployment.md`）
+
+- ✅ 已完成大量前置：同源 API 基址 + 运行时反代（BACKEND_ORIGIN）、生产模式实测 6 页全 200、
+  .env.example 对齐 config.py + 防漂移测试、运维工具 `scripts/api-sweep.js`（52 GET 巡检，47 通过）。
+- ❌ 未做：Docker 镜像/编排（**本机无 Docker，无法实测，拒绝盲交付**）、真实推送通道、监控告警。
+- **阻塞**：部署环境选型（NAS / 云服务器 / Vercel+Railway）。
+
+### 11. 基础设施类（本周期新增，未在原计划内）
+
+- 全端点巡检工具 + 载荷体检（空数据/过期数据分类）✅
+- Parquet 原子写 + 容错读（快照 + 分钟两处）✅
+- 组件渲染测试基建（jsdom + RTL，TradeForm/InfoPanel）✅
+- CI 自查脚本（skills/fullstack-phase-delivery/scripts/ci-watch.sh）✅
+
+---
+
+## 二、方案复盘：应被新成果替代的旧决策（优胜劣汰）
+
+| # | 旧决策 | 新成果 | 处置 |
+|---|---|---|---|
+| 1 | **C2 全市场历史日 K dump（ths Market Dumps）作为回测地基** | easy_tdx 已提供 2 年分钟级历史 + QFQ（495 交易日 vs 新浪 22 天） | **替代**：C2 从"待做"降级为"备查"；分钟域 TDX 已是事实底座。日级若将来需要，再评 marketdb |
+| 2 | **风控状态判定自建** | 情绪引擎已产出 阶段/温度/置信度 + 涨跌比/涨停跌停 | **已联动**（风控引擎 v1 就是复用情绪输出），无需动作，列为正确范例 |
+| 3 | **新闻摘要等 LLM** | `app/review/` 的 ModelRouter"规则先行+显式降级"范式 | **已推广**到 `app/news/`；后续所有 AI 能力统一此范式，LLM 只做增强层 |
+| 4 | **板块位置用 `active_days` 代理**（B3） | ths `index/prices/historical` 可给真实板块区间涨幅 | **待替代**：需先核验现状数据源（comparison B3 标记待核） |
+| ~~5~~ | ~~**各模块自写缓存**（60s/30min/5min 三套实现）~~ | ✅ 已替代（2026-08-31，P0-5）：`app/core/ttl_cache.py` 统一抽象，11 处收敛 | **已替代**：C3 统一缓存层落地；键空间有界化 + 逐出计数让"缓存键漂移"类隐患可见（经 /api/system/caches 观测） |
+| 6 | **`write_parquet` 直写** | `parquet_store.write_parquet_atomic` | **已替代**（快照 + 分钟两处全部切换；实测 7 个损坏文件的教训） |
+| 7 | **`except Exception` 兜底报错文案** | 错误分类细化（snapshot_unavailable ≠ tdx_unavailable） | **已替代**；选股器 502 曾把本地文件损坏误报成数据源问题 |
+
+---
+
+## 三、查漏补缺（本次新发现）
+
+1. 🔴 **待办真相源分裂（本次已修）**：README 路线图 / PROJECT-MASTER §十二 / AGENTS §5 /
+   retro-and-gaps 四处各自维护，互相矛盾——README 说 Phase 5"余：风险引擎"（已完成）、
+   PROJECT-MASTER 说 Phase 6"余：历史回放"（已完成）、README 说"REST 34 端点"（现 66）、
+   retro 表格还出现两行都是 #7 的编号错乱。
+   **处置：retro-and-gaps.md 定为唯一明细账本，其余三处只留"阶段级"索引 + 指向它。**
+2. 🟡 **快照/分钟数据的损坏文件**：`data/parquet/snapshots/20260830/` 下 7 个（本地数据不入库）。
+   代码已能跳过；是否物理删除待用户确认。
+3. 🟡 **`/api/quotes/{symbol}` 曾缺涨跌停价**：已修（quote_enrich 共享化，commit a8536302）。
+   教训沉淀：**撮合依赖的字段，所有出口必须同口径**。
+4. 🟡 **模拟账户在本次会话中被清空**（cash 回到 1,000,000，持仓/委托归零）。
+   已实证**不是测试污染**（跑 reset 重度用例前后真实库零变化，conftest 内存库隔离有效）；
+   属于模拟测试数据，无实际损失，但**原因未查明**——建议在 `/api/paper/reset` 加一条
+   INFO 级审计日志（谁在何时重置），下次可定位。
+5. ~~🟢 `sentiment.md` 仍含"未实现/TODO"字样，与已实现的晋级率/跌停/分层收益不同步（P3 #15）~~
+   ✅ 已处理（2026-09-01）：复核确认文档已同步，并修掉"阈值仍硬编码"的新滞后，
+   同时补齐「分歧」触发条件说明（P3 #17）。
+6. ~~🟢 retro 一 §一 表格编号重复（两个 #7），应重排~~
+   ✅ 复核后确认**非问题**（2026-09-01）：`retro-and-gaps.md` 是分节独立编号，
+   §一（1-20）与 §二（1-8）各有一个 #7，同一表内无重复，重排反而会破坏既有引用。
+7. 🟢 `scripts/api-sweep.js` 的载荷体检已能发现"200 但空数据"，**建议纳入发布前自检清单**
+   （CI 无真实数据跑不了，只能本地/部署后跑）。
+
+---
+
+## 四、跨计划联动关系（依赖图）
+
+```text
+[阻塞源 A：LLM 凭据] ──┬─→ 复盘 Agent LLM 四角色（星标 P2）
+                        ├─→ 新闻/公告摘要 LLM 增强层（news.llm）
+                        └─→ 预判/情绪的 LLM 增强（若有）
+                         → 一次接入，三处受益：LLMAnalyzer 只需实现一次
+
+[阻塞源 B：推送通道选型] ─┬─→ 预警真实通道（Phase 8 收尾）
+                          ├─→ 复盘报告推送（星标 P2）
+                          └─→ 盘中情绪监控（sentiment P2 #14）
+                           → 同样三合一：notifiers 抽象已就绪，加实现即可
+
+[阻塞源 C：部署环境] ─→ Docker/编排/监控（Phase 8 收尾）
+
+[内部依赖链]
+快照 Parquet ─→ 选股器截面 ─→ TDX 日K ─→ 评分卡 ─→ 风控下单预检
+情绪引擎(阶段/温度) ─→ 风控状态档位 ─→ 仓位参数        （已联动）
+交易日历 ─→ 情绪回退防护 / 撮合 T+1 / 预判验证        （已联动）
+统一缓存层(C3) ─→ news/screener/sparkline/quote       （已建，P0-5）
+推送通道(B) ─→ 预警/复盘/情绪监控                      （待建）
+```
+
+**关键判断：阻塞源 B 一旦解除，可同时关闭 3 个计划的遗留项——它的价值密度最高。**
+
+---
+
+## 五、阶段重评（Phase 1–8 是否仍合理）
+
+| 阶段 | 原定义 | 重评结论 |
+|---|---|---|
+| 1 基础框架 | — | ✅ 划分合理，完成 |
+| 2 行情基础设施 | — | ✅ 合理，完成；本周期补的 Parquet 容错/涨跌停补全应归入此阶段的"数据可靠性"子项 |
+| 3 市场与板块 | 余：题材事件树/生命周期、左栏sparkline | sparkline **已完成，应划掉**；题材事件树/生命周期仍开放（低优先） |
+| 4 投研数据 | 余：营业部图谱/筹码/解禁/两融/大宗 | 维持；新增"逐笔历史（TDX transaction）"归入此阶段更合适 |
+| 5 量化系统 | 余：更多副图 | **已完成度被低估**：选股器+评分+风控引擎均已交付，应改 ✅；"更多副图"是 UI 细节 |
+| 6 模拟交易与回测 | 余：历史回放/左栏持仓组 | **两项均已完成，应改 ✅** |
+| 7 AI 系统 | ⬜ | **定义过时**：复盘 Agent/新题材预判/新闻摘要规则层都已交付，应改 🔶 并拆两栏——"已完成（规则层）"与"待 LLM 凭据" |
+| 8 通知与部署 | 预警+通道+Docker | 预警核心已完成，应改 🔶；剩 通道接入+部署+监控 |
+| （建议新增）**9 运维与观测** | api-sweep、载荷体检、统一缓存层、审计日志 | 本周期实际做的事已形成一个新的关注域，建议显式立项，避免散落 |
+
+**阶段划分结论：骨架仍合理，不需要推倒；但 5/6/7/8 的状态行全部过时，且缺一个"运维观测"阶段。**
+
+---
+
+## 六、整合后的计划清单（按优先级排序，逐项推进）
+
+> 标注：〔依赖〕= 阻塞条件；〔联动〕= 完成后顺带关闭哪些计划项。
+
+### P0 · 无阻塞，立即可做（每项 ≤1 天）
+
+| # | 事项 | 来源 | 联动/说明 |
+|---|---|---|---|
+| **P0-1** | **统一待办真相源**：修 README/PROJECT-MASTER 过时状态，retro 编号重排，宣布 retro 为唯一明细账本 | 本次复盘 | 防止下次复盘再花一小时对账 |
+| ~~**P0-2**~~ | ~~**回测配置 mandate 化**~~ ✅ 已完成（2026-08-31，commit 7f80c95）：backend/mandates/ + 分层解析（默认<mandate<请求）+ meta.applied 来源展示 + /backtest 下拉预填 | 星标 P2 | 源选择（tdx/sina）留待后续 mandate 字段扩展 |
+| ~~**P0-3**~~ | ~~**sentiment 历史分位校准**~~ ✅ 已完成（2026-09-02）：阈值配置化（band_config.py）+ P0-3b 分位校准落地（等分分位替代经验值）+ metric_history lookback 120→250、回补 121 天（库 241 天 2025-09-03 起），promo 分位覆盖回测（缺失 80→0）与线上校准双链路 | 情绪 P2 #13 | 让"高潮/分歧"阈值有本地依据而非照搬网络 |
+| ~~**P0-4**~~ | ~~**东财 get_limit_break_pool 备源**~~ ✅ 已完成（2026-08-31）：push2ex getTopicZBPool；字段缩放 ×1000 已用 600103 与 TDX 日K交叉验证（与 ZT 池 ×100 不同，独立解析） | 数据源 B5 | 链上 ths → eastmoney 双源 |
+| ~~**P0-5**~~ | ~~**统一 provider 缓存层（C3）**~~ ✅ 已完成（2026-08-31）：`app/core/ttl_cache.py`（TTLCache：monotonic/LRU 有界/异步单飞/命中统计 + 弱引用注册表）+ `GET /api/system/caches` 观测；收敛 sentiment/heatmap/boards/themes/sparkline/announcements/news/digest/tdays/attribution/screener 共 11 处自写缓存，删除 market.py/news.py 两份拷贝的 `_route_cache`/`_ttl_hit`，键空间全部有界化（逐出计数让"缓存键漂移"可见） | 数据源 C3 | trade_calendar/heatmap 行业映射/ths 代码表三处保留模块内缓存（有失败冷却/增量填充等专用语义，非键漂移风险点） |
+| ~~**P0-6**~~ | ~~`/api/paper/reset` 加审计日志~~ ✅ 已完成（2026-08-31）：单行记录 重置前状态（持仓/委托/资金）+ source=api/engine + custom_initial 标记 | 本次复盘 | 审计断言直接打桩 logger（basicConfig 会破坏后续 caplog，见 test_paper_audit.py 注释） |
+| ~~**P0-7**~~ | ~~`sentiment.md` 与实现对齐~~ ✅ 已完成（2026-08-31）：判定纠错段改为"已修复"状态并保留开放项指引 | 情绪 P3 #15 | — |
+
+### P1 · 等一个触发条件（条件成熟即做）
+
+| # | 事项 | 触发条件 | 联动 |
+|---|---|---|---|
+| ~~**P1-1**~~ | ~~**推送通道接入**~~ ✅ 已完成（2026-09-02，8154e47）：用户选**飞书**——feishu notifier（webhook+可选加签）入 NotifierRegistry + `/api/alerts/channels` 返回 `configured` 诚实展示 + 前端未配置 amber 徽标；`.env` 填 `ASHARE_ALERT_FEISHU_WEBHOOK`（可选 `_SECRET`）即生效 | ~~用户选通道~~ 通道已定 | 一举关闭：Phase 8 通道 ✅ + 复盘推送挂上 + 盘中情绪监控解除阻塞（本体仍 P2） |
+| ~~**P1-2**~~ | ~~**LLM 接入**~~ ✅ 代码完成（2026-09-02，2226147）：`core/llm_client.py` 共享客户端（chat_completion + extract_json_object）+ `LLMAnalyzer`（judgements 重写+漏答回落规则）+ `LLMSummarizer`（白名单校验回填，全无效整体上抛）+ 12 测试；async 侧走 `asyncio.to_thread` 防阻塞 | 剩：用户填 `ASHARE_REVIEW_LLM_*` / `ASHARE_NEWS_LLM_*` 凭据即生效 | 关闭：复盘/新闻 LLM 增强 ✅；四角色编排仍等凭据 |
+| ~~**P1-3**~~ | ~~B1 热股榜 → 题材卡片"人气热度+排名变化"~~ ✅ 已完成（2026-08-31）：`aggregate_hot_themes` 纯函数 + `GET /api/themes/hot`（60s TTL 缓存）+ /themes 人气榜条与卡片徽标；rank_change 沿用榜内最高排名成员（不造题材级指标） | 无（ths 已具备） | ths 独占能力，欠用清单中最快出效果的 |
+| ~~**P1-4**~~ | ~~B4 `seal_nextday` 交叉验证晋级率~~ ✅ 已完成（2026-08-31）：`app/sentiment/ladder_check.py` + `GET /api/market/ladder-check`（60→10min 缓存）；实测 5 可比日逐日一致、零漂移 | 无 | 数据源方案的自证闭环：对不上说明拼接仍有问题 |
+| ~~**P1-5**~~ | ~~C1 `index/constituents` 板块成分表 → 题材指数、板块内资金合力~~ ✅ 已完成（2026-08-31）：`GET /api/themes/catalog/strength`（官方成分批量快照聚合：涨跌家数/等权涨幅/成交额/涨停家数，60s 缓存）+ `GET /api/themes/catalog/index`（ths 官方板块指数日 K + 3/5/10 日涨跌幅）+ 看板卡片合力条 | 无 | 阶段 C 全清 |
+| ~~**P1-6**~~ | ~~B3 核验板块区间涨幅数据源是否已换 ths~~ ✅ 已完成（2026-09-01）：核验确认 T3/B3 已在 `/api/themes` 用 ths 官方板块 K 线覆盖 chg_3d/5d/10d（f109 推断值仅留 `*_inferred` 审计）；本轮补完最后一步——`apply_position_with_5d`（dragon_service）把 `news_persistence` ②位置从 active_days 代理升级为真实 5 日涨幅（或语义只收紧不放松，阈值 `POSITION_5D_HIGH=10%`），路由 `_verify_board_multi_day` 官方 chg_5d 到位后自动调用。实测：粮食概念活跃仅 1 天但 5 日 +11.5% 被抓为高位——代理口径抓不到的"慢牛高位"由真实涨幅补上 | 无 | — |
+| **P1-7** | 部署（Docker/编排/监控） | **用户定环境** | 有 Docker 的环境才能实测交付 |
+| ~~**P1-8**~~ | ~~新闻/公告图上事件点（K 线标记）~~ ✅ 已完成（2026-08-31）：`lib/event-markers.ts` 纯函数（日期对齐 bar/非交易日不顺延/同日同类型合并）+ KlineChartPro「事件」开关（公告=琥珀●上、新闻=蓝●下、重要度高加!，与 B/S 点合并排序后一次 setMarkers） | 无（新闻+摘要已就绪） | ui-redesign §2 第 4 行，现在有数据了 |
+
+### P2 · 远期/触发式（维持观察，注明触发条件）
+
+| # | 事项 | 触发条件 |
+|---|---|---|
+| P2-1 | marketdb DuckDB 评估（日级历史落盘） | 需要日级标准底座时 |
+| P2-2 | qlib / RD-Agent 因子挖掘 | 数据底座铺好 + 进入多因子截面研究 |
+| P2-3 | L2 盘口 | 出现付费意愿或订单流需求 |
+| P2-4 | 逐笔历史（TDX transaction） | 做T信号撮合精度需要 |
+| P2-5 | 逐笔聚合（主动买卖比条） | 与 P2-4 同域，一并做 |
+| P2-6 | 题材事件树/生命周期 | 题材域再迭代时 |
+| P2-7 | 营业部图谱/筹码/解禁/两融/大宗 | Phase 4 深化时 |
+| P2-8 | MCP 工具层封装 | 出现真实 AI 调用方时（**API 契约已就绪**） |
+
+### 被替代/降级的项（明确不做，防复发）
+
+- ~~C2 全市场历史日 K dump~~ → 已被 TDX 替代（§二.1）
+- ~~"等 LLM 再做新闻摘要"~~ → 规则层已交付（范式推广的范例）
+- ~~rewrite 做后端反代~~ → 已被 Route Handler 替代（构建期烘焙教训）
+
+---
+
+## 七、本次复盘已顺手修复（不等文档）
+
+1. ✅ 涨跌停价补全共享化：`/api/quotes/{symbol}` 不再缺字段（commit a8536302，CI 绿）
+2. ✅ 全端点巡检 + 载荷体检工具化（`scripts/api-sweep.js`）
+3. ✅ 实证测试不污染真实数据库（reset 重度用例前后真实库零变化）
+
+## 八、遗留待用户决策
+
+| # | 决策 | 阻塞的联动项 |
+|---|---|---|
+| 1 | 推送通道选哪条（email/企微/飞书/TG/webhook） | 预警真实通道 + 复盘推送 + 盘中情绪监控 |
+| 2 | LLM 凭据 | 复盘 LLM 编排 + 新闻摘要增强 |
+| 3 | 部署环境（NAS/云服务器/Vercel+Railway） | Docker/编排/监控 |
+| 4 | 是否物理删除 `data/parquet/snapshots/20260830/` 下 7 个损坏文件 | 无（代码已容错） |

@@ -7,14 +7,16 @@ import { StockLink } from "@/components/stock-link";
 /**
  * 选股类卡片的共享布局壳（2026-09-08 猎场批次①，docs/system-audit-20260908.md §3.3）。
  *
- * PickCard（每日精选）与 TopDetailCard（盘中跟踪详情）此前各自手写同构的
- * 「圆角外框 + 名称代码头部」，结构漂移只能靠肉眼对齐。抽出两个最小单元：
  * - CardShell：圆角外框；`flow` 打开时附带瀑布流 margin（CSS columns 单元）。
  * - CardHead：头部行——左侧名称+代码（可选 StockLink 跳工作台），右侧内容槽
- *   （精选放价格/涨跌幅，跟踪放 T 档徽标/涨跌幅，各卡自定）。
+ *   （来源/持仓徽标 + 现价 + 涨跌幅）。
  *
- * 只抽「壳」，不抽「内容」：两卡的分节（评分条/出场纪律 vs 判定徽标/入选理由）
- * 语义差异大，强行合并会把条件渲染做成 5 处分支，可读性反而崩（审查 §3.3 结论）。
+ * 2026-09-10 复核更正：本文件原注释断言「只抽壳不抽内容——两卡分节语义差异大，
+ * 强行合并会把条件渲染做成 5 处分支」。该结论**已被推翻**：两卡实为**互补**关系
+ * （盘前有评分/估值/买入区间，盘中有辨识度·确定性判定/涨停原因/T 档），
+ * 合并通路不是「渲染层堆分支」，而是**在适配器里归一输入**（`pick-card.tsx`
+ * 的 `fromDailyPick` / `fromIntradayStock` → `TradingCard`），渲染层只认一种形状。
+ * 教训：判断「两个组件该不该合并」时，先看**输入契约**能否归一，再看渲染分支数。
  */
 
 export function CardShell({
@@ -55,7 +57,7 @@ export function CardHead({
   const label = (
     <>
       <span className="text-sm font-semibold">{name ?? "--"}</span>
-      <span className="ml-1.5 font-mono text-[10px] text-zinc-400">{symbol}</span>
+      <span className="ml-1.5 font-mono text-[10px] text-zinc-600 dark:text-zinc-400">{symbol}</span>
     </>
   );
   return (

@@ -48,17 +48,17 @@ export function BoardRankPanel({ className }: { className?: string }) {
           <button
             key={k}
             onClick={() => setType(k)}
-            className={`rounded px-2 py-0.5 text-xs ${type === k ? "bg-zinc-100 font-medium dark:bg-zinc-800" : "text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
+            className={`rounded px-2 py-0.5 text-xs ${type === k ? "bg-zinc-100 font-medium dark:bg-zinc-800" : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
           >
             {label}
           </button>
         ))}
-        <span className="ml-auto text-[10px] text-zinc-500">按涨跌幅降序 · 60s 刷新</span>
+        <span className="ml-auto text-[10px] text-zinc-600 dark:text-zinc-400">按涨跌幅降序 · 60s 刷新</span>
       </div>
-      {error && <div className="shrink-0 px-3 py-2 text-xs text-amber-600 dark:text-amber-300">{error}</div>}
+      {error && <div className="shrink-0 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">{error}</div>}
       <div className="min-h-0 flex-1 overflow-y-auto">
         <table className="w-full text-xs">
-          <thead className="sticky top-0 bg-zinc-50 text-zinc-400 dark:bg-zinc-900">
+          <thead className="sticky top-0 bg-zinc-50 text-zinc-600 dark:text-zinc-400 dark:bg-zinc-900">
             <tr className="text-left">
               <th className="px-3 py-1.5 font-normal">板块</th>
               <th className="px-2 py-1.5 text-right font-normal">涨跌幅</th>
@@ -71,14 +71,14 @@ export function BoardRankPanel({ className }: { className?: string }) {
               <tr key={b.name} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
                 <td className="px-3 py-1.5">
                   {b.name}
-                  {b.count != null && <span className="ml-1 text-[10px] text-zinc-400">{b.count}</span>}
+                  {b.count != null && <span className="ml-1 text-[10px] text-zinc-600 dark:text-zinc-400">{b.count}</span>}
                 </td>
                 <td className={`px-2 py-1.5 text-right font-mono font-medium tabular-nums ${pctColor(b.change_pct)}`}>
                   {pctText(b.change_pct)}
                 </td>
-                <td className="px-2 py-1.5 text-right font-mono tabular-nums text-zinc-400">{fmtAmount(b.amount)}</td>
+                <td className="px-2 py-1.5 text-right font-mono tabular-nums text-zinc-600 dark:text-zinc-400">{fmtAmount(b.amount)}</td>
                 <td className="px-3 py-1.5 text-right">
-                  <span className="text-zinc-500 dark:text-zinc-300">{b.leader_name ?? "--"}</span>
+                  <span className="text-zinc-600 dark:text-zinc-300">{b.leader_name ?? "--"}</span>
                   <span className={`ml-1 font-mono tabular-nums ${pctColor(b.leader_change_pct)}`}>
                     {pctText(b.leader_change_pct)}
                   </span>
@@ -98,7 +98,7 @@ export function BoardRankPanel({ className }: { className?: string }) {
             ) : null}
             {rows.length === 0 && loaded && !error && (
               <tr>
-                <td colSpan={4} className="px-4 py-8 text-center text-zinc-400">
+                <td colSpan={4} className="px-4 py-8 text-center text-zinc-600 dark:text-zinc-400">
                   暂无数据
                 </td>
               </tr>

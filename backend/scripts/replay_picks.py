@@ -328,9 +328,11 @@ async def build_daily_ranked(days_n: int, top_n: int, limiter=None, weight_mode:
         base_ranked.append((d.isoformat(), base_cands))
         carry_ranked.append((d.isoformat(), carry_cands))
         # 这里的调用只为维护 prev_combo（carryover 需要知道昨日组合是谁），
-        # 与 sweep 的策略参数无关，故用默认常量；真正的评估在 evaluate() 里按参数跑
+        # 与 sweep 的策略参数无关，故用默认常量；真正的评估在 evaluate() 里按参数跑。
+        # min_score=0.0：本脚本的分数是梯队+技术二维历史重建分，与线上六维综合分
+        # 不同量纲，绝对入选门槛（MIN_PICK_SCORE）在此不成立（见 replay.replay_picks docstring）。
         kept, _ = apply_replacement_threshold(
-            prev_combo, carry_cands, REPLACE_THRESHOLD, MAX_PICKS, MAX_SWAPS_PER_DAY
+            prev_combo, carry_cands, REPLACE_THRESHOLD, MAX_PICKS, MAX_SWAPS_PER_DAY, min_score=0.0
         )
         prev_combo = [k["symbol"] for k in kept]
 

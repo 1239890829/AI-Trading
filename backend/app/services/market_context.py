@@ -11,6 +11,7 @@ import logging
 from datetime import date
 
 from app.core.config import settings
+from app.core.freshness import Freshness
 from app.market import trade_calendar as tc
 from app.sentiment import metric_history
 from app.sentiment.band_config import load_bands
@@ -108,6 +109,24 @@ class CalendarUnavailable(Exception):
     """交易日历不可用。调用方必须拒绝输出结论，不能猜日期。"""
 
 
+def _snapshot_freshness(svc) -> Freshness:
+    """取全市场快照的新鲜度（S2-1 契约）。
+
+    优先用服务自身的 `freshness()`（单点口径）；测试桩没有该方法时回退到
+    按 `last_success` + `poll_interval` 派生同样的判据——**不回退到"当作新鲜的"**。
+    """
+    fn = getattr(svc, "freshness", None)
+    if callable(fn):
+        return fn()
+    interval = getattr(svc, "poll_interval", None) or 60.0
+    return Freshness.from_age(
+        as_of=getattr(svc, "last_success", None),
+        fresh_within=interval * 3,
+        source="snapshot",
+        missing_reason="快照服务未提供成功刷新时间，无法判定新鲜度",
+    )
+
+
 async def compute_market_sentiment(hub, snapshot_service) -> dict:
     """计算市场情绪。
 
@@ -117,6 +136,7 @@ async def compute_market_sentiment(hub, snapshot_service) -> dict:
 
     :raises CalendarUnavailable: 交易日历或最近两个交易日定位失败
     """
+    snap_fresh = _snapshot_freshness(snapshot_service)
     if snapshot_service.breadth is None:
         raise CalendarUnavailable("全市场快照尚未就绪")
 
@@ -168,6 +188,16 @@ async def compute_market_sentiment(hub, snapshot_service) -> dict:
     # 的"已知代价"），暴露分位数值比暴露标签更能反映真实位置。
     result["bands_source"] = bands_source
     result["calibration"] = calib_meta
+    # S2-1/S1-3：快照不新鲜时**结论必须降级可见**，而不是照算不误。
+    # 过去的形态是"20 分钟前的宽度配当前涨停池"——数字全都合理、结论是错的，
+    # 界面上看不出来。此处沿用引擎既有的 caveats/confidence 机制（不新增第二套），
+    # 因为 confidence 已在卡片与前端展示链路上，能被真正看到。
+    result["snapshot_freshness"] = snap_fresh.model_dump(mode="json")
+    if not snap_fresh.is_fresh():
+        caveats = list(result.get("caveats") or [])
+        caveats.append(f"{snap_fresh.note('全市场快照')}——宽度口径与当前涨停池可能不同时点")
+        result["caveats"] = caveats
+        result["confidence"] = "低"
     return {
         **result,
         "pool_today_count": len(pool_today),

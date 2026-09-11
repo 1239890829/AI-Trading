@@ -40,10 +40,10 @@ import type { LimitUpRecord, Quote } from "@/types/market";
 const PHASE_STYLE: Record<string, string> = {
   冰点: "bg-sky-500/15 text-sky-700 border-sky-500/40 dark:text-sky-300",
   修复: "bg-teal-500/15 text-teal-700 border-teal-500/40 dark:text-teal-300",
-  发酵: "bg-amber-500/15 text-amber-700 border-amber-500/40 dark:text-amber-300",
-  高潮: "bg-up/20 text-up border-up/50",
-  分歧: "bg-orange-500/15 text-orange-700 border-orange-500/40 dark:text-orange-300",
-  退潮: "bg-down/20 text-down border-down/50",
+  发酵: "bg-amber-500/15 text-amber-800 border-amber-500/40 dark:text-amber-300",
+  高潮: "bg-up/20 text-up-ink dark:text-up border-up/50",
+  分歧: "bg-orange-500/15 text-orange-800 border-orange-500/40 dark:text-orange-300",
+  退潮: "bg-down/20 text-down-ink dark:text-down border-down/50",
 };
 
 const VIEWS = [
@@ -137,7 +137,7 @@ function MarketInner() {
                 className={`rounded-md px-3 py-1.5 text-sm transition-colors ${
                   view === v.key
                     ? "bg-zinc-900 font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
-                    : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+                    : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
                 }`}
               >
                 {v.label}
@@ -145,7 +145,7 @@ function MarketInner() {
             ))}
           </nav>
         </div>
-        {view === "overview" && <span className="text-xs text-zinc-400">更新 {updatedAt || "--"}</span>}
+        {view === "overview" && <span className="text-xs text-zinc-600 dark:text-zinc-400">更新 {updatedAt || "--"}</span>}
       </div>
 
       {/* 视图切换统一 fade 过渡（2026-09-04）：h-full 保持各视图内部布局 */}
@@ -165,7 +165,7 @@ function MarketInner() {
         ) : (
           <div className="flex h-full min-h-0 flex-col gap-2">
           {error && (
-            <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-600 dark:text-amber-300">
+            <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-800 dark:text-amber-300">
               {error}
             </div>
           )}
@@ -189,7 +189,7 @@ function MarketInner() {
                 className="cursor-pointer rounded-lg border border-zinc-200 px-2.5 py-1.5 text-left transition-colors hover:bg-zinc-100/60 dark:border-zinc-800 dark:hover:bg-zinc-800/40"
               >
                 <div className="flex items-center justify-between gap-1">
-                  <span className="truncate text-xs text-zinc-400">{q.name ?? q.symbol}</span>
+                  <span className="truncate text-xs text-zinc-600 dark:text-zinc-400">{q.name ?? q.symbol}</span>
                   <span className="flex items-center gap-1">
                     <QualityBadge quality={q.quality} reasons={q.quality_reasons} />
                     <span className={`shrink-0 font-mono text-xs ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</span>
@@ -197,7 +197,7 @@ function MarketInner() {
                 </div>
                 <div className="mt-0.5 flex items-baseline justify-between gap-2">
                   <span className="font-mono text-base font-semibold">{q.price == null ? "未开盘" : fmt(q.price)}</span>
-                  <span className="shrink-0 font-mono text-[10px] text-zinc-500" title="成交额">
+                  <span className="shrink-0 font-mono text-[10px] text-zinc-600 dark:text-zinc-400" title="成交额">
                     额 {fmtAmount(q.amount)}
                   </span>
                 </div>
@@ -209,10 +209,10 @@ function MarketInner() {
               涨停/跌停两格可点击 → 盘面页对应 tab（2026-09-04 联动，tapeUrl 统一构造） */}
           <div className="grid shrink-0 grid-cols-3 gap-2 lg:grid-cols-6">
             {([
-              ["上涨", breadth?.up, "text-up", null],
-              ["下跌", breadth?.down, "text-down", null],
-              ["涨停", breadth?.limit_up, "text-up", tapeUrl("limitup")],
-              ["跌停", breadth?.limit_down, "text-down", tapeUrl("limitdown")],
+              ["上涨", breadth?.up, "text-up-ink dark:text-up", null],
+              ["下跌", breadth?.down, "text-down-ink dark:text-down", null],
+              ["涨停", breadth?.limit_up, "text-up-ink dark:text-up", tapeUrl("limitup")],
+              ["跌停", breadth?.limit_down, "text-down-ink dark:text-down", tapeUrl("limitdown")],
               ["平盘/停牌", breadth ? `${breadth.flat}/${breadth.suspended}` : null, "", null],
               ["沪深京总数", breadth?.total, "", null],
             ] as [string, string | number | null | undefined, string, string | null][]).map(([label, value, cls, href]) =>
@@ -223,19 +223,19 @@ function MarketInner() {
                   title={`查看${label}池明细（盘面页 · ${label === "涨停" ? "涨停生态" : "跌停"} tab）`}
                   className="cursor-pointer rounded-lg border border-zinc-200 px-2.5 py-1 transition-colors hover:bg-zinc-100/60 dark:border-zinc-800 dark:hover:bg-zinc-800/40"
                 >
-                  <span className="text-[11px] text-zinc-400">{label}</span>
+                  <span className="text-[11px] text-zinc-600 dark:text-zinc-400">{label}</span>
                   {value == null && pending ? (
                     <Skeleton className="mt-0.5 h-4 w-14" />
                   ) : (
                     <div className={`font-mono text-sm font-semibold ${cls}`}>
                       {value ?? "--"}
-                      <span className="ml-1 text-[10px] font-normal text-zinc-400">↗</span>
+                      <span className="ml-1 text-[10px] font-normal text-zinc-600 dark:text-zinc-400">↗</span>
                     </div>
                   )}
                 </Link>
               ) : (
                 <div key={String(label)} className="rounded-lg border border-zinc-200 px-2.5 py-1 dark:border-zinc-800">
-                  <span className="text-[11px] text-zinc-400">{label}</span>
+                  <span className="text-[11px] text-zinc-600 dark:text-zinc-400">{label}</span>
                   {value == null && pending ? (
                     <Skeleton className="mt-0.5 h-4 w-14" />
                   ) : (
@@ -253,15 +253,15 @@ function MarketInner() {
                 <span className={`rounded-md border px-2 py-0.5 text-xs font-semibold ${PHASE_STYLE[sent.phase] ?? ""}`}>
                   {sent.phase}
                 </span>
-                <span className="text-xs text-zinc-400">
+                <span className="text-xs text-zinc-600 dark:text-zinc-400">
                   情绪温度 <span className="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100">{sent.temperature}</span>/100
                 </span>
-                <span className="text-xs text-zinc-400">置信度 {sent.confidence}</span>
-                <span className="hidden text-xs text-zinc-400 xl:inline">
+                <span className="text-xs text-zinc-600 dark:text-zinc-400">置信度 {sent.confidence}</span>
+                <span className="hidden text-xs text-zinc-600 dark:text-zinc-400 xl:inline">
                   {sent.indicators.slice(0, 6).map((i) => `${i.name} ${i.value ?? "--"}`).join(" · ")}
                 </span>
                 <span
-                  className="max-w-[260px] truncate text-xs text-zinc-500"
+                  className="max-w-[260px] truncate text-xs text-zinc-600 dark:text-zinc-400"
                   title={`${sent.reasons.join("；")}｜误判：${sent.misjudge_caveats.join("；")}｜切换：${sent.switch_conditions}`}
                 >
                   判定依据：{sent.reasons[0]}…
@@ -288,7 +288,7 @@ function MarketInner() {
                         className="flex w-6 flex-col items-center gap-px"
                         title={`${h.trade_date}｜${h.phase}｜温度 ${t ?? "--"}｜置信 ${h.confidence ?? "--"}｜${h.source === "review" ? "复盘" : "实时"}`}
                       >
-                        <span className="text-[9px] tabular-nums text-zinc-400">{t ? Math.round(t) : "--"}</span>
+                        <span className="text-[9px] tabular-nums text-zinc-600 dark:text-zinc-400">{t ? Math.round(t) : "--"}</span>
                         <div className={`w-full rounded-t ${color}`} style={{ height }} />
                       </div>
                     );
@@ -308,10 +308,10 @@ function MarketInner() {
           {/* 中部：成交额 1/3 + 涨停速览 2/3（flex-[5] 优先撑高；表格超高时面板内滚动） */}
           <div className="grid min-h-[168px] flex-[5] gap-2 lg:grid-cols-[minmax(250px,1fr)_2fr]">
             <Panel title="两市成交额" className="min-h-0 overflow-hidden" source={sh?.source} dataTimestamp={sh?.data_timestamp}
-              extra={<Link href="/market?tab=fund" className="text-zinc-400 transition-colors hover:text-zinc-900 dark:hover:text-zinc-100">资金详情 ↗</Link>}>
+              extra={<Link href="/market?tab=fund" className="text-zinc-600 dark:text-zinc-400 transition-colors hover:text-zinc-900 dark:hover:text-zinc-100">资金详情 ↗</Link>}>
               <div className="flex h-full flex-col justify-center px-4 py-3">
                 <p className="font-mono text-3xl font-semibold tracking-tight">{totalAmount ? fmtAmount(totalAmount) : "--"}</p>
-                <p className="mt-2 text-[11px] leading-relaxed text-zinc-400">
+                <p className="mt-2 text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">
                   沪深京两市合计（含北交所）。实时对比/全日估算/分钟资金流见「资金」Tab。
                 </p>
               </div>
@@ -322,7 +322,7 @@ function MarketInner() {
               source={pool[0]?.source}
               className="min-h-0 overflow-hidden"
               extra={
-                <Link href={tapeUrl("limitup")} className="text-zinc-400 transition-colors hover:text-zinc-900 dark:hover:text-zinc-100">
+                <Link href={tapeUrl("limitup")} className="text-zinc-600 dark:text-zinc-400 transition-colors hover:text-zinc-900 dark:hover:text-zinc-100">
                   全部 ↗
                 </Link>
               }
@@ -337,11 +337,11 @@ function MarketInner() {
                         title="查看个股详情"
                         className="cursor-pointer border-b border-zinc-100 last:border-0 transition-colors hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900/60"
                       >
-                        <td className="px-3 py-1.5 font-mono text-xs text-zinc-400">{r.symbol}</td>
+                        <td className="px-3 py-1.5 font-mono text-xs text-zinc-600 dark:text-zinc-400">{r.symbol}</td>
                         <td className="px-2 py-1.5">{r.name}</td>
                         <td className="px-2 py-1.5 text-right font-mono">{fmt(r.price)}</td>
                         <td className={`px-2 py-1.5 text-right font-mono ${pctColor(r.change_pct)}`}>{pctText(r.change_pct)}</td>
-                        <td className="px-3 py-1.5 text-right text-xs text-zinc-400">{r.boards_stat ?? ""}</td>
+                        <td className="px-3 py-1.5 text-right text-xs text-zinc-600 dark:text-zinc-400">{r.boards_stat ?? ""}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -357,7 +357,7 @@ function MarketInner() {
                   ))}
                 </div>
               ) : (
-                <p className="px-4 py-6 text-center text-sm text-zinc-400">今日暂无涨停数据（或非交易日）</p>
+                <p className="px-4 py-6 text-center text-sm text-zinc-600 dark:text-zinc-400">今日暂无涨停数据（或非交易日）</p>
               )}
             </Panel>
           </div>

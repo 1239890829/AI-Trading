@@ -93,6 +93,11 @@ class Settings(BaseSettings):
     # 环境缓存（phase + promo 分位）刷新间隔：compute_market_sentiment 较重
     # （全市场宽度 + 两天涨停池），60s/拍全量重算太重且浪费数据源配额
     picks_watcher_env_refresh_seconds: float = 600.0
+    # 大单异动阈值（亿）：题材成员当日主力净流入**首破**该值 → 盘中提醒（P1-16）。
+    # 2026-09-10 源头收紧 0.3 → 1.0：实测原阈值下 151 条事件里 97% 被判读层忽略，
+    # 且挤占判读预算导致 falsify/high_board_break 等从未被判读。经验初值，
+    # 回测校准后再定稿；非正/非法回退代码内默认并记日志（不静默改口径）。
+    picks_flow_surge_yi: float = 1.0
     # 盘后对照（批次 C）：交易日 15:35 对照当日简报方向（四分类+误判分类）
     # 并回填提醒 T+1/T+3 收益；当日已 schedule 复盘过则幂等跳过
     picks_review_enabled: bool = True
@@ -132,6 +137,15 @@ class Settings(BaseSettings):
     flash_news_enabled: bool = True
     flash_news_interval_seconds: float = 15.0
     flash_news_eod_interval_seconds: float = 60.0
+    # 频道（东财 fastColumn，2026-09-10 实测）：100=**全部**（含公司/资金/政策/
+    # 市场，已覆盖 101 内容）｜101=要闻｜102/103=公司｜104/110=市场｜105=社会
+    # ｜107/111/112/113=国际。默认 100 修正"只拉宏观→盘后公司消息无法关联"的
+    # 覆盖缺口（retro-and-gaps P0-2）。多频道用逗号分隔，跨频道按 code 去重。
+    flash_news_columns: str = "100"
+    # 每频道翻页数（retro P0-2 多页拉取）：东财 getFastNewsList 用 data.sortEnd
+    # 游标翻页（实测边界无缝衔接）。默认 2 页 = 100 条/频道，追平冷启动历史；
+    # 每轮仍靠 EventStore 指纹去重，翻页只增加覆盖不产生重复。
+    flash_news_pages: int = 2
 
     # ---- 盘中情绪监控（sentiment P2 #14，参考 daben-review）----
     # 交易时段周期探测三类纯规则 P0 事件：高度板(≥4板)炸板 / 炸板率连续破
@@ -188,6 +202,24 @@ class Settings(BaseSettings):
     review_llm_base_url: str = ""
     review_llm_api_key: str = ""
     review_llm_model: str = ""
+
+    # ---- P2-3 层1：pending 事件 LLM 辅助判定（app/events/llm_aux.py）----
+    # 规则引擎判不出方向（direction=0 / 无方向行）的事件攒批交给 LLM 判一次，
+    # 命中写 direction 行（matched_by=llm_aux）+ 全批记 llm_judged_at 防重复。
+    # **停机开关**：默认关（保守——LLM 判定有真实成本，需显式开才跑）。
+    event_llm_aux_enabled: bool = False
+    event_llm_aux_min_batch: int = 2       # 攒批下限（< 此数不值得一次 CLI 冷启动）
+    event_llm_aux_max_batch: int = 12      # 单批上限（防一次超长）
+    event_llm_aux_age_max_h: float = 5.0   # 只判近 N 小时的事件（窗口内才有判定价值）
+    # 常驻低频轮询间隔（秒）：交易时段内自动攒批判定；默认 20 分钟一拍（低成本）。
+    event_llm_aux_loop_interval: float = 1200.0
+
+    # ---- 事件采集常驻循环（main.py::event_collector）----
+    # 每 1800s 一轮（首轮延迟 45s），盘后轮次附带最近交易日涨停股范围（R6）。
+    # **测试必须关掉**：它是此前唯一没有开关的调度器——长生命周期的 TestClient
+    # （如会话级 fixture）下会真的跑起来打网络并重复写 event_direction，
+    # 2026-09-10 实测撞 UNIQUE(event_id,target_type,target) 并拖垮 3 个无关用例。
+    event_collector_enabled: bool = True
 
     # ---- 新闻/公告摘要 ----
     # 摘要器：rules（默认，确定性、零成本、永远可用）| llm（需配 base_url + api_key）

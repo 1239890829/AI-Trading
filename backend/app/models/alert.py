@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.db import utcnow
+from app.core.db import beijing_now_naive
 from app.models.watchlist import Base
 
 
@@ -27,8 +27,10 @@ class AlertRule(Base):
     # channels 存储 JSON 数组字符串，如 ["in_app", "log"]
     channels: Mapped[str] = mapped_column(String(256), default='["in_app", "log"]')
     last_triggered_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    # 2026-09-09 时区统一：此前 default=utcnow 存 UTC naive，展示被当北京时间 → 告警时间早 8h
+    # （与 event_card 同款 bug）。时间口径统一为北京时间 naive（core.db.beijing_now_naive）。
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=beijing_now_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=beijing_now_naive, onupdate=beijing_now_naive)
 
     events: Mapped[list["AlertEvent"]] = relationship(
         "AlertEvent", back_populates="rule", cascade="all, delete-orphan", lazy="dynamic"
@@ -45,7 +47,7 @@ class AlertEvent(Base):
     symbol: Mapped[str] = mapped_column(String(12), index=True)
     trigger_value: Mapped[float] = mapped_column(Float)
     threshold: Mapped[float] = mapped_column(Float)
-    triggered_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    triggered_at: Mapped[datetime] = mapped_column(DateTime, default=beijing_now_naive, index=True)
     acknowledged: Mapped[bool] = mapped_column(Integer, default=0)
     delivered_channels: Mapped[str | None] = mapped_column(String(256), default=None)
     # 触发瞬间的报价快照（JSON）

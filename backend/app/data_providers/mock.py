@@ -2,13 +2,18 @@
 
 随机种子由 (symbol, 日期, 分钟) 派生：同分钟内多次请求结果一致，
 分钟变化时价格小幅随机游走（步幅远小于涨跌停限制），便于演示 WS 推送与质量校验。
+
+个股报价**带涨跌停价**（按 `app/market/price_rules.limit_pct` 的板块幅度 × 昨收算
+并按分四舍五入）——撮合守卫对限价缺失取保守口径，桩若不给价会让模拟交易全线拒单。
 """
 from __future__ import annotations
 
 import random
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
+from decimal import ROUND_HALF_UP, Decimal
 
+from app.market.price_rules import limit_pct as _rules_limit_pct
 from app.schemas.market import (
     Kline,
     LimitDownRecord,
@@ -66,6 +71,22 @@ def _base_price(symbol: str) -> float:
     return round(5 + (n % 97) + (n % 89) / 10, 2)
 
 
+def _round_cent(value: float) -> float:
+    """四舍五入到分（交易所口径）。Python `round` 是银行家舍入，0.005 会向偶数取。"""
+    return float(Decimal(repr(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def _limit_prices(prev_close: float, symbol: str) -> tuple[float, float]:
+    """按板块幅度算涨跌停价；幅度取自单点 `price_rules.limit_pct`，此处不另写一份。
+
+    2026-09-11 补：此前 mock 报价**不带涨跌停价**，而撮合守卫对 `None` 取保守口径
+    （判不了就不放行）⇒ 桩与真实世界不符，`test_paper_fills_and_reset` 被 422 拒单。
+    修的是桩，不是守卫——红线口径不得为测试让路。
+    """
+    pct = _rules_limit_pct(symbol)
+    return _round_cent(prev_close * (1 + pct / 100)), _round_cent(prev_close * (1 - pct / 100))
+
+
 def _quote_for(symbol: str, name: str | None, market: str | None, ts: datetime, rnd: random.Random) -> Quote:
     base = _base_price(symbol)
     prev_close = round(base * (1 + rnd.uniform(-0.02, 0.02)), 2)
@@ -76,6 +97,7 @@ def _quote_for(symbol: str, name: str | None, market: str | None, ts: datetime, 
     high = round(max(open_, price) * (1 + rnd.uniform(0, 0.004)), 2)
     low = round(min(open_, price) * (1 - rnd.uniform(0, 0.004)), 2)
     volume_hands = rnd.randint(50_000, 5_000_000)
+    limit_up, limit_down = _limit_prices(prev_close, symbol)
     return Quote(
         symbol=symbol,
         name=name,
@@ -90,6 +112,8 @@ def _quote_for(symbol: str, name: str | None, market: str | None, ts: datetime, 
         volume=volume_hands * 100,
         amount=round(volume_hands * 100 * price, 2),
         turnover_rate=round(rnd.uniform(0.3, 8.0), 2),
+        limit_up_price=limit_up,
+        limit_down_price=limit_down,
         data_timestamp=ts,
         source=SOURCE,
     )

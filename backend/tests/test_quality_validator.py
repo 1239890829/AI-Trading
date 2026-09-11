@@ -65,9 +65,10 @@ def test_chinext_allows_20pct():
     assert q2.quality is Quality.low
 
 
-def test_st_narrower_limit():
+def test_st_main_board_same_as_main_limit():
+    """2026-07-06 并轨：主板 ST 涨跌幅 5%→10%，不再收窄。"""
     q = make_quote(name="ST 某某", symbol="600077")
-    assert board_limit_pct(q) == 0.05
+    assert board_limit_pct(q) == 0.10
 
 
 def test_non_positive_price_is_invalid():

@@ -3,28 +3,79 @@
 @tailwind utilities;
 
 /* ===== Design tokens（Operate 模式：可扫读性优先，品牌在细节） ===== */
+/* 亮色是**基底**，深色是 `.dark` 覆盖层（2026-09-11 P2-24 修正）。
+   此前 `:root` 无条件写死 `color-scheme: dark`，等于宣布"亮色是次等公民"：
+   原生控件（滚动条、日期选择器、autofill、下拉箭头）全部按深色绘制，
+   连主题切换器本身都停在深色外观。`color-scheme` 必须与 `dark` class 同步。 */
 :root {
-  color-scheme: dark;
+  color-scheme: light;
   --accent: #f43f5e; /* A 股红涨 */
   --accent-down: #10b981;
+  /* 原生面：细滚动条。亮色档必须比深色档浅，否则在 zinc-50 上是一道黑线 */
+  --scrollbar-thumb: #a1a1aa; /* zinc-400 */
+  --scrollbar-thumb-hover: #71717a; /* zinc-500 */
+  /* 价格 tick 闪烁的起始色 + 呼吸点：亮色下必须用深档，
+     否则"闪一下"闪的是接近白的中浅色，在 zinc-50 上看不见（等于没有反馈）。 */
+  --tick-up-from: #be123c;
+  --tick-down-from: #047857;
+  --pulse-dot: #059669;
+}
+.dark {
+  color-scheme: dark;
+  --scrollbar-thumb: #3f3f46; /* zinc-700 */
+  --scrollbar-thumb-hover: #52525b; /* zinc-600 */
+  --tick-up-from: #fda4af;
+  --tick-down-from: #6ee7b7;
+  --pulse-dot: #34d399;
 }
 
-/* ===== 浏览器原生面主题化（craft-floor：built vs assembled 的分水岭） ===== */
+/* ===== Motion tokens（2026-09-11 单点收口）=====
+   CSS 内置 ease-out/ease-in-out 太弱（起步不够快），UI 动效一律用强自定义曲线。
+   时长阶梯：按压反馈 < 小弹层 < 抽屉/模态；UI 动效一律 <300ms。
+   设计意图：交易台动效只服务三件事——状态变化可读、空间连续、防止突兀；
+   「看起来酷」且高频可见的一律不做（数值每秒刷新，动效会变成噪音）。 */
+:root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-press: 120ms;
+  --dur-fast: 160ms;
+  --dur-base: 200ms;
+  --dur-slow: 280ms;
+  /* 语义 z 轴（禁用 999/9999 魔数）：sticky → drawer → modal → toast → tooltip */
+  --z-sticky: 20;
+  --z-drawer: 50;
+  --z-modal: 60;
+  --z-toast: 70;
+  --z-tooltip: 80;
+}
+
+/* ===== 浏览器原生面主题化（craft-floor：built vs assembled 的分水岭） =====
+   两个模式都要成立：亮色下用深墨字 + 淡玫底（白字压在 35% 玫底上只有 ~1.7:1，是隐形）；
+   深色下维持原来的浅字。 */
 ::selection {
+  background: rgba(244, 63, 94, 0.28);
+  color: #18181b; /* zinc-900 ~11:1 */
+}
+.dark ::selection {
   background: rgba(244, 63, 94, 0.35);
   color: #fafafa;
 }
 
+/* 焦点环是**非文本**对比（WCAG 1.4.11 要 3:1）：sky-400/70 在亮色底上约 1.75:1，等于没有焦点环。 */
 :focus-visible {
-  outline: 2px solid rgba(56, 189, 248, 0.7);
+  outline: 2px solid #0284c7; /* sky-600，亮色底 ~3.9:1 */
   outline-offset: 2px;
   border-radius: 4px;
 }
+.dark :focus-visible {
+  outline: 2px solid rgba(56, 189, 248, 0.7); /* 深色底 ~7:1 */
+}
 
-/* 细滚动条，融入 zinc 体系 */
+/* 细滚动条，融入 zinc 体系（颜色随主题走，见上面的 token） */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #3f3f46 transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 *::-webkit-scrollbar {
   width: 8px;
@@ -34,13 +85,13 @@
   background: transparent;
 }
 *::-webkit-scrollbar-thumb {
-  background: #3f3f46;
+  background: var(--scrollbar-thumb);
   border-radius: 8px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: #52525b;
+  background: var(--scrollbar-thumb-hover);
   background-clip: content-box;
 }
 
@@ -58,19 +109,43 @@ h1, h2 {
   letter-spacing: -0.01em;
 }
 
-/* 交互状态：卡片与行的过渡（interaction-states） */
-button, a, tr, input {
-  transition: background-color 140ms ease-out, border-color 140ms ease-out, color 140ms ease-out;
+/* 交互状态：卡片与行的过渡（interaction-states）
+   ⚠️ 只列具体属性，禁用 `transition: all`——它会把 transform/box-shadow 一起带走，
+   在密集网格里引发无谓的样式重算（design-taste: 「Specify exact properties」）。 */
+button, a, tr, input, select, textarea {
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+/* 按压反馈：按钮必须对「按下」有回应，否则感觉界面没听到。
+   仅限可悬停设备——触屏上 :active 会粘滞到滚动结束，反而像卡住。
+   scale 用 0.97 而非 0，且只动 transform（GPU 合成，不触发布局、不影响相邻元素）。
+   关闭方式：给按钮加 `data-nopress`（如画布上的悬浮控件，位移会干扰拖拽手感）。 */
+@media (hover: hover) {
+  button:not(:disabled):not([data-nopress]),
+  [role="button"]:not([aria-disabled="true"]):not([data-nopress]) {
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      border-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out),
+      transform var(--dur-press) var(--ease-out);
+  }
+  button:not(:disabled):not([data-nopress]):active,
+  [role="button"]:not([aria-disabled="true"]):not([data-nopress]):active {
+    transform: scale(0.97);
+  }
 }
 
 /* ===== 署名动效：价格 tick 过渡（impeccable animate: 让状态变化可读，非装饰）
    2026-09-02 用户反馈列表频繁闪烁：光晕减弱、时长收紧为 420ms——方向可读但不抢眼 ===== */
 @keyframes tick-flash-up {
-  from { color: #fda4af; text-shadow: 0 0 6px rgba(244, 63, 94, 0.3); }
+  from { color: var(--tick-up-from); text-shadow: 0 0 6px rgba(244, 63, 94, 0.3); }
   to   { color: inherit; text-shadow: 0 0 0 rgba(244, 63, 94, 0); }
 }
 @keyframes tick-flash-down {
-  from { color: #6ee7b7; text-shadow: 0 0 6px rgba(16, 185, 129, 0.28); }
+  from { color: var(--tick-down-from); text-shadow: 0 0 6px rgba(16, 185, 129, 0.28); }
   to   { color: inherit; text-shadow: 0 0 0 rgba(16, 185, 129, 0); }
 }
 .tick-up   { animation: tick-flash-up 420ms ease-out; }
@@ -86,7 +161,7 @@ button, a, tr, input {
   width: 7px;
   height: 7px;
   border-radius: 9999px;
-  background: #34d399;
+  background: var(--pulse-dot);
   animation: dot-breathe 1.8s ease-in-out infinite;
 }
 
@@ -101,11 +176,62 @@ button, a, tr, input {
   from { opacity: 1; }
   to   { opacity: 0; }
 }
-.anim-fade-in  { animation: ui-fade-in 180ms ease-out; }
-.anim-fade-out { animation: ui-fade-out 120ms ease-in forwards; }
+.anim-fade-in  { animation: ui-fade-in var(--dur-base) var(--ease-out); }
+.anim-fade-out { animation: ui-fade-out var(--dur-press) var(--ease-out) forwards; }
 
-/* 无障碍：偏好减弱动效时全部关闭 */
+/* ===== 入场动效族（2026-09-11）=====
+   用途边界：只在**挂载**时播一次。列表以 symbol 为 key 时 React 会复用 DOM 节点，
+   30s 轮询刷新不会重播（否则每个轮询周期整页抖一次 = 用户反馈的"闪烁"）。
+   · anim-rise  内容整体出现（tab 面板、卡片）
+   · anim-scale-in 弹层（模态/气泡），从 0.97 起而非 0——现实中不存在从无到有
+   · anim-stagger 列表错峰（首屏 ≤12 项，超过不再延迟，避免"等动画") */
+@keyframes ui-rise-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes ui-scale-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: none; }
+}
+.anim-rise     { animation: ui-rise-in var(--dur-base) var(--ease-out) both; }
+.anim-scale-in { animation: ui-scale-in var(--dur-base) var(--ease-out) both; }
+.anim-stagger > * { animation: ui-rise-in var(--dur-base) var(--ease-out) both; }
+.anim-stagger > *:nth-child(1) { animation-delay: 0ms; }
+.anim-stagger > *:nth-child(2) { animation-delay: 24ms; }
+.anim-stagger > *:nth-child(3) { animation-delay: 48ms; }
+.anim-stagger > *:nth-child(4) { animation-delay: 72ms; }
+.anim-stagger > *:nth-child(5) { animation-delay: 96ms; }
+.anim-stagger > *:nth-child(6) { animation-delay: 120ms; }
+.anim-stagger > *:nth-child(7) { animation-delay: 144ms; }
+.anim-stagger > *:nth-child(8) { animation-delay: 168ms; }
+.anim-stagger > *:nth-child(n+9) { animation-delay: 192ms; }
+
+/* 弹层入场（2026-09-11）：此前六个模态/抽屉都是「啪」地出现，是"整体观感生硬"的主因。
+   · 模态居中 → 从 0.97 放大（居中缩放；从触发点缩放只适用于 popover，不适用于模态）
+   · 右侧抽屉 → 用 iOS 抽屉曲线从右滑入，营造空间连续感
+   · 遮罩 → 只淡入，不动画背景色（backdrop-filter 动画极贵） */
+@keyframes ui-slide-in-right {
+  from { opacity: 0; transform: translateX(24px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes ui-backdrop-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.anim-slide-in-right { animation: ui-slide-in-right var(--dur-slow) var(--ease-drawer) both; }
+.anim-backdrop-in    { animation: ui-backdrop-in var(--dur-base) var(--ease-out) both; }
+
+/* 无障碍：偏好减弱动效时全部关闭（保留 comprehension-aiding 的颜色/状态变化） */
 @media (prefers-reduced-motion: reduce) {
-  .tick-up, .tick-down, .pulse-dot, .anim-fade-in, .anim-fade-out { animation: none; }
-  button, a, tr, input { transition: none !important; }
+  .tick-up, .tick-down, .pulse-dot,
+  .anim-fade-in, .anim-fade-out,
+  .anim-rise, .anim-scale-in, .anim-stagger > *,
+  .anim-slide-in-right, .anim-backdrop-in { animation: none; }
+  button, a, tr, input, select, textarea,
+  button:not(:disabled):not([data-nopress]),
+  [role="button"]:not([aria-disabled="true"]):not([data-nopress]) {
+    transition: none !important;
+  }
+  button:not(:disabled):not([data-nopress]):active,
+  [role="button"]:not([aria-disabled="true"]):not([data-nopress]):active { transform: none !important; }
 }

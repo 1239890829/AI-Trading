@@ -1,12 +1,7 @@
 import type { Kline, Quote } from "@/types/market";
+import { bjDate, bjHHMM } from "@/lib/format";
 
-/** quote.data_timestamp（UTC ISO）→ 北京时间 YYYY-MM-DD；缺失/非法返回空串。 */
-function bjDate(ts: string | null | undefined): string {
-  if (!ts) return "";
-  const d = new Date(ts);
-  if (isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("sv-SE", { timeZone: "Asia/Shanghai" });
-}
+// bjDate / bjHHMM 已收口到 lib/format（2026-09-11 冗余清理，此前两处逐字节同体）
 
 /** 北京 HH:MM → 当日分钟数；非法（"NaN"/空）返回 -1。 */
 function hhmmToMin(hhmm: string): number {
@@ -54,16 +49,6 @@ export function mergeQuoteIntoBars(bars: Kline[], quote: Quote | null | undefine
   }
   const next: Kline = { ...last, close: price, high, low, volume };
   return [...bars.slice(0, -1), next];
-}
-
-/** quote.data_timestamp（UTC ISO）→ 北京时间 HH:MM；缺失/非法返回空串。
- *  非法日期必须返回空串而不是 "Inval" 之类的垃圾串——否则两个非法时间戳
- *  会"相等"并误触发同分钟合成（kline-live.test.ts 跨分钟用例的教训）。 */
-function bjHHMM(ts: string | null | undefined): string {
-  if (!ts) return "";
-  const d = new Date(ts);
-  if (isNaN(d.getTime())) return "";
-  return d.toLocaleTimeString("sv-SE", { timeZone: "Asia/Shanghai", hour12: false }).slice(0, 5);
 }
 
 /**

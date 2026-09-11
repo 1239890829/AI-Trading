@@ -228,19 +228,29 @@ async def theme_strength(
     一次快照多方复用；结果缓存 60s（合力是分钟级感知，不必秒级刷新）。
     """
     code_list = [c.strip() for c in codes.split(",") if c.strip()]
-    theme_members: dict[str, list[str]] = {}
-    for c in (code_list or [t.code for t in svc.get_catalog()]):
-        members = [m.symbol for m in svc.get_members(c)]
-        if members:
-            theme_members[c] = members[:200]
-    if not theme_members:
-        return {"data": {"themes": {}, "note": "题材成分尚未同步"}, "meta": {}}
 
+    # 2026-09-11（P0-2）缓存判断**前移**：cache key 只依赖请求参数，不依赖查库结果。
+    # 原实现在 cache.get 之前先跑「1 次 catalog + 每题材 1 次 get_members」——默认全量
+    # 约 390 个题材 ⇒ 恒 391 次查询，**缓存命中也要照付**（60s TTL 下命中率越高越亏）。
+    # 现在命中路径 0 次查询，未命中路径 2 次（catalog + 批量成分）。
+    # 代价：key 不再随「哪些题材有成分」变化 ⇒ 成分刚同步时最多多返回 60s 旧值（TTL 内），
+    # 与既有 60s 缓存语义一致，可接受。
     cache = cache_on(request.app.state, "themes.catalog.strength", 60, maxsize=8)
-    cache_key = ",".join(sorted(theme_members))[:512]
+    cache_key = ",".join(sorted(code_list))[:512] if code_list else "__all__"
     hit, payload = cache.get(cache_key)
     if hit:
         return payload
+
+    catalog_rows = svc.get_catalog()
+    target_codes = code_list or [t.code for t in catalog_rows]
+    # 批量取成分（1 次查询）取代逐题材单查（N 次）；member_symbols_bulk 已按 symbol 定序，
+    # 与 get_members 同序 ⇒ 下面 [:200] 截断结果与改造前一致。
+    member_map = svc.member_symbols_bulk(target_codes)
+    theme_members: dict[str, list[str]] = {
+        c: syms[:200] for c, syms in member_map.items() if syms
+    }
+    if not theme_members:
+        return {"data": {"themes": {}, "note": "题材成分尚未同步"}, "meta": {}}
 
     all_symbols = sorted({s for members in theme_members.values() for s in members})
     # 2026-09-07 R3 收口：分批实现在 quote_enrich.fetch_quotes_batched
@@ -259,14 +269,34 @@ async def theme_strength(
     }
 
     strength = aggregate_theme_strength(theme_members, quotes_raw)
-    names = {t.code: t.name for t in svc.get_catalog()}
+    # 复用上面已取的目录行（原先这里又查一次 get_catalog，属同请求内重复查询）
+    names = {t.code: t.name for t in catalog_rows}
+    # 东财 f62 板块资金（P1-5，2026-09-10）：与上面的「合力」是**两套口径**——
+    # 合力 = ths 官方成分快照聚合（涨跌家数/成交额），board = 东财板块主力净额。
+    # 单开字段并各自标注，前端分开渲染，**绝不混算**（跨源口径红线）。
+    theme_names = [names.get(code, code) for code in strength]
+    try:
+        from app.services.theme_service import board_rows_for_names
+
+        board_rows = await board_rows_for_names(theme_names)
+    except Exception as exc:  # noqa: BLE001 板块资金是增强信息，失败不拖垮合力
+        log.warning("theme strength: 板块资金匹配失败: %s", exc)
+        board_rows = {}
     payload = {
         "data": {
             "themes": {
-                code: {**s, "name": names.get(code, code)} for code, s in strength.items()
+                code: {
+                    **s,
+                    "name": names.get(code, code),
+                    "board": board_rows.get(names.get(code, code)),
+                }
+                for code, s in strength.items()
             }
         },
-        "meta": {"basis": "合力=官方成分批量快照聚合（涨跌家数/等权涨幅/成交额合计），数据有延迟"},
+        "meta": {
+            "basis": "合力=官方成分批量快照聚合（涨跌家数/等权涨幅/成交额合计），数据有延迟",
+            "board_basis": "板块资金=东财板块主力净额（f62 口径）+ 连续流入天数；与合力口径不同，不可相加",
+        },
     }
     cache.set(cache_key, payload)
     return payload

@@ -11,6 +11,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.core.freshness import Freshness
 from app.market import sina_market
 from app.market.breadth import compute_breadth
 from app.market.trade_calendar import in_trading_window
@@ -90,12 +91,41 @@ class MarketSnapshotService:
             )
             await asyncio.sleep(delay)
 
+    def freshness(self) -> Freshness:
+        """全市场快照的新鲜度（S2-1 契约的 **snapshot 样板**）。
+
+        为什么不能只看 `breadth is None`（S1-3 实测缺陷）：`market_context` 过去
+        只判"有没有"，于是**20 分钟前的宽度**配上当前涨停池照样算出「阶段」——
+        数字全都合理、结论是错的，且界面上看不出任何异常。
+
+        新鲜窗口用 **`poll_interval × 3`** 而不是固定秒数：轮询周期本身就是这个
+        数据源的固有节奏（盘中 60s、休市 240s），写死一个常量会在休市时段
+        恒定误报 stale。连续失败次数 >0 但数据仍在窗口内时降级为 `degraded`
+        ——"数据还新鲜，但上游正在出问题"是需要提前知道的信号。
+        """
+        if self.breadth is None:
+            return Freshness.unavailable(reason="全市场快照尚未就绪", source="sina")
+        fresh_within = self.poll_interval * 3
+        f = Freshness.from_age(
+            as_of=self.last_success, fresh_within=fresh_within, source="sina",
+            missing_reason="从未成功刷新过全市场快照，无法判定新鲜度",
+        )
+        if self.consecutive_failures and f.is_usable():
+            return Freshness.degraded(
+                as_of=f.as_of, age_seconds=f.age_seconds, source="sina",
+                reason=f"上游连续失败 {self.consecutive_failures} 次，当前用的是上一次成功数据",
+            )
+        return f
+
     def breadth_payload(self) -> dict:
         age = None
         if self.last_success is not None:
             age = round((datetime.now(timezone.utc) - self.last_success).total_seconds(), 1)
         return {
             "breadth": self.breadth,
+            # S2-1：统一降级契约。`snapshot_age_seconds` 等旧字段**保留**——
+            # 助手工具与前端已在消费，本次只做"新增统一口径"，不做静默替换。
+            "freshness": self.freshness().model_dump(mode="json"),
             "snapshot_age_seconds": age,
             "rows": len(self.snapshot),
             "saved_files": self.saved_files,

@@ -24,6 +24,8 @@ class EventCard(Base):
     fingerprint: Mapped[str] = mapped_column(String(40), unique=True, index=True)
     title: Mapped[str] = mapped_column(String(512))
     url: Mapped[str | None] = mapped_column(String(512), default=None)
+    # 正文摘要（快讯源 summary 字段；无原文时弹窗降级展示，2026-09-09 补）
+    summary: Mapped[str | None] = mapped_column(String(2048), default=None)
     source: Mapped[str] = mapped_column(String(64), default="")
     # 来源分级 1-5：官方公告 5 / 一线权威 4 / 主流财经 3 / 聚合转载 2 / 自媒体 1
     source_tier: Mapped[int] = mapped_column(Integer, default=3)
@@ -39,6 +41,9 @@ class EventCard(Base):
     source_symbol: Mapped[str | None] = mapped_column(String(6), default=None)
     # active 为默认态（不落库，读取方计算）；这里只存人工裁决
     status: Mapped[str] = mapped_column(String(12), default="active")
+    # LLM 辅助判定已做时间（P2-3 层1）：null=未试过，非空=已判过（含判中性），
+    # 防重复调用烧钱。北京时间 naive，与 published_at 同口径。
+    llm_judged_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     directions: Mapped[list["EventDirection"]] = relationship(

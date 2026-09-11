@@ -122,6 +122,76 @@ def test_replacement_threshold_default_is_15():
     assert REPLACE_THRESHOLD == 15.0
 
 
+# ---------------------------------------------------------------- 入选门槛（2026-09-10）
+# 用户要求：「盘前不一定是要五个，不要硬凑五个，但也不要过多，按实际情况来选」。
+# 判据：名额由质量（MIN_PICK_SCORE 绝对线）决定，不由常量（MAX_PICKS 容量）决定。
+
+
+def test_min_pick_score_anchored_at_neutral():
+    """门槛锚在六维中性线 50——各维兜底分都是 50，故 ≥50 ⇔ 多维证据整体净正面。"""
+    from app.picks.engine import MIN_PICK_SCORE
+
+    assert MIN_PICK_SCORE == 50.0
+
+
+def test_entry_floor_does_not_pad_to_max_picks():
+    """够格者不足时名单就该更短：7 只候选只有 2 只过线 → 输出 2 只（不拿低分凑满 5）。"""
+    from app.picks.engine import apply_replacement_threshold
+
+    ranked = [
+        {"symbol": "A", "score": 62.0},
+        {"symbol": "B", "score": 51.0},
+        {"symbol": "C", "score": 49.9},
+        {"symbol": "D", "score": 45.0},
+        {"symbol": "E", "score": 41.0},
+    ]
+    kept, _ = apply_replacement_threshold([], ranked, 15.0, 5)
+    assert [k["symbol"] for k in kept] == ["A", "B"]
+
+
+def test_entry_floor_drops_carryover_below_floor():
+    """跌破门槛的昨日成员出列——门槛语义是「在组合里就必须够格」，
+    昨天在列不是豁免理由（否则今日名单退化成昨日名单的惯性延续）。"""
+    from app.picks.engine import apply_replacement_threshold
+
+    prev = ["A", "B", "C"]
+    ranked = [
+        {"symbol": "A", "score": 58.0},
+        {"symbol": "B", "score": 49.9},   # 跌破门槛 → 出列
+        {"symbol": "C", "score": 44.0},   # 跌破门槛 → 出列
+    ]
+    kept, replaced = apply_replacement_threshold(prev, ranked, 15.0, 5)
+    assert [k["symbol"] for k in kept] == ["A"]
+    assert replaced == []  # 出列不是「换股」（无换入方），不进 replaced
+
+
+def test_entry_floor_yields_empty_combo_when_pool_all_below():
+    """候选池整体不够格 → 组合为空（宁缺毋滥），不塞一只 49 分的来「凑名单」。
+
+    弱市里空名单本身是结论——空仓闸门管"今天要不要出手"，入选门槛管"单只够不够格"，
+    粒度不同、同源逻辑（gate.py：没有赚钱效应的市场里任何精选都是硬凑）。
+    """
+    from app.picks.engine import apply_replacement_threshold
+
+    ranked = [
+        {"symbol": "LOW1", "score": 49.0},
+        {"symbol": "LOW2", "score": 48.0},
+    ]
+    kept, replaced = apply_replacement_threshold(["OLD"], ranked, 1.0, 1)
+    # OLD 掉出候选池 → 无留任；两个候选都不过线 → 组合为空而不是塞一只 49 分的
+    assert kept == []
+    assert replaced == []
+
+
+def test_entry_floor_all_qualified_still_capped_by_max_picks():
+    """门槛与容量各管一头：过线者多于容量时，仍按分数取前 max_picks。"""
+    from app.picks.engine import apply_replacement_threshold
+
+    ranked = [{"symbol": s, "score": 90.0 - i} for i, s in enumerate(["A", "B", "C", "D", "E", "F"])]
+    kept, _ = apply_replacement_threshold([], ranked, 15.0, 5)
+    assert [k["symbol"] for k in kept] == ["A", "B", "C", "D", "E"]
+
+
 def test_buy_range_converges_with_technical_levels():
     r = build_buy_range(price=100.0, support=98.5, resistance=104.0)
     assert r["low"] == 98.5 and r["high"] == 103.0  # max(97, 98.5), min(103, 104)
@@ -367,3 +437,79 @@ def test_news_negative_dominates_positive():
 
     s, _ = score_news(2, 3, "暴雷", "利空")
     assert s < 50
+
+
+# ---------------------------------------------------------------- 运行时参数覆盖（P1-15，2026-09-10）
+# 目的：控制台改参数**免重启**生效，且覆盖层为空时行为与改动前完全一致。
+
+
+def test_engine_reads_runtime_overrides(monkeypatch):
+    """覆盖层生效：三个阈值都按覆盖值走（默认值参数在**调用时**解析，不是签名绑定）。"""
+    import app.core.runtime_params as rp
+    from app.picks.engine import apply_replacement_threshold
+
+    rp.clear()
+    try:
+        # 默认：门槛 50 → 49 分候选进不来、只有 1 只
+        ranked = [{"symbol": "A", "score": 70.0}, {"symbol": "B", "score": 49.0}]
+        kept, _ = apply_replacement_threshold([], ranked)
+        assert [k["symbol"] for k in kept] == ["A"]
+
+        # 覆盖入选门槛 40 → 49 分也能进
+        rp.set_overrides({"picks_min_pick_score": 40.0})
+        kept, _ = apply_replacement_threshold([], ranked)
+        assert [k["symbol"] for k in kept] == ["A", "B"]
+
+        # 覆盖换股上限 0 → 昨日成员一个都不换（新候选再高也不换）
+        rp.set_overrides({"picks_max_swaps_per_day": 0})
+        prev = ["OLD"]
+        ranked2 = [{"symbol": "NEW", "score": 99.0}, {"symbol": "OLD", "score": 60.0}]
+        kept, _ = apply_replacement_threshold(prev, ranked2)
+        assert [k["symbol"] for k in kept] == ["OLD"]
+    finally:
+        rp.clear()
+    # 清空后 = 代码常量
+    kept, _ = apply_replacement_threshold([], [{"symbol": "B", "score": 49.0}])
+    assert kept == []
+
+
+def test_max_swaps_none_still_means_unlimited_under_override():
+    """哨兵回归：覆盖层启用时，显式 `max_swaps=None` 仍表示**不限换股**。
+
+    `None` 本来就有语义（回放对照组/首次建仓用），不能拿它兼职表示"未传参"
+    ——否则覆盖层一启用就会把"不限"悄悄变成"上限"（静默改变回放结论）。
+    """
+    import app.core.runtime_params as rp
+    from app.picks.engine import apply_replacement_threshold
+
+    rp.clear()
+    try:
+        rp.set_overrides({"picks_max_swaps_per_day": 0})
+        ranked = [{"symbol": s, "score": 90.0 - i} for i, s in enumerate(["A", "B", "C"])]
+        kept, _ = apply_replacement_threshold(["OLD"], ranked, max_swaps=None)
+        assert [k["symbol"] for k in kept] == ["A", "B", "C"]  # 不限 → 补满
+    finally:
+        rp.clear()
+
+
+def test_effective_limits_report_overrides():
+    """meta 里的阈值必须是**生效值**，否则调参后复盘看到的仍是旧数（口径漂移）。"""
+    import app.core.runtime_params as rp
+    from app.picks.engine import (
+        MAX_SWAPS_PER_DAY, MIN_PICK_SCORE, REPLACE_THRESHOLD, effective_limits,
+    )
+
+    rp.clear()
+    base = effective_limits()
+    assert base == {
+        "replace_threshold": REPLACE_THRESHOLD,
+        "max_swaps_per_day": MAX_SWAPS_PER_DAY,
+        "min_pick_score": MIN_PICK_SCORE,
+    }
+    try:
+        rp.set_overrides({"picks_replace_threshold": 8.0, "picks_max_swaps_per_day": 3})
+        eff = effective_limits()
+        assert eff["replace_threshold"] == 8.0 and eff["max_swaps_per_day"] == 3
+        assert eff["min_pick_score"] == MIN_PICK_SCORE  # 未覆盖的项回落常量
+    finally:
+        rp.clear()

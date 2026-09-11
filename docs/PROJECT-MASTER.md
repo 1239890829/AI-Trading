@@ -16,7 +16,7 @@ A 股实时行情 + AI 量化投研 + 模拟交易工作台。**只做**行情�
 - 数据：全市场快照（5550 只）落 Parquet；SQLite 业务库
 - 测试：后端 801 用例全绿 + 前端 vitest 134；tsc/eslint(0 error)/pyflakes 门禁
 - 运行：双端本地运行中（8000/3000）
-> 注：本文档为 2026-08-29 基线 + 增量修补；2026-08-31 起的系统盘点与重构全记录见 docs/architecture-redesign.md
+> 注：本文档为 2026-08-29 基线 + 增量修补；2026-08-31 起的系统盘点与重构全记录见 docs/archive/architecture-redesign.md
 
 ---
 
@@ -317,7 +317,7 @@ ashare-ai-trader/
 | 8 通知与部署 | 预警规则/触发/通知通道抽象/管理页(api-sweep) + 同源反代 + **飞书通道**（feishu notifier + `configured` 诚实展示，2026-09-02） | 🔶；余：webhook 凭据、Docker 生产化、监控（阻塞于部署决策） |
 | 9 联动系统 | 统一路由 lib/routing.ts（URL 唯一真相源）/ 题材⇄个股双向联动（归属 chips+focus 聚焦）/ 官方板块 K 线交叉验证 / 事件驱动面板 + 个股相关事件行 | ✅ 全部完成（切片 E 2026-09-03：L7/L8/L10 跳转 + themesUrl） |
 
-> 明细账本：`docs/retro-and-gaps.md`；阶段复盘与跨计划依赖：`docs/plan-review.md`。
+> 明细账本：`docs/retro-and-gaps.md`；阶段复盘与跨计划依赖：`docs/archive/plan-review.md`。
 
 ## 近期路线（下一刀优先级）
 1. ~~**交易前端打磨**：持仓成本线画上K线、成交记录列表页~~ ✅ 已完成（2026-08-29）
@@ -331,7 +331,7 @@ ashare-ai-trader/
 9. ~~**Phase 5 选股器 + 评分系统**~~ ✅ 已完成 v1（2026-08-30）：`app/market/tech_score.py`（六维评分卡：趋势0.25/MACD0.20/KDJ0.15/RSI0.10/量价0.15/流动性0.15，可解释依据+失效条件，SCORER_VERSION 版本化）+ `app/services/screener_service.py`（快照截面过滤→候选池 Top150→TDX 日K QFQ→评分，TTL 30min 缓存+single-flight）+ `/api/screener`（Envelope 严格建模）+ `/screener` 页（条件工具条+评分排行表+依据 chips，行点击跳个股）。**防飞刀三修正**（零轴下 MACD 不计 bull、空头排列超卖衰减×0.3、放量下杀≠温和放量——2 年回测 avg_dev 主因的针对性防御）。真实跑：5550→150→148 评分 0 失败 17.6s。测试 287→295
 10. ~~**Phase 6 后半：回测引擎**~~ ✅ 已完成（2026-08-30）：`app/market/backtest.py` 代码级防泄露（as_of 视图越界抛 FutureDataError / T+1 / 一字板拒 / 停牌无 bar / 费用全配置化）+ 12 个防泄露测试先于引擎合入 + `/api/backtest/run` + `/backtest` 页；同步完成历史回放
 11. ~~**Phase 5 风控引擎 v1**~~ ✅ 已完成（2026-08-30）：`app/risk/`（`state_classifier.py` 七档市场状态：强势多头/震荡偏多/震荡/震荡偏空/下跌趋势/恐慌·极端波动/数据不足 → `config.py` 每档仓位建议参数 → `engine.py` 七项下单预检：数据质量/市场状态禁买/单票上限/总仓位上限/回撤保护/现金/流动性）+ `GET /api/risk/state`、`POST /api/risk/check-order`；工作台头部状态徽章、交易表单实时预检与拦截。测试 341→344。实测修正两处口径缺陷：持仓缺实时价时回退**成本价**而非订单价（否则总仓位被低估成 0%），`account_summary` 补 `initial_cash` 使回撤保护真正生效。顺带修复 `parseNum` 千分位截断（下单价曾按 ¥1 计算，见下文）
-12. ~~**系统盘点与重构（architecture-redesign 全清单）**~~ ✅ 已完成（2026-08-31 ~ 09-01）：P0 K线三源+熔断+回放限流（e77971f）、P1 事件采集调度（d8e4e52）、P1 角色胜率（2b719f3）、P1+P2 页面合并——导航 13→5（a9d42fa：/tape 四合一、云图入市场、/research 折叠、自选入工作台）、P2 基本面 ROE/毛利率评分补全（ede98be）、P2 screener 冻结+分钟信号删除+P3 skills 归档（50d5b8d）。全记录见 docs/architecture-redesign.md
+12. ~~**系统盘点与重构（architecture-redesign 全清单）**~~ ✅ 已完成（2026-08-31 ~ 09-01）：P0 K线三源+熔断+回放限流（e77971f）、P1 事件采集调度（d8e4e52）、P1 角色胜率（2b719f3）、P1+P2 页面合并——导航 13→5（a9d42fa：/tape 四合一、云图入市场、/research 折叠、自选入工作台）、P2 基本面 ROE/毛利率评分补全（ede98be）、P2 screener 冻结+分钟信号删除+P3 skills 归档（50d5b8d）。全记录见 docs/archive/architecture-redesign.md
 13. ~~**选股 2.0 批次 A–D + LLM 接入 + 飞书通道 + 分位校准扩窗**~~ ✅ 已完成（2026-09-02）：批次 A 盘中规则库/intraday_rules + B 盘前简报落盘 + C 盘后方向对照（15:35 调度，简报 payload.review）+ D 确认规则网格回测（120d/200d 双口径报告：触发数远低于 30 协议线，不给调参建议）；**LLM 接入层**（core/llm_client.py + LLMAnalyzer/LLMSummarizer，2226147）；**飞书推送通道**（feishu notifier + 前端 configured 徽标，8154e47）；**分位校准 250 日扩窗**（lookback 120→250 + 回补 121 天，库 241 天，promo 缺失 80→0，8c55110）；15:35 首跑验证闭环 + heat 落库 env 留痕（fa63dfb）
 
 

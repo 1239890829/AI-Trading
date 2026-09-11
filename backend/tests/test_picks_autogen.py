@@ -95,3 +95,45 @@ def test_tick_skips_non_trading_day(tmp_path, monkeypatch):
     out = asyncio.run(pa.picks_autogen_tick(app_stub, now=_dt(9, 40), run_hour=9, run_minute=26))
     assert out is False
     assert counter["n"] == 0
+
+
+def test_wait_snapshot_ready_polls_until_breadth():
+    """重启补跑场景（2026-09-09 事故）：breadth 未就绪时轮询等待，就绪即返回。"""
+    calls = {"n": 0}
+
+    class Svc:
+        @property
+        def breadth(self):
+            calls["n"] += 1
+            return None if calls["n"] < 3 else {"up": 100, "down": 50}
+
+    app_stub = type("A", (), {"state": type("S", (), {"snapshot_service": Svc()})()})()
+    ok = asyncio.run(pa._wait_snapshot_ready(app_stub, timeout=1.0, interval=0.01))
+    assert ok is True
+    assert calls["n"] >= 3  # 确实等了（不是看一眼就过）
+
+
+def test_wait_snapshot_ready_times_out_without_blocking():
+    """快照始终未就绪 → 超时返回 False，不无限阻塞调度。"""
+    class Svc:
+        breadth = None
+
+    app_stub = type("A", (), {"state": type("S", (), {"snapshot_service": Svc()})()})()
+    assert asyncio.run(pa._wait_snapshot_ready(app_stub, timeout=0.05, interval=0.01)) is False
+
+
+def test_tick_proceeds_without_snapshot_service(tmp_path, monkeypatch):
+    """无 snapshot_service（或旧 stub）→ 不等待、照常生成（回归保护）。"""
+    sf = _factory(tmp_path)
+    monkeypatch.setattr(pa, "get_session_factory", lambda: sf)
+    counter = {"n": 0}
+    _stub_generate(monkeypatch, counter)
+
+    async def _trading(hub, d):
+        return True
+
+    monkeypatch.setattr(pa, "_is_trading_day", _trading)
+    app_stub = type("A", (), {"state": type("S", (), {"hub": object()})()})()  # 无 snapshot_service
+    out = asyncio.run(pa.picks_autogen_tick(app_stub, now=_dt(9, 40), run_hour=9, run_minute=26))
+    assert out is True
+    assert counter["n"] == 1

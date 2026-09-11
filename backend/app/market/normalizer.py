@@ -389,6 +389,54 @@ def classify_boards(ssbk_rows: list[dict]) -> dict[str, list[str]]:
     return groups
 
 
+def board_code_norm(raw) -> str | None:
+    """F10 ssbk 板块代码 → 东财板块榜代码（`BK` + 4 位补零）。
+
+    两套体系不同（2026-09-10 逐项实测）：F10 CoreConception 的 `BOARD_CODE` 是
+    **纯数字 ID**（白酒Ⅱ=1277、银行Ⅱ=475），板块榜（board_flow 走 clist f12）是
+    `BK` + **4 位补零**（BK1277 / BK0475）。不做这一步规范化，按代码直取会全部 miss。
+    幂等：已是 `BKxxxx` 形态原样返回。
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    if s.startswith("BK"):
+        return s
+    if s.isdigit():
+        return f"BK{int(s):04d}"
+    return s
+
+
+def main_board(groups: dict, name_to_code: dict | None = None) -> dict | None:
+    """个股主板块（P1-4）：取东财行业三级的 **L2（Ⅱ级）行**。
+
+    `industry` 实测为 `[大类, Ⅱ级, Ⅲ级]`（2026-09-10，5 只样本）：茅台→白酒Ⅱ、
+    平安银行→银行Ⅱ、宁德时代→电池、比亚迪→乘用车、中国平安→保险Ⅱ——这是
+    「这只股是做什么的」的最近语义层级，也是自选行徽标要展示的口径。
+
+    **不取概念段首个**：那只是 ssbk 返回顺序里的第一个 `IS_PRECISE='1'` 标签，
+    与相关性无关（茅台→「味蕾经济」、平安银行→「跨境支付」，语义不成立；同源
+    fixture 见 tests/test_board_classifier.py）。无行业段时才回落概念首个，并以
+    `level` 如实标注口径（不把概念冒充行业）。都判不出 → None（三态，不臆造）。
+
+    `code` 经 `board_code_norm` 规范化——**不依赖调用方传入的格式**（F10 原始值是
+    纯数字，板块榜要 `BK`+4 位，这层转换由本函数兜住，幂等）。
+    """
+    groups = groups or {}
+    codes = name_to_code or {}
+    industry = [n for n in (groups.get("industry") or []) if n]
+    concept = [n for n in (groups.get("concept") or []) if n]
+    if len(industry) >= 2:
+        name, level = industry[1], "industry"
+    elif industry:
+        name, level = industry[0], "industry"
+    elif concept:
+        name, level = concept[0], "concept"
+    else:
+        return None
+    return {"name": name, "code": board_code_norm(codes.get(name)), "level": level}
+
+
 def normalize_announcement(raw: dict, symbol: str) -> dict | None:
     title = raw.get("title")
     code = str(raw.get("art_code") or "")

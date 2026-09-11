@@ -448,9 +448,14 @@ def _parse_brief_date(s: Any) -> date | None:
 
 async def _daily_closes(provider, symbol: str) -> dict[date, float]:
     """日 K → {交易日: 收盘价}。腾讯日 K 的 ts 是交易日 0 点（UTC），
-    ts.date() 即交易日；失败返回空表（调用方按 pending 处理，不臆造）。"""
+    ts.date() 即交易日；失败返回空表（调用方按 pending 处理，不臆造）。
+
+    2026-09-09 修复：日 K timeframe 全栈统一是 "1d"（tencent/eastmoney/mock/
+    ths 一致），此前硬编码 "day" → 任何 provider 承接都抛错被 suppress 吞掉
+    → settle 收盘价恒空 → 台账 verdict 全 None（胜率失真根因）。
+    """
     try:
-        bars = await provider.get_kline(symbol, "day")
+        bars = await provider.get_kline(symbol, "1d")
     except Exception as exc:
         log.warning("alert returns: kline %s failed: %s", symbol, exc)
         return {}
@@ -672,6 +677,16 @@ async def intraday_review_scheduler(
                     await snapshot_daily_if_closed()
                 except Exception:
                     log.warning("boardflow daily snapshot failed", exc_info=True)
+                # 分钟决策库（P1-24）：盘后扫描当日跟踪标的 → 记录做 T 信号 → 结算。
+                # 自带当日幂等 + 台账为空则跳过；TDX 直连是阻塞调用故走线程池。
+                try:
+                    from app.market.minute_decisions import scan_and_settle_today
+
+                    scan = await asyncio.to_thread(scan_and_settle_today, app)
+                    if scan.get("recorded") or scan.get("settled"):
+                        log.info("minute decisions: %s", scan)
+                except Exception:
+                    log.warning("minute decisions scan failed", exc_info=True)
         except Exception:
             log.exception("intraday review scheduler failed")
         with contextlib.suppress(asyncio.TimeoutError):

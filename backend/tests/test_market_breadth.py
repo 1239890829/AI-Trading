@@ -36,7 +36,7 @@ def test_breadth_counts_and_limit_detection():
         _row("000001", "平安银行", -10.02),     # 主板跌停
         _row("000002", "万科A", -3.0),
         _row("600003", "某平股", 0.0),
-        _row("600004", "ST 某某", -4.97),       # ST 跌停
+        _row("600004", "ST 某某", -9.97),       # ST 跌停（并轨后主板 ST 同为 10cm）
         {"symbol": "600005", "name": "停牌", "price": None, "change_pct": None, "amount": 0},
     ]
     b = compute_breadth(rows)
@@ -49,9 +49,18 @@ def test_breadth_counts_and_limit_detection():
     assert b["generated_at"]
 
 
-def test_breadth_st_5pct_limit():
+def test_breadth_st_same_limit_as_main_board():
+    """ST 并轨（2026-07-06）：主板 ST 不再收窄，4.99% 不算涨停、9.99% 才算。"""
     b = compute_breadth([_row("600004", "*ST 某某", 4.99), _row("600005", "某某", 4.99)])
-    assert b["limit_up"] == 1 and b["limit_up"] != b["up"]
+    assert b["limit_up"] == 0 and b["limit_up"] != b["up"]
+    c = compute_breadth([_row("600004", "*ST 某某", 9.99), _row("600005", "某某", 9.99)])
+    assert c["limit_up"] == 2
+
+
+def test_breadth_gem_st_still_20pct():
+    """创业板/科创板 ST 维持 20%，不因风险警示降档。"""
+    b = compute_breadth([_row("300123", "*ST 创业", 19.9), _row("300124", "创业普通", 10.0)])
+    assert b["limit_up"] == 1
 
 
 def test_breadth_excludes_new_stocks_from_limit_counts():
@@ -74,14 +83,28 @@ def _limit_row(symbol, name, pct, price=10.0):
 def test_limit_down_uses_two_sided_band():
     """跌停是「落在限价上」，不是「跌得比限价还多」。
 
-    回归 2026-08-28 实测：`*ST萃华` 按名称判为 5% 限制，实际跌 9.574%。
-    5% 限制下不可能跌 9.57%，说明该股限价口径与名称不符；
-    旧的单边判定（pct <= -(limit-0.15)）把它算成了跌停，且不报错。
+    两个方向都断言：贴线 -10% 计入跌停；-15% 超出限价则单独计 anomaly，
+    既不冒充跌停，也不悄悄丢掉。
     """
-    rows = [_limit_row("002731", "*ST萃华", -9.574, 0.85)]
-    b = compute_breadth(rows)
-    assert b["limit_down"] == 0, "超出限价的不得计入跌停"
-    assert b["limit_anomaly"] == 1, "必须单独标记为口径存疑，而不是悄悄丢掉"
+    on_line = compute_breadth([_limit_row("600123", "某主板", -10.0, 12.0)])
+    assert on_line["limit_down"] == 1
+    beyond = compute_breadth([_limit_row("600123", "某主板", -15.0, 12.0)])
+    assert beyond["limit_down"] == 0
+    assert beyond["limit_anomaly"] == 1
+
+
+def test_st_9p57_fall_is_normal_under_2026_rule():
+    """回归修正（2026-09-11）：`*ST萃华` 跌 9.574% 曾被记为「限价口径存疑」。
+
+    真因是 **ST 口径过期**（主板 ST 自 2026-07-06 起为 10%），不是数据源问题——
+    9.574% 在 10% 限价内，既非跌停也非 anomaly。旧断言 anomaly=1 建立在
+    「ST=5%」的过期前提上，属误报。
+    """
+    b = compute_breadth([_limit_row("002731", "*ST萃华", -9.574, 0.85)])
+    assert b["limit_down"] == 0
+    assert b["limit_anomaly"] == 0, "限价内跌幅不得误报为口径异常"
+    # 而真·ST 跌停（贴 -9.85 极限带）必须计入
+    assert compute_breadth([_limit_row("002731", "*ST萃华", -9.9, 0.85)])["limit_down"] == 1
 
 
 def test_real_limit_down_still_counted():

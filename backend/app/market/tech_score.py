@@ -22,6 +22,9 @@ from __future__ import annotations
 
 from typing import Literal
 
+from app.market.volume_state import describe as describe_volume
+from app.market.volume_state import volume_state as classify_volume
+
 Bar = dict  # {ts, open, high, low, close, volume}
 
 # 评分维度权重（和=1）。版本化：改权重必须递增 SCORER_VERSION。
@@ -143,6 +146,7 @@ def score_stock(
     amount_rank_pct: float | None = None,
     turnover_rank_pct: float | None = None,
     rps: dict | None = None,
+    rps_note: str | None = None,
 ) -> dict | None:
     """日K（升序、QFQ）+ 截面流动性分位 + 全市场 RPS → 评分卡。
 
@@ -150,6 +154,9 @@ def score_stock(
     :param turnover_rank_pct: 候选池内换手率分位 0-1
     :param rps: {"rps50": 0-100, "rps120": 0-100} 全市场涨幅分位
                 （app/picks/rps.py 截面；None/缺窗口 → rps 维取中性 0.5）
+    :param rps_note: rps 缺失时的**具名原因**（调用方探 RpsService.freshness() 得到，
+                     如「数据陈旧：滞后 6 个交易日」）。三态纪律：缺证据要能说清是
+                     缺仓、陈旧还是窗口不足——缺省文案只兜底，不遮挡真实原因。
     :return: None = 样本不足（<60 根，视为次新/长停牌，调用方过滤）
     """
     if len(bars) < 60:
@@ -249,11 +256,19 @@ def score_stock(
         signals.append(_sig("RSI14", r_bias, r_s, r_detail))
 
     # 5) 量价：当日量 / 前 5 日均量；放量方向必须结合当日涨跌——放量下杀不是"温和放量"
+    #    量能语义（P1-35）：分档与打分**一律保持不变**（零回归），仅额外用统一语义层
+    #    `volume_state` 产出六态 + 三层解读文案，收口"缩量/放量"的跨模块词汇。
+    vol_state = "unknown"
     vols = [b.get("volume") or 0 for b in bars]
     v5 = sum(vols[-6:-1]) / 5 if len(vols) >= 6 and vols[-6:-1] and sum(vols[-6:-1]) > 0 else None
     if v5:
         ratio = vols[-1] / v5
         day_up = len(closes) >= 2 and closes[-1] > closes[-2]
+        chg_pct = (
+            (closes[-1] / closes[-2] - 1) * 100
+            if len(closes) >= 2 and closes[-2] else None
+        )
+        vol_state = classify_volume(ratio, chg_pct, bands="tech")
         if ratio > 4.0:
             v_s, v_bias, v_detail = 0.35, "neutral", f"爆量（量比 {ratio:.2f}），警惕分歧"
         elif ratio < 0.6:
@@ -317,7 +332,7 @@ def score_stock(
             rps_detail += "（另一窗口样本不足，未计入）"
     else:
         r_s, rps_bias = 0.5, "neutral"
-        rps_detail = "RPS 未覆盖（marketdb 仓未建/未回补），中性处理"
+        rps_detail = (rps_note or "RPS 未覆盖（marketdb 仓未建/未回补/数据陈旧），中性处理")
     dim["rps"] = r_s
     signals.append(_sig("RPS相对强度", rps_bias, r_s, rps_detail))
 
@@ -345,4 +360,8 @@ def score_stock(
         "summary": summary,
         "fail_conditions": fail_conditions,
         "scorer_version": SCORER_VERSION,
+        # P1-35 量能语义（**纯增量字段**，不影响上述任何数值口径）：
+        # 六态枚举供个股/板块/大盘三层共用，避免各处自造"缩量/放量"词表。
+        "volume_state": vol_state,
+        "volume_note": describe_volume(vol_state),
     }

@@ -192,17 +192,17 @@ export function SearchBox() {
       {showPanel && (
         <ul className="absolute left-0 right-0 top-10 z-50 overflow-hidden rounded-md border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
           {error !== null && (
-            <li className="px-3 py-2 text-xs text-red-400" role="alert">
+            <li className="px-3 py-2 text-xs text-red-700 dark:text-red-400" role="alert">
               {error}
             </li>
           )}
           {loading && results.length === 0 && error === null && (
-            <li className="px-3 py-2 text-xs text-zinc-400" role="status">
+            <li className="px-3 py-2 text-xs text-zinc-600 dark:text-zinc-400" role="status">
               搜索中…
             </li>
           )}
           {!loading && error === null && searched && results.length === 0 && (
-            <li className="px-3 py-2 text-xs text-zinc-400" role="status">
+            <li className="px-3 py-2 text-xs text-zinc-600 dark:text-zinc-400" role="status">
               未找到与「{kw}」匹配的股票
             </li>
           )}
@@ -215,16 +215,16 @@ export function SearchBox() {
                 onKeyDown={(e) => e.key === "Enter" && go(it)}
                 className="flex w-full cursor-pointer items-center justify-between px-3 py-2 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"
               >
-                <span className="font-mono text-xs text-zinc-400">{it.symbol}</span>
+                <span className="font-mono text-xs text-zinc-600 dark:text-zinc-400">{it.symbol}</span>
                 <span className="flex-1 px-2">{it.name}</span>
                 {it.is_realtime ? (
-                  <span className="text-xs text-zinc-400">已加自选 ✓</span>
+                  <span className="text-xs text-zinc-600 dark:text-zinc-400">已加自选 ✓</span>
                 ) : (
-                  <button onClick={(e) => void quickAdd(e, it)} className="mr-2 rounded border border-up/50 px-1.5 text-xs text-up hover:bg-up/10" title="加入自选">
+                  <button onClick={(e) => void quickAdd(e, it)} className="mr-2 rounded border border-up/50 px-1.5 text-xs text-up-ink dark:text-up hover:bg-up/10" title="加入自选">
                     ＋
                   </button>
                 )}
-                <span className="text-xs text-zinc-400">{it.market}</span>
+                <span className="text-xs text-zinc-600 dark:text-zinc-400">{it.market}</span>
               </div>
             </li>
           ))}

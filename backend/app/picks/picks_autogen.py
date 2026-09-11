@@ -33,6 +33,29 @@ log = logging.getLogger(__name__)
 CATCHUP_DEADLINE = "14:00"
 
 
+async def _wait_snapshot_ready(app, *, timeout: float = 120.0, interval: float = 5.0) -> bool:
+    """等全市场快照就绪（breadth 非空）再生成。返回是否等到。
+
+    2026-09-09 事故：backend 重启后内存快照为空（KB-TRADE-03），补跑若立刻跑，
+    compute_market_sentiment 抛 CalendarUnavailable → market_phase=None 落库并
+    定格全天（评分吃不到风格偏移，前端显示「相位缺失·未路由」）。补跑前等一等
+    比重跑整条管线便宜得多；超时则按现状生成并留 warning（不无限阻塞调度）。
+    """
+    svc = getattr(getattr(app, "state", None), "snapshot_service", None)
+    if svc is None:
+        return False
+    waited = 0.0
+    while waited < timeout:
+        if getattr(svc, "breadth", None) is not None:
+            if waited > 0:
+                log.info("picks autogen: 快照已就绪（等待 %.0fs）", waited)
+            return True
+        await asyncio.sleep(interval)
+        waited += interval
+    log.warning("picks autogen: 等待 %.0fs 快照仍未就绪，按现状生成（情绪相位可能缺失）", timeout)
+    return False
+
+
 async def _today_row_exists(today: str) -> bool:
     from app.models.daily_pick import DailyPickSet
 
@@ -72,6 +95,7 @@ async def picks_autogen_tick(app, *, now, run_hour: int, run_minute: int) -> boo
     # 延迟导入防循环（routes.picks 依赖 app.picks.* 各模块）
     from app.api.routes.picks import generate_picks
 
+    await _wait_snapshot_ready(app)
     log.info("picks autogen: 当日组合缺失，开始自动生成（%s）", now.strftime("%H:%M:%S"))
     await generate_picks(SimpleNamespace(app=app), hub, None)
     log.info("picks autogen: 当日组合生成完成")

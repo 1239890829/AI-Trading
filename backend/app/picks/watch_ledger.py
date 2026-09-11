@@ -18,12 +18,12 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import select
 
-from app.core.db import get_session_factory, utcnow
+from app.core.db import beijing_now_naive, get_session_factory, utcnow
 from app.market.trading_status import beijing_now
 from app.models.watch_ledger import WatchLedger
 
@@ -136,7 +136,7 @@ def day_stats(trade_date: str, session_factory=None) -> dict:
 def history_stats(days: int = 30, session_factory=None) -> list[dict]:
     """近 N 个自然日逐日统计（需求 11：收盘后仍可查）。"""
     sf = session_factory or get_session_factory()
-    cutoff = (datetime.utcnow() - timedelta(days=days)).date().isoformat()
+    cutoff = (beijing_now_naive() - timedelta(days=days)).date().isoformat()
     with sf() as db:
         dates = db.execute(
             select(WatchLedger.trade_date).where(WatchLedger.trade_date >= cutoff)

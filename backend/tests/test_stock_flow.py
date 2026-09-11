@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 
 from app.market import stock_flow
+from app.picks import watcher as watcher_mod
 from app.picks.watcher import FLOW_SURGE_YI, IntradayWatcher
 
 
@@ -117,3 +118,40 @@ def test_flow_surge_ignores_unavailable_and_negative():
     assert w._step_flows({"600540": {"available": False, "main": None}}) == []
     assert w._step_flows({"000001": _flow(-0.9)}) == []  # 流出侧不报（炸板/跌停池覆盖）
     assert w.state()["flow_tracked"] == 1  # 只有可判定的 000001 进入跟踪
+
+
+# ---- P1-16 源头收紧：阈值配置化 + 每拍上限 ----
+
+def test_flow_surge_threshold_from_settings(monkeypatch):
+    """阈值走 settings（运维可调），非正/非法回退默认——不静默改口径。"""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "picks_flow_surge_yi", 2.5, raising=False)
+    assert watcher_mod.flow_surge_yi() == 2.5
+    w = IntradayWatcher([])
+    assert w._step_flows({"600540": _flow(2.4)}) == []       # 未破新阈值
+    got = w._step_flows({"600540": _flow(2.6)})
+    assert got and got[0]["meta"]["threshold"] == 2.5
+
+    monkeypatch.setattr(settings, "picks_flow_surge_yi", 0, raising=False)
+    assert watcher_mod.flow_surge_yi() == FLOW_SURGE_YI
+    monkeypatch.setattr(settings, "picks_flow_surge_yi", "abc", raising=False)
+    assert watcher_mod.flow_surge_yi() == FLOW_SURGE_YI
+
+
+def test_flow_surge_per_beat_cap_queues_rest():
+    """每拍按净额取 Top N；未入选的不置 alerted，下一拍仍有机会（是排队不是丢弃）。"""
+    w = IntradayWatcher([])
+    cap = watcher_mod.FLOW_ALERT_PER_BEAT
+    flows = {f"6000{i:02d}": _flow(1.0 + i * 0.1) for i in range(cap + 3)}
+    first = w._step_flows(flows)
+    assert len(first) == cap
+    # 降序取 Top：最大净额的先出
+    assert first[0]["meta"]["trigger_value"] == round(1.0 + (cap + 2) * 0.1, 3)
+    assert len(w.state()["flow_alerted"]) == cap
+    # 下一拍把剩余的补出来（同一批 flows 再次传入）
+    rest = w._step_flows(flows)
+    assert len(rest) == 3
+    assert len(w.state()["flow_alerted"]) == cap + 3
+    # 第三拍全部已报 → 无新增
+    assert w._step_flows(flows) == []

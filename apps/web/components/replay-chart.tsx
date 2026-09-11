@@ -66,13 +66,13 @@ export function ReplayChart({ bars, fills = [], onExit }: Props) {
   const cur = visible[visible.length - 1];
   const curDate = cur?.ts.slice(0, 10) ?? "--";
 
-  const btn = "rounded border border-zinc-300 px-2 py-0.5 text-xs text-zinc-500 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100 disabled:opacity-40";
+  const btn = "rounded border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100 disabled:opacity-40";
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col gap-1.5">
       {/* 回放控制条 */}
       <div className="flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-sky-500/40 bg-sky-500/5 px-3 py-1.5 text-xs">
-        <span className="font-medium text-sky-400">回放中</span>
+        <span className="font-medium text-sky-700 dark:text-sky-400">回放中</span>
         <button onClick={() => setPlaying((p) => !p)} disabled={idx >= bars.length - 1} className={btn}>
           {playing ? "⏸ 暂停" : "▶ 播放"}
         </button>
@@ -80,13 +80,13 @@ export function ReplayChart({ bars, fills = [], onExit }: Props) {
           ◀ 单步
         </button>
         <button onClick={() => { setPlaying(false); setIdx(startIdx); }} className={btn}>↺ 重置</button>
-        <span className="text-zinc-400">速度</span>
+        <span className="text-zinc-600 dark:text-zinc-400">速度</span>
         {SPEEDS.map(([label, ms]) => (
-          <button key={label} onClick={() => setSpeed(ms)} className={`rounded px-1.5 py-0.5 ${speed === ms ? "bg-sky-500/20 font-medium text-sky-400" : "text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}>
+          <button key={label} onClick={() => setSpeed(ms)} className={`rounded px-1.5 py-0.5 ${speed === ms ? "bg-sky-500/20 font-medium text-sky-700 dark:text-sky-400" : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}>
             {label}
           </button>
         ))}
-        <span className="text-zinc-400">起点</span>
+        <span className="text-zinc-600 dark:text-zinc-400">起点</span>
         <select
           value={startOffset}
           onChange={(e) => setStartOffset(Number(e.target.value))}
@@ -97,15 +97,15 @@ export function ReplayChart({ bars, fills = [], onExit }: Props) {
           <option value={60}>60 根前</option>
         </select>
         <span className="font-mono tabular-nums text-zinc-600 dark:text-zinc-300">
-          {curDate} <span className="text-zinc-400 dark:text-zinc-500">（{idx - startIdx + 1}/{bars.length - startIdx}）</span>
+          {curDate} <span className="text-zinc-600 dark:text-zinc-400">（{idx - startIdx + 1}/{bars.length - startIdx}）</span>
         </span>
         {tech && (
-          <span className={`rounded px-1.5 py-0.5 text-[11px] ${tech.bias === "bull" ? "bg-up/15 text-up" : tech.bias === "bear" ? "bg-down/15 text-down" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+          <span className={`rounded px-1.5 py-0.5 text-[11px] ${tech.bias === "bull" ? "bg-up/15 text-up-ink dark:text-up" : tech.bias === "bear" ? "bg-down/15 text-down-ink dark:text-down" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>
             {tech.bias === "bull" ? "偏多" : tech.bias === "bear" ? "偏空" : "中性"}（{tech.bullCount}多/{tech.bearCount}空）
           </span>
         )}
-        <span className="ml-auto text-[10px] text-zinc-500">技术评估随回放切片实时重算 · 不画当前成本线（防未来函数）</span>
-        <button onClick={onExit} className="rounded border border-zinc-300 px-2 py-0.5 text-xs text-zinc-500 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100">
+        <span className="ml-auto text-[10px] text-zinc-600 dark:text-zinc-400">技术评估随回放切片实时重算 · 不画当前成本线（防未来函数）</span>
+        <button onClick={onExit} className="rounded border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100">
           退出回放 ✕
         </button>
       </div>

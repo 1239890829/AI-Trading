@@ -2,29 +2,46 @@
 
 数据底座是本地 DuckDB marketdb（不入 git、CI 上不存在），所以本测试
 自建小库 fixture（tmp_path），不依赖真实回补数据——CI 环境下同样全绿。
+
+**夹具锚点纪律（2026-09-11 P0-7）**：合成库必须锚到**最近的交易日**，
+否则会被 `marketdb_freshness` 陈旧闸门判为陈旧而恒降级 → 分位断言全部落空。
+需要"历史截面"语义的用例显式传 `t0=`（如边界截断用例）。
 """
 import sys
+from datetime import date, timedelta
 
 import duckdb
 
 sys.path.insert(0, ".")
 
+from app.market import trade_calendar as tc
 from app.picks.rps import RpsService, _pct_rank_dedup, _trade_date_ms
 from scripts.sync_marketdb import rebuild_adj  # noqa: E402
 
 _MS_DAY = 86_400_000
-_T0 = _trade_date_ms("20260101")  # 上海零点，与仓内口径一致
+_T0 = _trade_date_ms("20260101")  # 上海零点，与仓内口径一致（历史夹具用）
 
 
-def _mk_adj_db(tmp_path, series: dict[str, list[float]], t0: int = _T0):
-    """造 daily_k_adj 小库：{thscode: [close_adj 序列]}，日毫秒逐日递增。"""
+def _recent_t0(n_days: int) -> int:
+    """锚到最近交易日往前 n_days-1 个自然日 → 序列末日≈最新交易日（过闸门）。"""
+    days = tc._load_persisted() or []
+    anchor = days[-1] if days else date.today()
+    return _trade_date_ms((anchor - timedelta(days=n_days - 1)).strftime("%Y%m%d"))
+
+
+def _mk_adj_db(tmp_path, series: dict[str, list[float]], t0: int | None = None):
+    """造 daily_k_adj 小库：{thscode: [close_adj 序列]}，日毫秒逐日递增。
+
+    t0=None → 锚到最近交易日（新鲜，过闸门）；显式 t0 → 历史/陈旧场景。
+    """
     db = tmp_path / "market.duckdb"
     con = duckdb.connect(str(db))
     con.execute("CREATE TABLE daily_k_adj (thscode VARCHAR, date_ms BIGINT, close_adj DOUBLE)")
     for code, closes in series.items():
+        base = _recent_t0(len(closes)) if t0 is None else t0
         con.executemany(
             "INSERT INTO daily_k_adj VALUES (?, ?, ?)",
-            [(code, t0 + i * _MS_DAY, c) for i, c in enumerate(closes)],
+            [(code, base + i * _MS_DAY, c) for i, c in enumerate(closes)],
         )
     con.close()
     return db
@@ -75,11 +92,15 @@ def test_rps_window_insufficient_symbol_excluded(tmp_path):
 
 
 def test_rps_historical_snapshot_date_bound(tmp_path):
-    """trade_date 上限：截到窗口内 → 正常截面；截到窗口外 → 空覆盖。"""
+    """trade_date 上限：截到窗口内 → 正常截面；截到窗口外 → 空覆盖。
+
+    显式历史锚点（t0=_T0）：新鲜度判定以**请求日**为基准 ⇒ 库内更新的数据不算陈旧，
+    回测/复盘要的就是那一刻的截面（不会因为"今天的库"而拒绝历史查询）。
+    """
     db = _mk_adj_db(tmp_path, {
         "600001.SH": [round(10 * 1.01 ** i, 6) for i in range(130)],
         "000002.SZ": [10.0] * 130,
-    })
+    }, t0=_T0)
     cut = _trade_date_ms("20260302")  # 第 61 天
     assert cut > _T0
     # 截断到第 61 日：rps50 仍可用；两票截面里 +1% 的 100、横盘的 0（相对最弱）
@@ -152,6 +173,7 @@ def test_rebuild_adj_no_event_symbol_passthrough(tmp_path):
 
 def test_rps_through_adjustment(tmp_path):
     """端到端：除权股在 close_adj 口径下不被错杀（横盘除权股 RPS=50 而非 0）。"""
+    base_t0 = _recent_t0(130)  # 锚到最近交易日，否则陈旧闸门会先降级
     db = tmp_path / "market.duckdb"
     con = duckdb.connect(str(db))
     con.execute("""CREATE TABLE daily_k (
@@ -165,14 +187,14 @@ def test_rps_through_adjustment(tmp_path):
     prices = [20.0] * 60 + [10.0] * 70
     con.executemany(
         "INSERT INTO daily_k VALUES (?, ?, ?, ?, ?, ?, 0, 0)",
-        [("600010.SH", _T0 + i * _MS_DAY, p, p, p, p) for i, p in enumerate(prices)],
+        [("600010.SH", base_t0 + i * _MS_DAY, p, p, p, p) for i, p in enumerate(prices)],
     )
     con.execute("INSERT INTO adjust_factor VALUES ('600010.SH', ?, 0, 1.0, 0, 0)",
-                [_T0 + 60 * _MS_DAY])
+                [base_t0 + 60 * _MS_DAY])
     # 对照组：真跌股每日 -0.5%，130 根
     con.executemany(
         "INSERT INTO daily_k VALUES (?, ?, ?, ?, ?, ?, 0, 0)",
-        [("600011.SH", _T0 + i * _MS_DAY, round(10 * 0.995 ** i, 6),
+        [("600011.SH", base_t0 + i * _MS_DAY, round(10 * 0.995 ** i, 6),
           round(10 * 0.995 ** i, 6), round(10 * 0.995 ** i, 6),
           round(10 * 0.995 ** i, 6)) for i in range(130)],
     )
@@ -193,6 +215,45 @@ def test_rps_missing_db_degrades_to_empty(tmp_path):
     assert svc.available() is False
     assert svc.snapshot() == {}
     assert svc.get("600519") is None
+    fr = svc.freshness()
+    assert fr["available"] is False and "marketdb 不存在" in fr["reason"]
+
+
+def test_rps_stale_db_degrades_to_empty(tmp_path, monkeypatch):
+    """回归（P0-7，2026-09-10 实测）：**仓存在但停更 6 个交易日**必须降级。
+
+    真实事故：marketdb 停在 2026-09-03 且同步调度器从未启动，而 rps 只判
+    「仓在不在」→ 照旧用 09-03 的横截面算分位，tech_score 的 rps 维当今日数据
+    静默使用。此用例锁住"陈旧 ≠ 可用"：分位算得出来也必须拒绝。
+    """
+    db = _mk_adj_db(tmp_path, {
+        "600001.SH": [round(10 * 1.01 ** i, 6) for i in range(130)],
+        "000002.SZ": [10.0] * 130,
+    }, t0=_T0)  # 锚在 2026-01-01 → 相对今天滞后数十个交易日
+    svc = RpsService(db_path=db)
+    fr = svc.freshness()
+    assert fr["available"] is True and fr["stale"] is True
+    assert fr["lag"] > 3 and "数据陈旧" in fr["reason"]
+    assert svc.snapshot() == {}                      # 降级为空（不是给旧分位）
+    assert svc.get("600001") is None
+    # 降级要留痕（一次性 warning，含可执行处置）
+    assert svc._warned is True
+
+    # 反证：把阈值放到滞后之上 → 同一库立即可用，证明"降级是因为陈阈而非别的原因"
+    lenient = RpsService(db_path=db, max_stale_days=10_000)
+    assert lenient.snapshot()  # 非空
+
+
+def test_rps_stale_warning_logged(tmp_path, caplog):
+    """降级 warning 必须带"滞后 N 个交易日"与处置脚本名（可运维）。"""
+    import logging
+
+    db = _mk_adj_db(tmp_path, {"600001.SH": [round(10 * 1.01 ** i, 6) for i in range(130)]},
+                    t0=_T0)
+    svc = RpsService(db_path=db)
+    with caplog.at_level(logging.WARNING, logger="app.picks.rps"):
+        assert svc.snapshot() == {}
+    assert "数据陈旧" in caplog.text and "sync_marketdb.py" in caplog.text
 
 
 def test_rps_snapshot_cached(tmp_path):

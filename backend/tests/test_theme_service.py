@@ -586,3 +586,267 @@ def test_tier_observe_when_retreat_or_all_first_boards():
         reopen_rate=0.0, premium_median=None,
     )
     assert tier2 == "观察"
+
+
+# ---------------------------------------------------------------- 炸板率双源直取（P1-19 收尾）
+
+
+def _break_provider(name: str, result=None, boom: bool = False):
+    """按名字造一个**独立类**的桩。
+
+    ⚠️ 不能写 `self.__class__.__name__ = name`：那是**类属性**，同一测试文件里
+    所有桩都是同一个类，改一次会把全部实例的名字一起改掉，`_pick_provider`
+    于是永远只认到第一个源（本用例第一版就是这么假绿的）。
+    """
+
+    async def get_limit_break_pool(self, trade_date):
+        self.calls += 1
+        if self.boom:
+            raise RuntimeError("upstream down")
+        return self.result
+
+    def __init__(self, res, b):
+        self.result = res
+        self.boom = b
+        self.calls = 0
+
+    cls = type(name, (), {"get_limit_break_pool": get_limit_break_pool, "__init__": __init__})
+    return cls(result, boom)
+
+
+def _chain(*providers):
+    """造一个 composite 形状的容器（有 .providers 列表）。"""
+    return SimpleNamespace(providers=list(providers))
+
+
+def test_market_break_rate_prefers_ths():
+    import asyncio
+
+    from app.services.theme_service import _market_break_rate
+
+    ths = _break_provider("ThsFuyaoProvider", result=[1, 2, 3])
+    em = _break_provider("EastmoneyProvider", result=[9])
+    rate = asyncio.run(_market_break_rate(_chain(ths, em), __import__("datetime").date(2026, 9, 10), 7))
+    assert rate == pytest.approx(3 / 10)
+    assert ths.calls == 1 and em.calls == 0  # 主源成功就不动备源
+
+
+def test_market_break_rate_falls_back_to_eastmoney_on_ths_failure():
+    """ths 抛异常 → 直取东财（P1-19：此前 ths 一挂就静默退化为近似口径）。"""
+    import asyncio
+    from datetime import date
+
+    from app.services.theme_service import _market_break_rate
+
+    ths = _break_provider("ThsFuyaoProvider", boom=True)
+    em = _break_provider("EastmoneyProvider", result=[1, 2])
+    rate = asyncio.run(_market_break_rate(_chain(ths, em), date(2026, 9, 10), 2))
+    assert rate == pytest.approx(2 / 4)
+    assert ths.calls == 1 and em.calls == 1
+
+
+def test_market_break_rate_both_down_returns_none():
+    import asyncio
+    from datetime import date
+
+    from app.services.theme_service import _market_break_rate
+
+    ths = _break_provider("ThsFuyaoProvider", boom=True)
+    em = _break_provider("EastmoneyProvider", boom=True)
+    assert asyncio.run(_market_break_rate(_chain(ths, em), date(2026, 9, 10), 5)) is None
+
+
+def test_market_break_rate_empty_pool_is_none_and_no_source_switch():
+    """拿到但为空 = 不是异常 → 不换源（避免拿另一源口径硬凑），如实 None。"""
+    import asyncio
+    from datetime import date
+
+    from app.services.theme_service import _market_break_rate
+
+    ths = _break_provider("ThsFuyaoProvider", result=[])
+    em = _break_provider("EastmoneyProvider", result=[1, 2, 3])
+    assert asyncio.run(_market_break_rate(_chain(ths, em), date(2026, 9, 10), 5)) is None
+    assert ths.calls == 1 and em.calls == 0
+
+
+def test_market_break_rate_zero_limit_up_is_none():
+    """0 涨停 → 分母为 0，绝不伪造 0% 炸板率。"""
+    import asyncio
+    from datetime import date
+
+    from app.services.theme_service import _market_break_rate
+
+    ths = _break_provider("ThsFuyaoProvider", result=[1])
+    assert asyncio.run(_market_break_rate(_chain(ths), date(2026, 9, 10), 0)) is None
+
+
+# ---------------------------------------------------------------- 题材/代码 → 板块资金行（P1-5 / P1-4）
+
+
+def _patch_boards(monkeypatch, industry, concept, streaks):
+    """桩掉 board_flow 的板块列表与落盘 streak（L3 层只依赖这两个出口）。"""
+    from app.market import board_flow as bf
+
+    async def fake_list(kind):
+        return (industry if kind == "industry" else concept), []
+
+    monkeypatch.setattr(bf, "get_board_list", fake_list)
+    monkeypatch.setattr(bf, "get_board_streaks", lambda m: dict(streaks))
+
+
+_IND = [{"board_code": "BK1033", "name": "电池", "kind": "industry",
+         "change_pct": -1.37, "main_net_yi": 4.01, "main_net_ratio": 2.0}]
+_CON = [{"board_code": "BK1024", "name": "绿色电力", "kind": "concept",
+         "change_pct": 0.19, "main_net_yi": 32.33, "main_net_ratio": 5.1}]
+
+
+def test_board_rows_for_names_attaches_streak_and_keeps_units(monkeypatch):
+    import asyncio
+
+    from app.services import theme_service as ts
+
+    _patch_boards(monkeypatch, _IND, _CON, {"BK1024": 4})
+    out = asyncio.run(ts.board_rows_for_names(["绿色电力"]))
+    assert out["绿色电力"]["board_code"] == "BK1024"
+    assert out["绿色电力"]["streak"] == 4
+    assert out["绿色电力"]["main_net_yi"] == 32.33      # 亿，不因 streak 计算被改单位
+    assert out["绿色电力"]["main_net_inflow"] == 32.33 * 1e8  # 元，news_persistence 口径不变
+
+
+def test_board_rows_for_names_unknown_absent_not_fabricated(monkeypatch):
+    """匹配不到的名字不出现在返回里（调用方按三态处理，绝不臆造默认板块）。"""
+    import asyncio
+
+    from app.services import theme_service as ts
+
+    _patch_boards(monkeypatch, _IND, _CON, {})
+    out = asyncio.run(ts.board_rows_for_names(["绿色电力", "查无此题材zzz", ""]))
+    assert set(out) == {"绿色电力"}
+
+
+def test_board_rows_for_names_streak_none_when_not_settled(monkeypatch):
+    """未落盘的板块 → streak=None（区别于 0=今日净流出，三态不混）。"""
+    import asyncio
+
+    from app.services import theme_service as ts
+
+    _patch_boards(monkeypatch, _IND, _CON, {})
+    out = asyncio.run(ts.board_rows_for_names(["绿色电力"]))
+    assert out["绿色电力"]["streak"] is None
+
+
+def test_board_rows_for_codes_indexes_by_code(monkeypatch):
+    """按板块代码直取（P1-4）：索引键是 code，绕开名字歧义。"""
+    import asyncio
+
+    from app.services import theme_service as ts
+
+    _patch_boards(monkeypatch, _IND, _CON, {"BK1033": 2})
+    out = asyncio.run(ts.board_rows_for_codes(["BK1033", "BK9999"]))
+    assert set(out) == {"BK1033"}
+    assert out["BK1033"]["name"] == "电池"
+    assert out["BK1033"]["streak"] == 2
+
+
+def test_board_rows_empty_input_no_upstream_call(monkeypatch):
+    """空输入直接返回，不触发任何上游（自选为空时不打东财）。"""
+    import asyncio
+
+    from app.market import board_flow as bf
+    from app.services import theme_service as ts
+
+    called = {"n": 0}
+
+    async def boom(kind):
+        called["n"] += 1
+        return [], []
+
+    monkeypatch.setattr(bf, "get_board_list", boom)
+    assert asyncio.run(ts.board_rows_for_names([])) == {}
+    assert asyncio.run(ts.board_rows_for_codes([])) == {}
+    assert called["n"] == 0
+
+
+# ---------------------------------------------------------------- 介入条件清单（P1-13）
+
+def _checklist_board() -> dict:
+    """最小题材看板 payload（字段名与 build_theme_board 输出一致）。"""
+    return {
+        "trade_date": "2026-09-10",
+        "themes": [
+            {
+                "theme": "固态电池",
+                "stage": "发酵",
+                "stage_basis": "连板高度 3、家数 5",
+                "health_note": "梯队成建制",
+                "risks": ["高位股分歧"],
+                "ladder": [
+                    {
+                        "symbol": "600540", "name": "新赛股份", "role": "龙头", "boards": 3,
+                        "boards_stat": "3天3板", "seal_amount": 3.2e8, "break_count": 0,
+                        "turnover_rate": 8.5, "float_market_cap": 9.0e9,
+                        "first_seal_time": "09:35:00", "last_seal_time": "09:35:00",
+                        "seal_phase": "早盘", "change_pct": 10.0,
+                        "dragon": {"score": 12, "grade": "龙头相", "basis": [], "missing": []},
+                        "sentiment": {"level": "高"},
+                        # 同花顺官方涨停原因：ladder 行**必须自带**（消费方
+                        # intraday_opportunity 的「涨停原因」直接取它，不再绕道
+                        # leaders.candidates —— 那份列表只含补涨/反包角色）
+                        "reason": "固态电池+锂电材料",
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def test_entry_checklist_from_board_uses_card_stage_and_market_phase():
+    from app.services.theme_service import entry_checklist_from_board
+
+    got = entry_checklist_from_board(_checklist_board(), "600540", market_phase="发酵")
+    assert got is not None
+    assert got["found"] if "found" in got else True  # 直接调用时不加 found（路由层加）
+    # 题材层来自 card.stage，市场层来自入参——两处都不能自己编
+    assert got["theme_layer"]["stage"] == "发酵"
+    assert got["theme_layer"]["blocked"] is False
+    assert got["market_layer"]["phase"] == "发酵"
+    assert got["dragon_grade"] == "龙头相"
+    assert got["role"] == "龙头"
+    assert got["boards"] == 3
+    assert got["conditions"] and got["invalidation"] and got["timing"]
+    # 输入齐全 → missing 不应包含个股层维度
+    assert "封单额" not in got["missing"] and "流通市值" not in got["missing"]
+
+
+def test_entry_checklist_from_board_retreat_theme_blocks():
+    """题材退潮 → theme_layer.blocked，且回避项里必须能看见原因。"""
+    from app.services.theme_service import entry_checklist_from_board
+
+    board = _checklist_board()
+    board["themes"][0]["stage"] = "退潮"
+    got = entry_checklist_from_board(board, "600540", market_phase="发酵")
+    assert got is not None
+    assert got["theme_layer"]["blocked"] is True
+    assert any("退潮" in a for a in got["avoid"])
+
+
+def test_entry_checklist_from_board_unknown_symbol_returns_none():
+    """不在任何题材梯队 → None（调用方给通用清单，不臆造角色/封单质量）。"""
+    from app.services.theme_service import entry_checklist_from_board
+
+    assert entry_checklist_from_board(_checklist_board(), "000001") is None
+    assert entry_checklist_from_board(_checklist_board(), "") is None
+    assert entry_checklist_from_board({}, "600540") is None
+
+
+def test_entry_checklist_from_board_marks_missing_inputs():
+    """缺失的输入必须进 missing，且不因缺失而静默当成中性。"""
+    from app.services.theme_service import entry_checklist_from_board
+
+    board = _checklist_board()
+    row = board["themes"][0]["ladder"][0]
+    row["seal_amount"] = None
+    row["turnover_rate"] = None
+    got = entry_checklist_from_board(board, "600540", market_phase=None)
+    assert got is not None
+    assert {"封单额", "换手率", "市场阶段"} <= set(got["missing"])

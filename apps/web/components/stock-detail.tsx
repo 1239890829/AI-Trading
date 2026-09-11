@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { MinuteChart } from "@/components/minute-chart";
 import { KlineChartPro } from "@/components/kline-chart-pro";
 import { priceLimitPct } from "@/lib/price-limit";
+import { INDEX_DEFAULT_RIGHT_TAB, INDEX_RIGHT_TABS, rightTabsFor, type DetailRightTab } from "@/lib/detail-tabs";
 import { Panel } from "@/components/panel";
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
@@ -15,6 +16,7 @@ import { isIndexSymbol } from "@/lib/api";
 import { notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import { ThemeChipsRow } from "@/components/detail/theme-chips";
 import { StockEventsRow } from "@/components/detail/stock-events";
+import { MinuteDecisionPanel } from "@/components/detail/minute-decision-panel";
 import {
   addToWatchlist,
   cancelPaperOrder,
@@ -83,8 +85,8 @@ function scheduleIdle(fn: () => void): () => void {
  * 顶部紧凑行情条 → 中部 [左：图表区(K线/分时/资金图) | 右：盘口↔逐笔] → 右列：盘口↔逐笔 + 财务摘要。龙虎榜见独立页面。
  * K线带龙虎榜日标记与金叉死叉技术信号；滚动只存在于表格/列表容器内部。 */
 export type ChartTab = "kline" | "minute" | "flow";
-export type RightTab = "book" | "trades" | "trade" | "real" | "profile" | "info" | "speed" | "boards";
-
+/** 右列 tab 键与 tab 列表见 lib/detail-tabs.ts（抽成纯模块以便单测与口径断言）。 */
+export type RightTab = DetailRightTab;
 /**
  * 助手「一键跳转」的落点参数（2026-09-06，docs/assistant-optimization-plan.md §1.3）：
  * 工作台 URL 的 ?ct=（图表区 tab）与 ?rt=（右栏 tab）由调用方（workbench 页）解析后
@@ -181,7 +183,9 @@ export function StockDetailPanel({
   const [vrBaseline, setVrBaseline] = useState<number[] | null>(null);
   // 指数 symbol（sh000001 等）：禁用个股专属面板（加自选/交易/资料/资金图）
   const isIndex = isIndexSymbol(symbol);
-  // 指数下个股专属 tab 不可用：残留的 flow/trade/real/profile 选中态强制归位
+  // 指数下个股专属 tab 不可用：残留的 flow/trade/real/profile/trades/book/info 选中态
+  // 强制归位到指数可用 tab（2026-09-11：指数右列精简为 涨速/板块——盘口无真实撮合
+  // 数据源、资讯接口对指数恒 502，两者均为死 tab）。
   //（workbench 切股走 key 重挂载不会残留，这里是 /stock/[symbol] 等复用方的防御）。
   // 渲染期调整（adjust-state 模式）：prevIsIndex 初始 false，挂载即指数时同样归位。
   const [prevIsIndex, setPrevIsIndex] = useState(false);
@@ -189,7 +193,7 @@ export function StockDetailPanel({
     setPrevIsIndex(isIndex);
     if (isIndex) {
       setChartTab((t) => (t === "flow" ? "kline" : t));
-      setRightTab((t) => (t === "trade" || t === "real" || t === "profile" || t === "trades" ? "book" : t));
+      setRightTab((t) => (INDEX_RIGHT_TABS.has(t) ? t : INDEX_DEFAULT_RIGHT_TAB));
     }
   }
 
@@ -200,11 +204,13 @@ export function StockDetailPanel({
   // connecting 防抖（2026-09-09）：WS 秒连场景下"● 连接中"只闪现毫秒级——延迟 2s
   // 才认为真异常；期间离开 connecting 态则取消。
   const [connectingDebounced, setConnectingDebounced] = useState(false);
+  // 离开 connecting 态 → 渲染期当帧清掉防抖标志（adjust-state 模式，与下方 live 合并
+  // 同款；原写法在 effect 内同步 setState，触发 react-hooks/set-state-in-effect，P1-27）
+  if (streamStatus !== "connecting" && connectingDebounced) {
+    setConnectingDebounced(false);
+  }
   useEffect(() => {
-    if (streamStatus !== "connecting") {
-      setConnectingDebounced(false);
-      return;
-    }
+    if (streamStatus !== "connecting") return;
     const t = setTimeout(() => setConnectingDebounced(true), 2000);
     return () => clearTimeout(t);
   }, [streamStatus]);
@@ -344,6 +350,18 @@ export function StockDetailPanel({
   //     切到对应 tab 时通常已就绪；不在首屏路径上，晚到不阻塞交互。
   // key={activeSymbol} 重挂载下 symbol 在实例内不变，原"切股清空"是死代码；
   // 各回调的 alive 检查负责防串股（切股后晚到的旧股结果直接丢弃）。
+  // 指数无盘口/逐笔数据源 → 当帧置「确认空」，不留加载中转圈。
+  // 渲染期 adjust-state（P1-27）：原写法在 data effect 内同步 setBook/setTrades。
+  // 本组件由 page.tsx 用 key={activeSymbol} 挂载，首帧即切股后的首帧，时机等价。
+  const [prevIndexSymbol, setPrevIndexSymbol] = useState<string | null>(null);
+  if (symbol !== prevIndexSymbol) {
+    setPrevIndexSymbol(symbol);
+    if (isIndexSymbol(symbol)) {
+      setBook(null);
+      setTrades([]);
+    }
+  }
+
   useEffect(() => {
     if (!symbol) return;
     let alive = true;
@@ -363,13 +381,8 @@ export function StockDetailPanel({
         // 首拉失败 = 确认拉不到（切股窗口结束），渲染"不可用"文案而非永远骨架；
         // 盘中 5s 轮询的失败仍静默保留上次快照（下方轮询 effect，有意设计）
         .catch(() => alive && setBook(null));
-    } else {
-      // 指数确认无盘口/逐笔数据源：显式置"确认空"，不留加载中转圈
-      if (alive) {
-        setBook(null);
-        setTrades([]);
-      }
     }
+    // 指数分支的「确认空」已在渲染期置好（见上方 prevIndexSymbol 块），此处不再 setState
     const cancelIdle = scheduleIdle(() => {
       if (!alive) return;
       getMinuteLineWithBaseline(symbol)
@@ -546,12 +559,12 @@ export function StockDetailPanel({
   const boardRows: BoardRows = boardGroups
     ? [
         ["行业", boardGroups.industry ?? [], "text-zinc-600 dark:text-zinc-200"],
-        ["地域", boardGroups.region ?? [], "text-zinc-500 dark:text-zinc-300"],
-        ["概念题材", boardGroups.concept ?? [], "text-amber-600 dark:text-amber-300"],
-        ["风格 / 指数成分", boardGroups.style_index ?? [], "text-zinc-500"],
+        ["地域", boardGroups.region ?? [], "text-zinc-600 dark:text-zinc-300"],
+        ["概念题材", boardGroups.concept ?? [], "text-amber-800 dark:text-amber-300"],
+        ["风格 / 指数成分", boardGroups.style_index ?? [], "text-zinc-600 dark:text-zinc-400"],
       ]
     : company?.boards?.length
-      ? [["板块", company.boards, "text-zinc-500 dark:text-zinc-300"]] // 无分组数据（旧缓存）时回退扁平全量
+      ? [["板块", company.boards, "text-zinc-600 dark:text-zinc-300"]] // 无分组数据（旧缓存）时回退扁平全量
       : [];
 
   async function handleResetAccount() {
@@ -570,7 +583,7 @@ export function StockDetailPanel({
   return (
     <div className="flex min-h-0 min-w-0 flex-col gap-2">
       {error && (
-        <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-600 dark:text-amber-300">{error}</div>
+        <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-300">{error}</div>
       )}
 
       {/* ① 紧凑行情条（指数隐藏加自选：sh000001 不是合法自选股代码）
@@ -586,7 +599,7 @@ export function StockDetailPanel({
       ) : quote ? (
         <QuoteStrip quote={quote} inWatchlist={inWatchlist} onAdd={() => void add()} hideWatchlist={isIndex} tradingStatus={tradingStatus} />
       ) : (
-        <div className="shrink-0 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-1.5 text-xs text-amber-600 dark:text-amber-300">
+        <div className="shrink-0 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-1.5 text-xs text-amber-800 dark:text-amber-300">
           行情数据暂不可用（数据源失败，稍后自动重试）
         </div>
       )}
@@ -609,8 +622,10 @@ export function StockDetailPanel({
       {/* ①½ 题材归属 chips（官方成分 / 涨停归因双源）→ 题材看板聚焦 */}
       <ThemeChipsRow themes={stockThemes} />
 
-      {/* ①¾ 相关事件（E2/L9）：方向题材命中归属 或 事件源自该股 */}
-      <StockEventsRow symbol={symbol} />
+      {/* ①¾ 相关事件（E2/L9）：方向题材命中归属 或 事件源自该股。
+          指数不渲染——/api/events/symbol/{code} 只接受 6 位个股代码，指数段
+          （sh000001 等）会返回 400，此前表现为常驻「加载失败 [重试]」（2026-09-11）。 */}
+      <StockEventsRow symbol={symbol} isIndex={isIndex} />
 
       {/* ② 中部：左图表区 + 右盘口/逐笔（右列宽度可拖拽，--right-w 由 state 注入；
           方案 B：右列可整体收起为细条，收起后图表获得全宽） */}
@@ -635,7 +650,7 @@ export function StockDetailPanel({
               <button
                 key={key}
                 onClick={() => setChartTab(key)}
-                className={`rounded-md px-2.5 py-1 text-xs ${chartTab === key ? "bg-zinc-100 font-medium dark:bg-zinc-800" : "text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
+                className={`rounded-md px-2.5 py-1 text-xs ${chartTab === key ? "bg-zinc-100 font-medium dark:bg-zinc-800" : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
               >
                 {label}
               </button>
@@ -649,17 +664,17 @@ export function StockDetailPanel({
                   <span
                     className={`rounded px-1.5 py-0.5 font-medium ${
                       tech.bias === "bull"
-                        ? "bg-up/15 text-up"
+                        ? "bg-up/15 text-up-ink dark:text-up"
                         : tech.bias === "bear"
-                          ? "bg-down/15 text-down"
-                          : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-300"
+                          ? "bg-down/15 text-down-ink dark:text-down"
+                          : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
                     }`}
                   >
                     技术评估：{tech.bias === "bull" ? "偏多" : tech.bias === "bear" ? "偏空" : "中性"}（{tech.bullCount}多/{tech.bearCount}空）
                   </span>
                   <button
                     onClick={() => setTechOpen(!techOpen)}
-                    className="shrink-0 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                    className="shrink-0 text-zinc-600 dark:text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
                     title={tech.signals.map((sg) => sg.name + "：" + sg.detail).join("\n")}
                   >
                     {techOpen ? "收起 ▴" : "依据 ▸"}
@@ -669,7 +684,7 @@ export function StockDetailPanel({
               {chartTab === "kline" && !replayMode && displayBars.length >= 60 && (
                 <button
                   onClick={() => setReplayMode(true)}
-                  className="rounded border border-sky-500/50 px-2 py-0.5 text-xs text-sky-400 hover:bg-sky-500/10"
+                  className="rounded border border-sky-500/50 px-2 py-0.5 text-xs text-sky-700 dark:text-sky-400 hover:bg-sky-500/10"
                   title="按日逐根推进 K 线，回放历史买卖点与成交（需要 ≥60 根日 K）"
                 >
                   ▶ 历史回放
@@ -691,12 +706,12 @@ export function StockDetailPanel({
                     />
                     <span>
                       <span className="font-medium text-zinc-700 dark:text-zinc-200">{sg.name}</span>
-                      <span className="ml-1 text-zinc-400">{sg.detail}</span>
+                      <span className="ml-1 text-zinc-600 dark:text-zinc-400">{sg.detail}</span>
                     </span>
                   </li>
                 ))}
               </ul>
-              <p className="mt-1.5 text-[10px] text-zinc-400">多因子技术信号汇总，不构成买卖建议</p>
+              <p className="mt-1.5 text-[10px] text-zinc-600 dark:text-zinc-400">多因子技术信号汇总，不构成买卖建议</p>
             </div>
           )}
 
@@ -720,7 +735,7 @@ export function StockDetailPanel({
                 </div>
                 )
               ) : (
-                <p className="px-4 py-10 text-center text-sm text-zinc-400">等待 K 线数据…</p>
+                <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">等待 K 线数据…</p>
               )}
             </Panel>
           )}
@@ -737,7 +752,7 @@ export function StockDetailPanel({
                       空图会被误读成"数据源挂了"，必须显式说明原因 */}
                   {isSuspended(tradingStatus) && (
                     <div className="absolute inset-0 z-10 flex items-center justify-center bg-zinc-50/70 backdrop-blur-[1px] dark:bg-zinc-950/70">
-                      <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-center text-xs text-amber-600 dark:text-amber-300">
+                      <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-center text-xs text-amber-800 dark:text-amber-300">
                         <div className="text-sm font-medium">该股当前停牌，当日无分时数据</div>
                         <div className="mt-1 opacity-80">{tradingStatus?.reason}</div>
                       </div>
@@ -756,7 +771,7 @@ export function StockDetailPanel({
                 />
                 </div>
               ) : (
-                <p className="px-4 py-10 text-center text-sm text-zinc-400">
+                <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">
                   {isSuspended(tradingStatus)
                     ? `该股当前停牌，当日无分时数据（${tradingStatus?.reason ?? ""}）`
                     : "暂无分时数据"}
@@ -770,7 +785,7 @@ export function StockDetailPanel({
                与 K 线/分时两个 tab 统一，纵向多出约 41px 给资金图（2026-09-02） */
             <Panel bodyClassName="overflow-hidden" className="min-h-0 flex-1">
               {!flow || flow.flow.length === 0 ? (
-                <p className="px-4 py-10 text-center text-sm text-zinc-400">暂无资金流数据</p>
+                <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">暂无资金流数据</p>
               ) : (
                 <FlowChart flow={flow} />
               )}
@@ -783,7 +798,7 @@ export function StockDetailPanel({
         {rightCollapsed ? (
           <button
             onClick={toggleRightCollapsed}
-            className="flex min-h-0 w-7 items-center justify-center rounded-lg border border-zinc-200 text-zinc-400 transition-colors hover:text-zinc-900 dark:border-zinc-800 dark:hover:text-zinc-100"
+            className="flex min-h-0 w-7 items-center justify-center rounded-lg border border-zinc-200 text-zinc-600 dark:text-zinc-400 transition-colors hover:text-zinc-900 dark:border-zinc-800 dark:hover:text-zinc-100"
             title="展开右列（盘口/逐笔/资料/资讯）"
             aria-label="展开右列"
           >
@@ -835,7 +850,9 @@ export function StockDetailPanel({
                         ? "题材涨速榜（5 分钟）"
                         : rightTab === "boards"
                           ? "板块涨幅"
-                          : "资讯"
+                          : rightTab === "dt"
+                            ? "做 T 决策（分钟级）"
+                            : "资讯"
           }
           bodyClassName="overflow-y-auto"
           source={rightTab === "book" ? book?.source : undefined}
@@ -846,7 +863,7 @@ export function StockDetailPanel({
                定位正好压在头部右侧「数据来源/数据时间」徽标上（2026-09-04 用户反馈） */
             <button
               onClick={toggleRightCollapsed}
-              className="rounded border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-400 transition-colors hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100"
+              className="rounded border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-600 dark:text-zinc-400 transition-colors hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100"
               title="收起右列，图表获得全宽"
               aria-label="收起右列"
             >
@@ -855,30 +872,11 @@ export function StockDetailPanel({
           }
         >
           <div className="flex shrink-0 gap-1 border-b border-zinc-100 px-2 py-1 dark:border-zinc-800/60">
-            {(
-              isIndex
-                ? ([
-                    // 指数右列（参考同花顺指数页：分时/盘口/涨速/相关板块/资讯）：
-                    // 无五档与逐笔数据源，保留 tab 显示空态；涨速/板块为指数专属价值 tab
-                    ["book", "盘口"],
-                    ["speed", "涨速"],
-                    ["boards", "板块"],
-                    ["info", "资讯"],
-                  ] as const)
-                : ([
-                    ["book", "盘口"],
-                    ["trades", "逐笔"],
-                    ["trade", "模拟交易"],
-                    // 真实持仓：券商实际成交的手工账本，与模拟交易完全独立
-                    ["real", "真实持仓"],
-                    ["profile", "资料"],
-                    ["info", "资讯"],
-                  ] as const)
-            ).map(([k, label]) => (
+            {rightTabsFor(isIndex).map(([k, label]) => (
               <button
                 key={k}
                 onClick={() => setRightTab(k)}
-                className={`rounded px-2 py-0.5 text-xs ${rightTab === k ? "bg-zinc-100 font-medium dark:bg-zinc-800" : "text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
+                className={`rounded px-2 py-0.5 text-xs ${rightTab === k ? "bg-zinc-100 font-medium dark:bg-zinc-800" : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
               >
                 {label}
               </button>
@@ -886,6 +884,7 @@ export function StockDetailPanel({
           </div>
           {rightTab === "speed" && <SpeedPanel className="h-full" />}
           {rightTab === "boards" && <BoardRankPanel className="h-full" />}
+          {rightTab === "dt" && <MinuteDecisionPanel symbol={symbol} className="h-full" />}
           {rightTab === "real" && (
             <RealPositionPanel symbol={symbol} currentPrice={quote?.price ?? null} currentName={quote?.name ?? null} className="h-full" />
           )}
@@ -907,7 +906,7 @@ export function StockDetailPanel({
                 onPaperChanged={() => loadPaperRef.current()}
               />
             ) : (
-              <p className="px-3 py-10 text-center text-xs text-zinc-400">模拟账户数据加载失败（稍后自动重试）</p>
+              <p className="px-3 py-10 text-center text-xs text-zinc-600 dark:text-zinc-400">模拟账户数据加载失败（稍后自动重试）</p>
             ))}
 
           {rightTab === "profile" && <ProfilePanel boardRows={boardRows} company={company} fins={fins} />}

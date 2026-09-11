@@ -126,9 +126,50 @@ def _collect_review_improvements(session_factory) -> dict:
             for a in (report.action_items or [])[:10]
         ]
         return {"available": True, "trade_date": today, "action_items": items,
-                "n": len(items)}
+                "n": len(items),
+                "repeat_pending": _repeat_pending_items(session_factory)}
     except Exception as exc:  # noqa: BLE001  证据收集失败不阻断议程
         return {"available": False, "note": f"读取失败：{exc}"}
+
+
+def _repeat_pending_items(session_factory, days: int = 7) -> list[dict]:
+    """P2-2（2026-09-09）：近 N 日重复出现仍未处置（pending）的改进项。
+
+    同一改进连续多日 pending = 「下轮强制改进」未落实的机器可读信号 → 议程据此
+    判断应升级处置（连续 2 日同项 → C 类候选；06-review-framework §闭环规则）。
+    按标题归一（去日期/序号差异）聚合，命中 ≥2 日的才列出。
+    """
+    from datetime import timedelta as _td
+
+    try:
+        from sqlalchemy import select as _sel
+
+        from app.review.models import ReviewActionItemRow
+
+        with session_factory() as db:
+            cutoff = beijing_now().date() - _td(days=days)
+            rows = db.execute(
+                _sel(ReviewActionItemRow).where(
+                    ReviewActionItemRow.trade_date >= cutoff.strftime("%Y%m%d"),
+                    ReviewActionItemRow.status == "pending",
+                )
+            ).scalars().all()
+    except Exception as exc:  # noqa: BLE001  重复检测失败不阻断
+        return [{"error": f"查询失败: {exc}"}]
+    seen: dict[str, dict] = {}
+    for r in rows:
+        key = (r.category or "", r.title[:60])
+        e = seen.setdefault(key, {"category": key[0], "title": key[1],
+                                  "days": set(), "latest": ""})
+        e["days"].add(r.trade_date)
+        e["latest"] = max(e["latest"], r.trade_date)
+    out = [
+        {"category": e["category"], "title": e["title"],
+         "pending_days": len(e["days"]), "latest": e["latest"]}
+        for e in seen.values() if len(e["days"]) >= 2
+    ]
+    out.sort(key=lambda x: -x["pending_days"])
+    return out[:5]
 
 
 #: 方向校验（P1-④）：关键能力快照——与三份计划的阶段声明对账。
@@ -187,7 +228,7 @@ def _collect_triage_stats(session_factory) -> dict:
 
 
 def collect_inputs(session_factory=None) -> dict:
-    """八路证据汇总（第八路：知识库健康态；factor_ic 月度复核到期接入）。"""
+    """多路证据汇总（第八/九路 + 第十路 review + framework_backlog P2-2）。"""
     sf = session_factory or get_session_factory()
     return {
         "review": _collect_review_improvements(sf),
@@ -200,7 +241,31 @@ def collect_inputs(session_factory=None) -> dict:
         "knowledge_base": _collect_knowledge_base(),
         # 第九路（2026-09-09 用户指令「跟踪本质是实时选股」）：台账复盘×进化依据
         "tracking": _collect_tracking_stats(sf),
+        # P2-2（2026-09-09）：复盘框架自优化待办（06 §7 演化日志最近条目）
+        "framework_backlog": _collect_framework_backlog(),
     }
+
+
+def _collect_framework_backlog() -> dict:
+    """复盘框架演化日志（docs/kb/06-review-framework.md §7）最近待复查条目。
+
+    06 框架闭环规则：自评低分维 → §7 登记改进 → 下一轮复盘先执行该改进再开始。
+    此处把最近登记的自优化项作为议程输入之一，让每日议程能对照检查落实
+    （「连续 2 轮同维低分 → 升级 C 类」由议程 LLM 依据本条+repeat_pending 裁决）。
+    """
+    path = PROJECT_ROOT / "docs" / "kb" / "06-review-framework.md"
+    if not path.exists():
+        return {"available": False, "note": "06-review-framework.md 不存在"}
+    import re as _re
+    try:
+        text = path.read_text(encoding="utf-8")
+        m = _re.search(r"##\s*7\.\s*框架演化日志(.*?)(?:\n## |\Z)", text, _re.S)
+        section = m.group(1) if m else text[-800:]
+        lines = [_l.strip() for _l in section.splitlines() if _l.strip().startswith("- ")
+                 and _re.match(r"-\s*\d{4}-\d{2}-\d{2}", _l.strip())]
+        return {"available": True, "n": len(lines), "recent": lines[-3:]}
+    except Exception as exc:  # noqa: BLE001
+        return {"available": False, "note": f"解析失败: {exc}"}
 
 
 def _collect_tracking_stats(session_factory) -> dict:
@@ -307,6 +372,11 @@ def _collect_recent_prediction(session_factory) -> dict:
 # 30 天结果覆盖 243 天官方日历——这条哨兵就是那个事故的产物。
 
 
+#: 情绪指标库允许的滞后交易日数。库尾是"上一个交易日"属正常（`backfill` 刻意
+#: 不回补今天），所以 1 是稳态；给到 3 是给周末/长假与调度周期留余量。
+_METRIC_HISTORY_MAX_LAG = 3
+
+
 def _collect_data_health(session_factory) -> dict:
     checks: list[dict] = []
 
@@ -342,16 +412,27 @@ def _collect_data_health(session_factory) -> dict:
     except Exception as exc:  # noqa: BLE001
         _add("snapshot_parquet", False, f"检查失败：{exc}")
 
-    # 3) marketdb 日 K 仓同步（>26h 未更新 = 增量停跑）
+    # 3) marketdb 日 K 仓新鲜度（P0-7 收紧：**内容日期**口径，不是文件 mtime）
+    #    原判据是 `mtime > 26h`——只证明「文件被写过」，不证明「数据到了新交易日」：
+    #    一次失败的 `--full` 重跑会刷新 mtime 而数据仍停在旧日期（假 OK）。
+    #    现改为库内 MAX(date_ms) × **交易日**滞后（口径与下游 rps/chip 闸门同源，
+    #    避免"哨兵说没问题、下游却在用陈旧截面"的口径分裂）。
     try:
         mdb = PROJECT_ROOT / "backend" / "data" / "marketdb" / "market.duckdb"
         if not mdb.exists():
             _add("marketdb", False, "market.duckdb 不存在")
         else:
+            from app.market.marketdb_freshness import freshness as _mdb_freshness
+
+            fr = _mdb_freshness(mdb)
             age_h = (datetime.now().timestamp() - mdb.stat().st_mtime) / 3600
-            _add("marketdb", age_h <= 26,
-                 f"{mdb.stat().st_size // (1024 * 1024)} MB，{age_h:.0f} 小时前更新"
-                 + ("（⚠️ 同步停跑——scripts/sync_marketdb.py）" if age_h > 26 else ""))
+            ok = fr["available"] and not fr["stale"]
+            detail = (f"{mdb.stat().st_size // (1024 * 1024)} MB，{age_h:.0f} 小时前更新；"
+                      f"库内最新 {fr['latest'] or '—'}，滞后 {fr['lag']} 个交易日"
+                      f"（阈值 {fr['threshold']}）")
+            if not ok:
+                detail += "（⚠️ 同步停跑——scripts/sync_marketdb.py；下游 RPS/筹码已降级）"
+            _add("marketdb", ok, detail)
     except Exception as exc:  # noqa: BLE001
         _add("marketdb", False, f"检查失败：{exc}")
 
@@ -409,9 +490,95 @@ def _collect_data_health(session_factory) -> dict:
     except Exception as exc:  # noqa: BLE001
         _add("snapshot_dirs", False, f"检查失败：{exc}")
 
+    # 8) 情绪指标库窗口新鲜度（2026-09-10 实测事故纳入哨兵）：
+    #    回补调度把 provider 原始日历（字符串）喂给 `backfill` → TypeError 被
+    #    `except Exception` 收成一条日志 ⇒ **库停在 2026-09-01、连续 6 个交易日
+    #    没更新**，而界面照旧写着「按近 241 个交易日的历史分位校准」——窗口漂移
+    #    了 6 天却没有任何告警。这正是"陈旧比缺失更危险"那一类（静默、看着正常）。
+    #    判据用**交易日滞后数**而非自然日差：周末/长假用自然日会虚报。
+    try:
+        raw = json.loads(
+            (PROJECT_ROOT / "backend" / "data" / "sentiment_metrics.json").read_text(encoding="utf-8")
+        )
+        keys = sorted((raw.get("days") or {}).keys())
+        tail = keys[-1] if keys else ""
+        cal_raw = json.loads(
+            (PROJECT_ROOT / "backend" / "data" / "trade_calendar.json").read_text(encoding="utf-8")
+        )
+        cal_days = cal_raw.get("days") if isinstance(cal_raw, dict) else cal_raw
+        today_iso = beijing_now().date().isoformat()
+        # 上限截到"今天"：官方日历**含未来日期**，不截会把未来交易日也算成滞后
+        lag = sum(1 for d in (cal_days or []) if tail < d <= today_iso) if tail else None
+        ok = bool(tail) and lag is not None and lag <= _METRIC_HISTORY_MAX_LAG
+        _add("sentiment_metrics", ok,
+             f"窗口尾 {tail or '—'}，滞后 {lag if lag is not None else '?'} 个交易日，共 {len(keys)} 天"
+             + ("（⚠️ 回补调度停跑——分位校准窗口在漂移）" if not ok else ""))
+    except Exception as exc:  # noqa: BLE001
+        _add("sentiment_metrics", False, f"检查失败：{exc}")
+
+    # 9) 持仓监护读取状态（S1-2，2026-09-11）：`exit_engine` 的两路持仓读取
+    #    过去都是 `except: return {}` / `positions = []`——失败与「确实无持仓」返回值
+    #    完全相同、连日志都没有 ⇒ 一次 DB 抖动就让**自动离场/硬止损/真实持仓提醒整轮跳过**
+    #    而在任何界面上都表现为「今天没有信号」。此处把该状态接进哨兵：
+    #    state=failed 即报问题（issue 文本**不含计数器**，保证 15 分钟一轮的去重稳定，
+    #    不会因为失败次数变化而反复推送）。
+    try:
+        from app.picks.exit_engine import position_monitor_state
+
+        pm = position_monitor_state()
+        bad = [k for k, v in pm.items() if v.get("state") == "failed"]
+        # 只用**异常类名**（如 OperationalError）拼文案：类名对同一故障模式稳定，
+        # 而完整错误消息可能每次都不同（含行号/耗时），会把哨兵的字符串去重打穿、
+        # 变成每 15 分钟推一次。完整错误已在 exit_engine 的日志里。
+        detail = "、".join(
+            f"{'模拟' if k == 'paper' else '真实'}持仓（{(pm[k].get('reason') or '未知').split(':')[0]}）"
+            for k in bad
+        )
+        _add("position_monitor_read", not bad,
+             "两路持仓读取正常" if not bad
+             else f"读取失败：{detail}——本轮自动离场/硬止损/真实持仓提醒已跳过"
+             + ("（⚠️ 监护降级，期间持仓不受止损保护）"))
+    except Exception as exc:  # noqa: BLE001
+        _add("position_monitor_read", False, f"检查失败：{exc}")
+
     issues = [c for c in checks if not c["ok"]]
     return {"available": True, "checks": checks, "n_issues": len(issues),
             "issues": [f"{c['name']}：{c['detail']}" for c in issues]}
+
+
+#: 数据健康确定性议程项的来源标记（execute_agenda 据此免占自治任务预算）。
+DATA_HEALTH_ORIGIN = "data_health"
+
+
+def _data_health_items(data_health: dict) -> list[dict]:
+    """数据健康未通过项 → **确定性**议程条目（B 类：只写进化日报，不改代码/参数）。
+
+    为什么必须由代码固化（2026-09-09/09-10 实测）：marketdb 停跑每天都进了
+    `inputs.data_health.issues`，但两天 LLM 各只产出 1 条**别的**条目、都没提它
+    ⇒「检查到 ≠ 有人知道」。故此处不依赖 LLM 是否注意到。
+
+    为什么是 B 类而非 C 类：处置动作是「跑同步脚本 / 查上游连通性」，不是改代码；
+    让自治执行器改代码去修数据管道既无效又危险（红线：不碰风控/资金/推送/凭据）。
+    B 类只往 docs/evolution/ 追加一行，零副作用。
+    """
+    if not data_health.get("available") or not data_health.get("n_issues"):
+        return []
+    issues = list(data_health.get("issues") or [])
+    failed = [c for c in (data_health.get("checks") or []) if not c["ok"]]
+    return [{
+        "class": "B",
+        "origin": DATA_HEALTH_ORIGIN,
+        "finding": f"数据健康哨兵报警：{len(issues)} 项未通过（{', '.join(c['name'] for c in failed)}）",
+        "evidence": {"issues": issues, "failed_checks": failed},
+        "action": "核对上游数据管道，按 check 名对应脚本补跑"
+                  "（marketdb → scripts/sync_marketdb.py）",
+        "expected_effect": "数据管道恢复新鲜；下游 RPS / 筹码 / 分位不再用陈旧截面算分",
+        "verification": "下一轮数据健康哨兵同项转 ok（盘中每 15 分钟一轮）",
+        "priority": 1,
+        "summary": "；".join(issues),
+        "status": "pending",
+        "result": "",
+    }]
 
 
 # ---------------------------------------------------------------- 议程生成
@@ -437,7 +604,10 @@ _SYSTEM_PROMPT = (
     "（修 bug、补校验、加守卫），禁止改架构、禁止碰 migrations/config/风控/资金/推送逻辑；"
     "执行器会用回归门禁（全量 pytest+pyflakes）验证，门禁不过会被丢弃\n"
     "- 不确定就不提；宁缺毋滥；最多 3 项；没有值得改的就输出空 items\n"
-    "- 不提供买卖建议，不改风控/资金/推送相关任何东西"
+    "- 不提供买卖建议，不改风控/资金/推送相关任何东西\n"
+    "- 裁决复盘改进项时遵循 docs/kb/06-review-framework.md（复盘执行框架 v1.0）："
+    "结论须挂数据、规律须可证伪（量化触发条件+适用边界+验证状态）、"
+    "与既有 KB 条目冲突须显式标注而非静默覆盖；证据不足宁可 deferred 也不编造"
 )
 
 
@@ -538,7 +708,9 @@ async def generate_agenda(session_factory=None) -> dict:
             )
 
         raw = await _llm_call(_call)
-        items = _parse_items(raw)
+        # 确定性追加：数据健康 NG 不依赖 LLM 是否注意到（见 _data_health_items）。
+        # 放在 _parse_items 之后 ⇒ 不占 LLM 的 3 项上限；至多 1 条。
+        items = _parse_items(raw) + _data_health_items(inputs.get("data_health") or {})
         with sf() as db:
             row = db.get(AgentAgenda, agenda_id)
             row.inputs = json.dumps(inputs, ensure_ascii=False, default=str)
@@ -684,6 +856,12 @@ def execute_agenda(agenda: dict, session_factory=None) -> dict:
     executed = 0
     for item in agenda.get("items") or []:
         cls = item.get("class")
+        if item.get("origin") == DATA_HEALTH_ORIGIN:
+            # 系统异常留痕**不占自治任务预算**：它是"记账"不是"自治行动"。
+            # 若被预算挤掉（LLM 条目用满 3 项时必然发生），异常就又变回"没人知道"
+            # ——正是本项存在的理由。执行体复用 B 类（docs/evolution/ 白名单，零副作用）。
+            items.append(_execute_b(item, agenda.get("date") or ""))
+            continue
         if cls == "C":
             from app.services import code_executor
 
@@ -711,6 +889,9 @@ def execute_agenda(agenda: dict, session_factory=None) -> dict:
         if new["status"] == "executed":
             executed += 1
 
+    # 兜底：无对应议程行（或库不可用）时返回**本次执行结果**本身，
+    # 否则 `row is None` 会让 out 未绑定（UnboundLocalError）而丢掉执行回执。
+    out: dict = {**agenda, "items": items}
     with sf() as db:
         row = db.execute(select(AgentAgenda).where(AgentAgenda.date == agenda["date"])).scalars().first()
         if row is not None:
@@ -807,11 +988,15 @@ async def evolution_scheduler(app, stop: asyncio.Event, *, run_hour: int, run_mi
     conclude_due 幂等（只处理 running 且到期的），节流靠 _last_conclude_date。
     """
     global _LAST_CONCLUDE_DATE, _LAST_SHADOW_DATE, _LAST_META_WEEK
-    log.info("evolution scheduler started: daily at %02d:%02d", run_hour, run_minute)
+    # WARNING 而非 INFO：app logger 级别为 WARNING，INFO 不落盘（KB-ENG-18）——
+    # 调度器是否存活只能靠这条日志 + scheduler_status() liveness 面取证
+    log.warning("evolution scheduler started: daily at %02d:%02d", run_hour, run_minute)
     while not stop.is_set():
         try:
             now = beijing_now()
             today = now.date()
+            _SCHED_LAST_TICK["at"] = now.isoformat(timespec="seconds")
+            _SCHED_LAST_TICK["date"] = today.isoformat()
             # 每日一次：到期实验裁决（劣化自动回滚）
             if _LAST_CONCLUDE_DATE != today.isoformat() and now.hour >= 16:
                 with contextlib.suppress(Exception):
@@ -839,9 +1024,16 @@ async def evolution_scheduler(app, stop: asyncio.Event, *, run_hour: int, run_mi
                 if tc.last_trade_date(days, asof=today) == today:
                     existing = get_agenda(today.isoformat())
                     if existing is None or existing["status"] == "failed":
+                        log.warning("[EVOLUTION] %s 15:45 窗口触发：开始生成议程", today)
                         agenda = await run_evolution_now()
                         log.warning("[EVOLUTION] %s 议程完成：status=%s items=%d",
                                     today, agenda.get("status"), len(agenda.get("items") or []))
+                    else:
+                        _log_skip_once(today.isoformat(), "agenda-exists",
+                                       f"今日议程已存在（status={existing['status']}）")
+                else:
+                    _log_skip_once(today.isoformat(), "not-trade-day",
+                                   f"非交易日（last_trade_date={tc.last_trade_date(days, asof=today)}）")
                     # 元评估周报（P2-①）：周五盘后 agenda 之后自动生成（幂等：一周一份）
                     if now.weekday() == 4 and _LAST_META_WEEK != today.isocalendar()[:2]:
                         with contextlib.suppress(Exception):
@@ -853,11 +1045,48 @@ async def evolution_scheduler(app, stop: asyncio.Event, *, run_hour: int, run_mi
         except Exception:
             log.exception("evolution scheduler tick failed")
         with contextlib.suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(stop.wait(), timeout=max(60.0, check_interval_seconds))
+            await asyncio.wait_for(stop.wait(),
+                                   timeout=max(_MIN_TICK_INTERVAL_SEC, check_interval_seconds))
 
 
 _LAST_CONCLUDE_DATE: str = ""
+_LAST_SHADOW_DATE: str = ""  # 2026-09-09 P0：被 global 声明/读写却从未定义 → 每 tick NameError，
+# 议程生成代码（在它之后）永远走不到 → 15:45 议程静默不触发的根因
 _LAST_META_WEEK: tuple = ()  # (ISO 年, 周)——元评估周报进程内幂等（文件存在性兜底）
+
+# 调度器 liveness 面（进程内）：每个 tick 刷新，经 scheduler_status() 暴露给
+# /api/agent/agenda meta——"调度停摆比缺日志更危险"（同指标库停更哨兵哲学）。
+_SCHED_LAST_TICK: dict = {"at": "", "date": ""}
+# 跳过原因按 (日期, 桶) 去重：60s 一 tick，不节流会每分钟刷屏
+_SKIP_LOGGED: set = set()
+
+
+def _log_skip_once(day: str, bucket: str, detail: str) -> None:
+    key = f"{day}:{bucket}"
+    if key in _SKIP_LOGGED:
+        return
+    _SKIP_LOGGED.add(key)
+    log.warning("[EVOLUTION] %s 议程跳过：%s", day, detail)
+
+
+def scheduler_status() -> dict:
+    """调度器存活状态（供 /api/agent/agenda meta 与哨兵消费）。
+
+    last_tick_age_sec 持续 > 2×tick 周期（120s）即视为调度停摆。
+    """
+    now = beijing_now()
+    last = _SCHED_LAST_TICK.get("at") or ""
+    age: int | None = None
+    if last:
+        try:
+            age = round((now - datetime.fromisoformat(last)).total_seconds())
+        except ValueError:  # pragma: no cover - 格式异常按未知处理
+            age = None
+    return {"last_tick_at": last, "last_tick_age_sec": age, "expected_interval_sec": 60}
+
+
+#: tick 最小等待（秒）。生产恒为 60s；测试注入小值以驱动时钟跨越窗口。
+_MIN_TICK_INTERVAL_SEC = 60.0
 
 
 def prune_old_snapshots(days: int = 90, *, dry_run: bool = True) -> dict:

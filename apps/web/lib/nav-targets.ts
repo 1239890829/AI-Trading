@@ -31,7 +31,7 @@ export const NAV_TARGETS = {
   stock_kline: (symbol: string) => `${workbenchUrl(symbol)}&ct=kline`,
   stock_minute: (symbol: string) => `${workbenchUrl(symbol)}&ct=minute`,
   stock_flow: (symbol: string) => `${workbenchUrl(symbol)}&ct=flow`,
-  // 右栏 tab（rt 与 RightTab 同域：book|trades|trade|real|profile|info|speed|boards）
+  // 右栏 tab（rt 与 RightTab 同域：book|trades|trade|real|profile|info|speed|boards|dt）
   stock_trades: (symbol: string) => `${workbenchUrl(symbol)}&rt=trades`,
   stock_profile: (symbol: string) => `${workbenchUrl(symbol)}&rt=profile`,
   stock_info: (symbol: string) => `${workbenchUrl(symbol)}&rt=info`,

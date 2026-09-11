@@ -294,7 +294,7 @@ class EastmoneyProvider:
 
     # ---- 板块（概念/行业）行情与资金 ----
     # get_board_metrics 已删除（2026-09-07 健康度审查 P0-1）：板块级数据统一
-    # 走 app/market/board_flow.get_board_list 唯一入口（fund-flow-redesign.md
+    # 走 app/market/board_flow.get_board_list 唯一入口（summary/architecture-design.md §2
     # 硬规则），f109/f110/f160 等字段序推断涨跌幅随之弃用（P1-6 已实证不可信）。
     # 注意：push2 主域在本机被 WAF 拦截（空回复），只有 push2delay 延迟域可用。
 
@@ -438,6 +438,15 @@ class EastmoneyProvider:
                 # boards 保留全量混合标签（不丢数据），board_groups 提供 行业/地域/概念/风格指数 分类
                 profile["boards"] = [b.get("BOARD_NAME") for b in ssbk_rows]
                 profile["board_groups"] = nz.classify_boards(ssbk_rows)
+                # 板块名 → 东财板块代码：调用方（P1-4 所属板块资金）按 code 直取，免名字匹配
+                # 歧义（行业三级名带罗马数字后缀，如「白酒Ⅱ」vs 板块榜的「白酒」）。
+                # ⚠️ F10 ssbk 的 BOARD_CODE 是**纯数字 ID**（茅台白酒Ⅱ=1277、平安银行Ⅱ=475），
+                # 板块榜是 `BK`+**4 位补零**（BK1277 / BK0475）——2026-09-10 逐项实测确认。
+                profile["board_codes"] = {
+                    str(b.get("BOARD_NAME")): nz.board_code_norm(b.get("BOARD_CODE"))
+                    for b in ssbk_rows
+                    if b.get("BOARD_NAME") and b.get("BOARD_CODE")
+                }
                 profile["core_themes"] = [t for t in (x.get("KEY_THEME") or x.get("BOARD_NAME") for x in cc_data.get("hxtc") or []) if t]
         except Exception as exc:
             log.warning("conception fetch failed for %s: %s", symbol, exc)

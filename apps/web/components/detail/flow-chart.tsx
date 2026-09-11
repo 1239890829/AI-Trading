@@ -26,12 +26,12 @@ export function FlowChart({ flow }: { flow: CapitalFlow }) {
       <div className="flex min-w-0 flex-col border-r border-zinc-200 px-3 py-2 dark:border-zinc-800">
         {/* 图名与时间口径做成图内灰标签：原挂在 Panel 头部占一整行（约 41px），
             移入后纵向空间还给柱状图（2026-09-02 用户选方案 2） */}
-        <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-400">
-          <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+        <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-600 dark:text-zinc-400">
+          <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
             主力资金净流入 · 近 {flow.days} 日
           </span>
           <span>
-            连续净流入 <span className="font-mono text-sm text-zinc-100">{flow.streak_in}</span> 天
+            连续净流入 <span className="font-mono text-sm text-zinc-900 dark:text-zinc-100">{flow.streak_in}</span> 天
           </span>
           <span title={flow.definition}>口径说明 ⓘ</span>
         </div>
@@ -48,12 +48,12 @@ export function FlowChart({ flow }: { flow: CapitalFlow }) {
             );
           })}
         </div>
-        <div className="shrink-0 border-t border-zinc-100 pt-1 text-[10px] text-zinc-500 dark:border-zinc-800/60">{flow.definition}</div>
+        <div className="shrink-0 border-t border-zinc-100 pt-1 text-[10px] text-zinc-600 dark:text-zinc-400 dark:border-zinc-800/60">{flow.definition}</div>
       </div>
       {/* 右：明细表 */}
       <div className="min-h-0 overflow-auto">
         <table className="w-full text-sm">
-          <thead className="sticky top-0 bg-zinc-50 text-left text-xs text-zinc-400 dark:bg-zinc-900/50">
+          <thead className="sticky top-0 bg-zinc-50 text-left text-xs text-zinc-600 dark:text-zinc-400 dark:bg-zinc-900/50">
             <tr>{["日期", "主力净流入", "超大单", "大单", "中单", "小单"].map((h) => (
               <th key={h} className={`px-3 py-2 font-medium ${h === "日期" ? "" : "text-right"}`}>{h}</th>
             ))}</tr>
@@ -62,9 +62,9 @@ export function FlowChart({ flow }: { flow: CapitalFlow }) {
             {[...flow.flow].reverse().map((r) => (
               <tr key={r.date} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
                 <td className="px-3 py-1.5 font-mono text-xs">{r.date}</td>
-                <td className={`px-2 py-1.5 text-right font-mono text-xs ${(r.net_main ?? 0) > 0 ? "text-up" : "text-down"}`}>{fmtAmount(r.net_main)}</td>
+                <td className={`px-2 py-1.5 text-right font-mono text-xs ${(r.net_main ?? 0) > 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}`}>{fmtAmount(r.net_main)}</td>
                 {[r.net_super, r.net_big, r.net_mid, r.net_small].map((v, j) => (
-                  <td key={j} className={`px-3 py-1.5 text-right font-mono text-xs ${(v ?? 0) > 0 ? "text-up" : "text-down"}`}>{fmtAmount(v)}</td>
+                  <td key={j} className={`px-3 py-1.5 text-right font-mono text-xs ${(v ?? 0) > 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}`}>{fmtAmount(v)}</td>
                 ))}
               </tr>
             ))}

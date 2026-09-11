@@ -109,6 +109,10 @@ class AgentParamChange(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     applied_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     rolled_back_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    #: 回滚归因（2026-09-10 P1-15）：JSON `{"code": ..., "note": ...}`。
+    #: 只记"回滚了"而不记"为什么回滚"，存活率就只是个数字——无法回答
+    #: "这批变更为什么活不下来"（是实验测到劣化，还是当初判断就错了）。
+    rollback_reason: Mapped[str | None] = mapped_column(Text, default=None)
 
 
 class AgentAgenda(Base):

@@ -5,7 +5,7 @@ fixture 为 2026-08-29 实抓的贵州茅台 CoreConception/PageAjax ssbk 数据
 """
 from __future__ import annotations
 
-from app.market.normalizer import classify_boards
+from app.market.normalizer import board_code_norm, classify_boards, main_board
 
 SSBK_MAOTAI = [
     {"BOARD_CODE": "438", "BOARD_NAME": "食品饮料", "BOARD_RANK": 1, "IS_PRECISE": "0"},
@@ -126,3 +126,72 @@ def test_classify_boards_tolerates_bad_rank():
     rows = [{"BOARD_NAME": "某某概念", "BOARD_RANK": "N/A", "IS_PRECISE": "1"}]
     g = classify_boards(rows)
     assert g["concept"] == ["某某概念"]
+
+
+# ---------------------------------------------------------------- 主板块选取（P1-4，2026-09-10）
+
+
+def _codes(rows):
+    return {r["BOARD_NAME"]: r["BOARD_CODE"] for r in rows}
+
+
+def test_main_board_prefers_industry_l2():
+    """主板块 = 行业三级 L2（茅台→白酒Ⅱ），**不是**概念段首个。"""
+    groups = classify_boards(SSBK_MAOTAI)
+    mb = main_board(groups, _codes(SSBK_MAOTAI))
+    # code 已由 main_board 规范化成板块榜格式（F10 原始值是纯数字 1277）
+    assert mb == {"name": "白酒Ⅱ", "code": "BK1277", "level": "industry"}
+    # 反例固化：概念段起点是「味蕾经济」（ssbk 里首个 IS_PRECISE='1'），
+    # 语义上不是主板块——这正是本函数存在的理由（初版取 concept[0] 实测不成立）。
+    assert groups["concept"][0] == "味蕾经济"
+
+
+def test_main_board_falls_back_when_no_l2():
+    """行业段只有一级 → 取该一级；不因为缺 L2 就跳到概念。"""
+    groups = {"industry": ["银行"], "concept": ["跨境支付"], "region": [], "style_index": []}
+    assert main_board(groups, {"银行": "475"}) == {"name": "银行", "code": "BK0475", "level": "industry"}
+
+
+def test_main_board_concept_fallback_is_level_labelled():
+    """无行业段才回落概念首个，且 level 如实标 concept（不冒充行业）。"""
+    groups = {"industry": [], "concept": ["跨境支付", "区块链"], "region": [], "style_index": []}
+    assert main_board(groups, {"跨境支付": "1071"}) == {
+        "name": "跨境支付", "code": "BK1071", "level": "concept",
+    }
+
+
+def test_main_board_empty_is_none_not_fabricated():
+    """四组全空 → None（三态：判不出就是判不出，绝不臆造一个板块）。"""
+    assert main_board({}, {}) is None
+    assert main_board({"industry": [], "concept": [], "region": ["广东板块"]}, {}) is None
+    assert main_board(None, None) is None
+
+
+def test_main_board_missing_code_is_none_field():
+    """名字有但拿不到代码 → code=None，不臆造代码（下游按缺省跳过）。"""
+    groups = {"industry": ["食品饮料", "白酒Ⅱ"], "concept": [], "region": [], "style_index": []}
+    assert main_board(groups, {}) == {"name": "白酒Ⅱ", "code": None, "level": "industry"}
+
+
+# ---------------------------------------------------------------- 板块代码规范化（P1-4）
+
+
+def test_board_code_norm_pads_to_four_digits():
+    """F10 纯数字 ID → 板块榜 `BK`+4 位补零（实测：白酒Ⅱ 1277→BK1277、银行Ⅱ 475→BK0475）。"""
+    assert board_code_norm("1277") == "BK1277"
+    assert board_code_norm("475") == "BK0475"   # 不补零会 miss（榜里是 BK0475）
+    assert board_code_norm(438) == "BK0438"     # 容忍 int 入参
+
+
+def test_board_code_norm_passthrough_and_empty():
+    assert board_code_norm("BK1033") == "BK1033"  # 已是榜格式 → 原样
+    assert board_code_norm(None) is None
+    assert board_code_norm("") is None
+    assert board_code_norm("X") == "X"            # 非数字非 BK → 原样交给下游匹配
+
+
+def test_main_board_code_round_trips_through_norm():
+    """端到端一致性：F10 取出的主板块代码规范化后，能在板块榜里按 code 命中。"""
+    groups = classify_boards(SSBK_MAOTAI)
+    mb = main_board(groups, _codes(SSBK_MAOTAI))
+    assert mb["code"] == board_code_norm(mb["code"]) == "BK1277"  # 幂等：内部已规范化

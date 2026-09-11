@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta, timezone
+
+import duckdb
 import pytest
 
+from app.market import trade_calendar as tc
 from app.market.chip import ChipService, simulate_chip_distribution
+
+_MS_DAY = 86_400_000
+_BJ = timezone(timedelta(hours=8))
 
 
 def _row(day: int, low: float, high: float, close: float, vol: float, turnover: float) -> dict:
@@ -93,3 +100,42 @@ class TestChipService:
     def test_bare_symbol_suffix_tolerated(self, tmp_path):
         svc = ChipService(db_path=tmp_path / "nope.duckdb")
         assert svc.distribution("000910.SZ")["available"] is False  # 同样显式降级不炸
+
+    def test_stale_db_explicit_degrade_with_stale_days(self, tmp_path):
+        """回归（P0-7）：仓存在但内容陈旧 → available=False 且带 stale_days。
+
+        真实事故：marketdb 停在 2026-09-03（下游同步从未启动），chip 只判
+        「仓在不在」→ 拿 6 个交易日前的日K 算出筹码形态当今日形态用。
+        """
+        _mk_daily_k(tmp_path, tail=date(2025, 3, 3), n=30)
+        svc = ChipService(db_path=tmp_path / "market.duckdb")
+        out = svc.distribution("600519")
+        assert out["available"] is False
+        assert "数据陈旧" in out["reason"] and "sync_marketdb.py" in out["reason"]
+        assert out["stale_days"] > 3 and out["latest"] == "2025-03-03"
+
+    def test_fresh_db_serves_distribution(self, tmp_path):
+        """反证：锚到最近交易日 → 同一库正常出形态（降级只因陈旧，不是因为功能坏了）。"""
+        days = tc._load_persisted() or []
+        anchor = days[-1] if days else date.today()
+        _mk_daily_k(tmp_path, tail=anchor, n=30)
+        svc = ChipService(db_path=tmp_path / "market.duckdb")
+        out = svc.distribution("600519")
+        assert out["available"] is True and out["bars"] >= 5
+        assert out.get("stale_days") is None
+
+
+def _mk_daily_k(tmp_path, *, tail: date, n: int) -> None:
+    """造 daily_k 小库：n 根日K，最后一根为 tail（上海零点毫秒，与仓内口径一致）。"""
+    db = tmp_path / "market.duckdb"
+    con = duckdb.connect(str(db))
+    con.execute("""CREATE TABLE daily_k (
+        thscode VARCHAR, date_ms BIGINT, open_price DOUBLE, high_price DOUBLE,
+        low_price DOUBLE, close_price DOUBLE, volume DOUBLE, turnover DOUBLE)""")
+    ms = int(datetime(tail.year, tail.month, tail.day, tzinfo=_BJ).timestamp() * 1000)
+    con.executemany(
+        "INSERT INTO daily_k VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [("600519.SH", ms - (n - 1 - i) * _MS_DAY, 10.0, 10.2, 9.9, 10.1, 1_000_000, 10_100_000)
+         for i in range(n)],
+    )
+    con.close()

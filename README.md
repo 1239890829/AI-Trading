@@ -29,7 +29,7 @@ cd backend && pytest
 
 ## 阶段路线图（对应 docs 与 full.md §23）
 
-> 待办明细账本：`docs/retro-and-gaps.md`（唯一明细）；阶段复盘见 `docs/plan-review.md`。
+> 待办明细账本：`docs/retro-and-gaps.md`（唯一明细）；阶段复盘见 `docs/archive/plan-review.md`（已归档，只读）。
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
@@ -68,10 +68,10 @@ backend/app     FastAPI（api / core / models / repositories / services / data_p
                 data_quality / websocket / market / paper / review / predict / schemas / migrations）
 backend/tests   pytest 329 例（防泄露回测/迁移三态/情绪序列/选股器/复盘/预判/鉴权…）
 data/           SQLite 业务库 + parquet 快照与分时 + trade_calendar.json 日历兜底
-docs/           14 篇文档（architecture / data-sources / data-source-comparison / api / websocket /
-                backtest-rules / longhu / sentiment / sentiment-phase-review / review-agent /
-                theme-prediction / risk-management / mcp / deployment / retro-and-gaps 等）
-skills/         仓库随行技能（hithink-finance / impeccable / design-taste / gsap-skills 等）
+docs/          文档：INDEX（总入口）/ kb（知识库）/ summary（主题汇总）/ 现役规范 + archive 归档
+                （已完成方案的精华进 summary 后原件即删，见 docs/kb/07-doc-curation.md）
+skills/         仓库随行技能：design-taste（**唯一权威视觉规范**，三源合成）/ hithink-finance
+                （API 契约查询）；其余（含残缺的 impeccable v4.1.2 副本）已归档 _archived/
 .github/workflows  CI（pytest/pyflakes + tsc/vitest/ESLint 四门禁）
 ```
 
@@ -82,7 +82,7 @@ skills/         仓库随行技能（hithink-finance / impeccable / design-taste
 - 数据源实测口径（含限流与降级）：[docs/data-sources.md](docs/data-sources.md) · 四源对比 [docs/data-source-comparison.md](docs/data-source-comparison.md)
 - 回测强制禁令（代码级）：[docs/backtest-rules.md](docs/backtest-rules.md)
 - 复盘 Agent：[docs/review-agent.md](docs/review-agent.md) · 新题材预判：[docs/theme-prediction.md](docs/theme-prediction.md)
-- 情绪判定与误判复盘：[docs/sentiment-phase-review.md](docs/sentiment-phase-review.md)
-- 欠缺清单（待办池）：[docs/retro-and-gaps.md](docs/retro-and-gaps.md)
-- 其余：api / websocket / longhu / sentiment / risk-management / mcp / deployment
-- UI/产品规划 v3（终端范式布局/持仓与自选分立/行情等级边界）：docs/ui-redesign-plan.md
+- 情绪判定与误判复盘：[docs/sentiment.md](docs/sentiment.md)（含「历史误判案例库」）
+- 欠缺清单（**唯一待办总账**）：[docs/retro-and-gaps.md](docs/retro-and-gaps.md) §六
+- 文档总入口：[docs/INDEX.md](docs/INDEX.md) · 计划去向：[docs/plan-registry.md](docs/plan-registry.md)
+- 其余：api / websocket / data-dictionary / risk-management / mcp / deployment

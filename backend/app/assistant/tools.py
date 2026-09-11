@@ -19,19 +19,22 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from app.core.ttl_cache import TTLCache
 
 log = logging.getLogger(__name__)
 
-MAX_CALLS_PER_TURN = 2
-MAX_ROWS = 20          # 单个工具最多渲染多少行
-MAX_CHARS = 1500       # 单个工具输出字符上限（防撑爆提示词）
+MAX_CALLS_PER_TURN = 4   # 单轮工具调用上限（2026-09-11：2 → 4）
+MAX_TOOL_ROUNDS = 2      # 取数后可再取一轮（多跳追问，如先看异动再查公告），防死循环
+MAX_ROWS = 20            # 单个工具最多渲染多少行
+MAX_CHARS = 1500         # 单个工具输出字符上限（防撑爆提示词）
 MAX_SYMBOLS = 6
 
 TOOL_CACHE = TTLCache("assistant.tools", ttl=60.0, maxsize=64)
@@ -39,6 +42,11 @@ TOOL_CACHE = TTLCache("assistant.tools", ttl=60.0, maxsize=64)
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _TOOL_RE = re.compile(r"\{\{tool:([a-z_]+)((?:\|[^\{\}]*)*)\}\}")
 _SYM_RE = re.compile(r"^\d{6}$")
+# 指数必须带市场前缀（项目纪律：裸代码=股票，指数须写 sh000001），
+# 与 QuoteHub.get_quotes 的兜底规则一致。
+_INDEX_RE = re.compile(r"^(sh|sz|bj)\d{6}$")
+
+TIMEFRAMES: tuple[str, ...] = ("1d", "1w", "60m", "30m", "15m", "5m", "1m")
 
 
 # ---------------------------------------------------------------- 解析
@@ -92,14 +100,27 @@ def has_partial_tool_call(text: str) -> bool:
 
 # ---------------------------------------------------------------- 校验
 
-def _valid_symbols(raw: str, known: set[str] | None) -> tuple[list[str], str | None]:
+def _valid_symbols(
+    raw: str,
+    known: set[str] | None,
+    max_symbols: int = MAX_SYMBOLS,
+    allow_index: bool = False,
+) -> tuple[list[str], str | None]:
+    """解析标的列表。
+
+    `allow_index=True` 时额外接受带市场前缀的指数（sh000001），且**不做实体词典校验**
+    ——指数不在股票词典里，用它去卡会把「问大盘」直接判成非法参数。
+    """
     parts = [p.strip() for p in re.split(r"[,，、;\s]+", raw or "") if p.strip()]
     if not parts:
         return [], "symbols 为空"
-    if len(parts) > MAX_SYMBOLS:
-        parts = parts[:MAX_SYMBOLS]
+    if len(parts) > max_symbols:
+        parts = parts[:max_symbols]
     codes: list[str] = []
     for p in parts:
+        if allow_index and _INDEX_RE.match(p.strip().lower()):
+            codes.append(p.strip().lower())
+            continue
         # 允许带市场后缀（600519.SH / SH600519），只取 6 位数字
         digits = re.sub(r"\D", "", p)
         if not _SYM_RE.match(digits):
@@ -181,6 +202,10 @@ class ToolContext:
     session_factory: Any = None      # 复盘报告读取
     known_symbols: set[str] = field(default_factory=set)   # 实体词典代码集
     trading_days: set[str] = field(default_factory=set)     # 交易日集合（字符串）
+    hub: Any = None                  # QuoteHub：指数快照（市场概览工具）
+    snapshot_service: Any = None     # 全市场快照服务：涨跌家数/成交额（市场概览工具）
+    paper_engine: Any = None         # 模拟交易引擎（模拟账户工具）
+    event_store: Any = None          # 事件库：全网快讯/资讯流（news 工具）
 
 
 def _latest_trade_day(ctx: ToolContext) -> date:
@@ -211,9 +236,40 @@ def _resolve_date(ctx: ToolContext, raw: str | None) -> tuple[date, str | None]:
 
 # ---- handlers ------------------------------------------------------------
 
+def _fmt_yi(v: Any, unit: str = "元") -> str:
+    """金额自适应单位（与前端 lib/format.ts::fmtAmount 同口径）。None → —。"""
+    if v is None:
+        return "—"
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return "—"
+    if abs(v) >= 1e8:
+        return f"{v / 1e8:.2f} 亿"
+    if abs(v) >= 1e4:
+        return f"{v / 1e4:.0f} 万"
+    return f"{v:.0f}{unit}" if unit else f"{v:.0f}"
+
+
+def _int_arg(raw: Any, default: int, lo: int, hi: int) -> int:
+    """工具参数取整并夹到 [lo, hi]；脏值退回默认值（工具是增强层，不为参数报错）。"""
+    try:
+        v = int(str(raw).strip()) if raw not in (None, "") else default
+    except (TypeError, ValueError):
+        v = default
+    return max(lo, min(v, hi))
+
+
+def _one_symbol(ctx: ToolContext, raw: str, field: str = "symbol") -> tuple[str | None, str | None]:
+    codes, e = _valid_symbols(raw, ctx.known_symbols or None, max_symbols=1)
+    if e:
+        return None, f"{field} 不合法：{e}"
+    return codes[0], None
+
+
 async def _t_quotes(ctx: ToolContext, **kw) -> str:
     raw = kw.get("symbols", "")
-    codes, e = _valid_symbols(raw, ctx.known_symbols or None)
+    codes, e = _valid_symbols(raw, ctx.known_symbols or None, allow_index=True)
     if e:
         return f"参数不合法：{e}"
     quotes = await ctx.provider.get_quotes(codes)
@@ -258,6 +314,18 @@ async def _t_limit_break(ctx: ToolContext, **kw) -> str:
 
 
 async def _t_longhu(ctx: ToolContext, **kw) -> str:
+    """龙虎榜：默认当日全市场榜；给 `symbols` 则转个股维度（席位明细 + 上榜历史表现）。
+
+    个股维度（2026-09-11 补）解决的是「我持仓/关注的这只票有没有上龙虎榜、谁在买」——
+    此前只有全市场榜，助手被问个股龙虎榜时只能答"我没有"，而系统里明明有
+    `GET /api/longhu/{symbol}`。
+    """
+    syms = (kw.get("symbols") or "").strip()
+    if syms:
+        code, e = _one_symbol(ctx, syms, "symbols")
+        if e:
+            return f"参数不合法：{e}"
+        return await _longhu_stock(ctx, code, kw.get("date"))
     d, e = _resolve_date(ctx, kw.get("date"))
     if e:
         return f"参数不合法：{e}"
@@ -266,6 +334,54 @@ async def _t_longhu(ctx: ToolContext, **kw) -> str:
         ("name", ""), ("symbol", ""), ("net_buy", "净买"),
         ("change_pct", "涨幅"), ("reason", "原因"),
     ], total=len(rows))
+
+
+async def _longhu_stock(ctx: ToolContext, code: str, raw_date: str | None) -> str:
+    d, e = _resolve_date(ctx, raw_date)
+    if e:
+        return f"参数不合法：{e}"
+    try:
+        detail = _rec(await ctx.provider.get_longhu_detail(code, d))
+    except Exception as exc:  # noqa: BLE001  东财未上榜会抛 ProviderError，属正常空态
+        detail = {}
+        log.info("longhu_detail %s %s: %s", code, d, exc)
+    buys = [_rec(x) for x in (detail.get("buy_seats") or [])]
+    sells = [_rec(x) for x in (detail.get("sell_seats") or [])]
+
+    lines = [f"【{code} 龙虎榜席位 {d}（东财口径）】"]
+    if not buys and not sells:
+        lines.append(f"- {d} 无席位记录（该日未上榜，或数据源尚未更新当日榜）")
+    for s in buys[:5]:
+        lines.append(
+            f"- 买 {s.get('seat') or '—'}（{s.get('seat_type') or '—'}）："
+            f"买入 {_fmt_yi(s.get('buy'))}，卖出 {_fmt_yi(s.get('sell'))}，净额 {_fmt_yi(s.get('net'))}"
+        )
+    for s in sells[:5]:
+        lines.append(
+            f"- 卖 {s.get('seat') or '—'}（{s.get('seat_type') or '—'}）："
+            f"买入 {_fmt_yi(s.get('buy'))}，卖出 {_fmt_yi(s.get('sell'))}，净额 {_fmt_yi(s.get('net'))}"
+        )
+
+    try:
+        history = [_rec(h) for h in (await ctx.provider.get_longhu_history(code)) or []]
+    except Exception as exc:  # noqa: BLE001
+        history = []
+        log.info("longhu_history %s: %s", code, exc)
+    if history:
+        win = [h for h in history if h.get("after_5d") is not None]
+        lines.append(f"- 上榜历史 {len(history)} 次，最近 5 次：")
+        for h in history[:5]:
+            lines.append(
+                f"  · {h.get('trade_date')}：涨跌 {h.get('change_pct')}%"
+                f"，净买 {_fmt_yi(h.get('net_buy'))}"
+                f"，T+5 {h.get('after_5d')}%"
+            )
+        if win:
+            avg = sum(h["after_5d"] for h in win) / len(win)  # type: ignore[arg-type]
+            rate = sum(1 for h in win if (h["after_5d"] or 0) > 0) / len(win)
+            lines.append(f"- 历史 T+5 均值 {avg:+.2f}%，胜率 {rate:.0%}（样本 {len(win)} 次）")
+    lines.append("- 口径：同一日可能同时披露日榜与三日榜（区间不同，不可相加）。")
+    return _clip("\n".join(lines))
 
 
 async def _t_boards(ctx: ToolContext, **kw) -> str:
@@ -516,12 +632,606 @@ async def _t_events(ctx: ToolContext, **kw) -> str:
     return _clip("\n".join(lines))
 
 
+async def _t_board_flow(ctx: ToolContext, **kw) -> str:
+    """板块主力资金排行（P1-3）：助手可答「今天资金在堆哪个方向」。
+
+    口径 = 东财官方板块 f62 主力净额（`board_flow.get_board_fund_flow`，与市场页
+    「资金」tab 同一入口）。板块/个股/新浪口径**不混算**（数据源纪律）；取不到
+    如实说明，绝不编造数值。
+    """
+    kind = (kw.get("kind") or "concept").strip() or "concept"
+    rng = (kw.get("range") or "intraday").strip() or "intraday"
+    if kind not in ("concept", "industry"):
+        return f"工具参数错误：kind 只支持 concept|industry，收到 {kind!r}"
+    if rng not in ("intraday", "5d", "10d"):
+        return f"工具参数错误：range 只支持 intraday|5d|10d，收到 {rng!r}"
+    from app.market.board_flow import get_board_fund_flow
+
+    try:
+        payload = await get_board_fund_flow(kind, rng)
+    except Exception as exc:  # noqa: BLE001  取不到如实说，不编造
+        log.warning("board_flow tool failed: %s", exc)
+        return "板块资金流取数失败（上游不可达）——请如实说明取不到，不要编造数值"
+    rows = (payload or {}).get("rows") or []
+    if not payload or not payload.get("available") or not rows:
+        return f"板块资金流暂不可用（kind={kind} range={rng}）——如实说明无数据即可"
+    label = {"concept": "概念板块", "industry": "行业板块"}[kind]
+    span = {"intraday": "当日", "5d": "近 5 日", "10d": "近 10 日"}[rng]
+    lines = [f"【{label}主力净额排行（{span}，东财 f62 口径，Top10）】"]
+    for r in rows[:10]:
+        net = r.get("main_net_yi")
+        pct = r.get("change_pct")
+        extra = ""
+        if rng == "intraday":
+            streak = r.get("streak")
+            if streak:
+                extra += f"｜连续 {streak} 日净流入"
+            delta = r.get("rank_delta")
+            if delta:
+                extra += f"｜榜位{'↑' if delta > 0 else '↓'}{abs(delta)}"
+        lines.append(
+            f"- {r.get('name', '—')}：净额 "
+            f"{f'{net:.2f} 亿' if net is not None else '--'}"
+            f"｜涨幅 {f'{pct:+.2f}%' if pct is not None else '--'}{extra}"
+        )
+    deg = payload.get("degraded") or []
+    if deg:
+        lines.append(f"- 口径说明：{'；'.join(deg)}")
+    lines.append(f"- 数据时间 {payload.get('updated_at') or '—'}；供参考，不构成买卖建议")
+    return _clip("\n".join(lines))
+
+
+async def _t_commodity(ctx: ToolContext, **kw) -> str:
+    """大宗商品异动 → 板块传导线索（P1-33，2026-09-11）。
+
+    ⚠️ **输出里必须保留「时点结构」声明**（`commodity_chain.TIMING_NOTE`）：
+    实测隔夜口径不成立（分组差 t 多在 ±2 内、原油为负），商品**无领先性**。
+    助手引用本工具时**不得**把它转述成「明天某板块会涨」（红线 3）。
+    """
+    from app.market.commodity_chain import collect as _collect_commodity
+
+    try:
+        payload = await _collect_commodity()
+    except Exception as exc:  # noqa: BLE001  取不到如实说，不编造
+        log.warning("commodity tool failed: %s", exc)
+        return "大宗商品行情取数失败（上游不可达）——请如实说明取不到，不要编造数值"
+    if not payload:
+        return "大宗商品行情暂不可用（全部来源不可达）——如实说明无数据即可"
+
+    kw_raw = (kw.get("keyword") or "").strip()
+    rows = payload.get("rows") or []
+    if kw_raw:
+        hit = [r for r in rows if kw_raw in r.get("label", "") or kw_raw in r.get("sw_name", "")]
+        if not hit:
+            names = "、".join(r.get("label", "") for r in rows)
+            return f"未找到匹配「{kw_raw}」的商品/行业（可选：{names}）"
+        rows = hit
+
+    lines = ["【大宗商品异动 → 板块传导线索（一阶价格，新浪主连）】"]
+    for r in rows:
+        if r.get("skip_reason"):
+            lines.append(f"- {r['label']}（{r['sw_name']}）：{r['skip_reason']}")
+            continue
+        head = (f"- {r['label']}（{r['sw_name']}）{r['date']}："
+                f"{r['change']:+.2f}%（{r['zone']}，死区 ±{r['dead_zone']}%）")
+        # ⚠️ mid_signal 与 mid_edge 必须**同时**成立才可进入格式化分支：
+        #    只判 mid_signal 会让「半填充行」把整条工具崩成"参数不合法"（误导性错误，
+        #    实测由 test_commodity_tool_always_carries_timing_note 逼出）。
+        edge, edge_t, edge_n = r.get("mid_edge"), r.get("mid_t"), r.get("mid_n")
+        if r.get("mid_signal") and edge is not None:
+            head += (f"｜**中期线索**：历史上该异动对应 {r['sw_name']} 中期"
+                     f"（约 5 日）超额 {edge:+.3f}pp（t={edge_t}，n={edge_n}）")
+        elif r.get("mid_verified"):
+            head += "｜中期线索：本次无异动（死区内）"
+        else:
+            head += "｜中期线索：该链未通过实证，不给板块含义"
+        lines.append(head)
+
+    lines.append(f"- 时点结构（重要）：{payload.get('timing_note')}")
+    lines.append(f"- 数据时间 {payload.get('as_of') or '—'}；{payload.get('disclaimer')}")
+    return _clip("\n".join(lines))
+
+
+async def _t_climate(ctx: ToolContext, **kw) -> str:
+    """气候一阶相位（ENSO/ONI）→ 板块前瞻线索（P1-32，2026-09-11）。
+
+    ⚠️ **必须同时输出两段声明**：①`timing_note`（ONI 滞后、无领先性）
+    ②`empirical_verdict`（人工传导链**未获数据支持**，基础化工方向甚至相反）。
+    少任何一段，助手都可能把它转述成「厄尔尼诺来了，买化肥」（红线 3）。
+    """
+    from app.market.climate import collect as _collect_climate
+
+    try:
+        payload = await _collect_climate()
+    except Exception as exc:  # noqa: BLE001  取不到如实说，不编造
+        log.warning("climate tool failed: %s", exc)
+        return "气候指数（NOAA ONI）取数失败——请如实说明取不到，不要编造相位"
+    if not payload:
+        return "气候指数暂不可用（NOAA ONI 不可达）——如实说明无数据即可"
+
+    lines = ["【气候一阶相位（NOAA ONI，重叠三月季）】"]
+    state = payload.get("state")
+    note = payload.get("unjudged_reason")
+    if state is None:
+        lines.append(f"- 本次未判定：{note or '数据不足'}")
+    else:
+        label = {"el_nino": "厄尔尼诺", "la_nina": "拉尼娜", "neutral": "中性"}.get(state, state)
+        strength = payload.get("strength")
+        band = {"weak": "弱", "moderate": "中等", "strong": "强", "very_strong": "超强"}
+        seg = f"（{band.get(strength, strength)}）" if strength else ""
+        alert = payload.get("alert") or ""
+        lines.append(
+            f"- 当前相位：**{label}**{seg}；同向连续 {payload.get('consecutive')} 个季"
+            + (f"；行业上 ONI 阈值 ±{payload.get('threshold')}，"
+               f"连续 {payload.get('persist_seasons')} 季才算「确立」" if alert else "")
+        )
+        if alert:
+            lines.append(
+                f"- **预警态**：已连续越线 {payload.get('consecutive')} 季但未满 "
+                f"{payload.get('persist_seasons')} 季 ⇒ 尚未构成官方「{alert} 确立」"
+            )
+        latest = payload.get("latest") or {}
+        if latest:
+            lines.append(
+                f"- 最新季：{latest.get('season')} {latest.get('year')}"
+                f"（季末 {latest.get('end_date')}）ANOM={latest.get('anom'):+.2f}"
+            )
+        series = payload.get("series") or []
+        if series:
+            lines.append(
+                "- 近几季：" + "、".join(f"{s['season']} {s['anom']:+.2f}" for s in series)
+            )
+        links = payload.get("candidate_links") or []
+        if links:
+            lines.append(
+                "- 候选题材（**人工映射，未获数据支持，仅线索**）："
+                + "、".join(f"{r['target']}（强度{r['strength']}）" for r in links)
+            )
+
+    lines.append(f"- 时点结构（重要）：{payload.get('timing_note')}")
+    lines.append(f"- 实证判读（重要）：{payload.get('empirical_verdict')}")
+    lines.append(f"- 数据时间 {payload.get('as_of') or '—'}；{payload.get('disclaimer')}")
+    return _clip("\n".join(lines))
+
+
+# ---- 扩展工具（2026-09-11）：把「系统已有、助手取不到」的数据资产接上 --------
+# 背景：用户实测「明明系统里都有的数据，助手答『我没有』」。逐项核对后是两类问题：
+# ① 提示词自我否认（见 prompt.py / context.py 的同日修复）；
+# ② **工具覆盖缺口**——后端端点早就存在，助手侧没登记（分时/K线/资金流/个股龙虎榜/
+#    公告财务/指数宽度/题材梯队/自选/模拟账户）。下列工具一律走与页面**同一个
+#    provider 读路径**，口径与页面一致，不含任何二次加工。
+
+
+async def _t_kline(ctx: ToolContext, **kw) -> str:
+    """个股 K 线（日线/分钟线）区间摘要 + 最近若干根明细。"""
+    code, e = _one_symbol(ctx, kw.get("symbol") or kw.get("symbols") or "")
+    if e:
+        return f"参数不合法：{e}"
+    tf = (kw.get("timeframe") or "1d").strip().lower()
+    if tf not in TIMEFRAMES:
+        return f"参数不合法：timeframe 只接受 {'/'.join(TIMEFRAMES)}，收到 {tf!r}"
+    limit = _int_arg(kw.get("limit"), 10, 3, 30)
+    bars = [_rec(b) for b in (await ctx.provider.get_kline(code, tf)) or []]
+    if not bars:
+        return f"{code} 无 {tf} K 线数据（新股/停牌/数据源缺，或该周期无数据）"
+    rows = bars[-limit:]
+    closes = [r.get("close") for r in bars if r.get("close") is not None]
+    span = None
+    if len(closes) >= 2 and closes[0]:
+        span = (closes[-1] / closes[0] - 1) * 100
+    src = rows[-1].get("source") or "—"
+    lines = [f"【{code} {tf} K线 最近 {len(rows)} 根（本次共取 {len(bars)} 根，来源 {src}）】"]
+    lines.append(
+        f"- 区间：{str(bars[0].get('ts'))[:16]} → {str(bars[-1].get('ts'))[:16]}"
+        + (f"，区间涨跌 {span:+.2f}%（{closes[0]} → {closes[-1]}）" if span is not None else "")
+    )
+    for r in rows:
+        pct = r.get("change_pct")
+        vol = r.get("volume")
+        lines.append(
+            f"- {str(r.get('ts'))[:16]}：开 {r.get('open')} 高 {r.get('high')} "
+            f"低 {r.get('low')} 收 {r.get('close')}"
+            + (f"，涨跌 {pct:+.2f}%" if isinstance(pct, (int, float)) else "")
+            + (f"，量 {vol / 1e4:.0f} 万股" if isinstance(vol, (int, float)) and vol else "")
+        )
+    return _clip("\n".join(lines))
+
+
+async def _t_minute(ctx: ToolContext, **kw) -> str:
+    """当日分时走势摘要——把 ~240 个分钟点压成结构化区间（开/高/低/振幅/关键时点）。"""
+    code, e = _one_symbol(ctx, kw.get("symbol") or kw.get("symbols") or "")
+    if e:
+        return f"参数不合法：{e}"
+    try:
+        pts = [_rec(p) for p in (await ctx.provider.get_minute_line(code)) or []]
+    except Exception as exc:  # noqa: BLE001
+        return f"{code} 分时数据取数失败：{type(exc).__name__}: {exc}（可换 K 线工具或到工作台分时页签查看）"
+    priced = [(str(p.get("ts")), p.get("price")) for p in pts if isinstance(p.get("price"), (int, float))]
+    if not priced:
+        return f"{code} 今日暂无分时数据（非交易日/停牌/数据源缺）"
+    src = pts[0].get("source") or "—"
+    hi = max(priced, key=lambda x: x[1])
+    lo = min(priced, key=lambda x: x[1])
+    open_p, last_p = priced[0][1], priced[-1][1]
+    amp = (hi[1] - lo[1]) / lo[1] * 100 if lo[1] else None
+    lines = [f"【{code} 当日分时摘要（来源 {src}，共 {len(priced)} 个分钟点）】"]
+    lines.append(f"- 时间范围：{priced[0][0]} → {priced[-1][0]}")
+    lines.append(
+        f"- 开 {open_p}｜最高 {hi[1]}（{hi[0]}）｜最低 {lo[1]}（{lo[0]}）｜最新 {last_p}"
+    )
+    if amp is not None:
+        lines.append(f"- 日内振幅 {amp:.2f}%（(最高−最低)/最低）")
+    tail_n = min(15, len(priced))
+    tail = priced[-tail_n:]
+    if tail[0][1]:
+        lines.append(
+            f"- 最近 {tail_n} 分钟：{tail[0][1]} → {tail[-1][1]}"
+            f"（{(tail[-1][1] / tail[0][1] - 1) * 100:+.2f}%）"
+        )
+    step = max(1, len(pts) // 8)
+    lines.append(
+        "- 走势采样：" + "、".join(f"{str(p.get('ts'))[-5:]} {p.get('price')}" for p in pts[::step])
+    )
+    lines.append("- 口径：分钟收盘价序列；分时点不含逐笔成交明细，指数分时无「均价」概念。")
+    return _clip("\n".join(lines))
+
+
+async def _t_capital_flow(ctx: ToolContext, **kw) -> str:
+    """个股资金流（新浪 MoneyFlow 口径：主力 = 超大单 + 大单）。"""
+    code, e = _one_symbol(ctx, kw.get("symbol") or kw.get("symbols") or "")
+    if e:
+        return f"参数不合法：{e}"
+    days = _int_arg(kw.get("days"), 5, 3, 20)
+    try:
+        rows = [_rec(r) for r in (await ctx.provider.get_capital_flow(code, days)) or []]
+    except Exception as exc:  # noqa: BLE001
+        return f"{code} 资金流取数失败：{type(exc).__name__}: {exc}"
+    if not rows:
+        return f"{code} 无资金流数据（新浪 MoneyFlow 未覆盖该标的/停牌）"
+    src = rows[0].get("source") or "—"
+    lines = [
+        f"【{code} 个股资金流 近 {len(rows)} 日（来源 {src}；"
+        "主力净额 = 超大单 + 大单，按单笔金额划分属估算、非交易所披露）】"
+    ]
+    for r in rows[:10]:
+        net = r.get("net_main")
+        seg = (
+            f"｜超大 {_fmt_yi(r.get('net_super'))}、大 {_fmt_yi(r.get('net_big'))}"
+            f"、中 {_fmt_yi(r.get('net_mid'))}、小 {_fmt_yi(r.get('net_small'))}"
+            if r.get("net_super") is not None
+            else ""
+        )
+        lines.append(
+            f"- {r.get('date')}：收盘 {r.get('close')}"
+            f"｜涨跌 {r.get('change_pct')}%｜主力净额 {_fmt_yi(net)}{seg}"
+        )
+    streak = 0
+    for r in rows:  # 由近及远
+        if (r.get("net_main") or 0) > 0:
+            streak += 1
+        else:
+            break
+    lines.append(f"- 自最新交易日往前，连续主力净流入 {streak} 日")
+    lines.append("- 口径边界：这是**个股**口径，与板块 f62 口径不可相加或互相替代。")
+    return _clip("\n".join(lines))
+
+
+async def _t_basics(ctx: ToolContext, **kw) -> str:
+    """个股「基本面 + 消息面」一条通：公司资料 + 财务摘要 + 最近公告 + 相关新闻。
+
+    合成一条而不是拆四条的理由：用户问「为什么跌/这家公司怎么样」时，
+    资料/财务/公告/新闻几乎总是一起被需要，拆开只会吃掉宝贵的工具调用配额。
+    """
+    code, e = _one_symbol(ctx, kw.get("symbol") or kw.get("symbols") or "")
+    if e:
+        return f"参数不合法：{e}"
+    lines: list[str] = [f"【{code} 基本面与消息面】"]
+    missing: list[str] = []
+
+    try:
+        prof = _rec(await ctx.provider.get_company_profile(code))
+        bits = [f"名称 {prof.get('name') or '—'}", f"行业 {prof.get('industry') or '—'}"]
+        if prof.get("region"):
+            bits.append(f"地区 {prof['region']}")
+        lines.append("- 公司：" + "，".join(bits))
+        if prof.get("main_business"):
+            lines.append(f"- 主营：{str(prof['main_business'])[:120]}")
+        concepts = (prof.get("board_groups") or {}).get("concept") or prof.get("boards") or []
+        if concepts:
+            lines.append("- 所属概念：" + "、".join(str(c) for c in concepts[:12]))
+        if prof.get("core_themes"):
+            lines.append("- 核心题材：" + "、".join(str(t) for t in prof["core_themes"][:5]))
+    except Exception as exc:  # noqa: BLE001
+        missing.append(f"公司资料（{type(exc).__name__}）")
+
+    try:
+        fin = [_rec(f) for f in (await ctx.provider.get_financials(code, 4)) or []]
+        for f in fin[:4]:
+            lines.append(
+                f"- 财报 {f.get('report_date')}：营收 {_fmt_yi(f.get('revenue'))}"
+                f"（同比 {f.get('revenue_yoy')}%）｜净利 {_fmt_yi(f.get('net_profit'))}"
+                f"（同比 {f.get('profit_yoy')}%）｜毛利率 {f.get('gross_margin')}%"
+                f"｜ROE {f.get('roe')}%｜EPS {f.get('eps')}"
+            )
+        if not fin:
+            missing.append("财务（无数据）")
+    except Exception as exc:  # noqa: BLE001
+        missing.append(f"财务（{type(exc).__name__}）")
+
+    try:
+        anns = [_rec(a) for a in (await ctx.provider.get_announcements(code, 8)) or []]
+        if anns:
+            lines.append(f"- 最近公告 {len(anns)} 条（东财）：")
+            for a in anns[:8]:
+                lines.append(f"  · {a.get('date')}｜{a.get('type') or '—'}｜{str(a.get('title'))[:60]}")
+        else:
+            missing.append("公告（无数据）")
+    except Exception as exc:  # noqa: BLE001
+        missing.append(f"公告（{type(exc).__name__}）")
+
+    try:
+        news = [_rec(n) for n in (await ctx.provider.get_news(code, 5)) or []]
+        if news:
+            lines.append("- 相关新闻：")
+            for n in news[:5]:
+                lines.append(f"  · {n.get('date')}｜{str(n.get('title'))[:50]}")
+    except Exception as exc:  # noqa: BLE001
+        missing.append(f"新闻（{type(exc).__name__}）")
+
+    if missing:
+        lines.append(f"- 未取到：{'、'.join(missing)}（可到工作台个股详情查看或稍后重试）")
+    lines.append("- 口径：东财 F10/业绩报表/公告接口；公告标题为原文，未改写。")
+    return _clip("\n".join(lines))
+
+
+async def _t_market_overview(ctx: ToolContext, **kw) -> str:
+    """大盘概览：指数快照 + 涨跌家数宽度 + 两市成交额（与市场页「市场概览」同口径）。"""
+    lines: list[str] = ["【大盘概览】"]
+    hub = ctx.hub
+    if hub is not None:
+        try:
+            idx = list(hub.get_indices() or [])
+        except Exception as exc:  # noqa: BLE001
+            idx = []
+            log.info("market_overview indices: %s", exc)
+        for q in idx[:8]:
+            price = getattr(q, "price", None)
+            pct = getattr(q, "change_pct", None)
+            lines.append(
+                f"- {getattr(q, 'name', '') or ''}（{getattr(q, 'symbol', '')}）："
+                f"{price if price is not None else '—'}"
+                f"｜涨跌 {f'{pct:+.2f}%' if isinstance(pct, (int, float)) else '—'}"
+            )
+    svc = ctx.snapshot_service
+    if svc is not None:
+        try:
+            payload = svc.breadth_payload()
+            b = payload.get("breadth") or {}
+            age = payload.get("snapshot_age_seconds")
+            lines.append(
+                f"- 涨跌家数：涨 {b.get('up', '—')} / 跌 {b.get('down', '—')} / 平 {b.get('flat', '—')}"
+                f"｜涨停 {b.get('limit_up', '—')} / 跌停 {b.get('limit_down', '—')}"
+                f"｜覆盖 {b.get('total', '—')} 只"
+            )
+            lines.append(f"- 两市成交额合计 {_fmt_yi(b.get('total_amount'))}")
+            if age is not None:
+                lines.append(f"- 快照新鲜度：{age} 秒前（腾讯/新浪全市场快照口径，非逐笔）")
+        except Exception as exc:  # noqa: BLE001
+            log.info("market_overview breadth: %s", exc)
+    if len(lines) == 1:
+        return "大盘概览暂不可用（指数与全市场快照均未就绪）——如实说明取不到即可"
+    lines.append("- 口径：指数为实时快照；涨跌家数/成交额来自全市场快照（含停牌统计口径）。")
+    return _clip("\n".join(lines))
+
+
+async def _t_themes(ctx: ToolContext, **kw) -> str:
+    """题材梯队看板：涨停池按题材重组后的强度/阶段/健康度（与盘面页同源）。"""
+    d, e = _resolve_date(ctx, kw.get("date"))
+    if e:
+        return f"参数不合法：{e}"
+    limit = _int_arg(kw.get("limit"), 10, 3, 30)
+    try:
+        from app.services.theme_service import build_theme_board
+
+        snap = await asyncio.to_thread(_snapshot_map_sync, ctx, d) if ctx.snapshot_service else {}
+        board = await build_theme_board(ctx.provider, d, snapshot_map=snap or None)
+    except Exception as exc:  # noqa: BLE001
+        return f"题材梯队构建失败：{type(exc).__name__}: {exc}（涨停池不可用时会这样，请稍后重试）"
+    cards = list(board.get("themes") or [])
+    summary = board.get("summary") or {}
+    if not cards:
+        return f"{d} 无题材梯队数据（当日无涨停或非交易日）"
+    lines = [
+        f"【题材梯队 {board.get('trade_date') or d}】"
+        f"涨停 {summary.get('limit_up_total', '—')} 家｜题材 {summary.get('theme_count', '—')} 个"
+        f"｜最高连板 {summary.get('market_max_boards', '—')}"
+        f"｜炸板率 {summary.get('market_break_rate', '—')}"
+    ]
+    for c in cards[:limit]:
+        perf = c.get("performance") or {}
+        core = c.get("core") or {}
+        seg = f"｜核心 {core.get('name')} {core.get('boards')}板" if core.get("name") else ""
+        lines.append(
+            f"- {c.get('theme')}：强度 {c.get('strength_score')}（{c.get('strength_tier') or '—'}）"
+            f"｜阶段 {c.get('stage') or '—'}｜梯队 {c.get('formation') or '—'}"
+            f"｜涨停 {perf.get('limit_up_count', '—')} 家/最高 {perf.get('max_boards', '—')} 板{seg}"
+        )
+        if c.get("health_note"):
+            lines.append(f"  · 健康度：{c['health_note']}")
+        if c.get("risks"):
+            lines.append(f"  · 风险：{'；'.join(str(r) for r in c['risks'][:3])}")
+    lines.append("- 口径：题材归因来自同花顺官方涨停原因；涨停池非交易时段为最近交易日收盘口径。")
+    return _clip("\n".join(lines))
+
+
+def _snapshot_map_sync(ctx: ToolContext, d: date) -> dict[str, dict]:
+    """同步实现（供 asyncio.to_thread 调用，Parquet 读是阻塞调用）。"""
+    svc = ctx.snapshot_service
+    base = Path(getattr(svc, "parquet_dir", "")) / "snapshots" if svc is not None else None
+    if base is None or not Path(base).exists():
+        return {}
+    from app.services.parquet_store import read_latest_in_dir
+
+    want = d.strftime("%Y%m%d")
+    day_dirs = sorted((p for p in Path(base).iterdir() if p.is_dir()), reverse=True)
+    exact = base / want
+    chosen = exact if exact.is_dir() and sorted(exact.glob("*.parquet")) else None
+    if chosen is None:
+        for day in day_dirs:
+            if day.name <= want and sorted(day.glob("*.parquet")):
+                chosen = day
+                break
+    if chosen is None:
+        return {}
+    read = read_latest_in_dir(chosen, columns=["symbol", "change_pct"])
+    if not read.ok:
+        return {}
+    df = read.df
+    return {
+        str(s): {"change_pct": p}
+        for s, p in zip(df["symbol"].to_list(), df["change_pct"].to_list())
+    }
+
+
+async def _t_watchlist(ctx: ToolContext, **kw) -> str:
+    """自选股清单 + 实时行情（按分组）。"""
+    if ctx.session_factory is None:
+        return "工具不可用：未配置数据库会话"
+    import asyncio as _asyncio
+
+    from app.repositories.watchlist_repo import WatchlistRepository
+
+    def _load() -> list[dict]:
+        repo = WatchlistRepository(ctx.session_factory)
+        return [
+            {"symbol": i.symbol, "name": i.name, "group_name": i.group_name, "note": i.note}
+            for i in repo.list_items()
+        ]
+
+    items = await _asyncio.to_thread(_load)
+    if not items:
+        return "自选股为空"
+    quotes: dict[str, Any] = {}
+    try:
+        got = await ctx.provider.get_quotes([i["symbol"] for i in items][:MAX_SYMBOLS])
+        quotes = {q.symbol: q for q in got or []}
+    except Exception as exc:  # noqa: BLE001
+        log.info("watchlist quotes: %s", exc)
+    groups: dict[str, list[str]] = {}
+    lines = [f"【自选股 {len(items)} 只（行情为实时快照口径）】"]
+    for i in items[:MAX_ROWS]:
+        q = quotes.get(i["symbol"])
+        price = getattr(q, "price", None) if q is not None else None
+        pct = getattr(q, "change_pct", None) if q is not None else None
+        groups.setdefault(i.get("group_name") or "默认", []).append(i["symbol"])
+        lines.append(
+            f"- [{i.get('group_name') or '默认'}] {i.get('name') or ''}({i['symbol']})："
+            f"现价 {price if price is not None else '—'}"
+            f"｜涨跌 {f'{pct:+.2f}%' if isinstance(pct, (int, float)) else '—'}"
+        )
+    if groups:
+        lines.append("- 分组：" + "；".join(f"{g} {len(v)} 只" for g, v in groups.items()))
+    if not quotes:
+        lines.append("- 注：实时行情未取到，仅列出清单（可用 quotes 工具单独取价）")
+    return _clip("\n".join(lines))
+
+
+async def _t_paper(ctx: ToolContext, **kw) -> str:
+    """模拟交易账户：资产汇总 + 持仓浮盈（只读；不提供下单）。"""
+    engine = ctx.paper_engine
+    if engine is None:
+        return "工具不可用：模拟交易引擎未初始化"
+    try:
+        positions = list(engine.positions_with_pnl({}) or [])
+    except Exception as exc:  # noqa: BLE001
+        return f"模拟账户读取失败：{type(exc).__name__}: {exc}"
+    quotes: dict[str, Any] = {}
+    try:
+        got = await ctx.provider.get_quotes([p.get("symbol") for p in positions][:MAX_SYMBOLS])
+        quotes = {q.symbol: q for q in got or []}
+    except Exception as exc:  # noqa: BLE001
+        log.info("paper quotes: %s", exc)
+    for p in positions:
+        q = quotes.get(p.get("symbol"))
+        last = getattr(q, "price", None) if q is not None else None
+        if last is not None and p.get("cost_price"):
+            p["last_price"] = last
+            p["pnl"] = round((last - p["cost_price"]) * p["quantity"], 2)
+    mv = sum((p.get("last_price") or p.get("cost_price") or 0) * p.get("quantity", 0) for p in positions)
+    try:
+        summary = engine.account_summary(mv)
+    except Exception as exc:  # noqa: BLE001
+        return f"模拟账户汇总失败：{type(exc).__name__}: {exc}"
+    lines = ["【模拟账户（只读；本系统不接真实券商）】"]
+    for k in ("initial_cash", "cash", "market_value", "total_assets", "total_pnl", "total_pnl_pct"):
+        if isinstance(summary, dict) and summary.get(k) is not None:
+            lines.append(f"- {k}：{summary[k]}")
+    if positions:
+        lines.append(f"- 持仓 {len(positions)} 只：")
+        for p in positions[:MAX_ROWS]:
+            lines.append(
+                f"  · {p.get('name') or ''}({p.get('symbol')})：{p.get('quantity')} 股"
+                f"｜成本 {p.get('cost_price')}｜现价 {p.get('last_price') or '—'}"
+                f"｜浮动 {p.get('pnl', '—')}"
+            )
+    else:
+        lines.append("- 当前无持仓")
+    return _clip("\n".join(lines))
+
+
+async def _t_news(ctx: ToolContext, **kw) -> str:
+    """全网资讯/快讯事件流（热点消息 + 利好利空方向映射）。
+
+    2026-09-11 补：用户实测助手答「我今天没有全网新闻/资讯类的实时数据源，无法直接列
+    今日热点新闻」——**这是错的**，系统有完整的新闻事件管道（`app/news/flash.py` 双域
+    快讯采集 → `EventStore` → `GET /api/events*`，即市场页「事件面板」的数据源），
+    只是助手侧没登记工具。与个股消息面（公告/新闻标题）不同，这里给的是**全市场**视角。
+
+    ⚠️ 输出必须保留方向行的 `basis`（依据）——事件→题材的方向映射是**系统推断**，
+    不是官方结论（红线 3：只给关联 + 依据 + 失效条件，不得转述成买卖建议）。
+    """
+    store = ctx.event_store
+    if store is None:
+        return "资讯事件流不可用：事件库未初始化（如实说明取不到即可，不要编造新闻）"
+    limit = _int_arg(kw.get("limit"), 10, 3, 30)
+    try:
+        rows = list(store.list_events(active_only=True, limit=limit) or [])
+    except Exception as exc:  # noqa: BLE001
+        return f"资讯事件流读取失败：{type(exc).__name__}: {exc}"
+    if not rows:
+        return "当前无活跃资讯事件（非交易时段/快讯采集未产出，属正常空态）"
+
+    lines = [f"【活跃资讯事件 {len(rows)} 条（来源：系统快讯事件流，与市场页事件面板同源）】"]
+    for r in rows:
+        rec = _rec(r)
+        when = str(rec.get("published_at") or "")[:16]
+        lines.append(
+            f"- [{rec.get('source') or '—'}｜{when}] {str(rec.get('title') or '')[:60]}"
+        )
+        summary = rec.get("summary")
+        if summary:
+            lines.append(f"  · 摘要：{str(summary)[:80]}")
+        dirs = rec.get("directions") or []
+        for d in dirs[:3]:
+            dd = _rec(d)
+            lines.append(
+                f"  · 方向推断：{dd.get('target') or '—'}"
+                f"（{dd.get('direction') or '—'}，强度 {dd.get('strength') or '—'}）"
+                f"｜依据：{str(dd.get('basis') or '—')[:50]}"
+            )
+    lines.append(
+        "- 口径：事件与方向映射由系统规则/LLM 从公开快讯抽取，"
+        "**方向是推断不是官方结论**，只作线索；不构成买卖建议。"
+    )
+    return _clip("\n".join(lines))
+
+
 TOOL_SPECS: dict[str, ToolSpec] = {
-    "quotes": ToolSpec("quotes", "批量实时行情快照", "symbols=600519,000001（≤6 只）", _t_quotes),
+    "quotes": ToolSpec("quotes", "批量实时行情快照（指数需带前缀，如 sh000001）", "symbols=600519,000001（≤6 只）", _t_quotes),
     "limit_up": ToolSpec("limit_up", "某交易日涨停池", "date=YYYY-MM-DD（可省略=最近交易日）", _t_limit_up),
     "limit_down": ToolSpec("limit_down", "某交易日跌停池", "date=YYYY-MM-DD（可省略）", _t_limit_down),
     "limit_break": ToolSpec("limit_break", "某交易日炸板池", "date=YYYY-MM-DD（可省略）", _t_limit_break),
-    "longhu": ToolSpec("longhu", "某交易日龙虎榜", "date=YYYY-MM-DD（可省略）", _t_longhu),
+    "longhu": ToolSpec("longhu", "龙虎榜：当日全市场榜；给 symbols 则查个股席位明细", "date=YYYY-MM-DD（可省略）｜symbols=600519（可选，个股维度）", _t_longhu),
     "boards": ToolSpec("boards", "板块排行榜", "board_type=hangye|gainian（默认 hangye）", _t_boards),
     "hot": ToolSpec("hot", "人气热股榜", "period=day|week|month（默认 day）", _t_hot),
     "anomaly": ToolSpec("anomaly", "当日异动原因（可按代码查为什么异动）", "symbols=可选，逗号分隔≤6只；缺省=全市场榜", _t_anomaly),
@@ -531,8 +1241,112 @@ TOOL_SPECS: dict[str, ToolSpec] = {
     "picks": ToolSpec("picks", "最近一次每日精选组合（含置信档）", "无参数", _t_picks),
     "positions": ToolSpec("positions", "当前持仓与浮动盈亏", "无参数", _t_positions),
     "sentiment": ToolSpec("sentiment", "近 5 日情绪相位", "无参数", _t_sentiment),
-    "events": ToolSpec("events", "今日 watcher 异动/确认/证伪事件", "无参数", _t_events),
+    "events": ToolSpec("events", "今日 watcher 异动/确认/证伪事件（自选池监控）", "无参数", _t_events),
+    "news": ToolSpec(
+        "news", "全网资讯/快讯事件流（今日热点消息 + 利好利空方向推断）",
+        "limit=10（3~30）",
+        _t_news,
+    ),
+    # P1-3（2026-09-10）：板块资金流——回答「今天资金在堆哪个方向」
+    # 参数说明刻意不用 `|`（那是工具调用的分段符，写进去会被解析成无 `=` 的段而丢弃）
+    "board_flow": ToolSpec(
+        "board_flow", "板块主力净额排行（东财 f62 口径）",
+        "kind=concept（默认）｜range=intraday（默认）｜可选值 industry / 5d / 10d",
+        _t_board_flow,
+    ),
+    # P1-33（2026-09-11）：大宗商品一阶价格 → 板块传导线索（实测标定，无隔夜领先性）
+    # 参数说明同样刻意不用 `|`（工具调用分段符）
+    "commodity": ToolSpec(
+        "commodity", "大宗商品异动与板块传导线索（含「无领先性」时点声明）",
+        "keyword=可选，按商品名或行业名过滤（如 原油 / 钢铁 / 有色）",
+        _t_commodity,
+    ),
+    # P1-32（2026-09-11）：气候一阶相位（ENSO/ONI）——把「厄尔尼诺」从新闻关键词
+    # 升级为一阶指数；输出强制携带「滞后无领先性」+「人工链未获支持」双声明
+    "climate": ToolSpec(
+        "climate", "气候相位（厄尔尼诺/拉尼娜/中性）与候选传导链（含实证判读声明）",
+        "无参数",
+        _t_climate,
+    ),
+    # ---- 个股与大盘数据面扩容（2026-09-11，用户实测「系统明明有、助手说没有」）----
+    "kline": ToolSpec(
+        "kline", "个股 K 线（日线/分钟线）区间涨跌与最近若干根明细",
+        "symbol=600519｜timeframe=1d（默认），可选 1w/60m/30m/15m/5m/1m｜limit=10（3~30）",
+        _t_kline,
+    ),
+    "minute": ToolSpec(
+        "minute", "当日分时走势摘要（开/高/低/振幅/关键时点/末段变化）",
+        "symbol=600519",
+        _t_minute,
+    ),
+    "capital_flow": ToolSpec(
+        "capital_flow", "个股资金流（主力=超大单+大单，连续净流入天数）",
+        "symbol=600519｜days=5（3~20）",
+        _t_capital_flow,
+    ),
+    "basics": ToolSpec(
+        "basics", "个股基本面与消息面：公司资料 + 财务摘要 + 最近公告 + 相关新闻",
+        "symbol=600519",
+        _t_basics,
+    ),
+    "market_overview": ToolSpec(
+        "market_overview", "大盘概览：指数快照 + 涨跌家数宽度 + 两市成交额",
+        "无参数",
+        _t_market_overview,
+    ),
+    "themes": ToolSpec(
+        "themes", "题材梯队看板（强度/阶段/健康度，涨停池按题材重组）",
+        "date=YYYY-MM-DD（可省略）｜limit=10（3~30）",
+        _t_themes,
+    ),
+    "watchlist": ToolSpec(
+        "watchlist", "自选股清单与实时行情（按分组）",
+        "无参数",
+        _t_watchlist,
+    ),
+    "paper": ToolSpec(
+        "paper", "模拟交易账户：资产汇总与持仓浮盈（只读）",
+        "无参数",
+        _t_paper,
+    ),
 }
+
+
+# 工具名 → 中文短标签（"正在取数：龙虎榜" 这类进度提示与工具回执用）。
+# 与 TOOL_SPECS 的键集由 tests/test_assistant.py 守卫，防新增工具漏标签。
+TOOL_LABELS: dict[str, str] = {
+    "quotes": "实时行情",
+    "limit_up": "涨停池",
+    "limit_down": "跌停池",
+    "limit_break": "炸板池",
+    "longhu": "龙虎榜",
+    "boards": "板块排行",
+    "hot": "人气热榜",
+    "anomaly": "异动原因",
+    "review": "复盘报告",
+    "brief": "盘前简报",
+    "picks": "每日精选",
+    "positions": "持仓",
+    "sentiment": "情绪相位",
+    "events": "盘中事件",
+    "news": "资讯快讯",
+    "board_flow": "板块资金流",
+    "commodity": "大宗商品",
+    "climate": "气候相位",
+    "kline": "K线",
+    "minute": "分时走势",
+    "capital_flow": "个股资金流",
+    "basics": "公司资料与公告",
+    "market_overview": "大盘概览",
+    "themes": "题材梯队",
+    "watchlist": "自选股",
+    "paper": "模拟账户",
+}
+
+
+def tool_label(name: str) -> str:
+    """工具名 → 中文短标签（进度提示与回执展示用；前端不再自己维护一份映射）。"""
+    return TOOL_LABELS.get(name) or name
 
 
 def tool_manifest() -> str:
@@ -541,7 +1355,11 @@ def tool_manifest() -> str:
         "## 可用工具（只读，受限）",
         "需要真实数据时，在回答**开头单独一行**写 {{tool:名称|参数=值}}，",
         "系统会取数后把结果回填给你，你再继续回答（标记行不会显示给用户）。",
-        "约束：每轮最多 2 次；不在下表的名称/参数会被拒绝；取不到就如实说没有，绝不编造。",
+        f"可以先取一批数、看过结果**再取第二批**（最多 {MAX_TOOL_ROUNDS} 轮，"
+        f"每轮最多 {MAX_CALLS_PER_TURN} 次）；不在下表的名称/参数会被拒绝；取不到就如实说没有，绝不编造。",
+        "**常见误判**：下表覆盖了行情/K线/分时/资金流/龙虎榜/公告财务/资讯快讯/"
+        "指数宽度/题材/精选/持仓/事件等绝大部分数据需求——**先取数，再下结论**，"
+        "不要凭印象回答「我没有这项数据」。",
     ]
     for spec in TOOL_SPECS.values():
         lines.append(f"- {{{{tool:{spec.name}|{spec.params}}}}} → {spec.desc}")

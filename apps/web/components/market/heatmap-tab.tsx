@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Panel } from "@/components/panel";
 import {
@@ -10,7 +10,7 @@ import {
   type HeatmapPayload,
   type HeatmapStock,
 } from "@/lib/api";
-import { fmtAmount } from "@/lib/format";
+import { fmtAmount, pctText } from "@/lib/format";
 import { workbenchUrl } from "@/lib/routing";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 
@@ -104,10 +104,62 @@ function pctColor(pct: number): string {
   return "rgba(120,120,130,0.35)";
 }
 
-function pctText(pct: number | null | undefined): string {
-  if (pct == null) return "--";
-  return `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`;
-}
+// 收敛说明（2026-09-11 冗余清理）：此处原有本地 `pctText`，与 `lib/format.ts`
+// 的导出版在涨跌幅实际区间（|pct| < 1000）内输出完全一致。对外文案按项目纪律
+// 单点收口在 format.ts——各页各写一份，早晚出现「这页 +1.20%、那页 +1.2%」。
+
+/**
+ * 单个个股格（memo 化）。
+ *
+ * 为什么必须拆出来：云图单屏一次性渲染约 1540 个 `<g>`
+ * （实测 `/api/market/heatmap` = 128 组 / 1540 只），而 hover 详情状态提升在
+ * 父组件上——若不 memo，鼠标每跨一个格子就重渲染整张 SVG，盘中高频移动时
+ * 主线程被 1500+ 节点重建占满，观感就是"卡"。
+ *
+ * memo 生效的前提是 `rect` 引用稳定：`visible` → `groupRects` → `stockRects`
+ * 三级 useMemo 保证 hover 变化时不会重算，故 `rect` 身份不变。回调亦用
+ * useCallback 固定，否则每次渲染新函数会让 memo 完全失效。
+ */
+const HeatmapCell = memo(function HeatmapCell({
+  rect,
+  stock,
+  clickable,
+  onEnter,
+  onLeave,
+  onOpen,
+}: {
+  rect: SqRect;
+  stock: HeatmapStock;
+  clickable: boolean;
+  onEnter: (s: HeatmapStock) => void;
+  onLeave: (s: HeatmapStock) => void;
+  onOpen: (symbol: string) => void;
+}) {
+  const w = Math.max(rect.w - 1, 0);
+  const h = Math.max(rect.h - 1, 0);
+  // 小于 3px 的格子不画（肉眼不可辨，纯属 DOM 负担）
+  if (w < 3 || h < 3) return null;
+  return (
+    <g
+      onMouseEnter={() => onEnter(stock)}
+      onMouseLeave={() => onLeave(stock)}
+      onClick={clickable ? () => onOpen(stock.symbol) : undefined}
+      className={clickable ? "cursor-pointer" : undefined}
+    >
+      <rect x={rect.x} y={rect.y} width={w} height={h} fill={pctColor(stock.change_pct)} />
+      {w > 52 && h > 24 && (
+        <>
+          <text x={rect.x + w / 2} y={rect.y + h / 2 - 2} textAnchor="middle" fontSize={11} fill="#fafafa" className="select-none">
+            {stock.name.slice(0, 6)}
+          </text>
+          <text x={rect.x + w / 2} y={rect.y + h / 2 + 12} textAnchor="middle" fontSize={11} fontWeight="bold" fill="#fafafa" className="select-none">
+            {pctText(stock.change_pct)}
+          </text>
+        </>
+      )}
+    </g>
+  );
+});
 
 export function HeatmapTab() {
   const router = useRouter();
@@ -178,10 +230,18 @@ export function HeatmapTab() {
     return out;
   }, [groupRects]);
 
+  // 回调引用固定：HeatmapCell 的 memo 依赖它们不变，否则 memo 形同虚设
+  const handleEnter = useCallback((s: HeatmapStock) => setHover(s), []);
+  const handleLeave = useCallback(
+    (s: HeatmapStock) => setHover((p) => (p === s ? null : p)),
+    []
+  );
+  const handleOpen = useCallback((symbol: string) => router.push(workbenchUrl(symbol)), [router]);
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
       {error && (
-        <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-600 dark:text-amber-300">{error}</div>
+        <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-300">{error}</div>
       )}
 
       <Panel
@@ -192,18 +252,18 @@ export function HeatmapTab() {
           <div className="flex items-center gap-2 text-xs">
             <button
               onClick={() => { setScope("all"); setFocusGroup(null); }}
-              className={`rounded px-2 py-0.5 ${scope === "all" ? "bg-zinc-100 font-medium dark:bg-zinc-800" : "text-zinc-400"}`}
+              className={`rounded px-2 py-0.5 ${scope === "all" ? "bg-zinc-100 font-medium dark:bg-zinc-800" : "text-zinc-600 dark:text-zinc-400"}`}
             >
               全市场
             </button>
             <button
               onClick={() => { setScope("watch"); setFocusGroup(null); }}
-              className={`rounded px-2 py-0.5 ${scope === "watch" ? "bg-zinc-100 font-medium dark:bg-zinc-800" : "text-zinc-400"}`}
+              className={`rounded px-2 py-0.5 ${scope === "watch" ? "bg-zinc-100 font-medium dark:bg-zinc-800" : "text-zinc-600 dark:text-zinc-400"}`}
             >
               自选
             </button>
             {focusGroup && (
-              <button onClick={() => setFocusGroup(null)} className="rounded border border-zinc-300 px-2 py-0.5 text-zinc-400 dark:border-zinc-600">
+              <button onClick={() => setFocusGroup(null)} className="rounded border border-zinc-300 px-2 py-0.5 text-zinc-600 dark:text-zinc-400 dark:border-zinc-600">
                 返回全部
               </button>
             )}
@@ -218,7 +278,7 @@ export function HeatmapTab() {
                 <div key={i} className="animate-pulse rounded-md bg-zinc-200/60 dark:bg-zinc-800/50" style={{ opacity: 1 - i * 0.02 }} />
               ))}
             </div>
-            <p className="mt-3 text-center text-xs text-zinc-400">云图构建中…（首次含行业映射构建约需数秒）</p>
+            <p className="mt-3 text-center text-xs text-zinc-600 dark:text-zinc-400">云图构建中…（首次含行业映射构建约需数秒）</p>
           </div>
         ) : (
           <div className="relative h-full w-full">
@@ -248,30 +308,17 @@ export function HeatmapTab() {
               })}
               {stockRects.map(({ rect, group }) => {
                 const s = rect.item.stock!;
-                const w = Math.max(rect.w - 1, 0), h = Math.max(rect.h - 1, 0);
-                if (w < 3 || h < 3) return null;
                 // L7（切片 E）：个股格点击进详情；聚合格（「其他」）无 symbol 不跳
-                const clickable = !s.is_aggregate && !!s.symbol;
                 return (
-                  <g
+                  <HeatmapCell
                     key={`${group.industry}:${s.symbol || s.name}`}
-                    onMouseEnter={() => setHover(s)}
-                    onMouseLeave={() => setHover((p) => (p === s ? null : p))}
-                    onClick={clickable ? () => router.push(workbenchUrl(s.symbol)) : undefined}
-                    className={clickable ? "cursor-pointer" : undefined}
-                  >
-                    <rect x={rect.x} y={rect.y} width={w} height={h} fill={pctColor(s.change_pct)} />
-                    {w > 52 && h > 24 && (
-                      <>
-                        <text x={rect.x + w / 2} y={rect.y + h / 2 - 2} textAnchor="middle" fontSize={11} fill="#fafafa" className="select-none">
-                          {s.name.slice(0, 6)}
-                        </text>
-                        <text x={rect.x + w / 2} y={rect.y + h / 2 + 12} textAnchor="middle" fontSize={11} fontWeight="bold" fill="#fafafa" className="select-none">
-                          {pctText(s.change_pct)}
-                        </text>
-                      </>
-                    )}
-                  </g>
+                    rect={rect}
+                    stock={s}
+                    clickable={!s.is_aggregate && !!s.symbol}
+                    onEnter={handleEnter}
+                    onLeave={handleLeave}
+                    onOpen={handleOpen}
+                  />
                 );
               })}
             </svg>
@@ -279,9 +326,9 @@ export function HeatmapTab() {
             {/* hover 详情 */}
             {hover && (
               <div className="pointer-events-none absolute right-3 top-3 rounded-lg border border-zinc-200 bg-white/95 px-3 py-2 text-xs shadow-lg dark:border-zinc-700 dark:bg-zinc-900/95">
-                <div className="font-semibold">{hover.name} <span className="font-mono text-zinc-400">{hover.symbol}</span></div>
-                <div className="mt-1 space-y-0.5 font-mono text-zinc-500 dark:text-zinc-300">
-                  <div>涨跌 <span className={hover.change_pct >= 0 ? "text-red-500" : "text-emerald-500"}>{pctText(hover.change_pct)}</span></div>
+                <div className="font-semibold">{hover.name} <span className="font-mono text-zinc-600 dark:text-zinc-400">{hover.symbol}</span></div>
+                <div className="mt-1 space-y-0.5 font-mono text-zinc-600 dark:text-zinc-300">
+                  <div>涨跌 <span className={hover.change_pct >= 0 ? "text-red-700 dark:text-red-500" : "text-emerald-700 dark:text-emerald-500"}>{pctText(hover.change_pct)}</span></div>
                   <div>价格 {hover.price != null ? hover.price : "--"}</div>
                   <div>流通市值 {fmtAmount(hover.float_cap_yi * 1e8)}</div>
                   <div>成交额 {fmtAmount(hover.amount_yi * 1e8)}</div>
@@ -290,7 +337,7 @@ export function HeatmapTab() {
             )}
 
             {/* 图例 */}
-            <div className="pointer-events-none absolute bottom-2 left-3 flex items-center gap-1 text-[10px] text-zinc-400">
+            <div className="pointer-events-none absolute bottom-2 left-3 flex items-center gap-1 text-[10px] text-zinc-600 dark:text-zinc-400">
               <span>-6%</span>
               {[-6, -4, -2, 0, 2, 4, 6].map((v) => (
                 <span key={v} className="inline-block h-3 w-5 rounded-sm" style={{ background: pctColor(v) }} />
@@ -302,7 +349,7 @@ export function HeatmapTab() {
       </Panel>
 
       {data && (
-        <div className="shrink-0 text-[11px] leading-relaxed text-zinc-400">
+        <div className="shrink-0 text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">
           更新 {updatedAt} · 共 {data.count} 只（{data.breadth_summary.up} 涨 / {data.breadth_summary.down} 跌 / {data.breadth_summary.flat} 平）·
           两市成交 {fmtAmount(data.total_amount_yi * 1e8)} · 行业覆盖 {(data.industry_coverage * 100).toFixed(0)}%（TDX HY 行业，
           未覆盖归「未分类」）· 组内展示流通市值 Top12，其余聚合为「其他」· 面积=流通市值，颜色=当日涨跌幅

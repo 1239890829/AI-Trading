@@ -157,6 +157,17 @@ C_MISSING_DATA: tuple[CandidateDef, ...] = (
         "mined",
         "ths 板块映射已有——可行性高于财报类，P1 可先行",
     ),
+    CandidateDef(
+        "main-capital-flow", "system-review-2026-09-02 §4.2（Wind/华泰：主力=超大单+大单，最优持仓 10 日，需市值中性化）",
+        "个股主力净流入率（超大单+大单口径，`mfd_inflowrate_m` 一类）",
+        "capital", "C",
+        "**个股 × 历史逐日**资金流序列：当前只有板块级 f62 daykline（board_flow.py）与个股单点快照",
+        "amt_ratio/liq20（成交额类，同信源不同语义）；board-streak-interaction（板块级替代）",
+        "mined",
+        "2026-09-10 复核：仍为数据阻塞（原 09-02 建议项，未实施）。已具备的**降级替代**是板块级"
+        "资金连续流入 × 个股动量（board-streak-interaction，B 层 ~2026-12 可评）——"
+        "在拿到个股历史前，不要把板块级结论下沉到个股层陈述",
+    ),
 )
 
 #: ---------------------------------------------------------------- B/D 层：系统内前向积累（积累满 60 交易日自动可评）
@@ -167,7 +178,7 @@ BD_ACCUMULATING: tuple[CandidateDef, ...] = (
         "interaction", "B", "board_flow daykline 60 交易日（~2026-12 满足）",
         "mom20/amt_ratio",
         "mined",
-        "factor-library-design.md §3.3 结合方向④；到期走事件+RankIC 双通道",
+        "summary/factor-system.md §3.3 结合方向④；到期走事件+RankIC 双通道",
     ),
     CandidateDef(
         "theme-heat-percentile", "系统内://picks/heat_history.py（JSONL 前向积累）",
@@ -198,6 +209,20 @@ BD_ACCUMULATING: tuple[CandidateDef, ...] = (
         "无（消息面新信息源，与量价因子相关性是预注册假设）",
         "mined",
         "与制度 §7.3 倒计时表联动",
+    ),
+    CandidateDef(
+        "longhu-resonance", "system-review-2026-09-02 §4.2（自建，业界无标准公式）",
+        "共振分 = w1·机构净买入/成交额 + w2·知名游资净买入/成交额 + w3·I(陆股通净买入) + w4·(买榜席位数 − 卖榜席位数)",
+        "capital", "D",
+        "龙虎榜日频数据落进**引擎数据源**：实测 `GET /api/longhu?date=` **历史可回填**"
+        "（一次调用即取回 net_buy / buy_amount / sell_amount / org_net_value / "
+        "hot_money_net_value / hot_rank / range_days），但当前只活在 ashare.db 且不持久化",
+        "无（资金席位是独立信息源，与量价因子正交）",
+        "mined",
+        "2026-09-10 复核：**阻塞在架构而非数据**——因子引擎跑 marketdb(duckdb)，龙虎榜在 "
+        "ashare.db(sqlite)，跨库 join 不可行。落地二选一：①龙虎榜日频同步进 marketdb；"
+        "②评估引擎支持外部数据接入（后者收益更大：还解锁财报类 C 层候选）。"
+        "w1..w4 无业界标准 → 必须走 IC + 分层双通道定权，不得拍脑袋",
     ),
 )
 

@@ -1,5 +1,10 @@
 # 每日盘后复盘 SOP
 
+> **速览（30 秒）**：本文是**人工/LLM 复盘的操作顺序**（按七阶段：定界→事实链→周期定位→六维剖析→规律提炼→KB 对照→反例自检）。
+> **结论产出必须可证伪**（if-then + 量化阈值 + 验证状态）；**单案例结论一律标「待验证」**。
+> 复盘产出的新规律**默认是候选假设**，须过数据验证才可进体系（`kb/04-decisions.md` KB-DEC-019）。
+> **导航**：§读法 → 执行顺序 → 各阶段要点 → 与后端 Agent 的分工 → 常见误判。判断口径另见 `kb/06-review-framework.md`（七阶段框架，复盘任务先读）。
+>
 > 适用：A 股每交易日收盘后（15:30 之后）。执行者：workbuddy（skill `ashare-daily-review`）。
 > 配套：`docs/review-agent.md`（后端 Agent 机制）· `docs/sentiment.md`（情绪双轴判据）·
 > `docs/theme-prediction.md`（题材预判评分卡）· `docs/retro-and-gaps.md`（项目盘点账本）。

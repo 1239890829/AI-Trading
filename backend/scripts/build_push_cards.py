@@ -39,18 +39,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # backend/ → imp
 
 # 卡片构建单点：app/picks/push_cards.py（2026-09-08 抽取，盘中买点推送共用同版式）
 from app.picks.push_cards import (  # noqa: E402
-    WEEKDAY,
     build_picks_card,
     card,
     div,
     fields_grid,
-    field,
     fmt_chg,
-    first_clause,
-    gate_banner,
     hr,
-    ind,
-    logic_line,
     note,
     sentiment_pairs,
     tri_text,

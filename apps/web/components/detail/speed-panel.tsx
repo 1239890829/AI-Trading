@@ -86,20 +86,20 @@ export function SpeedPanel({ className }: { className?: string }) {
             </option>
           ))}
         </select>
-        <span className="text-[10px] text-zinc-400">
+        <span className="text-[10px] text-zinc-600 dark:text-zinc-400">
           涨速 = 最近 5 分钟涨跌幅 · {sampled}/{rows.length} 已采样
         </span>
-        <span className="ml-auto text-[10px] text-zinc-500">{loading ? "刷新中…" : "30s 自动刷新"}</span>
+        <span className="ml-auto text-[10px] text-zinc-600 dark:text-zinc-400">{loading ? "刷新中…" : "30s 自动刷新"}</span>
       </div>
       {error && (
-        <div className="shrink-0 px-3 py-2 text-xs text-amber-600 dark:text-amber-300">{error}</div>
+        <div className="shrink-0 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">{error}</div>
       )}
       {note && !error && (
-        <div className="shrink-0 px-3 py-2 text-xs text-zinc-400">{note}</div>
+        <div className="shrink-0 px-3 py-2 text-xs text-zinc-600 dark:text-zinc-400">{note}</div>
       )}
       <div className="min-h-0 flex-1 overflow-y-auto">
         <table className="w-full text-xs">
-          <thead className="sticky top-0 bg-zinc-50 text-zinc-400 dark:bg-zinc-900">
+          <thead className="sticky top-0 bg-zinc-50 text-zinc-600 dark:text-zinc-400 dark:bg-zinc-900">
             <tr className="text-left">
               <th className="px-3 py-1.5 font-normal">标的</th>
               <th className="px-2 py-1.5 text-right font-normal">现价</th>
@@ -112,24 +112,24 @@ export function SpeedPanel({ className }: { className?: string }) {
             {rows.map((r) => (
               <tr key={r.symbol} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
                 <td className="px-3 py-1.5">
-                  <span className="font-mono text-[10px] text-zinc-400">{r.symbol}</span>
+                  <span className="font-mono text-[10px] text-zinc-600 dark:text-zinc-400">{r.symbol}</span>
                   <span className="ml-1.5">{r.name ?? "--"}</span>
                 </td>
                 <td className="px-2 py-1.5 text-right font-mono tabular-nums">{fmt(r.price)}</td>
-                <td className={`px-2 py-1.5 text-right font-mono font-medium tabular-nums ${r.sampled ? pctColor(r.speed) : "text-zinc-400"}`}>
+                <td className={`px-2 py-1.5 text-right font-mono font-medium tabular-nums ${r.sampled ? pctColor(r.speed) : "text-zinc-600 dark:text-zinc-400"}`}>
                   {r.sampled ? pctText(r.speed) : "采样中…"}
                 </td>
                 <td className={`px-2 py-1.5 text-right font-mono tabular-nums ${pctColor(r.change_pct)}`}>
                   {pctText(r.change_pct)}
                 </td>
-                <td className="px-3 py-1.5 text-right text-[10px] text-zinc-400">
+                <td className="px-3 py-1.5 text-right text-[10px] text-zinc-600 dark:text-zinc-400">
                   {r.sampled ? "OK" : r.sample_span_sec != null && r.sample_span_sec > 0 ? `${Math.round(r.sample_span_sec)}s` : "待采样"}
                 </td>
               </tr>
             ))}
             {rows.length === 0 && !error && !note && (
               <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-zinc-400">
+                <td colSpan={5} className="px-4 py-8 text-center text-zinc-600 dark:text-zinc-400">
                   {loading ? "加载中…" : "暂无数据"}
                 </td>
               </tr>
@@ -137,7 +137,7 @@ export function SpeedPanel({ className }: { className?: string }) {
           </tbody>
         </table>
       </div>
-      <div className="shrink-0 border-t border-zinc-100 px-3 py-1 text-[10px] text-zinc-500 dark:border-zinc-800/60">
+      <div className="shrink-0 border-t border-zinc-100 px-3 py-1 text-[10px] text-zinc-600 dark:text-zinc-400 dark:border-zinc-800/60">
         {themeName ? `${themeName} · ` : ""}不构成买卖建议 · 数据有延迟
       </div>
     </div>

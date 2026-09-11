@@ -113,6 +113,58 @@ class MinuteLinePayload(BaseModel):
     vr_baseline_5m: list[float] | None = None
 
 
+class MinuteDecisionItem(BaseModel):
+    """做 T 决策记录（GET /market/minute-decisions items 元素）。"""
+
+    decision_id: str
+    symbol: str
+    trade_date: str
+    trigger_ts: str
+    signal_price: float
+    bias: str
+    score: float
+    confidence: str | None = None
+    triggered: list[dict] = Field(default_factory=list)
+    invalidate_condition: str | None = None
+    executed: bool = False
+    executed_price: float | None = None
+    realized_spread_pct: float | None = None
+    best_price: float | None = None
+    worst_price: float | None = None
+    optimal_spread_pct: float | None = None
+    outcome: str | None = None
+    error_attribution: dict | None = None
+
+
+class MinuteDecisionsPayload(BaseModel):
+    """GET /market/minute-decisions 的 data。
+
+    ``outcomes`` 是「已结算结果 → 条数」的显式分布；``open`` = 未结算条数。
+    样本不足时**不装结论**——统计口径由前端按 open 数如实标注。
+    """
+
+    items: list[MinuteDecisionItem]
+    settled: int = 0
+    outcomes: dict[str, int] = Field(default_factory=dict)
+    open_count: int = 0
+    note: str = ""
+
+
+class MinuteSignalsPayload(BaseModel):
+    """GET /market/minute-signals/{symbol} 的 data。
+
+    ``degraded`` 原样透传引擎的降级原因（缺昨日量/缺波动率等），
+    ``recorded`` = 本次新增落库条数（0 表示这些信号此前已记录）。
+    """
+
+    symbol: str
+    signals: list[dict]
+    observed: int
+    degraded: list[str] = Field(default_factory=list)
+    recorded: int = 0
+    basis: dict = Field(default_factory=dict)
+
+
 class SentimentIndicator(BaseModel):
     name: str
     value: str | float | int | None = None

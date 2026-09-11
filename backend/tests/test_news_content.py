@@ -6,9 +6,7 @@
 from __future__ import annotations
 
 import pytest
-from fastapi.testclient import TestClient
 
-from app.main import app
 from app.market.article import (
     ArticleFetchError,
     classify_url,
@@ -140,18 +138,16 @@ def test_parse_notice_payload_empty_raises():
 
 # ---------- 端点行为（不 mock 白名单拒绝与降级路径） ----------
 
-def test_endpoint_rejects_non_whitelisted_url():
-    with TestClient(app) as client:
-        resp = client.get("/api/news/content", params={"url": "https://evil.example.com/x.html"})
-        assert resp.status_code == 400
+def test_endpoint_rejects_non_whitelisted_url(client):
+    resp = client.get("/api/news/content", params={"url": "https://evil.example.com/x.html"})
+    assert resp.status_code == 400
 
 
-def test_endpoint_degrades_on_fetch_failure():
+def test_endpoint_degrades_on_fetch_failure(client):
     """抓取失败 → 502 带原因（前端据此降级为摘要+原文链接）。"""
-    with TestClient(app) as client:
-        resp = client.get(
-            "/api/news/content",
-            params={"url": "https://finance.eastmoney.com/a/nonexistent000000000.html"},
-        )
-        assert resp.status_code == 502
-        assert resp.json()["detail"]
+    resp = client.get(
+        "/api/news/content",
+        params={"url": "https://finance.eastmoney.com/a/nonexistent000000000.html"},
+    )
+    assert resp.status_code == 502
+    assert resp.json()["detail"]

@@ -15,7 +15,7 @@ interface Props {
 
 export function Sparkline({ closes, width = 52, height = 24, up }: Props) {
   if (!closes || closes.length < 2) {
-    return <div className="text-center text-[9px] text-zinc-600" style={{ width, height }}>--</div>;
+    return <div className="text-center text-[9px] text-zinc-600 dark:text-zinc-400" style={{ width, height }}>--</div>;
   }
   const min = Math.min(...closes);
   const max = Math.max(...closes);

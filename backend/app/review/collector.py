@@ -17,7 +17,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import select
 
-from app.models.paper import PaperAccount, PaperOrder, PaperPosition
+from app.models.paper import SCOPE_MAIN, PaperAccount, PaperOrder, PaperPosition
 from app.review.schemas import (
     DataGap,
     IndexQuote,
@@ -260,8 +260,14 @@ def collect_trading(
     db = session_factory()
     try:
         # --- 账户 ---
+        # scope 过滤（S1-1 同族，2026-09-11）：trades 段只描述**用户交易账户 main**，
+        # 影子账户（shadow）在下方 ShadowSnapshot 独立采集。此前三处查询均无 scope，
+        # 影子持仓/委托会混进「账户与盈亏 / 操作评估」⇒ 复盘口径被污染且不可见。
         try:
-            acc = db.execute(select(PaperAccount).order_by(PaperAccount.id)).scalars().first()
+            acc = db.execute(
+                select(PaperAccount).where(PaperAccount.scope == SCOPE_MAIN)
+                .order_by(PaperAccount.id)
+            ).scalars().first()
             if acc:
                 account = {
                     "cash": acc.cash,
@@ -281,7 +287,10 @@ def collect_trading(
 
         # --- 当日订单（按北京时间过滤）---
         try:
-            rows = db.execute(select(PaperOrder).order_by(PaperOrder.created_at)).scalars().all()
+            rows = db.execute(
+                select(PaperOrder).where(PaperOrder.scope == SCOPE_MAIN)
+                .order_by(PaperOrder.created_at)
+            ).scalars().all()
             for o in rows:
                 if to_cst_date(o.created_at) != td:
                     continue
@@ -301,7 +310,9 @@ def collect_trading(
 
         # --- 持仓 ---
         try:
-            prows = db.execute(select(PaperPosition)).scalars().all()
+            prows = db.execute(
+                select(PaperPosition).where(PaperPosition.scope == SCOPE_MAIN)
+            ).scalars().all()
             missing_price: list[str] = []
             for p in prows:
                 if p.quantity <= 0:

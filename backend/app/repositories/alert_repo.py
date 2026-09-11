@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from app.core.db import utcnow
+from app.core.db import beijing_now_naive
 from app.models.alert import AlertEvent, AlertRule
 
 
@@ -45,7 +45,7 @@ class AlertRepository:
                 return None
             for k, v in kwargs.items():
                 setattr(rule, k, v)
-            rule.updated_at = utcnow()
+            rule.updated_at = beijing_now_naive()
             db.commit()
             db.refresh(rule)
             return rule
@@ -72,7 +72,7 @@ class AlertRepository:
             )
             db.add(event)
             rule = db.query(AlertRule).filter(AlertRule.id == rule_id).one()
-            rule.last_triggered_at = utcnow()
+            rule.last_triggered_at = beijing_now_naive()
             db.commit()
             db.refresh(event)
             return event
@@ -109,5 +109,5 @@ class AlertRepository:
         with self._session_factory() as db:
             rule = db.query(AlertRule).filter(AlertRule.id == rule_id).one_or_none()
             if rule:
-                rule.last_triggered_at = triggered_at or utcnow()
+                rule.last_triggered_at = triggered_at or beijing_now_naive()
                 db.commit()

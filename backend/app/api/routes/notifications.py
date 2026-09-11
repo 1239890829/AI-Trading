@@ -62,7 +62,7 @@ def get_alert_repo(request: Request) -> AlertRepository:
 
 
 def _alert_items(repo: AlertRepository, limit: int) -> list[dict]:
-    """watcher 确认/证伪 + 信号健康度预警 → 通知项。triggered_at 是 UTC naive → +8 转北京。
+    """watcher 确认/证伪 + 信号健康度预警 → 通知项。triggered_at 已统一北京时间 naive（2026-09-09 告警时区修复；此前存 UTC naive 在此 +8 补偿，补偿点已随存储统一移除）。
 
     P0-2（2026-09-08 用户指令「AI 盘中分析进站内通知」）：合并 AgentTriage
     判读结论与响应建议进 body——AI 的盘中分析在通知中心直接可见。
@@ -103,7 +103,7 @@ def _alert_items(repo: AlertRepository, limit: int) -> list[dict]:
         kind = snap.get("kind") or "watcher"
         direction = snap.get("direction") or ""
         text = (snap.get("text") or "").strip()
-        bj = (e.triggered_at + timedelta(hours=8)) if e.triggered_at else None
+        bj = e.triggered_at  # 北京时间 naive（存储已统一，勿再 +8）
         kind_label = (
             "确认" if kind == "confirm"
             else ("证伪" if kind == "falsify"

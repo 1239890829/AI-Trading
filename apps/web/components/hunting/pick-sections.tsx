@@ -34,7 +34,7 @@ export function RolePerformanceTable({ rows }: { rows: RolePerformance[] }) {
       </div>
       <table className="w-full">
         <thead>
-          <tr className="text-zinc-400">
+          <tr className="text-zinc-600 dark:text-zinc-400">
             <th className="text-left font-normal">角色</th>
             <th className="text-right font-normal">样本</th>
             <th className="text-right font-normal">胜率</th>
@@ -46,7 +46,7 @@ export function RolePerformanceTable({ rows }: { rows: RolePerformance[] }) {
             <tr key={r.role} className="border-t border-zinc-100 dark:border-zinc-800/60">
               <td className="py-1">{r.role}</td>
               <td className="text-right font-mono tabular-nums">{r.count}</td>
-              <td className={`text-right font-mono tabular-nums ${r.win_rate >= 50 ? "text-up" : "text-down"}`}>
+              <td className={`text-right font-mono tabular-nums ${r.win_rate >= 50 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}`}>
                 {r.win_rate}%
               </td>
               <td className={`text-right font-mono tabular-nums ${pctColor(r.avg_excess)}`}>
@@ -82,7 +82,7 @@ export function DailyReviews({ reviews }: { reviews: PickReviewRow[] }) {
     <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
       <div className="mb-1 font-medium">
         当日复盘（逐只归因：对在哪、错在哪）
-        <span className="ml-1.5 font-normal text-zinc-400">
+        <span className="ml-1.5 font-normal text-zinc-600 dark:text-zinc-400">
           走坏 {reviews.filter((r) => r.verdict === "bad").length} / 共 {reviews.length}
         </span>
       </div>
@@ -90,16 +90,16 @@ export function DailyReviews({ reviews }: { reviews: PickReviewRow[] }) {
         const label = REASON_LABELS[r.reason_category] ?? r.reason_category;
         const tone =
           r.verdict === "good"
-            ? "text-up"
+            ? "text-up-ink dark:text-up"
             : r.verdict === "bad"
-              ? "text-down"
-              : "text-zinc-400";
+              ? "text-down-ink dark:text-down"
+              : "text-zinc-600 dark:text-zinc-400";
         return (
           <div
             key={r.symbol + r.date}
             className="flex flex-wrap gap-2 border-b border-zinc-100 py-1 last:border-0 dark:border-zinc-800/60"
           >
-            <StockLink symbol={r.symbol} className="font-mono text-zinc-400">
+            <StockLink symbol={r.symbol} className="font-mono text-zinc-600 dark:text-zinc-400">
               {r.symbol}
             </StockLink>
             <span>{r.name ?? ""}</span>
@@ -107,7 +107,7 @@ export function DailyReviews({ reviews }: { reviews: PickReviewRow[] }) {
               超额 {pctText(r.excess_pct)}
             </span>
             <span className={tone}>{label}</span>
-            <span className="w-full text-zinc-500">{r.note}</span>
+            <span className="w-full text-zinc-600 dark:text-zinc-400">{r.note}</span>
           </div>
         );
       })}
@@ -126,9 +126,9 @@ export function HistoryList({
       <div className="mb-1 font-medium">历史组合（一致性可回溯）</div>
       {history.map((h) => (
         <div key={h.date} className="flex gap-2 border-b border-zinc-100 py-1 last:border-0 dark:border-zinc-800/60">
-          <span className="font-mono text-zinc-400">{h.date}</span>
+          <span className="font-mono text-zinc-600 dark:text-zinc-400">{h.date}</span>
           <span>均分 {h.score_avg}</span>
-          <span className="text-zinc-500">{h.symbols.join(" · ")}</span>
+          <span className="text-zinc-600 dark:text-zinc-400">{h.symbols.join(" · ")}</span>
         </div>
       ))}
     </div>

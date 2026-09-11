@@ -11,7 +11,7 @@ const LINKS = [
   { href: "/market", label: "市场" },
   { href: "/hunting", label: "猎场" },
   // 2026-09-08：研究页下线，回测取消、复盘与预警并入 AI 控制台（/agent）
-  { href: "/agent", label: "AI 控制台" },
+  { href: "/agent", label: "交易智能体" },
   // 2026-09-01 系统重构（docs/architecture-redesign.md），13 页 → 5 导航：
   // /themes /limit-up /boards /longhu → 盘面页四 tab（/tape?tab=…）
   // /heatmap → 市场页云图 tab；/watchlist → 工作台管理模式
@@ -38,7 +38,7 @@ export function NavBar() {
     <header className="sticky top-0 z-40 border-b border-zinc-200 bg-white/90 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/90">
       <div className="mx-auto flex h-14 max-w-7xl items-center gap-2 overflow-hidden px-2 sm:gap-4 sm:px-4 lg:gap-6">
         <Link href="/workbench" className="shrink-0 whitespace-nowrap font-semibold tracking-tight">
-          AShare <span className="text-up">AI</span> Trader
+          AShare <span className="text-up-ink dark:text-up">AI</span> Trader
         </Link>
         <nav className="hidden shrink-0 items-center gap-0.5 md:flex lg:gap-1">
           {LINKS.map((l) => {
@@ -50,7 +50,7 @@ export function NavBar() {
                 className={`rounded-md px-3 py-1.5 text-sm transition-colors ${
                   active
                     ? "bg-zinc-100 font-medium text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
-                    : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+                    : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
                 }`}
               >
                 {l.label}
@@ -64,7 +64,7 @@ export function NavBar() {
         <button
           onClick={toggleTheme}
           aria-label="切换主题"
-          className="rounded-md border border-zinc-200 px-2 py-1.5 text-sm text-zinc-500 hover:text-zinc-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
+          className="rounded-md border border-zinc-200 px-2 py-1.5 text-sm text-zinc-600 hover:text-zinc-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
         >
           <>
             {/* 深色态（显示太阳=可切浅色） */}

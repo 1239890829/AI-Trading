@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -35,6 +36,11 @@ def sf(tmp_path, monkeypatch):
                         lambda sf2: {"available": False, "note": "测试跳过"})
     monkeypatch.setattr(evo, "_collect_triage_stats",
                         lambda sf2: {"available": False, "note": "测试跳过"})
+    # B 类日报写入必须隔离到 tmp（KB-ENG-19：_EVOLUTION_DIR 锚定真实仓库根，
+    # 不隔离则每次 pytest 都向真实 docs/evolution/当天.md 追加测试条目）
+    evo_dir = tmp_path / "evolution"
+    evo_dir.mkdir()
+    monkeypatch.setattr(evo, "_EVOLUTION_DIR", evo_dir)
     yield factory
     from app.picks.style_router import set_override_provider
 
@@ -223,10 +229,247 @@ def test_data_health_structure(sf):
     out = evo._collect_data_health(sf)
     assert out["available"] is True
     names = {c["name"] for c in out["checks"]}
-    assert {"trade_calendar", "snapshot_parquet", "marketdb", "alert_pipeline"} <= names
+    assert {
+        "trade_calendar", "snapshot_parquet", "marketdb", "alert_pipeline",
+        # 2026-09-10 纳入：回补调度静默失败 → 分位校准窗口漂移 6 个交易日无人察觉
+        "sentiment_metrics",
+    } <= names
     for c in out["checks"]:
         assert isinstance(c["ok"], bool) and c["detail"]
     not_ok = [c["name"] for c in out["checks"] if not c["ok"]]
     assert out["n_issues"] == len(not_ok)
     # issues 每条 = "<name>：<detail>"，且与 not_ok 集合一一对应
     assert sorted(i.split("：", 1)[0] for i in out["issues"]) == sorted(not_ok)
+
+
+# ---------------------------------------------------------------- 调度器复现（2026-09-09 15:45 议程未触发事故）
+
+
+def test_scheduler_fires_when_clock_crosses_window(sf, monkeypatch):
+    """复现 09-09 事故：真实 evolution_scheduler 循环跨过 15:45 窗口必须生成议程。
+
+    用受控时钟 + 真实持久化交易日历驱动真实调度循环；窗口前不生成、跨过后生成。
+    若此测试挂，说明调度逻辑本身有 bug；若过，则当日未触发是进程环境问题，
+    须靠调度器 WARNING 日志与 /api/agent/agenda meta 的 liveness 现场取证。
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.market import trade_calendar as tc
+
+    BJ = timezone(timedelta(hours=8))
+    today = evo.beijing_now().date()
+
+    # 真实持久化日历（与线上同一份数据），保证交易日守卫用的是真实口径
+    real_days = tc._load_persisted()
+    assert real_days and real_days[-1] >= today, "持久化日历必须覆盖今日"
+
+    async def fake_trading_days(provider, lookback_days: int = 120):
+        return list(real_days)
+
+    monkeypatch.setattr(tc, "trading_days", fake_trading_days)
+    monkeypatch.setattr(evo, "autonomy_enabled", lambda: False)  # 只验证生成，不执行
+    _fake_llm(monkeypatch, json.dumps({"items": []}))
+
+    class _Hub:
+        provider = None
+
+    class _State:
+        hub = _Hub()
+
+    class _App:
+        state = _State()
+
+    clock = {"now": datetime.now(BJ).replace(hour=14, minute=44, second=0, microsecond=0)}
+    monkeypatch.setattr(evo, "beijing_now", lambda: clock["now"])
+    monkeypatch.setattr(evo, "_MIN_TICK_INTERVAL_SEC", 0.01)  # 生产行为不变（60s 下限），测试提速
+
+    async def main():
+        stop = asyncio.Event()
+        task = asyncio.create_task(
+            evo.evolution_scheduler(_App(), stop, run_hour=15, run_minute=45,
+                                    check_interval_seconds=0.02),
+        )
+        try:
+            await asyncio.sleep(0.15)  # 窗口前若干 tick
+            assert evo.get_agenda(today.isoformat(), sf) is None, "窗口前不应生成议程"
+            clock["now"] = clock["now"].replace(hour=15, minute=46)
+            for _ in range(60):
+                await asyncio.sleep(0.05)
+                if evo.get_agenda(today.isoformat(), sf) is not None:
+                    break
+            row = evo.get_agenda(today.isoformat(), sf)
+            assert row is not None, "跨过 15:45 窗口后调度器必须生成今日议程"
+            assert row["status"] in ("ready", "skipped", "failed", "executed")
+            # liveness 面：tick 必须刷新（否则 data=null 时无法区分"调度死了"与"真没有"）
+            st = evo.scheduler_status()
+            assert st["last_tick_at"], "调度器 tick 必须刷新 liveness"
+            assert st["last_tick_age_sec"] is not None and st["last_tick_age_sec"] < 5
+        finally:
+            stop.set()
+            with __import__("contextlib").suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(task), timeout=2)
+
+    asyncio.run(main())
+
+
+def test_b_class_never_touches_real_evolution_dir(sf, monkeypatch, tmp_path):
+    """KB-ENG-19 回归：B 类执行只写隔离目录，绝不追加真实 docs/evolution/。
+
+    2026-09-09 事故：_EVOLUTION_DIR 锚定真实仓库根而测试未隔离，每次 pytest
+    都向真实 docs/evolution/当天.md 追加 LLM 夹具条目（单日累计 84 行垃圾）。
+    """
+    payload = json.dumps({"items": [
+        {"class": "B", "finding": "隔离验证条目", "summary": "s", "priority": 1},
+    ]})
+    _fake_llm(monkeypatch, payload)
+
+    async def main():
+        return await evo.run_evolution_now(sf)
+
+    agenda = asyncio.run(main())
+    assert agenda["items"][0]["status"] == "executed"
+    # 写入发生在隔离目录（fixture 已把 _EVOLUTION_DIR 指到 tmp）
+    assert (evo._EVOLUTION_DIR / f"{evo.beijing_now().date().isoformat()}.md").exists()
+    assert "隔离验证条目" in (evo._EVOLUTION_DIR / f"{evo.beijing_now().date().isoformat()}.md").read_text()
+
+
+def test_data_health_flags_stale_sentiment_metrics(sf, tmp_path, monkeypatch):
+    """回归（2026-09-10 事故）：情绪指标库窗口陈旧必须报 NG。
+
+    真实事故：回补调度把 provider 原始日历（字符串）喂给 backfill → TypeError 被
+    `except Exception` 收成一条日志 ⇒ 库停在 6 个交易日之前，界面照旧写"按近 241
+    个交易日分位校准"。哨兵不查这个文件就等于没告警——这条断言锁住"会报"。
+    """
+    from datetime import timedelta
+
+    from app.market.trading_status import beijing_now
+
+    data_dir = tmp_path / "backend" / "data"
+    data_dir.mkdir(parents=True)
+    today = beijing_now().date()
+    stale_tail = (today - timedelta(days=20)).isoformat()  # 肯定超 3 个交易日的线
+    (data_dir / "sentiment_metrics.json").write_text(
+        json.dumps({"days": {stale_tail: {"date": stale_tail}}}), encoding="utf-8"
+    )
+    (data_dir / "trade_calendar.json").write_text(
+        json.dumps({"days": [(today - timedelta(days=i)).isoformat() for i in range(30)],
+                    "source": "test"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(evo, "PROJECT_ROOT", tmp_path)
+
+    out = evo._collect_data_health(sf)
+    check = next(c for c in out["checks"] if c["name"] == "sentiment_metrics")
+    assert check["ok"] is False
+    assert "回补调度停跑" in check["detail"]
+    assert any(i.startswith("sentiment_metrics：") for i in out["issues"])
+
+
+# ---------------------------------------------------------------- P0-7：marketdb 陈旧闸门 + 确定性议程项
+
+
+def test_data_health_marketdb_uses_content_date_not_mtime(sf, tmp_path, monkeypatch):
+    """P0-7 收紧：marketdb 判据改为**内容日期 × 交易日滞后**，不是文件 mtime。
+
+    旧判据 `mtime > 26h` 只证明「文件被写过」——一次失败的 `--full` 重跑会刷新
+    mtime 而数据仍停在旧日期（假 OK）。本用例把 mtime 刷成"刚刚改过"、内容却停在
+    10 天前，断言哨兵照样报 NG：判据必须落在数据上。
+    """
+    import duckdb
+
+    from app.market.trading_status import beijing_now
+
+    mdb_dir = tmp_path / "backend" / "data" / "marketdb"
+    mdb_dir.mkdir(parents=True)
+    db = mdb_dir / "market.duckdb"
+    con = duckdb.connect(str(db))
+    con.execute("CREATE TABLE daily_k_adj (thscode VARCHAR, date_ms BIGINT, close_adj DOUBLE)")
+    tail = beijing_now().date() - timedelta(days=10)
+    ms = int(datetime(tail.year, tail.month, tail.day,
+                      tzinfo=timezone(timedelta(hours=8))).timestamp() * 1000)
+    con.execute("INSERT INTO daily_k_adj VALUES ('600519.SH', ?, 10.0)", [ms])
+    con.close()
+    db.touch()  # mtime = 现在：旧判据会被骗过
+
+    monkeypatch.setattr(evo, "PROJECT_ROOT", tmp_path)
+    out = evo._collect_data_health(sf)
+    check = next(c for c in out["checks"] if c["name"] == "marketdb")
+    assert check["ok"] is False
+    assert "滞后" in check["detail"] and "个交易日" in check["detail"]
+    assert "同步停跑" in check["detail"]
+    assert any(i.startswith("marketdb：") for i in out["issues"])
+
+
+def test_data_health_items_deterministic_and_b_class():
+    """数据健康 NG → **确定性**议程条目（不依赖 LLM 是否注意到）。
+
+    真实事故（2026-09-09/09-10）：marketdb 停跑两天都进了 inputs.data_health.issues，
+    但 LLM 每天只产出 1 条别的条目 ⇒「检查到 ≠ 有人知道」。此用例锁住代码侧固化。
+    """
+    dh = {"available": True, "n_issues": 1,
+          "issues": ["marketdb：367 MB，库内最新 2026-09-03，滞后 6 个交易日"],
+          "checks": [{"name": "marketdb", "ok": False, "detail": "滞后 6 个交易日"},
+                     {"name": "disk_free", "ok": True, "detail": "ok"}]}
+    items = evo._data_health_items(dh)
+    assert len(items) == 1
+    it = items[0]
+    assert it["class"] == "B" and it["origin"] == evo.DATA_HEALTH_ORIGIN
+    assert it["status"] == "pending" and it["priority"] == 1
+    assert "marketdb" in it["finding"]
+    # evidence 只带未通过项（通过项不噪声化证据）
+    assert [c["name"] for c in it["evidence"]["failed_checks"]] == ["marketdb"]
+    # 无异常 / 检查不可用 → 不产出（宁缺毋滥）
+    assert evo._data_health_items({"available": True, "n_issues": 0, "issues": []}) == []
+    assert evo._data_health_items({"available": False, "issues": ["x"]}) == []
+
+
+def test_data_health_item_bypasses_task_budget(sf, monkeypatch):
+    """确定性议程项不得被自治任务预算挤掉——否则异常就又变回"没人知道"。
+
+    预算按 `executed` 计数；LLM 用满后普通条目会 deferred，但数据健康项必须落账。
+    """
+    monkeypatch.setattr(evo.settings, "agent_daily_task_budget", 0)
+    agenda = {
+        "date": evo.beijing_now().date().isoformat(),
+        "items": [
+            {"class": "D", "finding": "占位", "summary": ""},  # 预算为 0 时必 deferred
+            {"class": "B", "origin": evo.DATA_HEALTH_ORIGIN, "finding": "数据健康哨兵报警",
+             "summary": "marketdb 停跑", "evidence": {}, "status": "pending", "result": ""},
+        ],
+    }
+    out = evo.execute_agenda(agenda, sf)
+    by_finding = {i.get("finding"): i for i in out["items"]}
+    assert by_finding["数据健康哨兵报警"]["status"] == "executed"
+    assert by_finding["占位"]["status"] == "deferred"
+
+
+# ---------------------------------------------------------------- S1-2：持仓监护读取降级进哨兵
+
+
+def test_data_health_surfaces_position_monitor_read_failure(sf):
+    """S1-2 回归：`exit_engine` 两路持仓读取失败必须被数据健康哨兵看见。
+
+    旧行为：读失败 `return {}` / `positions = []`，与「确实无持仓」返回值相同，
+    哨兵与界面都显示正常 ⇒ 自动离场/硬止损/真实持仓提醒整轮静默跳过。
+    """
+    from app.picks import exit_engine as ee
+
+    ee._PAPER_READ.update(state="failed", reason="OperationalError: database is locked", failures=2)
+    ee._REAL_READ.update(state="failed", reason="OperationalError: database is locked", failures=1)
+    try:
+        out = evo._collect_data_health(sf)
+        check = next(c for c in out["checks"] if c["name"] == "position_monitor_read")
+        assert check["ok"] is False
+        assert "监护降级" in check["detail"]
+        assert any(i.startswith("position_monitor_read：") for i in out["issues"])
+        # 文案只用异常类名（不含会变化的完整消息/计数），保证哨兵去重稳定
+        assert "database is locked" not in check["detail"]
+
+        # 恢复正常 → 不再报问题（避免"每天都红的门等于没有门"）
+        ee._PAPER_READ.update(state="empty", reason=None, failures=0)
+        ee._REAL_READ.update(state="ok", reason=None, failures=0)
+        out2 = evo._collect_data_health(sf)
+        assert next(c for c in out2["checks"] if c["name"] == "position_monitor_read")["ok"] is True
+    finally:
+        ee._PAPER_READ.update(state="unknown", reason=None, failures=0)
+        ee._REAL_READ.update(state="unknown", reason=None, failures=0)

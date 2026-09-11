@@ -65,18 +65,26 @@ def replay_picks(
     threshold: float = REPLACE_THRESHOLD,
     max_picks: int = MAX_PICKS,
     max_swaps: int | None = MAX_SWAPS_PER_DAY,
+    min_score: float = 0.0,
 ) -> dict:
     """逐日回放：应用换股门槛与每日换股上限，输出轨迹 + 稳定性指标 + 对照组。
 
     :param daily_ranked: 按日期升序的 [(date, 候选按综合分降序)]，候选需含 symbol/score
     :param max_swaps: 每日最多换入几只（None = 不限）
+    :param min_score: 入选门槛。**默认 0.0（不在回放里启用），这不是笔误**——
+        回放的分数是历史重建分，只有梯队+技术两维可回放（见模块 docstring），
+        其绝对量级与线上六维综合分**不可比**；把线上标定的绝对门槛（MIN_PICK_SCORE）
+        套到二维重建分上属于量纲错误，会把回放结果整体压成空组合。
+        所以这里默认关闭、只由调用方显式开启；线上路径（picks.py 路由）用引擎默认值。
     :return: {daily, stats, baseline, threshold_effect, ...}
     """
     daily: list[list[str]] = []
     per_day: list[dict] = []
     prev: list[str] = []
     for date_str, ranked in daily_ranked:
-        kept, replaced = apply_replacement_threshold(prev, ranked, threshold, max_picks, max_swaps)
+        kept, replaced = apply_replacement_threshold(
+            prev, ranked, threshold, max_picks, max_swaps, min_score=min_score
+        )
         symbols = [k["symbol"] for k in kept]
         daily.append(symbols)
         scores = [k.get("score") for k in kept if isinstance(k.get("score"), (int, float))]

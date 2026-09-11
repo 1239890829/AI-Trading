@@ -123,7 +123,7 @@ export function LonghuTab() {
     <div className="flex h-full min-h-0 flex-col">
       <div className="mb-4 flex shrink-0 flex-wrap items-center justify-between gap-2">
         <h2 className="text-base font-semibold">龙虎榜 · {tradeDate || "…"}</h2>
-        <div className="flex items-center gap-2 text-xs text-zinc-400">
+        <div className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
           <label htmlFor="lh-date">按日期查询（T-1 盘后披露）：</label>
           <input
             id="lh-date"
@@ -135,14 +135,14 @@ export function LonghuTab() {
       </div>
 
       {error && !isPreRelease && (
-        <div className="mb-4 shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-600 dark:text-amber-300">
+        <div className="mb-4 shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
           {/* 加载失败时 records 为空，无从判断实际数据源，不猜、不写死源名 */}
           龙虎榜加载失败：{error}
         </div>
       )}
 
       {isPreRelease && (
-        <div className="mb-4 shrink-0 rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 py-3 text-sm text-sky-600 dark:text-sky-300">
+        <div className="mb-4 shrink-0 rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 py-3 text-sm text-sky-700 dark:text-sky-300">
           今日榜单尚未披露：龙虎榜由交易所收盘后披露（数据商约 17:00 同步），当前为盘前/盘中查询，非数据源故障。
         </div>
       )}
@@ -168,11 +168,11 @@ export function LonghuTab() {
               ))}
             </div>
           ) : (
-            <p className="px-4 py-10 text-center text-sm text-zinc-400">暂无数据（龙虎榜盘后披露，当日数据需收盘后查询）</p>
+            <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">暂无数据（龙虎榜盘后披露，当日数据需收盘后查询）</p>
           )
         ) : (
           <table className="w-full text-sm">
-            <thead className="text-left text-xs text-zinc-400">
+            <thead className="text-left text-xs text-zinc-600 dark:text-zinc-400">
               <tr className="border-b border-zinc-200 dark:border-zinc-800">
                 {["代码", "名称", "区间", "涨幅", ...(hasClose ? ["收盘"] : []), ...(hasTurnover ? ["换手"] : []), ...(hasAmount ? ["榜内成交"] : []), "净买额", "买入", "卖出", "游资净额", "机构净额", "上榜原因"].map((h) => (
                   <th key={h} className={`px-2 py-2 font-medium ${["名称", "区间", "上榜原因"].includes(h) ? "" : "text-right"}`}>
@@ -185,13 +185,13 @@ export function LonghuTab() {
               {sorted.map((r, i) => (
                 // 同股多榜并存，key 必须带 range_days，否则 React 复用错行
                 <tr key={`${r.symbol}-${r.range_days ?? "na"}-${i}`} onClick={stockNav(r.symbol)} className="cursor-pointer border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900">
-                  <td className="px-2 py-2 font-mono text-xs text-zinc-400">
+                  <td className="px-2 py-2 font-mono text-xs text-zinc-600 dark:text-zinc-400">
                     <StockLink symbol={r.symbol}>
                       {r.symbol}
                     </StockLink>
                   </td>
                   <td className="px-2 py-2">{r.name}</td>
-                  <td className="px-2 py-2 text-xs text-zinc-400" title="统计区间：交易所按不同触发条件分别披露当日榜与三日榜，两者金额不可相加">
+                  <td className="px-2 py-2 text-xs text-zinc-600 dark:text-zinc-400" title="统计区间：交易所按不同触发条件分别披露当日榜与三日榜，两者金额不可相加">
                     {scopeText(r.range_days)}
                   </td>
                   <td className={`px-2 py-2 text-right font-mono ${pctColor(r.change_pct)}`}>{pctText(r.change_pct)}</td>
@@ -200,19 +200,19 @@ export function LonghuTab() {
                     <td className="px-2 py-2 text-right font-mono text-xs">{r.turnover_rate != null ? `${fmt(r.turnover_rate)}%` : "--"}</td>
                   )}
                   {hasAmount && <td className="px-2 py-2 text-right font-mono text-xs">{fmtAmount(r.amount)}</td>}
-                  <td className={`px-2 py-2 text-right font-mono text-xs ${(r.net_buy ?? 0) > 0 ? "text-up" : "text-down"}`}>
+                  <td className={`px-2 py-2 text-right font-mono text-xs ${(r.net_buy ?? 0) > 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}`}>
                     {fmtAmount(r.net_buy)}
                   </td>
-                  <td className="px-2 py-2 text-right font-mono text-xs text-zinc-400">{fmtAmount(r.buy_amount)}</td>
-                  <td className="px-2 py-2 text-right font-mono text-xs text-zinc-400">{fmtAmount(r.sell_amount)}</td>
+                  <td className="px-2 py-2 text-right font-mono text-xs text-zinc-600 dark:text-zinc-400">{fmtAmount(r.buy_amount)}</td>
+                  <td className="px-2 py-2 text-right font-mono text-xs text-zinc-600 dark:text-zinc-400">{fmtAmount(r.sell_amount)}</td>
                   {/* 游资/机构净额缺失 = 该榜单无对应席位参与，与"参与但净额为 0"不同，显示 -- 而非 0 */}
-                  <td className={`px-2 py-2 text-right font-mono text-xs ${(r.hot_money_net_value ?? 0) > 0 ? "text-up" : (r.hot_money_net_value ?? 0) < 0 ? "text-down" : ""}`}>
+                  <td className={`px-2 py-2 text-right font-mono text-xs ${(r.hot_money_net_value ?? 0) > 0 ? "text-up-ink dark:text-up" : (r.hot_money_net_value ?? 0) < 0 ? "text-down-ink dark:text-down" : ""}`}>
                     {fmtAmount(r.hot_money_net_value)}
                   </td>
-                  <td className={`px-2 py-2 text-right font-mono text-xs ${(r.org_net_value ?? 0) > 0 ? "text-up" : (r.org_net_value ?? 0) < 0 ? "text-down" : ""}`}>
+                  <td className={`px-2 py-2 text-right font-mono text-xs ${(r.org_net_value ?? 0) > 0 ? "text-up-ink dark:text-up" : (r.org_net_value ?? 0) < 0 ? "text-down-ink dark:text-down" : ""}`}>
                     {fmtAmount(r.org_net_value)}
                   </td>
-                  <td className="px-2 py-2 text-xs text-zinc-400" title={r.reason ?? ""}>
+                  <td className="px-2 py-2 text-xs text-zinc-600 dark:text-zinc-400" title={r.reason ?? ""}>
                     {(r.reason ?? "--").slice(0, 22)}
                   </td>
                 </tr>
@@ -229,7 +229,7 @@ export function LonghuTab() {
           open={trailOpen}
           onToggle={(e) => setTrailOpen((e.target as HTMLDetailsElement).open)}
         >
-          <summary className="cursor-pointer select-none px-4 py-2.5 text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">
+          <summary className="cursor-pointer select-none px-4 py-2.5 text-xs text-zinc-600 dark:text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">
             题材迁徙 · 近 {trail.days.length} 日龙虎榜净额按概念聚合（等分守恒口径，非真实拆分；仅日榜）
           </summary>
           <div className="space-y-1.5 border-t border-zinc-200 px-4 py-3 dark:border-zinc-800">
@@ -253,14 +253,14 @@ export function LonghuTab() {
                       </div>
                     ))}
                   </div>
-                  <span className={`w-20 shrink-0 text-right font-mono tabular-nums ${((row.total ?? 0) > 0 && "text-up") || ((row.total ?? 0) < 0 && "text-down") || "text-zinc-400"}`}>
+                  <span className={`w-20 shrink-0 text-right font-mono tabular-nums ${((row.total ?? 0) > 0 && "text-up-ink dark:text-up") || ((row.total ?? 0) < 0 && "text-down-ink dark:text-down") || "text-zinc-600 dark:text-zinc-400"}`}>
                     {fmtAmount(row.total)}
                   </span>
                 </div>
               );
             })}
             {trail.degraded.length > 0 && (
-              <p className="pt-1 text-[11px] text-amber-500">
+              <p className="pt-1 text-[11px] text-amber-800 dark:text-amber-500">
                 部分交易日拉取失败已跳过：{trail.degraded.join("；")}
               </p>
             )}
@@ -268,16 +268,16 @@ export function LonghuTab() {
         </details>
       )}
 
-      <div className="mt-4 shrink-0 space-y-1 text-xs text-zinc-400">
+      <div className="mt-4 shrink-0 space-y-1 text-xs text-zinc-600 dark:text-zinc-400">
         {isIntradaySnapshot && (
-          <p className="text-amber-500">
+          <p className="text-amber-800 dark:text-amber-500">
             当前为盘中未定稿快照：龙虎榜以收盘后交易所披露为准，盘中数据可能继续新增或变化。
           </p>
         )}
         {stockCount > 0 && records.length > stockCount && (
           <p>
             记录数多于股票数属正常：同一只股票可同时上「当日榜」与「三日榜」（交易所按不同触发条件分别披露），
-            两者买卖净额是不同区间的累计值，<span className="text-amber-500">不可相加</span>。
+            两者买卖净额是不同区间的累计值，<span className="text-amber-800 dark:text-amber-500">不可相加</span>。
           </p>
         )}
         {hiddenCols.length > 0 && (

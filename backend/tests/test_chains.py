@@ -1,4 +1,4 @@
-"""传导链知识表测试（hotspot-pipeline-design §5 验收基准，2026-09-07）。
+"""传导链知识表测试（docs/summary/architecture-design.md §3 验收基准，2026-09-07）。
 
 §5 四条固定测试集 = P0 完成的定义：标题取设计文档 §3 实测样例的忠实转述，
 期望输出以 §5 表格为准。网络零依赖（match_chains/build_event 纯函数）。
@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import date
 
 from app.core.db import get_engine, get_session_factory
-from app.events.chains import macro_calendar_note
+from app.events.chains import macro_calendar_note, macro_event_line, select_macro_events
 from app.events.extract import build_event
 from app.events.store import EventStore
 
@@ -125,6 +125,13 @@ def test_chain_rows_never_break_event_store_roundtrip():
     assert any(d.target_type == "market" and d.target == "A股大盘" and d.direction == -1 for d in dirs)
 
 
+def test_chain_trigger_in_summary():
+    """P0-4：传导链触发词落在摘要里也应命中（标题被截断的补偿）。"""
+    ev = build_event("极端气候冲击农业生产", summary="世界气象组织确认厄尔尼诺强度创纪录")
+    targets = {d["target"] for d in ev["directions"] if d["matched_by"] == "chain"}
+    assert {"化肥", "农业种植"} <= targets, f"摘要触发词应命中传导链，实际 {targets}"
+
+
 # --------------------------------------------------------------- 宏观日历（G6）
 
 def test_macro_calendar_nfp_day_and_next_trading_day():
@@ -141,3 +148,102 @@ def test_macro_calendar_winter_time():
     # 2026-12 第一个周五 = 12-04（冬令时 → 21:30）
     note = macro_calendar_note(date(2026, 12, 4))
     assert note is not None and "21:30" in note
+
+
+# ------------------------------------------------- 财经日历高信号筛选（P1-8 残余）
+
+
+def _row(region, event, *, time="20:30", star=2, actual=None, forecast=None, previous=None):
+    return {
+        "region": region,
+        "event": event,
+        "time": time,
+        "actual": actual,
+        "forecast": forecast,
+        "previous": previous,
+        "importance": star,
+    }
+
+
+def test_macro_events_keeps_whitelist_and_drops_noise():
+    """白名单命中 ∧ 噪音词排除 —— 真实数据里 star=2 混大量日内噪音，不能只看星级。"""
+    rows = [
+        _row("中国", "中国8月CPI年率(%)", time="09:30", star=2),
+        _row("美国", "美国8月ISM制造业PMI", time="22:00", star=2),
+        # 同为 star=2 的日内噪音，必须被噪音词挡掉
+        _row("中国", "中国9月10日上期所每日仓单变动-铜(吨)", star=2),
+        _row("美国", "美国9月2日COMEX黄金库存-每日更新(百盎司)", star=2),
+        _row("美国", "美国截至9月2日美联储资产负债表(万亿美元)", star=2),
+        _row("美国", "美国9月8日3年期国债竞拍-总金额(亿美元)", star=1),
+        # 不在白名单的地区（非中/美）一律不进
+        _row("德国", "德国8月CPI年率(%)", star=2),
+        # 命中零售销售但属周度高频噪音（实测 09-09 误收）
+        _row("美国", "美国截至8月31日当周红皮书商业零售销售年率(%)", star=2),
+    ]
+    out = select_macro_events(rows)
+    labels = [(e["region"], e["label"]) for e in out]
+    assert labels == [("中国", "CPI"), ("美国", "ISM")]
+
+
+def test_macro_events_prefers_year_over_month_and_m1():
+    """同主题同星级择条：年率 > 月率；M1 > M2 > M0（数字型 token 优先，实测踩过）。"""
+    rows = [
+        _row("中国", "中国8月CPI月率(%)", time="09:30", star=1),
+        _row("中国", "中国8月CPI年率(%)", time="09:30", star=1),
+        _row("中国", "中国8月M0货币供应年率(%)", time="16:00", star=1),
+        _row("中国", "中国8月M1货币供应年率(%)", time="16:00", star=1),
+        _row("中国", "中国8月M2货币供应年率(%)", time="16:00", star=1),
+    ]
+    out = {e["label"]: e["event"] for e in select_macro_events(rows)}
+    assert out["CPI"] == "中国8月CPI年率(%)"
+    assert out["货币供应"] == "中国8月M1货币供应年率(%)"
+
+
+def test_macro_events_higher_star_wins_over_prefer_order():
+    rows = [
+        _row("中国", "中国8月CPI年率(%)", time="09:30", star=1),
+        _row("中国", "中国8月CPI月率(%)", time="09:30", star=2),
+    ]
+    assert select_macro_events(rows)[0]["event"] == "中国8月CPI月率(%)"
+
+
+def test_macro_events_sorted_by_time_and_limit():
+    rows = [
+        _row("美国", "美国8月CPI年率(%)", time="20:30"),
+        _row("中国", "中国8月CPI年率(%)", time="09:30"),
+        _row("美国", "美国8月ISM制造业PMI", time="22:00"),
+    ]
+    assert [e["time"] for e in select_macro_events(rows)] == ["09:30", "20:30", "22:00"]
+    assert len(select_macro_events(rows, limit=2)) == 2
+
+
+def test_macro_events_empty_is_not_none():
+    """三态纪律：空列表是「当日确无高信号事件」的真信息，不是缺失。"""
+    assert select_macro_events([]) == []
+    assert select_macro_events([_row("中国", "中国9月10日上期所每日仓单变动-铜(吨)")]) == []
+
+
+def test_macro_event_line_three_state_values():
+    """「未公布」是源占位文案，按缺失处理；无值时不补 0 也不写 None。"""
+    line = macro_event_line(
+        {"time": "09:30", "region": "中国", "label": "CPI", "event": "中国8月CPI年率(%)",
+         "actual": "0.8", "forecast": "0.8", "previous": "0.5"}
+    )
+    assert line == "09:30 中国·CPI（公布 0.8）　中国8月CPI年率(%)"
+    pending = macro_event_line(
+        {"time": "16:00", "region": "中国", "label": "社融", "event": "中国8月社会融资规模(亿元)",
+         "actual": "未公布", "forecast": None, "previous": "12000"}
+    )
+    assert "未公布" not in pending and "前值 12000" in pending and "公布" not in pending
+    bare = macro_event_line(
+        {"time": None, "region": "美国", "label": "GDP", "event": "美国二季度GDP(%)",
+         "actual": None, "forecast": None, "previous": None}
+    )
+    assert bare == "美国·GDP　美国二季度GDP(%)"
+
+
+def test_macro_events_select_attaches_line():
+    """格式化单点收口：后端把 line 一起给出，前端/卡片只渲染不拼接。"""
+    out = select_macro_events([_row("中国", "中国8月CPI年率(%)", time="09:30", actual="0.8")])
+    assert out[0]["line"] == "09:30 中国·CPI（公布 0.8）　中国8月CPI年率(%)"
+

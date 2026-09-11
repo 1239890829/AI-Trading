@@ -35,7 +35,7 @@ function inline(text: string, onNavigate?: Props["onNavigate"], keyBase = ""): R
         <button
           key={key}
           onClick={() => onNavigate?.(id)}
-          className="mx-0.5 rounded bg-sky-500/10 px-1 align-baseline text-[11px] font-medium text-sky-600 transition-colors hover:bg-sky-500/20 dark:text-sky-300"
+          className="mx-0.5 rounded bg-sky-500/10 px-1 align-baseline text-[11px] font-medium text-sky-700 transition-colors hover:bg-sky-500/20 dark:text-sky-300"
           title={`跳转：${id}`}
         >
           {id}
@@ -124,7 +124,7 @@ export function MarkdownView({ content, onNavigate }: Props) {
               <thead>
                 <tr className="border-b border-zinc-200 dark:border-zinc-800">
                   {header.map((h, hi) => (
-                    <th key={hi} className="px-2 py-1 text-left font-medium text-zinc-500">
+                    <th key={hi} className="px-2 py-1 text-left font-medium text-zinc-500 dark:text-zinc-400">
                       {inline(h, onNavigate, `th${hi}`)}
                     </th>
                   ))}

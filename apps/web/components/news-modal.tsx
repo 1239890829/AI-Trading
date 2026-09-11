@@ -14,6 +14,7 @@ import { API_BASE, getNewsContent, type ArticleBlock, type ArticleContent } from
 import { workbenchUrlWithBack, themesUrl } from "@/lib/routing";
 import { createEntityMatcher, type EntityDict, type EntityMatch, type EntityMatcher } from "@/lib/entity-links";
 import { RichText } from "@/components/assistant/rich-text";
+import { eventTimeText } from "@/lib/format";
 
 export interface NewsModalItem {
   title: string;
@@ -101,7 +102,7 @@ function TableBlock({ block }: { block: Extract<ArticleBlock, { type: "table" }>
           ))}
         </tbody>
       </table>
-      {block.truncated_rows && <p className="px-2 py-1 text-[10px] text-amber-500">表格过长已截断，完整内容见原文</p>}
+      {block.truncated_rows && <p className="px-2 py-1 text-[10px] text-amber-800 dark:text-amber-500">表格过长已截断，完整内容见原文</p>}
     </div>
   );
 }
@@ -111,7 +112,7 @@ function ImageBlock({ src }: { src: string }) {
   const [failed, setFailed] = useState(false);
   if (failed) {
     return (
-      <p className="rounded-md bg-zinc-50 px-3 py-2 text-[11px] text-zinc-400 dark:bg-zinc-800/50">
+      <p className="rounded-md bg-zinc-50 px-3 py-2 text-[11px] text-zinc-600 dark:text-zinc-400 dark:bg-zinc-800/50">
         [配图未能加载，可到原文查看]
       </p>
     );
@@ -119,6 +120,9 @@ function ImageBlock({ src }: { src: string }) {
   return (
     <figure className="m-0">
       {/* referrerPolicy：东财 CDN 部分图片校验 Referer，no-referrer 提高加载成功率 */}
+      {/* eslint-disable-next-line @next/next/no-img-element -- C 类显式豁免（P1-27）：
+          next/image 走自家优化端点取图会丢 Referer；新闻配图来自任意第三方域名，
+          逐个维护 remotePatterns 不现实。保留原生 <img> + referrerPolicy + onError 降级。 */}
       <img
         src={src}
         alt=""
@@ -250,25 +254,28 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
 
   const shownTitle = content?.title ?? item.title;
   const shownSource = content?.source_label ?? sourceText(item.source);
-  const shownTime = content?.published ?? item.date ?? null;
+  // 2026-09-09：此前优先取 content.published（抓正文接口的源站时间，与列表的
+  // EventStore.published_at 不同源 → 时间对不上）。改为**优先列表同字段**
+  // item.date，两者都经 eventTimeText 统一格式。
+  const shownTime = eventTimeText(item.date ?? content?.published ?? null);
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+      className="anim-backdrop-in fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
       onMouseDown={handleBackdrop}
       role="dialog"
       aria-modal="true"
       aria-label={shownTitle}
       data-testid="news-modal"
     >
-      <div className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="anim-scale-in flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900">
         {/* 头部：标题 + 元信息 + 关闭 */}
         <div className="border-b border-zinc-100 px-5 py-3.5 dark:border-zinc-800/80">
           <div className="flex items-start justify-between gap-3">
             <h2 className="text-[15px] font-semibold leading-snug text-zinc-900 dark:text-zinc-100">{shownTitle}</h2>
             <button
               onClick={onClose}
-              className="shrink-0 rounded p-1 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+              className="shrink-0 rounded p-1 text-zinc-600 dark:text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
               aria-label="关闭"
             >
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -276,12 +283,12 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
               </svg>
             </button>
           </div>
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-zinc-500">
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-zinc-600 dark:text-zinc-400">
             {item.kindLabel && <span className="rounded bg-zinc-100 px-1 py-px dark:bg-zinc-800">{item.kindLabel}</span>}
             {shownSource && <span>{shownSource}</span>}
             {shownTime && <span>{shownTime}</span>}
-            {content?.cached && <span className="text-zinc-400">缓存</span>}
-            {content?.truncated && <span className="text-amber-500">长文已截断，完整内容见原文</span>}
+            {content?.cached && <span className="text-zinc-600 dark:text-zinc-400">缓存</span>}
+            {content?.truncated && <span className="text-amber-800 dark:text-amber-500">长文已截断，完整内容见原文</span>}
           </div>
         </div>
 
@@ -322,12 +329,12 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
 
           {!loading && !content && (
             <div data-testid="news-modal-degraded">
-              <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+              <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-400">
                 正文获取失败{error ? `（${error}）` : ""}，以下为摘要，可在原文页查看完整内容。{" "}
                 {/* 渲染守卫会跳过同 URL 重取，瞬态失败必须显式重试入口自愈 */}
                 <button
                   onClick={() => setFetchedUrl(null)}
-                  className="font-medium text-sky-600 transition-colors hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300"
+                  className="font-medium text-sky-700 transition-colors hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300"
                   data-testid="news-modal-retry"
                 >
                   重试
@@ -336,7 +343,7 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
               {item.digest ? (
                 <p className="mt-3 text-[13px] leading-relaxed text-zinc-700 dark:text-zinc-300">{item.digest}</p>
               ) : (
-                <p className="mt-3 text-[13px] text-zinc-500">暂无摘要。</p>
+                <p className="mt-3 text-[13px] text-zinc-600 dark:text-zinc-400">暂无摘要。</p>
               )}
             </div>
           )}
@@ -344,12 +351,12 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
 
         {/* 底部：原文链接（版权边界：始终保留跳转） */}
         <div className="flex items-center justify-between border-t border-zinc-100 px-5 py-2.5 text-[11px] dark:border-zinc-800/80">
-          <span className="text-zinc-400">内容归原作者/来源媒体所有，本站仅作研究参考</span>
+          <span className="text-zinc-600 dark:text-zinc-400">内容归原作者/来源媒体所有，本站仅作研究参考</span>
           <a
             href={item.url}
             target="_blank"
             rel="noreferrer"
-            className="font-medium text-blue-600 transition-colors hover:text-blue-500 dark:text-blue-400"
+            className="font-medium text-blue-700 transition-colors hover:text-blue-500 dark:text-blue-400"
           >
             查看原文 ↗
           </a>

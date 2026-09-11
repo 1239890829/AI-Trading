@@ -509,3 +509,39 @@ def test_auction_gaps_skips_for_mock_provider():
 
     provider = SimpleNamespace()  # 无该方法
     assert asyncio.run(_auction_gaps(provider, date.today(), [SimpleNamespace(symbol="600519")])) is None
+
+
+def test_entry_checklist_declares_missing_inputs():
+    """三态纪律：缺失的输入要显式列进 missing，不能静默当"缺失=中性"。"""
+    e = entry_checklist(symbol="600001", boards=2, market_phase="发酵", theme_stage="发酵")
+    for label in ("封单额", "流通市值", "封板时间", "换手率", "炸板次数"):
+        assert label in e["missing"]
+    assert "市场阶段" not in e["missing"]  # 已给
+    full = entry_checklist(
+        symbol="600001", boards=2, market_phase="发酵", theme_stage="发酵",
+        seal_amount=1e8, float_market_cap=8e9, first_seal_time="09:40:00",
+        turnover_rate=9.0, break_count=0, dragon={"grade": "龙头相"},
+    )
+    assert full["missing"] == []
+
+
+def test_entry_checklist_note_is_plain_text_and_missing_sentence_is_conditional():
+    """note 直接进 UI 纯文本渲染 → 不得含 Markdown 标记；缺项说明只在真有缺项时出现。
+
+    回归：曾把 `missing` 写成 Markdown 代码跨度，前端字面显示反引号；且该句无论有无
+    缺项都静态追加，在 missing 为空时反而暗示"有东西没取到"，与三态语义相悖。
+    """
+    partial = entry_checklist(symbol="600001", boards=2, market_phase="发酵", theme_stage="发酵")
+    assert partial["missing"]  # 前置：确实有缺项
+    assert "`" not in partial["note"]
+    assert "未判定" in partial["note"]  # 有缺项 → 说明「按未判定呈现」
+
+    full = entry_checklist(
+        symbol="600001", boards=2, market_phase="发酵", theme_stage="发酵",
+        seal_amount=1e8, float_market_cap=8e9, first_seal_time="09:40:00",
+        turnover_rate=9.0, break_count=0, dragon={"grade": "龙头相"},
+    )
+    assert full["missing"] == []
+    assert "`" not in full["note"]
+    assert "未取到" not in full["note"]  # 无缺项 → 不出现缺项说明
+    assert "不构成介入理由" in full["note"]  # 免责声明恒定

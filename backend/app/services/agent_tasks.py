@@ -32,7 +32,13 @@ from app.models.agent import TERMINAL_STATUSES, AgentAudit, AgentTask
 
 log = logging.getLogger(__name__)
 
-#: 任务类型 → (展示名, 风险等级, 说明)
+#: 任务类型元数据（展示名 / 风险等级 / 说明）。
+#:
+#: ⚠️ **收录 ≠ 可创建**。`mutation` 与 `escalation` 是**服务侧登记**产生的条目
+#: （record_mutation / record_escalation），没有 handler、不启动执行；它们出现在
+#: 本表只为让任务中心与审计有统一标签来源，**不属于**「新建任务」的可选项
+#: ——放进可创建清单会建出必然失败的 L1 任务（按钮点了就报 handler 缺失）。
+#: 可创建集合见 `CREATABLE_TASK_TYPES`（= handler 注册表本身，唯一真相源）。
 TASK_TYPES: dict[str, dict[str, str]] = {
     "review": {
         "label": "生成复盘报告",
@@ -48,6 +54,11 @@ TASK_TYPES: dict[str, dict[str, str]] = {
         "label": "系统变更留痕",
         "risk": "L1",
         "desc": "任何策略/参数/代码改动的前置登记（2026-09-08 用户指令：改动前必须先建任务）",
+    },
+    "escalation": {
+        "label": "告警升级待办",
+        "risk": "L1",
+        "desc": "AI 判读判定 escalate 的告警登记（P1-36）：待人工处置后关闭，系统不自动动手",
     },
 }
 
@@ -97,6 +108,83 @@ def update_mutation_result(task_id: str, status: str, result: str) -> None:
         row.finished_at = datetime.utcnow()
         db.commit()
 
+
+#: escalate 待办的任务 id 前缀（`esc-<event_id>`）——**确定性 id = 幂等**：
+#: 同一告警事件重复判读不会在任务中心刷出多条待办。
+ESCALATION_ID_PREFIX = "esc-"
+
+
+def record_escalation(
+    *, event_id: int, summary: str, detail: dict | None = None,
+    source: str = "alert_triage", session_factory=None,
+) -> str:
+    """告警升级（escalate）→ 任务中心待办（P1-36）。
+
+    与 `create_task` 的区别同 `record_mutation`：**纯登记、不启动执行**——
+    escalate 的语义是「这件事需要人来判断」，系统自动处理反而违背判读初衷。
+
+    与 `record_mutation` 的两点差异：
+    1. **幂等**：task_id 由事件 id 派生（`esc-<event_id>`），重复登记返回同一条；
+    2. **初始态 `needs_confirm`**（待确认）而非 `queued`：queued 意为"等待执行"，
+       而本类条目**永远不会被执行**——用 queued 会让任务中心永久显示"排队中"
+       并触发前端 3s 轮询。needs_confirm 正是"停在预览态等人工处置"，处置入口
+       见 `resolve_task`。
+
+    `session_factory` 可注入：单测里必须与 triage 同库（否则判读单测会写生产库）。
+    """
+    task_id = f"{ESCALATION_ID_PREFIX}{int(event_id)}"
+    detail = detail or {}
+    sf = session_factory or get_session_factory()
+    with sf() as db:
+        if db.get(AgentTask, task_id) is not None:
+            return task_id
+        db.add(AgentTask(
+            id=task_id, type="escalation", status="needs_confirm",
+            params=json.dumps({
+                "source": source, "event_id": int(event_id), "summary": summary, **detail,
+            }, ensure_ascii=False, default=str),
+            risk_level="L1", created_by=source,
+        ))
+        db.commit()
+    record_audit(actor=source, action="escalation.create", target="alert",
+                 after={"summary": summary, "event_id": int(event_id)}, task_id=task_id)
+    return task_id
+
+
+def resolve_task(task_id: str, outcome: str, note: str = "") -> dict | None:
+    """人工处置 needs_confirm 类待办（P1-36）。
+
+    outcome：`done`（已处置，→ succeeded）/ `dismissed`（判定无需处理，→ canceled）。
+    只有 needs_confirm 可被处置——running 任务走 cancel_task，终态任务原样返回
+    （幂等，不报错）。**没有处置入口的待办是死胡同**：只登记不关闭，任务中心会
+    无限累积，反而淹没真正需要看的条目。
+    """
+    if outcome not in ("done", "dismissed"):
+        raise ValueError(f"未知处置结论：{outcome}（可用：done、dismissed）")
+    row = get_task(task_id)
+    if row is None:
+        return None
+    if row["status"] != "needs_confirm":
+        return row  # 已终态/运行中：原样返回，幂等
+    status = "succeeded" if outcome == "done" else "canceled"
+    with get_session_factory()() as db:
+        task = db.get(AgentTask, task_id)
+        if task is None:
+            return None
+        try:
+            params = json.loads(task.params or "{}")
+        except Exception:  # noqa: BLE001
+            params = {}
+        params["resolve"] = {"outcome": outcome, "note": note[:500]}
+        task.params = json.dumps(params, ensure_ascii=False, default=str)
+        task.status = status
+        task.finished_at = datetime.utcnow()
+        db.commit()
+    record_audit(actor="user", action="task.resolve", target=row["type"],
+                 after={"status": status, "outcome": outcome, "note": note[:200]},
+                 task_id=task_id)
+    return get_task(task_id)
+
 _APP: Any = None
 #: type -> asyncio.Task（同类型互斥）
 _RUNNING: dict[str, asyncio.Task] = {}
@@ -132,6 +220,126 @@ def record_audit(
             db.commit()
     except Exception as exc:  # noqa: BLE001  审计失败不阻断业务
         log.warning("agent audit write failed (%s/%s): %s", action, target, exc)
+
+
+#: 议程留痕条目的 ID 前缀（`agenda:2026-09-10`）。与真实任务（uuid hex）天然不冲突，
+#: 前端据此渲染为只读条目（无取消按钮）。
+AGENDA_ID_PREFIX = "agenda:"
+
+#: 议程状态 → 任务状态词汇。前端 `STATUS_META` 只认任务这套词，映射在此收口；
+#: 原始状态保留在 `params.agenda_status`，不丢信息。
+_AGENDA_STATUS_MAP = {
+    "generating": "running",
+    "executed": "succeeded",
+    "failed": "failed",
+    "skipped": "canceled",
+}
+
+
+def agenda_as_task(row) -> dict:
+    """议程行 → **只读**任务视图（P1-14 留痕合一，2026-09-10）。
+
+    为什么是视图映射而不是新落一张表：议程已经把 inputs/items/budget/status 四段
+    结构化留痕写全了，再写一份就是**两处真相源**（必然漂移，见 KB-ENG-26）。
+    本函数只做形状转换：
+
+    - `steps` = 「证据采集与预算」一段 + 每个议程条目一段（A/B/C 类各写各的），
+      字段名照搬 `_StepRecorder` ⇒ 前端**渲染代码零改动**；
+    - 状态映射到任务词汇，原始状态留在 `params.agenda_status`；
+    - `read_only=True` ⇒ 前端隐藏取消按钮、标注"自动执行"。
+
+    风险等级标 L1：议程含 A 类参数变更（进影子队列，非直接生效）与 B 类文档沉淀；
+    C 类代码执行有自己的独立留痕任务（`code_executor` 的 mutation）。
+    """
+    def _j(raw: str | None, default: Any) -> Any:
+        if not raw:
+            return default
+        try:
+            return json.loads(raw)
+        except Exception:  # noqa: BLE001
+            return default
+
+    items = _j(row.items, [])
+    budget = _j(row.budget, {})
+    steps: list[dict] = [{
+        "index": 1, "name": "证据采集与预算", "input_summary": "",
+        "output_summary": (
+            f"LLM {budget.get('llm_used', '?')}/{budget.get('llm_budget', '?')} · "
+            f"任务 {budget.get('tasks_used', '?')}/{budget.get('task_budget', '?')}"
+            + ("（LLM 预算耗尽）" if budget.get("llm_exhausted") else "")
+        ),
+        "duration_ms": 0, "ok": True,
+    }]
+    for i, it in enumerate(items, start=2):
+        status = it.get("status") or "pending"
+        steps.append({
+            "index": i,
+            "name": f"{it.get('class') or '?'} 类 · {it.get('priority') or '—'}",
+            "input_summary": (it.get("evidence") or {}).get("source") or "",
+            # 标题优先用 finding（人读得懂的结论），执行结果用 result 附后
+            "output_summary": f"[{status}] {it.get('finding') or it.get('summary') or ''}"
+                              + (f" → {it['result']}" if it.get("result") else ""),
+            "duration_ms": 0,
+            # deferred/failed/rejected 都不算「做成」——deferred 是"延后（附原因）"，
+            # 界面标 ✗ 才对得起审计语义（成功假象是留痕最不该犯的错）
+            "ok": status not in ("failed", "rejected", "deferred"),
+        })
+
+    # error 单独处理：不能用 `_j(row.error, None)` —— 裸字符串会 JSON 解析失败
+    # 后**静默变成 None**，于是"议程失败了"在界面上显示成"没有错误"。
+    # 错误字段的失败模式必须是"原文照登"，不是"丢了"。
+    error: dict | None = None
+    if row.error:
+        try:
+            parsed = json.loads(row.error)
+        except Exception:  # noqa: BLE001
+            parsed = row.error
+        error = parsed if isinstance(parsed, dict) else {
+            "code": "AgendaError", "message": str(parsed), "retryable": False,
+        }
+
+    created = row.created_at.isoformat() if row.created_at else None
+    return {
+        "id": f"{AGENDA_ID_PREFIX}{row.date}",
+        "type": "agenda",
+        "status": _AGENDA_STATUS_MAP.get(row.status, "succeeded"),
+        "params": {
+            "agenda_date": row.date,
+            "agenda_status": row.status,
+            "budget": budget,
+            "items": items,
+        },
+        "steps": steps,
+        "result_ref": {"kind": "agenda", "id": row.date},
+        "error": error,
+        "risk_level": "L1",
+        "created_by": "agenda",
+        "read_only": True,
+        "created_at": created,
+        "started_at": created,
+        "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+    }
+
+
+def list_agenda_tasks(limit: int = 30) -> list[dict]:
+    """议程留痕（近 limit 天，倒序）→ 只读任务视图。"""
+    from app.models.agent import AgentAgenda
+
+    with get_session_factory()() as db:
+        rows = db.execute(
+            select(AgentAgenda).order_by(AgentAgenda.date.desc()).limit(limit)
+        ).scalars().all()
+        return [agenda_as_task(r) for r in rows]
+
+
+def _get_agenda_task(agenda_date: str) -> dict | None:
+    from app.models.agent import AgentAgenda
+
+    with get_session_factory()() as db:
+        row = db.execute(
+            select(AgentAgenda).where(AgentAgenda.date == agenda_date)
+        ).scalar_one_or_none()
+        return agenda_as_task(row) if row else None
 
 
 def _load(row: AgentTask) -> dict:
@@ -291,6 +499,23 @@ _HANDLERS: dict[str, Callable[[_StepRecorder, dict, Any], Awaitable[dict]]] = {
     "data_check": _h_data_check,
 }
 
+#: 可创建（有 handler、能真正跑起来）的任务类型 = handler 注册表本身。
+#: `GET /agent/task-types` 与 `create_task` 都以此为准——否则会出现"清单里有按钮、
+#: 点了必失败"的类型（mutation/escalation 是服务侧登记条目，非可创建任务）。
+CREATABLE_TASK_TYPES: frozenset[str] = frozenset(_HANDLERS)
+
+
+def creatable_task_types() -> list[dict]:
+    """可创建任务清单（含展示元数据）。
+
+    顺序 = `TASK_TYPES` 声明顺序（稳定），前端按钮顺序与后端口径一致；
+    登记类类型（mutation/escalation）在此被过滤掉——它们不是"能点的任务"。
+    """
+    return [
+        {"type": k, "label": v["label"], "risk": v["risk"], "desc": v["desc"]}
+        for k, v in TASK_TYPES.items() if k in CREATABLE_TASK_TYPES
+    ]
+
 
 # ---------------------------------------------------------------- 生命周期
 
@@ -336,9 +561,17 @@ async def _execute(task_id: str, type_: str, params: dict) -> None:
 
 
 def create_task(type_: str, params: dict | None = None, *, created_by: str = "user") -> dict:
-    """创建并启动任务（同类型互斥）。返回任务 dict。"""
-    if type_ not in TASK_TYPES:
-        raise ValueError(f"未知任务类型：{type_}（可用：{'、'.join(TASK_TYPES)}）")
+    """创建并启动任务（同类型互斥）。返回任务 dict。
+
+    只接受 `CREATABLE_TASK_TYPES`（有 handler 的类型）；登记类条目
+    （mutation / escalation）走 record_* 入口，不经此处——否则任务会创建成功
+    却在 `_HANDLERS[type_]` 处立刻失败，留下一条无意义的 failed 记录。
+    """
+    if type_ not in CREATABLE_TASK_TYPES:
+        raise ValueError(
+            f"未知任务类型：{type_}"
+            f"（可用：{'、'.join(t['type'] for t in creatable_task_types())}）"
+        )
     if type_ in _RUNNING:
         raise RuntimeError(f"「{TASK_TYPES[type_]['label']}」正在运行中，请等待完成")
     params = params or {}
@@ -360,25 +593,38 @@ def create_task(type_: str, params: dict | None = None, *, created_by: str = "us
 
 
 def get_task(task_id: str) -> dict | None:
+    if task_id.startswith(AGENDA_ID_PREFIX):
+        return _get_agenda_task(task_id[len(AGENDA_ID_PREFIX):])
     with get_session_factory()() as db:
         row = db.get(AgentTask, task_id)
         return _load(row) if row else None
 
 
-def list_tasks(limit: int = 30, type_: str | None = None) -> list[dict]:
+def list_tasks(limit: int = 30, type_: str | None = None, *, include_agenda: bool = True) -> list[dict]:
     with get_session_factory()() as db:
         q = select(AgentTask)
         if type_:
             q = q.where(AgentTask.type == type_)
         rows = db.execute(q.order_by(AgentTask.created_at.desc()).limit(limit)).scalars().all()
-        return [_load(r) for r in rows]
+        out = [_load(r) for r in rows]
+
+    # 留痕合一（P1-14，2026-09-10）：议程 A/B/C 自动执行也是"系统做过什么"的留痕，
+    # 但此前只落在 agent_agenda，任务中心看不到——两处孤岛 = 追溯性缺口。
+    # 合并到同一时间线（按创建时间倒序），议程条目标记 read_only。
+    if include_agenda and (type_ is None or type_ == "agenda"):
+        out = out + list_agenda_tasks(limit)
+        out.sort(key=lambda t: str(t.get("created_at") or ""), reverse=True)
+    return out[:limit]
 
 
 def cancel_task(task_id: str) -> dict | None:
-    """取消运行中任务（已终态的返回当前状态，不报错）。"""
+    """取消运行中任务（已终态的返回当前状态，不报错）。只读留痕条目不可取消。"""
     row = get_task(task_id)
     if row is None:
         return None
+    if row.get("read_only"):
+        # 议程是已发生的事实记录，不存在"取消"语义（前端也不渲染该按钮）
+        return row
     if row["status"] in TERMINAL_STATUSES:
         return row
     handle = _HANDLES.get(task_id)

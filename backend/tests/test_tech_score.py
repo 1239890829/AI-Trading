@@ -153,3 +153,47 @@ def test_score_stock_rps_single_window():
     assert rep["dimensions"]["rps"] == pytest.approx(0.70)
     sig = next(s for s in rep["signals"] if s["name"] == "RPS相对强度")
     assert "未计入" in sig["detail"]
+
+
+# ---------------------------------------------------------------- 量能语义（P1-35 增量字段）
+
+
+def test_volume_state_is_pure_addition_and_classifies():
+    """P1-35：`volume_state` / `volume_note` 是**纯增量**字段，不改既有八维口径。
+
+    同时锁定量价配合分类：同样放量，价格上行/下行必须落到不同状态
+    （量的大小本身不构成判断）。
+    """
+    base = _up_trend_bars(60)
+    last = base[-1]
+
+    flat = score_stock(base)
+    assert flat["volume_state"] == "normal"  # 量比 1.0：不越线，量能平稳
+    assert flat["volume_note"]
+
+    # 放量上行（量比 3.0）
+    surge = score_stock(base[:-1] + [_bar(last["open"], last["close"], v=3000.0)])
+    assert surge["volume_state"] == "surge_up"
+    # 其余七维完全不受影响（口径零回归）
+    for k, v in flat["dimensions"].items():
+        if k != "volume":
+            assert surge["dimensions"][k] == v
+
+    # 同样放量但价格下行 → 放量下杀（方向不同，状态必须不同）
+    down = score_stock(base[:-1] + [_bar(last["open"], last["open"] * 0.97, v=3000.0)])
+    assert down["volume_state"] == "surge_down"
+    assert down["volume_state"] != surge["volume_state"]
+
+    # 缩量（量比 0.4 < tech 档 0.6）且价格上行 → 缩量上行
+    shrink = score_stock(base[:-1] + [_bar(last["open"], last["close"], v=400.0)])
+    assert shrink["volume_state"] == "shrink_up"
+
+
+def test_volume_state_unknown_when_volume_baseline_missing():
+    """量能基准缺失（前 5 日量为 0）→ unknown，**不得**当成「量能平稳」。"""
+    bars = _up_trend_bars(60)
+    # 前 5 日量置 0 ⇒ v5 = None ⇒ 无法判定
+    zeroed = bars[:-6] + [_bar(b["open"], b["close"], v=0.0) for b in bars[-6:]]
+    rep = score_stock(zeroed)
+    assert rep["volume_state"] == "unknown"
+    assert "未判定" in rep["volume_note"]

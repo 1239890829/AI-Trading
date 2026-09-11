@@ -157,6 +157,31 @@ async def run_intraday_review(
 # ---------------------------------------------------------------- 盘中机会视图
 
 
+def _snapshot_by(request: Request) -> dict[str, dict]:
+    """全市场快照 symbol → 行（现价来源）。取不到返回空 dict——三态降级，不臆造。"""
+    out: dict[str, dict] = {}
+    try:
+        for row in getattr(request.app.state.snapshot_service, "snapshot", None) or []:
+            if row.get("symbol"):
+                out[row["symbol"]] = row
+    except Exception:  # noqa: BLE001 — 快照不可用不拖垮列表，现价显式 null
+        pass
+    return out
+
+
+def _attach_risk_to_themes(data: dict, snap_by: dict[str, dict]) -> None:
+    """题材手风琴路径（/intraday-opportunities）的个股补现价/止损/出场。
+
+    与 /intraday-top 共用 ``attach_risk_fields`` 同一份实现——此前该项补全只写在
+    intraday-top 路由里，于是同一张选股卡片（PickCard）在两条数据源上字段丰度不同
+    （2026-09-10 用户反馈「其他板块打开的字段不一样」）。
+    """
+    from app.picks.intraday_opportunity import attach_risk_fields
+
+    for th in data.get("themes") or []:
+        attach_risk_fields(th.get("stocks") or [], snap_by)
+
+
 async def _build_opportunities(
     request: Request, trade_date, top_themes: int, stocks_per_theme: int
 ) -> dict:
@@ -178,6 +203,8 @@ async def _build_opportunities(
     key = (trade_date, top_themes, stocks_per_theme)
     hit, payload = cache.get(key)
     if hit:
+        # 装配结果命中缓存，但现价/止损每拍都在变 ⇒ 风险字段不进缓存，此处按当前快照重算
+        _attach_risk_to_themes(payload["data"], _snapshot_by(request))
         return payload
 
     snapshot_map = await asyncio.to_thread(_load_snapshot_map, request, trade_date)
@@ -258,6 +285,8 @@ async def _build_opportunities(
             if registered:
                 log.info("watch ledger: %d candidates registered (gate: 临板区 or cert=高, 未封板——KB-DEC-011)", registered)
     cache.set(key, payload)
+    # 同上：缓存的是装配结果（题材/判定/依据），风险字段按本次快照另行补全
+    _attach_risk_to_themes(payload["data"], _snapshot_by(request))
     return payload
 
 
@@ -336,6 +365,36 @@ async def leader_archive(request: Request, theme: str | None = Query(default=Non
     return {"data": archive, "meta": {}}
 
 
+@router.get("/relay-rank")
+async def relay_rank(request: Request) -> dict:
+    """接力质量排序（P1-6，2026-09-09）：今日涨停池按 kmid2/max20 排序 → 次日
+    接力候选顺序参考。数据支撑：P1-3 池内条件 IC（kmid2 +0.060、max20 +0.052，
+    可执行 lag1 口径 1466+ 交易日样本）。红线：只排序+依据，非买卖信号。
+    """
+    from app.market.trading_status import beijing_now
+    from app.picks.relay_rank import compute_relay_rank
+
+    hub = request.app.state.hub
+    today = beijing_now().date()
+    items = await compute_relay_rank(hub.provider, today)
+    return {"data": {"trade_date": today.isoformat(), "items": items,
+                     "basis": "kmid2=当日实体/全距(封得实)；max20=20日最高/现价(近新高)。池内 T+5 RankIC 实证为正（P1-3）"},
+            "meta": {}}
+
+
+@router.get("/lurk-pool")
+async def lurk_pool(request: Request) -> dict:
+    """潜伏观察池（P1-5，2026-09-09）：缩量横盘+试盘+回踩确认票（KB-STOCK-24，
+    P1-2 实证 20 日涨停 1.67×）。中线观察参考，非短线买入信号。数据=marketdb
+    daily_k（同步 DuckDB 丢线程池，曾卡事件循环同款）。"""
+    import asyncio
+
+    from app.picks.lurk_pool import scan_lurk_pool
+
+    out = await asyncio.to_thread(scan_lurk_pool)
+    return {"data": out, "meta": {}}
+
+
 @router.get("/intraday-opportunities")
 async def intraday_opportunities(
     request: Request,
@@ -367,8 +426,7 @@ async def intraday_top(
     同一份口径，保证「分组里看到的」和「复盘对照的」是同一批标的。
     """
     from app.api.routes.market import _default_trade_date_async
-    from app.picks.intraday_opportunity import top_watch_stocks
-    from app.picks.risk import exit_discipline, risk_tier_of, stop_loss_reference
+    from app.picks.intraday_opportunity import attach_risk_fields, top_watch_stocks
 
     hub = request.app.state.hub
     trade_date = await _default_trade_date_async(hub)
@@ -376,19 +434,9 @@ async def intraday_top(
     data = top_watch_stocks(payload["data"], limit=limit)
 
     # 2026-09-09 用户需求「盘中跟踪卡片与每日精选一致」：补现价/止损参考/出场纪律
-    # （与 PickCard 分节同构；现价来自全市场快照，缺失显式 null 不臆造）
-    snap_by: dict[str, dict] = {}
-    try:
-        for row in getattr(request.app.state.snapshot_service, "snapshot", None) or []:
-            if row.get("symbol"):
-                snap_by[row["symbol"]] = row
-    except Exception:  # noqa: BLE001
-        pass
-    for it in data.get("items") or []:
-        price = (snap_by.get(it.get("symbol") or "") or {}).get("price")
-        it["price"] = price
-        tier = risk_tier_of(it.get("role") or "")
-        stop = stop_loss_reference(price=price, tier=tier)
-        it["stop_ref"] = stop
-        it["exit_plan"] = exit_discipline(tier)
+    # （与 PickCard 分节同构；现价来自全市场快照，缺失显式 null 不臆造）。
+    # 2026-09-10：改为与题材手风琴共用同一实现——此前是内联在这里的独有逻辑，
+    # 导致同一张选股卡片（PickCard）在 /intraday-opportunities 路径上缺这三项。
+    # top_watch_stocks 会重建 item dict，故补全须在本函数内对它自己的 items 做一次。
+    attach_risk_fields(data.get("items") or [], _snapshot_by(request))
     return {"data": data, "meta": {}}

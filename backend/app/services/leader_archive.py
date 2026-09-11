@@ -18,6 +18,7 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from app.core.db import beijing_now_naive
 from app.market.trading_status import beijing_now
 
 log = logging.getLogger(__name__)
@@ -74,7 +75,7 @@ async def build_archive(provider, days: int = DEFAULT_DAYS) -> dict:
         archive[tag] = archive[tag][:3]
 
     return {
-        "built_at": datetime.utcnow().isoformat(timespec="seconds"),
+        "built_at": beijing_now_naive().isoformat(timespec="seconds"),
         "days_requested": days, "days_with_pool": n_days_ok,
         "symbols_seen": len(by_symbol),
         "themes": archive,
@@ -87,7 +88,7 @@ async def get_archive(provider, days: int = DEFAULT_DAYS, force: bool = False) -
         try:
             raw = json.loads(ARCHIVE_PATH.read_text(encoding="utf-8"))
             built = datetime.fromisoformat(raw["built_at"])
-            if datetime.utcnow() - built < timedelta(hours=ARCHIVE_TTL_HOURS):
+            if beijing_now_naive() - built < timedelta(hours=ARCHIVE_TTL_HOURS):
                 return raw
         except Exception:  # noqa: BLE001  缓存损坏 → 重建
             log.warning("leader archive cache corrupted, rebuilding")
@@ -100,9 +101,13 @@ async def get_archive(provider, days: int = DEFAULT_DAYS, force: bool = False) -
     return archive
 
 
-async def leaders_for_theme(provider, theme: str, days: int = DEFAULT_DAYS) -> list[dict]:
-    """指定题材的历史龙头（含子串匹配：「代糖」命中「代糖概念/糖业」）。"""
-    archive = await get_archive(provider, days)
+async def leaders_for_theme(provider, theme: str, days: int = DEFAULT_DAYS,
+                            archive: dict | None = None) -> list[dict]:
+    """指定题材的历史龙头（含子串匹配：「代糖」命中「代糖概念/糖业」）。
+
+    archive 可传入已读档案（P1-1：同一轮给多事件匹配时一次读档、多次复用，免重复文件读）。"""
+    if archive is None:
+        archive = await get_archive(provider, days)
     out: list[dict] = []
     for tag, leaders in (archive.get("themes") or {}).items():
         if theme in tag or tag in theme:

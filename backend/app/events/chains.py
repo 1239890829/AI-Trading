@@ -1,4 +1,4 @@
-"""事件→板块传导链知识表（hotspot-pipeline-design §4.1 传导层，2026-09-07）。
+"""事件→板块传导链知识表（docs/summary/architecture-design.md §3 传导层，2026-09-07）。
 
 与 extract.py 的 ENTITY_ALIASES（1 词→1 题材）互补：别名表管「直接点名」，
 本表管「一级事件→多板块多级传导」。全部人工维护、basis 必带，direction 不猜
@@ -10,6 +10,13 @@
    工程化表达：化肥直接进利润 2 > 种植 2 > 电力/电网逻辑间接 1）
 2. 海外实体：OpenAI/GPT → AI应用/AI智能体/算力（海外产品事件→A股题材映射）
 3. 宏观量化：非农 → 方向由意外差决定；P0 按标题方向词二分，词表未命中显式 0
+
+⚠️ 定位声明（2026-09-10，KB-DEC-019 反固化条款）：
+本表是**映射索引**（关键词 → 题材，供检索），**不是已验证的行情规律**。
+其中带数值的「弹性/强度排序」（如化肥 2 > 电力 1）源自**单日单案例观察**
+（KB-STOCK-01：09-09 全链涨停一天），**属未验证印象**——保留为可解释性依据，
+**不得当结论引用、不得据此做跨题材外推**；要升格为"战术"须走
+`app/research/strategy_verify.py` 的数据验证（准入闸门见 KB-DEC-019）。
 
 纪律：
 - target 全部使用官方目录名（theme 表实测核对 2026-09-07，零臆造）；
@@ -52,6 +59,8 @@ def _market_row(direction: int, strength: int, chain: str, basis: str) -> dict:
 
 
 # ---- 1. 产业链多级：厄尔尼诺/拉尼娜/极端天气（hotspot §3.2 实测传导链）----
+# ⚠️ 强度值（2/1）是人工给的「弹性印象」，源自单日单案例（KB-STOCK-01），**未经数据验证**；
+#    仅用于排序展示与可解释性，不得当结论引用（KB-DEC-019 反固化条款）。
 _EL_NINO_ROWS = [
     _theme_row("磷化工", 1, 2, "厄尔尼诺→主产区减产→施肥需求+磷肥涨价直接进利润→弹性最强", "厄尔尼诺农业链（弹性排序：化肥>种植>电力）"),
     _theme_row("化肥", 1, 2, "厄尔尼诺→农产品减产涨价→钾肥等化肥涨价直接进利润", "厄尔尼诺农业链"),
@@ -106,23 +115,46 @@ def _rate_rows(title: str) -> list[dict]:
 _RATE_KEYS = ("加息", "降息", "降准", "议息", "FOMC", "美联储决议")
 
 
-def match_chains(title: str) -> list[dict]:
-    """标题 → 传导链方向行（纯函数，与 extract_directions 行同构）。
+def _judge_text(title: str, summary: str | None) -> str:
+    """与 extract._judge_text 同义（复制实现避免循环导入：extract import chains）。
+
+    retro P0-4：标题被截断时触发词（如「厄尔尼诺」「非农」）可能落在摘要里。
+    """
+    s = (summary or "").strip()
+    if s and s not in title:
+        return f"{title} {s}"
+    return title
+
+
+def el_nino_rows() -> list[dict]:
+    """厄尔尼诺/拉尼娜链的题材行（**唯一真相源**）。
+
+    retro §6.2 P1-32：气候一阶源（`app/market/climate.py`）把触发条件从「新闻
+    命中关键词」升级为「ONI 指数越线」，但**链条内容必须只有一份**——所以由本
+    函数暴露，而不是在 climate 模块里复制一张同构表（复制必然漂移）。
+    返回浅拷贝，调用方可安全地补 `basis` 后缀。
+    """
+    return [dict(r) for r in _EL_NINO_ROWS]
+
+
+def match_chains(title: str, summary: str | None = None) -> list[dict]:
+    """标题+摘要 → 传导链方向行（纯函数，与 extract_directions 行同构）。
 
     每组命中一次；组内触发词取第一个命中（不重复产行）；跨组独立累加。
-    宏观两组（非农/利率）行内 direction 依赖标题动态判定。
+    宏观两组（非农/利率）行内 direction 依赖判定文本动态判定。
     """
+    text = _judge_text(title, summary)
     out: list[dict] = []
-    if any(k in title for k in _EL_NINO_KEYS):
-        hit = next(k for k in _EL_NINO_KEYS if k in title)
+    if any(k in text for k in _EL_NINO_KEYS):
+        hit = next(k for k in _EL_NINO_KEYS if k in text)
         out += [{**r, "basis": f"{r['basis']}；触发词「{hit}」"} for r in _EL_NINO_ROWS]
-    if any(k in title for k in _GPT_KEYS):
-        hit = next(k for k in _GPT_KEYS if k in title)
+    if any(k in text for k in _GPT_KEYS):
+        hit = next(k for k in _GPT_KEYS if k in text)
         out += [{**r, "basis": f"{r['basis']}；触发词「{hit}」"} for r in _GPT_ROWS]
-    if "非农" in title:
-        out += _nfp_rows(title)
-    if any(k in title for k in _RATE_KEYS):
-        out += _rate_rows(title)
+    if "非农" in text:
+        out += _nfp_rows(text)
+    if any(k in text for k in _RATE_KEYS):
+        out += _rate_rows(text)
     return out
 
 
@@ -164,3 +196,160 @@ def macro_calendar_note(today: date) -> str | None:
             "（历史回测：非农次日振幅 +24~33%，提示级）。复盘 A 股实际反应与意外差方向是否一致。"
         )
     return None
+
+
+# ------------------------------------------------ 财经日历·高信号事件筛选（P1-8 残余，2026-09-10）
+
+# ⚠️ 为什么不用源数据自带的「重要性」星号直接过滤（2026-09-10 实测）：
+# 百度财经日历的 star 只有 1/2 两档，且 **star=2 里混着大量日内噪音**——
+# 「上期所每日仓单变动-铜/原油」「COMEX 黄金库存」「SPDR 黄金持仓」「美联储资产负债表」
+# 全部标 2。实测 2026-09-10 共 109 条、star=2 有 28 条，其中真正值得进简报的不足 6 条。
+# ⇒ 采用**地区分侧的关键词白名单 ∧ 噪音词排除**，白名单即过滤器（star 仅作组内择优选条）。
+_CN_KEYS: tuple[tuple[str, str], ...] = (
+    ("CPI", "CPI"),
+    ("PPI", "PPI"),
+    ("GDP", "GDP"),
+    ("PMI", "PMI"),
+    ("社会融资", "社融"),
+    ("新增人民币贷款", "新增贷款"),
+    ("M0", "货币供应"),
+    ("M1", "货币供应"),
+    ("M2", "货币供应"),
+    ("工业增加值", "工业增加值"),
+    ("社会消费品零售", "社零"),
+    ("固定资产投资", "固投"),
+    ("住宅销售价格", "70城房价"),
+    ("进出口", "进出口"),
+    ("贸易帐", "贸易帐"),
+    ("外汇储备", "外储"),
+    ("LPR", "LPR"),
+)
+
+# 美国侧只保留「隔夜就能给 A 股开盘定情绪」的一档；非农另有先验日历链（macro_calendar_note），
+# 此处并列只为给预期/前值，不重复下结论。
+_US_KEYS: tuple[tuple[str, str], ...] = (
+    ("非农", "非农"),
+    ("ADP", "ADP就业"),
+    ("初请失业金", "初请失业金"),
+    ("CPI", "CPI"),
+    ("PPI", "PPI"),
+    ("核心PCE", "核心PCE"),
+    ("利率决议", "利率决议"),
+    ("零售销售", "零售销售"),
+    ("GDP", "GDP"),
+    ("ISM", "ISM"),
+    ("PMI", "PMI"),
+)
+
+# 噪音词：命中的一律不进简报。前 6 个是每日/每周固定披露（仓单/持仓/库存/竞拍），
+# 后 2 个是「周度高频点」——如「红皮书商业零售销售」「ADP 就业周度发布变动」，
+# 虽含 零售销售/ADP 关键词，但发布频率高、对 A 股无定价意义（实测 2026-09-09 误收）。
+_NOISE_KEYS: tuple[str, ...] = (
+    "资产负债表", "持仓", "库存", "仓单", "竞拍", "拍卖", "周度", "红皮书",
+)
+
+_MACRO_REGIONS: tuple[str, tuple[tuple[str, str], ...]] = (("中国", _CN_KEYS), ("美国", _US_KEYS))
+
+# 同主题同星级时的择条偏好（越靠前越优先）：M1 > M2 > M0 > 年率 > 当月 > 月率 > 年初至今。
+# 例：CPI 年率/月率 同日两条同星级 → 取年率；M0/M1/M2 同日 → 取 M1（A 股更看 M1/M2）。
+# ⚠️ 数字型 token 必须排在「年率」之前，否则年率会把 M0/M1/M2 拉平（实测踩过）。
+# 未命中任何词 → 排在偏好序列之后（并列时保持先到者）。
+_PREFER_ORDER: tuple[str, ...] = ("M1", "M2", "M0", "年率", "当月", "月率", "年初至今")
+
+
+def _prefer_rank(title: str) -> int:
+    up = title.upper()
+    for i, tok in enumerate(_PREFER_ORDER):
+        if tok.upper() in up:
+            return i
+    return len(_PREFER_ORDER)
+
+
+def _match_macro_key(title: str, keys: tuple[tuple[str, str], ...]) -> str | None:
+    """标题命中白名单 → 主题名；ASCII 键按大小写不敏感匹配（源标题混用 M2/m2）。"""
+    up = title.upper()
+    for key, label in keys:
+        needle = key.upper()
+        if needle in up:
+            return label
+    return None
+
+
+def select_macro_events(rows: list[dict], *, limit: int = 6) -> list[dict]:
+    """财经日历原始行 → 简报用高信号事件（纯函数，零 IO）。
+
+    规则（依 2026-09-10 真实数据定）：地区 ∈ {中国, 美国} ∧ 命中该侧白名单
+    ∧ 不命中噪音词；同一 (地区, 主题) 只留一条——先比重要性星级，再比
+    `_PREFER_ORDER` 择条偏好（年率 > 月率、M1 > M2 > M0），仍并列则保持先到者。
+    排序按公布时刻；``time`` 缺失的行排最后（不臆造时间）。
+    """
+    best: dict[tuple[str, str], dict] = {}
+    for r in rows or []:
+        region = (r.get("region") or "").strip()
+        title = (r.get("event") or "").strip()
+        if not title:
+            continue
+        label = None
+        for name, keys in _MACRO_REGIONS:
+            if region == name:
+                label = _match_macro_key(title, keys)
+                break
+        if not label:
+            continue
+        if any(n in title for n in _NOISE_KEYS):
+            continue
+        star = r.get("importance")
+        star = star if isinstance(star, int) else 0
+        key = (region, label)
+        cand = (star, -_prefer_rank(title))
+        prev = best.get(key)
+        if prev is not None and (prev["_star"], prev["_prefer"]) >= cand:
+            continue
+        best[key] = {
+            "_star": star,
+            "_prefer": cand[1],
+            "region": region,
+            "label": label,
+            "event": title,
+            "time": r.get("time") or None,
+            "actual": r.get("actual"),
+            "forecast": r.get("forecast"),
+            "previous": r.get("previous"),
+            "importance": star or None,
+        }
+    out = sorted(best.values(), key=lambda x: (x["time"] is None, x["time"] or "", x["region"]))
+    for item in out:
+        item.pop("_star", None)
+        item.pop("_prefer", None)
+        item["line"] = macro_event_line(item)  # 格式化单点收口：前端/卡片只渲染不拼接
+    return out[:limit] if limit > 0 else out
+
+
+def _fmt_val(v) -> str | None:
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s or None
+
+
+def macro_event_line(ev: dict) -> str:
+    """事件 → 单行文案（格式化单点收口：简报前端与推送卡片共用同一字符串）。
+
+    数值缺失显式跳过该段，不写「None」也不补 0（三态纪律）。
+    """
+    parts: list[str] = []
+    pub = _fmt_val(ev.get("actual"))
+    exp = _fmt_val(ev.get("forecast"))
+    prev = _fmt_val(ev.get("previous"))
+    # 「未公布」是源数据的占位文案，不是数值 —— 当缺失处理，避免读成已公布值
+    pub = None if pub == "未公布" else pub
+    if pub:
+        parts.append(f"公布 {pub}")
+    else:
+        if exp:
+            parts.append(f"预期 {exp}")
+        if prev:
+            parts.append(f"前值 {prev}")
+    vals = f"（{' · '.join(parts)}）" if parts else ""
+    head = f"{ev['time']} " if ev.get("time") else ""
+    return f"{head}{ev['region']}·{ev['label']}{vals}　{ev['event']}"

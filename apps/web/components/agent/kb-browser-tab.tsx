@@ -83,12 +83,12 @@ export function KbBrowserTab() {
       className={`block w-full truncate rounded px-2 py-1 text-left text-xs transition-colors ${
         selected === f.path
           ? "bg-zinc-900 font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
-          : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+          : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
       }`}
       title={`${f.path}${f.kb_ids.length ? ` · ${f.kb_ids.length} 条 KB` : ""}`}
     >
       {f.name}
-      {f.kb_ids.length > 0 && <span className="ml-1 text-[10px] text-sky-500">KB{f.kb_ids.length}</span>}
+      {f.kb_ids.length > 0 && <span className="ml-1 text-[10px] text-sky-700 dark:text-sky-500">KB{f.kb_ids.length}</span>}
     </button>
   );
 
@@ -106,14 +106,14 @@ export function KbBrowserTab() {
         </div>
         <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
           {!loaded ? (
-            <p className="px-2 py-1 text-xs text-zinc-400">加载中…</p>
+            <p className="px-2 py-1 text-xs text-zinc-600 dark:text-zinc-400">加载中…</p>
           ) : failed ? (
-            <p className="px-2 py-1 text-xs text-amber-500">文档树加载失败（后端不可达）</p>
+            <p className="px-2 py-1 text-xs text-amber-800 dark:text-amber-500">文档树加载失败（后端不可达）</p>
           ) : (
             <>
               {groups.kbFiles.length > 0 && (
                 <>
-                  <p className="px-2 pt-1 text-[10px] font-medium text-zinc-400">知识库（canonical）</p>
+                  <p className="px-2 pt-1 text-[10px] font-medium text-zinc-600 dark:text-zinc-400">知识库（canonical）</p>
                   {groups.kbFiles.map((f) => (
                     <FileRow key={f.path} f={f} />
                   ))}
@@ -121,7 +121,7 @@ export function KbBrowserTab() {
               )}
               {groups.byDir.map(([dir, fs]) => (
                 <div key={dir}>
-                  <p className="px-2 pt-2 text-[10px] font-medium text-zinc-400">{dir}</p>
+                  <p className="px-2 pt-2 text-[10px] font-medium text-zinc-600 dark:text-zinc-400">{dir}</p>
                   {fs.map((f) => (
                     <FileRow key={f.path} f={f} />
                   ))}
@@ -135,10 +135,10 @@ export function KbBrowserTab() {
       {/* 渲染阅读区 */}
       <section className="min-w-0 flex-1 overflow-y-auto rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
         {!selected ? (
-          <p className="py-8 text-center text-sm text-zinc-400">左侧选择一篇文档</p>
+          <p className="py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">左侧选择一篇文档</p>
         ) : (
           <>
-            <p className="mb-2 font-mono text-[10px] text-zinc-400">docs/{selected}</p>
+            <p className="mb-2 font-mono text-[10px] text-zinc-600 dark:text-zinc-400">docs/{selected}</p>
             <MarkdownView content={content} onNavigate={onNavigate} />
           </>
         )}

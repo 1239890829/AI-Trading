@@ -3,14 +3,20 @@
 **政策**：只有涨停前已提醒过的股票才准入盘中跟踪；封板后才发现的一律不入册。
 旧门槛「boards≥1」= 制度上等涨停，是滞后根源之一——已从机会候选准入中移除。
 
-临板区（按板性缩放，封板前保留可操作跑道）：
+临板区（按板性缩放，封板前保留可操作跑道）——涨幅上限**委托单点
+`app/market/price_rules.limit_pct`**（2026-09-11 收口，此前本模块是第二份手写实现）：
 
 | 板性 | 涨停幅 | 临板下沿 | 封板判定 |
 |---|---|---|---|
 | 主板 60/00 | 10% | 6.5% | pct ≥ 9.7 |
+| 主板 ST/*ST | 10% | 6.5% | pct ≥ 9.7 |
 | 创业/科创 30/68 | 20% | 13.0% | pct ≥ 19.7 |
-| ST（名称含 ST） | 5% | 3.2% | pct ≥ 4.7 |
-| 北交所 8/4 开头 | 30% | 19.5% | pct ≥ 29.7 |
+| 北交所 43/83/87/92 | 30% | 19.5% | pct ≥ 29.7 |
+
+📌 2026-07-06 并轨：主板 ST 由 5% 放宽至 10%（与主板普通股一致），创业板/
+科创板 ST 维持 20%、北交所维持 30%——**ST 状态已不再改变涨跌幅**，故上表
+不再单列 5% 档。旧实现「ST 名称优先于代码段」还会把双创/北交所 ST 误判为
+5%，已随收口一并修正。
 
 雷达活跃窗口：**09:20–11:30 / 13:00–15:00**（含集合竞价尾段 09:20-09:25——
 竞价指示价临板即可提前预警，抢在 09:25 封板价确定之前）。每 6s 扫一遍内存
@@ -30,6 +36,7 @@ import contextlib
 import logging
 from datetime import datetime, timezone
 
+from app.market.price_rules import limit_pct as _rules_limit_pct
 from app.market.trading_status import beijing_now
 
 log = logging.getLogger(__name__)
@@ -48,18 +55,15 @@ _ACTIVE_WINDOWS = (("09:20", "11:30"), ("13:00", "15:00"))
 
 
 def board_limit_pct(symbol: str, name: str = "") -> float:
-    """按代码段/名称推断涨停幅度（%）。
+    """按现行交易规则推断涨停幅度（%）。
 
-    ST（名称含 ST）5% > 北交所（8/4 开头）30% > 创业/科创（30/68）20% > 主板 10%。
+    2026-09-11 收口：原为本模块第二份硬编码实现，且判定顺序为「ST 名称 >
+    代码段」——会把创业板/科创板 ST（应 20%）与北交所 ST（应 30%）误判为 5%，
+    并把 B 股 900xxx 误判为 30%（`startswith("9")` 混入）。现全部委托单点
+    `app/market/price_rules.limit_pct`，与 breadth / validator / sentiment 同源。
+    （导入取别名 `_rules_limit_pct`：本模块多处形参名为 limit_pct 会遮蔽同名导入。）
     """
-    if "ST" in (name or "").upper():
-        return 5.0
-    sym = (symbol or "").strip()
-    if sym.startswith(("8", "4", "9")):  # 北交所/老三板
-        return 30.0
-    if sym.startswith(("30", "68")):
-        return 20.0
-    return 10.0
+    return _rules_limit_pct(symbol, name or None)
 
 
 def seal_threshold(limit_pct: float) -> float:
@@ -176,6 +180,7 @@ async def pre_limit_sweep(app) -> int:
                 target, _ = brief_for_today()
                 append_alert(target, {
                     "kind": "board_reopen", "symbol": c["symbol"], "name": c["name"],
+                    "key": f"board-reopen-{c['symbol']}",
                     "direction": "开板重评",
                     "text": f"一字板开板回落 {c['pct']:.1f}%（距封板 {c['runway_pct']}pct）——重新纳入候选，"
                             f"全方位评估（题材阶段/封单/大盘合力）通过后可参与",
@@ -216,6 +221,9 @@ async def pre_limit_sweep(app) -> int:
         # 2) 提醒：规则直发（append_alert → AlertEvent → 通知中心），不经 LLM 判读
         alert = {
             "kind": "pre_limit",
+            # 去重键由调用方生成（append_alert 契约）——2026-09-09 曾漏此字段导致
+            # key=None 落盘，前端 key={null} 触发 React key 警告且 None 互相撞去重。
+            "key": f"pre-limit-{c['symbol']}",
             "symbol": c["symbol"],
             "name": c["name"],
             "direction": "临板预警",
@@ -236,7 +244,14 @@ async def pre_limit_sweep(app) -> int:
 
 
 async def pre_limit_loop(app, stop: asyncio.Event) -> None:
-    """常驻循环：交易时段 6s 一轮，其余 30s。停机事件受控于 lifespan。"""
+    """常驻循环：交易时段 6s 一轮，其余 30s。停机事件受控于 lifespan。
+
+    S2-2 收尾（09-11）：睡眠用 `wait_or_stop` 而非裸 `asyncio.sleep`——裸 sleep 时
+    `stop` 只在**下一轮开头**才被看到，实测停机日志「pre-limit-radar 超过 10s 未退出，
+    强制 cancel」，每次停机白烧一个宽限窗口。
+    """
+    from app.core.scheduler import wait_or_stop
+
     log.info("pre-limit radar loop started (KB-DEC-011)")
     while True:
         try:
@@ -245,12 +260,16 @@ async def pre_limit_loop(app, stop: asyncio.Event) -> None:
                 return
             if radar_active_now():
                 await pre_limit_sweep(app)
-                await asyncio.sleep(SWEEP_INTERVAL)
-            else:
-                await asyncio.sleep(IDLE_INTERVAL)
+                if await wait_or_stop(stop, SWEEP_INTERVAL):
+                    log.info("pre-limit radar loop stop requested")
+                    return
+            elif await wait_or_stop(stop, IDLE_INTERVAL):
+                log.info("pre-limit radar loop stop requested")
+                return
         except asyncio.CancelledError:
             log.info("pre-limit radar loop cancelled")
             return
         except Exception:  # noqa: BLE001  单轮失败不终止雷达
             log.exception("pre-limit radar sweep failed")
-            await asyncio.sleep(IDLE_INTERVAL)
+            if await wait_or_stop(stop, IDLE_INTERVAL):
+                return

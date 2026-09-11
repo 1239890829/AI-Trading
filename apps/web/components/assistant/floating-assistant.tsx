@@ -31,13 +31,13 @@ const PAGE_TITLES: Record<string, string> = {
   "/tape": "盘面",
   "/market": "市场",
   "/hunting": "猎场",
-  "/agent": "AI 控制台",
+  "/agent": "交易智能体",
 };
 
 const SUGGESTIONS = [
-  "工作台有哪些功能？",
+  "今天大盘和涨停池什么情况？",
+  "帮我看看我的自选和持仓",
   "每日精选的选股逻辑是什么？",
-  "题材梯队怎么看？",
 ];
 
 interface ChatMsg {
@@ -47,8 +47,48 @@ interface ChatMsg {
   status: "ok" | "streaming" | "interrupted" | "error";
   /** 本条回答引用到的实时快照溯源（来源 + 数据时间）；无快照为空 */
   sources?: { symbol: string; name: string; source: string; as_of: string }[];
-  /** 本条回答实际调用过的工具名（后端白名单内的只读工具） */
+  /** 本条回答实际调用过的工具（中文短标签，后端 tool_label 给；旧事件无 labels 时退回键名） */
   tools?: string[];
+}
+
+/** 生成期进度（后端 status 事件）：thinking = 组织回答；tools = 正在取数 */
+interface Activity {
+  phase: "thinking" | "tools";
+  label?: string;
+}
+
+/**
+ * 生成中提示（2026-09-11 用户反馈「没有思考中/生成中的提示，一直在等待，以为不动了」）。
+ *
+ * 为什么必须显式做：一次取数 + 两轮生成在网关侧可达十几秒**零 delta**，
+ * 此前只有"内容为空时一个 2px 呼吸光标"——用户看不到任何"在动"的信号。
+ * 现在按后端 status 事件显示「思考中… / 正在取数：龙虎榜…」，三点错峰呼吸。
+ */
+function ActivityLine({ activity }: { activity: Activity | null }) {
+  const label =
+    activity?.phase === "tools"
+      ? activity.label
+        ? `正在取数：${activity.label}`
+        : "正在取数"
+      : "思考中";
+  return (
+    <span
+      data-testid="assistant-activity"
+      aria-live="polite"
+      className="inline-flex items-center gap-1.5 text-[12px] text-zinc-600 dark:text-zinc-400"
+    >
+      <span className="flex items-center gap-[3px]" aria-hidden>
+        {[0, 1, 2].map((i) => (
+          <span
+            key={i}
+            className="h-[3px] w-[3px] rounded-full bg-current motion-safe:animate-pulse"
+            style={{ animationDelay: `${i * 160}ms` }}
+          />
+        ))}
+      </span>
+      {label}
+    </span>
+  );
 }
 
 function clampPos(p: { x: number; y: number }): { x: number; y: number } {
@@ -76,6 +116,7 @@ export function FloatingAssistant() {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
+  const [activity, setActivity] = useState<Activity | null>(null);
   const [model, setModel] = useState("");
   const [dict, setDict] = useState<EntityDict | null>(null);
   const [bubbles, setBubbles] = useState<AgentBubble[]>([]);
@@ -236,6 +277,7 @@ export function FloatingAssistant() {
       { id: assistantId, role: "assistant", content: "", status: "streaming" },
     ]));
     setStreaming(true);
+    setActivity({ phase: "thinking" });
     stickRef.current = true;
     const ac = new AbortController();
     abortRef.current = ac;
@@ -303,16 +345,28 @@ export function FloatingAssistant() {
                   return next;
                 }));
               }
+            } else if (ev.type === "status") {
+              // 进度提示：取数/思考期间可能十几秒没有任何 delta，必须靠它给反馈
+              const phase = ev.phase === "tools" ? "tools" : "thinking";
+              setActivity({
+                phase,
+                label: typeof ev.label === "string" ? ev.label : undefined,
+              });
             } else if (ev.type === "tools" && Array.isArray(ev.used)) {
-              // 工具调用回执：让用户知道这条答案取过数，不是模型凭空编的
-              const used = (ev.used as unknown[]).map(String);
+              // 工具回执：让用户知道这条答案取过数，不是模型凭空编的。
+              // 优先用后端给的中文标签（labels），旧事件没带就退回键名。
+              const labels = Array.isArray(ev.labels)
+                ? (ev.labels as unknown[]).map(String)
+                : (ev.used as unknown[]).map(String);
               setMessages(syncRef((prev) => {
                 if (!prev.length) return prev;
                 const next = [...prev];
-                next[next.length - 1] = { ...next[next.length - 1], tools: used };
+                next[next.length - 1] = { ...next[next.length - 1], tools: labels };
                 return next;
               }));
             } else if (ev.type === "delta" && typeof ev.text === "string") {
+              // 正文开始回流 → 退出"取数中"；已经是 thinking 时保持原引用，避免每个 delta 多一次渲染
+              setActivity((a) => (a?.phase === "tools" ? { phase: "thinking" } : a));
               setMessages(syncRef((prev) => {
                 if (!prev.length) return prev;
                 const next = [...prev];
@@ -359,6 +413,7 @@ export function FloatingAssistant() {
     } finally {
       abortRef.current = null;
       setStreaming(false);
+      setActivity(null);
     }
   }, [patchLast]);
 
@@ -373,6 +428,7 @@ export function FloatingAssistant() {
 
   const stop = () => {
     abortRef.current?.abort();
+    setActivity(null);
     // 兜底：不等 abort 让 read() 拒绝，直接落中断状态（与 catch 路径幂等）
     setMessages(syncRef((prev) => {
       if (!prev.length || prev[prev.length - 1].status !== "streaming") return prev;
@@ -455,12 +511,17 @@ export function FloatingAssistant() {
       {/* 悬浮球：墨玉反色（light 深墨 / dark 亮面）在任何页面上都可读；
           rose 细环是唯一的品牌色——hairline 级克制，不做渐变球。
           贴边收纳（2026-09-09 用户要求重设计）：不再是被截断的球，morph 成
-          墨玉半胶囊把手贴在屏幕边缘（rose 细竖条提示），hover 平滑展开为完整球 */}
+          墨玉半胶囊把手贴在屏幕边缘（rose 细竖条提示），hover 平滑展开为完整球
+          亮色档 2026-09-11 修正（P2-27）：原 `text-zinc-600` 在 `bg-zinc-900` 上仅 **2.31:1**，
+          低于非文本图形 3:1。**注意坏的不是颜色而是配对**——`text-zinc-600` 在亮面上完全合规，
+          是「墨玉底」让它失效的。取 zinc-400（6.91:1）而非 zinc-100：球已有 shadow + rose 环
+          做边界，mark 保持克制的弱化观感；深色侧 `dark:bg-zinc-100 dark:text-zinc-950`（16.12:1）
+          原本就达标，未动。 */}
       <div
         data-testid="assistant-ball"
         role="button"
         aria-label="AI 助手"
-        className={`fixed z-50 flex cursor-grab select-none items-center justify-center bg-zinc-900 text-zinc-50 shadow-[0_2px_8px_rgba(0,0,0,0.18),0_10px_28px_rgba(0,0,0,0.22)] transition-[left,width,height,border-radius,box-shadow] duration-200 ease-out hover:shadow-[0_4px_12px_rgba(0,0,0,0.22),0_14px_36px_rgba(0,0,0,0.28)] active:cursor-grabbing dark:bg-zinc-100 dark:text-zinc-950 dark:shadow-[0_2px_8px_rgba(0,0,0,0.4),0_10px_28px_rgba(0,0,0,0.35)] ${
+        className={`fixed z-50 flex cursor-grab select-none items-center justify-center bg-zinc-900 text-zinc-400 shadow-[0_2px_8px_rgba(0,0,0,0.18),0_10px_28px_rgba(0,0,0,0.22)] transition-[left,width,height,border-radius,box-shadow] duration-200 ease-out hover:shadow-[0_4px_12px_rgba(0,0,0,0.22),0_14px_36px_rgba(0,0,0,0.28)] active:cursor-grabbing dark:bg-zinc-100 dark:text-zinc-950 dark:shadow-[0_2px_8px_rgba(0,0,0,0.4),0_10px_28px_rgba(0,0,0,0.35)] ${
           docked && !orbHovered
             ? "ring-0"
             : "ring-1 ring-rose-500/45 dark:ring-rose-500/55"
@@ -528,7 +589,7 @@ export function FloatingAssistant() {
               AI 判读提醒 · {bubbles.length} 条
             </span>
             {bubbles[0].model === "llm_fallback" && (
-              <span className="rounded bg-amber-500/10 px-1 py-0.5 text-[10px] text-amber-600 dark:text-amber-300">
+              <span className="rounded bg-amber-500/10 px-1 py-0.5 text-[10px] text-amber-800 dark:text-amber-300">
                 按规则提醒
               </span>
             )}
@@ -549,7 +610,7 @@ export function FloatingAssistant() {
             <button
               type="button"
               onClick={() => void ackBubble(bubbles[0].id)}
-              className="rounded-md px-2 py-0.5 text-[11px] text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+              className="rounded-md px-2 py-0.5 text-[11px] text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
             >
               忽略
             </button>
@@ -566,13 +627,14 @@ export function FloatingAssistant() {
         >
           {/* 头部：墨玉徽标 + 名称 + 模型（mono 弱化），按钮族统一次要级 */}
           <div className="flex items-center gap-2.5 border-b border-zinc-200/80 px-4 py-3 dark:border-zinc-800/80">
-            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-zinc-900 text-zinc-50 dark:bg-zinc-100 dark:text-zinc-950">
+            {/* 与悬浮球同款墨玉反色，档位同步（P2-27） */}
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-zinc-900 text-zinc-400 dark:bg-zinc-100 dark:text-zinc-950">
               <AssistantMark size={15} strokeWidth={2} />
             </span>
             <div className="min-w-0 flex-1">
               <div className="text-[13px] font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">AI 助手</div>
               {model && (
-                <div className="truncate font-mono text-[10px] leading-tight text-zinc-400 dark:text-zinc-500">{model}</div>
+                <div className="truncate font-mono text-[10px] leading-tight text-zinc-600 dark:text-zinc-400">{model}</div>
               )}
             </div>
             {messages.length > 0 && (
@@ -581,7 +643,7 @@ export function FloatingAssistant() {
                 aria-label="清空对话"
                 title="清空对话"
                 onClick={clearChat}
-                className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
+                className="rounded-md p-1.5 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                   <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
@@ -593,7 +655,7 @@ export function FloatingAssistant() {
               aria-label="最小化"
               title="最小化"
               onClick={() => setOpen(false)}
-              className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
+              className="rounded-md p-1.5 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
                 <path d="M5 12h14" />
@@ -612,8 +674,9 @@ export function FloatingAssistant() {
                 <div className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
                   问盘面、问个股、问功能。
                 </div>
-                <div className="text-xs leading-relaxed text-zinc-400 dark:text-zinc-500">
-                  可以讲解各模块用法、聊板块与个股（无实时行情），或回答一般问题。
+                <div className="text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
+                  能查实时行情、K 线与分时、个股资金流、龙虎榜、公告财务、指数与市场宽度、
+                  题材梯队、每日精选与持仓；也能讲解各模块用法或回答一般问题。
                 </div>
                 <div className="mt-2 space-y-1.5">
                   {SUGGESTIONS.map((s) => (
@@ -626,7 +689,7 @@ export function FloatingAssistant() {
                       <span>{s}</span>
                       <span
                         aria-hidden
-                        className="text-zinc-300 transition-[transform,color] duration-150 ease-out group-hover:translate-x-0.5 group-hover:text-zinc-500 dark:text-zinc-600 dark:group-hover:text-zinc-400"
+                        className="text-zinc-700 transition-[transform,color] duration-150 ease-out group-hover:translate-x-0.5 group-hover:text-zinc-500 dark:text-zinc-400 dark:group-hover:text-zinc-200"
                       >
                         →
                       </span>
@@ -657,21 +720,26 @@ export function FloatingAssistant() {
                     {m.content ? (
                       <RichText text={m.content} matcher={matcher} onNavigate={onNavigate} />
                     ) : null}
-                    {m.status === "streaming" && !m.content && (
-                      <span
-                        className="inline-block h-4 w-0.5 animate-pulse rounded-full bg-zinc-400 dark:bg-zinc-500"
-                        aria-label="正在思考"
-                      />
-                    )}
+                    {/* 生成中：无正文时显示「思考中…/正在取数：xxx」，有正文时只留光标。
+                        光标此前只在 content 为空时出现且极细（2px），用户看不到"在动"。 */}
+                    {m.status === "streaming" &&
+                      (m.content ? (
+                        <span
+                          className="ml-0.5 inline-block h-3.5 w-[2px] animate-pulse rounded-full bg-zinc-500 align-[-2px] dark:bg-zinc-400"
+                          aria-hidden
+                        />
+                      ) : (
+                        <ActivityLine activity={activity} />
+                      ))}
                     {m.status === "interrupted" && (
-                      <div className="mt-1 text-[10px] text-zinc-400 dark:text-zinc-500">已停止生成</div>
+                      <div className="mt-1 text-[10px] text-zinc-600 dark:text-zinc-400">已停止生成</div>
                     )}
                     {/* 工具回执（P0-3）：这条答案调过哪些只读工具——取过数和没取过
                         必须能一眼分出来，否则"引用了数字"和"编了数字"长得一样 */}
                     {!!m.tools?.length && (
                       <div
                         data-testid="assistant-tools"
-                        className="mt-1.5 text-[10px] text-zinc-400 dark:text-zinc-500"
+                        className="mt-1.5 text-[10px] text-zinc-600 dark:text-zinc-400"
                       >
                         已取数 · {m.tools.join(" / ")}
                       </div>
@@ -681,9 +749,9 @@ export function FloatingAssistant() {
                     {!!m.sources?.length && (
                       <div
                         data-testid="assistant-sources"
-                        className="mt-1.5 border-t border-zinc-200/80 pt-1.5 text-[10px] leading-relaxed text-zinc-400 dark:border-zinc-800/80 dark:text-zinc-500"
+                        className="mt-1.5 border-t border-zinc-200/80 pt-1.5 text-[10px] leading-relaxed text-zinc-600 dark:border-zinc-800/80 dark:text-zinc-400"
                       >
-                        <span className="font-medium text-zinc-500 dark:text-zinc-400">数据来源</span>
+                        <span className="font-medium text-zinc-600 dark:text-zinc-400">数据来源</span>
                         {m.sources.map((s) => (
                           <span key={s.symbol} className="ml-1">
                             · {s.name || s.symbol} {s.source} {s.as_of}
@@ -697,7 +765,7 @@ export function FloatingAssistant() {
                           type="button"
                           onClick={regenerate}
                           disabled={streaming}
-                          className="text-zinc-400 underline decoration-dotted underline-offset-2 hover:text-zinc-600 disabled:opacity-40 dark:hover:text-zinc-300"
+                          className="text-zinc-600 dark:text-zinc-400 underline decoration-dotted underline-offset-2 hover:text-zinc-600 disabled:opacity-40 dark:hover:text-zinc-300"
                         >
                           重新生成
                         </button>
@@ -732,7 +800,7 @@ export function FloatingAssistant() {
                   onClick={stop}
                   aria-label="停止生成"
                   title="停止生成"
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-zinc-200 text-zinc-500 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-zinc-200 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
                 >
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
                     <rect x="5" y="5" width="14" height="14" rx="2" />
@@ -753,7 +821,7 @@ export function FloatingAssistant() {
                 </button>
               )}
             </div>
-            <div className="mt-1.5 text-center text-[10px] text-zinc-400 dark:text-zinc-600">
+            <div className="mt-1.5 text-center text-[10px] text-zinc-600 dark:text-zinc-400">
               AI 生成内容仅供参考，不构成投资建议
             </div>
           </div>

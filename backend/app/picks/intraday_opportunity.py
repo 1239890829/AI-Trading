@@ -193,9 +193,6 @@ def assemble(
     themes_out: list[dict] = []
     for t in board.get("themes", [])[:top_themes]:
         perf = t.get("performance") or {}
-        reason_by_symbol = {
-            c["symbol"]: c.get("reason") for c in ((t.get("leaders") or {}).get("candidates") or [])
-        }
         stocks: list[dict] = []
         for rung in (t.get("ladder") or [])[:stocks_per_theme]:
             sym = rung.get("symbol")
@@ -207,7 +204,12 @@ def assemble(
                     "role": rung.get("role"),
                     "boards": rung.get("boards"),
                     "change_pct": rung.get("change_pct"),
-                    "reason": reason_by_symbol.get(sym),
+                    # 官方涨停原因直接取**本行自己**的 reason。曾绕道
+                    # leaders.candidates 建 symbol→reason 映射，但 candidates 只含
+                    # 「补涨/反包」两种角色（theme_service 中为「低位替代」语义槽）、
+                    # 值是硬编码文案 ⇒ 其余角色（龙头/中军/空间板/首板…）全部取不到，
+                    # 卡片「入选原因」恒空（2026-09-10 用户反馈）。
+                    "reason": rung.get("reason"),
                     "hot_rank": (hot or {}).get("rank"),
                     "distinctiveness": distinctiveness(
                         hot_rank=(hot or {}).get("rank"),
@@ -266,7 +268,7 @@ def assemble(
     }
 
 
-def top_watch_stocks(payload: dict, *, limit: int = TOP_WATCH_LIMIT) -> dict:
+def top_watch_stocks(payload: dict, *, limit: int | None = None) -> dict:
     """盘中跟踪「最推荐标的」筛选（2026-09-04 用户需求，工作台动态分组 + 复盘共用口径）。
 
     多维评估的显式 if 链（可回测、可复盘对照），机会度优先级：
@@ -278,7 +280,15 @@ def top_watch_stocks(payload: dict, *, limit: int = TOP_WATCH_LIMIT) -> dict:
     顺序：tier 升序稳定排序——同 tier 内保持 opportunities 的题材强度序与
     梯队连板序（sort 稳定性保证，不引入额外权重以免丢失可解释性）。
     输出是机会度排序，不是买卖建议（红线）；依据文案逐只可追溯。
+
+    :param limit: 展示容量上限。未传 → 取**运行时生效值**（控制台参数白名单
+        可调 `picks_intraday_top_limit`，P1-15），否则回落 `TOP_WATCH_LIMIT`。
+        这是**纯展示容量**：改它不动筛选逻辑，也不改「谁能入选」。
     """
+    if limit is None:
+        from app.core import runtime_params
+
+        limit = runtime_params.get("picks_intraday_top_limit", TOP_WATCH_LIMIT)
     items: list[dict] = []
     for t in payload.get("themes") or []:
         for s in t.get("stocks") or []:
@@ -318,3 +328,24 @@ def top_watch_stocks(payload: dict, *, limit: int = TOP_WATCH_LIMIT) -> dict:
         "hot_available": payload.get("hot_available"),
         "caveats": list(payload.get("caveats") or []),
     }
+
+
+def attach_risk_fields(stocks: list[dict], snap_by: dict[str, dict]) -> None:
+    """就地补 现价 / 止损参考 / 出场纪律（与每日精选 PickCard 同构的三项，纯函数）。
+
+    为什么抽成共用函数：这三项 2026-09-09 起只在 ``/api/picks/intraday-top`` 的
+    路由里补，而题材手风琴走的是 ``/api/picks/intraday-opportunities`` ⇒ **同一张
+    选股卡片（PickCard）被两套字段丰度喂**，手风琴展开后缺现价/止损/出场纪律，
+    看起来像「字段没对齐」（2026-09-10 用户反馈）。补全逻辑只允许有一份。
+
+    三态纪律：现价取全市场快照，取不到写 ``None``（显式缺失，由前端渲染 ``--``），
+    不拿昨收或 0 冒充；``stop_loss_reference`` 在 price 为 None 时自行降级。
+    """
+    from app.picks.risk import exit_discipline, risk_tier_of, stop_loss_reference
+
+    for s in stocks:
+        price = (snap_by.get(str(s.get("symbol") or "")) or {}).get("price")
+        s["price"] = price
+        tier = risk_tier_of(s.get("role") or "")
+        s["stop_ref"] = stop_loss_reference(price=price, tier=tier)
+        s["exit_plan"] = exit_discipline(tier)

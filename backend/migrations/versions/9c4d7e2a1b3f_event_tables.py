@@ -8,6 +8,10 @@ Revises: 6f2ab91c4d70
 Create Date: 2026-08-31
 """
 
+from __future__ import annotations
+
+from alembic import op
+
 revision: str = "9c4d7e2a1b3f"
 down_revision = "6f2ab91c4d70"
 branch_labels = None
@@ -17,9 +21,11 @@ depends_on = None
 def upgrade() -> None:
     import sqlalchemy as sa
 
-    from app.core.db import get_engine
-
-    engine = get_engine()
+    # 2026-09-09：历史缺陷修复——此前用 get_engine()（默认库 engine）建表，
+    # 迁移实际跑在共享连接上（op.get_bind），fresh 测试/多库场景表会建到默认库
+    # 而非迁移目标库（真实库当年碰巧建对，从未暴露；b7e5c3d9a2f4 首次在迁移里
+    # 触碰 event_card 加列才在测试库报 no such table）。改共享连接。
+    bind = op.get_bind()
     metadata = sa.MetaData()
 
     event_card = sa.Table(
@@ -58,14 +64,12 @@ def upgrade() -> None:
     )
     sa.Index("ix_event_direction_event_id", event_direction.c.event_id)
 
-    metadata.create_all(engine)
+    metadata.create_all(bind)
 
 
 def downgrade() -> None:
     import sqlalchemy as sa
 
-    from app.core.db import get_engine
-
-    engine = get_engine()
+    bind = op.get_bind()
     for table in ("event_direction", "event_card"):
-        sa.Table(table, sa.MetaData(), autoload_with=engine).drop(engine)
+        sa.Table(table, sa.MetaData(), autoload_with=bind).drop(bind)

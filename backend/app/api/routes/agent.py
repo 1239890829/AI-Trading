@@ -4,11 +4,12 @@
 P1 参数配置模块接入后按同一套状态机/审计机制扩展。
 
 端点：
-- GET  /agent/task-types    任务类型清单（前端表单用，含风险等级与说明）
+- GET  /agent/task-types    可创建任务类型清单（前端表单用，含风险等级与说明）
 - POST /agent/tasks         创建任务（写操作 → require_write_token）
 - GET  /agent/tasks         任务列表（?type=&limit=）
 - GET  /agent/tasks/{id}    任务详情（含步骤轨迹）
-- POST /agent/tasks/{id}/cancel  取消（写操作）
+- POST /agent/tasks/{id}/cancel   取消（写操作）
+- POST /agent/tasks/{id}/resolve  处置待办（P1-36：告警 escalate 待办，写操作）
 - GET  /agent/audit         执行层审计（?target=&task_id=&limit=）
 """
 from __future__ import annotations
@@ -34,10 +35,12 @@ class TaskCreateIn(BaseModel):
 
 @router.get("/agent/task-types")
 async def agent_task_types():
-    return {"data": [
-        {"type": k, "label": v["label"], "risk": v["risk"], "desc": v["desc"]}
-        for k, v in at.TASK_TYPES.items()
-    ]}
+    """可**创建**的任务类型（有 handler、点了会真跑）。
+
+    登记类条目（mutation 变更留痕 / escalation 告警升级待办）不在此列——它们由
+    服务侧产生，没有执行体，出现在这里只会建出必然失败的任务。
+    """
+    return {"data": at.creatable_task_types()}
 
 
 @router.post("/agent/tasks", dependencies=[Depends(require_write_token)])
@@ -66,6 +69,23 @@ async def get_task(task_id: str):
 @router.post("/agent/tasks/{task_id}/cancel", dependencies=[Depends(require_write_token)])
 async def cancel_task(task_id: str):
     row = at.cancel_task(task_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return {"data": row}
+
+
+class TaskResolveIn(BaseModel):
+    outcome: str = Field(..., description="done=已处置 / dismissed=判定无需处理")
+    note: str = Field(default="", description="处置说明（可选，留痕用）")
+
+
+@router.post("/agent/tasks/{task_id}/resolve", dependencies=[Depends(require_write_token)])
+async def resolve_task(task_id: str, body: TaskResolveIn):
+    """处置 needs_confirm 待办（P1-36：告警 escalate 落任务中心后的关闭入口）。"""
+    try:
+        row = at.resolve_task(task_id, body.outcome, body.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     if row is None:
         raise HTTPException(status_code=404, detail="任务不存在")
     return {"data": row}
@@ -104,6 +124,13 @@ class ParamChangeIn(BaseModel):
     evidence: dict | None = Field(None, description="采纳依据 {sample_days, ic, win_rate}")
 
 
+class RollbackIn(BaseModel):
+    """回滚入参（P1-15）：归因是必填语义。不传 = manual（人工判断、未说明）。"""
+
+    reason_code: str = Field("manual", description="回滚归因 code（枚举见 /agent/params/rollback-reasons）")
+    note: str = Field("", description="备注（code=other 时应当填写）")
+
+
 @router.get("/agent/params")
 async def list_params():
     """参数白名单与当前生效值（覆盖层优先于静态配置）。"""
@@ -113,6 +140,25 @@ async def list_params():
 @router.get("/agent/params/changes")
 async def list_param_changes(key: str | None = None, limit: int = Query(30, ge=1, le=200)):
     return {"data": params_svc.list_changes(limit=limit, key=key)}
+
+
+@router.get("/agent/params/survival")
+async def param_survival():
+    """变更存活率 + 回滚归因分布（P1-15）。
+
+    样本不足时 `insufficient=True` 并给 note——**样本=1 的存活率是巧合不是指标**，
+    接口照实返回数字但同时标注不可用，免得界面上出现一个看着像结论的数字。
+    """
+    return {"data": params_svc.survival_stats()}
+
+
+@router.get("/agent/params/rollback-reasons")
+async def param_rollback_reasons():
+    """回滚归因枚举（前端下拉用；**封闭集合**，不收自由文本 code）。"""
+    return {"data": [
+        {"code": code, "label": label}
+        for code, label in params_svc.ROLLBACK_REASONS.items()
+    ]}
 
 
 @router.post("/agent/params/change", dependencies=[Depends(require_write_token)])
@@ -138,18 +184,29 @@ async def apply_param_change(change_id: int):
 
 
 @router.post("/agent/params/changes/{change_id}/rollback", dependencies=[Depends(require_write_token)])
-async def rollback_param_change(change_id: int):
-    """回滚变更单：恢复到 before（覆盖层同步还原）。"""
+async def rollback_param_change(change_id: int, body: RollbackIn | None = None):
+    """回滚变更单：恢复到 before（覆盖层同步还原）+ 记录**归因**。
+
+    归因 code 非法 → 422（封闭集合，不静默落 other）。
+    """
+    body = body or RollbackIn()
     try:
-        return {"data": params_svc.rollback_change(change_id)}
+        return {"data": params_svc.rollback_change(
+            change_id, reason_code=body.reason_code, note=body.note,
+        )}
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.get("/agent/agenda")
 async def get_agenda(date: str | None = None):
-    """今日（或指定日）进化议程；不存在返回 data=null。"""
-    return {"data": evo.get_agenda(date)}
+    """今日（或指定日）进化议程；不存在返回 data=null。
+
+    meta.scheduler_status：调度器 liveness（last_tick_at/age）——data=null 时
+    先看调度器是否活着（2026-09-09 事故：调度器 NameError 每 tick 崩溃，
+    议程静默不生成，无任何日志可取证）。
+    """
+    return {"data": evo.get_agenda(date), "meta": {"scheduler_status": evo.scheduler_status()}}
 
 
 @router.get("/agent/agendas")

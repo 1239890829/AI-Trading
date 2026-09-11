@@ -102,9 +102,27 @@ async def _fetch_day(provider, d: date) -> tuple[list, list | None]:
     return pool or [], brk
 
 
+def _as_date(v) -> date:
+    """日历元素归一：接受 date / datetime / ISO 字符串。
+
+    **2026-09-10 实测事故**：调度侧直取 provider 原始日历（**字符串**）传给 `backfill`，
+    而本函数按 `date` 比较 → `TypeError: '<' not supported between instances of
+    'str' and 'datetime.date'`；异常被调度器的 `except Exception` 收成一条 ERROR 日志，
+    结果**库静默停在 2026-09-01、连续 6 个交易日没更新**，而界面照旧写着
+    「按近 241 个交易日的历史分位校准」——窗口早已漂移却无人能一眼看出。
+
+    归一做在这里：传错类型不该是一个沉默数周的数据缺陷（调用方同时已修）。
+    """
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    return date.fromisoformat(str(v)[:10])
+
+
 async def backfill(
     provider,
-    trade_days: list[date],
+    trade_days: list,
     lookback: int = 120,
     *,
     store_path: Path | None = None,
@@ -117,6 +135,8 @@ async def backfill(
     入库会把分布往盘中口径拉偏。今天的数据等下一个周期（次日）再补——
     对 120 天窗口而言 1 天滞后可忽略，而口径纯净不可妥协。
 
+    :param trade_days: 交易日序列（``date`` / ISO 字符串均可，内部归一；见 `_as_date`）
+
     Returns:
         `{added, skipped, suspicious, total, days}`——`suspicious` 为疑似回退
         被剔除的天数，非 0 时应告警。
@@ -124,8 +144,9 @@ async def backfill(
     path = store_path or _STORE_PATH
     today = today or beijing_today()
     store = load(path)
-    # 多取一天：最早那天的指标需要它的前一日；再剔除今天（见 docstring）
-    days = [d for d in sorted(trade_days) if d < today][-(lookback + 1):]
+    # 多取一天：最早那天的指标需要它的前一日；再剔除今天（见 docstring）。
+    # 先去重再排序——重复日期会让相邻两天被当成"同一天"参与 _is_same_pool 判定。
+    days = [d for d in sorted({_as_date(x) for x in trade_days}) if d < today][-(lookback + 1):]
 
     pool_by_day: dict[date, list] = {}
     added = skipped = suspicious = 0
@@ -180,6 +201,33 @@ def history(store_path: Path | None = None, limit: int | None = None) -> list[di
     store = load(store_path)
     rows = [store["days"][k] for k in sorted(store["days"])]
     return rows[-limit:] if limit else rows
+
+
+def percentile_of_value(
+    metric: str, value: float | None, store_path: Path | None = None
+) -> dict | None:
+    """把**当日实测值**放进历史样本里算分位（0–100）。样本不足或值缺失 → None。
+
+    与 `calibration.describe()` 的区别（2026-09-10 修正）：`describe` 取的是
+    **历史库里最后一行**的分位，而库里最后一行是"上一个交易日"（`backfill` 刻意
+    不回补今天，见其 docstring）——把它当成"今天的分位"用，等于每天用昨天的位置
+    描述今天，且库一旦停更就变成"用上个月的位置描述今天"（实测陈旧 6 个交易日）。
+    本函数显式接收当日值，回答的才是「**今天**处在历史什么位置」。
+    """
+    if value is None:
+        return None
+    from app.sentiment.calibration import percentile_of
+
+    vals = sorted(
+        float(r[metric]) for r in history(store_path) if r.get(metric) is not None
+    )
+    if not vals:
+        return None
+    return {
+        "value": float(value),
+        "percentile": round(percentile_of(vals, float(value)), 1),
+        "samples": len(vals),
+    }
 
 
 def _save(store: dict, path: Path) -> None:

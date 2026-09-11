@@ -95,7 +95,7 @@ async def list_events(
     """事件列表 + AI 判读合并（2026-09-09 告警面板重设计：verdict 徽标数据源）。"""
     events = repo.list_events(limit=limit, rule_id=rule_id)
     out = []
-    triage_map: dict[int, tuple[str, str]] = {}
+    triage_map: dict[int, tuple[str, str, str]] = {}
     try:
         from sqlalchemy import select as _sel
 
@@ -108,13 +108,15 @@ async def list_events(
                 rows = db.execute(
                     _sel(AgentTriage).where(AgentTriage.event_id.in_(ids))
                 ).scalars().all()
-                triage_map = {t.event_id: (t.verdict, t.reason or "") for t in rows}
+                triage_map = {t.event_id: (t.verdict, t.reason or "", t.model or "") for t in rows}
     except Exception:  # noqa: BLE001  判读缺失 → 事件仍可展示（三态）
         pass
     for e in events:
         d = _serialize_event(e).model_dump() if hasattr(_serialize_event(e), 'model_dump') else dict(_serialize_event(e))
         tri = triage_map.get(e.id)
-        d["triage"] = {"verdict": tri[0], "reason": tri[1]} if tri else None
+        # model 一并返回：`llm_fallback` 表示「AI 判读不可用、按规则提醒」，
+        # 界面必须能区分（P1-36「今日已挡事件」要展示是否降级）——不伪装成 AI 判断。
+        d["triage"] = {"verdict": tri[0], "reason": tri[1], "model": tri[2]} if tri else None
         out.append(d)
     return Envelope(data=out)
 

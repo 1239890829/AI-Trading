@@ -54,8 +54,11 @@ function AgentInner() {
     <main className="mx-auto flex h-full w-full max-w-[1600px] flex-col px-4 py-3">
       <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-4">
-          <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">AI 控制台</h1>
-          <nav className="flex items-center gap-1" aria-label="AI 控制台子页签">
+          <h1 className="flex items-baseline gap-2 text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+            交易智能体
+            <span className="text-xs font-normal text-zinc-600 dark:text-zinc-400">自主进化体</span>
+          </h1>
+          <nav className="flex items-center gap-1" aria-label="交易智能体子页签">
             {TABS.map((t) => (
               <button
                 key={t.key}
@@ -64,7 +67,7 @@ function AgentInner() {
                 className={`rounded-md px-3 py-1.5 text-sm transition-colors ${
                   tab === t.key
                     ? "bg-zinc-900 font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
-                    : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+                    : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
                 }`}
               >
                 {t.label}
@@ -72,8 +75,8 @@ function AgentInner() {
             ))}
           </nav>
         </div>
-        <span className="hidden text-xs text-zinc-400 lg:inline">
-          大脑 + 执行层 · 首批仅 L0 只读/生成任务 · 每次执行全程留痕 · 不构成买卖建议
+        <span className="hidden text-xs text-zinc-600 dark:text-zinc-400 lg:inline">
+          自主复盘 · 分级执行（L0-L3） · 全程留痕可回滚 · 不构成买卖建议
         </span>
       </div>
 
@@ -95,7 +98,7 @@ function AgentInner() {
 
 export default function AgentPage() {
   return (
-    <Suspense fallback={<PageSkeletonFallback label="AI 控制台加载中" />}>
+    <Suspense fallback={<PageSkeletonFallback label="交易智能体加载中" />}>
       <AgentInner />
     </Suspense>
   );

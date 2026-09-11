@@ -58,7 +58,7 @@ export function LimitDownTab() {
     <div className="flex h-full min-h-0 flex-col">
       <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2">
         <h2 className="text-base font-semibold">跌停池 · {tradeDate || "…"}</h2>
-        <div className="flex items-center gap-2 text-xs text-zinc-400">
+        <div className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
           <label htmlFor="dt-date">按日期查询：</label>
           <input
             id="dt-date"
@@ -71,7 +71,7 @@ export function LimitDownTab() {
       </div>
 
       {error && (
-        <div className="mb-4 shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-600 dark:text-amber-300">
+        <div className="mb-4 shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
           跌停池加载失败：{error}（数据源为东方财富 push2ex 免费接口）
         </div>
       )}
@@ -93,11 +93,11 @@ export function LimitDownTab() {
               ))}
             </div>
           ) : (
-            <p className="px-4 py-10 text-center text-sm text-zinc-400">当日暂无跌停（或非交易日）</p>
+            <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">当日暂无跌停（或非交易日）</p>
           )
         ) : (
           <table className="w-full text-sm">
-            <thead className="text-left text-xs text-zinc-400">
+            <thead className="text-left text-xs text-zinc-600 dark:text-zinc-400">
               <tr className="border-b border-zinc-200 dark:border-zinc-800">
                 {["代码", "名称", "价格", "跌幅", "连续跌停", "开板", "封单额", "换手", "成交额", "行业"].map((h) => (
                   <th key={h} className={`px-2 py-2 font-medium ${["名称", "行业"].includes(h) ? "" : "text-right"}`}>
@@ -113,7 +113,7 @@ export function LimitDownTab() {
                   onClick={stockNav(r.symbol)}
                   className="cursor-pointer border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900"
                 >
-                  <td className="px-2 py-2 font-mono text-xs text-zinc-400">
+                  <td className="px-2 py-2 font-mono text-xs text-zinc-600 dark:text-zinc-400">
                     <StockLink symbol={r.symbol}>
                       {r.symbol}
                     </StockLink>
@@ -123,25 +123,25 @@ export function LimitDownTab() {
                   <td className={`px-2 py-2 text-right font-mono ${pctColor(r.change_pct)}`}>{pctText(r.change_pct)}</td>
                   <td className="px-2 py-2 text-right font-mono">
                     {(r.consecutive_days ?? 0) > 1 ? (
-                      <span className="font-semibold text-down">{r.consecutive_days} 天</span>
+                      <span className="font-semibold text-down-ink dark:text-down">{r.consecutive_days} 天</span>
                     ) : (
                       (r.consecutive_days ?? 0) || "--"
                     )}
                   </td>
                   <td className="px-2 py-2 text-right font-mono text-xs">
-                    {(r.open_count ?? 0) > 0 ? <span className="text-amber-400">{r.open_count}</span> : "0"}
+                    {(r.open_count ?? 0) > 0 ? <span className="text-amber-800 dark:text-amber-400">{r.open_count}</span> : "0"}
                   </td>
                   <td className="px-2 py-2 text-right font-mono text-xs">{fmtAmount(r.seal_amount)}</td>
                   <td className="px-2 py-2 text-right font-mono text-xs">{r.turnover_rate != null ? `${fmt(r.turnover_rate)}%` : "--"}</td>
                   <td className="px-2 py-2 text-right font-mono text-xs">{fmtAmount(r.amount)}</td>
-                  <td className="max-w-[140px] truncate px-2 py-2 text-xs text-zinc-500 dark:text-zinc-300">{r.industry_board ?? "--"}</td>
+                  <td className="max-w-[140px] truncate px-2 py-2 text-xs text-zinc-600 dark:text-zinc-300">{r.industry_board ?? "--"}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
       </Panel>
-      <p className="mt-4 shrink-0 text-xs text-zinc-400">
+      <p className="mt-4 shrink-0 text-xs text-zinc-600 dark:text-zinc-400">
         跌停池是市场极端亏钱效应的反面证据（与涨停生态对照阅读）；连续跌停 ≥2 天的标的风险极高，点击代码进详情仅供参考。
       </p>
     </div>

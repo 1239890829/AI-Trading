@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from datetime import date, datetime, time as dt_time, timedelta
 from pathlib import Path
@@ -9,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from app.api.deps import get_hub
+from app.core.freshness import Freshness
 from app.core.ttl_cache import cache_on
 from app.data_providers.eastmoney import ProviderError
 from app.data_quality.validator import validate_order_book
@@ -23,7 +25,9 @@ from app.schemas.envelope import (
     LimitDownPoolPayload,
     LimitUpPoolPayload,
     LongHuPayload,
+    MinuteDecisionsPayload,
     MinuteLinePayload,
+    MinuteSignalsPayload,
     OverviewPayload,
     SentimentHistoryItem,
     SentimentHistoryPayload,
@@ -32,6 +36,7 @@ from app.schemas.envelope import (
     SparklinePayload,
     ThemeBoardPayload,
 )
+from app.market.normalizer import main_board
 from app.market.trade_calendar import trading_days
 from app.market.trading_status import bar_date, beijing_now, resolve_trading_status
 from app.schemas.market import (
@@ -52,11 +57,32 @@ log = logging.getLogger(__name__)
 router = APIRouter(tags=["market"])
 
 
+def _hub_freshness(hub: QuoteHub) -> dict:
+    """行情链新鲜度（S2-1 契约）。**保留 `is_stale` 布尔**供既有消费方使用。
+
+    刻意用 `getattr` 回退而非直接调 `hub.freshness()`：多处测试桩只实现了
+    `is_stale`（历史接口面），强依赖新方法会把"加一个只读字段"变成破坏性改动。
+    回退路径同样按 Freshness 规则派生（缺时间戳 → unknown），**不假装 ready**。
+    """
+    fn = getattr(hub, "freshness", None)
+    if callable(fn):
+        fresh = fn()
+    else:
+        fresh = Freshness.from_age(
+            as_of=getattr(hub, "last_success_refresh", None),
+            fresh_within=getattr(hub, "stale_after", 10.0) or 10.0,
+            source=getattr(getattr(hub, "provider", None), "name", None),
+            missing_reason="行情链未提供成功刷新时间，无法判定新鲜度",
+        )
+    return fresh.model_dump(mode="json")
+
+
 def _meta(hub: QuoteHub) -> dict:
     return {
         "provider": hub.provider.name,
         "is_realtime": bool(getattr(hub.provider, "realtime", False)) and not hub.is_stale(),
         "is_stale": hub.is_stale(),
+        "freshness": _hub_freshness(hub),
         "last_success_refresh": hub.last_success_refresh.isoformat() if hub.last_success_refresh else None,
         "generated_at": utcnow().isoformat(),
     }
@@ -396,7 +422,7 @@ async def market_board_fund_flow(
     kind: str = Query(default="concept", description="concept 概念 / industry 行业"),
     range: str = Query(default="intraday", description="intraday 今日 / 5d / 10d / 20d"),
 ) -> dict:
-    """板块资金流榜（L2 唯一实现，docs/fund-flow-redesign.md 四层级模型）。
+    """板块资金流榜（L2 唯一实现，docs/summary/architecture-design.md §2 四层级模型）。
 
     - intraday/5d/10d：一次翻页全量（f62 今日 / f164 5日 / f174 10日，官方字段已实测），
       前端排序筛选纯内存，切换不回源；
@@ -638,6 +664,90 @@ async def minute_line(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
     return {"data": {"symbol": symbol, "points": points, "vr_baseline_5m": baseline}, "meta": _meta(hub)}
 
 
+@router.get("/market/minute-signals/{symbol}", response_model=Envelope[MinuteSignalsPayload])
+async def minute_signals(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
+    """做 T 偏向信号（分钟级）+ **触发即记录**到决策库（P1-24 接线）。
+
+    记录是**幂等日志副作用**：引擎前缀稳定 ⇒ 同一根 bar 重算结果相同，
+    去重键 ``(symbol, trigger_ts)`` 保证重复请求不产生第二条 —— 因此这里
+    用 GET 读写同一资源是可接受的（原模块 docstring 的设计即如此：
+    "触发即记录：signals 接口产出越过阈值的信号时落库"）。
+
+    ``degraded`` 如实透传降级原因（缺昨日量 → 量比条件降级；缺波动率 →
+    阈值不自适应）。**不补假数据**：宁可降级并标注，不用别的口径顶上。
+    """
+    from app.core.db import get_session_factory
+    from app.market import minute_decisions as md
+    from app.market.minute_signals import compute_minute_signals
+
+    try:
+        points = await hub.provider.get_minute_line(symbol)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"分时数据源失败：{exc}") from exc
+
+    out = compute_minute_signals(points)
+    signals = list(out["signals"])  # 引擎已 dump 成 dict，勿再 .model_dump()（2026-09-10 实测踩坑）
+    # 只在信号非空时才动库（空列表不会产生写入，省一次连接与事务）
+    recorded = (
+        await asyncio.to_thread(md.record_signals, get_session_factory(), symbol, signals)
+        if signals
+        else 0
+    )
+    return {
+        "data": {
+            "symbol": symbol,
+            "signals": signals,
+            "observed": out.get("observed", 0),
+            "degraded": list(out.get("degraded") or []),
+            "recorded": recorded,
+            "basis": out.get("basis") or {},
+        },
+        "meta": _meta(hub),
+    }
+
+
+@router.get("/market/minute-decisions", response_model=Envelope[MinuteDecisionsPayload])
+async def minute_decisions(
+    symbol: str | None = Query(None, description="按标的过滤；缺省=全部"),
+    limit: int = Query(50, ge=1, le=200),
+) -> dict:
+    """做 T 决策库（记录 → 结算 → 错误归因）。读时**惰性结算**到期的 open 记录。
+
+    惰性结算的口径：只在读取时推进，不另起常驻任务（原模块设计如此）；
+    盘后还有一次批量结算挂在 15:35 复调度的收盘分支（`scan_and_settle_today`），
+    保证"没人看页面时样本也会累积"。
+    """
+    from app.core.db import get_session_factory
+    from app.market import minute_decisions as md
+    from app.market.trading_status import beijing_now
+
+    sf = get_session_factory()
+    settled = 0
+    # 收盘后才有完整窗口可结算；盘中也允许（到期的那部分能算）
+    if beijing_now().hour >= 12:
+        with contextlib.suppress(Exception):
+            settled = await asyncio.to_thread(md.settle_due, sf, md.tdx_points, symbol)
+    items = await asyncio.to_thread(md.list_decisions, sf, symbol, limit)
+    outcomes: dict[str, int] = {}
+    for it in items:
+        key = it.get("outcome") or "open"
+        outcomes[key] = outcomes.get(key, 0) + 1
+    return {
+        "data": {
+            "items": items,
+            "settled": settled,
+            "outcomes": outcomes,
+            "open_count": outcomes.get("open", 0),
+            "note": (
+                "结算门槛 8bp（≈2×交易成本）；correct=偏向方向最优价差达标，"
+                "wrong=反向不利价差达标，invalid=窗口内未达任何阈值（消耗注意力但没钱），"
+                "expired=窗口数据不足不判定。错误归因用 leave-one-out（剔除哪个指标会翻转结论）。"
+            ),
+        },
+        "meta": {"generated_at": utcnow().isoformat()},
+    }
+
+
 async def _prev_trade_date_async(hub, before: date) -> date | None:
     """before 之前的最近交易日（交易日历缓存优先，失败回退周末规则）；拿不到返回 None。"""
     cache = cache_on(hub, "provider.trading_days", 86400, maxsize=1)
@@ -800,6 +910,83 @@ async def market_anomalies_stock(
         return {
             "records": [r.model_dump(mode="json") for r in records],
             "note": None if records else "所查代码当日无异动记录（非故障）",
+        }
+
+    _, payload = await cache.get_or_set(key, _build)
+    return {"data": payload, "meta": _meta(hub)}
+
+
+@router.get("/market/board-fund/by-symbols")
+async def market_board_fund_by_symbols(
+    request: Request,
+    symbols: str = Query(description="逗号分隔 6 位代码，≤50"),
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    """自选行「所属板块资金」徽标（P1-4，2026-09-10）。
+
+    **主板块口径** = 东财 F10 ssbk 行业三级的 **L2（Ⅱ级）行**（`classify_boards` 按
+    `IS_PRECISE` 分段得到行业段）——「这只股是做什么的」的最近语义层级。**不用概念段首个**：
+    那是 ssbk 返回顺序里的首个概念标签，与相关性无关（2026-09-10 实测茅台→「味蕾经济」、
+    平安银行→「跨境支付」，语义不成立）。无行业段时才回落概念首个并如实标注 `level`。
+    板块按 **BOARD_CODE 直取**（不按名字匹配——行业三级名带罗马数字后缀「白酒Ⅱ」，
+    板块榜里是「白酒」，走名字会引入歧义）。
+
+    **板块资金** = 东财 f62，经 `theme_service.board_rows_for_codes`（L3 映射 →
+    复用 board_flow 盘中 30s 缓存，**零额外上游调用**）。连续流入天数只对落盘
+    Top 板块可判，其余 None（三态，区别于 0=今日净流出）。资料/板块取不到 →
+    该 symbol **不出现在返回里**，绝不臆造。
+    """
+    sym_list = [s.strip() for s in symbols.split(",") if s.strip()]
+    if not sym_list:
+        raise HTTPException(status_code=422, detail="symbols 不能为空")
+    if len(sym_list) > 50:
+        raise HTTPException(status_code=422, detail="单批最多 50 个代码")
+
+    cache = cache_on(request.app.state, "market.board-fund.by-symbols", 60, maxsize=64)
+    key = (tuple(sym_list),)
+
+    async def _build() -> dict:
+        # 所属板块是**低频变更**数据（成分调整才变）→ 6h 缓存，避免自选轮询反复打 F10。
+        board_cache = cache_on(request.app.state, "market.board-fund.main-board", 6 * 3600, maxsize=512)
+        sem = asyncio.Semaphore(8)
+
+        async def _main_board(sym: str) -> tuple[str, dict | None]:
+            hit, cached = board_cache.get(sym)
+            if hit:
+                return sym, cached
+            async with sem:
+                try:
+                    profile = await hub.provider.get_company_profile(sym)
+                except Exception as exc:  # noqa: BLE001 单只失败不影响其余
+                    log.debug("board-fund: profile %s failed: %s", sym, exc)
+                    return sym, None
+            groups = profile.get("board_groups") or {}
+            ref = main_board(groups, profile.get("board_codes") or {})
+            board_cache.set(sym, ref)
+            return sym, ref
+
+        pairs = await asyncio.gather(*[_main_board(s) for s in sym_list])
+        from app.services.theme_service import board_rows_for_codes
+
+        rows = await board_rows_for_codes([r["code"] for _, r in pairs if r and r.get("code")])
+        boards: dict[str, dict] = {}
+        for sym, ref in pairs:
+            row = rows.get(ref.get("code")) if ref else None
+            if not row:
+                continue  # 板块代码未在东财板块榜中 → 缺省，不臆造
+            boards[sym] = {
+                "board_name": row.get("name") or (ref or {}).get("name"),
+                "board_code": row.get("board_code"),
+                "kind": row.get("kind"),
+                "level": (ref or {}).get("level"),
+                "change_pct": row.get("change_pct"),
+                "main_net_yi": row.get("main_net_yi"),
+                "main_net_ratio": row.get("main_net_ratio"),
+                "streak": row.get("streak"),
+            }
+        return {
+            "boards": boards,
+            "note": None if boards else "所属板块资金暂不可用（公司资料或板块列表取不到）",
         }
 
     _, payload = await cache.get_or_set(key, _build)
@@ -1487,23 +1674,7 @@ async def themes(
         raise HTTPException(status_code=400, detail="sort 仅支持 strength / boards / count")
     trade_date = date.fromisoformat(date_str) if date_str else await _default_trade_date_async(hub)
 
-    cache = cache_on(request.app.state, "market.themes", 60, maxsize=16)
-    hit, payload = cache.get(trade_date)
-    if not hit:
-        from app.services.theme_service import build_theme_board
-
-        # 读 Parquet 是同步阻塞调用，必须丢到线程池，否则会卡住事件循环
-        # （曾导致整个服务无响应，连 /api/health 都超时）。
-        try:
-            board = await build_theme_board(
-                hub.provider,
-                trade_date,
-                snapshot_map=await asyncio.to_thread(_load_snapshot_map, request, trade_date),
-            )
-        except RuntimeError as exc:
-            raise HTTPException(status_code=502, detail=str(exc))
-        payload = {"data": board, "meta": _meta(hub)}
-        cache.set(trade_date, payload)
+    payload = await _theme_board_cached(request, hub, trade_date)
 
     # T3/B3：官方板块 K 线交叉验证（缓存的 payload 已验证过时内部直接跳过）
     await _verify_board_multi_day(request, payload["data"])
@@ -1523,6 +1694,97 @@ async def themes(
     out["themes"] = themes_list[:limit]
     out["filters"] = {"sort": sort, "min_boards": min_boards, "min_count": min_count, "limit": limit}
     return {"data": out, "meta": payload["meta"]}
+
+
+async def _theme_board_cached(request: Request, hub: QuoteHub, trade_date: date) -> dict:
+    """题材看板（60s 缓存，与 /api/market/themes 共用同一缓存槽）。
+
+    抽出来的理由：介入条件清单（/entry-checklist）也要这份 payload，重复取数等于
+    把同一份重计算做两遍。`build_theme_board` 抛 RuntimeError（涨停池不可用）→ 502。
+    """
+    from app.services.theme_service import build_theme_board
+
+    cache = cache_on(request.app.state, "market.themes", 60, maxsize=16)
+    hit, payload = cache.get(trade_date)
+    if hit:
+        return payload
+    # 读 Parquet 是同步阻塞调用，必须丢到线程池，否则会卡住事件循环
+    # （曾导致整个服务无响应，连 /api/health 都超时）。
+    try:
+        board = await build_theme_board(
+            hub.provider,
+            trade_date,
+            snapshot_map=await asyncio.to_thread(_load_snapshot_map, request, trade_date),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    payload = {"data": board, "meta": _meta(hub)}
+    cache.set(trade_date, payload)
+    return payload
+
+
+async def _market_phase_cached(request: Request, hub: QuoteHub) -> str | None:
+    """当前市场相位（复用 /api/market/sentiment 的 60s 缓存槽）。
+
+    判不出来（日历不可用/计算失败）→ None = 未判定，绝不猜一个相位。异常不写缓存
+    （TTLCache 契约），所以 /market/sentiment 仍会照常返回 503。
+    """
+    from app.services.market_context import compute_market_sentiment
+
+    cache = cache_on(request.app.state, "market.sentiment", 60, maxsize=1)
+
+    async def _build() -> dict:
+        result = await compute_market_sentiment(hub, request.app.state.snapshot_service)
+        return {"data": result, "meta": _meta(hub)}
+
+    try:
+        _, payload = await cache.get_or_set((), _build)
+    except Exception as exc:  # noqa: BLE001  相位缺失只影响市场层维度，不阻断清单
+        log.warning("entry-checklist: market phase unavailable: %s", exc)
+        return None
+    return ((payload or {}).get("data") or {}).get("phase")
+
+
+@router.get("/market/entry-checklist")
+async def market_entry_checklist(
+    symbol: str = Query(min_length=6, max_length=12, description="裸6位代码或带后缀"),
+    date_str: str | None = Query(default=None, alias="date", description="YYYY-MM-DD，默认最近交易日"),
+    request: Request = None,
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    """介入条件清单（P1-13）：三层必须同时满足的信号 + 回避项 + 失效条件 + 时间窗口。
+
+    回答「等确认往往已涨一轮，追进去又被套」——不给"明天买 X"，只给信号清单：
+    市场层（环境允许不允许）→ 题材层（题材处在什么阶段）→ 个股层（封板质量够不够），
+    三层都过才谈价位；同时给出「什么情况说明判断错了」的失效条件。
+
+    输入**全部复用**已有计算：题材看板（60s 缓存，含 dragon_score/封单质量/题材阶段）
+    + 情绪判定（60s 缓存，提供市场相位）。个股不在任何题材梯队时 found=False，
+    只给市场层通用条件并显式标注「个股层未判定」，绝不臆造角色与封单质量。
+    红线 3：输出是条件清单，不是买卖建议。
+    """
+    from app.services.dragon_service import entry_checklist
+    from app.services.theme_service import entry_checklist_from_board
+
+    td = date.fromisoformat(date_str) if date_str else await _default_trade_date_async(hub)
+    payload = await _theme_board_cached(request, hub, td)
+    phase = await _market_phase_cached(request, hub)
+
+    found = entry_checklist_from_board(payload["data"], symbol, market_phase=phase)
+    if found is not None:
+        data = {"found": True, **found, "market_phase": phase}
+    else:
+        data = entry_checklist(symbol=symbol, market_phase=phase)
+        data.update({
+            "found": False,
+            "trade_date": td.isoformat(),
+            "market_phase": phase,
+            "note": (
+                f"该标的 {td.isoformat()} 不在任何题材梯队（当日未涨停或未归入题材）"
+                "→ 只给市场层通用条件，个股层的封单质量/角色/题材阶段均未判定。"
+            ) + data["note"],
+        })
+    return {"data": data, "meta": _meta(hub)}
 
 
 @router.get("/chip")

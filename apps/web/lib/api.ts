@@ -105,7 +105,32 @@ async function request<T>(
   if (!res.ok) {
     throw new ApiError(res.status, body.detail ?? `HTTP ${res.status}`, body.code ?? `http_${res.status}`);
   }
+  // 200 但没有 Envelope 的 `data` 键 = **契约破坏**（响应体不是合法 JSON，或请求落到了非 API 路由）。
+  // 若不校验而直接 `return body`，调用方拿到的是 `undefined`：`.catch(() => [])` 兜得住「抛错」、
+  // **兜不住「返回 undefined」**，于是崩溃点会漂到离根因很远的地方——实测表现为
+  // `Cannot read properties of undefined (reading 'length')`（V8）/
+  // `undefined is not an object (evaluating 'reviews.length')`（JSC），
+  // 现场看像是页面自身逻辑出错，实际根因是接口响应不是 Envelope。
+  // 三态纪律：契约破坏要**显式失败**，不能伪装成「成功且无数据」（KB-ENG-37）。
+  if (!("data" in body)) {
+    throw new ApiError(
+      res.status,
+      `${path}：响应缺少 data 字段（HTTP ${res.status} 但非 API Envelope）`,
+      "bad_envelope",
+    );
+  }
   return body as { data: T; meta: Meta };
+}
+
+/** 列表接口专用入口：契约是数组。
+ *
+ * `data: null` 是后端表达「无数据」的**合法**形态 → 归一为 `[]`（读取路径不该因空而崩）；
+ * 而**缺 `data` 键**（契约破坏）由 `request` 层抛错，**不在这里吞**——吞掉会把接口故障
+ * 伪装成「空列表」，用户看到「暂无数据」却以为是正常状态。
+ */
+async function getJsonArray<T>(path: string, timeoutMs?: number): Promise<T[]> {
+  const body = await getJson<T[] | null>(path, timeoutMs);
+  return body.data ?? [];
 }
 
 async function getJson<T>(path: string, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<{ data: T; meta: Meta }> {
@@ -152,7 +177,7 @@ export async function getQuote(symbol: string, source?: string): Promise<Quote> 
 
 export async function getQuotes(symbols?: string[]): Promise<Quote[]> {
   const qs = symbols && symbols.length > 0 ? `?symbols=${symbols.join(",")}` : "";
-  return (await getJson<Quote[]>(`/api/quotes${qs}`)).data;
+  return getJsonArray<Quote>(`/api/quotes${qs}`);
 }
 
 export interface KlinePayload {
@@ -171,16 +196,12 @@ export async function getKlinePayload(symbol: string, timeframe = "1d", limit = 
   ).data;
 }
 
-export async function getKline(symbol: string, timeframe = "1d", limit = 250): Promise<Kline[]> {
-  return (await getKlinePayload(symbol, timeframe, limit)).bars;
-}
-
 export async function getOrderBook(symbol: string): Promise<OrderBook> {
   return (await getJson<OrderBook>(`/api/order-book/${symbol}`)).data;
 }
 
 export async function getTrades(symbol: string, limit = 50): Promise<Trade[]> {
-  return (await getJson<Trade[]>(`/api/trades/${symbol}?limit=${limit}`)).data;
+  return getJsonArray<Trade>(`/api/trades/${symbol}?limit=${limit}`);
 }
 
 export async function getLimitUpPool(dateStr?: string): Promise<LimitUpRecord[]> {
@@ -268,7 +289,9 @@ export interface NewsDigest {
  * 前端应据此标注来源，别让读者误以为摘要出自模型。
  */
 export async function getNewsDigest(symbol: string, limit = 8): Promise<NewsDigest> {
-  return (await getJson<NewsDigest>(`/api/news/digest/${symbol}?limit=${limit}`, 15_000)).data;
+  // 超时 40s：后端首次生成实测 ~32s（抓原文+摘要），15s 会稳定超时失败。
+  // 调用方（feed 弹窗）是后台加载不阻塞 UI，慢只是慢，不是卡死。
+  return (await getJson<NewsDigest>(`/api/news/digest/${symbol}?limit=${limit}`, 40_000)).data;
 }
 
 /** 板块排行（新浪闪电口径）。结构见 /api/boards。 */
@@ -296,6 +319,47 @@ export interface ThemeCatalogItem {
 export async function getThemesCatalog(search?: string): Promise<ThemeCatalogItem[]> {
   const qs = search ? `?search=${encodeURIComponent(search)}` : "";
   return (await getJson<{ items: ThemeCatalogItem[] }>(`/api/themes/catalog${qs}`, 30_000)).data.items;
+}
+
+/** 介入条件清单（/api/market/entry-checklist，P1-13）：三层信号 + 回避项 + 失效条件。
+ *  不是买卖建议——信号未同时满足就不构成介入理由。found=false 表示该标的当日
+ *  不在任何题材梯队，个股层（封单质量/角色/题材阶段）未判定。 */
+export interface EntryChecklistLayer {
+  phase?: string | null;
+  stage?: string | null;
+  blocked: boolean;
+  note: string;
+}
+
+export interface EntryChecklist {
+  symbol: string;
+  name?: string | null;
+  found: boolean;
+  trade_date?: string | null;
+  theme?: string | null;
+  theme_stage_basis?: string | null;
+  health_note?: string | null;
+  risks?: string[];
+  role?: string | null;
+  boards?: number | null;
+  dragon_grade?: string | null;
+  dragon?: { score?: number; grade?: string; basis?: string[]; missing?: string[] };
+  market_phase?: string | null;
+  market_layer: EntryChecklistLayer;
+  theme_layer: EntryChecklistLayer;
+  conditions: string[];
+  avoid: string[];
+  invalidation: string[];
+  timing: string;
+  /** 未取到的输入（三态：缺失显式列出，不做中性假设）。 */
+  missing: string[];
+  note: string;
+}
+
+export async function getEntryChecklist(symbol: string, dateStr?: string): Promise<EntryChecklist> {
+  const qs = new URLSearchParams({ symbol });
+  if (dateStr) qs.set("date", dateStr);
+  return (await getJson<EntryChecklist>(`/api/market/entry-checklist?${qs}`, 20_000)).data;
 }
 
 /** 涨速榜（/api/speed-rank）：最近 5 分钟涨跌幅，同花顺行情"涨速"列同口径。
@@ -326,6 +390,19 @@ export async function getSpeedRank(theme?: string, symbols?: string[]): Promise<
   return (await getJson<SpeedRankPayload>(`/api/speed-rank?${p.toString()}`, 20_000)).data;
 }
 
+/** 东财板块资金行（P1-4/P1-5 共用）：**f62 主力净额口径**。
+ *  ⚠️ 与 `ThemeStrengthRow` 的「合力」是两套口径（合力=ths 官方成分快照聚合），
+ *  分开渲染、不可相加；`streak` 只对落盘 Top 板块可判，未知为 null（不是 0）。 */
+export interface BoardFundRow {
+  board_code: string | null;
+  name: string;
+  kind: string | null;
+  change_pct: number | null;
+  main_net_yi: number | null;
+  main_net_ratio: number | null;
+  streak: number | null;
+}
+
 /** 题材内资金合力（P1-5）：官方成分批量快照聚合（涨跌家数/等权涨幅/成交额/涨停家数）。 */
 export interface ThemeStrengthRow {
   name: string;
@@ -339,11 +416,30 @@ export interface ThemeStrengthRow {
   total_amount: number;
   top_gainers: { symbol: string; name: string | null; change_pct: number }[];
   basis: string;
+  /** 同名东财板块的资金（f62 口径，P1-5 新口径；匹配不到为 null） */
+  board?: BoardFundRow | null;
 }
 
 export async function getThemeStrength(codes?: string[]): Promise<Record<string, ThemeStrengthRow>> {
   const qs = codes && codes.length > 0 ? `?codes=${codes.join(",")}` : "";
   return (await getJson<{ themes: Record<string, ThemeStrengthRow> }>(`/api/themes/catalog/strength${qs}`, 20_000)).data.themes;
+}
+
+/** 自选行「所属板块资金」行（P1-4）：主板块 + 该板块的 f62 资金。 */
+export interface SymbolBoardFund extends Omit<BoardFundRow, "name"> {
+  board_name: string;
+  /** industry = 东财行业三级 L2（主口径）；concept = 无行业段时的回落，已如实标注 */
+  level: "industry" | "concept" | null;
+}
+
+/** 自选行所属板块资金（P1-4）。批量一次，未判出的标的不会出现在返回里。 */
+export async function getBoardFundBySymbols(symbols: string[]): Promise<Record<string, SymbolBoardFund>> {
+  if (symbols.length === 0) return {};
+  const payload = await getJson<{ boards: Record<string, SymbolBoardFund> }>(
+    `/api/market/board-fund/by-symbols?symbols=${symbols.join(",")}`,
+    25_000,
+  );
+  return payload.data.boards;
 }
 
 /** ===== 真实持仓（CONTEXT.md: Real Position 域；与 /api/paper/* 模拟账户完全独立）=====
@@ -504,6 +600,9 @@ export interface StyleRouting {
   offsets: Record<string, number>;
   basis: string;
   routed: boolean;
+  /** 相位来源：live=读取时刻实时重算；unavailable=实时不可用退回生成时刻快照；unknown_phase=相位未识别 */
+  phase_source?: "live" | "unavailable" | "unknown_phase" | string;
+  phase_note?: string;
 }
 
 /** 空仓闸门（CONTEXT.md: Stand-aside Gate） */
@@ -513,6 +612,11 @@ export interface StandAsideGate {
   reasons: string[];
   advice: string;
   disclaimer?: string;
+  /** 触发时的情绪相位原样带出（下游分档判据用；level 是理由条数的计数产物，不足以表达信号性质） */
+  phase?: string | null;
+  /** 本次是否**撤除买入区间**（相位级信号/多信号叠加 → true；单条量化擦线 → false）。
+   *  后端算好带出，前端只读不算（重算 = 两份口径必然漂移）。旧行无此字段时按 undefined 处理。 */
+  strip_buy_range?: boolean;
 }
 
 export interface DailyPicksPayload {
@@ -530,6 +634,18 @@ export interface DailyPicksPayload {
     candidate_count?: number;
     limit_up_count?: number;
     market_max_boards?: number;
+    /** 容量上限（不是"每天必须凑满"的目标数） */
+    max_picks?: number;
+    /** 换股门槛（生效值，可被控制台参数白名单覆盖） */
+    replace_threshold?: number;
+    /** 每日换股上限（生效值，同上） */
+    max_swaps_per_day?: number;
+    /** 入选门槛（综合分下限）：低于此分不入选，名单长度由质量决定 */
+    min_pick_score?: number;
+    /** 实际入选只数（= 名单长度，≤ max_picks） */
+    kept_count?: number;
+    /** 昨日成员出列留痕（跌破门槛/掉出候选池/容量截断），供复盘归因 */
+    removed?: { symbol: string; score: number | null; reason: string }[];
   } | null;
 }
 
@@ -552,12 +668,14 @@ export async function generatePicks(): Promise<DailyPicksPayload> {
 }
 
 export async function getPicksHistory(limit = 10): Promise<{ date: string; symbols: (string | null)[]; score_avg: number }[]> {
-  return (await getJson<{ date: string; symbols: (string | null)[]; score_avg: number }[]>(`/api/picks/history?limit=${limit}`, 10_000)).data;
+  return getJsonArray<{ date: string; symbols: (string | null)[]; score_avg: number }>(
+    `/api/picks/history?limit=${limit}`, 10_000,
+  );
 }
 
 export async function getPickReviews(date?: string): Promise<PickReviewRow[]> {
   const qs = date ? `?date=${date}` : "";
-  return (await getJson<PickReviewRow[]>(`/api/picks/review${qs}`, 15_000)).data;
+  return getJsonArray<PickReviewRow>(`/api/picks/review${qs}`, 15_000);
 }
 
 /** 复盘生成结果。date 是服务端实际复盘的交易日（可能与"今天"不同，如休市时复盘最近交易日） */
@@ -639,99 +757,19 @@ export async function getHeatmap(): Promise<HeatmapPayload> {
   return (await getJson<HeatmapPayload>("/api/market/heatmap", 30_000)).data;
 }
 
-/** ---------------------------------------------------------------- 回测（Phase 6 后半） */
-
-export interface BacktestTrade {
-  signal_ts: string;
-  fill_ts: string;
-  side: "buy" | "sell";
-  price: number;
-  ref_price: number;
-  qty: number;
-  fee: number;
-  ok: boolean;
-  reason: string;
-}
-
-export interface BacktestEquityPoint {
-  ts: string;
-  value: number;
-  benchmark: number;
-}
-
-export interface BacktestMetrics {
-  total_return: number;
-  benchmark_return: number;
-  excess_return: number;
-  annual_return: number;
-  max_drawdown: number;
-  max_drawdown_days: number;
-  sharpe: number;
-  sortino: number;
-  calmar: number;
-  win_rate: number;
-  profit_loss_ratio: number;
-  in_return: number;
-  out_return: number;
-}
-
-export interface BacktestPayload {
-  symbol: string;
-  strategy_id: string;
-  bars_count: number;
-  metrics: BacktestMetrics;
-  equity: BacktestEquityPoint[];
-  trades: BacktestTrade[];
-  config: Record<string, number>;
-  notes: string[];
-}
-
-export interface StrategyInfo {
-  id: string;
-  name: string;
-  params: Record<string, number>;
-}
-
-export async function getBacktestStrategies(): Promise<StrategyInfo[]> {
-  return (await getJson<StrategyInfo[]>("/api/backtest/strategies")).data;
-}
-
-/** 回测 mandate：yaml 声明的可复跑配置（backend/mandates/）。id 是 load 标识符，file 仅展示。 */
-export interface BacktestMandate {
-  id: string;
-  name: string;
-  file: string;
-  description: string;
-  symbol: string;
-  strategy_id: string;
-  params: Record<string, number>;
-  bars: number;
-  valid: boolean;
-  error?: string;
-}
-
-export async function getBacktestMandates(): Promise<BacktestMandate[]> {
-  return (await getJson<BacktestMandate[]>("/api/backtest/mandates")).data;
-}
-
-/** 回测运行结果：payload + meta（meta.applied 逐字段说明 默认/mandate/请求 的取值来源）。 */
-export interface BacktestRunResult {
-  payload: BacktestPayload;
-  meta: { applied?: string[]; mandate?: string | null; [k: string]: unknown };
-}
-
-export async function runBacktest(req: {
-  symbol?: string;
-  strategy_id?: string;
-  params?: Record<string, number>;
-  bars?: number;
-  /** 给了 mandate 时其余字段可省略；显式字段优先级高于 mandate（meta.applied 说明来源） */
-  mandate?: string;
-}): Promise<BacktestRunResult> {
-  const env = await sendJson<BacktestPayload>("/api/backtest/run", "POST", req, 60_000);
-  const meta = env.meta as unknown as BacktestRunResult["meta"];
-  return { payload: env.data, meta: meta ?? {} };
-}
+/**
+ * ❌ 已移除：回测（Phase 6 后半）前端客户端（2026-09-11 冗余清理）
+ *
+ * 原内容：BacktestTrade / BacktestEquityPoint / BacktestMetrics / BacktestPayload /
+ * StrategyInfo / BacktestMandate / BacktestRunResult 七组类型 +
+ * getBacktestStrategies / getBacktestMandates / runBacktest 三个请求函数。
+ *
+ * 移除理由：全仓（含测试）零引用——前端回测页已在 2026-09-01 页面合并中下线，
+ * 只剩客户端壳子。**后端回测引擎仍然保留且在跑**（`/api/backtest/*`、
+ * backbone mandates/ 配置化、历史回放），其契约以 `docs/` 与后端 openapi 为准；
+ * 若日后恢复前端回测页，请从 git 历史取回本段，不要凭记忆重写（meta.applied
+ * 的「默认/mandate/请求」来源分层语义很容易写错）。
+ */
 
 /** ---------------------------------------------------------------- 自选 sparkline（retro #9） */
 
@@ -857,7 +895,7 @@ export async function getLonghuThemeTrail(days = 5): Promise<LonghuTrailPayload>
 }
 
 export async function searchSymbols(q: string): Promise<SymbolSearchItem[]> {
-  return (await getJson<SymbolSearchItem[]>(`/api/search?q=${encodeURIComponent(q)}`)).data;
+  return getJsonArray<SymbolSearchItem>(`/api/search?q=${encodeURIComponent(q)}`);
 }
 
 /** 个股题材归属（linkage-design §3.2）：官方成分（L3 结构性）+ 当日涨停归因（L2 行为性）。 */
@@ -960,7 +998,7 @@ export interface AuctionBenchmarkItem {
  */
 export async function getAuctionBenchmark(date?: string): Promise<AuctionBenchmarkItem[]> {
   const qs = date ? `?date=${encodeURIComponent(date)}` : "";
-  return (await getJson<AuctionBenchmarkItem[]>(`/api/auction-benchmark${qs}`, 15_000)).data;
+  return getJsonArray<AuctionBenchmarkItem>(`/api/auction-benchmark${qs}`, 15_000);
 }
 
 export async function getSentiment(): Promise<Sentiment> {
@@ -994,7 +1032,7 @@ export async function getSentimentHistory(days = 10): Promise<SentimentHistoryPa
 }
 
 export async function getWatchlist(): Promise<WatchlistItem[]> {
-  return (await getJson<WatchlistItem[]>("/api/watchlist")).data;
+  return getJsonArray<WatchlistItem>("/api/watchlist");
 }
 
 /** 事件驱动（linkage-design §4）：EventCard 摘要与方向映射。 */
@@ -1005,12 +1043,16 @@ export interface EventDirectionRow {
   strength: number;
   chain: string;
   basis: string;
+  /** 题材辨识度记忆（KB-STOCK-25 / P1-1）：该题材近 30 日历史龙头 top3，仅题材方向附带 */
+  memory_leaders?: { symbol: string; name: string; max_boards: number; hit_days: number }[];
 }
 
 export interface EventSummary {
   id: number;
   title: string;
   url: string | null;
+  /** 正文摘要（快讯源 summary 字段；无原文/抓原文失败时弹窗降级展示） */
+  summary?: string | null;
   source: string;
   source_tier: number;
   published_at: string | null;
@@ -1021,6 +1063,11 @@ export interface EventSummary {
   source_symbol: string | null;
   is_active: boolean;
   directions: EventDirectionRow[];
+  /** 判定状态机（2026-09-09）：judged 已判定 / pending 待判 / neutral 待判超时收敛 / expired 过期 */
+  judge_status?: "judged" | "pending" | "neutral" | "expired" | "unknown";
+  judge_status_label?: string;
+  judged_at?: string | null;
+  judge_reason?: string | null;
 }
 
 export interface EventStockPool {
@@ -1160,11 +1207,11 @@ export interface PaperFill {
 }
 
 export const getPaperAccount = () => getJson<PaperAccountInfo>("/api/paper/account").then((b) => b.data);
-export const getPaperPositions = () => getJson<PaperPositionInfo[]>("/api/paper/positions").then((b) => b.data);
+export const getPaperPositions = () => getJsonArray<PaperPositionInfo>("/api/paper/positions");
 export const getPaperOrders = (status?: string) =>
-  getJson<PaperOrderInfo[]>(`/api/paper/orders${status ? `?status=${status}` : ""}`).then((b) => b.data);
+  getJsonArray<PaperOrderInfo>(`/api/paper/orders${status ? `?status=${status}` : ""}`);
 export const getPaperFills = (symbol: string) =>
-  getJson<PaperFill[]>(`/api/paper/fills?symbol=${symbol}`).then((b) => b.data);
+  getJsonArray<PaperFill>(`/api/paper/fills?symbol=${symbol}`);
 
 export async function placePaperOrder(symbol: string, side: string, price: number, quantity: number) {
   return (
@@ -1186,7 +1233,7 @@ export async function resetPaperAccount(initialCash?: number): Promise<PaperAcco
 }
 
 export async function getWatchlistGroups(): Promise<string[]> {
-  return (await getJson<string[]>("/api/watchlist/groups")).data;
+  return getJsonArray<string>("/api/watchlist/groups");
 }
 
 /** 新建空分组（重名 409 → 抛错给调用方提示）。 */
@@ -1233,8 +1280,9 @@ export interface AlertRule {
 }
 
 export interface AlertEvent {
-  /** AI 判读合并（告警面板重设计）：notify=提醒 / ignore=已降噪 / escalate=需关注 */
-  triage?: { verdict: string; reason: string } | null;
+  /** AI 判读合并（告警面板重设计）：notify=提醒 / ignore=已降噪 / escalate=需关注
+   *  model 为判读模型名；`llm_fallback` = AI 不可用、按规则提醒（P1-36 展示降级） */
+  triage?: { verdict: string; reason: string; model?: string | null } | null;
   id: number;
   rule_id: number;
   symbol: string;
@@ -1269,7 +1317,7 @@ export async function getAlertChannels(): Promise<AlertChannels> {
 }
 
 export async function listAlertRules(): Promise<AlertRule[]> {
-  return (await getJson<AlertRule[]>("/api/alerts/rules")).data;
+  return getJsonArray<AlertRule>("/api/alerts/rules");
 }
 
 export async function createAlertRule(rule: AlertRuleCreate): Promise<AlertRule> {
@@ -1288,11 +1336,7 @@ export async function listAlertEvents(limit = 50, ruleId?: number): Promise<Aler
   const qs = new URLSearchParams();
   qs.set("limit", String(limit));
   if (ruleId != null) qs.set("rule_id", String(ruleId));
-  return (await getJson<AlertEvent[]>(`/api/alerts/events?${qs.toString()}`)).data;
-}
-
-export async function ackAlertEvent(eventId: number): Promise<void> {
-  await sendJson(`/api/alerts/events/${eventId}/ack`, "POST");
+  return getJsonArray<AlertEvent>(`/api/alerts/events?${qs.toString()}`);
 }
 
 /** ---------------------------------------------------------------- 站内通知中心（2026-09-07） */
@@ -1416,7 +1460,7 @@ export interface ReviewEffectiveness {
 }
 
 export async function getReviewReports(): Promise<ReviewReportSummary[]> {
-  return (await getJson<ReviewReportSummary[]>("/api/review/reports")).data;
+  return getJsonArray<ReviewReportSummary>("/api/review/reports");
 }
 
 export async function getReviewReport(tradeDate: string): Promise<ReviewReportDetail> {
@@ -1540,6 +1584,83 @@ export interface BriefAlert {
   meta: { returns?: BriefAlertReturns; [k: string]: unknown };
 }
 
+export interface MacroEvent {
+  region: string;
+  label: string;
+  event: string;
+  time: string | null;
+  actual: string | number | null;
+  forecast: string | number | null;
+  previous: string | number | null;
+  importance: number | null;
+  /** 后端格式化好的单行文案（前端只渲染不拼接，避免两处口径） */
+  line: string;
+}
+
+/** 隔夜海外单路输入的实测快照（P1-34）。change/skip_reason 二选一：判不出即给原因。 */
+export interface OvernightBiasEvidence {
+  key: string;
+  label: string;
+  /** "%"（涨跌幅）| "bp"（收益率绝对变化） */
+  unit: string;
+  /** false = 仅记录、不参与方向判定（实测否决项） */
+  weighted: boolean;
+  note: string;
+  date: string | null;
+  value: number | null;
+  prev_value: number | null;
+  change: number | null;
+  zone: "升" | "降" | "平" | null;
+  bullish: boolean | null;
+  skip_reason?: string;
+}
+
+/** 气候一阶相位的候选题材行（P1-32）。**人工映射、实证未获支持**，只作线索。 */
+export interface ClimateLink {
+  target: string;
+  strength: number;
+  direction: number;
+  chain: string;
+}
+
+/** 气候一阶相位（ENSO/ONI，P1-32）。state=null 表示未判定（非中性）。 */
+export interface Climate {
+  /** null = 未判定（数据不足 / 源滞后）；"neutral" 是**真信息**，两者不可混 */
+  state: "el_nino" | "la_nina" | "neutral" | null;
+  /** 已越线但未满 5 季的「预警态」；null = 无 */
+  alert: "el_nino" | "la_nina" | null;
+  strength: "weak" | "moderate" | "strong" | "very_strong" | null;
+  consecutive: number;
+  peak_abs: number | null;
+  threshold: number;
+  persist_seasons: number;
+  latest: { season: string; year: number; anom: number; end_date: string } | null;
+  series: { season: string; year: number; anom: number }[];
+  candidate_links: ClimateLink[];
+  unjudged_reason: string | null;
+  as_of: string;
+  timing_note: string;
+  chain_caveat: string;
+  /** 人工传导链的实测判读（**未获支持**）——必须渲染 */
+  empirical_verdict: string;
+  disclaimer: string;
+}
+
+/** 隔夜海外输入 → 大盘方向偏向。stance=null 表示输入不足「未判定」（非中性）。 */
+export interface OvernightBias {
+  stance: "走强" | "中性" | "承压" | null;
+  score: number | null;
+  score_range: string;
+  available_weight: number;
+  unjudged_reason: string | null;
+  evidence: OvernightBiasEvidence[];
+  missing: string[];
+  invalidation: string[];
+  horizon_note: string;
+  disclaimer: string;
+  as_of: Record<string, string>;
+}
+
 export interface MorningBrief {
   brief_date: string;
   generated_at: string;
@@ -1553,6 +1674,14 @@ export interface MorningBrief {
     is_trading_day: boolean | null;
   };
   missing: string[];
+  /** 非农先验提醒（零外呼纯规则；仅非农日/其后 3 日内非空） */
+  macro_note?: string | null;
+  /** 财经日历高信号事件；null = 源不可得（见 missing），[] = 当日确无高信号事件 */
+  macro_events?: MacroEvent[] | null;
+  /** 隔夜海外输入 → 大盘方向偏向（P1-34）；null = 整块不可用（见 missing） */
+  overnight_bias?: OvernightBias | null;
+  /** 气候一阶相位（ENSO/ONI，P1-32）；null = 源不可得 → 整块不渲染 */
+  climate?: Climate | null;
   directions: BriefDirection[];
   alerts: BriefAlert[];
   review?: {
@@ -1671,10 +1800,15 @@ export interface OpportunityStock {
   role: string | null;
   boards: number | null;
   change_pct: number | null;
+  /** 同花顺官方涨停原因原串（`+` 分隔）。ladder 行自带；缺失为 null。 */
   reason: string | null;
   hot_rank: number | null;
   distinctiveness: OpportunityJudgement;
   certainty: OpportunityJudgement;
+  /** 现价/止损/出场：与 intraday-top 同源补全（attach_risk_fields），缺失显式 null。 */
+  price?: number | null;
+  stop_ref?: { pct: number; price: number; basis: string } | null;
+  exit_plan?: Record<string, unknown> | null;
 }
 
 export interface OpportunityTheme {
@@ -1916,7 +2050,7 @@ export async function getFundFlowHistory(days = 20): Promise<FundFlowHistory> {
   return (await getJson<FundFlowHistory>(`/api/market/fund-flow/history?days=${days}`, 50_000)).data;
 }
 
-// ---------- 板块资金流（L2 唯一实现 /api/market/board-fund-flow*，docs/fund-flow-redesign.md） ----------
+// ---------- 板块资金流（L2 唯一实现 /api/market/board-fund-flow*，docs/summary/architecture-design.md §2） ----------
 
 export type BoardFlowKind = "concept" | "industry";
 export type BoardFlowRange = "intraday" | "5d" | "10d" | "20d";
@@ -2041,7 +2175,8 @@ export async function getNewsContent(url: string): Promise<ArticleContent> {
 // AI 控制台（大脑 + 执行层，docs/ai-agent-console-plan.md）
 // ============================================================================
 
-/** 任务状态机：queued → running → succeeded/failed/canceled；needs_confirm 为 L1/L2 预览态（P1 接入） */
+/** 任务状态机：queued → running → succeeded/failed/canceled；
+ *  needs_confirm = 待人工处置（P1-36：告警 escalate 登记后停在此态，靠 resolveAgentTask 关闭） */
 export type AgentTaskStatus =
   | "queued"
   | "running"
@@ -2074,6 +2209,8 @@ export interface AgentTask {
   created_at: string | null;
   started_at: string | null;
   finished_at: string | null;
+  /** 只读留痕条目（议程自动执行，P1-14 留痕合一）：不可取消、不可重跑 */
+  read_only?: boolean;
 }
 
 export interface AgentTaskType {
@@ -2083,29 +2220,13 @@ export interface AgentTaskType {
   desc: string;
 }
 
-export interface AgentAuditEntry {
-  id: number;
-  actor: string;
-  action: string;
-  target: string;
-  before: unknown;
-  after: unknown;
-  task_id: string | null;
-  rollback_ref: string | null;
-  at: string | null;
-}
-
 export async function getAgentTaskTypes(): Promise<AgentTaskType[]> {
-  return (await getJson<AgentTaskType[]>("/api/agent/task-types")).data;
+  return getJsonArray<AgentTaskType>("/api/agent/task-types");
 }
 
 export async function getAgentTasks(type?: string): Promise<AgentTask[]> {
   const q = type ? `?type=${encodeURIComponent(type)}` : "";
-  return (await getJson<AgentTask[]>(`/api/agent/tasks${q}`)).data;
-}
-
-export async function getAgentTask(id: string): Promise<AgentTask> {
-  return (await getJson<AgentTask>(`/api/agent/tasks/${id}`)).data;
+  return getJsonArray<AgentTask>(`/api/agent/tasks${q}`);
 }
 
 export async function createAgentTask(type: string, params: Record<string, unknown> = {}): Promise<AgentTask> {
@@ -2114,6 +2235,15 @@ export async function createAgentTask(type: string, params: Record<string, unkno
 
 export async function cancelAgentTask(id: string): Promise<AgentTask> {
   return (await sendJson<AgentTask>(`/api/agent/tasks/${id}/cancel`, "POST")).data;
+}
+
+/** 处置待人工确认的任务（P1-36）：done=已处置 / dismissed=判定无需处理 */
+export async function resolveAgentTask(
+  id: string,
+  outcome: "done" | "dismissed",
+  note = "",
+): Promise<AgentTask> {
+  return (await sendJson<AgentTask>(`/api/agent/tasks/${id}/resolve`, "POST", { outcome, note })).data;
 }
 
 /** 悬浮球提醒气泡（AI 判读为 notify 且未确认的） */
@@ -2134,16 +2264,11 @@ export interface AgentBubble {
 }
 
 export async function getAgentBubbles(limit = 5): Promise<AgentBubble[]> {
-  return (await getJson<AgentBubble[]>(`/api/agent/triage/pending?limit=${limit}`)).data;
+  return getJsonArray<AgentBubble>(`/api/agent/triage/pending?limit=${limit}`);
 }
 
 export async function ackAgentTriage(id: number): Promise<boolean> {
   return (await sendJson<{ ok: boolean }>(`/api/agent/triage/${id}/ack`, "POST")).data.ok;
-}
-
-export async function getAgentAudit(taskId?: string): Promise<AgentAuditEntry[]> {
-  const q = taskId ? `?task_id=${encodeURIComponent(taskId)}` : "";
-  return (await getJson<AgentAuditEntry[]>(`/api/agent/audit${q}`)).data;
 }
 
 // ============================================================================
@@ -2191,6 +2316,10 @@ export interface AgentParamInfo {
   label: string;
   desc: string;
   risk: string;
+  /** 参数形态：json（结构化，走各自 provider 通道）/ int / float（标量，走运行时覆盖层） */
+  kind?: "json" | "int" | "float";
+  /** 标量参数的值域（json 参数为 null） */
+  range?: { min: number | null; max: number | null } | null;
   current: string;
   default: string;
 }
@@ -2207,16 +2336,54 @@ export interface AgentParamChange {
   created_at: string | null;
   applied_at: string | null;
   rolled_back_at: string | null;
+  /** 回滚归因（P1-15）：只记"回滚了"不记"为什么" ⇒ 存活率无法下钻 */
+  rollback_reason: { code: string; note: string } | null;
   task_id: string | null;
 }
 
+/** 变更存活率与归因分布（P1-15） */
+export interface AgentParamSurvival {
+  total_changes: number;
+  applied: number;
+  rolled_back: number;
+  draft: number;
+  shadow: number;
+  /** 已裁决 = applied + rolled_back（存活率的分母） */
+  decided: number;
+  /** applied / decided；无已裁决变更时为 null（不编造 0） */
+  survival_rate: number | null;
+  /** applied 且当前值仍等于其 after（未被后续变更覆盖） */
+  still_effective: number;
+  /** applied 但已被后来者覆盖 —— 与 rolled_back 不同，状态上看不出来 */
+  superseded: number;
+  rollback_reasons: Record<string, number>;
+  reason_labels: Record<string, string>;
+  by_key: Record<string, { applied: number; rolled_back: number; draft: number; shadow: number }>;
+  /** 样本不足（< 3 条已裁决）：数字照给，但明确标注不可用于判断 */
+  insufficient: boolean;
+  note: string;
+}
+
+export interface AgentRollbackReason {
+  code: string;
+  label: string;
+}
+
 export async function getAgentParams(): Promise<AgentParamInfo[]> {
-  return (await getJson<AgentParamInfo[]>("/api/agent/params")).data;
+  return getJsonArray<AgentParamInfo>("/api/agent/params");
 }
 
 export async function getAgentParamChanges(key?: string): Promise<AgentParamChange[]> {
   const q = key ? `?key=${encodeURIComponent(key)}` : "";
-  return (await getJson<AgentParamChange[]>(`/api/agent/params/changes${q}`)).data;
+  return getJsonArray<AgentParamChange>(`/api/agent/params/changes${q}`);
+}
+
+export async function getAgentParamSurvival(): Promise<AgentParamSurvival> {
+  return (await getJson<AgentParamSurvival>("/api/agent/params/survival")).data;
+}
+
+export async function getAgentRollbackReasons(): Promise<AgentRollbackReason[]> {
+  return getJsonArray<AgentRollbackReason>("/api/agent/params/rollback-reasons");
 }
 
 export async function createAgentParamChange(
@@ -2233,8 +2400,13 @@ export async function applyAgentParamChange(changeId: number): Promise<AgentPara
   return (await sendJson<AgentParamChange>(`/api/agent/params/changes/${changeId}/apply`, "POST")).data;
 }
 
-export async function rollbackAgentParamChange(changeId: number): Promise<AgentParamChange> {
-  return (await sendJson<AgentParamChange>(`/api/agent/params/changes/${changeId}/rollback`, "POST")).data;
+export async function rollbackAgentParamChange(
+  changeId: number,
+  reason: { reason_code: string; note?: string } = { reason_code: "manual" },
+): Promise<AgentParamChange> {
+  return (await sendJson<AgentParamChange>(
+    `/api/agent/params/changes/${changeId}/rollback`, "POST", reason,
+  )).data;
 }
 
 // ---- AI 大脑：每日进化议程（v2）----
@@ -2271,7 +2443,7 @@ export async function getAgentAgenda(date?: string): Promise<AgentAgenda | null>
 }
 
 export async function getAgentAgendas(limit = 14): Promise<AgentAgenda[]> {
-  return (await getJson<AgentAgenda[]>(`/api/agent/agendas?limit=${limit}`)).data;
+  return getJsonArray<AgentAgenda>(`/api/agent/agendas?limit=${limit}`);
 }
 
 export async function runAgentAgenda(): Promise<AgentAgenda> {
@@ -2295,7 +2467,7 @@ export interface AgentExperiment {
 }
 
 export async function getAgentExperiments(): Promise<AgentExperiment[]> {
-  return (await getJson<AgentExperiment[]>("/api/agent/experiments")).data;
+  return getJsonArray<AgentExperiment>("/api/agent/experiments");
 }
 
 // ============================================================================
@@ -2323,4 +2495,128 @@ export async function getAgentKbFile(path: string): Promise<{ path: string; cont
 /** 闭环「标签」：symbol → 已模拟持仓(sim)/已真实持仓(real)——持仓状态派生，卖出自动消失 */
 export async function getPositionLabels(): Promise<Record<string, "sim" | "real">> {
   return (await getJson<{ labels: Record<string, "sim" | "real"> }>("/api/picks/position-labels")).data.labels;
+}
+
+// ---- P1-5/6 盘后增强（2026-09-09）：接力质量排序 + 潜伏观察池 ----
+
+export interface RelayRankItem {
+  symbol: string;
+  name: string;
+  boards: number;
+  reason: string;
+  kmid2: number | null;
+  max20: number | null;
+}
+
+export interface LurkPoolItem {
+  symbol: string;
+  confirm_ms: number;
+}
+
+/** 潜伏观察池载荷。`as_of`/`stale_days` 是陈旧披露（2026-09-11）：池子按**
+ * 库内最新 K 线**判定，marketdb 停更时看着正常但实际基于数日前数据。 */
+export interface LurkPoolPayload {
+  trade_date: string;
+  as_of: string;
+  stale_days: number;
+  stale: boolean;
+  stale_note: string;
+  items: LurkPoolItem[];
+}
+
+/** 接力质量排序：今日涨停池按 kmid2/max20 排序 → 次日接力候选顺序（P1-6） */
+export async function getRelayRank(): Promise<{ trade_date: string; items: RelayRankItem[] }> {
+  return (await getJson<{ trade_date: string; items: RelayRankItem[] }>("/api/picks/relay-rank")).data;
+}
+
+/** 潜伏观察池：缩量横盘+试盘+回踩确认票（中线观察，P1-5） */
+export async function getLurkPool(): Promise<LurkPoolPayload> {
+  return (await getJson<LurkPoolPayload>("/api/picks/lurk-pool")).data;
+}
+
+// ============================================================================
+// P1-24 做 T 信号决策链（分钟级，2026-09-10 生产接线）
+// ============================================================================
+
+export interface MinuteIndicatorHit {
+  key: string;
+  name: string;
+  weight: number;
+  /** -1 低吸方向 / +1 高抛方向 */
+  direction: number;
+  trigger_value: number;
+  threshold: number;
+  evidence: string;
+}
+
+export interface MinuteSignalItem {
+  /** 触发时刻（= 确认完成的那根 bar，UTC ISO） */
+  ts: string;
+  signal_price: number;
+  bias: string;
+  score: number;
+  confidence: string;
+  triggered: MinuteIndicatorHit[];
+  invalidate_condition: string;
+  basis?: string;
+}
+
+/** `degraded` 是**如实上报**的降级原因（缺昨日量/缺波动率…），不是错误；`signals: []` = 确无信号 */
+export interface MinuteSignalsPayload {
+  symbol: string;
+  signals: MinuteSignalItem[];
+  observed: number;
+  degraded: string[];
+  /** 本次请求新落库的条数（幂等：重复请求恒为 0） */
+  recorded: number;
+  basis: Record<string, unknown>;
+}
+
+export interface MinuteErrorAttribution {
+  primary_cause?: string | null;
+  primary_name?: string;
+  score_without?: number | null;
+  pivotal?: boolean;
+  counter_evidence?: string;
+}
+
+export interface MinuteDecisionItem {
+  decision_id: string;
+  symbol: string;
+  trade_date: string;
+  trigger_ts: string;
+  signal_price: number;
+  bias: string;
+  score: number;
+  confidence: string;
+  triggered: MinuteIndicatorHit[];
+  invalidate_condition: string;
+  executed: boolean;
+  executed_price: number | null;
+  realized_spread_pct: number | null;
+  best_price: number | null;
+  worst_price: number | null;
+  optimal_spread_pct: number | null;
+  /** null = 未结算（窗口未走完）；expired = 数据不足不判定 */
+  outcome: string | null;
+  error_attribution: MinuteErrorAttribution | null;
+}
+
+export interface MinuteDecisionsPayload {
+  items: MinuteDecisionItem[];
+  settled: number;
+  outcomes: Record<string, number>;
+  open_count: number;
+  note: string;
+}
+
+/** 做 T 偏向信号 + 触发即记录（幂等日志副作用；引擎前缀稳定 ⇒ 重复请求不产生重复样本） */
+export async function getMinuteSignals(symbol: string): Promise<MinuteSignalsPayload> {
+  return (await getJson<MinuteSignalsPayload>(`/api/market/minute-signals/${symbol}`, 20_000)).data;
+}
+
+/** 做 T 决策库（读列表时顺手惰性结算到期记录） */
+export async function getMinuteDecisions(symbol: string, limit = 30): Promise<MinuteDecisionsPayload> {
+  const q = new URLSearchParams({ symbol, limit: String(limit) });
+  return (await getJson<MinuteDecisionsPayload>(`/api/market/minute-decisions?${q.toString()}`)).data;
 }

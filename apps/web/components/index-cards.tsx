@@ -21,7 +21,7 @@ export function IndexCards({ indices, selected, onSelect }: Props) {
 
   return (
     <div className="shrink-0 rounded-xl border border-zinc-200 p-2 dark:border-zinc-800">
-      <button onClick={() => setOpen(!open)} className="mb-1 flex w-full items-center justify-between px-1 text-xs text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200">
+      <button onClick={() => setOpen(!open)} className="mb-1 flex w-full items-center justify-between px-1 text-xs text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200">
         <span>指数{!open && indices.length > 0 ? `（${indices.length}）` : ""}</span>
         <span>{open ? "收起 ▲" : "展开 ▼"}</span>
       </button>
@@ -42,13 +42,13 @@ export function IndexCards({ indices, selected, onSelect }: Props) {
                 } ${onSelect ? "cursor-pointer" : "cursor-default"}`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="truncate text-[10px] text-zinc-400">{q.name ?? q.symbol}</span>
+                  <span className="truncate text-[10px] text-zinc-600 dark:text-zinc-400">{q.name ?? q.symbol}</span>
                   {/* 仅硬质量问题（过期/休市/非法）出徽标：正常态徽标是视觉噪音，
                       low/medium 瞬态抖动会闪（2026-09-02 可疑标签修复，口径同列表行） */}
                   {isHardQuality(q.quality) && <QualityBadge quality={q.quality} reasons={q.quality_reasons} />}
                 </div>
                 <div className="font-mono text-sm font-semibold tabular-nums">
-                  {q.price == null ? <span className="text-xs font-normal text-zinc-400">未开盘</span> : fmt(q.price)}
+                  {q.price == null ? <span className="text-xs font-normal text-zinc-600 dark:text-zinc-400">未开盘</span> : fmt(q.price)}
                 </div>
                 <div className={`font-mono text-[11px] tabular-nums ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</div>
               </button>

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from fastapi.testclient import TestClient
 
-from app.main import app
 from app.risk.config import get_params
 from app.risk.engine import RiskEngine
 from app.risk.state_classifier import classify_market_state
@@ -144,27 +142,25 @@ def test_drawdown_protection_surfaces_missing_initial_cash():
     assert any("回撤保护未生效" in w for w in result["warnings"])
 
 
-def test_risk_state_api():
-    with TestClient(app) as client:
-        resp = client.get("/api/risk/state")
-        assert resp.status_code == 200
-        data = resp.json()["data"]
-        assert data["state"] in {
-            "强势多头", "震荡偏多", "震荡", "震荡偏空", "下跌趋势", "恐慌/极端波动", "数据不足"
-        }
-        assert "params" in data
-        assert "single_stock_max_pct" in data["params"]
+def test_risk_state_api(client):
+    resp = client.get("/api/risk/state")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["state"] in {
+        "强势多头", "震荡偏多", "震荡", "震荡偏空", "下跌趋势", "恐慌/极端波动", "数据不足"
+    }
+    assert "params" in data
+    assert "single_stock_max_pct" in data["params"]
 
 
-def test_risk_check_order_api():
-    with TestClient(app) as client:
-        resp = client.post("/api/risk/check-order", json={
-            "symbol": "600519",
-            "side": "buy",
-            "price": 100,
-            "quantity": 100,
-        })
-        assert resp.status_code == 200
-        data = resp.json()["data"]
-        assert "allowed" in data
-        assert isinstance(data["reasons"], list)
+def test_risk_check_order_api(client):
+    resp = client.post("/api/risk/check-order", json={
+        "symbol": "600519",
+        "side": "buy",
+        "price": 100,
+        "quantity": 100,
+    })
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert "allowed" in data
+    assert isinstance(data["reasons"], list)

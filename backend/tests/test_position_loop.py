@@ -131,6 +131,104 @@ def test_exit_wave_detection():
     assert rule2 is None or rule2["action"] != "wave"
 
 
+# ---------------------------------------------------------------- S1-2 读取降级可见性
+
+def test_real_positions_failure_is_three_state(monkeypatch):
+    """S1-2 回归：读失败必须与「确实无持仓」可区分，且连续失败计数累加。
+
+    旧实现 `except Exception: return {}` 连日志都没有 ⇒ 一次 SQLite 锁超时
+    就让整轮真实持仓止损检查静默跳过，用户与看板都只看到「今天没有信号」。
+    """
+    import app.core.db as core_db
+
+    monkeypatch.setattr(core_db, "get_session_factory",
+                        lambda: (_ for _ in ()).throw(RuntimeError("db locked")))
+    ee._REAL_READ.update(state="unknown", as_of=None, age_seconds=None, reason=None, failures=0)
+
+    assert ee._real_positions() == {}
+    st = ee.real_position_read_state()
+    assert st["state"] == "failed"
+    assert "RuntimeError" in st["reason"] and st["failures"] == 1
+    assert st["as_of"] is not None
+
+    ee._real_positions()
+    assert ee.real_position_read_state()["failures"] == 2  # 连续失败可见
+
+
+def test_real_positions_empty_is_not_failed():
+    """空结果（确实无持仓）与失败必须落到不同状态——否则降级信号天天误报。"""
+    from sqlalchemy import text
+
+    from app.core.db import get_engine
+    from app.models.real_position import RealTrade
+    from app.models.watchlist import Base
+
+    # 导入本身就是目的：模型须先进 Base.metadata 才会被 create_all 建表（pyflakes 不认 # noqa，
+    # 所以顺手断言表名——既用掉这个名字，也把「导入是刻意的」写进测试）。
+    assert RealTrade.__tablename__ == "real_trade"
+    # 测试库是 sqlite:///:memory:（conftest），此处只建表、不碰磁盘上的生产库
+    Base.metadata.create_all(get_engine())
+    with get_engine().connect() as conn:
+        conn.execute(text("DELETE FROM real_trade"))
+        conn.commit()
+
+    ee._REAL_READ.update(state="unknown", failures=0)
+    out = ee._real_positions()
+    st = ee.real_position_read_state()
+    assert out == {} and st["state"] in {"empty", "ok"} and st["state"] != "failed"
+    assert st["failures"] == 0
+
+
+def test_evaluate_once_surfaces_read_degradation(monkeypatch):
+    """S1-2 回归：两路持仓读取失败时，`evaluate_once` 必须产出可见降级信号。
+
+    failed 时不能只是 `positions = []` 静默继续——自动离场/硬止损/真实持仓提醒
+    全被跳过，必须进 fired（供哨兵观测）并在通知中心留痕。
+    """
+    import app.core.db as core_db
+
+    # 两路都不碰真库（`_sf` 与 `get_session_factory` 双双注入失败），故无需建表。
+    class _Engine:
+        """两路读取都必须**确定性失败**，不许依赖「表恰好还没建」这种副作用。
+
+        2026-09-11 踩：原写法 `_sf = real_sf`（真实可用 sessionmaker）配 patch
+        `core_db.get_session_factory` —— 只拦到真实持仓那一路；模拟持仓走 `engine._sf()`
+        照常成功。于是**单跑**（表未建，模拟那路也抛 no such table）出 2 条 degraded、
+        **全量跑**（前序用例已 create_all 建好表）只出 1 条 ⇒ 通过与否取决于执行顺序。
+        现改为 `_sf` 自身抛错，两路必然降级，与运行顺序无关。
+        """
+
+        scope = "main"
+
+        def _sf(self):  # 与 PaperEngine 的 sessionmaker 同名属性，调用即失败
+            raise RuntimeError("db locked")
+
+        async def place_order(self, *a, **k):  # pragma: no cover - 本用例不应触发下单
+            raise AssertionError("读取失败时不应有下单路径")
+
+    app = type("A", (), {"state": type("S", (), {"paper": _Engine(),
+                                                  "snapshot_service": None})()})()
+
+    monkeypatch.setattr(ee, "load_plan", lambda: {"peaks": {}})
+    monkeypatch.setattr(ee, "save_plan", lambda plan: None)
+    monkeypatch.setattr(ee, "_picks_combos", lambda: {})
+    monkeypatch.setattr(core_db, "get_session_factory",
+                        lambda: (_ for _ in ()).throw(RuntimeError("db locked")))
+    ee._NOTIFIED.clear()
+    ee._PAPER_READ.update(state="unknown", failures=0)
+    ee._REAL_READ.update(state="unknown", failures=0)
+    notified: list[tuple] = []
+    monkeypatch.setattr(ee, "_notify", lambda *a, **k: notified.append((a, k)))
+
+    fired = asyncio.run(ee.evaluate_once(app))
+
+    degraded = [f for f in fired if f["action"] == "degraded"]
+    assert len(degraded) == 2, fired  # 模拟 + 真实 两路各一条
+    assert ee._PAPER_READ["state"] == "failed" and ee._REAL_READ["state"] == "failed"
+    assert [c[0][3] for c in notified] == ["position_monitor_degraded"] * 2
+    assert any("止损已跳过" in c[0][4] for c in notified)
+
+
 # ---------------------------------------------------------------- D+1 验证
 
 def test_validate_previous_day(tmp_path, monkeypatch):

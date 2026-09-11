@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta
 
+from app.core.db import beijing_now_naive
+
 import pytest
 
 import app.services.alert_triage as tri
@@ -27,7 +29,9 @@ def _event(sf, rule_id: int = 1, symbol: str = "600000", **kw) -> AlertEvent:
             rule_id=rule_id, symbol=symbol, trigger_value=kw.get("trigger_value", 12.5),
             threshold=kw.get("threshold", 12.0),
             snapshot='{"kind": "price_above", "text": "股价 12.50 突破阈值 12.00", "name": "贵州茅台"}',
-            triggered_at=kw.get("triggered_at") or datetime.utcnow(),
+            # 2026-09-09 时区统一：triggered_at 一律北京 naive（此前 datetime.utcnow 造 UTC
+            # → 气泡 6h 时效按北京 cutoff 判定时被误过滤，测试与生产契约同步）
+            triggered_at=kw.get("triggered_at") or beijing_now_naive(),
         )
         db.add(ev)
         db.commit()
@@ -175,6 +179,82 @@ def test_triage_auto_acknowledges_event(sf, monkeypatch):
         assert row.acknowledged == 1, "判读完成后事件必须自动 acknowledged"
 
 
+# ---------------------------------------------------------------- escalate → 任务中心待办（P1-36）
+# 事故/问题：判读层 docstring 承诺「escalate 进任务中心待办」，代码却只落 agent_triage
+# 一行——控制台任务中心看不到，"升级"实际等于丢弃（与 P1-38「检查到≠有人知道」同类）。
+
+
+def test_escalate_registers_task_center_todo(sf, monkeypatch):
+    """escalate 必须落任务中心待办（needs_confirm，待人工处置）。"""
+    import app.services.agent_tasks as at
+
+    # 审计也落 tmp 库（不污染进程内全局工厂）
+    monkeypatch.setattr(at, "get_session_factory", lambda: sf)
+
+    async def fake(ctx):
+        return ("escalate", "全市场级风险")
+
+    monkeypatch.setattr(tri, "_llm_verdict", fake)
+    ev = _event(sf)
+    out = asyncio.run(tri.triage_event(ev, sf))
+    assert out["verdict"] == "escalate"
+
+    todo = at.get_task(f"{at.ESCALATION_ID_PREFIX}{ev.id}")
+    assert todo is not None, "escalate 必须在任务中心生成待办，否则升级即丢弃"
+    assert todo["type"] == "escalation" and todo["status"] == "needs_confirm"
+    assert "全市场级风险" in todo["params"]["summary"]
+    assert todo["params"]["symbol"] == "600000"
+    assert "茅台突破" in todo["params"]["rule"]
+
+    # 幂等：重复判读（模拟 worker 重入）不刷出第二条待办
+    at.record_escalation(event_id=ev.id, summary="重放", session_factory=sf)
+    with sf() as db:
+        from app.models.agent import AgentTask
+
+        assert db.query(AgentTask).filter(AgentTask.type == "escalation").count() == 1
+
+
+def test_non_escalate_registers_no_todo(sf, monkeypatch):
+    """notify / ignore 不产生待办——否则任务中心被噪音淹没（与降噪初衷相悖）。"""
+    import app.services.agent_tasks as at
+    from app.models.agent import AgentTask
+
+    monkeypatch.setattr(at, "get_session_factory", lambda: sf)
+    with sf() as db:  # 独立规则，避免被冷却去重抢先判为 ignore
+        db.add(AlertRule(id=2, name="炸板率", condition_type="break_rate",
+                         scope="all", threshold=0.4, channels='["in_app"]'))
+        db.commit()
+
+    async def fake(ctx):
+        return ("ignore", "噪音")
+
+    monkeypatch.setattr(tri, "_llm_verdict", fake)
+    out = asyncio.run(tri.triage_event(_event(sf, rule_id=2), sf))
+    assert out["verdict"] == "ignore"
+    with sf() as db:
+        assert db.query(AgentTask).filter(AgentTask.type == "escalation").count() == 0
+
+
+def test_escalation_register_failure_does_not_break_triage(sf, monkeypatch):
+    """待办登记失败不能拖垮判读落库（增强层失败必须降级，不留半途状态）。"""
+    import app.services.agent_tasks as at
+
+    def boom(**_kw):
+        raise RuntimeError("db locked")
+
+    monkeypatch.setattr(at, "record_escalation", boom)
+
+    async def fake(ctx):
+        return ("escalate", "系统性异常")
+
+    monkeypatch.setattr(tri, "_llm_verdict", fake)
+    ev = _event(sf)
+    out = asyncio.run(tri.triage_event(ev, sf))
+    assert out["verdict"] == "escalate"  # 判读照常落库
+    with sf() as db:
+        assert db.query(AgentTriage).count() == 1
+
+
 def test_push_policy_matrix():
     """推送矩阵契约：CRITICAL/ANOMALY/REPORT 允许进飞书，SILENT 一律不允许。"""
     from app.services.push_policy import PolicyKind, feishu_allowed
@@ -195,3 +275,49 @@ def test_anomaly_guard_only_pushes_new():
     assert g.filter_new(["marketdb 停更", "盘中零告警"]) == ["盘中零告警"]  # 只推新增
     assert g.filter_new([]) == []                                # 恢复清空
     assert g.filter_new(["marketdb 停更"]) == ["marketdb 停更"]  # 再现=新异常
+
+
+# ---------------------------------------------------------------- 判读队列（漏判回归）
+
+def test_triage_pending_reaches_old_unjudged(sf, monkeypatch):
+    """未判读优先：事件量超过窗口上限后，**较早的未判读事件仍会被判读**。
+
+    回归背景（2026-09-10）：原实现取「最近 limit 条」再过滤未判读 → 新事件把
+    旧事件永久挤出窗口，实测库内 75 条从未判读（含 falsify 18 条方向证伪）。
+    本测试造 30 条未判读 + 1 条已判读，断言**最早那条**（30 条之外）最终被判读。
+    """
+    judged_ids: list[int] = []
+
+    async def fake_verdict(ctx):
+        return ("notify", "测试")
+
+    monkeypatch.setattr(tri, "_llm_verdict", fake_verdict)
+    monkeypatch.setattr(tri, "RECENT_LIMIT", 40)  # 放开单轮上限以便一次覆盖
+
+    base = beijing_now_naive() - timedelta(hours=12)
+    old = _event(sf, symbol="600001", triggered_at=base)
+    for i in range(30):
+        _event(sf, symbol=f"6001{i:02d}", triggered_at=base + timedelta(minutes=i + 1))
+
+    out = asyncio.run(tri.triage_pending(limit=50, session_factory=sf))
+    judged_ids = [r["event_id"] for r in out]
+    assert old.id in judged_ids, "最早的未判读事件必须被判读（不能被新事件挤出窗口）"
+    assert len(judged_ids) == 31
+    # 幂等：再跑一轮无新增
+    assert asyncio.run(tri.triage_pending(limit=50, session_factory=sf)) == []
+
+
+def test_triage_pending_skips_judged(sf, monkeypatch):
+    """已判读事件不重复判读（幂等），且不占用单轮预算。"""
+
+    async def fake_verdict(ctx):
+        return ("ignore", "测试")
+
+    monkeypatch.setattr(tri, "_llm_verdict", fake_verdict)
+    ev = _event(sf)
+    first = asyncio.run(tri.triage_pending(session_factory=sf))
+    assert [r["event_id"] for r in first] == [ev.id]
+    second = asyncio.run(tri.triage_pending(session_factory=sf))
+    assert second == []
+    with sf() as db:
+        assert db.query(AgentTriage).count() == 1

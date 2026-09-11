@@ -37,6 +37,7 @@ from datetime import date, timedelta
 from app.market import board_flow
 from app.services.dragon_service import (
     dragon_score,
+    entry_checklist,
     news_persistence,
     stock_sentiment,
     theme_core,
@@ -826,6 +827,9 @@ async def _board_index() -> dict[str, dict]:
                 "name": name,
                 "kind": row.get("kind"),
                 "change_pct": row.get("change_pct"),
+                # main_net_inflow 以元为单位（news_persistence 展示口径）；
+                # main_net_yi 保留亿单位（连续流入天数按亿比对落盘 bar，单位必须一致）
+                "main_net_yi": yi,
                 "main_net_inflow": yi * 1e8 if yi is not None else None,
                 "main_net_ratio": row.get("main_net_ratio"),
             }
@@ -834,6 +838,59 @@ async def _board_index() -> dict[str, dict]:
             else:
                 index.setdefault(name, mapped)
     return index
+
+
+async def board_rows_for_names(names: list[str]) -> dict[str, dict]:
+    """名字（题材名或东财板块名）→ 东财板块资金行（含**连续流入天数**）。
+
+    L3 映射层的唯一批量入口（P1-5，2026-09-10）：P1-5 传 ths 题材名，
+    P1-4 传东财板块代码时走 `board_rows_for_codes`（免名字歧义）。
+
+    数据链路：`_board_index()`（复用 board_flow 盘中 30s 缓存，零额外上游调用）
+    → `match_board` 匹配 → `board_flow.get_board_streaks`（纯读落盘，零外呼）。
+    匹配不到的名字**不出现在返回里**——调用方按三态处理，绝不臆造；
+    连续流入天数只对落盘 Top 板块可判，其余 None（区别于 0=今日净流出）。
+    """
+    if not names:
+        return {}
+    index = await _board_index()
+    matched: dict[str, dict] = {}
+    for n in dict.fromkeys(names):  # 去重保序
+        if not n:
+            continue
+        row = match_board(n, index)
+        if row:
+            matched[n] = dict(row)
+    return _attach_streaks(matched)
+
+
+async def board_rows_for_codes(codes: list[str]) -> dict[str, dict]:
+    """东财板块代码（BKxxxx）→ 板块资金行（含**连续流入天数**）。
+
+    与 `board_rows_for_names` **同一份数据、同一份 30s 缓存**，只是索引键换成
+    板块代码——调用方已知代码时走这里，避免名字匹配歧义（东财行业三级名带罗马
+    数字后缀「白酒Ⅱ」，而板块榜里是「白酒」；P1-4 主板块即取 L2 行，正好踩到这个差异）。
+    """
+    if not codes:
+        return {}
+    index = await _board_index()
+    by_code = {
+        r["board_code"]: dict(r) for r in index.values() if r.get("board_code")
+    }
+    matched = {c: by_code[c] for c in dict.fromkeys(codes) if c in by_code}
+    return _attach_streaks(matched)
+
+
+def _attach_streaks(rows: dict[str, dict]) -> dict[str, dict]:
+    """批量补连续流入天数（按 f62 亿比对落盘日度 bar；store 无该板块 → None）。"""
+    if not rows:
+        return rows
+    streaks = board_flow.get_board_streaks(
+        {r["board_code"]: r.get("main_net_yi") for r in rows.values()}
+    )
+    for row in rows.values():
+        row["streak"] = streaks.get(row["board_code"])
+    return rows
 
 
 async def _load_history(provider, trade_date: date, lookback_days: int) -> list[tuple[date, list]]:
@@ -859,18 +916,26 @@ async def _load_history(provider, trade_date: date, lookback_days: int) -> list[
 
 
 async def _market_break_rate(provider, trade_date: date, limit_up_count: int) -> float | None:
-    """全市场炸板率 = 炸板数 / (涨停数 + 炸板数)。"""
-    ths = _pick_provider(provider, "ThsFuyaoProvider")
-    if ths is None:
-        return None
-    try:
-        broken = await ths.get_limit_break_pool(trade_date)
-    except Exception as exc:
-        log.debug("limit-break pool unavailable: %s", exc)
-        return None
-    if not broken or limit_up_count <= 0:
-        return None
-    return round(len(broken) / (len(broken) + limit_up_count), 4)
+    """全市场炸板率 = 炸板数 / (涨停数 + 炸板数)。
+
+    **双源直取（P1-19 收尾，2026-09-10）**：优先 ths，抛异常时回落东财 push2ex。
+    两家都用 `_pick_provider` 直取实例、不走 composite 链——理由见 `_pick_provider`：
+    composite 会在每个失败源上串行重试（8s × 4 源），5 日回溯能拖到分钟级。
+    此前只取 ths，**ths 一挂这里就静默退化成近似口径**。
+    """
+    for cls in ("ThsFuyaoProvider", "EastmoneyProvider"):
+        p = _pick_provider(provider, cls)
+        if p is None:
+            continue
+        try:
+            broken = await p.get_limit_break_pool(trade_date)
+        except Exception as exc:
+            log.debug("limit-break pool unavailable (%s): %s", cls, exc)
+            continue  # 换下一源；两源都失败 → 返回 None（调用方退化为近似并标注）
+        if not broken or limit_up_count <= 0:
+            return None  # 拿到但空/无涨停 → 如实 None，不再换源（避免拿另一源口径硬凑）
+        return round(len(broken) / (len(broken) + limit_up_count), 4)
+    return None
 
 
 async def _auction_gaps(provider, trade_date: date, pool: list) -> dict[str, float] | None:
@@ -1040,6 +1105,11 @@ def _build_card(
                 "change_pct": rec.change_pct,
                 "dragon": dragon,
                 "sentiment": senti,
+                # 同花顺官方涨停原因原串（`+` 分隔的题材串）。必须**在 ladder 行上**导出：
+                # 消费方（intraday_opportunity）曾绕道 leaders.candidates 取，而 candidates
+                # 只含「补涨/反包」两种角色、值是硬编码文案 ⇒ 绝大多数梯队员取不到、
+                # 卡片「入选原因」恒空（2026-09-10 用户反馈）。
+                "reason": rec.reason,
             }
         )
 
@@ -1203,3 +1273,51 @@ def _build_card(
             ],
         },
     }
+
+
+# ---------------------------------------------------------------- 介入条件清单（P1-13）
+
+def entry_checklist_from_board(
+    board: dict, symbol: str, *, market_phase: str | None = None,
+) -> dict | None:
+    """从题材看板 payload 解析某只股票的「介入条件清单」（纯函数，零 IO）。
+
+    为什么复用看板而不是重新取数：`dragon_score` / 封单质量 / 题材阶段 / 角色
+    这些输入**看板构建时已经算好**（ladder 行的 dragon、card 的 stage）。再取一遍
+    等于把同一份计算做两次、并多打一轮上游。找不到该 symbol（不在任何题材梯队里，
+    例如未涨停的候选股）→ None，由调用方决定降级口径。
+
+    market_phase 必须由调用方给（市场层环境是全局的，不在题材看板里）。
+    """
+    sym = (symbol or "").strip()
+    if not sym:
+        return None
+    for card in board.get("themes") or []:
+        for row in card.get("ladder") or []:
+            if (row.get("symbol") or "").strip() != sym:
+                continue
+            checklist = entry_checklist(
+                symbol=sym,
+                name=row.get("name"),
+                boards=row.get("boards"),
+                seal_amount=row.get("seal_amount"),
+                float_market_cap=row.get("float_market_cap"),
+                first_seal_time=row.get("first_seal_time"),
+                turnover_rate=row.get("turnover_rate"),
+                break_count=row.get("break_count"),
+                theme=card.get("theme"),
+                theme_stage=card.get("stage"),
+                dragon=row.get("dragon"),
+                market_phase=market_phase,
+            )
+            return {
+                **checklist,
+                "trade_date": board.get("trade_date"),
+                "theme_stage_basis": card.get("stage_basis"),
+                "role": row.get("role"),
+                "dragon": row.get("dragon") or {},
+                "sentiment": row.get("sentiment") or {},
+                "health_note": card.get("health_note"),
+                "risks": card.get("risks") or [],
+            }
+    return None

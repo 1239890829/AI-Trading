@@ -13,7 +13,9 @@
    AI 判断**（09-04 有 LLM 全天降级先例，界面必须能看出区别）。
 
 纪律：判读**不发飞书**（2026-09-08 推送定稿：飞书只保留盘中买点卡），
-只在系统内（悬浮球 + 控制台）呈现；escalate 进任务中心待办（P1 后续接）。
+只在系统内（悬浮球 + 控制台）呈现；`escalate` 由 `_save` 登记为任务中心待办
+（P1-36，2026-09-10 接通：`record_escalation` 纯登记 + `needs_confirm` 初始态，
+人工在任务中心处置 → `resolve_task`）。
 """
 from __future__ import annotations
 
@@ -22,15 +24,21 @@ import contextlib
 import json
 import logging
 from typing import Any
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import select
 
-from app.core.db import get_session_factory
+from app.core.db import beijing_now_naive, get_session_factory
 from app.models.agent import AgentTriage
-from app.models.alert import AlertEvent
+from app.models.alert import AlertEvent, AlertRule
 
 log = logging.getLogger(__name__)
+
+
+def _bj_now():
+    """2026-09-09 时区统一：判读去重/时效/基准一律北京时间 naive（此前误用
+    datetime.utcnow() 与库内 UTC naive 比——库统一北京时间后必须换口径）。"""
+    return beijing_now_naive()
 
 #: 冷却窗口：同一规则在此窗口内已判读过 → 直接 ignore（去重，防刷屏）
 COOLDOWN_MINUTES = 30
@@ -60,13 +68,11 @@ def _event_context(event: AlertEvent, session_factory) -> dict:
 
     rule_name, condition = "", ""
     with session_factory() as db:
-        from app.models.alert import AlertRule
-
         rule = db.get(AlertRule, event.rule_id)
         if rule is not None:
             rule_name = rule.name or ""
             condition = rule.condition_type or ""
-        cutoff = datetime.utcnow() - timedelta(hours=1)
+        cutoff = _bj_now() - timedelta(hours=1)
         recent = db.execute(
             select(AlertEvent.id).where(
                 AlertEvent.rule_id == event.rule_id,
@@ -130,7 +136,7 @@ def _already_recent(event: AlertEvent, session_factory) -> bool:
     triage.created_at=现在）会把当前的新事件误判成"冷却期重复"而永久静默
     （2026-09-08 单测抓到）。
     """
-    base = event.triggered_at or datetime.utcnow()
+    base = event.triggered_at or _bj_now()
     lo = base - timedelta(minutes=COOLDOWN_MINUTES)
     hi = base + timedelta(minutes=COOLDOWN_MINUTES)
     with session_factory() as db:
@@ -233,9 +239,44 @@ def _save(event_id: int, verdict: str, reason: str, model: str, sf) -> dict:
         ev = db.get(AlertEvent, event_id)
         if ev is not None:
             ev.acknowledged = 1
+        symbol = ev.symbol if ev is not None else None
+        rule_name, trigger_value = "", None
+        if ev is not None:
+            trigger_value = ev.trigger_value
+            with contextlib.suppress(Exception):
+                rule = db.get(AlertRule, ev.rule_id)
+                rule_name = (rule.name or "") if rule is not None else ""
         db.commit()
         db.refresh(row)
-        return _dump(row)
+        out = _dump(row)
+
+    # escalate → 任务中心待办（P1-36）。**在 session 之外登记**：record_escalation
+    # 会另开一个 session（SQLite 同一时刻只允许一个写事务，嵌套会锁等待）。
+    # 必须传 sf（生产=全局工厂；单测=tmp 库），否则判读单测会往生产库写待办。
+    if verdict == "escalate":
+        _register_escalation(event_id, reason, symbol, rule_name, trigger_value, sf)
+    return out
+
+
+def _register_escalation(event_id: int, reason: str, symbol: str | None,
+                         rule_name: str, trigger_value: object, sf) -> str | None:
+    """把 escalate 判读登记为待办（纯留痕，不启动执行）。登记失败不影响判读落库。"""
+    from app.services.agent_tasks import record_escalation
+
+    head = f"{symbol or '（无代码）'} {rule_name or '告警'}".strip()
+    try:
+        return record_escalation(
+            event_id=event_id,
+            summary=f"{head}｜{reason}"[:200],
+            detail={
+                "symbol": symbol, "rule": rule_name,
+                "trigger_value": trigger_value, "reason": reason,
+            },
+            session_factory=sf,
+        )
+    except Exception as exc:  # noqa: BLE001  待办是增强层，失败只留痕不上抛
+        log.warning("escalation task register failed for event %s: %s", event_id, exc)
+        return None
 
 
 def _dump(row: AgentTriage) -> dict:
@@ -247,14 +288,23 @@ def _dump(row: AgentTriage) -> dict:
 
 
 async def triage_pending(limit: int = 20, session_factory=None) -> list[dict]:
-    """扫描最近未判读事件并判读（worker 每轮调用）。"""
+    """扫描**未判读**事件并判读（worker 每轮调用）。
+
+    ⚠️ 必须「先查未判读、再按时间倒序」——原实现取「最近 limit 条」再过滤未判读，
+    一旦某时段事件量 > limit，较早的未判读事件就被新事件**永久挤出窗口**，
+    再也不会被判读（2026-09-10 实测库内 75 条从未判读，含 falsify 18 /
+    flow_surge 46 / break_rate 7 / high_board_break 3；而 falsify 是方向证伪这类
+    高价值信号）。单轮判读量仍由 RECENT_LIMIT 封顶，避免 LLM 突发批量。
+    """
     sf = session_factory or get_session_factory()
     with sf() as db:
-        judged = {r for r in db.execute(select(AgentTriage.event_id)).scalars().all()}
         rows = db.execute(
-            select(AlertEvent).order_by(AlertEvent.triggered_at.desc()).limit(limit)
+            select(AlertEvent)
+            .where(AlertEvent.id.not_in(select(AgentTriage.event_id)))
+            .order_by(AlertEvent.triggered_at.desc())
+            .limit(max(int(limit), 1))
         ).scalars().all()
-        pending = [r for r in rows if r.id not in judged][:RECENT_LIMIT]
+        pending = list(rows)[:RECENT_LIMIT]
     out = []
     for ev in pending:
         try:
@@ -288,7 +338,7 @@ def pending_bubbles(limit: int = 5, session_factory=None) -> list[dict]:
     name 从事件快照补，快照也没有则整条过滤（宁缺毋滥）。
     """
     sf = session_factory or get_session_factory()
-    cutoff = datetime.utcnow() - timedelta(hours=BUBBLE_MAX_AGE_HOURS)
+    cutoff = _bj_now() - timedelta(hours=BUBBLE_MAX_AGE_HOURS)
     with sf() as db:
         rows = db.execute(
             select(AgentTriage).where(AgentTriage.verdict == "notify", AgentTriage.acked == 0)

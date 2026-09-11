@@ -53,10 +53,3 @@ export function StockLink({
     </Link>
   );
 }
-
-/**
- * 通用可点击元素 hover（非个股：新闻标题/事件标题/操作按钮等）：
- * 中性底色洗染 + 文字加深/提亮，light/dark 各自适配，同样不用下划线。
- */
-export const HOVER_SOFT =
-  "cursor-pointer rounded transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100";

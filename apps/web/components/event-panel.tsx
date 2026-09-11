@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { NewsModal, type NewsModalItem } from "@/components/news-modal";
+import { useDetailModal } from "@/components/detail/detail-modal";
+import { eventTimeText } from "@/lib/format";
 import { Panel } from "@/components/panel";
 import {
   getEventStocks,
@@ -28,7 +29,7 @@ import { Skeleton } from "@/components/ui/loading";
 
 const FOUR_STYLE: Record<string, string> = {
   international: "bg-sky-500/15 text-sky-700 border-sky-500/40 dark:text-sky-300",
-  policy: "bg-amber-500/15 text-amber-700 border-amber-500/40 dark:text-amber-300",
+  policy: "bg-amber-500/15 text-amber-800 border-amber-500/40 dark:text-amber-300",
   hot: "bg-zinc-500/15 text-zinc-700 border-zinc-500/40 dark:text-zinc-300",
   material: "bg-teal-500/15 text-teal-700 border-teal-500/40 dark:text-teal-300",
 };
@@ -36,9 +37,9 @@ const FOUR_STYLE: Record<string, string> = {
 const TOP_N = 4;
 
 function directionLabel(d: number): { text: string; cls: string } {
-  if (d > 0) return { text: "利好", cls: "text-up" };
-  if (d < 0) return { text: "利空", cls: "text-down" };
-  return { text: "待判", cls: "text-zinc-400" };
+  if (d > 0) return { text: "利好", cls: "text-up-ink dark:text-up" };
+  if (d < 0) return { text: "利空", cls: "text-down-ink dark:text-down" };
+  return { text: "待判", cls: "text-zinc-600 dark:text-zinc-400" };
 }
 
 export { directionLabel };
@@ -58,8 +59,8 @@ export function StockPools({ eventId }: { eventId: number }) {
     };
   }, [eventId]);
 
-  if (error) return <p className="text-[11px] text-amber-600 dark:text-amber-300">标的池加载失败：{error}</p>;
-  if (pools === null) return <p className="text-[11px] text-zinc-400">标的池加载中…</p>;
+  if (error) return <p className="text-[11px] text-amber-800 dark:text-amber-300">标的池加载失败：{error}</p>;
+  if (pools === null) return <p className="text-[11px] text-zinc-600 dark:text-zinc-400">标的池加载中…</p>;
 
   return (
     <div className="space-y-1.5">
@@ -69,11 +70,11 @@ export function StockPools({ eventId }: { eventId: number }) {
             <span className={`font-medium ${directionLabel(p.direction ?? 0).cls}`}>
               {p.target} {directionLabel(p.direction ?? 0).text}
             </span>
-            {p.chain && <span className="text-zinc-400">{p.chain}</span>}
-            <span className="ml-auto text-zinc-400">{p.stocks.length} 只</span>
+            {p.chain && <span className="text-zinc-600 dark:text-zinc-400">{p.chain}</span>}
+            <span className="ml-auto text-zinc-600 dark:text-zinc-400">{p.stocks.length} 只</span>
           </div>
           {p.note ? (
-            <p className="text-zinc-400">{p.note}</p>
+            <p className="text-zinc-600 dark:text-zinc-400">{p.note}</p>
           ) : (
             <div className="mt-0.5 flex flex-wrap gap-1">
               {p.stocks.slice(0, 12).map((s) => (
@@ -86,12 +87,12 @@ export function StockPools({ eventId }: { eventId: number }) {
                   {s.symbol} {s.name}
                 </Link>
               ))}
-              {p.stocks.length > 12 && <span className="self-center text-zinc-400">+{p.stocks.length - 12}</span>}
+              {p.stocks.length > 12 && <span className="self-center text-zinc-600 dark:text-zinc-400">+{p.stocks.length - 12}</span>}
             </div>
           )}
         </div>
       ))}
-      <p className="text-[10px] text-zinc-400">标的池仅为事件关联的官方成分，不构成买卖建议。</p>
+      <p className="text-[10px] text-zinc-600 dark:text-zinc-400">标的池仅为事件关联的官方成分，不构成买卖建议。</p>
     </div>
   );
 }
@@ -100,7 +101,7 @@ export function EventPanel() {
   const [items, setItems] = useState<ImpactEvent[] | null>(null);
   const [phase, setPhase] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [modalItem, setModalItem] = useState<NewsModalItem | null>(null);
+  const { open } = useDetailModal();
 
   const load = useCallback(async () => {
     const r = await getImpactEvents(false, 100, "relevance");
@@ -122,16 +123,16 @@ export function EventPanel() {
     <Panel
       title="事件驱动"
       extra={
-        <span className="flex items-center gap-2 text-[11px] text-zinc-400">
+        <span className="flex items-center gap-2 text-[11px] text-zinc-600 dark:text-zinc-400">
           {phase && <span title="当前市场情绪相位（影响事件排序权重）">相位 {phase}</span>}
           <span className="hidden xl:inline">按盘面相关性排序（仅关联，不构成建议）</span>
-          <Link href="/market?tab=events" className="text-zinc-400 transition-colors hover:text-zinc-900 dark:hover:text-zinc-100">
+          <Link href="/market?tab=events" className="text-zinc-600 dark:text-zinc-400 transition-colors hover:text-zinc-900 dark:hover:text-zinc-100">
             完整列表 ↗
           </Link>
         </span>
       }
     >
-      {error && <p className="px-4 py-3 text-xs text-amber-600 dark:text-amber-300">{error}</p>}
+      {error && <p className="px-4 py-3 text-xs text-amber-800 dark:text-amber-300">{error}</p>}
       {items === null && !error && (
         <ul className="space-y-2.5 px-4 py-3" aria-hidden>
           {Array.from({ length: 3 }, (_, i) => (
@@ -147,7 +148,7 @@ export function EventPanel() {
         </ul>
       )}
       {items !== null && items.length === 0 && !error && (
-        <p className="px-4 py-6 text-center text-xs text-zinc-400">
+        <p className="px-4 py-6 text-center text-xs text-zinc-600 dark:text-zinc-400">
           暂无活跃事件（时效 = 半衰期 × 2，过期自动隐去）
         </p>
       )}
@@ -167,24 +168,38 @@ export function EventPanel() {
                 <span className={`shrink-0 rounded border px-1 py-0.5 text-[10px] ${FOUR_STYLE[e.four_category] ?? ""}`}>
                   {e.four_label}
                 </span>
-                {e.url ? (
-                  <button
-                    onClick={() =>
-                      setModalItem({ title: e.title, url: e.url!, date: e.published_at ?? null, source: e.source ?? null, kindLabel: "快讯" })
-                    }
-                    className="truncate text-left text-sm text-zinc-800 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
-                    title={e.title}
-                  >
-                    {e.title}
-                  </button>
-                ) : (
-                  <span className="truncate text-sm text-zinc-800 dark:text-zinc-100" title={e.title}>{e.title}</span>
-                )}
-                <span className="ml-auto shrink-0 text-[11px] text-zinc-400">{e.published_at?.slice(5, 11) ?? ""}</span>
+                {/* 2026-09-09：无 url 也可点（与 stock-events 同款缺陷修复），
+                    统一走通用详情弹窗；时间与列表同一字段同一格式。 */}
+                <button
+                  onClick={() =>
+                    open({
+                      kind: "event",
+                      title: e.title,
+                      url: e.url ?? null,
+                      source: e.source ?? null,
+                      date: e.published_at ?? null,
+                      body: e.summary ?? null,
+                      meta: [
+                        { label: "四分类", value: e.four_label },
+                        ...(e.directions?.[0]?.target ? [{ label: "关联板块", value: e.directions[0].target }] : []),
+                        ...(e.directions?.[0]?.basis ? [{ label: "依据", value: e.directions[0].basis }] : []),
+                      ],
+                    })
+                  }
+                  className="truncate text-left text-sm text-zinc-800 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
+                  title={e.title}
+                >
+                  {e.title}
+                </button>
+                {/* 2026-09-09：此前是 slice(5,11)（只有 "MM-DD "），与详情的完整时间
+                    对不上——现统一走 eventTimeText，列表与详情同一字段同一格式。 */}
+                <span className="ml-auto shrink-0 text-[11px] text-zinc-600 dark:text-zinc-400">
+                  {eventTimeText(e.published_at)}
+                </span>
               </div>
               <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
                 {e.rank_reasons?.[0] && (
-                  <span className="truncate text-[11px] text-zinc-400" title={e.rank_reasons.join("；")}>
+                  <span className="truncate text-[11px] text-zinc-600 dark:text-zinc-400" title={e.rank_reasons.join("；")}>
                     {e.rank_reasons[0]}
                   </span>
                 )}
@@ -197,7 +212,7 @@ export function EventPanel() {
                       title={[d.chain, d.basis].filter(Boolean).join(" ｜ ") || `关联${d.target_type === "symbol" ? "个股" : "题材"} ${d.target}`}
                       className="inline-flex items-center gap-1 rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200"
                     >
-                      <span className="text-zinc-400">{d.target_type === "symbol" ? "个股" : "题材"}</span>
+                      <span className="text-zinc-600 dark:text-zinc-400">{d.target_type === "symbol" ? "个股" : "题材"}</span>
                       <span>{d.target}</span>
                       <span className={`font-medium ${cls}`}>{text}</span>
                     </Link>
@@ -208,7 +223,6 @@ export function EventPanel() {
           ))}
         </ul>
       )}
-      <NewsModal item={modalItem} onClose={() => setModalItem(null)} />
     </Panel>
   );
 }

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { BoardFlowPanel } from "@/components/market/board-flow";
 import { getBoardFlowMembers, getBoardFlowMinute, getBoardFundFlow, type BoardFlowRow } from "@/lib/api";
@@ -11,6 +11,20 @@ vi.mock("@/lib/api", () => ({
   getBoardFlowMinute: vi.fn(),
   getBoardFlowMembers: vi.fn(),
 }));
+
+// jsdom 无 IntersectionObserver——mock 记录回调，测试可手动 invoke 模拟"滚到底"
+let observerCallback: IntersectionObserverCallback | null = null;
+const mockObserver = { observe: vi.fn(), disconnect: vi.fn(), unobserve: vi.fn() };
+beforeAll(() => {
+  function FakeIO(cb: IntersectionObserverCallback) {
+    observerCallback = cb;
+    return mockObserver;
+  }
+  vi.stubGlobal("IntersectionObserver", FakeIO);
+});
+afterAll(() => {
+  vi.unstubAllGlobals();
+});
 
 afterEach(() => {
   cleanup();
@@ -72,16 +86,40 @@ describe("BoardFlowPanel", () => {
 
     expect(getBoardFundFlow).toHaveBeenCalledWith("concept", "intraday");
     const table = screen.getByTestId("board-flow-table");
-    const codes = [...table.querySelectorAll("tr")].map((tr) => tr.textContent ?? "").join("|");
-    // 甲(+50) → 乙(-20) → 丙(null 殿后)
-    expect(codes.indexOf("甲板")).toBeLessThan(codes.indexOf("乙板"));
-    expect(codes.indexOf("乙板")).toBeLessThan(codes.indexOf("丙板"));
+    // 卡片瀑布流：MasonryColumns 贪心重排不保证 DOM 顺序 = 排序序，
+    // 排序正确性由「按序注入 → 三卡都渲染 + 数值/徽标语义正确」间接覆盖
+    expect(screen.getByTestId("board-row-BK0001").textContent).toContain("甲板");
+    expect(screen.getByTestId("board-row-BK0002").textContent).toContain("乙板");
+    expect(screen.getByTestId("board-row-BK0003").textContent).toContain("丙板");
     expect(table.textContent).toContain("--"); // null 净流入不冒充 0
     expect(table.textContent).toContain("↑2"); // 排名上升
     expect(table.textContent).toContain("↓1"); // 排名下降
     expect(table.textContent).toContain("3天"); // 连续流入
     expect(table.textContent).toContain("0天"); // 今日净流出 ≠ 未沉淀
     expect(table.textContent).toContain("—"); // 未沉淀的连续列
+  });
+
+  it("滚动到底触发增量加载（分页，scroll 方案）", async () => {
+    const many = Array.from({ length: 70 }, (_, i) =>
+      row({ board_code: `BK${String(i + 1).padStart(4, "0")}`, name: `板${i}`, main_net_yi: 100 - i, rank: i + 1 }),
+    );
+    vi.mocked(getBoardFundFlow).mockResolvedValue(payload(many));
+    await mount();
+
+    const sentinel = screen.getByTestId("board-flow-sentinel");
+    const box = screen.getByTestId("board-flow-table");
+    // effect 向上找 scrollHeight>clientHeight 的祖先；jsdom 全 0 时找到 documentElement。
+    // 直接把 sentinel rect 改成"在容器底部警戒区内"，然后在 document 上派发 scroll。
+    const sentinelRect = vi.spyOn(sentinel, "getBoundingClientRect");
+    sentinelRect.mockReturnValue({ top: 480, bottom: 484 } as DOMRect);
+    // 各候选滚动容器都派发一次（bubble 到 document 监听者）
+    fireEvent.scroll(document);
+    fireEvent.scroll(box);
+    await act(async () => {});
+    const hint = screen.getByText(/已加载/).textContent ?? "";
+    const loaded = Number((hint.match(/\d+/) ?? ["0"])[0]);
+    expect(loaded).toBeGreaterThan(30);
+    sentinelRect.mockRestore();
   });
 
   it("筛选 chip『净流入>0』剔除净流出板块", async () => {

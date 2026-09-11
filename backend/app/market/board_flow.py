@@ -1,4 +1,4 @@
-"""板块资金流服务（L2 枢纽）——「板块级资金」的唯一实现（docs/fund-flow-redesign.md）。
+"""板块资金流服务（L2 枢纽）——「板块级资金」的唯一实现（docs/summary/architecture-design.md §2）。
 
 ## 层级纪律（R1 三层命名统一）
 - L1 大盘   app/market/fund_flow.py           → /market/fund-flow*       （保持不动）

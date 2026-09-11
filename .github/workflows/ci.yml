@@ -40,7 +40,7 @@ jobs:
         run: python -m pytest -q
 
       - name: pyflakes（静态检查）
-        run: python -m pyflakes app tests
+        run: python -m pyflakes app tests scripts
 
   frontend:
     name: frontend (tsc + lint)

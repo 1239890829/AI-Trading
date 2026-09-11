@@ -355,7 +355,7 @@ elif pct < -(limit + tol):                    限价口径存疑，单独计数�
   UI 消费端 `GET /api/themes/catalog/{code}/members`。
 - **C2** `dump/daily-k` 全市场历史日 K → Phase 6 回测地基。
 - **C3** ✅ 已完成（2026-08-31，P0-5）：`app/core/ttl_cache.py` 统一 TTL/LRU/单飞/统计抽象，
-  11 处自写缓存收敛，`GET /api/system/caches` 可观测（详见 docs/plan-review.md P0-5）。
+  11 处自写缓存收敛，`GET /api/system/caches` 可观测（详见 docs/archive/plan-review.md P0-5）。
 
 ---
 

@@ -16,6 +16,19 @@ export function parseNum(s: string | number | null | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** 亿元金额格式（无符号，表头/轴标签用）。 */
+export function fmtYi(v: number | null | undefined, digits = 0): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "--";
+  return v.toLocaleString("zh-CN", { maximumFractionDigits: digits, minimumFractionDigits: digits });
+}
+
+/** 亿元金额带符号格式：+32.3亿 / -12.3亿 / --。
+ *  正负只表达方向，颜色由调用方按 A 股惯例定（红涨绿跌）。 */
+export function signedYi(v: number | null | undefined, digits = 1): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "--";
+  return `${v >= 0 ? "+" : ""}${fmtYi(v, digits)}亿`;
+}
+
 export function fmtAmount(v: number | null | undefined): string {
   if (v === null || v === undefined || Number.isNaN(v)) return "--";
   if (Math.abs(v) >= 1e8) return `${fmt(v / 1e8)} 亿`;
@@ -38,8 +51,8 @@ export function fmtHeat(v: number | null | undefined): string {
 }
 
 export function pctColor(v: number | null | undefined): string {
-  if (v === null || v === undefined || Number.isNaN(v) || v === 0) return "text-zinc-400";
-  return v > 0 ? "text-up" : "text-down";
+  if (v === null || v === undefined || Number.isNaN(v) || v === 0) return "text-zinc-600 dark:text-zinc-400";
+  return v > 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down";
 }
 
 export function pctText(v: number | null | undefined): string {
@@ -47,11 +60,72 @@ export function pctText(v: number | null | undefined): string {
   return `${v > 0 ? "+" : ""}${fmt(v)}%`;
 }
 
+/**
+ * 事件/快讯时间统一显示（2026-09-09 修「列表时间与详情时间不一致」）。
+ *
+ * 后端 event_card.published_at 全库统一为北京时间字符串
+ * "YYYY-MM-DD HH:MM:SS.ffffff"（实测 400/400 条同格式，故按字符串排序即时间序）。
+ * 这里**不 new Date() 解析**：非 ISO 字符串在各浏览器/时区下解析结果不一，
+ * 正是列表与详情对不上的根源之一。纯字符串截取，列表与详情共用同一函数。
+ */
+export function eventTimeText(iso: string | null | undefined): string {
+  if (!iso) return "--";
+  const s = String(iso).replace("T", " ").trim();
+  const m = s.match(/^\d{4}-(\d{2}-\d{2})[ ](\d{2}:\d{2})/);
+  if (m) return `${m[1]} ${m[2]}`;
+  return s.slice(0, 16) || "--";
+}
+
 export function timeText(iso: string | null | undefined): string {
   if (!iso) return "--";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "--";
   return d.toLocaleTimeString("zh-CN", { hour12: false });
+}
+
+/* ---------------------------------------------------------------- 北京时间（Asia/Shanghai） */
+
+/**
+ * UTC ISO 时间戳 → 北京时间 `YYYY-MM-DD`；缺失/非法返回空串。
+ *
+ * **为什么必须显式指定时区**：后端时间戳统一是 UTC ISO（带 Z），而 `toLocaleDateString`
+ * 默认按**运行环境时区**渲染。在非 +8 时区的环境（CI 容器、海外机器）直接用默认时区
+ * 会把「09-11 早盘 09:20」显示成前一天，分钟决策、竞价、K 线实时合成全部错位一天。
+ * 固定 `sv-SE` 是因为它天然输出 `YYYY-MM-DD`，无需手工拼零。
+ *
+ * 单点收口（2026-09-11 冗余清理）：此前 `lib/kline-live.ts` 与
+ * `components/detail/minute-decision-panel.tsx` 各有一份逐字节同体实现。
+ *
+ * ⚠️ **例外**：`components/minute-chart.tsx` 保留一份手算偏移的 `bjHHMM`——那条路径按
+ * 分钟点逐点调用（构建索引 + 每次 tick），Intl formatter 的构造开销高出约一个数量级。
+ * 两者对 UTC 锚定的 ISO 输出一致，改动时**不要顺手"合并"那一份**。
+ */
+export function bjDate(ts: string | null | undefined): string {
+  if (!ts) return "";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("sv-SE", { timeZone: "Asia/Shanghai" });
+}
+
+/**
+ * UTC ISO 时间戳 → 北京时间 `HH:MM`（分钟粒度，无秒）；缺失/非法返回空串。
+ *
+ * **非法日期必须返回空串，不能返回 `"Invalid Date"` 一类垃圾串**：调用方
+ * （`lib/kline-live.ts` 的分时/K线实时合成）会用这个字符串比对「是否同一分钟」，
+ * 两个非法时间戳若都返回同一段垃圾串就会「相等」，误判为同分钟而跳过合成。
+ * 这是 `kline-live.test.ts` 跨分钟用例抓到的真实缺陷，改动时请保留空串语义。
+ */
+export function bjHHMM(ts: string | null | undefined): string {
+  if (!ts) return "";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString("sv-SE", { timeZone: "Asia/Shanghai", hour12: false }).slice(0, 5);
+}
+
+/** UTC ISO 时间戳 → 北京时间 `MM-DD`（不含年份，紧凑展示用）；缺失/非法返回空串。 */
+export function bjMonthDay(ts: string | null | undefined): string {
+  const d = bjDate(ts);
+  return d ? d.slice(5) : "";
 }
 
 const SOURCE_LABELS: Record<string, string> = {

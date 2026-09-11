@@ -132,8 +132,18 @@ def test_stream_cli_no_delta_fallback_to_full_message(monkeypatch):
 # ---------------------------------------------------------------- 路由：SSE 契约
 
 
-@pytest.fixture()
+@pytest.fixture(scope="module")
 def client():
+    """模块级：本文件全部用例共用一次 lifespan（P1-26，2026-09-10）。
+
+    此前是默认的 function 作用域——每个用例都重建 `app.main` 的 lifespan
+    （建库 + 起 QuoteHub/snapshot，实测单次 35–46s），**15 次 ≈ 9 分钟**，
+    是当时全量套件 17 分钟的最大单点。
+
+    安全性依据：本文件用例全部靠 `monkeypatch`（function 作用域，自动还原）
+    注入桩，不依赖「全新启动状态」；SSE 用例的假流/假进程同样按用例还原。
+    **用例数会随功能增长**（2026-09-11 助手工具扩容后为 48 项）——别把这里当计数真相源。
+    """
     from app.main import app
 
     with TestClient(app) as c:
@@ -646,3 +656,429 @@ def test_chat_route_grounding_skipped_without_evidence(client, monkeypatch):
     evs = _parse_sse(resp.text)
     assert not [e for e in evs if e.get("type") == "grounding"]
     assert evs[-1] == {"type": "done"}
+
+
+# ---------------------------------------------------------------- 2026-09-11 扩容
+# 用户实测：「明明系统里都有的数据，助手答『我没有』」。根因两条——
+# ① 提示词的能力边界写死了无工具时代的事实，与工具清单自相矛盾；
+# ② 分时/K线/资金流/个股龙虎榜/公告财务/指数宽度/题材梯队等**工具覆盖缺口**。
+# 下列用例分别把这两条钉住。
+
+
+def test_system_map_matches_frontend_nav_whitelist():
+    """助手「系统地图」的页面集合必须与前端导航白名单完全一致（双向）。
+
+    这是**防认知漂移的机制**，不是一次性检查：地图此前是 prompt.py 里的手写字符串，
+    实测已漂移到「每日精选 /picks」「研究 /research」——这两条路由早已 302 下线。
+    模型照过期地图指路，用户按图索骥必然找不到。
+    现在地图只有一处定义（`app/assistant/system_map.py`），这里按住它与前端对齐。
+    """
+    from app.assistant.system_map import MODULES, module_paths
+
+    nav_src = (FRONTEND / "apps/web/lib/nav-targets.ts").read_text(encoding="utf-8")
+    block = re.search(r"NAV_ALLOWED_PATHS[^=]*=\s*\[(.*?)\]", nav_src, re.S)
+    assert block, "未找到前端 NAV_ALLOWED_PATHS（结构变了，同步更新本测试）"
+    # 去掉行尾 // 注释再抽字符串，避免把注释里的路径当成白名单
+    raw = "\n".join(line.split("//")[0] for line in block.group(1).splitlines())
+    frontend_paths = set(re.findall(r'"([^"]+)"', raw))
+
+    assert set(module_paths()) == frontend_paths, (
+        "助手系统地图与前端导航白名单不一致 —— "
+        f"仅后端有：{sorted(set(module_paths()) - frontend_paths)}；"
+        f"仅前端有：{sorted(frontend_paths - set(module_paths()))}"
+    )
+    # 每个模块的说明不许为空（空说明 = 地图看着有、其实问不出所以然）
+    for m in MODULES:
+        assert m.name and m.detail, f"{m.path} 缺少名称或说明"
+
+
+def test_system_map_reaches_system_prompt():
+    """地图要真的渲染进提示词（只写在常量里不算），且不含已下线路由。"""
+    from app.assistant.prompt import build_system_prompt
+
+    p = build_system_prompt(None, tools_enabled=True)
+    for path in ("/workbench", "/tape", "/market", "/hunting", "/agent"):
+        assert path in p, f"提示词缺少现役页面：{path}"
+    for dead in ("/picks", "/research", "/intraday"):
+        assert f" {dead}：" not in p and f" {dead} " not in p, f"提示词仍在指向已下线路由：{dead}"
+
+
+def test_prompt_capability_never_denies_when_tools_on():
+    """启用工具时，提示词里不许再出现「你没有实时数据/资金流/龙虎榜」这类自我否认。
+
+    这是本次问题的**直接根因**：模型信了提示词里那句"你没有"，
+    于是答"我没有龙虎榜数据"，而 longhu 工具就在同一份提示词的工具清单里。
+    """
+    from app.assistant.prompt import build_system_prompt
+
+    on = build_system_prompt(None, tools_enabled=True)
+    off = build_system_prompt(None, tools_enabled=False)
+    for denied in ("默认你**没有实时行情", "资金流、龙虎榜等任何实时数据"):
+        assert denied not in on, f"启用工具时仍含自我否认文案：{denied}"
+    assert "默认你**没有实时行情" in off, "关掉工具时必须恢复诚实的无数据声明"
+    # 有工具时要点名"先取数再下结论"，并真的带上工具清单
+    assert "先调用工具再回答" in on
+    assert "{{tool:capital_flow|" in on
+    assert "可用工具" not in off
+
+
+def test_market_context_block_scope_follows_tools_flag():
+    """快照块头文案必须与工具开关一致（曾经的"你都没有"是第二处自相矛盾）。
+
+    同一个答复里，「工具清单」说能查龙虎榜、「快照块」说没有龙虎榜——
+    模型在冲突指令下选了后者。两处必须同向。
+    """
+    import asyncio
+
+    from app.assistant.context import build_market_context
+    from app.schemas.market import Quote
+
+    async def _get(_syms):
+        return [Quote(symbol="600519", name="贵州茅台", price=1500.0, source="tencent")]
+
+    on, _ = asyncio.run(build_market_context(_get, ["600519"], True))
+    off, _ = asyncio.run(build_market_context(_get, ["600519"], False))
+    assert "可用工具" in on and "你都没有" not in on
+    assert "你都没有" in off and "可用工具" not in off
+    # 两版都必须保留溯源纪律
+    assert "溯源纪律" in on and "溯源纪律" in off
+
+
+def test_tool_labels_cover_every_spec():
+    """进度提示与回执都靠 TOOL_LABELS；新增工具漏标签会静默显示英文名。"""
+    from app.assistant.tools import TOOL_LABELS, TOOL_SPECS, tool_label
+
+    missing = sorted(set(TOOL_SPECS) - set(TOOL_LABELS))
+    assert not missing, f"这些工具没有中文短标签（进度提示会退化成英文键名）：{missing}"
+    stale = sorted(set(TOOL_LABELS) - set(TOOL_SPECS))
+    assert not stale, f"这些标签没有对应工具（已删的工具要连标签一起删）：{stale}"
+    assert tool_label("longhu") == "龙虎榜"
+    assert tool_label("不存在的工具") == "不存在的工具"  # 未登记不抛异常
+
+
+def _ctx(provider, **kw):
+    from app.assistant.tools import ToolContext
+
+    return ToolContext(provider=provider, **kw)
+
+
+def _call_tool(ctx, name, **args):
+    """跑单个工具（名不与本文件既有 `_run(awaitable)` 冲突，2026-09-11 踩过一次）。"""
+    import asyncio
+
+    from app.assistant.tools import ToolCall, run_tool
+
+    return asyncio.run(run_tool(ToolCall(name=name, args=args), ctx, cache=None))
+
+
+def test_quotes_tool_accepts_index_prefix():
+    """指数必须能查（sh000001）——裸 6 位仍是股票，带前缀才是指数（项目纪律）。"""
+    from app.schemas.market import Quote
+
+    class _P:
+        async def get_quotes(self, codes):
+            return [Quote(symbol=c, name="上证指数", price=3300.0, source="tencent") for c in codes]
+
+    out = _call_tool(_ctx(_P()), "quotes", symbols="sh000001")
+    assert "上证指数" in out and "sh000001" in out
+    # 裸代码仍然按股票走词典校验
+    bad = _call_tool(_ctx(_P(), known_symbols={"600519"}), "quotes", symbols="000001")
+    assert "不在实体词典内" in bad
+
+
+def test_minute_tool_summarizes_extremes_and_tail():
+    """分时工具要把 240 个点压成「开/高/低/振幅/末段」，而不是把点全倒出来。"""
+    pts = [
+        {"ts": "2026-09-11 09:31", "price": 15.31, "source": "tencent"},
+        {"ts": "2026-09-11 09:45", "price": 15.14, "source": "tencent"},
+        {"ts": "2026-09-11 10:30", "price": 18.10, "source": "tencent"},
+        {"ts": "2026-09-11 11:20", "price": 16.60, "source": "tencent"},
+    ]
+
+    class _P:
+        async def get_minute_line(self, symbol):
+            return pts
+
+    out = _call_tool(_ctx(_P(), known_symbols=set()), "minute", symbol="603042")
+    assert "开 15.31" in out
+    assert "最高 18.1（2026-09-11 10:30）" in out
+    assert "最低 15.14（2026-09-11 09:45）" in out
+    assert "日内振幅 19.55%" in out  # (18.10-15.14)/15.14
+    assert "tencent" in out
+    assert out.count("\n") < 12, "分时工具不该把每个点都渲染出来"
+
+
+def test_capital_flow_tool_formats_amount_and_streak():
+    """个股资金流：元→亿/万换算 + 连续净流入天数（用户问『谁在买』的核心指标）。"""
+    rows = [
+        {"date": "2026-09-10", "close": 18.67, "change_pct": 5.2, "net_main": 1.2e8,
+         "net_super": 8.0e7, "net_big": 4.0e7, "net_mid": -1.0e7, "net_small": -2.0e7,
+         "source": "sina"},
+        {"date": "2026-09-09", "close": 17.75, "change_pct": 3.1, "net_main": 3.0e7,
+         "net_super": 2.0e7, "net_big": 1.0e7, "net_mid": 0.0, "net_small": 0.0,
+         "source": "sina"},
+        {"date": "2026-09-08", "close": 17.22, "change_pct": -1.4, "net_main": -5.0e7,
+         "net_super": -3.0e7, "net_big": -2.0e7, "net_mid": 1.0e7, "net_small": 0.0,
+         "source": "sina"},
+    ]
+
+    class _P:
+        async def get_capital_flow(self, symbol, days):
+            return rows[:days]
+
+    out = _call_tool(_ctx(_P()), "capital_flow", symbol="603042", days="3")
+    assert "主力净额 1.20 亿" in out
+    assert "连续主力净流入 2 日" in out
+    assert "个股**口径" in out or "个股" in out
+    assert "sina" in out
+
+
+def test_kline_tool_validates_timeframe_and_bounds_limit():
+    from app.assistant.tools import TIMEFRAMES
+
+    class _P:
+        async def get_kline(self, symbol, timeframe):
+            return [
+                {"ts": f"bar-{i:03d}", "open": 10 + i, "high": 11 + i,
+                 "low": 9 + i, "close": 10.5 + i, "volume": 1e6, "change_pct": 1.0,
+                 "source": "tdx"}
+                for i in range(40)
+            ]
+
+    bad = _call_tool(_ctx(_P()), "kline", symbol="600519", timeframe="2h")
+    assert "参数不合法" in bad and "1d" in bad
+    ok = _call_tool(_ctx(_P()), "kline", symbol="600519", timeframe=TIMEFRAMES[0], limit="99")
+    assert "最近 30 根" in ok  # limit 夹到上限而不是报错
+    assert ok.count("\n") <= 33, "明细行数必须被 limit 夹住"
+
+
+def test_longhu_tool_symbol_branch_returns_seats_and_history():
+    """个股龙虎榜：席位 + 上榜历史胜率（此前只有全市场榜，个股问不到）。"""
+    class _P:
+        async def get_longhu_detail(self, symbol, trade_date):
+            return {
+                "buy_seats": [{"seat": "机构专用", "seat_type": "机构", "buy": 2.0e8,
+                               "sell": 0.0, "net": 2.0e8}],
+                "sell_seats": [{"seat": "某某营业部", "seat_type": "游资", "buy": 0.0,
+                                "sell": 1.0e8, "net": -1.0e8}],
+            }
+
+        async def get_longhu_history(self, symbol, limit=30):
+            return [
+                {"trade_date": "2026-09-10", "change_pct": 5.2, "net_buy": 1.0e8, "after_5d": 3.0},
+                {"trade_date": "2026-08-20", "change_pct": -2.0, "net_buy": -2.0e7, "after_5d": -4.0},
+            ]
+
+    out = _call_tool(_ctx(_P()), "longhu", symbols="603042", date="2026-09-10")
+    assert "机构专用" in out and "2.00 亿" in out
+    assert "某某营业部" in out
+    assert "T+5 均值 -0.50%" in out      # (3.0 + -4.0) / 2
+    assert "胜率 50%" in out
+    assert "不可相加" in out
+
+
+def test_market_overview_tool_uses_hub_and_snapshot():
+    class _Idx:
+        def __init__(self, s, n, p, c):
+            self.symbol, self.name, self.price, self.change_pct = s, n, p, c
+
+    class _Hub:
+        def get_indices(self):
+            return [_Idx("000001", "上证指数", 3300.0, 0.42), _Idx("399001", "深证成指", 10500.0, -0.31)]
+
+    class _Svc:
+        def breadth_payload(self):
+            return {
+                "breadth": {"up": 2100, "down": 2600, "flat": 130, "limit_up": 38,
+                            "limit_down": 6, "total": 4830, "total_amount": 8.9e11},
+                "snapshot_age_seconds": 12.0,
+            }
+
+    out = _call_tool(_ctx(provider=object(), hub=_Hub(), snapshot_service=_Svc()), "market_overview")
+    assert "上证指数" in out and "+0.42%" in out
+    assert "涨 2100 / 跌 2600" in out
+    assert "涨停 38 / 跌停 6" in out
+    assert "8900.00 亿" in out
+    assert "快照新鲜度：12.0 秒前" in out
+
+
+def test_false_denial_detector():
+    """认知缺口自曝：没调工具却说"我没有这项数据"要被抓到；正常表述不许误伤。
+
+    价值在于**不需要用户投诉**就能积累缺口清单——以后新增数据源漏了工具，
+    日志会自己报出来，而不是等用户发现"明明系统里有"。
+    """
+    from app.assistant.cognition import looks_like_false_denial
+
+    # 用户实测的原话形态 → 命中
+    assert looks_like_false_denial("我没有该股的分时明细、资金流向和龙虎榜数据")
+    assert looks_like_false_denial("这部分行情我无法获取，建议到页面查看")
+    # 调过工具再说没有 → 是真取不到，不是认知缺口
+    assert not looks_like_false_denial("我没有该股的资金流数据", tools_used=["capital_flow"])
+    # 正当声明不许误伤（缺数据类名词）
+    assert not looks_like_false_denial("我不具备投资顾问资质，以下不构成投资建议")
+    assert not looks_like_false_denial("我没有卖出建议")
+    assert not looks_like_false_denial("")
+
+
+def test_chat_route_logs_cognition_gap_when_no_tool_used(client, monkeypatch, caplog):
+    """端到端：助手说"我没有龙虎榜数据"却一次工具没调 → 日志留痕（不改答案）。"""
+    monkeypatch.setattr(
+        assistant_routes, "_open_stream",
+        lambda msgs: _FakeStream(["我没有该股的资金流向和龙虎榜数据，建议到页面查看。"]),
+    )
+    monkeypatch.setattr(assistant_routes, "_entity_payload",
+                        lambda _req: {"stocks": [], "themes": []})
+    monkeypatch.setattr(assistant_routes, "_build_extra_context", lambda _req: "")
+    monkeypatch.setattr(settings, "assistant_tools_enabled", True)
+
+    from app.assistant.tools import ToolContext
+
+    async def fake_ctx(request, known=None):
+        return ToolContext(provider=object(), known_symbols=set())
+
+    monkeypatch.setattr(assistant_routes, "_tool_context", fake_ctx)
+
+    with caplog.at_level("WARNING", logger="app.api.routes.assistant"):
+        resp = client.post("/api/assistant/chat", json={
+            "messages": [{"role": "user", "content": "华脉科技的资金流向和龙虎榜？"}],
+        })
+    assert resp.status_code == 200
+    evs = _parse_sse(resp.text)
+    assert evs[-1] == {"type": "done"}
+    assert any("认知缺口" in r.message for r in caplog.records), caplog.text
+    # 只留痕，不改用户看到的答案
+    assert "我没有该股的资金流向" in "".join(
+        e["text"] for e in evs if e.get("type") == "delta"
+    )
+
+
+def test_news_tool_lists_active_events_with_basis():
+    """全网资讯快讯工具（用户实测：助手答「我没有全网新闻/资讯数据源」——系统其实有）。
+
+    事件面板的数据源就是它；输出必须保留方向行的「依据」，且不得写成买卖建议。
+    """
+    from datetime import datetime
+
+    class _Dir:
+        def __init__(self):
+            # 实例属性而非类属性：_rec 读 __dict__（真实的是 SQLAlchemy 实例，同理）
+            self.target_type = "theme"
+            self.target = "商业航天"
+            self.direction = "利好"
+            self.strength = 3
+            self.chain = "政策→产业"
+            self.basis = "政策表述首次出现「加快发展」"
+
+    class _Ev:
+        def __init__(self):
+            self.title = "北京：加快发展商业航天产业"
+            self.summary = "提出打造商业航天产业集群"
+            self.source = "cls"
+            self.published_at = datetime(2026, 9, 11, 10, 30)
+            self.directions = [_Dir()]
+
+    class _Store:
+        def list_events(self, *, active_only=True, limit=30):
+            assert active_only is True
+            return [_Ev()][:limit]
+
+    out = _call_tool(_ctx(provider=object(), event_store=_Store()), "news", limit="5")
+    assert "北京：加快发展商业航天产业" in out
+    assert "商业航天" in out and "利好" in out
+    assert "依据：政策表述首次出现" in out
+    assert "不构成买卖建议" in out
+
+    # 事件库缺失时如实说明，不编造
+    missing = _call_tool(_ctx(provider=object()), "news")
+    assert "不可用" in missing and "不要编造" in missing
+
+
+def test_chat_route_emits_status_progress_events(client, monkeypatch):
+    """取数与思考期间必须有 progress 事件——否则界面静止十几秒，用户以为卡死。"""
+    rounds = [["{{tool:limit_up|date=2026-09-04}}"], ["今日涨停 ", "38 家"]]
+    opened: list = []
+
+    def factory(msgs):
+        opened.append(msgs)
+        return _FakeStream(list(rounds[len(opened) - 1]))
+
+    monkeypatch.setattr(assistant_routes, "_open_stream", factory)
+
+    from app.assistant.tools import ToolContext
+
+    class _P:
+        async def get_limit_up_pool(self, trade_date):
+            return [{"symbol": "600519", "name": "贵州茅台", "consecutive_boards": 1,
+                     "change_pct": 10.0, "reason": "白酒"}]
+
+    async def fake_ctx(request, known=None):
+        return ToolContext(provider=_P(), known_symbols=set(), trading_days={"2026-09-04"})
+
+    monkeypatch.setattr(assistant_routes, "_tool_context", fake_ctx)
+    monkeypatch.setattr(settings, "assistant_tools_enabled", True)
+
+    resp = client.post("/api/assistant/chat", json={
+        "messages": [{"role": "user", "content": "今天涨停池什么情况？"}],
+    })
+    evs = _parse_sse(resp.text)
+    statuses = [e for e in evs if e.get("type") == "status"]
+    assert statuses, "必须有 status 事件"
+    assert statuses[0] == {"type": "status", "phase": "thinking"}
+    tools_status = [s for s in statuses if s.get("phase") == "tools"]
+    assert len(tools_status) == 1
+    assert tools_status[0]["used"] == ["limit_up"]
+    assert tools_status[0]["label"] == "涨停池", "进度提示要给中文标签，不是英文键名"
+    # 顺序：thinking → tools 进度 → 回执 → done
+    idx = {id(e): i for i, e in enumerate(evs)}
+    assert idx[id(statuses[0])] < idx[id(tools_status[0])]
+    assert idx[id(tools_status[0])] < idx[id([e for e in evs if e.get("type") == "tools"][0])]
+    assert evs[-1] == {"type": "done"}
+
+
+def test_chat_route_second_tool_round(client, monkeypatch):
+    """取数后可**再取一批**（多跳提问）——此前硬编码只允许一轮。"""
+    rounds = [
+        ["{{tool:limit_up|date=2026-09-04}}"],
+        ["{{tool:capital_flow|symbol=600519}}"],
+        ["贵州茅台 600519 主力净流入 1.2 亿"],
+    ]
+    opened: list = []
+
+    def factory(msgs):
+        opened.append(msgs)
+        return _FakeStream(list(rounds[len(opened) - 1]))
+
+    monkeypatch.setattr(assistant_routes, "_open_stream", factory)
+
+    from app.assistant.tools import ToolContext
+
+    class _P:
+        async def get_limit_up_pool(self, trade_date):
+            return [{"symbol": "600519", "name": "贵州茅台", "consecutive_boards": 1,
+                     "change_pct": 10.0, "reason": "白酒"}]
+
+        async def get_capital_flow(self, symbol, days):
+            return [{"date": "2026-09-10", "net_main": 1.2e8, "source": "sina"}]
+
+    async def fake_ctx(request, known=None):
+        return ToolContext(provider=_P(), known_symbols=set(), trading_days={"2026-09-04"})
+
+    monkeypatch.setattr(assistant_routes, "_tool_context", fake_ctx)
+    monkeypatch.setattr(settings, "assistant_tools_enabled", True)
+
+    resp = client.post("/api/assistant/chat", json={
+        "messages": [{"role": "user", "content": "今天涨停池怎么样，茅台资金流呢？"}],
+    })
+    evs = _parse_sse(resp.text)
+    assert len(opened) == 3, "应跑三轮：取数→再取数→成文"
+    used = [e["used"] for e in evs if e.get("type") == "tools"]
+    assert used == [["limit_up"], ["capital_flow"]]
+    # 第三轮（成文）的完整上下文里必须同时带着两批取数结果，
+    # 否则模型看不到自己第一次取的数，只能拿最近一批硬答。
+    final_ctx = "\n".join(m["content"] for m in opened[2])
+    assert "贵州茅台" in final_ctx and "涨停池" in final_ctx
+    assert "主力净流入" in final_ctx
+    # 工具标记绝不外泄
+    joined = "".join(e["text"] for e in evs if e.get("type") == "delta")
+    assert "{{tool:" not in joined

@@ -117,6 +117,68 @@ def test_engine_scope_isolation():
     assert main.ensure_account().id != shadow.ensure_account().id
 
 
+def test_engine_sell_scope_isolated():
+    """S1-1 回归：main / shadow 同持一票时，卖出一方不得触碰另一方，也不得抛异常。
+
+    历史缺陷：卖出路径只按 symbol 查持仓（模型层却是 scope+symbol 唯一）
+    ⇒ `one_or_none()` 抛 MultipleResultsFound，被常驻循环吞掉 ⇒ 持仓卡死。
+    """
+    _reset_paper_tables()
+    from app.models.paper import PaperPosition
+
+    main = _engine({"600001": FIXED_QUOTE}, "main")
+    shadow = _engine({"600001": FIXED_QUOTE.model_copy(update={"price": 20.0})}, "shadow")
+    with main._sf() as db:
+        db.add(PaperPosition(scope="main", symbol="600001", quantity=100,
+                             frozen_today=0, cost_price=10.0, buy_date="20260901"))
+        db.add(PaperPosition(scope="shadow", symbol="600001", quantity=200,
+                             frozen_today=0, cost_price=20.0, buy_date="20260901"))
+        db.commit()
+    shadow_cash_before = shadow.ensure_account().cash
+    main_cash_before = main.ensure_account().cash
+
+    o = asyncio.run(main.place_order("600001", "sell", 10.0, 100))
+    assert o.status == "filled", o.reason
+    # main 清仓；shadow 的 200 股与资金分毫未动
+    assert main.positions_with_pnl({}) == []
+    assert shadow.positions_with_pnl({})[0]["quantity"] == 200
+    assert shadow.ensure_account().cash == shadow_cash_before
+    assert main.ensure_account().cash > main_cash_before
+
+
+def test_fill_sell_rejects_oversell_and_never_goes_negative():
+    """S1-1 回归：`match_pending` 直接调用 `_fill_sell`，必须二次校验可卖量。
+
+    同一批可用量被两次挂单卖出时，旧实现会把 quantity 扣成负数并静默 delete
+    持仓（卖出款已入账）——等于凭空多出一笔卖出。
+    """
+    _reset_paper_tables()
+    from app.models.paper import PaperOrder, PaperPosition
+
+    eng = _engine({"600001": FIXED_QUOTE}, "main")
+    with eng._sf() as db:
+        db.add(PaperPosition(scope="main", symbol="600001", quantity=100,
+                             frozen_today=0, cost_price=10.0, buy_date="20260901"))
+        db.commit()
+    # 限价 11 高于现价 10 → 两张挂单（挂单不冻结股份，两者都能过下单校验）
+    o1 = asyncio.run(eng.place_order("600001", "sell", 11.0, 100))
+    o2 = asyncio.run(eng.place_order("600001", "sell", 11.0, 100))
+    assert (o1.status, o2.status) == ("pending", "pending")
+
+    up = _engine({"600001": FIXED_QUOTE.model_copy(update={"price": 12.0, "limit_up_price": 13.2})}, "main")
+    assert asyncio.run(up.match_pending()) == 0
+    with up._sf() as db:
+        st = {o.id: o.status for o in db.query(PaperOrder).all()}
+        rej = [o.reason or "" for o in db.query(PaperOrder).filter(PaperOrder.status == "rejected").all()]
+    assert st[o1.id] == "filled"
+    assert st[o2.id] == "rejected", "超卖挂单必须被拒，而不是静默扣负"
+    assert any("可卖数量不足" in r for r in rej)
+    assert up.positions_with_pnl({}) == []
+    # 只成交一次：资金约 +1194 元（1200 − 费用 5.61），不是两笔
+    cash = up.ensure_account().cash
+    assert 1_001_000 < cash < 1_002_000, cash
+
+
 def test_engine_match_pending_scope_isolated():
     _reset_paper_tables()
     q_low = FIXED_QUOTE.model_copy(update={"price": 9.0})
@@ -131,8 +193,40 @@ def test_engine_match_pending_scope_isolated():
     assert left == 1  # main 的挂单不被 shadow 价成交（现价 10 > 9.5），仍挂着
 
 
-# ---------------------------------------------------------------- ShadowRunner 编排
+def test_collect_trading_excludes_shadow_scope():
+    """S1-1 同族回归：复盘 `trades` 段只描述 main 账户，影子持仓/委托不得混入。
 
+    影子账户本身在 ShadowSnapshot 独立采集；此前 trades 三处查询均无 scope，
+    影子数据会污染「账户与盈亏 / 操作评估」两个维度且从报表上看不出来。
+    """
+    _reset_paper_tables()
+    from datetime import date as _date
+
+    from app.core.db import get_session_factory
+    from app.models.paper import PaperAccount, PaperOrder, PaperPosition
+    from app.review.collector import collect_trading
+
+    sf = get_session_factory()
+    with sf() as db:
+        db.add(PaperAccount(scope="main", cash=1_000.0, initial_cash=1_000.0))
+        db.add(PaperAccount(scope="shadow", cash=9_000.0, initial_cash=9_000.0))
+        db.add(PaperPosition(scope="main", symbol="600001", quantity=100,
+                             cost_price=10.0, buy_date="20260901"))
+        db.add(PaperPosition(scope="shadow", symbol="600002", quantity=900,
+                             cost_price=30.0, buy_date="20260901"))
+        db.add(PaperOrder(scope="main", symbol="600001", side="buy", price=10.0,
+                          quantity=100, status="filled"))
+        db.add(PaperOrder(scope="shadow", symbol="600002", side="buy", price=30.0,
+                          quantity=900, status="filled"))
+        db.commit()
+
+    snap = collect_trading(sf, _date.today(), price_map={"600001": 11.0, "600002": 31.0})
+    assert snap.account["cash"] == 1_000.0
+    assert [p.symbol for p in snap.positions] == ["600001"]
+    assert {o.symbol for o in snap.orders} <= {"600001"}
+
+
+# ---------------------------------------------------------------- ShadowRunner 编排
 
 def _runner(quote_map, scope="shadow"):
     engine = _engine(quote_map, scope)

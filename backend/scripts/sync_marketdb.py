@@ -169,7 +169,7 @@ def _sync_factors(con: duckdb.DuckDBPyConnection, client: httpx.Client,
         """)
         con.execute("""
             INSERT INTO adjust_factor
-            SELECT thscode, ex_date_ms, dividend_per_share, per_share_bonus,
+            SELECT DISTINCT thscode, ex_date_ms, dividend_per_share, per_share_bonus,
                    allotment_ratio, allotment_price
             FROM read_parquet(?) ORDER BY thscode, ex_date_ms
         """, [str(tmp_path)])
@@ -249,9 +249,15 @@ _QUALITY_CHECKS: list[tuple[str, str, str]] = [
      "OR low_price < 0 OR close_price < 0 LIMIT 10"),
     ("daily_k.volume_non_negative", "warn",
      "SELECT thscode, date_ms FROM daily_k WHERE volume < 0 OR turnover < 0 LIMIT 10"),
+    # 自然键 = 全部 6 列。同一除权日**可以有多个合法事件**（同日「派现」+「送股」，
+    # 或两次独立权益分派），只按 (thscode, ex_date_ms) 分组会把它们误判成重复。
+    # 2026-09-11 实测（P0-7）：全库 3 组同日多事件中 2 组是合法多事件
+    # （000812.SZ 1998-09-22 = 派现 0.2 + 送股 0.1；603883.SH 2024-06-27 = 两笔不同派送），
+    # 只有 000601.SZ 1997-11-03 是真重复。旧判据每次同步都误报 error → 同步恒判 fail。
     ("adjust_factor.pk_unique", "error",
      "SELECT thscode, ex_date_ms, COUNT(*) FROM adjust_factor "
-     "GROUP BY thscode, ex_date_ms HAVING COUNT(*) > 1 LIMIT 10"),
+     "GROUP BY thscode, ex_date_ms, dividend_per_share, per_share_bonus, "
+     "allotment_ratio, allotment_price HAVING COUNT(*) > 1 LIMIT 10"),
 ]
 
 
@@ -287,16 +293,34 @@ def freshness_lag_days(con: duckdb.DuckDBPyConnection, trade_days_ms: list[int])
 
 
 def _calendar_days_ms(limit: int = 400) -> list[int]:
-    """交易日历 → 升序 date_ms 列表（UTC+8 零点，与 dump 口径一致）。失败返回 []（跳过检查）。"""
+    """交易日历 → 升序 date_ms 列表（UTC+8 零点，与 dump 口径一致）。失败返回 []（跳过检查）。
+
+    🔴 2026-09-11 修复（原为**死代码**）：此处原本调 `trading_days()`，但该函数签名是
+    `async def trading_days(provider, lookback_days=120)`——**缺 provider 且未 await**，
+    必然抛 TypeError → 被 except 吞掉 → 每次同步都打印「交易日历不可用」并**静默跳过
+    滞后门槛**，即「滞后 >7 交易日则拒绝增量、强制 --full」这道保护**从未真正生效过**。
+
+    CLI 既无事件循环也无 provider，故改用**持久化日历**（`trade_calendar._load_persisted()`，
+    与 `app/market/marketdb_freshness.trading_day_lag` 同源，口径单点收口）；日历落后于
+    今天时用**工作日**补足到今天——节假日场景偏保守，宁可多报不可静默，同 freshness 模块判据。
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.market import trade_calendar as tc
+
     try:
-        from datetime import datetime, timedelta, timezone
-
-        from app.market.trade_calendar import trading_days
-
+        days = list(tc._load_persisted() or [])
+        if not days:
+            print("warn: 持久化交易日历不可用/过短，跳过 freshness 检查", file=sys.stderr)
+            return []
         tz8 = timezone(timedelta(hours=8))
-        days = trading_days()
-        out = [int(datetime(d.year, d.month, d.day, tzinfo=tz8).timestamp() * 1000)
-               for d in days]
+        today = datetime.now(tz8).date()
+        cur = days[-1]
+        while cur < today:  # 日历过期 → 工作日补足（宁可多报滞后）
+            cur += timedelta(days=1)
+            if cur.weekday() < 5:
+                days.append(cur)
+        out = [int(datetime(d.year, d.month, d.day, tzinfo=tz8).timestamp() * 1000) for d in days]
         return sorted(out)[-limit:]
     except Exception as exc:  # noqa: BLE001 —— 日历不可用不阻塞同步，仅跳过新鲜度检查
         print(f"warn: 交易日历不可用，跳过 freshness 检查：{exc}", file=sys.stderr)

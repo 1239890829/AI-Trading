@@ -41,6 +41,13 @@ turnover_rate / consecutive_boards(连板) / boards_stat("3天2板") / trade_dat
 `close / change_pct / turnover_rate / amount(榜内成交额) / net_buy / buy_amount / sell_amount /
 reason(上榜原因 EXPLAIN) / trade_date`。
 
+### 龙虎榜口径规则（2026-09-10 并入，原 longhu.md）
+
+- **上榜阈值必须配置化驱动**，不得假设所有板块同一规则：±7% 偏离 / 15% 振幅 / 20% 换手 / 三日 ±20% / 退市整理 / ST 异动 …
+- **席位分类 8 类**：机构专用 / 沪股通 / 深股通 / 知名游资 / 一线游资 / 普通营业部 / 量化席位 / 不明席位——**允许人工修正，修正必须写审计日志**
+- 统计周期口径：历史 / 近 5 / 20 / 60 日 / 近 1 年
+- 详情页表现口径：次日/3/5/10 日涨跌、成功率、平均与中位收益、最大收益、最大回撤、负收益比例
+
 ## SymbolSearchItem
 
 `symbol / name / market / source / is_realtime`（搜索结果永不标记实时）。

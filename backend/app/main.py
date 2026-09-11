@@ -29,6 +29,7 @@ from app.api.routes import ext_data as ext_data_route
 from app.api.routes import notifications as notifications_route
 from app.core.config import settings
 from app.core.db import get_engine, get_session_factory
+from app.core.scheduler import SHUTDOWN_GRACE_SECONDS, SchedulerRegistry, wait_or_stop
 from app.data_providers import build_provider
 from app.events.store import EventStore
 from app.market.alert_engine import AlertEngine
@@ -72,44 +73,12 @@ _REGISTERED_MODELS = (
 logging.basicConfig(level=settings.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
 
-# lifespan 关闭时给每个后台任务的收尾宽限（秒）。
-_SHUTDOWN_GRACE_SECONDS = 10.0
 
+def _session_interval(active: float, idle: float) -> float:
+    """盘中用 `active`、盘外用 `idle`——给"盘外不必 5s 空转"的调度器用（P2-9/P1-3）。"""
+    from app.market.trade_calendar import in_trading_window
 
-async def _wait_quit(task: asyncio.Task, timeout: float) -> bool:
-    """等任务在 timeout 内结束。True=已结束（正常返回/自行抛错/被取消都算）。"""
-    try:
-        # shield：超时只取消"等待"本身，任务留给调用方决定 cancel 时机——
-        # 避免与"任务早已被 cancel 过"的路径产生隐式取消语义纠缠
-        await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
-        return True
-    except TimeoutError:
-        return False
-    except asyncio.CancelledError:
-        return True
-    except Exception:
-        return True
-
-
-async def _reap(task: asyncio.Task | None, *, name: str, grace: float = _SHUTDOWN_GRACE_SECONDS) -> None:
-    """停机收割：先给 grace 秒自然退出，超时转 cancel 再收割；异常一律吞掉。
-
-    为什么不能裸 `await task`：cancel()/stop.set() 都打不断 in-flight 的
-    await——调度器 tick 一旦卡在无超时边界的调用上，lifespan 关闭就被单个
-    任务整体挂死。而 TestClient.__exit__ 的语义是"等 lifespan 完全结束"，
-    全量 pytest 因此在首个用例（test_alerts，字母序最先）整场卡死
-    （2026-09-03 两连复现，faulthandler 栈转储实证卡点 wait_shutdown；
-    tests/conftest.py 同日已把测试环境调度器全关，这里是生产侧兜底：
-    任何单任务不得拖死关机）。cancel 后仍杀不掉（sync 调用里僵死）就
-    放弃等待——悬挂任务会在循环关闭时打 "Task was destroyed"，但不阻塞关机。
-    """
-    if task is None or task.done():
-        return
-    if not await _wait_quit(task, grace):
-        log.warning("lifespan shutdown: %s 超过 %.0fs 未退出，强制 cancel", name, grace)
-        task.cancel()
-        if not await _wait_quit(task, grace):
-            log.error("lifespan shutdown: %s cancel 后 %.0fs 仍未退出，放弃等待", name, grace)
+    return active if in_trading_window() else idle
 
 
 @asynccontextmanager
@@ -238,113 +207,124 @@ async def lifespan(app: FastAPI):
     from app.services.alert_triage import set_app_state as _triage_set_app
 
     _triage_set_app(app)  # P1-5 响应建议需要 state（题材目录/快照）
+
+    # --- 常驻调度注册表（S2-2）：声明 → 启动 → 收割全走**一份**清单 ---
+    # 此前是 23 处 create_task 与一份手写停机清单并存，两边都要人工同步；
+    # 现在 add() 一次声明，shutdown() 统一收割，并发死亡自愈 + 状态可查
+    # （GET /api/system/schedulers）。详见 app/core/scheduler.py 模块 docstring。
+    reg = SchedulerRegistry()
+    app.state.schedulers = reg
+
     triage_stop = asyncio.Event()
     from app.services.alert_triage import triage_loop
 
-    triage_task = asyncio.create_task(triage_loop(triage_stop), name="alert-triage")
+    reg.add("alert-triage", lambda: triage_loop(triage_stop), stop=triage_stop)
 
     # --- AI 大脑：每日进化议程（docs/evolution-brain-plan.md，交易日 15:45）---
     # 无条件挂载：autonomy 关闭时议程照常生成（仅不执行，降级为建议清单）
     evolution_stop = asyncio.Event()
     from app.services.evolution import evolution_scheduler
 
-    evolution_task = asyncio.create_task(
-        evolution_scheduler(
+    reg.add(
+        "evolution-agenda",
+        lambda: evolution_scheduler(
             app,
             stop=evolution_stop,
             run_hour=settings.agent_evolution_hour,
             run_minute=settings.agent_evolution_minute,
             check_interval_seconds=settings.review_check_interval_seconds,
         ),
-        name="evolution-agenda",
+        stop=evolution_stop,
     )
 
     review_stop = asyncio.Event()
-    review_task = None
-    if settings.review_scheduler_enabled:
-        review_task = asyncio.create_task(
-            review_scheduler(
-                review_svc,
-                run_hour=settings.review_run_hour,
-                run_minute=settings.review_run_minute,
-                check_interval_seconds=settings.review_check_interval_seconds,
-                stop=review_stop,
-            ),
-            name="review-scheduler",
-        )
+    reg.add(
+        "review-scheduler",
+        lambda: review_scheduler(
+            review_svc,
+            run_hour=settings.review_run_hour,
+            run_minute=settings.review_run_minute,
+            check_interval_seconds=settings.review_check_interval_seconds,
+            stop=review_stop,
+        ),
+        stop=review_stop,
+        switch="review_scheduler_enabled",
+    )
 
-    poller = asyncio.create_task(hub.run(), name="quote-poller")
-    snapshotter = asyncio.create_task(snapshot_service.run(), name="market-snapshot")
+    reg.add("quote-poller", hub.run)
+    reg.add("market-snapshot", snapshot_service.run)
 
     # 数据健康哨兵盘中循环（push_policy ② ANOMALY：交易时段 15 分钟一轮，
     # 新异常推飞书摘要卡——2026-09-08 推送矩阵）
     # 每日组合自动生成（09:26，幂等 by DailyPickSet——旧 09:26 automation 停用后的生成接盘者）
     picks_autogen_stop = asyncio.Event()
-    picks_autogen_task = None
-    if settings.picks_autogen_enabled:
-        from app.picks.picks_autogen import picks_autogen_scheduler
+    from app.picks.picks_autogen import picks_autogen_scheduler
 
-        picks_autogen_task = asyncio.create_task(
-            picks_autogen_scheduler(
-                app, stop=picks_autogen_stop,
-                run_hour=settings.picks_autogen_hour,
-                run_minute=settings.picks_autogen_minute,
-            ),
-            name="picks-autogen",
-        )
+    reg.add(
+        "picks-autogen",
+        lambda: picks_autogen_scheduler(
+            app, stop=picks_autogen_stop,
+            run_hour=settings.picks_autogen_hour,
+            run_minute=settings.picks_autogen_minute,
+        ),
+        stop=picks_autogen_stop,
+        switch="picks_autogen_enabled",
+    )
 
     data_health_stop = asyncio.Event()
     from app.services.data_health_loop import data_health_loop
 
-    data_health_task = asyncio.create_task(data_health_loop(app, stop=data_health_stop), name="data-health-sentinel")
+    reg.add(
+        "data-health-sentinel",
+        lambda: data_health_loop(app, stop=data_health_stop),
+        stop=data_health_stop,
+    )
 
     # 临板雷达（KB-DEC-011）：涨停前识别与提醒，交易时段 6s 一轮，封板后不入册
     radar_stop = asyncio.Event()
     from app.picks.pre_limit_radar import pre_limit_loop
 
-    radar_task = asyncio.create_task(pre_limit_loop(app, stop=radar_stop), name="pre-limit-radar")
+    reg.add("pre-limit-radar", lambda: pre_limit_loop(app, stop=radar_stop), stop=radar_stop)
+
+    # pending 事件 LLM 辅助判定（P2-3 层1）：交易时段低频攒批，默认关
+    # 注：开关在**循环内部**逐拍读取（运行时可切），故不在此处做启动期门控。
+    llm_aux_stop = asyncio.Event()
+    from app.events.llm_aux import llm_aux_loop
+
+    reg.add("llm-aux-judge", lambda: llm_aux_loop(app, stop=llm_aux_stop), stop=llm_aux_stop)
 
     # 持仓监护（闭环「离场」段）：止损/移动止盈/弱转强识别，交易时段 15s 一轮
     position_stop = asyncio.Event()
     from app.picks.exit_engine import position_loop
 
-    position_task = asyncio.create_task(position_loop(app, stop=position_stop), name="position-monitor")
+    reg.add("position-monitor", lambda: position_loop(app, stop=position_stop), stop=position_stop)
 
-    async def paper_matcher():
-        # 技术债 #5：无挂单时空转降频（30s 查一次挂单表），有挂单才 5s 密集轮询
-        interval = 5.0
-        while True:
-            try:
-                pending = await paper.match_pending()
-                interval = 5.0 if pending > 0 else 30.0
-            except Exception:
-                log.exception("paper match_pending failed")
-            await asyncio.sleep(interval)
+    # 技术债 #5：无挂单时空转降频（30s 查一次挂单表），有挂单才 5s 密集轮询
+    async def _paper_match_tick() -> float:
+        pending = await paper.match_pending()
+        return 5.0 if pending > 0 else 30.0
 
-    matcher = asyncio.create_task(paper_matcher(), name="paper-matcher")
+    reg.add_periodic("paper-matcher", _paper_match_tick, interval=30.0)
 
-    async def alert_quotes_feeder():
-        while True:
-            try:
-                alert_engine.update_quotes({s: q.model_dump() for s, q in hub.quotes.items()})
-            except Exception:
-                log.exception("alert quotes feeder failed")
-            await asyncio.sleep(settings.alert_poll_interval_seconds)
+    async def _alert_quotes_tick() -> float:
+        alert_engine.update_quotes({s: q.model_dump() for s, q in hub.quotes.items()})
+        # P2-9：盘外行情不再变化，喂给引擎无意义 —— 降到 5 分钟一次
+        return _session_interval(settings.alert_poll_interval_seconds, 300.0)
 
-    alert_feeder = asyncio.create_task(alert_quotes_feeder(), name="alert-quotes-feeder")
-    alert_engine.start()
+    reg.add_periodic(
+        "alert-quotes-feeder", _alert_quotes_tick,
+        interval=settings.alert_poll_interval_seconds,
+    )
+    reg.add("alert-engine", alert_engine.run)
 
-    async def risk_refresher():
-        while True:
-            try:
-                await risk_engine.refresh()
-            except Exception:
-                log.exception("risk engine refresh failed")
-            await asyncio.sleep(60.0)
+    async def _risk_tick() -> float:
+        # P1-3：盘外 30 分钟刷一次即可（此前恒定 60s，与情绪计算一起空转回源）
+        await risk_engine.refresh()
+        return _session_interval(60.0, 1800.0)
 
-    risk_task = asyncio.create_task(risk_refresher(), name="risk-refresher")
+    reg.add_periodic("risk-refresher", _risk_tick, interval=60.0)
 
-    async def event_collector():
+    async def _event_collect_tick() -> None:
         """事件采集调度（P1）：自选新闻 → 事件卡，指纹去重保证幂等。
 
         此前事件只有手工/半自动录入，活跃事件长期个位数，选股消息面近乎
@@ -354,25 +334,25 @@ async def lifespan(app: FastAPI):
         非盘中轮次（≥15:05 或 <09:15）附带把最近交易日涨停股纳入采集范围
         （R6，2026-09-01）：盘中轮次范围保持 自选∪组合∪持仓，控上游配额。
         """
-        await asyncio.sleep(45)  # 启动先让目录同步/行情填充完成
-        while True:
-            try:
-                from datetime import datetime as _dt, time as _time
+        from datetime import datetime as _dt, time as _time
 
-                from app.api.routes.events import collect_news_events
+        from app.api.routes.events import collect_news_events
 
-                now = _dt.now().time()
-                after_hours = now >= _time(15, 5) or now < _time(9, 15)
-                stats = await collect_news_events(app.state, include_limit_up=after_hours)
-                if stats.get("created"):
-                    log.info("event collector: +%s 新事件（duplicated %s）", stats["created"], stats["duplicated"])
-            except Exception:
-                log.exception("event collector failed")
-            await asyncio.sleep(1800.0)
+        now = _dt.now().time()
+        after_hours = now >= _time(15, 5) or now < _time(9, 15)
+        stats = await collect_news_events(app.state, include_limit_up=after_hours)
+        if stats.get("created"):
+            log.info("event collector: +%s 新事件（duplicated %s）", stats["created"], stats["duplicated"])
 
-    event_task = asyncio.create_task(event_collector(), name="event-collector")
+    # 停机开关（2026-09-10 补）：此前它是唯一无开关的调度器，测试里会真的跑起来
+    # 打网络并重复写 event_direction（撞 UNIQUE 约束）。测试一律关（见 conftest）。
+    reg.add_periodic(
+        "event-collector", _event_collect_tick,
+        interval=1800.0, first_delay=45.0,  # 启动先让目录同步/行情填充完成
+        switch="event_collector_enabled",
+    )
 
-    async def metric_history_backfiller():
+    async def metric_history_backfiller(stop: asyncio.Event | None = None):
         """情绪历史指标库的**增量**维护（P0-3b 分位校准的数据底座）。
 
         没有这个任务，库会停在首次手工回补的那天：半年后界面仍写着"按近 120
@@ -382,14 +362,26 @@ async def lifespan(app: FastAPI):
 
         启动延迟 90s：让冷启动的行情/快照先填完，不和其他网络请求抢配额。
         """
-        await asyncio.sleep(90)
+        if await wait_or_stop(stop, 90):
+            return
         while True:
             try:
+                from app.market import trade_calendar as tc
                 from app.sentiment import metric_history
 
-                days = await hub_trading_days()
+                # 日历一律走 trade_calendar（**唯一归一化入口**：返回 date 列表，
+                # 官方日历失败回落日 K 推导）。**不要直取 provider 原始日历**——
+                # 那是字符串，与 backfill 的 date 比较类型不符 → TypeError →
+                # 异常被下面的 except 收成一条日志，库静默陈旧而界面照旧宣称
+                # 「按近 N 个交易日校准」（2026-09-10 实测：库停在 09-01，
+                # 连续 6 个交易日没更新）。
+                try:
+                    days = await tc.trading_days(hub.provider)
+                except Exception as exc:
+                    log.warning("metric history backfill skipped: 交易日历不可用（%s）", exc)
+                    days = []
                 if not days:
-                    log.warning("metric history backfill skipped: 交易日历不可用")
+                    log.warning("metric history backfill skipped: 交易日历为空")
                 else:
                     stats = await metric_history.backfill(
                         hub.provider,
@@ -401,6 +393,16 @@ async def lifespan(app: FastAPI):
                             "metric history backfill: +%s 天（跳过 %s / 共 %s 天）",
                             stats["added"], stats["skipped"], stats["total"],
                         )
+                    else:
+                        # 心跳：稳态（无新增）时也留一行，让"回补到底有没有在跑"
+                        # 可以从日志直接回答。此前只在 added>0 时打日志，
+                        # 而失败又是另一条 ERROR——两条都没有时无法区分
+                        # "跑得很健康" 与 "根本没跑"（2026-09-10 的 6 个交易日
+                        # 静默陈旧正是栽在这个盲区上）。
+                        log.info(
+                            "metric history backfill: 无新增（窗口尾 %s / 共 %s 天）",
+                            (stats["days"] or [None])[-1], stats["total"],
+                        )
                     if stats["suspicious"]:
                         # 数据源日期回退（东财 push2ex 的前科）会污染整个分布，
                         # 剔除后宁可少样本。非 0 属异常，必须留痕。
@@ -410,128 +412,155 @@ async def lifespan(app: FastAPI):
                         )
             except Exception:
                 log.exception("metric history backfill failed")
-            await asyncio.sleep(settings.sentiment_history_backfill_interval_seconds)
+            if await wait_or_stop(stop, settings.sentiment_history_backfill_interval_seconds):
+                return
 
-    metric_task = None
-    if settings.sentiment_history_backfill_enabled:
-        metric_task = asyncio.create_task(
-            metric_history_backfiller(), name="metric-history-backfill"
-        )
+    metric_stop = asyncio.Event()
+    reg.add(
+        "metric-history-backfill",
+        lambda: metric_history_backfiller(stop=metric_stop),
+        stop=metric_stop,
+        switch="sentiment_history_backfill_enabled",
+    )
 
     # --- 盘前简报 + 盘中跟踪（选股 2.0 批次 B）---
     # 环境缓存放 state：手动单拍端点与 watcher_loop 共用同一份（避免各自重算情绪）
     app.state.picks_env_cache = {"at": 0.0, "env": None}
 
     premarket_stop = asyncio.Event()
-    premarket_task = None
-    if settings.premarket_brief_enabled:
-        from app.picks.morning_brief import premarket_scheduler
+    from app.picks.morning_brief import premarket_scheduler
 
-        premarket_task = asyncio.create_task(
-            premarket_scheduler(
-                app,
-                stop=premarket_stop,
-                run_hour=settings.premarket_brief_hour,
-                run_minute=settings.premarket_brief_minute,
-                check_interval_seconds=settings.review_check_interval_seconds,
-            ),
-            name="premarket-brief",
-        )
+    reg.add(
+        "premarket-brief",
+        lambda: premarket_scheduler(
+            app,
+            stop=premarket_stop,
+            run_hour=settings.premarket_brief_hour,
+            run_minute=settings.premarket_brief_minute,
+            check_interval_seconds=settings.review_check_interval_seconds,
+        ),
+        stop=premarket_stop,
+        switch="premarket_brief_enabled",
+    )
 
     watcher_stop = asyncio.Event()
-    watcher_task = None
-    if settings.picks_watcher_enabled:
-        from app.picks.watcher import watcher_loop
+    from app.picks.watcher import watcher_loop
 
-        watcher_task = asyncio.create_task(watcher_loop(app, stop=watcher_stop), name="picks-watcher")
+    reg.add(
+        "picks-watcher",
+        lambda: watcher_loop(app, stop=watcher_stop),
+        stop=watcher_stop,
+        switch="picks_watcher_enabled",
+    )
 
     # --- 盘中买点推送（2026-09-08 用户定稿：唯一保留的盘中飞书推送）---
     buy_point_stop = asyncio.Event()
-    buy_point_task = None
-    if settings.picks_buy_point_enabled:
-        from app.picks.buy_point import buy_point_loop
+    from app.picks.buy_point import buy_point_loop
 
-        buy_point_task = asyncio.create_task(buy_point_loop(app, stop=buy_point_stop), name="picks-buy-point")
+    reg.add(
+        "picks-buy-point",
+        lambda: buy_point_loop(app, stop=buy_point_stop),
+        stop=buy_point_stop,
+        switch="picks_buy_point_enabled",
+    )
 
     # --- 盘后方向对照（选股 2.0 批次 C）：15:35 对照当日简报 + 提醒收益回填 ---
     review_intraday_stop = asyncio.Event()
-    review_intraday_task = None
-    if settings.picks_review_enabled:
-        from app.picks.review_intraday import intraday_review_scheduler
+    from app.picks.review_intraday import intraday_review_scheduler
 
-        review_intraday_task = asyncio.create_task(
-            intraday_review_scheduler(
-                app,
-                stop=review_intraday_stop,
-                run_hour=settings.picks_review_hour,
-                run_minute=settings.picks_review_minute,
-                check_interval_seconds=settings.review_check_interval_seconds,
-            ),
-            name="picks-intraday-review",
-        )
+    reg.add(
+        "picks-intraday-review",
+        lambda: intraday_review_scheduler(
+            app,
+            stop=review_intraday_stop,
+            run_hour=settings.picks_review_hour,
+            run_minute=settings.picks_review_minute,
+            check_interval_seconds=settings.review_check_interval_seconds,
+        ),
+        stop=review_intraday_stop,
+        switch="picks_review_enabled",
+    )
 
     # --- ths 涨停原因单点哨兵（P0-B）：交易时段探测 reason 非空率，缺原因即告警 ---
     ths_sentinel_stop = asyncio.Event()
-    ths_sentinel_task = None
-    if settings.ths_sentinel_enabled:
-        from app.services.ths_sentinel import sentinel_loop
+    from app.services.ths_sentinel import sentinel_loop
 
-        ths_sentinel_task = asyncio.create_task(sentinel_loop(app, stop=ths_sentinel_stop), name="ths-reason-sentinel")
+    reg.add(
+        "ths-reason-sentinel",
+        lambda: sentinel_loop(app, stop=ths_sentinel_stop),
+        stop=ths_sentinel_stop,
+        switch="ths_sentinel_enabled",
+    )
 
     # --- 盘中情绪监控（sentiment P2 #14）：高度板炸板/炸板率破位/指数急杀 → 告警 ---
     sentiment_monitor_stop = asyncio.Event()
-    sentiment_monitor_task = None
-    if settings.sentiment_monitor_enabled:
-        from app.sentiment.intraday_monitor import sentiment_monitor_loop
+    from app.sentiment.intraday_monitor import sentiment_monitor_loop
 
-        sentiment_monitor_task = asyncio.create_task(
-            sentiment_monitor_loop(app, stop=sentiment_monitor_stop), name="sentiment-monitor"
-        )
+    reg.add(
+        "sentiment-monitor",
+        lambda: sentiment_monitor_loop(app, stop=sentiment_monitor_stop),
+        stop=sentiment_monitor_stop,
+        switch="sentiment_monitor_enabled",
+    )
 
     # --- 影子持仓晨窗（P0-B）：09:26 竞价后按执行闸门模拟执行最新组合 ---
     shadow_stop = asyncio.Event()
-    shadow_task = None
-    if settings.picks_shadow_enabled and app.state.paper_shadow is not None:
-        from app.picks.shadow import shadow_loop
+    from app.picks.shadow import shadow_loop
 
-        shadow_task = asyncio.create_task(shadow_loop(app, stop=shadow_stop), name="picks-shadow")
+    reg.add(
+        "picks-shadow",
+        lambda: shadow_loop(app, stop=shadow_stop),
+        stop=shadow_stop,
+        switch="picks_shadow_enabled",
+        # state 上可能压根没有这个键（开关关时上面不赋值）——用 getattr 而非属性直取
+        enabled=getattr(app.state, "paper_shadow", None) is not None,
+        reason="picks_shadow_enabled 但 paper_shadow 未装配",
+    )
 
     # --- marketdb 盘后增量同步（RPS/tech_score 数据地基；子进程隔离 + 磁盘幂等）---
     marketdb_stop = asyncio.Event()
-    marketdb_task = None
-    if settings.marketdb_sync_enabled:
-        if not settings.ths_api_key:
-            log.warning("marketdb_sync_enabled but ths_api_key missing, scheduler not started")
-        else:
-            from app.market.marketdb_sync import marketdb_sync_scheduler
+    from app.market.marketdb_sync import marketdb_sync_scheduler
 
-            marketdb_task = asyncio.create_task(
-                marketdb_sync_scheduler(
-                    stop=marketdb_stop,
-                    run_hour=settings.marketdb_sync_hour,
-                    run_minute=settings.marketdb_sync_minute,
-                    check_interval_seconds=settings.marketdb_sync_check_interval_seconds,
-                ),
-                name="marketdb-sync",
-            )
+    reg.add(
+        "marketdb-sync",
+        lambda: marketdb_sync_scheduler(
+            stop=marketdb_stop,
+            run_hour=settings.marketdb_sync_hour,
+            run_minute=settings.marketdb_sync_minute,
+            check_interval_seconds=settings.marketdb_sync_check_interval_seconds,
+        ),
+        stop=marketdb_stop,
+        switch="marketdb_sync_enabled",
+        enabled=bool(settings.ths_api_key),
+        reason="marketdb_sync_enabled 但 ths_api_key 缺失",
+    )
 
     # --- 东财 7x24 快讯流（hotspot-pipeline G1/P0①）：宏观快讯 → build_event → EventStore ---
     flash_stop = asyncio.Event()
-    flash_task = None
-    if settings.flash_news_enabled:
-        from app.news.flash import flash_news_loop
+    from app.news.flash import flash_news_loop
 
-        flash_task = asyncio.create_task(flash_news_loop(app, stop=flash_stop), name="news-flash")
+    reg.add(
+        "news-flash",
+        lambda: flash_news_loop(app, stop=flash_stop),
+        stop=flash_stop,
+        switch="flash_news_enabled",
+    )
 
     # --- LLM 网关健康探针（2026-09-06）：区分额度不足/网关失败，避免静默降级 ---
     llm_probe_stop = asyncio.Event()
-    llm_probe_task = None
-    if settings.llm_probe_enabled and settings.llm_probe_interval_seconds > 0:
-        from app.services.llm_probe import probe_loop
+    from app.services.llm_probe import probe_loop
 
-        llm_probe_task = asyncio.create_task(
-            probe_loop(app, stop=llm_probe_stop), name="llm-gateway-probe"
-        )
+    reg.add(
+        "llm-gateway-probe",
+        lambda: probe_loop(app, stop=llm_probe_stop),
+        stop=llm_probe_stop,
+        switch="llm_probe_enabled",
+        enabled=settings.llm_probe_interval_seconds > 0,
+        reason="llm_probe_interval_seconds <= 0",
+    )
+
+    # --- 统一拉起（S2-2）：声明完毕，一次启动；此后由注册表负责观测与死亡自愈 ---
+    await reg.start()
 
     try:
         await hub.refresh()  # 冷启动立即填充，接口首次调用即有数据
@@ -539,74 +568,15 @@ async def lifespan(app: FastAPI):
     except Exception:
         log.exception("initial refresh failed; serving stale/empty until next cycle")
     yield
-    # --- 停机：先发信号（cancel + stop），再限时收割（任何单任务不得拖死关机）---
-    poller.cancel()
-    snapshotter.cancel()
-    matcher.cancel()
-    alert_feeder.cancel()
-    alert_engine.stop()
-    risk_task.cancel()
-    event_task.cancel()
-    if metric_task is not None:
-        metric_task.cancel()
-    if premarket_task is not None:
-        premarket_stop.set()
-    if watcher_task is not None:
-        watcher_stop.set()
-    if buy_point_task is not None:
-        buy_point_stop.set()
-    triage_stop.set()
-    evolution_stop.set()
-    data_health_stop.set()
-    picks_autogen_stop.set()
-    radar_stop.set()
-    position_stop.set()
-    if ths_sentinel_task is not None:
-        ths_sentinel_stop.set()
-    if sentiment_monitor_task is not None:
-        sentiment_monitor_stop.set()
-    if shadow_task is not None:
-        shadow_stop.set()
-    if review_intraday_task is not None:
-        review_intraday_stop.set()
-    if review_task is not None:
-        review_stop.set()
-    if marketdb_task is not None:
-        marketdb_stop.set()
-    if llm_probe_task is not None:
-        llm_probe_stop.set()
-    if flash_task is not None:
-        flash_stop.set()
-    await _reap(poller, name="quote-poller")
-    await _reap(snapshotter, name="market-snapshot")
-    await _reap(matcher, name="paper-matcher")
-    await _reap(alert_feeder, name="alert-quotes-feeder")
-    await _reap(risk_task, name="risk-refresher")
-    await _reap(event_task, name="event-collector")
-    await _reap(metric_task, name="metric-history-backfill")
-    await _reap(review_task, name="review-scheduler")
-    await _reap(premarket_task, name="premarket-brief")
-    await _reap(watcher_task, name="picks-watcher")
-    await _reap(buy_point_task, name="picks-buy-point")
-    await _reap(triage_task, name="alert-triage")
-    await _reap(evolution_task, name="evolution-agenda")
-    await _reap(radar_task, name="pre-limit-radar")
-    await _reap(position_task, name="position-monitor")
-    if picks_autogen_task is not None:
-        await _reap(picks_autogen_task, name="picks-autogen")
-    await _reap(data_health_task, name="data-health-sentinel")
-    await _reap(review_intraday_task, name="picks-intraday-review")
-    await _reap(ths_sentinel_task, name="ths-reason-sentinel")
-    await _reap(sentiment_monitor_task, name="sentiment-monitor")
-    await _reap(shadow_task, name="picks-shadow")
-    await _reap(marketdb_task, name="marketdb-sync")
-    await _reap(llm_probe_task, name="llm-gateway-probe")
-    await _reap(flash_task, name="news-flash")
+    # --- 停机：统一收割（先发信号、再限时收割，任何单任务不得拖死关机）---
+    # 此前这里是与启动清单并列的**第二份手写清单**（26 行 _reap），现在由注册表
+    # 按同一份声明收敛：能自己退的走 stop 事件，其余 cancel，逐个限时收割。
+    await reg.shutdown()
     with contextlib.suppress(Exception, TimeoutError):
-        await asyncio.wait_for(provider.aclose(), timeout=_SHUTDOWN_GRACE_SECONDS)
+        await asyncio.wait_for(provider.aclose(), timeout=SHUTDOWN_GRACE_SECONDS)
     if app.state.theme_catalog is not None:
         with contextlib.suppress(Exception, TimeoutError):
-            await asyncio.wait_for(app.state.theme_catalog.aclose(), timeout=_SHUTDOWN_GRACE_SECONDS)
+            await asyncio.wait_for(app.state.theme_catalog.aclose(), timeout=SHUTDOWN_GRACE_SECONDS)
 
 
 app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)

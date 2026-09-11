@@ -287,3 +287,242 @@ def test_every_tool_has_desc_and_params(name):
     spec = TOOL_SPECS[name]
     assert spec.desc and spec.params
     assert spec.name == name
+
+
+# ---------------------------------------------------------------- 板块资金流工具（P1-3）
+
+
+def _patch_flow(monkeypatch, payload):
+    """把 board_flow.get_board_fund_flow 换成受控桩（工具内部按名导入，故打模块属性）。"""
+    from app.market import board_flow as bf
+
+    async def fake(kind, range_key):
+        return payload
+
+    monkeypatch.setattr(bf, "get_board_fund_flow", fake)
+
+
+def test_board_flow_tool_renders_rows(monkeypatch):
+    _patch_flow(monkeypatch, {
+        "available": True, "updated_at": "15:03:00", "degraded": [],
+        "rows": [
+            {"name": "绿色电力", "main_net_yi": 32.33, "change_pct": 0.19, "streak": 4, "rank_delta": 1},
+            {"name": "某板", "main_net_yi": None, "change_pct": None},
+        ],
+    })
+    out = _run(run_tool(ToolCall("board_flow", {}), _ctx(), cache=None))
+    assert "绿色电力" in out and "32.33 亿" in out
+    assert "连续 4 日净流入" in out and "榜位↑1" in out
+    assert "--" in out  # 缺失如实显示，不冒充 0
+    assert "不构成买卖建议" in out
+
+
+def test_board_flow_tool_rejects_bad_params(monkeypatch):
+    _patch_flow(monkeypatch, {"available": True, "rows": [{"name": "x", "main_net_yi": 1}]})
+    assert "kind 只支持" in _run(run_tool(ToolCall("board_flow", {"kind": "bogus"}), _ctx(), cache=None))
+    assert "range 只支持" in _run(run_tool(ToolCall("board_flow", {"range": "1y"}), _ctx(), cache=None))
+
+
+def test_board_flow_tool_unavailable_is_honest(monkeypatch):
+    """取不到就如实说"暂不可用"，绝不编造数值。"""
+    _patch_flow(monkeypatch, {"available": False, "rows": []})
+    assert "暂不可用" in _run(run_tool(ToolCall("board_flow", {}), _ctx(), cache=None))
+
+
+def test_board_flow_tool_surfaces_degraded_note(monkeypatch):
+    """降级口径必须随结论一起给出（数据源纪律：延迟口径不能伪装实时）。"""
+    _patch_flow(monkeypatch, {
+        "available": True, "updated_at": "15:03:00",
+        "rows": [{"name": "甲板", "main_net_yi": 1.0, "change_pct": 0.5}],
+        "degraded": ["主域不可达，使用延迟口径（push2delay）"],
+    })
+    out = _run(run_tool(ToolCall("board_flow", {}), _ctx(), cache=None))
+    assert "延迟口径" in out
+
+
+def test_board_flow_registered_in_specs_and_manifest():
+    assert "board_flow" in TOOL_SPECS
+    assert "board_flow" in tool_manifest()
+    # 参数说明不能含 `|`（那是工具调用分段符，写进去会被解析成无 `=` 的段而丢弃）
+    assert "|" not in TOOL_SPECS["board_flow"].params
+
+
+# ---------------------------------------------------------------- 大宗商品工具（P1-33）
+
+
+def _patch_commodity(monkeypatch, payload):
+    """把 commodity_chain.collect 换成受控桩（工具内部按名导入，故打模块属性）。"""
+    from app.market import commodity_chain as cm
+
+    async def fake(asof=None):
+        return payload
+
+    monkeypatch.setattr(cm, "collect", fake)
+
+
+_CM_ROW = {
+    "code": "RB0", "label": "螺纹钢", "sw_name": "钢铁",
+    "date": "2026-09-10", "change": 1.23, "dead_zone": 0.68,
+    "zone": "涨破死区", "bias": 1, "mid_signal": True,
+    "mid_verified": True, "mid_edge": 0.381, "mid_t": 3.389, "mid_n": 4214,
+}
+
+
+def test_commodity_tool_renders_mid_term_signal(monkeypatch):
+    _patch_commodity(monkeypatch, {
+        "rows": [_CM_ROW], "mid_signals": [_CM_ROW], "as_of": "2026-09-11",
+        "timing_note": "实测以同日共振为主，商品不具备领先性。",
+        "disclaimer": "以上为规则层偏向研判，不构成买卖建议。",
+    })
+    out = _run(run_tool(ToolCall("commodity", {}), _ctx(), cache=None))
+    assert "螺纹钢" in out and "+1.23%" in out and "涨破死区" in out
+    assert "0.381pp" in out and "t=3.389" in out and "n=4214" in out
+    assert "不构成买卖建议" in out
+
+
+def test_commodity_tool_always_carries_timing_note(monkeypatch):
+    """红线 3 守卫：助手必须拿到「无领先性」这句话，否则会把共振转述成预测。"""
+    _patch_commodity(monkeypatch, {
+        "rows": [{**_CM_ROW, "mid_signal": False, "mid_verified": False,
+                  "mid_edge": None, "mid_t": None, "mid_n": 0}],
+        "mid_signals": [], "as_of": "2026-09-11",
+        "timing_note": "实测时点结构：以同日共振为主，隔夜口径基本失效。",
+        "disclaimer": "不构成买卖建议。",
+    })
+    out = _run(run_tool(ToolCall("commodity", {}), _ctx(), cache=None))
+    assert "时点结构" in out
+    assert "未通过实证" in out  # 未验证的链必须显式说明不给板块含义
+
+
+def test_commodity_tool_keyword_filter_and_miss(monkeypatch):
+    other = {**_CM_ROW, "code": "SC0", "label": "原油", "sw_name": "石油石化"}
+    _patch_commodity(monkeypatch, {
+        "rows": [_CM_ROW, other], "mid_signals": [], "as_of": "2026-09-11",
+        "timing_note": "t", "disclaimer": "d",
+    })
+    hit = _run(run_tool(ToolCall("commodity", {"keyword": "原油"}), _ctx(), cache=None))
+    assert "原油" in hit and "螺纹钢" not in hit
+    miss = _run(run_tool(ToolCall("commodity", {"keyword": "不存在品"}), _ctx(), cache=None))
+    assert "未找到匹配" in miss
+
+
+def test_commodity_tool_renders_skip_reason(monkeypatch):
+    _patch_commodity(monkeypatch, {
+        "rows": [{**_CM_ROW, "skip_reason": "源不可得", "change": None, "zone": "unknown"}],
+        "mid_signals": [], "as_of": "2026-09-11",
+        "timing_note": "t", "disclaimer": "d",
+    })
+    out = _run(run_tool(ToolCall("commodity", {}), _ctx(), cache=None))
+    assert "源不可得" in out
+
+
+def test_commodity_tool_unavailable_is_honest(monkeypatch):
+    _patch_commodity(monkeypatch, None)
+    assert "暂不可用" in _run(run_tool(ToolCall("commodity", {}), _ctx(), cache=None))
+
+
+def test_commodity_tool_failure_is_honest(monkeypatch):
+    from app.market import commodity_chain as cm
+
+    async def boom(asof=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(cm, "collect", boom)
+    out = _run(run_tool(ToolCall("commodity", {}), _ctx(), cache=None))
+    assert "取数失败" in out and "不要编造" in out
+
+
+def test_commodity_registered_in_specs_and_manifest():
+    assert "commodity" in TOOL_SPECS
+    assert "commodity" in tool_manifest()
+    assert "|" not in TOOL_SPECS["commodity"].params
+
+
+# ---------------------------------------------------------------- 气候相位工具（P1-32）
+
+
+def _patch_climate(monkeypatch, payload):
+    """把 climate.collect 换成受控桩（工具内部按名导入，故打模块属性）。"""
+    from app.market import climate as cl
+
+    async def fake(asof=None):
+        return payload
+
+    monkeypatch.setattr(cl, "collect", fake)
+
+
+_CL_PAYLOAD = {
+    "state": "el_nino",
+    "alert": None,
+    "strength": "strong",
+    "consecutive": 5,
+    "peak_abs": 1.8,
+    "threshold": 0.5,
+    "persist_seasons": 5,
+    "latest": {"season": "JJA", "year": 2026, "anom": 1.8, "end_date": "2026-08-31"},
+    "series": [{"season": "AMJ", "year": 2026, "anom": 0.95},
+               {"season": "MJJ", "year": 2026, "anom": 1.39},
+               {"season": "JJA", "year": 2026, "anom": 1.80}],
+    "candidate_links": [
+        {"target": "磷化工", "strength": 2}, {"target": "化肥", "strength": 2},
+    ],
+    "as_of": "2026-09-11",
+    "timing_note": "ONI 是三月滑动平均且季末后发布，天然滞后，不构成领先指标。",
+    "empirical_verdict": "**人工传导链未获数据支持**……基础化工方向与表相反。",
+    "disclaimer": "以上为气候相位与候选传导链陈述，不构成买卖建议。",
+}
+
+
+def test_climate_tool_renders_phase_alert_and_series(monkeypatch):
+    _patch_climate(monkeypatch, {**_CL_PAYLOAD, "state": "neutral", "alert": "el_nino",
+                                 "consecutive": 3})
+    out = _run(run_tool(ToolCall("climate", {}), _ctx(), cache=None))
+    assert "中性" in out
+    assert "预警态" in out and "未满 5 季" in out
+    assert "JJA" in out and "+1.80" in out
+    assert "不构成买卖建议" in out
+
+
+def test_climate_tool_marks_candidate_links_as_unverified(monkeypatch):
+    _patch_climate(monkeypatch, _CL_PAYLOAD)
+    out = _run(run_tool(ToolCall("climate", {}), _ctx(), cache=None))
+    assert "磷化工" in out
+    assert "未获数据支持" in out or "未获支持" in out
+
+
+def test_climate_tool_always_carries_both_disclaimers(monkeypatch):
+    """红线 3 守卫：少了任一段，助手都可能把气候相位转述成买卖结论。"""
+    _patch_climate(monkeypatch, _CL_PAYLOAD)
+    out = _run(run_tool(ToolCall("climate", {}), _ctx(), cache=None))
+    assert "时点结构" in out and "不构成领先指标" in out
+    assert "实证判读" in out and "未获" in out
+
+
+def test_climate_tool_unjudged_is_honest(monkeypatch):
+    _patch_climate(monkeypatch, {**_CL_PAYLOAD, "state": None, "alert": None,
+                                 "unjudged_reason": "ONI 数据滞后（最新季末距今 200 天 > 120）"})
+    out = _run(run_tool(ToolCall("climate", {}), _ctx(), cache=None))
+    assert "未判定" in out and "滞后" in out
+    assert "磷化工" not in out
+
+
+def test_climate_tool_unavailable_is_honest(monkeypatch):
+    _patch_climate(monkeypatch, None)
+    assert "暂不可用" in _run(run_tool(ToolCall("climate", {}), _ctx(), cache=None))
+
+
+def test_climate_tool_failure_is_honest(monkeypatch):
+    from app.market import climate as cl
+
+    async def boom(asof=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(cl, "collect", boom)
+    out = _run(run_tool(ToolCall("climate", {}), _ctx(), cache=None))
+    assert "取数失败" in out and "不要编造" in out
+
+
+def test_climate_registered_in_specs_and_manifest():
+    assert "climate" in TOOL_SPECS
+    assert "climate" in tool_manifest()
+    assert "|" not in TOOL_SPECS["climate"].params

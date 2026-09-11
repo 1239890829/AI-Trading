@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
@@ -70,11 +70,31 @@ def _parse_dt(value: str | None) -> datetime | None:
     return None
 
 
+def _judge_fields(row) -> dict:
+    """判定状态字段（单点收口：所有事件端点共用）。失败退化为 unknown，不臆造。"""
+    from app.events.extract import JUDGE_STATUS_LABEL, judge_state
+
+    try:
+        pub = getattr(row, "published_at", None)
+        dirs = [{"direction": d.direction, "chain": getattr(d, "chain", "")} for d in (row.directions or [])]
+        st = judge_state(pub, dirs, half_life_hours=getattr(row, "half_life_hours", None))
+        return {
+            "judge_status": st["status"],
+            "judge_status_label": JUDGE_STATUS_LABEL.get(st["status"], st["status"]),
+            "judged_at": st["judged_at"].isoformat(sep=" ") if st["judged_at"] else None,
+            "judge_reason": st.get("reason") or None,
+        }
+    except Exception:  # noqa: BLE001 —— 判定是增强字段，失败不得拖垮事件列表
+        return {"judge_status": "unknown", "judge_status_label": "未判定",
+                "judged_at": None, "judge_reason": "判定状态计算失败"}
+
+
 def _serialize(row, directions=None) -> dict:
     out = {
         "id": row.id,
         "title": row.title,
         "url": row.url,
+        "summary": row.summary,
         "source": row.source,
         "source_tier": row.source_tier,
         "published_at": row.published_at.isoformat(sep=" ") if row.published_at else None,
@@ -85,6 +105,10 @@ def _serialize(row, directions=None) -> dict:
         "source_symbol": row.source_symbol,
         "status": row.status,
         "is_active": EventStore.is_active(row),
+        # 判定结果（2026-09-09 需求 2）：利好/利空/中性由 directions 承载，
+        # 这里补「判定时间 + 判定状态」——状态是读时派生（judge_state 纯函数），
+        # 不落库免迁移；待判超时自动收敛中性，避免事件长期挂在「待判」。
+        **_judge_fields(row),
         "directions": [
             {
                 "target_type": d.target_type,
@@ -108,6 +132,41 @@ async def list_events(
 ) -> dict:
     rows = store.list_events(active_only=active, limit=limit)
     return {"data": {"count": len(rows), "items": [_serialize(r) for r in rows]}, "meta": {}}
+
+
+@router.get("/events/verify")
+async def verify_events(
+    request: Request,
+    limit: int = Query(default=30, ge=1, le=100),
+    store: EventStore = Depends(get_store),
+) -> dict:
+    """热点验证环（P1-6）：当日活跃事件的发酵四态（实时计算，不落库）。
+
+    采样关联题材的「事件后新涨停」（封板时间 ≥ 事件发布）+ 板块主力资金（f62），
+    判定 `confirmed`（新涨停且净流入）/ `fermenting`（单一信号）/ `faded`
+    （无新涨停且净流出或净额 0）/ `unknown`（窗口未到 <30min 或缺数据）。
+    验证是时点快照，故实时现算、不落库（多次调用 = 多次采样，天然支持
+    30/60min/收盘三次采样口径）。
+    """
+    from app.events.verify import verify_active_events
+    from app.market import trade_calendar as tc
+
+    hub = request.app.state.hub
+    try:
+        days = await tc.trading_days(hub.provider)
+        td = tc.last_trade_date(days)
+        if td is None:
+            return {"data": {"trade_date": None, "count": 0, "items": [], "note": "交易日历不可用"}, "meta": {}}
+        pool = await hub.provider.get_limit_up_pool(td)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"涨停池取数失败：{exc}") from exc
+
+    pool_dicts = [r.model_dump() for r in (pool or [])]
+    items = await verify_active_events(store, hub, pool_dicts, td, limit=limit)
+    return {
+        "data": {"trade_date": td.isoformat(), "count": len(items), "items": items},
+        "meta": {"basis": "发酵四态：confirmed/fermenting/faded/unknown；新涨停=封板≥事件发布，资金=东财 f62"},
+    }
 
 
 @router.get("/events/impact")
@@ -195,6 +254,28 @@ async def impact_events(
                                      -(e["source_tier"] or 0), e["published_at"] or ""))
     # sort == "time"：保持 store 的 published_at desc 原序
 
+    # P1-1（2026-09-09）：题材辨识度记忆效应（KB-STOCK-25）——给事件方向题材附
+    # 「近 30 日历史龙头」名单。资金对同题材"熟脸"有记忆：消息一来先拉档案里的老龙头。
+    # 一次读档、多事件复用（leaders_for_theme archive 参数）；增强层失败不阻塞主流程。
+    try:
+        from app.services.leader_archive import get_archive, leaders_for_theme
+
+        hub = getattr(request.app.state, "hub", None)
+        if hub is not None:
+            archive = await get_archive(hub.provider)
+            for e in enriched:
+                for d in e["directions"]:
+                    if d["target_type"] == "theme" and d.get("target"):
+                        mem = await leaders_for_theme(hub.provider, d["target"], archive=archive)
+                        if mem:
+                            d["memory_leaders"] = [
+                                {"symbol": m["symbol"], "name": m["name"],
+                                 "max_boards": m["max_boards"], "hit_days": m["hit_days"]}
+                                for m in mem[:3]
+                            ]
+    except Exception:  # noqa: BLE001  记忆附加强层，失败仅降级（无记忆名单）
+        log.warning("impact theme-memory enrich skipped", exc_info=True)
+
     return {"data": {"count": len(enriched), "counts_all": counts, "four_counts": four_counts,
                      "tag_counts": tag_counts, "sort": sort, "items": enriched}, "meta": {}}
 
@@ -279,8 +360,11 @@ async def events_for_symbol(
         theme_names = {m["theme_name"] for m in svc.get_official_for_symbol(sym)}
 
     matched = []
-    for row in store.list_events(active_only=True, limit=50):
-        dirs = store.directions_of(row.id)
+    # 2026-09-09：limit 50 → 300。此前每轮快讯新增几十条会把半天前的关键事件
+    # （如 15:42 的北京商业航天）挤出 50 条窗口，个股关联"突然变 0"。
+    # 另：row.directions 已由 list_events selectinload 预加载，直接用，免 N+1。
+    for row in store.list_events(active_only=True, limit=300):
+        dirs = row.directions
         if row.source_symbol == sym:
             matched.append({"event": row, "directions": dirs, "match_reason": "source"})
         else:
@@ -302,6 +386,141 @@ async def events_for_symbol(
         },
         "meta": {},
     }
+
+
+@router.post("/events/backfill-directions", dependencies=[Depends(require_write_token)])
+async def backfill_directions(
+    request: Request,
+    store: EventStore = Depends(get_store),
+    days: int = Query(default=3, ge=1, le=30),
+) -> dict:
+    """存量事件方向重扫（2026-09-09 事故修复的补数据入口）。
+
+    背景：快讯入库曾漏传 theme_names → 官方题材目录匹配整条链路失效，近 3 日
+    558 条事件中 198 条无任何方向行（含「北京：加快发展商业航天产业」这类明确
+    的板块政策利好），个股关联事件因此恒为 0。
+
+    幂等：仅对「当前无 direction 行」的事件补抽，绝不覆盖已有判定；category
+    仅当旧值为 other 时升级（store.backfill_event 保证）。可重复执行。
+    """
+    from datetime import timedelta, timezone as _tz
+
+    from app.events.extract import build_event
+
+    theme_names = _theme_names(request.app.state)
+    if not theme_names:
+        return {"data": {"scanned": 0, "filled": 0, "note": "题材目录未同步，跳过（不臆造方向）"}, "meta": {}}
+
+    # 2026-09-09 时区口径：published_at 统一北京 naive，cutoff 也用北京 naive
+    cutoff = datetime.now(_tz(timedelta(hours=8))).replace(tzinfo=None) - timedelta(days=days)
+    rows = store.list_events(active_only=False, limit=2000)
+    scanned = filled = 0
+    for r in rows:
+        pub = getattr(r, "published_at", None)
+        if pub is None or pub < cutoff:
+            continue
+        if getattr(r, "directions", None):
+            continue
+        scanned += 1
+        try:
+            ev = build_event(
+                r.title, source=r.source, url=r.url, published_at=pub,
+                source_symbol=getattr(r, "source_symbol", None), theme_names=theme_names,
+            )
+            filled += 1 if store.backfill_event(
+                r.id, category=ev.get("category"),
+                half_life_hours=ev.get("half_life_hours"),
+                directions=ev.get("directions") or [],
+            ) else 0
+        except Exception:  # noqa: BLE001 —— 单条失败不影响整批
+            log.warning("backfill failed: event %s", getattr(r, "id", "?"))
+    return {"data": {"scanned": scanned, "filled": filled, "days": days,
+                     "theme_names": len(theme_names)}, "meta": {}}
+
+
+@router.post("/events/llm-aux-judge", dependencies=[Depends(require_write_token)])
+async def llm_aux_judge_route(request: Request) -> dict:
+    """pending 事件 LLM 辅助判定（P2-3 层1）手动触发。攒批 + 每事件一次。
+
+    命中（direction≠0 且题材匹配目录）写 direction 行 matched_by=llm_aux；
+    无论命中与否整批记 llm_judged_at（防重复烧钱）。失败整批跳过下轮重试。
+    默认关闭（event_llm_aux_enabled=False 返回 skipped）——需显式开启。
+    线程池执行（LLM 调用阻塞，不卡事件循环）。
+    """
+    import asyncio
+
+    from app.events.llm_aux import judge_pending_batch
+
+    theme_names = _theme_names(request.app.state)
+    result = await asyncio.to_thread(
+        judge_pending_batch, theme_names=theme_names,
+    )
+    return {"data": result, "meta": {}}
+
+
+@router.get("/events/focus/themes")
+async def theme_focus(
+    request: Request,
+    store: EventStore = Depends(get_store),
+    days: int = Query(default=1, ge=1, le=7),
+    limit: int = Query(default=8, ge=1, le=30),
+) -> dict:
+    """按板块聚合事件 → 次日关注方向（2026-09-09 需求 1）。
+
+    聚合口径（全部来自方向行，不臆造）：
+    - 板块 = directions.target（target_type=theme）；
+    - 利好/利空 = direction ±1 计数（direction=0 只计「关联」不计方向）；
+    - 排序：净方向（利好-利空）→ 事件条数 → 最新事件时间；同分时按板块名稳定排序；
+    - 每条方向附带 judge_status（含待判/中性/过期），前端可据此标注可信度。
+
+    用途：盘后汇总「明天看什么」——北京十五五规划这类政策利好会在这里
+    以「商业航天 +N 利好」的形式冒头，而不必等人去翻快讯流。
+    """
+    from datetime import timedelta
+
+    from app.events.extract import judge_state
+
+    # 2026-09-09 时区口径：published_at 统一北京 naive，cutoff 也用北京 naive
+    cutoff = datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None) - timedelta(days=days)
+    rows = store.list_events(active_only=False, limit=2000)
+    buckets: dict[str, dict] = {}
+    for r in rows:
+        pub = getattr(r, "published_at", None)
+        if pub is None or pub < cutoff:
+            continue
+        for d in getattr(r, "directions", None) or []:
+            if getattr(d, "target_type", "theme") != "theme" or not getattr(d, "target", None):
+                continue
+            b = buckets.setdefault(d.target, {
+                "theme": d.target, "events": 0, "positive": 0, "negative": 0,
+                "neutral": 0, "judged": 0, "pending": 0, "samples": [], "latest": None,
+            })
+            b["events"] += 1
+            dir_v = int(getattr(d, "direction", 0) or 0)
+            if dir_v > 0:
+                b["positive"] += 1
+            elif dir_v < 0:
+                b["negative"] += 1
+            else:
+                b["neutral"] += 1
+            st = judge_state(pub, [{"direction": dir_v, "chain": getattr(d, "chain", "")}],
+                             half_life_hours=getattr(r, "half_life_hours", None))["status"]
+            if st == "judged":
+                b["judged"] += 1
+            elif st == "pending":
+                b["pending"] += 1
+            if len(b["samples"]) < 3:
+                b["samples"].append({"title": r.title, "direction": dir_v,
+                                     "judge_status": st, "url": getattr(r, "url", None)})
+            if b["latest"] is None or (pub and pub > b["latest"]):
+                b["latest"] = pub
+    out = []
+    for b in buckets.values():
+        b["net"] = b["positive"] - b["negative"]
+        b["latest"] = b["latest"].isoformat(sep=" ") if b["latest"] else None
+        out.append(b)
+    out.sort(key=lambda x: (-x["net"], -x["events"], x["latest"] or "", x["theme"]))
+    return {"data": {"days": days, "count": len(out), "items": out[:limit]}, "meta": {}}
 
 
 class EventItemIn(BaseModel):

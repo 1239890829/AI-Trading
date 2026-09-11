@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { MarkdownView } from "@/components/agent/markdown-view";
 import { getAgentKbFile } from "@/lib/api";
 
@@ -39,10 +40,10 @@ const STATUS_LABEL: Record<string, string> = {
   "❌": "淘汰",
 };
 const STATUS_CLS: Record<string, string> = {
-  "✅": "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300",
-  "🔶": "bg-sky-500/10 text-sky-600 dark:text-sky-300",
-  "⏳": "bg-amber-500/10 text-amber-600 dark:text-amber-300",
-  "❌": "bg-zinc-500/10 text-zinc-400",
+  "✅": "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  "🔶": "bg-sky-500/10 text-sky-700 dark:text-sky-300",
+  "⏳": "bg-amber-500/10 text-amber-800 dark:text-amber-300",
+  "❌": "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400",
 };
 
 /** 解析台账：### 开头=仓库条目，## 开头=元段落（筛选经验/发现日志等）。 */
@@ -96,21 +97,16 @@ export function RepoTrackerTab() {
     setLoaded(true);
   }, []);
 
-  useEffect(() => {
-    void load();
-    const t = setInterval(() => void load(), 60_000); // 评估轮回填后自动刷新
-    return () => clearInterval(t);
-  }, [load]);
+  // P1-27 收编 usePollingFetch（挂载即拉 + 定时轮询），语义不变
+  usePollingFetch(load, 60_000); // 评估轮回填后自动刷新
 
   const sections = useMemo(() => parseSections(content), [content]);
   const repos = useMemo(() => sections.filter((s) => s.isRepo), [sections]);
   const metas = useMemo(() => sections.filter((s) => !s.isRepo && !["分组收录", "状态定义"].includes(s.title)), [sections]);
 
-  // 默认选中第一个仓库
-  useEffect(() => {
-    if (sections.length && selected == null) setSelected(sections[0].title);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sections.length]);
+  // 默认选中第一个仓库：渲染期 adjust-state（当帧生效）。
+  // 原写法是 effect + `eslint-disable exhaustive-deps`，同时踩两条 hook 规则（P1-27）。
+  if (sections.length && selected == null) setSelected(sections[0].title);
 
   const selectedSection = sections.find((s) => s.title === selected) ?? null;
 
@@ -121,7 +117,7 @@ export function RepoTrackerTab() {
         <button
           onClick={() => setSelected(s.title)}
           className={`block w-full rounded-lg px-2 py-1.5 text-left text-xs transition-colors ${
-            active ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900" : "text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900"
+            active ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900" : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900"
           }`}
         >
           {s.title}
@@ -141,7 +137,7 @@ export function RepoTrackerTab() {
           <span className={`truncate font-mono text-xs font-medium ${active ? "text-white dark:text-zinc-900" : "text-zinc-800 dark:text-zinc-100"}`}>
             {name}
           </span>
-          <span className={`shrink-0 font-mono text-[10px] ${active ? "text-zinc-300 dark:text-zinc-600" : "text-amber-600 dark:text-amber-300"}`}>
+          <span className={`shrink-0 font-mono text-[10px] ${active ? "text-zinc-600 dark:text-zinc-400" : "text-amber-800 dark:text-amber-300"}`}>
             {stars}
           </span>
         </div>
@@ -153,7 +149,7 @@ export function RepoTrackerTab() {
             </span>
           )}
           {lang && (
-            <span className={`rounded border px-1 text-[10px] ${active ? "border-zinc-500 text-zinc-300 dark:border-zinc-600 dark:text-zinc-600" : "border-zinc-200 text-zinc-400 dark:border-zinc-700"}`}>
+            <span className={`rounded border px-1 text-[10px] ${active ? "border-zinc-500 text-zinc-700 dark:border-zinc-600 dark:text-zinc-400" : "border-zinc-200 text-zinc-600 dark:border-zinc-700"}`}>
               {lang}
             </span>
           )}
@@ -165,11 +161,11 @@ export function RepoTrackerTab() {
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
-        <p className="text-[10px] text-zinc-400">
+        <p className="text-[10px] text-zinc-600 dark:text-zinc-400">
           GitHub「agent」star 分组仓库台账：用途 / 服务功能 / 使用轨迹 / 评估结论（仅 ≥1000★ 实拉实跑评估）
         </p>
         {loaded && !missing && (
-          <span className="rounded bg-sky-500/10 px-2 py-0.5 text-[10px] text-sky-600 dark:text-sky-300">
+          <span className="rounded bg-sky-500/10 px-2 py-0.5 text-[10px] text-sky-700 dark:text-sky-300">
             {repos.length} 个仓库
           </span>
         )}
@@ -177,7 +173,7 @@ export function RepoTrackerTab() {
 
       {(!loaded || missing) ? (
         <section className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto rounded-xl border border-zinc-200 dark:border-zinc-800">
-          <p className="py-8 text-center text-sm text-zinc-400">
+          <p className="py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">
             {loaded ? "台账尚未生成——完成一轮 agent 分组评估后写入 docs/kb/05-repo-tracker.md" : "加载中…"}
           </p>
         </section>
@@ -186,13 +182,13 @@ export function RepoTrackerTab() {
           {/* 左：条目列表（上下结构：名称+星数 / 分类标签） */}
           <aside className="flex w-64 shrink-0 flex-col overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
             <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
-              <p className="px-2 pb-1 pt-0.5 text-[10px] font-medium text-zinc-400">仓库（agent 分组）</p>
+              <p className="px-2 pb-1 pt-0.5 text-[10px] font-medium text-zinc-600 dark:text-zinc-400">仓库（agent 分组）</p>
               {repos.map((s) => (
                 <Item key={s.title} s={s} />
               ))}
               {metas.length > 0 && (
                 <>
-                  <p className="px-2 pb-1 pt-2 text-[10px] font-medium text-zinc-400">闭环机制</p>
+                  <p className="px-2 pb-1 pt-2 text-[10px] font-medium text-zinc-600 dark:text-zinc-400">闭环机制</p>
                   {metas.map((s) => (
                     <Item key={s.title} s={s} />
                   ))}
@@ -206,7 +202,7 @@ export function RepoTrackerTab() {
             {selectedSection ? (
               <MarkdownView content={selectedSection.body} />
             ) : (
-              <p className="py-8 text-center text-sm text-zinc-400">左侧选择一个仓库</p>
+              <p className="py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">左侧选择一个仓库</p>
             )}
           </section>
         </div>

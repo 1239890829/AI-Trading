@@ -1,5 +1,6 @@
 "use client";
 
+import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
@@ -7,6 +8,7 @@ import {
   createAgentTask,
   getAgentTasks,
   getAgentTaskTypes,
+  resolveAgentTask,
   type AgentTask,
   type AgentTaskStatus,
   type AgentTaskType,
@@ -23,12 +25,42 @@ import {
  */
 
 const STATUS_META: Record<AgentTaskStatus, { label: string; cls: string }> = {
-  queued: { label: "排队中", cls: "bg-zinc-500/10 text-zinc-500" },
-  running: { label: "执行中", cls: "bg-sky-500/10 text-sky-600 dark:text-sky-300" },
-  succeeded: { label: "成功", cls: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300" },
-  failed: { label: "失败", cls: "bg-red-500/10 text-red-600 dark:text-red-300" },
-  canceled: { label: "已取消", cls: "bg-zinc-500/10 text-zinc-400" },
-  needs_confirm: { label: "待确认", cls: "bg-amber-500/10 text-amber-600 dark:text-amber-300" },
+  queued: { label: "排队中", cls: "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400" },
+  running: { label: "执行中", cls: "bg-sky-500/10 text-sky-700 dark:text-sky-300" },
+  succeeded: { label: "成功", cls: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" },
+  failed: { label: "失败", cls: "bg-red-500/10 text-red-700 dark:text-red-300" },
+  canceled: { label: "已取消", cls: "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400" },
+  needs_confirm: { label: "待确认", cls: "bg-amber-500/10 text-amber-800 dark:text-amber-300" },
+};
+
+/**
+ * 服务侧登记类条目的标签（P1-14 议程留痕合一 / P1-36 告警升级待办）。
+ * 它们**不在** task-types 里——不是可创建的任务类型（没有执行体），只作为
+ * 待办/留痕出现在同一时间线。标签在此兜底，避免列表里显示成裸 type 名。
+ */
+const REGISTRY_LABELS: Record<string, string> = {
+  agenda: "每日进化议程（自动执行）",
+  mutation: "系统变更留痕",
+  escalation: "告警升级待办",
+};
+
+function taskLabel(type: string, types: AgentTaskType[] | undefined | null): string {
+  return types?.find((x) => x.type === type)?.label ?? REGISTRY_LABELS[type] ?? type;
+}
+
+/** params 键的中文标签（登记类条目的正文靠它才读得懂；未知键回退原样显示）。 */
+const PARAM_LABEL: Record<string, string> = {
+  summary: "摘要",
+  reason: "判读理由",
+  symbol: "标的",
+  rule: "规则",
+  trigger_value: "触发值",
+  event_id: "告警事件",
+  source: "来源",
+  kind: "类型",
+  result: "结果",
+  trade_date: "交易日",
+  agenda_date: "议程日期",
 };
 
 function timeText(iso: string | null | undefined): string {
@@ -59,9 +91,9 @@ export function TaskCenter() {
     }
   }, []);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  // 挂载即拉取（P1-27 收编 usePollingFetch）：setState 落在 promise 回调里，
+  // 不再触发 react-hooks/set-state-in-effect。load 依赖为 []（无参数），语义不变。
+  usePollingFetch(load, null);
 
   // 有任务在跑时按 3s 轮询（无 running 则停），避免无谓请求
   const hasRunning = useMemo(
@@ -108,17 +140,35 @@ export function TaskCenter() {
     }
   }
 
+  /** 处置待办（P1-36）：done=已处置 / dismissed=判定无需处理 */
+  async function resolve(id: string, outcome: "done" | "dismissed") {
+    try {
+      await resolveAgentTask(id, outcome);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   const detail = (tasks ?? []).find((t) => t.id === selected) ?? null;
+
+  // 登记类条目（escalation 待办 / mutation 留痕）的正文就在 params 里——不渲染
+  // 等于「待办没有内容」。只取标量：议程条目的 params.items 是数组，JSON 平铺
+  // 会把面板淹掉（它的内容已在步骤轨迹里）。
+  const paramRows = Object.entries(detail?.params ?? {}).filter(
+    ([, v]) => typeof v === "string" || typeof v === "number",
+  );
+  const actionable = detail !== null && !detail.read_only && detail.status === "needs_confirm";
 
   return (
     <div className="flex h-full min-h-0 gap-3">
       {/* 左：任务列表 */}
       <div className="flex w-[300px] shrink-0 flex-col gap-2">
         <div className="flex items-center justify-between">
-          <span className="text-xs text-zinc-500">任务列表</span>
+          <span className="text-xs text-zinc-600 dark:text-zinc-400">任务列表</span>
           <button
             onClick={() => void load()}
-            className="rounded px-1.5 py-0.5 text-[11px] text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            className="rounded px-1.5 py-0.5 text-[11px] text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
           >
             刷新
           </button>
@@ -131,11 +181,11 @@ export function TaskCenter() {
               ))}
             </div>
           ) : tasks === null ? (
-            <p className="rounded-lg border border-dashed border-zinc-200 p-3 text-[11px] text-zinc-400 dark:border-zinc-700">
+            <p className="rounded-lg border border-dashed border-zinc-200 p-3 text-[11px] text-zinc-600 dark:text-zinc-400 dark:border-zinc-700">
               任务列表加载失败（后端未启动或接口异常）。
             </p>
           ) : tasks.length === 0 ? (
-            <p className="rounded-lg border border-dashed border-zinc-200 p-3 text-[11px] text-zinc-400 dark:border-zinc-700">
+            <p className="rounded-lg border border-dashed border-zinc-200 p-3 text-[11px] text-zinc-600 dark:text-zinc-400 dark:border-zinc-700">
               暂无任务。选择右侧任务类型创建（首批为 L0 只读/生成类）。
             </p>
           ) : (
@@ -151,14 +201,20 @@ export function TaskCenter() {
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="truncate text-xs font-medium text-zinc-800 dark:text-zinc-100">
-                    {types?.find((x) => x.type === t.type)?.label ?? t.type}
+                    {taskLabel(t.type, types)}
                   </span>
                   <span className={`shrink-0 rounded px-1 py-0.5 text-[10px] ${STATUS_META[t.status].cls}`}>
                     {STATUS_META[t.status].label}
                   </span>
                 </div>
-                <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-zinc-400">
-                  <span className="font-mono">{t.risk_level}</span>
+                <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-zinc-600 dark:text-zinc-400">
+                  {t.read_only ? (
+                    <span className="rounded bg-zinc-500/10 px-1 text-zinc-600 dark:text-zinc-400" title="系统自动执行的留痕条目：只读，不可取消">
+                      只读留痕
+                    </span>
+                  ) : (
+                    <span className="font-mono">{t.risk_level}</span>
+                  )}
                   <span>·</span>
                   <span>{timeText(t.created_at)}</span>
                   {t.steps.length > 0 && <span>· {t.steps.length} 步</span>}
@@ -175,12 +231,12 @@ export function TaskCenter() {
         <section className="shrink-0 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
           <div className="mb-2 flex items-center justify-between">
             <h3 className="text-xs font-medium text-zinc-700 dark:text-zinc-200">新建任务</h3>
-            <span className="text-[10px] text-zinc-400">首批仅 L0 只读/生成类；写类任务在参数配置模块（P1）开放</span>
+            <span className="text-[10px] text-zinc-600 dark:text-zinc-400">首批仅 L0 只读/生成类；写类任务在参数配置模块（P1）开放</span>
           </div>
           {types === undefined ? (
             <div className="h-8 w-full animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
           ) : types === null ? (
-            <p className="text-[11px] text-zinc-400">任务类型加载失败，无法创建任务。</p>
+            <p className="text-[11px] text-zinc-600 dark:text-zinc-400">任务类型加载失败，无法创建任务。</p>
           ) : (
             <div className="flex flex-wrap items-center gap-1.5">
               {types.map((t) => (
@@ -192,7 +248,7 @@ export function TaskCenter() {
                   className="rounded-md border border-zinc-300 px-2 py-1 text-[11px] text-zinc-700 transition-colors hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
                 >
                   {creating === t.type ? "提交中…" : t.label}
-                  <span className="ml-1 font-mono text-[10px] text-zinc-400">{t.risk}</span>
+                  <span className="ml-1 font-mono text-[10px] text-zinc-600 dark:text-zinc-400">{t.risk}</span>
                 </button>
               ))}
             </div>
@@ -208,22 +264,27 @@ export function TaskCenter() {
         {/* 任务详情 */}
         <section className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
           {error && (
-            <p className="mb-2 rounded-md bg-red-500/5 px-2 py-1.5 text-[11px] text-red-500 dark:text-red-300">{error}</p>
+            <p className="mb-2 rounded-md bg-red-500/5 px-2 py-1.5 text-[11px] text-red-700 dark:text-red-300">{error}</p>
           )}
           {detail === null ? (
-            <p className="text-[11px] text-zinc-400">选择左侧任务查看执行轨迹；或先创建一个任务。</p>
+            <p className="text-[11px] text-zinc-600 dark:text-zinc-400">选择左侧任务查看执行轨迹；或先创建一个任务。</p>
           ) : (
             <>
               <div className="mb-2 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
-                    {types?.find((x) => x.type === detail.type)?.label ?? detail.type}
+                    {taskLabel(detail.type, types)}
                   </span>
                   <span className={`rounded px-1.5 py-0.5 text-[10px] ${STATUS_META[detail.status].cls}`}>
                     {STATUS_META[detail.status].label}
                   </span>
+                  {detail.read_only && (
+                    <span className="rounded bg-zinc-500/10 px-1.5 py-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
+                      自动执行 · 只读
+                    </span>
+                  )}
                 </div>
-                {(detail.status === "running" || detail.status === "queued") && (
+                {!detail.read_only && (detail.status === "running" || detail.status === "queued") && (
                   <button
                     onClick={() => void cancel(detail.id)}
                     className="rounded-md border border-zinc-300 px-2 py-0.5 text-[11px] text-zinc-600 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
@@ -231,16 +292,39 @@ export function TaskCenter() {
                     取消任务
                   </button>
                 )}
+                {actionable && (
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <button
+                      onClick={() => void resolve(detail.id, "done")}
+                      className="rounded-md border border-emerald-300 px-2 py-0.5 text-[11px] text-emerald-700 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-900/30"
+                    >
+                      已处置
+                    </button>
+                    <button
+                      onClick={() => void resolve(detail.id, "dismissed")}
+                      className="rounded-md border border-zinc-300 px-2 py-0.5 text-[11px] text-zinc-600 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    >
+                      忽略
+                    </button>
+                  </div>
+                )}
               </div>
 
-              <dl className="mb-3 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-zinc-500">
+              <dl className="mb-3 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-zinc-600 dark:text-zinc-400">
                 <div className="flex gap-1">
-                  <dt>任务 ID</dt>
-                  <dd className="truncate font-mono text-zinc-700 dark:text-zinc-200">{detail.id.slice(0, 12)}</dd>
+                  <dt>{detail.read_only ? "议程日期" : "任务 ID"}</dt>
+                  {/* 只读条目 ID 是 `agenda:2026-09-10`，截断成 "agenda:2026-" 没信息量 */}
+                  <dd className="truncate font-mono text-zinc-700 dark:text-zinc-200">
+                    {detail.read_only
+                      ? String(detail.params?.agenda_date ?? detail.id)
+                      : detail.id.slice(0, 12)}
+                  </dd>
                 </div>
                 <div className="flex gap-1">
                   <dt>触发方</dt>
-                  <dd className="text-zinc-700 dark:text-zinc-200">{detail.created_by}</dd>
+                  <dd className="text-zinc-700 dark:text-zinc-200">
+                    {detail.read_only ? "进化议程（定时自动）" : detail.created_by}
+                  </dd>
                 </div>
                 <div className="flex gap-1">
                   <dt>开始</dt>
@@ -252,20 +336,38 @@ export function TaskCenter() {
                 </div>
               </dl>
 
+              {actionable && (
+                <p className="mb-2 rounded-md bg-amber-500/5 px-2 py-1.5 text-[11px] text-amber-800 dark:text-amber-300">
+                  待人工处置：AI 判读把该告警升级为「需处理」。系统不会自动执行任何动作——
+                  已处理点「已处置」，判定无需处理点「忽略」，结论留痕在审计里。
+                </p>
+              )}
+              {paramRows.length > 0 && (
+                <dl className="mb-3 rounded-lg border border-zinc-100 px-2 py-1.5 text-[11px] dark:border-zinc-800">
+                  {paramRows.map(([k, v]) => (
+                    <div key={k} className="flex gap-2 py-0.5">
+                      <dt className="w-[72px] shrink-0 text-zinc-600 dark:text-zinc-400">{PARAM_LABEL[k] ?? k}</dt>
+                      <dd className="min-w-0 flex-1 break-words text-zinc-700 dark:text-zinc-200">
+                        {String(v)}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
               {detail.error && (
-                <p className="mb-2 rounded-md bg-red-500/5 px-2 py-1.5 text-[11px] text-red-500 dark:text-red-300">
+                <p className="mb-2 rounded-md bg-red-500/5 px-2 py-1.5 text-[11px] text-red-700 dark:text-red-300">
                   失败：{detail.error.message}（{detail.error.code}）
                 </p>
               )}
               {detail.result_ref && (
-                <p className="mb-2 rounded-md bg-emerald-500/5 px-2 py-1.5 text-[11px] text-emerald-600 dark:text-emerald-300">
+                <p className="mb-2 rounded-md bg-emerald-500/5 px-2 py-1.5 text-[11px] text-emerald-700 dark:text-emerald-300">
                   产物：{detail.result_ref.kind} · {detail.result_ref.id}
                 </p>
               )}
 
               <h4 className="mb-1.5 text-[11px] font-medium text-zinc-600 dark:text-zinc-300">执行轨迹</h4>
               {detail.steps.length === 0 ? (
-                <p className="text-[11px] text-zinc-400">暂无步骤（任务刚创建，等待执行）。</p>
+                <p className="text-[11px] text-zinc-600 dark:text-zinc-400">暂无步骤（任务刚创建，等待执行）。</p>
               ) : (
                 <ol className="space-y-1.5">
                   {detail.steps.map((s) => (
@@ -274,18 +376,18 @@ export function TaskCenter() {
                         <span className="text-[11px] font-medium text-zinc-800 dark:text-zinc-100">
                           {s.index}. {s.name}
                         </span>
-                        <span className="shrink-0 font-mono text-[10px] text-zinc-400">
+                        <span className="shrink-0 font-mono text-[10px] text-zinc-600 dark:text-zinc-400">
                           {s.ok ? "✓" : "✗"} {s.duration_ms}ms
                         </span>
                       </div>
                       {s.input_summary && (
-                        <p className="mt-0.5 text-[10px] text-zinc-400">输入：{s.input_summary}</p>
+                        <p className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">输入：{s.input_summary}</p>
                       )}
                       {s.output_summary && (
-                        <p className="text-[10px] text-zinc-500 dark:text-zinc-300">输出：{s.output_summary}</p>
+                        <p className="text-[10px] text-zinc-600 dark:text-zinc-300">输出：{s.output_summary}</p>
                       )}
                       {s.llm && (
-                        <p className="mt-0.5 text-[10px] text-zinc-400">
+                        <p className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
                           模型：{s.llm.model || "rules"}
                           {s.llm.enhanced ? " · LLM 增强" : ""}
                         </p>

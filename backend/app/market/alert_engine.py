@@ -27,29 +27,31 @@ class AlertEngine:
         self._interval = interval
         self._registry = get_notifier_registry()
         self._quotes: dict[str, dict] = {}
-        self._task: asyncio.Task | None = None
+        # 盘外空转节奏（P2-9）：不得低于 interval，也不低于 5 分钟
+        self._idle_interval = max(300.0, interval)
 
     def update_quotes(self, quotes: dict[str, dict]) -> None:
         """由 QuoteHub 或外部定时推送最新行情。"""
         self._quotes = quotes
 
-    def start(self) -> None:
-        if self._task is not None:
-            return
-        self._task = asyncio.create_task(self._loop(), name="alert-engine")
+    async def run(self) -> None:
+        """常驻入口：由 SchedulerRegistry 托管（S2-2 起不再自行 create_task）。
 
-    def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
-            self._task = None
+        P2-9（并入 S2-2）：此前恒定 `interval`（默认 5s）一拍、**无时段门控**——
+        盘外行情不再变化，空转纯属浪费；且用当日收盘价反复求值规则只受冷却窗口
+        约束，等于用陈旧价格制造"新"触发。现在盘外**只空转不判读**，节奏同时
+        降到 `_idle_interval`。
+        """
+        from app.market.trade_calendar import in_trading_window
 
-    async def _loop(self) -> None:
         while True:
-            try:
-                await self._tick()
-            except Exception:
-                log.exception("alert engine tick failed")
-            await asyncio.sleep(self._interval)
+            in_window = in_trading_window()
+            if in_window:
+                try:
+                    await self._tick()
+                except Exception:
+                    log.exception("alert engine tick failed")
+            await asyncio.sleep(self._interval if in_window else self._idle_interval)
 
     async def _tick(self) -> None:
         rules = self._repo.list_rules(enabled_only=True)

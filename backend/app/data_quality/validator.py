@@ -14,10 +14,12 @@ _PCT_MISMATCH_TOLERANCE = 1.0  # 涨跌幅与昨收反推值允许的百分点�
 
 
 def board_limit_pct(quote: Quote) -> float:
-    """涨跌停幅度（小数）：主板 ±10%，创业板/科创板 ±20%，北交所 ±30%，ST ±5%。
+    """涨跌停幅度（小数）：主板 ±10%（**含 ST**）、创业板/科创板 ±20%、北交所 ±30%。
 
     2026-09-07 R1 收口：判定单点在 app/market/price_rules.limit_pct（百分数），
     本函数保留小数单位对外契约（quote 参数），仅做单位换算委托。
+    2026-09-11 更正：主板 ST 已于 2026-07-06 由 5% 放宽至 10%，旧注释的
+    「ST ±5%」已过期（详见 price_rules.limit_pct）。
     新股上市初期等特殊阶段未在此展开，由后续交易规则模块接管。
     """
     return price_rules.limit_pct(quote.symbol, quote.name) / 100.0

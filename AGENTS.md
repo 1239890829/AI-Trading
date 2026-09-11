@@ -1,8 +1,8 @@
-# AGENTS.md — AI 开发者交接手册（必读，2026-08-31 全量重写，2026-09-01 行情秒级化后更新至 commit cba1359）
+# AGENTS.md — AI 开发者交接手册（必读，2026-08-31 全量重写；2026-09-10 更新：门禁实测回填、阶段 A/B 销账、待决清单收敛）
 
 你接手的是 **AShare AI Trader**：A 股实时行情 + 量化投研 + 模拟交易 + 事件驱动选股的一体化工作台。
 本文件是你的作业手册：现状、待办、阶段安排、工作纪律全在这里。
-**动手前先读完本文件，再按需查 `docs/PROJECT-MASTER.md`（技术总览）与 `docs/plan-review.md`（计划与优先级）。**
+**动手前先读完本文件，再按需查 `docs/PROJECT-MASTER.md`（技术总览）与 `docs/archive/plan-review.md`（历史计划复盘，只读）。**
 
 ---
 
@@ -14,29 +14,41 @@
    事件标的池等"机会输出"必须带「不构成买卖建议」声明。
 4. **API Key 只存 `backend/.env`**（已 gitignored），绝不入库/入前端/入文档。
 5. 撮合规则（T+1/涨跌停拒/整手/费用/停牌拒）是硬拦截，不可绕过。
-6. **新增页面/板块需先论证**：默认通过复用、扩展、联动实现需求（联动设计原则，见 docs/linkage-design.md §0）。
+6. **新增页面/板块需先论证**：默认通过复用、扩展、联动实现需求（联动设计原则，见 `docs/summary/architecture-design.md` §0）。
 
 ---
 
 ## 1. 快速启动
 
 ```bash
-# 后端（Python 3.11，venv 已建好；.env 含 THS key / 新闻 LLM 留空占位）
+# 后端（venv 已建好；.env 含 THS key，LLM 走 `claude -p` → GLM-5.3 网关）
 cd backend && source .venv/bin/activate
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+# ⚠️ 绝不用 --reload：与 SQLite 锁组合会反复挂死（2026-09-02 定位，见 §6.1）
 
 # 前端（node_modules 已装）
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
-# 测试与门禁（每次改动全部跑，全绿才算完；当前基线：后端 580 / 前端 97）
-cd backend && .venv/bin/pytest                    # 后端全量用例（规模见 §2 快照）
+# 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 1925 项（1923 passed / 2 skipped）· 147 文件（09-11 实测）
+# ⚠️ 耗时强依赖「8000 是否在跑」：后端服务停着 ~67s，服务在跑时 ~330s（5 倍）。
+# 原因是常驻调度与测试同时抢 SQLite/网络；**报耗时必须说明前提**，否则会被当成回归。
+# ⚠️ `--basetemp` 不可省：默认临时目录会被沙箱拒绝创建（EEXIST → PermissionError），
+# 表现为几十个 E 而非 F，极易误判成代码回归（2026-09-11 踩，见 kb/03）。
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
-cd apps/web && npx eslint .                       # 0 error / ≤1 warn（set-state-in-effect 已清零 a155d49，余 1 条既有 exhaustive-deps）
-cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端全量用例（规模见 §2 快照）
-cd backend && .venv/bin/python -m pyflakes app tests            # 0
+cd apps/web && npx eslint .                       # 0 error / 0 warn（P1-27 已清零；余 1 处 C 类显式豁免）
+cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 342 项 / 45 文件（09-11 实测）
+cd backend && .venv/bin/python -m pyflakes app tests scripts   # 0（scripts 已纳入口径，P2-18）
+python3 scripts/doc-health.py                    # 文档体检：0 待处理（收尾必跑，见 kb/07 §8.2）
 # 生产构建前必须先停 dev server（.next 冲突已踩两次）：
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
+
+> **门禁口径**：后端 1925 项（1923 passed / 2 skipped）· 147 文件、前端 342 项 / 45 文件、eslint **0 error / 0 warn**
+> （25 条回归已按 P1-27 清零；仅 notification-drawer 保留 1 处带理由的 C 类豁免）。
+> **测试规模与告警数同属「会失真的状态标注」**——改动后要实测回填，不要沿用旧数字
+> （此前「≤1 warn / 后端 580 / 前端 97 / 219 / 257 / 263」均已被后续改动追过，教训见 `docs/retro-and-gaps.md` §七）。
+> **加测试文件就会让这里过期**，改测试后请顺手回填。
 
 **发布前额外做一次接口载荷体检**（plan-review 三.7，2026-09-01 纳入）：
 `node scripts/api-sweep.js`（服务在跑时）——它能抓出"HTTP 200 但数据是空的"这类
@@ -45,15 +57,20 @@ lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=
 CI（GitHub Actions）：后端 pytest+pyflakes、前端 tsc+eslint+vitest+build。推送后**自查 CI**
 （`source ~/.zshenv` 拿 GITHUB_TOKEN → `/actions/runs?head_sha=<完整SHA>` → jobs → logs），绝不问用户。
 
-## 2. 当前状态快照（2026-09-01，系统重构完成后更新）
+## 2. 当前状态快照（沿革记录；**会失真的数字见 §1 门禁行与 `/openapi.json`**）
 
-**585 后端测试 + 97 前端测试全绿 · 94 REST + 1 WS 端点 · 四源链 `ths→tencent→eastmoney→sina`（含熔断）**
+**测试规模见 §1 门禁行（此处刻意不写数字，见下方 ⚠️）· 四源链 `ths→tencent→eastmoney→sina`（含熔断）· REST 端点数以 `/openapi.json` 为权威**
+
+> ⚠️ **本节只沉淀「不随版本漂移」的口径、决策与沿革**。测试数 / 端点数 / 告警数这类**会失真的数字**，
+> 一律以 §1 门禁行与 `/openapi.json` 为准（教训见 KB-ENG-36：清单类内容不该被摘要吞掉，
+> 数字类内容不该被写死当事实——本节此前写死的「585 / 94 REST」两条都早已过期）。
+
 **复盘改进项闭环（2026-09-01）：`PATCH /api/review/action-items/{id}` 处置入口 + 前端四态处置控件，破解"改进项只能产出、无法消费"（107 条全 pending、采纳率恒 0）。注意 `get_report` 会用表行状态覆盖 payload 快照——payload 是生成时快照，不同步就会"点了确认回读仍待处置"。PATCH 请求体带 `trade_date/category/title` 守卫三元组：id 是 SQLite rowid 别名且无 AUTOINCREMENT，重跑删除重建后 id 会漂移/跨日串号（实测 111→72），三元组不符返回 409 要求刷新，绝不静默挂到不相干项上。**
 **实时行情秒级化（2026-09-01，`5b0024a`）：QuoteHub 1s 固定节奏 + WS 订阅队列终身复用（换队列孤儿化 writer 是"约 30s 才更新"的真因）+ 实时方法腾讯源优先（realtime_rank，ths 付费配额/8s 超时移出秒级链）+ 瞬时失败 stale_after(10s) 容忍 + 分时/K线 WS tick 实时合成（`lib/kline-live.ts`）。实测：列表/头部/K线/分时全部 0.6~1.3s 更新。**
 **前端导航 5 项：工作台 / 盘面 /tape / 市场 /market / 每日精选 /picks / 研究 /research**（2026-09-01 页面合并，旧路由 302）
 
 08-31 ~ 09-01 已完成：实时行情修复 → 真实持仓账本 → 题材合力 → 每日精选五维评分+梯队/阶段/闸门/出场纪律 →
-跨日回放+参数扫描（组合稳定性：MAX_SWAPS_PER_DAY=2）→ **系统盘点（docs/architecture-redesign.md）全清单清零**：
+跨日回放+参数扫描（组合稳定性：MAX_SWAPS_PER_DAY=2）→ **系统盘点（`docs/archive/architecture-redesign.md`）全清单清零**：
 P0 K线三源+熔断+回放限流（`e77971f`）→ 事件采集调度+消息面六维打通（`d8e4e52`）→ 角色胜率（`2b719f3`）→
 盘点清理（`50d5b8d`）→ **页面合并：盘面四合一/云图入市场/研究折叠/自选入工作台（`a9d42fa`）** →
 基本面 ROE/毛利率评分补全（`ede98be`）→ **09-01 下午**：评审三批执行（分组 CRUD/一屏化/
@@ -67,6 +84,36 @@ screener 彻底删除、消融验证启动（`07f29a7`/`c38cb05`）。
 `top_watch_stocks`+`/api/picks/intraday-top`）→ 复盘新增 picks 准确率维度（逐股归因自动触发+失误 findings）→
 盘中情绪监控本体（sentiment P2 #14：高度板炸板/炸板率/指数急杀三类纯规则告警）。
 **唯一在途：消融数据自然积累（约 2026-10 中旬跑 `--days 30 --compare-ablation` 出验收）。**
+
+**09-08 ~ 09-09 已完成**（明细见 `docs/retro-and-gaps.md` §五/§六、`docs/kb/`）：
+`/hunting` 两页合一（旧 `/picks` `/intraday` 302）· 六相位 style_router（偏移叠加 regime，`|offset|≤0.06` fail-fast）·
+空仓闸门三态 `follow_state`（闸门日不给 buy_range）· 每日精选四子模块（`echelon` 梯队地位 / `regime` 炒作阶段 /
+`gate` 空仓闸门 / `risk` 风险档位与出场纪律）· 跨日回放 + 参数扫描
+（**稳定性靠 `MAX_SWAPS_PER_DAY`，不靠分差门槛**——涨停股梯队分差 30+ 使 15 分门槛形同虚设）·
+因子库 P0 评估闭环（qlib Alpha158 族 + TA-Lib，`app/factors/`）· 进化大脑每日议程（15:45 自动执行 + A/B/C 分类 +
+代码变更走 worktree 沙箱）。
+
+**09-10 已完成**（单日大批，逐项状态以 §六 账本为准）：
+- **工程门禁与缺陷修复**：测试提速二期（全量 17 分 27 秒 → **5 分 55 秒**，根因是 `test_assistant` 的 function 级
+  fixture 被 15 例共用）· eslint 25 → 0 warn · **快讯事件被 UNIQUE 冲突整条丢弃**（四来源方向行只做了部分去重；
+  `except IntegrityError` 把「并发重复」与「新行非法」合并成一类 → 整条丢失且每轮重试都失败）
+- **闸门与阈值口径**：闸门**分档**（相位级 `退潮/冰点` 或多信号叠加才撤买入区间；单条量化擦线只提示，
+  判据按**信号性质**而非 `level` 标签——`level` 是理由条数的计数产物）· 量化阈值改**历史分位**口径
+  （`PROMO_FLOOR=30%` 落在 241 日分布之外、近似恒真），绝对经验值降为兜底且**理由里写明所用口径**；
+  连带修掉情绪指标库**静默停更 6 个交易日**（调度传字符串日历 → TypeError 被 except 吞）与
+  「用昨天的位置描述今天」（`describe()` 给的是历史末行分位 → 新增 `percentile_of_value`）
+- **猎场（每日精选 + 盘中跟踪）**：两卡**合并为一个组件 + 两个适配器**（`TradingCard` 中间模型，
+  4 组异名同义字段单点归一；`WatchCard` 已退役）· 重新分区为**两条瀑布流（盘中在上）**·
+  盘前名单**名额由质量决定**（`MAX_PICKS` 降为容量上限 + 新增 `MIN_PICK_SCORE=50` 入选门槛，
+  实测 5 只 → 2~3 只；`meta.removed` 记录出列归因）
+- **控制台**：任务中心**留痕合一**（议程自动执行 → 只读任务视图，不新建表/不写第二份数据）·
+  参数白名单 1 → 5 + 运行时覆盖层（**免重启生效**）+ 回滚归因（封闭集合）+ 变更存活率（三数分工，
+  排除 superseded 假存活）；**风控/资金类参数永久排除**在白名单外
+- **UI 可发现性**：内容行内跳转入口统一 pill（`components/ui/jump-link.tsx`）；
+  `Panel` extra 位的跳转**刻意保持低调**（勿无差别套用）
+- **文档治理**：09-02 调研的十项候选因子**逐项复核销账**（6 已完成/等价、5 数据阻塞、0 数据具备却未实现；
+  核查表在 `docs/summary/factor-system.md §5`）；归档事故教训入 **KB-ENG-36**
+  （可执行清单压成一句概括 = 丢失 N 个待办，恢复只能回 git 历史）
 
 | 阶段 | 状态 |
 |---|---|
@@ -135,13 +182,13 @@ cum_amount/cum_volume 对指数给出 ~15 元荒谬值，该 series 拉爆 Y 轴
 - `risk.py` **风险档位与出场纪律**（借鉴 freqtrade：止损/跟踪止盈/ROI 分档，参数按 A 股重设）：
   止损 = max(档位基准, 1.5×ATR%) clamp 3%~12%；每只带失效条件（题材退潮/高度塌陷/跌破均线/事件证伪）
 每日自动复盘（走坏原因九类归类，**买点质量单独评估**：区分"选错了"与"选对了但追高"）
-+ 周末元结论建议调权（人工确认生效）；参考仓库择优见 docs/github-stars-trading-analysis.md
++ 周末元结论建议调权（人工确认生效）；参考仓库择优见 `docs/kb/05-repo-tracker.md`
 （2026-08-31 按真实 star 分组复核：补入 freqtrade/last30days/Polymarket 三项，修正漏 3 误收 2）；
 新题材预判（六维评分+D1 四问验证）；新闻/公告摘要（规则层，表格正文丢弃纪律）；
 **事件驱动选股 v1**（EventCard 规则抽取：来源分级/事实与解读/半衰期模板/方向词典+国产替代对冲；
 标的池=题材官方成分反查；market 页事件面板 + 详情页相关事件行）。
 
-**联动系统**（docs/linkage-design.md）：统一路由 `lib/routing.ts`（URL 唯一真相源）；
+**联动系统**（`docs/summary/architecture-design.md`）：统一路由 `lib/routing.ts`（URL 唯一真相源）；
 `/stock/[symbol]` 中转修复（路径参数 bug）；题材归属 chips ⇄ 题材看板 focus 聚焦（L4/L5）；
 板块多日涨幅官方 K 线交叉验证（B3 关闭，实测推断值方向都反）；预警→详情跳转（L6）；
 新闻/公告事件点画上 K 线（P1-8：`lib/event-markers.ts` + KlineChartPro「事件」开关，
@@ -153,37 +200,46 @@ sh000001）；QuoteHub.get_quotes 兜底 indices + 前缀归一化（model_copy�
 
 **工程化**：Next 16 升级（flat config）；错误边界；vitest+RTL 组件测试基建（含变异验证纪律）；
 `scripts/api-sweep.js` 全端点巡检（载荷体检）；alembic 三态迁移（手写对齐 ORM）；
+**研究/核验工具** `app/research/strategy_verify.py`（战法核验器：特征物化 + **同日市场中性基准**
++ 累计漏斗/单条件独立/参数敏感性/环境分层/分年度稳定性/可成交性，配 22 项合成数据单测）
+—— 新战法只写条件表达式，**勿再重写窗口 SQL**（见 `docs/kb/03-engineering.md` **KB-ENG-39**）；
 `.env.example` 漂移守护测试；同源反代（Route Handler 运行时代理）；
 统一缓存层 `app/core/ttl_cache.py`（TTL/LRU 有界/异步单飞/命中率统计，11 处自写缓存收敛，
 `/api/system/caches` 可观测——新缓存一律用它，勿再手写 TTL 元组）。
 
 ---
 
-## 4. 后续规划（分阶段；明细账本 docs/retro-and-gaps.md，优先级依据 docs/plan-review.md）
+## 4. 后续规划（分阶段；明细账本 docs/retro-and-gaps.md，优先级依据 `docs/retro-and-gaps.md` §六 + `docs/plan-registry.md`）
 
-> **接手者看这里**：系统盘点与重构清单（docs/architecture-redesign.md）已于 2026-09-01 **全部清零**，
-> 导航已收敛为 5 项。无阻塞待办；剩余在等外部触发的阶段 B 与远期阶段 D。
+> **接手者看这里**：系统盘点与重构清单（`docs/archive/architecture-redesign.md`）已于 2026-09-01 **全部清零**，
+> 导航已收敛为 5 项。**当前剩余待办一律以 `docs/retro-and-gaps.md` §六 为唯一账本**——09-10 已把 §6.2 P1
+> **全部清空**（P1-17 当日拍板保留、其余逐项落地），剩下的只有**等时间的阻塞项**：
+> P1-22 / P1-23 / P1-30（样本不足）与 P1-24（分钟决策库需前瞻积累约 3 个月）；§6.3 P2 全为触发式，**维持观察、不主动做**。
 > **继续推进须等用户明确指令**（工作模式，用户 2026-08-31 定）；动手前先读 §6。
+> **红线**：涉及风控/资金口径变更、删除数据或文件、凭据类动作，一律先经用户确认。
 
-### 阶段 E · 系统重构（✅ 全部完成 2026-09-01，记录见 docs/architecture-redesign.md §五）
+### 阶段 E · 系统重构（✅ 全部完成 2026-09-01，记录见 `docs/archive/architecture-redesign.md` §五）
 P0 K线多源冗余+熔断+回放限流 · P1 事件采集调度+角色胜率分布 · P1/P2 页面合并（/tape 四合一、
 云图入市场、/research 折叠、自选入工作台，导航 13→5）· P2 screener 冻结+分钟信号删除 ·
 P2 基本面 ROE/毛利率 · P3 skills 归档。
 
-### 阶段 A · P0（只剩一项，等数据）
-1. **sentiment 历史分位校准**（P0-3 残留；阈值配置化 ✅ 已完成 2026-08-31：`band_config.py` + `ASHARE_SENTIMENT_HEAT_BANDS_JSON`/`ASHARE_SENTIMENT_EARNING_BANDS_JSON` 覆盖，非法配置启动即失败）：等 Parquet 快照积累后用本地数据算分位，替换照搬网络的阈值。快照目录在**项目根** `data/parquet/snapshots/`（按日分目录），2026-08-31 时只有 2 个交易日样本，需数十个交易日。
-   来源：docs/sentiment-phase-review.md P2 #13。
+### 阶段 A · P0（✅ 全部完成）
+1. ~~**sentiment 历史分位校准**~~ ✅ **已完成（2026-09-02 落地，2026-09-10 进一步分位化）**。
+   **注意实际走的路与当时的设想不同**：不是用 Parquet 快照算，而是建了**指标历史库**
+   `app/sentiment/metric_history.py`（ths 涨停池/炸板池回补，窗口 247 交易日）+
+   `app/sentiment/calibration.py` 等分位切档；闸门层进一步按分位判并写明所用口径（KB-DEC-015）。
+   **数据底座受数据健康哨兵保护**（该文件曾静默停更 6 个交易日，见 KB-ENG-33）。
 2. ~~**统一 provider 缓存层**（P0-5 / 数据源 C3）~~ ✅ 已完成（2026-08-31）：`app/core/ttl_cache.py`
    （TTLCache：monotonic/LRU 有界/异步单飞/命中统计 + 弱引用注册表）+ `GET /api/system/caches` 观测；
-   11 处自写缓存收敛，端点 79→80。
+   11 处自写缓存收敛。
 
 ### 阶段 B · 等用户触发（外部条件成熟即做）
-| 项 | 触发条件 | 一举关闭 |
+| 项 | 触发条件 | 状态 |
 |---|---|---|
-| 推送通道接入（email/企微/飞书/TG） | 用户选通道 | Phase 8 收尾 + 复盘推送 + 盘中情绪监控 |
-| LLM 接入（LLMAnalyzer + 新闻摘要增强 + 事件方向 LLM 分类） | 用户给凭据 | 复盘四角色编排 + 事件 E3 |
-| 生产部署（Docker/编排/监控） | 用户定环境 | Phase 8 全收尾；需有 Docker 的环境实测 |
-| 事件复盘回写（E4：T+N 胜率回写事件权重） | 上线运行积累数据后 | 事件模板自校准 |
+| ~~推送通道接入~~ | — | ✅ **已完成**：飞书 webhook 落地（盘中只保留买点卡，2026-09-08 定稿） |
+| ~~LLM 接入~~ | — | ✅ **已完成**：`claude -p` → GLM-5.3 网关 + `events/llm_aux.py`（pending 事件二次判定） |
+| 生产部署（Docker/编排/监控） | 用户定环境 | 🟡 镜像与编排已交付（09-04），本机无 Docker 待用户侧实测 |
+| 事件复盘回写（E4：T+N 胜率回写事件权重） | 上线运行积累数据后 | ❌ 未做（远期：需先有 T+N 事件样本积累，属事件因子闭环） |
 
 ### 阶段 C · P1 功能项（✅ 全部完成 2026-08-31）
 1. ~~**B1 热股榜**~~ ✅ 2. ~~**B4 seal_nextday 交叉验证晋级率**~~ ✅ 3. ~~**新闻/公告事件点画上 K 线**~~ ✅ 4. ~~**题材指数与板块内资金合力**~~ ✅（`GET /api/themes/catalog/strength` 合力聚合 + `GET /api/themes/catalog/index` 官方指数日 K + 卡片合力条；归属=官方成分反查，行情=腾讯批量快照）
@@ -202,21 +258,23 @@ C2 全市场日 K dump（已被 TDX 替代）；"等 LLM 再做摘要"（规则�
 
 | 文档 | 内容 / 地位 |
 |---|---|
-| **docs/PROJECT-MASTER.md** | 技术总览：目录逐文件/数据源口径/82 API/阶段状态表 |
-| **docs/plan-review.md** | 计划复盘：10 份方案逐项盘点 + P0/P1/P2 整合清单（§六）+ 遗留用户决策（§八） |
-| **docs/linkage-design.md** | 联动系统总纲：状态管理规范/路由规范/联动矩阵 L1-L10/题材三层归属/事件 SOP；切片标记在此 |
-| **docs/retro-and-gaps.md** | 唯一明细账本（§一功能欠缺 20 项全清 / §二布局 / §三技术债 / §四行为基线勿回退） |
+| **docs/INDEX.md** | **文档总入口**（所有文档索引 + 使用地图） |
+| **docs/PROJECT-MASTER.md** | 技术总览：目录逐文件/数据源口径/API/阶段状态表 |
+| **docs/retro-and-gaps.md** | **唯一待办账本**——§一~§三 历史盘点 / §四 行为基线勿回退 / **§六 全量待办总账（P0/P1/P2）** / §七 偏差更正 / §八 计划文档处置 |
+| **docs/summary/** | 主题汇总 6 份（stock-strategy / factor-system / data-market / architecture-design / ai-evolution / review-governance）——**已完成方案的精华收敛处** |
+| **docs/kb/** | 权威知识库（KB-STOCK/TRADE/ENG/DEC + 00-INDEX）；`07-doc-curation.md` = 文档治理规范（v1.6：§3.2 完成即沉淀删件、`📎 示例` 状态、`scripts/doc-health.py` 一键体检）。**示例/题材案例一律标 `📎`，不得与 `✅ 已落地` 混用** |
+| docs/plan-registry.md | 历史计划去向表 + 文档处理规范（**不再新建计划文档**） |
 | docs/api.md | API 契约（端点数以 /openapi.json 为权威，文档按域分节） |
 | docs/data-sources.md + data-source-comparison.md | 字段口径实测记录 + 四源能力选型（改 Provider 前必读） |
-| docs/sentiment-phase-review.md + sentiment.md | 情绪方法论调研 + 误判复盘 + 优化清单 |
-| docs/theme-prediction.md / review-agent.md / theme-sentiment-methodology.md | 预判 / 复盘 Agent / 题材情绪方法论 |
-| docs/backtest-rules.md | 回测代码级禁令（做回测前必读） |
-| docs/deployment.md | 部署 + 环境变量全表 + 已踩坑 |
-| docs/github-stars-trading-analysis.md / mcp.md / orderbook-source-evaluation.md / minute-chart-plan.md | 星标方案 / MCP 规划 / 盘口评估 / 分时图方案（均已完成或触发式） |
-| docs/architecture.md / websocket.md / risk-management.md / longhu.md / data-dictionary.md | 架构 / WS 契约 / 风控红线 / 龙虎榜口径 / 数据字典 |
+| docs/sentiment.md + theme-sentiment-methodology.md + theme-prediction.md | 情绪口径 / 题材情绪方法论 / 新题材预判 |
+| docs/review-agent.md + daily-review-sop.md + daily-review-checklist.md | 复盘 Agent 架构 / 复盘 SOP / 执行清单 |
+| docs/backtest-rules.md / risk-management.md | 回测代码级禁令（做回测前必读） / 风控红线 |
+| docs/deployment.md / websocket.md / mcp.md / architecture.md / data-dictionary.md | 部署+环境变量全表 / WS 契约 / MCP 清单 / 架构 / 数据字典 |
+| docs/live-trading-guosen-plan.md | 实盘接入蓝图（⚫ 搁置，等用户恢复） |
+| docs/daily-review/ · evolution/ · repo-watch/ | 逐日复盘 / 进化议程日志 / 仓库跟踪周报 |
 
-**账本约定**：待办明细以 retro-and-gaps 为唯一账本；跨计划优先级看 plan-review §六；
-联动需求看 linkage-design；README/PROJECT-MASTER 只留阶段级索引。**完成一项划一项并 git checkpoint。**
+**账本约定**：待办明细以 `docs/retro-and-gaps.md` §六 为**唯一账本**（已完成方案文档即删，精华进 `docs/summary/`）；
+优先级看总账 P0/P1/P2；README/PROJECT-MASTER 只留阶段级索引。**完成一项划一项并 git checkpoint。**
 
 ---
 
@@ -289,12 +347,20 @@ curl 先行 → 记录字段口径与类型陷阱 → 多采样找规律 → fix
 
 ## 7. 待用户决策（阻塞项，勿催促，列清单等待）
 
-| # | 决策 | 阻塞的联动项 |
+> 已解决不再列：~~推送通道~~ ✅ 飞书 webhook（09-08 定稿，盘中只留买点卡）、~~LLM 凭据~~ ✅ `claude -p` → GLM-5.3。
+> **本节只列「需要人拍板」的**；样本不足类阻塞（P1-22/23/30、P1-24）不进这里，它们等时间不等人。
+
+| # | 决策 | 影响面 |
 |---|---|---|
-| 1 | 推送通道（email/企微/飞书/TG/webhook） | 预警真实推送 + 复盘推送 + 盘中情绪监控 |
-| 2 | LLM 凭据 | 复盘 LLM 编排 + 摘要增强 + 事件方向 LLM 分类（E3） |
-| 3 | 部署环境（NAS/云服务器/Vercel+Railway） | Docker/编排/监控；需有 Docker 的环境实测 |
-| 4 | 是否物理删除 `data/parquet/snapshots/20260830/` 下 7 个损坏文件 | 无（读取已容错，新快照自动覆盖） |
+| 1 | 部署环境（NAS / 云服务器 / Vercel+Railway） | Docker/编排/监控；需有 Docker 的环境实测 |
+| 2 | 飞书已收敛为「盘中只保留买点卡」，4 个定时 automation（09:26/14:40/15:35/15:40）**是否也一并停** | 减少打扰 vs 保留兜底（2026-09-08 记录，未决） |
+
+> **已决（留痕，勿重开）**：控制台「自定义规则 UI」→ **2026-09-10 拍板保留**（成本近零，且是全系统唯一能写自定义阈值提醒的入口；
+> 位置：`/agent?tab=alerts`「提醒与告警」，链路 = `POST /api/alerts/rules` → `AlertEngine` 轮询 → `alert_triage` → 悬浮球/in_app。
+> 当前用户自建规则 0 条，库内 4 条全是 `__` 前缀系统规则——是**入口深 + 无需求**，不是功能缺失）。详见账本 P1-17。
+
+> `data/parquet/snapshots/20260830/` 下 7 个损坏文件**不占决策位**：读取已容错、新快照会自动覆盖；
+> 若要清理，按删除纪律走 `scripts/safe-trash.sh`（进项目回收站，可 `--restore`）即可，不必问。
 
 ---
 

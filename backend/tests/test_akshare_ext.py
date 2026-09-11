@@ -109,6 +109,49 @@ def test_pool_error_not_cached_then_recovers(fake_ak, monkeypatch):
     assert len(up) == 2
 
 
+# ---------- 财经日历（P1-8 残余） ----------
+
+CAL_ROWS = [
+    {"date": "2026-09-10", "time": "09:30", "region": "中国", "title": "中国8月CPI年率(%)",
+     "pubVal": "0.8", "indicateVal": "0.8", "formerVal": "0.5", "star": "2"},
+    {"date": "2026-09-10", "time": "16:00", "region": "中国", "title": "中国8月社融(亿元)",
+     "pubVal": "未公布", "indicateVal": None, "formerVal": "12000", "star": "2"},
+    {"date": "2026-09-10", "time": None, "region": "美国", "title": "美国8月ISM制造业PMI",
+     "pubVal": None, "indicateVal": None, "formerVal": None, "star": "x"},
+    {"date": "2026-09-10", "time": "20:30", "region": "美国", "title": "",
+     "pubVal": None, "indicateVal": None, "formerVal": None, "star": "2"},
+]
+
+
+def test_macro_calendar_normalizes_rows(monkeypatch):
+    svc = AkshareExtService()
+    monkeypatch.setattr(svc, "_calendar_rows", lambda d: CAL_ROWS, raising=False)
+    rows = _run(svc.macro_calendar(date(2026, 9, 10)))
+    assert [r["event"] for r in rows] == ["中国8月CPI年率(%)", "中国8月社融(亿元)", "美国8月ISM制造业PMI"]
+    assert rows[0]["actual"] == "0.8" and rows[0]["importance"] == 2
+    assert rows[1]["actual"] == "未公布"  # 源占位文案原样保留，语义由消费方判定
+    assert rows[2]["time"] is None and rows[2]["importance"] is None  # 缺失显式，不臆造 0
+
+
+def test_macro_calendar_cookie_failure_is_explicit(monkeypatch):
+    """反爬拿不到 cookie → 抛 source_error（不静默返回空日历冒充「今天没数据」）。"""
+    svc = AkshareExtService()
+    monkeypatch.setattr(svc, "_calendar_cookie", lambda headers: None, raising=False)
+    with pytest.raises(AkshareExtError) as ei:
+        svc._calendar_rows(date(2026, 9, 10))
+    assert ei.value.kind == "source_error"
+    assert "cookie" in ei.value.detail
+
+
+def test_int_or_none():
+    from app.services.akshare_ext import _int_or_none
+
+    assert _int_or_none("2") == 2
+    assert _int_or_none(3.0) == 3
+    assert _int_or_none(None) is None
+    assert _int_or_none("x") is None
+
+
 def test_limit_down_pool_fields(fake_ak):
     dn = _run(AkshareExtService().limit_down_pool(date(2026, 9, 4)))
     assert dn[0]["symbol"] == "301010"

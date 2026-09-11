@@ -21,7 +21,7 @@ export function SuspendedBadge({ status }: { status?: TradingStatusInfo | null }
   if (status.status === "suspended") {
     return (
       <span
-        className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-300"
+        className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[11px] font-medium text-amber-800 dark:text-amber-300"
         title={`停牌判定依据：${status.reason ?? "—"}`}
       >
         停牌{status.suspended_days ? ` ${status.suspended_days} 个交易日` : ""}
@@ -30,7 +30,7 @@ export function SuspendedBadge({ status }: { status?: TradingStatusInfo | null }
   }
   return (
     <span
-      className="rounded bg-zinc-500/20 px-1.5 py-0.5 text-[11px] text-zinc-500 dark:text-zinc-400"
+      className="rounded bg-zinc-500/20 px-1.5 py-0.5 text-[11px] text-zinc-600 dark:text-zinc-400"
       title={status.reason || "无足够数据判定交易状态"}
     >
       交易状态未知
@@ -46,8 +46,8 @@ export function SuspendedNotice({ status }: { status?: TradingStatusInfo | null 
     <div
       className={`flex shrink-0 flex-wrap items-baseline gap-x-2 border-b px-3 py-1 text-[11px] ${
         suspended
-          ? "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-300"
-          : "border-zinc-200 bg-zinc-50 text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-zinc-400"
+          ? "border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-300"
+          : "border-zinc-200 bg-zinc-50 text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-zinc-400"
       }`}
     >
       <span className="font-medium">{suspended ? "该股当前停牌" : "交易状态无法判定"}</span>

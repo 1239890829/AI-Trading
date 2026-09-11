@@ -8,12 +8,12 @@ export type StreamStatus = "connecting" | "live" | "polling" | "closed" | "stale
 
 /** 连接状态 → 界面文案（共享：工作台与个股详情同一套，避免两处文案漂移）。 */
 export const STREAM_STATUS_LABEL: Record<StreamStatus, { text: string; cls: string }> = {
-  connecting: { text: "连接中", cls: "text-zinc-400" },
-  live: { text: "WS 实时推送", cls: "text-sky-400" },
-  polling: { text: "WS 断线 · REST 轮询", cls: "text-amber-400" },
-  closed: { text: "休市 · 展示最近交易日数据", cls: "text-zinc-400" },
-  stale: { text: "数据过期 · 后端刷新异常", cls: "text-amber-400" },
-  error: { text: "连接失败", cls: "text-red-400" },
+  connecting: { text: "连接中", cls: "text-zinc-600 dark:text-zinc-400" },
+  live: { text: "WS 实时推送", cls: "text-sky-700 dark:text-sky-400" },
+  polling: { text: "WS 断线 · REST 轮询", cls: "text-amber-800 dark:text-amber-400" },
+  closed: { text: "休市 · 展示最近交易日数据", cls: "text-zinc-600 dark:text-zinc-400" },
+  stale: { text: "数据过期 · 后端刷新异常", cls: "text-amber-800 dark:text-amber-400" },
+  error: { text: "连接失败", cls: "text-red-700 dark:text-red-400" },
 };
 
 /** 需要常驻可见的异常态。live/closed 是"一切正常"的正常态，消费方不得常驻渲染
@@ -212,7 +212,9 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [hasSymbols]);
+    // throttleMs 是**数字**（`opts?.throttleMs ?? 0`），依赖按值比较——
+    // 调用方每次传内联对象也不会导致重连；真改动节流值时才重连，符合预期。
+  }, [hasSymbols, throttleMs]);
 
   // 订阅更新：连接存活时发 subscribe 消息切换订阅集（不重连）。
   // ⚠️ 依赖只允许 key（集合的稳定字符串）：symbols 数组每次渲染都是新引用，

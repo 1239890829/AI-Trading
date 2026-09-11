@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import create_engine
@@ -9,9 +9,21 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
 
+_BJ = timezone(timedelta(hours=8))
+
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def beijing_now_naive() -> datetime:
+    """北京时间 naive（2026-09-09 定为事件时间口径）。
+
+    事故背景：event_card.published_at 曾存 UTC（flash 入库时 astimezone(utc)），
+    而展示/排序按北京时间理解 → 全部时间"早了 8 小时"（用户看到的事件全是早上）。
+    事件面向人看，统一存北京 naive；ranking/judge 等内部计算同步对齐此口径。
+    """
+    return datetime.now(_BJ).replace(tzinfo=None)
 
 
 _engine = None

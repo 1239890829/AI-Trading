@@ -13,6 +13,7 @@ from app.market.minute_decisions import (
     settle_due,
 )
 from app.models.paper import PaperOrder
+from app.models.watch_ledger import WatchLedger  # noqa: F401  让 create_all 建出跟踪台账表（P1-24 扫描用）
 from app.models.watchlist import Base
 from app.review.models import MinuteDecisionRow
 
@@ -158,3 +159,92 @@ def test_list_decisions_payload():
     rows = list_decisions(get_session_factory(), symbol="000001")
     assert rows and rows[0]["decision_id"].startswith("MD-")
     assert rows[0]["triggered"][0]["key"] in {"avg_dev", "vol_div"}
+
+
+# ------------------------------------------------------------- 生产接线（P1-24）
+#
+# 本轮补的是「库 → 生产链路」的接线，故测试聚焦三件事：
+#   ① 记录侧前缀稳定 ⇒ 重复扫描不产生重复样本（去重可靠性的前提）；
+#   ② degraded 原样透传（不假装满配）；
+#   ③ 盘后扫描的当日幂等 + 「台账为空不写标记」（否则当天补台账会被永久跳过）。
+
+import app.market.minute_decisions as md_mod  # noqa: E402
+from app.market.minute_decisions import record_from_points, scan_and_settle_today  # noqa: E402
+from app.picks.watch_ledger import record_sighting  # noqa: E402
+from app.sentiment.metric_history import beijing_today  # noqa: E402
+from tests.test_minute_signals import mk_series  # noqa: E402
+
+
+def _signal_series():
+    """低吸共振序列（与 test_minute_signals 同构）：确定性产出 ≥1 条信号。"""
+    prices = [10.0] * 30 + [9.80] * 6 + [9.75, 9.76, 9.76, 9.76]
+    vols = [1000] * 30 + [5000] + [1000] * 5 + [200] * 4
+    return mk_series(prices, vols)
+
+
+def test_record_from_points_prefix_stable_and_dedup():
+    """前缀稳定 ⇒ 同日重复扫描 0 新增（这正是 (symbol, trigger_ts) 去重可靠的前提）。"""
+    sf = get_session_factory()
+    first = record_from_points(sf, "600111", _signal_series(), yesterday_vol=100_000)
+    assert first["computed"] >= 1
+    assert first["recorded"] == first["computed"]  # 首次全落库
+    again = record_from_points(sf, "600111", _signal_series(), yesterday_vol=100_000)
+    assert again["computed"] == first["computed"]  # 重算结果完全一致
+    assert again["recorded"] == 0                  # 无重复样本
+
+
+def test_record_from_points_degrades_not_fakes():
+    """缺输入 → degraded 如实上报，不补 0 不假装满配。"""
+    sf = get_session_factory()
+    out = record_from_points(sf, "600112", _signal_series())
+    assert any("缺昨日量" in d for d in out["degraded"])
+    assert any("缺近 5 日波动率" in d for d in out["degraded"])
+    assert any("turnover" in d for d in out["degraded"])  # 恒降级项
+    # 给了昨日量 → 该项不再报缺
+    full = record_from_points(
+        sf, "600113", _signal_series(), yesterday_vol=100_000, daily_vol_pct=1.8
+    )
+    assert not any("缺昨日量" in d for d in full["degraded"])
+    assert not any("缺近 5 日波动率" in d for d in full["degraded"])
+
+
+def test_scan_skips_without_tracked_symbols_and_leaves_no_marker(monkeypatch, tmp_path):
+    """台账为空 → 跳过且**不写标记**（当天晚些补台账仍会被扫到）。
+
+    台账读取被替换为空：全量跑时内存库是**跨用例共享**的（conftest 的 TestClient
+    会让别的模块先写入当日台账行），「空台账」无法靠真实库状态构造。
+    """
+    monkeypatch.setattr(md_mod, "SCAN_DIR", tmp_path)
+    monkeypatch.setattr(md_mod, "_tracked_symbols", lambda sf, d: [])
+    out = scan_and_settle_today(None, session_factory=get_session_factory())
+    assert out["skipped"] == "no_tracked_symbols"
+    assert list(tmp_path.glob("scan-*.json")) == []
+
+
+def test_tracked_symbols_reads_ledger():
+    """台账 → 标的清单的读取通路（真实库读，独立于扫描逻辑）。"""
+    sf = get_session_factory()
+    tdate = beijing_today().isoformat()
+    record_sighting(trade_date=tdate, symbol="600114", name="测试标的", session_factory=sf)
+    assert "600114" in md_mod._tracked_symbols(sf, tdate)
+    db = sf()
+    assert db.query(WatchLedger).filter(
+        WatchLedger.trade_date == tdate, WatchLedger.symbol == "600114"
+    ).count() == 1
+    db.close()
+
+
+def test_scan_idempotent_and_records_from_ledger(monkeypatch, tmp_path):
+    """有标的 → 扫描记录 + 落标记；同日第二次调用直接跳过（幂等）。"""
+    monkeypatch.setattr(md_mod, "SCAN_DIR", tmp_path)
+    monkeypatch.setattr(md_mod, "tdx_points", lambda sym: _signal_series())
+    monkeypatch.setattr(md_mod, "_tracked_symbols", lambda sf, d: ["600114"])
+    sf = get_session_factory()
+
+    first = scan_and_settle_today(None, session_factory=sf)
+    assert first["scanned"] == 1 and first["recorded"] >= 1
+    marker = tmp_path / f"scan-{beijing_today().isoformat()}.json"
+    assert marker.exists()
+
+    second = scan_and_settle_today(None, session_factory=sf)
+    assert second["skipped"] == "already_scanned"

@@ -141,7 +141,7 @@ function renderInline({ text, match, onNavigate }: InlineProps): ReactNode[] {
             key={`e${key++}`}
             type="button"
             title={`${h.name} — 点击跳转到${NAV_LABELS[h.key as NavKey] ?? "对应功能"}`}
-            className="mx-0.5 rounded bg-emerald-500/10 px-1 font-medium text-emerald-600 transition-colors hover:bg-emerald-500/20 dark:text-emerald-400"
+            className="mx-0.5 rounded bg-emerald-500/10 px-1 font-medium text-emerald-700 transition-colors hover:bg-emerald-500/20 dark:text-emerald-400"
             onClick={() => onNavigate(h)}
           >
             {h.text}
@@ -155,7 +155,7 @@ function renderInline({ text, match, onNavigate }: InlineProps): ReactNode[] {
               key={`e${key++}`}
               type="button"
               title={`${h.name}（${h.code}）— 点击打开个股详情`}
-              className="mx-0.5 rounded bg-sky-500/10 px-1 font-medium text-sky-600 underline decoration-dotted underline-offset-2 hover:bg-sky-500/20 dark:text-sky-400"
+              className="mx-0.5 rounded bg-sky-500/10 px-1 font-medium text-sky-700 underline decoration-dotted underline-offset-2 hover:bg-sky-500/20 dark:text-sky-400"
               onClick={() => onNavigate(h)}
             >
               {h.text}
@@ -165,7 +165,7 @@ function renderInline({ text, match, onNavigate }: InlineProps): ReactNode[] {
               key={`e${key++}`}
               type="button"
               title={`${h.name} — 点击查看题材梯队`}
-              className="mx-0.5 rounded bg-violet-500/10 px-1 font-medium text-violet-600 transition-colors hover:bg-violet-500/20 dark:text-violet-400"
+              className="mx-0.5 rounded bg-violet-500/10 px-1 font-medium text-violet-700 transition-colors hover:bg-violet-500/20 dark:text-violet-400"
               onClick={() => onNavigate(h)}
             >
               {h.text}
@@ -199,7 +199,7 @@ function renderInline({ text, match, onNavigate }: InlineProps): ReactNode[] {
           <a
             key={`l${key++}`}
             href={lm[2]}
-            className="rounded text-sky-600 transition-colors hover:bg-sky-500/10 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300"
+            className="rounded text-sky-700 transition-colors hover:bg-sky-500/10 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300"
           >
             {lm[1] || lm[2]}
           </a>,
@@ -241,7 +241,7 @@ export function RichText({ text, matcher, onNavigate, className }: RichTextProps
             return (
               <pre
                 key={i}
-                className="overflow-x-auto rounded-lg bg-zinc-900 p-3 font-mono text-xs text-zinc-100 dark:bg-black/60"
+                className="overflow-x-auto rounded-lg bg-zinc-900 p-3 font-mono text-xs text-zinc-900 dark:text-zinc-100 dark:bg-black/60"
               >
                 <code>{b.content}</code>
               </pre>
@@ -275,7 +275,7 @@ export function RichText({ text, matcher, onNavigate, className }: RichTextProps
             return (
               <blockquote
                 key={i}
-                className="border-l-2 border-zinc-300 pl-3 text-zinc-500 dark:border-zinc-700 dark:text-zinc-400"
+                className="border-l-2 border-zinc-300 pl-3 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
               >
                 {b.lines.map((l, j) => (
                   <Fragment key={j}>
@@ -293,7 +293,7 @@ export function RichText({ text, matcher, onNavigate, className }: RichTextProps
                     <thead className="bg-zinc-50 dark:bg-zinc-900">
                       <tr>
                         {b.header.map((c, j) => (
-                          <th key={j} className="border-b border-zinc-200 px-2 py-1.5 text-left font-medium text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+                          <th key={j} className="border-b border-zinc-200 px-2 py-1.5 text-left font-medium text-zinc-600 dark:border-zinc-800 dark:text-zinc-400">
                             {inline(c)}
                           </th>
                         ))}

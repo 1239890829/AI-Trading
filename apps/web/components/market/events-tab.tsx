@@ -2,12 +2,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { NewsModal, type NewsModalItem } from "@/components/news-modal";
+import { useDetailModal } from "@/components/detail/detail-modal";
 import { Panel } from "@/components/panel";
 import { StockPools, directionLabel } from "@/components/event-panel";
 import { getImpactEvents, type EventSort, type ImpactEvent } from "@/lib/api";
 import { themesUrl, workbenchUrl } from "@/lib/routing";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { Skeleton } from "@/components/ui/loading";
+import { IncrementalSentinel } from "@/components/ui/incremental-sentinel";
+import { useIncremental } from "@/hooks/use-incremental";
 
 /**
  * 事件 Tab（§六.4 用户拍板 2026-09-04）：云图之后独立视图。
@@ -21,17 +24,17 @@ import { Skeleton } from "@/components/ui/loading";
 
 const FOUR_STYLE: Record<string, string> = {
   international: "bg-sky-500/15 text-sky-700 border-sky-500/40 dark:text-sky-300",
-  policy: "bg-amber-500/15 text-amber-700 border-amber-500/40 dark:text-amber-300",
+  policy: "bg-amber-500/15 text-amber-800 border-amber-500/40 dark:text-amber-300",
   hot: "bg-zinc-500/15 text-zinc-700 border-zinc-500/40 dark:text-zinc-300",
   material: "bg-teal-500/15 text-teal-700 border-teal-500/40 dark:text-teal-300",
 };
 
 const LEVEL_STYLE: Record<string, string> = {
-  L1: "bg-up/20 text-up border-up/50",
+  L1: "bg-up/20 text-up-ink dark:text-up border-up/50",
   L2: "bg-zinc-500/15 text-zinc-600 border-zinc-500/40 dark:text-zinc-300",
 };
 
-const TAG_STYLE = "bg-indigo-500/10 text-indigo-600 border-indigo-500/30 dark:text-indigo-300";
+const TAG_STYLE = "bg-indigo-500/10 text-indigo-700 border-indigo-500/30 dark:text-indigo-300";
 
 const FOUR_FILTERS = [
   { key: "all", label: "全部" },
@@ -54,7 +57,7 @@ const CHIP =
 const CHIP_ON =
   "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900";
 const CHIP_OFF =
-  "border-zinc-200 text-zinc-500 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100";
+  "border-zinc-200 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100";
 
 export function EventsTab() {
   const [items, setItems] = useState<ImpactEvent[] | null>(null);
@@ -67,6 +70,7 @@ export function EventsTab() {
   const [modalItem, setModalItem] = useState<NewsModalItem | null>(null);
   const [l1Only, setL1Only] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
+  const { open: openDetail } = useDetailModal();
 
   const load = useCallback(async () => {
     const r = await getImpactEvents(false, 100, sort);
@@ -100,11 +104,18 @@ export function EventsTab() {
       (!l1Only || e.impact_level === "L1"),
   );
 
+  // 增量渲染（#55 分页）：/api/events/impact?limit=100 实测 75 条，每条含
+  // directions/tags 嵌套渲染，一次性铺开 DOM 明显偏重。筛选条件变化时重置到首页
+  // （resetKey），避免"筛完只剩 3 条却仍渲染第 90 条起"的错位。
+  const { shown: shownPage, visible, sentinelRef } = useIncremental(shown, {
+    resetKey: `${four}/${tag}/${sort}/${l1Only}`,
+  });
+
   return (
     <Panel
       title="事件影响力"
       extra={
-        <span className="text-[11px] text-zinc-400">
+        <span className="text-[11px] text-zinc-600 dark:text-zinc-400">
           {countsAll ? `L1 ${countsAll.L1 ?? 0} · L2 ${countsAll.L2 ?? 0} · L3 已滤 ${countsAll.L3 ?? 0}` : ""}
         </span>
       }
@@ -123,7 +134,7 @@ export function EventsTab() {
               {s.label}
             </button>
           ))}
-          <label className="ml-auto flex cursor-pointer items-center gap-1 text-xs text-zinc-500">
+          <label className="ml-auto flex cursor-pointer items-center gap-1 text-xs text-zinc-600 dark:text-zinc-400">
             <input type="checkbox" checked={l1Only} onChange={(e) => setL1Only(e.target.checked)} />
             只看 L1
           </label>
@@ -161,7 +172,7 @@ export function EventsTab() {
         </div>
 
         {error && (
-          <p className="shrink-0 px-4 py-2 text-xs text-amber-600 dark:text-amber-300">{error}</p>
+          <p className="shrink-0 px-4 py-2 text-xs text-amber-800 dark:text-amber-300">{error}</p>
         )}
         {items === null && !error && (
           <ul className="min-h-0 flex-1 space-y-3 overflow-hidden px-4 py-3" aria-hidden>
@@ -178,13 +189,13 @@ export function EventsTab() {
           </ul>
         )}
         {items !== null && shown.length === 0 && !error && (
-          <p className="flex-1 px-4 py-6 text-center text-sm text-zinc-400">
+          <p className="flex-1 px-4 py-6 text-center text-sm text-zinc-600 dark:text-zinc-400">
             当前筛选下暂无事件（L3 日常经营/人事变动默认不上榜；时效 = 半衰期 × 2）
           </p>
         )}
 
         <ul className="min-h-0 flex-1 divide-y divide-zinc-100 overflow-y-auto dark:divide-zinc-800">
-          {shown.map((e) => (
+          {shownPage.map((e) => (
             <li key={e.id} className="px-4 py-2.5">
               <div className="flex items-baseline gap-2">
                 {sort === "relevance" && e.rank_score != null && (
@@ -209,23 +220,48 @@ export function EventsTab() {
                 {e.url ? (
                   <button
                     onClick={() =>
-                      setModalItem({ title: e.title, url: e.url!, date: e.published_at ?? null, source: e.source ?? null, kindLabel: "快讯" })
+                      setModalItem({ title: e.title, url: e.url!, date: e.published_at ?? null, source: e.source ?? null, kindLabel: "快讯", digest: e.summary ?? null })
                     }
                     className="text-left text-sm text-zinc-800 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
                   >
                     {e.title}
                   </button>
                 ) : (
-                  <span className="text-sm text-zinc-800 dark:text-zinc-100">{e.title}</span>
+                  // 2026-09-09：无 url 的快讯事件（如国新办发布会、北京商业航天）
+                  // 此前渲染成死 span 点不动。改为走通用详情弹窗，展示判定状态 +
+                  // 方向/依据/传导链 + 正文摘要（summary）或判定理由。
+                  <button
+                    onClick={() => {
+                      const d = e.directions?.[0];
+                      openDetail({
+                        kind: "event",
+                        title: e.title,
+                        url: null,
+                        theme: d?.target ?? null,
+                        source: e.source ?? null,
+                        date: e.published_at ?? null,
+                        meta: [
+                          ...(e.judge_status_label ? [{ label: "判定", value: e.judge_status_label }] : []),
+                          ...(d ? [{ label: "方向", value: d.direction > 0 ? "利好" : d.direction < 0 ? "利空" : "待判" }] : []),
+                          ...(d?.basis ? [{ label: "依据", value: d.basis }] : []),
+                          ...(d?.chain ? [{ label: "传导链", value: d.chain }] : []),
+                        ],
+                        body: e.summary ?? e.judge_reason ?? null,
+                      });
+                    }}
+                    className="text-left text-sm text-zinc-800 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
+                  >
+                    {e.title}
+                  </button>
                 )}
-                <span className="ml-auto shrink-0 text-[11px] text-zinc-400">
+                <span className="ml-auto shrink-0 text-[11px] text-zinc-600 dark:text-zinc-400">
                   {e.published_at?.slice(5, 16) ?? ""} · {e.source}
                 </span>
               </div>
               {/* 排序依据（最相关模式）：首条理由内联，全部理由悬浮 title 可追溯 */}
               {sort === "relevance" && e.rank_reasons && e.rank_reasons.length > 0 && (
                 <p
-                  className="mt-1 truncate text-[11px] text-zinc-400"
+                  className="mt-1 truncate text-[11px] text-zinc-600 dark:text-zinc-400"
                   title={e.rank_reasons.join("；")}
                 >
                   排序依据：{e.rank_reasons[0]}
@@ -255,7 +291,7 @@ export function EventsTab() {
                         title={tip || `关联${isStock ? "个股" : "题材"} ${d.target}（${d.basis || "入选理由见标的池"}）`}
                         className="inline-flex items-center gap-1 rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200"
                       >
-                        <span className="text-zinc-400">{isStock ? "个股" : "题材"}</span>
+                        <span className="text-zinc-600 dark:text-zinc-400">{isStock ? "个股" : "题材"}</span>
                         <span>{d.target}</span>
                         <span className={`font-medium ${cls}`}>{text}</span>
                       </a>
@@ -263,12 +299,25 @@ export function EventsTab() {
                   })}
                   <button
                     onClick={() => setExpanded(expanded === e.id ? null : e.id)}
-                    className="rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-500 hover:text-zinc-800 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-100"
+                    className="rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-600 hover:text-zinc-800 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-100"
                   >
                     {expanded === e.id ? "收起标的池" : "标的池 ↗"}
                   </button>
                 </div>
               )}
+              {/* 题材辨识度记忆（KB-STOCK-25 / P1-1）：消息一来先拉"熟脸"——近 30 日历史龙头 */}
+              {(() => {
+                const memText = e.directions
+                  .map((d) => d.memory_leaders && d.memory_leaders.length
+                    ? `${d.target}：${d.memory_leaders.map((m) => `${m.name}${m.max_boards}板`).join("/")}`
+                    : null)
+                  .filter((s): s is string => Boolean(s));
+                return memText.length > 0 ? (
+                  <p className="mt-1 text-[10px] text-zinc-600 dark:text-zinc-400" title="该题材近 30 日涨停过的历史龙头（记忆效应排序参考，非推荐）">
+                    记忆龙头（近30日）｜{memText.slice(0, 2).join("　")}
+                  </p>
+                ) : null;
+              })()}
               {expanded === e.id && (
                 <div className="mt-2">
                   <StockPools eventId={e.id} />
@@ -276,6 +325,18 @@ export function EventsTab() {
               )}
             </li>
           ))}
+          {/* 哨兵必须在滚动容器（本 <ul>）内部：放在外面它不随列表滚动，
+              getBoundingClientRect 恒定落在视口内 → 首帧补载一页后永不触发。
+              <ul> 内插 <li> 包裹以满足列表嵌套合法性（sentinel 本体是 div+p）。 */}
+          <li className="list-none">
+            <IncrementalSentinel
+              sentinelRef={sentinelRef}
+              visible={visible}
+              total={shown.length}
+              unit="条事件"
+              testId="events-sentinel"
+            />
+          </li>
         </ul>
       </div>
       <NewsModal item={modalItem} onClose={() => setModalItem(null)} />

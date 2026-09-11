@@ -230,9 +230,41 @@ class DirectionTracker:
         }
 
 
-#: 大单异动阈值：题材成员当日主力净流入首破 0.3 亿（3000 万）提醒。
-#: 经验初值、未经回测校准——校准走复盘 IC/胜率证据后再定稿（同 halt_risk TODO 模式）。
-FLOW_SURGE_YI = 0.3
+#: 大单异动阈值回退值：题材成员当日主力净流入首破 1.0 亿提醒。
+#: **2026-09-10 源头收紧（P1-16）：0.3 → 1.0 亿**。依据（实测 09-08~09-10 库内
+#: 151 条 flow_surge）：①触发值中位数仅 0.92 亿，0.3 亿档贡献了 51.7% 的事件；
+#: ②判读层 105 条判读中 102 条 ignore（97.1%）；③噪音挤占判读预算，实测 75 条
+#: 事件**从未被判读**（含 falsify 18 / high_board_break 3）。1.0 亿保留 48% 事件量、
+#: 砍掉一半低幅事件。仍为经验初值，实参走 settings.picks_flow_surge_yi，回测校准后定稿。
+FLOW_SURGE_YI = 1.0
+#: 每拍最多产出条数（按净额取 Top，防单拍批量刷屏——与板块规则 BOARD_ALERT_PER_BEAT 同纪律）。
+FLOW_ALERT_PER_BEAT = 5
+
+# ---- 板块级资金规则（P1-1，2026-09-10）----
+#: ①单拍净额增量突增：板块当日累计主力净额（东财 f62）相对上一拍的增量阈值。
+#: watcher 一拍 ≈ 60s，故该阈值即"每分钟净流入"。首拍无基线 → 跳过（不臆造）。
+BOARD_FLOW_SURGE_YI = 0.5
+#: ②低吸异动：当日累计净流入下限 + 涨幅上限（资金在进、价格没动）。
+BOARD_LOW_ABSORB_YI = 2.0
+BOARD_LOW_ABSORB_PCT = 2.0
+#: 每拍每规则最多产出的提醒条数（按幅度取 Top，防板块轮动刷屏）。
+BOARD_ALERT_PER_BEAT = 3
+
+
+def flow_surge_yi() -> float:
+    """大单异动阈值（亿）。配置非正/非法 → 回退 `FLOW_SURGE_YI` 并记日志（不静默改口径）。"""
+    from app.core.config import settings
+
+    raw = getattr(settings, "picks_flow_surge_yi", FLOW_SURGE_YI)
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        log.warning("picks_flow_surge_yi 非法（%r），回退默认 %.2f 亿", raw, FLOW_SURGE_YI)
+        return FLOW_SURGE_YI
+    if val <= 0:
+        log.warning("picks_flow_surge_yi 非正（%r），回退默认 %.2f 亿", raw, FLOW_SURGE_YI)
+        return FLOW_SURGE_YI
+    return val
 
 
 class IntradayWatcher:
@@ -252,6 +284,8 @@ class IntradayWatcher:
         self.beat_count = 0
         # 题材成员主力净额跟踪（P1 方向2）：symbol -> {"peak": 累计净额峰值, "alerted": bool}
         self.flow_state: dict[str, dict] = {}
+        # 板块级资金跟踪（P1-1）：board 名 -> {"last": 上一拍累计净额, "surge"/"absorb": bool}
+        self.board_flow_state: dict[str, dict] = {}
 
     def step(self, beat: dict) -> list[dict]:
         self.beat_count += 1
@@ -261,6 +295,7 @@ class IntradayWatcher:
         for tr in self.trackers:
             alerts.extend(tr.step(themes.get(tr.direction), env, beat.get("now_minutes")))
         alerts.extend(self._step_flows(beat.get("flows") or {}))
+        alerts.extend(self._step_board_flows(beat.get("board_flows") or {}))
         return alerts
 
     def _step_flows(self, flows: dict) -> list[dict]:
@@ -269,9 +304,14 @@ class IntradayWatcher:
         f62 是**当日累计**口径，无需差分；「首破」语义让持续流入只报第一拍，
         同票每日至多一次（append_alert 按 key 去重兜底）。只报流入侧——选股
         场景的标的在涨停池里，流出异动由炸板池/跌停池覆盖，不重复建设。
+
+        **源头收紧（P1-16，2026-09-10）**：①阈值由 settings `picks_flow_surge_yi`
+        给（默认 1.0 亿，原 0.3 亿）；②每拍按净额取 Top `FLOW_ALERT_PER_BEAT`，
+        未入选的**不置 alerted**，下一拍仍有候选机会（不是丢弃，只是排队）。
         阈值为经验初值（未经回测校准，同 halt_risk 模式，校准前仅作提示）。
         """
-        out: list[dict] = []
+        threshold = flow_surge_yi()
+        cands: list[tuple[float, str, dict]] = []
         for sym, it in flows.items():
             if not isinstance(it, dict) or not it.get("available"):
                 continue
@@ -280,20 +320,86 @@ class IntradayWatcher:
                 continue
             st = self.flow_state.setdefault(sym, {"peak": None, "alerted": False})
             st["peak"] = main if st["peak"] is None else max(st["peak"], main)
-            if st["alerted"] or main < FLOW_SURGE_YI:
+            if st["alerted"] or main < threshold:
                 continue
-            st["alerted"] = True
+            cands.append((main, sym, it))
+
+        out: list[dict] = []
+        for main, sym, it in sorted(cands, key=lambda x: x[0], reverse=True)[:FLOW_ALERT_PER_BEAT]:
+            self.flow_state.setdefault(sym, {})["alerted"] = True
             name = it.get("name") or ""
             out.append({
                 "key": f"flow-surge-{sym}",
                 "kind": "flow_surge",
                 "direction": "",
                 "symbol": sym,
+                "name": name,
                 "text": (
                     f"💰 大单异动 {name}({sym})：主力净流入 {main:.2f} 亿"
-                    f"（当日累计首破 {FLOW_SURGE_YI} 亿，题材成员跟踪）"
+                    f"（当日累计首破 {threshold} 亿，题材成员跟踪）"
                 ),
-                "meta": {"trigger_value": round(main, 3), "threshold": FLOW_SURGE_YI},
+                "meta": {"trigger_value": round(main, 3), "threshold": threshold},
+            })
+        return out
+
+    def _step_board_flows(self, boards: dict) -> list[dict]:
+        """板块级资金规则（P1-1）：①单拍净额增量突增 ②低吸异动（资金进、价没动）。
+
+        与个股 `_step_flows` 的关键差别：f62 是**当日累计**口径——个股用「首破阈值」
+        规避差分，而板块要的是"正在加速"，**必须与上一拍做差**。watcher 一拍 ≈60s，
+        故增量即"每分钟净流入"。首拍无基线 → 只记基线不判定（不臆造）。
+
+        两类各当日一次（key 含规则名+板块名，`append_alert` 兜底）；每拍按幅度取
+        Top `BOARD_ALERT_PER_BEAT`，防板块轮动刷屏。阈值为经验初值、未回测校准。
+        """
+        out: list[dict] = []
+        surge: list[tuple[float, str, dict]] = []
+        absorb: list[tuple[float, str, dict]] = []
+        for name, it in boards.items():
+            if not name or not isinstance(it, dict):
+                continue
+            net = it.get("net")
+            if net is None:
+                continue
+            st = self.board_flow_state.setdefault(
+                name, {"last": None, "surge": False, "absorb": False}
+            )
+            prev, st["last"] = st["last"], net
+            pct = it.get("pct")
+            if prev is not None:
+                delta = net - prev
+                if not st["surge"] and delta >= BOARD_FLOW_SURGE_YI:
+                    surge.append((delta, name, {"net": net, "delta": delta}))
+            if (not st["absorb"] and net >= BOARD_LOW_ABSORB_YI
+                    and pct is not None and pct < BOARD_LOW_ABSORB_PCT):
+                absorb.append((net, name, {"net": net, "pct": pct}))
+
+        for delta, name, d in sorted(surge, key=lambda x: x[0], reverse=True)[:BOARD_ALERT_PER_BEAT]:
+            self.board_flow_state.setdefault(name, {})["surge"] = True
+            out.append({
+                "key": f"board-flow-surge-{name}",
+                "kind": "board_flow_surge",
+                "direction": name,
+                "text": (
+                    f"🌊 板块资金突增 {name}：本拍主力净流入 +{d['delta']:.2f} 亿"
+                    f"（当日累计 {d['net']:.2f} 亿；阈值 {BOARD_FLOW_SURGE_YI} 亿/拍）"
+                ),
+                "meta": {"trigger_value": round(d["delta"], 3),
+                         "threshold": BOARD_FLOW_SURGE_YI,
+                         "cum_net_yi": round(d["net"], 3)},
+            })
+        for net, name, d in sorted(absorb, key=lambda x: x[0], reverse=True)[:BOARD_ALERT_PER_BEAT]:
+            self.board_flow_state.setdefault(name, {})["absorb"] = True
+            out.append({
+                "key": f"board-low-absorb-{name}",
+                "kind": "board_low_absorb",
+                "direction": name,
+                "text": (
+                    f"🧲 低吸异动 {name}：主力净流入 {d['net']:.2f} 亿但仅涨 {d['pct']:.2f}%"
+                    f"（流入 ≥{BOARD_LOW_ABSORB_YI} 亿 且 涨幅 <{BOARD_LOW_ABSORB_PCT}%）"
+                ),
+                "meta": {"trigger_value": round(d["net"], 3),
+                         "threshold": BOARD_LOW_ABSORB_YI, "change_pct": d["pct"]},
             })
         return out
 
@@ -318,6 +424,7 @@ class IntradayWatcher:
                 for t in self.trackers
             ],
             "flow_tracked": len(self.flow_state),
+            "board_flow_tracked": len(self.board_flow_state),
             "flow_alerted": sorted(s for s, v in self.flow_state.items() if v.get("alerted")),
         }
 
@@ -380,6 +487,32 @@ async def _board_pcts(hub) -> tuple[dict[str, float], int]:
             if name and pct is not None:
                 out[name] = float(pct)
     return out, len(out)
+
+
+async def _board_flows(hub) -> dict[str, dict]:
+    """板块主力净额（概念+行业）：name -> {net, pct, code}（净额单位亿，东财 f62 口径）。
+
+    与 `_board_pcts` 同源、同走 board_flow 唯一入口（30s TTL 缓存 → 实际零额外上游
+    调用）。**拆成独立函数是为了不动 `_board_pcts` 的签名**——测试按旧签名
+    monkeypatch 它。net 缺失（None）如实保留，调用方按 unknown 处理，
+    绝不拿 0 冒充"无流入"（三态纪律）。
+    """
+    out: dict[str, dict] = {}
+    for kind in ("concept", "industry"):
+        rows, errs = await board_flow.get_board_list(kind)
+        if rows is None:
+            log.warning("watcher beat: board flow %s unavailable: %s", kind, "; ".join(errs))
+            continue
+        for row in rows:
+            name = row.get("name")
+            if not name:
+                continue
+            out[name] = {
+                "net": row.get("main_net_yi"),
+                "pct": row.get("change_pct"),
+                "code": row.get("board_code"),
+            }
+    return out
 
 
 async def _refresh_env(state, env_cache: dict, refresh_after: float) -> dict:
@@ -514,6 +647,12 @@ async def collect_beat_inputs(app, env_cache: dict, *, env_refresh_seconds: floa
 
     board_pct, board_count = await _board_pcts(hub)
     beat["board_count"] = board_count
+    # 板块级资金（P1-1）：与涨幅同源（board_flow 唯一入口，命中 30s TTL 缓存）。
+    # 失败 → 键缺席，_step_board_flows 无输入（不臆造、不阻断其他判定）。
+    try:
+        beat["board_flows"] = await _board_flows(hub)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("watcher beat: board flow failed: %s", exc)
     for tag, st in themes.items():
         st["pct"] = match_board_pct(tag, board_pct)
 
@@ -585,6 +724,46 @@ def ensure_system_rule(session_factory) -> AlertRule:
         return row
 
 
+def _snapshot_price(app, symbol) -> float | None:
+    """从快照取现价（只在调用方没有价格语义字段时作回退）。取不到 → None。"""
+    if not symbol:
+        return None
+    try:
+        svc = getattr(app.state if hasattr(app, "state") else app, "snapshot_service", None)
+        for sr in getattr(svc, "snapshot", None) or []:
+            if sr.get("symbol") == symbol:
+                p = sr.get("price")
+                return float(p) if isinstance(p, (int, float)) and p > 0 else None
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _alert_price(alert: dict, snap_price: float | None = None) -> float | None:
+    """取告警的**价格**——只认价格语义字段，**绝不用 `trigger_value`**。
+
+    🔴 历史缺陷（2026-09-10 发现并修复，污染数据与影响见 `retro-and-gaps.md`）：
+    `trigger_value` 在本模块有四种语义且**没有一种表示价格**——
+    falsify/confirm = 涨跌幅、flow_surge/board_flow = 净额（亿元）；
+    `buy_point` 的价格放在 `meta["price"]`（不是 trigger_value）。
+    此前 `entry_price` 与 `maybe_open(price=...)` 两处都直接取 `trigger_value`，后果：
+      · `watch_ledger` 把「主力净流入 0.32 亿」写成股价 0.32 → pnl 算出 **22150%**、
+        verdict 误判 success（09-09 有 71 行）；
+      · `paper_order` 以「题材涨跌幅 1.82」当价格开模拟仓 → **模拟成本价错误**
+        （实测单号 1/2：603330 以 1.82 元挂单）。
+    取数优先级：`meta["price"]`（价格语义字段）→ 快照现价 → **None**。
+    ⚠️ 返回 None 时调用方必须接受「判不出」：`record_sighting` 会让该行在清算时
+    跳过（不产生 verdict），`maybe_open` 会拒绝开仓——**宁可不判，不可判错**。
+    """
+    meta = alert.get("meta") or {}
+    p = meta.get("price")
+    if isinstance(p, (int, float)) and p > 0:
+        return float(p)
+    if isinstance(snap_price, (int, float)) and snap_price > 0:
+        return float(snap_price)
+    return None
+
+
 async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
     """去重（append_alert）→ record_trigger → NotifierRegistry 分发。
 
@@ -607,6 +786,7 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
 
             # 2026-09-09 用户指令：缺名称=无效提醒——name 空时从快照补，仍空则不登记
             snap_pct: float | None = None
+            snap_price: float | None = None
             if not alert.get("name"):
                 try:
                     snap_rows = getattr(app.state if hasattr(app, "state") else app, "snapshot_service", None)
@@ -614,6 +794,7 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
                         if sr.get("symbol") == alert["symbol"]:
                             alert["name"] = sr.get("name") or ""
                             snap_pct = sr.get("change_pct")
+                            snap_price = sr.get("price")
                             break
                 except Exception:  # noqa: BLE001
                     pass
@@ -628,6 +809,7 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
                     for sr in getattr(snap_rows, "snapshot", None) or []:
                         if sr.get("symbol") == alert["symbol"]:
                             snap_pct = sr.get("change_pct")
+                            snap_price = sr.get("price")
                             break
                 except Exception:  # noqa: BLE001
                     pass
@@ -646,7 +828,7 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
                     source_theme=str(alert.get("direction") or ""),
                     reason={"kind": alert.get("kind"), "text": (alert.get("text") or "")[:300],
                             "direction": alert.get("direction") or ""},
-                    entry_price=(alert.get("meta") or {}).get("trigger_value"),
+                    entry_price=_alert_price(alert, snap_price),
                     entry_time=beijing_now().strftime("%H:%M:%S"),
                 )
     # 仓位引擎（2026-09-09 闭环「持仓」段）：买点/确认触发 → 是否自动开模拟仓由
@@ -660,7 +842,7 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
                 app,
                 symbol=str(alert["symbol"]), name=str(alert.get("name") or ""),
                 trigger=str(alert["kind"]),
-                price=(alert.get("meta") or {}).get("trigger_value"),
+                price=_alert_price(alert, _snapshot_price(app, alert.get("symbol"))),
             )
 
     state = app.state if hasattr(app, "state") else app
@@ -672,6 +854,11 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
         "kind": alert.get("kind"),
         "direction": alert.get("direction"),
         "text": alert.get("text"),
+        # 名称必须随快照落库：悬浮球（alert_triage.pending_bubbles）要求
+        # symbol+name 齐备，缺 name 整条过滤（2026-09-09 用户指令）。
+        # 此前只落 kind/direction/text → 实测 14 条 notify 全部 name=None，
+        # 悬浮球一条 watcher 个股提醒都收不到（2026-09-10 修复）。
+        "name": alert.get("name") or None,
     }
     if isinstance(alert.get("card"), dict):
         snapshot["card"] = alert["card"]

@@ -22,6 +22,33 @@ def _fmt(v, suffix: str = "") -> str:
     return "--" + suffix if v is None else f"{v}{suffix}"
 
 
+def _collect_other_strategy_health(session_factory) -> dict:
+    """跨策略键健康度摘要（**排除 daily_picks**，它已有组合级专门段落）。
+
+    失败只记日志并返回空摘要——策略级是增量信息，不该让整个维度降级。
+    """
+    try:
+        from app.picks.strategy_registry import collect_all_strategy_health
+
+        out = collect_all_strategy_health(session_factory)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("strategy_registry: 复盘维度取数失败：%s", exc)
+        return {"total": 0, "attention": [], "not_judgeable": 0, "error": str(exc)}
+
+    items = [s for s in out["strategies"] if s.get("strategy_key") != "daily_picks"]
+    attention = [s for s in items if s.get("status") in ("warning", "drift")]
+    not_judgeable = sum(
+        1 for s in items
+        if s.get("status") in ("insufficient", "thin", "no_pipeline")
+    )
+    return {
+        "total": len(items),
+        "attention": attention,
+        "not_judgeable": not_judgeable,
+        "statuses": {s.get("strategy_key"): s.get("status") for s in items},
+    }
+
+
 def build_strategy_health_dimension(
     session_factory, sentiment: dict | None
 ) -> tuple[DimensionResult, dict]:
@@ -69,6 +96,39 @@ def build_strategy_health_dimension(
         elif h_status == "warning":
             judgements.append(
                 "滚动胜率或超额越警戒线：关注下一批组合的确认/证伪记录，勿加仓执行"
+            )
+
+    # --- 跨策略键健康度（P1-37/P1-38）---
+    # ⚠️ 去重纪律：`daily_picks` 已由上面的组合级段落覆盖，此处**排除**它，
+    #    否则同一策略会被报两遍（口径重复计数）。
+    strategy_health = _collect_other_strategy_health(session_factory)
+    if strategy_health["total"] > 0:
+        evidence["strategy_health"] = strategy_health
+        attention = strategy_health["attention"]
+        judged_na = strategy_health["not_judgeable"]
+        if attention:
+            for s in attention:
+                basis_hint = (
+                    "（口径=绝对收益，只反映该策略自身变化，非 alpha 衰减）"
+                    if s.get("basis") == "absolute" else "（口径=市场中性超额）"
+                )
+                w = s.get("window") or {}
+                findings.append(
+                    f"策略[{s.get('name')}] 健康度[{s.get('status')}]："
+                    f"{w.get('groups', 0)} 组日 {w.get('total_picks', 0)} 笔——"
+                    f"胜率 {_fmt(w.get('win_rate'))}、"
+                    f"日均{'收益' if s.get('basis') == 'absolute' else '超额'} "
+                    f"{_fmt(w.get('mean_excess'), '%')}{basis_hint}"
+                )
+        if judged_na:
+            findings.append(
+                f"另有 {judged_na} 个未接入策略键无法判定（样本不足 / 触发次数不足 / 无逐日落库）"
+                "——「判不出」不等于「失效」，勿据此停用"
+            )
+        if attention:
+            judgements.append(
+                "存在策略键健康度越线：核对是「策略失效」还是「相位/环境错配」"
+                "（同一策略在不同相位表现可差一个档），确认失效则走处置台账（归档/改造）"
             )
 
     # --- 相位对账（昨日 switch_conditions vs 今日实际相位）---
@@ -141,3 +201,55 @@ def build_signal_health_action_item(health: dict) -> ActionItem | None:
             "确认失效则降低执行档位/仓位上限"
         ),
     )
+
+
+def build_strategy_key_action_items(session_factory) -> list[ActionItem]:
+    """跨策略键 warning/drift → 改进项（**排除 daily_picks**，它走上面那条）。
+
+    `insufficient`/`thin`/`no_pipeline` → 不产改进项：
+    那是「还没法判」，不是「策略有缺陷」——产了会变成噪音待办。
+    """
+    from app.picks.strategy_registry import collect_all_strategy_health
+
+    try:
+        out = collect_all_strategy_health(session_factory)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("strategy_registry: 改进项取数失败：%s", exc)
+        return []
+
+    items: list[ActionItem] = []
+    for s in out["strategies"]:
+        if s.get("strategy_key") == "daily_picks":
+            continue
+        status = s.get("status")
+        if status not in ("warning", "drift"):
+            continue
+        w = s.get("window") or {}
+        cusum = s.get("cusum") or {}
+        basis_label = "绝对收益" if s.get("basis") == "absolute" else "市场中性超额"
+        ev = (
+            f"[{s.get('name')}] 近 {w.get('groups')} 组日 {w.get('total_picks')} 笔："
+            f"胜率 {_fmt(w.get('win_rate'))}、日均{basis_label} {_fmt(w.get('mean_excess'), '%')}"
+        )
+        if status == "drift" and cusum:
+            ev += f"；CUSUM s_max={cusum.get('s_max')} > 阈值 {cusum.get('threshold')}"
+        else:
+            ev += "——越过警戒线（胜率 <40% 或均值 <-1%）"
+        if s.get("basis") == "absolute":
+            ev += "。⚠️ 该口径为绝对收益，只说明「策略自身在变差」，不能读作 alpha 衰减"
+        items.append(ActionItem(
+            title=f"策略[{s.get('name')}] 健康度[{status}]：需复核是否失效",
+            category="strategy",
+            priority="P0" if status == "drift" else "P1",
+            expected_impact=(
+                "策略衰减期继续按原档位执行会放大回撤；确认失效应走处置台账（归档/改造），"
+                "而非继续沿用"
+            ),
+            evidence=ev,
+            target=f"picks/strategy_registry + {s.get('source')}",
+            proposed_change=(
+                "对照 docs/strategy-registry.md 该条目的「失效判据」人工复核；"
+                "确认失效则在处置台账追加一行（含证据链与样本边界），并按三选一动作处置"
+            ),
+        ))
+    return items

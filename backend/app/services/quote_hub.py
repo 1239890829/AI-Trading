@@ -6,6 +6,7 @@ from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
+from app.core.freshness import Freshness
 from app.data_quality.validator import mark_stale, validate_quote
 from app.market import trade_calendar as tc
 from app.schemas.market import Quote, utcnow
@@ -176,12 +177,31 @@ class QuoteHub:
             mark_stale(q, reason)
         self._broadcast("stale")
 
-    def is_stale(self) -> bool:
+    def freshness(self) -> Freshness:
+        """行情链新鲜度（S2-1 契约的 **QuoteHub 样板**）。
+
+        `is_stale()` 是这套判定的"二态年代"替身：它把三种**成因完全不同**的情况
+        ——①从未成功刷新 ②已标记休市 ③超过 `stale_after`——压成一个布尔，
+        调用方无从区分"该显示占位符"还是"该显示昨收并标注"。本方法保留三种成因，
+        `is_stale()` 改为它的派生布尔（判定逻辑单点在此，不再各写一份）。
+        """
+        source = getattr(self.provider, "name", None)
         if self.last_success_refresh is None:
-            return True
-        if self._closed_marked:
-            return True  # 休市：最近交易日数据，绝不冒充实时（红线 2）
-        return utcnow() - self.last_success_refresh > timedelta(seconds=self.stale_after)
+            return Freshness.unavailable(reason="行情链尚未成功刷新过", source=source)
+        f = Freshness.from_age(
+            as_of=self.last_success_refresh, fresh_within=self.stale_after,
+            source=source, missing_reason="无成功刷新时间，无法判定新鲜度",
+        )
+        if self._closed_marked and f.state == "ready":
+            # 休市：数据是最近交易日的，绝不冒充实时（红线 2）
+            return Freshness.stale(
+                as_of=f.as_of, age_seconds=f.age_seconds, source=source,
+                reason="已标记休市：当前为最近交易日数据，不冒充实时",
+            )
+        return f
+
+    def is_stale(self) -> bool:
+        return not self.freshness().is_fresh()
 
     # ---------- 读取 ----------
 

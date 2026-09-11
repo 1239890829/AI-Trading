@@ -77,6 +77,51 @@
 5. **≥1000★ 硬门槛**保持；trading 分组已有的仓不重复收录（去重表见 git log / kb 面板）
 6. **A 股 LLM 应用层正在爆发**（TradingAgents 系 31k+、daily_stock_analysis 64k）——每轮必查该类新仓库
 
+## trading 分组 diff 台账（2026-09-09，22 仓快照 vs 历史已评）
+
+> 2026-09-09 拉取 trading 分组 22 仓，与 docs/archive/github-stars-trading-analysis.md
+> （08-30 深评）+ github-repo-audit-financial-api-sequoia-x.md（09-03）做差集——
+> **已评 14 仓直接引用历史结论（不重复评估）**；真新增 8 仓浅评如下。
+
+### A. 已评仓（引用 archive，状态不变）
+持续使用：Financial-API（ths fuyao 官方，四源链首源）、akshare（双源校验）、akquant（talib rust）
+保留参考：freqtrade（出场纪律已落地）、myhhub/stock（筹码反面教材）
+归档/不采用：TradingAgents（12 次 LLM/票不可接受）、ai-hedge-fund、daily_stock_analysis、
+Vibe-Trading、qlib、OpenBB、quantskills、zvt
+废弃：vnpy（禁实盘红线正交）
+忽略：Sequoia-X（无 LICENSE，09-03 已判）
+
+### B. 真新增 8 仓浅评（本次）
+| 仓库 | 判定 | 一句话 |
+|---|---|---|
+| KylinMountain/AlphaAgents (5★, 09-09 push, 有 LICENSE) | ⏳ 候选试点 | 「会因亏过钱改变下次判断的 AI 交易员」——新闻驱动自主选股+反思记忆，场景最贴我们的消息面/议程自动演进；星低但方向精准，P2 TradingAgent 演进参照物之一 |
+| Tencent/WeKnora (22k★ Go) | 归档观察 | 腾讯 LLM 知识平台（KB/RAG/多 agent 读取）；我们 KB 已自建+议程第八路消费，触发条件=KB 规模爆炸再评 |
+| waditu/czsc (6k★ Rust 缠论) | 归档观察 | 缠论 Rust 库，集成成本高；easy_tdx 已带缠论（历史采纳），无新增 |
+| zvt (4.3k★) | 归档 | modular quant 中频框架，与 qlib 同族域不同频 |
+| stockstats (1.5k★) | 归档 | pandas 指标包装，域是 Python vs 我们 TS technical-analysis |
+| cvxportfolio (1.3k★ Stanford) | 归档远期 | 学术组合优化；我们无组合需求，仓位引擎规则级已够 |
+| tqsdk-python (5k★) | 废弃 | 期货域外 |
+| efinance (4k★) | 不引入 | 与 akshare 东财源重叠（日 K 冒烟可拉，涨停池接口不匹配），非替换项 |
+
+**换血结论**：真新增无「替换级」候选——金融/量化大仓 08-30~09-03 已评完并落地；
+数据源层早为 ths fuyao + easy_tdx + akshare + 腾讯多源，无需新源。
+**剩余真实差距回到系统内部**（因子库 0 消费 / 形态薄弱 / 记忆效应排序），不依赖新 repo。
+
+## 历史审计索引（archive 专项审计归口，2026-09-10）
+
+> 用途：查"某仓库/工具评过没、结论是什么"**先看本表**，再按指针翻 archive 详情（archive 只读、不再更新）。
+> 主表：`archive/github-stars-trading-analysis.md`（trading 分组 16 仓速查表 + 逐仓深评）——**唯一总表，勿另造**。
+
+| 专项审计（`docs/archive/`） | 覆盖对象 | 一句话结论 | 时间 |
+|---|---|---|---|
+| **github-stars-trading-analysis.md** | trading 分组 16 仓 | **主表**：结论速查 + 逐仓评估（含 2 项已落地） | 09-03 |
+| github-repo-audit-chips-pattern-chanlun.md | 筹码分布 / TA-Lib 形态 | 筹码不自研（akshare `stock_cyq_em` 取东财已算结果）；TA-Lib 日线形态噪音大 → 放弃引入，改自实现已有 3 形态 | 08-30~09-03 |
+| github-repo-audit-dsa-misc.md | daily_stock_analysis 等 | star 真实性=真项目 + 营销推高（star≠深度用户）；架构参考、不引入依赖 | 08-30~09-03 |
+| github-repo-audit-financial-api-sequoia-x.md | 同花顺官方 API / Sequoia-X | Financial-API = 在用的 fuyao 本体（价值=盘点未启用官方能力）；Sequoia-X 无 LICENSE → 忽略 | 08-30~09-03 |
+| github-repo-audit-frameworks.md | freqtrade / vnpy / OpenBB / AlphaMaster | **freqtrade 回测引擎对本项目不可用**（撮合假设根本差异，硬用产系统性乐观偏差）；其余暂不采用 | 08-30~09-03 |
+| github-repo-audit-qlib-quantmind.md | qlib / QuantMind | 不引入 qlib 本体；取其「涨跌停按板块映射」等 3 项做法 | 08-30~09-03 |
+| github-llm-agent-audit.md | LLM Agent 类项目 | 编排不引入；采纳「置信度数值必须附生成它的规则引用」的 prompt 契约 | 08-30~09-03 |
+
 ## 发现日志（append-only）
 
 - **2026-09-09 首轮**：检索 10 组关键词 → 15 候选（≥1000★）→ 收录 8 仓（去重 trading 分组后）→ 深评 3（go-stock 编译通过/tick-stock-panel 装机通过/leek-fund 结构性）→ 浅评 5。经验 6 条。运行受限诚实记录：FinGPT 需 GPU、leek-fund 需 IDE 环境、其余需 LLM 多模型配置——均标注未实跑部分。

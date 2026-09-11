@@ -12,13 +12,21 @@
 
 结算采用**惰性触发**（读决策列表时顺手结算到期记录）而非后台定时器——
 单用户场景下等价且少一个常驻任务；与方案的差异已在此注明。
+
+生产接线（2026-09-10 P1-24）：本模块此前**零生产引用**（只有单测 import）。
+现由 `scan_and_settle_today()` 挂进既有 15:35 盘后复盘调度（`review_intraday.
+intraday_review_scheduler` 的收盘分支，与题材热度/板块资金快照同一位置、
+独立 try/except、当日幂等），扫描当日盘中跟踪台账标的 → 记录 → 结算。
+`GET /api/market/minute-decisions` 读列表时也会顺手结算（惰性路径）。
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from sqlalchemy import select
 
@@ -30,6 +38,8 @@ log = logging.getLogger(__name__)
 WINDOW_MINUTES = 30
 THRESHOLD_PCT = 0.08  # 8bp ≈ 2×（佣金+印花税+滑点），方案 4.3 的"有效"门槛
 TOTAL_W = 0.90        # 可计算指标权重和（turnover 恒降级，见引擎）
+
+SCAN_DIR = Path(__file__).resolve().parents[2] / "data" / "minute_decisions"
 
 _SIDE = {"低吸偏向": "buy", "高抛偏向": "sell"}
 
@@ -239,3 +249,144 @@ def list_decisions(session_factory, symbol: str | None = None, limit: int = 50) 
         } for r in rows]
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------- 生产接线（P1-24）
+
+
+def record_from_points(
+    session_factory,
+    symbol: str,
+    points: list[dict],
+    *,
+    yesterday_vol: float | None = None,
+    daily_vol_pct: float | None = None,
+) -> dict:
+    """分时序列 → 信号 → 落库（引擎前缀稳定性保证重算幂等，去重键 (symbol, trigger_ts)）。
+
+    返回 ``{"computed", "recorded", "degraded"}``；``degraded`` 原样透传引擎的降级原因
+    （缺昨日量/缺波动率等），供调用方如实标注而不是假装满配。
+    """
+    from app.market.minute_signals import compute_minute_signals
+
+    out = compute_minute_signals(
+        points, yesterday_vol=yesterday_vol, daily_vol_pct=daily_vol_pct
+    )
+    # 引擎返回的已是 dict（内部统一 model_dump 过），此处不再二次转换——
+    # 曾经的 .model_dump() 假设会让整条扫描链 AttributeError（2026-09-10 实测）。
+    signals = list(out["signals"])
+    return {
+        "computed": len(signals),
+        "recorded": record_signals(session_factory, symbol, signals),
+        "degraded": list(out.get("degraded") or []),
+    }
+
+
+def tdx_points(symbol: str) -> list[dict]:
+    """结算/扫描用的分时来源：TDX 直连 m1（同步阻塞，调用方负责丢线程池）。
+
+    失败返回 []（**不抛**）——结算侧会按「数据不足」判定，下一轮补；
+    绝不拿别家口径或空数据硬凑（三态纪律）。
+    """
+    try:
+        from app.market.minute_backfill import tdx_minute_line_fallback
+
+        return tdx_minute_line_fallback(symbol) or []
+    except Exception as exc:
+        log.warning("minute points unavailable for %s: %s", symbol, exc)
+        return []
+
+
+def _tracked_symbols(session_factory, trade_date: str) -> list[str]:
+    """当日盘中跟踪台账标的（唯一来源）。
+
+    台账为空 → 返回 []，调用方跳过本轮（**不回落自选/全市场**：那会把「没跟踪」
+    变成「凭空产生信号」，样本口径就脏了）。
+    """
+    with contextlib.suppress(Exception):
+        from app.picks.watch_ledger import get_day
+
+        out: list[str] = []
+        for r in get_day(trade_date, session_factory) or []:
+            sym = r.get("symbol")
+            if sym and sym not in out:
+                out.append(sym)
+        return out
+    return []
+
+
+def _scan_marker(trade_date: str) -> Path:
+    return SCAN_DIR / f"scan-{trade_date}.json"
+
+
+def scan_and_settle_today(app_state, *, session_factory=None) -> dict:
+    """盘后一次性闭环：扫描今日跟踪标的 → 记录信号 → 惰性结算。
+
+    **当日幂等**（落 `data/minute_decisions/scan-YYYYMMDD.json`，失败不写标记 →
+    下一 tick 重试）；台账为空则本轮直接跳过且**不写标记**（当天晚些补台账仍会被扫到）。
+
+    为什么放在盘后而不是盘中实时：引擎是**前缀稳定**的——用全天分时重放，产出的
+    信号集合与盘中逐拍实时产出的完全一致（这正是 record_signals 敢于按
+    ``(symbol, trigger_ts)`` 去重的前提）。盘后一次性扫 = 同样的样本、零常驻任务、
+    零盘中额外行情配额。
+    """
+    from app.core.db import get_session_factory
+    from app.sentiment.metric_history import beijing_today
+
+    sf = session_factory or get_session_factory()
+    tdate = beijing_today().isoformat()
+    marker = _scan_marker(tdate)
+    if marker.exists():
+        return {"skipped": "already_scanned", "trade_date": tdate}
+
+    symbols = _tracked_symbols(sf, tdate)
+    if not symbols:
+        return {"skipped": "no_tracked_symbols", "trade_date": tdate}
+
+    scanned = recorded = 0
+    degraded: list[str] = []
+    for sym in symbols:
+        points = tdx_points(sym)
+        if not points:
+            continue
+        out = record_from_points(sf, sym, points)
+        scanned += 1
+        recorded += out["recorded"]
+        degraded += out["degraded"]
+    settled = settle_due(sf, tdx_points)
+
+    SCAN_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = marker.with_suffix(".tmp")
+    tmp.write_text(
+        json.dumps(
+            {"trade_date": tdate, "symbols": symbols, "scanned": scanned,
+             "recorded": recorded, "settled": settled,
+             "degraded": sorted(set(degraded))},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    tmp.replace(marker)
+    log.info(
+        "minute decisions scan %s: %d 标的 / 新增 %d 条 / 结算 %d 条", tdate, scanned, recorded, settled
+    )
+    return {"trade_date": tdate, "symbols": len(symbols), "scanned": scanned,
+            "recorded": recorded, "settled": settled, "degraded": sorted(set(degraded))}
+
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+__all__ = [
+    "WINDOW_MINUTES",
+    "THRESHOLD_PCT",
+    "record_signals",
+    "settle_decision",
+    "settle_due",
+    "list_decisions",
+    "record_from_points",
+    "tdx_points",
+    "scan_and_settle_today",
+    "SCAN_DIR",
+]

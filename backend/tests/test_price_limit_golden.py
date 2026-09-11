@@ -38,9 +38,15 @@ def test_price_limit_backend_matches_golden(case: dict) -> None:
 
 
 def test_golden_covers_key_segments() -> None:
-    """样本覆盖面守卫：关键代码段缺失即样本本身不完整（防删样本偷懒）。"""
+    """样本覆盖面守卫：关键代码段缺失即样本本身不完整（防删样本偷懒）。
+
+    2026-09-11 补 302132 / 889123 / 870804：302 与 88 两段此前**无样本**
+    ⇒ 双端已实际漂移（后端判 10 / 前端判 20、30）却永不报警。段样本是
+    「漂移会被发现」的唯一机制，删样本等于关掉报警器。
+    """
     syms = {c["symbol"] for c in _cases()}
-    for required in ("600519", "300750", "688981", "920075", "300999", "sh000001"):
+    for required in ("600519", "300750", "688981", "920075", "300999", "sh000001",
+                     "302132", "889123", "870804"):
         assert required in syms, f"黄金样本缺关键段：{required}"
     divergents = [c for c in _cases() if c.get("divergent")]
     assert divergents, "分歧样本必须显式留档（删掉=隐藏口径分歧）"

@@ -9,7 +9,12 @@
 
 数据编排全部复用既有管线：候选池（活跃事件标的池 + 涨停池 + 热股榜）→ 五维评分
 （情绪=情绪引擎 / 消息=EventCard 方向 / 技术=score_stock / 基本面=财务 /
-资金=资金流+快照）→ 加权合成 + 一票否决 → 换股门槛 → 持久化。
+资金=资金流+快照）→ 加权合成 + 一票否决 → **入选门槛（MIN_PICK_SCORE，不够格不凑数）**
+→ 换股门槛 → 持久化。
+
+名单长度声明（2026-09-10）：**盘前选择不是"每天 5 只"**。MAX_PICKS 是容量上限，
+实际只数 = 当日达到入选门槛的标的数（可能 0~5，弱市就该更短）。语义上与盘中跟踪的
+`top_watch_stocks`（unknown/低不入选）对齐，只是筛选依据换成六维综合分。
 """
 
 from __future__ import annotations
@@ -36,9 +41,9 @@ from app.picks.meta_confidence import classify_confidence
 from app.picks.rps import get_rps_service
 from app.picks.engine import (
     MAX_PICKS,
-    REPLACE_THRESHOLD,
     apply_replacement_threshold,
     build_buy_range,
+    effective_limits,
     score_capital,
     score_fundamental,
     score_news,
@@ -375,10 +380,22 @@ async def _deep_score_candidates(
     """
     sem = asyncio.Semaphore(concurrency)
     index_bars = index_bars or {}
-    # RPS 全市场截面（一次查询、服务内当日缓存；marketdb 未建 → {} →
+    # RPS 全市场截面（一次查询、服务内当日缓存；marketdb 未建/陈旧 → {} →
     # score_stock 的 rps 维自动取中性 0.5，不臆造分位）。同步 DuckDB 查询
     # 放线程池，不占事件循环。
-    rps_map = await asyncio.to_thread(get_rps_service().snapshot)
+    rps_svc = get_rps_service()
+    rps_map = await asyncio.to_thread(rps_svc.snapshot)
+    # 三态诚实：RPS 为空时把**真实原因**带到卡片依据里（缺仓 / 陈旧 / 窗口不足
+    # 语义完全不同；统一写"仓未建"会让"仓在但停更 6 个交易日"被误读为没数据源）
+    rps_note = None
+    if not rps_map:
+        fr = await asyncio.to_thread(rps_svc.freshness)
+        if fr.get("stale"):
+            rps_note = (f"RPS 数据陈旧（库内最新 {fr['latest']}，滞后 {fr['lag']} 个交易日），"
+                        "中性处理——修复：scripts/sync_marketdb.py")
+        elif not fr.get("available"):
+            rps_note = (f"RPS 未覆盖（{fr.get('reason') or 'marketdb 仓未建/未回补'}），"
+                        "中性处理")
 
     async def _score_one(c: dict) -> dict | None:
         sym = c["symbol"]
@@ -389,7 +406,7 @@ async def _deep_score_candidates(
             try:
                 bars = await hub.provider.get_kline(sym, "1d", None, None)
                 dicts = [b.model_dump() if hasattr(b, "model_dump") else dict(b) for b in bars][-250:]
-                s_tech, b_tech = score_tech(score_stock(dicts, rps=rps_map.get(sym)))
+                s_tech, b_tech = score_tech(score_stock(dicts, rps=rps_map.get(sym), rps_note=rps_note))
             except Exception:
                 dicts = []
                 s_tech, b_tech = 50.0, "K线数据缺失，中性"
@@ -671,6 +688,17 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
     except Exception as exc:
         log.warning("picks sentiment failed: %s", exc)
 
+    if market_phase is None:
+        # 2026-09-09：相位缺失会让 style_routing 不路由——当日评分丢掉风格偏移，
+        # 且写入 meta 后定格全天。最常见原因是快照 breadth 未就绪（含刚重启补跑），
+        # 等一拍再取一次，比让全天评分裸奔便宜得多；仍失败则诚实留 None。
+        await asyncio.sleep(5)
+        try:
+            sent = await compute_market_sentiment(hub, request.app.state.snapshot_service) or {}
+            market_phase = sent.get("phase")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("picks sentiment retry failed: %s", exc)
+
     # ③b 炒作阶段（Regime）：财报日历 + 业绩事件密度 → 六维权重表。
     # 业绩空窗期必须把基本面权重让给情绪与题材梯队，否则系统性错过妖股。
     try:
@@ -704,10 +732,30 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
         limit_down = (request.app.state.snapshot_service.breadth or {}).get("limit_down")
     except Exception:
         limit_down = None
+
+    # 当日分位（2026-09-10 修正 + P1-31）：
+    # ①**必须用当日实测值算分位**——`sent.calibration.percentile` 是「历史库最后一行」
+    #   的分位，而库里最后一行是上一个交易日（backfill 刻意不回补今天），拿它当
+    #   "今天的分位"等于每天用昨天的位置描述今天，库一停更就变成用上个月的位置；
+    # ②闸门（晋级率/炸板率）与情绪面评分共用同一处计算，避免两个口径各自漂移。
+    # 样本不足/值缺失 → None，闸门自动回落绝对经验值并在理由里写明（不静默）。
+    promo_1to2 = (sent.get("promotion") or {}).get("promo_1to2")
+    promo_pctl = None
+    break_pctl = None
+    try:
+        from app.sentiment import metric_history
+
+        promo_pctl = (metric_history.percentile_of_value("promo_1to2", promo_1to2) or {}).get("percentile")
+        break_pctl = (metric_history.percentile_of_value("break_rate", break_rate) or {}).get("percentile")
+    except Exception as exc:
+        log.warning("picks percentile_of_value failed: %s", exc)
+
     gate = evaluate_stand_aside(
         phase=market_phase,
-        promotion_1to2=(sent.get("promotion") or {}).get("promo_1to2"),
+        promotion_1to2=promo_1to2,
+        promotion_1to2_pctl=promo_pctl,
         break_rate=break_rate,
+        break_rate_pctl=break_pctl,
         limit_down=limit_down,
         prev_zt_median_pct=(sent.get("prev_perf") or {}).get("median_pct"),
         phase_unreliable=bool(sent.get("phase_unreliable")),
@@ -725,11 +773,9 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
     # 原实现每候选股在并发任务里重复全量扫事件表（24×~31 次同步查询）
     event_hits_index = _build_event_hits_index(store)
 
-    # 晋级率历史分位（选股 2.0 §3）：来自 P0-3b 校准库的 percentile，
-    # 库旧/样本不足时 percentile 为空 → 修正项自动缺席，basis 如实呈现
-    promo_pct = None
-    calib_pct = ((sent.get("calibration") or {}).get("percentile") or {}).get("promo_1to2") or {}
-    promo_pct = calib_pct.get("percentile")
+    # 晋级率历史分位（选股 2.0 §3）：**当日值**在历史样本中的位置（见上方 ③c 说明）。
+    # 库样本不足时为空 → 情绪面修正项自动缺席，basis 如实呈现。
+    promo_pct = promo_pctl
 
     # ④ 逐只深度评分（并发；T6 拆分至 _deep_score_candidates）
     ranked = await _deep_score_candidates(
@@ -749,8 +795,11 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
     )
     ranked.sort(key=lambda r: -r["score"])
 
-    # ⑤ 换股门槛（昨日组合；prev_symbols 已在 ①a 载入，此处不重复查库）
+    # ⑤ 入选门槛 + 换股门槛（昨日组合；prev_symbols 已在 ①a 载入，此处不重复查库）
+    #    入选门槛（MIN_PICK_SCORE）保证「够格几只就是几只」，MAX_PICKS 只是容量上限。
+    #    三档阈值默认取运行时生效值（控制台参数白名单 P1-15 的覆盖层优先）。
     kept, replaced = apply_replacement_threshold(prev_symbols, ranked)
+    limits = effective_limits()
 
     # ⑤a 落选者落库（消融验证 P3 数据地基，2026-09-01 用户批准启动）：
     # 深评过但未进组合的候选（分数不够/门槛拦截/上限截断），精简摘要 + tech 分——
@@ -768,6 +817,24 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
         if r["symbol"] not in kept_symbols
     ][:20]
 
+    # ⑤b 出列留痕（2026-09-10）：昨日成员没进今日名单的，分两种归因——
+    # ① 跌破入选门槛（质量下滑，有分数可证）② 未入选（掉出候选池/被更强候选换掉/名额截断）。
+    # 不写这条，「名单变短」在复盘里就成了无解释的数字变化。
+    score_of = {r["symbol"]: r.get("score") for r in ranked}
+    swapped_out = {r["out"] for r in replaced}
+    removed = []
+    for sym in prev_symbols:
+        if sym in kept_symbols or sym in swapped_out:
+            continue
+        sc = score_of.get(sym)
+        if sc is not None and sc < limits["min_pick_score"]:
+            reason = f"跌破入选门槛（综合分 {sc} < {limits['min_pick_score']}）"
+        elif sc is None:
+            reason = "掉出候选池（今日未进入深度评分）"
+        else:
+            reason = "未入选（被更强候选换掉或容量截断）"
+        removed.append({"symbol": sym, "score": sc, "reason": reason})
+
     # ⑥ 卡片组装（含风险档位与出场纪律参考）+ 空仓闸门处理 + 持久化
     items = [_assemble_card(k) for k in kept]
     items = apply_gate_to_picks(items, gate)
@@ -776,11 +843,17 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
         "regime": regime,
         "style_routing": style,
         "gate": gate,
-        "replace_threshold": REPLACE_THRESHOLD,
+        "replace_threshold": limits["replace_threshold"],
+        "max_swaps_per_day": limits["max_swaps_per_day"],
         "market_phase": market_phase,
         "candidate_count": len(candidates),
         "deep_dives": len(deep),
+        # max_picks 是容量上限、min_pick_score 是入选门槛：两者共同决定
+        # 「今日名单 = 达到门槛者，最多 5 只」，不是「每天凑满 5 只」（2026-09-10）
         "max_picks": MAX_PICKS,
+        "min_pick_score": limits["min_pick_score"],
+        "kept_count": len(items),
+        "removed": removed,
         "market_pct": market_pct,
         "limit_up_count": len(lu_ctx["records"]),
         "market_max_boards": lu_ctx["market_max_boards"],
@@ -809,8 +882,49 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
     return {"data": {"date": today, "items": items, "replaced": replaced, "meta": meta}, "meta": {}}
 
 
+async def _live_style_routing(request: Request, hub: QuoteHub, stored: dict | None) -> dict:
+    """相位→风格路由按**读取时刻**重算（60s 缓存）。
+
+    2026-09-09 修：style_routing 原本只在组合生成时算一次并持久化进 meta，
+    全天定格——重启补跑若赶上全市场快照未就绪（breadth=None → CalendarUnavailable），
+    phase=None 会被静默落库，「相位缺失·未路由」挂一整天（09-09 实测如此）。
+    风格路由语义是「当日微调」，本就该用实时相位；生成时刻快照保留在
+    meta.market_phase 作对照，用 phase_source 标明来源（三态纪律：来源显式，
+    未知不伪装成「均衡」）。
+
+    缓存名独立（不复用 market.sentiment）：那边 payload 是 {data,meta} 信封结构，
+    复用会因 build 产物结构不同互相污染；这里 60s 一次上游，开销可忽略。
+    """
+    from app.core.ttl_cache import cache_on
+    from app.picks.style_router import route_style
+    from app.services.market_context import CalendarUnavailable, compute_market_sentiment
+
+    cache = cache_on(request.app.state, "picks.live_sentiment", 60, maxsize=1)
+
+    async def _build() -> dict:
+        return await compute_market_sentiment(hub, request.app.state.snapshot_service)
+
+    try:
+        _, sent = await cache.get_or_set((), _build)
+    except CalendarUnavailable as exc:
+        out = dict(stored or route_style(None))
+        out["phase_source"] = "unavailable"
+        out["phase_note"] = f"实时相位不可用（{exc}），显示生成时刻快照"
+        return out
+    except Exception as exc:  # noqa: BLE001  读时重算失败是降级不是故障——保留快照，不覆盖成未知
+        log.warning("live style routing failed: %s", exc)
+        out = dict(stored or route_style(None))
+        out["phase_source"] = "unavailable"
+        out["phase_note"] = f"实时相位计算失败（{exc}），显示生成时刻快照"
+        return out
+
+    live = route_style(sent.get("phase"))
+    live["phase_source"] = "live" if live.get("routed") else "unknown_phase"
+    return live
+
+
 @router.get("/today")
-async def today_picks() -> dict:
+async def today_picks(request: Request, hub: QuoteHub = Depends(get_hub)) -> dict:
     today = date.today().isoformat()
     with _db() as db:
         from app.models.daily_pick import DailyPickSet
@@ -820,21 +934,25 @@ async def today_picks() -> dict:
             row = db.execute(select(DailyPickSet).order_by(DailyPickSet.date.desc()).limit(1)).scalar_one_or_none()
             if row is None:
                 return {"data": {"date": None, "items": [], "meta": None, "note": "尚未生成组合：POST /api/picks/generate（或等收盘管线）"}, "meta": {}}
+            meta = _parse_meta(row.meta)  # 炒作阶段与空仓闸门状态（前端横幅需要）
+            meta["style_routing"] = await _live_style_routing(request, hub, meta.get("style_routing"))
             return {
                 "data": {
                     "date": row.date,
                     "items": json.loads(row.items),
                     "stale": row.date != today,
-                    "meta": _parse_meta(row.meta),  # 炒作阶段与空仓闸门状态（前端横幅需要）
+                    "meta": meta,
                 },
                 "meta": {},
             }
+        meta = _parse_meta(row.meta)
+        meta["style_routing"] = await _live_style_routing(request, hub, meta.get("style_routing"))
         return {
             "data": {
                 "date": row.date,
                 "items": json.loads(row.items),
                 "replaced": json.loads(row.replaced or "[]"),
-                "meta": _parse_meta(row.meta),
+                "meta": meta,
             },
             "meta": {},
         }
@@ -1004,9 +1122,40 @@ async def picks_signal_health() -> dict:
     """信号健康度（方向1×5 反馈环）：每日精选命中记录的滚动胜率 + CUSUM 下漂。
 
     status: ok | warning | drift | insufficient（样本 <10 组合日，显式不判 ok）| error。
-    预警接线（通知中心/自动 action_items）为 P1，当前仅评估与呈现。
+    预警已接线（通知中心 + 自动 action_items）。
+    **本端点只覆盖「每日精选组合」一级**；跨策略键的评估见 `/strategy-health`。
     """
     from app.picks.signal_health import collect_signal_health
 
     payload = collect_signal_health(get_session_factory())
     return {"data": payload, "meta": {}}
+
+
+@router.get("/strategy-health")
+async def picks_strategy_health() -> dict:
+    """**策略级**健康度（P1-37/P1-38）：逐策略键独立评估，不合并。
+
+    与 `/signal-health` 的关系：后者是「每日精选组合」一级的视图（保持向后兼容），
+    本端点是登记册全量策略键的视图——含 `intraday_watch`（盘中跟踪）等此前
+    不在监控视野内的策略。
+
+    status: ok | warning | drift | insufficient | thin | no_pipeline | error | unknown。
+    ⚠️ `insufficient`/`thin`/`no_pipeline` 都是「判不出」，**不是 ok 也不是失效**。
+    ⚠️ 每条带 `basis`：`market_neutral`（已扣同日市场均值的超额 → 测 alpha 衰减）
+    与 `absolute`（绝对收益 → 只测策略自身是否变差），**两者不可互相解释**。
+    """
+    from app.picks.strategy_registry import collect_all_strategy_health
+
+    payload = collect_all_strategy_health(get_session_factory())
+    return {"data": payload, "meta": {}}
+
+
+@router.get("/strategy-registry")
+async def picks_strategy_registry() -> dict:
+    """策略登记册全量条目（含已否决者，便于追溯"有哪些策略、各自什么状态"）。
+
+    与 `docs/strategy-registry.md` §1 总表一致（由测试守卫）。
+    """
+    from app.picks.strategy_registry import list_strategy_keys
+
+    return {"data": {"strategies": list_strategy_keys()}, "meta": {}}

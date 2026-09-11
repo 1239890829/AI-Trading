@@ -57,7 +57,7 @@ function TapeInner() {
                 className={`rounded-md px-3 py-1.5 text-sm transition-colors ${
                   tab === t.key
                     ? "bg-zinc-900 font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
-                    : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+                    : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
                 }`}
               >
                 {t.label}
@@ -65,7 +65,7 @@ function TapeInner() {
             ))}
           </nav>
         </div>
-        <span className="hidden text-xs text-zinc-400 lg:inline">梯队结构 · 涨停证据 · 资金关注</span>
+        <span className="hidden text-xs text-zinc-600 dark:text-zinc-400 lg:inline">梯队结构 · 涨停证据 · 资金关注</span>
       </div>
 
       {/* tab 切换统一 fade 过渡（2026-09-04）：h-full 保持子 tab 内部 flex 布局 */}

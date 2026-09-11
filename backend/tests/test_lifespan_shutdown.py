@@ -12,7 +12,7 @@ import asyncio
 import contextlib
 import time
 
-from app.main import _reap
+from app.core.scheduler import _reap
 
 
 def _run(coro) -> None:

@@ -40,7 +40,12 @@ describe("price-limit golden samples (R4 跨端共享)", () => {
 
   it("黄金样本覆盖关键代码段且分歧样本显式留档", () => {
     const syms = new Set(golden.cases.map((c) => c.symbol));
-    for (const required of ["600519", "300750", "688981", "920075", "300999", "sh000001"]) {
+    // 302132 / 889123 / 870804 为 2026-09-11 补的 required 段：
+    // 302 与 88 段此前无样本 ⇒ 双端已实际漂移却不报警。删样本 = 关掉报警器。
+    for (const required of [
+      "600519", "300750", "688981", "920075", "300999", "sh000001",
+      "302132", "889123", "870804",
+    ]) {
       expect(syms.has(required)).toBe(true);
     }
     expect(golden.cases.some((c) => c.divergent)).toBe(true);

@@ -194,6 +194,7 @@ async def maybe_open(
             target,
             {
                 "kind": "position_open", "symbol": symbol, "name": name,
+                "key": f"position-open-{symbol}",
                 "direction": "模拟持仓",
                 "text": f"自动开模拟仓 {qty} 股 @ {filled}（总仓位上限 {total_cap:.0%}·个股权重 {weight:.0%}·触发 {trigger}）",
                 "meta": {"trigger_value": filled},

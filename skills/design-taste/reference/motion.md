@@ -50,6 +50,29 @@ Correct format: A single markdown table with | Before | After | Why | columns, o
 
 Before writing any animation code, answer these questions in order:
 
+### 0. Write the motion thesis first
+
+Carried over from `impeccable animate` (2026-09-11 归并): before touching code, state the plan in four lines. This is what separates authored motion from sprinkling effects across a page.
+
+- **Focal moment** — the *one* sequence or interaction that deserves authorship, if any. It must come from this product and this surface concept. A generic fade-and-rise, hover lift, parallax layer, or scroll reveal is **not** a thesis.
+- **Continuity** — which state, layout, or navigation changes need explaining.
+- **Feedback** — which controls and outcomes need acknowledgment.
+- **Budget** — which effects may be expensive, and how often they run.
+
+**One strong material idea**, carried through the focal sequence and quiet supporting states, is usually enough. Do not stack techniques for spectacle.
+
+Choose the animated property by *meaning*, not by habit:
+
+| What the transition communicates | Material |
+| --- | --- |
+| Continuity and relationship | Shared-element motion, FLIP-style transforms, view transitions, deliberate spatial movement |
+| Focus and depth | Bounded blur, filter, backdrop, light, or shadow changes |
+| Reveal and composition | Masks, clip paths, cropping, controlled occlusion |
+| Material and energy | Color, gradient position, texture, distortion, shaders (only if the runtime supports it) |
+| State and feedback | The smallest change that makes cause and result unmistakable |
+
+Sibling stagger is appropriate **when a list appears as a list**. Cap the total delay, and never reinterpret every scrolled section as a staggered list.
+
 ### 1. Should this animate at all?
 
 **Ask:** How often will users see this animation?
@@ -119,7 +142,11 @@ Is the element entering or exiting?
 | Modals, drawers          | 200-500ms     |
 | Marketing/explanatory    | Can be longer |
 
-**Rule: UI animations should stay under 300ms.** A 180ms dropdown feels more responsive than a 400ms one. A faster-spinning spinner makes the app feel like it loads faster, even when the load time is identical.
+**Rule: routine UI animations should stay under 300ms.** A 180ms dropdown feels more responsive than a 400ms one. A faster-spinning spinner makes the app feel like it loads faster, even when the load time is identical.
+
+**The one legitimate exception — the focal entrance** (impeccable animate, 2026-09-11 归并): a *deliberately authored* focal sequence may run 300–500ms (layout, overlay, view transition) or 500–800ms (focal entrance). The distinction is authorship, not size: the exception applies to the **single** focal moment from the motion thesis, never to routine state changes dressed up as spectacle. If more than one thing on the surface exceeds 300ms, you have not found a focal moment — you have found animation debt.
+
+**Exit faster than entrance.** Leaving is not something users want to watch.
 
 ### Perceived performance
 
@@ -658,9 +685,23 @@ When reviewing UI code, check for:
 | `ease-in` on UI element                    | Switch to `ease-out` or custom curve                             |
 | `transform-origin: center` on popover      | Set to trigger location or use Radix/Base UI CSS variable (modals are exempt — keep centered) |
 | Animation on keyboard action               | Remove animation entirely                                        |
-| Duration > 300ms on UI element             | Reduce to 150-250ms                                              |
+| Duration > 300ms on a routine UI element             | Reduce to 150-250ms (only the single focal moment from the motion thesis may exceed it) |
 | Hover animation without media query        | Add `@media (hover: hover) and (pointer: fine)`                  |
 | Keyframes on rapidly-triggered element     | Use CSS transitions for interruptibility                         |
 | Framer Motion `x`/`y` props under load     | Use `transform: "translateX()"` for hardware acceleration        |
 | Same enter/exit transition speed           | Make exit faster than enter (e.g., enter 2s, exit 200ms)         |
 | Elements all appear at once                | Add stagger delay (30-80ms between items)                        |
+
+## Motion Verify Pass (from `impeccable animate`, merged 2026-09-11)
+
+Run this immediately after implementing motion, before pre-flight:
+
+- The focal motion is **specific to this product and surface** — not a generic effect any site could wear.
+- Every supporting animation explains **feedback, state, or relationship**. Delete any that only decorates.
+- **Interruption and repeated use behave correctly** (trigger it three times fast; toggle mid-flight).
+- Desktop, mobile, and **keyboard** paths all remain usable.
+- The `prefers-reduced-motion` path reduces movement while **keeping meaning-bearing opacity/color/state transitions** — fewer and gentler, not "all motion off".
+- Expensive effects (blur, filter, shadow, canvas, shader) stay smooth **on the target device**, not just on the dev machine.
+- **Removing the animation would lose meaning or authored character** — if not, it was decoration.
+
+Measure on target viewports and devices rather than assuming `transform` means fast.

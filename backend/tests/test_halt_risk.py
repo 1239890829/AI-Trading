@@ -5,9 +5,13 @@
 2. 连板判定要容忍涨停价四舍五入（9.97% / 10.1% 都算涨停）
 3. 三档规则各自触发边界，以及红线命中时不再重复扣黄线分
 4. 数据不足时诚实降级，不拿短区间冒充长区间
+5. 校准反漂移（P1-22）：参数值、结构约束、核验脚本的「import 生产模块」纪律
 """
+from pathlib import Path
+
 import pytest
 
+from app.picks import halt_risk as hr
 from app.picks.halt_risk import (
     assess,
     benchmark_symbol,
@@ -19,6 +23,9 @@ from app.picks.halt_risk import (
     risk_labels,
     veto_reasons,
 )
+
+_REPO = Path(__file__).resolve().parents[2]
+_VERIFY_SCRIPT = _REPO / "backend" / "scripts" / "verify_halt_risk.py"
 
 
 def _bars(pcts, start=10.0):
@@ -45,8 +52,8 @@ def _flat(n, close=100.0):
         ("300750", "宁德时代", "gem", 20.0),
         ("688981", "中芯国际", "star", 20.0),
         ("830799", "艾融软件", "bse", 30.0),
-        ("600122", "*ST 宏图", "st", 5.0),
-        ("000004", "国华网安 ST", "st", 5.0),
+        ("600122", "*ST 宏图", "st", 10.0),
+        ("000004", "国华网安 ST", "st", 10.0),
         # 2026-09-08 修复：代码前缀优先于 ST 名称——双创/北交所 ST 归各自板块
         ("300123", "*ST 某某", "gem", 20.0),
         ("301599", "ST 某某", "gem", 20.0),
@@ -74,7 +81,7 @@ def test_benchmark_symbol_maps_every_board():
 
 
 def test_st_uses_its_own_market_benchmark():
-    """ST 不是独立市场：涨限 5%、异动阈值 12%，但基准指数仍按所属市场取。
+    """ST 不是独立市场：基准指数仍按所属市场取（"st" 只影响板块键）。
 
     早期实现直接查 BENCHMARK_INDEX["st"] → KeyError 崩溃，ST 股全部评估失败。
     """
@@ -82,10 +89,11 @@ def test_st_uses_its_own_market_benchmark():
     assert benchmark_symbol("st", "000004") == "399107"     # 深市 ST
 
 
-def test_st_assess_does_not_crash_and_uses_5pct_limit():
+def test_st_assess_uses_10pct_after_2026_rule():
+    """2026-07-06 并轨后主板 ST 涨限为 10%（旧断言 5.0 已过期）。"""
     res = assess(symbol="600122", name="*ST 宏图", bars=_bars([1.0] * 11), index_bars=_flat(12))
     assert res["board"] == "st"
-    assert res["limit_pct"] == 5.0
+    assert res["limit_pct"] == 10.0
     assert res["benchmark"] == "sh000001"
 
 
@@ -298,3 +306,80 @@ def test_veto_reasons_and_labels():
     safe = assess(symbol="600540", bars=_bars([0.1] * 11), index_bars=_flat(12))
     assert veto_reasons(safe) == []
     assert risk_labels(safe) == []
+
+
+# ---- 校准反漂移（P1-22，2026-09-11）----
+#
+# 背景：这些参数长期以「经验初值」挂着。P1-22 用
+# `scripts/verify_halt_risk.py` 做了实证核验，结论**不是"按均值调参"**——
+# 红线组前瞻超额均值不显著（t=−0.20）、全池剔除红线仅 +0.0016pp/日，
+# 但停牌 = 资金锁死、不可申报不可撤单 ⇒ 依「安全不对称性」保留硬排除。
+# 完整判读见 `halt_risk.py` 末尾「校准结论」段与 [[KB-STOCK-31]]。
+#
+# 下面这些断言**不是**在测试数学能力（那由上面的边界用例覆盖），
+# 而是在防止「数值被静默改动、而结论与理由没跟着改」——即文档与代码脱钩。
+
+
+def test_calibrated_constants_match_documented_values():
+    """参数值即校准结论的一部分：改动必须同时更新 KB-STOCK-31 与模块注释。
+
+    若此断言失败，先问「新值有实测依据吗」——**不要**为了让测试变绿而回退数值。
+    """
+    assert hr.RED_DEV_10D == 80.0
+    assert hr.YELLOW_DEV_10D_LO == 50.0
+    assert hr.PENALTY_Y1 == 6.0
+    assert hr.PENALTY_Y3 == 8.0
+    assert hr.PENALTY_BOARDS == {4: 5.0, 5: 10.0}
+    assert hr.PENALTY_BOARDS_MAX == 15.0
+    assert hr.POSITION_FACTOR_P1 == 0.5
+    assert hr.POSITION_FACTOR_P2 == 1.0 / 3
+
+
+def test_threshold_ordering_invariants_hold():
+    """结构约束（比具体数值更本质，调参时不可破坏）：
+
+    ① 黄线区间左界 < 红线界——否则 Y3 与硬排除重叠，扣分永远轮不到；
+    ② 红线界 < 监管强制停牌线（SEVERE_10D=100%）——硬排除必须**提前**于停牌发生，
+       等触发停牌再排除毫无意义；
+    ③ 连板扣分随板数单调递增且有封顶。
+    """
+    assert hr.YELLOW_DEV_10D_LO < hr.RED_DEV_10D < hr.SEVERE_10D
+    boards = sorted(hr.PENALTY_BOARDS)
+    penalties = [hr.PENALTY_BOARDS[b] for b in boards]
+    assert penalties == sorted(penalties), "连板扣分必须随板数单调不减"
+    assert penalties[-1] < hr.PENALTY_BOARDS_MAX, (
+        "最高处罚档应留有余量，封顶值本身是给 ≥6 板用的"
+    )
+
+
+def test_verify_script_imports_production_module():
+    """核验脚本必须 `import` 生产模块（[[KB-ENG-44]]）。
+
+    否则脚本会各自复制一份阈值与判定逻辑 ⇒ 跑的是「核验副本」而不是线上规则，
+    结论再漂亮也和线上无关。这条守卫同时锁住 `assess` 被真实调用（口径守卫段）。
+    """
+    assert _VERIFY_SCRIPT.exists(), f"核验脚本缺失：{_VERIFY_SCRIPT}"
+    src = _VERIFY_SCRIPT.read_text(encoding="utf-8")
+    assert "from app.picks import halt_risk" in src
+    assert "hr.assess(" in src, "必须用生产 assess() 复算抽样行，否则口径守卫不成立"
+
+
+def test_module_keeps_calibration_rationale():
+    """参数可以保留，但**理由不可删除**。
+
+    本项的真正风险不是数值错，而是「后人只看均值显著性就把红线删掉」——
+    均值上红线确实不显著（这是实测结论，见模块注释）。故把「为什么不按均值调参」
+    的段落固化为断言：删掉理由必须先删掉这条测试，即强制一次显式取舍。
+    """
+    doc = hr.__doc__ or ""
+    tail = _read_module_tail()
+    assert "安全不对称性" in tail
+    assert "校准结论" in tail
+    assert "均值" in tail
+    # 模块头部仍须声明口径选择（监管口径 vs 封板质量口径）与免责
+    assert "收盘涨停连续天数" in doc
+    assert "不构成买卖建议" in doc
+
+
+def _read_module_tail() -> str:
+    return Path(hr.__file__).read_text(encoding="utf-8")

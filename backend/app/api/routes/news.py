@@ -40,7 +40,9 @@ async def news_digest(
 
     按重要度倒序返回。摘要只做事实抽取，不含任何买卖建议。
     """
-    cache = cache_on(request.app.state, "news.digest", 60, maxsize=512)
+    # 2026-09-09：TTL 60s 实测不够——生成一次要 ~32s（抓原文+摘要），缓存几乎
+    # 永远过期，表现为「每次打开都很慢」。个股资讯是日频数据，5 分钟缓存可接受。
+    cache = cache_on(request.app.state, "news.digest", 300, maxsize=512)
     key = (symbol, limit)
     hit, cached = cache.get(key)
     if hit:

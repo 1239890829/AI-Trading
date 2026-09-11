@@ -2,11 +2,11 @@ import { qualityLabel } from "@/lib/format";
 import type { Quality } from "@/types/market";
 
 const STYLES: Record<Quality, string> = {
-  high: "text-zinc-400",
-  medium: "text-sky-400",
-  low: "text-amber-400",
-  stale: "text-orange-400",
-  invalid: "text-red-400",
+  high: "text-zinc-600 dark:text-zinc-400",
+  medium: "text-sky-700 dark:text-sky-400",
+  low: "text-amber-800 dark:text-amber-400",
+  stale: "text-orange-800 dark:text-orange-400",
+  invalid: "text-red-700 dark:text-red-400",
 };
 
 /** quality_reasons 的英文 key → 展示中文（tooltip 用）。 */
@@ -36,7 +36,7 @@ export function QualityBadge({ quality, reasons }: { quality: Quality; reasons?:
   const title = reasons && reasons.length > 0 ? reasons.map((r) => REASON_LABELS[r] ?? r).join("; ") : undefined;
   if (closed) {
     return (
-      <span title={title} className="whitespace-nowrap rounded px-1.5 py-0.5 text-xs text-zinc-400">
+      <span title={title} className="whitespace-nowrap rounded px-1.5 py-0.5 text-xs text-zinc-600 dark:text-zinc-400">
         休市
       </span>
     );

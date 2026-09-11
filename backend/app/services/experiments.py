@@ -164,10 +164,17 @@ def _conclude_one(exp_id: int, sf) -> dict:
 
 
 def _rollback_change(change_id: int, sf) -> dict:
-    """自动回滚变更单（找到该实验关联的 change，恢复 before）。"""
+    """自动回滚变更单（找到该实验关联的 change，恢复 before）。
+
+    归因固定为 `degraded`（30 日实验测到劣化自动回滚）——这是存活率统计里
+    最有价值的一类归因：它区分"被数据否决"与"人工改主意"。
+    """
     from app.services.agent_params import rollback_change
 
-    return rollback_change(change_id, session_factory=sf)
+    return rollback_change(
+        change_id, session_factory=sf,
+        reason_code="degraded", note="30 日实验劣化，自动回滚（experiments 后置守护）",
+    )
 
 
 def list_experiments(limit: int = 30, session_factory=None) -> list[dict]:

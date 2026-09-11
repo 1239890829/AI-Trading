@@ -112,3 +112,109 @@ def at_audits(sf):
         } for r in db.execute(select(AgentAudit).order_by(AgentAudit.id)).scalars().all()]
 
 
+
+
+# ---------------------------------------------------------------- 白名单扩充 + 归因 + 存活率（P1-15）
+# 起因（2026-09-10 实证）：白名单只有 1 个参数 → "没得调"；回滚不记原因 →
+# 存活率只是个数字，回答不了"为什么活不下来"。
+
+
+def test_scalar_params_validated_by_range_and_type(sf):
+    """标量参数走通用值域校验：越界/非数/小数给整数 一律拒绝，不静默收敛。"""
+    for bad in ("999", "-1"):
+        with pytest.raises(ValueError):
+            ap.propose("picks_max_swaps_per_day", bad, session_factory=sf)
+    with pytest.raises(ValueError):
+        ap.propose("picks_max_swaps_per_day", "1.5", session_factory=sf)
+    with pytest.raises(ValueError):
+        ap.propose("picks_max_swaps_per_day", "abc", session_factory=sf)
+    with pytest.raises(ValueError):
+        ap.propose("picks_min_pick_score", "101", session_factory=sf)
+    # 合法值规范化后落库（`_dump` 会把 JSON 文本解析回来：整数 → int）
+    c = ap.propose("picks_max_swaps_per_day", "1", session_factory=sf)
+    assert c["after"] == 1
+
+
+def test_apply_injects_scalar_and_rollback_removes_it(sf, monkeypatch):
+    """生效 → 注入 runtime_params 覆盖层（免重启）；回滚 → 覆盖移除、回落代码常量。"""
+    import app.core.runtime_params as rp
+
+    rp.clear()
+    monkeypatch.setattr(ap, "get_session_factory", lambda: sf)
+    c = ap.propose("picks_max_swaps_per_day", "1", session_factory=sf)
+    ap.apply_change(c["id"], sf)
+    assert rp.get("picks_max_swaps_per_day", 2) == 1
+    ap.rollback_change(c["id"], session_factory=sf, reason_code="manual")
+    # 回滚后覆盖层不含该 key ⇒ 业务侧回落代码常量（不需要在消费点写回退逻辑）
+    assert rp.get("picks_max_swaps_per_day", 2) == 2
+    rp.clear()
+
+
+def test_rollback_requires_valid_reason_code(sf):
+    """归因是**封闭集合**：非法 code 直接拒绝，不静默落 other（垃圾桶式归因等于没归因）。"""
+    c = ap.propose("picks_replace_threshold", "12", session_factory=sf)
+    ap.apply_change(c["id"], sf)
+    with pytest.raises(ValueError):
+        ap.rollback_change(c["id"], session_factory=sf, reason_code="whatever")
+    rolled = ap.rollback_change(
+        c["id"], session_factory=sf, reason_code="superseded", note="被更激进的版本取代"
+    )
+    assert rolled["rollback_reason"] == {"code": "superseded", "note": "被更激进的版本取代"}
+
+
+def test_survival_stats_counts_and_insufficient_flag(sf):
+    """存活率分母只算**已裁决**（applied + rolled_back）；样本不足时明说不可用。"""
+    a = ap.propose("picks_replace_threshold", "12", session_factory=sf)
+    ap.apply_change(a["id"], sf)
+    b = ap.propose("picks_min_pick_score", "55", session_factory=sf)
+    ap.apply_change(b["id"], sf)
+    ap.rollback_change(b["id"], session_factory=sf, reason_code="degraded")
+
+    st = ap.survival_stats(sf)
+    assert st["applied"] == 1 and st["rolled_back"] == 1 and st["decided"] == 2
+    assert st["survival_rate"] == 0.5
+    assert st["rollback_reasons"] == {"degraded": 1}
+    assert st["insufficient"] is True  # 2 < MIN_SURVIVAL_SAMPLES
+    assert "样本不足" in st["note"]
+    assert st["by_key"]["picks_min_pick_score"]["rolled_back"] == 1
+
+
+def test_survival_still_effective_excludes_superseded(sf):
+    """**假存活**要排除：状态仍是 applied，但值已被后来者覆盖 ⇒ 算 superseded。
+
+    只看 status 会把"被取代"的也算成活下来，存活率因此虚高。
+    """
+    a = ap.propose("picks_replace_threshold", "12", session_factory=sf)
+    ap.apply_change(a["id"], sf)
+    b = ap.propose("picks_replace_threshold", "18", session_factory=sf)
+    ap.apply_change(b["id"], sf)
+
+    st = ap.survival_stats(sf)
+    assert st["applied"] == 2 and st["decided"] == 2
+    assert st["still_effective"] == 1 and st["superseded"] == 1
+    assert st["survival_rate"] == 1.0  # 都没被回滚——所以"存活率"必须配 superseded 一起看
+
+
+def test_survival_empty_db_returns_none_rate(sf):
+    """无已裁决变更 → survival_rate=None（不编造 0，也不编造 1）。"""
+    st = ap.survival_stats(sf)
+    assert st["decided"] == 0 and st["survival_rate"] is None and st["insufficient"] is True
+
+
+def test_survival_labels_legacy_rows_as_unspecified(sf):
+    """早于归因功能上线（2026-09-10）的回滚行 → 分桶 `unspecified` 且**有中文标签**。
+
+    `unspecified` 不是可提交的 code（不在 ROLLBACK_REASONS 里），只是统计分桶——
+    但缺标签会让界面直接显示英文 code（"unspecified×1" 没人看得懂）。
+    """
+    from app.models.agent import AgentParamChange
+
+    with sf() as db:
+        db.add(AgentParamChange(key="picks_replace_threshold", before=None, after="12",
+                                status="rolled_back", rollback_reason=None))
+        db.commit()
+    st = ap.survival_stats(sf)
+    assert st["rollback_reasons"] == {"unspecified": 1}
+    assert "未记录归因" in st["reason_labels"]["unspecified"]
+    # 并且它不可作为入参提交（封闭集合只收 ROLLBACK_REASONS）
+    assert "unspecified" not in ap.ROLLBACK_REASONS

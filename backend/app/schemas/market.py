@@ -6,6 +6,8 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
+from app.core.freshness import DEFAULT_FRESH_WITHIN_SECONDS, Freshness
+
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -59,6 +61,59 @@ class Quote(AuditFields):
                   "volume", "amount", "turnover_rate", "pe_ttm", "pb",
                   "total_mktcap_yi", "float_mktcap_yi", "limit_up_price", "limit_down_price"):
             setattr(self, f, _clean(getattr(self, f)))
+
+    def limit_prices_state(self) -> str:
+        """涨跌停价可用性**三态**：`ready` / `partial` / `unavailable`。
+
+        为什么必须显式（2026-09-11 S1-4）：撮合引擎的「涨停不可买入 / 跌停不可卖出」
+        是红线硬拦截，原写法是 `if quote.limit_up_price and ...`——限价为 `None`
+        （或 0）时**整体短路**，守卫静默失效且与「该票今天没触板」不可区分。
+        补价依赖链上腾讯单源（曾真实被封），所以「拿不到限价」是会发生的状态，
+        不是异常路径。
+
+        `<= 0` 与 `None` 同等视为**不可用**：0 在布尔上下文中是假值，
+        与 `None` 走的是同一个静默分支，必须归到同一态。
+        """
+        up = self.limit_up_price if (self.limit_up_price or 0) > 0 else None
+        down = self.limit_down_price if (self.limit_down_price or 0) > 0 else None
+        if up is not None and down is not None:
+            return "ready"
+        if up is None and down is None:
+            return "unavailable"
+        return "partial"
+
+    def freshness(self, *, fresh_within: float = DEFAULT_FRESH_WITHIN_SECONDS) -> Freshness:
+        """本报价的新鲜度（S2-1 契约的 **Quote 样板**）。
+
+        年龄取 `data_timestamp`（上游给的数据时点）优先，缺失回退 `received_at`
+        （本机接收时点）——两者语义不同，回退时**不假装是同一个**：`reason`
+        会写明是「无数据时间戳」，读的人能判断这个年龄到底在量什么。
+
+        质量等级与年龄是**两个独立维度**，任一为差都要降级：
+        `invalid` 表示校验层已判定报价不可用（价格/涨跌幅越界等）⇒ 直接
+        `unavailable`，绝不能因为"刚收到"就当成 ready。
+        """
+        if self.quality is Quality.invalid:
+            return Freshness.unavailable(
+                reason="数据源质量自评 invalid，报价不可用于结论", source=self.source
+            )
+        as_of = self.data_timestamp or self.received_at
+        f = Freshness.from_age(
+            as_of=as_of,
+            fresh_within=fresh_within,
+            source=self.source,
+            missing_reason=(
+                "报价无 data_timestamp 且无 received_at，无法判定新鲜度"
+                if self.received_at is None
+                else "无数据时间戳，按接收时间判定"
+            ),
+        )
+        if self.quality is Quality.stale and f.state == "ready":
+            return Freshness.stale(
+                as_of=as_of, age_seconds=f.age_seconds, source=self.source,
+                reason="数据源自评质量 stale（年龄虽在窗口内）",
+            )
+        return f
 
 
 class TradingStatus(str, Enum):
@@ -147,7 +202,7 @@ class AnomalyRecord(AuditFields):
     """当日个股异动原因（ths 独占口径，today-only 无历史）。
 
     analysis/keywords 是官方给出的异动归因文本——热点消息验证环
-    （hotspot-pipeline-design G5）的盘面证据源，也是自选监控「为什么异动」的答案。
+    （docs/summary/architecture-design.md §3）的盘面证据源，也是自选监控「为什么异动」的答案。
     """
 
     symbol: str

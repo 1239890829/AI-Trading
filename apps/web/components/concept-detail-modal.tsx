@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
+import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { getConceptDetail, type ConceptDetail } from "@/lib/api";
 import { fmtAmount, pctColor, pctText } from "@/lib/format";
 import { useStockRowNav } from "@/components/stock-link";
@@ -49,9 +50,9 @@ export function ConceptDetailModal({
     }
   }, [code]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  // P1-27 收编 usePollingFetch：setState 落在 promise 回调里。
+  // `code` 是会变的入参 → 必须作为第三参 key 传入，否则切概念不会立即重拉。
+  usePollingFetch(load, null, code);
 
   const members = useMemo(() => {
     const list = detail?.members ?? [];
@@ -63,12 +64,12 @@ export function ConceptDetailModal({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      className="anim-backdrop-in fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       onClick={onClose}
       role="presentation"
     >
       <div
-        className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900"
+        className="anim-scale-in flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -78,9 +79,9 @@ export function ConceptDetailModal({
           <div className="min-w-0">
             <h2 className="truncate text-base font-semibold text-zinc-900 dark:text-zinc-50">
               {detail?.name ?? name}
-              <span className="ml-2 font-mono text-[11px] text-zinc-400">{code}</span>
+              <span className="ml-2 font-mono text-[11px] text-zinc-600 dark:text-zinc-400">{code}</span>
             </h2>
-            <p className="mt-0.5 text-[11px] text-zinc-400">
+            <p className="mt-0.5 text-[11px] text-zinc-600 dark:text-zinc-400">
               {detail
                 ? `官方成分 ${detail.total} 只（与同花顺逐符号一致） · 今日涨停 ${detail.limit_up_count}`
                 : "加载中…"}
@@ -88,7 +89,7 @@ export function ConceptDetailModal({
           </div>
           <button
             onClick={onClose}
-            className="shrink-0 rounded-lg px-2 py-1 text-sm text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+            className="shrink-0 rounded-lg px-2 py-1 text-sm text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
             aria-label="关闭"
           >
             ✕
@@ -125,9 +126,9 @@ export function ConceptDetailModal({
               ))}
             </div>
           ) : detail === null ? (
-            <p className="py-6 text-center text-xs text-red-500">加载失败：{error}</p>
+            <p className="py-6 text-center text-xs text-red-700 dark:text-red-500">加载失败：{error}</p>
           ) : members.length === 0 ? (
-            <p className="py-6 text-center text-xs text-zinc-400">
+            <p className="py-6 text-center text-xs text-zinc-600 dark:text-zinc-400">
               {tab === "__all__" ? "无匹配成分" : "该细分下暂无当日涨停成员"}
             </p>
           ) : (
@@ -135,7 +136,7 @@ export function ConceptDetailModal({
               {members.map((m) => (
                 <li key={m.symbol} onClick={stockNav(m.symbol)} className="cursor-pointer py-1.5 text-xs transition-colors hover:bg-sky-500/5">
                   <div className="flex items-center gap-2">
-                    <span className="w-14 shrink-0 font-mono text-zinc-400">{m.symbol}</span>
+                    <span className="w-14 shrink-0 font-mono text-zinc-600 dark:text-zinc-400">{m.symbol}</span>
                     <span className="w-24 shrink-0 truncate font-medium text-zinc-800 dark:text-zinc-100">
                       {m.name}
                     </span>
@@ -145,25 +146,25 @@ export function ConceptDetailModal({
                       {m.change_pct != null ? pctText(m.change_pct) : "--"}
                     </span>
                     {m.limit_up && (
-                      <span className="shrink-0 rounded bg-rose-500/10 px-1 py-0.5 text-[10px] text-rose-600 dark:text-rose-300">
+                      <span className="shrink-0 rounded bg-rose-500/10 px-1 py-0.5 text-[10px] text-rose-700 dark:text-rose-300">
                         涨停
                       </span>
                     )}
                     {/* 换手 / 流通市值：全市场快照口径，缺失显式 -- */}
-                    <span className="ml-auto w-20 shrink-0 text-right font-mono tabular-nums text-zinc-500" title="换手率%">
+                    <span className="ml-auto w-20 shrink-0 text-right font-mono tabular-nums text-zinc-600 dark:text-zinc-400" title="换手率%">
                       换手 {m.turnover_rate != null ? `${m.turnover_rate.toFixed(2)}%` : "--"}
                     </span>
-                    <span className="w-24 shrink-0 text-right font-mono tabular-nums text-zinc-500" title="流通市值（亿元）">
+                    <span className="w-24 shrink-0 text-right font-mono tabular-nums text-zinc-600 dark:text-zinc-400" title="流通市值（亿元）">
                       流通 {m.float_market_cap_yi != null ? `${m.float_market_cap_yi.toFixed(1)}亿` : "--"}
                     </span>
                   </div>
                   {/* 第二行：涨停成员的官方归因与封板细节（开板/封单/连板；非涨停不显示） */}
-                  <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 pl-16 text-[11px] text-zinc-400">
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 pl-16 text-[11px] text-zinc-600 dark:text-zinc-400">
                     {m.limit_up && (
                       <span className="font-mono tabular-nums" title="连板数（ths 官方）">
                         {m.boards != null ? `${m.boards} 板` : "--"}
                         {m.break_count != null && m.break_count > 0 && (
-                          <span className="ml-1 text-amber-500 dark:text-amber-400">开板 {m.break_count} 次</span>
+                          <span className="ml-1 text-amber-800 dark:text-amber-400">开板 {m.break_count} 次</span>
                         )}
                       </span>
                     )}
@@ -182,7 +183,7 @@ export function ConceptDetailModal({
           )}
         </div>
 
-        <p className="shrink-0 border-t border-zinc-100 px-4 py-1.5 text-[10px] leading-relaxed text-zinc-400 dark:border-zinc-800">
+        <p className="shrink-0 border-t border-zinc-100 px-4 py-1.5 text-[10px] leading-relaxed text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
           {detail?.meta_note ?? "成分=同花顺官方目录"} · 细分 tab 为当日涨停成员的官方归因标签（官方 API 未提供二级概念成分，待数据源支持）
         </p>
       </div>

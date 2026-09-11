@@ -40,6 +40,34 @@ def _today() -> str:
     return datetime.now(timezone.utc).astimezone().strftime("%Y%m%d")
 
 
+def limit_block_reason(quote, side: str, price: float | None) -> str | None:
+    """涨跌停硬拦截（红线 5）的**唯一判据**。返回 `None` = 放行，否则返回中文原因。
+
+    为什么单独抽成函数（2026-09-11 S1-4）：`place_order` 与 `match_pending`
+    是两条独立的成交路径，历史上只有前者做了拦截，后者直接按现价成交
+    ⇒ 挂单在股价冲上涨停后仍会成交，等于在涨停板买入。
+
+    **缺限价一律不视为"无涨跌停"**。原写法 `if quote.limit_up_price and ...`
+    在限价为 `None`（或 0）时整体短路，守卫静默失效且与"该票今天没触板"
+    完全不可区分。限价来自链上腾讯单源补价、曾真实被封，所以缺失是
+    **会发生的状态**而非异常路径；此处取保守口径（判不了就不放行），
+    由调用方把它变成**可见**的拒单原因或跳过日志。
+    """
+    if side == "buy":
+        up = quote.limit_up_price if (quote.limit_up_price or 0) > 0 else None
+        if up is None:
+            return "缺涨停价，无法校验涨停拦截，已拒绝买入（行情源未提供限价）"
+        if price is not None and price >= up:
+            return f"涨停价 {up}，无法买入"
+    else:
+        down = quote.limit_down_price if (quote.limit_down_price or 0) > 0 else None
+        if down is None:
+            return "缺跌停价，无法校验跌停拦截，已拒绝卖出（行情源未提供限价）"
+        if price is not None and price <= down:
+            return f"跌停价 {down}，无法卖出"
+    return None
+
+
 class PaperTradingEngine:
     def __init__(self, session_factory, quote_fn, trading_days_fn=None, *, scope: str = "main"):
         self._sf = session_factory
@@ -103,7 +131,11 @@ class PaperTradingEngine:
     # ---------- T+1 解冻 ----------
 
     async def _unfreeze(self, db: Session) -> None:
-        positions = db.query(PaperPosition).filter(PaperPosition.frozen_today > 0).all()
+        # scope 过滤（S1-1）：解冻只作用于本账户，避免影子账户的解冻被交易账户的
+        # 一次下单顺带触发（跨账户写）。语义上解冻幂等、无本金风险，但隔离边界必须一致。
+        positions = db.query(PaperPosition).filter(
+            PaperPosition.scope == self.scope, PaperPosition.frozen_today > 0
+        ).all()
         if not positions:
             return
         next_day = await self._next_trading_day()
@@ -125,6 +157,23 @@ class PaperTradingEngine:
             return future[0] if future else None
         except Exception:
             return None
+
+    # ---------- 持仓读取（scope 唯一入口） ----------
+
+    def _position_of(self, db: Session, symbol: str) -> PaperPosition | None:
+        """按 **(scope, symbol)** 取本账户持仓——卖出路径的唯一入口。
+
+        历史缺陷（2026-09-11 S1-1）：卖出路径（`place_order` sell 分支 / `_fill_sell`）
+        只按 symbol 查，而模型层是 `UniqueConstraint("scope", "symbol")` 双账户隔离
+        ⇒ main 与 shadow 同持一票时 `one_or_none()` 抛 `MultipleResultsFound`
+        （卖出在常驻循环里被吞、持仓卡死），单边持有时**扣错账户**。
+        买入路径本就有 scope 过滤，此方法把该口径收口为单点，避免再次漏写。
+        """
+        return (
+            db.query(PaperPosition)
+            .filter(PaperPosition.scope == self.scope, PaperPosition.symbol == symbol)
+            .one_or_none()
+        )
 
     # ---------- 下单 ----------
 
@@ -150,10 +199,16 @@ class PaperTradingEngine:
             return reject("停牌或无行情，无法交易")
         if side == "buy" and qty % 100 != 0:
             return reject("买入数量须为100股整数倍")
-        if quote.limit_up_price and side == "buy" and price >= quote.limit_up_price:
-            return reject(f"涨停价 {quote.limit_up_price}，无法买入")
-        if quote.limit_down_price and side == "sell" and price <= quote.limit_down_price:
-            return reject(f"跌停价 {quote.limit_down_price}，无法卖出")
+
+        # 涨跌停硬拦截（红线 5）：**缺限价一律拒单，不做静默放行**。
+        # 限价缺失是**会发生的状态**（补价依赖链上腾讯单源，曾真实被封），
+        # 且此处是模拟盘胜率基线的来源——放进一笔试不到的单子会污染统计，
+        # 故取保守口径：宁可拒单并说明原因，也不放行未校验的单。
+        # 顺序刻意放在账户级校验（资金/可卖量）之前：涨跌停是**市场可行性**，
+        # 与用户账户状态无关，红线守卫不应因为"钱不够"而根本不被求值。
+        blocked = limit_block_reason(quote, side, price)
+        if blocked:
+            return reject(blocked)
 
         with self._sf() as db:
             await self._unfreeze(db)
@@ -171,7 +226,7 @@ class PaperTradingEngine:
                 db.refresh(order)
                 return order
             # sell
-            pos = db.query(PaperPosition).filter(PaperPosition.symbol == symbol).one_or_none()
+            pos = self._position_of(db, symbol)
             if pos is None or pos.available < qty:
                 avail = pos.available if pos else 0
                 return reject(f"可卖数量不足（{avail}）")
@@ -219,7 +274,17 @@ class PaperTradingEngine:
     # ---------- 成交（卖） ----------
 
     async def _fill_sell(self, db: Session, acc: PaperAccount, order: PaperOrder, fill_price: float, qty: int) -> PaperOrder:
-        pos = db.query(PaperPosition).filter(PaperPosition.symbol == order.symbol).one_or_none()
+        pos = self._position_of(db, order.symbol)
+        # 成交前二次校验：`match_pending` 直接调用本方法，不经 place_order 的可卖量校验。
+        # 无此校验时 quantity 会被扣成负数，又被下面 `quantity <= 0` 分支静默删除 ⇒
+        # 持仓消失但卖出款已入账（同一批可用量可被两次挂单重复卖出）。S1-1 一并加固。
+        if pos is None or pos.available < qty:
+            order.status = "rejected"
+            order.reason = f"可卖数量不足（成交时校验：{pos.available if pos else 0}）"
+            db.add(order)
+            db.commit()
+            db.refresh(order)
+            return order
         fee = calc_fee("sell", fill_price, qty)
         proceeds = fill_price * qty - fee
         acc.cash += proceeds
@@ -261,6 +326,13 @@ class PaperTradingEngine:
                     PaperOrder.symbol == sym,
                 ).all():
                     acc = self.ensure_account()
+                    # 成交前二次校验涨跌停（红线 5）：挂单可能是在股价冲上涨停**之前**
+                    # 挂下的，`place_order` 的那次校验代表不了此刻。缺限价时同样不成交
+                    # ——静默按现价成交等于在涨停板买入/在跌停板卖出。
+                    blocked = limit_block_reason(quote, o.side, quote.price)
+                    if blocked:
+                        log.info("挂单暂不撮合 %s %s：%s", o.side, sym, blocked)
+                        continue
                     if o.side == "buy" and o.price >= quote.price:
                         await self._fill(db, acc, o, quote.price, o.quantity)
                     elif o.side == "sell" and o.price <= quote.price:

@@ -33,6 +33,10 @@ def run_migrations(engine: Engine, url: str | None = None) -> str:
 
     cfg = Config(str(BACKEND_DIR / "alembic.ini"))
     cfg.set_main_option("script_location", str(BACKEND_DIR / "migrations"))
+    # 不让迁移重配 logging：env.py 的 fileConfig 会整体替换 root handlers 并
+    # （历史上）禁用迁移前创建的所有 logger（2026-09-09 议程零日志事故根因之一）。
+    # app 进程的日志归 main.py basicConfig 管，迁移只管 schema。
+    cfg.attributes["configure_logger"] = False
     # url 默认从 engine 派生——迁移目标必须与传入 engine 严格一致，
     # 否则测试/多库场景会误操作默认库（env.py 仅在未设置时回填 settings）
     cfg.set_main_option("sqlalchemy.url", url or str(engine.url))

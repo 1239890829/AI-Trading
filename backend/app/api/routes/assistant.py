@@ -6,6 +6,12 @@ SSE 事件契约（每事件一行 `data: {json}\n\n`）：
                                             溯源清单（{symbol,name,source,as_of}），
                                             无快照时为空数组
 - {"type":"delta","text":".."}               文本增量（可能多次）
+- {"type":"status","phase":"thinking"|"tools","used":["longhu"],"label":"龙虎榜"}
+                                            进度提示（2026-09-11 新增）：thinking =
+                                            正在生成/正在组织回答；tools = 正在取数，
+                                            label 是中文短标签串。**取数与思考期间可能
+                                            十几秒没有任何 delta**，前端必须靠它给出
+                                            "思考中/正在取数"反馈，否则界面像卡死。
 - {"type":"error","message":"..","kind":"..","hint":".."}
                                             显式错误（之后仍发 done）。kind 取
                                             LLMFailure，hint 是可行动提示——
@@ -41,14 +47,18 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
+from app.assistant.cognition import describe_gap, looks_like_false_denial
 from app.assistant.context import build_market_context, resolve_symbols
 from app.assistant.prompt import PageContext, build_system_prompt
 from app.assistant.tools import (
+    MAX_CALLS_PER_TURN,
+    MAX_TOOL_ROUNDS,
     ToolContext,
     has_partial_tool_call,
     parse_tool_calls,
     run_tool_calls,
     strip_tool_calls,
+    tool_label,
 )
 from app.core.config import settings
 from app.core.grounding import grounding_violations
@@ -154,6 +164,10 @@ async def _tool_context(
         session_factory=sf,
         known_symbols=known_symbols or set(),
         trading_days=days,
+        hub=hub,
+        snapshot_service=getattr(request.app.state, "snapshot_service", None),
+        paper_engine=getattr(request.app.state, "paper", None),
+        event_store=getattr(request.app.state, "event_store", None),
     )
 
 
@@ -162,31 +176,38 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
     provider = settings.llm_provider
     model = settings.review_llm_model or settings.news_llm_model or "default"
 
-    # 实时快照注入：解析消息/页面里的标的 → 批量取价 → 提示词块 + 溯源清单（best-effort）
-    market_block = ""
-    market_sources: list[dict[str, str]] = []
+    # 实体词典先取：既用于快照标的解析，也是工具参数的实体校验来源。
     known_symbols: set[str] = set()
+    stocks: list[dict[str, str]] = []
     try:
         entity = await asyncio.to_thread(_entity_payload, request)
         stocks = entity.get("stocks") or []
         known_symbols = {str(s.get("code")) for s in stocks if s.get("code")}
-        codes = resolve_symbols(
-            req.messages[-1].content, req.page, stocks
-        )
+    except Exception as exc:  # noqa: BLE001  上下文构建是增强层，绝不拖垮聊天
+        log.warning("assistant entity dict skipped: %s", exc)
+
+    # 工具上下文**必须先于**快照块确定：快照块头文案依赖"有没有工具"
+    # （2026-09-11 修复——无工具时写死的"你没有资金流/龙虎榜"与工具清单自相矛盾，
+    # 模型据此答"我没有龙虎榜数据"，而这玩意的工具明明在清单里）。
+    tool_ctx = await _tool_context(request, known_symbols) if settings.assistant_tools_enabled else None
+    tools_enabled = tool_ctx is not None
+
+    # 实时快照注入：解析消息/页面里的标的 → 批量取价 → 提示词块 + 溯源清单（best-effort）
+    market_block = ""
+    market_sources: list[dict[str, str]] = []
+    try:
+        codes = resolve_symbols(req.messages[-1].content, req.page, stocks)
         if codes:
             from app.api.routes.market import _batch_quotes
 
             hub = request.app.state.hub
             market_block, market_sources = await build_market_context(
-                lambda syms: _batch_quotes(hub, syms), codes
+                lambda syms: _batch_quotes(hub, syms), codes, tools_enabled
             )
-    except Exception as exc:  # noqa: BLE001  上下文构建是增强层，绝不拖垮聊天
+    except Exception as exc:  # noqa: BLE001
         log.warning("assistant market context skipped: %s", exc)
         market_block = ""
         market_sources = []
-
-    tool_ctx = await _tool_context(request, known_symbols) if settings.assistant_tools_enabled else None
-    tools_enabled = tool_ctx is not None
 
     # 上下文注入扩展（AI 大脑 P1）：行情快照之外，把「持仓 + 最近精选 + 今日事件」
     # 也主动喂给模型——助手回答"我持仓怎么样"不再依赖用户贴数据。全部只读、
@@ -261,28 +282,50 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
         tool_block: str | None = None  # 工具真实返回——grounding 证据池的第二部分
         try:
             sink: list[str] = []
+            # 首事件即进度：前端据此亮「思考中」，不必等到第一个 delta 才有反馈
+            # （用户实测反馈：取数与思考期间界面完全静止，像卡死）。
+            yield _sse({"type": "status", "phase": "thinking"})
             # 第一轮：启用工具时走收集模式（开头可能是 {{tool:...}}，剥离后才给前端）
             async for chunk in _stream_round(messages, collect=tools_enabled, sink=sink):
                 yield chunk
 
-            raw = sink[0] if sink else ""
-            calls = parse_tool_calls(raw) if tools_enabled else []
-            if calls:
-                ctx = tool_ctx
-                if ctx is not None:
-                    block, used = await run_tool_calls(calls, ctx)
-                    tool_block = block
-                    log.info("assistant tools used=%s", used)
-                    yield _sse({"type": "tools", "used": used})
-                    followup = messages + [
-                        {"role": "assistant", "content": strip_tool_calls(raw) or "（取数）"},
-                        {"role": "user", "content":
-                            "以下是工具返回的真实数据（只读，来源见各行）。"
-                            "基于这些数据回答，并标注来源；工具没给到的信息如实说没有。\n\n" + block},
-                    ]
-                    # 第二轮：不再允许工具（防止无限循环）
-                    async for chunk in _stream_round(followup, collect=True, sink=sink):
-                        yield chunk
+            # 多轮取数（2026-09-11：由"只取一轮"改为最多 MAX_TOOL_ROUNDS 轮）：
+            # 真实提问常是多跳的（先看异动 → 再查公告 → 再看资金），一轮两把工具不够，
+            # 模型只能拿第一批数据硬答。每轮都重新解析**本轮**输出里的工具标记。
+            rounds = 0
+            used_tools: list[str] = []   # 跨轮累计：认知缺口检测要判"本轮有没有取过数"
+            while tools_enabled and tool_ctx is not None and rounds < MAX_TOOL_ROUNDS:
+                raw = sink[-1] if sink else ""
+                calls = parse_tool_calls(raw)
+                if not calls:
+                    break
+                rounds += 1
+                names = [c.name for c in calls[:MAX_CALLS_PER_TURN]]
+                yield _sse({
+                    "type": "status",
+                    "phase": "tools",
+                    "used": names,
+                    "label": "、".join(tool_label(n) for n in names),
+                })
+                block, used = await run_tool_calls(calls, tool_ctx)
+                tool_block = f"{tool_block}\n\n{block}" if tool_block else block
+                used_tools.extend(used)
+                log.info("assistant tools round=%s used=%s", rounds, used)
+                yield _sse({"type": "tools", "used": used,
+                            "labels": [tool_label(n) for n in used]})
+                if not used:
+                    break
+                messages = messages + [
+                    {"role": "assistant", "content": strip_tool_calls(raw) or "（取数）"},
+                    {"role": "user", "content":
+                        "以下是工具返回的真实数据（只读，来源见各行）。"
+                        "基于这些数据回答，并标注来源；工具没给到的信息如实说没有。"
+                        f"如果还需要别的数据，可以在回答开头再写新的工具标记（最多还能取 "
+                        f"{MAX_TOOL_ROUNDS - rounds} 轮）。\n\n" + block},
+                ]
+                yield _sse({"type": "status", "phase": "thinking"})
+                async for chunk in _stream_round(messages, collect=True, sink=sink):
+                    yield chunk
 
             # 接地校验（P2-F，Vibe-Trading grounding gate 思想）：对用户实际看到的
             # 全部文本（各轮 strip 工具标记后拼接）做数字/指令越权校验。流式场景
@@ -296,6 +339,14 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
                 if violations:
                     log.warning("assistant grounding violations=%s", violations)
                     yield _sse({"type": "grounding", "violations": violations})
+            # 认知缺口自曝（2026-09-11）：没调工具却声称"我没有这项数据"——
+            # 大概率是工具覆盖缺口或提示词没说清，而非真的取不到。
+            # 只留痕、不改答案：这是**信号**，日志累积起来就是一份自动产出的缺口清单。
+            if tools_enabled and looks_like_false_denial(answer_text, tools_used=used_tools):
+                log.warning(
+                    "assistant 疑似认知缺口（未调工具却声称无数据）：%s",
+                    describe_gap(answer_text, req.messages[-1].content),
+                )
             yield _sse({"type": "done"})
         except asyncio.CancelledError:
             # 客户端断开（点了停止/关窗/跳页）：底层传输由 _stream_round 的 finally 关闭

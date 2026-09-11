@@ -71,7 +71,7 @@ def test_impact_route_filters_l3(monkeypatch=None):
 
     rows = [
         SimpleNamespace(
-            id=1, title="多晶硅涨价函落地", url=None, source="财联社", source_tier=4,
+            id=1, title="多晶硅涨价函落地", url=None, summary=None, source="财联社", source_tier=4,
             published_at=datetime(2026, 9, 4, 2, 0, tzinfo=timezone.utc),
             fact_kind="fact", certainty="done", category="corporate",
             half_life_hours=72, source_symbol=None, status="active",
@@ -79,7 +79,7 @@ def test_impact_route_filters_l3(monkeypatch=None):
                                         direction=1, strength=2, chain="", basis="")],
         ),
         SimpleNamespace(
-            id=2, title="某公司董事辞职", url=None, source="x", source_tier=2,
+            id=2, title="某公司董事辞职", url=None, summary=None, source="x", source_tier=2,
             published_at=datetime(2026, 9, 4, 2, 0, tzinfo=timezone.utc),
             fact_kind="fact", certainty="done", category="corporate",
             half_life_hours=72, source_symbol=None, status="active",
@@ -128,7 +128,7 @@ def test_impact_route_returns_tags_and_tag_counts():
 
     rows = [
         SimpleNamespace(
-            id=1, title="多晶硅涨价函落地", url=None, source="财联社", source_tier=4,
+            id=1, title="多晶硅涨价函落地", url=None, summary=None, source="财联社", source_tier=4,
             published_at=datetime(2026, 9, 4, 2, 0, tzinfo=timezone.utc),
             fact_kind="fact", certainty="done", category="corporate",
             half_life_hours=72, source_symbol=None, status="active",
@@ -136,7 +136,7 @@ def test_impact_route_returns_tags_and_tag_counts():
                                         direction=1, strength=2, chain="", basis="")],
         ),
         SimpleNamespace(
-            id=2, title="某公司董事辞职", url=None, source="x", source_tier=2,
+            id=2, title="某公司董事辞职", url=None, summary=None, source="x", source_tier=2,
             published_at=datetime(2026, 9, 4, 2, 0, tzinfo=timezone.utc),
             fact_kind="fact", certainty="done", category="corporate",
             half_life_hours=72, source_symbol=None, status="active",

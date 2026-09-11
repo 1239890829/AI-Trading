@@ -1,4 +1,4 @@
-"""盘中情绪监控（sentiment-phase-review P2 #14，参考 WhiteWolf-js/daben-review）。
+"""盘中情绪监控（docs/sentiment.md「历史误判案例库」P2 #14，参考 WhiteWolf-js/daben-review）。
 
 阻塞解除：推送通道已选飞书并落地 notifier（2026-09-02，8154e47），监控本体补齐。
 三类**纯规则** P0 事件（不引入主观打分，全部可在盘后用池子数据复核）：

@@ -45,21 +45,21 @@ export function QuoteStrip({
       <div className="flex flex-wrap items-baseline justify-between gap-x-4">
         <div className="flex items-baseline gap-2">
           <span className="text-base font-semibold">{quote.name ?? "--"}</span>
-          <span className="font-mono text-xs text-zinc-400">{quote.market}.{quote.symbol}</span>
+          <span className="font-mono text-xs text-zinc-600 dark:text-zinc-400">{quote.market}.{quote.symbol}</span>
           {/* 仅硬质量态出徽标（过期/休市/非法）；"正常"常驻是噪音、low"可疑"
               盘中瞬态闪现（2026-09-02 可疑标签修复，口径同列表行/指数卡） */}
           {isHardQuality(quote.quality) && <QualityBadge quality={quote.quality} reasons={quote.quality_reasons} />}
           <SuspendedBadge status={tradingStatus} />
           {!hideWatchlist &&
             (inWatchlist ? (
-              <span className="text-xs text-zinc-400">已在自选</span>
+              <span className="text-xs text-zinc-600 dark:text-zinc-400">已在自选</span>
             ) : (
-              <button onClick={onAdd} className="rounded border border-up/50 px-1.5 py-0.5 text-[11px] text-up hover:bg-up/10">＋ 自选</button>
+              <button onClick={onAdd} className="rounded border border-up/50 px-1.5 py-0.5 text-[11px] text-up-ink dark:text-up hover:bg-up/10">＋ 自选</button>
             ))}
         </div>
         <div className="flex items-baseline gap-2">
           {quote.price == null ? (
-            <span className="text-sm text-zinc-400">未开盘</span>
+            <span className="text-sm text-zinc-600 dark:text-zinc-400">未开盘</span>
           ) : (
             <PriceFlash value={quote.price} className={`font-mono text-2xl font-semibold tabular-nums ${pctColor(quote.change_pct)}`}>{fmt(quote.price)}</PriceFlash>
           )}
@@ -68,13 +68,13 @@ export function QuoteStrip({
           </span>
         </div>
       </div>
-      <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[11px] text-zinc-400">
+      <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[11px] text-zinc-600 dark:text-zinc-400">
         {strip.map(([k, v, title]) => (
           <span key={k} title={title}>
             {k} <span className="font-mono tabular-nums text-zinc-800 dark:text-zinc-200">{v}</span>
           </span>
         ))}
-        <span className="ml-auto text-zinc-500">
+        <span className="ml-auto text-zinc-600 dark:text-zinc-400">
           {timeText(quote.data_timestamp)} · {sourceLabel(quote.source)}
         </span>
       </div>

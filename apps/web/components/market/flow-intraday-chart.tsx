@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import { fmtYi, signedYi } from "@/lib/format";
 import type { FlowIntradayPoint, FlowTier } from "@/lib/api";
 
 /**
@@ -19,14 +20,14 @@ export const TIER_META: { key: keyof FlowTier; label: string; color: string; des
   { key: "small", label: "小单", color: "#4ade80", desc: "小单净额" },
 ];
 
-export function fmtYi(v: number | null | undefined, digits = 0): string {
-  if (v == null) return "--";
-  return v.toLocaleString("zh-CN", { maximumFractionDigits: digits, minimumFractionDigits: digits });
-}
+// fmtYi / signedYi 已下沉至 lib/format（2026-09-10）：题材卡等非图表场景也要用
+// 同一套金额格式，留在组件文件里会造成无谓的跨组件依赖。此处 re-export 保持
+// 既有引用路径（board-flow / fund-tab）不变，signedFmt 作为历史调用名的包装。
+export { fmtYi, signedYi };
 
+/** 兼容包装（历史调用名）：板块/大盘资金流组件的「±X.X亿」。 */
 export function signedFmt(v: number | null): string {
-  if (v == null) return "--";
-  return `${v >= 0 ? "+" : ""}${fmtYi(v, 1)}亿`;
+  return signedYi(v, 1);
 }
 
 /** HH:MM → 交易分钟序（0..240），与后端 _sina_bar_seq 同口径。 */
@@ -92,10 +93,10 @@ export function FlowIntradayChart({ items }: { items: FlowIntradayPoint[] }) {
         onMouseLeave={() => setHoverIdx(null)}
       >
         <svg viewBox="0 0 240 100" preserveAspectRatio="none" className="h-full w-full" role="img" aria-label="分钟级五档资金流累计曲线">
-          <line x1="0" y1="50" x2="240" y2="50" stroke="currentColor" className="text-zinc-300 dark:text-zinc-700" strokeWidth="1" strokeDasharray="2 3" vectorEffect="non-scaling-stroke" />
-          <line x1="60" y1="0" x2="60" y2="100" stroke="currentColor" className="text-zinc-100 dark:text-zinc-800/80" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-          <line x1="120" y1="0" x2="120" y2="100" stroke="currentColor" className="text-zinc-100 dark:text-zinc-800/80" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-          <line x1="180" y1="0" x2="180" y2="100" stroke="currentColor" className="text-zinc-100 dark:text-zinc-800/80" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+          <line x1="0" y1="50" x2="240" y2="50" stroke="currentColor" className="text-zinc-700 dark:text-zinc-700" strokeWidth="1" strokeDasharray="2 3" vectorEffect="non-scaling-stroke" />
+          <line x1="60" y1="0" x2="60" y2="100" stroke="currentColor" className="text-zinc-900 dark:text-zinc-800/80" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+          <line x1="120" y1="0" x2="120" y2="100" stroke="currentColor" className="text-zinc-900 dark:text-zinc-800/80" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+          <line x1="180" y1="0" x2="180" y2="100" stroke="currentColor" className="text-zinc-900 dark:text-zinc-800/80" strokeWidth="1" vectorEffect="non-scaling-stroke" />
           {TIER_META.map((m) => (
             <path key={m.key} d={toPath(m.key)} fill="none" stroke={m.color} strokeWidth={m.key === "main" ? 2 : 1.1} opacity={m.key === "main" ? 1 : 0.8} vectorEffect="non-scaling-stroke" />
           ))}
@@ -122,16 +123,16 @@ export function FlowIntradayChart({ items }: { items: FlowIntradayPoint[] }) {
               style={{ left: `${hoverLeftPct}%`, transform: hoverLeftPct > 60 ? "translateX(calc(-100% - 8px))" : "translateX(8px)" }}
               data-testid="flow-tooltip"
             >
-              <p className="mb-1 font-mono text-[10px] text-zinc-500">{hp.t}｜分钟累计净额（亿元）</p>
+              <p className="mb-1 font-mono text-[10px] text-zinc-600 dark:text-zinc-400">{hp.t}｜分钟累计净额（亿元）</p>
               {TIER_META.map((m) => {
                 const v = hp[m.key];
                 return (
                   <p key={m.key} className="flex items-center justify-between py-px text-[10px]">
-                    <span className="inline-flex items-center gap-1 text-zinc-500">
+                    <span className="inline-flex items-center gap-1 text-zinc-600 dark:text-zinc-400">
                       <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ backgroundColor: m.color }} />
                       {m.label}
                     </span>
-                    <span className={`font-mono tabular-nums ${v == null ? "text-zinc-400" : v >= 0 ? "text-up" : "text-down"}`}>{signedFmt(v)}</span>
+                    <span className={`font-mono tabular-nums ${v == null ? "text-zinc-600 dark:text-zinc-400" : v >= 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}`}>{signedFmt(v)}</span>
                   </p>
                 );
               })}
@@ -140,7 +141,7 @@ export function FlowIntradayChart({ items }: { items: FlowIntradayPoint[] }) {
         )}
       </div>
       {/* 时间轴：HTML 行（替代 SVG 内文字，定高下不变形） */}
-      <div className="flex justify-between font-mono text-[9px] text-zinc-400">
+      <div className="flex justify-between font-mono text-[9px] text-zinc-600 dark:text-zinc-400">
         <span>09:30</span>
         <span>10:30</span>
         <span>11:30/13:00</span>

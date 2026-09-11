@@ -31,8 +31,15 @@ config.set_main_option("sqlalchemy.url", settings.database_url)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+# 2026-09-09 P0：fileConfig 默认 disable_existing_loggers=True——程序化迁移
+# （app 启动 lifespan 内 run_migrations）每次执行都会把迁移前创建的所有 logger
+# （uvicorn 自身、main、以及随 routes 在 import 期加载的 app.services.evolution）
+# 整体禁用 → 议程调度器每 tick NameError 崩溃却零日志，"Application startup
+# complete" 也消失。双保险修复：
+#   ① app 程序化迁移设 attributes["configure_logger"]=False → 完全跳过（app 已自带 basicConfig）；
+#   ② CLI 直跑（alembic upgrade head）保留 ini 日志配置，但不再禁用既有 logger。
+if config.attributes.get("configure_logger", True) and config.config_file_name is not None:
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

@@ -6,11 +6,14 @@ import {
   CrosshairMode,
   HistogramData,
   IChartApi,
+  IPriceLine,
   ISeriesApi,
   LineData,
   Time,
 } from "lightweight-charts";
 import type { MinutePoint as P } from "@/lib/api";
+import { computeMinuteAxis } from "@/lib/minute-axis";
+import { readChartTheme, useChartTheme, type ChartTheme } from "@/lib/chart-theme";
 import type { MinuteNewsEvent } from "@/lib/event-markers";
 
 /**
@@ -24,9 +27,11 @@ import type { MinuteNewsEvent } from "@/lib/event-markers";
  * 两种场景下 bars[-2] 都恰好是"分时日的上一交易日"）。分子分母同为股，单位已实测一致。
  * 交互：十字光标浮层（触摸同源），ref 直改 DOM 不走 React state。
  * 纵轴区间（2026-09-04 用户需求）：有板块涨跌幅限制（limitPct，来自 lib/price-limit：
- * 主板 ±10 / 创业·科创 ±20 / 北交 ±30 / ST ±5）→ 恒为 [跌停价, 涨停价] 全限制区间，
+ * 主板 ±10（含 ST）/ 创业·科创 ±20 / 北交 ±30）→ 恒为 [跌停价, 涨停价] 全限制区间，
  * 涨停/跌停虚线贴上下边缘、价格区几乎撑满图高；指数/无法识别 → 回退原「当日波幅
  * 对称区间」（昨收中心，0.5% 地板防抖）。
+ * ⚠️ 2026-09-11：真实行情若越出名义带（除权/换源/昨收口径不一致），区间并入越界点，
+ * 不再把曲线裁到图外；左轴百分比带随价格带同步放大（保证左右轴不脱锚）。
  * prevClose 缺失时整体降级为库默认自适应坐标 + 浮层隐藏涨跌幅，绝不臆造基准。
  *
  * 创建/数据分离（2026-09-02 用户反馈"刷新闪烁"）：原实现 effect 依赖 points——
@@ -51,9 +56,90 @@ import type { MinuteNewsEvent } from "@/lib/event-markers";
  * 消除每根新分钟线导致的整图横移跳动。
  */
 
-const UP = "#ef4444"; // 中国惯例红涨
-const DOWN = "#10b981"; // 绿跌
-const FLAT = "rgba(161,161,170,0.6)";
+/**
+ * 画布调色板（P2-26，2026-09-11）——与 `kline-chart-pro.tsx` 同根因、同处置。
+ *
+ * lightweight-charts 的颜色是创建 series 时写死的十六进制，不认识 CSS 变量、也不认识
+ * Tailwind 的 `dark:`（那些选择器只作用于 DOM）。亮色下这些"深色画布专用"色全部失效：
+ * 均价线 `#eab308` 在浅卡片上约 **1.9:1**、绿线 `#10b981` 2.54、竞价点 `#f59e0b` 2.14。
+ * 文本对比度扫描器看不见 canvas，故此前对比度专项一路报 0 违规。
+ *
+ * **深色档 = 全部历史值，逐字节不变**；亮色档取同色系足够深的档位（图形 ≥3:1）。
+ * 注意分时的"红"与 K 线的 `#f43f5e` 本来就不是同一个红（分时用纯红 `#ef4444`），
+ * 故亮色档各自加深到本色的深档，不强行统一到 rose 系。
+ */
+type MinutePalette = {
+  axis: string;
+  grid: string;
+  up: string;
+  down: string;
+  upFill1: string;
+  upFill2: string;
+  downFill1: string;
+  downFill2: string;
+  flat: string;
+  volUp: string;
+  volDown: string;
+  avg: string;
+  prevClose: string;
+  limitUp: string;
+  limitDown: string;
+  index: string;
+  auction: string;
+  event: string;
+};
+
+const MINUTE_PALETTE: Record<ChartTheme, MinutePalette> = {
+  dark: {
+    axis: "#a1a1aa",
+    grid: "rgba(120,120,130,0.12)",
+    up: "#ef4444",
+    down: "#10b981",
+    upFill1: "rgba(239,68,68,0.28)",
+    upFill2: "rgba(239,68,68,0.02)",
+    downFill1: "rgba(16,185,129,0.28)",
+    downFill2: "rgba(16,185,129,0.02)",
+    flat: "rgba(161,161,170,0.6)",
+    volUp: "rgba(239,68,68,0.5)",
+    volDown: "rgba(16,185,129,0.5)",
+    avg: "#eab308",
+    prevClose: "rgba(161,161,170,0.7)",
+    limitUp: "rgba(239,68,68,0.55)",
+    limitDown: "rgba(16,185,129,0.55)",
+    index: "rgba(167,139,250,0.85)",
+    auction: "#f59e0b",
+    event: "#38bdf8",
+  },
+  light: {
+    axis: "#52525b", // zinc-600，zinc-50 上 7.03:1（原 zinc-400 仅 2.46）—— 轴标签是文字
+    grid: "rgba(120,120,130,0.18)",
+    up: "#dc2626", // red-600，白底 4.83:1（原 ef4444 3.76 也过线，但与填充同深更耐看）
+    down: "#047857", // emerald-700，白底 5.25:1（原 10b981 仅 2.54）
+    upFill1: "rgba(220,38,38,0.28)",
+    upFill2: "rgba(220,38,38,0.02)",
+    downFill1: "rgba(4,120,87,0.28)",
+    downFill2: "rgba(4,120,87,0.02)",
+    flat: "rgba(113,113,122,0.8)", // zinc-500 @80% → 白底 3.36:1
+    volUp: "rgba(220,38,38,0.8)",
+    volDown: "rgba(4,120,87,0.8)",
+    avg: "#a16207", // yellow-700，白底 4.72:1（原 eab308 约 1.9，亮色下均价线几乎消失）
+    prevClose: "rgba(113,113,122,0.8)",
+    limitUp: "rgba(220,38,38,0.85)",
+    limitDown: "rgba(4,120,87,0.85)",
+    index: "#7c3aed", // violet-600，白底 5.70:1（原 violet-400@85% 仅 2.32）
+    auction: "#b45309", // amber-700，白底 4.81:1
+    event: "#0369a1", // sky-700，白底 5.69:1
+  },
+};
+/**
+ * 北京时间 HH:MM（**热路径专用，勿与其它同名实现合并**）。
+ *
+ * 全站另有两份语义相同的 `bjHHMM`（`lib/kline-live.ts`、`detail/minute-decision-panel.tsx`），
+ * 走 `toLocaleTimeString("sv-SE", { timeZone: "Asia/Shanghai" })`。那份时区语义更稳妥，
+ * 但每次调用要建 Intl formatter；此处按分钟点逐点调用（构建 byHHMM 索引、游标定位、
+ * 每次 tick 重建），240 点 × 每次重渲染的量级下，手算偏移比 Intl 快一个数量级。
+ * 两者对 UTC 锚定的 ISO 时间戳输出一致，故只在**这条热路径**保留手算版本。
+ */
 const BJ_OFFSET = 8 * 3600;
 
 /** 已开市交易分钟数（11:30-13:00 午休不计），clamp 到 [1,240]。 */
@@ -81,11 +167,29 @@ type SeriesBundle = {
   pct: ISeriesApi<"Line"> | null;
   avg: ISeriesApi<"Line"> | null;
   vol: ISeriesApi<"Histogram"> | null;
+  /** 叠加线（大盘/竞价点/事件点）与价格线：主题切换要一并换色，故留引用（P2-26）。 */
+  index: ISeriesApi<"Line"> | null;
+  auction: ISeriesApi<"Line"> | null;
+  events: ISeriesApi<"Line"> | null;
+  /** 昨收/涨停/跌停虚线：颜色随主题走，`pick` 指向调色板色槽（不依赖数组顺序）。 */
+  priceLines: { pl: IPriceLine; pick: (p: MinutePalette) => string }[];
   slots: number[];
   base0: number;
 };
 
-const emptyBundle = (): SeriesBundle => ({ chart: null, price: null, pct: null, avg: null, vol: null, slots: [], base0: 0 });
+const emptyBundle = (): SeriesBundle => ({
+  chart: null,
+  price: null,
+  pct: null,
+  avg: null,
+  vol: null,
+  index: null,
+  auction: null,
+  events: null,
+  priceLines: [],
+  slots: [],
+  base0: 0,
+});
 
 export function MinuteChart({
   points,
@@ -117,6 +221,9 @@ export function MinuteChart({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const tipRef = useRef<HTMLDivElement>(null);
+  // 画布配色随主题走（P2-26）：theme 变化 → applyTheme 把新色套到既有 series 上，不重建图表。
+  const theme = useChartTheme();
+  const pal = MINUTE_PALETTE[theme];
 
   // 量比统一计算：精确口径（TDX 5 日同期基线）优先，缺失回退近似（昨日量×时间占比）。
   const computeLB = useCallback(
@@ -194,7 +301,7 @@ export function MinuteChart({
    * setData 无顺序约束且是 Canvas 原位重绘（不重建图表、不闪）：243 槽 ×
    * 4 序列在 1Hz 节奏下开销可忽略，且天然消除合成点与官方点同槽竞态。
    */
-  function fillAll(s: SeriesBundle, pts: P[], base: number | null | undefined) {
+  function fillAll(s: SeriesBundle, pts: P[], base: number | null | undefined, palette: MinutePalette) {
     if (!s.price) return;
     const byHHMM = new Map<string, P>();
     for (const p of pts) byHHMM.set(bjHHMM(p), p);
@@ -207,9 +314,9 @@ export function MinuteChart({
       const p = byHHMM.get(slotHHMMs[i]);
       if (p && p.price != null) prevP = p.price;
     }
-    const volColor = (p: P): string => {
-      const prevPrice = prevPriceByHHMM.get(bjHHMM(p)) ?? null;
-      return prevPrice == null || p.price === prevPrice ? FLAT : p.price > prevPrice ? "rgba(239,68,68,0.5)" : "rgba(16,185,129,0.5)";
+    const volColor = (q: P): string => {
+      const prevPrice = prevPriceByHHMM.get(bjHHMM(q)) ?? null;
+      return prevPrice == null || q.price === prevPrice ? palette.flat : q.price > prevPrice ? palette.volUp : palette.volDown;
     };
     const over = <T,>(pick: (p: P) => T | null): { time: Time; value?: T }[] =>
       s.slots.map((sec, i) => {
@@ -238,13 +345,15 @@ export function MinuteChart({
     if (!ref.current || !hasPoints) return;
     const cur = pointsRef.current;
     const hasBase = prevClose != null && prevClose > 0;
+    // 首建配色同步读 DOM（不读 state）：主题是 documentElement 上的 class，它才是权威值。
+    const p = MINUTE_PALETTE[readChartTheme()];
 
     const chart = createChart(ref.current, {
       autoSize: true,
-      layout: { background: { color: "transparent" }, textColor: "#a1a1aa" },
+      layout: { background: { color: "transparent" }, textColor: p.axis },
       grid: {
-        vertLines: { color: "rgba(120,120,130,0.12)" },
-        horzLines: { color: "rgba(120,120,130,0.12)" },
+        vertLines: { color: p.grid },
+        horzLines: { color: p.grid },
       },
       // allowShiftVisibleRangeOnWhitespaceReplacement=false：盘中每根新分钟线
       // 把 whitespace 槽替换为数据点时，库默认会把可视区间右移 1 槽——悬停中
@@ -262,11 +371,15 @@ export function MinuteChart({
     });
     const s = seriesRef.current;
     s.chart = chart;
+    // 重建会连带作废旧 priceLine（随 chart.remove 一起销毁）⇒ 引用同步清空
+    s.priceLines = [];
     // 验收/调试挂点：canvas 内容无 DOM 文本可读，agent-browser 文本通道验收
     // （校验纵轴区间/margins）依赖经容器元素读取的图表实例与区间快照。
     const dbg = ref.current as unknown as {
       __minuteChart?: IChartApi;
       __minuteRange?: { min: number; max: number } | null;
+      /** 真实行情越出名义涨跌停带（除权/换源/昨收口径不一致）时为 true。 */
+      __minuteOutOfBand?: boolean;
     };
     dbg.__minuteChart = chart;
     const { slots, base0 } = buildSlots(cur[0]);
@@ -279,19 +392,19 @@ export function MinuteChart({
     const series: ISeriesApi<"Area"> | ISeriesApi<"Baseline"> = hasBase
       ? chart.addBaselineSeries({
           baseValue: { type: "price", price: prevClose! },
-          topLineColor: UP,
-          topFillColor1: "rgba(239,68,68,0.28)",
-          topFillColor2: "rgba(239,68,68,0.02)",
-          bottomLineColor: DOWN,
-          bottomFillColor1: "rgba(16,185,129,0.28)",
-          bottomFillColor2: "rgba(16,185,129,0.02)",
+          topLineColor: p.up,
+          topFillColor1: p.upFill1,
+          topFillColor2: p.upFill2,
+          bottomLineColor: p.down,
+          bottomFillColor1: p.downFill1,
+          bottomFillColor2: p.downFill2,
           lineWidth: 2,
           priceLineVisible: false,
         })
       : chart.addAreaSeries({
-          lineColor: "#f43f5e",
-          topColor: "rgba(244,63,94,0.28)",
-          bottomColor: "rgba(244,63,94,0.02)",
+          lineColor: p.up,
+          topColor: p.upFill1,
+          bottomColor: p.upFill2,
           lineWidth: 2,
           priceLineVisible: false,
         });
@@ -311,7 +424,7 @@ export function MinuteChart({
 
     // ---- 均价线（黄）----
     s.avg = chart.addLineSeries({
-      color: "#eab308",
+      color: p.avg,
       lineWidth: 1,
       priceLineVisible: false,
       lastValueVisible: false,
@@ -327,7 +440,7 @@ export function MinuteChart({
     });
     chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
 
-    fillAll(s, cur, prevClose);
+    fillAll(s, cur, prevClose, p);
     cursorRef.current = bjHHMM(cur[cur.length - 1]);
     lastPointsRef.current = cur;
 
@@ -344,27 +457,20 @@ export function MinuteChart({
       // 名义涨跌停价（仅作坐标锚点与虚线位置，不做分位四舍五入）
       const limUp = lim != null ? prevClose! * (1 + lim / 100) : null;
       const limDn = lim != null ? Math.max(prevClose! * (1 - lim / 100), 0) : null;
-      let hi = -Infinity;
-      let lo = Infinity;
-      for (const p of cur) {
-        if (p.price > hi) hi = p.price;
-        if (p.price < lo) lo = p.price;
-      }
-      // 竞价点纳入对称区间，防止被裁剪出可视区（限制模式天然覆盖，仅回退模式需要）
-      if (auction?.price) {
-        if (auction.price > hi) hi = auction.price;
-        if (auction.price < lo) lo = auction.price;
-      }
-      dbg.__minuteRange = limUp != null && limDn != null ? { min: limDn, max: limUp } : null;
-      const half = limUp != null
-        ? limUp - prevClose!
-        : Math.max(Math.abs(hi - prevClose!), Math.abs(lo - prevClose!), prevClose! * 0.005);
+      const axis = computeMinuteAxis({
+        prevClose: prevClose!,
+        // 三态归一：prop 为可选（undefined）时显式收敛为 null = 「判不出 → 回退波幅区间」
+        limitPct: limitPct ?? null,
+        prices: cur.map((p) => p.price),
+        // 竞价点纳入区间，防止被裁剪出可视区（限制模式天然覆盖，回退模式需要）
+        auctionPrice: auction?.price,
+      });
+      const { min: rangeMin, max: rangeMax, pctBand } = axis;
+      dbg.__minuteRange = { min: rangeMin, max: rangeMax };
+      dbg.__minuteOutOfBand = axis.outOfBand;
       series.applyOptions({
         autoscaleInfoProvider: () => ({
-          priceRange:
-            limUp != null && limDn != null
-              ? { minValue: limDn, maxValue: limUp }
-              : { minValue: Math.max(prevClose! - half, 0), maxValue: prevClose! + half },
+          priceRange: { minValue: rangeMin, maxValue: rangeMax },
         }),
       });
       // 限制模式：价格区几乎撑满图高（上下各留 2% 呼吸位），涨停线才真正紧靠顶部；
@@ -375,46 +481,52 @@ export function MinuteChart({
         chart.priceScale("right").applyOptions({ scaleMargins: margins });
         chart.priceScale("left").applyOptions({ scaleMargins: margins });
       }
-      series.createPriceLine({
-        price: prevClose!,
-        color: "rgba(161,161,170,0.7)",
-        lineWidth: 1,
-        lineStyle: 2, // dotted
-        axisLabelVisible: true,
-        title: "昨收",
+      s.priceLines.push({
+        pl: series.createPriceLine({
+          price: prevClose!,
+          color: p.prevClose,
+          lineWidth: 1,
+          lineStyle: 2, // dotted
+          axisLabelVisible: true,
+          title: "昨收",
+        }),
+        pick: (q) => q.prevClose,
       });
 
       // 涨停/跌停虚线（红涨/绿跌 A 股惯例），贴住纵轴上下边缘
       if (limUp != null && limDn != null) {
-        series.createPriceLine({
-          price: limUp,
-          color: "rgba(239,68,68,0.55)",
-          lineWidth: 1,
-          lineStyle: 1, // dashed
-          axisLabelVisible: true,
-          title: "涨停",
+        s.priceLines.push({
+          pl: series.createPriceLine({
+            price: limUp,
+            color: p.limitUp,
+            lineWidth: 1,
+            lineStyle: 1, // dashed
+            axisLabelVisible: true,
+            title: "涨停",
+          }),
+          pick: (q) => q.limitUp,
         });
-        series.createPriceLine({
-          price: limDn,
-          color: "rgba(16,185,129,0.55)",
-          lineWidth: 1,
-          lineStyle: 1, // dashed
-          axisLabelVisible: true,
-          title: "跌停",
+        s.priceLines.push({
+          pl: series.createPriceLine({
+            price: limDn,
+            color: p.limitDown,
+            lineWidth: 1,
+            lineStyle: 1, // dashed
+            axisLabelVisible: true,
+            title: "跌停",
+          }),
+          pick: (q) => q.limitDown,
         });
       }
 
       // 左轴涨跌幅与右轴价格严格同锚（price = prevClose×(1+pct/100)）：
       // 限制模式刻度精确等于名义限制（跌停↔-lim、昨收↔0、涨停↔+lim），
       // 2026-09-07 修正：不再用实际涨跌停价反推（分位四舍五入导致刻度偏差）；
-      // 回退模式维持 ±halfPct 对称
-      const halfPct = lim != null ? lim : (half / prevClose!) * 100;
+      // 回退模式维持 ±pctBand 对称。2026-09-11：越界数据并入价格带后，
+      // pctBand 同步放大，保证左右轴不脱锚。
       s.pct?.applyOptions({
         autoscaleInfoProvider: () => ({
-          priceRange:
-            lim != null
-              ? { minValue: -lim, maxValue: lim }
-              : { minValue: -halfPct, maxValue: halfPct },
+          priceRange: { minValue: -pctBand, maxValue: pctBand },
         }),
       });
 
@@ -422,7 +534,7 @@ export function MinuteChart({
       if (index && index.points.length > 0) {
         const idxSeries = chart.addLineSeries({
           priceScaleId: "left",
-          color: "rgba(167,139,250,0.85)",
+          color: p.index,
           lineWidth: 1,
           lineStyle: 3, // dashed
           priceLineVisible: false,
@@ -441,19 +553,20 @@ export function MinuteChart({
               : ({ time: sec as Time } as LineData);
           }) as never
         );
-        // 叠加曲线不得撑破个股的对称区间：钳制到 ±halfPct 视觉带内
+        // 叠加曲线不得撑破个股的对称区间：钳制到 ±pctBand 视觉带内
         idxSeries.applyOptions({
           autoscaleInfoProvider: () => ({
-            priceRange: { minValue: -halfPct, maxValue: halfPct },
+            priceRange: { minValue: -pctBand, maxValue: pctBand },
           }),
         });
+        s.index = idxSeries; // 留引用：主题切换换色用（P2-26）
       }
     }
 
     // ---- 集合竞价点（09:25，金色）：槽序列首点即 9:25 ----
     if (auction?.price && cur.length > 0) {
       const auctionSeries = chart.addLineSeries({
-        color: "#f59e0b",
+        color: p.auction,
         lineWidth: 1,
         pointMarkersVisible: true,
         pointMarkersRadius: 4,
@@ -462,6 +575,7 @@ export function MinuteChart({
         crosshairMarkerVisible: false,
       });
       auctionSeries.setData([{ time: slots[0] as never, value: auction.price }]);
+      s.auction = auctionSeries; // 留引用：主题切换换色用（P2-26）
     }
 
     // ---- 当日新闻事件点（蓝圆点，挂在事件分钟的价格上）：只在槽已有行情时画
@@ -479,7 +593,7 @@ export function MinuteChart({
       }
       if (evData.length > 0) {
         const evSeries = chart.addLineSeries({
-          color: "#38bdf8",
+          color: p.event,
           lineWidth: 1,
           pointMarkersVisible: true,
           pointMarkersRadius: 3.5,
@@ -488,6 +602,7 @@ export function MinuteChart({
           crosshairMarkerVisible: false,
         });
         evSeries.setData(evData as never);
+        s.events = evSeries; // 留引用：主题切换换色用（P2-26）
       }
     }
 
@@ -498,17 +613,17 @@ export function MinuteChart({
     // 字段 textContent/className（零节点增删）；位置/透明度仅在变化时写。
     const tooltip = tipRef.current;
     const tipSkeleton =
-      `<div class="font-mono text-[11px] text-zinc-400" data-f="hhmm"></div>` +
+      `<div class="font-mono text-[11px] text-zinc-600 dark:text-zinc-400" data-f="hhmm"></div>` +
       `<div class="flex items-baseline gap-2"><span class="font-mono text-sm font-semibold tabular-nums" data-f="price"></span>` +
       `<span data-f="pct"></span></div>` +
       `<div class="mt-0.5 grid grid-cols-[auto,1fr] gap-x-2 gap-y-0.5 text-[11px] tabular-nums">` +
-      `<span class="text-zinc-500">均价</span><span class="font-mono text-amber-500"><span data-f="avg"></span> <span data-f="avgdev"></span></span>` +
-      `<span class="text-zinc-500">量比</span><span class="font-mono" data-f="lb"></span>` +
-      `<span class="text-zinc-500">分钟量</span><span class="font-mono" data-f="vol"></span>` +
-      `<span class="text-zinc-500">分钟额</span><span class="font-mono" data-f="amt"></span>` +
-      `<span class="text-zinc-500">累计额</span><span class="font-mono" data-f="cum"></span>` +
+      `<span class="text-zinc-600 dark:text-zinc-400">均价</span><span class="font-mono text-amber-800 dark:text-amber-500"><span data-f="avg"></span> <span data-f="avgdev"></span></span>` +
+      `<span class="text-zinc-600 dark:text-zinc-400">量比</span><span class="font-mono" data-f="lb"></span>` +
+      `<span class="text-zinc-600 dark:text-zinc-400">分钟量</span><span class="font-mono" data-f="vol"></span>` +
+      `<span class="text-zinc-600 dark:text-zinc-400">分钟额</span><span class="font-mono" data-f="amt"></span>` +
+      `<span class="text-zinc-600 dark:text-zinc-400">累计额</span><span class="font-mono" data-f="cum"></span>` +
       `</div>` +
-      `<div data-f="evrow" class="mt-1 border-t border-zinc-200 pt-1 dark:border-zinc-700"><span class="text-sky-500" data-f="ev"></span></div>`;
+      `<div data-f="evrow" class="mt-1 border-t border-zinc-200 pt-1 dark:border-zinc-700"><span class="text-sky-700 dark:text-sky-500" data-f="ev"></span></div>`;
 
     /** param.time（伪 UTC 编码）→ 最近数据点；无数据返回 null。 */
     const nearestPoint = (time: Time): P | null => {
@@ -542,8 +657,8 @@ export function MinuteChart({
               return prev != null ? (d.cum_amount! - prev) / 1e4 : null; // 万
             })()
           : null;
-      const pctCls = (v: number | null) => (v == null ? "text-zinc-400" : v > 0 ? "text-red-500" : v < 0 ? "text-emerald-500" : "text-zinc-400");
-      const lbCls = lb == null ? "text-zinc-400" : lb >= 1.5 ? "text-red-500" : lb >= 0.8 ? "text-amber-500" : "text-sky-500";
+      const pctCls = (v: number | null) => (v == null ? "text-zinc-600 dark:text-zinc-400" : v > 0 ? "text-red-700 dark:text-red-500" : v < 0 ? "text-emerald-700 dark:text-emerald-500" : "text-zinc-600 dark:text-zinc-400");
+      const lbCls = lb == null ? "text-zinc-600 dark:text-zinc-400" : lb >= 1.5 ? "text-red-700 dark:text-red-500" : lb >= 0.8 ? "text-amber-800 dark:text-amber-500" : "text-sky-700 dark:text-sky-500";
       // 事件行：光标分钟（±1 分钟容差）命中当日新闻时显示，长标题截断
       const bestHHMM = bjIso.slice(11, 16);
       const hhmmMins = Number(bestHHMM.slice(0, 2)) * 60 + Number(bestHHMM.slice(3, 5));
@@ -670,6 +785,7 @@ export function MinuteChart({
       renderTipRef.current = null;
       delete dbg.__minuteChart;
       delete dbg.__minuteRange;
+      delete dbg.__minuteOutOfBand;
       chart.remove();
       seriesRef.current = emptyBundle();
       cursorRef.current = "";
@@ -690,7 +806,8 @@ export function MinuteChart({
     if (!s.chart || !s.price || points.length === 0) return;
     if (lastPointsRef.current === points) return; // 创建 effect 刚灌过同一份数据
     lastPointsRef.current = points;
-    fillAll(s, points, prevClose);
+    // 配色同步读 DOM（与创建 effect 同源）：量柱色是逐条写进数据的，必须带上当前档
+    fillAll(s, points, prevClose, MINUTE_PALETTE[readChartTheme()]);
     cursorRef.current = bjHHMM(points[points.length - 1]);
     // 悬停中数据被整体替换：主动刷新浮层数值（库的 updateCrosshair 重放通常
     // 也会触发 onMove，此处兜底保证刷新不依赖重放行为；手术式 patch 零开销）
@@ -698,6 +815,57 @@ export function MinuteChart({
       renderTipRef.current?.(lastParamRef.current.time, lastParamRef.current.point);
     }
   }, [points, prevClose]);
+
+  /**
+   * 主题切换：**只换色、不重建**（P2-26）——重建会丢用户的缩放/平移，也违背本文件
+   * 顶部「创建与数据分离」的既有约定。需覆盖的颜色分两类，缺一不可：
+   *   ① 配置型颜色（布局文字/网格/各 series 的 color/填充/价格线）→ `applyOptions` 直接改；
+   *   ② **逐条写进数据的颜色**（量柱由 fillAll 逐条带 color 灌入）→ `applyOptions` 管不到，
+   *      必须用新调色板再跑一次 `fillAll`（setData 为 Canvas 原位重绘：不重建、不闪、
+   *      几何完全不变，只有色值换档）。
+   */
+  const applyTheme = useCallback((p: MinutePalette, baseline: boolean) => {
+    const s = seriesRef.current;
+    const chart = s.chart;
+    if (!chart) return;
+    chart.applyOptions({
+      layout: { textColor: p.axis },
+      grid: { vertLines: { color: p.grid }, horzLines: { color: p.grid } },
+    });
+    if (s.price) {
+      // price 是 Baseline | Area 的联合类型，TS 无法自行收窄，按创建时的分支显式断言
+      if (baseline) {
+        (s.price as ISeriesApi<"Baseline">).applyOptions({
+          topLineColor: p.up,
+          topFillColor1: p.upFill1,
+          topFillColor2: p.upFill2,
+          bottomLineColor: p.down,
+          bottomFillColor1: p.downFill1,
+          bottomFillColor2: p.downFill2,
+        });
+      } else {
+        (s.price as ISeriesApi<"Area">).applyOptions({
+          lineColor: p.up,
+          topColor: p.upFill1,
+          bottomColor: p.upFill2,
+        });
+      }
+    }
+    s.avg?.applyOptions({ color: p.avg });
+    s.index?.applyOptions({ color: p.index });
+    s.auction?.applyOptions({ color: p.auction });
+    s.events?.applyOptions({ color: p.event });
+    for (const { pl, pick } of s.priceLines) pl.applyOptions({ color: pick(p) });
+  }, []);
+
+  // 主题 effect：声明在创建 effect 之后 ⇒ 挂载时先建图、后套色（幂等）。
+  // 色值一律经 readChartTheme() 读 DOM（theme 仅作触发）：hydration 首帧 state 可能
+  // 仍是服务端快照 "dark" 而实际 class 已是 light，用 state 取值会闪一帧深色画布。
+  useEffect(() => {
+    const p = MINUTE_PALETTE[readChartTheme()];
+    applyTheme(p, prevClose != null && prevClose > 0);
+    fillAll(seriesRef.current, pointsRef.current, prevClose, p);
+  }, [theme, prevClose, applyTheme]);
 
   return (
     <div className="flex h-full w-full flex-col">
@@ -707,7 +875,7 @@ export function MinuteChart({
         {auction?.pct != null && (
           <span
             className={`rounded border px-1.5 py-0.5 font-mono tabular-nums ${
-              auction.pct >= 2 ? "border-amber-500/40 bg-amber-500/10 text-amber-500" : "border-zinc-500/40 bg-zinc-500/10 text-zinc-400"
+              auction.pct >= 2 ? "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-500" : "border-zinc-500/40 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400"
             }`}
             title="集合竞价（09:25 终态）：图中金色点为竞价价格；放量上攻（≥2% 且量比≥1.5）为资金先手信号"
           >
@@ -719,10 +887,10 @@ export function MinuteChart({
           <span
             className={`rounded border px-1.5 py-0.5 font-mono tabular-nums ${
               badges.lb >= 1.5
-                ? "border-red-500/40 bg-red-500/10 text-red-500"
+                ? "border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-500"
                 : badges.lb >= 0.8
-                  ? "border-amber-500/40 bg-amber-500/10 text-amber-500"
-                  : "border-sky-500/40 bg-sky-500/10 text-sky-500"
+                  ? "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-500"
+                  : "border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-500"
             }`}
             title="量比（近似）= 当日累计量 / (昨日全天量 × 已开市时间占比)；≥1.5 放量"
           >
@@ -730,13 +898,13 @@ export function MinuteChart({
           </span>
         )}
         {badges.idxPct != null && (
-          <span className="rounded border border-violet-500/40 bg-violet-500/10 px-1.5 py-0.5 font-mono tabular-nums text-violet-400" title="上证指数叠加（左轴 %）">
+          <span className="rounded border border-violet-500/40 bg-violet-500/10 px-1.5 py-0.5 font-mono tabular-nums text-violet-700 dark:text-violet-400" title="上证指数叠加（左轴 %）">
             上证 {fmtPct(badges.idxPct)}
           </span>
         )}
         {newsEvents && newsEvents.length > 0 && (
           <span
-            className="rounded border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-sky-500"
+            className="rounded border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-sky-700 dark:text-sky-500"
             title={`图中蓝色圆点为当日新闻发布时刻（挂在该分钟价格上）：${newsEvents.map((e) => e.hhmm).join(" / ")}`}
           >
             新闻 {newsEvents.length} 点

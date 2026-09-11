@@ -150,6 +150,17 @@ class ReviewService:
             health_item = build_signal_health_action_item(health)
             if health_item is not None:
                 action_items = [*action_items, health_item]
+        # 跨策略键（P1-37/P1-38）：仅 warning/drift 产项，「判不出」不产（防噪音待办）。
+        try:
+            from app.review.strategy_health import build_strategy_key_action_items
+
+            key_items = await asyncio.to_thread(
+                build_strategy_key_action_items, self.session_factory
+            )
+            if key_items:
+                action_items = [*action_items, *key_items]
+        except Exception:
+            log.exception("strategy key action items failed (degraded)")
         from app.review.methodology import build_meta_insights
 
         meta_insights = build_meta_insights(data, dimensions, method)

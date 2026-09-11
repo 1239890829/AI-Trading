@@ -305,6 +305,9 @@ def assemble_brief(evidence: dict) -> dict:
         },
         "missing": evidence.get("missing") or [],
         "macro_note": evidence.get("macro_note"),
+        "macro_events": evidence.get("macro_events"),
+        "overnight_bias": evidence.get("overnight_bias"),
+        "climate": evidence.get("climate"),
         "performance_skipped": perf_skipped,
         "directions": directions,
         "daily_plan": _daily_plan(evidence.get("pool_date")),
@@ -404,6 +407,23 @@ async def _resolve_names(hub, symbols: list[str]) -> dict[str, str]:
     return {q.symbol: (q.name or "") for q in found.values() if q.symbol}
 
 
+async def collect_climate_safe(today: date) -> dict | None:
+    """气候一阶相位取数（P1-32，2026-09-11）。**永不抛异常、永不写 missing**。
+
+    三态：`None` = 源不可得 → 前端**整块不渲染**（不谎称「中性」）。
+    **刻意不并入 brief.missing**：气候是月更慢变量，天天在简报顶部挂一条 ⚠
+    是纯噪音；取不到就不显示即可。抽成独立函数是为了让这条口径**可被直接测**
+    （内联在 `collect_evidence` 里就只能靠读源码断言，属易碎测试）。
+    """
+    try:
+        from app.market.climate import collect as _collect_climate
+
+        return await _collect_climate(today)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("brief evidence: climate failed: %s", exc)
+        return None
+
+
 async def collect_evidence(app_state) -> dict:
     """三类证据采集（IO 层）。任何一路失败记入 missing，不让排序静默降级。
 
@@ -489,7 +509,7 @@ async def collect_evidence(app_state) -> dict:
         log.warning("brief evidence: sentiment failed: %s", exc)
         missing.append(f"情绪环境不可用（{exc}）")
 
-    # 宏观日历提醒（hotspot-pipeline G6/P0：非农日先验标注，零外呼纯规则）
+    # 宏观日历：①先验规则（非农，零外呼纯规则）②财经日历（百度，需外呼）
     macro_note: str | None = None
     try:
         from app.events.chains import macro_calendar_note
@@ -497,6 +517,35 @@ async def collect_evidence(app_state) -> dict:
         macro_note = macro_calendar_note(beijing_today())
     except Exception as exc:
         log.warning("brief evidence: macro calendar failed: %s", exc)
+
+    # 财经日历高信号事件（P1-8 残余，2026-09-10）：CPI/PPI/GDP/PMI/社融/M1M2/非农…
+    # 三态：None=源不可得（记 missing），[]=当日确无高信号事件（真信息）
+    macro_events: list[dict] | None = None
+    try:
+        from app.events.chains import select_macro_events
+        from app.services.akshare_ext import get_akshare_ext
+
+        rows = await get_akshare_ext().macro_calendar(beijing_today())
+        macro_events = select_macro_events(rows)
+    except Exception as exc:
+        log.warning("brief evidence: macro calendar events failed: %s", exc)
+        missing.append(f"宏观财经日历不可用（{exc}）")
+
+    # 隔夜海外一阶输入 → 大盘方向偏向（P1-34，2026-09-11）
+    # 三态：None=整块不可用（异常）；dict 内 stance=None=输入不足未判定（见 unjudged_reason）
+    # 注意：**逐输入的 missing 不并入 brief.missing**——面板内已逐条如实展示，
+    # 并入会让简报顶部多出最多 4 条 ⚠（噪音），只有整块失败才上 brief.missing。
+    overnight_bias: dict | None = None
+    try:
+        from app.market.overnight_bias import collect as _collect_overnight
+
+        overnight_bias = await _collect_overnight(beijing_today())
+    except Exception as exc:
+        log.warning("brief evidence: overnight bias failed: %s", exc)
+        missing.append(f"隔夜海外输入不可用（{exc}）")
+
+    # 气候一阶相位（ENSO/ONI，P1-32，2026-09-11）
+    climate = await collect_climate_safe(beijing_today())
 
     return {
         "brief_date": beijing_today().strftime("%Y%m%d"),
@@ -514,6 +563,9 @@ async def collect_evidence(app_state) -> dict:
         "event_symbol_names": names,
         "missing": missing,
         "macro_note": macro_note,
+        "macro_events": macro_events,
+        "overnight_bias": overnight_bias,
+        "climate": climate,
     }
 
 
@@ -564,7 +616,12 @@ def append_alert(target_date: str, alert: dict) -> bool:
         log.warning("append_alert: brief %s 不存在，提醒不落盘", target_date)
         return False
     alerts = payload.setdefault("alerts", [])
+    # 单点兜底：调用方漏生成 key 时补一个当日唯一键（len 保证不撞），
+    # 避免 key=None 落盘（前端 key={null} 触发 React key 警告）+ None 互相撞去重。
     key = alert.get("key")
+    if not key:
+        key = f"{alert.get('kind', 'alert')}:{alert.get('symbol') or alert.get('direction') or 'x'}:{len(alerts)}"
+        alert["key"] = key
     if any(a.get("key") == key for a in alerts):
         return False
     alerts.append(alert)

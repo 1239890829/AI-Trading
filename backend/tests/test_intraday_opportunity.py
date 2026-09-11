@@ -133,17 +133,23 @@ def _board() -> dict:
                     "max_boards": 5, "limit_up_count": 12, "has_succession": True,
                 },
                 "leaders": {
+                    # 刻意与 ladder 首行**同 symbol 但不同文案**：证明 reason 取自 ladder
+                    # 行自带的官方涨停原因，而不是从这里按 symbol 匹配（那曾是错误链路，
+                    # 且 candidates 只含「补涨/反包」角色 ⇒ 其余角色恒为 None）。
                     "candidates": [
-                        {"symbol": "600111", "name": "北方稀土", "boards": 5, "role": "龙头", "reason": "空间板 5 连板"},
+                        {"symbol": "600111", "name": "北方稀土", "boards": 5, "role": "龙头",
+                         "reason": "错误来源：不应被采用"},
                     ],
                 },
                 "ladder": [
                     {"symbol": "600111", "name": "北方稀土", "role": "龙头", "boards": 5,
                      "seal_amount": 2.0e8, "amount": 1.0e9, "break_count": 0,
-                     "first_seal_time": "09:45", "change_pct": 10.01},
+                     "first_seal_time": "09:45", "change_pct": 10.01,
+                     "reason": "存储芯片+稀土永磁"},
                     {"symbol": "000001", "name": "平安银行", "role": "中军", "boards": 2,
                      "seal_amount": 5.0e6, "amount": 8.0e8, "break_count": 3,
-                     "first_seal_time": "13:20", "change_pct": 10.0},
+                     "first_seal_time": "13:20", "change_pct": 10.0,
+                     "reason": "银行+中特估"},
                 ],
             },
         ],
@@ -167,12 +173,45 @@ def test_assemble_happy_path():
     assert s0["hot_rank"] == 2
     assert s0["distinctiveness"]["level"] == "高"
     assert s0["certainty"]["level"] == "高"
-    assert s0["reason"] == "空间板 5 连板"  # candidates reason 按 symbol 匹配进 ladder
+    assert s0["reason"] == "存储芯片+稀土永磁"  # ladder 行自带的官方涨停原因
 
     # 无榜 + 炸板 3 次：辨识度看角色（中军→中），确定性压到低
     assert s1["hot_rank"] is None
     assert s1["distinctiveness"]["level"] == "中"
     assert s1["certainty"]["level"] == "低"
+
+
+def test_assemble_reason_comes_from_ladder_row_not_leaders_candidates():
+    """回归（2026-09-10 用户反馈「入选原因是空的」）：
+
+    旧实现从 ``leaders.candidates`` 建 symbol→reason 映射，而该列表只含「补涨/反包」
+    两种角色（低位替代语义槽）⇒ 龙头/中军/空间板/首板… 全部 reason=None。
+    正确来源是 **ladder 行自己的 reason**（同花顺官方涨停原因原串）。
+    """
+    out = assemble(_board(), [], False, top_themes=5, stocks_per_theme=8)
+    s0, s1 = out["themes"][0]["stocks"]
+    # 同 symbol 的 candidates 文案必须**不**被采用
+    assert s0["reason"] == "存储芯片+稀土永磁"
+    assert s0["reason"] != "错误来源：不应被采用"
+    # 旧实现下「中军」不在 candidates 里 ⇒ None；现在必须有值
+    assert s1["reason"] == "银行+中特估"
+
+
+def test_attach_risk_fields_fills_price_stop_and_exit():
+    """现价/止损/出场补全：两处端点（opportunities / top）共用同一实现。"""
+    from app.picks.intraday_opportunity import attach_risk_fields
+
+    stocks = [{"symbol": "600111", "name": "北方稀土", "role": "龙头"},
+              {"symbol": "000001", "name": "平安银行", "role": "中军"}]
+    attach_risk_fields(stocks, {"600111": {"symbol": "600111", "price": 32.5}})
+
+    assert stocks[0]["price"] == 32.5
+    assert stocks[0]["stop_ref"] is not None
+    assert stocks[0]["stop_ref"]["price"] < 32.5
+    assert stocks[0]["exit_plan"]  # 出场纪律结构非空
+    # 快照里没有的票：现价显式 None（三态），止损随之降级为 None —— 不臆造
+    assert stocks[1]["price"] is None
+    assert stocks[1]["stop_ref"] is None
 
 
 def test_assemble_hot_unavailable_marks_unknown_and_caveat():

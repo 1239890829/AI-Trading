@@ -20,6 +20,7 @@ import {
   getIntradayTop,
   getMarketOverview,
   getPaperPositions,
+  getBoardFundBySymbols,
   getQuotes,
   getRiskState,
   getSparklines,
@@ -35,9 +36,10 @@ import {
   type PaperPositionInfo,
   type RiskState,
   type SparklinePayload,
+  type SymbolBoardFund,
   getPositionLabels,
 } from "@/lib/api";
-import { fmt, fmtAmount, isHardQuality, pctColor, pctText, triText } from "@/lib/format";
+import { fmt, fmtAmount, isHardQuality, pctColor, pctText, signedYi, triText } from "@/lib/format";
 import { isTradingSession } from "@/lib/market-hours";
 import { subscribeWatchlist, notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import { LAST_SYMBOL_KEY, originLabel, workbenchUrl } from "@/lib/routing";
@@ -58,7 +60,8 @@ function parseRightTab(v: string | null): RightTab | undefined {
     v === "profile" ||
     v === "info" ||
     v === "speed" ||
-    v === "boards"
+    v === "boards" ||
+    v === "dt"
     ? v
     : undefined;
 }
@@ -255,6 +258,24 @@ function WorkbenchInner() {
     if (s) setSparks(s);
   }, 60_000);
 
+  // 所属板块资金（P1-4，2026-09-10）：主板块 = 东财行业三级 L2（白酒Ⅱ/银行Ⅱ…），
+  // 资金 = 东财 f62 主力净额 + 连续流入天数。**口径与个股资金流（新浪 L4）不同，不可相加**。
+  // 60s 与自选行情同节奏；F10 归属在后端有 6h 缓存（所属板块低频变更），轮询实际只刷新资金值。
+  const [boardFund, setBoardFund] = useState<Record<string, SymbolBoardFund>>({});
+  if (symbols.length === 0 && Object.keys(boardFund).length > 0) {
+    setBoardFund({}); // 自选清空 → 渲染期同步清掉（防上一组残留，同 sparks 的 adjust-state 模式）
+  }
+  useEffect(() => {
+    if (symbols.length === 0) return;
+    getBoardFundBySymbols(symbols.slice(0, 50)).then(setBoardFund).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sparkKey]);
+  usePollingFetch(async () => {
+    if (symbols.length === 0) return;
+    const m = await getBoardFundBySymbols(symbols.slice(0, 50)).catch(() => null);
+    if (m) setBoardFund(m);
+  }, 60_000);
+
   // 分组清单由 groupMap 派生（旧代码是独立的 groups 状态，从未被赋值，chips 永远只有「全部」）
   // 「猎场」是动态分组的保留名（2026-09-09 合并原「每日精选」「盘中跟踪」），用户分组里排除（防 chips 重名撞 key）
   const groups = useMemo(
@@ -403,15 +424,15 @@ function WorkbenchInner() {
   return (
     <main className="mx-auto flex h-full w-full max-w-[1600px] flex-col gap-3 px-4 py-3">
       {error && (
-        <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-600 dark:text-amber-300">{error}</div>
+        <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-800 dark:text-amber-300">{error}</div>
       )}
 
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 text-xs text-zinc-600 dark:text-zinc-400">
         <span className="flex items-center gap-2">
           {backLabel && backFrom && (
             <button
               onClick={() => router.push(backFrom)}
-              className="rounded border border-zinc-300 px-2 py-0.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+              className="rounded border border-zinc-300 px-2 py-0.5 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 hover:text-zinc-900 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
               title={`返回${backLabel}（跳转前状态已保留）`}
             >
               ← 返回{backLabel}
@@ -424,13 +445,13 @@ function WorkbenchInner() {
           >
             两市成交额合计：<span className="font-mono tabular-nums text-zinc-700 dark:text-zinc-200">{totalAmount ? fmtAmount(totalAmount) : "--"}</span>
             {turnDiff != null && (
-              <span className={`font-mono text-[11px] tabular-nums ${turnDiff >= 0 ? "text-up" : "text-down"}`}>
+              <span className={`font-mono text-[11px] tabular-nums ${turnDiff >= 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}`}>
                 {turnDiff >= 0 ? "+" : ""}
                 {turnDiff.toLocaleString("zh-CN", { maximumFractionDigits: 0 })}亿
-                <span className="ml-0.5 font-sans text-[10px] text-zinc-400">vs 昨日同时刻</span>
+                <span className="ml-0.5 font-sans text-[10px] text-zinc-600 dark:text-zinc-400">vs 昨日同时刻</span>
               </span>
             )}
-            <span aria-hidden className="text-zinc-300 dark:text-zinc-600">↗</span>
+            <span aria-hidden className="text-zinc-600 dark:text-zinc-400">↗</span>
           </button>
         </span>
         <span className="flex items-center gap-3">
@@ -443,16 +464,18 @@ function WorkbenchInner() {
             <span title={risk.reasons.join("；")} className="cursor-help">
               市场状态：
               <span className={`rounded px-1.5 py-0.5 ${
-                risk.state === "强势多头" ? "bg-up/10 text-up" :
-                risk.state === "下跌趋势" || risk.state === "恐慌/极端波动" ? "bg-down/10 text-down" :
-                "bg-zinc-100 text-zinc-500 dark:bg-zinc-800"
+                risk.state === "强势多头" ? "bg-up/10 text-up-ink dark:text-up" :
+                risk.state === "下跌趋势" || risk.state === "恐慌/极端波动" ? "bg-down/10 text-down-ink dark:text-down" :
+                // 中性档（震荡/结构性行情）此前漏了 dark 文本色：深色下 zinc-500 落在
+                // zinc-800 上仅 3.08:1（<4.5:1），而这是语义状态标签，必须可读。
+                "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
               }`}>
                 {risk.state}
               </span>
             </span>
           )}
           <span>指数刷新 {updatedAt || "--"}</span>
-          <span className="hidden text-zinc-500 lg:inline">数据仅供投研与模拟交易参考</span>
+          <span className="hidden text-zinc-600 dark:text-zinc-400 lg:inline">数据仅供投研与模拟交易参考</span>
         </span>
       </div>
 
@@ -477,11 +500,11 @@ function WorkbenchInner() {
                       className="cursor-pointer border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900"
                     >
                       <td className="px-3 py-1.5">
-                        <span className="font-mono text-[10px] text-zinc-400">{p.symbol}</span>
+                        <span className="font-mono text-[10px] text-zinc-600 dark:text-zinc-400">{p.symbol}</span>
                         <span className="ml-1.5">{merged[p.symbol]?.name ?? ""}</span>
                       </td>
-                      <td className="px-2 py-1.5 text-right font-mono tabular-nums text-zinc-400">{p.quantity}股</td>
-                      <td className={`px-3 py-1.5 text-right font-mono tabular-nums ${pct == null ? "text-zinc-500" : pctColor(pct)}`}>
+                      <td className="px-2 py-1.5 text-right font-mono tabular-nums text-zinc-600 dark:text-zinc-400">{p.quantity}股</td>
+                      <td className={`px-3 py-1.5 text-right font-mono tabular-nums ${pct == null ? "text-zinc-600 dark:text-zinc-400" : pctColor(pct)}`}>
                         {pct == null ? "--" : `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`}
                       </td>
                     </tr>
@@ -512,10 +535,10 @@ function WorkbenchInner() {
                     aria-label="输入 6 位代码添加自选"
                     className="w-20 rounded border border-zinc-200 bg-transparent px-1.5 py-0.5 font-mono outline-none focus:border-up/60 dark:border-zinc-700"
                   />
-                  <button onClick={() => void addWatch()} className="text-up transition-opacity hover:opacity-75">
+                  <button onClick={() => void addWatch()} className="text-up-ink dark:text-up transition-opacity hover:opacity-75">
                     添加
                   </button>
-                  {addError && <span className="text-red-400">{addError}</span>}
+                  {addError && <span className="text-red-700 dark:text-red-400">{addError}</span>}
                 </>
               )}
               <button
@@ -523,7 +546,7 @@ function WorkbenchInner() {
                   setManaging((v) => !v);
                   setAddError(null);
                 }}
-                className="text-sky-400 transition-opacity hover:opacity-75"
+                className="text-sky-700 dark:text-sky-400 transition-opacity hover:opacity-75"
               >
                 {managing ? "完成" : "管理"}
               </button>
@@ -544,12 +567,12 @@ function WorkbenchInner() {
                 <button
                   onClick={() => setActiveGroup(g)}
                   className={`rounded-full border px-2.5 py-0.5 text-xs ${
-                    activeGroup === g ? "border-up/60 bg-up/10 text-up" : "border-zinc-200 text-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100"
+                    activeGroup === g ? "border-up/60 bg-up/10 text-up-ink dark:text-up" : "border-zinc-200 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100"
                   }`}
                 >
                   {g}
-                  {g === "持仓" && realSymbols.length > 0 && <span className="ml-1 text-[10px] text-zinc-400">{realSymbols.length}</span>}
-                  {g === "猎场" && huntingQuotes.length > 0 && <span className="ml-1 text-[10px] text-zinc-400">{huntingQuotes.length}</span>}
+                  {g === "持仓" && realSymbols.length > 0 && <span className="ml-1 text-[10px] text-zinc-600 dark:text-zinc-400">{realSymbols.length}</span>}
+                  {g === "猎场" && huntingQuotes.length > 0 && <span className="ml-1 text-[10px] text-zinc-600 dark:text-zinc-400">{huntingQuotes.length}</span>}
                 </button>
               </span>
             ))}
@@ -557,7 +580,7 @@ function WorkbenchInner() {
               <button
                 onClick={() => void handleCreateGroup()}
                 title="新建分组"
-                className="rounded-full border border-dashed border-zinc-300 px-2 py-0.5 text-xs text-zinc-400 hover:border-up/60 hover:text-up dark:border-zinc-700"
+                className="rounded-full border border-dashed border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 dark:text-zinc-400 hover:border-up/60 hover:text-up dark:border-zinc-700"
               >
                 ＋ 组
               </button>
@@ -568,14 +591,14 @@ function WorkbenchInner() {
                 <button
                   onClick={() => void handleRenameGroup(activeGroup)}
                   title={`重命名分组「${activeGroup}」`}
-                  className="rounded px-1 text-xs text-zinc-400 hover:text-sky-400"
+                  className="rounded px-1 text-xs text-zinc-600 dark:text-zinc-400 hover:text-sky-400"
                 >
                   ✎
                 </button>
                 <button
                   onClick={() => void handleDeleteGroup(activeGroup)}
                   title={`删除分组「${activeGroup}」`}
-                  className="rounded px-1 text-xs text-zinc-400 hover:text-red-400"
+                  className="rounded px-1 text-xs text-zinc-600 dark:text-zinc-400 hover:text-red-400"
                 >
                   🗑
                 </button>
@@ -590,7 +613,7 @@ function WorkbenchInner() {
               ))}
             </div>
           ) : activeRows.length === 0 ? (
-            <p className="px-4 py-8 text-center text-sm text-zinc-400">
+            <p className="px-4 py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">
               {activeGroup === "持仓" ? (
                 <>
                   暂无真实持仓。在个股详情页「真实持仓」tab 记一笔买入
@@ -621,6 +644,7 @@ function WorkbenchInner() {
                 {activeRows.map((q) => {
                   const pick = activeGroup === "猎场" ? pickInfoBySymbol.get(q.symbol) : undefined;
                   const top = activeGroup === "猎场" ? topInfoBySymbol.get(q.symbol) : undefined;
+                  const bf = boardFund[q.symbol];
                   return (
                   <tr
                     key={q.symbol}
@@ -630,7 +654,7 @@ function WorkbenchInner() {
                     }`}
                   >
                     <td className="min-w-0 px-3 py-2">
-                      <div className="truncate font-mono text-xs text-zinc-400">
+                      <div className="truncate font-mono text-xs text-zinc-600 dark:text-zinc-400">
                         {q.symbol}
                         {/* 猎场合并视图：行内来源徽标（2026-09-09 用户指令，取代分组名区分）——
                             同股两者都在时按「盘中跟踪」标（实时口径优先） */}
@@ -638,8 +662,8 @@ function WorkbenchInner() {
                           <span
                             className={`ml-1.5 rounded px-1 text-[10px] ${
                               top != null
-                                ? "bg-sky-500/10 text-sky-600 dark:text-sky-300"
-                                : "bg-amber-500/10 text-amber-600 dark:text-amber-300"
+                                ? "bg-sky-500/10 text-sky-700 dark:text-sky-300"
+                                : "bg-amber-500/10 text-amber-800 dark:text-amber-300"
                             }`}
                           >
                             {top != null ? "盘中跟踪" : "盘前选择"}
@@ -649,8 +673,8 @@ function WorkbenchInner() {
                           <span
                             className={`ml-1 rounded px-1 text-[10px] font-medium ${
                               posLabels[q.symbol] === "real"
-                                ? "bg-rose-500/10 text-rose-500"
-                                : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"
+                                ? "bg-rose-500/10 text-rose-700 dark:text-rose-500"
+                                : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
                             }`}
                             title="持仓状态派生标签；卖出/删流水后自动消失"
                           >
@@ -659,7 +683,7 @@ function WorkbenchInner() {
                         )}
                         {pick != null && (
                           <span
-                            className="ml-1.5 rounded bg-up/10 px-1 text-[10px] text-up"
+                            className="ml-1.5 rounded bg-up/10 px-1 text-[10px] text-up-ink dark:text-up"
                             title={`六维综合评分 ${pick.score}；题材：${pick.themes?.join("、") || "--"}`}
                           >
                             {pick.score.toFixed(0)} 分
@@ -668,7 +692,7 @@ function WorkbenchInner() {
                         {top != null && (
                           <span
                             className={`ml-1.5 rounded px-1 text-[10px] ${
-                              top.tier <= 2 ? "bg-up/10 text-up" : "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                              top.tier <= 2 ? "bg-up/10 text-up-ink dark:text-up" : "bg-amber-500/10 text-amber-800 dark:text-amber-400"
                             }`}
                             title={`盘中跟踪 T${top.tier}：${top.pick_basis}；题材 ${top.theme ?? "--"}（${top.stage ?? "?"}）`}
                           >
@@ -676,12 +700,40 @@ function WorkbenchInner() {
                           </span>
                         )}
                       </div>
-                      <div className="truncate" title={q.name ?? undefined}>{q.name ?? "--"}</div>
+                      <div className="min-w-0">
+                        <div className="truncate" title={q.name ?? undefined}>{q.name ?? "--"}</div>
+                        {/* 所属板块资金（P1-4，2026-09-10）：主板块（东财行业三级 L2）+
+                            该板块 f62 主力净额。**必须独立成行**——列宽仅 ~62px，与名称同行
+                            会把名称挤到 0 宽（实测）。**金额 shrink-0 优先**、板块名 truncate：
+                            金额（含红绿方向）是扫视主信号，不能先被截掉（首版实测被截成
+                            「通信设备-4…」，金额反而丢了）；完整信息在 title。
+                            判不出主板块的标的不渲染（三态）。连续流入天数只进 title
+                            （列宽放不下；0=今日转流出、null=未沉淀，本身也不显示）。 */}
+                        {bf && (
+                          <div
+                            className="flex min-w-0 items-baseline gap-1 text-[10px] font-normal leading-4"
+                            title={`${bf.board_name}（东财${
+                              bf.level === "industry" ? "行业" : "概念"
+                            }板块，f62 主力净额口径）${signedYi(bf.main_net_yi)}${
+                              bf.streak != null && bf.streak >= 1 ? `，连续 ${bf.streak} 日净流入` : ""
+                            }｜与个股资金流口径不同，不可相加；所属板块低频变更（6h 缓存）`}
+                          >
+                            <span
+                              className={`shrink-0 font-mono ${
+                                bf.main_net_yi == null ? "text-zinc-600 dark:text-zinc-400" : bf.main_net_yi >= 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"
+                              }`}
+                            >
+                              {signedYi(bf.main_net_yi)}
+                            </span>
+                            <span className="truncate text-zinc-600 dark:text-zinc-400">{bf.board_name}</span>
+                          </div>
+                        )}
+                      </div>
                     </td>
                     <td className="hidden w-[52px] px-1 py-2 sm:table-cell" title="当日分时（盘外展示最近交易日）">
                       {pick != null || top != null ? (
                         <span
-                          className="block truncate text-[10px] text-zinc-400"
+                          className="block truncate text-[10px] text-zinc-600 dark:text-zinc-400"
                           title={pick != null ? (pick.echelon_role ?? "") : `确定性 ${triText(top?.certainty?.level)} · 辨识度 ${triText(top?.distinctiveness?.level)}`}
                         >
                           {pick != null
@@ -709,7 +761,7 @@ function WorkbenchInner() {
                       )}
                     </td>
                     <td className="w-[76px] px-1.5 py-2 text-right font-mono text-xs tabular-nums">
-                      {q.price == null ? <span className="font-sans text-zinc-400">未开盘</span> : <PriceFlash value={q.price}>{fmt(q.price)}</PriceFlash>}
+                      {q.price == null ? <span className="font-sans text-zinc-600 dark:text-zinc-400">未开盘</span> : <PriceFlash value={q.price}>{fmt(q.price)}</PriceFlash>}
                     </td>
                     <td className={`w-[58px] px-1 py-2 text-right font-mono text-xs tabular-nums ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</td>
                     <td className="w-[44px] px-0.5 py-2 text-right">{isHardQuality(q.quality) && <QualityBadge quality={q.quality} reasons={q.quality_reasons} />}</td>
@@ -720,7 +772,7 @@ function WorkbenchInner() {
                             e.stopPropagation();
                             setDetailTarget(pick ? { kind: "pick", item: pick } : { kind: "top", item: top! });
                           }}
-                          className="text-zinc-400 transition-colors hover:bg-sky-500/10 hover:text-sky-700 dark:hover:text-sky-300"
+                          className="text-zinc-600 dark:text-zinc-400 transition-colors hover:bg-sky-500/10 hover:text-sky-700 dark:hover:text-sky-300"
                           title={pick ? "查看选股原因（六维评分/依据/失效条件）" : "查看入选详情（T档/判定/理由）"}
                           aria-label={`查看 ${q.symbol} 选股详情`}
                         >
@@ -736,7 +788,7 @@ function WorkbenchInner() {
                             e.stopPropagation();
                             void remove(q.symbol);
                           }}
-                          className="text-zinc-400 hover:text-red-400"
+                          className="text-zinc-600 dark:text-zinc-400 hover:text-red-400"
                           title="移出自选"
                           aria-label={`移出自选 ${q.symbol}`}
                         >

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from fastapi.testclient import TestClient
 
 from app.main import app
 from app.news.router import SummaryRouter
@@ -144,7 +143,7 @@ _ANN_FIXTURE = [
 ]
 
 
-def test_news_digest_api(monkeypatch):
+def test_news_digest_api(client, monkeypatch):
     """端到端验证路由与序列化。数据源必须 mock——CI 无外网，真打会 502。"""
 
     async def fake_news(symbol: str, limit: int = 10):
@@ -153,45 +152,44 @@ def test_news_digest_api(monkeypatch):
     async def fake_ann(symbol: str, limit: int = 10):
         return [dict(r) for r in _ANN_FIXTURE]
 
-    with TestClient(app) as client:
-        # 测试环境 hub.provider 是 MockProvider（没有这两个方法），raising=False 才允许挂载
-        monkeypatch.setattr(app.state.hub.provider, "get_news", fake_news, raising=False)
-        monkeypatch.setattr(
-            app.state.hub.provider, "get_announcements", fake_ann, raising=False
-        )
+    # 测试环境 hub.provider 是 MockProvider（没有这两个方法），raising=False 才允许挂载
+    monkeypatch.setattr(app.state.hub.provider, "get_news", fake_news, raising=False)
+    monkeypatch.setattr(
+        app.state.hub.provider, "get_announcements", fake_ann, raising=False
+    )
 
-        resp = client.get("/api/news/digest/600519?limit=5")
-        assert resp.status_code == 200
-        data = resp.json()["data"]
-        assert data["symbol"] == "600519"
-        assert data["model"]["actual"] == "rules"
-        assert data["model"]["degraded"] is False
+    resp = client.get("/api/news/digest/600519?limit=5")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["symbol"] == "600519"
+    assert data["model"]["actual"] == "rules"
+    assert data["model"]["degraded"] is False
 
-        news = data["news"]
-        assert len(news) == 2
-        # 中报（高）排在资金流（普通）前面
-        assert "半年度报告" in news[0]["title"]
-        assert news[0]["importance"] == "高"
-        for item in news:
-            assert item["importance"] in {"高", "中", "普通", "低"}
-            assert item["sentiment"] in {"偏正面", "偏负面", "分歧", "中性"}
-            assert item["digest"]
-            assert item["digest_source"]
+    news = data["news"]
+    assert len(news) == 2
+    # 中报（高）排在资金流（普通）前面
+    assert "半年度报告" in news[0]["title"]
+    assert news[0]["importance"] == "高"
+    for item in news:
+        assert item["importance"] in {"高", "中", "普通", "低"}
+        assert item["sentiment"] in {"偏正面", "偏负面", "分歧", "中性"}
+        assert item["digest"]
+        assert item["digest_source"]
 
-        # 表格型正文被丢弃，回退到标题
-        table_item = next(n for n in news if "杠杆资金" in n["title"])
-        assert "海光信息" not in table_item["digest"]
-        assert "表格" in table_item["digest_source"]
+    # 表格型正文被丢弃，回退到标题
+    table_item = next(n for n in news if "杠杆资金" in n["title"])
+    assert "海光信息" not in table_item["digest"]
+    assert "表格" in table_item["digest_source"]
 
-        # 公告："贵州茅台:贵州茅台关于…" 的双层前缀应被剥掉
-        ann = data["announcements"][0]
-        assert ann["digest"].startswith("关于召开")
-        # 正常路径：双侧数据源错误字段必须为 None（三态显式）
-        assert data["news_error"] is None
-        assert data["announcements_error"] is None
+    # 公告："贵州茅台:贵州茅台关于…" 的双层前缀应被剥掉
+    ann = data["announcements"][0]
+    assert ann["digest"].startswith("关于召开")
+    # 正常路径：双侧数据源错误字段必须为 None（三态显式）
+    assert data["news_error"] is None
+    assert data["announcements_error"] is None
 
 
-def test_news_digest_degrades_when_news_source_fails(monkeypatch):
+def test_news_digest_degrades_when_news_source_fails(client, monkeypatch):
     """新闻源失败 → 公告照常返回 + news_error 显式透出（不整体 502）；
     双侧都挂才 502。东财搜索接口有间歇软封锁（2026-09-04 实测）。
     注意 digest 有 60s TTL 缓存（键=symbol+limit），换标的避免撞上一个用例的缓存。"""
@@ -202,27 +200,25 @@ def test_news_digest_degrades_when_news_source_fails(monkeypatch):
     async def fake_ann(symbol: str, limit: int = 10):
         return [dict(r) for r in _ANN_FIXTURE]
 
-    with TestClient(app) as client:
-        monkeypatch.setattr(app.state.hub.provider, "get_news", fail_news, raising=False)
-        monkeypatch.setattr(app.state.hub.provider, "get_announcements", fake_ann, raising=False)
+    monkeypatch.setattr(app.state.hub.provider, "get_news", fail_news, raising=False)
+    monkeypatch.setattr(app.state.hub.provider, "get_announcements", fake_ann, raising=False)
 
-        resp = client.get("/api/news/digest/000001?limit=5")
-        assert resp.status_code == 200
-        data = resp.json()["data"]
-        assert data["news"] == []
-        assert "可能被限流" in data["news_error"]
-        assert data["announcements_error"] is None
-        assert len(data["announcements"]) == 1
+    resp = client.get("/api/news/digest/000001?limit=5")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["news"] == []
+    assert "可能被限流" in data["news_error"]
+    assert data["announcements_error"] is None
+    assert len(data["announcements"]) == 1
 
 
-def test_news_digest_502_when_both_sources_fail(monkeypatch):
+def test_news_digest_502_when_both_sources_fail(client, monkeypatch):
     async def fail(symbol: str, limit: int = 10):
         raise RuntimeError("down")
 
-    with TestClient(app) as client:
-        monkeypatch.setattr(app.state.hub.provider, "get_news", fail, raising=False)
-        monkeypatch.setattr(app.state.hub.provider, "get_announcements", fail, raising=False)
+    monkeypatch.setattr(app.state.hub.provider, "get_news", fail, raising=False)
+    monkeypatch.setattr(app.state.hub.provider, "get_announcements", fail, raising=False)
 
-        resp = client.get("/api/news/digest/000002?limit=5")
-        assert resp.status_code == 502
-        assert "均失败" in resp.json()["detail"]
+    resp = client.get("/api/news/digest/000002?limit=5")
+    assert resp.status_code == 502
+    assert "均失败" in resp.json()["detail"]

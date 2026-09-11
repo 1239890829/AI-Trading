@@ -100,7 +100,7 @@ export function TradeForm({
             key={sd}
             onClick={() => setSide(sd)}
             className={`flex-1 rounded py-1 text-sm font-medium ${
-              side === sd ? (sd === "buy" ? "bg-up text-white" : "bg-down text-white") : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800"
+              side === sd ? (sd === "buy" ? "bg-up-deep text-white" : "bg-down-deep text-white") : "bg-zinc-100 text-zinc-600 dark:text-zinc-400 dark:bg-zinc-800"
             }`}
           >
             {sd === "buy" ? "买入" : "卖出"}
@@ -109,7 +109,7 @@ export function TradeForm({
       </div>
       <div className="space-y-1.5 text-xs">
         <label className="flex items-center justify-between gap-2">
-          <span className="text-zinc-400">价格</span>
+          <span className="text-zinc-600 dark:text-zinc-400">价格</span>
           <input
             value={p}
             onChange={(e) => setP(e.target.value)}
@@ -118,7 +118,7 @@ export function TradeForm({
           />
         </label>
         <label className="flex items-center justify-between gap-2">
-          <span className="text-zinc-400">数量</span>
+          <span className="text-zinc-600 dark:text-zinc-400">数量</span>
           <input
             value={qty}
             onChange={(e) => setQty(e.target.value.replace(/[^0-9]/g, ""))}
@@ -126,24 +126,24 @@ export function TradeForm({
             className="w-28 rounded border border-zinc-200 bg-transparent px-2 py-1 text-right font-mono text-zinc-900 outline-none focus:border-up/60 dark:border-zinc-700 dark:text-zinc-100"
           />
         </label>
-        <div className="flex justify-between text-zinc-500">
+        <div className="flex justify-between text-zinc-600 dark:text-zinc-400">
           <span>预估金额</span>
           <span className="font-mono">{fmt(est)} + 费 {fmt(fee)}</span>
         </div>
         {riskCheck && (
-          <div className="flex justify-between text-zinc-500">
+          <div className="flex justify-between text-zinc-600 dark:text-zinc-400">
             <span>{side === "buy" ? "风控可买上限" : "可卖（T+1）"}</span>
             <span className="font-mono">{fmt(riskCheck.max_qty, 0)} 股</span>
           </div>
         )}
         {limitUp != null && side === "buy" && (
-          <div className="flex justify-between text-zinc-500">
+          <div className="flex justify-between text-zinc-600 dark:text-zinc-400">
             <span>涨停价</span>
             <span className="font-mono">{fmt(limitUp)}（≥则拒单）</span>
           </div>
         )}
         {limitDown != null && side === "sell" && (
-          <div className="flex justify-between text-zinc-500">
+          <div className="flex justify-between text-zinc-600 dark:text-zinc-400">
             <span>跌停价</span>
             <span className="font-mono">{fmt(limitDown)}（≤则拒单）</span>
           </div>
@@ -152,20 +152,20 @@ export function TradeForm({
       <button
         onClick={() => void submit()}
         disabled={submitting || bad}
-        className={`mt-2 w-full rounded py-1.5 text-sm font-medium text-white disabled:opacity-40 ${side === "buy" ? "bg-up" : "bg-down"}`}
+        className={`mt-2 w-full rounded py-1.5 text-sm font-medium text-white disabled:opacity-40 ${side === "buy" ? "bg-up-deep" : "bg-down-deep"}`}
       >
         {submitting ? "提交中…" : `${side === "buy" ? "买入" : "卖出"} ${symbol}`}
       </button>
-      {msg && <p className={`mt-1.5 text-xs ${msg.ok ? "text-emerald-400" : "text-red-400"}`}>{msg.text}</p>}
-      {checking && !riskCheck && <p className="mt-1 text-[11px] text-zinc-500">风控预检中…</p>}
+      {msg && <p className={`mt-1.5 text-xs ${msg.ok ? "text-emerald-700 dark:text-emerald-400" : "text-red-700 dark:text-red-400"}`}>{msg.text}</p>}
+      {checking && !riskCheck && <p className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-400">风控预检中…</p>}
       {riskCheck && riskCheck.warnings.length > 0 && (
-        <p className="mt-1 text-[11px] text-amber-400">⚠ {riskCheck.warnings.join("；")}</p>
+        <p className="mt-1 text-[11px] text-amber-800 dark:text-amber-400">⚠ {riskCheck.warnings.join("；")}</p>
       )}
       {riskCheck?.allowed === false && (
-        <p className="mt-1 text-[11px] text-red-400">⛔ {riskCheck.reasons.join("；")}</p>
+        <p className="mt-1 text-[11px] text-red-700 dark:text-red-400">⛔ {riskCheck.reasons.join("；")}</p>
       )}
       {bad && pv > 0 && !submitting && (
-        <p className="mt-1 text-[11px] text-zinc-500">
+        <p className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-400">
           {side === "buy" && qv % 100 !== 0 ? "买入须为 100 股整数倍 " : ""}
           {limitUp != null && side === "buy" && pv >= limitUp ? "价格已达涨停，将被拒绝 " : ""}
           {limitDown != null && side === "sell" && pv <= limitDown ? "价格已达跌停，将被拒绝" : ""}

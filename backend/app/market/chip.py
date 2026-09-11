@@ -18,6 +18,13 @@ ths 官方 59 端点无筹码分布数据（capability-map.md 已核对），故
 - main_peak     主密集峰（吸筹/派发成本区）
 - support/resistance 现价下方/上方最大筹码峰（「上峰不移下跌不止，
   下峰锁定行情未尽」的量化对应）
+
+降级（**三态**，2026-09-10 P0-7 补齐第三态）：
+`marketdb 不存在` / `数据陈旧` / `查询失败` / `样本不足` → `available=False` + 具名
+`reason`，绝不静默返回空分布当「无筹码」。陈态势额外带 `stale_days` / `latest`，
+判定见 `app/market/marketdb_freshness.py`（内容日期 × 交易日滞后，非文件 mtime）——
+此前只判「仓在不在」，于是**仓存在但停更 6 个交易日**时，筹码分布照样按 09-03 的
+日K 算出来当今日形态用（"陈旧比缺失更危险"：静默、看着正常）。
 """
 
 from __future__ import annotations
@@ -27,6 +34,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.core.ttl_cache import TTLCache
+from app.market.marketdb_freshness import MAX_STALE_TRADE_DAYS, freshness as mdb_freshness
 
 log = logging.getLogger(__name__)
 
@@ -157,19 +165,25 @@ def _max_dist_price(idxs: list[int], dist: list[float], grid_prices: list[float]
 class ChipService:
     """筹码分布服务：marketdb 只读查询 + TTLCache（键=symbol+window，有界）。"""
 
-    def __init__(self, db_path: str | Path | None = None, window: int = DEFAULT_WINDOW):
+    def __init__(self, db_path: str | Path | None = None, window: int = DEFAULT_WINDOW,
+                 max_stale_days: int = MAX_STALE_TRADE_DAYS):
         self._db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
         self._window = window
+        self._max_stale_days = max_stale_days
         self._cache = TTLCache("chip-dist", ttl=1800, maxsize=256)
 
     def available(self) -> bool:
         return self._db_path.exists()
 
+    def freshness(self) -> dict:
+        """仓新鲜度（内容日期 × 交易日滞后，口径与 RPS / 数据健康哨兵同源）。"""
+        return mdb_freshness(self._db_path, max_stale_days=self._max_stale_days)
+
     def distribution(self, symbol: str, full: bool = False) -> dict:
         """裸 6 位代码 → 筹码分布 + 形态指标 + 口径注记。
 
         :param full: True 时回传 grid_prices/dist 全网格（研究用；默认剔除减重）。
-        缺仓 / 查询失败 / 样本不足 → {"available": False, "reason": ...}
+        缺仓 / 数据陈旧 / 查询失败 / 样本不足 → {"available": False, "reason": ...}
         （三态显式降级，绝不静默返回空分布当「无筹码」）。
         """
         bare = symbol.split(".")[0]
@@ -189,6 +203,11 @@ class ChipService:
         if not self.available():
             return {"available": False,
                     "reason": "marketdb 不存在（先跑 scripts/sync_marketdb.py --full）"}
+        fresh = self.freshness()
+        if fresh["stale"]:
+            # 陈旧日K 算出的筹码形态是"旧分布描述今天"——降级要带 stale_days 供调用方透出
+            return {"available": False, "reason": fresh["reason"],
+                    "stale_days": fresh["lag"], "latest": fresh["latest"]}
         try:
             with duckdb.connect(str(self._db_path), read_only=True) as con:
                 rows = con.execute(

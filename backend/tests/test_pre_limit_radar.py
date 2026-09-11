@@ -18,8 +18,26 @@ def test_board_limit_by_symbol_and_name():
     assert board_limit_pct("000001") == 10.0
     assert board_limit_pct("300750") == 20.0
     assert board_limit_pct("688981") == 20.0
-    assert board_limit_pct("600073", "ST某某") == 5.0
+    # 2026-07-06 并轨：主板 ST 不再降档，与主板普通股同为 10%
+    assert board_limit_pct("600073", "ST某某") == 10.0
     assert board_limit_pct("832000") == 30.0
+
+
+def test_board_limit_st_no_longer_narrows_any_board():
+    """ST 并轨（2026-07-06）后，ST 状态不改变任何板块的涨跌幅。
+
+    旧实现「ST 名称优先于代码段」会把双创/北交所 ST 误判为 5%——
+    这里把三类板的 ST 与大板非 ST 并列断言，锁死回归。
+    """
+    # 主板 ST = 主板普通股
+    assert board_limit_pct("600073", "ST某某") == board_limit_pct("600519")
+    # 创业板 ST / 科创板 ST 维持板块口径 20%
+    assert board_limit_pct("300123", "*ST某某") == 20.0
+    assert board_limit_pct("688123", "ST某某") == 20.0
+    # 北交所 ST 维持 30%
+    assert board_limit_pct("833123", "ST某某") == 30.0
+    # B 股（900xxx）不应被误判为北交所 30%——旧实现 startswith("9") 会踩
+    assert board_limit_pct("900901", "某B股") == 10.0
 
 
 def test_zone_boundaries_10cm():
@@ -33,16 +51,29 @@ def test_zone_boundaries_10cm():
     assert seal_threshold(10.0) == 9.7
 
 
-def test_zone_boundaries_20cm_and_st():
+def test_zone_boundaries_20cm_and_scaling():
     # 20cm：[13.0, 19.7)
     assert pre_limit_floor(20.0) == 13.0
     assert in_pre_limit_zone(13.0, 20.0)
     assert not in_pre_limit_zone(12.9, 20.0)
     assert is_sealed(19.7, 20.0)
-    # ST 5%：[3.2, 4.7)
-    assert pre_limit_floor(5.0) == 3.2
-    assert in_pre_limit_zone(3.5, 5.0)
-    assert is_sealed(4.7, 5.0)
+    # 缩放公式对任意板性成立（10cm 下沿 6.5）
+    assert pre_limit_floor(10.0) == 6.5
+    assert in_pre_limit_zone(6.5, 10.0)
+
+
+def test_st_now_uses_main_board_zone():
+    """ST 并轨（2026-07-06）后主板 ST 走 10cm 临板区。
+
+    用户实测案例：002547（*ST春兴）09-10 收到「临板 3.5%」预警——那是**旧口径**
+    （ST=5% → 临板区 [3.2, 4.7)）的产物；并轨后 3.5% 不再是临板，需涨到 6.5%
+    才进入预警区。
+    """
+    assert board_limit_pct("002547", "*ST春兴") == 10.0
+    assert not in_pre_limit_zone(3.5, 10.0)   # 旧口径的 3.5% 不再触发
+    assert not in_pre_limit_zone(6.4, 10.0)   # 新下沿之下
+    assert in_pre_limit_zone(6.6, 10.0)       # 新口径临板区
+    assert is_sealed(9.7, 10.0)
 
 
 def test_select_candidates_skips_sealed_and_registered():

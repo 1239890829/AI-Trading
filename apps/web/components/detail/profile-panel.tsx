@@ -47,7 +47,7 @@ export function ProfilePanel({
         .filter(([, items]) => items.length > 0)
         .map(([label, items, tone]) => (
           <div key={label} className="mb-2.5">
-            <div className="mb-1 text-zinc-400">{label}</div>
+            <div className="mb-1 text-zinc-600 dark:text-zinc-400">{label}</div>
             <div className="flex flex-wrap gap-1">
               {items.map((b) => (
                 <span key={b} className={`rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800 ${tone}`}>
@@ -59,19 +59,19 @@ export function ProfilePanel({
         ))}
       {company?.main_business && (
         <div className="mb-2">
-          <div className="mb-1 text-zinc-400">主营业务</div>
+          <div className="mb-1 text-zinc-600 dark:text-zinc-400">主营业务</div>
           <div className="leading-relaxed text-zinc-800 dark:text-zinc-200">{company.main_business}</div>
         </div>
       )}
       {company?.profile && (
         <div className="mb-3">
-          <div className="mb-1 text-zinc-400">公司简介</div>
+          <div className="mb-1 text-zinc-600 dark:text-zinc-400">公司简介</div>
           <div className="line-clamp-5 leading-relaxed text-zinc-600 dark:text-zinc-400" title={company.profile}>
             {company.profile}
           </div>
         </div>
       )}
-      <div className="mb-1 text-zinc-400">最近财报</div>
+      <div className="mb-1 text-zinc-600 dark:text-zinc-400">最近财报</div>
       {fins === undefined ? (
         <div className="space-y-2" aria-hidden>
           <Skeleton className="h-12 w-full rounded-lg" />
@@ -82,10 +82,10 @@ export function ProfilePanel({
           {(fins ?? []).slice(0, 2).map((r) => (
             <div key={r.report_date} className="mb-1.5 rounded-lg border border-zinc-100 px-2 py-1.5 dark:border-zinc-800/60">
               <div className="flex justify-between">
-                <span className="font-mono text-zinc-500 dark:text-zinc-400">{r.report_date}</span>
+                <span className="font-mono text-zinc-600 dark:text-zinc-400">{r.report_date}</span>
                 <span className={`font-mono ${pctColor(r.profit_yoy)}`}>净利同比 {pctText(r.profit_yoy)}</span>
               </div>
-              <div className="mt-0.5 flex justify-between text-zinc-400">
+              <div className="mt-0.5 flex justify-between text-zinc-600 dark:text-zinc-400">
                 <span>
                   营收 <span className="font-mono text-zinc-800 dark:text-zinc-200">{r.revenue != null ? fmt(r.revenue / 1e8) : "--"}</span> 亿
                 </span>
@@ -95,7 +95,7 @@ export function ProfilePanel({
               </div>
             </div>
           ))}
-          {(fins ?? []).length === 0 && <p className="text-zinc-500">暂无财报数据</p>}
+          {(fins ?? []).length === 0 && <p className="text-zinc-600 dark:text-zinc-400">暂无财报数据</p>}
         </>
       )}
     </div>

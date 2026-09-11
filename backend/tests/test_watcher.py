@@ -9,8 +9,10 @@
 """
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace as NS
 
+from app.picks import morning_brief, watcher
 from app.picks.watcher import (
     MAX_ALERTS_PER_DIRECTION,
     DirectionTracker,
@@ -455,3 +457,309 @@ def test_ensure_system_rule_upgrades_v1_default_row(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "picks_watcher_channels", "in_app,log")
     row3 = ensure_system_rule(factory)
     assert json.loads(row3.channels) == ["in_app", "log"]
+
+
+# ---------------------------------------------------------------- 板块级资金规则（P1-1）
+
+
+def test_board_flow_first_beat_only_records_baseline():
+    """首拍**无增量基线** → 不报「突增」（否则每次启动都会误报）；但「低吸异动」是
+    累计口径条件（净额 + 涨幅），不依赖差分 → 首拍即可成立。两类语义不同，勿混。"""
+    w = IntradayWatcher([])
+    got = w._step_board_flows({"甲板": {"net": 3.0, "pct": 0.5}})
+    assert [a["kind"] for a in got] == ["board_low_absorb"]
+    # 第二拍才有增量基线；低吸已当日一次 → 只剩突增
+    got2 = w._step_board_flows({"甲板": {"net": 5.0, "pct": 0.5}})
+    assert [a["kind"] for a in got2] == ["board_flow_surge"]
+
+
+def test_board_flow_surge_needs_increment_over_threshold():
+    from app.picks.watcher import BOARD_FLOW_SURGE_YI
+
+    w = IntradayWatcher([])
+    w._step_board_flows({"甲板": {"net": 0.0, "pct": 5.0}})
+    # 增量略低于阈值 → 不报（且涨幅 5% 也不满足低吸）
+    assert w._step_board_flows({"甲板": {"net": BOARD_FLOW_SURGE_YI - 0.01, "pct": 5.0}}) == []
+    # 恰好越过阈值 → 报（口径含边界）
+    got = w._step_board_flows({"甲板": {"net": BOARD_FLOW_SURGE_YI * 2, "pct": 5.0}})
+    assert [a["kind"] for a in got] == ["board_flow_surge"]
+
+
+def test_board_low_absorb_requires_high_net_and_low_pct():
+    from app.picks.watcher import BOARD_LOW_ABSORB_PCT, BOARD_LOW_ABSORB_YI
+
+    w = IntradayWatcher([])
+    # 净额达标但涨幅也不低 → 不是「资金进价没动」，不报
+    assert w._step_board_flows({"甲板": {"net": BOARD_LOW_ABSORB_YI, "pct": BOARD_LOW_ABSORB_PCT}}) == []
+    # 净额略低 → 不报
+    assert w._step_board_flows({"乙板": {"net": BOARD_LOW_ABSORB_YI - 0.01, "pct": 0.5}}) == []
+
+
+def test_board_flow_unknown_net_is_not_zero():
+    """缺净额（unknown）绝不按 0 处理：不建基线、不触发任何规则。"""
+    w = IntradayWatcher([])
+    assert w._step_board_flows({"甲板": {"net": None, "pct": 0.1}}) == []
+    assert w._step_board_flows({"甲板": {"net": None, "pct": 0.1}}) == []
+    assert w.state()["board_flow_tracked"] == 0
+
+
+def test_board_flow_alerted_once_per_day():
+    w = IntradayWatcher([])
+    w._step_board_flows({"甲板": {"net": 0.0, "pct": 0.5}})
+    assert len(w._step_board_flows({"甲板": {"net": 5.0, "pct": 0.5}})) == 2
+    assert w._step_board_flows({"甲板": {"net": 50.0, "pct": 0.5}}) == []
+
+
+def test_board_flow_caps_alerts_per_beat_and_keeps_biggest():
+    """按幅度取 Top（防板块轮动刷屏）；未入选的不标记 → 下一拍仍有机会。"""
+    from app.picks.watcher import BOARD_ALERT_PER_BEAT
+
+    w = IntradayWatcher([])
+    names = [f"板{i}" for i in range(BOARD_ALERT_PER_BEAT + 3)]
+    w._step_board_flows({n: {"net": 0.0, "pct": 5.0} for n in names})
+    got = w._step_board_flows({n: {"net": float(i + 1), "pct": 5.0} for i, n in enumerate(names)})
+    assert len(got) == BOARD_ALERT_PER_BEAT
+    assert {a["direction"] for a in got} == set(names[-BOARD_ALERT_PER_BEAT:])
+
+
+def test_board_flow_keys_are_kind_tagged():
+    w = IntradayWatcher([])
+    w._step_board_flows({"甲板": {"net": 0.0, "pct": 0.5}})
+    got = w._step_board_flows({"甲板": {"net": 5.0, "pct": 0.5}})
+    assert {a["key"] for a in got} == {"board-flow-surge-甲板", "board-low-absorb-甲板"}
+    assert all(a["direction"] == "甲板" for a in got)
+
+
+def test_board_flows_io_reads_net_pct_code(monkeypatch):
+    """`_board_flows` 取三要素；缺 net 如实 None（不填 0）；无名板块跳过；单 kind 失败降级。"""
+    import asyncio
+
+    from app.market import board_flow as bf
+    from app.picks import watcher as wt
+
+    async def fake_list(kind):
+        if kind == "concept":
+            return ([{"name": "甲板", "main_net_yi": 1.5, "change_pct": 0.8, "board_code": "BK1"},
+                     {"name": "乙板", "main_net_yi": None, "change_pct": 2.0, "board_code": "BK2"},
+                     {"name": "", "main_net_yi": 9.0, "change_pct": 1.0}], [])
+        return (None, ["boom"])
+
+    monkeypatch.setattr(bf, "get_board_list", fake_list)
+    out = asyncio.run(wt._board_flows(None))
+    assert out["甲板"] == {"net": 1.5, "pct": 0.8, "code": "BK1"}
+    assert out["乙板"]["net"] is None
+    assert "" not in out
+
+
+# ---------------------------------------------------------------- 分发快照（名称留存）
+
+def test_dispatch_alert_snapshot_keeps_name(monkeypatch):
+    """提醒快照必须带 name：悬浮球（alert_triage.pending_bubbles）要求 symbol+name
+    齐备，缺 name 整条过滤（2026-09-09 用户指令）。
+
+    回归背景（2026-09-10）：此前 snapshot 只落 kind/direction/text，实测库内 14 条
+    notify 事件全部 name=None → 悬浮球收不到任何 watcher 个股提醒，而事件确实产生了
+    （symbol 列有值），属"数据缺失但无人报错"的静默失效。
+    """
+    captured: dict = {}
+
+    class _Repo:
+        def record_trigger(self, rule_id, symbol, tv, threshold, snapshot=None):
+            captured["snapshot"] = snapshot
+            captured["symbol"] = symbol
+            return NS(id=1)
+
+        def update_event_channels(self, event_id, channels):
+            return None
+
+    class _Registry:
+        async def dispatch(self, event, rule):
+            return ["in_app"]
+
+    monkeypatch.setattr(morning_brief, "brief_for_today", lambda: ("20260910", {"directions": []}))
+    monkeypatch.setattr(morning_brief, "append_alert", lambda target, alert: True)
+    monkeypatch.setattr(watcher, "get_session_factory", lambda: (lambda: None))
+    monkeypatch.setattr(watcher, "get_notifier_registry", lambda: _Registry())
+
+    alert = {
+        "key": "flow-surge-600540",
+        "kind": "flow_surge",
+        "symbol": "",  # 空 symbol 跳过台账登记分支，保持测试无副作用
+        "name": "新赛股份",
+        "direction": "",
+        "text": "💰 大单异动 新赛股份(600540)：主力净流入 1.20 亿",
+        "meta": {"trigger_value": 1.2, "threshold": 1.0},
+    }
+    app = NS(state=NS(alert_repo=_Repo()))
+    ok = asyncio.run(
+        watcher.dispatch_alert(app, dict(alert), rule_provider=lambda sf: NS(id=1, channels="[]"))
+    )
+    assert ok is True
+    assert captured["snapshot"]["name"] == "新赛股份"
+    assert captured["snapshot"]["kind"] == "flow_surge"
+    # 无名称时不臆造：落 None 而不是空串（三态：缺失 ≠ 有值）
+    alert2 = dict(alert, name="")
+    asyncio.run(watcher.dispatch_alert(app, alert2, rule_provider=lambda sf: NS(id=1, channels="[]")))
+    assert captured["snapshot"]["name"] is None
+
+
+# ---------------------------------------------------------------- 价格语义（缺陷回归，2026-09-10）
+
+
+def _install_dispatch_stubs(monkeypatch):
+    """dispatch_alert 的最小桩：只保留被断言的分支，阻断真实 IO 与 DB。"""
+
+    class _Repo:
+        def record_trigger(self, rule_id, symbol, tv, threshold, snapshot=None):
+            return NS(id=1)
+
+        def update_event_channels(self, event_id, channels):
+            return None
+
+    class _Registry:
+        async def dispatch(self, event, rule):
+            return ["in_app"]
+
+    monkeypatch.setattr(morning_brief, "brief_for_today", lambda: ("20260910", {"directions": []}))
+    monkeypatch.setattr(morning_brief, "append_alert", lambda target, alert: True)
+    monkeypatch.setattr(watcher, "get_session_factory", lambda: (lambda: None))
+    monkeypatch.setattr(watcher, "get_notifier_registry", lambda: _Registry())
+    return _Repo()
+
+
+def test_alert_price_rejects_non_price_trigger_value():
+    """`trigger_value` 的两种语义（涨跌幅 / 净额亿元）**都不是价格**，不可当 entry_price。
+
+    回归背景（2026-09-10）：`record_sighting(entry_price=...)` 与
+    `maybe_open(price=...)` 曾直接取 `meta["trigger_value"]`，而该字段在本模块有四种
+    语义且没有一种表示价格 ——
+      · flow_surge / board_flow = 净额（亿元）或板块涨跌幅；
+      · falsify / confirm = 个股涨跌幅。
+    后果：`watch_ledger` 把「主力净流入 0.32 亿」记成股价 0.32（pnl 22150%，
+    verdict 误判 success，09-09 共 71 行）；`paper_order` 以题材涨跌幅 1.82
+    当价格开模拟仓（单号 1/2，603330）。取数只认价格语义字段，取不到给 None。
+    """
+    # flow_surge：净额（亿元）—— 1.20 是钱不是股价
+    assert watcher._alert_price({"meta": {"trigger_value": 1.2, "threshold": 1.0}}) is None
+    # 09-09 事故原样：alert_event.snapshot =「主力净流入 0.32 亿」
+    assert watcher._alert_price({"meta": {"trigger_value": 0.32, "threshold": 0.3}}) is None
+    # falsify / confirm：个股涨跌幅
+    assert watcher._alert_price({"meta": {"trigger_value": -3.5}}) is None
+    # board_flow 的题材涨跌幅（paper_order id=1/2 曾以 1.82「元」开仓）
+    assert watcher._alert_price({"meta": {"trigger_value": 1.82}}) is None
+    # 明确的价格字段 → 采纳（并优先于 trigger_value）
+    assert watcher._alert_price({"meta": {"price": 71.2, "trigger_value": 0.32}}) == 71.2
+    # 无价格字段 → 回退快照现价
+    assert watcher._alert_price({}, 33.3) == 33.3
+    # 两处都取不到 → None（宁可判不出，不可判错）
+    assert watcher._alert_price({}) is None
+    assert watcher._alert_price({"meta": {}}, None) is None
+    assert watcher._alert_price({"meta": None}) is None
+    # 非正数不是价格
+    assert watcher._alert_price({"meta": {"price": 0}}) is None
+    assert watcher._alert_price({"meta": {"price": -1}}) is None
+    assert watcher._alert_price({"meta": {"price": 0}}, 5.0) == 5.0
+    # 字符串不隐式转换（三态：类型不符 ≠ 可解析）
+    assert watcher._alert_price({"meta": {"price": "12.5"}}) is None
+
+
+def test_snapshot_price_only_accepts_positive_number():
+    """快照现价回退：只认正数 price，缺失/0/负都返回 None（缺 ≠ 0）。"""
+
+    class _Svc:
+        def __init__(self, rows):
+            self.snapshot = rows
+
+    app = NS(snapshot_service=_Svc([{"symbol": "603330", "price": 71.2}]))
+    assert watcher._snapshot_price(app, "603330") == 71.2
+    assert watcher._snapshot_price(NS(snapshot_service=_Svc([{"symbol": "603330", "price": 0}])), "603330") is None
+    assert watcher._snapshot_price(NS(snapshot_service=_Svc([{"symbol": "603330", "change_pct": 3.0}])), "603330") is None
+    # 未命中 / 空 symbol / 无服务 / snapshot=None → None
+    assert watcher._snapshot_price(app, "000001") is None
+    assert watcher._snapshot_price(app, "") is None
+    assert watcher._snapshot_price(NS(), "603330") is None
+    assert watcher._snapshot_price(NS(snapshot_service=NS(snapshot=None)), "603330") is None
+
+
+def test_dispatch_alert_price_comes_from_price_semantics(monkeypatch):
+    """端到端复刻 09-09 事故：`buy_point` 告警不带 `meta["price"]` 时，
+    台账 entry_price 与开仓价都必须回退**快照现价**，绝不可取 trigger_value。
+
+    覆盖两条独立调用链：`record_sighting(entry_price=...)`（用局部 snap_price）
+    与 `maybe_open(price=...)`（用 _snapshot_price 独立查快照）。
+    """
+    from app.picks import position_engine, watch_ledger
+
+    repo = _install_dispatch_stubs(monkeypatch)
+    seen: dict = {}
+    opened: dict = {}
+
+    monkeypatch.setattr(watch_ledger, "record_sighting", lambda **kw: seen.update(kw) or {"ok": True})
+
+    async def fake_open(app, **kw):
+        opened.update(kw)
+        return {"opened": False, "reason": "stub"}
+
+    monkeypatch.setattr(position_engine, "maybe_open", fake_open)
+
+    class _Svc:
+        snapshot = [{"symbol": "603330", "name": "奥士康", "price": 71.2, "change_pct": 3.0}]
+
+    app = NS(state=NS(alert_repo=repo, snapshot_service=_Svc()))
+    alert = {
+        "key": "buy-point-603330",
+        "kind": "buy_point",
+        "symbol": "603330",
+        "name": "奥士康",
+        "text": "主力净流入 0.32 亿",
+        "meta": {"trigger_value": 0.32, "threshold": 0.3},  # 无 price 字段
+    }
+    ok = asyncio.run(
+        watcher.dispatch_alert(app, dict(alert), rule_provider=lambda sf: NS(id=1, channels="[]"))
+    )
+    assert ok is True
+    assert seen, "台账登记分支未走到（异常被 contextlib.suppress 吞掉时会假绿）"
+    assert seen["entry_price"] == 71.2
+    assert opened["price"] == 71.2
+    assert seen["entry_price"] != 0.32 and opened["price"] != 0.32  # 事故值：净额不是价格
+
+
+def test_dispatch_alert_price_absent_stays_unknown(monkeypatch):
+    """meta 无 price、快照也无 price → 两条链都取 None（宁可判不出，不可判错）。
+
+    旧代码此处会取到 trigger_value=0.32，把「净流入 0.32 亿」静默记成 0.32 元成本。
+    """
+    from app.picks import position_engine, watch_ledger
+
+    repo = _install_dispatch_stubs(monkeypatch)
+    seen: dict = {}
+    opened: dict = {}
+
+    monkeypatch.setattr(watch_ledger, "record_sighting", lambda **kw: seen.update(kw) or {"ok": True})
+
+    async def fake_open(app, **kw):
+        opened.update(kw)
+        return {"opened": False, "reason": "stub"}
+
+    monkeypatch.setattr(position_engine, "maybe_open", fake_open)
+
+    class _Svc:
+        # 有行情（change_pct 可判定未封板）但**没有价格**——模拟快照字段不齐
+        snapshot = [{"symbol": "603330", "name": "奥士康", "change_pct": 3.0}]
+
+    app = NS(state=NS(alert_repo=repo, snapshot_service=_Svc()))
+    alert = {
+        "key": "buy-point-603330",
+        "kind": "buy_point",
+        "symbol": "603330",
+        "name": "奥士康",
+        "meta": {"trigger_value": 0.32, "threshold": 0.3},
+    }
+    ok = asyncio.run(
+        watcher.dispatch_alert(app, dict(alert), rule_provider=lambda sf: NS(id=1, channels="[]"))
+    )
+    assert ok is True
+    assert seen, "台账登记分支未走到（异常被 contextlib.suppress 吞掉时会假绿）"
+    assert seen["entry_price"] is None
+    assert opened["price"] is None
+    assert seen["entry_price"] != 0.32 and opened["price"] != 0.32

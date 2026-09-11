@@ -1,6 +1,7 @@
 # 因子全生命周期管理制度（Factor Lifecycle Governance）
+> **同族文档（因子体系，2026-09-10 归口）**：建设方案 → `summary/factor-system.md`；候选登记册 → `factor-candidates.md`；IC 复核报告 → `summary/factor-system.md`。本文 = 全生命周期制度（**入口文档**）。
 
-> 定位：在 `docs/factor-library-design.md`（因子库建设方案，P0 评估闭环）之上，把「评估」扩展为**全生命周期闭环**：挖掘 → 筛选评估 → 入库登记 → 使用 → 出库 → 衰减监控与更新，六环联动，每一环有明确的存在价值与承接物。
+> 定位：在 `docs/summary/factor-system.md`（因子库建设方案，P0 评估闭环）之上，把「评估」扩展为**全生命周期闭环**：挖掘 → 筛选评估 → 入库登记 → 使用 → 出库 → 衰减监控与更新，六环联动，每一环有明确的存在价值与承接物。
 > 配套代码资产：`backend/app/factors/library.py`（注册表=唯一口径锚）、`backend/app/factors/evaluate.py`（评估引擎）、`backend/app/factors/candidates.py`（候选登记册）、`backend/scripts/run_factor_eval.py`（跑批 CLI）。
 > 版本：v1（2026-09-07）。评估数据全部为 marketdb 10 年日 K 实测（1023.8 万行 / 5555 只 / 2016-09-05~2026-09-03），非推演。
 
@@ -84,7 +85,7 @@
 ### 2.2 挖掘 SOP（四步，缺一不入候选池）
 
 1. **提取原始定义**：公式 + 源码文件路径 + 原始注释语义（保留原仓命名，如 qlib KMID/CORD）；
-2. **数据可行性分级**（复用 factor-library-design.md §2 四层）：
+2. **数据可行性分级**（复用 summary/factor-system.md §2 四层）：
    - A 层：marketdb 日 K 立即可算 → 进评估管线；
    - B 层：需已积累但未满 60 日的序列（板块资金/情绪/热度）→ 候选池挂「积累中」；
    - C 层：需外部数据（财报/换手率/行业）→ 候选池挂「数据缺口」+ 指名数据源；
@@ -111,7 +112,7 @@ CandidateDef(
 ### 2.4 持续产生新因子的途径（管线化，非一次性）
 
 1. **完整化既有来源**：qlib Alpha158 逐算子补全窗口（本轮评 20 日代表窗，P1 补 5/10/60 日扫描）；TA-Lib 指标族中 MFI/OBV/ADX/CCI 等待 P1；
-2. **系统内准因子收敛**（factor-library-design.md §1.2 的 11 处）到期逐个转正：board_flow streak（B 层 60 日倒计时）、竞价溢价（D 层）；
+2. **系统内准因子收敛**（summary/factor-system.md §1.2 的 11 处）到期逐个转正：board_flow streak（B 层 60 日倒计时）、竞价溢价（D 层）；
 3. **LLM 挖掘管线**（P2，参考 finhack alphaEngine / QuantMind×RD-Agent 集成）：表达式空间生成 → 批量过 evaluate → 人审入库。前提：factor_values 每日截面落库（P1）；
 4. **数据源扩容解锁**（C 层因子解锁钥匙）：财报数据（HiThink Financial-API 官方已有 → 解锁 PEAD/Graham 族）、流通股本（解锁真换手率）、行业分类（解锁行业中性化）。
 
@@ -121,7 +122,7 @@ CandidateDef(
 
 ### 3.1 准入标准（evaluate.py 代码级，四维 + 一票否决）
 
-沿用 factor-library-design.md §4（本制度不重复展开）：
+沿用 summary/factor-system.md §4（本制度不重复展开）：
 有效性（|IC|≥0.02 且 |ICIR|≥0.30）/ 稳定性（分年同号 ≥60%）/ 分层单调（多空年化 ≥3% 同号且 ≥3/4 单调对）/ 覆盖率 ≥90%；一票否决：未来函数、幸存者偏差未标注、口径不可复现。
 三层判定（三态纪律）：**PASS 入库 / CONDITIONAL 辅助维度 / FAIL 淘汰留档**。
 去重：与已入库因子主窗 IC 序列 |corr| ≥ 0.70 标 redundant，同族按 |ICIR| 择优。

@@ -25,12 +25,13 @@ from datetime import datetime
 
 from sqlalchemy import select
 
-from app.core.db import get_session_factory
+from app.core.db import beijing_now_naive, get_session_factory
 
 log = logging.getLogger(__name__)
 
 WINDOW_GROUPS = 20        # 滚动统计窗口（组合日数）
 MIN_GROUPS = 10           # 判 ok 的最少样本（不足 → insufficient）
+MIN_PICKS = 0             # 最少总笔数门槛（0 = 不启用；策略级评估传正值 → thin）
 CUSUM_DELTA = 0.10        # 容忍漂移（pct）
 CUSUM_THRESHOLD = 1.5     # 漂移累积告警阈值
 WARN_WIN_RATE = 0.40      # 滚动 good 占比低于此 → warning
@@ -43,16 +44,21 @@ def evaluate_signal_health(
     min_groups: int = MIN_GROUPS,
     cusum_delta: float = CUSUM_DELTA,
     cusum_threshold: float = CUSUM_THRESHOLD,
+    min_picks: int = MIN_PICKS,
 ) -> dict:
     """纯函数：按 date 升序的组合日序列 → 健康度评估。
 
     :param groups: [{date, phase, n, good, bad, flat, mean_excess}]
                    mean_excess 允许 None（当日全部缺基准）。
+    :param min_groups: 最少**组日数**（不足 → insufficient）。
+    :param min_picks: 最少**总笔数**（不足 → thin）。默认 0 不启用，
+        保持组合级既有行为零回归；策略级评估传正值（防"10 天 × 1 笔"
+        这种组日数达标但统计不可靠的情形，P1-38）。
     :returns: {status, window: {...}, cusum: {...}, history: [...], counts}
     """
     if not groups:
         return {"status": "insufficient", "reason": "无命中记录", "history": [],
-                "window": None, "cusum": None, "counts": {"groups": 0}}
+                "window": None, "cusum": None, "counts": {"groups": 0, "picks": 0}}
 
     recent = groups[-window:]
     total = sum(g["n"] for g in recent)
@@ -81,9 +87,11 @@ def evaluate_signal_health(
             "drift": bool(s_max > cusum_threshold),
         }
 
-    # —— 状态判定（优先级：insufficient > drift > warning > ok）——
+    # —— 状态判定（优先级：insufficient > thin > drift > warning > ok）——
     if len(groups) < min_groups:
         status = "insufficient"
+    elif min_picks > 0 and total < min_picks:
+        status = "thin"
     elif cusum_out and cusum_out["drift"]:
         status = "drift"
     elif (win_rate is not None and win_rate < WARN_WIN_RATE) or (
@@ -111,26 +119,27 @@ def evaluate_signal_health(
             }
             for g in groups
         ],
-        "counts": {"groups": len(groups)},
+        "counts": {"groups": len(groups), "picks": total},
     }
 
 
-def collect_signal_health(session_factory, window: int = WINDOW_GROUPS) -> dict:
-    """读库 → 组合日聚合 → evaluate。库异常显式降级（绝不静默当 ok）。"""
-    try:
-        with session_factory() as db:
-            from app.models.daily_pick import DailyPickReview, DailyPickSet
+def collect_daily_pick_groups(session_factory) -> list[dict]:
+    """读库 → 「每日精选」组合日序列（**取数唯一实现**，供组合级与策略级共用）。
 
-            rows = db.execute(
-                select(DailyPickReview)
-                .order_by(DailyPickReview.date.asc(), DailyPickReview.symbol.asc())
-            ).scalars().all()
-            sets = db.execute(
-                select(DailyPickSet).order_by(DailyPickSet.date.asc())
-            ).scalars().all()
-    except Exception as exc:  # noqa: BLE001
-        log.warning("signal_health: 读取失败，显式降级：%s", exc)
-        return {"status": "error", "reason": str(exc)}
+    独立抽出（P1-38）是为了让策略级评估复用同一份聚合逻辑——
+    消费方自算 = 口径漂移（涨停家数两口径的前科）。
+    库异常**向上抛**，由调用方决定如何降级（不在此处静默吞掉）。
+    """
+    with session_factory() as db:
+        from app.models.daily_pick import DailyPickReview, DailyPickSet
+
+        rows = db.execute(
+            select(DailyPickReview)
+            .order_by(DailyPickReview.date.asc(), DailyPickReview.symbol.asc())
+        ).scalars().all()
+        sets = db.execute(
+            select(DailyPickSet).order_by(DailyPickSet.date.asc())
+        ).scalars().all()
 
     phase_by_date: dict[str, str | None] = {}
     for s in sets:
@@ -157,7 +166,7 @@ def collect_signal_health(session_factory, window: int = WINDOW_GROUPS) -> dict:
         if r.excess_pct is not None:
             g["ex"].append(float(r.excess_pct))
 
-    groups = [
+    return [
         {
             "date": g["date"], "phase": g["phase"], "n": g["n"],
             "good": g["good"], "bad": g["bad"], "flat": g["flat"],
@@ -165,6 +174,16 @@ def collect_signal_health(session_factory, window: int = WINDOW_GROUPS) -> dict:
         }
         for g in sorted(by_date.values(), key=lambda x: x["date"])
     ]
+
+
+def collect_signal_health(session_factory, window: int = WINDOW_GROUPS) -> dict:
+    """读库 → 组合日聚合 → evaluate。库异常显式降级（绝不静默当 ok）。"""
+    try:
+        groups = collect_daily_pick_groups(session_factory)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("signal_health: 读取失败，显式降级：%s", exc)
+        return {"status": "error", "reason": str(exc)}
+
     out = evaluate_signal_health(groups, window=window)
     out["generated_at"] = datetime.now().isoformat(timespec="seconds")
     out["source"] = "daily_pick_review"
@@ -249,8 +268,6 @@ async def maybe_alert_signal_health(state, health: dict) -> dict:
     if status not in ("warning", "drift"):
         return {"dispatched": False, "reason": f"status={status} 无需告警"}
 
-    from datetime import datetime
-
     from app.models.alert import AlertEvent
     from app.notifiers import get_notifier_registry
     from app.repositories.alert_repo import AlertRepository
@@ -260,8 +277,8 @@ async def maybe_alert_signal_health(state, health: dict) -> dict:
     rule = ensure_signal_health_rule(session_factory)
     repo = getattr(state, "alert_repo", None) or AlertRepository(session_factory)
 
-    # 当日去重：按 snapshot.status 比对（triggered_at 为 naive UTC，全库同口径）
-    day_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    # 当日去重：按 snapshot.status 比对（triggered_at 已统一北京 naive，2026-09-09）
+    day_start = beijing_now_naive().replace(hour=0, minute=0, second=0, microsecond=0)
     try:
         with session_factory() as db:
             rows = db.execute(

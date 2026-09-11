@@ -26,17 +26,17 @@ export interface InfoItem {
 }
 
 const IMPORTANCE_STYLE: Record<string, string> = {
-  高: "bg-up/15 text-up",
-  中: "bg-amber-500/15 text-amber-400",
-  普通: "bg-zinc-500/15 text-zinc-400",
-  低: "bg-zinc-500/10 text-zinc-500",
+  高: "bg-up/15 text-up-ink dark:text-up",
+  中: "bg-amber-500/15 text-amber-800 dark:text-amber-400",
+  普通: "bg-zinc-500/15 text-zinc-600 dark:text-zinc-400",
+  低: "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400",
 };
 
 const SENTIMENT_STYLE: Record<string, string> = {
-  偏正面: "text-up",
-  偏负面: "text-down",
-  分歧: "text-amber-400",
-  中性: "text-zinc-400",
+  偏正面: "text-up-ink dark:text-up",
+  偏负面: "text-down-ink dark:text-down",
+  分歧: "text-amber-800 dark:text-amber-400",
+  中性: "text-zinc-600 dark:text-zinc-400",
 };
 
 function DigestRow({ item }: { item: InfoItem }) {
@@ -58,7 +58,7 @@ function DigestRow({ item }: { item: InfoItem }) {
         )}
         {item.sentiment && (
           <span
-            className={`text-[10px] ${SENTIMENT_STYLE[item.sentiment] ?? "text-zinc-400"}`}
+            className={`text-[10px] ${SENTIMENT_STYLE[item.sentiment] ?? "text-zinc-600 dark:text-zinc-400"}`}
             title={
               item.sentiment_reasons?.length
                 ? `情绪依据：${item.sentiment_reasons.join("、")}`
@@ -69,14 +69,14 @@ function DigestRow({ item }: { item: InfoItem }) {
           </span>
         )}
         {item.numbers && item.numbers.length > 0 && (
-          <span className="truncate font-mono text-[10px] text-zinc-500" title={item.numbers.join(" ")}>
+          <span className="truncate font-mono text-[10px] text-zinc-600 dark:text-zinc-400" title={item.numbers.join(" ")}>
             {item.numbers.slice(0, 3).join(" ")}
           </span>
         )}
       </div>
       {item.digest && (
         // digest_source 说明摘要取自正文还是标题（表格型正文会被丢弃）
-        <p className="line-clamp-2 text-[11px] leading-snug text-zinc-400" title={`${item.digest}（来源：${item.digest_source ?? "未知"}）`}>
+        <p className="line-clamp-2 text-[11px] leading-snug text-zinc-600 dark:text-zinc-400" title={`${item.digest}（来源：${item.digest_source ?? "未知"}）`}>
           {item.digest}
         </p>
       )}
@@ -101,9 +101,9 @@ export function InfoPanel({
     setModalItem({ title: item.title, url: item.url, date: item.date, source: item.source, digest: item.digest ?? null, kindLabel });
   return (
     <div className="min-h-0 overflow-y-auto">
-      <h3 className="px-3 py-1.5 text-xs font-medium text-zinc-500 dark:text-zinc-300">近期公告</h3>
+      <h3 className="px-3 py-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-300">近期公告</h3>
       {annError && (
-        <p className="mx-3 mb-1 rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-600 dark:text-amber-400">
+        <p className="mx-3 mb-1 rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-800 dark:text-amber-400">
           公告源暂时不可用（{annError}），稍后自动恢复
         </p>
       )}
@@ -114,16 +114,16 @@ export function InfoPanel({
           className="block w-full border-b border-zinc-100 px-3 py-1.5 text-left hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900"
         >
           <div className="truncate text-xs text-zinc-900 dark:text-zinc-200">{a.title}</div>
-          <div className="text-[11px] text-zinc-500">
+          <div className="text-[11px] text-zinc-600 dark:text-zinc-400">
             {a.date} {a.type ? `· ${a.type}` : ""}
           </div>
           <DigestRow item={a} />
         </button>
       ))}
-      {anns && anns.length === 0 && <p className="px-3 py-3 text-xs text-zinc-500">暂无公告</p>}
-      <h3 className="border-t border-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-500 dark:border-zinc-800/60 dark:text-zinc-300">相关新闻</h3>
+      {anns && anns.length === 0 && <p className="px-3 py-3 text-xs text-zinc-600 dark:text-zinc-400">暂无公告</p>}
+      <h3 className="border-t border-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:border-zinc-800/60 dark:text-zinc-300">相关新闻</h3>
       {newsError && (
-        <p className="mx-3 mb-1 rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-600 dark:text-amber-400">
+        <p className="mx-3 mb-1 rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-800 dark:text-amber-400">
           新闻源暂时不可用（{newsError}），稍后自动恢复
         </p>
       )}
@@ -134,11 +134,11 @@ export function InfoPanel({
           className="block w-full border-b border-zinc-100 px-3 py-1.5 text-left hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900"
         >
           <div className="truncate text-xs text-zinc-900 dark:text-zinc-200">{n.title}</div>
-          <div className="text-[11px] text-zinc-500">{n.date}</div>
+          <div className="text-[11px] text-zinc-600 dark:text-zinc-400">{n.date}</div>
           <DigestRow item={n} />
         </button>
       ))}
-      {news && news.length === 0 && <p className="px-3 py-3 text-xs text-zinc-500">暂无新闻</p>}
+      {news && news.length === 0 && <p className="px-3 py-3 text-xs text-zinc-600 dark:text-zinc-400">暂无新闻</p>}
       <NewsModal item={modalItem} onClose={() => setModalItem(null)} />
     </div>
   );

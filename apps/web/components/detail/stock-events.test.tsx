@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { StockEventsRow } from "./stock-events";
+import { DetailModalProvider } from "./detail-modal";
 import type { EventSummary } from "@/lib/api";
 
 // vitest 未开 globals 时 RTL 自动 cleanup 不注册，必须手动（见 trade-form.test.tsx 注释）
@@ -32,8 +33,14 @@ const event: EventSummary = {
   ],
 };
 
+// 2026-09-09：改用全站通用详情弹窗（Provider 单例），测试必须包 Provider，
+// 否则 useDetailModal 取到的是默认 noop context，点击不会有任何反应。
+function renderWithProvider(ui: React.ReactElement) {
+  return render(<DetailModalProvider>{ui}</DetailModalProvider>);
+}
+
 describe("StockEventsRow", () => {
-  it("渲染相关事件标题与方向，点击打开弹窗（正文 + 原文链接）", async () => {
+  it("渲染相关事件标题与方向，点击打开通用弹窗（正文 + 原文链接）", async () => {
     mockedGet.mockResolvedValue({ symbol: "600519", themes: [], count: 1, items: [event] });
     mockedContent.mockResolvedValue({
       kind: "news",
@@ -46,31 +53,54 @@ describe("StockEventsRow", () => {
       url: event.url!, // 该用例的 event 必带 url，非空断言成立
     });
 
-    render(<StockEventsRow symbol="600519" />);
+    renderWithProvider(<StockEventsRow symbol="600519" />);
     await screen.findByText(/沃什鹰派/);
 
     expect(screen.getByText("利空")).toBeTruthy();
 
-    // 弹窗化交互：条目是按钮，点击打开 NewsModal 而非外跳
+    // 弹窗化交互：条目是按钮，点击打开通用详情弹窗（Portal 到 body）
     fireEvent.click(screen.getByRole("button", { name: /沃什鹰派/ }));
-    const modal = await screen.findByTestId("news-modal");
+    const modal = await screen.findByRole("dialog");
     expect(modal).toBeTruthy();
     await screen.findByText("正文第一段。");
-    const link = screen.getByText("查看原文 ↗").closest("a");
+    const link = screen.getByText("打开原文 ↗").closest("a");
     expect(link?.getAttribute("href")).toBe("https://example.com/news/7");
   });
 
-  it("无相关事件时零占用", async () => {
+  it("无相关事件时显示显式兜底（不再是零占用的静默消失）", async () => {
     mockedGet.mockResolvedValue({ symbol: "600519", themes: [], count: 0, items: [] });
-    const { container } = render(<StockEventsRow symbol="600519" />);
-    await new Promise((r) => setTimeout(r, 5));
-    expect(container.textContent).toBe("");
+    renderWithProvider(<StockEventsRow symbol="600519" />);
+    await screen.findByText(/暂无与该股题材匹配的活跃事件/);
   });
 
-  it("加载失败静默（不拖垮详情页）", async () => {
+  it("加载失败显示失败态与重试（不再是静默消失）", async () => {
     mockedGet.mockRejectedValue(new Error("boom"));
-    const { container } = render(<StockEventsRow symbol="600519" />);
-    await new Promise((r) => setTimeout(r, 5));
+    renderWithProvider(<StockEventsRow symbol="600519" />);
+    await screen.findByText("加载失败");
+    expect(screen.getByText("重试")).toBeTruthy();
+  });
+
+  it("无 url 的事件也可点开（弹窗内给原文缺失兜底）", async () => {
+    mockedGet.mockResolvedValue({
+      symbol: "600519",
+      themes: [],
+      count: 1,
+      items: [{ ...event, url: null }],
+    });
+    renderWithProvider(<StockEventsRow symbol="600519" />);
+    await screen.findByText(/沃什鹰派/);
+    fireEvent.click(screen.getByRole("button", { name: /沃什鹰派/ }));
+    const modal = await screen.findByRole("dialog");
+    expect(modal.textContent).toContain("原文链接缺失");
+  });
+
+  it("指数（isIndex）：整行不渲染，且**不发请求**（后端对指数代码必拒 400）", async () => {
+    mockedGet.mockReset();
+    const { container } = renderWithProvider(<StockEventsRow symbol="sh000001" isIndex />);
     expect(container.textContent).toBe("");
+    expect(mockedGet).not.toHaveBeenCalled();
+    // 行内三态（加载中/失败/兜底）均不得出现
+    expect(screen.queryByText("加载失败")).toBeNull();
+    expect(screen.queryByText(/相关事件/)).toBeNull();
   });
 });

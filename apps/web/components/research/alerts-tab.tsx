@@ -70,6 +70,12 @@ export function AlertsTab() {
 
   usePollingFetch(load, 10_000);
 
+  // P1-36：判读层「已挡（ignore）」事件——被挡清单可见，才能判断"是不是挡多了"。
+  const blocked = useMemo(
+    () => events.filter((e) => e.triage?.verdict === "ignore"),
+    [events],
+  );
+
   const [form, setForm] = useState<AlertRuleCreate>({
     name: "",
     condition_type: "price_above",
@@ -129,16 +135,16 @@ export function AlertsTab() {
     <div className="flex h-full min-h-0 flex-col gap-3">
       <div className="flex shrink-0 items-center justify-between">
         <h2 className="text-base font-semibold">预警通知</h2>
-        <span className="text-xs text-zinc-400">判读即终态 · 自动 10 秒刷新</span>
+        <span className="text-xs text-zinc-600 dark:text-zinc-400">判读即终态 · 自动 10 秒刷新</span>
       </div>
 
-      {error && <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-600">{error}</div>}
+      {error && <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-800 dark:text-amber-600">{error}</div>}
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[360px,minmax(0,1fr)]">
         <Panel title="新建规则" className="flex flex-col gap-3 overflow-auto">
           <form onSubmit={submit} className="flex flex-col gap-3 text-sm">
             <div>
-              <label className="mb-1 block text-xs text-zinc-400">名称</label>
+              <label className="mb-1 block text-xs text-zinc-600 dark:text-zinc-400">名称</label>
               <input
                 value={form.name}
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
@@ -149,7 +155,7 @@ export function AlertsTab() {
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="mb-1 block text-xs text-zinc-400">条件</label>
+                <label className="mb-1 block text-xs text-zinc-600 dark:text-zinc-400">条件</label>
                 <select
                   value={form.condition_type}
                   onChange={(e) => setForm((f) => ({ ...f, condition_type: e.target.value as AlertConditionType }))}
@@ -162,7 +168,7 @@ export function AlertsTab() {
                 </select>
               </div>
               <div>
-                <label className="mb-1 block text-xs text-zinc-400">阈值</label>
+                <label className="mb-1 block text-xs text-zinc-600 dark:text-zinc-400">阈值</label>
                 <input
                   type="number"
                   step="any"
@@ -174,7 +180,7 @@ export function AlertsTab() {
               </div>
             </div>
             <div>
-              <label className="mb-1 block text-xs text-zinc-400">范围</label>
+              <label className="mb-1 block text-xs text-zinc-600 dark:text-zinc-400">范围</label>
               <select
                 value={form.scope}
                 onChange={(e) => setForm((f) => ({ ...f, scope: e.target.value as AlertScope }))}
@@ -187,7 +193,7 @@ export function AlertsTab() {
             </div>
             {form.scope === "symbols" && (
               <div>
-                <label className="mb-1 block text-xs text-zinc-400">标的（逗号分隔）</label>
+                <label className="mb-1 block text-xs text-zinc-600 dark:text-zinc-400">标的（逗号分隔）</label>
                 <input
                   value={symbolInput}
                   onChange={(e) => {
@@ -203,7 +209,7 @@ export function AlertsTab() {
               </div>
             )}
             <div>
-              <label className="mb-1 block text-xs text-zinc-400">冷却（秒）</label>
+              <label className="mb-1 block text-xs text-zinc-600 dark:text-zinc-400">冷却（秒）</label>
               <input
                 type="number"
                 min={0}
@@ -213,7 +219,7 @@ export function AlertsTab() {
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-zinc-400">通知通道</label>
+              <label className="mb-1 block text-xs text-zinc-600 dark:text-zinc-400">通知通道</label>
               <div className="flex flex-wrap gap-2">
                 {channels.map((ch) => (
                   <label key={ch} className="flex items-center gap-1 text-xs">
@@ -232,7 +238,7 @@ export function AlertsTab() {
                     {channelConfig[ch] === false && (
                       <span
                         title="该通道未完成配置（如飞书 webhook），触发时会跳过并在后端日志告警，不会伪装成功"
-                        className="rounded bg-amber-500/15 px-1 text-[10px] text-amber-600 dark:text-amber-400"
+                        className="rounded bg-amber-500/15 px-1 text-[10px] text-amber-800 dark:text-amber-400"
                       >
                         未配置
                       </span>
@@ -241,10 +247,13 @@ export function AlertsTab() {
                 ))}
               </div>
             </div>
+            {/* `bg-up-deep/90` 已去掉那 10% 透明度（2026-09-11 P2-24）：90% 叠在浅色卡片上被稀释成
+                rgb(228,51,90)，白字对比度从 4.70 掉到 4.28（< AA 4.5）；实心后与其余三处 up-deep
+                按钮一致，`hover:bg-up-deep` 也随之冗余（悬停反馈由全局 :active 按压 + transition 承担）。 */}
             <button
               type="submit"
               disabled={loading}
-              className="mt-1 rounded-md bg-up/90 px-3 py-1.5 text-sm font-medium text-white hover:bg-up disabled:opacity-50"
+              className="mt-1 rounded-md bg-up-deep px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
             >
               创建规则
             </button>
@@ -254,10 +263,10 @@ export function AlertsTab() {
         <div className="flex min-h-0 flex-col gap-3">
           <Panel title={`规则列表 (${rules.length})`} className="max-h-[45%] shrink-0 overflow-auto">
             {rules.length === 0 ? (
-              <p className="px-4 py-6 text-center text-sm text-zinc-400">暂无规则。</p>
+              <p className="px-4 py-6 text-center text-sm text-zinc-600 dark:text-zinc-400">暂无规则。</p>
             ) : (
               <table className="w-full text-xs">
-                <thead className="sticky top-0 bg-zinc-50 text-zinc-500 dark:bg-zinc-900">
+                <thead className="sticky top-0 bg-zinc-50 text-zinc-600 dark:text-zinc-400 dark:bg-zinc-900">
                   <tr>
                     <th className="px-3 py-2 text-left font-medium">名称</th>
                     <th className="px-3 py-2 text-left font-medium">条件</th>
@@ -281,13 +290,13 @@ export function AlertsTab() {
                       <td className="px-3 py-2">
                         <button
                           onClick={() => void toggleEnabled(r)}
-                          className={`rounded-full px-2 py-0.5 ${r.enabled ? "bg-up/10 text-up" : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800"}`}
+                          className={`rounded-full px-2 py-0.5 ${r.enabled ? "bg-up/10 text-up-ink dark:text-up" : "bg-zinc-100 text-zinc-600 dark:text-zinc-400 dark:bg-zinc-800"}`}
                         >
                           {r.enabled ? "启用" : "停用"}
                         </button>
                       </td>
                       <td className="px-3 py-2">
-                        <button onClick={() => void remove(r.id)} className="text-zinc-400 hover:text-red-400">
+                        <button onClick={() => void remove(r.id)} className="text-zinc-600 dark:text-zinc-400 hover:text-red-400">
                           删除
                         </button>
                       </td>
@@ -300,10 +309,10 @@ export function AlertsTab() {
 
           <Panel title={`触发记录 (${events.length})`} className="min-h-0 flex-1 overflow-auto">
             {events.length === 0 ? (
-              <p className="px-4 py-6 text-center text-sm text-zinc-400">暂无触发。</p>
+              <p className="px-4 py-6 text-center text-sm text-zinc-600 dark:text-zinc-400">暂无触发。</p>
             ) : (
               <table className="w-full text-xs">
-                <thead className="sticky top-0 bg-zinc-50 text-zinc-500 dark:bg-zinc-900">
+                <thead className="sticky top-0 bg-zinc-50 text-zinc-600 dark:text-zinc-400 dark:bg-zinc-900">
                   <tr>
                     <th className="px-3 py-2 text-left font-medium">时间</th>
                     <th className="px-3 py-2 text-left font-medium">标的</th>
@@ -317,7 +326,7 @@ export function AlertsTab() {
                 <tbody>
                   {events.map((e) => (
                     <tr key={e.id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                      <td className="px-3 py-2 font-mono text-zinc-400">
+                      <td className="px-3 py-2 font-mono text-zinc-600 dark:text-zinc-400">
                         {new Date(e.triggered_at).toLocaleTimeString("zh-CN")}
                       </td>
                       <td className="px-3 py-2 font-mono">
@@ -329,17 +338,50 @@ export function AlertsTab() {
                       <td className={`px-3 py-2 font-mono tabular-nums ${e.snapshot ? pctColor(e.snapshot.change_pct) : ""}`}>
                         {e.trigger_value.toFixed(2)}
                       </td>
-                      <td className="px-3 py-2 font-mono tabular-nums text-zinc-400">{e.threshold}</td>
-                      <td className="px-3 py-2 text-zinc-400">{e.delivered_channels.join(", ")}</td>
+                      <td className="px-3 py-2 font-mono tabular-nums text-zinc-600 dark:text-zinc-400">{e.threshold}</td>
+                      <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">{e.delivered_channels.join(", ")}</td>
                       <td className="px-3 py-2">
                         {/* 2026-09-08 用户指令：触发记录状态不再需要确认——判读完成即自动置
                             acknowledged，此处只读展示终态，移除人工「确认」按钮 */}
-                        <span className="text-zinc-400">已判读</span>
+                        <span className="text-zinc-600 dark:text-zinc-400">已判读</span>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+            )}
+
+            {/* P1-36：判读挡了什么必须可见——否则无法判断"是不是挡多了"。
+                只列出 verdict=ignore 的（notify 已在悬浮球、escalate 另见任务中心）；
+                `llm_fallback` 单独标出，不伪装成 AI 判断。 */}
+            {blocked.length > 0 && (
+              <details className="border-t border-zinc-100 dark:border-zinc-800/60">
+                <summary className="cursor-pointer select-none px-3 py-2 text-xs text-zinc-600 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300">
+                  今日已挡事件（{blocked.length}）· 展开查看已降噪告警
+                </summary>
+                <ul className="space-y-1 px-3 pb-3 text-[11px]">
+                  {blocked.map((e) => (
+                    <li
+                      key={e.id}
+                      className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded bg-zinc-50 px-2 py-1 dark:bg-zinc-900/60"
+                    >
+                      <span className="font-mono text-zinc-600 dark:text-zinc-400">
+                        {new Date(e.triggered_at).toLocaleTimeString("zh-CN")}
+                      </span>
+                      <span className="font-mono">{e.symbol}</span>
+                      <span className="text-zinc-600 dark:text-zinc-400">
+                        {rules.find((r) => r.id === e.rule_id)?.name ?? e.rule_id}
+                      </span>
+                      <span className="text-zinc-600 dark:text-zinc-300">{e.triage?.reason || "（无理由记录）"}</span>
+                      {e.triage?.model === "llm_fallback" && (
+                        <span className="rounded bg-amber-500/15 px-1 text-[10px] text-amber-800 dark:text-amber-400">
+                          判读降级
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </details>
             )}
           </Panel>
         </div>

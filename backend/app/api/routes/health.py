@@ -122,6 +122,32 @@ async def system_metrics() -> dict:
     }
 
 
+@router.get("/system/schedulers")
+async def system_schedulers(request: Request) -> dict:
+    """常驻调度器可观测（S2-2）：逐任务的启用/存活/心跳/失败/重启状态。
+
+    此前只有 evolution 暴露自己的调度状态，其余 25 个常驻任务靠日志猜——
+    "任务静默死亡"两次都是事后才发现。这里把每个任务收敛成一行结构化状态：
+    `state`（running/dead/restarting/disabled/…）、`last_tick`、`failures`、
+    `restarts`、`last_error`。
+
+    `heartbeat="external"` 表示该循环由自己的 `create_task` 驱动（不是注册表
+    驱动），`last_tick` 恒为 null——**显式标注"没有心跳数据"，不假装有**。
+    未装配注册表（精简启动 / 早期单测）时返回 `available=false` 而非空列表，
+    避免"没有任务"与"看不到任务"被混为一谈。
+    """
+    reg = getattr(request.app.state, "schedulers", None)
+    if reg is None:
+        return {"available": False, "reason": "调度注册表未装配（精简启动或单测环境）",
+                "schedulers": [], "counts": {}}
+    return {
+        "available": True,
+        "counts": reg.counts(),
+        "dead": reg.dead_names(),
+        "schedulers": reg.snapshot(),
+    }
+
+
 @router.get("/system/marketdb-quality")
 async def marketdb_quality() -> dict:
     """marketdb 质量门报告（sync_marketdb.py 每次同步后落盘）。

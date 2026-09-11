@@ -120,12 +120,17 @@ def quote_sources(quotes: list[Quote]) -> list[dict[str, str]]:
 
 
 async def build_market_context(
-    hub_provider_get_quotes, codes: list[str]
+    hub_provider_get_quotes, codes: list[str], tools_enabled: bool = False
 ) -> tuple[str, list[dict[str, str]]]:
     """拉实时快照 →（提示词块, 溯源清单）；无标的/失败返回 ("", [])。
 
     `hub_provider_get_quotes` 为注入的批量取价协程（测试替换用），
     生产传 `lambda syms: _batch_quotes(hub, syms)`。
+
+    `tools_enabled` 决定块头怎么写（2026-09-11 修复）：此前的措辞是
+    "快照之外的实时信息（资金流/龙虎榜/其他个股等）你都没有"——它写死了无工具
+    时代的事实，接入工具后变成**与工具清单直接冲突的指令**，模型据此回答
+    "我没有龙虎榜数据"。现在有工具时改为"未被快照覆盖的用工具取"。
     """
     if not codes:
         return "", []
@@ -140,18 +145,29 @@ async def build_market_context(
     if not lines:
         return "", []
     now = datetime.now(timezone.utc).astimezone()
+    if tools_enabled:
+        scope = (
+            "这是**已提前注入**的快照；快照之外的标的与维度（K线/分时/资金流/龙虎榜/"
+            "公告财务/指数等）请用「可用工具」按需取数，不要因为快照里没有就回答「我没有」。"
+        )
+    else:
+        scope = (
+            "以下是你**仅有的**实时数据：回答价格/涨跌幅时只准引用这些数字；"
+            "快照之外的实时信息（资金流/龙虎榜/其他个股等）你都没有，请如实说明并引导用户到对应页面查看。"
+        )
     header = (
         f"## 实时数据快照（拉取于北京时间 {now:%H:%M}）\n"
-        "以下是你**仅有的**实时数据：回答价格/涨跌幅时只准引用这些数字；"
-        "快照之外的实时信息（资金流/龙虎榜/其他个股等）你都没有，请如实说明并引导用户到对应页面查看。\n"
+        + scope + "\n"
         "**溯源纪律**：引用快照数字时必须带上「来源 + 数据时间 + 口径」"
         "（每行末尾已给出，照抄即可）；行尾有 ⚠ 数据质量标记时，只陈述数值、不下确定性结论；"
-        "没有被快照覆盖的数字一律不许出现。\n"
+        "没有被快照覆盖、也没有工具支撑的数字一律不许出现。\n"
     )
     return header + "\n".join(lines) + "\n", quote_sources(used)
 
 
-async def build_market_block(hub_provider_get_quotes, codes: list[str]) -> str:
+async def build_market_block(
+    hub_provider_get_quotes, codes: list[str], tools_enabled: bool = False
+) -> str:
     """只要提示词块的便捷包装（路由用 build_market_context 拿溯源清单）。"""
-    block, _ = await build_market_context(hub_provider_get_quotes, codes)
+    block, _ = await build_market_context(hub_provider_get_quotes, codes, tools_enabled)
     return block

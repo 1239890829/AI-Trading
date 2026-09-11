@@ -13,7 +13,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.db import get_engine, get_session_factory
-from app.main import app
 from app.services.theme_catalog_service import (
     ThemeCatalogService,
     parse_catalog_items,
@@ -141,44 +140,43 @@ def test_stale_codes_prioritizes_empty(monkeypatch: pytest.MonkeyPatch):
 # ---------------------------------------------------------------- API
 
 
-def test_theme_catalog_api(monkeypatch: pytest.MonkeyPatch):
-    with TestClient(app) as client:
-        svc = _svc()
+def test_theme_catalog_api(client, monkeypatch: pytest.MonkeyPatch):
+    svc = _svc()
 
-        async def fake_catalog():
-            return [{"code": GRAIN, "name": "粮食概念"}, {"code": "886042.TI", "name": "存储芯片"}]
+    async def fake_catalog():
+        return [{"code": GRAIN, "name": "粮食概念"}, {"code": "886042.TI", "name": "存储芯片"}]
 
-        async def fake_members(code):
-            if code != GRAIN:
-                return []
-            return [{"symbol": "000019", "name": "深粮控股"}, {"symbol": "000505", "name": "京粮控股"}]
+    async def fake_members(code):
+        if code != GRAIN:
+            return []
+        return [{"symbol": "000019", "name": "深粮控股"}, {"symbol": "000505", "name": "京粮控股"}]
 
-        monkeypatch.setattr(svc, "fetch_catalog", fake_catalog)
-        monkeypatch.setattr(svc, "fetch_members", fake_members)
-        client.app.state.theme_catalog = svc  # 替换掉 lifespan 建的真服务，杜绝外网
+    monkeypatch.setattr(svc, "fetch_catalog", fake_catalog)
+    monkeypatch.setattr(svc, "fetch_members", fake_members)
+    client.app.state.theme_catalog = svc  # 替换掉 lifespan 建的真服务，杜绝外网
 
-        # 用 TestClient 自身的事件循环执行（portal.call），而不是 asyncio.run——
-        # sqlite 文件库是 SingletonThreadPool（同线程同一连接），asyncio.run 的
-        # 第二个循环与 lifespan 后台轮询任务共用连接，同步 commit 时会撞上
-        # 后台任务的未消费游标（"SQL statements in progress"，CI 慢机偶发）。
-        # portal.call 让两者在同一循环内串行让出，连接不再交叠。
-        client.portal.call(svc.sync_catalog)
-        client.portal.call(svc.sync_members, GRAIN)
+    # 用 TestClient 自身的事件循环执行（portal.call），而不是 asyncio.run——
+    # sqlite 文件库是 SingletonThreadPool（同线程同一连接），asyncio.run 的
+    # 第二个循环与 lifespan 后台轮询任务共用连接，同步 commit 时会撞上
+    # 后台任务的未消费游标（"SQL statements in progress"，CI 慢机偶发）。
+    # portal.call 让两者在同一循环内串行让出，连接不再交叠。
+    client.portal.call(svc.sync_catalog)
+    client.portal.call(svc.sync_members, GRAIN)
 
-        r = client.get("/api/themes/catalog", params={"search": "粮食"})
-        assert r.status_code == 200
-        assert [i["code"] for i in r.json()["data"]["items"]] == [GRAIN]
+    r = client.get("/api/themes/catalog", params={"search": "粮食"})
+    assert r.status_code == 200
+    assert [i["code"] for i in r.json()["data"]["items"]] == [GRAIN]
 
-        r = client.get(f"/api/themes/catalog/{GRAIN}/members")
-        assert r.status_code == 200
-        assert any(i["symbol"] == "000019" for i in r.json()["data"]["items"])
+    r = client.get(f"/api/themes/catalog/{GRAIN}/members")
+    assert r.status_code == 200
+    assert any(i["symbol"] == "000019" for i in r.json()["data"]["items"])
 
-        # refresh=1 强制重拉（仍走 mock）
-        r = client.get(f"/api/themes/catalog/{GRAIN}/members", params={"refresh": "1"})
-        assert r.status_code == 200
+    # refresh=1 强制重拉（仍走 mock）
+    r = client.get(f"/api/themes/catalog/{GRAIN}/members", params={"refresh": "1"})
+    assert r.status_code == 200
 
-        # 非法代码被拒
-        assert client.get("/api/themes/catalog/../secret/members").status_code in (400, 404)
+    # 非法代码被拒
+    assert client.get("/api/themes/catalog/../secret/members").status_code in (400, 404)
 
 
 # ---------------------------------------------------------------- T2-a：个股反查
@@ -233,39 +231,38 @@ def test_get_official_for_symbol_applies_overrides(monkeypatch: pytest.MonkeyPat
     assert svc.get_official_for_symbol("000019") == [], "活跃 exclude 必须生效"
 
 
-def test_stock_themes_api(monkeypatch: pytest.MonkeyPatch):
-    with TestClient(app) as client:
-        svc = _svc()
+def test_stock_themes_api(client, monkeypatch: pytest.MonkeyPatch):
+    svc = _svc()
 
-        async def fake_catalog():
-            return [{"code": GRAIN, "name": "粮食概念"}]
+    async def fake_catalog():
+        return [{"code": GRAIN, "name": "粮食概念"}]
 
-        async def fake_members(code):
-            if code != GRAIN:
-                return []
-            return [{"symbol": "000019", "name": "深粮控股"}, {"symbol": "000505", "name": "京粮控股"}]
+    async def fake_members(code):
+        if code != GRAIN:
+            return []
+        return [{"symbol": "000019", "name": "深粮控股"}, {"symbol": "000505", "name": "京粮控股"}]
 
-        monkeypatch.setattr(svc, "fetch_catalog", fake_catalog)
-        monkeypatch.setattr(svc, "fetch_members", fake_members)
-        client.app.state.theme_catalog = svc
+    monkeypatch.setattr(svc, "fetch_catalog", fake_catalog)
+    monkeypatch.setattr(svc, "fetch_members", fake_members)
+    client.app.state.theme_catalog = svc
 
-        client.portal.call(svc.sync_catalog)
-        client.portal.call(svc.sync_members, GRAIN)
+    client.portal.call(svc.sync_catalog)
+    client.portal.call(svc.sync_members, GRAIN)
 
-        # 用 000505：上一条测试写入的 000019 override 会泄漏到共享内存库
-        r = client.get("/api/themes/stock/000505")
-        assert r.status_code == 200
-        data = r.json()["data"]
-        # theme_chg_1d / theme_align_1d：增强字段（测试 key 无法拉官方板块K线/无快照 → None）
-        assert data["official"] == [
-            {"theme_code": GRAIN, "theme_name": "粮食概念", "source": "ths_official",
-             "theme_chg_1d": None, "theme_align_1d": None}
-        ]
-        # 测试环境 provider 链是 mock（无 ThsFuyaoProvider）→ 归因为空但不报错
-        assert data["attribution"] == []
+    # 用 000505：上一条测试写入的 000019 override 会泄漏到共享内存库
+    r = client.get("/api/themes/stock/000505")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    # theme_chg_1d / theme_align_1d：增强字段（测试 key 无法拉官方板块K线/无快照 → None）
+    assert data["official"] == [
+        {"theme_code": GRAIN, "theme_name": "粮食概念", "source": "ths_official",
+         "theme_chg_1d": None, "theme_align_1d": None}
+    ]
+    # 测试环境 provider 链是 mock（无 ThsFuyaoProvider）→ 归因为空但不报错
+    assert data["attribution"] == []
 
-        # 非法代码
-        assert client.get("/api/themes/stock/abc").status_code == 400
+    # 非法代码
+    assert client.get("/api/themes/stock/abc").status_code == 400
 
 
 # ---------------------------------------------------------------- T3/B3：官方 K 线交叉验证

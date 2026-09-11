@@ -1,6 +1,6 @@
 # REST API
 
-Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**92 个端点**（2026-09-01 与代码同步；端点数以 `/openapi.json` 为权威，本文档按域分节供检索）。
+Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**170 个操作 / 160 条路径**（2026-09-10 实测回填；端点数以 `/openapi.json` 为权威，本文档按域分节供检索——**数字会随改动漂移，勿以本行为准**）。
 
 统一响应：`{"data": ..., "meta": {...}}`（Envelope[T]，meta 含 `provider / is_realtime / is_stale / last_success_refresh / generated_at`）。
 数据源失败返回 **HTTP 502**（前端显示错误态，绝不降级伪造）；错误统一契约 `{detail, code}`。
@@ -22,6 +22,7 @@ Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**92 个端点**（2026-
 | GET | `/api/market/sentiment-history?days=10` | 情绪周期序列 + 周期起点定位（retro #17） |
 | GET | `/api/market/ladder-check` | B4 数据源自证：ths 天梯 seal_nextday 交叉验证自算晋级率（2进3/高位存活，逐日 match/drift，10min 缓存） |
 | GET | `/api/market/heatmap` | A 股云图（行业分组 treemap 载荷） |
+| GET | `/api/market/entry-checklist?symbol=&date=` | **介入条件清单（P1-13）**：市场层 → 题材层 → 个股层**必须同时满足**的信号 + 回避项 + 失效条件 + 时间窗口。复用 `/api/themes` 与 sentiment 的既有 60s 缓存（**零额外上游**）。非题材成员返回通用清单 + `found:false`（个股层未判定）；`missing[]` 显式列出未取到的输入（三态：缺失不当地/中性假设）。**全部为条件陈述，不构成买卖建议** |
 
 ## 行情与个股
 
@@ -33,6 +34,8 @@ Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**92 个端点**（2026-
 | GET | `/api/order-book/{symbol}` | 五档盘口（经交叉校验） |
 | GET | `/api/trades/{symbol}?limit=50` | 逐笔成交 |
 | GET | `/api/minute-line/{symbol}` | 当日分时（含均价/精确量比基线） |
+| GET | `/api/market/minute-signals/{symbol}` | **做 T 偏向信号（P1-24）**：分钟级五指标引擎产出「偏向 + 依据（逐指标 evidence）+ 失效条件」。**触发即记录**到决策库（幂等副作用：引擎前缀稳定 ⇒ 同 bar 重算同结果，按 `(symbol, trigger_ts)` 去重，重复请求 `recorded=0`）。`signals:[]` = 确无信号；`degraded[]` = 输入缺失导致的降级（缺昨日量/缺波动率…），**如实透传不补假数据**。**不构成买卖建议** |
+| GET | `/api/market/minute-decisions?symbol=&limit=` | **做 T 决策库（P1-24）**：决策记录 + 三分类结果（`correct` 方向最优价差≥8bp / `wrong` 反向不利价差达阈 / `invalid` 窗口内无有效价差 / `expired` 数据不足不判定 / `null` 待结算）+ **leave-one-out 错误归因**（剔除哪个指标会翻转结论）。读列表时**惰性结算**到期记录；盘后 15:35 另有批量结算保证无人看页面时样本也累积 |
 | GET | `/api/limit-up?date=` | 涨停池（按连板数排序） |
 | GET | `/api/limit-break?date=` | 炸板池 |
 | GET | `/api/themes?date=&min_boards=&sort=` | 题材梯队看板（连板天梯/成建制/健康度） |
@@ -104,7 +107,7 @@ Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**92 个端点**（2026-
 | GET | `/api/themes/catalog/strength?themes=` | 题材内资金合力（P1-5）：官方成分批量快照聚合（涨跌家数/等权涨幅/涨停数/成交额），60s 缓存 |
 | GET | `/api/themes/catalog/index?code=&days=30` | 官方板块指数日 K + 3/5/10 日涨跌幅（板块级交叉验证） |
 
-归属置信度分层与纠错机制见 docs/linkage-design.md §3.2-§3.4。
+归属置信度分层与纠错机制见 docs/summary/architecture-design.md §3.2-§3.4。
 
 ## 风控预检
 
@@ -180,7 +183,7 @@ Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**92 个端点**（2026-
 - `PATCH /api/real/positions/{symbol}` — 手动覆盖持仓数量/总成本（覆盖后以覆盖为准）
 - `DELETE /api/real/positions/{symbol}` — 整只删除（清空该标的流水与覆盖）
 
-## 每日精选（/api/picks/*，五维规则版多角色评分；≤5 只；收盘定次日+换股门槛 15 分）
+## 每日精选（/api/picks/*，六维规则版多角色评分；≤5 只；收盘定次日+换股门槛 15 分+每日换股上限 2 只）
 
 - `GET /api/picks/today` — 当日组合（含 meta：六维权重/炒作阶段 regime/空仓闸门 gate；items 含梯队地位/题材阶段/风险档位/止损参考位/失效条件/observation_only）
 - `POST /api/picks/generate` — 生成/刷新组合（写鉴权）：候选池 → 题材基准超额判梯队 → 六维评分（权重按炒作阶段切换）→ 换股门槛 → 空仓闸门处理
@@ -188,3 +191,36 @@ Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**92 个端点**（2026-
 - `POST /api/picks/review/generate` — 生成复盘：逐只超额 vs 上证 + 九类归因（含买点质量/情绪误判/踏空）
 - `GET /api/picks/review?date=` — 复盘日志
 - `GET /api/picks/meta` — 走坏原因分布（周末调权建议输入）
+
+## 交易智能体（/api/agent/*，AI 控制台；L0-L3 分级执行 · 全程留痕可回滚）
+
+> 2026-09-10 补录：本域此前完全不在本索引里（属"文档缺域"）。该域 26 个操作**已全数列出**（实测自 `/openapi.json`）。
+
+**任务中心（执行层）**
+
+- `GET /api/agent/task-types` — **可创建**任务类型（= 有 handler 的类型：生成复盘报告 / 数据体检）。登记类条目（mutation 变更留痕 / escalation 告警升级待办）**不在此列**——它们没有执行体，出现只会建出必然失败的任务（见 KB-ENG-41）
+- `POST /api/agent/tasks` 🔒 — 创建并启动任务（同类型互斥；未知/登记类类型返回 422）
+- `GET /api/agent/tasks` — 任务列表（`?type=&limit=`；含**只读留痕合一**：议程自动执行以 `read_only` 条目并入同一时间线）
+- `GET /api/agent/tasks/{id}` — 任务详情（步骤轨迹 + `params` 全量：登记类条目的正文就在 params 里）
+- `POST /api/agent/tasks/{id}/cancel` 🔒 — 取消（只读留痕条目不可取消）
+- `POST /api/agent/tasks/{id}/resolve` 🔒 — **处置待办（P1-36）**：`{outcome: done\|dismissed, note?}` → succeeded / canceled；仅 `needs_confirm` 可改，终态幂等
+- `GET /api/agent/audit` — 执行层审计（`?target=&task_id=`）
+- `GET /api/agent/agenda` / `GET /api/agent/agendas` — 当日议程 / 历史议程
+- `POST /api/agent/agenda/run` 🔒 — 手动跑一次进化议程（降级兜底；常规由 15:45 定时自动执行）
+
+**提醒与告警判读（降噪层）**
+
+- `GET /api/agent/triage` — 判读历史（`?verdict=notify\|ignore\|escalate`；`model` 区分 llm / rules / **llm_fallback**）
+- `GET /api/agent/triage/pending` — 悬浮球待提醒（仅 `notify` 且未确认，**6 小时时效**，缺 symbol/name 的整条过滤）
+- `POST /api/agent/triage/{id}/ack` 🔒 — 气泡确认
+- `POST /api/agent/triage/run` 🔒 — 手动触发一轮判读（常规由后台 worker 每 30s 自动跑）
+- 纪律：判读**不发飞书**；`escalate` 由 `_save` 登记为任务中心待办（`needs_confirm`），人工处置（KB-DEC-020）
+
+**参数配置 / 实验 / 元评估 / 知识库**
+
+- `GET /api/agent/params` · `POST /api/agent/params/change` 🔒 — 参数运行态 / 提交变更单（白名单 + fail-fast）
+- `GET /api/agent/params/changes` · `POST /api/agent/params/changes/{id}/apply` 🔒 · `POST .../rollback` 🔒 — 变更单历史 / 生效 / 回滚
+- `GET /api/agent/params/survival` · `GET /api/agent/params/rollback-reasons` — 存活率三数分工 / 回滚归因
+- `GET /api/agent/experiments` — 实验记录本（A 类变更 30 日后置验证，劣化自动回滚）
+- `GET /api/agent/meta-review` · `POST /api/agent/meta-review/run` 🔒 — 元评估周报
+- `GET /api/agent/kb/tree` · `GET /api/agent/kb/file?path=` — 知识库浏览（docs/kb）

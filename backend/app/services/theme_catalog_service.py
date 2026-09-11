@@ -492,12 +492,20 @@ class ThemeCatalogService:
             return int(db.execute(select(func.count(Theme.id))).scalar_one() or 0)
 
     def member_symbols_bulk(self, codes: list[str]) -> dict[str, list[str]]:
-        """批量查题材成分股列表（key=theme_code）。联动度计算用。"""
+        """批量查题材成分股列表（key=theme_code）。联动度计算 / 题材合力用。
+
+        2026-09-11（P0-2）显式 `order_by(theme_code, symbol)`：调用方会做 `[:N]` 截断
+        （题材合力取前 200 只），不排序时取到的是 DB 扫描顺序（≈rowid 插入序），
+        与单条 `get_members`（按 symbol 排序）不一致，且结果随插入顺序漂移。
+        排序后与 `get_members` 同序，批量替换单查才是**行为等价**的。
+        """
         if not codes:
             return {}
         with self._sf() as db:
             rows = db.execute(
-                select(ThemeMember.theme_code, ThemeMember.symbol).where(ThemeMember.theme_code.in_(codes))
+                select(ThemeMember.theme_code, ThemeMember.symbol)
+                .where(ThemeMember.theme_code.in_(codes))
+                .order_by(ThemeMember.theme_code, ThemeMember.symbol)
             ).all()
         out: dict[str, list[str]] = {}
         for code, sym in rows:

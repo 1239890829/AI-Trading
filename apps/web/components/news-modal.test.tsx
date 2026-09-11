@@ -13,7 +13,9 @@ vi.mock("@/lib/api", async () => {
 
 const mockedContent = vi.mocked((await import("@/lib/api")).getNewsContent);
 
-const item = { title: "乳业概念涨2.47%", url: "https://finance.eastmoney.com/a/202609043865461886.html" };
+// 2026-09-09：真实调用方都会传 date（EventStore.published_at 统一格式），
+// 详情时间与列表同源（此前优先 content.published 源站时间导致两边对不上）。
+const item = { title: "乳业概念涨2.47%", url: "https://finance.eastmoney.com/a/202609043865461886.html", date: "2026-09-04 16:46:00" };
 
 function contentFixture(overrides: Partial<ArticleContent> = {}): ArticleContent {
   return {
@@ -80,7 +82,7 @@ describe("NewsModal 正文块渲染（2026-09-04 排版升级）", () => {
       contentFixture({ blocks: [{ type: "img", src: "https://img.eastmoney.com/news/a.jpg" }] }),
     );
     render(<NewsModal item={item} onClose={() => {}} />);
-    await screen.findByText("2026年09月04日 16:46"); // 正文已加载
+    await screen.findByText("09-04 16:46"); // 时间与列表同字段同格式（eventTimeText）
     // alt="" 的 img 是 presentational（无 img role），用 DOM 查询
     const img = (await waitFor(() => {
       const el = document.body.querySelector("figure img");

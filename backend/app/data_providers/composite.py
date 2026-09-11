@@ -5,6 +5,9 @@
 - 秒级方法（REALTIME_METHODS）走"主源宽限 + 备源对冲"：主源超时未应答时
   备源并行起跑，故障周期不吃一整次主源超时（P1-A，realtime-broker §3.2 方案 B）。
 - 全链失败抛 ProviderError → QuoteHub 标记 stale，绝不伪造实时数据。
+- **请求级总预算（S2-3）**：failover 必须在 `REQUEST_BUDGET_SECONDS` 内收口。此前各源
+  各自带 HTTP 超时（腾讯/东财/新浪 5s、ths 8s）却**无总预算**，全挂时单个请求悬停
+  20~30s（= 各源超时之和），而 FastAPI 侧没有请求超时，前端只能干等、连接与事件循环被占住。
 """
 from __future__ import annotations
 
@@ -26,6 +29,18 @@ COOLDOWN_SECONDS = 60.0
 #: 秒级方法主源宽限（秒）：正常应答 ~60ms 远小于此，主源超过宽限仍未归即
 #: 并行打备源（先归者得，主源被放弃记一次失败——连续挂起 3 次同样进熔断）。
 HEDGE_DELAY = 0.20
+
+#: 请求级总预算（秒）：某方法一次调用**跨所有源加总**的时长上限（S2-3）。
+#: 取值需容纳"最慢的正常源"（ths 单次 HTTP 超时 8s）再留一次换源的余量。
+REQUEST_BUDGET_SECONDS = 12.0
+#: 秒级方法的预算（秒）：Hub 以 1Hz 轮询这些方法，一次卡顿要吃掉好几个 tick，
+#: 等不起总预算——正常情况下腾讯 ~60ms 应答，4s 已是极宽裕的上界。
+REALTIME_BUDGET_SECONDS = 4.0
+
+
+class BudgetExhausted(TimeoutError):
+    """单源调用被**请求级预算**掐断（与"源自己超时"区分开，便于归因与记账）。"""
+
 
 #: 秒级实时方法：Hub 以 1Hz 轮询这些方法，走 realtime_rank 排序——
 #: 免费高频源（腾讯）优先，付费/慢源（ths 配额+8s 超时）不挡在秒级链路上。
@@ -127,6 +142,11 @@ class CompositeProvider:
             "breakers": breakers,
             "last_good": dict(self._last_good),
             "switch_log": list(self.switch_log[-20:]),
+            # 预算值可观测（S2-3）：否则"为什么这个请求 4s 就失败了"只能靠读代码
+            "budget_seconds": {
+                "realtime": REALTIME_BUDGET_SECONDS,
+                "default": REQUEST_BUDGET_SECONDS,
+            },
         }
 
     @property
@@ -136,6 +156,14 @@ class CompositeProvider:
     async def aclose(self) -> None:
         for p in self.providers:
             await p.aclose()
+
+    def budget_for(self, method: str) -> float:
+        """该方法一次调用的**总**预算（秒）。秒级方法更紧（Hub 1Hz 轮询等不起）。"""
+        return (
+            REALTIME_BUDGET_SECONDS
+            if method in REALTIME_METHODS
+            else REQUEST_BUDGET_SECONDS
+        )
 
     def _pick(self, method: str):
         picked = [p for p in self.providers if hasattr(p, method)]
@@ -157,19 +185,40 @@ class CompositeProvider:
             live.append(p)
         if not live:
             raise ProviderError(f"all providers failed for {method}: " + "; ".join(errors))
+        # S2-3：本次调用的硬上界——**跨源共享**（不是每源一份配额），
+        # 否则 N 个源各花满 N 份预算，串行总时长照样是各源超时之和。
+        deadline = time.monotonic() + self.budget_for(method)
         if method in REALTIME_METHODS and len(live) >= 2:
-            return await self._call_hedged(method, args, live, errors)
-        return await self._call_serial(method, args, live, errors)
+            return await self._call_hedged(method, args, live, errors, deadline)
+        return await self._call_serial(method, args, live, errors, deadline)
 
     @staticmethod
     def _is_empty(result) -> bool:
         # 空结果同样计入失败：K 线/池子返回空往往是源已异常的前兆
         return result is None or (isinstance(result, (list, tuple)) and len(result) == 0)
 
-    async def _attempt(self, method: str, p, args) -> tuple[object, object, Exception | None]:
-        """单源单次调用，绝不抛（异常作为第三元组项返回，便于并发收割）。"""
+    async def _attempt(
+        self, method: str, p, args, deadline: float | None = None
+    ) -> tuple[object, object, Exception | None]:
+        """单源单次调用，绝不抛（异常作为第三元组项返回，便于并发收割）。
+
+        `deadline`（S2-3）为本次调用的绝对时刻上界：源自己没超时也要被掐，
+        并记 `BudgetExhausted`——它比普通异常多一层信息（"不是源的问题，是整体等不起"），
+        且同样进熔断计数：被掐掉的源按**失败**记账，不会无限挂账。
+        """
+        if deadline is not None:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return p, None, BudgetExhausted("请求预算已耗尽（未发起）")
+        else:
+            left = None
         try:
-            return p, await getattr(p, method)(*args), None
+            call = getattr(p, method)(*args)
+            if left is None:
+                return p, await call, None
+            return p, await asyncio.wait_for(call, timeout=left), None
+        except (asyncio.TimeoutError, TimeoutError):
+            return p, None, BudgetExhausted(f"请求预算耗尽（剩余 {left:.2f}s 未应答）")
         except Exception as exc:
             log.warning("provider %s %s failed: %s", p.name, method, exc)
             return p, None, exc
@@ -187,25 +236,44 @@ class CompositeProvider:
                 log.info("provider switched: %s", msg)
             self._last_good[method] = name
 
-    async def _call_serial(self, method: str, args: tuple, live: list, errors: list[str]):
+    async def _call_serial(
+        self, method: str, args: tuple, live: list, errors: list[str], deadline: float | None
+    ):
+        """按序试源，全程受同一个 `deadline` 约束。
+
+        `deadline` **刻意不给默认值**（S2-3）：本次实现时正是"参数加了默认值、
+        却漏改一处调用点"⇒ 那条路径整条绕过预算（实时对冲回落的串行段静默跑满
+        30s，测试才抓到）。必填参数让漏传在开发期就报 TypeError，而不是静默失效。
+        """
         for p in live:
-            _, result, exc = await self._attempt(method, p, args)
+            if deadline is not None and time.monotonic() >= deadline:
+                # 预算已光：剩下的源连问都不问，也**不记它们失败**——
+                # 没发起过请求不是它们的责任，记了会误伤熔断统计。
+                errors.append(f"{p.name}: 请求预算已耗尽，未发起")
+                break
+            _, result, exc = await self._attempt(method, p, args, deadline)
             if exc is None and not self._is_empty(result):
                 self._settle_last_good(method, p.name)
                 return result
             self._note_failure(method, p.name, exc, errors)
+            if isinstance(exc, BudgetExhausted):
+                # 本源被预算掐断 ⇒ 剩余额度已归零，继续循环只会得到一串"未发起"
+                break
         raise ProviderError(f"all providers failed for {method}: " + "; ".join(errors))
 
-    async def _call_hedged(self, method: str, args: tuple, live: list, errors: list[str]):
+    async def _call_hedged(
+        self, method: str, args: tuple, live: list, errors: list[str], deadline: float | None
+    ):
         """秒级方法对冲（P1-A）：主源宽限 HEDGE_DELAY，超时并行打备源，先归者得。
 
         - 主源宽限期内应答：成功用之（正常路径，备源零流量、行为与串行一致）；
           快速失败/空 → 记账后串行走剩余源（主源活着只是这把没给数据，无须并发）。
         - 主源超宽限：备源起跑，两路先归且可用者得；备源抢先时放弃主源
           （cancel + 记一次失败，连续挂起 3 次同样进熔断，不会无限挂账）。
+        - 两路都受同一 `deadline` 约束（S2-3）：并发只缩短等待，不取消上界。
         """
         primary, backup = live[0], live[1]
-        p_task = asyncio.create_task(self._attempt(method, primary, args))
+        p_task = asyncio.create_task(self._attempt(method, primary, args, deadline))
         done, _ = await asyncio.wait({p_task}, timeout=HEDGE_DELAY)
         if done:
             _, result, exc = p_task.result()
@@ -213,9 +281,9 @@ class CompositeProvider:
                 self._settle_last_good(method, primary.name)
                 return result
             self._note_failure(method, primary.name, exc, errors)
-            return await self._call_serial(method, args, live[1:], errors)
+            return await self._call_serial(method, args, live[1:], errors, deadline)
 
-        b_task = asyncio.create_task(self._attempt(method, backup, args))
+        b_task = asyncio.create_task(self._attempt(method, backup, args, deadline))
         tasks = {p_task: primary, b_task: backup}
         while tasks:
             done, _ = await asyncio.wait(set(tasks), return_when=asyncio.FIRST_COMPLETED)
@@ -249,8 +317,8 @@ class CompositeProvider:
                     TimeoutError(f"超 {HEDGE_DELAY:.2f}s 未应答（备源未接住）"), errors,
                 )
                 break
-        # 两路都不可用：继续串行剩余源
-        return await self._call_serial(method, args, live[2:], errors)
+        # 两路都不可用：继续串行剩余源（共享同一 deadline）
+        return await self._call_serial(method, args, live[2:], errors, deadline)
 
     async def get_indices(self) -> list:
         return await self._call("get_indices")

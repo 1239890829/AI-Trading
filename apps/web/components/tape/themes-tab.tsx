@@ -224,7 +224,7 @@ export function ThemesTab() {
     <div className="flex h-full min-h-0 flex-col">
       {/* ── 固定头部：摘要 + 筛选 ────────────────────────────── */}
       <div className="mb-3 flex shrink-0 flex-wrap items-end justify-between gap-3">
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+        <p className="text-xs text-zinc-600 dark:text-zinc-400">
           {data ? `${data.trade_date}` : "…"}
           {data?.prev_trade_date && ` · 对照 ${data.prev_trade_date}`}
           {data &&
@@ -235,7 +235,7 @@ export function ThemesTab() {
 
         <div className="flex flex-wrap items-center gap-3 text-xs">
           <label className="flex items-center gap-1.5">
-            <span className="text-zinc-400">日期</span>
+            <span className="text-zinc-600 dark:text-zinc-400">日期</span>
             <input
               type="date"
               value={date}
@@ -245,7 +245,7 @@ export function ThemesTab() {
           </label>
 
           <div className="flex items-center gap-1">
-            <span className="text-zinc-400">排序</span>
+            <span className="text-zinc-600 dark:text-zinc-400">排序</span>
             {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
               <button
                 key={k}
@@ -253,7 +253,7 @@ export function ThemesTab() {
                 className={`rounded-md px-2 py-1 transition-colors ${
                   sort === k
                     ? "bg-zinc-900 font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
-                    : "border border-zinc-200 text-zinc-500 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-100"
+                    : "border border-zinc-200 text-zinc-600 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-100"
                 }`}
               >
                 {SORT_LABELS[k]}
@@ -262,7 +262,7 @@ export function ThemesTab() {
           </div>
 
           <div className="flex items-center gap-1">
-            <span className="text-zinc-400">连板</span>
+            <span className="text-zinc-600 dark:text-zinc-400">连板</span>
             {BOARD_FILTERS.map((v) => (
               <button
                 key={v}
@@ -270,7 +270,7 @@ export function ThemesTab() {
                 className={`rounded-md px-2 py-1 transition-colors ${
                   minBoards === v
                     ? "bg-zinc-900 font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
-                    : "border border-zinc-200 text-zinc-500 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-100"
+                    : "border border-zinc-200 text-zinc-600 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-100"
                 }`}
               >
                 {v === 0 ? "不限" : `${v}板+`}
@@ -279,7 +279,7 @@ export function ThemesTab() {
           </div>
 
           <div className="flex items-center gap-1">
-            <span className="text-zinc-400">家数</span>
+            <span className="text-zinc-600 dark:text-zinc-400">家数</span>
             {COUNT_FILTERS.map((f) => (
               <button
                 key={f.v}
@@ -287,7 +287,7 @@ export function ThemesTab() {
                 className={`rounded-md px-2 py-1 transition-colors ${
                   minCount === f.v
                     ? "bg-zinc-900 font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
-                    : "border border-zinc-200 text-zinc-500 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-100"
+                    : "border border-zinc-200 text-zinc-600 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-100"
                 }`}
               >
                 {f.label}
@@ -297,7 +297,7 @@ export function ThemesTab() {
         </div>
       </div>
 
-      <p className="mb-3 shrink-0 text-[11px] text-zinc-400" title="分级规则由后端 strength_tier 规则化判定，鼠标悬停卡片分级徽标可看判定依据">
+      <p className="mb-3 shrink-0 text-[11px] text-zinc-600 dark:text-zinc-400" title="分级规则由后端 strength_tier 规则化判定，鼠标悬停卡片分级徽标可看判定依据">
         分级：{TIER_LEGEND}
       </p>
 
@@ -308,7 +308,7 @@ export function ThemesTab() {
           className="mb-3 flex shrink-0 items-center gap-x-3 gap-y-1 overflow-x-auto rounded-lg border border-zinc-200 px-3 py-1.5 dark:border-zinc-800"
           title="同花顺短线风向标竞价基准：该交易日 09:25 集合竞价终态的标杆个股；题材为官方 tags"
         >
-          <span className="shrink-0 text-[11px] text-zinc-400">竞价标杆</span>
+          <span className="shrink-0 text-[11px] text-zinc-600 dark:text-zinc-400">竞价标杆</span>
           {benchmarkSorted.map((b) => (
             <Link
               key={b.symbol}
@@ -323,7 +323,7 @@ export function ThemesTab() {
             </Link>
           ))}
           <div className="flex-1" />
-          <span className="shrink-0 font-mono text-[10px] text-zinc-400 dark:text-zinc-600">
+          <span className="shrink-0 font-mono text-[10px] text-zinc-600 dark:text-zinc-400">
             同花顺 · 竞价 {date || "当日"}
           </span>
         </div>
@@ -335,7 +335,7 @@ export function ThemesTab() {
           className="mb-3 flex shrink-0 items-center gap-x-3 gap-y-1 overflow-x-auto rounded-lg border border-zinc-200 px-3 py-1.5 dark:border-zinc-800"
           title="同花顺热股榜（24 小时口径，人气为估算数据）；题材归属为官方成分反查"
         >
-          <span className="shrink-0 text-[11px] text-zinc-400">人气榜</span>
+          <span className="shrink-0 text-[11px] text-zinc-600 dark:text-zinc-400">人气榜</span>
           {hot.stocks.slice(0, 10).map((s) => (
             <Link
               key={s.symbol}
@@ -343,14 +343,14 @@ export function ThemesTab() {
               className="flex shrink-0 items-center gap-1 text-xs hover:text-rose-600 dark:hover:text-rose-400"
               title={s.themes.length ? `官方题材：${s.themes.join("、")}` : "无官方题材归属"}
             >
-              <span className="font-mono text-zinc-400">#{s.rank}</span>
+              <span className="font-mono text-zinc-600 dark:text-zinc-400">#{s.rank}</span>
               <span className="text-zinc-700 dark:text-zinc-200">{s.name ?? s.symbol}</span>
-              <span className="font-mono tabular-nums text-zinc-400">{fmtHeat(s.heat)}</span>
+              <span className="font-mono tabular-nums text-zinc-600 dark:text-zinc-400">{fmtHeat(s.heat)}</span>
               <RankDelta v={s.rank_change} />
             </Link>
           ))}
           <div className="flex-1" />
-          <span className="shrink-0 font-mono text-[10px] text-zinc-400 dark:text-zinc-600">
+          <span className="shrink-0 font-mono text-[10px] text-zinc-600 dark:text-zinc-400">
             同花顺 {timeText(hot.ts)}
           </span>
         </div>
@@ -362,27 +362,27 @@ export function ThemesTab() {
           className="mb-3 flex shrink-0 items-center gap-x-3 gap-y-1 overflow-x-auto rounded-lg border border-zinc-200 px-3 py-1.5 dark:border-zinc-800"
           title="同花顺飙升榜（排名变化驱动，与人气榜排名逻辑不同；人气为估算数据、榜单有延迟）"
         >
-          <span className="shrink-0 text-[11px] text-zinc-400">飙升榜</span>
+          <span className="shrink-0 text-[11px] text-zinc-600 dark:text-zinc-400">飙升榜</span>
           {sky.slice(0, 10).map((s) => (
             <Link
               key={s.symbol}
               href={workbenchUrlWithBack(s.symbol)}
               className="flex shrink-0 items-center gap-1 text-xs hover:text-rose-600 dark:hover:text-rose-400"
             >
-              <span className="font-mono text-zinc-400">#{s.rank}</span>
+              <span className="font-mono text-zinc-600 dark:text-zinc-400">#{s.rank}</span>
               <span className="text-zinc-700 dark:text-zinc-200">{s.name ?? s.symbol}</span>
               <RankDelta v={s.rank_change} />
             </Link>
           ))}
           <div className="flex-1" />
-          <span className="shrink-0 font-mono text-[10px] text-zinc-400 dark:text-zinc-600">
+          <span className="shrink-0 font-mono text-[10px] text-zinc-600 dark:text-zinc-400">
             同花顺
           </span>
         </div>
       )}
 
       {error && (
-        <div className="mb-3 shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+        <div className="mb-3 shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
           题材看板加载失败：{error}
         </div>
       )}
@@ -416,13 +416,13 @@ export function ThemesTab() {
       )}
 
       {data && data.themes.length === 0 && (
-        <p className="py-16 text-center text-sm text-zinc-400">
+        <p className="py-16 text-center text-sm text-zinc-600 dark:text-zinc-400">
           当前筛选条件下没有题材（连板 ≥{minBoards} 板 / 涨停 ≥{minCount} 家）
         </p>
       )}
 
       {data && data.themes.length > 0 && visibleThemes.length === 0 && (
-        <p className="py-16 text-center text-sm text-zinc-400">
+        <p className="py-16 text-center text-sm text-zinc-600 dark:text-zinc-400">
           题材「{focus}」今日没有梯队卡片——可能今日无涨停、未成建制，或归属名称与看板口径不一致（可在涨停生态 tab 核对该股涨停原因原文）
         </p>
       )}
@@ -448,7 +448,7 @@ export function ThemesTab() {
             <header className="border-b border-zinc-200 bg-zinc-50 px-4 py-2.5 dark:border-zinc-800 dark:bg-zinc-900/40">
               <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
                 断板股
-                <span className="ml-2 text-xs font-normal text-zinc-400">
+                <span className="ml-2 text-xs font-normal text-zinc-600 dark:text-zinc-400">
                   昨日连板、今日未封板 —— 梯队断层与情绪退潮的先行信号（{broken.length} 只）
                 </span>
               </h2>
@@ -456,7 +456,7 @@ export function ThemesTab() {
             <div className="overflow-x-auto px-4 py-3">
               <table className="w-full min-w-[560px] text-sm">
                 <thead>
-                  <tr className="border-b border-zinc-200 text-left text-[11px] text-zinc-400 dark:border-zinc-800">
+                  <tr className="border-b border-zinc-200 text-left text-[11px] text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
                     <th className="py-1.5 font-medium">名称</th>
                     <th className="py-1.5 font-medium">昨日连板</th>
                     <th className="py-1.5 font-medium">所属题材</th>
@@ -467,10 +467,10 @@ export function ThemesTab() {
                     <tr key={b.symbol} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
                       <td className="py-1.5">
                         <span className="text-zinc-700 dark:text-zinc-200">{b.name ?? b.symbol}</span>
-                        <span className="ml-1.5 font-mono text-[11px] text-zinc-400">{b.symbol}</span>
+                        <span className="ml-1.5 font-mono text-[11px] text-zinc-600 dark:text-zinc-400">{b.symbol}</span>
                       </td>
-                      <td className="py-1.5 font-mono text-rose-600 dark:text-rose-400">{b.prev_boards} 板</td>
-                      <td className="py-1.5 text-xs text-zinc-500 dark:text-zinc-400">{b.themes.join("、")}</td>
+                      <td className="py-1.5 font-mono text-rose-700 dark:text-rose-400">{b.prev_boards} 板</td>
+                      <td className="py-1.5 text-xs text-zinc-600 dark:text-zinc-400">{b.themes.join("、")}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -481,7 +481,7 @@ export function ThemesTab() {
 
         {/* ── 口径说明 ───────────────────────────────────────── */}
         {data?.caveats && data.caveats.length > 0 && (
-          <div className="mb-4 mt-4 rounded-lg border border-zinc-200 px-4 py-2.5 text-xs text-zinc-400 dark:border-zinc-800">
+          <div className="mb-4 mt-4 rounded-lg border border-zinc-200 px-4 py-2.5 text-xs text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
             <button onClick={() => setShowCaveats((v) => !v)} className="flex items-center gap-1.5 hover:text-zinc-600 dark:hover:text-zinc-200">
               <span>{showCaveats ? "▾" : "▸"}</span>
               <span>口径与已知边界（{data.caveats.length} 条）</span>
@@ -490,7 +490,7 @@ export function ThemesTab() {
               <ul className="mt-2 space-y-1">
                 {data.caveats.map((c) => (
                   <li key={c} className="flex gap-1.5">
-                    <span className="text-zinc-300 dark:text-zinc-600">·</span>
+                    <span className="text-zinc-600 dark:text-zinc-400">·</span>
                     <span>{c}</span>
                   </li>
                 ))}
@@ -499,7 +499,7 @@ export function ThemesTab() {
           </div>
         )}
 
-        <p className="pb-2 text-[11px] leading-4 text-zinc-400">
+        <p className="pb-2 text-[11px] leading-4 text-zinc-600 dark:text-zinc-400">
           本页为技术面结构分析，不构成投资建议。题材阶段与健康度为规则化推断，需结合盘中实际走势与个股基本面独立判断。
           梯队归属按当日涨停联动唯一判定（连板密度优先），一只票只出现在一张卡片。
         </p>

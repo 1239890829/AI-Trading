@@ -18,15 +18,18 @@ os.environ["ASHARE_DATABASE_URL"] = "sqlite:///:memory:"
 # 栈转储实证卡点：test_alerts.py::test_alert_channels 的 wait_shutdown。
 # 测试不应跑生产调度——要测调度器行为就直接调 loop 函数（各测试已如此）。
 #
-# 新增调度开关时必须同步在这里补一行（marketdb-sync 是第七个）。
-os.environ["ASHARE_REVIEW_SCHEDULER_ENABLED"] = "false"
-os.environ["ASHARE_PREMARKET_BRIEF_ENABLED"] = "false"
-os.environ["ASHARE_PICKS_WATCHER_ENABLED"] = "false"
-os.environ["ASHARE_PICKS_REVIEW_ENABLED"] = "false"
-os.environ["ASHARE_THS_SENTINEL_ENABLED"] = "false"
-os.environ["ASHARE_SENTIMENT_HISTORY_BACKFILL_ENABLED"] = "false"
-os.environ["ASHARE_MARKETDB_SYNC_ENABLED"] = "false"
-os.environ["ASHARE_PICKS_SHADOW_ENABLED"] = "false"
+# **这张表由注册表派生**（S2-2）：唯一真相源是 app/core/scheduler.SCHEDULER_SWITCH_ENV_VARS，
+# main.py 的 add(switch=...) 传了未登记的名字会直接 fail-fast（启动期 ValueError）。
+# 此前是手写清单 + 注释提醒"新增开关时同步补一行"——2026-09-10 的 event_collector 就是
+# 漏补一行的后果：长生命周期 TestClient 下它真的跑起来打网络、重复写 event_direction，
+# 撞 UNIQUE 约束后让 test_events / test_theme_catalog 无辜失败。
+#
+# ⚠️ 这里引入的模块**只依赖标准库**（不得在模块级 import app.core.config）：本文件顶部
+# 必须早于 settings 定型，否则下面 ASHARE_REVIEW_MODEL=rules 等设置会被 .env 抢先固化。
+from app.core.scheduler import SCHEDULER_SWITCH_ENV_VARS  # noqa: E402
+
+for _switch_env in SCHEDULER_SWITCH_ENV_VARS:
+    os.environ[_switch_env] = "false"
 
 # LLM 路由钉回 rules：本机 .env 配了 provider=claude_cli / *_MODEL=llm 时，
 # 走 settings 的测试（如 test_news_digest_api）会真的调起 claude 子进程打
@@ -54,3 +57,36 @@ import app.review.storage as _review_storage  # noqa: E402
 
 _review_storage.REPORT_DIR = _TMP_REPORT_DIR
 _TMP_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ---------------------------------------------------------------- 共享 TestClient
+import pytest  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def client():
+    """模块级 TestClient：**一个测试模块只进一次 lifespan**（P1-25，2026-09-10）。
+
+    为什么必须共享：`with TestClient(app)` 每进一次就重建 lifespan（建库 + 起
+    QuoteHub / snapshot 服务 / 首次全市场刷新），本机实测单次 **35–46s**；
+    `tests/test_api.py` 12 个用例各开一次 = **7 分 24 秒**（实测）。共享后
+    该文件降到 **38 秒**。
+
+    ⚠️ **必须是 module 而不是 session**：lifespan 一旦跨模块存活，`app` 就会与
+    后续模块自己新建的 TestClient **并存两个 lifespan**（同一个 app 对象）——
+    任何没被开关关掉的常驻调度都会在此期间真的跑起来。2026-09-10 实测：session
+    作用域下 `event_collector` 反复写入撞 UNIQUE(event_id,target_type,target)，
+    拖垮 3 个完全无关的用例（test_events / test_theme_catalog ×2）。
+    若将来要把作用域升到 session，**前提是 conftest 顶部已关掉全部常驻调度**。
+
+    ⚠️ 使用时：同一模块内用例**共享进程状态**（内存库 / 自选表 / 模拟盘 / 快照），
+    改状态的用例必须自己还原现场（范例：test_api 的 watchlist 删回、paper reset）；
+    依赖「全新启动状态」的用例请自建 TestClient。
+    """
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as c:
+        yield c
+

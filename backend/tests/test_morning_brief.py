@@ -173,6 +173,19 @@ def test_assemble_brief_events_only_and_missing():
         assert d["pool"] == [] or all(p["role"] == "事件标的" for p in d["pool"])
 
 
+def test_assemble_brief_macro_fields_passthrough():
+    """P1-8：宏观日历字段按三态透传（None=源不可得 / [] =当日无高信号事件）。"""
+    ev = _evidence()
+    ev["macro_note"] = "宏观日历：今晚 20:30 美国9月非农公布。"
+    ev["macro_events"] = [{"line": "09:30 中国·CPI（公布 0.8）　中国8月CPI年率(%)"}]
+    payload = mb.assemble_brief(ev)
+    assert payload["macro_note"].startswith("宏观日历")
+    assert payload["macro_events"][0]["line"].startswith("09:30")
+    # 缺字段时给 None（不是 [] —— 空列表是「确无事件」的真信息，两者不可混）
+    bare = mb.assemble_brief(_evidence())
+    assert bare["macro_note"] is None and bare["macro_events"] is None
+
+
 # ---------------------------------------------------------------- 落盘与去重
 
 
@@ -313,3 +326,40 @@ def test_scheduler_corrupt_brief_falls_through_to_generate(brief_dir, monkeypatc
     )
     assert built is True
     assert new_last == "20260902"
+
+
+def test_assemble_brief_climate_passthrough():
+    """P1-32：气候相位按三态透传（None=源不可得 → 前端整块不渲染）。"""
+    ev = _evidence()
+    ev["climate"] = {"state": "neutral", "alert": "el_nino", "consecutive": 3}
+    payload = mb.assemble_brief(ev)
+    assert payload["climate"]["alert"] == "el_nino"
+    bare = mb.assemble_brief(_evidence())
+    assert bare["climate"] is None
+
+
+def test_climate_failure_is_swallowed_and_not_added_to_missing(monkeypatch):
+    """气候是月更慢变量：取不到就整块不渲染，**不得**让简报顶部天天挂 ⚠。"""
+    import asyncio
+
+    from app.market import climate as cl
+
+    async def boom(asof=None):
+        raise RuntimeError("noaa down")
+
+    monkeypatch.setattr(cl, "collect", boom)
+    assert asyncio.run(mb.collect_climate_safe(date(2026, 9, 11))) is None
+
+
+def test_climate_safe_helper_passes_through_payload(monkeypatch):
+    import asyncio
+
+    from app.market import climate as cl
+
+    async def ok(asof=None):
+        return {"state": "neutral", "alert": "el_nino", "consecutive": 3, "asof": str(asof)}
+
+    monkeypatch.setattr(cl, "collect", ok)
+    out = asyncio.run(mb.collect_climate_safe(date(2026, 9, 11)))
+    assert out["alert"] == "el_nino"
+    assert out["asof"] == "2026-09-11"

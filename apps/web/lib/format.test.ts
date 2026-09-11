@@ -1,6 +1,52 @@
 /** 格式化工具测试：空值/边界/单位换算/红涨绿跌语义。 */
 import { describe, expect, it } from "vitest";
-import { fmt, fmtAmount, fmtHeat, fmtVolume, isHardQuality, parseNum, pctColor, pctText, qualityLabel, sourceLabel, timeText } from "./format";
+import { fmt, fmtAmount, fmtHeat, fmtVolume, isHardQuality, parseNum, pctColor, pctText, qualityLabel, sourceLabel, timeText, bjDate, bjHHMM, bjMonthDay } from "./format";
+
+/**
+ * 北京时间格式化（2026-09-11 收口）。
+ *
+ * 这组用例的价值不在"能格式化"，而在**钉住时区与空值语义**——两者都是静默出错：
+ * 时区错了会整体错一天（CI 容器非 +8 时区时最明显），空值语义错了会让两个非法
+ * 时间戳"相等"从而误判同分钟（kline-live 的实时合成缺陷）。
+ */
+describe("北京时间格式化", () => {
+  it("按 Asia/Shanghai 渲染，与运行环境时区无关", () => {
+    // 2026-09-11T01:20:00Z = 北京 09:20（开盘竞价）——用默认时区渲染会变成 01:20
+    expect(bjHHMM("2026-09-11T01:20:00Z")).toBe("09:20");
+    expect(bjDate("2026-09-11T01:20:00Z")).toBe("2026-09-11");
+    expect(bjMonthDay("2026-09-11T01:20:00Z")).toBe("09-11");
+  });
+
+  it("跨日边界：UTC 前一日深夜属北京次日", () => {
+    // 2026-09-10T16:00:00Z = 北京 2026-09-11 00:00
+    expect(bjDate("2026-09-10T16:00:00Z")).toBe("2026-09-11");
+    expect(bjHHMM("2026-09-10T16:00:00Z")).toBe("00:00");
+    // 再早一秒仍是前一日
+    expect(bjDate("2026-09-10T15:59:59Z")).toBe("2026-09-10");
+  });
+
+  it("收盘时刻：15:00 北京时间", () => {
+    expect(bjHHMM("2026-09-11T07:00:00Z")).toBe("15:00");
+  });
+
+  it("缺失/非法一律返回空串（不得产出 'Invalid Date' 类垃圾串）", () => {
+    for (const bad of [null, undefined, "", "not-a-date"]) {
+      expect(bjHHMM(bad)).toBe("");
+      expect(bjDate(bad)).toBe("");
+      expect(bjMonthDay(bad)).toBe("");
+    }
+    // 关键回归：两个不同的非法输入必须"相等"于空串，而不是等于同一段垃圾串后
+    // 被上游当作"同一分钟"从而跳过实时合成
+    expect(bjHHMM("garbage-a")).toBe(bjHHMM("garbage-b"));
+    expect(bjHHMM("garbage-a")).toBe("");
+  });
+
+  it("输入带 Z 的 UTC ISO（后端统一格式）", () => {
+    expect(bjHHMM("2026-09-11T03:47:12.345Z")).toBe("11:47");
+    expect(bjDate("2026-09-11T03:47:12.345Z")).toBe("2026-09-11");
+  });
+});
+
 
 describe("isHardQuality", () => {
   it("低/中质量（盘中瞬态）不渲染徽标，持久态（过期/非法）才渲染", () => {
@@ -58,9 +104,9 @@ describe("fmtHeat", () => {
 
 describe("pctColor / pctText", () => {
   it("red up, green down (A-share convention)", () => {
-    expect(pctColor(1.5)).toBe("text-up");
-    expect(pctColor(-1.5)).toBe("text-down");
-    expect(pctColor(0)).toBe("text-zinc-400");
+    expect(pctColor(1.5)).toBe("text-up-ink dark:text-up");
+    expect(pctColor(-1.5)).toBe("text-down-ink dark:text-down");
+    expect(pctColor(0)).toBe("text-zinc-600 dark:text-zinc-400");
   });
 
   it("pctText keeps explicit plus and handles null", () => {
