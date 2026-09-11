@@ -28,9 +28,13 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Any, Iterable
 
 log = logging.getLogger(__name__)
+
+#: marketdb 路径（与 `app/factors/evaluate.py` 等同一份库）
+DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "marketdb" / "market.duckdb"
 
 #: 少于此天数不给方向结论（只有影响面）
 MIN_SAMPLE_DAYS = 3
@@ -222,7 +226,144 @@ def _num(v: Any) -> float | None:
         return None
 
 
+# ---------------------------------------------------------------- 全市场走势补验
+
+#: 补验用的默认前向窗口（交易日），与 `DailyPickReview` 的 T+5 口径保持一致
+FORWARD_HORIZON = 5
+
+
+def load_market_forward_gains(
+    pairs: list[tuple[str, str]],
+    horizon: int = FORWARD_HORIZON,
+    db_path: Path | None = None,
+) -> dict[tuple[str, str], float]:
+    """查 marketdb，给 (symbol, 交易日) 补一段**市场中性**的前向收益（%）。
+
+    **为什么需要它**：放宽 `picks_min_pick_score` 时补进来的是**历史落选者**——
+    他们从未入选 ⇒ `DailyPickReview` 里根本没有他们 ⇒ 事后验证数恒为 0。
+    没有这个函数，"放宽门槛"这个方向就永远无法评估（只能给影响面、给不了方向）。
+
+    ⚠️ marketdb 是**本项目自己的库**，不是外部数据源——此前把它误判成"新增数据源依赖"
+    而搁置了这项，属过度保守。
+
+    ⚠️ **适用边界（实测确认，别误读成缺陷）**：需要"该日之后 h 个交易日"的行情，
+    所以**距今不足 h 个交易日的日子算不出来**（那是未来）。实测：库内最新到 2026-09-11，
+    查 2026-08-03 正常返回，查 2026-09-10 返回空。因此本补验对**近期**的落选者无效、
+    对**较早**的有效——`DailyPickSet` 数据越积累，能补验的样本越多。
+    查不到时返回空（由调用方降级），**不臆造 0**。
+
+    :param pairs: `[(symbol, 交易日YYYY-MM-DD)]`
+    :returns: `{(symbol, 交易日): 超额收益%}`，查不到的键不出现（**不臆造 0**）。
+    """
+    if not pairs:
+        return {}
+    try:
+        import duckdb
+
+        from app.data_providers.ths import to_thscode
+    except Exception as exc:  # noqa: BLE001
+        log.warning("marketdb 补验不可用：%s", exc)
+        return {}
+
+    codes = sorted({to_thscode(s) for s, _ in pairs})
+    dates = sorted({d for _, d in pairs})
+    day_ms = [_date_ms(d) for d in dates]
+    lo, hi = min(day_ms), max(day_ms)
+    # 缓冲：LEAD 要往后看 h 个交易日，给足自然日余量（含周末/假期）
+    buf_ms = (horizon + 4) * 86_400_000
+
+    path = str(db_path or DEFAULT_DB_PATH)
+    try:
+        con = duckdb.connect(path, read_only=True)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("marketdb 连接失败（%s）：%s", path, exc)
+        return {}
+
+    try:
+        # 个股：在限定窗口内用 LEAD 取第 h 个交易日后的收盘价
+        codes_sql = ", ".join("'" + c.replace("'", "") + "'" for c in codes)
+        dates_sql = ", ".join(str(v) for v in day_ms)
+        rows = con.execute(
+            f"""
+            WITH w AS (
+                SELECT thscode, date_ms, close_price,
+                       LEAD(close_price, {int(horizon)}) OVER
+                         (PARTITION BY thscode ORDER BY date_ms) AS c_h
+                FROM daily_k
+                WHERE thscode IN ({codes_sql})
+                  AND date_ms BETWEEN {lo - buf_ms} AND {hi + buf_ms}
+            )
+            SELECT thscode, date_ms, (c_h / close_price - 1.0) * 100.0
+            FROM w
+            WHERE c_h IS NOT NULL AND close_price > 0 AND date_ms IN ({dates_sql})
+            """
+        ).fetchall()
+        # 市场同期基准：同一批日期的全市场均值（中性化的分母）
+        mkt = {
+            int(r[0]): float(r[1])
+            for r in con.execute(
+                f"""
+                WITH w AS (
+                    SELECT thscode, date_ms, close_price,
+                           LEAD(close_price, {int(horizon)}) OVER
+                             (PARTITION BY thscode ORDER BY date_ms) AS c_h
+                    FROM daily_k
+                    WHERE date_ms BETWEEN {lo - buf_ms} AND {hi + buf_ms}
+                )
+                SELECT date_ms, avg((c_h / close_price - 1.0) * 100.0)
+                FROM w
+                WHERE c_h IS NOT NULL AND close_price > 0 AND date_ms IN ({dates_sql})
+                GROUP BY date_ms
+                """
+            ).fetchall()
+        }
+    except Exception as exc:  # noqa: BLE001
+        log.warning("marketdb 前向收益查询失败：%s", exc)
+        return {}
+    finally:
+        con.close()
+
+    out: dict[tuple[str, str], float] = {}
+    by_ms = {ms: d for d, ms in zip(dates, day_ms)}
+    for thscode, ms, ret in rows:
+        base = mkt.get(int(ms))
+        if base is None:
+            continue  # 没有市场基准就不给超额——宁缺勿滥
+        day = by_ms.get(int(ms))
+        if day is None:
+            continue
+        out[(thscode.split(".")[0], day)] = round(float(ret) - base, 3)
+    return out
+
+
+def _date_ms(day: str) -> int:
+    """交易日字符串 → marketdb 的 `date_ms`（**上海零点**毫秒）。
+
+    ⚠️ 必须按北京时间取零点：用本地时区会在跨零点时差一天（既有教训）。
+    """
+    from datetime import datetime as _dt
+
+    from app.core.bjtime import BJ_TZ
+
+    return int(_dt.strptime(day, "%Y-%m-%d").replace(tzinfo=BJ_TZ).timestamp() * 1000)
+
+
 # ---------------------------------------------------------------- 事后验证
+
+
+def _ratio_from_market(
+    records: list[dict], gains: dict[tuple[str, str], float]
+) -> dict:
+    """用 marketdb 的前向**超额**收益给一批记录算 good 比例（>0 视为跑赢市场）。
+
+    查不到的**直接剔除**，绝不按 0 计入——0 表示"恰好持平"，会系统性稀释结论。
+    """
+    vals = [gains.get((r.get("symbol"), r.get("date"))) for r in records]
+    vals = [v for v in vals if v is not None and v == v]  # 去 None 与 NaN
+    if not vals:
+        return {"n": 0, "good": 0, "ratio": None}
+    return {"n": len(vals), "good": sum(1 for v in vals if v > 0),
+            "ratio": sum(1 for v in vals if v > 0) / len(vals)}
 
 
 def _good_ratio(records: Iterable[dict], reviews: dict) -> dict:
@@ -254,7 +395,14 @@ def _base(key: str, before: Any, after: Any) -> dict:
     }
 
 
-def eval_min_pick_score(*, before: Any, after: Any, sets: list[dict], reviews: dict) -> dict:
+def eval_min_pick_score(
+    *,
+    before: Any,
+    after: Any,
+    sets: list[dict],
+    reviews: dict,
+    market_gains: dict[tuple[str, str], float] | None = None,
+) -> dict:
     """入选门槛变更：抬高 → 剔除低分者；降低 → 落选者补位。
 
     判据（**只在可比时给方向**）：
@@ -299,8 +447,22 @@ def eval_min_pick_score(*, before: Any, after: Any, sets: list[dict], reviews: d
     dropped_stat = _good_ratio(sim["dropped"], reviews)
     added_stat = _good_ratio(sim["added"], reviews)
     kept_stat = _good_ratio(sim["kept"], reviews)
+
+    # **结构性盲区补验**：补入者是历史落选者，复盘表里没有他们 ⇒ `added_stat` 恒为 0 条。
+    # 此时改用 marketdb 的全市场走势补一段前向超额收益，让"放宽到底好不好"能被判定。
+    #
+    # ⚠️ **必须两边同口径**：只补 added 不补 kept 的话，`kept_stat` 仍不足样本下限，
+    # 判定依旧落到"可比性不足" ⇒ 还是 neutral（2026-09-11 首版就踩了这个坑）。
+    added_source = "review"
+    if market_gains:
+        if not raising and sim["added"] and added_stat["n"] < MIN_REVIEW_SAMPLES:
+            added_stat = _ratio_from_market(sim["added"], market_gains)
+            if added_stat["n"]:
+                added_source = "marketdb"
+        if kept_stat["n"] < MIN_REVIEW_SAMPLES:
+            kept_stat = _ratio_from_market(sim["kept"], market_gains) or kept_stat
     out["metrics"]["review"] = {"dropped": dropped_stat, "added": added_stat,
-                                "kept": kept_stat}
+                                "kept": kept_stat, "added_source": added_source}
 
     changed_stat = dropped_stat if raising else added_stat
     label = "剔除" if raising else "补入"
@@ -312,7 +474,7 @@ def eval_min_pick_score(*, before: Any, after: Any, sets: list[dict], reviews: d
         why = ""
         if not raising and sim["added"] and added_stat["n"] == 0:
             why = ("（补入者均来自历史落选池，从未入选 ⇒ 无复盘记录；"
-                   "放宽方向需另用全市场走势验证，本模块不做）")
+                   "可传 `market_gains` 用全市场走势补验，本次未提供或查不到对应行情）")
         out["note"] = (f"影响 {len(sim['dropped'])} 剔除 / {len(sim['added'])} 补位，"
                        f"但可比对的事后复盘不足 {MIN_REVIEW_SAMPLES} 条"
                        f"（{label} {changed_stat['n']}、保留 {kept_stat['n']}）"
@@ -482,12 +644,32 @@ def evaluate_shadow(key: str, *, before: Any, after: Any, session_factory=None) 
         return {"key": key, "before": before, "after": after,
                 "verdict": VERDICT_INSUFFICIENT, "sample_days": 0,
                 "note": f"{err} ⇒ 无法评估（并非样本不足）"}
+    # 放宽门槛时需要全市场走势补验（补入者是落选者，复盘表里没有他们）
+    market_gains: dict[tuple[str, str], float] = {}
+    if key == "picks_min_pick_score":
+        try:
+            t_new, t_old = float(after), float(before)
+        except (TypeError, ValueError):
+            t_new = t_old = None
+        if t_new is not None and t_old is not None and t_new < t_old:
+            sim = simulate_min_score(sets, t_new, _capacity(), base_threshold=t_old)
+            # added 与 kept **都要查**——判定是两者的对比，只补一边等于没补
+            pairs = [(r.get("symbol"), r.get("date"))
+                     for r in (sim["added"] + sim["kept"])
+                     if r.get("symbol") and r.get("date")]
+            if pairs:
+                market_gains = load_market_forward_gains(pairs)
+
     try:
-        out = fn(before=before, after=after, sets=sets, reviews=reviews)
+        out = fn(before=before, after=after, sets=sets, reviews=reviews,
+                 market_gains=market_gains or None)
     except Exception as exc:  # noqa: BLE001 —— 评估器炸了不能拖垮 promote 流程
         log.warning("影子评估失败 key=%s: %s", key, exc)
         return {"key": key, "before": before, "after": after,
                 "verdict": VERDICT_INSUFFICIENT, "note": f"评估失败：{exc}"}
+    if market_gains:
+        out["market_verify"] = {"pairs_queried": len(market_gains),
+                                "horizon": FORWARD_HORIZON}
 
     out["caveat"] = ("静态重放：假设评分分布不变、只改门槛，真实改动会连带改变候选池；"
                      "结论是方向性的，不是收益预测")

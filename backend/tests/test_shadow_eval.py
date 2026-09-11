@@ -303,3 +303,69 @@ def test_load_history_reports_error_instead_of_empty_success():
     sets, reviews, err = se.load_history(_BrokenFactory())
     assert sets == [] and reviews == {}
     assert err
+
+
+# ---------------------------------------------------------------- 全市场走势补验（#9）
+
+
+def test_loosening_gets_a_direction_from_market_gains():
+    """**定点回归**：放宽方向此前因补入者无复盘记录而**恒为 neutral**。
+
+    传入 market_gains 后必须能真正给出方向（补入者不弱于保留者 ⇒ supports）。
+    """
+    sets = _sets(6)
+    sim = se.simulate_min_score(sets, 45.0, 5, base_threshold=50.0)
+    # 补入者全部跑赢（ratio=1.0），保留者只有一半跑赢（ratio=0.5）⇒ supports。
+    # 两边都必须给值：判定是对比，只补一边仍会落到"可比性不足"而 neutral。
+    gains = {(a["symbol"], a["date"]): 2.5 for a in sim["added"]}
+    for i, k in enumerate(sim["kept"]):
+        gains[(k["symbol"], k["date"])] = 1.0 if i % 2 == 0 else -1.0
+
+    out = se.eval_min_pick_score(before=50.0, after=45.0, sets=sets, reviews={},
+                                 market_gains=gains)
+    assert out["verdict"] == se.VERDICT_SUPPORTS
+    assert out["metrics"]["review"]["added_source"] == "marketdb"
+    assert out["metrics"]["review"]["added"]["n"] > 0
+
+
+def test_market_gains_below_zero_count_as_not_good():
+    """补入者跑输市场（超额 <0）⇒ 放宽是稀释组合 ⇒ opposes。"""
+    sets = _sets(6)
+    sim = se.simulate_min_score(sets, 45.0, 5, base_threshold=50.0)
+    gains = {(a["symbol"], a["date"]): -1.5 for a in sim["added"]}
+    for k in sim["kept"]:
+        gains[(k["symbol"], k["date"])] = 1.0  # 保留者全部跑赢
+    out = se.eval_min_pick_score(before=50.0, after=45.0, sets=sets, reviews={},
+                                 market_gains=gains)
+    assert out["verdict"] == se.VERDICT_OPPOSES
+
+
+def test_raising_ignores_market_gains():
+    """抬高方向看的是**剔除者**，与 market_gains 无关（不得被它污染）。"""
+    sets = _sets(6)
+    sim = se.simulate_min_score(sets, 55.0, 5, base_threshold=50.0)
+    gains = {(d["symbol"], d["date"]): 9.9 for d in sim["dropped"]}
+    out = se.eval_min_pick_score(before=50.0, after=55.0, sets=sets, reviews={},
+                                 market_gains=gains)
+    assert out["metrics"]["review"]["added_source"] == "review"
+
+
+def test_market_gains_missing_keys_are_dropped_not_zeroed():
+    """查不到的票必须**剔除**，不能当 0 参与统计（0 = 恰好持平，会稀释结论）。"""
+    sets = _sets(6)
+    sim = se.simulate_min_score(sets, 45.0, 5, base_threshold=50.0)
+    gains = {}  # 一条都查不到
+    out = se.eval_min_pick_score(before=50.0, after=45.0, sets=sets, reviews={},
+                                 market_gains=gains)
+    assert out["metrics"]["review"]["added"]["n"] == 0
+    assert out["verdict"] == se.VERDICT_NEUTRAL
+    assert "落选池" in out["note"]
+
+
+def test_forward_horizon_matches_review_caliber():
+    """补验窗口必须与 DailyPickReview 的 T+5 口径一致，否则两方向不可比。"""
+    assert se.FORWARD_HORIZON == 5
+
+
+def test_load_market_forward_gains_returns_empty_on_empty_input():
+    assert se.load_market_forward_gains([]) == {}
