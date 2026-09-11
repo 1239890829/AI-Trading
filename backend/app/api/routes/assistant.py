@@ -610,12 +610,16 @@ def _collect_summary_evidence(request: Request) -> dict:
 
 
 @router.get("/assistant/daily-summary")
-async def assistant_daily_summary(request: Request, force: bool = False) -> dict:
+async def assistant_daily_summary(request: Request) -> dict:
     """收盘 LLM 综述（15:35 automation 消费）：把当日系统数据变成人话与判断。
 
     与 15:45 清单式复盘分工：本端点是**叙事层**（相位→盘面→组合→关注点），
     复盘 automation 是**审计层**（三态判定/操作对账/处置闭环）。
     LLM 失败显式 available=False——automation 侧跳过发送，绝不发降级占位文。
+
+    ⚠️ 曾有个 `force: bool = False` 参数但**从未被读取**（本端点没有缓存可强制刷新），
+    属误导性死参数——读者会以为有缓存、传了 force 就能重算。2026-09-11 按 YAGNI 删除；
+    若将来真按 `trade_date` 缓存了当日综述，再加回来并让它名副其实。
     """
     import time as _time
 
