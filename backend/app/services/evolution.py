@@ -326,6 +326,21 @@ def _collect_applied_landed(session_factory) -> dict:
     return out
 
 
+def _collect_decision_ledger(session_factory) -> dict:
+    """决策台账（S2-11 第 5 步「决策级记忆」）：只读聚合视图，零迁移。
+
+    把散在四处的决策痕迹（改进项处置 / 策略核验 / 参数变更 / 标 applied 却未落地）
+    并陈到一个台账里，回答「当初为什么这么定、后来兑现了吗」。
+    只读、不落库、不做因果判定——详细边界见 `app/services/decision_ledger.py`。
+    """
+    try:
+        from app.services.decision_ledger import collect_decision_ledger
+
+        return collect_decision_ledger(session_factory)
+    except Exception as exc:  # noqa: BLE001
+        return {"available": False, "note": f"读取失败：{exc}"}
+
+
 def _collect_triage_stats(session_factory) -> dict:
     """告警判读统计：哪些规则在产生噪音（ignore 占比）、哪些事件被升级。"""
     try:
@@ -356,6 +371,7 @@ def collect_inputs(session_factory=None) -> dict:
         "factor_ic": _collect_factor_ic(),
         "strategy_verification": _collect_strategy_verification(),
         "applied_landed": _collect_applied_landed(sf),
+        "decision_ledger": _collect_decision_ledger(sf),
         "prediction": _collect_recent_prediction(sf),
         "knowledge_base": _collect_knowledge_base(),
         # 第九路（2026-09-09 用户指令「跟踪本质是实时选股」）：台账复盘×进化依据
