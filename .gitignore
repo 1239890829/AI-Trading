@@ -12,6 +12,7 @@ out/
 
 # Env & secrets
 .env
+.env.bak*
 *.local
 
 # Data & runtime
