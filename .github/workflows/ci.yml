@@ -68,3 +68,22 @@ jobs:
 
       - name: ESLint
         run: npx eslint .
+
+  docs:
+    name: docs (doc-health)
+    runs-on: ubuntu-latest
+    # 只依赖标准库（re/sys/pathlib），无需安装任何依赖即可跑。
+    # 退出码语义：0 = 全部通过，1 = 有待处理项（脚本内 `return 0 if problems == 0 else 1`）。
+    # 2026-09-11 进 CI 的当天就抓到一例：新增 KB 条目把 docs/kb/03-engineering.md
+    # 推到 807 行 > 800 配额，而本地收尾漏跑体检 ⇒ 若非进 CI，这条会一直挂在仓库里。
+    env:
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 文档体检（未登记 / 死链 / 超层配额 / 摘要缺失）
+        run: python3 scripts/doc-health.py

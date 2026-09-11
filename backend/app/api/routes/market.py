@@ -1277,7 +1277,23 @@ async def longhu_detail(
             log.warning("longhu detail %s: %s", symbol, exc)
             return {"symbol": symbol, "trade_date": trade_date.isoformat(), "buy_seats": [], "sell_seats": [], "empty": True}
 
-    detail, history = await asyncio.gather(_detail(), hub.provider.get_longhu_history(symbol))
+    async def _history():
+        """历史榜单独立兜底（S2-12 冒烟实测修）。
+
+        原先这里是 `gather(_detail(), hub.provider.get_longhu_history(symbol))`——
+        detail 有 try/except、**history 裸调用**，两侧健壮性不对称：
+        只要 provider 缺 `get_longhu_history`（切换 provider / 降级到无该能力的源），
+        `AttributeError` 就穿透到路由层变 **500**；而且 gather 一失败，
+        `_detail()` 的协程**从未被 await**（RuntimeWarning: coroutine was never awaited）。
+        两路各自兜底后，单路失败不再拖垮整条，也不再有悬空协程。
+        """
+        try:
+            return await hub.provider.get_longhu_history(symbol)
+        except Exception as exc:
+            log.warning("longhu history %s: %s", symbol, exc)
+            return []
+
+    detail, history = await asyncio.gather(_detail(), _history())
     win = [h for h in history if (h.get("after_5d") is not None)]
     stats = {
         "count": len(history),

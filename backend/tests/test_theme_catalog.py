@@ -130,7 +130,12 @@ def test_stale_codes_prioritizes_empty(monkeypatch: pytest.MonkeyPatch):
     asyncio.run(svc.sync_catalog())
     asyncio.run(svc.sync_members(GRAIN))
 
-    stale = svc.stale_codes(max_themes=10)
+    # ⚠️ max_themes 必须给足，**不能用小值**：stale_codes 按 synced_at 升序返回并截断，
+    # 共享内存库里其它测试（含全端点冒烟 test_endpoint_smoke，它会打所有 GET 端点、
+    # 连带写入题材目录缓存）的条目可能排在 886042.TI 之前 ⇒ 截断到 10 时它会被挤出，
+    # 于是这条断言实际验的是"排名"而不是"成员关系"，与下面不锁顺序的意图自相矛盾。
+    # 2026-09-11 实测：单跑本文件通过，接在冒烟测试之后跑就失败，根因即此。
+    stale = svc.stale_codes(max_themes=10_000)
     assert "886042.TI" in stale, "从未同步成分的题材必须进入 stale 队列"
     assert GRAIN not in stale, "已同步成分且未过 TTL 的题材不得进入 stale 队列"
     # 注：不锁 stale[0]——共享内存库里其他测试的目录条目可能排在更前（按 synced_at 升序），
