@@ -16,6 +16,7 @@ import {
   type AgentParamSurvival,
   type AgentRollbackReason,
 } from "@/lib/api";
+import { dateTimeTextUTC } from "@/lib/format";
 
 /**
  * AI 控制台 · 参数配置（方案 P1-B：闭环"复盘 → 改进项 → 参数变更单 → 生效 → 回滚"）。
@@ -24,12 +25,10 @@ import {
  * 白名单之外不可改；每次应用/回滚都有审计留痕。
  */
 
-function fmtTime(iso: string | null): string {
-  if (!iso) return "--";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "--";
-  return d.toLocaleString("zh-CN", { hour12: false, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
-}
+// 2026-09-11：agent 域时间戳是**无时区的 UTC naive**，直接 `new Date(...)` 会按
+// 运行环境时区解释 ⇒ 国内机器上早 8 小时。改调 `dateTimeTextUTC`（按 UTC 解释、
+// 固定 Asia/Shanghai 输出），显示格式保持 `MM/DD HH:mm` 不变。
+const fmtTime = dateTimeTextUTC;
 
 function pretty(v: unknown): string {
   if (v === null || v === undefined || v === "") return "--";

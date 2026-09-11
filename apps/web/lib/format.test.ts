@@ -1,6 +1,6 @@
 /** 格式化工具测试：空值/边界/单位换算/红涨绿跌语义。 */
 import { describe, expect, it } from "vitest";
-import { fmt, fmtAmount, fmtHeat, fmtVolume, isHardQuality, parseNum, pctColor, pctText, qualityLabel, sourceLabel, timeText, bjDate, bjHHMM, bjMonthDay, triText } from "./format";
+import { fmt, fmtAmount, fmtHeat, fmtVolume, isHardQuality, parseNum, pctColor, pctText, qualityLabel, sourceLabel, timeText, timeTextUTC, dateTimeTextUTC, bjDate, bjHHMM, bjMonthDay, triText } from "./format";
 
 /**
  * 北京时间格式化（2026-09-11 收口）。
@@ -183,5 +183,41 @@ describe("三态文案 triText", () => {
 
   it("未登记的字面量原样透出（不臆造翻译）", () => {
     expect(triText("strong")).toBe("strong");
+  });
+});
+
+/** agent 域时间戳是**无时区的 UTC naive**——这是「交易智能体显示早 8 小时」的根因。 */
+describe("timeTextUTC / dateTimeTextUTC", () => {
+  it("把无时区的 UTC 串按 UTC 解释（07:45 UTC → 15:45 北京）", () => {
+    // 若按本地时区（+8）解释，会得到 07:45 ⇒ 整整早 8 小时
+    expect(timeTextUTC("2026-09-11T07:45:06.541226")).toContain("15:45");
+    expect(dateTimeTextUTC("2026-09-11T07:45:06.541226")).toContain("15:45");
+  });
+
+  it("已带 Z 的串不受影响（不会被二次偏移）", () => {
+    expect(timeTextUTC("2026-09-11T07:45:06Z")).toContain("15:45");
+  });
+
+  it("带偏移的串原样处理", () => {
+    expect(timeTextUTC("2026-09-11T15:45:00+08:00")).toContain("15:45");
+  });
+
+  it("跨零点正确（UTC 16:00 → 北京次日 00:00）", () => {
+    // 注意：zh-CN 的 toLocaleString 用斜杠分隔（09/12），与后端日期串的短横线不同
+    expect(dateTimeTextUTC("2026-09-11T16:00:00")).toContain("09/12");
+  });
+
+  it("空值与非法值返回 --", () => {
+    expect(timeTextUTC(null)).toBe("--");
+    expect(timeTextUTC("")).toBe("--");
+    expect(timeTextUTC("not a date")).toBe("--");
+    expect(dateTimeTextUTC(undefined)).toBe("--");
+  });
+
+  it("输出不受运行环境时区影响（固定 Asia/Shanghai）", () => {
+    // 与 timeText 的差别：timeText 未指定 timeZone，在非 +8 环境会错
+    const out = timeTextUTC("2026-09-11T07:45:06");
+    expect(out).toContain("15:45");
+    expect(out).not.toContain("07:45");
   });
 });

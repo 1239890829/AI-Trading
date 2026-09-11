@@ -11,6 +11,7 @@ import {
   type AgentAgenda,
   type AgentExperiment,
 } from "@/lib/api";
+import { timeTextUTC } from "@/lib/format";
 
 /**
  * AI 控制台 · 进化 tab（AI 大脑 v2，docs/evolution-brain-plan.md）。
@@ -39,11 +40,10 @@ const AGENDA_STATUS: Record<string, string> = {
   failed: "失败", skipped: "已跳过",
 };
 
-function timeText(iso: string | null): string {
-  if (!iso) return "--";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "--" : d.toLocaleTimeString("zh-CN", { hour12: false });
-}
+// 2026-09-11：agent 域时间戳是**无时区的 UTC naive**，直接 `new Date(...)` 会按
+// 运行环境时区解释 ⇒ 国内机器上早 8 小时。改用 `timeTextUTC`（按 UTC 解释、
+// 固定 Asia/Shanghai 输出），显示格式保持 `HH:mm:ss` 不变。
+const timeText = timeTextUTC;
 
 export function EvolutionTab() {
   const [agenda, setAgenda] = useState<AgentAgenda | null | undefined>(undefined);
