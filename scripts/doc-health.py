@@ -29,6 +29,8 @@
   F2 代码裸名死引用  已删/已归档方案文档的**裸名**（如 `linkage-design §3`），F 扫不到
   F3 KB 指针错册   `见 kb/NN-x.md … KB-ENG-NN` 的条目号必须真的在那个册里
                  （KB 分册后「条目搬家」会让只写册名的指针静默指错；触发刻意写窄，见函数说明）
+  G KB 孤儿条目   某条 KB 条目在全仓**零外部引用**（Karpathy wiki 的 orphan-page lint）
+                 ——「沉淀了但没人用」的唯一可量化信号；排除定义行自身
 
 局限（诚实声明）：C 的"日志单轮新增 ≤80 行"是**过程指标**，静态扫描判不出，需人工/议程侧核对。
 """
@@ -354,6 +356,64 @@ def check_kb_pointer_files() -> list[tuple[str, int, str, str, str]]:
     return out
 
 
+#: G 项豁免：这些条目零外部引用属「设计如此」，不是待办（判一次、留痕，不反复争论）。
+KB_ORPHAN_ALLOW: dict[str, str] = {}
+
+
+def check_kb_orphans() -> list[tuple[str, str, str]]:
+    """G 项：KB 条目的**孤儿检测**（零外部引用）。
+
+    为什么需要：B/F/F2 只管「文件还在不在」，F3 只管「指针册名对不对」——
+    **没有任何检查回答「这条知识还有人引用吗」**。Karpathy 的 wiki lint 把
+    orphan page 列为必查项：孤儿 = 沉淀了但没人用，是「知识躺在角落」的**唯一可量化信号**。
+
+    口径（两条，都刻意选择以免制造噪音）：
+    - **排除定义行自身**：`### KB-XXX-NN` 那一行必然含自己，不是引用（否则恒不自 0，检查失效）。
+    - **册内互引算引用**：03 册的条目被 09 册引用是真实引用，不因「同一册」而降级。
+
+    扫描面与 F3 一致（代码 + 文档），但**排除** archive / 逐日 memory / trash：
+    那些是只读历史或 append-only 记录，它们的引用不能证明「今天还有人用」。
+
+    ⚠️ **本检查上线时实测为 0 条**（2026-09-12）——它不修 bug，而是**防退化**：
+    此后新沉淀的条目若无人引用，会在收尾体检时立即暴露。
+    """
+    owner_counts: dict[str, int] = {}
+    for p in (DOCS / "kb").glob("*.md"):
+        for m in re.finditer(r"^### (KB-[A-Z]+-\d+)", _read(p), re.M):
+            owner_counts[m.group(1)] = 0
+
+    skip_dirs = {"node_modules", ".next", ".turbo", "__pycache__", ".venv",
+                 "dist", "build", "archive", "trash", ".workbuddy"}
+    targets: list[Path] = []
+    for name in ("AGENTS.md", "README.md", "CONTEXT.md"):
+        if (ROOT / name).exists():
+            targets.append(ROOT / name)
+    for base in ("docs", "backend", "apps/web", "scripts"):
+        root = ROOT / base
+        if root.exists():
+            targets += [p for p in root.rglob("*") if p.is_file()]
+
+    for p in targets:
+        if p.suffix not in (".md", ".py", ".ts", ".tsx", ".mjs", ".js", ".sh"):
+            continue
+        if any(d in p.parts for d in skip_dirs):
+            continue
+        for line in _read(p).splitlines():
+            if re.match(r"^### KB-[A-Z]+-\d+", line):
+                continue  # 定义行：条目在自我介绍，不是被引用
+            for kid in owner_counts:
+                if kid in line:
+                    owner_counts[kid] += 1
+
+    out: list[tuple[str, str, str]] = []
+    for p in kb_classified_files():
+        for m in re.finditer(r"^### (KB-[A-Z]+-\d+)\s+(.*)", _read(p), re.M):
+            kid, title = m.group(1), m.group(2).strip()
+            if owner_counts.get(kid, 0) == 0 and kid not in KB_ORPHAN_ALLOW:
+                out.append((p.name, kid, title))
+    return out
+
+
 def check_kb_entries() -> list[tuple[str, str, int]]:
     """§7 L0 硬门：单条 KB 条目 ≤60 行（`### KB-` 到下一条目起点的行距）。"""
     out = []
@@ -441,6 +501,7 @@ def main() -> int:
     coderef, coderef_ok = check_code_refs()
     legacy, legacy_ok = check_legacy_slugs()
     ptr = check_kb_pointer_files()
+    orphans = check_kb_orphans()
 
     def line(label: str, ok: bool, detail: str = "") -> None:
         nonlocal problems
@@ -486,6 +547,13 @@ def main() -> int:
     if ptr and not quiet:
         for f, ln, said, kid, real in ptr[:12]:
             print(f"       {f}:{ln} → 写 kb/{said}，实为 {real} ← {kid}")
+    line("G KB 孤儿条目", not orphans,
+         f"{len(orphans)} 条零外部引用（沉淀了但没人用）")
+    if orphans and not quiet:
+        for f, kid, title in orphans[:12]:
+            print(f"       {f}:{kid} {title[:48]}")
+        if len(orphans) > 12:
+            print(f"       …另有 {len(orphans) - 12} 条")
     if not quiet:
         print("[INFO] E 同类聚集（同前缀 ≥3 份，评估是否需共同索引页）："
               + (", ".join(f"{k}×{v}" for k, v in clusters) if clusters else "无"))
