@@ -21,11 +21,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.core.bjtime import beijing_today
 from app.core.config import settings
 from app.data_providers.ths import ThsFuyaoProvider
 from app.picks import backtest as bt
@@ -48,7 +48,8 @@ async def main(days: int, out: Path | None) -> int:
     finally:
         await provider._client.aclose()
         await svc.aclose()
-    target = out or (ROOT / "docs" / f"stock-picking-backtest-{date.today().isoformat()}.md")
+    # 报告日期归属走权威时钟（`date.today()` 按进程时区取日，非 CST 机器差一天）
+    target = out or (ROOT / "docs" / f"stock-picking-backtest-{beijing_today().isoformat()}.md")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(report, encoding="utf-8")
     print(report)

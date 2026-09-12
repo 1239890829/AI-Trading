@@ -200,8 +200,7 @@ def test_collect_trading_excludes_shadow_scope():
     影子数据会污染「账户与盈亏 / 操作评估」两个维度且从报表上看不出来。
     """
     _reset_paper_tables()
-    from datetime import date as _date
-
+    from app.core.bjtime import beijing_today
     from app.core.db import get_session_factory
     from app.models.paper import PaperAccount, PaperOrder, PaperPosition
     from app.review.collector import collect_trading
@@ -220,7 +219,7 @@ def test_collect_trading_excludes_shadow_scope():
                           quantity=900, status="filled"))
         db.commit()
 
-    snap = collect_trading(sf, _date.today(), price_map={"600001": 11.0, "600002": 31.0})
+    snap = collect_trading(sf, beijing_today(), price_map={"600001": 11.0, "600002": 31.0})
     assert snap.account["cash"] == 1_000.0
     assert [p.symbol for p in snap.positions] == ["600001"]
     assert {o.symbol for o in snap.orders} <= {"600001"}

@@ -7,9 +7,9 @@
 """
 from __future__ import annotations
 
-from datetime import date
 from types import SimpleNamespace
 
+from app.core.bjtime import beijing_today
 from app.services.dragon_service import (
     _hhmmss,
     apply_position_with_5d,
@@ -457,7 +457,7 @@ def test_dragon_score_auction_tips_grade_at_boundary():
 def test_auction_gaps_guards_against_cross_day_pollution():
     """历史日期必须返回 None：ths 竞价端点只有当日数据，绝不能让历史回看套上今日竞价。"""
     import asyncio
-    from datetime import date, timedelta
+    from datetime import timedelta
 
     from app.services.theme_service import _auction_gaps
 
@@ -469,7 +469,7 @@ def test_auction_gaps_guards_against_cross_day_pollution():
 
     provider = SimpleNamespace(get_auction_snapshot=fake_snapshot)
     pool = [SimpleNamespace(symbol="600519")]
-    past = date.today() - timedelta(days=1)
+    past = beijing_today() - timedelta(days=1)
     assert asyncio.run(_auction_gaps(provider, past, pool)) is None
     assert calls["n"] == 0, "历史日期不得发起竞价请求"
 
@@ -493,7 +493,7 @@ def test_auction_gaps_filters_not_ready_and_batches():
 
     provider = SimpleNamespace(get_auction_snapshot=fake_snapshot)
     pool = [SimpleNamespace(symbol=f"{600000 + i:06d}") for i in range(120)]
-    out = asyncio.run(_auction_gaps(provider, date.today(), pool))
+    out = asyncio.run(_auction_gaps(provider, beijing_today(), pool))
     assert out is not None
     assert out[f"{600000:06d}"] == 3.0 and out[f"{600001:06d}"] == 3.0
     assert "000003" not in out and "000004" not in out, "缺失/未就绪不标 gap"
@@ -508,7 +508,7 @@ def test_auction_gaps_skips_for_mock_provider():
     from app.services.theme_service import _auction_gaps
 
     provider = SimpleNamespace()  # 无该方法
-    assert asyncio.run(_auction_gaps(provider, date.today(), [SimpleNamespace(symbol="600519")])) is None
+    assert asyncio.run(_auction_gaps(provider, beijing_today(), [SimpleNamespace(symbol="600519")])) is None
 
 
 def test_entry_checklist_declares_missing_inputs():

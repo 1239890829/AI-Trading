@@ -26,9 +26,9 @@
    `beijing_today` / `to_beijing` / `to_beijing_naive`。
 3. `app/market/trading_status.py` 与 `app/core/db.py` 不得再"重新拥有"时钟
    （前者曾导出 `beijing_now`、后者曾导出 `beijing_now_naive`）。
-4. `app/` 内禁止 `date.today()`——**含 `from datetime import date as X` 的别名形式**
-   与 `datetime.date.today()` 限定形式。日期归属一律 `beijing_today()`（见第 5 节）。
-   ⚠️ `scripts/` 暂不在本规则扫描面内（离线工具，见 AGENTS.md §7 待决）。
+4. `app/` `scripts/` `tests/` 内禁止**任何** `.today()` 调用——不区分接收者是谁
+   （`date.today()` / `date_cls.today()` / `pd.Timestamp.today()` 取的都是进程本地时区的今天）。
+   日期归属一律 `beijing_today()`（见第 5 节）。
 """
 from __future__ import annotations
 
@@ -201,76 +201,82 @@ def test_alert_triggered_at_is_not_shifted_again():
     assert "22:59" not in text
 
 
-# ---------------------------------------------------------------- 5. date.today() 禁令（S2-8 阶段 2.5 收口，2026-09-12）
+# ---------------------------------------------------------------- 5. `.today()` 禁令
+# （S2-8 阶段 2.5 收口 2026-09-12；扫描面扩至 scripts/tests 同日）
 
 def _find_today_calls(src: str) -> list[int]:
-    """返回源码中「按进程时区取日」调用的行号（AST 判定，**解 import 别名**）。
+    """返回源码中 `<expr>.today()` 调用的行号（AST 判定）。
 
-    两条硬要求，都踩过：
-    - **必须走 AST**：文本扫描会被文档里的教学文字误伤（本文件 docstring 就在讲它）。
-    - **必须解别名**：只匹配 `Name(id="date")` 会被 `from datetime import date as date_cls`
-      整条绕过——`app/services/akshare_ext.py` 正是这样漏了 1 处，使「app/ 已清零」成为
-      假结论（2026-09-12 实测）。
+    **规则是「任何 `.today()` 都算违例」**，不区分接收者是谁。三版守卫的演进说明为什么：
+
+    - v1 只匹配 `Name(id="date")` ⇒ `from datetime import date as date_cls` + `date_cls.today()`
+      整条绕过（`app/services/akshare_ext.py` 就这样漏了 1 处，**而测试当时全绿**）。
+    - v2 解了 import 别名，但仍按「接收者是 date 对象」的思路写 ⇒
+      `pd.Timestamp.today()`（`scripts/verify_climate_chain.py`）又漏了。
+    - v3（本版）索性按**语义**判定：`.today()` 这个属性调用**无论挂在谁身上**，
+      取的都是**进程本地时区的今天**——pandas、numpy、第三方封装都一样。
+      既然全系统只允许 `beijing_today()` 作为「今天」，那么 `.today()` 就该零容忍。
+
+    ⚠️ **必须走 AST**：文本扫描会被「不要用 date.today()」这类教学文字误伤
+    （本文件 docstring 自己就在讲它）。
     """
     import ast
 
-    tree = ast.parse(src)
-
-    # 裸 `date` 始终可疑：日期对象上的 .today() 必定是按进程时区取日
-    date_names: set[str] = {"date"}
-    dt_module_names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == "datetime":
-            for a in node.names:
-                if a.name == "date":
-                    date_names.add(a.asname or a.name)
-        elif isinstance(node, ast.Import):
-            for a in node.names:
-                if a.name == "datetime":
-                    dt_module_names.add(a.asname or a.name)
-
     lines: list[int] = []
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call)
+    for node in ast.walk(ast.parse(src)):
+        if (isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
                 and node.func.attr == "today"):
-            continue
-        v = node.func.value
-        if isinstance(v, ast.Name) and v.id in date_names:
-            lines.append(node.lineno)
-        elif (isinstance(v, ast.Attribute) and v.attr == "date"
-                and isinstance(v.value, ast.Name) and v.value.id in dt_module_names):
             lines.append(node.lineno)
     return sorted(lines)
 
 
-def test_no_naive_date_today_in_app():
-    """运行时代码禁止 `date.today()`——日期归属一律 `beijing_today()`。
+#: 扫描面。2026-09-12 由 `app/` 扩至三处，理由见下方测试 docstring。
+TODAY_SCAN_DIRS = ("app", "scripts", "tests")
 
-    `date.today()` 按进程时区取日：+8 生产机「碰巧正确」，CI/海外机器错一天。
+#: 权威模块自身豁免（它的实现里允许出现进程取日的历史痕迹；当前已无，留作显式口子）。
+TODAY_EXEMPT = (AUTHORITY, SELF)
+
+
+def test_no_process_timezone_today_anywhere():
+    """`app/` `scripts/` `tests/` 内禁止任何 `.today()`——日期归属一律 `beijing_today()`。
+
+    **为什么扩到 scripts/ 与 tests/**：`.today()` 按**进程时区**取日，+8 生产机上
+    「碰巧正确」，CI/海外机器错一天。此前只守 `app/`，另两处的 11 个调用点
+    （`scripts/` 2 + `tests/` 9）静默存在——而 `tests/` 恰恰最容易出问题：
+    夹具用进程时区的「今天」去锚定，被测代码用北京「今天」判定，
+    「一直好的测试突然挂」（[[KB-TRADE-02]] 原话）就是这么来的。
+    非 CST 机器上行为会变，CST 机器上保持不变。
     """
     offenders: list[str] = []
-    for p in sorted((BACKEND / "app").rglob("*.py")):
-        rel = p.relative_to(BACKEND).as_posix()
-        for ln in _find_today_calls(p.read_text(encoding="utf-8")):
-            offenders.append(f"{rel}:{ln}")
+    for sub in TODAY_SCAN_DIRS:
+        for p in sorted((BACKEND / sub).rglob("*.py")):
+            rel = p.relative_to(BACKEND).as_posix()
+            if rel in TODAY_EXEMPT:
+                continue
+            for ln in _find_today_calls(p.read_text(encoding="utf-8")):
+                offenders.append(f"{rel}:{ln}")
     assert not offenders, (
-        "以下位置用了 date.today()（进程时区取日，跨时区错一天），"
+        "以下位置用了 `.today()`（进程时区取日，跨时区错一天），"
         "应改为 `from app.core.bjtime import beijing_today`：\n  " + "\n  ".join(offenders)
     )
 
 
-def test_today_detector_sees_aliases():
-    """**守卫自证**：别名与模块限定形式都必须被识别，否则「已清零」是假结论。
+def test_today_detector_sees_every_receiver():
+    """**守卫自证**：任何接收者的 `.today()` 都要被识别，否则「已清零」是假结论。
 
-    这是把注入验证固化下来——首版守卫只匹配 `Name(id="date")`，
-    `app/services/akshare_ext.py:425` 的 `date_cls.today()` 就这样漏过去了，
-    而当时测试是**全绿**的：守卫漏检比没有守卫更糟，它让口径分裂看起来已解决。
+    把注入验证固化成常驻测试——守卫漏检比没有守卫更糟，
+    它让口径分裂**看起来已解决**，此后没人再去看。
+    前两版都是这样翻车的：v1 漏了 `date_cls.today()`，v2 漏了 `pd.Timestamp.today()`。
     """
+    # 四种历史写法（v1/v2 各自漏过的都在内）
     assert _find_today_calls("from datetime import date\nx = date.today()\n") == [2]
     assert _find_today_calls(
         "from datetime import date as date_cls\nx = date_cls.today()\n") == [2]
     assert _find_today_calls("import datetime as dt\nx = dt.date.today()\n") == [2]
     assert _find_today_calls("import datetime\nx = datetime.date.today()\n") == [2]
-    # 反例：叙述被禁写法的文档文字、以及权威函数调用，都不得被误伤
+    assert _find_today_calls("import pandas as pd\nx = pd.Timestamp.today()\n") == [2]
+    # 反例：叙述被禁写法的文档文字、权威函数调用、以及**名字里带 today 的其他调用**
+    # 都不得被误伤（`beijing_today()` 是函数名整体，不是 `.today` 属性访问）
     assert _find_today_calls('"""不要用 date.today()。"""\nx = beijing_today()\n') == []
+    assert _find_today_calls("x = beijing_today()\n") == []

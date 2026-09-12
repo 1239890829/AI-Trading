@@ -12,6 +12,7 @@ from datetime import date
 
 import pytest
 
+from app.core.bjtime import beijing_today
 from app.assistant.tools import (
     MAX_CALLS_PER_TURN,
     TOOL_SPECS,
@@ -149,12 +150,13 @@ def test_latest_trade_day_weekend_fallback():
     ctx = ToolContext(provider=None)
     d = _latest_trade_day(ctx)          # 无日历 → 周末回退
     assert d.weekday() < 5
-    assert d <= date.today()
+    # 生产侧用 beijing_today() 判定「今天」，测试必须同源（KB-TRADE-02）
+    assert d <= beijing_today()
     # 有日历时取 <= 今天的最近一天
     ctx2 = ToolContext(provider=None, trading_days={"2026-09-04"})
     assert _latest_trade_day(ctx2) == date(2026, 9, 4)
     # 未来日期不能当选
-    ctx3 = ToolContext(provider=None, trading_days={(date.today() + timedelta(days=1)).isoformat()})
+    ctx3 = ToolContext(provider=None, trading_days={(beijing_today() + timedelta(days=1)).isoformat()})
     assert _latest_trade_day(ctx3).weekday() < 5
 
 
@@ -262,7 +264,7 @@ def test_brief_tool_no_data_is_explicit():
     class _NoBrief:
         @staticmethod
         def brief_for_today():
-            return date.today().isoformat(), None
+            return beijing_today().isoformat(), None
 
     monkeypatched = _ctx()
     import app.picks.morning_brief as mb

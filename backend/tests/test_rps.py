@@ -8,12 +8,13 @@
 需要"历史截面"语义的用例显式传 `t0=`（如边界截断用例）。
 """
 import sys
-from datetime import date, timedelta
+from datetime import timedelta
 
 import duckdb
 
 sys.path.insert(0, ".")
 
+from app.core.bjtime import beijing_today
 from app.market import trade_calendar as tc
 from app.picks.rps import RpsService, _pct_rank_dedup, _trade_date_ms
 from scripts.sync_marketdb import rebuild_adj  # noqa: E402
@@ -25,7 +26,7 @@ _T0 = _trade_date_ms("20260101")  # 上海零点，与仓内口径一致（历�
 def _recent_t0(n_days: int) -> int:
     """锚到最近交易日往前 n_days-1 个自然日 → 序列末日≈最新交易日（过闸门）。"""
     days = tc._load_persisted() or []
-    anchor = days[-1] if days else date.today()
+    anchor = days[-1] if days else beijing_today()
     return _trade_date_ms((anchor - timedelta(days=n_days - 1)).strftime("%Y%m%d"))
 
 

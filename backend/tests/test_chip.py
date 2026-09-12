@@ -9,7 +9,7 @@ import pytest
 
 from app.market import trade_calendar as tc
 from app.market.chip import ChipService, simulate_chip_distribution
-from app.core.bjtime import BJ_TZ  # S2-8 时区收敛
+from app.core.bjtime import BJ_TZ, beijing_today  # S2-8 时区收敛
 
 _MS_DAY = 86_400_000
 
@@ -118,7 +118,7 @@ class TestChipService:
     def test_fresh_db_serves_distribution(self, tmp_path):
         """反证：锚到最近交易日 → 同一库正常出形态（降级只因陈旧，不是因为功能坏了）。"""
         days = tc._load_persisted() or []
-        anchor = days[-1] if days else date.today()
+        anchor = days[-1] if days else beijing_today()
         _mk_daily_k(tmp_path, tail=anchor, n=30)
         svc = ChipService(db_path=tmp_path / "market.duckdb")
         out = svc.distribution("600519")

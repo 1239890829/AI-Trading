@@ -41,6 +41,7 @@ import math
 import akshare as ak
 import pandas as pd
 
+from app.core.bjtime import beijing_today
 from app.market import climate as cl
 
 #: 申万一级行业：覆盖 chains.py 人工表点名的题材所属的上游行业
@@ -200,7 +201,8 @@ def main() -> None:
     _p(f"ONI 最新一季：{pts[-1].year} {pts[-1].season} ANOM={pts[-1].anom:+.2f}"
        f"（季末 {cl.season_end(pts[-1]).isoformat()}）")
 
-    today = pd.Timestamp.today().date()
+    # asof 走权威时钟：`pd.Timestamp.today()` 按进程时区取日，非 CST 机器差一天
+    today = beijing_today()
     prod = cl.classify(pts, asof=today)
     _p(
         f"线上 classify(asof={today}) → state={prod['state']} alert={prod['alert']} "
