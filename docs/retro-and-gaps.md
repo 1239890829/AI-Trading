@@ -213,7 +213,7 @@
 
 | # | 项 | 状态与原因 |
 |---|---|---|
-| 1 | **批次 4 · 死代码清理** | ⏳ **待用户单独确认**（用户明示：执行前必须单独确认）。范围 = 后端 5 个零引用函数 + `triple_volume.py`（**整模块只被 tests import**）+ 前端 `navUrlForAlias` / `use-incremental` 常量。删前须**扫未引用导出（把测试纳入扫描面）** + 走 `safe-trash.sh` |
+| 1 | **批次 4 · 死代码清理** | ⏳ **待用户确认**（用户明示：执行前必须单独向我确认）。**2026-09-13 已扫面并修正前提——原描述 4 项里 2 项有误**：<br>❌ **`triple_volume.py` 不该删**：它在 `strategy_registry.py:101` 注册为策略键，且 `docs/strategy-registry.md` §3 D-1 将其列为**已否决策略的证据链载体**（P1-39 处置口径 =「**归档**：保留代码、停消费」）⇒ 删它**等于销毁否决结论的证据链**（与 P1-9「已否决 ≠ 未做」同类）。<br>❌ **前端 `DEFAULT_PAGE_SIZE` / `DEFAULT_PAGE_STEP` 不是死代码**：`use-incremental.ts:43-44` **本文件内部在用**，只是 `export` 暴露过宽 ⇒ 正解是**去掉 export**而非删除（KB-ENG-53 ⑥ 明确警告的第二类）。<br>✅ **扫描器已做自身有效性验证**（注入已知在用的 `limit_block_reason` 确认不误报——首版曾因"每文件只记首次出现行号"把「同文件定义并调用」误判为零引用）。扫面：顶层导出 2024 个、**全仓仅定义处出现 24 个**；spot-check 5 个（`TASK_STATUSES` / `_perf_middleware` / `run_prediction` / `follow_state_label` / `paper_position_read_state`）**均确认真零引用**。<br>**建议**：先只删这 5 个 + 去掉那 2 个 `export`，其余 19 个再逐项核对；全部走 `safe-trash.sh`，代码另受 git 历史保护。**确认后我立即执行** |
 | 2 | **`RiskEngine.check_order` 是否接入模拟撮合硬拦截** | 🔶 **待拍板（口径变更）**。现状：只被 `POST /api/risk/check-order` 消费，是「预检 / 提示」；`risk-management.md` 旧稿写成「强制拦截」⇒ **文档高估，非代码 bug**。A 维持现状 / B 接入硬拦截 |
 | 3 | **定时 automation 去留** | 🔶 **待拍板**。实测 **3 条活跃循环**（周一 09:20 仓库发现 / 周日 10:00 周报 / 工作日 15:45 进化总结）+ **1 条 `scheduledAt=2026-09-11T12:05` 已过期但仍 `ACTIVE`** 的一次性任务。⚠️ 文档此前写「4 个 09:26/14:40/15:35/15:40」**已失真** |
 | 4 | **`PanelBoundary.resetKey` 默认值改为 `label`** | 🔶 **待拍板（设计变更）**。收益 = 把多数场景从「调用点纪律」降为「默认行为」；代价 = 比较语义变更 + title 含计数的面板会在数据变动时清一次错误态 |
