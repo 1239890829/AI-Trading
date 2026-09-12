@@ -248,6 +248,10 @@ export function HeatmapTab() {
         title={`A 股云图${focusGroup ? ` · ${focusGroup.industry}` : ""}`}
         className="min-h-0 flex-1"
         bodyClassName="overflow-hidden"
+        // D-3：云图是**同一实例换视图**（全市场 / 自选 / 行业聚焦由 scope+focusGroup 决定），
+        // 复用实例 ⇒ 错误态不会自动清。用 scope+行业名做键（不直接传 focusGroup 对象：
+        // scope="watch" 时它是 useMemo 里现造的，引用不稳定）。判据见 panel-boundary.test.tsx。
+        resetKey={`${scope}:${focusGroup?.industry ?? ""}`}
         extra={
           <div className="flex items-center gap-2 text-xs">
             <button

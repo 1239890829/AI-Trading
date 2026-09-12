@@ -544,6 +544,10 @@ function WorkbenchInner() {
             </div>
           }
           className="min-h-0 flex-1 overflow-hidden"
+          // D-3：本 Panel 是**同一实例换视图**（activeGroup 决定 title 与列表内容）⇒ 必须给
+          // resetKey。注意 title 在「自选股」各分组间是**同一个字符串**，仅看 title 判断不出来。
+          // 判据与反例见 panel-boundary.test.tsx「Panel.resetKey（D-3）」。
+          resetKey={activeGroup}
         >
           {/* ── 视图切换 + 分组（M1/A1 2026-09-01）：chips 移入面板内部——
               「全部」是自选股的默认视图而非页面级筛选；持仓与自选分组用

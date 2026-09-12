@@ -16,6 +16,23 @@ interface PanelProps {
   extra?: ReactNode;
   className?: string;
   bodyClassName?: string;
+  /**
+   * 透传给内建 `PanelBoundary` 的重置键（D-3，2026-09-12 评审批次 2）。
+   *
+   * **判据 = 「同一位置的视图是否换了」，不是「title 变没变」。** 用户主动切视图
+   * （切 tab / 切标的 / 切分组）时，元素落在**同一 slot**、React 复用同一个实例，
+   * `PanelBoundary` 的 state 因此保留：某次渲染抛错后切走，**仍停在错误卡上**，
+   * 且 label 用的是**新** title ⇒ 归因错位 + 该位置被钉死到整页刷新。此时**必须传**。
+   *
+   * **刻意不传**：同一视图的**数据刷新**（轮询回新值、条数 0→N）。这类停在错误卡上是
+   * 期望行为——同一处仍在失败，不该被数据变化"擦白"；恢复路径是卡上的「重试」。
+   * 若给它传 resetKey，等于按轮询节奏反复重渲染注定失败的子树。
+   *
+   * ⚠️ **title 不变也可能要传**：工作台右列切分组时 title 在「自选股」各分组间**完全相同**，
+   * 只看 title 判断不出来 ⇒ 按 `activeGroup` 传。四种形态（两种要传、两种不必传）都在
+   * `panel-boundary.test.tsx` 的 `Panel.resetKey（D-3）` 里钉着，改渲染结构翻转时那里会红。
+   */
+  resetKey?: unknown;
 }
 
 /**
@@ -43,7 +60,7 @@ interface PanelProps {
  * `useResource` 三态与根边界兜底，详见 `components/ui/panel-boundary.tsx`。
  */
 
-export function Panel({ title, children, source, dataTimestamp, quality, qualityReasons, extra, className, bodyClassName }: PanelProps) {
+export function Panel({ title, children, source, dataTimestamp, quality, qualityReasons, extra, className, bodyClassName, resetKey }: PanelProps) {
   // 头部占位约 41px；图表类面板的标题（股票名+图表类型）在页面别处已展示，
   // 保留纯属重复占位 —— 无标题且无右侧徽标时整行不渲染（2026-09-02）。
   const showHeader = Boolean(title || extra || quality || source || dataTimestamp);
@@ -62,7 +79,7 @@ export function Panel({ title, children, source, dataTimestamp, quality, quality
         </div>
       )}
       <div className={"flex-1 " + (bodyClassName ?? "overflow-auto")}>
-        <PanelBoundary label={typeof title === "string" ? title : undefined}>{children}</PanelBoundary>
+        <PanelBoundary label={typeof title === "string" ? title : undefined} resetKey={resetKey}>{children}</PanelBoundary>
       </div>
     </section>
   );

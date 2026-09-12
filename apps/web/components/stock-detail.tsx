@@ -879,6 +879,10 @@ export const StockDetailPanel = memo(function StockDetailPanel({
           source={rightTab === "book" ? book?.source : undefined}
           dataTimestamp={rightTab === "book" ? book?.data_timestamp : null}
           className="min-h-0 flex-1 overflow-hidden"
+          // D-3：本 Panel 是**同一实例换内容**（rightTab 决定 title/children）⇒ 必须给 resetKey。
+          // 否则某个 tab 渲染失败后，切到别的 tab 仍停在错误卡上，且 label 用的是**新** title
+          // ⇒ 归因错位 + 该位置被钉死到整页刷新。判据与反例见 panel-boundary.test.tsx「D-3」组。
+          resetKey={rightTab}
           extra={
             /* 收起按钮走 Panel 头部 extra 槽位（正常文档流）——原 absolute 悬浮
                定位正好压在头部右侧「数据来源/数据时间」徽标上（2026-09-04 用户反馈） */
