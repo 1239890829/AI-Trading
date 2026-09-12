@@ -879,6 +879,65 @@ def test_kline_tool_validates_timeframe_and_bounds_limit():
     assert ok.count("\n") <= 33, "明细行数必须被 limit 夹住"
 
 
+def _synth_bars(n: int = 200) -> list[dict]:
+    """合成日K（升序、含趋势反转以产生成交）；**不触网**。"""
+    import math
+
+    bars = []
+    for i in range(n):
+        close = 10.0 + 2.0 * math.sin(i / 9.0) + i * 0.01
+        bars.append({
+            "ts": f"2026-{1 + i // 28:02d}-{1 + i % 28:02d}",
+            "open": close * 0.995, "high": close * 1.01,
+            "low": close * 0.99, "close": close, "volume": 1e6,
+        })
+    return bars
+
+
+def test_backtest_tool_flags_unknown_strategy_with_options():
+    """策略名给错要说清**合法取值**（只回「不合法」模型没法自我纠正）。"""
+    out = _call_tool(_ctx(object()), "backtest", symbol="600519", strategy="boll")
+    assert "参数不合法" in out and "ma_cross" in out and "boll" in out
+
+
+def test_backtest_tool_missing_strategy_lists_options():
+    out = _call_tool(_ctx(object()), "backtest", symbol="600519")
+    assert "参数不合法" in out and "双均线" in out  # 连注册表中文名一起给
+
+
+def test_backtest_tool_reports_metrics_with_mandatory_caveats(monkeypatch):
+    """核心纪律：指标可以给，但**三条口径必须一起给**——否则模型会把「样本内历史
+    表现」讲成「这只票能赚钱」，这是本项目最危险的误读之一。"""
+    import app.market.tdx_kline as tdx
+
+    monkeypatch.setattr(tdx, "tdx_daily_bars", lambda symbol, count=500: _synth_bars(200))
+
+    out = _call_tool(_ctx(object()), "backtest", symbol="600519",
+                     strategy="ma_cross", bars="200")
+    assert "日线回测" in out and "ma_cross" in out
+    assert "区间收益" in out and "最大回撤" in out and "夏普" in out and "%" in out
+    # —— 三条口径逐条钉死（注入验证：删任一条即红）
+    assert "不构成买卖建议" in out       # ① 非建议
+    assert "样本内" in out               # ② 未做样本外验证
+    assert "未做参数优化" in out         # ② 参数未优化
+    assert "不得据此外推" in out         # ③ 不得外推为选股依据
+    # —— 数值呈现纪律（首版实测踩到）：
+    assert "最大回撤 +" not in out, "回撤带 `+` 号会被读成「涨了」——方向恰好反了"
+    assert re.search(r"胜率 \+", out) is None, "胜率是比率，不带正负号"
+    assert re.search(r"平均持有 \d+\.\d{3}", out) is None, "浮点须截断（原样输出 8.461538）"
+
+
+def test_backtest_tool_insufficient_bars_says_so(monkeypatch):
+    """样本不足就**如实说不足**——绝不拿不够的样本硬算出一个数字。"""
+    import app.market.tdx_kline as tdx
+
+    monkeypatch.setattr(tdx, "tdx_daily_bars", lambda symbol, count=500: _synth_bars(30))
+
+    out = _call_tool(_ctx(object()), "backtest", symbol="600519", strategy="ma_cross")
+    assert "数据不足" in out and "30 根" in out
+    assert "区间收益" not in out
+
+
 def test_longhu_tool_symbol_branch_returns_seats_and_history():
     """个股龙虎榜：席位 + 上榜历史胜率（此前只有全市场榜，个股问不到）。"""
     class _P:

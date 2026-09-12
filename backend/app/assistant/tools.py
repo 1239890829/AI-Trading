@@ -1580,6 +1580,112 @@ async def _t_chain(ctx: ToolContext, **kw) -> str:  # noqa: ARG001 — 纯函数
     return _clip("\n".join(lines))
 
 
+# ---- 回测（P2-28① 收尾，2026-09-12）--------------------------------------
+#
+# 为什么是「执行型」而不是「读现成结果」：回测结果在生产侧**本来就不持久化**
+# ——`POST /api/backtest/run` 是同步计算、无结果表（见 `routes/backtest.py` 模块头），
+# 所以「读现成结果」这条路根本不存在；而新增结果表属**写库 + schema 变更**
+# （需确认），故这里走**现算、不留存**（与 `minute_decisions` 的「惰性结算」同思路：
+# 不改变既有写路径）。
+#
+# 耗时已实测（2026-09-12，真实数据 600519 / 500 根）：冷启 **0.90s**（含 500 根日K
+# 网络取数）／热缓存 **0.004s** ⇒ 远低于助手工具可接受量级；TTL 缓存（60s）由
+# 执行层统一套用，同一问题重复问不会重复算。
+async def _t_backtest(ctx: ToolContext, **kw) -> str:
+    """单标的日线策略回测（与 /api/backtest/run **同引擎、同默认成本**）。
+
+    ⚠️ 三条口径必须随结论一起给出，否则模型会把「历史样本内表现」读成
+    「这只票能赚钱」——本项目最危险的误读之一：
+    ① 结果是**历史统计事实**，不构成买卖建议；
+    ② 是**样本内**表现，未做样本外验证、未做参数优化；
+    ③ 成本用**代码默认**（未套用 mandate 文件）——生产若配了 mandate，数字会有差异。
+    """
+    code, e = _one_symbol(ctx, kw.get("symbol") or kw.get("symbols") or "")
+    if e:
+        return f"参数不合法：{e}"
+
+    from app.market.backtest import STRATEGY_REGISTRY, build_strategy, run_backtest
+
+    sid = (kw.get("strategy") or kw.get("strategy_id") or "").strip()
+    if not sid:
+        opts = "、".join(
+            f"{k}（{STRATEGY_REGISTRY[k]['name']}）" for k in sorted(STRATEGY_REGISTRY)
+        )
+        return f"参数不合法：strategy 缺失。可选策略：{opts}"
+    if sid not in STRATEGY_REGISTRY:
+        return (f"参数不合法：strategy 只接受 "
+                f"{'/'.join(sorted(STRATEGY_REGISTRY))}，收到 {sid!r}")
+
+    n_bars = _int_arg(kw.get("bars"), 250, 100, 500)
+
+    from app.market.mandate import resolve_backtest_request
+
+    try:
+        r = resolve_backtest_request(
+            symbol=code, strategy_id=sid, params=None, bars=n_bars, mandate_name=None,
+        )
+        strategy = build_strategy(r.strategy_id, r.params)
+    except ValueError as exc:
+        return f"参数不合法：{exc}"
+
+    def _compute() -> tuple[Any, str | None]:
+        """同步实现（供 asyncio.to_thread 调用；日K取数 + 回测都是阻塞调用）。"""
+        from app.market.tdx_kline import tdx_daily_bars
+
+        bars = tdx_daily_bars(r.symbol, count=r.bars)
+        if not bars or len(bars) < 60:
+            return None, (f"{r.symbol} 日K数据不足（拿到 {len(bars) if bars else 0} 根，"
+                          f"回测至少需 60 根）——新股 / 长期停牌 / 数据源缺都可能")
+        return run_backtest(bars, strategy, r.config), None
+
+    try:
+        report, err = await asyncio.to_thread(_compute)
+    except Exception as exc:  # noqa: BLE001
+        return f"回测执行失败：{exc}"
+    if err:
+        return err
+
+    def _pct(v: Any, sign: bool = True) -> str:
+        """收益率带符号（涨跌方向有意义）；**比率类不带**——
+        「最大回撤 +16.90%」会被读成"涨了 16.9%"，方向恰好反了（本工具首版实测踩到）。"""
+        try:
+            n = float(v) * 100
+        except (TypeError, ValueError):
+            return "—"
+        return f"{n:+.2f}%" if sign else f"{n:.2f}%"
+
+    extra = report.extra_metrics or {}
+    n_span = len(report.equity_ts)
+    span = f"{str(report.equity_ts[0])[:10]} → {str(report.equity_ts[-1])[:10]}" if n_span else "—"
+    strat_name = STRATEGY_REGISTRY[r.strategy_id]["name"]
+    raw_hold = extra.get("avg_holding_bars")
+    hold = f"{float(raw_hold):.2f}" if isinstance(raw_hold, (int, float)) else "—"
+    lines = [
+        f"【{r.symbol} 日线回测 · {r.strategy_id}（{strat_name}）"
+        f"· {n_span} 根日K（{span}）】",
+        f"- 区间收益 {_pct(report.total_return)}｜买入持有 {_pct(report.benchmark_return)}"
+        f"｜超额 {_pct(report.excess_return)}",
+        f"- 年化 {_pct(report.annual_return)}｜最大回撤 {_pct(report.max_drawdown, sign=False)}"
+        f"（{report.max_drawdown_days} 个交易日）",
+        f"- 夏普 {report.sharpe:.2f}｜索提诺 {report.sortino:.2f}｜卡玛 {report.calmar:.2f}",
+        f"- 成交 {int(extra.get('n_trades') or len(report.trades))} 次"
+        f"｜胜率 {_pct(report.win_rate, sign=False)}｜盈亏比 {report.profit_loss_ratio:.2f}"
+        f"｜平均持有 {hold} 交易日",
+    ]
+    if report.in_return or report.out_return:
+        lines.append(
+            f"- 样本内外分离：样本内 {_pct(report.in_return)}｜样本外 {_pct(report.out_return)}"
+        )
+    lines.append(
+        f"- ⚠️ 口径：**历史统计事实（样本内），不构成买卖建议**；策略参数取注册表默认值"
+        f"（{r.params}），**未做参数优化与样本外验证**；成本为代码默认"
+        f"（佣金 {r.config.commission_rate:.5f} / 印花税 {r.config.stamp_tax:.4f} / "
+        f"滑点 {r.config.slippage_bp:g}bp / 一字涨停拒买·跌停拒卖 / T+1）；"
+        f"样本仅 {n_span} 根日K，区间越短结论越不稳，**不得据此外推为选股依据**。"
+    )
+    return _clip("\n".join(lines))
+
+
 TOOL_SPECS: dict[str, ToolSpec] = {
     # P2-5（2026-09-12）：事件→板块传导链的**反向检索**（关键词 → 链）。
     # 与 events 工具的分工：events 给「发生了什么」，本工具给「它可能传到哪些板块」。
@@ -1702,6 +1808,15 @@ TOOL_SPECS: dict[str, ToolSpec] = {
         "无参数",
         _t_paper,
     ),
+    # P2-28① 收尾（2026-09-12）：回测。生产侧**无结果表可读**（端点同步计算、不持久化），
+    # 故登记为「现算不留存」的执行型工具；耗时实测 0.9s 冷启，明细见 `_t_backtest` 头注。
+    "backtest": ToolSpec(
+        "backtest",
+        "单标的日线策略回测（历史统计事实·样本内·未做参数优化，不构成买卖建议）",
+        "symbol=单只代码（6 位）｜strategy=ma_cross/ma_breakout｜"
+        "bars=回看日K根数（100~500，默认 250）",
+        _t_backtest,
+    ),
 }
 
 
@@ -1744,6 +1859,7 @@ TOOL_LABELS: dict[str, str] = {
     "themes": "题材梯队",
     "watchlist": "自选股",
     "paper": "模拟账户",
+    "backtest": "策略回测",
 }
 
 
