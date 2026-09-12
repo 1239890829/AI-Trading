@@ -25,6 +25,10 @@
                  豁免：L4 时间序列（daily-review/ evolution/ repo-watch/，按时间消费）
                        与 KB 分类文件（00-INDEX 用「条目级」约束，见 §7 表）
   E 同类聚集     同前缀（取 `-` 前段）≥3 份 → 提示评估 §5.1 合并 / §5.2 共同索引页
+  F  代码注释死引用  app/tests/web/scripts 里 `docs/xxx.md` 指向不存在的文件
+  F2 代码裸名死引用  已删/已归档方案文档的**裸名**（如 `linkage-design §3`），F 扫不到
+  F3 KB 指针错册   `见 kb/NN-x.md … KB-ENG-NN` 的条目号必须真的在那个册里
+                 （KB 分册后「条目搬家」会让只写册名的指针静默指错；触发刻意写窄，见函数说明）
 
 局限（诚实声明）：C 的"日志单轮新增 ≤80 行"是**过程指标**，静态扫描判不出，需人工/议程侧核对。
 """
@@ -60,6 +64,29 @@ FRAMEWORK_FILES = ("theme-sentiment-methodology.md", "data-source-comparison.md"
                    "daily-review-sop.md", "daily-review-checklist.md")
 FRAMEWORK_CAP, REPORT_CAP, KB_FILE_CAP = 500, 600, 800
 KB_ENTRY_CAP = 60  # §7 L0 硬门：单条 KB 条目 ≤60 行
+#: KB 分类文件的**唯一扫描入口**（两处检查共用，避免各自写 glob 而漏改一处）
+#: ⚠️ 原为 `glob("0[1-9]*.md")`——只覆盖 01~09，**新建 `10-*.md` 会被静默漏检**
+#: （既不算 C 的条目超长，也不出 >800 行提示），属「扫描面被写窄」类缺陷（[[KB-ENG-54]]）。
+#: 改正为「两位数字开头」并对全部 kb/*.md 做**覆盖断言**（见 kb_file_coverage_gap）。
+KB_SCAN_RE = re.compile(r"^\d{2}-.+\.md$")
+
+
+def kb_classified_files() -> list[Path]:
+    """docs/kb/ 下所有「两位数字前缀」的分类文件（00-INDEX 不计：它是索引不是分类）。"""
+    return sorted(p for p in (DOCS / "kb").glob("*.md")
+                  if KB_SCAN_RE.match(p.name) and not p.name.startswith("00-"))
+
+
+def kb_file_coverage_gap() -> list[str]:
+    """覆盖守卫：docs/kb/*.md 里**没被任何检查覆盖**的文件（防扫描面被写窄）。
+
+    为什么需要：条目超长与文件超长两道检查都靠 glob 选文件——glob 写窄时，
+    新文件不是「检查失败」而是**根本不进检查**，症状恰好是「全绿」。
+    要求「新分类文件加进来即自动纳入」，不依赖有人记得改 glob。
+    """
+    covered = {p.name for p in kb_classified_files()}
+    return [p.name for p in sorted((DOCS / "kb").glob("*.md"))
+            if p.name not in covered and not p.name.startswith("00-")]
 # 已判定的容忍项（显式登记，避免每跑一次就重新争论一次）
 TOLERATED = {
     "theme-sentiment-methodology.md":
@@ -275,10 +302,62 @@ def check_code_refs() -> tuple[list[tuple[str, int, str]], list[tuple[str, str]]
     return out, allowed
 
 
+#: 指针句式（F3 窄触发）：`见 kb/NN-x.md` 与紧随其后的 KB-ID 必须同册
+KB_POINTER_RE = re.compile(r"(?:见|参见|详见)\s*`?(kb/\d{2}-[\w\-]+\.md)`?[^）)\n]{0,40}?(KB-[A-Z]+-\d+)")
+
+
+def kb_entry_owner() -> dict[str, str]:
+    """KB-ID → 所在文件名。**从 `### KB-` 标题实读**，不手工维护映射表（避免第二份真相源）。"""
+    out: dict[str, str] = {}
+    for p in (DOCS / "kb").glob("*.md"):
+        for m in re.finditer(r"^### (KB-[A-Z]+-\d+)", _read(p), re.M):
+            out.setdefault(m.group(1), p.name)
+    return out
+
+
+def check_kb_pointer_files() -> list[tuple[str, int, str, str, str]]:
+    """F3 指针写错册：`见 kb/NN-x.md` 后面跟的 KB-ID 必须**真的在那个文件里**。
+
+    为什么需要：KB-ENG 按子类分册后，「引用某条目」与「写对册名」变成两件事——
+    只写 ID 的引用（`[[KB-ENG-NN]]`）不受搬家影响，但**带文件路径的指针会静默指错册**
+    （条目移走、句子还停在原册名上），而 B/F/F2 都只管「文件是否存在」、不管「条目在不在里面」。
+
+    ⚠️ **触发刻意写窄，且宽版已实测否决**：放宽为「同行出现即比对」时全仓 23 处命中里
+    **真误指针 0 处**（全是逐日 memory 的记录性引用、以及长句里两个不相干短语的巧合）
+    ⇒ 会变成「永远红的门禁」，按 [[KB-ENG-58]] 不可取。窄触发（只认「见/参见/详见 + 路径 + 40 字内 ID」）
+    实测 1 处命中 / 0 处误报 —— **宁可少报也不制造噪音**。
+    """
+    owner = kb_entry_owner()
+    skip_dirs = {"node_modules", ".next", ".turbo", "__pycache__", ".venv",
+                 "dist", "build", "archive", "trash", ".workbuddy"}
+    targets: list[Path] = []
+    for name in ("AGENTS.md", "README.md"):
+        if (ROOT / name).exists():
+            targets.append(ROOT / name)
+    for base in ("docs", "backend", "apps/web", "scripts"):
+        root = ROOT / base
+        if root.exists():
+            targets += [p for p in root.rglob("*") if p.is_file()]
+    out: list[tuple[str, int, str, str, str]] = []
+    for p in targets:
+        if p.suffix not in (".md", ".py", ".ts", ".tsx", ".mjs", ".js"):
+            continue
+        if any(d in p.parts for d in skip_dirs):
+            continue  # 逐日 memory 是 append-only 记录，天然指向"当时"的册，不算漂移
+        rel = str(p.relative_to(ROOT))
+        for i, line in enumerate(_read(p).splitlines(), 1):
+            for m in KB_POINTER_RE.finditer(line):
+                said, kid = m.group(1).split("/")[-1], m.group(2)
+                real = owner.get(kid)
+                if real and real != said:
+                    out.append((rel, i, said, kid, real))
+    return out
+
+
 def check_kb_entries() -> list[tuple[str, str, int]]:
     """§7 L0 硬门：单条 KB 条目 ≤60 行（`### KB-` 到下一条目起点的行距）。"""
     out = []
-    for p in sorted((DOCS / "kb").glob("0[1-9]*.md")):
+    for p in kb_classified_files():
         lines = _read(p).splitlines()
         starts = [i for i, l in enumerate(lines) if re.match(r"^### KB-[A-Z]+-\d+", l)]
         for j, s in enumerate(starts):
@@ -297,7 +376,7 @@ def check_kb_entries() -> list[tuple[str, str, int]]:
 def kb_file_advisories() -> list[tuple[str, int]]:
     """§7：L0 文件总行数不限，>800 只是「评估按子类拆文件」的触发 → 非阻断提示。"""
     out = []
-    for p in sorted((DOCS / "kb").glob("0[1-9]*.md")):
+    for p in kb_classified_files():
         n = len(_read(p).splitlines())
         if n > KB_FILE_CAP:
             out.append((f"docs/kb/{p.name}", n))
@@ -356,10 +435,12 @@ def main() -> int:
     dead = check_dead_links(scan_all)
     over = check_over_limit()
     kb_over = check_kb_entries()
+    coverage = kb_file_coverage_gap()
     abstract = check_missing_abstract()
     clusters = check_clusters()
     coderef, coderef_ok = check_code_refs()
     legacy, legacy_ok = check_legacy_slugs()
+    ptr = check_kb_pointer_files()
 
     def line(label: str, ok: bool, detail: str = "") -> None:
         nonlocal problems
@@ -380,6 +461,9 @@ def main() -> int:
     line("C 超层配额", not over, f"{len(over)} 份" + (" → " + ", ".join(f"{p}({n}>{c})" for p, n, c in over) if over else ""))
     line("C-KB 条目超长", not kb_over, f"{len(kb_over)} 条"
          + (" → " + ", ".join(f"{f}:{i}({n})" for f, i, n in kb_over) if kb_over else "（≤60，§7 L0 硬门）"))
+    line("C-KB 扫描覆盖", not coverage,
+         f"{len(coverage)} 份未纳入 KB 检查"
+         + (" → " + ", ".join(coverage) if coverage else "（docs/kb/*.md 全部纳入）"))
     line("D 摘要前置缺失", not abstract, f"{len(abstract)} 份")
     if abstract and not quiet:
         for p, n in abstract:
@@ -397,6 +481,11 @@ def main() -> int:
             print(f"       {f}:{ln} → {slug}（已删/归档，真身：{LEGACY_DOC_SLUGS[slug]}）")
         if len(legacy) > 12:
             print(f"       …另有 {len(legacy) - 12} 处")
+    line("F3 KB 指针错册", not ptr,
+         f"{len(ptr)} 处（`见 kb/NN-x.md … KB-ID` 必须同册；KB 分册后条目搬家会静默指错）")
+    if ptr and not quiet:
+        for f, ln, said, kid, real in ptr[:12]:
+            print(f"       {f}:{ln} → 写 kb/{said}，实为 {real} ← {kid}")
     if not quiet:
         print("[INFO] E 同类聚集（同前缀 ≥3 份，评估是否需共同索引页）："
               + (", ".join(f"{k}×{v}" for k, v in clusters) if clusters else "无"))

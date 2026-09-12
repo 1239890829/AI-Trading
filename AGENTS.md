@@ -289,7 +289,7 @@ C2 全市场日 K dump（已被 TDX 替代）；"等 LLM 再做摘要"（规则�
 | **docs/PROJECT-MASTER.md** | 技术总览：目录逐文件/数据源口径/API/阶段状态表 |
 | **docs/retro-and-gaps.md** | **唯一待办账本**——§一~§三 历史盘点 / §四 行为基线勿回退 / **§六 全量待办总账（P0/P1/P2）** / §七 偏差更正 / §八 计划文档处置 |
 | **docs/summary/** | 主题汇总 6 份（stock-strategy / factor-system / data-market / architecture-design / ai-evolution / review-governance）——**已完成方案的精华收敛处** |
-| **docs/kb/** | 权威知识库（KB-STOCK/TRADE/ENG/DEC + 00-INDEX，**全序列唯一登记处**）；`03-engineering.md` = 系统性工程教训（KB-ENG-16 起）/ `08-tooling-pitfalls.md` = 工具与环境陷阱速查（KB-ENG-01~15，09-12 按 §5.2 条件① 拆出）；`07-doc-curation.md` = 文档治理规范（v1.6：§3.2 完成即沉淀删件、`📎 示例` 状态、`scripts/doc-health.py` 一键体检）。**示例/题材案例一律标 `📎`，不得与 `✅ 已落地` 混用** |
+| **docs/kb/** | 权威知识库（KB-STOCK/TRADE/ENG/DEC + 00-INDEX，**全序列唯一登记处**）；**工程教训 KB-ENG 按子类分四册**（09-12 按 §5.2 条件① 拆出，引用只写 `[[KB-ENG-NN]]` 即可，查条目不必知道册名）：`03-engineering.md` = **应用与设计层**（架构/接口/口径判据/前端/方法论）/ `09-verification-pitfalls.md` = **验证层**（测试·门禁·CI·防线有效性）/ `10-data-contract-pitfalls.md` = **数据契约层**（写入·去重·传输·时间·质量门）/ `08-tooling-pitfalls.md` = 工具与环境陷阱速查（KB-ENG-01~15 操作类短条目）；`07-doc-curation.md` = 文档治理规范（v1.6：§3.2 完成即沉淀删件、`📎 示例` 状态、`scripts/doc-health.py` 一键体检）。**示例/题材案例一律标 `📎`，不得与 `✅ 已落地` 混用** |
 | docs/plan-registry.md | 历史计划去向表 + 文档处理规范（**不再新建计划文档**） |
 | docs/api.md | API 契约（端点数以 /openapi.json 为权威，文档按域分节） |
 | docs/data-sources.md + data-source-comparison.md | 字段口径实测记录 + 四源能力选型（改 Provider 前必读） |
