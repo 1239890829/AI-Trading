@@ -1,4 +1,4 @@
-"""盘中跟踪选股的量化规则库（选股 2.0，docs/stock-picking-system-2026-09-02.md §5–6）。
+"""盘中跟踪选股的量化规则库（选股 2.0，docs/summary/stock-strategy.md §5–6）。
 
 ## 设计约束（红线级，不可违背）
 
@@ -15,11 +15,14 @@
 
 - 题材阶段（`theme_service.judge_theme_stage`）：启动 / 发酵 / 高潮 / 分歧 / 退潮
 - 市场相位（`sentiment.engine.compute_sentiment`）：冰点 / 修复 / 发酵 / 高潮 / 分歧 / 退潮
+  —— **情绪适配的档位不再在本模块手写**：进攻档 = `STRONG_PHASES`、防守档 = `ADVERSE_PHASES`，
+  一律 import 自引擎（S2-7 相位副本收编；2026-09-12 收口最后一处遗留副本）
 - 梯队角色（`theme_service.classify_role`）：龙头 / 中军 / 跟风
 """
 from __future__ import annotations
 
 from app.sentiment.engine import ADVERSE_PHASES as _EBB_PHASES  # S2-7：唯一权威
+from app.sentiment.engine import STRONG_PHASES as _ATTACK_PHASES  # S2-7：唯一权威
 
 # ---------------------------------------------------------------- 确认走强（§5.1）
 CONFIRM_THEME_PCT_EARLY = 1.5   # 10:00 前板块涨幅确认线（早盘冲高回落常态化，阈值放宽）
@@ -124,21 +127,26 @@ def rank_directions(evidences: list[dict], phase: str | None = None) -> list[dic
         defensive = bool(ev.get("defensive"))
         fit = 10.0 if (
             (defensive and phase in _EBB_PHASES)
-            # ⚠️ 非防守方向只认「高潮/发酵」，**不含「修复」**——与 STRONG_PHASES
-            # （修复/发酵/高潮）不一致，属**已知口径分歧**（账本 §6.5 结转 #4）。
+            # 非防守方向直接用引擎的 STRONG_PHASES（进攻语义：修复/发酵/高潮）——
+            # **不再手写字面量**。「修复」曾长期缺席此处、与 STRONG_PHASES 不一致，
+            # 是 S2-7 相位副本收编遗漏的最后一处；2026-09-12 改为引用生产常量后，
+            # 两模块共享同一口径，**同类分歧不可能再出现**（改动需改引擎一处）。
             #
-            # 2026-09-12 核验订正——**精确语义**：fit 是**相位常量项**，所以「把某相位
-            # 加进进攻档」的真实效果 = **在该相位把非防守方向整体抬到防守方向之上**
-            # （+3.0），它**不改变任一组内的相对次序**。说成「会改变事件排序结果」过宽。
-            # 逐相位倾斜由 `tests/test_intraday_rules.py::test_fit_cross_group_tilt_is_decisive_and_pinned_per_phase`
-            # 钉住（含「修复 = 中性档」），改动该档位会让 3 项用例变红——那是设计意图。
+            # 语义边界（勿误读）：fit 是**相位常量项**，所以本档位只决定
+            # 「防守 ↔ 非防守」的**跨组倾斜**（+3.0），**不改变任一组内的相对次序**。
+            # 逐相位倾斜由 `tests/test_intraday_rules.py` 钉住。
             #
-            # 为什么**维持现状而不并入**：影响面经实测**不小**（「修复」的必要条件是
-            # 热度档 ≤1，实测 249 个交易日里 123 天 = **49.4%**，不是边角场景），
-            # 而本地产线**无可用反证**：逐日相位需要赚钱效应轴的 median_pct / red_rate /
-            # limit_down 三项，均**未落库**；盘前简报含 directions 的落盘仅 8 天、
-            # 产线相位记录仅 11 天。按「没验 ≠ 验过」纪律，**无证据不改口径**。
-            or (not defensive and phase in ("高潮", "发酵"))
+            # 为什么并入「修复」有据（2026-09-12 核验，`scripts/verify_intraday_phase_fit.py`）：
+            # 「进攻篮」（当日涨停池成员）次日**可成交口径**（次日开盘买入、剔除一字板开盘）
+            # 市场中性超额——修复 **−0.528%** vs 强势组（发酵+高潮）−0.404%、
+            # 弱势组（退潮+冰点）−0.034% ⇒ 修复**明显更接近强势组**。
+            # ⚠️ **收盘口径会给出相反结论**（修复 −0.528 → 更接近弱势组），因为
+            # 「当日封板买不到」，收盘价把不可成交的封板溢价算成了收益 ——
+            # 这正是 KB-STOCK-31 要求「当日封板 ⇒ 必须双口径对照」的原因。
+            # 已知边界：该代理是「进攻 vs 大盘」，不是「进攻 vs 防守」（防守方向无成分
+            # 可还原——官方题材目录里没有干净的防守行业题材）；且 8 份盘前简报里
+            # 防守方向占 top3 席位 **0/24**，故本口径变更的**实际影响面很小**。
+            or (not defensive and phase in _ATTACK_PHASES)
         ) else 0.0
         score = round(event * 1.0 + momentum * 0.6 + ech * 0.4 + fit * 0.3, 2)
         basis = [

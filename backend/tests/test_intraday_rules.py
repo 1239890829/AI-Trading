@@ -10,10 +10,12 @@
 """
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
 from app.picks import intraday_rules as ir
-from app.sentiment.engine import PHASE_ORDER, STRONG_PHASES
+from app.sentiment.engine import ADVERSE_PHASES, PHASE_ORDER, STRONG_PHASES
 
 
 # ---------------------------------------------------------------- 盘前排序
@@ -46,23 +48,39 @@ def test_rank_directions_defensive_boosted_in_ebb():
 # 所以「把某相位加进进攻档」这件事的精确语义 = 「在该相位把非防守方向整体抬到防守方向之上」，
 # 而不是笼统的「改变事件排序结果」。
 #
-# ⚠️ 进攻档不含「修复」是**当前口径**，且与 `sentiment.engine.STRONG_PHASES` 不一致——
-#    这是**已知分歧**（账本 §6.5 结转 #4）。2026-09-12 核验结论：本地样本**不足以**
-#    支撑该口径变更（逐日相位的赚钱效应轴 4 项输入里有 3 项未落库，见账本记录），
-#    故**维持现状**。下面的用例是**变更检测器**：若将来决定把「修复」并入进攻档，
-#    它们变红是**设计意图**，不是回归——请连同注释与账本一起更新。
+# 2026-09-12：进攻档改为**引用** `sentiment.engine.STRONG_PHASES`（不再手写字面量），
+# 「修复」随之并入 —— 这是 `scripts/verify_intraday_phase_fit.py` 的核验结论：
+# 可成交口径下「进攻篮」次日市场中性超额，修复 −0.528% ≈ 强势组 −0.404%，而弱势组为
+# −0.034%（收盘口径会给出相反结论，见 KB-STOCK-31「当日封板买不到 ⇒ 必双口径」）。
+# 下面的用例是**变更检测器**：档位一变就红，请连同注释与账本一起更新。
 
-_FIT_OFFENSIVE = ("高潮", "发酵")   # 与 intraday_rules.rank_directions 内的字面量保持一致
+_FIT_OFFENSIVE = ("修复", "发酵", "高潮")  # 期望契约；应与 STRONG_PHASES 相等
+_FIT_DEFENSIVE = ("退潮", "冰点")          # 期望契约；应与 ADVERSE_PHASES 相等
+
+
+def test_fit_tiers_are_sourced_from_production_constants_not_literals():
+    """档位必须**引用**生产常量（同一对象），并在**源码里真的用上**。
+
+    仅断言常量存在是不够的：把表达式换回 `("高潮","发酵")` 字面量、而 import 留在原处，
+    一样能通过——那就成了「引用了但没用」的假守卫（[[KB-ENG-46]] 同类）。故同时做源码级断言。
+
+    这里防的是「S2-7 相位常量收编」的复发：历史上 9 处副本已漂移出两处真缺陷。
+    """
+    assert ir._ATTACK_PHASES is STRONG_PHASES
+    assert ir._EBB_PHASES is ADVERSE_PHASES
+    assert tuple(_FIT_OFFENSIVE) == tuple(STRONG_PHASES)
+    assert tuple(_FIT_DEFENSIVE) == tuple(ADVERSE_PHASES)
+    src = inspect.getsource(ir.rank_directions)
+    assert "_ATTACK_PHASES" in src and "_EBB_PHASES" in src, "档位表达式退回了手写字面量"
 
 
 def test_fit_phase_tiers_partition_all_phases():
-    """六相位被划分成三档且互斥：进攻档 / 防守档 / 中性档。"""
-    offense, defense = set(_FIT_OFFENSIVE), set(ir._EBB_PHASES)
-    assert offense == {"高潮", "发酵"}
+    """六相位被划分成三档且互斥：进攻档 / 防守档 / 中性档（后者现仅剩「分歧」）。"""
+    offense, defense = set(_FIT_OFFENSIVE), set(_FIT_DEFENSIVE)
+    assert offense == {"修复", "发酵", "高潮"}
     assert defense == {"退潮", "冰点"}
     assert not (offense & defense)
-    # 中性档 = 剩下的相位，当前是「修复」与「分歧」
-    assert set(PHASE_ORDER) - offense - defense == {"修复", "分歧"}
+    assert set(PHASE_ORDER) - offense - defense == {"分歧"}
 
 
 def test_fit_is_phase_constant_so_within_group_order_is_invariant():
@@ -90,18 +108,18 @@ def test_fit_cross_group_tilt_is_decisive_and_pinned_per_phase():
     top = {ph: ir.rank_directions([off, dfn], phase=ph)[0]["direction"] for ph in PHASE_ORDER}
     assert top["退潮"] == "防守" and top["冰点"] == "防守"
     assert top["高潮"] == "进攻" and top["发酵"] == "进攻"
-    # 中性档：两组都拿 0 ⇒ 基础分高者在前（防守 7.9 > 进攻 5.0）
-    assert top["修复"] == "防守", "当前口径：修复为中性档"
+    # 2026-09-12 起「修复」属进攻档（此前为中性档）
+    assert top["修复"] == "进攻", "修复已并入进攻档"
+    # 中性档只剩「分歧」：两组都拿 0 ⇒ 基础分高者在前（防守 7.9 > 进攻 5.0）
     assert top["分歧"] == "防守"
 
 
-def test_repair_divergence_from_strong_phases_is_deliberate_and_recorded():
-    """「修复」在引擎里属 STRONG_PHASES（进攻语义），在本模块却是中性档。
-
-    断言这一**分歧存在**（而非断言它正确）——防止有人「顺手统一」而绕过核验。
-    """
-    assert "修复" in STRONG_PHASES
-    assert "修复" not in _FIT_OFFENSIVE
+def test_unknown_phase_is_neutral_not_silently_defensive():
+    """phase 缺失/未知时不得悄悄偏袒某一侧（三态纪律：判不了就不倾斜）。"""
+    off = {"direction": "进攻", "event_strength": 5.0, "theme_momentum": 0, "echelon": 0, "defensive": False}
+    dfn = {"direction": "防守", "event_strength": 7.9, "theme_momentum": 0, "echelon": 0, "defensive": True}
+    for ph in (None, "", "未知相位"):
+        assert ir.rank_directions([off, dfn], phase=ph)[0]["direction"] == "防守"
 
 
 # ---------------------------------------------------------------- 确认走强
