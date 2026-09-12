@@ -370,3 +370,25 @@ def test_conclusion_line_on_clean_run_says_all_passed(
     concl = _conclusion(capsys.readouterr().out)
 
     assert concl == "结论：全部通过", f"实得：{concl}"
+
+
+# ---------------------------------------------------------------- 豁免治理（§6.5b #8）
+
+def test_anchor_allow_entries_carry_reason_and_stay_pinned() -> None:
+    """**豁免治理钉子**（§6.5b #8，2026-09-13 裁定）：J 项豁免必须带理由，且数量钉死。
+
+    现有 2 条均属「叙述已处置物」（KB-ENG-62 拆除记录的处置留痕与成因复述）——
+    是**预期残留**，不是待清理项；但豁免本质是检查器的**声明式盲区**，增长必须
+    是有意识的决策：第 3 条出现时本用例变红，要求先评估是否应改走
+    「记录性标记」（行内状态词，见 ANCHOR_RECORD_MARKERS），而不是悄悄加豁免。
+    """
+    mod = _load()
+    entries = mod.ANCHOR_ALLOW
+    assert len(entries) == 2, (
+        f"ANCHOR_ALLOW 出现第 {len(entries)} 条豁免——豁免是检查器的声明式盲区，"
+        "增长必须过评审：先评估能否改走「记录性标记」（ANCHOR_RECORD_MARKERS 行内状态词），"
+        "确需豁免时请同步更新本钉子并在账本 §6.5b #8 留痕。"
+    )
+    for key, reason in entries.items():
+        assert isinstance(key, tuple) and len(key) == 2, f"豁免键必须是 (文件, 锚点)：{key!r}"
+        assert reason and len(reason) >= 12, f"豁免 {key} 缺少有信息量的理由：{reason!r}"

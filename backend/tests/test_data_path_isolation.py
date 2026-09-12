@@ -191,3 +191,25 @@ def test_record_gap_write_lands_in_sandbox():
 
     lines = [json.loads(l) for l in sandbox.read_text(encoding="utf-8").splitlines() if l.strip()]
     assert any(r.get("at") == rec["at"] for r in lines), "沙箱台账里没有本次留痕"
+
+
+def test_sandbox_root_not_inside_repo_data():
+    """**前提钉死**（§6.5b #7，2026-09-13 裁定：挂账边界转结构保证）。
+
+    `test_test_writable_paths_are_sandboxed` 用「`_REPO_DATA` 不在路径祖先中」
+    判定「仍指向真实数据」——该判据隐含前提：**沙箱自身不在 data/ 里**
+    （否则合法的沙箱路径也会命中同一不等式 ⇒ 恒假报）。当前 conftest 用
+    `tempfile.mkdtemp`（/tmp 下）⇒ 前提天然成立；本用例把前提显式化——
+    若将来有人把沙箱挪进 data/，这里会红并直接给出两条修法，而不是留一道
+    说不清何时触发的隐性误报。
+    """
+    import app.assistant.cognition as cognition
+    import app.services.leader_archive as leader_archive
+
+    for current in (Path(cognition.GAP_LOG_PATH), Path(leader_archive.ARCHIVE_PATH)):
+        assert _REPO_DATA not in current.parents, (
+            f"沙箱路径 {current} 位于仓库 data/ 之内——「仍指向真实数据」判据"
+            f"（`_REPO_DATA not in parents`）会把合法沙箱误判为真实路径。二选一："
+            "①把 conftest 的 _DATA_SANDBOX 挪出 data/（现状 tempfile.mkdtemp）；"
+            "②把判据改成与真实文件路径的精确比较。改动前先读本文件头部边界说明。"
+        )
