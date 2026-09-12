@@ -291,6 +291,92 @@ def test_attach_volume_ratios_max_of_members_and_daily_cache(monkeypatch):
     assert started["n"] == 3
 
 
+def test_volume_ratio_prev_day_volume_failure_isolated(monkeypatch):
+    """单只昨日量取数失败 → 该只记 None，**不连坐**其它只（并发化的前置契约）。
+
+    2026-09-12 评审批次 3：首拍取数改为 `asyncio.gather` 并发。gather 的默认语义是
+    **任一 coroutine 抛异常即整体失败**，所以并发化的前提是「`_prev_day_volume` 绝不
+    向外抛」——它靠内部 `try/except Exception` 保证（连 `hub.provider` 缺失的
+    AttributeError 也吞掉，返回 None）。
+
+    本用例**故意走真实 `_prev_day_volume`**（不 monkeypatch 它），只让 provider 对
+    某一只抛异常，从而验证的是**真实契约**而非桩的承诺。若有人把 `_prev_day_volume`
+    改成向外抛，本用例会先红，而不是等到线上首拍整体崩。
+    """
+    import app.picks.watcher as w
+
+    class _Provider:
+        async def get_kline(self, symbol: str, period: str):
+            if symbol == "600002":
+                raise RuntimeError("provider exploded")
+            return [NS(volume=1000.0, ts=__import__("datetime").datetime(2026, 9, 1))]
+
+    snap_service = NS(snapshot=[
+        {"symbol": "600001", "volume": 500.0},
+        {"symbol": "600002", "volume": 500.0},
+        {"symbol": "600003", "volume": 500.0},
+    ])
+    hub = NS(provider=_Provider(), get_quotes=lambda syms: [])
+    themes = {"粮食": {"members": ["600001", "600002", "600003"]}}
+    cache = {"date": "", "vols": {}}
+
+    asyncio.run(w._attach_volume_ratios(hub, snap_service, themes, cache, "20260902", 600))
+
+    # 失败的那只被缓存为非 None 之外的空值（None），**当日不重试**；其余两只正常取到
+    assert cache["vols"]["600002"] is None
+    assert cache["vols"]["600001"] == 1000.0
+    assert cache["vols"]["600003"] == 1000.0
+    # 三只都有昨日量才是 4.0；600002 为 None ⇒ compute_volume_ratio 返回 None ⇒
+    # max 取另外两只 → 仍是 4.0（这正是"不连坐"的可观测结果）
+    assert themes["粮食"]["volume_ratio"] == 4.0
+
+
+def test_volume_ratio_prev_day_fetch_is_concurrent_and_bounded(monkeypatch):
+    """昨日量取数**确实并发**（不是串行），且并发数**不超过** `VR_FETCH_CONCURRENCY`。
+
+    2026-09-12 评审批次 3 / P-1。这条守卫的两向价值：
+    · 注入「改回串行 for-await」⇒ 在飞数恒为 1 ⇒ 精确变红（防性能优化被静默回退）；
+    · 注入「去掉 Semaphore」⇒ 在飞数 = 全量 ⇒ 也变红（防打爆数据源触发 WAF，
+      项目里 `market.py` 两处注释都写了「N 大时可能触发 WAF」）。
+
+    做法：让被 monkeypatch 的 `_prev_day_volume` 在 `await` 前后自增/自减计数器，
+    在挂起点（`asyncio.sleep(0)`）采样在飞数。串行实现下最大在飞数必然是 1。
+    """
+    import app.picks.watcher as w
+    from app.picks.watcher import VR_FETCH_CONCURRENCY
+
+    n = VR_FETCH_CONCURRENCY * 3  # 样本数取 3 倍上限 → 上限真被约束时必被削平
+    symbols = [f"60{i:04d}" for i in range(n)]
+    inflight = {"cur": 0, "max": 0, "calls": 0}
+
+    async def _prev(hub_, s):
+        inflight["cur"] += 1
+        inflight["calls"] += 1
+        inflight["max"] = max(inflight["max"], inflight["cur"])
+        await asyncio.sleep(0)  # 主动让出，使"同时在飞"可被观测
+        inflight["cur"] -= 1
+        return 1000.0
+
+    monkeypatch.setattr(w, "_prev_day_volume", _prev)
+
+    snap_service = NS(snapshot=[{"symbol": s, "volume": 500.0} for s in symbols])
+    hub = NS(provider=NS(), get_quotes=lambda syms: [])
+    themes = {"粮食": {"members": symbols}}
+    cache = {"date": "", "vols": {}}
+
+    asyncio.run(w._attach_volume_ratios(hub, snap_service, themes, cache, "20260902", 600))
+
+    assert inflight["calls"] == n and len(cache["vols"]) == n  # 全覆盖，无遗漏
+    assert inflight["max"] > 1, (
+        f"昨日量取数退化成串行了（最大在飞数={inflight['max']}）——"
+        "并发化被回退，首拍耗时会随题材成员数线性增长"
+    )
+    assert inflight["max"] <= VR_FETCH_CONCURRENCY, (
+        f"并发数 {inflight['max']} 超过上限 {VR_FETCH_CONCURRENCY}——"
+        "Semaphore 失效，可能触发数据源 WAF"
+    )
+
+
 def test_attach_volume_ratios_snapshot_missing_falls_back_to_hub(monkeypatch):
     """全市场快照缺失 → 回退 hub.get_quotes（同步内存读，watchlist 覆盖）。"""
     import asyncio

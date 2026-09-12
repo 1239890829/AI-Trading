@@ -67,6 +67,9 @@ log = logging.getLogger(__name__)
 WATCHER_RULE_NAME = "__picks_watcher__"
 MAX_ALERTS_PER_DIRECTION = 3   # 每方向每日确认提醒上限（防龙头轮动刷屏）
 VR_MEMBERS_CAP = 5             # 量比计算的题材成员上限（按板数取最强 5 只）
+#: 昨日量并发取数上限。**对齐 `api/routes/market.py` 与 relay-rank 已验证的 8**
+#: （那两处注释同写「N 大时可能触发 WAF」）——不是随手取的数，是项目实测安全值。
+VR_FETCH_CONCURRENCY = 8
 
 
 # ---------------------------------------------------------------- 纯函数：板块匹配
@@ -731,9 +734,28 @@ async def _attach_volume_ratios(
         vr_cache["date"] = today_key
         vr_cache["vols"] = {}
     vols_cache: dict = vr_cache["vols"]
-    for s in sorted(symbols):
-        if s not in vols_cache:
-            vols_cache[s] = await _prev_day_volume(hub, s)
+    # 昨日量：只补**缓存未命中**的项（`vr_cache` 按日持久 ⇒ 除当日首拍外几乎零成本）。
+    # 取数**并发化**（2026-09-12 评审批次 3 / P-1）：旧写法是
+    # `for s in sorted(symbols): vols_cache[s] = await _prev_day_volume(hub, s)`
+    # —— 串行 await，每只一次**真实 HTTP**（腾讯日线），题材成员并集几十只时
+    # 就是几十个 RTT 逐个相加，盘前首拍被拖长。与 relay-rank（P0-3）同型：
+    # 纯 IO 并发、结果集合与失败语义都不变。
+    #
+    # 异常兜底**不需要**再包一层：`_prev_day_volume` 的 try 覆盖其整个函数体
+    # （连 `hub.provider` 缺失的 AttributeError 也吞掉）并返回 None，故
+    # `asyncio.gather` 默认语义下不会有异常逃逸、单只失败不会连坐其它只。
+    # 该契约由 `test_volume_ratio_prev_day_volume_failure_isolated` 钉住 ——
+    # 若有人把 `_prev_day_volume` 改成向外抛，那条测试会先红。
+    missing = [s for s in sorted(symbols) if s not in vols_cache]
+    if missing:
+        sem = asyncio.Semaphore(VR_FETCH_CONCURRENCY)
+
+        async def _load_one(sym: str) -> tuple[str, float | None]:
+            async with sem:
+                return sym, await _prev_day_volume(hub, sym)
+
+        for sym, vol in await asyncio.gather(*(_load_one(s) for s in missing)):
+            vols_cache[sym] = vol
     # 当日累计量：全市场快照（覆盖任意题材成员）→ hub 缓存回退（仅 watchlist）。
     # 两条路径都是纯内存读，无 IO，不再包 try/except 吞错。
     snap = getattr(snapshot_service, "snapshot", None) or []
