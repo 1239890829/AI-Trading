@@ -41,6 +41,7 @@ import asyncio
 import contextlib
 import logging
 import time
+from bisect import bisect_right
 from dataclasses import dataclass, field
 
 from app.core.config import settings
@@ -250,6 +251,36 @@ BOARD_LOW_ABSORB_PCT = 2.0
 #: 每拍每规则最多产出的提醒条数（按幅度取 Top，防板块轮动刷屏）。
 BOARD_ALERT_PER_BEAT = 3
 
+#: ③**占比口径 —— 现阶段只做 dry-run 计量，不参与触发**（P1-2 残余，2026-09-12 起）。
+#: **为什么需要这个口径**（实测 2026-09-12，全量 1000 个板块）：绝对额阈值对大板块偏松、
+#: 对小板块偏紧——净额同样落在 [0.4, 0.6] 亿的板块里，占比跨度
+#: **0.61%（核污染防治）→ 5.09%（卫浴制品）**，相差 **8.3 倍**；净额榜首「通信设备」
+#: 47.41 亿只占 2.67%，而净额更小的「被动元件」29.09 亿却占 8.74%
+#: ⇒ 一刀切的绝对额会把**占比更猛**的板块排在后面。
+#:
+#: **为什么不直接上线、先计量**（2026-09-12 裁定）：分位口径"取当日横截面前 5%"
+#: 在数学上**必然**产出 ≈ 0.05×N 个候选；全量 N≈1000 ⇒ **≈50 个/拍**，
+#: 而每拍上限只有 `BOARD_ALERT_PER_BEAT=3` ⇒ **几乎每拍满额**，
+#: 按 3/拍 × 约 240 拍 ≈ 上限 **720/天**，对比当日实测 **156/天**
+#: （`data/picks/briefs/20260911.json`）是 **4.6 倍**，会直接冲掉 P1-16 修好的
+#: 「噪音挤占判读预算」。而"这条线该落在哪"取决于每拍 `delta_ratio` 的真实分布，
+#: **该分布没有任何历史序列**：
+#: · `daykline.json`：bar = `[date, main_net_yi, change_pct]`，**无成交额**
+#:   ⇒ ratio 反推不出（仅 Top20/kind）；
+#: · `daily.json`：**确有**日频 ratio（`[code, name, net, ratio, pct]`，Top50/kind），
+#:   但 2026-09-12 实测只有 **5 个交易日**（09-07~09-11），且日频 ≠ 拍频
+#:   （时间尺度差三个数量级，拿它定"每分钟"的线属量纲错配）。
+#: 故先按拍累计直方图（`_probe_board_ratio`），跑满一个交易日再据实定线。
+BOARD_RATIO_PCTL = 95.0
+#: 横截面「够宽」的判定阈值（带回 ratio 的板块数）。低于此数的拍标为**窄拍**
+#: （正常全量约 1000 个板块，窄拍多为上游取数降级），其样本**照常保留**但另计
+#: `samples_narrow` 供读的人排除——不丢弃有效观测，也不假装它没问题。
+BOARD_RATIO_MIN_SAMPLES = 50
+#: 计量直方图分箱上界（百分点/拍）。落箱规则 = `bisect_right(BINS, v)`，即
+#: 箱 i 表示 `BINS[i-1] <= v < BINS[i]`（箱 0 为 `v < BINS[0]`，末箱为 `v >= BINS[-1]`）。
+#: 因此事后可直接对尾部求和，反推「任取一条线 t 会放出多少候选」。
+BOARD_RATIO_BINS = (0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0)
+
 
 def flow_surge_yi() -> float:
     """大单异动阈值（亿）。配置非正/非法 → 回退 `FLOW_SURGE_YI` 并记日志（不静默改口径）。"""
@@ -284,8 +315,22 @@ class IntradayWatcher:
         self.beat_count = 0
         # 题材成员主力净额跟踪（P1 方向2）：symbol -> {"peak": 累计净额峰值, "alerted": bool}
         self.flow_state: dict[str, dict] = {}
-        # 板块级资金跟踪（P1-1）：board 名 -> {"last": 上一拍累计净额, "surge"/"absorb": bool}
+        # 板块级资金跟踪（P1-1）：board 名 -> {"last": 上一拍累计净额, "last_ratio":
+        # 上一拍累计占比, "surge"/"absorb": bool}
+        # `last_ratio` 仅供占比口径的 dry-run 计量用（`_probe_board_ratio`），不参与触发。
         self.board_flow_state: dict[str, dict] = {}
+        # 占比口径 dry-run 计量（2026-09-12，见 BOARD_RATIO_* 注释）。**不产任何告警**，
+        # 只累计每拍 delta_ratio 的分布；跑满一个交易日后再据实决定阈值线。
+        # ⚠️ **内存态、当日有效、重启即清零**：要拿满一天的分布，当日盘中**不得重启 8000**
+        # （与"交易日 12:00 前禁重启"的既有约束同向）。读数出口 =
+        # `GET /api/picks/watcher/state` → `board_ratio_probe`（复用既有端点，未新增）。
+        self.board_ratio_probe: dict = {
+            "beats": 0,               # 计入的拍数（样本 ≥ BOARD_RATIO_MIN_SAMPLES）
+            "beats_insufficient": 0,  # 样本不足被整拍跳过的拍数
+            "samples": 0,             # 板块·拍 样本总数
+            "hist": [0] * (len(BOARD_RATIO_BINS) + 1),
+            "total": 0.0,             # delta_ratio 累计和（算均值用）
+        }
 
     def step(self, beat: dict) -> list[dict]:
         self.beat_count += 1
@@ -349,12 +394,19 @@ class IntradayWatcher:
         规避差分，而板块要的是"正在加速"，**必须与上一拍做差**。watcher 一拍 ≈60s，
         故增量即"每分钟净流入"。首拍无基线 → 只记基线不判定（不臆造）。
 
+        **触发逻辑与绝对额口径保持原样、逐字未动**——占比口径当前**只计量、不触发**
+        （2026-09-12 裁定，理由见 `BOARD_RATIO_*` 常量注释）：分位口径取前 5% 会必然
+        产出 ≈50 候选/拍而撞满 3/拍上限，告警量约 4.6 倍，但"线该画在哪"缺少拍频分布
+        依据 ⇒ 先由 `_probe_board_ratio` 累计真实分布，跑满一个交易日再据实定线，
+        避免拿未标定的口径直接上线（同 P1-16「噪音挤占判读预算」的教训）。
+
         两类各当日一次（key 含规则名+板块名，`append_alert` 兜底）；每拍按幅度取
         Top `BOARD_ALERT_PER_BEAT`，防板块轮动刷屏。阈值为经验初值、未回测校准。
         """
         out: list[dict] = []
         surge: list[tuple[float, str, dict]] = []
         absorb: list[tuple[float, str, dict]] = []
+        carry = 0   # 本拍带回可用 ratio 的板块数（横截面宽度，用于判定该拍是否计入）
         for name, it in boards.items():
             if not name or not isinstance(it, dict):
                 continue
@@ -362,10 +414,16 @@ class IntradayWatcher:
             if net is None:
                 continue
             st = self.board_flow_state.setdefault(
-                name, {"last": None, "surge": False, "absorb": False}
+                name, {"last": None, "last_ratio": None, "surge": False, "absorb": False}
             )
             prev, st["last"] = st["last"], net
             pct = it.get("pct")
+            # 占比仅供 dry-run 计量：`last_ratio` 的读写不参与任何触发判定
+            prev_ratio, st["last_ratio"] = st["last_ratio"], it.get("ratio")
+            if st["last_ratio"] is not None:
+                carry += 1                            # 本拍带回可用 ratio（横截面宽度）
+            if prev_ratio is not None and st["last_ratio"] is not None:
+                self._probe_board_ratio(st["last_ratio"] - prev_ratio)
             if prev is not None:
                 delta = net - prev
                 if not st["surge"] and delta >= BOARD_FLOW_SURGE_YI:
@@ -373,6 +431,8 @@ class IntradayWatcher:
             if (not st["absorb"] and net >= BOARD_LOW_ABSORB_YI
                     and pct is not None and pct < BOARD_LOW_ABSORB_PCT):
                 absorb.append((net, name, {"net": net, "pct": pct}))
+
+        self._probe_close_beat(carry)
 
         for delta, name, d in sorted(surge, key=lambda x: x[0], reverse=True)[:BOARD_ALERT_PER_BEAT]:
             self.board_flow_state.setdefault(name, {})["surge"] = True
@@ -403,6 +463,39 @@ class IntradayWatcher:
             })
         return out
 
+    def _probe_board_ratio(self, delta_ratio: float) -> None:
+        """占比口径 dry-run 计量：把本拍 delta_ratio 记进直方图（**不产告警、不影响触发**）。
+
+        **不按横截面宽度过滤样本**：单个板块的 `delta_ratio` 是独立于"本拍共有几个板块"
+        的有效观测，丢弃它属于无谓的信息损失。宽度只影响**怎么解读**，故由
+        `beats` / `beats_insufficient` / `samples_narrow` 另行标注，让读的人自行取舍。
+
+        分箱 = `bisect_right(BOARD_RATIO_BINS, v)`；负值（占比下降）照记——
+        定线时既要看尾部多厚，也要看分布是否对称（「占比突增」本就该只在右尾）。
+        """
+        p = self.board_ratio_probe
+        p["samples"] += 1
+        p["total"] += delta_ratio
+        p["_beat_deltas"] = p.get("_beat_deltas", 0) + 1
+        p["hist"][bisect_right(BOARD_RATIO_BINS, delta_ratio)] += 1
+
+    def _probe_close_beat(self, carry: int) -> None:
+        """收一拍：按**横截面宽度**（带回 ratio 的板块数）标注该拍，样本照常保留。
+
+        `carry < BOARD_RATIO_MIN_SAMPLES` 的"窄拍"多为上游取数降级（正常全量约 1000 个
+        板块），其样本**不丢弃**但计入 `samples_narrow` 供排除参考。
+        首拍（全员无基线、delta 数为 0）只要横截面够宽就仍算有效拍——
+        "还没有上一拍可比"与"板块数太少"成因不同，不可混记。
+        """
+        p = self.board_ratio_probe
+        deltas = p.pop("_beat_deltas", 0)
+        if carry < BOARD_RATIO_MIN_SAMPLES:
+            p["beats_insufficient"] += 1
+            p["samples_narrow"] = p.get("samples_narrow", 0) + deltas
+            return
+        p["beats"] += 1
+        p["beat_deltas"] = p.get("beat_deltas", 0) + deltas
+
     def state(self) -> dict:
         return {
             "active": True,
@@ -426,6 +519,27 @@ class IntradayWatcher:
             "flow_tracked": len(self.flow_state),
             "board_flow_tracked": len(self.board_flow_state),
             "flow_alerted": sorted(s for s, v in self.flow_state.items() if v.get("alerted")),
+            # 占比口径 dry-run 计量（P1-2 残余）：**不产告警**，只为"线该画在哪"取证。
+            # 落在这里是因为 GET /api/picks/intraday/watcher/state 早已暴露 state()，
+            # 复用既有出口、不新增端点（红线 6：默认复用而非新建）。
+            "board_ratio_probe": self._probe_snapshot(),
+        }
+
+    def _probe_snapshot(self) -> dict:
+        """计量快照：直方图 + 可对账的计数。空计量如实报 `enabled=False`（三态）。"""
+        p = self.board_ratio_probe
+        n = p["samples"]
+        return {
+            "enabled": p["beats"] > 0,
+            "bins": list(BOARD_RATIO_BINS),
+            "hist": list(p["hist"]),
+            "samples": n,
+            "samples_narrow": p.get("samples_narrow", 0),
+            "beats": p["beats"],
+            "beats_insufficient": p["beats_insufficient"],
+            "min_samples": BOARD_RATIO_MIN_SAMPLES,
+            "pctl": BOARD_RATIO_PCTL,
+            "mean": round(p["total"] / n, 4) if n else None,
         }
 
 
@@ -490,12 +604,16 @@ async def _board_pcts(hub) -> tuple[dict[str, float], int]:
 
 
 async def _board_flows(hub) -> dict[str, dict]:
-    """板块主力净额（概念+行业）：name -> {net, pct, code}（净额单位亿，东财 f62 口径）。
+    """板块主力净额（概念+行业）：name -> {net, ratio, pct, code}（净额单位亿，东财 f62 口径）。
 
     与 `_board_pcts` 同源、同走 board_flow 唯一入口（30s TTL 缓存 → 实际零额外上游
     调用）。**拆成独立函数是为了不动 `_board_pcts` 的签名**——测试按旧签名
     monkeypatch 它。net 缺失（None）如实保留，调用方按 unknown 处理，
     绝不拿 0 冒充"无流入"（三态纪律）。
+
+    `ratio` = `main_net_ratio`（主力净额占板块成交额比，%，东财 f184；缺 f184 时
+    `board_flow` 已按 f62/f6 同式补算）——**此前被丢弃、2026-09-12 接入**，供
+    surge 的占比口径使用。同样可缺失（None），调用方按 unknown 跳过。
     """
     out: dict[str, dict] = {}
     for kind in ("concept", "industry"):
@@ -509,6 +627,7 @@ async def _board_flows(hub) -> dict[str, dict]:
                 continue
             out[name] = {
                 "net": row.get("main_net_yi"),
+                "ratio": row.get("main_net_ratio"),
                 "pct": row.get("change_pct"),
                 "code": row.get("board_code"),
             }

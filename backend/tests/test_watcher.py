@@ -530,8 +530,9 @@ def test_board_flow_keys_are_kind_tagged():
     assert all(a["direction"] == "甲板" for a in got)
 
 
-def test_board_flows_io_reads_net_pct_code(monkeypatch):
-    """`_board_flows` 取三要素；缺 net 如实 None（不填 0）；无名板块跳过；单 kind 失败降级。"""
+def test_board_flows_io_reads_net_ratio_pct_code(monkeypatch):
+    """`_board_flows` 取四要素（含 `ratio`，2026-09-12 接入）；缺 net/ratio 如实 None
+    （不填 0）；无名板块跳过；单 kind 失败降级。"""
     import asyncio
 
     from app.market import board_flow as bf
@@ -539,16 +540,164 @@ def test_board_flows_io_reads_net_pct_code(monkeypatch):
 
     async def fake_list(kind):
         if kind == "concept":
-            return ([{"name": "甲板", "main_net_yi": 1.5, "change_pct": 0.8, "board_code": "BK1"},
-                     {"name": "乙板", "main_net_yi": None, "change_pct": 2.0, "board_code": "BK2"},
+            return ([{"name": "甲板", "main_net_yi": 1.5, "main_net_ratio": 3.2,
+                      "change_pct": 0.8, "board_code": "BK1"},
+                     {"name": "乙板", "main_net_yi": None, "main_net_ratio": None,
+                      "change_pct": 2.0, "board_code": "BK2"},
                      {"name": "", "main_net_yi": 9.0, "change_pct": 1.0}], [])
         return (None, ["boom"])
 
     monkeypatch.setattr(bf, "get_board_list", fake_list)
     out = asyncio.run(wt._board_flows(None))
-    assert out["甲板"] == {"net": 1.5, "pct": 0.8, "code": "BK1"}
+    assert out["甲板"] == {"net": 1.5, "ratio": 3.2, "pct": 0.8, "code": "BK1"}
     assert out["乙板"]["net"] is None
+    assert out["乙板"]["ratio"] is None      # 缺 f184 → 如实 None，不填 0
     assert "" not in out
+
+
+# ---------------------------------------------------------------- 占比口径 dry-run 计量（P1-2 残余，2026-09-12）
+
+
+def _boards(n: int, named: dict[str, float] | None = None, pct: float = 5.0,
+            base: float = 0.0) -> dict[str, dict]:
+    """构造一拍板块字典：`n` 个匿名板块（ratio=`base`）+ 每个具名板块。
+
+    具名板块**永远存在**（即使 ratio 为 0）——否则它在"基线拍"里缺席，
+    下一拍就是首拍（无 prev）⇒ 测出来的是"没有基线"而不是被考察的逻辑。
+
+    `base` 用来把匿名板块的 ratio 抬离 0：此时"缺值"与"值为 0"才可区分，
+    否则把 unknown 当 0 的错误**测不出来**（2026-09-12 实测：用 0.0 时注入不红）。
+
+    pct 默认 5.0（> BOARD_LOW_ABSORB_PCT）⇒ 只考察 surge 与计量，不掺低吸异动。
+    """
+    out = {f"板{i}": {"net": 0.0, "ratio": base, "pct": pct} for i in range(n)}
+    for name, ratio in (named or {}).items():
+        out[name] = {"net": 0.0, "ratio": ratio, "pct": pct}
+    return out
+
+
+def _two_beats_ratio(w, n: int, first: dict[str, float], second: dict[str, float]) -> list[dict]:
+    """打两拍：两拍**都含**同一批具名板块，只有 ratio 变；返回第二拍的产出。"""
+    w._step_board_flows(_boards(n, {k: first.get(k, 0.0) for k in second}))
+    return w._step_board_flows(_boards(n, second))
+
+
+def test_board_ratio_probe_does_not_trigger_any_alert():
+    """**核心不变量**：占比计量**绝不影响触发**。
+
+    即便占比增量给到 50 个百分点这种极端值，只要净额增量不足绝对额阈值，
+    就必须**一条告警都不产**——否则 dry-run 就成了事实上的上线。
+    """
+    w = IntradayWatcher([])
+    got = _two_beats_ratio(w, 60, {"猛板": 0.0}, {"猛板": 50.0})
+    assert got == []
+    assert w.board_ratio_probe["samples"] == 61       # 但计量确实记下了（60 匿名 + 猛板）
+
+
+def test_board_ratio_probe_accumulates_histogram_and_beats():
+    """计量累计正确：样本数 / 计入拍数 / 直方图落箱，且均值可复算。"""
+    from app.picks.watcher import BOARD_RATIO_BINS
+
+    w = IntradayWatcher([])
+    w._step_board_flows(_boards(60, {"甲板": 0.0, "乙板": 0.0}))   # 首拍无基线 → 0 样本
+    w._step_board_flows(_boards(60, {"甲板": 0.03, "乙板": 3.0}))  # 第二拍：+0.03 / +3.0
+    p = w._probe_snapshot()
+    # 两拍横截面都够宽（62 个板块带回 ratio）⇒ 都计入有效拍；但只有第二拍有 delta
+    assert p["beats"] == 2
+    assert p["beats_insufficient"] == 0
+    assert p["samples"] == 62                        # 60 匿名(Δ0) + 甲板 +0.03 + 乙板 +3.0
+    assert p["min_samples"] == 50
+    assert p["bins"] == list(BOARD_RATIO_BINS)
+    assert sum(p["hist"]) == 62
+    assert p["mean"] == round((0.03 + 3.0) / 62, 4)
+    # 落箱：bisect_right([0.02,0.05,...], 0.03)=1；bisect_right(..., 3.0)=7；0.0 → 箱 0
+    assert p["hist"][1] == 1
+    assert p["hist"][7] == 1
+    assert p["hist"][0] == 60
+    assert p["enabled"] is True
+
+
+def test_board_ratio_probe_first_beat_is_not_insufficient():
+    """首拍全员**无基线**（delta 数为 0）但横截面够宽 ⇒ 仍算**有效拍**、不算样本不足。
+
+    这两件事成因完全不同：前者是"还没有上一拍可比"，后者是"板块数太少"。
+    若混记，`beats_insufficient > 0` 会被误读成"横截面经常不够"，进而误判口径可用性。
+    """
+    w = IntradayWatcher([])
+    w._step_board_flows(_boards(60))
+    p = w._probe_snapshot()
+    assert p["beats"] == 1
+    assert p["beats_insufficient"] == 0
+    assert p["samples"] == 0                          # 首拍确实没有可比的 delta
+    assert p["enabled"] is True
+
+
+def test_board_ratio_probe_negative_deltas_are_recorded():
+    """占比下降（负增量）也要记——分布是否对称是"线画在哪"的依据之一，不能只留右尾。"""
+    w = IntradayWatcher([])
+    _two_beats_ratio(w, 60, {"降板": 0.0}, {"降板": -5.0})
+    p = w._probe_snapshot()
+    assert p["hist"][0] == 61                         # 60 匿名(Δ0) + 降板(-5.0) 全在箱 0
+    assert p["mean"] == round(-5.0 / 61, 4)
+    assert p["samples"] == 61
+
+
+def test_board_ratio_probe_narrow_beats_keep_samples_but_are_flagged():
+    """横截面过窄的拍：样本**照常保留**（单板块 delta 是有效观测，不丢信息），
+    但必须被标出来（`beats_insufficient` / `samples_narrow`），不能假装它没问题。"""
+    w = IntradayWatcher([])
+    got = _two_beats_ratio(w, 10, {"甲板": 0.0}, {"甲板": 3.0})
+    assert got == []
+    p = w._probe_snapshot()
+    assert p["beats"] == 0
+    assert p["beats_insufficient"] == 2               # 两拍横截面都只有 11 个板块
+    assert p["samples"] == 11                         # 但样本保留（可用于看分布形状）
+    assert p["samples_narrow"] == 11                  # 且如实标注为"窄拍样本"
+    assert p["enabled"] is False                      # 无有效拍 ⇒ 不宣称可用
+    assert p["hist"][0] == 10 and p["hist"][7] == 1   # 分布仍如实落箱
+
+
+def test_board_ratio_probe_requires_both_beats_known():
+    """任一拍缺 ratio ⇒ 该板块本拍**不计入**（unknown ≠ 0，三态纪律）。
+
+    匿名板块的 ratio 抬到 1.0 且缺值板块取 5.0：这样"缺值"与"值为 0/相等"可区分——
+    用 0.0 构造时，把 unknown 当 0 的错误**测不出来**（2026-09-12 实测注入不红）。
+    """
+    w = IntradayWatcher([])
+    b1 = _boards(60, {"缺板": 0.0}, base=1.0)
+    del b1["缺板"]["ratio"]                            # 首拍缺
+    w._step_board_flows(b1)
+    w._step_board_flows(_boards(60, {"缺板": 5.0}, base=1.0))
+    # 60 个匿名板块 delta=0 计入；缺板 首拍 unknown ⇒ 本拍不计
+    assert w._probe_snapshot()["samples"] == 60
+
+    w2 = IntradayWatcher([])
+    w2._step_board_flows(_boards(60, {"缺板": 5.0}, base=1.0))
+    b2 = _boards(60, {"缺板": 5.0}, base=1.0)
+    del b2["缺板"]["ratio"]                            # 次拍缺
+    w2._step_board_flows(b2)
+    assert w2._probe_snapshot()["samples"] == 60
+
+
+def test_board_flow_surge_absolute_path_unchanged_by_probe():
+    """回归守卫：计量接入后，绝对额口径的 surge 语义必须与改动前**逐字一致**
+    （文案 / meta 键集 / 阈值），确保 dry-run 是纯增量、没夹带行为变更。"""
+    from app.picks.watcher import BOARD_FLOW_SURGE_YI
+
+    w = IntradayWatcher([])
+    w._step_board_flows(_boards(60, {"甲板": 0.0}))
+    got = w._step_board_flows({**_boards(60, {"甲板": 0.0}),
+                               "甲板": {"net": 1.0, "ratio": 0.0, "pct": 5.0}})
+    surges = [a for a in got if a["kind"] == "board_flow_surge"]
+    assert [a["direction"] for a in surges] == ["甲板"]
+    assert surges[0]["meta"] == {
+        "trigger_value": 1.0, "threshold": BOARD_FLOW_SURGE_YI, "cum_net_yi": 1.0,
+    }
+    assert surges[0]["text"] == (
+        "🌊 板块资金突增 甲板：本拍主力净流入 +1.00 亿"
+        f"（当日累计 1.00 亿；阈值 {BOARD_FLOW_SURGE_YI} 亿/拍）"
+    )
+    assert "占比" not in surges[0]["text"]
 
 
 # ---------------------------------------------------------------- 分发快照（名称留存）
