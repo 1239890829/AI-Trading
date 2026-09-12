@@ -30,10 +30,6 @@ def _sets(n: int = 4, *, scores=(70.0, 60.0, 52.0, 51.0), rejected=(49.0, 48.0, 
     return out
 
 
-def _reviews(dates_symbols_verdict):
-    return {(d, s): {"verdict": v, "excess_pct": 1.0} for d, s, v in dates_symbols_verdict}
-
-
 # ---------------------------------------------------------------- 纯函数模拟
 
 

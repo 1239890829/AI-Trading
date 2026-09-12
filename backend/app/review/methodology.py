@@ -24,9 +24,6 @@ from app.review.schemas import DimensionResult, MetaInsight, ReviewData
 
 log = logging.getLogger(__name__)
 
-# 连续多少次某维度空转才判定"无效"：1 次可能是当天确实没情况，3 次是模式
-INEFFECTIVE_STREAK = 3
-
 
 def build_meta_insights(
     data: ReviewData, dimensions: list[DimensionResult], method: MethodologyConfig

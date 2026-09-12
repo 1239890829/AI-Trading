@@ -222,11 +222,6 @@ _PAPER_READ: dict = {
 }
 
 
-def paper_position_read_state() -> dict:
-    """模拟持仓读取状态（只读快照）。"""
-    return dict(_PAPER_READ)
-
-
 def position_monitor_state() -> dict:
     """持仓监护两路读取状态的合并快照（数据健康哨兵单点消费）。"""
     return {"paper": dict(_PAPER_READ), "real": dict(_REAL_READ)}

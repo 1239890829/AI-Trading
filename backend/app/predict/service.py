@@ -1,4 +1,4 @@
-"""预判编排：采集 → 评分 → 报告落库；目标日收盘后验证回填（docs §五）。
+"""预判验证回填：目标日收盘后对 pending 预判跑「验证四问」（docs §五）。
 
 验证四问（每条题材预判在目标日收盘后回答）：
 1. 题材成立了吗？——目标日涨停池中题材关联家数 ≥3
@@ -8,140 +8,25 @@
 
 验证结果回填 prediction_themes.verify_outcome —— 这是命中率统计
 与方法论再校准（哪类消息级别/环境下预判最准）的直接数据来源。
+
+⚠️ 预判的「生产入口」（采集→评分→落库，原 run_prediction）已于 2026-09-13
+死代码清理中移除：全仓（路由/调度/测试）无任何调用方。本模块保留验证回填侧
+（verify_predictions / maybe_auto_verify），对库内存量 pending 报告仍然有效；
+若将来重启预判生产，从 git 历史找回原实现。
 """
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
 
-from app.predict.collector import collect_predict_evidence
-from app.predict.engine import ENGINE_VERSION, judge_theme
-from app.predict.schemas import PredictionReport
-from app.predict.storage import apply_verify, get_report, save_report
+from app.predict.storage import apply_verify, get_report
 from app.services.theme_service import parse_theme_tags
-from app.core.bjtime import beijing_now
 
 log = logging.getLogger(__name__)
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-async def run_prediction(
-    hub,
-    snapshot_service,
-    session_factory,
-    theme_hint: str | None = None,
-    keywords: list[str] | None = None,
-    trigger: str = "manual",
-) -> PredictionReport:
-    """跑一次预判。theme_hint + keywords 给定走定向模式；否则自动发现候选主题。"""
-    hint_mode = bool(theme_hint and keywords)
-    if not hint_mode:
-        # 自动发现：无关键词可先只采热榜与新闻样本，按新闻高频词聚类（v1 启发式）
-        kw = keywords or []
-        pack = await collect_predict_evidence(hub, snapshot_service, kw)
-        discovered = _discover_themes(pack)
-        if not discovered:
-            pack["gaps"].append("auto_discover: 热榜个股新闻无 ≥2 股共享关键词，未发现候选主题——建议给 theme_hint 定向预判")
-            report = _empty_report(pack, trigger)
-            report.prediction_id = f"PR-{report.target_date}-{beijing_now().strftime('%H%M%S')}"
-            return save_report(session_factory, report)
-        predictions = [
-            judge_theme(theme, kws, pack, heuristic=True) for theme, kws in discovered
-        ]
-        used_pack = pack
-    else:
-        pack = await collect_predict_evidence(hub, snapshot_service, keywords)
-        predictions = [judge_theme(theme_hint, keywords, pack)]
-        used_pack = pack
-
-    report = PredictionReport(
-        created_at=_now_iso(),
-        context=used_pack["context"],
-        target_date=used_pack["target_date"],
-        trigger=trigger,
-        engine_version=ENGINE_VERSION,
-        market_env={
-            "phase": (used_pack.get("env") or {}).get("phase"),
-            "last_trade_date": used_pack["last_trade_date"],
-            "hot_list_top5": [
-                {"rank": h["rank"], "name": h.get("name"), "symbol": h["symbol"]}
-                for h in used_pack["hot_list"][:5]
-            ],
-        },
-        predictions=predictions,
-        summary=_summary_line(predictions, used_pack),
-    )
-    report.prediction_id = f"PR-{report.target_date}-{beijing_now().strftime('%H%M%S')}"
-    # 报告级 gap（采集层共用），逐题材 gap 已在各 ThemePrediction.data_gaps
-    return save_report(session_factory, report)
-
-
-def _discover_themes(pack: dict) -> list[tuple[str, list[str]]]:
-    """无 hint 时从热榜个股新闻标题聚类候选主题（启发式，verdict 封顶可能成立）。"""
-    from collections import Counter
-
-    stop = {"的", "了", "在", "与", "和", "将", "为", "上", "下", "中国", "公司", "集团", "公告", "新闻", " regarding"}
-    freq: Counter = Counter()
-    for c in pack["candidates"]:
-        titles = set(c.get("news_sample") or [])
-        words: set[str] = set()
-        for t in titles:
-            buf = []
-            for ch in t:
-                if "\u4e00" <= ch <= "\u9fff":
-                    buf.append(ch)
-                else:
-                    if buf:
-                        words.update(_ngrams("".join(buf)))
-                        buf = []
-            if buf:
-                words.update(_ngrams("".join(buf)))
-        for w in words:
-            if len(w) >= 2 and w not in stop:
-                freq[w] += 1
-    # 出现在 ≥2 只不同热榜股新闻里的词 = 潜在共同主题
-    common = [w for w, n in freq.items() if n >= 2]
-    common.sort(key=lambda w: -freq[w])
-    out = []
-    for w in common[:5]:
-        kws = [w]
-        # 同族扩展：包含该词的更长高频词
-        kws.extend(x for x in common if w in x and x != w)[:3]
-        out.append((w, kws[:4]))
-    return out
-
-
-def _ngrams(text: str, n: tuple[int, ...] = (2, 3, 4)) -> list[str]:
-    return [text[i: i + k] for k in n for i in range(len(text) - k + 1)]
-
-
-def _empty_report(pack: dict, trigger: str) -> PredictionReport:
-    return PredictionReport(
-        created_at=_now_iso(),
-        context=pack["context"],
-        target_date=pack["target_date"],
-        trigger=trigger,
-        engine_version=ENGINE_VERSION,
-        market_env={"phase": (pack.get("env") or {}).get("phase"), "last_trade_date": pack["last_trade_date"]},
-        predictions=[],
-        summary="未发现可预判的候选主题（详见 data_gaps）",
-    )
-
-
-def _summary_line(predictions: list, pack: dict) -> str:
-    if not predictions:
-        return "未发现可预判的候选主题"
-    parts = []
-    for p in predictions:
-        head = f"{p.theme}→{p.verdict}（{p.score:.2f}/{p.confidence}）"
-        if p.echelon:
-            head += f"，龙头候选 {p.echelon[0].name}"
-        parts.append(head)
-    env = (pack.get("env") or {}).get("phase") or "情绪未知"
-    return f"目标 {pack['target_date']} | 环境 {env} | " + "；".join(parts)
 
 
 async def verify_predictions(

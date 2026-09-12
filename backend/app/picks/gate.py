@@ -236,8 +236,6 @@ FOLLOW_ROLES = {"空间板", "龙头", "反包", "中军", "领涨"}
 #: 可跟档的连板高度下限（首板不够格：闸门日追首板是典型的接飞刀）
 FOLLOW_MIN_BOARDS = 2
 
-_STATE_LABELS = {"blocked": "禁买", "observe": "仅观察", "followable": "可跟"}
-
 
 def _follow_state_of(item: dict) -> tuple[str, list[str]]:
     """单票三态判定（纯函数）：红线一票否决 > 可跟判据 > 默认观察。"""
@@ -271,8 +269,3 @@ def _follow_state_of(item: dict) -> tuple[str, list[str]]:
         return "followable", reasons
     reasons.append("龙头判据未全满足，保持仅观察")
     return "observe", reasons
-
-
-def follow_state_label(state: str | None) -> str:
-    """三态 → 中文标签（None/未知 → 空串，调用方按无闸门处理）。"""
-    return _STATE_LABELS.get(state or "", "")

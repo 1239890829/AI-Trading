@@ -375,10 +375,6 @@ def scan_and_settle_today(app_state, *, session_factory=None) -> dict:
             "recorded": recorded, "settled": settled, "degraded": sorted(set(degraded))}
 
 
-def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
-
-
 __all__ = [
     "WINDOW_MINUTES",
     "THRESHOLD_PCT",

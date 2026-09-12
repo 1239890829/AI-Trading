@@ -103,9 +103,6 @@ STRENGTH_BANDS: tuple[tuple[float, str], ...] = (
     (1.0, "moderate"),
     (0.5, "weak"),
 )
-STRENGTH_LABEL = {
-    "weak": "弱", "moderate": "中等", "strong": "强", "very_strong": "超强",
-}
 
 #: 允许的最大滞后（天）。**取 120 而不是 60**——正常出版节奏下，季末到发布要
 #: 1~2 周，而「上一季刚结束、这一季还没发布」的窗口本身就有近一个月，再加季末

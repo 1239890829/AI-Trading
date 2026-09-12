@@ -79,14 +79,6 @@ def _line(label: str, r: dict) -> str:
             f"{r[f'w{H}'] * 100:>8.1f}%{_t(r):>+8.1f}")
 
 
-def label_to_cond(label: str) -> str:
-    bn, dn, mn = [x.strip() for x in label.split("|")]
-    b = next(c for n, c in BANDS if n == bn)
-    d = next(c for n, c in DEPTHS if n == dn)
-    m = next(c for n, c in MARKETS if n == mn)
-    return f"({b}) AND ({d}) AND ({m})"
-
-
 def _pctl(vals: list[float], p: float) -> float:
     s = sorted(vals)
     pos = (len(s) - 1) * p / 100

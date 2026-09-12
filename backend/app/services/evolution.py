@@ -992,9 +992,6 @@ def _execute_a(item: dict, sf, agenda_date: str) -> dict:
         return {**item, "status": "failed", "result": f"{type(exc).__name__}: {exc}"}
 
 
-VERIFY_NOTE = "30 日后置验证：劣化自动回滚"
-
-
 def _execute_b(item: dict, agenda_date: str) -> dict:
     """B 类：进化日报（路径白名单 docs/evolution/，内容为 LLM 结论摘要）。"""
     try:

@@ -30,8 +30,6 @@ from app.core.bjtime import BJ_TZ, beijing_now
 
 log = logging.getLogger(__name__)
 
-#: 影子账户初始资金（与 main 默认一致，收益可直接对比）
-SHADOW_INITIAL_CASH = 1_000_000.0
 #: 资金使用上限比例（留 1% 缓冲费用）
 CASH_USE_RATIO = 0.99
 

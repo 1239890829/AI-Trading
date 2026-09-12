@@ -41,7 +41,6 @@ FALSIFY_NEGATIVE_BEATS = 15     # 转负需连续拍数（60s/拍 ≈ 15 分钟�
 # ---------------------------------------------------------------- 买点（§6.3）
 PULLBACK_VOLUME_RATIO = 0.8     # 回调企稳的缩量线
 BREAKOUT_VOLUME_RATIO = 2.0     # 放量突破
-STOP_PCT_CHASE = 5.0            # 追涨止损（%）
 BREAKOUT_STOP_PCT = 3.0         # 突破位回撤止损（%）
 RESEAL_STOP_PCT = 2.0           # 回封止损：炸板价下方（%）
 POSITION_BASE = 10.0            # 基础仓位（%）

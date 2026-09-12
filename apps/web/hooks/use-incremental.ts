@@ -18,8 +18,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * `resetKey` 变化（切换维度/区间/筛选）时页码归位到首页：否则用户在新维度下会
  * 直接看到"已加载 120/200"，与"从第一页开始"的预期不符。
  */
-export const DEFAULT_PAGE_SIZE = 30;
-export const DEFAULT_PAGE_STEP = 30;
+// 模块内默认值，刻意不 export：对外 API 面只留 useIncremental / IncrementalList
+const DEFAULT_PAGE_SIZE = 30;
+const DEFAULT_PAGE_STEP = 30;
 /** 哨兵进入视口底部多少像素内即触发追加。 */
 const VIEWPORT_MARGIN = 300;
 

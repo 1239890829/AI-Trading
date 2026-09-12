@@ -25,7 +25,7 @@ from sqlalchemy import select
 
 from app.core.db import get_session_factory, utcnow
 from app.models.watch_ledger import WatchLedger
-from app.core.bjtime import beijing_now_naive, beijing_now
+from app.core.bjtime import beijing_now
 
 log = logging.getLogger(__name__)
 
@@ -131,18 +131,6 @@ def day_stats(trade_date: str, session_factory=None) -> dict:
         "win_rate": round(success / judged, 4) if judged else None,
         "avg_pnl_pct": round(sum(r.pnl_pct or 0 for r in settled) / len(settled), 2) if settled else None,
     }
-
-
-def history_stats(days: int = 30, session_factory=None) -> list[dict]:
-    """近 N 个自然日逐日统计（需求 11：收盘后仍可查）。"""
-    sf = session_factory or get_session_factory()
-    cutoff = (beijing_now_naive() - timedelta(days=days)).date().isoformat()
-    with sf() as db:
-        dates = db.execute(
-            select(WatchLedger.trade_date).where(WatchLedger.trade_date >= cutoff)
-            .group_by(WatchLedger.trade_date).order_by(WatchLedger.trade_date.desc())
-        ).scalars().all()
-    return [day_stats(d, sf) for d in dates]
 
 
 def get_day(trade_date: str, session_factory=None) -> list[dict]:

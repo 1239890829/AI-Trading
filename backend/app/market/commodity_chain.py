@@ -170,8 +170,6 @@ SPECS: tuple[CommoditySpec, ...] = (
     ),
 )
 
-_BY_CODE: dict[str, CommoditySpec] = {s.code: s for s in SPECS}
-
 
 def change_of(spec: CommoditySpec, prev_value: float, last_value: float) -> float:
     """口径单点收口：商品日变化（%）。

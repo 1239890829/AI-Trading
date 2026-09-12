@@ -39,8 +39,6 @@ _STORE_PATH = Path(__file__).resolve().parents[2] / "data" / "sentiment_metrics.
 # 请求间隔（秒）：批量回溯别把 ths 配额打满
 _FETCH_GAP = 0.15
 
-METRIC_KEYS = ("limit_up", "max_board", "break_rate", "promo_1to2", "promo_2to3")
-
 
 def _boards_of(pool) -> dict[str, int]:
     from app.sentiment.engine import _boards_of as _engine_boards

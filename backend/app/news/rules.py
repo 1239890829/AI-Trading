@@ -46,7 +46,6 @@ SENTIMENT_NEGATIVE = [
 # 疑似"原始表格 dump"的判据：东财部分 summary 直接塞了行情表，读不了
 _TABLE_HINT = re.compile(r"(\d+\.\d+\s+){4,}")
 _WS = re.compile(r"[\u3000\s]+")
-_SENT_SPLIT = re.compile(r"(?<=[。！？；])")
 _PCT = re.compile(r"[-+]?\d+(?:\.\d+)?%")
 _AMOUNT = re.compile(r"\d+(?:\.\d+)?(?:亿|万)元?")
 

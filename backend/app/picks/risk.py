@@ -16,8 +16,6 @@
 
 from __future__ import annotations
 
-RISK_TIERS = ("龙头博弈", "趋势跟随", "情绪低位")
-
 #: 梯队地位 → 风险档位。龙头/空间板/反包是高位博弈，中军与领涨是波段，
 #: 补涨/跟风/首板/滞涨是低位反抽博弈（对了快、错了更快）。
 TIER_BY_ROLE: dict[str, str] = {

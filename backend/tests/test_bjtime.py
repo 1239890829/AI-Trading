@@ -40,7 +40,6 @@ import pytest
 
 BACKEND = Path(__file__).resolve().parents[1]
 AUTHORITY = "app/core/bjtime.py"
-AUTHORITY_PATH = BACKEND / AUTHORITY
 
 #: 本文件自身豁免：它的 docstring 必须**叙述**被禁的写法（如「仍在 + timedelta(hours=8)」），
 #: 不豁免就会被自己的说明文字误伤（同 test_import_lint 用 AST 而非文本匹配的动因）。

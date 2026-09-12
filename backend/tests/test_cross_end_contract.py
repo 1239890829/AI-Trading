@@ -135,10 +135,6 @@ def _role_base_score():
     return ROLE_BASE_SCORE
 
 
-def _contract_id(c: dict) -> str:
-    return f"{c['name']}"
-
-
 # ---------------------------------------------------------------- 覆盖性
 
 

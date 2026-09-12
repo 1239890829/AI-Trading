@@ -336,16 +336,20 @@ def evaluate_factor(con, factor: FactorDef, market_daily: dict[int, int]) -> dic
     cols = [d[0] for d in con.description]
     daily = [dict(zip(cols, r)) for r in rows]
 
+    # 协议排除（MIN_CROSS_SECTION）：每日截面 <30 只的 IC 不计入聚合（小截面失真）。
+    # 覆盖率统计**不含**此过滤——小截面日是真实的覆盖信号，滤掉会虚增覆盖率。
+    daily_ic = [r for r in daily if r["n"] >= MIN_CROSS_SECTION]
+
     wins: dict[int, WindowStats] = {}
     ic_series: dict[int, list[tuple[int, float]]] = {}
     for h in (*HORIZONS_EXEC, HORIZON_CLOSE):
-        w = _agg_window(daily, h, ic_all=0.0)  # consistency 需 ic_all，二次填充
+        w = _agg_window(daily_ic, h, ic_all=0.0)  # consistency 需 ic_all，二次填充
         if w is not None:
-            w2 = _agg_window(daily, h, ic_all=w.ic_mean)
+            w2 = _agg_window(daily_ic, h, ic_all=w.ic_mean)
             wins[h] = w2
             # 与 _agg_window 同口径过滤 NaN（截面零方差日的 corr=NaN 不得进入序列）
             ic_series[h] = [
-                (r["date_ms"], r[f"ic{h}"]) for r in daily
+                (r["date_ms"], r[f"ic{h}"]) for r in daily_ic
                 if r.get(f"ic{h}") is not None and not math.isnan(r[f"ic{h}"])
             ]
 

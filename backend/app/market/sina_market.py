@@ -18,9 +18,6 @@ SOURCE = "sina_market"
 _BASE = "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php"
 _HEADERS = {"User-Agent": "Mozilla/5.0", "Referer": "https://finance.sina.com.cn/"}
 
-_NUM_FIELDS = ("trade", "pricechange", "changepercent", "settlement", "open", "high", "low",
-               "volume", "amount", "mktcap", "nmc", "turnoverratio")
-
 
 def _f(v) -> float | None:
     try:

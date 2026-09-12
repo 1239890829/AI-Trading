@@ -32,7 +32,6 @@ from collections.abc import Iterable
 
 CODE_EVIDENCE_NOT_FOUND = "EVIDENCE_NOT_FOUND"
 CODE_OUT_OF_SCOPE_INFERENCE = "OUT_OF_SCOPE_INFERENCE"
-CODE_SCHEMA_VIOLATION = "SCHEMA_VIOLATION"
 
 # 指令性交易建议：只抓"明确交易动词"形态。刻意排除的词：出手/追高/抄底/关注/
 # 控制（歧义大，规则判读自己也用）——"建议控制仓位""不宜追高""可以关注"放行。
@@ -46,9 +45,6 @@ _ADVICE_PATTERNS: tuple[re.Pattern, ...] = tuple(
         r"(仓位|持仓)[^。；;\n]{0,4}[0-9]+(?:\.[0-9]+)?%",
         r"(坚决|立即|马上|赶紧|果断|直接)(买入|卖出|进场|离场|加仓|减仓|清仓)",
     )
-)
-_ADVICE_VERBS = (
-    "买入", "卖出", "加仓", "减仓", "清仓", "建仓", "补仓", "介入", "进场", "离场",
 )
 
 # 事实性数字引用：千分位金额 / 百分数 / 强离散单位（家|个|只|板|bp）/ 独立小数。

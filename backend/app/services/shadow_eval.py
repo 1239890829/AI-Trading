@@ -376,15 +376,6 @@ def _good_ratio(records: Iterable[dict], reviews: dict) -> dict:
     return {"n": len(vals), "good": good, "ratio": good / len(vals)}
 
 
-def _compare(dropped: list[dict], kept: list[dict], reviews: dict) -> dict:
-    """被剔除者 vs 被保留者的事后对比。样本不足时 `ratio` 为 None。"""
-    d = _good_ratio(dropped, reviews)
-    k = _good_ratio(kept, reviews)
-    if d["n"] < MIN_REVIEW_SAMPLES or k["n"] < MIN_REVIEW_SAMPLES:
-        return {"dropped": d, "kept": k, "comparable": False}
-    return {"dropped": d, "kept": k, "comparable": True}
-
-
 # ---------------------------------------------------------------- 各参数评估器
 
 

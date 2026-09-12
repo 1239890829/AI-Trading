@@ -17,8 +17,6 @@ from app.schemas.market import OrderBook, OrderBookLevel, Quote
 SOURCE = "sina"
 from app.core.bjtime import BJ_TZ  # S2-8 时区收敛
 
-_ROW = None
-
 
 def _num(v: str | None) -> float | None:
     if v is None or not v.strip():

@@ -27,7 +27,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from app.core.db import get_session_factory
 from app.picks.signal_health import evaluate_signal_health
 
 log = logging.getLogger(__name__)
@@ -284,8 +283,3 @@ def strategy_verdicts(session_factory) -> list[dict]:
     """仅返回需要关注的策略键（warning/drift），供告警与复盘消费。"""
     out = collect_all_strategy_health(session_factory)
     return [s for s in out["strategies"] if s.get("status") in ("warning", "drift")]
-
-
-def collect_all_strategy_health_default() -> dict:
-    """生产入口（用全局 session factory）。"""
-    return collect_all_strategy_health(get_session_factory())

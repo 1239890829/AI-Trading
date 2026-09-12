@@ -27,14 +27,6 @@ STATE_NORMAL = "normal"        # gap ∈ -5~5%：可执行
 STATE_ANOMALY = "anomaly"      # gap ≤ -5%：异常低开（除权/利空嫌疑），复核
 STATE_UNKNOWN = "unknown"      # 竞价数据缺失：判不出，不放行
 
-STATE_LABEL = {
-    STATE_BLOCKED: "禁买",
-    STATE_OBSERVE: "观察",
-    STATE_NORMAL: "可买",
-    STATE_ANOMALY: "异常",
-    STATE_UNKNOWN: "未知",
-}
-
 #: 阈值默认值（与 config.settings 同名字段互为备份；settings 优先）
 BLOCK_GAP_PCT = 9.5
 OBSERVE_GAP_PCT = 5.0

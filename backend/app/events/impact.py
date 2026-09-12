@@ -42,8 +42,6 @@ _TAG_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("行业", re.compile(r"概念|板块|行业|产业链|上游|下游")),
 ]
 
-TAG_LABELS = ["业绩", "公告", "异动", "资金", "行业"]
-
 
 def derive_tags(title: str | None, category: str | None) -> list[str]:
     """派生事件标签（多标签）。纯规则、可测；无命中 → 空列表（不臆造）。"""

@@ -25,7 +25,6 @@ from app.models.watchlist import Base
 #: 任务状态机（方案 §3.2）：
 #: queued → running → succeeded / failed / canceled
 #: needs_confirm = L1/L2 任务停在预览态等人工确认（P1 接入写工具后启用）
-TASK_STATUSES = ("queued", "running", "succeeded", "failed", "canceled", "needs_confirm")
 TERMINAL_STATUSES = ("succeeded", "failed", "canceled")
 
 

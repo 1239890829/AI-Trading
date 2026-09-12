@@ -65,8 +65,6 @@ _LIST_EOD_CACHE = TTLCache("boardflow-list-eod", ttl=300.0, maxsize=4)
 #: 单板块分钟/成员：下钻时才拉，小容量防驻留
 _MINUTE_CACHE = TTLCache("boardflow-minute", ttl=60.0, maxsize=4)
 _MEMBERS_CACHE = TTLCache("boardflow-members", ttl=60.0, maxsize=8)
-#: 板块 daykline 内存层（真正增量在落盘文件）
-_DAYK_MEM_CACHE = TTLCache("boardflow-dayk", ttl=6 * 3600.0, maxsize=200)
 
 _HTTP = None
 

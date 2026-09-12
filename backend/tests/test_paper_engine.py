@@ -6,8 +6,6 @@ import asyncio
 from app.core.db import get_session_factory
 from app.paper.engine import PaperTradingEngine
 
-FIXED = lambda: __import__("datetime").datetime(2026, 8, 28, 10, 30)  # noqa: E731
-
 
 def make_engine(quote_map):
     class Q:

@@ -85,21 +85,6 @@ def test_parse_stats_returns_none_when_any_metric_missing():
 # ---------------------------------------------------------------- 阈值判定
 
 
-def _fake_run(stats_line: str):
-    """构造一个假的 subprocess 结果（不跑真回放）。"""
-    class _P:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    report = (
-        f"| 日均换手率 | {stats_line[0]}% |\n"
-        f"| 平均持有天数 | {stats_line[1]} |\n"
-        f"| 日均组合分 | {stats_line[2]} |\n"
-    )
-    return lambda *_a, **_kw: _P(), report
-
-
 @pytest.fixture()
 def gate(tmp_path, monkeypatch):
     """把基线路径与回放子进程都隔离掉，只测判定逻辑。"""
