@@ -113,6 +113,11 @@ export function WatchLedgerPanel() {
                       </span>
                     )}
                     {r.boards > 0 && <span className="ml-1 font-mono text-[10px] text-zinc-600 dark:text-zinc-400">{r.boards}板</span>}
+                    {r.merged_into_picks && (
+                      <span className="ml-1 rounded bg-violet-500/10 px-1 text-[10px] text-violet-700 dark:text-violet-300" title="该股进入了当日收盘后的每日精选组合">
+                        已入精选
+                      </span>
+                    )}
                   </td>
                   <td className="max-w-[8em] truncate py-1.5 pr-2 text-zinc-600 dark:text-zinc-400" title={r.source_theme}>
                     {r.source_theme || "--"}

@@ -768,6 +768,15 @@ def _persist_picks(
             for key, val in payload.items():
                 setattr(row, key, val)
         db.commit()
+    # 需求 7 收尾（merged_into_picks 此前「有字段无接线」）：组合定稿后，把当日
+    # 盘中跟踪台账中进入组合的行打合并标记，猎场台账面板可显示「已入精选」。
+    # 失败只记日志——合并标记是展示增强，不应让组合落库整体失败。
+    try:
+        from app.picks.watch_ledger import mark_merged_into_picks
+
+        mark_merged_into_picks(today, [it.get("symbol") for it in items if isinstance(it, dict)])
+    except Exception as exc:  # noqa: BLE001
+        log.warning("watch ledger merge marking failed: %s", exc)
 
 
 async def generate_picks_pipeline(

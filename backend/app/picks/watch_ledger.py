@@ -239,6 +239,36 @@ def tracking_review_stats(days: int = 5, session_factory=None) -> dict:
     }
 
 
+def mark_merged_into_picks(trade_date: str, symbols: list[str], session_factory=None) -> int:
+    """需求 7 收尾：当日台账中进入每日精选组合的行打 merged_into_picks 标记。
+
+    幂等（已标记行跳过）；symbols 里的未知/非当日 symbol 无写入、不报错。
+    只置标志位，不动 reason/verdict——合并是展示事实，不是对入选依据的改写。
+    返回本次新标记的行数。
+    """
+    wanted = {str(s) for s in symbols if s}
+    if not wanted:
+        return 0
+    sf = session_factory or get_session_factory()
+    n = 0
+    with sf() as db:
+        rows = db.execute(
+            select(WatchLedger).where(
+                WatchLedger.trade_date == trade_date,
+                WatchLedger.merged_into_picks == 0,
+                WatchLedger.symbol.in_(wanted),
+            )
+        ).scalars().all()
+        for r in rows:
+            r.merged_into_picks = 1
+            r.updated_at = utcnow()
+            n += 1
+        db.commit()
+    if n:
+        log.info("watch ledger merged into picks: %d rows (%s)", n, trade_date)
+    return n
+
+
 def validate_previous_day(close_map: dict[str, float], session_factory=None) -> int:
     """T-1 台账行的**次日持续性验证**（闭环「验证」段，2026-09-09 用户指令：
     当天选出的个股次日继续跟踪是否仍强势）。
