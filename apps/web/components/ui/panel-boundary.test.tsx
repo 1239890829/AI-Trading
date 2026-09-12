@@ -118,6 +118,26 @@ describe("PanelBoundary", () => {
 
     expect(screen.getByRole("alert")).toBeTruthy();
   });
+
+  it("label 变化自动清除错误态（默认行为，2026-09-13 §6.5b #4 起）", () => {
+    const flag = { fail: true };
+    const { rerender } = render(
+      <PanelBoundary label="五档盘口">
+        <Boom flag={flag} />
+      </PanelBoundary>,
+    );
+    expect(screen.getByRole("alert")).toBeTruthy();
+
+    flag.fail = false;
+    rerender(
+      <PanelBoundary label="逐笔成交">
+        <Boom flag={flag} />
+      </PanelBoundary>,
+    );
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText("内容已恢复")).toBeTruthy();
+  });
 });
 
 describe("Panel 集成（S2-6 的主收益）", () => {
@@ -151,24 +171,23 @@ describe("Panel 集成（S2-6 的主收益）", () => {
 });
 
 /**
- * `Panel.resetKey` 透传 + **哪些场景真的需要它**（2026-09-12 评审批次 2 / D-3）。
+ * `Panel.resetKey` 透传 + 错误态清除的**默认行为与显式途径**（D-3，2026-09-12；
+ * 2026-09-13 §6.5b #4 把「title 变化」纳入默认清除）。
  *
- * 台账写的是「`resetKey` 生产 0 处传」，复核后发现**根因在 `Panel` 没有暴露该 prop**——
- * 全站都走 `Panel`，于是设计者写在 `panel-boundary` 里的契约（「`resetKey` 不是可选项」）
- * 在集成处**无法被兑现**。
+ * 错误态自动清除的两条路（满足其一即可）：
+ * - **默认**：`label`（= title 的字符串形态）变化——详情面板"同一块位置换内容"
+ *   多数伴随标题变化（切 tab / 换面板），这从「调用点纪律」降为「默认行为」；
+ * - **显式**：`resetKey` 变化——**title 不变**而内容换的场景（「自选股」各分组间
+ *   title 完全相同）只有它判断得出来。
  *
- * 但"哪里该传"不能靠感觉：需要它的前提是 **React 复用了同一个 `PanelBoundary` 实例**
- * （实例复用时 state 保留，错误态才不会被自动清掉）。下面两组用例把两类场景**钉开**：
- *
- * - **同一实例换内容**（`rightTab` 变 ⇒ `Panel` 的 title/children 变）⇒ **需要** `resetKey`；
- * - **并列条件渲染**（`{tab === "a" && <Panel/>}{tab === "b" && <Panel/>}`）⇒ 两个 slot
- *   位置不同，切 tab 时前者卸载、后者新挂载 ⇒ **天然重置，不需要** `resetKey`。
- *
- * 这两条是**现状钉住**（characterization）而非我的猜测——谁改了渲染结构导致结论翻转，
- * 这里会红，从而提醒重新判断"哪里该传"。
+ * 仍然钉住的形态（characterization，谁改了渲染结构导致结论翻转，这里会红）：
+ * - 同实例换 title ⇒ 默认清除（原「不传就钉死」的调用点纪律已被默认行为覆盖）；
+ * - 同 title 换 children ⇒ 仍需显式 resetKey；
+ * - 并列条件渲染 ⇒ 两个 slot 位置不同，天然重挂载重置，不需要 resetKey；
+ * - title 含计数的数据刷新 ⇒ 清一次错误态（成本已接受），持续失败时错误卡回归。
  */
 describe("Panel.resetKey（D-3）", () => {
-  it("同一 Panel 实例换内容时不传 resetKey ⇒ 停在错误卡上（这就是切 tab 被钉死的形态）", () => {
+  it("同一 Panel 实例换内容（title 变）不传 resetKey ⇒ 默认清除（原「钉死」形态被默认行为覆盖）", () => {
     const flag = { fail: true };
     const { rerender } = render(
       <Panel title="五档盘口">
@@ -184,10 +203,38 @@ describe("Panel.resetKey（D-3）", () => {
       </Panel>,
     );
 
-    // 内容已经换成了「逐笔成交」，却仍显示错误卡，且 label 用的是**新** title
-    // ⇒ 错误归因错位 + 该 tab 被钉死，直到整页刷新
+    // label（title）变化即清错误态——§6.5b #4 拍板的默认行为；
+    // 原先「不传 resetKey 就钉死 + 归因错位」的形态不再存在
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText("内容已恢复")).toBeTruthy();
+  });
+
+  it("title 含计数的数据刷新（label 变）清一次错误态：子树被重试一次；仍在失败则错误卡回归", () => {
+    let renders = 0;
+    function AlwaysBoom(): never {
+      renders += 1;
+      throw new Error("仍在失败");
+    }
+    const { rerender } = render(
+      <Panel title="自选股 (3)">
+        <AlwaysBoom />
+      </Panel>,
+    );
     expect(screen.getByRole("alert")).toBeTruthy();
-    expect(screen.getByText(/逐笔成交 · 局部加载失败/)).toBeTruthy();
+    const rendersBefore = renders;
+
+    rerender(
+      <Panel title="自选股 (4)">
+        <AlwaysBoom />
+      </Panel>,
+    );
+
+    // label 变了 ⇒ 错误态清一次、子树被重试（这是 §6.5b #4 已接受的成本；
+    // 不钉具体渲染次数——StrictMode/边界重渲染会让计数漂移，只钉"确实重试了"）；
+    // 但仍在失败 ⇒ 错误卡原样回归，不会被数据变化"擦白"
+    expect(renders).toBeGreaterThan(rendersBefore);
+    expect(screen.getByRole("alert")).toBeTruthy();
+    expect(screen.getByText(/自选股 \(4\) · 局部加载失败/)).toBeTruthy();
   });
 
   it("同一 Panel 实例换内容且传了 resetKey ⇒ 错误态随之清除", () => {

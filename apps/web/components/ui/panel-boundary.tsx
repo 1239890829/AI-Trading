@@ -21,11 +21,14 @@ import { Component, type ErrorInfo, type ReactNode } from "react";
  * </PanelBoundary>
  * ```
  *
- * ## `resetKey` 不是可选项
+ * ## 错误态何时自动清除（两条路，满足其一即可）
  * React 的错误边界一旦进入错误态，**不会**因为 children 变了就自动恢复。
- * 详情面板这类"同一块位置反复换内容"的场景（切标的、切 tab）必须给 `resetKey`：
- * 值一变就清掉错误态重新渲染，否则一只票渲染失败会把这个面板钉死在错误卡上，
- * 直到用户整页刷新——把"局部降级"又变成了"整页不可用"。
+ * - **label 变化（默认，2026-09-13 §6.5b #4 起）**：详情面板"同一块位置换内容"
+ *   多数伴随标题变化（切 tab / 换面板），这从「调用点纪律」降为「默认行为」。
+ *   已接受的成本：title 含计数的面板（如「自选股 (3)」）在数据变动时会清一次
+ *   错误态、多重渲染一次失败的子树；若仍在失败，错误卡原样回归——**不会掩盖持续故障**。
+ * - **`resetKey` 变化（显式）**：**同一 label** 下换内容（如「自选股」各分组间
+ *   title 完全相同）label 判断不出来，必须传。
  *
  * ## 边界能抓到什么、抓不到什么
  * - **能**：子树**渲染期**抛出的同步异常（含 hooks 执行期、render 内计算）。
@@ -38,7 +41,10 @@ interface PanelBoundaryProps {
   /** 出错时点名的对象（面板标题）。纯文本——它要进 `console.error` 与文案。 */
   label?: string;
   className?: string;
-  /** 值变化时清除错误态。切标的/切 tab 的场景必须传。 */
+  /**
+   * 值变化时清除错误态。**同一 label 下换内容**（切分组等 title 不变的场景）才需要传；
+   * label 变化默认已清错误态（2026-09-13 起），无须再传。
+   */
   resetKey?: unknown;
   /** 额外上报（埋点/告警）。默认行为已经 `console.error`，不需要重复打印。 */
   onError?: (error: Error, info: ErrorInfo) => void;
@@ -63,7 +69,10 @@ export class PanelBoundary extends Component<PanelBoundaryProps, PanelBoundarySt
   }
 
   componentDidUpdate(prev: PanelBoundaryProps) {
-    if (this.state.error && prev.resetKey !== this.props.resetKey) {
+    if (
+      this.state.error &&
+      (prev.resetKey !== this.props.resetKey || prev.label !== this.props.label)
+    ) {
       this.setState({ error: null });
     }
   }
