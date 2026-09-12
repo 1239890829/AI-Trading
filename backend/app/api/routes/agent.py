@@ -1,4 +1,4 @@
-"""AI 控制台端点（方案 docs/ai-agent-console-plan.md P0）。
+"""AI 控制台端点（方案 docs/summary/ai-evolution.md P0）。
 
 首批只暴露 **L0 只读/生成类**任务（review / data_check），写类任务与参数变更在
 P1 参数配置模块接入后按同一套状态机/审计机制扩展。

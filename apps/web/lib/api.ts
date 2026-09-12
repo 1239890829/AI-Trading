@@ -2172,7 +2172,7 @@ export async function getNewsContent(url: string): Promise<ArticleContent> {
 }
 
 // ============================================================================
-// AI 控制台（大脑 + 执行层，docs/ai-agent-console-plan.md）
+// AI 控制台（大脑 + 执行层，docs/summary/ai-evolution.md）
 // ============================================================================
 
 /** 任务状态机：queued → running → succeeded/failed/canceled；

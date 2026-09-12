@@ -66,7 +66,7 @@ import { timeText } from "@/lib/format";
 import { MasonryColumns } from "@/components/masonry-columns";
 
 /**
- * 猎场（/hunting，2026-09-08 板块融合 docs/system-audit-20260908.md §三）：
+ * 猎场（/hunting，2026-09-08 板块融合 docs/summary/review-governance.md §三）：
  * 合并原 /picks（每日精选）+ /intraday（盘中跟踪），回答「今天/现在值得盯哪些票」。
  *
  * 结构：统计条（双口径独立不混算）→ **两条瀑布流**（盘中跟踪在上 / 盘前选择在下，

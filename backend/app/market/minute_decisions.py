@@ -1,6 +1,6 @@
 """做 T 信号决策链：记录 → 执行关联 → 30 分钟窗口结算与错误归因。
 
-三段式生命周期（docs/minute-chart-plan.md 模块 5）：
+三段式生命周期（docs/archive/minute-chart-plan.md 模块 5）：
 1. **触发即记录**：signals 接口产出越过阈值的信号时落库，(symbol, trigger_ts) 去重
    ——引擎的 as_of 前缀属性保证同一信号重算结果稳定，去重键可靠。
 2. **执行自动关联**：结算时查 paper 成交（同 symbol、方向匹配、落在信号窗口内），

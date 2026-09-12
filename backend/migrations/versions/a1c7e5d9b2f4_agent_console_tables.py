@@ -1,4 +1,4 @@
-"""AI 控制台两表（agent_task / agent_audit，docs/ai-agent-console-plan.md P0）
+"""AI 控制台两表（agent_task / agent_audit，docs/summary/ai-evolution.md P0）
 
 - `agent_task`：任务中心持久化——状态机 + 步骤轨迹（可追溯三件套第一件）。
 - `agent_audit`：执行层审计——写操作的 before/after + 回滚点，任何状态变更留痕，

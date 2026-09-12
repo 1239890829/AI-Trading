@@ -5,7 +5,7 @@ import type { IntradayReviewStats, SignalHealthPayload } from "@/lib/api";
 import type { RolePerformance } from "@/components/hunting/pick-sections";
 
 /**
- * 猎场统计条（批次②，docs/system-audit-20260908.md §3.2）：精选与跟踪双口径并列，
+ * 猎场统计条（批次②，docs/summary/review-governance.md §3.2）：精选与跟踪双口径并列，
  * 各自标注口径、绝不混算（精选=date+symbol 持久组合，跟踪=当日实时动态名单）。
  *
  * 三态纪律（审查 F1/F2）：

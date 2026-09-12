@@ -1,6 +1,6 @@
 """RPS 相对强度（横截面）：个股 N 日涨幅在全市场的百分位（0-100）。
 
-来源：trading 分组调研采纳（docs/github-repo-audit-financial-api-sequoia-x.md）——
+来源：trading 分组调研采纳（docs/archive/github-repo-audit-financial-api-sequoia-x.md）——
 既有 tech_score 六/七维全是「个股自身 vs 自身历史」，缺「个股 vs 全市场」维度；
 打板语境里「强者恒强」正是横截面信息（欧奈尔 RPS 口径）。
 

@@ -1,4 +1,4 @@
-"""停牌核查 / 异动风险评估单测（docs/halt-check-risk-analysis.md 第一批规则）。
+"""停牌核查 / 异动风险评估单测（docs/summary/stock-strategy.md 第一批规则）。
 
 覆盖重点：
 1. 偏离值必须减指数（不减 = 系统性误判）

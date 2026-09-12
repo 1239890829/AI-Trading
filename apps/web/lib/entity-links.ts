@@ -5,7 +5,7 @@
  * （/api/assistant/entity-dict：股票名→代码 + 官方题材名）在渲染层做
  * **最长匹配**。字典外的 6 位数字不认（避免把金额/日期当股票）。
  *
- * 2026-09-06 扩面（docs/assistant-optimization-plan.md §1）：除个股/题材外，
+ * 2026-09-06 扩面（docs/archive/assistant-optimization-plan.md §1）：除个股/题材外，
  * 还识别**功能入口别名**（"涨停池""龙虎榜""复盘报告"…），命中即渲染成站内跳转
  * 链接。别名表与 URL 构造都在 lib/nav-targets.ts，本文件只做识别。
  *

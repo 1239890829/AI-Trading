@@ -1,4 +1,4 @@
-"""因子评估引擎（docs/factor-library-design.md §4-5）。
+"""因子评估引擎（docs/summary/factor-system.md §4-5）。
 
 口径（防泄露，代码级）：
 - signal at T 收盘；entry = T+1 收盘（f1），exit = T+h 收盘（f3/f5/f10/f20）——
@@ -51,7 +51,7 @@ MIN_CROSS_SECTION = 30     # 每日截面最少股票数
 DAYS_PER_YEAR = 243        # A 股年均交易日（年化用）
 ROLLING_WINDOW_DAYS = 250  # 滚动衰减监控窗口（约 1 年，制度 §6.1/§7.2）
 
-#: 数据质量硬结论（2026-09-07 marketdb 实测，docs/factor-library-design.md §1.4）
+#: 数据质量硬结论（2026-09-07 marketdb 实测，docs/summary/factor-system.md §1.4）
 DATA_QUALITY_NOTES = {
     "survivorship": (
         "universe 为当前在市股票全历史（实测最后交易日早于全库最新 90 天的股票 = 0 只），"

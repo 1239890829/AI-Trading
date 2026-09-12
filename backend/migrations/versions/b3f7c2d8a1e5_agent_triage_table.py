@@ -1,4 +1,4 @@
-"""告警 AI 判读表（agent_triage，docs/ai-agent-console-plan.md P1）
+"""告警 AI 判读表（agent_triage，docs/summary/ai-evolution.md P1）
 
 规则触发 ≠ 值得提醒。本表存 AI 对每条告警事件的判读结论：
 notify（值得提醒，进悬浮球）/ ignore（噪音，不上界面）/ escalate（升级，进任务中心）。

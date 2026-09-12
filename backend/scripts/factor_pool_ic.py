@@ -1,6 +1,6 @@
 """P1-3 池内条件 IC 评估（一次性研究，2026-09-09）
 
-背景：docs/factor-ic-review-20260908.md 全市场 IC 明确警示「全市场 IC ≠ 选股池
+背景：docs/summary/factor-system.md 全市场 IC 明确警示「全市场 IC ≠ 选股池
 条件 IC」——tech_score 只作用于强势候选池，「趋势维全市场 T+5 反转」≠「池内
 失效」。P1-3 = 用条件 IC 回答「哪些因子在我们实际选股的池子里有区分度」。
 

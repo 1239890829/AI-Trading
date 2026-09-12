@@ -69,3 +69,6 @@ docs/archive/theme-audit-2026-09-01.json
 
 # Agent 本地状态（同类 .workbuddy/ 见上）
 .workbuddy-ai/
+
+# 相位核验中间产物（可再生产：scripts/verify_intraday_phase_fit.py --refresh）
+backend/data/research/phase_verify/

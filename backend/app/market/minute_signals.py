@@ -1,4 +1,4 @@
-"""做 T 分时信号引擎（docs/minute-chart-plan.md 模块 4 的引擎核心）。
+"""做 T 分时信号引擎（docs/archive/minute-chart-plan.md 模块 4 的引擎核心）。
 
 红线与设计约束
 --------------

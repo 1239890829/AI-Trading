@@ -1,4 +1,4 @@
-"""AI 控制台参数配置（方案 docs/ai-agent-console-plan.md P1-B）。
+"""AI 控制台参数配置（方案 docs/summary/ai-evolution.md P1-B）。
 
 为什么需要这一层：复盘给出改进建议后，`suggest_methodology_changes()` 目前
 **没有任何消费方**——建议看得到、改不了，闭环断在最后一公里。本模块把"建议

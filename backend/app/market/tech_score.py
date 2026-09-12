@@ -6,7 +6,7 @@
 八维：trend / macd / kdj / rsi / volume / liquidity / pattern / rps。
 - v2（2026-09-04）补齐形态维——此前前后端形态不对齐，docstring 撒谎，已修正。
 - v3（2026-09-04）新增 rps 维（RPS50/RPS120 全市场涨幅分位，来源
-  docs/github-repo-audit-financial-api-sequoia-x.md 采纳项）——既有维度全是
+  docs/archive/github-repo-audit-financial-api-sequoia-x.md 采纳项）——既有维度全是
   「个股自身 vs 自身历史」，rps 补上「个股 vs 全市场」横截面（强者恒强）。
   数据底座 = 本地 DuckDB marketdb（app/picks/rps.py）；仓未建/未覆盖 → 0.5
   中性（无证据≠负面），不臆造分位。

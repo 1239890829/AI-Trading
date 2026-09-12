@@ -10,7 +10,7 @@
 - 非涨停股（趋势股、情绪股）：题材看板没有它的位置——用**相对题材基准的超额**
   推导类梯队地位（领涨/同步/滞涨），大市值且中上的归为中军
 
-参考仓库择优（docs/github-stars-trading-analysis.md）：
+参考仓库择优（docs/archive/github-stars-trading-analysis.md）：
 TradingAgents 的多角色分工思想在此落地为"个股角色 × 题材阶段"的联合判读，
 而非单看个股指标；其"买卖点位"结论风格一律不引（红线 3）。
 """

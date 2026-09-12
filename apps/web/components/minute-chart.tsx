@@ -17,7 +17,7 @@ import { readChartTheme, useChartTheme, type ChartTheme } from "@/lib/chart-them
 import type { MinuteNewsEvent } from "@/lib/event-markers";
 
 /**
- * 当日分时图（docs/minute-chart-plan.md 模块 1+2+P1，2026-08-30）。
+ * 当日分时图（docs/archive/minute-chart-plan.md 模块 1+2+P1，2026-08-30）。
  *
  * 坐标系：以昨收为中心对称展开（涨跌停贴边、横盘日 0.5% 地板防抖）；
  * 右轴绝对价格、左轴涨跌幅（隐藏 % 序列承载）；昨收虚线基准。

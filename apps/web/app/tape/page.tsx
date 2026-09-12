@@ -9,7 +9,7 @@ import { LonghuTab } from "@/components/tape/longhu-tab";
 import { FadeSwap, PageSkeletonFallback } from "@/components/ui/loading";
 
 /**
- * 盘面页（2026-09-01 系统重构，docs/architecture-redesign.md §一.1.2）：
+ * 盘面页（2026-09-01 系统重构，docs/archive/architecture-redesign.md §一.1.2）：
  * 涨停池 / 题材 / 龙虎榜 合并为一个入口的三个 tab——
  * 同属"盘面生态"参考，分开看要来回切，且除龙虎榜外都消费同一份涨停数据。
  *

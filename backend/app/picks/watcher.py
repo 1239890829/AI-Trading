@@ -1,4 +1,4 @@
-"""盘中方向跟踪（选股 2.0 §5–6，docs/stock-picking-system-2026-09-02.md，批次 B）。
+"""盘中方向跟踪（选股 2.0 §5–6，docs/summary/stock-strategy.md，批次 B）。
 
 结构（红线级，与 intraday_rules 同一纪律）：
 - `DirectionTracker`：单方向**纯状态机**，零 IO。输入一拍数据（板块涨幅/

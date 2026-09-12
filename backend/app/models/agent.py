@@ -1,4 +1,4 @@
-"""AI 控制台持久化层：任务 + 审计（2026-09-08 方案 docs/ai-agent-console-plan.md P0）。
+"""AI 控制台持久化层：任务 + 审计（2026-09-08 方案 docs/summary/ai-evolution.md P0）。
 
 两张表的定位：
 - `AgentTask`：一次 AI/人触发的任务（状态机 + 步骤轨迹）。**步骤轨迹是可追溯
@@ -117,7 +117,7 @@ class AgentParamChange(Base):
 
 
 class AgentAgenda(Base):
-    """每日进化议程（AI 大脑 v2，docs/evolution-brain-plan.md）。
+    """每日进化议程（AI 大脑 v2，docs/summary/ai-evolution.md）。
 
     一天一份：LLM 汇总五路证据 → 议程项数组 → 按类别自动执行。
     items 元素：{class: A|B, finding, evidence, action, priority,

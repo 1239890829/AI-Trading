@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { StockLink } from "@/components/stock-link";
 
 /**
- * 选股类卡片的共享布局壳（2026-09-08 猎场批次①，docs/system-audit-20260908.md §3.3）。
+ * 选股类卡片的共享布局壳（2026-09-08 猎场批次①，docs/summary/review-governance.md §3.3）。
  *
  * - CardShell：圆角外框；`flow` 打开时附带瀑布流 margin（CSS columns 单元）。
  * - CardHead：头部行——左侧名称+代码（可选 StockLink 跳工作台），右侧内容槽

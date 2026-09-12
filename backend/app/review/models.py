@@ -80,7 +80,7 @@ class ReviewMetaInsightRow(Base):
 
 
 class MinuteDecisionRow(Base):
-    """做 T 信号决策链（docs/minute-chart-plan.md 模块 5）。
+    """做 T 信号决策链（docs/archive/minute-chart-plan.md 模块 5）。
 
     三段式生命周期：触发即记录（open）→ 30 分钟窗口后结算（correct|wrong|invalid|expired）。
     结算含 leave-one-out 错误归因——剔除哪个指标会翻转结论，那个就是错误主因。

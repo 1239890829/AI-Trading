@@ -1,6 +1,6 @@
 """LLM 输出接地校验（grounding gate）——三类拒绝码。
 
-来源：trading 分组调研采纳的设计（docs/github-llm-agent-audit.md）：
+来源：trading 分组调研采纳的设计（docs/archive/github-llm-agent-audit.md）：
 - Vibe-Trading 的反幻觉三类拒绝码（引用不存在数据 / 超出输入范围推断 / 格式越权）
 - daily_stock_analysis 的评分-动作一致性守卫——本项目红线 3 全链路不输出买卖动作，
   守卫的对应物是「LLM 研判不得夹带指令性交易建议」（结论强度 ≤ 证据强度的 LLM 侧落点；

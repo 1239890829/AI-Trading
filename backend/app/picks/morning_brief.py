@@ -1,4 +1,4 @@
-"""盘前简报（选股 2.0 §4，docs/stock-picking-system-2026-09-02.md，批次 B）。
+"""盘前简报（选股 2.0 §4，docs/summary/stock-strategy.md，批次 B）。
 
 职责：盘前（默认 08:40，交易日调度，可随时手动触发）采集三类证据 →
 `intraday_rules.rank_directions` 排出 top 1-3 方向 → 每方向给出标的池 /

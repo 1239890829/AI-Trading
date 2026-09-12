@@ -14,7 +14,7 @@ import { ReviewTab } from "@/components/research/review-tab";
 import { FadeSwap, PageSkeletonFallback } from "@/components/ui/loading";
 
 /**
- * AI 控制台（docs/ai-agent-console-plan.md P0）。
+ * AI 控制台（docs/summary/ai-evolution.md P0）。
  *
  * 定位：助手从"只问答"升级为"大脑 + 执行层"的系统侧面板——任务、复盘、告警、
  * 历史统一收纳在这里；悬浮球保留轻量问答与即时提醒。

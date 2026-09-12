@@ -14,7 +14,7 @@ import {
 import { timeTextBJ } from "@/lib/format";
 
 /**
- * AI 控制台 · 进化 tab（AI 大脑 v2，docs/evolution-brain-plan.md）。
+ * AI 控制台 · 进化 tab（AI 大脑 v2，docs/summary/ai-evolution.md）。
  *
  * 展示今日进化议程：LLM 的发现/依据/动作/执行状态与结果——
  * **没有"待确认"态**（后置守护模型：议程项要么已执行、要么写明为什么没执行）。

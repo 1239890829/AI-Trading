@@ -12,13 +12,13 @@ const LINKS = [
   { href: "/hunting", label: "猎场" },
   // 2026-09-08：研究页下线，回测取消、复盘与预警并入 AI 控制台（/agent）
   { href: "/agent", label: "交易智能体" },
-  // 2026-09-01 系统重构（docs/architecture-redesign.md），13 页 → 5 导航：
+  // 2026-09-01 系统重构（docs/archive/architecture-redesign.md），13 页 → 5 导航：
   // /themes /limit-up /boards /longhu → 盘面页四 tab（/tape?tab=…）
   // /heatmap → 市场页云图 tab；/watchlist → 工作台管理模式
   // /backtest /alerts → 研究页（/research?tab=…）→ 2026-09-08 改指 AI 控制台
   // （回测取消；预警并入 /agent?tab=alerts），旧路由经 next.config 302
   // /screener 已彻底删除（2026-09-01 用户拍板）：页面/端点/服务全清，tech_score 评分内核被每日精选复用保留
-  // 2026-09-08 板块融合（docs/system-audit-20260908.md §三）：/picks（每日精选）+
+  // 2026-09-08 板块融合（docs/summary/review-governance.md §三）：/picks（每日精选）+
   // /intraday（盘中跟踪）→ /hunting 猎场（tag 切换 + 双口径统计 + 手风琴增强），旧路由 302
 ];
 

@@ -1,4 +1,4 @@
-"""因子评估跑批 CLI（docs/factor-library-design.md §6 P0）。
+"""因子评估跑批 CLI（docs/summary/factor-system.md §6 P0）。
 
 用法（cwd 任意）：
     backend/.venv/bin/python backend/scripts/run_factor_eval.py

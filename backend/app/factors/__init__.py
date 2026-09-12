@@ -1,4 +1,4 @@
-"""因子库（docs/factor-library-design.md）。
+"""因子库（docs/summary/factor-system.md）。
 
 P0 范围 = 评估准入闭环：
 - library.py：因子注册表（唯一口径锚，SQL 定义 + 类别 + 最小样本）；

@@ -346,7 +346,7 @@ function WorkbenchInner() {
 
   // ── 自选管理模式（2026-09-01 自选页并入工作台）──────────────
   // 原 /watchlist 页仅剩两项独有能力：手动输代码添加、修改分组——
-  // 收进这里后独立页面删除（docs/architecture-redesign.md §一.1.2）。
+  // 收进这里后独立页面删除（docs/archive/architecture-redesign.md §一.1.2）。
   const [managing, setManaging] = useState(false);
   const [newSymbol, setNewSymbol] = useState("");
   const [addError, setAddError] = useState<string | null>(null);

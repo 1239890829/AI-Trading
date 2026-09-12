@@ -556,7 +556,7 @@ async def deep_score_candidates(
                 + (f"；题材「{theme_name}」" if theme_name else "；未匹配到题材（按个股独立评估）")
             )
 
-            # 停牌核查 / 异动风险（docs/halt-check-risk-analysis.md 第一批）：
+            # 停牌核查 / 异动风险（docs/summary/stock-strategy.md 第一批）：
             # 只依据已取到的个股日 K + 预取的指数日 K，零新增数据源。
             # 红线进 veto（×0.4 重罚并显式记录），黄线在合成后按扣分扣减。
             # ⚠️ R3（当前停牌）暂不接：picks 流程没有可靠的 trading_status 来源，

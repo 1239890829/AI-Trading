@@ -42,6 +42,8 @@ DOCS = ROOT / "docs"
 SCAN_FILES = ["AGENTS.md", "README.md", "docs/INDEX.md", "docs/plan-registry.md",
               "docs/retro-and-gaps.md", ".workbuddy/memory/MEMORY.md"]
 REF_RE = re.compile(r"docs/([\w\-./]+\.md)")
+#: 代码注释里的 docs 引用：断言 `docs/` 不是更长路径（如 skills/hithink-finance/docs/）的尾巴
+CODE_REF_RE = re.compile(r"(?<![\w/.-])docs/([\w\-./]+\.md)")
 # 记录性引用标记（同句出现即视为"在案引述"，不算断链）
 RECORD_MARKERS = ("已删除", "已归档", "被取代", "归档", "移入", "存档", "只读",
                   "删除", "待建", "尚未创建", "已并入", "精华见")
@@ -120,6 +122,69 @@ def check_dead_links(scan_all: bool = False) -> list[tuple[str, int, str]]:
                 continue  # 记录性引用：在案引述，不算断链
             out.append((str(t.relative_to(ROOT)), ln + 1, rel))
     return out
+
+
+#: F 检查的**已登记例外**：(文件, 引用) → 理由。这些不是「指向文档的指针」，而是
+#: CLI 示例的 `--out` 输出路径 / 测试输入串 / Markdown 语法示例——**改掉反而失真**，
+#: 故显式登记留痕（同 TOLERATED 的做法），而不是把它们从扫描里悄悄排除。
+CODE_REF_ALLOW = {
+    ("backend/tests/test_code_executor.py", "plan.md"):
+        "测试输入串（`.replace('.md','.py')` 后作白名单校验用例，不是文档指针）",
+    ("backend/scripts/replay_picks.py", "ablation-report.md"):
+        "CLI 示例里的 `--out` **输出路径**（未来产物，报告尚未生成）",
+    ("backend/scripts/backtest_picks.py", "x.md"):
+        "CLI 用法示例的 `--out` 输出路径占位",
+    ("apps/web/components/agent/markdown-view.tsx", "xx.md"):
+        "docstring 里的 Markdown 链接语法示例（形如 `[文本](docs/<名字>.md)`）",
+}
+
+
+def check_code_refs() -> tuple[list[tuple[str, int, str]], list[tuple[str, str]]]:
+    """F 代码注释里的 docs 引用必须可解（2026-09-12 新增，§七 #28 的根治）。
+
+    **为什么 B 死链管不到**：`check_dead_links` 只扫 `*.md`。删档时「全仓 grep 解引用」
+    若只覆盖 md，`app/` `tests/` 里的 docstring 指针会留下来 —— 把复核者引向不存在的文件。
+
+    排除项（防误报）：
+    - `skills/hithink-finance/docs/...` —— 那是 **fuyao 官方 API 文档**，不在本仓 docs 面；
+      故用 `(?<![\\w/.-])` 断言 `docs/` 不是某个更长路径的尾巴；
+    - 构建产物 / 虚拟环境；
+    - 模板占位名（YYYY-MM-DD.md / xxx.md）；
+    - 记录性语句（"已删除/已归档" 等，在案引述不算断链）；
+    - `CODE_REF_ALLOW` 里已登记理由的示例/输出路径。
+
+    :returns: (违规列表, 命中登记例外列表)
+    """
+    skip_dirs = {"node_modules", ".next", ".turbo", "__pycache__", ".venv", "dist", "build"}
+    out: list[tuple[str, int, str]] = []
+    allowed: list[tuple[str, str]] = []
+    for base in ("backend", "apps/web", "scripts"):
+        root = ROOT / base
+        if not root.exists():
+            continue
+        for p in root.rglob("*"):
+            if p.suffix not in (".py", ".ts", ".tsx", ".mjs", ".js"):
+                continue
+            if any(d in p.parts for d in skip_dirs):
+                continue
+            relf = str(p.relative_to(ROOT))
+            txt = _read(p)
+            lines = txt.splitlines()
+            for m in CODE_REF_RE.finditer(txt):
+                rel = m.group(1)
+                if (DOCS / rel).exists():
+                    continue
+                if (relf, rel) in CODE_REF_ALLOW:
+                    allowed.append((relf, rel))
+                    continue
+                if PLACEHOLDER_RE.search(rel):
+                    continue
+                ln = txt[: m.start()].count("\n")
+                seg = lines[ln] if ln < len(lines) else ""
+                if any(k in seg for k in RECORD_MARKERS):
+                    continue
+                out.append((relf, ln + 1, rel))
+    return out, allowed
 
 
 def check_kb_entries() -> list[tuple[str, str, int]]:
@@ -205,6 +270,7 @@ def main() -> int:
     kb_over = check_kb_entries()
     abstract = check_missing_abstract()
     clusters = check_clusters()
+    coderef, coderef_ok = check_code_refs()
 
     def line(label: str, ok: bool, detail: str = "") -> None:
         nonlocal problems
@@ -229,6 +295,12 @@ def main() -> int:
     if abstract and not quiet:
         for p, n in abstract:
             print(f"       {p}（{n} 行，前 40 行无摘要/定位块）")
+    line("F 代码注释死引用", not coderef, f"{len(coderef)} 处（B 只扫 *.md，本项扫 app/tests/web/scripts）")
+    if coderef and not quiet:
+        for f, ln, rel in coderef[:15]:
+            print(f"       {f}:{ln} → docs/{rel}（不存在）")
+        if len(coderef) > 15:
+            print(f"       …另有 {len(coderef) - 15} 处")
     if not quiet:
         print("[INFO] E 同类聚集（同前缀 ≥3 份，评估是否需共同索引页）："
               + (", ".join(f"{k}×{v}" for k, v in clusters) if clusters else "无"))
@@ -237,6 +309,8 @@ def main() -> int:
               + (", ".join(f"{p}（{n} 行）" for p, n in kb_big) or "无"))
         print(f"[INFO] C 已登记容忍项：文件 {len(TOLERATED)} 份 / 条目 {len(TOLERATED_ENTRIES)} 条"
               f"（{', '.join(list(TOLERATED) + list(TOLERATED_ENTRIES))}）")
+        print(f"[INFO] F 已登记例外：{len(coderef_ok)} 处示例/输出路径"
+              + (f"（{'、'.join(r for _, r in coderef_ok)}）" if coderef_ok else ""))
         print(f"{'-' * 60}\n结论：{'全部通过' if problems == 0 else f'{problems} 项待处理'}"
               f"（C 的日志单轮 ≤80 行属过程指标，需人工/议程核对）")
     return 0 if problems == 0 else 1

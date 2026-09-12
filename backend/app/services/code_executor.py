@@ -1,4 +1,4 @@
-"""C 类代码执行器（docs/evolution-brain-plan.md P1-⑤）——AI 自主改代码，最危险能力。
+"""C 类代码执行器（docs/summary/ai-evolution.md P1-⑤）——AI 自主改代码，最危险能力。
 
 安全设计（纵深防御，任何一层拒绝即终止）：
 1. **白名单**：仅 backend/app/** 与 backend/tests/** 的 ``*.py``（前端/脚本/文档 v1 明确

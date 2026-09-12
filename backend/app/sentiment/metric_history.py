@@ -5,7 +5,7 @@
 分位校准要有历史样本，而本地 `sentiment_history` 表只有 3 行、快照 Parquet 只有 5 天。
 但**涨停池/炸板池可以用历史日期回补**——实测 ths `get_limit_up_pool(date)` 可回溯
 **至少 2 年**（2024-12-31 仍返回 46 条），且**没有东财 push2ex 那种"非交易日静默回退"**
-（31 个交易日的涨停家数 46–137 各不相同，见 `docs/system-review-2026-09-02.md` §4.4）。
+（31 个交易日的涨停家数 46–137 各不相同，见 `docs/summary/review-governance.md` §4.4）。
 
 于是 `limit_up` / `max_board` / `break_rate` / `promo_1to2` / `promo_2to3` 五个指标
 都能从历史回算，`calibration.py` 才有米下锅。

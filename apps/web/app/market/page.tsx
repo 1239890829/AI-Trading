@@ -29,7 +29,7 @@ import type { LimitUpRecord, Quote } from "@/types/market";
 /**
  * 市场页（2026-09-01 系统重构）：总览（情绪/宽度/事件）+ 云图 两个视图。
  * 云图无独立数据源（复用市场快照，纯视图），故并入本页为 tab 而非一级导航
- * （docs/architecture-redesign.md §一.1.2 减负原则 2）。
+ * （docs/archive/architecture-redesign.md §一.1.2 减负原则 2）。
  *
  * 布局 v3（2026-09-01 用户要求）：**一屏完整展示，严禁页面级滚动**——
  * 顶部指标带全部紧凑化（指数卡 2 行、宽度卡 py-1、情绪卡降高、低价值说明行

@@ -1,4 +1,4 @@
-"""做 T 分时信号引擎测试（docs/minute-chart-plan.md 模块 4 引擎核心）。
+"""做 T 分时信号引擎测试（docs/archive/minute-chart-plan.md 模块 4 引擎核心）。
 
 核心不变量：
 - **as_of**：信号只用 ≤ 触发 bar 的数据——任意截断点的前缀信号必须与全量一致；

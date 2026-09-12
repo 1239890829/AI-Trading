@@ -1,4 +1,4 @@
-"""每日进化议程两表迁移（agent_agenda，docs/evolution-brain-plan.md P0）"""
+"""每日进化议程两表迁移（agent_agenda，docs/summary/ai-evolution.md P0）"""
 from __future__ import annotations
 
 import sqlalchemy as sa

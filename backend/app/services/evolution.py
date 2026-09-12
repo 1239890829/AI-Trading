@@ -1,4 +1,4 @@
-"""AI 大脑：每日进化议程（docs/evolution-brain-plan.md v2）。
+"""AI 大脑：每日进化议程（docs/summary/ai-evolution.md v2）。
 
 自主进化循环：**感知 → 诊断 → 议程 → 执行 → 验证 → 记忆**。
 

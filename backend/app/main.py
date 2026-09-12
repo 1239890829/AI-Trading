@@ -225,7 +225,7 @@ async def lifespan(app: FastAPI):
 
     reg.add("alert-triage", lambda: triage_loop(triage_stop), stop=triage_stop)
 
-    # --- AI 大脑：每日进化议程（docs/evolution-brain-plan.md，交易日 15:45）---
+    # --- AI 大脑：每日进化议程（docs/summary/ai-evolution.md，交易日 15:45）---
     # 无条件挂载：autonomy 关闭时议程照常生成（仅不执行，降级为建议清单）
     evolution_stop = asyncio.Event()
     from app.services.evolution import evolution_scheduler

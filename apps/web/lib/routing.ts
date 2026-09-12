@@ -1,5 +1,5 @@
 /**
- * 统一路由跳转规范（docs/linkage-design.md §2）。
+ * 统一路由跳转规范（docs/summary/architecture-design.md §2）。
  *
  * 规则一：选中标的的唯一真相源是 URL（/workbench?symbol=…）。
  * - 页面内切换用 router.replace(workbenchUrl(s), { scroll: false })（不产生历史噪音）

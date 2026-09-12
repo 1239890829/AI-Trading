@@ -2,7 +2,7 @@
  * 助手回答「一键跳转」的入口注册表（唯一真相源）。
  *
  * 背景：此前助手只有两个落点（workbenchUrl / themesUrl），市场/研究/精选/盘中
- * 的具体 tab 与条目都跳不了。2026-09-06 按 docs/assistant-optimization-plan.md §1.2
+ * 的具体 tab 与条目都跳不了。2026-09-06 按 docs/archive/assistant-optimization-plan.md §1.2
  * 收敛为一张注册表 + 三类定位方式：
  *   A URL 深链（首选，状态已在 query，可书签、可分享）
  *   B 初值深链（目标页 state 从 query 初始化，见 workbench rt/ct、research date）

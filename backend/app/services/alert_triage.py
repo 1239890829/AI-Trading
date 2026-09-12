@@ -1,4 +1,4 @@
-"""告警 AI 判读层（方案 docs/ai-agent-console-plan.md P1）。
+"""告警 AI 判读层（方案 docs/summary/ai-evolution.md P1）。
 
 问题：规则触发 ≠ 值得提醒。价格/炸板/异动规则在震荡日能刷出几十条，
 人工看等于没有——这正是"预警"沦为噪音的原因。

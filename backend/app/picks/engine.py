@@ -4,7 +4,7 @@
 1. **规则版多角色**（TradingAgents 编排思想的规则落地）：五个"分析师"各自产出
    0-100 子评分 + basis，合成器加权求和 + 一票否决。全程可解释，LLM 接入后
    按维度逐个增强（子评分接口不变）。
-2. **参考仓库择优**（docs/github-stars-trading-analysis.md）：TradingAgents 的
+2. **参考仓库择优**（docs/archive/github-stars-trading-analysis.md）：TradingAgents 的
    角色分工与决策日志、ai-hedge-fund 的 mandate 解耦（已落地回测）、
    daily_stock_analysis 的每日节奏；其"买卖点位/确定性结论"风格一律不引（红线 3）。
 3. **组合稳定**（换股门槛）：新候选综合分超出被换成员 ≥15 分才替换；

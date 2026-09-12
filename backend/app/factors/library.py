@@ -1,4 +1,4 @@
-"""因子注册表（唯一口径锚）——docs/factor-library-design.md §5。
+"""因子注册表（唯一口径锚）——docs/summary/factor-system.md §5。
 
 每个因子是作用在统一 base 视图上的 SQL 表达式（evaluate.py 生成 base）：
 - base 提供：close_adj / ret1 / c5..c120（复权 LAG 锚点）/ fwd_*（前瞻收益）/

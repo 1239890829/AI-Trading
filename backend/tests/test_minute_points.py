@@ -1,4 +1,4 @@
-"""腾讯分钟分时解析测试（docs/minute-chart-plan.md 模块 0）。
+"""腾讯分钟分时解析测试（docs/archive/minute-chart-plan.md 模块 0）。
 
 重点覆盖"错了也看不出来"的地方：
 - 非交易日请求时 ts 必须落在响应自带的真实交易日，而不是 datetime.now()；

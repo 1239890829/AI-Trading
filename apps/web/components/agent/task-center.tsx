@@ -16,7 +16,7 @@ import {
 import { dateTimeTextBJ } from "@/lib/format";
 
 /**
- * AI 控制台 · 任务中心（docs/ai-agent-console-plan.md P0）。
+ * AI 控制台 · 任务中心（docs/summary/ai-evolution.md P0）。
  *
  * 首批只暴露 L0 只读/生成类任务；每个任务可展开看**步骤轨迹**（可追溯三件套
  * 第一件：做过什么、依据什么、花了多久、是否经 LLM 增强）。

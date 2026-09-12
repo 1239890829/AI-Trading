@@ -383,7 +383,7 @@ class TencentProvider:
     async def get_minute_line(self, symbol: str) -> list[dict]:
         """当日 1 分钟分时：[{ts, price, volume(股), cum_amount(元), cum_volume(股), avg(元)}]。
 
-        2026-08-30 修正（docs/minute-chart-plan.md 模块 0）：
+        2026-08-30 修正（docs/archive/minute-chart-plan.md 模块 0）：
         - ts 改用响应里的 ``data.date``（真实交易日）。旧实现用 ``datetime.now()``
           拼日期——非交易日请求会把最近交易日的分时打上今天日期（X 轴错位）。
         - 新增 ``cum_volume``（累计量，股）与 ``avg``（均价线）。

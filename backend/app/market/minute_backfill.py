@@ -1,4 +1,4 @@
-"""分钟历史回拉（回测底座，docs/minute-chart-plan.md 模块 4.3）。
+"""分钟历史回拉（回测底座，docs/archive/minute-chart-plan.md 模块 4.3）。
 
 数据源边界（2026-08-30 实测）：
 - 腾讯 mkline：单次 320 根封顶、**无翻页能力**（偏移参数返回 0 bars）

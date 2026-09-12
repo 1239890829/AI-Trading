@@ -3,7 +3,7 @@
 与 extract.py 的 ENTITY_ALIASES（1 词→1 题材）互补：别名表管「直接点名」，
 本表管「一级事件→多板块多级传导」。全部人工维护、basis 必带，direction 不猜
 ——产业链/海外实体类事件本体即利好源头给 +1；宏观类方向引用回测结论
-（docs/nfp-ashare-validation.md），证据不足时 strength=1（弱）或 0（待判）。
+（docs/summary/data-market.md），证据不足时 strength=1（弱）或 0（待判）。
 
 三类链路：
 1. 产业链多级：厄尔尼诺 → 种植/磷化工/化肥/电力/电网（强度=专业弹性排序的
@@ -31,7 +31,7 @@ from __future__ import annotations
 import re
 from datetime import date, timedelta
 
-_NFP_BASIS = "宏观传导链 chains.nfp（docs/nfp-ashare-validation.md 10年116期回测，t 不显著，仅提示不作规则）"
+_NFP_BASIS = "宏观传导链 chains.nfp（docs/summary/data-market.md 10年116期回测，t 不显著，仅提示不作规则）"
 
 
 def _theme_row(target: str, direction: int, strength: int, chain: str, basis: str) -> dict:
@@ -277,7 +277,7 @@ def _us_dst(d: date) -> bool:
 
 
 def macro_calendar_note(today: date) -> str | None:
-    """非农日历提醒（docs/nfp-ashare-validation.md 决议「日历提醒类标注 ✓ 可做」）。
+    """非农日历提醒（docs/summary/data-market.md 决议「日历提醒类标注 ✓ 可做」）。
 
     先验规则：非农 = 每月第一个周五（北京时间夏令时 20:30 / 冬令时 21:30 公布）。
     返回简报提示文案；与规则无关的日子返回 None（显式缺失，不凑话）。

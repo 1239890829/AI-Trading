@@ -270,7 +270,7 @@ class Settings(BaseSettings):
     picks_buy_point_interval_seconds: float = 60.0
     picks_buy_point_channels: str = "in_app,log"
 
-    # ---- AI 大脑自主进化（docs/evolution-brain-plan.md v2）----
+    # ---- AI 大脑自主进化（docs/summary/ai-evolution.md v2）----
     # 盘后 15:45 自动汇总五路证据（复盘改进项/signal_health/告警判读统计/…）
     # → LLM 生成「今日进化议程」→ 按变更类别自动执行（A 参数/B 文档；C 代码 P1）。
     # 安全模型=后置守护：证据门槛 + 值域钳制 + 红线 + 预算 + 自动回滚（P1 实验记录本）。

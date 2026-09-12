@@ -89,7 +89,7 @@ export type ChartTab = "kline" | "minute" | "flow";
 /** 右列 tab 键与 tab 列表见 lib/detail-tabs.ts（抽成纯模块以便单测与口径断言）。 */
 export type RightTab = DetailRightTab;
 /**
- * 助手「一键跳转」的落点参数（2026-09-06，docs/assistant-optimization-plan.md §1.3）：
+ * 助手「一键跳转」的落点参数（2026-09-06，docs/archive/assistant-optimization-plan.md §1.3）：
  * 工作台 URL 的 ?ct=（图表区 tab）与 ?rt=（右栏 tab）由调用方（workbench 页）解析后
  * 传进来。这里只做**初值 + 跟随变化**：内部仍是 state，用户手动切 tab 不回写 URL
  * （避免每次点击都产生历史/路由噪音），但外部深链进来必须生效——

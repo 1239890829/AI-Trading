@@ -15,12 +15,12 @@ const nextConfig: NextConfig = {
       { source: "/longhu", destination: "/tape?tab=longhu", permanent: false },
       { source: "/heatmap", destination: "/market?tab=heatmap", permanent: false },
       { source: "/watchlist", destination: "/workbench", permanent: false },
-      // 2026-09-08 研究页下线（docs/ai-agent-console-plan.md §6）：复盘/预警并入
+      // 2026-09-08 研究页下线（docs/summary/ai-evolution.md §6）：复盘/预警并入
       // AI 控制台，回测取消（后端引擎保留，由任务中心以任务形态调用）
       { source: "/research", destination: "/agent?tab=review", permanent: false },
       { source: "/backtest", destination: "/agent?tab=tasks", permanent: false },
       { source: "/alerts", destination: "/agent?tab=alerts", permanent: false },
-      // 2026-09-08 板块融合（docs/system-audit-20260908.md §三）：两页并入猎场
+      // 2026-09-08 板块融合（docs/summary/review-governance.md §三）：两页并入猎场
       { source: "/picks", destination: "/hunting?tag=pick", permanent: false },
       { source: "/intraday", destination: "/hunting?tag=watch", permanent: false },
     ];
