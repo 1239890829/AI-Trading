@@ -34,10 +34,27 @@ const record = (trade_date: string): LongHuRecord => ({
   received_at: "t0",
 });
 
-/** 把客户端时间钉在 2026-09-02（周二，交易日）的指定时刻。组件的 now/todayISO 都取自它。 */
+/**
+ * 把客户端时间钉在 2026-09-02（周二，交易日）的指定**北京**时刻。
+ *
+ * ⚠️ **必须用带 `+08:00` 偏移的字面量构造绝对时刻，不能用 `new Date(2026, 8, 2, h, m)`**
+ * ——后者按**本机时区**解释。组件判「是否当天 / 有没有过 17:00 披露点」走的是
+ * `lib/market-hours` 的 `bjToday()` / `bjMinuteOfDay()`（**北京**口径，与宿主时区无关），
+ * 两者一错位断言就整体翻转：
+ *
+ * | 写法 | 在 CI（TZ=UTC）上的实际含义 |
+ * |---|---|
+ * | `new Date(2026, 8, 2, 14, 20)` | 14:20 **UTC** = 北京 22:20 ⇒ "盘中"变"盘后" |
+ * | `new Date(2026, 8, 2, 17, 5)` | 17:05 UTC = **次日**北京 01:05 ⇒ 日期也跨了一天 |
+ *
+ * 2026-09-12 真实踩过：本地（UTC+8）5 例全绿、CI 3 例红（`longhu-tab` 的披露语义），
+ * 根因就是这里。**本地全绿 ≠ CI 绿，窗口是宿主时区**；本文件可用
+ * `TZ=UTC npx vitest run components/tape/longhu-tab.test.tsx` 离线复现。
+ */
 function at(hour: number, minute: number) {
   vi.useFakeTimers();
-  vi.setSystemTime(new Date(2026, 8, 2, hour, minute));
+  const p = (n: number) => String(n).padStart(2, "0");
+  vi.setSystemTime(new Date(`2026-09-02T${p(hour)}:${p(minute)}:00+08:00`));
 }
 
 beforeEach(() => {

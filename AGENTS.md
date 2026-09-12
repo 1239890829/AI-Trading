@@ -48,14 +48,21 @@ cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2635
 # **教训与本文档的警告同源：数字标注要么当轮实测回填，要么写"实测方法"而不写死数值。**
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
 cd apps/web && npx eslint .                       # 0 error / 0 warn（P1-27 已清零；余 1 处 C 类显式豁免）
-cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 438 项 / 53 文件（09-12 实测）
+cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 440 项 / 53 文件（09-12 实测）
+# ⚠️ **凡改动/新增涉及时间·时区的断言，必须再用 `TZ=UTC` 复跑一遍**（CI 跑在 UTC，本地是 UTC+8）：
+cd apps/web && TZ=UTC CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run
+# 2026-09-12 真实踩过：`longhu-tab.test.tsx` 用 `new Date(2026, 8, 2, 14, 20)` 钉"盘中"，
+# 那是**本机时区**解释 —— 在 UTC 上变成北京 22:20（"盘中"→"盘后"）、`at(17,5)` 更跨到次日，
+# **本地 5 例全绿、CI 3 例红**。生产侧走 `bjToday()/bjMinuteOfDay()`（北京口径）本身是对的，
+# 错的是测试钉了宿主墙钟。修法：用带 `+08:00` 偏移的字面量构造绝对时刻。
+# ⇒ **"本地全绿" 不构成 CI 绿；时区是宿主属性，不改代码也能翻断言**。
 cd backend && .venv/bin/python -m pyflakes app tests scripts   # 0（scripts 已纳入口径，P2-18）
 python3 scripts/doc-health.py                    # 文档体检：0 待处理（收尾必跑，见 kb/07 §8.2）
 # 生产构建前必须先停 dev server（.next 冲突已踩两次）：
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 2635 项（2573 passed / 62 skipped）· 171 文件、前端 438 项 / 53 文件、eslint **0 error / 0 warn**
+> **门禁口径**：后端 2635 项（2573 passed / 62 skipped）· 171 文件、前端 440 项 / 53 文件、eslint **0 error / 0 warn**
 > （25 条回归已按 P1-27 清零；仅 notification-drawer 保留 1 处带理由的 C 类豁免）。
 > **测试规模与告警数同属「会失真的状态标注」**——改动后要实测回填，不要沿用旧数字
 > （此前「≤1 warn / 后端 580 / 前端 97 / 219 / 257 / 263 / 342 / 1925 / 2553 / 2556 / 2557 / 2574 / 2576 / 2625 /
