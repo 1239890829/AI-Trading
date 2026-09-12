@@ -59,6 +59,41 @@ _review_storage.REPORT_DIR = _TMP_REPORT_DIR
 _TMP_REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 
+# ------------------------------------------- 运行期落盘隔离（第二批，2026-09-12）
+#
+# 库走 `:memory:`、报告目录已隔离，**仍有两处模块级常量指向真实 `backend/data/`**，
+# 且都由端到端测试**间接触发**（写入口自己完全不知情）：
+#
+# ① `data/leader_archive.json` ← `tests/test_endpoint_smoke.py`。它按 openapi 遍历
+#    **132 个 GET 端点**，其中 `/api/events/impact` 与 `/api/picks/leader-archive`
+#    会走 `leader_archive.get_archive()` ⇒ TTL 到期即用测试的 **MockProvider**
+#    重建并**覆盖真实档案**。污染特征可内容级识别，且**只有两个量是判据**：
+#    `symbols_seen=6`（= mock 的 `UNIVERSE[:6]`）与 `days_with_pool=30`
+#    （mock 对**任何日历日**都给池；真实只交易日有池，实测 15~22）。
+#    ⚠️ `themes={}` **不是**判据——09-11 的真实构建同样是空题材（当日 ths 未返回 reason）。
+#    即：判据要看**与数据源实现强绑定的量**，不看"看着像不像有内容"。
+# ② `data/cognition_gaps.jsonl` ← `tests/test_assistant.py::test_chat_route_logs_cognition_gap_when_no_tool_used`
+#    经 `/api/assistant/chat` → `record_gap()` **追加**一行；每跑一次全量 +1 行
+#    （实测该文件 36 行**全部**是同一条测试问题，真实留痕被淹没）。
+#
+# 判据（实测，非推断）：以运行时刻为界 `find data -type f -newermt <时刻>`，
+# 整场 pytest 只捞出这两个文件；其余 20 个"指向 data/ 的模块级常量"（DuckDB 只读、
+# 由调度写而测试不触发等）实测未被写入，故**不做无差别重定向**（重定向 `trade_calendar`
+# 一类会被读的路径反而会改变测试语义）。
+#
+# 修法沿用上面 REPORT_DIR 的既定做法：**把入口模块的属性改指沙箱**——两个模块的调用点
+# 都是运行时读模块全局，import 后改属性即生效；测试自身的 `monkeypatch.setattr`
+# 仍可临时覆盖（test_cognition 已如此，互不干扰）。
+# 守卫：`tests/test_data_path_isolation.py`（新增 data 路径常量必须登记 + 注入校验 + 功能回归）。
+_DATA_SANDBOX = Path(tempfile.mkdtemp(prefix="ashare-test-data-"))
+
+import app.assistant.cognition as _cognition_mod  # noqa: E402
+import app.services.leader_archive as _leader_archive_mod  # noqa: E402
+
+_leader_archive_mod.ARCHIVE_PATH = _DATA_SANDBOX / "leader_archive.json"
+_cognition_mod.GAP_LOG_PATH = _DATA_SANDBOX / "cognition_gaps.jsonl"
+
+
 # ---------------------------------------------------------------- 共享 TestClient
 import pytest  # noqa: E402
 

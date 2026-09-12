@@ -57,6 +57,11 @@ data/*.bak-*
 # 运行时状态文件（缺文件时代码自建/降级；pytest 也会改写 trade_calendar.json）
 backend/data/trade_calendar.json
 backend/data/sentiment_metrics.json
+# 历史龙头档案：TTL 20h 缓存、`get_archive()` 缺文件即重建（2026-09-12 补齐）。
+# 同属上面这一类，此前被漏掉 —— 它被 git 跟踪且**每次重建都产生整文件 diff**
+# （实测重建后 321 KB / 1799 个题材，而 TTL 只有 20h ⇒ 每个交易日都可能重写）。
+# 判据与 trade_calendar 一致：缺文件时**代码自建**，入库只带来噪声不带来信息。
+backend/data/leader_archive.json
 # 一次性迁移的防重跑 marker（migrate_agent_time_to_bj.py）
 data/.agent_time_migrated*
 
@@ -72,3 +77,10 @@ docs/archive/theme-audit-2026-09-01.json
 
 # 相位核验中间产物（可再生产：scripts/verify_intraday_phase_fit.py --refresh）
 backend/data/research/phase_verify/
+
+# launchd/cron 运行期日志（每次触发追加，非源码；2026-09-12 加入）
+# 判据：内容对后续读者零价值（只有时间戳与错误行），却会每次运行都产生 diff。
+# 例外：logs/review-*.json 是盘后复盘的 claude -p 原始产物（含成本与 session），仍跟踪。
+scripts/agent/logs/*.err
+scripts/agent/logs/*.out
+scripts/agent/logs/run.log
