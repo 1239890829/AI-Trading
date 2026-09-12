@@ -41,7 +41,14 @@ A 股实时行情 + AI 量化投研 + 模拟交易工作台。**只做**行情�
 
 ---
 
-# 三、目录结构（逐文件说明）
+# 三、目录结构（主干说明）
+
+> **口径（2026-09-12 修订，KB-ENG-36 同族）**：本节是**主干示意**，按包列出主要模块与职责，
+> **不保证逐文件穷尽**——文件级全量以代码为准，端点全量以 `/openapi.json` 为准，
+> 测试/规模类**会漂移的数字一律不写死**（以 `AGENTS.md` §1 门禁行为唯一出处）。
+> 修订原因：本节曾是 08-31 快照却读起来像"当前完整结构"，12 天后已失真到列着
+> **三个已删模块**（`screener.py` / `screener_service.py` / `minute_backtest.py`）
+> 与已删路由 `predict.py`——由 `scripts/doc-health.py` **J 项**（文档代码锚点）抓出。
 
 ```text
 ashare-ai-trader/
@@ -56,26 +63,42 @@ ashare-ai-trader/
 │   │   │       ├── watchlist.py       # 自选 CRUD + 分组
 │   │   │       ├── paper.py           # 模拟交易（账户/持仓/委托/撤单/成交/重置）
 │   │   │       ├── review.py          # 盘后复盘（run/reports/compare/versions/effectiveness）
-│   │   │       ├── screener.py        # GET /screener 全市场选股器（快照过滤+TDX日K评分）
 │   │   │       ├── backtest.py        # POST /backtest/run + GET /backtest/strategies
-│   │   │       └── predict.py         # 新题材预判（run/list/get/verify/themes）
+│   │   │       ├── picks.py           # 每日精选（generate/latest/回放/消融）
+│   │   │       ├── picks_intraday.py  # 盘中跟踪（顶级榜单）
+│   │   │       ├── events.py          # 事件池/影响面/传导链
+│   │   │       ├── news.py            # 快讯流
+│   │   │       ├── agent.py           # 控制台：任务中心/参数配置/议程
+│   │   │       ├── assistant.py       # 全局助手（会话 + 受限工具集）
+│   │   │       ├── alert.py           # 提醒与告警（含今日已挡事件）
+│   │   │       ├── notifications.py   # 通知读写水位（服务端权威）
+│   │   │       ├── risk.py            # RiskEngine 预检（**非撮合硬拦截**，见 §6 待决）
+│   │   │       ├── theme_catalog.py   # 题材目录
+│   │   │       ├── real_position.py   # 真实持仓账本（只读录入）
+│   │   │       ├── ext_data.py        # 外部一阶数据（气候/商品）
+│   │   │       └── （screener.py / predict.py 已于 2026-09 删除，见本节口径声明）
 │   │   ├── core/
+│   │   │   ├── bjtime.py              # 北京时间唯一入口（BJ_TZ / beijing_now / beijing_today；naive 与 aware 两语义）
 │   │   │   ├── config.py              # Settings（ASHARE_* 环境变量）
 │   │   │   ├── db.py                  # 引擎(:memory:→StaticPool) + 幂等迁移 + session
 │   │   │   ├── errors.py              # 统一错误契约（AppError + handler 注册）
+│   │   │   ├── freshness.py           # Freshness 契约（失败有类型，不用 None 冒充）
 │   │   │   ├── migrations.py          # alembic 三态 stamp-or-upgrade
+│   │   │   ├── runtime_params.py      # 参数运行时覆盖层（白名单 + 归因 + 回滚）
+│   │   │   ├── scheduler.py           # TaskRegistry：常驻任务**一份声明**（启动/心跳/重启/收割）
 │   │   │   └── ttl_cache.py           # 统一 TTL 缓存（LRU 有界/异步单飞/命中统计，P0-5）
 │   │   ├── models/
 │   │   │   ├── watchlist.py           # 自选（含 group_name）
 │   │   │   └── paper.py               # 模拟账户/持仓/订单
 │   │   ├── schemas/market.py          # Quote/OrderBook/Trade/Kline/LimitUp/LongHu/Board/Quality + 审计字段
 │   │   ├── repositories/watchlist_repo.py
-│   │   ├── services/
+│   │   ├── services/                  # 34 个服务，主干列下（全量见目录）
 │   │   │   ├── quote_hub.py           # 行情轮询/缓存/校验/订阅广播/seq/stale 降级（含休市日 mark_all_stale）
 │   │   │   ├── snapshot_service.py    # 全市场快照(新浪)→宽度→Parquet
-│   │   │   ├── screener_service.py    # 选股器编排：截面过滤→TDX日K→评分（TTL 30min+single-flight）
+│   │   │   ├── picks_pipeline.py      # 每日精选管线（候选池→打分→落库；同步 IO 一律 to_thread）
 │   │   │   ├── heatmap_service.py     # 云图聚合（快照×TDX HY 行业映射，24h 缓存）
-│   │   │   └── market_context.py      # 大盘上下文 + compute_market_sentiment（实时情绪，复盘共用）
+│   │   │   ├── market_context.py      # 大盘上下文 + compute_market_sentiment（实时情绪，复盘共用）
+│   │   │   └── （screener_service.py 已随选股器删除；其余见 `backend/app/services/`）
 │   │   ├── market/
 │   │   │   ├── normalizer.py          # 东财全族字段→统一 schema（含财务/席位/公告/新闻/搜索）
 │   │   │   ├── sina_market.py         # 新浪全市场快照（Market Center）
@@ -88,7 +111,21 @@ ashare-ai-trader/
 │   │   │   ├── minute_signals.py      # 做 T 信号引擎（5 指标 as_of 流式）
 │   │   │   ├── minute_decisions.py    # 做 T 决策链记录与结算（leave-one-out 归因）
 │   │   │   ├── minute_backfill.py     # 分时历史落盘（新浪 5m→Parquet）
-│   │   │   └── minute_backtest.py     # 做 T 回测底座（as_of 逐日+样本内外）
+│   │   │   └── （minute_backtest.py 已随其唯一消费方一并删除，2026-09-08 P0-3；其余 market 模块见目录）
+│   │   ├── picks/                     # 每日精选域（34 模块）：pipeline 上层
+│   │   │   ├── morning_brief.py       # 盘前简报（一阶证据采集：气候/隔夜/商品）
+│   │   │   ├── echelon.py             # 梯队地位 / regime.py 炒作阶段 / gate.py 空仓闸门
+│   │   │   ├── halt_risk.py           # 风险档位与硬排除（vetoes）
+│   │   │   ├── position_engine.py     # 仓位引擎 + 自动离场（KB-DEC-012）
+│   │   │   ├── watcher.py             # 盘中观察名单与告警派发（同步 read-modify-write **刻意不搬线程**）
+│   │   │   └── （engine / daily_review / replay / style_router / signal_health 等见目录）
+│   │   ├── factors/                   # 因子库：library.py 注册表（唯一口径锚）+ evaluate.py 评估闭环
+│   │   ├── events/                    # 事件域：extract 抽取 / chains 传导链 / impact 影响面 / store 落库
+│   │   ├── research/                  # 策略核验（strategy_verify.py，import 生产常量）
+│   │   ├── assistant/                 # 全局助手：tools 受限工具集 / context 上下文 / prompt 提示词
+│   │   ├── news/                      # 快讯：flash 抓取 + rules 规则 + llm 判读
+│   │   ├── notifiers/                 # 通知出口：base 协议 + feishu 飞书
+│   │   ├── risk/                      # 风险引擎：engine 预检 + state_classifier 状态分档（**不接撮合**）
 │   │   ├── data_providers/
 │   │   │   ├── base.py                # MarketDataProvider 协议
 │   │   │   ├── ths.py                 # 同花顺官方 fuyao（链首）
@@ -119,18 +156,22 @@ ashare-ai-trader/
 │   │   │   ├── storage.py             # 落库+落盘+检索+命中率分层统计
 │   │   │   └── service.py             # 编排 + 目标日四问验证 + 复盘钩子
 │   │   └── websocket/routes.py        # /ws/quotes
-│   ├── tests/（27 文件 329 用例；含 test_backtest 12 防泄露、test_screener 8、test_sentiment_history 8、test_write_token 4）
+│   ├── tests/                         # 专项守卫族：import 分层 / 无阻塞事件循环 / bjtime 禁用扫描 /
+│   │                                  #   文档门禁自证 / 侧写副作用隔离 …（**规模以 AGENTS §1 门禁行为准**）
 │   ├── requirements.txt + requirements.lock / alembic.ini + migrations/（baseline 91f8ea3c3a3e + a7c3e91d2f44 情绪序列）/ Dockerfile / .env（key，gitignored）
 ├── apps/web/
-│   ├── app/（10 路由页面：workbench/market/watchlist/boards/heatmap/limit-up/themes/screener/backtest/longhu）
-│   ├── components/（15 组件：图表族 kline-chart-pro/minute-chart/replay-chart、detail/ 六子件、sparkline、nav-bar 等）
+│   ├── app/（导航 5 页：workbench / tape / market / hunting / agent，与 `NAV_ALLOWED_PATHS` 一一对应；
+│   │        另有 stock/[symbol] 详情页与 backend/[...path] 代理，二者非导航项）
+│   ├── components/（面板族：Panel/PanelBoundary、图表族 kline-chart-pro/minute-chart/replay-chart、
+│   │                picks/pick-card（选股卡**唯一实现**）、detail/、ui/jump-link 等）
 │   ├── hooks/use-quote-stream.ts      # WS+降级轮询
-│   ├── lib/api.ts（ApiError+超时+token）+ format.ts（fmt/parseNum）+ technical-analysis.ts（防飞刀三条口径，与后端 tech_score 一致）
-│   ├── lib/*.test.ts（vitest 18 用例）+ vitest.config.ts
+│   ├── hooks/use-resource.ts          # 统一取数（三态 + 可见性暂停 + 盘外降频封顶）
+│   ├── lib/api.ts（ApiError+超时+token）+ format.ts（fmt/parseNum/triText）+ technical-analysis.ts（与后端 tech_score 同口径）
+│   ├── lib/*.test.ts + components/**/*.test.tsx   # vitest（**规模以 AGENTS §1 门禁行为准**）+ vitest.config.ts
 │   └── types/market.ts
 ├── data/（ashare.db + parquet/snapshots/ + parquet/minutes-tdx/ + trade_calendar.json）
-├── docs/（14 篇 + 本文档）
-├── scripts/bootstrap.sh
+├── docs/（INDEX.md 为入口；kb/ 为唯一权威知识库；规模不写死，见 `docs/INDEX.md`）
+├── scripts/（doc-health.py 文档体检 / api-sweep.js 载荷体检 / bootstrap.sh）
 ├── docker-compose.yml / .env.example / README.md
 └── .github/workflows/ci.yml  # 四门禁：pytest/pyflakes + tsc/vitest/ESLint
 ```

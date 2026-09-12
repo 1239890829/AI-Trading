@@ -2,7 +2,7 @@
 > **同族文档（因子体系，2026-09-10 归口）**：建设方案 → `summary/factor-system.md`；候选登记册 → `factor-candidates.md`；IC 复核报告 → `summary/factor-system.md`。本文 = 全生命周期制度（**入口文档**）。
 
 > 定位：在 `docs/summary/factor-system.md`（因子库建设方案，P0 评估闭环）之上，把「评估」扩展为**全生命周期闭环**：挖掘 → 筛选评估 → 入库登记 → 使用 → 出库 → 衰减监控与更新，六环联动，每一环有明确的存在价值与承接物。
-> 配套代码资产：`backend/app/factors/library.py`（注册表=唯一口径锚）、`backend/app/factors/evaluate.py`（评估引擎）、`backend/app/factors/candidates.py`（候选登记册）、`backend/scripts/run_factor_eval.py`（跑批 CLI）。
+> 配套代码资产：`backend/app/factors/library.py`（注册表=唯一口径锚）、`backend/app/factors/evaluate.py`（评估引擎）、`backend/app/factors/report.py`（评估报告运行时只读层）、`backend/scripts/run_factor_eval.py`（跑批 CLI）；候选登记册现为**纯文档** `docs/factor-candidates.md`（2026-09-08 起仅以文档形态维护）。
 > 版本：v1（2026-09-07）。评估数据全部为 marketdb 10 年日 K 实测（1023.8 万行 / 5555 只 / 2016-09-05~2026-09-03），非推演。
 
 ---
@@ -172,7 +172,7 @@ signal at T 收盘 → entry T+1 收盘（保守执行口径）→ exit T+h；T+
 ### 3.4 事件因子通道（新增，Sequoia 系策略的评估口径）
 
 0/1 事件因子（涨停洗盘/高紧旗形/海龟突破等）**不走 RankIC**（截面连续值假设不成立），改走事件研究法（`picks/backtest.py` 既有范式）：触发日 vs 全市场基线的前瞻收益差 + 样本 ≥120 触发 + walk-forward 多窗。
-本通道 P1 落地 `app/factors/evaluate_event.py`；候选登记册已收录 Sequoia 6 策略原始规则（tier=C：需涨停家数/连板数据联判，且事件稀疏需长窗口）。
+本通道 **P1 尚未落地**（截至 2026-09-12 实测无实现：`app/factors/` 下只有注册表 / 评估引擎 / 评估报告三件）；候选登记册已收录 Sequoia 6 策略原始规则（tier=C：需涨停家数/连板数据联判，且事件稀疏需长窗口），待通道就绪后按上述事件研究法批量评。**待办出口**：`docs/retro-and-gaps.md` §6.2 P1-42。
 
 ### 3.5 样本内外纪律
 

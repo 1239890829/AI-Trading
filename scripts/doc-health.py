@@ -35,12 +35,21 @@
                  死锚存活 10+ 天无人发现（2026-09-12）
   G KB 孤儿条目   某条 KB 条目在全仓**零外部引用**（Karpathy wiki 的 orphan-page lint）
                  ——「沉淀了但没人用」的唯一可量化信号；排除定义行自身
+  J 文档代码锚点  文档点名的**仓库代码路径必须存在**（两个子面）：
+                 J1 行内 `` `app/x/y.py` ``（首段属已知根）；
+                 J2 围栏代码块里的**目录树行** `├── x.py`（末段文件名全仓须存在）。
+                 动机 = §6.12「设计文档能力失真」的可判子集（F-10）；先量三个原型才定档，
+                 宽口径已**实测否决**（见函数 docstring）。上线时 4 处命中 / 0 误报
 
 局限（诚实声明）：C 的"日志单轮新增 ≤80 行"是**过程指标**，静态扫描判不出，需人工/议程侧核对。
+J 只回答「点名的代码资产还在不在」，**不回答**「文档对某能力的描述是否过时」——
+后者（如「禁止交易名单」不存在、「复权方式切换」不存在）的锚点是**中文子能力描述**，
+与代码无机械映射，三个原型实测真阳性≈0 ⇒ 明确判定**不可自动对账**，不设门禁（KB-ENG-68）。
 """
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -184,6 +193,11 @@ CODE_REF_ALLOW = {
         "**合成文档名**：该测试把扫描面 monkeypatch 到 `tmp_path`，临时树里那个 `a.md`"
         "不是仓库文档指针（它只用来钉 I 项判据）。真实扫描面由同文件末条"
         "`test_real_repo_has_no_unregistered_empty_section` 在真仓库上覆盖",
+    ("backend/tests/test_doc_health_anchors.py", "a.md"):
+        "**合成文档名**（同上一行的 `test_doc_health_empty_sections.py`）：扫描面 monkeypatch "
+        "到 `tmp_path`，临时树里的 `a.md` 只是宽容名单的**键**——键的形状必须是「文档相对路径」，"
+        "所以它长得像文档指针但不是。真实扫描面由同文件末条 "
+        "`test_real_repo_has_no_dead_doc_anchor` 在真仓库上覆盖",
     # ⚠️ 本文件自身也吃过同一次亏：上面这条理由的第一版把 `docs/` 前缀写了出来，
     # 结果 `check_code_refs` 把**自己的说明文字**判成死引用（`scripts/doc-health.py:184`）。
     # 与 `STALE_ANCHOR_ALLOW` 的取舍同源：**描述缺陷的文字本身必须点名缺陷名**，
@@ -738,6 +752,166 @@ def check_empty_sections() -> tuple[list[tuple[str, int, str]], list[tuple[str, 
     return hits, ghost
 
 
+# ---------------------------------------------------------------- J. 文档代码锚点
+#
+#: 参与判定的后缀：**只认源码/配置**。数据产物（json/jsonl/parquet/duckdb）刻意排除 ——
+#: 它们是 gitignored 运行时文件，「本地在、CI 不在」，纳入会造成 CI 假红（KB-ENG-57）。
+ANCHOR_SUFFIX = r"(?:py|ts|tsx|js|mjs|sh|yml|yaml|toml|html|css|plist)"
+#: J1 行内锚点：反引号里的路径/文件名
+ANCHOR_INLINE_RE = re.compile(rf"`([\w./\-]+\.{ANCHOR_SUFFIX})`")
+#: J2 树锚点：围栏代码块里目录树行的**末段文件名**（树靠缩进表达层级，不还原完整路径）
+ANCHOR_TREE_RE = re.compile(rf"^[\s│├└─+`|]*([\w.\-]+\.{ANCHOR_SUFFIX})\s*(?:#.*)?$")
+#: 记录性引用标记（与 RECORD_MARKERS 同族，按锚点面增补"计划/迁出/移除"等状态词）
+ANCHOR_RECORD_MARKERS = RECORD_MARKERS + (
+    "退役", "已删", "迁出", "移除", "从未", "计划", "规划", "拟建", "不再",
+    # `~~` = markdown 删除线，本仓用它标「已完成 / 已作废」的**路线条目**
+    # （范本 `~~**Phase 5 选股器 + 评分系统**~~ ✅ 已完成（2026-08-30）：… `screener_service.py`…`）。
+    # 这类行是 **changelog**：与 `ANCHOR_SKIP_FILES` 排除账本同属「对 changelog 做存在性
+    # 对账属范畴错误」——写"那天建了 X"，X 后来被删，历史依然为真。
+    # ⚠️ **实测边界（2026-09-12）**：该标记**恰好且仅**移除 1 条命中（`docs/PROJECT-MASTER.md:371`
+    # 那条 08-30 路线，其中 `screener_service.py` 09-01 已彻底删除）；另测 `✅` 与 `已完成`
+    # **无任何额外收益** ⇒ 按最小改动**只收 `~~`**。少收一个标记 = 少一处未来的假阴性。
+    "~~")
+#: 占位/示例名（不是真引用）。⚠️ **必须按"整段词"判**，不能用 `(?:^|/)a+` 这类
+#: 开放正则——它会把**所有 `app/...` 锚点**当成占位名静默跳过（实测：J 项的行内
+#: 覆盖一度等于失效，靠自证测试抓出）。判据 = 末段词干整体落在集合内。
+ANCHOR_PLACEHOLDER_STEMS = frozenset({
+    "foo", "bar", "baz", "tmp", "temp", "example", "sample", "demo",
+    "x", "xx", "xxx", "xxxx", "a", "aa", "nn", "n", "当天", "yyyymmdd"})
+ANCHOR_PLACEHOLDER_RE = re.compile(r"^(?:x+|a+|n+|y{4}[\w-]*)$", re.I)
+#: 视为「仓库相对路径首段」的目录；**不在其中的含 `/` 锚点**视为外部路径或文档自造简写，不判
+ANCHOR_ROOTS = ("app", "backend", "apps", "scripts", "docs", "tests", "data", "skills")
+#: 全仓文件名清点时剪掉的目录（`rglob` 会钻进 node_modules/.next 造成秒级开销）
+ANCHOR_SKIP_DIRS = frozenset({
+    "node_modules", ".next", ".turbo", "__pycache__", ".venv", "dist", "build", ".git"})
+#: 排除的文档位（**口径**，见 `check_doc_anchors` docstring 末段）
+ANCHOR_SKIP_DIR_PARTS = ("archive", "trash", "daily-review")
+ANCHOR_SKIP_FILES = ("docs/retro-and-gaps.md",)
+#: 已登记容忍项（键 = 相对路径 + 完整锚点）。空 = 上线实测 0 误报；机制保留供后续登记。
+#: ⚠️ 键用**完整锚点**而非截断，否则同一锚点会既进 hits 又进 ghost（F-4 踩过）。
+ANCHOR_ALLOW: dict[tuple[str, str], str] = {}
+
+
+def _repo_basenames() -> set[str]:
+    """全仓文件名集合（`os.walk` + 目录剪枝）。"""
+    out: set[str] = set()
+    for dirpath, dirnames, filenames in os.walk(ROOT):
+        dirnames[:] = [d for d in dirnames if d not in ANCHOR_SKIP_DIRS]
+        out.update(filenames)
+    return out
+
+
+def _is_placeholder(cand: str) -> bool:
+    """占位/示例名：`foo.py` / `xxx.md` / `NN-x.md` / `当天.md`。
+
+    判据走**末段词干**（去掉扩展名）而不是在整条路径上开放匹配——后者会误吞
+    真实路径（见 `ANCHOR_PLACEHOLDER_STEMS` 上方注释）。
+    """
+    stem = cand.split("/")[-1].split(".")[0]
+    return stem.lower() in ANCHOR_PLACEHOLDER_STEMS or bool(ANCHOR_PLACEHOLDER_RE.match(stem))
+
+
+def _is_repo_path(cand: str) -> bool:
+    """行内锚点是否**值得判**：HTTP 路径 / 外部域名 / 非仓库首段 一律放过。
+
+    放过（返回 False）≠ 通过，而是**不参与判定**——它们不是"文档对仓库代码的点名"。
+    实例：`/openapi.json`（HTTP）、`d.10jqka.com.cn/...`（外部站）、`kb/NN-x.md`（自造占位）。
+    """
+    if cand.startswith("/"):
+        return False
+    head = cand.split("/")[0]
+    if re.match(r"^\d+\.\d+\.\d+\.\d+$", head) or re.match(r"^[a-z0-9-]+\.[a-z]{2,}$", head):
+        return False
+    return "/" not in cand or head in ANCHOR_ROOTS
+
+
+def check_doc_anchors() -> tuple[list[tuple[str, int, str, str]], list[str]]:
+    """J 文档代码锚点：文档点名的**仓库代码路径必须存在**。
+
+    为什么有它（F-10，2026-09-12）：§6.12 归纳出「设计文档能力失真」的根因是
+    **只加不改、无机制防止**。本轮先量了三个原型才定档，**两个宽口径实测否决**：
+
+    · **v1 句级共现**（"未实现/不存在"同句 + 反引号锚点）：66 + 40 条，真阳性≈0。
+      败因：把"锚点"与"断言"错误配对 —— 实例 `Auditor` 不存在（仅 `risk/engine.py` 模块头…）
+      一句里两个锚点**真值相反**；`out` / `retro` / `status` 这类 2~5 字符弱锚点满地都是。
+    · **v2 收窄后**（强标识符 + ±16 字邻近配对 + 排除已更正行）：2 + 3 条，仍近乎全假。
+      败因是**根本性的**：断言的宾语常是**中文子能力**（「禁止交易名单」「复权方式切换」），
+      而可机械核验的只有它**所在的文件** ⇒ **语义不可配对**，不是调参能解决的。
+    · ⇒ 结论：**「文档对某能力的描述是否过时」不可自动对账**，不设门禁（KB-ENG-68）。
+
+    但 v3 找到一个**判据零歧义**的可判子集：**点名的代码路径是否还在**。
+    实测 459 个行内锚点 / 3 处失败，扩到**围栏代码块里的目录树行**后共 **4 处真漂移**、
+    **0 误报**，且全部集中在权威架构文档 `docs/PROJECT-MASTER.md`：
+    `screener.py` / `screener_service.py`（09-01 选股器彻底删除）、`predict.py`（09-08 P0-4）、
+    `minute_backtest.py`（09-08 P0-3 随唯一消费方删除）——**死于模块被删，树却没人改**。
+
+    上线后修掉一处**自身缺陷**（占位名正则吞掉所有 `app/...` 锚点，见
+    `ANCHOR_PLACEHOLDER_STEMS` 注释），行内覆盖**恢复真实**后又抓出 **3 处同类漂移**：
+    `PROJECT-MASTER.md:371`（08-30 路线条目点名已删的 `screener_service.py`——属 changelog，
+    已由 `~~` 标记排除）、`docs/factor-lifecycle-governance.md:5`（把已迁出为纯文档的
+    `candidates.py` 仍列为代码资产）、同文件 `:175`（**把计划写成既成事实**：点名
+    `app/factors/evaluate_event.py`，实测该文件**全仓零引用、从未存在**，且该待办
+    **在账本里没有任何出口**——违反「待办必须有出口」[[KB-DEC-020]]，已在 §6.2 登记 P1-42）。
+    ⇒ **"修好守卫后召回变真，又冒出新命中"是正常顺序**，不要反过来当成误报证据。
+
+    口径（三处刻意选择，都是为了**零误报优先**）：
+    · **只认"点名"**：锚点形式限定为反引号路径与树行末段；不做"清单完整性"校验
+      （树靠缩进表达层级，不还原完整路径；缺项方向无声明式依据可判）。
+    · **只认源码/配置后缀**：`py/ts/tsx/js/mjs/sh/yml/yaml/toml/html/css/plist`。
+      **刻意排除数据产物**（`json/jsonl/parquet/duckdb`）——它们是 gitignored 运行时文件，
+      **本地在、CI 不在**，纳入会让门禁在 CI 上假红（[[KB-ENG-57]] 同族）。
+    · **排除账本与逐日复盘**：`docs/retro-and-gaps.md` 是**变更叙述 + 计划登记**
+      （P1 行点名"计划中"的模块是合法写法），`docs/daily-review/` 是 L4 历史快照。
+      对 changelog 做存在性对账属**范畴错误**（v1 的 47/66 条命中全部来自账本）。
+      同名裸锚另有 F3/F4 覆盖。
+      **粒度修正（2026-09-12）**：该排除原先**按文件**实现，而 `docs/PROJECT-MASTER.md`
+      是**混合体裁**文档——既有权威结构树（必须判），也有「近期路线」changelog 段
+      （不该判）⇒ **文件级代理在它身上失效**，于是改为**行级**：含 `~~` 删除线的行
+      视为 changelog 条目（适用边界见 `ANCHOR_RECORD_MARKERS` 的实测注释）。
+      ⇒ 通例：**排除规则要按"内容性质"实现，不要按"文件身份"实现**，否则遇到
+      混合体裁文件不是误报、就是漏报。
+
+    返回 `(hits, ghost)`：`hits` = `(相对路径, 行号, 锚点, 行文摘要)`；
+    `ghost` = 已失效的容忍项（**反向断言**，防容忍名单像 `CLAIM_EXEMPT` 那样静默腐烂）。
+    """
+    basenames = _repo_basenames()
+    hits: list[tuple[str, int, str, str]] = []
+    used: set[tuple[str, str]] = set()
+    for p in sorted(DOCS.rglob("*.md")):
+        rel = str(p.relative_to(ROOT))
+        if any(d in p.relative_to(DOCS).parts for d in ANCHOR_SKIP_DIR_PARTS):
+            continue
+        if rel in ANCHOR_SKIP_FILES:
+            continue
+        infence = False
+        for i, line in enumerate(_read(p).splitlines(), 1):
+            if line.lstrip().startswith(("```", "~~~")):
+                infence = not infence
+                continue
+            if any(m in line for m in ANCHOR_RECORD_MARKERS):
+                continue          # 记录性引用：在案引述"曾存在/曾不存在"，不算失真
+            cands = [(m.group(1), "inline") for m in ANCHOR_INLINE_RE.finditer(line)]
+            if infence:
+                # 树锚点**只在围栏内认**：正文里的 `├── x.py` 是插画/引用，不是结构声明。
+                cands += [(m.group(1), "tree") for m in ANCHOR_TREE_RE.finditer(line.rstrip())]
+            for cand, kind in cands:
+                if _is_placeholder(cand):
+                    continue
+                if kind == "inline" and not _is_repo_path(cand):
+                    continue
+                if cand.split("/")[-1] in basenames:
+                    continue
+                key = (rel, cand)
+                if key in ANCHOR_ALLOW:
+                    used.add(key)
+                    continue
+                hits.append((rel, i, cand, line.strip()[:96]))
+    ghost = sorted(
+        f"{f} → {a}（原登记理由：{ANCHOR_ALLOW[(f, a)]}）" for f, a in (set(ANCHOR_ALLOW) - used)
+    )
+    return hits, ghost
+
+
 def main() -> int:
     quiet = "--quiet" in sys.argv
     scan_all = "--all" in sys.argv
@@ -758,6 +932,7 @@ def main() -> int:
     claim_miss = check_claim_entries_missing_falsifier()
     claim_ghost = check_claim_exempt_ids()
     empty, empty_ghost = check_empty_sections()
+    anchors, anchor_ghost = check_doc_anchors()
 
     def line(label: str, ok: bool, detail: str = "") -> None:
         nonlocal problems
@@ -831,6 +1006,20 @@ def main() -> int:
     if empty_ghost and not quiet:
         for g in empty_ghost:
             print(f"       容忍项失效（标题改了/文件搬了，须删该条）：{g}")
+    j_detail = f"{len(anchors)} 处（文档点名的仓库代码路径不存在）"
+    if ANCHOR_ALLOW:
+        j_detail += f"；已登记容忍 {len(ANCHOR_ALLOW)} 条"
+    if anchor_ghost:
+        j_detail += f"；⚠️ 容忍项已失效 {len(anchor_ghost)} 条"
+    line("J 文档代码锚点", not anchors and not anchor_ghost, j_detail)
+    if anchors and not quiet:
+        for f, ln, a, txt in anchors[:12]:
+            print(f"       {f}:{ln} → {a}（全仓不存在）")
+        if len(anchors) > 12:
+            print(f"       …另有 {len(anchors) - 12} 处")
+    if anchor_ghost and not quiet:
+        for g in anchor_ghost:
+            print(f"       容忍项失效（锚点已改/文件已搬，须删该条）：{g}")
     # H 项**刻意走 WARN 而非 FAIL**：先补存量再上哨兵，且只作提示。
     # 若计 FAIL，未补完的条目会让整份体检长期挂红 ⇒ 被整体无视（KB-ENG-58）。
     line("H-KB 豁免名单有效", not claim_ghost,
