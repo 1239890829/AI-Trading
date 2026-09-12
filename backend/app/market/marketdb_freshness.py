@@ -86,17 +86,27 @@ def latest_content_date(db_path: str | Path | None = None) -> date | None:
 def trading_day_lag(latest: date, asof: date) -> int:
     """计数「> latest 且 <= asof」的交易日数。asof <= latest 恒 0。
 
-    日历（持久化文件）**覆盖到 asof** 时按真实交易日计数（含长假）；否则退化为
-    **工作日计数**（跳过周末）——因为一份过期日历会把滞后**算少**（低估陈旧），
-    而工作日计数最多算多（节假日场景偏保守）。不因日历缺失/过期而放行：
-    宁可多报，不可静默。
+    日历（持久化文件）**完整覆盖区间 (latest, asof]** 时按真实交易日计数（含长假）；
+    否则退化为**工作日计数**（跳过周末）——因为一份过期/缺左端的日历会把滞后**算少**
+    （低估陈旧），而工作日计数最多算多（节假日场景偏保守）。不因日历缺失/过期/缺左端
+    而放行：宁可多报，不可静默。
+
+    ⚠️ 「覆盖」必须**两端都成立**（2026-09-12 修复）：
+    - 右端 `days[-1] >= asof`：日历不到 asof ⇒ 区间右半段缺失；
+    - 左端 `days[0] <= latest`：日历起点晚于 latest ⇒ 区间左半段缺失。
+
+    缺左端是本函数此前的**真实假阴性**：只在右端把关时，`latest < asof < days[0]`
+    （持久化日历整段落在 asof 之后，典型于用**历史 asof** 回看一个更旧的仓）
+    会使 `sum(...)` 落空得 **0 ⇒ 直接判「新鲜」**，恰与本模块「宁可多报，不可静默」
+    相反；`latest < days[0] <= asof` 则把区间左侧的交易日**静默数少**（低估陈旧）。
+    两者同源，一个前置条件即根治——不满足就走工作日兜底（只会多报）。
     """
     if asof <= latest:
         return 0
     from app.market import trade_calendar as tc
 
     days = tc._load_persisted()
-    if days and days[-1] >= asof:
+    if days and days[-1] >= asof and days[0] <= latest:
         return sum(1 for d in days if latest < d <= asof)
     n, cur = 0, latest
     while cur < asof:

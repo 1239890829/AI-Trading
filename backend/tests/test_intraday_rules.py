@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 
 from app.picks import intraday_rules as ir
+from app.sentiment.engine import PHASE_ORDER, STRONG_PHASES
 
 
 # ---------------------------------------------------------------- 盘前排序
@@ -34,6 +35,73 @@ def test_rank_directions_defensive_boosted_in_ebb():
     boost = ir.rank_directions([ev], phase="退潮")[0]["score"]
     flat = ir.rank_directions([ev], phase="高潮")[0]["score"]
     assert boost == pytest.approx(flat + 3.0)  # 10 × 0.3
+
+
+# ---------------------------------------------------------------- 情绪适配（fit）档位契约
+#
+# fit 是**相位常量项**（同一相位下，同 defensive 标志的候选拿到完全相同的 fit）。
+# 由此可精确推出它的作用边界：
+#   · **不改变任一组内的相对次序**（组内大家加的是一样的）；
+#   · 只决定**防守 ↔ 非防守的跨组倾斜**（+3.0，即 10×0.3）。
+# 所以「把某相位加进进攻档」这件事的精确语义 = 「在该相位把非防守方向整体抬到防守方向之上」，
+# 而不是笼统的「改变事件排序结果」。
+#
+# ⚠️ 进攻档不含「修复」是**当前口径**，且与 `sentiment.engine.STRONG_PHASES` 不一致——
+#    这是**已知分歧**（账本 §6.5 结转 #4）。2026-09-12 核验结论：本地样本**不足以**
+#    支撑该口径变更（逐日相位的赚钱效应轴 4 项输入里有 3 项未落库，见账本记录），
+#    故**维持现状**。下面的用例是**变更检测器**：若将来决定把「修复」并入进攻档，
+#    它们变红是**设计意图**，不是回归——请连同注释与账本一起更新。
+
+_FIT_OFFENSIVE = ("高潮", "发酵")   # 与 intraday_rules.rank_directions 内的字面量保持一致
+
+
+def test_fit_phase_tiers_partition_all_phases():
+    """六相位被划分成三档且互斥：进攻档 / 防守档 / 中性档。"""
+    offense, defense = set(_FIT_OFFENSIVE), set(ir._EBB_PHASES)
+    assert offense == {"高潮", "发酵"}
+    assert defense == {"退潮", "冰点"}
+    assert not (offense & defense)
+    # 中性档 = 剩下的相位，当前是「修复」与「分歧」
+    assert set(PHASE_ORDER) - offense - defense == {"修复", "分歧"}
+
+
+def test_fit_is_phase_constant_so_within_group_order_is_invariant():
+    """组内次序在任何相位下都必须一致——fit 不是组内区分项。"""
+    evs = [
+        {"direction": "进攻强", "event_strength": 9, "theme_momentum": 0, "echelon": 0, "defensive": False},
+        {"direction": "进攻弱", "event_strength": 5, "theme_momentum": 0, "echelon": 0, "defensive": False},
+        {"direction": "防守强", "event_strength": 7, "theme_momentum": 0, "echelon": 0, "defensive": True},
+        {"direction": "防守弱", "event_strength": 3, "theme_momentum": 0, "echelon": 0, "defensive": True},
+    ]
+    for ph in PHASE_ORDER:
+        names = [r["direction"] for r in ir.rank_directions(evs, phase=ph)]
+        assert [n for n in names if n.startswith("进攻")] == ["进攻强", "进攻弱"], ph
+        assert [n for n in names if n.startswith("防守")] == ["防守强", "防守弱"], ph
+
+
+def test_fit_cross_group_tilt_is_decisive_and_pinned_per_phase():
+    """跨组倾斜逐相位钉住。
+
+    构造：非防守基础分 5.0、防守基础分 7.9（**差 2.9 < 3.0**）⇒ 谁在前**完全由 fit 决定**。
+    于是本用例同时证明了「fit 确实有决定性」与「各相位倾斜方向」。
+    """
+    off = {"direction": "进攻", "event_strength": 5.0, "theme_momentum": 0, "echelon": 0, "defensive": False}
+    dfn = {"direction": "防守", "event_strength": 7.9, "theme_momentum": 0, "echelon": 0, "defensive": True}
+    top = {ph: ir.rank_directions([off, dfn], phase=ph)[0]["direction"] for ph in PHASE_ORDER}
+    assert top["退潮"] == "防守" and top["冰点"] == "防守"
+    assert top["高潮"] == "进攻" and top["发酵"] == "进攻"
+    # 中性档：两组都拿 0 ⇒ 基础分高者在前（防守 7.9 > 进攻 5.0）
+    assert top["修复"] == "防守", "当前口径：修复为中性档"
+    assert top["分歧"] == "防守"
+
+
+def test_repair_divergence_from_strong_phases_is_deliberate_and_recorded():
+    """「修复」在引擎里属 STRONG_PHASES（进攻语义），在本模块却是中性档。
+
+    断言这一**分歧存在**（而非断言它正确）——防止有人「顺手统一」而绕过核验。
+    """
+    assert "修复" in STRONG_PHASES
+    assert "修复" not in _FIT_OFFENSIVE
 
 
 # ---------------------------------------------------------------- 确认走强

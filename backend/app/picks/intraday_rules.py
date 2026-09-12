@@ -125,8 +125,19 @@ def rank_directions(evidences: list[dict], phase: str | None = None) -> list[dic
         fit = 10.0 if (
             (defensive and phase in _EBB_PHASES)
             # ⚠️ 非防守方向只认「高潮/发酵」，**不含「修复」**——与 STRONG_PHASES
-            # （修复/发酵/高潮）不一致。此处**刻意不擅自改**：加进「修复」会改变
-            # 排序结果（口径变更），需参数扫描/回测支持后再定。已登记为待验证项。
+            # （修复/发酵/高潮）不一致，属**已知口径分歧**（账本 §6.5 结转 #4）。
+            #
+            # 2026-09-12 核验订正——**精确语义**：fit 是**相位常量项**，所以「把某相位
+            # 加进进攻档」的真实效果 = **在该相位把非防守方向整体抬到防守方向之上**
+            # （+3.0），它**不改变任一组内的相对次序**。说成「会改变事件排序结果」过宽。
+            # 逐相位倾斜由 `tests/test_intraday_rules.py::test_fit_cross_group_tilt_is_decisive_and_pinned_per_phase`
+            # 钉住（含「修复 = 中性档」），改动该档位会让 3 项用例变红——那是设计意图。
+            #
+            # 为什么**维持现状而不并入**：影响面经实测**不小**（「修复」的必要条件是
+            # 热度档 ≤1，实测 249 个交易日里 123 天 = **49.4%**，不是边角场景），
+            # 而本地产线**无可用反证**：逐日相位需要赚钱效应轴的 median_pct / red_rate /
+            # limit_down 三项，均**未落库**；盘前简报含 directions 的落盘仅 8 天、
+            # 产线相位记录仅 11 天。按「没验 ≠ 验过」纪律，**无证据不改口径**。
             or (not defensive and phase in ("高潮", "发酵"))
         ) else 0.0
         score = round(event * 1.0 + momentum * 0.6 + ech * 0.4 + fit * 0.3, 2)

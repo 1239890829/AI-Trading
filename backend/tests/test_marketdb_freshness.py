@@ -99,6 +99,54 @@ def test_trading_day_lag_falls_back_to_weekdays_when_calendar_incomplete(monkeyp
     assert trading_day_lag(date(2026, 9, 3), date(2026, 9, 11)) == 6
 
 
+def test_trading_day_lag_needs_left_edge_too_not_just_right_edge(monkeypatch):
+    """日历起点晚于 latest ⇒ 区间左端缺失，**不得**按日历截断计数（会数少）。
+
+    定点回归（2026-09-12）：原实现只校验右端 `days[-1] >= asof`，缺此左端守卫。
+    """
+    # 日历只覆盖 09-07 起（起点晚于 latest=09-01），右端 >= asof 成立
+    cal = [date(2026, 9, 7), date(2026, 9, 8), date(2026, 9, 9),
+           date(2026, 9, 10), date(2026, 9, 11)]
+    monkeypatch.setattr(tc, "_load_persisted", lambda: cal)
+    lag = trading_day_lag(date(2026, 9, 1), date(2026, 9, 11))
+    # 工作日兜底：09-02/03/04 + 09-07…09-11 = 8（真值即 8；按日历截断只会得 5）
+    assert lag == 8
+    assert lag > 5, "缺左端守卫时该值退化为 5（静默数少）"
+
+
+def test_trading_day_lag_calendar_entirely_after_asof_is_never_judged_fresh(monkeypatch):
+    """`latest < asof < days[0]`：日历整段落在 asof 之后 ⇒ 此前 sum 落空得 **0（假新鲜）**。
+
+    典型场景：用**历史 asof** 回看一个更旧的仓（回测/复盘），持久化日历只含 asof 之后的日期。
+    0 会把「滞后 40 个交易日」判成「新鲜」——本函数最不该产生的假阴性。
+    """
+    cal = [date(2026, 6, 1), date(2026, 6, 2), date(2026, 6, 3)]  # 全部晚于 asof
+    monkeypatch.setattr(tc, "_load_persisted", lambda: cal)
+    lag = trading_day_lag(date(2026, 1, 5), date(2026, 3, 2))
+    assert lag == 40, "01-05→03-02 的工作日数"
+    assert lag != 0, "绝不允许判「不滞后」"
+
+
+def test_trading_day_lag_uses_calendar_when_left_edge_precedes_latest(monkeypatch):
+    """左端**严格早于** latest 也不该被误伤：日历仍完整覆盖区间 ⇒ 照走日历计数。"""
+    cal = [date(2026, 9, 1), date(2026, 9, 2), date(2026, 9, 3), date(2026, 9, 4),
+           date(2026, 9, 7), date(2026, 9, 8), date(2026, 9, 9),
+           date(2026, 9, 10), date(2026, 9, 11)]
+    monkeypatch.setattr(tc, "_load_persisted", lambda: cal)
+    assert trading_day_lag(date(2026, 9, 3), date(2026, 9, 11)) == 6
+
+
+def test_freshness_stale_when_calendar_lies_after_asof(tmp_path, monkeypatch):
+    """端到端：历史 asof + 日历整段在其后 ⇒ 必须报陈旧（不是「新鲜」）。"""
+    cal = [date(2026, 6, 1), date(2026, 6, 2), date(2026, 6, 3)]
+    monkeypatch.setattr(tc, "_load_persisted", lambda: cal)
+    db = _mk_db(tmp_path, {"daily_k_adj": [_ms(date(2026, 1, 5))]})
+    fr = freshness(db, asof=date(2026, 3, 2))
+    assert fr["available"] is True
+    assert fr["lag"] == 40 and fr["stale"] is True
+    assert "数据陈旧" in fr["reason"]
+
+
 # ---------------------------------------------------------------- freshness 契约
 
 
