@@ -819,7 +819,7 @@ frozenset + 收窄正则）。⚠️ 修好之后**召回恢复真实、又冒�
 | ✚ | `panel-boundary` 的 `resetKey` 生产 0 处传 ⇒ 切 tab 不恢复 | ✅ 本轮修完（D-3；根因是 `Panel` 未暴露该 prop，3 处接线 + 四种形态钉住，见 6.13） |
 | ✚ | pipeline 另两处 N+1（`get_members` 每题材一 session / `get_official_for_symbol` 每候选 2 查） | ✅ 已修 `1b7f855`（批次 3 P-3） |
 | ✚ | `test_event_loop_no_block` 白名单不含 pipeline/watcher ⇒ 上述阻塞不被门禁覆盖 | ✅ 已修（批次 5 G-2：管线 8 处搬线程池 + 守卫表 4→10 项 + 取数单点守卫；watcher 经审计**刻意不搬**并写明理由，见 6.13） |
-| ✚ | **async 端点里的同步 DB 读**（`routes/events.py:132` `store.list_events` / `routes/alert.py:96` `repo.list_events` 等）——与 pipeline 同族，是全站热端点 | 未开始（**全仓 async 端点同步 IO 扫面**；范围未量化，须先扫再定，见 6.13 末尾） |
+| ✚ | **async 端点里的同步 DB 读**（`routes/events.py:132` `store.list_events` / `routes/alert.py:96` `repo.list_events` 等）——与 pipeline 同族，是全站热端点 | ✅ **已完成（2026-09-12 深夜，见 §6.17）**。扫面已量化：**53 处同步 IO 调用点**，逐项实测后**只有 `EventStore.list_events` 家族（7.2~85ms）达到搬线程阈值**，9 处已搬 + 纳入守卫（`GUARDED_ROUTES`）；其余 42 处实测 **0.13~4.9ms**，按既有「毫秒级不搬」口径**刻意不搬并逐条登记数字**。⚠️ 原行点名的 `routes/alert.py:96 repo.list_events` 经重测为 **0.36ms**（首版测量标签错配，见 [[KB-ENG-71]]）⇒ **判定不搬、已回退** |
 | ✚ | 设计文档能力失真**根因未解**（只加不改，无机制防止） | ✅ 已修（批次 5 F-10：`doc-health` **J 项**"文档点名的代码路径必须存在" ＋ 17 项自证测试；**"描述是否过时"经三原型实测判定不可自动对账、明确不设门禁**，见 6.13 与 [[KB-ENG-68]]） |
 | ✚ | `alerts-tab.tsx:71` 漏 `marketHours:false`（盘外 10s→50s，与同仓 4 处做法不一致） | 批次 1（`⟳代理`，执行前复核） |
 | ✚ | `limit-up-tab.tsx:57` 等漏 `key` ⇒ URL 变化不重拉（静默漏刷新） | 批次 1（`⟳代理`，执行前复核） |
@@ -991,6 +991,100 @@ run `34701730259` = **success**，三个 job **全部通过**：
 ⇒ **两轮连红（`02445e0` / `711d8de`）至此复绿，纪律"推送后自查 CI"闭环。**
 ⚠️ 取证手法留档：查 run 用 **`curl -sL`** + **完整 SHA**；经 shell 变量中转 JSON 会被控制字符破坏
 （`Invalid control character`）——**直接管道给解析器，不要 `OUT=$(...)` 再 `echo`**。
+
+---
+
+### 6.16 2026-09-12 深夜（async 端点同步 IO 扫面 —— 实测定范围 · 守卫扩面 · 两处自我更正）
+
+> 对象 = §6.13 中优表里**唯一「未开始」**的那项（「全仓 async 端点同步 IO 扫面」）。
+> 方法：AST 扫描 → **逐项实测** → 按阈值决定搬/不搬 → 守卫扩面 → 注入验证。
+
+**① 扫面：两轮才拿到真值（第一轮欠报）**
+
+| 轮次 | 判据 | 命中 |
+|---|---|---|
+| v1 | async 函数体内、对白名单方法名的**直接**调用 | 53 处 |
+| v2 | 加**调用图传递闭包**（async → 同步 helper → IO） | 多出 `notifications._alert_items` / `_daily_pick_item` / `events._theme_names` / `market` 情绪历史系列 |
+
+⚠️ v1 的欠报**是被守卫自己抓出来的**：写入守卫后反向断言立刻报出
+`notifications.py:88 repo.list_events(limit=limit)`（在列表推导式里，v1 漏了）。⇒ 又一次应验
+「扫描结果为 0 必须换方式复核」。
+
+**② 实测定档（这才是范围）**
+
+| 调用 | 中位 | 处置 |
+|---|---|---|
+| `EventStore.list_events(all, 2000)` | **83~85ms** | **搬**（本文件最重） |
+| `EventStore.list_events(active, 300)` | **21ms** | **搬**（个股详情热路径） |
+| `EventStore.list_events(active, 100)` | **11ms** | **搬**（前端 30s 轮询） |
+| `EventStore.list_events(all, 80)` | **9.6ms** | **搬** |
+| `EventStore.list_events(active, 30)` | **7.2ms** | **搬**（前端 30s 轮询） |
+| `member_symbols_bulk(30)` / `get_catalog(1000)` / `_alert_items` / `AgentTriage` 内联查询 / `get_members` / `AlertRepository.list_events(50)` / `list_tasks(50)` / `list_items()` | 4.9 / 1.6 / 1.25 / 0.76 / 0.61 / **0.36** / 0.53 / 0.14 ms | **不搬**（毫秒级，同 `ensure_system_rule` 先例） |
+
+⇒ **结论：53 处里只有 `EventStore.list_events` 家族达阈值，9 处已搬**；其余 42 处**逐条登记数字**
+后刻意不搬（不是遗漏）。搬的前提逐处核对：`EventStore` / `AlertRepository` 均 **per-call 建
+session**（`with self._sf()`），不跨线程复用（[[KB-ENG-67]]）。
+
+**③ 两处自我更正（本轮最值钱的部分，都已如实留痕）**
+
+1. **测量标签错配**（新立 [[KB-ENG-71]]）：基准表里 `/api/alerts/events` 的标签写 `AlertRepository`、
+   lambda 调的却是 `EventStore` ⇒ 记成 8.5ms 并**动手包了** `to_thread`。复核实测
+   `AlertRepository.list_events(50)` = **0.36ms**（差 24 倍）⇒ **回退两处包裹**
+   （`alert.py` / `assistant.tools._t_alert_events`），并就地写明"实测判定不搬 + 数字"。
+   ⇒ **数字精确 ≠ 结论正确，"这个数是谁的"与"这个数是多少"同等重要。**
+2. **守卫判据过宽**（新立 [[KB-ENG-72]]）：反向断言只写方法名 ⇒ 命中 `AlertRepository.list_events`
+   与同步 helper 体内的合法调用，两次假红。修法：**判据带接收者**（`store.list_events`，
+   靠"`to_thread` 传函数引用不含 `(`"这一语法事实做到只命中裸调用）＋ **`async_only`**
+   （`ast` 取 async 函数体行号集合、减去其中嵌套的同步 def）。
+
+**④ 交付**
+
+| 项 | 内容 |
+|---|---|
+| 代码 | 9 处 `await asyncio.to_thread(store.list_events, …)`：`routes/events.py`×5（含 2000 限的两处）、`routes/notifications.py`、`events/verify.py`、`assistant/tools.py`、`picks/morning_brief.py` |
+| 守卫 | `test_event_loop_no_block.py` 新增 `GUARDED_ROUTES` **9 条** + `_async_context_lines()` + `_bare_calls(async_only=)`；文件 **16 → 29 项** |
+| 自证测试 | 4 条（同步 helper 不误伤 / async 体内照抓 / 嵌套同步 def 不算 async 上下文 / 语法不完整返回 `None` 退回不过滤） |
+| 注入验证 | `events.py` 一处 ⇒ **5 红**（5 条登记项共用文件级反向断言，**已在 docstring 写明是预期形状**）；`notifications.py` 一处 ⇒ **精确 1 红**；均已复原、`INJECTED` 残留 0 |
+| 沉淀 | [[KB-ENG-71]] / [[KB-ENG-72]]，已登记 `00-INDEX` |
+
+**⑤ 门禁终态（实测回填，前提 8000 在跑）**：后端 **2708 项（2646 passed / 62 skipped）· 173 文件**、
+耗时 **122.26s**；`junitxml` 复核 `failures=0 / errors=0`。**自洽核对**：2695 → 2708 差 **+13 项 /
++0 文件**，恰好等于守卫文件 16 → 29 的增量 ⇒ 三方自洽。前端 **454 项 / 54 文件**（本轮零前端改动，
+用 `--maxWorkers=1` 实测复验）、`tsc` 0、`eslint` 0 error / 0 warn、`pyflakes app tests scripts` **0**、
+`doc-health` **全部通过**。
+
+> ⚠️ **前端取数的环境坑（本轮踩到，如实记）**：默认并行度下 `npx vitest run` **连续 3 次被
+> SIGKILL（exit 137）**，且无任何输出；改 `--maxWorkers=1` 后**一次跑通（454 / 54）**。
+> 判读：**无输出的 137 ≠ 测试失败**，先降并行度复跑再下结论（与 [[KB-ENG-53]] 的「E 成簇先怀疑
+> 环境」同族：**环境类静默失败的特征是"没有失败信息"**）。
+
+**⑥ 效果实测（A/B，不靠推理）**
+
+搬 `to_thread` 的收益**不在单请求延迟**（那反而略增，且 ORM 构造是 CPU 密集、受 GIL 限制，
+并发墙钟本就接近串行）——**收益在事件循环被释放**。故用**循环延迟探针**做 A/B
+（每 5ms 醒一次，记录 `实际间隔 − 期望间隔`）：
+
+| 相 | 墙钟（4 次 ×limit=2000） | **最大循环延迟** | 探针采样数 |
+|---|---|---|---|
+| A 旧写法（同步直调） | 347.7ms | **342.8ms** | **6** |
+| B 新写法（`to_thread`） | 330.0ms | **19.1ms** | 36 |
+
+⇒ **最大循环延迟 342.8ms → 19.1ms（改善 94%）**；A 相探针只采到 **6** 次，正是因为循环被
+占死（连 5ms 的 `sleep` 都排不上）——**采样数本身就是证据**。墙钟基本不变（347.7 → 330.0ms），
+与「搬线程不加速 CPU 密集工作、只把循环让出来」一致。
+
+> 📌 **一条判据修正（我自己的第一版判据是错的）**：最初用「4 并发重请求的墙钟 / 单发」判并行度，
+> 得出 `6.00 ⇒ 疑似串行`，**据此差点误判改动无效**。错因：`list_events` 把 2000 行构造成 ORM 对象
+> 是 **CPU 密集**，GIL 下**本就无法并行**，墙钟串行是必然的、与 `to_thread` 无关。
+> ⇒ **判据必须对准"你想改善的那个量"**：这里要改善的是**事件循环延迟**，不是吞吐。
+
+**⑦ 顺带修正一处台账自身的措辞**：原 §6.13 行点名 `routes/alert.py:96 repo.list_events` 是"热端点
+阻塞源"，经重测该处仅 0.36ms ⇒ 已在行内更正（这是 [[KB-ENG-71]] 的连带影响面）。
+
+**⑧ 本轮未做的（明确边界，不是遗漏）**：调用图 v2 扫出的第二层（async 端点 → 同步 helper）中，
+`notifications._alert_items`(1.25ms) / `_daily_pick_item`(0.20ms) / `events._theme_names`(≈2ms) /
+`market` 情绪历史系列，**逐项实测均 <5ms** ⇒ 按同一条阈值线判定不搬，**未改代码**；
+若日后这些数据量增长到阈值以上，重跑本轮探针即可重判（方法已写进守卫文件注释）。
 
 ---
 

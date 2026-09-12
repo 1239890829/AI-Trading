@@ -663,6 +663,8 @@ async def _t_alert_events(ctx: ToolContext, **kw) -> str:
     try:
         from app.repositories.alert_repo import AlertRepository
 
+        # 2026-09-12 实测判定**不搬线程**：`AlertRepository.list_events(limit≤50)` 中位 **0.36ms**
+        # （对照 `EventStore.list_events` 7.2~85ms）⇒ 毫秒级，与 `ensure_system_rule` 同族。
         events = AlertRepository(ctx.session_factory).list_events(limit=limit)
     except Exception as exc:  # noqa: BLE001
         return f"预警记录：读取失败（{exc}）"
@@ -1499,7 +1501,7 @@ async def _t_news(ctx: ToolContext, **kw) -> str:
         return "资讯事件流不可用：事件库未初始化（如实说明取不到即可，不要编造新闻）"
     limit = _int_arg(kw.get("limit"), 10, 3, 30)
     try:
-        rows = list(store.list_events(active_only=True, limit=limit) or [])
+        rows = list(await asyncio.to_thread(store.list_events, active_only=True, limit=limit) or [])
     except Exception as exc:  # noqa: BLE001
         return f"资讯事件流读取失败：{type(exc).__name__}: {exc}"
     if not rows:

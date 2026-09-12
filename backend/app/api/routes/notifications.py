@@ -28,6 +28,7 @@ session（盘前/盘中/盘后）按北京时间墙钟划分：<09:30 盘前；0
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timedelta
@@ -210,7 +211,9 @@ def _daily_pick_item() -> dict | None:
 async def _news_items(store, request: Request, limit: int, min_score: float, now: datetime) -> tuple[list[dict], str | None]:
     """事件系统 → 评分过滤后的新闻通知。返回 (items, error)。"""
     try:
-        rows = store.list_events(active_only=False, limit=80)
+        # 同步 SQLite 读搬线程池（2026-09-12）：limit=80 实测约 9.6ms；本函数被
+        # `/api/notifications` 调用，前端通知抽屉按轮询取数。
+        rows = await asyncio.to_thread(store.list_events, active_only=False, limit=80)
     except Exception as exc:  # noqa: BLE001
         return [], str(exc)
 

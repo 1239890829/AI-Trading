@@ -14,6 +14,7 @@ collect_news_events 函数）、/events/{id}/review。
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime
@@ -129,7 +130,11 @@ async def list_events(
     limit: int = Query(default=30, ge=1, le=100),
     store: EventStore = Depends(get_store),
 ) -> dict:
-    rows = store.list_events(active_only=active, limit=limit)
+    # 同步 SQLite 读搬线程池（2026-09-12）：实测 limit=30 约 7.9ms、limit=100 约 11ms，
+    # 本端点被前端 30s 轮询，排在事件循环上会与 QuoteHub 秒级推送抢同一个循环。
+    # `EventStore.list_events` 内部 per-call 建 session（`with self._sf()`）⇒ 不跨线程复用，
+    # 符合「同步 IO 搬线程」的前提（[[KB-ENG-67]]）。
+    rows = await asyncio.to_thread(store.list_events, active_only=active, limit=limit)
     return {"data": {"count": len(rows), "items": [_serialize(r) for r in rows]}, "meta": {}}
 
 
@@ -188,7 +193,8 @@ async def impact_events(
     if sort not in ("relevance", "time", "impact"):
         raise HTTPException(status_code=400, detail=f"sort 只支持 relevance/time/impact，收到 {sort!r}")
 
-    rows = store.list_events(active_only=True, limit=limit)
+    # 同步 SQLite 读搬线程池（2026-09-12）：limit=100 实测约 11ms，前端 30s 轮询本端点。
+    rows = await asyncio.to_thread(store.list_events, active_only=True, limit=limit)
     # naive 北京墙钟：与 _parse_dt 产出的 naive published_at 同语义相减（age_h 衰减），
     # 且与服务器本地时区解耦（P2-2 时区统一）
     now = beijing_now().replace(tzinfo=None)
@@ -362,7 +368,9 @@ async def events_for_symbol(
     # 2026-09-09：limit 50 → 300。此前每轮快讯新增几十条会把半天前的关键事件
     # （如 15:42 的北京商业航天）挤出 50 条窗口，个股关联"突然变 0"。
     # 另：row.directions 已由 list_events selectinload 预加载，直接用，免 N+1。
-    for row in store.list_events(active_only=True, limit=300):
+    # 同步 SQLite 读搬线程池（2026-09-12）：limit=300 实测约 21ms（个股详情热路径）。
+    _rows = await asyncio.to_thread(store.list_events, active_only=True, limit=300)
+    for row in _rows:
         dirs = row.directions
         if row.source_symbol == sym:
             matched.append({"event": row, "directions": dirs, "match_reason": "source"})
@@ -412,7 +420,8 @@ async def backfill_directions(
 
     # 2026-09-09 时区口径：published_at 统一北京 naive，cutoff 也用北京 naive
     cutoff = beijing_now_naive() - timedelta(days=days)
-    rows = store.list_events(active_only=False, limit=2000)
+    # 同步 SQLite 读搬线程池（2026-09-12）：limit=2000 实测约 83ms——本文件最重的同步阻塞。
+    rows = await asyncio.to_thread(store.list_events, active_only=False, limit=2000)
     scanned = filled = 0
     for r in rows:
         pub = getattr(r, "published_at", None)
@@ -481,7 +490,8 @@ async def theme_focus(
 
     # 2026-09-09 时区口径：published_at 统一北京 naive，cutoff 也用北京 naive
     cutoff = beijing_now_naive() - timedelta(days=days)
-    rows = store.list_events(active_only=False, limit=2000)
+    # 同步 SQLite 读搬线程池（2026-09-12）：limit=2000 实测约 85ms——本文件最重的同步阻塞。
+    rows = await asyncio.to_thread(store.list_events, active_only=False, limit=2000)
     buckets: dict[str, dict] = {}
     for r in rows:
         pub = getattr(r, "published_at", None)

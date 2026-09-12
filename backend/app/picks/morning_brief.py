@@ -462,7 +462,11 @@ async def collect_evidence(app_state) -> dict:
     store = getattr(state, "event_store", None)
     if store is not None:
         try:
-            for row in store.list_events(active_only=True, limit=EVENT_LIMIT):
+            # 同步 SQLite 读搬线程池（2026-09-12）：本函数在事件循环上执行（简报生成）。
+            _ev_rows = await asyncio.to_thread(
+                store.list_events, active_only=True, limit=EVENT_LIMIT
+            )
+            for row in _ev_rows:
                 w = event_weight(row.source_tier, row.certainty)
                 row_themes: list[str] = []
                 row_syms: list[str] = []

@@ -82,6 +82,7 @@
 """
 from __future__ import annotations
 
+import ast
 import io
 import re
 import tokenize
@@ -206,11 +207,53 @@ def _mask_comments_and_strings(text: str) -> str:
     return "".join(lines)
 
 
-def _bare_calls(text: str, fn: str) -> list[str]:
+def _async_context_lines(text: str) -> set[int] | None:
+    """返回「处于 async 函数体内、且**不在其内部嵌套的同步 def 内**」的行号集合。
+
+    为什么反向断言需要这个（2026-09-12 加路由层条目时踩到）：`_bare_calls` 原本是
+    纯文本的，会把**同步函数体内**的调用也算成裸调用。而 `notifications._alert_items`
+    是**同步**函数、内部有 `repo.list_events(limit=limit)` —— 那本身完全合法；
+    真正的违规在**调用它的 async 端点**（`async def notifications` 直接 `_alert_items(...)`，
+    没包 to_thread），是**另一层**的问题，文本扫描表达不了。
+    ⇒ 判据收窄为「async 上下文里的裸调用」才既准又不会逼人删掉合法的同步实现。
+
+    语法不完整时返回 `None`（调用方据此退回"不过滤"，宁可严不可漏）。
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return None
+    async_ranges: list[tuple[int, int]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef):
+            async_ranges.append((node.lineno, node.end_lineno or node.lineno))
+    if not async_ranges:
+        return set()
+    nested_sync: list[tuple[int, int]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and not isinstance(node, ast.AsyncFunctionDef):
+            end = node.end_lineno or node.lineno
+            for a, b in async_ranges:
+                if a < node.lineno and end <= b:      # 嵌套在某个 async 函数体内
+                    nested_sync.append((node.lineno, end))
+                    break
+    lines: set[int] = set()
+    for a, b in async_ranges:
+        lines.update(range(a, b + 1))
+    for a, b in nested_sync:
+        lines.difference_update(range(a, b + 1))
+    return lines
+
+
+def _bare_calls(text: str, fn: str, *, async_only: bool = False) -> list[str]:
     """返回文件里**未被 to_thread 包住**的 `fn(` 调用所在行（含定义行则跳过）。
 
     只看代码骨架（`_mask_comments_and_strings`）——注释与 docstring 里提到该调用
     不算违规，否则"在注释里解释这条守卫"会把它自己弄红。
+
+    `async_only=True`（路由层用）：只报**位于 async 函数体内**的裸调用。
+    同步函数体内的调用是合法的（它自己不占事件循环），该层的问题是"谁调了它"，
+    由调用点的条目负责。
     """
     masked = _mask_comments_and_strings(text)
     # ⚠️ 行号/列号一律在 **masked** 上算、回报时取 **原文** 的那一行：
@@ -218,6 +261,7 @@ def _bare_calls(text: str, fn: str) -> list[str]:
     # 拿 masked 的 offset 去原文切行会串行。故两套坐标分工使用。
     masked_lines = masked.splitlines()
     plain_lines = text.splitlines()
+    async_lines = _async_context_lines(text) if async_only else None
     out: list[str] = []
     for m in re.finditer(re.escape(fn) + r"\(", masked):
         ln = masked.count("\n", 0, m.start())          # 行号（0-based）
@@ -226,6 +270,8 @@ def _bare_calls(text: str, fn: str) -> list[str]:
         prefix = mline[:mcol]
         if "to_thread(" in prefix:          # 同行已包（在代码骨架里判断才准：
             continue                        # 字符串里的 "to_thread(" 不算）
+        if async_lines is not None and (ln + 1) not in async_lines:
+            continue                        # 不在 async 上下文 ⇒ 这一层不归它管
         line = plain_lines[ln] if ln < len(plain_lines) else ""
         # 注意用**整行** strip 后判断：`prefix.strip()` 会把 "def " 的尾空格一并
         # 吃掉，导致 `def fn(` 被判成裸调用（2026-09-11 首版即踩）。
@@ -254,6 +300,137 @@ def test_sync_io_calls_are_offloaded(rel: str, needle: str, fn: str, why: str) -
         f"{rel} 存在未被 to_thread 包裹的 `{fn}(` 调用（正向断言抓不到这种）：\n  "
         + "\n  ".join(bare)
         + f"\n阻塞源：{why}"
+    )
+
+
+# ---------------------------------------------------------------- 路由 / 事件层（2026-09-12）
+#
+# 背景：上面那张表只覆盖**常驻调度与管线**。`§6.13 中优`登记了一项「全仓 async 端点
+# 同步 IO 扫面」，本轮把它做完并收口到本表。
+#
+# **范围是按实测定的，不是按"是不是同步"定的**（判据同 KB-ENG-67 三项）：
+#
+# | 调用 | 实测中位 | 处置 |
+# | --- | --- | --- |
+# | `EventStore.list_events(all, 2000)` | **83~85ms** | 搬（本表） |
+# | `EventStore.list_events(active, 300)` | **21ms** | 搬 |
+# | `EventStore.list_events(active, 100)` | **11ms** | 搬 |
+# | `EventStore.list_events(all, 80)` | **9.6ms** | 搬 |
+# | `EventStore.list_events(active, 30)` | **7.2ms** | 搬 |
+# | `ThemeCatalogService.member_symbols_bulk(30)` | 4.9ms | 不搬（毫秒级） |
+# | `ThemeCatalogService.get_catalog(1000)` | 1.6ms | 不搬 |
+# | `notifications._alert_items`（rules + events 50） | 1.25ms | 不搬 |
+# | `AgentTriage` 内联查询（alert.py，≤50 ids） | 0.76ms | 不搬 |
+# | `ThemeCatalogService.get_members(code)` | 0.61ms | 不搬 |
+# | `AlertRepository.list_events(50)` | **0.36ms** | 不搬 |
+# | `agent_tasks.list_tasks(50)` | 0.53ms | 不搬 |
+# | `WatchlistRepository.list_items()` | 0.14ms | 不搬 |
+#
+# ⚠️ **一个测量陷阱，如实记**：首版把 `/api/alerts/events` 记成 8.5ms，其实是**标签写错**
+# ——那一行 lambda 调的是 `EventStore` 而不是 `AlertRepository`。重测后 `AlertRepository`
+# 只有 0.36ms，据此**回退了**两处已写好的包裹（`alert.py` / `assistant.tools._t_alert_events`）。
+# ⇒ 报耗时必须连同**被测对象**一起核对，标签与 lambda 不是一回事。
+#
+# ⚠️ **第二层（async 端点 → 同步 helper）也扫过**：`notifications._alert_items` /
+# `_daily_pick_item`、`events._theme_names`（内含 `get_catalog`）、`market` 的情绪历史
+# 系列 —— 逐项实测**全部 <5ms**，按上表同一条线判定不搬。故本层只登记 `EventStore.list_events`。
+
+# ⚠️ **反向断言的接收者必须限定为 `store.list_events`（不能只写 `list_events`）**：
+# 仓内另有 `AlertRepository.list_events`（实测 0.36ms，判定不搬）与
+# `notifications._alert_items` 这类**同步 helper**里的调用。只写方法名会把它们一并
+# 报成违规 —— 2026-09-12 首次运行时 `app/assistant/tools.py` 正是这样假红，
+# 差点逼我去包一个 0.36ms 的调用。带接收者的字面量（`store.list_events(`）恰好只命中
+# 真正被搬的那一族：**裸调用**才产生该 token，`to_thread(store.list_events, …)`
+# 传的是函数引用、不含 `(`，因此天然不会自match。
+
+#: (相对 backend/ 的路径, 必须出现的 to_thread 片段, 函数名, 阻塞源说明)
+GUARDED_ROUTES: list[tuple[str, str, str, str]] = [
+    (
+        "app/api/routes/events.py",
+        "asyncio.to_thread(store.list_events, active_only=active, limit=limit)",
+        "store.list_events",
+        "活跃事件列表（默认 30 条）——前端 30s 轮询的热端点，实测 7.2ms",
+    ),
+    (
+        "app/api/routes/events.py",
+        "asyncio.to_thread(store.list_events, active_only=True, limit=limit)",
+        "store.list_events",
+        "盘面相关性排序（limit≤200）——前端 30s 轮询，实测 11ms",
+    ),
+    (
+        "app/api/routes/events.py",
+        "asyncio.to_thread(store.list_events, active_only=True, limit=300)",
+        "store.list_events",
+        "个股关联事件（limit 固定 300）——个股详情热路径，实测 21ms",
+    ),
+    (
+        "app/api/routes/events.py",
+        "asyncio.to_thread(store.list_events, active_only=False, limit=2000)",
+        "store.list_events",
+        "方向回填扫描（limit 2000）——实测 83ms，本文件最重的同步阻塞",
+    ),
+    (
+        "app/api/routes/events.py",
+        "asyncio.to_thread(store.list_events, active_only=False, limit=2000)",
+        "store.list_events",
+        "题材焦点聚合（limit 2000）——实测 85ms",
+    ),
+    (
+        "app/api/routes/notifications.py",
+        "asyncio.to_thread(store.list_events, active_only=False, limit=80)",
+        "store.list_events",
+        "通知抽屉的新闻源（limit 80）——实测 9.6ms，前端按轮询取数",
+    ),
+    (
+        "app/events/verify.py",
+        "asyncio.to_thread(store.list_events, active_only=True, limit=limit)",
+        "store.list_events",
+        "热点验证环的活跃事件（端点 + 调度双入口，均落在事件循环上）",
+    ),
+    (
+        "app/assistant/tools.py",
+        "asyncio.to_thread(store.list_events, active_only=True, limit=limit)",
+        "store.list_events",
+        "助手 `news` 工具的事件源（limit 3~30，实测上限 7.2ms）",
+    ),
+    (
+        "app/picks/morning_brief.py",
+        "store.list_events, active_only=True, limit=EVENT_LIMIT",
+        "store.list_events",
+        "盘前简报的证据采集（在事件循环上执行）",
+    ),
+]
+
+_ROUTE_IDS = [f"{Path(g[0]).stem}::{g[2]}#{i}" for i, g in enumerate(GUARDED_ROUTES)]
+
+
+@pytest.mark.parametrize("rel,needle,fn,why", GUARDED_ROUTES, ids=_ROUTE_IDS)
+def test_route_sync_io_calls_are_offloaded(rel: str, needle: str, fn: str, why: str) -> None:
+    """路由 / 事件层的 `EventStore.list_events` 调用点必须走 `asyncio.to_thread`。
+
+    反向断言带 `async_only=True`：只判 **async 上下文**里的裸调用。
+    同步 helper（如 `notifications._alert_items`）内部的调用是合法的，不在此层判。
+
+    ⚠️ **注入验证时的预期形状**：反向断言按**文件**判，所以 `events.py` 的 5 条登记项
+    共用同一份反向检查 —— 在该文件里注入一处裸调用会**同时红 5 条**，这不是守卫失灵，
+    而是"5 条登记项描述的是同一个文件"的必然结果。判读时看**报出的行**而不是条目数：
+    2026-09-12 实测：注入 `events.py` 一处 ⇒ 5 红（4 条走反向、1 条走正向）；
+    注入 `notifications.py` 一处 ⇒ **精确 1 红**（走正向 needle）。
+    """
+    path = BACKEND / rel
+    assert path.exists(), f"{rel} 不存在（改路径了？同步更新本清单）"
+    text = path.read_text(encoding="utf-8")
+    assert needle in text, (
+        f"{rel} 找不到 `{needle}` ⇒ 该调用点未走 to_thread，"
+        f"同步调用会阻塞事件循环。阻塞源：{why}"
+    )
+    bare = _bare_calls(text, fn, async_only=True)
+    assert not bare, (
+        f"{rel} 的 async 上下文里存在未被 to_thread 包裹的 `{fn}(` 调用：\n  "
+        + "\n  ".join(bare)
+        + "\n⚠️ 该反向断言按**文件**判（同一文件的多条登记项共用），"
+        "故报出的行**不一定**属于本条登记项——先看行内容再定位。"
+        f"\n本条登记项的阻塞源：{why}"
     )
 
 
@@ -320,3 +497,67 @@ def test_incomplete_source_falls_back_to_raw_scan():
     src = "# 说明 list_events( 的调用\nrows = (\n"
     assert _mask_comments_and_strings(src) == src, "应原样退回，而不是静默把注释掩掉"
     assert _bare_calls(src, "list_events"), "退回纯文本后注释里的提及也算命中（严 > 漏）"
+
+
+# ------------------------------------------------- async 感知（2026-09-12 路由层新增）
+#
+# 反向断言原本是纯文本的，会把**同步函数体内**的调用也算成裸调用。
+# `notifications._alert_items` 是同步函数、内部有 `repo.list_events(limit=limit)`——
+# 那本身合法；违规在**调用它的 async 端点**（另一层，文本扫描表达不了）。
+# ⇒ 路由层条目一律带 `async_only=True`。
+
+
+def test_async_only_ignores_module_level_sync_helper():
+    """`async_only=True` 时，**模块级同步函数体内**的调用不算裸调用。
+
+    这正是 `notifications._alert_items` 的形状（守卫首次运行时真实命中的假阳性）。
+    """
+    src = (
+        "def _alert_items(repo, limit):\n"
+        "    return [e for e in repo.list_events(limit=limit) if e.rule_id]\n"
+        "\n"
+        "async def notifications(repo):\n"
+        "    items = _alert_items(repo, 50)\n"
+        "    return items\n"
+    )
+    assert _bare_calls(src, "list_events") == ["return [e for e in repo.list_events(limit=limit) if e.rule_id]"], (
+        "全文口径应报出该行（证明用例本身有效）"
+    )
+    assert _bare_calls(src, "list_events", async_only=True) == [], (
+        "async 口径应放过同步 helper 体内的调用"
+    )
+
+
+def test_async_only_still_flags_async_body_calls():
+    """正向对照：async 函数体内的裸调用**必须**照旧被抓（否则 async_only 变成"一律放过"）。"""
+    src = (
+        "async def list_events(store):\n"
+        "    rows = store.list_events(active_only=True, limit=30)\n"
+        "    return rows\n"
+    )
+    assert _bare_calls(src, "store.list_events", async_only=True) == [
+        "rows = store.list_events(active_only=True, limit=30)"
+    ]
+
+
+def test_async_context_excludes_sync_def_nested_inside_async():
+    """async 函数体内**嵌套的同步 def**，其函数体不算 async 上下文。
+
+    没有这条，`async def` 里定义个同步小工具就会被误判——而它跑在调用方线程上。
+    """
+    src = (
+        "async def outer():\n"
+        "    def inner(store):\n"
+        "        return store.list_events(limit=1)\n"
+        "    a = store.list_events(limit=2)\n"
+        "    return a\n"
+    )
+    lines = _async_context_lines(src)
+    assert lines is not None
+    assert 3 not in lines, "同步 def 体内的行不应算 async 上下文"
+    assert 4 in lines, "async 函数体内的行应算 async 上下文"
+
+
+def test_async_context_returns_none_on_unparsable_source():
+    """语法不完整时返回 `None` ⇒ 调用方退回"不过滤"（严 > 漏），而不是静默返回空集。"""
+    assert _async_context_lines("async def f(:\n") is None

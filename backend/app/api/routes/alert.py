@@ -93,6 +93,10 @@ async def list_events(
     repo: AlertRepository = Depends(get_alert_repo),
 ) -> Envelope[list[dict]]:
     """事件列表 + AI 判读合并（2026-09-09 告警面板重设计：verdict 徽标数据源）。"""
+    # 2026-09-12 实测判定**不搬线程**：`AlertRepository.list_events(limit=50)` 中位 **0.36ms**、
+    # `list_rules()` 0.13ms（对照 `EventStore.list_events` 7.2~85ms）⇒ 毫秒级，与
+    # `watcher.ensure_system_rule` / `record_sighting` 同族（见 `test_event_loop_no_block.py`
+    # 「已审计、刻意不搬」段）。搬线程的调度开销与收益同量级，不加。
     events = repo.list_events(limit=limit, rule_id=rule_id)
     out = []
     triage_map: dict[int, tuple[str, str, str]] = {}

@@ -18,6 +18,7 @@ confirmed 或 faded；「有新涨停」与「资金净流入」是两套口径�
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date, datetime
 from app.core.bjtime import beijing_now_naive  # S2-8 时区收敛
@@ -155,7 +156,9 @@ async def verify_active_events(
     涨停池由调用方传入（避免本函数自行拉取——端点/调度可复用已加载的池，
     也便于测试注入受控桩）；板块资金经 `board_rows_for_names` 一次性批取。
     """
-    events = store.list_events(active_only=True, limit=limit)
+    # 同步 SQLite 读搬线程池（2026-09-12）：本函数由 `/api/events/verify` 与调度调用，
+    # 均落在事件循环上；`EventStore.list_events` per-call 建 session ⇒ 可安全跨线程。
+    events = await asyncio.to_thread(store.list_events, active_only=True, limit=limit)
     if not events:
         return []
 
