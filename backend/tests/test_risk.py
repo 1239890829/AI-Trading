@@ -164,3 +164,24 @@ def test_risk_check_order_api(client):
     data = resp.json()["data"]
     assert "allowed" in data
     assert isinstance(data["reasons"], list)
+
+
+def test_paper_engine_has_risk_gate_wired(client):
+    """§6.5b #2 端到端装配断言（KB-ENG：接线必须有测试）：main 账户的撮合引擎
+    必须持有 risk_engine（同一实例）；shadow 引擎必须豁免（研究仪器，
+    风控否决会污染 A/B 口径）。行为级用例见 test_paper_risk_gate.py。"""
+    paper = client.app.state.paper
+    assert paper._risk_engine is client.app.state.risk_engine
+    shadow = getattr(client.app.state, "paper_shadow", None)
+    if shadow is not None:
+        engine = getattr(shadow, "engine", shadow)
+        assert engine._risk_engine is None
+
+
+def test_risk_check_context_matches_route_caliber(client):
+    """预检上下文组装收口到 paper.risk_check_context 后，路由与撮合层同口径。"""
+    paper = client.app.state.paper
+    hub = client.app.state.hub
+    account, positions = paper.risk_check_context(hub)
+    assert "total_equity" in account
+    assert isinstance(positions, list)

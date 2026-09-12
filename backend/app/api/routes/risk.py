@@ -29,26 +29,11 @@ async def check_order(
     paper = request.app.state.paper
     hub = request.app.state.hub
 
-    # 取价口径必须与 /paper/account 一致：优先 hub 全量报价，缺失时回退成本价。
-    # 早期版本用 hub.quotes（仅已订阅标的）且回退到「订单价」，会把总仓位严重低估。
-    price_map = {q.symbol: q.price for q in hub.get_quotes() if q.price}
-    positions = paper.positions_with_pnl(price_map)
-    for pos in positions:
-        if pos["last_price"] is None and pos["symbol"] in price_map:
-            last = price_map[pos["symbol"]]
-            pos["last_price"] = last
-            pos["pnl"] = round((last - pos["cost_price"]) * pos["quantity"], 2)
-            pos["pnl_pct"] = (
-                round((last - pos["cost_price"]) / pos["cost_price"] * 100, 2)
-                if pos["cost_price"]
-                else None
-            )
-    market_value = sum(
-        (p.get("last_price") or p.get("cost_price") or 0) * p.get("quantity", 0)
-        for p in positions
-    )
-    account = paper.account_summary(market_value)
-    account["total_equity"] = account["total"]
+    # 取价/账户/持仓组装口径收口到 `paper.risk_check_context`（§6.5b #2）：
+    # 撮合层的风控硬拦截与这里的预检**必须同一口径**，否则会出现
+    # 「UI 预检说可以、下单被拒」。历史教训：早期用 hub.quotes（仅已订阅标的）
+    # 且回退「订单价」，把总仓位严重低估。
+    account, positions = paper.risk_check_context(hub)
 
     quote = hub.quotes.get(body.symbol)
     quote_dict = quote.model_dump() if quote else None

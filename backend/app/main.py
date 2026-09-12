@@ -134,12 +134,32 @@ async def lifespan(app: FastAPI):
                     continue
         return None
 
-    paper = PaperTradingEngine(get_session_factory(), live_quote, hub_trading_days)
+    snapshot_service = MarketSnapshotService(
+        poll_interval=settings.snapshot_poll_interval_seconds,
+        save_interval=settings.snapshot_save_interval_seconds,
+        parquet_dir=Path(settings.parquet_dir),
+    )
+    app.state.snapshot_service = snapshot_service
+
+    # --- 风险引擎（Phase 5）：市场状态 + 仓位参数 + 订单预检 ---
+    # 先于 paper 构造：§6.5b #2（2026-09-13）起 check_order 接入模拟撮合硬拦截，
+    # main 账户的买入在下单时经 risk_engine 把关（见 PaperTradingEngine 边界注释）。
+    risk_engine = RiskEngine(
+        hub=hub,
+        snapshot_service=snapshot_service,
+        session_factory=get_session_factory(),
+        app_state=app.state,  # P1-3：情绪判定并入全站共享 60s 槽
+    )
+    app.state.risk_engine = risk_engine
+
+    paper = PaperTradingEngine(get_session_factory(), live_quote, hub_trading_days, risk_engine=risk_engine)
     app.state.paper = paper
 
     # --- 影子持仓（picks-intraday-fusion-assessment P0-B）：scope=shadow 独立账户 ---
     # 每日精选的 A/B 对照组：晨窗把最新组合按执行闸门模拟执行，验证空仓闸门
     # 机会成本与执行闸门价值。与 main 账户数据完全隔离（scope 列）。
+    # ⚠️ 刻意**不注入 risk_engine**：影子账户是研究仪器，风控否决会污染 A/B 口径
+    #（上游 gate.py 已各自把关），见 PaperTradingEngine 边界注释。
     paper_shadow = None
     if settings.picks_shadow_enabled:
         paper_shadow = PaperTradingEngine(
@@ -149,23 +169,7 @@ async def lifespan(app: FastAPI):
 
         app.state.paper_shadow = ShadowRunner(paper_shadow, get_session_factory())
 
-    snapshot_service = MarketSnapshotService(
-        poll_interval=settings.snapshot_poll_interval_seconds,
-        save_interval=settings.snapshot_save_interval_seconds,
-        parquet_dir=Path(settings.parquet_dir),
-    )
-    app.state.snapshot_service = snapshot_service
-
     # --- 全市场选股器（Phase 5）：快照截面过滤 + TDX 日K 技术评分卡 ---
-
-    # --- 风险引擎（Phase 5）：市场状态 + 仓位参数 + 订单预检 ---
-    risk_engine = RiskEngine(
-        hub=hub,
-        snapshot_service=snapshot_service,
-        session_factory=get_session_factory(),
-        app_state=app.state,  # P1-3：情绪判定并入全站共享 60s 槽
-    )
-    app.state.risk_engine = risk_engine
 
     # --- 题材字典/官方成分（architecture-design §1 T1）：fuyao 官方目录与成分同步 ---
     try:

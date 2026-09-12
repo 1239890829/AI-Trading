@@ -1,6 +1,8 @@
 """市场状态 → 仓位参数的映射配置。
 
-所有数值为**建议参数**，模拟交易当前只做提示与预检，不强制改写订单。
+所有数值为**建议参数**。2026-09-13（§6.5b #2）起 main 账户买入在撮合层
+经 `PaperTradingEngine._risk_block_reason` 强制过闸（shadow/卖出豁免）；
+此前仅 UI 预检提示。
 实盘接入时应根据用户风险偏好再分档。
 """
 from __future__ import annotations

@@ -9,10 +9,17 @@
 风险引擎（`backend/app/risk/`）在**信号/策略输出与模拟撮合之间**提供订单预检
 （`RiskEngine.check_order`），输出 `{allowed, max_qty, reasons, warnings, state}`。
 
-⚠️ **定位澄清（勿高估，2026-09-12 复核）**：`check_order` 目前只被 `POST /api/risk/check-order`
-预检端点消费，**模拟交易路由并未强制调用它**——即它是「预检 / 提示」，尚不是撮合链上的硬拦截。
-引擎模块头自述亦如此：「所有数值为**建议参数**，模拟交易当前只做提示与预检，不强制改写订单」。
-把它描述成「任何 AI 或策略输出都不得绕过」与代码不符。
+✅ **已接入撮合硬拦截（retro §6.5b #2，2026-09-13 拍板执行）**：main 账户的**买入**订单在
+`PaperTradingEngine.place_order` 内强制过闸（`app/paper/engine.py::_risk_block_reason`），
+不通过即拒单（`order.reason = "风控拦截：…"`）。边界刻意收窄：
+- **仅 main 账户 + 仅买入**：shadow（影子账户）豁免——它是研究仪器，风控否决会污染 A/B 口径
+  （豁免判据写在 `_risk_block_reason` 的 scope 检查里，非装配约定）；**卖出永不拦截**——
+  减风险动作不因风控被阻（exit_engine 硬止损走卖出路径）；
+- **挂单撮合期不复查**：风控时点是下单（资金已冻结，撮合期否决会留下难自解释的冻结挂单）；
+- **预检异常保守拒单**（`风控预检异常（…），保守拒单`）；
+- 预检数据组装与 `POST /api/risk/check-order` **同口径单点**（`paper.risk_check_context`），
+  杜绝「UI 预检说可以、下单被拒」的分裂。用例：`tests/test_paper_risk_gate.py` +
+  `test_risk.py::test_paper_engine_has_risk_gate_wired`（装配断言）。
 
 ## 2. 市场状态驱动的仓位参数
 
@@ -50,7 +57,7 @@
   （`picks/backtest.py`、`picks/review_intraday.py`、`app/review/`），不是 Agent 角色。
 - **AI 结论有效期与自动失效通知**：未实现（同上）。现有的是**事件/题材条目的 `expires_at`
   过滤**（`services/theme_catalog_service.py`），与「AI 结论自动过期」不是同一机制。
-- **风险引擎对撮合的强制拦截**：见 §1 的定位澄清。
+- ~~风险引擎对撮合的强制拦截~~ ✅ **2026-09-13 已实现**（§6.5b #2 拍板），边界见 §1。
 
 ## 4. 数据质量联动
 

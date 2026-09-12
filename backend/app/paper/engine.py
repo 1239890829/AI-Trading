@@ -71,12 +71,31 @@ def limit_block_reason(quote, side: str, price: float | None) -> str | None:
 
 
 class PaperTradingEngine:
-    def __init__(self, session_factory, quote_fn, trading_days_fn=None, *, scope: str = "main"):
+    def __init__(
+        self,
+        session_factory,
+        quote_fn,
+        trading_days_fn=None,
+        *,
+        scope: str = "main",
+        risk_engine=None,
+    ):
         self._sf = session_factory
         self._quote_fn = quote_fn  # async (symbol) -> Quote | None（走实时链）
         self._tdays_fn = trading_days_fn  # async () -> list[str] | None
         #: 账户域：main=交易页签；shadow=每日精选影子持仓（数据隔离，互不可见）
         self.scope = scope
+        #: 风控硬拦截（retro §6.5b #2，2026-09-13 拍板：check_order 从「仅 UI 预检」
+        #: 升级为撮合层拦截）。边界刻意收窄为 **仅 main 账户 + 仅买入方向**：
+        #: - **shadow 豁免**：影子账户是研究仪器，测的是每日精选策略本身，
+        #:   风控否决会污染 A/B 口径（其上游闸门 gate.py 已各自把关）；
+        #: - **卖出永不拦截**：卖出是减风险动作，风控的目的是阻止加风险——
+        #:   拦自损卖出（exit_engine 硬止损走本引擎卖出路径）只会放大风险；
+        #: - position_engine 的买点自动执行同走 main 买入，一并通过本闸
+        #:   （其拒绝路径已优雅呈现「撮合拒绝：<原因>」）。
+        #: 挂单轮询（match_pending）**不**重复风控：资金已在下单时冻结，
+        #: 撮合期再否决会留下既不可成交也难自解释的冻结挂单——风控时点是下单。
+        self._risk_engine = risk_engine
 
     # ---------- 账户 ----------
 
@@ -177,6 +196,72 @@ class PaperTradingEngine:
             .one_or_none()
         )
 
+    # ---------- 风控硬拦截（§6.5b #2） ----------
+
+    def risk_check_context(self, hub) -> tuple[dict, list[dict]]:
+        """风控预检的（账户, 持仓）上下文——**与 /api/risk/check-order 同口径的单点**。
+
+        取价 = hub 全量报价，缺实时价回退成本价（绝不回退「本次订单价」——
+        那会把未订阅行情的持仓按订单价计价、总仓位严重低估，见
+        test_total_position_falls_back_to_cost_price_not_order_price）。
+        路由与撮合层共用本方法，杜绝「UI 预检说可以、下单被拒」的口径分裂。
+        """
+        price_map = {q.symbol: q.price for q in hub.get_quotes() if q.price}
+        positions = self.positions_with_pnl(price_map)
+        for pos in positions:
+            if pos["last_price"] is None and pos["symbol"] in price_map:
+                last = price_map[pos["symbol"]]
+                pos["last_price"] = last
+                pos["pnl"] = round((last - pos["cost_price"]) * pos["quantity"], 2)
+                pos["pnl_pct"] = (
+                    round((last - pos["cost_price"]) / pos["cost_price"] * 100, 2)
+                    if pos["cost_price"]
+                    else None
+                )
+        market_value = sum(
+            (p.get("last_price") or p.get("cost_price") or 0) * p.get("quantity", 0)
+            for p in positions
+        )
+        account = self.account_summary(market_value)
+        account["total_equity"] = account["total"]
+        return account, positions
+
+    async def _risk_block_reason(self, symbol: str, side: str, price: float, qty: int, quote) -> str | None:
+        """风控硬拦截判据。返回 None = 放行，否则返回中文拒单原因。
+
+        边界（见构造函数注释）：仅 main 账户 + 仅买入；挂单撮合期不复查。
+        市场状态用的是 risk_engine 的**缓存态**（调度器每 60s 刷新，
+        与 UI 预检看到的同一个值）；预检自身异常按**保守拒单**处理——
+        不知道订单是否安全时，模拟盘宁可拒并说明原因（红线 2 的精神：
+        失败必须可见，不静默放行）。
+        """
+        re_ = self._risk_engine
+        # 豁免判据**写在代码里**而非只靠装配约定：scope != main 一律不闸——
+        # 即使将来有人给 shadow 注入 risk_engine，研究仪器口径也不会被污染
+        #（test_shadow_scope_not_gated 钉住这条结构性保证）。
+        if re_ is None or side != "buy" or self.scope != "main":
+            return None
+        try:
+            account, positions = self.risk_check_context(re_.hub)
+            result = re_.check_order(
+                symbol=symbol,
+                side=side,
+                price=price,
+                quantity=qty,
+                account=account,
+                positions=positions,
+                # 用刚取到的实时 quote（比 hub 缓存更新），quality/amount 判据同源
+                quote=quote.model_dump() if quote is not None else None,
+            )
+        except Exception as exc:
+            log.warning("risk pre-check failed for %s buy: %s", symbol, exc)
+            return f"风控预检异常（{type(exc).__name__}），保守拒单"
+        if result.get("allowed"):
+            return None
+        reason = "；".join(result.get("reasons") or []) or "未通过风控预检"
+        warnings = "；".join(result.get("warnings") or [])
+        return f"风控拦截：{reason}" + (f"（警告：{warnings}）" if warnings else "")
+
     # ---------- 下单 ----------
 
     async def place_order(self, symbol: str, side: str, price: float, qty: int) -> PaperOrder:
@@ -214,6 +299,11 @@ class PaperTradingEngine:
 
         with self._sf() as db:
             await self._unfreeze(db)
+            # 风控硬拦截（§6.5b #2）：仅 main 买入。放在账户级资金校验之前——
+            # 与涨跌停拦截同理：「该不该买」不应因「买不买得起」不满足而不被求值。
+            risk_blocked = await self._risk_block_reason(symbol, side, price, qty, quote)
+            if risk_blocked:
+                return reject(risk_blocked)
             if side == "buy":
                 need = price * qty + calc_fee("buy", price, qty)
                 if need > acc.cash:
