@@ -440,7 +440,13 @@ def report(rows: list[dict], history: dict[str, str], prod: dict[str, dict]) -> 
         ))
     print()
     print(f"  生产常量：STRONG_PHASES={STRONG_PHASES}  ADVERSE_PHASES={ADVERSE_PHASES}")
-    print("  intraday_rules 进攻档（当前）= ('高潮', '发酵')  ←「修复」不在其中")
+    # 进攻档**直接读被测模块**，不写死字面量——否则本条输出自己就会过期（会失真的标注）
+    from app.picks import intraday_rules as ir
+
+    tier = tuple(ir._ATTACK_PHASES)
+    print(f"  intraday_rules 进攻档（实读模块）= {tier}"
+          + ("  ← 与 STRONG_PHASES 一致 ✓" if tier == tuple(STRONG_PHASES)
+             else "  ← ⚠️ 与 STRONG_PHASES 不一致，属口径分歧"))
     if rate < 0.7:
         print(f"  ⚠️ 相位一致率仅 {rate:.0%}（<70%）⇒ 重建未获校验，**结论不可用**")
         return 2
