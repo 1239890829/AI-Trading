@@ -25,6 +25,7 @@ import os
 from datetime import date as date_cls
 from datetime import timedelta
 
+from app.core.bjtime import beijing_today
 from app.core.ttl_cache import cache_on
 
 # requests(trust_env) 在 macOS 会读系统级代理配置；本机会话曾出现死系统代理。
@@ -422,7 +423,8 @@ class AkshareExtService:
         if fn is None:
             raise AkshareExtError("source_error", "akshare 无 bond_zh_us_rate 接口")
 
-        start = (date_cls.today() - timedelta(days=45)).strftime("%Y%m%d")
+        # 日期归属走权威时钟：`date_cls.today()` 按进程时区取日，非 CST 机器差一天
+        start = (beijing_today() - timedelta(days=45)).strftime("%Y%m%d")
 
         def _fetch() -> list[dict]:
             try:

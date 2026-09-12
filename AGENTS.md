@@ -30,12 +30,12 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2619 项（2557 passed / 62 skipped）· 171 文件（09-12 实测）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2620 项（2558 passed / 62 skipped）· 171 文件（09-12 实测）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。
 # 需要机器可读计数时改用 `--junitxml=/tmp/be.xml` 解析（2026-09-11 踩）。
-# ⚠️ 耗时强依赖「8000 是否在跑」：后端服务停着 ~64s，服务在跑时实测 93s~330s 波动。
+# ⚠️ 耗时强依赖「8000 是否在跑」：后端服务停着 ~64s，服务在跑时实测 79s~330s 波动。
 # 原因是常驻调度与测试同时抢 SQLite/网络；**报耗时必须说明前提**，否则会被当成回归。
 # ⚠️ `--basetemp` 不可省：默认临时目录会被沙箱拒绝创建（EEXIST → PermissionError），
 # 表现为几十个 E 而非 F，极易误判成代码回归（2026-09-11 踩，见 kb/03）。
@@ -55,11 +55,11 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 2619 项（2557 passed / 62 skipped）· 171 文件、前端 429 项 / 52 文件、eslint **0 error / 0 warn**
+> **门禁口径**：后端 2620 项（2558 passed / 62 skipped）· 171 文件、前端 429 项 / 52 文件、eslint **0 error / 0 warn**
 > （25 条回归已按 P1-27 清零；仅 notification-drawer 保留 1 处带理由的 C 类豁免）。
 > **测试规模与告警数同属「会失真的状态标注」**——改动后要实测回填，不要沿用旧数字
 > （此前「≤1 warn / 后端 580 / 前端 97 / 219 / 257 / 263 / 342 / 1925 / 2553 / 2556 / 2557 / 2574 / 2576 /
-> 2584 / 2585 / 2590 / 2602 / 2606 / 前端 423」均已被后续改动追过，教训见 `docs/retro-and-gaps.md` §七）。
+> 2584 / 2585 / 2590 / 2602 / 2606 / 2619 / 前端 423」均已被后续改动追过，教训见 `docs/retro-and-gaps.md` §七）。
 > ⚠️ **交接 note 里的门禁数字也会失真**（2026-09-12 实测：note 写「2574 / 2513」，当轮为 2576 / 2515，新加 8 项后为 2584 / 2523 ⇒ 差值恰好等于新增测试数，可自洽核对）——**取数一律自己跑一遍**。
 > **加测试文件就会让这里过期**，改测试后请顺手回填。
 
@@ -143,8 +143,12 @@ screener 彻底删除、消融验证启动（`07f29a7`/`c38cb05`）。
   **「修复」相位从未被覆盖**两处真缺陷）· 角色配色合并为 `lib/role-style.ts` 一份 ·
   三态文案补 `null` 键 + 前后端逐键守卫 · relay-rank **并发化 8.0x**（2044.7ms → 256.2ms）·
   情绪**缓存槽合一**（5 消费方 1 次计算）· 同源双取数收口 · 4 处 `memo` · WS 连接复用
-- **唯一未做**：**S2-8 北京时间收敛**——已裁定**拆为阶段 2.5**（改动面是阶段 2 其余项之和，
-  且每处 `date.today()` 携带交易日归属语义，接近「口径变更」红线，需逐处核对）
+- **S2-8 北京时间收敛 → 阶段 2.5 ✅ 已完成**（低风险子集 09-11；`date.today()` 禁令 09-12 收口）：
+  `app/core/bjtime.py` 为唯一权威，`tests/test_bjtime.py` **12 项守卫**（扫 `app/tests/scripts`，
+  禁自建 UTC+8 偏移与重复时钟函数）。`app/` 下 `date.today()` 实测**清零**——**含 import 别名形式**：
+  首版守卫只匹配 `Name(id="date")`，`from datetime import date as date_cls` 可整条绕过，
+  `akshare_ext.py` 因此**漏了 1 处而测试全绿**（09-12 修代码 + 守卫解别名 + 别名自证测试固化）。
+  ⚠️ **扫描面仅 `app/`**：`scripts/` 2 处、`tests/` 9 处「取今天」不在其内 → §7 第 3 条
 
 | 阶段 | 状态 |
 |---|---|
@@ -386,6 +390,7 @@ curl 先行 → 记录字段口径与类型陷阱 → 多采样找规律 → fix
 |---|---|---|
 | 1 | 部署环境（NAS / 云服务器 / Vercel+Railway） | Docker/编排/监控；需有 Docker 的环境实测 |
 | 2 | 飞书已收敛为「盘中只保留买点卡」，4 个定时 automation（09:26/14:40/15:35/15:40）**是否也一并停** | 减少打扰 vs 保留兜底（2026-09-08 记录，未决） |
+| 3 | `date.today()` 守卫是否**扩面到 `scripts/` + `tests/`**（现仅扫 `app/`） | **建议扩并改**：`scripts/` 2 处（`backtest_picks.py:51` 报告文件名、`verify_climate_chain.py:203` 用 `pd.Timestamp.today()`）、`tests/` 9 处夹具锚点（另 9 处 `utcnow`）。各 1 行改动，CST 机器上行为不变，非 CST 才修正。不改则须接受「`date.today()` 已清零」**只对 `app/` 成立**（2026-09-12 记录） |
 
 > **已决（留痕，勿重开）**：控制台「自定义规则 UI」→ **2026-09-10 拍板保留**（成本近零，且是全系统唯一能写自定义阈值提醒的入口；
 > 位置：`/agent?tab=alerts`「提醒与告警」，链路 = `POST /api/alerts/rules` → `AlertEngine` 轮询 → `alert_triage` → 悬浮球/in_app。

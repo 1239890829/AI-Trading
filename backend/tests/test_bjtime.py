@@ -26,6 +26,9 @@
    `beijing_today` / `to_beijing` / `to_beijing_naive`。
 3. `app/market/trading_status.py` 与 `app/core/db.py` 不得再"重新拥有"时钟
    （前者曾导出 `beijing_now`、后者曾导出 `beijing_now_naive`）。
+4. `app/` 内禁止 `date.today()`——**含 `from datetime import date as X` 的别名形式**
+   与 `datetime.date.today()` 限定形式。日期归属一律 `beijing_today()`（见第 5 节）。
+   ⚠️ `scripts/` 暂不在本规则扫描面内（离线工具，见 AGENTS.md §7 待决）。
 """
 from __future__ import annotations
 
@@ -200,26 +203,74 @@ def test_alert_triggered_at_is_not_shifted_again():
 
 # ---------------------------------------------------------------- 5. date.today() 禁令（S2-8 阶段 2.5 收口，2026-09-12）
 
+def _find_today_calls(src: str) -> list[int]:
+    """返回源码中「按进程时区取日」调用的行号（AST 判定，**解 import 别名**）。
+
+    两条硬要求，都踩过：
+    - **必须走 AST**：文本扫描会被文档里的教学文字误伤（本文件 docstring 就在讲它）。
+    - **必须解别名**：只匹配 `Name(id="date")` 会被 `from datetime import date as date_cls`
+      整条绕过——`app/services/akshare_ext.py` 正是这样漏了 1 处，使「app/ 已清零」成为
+      假结论（2026-09-12 实测）。
+    """
+    import ast
+
+    tree = ast.parse(src)
+
+    # 裸 `date` 始终可疑：日期对象上的 .today() 必定是按进程时区取日
+    date_names: set[str] = {"date"}
+    dt_module_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "datetime":
+            for a in node.names:
+                if a.name == "date":
+                    date_names.add(a.asname or a.name)
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name == "datetime":
+                    dt_module_names.add(a.asname or a.name)
+
+    lines: list[int] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "today"):
+            continue
+        v = node.func.value
+        if isinstance(v, ast.Name) and v.id in date_names:
+            lines.append(node.lineno)
+        elif (isinstance(v, ast.Attribute) and v.attr == "date"
+                and isinstance(v.value, ast.Name) and v.value.id in dt_module_names):
+            lines.append(node.lineno)
+    return sorted(lines)
+
+
 def test_no_naive_date_today_in_app():
     """运行时代码禁止 `date.today()`——日期归属一律 `beijing_today()`。
 
     `date.today()` 按进程时区取日：+8 生产机「碰巧正确」，CI/海外机器错一天。
-    用 ast 解析（不是文本扫描）——文档里「不要用 date.today()」的教学文字不算违例。
     """
-    import ast
-
     offenders: list[str] = []
     for p in sorted((BACKEND / "app").rglob("*.py")):
         rel = p.relative_to(BACKEND).as_posix()
-        tree = ast.parse(p.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if (isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "today"
-                    and isinstance(node.func.value, ast.Name)
-                    and node.func.value.id == "date"):
-                offenders.append(f"{rel}:{node.lineno}")
+        for ln in _find_today_calls(p.read_text(encoding="utf-8")):
+            offenders.append(f"{rel}:{ln}")
     assert not offenders, (
         "以下位置用了 date.today()（进程时区取日，跨时区错一天），"
         "应改为 `from app.core.bjtime import beijing_today`：\n  " + "\n  ".join(offenders)
     )
+
+
+def test_today_detector_sees_aliases():
+    """**守卫自证**：别名与模块限定形式都必须被识别，否则「已清零」是假结论。
+
+    这是把注入验证固化下来——首版守卫只匹配 `Name(id="date")`，
+    `app/services/akshare_ext.py:425` 的 `date_cls.today()` 就这样漏过去了，
+    而当时测试是**全绿**的：守卫漏检比没有守卫更糟，它让口径分裂看起来已解决。
+    """
+    assert _find_today_calls("from datetime import date\nx = date.today()\n") == [2]
+    assert _find_today_calls(
+        "from datetime import date as date_cls\nx = date_cls.today()\n") == [2]
+    assert _find_today_calls("import datetime as dt\nx = dt.date.today()\n") == [2]
+    assert _find_today_calls("import datetime\nx = datetime.date.today()\n") == [2]
+    # 反例：叙述被禁写法的文档文字、以及权威函数调用，都不得被误伤
+    assert _find_today_calls('"""不要用 date.today()。"""\nx = beijing_today()\n') == []
