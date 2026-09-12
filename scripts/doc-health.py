@@ -105,6 +105,17 @@ TOLERATED_ENTRIES = {
     "04-decisions.md:KB-DEC-019":
         "63 行：治理层决策（准入五条+反固化条款）语义完整优先；待蒸馏时处理",
 }
+# I 空章节：**有意留空的**标题（键 = 相对路径 + 完整标题文本；行号会漂故不进口）。
+# 用完整标题而非前缀：标题一旦被改写，键就对不上 → 由 ghost 反向断言暴露（防容忍名单静默失效）。
+EMPTY_SECTION_ALLOW = {
+    ("docs/daily-review/2026-09-08.md", "6.3 今日未执行 §7（取长补短层）——非周五"):
+        "标题本身即结论（非周五故未执行 §7）；L4 历史快照，补正文＝改历史",
+}
+#: 空章节扫描面：docs/ 全量（archive 除外——只读历史）+ 仓库根的操作手册。
+EMPTY_SECTION_ROOT_FILES = ("AGENTS.md", "README.md")
+HEADING_RE = re.compile(r"^(#{1,6})\s+(\S.*?)\s*$")
+_HR_LINES = {"---", "***", "___"}
+_FENCE = "\x00fence\x00"
 
 
 def _read(p: Path) -> str:
@@ -169,6 +180,14 @@ CODE_REF_ALLOW = {
         "CLI 用法示例的 `--out` 输出路径占位",
     ("apps/web/components/agent/markdown-view.tsx", "xx.md"):
         "docstring 里的 Markdown 链接语法示例（形如 `[文本](docs/<名字>.md)`）",
+    ("backend/tests/test_doc_health_empty_sections.py", "a.md"):
+        "**合成文档名**：该测试把扫描面 monkeypatch 到 `tmp_path`，临时树里那个 `a.md`"
+        "不是仓库文档指针（它只用来钉 I 项判据）。真实扫描面由同文件末条"
+        "`test_real_repo_has_no_unregistered_empty_section` 在真仓库上覆盖",
+    # ⚠️ 本文件自身也吃过同一次亏：上面这条理由的第一版把 `docs/` 前缀写了出来，
+    # 结果 `check_code_refs` 把**自己的说明文字**判成死引用（`scripts/doc-health.py:184`）。
+    # 与 `STALE_ANCHOR_ALLOW` 的取舍同源：**描述缺陷的文字本身必须点名缺陷名**，
+    # 处置是"换个不会命中自己的写法"，不是把检查器自己的扫描面关掉。
 }
 
 
@@ -656,6 +675,69 @@ def check_clusters() -> list[tuple[str, int]]:
     return [(k, len(v)) for k, v in sorted(buckets.items()) if len(v) >= 3]
 
 
+def _strip_fences(lines: list[str]) -> list[str]:
+    """围栏代码块内的行替换成哨兵——否则代码示例里的 `# 注释` 会被当成标题。"""
+    out: list[str] = []
+    infence = False
+    for ln in lines:
+        if ln.strip().startswith(("```", "~~~")):
+            infence = not infence
+            out.append(_FENCE)
+            continue
+        out.append(_FENCE if infence else ln)
+    return out
+
+
+def check_empty_sections() -> tuple[list[tuple[str, int, str]], list[tuple[str, str]]]:
+    """I 空章节：**标题在、正文 0 行**。
+
+    为什么单列一项：这是「**内容被搬错位置**」的典型形态，而它发生时其余检查**全绿**——
+    `docs/retro-and-gaps.md` 的 §6.6 正文曾被 §6.7 的标题截断、落到 6.7 的表下方，
+    表现为「6.6 标题空着、正文挂在别的章节里」；按目录点进去只有一行标题，
+    读者既看不到内容、也无从判断是"还没写"还是"写丢了"。
+
+    判据：本标题之后、到**下一个同级或更高级标题**之前，没有任何正文行。
+    ⚠️ **不是**「到下一个任意标题之前」——`## 7` 紧跟 `### 7.1` 是合法容器写法，
+    按后者判会把所有"带子标题的父章节"全部误报成空章节。
+
+    返回 `(hits, ghost)`：`ghost` 是已失效的容忍项（标题被改 / 文件被搬），
+    反向断言避免容忍名单像 `CLAIM_EXEMPT` 那样**静默失效**后仍被当作有效。
+    """
+    hits: list[tuple[str, int, str]] = []
+    used: set[tuple[str, str]] = set()
+    targets: list[tuple[str, Path]] = [
+        (f"docs/{p.relative_to(DOCS)}", p)
+        for p in sorted(DOCS.rglob("*.md"))
+        if "archive" not in p.relative_to(DOCS).parts
+    ]
+    targets += [(n, ROOT / n) for n in EMPTY_SECTION_ROOT_FILES if (ROOT / n).exists()]
+    for rel, p in targets:
+        lines = _strip_fences(_read(p).splitlines())
+        heads = [
+            (i, len(m.group(1)), m.group(2))
+            for i, ln in enumerate(lines)
+            if ln != _FENCE and (m := HEADING_RE.match(ln))
+        ]
+        for k, (i, lvl, txt) in enumerate(heads):
+            j = next((h[0] for h in heads[k + 1:] if h[1] <= lvl), len(lines))
+            body = lines[i + 1:j]
+            if any(
+                b.strip() and b.strip() not in _HR_LINES and not b.strip().startswith("<!--")
+                for b in body
+            ):
+                continue
+            key = (rel, txt)
+            if key in EMPTY_SECTION_ALLOW:
+                used.add(key)
+                continue
+            hits.append((rel, i + 1, txt))
+    ghost = sorted(
+        f"{f} → {t}（原登记理由：{EMPTY_SECTION_ALLOW[(f, t)]}）"
+        for f, t in (set(EMPTY_SECTION_ALLOW) - used)
+    )
+    return hits, ghost
+
+
 def main() -> int:
     quiet = "--quiet" in sys.argv
     scan_all = "--all" in sys.argv
@@ -675,6 +757,7 @@ def main() -> int:
     stale = check_stale_anchors()
     claim_miss = check_claim_entries_missing_falsifier()
     claim_ghost = check_claim_exempt_ids()
+    empty, empty_ghost = check_empty_sections()
 
     def line(label: str, ok: bool, detail: str = "") -> None:
         nonlocal problems
@@ -734,6 +817,20 @@ def main() -> int:
             print(f"       {f}:{kid} {title[:48]}")
         if len(orphans) > 12:
             print(f"       …另有 {len(orphans) - 12} 条")
+    i_detail = f"{len(empty)} 处（标题在、正文 0 行）"
+    if EMPTY_SECTION_ALLOW:
+        i_detail += f"；已登记容忍 {len(EMPTY_SECTION_ALLOW)} 条"
+    if empty_ghost:
+        i_detail += f"；⚠️ 容忍项已失效 {len(empty_ghost)} 条"
+    line("I 空章节", not empty and not empty_ghost, i_detail)
+    if empty and not quiet:
+        for f, ln, txt in empty[:12]:
+            print(f"       {f}:{ln} → {txt[:60]}")
+        if len(empty) > 12:
+            print(f"       …另有 {len(empty) - 12} 处")
+    if empty_ghost and not quiet:
+        for g in empty_ghost:
+            print(f"       容忍项失效（标题改了/文件搬了，须删该条）：{g}")
     # H 项**刻意走 WARN 而非 FAIL**：先补存量再上哨兵，且只作提示。
     # 若计 FAIL，未补完的条目会让整份体检长期挂红 ⇒ 被整体无视（KB-ENG-58）。
     line("H-KB 豁免名单有效", not claim_ghost,
