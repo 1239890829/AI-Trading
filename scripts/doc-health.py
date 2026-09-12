@@ -507,6 +507,102 @@ def check_kb_entries() -> list[tuple[str, str, int]]:
     return out
 
 
+# ---------------------------------------------------------------- H. 主张类条目缺「失效条件」
+#
+# 【为什么只扫这两册】KB 的价值分两类，对「失效条件」的需求完全不同：
+#   ① **主张类**（对市场/现象的判断、规则、阈值）——它的价值就在「什么条件下不再成立」；
+#      缺了这句，模型会把**示例当规律**引用（[[KB-DEC-018]] 同一病灶）。
+#   ② **做法类**（工程/操作纪律、定义、框架）——条目**本身就是做法**，没有可证伪的命题，
+#      强行要求「失效条件」只会催生凑数文字，反而稀释信噪比。
+#   ⇒ 主张类恰好集中在 `01-stock-picking`（选股）与 `02-trading-lessons`（交易教训）两册；
+#     其余册（决策/工程/文档治理/工具坑/验证坑/数据契约）以做法为主，**不纳入**。
+#
+# 【为什么以告警起步、且要豁免名单】2026-09-12 首次量测时，两册 44 条里仅 5 条带失效表述。
+#   若直接立硬门，一上线就红 39 条，整份体检立刻失去信噪比，下场是被整体无视
+#   （同「永不触发的门禁」与「过宽的触发等于没有触发」[[KB-ENG-58]]）。
+#   ⇒ 先补存量（本轮已补 18 条）→ 再以 **WARN** 上线，只提示、不阻断；
+#     同时用 **显式豁免名单**把「纪律 / 定义 / 框架」类条目排除在外。
+CLAIM_KB_FILES = ("01-stock-picking.md", "02-trading-lessons.md")
+
+#: 认定「已交代失效条件」的标记词。刻意放宽——只要作者**以任何形式**交代了边界即可，
+#: 不强制统一措辞（`边界` / `不适用` / `未获支持` / `已否决` 都是合法交代）。
+CLAIM_MARKERS = ("失效条件", "失效", "边界", "不适用", "未获支持", "已否决", "被取代", "局限")
+
+#: 豁免名单：**做法 / 定义 / 框架**类条目——无可证伪命题，不要求「失效条件」。
+#: ⚠️ 这份名单必须与条目**同时维护**：条目改名或删除后，ID 会变成幽灵豁免，
+#:    因此下方 `check_claim_exempt_ids` 会反向断言「名单里的每个 ID 都真实存在」。
+CLAIM_EXEMPT = {
+    # —— 01-stock-picking.md ——
+    "KB-STOCK-01": "📎 示例 + 已有实测否决结论（比一般失效条件更强）",
+    "KB-STOCK-03": "📎 示例（与 02 同构，仅作类比，不另计证据）",
+    "KB-STOCK-04": "📎 示例·历史参照（无对应实测）",
+    "KB-STOCK-07": "纪律：发现与买入分离",
+    "KB-STOCK-08": "纪律：必须有低风险参与档位",
+    "KB-STOCK-10": "定义：梯队七角色",
+    "KB-STOCK-13": "定义：强度四档",
+    "KB-STOCK-16": "纪律：题材唯一归属",
+    "KB-STOCK-18": "纪律：预判以实测为准",
+    "KB-STOCK-19": "框架：稳定核 + 灵活壳",
+    "KB-STOCK-21": "纪律：一字板参与",
+    "KB-STOCK-25": "主张类，但已有「反例边界」段（标记词已覆盖）",
+    "KB-STOCK-26": "框架：消息驱动五段流水线",
+    "KB-STOCK-27": "已有「边界声明」段（标记词已覆盖）",
+    "KB-STOCK-28": "方法论：策略生命周期管理",
+    "KB-STOCK-29": "已有口径声明与「须样本外复验」标注",
+    "KB-STOCK-30": "已有「裁决」与适用范围段",
+    "KB-STOCK-31": "已有「已知边界 / 残余诚实口径」段",
+    # —— 02-trading-lessons.md ——
+    "KB-TRADE-01": "做法：先实测时间再判断",
+    "KB-TRADE-02": "做法：日期源必须同源",
+    "KB-TRADE-05": "做法：三态纪律",
+    "KB-TRADE-06": "做法：验收以实际渲染为准",
+    "KB-TRADE-07": "做法：盘点三原则",
+    "KB-TRADE-09": "做法：瞬态状态不入异常白名单",
+    "KB-TRADE-12": "做法：清除类操作用时间切线",
+    "KB-TRADE-13": "做法：周度统计闭环（本身是待实现项）",
+}
+
+
+def check_claim_entries_missing_falsifier() -> list[tuple[str, str, str]]:
+    """H 项（**告警级**）：主张类条目未交代「什么条件下不再成立」。
+
+    只扫 `CLAIM_KB_FILES`，并按 `CLAIM_EXEMPT` 豁免做法/定义/框架类。
+    返回 (文件, KB-ID, 标题) 列表——**不计入 problems**，见 main() 中的 WARN 处理。
+    """
+    out: list[tuple[str, str, str]] = []
+    for name in CLAIM_KB_FILES:
+        p = DOCS / "kb" / name
+        if not p.exists():
+            continue
+        lines = _read(p).splitlines()
+        starts = [i for i, l in enumerate(lines) if re.match(r"^### KB-[A-Z]+-\d+", l)]
+        for j, s in enumerate(starts):
+            end = starts[j + 1] if j + 1 < len(starts) else len(lines)
+            m = re.match(r"^### (KB-[A-Z]+-\d+)\s+(.*)", lines[s])
+            if not m:
+                continue
+            kid, title = m.group(1), m.group(2).strip()
+            if kid in CLAIM_EXEMPT:
+                continue
+            body = "\n".join(lines[s:end])
+            if not any(mk in body for mk in CLAIM_MARKERS):
+                out.append((name, kid, title))
+    return out
+
+
+def check_claim_exempt_ids() -> list[str]:
+    """H 的**守卫的守卫**：豁免名单里的 ID 必须真实存在，否则是幽灵豁免。
+
+    为什么必须有这一条：豁免名单的价值全在「它排除的是真实条目」。条目被改名/删除后，
+    名单不会报错，只会**静默失去作用**——而失去作用的方向恰好是**放宽**检查，
+    症状又是「全绿」。这正是 KB-ENG-54「扫描面被写窄」的**名单版**。
+    """
+    alive: set[str] = set()
+    for p in kb_classified_files():
+        alive |= set(re.findall(r"^### (KB-[A-Z]+-\d+)", _read(p), re.M))
+    return [kid for kid in CLAIM_EXEMPT if kid not in alive]
+
+
 def kb_file_advisories() -> list[tuple[str, int]]:
     """§7：L0 文件总行数不限，>800 只是「评估按子类拆文件」的触发 → 非阻断提示。"""
     out = []
@@ -577,6 +673,8 @@ def main() -> int:
     ptr = check_kb_pointer_files()
     orphans = check_kb_orphans()
     stale = check_stale_anchors()
+    claim_miss = check_claim_entries_missing_falsifier()
+    claim_ghost = check_claim_exempt_ids()
 
     def line(label: str, ok: bool, detail: str = "") -> None:
         nonlocal problems
@@ -636,6 +734,20 @@ def main() -> int:
             print(f"       {f}:{kid} {title[:48]}")
         if len(orphans) > 12:
             print(f"       …另有 {len(orphans) - 12} 条")
+    # H 项**刻意走 WARN 而非 FAIL**：先补存量再上哨兵，且只作提示。
+    # 若计 FAIL，未补完的条目会让整份体检长期挂红 ⇒ 被整体无视（KB-ENG-58）。
+    line("H-KB 豁免名单有效", not claim_ghost,
+         f"{len(claim_ghost)} 个幽灵 ID（条目已改名/删除，豁免已静默失效）"
+         + (" → " + ", ".join(claim_ghost) if claim_ghost else
+            f"（{len(CLAIM_EXEMPT)} 条豁免全部指向在册条目）"))
+    if not quiet:
+        print(f"[{'WARN' if claim_miss else 'OK '}] H-KB 主张类失效条件 "
+              f"{len(claim_miss)} 条未交代（**告警级，不计 FAIL**；"
+              f"扫 {', '.join(CLAIM_KB_FILES)} 并按 CLAIM_EXEMPT 豁免做法/定义/框架类）")
+        for f, kid, title in claim_miss[:12]:
+            print(f"       {f}:{kid} {title[:48]}")
+        if len(claim_miss) > 12:
+            print(f"       …另有 {len(claim_miss) - 12} 条")
     if not quiet:
         print("[INFO] E 同类聚集（同前缀 ≥3 份，评估是否需共同索引页）："
               + (", ".join(f"{k}×{v}" for k, v in clusters) if clusters else "无"))
@@ -650,6 +762,10 @@ def main() -> int:
               + (f"（{'、'.join(f'{s}@{f}' for f, s in legacy_ok)}）" if legacy_ok else "（无）"))
         print(f"[INFO] F4 登记锚名 {len(STALE_ANCHORS)} 个 / 例外 {len(STALE_ANCHOR_ALLOW)} 处"
               + (f"（{'、'.join(f'{n}@{f}' for f, n in STALE_ANCHOR_ALLOW)}）" if STALE_ANCHOR_ALLOW else "（无）"))
+        n_claim = len(re.findall(r"^### KB-[A-Z]+-\d+", _read(DOCS / "kb" / "01-stock-picking.md"), re.M)) \
+            + len(re.findall(r"^### KB-[A-Z]+-\d+", _read(DOCS / "kb" / "02-trading-lessons.md"), re.M))
+        print(f"[INFO] H 主张类覆盖面：{n_claim} 条中 {len(CLAIM_EXEMPT)} 条豁免（做法/定义/框架），"
+              f"{n_claim - len(CLAIM_EXEMPT)} 条应带失效条件，实际缺 {len(claim_miss)} 条")
         print(f"{'-' * 60}\n结论：{'全部通过' if problems == 0 else f'{problems} 项待处理'}"
               f"（C 的日志单轮 ≤80 行属过程指标，需人工/议程核对）")
     return 0 if problems == 0 else 1
