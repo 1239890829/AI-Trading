@@ -2,7 +2,7 @@
 
 所有主要数据对象必带审计字段：`source`（来源）、`quality`（high/medium/low/stale/invalid）、
 `quality_reasons`（触发规则）、`received_at`（接收时间）；SQLite 业务表另带
-`created_at / updated_at / data_timestamp / version`（full.md §3.3）。
+`created_at / updated_at / data_timestamp / version`。
 
 ## Quote（行情快照）
 

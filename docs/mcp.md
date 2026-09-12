@@ -1,4 +1,4 @@
-# MCP 工具体系 — full.md §16（Phase 7）
+# MCP 工具体系
 
 ## 工具清单
 

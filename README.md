@@ -27,7 +27,7 @@ cd backend && pytest
 
 无网络 / 演示模式：`ASHARE_DATA_PROVIDER=mock uvicorn app.main:app --port 8000`（数据标记 source=mock）。
 
-## 阶段路线图（对应 docs 与 full.md §23）
+## 阶段路线图（对应 `docs/PROJECT-MASTER.md` §十二）
 
 > 待办明细账本：`docs/retro-and-gaps.md`（唯一明细）；阶段复盘见 `docs/archive/plan-review.md`（已归档，只读）。
 

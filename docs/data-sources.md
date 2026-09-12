@@ -5,7 +5,7 @@
 > 降级口径必须随结论一起给（如 push2delay 的 15min 延迟）。
 > **导航**：§0 接入策略 → §1 各源能力与边界 → §2 口径差异与不可混算项 → §3 降级与告警。
 > 改数据源前**先读** `data-source-comparison.md`（实测对比），改完回填。
-> **同族文档（数据源族，2026-09-10 归口）**：选型依据 → `data-source-comparison.md`（四源实测对比）；专项评估 → `archive/orderbook-source-evaluation.md`（五档盘口，结论：ths 无五档）。
+> **同族文档（数据源族，2026-09-10 归口）**：选型依据 → `data-source-comparison.md`（四源实测对比）；专项评估 → `archive/orderbook-source-evaluation.md`（五档盘口，结论：ths 无五档）；**外部情报（⚠️ 零本机实测）** → `external-data-source-survey-2026-09-11.md`（付费源调研：四家均无 L2、两家与我们同源；未决建议见 `retro-and-gaps.md` §六 **P2-31**）。
 
 ## 0. 接入策略（§2.2 主源→备源→降级）
 

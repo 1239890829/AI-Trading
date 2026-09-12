@@ -29,6 +29,10 @@
   F2 代码裸名死引用  已删/已归档方案文档的**裸名**（如 `linkage-design §3`），F 扫不到
   F3 KB 指针错册   `见 kb/NN-x.md … KB-ENG-NN` 的条目号必须真的在那个册里
                  （KB 分册后「条目搬家」会让只写册名的指针静默指错；触发刻意写窄，见函数说明）
+  F4 废弃锚名死引用  文档里以**裸名**指向上册（如「（full.md §2.2）」）但该文件全仓不存在
+                 ——B 只认 Markdown 链接、F 只认 `docs/xxx.md`，两条都扫不到它；
+                 首次上线即实测出 **8 处 / 8 文件**（6 份 docs 正文 + INDEX + README），
+                 死锚存活 10+ 天无人发现（2026-09-12）
   G KB 孤儿条目   某条 KB 条目在全仓**零外部引用**（Karpathy wiki 的 orphan-page lint）
                  ——「沉淀了但没人用」的唯一可量化信号；排除定义行自身
 
@@ -218,6 +222,71 @@ LEGACY_SLUG_SKIP_FILES = {"scripts/doc-health.py"}
 LEGACY_SLUG_RE = re.compile(
     r"(?<![\w/.-])(" + "|".join(map(re.escape, sorted(LEGACY_DOC_SLUGS, key=len, reverse=True))) + r")(?![\w.])"
 )
+
+
+#: **F4 废弃锚名登记表**：锚名 → 真身/处置说明。
+#: 这些名字曾在现役文档里被当作"上/下册指针"使用（形如「（full.md §2.2）」），
+#: 但**锚名对应的文件从未进入 git 历史的任何一次提交**。
+#: B 项只认 Markdown 链接、F 项只认 `docs/xxx.md` 形式，两者都扫不到这种裸名
+#: ⇒ 6 份现役文档带着死锚活了 10+ 天，读者按名字找不到任何东西（2026-09-12 发现）。
+#:
+#: **为什么用登记表而不是"裸名存在性"全扫**：全扫实测误报 114 处 ——
+#: `AGENTS.md` 在仓库根（合法）、`API_REFERENCE.md` 属被调研的外部仓库、
+#: INDEX/plan-registry/summary 的「已删除 · 去向」表更是**故意**写着不存在的名字。
+#: 登记表零误报、可注入验证，与 `LEGACY_DOC_SLUGS` 同一思路；
+#: 「过宽的触发等于没有触发」（KB-ENG-58）——宁可窄而准。
+STALE_ANCHORS: dict[str, str] = {
+    "full.md": "该文件从未存在；08-29 的「全文」由 PROJECT-MASTER.md 承载，非本名",
+}
+
+#: F4 的**已登记例外**：(文件, 锚名) → 理由。
+#: 两处都是**机制自身的说明文**：`kb/07-doc-curation.md` 是 F4 的规格（必须点名这个锚名，
+#: 否则规则无法被读者对准），`INDEX.md` 是本次变更日志（记录"清除了 8 处该锚名"）。
+#: 与 `LEGACY_SLUG_SKIP_FILES` 同类取舍：**描述缺陷的文字本身必然写到缺陷名**，
+#: 代价是这两个文件里真写错锚名不会被抓——由人工策展保证（收尾体检仍看得到变化）。
+STALE_ANCHOR_ALLOW: dict[tuple[str, str], str] = {
+    ("docs/kb/07-doc-curation.md", "full.md"): "F4 项的规格说明（须点名被检查的锚名）",
+    ("docs/INDEX.md", "full.md"): "变更日志：记录本轮清除了 8 处该锚名",
+}
+
+STALE_ANCHOR_RE = re.compile(
+    r"(?<![\w/.\-])("
+    + "|".join(re.escape(n) for n in sorted(STALE_ANCHORS, key=len, reverse=True))
+    + r")(?![\w])"
+)
+
+
+def check_stale_anchors() -> list[tuple[str, int, str]]:
+    """F4：**废弃锚名**死引用（裸名指向全仓不存在的文件）。
+
+    扫描面与 B 一致（SCAN_FILES + docs 活文档面），跳过 archive/ 与 L4 逐日目录——
+    那些是只读历史，内部引用天然指向"当时存在的文件"。含记录标记（已删除/已归档…）
+    的行同样跳过：INDEX / plan-registry 的「原件已删除」去向表是合法提及。
+    """
+    out: list[tuple[str, int, str]] = []
+    targets: list[Path] = [ROOT / f for f in SCAN_FILES]
+    targets += sorted(DOCS.rglob("*.md"))
+    for t in targets:
+        if not t.exists() or t.name in LEGACY_SLUG_SKIP_FILES:
+            continue
+        rel_parts = t.relative_to(DOCS).parts if DOCS in t.parents else ()
+        if "archive" in rel_parts:
+            continue
+        if rel_parts and rel_parts[0] in L4_DIRS:
+            continue
+        rel = str(t.relative_to(ROOT))
+        txt = _read(t)
+        lines = txt.splitlines()
+        for m in STALE_ANCHOR_RE.finditer(txt):
+            name = m.group(1)
+            if (rel, name) in STALE_ANCHOR_ALLOW:
+                continue
+            ln = txt[: m.start()].count("\n")
+            seg = lines[ln] if ln < len(lines) else ""
+            if any(k in seg for k in RECORD_MARKERS):
+                continue
+            out.append((rel, ln + 1, name))
+    return out
 
 
 def check_legacy_slugs() -> tuple[list[tuple[str, int, str]], list[tuple[str, str]]]:
@@ -502,6 +571,7 @@ def main() -> int:
     legacy, legacy_ok = check_legacy_slugs()
     ptr = check_kb_pointer_files()
     orphans = check_kb_orphans()
+    stale = check_stale_anchors()
 
     def line(label: str, ok: bool, detail: str = "") -> None:
         nonlocal problems
@@ -547,6 +617,13 @@ def main() -> int:
     if ptr and not quiet:
         for f, ln, said, kid, real in ptr[:12]:
             print(f"       {f}:{ln} → 写 kb/{said}，实为 {real} ← {kid}")
+    line("F4 废弃锚名死引用", not stale,
+         f"{len(stale)} 处（裸名指向全仓不存在的文件；B/F 均扫不到）")
+    if stale and not quiet:
+        for f, ln, name in stale[:12]:
+            print(f"       {f}:{ln} → {name}（{STALE_ANCHORS[name]}）")
+        if len(stale) > 12:
+            print(f"       …另有 {len(stale) - 12} 处")
     line("G KB 孤儿条目", not orphans,
          f"{len(orphans)} 条零外部引用（沉淀了但没人用）")
     if orphans and not quiet:
@@ -566,6 +643,8 @@ def main() -> int:
               + (f"（{'、'.join(r for _, r in coderef_ok)}）" if coderef_ok else ""))
         print(f"[INFO] F2 已登记例外：{len(legacy_ok)} 处"
               + (f"（{'、'.join(f'{s}@{f}' for f, s in legacy_ok)}）" if legacy_ok else "（无）"))
+        print(f"[INFO] F4 登记锚名 {len(STALE_ANCHORS)} 个 / 例外 {len(STALE_ANCHOR_ALLOW)} 处"
+              + (f"（{'、'.join(f'{n}@{f}' for f, n in STALE_ANCHOR_ALLOW)}）" if STALE_ANCHOR_ALLOW else "（无）"))
         print(f"{'-' * 60}\n结论：{'全部通过' if problems == 0 else f'{problems} 项待处理'}"
               f"（C 的日志单轮 ≤80 行属过程指标，需人工/议程核对）")
     return 0 if problems == 0 else 1
