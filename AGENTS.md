@@ -30,7 +30,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2635 项（2573 passed / 62 skipped）· 171 文件（09-12 实测）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2652 项（2590 passed / 62 skipped）· 171 文件（09-12 实测）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。
@@ -62,14 +62,20 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 2635 项（2573 passed / 62 skipped）· 171 文件、前端 440 项 / 53 文件、eslint **0 error / 0 warn**
+> **门禁口径**：后端 2652 项（2590 passed / 62 skipped）· 171 文件、前端 440 项 / 53 文件、eslint **0 error / 0 warn**
 > （25 条回归已按 P1-27 清零；仅 notification-drawer 保留 1 处带理由的 C 类豁免）。
 > **测试规模与告警数同属「会失真的状态标注」**——改动后要实测回填，不要沿用旧数字
 > （此前「≤1 warn / 后端 580 / 前端 97 / 219 / 257 / 263 / 342 / 1925 / 2553 / 2556 / 2557 / 2574 / 2576 / 2625 /
-> 2584 / 2585 / 2590 / 2602 / 2606 / 2619 / 2620 / 2632 / 前端 423 / 429」均已被后续改动追过，教训见 `docs/retro-and-gaps.md` §七）。
+> 2584 / 2585 / 2590 / 2602 / 2606 / 2619 / 2620 / 2632 / 2635 / 前端 423 / 429」均已被后续改动追过，教训见 `docs/retro-and-gaps.md` §七）。
 > ⚠️ **交接 note 里的门禁数字也会失真**（2026-09-12 实测：note 写「2574 / 2513」，当轮为 2576 / 2515，新加 8 项后为 2584 / 2523 ⇒ 差值恰好等于新增测试数，可自洽核对）——**取数一律自己跑一遍**。
 > ✅ **自洽核对法已再次生效**（2026-09-12 批次 1 收尾）：上一值为 2632 / 429，本轮 2635 / 438 ⇒ 差值 **+3 / +9**，
 > 恰好等于本轮新增的 3 条后端守卫与 1 个前端文件（`lib/market-hours.test.ts` 9 项）——**差值对不上就说明有别的改动混入，值得查**。
+> ⚠️ **差值对不上时，别先怀疑自己——先用 worktree 实测基线**（2026-09-12 批次 3 收尾）：
+> 记录值 2635、实测 2652，差 **+17**，而我按新增用例只数到 **+15**。做法：
+> `git worktree add /tmp/base <上一个提交>` → 在 worktree 里跑 `pytest --collect-only` → 与当前 collect 输出**逐文件 diff**。
+> 实测基线 2637 ⇒ 真实差值 **+15 = 4+4+3+4+1**，全额对上；**记录值 2635 是「#29 提交之前」的数字，
+> 提交时忘了回填那 2 条 watcher 守卫**。⇒ 教训不是"数错了"，而是「**回填滞后于提交**会留下缺口」；
+> 好在 `--collect-only` 的产出可以逐文件对账，比记总量可靠。
 > **加测试文件就会让这里过期**，改测试后请顺手回填。
 
 **发布前额外做一次接口载荷体检**（plan-review 三.7，2026-09-01 纳入）：

@@ -426,6 +426,8 @@
 | `alerts-tab` 漏 `marketHours:false` | ✅ 已修 | 补 `{ marketHours: false }`——预警规则/事件/通道非行情数据，盘外不该被 ×5 降频+封顶 120s（盘后恰是告警高峰） |
 | 三 tab 漏 `key` + `longhu` 本地时区 | ✅ 已修（**诊断经复核后修正**） | `longhu-tab` 改用 `bjToday()` / `bjMinuteOfDay(now)` 判"披露日/17:00 披露点"（交易所口径本就是北京）。`limit-up` / `limit-down` / `themes` 改「URL 为取数唯一触发源」：`themes` 的 `date` 由 state 改为**派生自 `searchParams`**（消除双真相源），三处补 `key` 并**同步删掉 handler 里那次显式 `load()`**（`useResource` 依赖含 `key` 且**无去重**，只补 `key` 不删 load ⇒ 改一次日期发两次请求）。<br>⚠️ **原诊断「漏 key ⇒ 静默漏刷新」经复核前提不成立**：助手正文链接渲染为**裸 `<a href>`**（`assistant/rich-text.tsx:202`）⇒ 整页重载；仓内 `router.push` 目标**不含 `/tape`**；同页 `JumpLink` 跳涨停池必**同时改 tab** ⇒ `FadeSwap` 换节点重挂载。⇒ 定性为**潜在契约违反（latent）**——hook 文档明写「参数会变的取数必须传 `key`」而代码未遵守，一旦新增"同 tab 内跳不同日期"的链接就会静默显示旧日数据。**不宣称修复了正在发生的 bug**，注释与本节均按此表述。<br>**实测（agent-browser，6 项）**：①改日期输入 ⇒ 恰 1 次请求；②外部 `replaceState` 改写 URL ⇒ 恰 1 次请求（旧写法此路径不重拉）；③④`themes` 外部改写与输入改动各恰 1 次；⑤`limit-down` 同；⑥tab 切换携带日期正确。故 key 生效且**无重复请求** |
 
+| 板块名匹配 3 份且语义已分叉（R-1） | ✅ 已修 `9d15ac6` | 见下方「**同批重复实现：有的该合、有的必须分**」留痕段 |
+
 > **本节的方法论留痕（写入规范）**：本批次 5 项里有 **2 项在「执行前复核」这一步被改写定性**——
 > ① pipeline N+1 的守卫：原以为"删桩即成天然守卫"，实测**仍全绿**（异常吞没使断言永不触达）；
 > ② 漏 `key` 的触发路径：原引子代理结论（标 `⟳代理`）称"URL 变化不重拉"，复核后**无此路径**，改为 latent 定性。
@@ -456,6 +458,64 @@
 > ⚠️ **本条与「验收以实际渲染为准」同族**：都是在提醒**验证环境的属性会决定结论**
 > （前面是"必须真的渲染出来看"，这里是"必须在与 CI 同构的时区下跑"）。
 
+> **同批重复实现：有的该合、有的必须分**（R-1，`9d15ac6`，2026-09-12）
+>
+> 台账把「板块名匹配 3 份、语义已分叉」与「pipeline 两处 N+1」同列一类问题，但**收敛方式相反**：
+>
+> | 三份实现 | 口径 | 处置 |
+> |---|---|---|
+> | `theme_service.match_board` | 精确 → 剥后缀 → 取**最长** | **保留**（`architecture-design §2` 指定的 L3 题材看板映射） |
+> | `watcher.match_board_pct` / `backtest.match_board_name` | 精确 → 双向包含取**最短** | 收敛为唯一原语 `theme_service.match_board_name_shortest`，两处改**薄委托** |
+>
+> 判据是**语义是否等价**，不是"看着像重复"。策略 A/B 对同一输入**答案不同**
+> （`tag="AI"`、板块 `["AI应用","AI算力芯片"]` → A 取 `AI应用`、B 取 `AI算力芯片`），
+> 合并即口径变更 ⇒ 处理为「一份原语 + 一份显式契约 + **双向钉子**」，
+> 两边 docstring 都写明「不要因为看着像重复而合并」。
+> **教训**：台账/评审说"重复"时，只描述了现象，**口径是否一致必须自己判**——
+> 与 §七「断言未验证」同族：**摘要给的是线索，不是结论**。
+> 注入验证 2 条：①策略 A 改取 `max` ⇒ 5 failed；②策略 B 改取最短 ⇒ 1 failed（正是那条双向钉子）。
+
+**批次 2 执行记录（2026-09-12，**未开始** —— 一项待拍板、一项待定性）**
+
+| 项 | 状态 | 说明 |
+|---|---|---|
+| `useResource` 三态在真实用法下恒 `pending`（D-1） | ◻ 待做 | 先补约束守卫钉住现状，防他人误用（**不是删抽象**——门控确实被 45 处消费） |
+| `refresh()` 在 `enabled=false` 时把 `pending` 卡在 true（D-2） | ◻ 待做 | `✅实测` |
+| `panel-boundary` 的 `resetKey` 生产 0 处传（D-3） | ⏸ **待拍板** | 属**生产接线**（新增传参）⇒ 按承诺执行前单独确认；`panel-boundary.tsx:24` 自述「不是可选项」 |
+| `read_ids` 剪裁尾部致「重新变未读」（C-1） | ⏸ **待定性** | 需先复核触发条件与后果（自述"单调"，差值需 >500 条才可能触发），再定「修」还是「挂账并写明边界」 |
+
+**批次 3 执行记录（2026-09-12，3 项已修；逐项注入验证）**
+
+| 项 | 状态 | 证据 / 实测 |
+|---|---|---|
+| watcher 当日首拍「昨日量」串行打网络（P-1） | ✅ 已修 `220f61a` | `VR_FETCH_CONCURRENCY = 8`（对齐 `market.py` 与 relay-rank 已验证安全值）+「只补缺失项」+ `Semaphore(8)`/`gather`。**实测加速比 7.7x**（40 只 × 50ms 模拟 RTT：2000ms → 261ms）。注入验证 2 条：改回串行 ⇒ 精确变红（`最大在飞数=1`）；去掉 Semaphore ⇒ 精确变红（`并发数 24 超过上限 8`） |
+| 调度器持续失败呈现为健康（O-1） | ✅ 已修 `2179161` | 「**跑了一拍**」与「**跑成功了一拍**」分开记：新增 `last_ok_tick` / `tick_failures` / `consecutive_tick_failures` / `last_tick_error`；`_driver` 改为先记失败、再让 `tick()` 记「循环还在转」；`failing_names()`（连续 ≥ `TICK_FAILURE_ALERT_THRESHOLD=3` 且 running）与 `dead_names()`（已死）**保持正交**——一个是「已经死了」（查退出原因），一个是「还活着但活得不正常」（看错误摘要），处置动作不同；快照 `_row()` 只增键。新增 sibling 探针 `scheduler_failing_probe` 与 `scheduler_probe` **刻意报成两条 issue**；文案只含任务名等**稳定值**（`AnomalyPushGuard` 按字符串去重，含数量/时间戳会退化成每 15 分钟推一次飞书）。注入验证 2 条，均精确变红（3 failed） |
+| pipeline 另两处 N+1（P-3） | ✅ 已修 `1b7f855` | ①`candidate_pool` 题材方向反查复用既有 `member_symbols_bulk`——**遍历顺序逐字保留**（`symbols` 是有序列，`out` 按插入序取到 cap，`[:30]` 截断落在与 `get_members` 同序的列表上）；②`deep_score_candidates` 进循环前一次 `official_for_symbols_bulk`（每候选原为 2 次**同步** SQLite，24 只 ≈ 48 次），`_theme_benchmark` 随之抽**纯函数**（取数/判定分离）。新增 `official_for_symbols_bulk` / `_overrides_by_symbol` + **单点判据** `override_still_active`（单查与批量共用，避免"两处各写一遍同样的比较"）。守卫看**查询次数**而非行为（桩带调用计数，同 `test_board_fund_api.py` 范式）。注入验证 4 条，其中 ④ **只靠显式断言变红**——两路共用判据本身失效时 `bulk == single` 照旧成立（**A/B 对照只能钉「两路一致」，钉不住「判据正确」**），该边界已写进测试注释 |
+
+> **批次 3 的方法论留痕（三条新纪律）**
+>
+> ① **注入验证必须挑"真实行为破坏"，不能加注释充数**（本轮又犯一次）：给 `scheduler_failing_probe`
+> 注入时只写了 `# INJECTED: return None` 注释、行为未变 ⇒ 当然照样全绿。**"注入"的定义是让行为变得可观测地错**。
+> ② **A/B 等价对照覆盖不到"共用判据本身失效"**（见上表 P-3 的 ④）——凡是"两路共用同一判据"的重构，
+> **必须同时有 (a) 两路 A/B 相等 与 (b) 单路绝对结果断言**；只有 (a) 时判据坏了也测不出。
+> ③ **桩缺方法不是天然守卫**：批量化后 `_Catalog` 桩缺 `member_symbols_bulk` / `official_for_symbols_bulk`，
+> `AttributeError` 会被 `candidate_pool` 与批预取处的 `except Exception: log.warning(...)` 吞掉，
+> **改回逐只 N+1 的旧实现测试照样全绿**（与批次 1 那条 `_Store.directions_of` 是同一个坑，隔天又踩到形态变体）。
+> ⇒ 应对是**把计数放进桩**，断言「批量恰一次、单查恰零次」，并额外断言**未走异常兜底**（否则次数断言无意义）。
+
+> **门禁与自洽核对（批次 3 收尾，全绿）**：后端 **2652 项（2590 passed / 62 skipped）· 171 文件**、
+> 前端 **440 项 / 53 文件**、`tsc` 0、`eslint` 0 error / 0 warn、`pyflakes` 0、`doc-health` 全部通过、
+> 后端全量耗时 **92.76s**（前提：8000 在跑）。
+> **自洽核对踩到的坑（可复用做法）**：记录值 2635、实测 2652 ⇒ 差 **+17**，但我按新增用例只数到 **+15**。
+> 做法：`git worktree add /tmp/base <上一提交>` → 在 worktree 里 `pytest --collect-only` → 与当前 collect 输出**逐文件 diff**。
+> 实测真实基线 **2637** ⇒ 差值 **+15 = 4+4+3+4+1**（`test_scheduler_registry` / `test_data_health_limit_probe` /
+> `test_theme_service` / `test_picks_pipeline` / `test_theme_catalog`），全额对上。
+> 缺口那 **2 条**来自「#29 提交时加了 2 条 watcher 守卫但忘了回填」⇒ 教训不是"数错了"，
+> 而是「**回填滞后于提交**会留下缺口」；`--collect-only` 的逐文件对账比记总量可靠。
+> 顺带修正：两笔提交信息里的测试项数原写 `10→13` 之外的 `16→19`、`5→10` 均为记错基线，
+> 已**软回退重做提交**改为实测值（`test_data_health_limit_probe` 10→13、`test_picks_pipeline` 6→10）。
+> **原则**：未推送的提交若含失真的数字，就地重做比留错账好——本项目的核心纪律就是"数字当轮实测回填"。
+
 **评审结论**：方向正确、交付密度高、假绿意识显著提升；但有 **1 处设计过度 + 3 处高优热点 + 若干配置遗漏**。
 
 **高优（已实测/读码确认，待执行）**
@@ -463,9 +523,9 @@
 | # | 项 | 证据 | 出口 |
 |---|---|---|---|
 | ✚ | **`useResource` 三态在真实用法下恒 `pending` 且零消费** | `✅实测`：45 个调用点全经薄壳 `usePollingFetch` 弃用返回值；`fn` 不返回值时 flush 后与 10 分钟后均 `{status:"pending", pending:true}` | 批次 2（先补约束守卫钉住现状，防他人误用。**不是删抽象**——门控确实被 45 处消费） |
-| ✚ | **watcher 当日首拍串行打网络**（`watcher.py:708-710`，每只一次真实 HTTP） | `◻读码` | 批次 3（并发化，参照 P0-3 relay-rank 的 8x 做法；纯性能、行为等价） |
+| ✚ | **watcher 当日首拍串行打网络**（`watcher.py:708-710`，每只一次真实 HTTP） | `◻读码` | ✅ 已修 `220f61a`（批次 3 P-1；实测 7.7x） |
 | ✚ | **pipeline 循环内 `directions_of` 冗余 N+1**（`picks_pipeline.py:155-156`，而 `list_events` 已 `selectinload`） | `◻读码`（`store.py:156` 已预加载） | 批次 1（改用 `row.directions`，易修） |
-| ✚ | **调度器持续失败呈现为健康**（`scheduler.py:275-281` 吞异常 + 心跳照更新，`failures` 只在整体死亡时 +1） | `◻读码` | 批次 3（单拍失败计数 + 告警，同族于 P0-7 ③） |
+| ✚ | **调度器持续失败呈现为健康**（`scheduler.py:275-281` 吞异常 + 心跳照更新，`failures` 只在整体死亡时 +1） | `◻读码` | ✅ 已修 `2179161`（批次 3 O-1；单拍失败计数 + 告警，同族于 P0-7 ③） |
 
 **中优**
 
@@ -476,9 +536,9 @@
 | ✚ | 通知 `ts` 硬编码 `08:40:00`（`notifications.py:190`，编造时间戳） | 批次 1 |
 | ✚ | 「是否盘中」两份且区间不同（`kline-live.ts:15` 09:30-11:30/13:00-15:00 vs `market-hours.ts:9` 09:15-15:15） | 批次 1（**注意：两者语义不同，不可直接合并**，须先判明各自调用点要的是哪种） |
 | ✚ | 「交易分钟序」两份（`flow-intraday-chart.tsx:34` vs `minute-chart.tsx:146`，下界不同） | 批次 1 |
-| ✚ | 板块名匹配 3 份且语义已分叉（`watcher.py:75` / `backtest.py:113` / `theme_service.py:779`） | 批次 1 |
+| ✚ | 板块名匹配 3 份且语义已分叉（`watcher.py:75` / `backtest.py:113` / `theme_service.py:779`） | ✅ 已修 `9d15ac6`（批次 1 R-1；**策略 B 刻意不合并**，见 6.13 留痕段） |
 | ✚ | `panel-boundary` 的 `resetKey` 生产 0 处传 ⇒ 切 tab 不恢复 | 批次 2 |
-| ✚ | pipeline 另两处 N+1（`get_members` 每题材一 session / `get_official_for_symbol` 每候选 2 查） | 批次 3 |
+| ✚ | pipeline 另两处 N+1（`get_members` 每题材一 session / `get_official_for_symbol` 每候选 2 查） | ✅ 已修 `1b7f855`（批次 3 P-3） |
 | ✚ | `test_event_loop_no_block` 白名单不含 pipeline/watcher ⇒ 上述阻塞不被门禁覆盖 | 批次 5 |
 | ✚ | 设计文档能力失真**根因未解**（只加不改，无机制防止） | 批次 5（文档能力锚点自动对账） |
 | ✚ | `alerts-tab.tsx:71` 漏 `marketHours:false`（盘外 10s→50s，与同仓 4 处做法不一致） | 批次 1（`⟳代理`，执行前复核） |
