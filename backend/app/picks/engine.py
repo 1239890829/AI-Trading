@@ -263,7 +263,11 @@ def score_capital(net_inflow: float | None, volume_ratio: float | None, on_lhb: 
     """资金面：主力净流入（亿）+ 量能 + 龙虎榜。
 
     - 净流入：≥2 亿 +30 / 0.5-2 亿 +18 / −0.5-0.5 亿 中性 / <−1 亿 −20
-    - 量比：≥1.5 +12 / 0.8-1.5 +5 / <0.5 −8（缩量）
+    - 量比（**倒 U 形状，KB-STOCK-32 实证改写，2026-09-13**）：marketdb 10y 全 A 实测
+      5 日基线量比分位 p50=0.91 / p90=1.65 / p95=2.08；次日收益在适度放量区（≈p50-p90）
+      达峰、p95+ 极端区转负（D10 = −0.127%/日）。原「≥1.5 +12」整体落在转弱/负区 ⇒
+      ≥2.1 −10（极端放量）/ 1.65-2.1 中性（转弱区）/ 0.9-1.65 +12（适度放量=峰区）/
+      0.5-0.9 +5 / <0.5 −8（显著缩量）
     - 龙虎榜上榜 +8（有公开资金关注；不区分买卖净额，basis 注明）
     """
     parts: list[str] = []
@@ -282,13 +286,18 @@ def score_capital(net_inflow: float | None, volume_ratio: float | None, on_lhb: 
         else:
             parts.append(f"资金净额 {round(yi, 2)} 亿（中性）")
     if volume_ratio is not None:
-        if volume_ratio >= 1.5:
+        if volume_ratio >= 2.1:
+            score -= 10
+            parts.append(f"量比 {volume_ratio}（极端放量：实证尾区隔日转负，KB-STOCK-32）")
+        elif volume_ratio >= 1.65:
+            parts.append(f"量比 {volume_ratio}（转弱区，中性）")
+        elif volume_ratio >= 0.9:
             score += 12
-            parts.append(f"量比 {volume_ratio}（放量）")
-        elif volume_ratio >= 0.8:
+            parts.append(f"量比 {volume_ratio}（适度放量）")
+        elif volume_ratio >= 0.5:
             score += 5
             parts.append(f"量比 {volume_ratio}")
-        elif volume_ratio < 0.5:
+        else:
             score -= 8
             parts.append(f"量比 {volume_ratio}（显著缩量）")
     if on_lhb:
