@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
+from collections.abc import Iterable
 from datetime import date, timedelta
 
 from app.core.bjtime import beijing_today
@@ -776,12 +777,68 @@ def _strip_board_suffix(name: str) -> str:
     return name
 
 
+# ---------------------------------------------------------------------------
+# 题材标签 → 板块名：**两套策略刻意并存，勿合并**（R-1，2026-09-12 评审批次 1）
+#
+# | 策略 | 位置 | 规则 | 用在 |
+# |---|---|---|---|
+# | **A 最短包含** | `match_board_name_shortest`（本函数） | 精确 → 双向包含取**板块名最短** | 盘中 `watcher.match_board_pct`、回放 `backtest.match_board_name` |
+# | **B 剥后缀取最长** | `match_board`（本模块） | 精确 → 剥后缀精确 → 剥后缀后取**最长** | L3 题材看板（`architecture-design.md §2` 指定映射） |
+#
+# 两者会给出**不同答案**。反例（已固化为守卫
+# `tests/test_theme_service.py::test_two_board_match_policies_are_deliberately_divergent`）：
+#     tag="AI"、板块=["AI应用", "AI算力芯片"]
+#       → A 取 "AI应用"（最短，语义最贴近）
+#       → B 取 "AI算力芯片"（最长，更具体）
+# 即：**同一个题材标签，在"盘中/回放分析"与"题材看板展示"两条路径上可能落到不同板块**。
+#
+# ⚠️ 这是**已知且待决断的口径差异，不是疏忽**——合并即改变题材→板块映射结果，
+# 属口径变更（本仓纪律：此类改动须先拍板）。故本轮只做两件事：
+#   ① 把 A 的两份冗余实现收敛为下方唯一实现（行为等价，有测试与注入验证）；
+#   ② 把分叉写成显式契约 + 双向守卫，防止将来有人"顺手清理"时静默合并。
+# ---------------------------------------------------------------------------
+
+
+def match_board_name_shortest(tag: str, names: Iterable[str]) -> str | None:
+    """题材标签 → 板块名：**精确优先**；否则「双向包含」里取**板块名最短**的那个。
+
+    最短 = 语义最贴近（「粮食」→「粮食概念」而非「粮食安全概念」）；
+    匹配不到 → None（unknown），**绝不拿不相干的板块冒充**。
+
+    **唯一实现**：`watcher.match_board_pct`（盘中，取板块涨幅）与
+    `backtest.match_board_name`（回放，取板块名）此前各写一份同口径实现
+    ——`backtest` 的模块 docstring 自己就写着"与盘中 `watcher.match_board_pct`
+    同口径"。本函数即那份口径的唯一落点（R-1）。两者改为薄委托，行为等价：
+    原有的 `test_watcher.py::test_match_board_pct_exact_contains_none` 与
+    `test_picks_backtest.py::test_match_board_name_same_semantics_as_watcher`
+    就是等价性的回归位。
+
+    与 `match_board`（策略 B）**不是同一政策**，刻意不合并，理由见上方策略表。
+
+    ⚠️ 已知边界（沿袭旧实现，本轮刻意未改）：`tag` 为空串时，
+    「双向包含」判定里的 `"" in name` 恒为真 ⇒ 会匹配到**板块名最短的那一个**。
+    这属于"空标签不该有归属"的隐患，但修它同样是口径变更，另行决断。
+    """
+    names = [n for n in names if n]
+    if tag in names:
+        return tag
+    candidates = [n for n in names if tag in n or n in tag]
+    if not candidates:
+        return None
+    return min(candidates, key=len)
+
+
 def match_board(theme: str, index: dict[str, dict]) -> dict | None:
-    """把题材名匹配到东财板块。
+    """把题材名匹配到东财板块（**策略 B：剥后缀 → 多命中取最长**）。
 
     ths 题材标签体系与东财板块名体系不同（"转基因玉米" vs "转基因"、
     "黄金珠宝" vs "黄金概念"），精确匹配命中率极低，必须做剥离后缀后的双向包含匹配；
     多命中时取板块名最长的（更具体）。
+
+    ⚠️ 本函数与 `match_board_name_shortest`（策略 A）**政策不同、答案可能不同**，
+    刻意并存（策略表与反例见 `match_board_name_shortest` 上方注释块）。
+    这是 L3 题材看板指定的映射实现（`app/market/board_flow.py` 层纪律），
+    不要因为"看着像重复"而合并——合并会改变题材看板落到哪个板块上。
     """
     if not theme or not index:
         return None

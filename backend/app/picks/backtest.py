@@ -44,7 +44,7 @@ from datetime import date
 from app.market.performance import compute_performance
 from app.picks.intraday_rules import confirm_signal, is_performance_tag
 from app.sentiment.calibration import percentile_of
-from app.services.theme_service import parse_theme_tags
+from app.services.theme_service import match_board_name_shortest, parse_theme_tags
 from app.core.bjtime import beijing_now
 
 log = logging.getLogger(__name__)
@@ -111,18 +111,13 @@ def tag_stats(pool, tag: str) -> dict | None:
 
 
 def match_board_name(tag: str, board_names: list[str]) -> str | None:
-    """题材标签 → ths 官方板块名：精确 → 双向包含取最短（语义最贴近）。
+    """题材标签 → ths 官方板块名。
 
-    与盘中 `watcher.match_board_pct` 同口径（那边返回涨幅、这边返回名字，
-    匹配语义一致：绝不拿不相干的板块冒充）。匹配不到 → None。
+    口径（精确优先 → 双向包含取**板块名最短**）的唯一实现在
+    `theme_service.match_board_name_shortest`；本函数是薄委托，保留此名是因为
+    报告与测试按它检索（R-1 收敛后不再有第二份实现）。匹配不到 → None。
     """
-    names = [n for n in board_names if n]
-    if tag in names:
-        return tag
-    candidates = [n for n in names if tag in n or n in tag]
-    if not candidates:
-        return None
-    return min(candidates, key=len)
+    return match_board_name_shortest(tag, board_names)
 
 
 # ---------------------------------------------------------------- 纯函数：板块日 K 视图

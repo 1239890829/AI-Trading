@@ -21,6 +21,8 @@ from app.services.theme_service import (
     echelon_completeness,
     formation_level,
     judge_theme_stage,
+    match_board,
+    match_board_name_shortest,
     normalize_theme,
     parse_theme_tags,
     seal_phase,
@@ -30,6 +32,68 @@ from app.services.theme_service import (
     theme_health_note,
     theme_strength_score,
 )
+
+
+# ---------------------------------------------- 题材→板块匹配：两套策略（R-1）
+def test_match_board_name_shortest_is_the_single_implementation():
+    """策略 A（精确 → 双向包含取**最短**）的契约。
+
+    它是 `watcher.match_board_pct` 与 `backtest.match_board_name` 的唯一实现。
+    这两个消费方各自的既有用例（`test_watcher.py` / `test_picks_backtest.py`）
+    共同构成"收敛未改变行为"的回归位——本用例只钉原语自己的语义，
+    含**空名过滤**与**不做后缀剥离**（那是策略 B 的事）。
+    """
+    names = ["粮食概念", "粮食安全概念", "低空经济", "", "白酒"]
+    assert match_board_name_shortest("粮食概念", names) == "粮食概念"   # 精确优先
+    assert match_board_name_shortest("粮食", names) == "粮食概念"       # 取最短（非"粮食安全概念"）
+    assert match_board_name_shortest("低空经济概念", names) == "低空经济"  # 板块名包含于标签
+    assert match_board_name_shortest("量子科技", names) is None         # 匹配不到不冒充
+    assert match_board_name_shortest("算力", ["", "算力"]) == "算力"    # 空名过滤
+
+    # ⚠️ **不做后缀剥离**（与策略 B 的关键差异）：标签带"概念"后缀时，
+    # 这里只能靠"板块名包含于标签"命中，而**不会**把"粮食概念"剥成"粮食"去精确匹配
+    assert match_board_name_shortest("黄金概念", ["黄金"]) == "黄金"
+    assert match_board_name_shortest("黄金概念", ["黄金珠宝"]) is None, (
+        "策略 A 不剥后缀 ⇒ 「黄金概念」不会命中「黄金珠宝」（那是策略 B 的能力）"
+    )
+
+
+def test_two_board_match_policies_are_deliberately_divergent():
+    """**双向钉子**：两套策略在两处**都必须保持不同**，防止将来被"顺手合并"。
+
+    合并这两个函数会改变题材→板块的映射结果（属口径变更），所以本用例同时钉住
+    两个方向：既反对"把 A 改成 B"，也反对"把 B 改成 A"。任何一侧被统一，这里必红。
+
+    背景：`app/market/board_flow.py` 的 L1~L4 层纪律把 `theme_service.match_board`
+    指定为 L3 题材看板的映射实现；而 `watcher` / `backtest` 走的是策略 A。
+    同一个题材标签在"看板展示"与"盘中/回放分析"两条路径上可能落到不同板块——
+    这是**已知且待决断**的口径差异（R-1 只收敛了 A 的内部冗余，未动这个分歧）。
+    """
+    index = {"AI应用": {"code": "BK1"}, "AI算力芯片": {"code": "BK2"}}
+
+    # 策略 A：多命中取**最短**
+    assert match_board_name_shortest("AI", index.keys()) == "AI应用"
+    # 策略 B：多命中取**最长**
+    assert match_board("AI", index) == index["AI算力芯片"]
+
+    # 后缀剥离方向：标签带后缀时 B 能靠剥后缀精确命中，A 只能靠包含关系
+    assert match_board("黄金概念", {"黄金": {"code": "BK3"}}) == {"code": "BK3"}
+    assert match_board_name_shortest("黄金概念", ["黄金"]) == "黄金"  # 靠"板块名 ⊂ 标签"
+
+    # B 独有的早退：`theme` 或 `index` 为空直接 None；A 无此分支（空 names 自然 None）
+    assert match_board("", index) is None and match_board("AI", {}) is None
+    assert match_board_name_shortest("AI", []) is None
+
+
+def test_match_board_name_shortest_empty_tag_edge_is_pinned_not_endorsed():
+    """**已知边界**：空标签在策略 A 下会命中"板块名最短的那一个"。
+
+    成因是「双向包含」里的 `"" in name` 恒真。这是沿袭旧实现（`watcher` 与
+    `backtest` 此前行为一致）的隐患，本轮**刻意未改**——修它属口径变更。
+    本用例存在的意义是**把边界写下来**，而不是宣称这是期望行为：
+    将来若拍板改为"空标签 → None"，改这里即可（红是预期的，不是回归）。
+    """
+    assert match_board_name_shortest("", ["白酒", "粮食概念"]) == "白酒"
 
 
 def _rec(symbol: str, reason: str | None, boards: int = 1):

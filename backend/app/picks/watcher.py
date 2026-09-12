@@ -58,7 +58,11 @@ from app.picks.intraday_rules import (
     position_size,
 )
 from app.repositories.alert_repo import AlertRepository
-from app.services.theme_service import normalize_theme, parse_theme_tags
+from app.services.theme_service import (
+    match_board_name_shortest,
+    normalize_theme,
+    parse_theme_tags,
+)
 from app.core.bjtime import beijing_now, to_beijing  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
@@ -76,21 +80,15 @@ VR_FETCH_CONCURRENCY = 8
 
 
 def match_board_pct(tag: str, board_pct: dict[str, float]) -> float | None:
-    """题材标签 → 东财板块涨幅。精确命中优先；否则取"包含关系且板块名最短"
-    （最短 = 语义最贴近，如「粮食」→「粮食概念」而非「粮食安全概念」）；
-    仍无 → None（unknown）。绝不拿不相干的板块冒充。
+    """题材标签 → 东财板块涨幅。
+
+    匹配口径（精确优先 → 双向包含取**板块名最短**）的**唯一实现**在
+    `theme_service.match_board_name_shortest`——本函数只负责把命中的板块名换成涨幅
+    （R-1，2026-09-12 评审批次 1：此前 `watcher` 与 `backtest` 各写一份同口径实现）。
+    匹配不到 → None（unknown）。绝不拿不相干的板块冒充。
     """
-    if tag in board_pct:
-        return board_pct[tag]
-    candidates = [
-        (name, pct)
-        for name, pct in board_pct.items()
-        if name and (tag in name or name in tag)
-    ]
-    if not candidates:
-        return None
-    candidates.sort(key=lambda x: len(x[0]))
-    return candidates[0][1]
+    name = match_board_name_shortest(tag, board_pct.keys())
+    return board_pct[name] if name is not None else None
 
 
 # ---------------------------------------------------------------- 纯状态机
