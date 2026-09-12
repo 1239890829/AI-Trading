@@ -34,6 +34,7 @@ import logging
 from collections import defaultdict
 from datetime import date, timedelta
 
+from app.core.bjtime import beijing_today
 from app.market import board_flow
 from app.services.dragon_service import (
     dragon_score,
@@ -947,7 +948,7 @@ async def _auction_gaps(provider, trade_date: date, pool: list) -> dict[str, flo
     - provider 需实现 get_auction_snapshot（mock 桩/旧链可能没有）。
     分批 ≤100 只（ths 单次上限）；非就绪条目（not_ready/suspended）跳过不标 gap。
     """
-    if trade_date != date.today():
+    if trade_date != beijing_today():
         return None
     fn = getattr(provider, "get_auction_snapshot", None)
     if fn is None:

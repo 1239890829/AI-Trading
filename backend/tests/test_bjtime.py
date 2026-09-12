@@ -196,3 +196,30 @@ def test_alert_triggered_at_is_not_shifted_again():
 
     assert "14:59:31" in text, f"触发时间被二次偏移了：{text!r}"
     assert "22:59" not in text
+
+
+# ---------------------------------------------------------------- 5. date.today() 禁令（S2-8 阶段 2.5 收口，2026-09-12）
+
+def test_no_naive_date_today_in_app():
+    """运行时代码禁止 `date.today()`——日期归属一律 `beijing_today()`。
+
+    `date.today()` 按进程时区取日：+8 生产机「碰巧正确」，CI/海外机器错一天。
+    用 ast 解析（不是文本扫描）——文档里「不要用 date.today()」的教学文字不算违例。
+    """
+    import ast
+
+    offenders: list[str] = []
+    for p in sorted((BACKEND / "app").rglob("*.py")):
+        rel = p.relative_to(BACKEND).as_posix()
+        tree = ast.parse(p.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "today"
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "date"):
+                offenders.append(f"{rel}:{node.lineno}")
+    assert not offenders, (
+        "以下位置用了 date.today()（进程时区取日，跨时区错一天），"
+        "应改为 `from app.core.bjtime import beijing_today`：\n  " + "\n  ".join(offenders)
+    )

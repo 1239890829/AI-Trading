@@ -57,7 +57,7 @@ from app.services.market_snapshot import (
 from app.services.speed_sampler import SpeedSampler
 from app.services.dragon_service import apply_position_with_5d
 from app.services.theme_catalog_service import official_multi_day_changes
-from app.core.bjtime import beijing_now, beijing_now_naive  # S2-8 时区收敛
+from app.core.bjtime import beijing_now, beijing_now_naive, beijing_today  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["market"])
@@ -1002,7 +1002,7 @@ async def market_hot_rank_trend(
     if not (len(sym) == 6 and sym.isdigit()):
         raise HTTPException(status_code=422, detail="symbol 须为 6 位股票代码")
 
-    end = date.today()
+    end = beijing_today()
     start = end - timedelta(days=days - 1)
     cache = cache_on(request.app.state, "market.heat.rank-trend", 300, maxsize=64)
     key = (sym, days)
@@ -1123,7 +1123,7 @@ async def auction_benchmark(
     hub: QuoteHub = Depends(get_hub),
 ) -> dict:
     """短线风向标竞价基准（按日，含题材 tags）——新题材预判与竞价联动验证的数据面。"""
-    d = date.fromisoformat(date_str) if date_str else date.today()
+    d = date.fromisoformat(date_str) if date_str else beijing_today()
     try:
         rows = await hub.provider.get_auction_benchmark(d)
     except Exception as exc:

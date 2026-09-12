@@ -44,6 +44,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from app.core.bjtime import beijing_today
+
 log = logging.getLogger(__name__)
 
 # 有效权重下限：低于此值视为「输入不足」，给 None（未判定）而非硬凑一个档位
@@ -249,9 +251,9 @@ def evaluate(
     by_code = {s.code: s for s in use_specs}
 
     if asof is None:
-        asof = _date.today()
+        asof = beijing_today()
     elif not isinstance(asof, _date):
-        asof = _parse_date(str(asof)) or _date.today()
+        asof = _parse_date(str(asof)) or beijing_today()
 
     rows: list[dict] = []
     covered: set[str] = set()

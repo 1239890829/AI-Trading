@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.ttl_cache import cache_on
-from app.core.bjtime import beijing_now
+from app.core.bjtime import beijing_now, beijing_today
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ async def default_trade_date(hub) -> date:
 
 def default_trade_date_weekend_fallback() -> date:
     """周末回退规则（交易日历不可用时的兜底）。"""
-    d = date.today()
+    d = beijing_today()
     return {5: d - timedelta(days=1), 6: d - timedelta(days=2)}.get(d.weekday(), d)
 
 

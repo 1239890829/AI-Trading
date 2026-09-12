@@ -69,6 +69,7 @@ import logging
 from dataclasses import dataclass
 from datetime import date
 
+from app.core.bjtime import beijing_today
 from app.core.ttl_cache import TTLCache
 
 log = logging.getLogger(__name__)
@@ -244,9 +245,9 @@ def classify(points: list[OniPoint], *, asof=None) -> dict:
     - `unjudged_reason`：`state is None` 时具名原因
     """
     if asof is None:
-        asof = date.today()
+        asof = beijing_today()
     elif not isinstance(asof, date):
-        asof = _parse_date(str(asof)) or date.today()
+        asof = _parse_date(str(asof)) or beijing_today()
 
     usable = [p for p in points if season_end(p) < asof]
     base = {

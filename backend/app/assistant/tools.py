@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from app.core.ttl_cache import TTLCache
-from app.core.bjtime import beijing_now  # S2-8 时区收敛
+from app.core.bjtime import beijing_now, beijing_today  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 
@@ -144,7 +144,7 @@ def _valid_date(raw: str | None, trading_days: set[str] | None) -> tuple[str | N
         parsed = datetime.strptime(d, "%Y-%m-%d").date()
     except ValueError:
         return None, f"日期不合法：{raw!r}"
-    if parsed > date.today():
+    if parsed > beijing_today():
         return None, f"日期不能晚于今天：{d}"
     if trading_days and d not in trading_days:
         return None, f"{d} 不是交易日"
@@ -218,11 +218,11 @@ def _latest_trade_day(ctx: ToolContext) -> date:
     而模型会照着"没有数据"回答用户（2026-09-06 周日实测：今天=周日 → 必须退到周五）。
     """
     if ctx.trading_days:
-        today = date.today().isoformat()
+        today = beijing_today().isoformat()
         past = sorted(d for d in ctx.trading_days if d <= today)
         if past:
             return datetime.strptime(past[-1], "%Y-%m-%d").date()
-    d = date.today()
+    d = beijing_today()
     return {5: d - timedelta(days=1), 6: d - timedelta(days=2)}.get(d.weekday(), d)
 
 

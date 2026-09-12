@@ -19,12 +19,12 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 
 from app.api.deps import get_hub, require_write_token
+from app.core.bjtime import beijing_today
 from app.core.db import get_session_factory
 from app.services.picks_pipeline import (
     PipelineDeps,
@@ -92,7 +92,7 @@ async def _live_style_routing(request: Request, hub: QuoteHub, stored: dict | No
 
 @router.get("/today")
 async def today_picks(request: Request, hub: QuoteHub = Depends(get_hub)) -> dict:
-    today = date.today().isoformat()
+    today = beijing_today().isoformat()
     with _db() as db:
         from app.models.daily_pick import DailyPickSet
 

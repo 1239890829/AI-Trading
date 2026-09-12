@@ -10,6 +10,7 @@ import asyncio
 import logging
 from datetime import date
 
+from app.core.bjtime import beijing_today
 from app.core.config import settings
 from app.core.freshness import Freshness
 from app.market import trade_calendar as tc
@@ -222,7 +223,7 @@ async def compute_market_sentiment(
         **result,
         "pool_today_count": len(pool_today),
         "pool_yesterday_count": len(pool_yesterday),
-        "is_last_trade_date_today": anchor == date.today(),
+        "is_last_trade_date_today": anchor == beijing_today(),
         # P2-4 的可观测出口：本次是否复用了调用方预取的涨停池（少打一次上游）。
         "limit_up_pool_reused": reused_pool,
     }

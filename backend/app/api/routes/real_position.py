@@ -9,13 +9,13 @@
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.api.deps import get_hub
+from app.core.bjtime import beijing_today
 from app.core.db import get_session_factory
 from app.services.quote_hub import QuoteHub
 from app.services.real_position_service import load_positions
@@ -130,7 +130,7 @@ async def create_trade(body: TradeIn) -> dict:
     symbol = body.symbol.strip()
     if not symbol:
         raise HTTPException(status_code=400, detail="symbol 不能为空")
-    traded_at = body.traded_at or date.today().isoformat()
+    traded_at = body.traded_at or beijing_today().isoformat()
     with _sf() as db:
         from app.models.real_position import RealTrade
 

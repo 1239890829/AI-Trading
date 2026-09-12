@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 from datetime import date, datetime, timezone
 
+from app.core.bjtime import beijing_today
 from app.schemas.market import (
     Kline,
     LimitDownRecord,
@@ -144,7 +145,7 @@ def normalize_trade(symbol: str, row: str) -> Trade | None:
     parts = row.split(",")
     if len(parts) < 3:
         return None
-    today = date.today().isoformat()
+    today = beijing_today().isoformat()
     try:
         ts = datetime.strptime(f"{today} {parts[0]}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
     except ValueError:

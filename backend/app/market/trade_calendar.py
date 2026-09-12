@@ -43,7 +43,7 @@ import logging
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from app.core.bjtime import beijing_now  # S2-8 时区收敛
+from app.core.bjtime import beijing_now, beijing_today  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 
@@ -289,7 +289,7 @@ def last_trade_date(days: list[date], asof: date | None = None) -> date | None:
 
     if not days:
         return None
-    asof = asof or date.today()
+    asof = asof or beijing_today()
     i = bisect.bisect_right(days, asof)
     return days[i - 1] if i > 0 else None
 
