@@ -1465,7 +1465,7 @@ async def search(q: str = Query(min_length=1, max_length=20), hub: QuoteHub = De
 
 
 async def _verify_board_multi_day(request: Request, board_payload: dict) -> None:
-    """T3/B3（linkage-design §3.5）：用同花顺官方板块 K 线交叉验证/替换
+    """T3/B3（architecture-design §1）：用同花顺官方板块 K 线交叉验证/替换
     板块 3/5/10 日涨跌幅（东财字段序推断值）。
 
     - 题材名（ths 体系）直接映射官方概念目录 → 板块 K 线 → 重算涨跌幅
@@ -1544,7 +1544,7 @@ async def _verify_board_multi_day(request: Request, board_payload: dict) -> None
 
 
 def _attach_official_flags(request: Request, themes_list: list[dict]) -> None:
-    """L5（linkage-design §3.2）+ 09-08 簇级官方概念挂靠：见 app/services/official_match.py。
+    """L5（architecture-design §1）+ 09-08 簇级官方概念挂靠：见 app/services/official_match.py。
 
     盘面题材看板与猎场机会视图共用同一挂靠实现（成分重叠反查，非簇名精确匹配）。
     """

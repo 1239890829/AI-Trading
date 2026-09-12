@@ -10,7 +10,7 @@ from app.models.watchlist import Base
 
 
 class Theme(Base):
-    """题材字典（同花顺官方概念目录，linkage-design §3）。
+    """题材字典（同花顺官方概念目录，architecture-design §1）。
 
     此前题材名只存在于涨停股 reason 串里——无涨停发生的题材（如粮食概念）
     在系统里不存在。本表以官方目录为全集，是题材—梯队—个股映射的地基。
@@ -31,7 +31,7 @@ class Theme(Base):
 class ThemeMember(Base):
     """题材归属（成分股快照）。
 
-    归属来源分层（linkage-design §3.2，高层压制低层、并列不覆盖）：
+    归属来源分层（architecture-design §1，高层压制低层、并列不覆盖）：
     ths_official=官方成分（结构性）> limit_up_reason=涨停归因（行为性）
     > event_infer=事件推断（推断性）> 人工 override 直接裁决。
     本表只存官方成分；其余两层在展示时叠加，不落库。
@@ -49,7 +49,7 @@ class ThemeMember(Base):
 
 
 class ThemeOverride(Base):
-    """人工归属纠错（linkage-design §3.4）。权重高于一切自动归属。"""
+    """人工归属纠错（architecture-design §1）。权重高于一切自动归属。"""
 
     __tablename__ = "theme_override"
 

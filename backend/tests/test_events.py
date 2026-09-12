@@ -1,4 +1,4 @@
-"""事件驱动最小闭环测试（linkage-design §4 E1）。网络全 mock。"""
+"""事件驱动最小闭环测试（architecture-design §1 E1）。网络全 mock。"""
 
 from __future__ import annotations
 

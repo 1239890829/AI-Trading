@@ -1,4 +1,4 @@
-"""题材字典与官方成分同步（linkage-design §3）。
+"""题材字典与官方成分同步（architecture-design §1）。
 
 数据源：同花顺官方 fuyao API（key 已在 settings.ths_api_key）：
 - 目录 ``GET /api/a-share-index/catalog/ths-index-list?tag=cn_concept``（一次全量，实测 390 个）
@@ -61,7 +61,7 @@ def parse_board_bars(payload: dict) -> list[dict]:
 
 
 def official_multi_day_changes(bars: list[dict]) -> dict:
-    """官方板块 K 线 → 3/5/10 日涨跌幅（纯函数，linkage-design §3.5 T3）。
+    """官方板块 K 线 → 3/5/10 日涨跌幅（纯函数，architecture-design §1 T3）。
 
     N 日涨幅 = close[-1] / close[-1-N] - 1（%）。交易日不足或除数为 0 → None，
     不用部分数据硬凑。
@@ -149,7 +149,7 @@ def aggregate_hot_themes(
 ) -> dict:
     """热股榜 × 官方成分 → 题材级人气聚合（纯函数，B1 热股榜消费端）。
 
-    归属口径 = 官方成分反查（linkage-design L3），不用关键词猜题材。
+    归属口径 = 官方成分反查（architecture-design §1 L3），不用关键词猜题材。
     - 题材热度 = 题材内热股 heat 合计；热股家数与榜内最高排名成员一并给出；
     - rank_change 沿用榜内最高排名成员的值——不单造「题材排名变化」指标，保持可解释；
     - 无官方归属的热股只留在 stocks 列表（附空 themes），不参与题材聚合（诚实口径）。
@@ -464,7 +464,7 @@ class ThemeCatalogService:
             ]
 
     def get_official_for_symbol(self, symbol: str, *, apply_manual: bool = True) -> list[dict]:
-        """反查：该股票属于哪些官方题材（linkage-design §3.2 L3 层）。
+        """反查：该股票属于哪些官方题材（architecture-design §1 L3 层）。
 
         返回 [{theme_code, theme_name, source}]；默认叠加人工 override（exclude 剔除 /
         include 追加），来源徽标由前端按 source 渲染。

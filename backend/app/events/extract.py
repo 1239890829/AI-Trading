@@ -1,4 +1,4 @@
-"""事件抽取规则引擎（linkage-design §4.3-4.4，E1 最小闭环）。
+"""事件抽取规则引擎（architecture-design §1，E1 最小闭环）。
 
 原则（延续项目范式）：
 - **规则先行、可解释**：每个判定带 basis；LLM 只是后续增强层（app/news/llm.py

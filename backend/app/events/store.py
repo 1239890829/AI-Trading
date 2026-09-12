@@ -1,4 +1,4 @@
-"""事件驱动选股：EventCard 存储/查询（linkage-design §4.4 E1）。
+"""事件驱动选股：EventCard 存储/查询（architecture-design §1 E1）。
 
 抽取（extract.py，纯函数）与存储（本模块）分离。EventStore 只做同步的
 入库去重与查询；标的池计算需要异步懒同步成分，由路由层编排（见

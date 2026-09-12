@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date
+from pathlib import Path
 
 from app.core.db import get_engine, get_session_factory
 from app.events.chains import macro_calendar_note, macro_event_line, select_macro_events
@@ -14,6 +16,9 @@ from app.events.extract import build_event
 from app.events.store import EventStore
 
 import pytest
+
+#: 仓库根（tests/ 的上一级再上一级）——用于校验 basis 里的文档指针是否可解析
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture(autouse=True)
@@ -42,7 +47,15 @@ def test_s5_nfp_beat_expectations():
     assert len(market) == 1
     assert market[0]["target"] == "A股大盘"
     assert market[0]["direction"] == -1 and market[0]["strength"] == 1
-    assert "nfp-ashare-validation" in market[0]["basis"]
+    # basis 会**渲给用户看**，故其中若含文档指针就必须**可解析**——不要写死某个路径，
+    # 否则文档一改版测试就假红；也不要像原来那样只断言旧文档名。
+    # 该断言原先写死 `docs/nfp-ashare-validation.md`（**已删除**，2026-09-12 清扫时
+    # 改指 `docs/summary/data-market.md`），换成「可解析」判定后能自动跟上文档迁移。
+    basis = market[0]["basis"]
+    assert "chains.nfp" in basis, "溯源必须带稳定的链 id"
+    ref = re.search(r"docs/[\w\-./]+\.md", basis)
+    assert ref, f"basis 未带文档指针：{basis}"
+    assert (REPO_ROOT / ref.group(0)).exists(), f"basis 里的文档指针失效：{ref.group(0)}"
     # 观察关联（direction=0，显式待判不猜方向）
     observe = {d["target"] for d in ev["directions"] if d["matched_by"] == "chain"}
     assert {"东数西算(算力)", "苹果概念"} <= observe

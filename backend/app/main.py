@@ -165,7 +165,7 @@ async def lifespan(app: FastAPI):
     )
     app.state.risk_engine = risk_engine
 
-    # --- 题材字典/官方成分（linkage-design §3 T1）：fuyao 官方目录与成分同步 ---
+    # --- 题材字典/官方成分（architecture-design §1 T1）：fuyao 官方目录与成分同步 ---
     try:
         theme_catalog = ThemeCatalogService(get_session_factory())
     except RuntimeError as exc:
@@ -174,7 +174,7 @@ async def lifespan(app: FastAPI):
         theme_catalog = None
     app.state.theme_catalog = theme_catalog
 
-    # --- 事件驱动（linkage-design §4 E1）：EventCard 存储/查询 ---
+    # --- 事件驱动（architecture-design §1 E1）：EventCard 存储/查询 ---
     app.state.event_store = EventStore(get_session_factory())
 
     # --- 盘后复盘 Agent：服务实例 + 收盘后调度 ---

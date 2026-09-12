@@ -10,7 +10,7 @@ from app.models.watchlist import Base
 
 
 class EventCard(Base):
-    """事件卡（linkage-design §4.3）：新闻事件 → 个股机会链路的注册单元。
+    """事件卡（architecture-design §1）：新闻事件 → 个股机会链路的注册单元。
 
     抽取自规则引擎（app/events/extract.py），LLM 增强层未接入前全部字段
     由规则产出并带 basis；status 仅存人工裁决（resolved/rejected），
@@ -52,7 +52,7 @@ class EventCard(Base):
 
 
 class EventDirection(Base):
-    """事件 → 题材/个股 的方向映射行（linkage-design §4.3 direction_map）。
+    """事件 → 题材/个股 的方向映射行（architecture-design §1 direction_map）。
 
     同一事件可对 A 题材 +1、对 B 题材 -1（方向成对分析）；direction=0 表示
     仅确认关联、方向待判（不猜）。每行必带 basis（命中了什么词/规则）。

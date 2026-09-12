@@ -1,4 +1,4 @@
-"""题材字典与官方成分 API（linkage-design §3.5 T1）。
+"""题材字典与官方成分 API（architecture-design §1 T1）。
 
 - GET  /api/themes/catalog?search=&limit=      题材全集（官方目录；空库自动同步一次）
 - GET  /api/themes/catalog/{code}/members      官方成分（过期/缺失时懒同步；?refresh=1 强制）
@@ -90,7 +90,7 @@ async def stock_themes(
     date_str: str | None = Query(default=None, alias="date", description="YYYYMMDD，默认最近交易日"),
     svc: ThemeCatalogService = Depends(get_service),
 ) -> dict:
-    """个股题材反查（linkage-design §3.2）：官方成分（L3）+ 涨停归因（L2）。
+    """个股题材反查（architecture-design §1）：官方成分（L3）+ 涨停归因（L2）。
 
     首次访问时目录为空会自动同步一次。归因为 best-effort：ths 源不可用时
     官方成分照常返回；交易日盘前当日池为空属正常语义（?date= 可回看）。

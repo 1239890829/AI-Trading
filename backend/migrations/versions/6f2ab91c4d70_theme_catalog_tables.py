@@ -1,4 +1,4 @@
-"""theme catalog tables (linkage-design §3 T1)
+"""theme catalog tables (architecture-design §1 T1)
 
 题材字典 + 官方成分快照 + 人工归属纠错三张表。
 目录来自同花顺官方 fuyao API（885995.TI 粮食概念等 390 个概念板块），

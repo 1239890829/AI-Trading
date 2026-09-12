@@ -1,4 +1,4 @@
-"""题材字典/官方成分测试（linkage-design §3 T1）。
+"""题材字典/官方成分测试（architecture-design §1 T1）。
 
 网络全部 mock：测试绝不真打 fuyao 外网（CI 无外网会红）。
 """

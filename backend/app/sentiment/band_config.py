@@ -1,4 +1,4 @@
-"""情绪阈值配置化（plan-review P0-3）。
+"""情绪阈值配置化（archive/plan-review.md P0-3）。
 
 默认分档 = engine 里的业界经验值（HEAT_BANDS / EARNING_BANDS，来源与依据见
 engine 模块注释）。支持通过 settings 的 JSON 字符串覆盖：

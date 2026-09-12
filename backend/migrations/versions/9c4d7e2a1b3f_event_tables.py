@@ -1,4 +1,4 @@
-"""event tables (linkage-design §4 E1)
+"""event tables (architecture-design §1 E1)
 
 事件卡 + 事件方向映射两张表。抽取由规则引擎（app/events/extract.py）产出，
 status 只存人工裁决；active/expired 由读取方按 half_life 实时计算。

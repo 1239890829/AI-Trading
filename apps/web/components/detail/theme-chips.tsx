@@ -6,7 +6,7 @@ import type { StockThemeLink, StockThemes } from "@/lib/api";
 import { pctColor, pctText } from "@/lib/format";
 import { themesUrl } from "@/lib/routing";
 
-/** 来源徽标语义（linkage-design §3.2）：官方成分=结构性归属，涨停归因=行为性归属，人工=override。 */
+/** 来源徽标语义（architecture-design §1）：官方成分=结构性归属，涨停归因=行为性归属，人工=override。 */
 const SOURCE_LABEL: Record<string, string> = {
   ths_official: "官方成分",
   manual: "人工",

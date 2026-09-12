@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     provider_fallbacks: str = "tencent,eastmoney,sina"
     ths_api_key: str = ""  # 同花顺 fuyao 官方 API Key（放 .env，勿提交）
     ths_base_url: str = "https://fuyao.aicubes.cn"
-    # 题材官方成分视为有效的时长（linkage-design §3）；过期后懒同步。
+    # 题材官方成分视为有效的时长（architecture-design §1）；过期后懒同步。
     # 2026-09-08 用户指令（成分与同花顺完全一致）：168h 曾让 stale 判定 7 天不命中
     # ——30min×40 的补齐调度因此空转，成分调整（如代糖概念新增 920230）最长一周
     # 才被发现。24h 与 30min×40 的调度能力（理论 1920 个/天 ≫ 390）匹配。

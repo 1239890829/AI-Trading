@@ -1,4 +1,4 @@
-"""事件驱动 API（linkage-design §4.4 E1+E2）。
+"""事件驱动 API（architecture-design §1 E1+E2）。
 
 - GET  /api/events?active=&limit=            活跃事件列表（时效=半衰期×2 实时计算）
 - GET  /api/events/impact                    影响力视图：四级分类 + L1/L2/L3 分级（§六.4 拍板）
@@ -289,7 +289,7 @@ async def get_event(event_id: int, store: EventStore = Depends(get_store)) -> di
 
 @router.get("/events/{event_id}/stocks")
 async def event_stocks(event_id: int, request: Request, store: EventStore = Depends(get_store)) -> dict:
-    """标的池：方向题材 → 官方成分 + 人工 override（linkage-design §4.4 ④⑤）。
+    """标的池：方向题材 → 官方成分 + 人工 override（architecture-design §1 ④⑤）。
 
     成分为空的方向会懒同步一次官方成分；仍为空则如实返回空池
     （题材今日无关联标的 ≠ 数据错误）。
@@ -349,7 +349,7 @@ async def events_for_symbol(
     """与个股相关的活跃事件（E2 残留：详情页事件标签的数据源）。
 
     命中两条路径之一：
-    - 方向题材 ∈ 该股官方归属题材（linkage-design §3.2 L3 归属反查）
+    - 方向题材 ∈ 该股官方归属题材（architecture-design §1 L3 归属反查）
     - 事件抽取自该股的新闻（source_symbol）
     """
     sym = normalize_symbol(symbol)

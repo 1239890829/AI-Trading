@@ -139,6 +139,94 @@ CODE_REF_ALLOW = {
 }
 
 
+#: 已删除/已归档**方案文档**的 slug。代码注释里出现**裸名**（不带 `docs/` 前缀、
+#: 不带 `.md`）同样是失效指针——读者按名字找不到文件，而 `check_code_refs` 只认
+#: `docs/xxx.md` 形式、扫不到它。值为真身指针（改写时照此改）。
+LEGACY_DOC_SLUGS = {
+    "architecture-redesign": "docs/archive/architecture-redesign.md",
+    "assistant-optimization-plan": "docs/archive/assistant-optimization-plan.md",
+    "minute-chart-plan": "docs/archive/minute-chart-plan.md",
+    "ui-redesign-plan": "docs/archive/ui-redesign-plan.md",
+    "plan-review": "docs/archive/plan-review.md",
+    "linkage-design": "docs/summary/architecture-design.md",
+    "fund-flow-redesign": "docs/summary/architecture-design.md",
+    "hotspot-pipeline-design": "docs/summary/architecture-design.md",
+    "news-event-module-redesign": "docs/summary/architecture-design.md",
+    "ai-agent-console-plan": "docs/summary/ai-evolution.md",
+    "ai-brain-plan": "docs/summary/ai-evolution.md",
+    "evolution-brain-plan": "docs/summary/ai-evolution.md",
+    "research-autonomous-agent": "docs/summary/ai-evolution.md",
+    "llm-finetune-research": "docs/summary/ai-evolution.md",
+    "system-audit-20260908": "docs/summary/review-governance.md",
+    "system-review-2026-09-02": "docs/summary/review-governance.md",
+    "system-review-20260909": "docs/summary/review-governance.md",
+    "console-three-modules-review": "docs/summary/review-governance.md",
+    "board-fund-page-audit": "docs/summary/review-governance.md",
+    "hunting-review": "docs/summary/review-governance.md",
+    "factor-library-design": "docs/summary/factor-system.md",
+    "factor-ic-review-20260908": "docs/summary/factor-system.md",
+    "stock-picking-system-2026-09-02": "docs/summary/stock-strategy.md",
+    "halt-check-risk-analysis": "docs/summary/stock-strategy.md",
+    "sentiment-phase-review": "docs/sentiment.md（历史误判案例库）",
+    "nfp-ashare-validation": "docs/summary/data-market.md",
+    "repo-deep-research": "docs/summary/data-market.md",
+    "document-consolidation-plan": "docs/kb/07-doc-curation.md",
+    "orderbook-source-evaluation": "docs/archive/orderbook-source-evaluation.md",
+    "full-project-review-2026-09-01": "docs/archive/full-project-review-2026-09-01.md",
+}
+
+#: 裸名检查的**已登记例外**：(文件, slug) → 理由。
+#: 目前为**空**——2026-09-12 那条 `nfp-ashare-validation@test_chains.py` 例外随着该断言
+#: 改写（不再依赖文档名做标记）已经**不再命中**，属死配置故删除：**过期的允许列表本身
+#: 就是「看着有守卫、实际不设防」**，与「永不触发的门禁」同类。
+LEGACY_SLUG_ALLOW: dict[tuple[str, str], str] = {}
+
+#: 裸名检查**整体跳过的文件**：检查器自身——`LEGACY_DOC_SLUGS` 的**定义**里必然
+#: 逐个写着这些名字（引用 vs 定义的区分靠语义，脚本判不了）。代价：本文件里真写错
+#: 一个裸名不会被抓；但该文件是人工策展的检查器，收益大于代价。
+LEGACY_SLUG_SKIP_FILES = {"scripts/doc-health.py"}
+
+LEGACY_SLUG_RE = re.compile(
+    r"(?<![\w/.-])(" + "|".join(map(re.escape, sorted(LEGACY_DOC_SLUGS, key=len, reverse=True))) + r")(?![\w.])"
+)
+
+
+def check_legacy_slugs() -> tuple[list[tuple[str, int, str]], list[tuple[str, str]]]:
+    """F2 代码注释里的**裸名**死引用（已删/已归档方案文档的名字）。
+
+    与 F 互补：F 管 `docs/xxx.md` 形式，F2 管「只写了名字」的形式——
+    后者更隐蔽，因为 `docs/` 都不出现，肉眼与脚本都容易漏。
+
+    **只扫代码，不扫 docs**：docs 面的同名出现绝大多数是**记录性引用**
+    （删档去向表、「原件已删除、精华并入本文」的注记）——那是治理痕迹，
+    改了反而抹掉溯源，故豁免。
+    """
+    skip_dirs = {"node_modules", ".next", ".turbo", "__pycache__", ".venv", "dist", "build"}
+    out: list[tuple[str, int, str]] = []
+    allowed: list[tuple[str, str]] = []
+    for base in ("backend", "apps/web", "scripts"):
+        root = ROOT / base
+        if not root.exists():
+            continue
+        for p in root.rglob("*"):
+            if p.suffix not in (".py", ".ts", ".tsx", ".mjs", ".js"):
+                continue
+            if any(d in p.parts for d in skip_dirs):
+                continue
+            relf = str(p.relative_to(ROOT))
+            if relf in LEGACY_SLUG_SKIP_FILES:
+                continue
+            txt = _read(p)
+            for i, ln in enumerate(txt.splitlines(), 1):
+                for m in LEGACY_SLUG_RE.finditer(ln):
+                    slug = m.group(1)
+                    if (relf, slug) in LEGACY_SLUG_ALLOW:
+                        allowed.append((relf, slug))
+                        continue
+                    out.append((relf, i, slug))
+    return out, allowed
+
+
 def check_code_refs() -> tuple[list[tuple[str, int, str]], list[tuple[str, str]]]:
     """F 代码注释里的 docs 引用必须可解（2026-09-12 新增，§七 #28 的根治）。
 
@@ -271,6 +359,7 @@ def main() -> int:
     abstract = check_missing_abstract()
     clusters = check_clusters()
     coderef, coderef_ok = check_code_refs()
+    legacy, legacy_ok = check_legacy_slugs()
 
     def line(label: str, ok: bool, detail: str = "") -> None:
         nonlocal problems
@@ -301,6 +390,13 @@ def main() -> int:
             print(f"       {f}:{ln} → docs/{rel}（不存在）")
         if len(coderef) > 15:
             print(f"       …另有 {len(coderef) - 15} 处")
+    line("F2 代码裸名死引用", not legacy,
+         f"{len(legacy)} 处（已删/已归档方案文档的**裸名**，F 扫不到）")
+    if legacy and not quiet:
+        for f, ln, slug in legacy[:12]:
+            print(f"       {f}:{ln} → {slug}（已删/归档，真身：{LEGACY_DOC_SLUGS[slug]}）")
+        if len(legacy) > 12:
+            print(f"       …另有 {len(legacy) - 12} 处")
     if not quiet:
         print("[INFO] E 同类聚集（同前缀 ≥3 份，评估是否需共同索引页）："
               + (", ".join(f"{k}×{v}" for k, v in clusters) if clusters else "无"))
@@ -311,6 +407,8 @@ def main() -> int:
               f"（{', '.join(list(TOLERATED) + list(TOLERATED_ENTRIES))}）")
         print(f"[INFO] F 已登记例外：{len(coderef_ok)} 处示例/输出路径"
               + (f"（{'、'.join(r for _, r in coderef_ok)}）" if coderef_ok else ""))
+        print(f"[INFO] F2 已登记例外：{len(legacy_ok)} 处"
+              + (f"（{'、'.join(f'{s}@{f}' for f, s in legacy_ok)}）" if legacy_ok else "（无）"))
         print(f"{'-' * 60}\n结论：{'全部通过' if problems == 0 else f'{problems} 项待处理'}"
               f"（C 的日志单轮 ≤80 行属过程指标，需人工/议程核对）")
     return 0 if problems == 0 else 1

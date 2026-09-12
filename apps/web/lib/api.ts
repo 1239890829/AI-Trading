@@ -898,7 +898,7 @@ export async function searchSymbols(q: string): Promise<SymbolSearchItem[]> {
   return getJsonArray<SymbolSearchItem>(`/api/search?q=${encodeURIComponent(q)}`);
 }
 
-/** 个股题材归属（linkage-design §3.2）：官方成分（L3 结构性）+ 当日涨停归因（L2 行为性）。 */
+/** 个股题材归属（architecture-design §1）：官方成分（L3 结构性）+ 当日涨停归因（L2 行为性）。 */
 export interface StockThemeLink {
   theme_code: string;
   theme_name: string;
@@ -1035,7 +1035,7 @@ export async function getWatchlist(): Promise<WatchlistItem[]> {
   return getJsonArray<WatchlistItem>("/api/watchlist");
 }
 
-/** 事件驱动（linkage-design §4）：EventCard 摘要与方向映射。 */
+/** 事件驱动（architecture-design §1）：EventCard 摘要与方向映射。 */
 export interface EventDirectionRow {
   target_type: string;
   target: string;
