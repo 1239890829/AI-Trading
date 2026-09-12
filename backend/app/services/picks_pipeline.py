@@ -141,18 +141,35 @@ async def candidate_pool(
     svc,
     *,
     limit_up_pool: list | None = None,
+    active_events: list | None = None,
 ) -> list[dict]:
     """候选池 = 活跃事件标的池 ∪ 当日涨停池 ∪ 热股榜 top，去重剔 ST，cap 40。
 
     三路来源天然覆盖「突发消息引发的极端盘面」：事件池是消息源，
     涨停池是大幅拉升的极端表现，热股榜是关注度信号。
+
+    :param active_events: 活跃事件行（`store.list_events` 的结果）。管线内**预取一次
+        复用**（与 `limit_up_pool` 同型，P2-4 的取数单点原则）；缺省 None 时本函数
+        自己取（独立调用方/测试的兼容路径）。传入 `[]` 表示"已取过、结果为空"，
+        **不等于**缺省——不会触发重复取数。
     """
     symbols: dict[str, dict] = {}
-    name_to_code = {t.name: t.code for t in svc.get_catalog(limit=1000)} if svc else {}
+    # G-2（2026-09-12 评审批次 5）：本函数由 async 管线直接 await（调度 15:00+ 与
+    # `POST /api/picks/generate` 手动触发两条路径都**在事件循环上**），函数体内每一处
+    # 同步 SQLite/磁盘读都排在循环里（连同 QuoteHub 的秒级行情推送一起停摆）。
+    # 故逐处搬进线程池；守卫与判据见 `tests/test_event_loop_no_block.py`（新增的
+    # pipeline/watcher 覆盖）。`get_catalog` 自带 session（每次调用新建并关闭），
+    # 整体搬线程不跨线程复用 session，是安全的——这一点对下面几处同样成立。
+    _catalog = await asyncio.to_thread(svc.get_catalog, limit=1000) if svc is not None else []
+    name_to_code = {t.name: t.code for t in _catalog}
 
     # ① 活跃事件：symbol 方向直接收；theme 方向反查官方成分（cap 30/题材）
     try:
-        rows = store.list_events(active_only=True, limit=30)
+        rows = (
+            active_events
+            if active_events is not None
+            else await asyncio.to_thread(store.list_events, active_only=True, limit=30)
+        )
         # P-3①（2026-09-12 评审批次 3）：先把本批事件要查的题材代码**按同一遍历顺序去重收集**，
         # 再用**既有**批量接口一次性取回，替代循环内的逐题材 `svc.get_members(code)`
         # （每个题材一个独立 session）。复用的是既有挂载点 `member_symbols_bulk`——它的
@@ -172,7 +189,11 @@ async def candidate_pool(
                     if code and code not in seen_codes:
                         seen_codes.add(code)
                         wanted.append(code)
-        members_by_code = svc.member_symbols_bulk(wanted) if (svc is not None and wanted) else {}
+        members_by_code = (
+            await asyncio.to_thread(svc.member_symbols_bulk, wanted)
+            if (svc is not None and wanted)
+            else {}
+        )
         for row in rows:
             # 直接读关系属性，**不要再调 `store.directions_of(row.id)`**：`list_events` 内部
             # 已 `selectinload(EventCard.directions)`（store.py:156），行虽 detached 但方向
@@ -357,7 +378,9 @@ def parse_pick_meta(raw: str | None) -> dict:
         return {}
 
 
-def _build_event_hits_index(store: EventStore) -> dict[str, tuple[float, float, str | None, str | None, int]]:
+def _build_event_hits_index(
+    rows: list,
+) -> dict[str, tuple[float, float, str | None, str | None, int]]:
     """一次遍历活跃事件 → 按 symbol 索引消息命中（评审 B1）。
 
     返回 {symbol: (利好强度和, 利空强度和, 主事件标题, 主方向文案, 关联数)}。
@@ -367,10 +390,16 @@ def _build_event_hits_index(store: EventStore) -> dict[str, tuple[float, float, 
     后仍可安全访问），索引构建零额外查询——原实现每候选股重复全量扫事件表
     （24 只深评 × 每次约 31 次查询）；关联数含 direction=0（"来源关联、
     方向待判"也是证据，丢掉它会让消息面对有新闻但无方向词的标的显示"无命中"）。
+
+    ⚠️ **入参是事件行本身，不是 store**（2026-09-12 评审批次 5 / G-2 改）：
+    同一次管线里 `candidate_pool` / 本函数 / `ev_texts` 此前**各自跑了同一条
+    `store.list_events(active_only=True, limit=30)`，同一查询三遍**——既白读两遍，
+    又因为是同步 SQLite 而三度占用事件循环。改为调用方预取一次后，本函数是
+    **纯内存函数**（零 IO，可安全留在循环上，无需 to_thread）。
     """
     index: dict[str, dict] = {}
     try:
-        for row in store.list_events(active_only=True, limit=30):
+        for row in rows:
             w = event_weight(row.source_tier, row.certainty)
             for d in row.directions:
                 if d.target_type != "symbol" or not d.target:
@@ -476,7 +505,8 @@ async def deep_score_candidates(
     themes_by_symbol: dict[str, list[dict]] = {}
     if svc is not None:
         try:
-            themes_by_symbol = svc.official_for_symbols_bulk([c["symbol"] for c in deep])
+            # G-2：批量反查仍是同步 SQLite（2 次查询）→ 线程池（判据见 candidate_pool 顶部）
+            themes_by_symbol = await asyncio.to_thread(svc.official_for_symbols_bulk, [c["symbol"] for c in deep])
         except Exception as exc:
             log.warning("picks official themes bulk failed: %s", exc)
             themes_by_symbol = {}
@@ -713,6 +743,33 @@ def assemble_card(k: dict) -> dict:
 # ---------------------------------------------------------------- 管线主体
 
 
+def _persist_picks(
+    today: str, items: list, meta: dict, replaced: list, rejected: list
+) -> None:
+    """组合落库（同日重复生成 = 覆盖当日行）。
+
+    抽成独立同步函数是为了**能整体搬线程池**（G-2，2026-09-12 评审批次 5）：
+    原先这段挂在 async 管线的末尾，同步 SQLite 读改写 + 两次大对象 `json.dumps`
+    都排在事件循环上。抽出来后调用方一次 `to_thread` 包住，语义零变化。
+    """
+    with _db() as db:
+        from app.models.daily_pick import DailyPickSet
+
+        row = db.execute(select(DailyPickSet).where(DailyPickSet.date == today)).scalar_one_or_none()
+        payload = {
+            "items": json.dumps(items, ensure_ascii=False),
+            "meta": json.dumps(meta, ensure_ascii=False),
+            "replaced": json.dumps(replaced, ensure_ascii=False),
+            "rejected": json.dumps(rejected, ensure_ascii=False),
+        }
+        if row is None:
+            db.add(DailyPickSet(date=today, **payload))
+        else:
+            for key, val in payload.items():
+                setattr(row, key, val)
+        db.commit()
+
+
 async def generate_picks_pipeline(
     deps: PipelineDeps,
     hub: QuoteHub,
@@ -733,14 +790,26 @@ async def generate_picks_pipeline(
     td, limit_up_pool = await _fetch_limit_up_pool(hub)
 
     # ①a 候选池
-    candidates = await candidate_pool(hub, store, svc, limit_up_pool=limit_up_pool)
+    # G-2 / 取数单点（P2-4 同型）：活跃事件**取一次**（同步 SQLite + selectinload →
+    # 线程池），下游三处复用（候选池题材反查 / regime 的 ev_texts / 消息命中索引）。
+    # 此前同一条查询在本管线里跑了**三遍**。失败 → 空表，下游各自诚实降级（不臆造）。
+    try:
+        active_events = await asyncio.to_thread(store.list_events, active_only=True, limit=30)
+    except Exception as exc:
+        log.warning("picks active events failed: %s", exc)
+        active_events = []
+
+    candidates = await candidate_pool(
+        hub, store, svc, limit_up_pool=limit_up_pool, active_events=active_events
+    )
 
     # ①b 昨日组合成员兜底纳入（carryover）：
     # 组合稳定性要求 incumbent 有"被重新评估的权利"——否则一只票今天没涨停、
     # 没上热榜、事件又过期，就会被静默踢出，组合天天大换血（跨日回放实测：
     # 纯涨停股候选池下日均换手 60%）。纳入后它仍要重新评分，分数不够照样被换，
     # 只是不再因为"没进榜"而消失。
-    prev_symbols = _prev_combo_symbols()
+    # G-2：同步 SQLite（DailyPickSet 最近一行）→ 线程池（判据同 candidate_pool 顶部注释）
+    prev_symbols = await asyncio.to_thread(_prev_combo_symbols)
     have = {c["symbol"] for c in candidates}
     for s in prev_symbols:
         if s not in have:
@@ -811,10 +880,8 @@ async def generate_picks_pipeline(
 
     # ③b 炒作阶段（Regime）：财报日历 + 业绩事件密度 → 六维权重表。
     # 业绩空窗期必须把基本面权重让给情绪与题材梯队，否则系统性错过妖股。
-    try:
-        ev_texts = [e.title for e in store.list_events(active_only=True, limit=30)]
-    except Exception:
-        ev_texts = []
+    # 复用管线开头的预取结果（此前这里是第三次同查询）；失败在预取处已降级为空表
+    ev_texts = [e.title for e in active_events]
     regime = detect_regime(
         today=date.fromisoformat(today),
         earnings_ratio=earnings_event_ratio(ev_texts) if ev_texts else None,
@@ -853,8 +920,14 @@ async def generate_picks_pipeline(
     try:
         from app.sentiment import metric_history
 
-        promo_pctl = (metric_history.percentile_of_value("promo_1to2", promo_1to2) or {}).get("percentile")
-        break_pctl = (metric_history.percentile_of_value("break_rate", break_rate) or {}).get("percentile")
+        # G-2：`percentile_of_value` 要读整份情绪历史文件（同步磁盘读），两次调用
+        # 合并成一次线程跳（两个分位一起算），不占事件循环。
+        promo_pctl = (
+            await asyncio.to_thread(metric_history.percentile_of_value, "promo_1to2", promo_1to2) or {}
+        ).get("percentile")
+        break_pctl = (
+            await asyncio.to_thread(metric_history.percentile_of_value, "break_rate", break_rate) or {}
+        ).get("percentile")
     except Exception as exc:
         log.warning("picks percentile_of_value failed: %s", exc)
 
@@ -876,7 +949,8 @@ async def generate_picks_pipeline(
     # ③e 基准指数日 K（停牌核查/异动的偏离值分母）：一次性预取，供全部候选复用。
     # 24 只候选各拉一次会触发腾讯熔断，必须在这里取完。
     index_bars = await _prefetch_index_bars(hub)
-    event_hits_index = _build_event_hits_index(store)
+    # 纯内存（行已预取，见管线开头）——不再需要 to_thread，也不再重复查库
+    event_hits_index = _build_event_hits_index(active_events)
 
     # 晋级率历史分位（选股 2.0 §3）：**当日值**在历史样本中的位置（见上方 ③c 说明）。
     # 库样本不足时为空 → 情绪面修正项自动缺席，basis 如实呈现。
@@ -964,24 +1038,6 @@ async def generate_picks_pipeline(
         "market_max_boards": lu_ctx["market_max_boards"],
         "generated_at": beijing_now().isoformat(),
     }
-    with _db() as db:
-        from app.models.daily_pick import DailyPickSet
-
-        row = db.execute(select(DailyPickSet).where(DailyPickSet.date == today)).scalar_one_or_none()
-        rejected_json = json.dumps(rejected, ensure_ascii=False)
-        if row is None:
-            row = DailyPickSet(
-                date=today,
-                items=json.dumps(items, ensure_ascii=False),
-                meta=json.dumps(meta, ensure_ascii=False),
-                replaced=json.dumps(replaced, ensure_ascii=False),
-                rejected=rejected_json,
-            )
-            db.add(row)
-        else:
-            row.items = json.dumps(items, ensure_ascii=False)
-            row.meta = json.dumps(meta, ensure_ascii=False)
-            row.replaced = json.dumps(replaced, ensure_ascii=False)
-            row.rejected = rejected_json
-        db.commit()
+    # G-2：落库是同步 SQLite 写（+ 大对象 json.dumps）→ 线程池（判据见 candidate_pool 顶部）
+    await asyncio.to_thread(_persist_picks, today, items, meta, replaced, rejected)
     return {"data": {"date": today, "items": items, "replaced": replaced, "meta": meta}, "meta": {}}

@@ -72,9 +72,17 @@ class _Store:
     这是刻意的——管线改从 `row.directions` 读（`list_events` 已 selectinload，
     见 P-2「循环内重查」修复）。若有人改回 `store.directions_of(row.id)`，
     这里会立刻 `AttributeError` 精确变红，而不是静默退回 N+1。
+
+    另带 `list_events` **调用计数**（G-2，2026-09-12 评审批次 5）：管线的活跃事件是
+    **取数单点**（候选池题材反查 / regime 的 ev_texts / 消息命中索引三处复用同一份），
+    计数 > 1 就说明又退回"同一条查询跑多遍 + 每遍同步占事件循环"。
     """
 
+    def __init__(self) -> None:
+        self.list_events_calls = 0
+
     def list_events(self, *, active_only: bool = False, limit: int = 30):
+        self.list_events_calls += 1
         return [_Event(1, "白酒消费刺激政策落地")]
 
 
@@ -260,7 +268,13 @@ def catalog() -> _Catalog:
 
 
 @pytest.fixture()
-def deps(tmp_path, monkeypatch, catalog):
+def store() -> _Store:
+    """单独暴露桩实例，供用例断言「同一条查询只跑一次」（G-2 取数单点）。"""
+    return _Store()
+
+
+@pytest.fixture()
+def deps(tmp_path, monkeypatch, catalog, store):
     engine = create_engine(f"sqlite:///{tmp_path / 'pipeline.db'}")
     Base.metadata.create_all(engine)  # DailyPickSet 经顶部 import 注册
     sf = sessionmaker(bind=engine)
@@ -273,7 +287,7 @@ def deps(tmp_path, monkeypatch, catalog):
     monkeypatch.setattr(pl, "get_chip_service", lambda: _Chip())
     monkeypatch.setattr(pl, "_prefetch_index_bars", _no_index_bars)
 
-    return pl.PipelineDeps(event_store=_Store(), snapshot_service=_Snapshot(), theme_catalog=catalog)
+    return pl.PipelineDeps(event_store=store, snapshot_service=_Snapshot(), theme_catalog=catalog)
 
 
 async def _days():
@@ -465,6 +479,30 @@ def test_deep_scan_prefetches_official_themes_once(deps, catalog, monkeypatch):
     assert catalog.official_single_calls == 0, "不得逐候选调 get_official_for_symbol"
     assert not [w for w in warnings if "picks official themes bulk failed" in w], (
         f"批量反查被异常兜底了（异常吞没会同时让次数断言失去意义）：{warnings}"
+    )
+
+
+def test_active_events_fetched_once_per_pipeline(deps, store, monkeypatch):
+    """**G-2 回归位**：一次管线里活跃事件只许取一次（取数单点）。
+
+    同一条 `store.list_events(active_only=True, limit=30)` 此前在管线里跑了**三遍**
+    ——候选池的题材反查、regime 的 `ev_texts`、消息命中索引各一遍。三遍都是**同步
+    SQLite**，且管线是由调度（15:00+）与 `POST /api/picks/generate` **在事件循环上**
+    直接 await 的 ⇒ 既白读两遍，又把同一段阻塞排了三次（连同 QuoteHub 的秒级行情
+    推送一起停摆）。
+
+    现在管线开头预取一次、下游三处复用（与 `limit_up_pool` 的 P2-4 取数单点同型）；
+    `_build_event_hits_index` 随之从"接 store 自己查"改为"接事件行"的纯内存函数。
+
+    断言看**次数**不看行为：桩缺计数就测不出"又查了两遍"（同 `_Catalog` 那条教训）。
+    """
+    monkeypatch.setattr(pl, "evaluate_stand_aside", _benign_gate)
+
+    _run(deps, _Hub())
+
+    assert store.list_events_calls == 1, (
+        f"管线里活跃事件应**只取一次**，实际 {store.list_events_calls} 次"
+        "（多了 = 又退回「同一条同步查询跑多遍」）"
     )
 
 

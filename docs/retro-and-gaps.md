@@ -638,6 +638,87 @@
 > （`test_doc_health_empty_sections` / `test_agent_kb_tree` / `test_env_docs`）——上一条"注释也算改动"的教训
 > 的直接应用（**全量门禁的数字不受文档文本影响，但读真实 docs 的用例会**，两者要分开取证）。
 
+**批次 5 执行记录（2026-09-12，G-2 同步 IO 守卫扩面；无需拍板项）**
+
+**问题**：`test_event_loop_no_block` 只钉住 **4 个**调用点（evolution ×3 + data_health_loop），
+**pipeline / watcher 不在覆盖内** ⇒ 批次 3 刚修好的 P-1/P-3 没有回归保护；而管线的同步读
+**全部排在事件循环上**（调度 15:00+ 与 `POST /api/picks/generate` 手动触发两条路径都是
+`await generate_picks_pipeline(...)`），盘中手动生成时会连同 QuoteHub 的秒级行情推送一起停摆。
+
+**审计结论分两类（逐处核对，"搬不搬"看的是收益而不是"是不是同步"）**
+
+**A. 搬进线程池（8 处）**
+
+| 位置 | 同步源 | 阻塞量级 |
+|---|---|---|
+| `candidate_pool` | `svc.get_catalog(limit=1000)` | 题材目录全量读（≤1000 行） |
+| `candidate_pool` | `store.list_events` | 事件行 + `selectinload` 方向行 |
+| `candidate_pool` | `svc.member_symbols_bulk` | 30 个题材的成分并集 |
+| `generate_picks_pipeline` | `store.list_events`（**预取单点**） | 见下"顺带修掉的真冗余" |
+| `generate_picks_pipeline` | `_prev_combo_symbols` | 昨日组合行 |
+| `generate_picks_pipeline` | `metric_history.percentile_of_value` ×2 | **整份情绪历史文件读**（磁盘） |
+| `generate_picks_pipeline` | 末尾落库 → 新抽 `_persist_picks` | SQLite 读改写 + 两次大对象 `json.dumps` |
+| `deep_score_candidates` | `svc.official_for_symbols_bulk` | 2 次批量查询（P-3② 的批量化版本） |
+
+**B. 刻意不搬（`watcher.dispatch_alert`）——理由不是"同步就不管"，而是"搬了更差"**
+
+`append_alert` / `brief_for_today` 是**读-改-写整个 JSON 简报文件**。同步执行时，
+从"读"到"写"之间**没有 `await`** ⇒ 对事件循环而言是**一次原子操作**；把它丢进线程池
+反而**制造**并发：两条 alert 同时 dispatch 时，两个 worker 线程交错完成 `读→改→写`，
+后写者覆盖前写者（**丢提醒**）——除非另加锁，那是更大的改动。
+`ensure_system_rule` / `record_sighting`（单条小查询 / 单行插入，毫秒级）同判。
+
+> ⛔ **反直觉点（值得进 kb）：「同步」≠「该搬去线程」**。同步的 read-modify-write
+> 在**单线程事件循环**上是天然安全的；搬进线程池才把原子操作拆成可交错的片段。
+> 判据要写成"**阻塞时长 × 触发时是否在交易时段 × 搬走是否引入新风险**"三项一起看，
+> 只看第一项会做出错的改动。
+
+**顺带修掉的真冗余**：同一条 `store.list_events(active_only=True, limit=30)` 在管线里
+**跑了三遍**（候选池题材反查 / regime 的 `ev_texts` / 消息命中索引）——既白读两遍，
+又把同一段阻塞排了三次。改为**管线开头预取一次、下游三处复用**（与 `limit_up_pool`
+的 P2-4 取数单点同型）；`_build_event_hits_index` 随之从"接 store 自己查"改为
+**接事件行的纯内存函数**（零 IO，不需要也不该再包 `to_thread`）。
+
+**守卫扩面（新增 13 条用例）**
+
+- `GUARDED` 表 **4 → 10 项**（+6 pipeline，含 `_persist_picks`）；
+- `test_picks_pipeline.py` 新增 `test_active_events_fetched_once_per_pipeline`：
+  桩带 `list_events_calls` **计数**，钉住"活跃事件一次管线只取一次"；
+- **顺手修掉守卫自身的一个真缺陷**：反向检测是**纯文本扫描**，分不清"调用"与
+  "提到这段调用的**文字**"——新条目一加上就**假红**，且失败信息断言"存在未被
+  `to_thread` 包裹的调用"，**与事实不符**（误报的失败信息比不报更糟：会引导后人
+  删掉那段正确的说明文字）。修法：`_mask_comments_and_strings` 用 `tokenize` 把
+  注释与字符串字面量换成等长空白（单行原地等长替换；多行字符串的中间行只保留换行
+  以**保持行号**；语法不完整则退回原文 = **宁可严不可漏**）。
+  配套 5 条**守卫自身的测试**：docstring/注释提及不算裸调用、掩码后行号不串、
+  真裸调用照抓、**字符串里的 `to_thread(` 不算"已包"**、片段回退。
+
+**注入验证（4 次，全部精确变红后复原）**
+
+| # | 注入 | 结果 |
+|---|---|---|
+| 1 | 去掉 `get_catalog` 的 `to_thread` | 精确红 1 条：`[picks_pipeline::get_catalog]` |
+| 2 | 管线里塞回一行裸 `store.list_events(...)` | **双红**：反向断言红（指名注入行）+ `test_active_events_fetched_once_per_pipeline` 红（计数 2）——两个独立机制交叉捕获 |
+| 3 | 关掉掩码（`_mask_comments_and_strings` 直接返回原文） | 红 **4** 条（含 pipeline `list_events` 条目 + 3 条掩码自身测试） |
+| 4 | 落库改回裸调用 | 精确红 1 条：`[picks_pipeline::_persist_picks]` |
+
+> ⚠️ **注入过程中自己被抓出的一个假绿测试**：`test_to_thread_inside_a_string_does_not_count_as_wrapping`
+> 首版把那个字符串放在**另一行**，而前缀比较只看**同行**前缀 ⇒ 掩不掩码都通过（**等于没测到**）。
+> 修法：把字符串与该调用放到**同一行且在调用之前**；重做注入验证后该条确实变红。
+> 教训：**"注入了却没变红"多数不是注入不够狠，而是那条测试根本没覆盖到你想的那条路径。**
+
+> **批次 5（G-2 部分）收尾门禁（2026-09-12，实测回填）**：后端 **2674 项（2612 passed / 62 skipped）·
+> 172 文件**（+13 项 / **+0 文件** = 全部加在两个既有测试文件内；与 `test_event_loop_no_block`
+> 16−4=**+12**、`test_picks_pipeline` **+1** **三方自洽**）、前端 **444 项 / 53 文件**
+> （**本轮零前端改动**，同值非漏跑）、`tsc` 0、`eslint` 0 error / 0 warn、`pyflakes` 0、
+> `doc-health` 全部通过、后端全量 **82.19s**（前提：8000 在跑）。
+
+**本轮审计顺带发现、但刻意不并入的（登记为待办）**：`app/api/routes/events.py:132`
+与 `alert.py:96` 等 **async 端点里直接调同步 DB 读**（`store.list_events` / `repo.list_events`），
+与 pipeline 同族。它属「**全仓 async 端点同步 IO 扫面**」这个更大的面（数量未知、且多数是
+前端轮询会用到的热端点），不在 G-2 "把 pipeline/watcher 纳入守卫"的范围内 ⇒ **不夹带**，
+单列一行待办（见下方低优表）。
+
 **评审结论**：方向正确、交付密度高、假绿意识显著提升；但有 **1 处设计过度 + 3 处高优热点 + 若干配置遗漏**。
 
 **高优（已实测/读码确认，待执行）**
@@ -661,7 +742,8 @@
 | ✚ | 板块名匹配 3 份且语义已分叉（`watcher.py:75` / `backtest.py:113` / `theme_service.py:779`） | ✅ 已修 `9d15ac6`（批次 1 R-1；**策略 B 刻意不合并**，见 6.13 留痕段） |
 | ✚ | `panel-boundary` 的 `resetKey` 生产 0 处传 ⇒ 切 tab 不恢复 | ✅ 本轮修完（D-3；根因是 `Panel` 未暴露该 prop，3 处接线 + 四种形态钉住，见 6.13） |
 | ✚ | pipeline 另两处 N+1（`get_members` 每题材一 session / `get_official_for_symbol` 每候选 2 查） | ✅ 已修 `1b7f855`（批次 3 P-3） |
-| ✚ | `test_event_loop_no_block` 白名单不含 pipeline/watcher ⇒ 上述阻塞不被门禁覆盖 | 批次 5 |
+| ✚ | `test_event_loop_no_block` 白名单不含 pipeline/watcher ⇒ 上述阻塞不被门禁覆盖 | ✅ 已修（批次 5 G-2：管线 8 处搬线程池 + 守卫表 4→10 项 + 取数单点守卫；watcher 经审计**刻意不搬**并写明理由，见 6.13） |
+| ✚ | **async 端点里的同步 DB 读**（`routes/events.py:132` `store.list_events` / `routes/alert.py:96` `repo.list_events` 等）——与 pipeline 同族，是全站热端点 | 未开始（**全仓 async 端点同步 IO 扫面**；范围未量化，须先扫再定，见 6.13 末尾） |
 | ✚ | 设计文档能力失真**根因未解**（只加不改，无机制防止） | 批次 5（文档能力锚点自动对账） |
 | ✚ | `alerts-tab.tsx:71` 漏 `marketHours:false`（盘外 10s→50s，与同仓 4 处做法不一致） | 批次 1（`⟳代理`，执行前复核） |
 | ✚ | `limit-up-tab.tsx:57` 等漏 `key` ⇒ URL 变化不重拉（静默漏刷新） | 批次 1（`⟳代理`，执行前复核） |

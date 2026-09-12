@@ -30,7 +30,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2661 项（2599 passed / 62 skipped）· 172 文件（09-12 实测）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2674 项（2612 passed / 62 skipped）· 172 文件（09-12 实测）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。
@@ -62,7 +62,7 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 2661 项（2599 passed / 62 skipped）· 172 文件、前端 444 项 / 53 文件、eslint **0 error / 0 warn**
+> **门禁口径**：后端 2674 项（2612 passed / 62 skipped）· 172 文件、前端 444 项 / 53 文件、eslint **0 error / 0 warn**
 > （25 条回归已按 P1-27 清零；仅 notification-drawer 保留 1 处带理由的 C 类豁免）。
 > **测试规模与告警数同属「会失真的状态标注」**——改动后要实测回填，不要沿用旧数字
 > （此前「≤1 warn / 后端 580 / 前端 97 / 219 / 257 / 263 / 342 / 1925 / 2553 / 2556 / 2557 / 2574 / 2576 / 2625 /
@@ -76,8 +76,10 @@ lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=
 > 实测基线 2637 ⇒ 真实差值 **+15 = 4+4+3+4+1**，全额对上；**记录值 2635 是「#29 提交之前」的数字，
 > 提交时忘了回填那 2 条 watcher 守卫**。⇒ 教训不是"数错了"，而是「**回填滞后于提交**会留下缺口」；
 > 好在 `--collect-only` 的产出可以逐文件对账，比记总量可靠。
-> ✅ **自洽核对（2026-09-12 批次 5 收尾）**：上一值 2652 / 171，本轮 **2661 / 172** ⇒ 差 **+9 项 / +1 文件**，
-> 恰好等于新增的 `tests/test_doc_health_empty_sections.py`（9 条用例）——**差额与新增文件数、用例数三方自洽**。
+> ✅ **自洽核对（2026-09-12 批次 5 收尾）**：F-4 轮 2652 / 171 → **2661 / 172** ⇒ 差 **+9 项 / +1 文件**，
+> 恰好等于新增的 `tests/test_doc_health_empty_sections.py`（9 条用例）——**差额与新增文件数、用例数三方自洽**；
+> G-2 轮 2661 / 172 → **2674 / 172** ⇒ 差 **+13 项 / +0 文件**（全部加在两个既有测试文件内：
+> `test_event_loop_no_block` 16−4=+12、`test_picks_pipeline` +1）——**"零新增文件"也要能对上差额**。
 > **加测试文件就会让这里过期**，改测试后请顺手回填。
 
 **发布前额外做一次接口载荷体检**（plan-review 三.7，2026-09-01 纳入）：
