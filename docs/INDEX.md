@@ -9,7 +9,7 @@
 | 想知道… | 看 |
 |---|---|
 | **用户教过的选股规则/历史教训/拍板过的决策** | **`kb/00-INDEX.md`（知识库，KB-ID 引用制）** |
-| **复盘系统怎么独立运行（不依赖会话）** | `summary/ai-evolution.md` §6（选型）→ `scripts/agent/run_review.sh` + `com.ashare.review.plist`（P0 已部署，工作日 16:30 launchd 拉起 claude -p） |
+| **盘后复盘怎么自动跑（不依赖会话）** | **后端常驻调度承担**：`review-scheduler`（交易日 **15:30**，`ASHARE_REVIEW_SCHEDULER_ENABLED`）+ `picks-intraday-review`（15:35），日程可见 `GET /api/system/schedulers`，产物 `data/review/reports/YYYYMMDD.json`。⚠️ **独立 launchd 通道已拆除**（2026-09-12，裁定 B）：`~/Desktop` 属 macOS TCC 保护目录，launchd 进程无权访问 ⇒ `runs=4` 全 exit 126、**零产出**；教训见 `kb/09-verification-pitfalls.md` KB-ENG-62 |
 | **怎么执行一次复盘（LLM SOP）** | **`kb/06-review-framework.md`（七阶段复盘框架 v1.0，复盘任务先读它）** |
 | 趋势转龙头连板的成因实例 | `summary/stock-strategy.md`（百大集团六维剖析+规律提炼，KB-STOCK-23/24 实证） |
 | 新闻/事件模块排查与改造 | `summary/architecture-design.md` §4 + `kb/03-engineering.md`（根因/刷新方案/判定状态机/弹窗改造；剩余待办见 `retro-and-gaps.md` P0-2~P0-5） |

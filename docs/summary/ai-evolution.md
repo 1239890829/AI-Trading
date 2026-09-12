@@ -56,11 +56,19 @@
 **结论：分层而非单选**——
 | 层 | 方案 |
 |---|---|
-| 触发层 | **launchd + `claude -p`（headless）**⭐ 使复盘脱离桌面应用独立运行 |
+| 触发层 | ~~launchd + `claude -p`（headless）~~ ❌ **2026-09-12 裁定 B 不采用**（见下） |
 | 能力层 | 补一个 MCP server（多步工具循环：查数 → 读 KB → 跑脚本 → 写结论） |
 | 治理层 | KB 复盘框架 + 现有推送矩阵 |
 
 差异点：15:45 议程是**固定管线**（十路 → 一次裁决），非自由探索。
+
+**触发层裁定（2026-09-12，B 方案）**：`launchd + claude -p` 选型**已推翻**。实测 `com.ashare.review`
+自 09-09 安装后 `runs=4` **全部 exit 126**、零产出——项目位于 `~/Desktop`（macOS **TCC 保护目录**），
+launchd 启动的进程无该目录访问授权。**改用后端已有常驻调度承担**：`review-scheduler`
+（交易日 15:30 → `data/review/reports/YYYYMMDD.json`，实测 09-02~09-11 **连续 9 个交易日准点产出**）
++ `picks-intraday-review`（15:35）。**不新增独立机制**——KB-ENG-62 的普适结论。
+ad-hoc headless 的真实成本样本（供未来评估）：**$1.40 / 38 轮 / 8.2 分钟**。
+拆除明细与教训：`kb/09-verification-pitfalls.md` KB-ENG-62、`retro-and-gaps.md` §6.10。
 
 ## 7. LLM 微调路径（三层，守零新增付费依赖）
 
