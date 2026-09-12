@@ -236,6 +236,74 @@ def test_get_official_for_symbol_applies_overrides(monkeypatch: pytest.MonkeyPat
     assert svc.get_official_for_symbol("000019") == [], "活跃 exclude 必须生效"
 
 
+def test_official_for_symbols_bulk_matches_single_read(monkeypatch: pytest.MonkeyPatch):
+    """**批次 3 / P-3② 的 A/B 等价守卫**：批量反查逐条 == 逐只反查。
+
+    为什么必须直接对照、而不是各测各的（2026-09-12）：批量版把
+    `N 只 ×（成员 + 人工纠错）` 压成 2 次 `in_` 查询，**优化本身就可能改口径**——
+    漏排序、漏叠加 override、把「未命中」从空列表变成缺键，三种都会让调用方
+    `themes_by_symbol.get(sym) or []` 悄悄取到不同结果，而单侧测试照样全绿。
+    所以此处逐只跑一遍、与批量结果**整体比对**，并覆盖两种 override 状态：
+
+    · 活跃 exclude：批量与逐只都必须剔除该官方归属；
+    · 已过期 include：两边都不该出现（过期 = 不生效，判据共用
+      `override_still_active`，而不是"两处各写一遍同样的比较"）；
+    · 未命中的 symbol：返回**空列表而非缺键**（调用方不必再 `or []`）。
+
+    注入验证（2026-09-12，逐条真实破坏后复原）：把批量版改成跳过 override 叠加 /
+    把未命中改成缺键 —— 均由 `bulk == single` 精确变红；而把 `override_still_active`
+    改成恒 True（**两路共用的判据本身失效**）时 `bulk == single` **照旧成立** ——
+    这时候只有下面那条显式断言（`bulk["600303"] == []`）会红。⇒ A/B 对照只能钉
+    「两路一致」，钉不住「判据正确」；两者必须同时存在。
+
+    用独立题材码 / 个股码：本文件与其它用例共用内存库，复用既有码会被别的
+    用例写入的 override 污染（同 `test_stock_themes_api` 的注释）。
+    """
+    from datetime import timedelta
+
+    from app.core.db import utcnow
+    from app.models.theme_catalog import ThemeOverride
+
+    svc = _svc()
+    code_a, code_b = "889900.TI", "889901.TI"
+
+    async def fake_catalog():
+        return [{"code": code_a, "name": "测试题材甲"}, {"code": code_b, "name": "测试题材乙"}]
+
+    async def fake_members(code):
+        if code == code_a:
+            return [{"symbol": "600301", "name": "甲一"}, {"symbol": "600302", "name": "甲二"}]
+        if code == code_b:
+            return [{"symbol": "600301", "name": "甲一"}]
+        return []
+
+    monkeypatch.setattr(svc, "fetch_catalog", fake_catalog)
+    monkeypatch.setattr(svc, "fetch_members", fake_members)
+    asyncio.run(svc.sync_catalog())
+    asyncio.run(svc.sync_members(code_a))
+    asyncio.run(svc.sync_members(code_b))
+
+    with svc._sf() as db:
+        db.add(ThemeOverride(theme_code=code_b, symbol="600301", action="exclude", reason="测试：活跃剔除"))
+        db.add(ThemeOverride(theme_code=code_a, symbol="600303", action="include", reason="测试：已过期",
+                             expires_at=utcnow() - timedelta(days=1)))
+        db.commit()
+
+    symbols = ["600301", "600302", "600303", "600304"]  # 600304 不在任何题材里
+    bulk = svc.official_for_symbols_bulk(symbols)
+    single = {s: svc.get_official_for_symbol(s) for s in symbols}
+    assert bulk == single, "批量反查与逐只反查必须逐条等价（含排序与 override 叠加）"
+
+    assert [m["theme_code"] for m in bulk["600301"]] == [code_a], "活跃 exclude 必须生效"
+    assert bulk["600302"] == [{"theme_code": code_a, "theme_name": "测试题材甲",
+                               "source": "ths_official"}]
+    assert bulk["600303"] == [], "已过期 override 不生效（include 不该被保留）"
+    assert "600304" in bulk and bulk["600304"] == [], "未命中返回空列表，不是缺键"
+
+    # 空入参：不查库、返回空字典（调用方无需特判）
+    assert svc.official_for_symbols_bulk([]) == {}
+
+
 def test_stock_themes_api(client, monkeypatch: pytest.MonkeyPatch):
     svc = _svc()
 

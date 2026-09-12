@@ -227,6 +227,21 @@ def apply_overrides(
     return out
 
 
+def override_still_active(ov: ThemeOverride, now: datetime) -> bool:
+    """人工纠错记录是否**仍在有效期内**（`expires_at` 为 None = 永久）。
+
+    「单查」(`get_active_overrides_for_symbol`) 与「批量」(`_overrides_by_symbol`)
+    **共用这一处判据**（2026-09-12 评审批次 3 / P-3②）——两处各写一遍同样的有效期
+    比较，正是"同名不同口径"的滋生地：批量版一旦漏掉过期过滤，人工纠错就会**永久生效**，
+    而且不会有任何报错。
+
+    SQLite 读回的是 naive datetime（UTC 语义），两侧统一去 tzinfo 后再比。
+    """
+    if ov.expires_at is None:
+        return True
+    return ov.expires_at.replace(tzinfo=None) >= now.replace(tzinfo=None)
+
+
 # ---------------------------------------------------------------- IO：同步与查询
 
 
@@ -454,14 +469,30 @@ class ThemeCatalogService:
             return list(db.execute(q).scalars())
 
     def get_active_overrides_for_symbol(self, symbol: str) -> list[ThemeOverride]:
-        """该 symbol 的未过期人工纠错记录。"""
+        """该 symbol 的未过期人工纠错记录（单查；有效期判据见 `override_still_active`）。"""
         now = utcnow()
         with self._sf() as db:
             rows = db.execute(select(ThemeOverride).where(ThemeOverride.symbol == symbol)).scalars()
-            return [
-                r for r in rows
-                if r.expires_at is None or r.expires_at.replace(tzinfo=None) >= now.replace(tzinfo=None)
-            ]
+            return [r for r in rows if override_still_active(r, now)]
+
+    def _overrides_by_symbol(self, symbols: list[str]) -> dict[str, list[ThemeOverride]]:
+        """批量取多只股票的**未过期**人工纠错（key=symbol）。
+
+        与 `get_active_overrides_for_symbol` 共用 `override_still_active` 判据
+        （不是"照抄一遍同样的比较"），故两路的活跃集定义恒等。
+        """
+        if not symbols:
+            return {}
+        now = utcnow()
+        with self._sf() as db:
+            rows = db.execute(
+                select(ThemeOverride).where(ThemeOverride.symbol.in_(symbols))
+            ).scalars()
+            out: dict[str, list[ThemeOverride]] = {}
+            for r in rows:
+                if override_still_active(r, now):
+                    out.setdefault(r.symbol, []).append(r)
+            return out
 
     def get_official_for_symbol(self, symbol: str, *, apply_manual: bool = True) -> list[dict]:
         """反查：该股票属于哪些官方题材（architecture-design §1 L3 层）。
@@ -486,6 +517,44 @@ class ThemeCatalogService:
         if not overrides:
             return members
         return apply_overrides(members, overrides, {})
+
+    def official_for_symbols_bulk(
+        self, symbols: list[str], *, apply_manual: bool = True
+    ) -> dict[str, list[dict]]:
+        """批量反查：多只股票各自属于哪些官方题材（key=symbol）。
+
+        与逐只 `get_official_for_symbol` **行为等价**（2026-09-12 评审批次 3 / P-3②），
+        等价性由 `test_theme_catalog.py::test_official_for_symbols_bulk_matches_single_read`
+        直接 A/B 对照钉住（含 override 生效与 override 过期两种情形）：
+        · 同一张表、同一 join、同样按 `ThemeMember.theme_code` 排序 ⇒ 每只内部顺序一致；
+        · 默认同样叠加人工 override，且活跃集判据共用 `override_still_active`；
+        · **未命中的 symbol 返回空列表**（不是缺键），调用方不必再 `.get(sym) or []`。
+
+        实现上把 `N 只 × (1 次成员 + 1 次 override)` 压成 **2 次**查询：成员与
+        override 各一次 `in_`。原逐只版是评审批次 3 的 P-3② 热点——24 只候选 ≈ 48 次
+        **同步** SQLite 查询落在 async 函数里，既浪费又阻塞事件循环（与 P-2 同族）。
+        """
+        uniq = list(dict.fromkeys(symbols))
+        if not uniq:
+            return {}
+        with self._sf() as db:
+            rows = db.execute(
+                select(ThemeMember.symbol, ThemeMember, Theme.name)
+                .join(Theme, Theme.code == ThemeMember.theme_code)
+                .where(ThemeMember.symbol.in_(uniq))
+                .order_by(ThemeMember.symbol, ThemeMember.theme_code)
+            ).all()
+        grouped: dict[str, list[dict]] = {s: [] for s in uniq}
+        for sym, m, name in rows:
+            grouped[sym].append(
+                {"theme_code": m.theme_code, "theme_name": name, "source": m.attribution_source}
+            )
+        if not apply_manual:
+            return grouped
+        overrides = self._overrides_by_symbol(uniq)
+        if not overrides:
+            return grouped
+        return {s: apply_overrides(v, overrides.get(s) or [], {}) for s, v in grouped.items()}
 
     def catalog_size(self) -> int:
         with self._sf() as db:

@@ -9,7 +9,10 @@
 1. 产出卡片结构完整（含买入范围、出场纪律、失效条件、置信档）；
 2. 真的落库到 `daily_pick_set`；
 3. **P2-4**：单次生成内当日涨停池只被上游拉一次；
-4. **S2-4**：依赖以 `PipelineDeps` 显式传入，不需要伪造 request。
+4. **S2-4**：依赖以 `PipelineDeps` 显式传入，不需要伪造 request；
+5. **P-3（09-12 评审批次 3）**：两处题材取数只许走批量——题材成分 `member_symbols_bulk`
+   恰一次、官方题材反查 `official_for_symbols_bulk` 恰一次，**逐只单查的调用数必须为 0**。
+   这两条看的是**查询次数**而非行为，故桩带调用计数（同 `test_board_fund_api.py` 范式）。
 """
 
 from __future__ import annotations
@@ -47,20 +50,20 @@ class _PoolRec:
 
 
 class _Direction:
-    def __init__(self, target: str, direction: int = 1):
-        self.target_type = "symbol"
+    def __init__(self, target: str, direction: int = 1, target_type: str = "symbol"):
+        self.target_type = target_type
         self.target = target
         self.direction = direction
         self.strength = 1.0
 
 
 class _Event:
-    def __init__(self, eid: int, title: str):
+    def __init__(self, eid: int, title: str, target: str = "600519", target_type: str = "symbol"):
         self.id = eid
         self.title = title
         self.source_tier = 2
         self.certainty = "high"
-        self.directions = [_Direction("600519", 1)]
+        self.directions = [_Direction(target, 1, target_type)]
 
 
 class _Store:
@@ -86,15 +89,69 @@ class _CatalogTheme:
         self.name = name
 
 
+#: 桩成分表：**刻意不排序**——「批量与单查同序」是靠两端各自排序拿到的性质
+#: （`member_symbols_bulk` 的 `order_by(theme_code, symbol)` 对 `get_members` 的
+#: `order_by(symbol)`），桩若直接返回原序就测不出这一点。
+_MEMBERS: dict[str, list[str]] = {"BK0001": ["600519", "000858"]}
+
+
+def _official(symbol: str) -> list[dict]:
+    """`600519` 属「白酒概念」，其余为空——与生产返回的键集完全一致。"""
+    if symbol != "600519":
+        return []
+    return [{"theme_code": "BK0001", "theme_name": "白酒概念", "source": "ths_official"}]
+
+
 class _Catalog:
+    """题材目录桩，**带调用计数**。
+
+    P-3 的验收看的是「查询次数」而非行为：批量化后逐只单查的计数必须为 0。
+    因此本桩**同时提供单查与批量两条路**，由用例断言单查计数为 0。
+
+    为什么必须补齐批量方法（2026-09-12 实测教训）：桩若缺 `member_symbols_bulk` /
+    `official_for_symbols_bulk`，`AttributeError` 会被 `candidate_pool` 与批预取处的
+    `except Exception: log.warning(...)` 吞掉，**改回逐只 N+1 的旧实现测试照样全绿**
+    ——「桩缺方法」不构成守卫（同 `_Store` 那条注释的结论）。
+    """
+
+    def __init__(self):
+        self.member_bulk_calls = 0
+        self.member_single_calls = 0
+        self.official_bulk_calls = 0
+        self.official_single_calls = 0
+
     def get_catalog(self, limit: int = 1000):
         return [_CatalogTheme("BK0001", "白酒概念")]
 
     def get_members(self, code: str):
-        return [_Member("600519"), _Member("000858")]
+        self.member_single_calls += 1
+        return [_Member(s) for s in sorted(_MEMBERS.get(code, []))]
 
-    def get_official_for_symbol(self, symbol: str):
-        return [{"theme_name": "白酒概念"}] if symbol == "600519" else []
+    def member_symbols_bulk(self, codes: list[str]):
+        """镜像真实实现：**只返回有成分的题材**，且按 symbol 定序（`[:30]` 截断依赖次序）。"""
+        self.member_bulk_calls += 1
+        out: dict[str, list[str]] = {}
+        for c in codes:
+            syms = sorted(_MEMBERS.get(c, []))
+            if syms:
+                out[c] = syms
+        return out
+
+    def get_official_for_symbol(self, symbol: str, *, apply_manual: bool = True):
+        self.official_single_calls += 1
+        return _official(symbol)
+
+    def official_for_symbols_bulk(self, symbols: list[str], *, apply_manual: bool = True):
+        """镜像真实实现的**两条关键契约**：未命中的 symbol 返回空列表（不是缺键）。"""
+        self.official_bulk_calls += 1
+        return {s: _official(s) for s in dict.fromkeys(symbols)}
+
+
+class _ThemeStore:
+    """只返回**一条题材方向**事件——用于把候选池的事件路钉在「题材反查」分支上。"""
+
+    def list_events(self, *, active_only: bool = False, limit: int = 30):
+        return [_Event(7, "白酒消费刺激政策落地", target="白酒概念", target_type="theme")]
 
 
 class _Snapshot:
@@ -197,7 +254,13 @@ class _Chip:
 
 
 @pytest.fixture()
-def deps(tmp_path, monkeypatch):
+def catalog() -> _Catalog:
+    """单独暴露桩实例，供用例断言「查询次数」（P-3 验收看次数，不看行为）。"""
+    return _Catalog()
+
+
+@pytest.fixture()
+def deps(tmp_path, monkeypatch, catalog):
     engine = create_engine(f"sqlite:///{tmp_path / 'pipeline.db'}")
     Base.metadata.create_all(engine)  # DailyPickSet 经顶部 import 注册
     sf = sessionmaker(bind=engine)
@@ -210,7 +273,7 @@ def deps(tmp_path, monkeypatch):
     monkeypatch.setattr(pl, "get_chip_service", lambda: _Chip())
     monkeypatch.setattr(pl, "_prefetch_index_bars", _no_index_bars)
 
-    return pl.PipelineDeps(event_store=_Store(), snapshot_service=_Snapshot(), theme_catalog=_Catalog())
+    return pl.PipelineDeps(event_store=_Store(), snapshot_service=_Snapshot(), theme_catalog=catalog)
 
 
 async def _days():
@@ -338,6 +401,96 @@ def test_candidate_pool_reads_directions_from_loaded_relation(deps, monkeypatch)
     assert not [w for w in warnings if w.startswith("picks candidate: events failed")], (
         f"事件路被异常吞掉了（异常吞没会同时让守卫失效）：{warnings}"
     )
+
+
+def test_candidate_pool_theme_members_go_through_bulk_only(monkeypatch):
+    """**P-3① 回归位**：题材方向的成分股只许走**一次批量查询**，不得逐题材单查。
+
+    旧实现是循环内 `svc.get_members(code)`——每个题材一个独立 session，且这些
+    **同步** SQLite 调用落在 async 函数里（与 P-2 同族，会阻塞事件循环）。
+    改用既有 `member_symbols_bulk`（P0-2 已为另一处消费方补齐「与 `get_members`
+    同序」的性质），故本用例同时钉两件事：**次数**（单查必须为 0）与**次序**
+    （`[:30]` 截断依赖 bulk 与单查同序）。
+
+    桩带计数 ⇒ 改回逐题材单查后 `member_bulk_calls` 变 0、`member_single_calls`
+    由 0 变 2 ⇒ 精确变红。
+    """
+    monkeypatch.setattr(pl.log, "warning", lambda msg, *a: None)
+    cat = _Catalog()
+
+    pool = asyncio.run(pl.candidate_pool(_BareHub(), _ThemeStore(), cat, limit_up_pool=[]))
+
+    # 次序即断言：批量版按 symbol 定序 ⇒ 000858 排在 600519 之前
+    assert [p["symbol"] for p in pool] == ["000858", "600519"]
+    assert {p["from"] for p in pool} == {"event_theme"}
+    assert cat.member_bulk_calls == 1, "题材成分必须走**一次**批量查询"
+    assert cat.member_single_calls == 0, "不得逐题材调 get_members（N 次独立 session）"
+
+
+def test_candidate_pool_unknown_theme_name_triggers_no_query(monkeypatch):
+    """目录里查不到的题材名：整条分支跳过（不臆造归属），且**不触发任何成分查询**。"""
+    monkeypatch.setattr(pl.log, "warning", lambda msg, *a: None)
+    cat = _Catalog()
+
+    class _UnknownThemeStore:
+        def list_events(self, *, active_only: bool = False, limit: int = 30):
+            return [_Event(8, "未知题材事件", target="目录里没有的题材", target_type="theme")]
+
+    pool = asyncio.run(pl.candidate_pool(_BareHub(), _UnknownThemeStore(), cat, limit_up_pool=[]))
+
+    assert pool == []
+    assert cat.member_bulk_calls == 0 and cat.member_single_calls == 0
+
+
+def test_deep_scan_prefetches_official_themes_once(deps, catalog, monkeypatch):
+    """**P-3② 回归位**：逐候选「股票 → 官方题材」反查只许**一次批量查询**。
+
+    旧实现在 `_theme_benchmark` 函数体内调 `svc.get_official_for_symbol(symbol)`
+    ——每只 2 次同步 SQLite（成员 + 人工纠错），24 只候选 ≈ 48 次落在 async 循环里。
+    现在进循环前一次 `official_for_symbols_bulk`，循环内退化为内存查表。
+
+    等价性（批量 == 逐只）由
+    `test_theme_catalog.py::test_official_for_symbols_bulk_matches_single_read`
+    直接 A/B 对照钉住；本用例只钉**调用路径**：批量恰一次、单查恰好零次，
+    且没有走异常兜底——批预取的失败路径会 `log.warning("picks official themes
+    bulk failed")`，与 P-2 那条注释同一个坑：**异常被吞会让次数断言失去意义**。
+    """
+    warnings: list[str] = []
+    monkeypatch.setattr(pl.log, "warning", lambda msg, *a: warnings.append(msg % a if a else msg))
+    monkeypatch.setattr(pl, "evaluate_stand_aside", _benign_gate)
+
+    _run(deps, _Hub())
+
+    assert catalog.official_bulk_calls == 1, "官方题材反查必须走**一次**批量查询"
+    assert catalog.official_single_calls == 0, "不得逐候选调 get_official_for_symbol"
+    assert not [w for w in warnings if "picks official themes bulk failed" in w], (
+        f"批量反查被异常兜底了（异常吞没会同时让次数断言失去意义）：{warnings}"
+    )
+
+
+def test_theme_benchmark_is_pure_and_prefers_strongest_theme():
+    """`_theme_benchmark` 抽成纯函数的直测：题材归属由参数传入，且取**最强**题材。
+
+    原签名带 `svc`/`symbol` 并在函数体内查库 ⇒ 无法直测（必须起 DB）。抽纯后：
+    ① 传入多个所属题材时取当日均涨幅最高者；
+    ② 一个都匹配不上时**回退大盘**（诚实降级，不臆造题材归属）。
+    """
+    lu_ctx = {
+        "themes": {
+            "白酒概念": {"changes": [3.0, 5.0]},
+            "次高端": {"changes": [9.0]},
+            "无量题材": {"changes": []},
+        }
+    }
+    best, name = pl._theme_benchmark(
+        themes=[{"theme_code": "BK0001", "theme_name": "白酒概念"},
+                {"theme_code": "BK0002", "theme_name": "次高端"}],
+        lu_ctx=lu_ctx, market_pct=1.2,
+    )
+    assert (best, name) == (9.0, "次高端")
+
+    fallback, none_name = pl._theme_benchmark(themes=None, lu_ctx=lu_ctx, market_pct=1.2)
+    assert (fallback, none_name) == (1.2, None), "匹配不到所属题材时回退大盘，不臆造归属"
 
 
 def test_deps_are_explicit_not_request_shaped(deps):

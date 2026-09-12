@@ -152,7 +152,28 @@ async def candidate_pool(
 
     # ① 活跃事件：symbol 方向直接收；theme 方向反查官方成分（cap 30/题材）
     try:
-        for row in store.list_events(active_only=True, limit=30):
+        rows = store.list_events(active_only=True, limit=30)
+        # P-3①（2026-09-12 评审批次 3）：先把本批事件要查的题材代码**按同一遍历顺序去重收集**，
+        # 再用**既有**批量接口一次性取回，替代循环内的逐题材 `svc.get_members(code)`
+        # （每个题材一个独立 session）。复用的是既有挂载点 `member_symbols_bulk`——它的
+        # docstring 已写明"排序后与 `get_members` 同序，批量替换单查才是**行为等价**的"
+        # （2026-09-11 P0-2 已为另一处消费方补齐该性质），所以这里不是新写一个批量查询。
+        # 行为等价要点：`symbols` 是 setdefault 建的**有序列**，最终 `out` 按插入序取到
+        # `CANDIDATE_CAP` 为止 ⇒ **遍历顺序必须逐字保留**。故下面仍是「按 row → 按 direction」
+        # 的原顺序，只是把取数提前；`[:30]` 截断落在与 `get_members` 同序的列表上。
+        wanted: list[str] = []
+        if svc is not None:
+            seen_codes: set[str] = set()
+            for row in rows:
+                for d in row.directions:
+                    if d.target_type != "theme":
+                        continue
+                    code = name_to_code.get(d.target)
+                    if code and code not in seen_codes:
+                        seen_codes.add(code)
+                        wanted.append(code)
+        members_by_code = svc.member_symbols_bulk(wanted) if (svc is not None and wanted) else {}
+        for row in rows:
             # 直接读关系属性，**不要再调 `store.directions_of(row.id)`**：`list_events` 内部
             # 已 `selectinload(EventCard.directions)`（store.py:156），行虽 detached 但方向
             # 已在内存里；旧写法会**逐事件重开 session 再查一遍同一条 event_direction**
@@ -167,8 +188,8 @@ async def candidate_pool(
                     code = name_to_code.get(d.target)
                     if not code:
                         continue
-                    for m in svc.get_members(code)[:30]:
-                        symbols.setdefault(m.symbol, {"from": "event_theme", "prio": 1})
+                    for sym in (members_by_code.get(code) or [])[:30]:
+                        symbols.setdefault(sym, {"from": "event_theme", "prio": 1})
     except Exception as exc:
         log.warning("picks candidate: events failed: %s", exc)
 
@@ -232,18 +253,18 @@ def limit_up_context(pool: list) -> dict:
 
 
 def _theme_benchmark(
-    *, svc, lu_ctx: dict, symbol: str, market_pct: float | None
+    *, themes: list[dict] | None, lu_ctx: dict, market_pct: float | None
 ) -> tuple[float | None, str | None]:
     """个股所属题材的当日基准涨幅（优先最强题材，匹配不到回退大盘）。
 
+    **纯函数**（2026-09-12 评审批次 3 / P-3②）：题材归属由调用方
+    （`deep_score_candidates`）批量预取后传入，本函数不再自己查库。原实现签名带
+    `svc` 并在函数体内 `svc.get_official_for_symbol(symbol)`，于是**每个候选**
+    2 次同步 SQLite 查询（成员 + 人工纠错）都落在 async 循环体里（24 候选 ≈ 48 次），
+    与 P-2/P-3① 同族。抽成纯函数后既可直测，也让"取数"与"判定"分开。
+
     回退大盘是诚实降级：宁可用确定性高的弱基准，也不臆造题材归属。
     """
-    if svc is None:
-        return market_pct, None
-    try:
-        themes = svc.get_official_for_symbol(symbol)
-    except Exception:
-        return market_pct, None
     best: float | None = None
     best_name: str | None = None
     for t in themes or []:
@@ -445,6 +466,21 @@ async def deep_score_candidates(
             rps_note = (f"RPS 未覆盖（{fr.get('reason') or 'marketdb 仓未建/未回补'}），"
                         "中性处理")
 
+    # P-3②（2026-09-12 评审批次 3）：逐候选「股票 → 官方题材」反查此前是
+    # `get_official_for_symbol(sym)` **每只 2 次同步 SQLite 查询**（成员 + 人工纠错），
+    # 24 只候选 ≈ 48 次落在 async 循环体里——既浪费又阻塞事件循环（与 P-2 同族）。
+    # 改为**进循环前批量取一次**，循环内退化为纯内存查表。
+    # 等价性由 `test_theme_catalog.py::test_official_for_symbols_bulk_matches_single_read`
+    # 直接 A/B 对照钉住（含 override 生效 / 过期两种情形）。
+    # 失败语义保持与逐只版一致：查不到 → 该只回退大盘，不臆造题材归属。
+    themes_by_symbol: dict[str, list[dict]] = {}
+    if svc is not None:
+        try:
+            themes_by_symbol = svc.official_for_symbols_bulk([c["symbol"] for c in deep])
+        except Exception as exc:
+            log.warning("picks official themes bulk failed: %s", exc)
+            themes_by_symbol = {}
+
     async def _score_one(c: dict) -> dict | None:
         sym = c["symbol"]
         async with sem:
@@ -523,7 +559,8 @@ async def deep_score_candidates(
             # 梯队（第六维）：个股在题材天梯中的地位 × 题材阶段，联合读取。
             # 没有这一维，退潮期的最后一棒会和发酵期的真龙头拿同样分。
             benchmark, theme_name = _theme_benchmark(
-                svc=svc, lu_ctx=lu_ctx, symbol=sym, market_pct=market_pct
+                themes=themes_by_symbol.get(sym) or [],
+                lu_ctx=lu_ctx, market_pct=market_pct,
             )
             excess = (
                 round(c["change_pct"] - benchmark, 2)
