@@ -34,6 +34,7 @@ J 项是本轮新加的检查：**文档点名的仓库代码路径必须存在*
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
 from types import ModuleType
 
@@ -241,7 +242,131 @@ def test_real_repo_has_no_dead_doc_anchor() -> None:
     一箭双雕：①证明检查器在真实扫描面（含大目录遍历）上可运行；
     ②把"仓库当前干净"钉住——若这条与 `doc-health` 同时变红，说明新出现了
     文档点名的死路径（改文档或登记 `ANCHOR_ALLOW`），这是**期望的双红**。
+
+    ⚠️ **这条守卫曾在本地是瞎的**（2026-09-12）：判定面用的是 `os.walk`，会把
+    `.workbuddy/trash/` 里的**回收站副本**算作"文件存在"⇒ 本地恒绿、CI 变红
+    （实测遮盖 `docs/kb/00-INDEX.md:192 → run_review.sh`）。判定面改为 git 跟踪
+    清单后本条才真正具备"本地能看见 CI 所见"的能力（见 KB-ENG-70）。
     """
     hits, ghost = _load().check_doc_anchors()
     assert hits == [], f"文档点名了不存在的代码路径（改文档或登记 ANCHOR_ALLOW）：{hits}"
     assert ghost == [], f"容忍项已失效（锚点改了/文件搬了，须删该条）：{ghost}"
+
+
+# ---------------------------------------------------------------- 分界点 5：判定面 = git 跟踪清单
+
+
+def test_anchor_face_equals_git_tracked_basenames() -> None:
+    """**判定面必须等于 CI 的检出内容**（git 跟踪清单），不是本地文件系统。
+
+    门禁问的是「文档点名的代码路径**在仓库里**还在不在」，而 CI 检出的只有跟踪文件。
+    两者不相等 ⇒ 本地被未跟踪文件（回收站副本、数据产物）**系统性喂绿**，
+    且"本地绿 / CI 红"会常态复现。本仓实测量级：`os.walk` 10409 个 basename
+    vs `git ls-files` 999 个。
+    """
+    mod = _load()
+    if mod._tracked_basenames() is None:
+        pytest.skip("非 git 检出（走 os.walk 回退路径），本断言不适用")
+    raw = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=mod.ROOT, capture_output=True, check=True)
+    expected = {Path(p).name for p in raw.stdout.decode("utf-8").split("\0") if p}
+    assert mod._repo_basenames() == expected
+
+
+def test_untracked_local_copy_cannot_mask_dead_anchor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """**回收站副本不得"救活"死引用**——两种口径对照，缺陷与修复各跑一遍。
+
+    与本仓删除纪律直接冲突的场景：文件处置一律先进 `.workbuddy/trash/`（禁止 `rm`），
+    该目录 gitignored 但 `os.walk` 照走 ⇒ **越守纪律，门禁越假绿**。
+    """
+    mod = _load()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    monkeypatch.setattr(mod, "ROOT", tmp_path)
+    monkeypatch.setattr(mod, "DOCS", docs)
+    monkeypatch.setattr(mod, "ANCHOR_ALLOW", {})
+    (docs / "a.md").write_text("见 `run_review.sh`。\n", encoding="utf-8")
+    trash = tmp_path / ".workbuddy" / "trash" / "2026-09-12" / "scripts"
+    trash.mkdir(parents=True)
+    (trash / "run_review.sh").write_text("", encoding="utf-8")   # 本地有、但未跟踪
+
+    # ① 旧口径（os.walk 全盘扫描）：被回收站副本遮盖 ⇒ **假绿**（这就是缺陷本身）
+    monkeypatch.setattr(mod, "_tracked_basenames", lambda: None)
+    assert mod.check_doc_anchors()[0] == [], "旧口径下应复现假绿，否则本测试失去了对照意义"
+
+    # ② 新口径（git 跟踪清单）：仓库里没有这个文件 ⇒ 暴露真漂移
+    monkeypatch.setattr(mod, "_tracked_basenames", lambda: {"unrelated.py"})
+    hits, _ = mod.check_doc_anchors()
+    assert [a for _, _, a, _ in hits] == ["run_review.sh"]
+
+
+# ---------------------------------------------------------------- 结论行必须由实际结果派生
+
+
+_NEUTRAL = {
+    "check_unregistered": (),
+    "check_dead_links": (),
+    "check_over_limit": (),
+    "check_kb_entries": (),
+    "kb_file_coverage_gap": (),
+    "check_missing_abstract": (),
+    "check_clusters": (),
+    "check_code_refs": ((), ()),        # 第二项是**已登记例外列表**，不是布尔
+    "check_legacy_slugs": ((), ()),
+    "check_kb_pointer_files": (),
+    "check_kb_orphans": (),
+    "check_stale_anchors": (),
+    "check_claim_entries_missing_falsifier": (),
+    "check_claim_exempt_ids": (),
+    "check_empty_sections": ((), ()),
+}
+
+
+def _stub_all_but_anchors(mod: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    """把 J 以外的检查全部打成"空结果"，以隔离结论行本身。"""
+    for name, ret in _NEUTRAL.items():
+        monkeypatch.setattr(mod, name, lambda *a, _r=ret, **k: _r)
+
+
+def _conclusion(stdout: str) -> str:
+    lines = [ln for ln in stdout.splitlines() if ln.startswith("结论：")]
+    assert len(lines) == 1, f"结论行应恰好 1 条，实得 {lines}"
+    return lines[0]
+
+
+def test_conclusion_line_names_the_failing_check(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """**汇总行必须由实际结果派生**——不得把常驻局限写成失败项的原因。
+
+    回归点：结论行原先无条件追加「（C 的日志单轮 ≤80 行属过程指标…）」，而那句是
+    **常驻局限**、与本次失败项无关 ⇒ J 项变红时会读成"C 项待处理"。
+    实测已导致排查方向跑偏（2026-09-12 CI：J 红，据结论行去查 C）。
+    """
+    mod = _load()
+    _stub_all_but_anchors(mod, monkeypatch)
+    monkeypatch.setattr(mod, "check_doc_anchors", lambda: ([("docs/a.md", 1, "gone.py", "正文")], []))
+
+    rc = mod.main()
+    concl = _conclusion(capsys.readouterr().out)
+
+    assert rc == 1
+    assert "1 项待处理" in concl
+    assert "J 文档代码锚点" in concl, f"结论行必须点名失败的检查项，实得：{concl}"
+    assert "C 的日志单轮" not in concl, f"常驻局限不得冒充失败原因，实得：{concl}"
+
+
+def test_conclusion_line_on_clean_run_says_all_passed(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """全绿时结论行只能是"全部通过"，同样不得挂任何单项描述。"""
+    mod = _load()
+    _stub_all_but_anchors(mod, monkeypatch)
+    monkeypatch.setattr(mod, "check_doc_anchors", lambda: ([], []))
+
+    assert mod.main() == 0
+    concl = _conclusion(capsys.readouterr().out)
+
+    assert concl == "结论：全部通过", f"实得：{concl}"

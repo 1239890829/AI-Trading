@@ -910,6 +910,80 @@ frozenset + 收窄正则）。⚠️ 修好之后**召回恢复真实、又冒�
 
 ---
 
+### 6.15 2026-09-12 夜（CI 自查：J 项门禁**假绿** —— 判定面漏 gitignored 目录 ＋ 真阳性未登记 ＋ 汇总行硬编码）
+
+**起因**：推送后按纪律自查 CI。`02445e0`（F-10 门禁轮）与 `711d8de`（知识库卡死修复轮）
+两个 run 的 **`backend (pytest + pyflakes)` 与 `docs (doc-health)` 两个 job 均红**，
+而**本地同一条命令全绿**。
+
+**取证（本轮新增手法，见 [[KB-ENG-70]]）**：`urllib` 跟随 302 到对象存储时会带 `Authorization`
+⇒ **401**（上轮两次卡在这里）；改 **`curl -sL`** 反而可行（跨主机重定向时 curl 默认**丢弃**
+`Authorization`），`.../actions/jobs/<job_id>/logs` 直出全文。另：`/actions/runs?head_sha=` 的
+`head_sha` **必须是完整 SHA**——传 7 位短 SHA **静默返回空数组**（不报错），本轮一度据此误判。
+
+**两 job 同一根因、只报一处**：`docs/kb/00-INDEX.md:192 → run_review.sh（全仓不存在）`。
+
+| # | 缺陷 | 表现 | 影响范围 | 根本原因 |
+|---|---|---|---|---|
+| **D1** | **判定面 ≠ CI 检出内容** | 本地绿 / CI 红；`test_real_repo_has_no_dead_doc_anchor` **在本地是瞎的** | J 项全量；同类检查项未逐项核验 | J 的"全仓文件名清单"用 `os.walk(ROOT)` 现算，而 CI 只检出 **git 跟踪文件** |
+| **D2** | **真阳性未登记** | 该行被 J 判红（CI 侧判定**正确**） | 1 处（KB-ENG-62 行） | 该行是**处置记录**（叙述"已入回收站"），属 J 的"记录性引用"面，但标记表未覆盖该措辞 |
+| **D3** | **汇总行硬编码** | `结论：N 项待处理（C 的日志单轮 ≤80 行…）` 与实际失败项无关 | 全部失败场景 | 括注是**常驻局限**，却被无条件挂在结论后 ⇒ J 红被读成"C 项待处理"，**本轮据此排查方向直接跑偏** |
+
+**D1 的实测爆炸半径（非估计）**：`os.walk` 清点 **10409** 个 basename vs `git ls-files` **999** 个；
+其中后缀受检、**真能"伪造通过"的 7 个**（`run_review.sh` / `com.ashare.review.plist` /
+`watch-card.tsx` / `v1.yaml` / …）；**实际遮盖 1 处**——正是 CI 报的那处。
+**要害在于它与本仓删除纪律互相削弱**：文件处置一律先进 `.workbuddy/trash/`（gitignored，
+且**禁止 `rm`**），而 `os.walk` 照走该目录 ⇒ **越守纪律，门禁越假绿**。
+
+**修法（三条，缺一不可）**：
+
+| # | 改动 | 位置 |
+|---|---|---|
+| D1 | 判定面改为 **git 跟踪清单**（`git rev-parse --show-toplevel` 先验 + `git ls-files -z`；非 git 环境回退 `os.walk`） | `_repo_basenames()` ＋新增 `_tracked_basenames()` |
+| D2 | 登记 `ANCHOR_ALLOW[(docs/kb/00-INDEX.md, run_review.sh)]`；**不改文档**（那次拆除就是该条教训本体） | `ANCHOR_ALLOW` |
+| D3 | 结论行**由实际结果派生**（列举失败项标签）；常驻局限降为独立 `[INFO]` 行 | `main()` |
+
+> D1 的取向说明：**靠往 skip 目录补条目治不了根**——那是**枚举**（补了 `.workbuddy`，
+> 明天还有 `data/`、`logs/`），"跟踪清单"是**定义**。故在 `ANCHOR_SKIP_DIRS` 上写了
+> 「不要再往这里补目录来修"本地绿 / CI 红"」的告示。
+
+**注入验证（4 条，逐条实测"精确变红"后可复现）**：①判定面退回 `os.walk` →
+`test_anchor_face_equals_git_tracked_basenames` 红；②结论行退回硬编码 →
+`test_conclusion_line_names_the_failing_check` 红；③撤销 `ANCHOR_ALLOW` →
+`test_real_repo_has_no_dead_doc_anchor` 红；④遮盖场景守卫（`test_untracked_local_copy_cannot_mask_dead_anchor`，
+两口径对照：旧口径复现假绿、新口径暴露真漂移）→ 红。
+
+> ⚠️ **注入过程自身踩的坑（已进 [[KB-ENG-70]]）**：③一度被判成"守卫无效"——真因是替换串
+> `'ANCHOR_ALLOW: dict[… ] = {\n'` 是 `'STALE_ANCHOR_ALLOW: dict[… ] = {\n'` 的**子串**，
+> `str.replace(…, 1)` 命中的是**另一处**名单（F4 的）。⇒ 通例：**注入串必须带唯一上下文**，
+> 且**落点必须校验**（不是"字符串在不在"，而是"是否落在目标行"）——本轮连"同调用内写入是否落盘"
+> 都因此被误判了一轮。改用 Edit 工具（带上下文）后一次命中。
+
+**新增测试 4 项**（`backend/tests/test_doc_health_anchors.py`，17 → 21 项）：
+`test_anchor_face_equals_git_tracked_basenames` / `test_untracked_local_copy_cannot_mask_dead_anchor` /
+`test_conclusion_line_names_the_failing_check` / `test_conclusion_line_on_clean_run_says_all_passed`；
+并把"这条守卫曾在本地是瞎的"写进既有真实仓库守卫的 docstring。
+
+**门禁实测（前提：8000 在跑）**：后端 **2695 项（2633 passed / 62 skipped）· 173 文件**（147.52s）·
+前端 **454 项 / 54 文件** · `tsc` 0 · `eslint` 0 error / 0 warn · `pyflakes` 0 ·
+`doc-health` **全部通过**（J 项 0 处 / 已登记容忍 2 条，exit 0）。
+**自洽核对**：2691 → **2695** 恰为**新增 4 项**；文件数 173 **不变**（未新增测试文件）。
+
+**沉淀**：新建 **[[KB-ENG-70]]**（09 册，已登记 00-INDEX）——四条通例：判定面必须等于 CI 检出内容 /
+"本地绿 CI 红"先查判定面差再谈环境 / 汇总行必须由实际结果派生 / "已处置物"必须显式留出口；
+附 CI 日志取法与"注入串子串"教训。
+
+**未做 / 边界（如实记）**：①`--quiet` 的**行为与 docstring 曾不一致**（实际"全绿零输出"，
+原文写"只输出结论行"）——本轮**只改 docstring 未改行为**，是否让 `--quiet` 打印结论行**待决**
+②本轮只修了 J 项这一种"判定面 ≠ CI 检出内容"，**其余检查项是否同类未逐项核验**（如 B 死链扫
+`.workbuddy/memory/MEMORY.md`——该文件**未跟踪但被当真源**，属有意为之，非同类）
+③`ANCHOR_ALLOW` 现有 2 条登记，**同为"叙述已处置物"这一类**——即该类的**预期残留**；
+若持续增长，应考虑改为"记录性标记"而非逐条登记（**先提后做**）。
+
+**待决（承接 §6.14 ①，先提后做）**：是否为「表格必须有分隔行」新增**文档侧门禁**（可覆盖全部 49 行）。
+
+---
+
 ## 七、文档 × 实际状态 偏差更正（2026-09-10）
 
 | # | 位置 | 原记载（错） | 实际 |

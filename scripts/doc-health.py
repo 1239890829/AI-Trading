@@ -7,7 +7,7 @@
 
 用法：
     python3 scripts/doc-health.py            # 全量体检，有问题 exit 1
-    python3 scripts/doc-health.py --quiet    # 只输出结论行（收尾自检用）
+    python3 scripts/doc-health.py --quiet    # 静默模式：全绿时**零输出**，只在有失败项时打印
     python3 scripts/doc-health.py --all      # 额外扫描 archive/ 与历史日志（默认跳过，见下）
 
 检查项（对应 §8.2）：
@@ -40,6 +40,8 @@
                  J2 围栏代码块里的**目录树行** `├── x.py`（末段文件名全仓须存在）。
                  动机 = §6.12「设计文档能力失真」的可判子集（F-10）；先量三个原型才定档，
                  宽口径已**实测否决**（见函数 docstring）。上线时 4 处命中 / 0 误报
+                 **判定面 = git 跟踪清单**（= CI 检出内容），不是本地文件系统
+                 ——否则回收站副本会把死引用持续"喂绿"（2026-09-12 修正，见 `_repo_basenames`、KB-ENG-70）
 
 局限（诚实声明）：C 的"日志单轮新增 ≤80 行"是**过程指标**，静态扫描判不出，需人工/议程侧核对。
 J 只回答「点名的代码资产还在不在」，**不回答**「文档对某能力的描述是否过时」——
@@ -51,6 +53,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -782,6 +785,9 @@ ANCHOR_PLACEHOLDER_RE = re.compile(r"^(?:x+|a+|n+|y{4}[\w-]*)$", re.I)
 #: 视为「仓库相对路径首段」的目录；**不在其中的含 `/` 锚点**视为外部路径或文档自造简写，不判
 ANCHOR_ROOTS = ("app", "backend", "apps", "scripts", "docs", "tests", "data", "skills")
 #: 全仓文件名清点时剪掉的目录（`rglob` 会钻进 node_modules/.next 造成秒级开销）
+#: ⚠️ **只在 `_tracked_basenames()` 失败的回退路径上生效**——正常路径走 git 跟踪清单，
+#: 而跟踪清单天然不含这些目录。**不要再往这里补目录来修"本地绿 / CI 红"**
+#: （那是枚举，治不了根；理由见 `_repo_basenames` docstring）。
 ANCHOR_SKIP_DIRS = frozenset({
     "node_modules", ".next", ".turbo", "__pycache__", ".venv", "dist", "build", ".git"})
 #: 排除的文档位（**口径**，见 `check_doc_anchors` docstring 末段）
@@ -789,12 +795,73 @@ ANCHOR_SKIP_DIR_PARTS = ("archive", "trash", "daily-review")
 ANCHOR_SKIP_FILES = ("docs/retro-and-gaps.md",)
 #: 已登记容忍项（键 = 相对路径 + 完整锚点）。空 = 上线实测 0 误报；机制保留供后续登记。
 #: ⚠️ 键用**完整锚点**而非截断，否则同一锚点会既进 hits 又进 ghost（F-4 踩过）。
-ANCHOR_ALLOW: dict[tuple[str, str], str] = {}
+ANCHOR_ALLOW: dict[tuple[str, str], str] = {
+    # J 项判的是「点名的资产**还在不在**」，而这里点名的恰恰是**已处置物**——属误报面。
+    # 该行是 KB-ENG-62 的**处置记录**（2026-09-12 裁定 B）：独立复盘通道已拆除
+    # （`bootout` + 安装位 plist 与 `run_review.sh` 等四文件入回收站，能力由既有
+    # `review-scheduler` 承担）。**不选"改文档"**：那次拆除就是该条教训的本体，
+    # 点名文件是必要信息，改掉反而削弱记录（拆除叙述本就属 J 的"在案引述"范畴）。
+    # ⚠️ 也**不选**往 `ANCHOR_RECORD_MARKERS` 加"回收站"：标记是全行级宽口径，
+    # 会连带豁免"规则类"行（如"禁止把 `app/x.py` 放进回收站"），制造新的假阴性。
+    ("docs/kb/00-INDEX.md", "run_review.sh"):
+        "KB-ENG-62 处置记录：2026-09-12 已随独立通道拆除入回收站，是在案叙述而非在用资产",
+    # 同一条教训在 KB 正文里的复述（[[KB-ENG-70]] 的"成因 2"）：该条目**必须**点名它，
+    # 否则读者无法核验"文档点名的资产已处置"这件事。键是 `(文件, 锚点)` 而非行号 ⇒
+    # 一处登记覆盖该文件内全部提及（此处 2 行）。
+    ("docs/kb/09-verification-pitfalls.md", "run_review.sh"):
+        "KB-ENG-70 成因叙述：该脚本已随拆除入回收站，本条目的主题正是「它为何会被误报」",
+}
+
+
+def _tracked_basenames() -> set[str] | None:
+    """**git 跟踪**文件名集合；`ROOT` 不是 git 仓库根时返回 `None`（调用方回退 `os.walk`）。
+
+    先验 `rev-parse --show-toplevel == ROOT`：只有在 `ROOT` 本身就是仓库根时才认，
+    避免"`ROOT` 恰好落在别的仓库内、拿到隔壁仓库的文件清单"这种静默错面。
+    """
+    try:
+        top = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=ROOT, capture_output=True, text=True, timeout=30, check=True)
+        if Path(top.stdout.strip()).resolve() != ROOT.resolve():
+            return None
+        ls = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=ROOT, capture_output=True, timeout=60, check=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    names = {
+        Path(p).name
+        for p in ls.stdout.decode("utf-8", "replace").split("\0")
+        if p
+    }
+    return names or None
 
 
 def _repo_basenames() -> set[str]:
-    """全仓文件名集合（`os.walk` + 目录剪枝）。"""
-    out: set[str] = set()
+    """全仓文件名集合 —— **判定面 = git 跟踪清单**（即 CI 检出内容），非 git 才回退 `os.walk`。
+
+    为什么不用 `os.walk` 直接当判定面（2026-09-12 定位的真因，见 KB-ENG-70）：
+
+    这条检查问的是「文档点名的代码路径**在仓库里**还在不在」，而 **CI 检出的只有 git
+    跟踪文件**。用 `os.walk` 会把**本地独有**的文件一并算作"存在"——本仓实测
+    `os.walk` 清点 10409 个 basename，`git ls-files` 只有 999 个，其中**后缀落在
+    `ANCHOR_SUFFIX` 内、因而真能"伪造通过"的有 7 个**（`run_review.sh` 等）。
+
+    致命之处在于它与本仓的**删除纪律互相削弱**：文件处置一律先进
+    `.workbuddy/trash/`（用户要求，禁止 `rm`），而该目录是 gitignored、`os.walk`
+    却照走 ⇒ **回收站里的副本持续把死引用"喂绿"** ⇒ 本地全绿、CI 假红，且
+    `test_real_repo_has_no_dead_doc_anchor` 这条守卫**在本地是瞎的**（实测：
+    `docs/kb/00-INDEX.md:192 → run_review.sh` 被回收站副本完整遮盖）。
+
+    ⇒ 通例：**门禁的判定面必须等于 CI 的检出内容**。靠逐个往 `ANCHOR_SKIP_DIRS`
+    补目录（补 `.workbuddy`，明天再补 `data/`、`logs/`…）治不了根——那是枚举，
+    而"跟踪清单"是**定义**。
+    """
+    tracked = _tracked_basenames()
+    if tracked is not None:
+        return tracked
+    out: set[str] = set()          # 回退：无 git 环境（打包件 / 沙箱）
     for dirpath, dirnames, filenames in os.walk(ROOT):
         dirnames[:] = [d for d in dirnames if d not in ANCHOR_SKIP_DIRS]
         out.update(filenames)
@@ -916,6 +983,7 @@ def main() -> int:
     quiet = "--quiet" in sys.argv
     scan_all = "--all" in sys.argv
     problems = 0
+    failed: list[str] = []          # 失败的检查项标签，供结论行**如实**列举（见下）
 
     unreg = check_unregistered()
     dead = check_dead_links(scan_all)
@@ -938,6 +1006,7 @@ def main() -> int:
         nonlocal problems
         if not ok:
             problems += 1
+            failed.append(label)
         if ok and quiet:
             return
         print(f"[{'OK ' if ok else 'FAIL'}] {label} {detail}")
@@ -1052,8 +1121,15 @@ def main() -> int:
             + len(re.findall(r"^### KB-[A-Z]+-\d+", _read(DOCS / "kb" / "02-trading-lessons.md"), re.M))
         print(f"[INFO] H 主张类覆盖面：{n_claim} 条中 {len(CLAIM_EXEMPT)} 条豁免（做法/定义/框架），"
               f"{n_claim - len(CLAIM_EXEMPT)} 条应带失效条件，实际缺 {len(claim_miss)} 条")
-        print(f"{'-' * 60}\n结论：{'全部通过' if problems == 0 else f'{problems} 项待处理'}"
-              f"（C 的日志单轮 ≤80 行属过程指标，需人工/议程核对）")
+        # 结论行**按实际失败项列举**。此前这里硬编码「（C 的日志单轮 ≤80 行属过程指标…）」——
+        # 那句是**常驻局限**（见模块 docstring），与本次失败项无关，却无条件挂在结论后，
+        # 失败项是 J 时会被读成"C 项待处理"。实测已导致排查方向跑偏（2026-09-12 CI：J 项红，
+        # 日志显示"结论：1 项待处理（C 的日志单轮…）"，据此去查 C 而非 J）。
+        # ⇒ 通例：**汇总行必须由实际结果派生，不得写死任何单项的描述**。
+        concl = "全部通过" if not failed else f"{len(failed)} 项待处理（{'、'.join(failed)}）"
+        print(f"{'-' * 60}\n结论：{concl}")
+        print("[INFO] 常驻局限：C 的「日志单轮新增 ≤80 行」属过程指标，静态扫描判不出，"
+              "需人工/议程核对（见 kb/07 §8.2）")
     return 0 if problems == 0 else 1
 
 
