@@ -115,7 +115,10 @@ node scripts/api-sweep.js http://nas:8000    # 指定目标
 
 - SQLite 文件在 `data/ashare.db`，行情/因子/回测结果规划写入 `data/parquet/`，注意备份 data/ 目录。
 - `/api/health` 报告数据源健康（consecutive_failures / last_error / is_stale），可接监控告警。
-- 结构化日志 + 每个后台任务的名称/起止/状态/重试统计在 Phase 8 补全（当前轮询协程有日志与失败计数）。
+- 结构化日志；**后台任务可观测性已落地**——`TaskRegistry`（S2-2）把 26 个常驻任务收敛为
+  一份声明，逐任务记录 `state / last_tick / failures / last_error / restarts`，经
+  `GET /api/system/schedulers` 暴露，并带死亡自愈（指数退避重启）。
+  **未做**的是外部监控接入（Prometheus / 告警面板）。
 - 免费数据源被限流（空回复）属预期：系统自动进入 stale 降级，调大 ASHARE_POLL_INTERVAL_SECONDS 或换备源。
 
 ## 已踩过的坑（务必记住）

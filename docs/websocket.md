@@ -44,7 +44,9 @@ RuntimeError 被静默吞掉 → 推送死亡而 ping 存活（连接假活，�
 - 优先 WS；断线指数退避重连；连续 3 次失败降级为 REST 轮询（5s），恢复后切回 WS。
 - 每 15s 发送心跳 ping。
 
-## 规划端点（Phase 6+）
+## 规划端点（**未实现** · 按需启动）
+
+现已实现并投用的只有 `/ws/quotes`（`backend/app/websocket/routes.py`）。以下五个为规划，**均未实现**：
 
 `/ws/order-book` `/ws/trades` `/ws/market` `/ws/alerts` `/ws/paper-trading`
 （消息结构沿用 type/seq/ts/data 约定。）

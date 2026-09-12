@@ -3,7 +3,7 @@
 ## 1. 数据流
 
 ```text
-数据源（东方财富免费接口 / Mock / 未来: 新浪·腾讯·akshare·盘后文件导入）
+数据源（四源链 ths → 腾讯 → 东财 → 新浪，含熔断；Mock；akshare 扩展面；盘后文件导入）
   ↓
 Provider Adapter        backend/app/data_providers/     统一 MarketDataProvider 协议
   ↓
@@ -11,7 +11,7 @@ Data Normalizer         backend/app/market/normalizer.py  各数据源字段 →
   ↓
 Data Quality Validator  backend/app/data_quality/validator.py  5 级质量标记
   ↓
-Data Cache              QuoteHub 内存缓存 + 轮询历史（后续接入 Redis/Parquet）
+Data Cache              QuoteHub 内存缓存 + 轮询历史（Parquet/DuckDB 落库已接入；Redis 未接）
   ↓
 Quote Hub               backend/app/services/quote_hub.py  订阅/广播/seq
   ↓
@@ -27,10 +27,10 @@ WebSocket / REST API    backend/app/websocket/ + backend/app/api/
 ```text
 API Layer        app/api/routes        只做参数校验与编排，禁止业务逻辑
 Service Layer    app/services          QuoteHub 等编排服务
-Domain Layer     app/market, app/data_quality, ...（后续: factors, sentiment, backtest...）
+Domain Layer     app/market, app/data_quality, app/factors, app/sentiment, app/picks, app/risk
 Repository Layer app/repositories      SQLAlchemy 访问（SQLite 业务库）
 Provider Layer   app/data_providers    外部数据源适配
-Task Layer       后台任务（当前: QuoteHub 轮询协程；后续: APScheduler）
+Task Layer       后台任务（统一 `TaskRegistry`：26 个常驻任务一份声明，`GET /api/system/schedulers`）
 ```
 
 ## 3. 数据质量模型（§2.3）
@@ -47,17 +47,23 @@ Task Layer       后台任务（当前: QuoteHub 轮询协程；后续: APSchedu
 
 校验规则清单见 `data_quality/validator.py`，新增规则只需在该模块扩展。
 
-## 4. AI 多 Agent 研究流（§15，Phase 7）
+## 4. AI 多 Agent 研究流（§15 · **设计稿，未实现**）
+
+> ⚠️ 当前**没有** `Researcher` / `Critic` / `Strategist` / `Auditor` 这四个 Agent 角色
+> （全仓代码中不存在这些标识符，可 grep 复核）。已实现的是**研究与复盘的能力模块**：
+> 因子库（`app/factors/`）、事件采集与六维消息面、复盘归因（`app/review/`）、
+> 盘后 T+1/3/5 对照（`picks/backtest.py`、`picks/review_intraday.py`）。
+> 下面的流水线是**目标形态**，落地前不得当作现有能力引用。
 
 ```text
-数据收集 → Researcher → Critic（反方审查）→ Strategist（分级+失效条件）
+（目标）数据收集 → Researcher → Critic（反方审查）→ Strategist（分级+失效条件）
         → 风险引擎拦截 → Auditor（盘后对照 T+1/3/5 表现）→ 写入研究记忆
 ```
 
 AI 输出必须遵循统一评分结构（总分/因子贡献/正反理由/风险项/失效条件/有效期/数据时间/置信度），
 禁止保证性语言，禁止把评分等同未来收益概率。
 
-## 5. 回测防泄露（§13.2，Phase 6）
+## 5. 回测防泄露（§13.2 · **已实现**）
 
 代码级强制隔离，规则清单与测试用例要求见 `docs/backtest-rules.md`。
 
@@ -65,7 +71,9 @@ AI 输出必须遵循统一评分结构（总分/因子贡献/正反理由/风�
 
 - 后端：Python 3.11 / FastAPI / Pydantic v2 / SQLAlchemy 2 / SQLite（业务）/ httpx / pytest
 - 前端：Next.js 15 / React 19 / TypeScript / Tailwind CSS / lightweight-charts / WebSocket
-- 后续按阶段引入：Parquet+Polars（行情落库）、pandas-ta（指标）、APScheduler（任务）、Redis（可选缓存）
+- 已引入：Parquet + DuckDB（行情落库 marketdb）、pandas-ta（指标）。
+- **未引入**：Redis（可选缓存）。**`APScheduler` 不引入**——常驻任务由自研 `TaskRegistry`
+  （asyncio + 注册表，含死亡自愈与可观测出口）承担。
 
 ## 7. 当前已实现 vs 计划
 

@@ -25,7 +25,11 @@
 ## Kline
 
 `timeframe`（1m…1w）、`ts`（UTC）、`open/high/low/close/volume(股)/amount/change_pct/turnover_rate`。
-Eastmoney 源前复权（fqt=1）；复权方式切换在 Phase 2 后期提供。
+Eastmoney 源前复权（fqt=1）；日/周 K **固定前复权**，系统**不提供复权方式切换**——
+`/api/kline/{symbol}` 无 `adjust` 参数，marketdb 也只物化 `close_adj`（前复权收盘）。
+原 `/api/market/adjustment-events/{symbol}` 端点已于 2026-09-07 健康度审查删除
+（全仓 0 引用的死端点）；provider 层 `get_adjustment_events` 作为数据能力保留
+（复权事件流是 marketdb 因子推算的地基）。
 
 ## Trade
 
@@ -56,7 +60,12 @@ reason(上榜原因 EXPLAIN) / trade_date`。
 
 `symbol(唯一) / name / note / source / quality / version + 审计字段`。
 
-## 信号等级（Phase 5 评分系统，§10/§11）
+## 信号等级（§10/§11 · **设计稿，未实现**）
 
-`观察 → 候选 → 强势候选 → 高风险强势候选 → 数据不足 → 禁止分析`；
+> ⚠️ 全仓**没有**按下面六个等级分档的实现。唯一近似物是 `services/dragon_service.py` 的
+> `DRAGON_GRADES`（龙头相 / 强势候选 / 观察 / 杂毛·回避）——那是**龙头分级**，不是信号等级，
+> 勿混。已实现的是**每日精选六维评分**（`picks/engine.py::synthesize`：子项加权合成综合分，
+> `vetoes` 一票否决压制 ×0.4）与质量五档 / 置信度。
+
+`（设计稿）观察 → 候选 → 强势候选 → 高风险强势候选 → 数据不足 → 禁止分析`；
 每个评分必须输出：原始指标→公式→标准化→因子权重→贡献→总分→数据时间→来源→有效期→失效条件→风险项→质量→置信度。

@@ -154,8 +154,9 @@ provider 与 `main_board` 都经它。
 ## 4. 同花顺（分时候选，已验证可达）
 
 `d.10jqka.com.cn/v6/line/hs_600519/01/today.js`（JSONP）返回当日分时：开/高/低/现价/量/额/均价等。
-社区项目常用其分时与增量 K 线（`/v6/line/hs_600519/01/2026.js`）。Phase 3 做**分时图**时优先接入，
-当前未实现 Provider（保持接口契约，见 docs/api.md）。
+社区项目常用其分时与增量 K 线（`/v6/line/hs_600519/01/2026.js`）。
+⚠️ **分时最终未采用本源**：当日分时由**腾讯**实现并在用（§1 `minute/query` → `/api/minute-line/{symbol}`）。
+本节保留为「可达但未接入」的记录，ths 未实现分时 Provider（接口契约见 docs/api.md）。
 
 ## 5. Mock（演示/测试专用）
 
@@ -165,7 +166,10 @@ provider 与 `main_board` 都经它。
 ## 6. 社区参考（GitHub 调研 2026-08-28）
 
 - [easyquotation](https://github.com/shidenggui/easyquotation)（5.4k★）：新浪/腾讯实时快照——与本库选型一致。
-- [akshare](https://github.com/akfamily/akshare)：聚合新浪/东财/腾讯，全品类数据（Phase 4 基本面接入候选）。
+- [akshare](https://github.com/akfamily/akshare)：聚合新浪/东财/腾讯，全品类数据。**已部分接入**
+  （2026-09-07 star 仓库评测后落地 `backend/app/services/akshare_ext.py`，定位**扩展面**、**不入行情热链路**：
+  涨停三池 / 龙虎榜明细 / 宏观 CPI / 两融账户 / ETF·可转债日 K / 美股指数 / 外汇日线；懒加载 + 失败有类型，
+  本机被墙的 push2 系一律不接）。**基本面不走 akshare**，由东财源提供。
 - 同类聚合库普遍采用「腾讯/新浪快照 + 东财数据网」组合；腾讯字段更全（知乎测评）。
 
 ### 6.1 情绪周期专项（GitHub 调研 2026-08-29，改 sentiment 前必读）

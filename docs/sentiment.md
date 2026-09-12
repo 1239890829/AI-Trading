@@ -112,5 +112,6 @@ date=20260827(周四) → 77 条
 
 ## 依赖
 
-需要 Phase 2 后期的全市场行情快照落库 + Phase 3 涨停池/炸板池数据，
-由 `backend/app/sentiment/` 计算并提供 `/api/market/sentiment`。
+依赖**全市场行情快照落库**与**涨停池 / 炸板池数据**——两者**均已就绪**
+（见上方清单 #2 晋级率 ✅、#6 真实炸板池 ✅），由 `backend/app/sentiment/` 计算并提供
+`/api/market/sentiment`。
