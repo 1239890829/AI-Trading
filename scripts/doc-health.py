@@ -42,6 +42,12 @@
                  宽口径已**实测否决**（见函数 docstring）。上线时 4 处命中 / 0 误报
                  **判定面 = git 跟踪清单**（= CI 检出内容），不是本地文件系统
                  ——否则回收站副本会把死引用持续"喂绿"（2026-09-12 修正，见 `_repo_basenames`、KB-ENG-70）
+  K 表格分隔行   以 `|` 开头的**行块首行**，其下一行必须是 GFM 分隔行（`|---|---|`）。
+                 动机 = §6.14 的渲染器死循环事故：`docs/` 里曾用**空行给同一张表分组**，
+                 在严格 GFM 下必然打碎。渲染器那半已有 `markdown-view.test.tsx` 守住，
+                 **文档这半此前没有任何机制**（这类书写不会让任何既有检查变红）。
+                 上线前实测活文档面 **292 个 `|` 起始块全部合法、0 处可疑** ⇒ 零假阳性可设硬门。
+                 围栏代码块内不判（目录树/示例里的 `|`）。
 
 局限（诚实声明）：C 的"日志单轮新增 ≤80 行"是**过程指标**，静态扫描判不出，需人工/议程侧核对。
 J 只回答「点名的代码资产还在不在」，**不回答**「文档对某能力的描述是否过时」——
@@ -123,7 +129,9 @@ EMPTY_SECTION_ALLOW = {
     ("docs/daily-review/2026-09-08.md", "6.3 今日未执行 §7（取长补短层）——非周五"):
         "标题本身即结论（非周五故未执行 §7）；L4 历史快照，补正文＝改历史",
 }
-#: 空章节扫描面：docs/ 全量（archive 除外——只读历史）+ 仓库根的操作手册。
+#: 结构性书写扫描面：docs/ 全量（archive 除外——只读历史）+ 仓库根的操作手册。
+#: ⚠️ **I 空章节与 K 表格分隔行共用这一份**。名字里的 `EMPTY_SECTION` 是历史遗留（最初只服务 I 项）
+#: —— **不要为 K 再建一份同名清单**（两份清单必漂移，KB-ENG-26）。
 EMPTY_SECTION_ROOT_FILES = ("AGENTS.md", "README.md")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(\S.*?)\s*$")
 _HR_LINES = {"---", "***", "___"}
@@ -979,6 +987,66 @@ def check_doc_anchors() -> tuple[list[tuple[str, int, str, str]], list[str]]:
     return hits, ghost
 
 
+# ---------------------------------------------------------------- K. 表格分隔行
+
+
+def _is_table_delim(line: str) -> bool:
+    """GFM 分隔行：只由 `|` `-` `:` 与空白组成，且**同时**含 `|` 与 `-`。
+
+    两个"必须有"都不是装饰：`| |`（两列皆空）不是分隔行；`---` 是**水平分隔线**
+    （`_HR_LINES`），不是表分隔行——少了 `|` 这一条，`---` 之后的块首行会被误判为通过。
+    """
+    s = line.strip()
+    return bool(s) and "|" in s and "-" in s and set(s) <= set("|-: ")
+
+
+def check_table_delimiters() -> list[tuple[str, int, str]]:
+    """K 表格分隔行：以 `|` 开头的行块，其**首行的下一行必须是分隔行**。
+
+    动机（2026-09-12 §6.14 事故）：自研 Markdown 渲染器曾因「以 `|` 开头却不构成表格的行」
+    走进**零消费死循环**，把知识库面板整页卡死——而单测 / `tsc` / eslint **全绿照不出**。
+    事后两条修法缺一不可：①渲染器兜底改 `do...while`（**无条件消费一行**）；
+    ②**文档改合法 GFM**（`docs/` 下 4 份 / 49 行曾用**空行给同一张表分组**，严格 GFM 下必然打碎）。
+    ①已有 `components/agent/markdown-view.test.tsx` 守住；**②此前没有任何机制**——
+    这类书写不会让任何既有检查变红，只能靠人记得 ⇒ 本项补的就是这个缺口。
+
+    判据（只判**结构**，零歧义）：`|` 起始的**行块首行**，其下一行不是分隔行 ⇒ 命中。
+      · 正常表头 = 首行 + 分隔行 ⇒ 通过；
+      · **空行分组后**那批 `|` 行 = 新块首行但下一行是数据行 ⇒ 命中（正是事故形态）；
+      · 表头忘写分隔行 ⇒ 命中。
+    排除：**围栏代码块内**（`_strip_fences` 置哨兵 ⇒ 目录树 / 示例里的 `|` 不参与）。
+
+    **为什么敢设硬门（先量噪声再定档）**：上线前实测活文档面
+    **292 个 `|` 起始块全部是合法表头、0 处可疑**（docs 287 + AGENTS.md 4 + README.md 1）
+    ⇒ 判据在全部现有数据上**零假阳性**，不会出现「一上线就红满天 ⇒ 被整体无视」（KB-ENG-58）。
+    注入验证见 `tests/test_doc_health_tables.py`：合成「空行分组 + 表头缺分隔行」⇒ 精确 2 处命中；
+    围栏内与行内管道符均不误伤。
+
+    局限（诚实声明）：只判**结构**，不判列数一致性 / 内容；也不覆盖 `|` 不出现在行首的变体写法
+    （本仓统一行首带 `|`）。若将来出现**合法的非表格 `|` 块**（如 ASCII 图），
+    正解是给它补表头或放进围栏——**不要为它放宽判据**。
+    """
+    hits: list[tuple[str, int, str]] = []
+    targets: list[tuple[str, Path]] = [
+        (f"docs/{p.relative_to(DOCS)}", p)
+        for p in sorted(DOCS.rglob("*.md"))
+        if "archive" not in p.relative_to(DOCS).parts
+    ]
+    targets += [(n, ROOT / n) for n in EMPTY_SECTION_ROOT_FILES if (ROOT / n).exists()]
+    for rel, p in targets:
+        lines = _strip_fences(_read(p).splitlines())
+        for i, ln in enumerate(lines):
+            if not ln.strip().startswith("|"):
+                continue
+            if i > 0 and lines[i - 1].strip().startswith("|"):
+                continue                      # 非块首行 ⇒ 已由块首行代表
+            nxt = lines[i + 1] if i + 1 < len(lines) else ""
+            if _is_table_delim(nxt):
+                continue
+            hits.append((rel, i + 1, ln.strip()[:80]))
+    return hits
+
+
 def main() -> int:
     quiet = "--quiet" in sys.argv
     scan_all = "--all" in sys.argv
@@ -1001,6 +1069,7 @@ def main() -> int:
     claim_ghost = check_claim_exempt_ids()
     empty, empty_ghost = check_empty_sections()
     anchors, anchor_ghost = check_doc_anchors()
+    tables = check_table_delimiters()
 
     def line(label: str, ok: bool, detail: str = "") -> None:
         nonlocal problems
@@ -1089,6 +1158,14 @@ def main() -> int:
     if anchor_ghost and not quiet:
         for g in anchor_ghost:
             print(f"       容忍项失效（锚点已改/文件已搬，须删该条）：{g}")
+    line("K 表格分隔行", not tables,
+         f"{len(tables)} 处（`|` 行块首行的下一行不是 GFM 分隔行；"
+         "空行分组会把表打碎，曾致渲染器死循环 §6.14）")
+    if tables and not quiet:
+        for f, ln, txt in tables[:12]:
+            print(f"       {f}:{ln} → {txt[:64]}")
+        if len(tables) > 12:
+            print(f"       …另有 {len(tables) - 12} 处")
     # H 项**刻意走 WARN 而非 FAIL**：先补存量再上哨兵，且只作提示。
     # 若计 FAIL，未补完的条目会让整份体检长期挂红 ⇒ 被整体无视（KB-ENG-58）。
     line("H-KB 豁免名单有效", not claim_ghost,
