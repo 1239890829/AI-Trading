@@ -38,7 +38,7 @@ from pydantic import BaseModel, Field
 from app.core.config import settings
 from app.core.db import get_session_factory
 from app.repositories.alert_repo import AlertRepository
-from app.core.bjtime import beijing_now
+from app.core.bjtime import BJ_OFFSET, beijing_now
 from app.services import notification_read_state as read_state_service
 
 log = logging.getLogger(__name__)
@@ -182,12 +182,23 @@ def _daily_pick_item() -> dict | None:
         meta = {}
     gate_stand = bool((meta.get("gate") or {}).get("stand_aside"))
     gate_note = "，空仓闸门触发（仅观察）" if gate_stand else ""
+    # 时间戳 = **真实生成时刻**（评审 F-9，2026-09-12）。旧实现写死
+    # `f"{row.date} 08:40:00"`，两个问题：
+    # ① 08:40 是配置漂移的残留——自动生成实为 09:26（`picks_autogen_scheduler` 的
+    #    run_hour=9 / run_minute=26），DB 实测 `created_at` 01:26:58 UTC +8 = 09:26:58
+    #    北京，与配置精确吻合；组合也可能由人工在盘中/盘后触发，写死则一律显示盘前。
+    # ② 它与本模块第 312 行的 `ts` 倒序直接冲突：alert/news 用真实时间，只有这一条
+    #    用一个假时间，排序结果与"实际发生顺序"不一致。
+    # ⚠️ 换算必须走 `BJ_OFFSET`，**不能**用 `to_beijing_naive()`：后者对 naive 输入按
+    #    「已经是北京时间」处理（bjtime 口径），对 UTC 语义的 `created_at` 是零变换，
+    #    会静默早 8 小时——正是 S2-8 那类事故的形态。
+    ts = (row.created_at + BJ_OFFSET).isoformat(sep=" ") if row.created_at else None
     return {
         "id": f"picks-{row.date}",
         "category": "daily_picks",
         "label": "每日精选",
         "session": "pre_open",  # 组合盘前/盘后生成，归盘前节拍
-        "ts": f"{row.date} 08:40:00",
+        "ts": ts,
         "title": f"每日精选 · {row.date}（{len(items)} 只{gate_note}）",
         "body": f"Top：{top or '—'}。名单为盘中跟踪的输入，机会确认以盘中提醒为准，避免开盘即回落被误判。",
         "symbol": None,

@@ -124,6 +124,34 @@ def test_alert_items_ignores_placeholder_symbol():
     assert items[0]["label"] == "证伪"
 
 
+# ---------------------------------------------------------------- _daily_pick_item
+def test_daily_pick_item_ts_is_real_generation_time(monkeypatch):
+    """**F-9 回归位**：精选通知的 `ts` 取真实生成时刻（UTC naive → 北京 +8），不写死。
+
+    旧实现是 `f"{row.date} 08:40:00"`。它有两处失真，本用例各钉一条：
+    ① 08:40 是配置漂移的残留——自动生成实为 09:26（`picks_autogen_scheduler`
+       的 run_hour=9/run_minute=26），写死会让真实 09:26 生成的组合显示成 08:40；
+    ② 不同 `created_at` 必须得到不同 `ts`（第二条断言），否则"未写死"就没有证据。
+    """
+    import app.api.routes.notifications as notif
+
+    row = _FakeRow(
+        date="2026-09-11",
+        items='[{"symbol": "600519", "name": "贵州茅台"}]',
+        meta="{}",
+        created_at=datetime(2026, 9, 11, 1, 26, 58, 379775),  # naive UTC
+    )
+    monkeypatch.setattr(notif, "get_session_factory", lambda: lambda: _FakeDB(row))
+
+    item = notif._daily_pick_item()
+    assert item["ts"] == "2026-09-11 09:26:58.379775", "created_at(UTC) 必须 +8 转北京"
+    # 与 alert/news 同形（空格分隔、无偏移标记），否则 ts 倒序会与其它来源错乱
+    assert "T" not in item["ts"] and "+" not in item["ts"]
+
+    row.created_at = datetime(2026, 9, 11, 7, 52, 21, 349819)  # → 北京 15:52（盘后生成）
+    assert notif._daily_pick_item()["ts"] == "2026-09-11 15:52:21.349819"
+
+
 # ---------------------------------------------------------------- 路由
 def test_route_merges_sources(monkeypatch):
     import app.api.routes.notifications as notif
@@ -137,6 +165,8 @@ def test_route_merges_sources(monkeypatch):
         date="2026-09-07",
         items='[{"symbol": "300001", "name": "某某"}]',
         meta='{"gate": {"stand_aside": false}}',
+        # created_at 是 naive UTC（`db.utcnow()` 口径），+8 后为北京生成时刻
+        created_at=datetime(2026, 9, 7, 1, 26, 58),
     )
     monkeypatch.setattr(notif, "get_session_factory", lambda: lambda: _FakeDB(picks_row))
     old_store = getattr(app.state, "event_store", None)
@@ -149,7 +179,7 @@ def test_route_merges_sources(monkeypatch):
         cats = {i["category"] for i in body["items"]}
         assert {"opportunity", "daily_picks", "news"} <= cats
         assert body["errors"] is None
-        # ts 倒序：精选（08:40 当日）与新闻（2h 前）与提醒（1h 前 UTC→北京）共存
+        # ts 倒序：精选（当日 09:26 北京，由 created_at +8 推出）与新闻（2h 前）与提醒（1h 前 UTC→北京）共存
         assert body["count"] >= 3
         news = next(i for i in body["items"] if i["category"] == "news")
         assert news["label"] == "国家政策"
@@ -164,7 +194,8 @@ def test_route_score_threshold_filters_news(monkeypatch):
     from app.main import app
 
     app.dependency_overrides[notif.get_alert_repo] = lambda: _FakeRepo(rules=[], events=[])
-    picks_row = _FakeRow(date="2026-09-07", items="[]", meta="{}")
+    picks_row = _FakeRow(date="2026-09-07", items="[]", meta="{}",
+                         created_at=datetime(2026, 9, 7, 1, 26, 58))
     monkeypatch.setattr(notif, "get_session_factory", lambda: lambda: _FakeDB(picks_row))
     old_store = getattr(app.state, "event_store", None)
     app.state.event_store = _FakeStore([_event_row()])

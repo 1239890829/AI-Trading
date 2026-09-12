@@ -13,6 +13,7 @@ import {
 } from "lightweight-charts";
 import type { MinutePoint as P } from "@/lib/api";
 import { computeMinuteAxis } from "@/lib/minute-axis";
+import { tradingSeqFromHHMM } from "@/lib/market-hours";
 import { readChartTheme, useChartTheme, type ChartTheme } from "@/lib/chart-theme";
 import type { MinuteNewsEvent } from "@/lib/event-markers";
 
@@ -142,13 +143,19 @@ const MINUTE_PALETTE: Record<ChartTheme, MinutePalette> = {
  */
 const BJ_OFFSET = 8 * 3600;
 
-/** 已开市交易分钟数（11:30-13:00 午休不计），clamp 到 [1,240]。 */
+/**
+ * 已开市交易分钟数（11:30-13:00 午休不计），clamp 到 [1,240]。
+ *
+ * 轴位来自 `lib/market-hours.ts::tradingSeqFromHHMM`（全站唯一的交易分钟轴，
+ * 与后端 `_sina_bar_seq` 同口径）——2026-09-12 评审 R-3：此前本文件与
+ * `flow-intraday-chart.tsx` 各写一份映射，午休段两处算法还不一致。
+ * 本函数只负责**把轴位转成「已过分钟数」**：09:30 视为第 1 分钟（下界 1 而
+ * 不是 0），量比分母 `yesterdayVol * (elapsed / 240)` 与基线槽位
+ * `floor(elapsed / 5) - 1` 都依赖这个 1 基口径。
+ */
 function tradingMinutesElapsed(bjIso: string): number {
-  const hhmm = bjIso.slice(11, 16);
-  const mins = Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
-  const am = Math.min(Math.max(mins - 570, 0), 120); // 09:30 起
-  const pm = Math.min(Math.max(mins - 780, 0), 120); // 13:00 起
-  return Math.min(Math.max(am + pm, 1), 240);
+  const seq = tradingSeqFromHHMM(bjIso.slice(11, 16));
+  return Math.min(Math.max(seq, 1), 240);
 }
 
 function fmtPct(v: number | null): string {

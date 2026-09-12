@@ -415,6 +415,23 @@
 > 在 **`.workbuddy/reports/deep-review-2026-09-12.md`**；本节只记**待办出口**，不复述分析。
 > **证据纪律**：标 `✅实测` 的跑过代码/用例；`◻读码` 读过源码；`⟳代理` 为子代理扫描未逐条复核。
 
+**批次 1 执行记录（2026-09-12，5 项已修；逐项注入验证）**
+
+| 项 | 状态 | 证据 / 实测 |
+|---|---|---|
+| pipeline 循环内 `directions_of` N+1 | ✅ 已修 | 改 `row.directions`（`list_events` 已 `selectinload`）。**注入验证踩到假绿**：仅删 `_Store.directions_of` 桩无效——`candidate_pool` 的 `except Exception` 把 `AttributeError` 吞掉，注入旧写法**仍 5 passed**。正解是新增守卫把涨停池/热股榜**两路来源都置空**使事件路成为唯一来源，并额外断言事件路未产生 warning ⇒ 注入后精确变红（1 failed / 5 passed） |
+| 通知 `ts` 硬编码 `08:40:00` | ✅ 已修 | 改 `(row.created_at + BJ_OFFSET)`。⚠️ **必须 `+ BJ_OFFSET`，不能用 `to_beijing_naive()`**——后者对 naive 输入按"已是北京时间"处理，对 UTC 语义的 `created_at` 是零变换，会静默早 8 小时（S2-8 那类事故的形态）。DB 实测 `created_at` 01:26:58 UTC +8 = 09:26:58 北京，与 `picks_autogen_scheduler` 的 09:26 精确吻合，证实 08:40 是配置漂移残留。注入验证精确变红 |
+| 「是否盘中」两份 + 「交易分钟序」两份 | ✅ 已修 | 收敛到 `lib/market-hours.ts` 唯一口径：`isContinuousSession`（严格 09:30–11:30/13:00–15:00）与 `isPollingSession`（宽松 09:15–11:35/12:55–15:15）**不合并**（两个意图），但宽松区间由严格区间**派生**（`POLL_PAD`）使包含关系机械成立；`tradingSeqFromHHMM` 补午休折叠。**注入验证**：删午休折叠分支 ⇒ 报出预测症状 `'11:31→31(<120)'`（旧实现在午休段折线往回画，**实测确认**）；删 `POLL_PAD` 派生 ⇒ 2 failed。另收编 `kline-live.ts` 私有 `inTradingSession`、`flow-intraday-chart.tsx` 本地 `hmToSeq`、`minute-chart.tsx` 的 `tradingMinutesElapsed` |
+| dry-run 计量窄拍样本无法拆出 | ✅ 已修 | 改**双直方图**：`hist_all`（审计）+ `hist_wide`（定线唯一依据），差值 = `samples_narrow`；分箱时机从循环内移到 `_probe_close_beat`（旧实现在循环内直写唯一 `hist`，扫完发现是窄拍时样本**已混进去、再也拆不开**）。**注入验证**：移除窄拍分支的 `return` ⇒ 精确变红（2 failed / 39 passed）——证明该缺陷真实可复现，非理论担忧。踩坑：`_boards` 桩按板块名跨段持久 ⇒ 两段用同名 `板0..板n` 会让第二段"首拍"凭空多出 delta，已加 `prefix` 参数隔离 |
+| `alerts-tab` 漏 `marketHours:false` | ✅ 已修 | 补 `{ marketHours: false }`——预警规则/事件/通道非行情数据，盘外不该被 ×5 降频+封顶 120s（盘后恰是告警高峰） |
+| 三 tab 漏 `key` + `longhu` 本地时区 | ✅ 已修（**诊断经复核后修正**） | `longhu-tab` 改用 `bjToday()` / `bjMinuteOfDay(now)` 判"披露日/17:00 披露点"（交易所口径本就是北京）。`limit-up` / `limit-down` / `themes` 改「URL 为取数唯一触发源」：`themes` 的 `date` 由 state 改为**派生自 `searchParams`**（消除双真相源），三处补 `key` 并**同步删掉 handler 里那次显式 `load()`**（`useResource` 依赖含 `key` 且**无去重**，只补 `key` 不删 load ⇒ 改一次日期发两次请求）。<br>⚠️ **原诊断「漏 key ⇒ 静默漏刷新」经复核前提不成立**：助手正文链接渲染为**裸 `<a href>`**（`assistant/rich-text.tsx:202`）⇒ 整页重载；仓内 `router.push` 目标**不含 `/tape`**；同页 `JumpLink` 跳涨停池必**同时改 tab** ⇒ `FadeSwap` 换节点重挂载。⇒ 定性为**潜在契约违反（latent）**——hook 文档明写「参数会变的取数必须传 `key`」而代码未遵守，一旦新增"同 tab 内跳不同日期"的链接就会静默显示旧日数据。**不宣称修复了正在发生的 bug**，注释与本节均按此表述。<br>**实测（agent-browser，6 项）**：①改日期输入 ⇒ 恰 1 次请求；②外部 `replaceState` 改写 URL ⇒ 恰 1 次请求（旧写法此路径不重拉）；③④`themes` 外部改写与输入改动各恰 1 次；⑤`limit-down` 同；⑥tab 切换携带日期正确。故 key 生效且**无重复请求** |
+
+> **本节的方法论留痕（写入规范）**：本批次 5 项里有 **2 项在「执行前复核」这一步被改写定性**——
+> ① pipeline N+1 的守卫：原以为"删桩即成天然守卫"，实测**仍全绿**（异常吞没使断言永不触达）；
+> ② 漏 `key` 的触发路径：原引子代理结论（标 `⟳代理`）称"URL 变化不重拉"，复核后**无此路径**，改为 latent 定性。
+> ⇒ **`⟳代理` 标注不是"待复核"的礼貌标记，是"结论未成立"的警示**；凡入口写在代码注释/台账之前，
+> 必须自己跑一遍或 grep 一遍。与 §七「断言未验证」同类。
+
 **评审结论**：方向正确、交付密度高、假绿意识显著提升；但有 **1 处设计过度 + 3 处高优热点 + 若干配置遗漏**。
 
 **高优（已实测/读码确认，待执行）**

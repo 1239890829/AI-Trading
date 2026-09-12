@@ -64,11 +64,15 @@ class _Event:
 
 
 class _Store:
+    """桩：**不提供 `directions_of`**。
+
+    这是刻意的——管线改从 `row.directions` 读（`list_events` 已 selectinload，
+    见 P-2「循环内重查」修复）。若有人改回 `store.directions_of(row.id)`，
+    这里会立刻 `AttributeError` 精确变红，而不是静默退回 N+1。
+    """
+
     def list_events(self, *, active_only: bool = False, limit: int = 30):
         return [_Event(1, "白酒消费刺激政策落地")]
-
-    def directions_of(self, eid: int):
-        return [_Direction("600519", 1)]
 
 
 class _Member:
@@ -153,6 +157,22 @@ class _Provider:
 
     async def get_capital_flow(self, symbol, days):
         return [{"net_main": 2.5e8}]
+
+
+class _EmptyProvider:
+    """热股榜恒空——用于把候选池的**另外两路来源**（涨停池 / 热股榜）置空。"""
+
+    name = "tencent"
+
+    async def get_hot_stock_list(self, period):
+        return []
+
+
+class _BareHub:
+    """只保留热股榜接口的极简 hub：`candidate_pool` 不碰 quote/kline。"""
+
+    def __init__(self):
+        self.provider = _EmptyProvider()
 
 
 class _Hub:
@@ -289,6 +309,35 @@ def test_pipeline_reuses_prefetched_pool_in_sentiment(deps):
     out = _run(deps, hub)
     # limit_up_count 与候选池来源都建立在同一个池上：2 只
     assert out["data"]["meta"]["limit_up_count"] == 2
+
+
+def test_candidate_pool_reads_directions_from_loaded_relation(deps, monkeypatch):
+    """**P-2 回归位**：候选池从 `row.directions`（已 `selectinload`）读方向，不循环重查库。
+
+    为什么必须单独钉一条（2026-09-12 实测教训）：
+
+    只把 `_Store.directions_of` 删掉**不构成守卫**。把实现改回
+    `store.directions_of(row.id)` 后，该调用抛 `AttributeError`，却被
+    `candidate_pool` 顶部的 `except Exception: log.warning(...)` 吞掉，
+    候选池仍由涨停池/热股榜兜底 → 集成用例**照样全绿**（实测 `5 passed`）。
+    ⇒ 异常吞没会让「桩缺方法」这种天然守卫失效，必须另设一条不依赖该异常路径的断言。
+
+    做法：把涨停池与热股榜**都置空**，让事件方向成为唯一来源——
+    改回旧写法 ⇒ 事件路静默断 ⇒ 池空 ⇒ 精确变红。同时断言事件路未告警，
+    这样「异常被吞」本身也会被指名，而不是只表现为一个空的列表。
+    """
+    warnings: list[str] = []
+    monkeypatch.setattr(pl.log, "warning", lambda msg, *a: warnings.append(msg % a if a else msg))
+
+    pool = asyncio.run(pl.candidate_pool(_BareHub(), _Store(), _Catalog(), limit_up_pool=[]))
+
+    assert [p["symbol"] for p in pool] == ["600519"], (
+        "事件方向没进候选池——多半是回退成 store.directions_of 后异常被吞"
+    )
+    assert pool[0] == {"symbol": "600519", "from": "event", "prio": 1}
+    assert not [w for w in warnings if w.startswith("picks candidate: events failed")], (
+        f"事件路被异常吞掉了（异常吞没会同时让守卫失效）：{warnings}"
+    )
 
 
 def test_deps_are_explicit_not_request_shaped(deps):

@@ -52,7 +52,12 @@ export function ThemesTab() {
   const [data, setData] = useState<ThemeBoardPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [date, setDate] = useState<string>(searchParams.get("date") ?? "");
+  // `date` 直接**派生自 URL**，不再另存一份 state（2026-09-12 评审 R-7）。
+  // 原先「state 副本 + URL」两份持有：state 只在挂载时读一次 URL，此后 URL 再变
+  // 它也不动 ⇒ 取数参数有两个真相源（`useResource` 的 effect 依赖里没有 `searchParams`）。
+  // 派生后 URL 是唯一真相源，配合下面的 `key` 即为单一触发路径。
+  // 诚实边界（潜在契约违反，非当前可观测缺陷）见 limit-up-tab 同处说明。
+  const date = searchParams.get("date") ?? "";
   const [sort, setSort] = useState<SortKey>((searchParams.get("sort") as SortKey) || "strength");
   const [minBoards, setMinBoards] = useState(() => {
     const v = searchParams.get("min_boards");
@@ -103,8 +108,10 @@ export function ThemesTab() {
 
   // 首屏必须带上 URL 里的 date——此前裸 load() 只用默认日期，
   // ?date=2026-08-28 打开时实际取的是"今天"（盘前为降级数据）。
-  // 仅挂载时拉一次（latest-ref 拿到当前 date）；后续筛选由各自的 onChange 触发
-  usePollingFetch(() => load(date || undefined), null);
+  // 仅挂载时拉一次（latest-ref 拿到当前 date）；后续筛选由各自的 onChange 触发。
+  // `key={date}` 兜住「URL 被外部改写」这条路（见 date 派生处的说明）；
+  // ⚠️ 它必须与 onDate 里删掉的那次显式 load 成对——`useResource` 依赖 key 且无去重。
+  usePollingFetch(() => load(date || undefined), null, date);
 
   useEffect(() => {
     // 人气榜独立拉取（实时口径，不看 date 参数——历史日期没有人气数据）
@@ -178,9 +185,9 @@ export function ThemesTab() {
     void load(date || undefined, sort, minBoards, v);
   };
   const onDate = (v: string) => {
-    setDate(v);
+    // 只改 URL——date 是派生值，URL 一变 key 就变，取数由 usePollingFetch 触发
+    // （勿在此再调 load：会与 key 触发的重拉叠加成两次请求）
     updateUrl(v || undefined, sort, minBoards, minCount);
-    void load(v || undefined);
   };
 
   const broken = useMemo(() => data?.broken_ladder ?? [], [data]);

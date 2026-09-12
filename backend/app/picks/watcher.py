@@ -325,11 +325,19 @@ class IntradayWatcher:
         # （与"交易日 12:00 前禁重启"的既有约束同向）。读数出口 =
         # `GET /api/picks/watcher/state` → `board_ratio_probe`（复用既有端点，未新增）。
         self.board_ratio_probe: dict = {
-            "beats": 0,               # 计入的拍数（样本 ≥ BOARD_RATIO_MIN_SAMPLES）
-            "beats_insufficient": 0,  # 样本不足被整拍跳过的拍数
-            "samples": 0,             # 板块·拍 样本总数
-            "hist": [0] * (len(BOARD_RATIO_BINS) + 1),
-            "total": 0.0,             # delta_ratio 累计和（算均值用）
+            "beats": 0,               # 计入的**宽**拍数（样本 ≥ BOARD_RATIO_MIN_SAMPLES）
+            "beats_insufficient": 0,  # 样本不足被标为窄拍的拍数
+            "samples": 0,             # 板块·拍 样本总数（含窄拍）
+            "samples_narrow": 0,      # 其中来自窄拍的样本数（供对账：samples = wide + narrow）
+            # **两份直方图**（2026-09-12 评审 F-8 修复）。旧实现只有一份 `hist`
+            # （含全部样本）+ 一个 `samples_narrow` 计数：「要排除窄拍」只用**一个
+            # 总数**表达、其分布没被保留 ⇒ 事后**无法**从 `hist` 里扣掉窄拍那部分，
+            # 「用干净样本定线」在数据上根本做不到，只能重跑一天。
+            # 现在：`hist_all` 供审计（含窄拍），`hist_wide` 是定线的**唯一依据**。
+            "hist_all": [0] * (len(BOARD_RATIO_BINS) + 1),
+            "hist_wide": [0] * (len(BOARD_RATIO_BINS) + 1),
+            "total": 0.0,             # 全部样本 delta_ratio 累计和
+            "total_wide": 0.0,        # 宽拍样本 delta_ratio 累计和
         }
 
     def step(self, beat: dict) -> list[dict]:
@@ -464,37 +472,45 @@ class IntradayWatcher:
         return out
 
     def _probe_board_ratio(self, delta_ratio: float) -> None:
-        """占比口径 dry-run 计量：把本拍 delta_ratio 记进直方图（**不产告警、不影响触发**）。
+        """占比口径 dry-run 计量：把本拍 delta_ratio 记进**本拍缓冲**（不产告警、不影响触发）。
 
         **不按横截面宽度过滤样本**：单个板块的 `delta_ratio` 是独立于"本拍共有几个板块"
         的有效观测，丢弃它属于无谓的信息损失。宽度只影响**怎么解读**，故由
         `beats` / `beats_insufficient` / `samples_narrow` 另行标注，让读的人自行取舍。
 
-        分箱 = `bisect_right(BOARD_RATIO_BINS, v)`；负值（占比下降）照记——
-        定线时既要看尾部多厚，也要看分布是否对称（「占比突增」本就该只在右尾）。
+        ⚠️ 这里**只缓冲、不落箱**：本拍是宽拍还是窄拍，要等整拍扫完才知道（横截面宽度
+        `carry` 由 `_step_board_flows` 的循环累加），而本函数正是在循环内被调用。
+        落箱动作因此移到 `_probe_close_beat` —— 这是 F-8 的修法：旧实现在循环内直接写
+        唯一那份 `hist`，等扫完发现是窄拍时样本**已经混进去了**，只能补一个计数、
+        再也拆不开。
         """
-        p = self.board_ratio_probe
-        p["samples"] += 1
-        p["total"] += delta_ratio
-        p["_beat_deltas"] = p.get("_beat_deltas", 0) + 1
-        p["hist"][bisect_right(BOARD_RATIO_BINS, delta_ratio)] += 1
+        self.board_ratio_probe.setdefault("_beat_deltas", []).append(delta_ratio)
 
     def _probe_close_beat(self, carry: int) -> None:
-        """收一拍：按**横截面宽度**（带回 ratio 的板块数）标注该拍，样本照常保留。
+        """收一拍：按**横截面宽度**落箱，并标注该拍是宽拍还是窄拍。
 
         `carry < BOARD_RATIO_MIN_SAMPLES` 的"窄拍"多为上游取数降级（正常全量约 1000 个
-        板块），其样本**不丢弃**但计入 `samples_narrow` 供排除参考。
+        板块），其样本**不丢弃**但只进 `hist_all`，**不进 `hist_wide`**——定线只看后者。
         首拍（全员无基线、delta 数为 0）只要横截面够宽就仍算有效拍——
         "还没有上一拍可比"与"板块数太少"成因不同，不可混记。
         """
         p = self.board_ratio_probe
-        deltas = p.pop("_beat_deltas", 0)
+        deltas = p.pop("_beat_deltas", [])
+        for v in deltas:
+            p["samples"] += 1
+            p["total"] += v
+            p["hist_all"][bisect_right(BOARD_RATIO_BINS, v)] += 1
         if carry < BOARD_RATIO_MIN_SAMPLES:
             p["beats_insufficient"] += 1
-            p["samples_narrow"] = p.get("samples_narrow", 0) + deltas
+            p["samples_narrow"] += len(deltas)
             return
         p["beats"] += 1
-        p["beat_deltas"] = p.get("beat_deltas", 0) + deltas
+        # `beat_deltas` 保留为「宽拍样本数」的独立计数（与 `samples_narrow` 不同源），
+        # 便于事后对账 `samples == beat_deltas + samples_narrow`。
+        p["beat_deltas"] = p.get("beat_deltas", 0) + len(deltas)
+        for v in deltas:
+            p["total_wide"] += v
+            p["hist_wide"][bisect_right(BOARD_RATIO_BINS, v)] += 1
 
     def state(self) -> dict:
         return {
@@ -526,20 +542,30 @@ class IntradayWatcher:
         }
 
     def _probe_snapshot(self) -> dict:
-        """计量快照：直方图 + 可对账的计数。空计量如实报 `enabled=False`（三态）。"""
+        """计量快照：两份直方图 + 可对账的计数。空计量如实报 `enabled=False`（三态）。
+
+        **定线只看 `hist_wide`**（宽拍 = 横截面够宽、上游未降级）；`hist_all` 供审计，
+        两者之差即窄拍样本（= `samples_narrow`）。分箱 = `bisect_right(BOARD_RATIO_BINS, v)`；
+        负值（占比下降）照记——定线时既要看尾部多厚，也要看分布是否对称
+        （「占比突增」本就该只在右尾）。
+        """
         p = self.board_ratio_probe
         n = p["samples"]
+        wide = p.get("beat_deltas", 0)
         return {
             "enabled": p["beats"] > 0,
             "bins": list(BOARD_RATIO_BINS),
-            "hist": list(p["hist"]),
+            "hist_all": list(p["hist_all"]),
+            "hist_wide": list(p["hist_wide"]),
             "samples": n,
-            "samples_narrow": p.get("samples_narrow", 0),
+            "samples_wide": wide,
+            "samples_narrow": p["samples_narrow"],
             "beats": p["beats"],
             "beats_insufficient": p["beats_insufficient"],
             "min_samples": BOARD_RATIO_MIN_SAMPLES,
             "pctl": BOARD_RATIO_PCTL,
             "mean": round(p["total"] / n, 4) if n else None,
+            "mean_wide": round(p["total_wide"] / wide, 4) if wide else None,
         }
 
 

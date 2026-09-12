@@ -6,6 +6,7 @@ import { StockLink, useStockRowNav } from "@/components/stock-link";
 import { getLonghu, getLonghuThemeTrail, type LonghuTrailPayload } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import { bjMinuteOfDay, bjToday } from "@/lib/market-hours";
 import type { LongHuRecord } from "@/types/market";
 
 /** 盘面页 · 龙虎榜 tab（原 /longhu 页迁移，2026-09-01 系统重构）。 */
@@ -16,12 +17,11 @@ function scopeText(rd?: number | null): string {
   return rd === 1 ? "日榜" : `${rd}日榜`;
 }
 
-/** 本地日期 YYYY-MM-DD（客户端计算，避免 SSR 与浏览器时区不一致导致 hydration mismatch）。 */
-function todayISO(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
+// 日期与时刻一律取**北京**口径（`lib/market-hours` 的 `bjToday` / `bjMinuteOfDay`）：
+// 交易所披露日与 17:00 披露时刻都是北京时间，用本地 getFullYear()/getHours() 判断
+// 「是不是当天」「有没有过披露点」，在非 UTC+8 的机器/浏览器上会整体判错
+// （2026-09-12 评审：local-tz 误用）。二者仍是**客户端侧**计算（不进 SSR 渲染期），
+// 水合一致性不变。
 
 export function LonghuTab() {
   const stockNav = useStockRowNav();
@@ -95,17 +95,17 @@ export function LonghuTab() {
   // 分界取 17:00（数据商同步交易所披露的时刻）而非 15:30——2026-09-02 盘中实测：
   // 15:30 前四源当日数据恒为空，"15:30 前有部分快照"的前提不成立，原分界永远触发不了。
   const isIntradaySnapshot = useMemo(() => {
-    if (!now || !tradeDate || tradeDate !== todayISO()) return false;
-    return now.getHours() * 60 + now.getMinutes() < 17 * 60;
+    if (!now || !tradeDate || tradeDate !== bjToday()) return false;
+    return bjMinuteOfDay(now) < 17 * 60;
   }, [now, tradeDate]);
   // 盘中查当天：四源皆空（当日榜收盘后才披露）→ 后端 502"数据源失败"。
   // 这不是故障，是还没披露——盘中实测（2026-09-02 14:20）确认渲染成红错误导用户，
   // 披露前的当日查询改走"尚未披露"提示，只有披露时刻（约 17:00）之后仍拿不到才算失败。
   const isPreRelease = useMemo(() => {
     if (!now) return false;
-    const want = queryDate || todayISO(); // 不带日期参数 = 后端默认查当天
-    if (want !== todayISO()) return false;
-    return now.getHours() * 60 + now.getMinutes() < 17 * 60;
+    const want = queryDate || bjToday(); // 不带日期参数 = 后端默认查当天
+    if (want !== bjToday()) return false;
+    return bjMinuteOfDay(now) < 17 * 60;
   }, [now, queryDate]);
   // ths 龙虎榜个股明细不含 close / turnover_rate / amount（成交额仅游资榜提供）。
   // 恒空的列直接隐藏并在页脚说明原因，不留一列 "--" 让用户猜是不是又坏了；

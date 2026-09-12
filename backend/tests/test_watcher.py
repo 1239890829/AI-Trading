@@ -559,7 +559,7 @@ def test_board_flows_io_reads_net_ratio_pct_code(monkeypatch):
 
 
 def _boards(n: int, named: dict[str, float] | None = None, pct: float = 5.0,
-            base: float = 0.0) -> dict[str, dict]:
+            base: float = 0.0, prefix: str = "板") -> dict[str, dict]:
     """构造一拍板块字典：`n` 个匿名板块（ratio=`base`）+ 每个具名板块。
 
     具名板块**永远存在**（即使 ratio 为 0）——否则它在"基线拍"里缺席，
@@ -568,9 +568,13 @@ def _boards(n: int, named: dict[str, float] | None = None, pct: float = 5.0,
     `base` 用来把匿名板块的 ratio 抬离 0：此时"缺值"与"值为 0"才可区分，
     否则把 unknown 当 0 的错误**测不出来**（2026-09-12 实测：用 0.0 时注入不红）。
 
+    `prefix` 用于**隔离同名板块的跨段状态**：`board_flow_state` 按板块名跨拍持久，
+    若两段测试都用默认的 `板0..板n`，第二段的"首拍"会带着第一段留下的 `last_ratio`
+    ⇒ 凭空多出一批 delta（实测把 62 样本算成 82）。需要互不干扰的段就换前缀。
+
     pct 默认 5.0（> BOARD_LOW_ABSORB_PCT）⇒ 只考察 surge 与计量，不掺低吸异动。
     """
-    out = {f"板{i}": {"net": 0.0, "ratio": base, "pct": pct} for i in range(n)}
+    out = {f"{prefix}{i}": {"net": 0.0, "ratio": base, "pct": pct} for i in range(n)}
     for name, ratio in (named or {}).items():
         out[name] = {"net": 0.0, "ratio": ratio, "pct": pct}
     return out
@@ -595,7 +599,7 @@ def test_board_ratio_probe_does_not_trigger_any_alert():
 
 
 def test_board_ratio_probe_accumulates_histogram_and_beats():
-    """计量累计正确：样本数 / 计入拍数 / 直方图落箱，且均值可复算。"""
+    """计量累计正确：样本数 / 计入拍数 / **两份**直方图落箱，且均值可复算。"""
     from app.picks.watcher import BOARD_RATIO_BINS
 
     w = IntradayWatcher([])
@@ -608,12 +612,15 @@ def test_board_ratio_probe_accumulates_histogram_and_beats():
     assert p["samples"] == 62                        # 60 匿名(Δ0) + 甲板 +0.03 + 乙板 +3.0
     assert p["min_samples"] == 50
     assert p["bins"] == list(BOARD_RATIO_BINS)
-    assert sum(p["hist"]) == 62
+    # 全宽拍 ⇒ 两份直方图**逐箱相等**（这也是"双直方图未错位"的对账）
+    assert p["hist_all"] == p["hist_wide"]
+    assert sum(p["hist_wide"]) == 62
     assert p["mean"] == round((0.03 + 3.0) / 62, 4)
+    assert p["mean_wide"] == p["mean"]
     # 落箱：bisect_right([0.02,0.05,...], 0.03)=1；bisect_right(..., 3.0)=7；0.0 → 箱 0
-    assert p["hist"][1] == 1
-    assert p["hist"][7] == 1
-    assert p["hist"][0] == 60
+    assert p["hist_wide"][1] == 1
+    assert p["hist_wide"][7] == 1
+    assert p["hist_wide"][0] == 60
     assert p["enabled"] is True
 
 
@@ -637,7 +644,7 @@ def test_board_ratio_probe_negative_deltas_are_recorded():
     w = IntradayWatcher([])
     _two_beats_ratio(w, 60, {"降板": 0.0}, {"降板": -5.0})
     p = w._probe_snapshot()
-    assert p["hist"][0] == 61                         # 60 匿名(Δ0) + 降板(-5.0) 全在箱 0
+    assert p["hist_wide"][0] == 61                    # 60 匿名(Δ0) + 降板(-5.0) 全在箱 0
     assert p["mean"] == round(-5.0 / 61, 4)
     assert p["samples"] == 61
 
@@ -654,7 +661,40 @@ def test_board_ratio_probe_narrow_beats_keep_samples_but_are_flagged():
     assert p["samples"] == 11                         # 但样本保留（可用于看分布形状）
     assert p["samples_narrow"] == 11                  # 且如实标注为"窄拍样本"
     assert p["enabled"] is False                      # 无有效拍 ⇒ 不宣称可用
-    assert p["hist"][0] == 10 and p["hist"][7] == 1   # 分布仍如实落箱
+    assert p["hist_all"][0] == 10 and p["hist_all"][7] == 1   # 审计直方图仍如实落箱
+
+
+def test_board_ratio_probe_narrow_samples_never_leak_into_wide_hist():
+    """**F-8 回归位**：窄拍样本只进 `hist_all`，**绝不进 `hist_wide`**。
+
+    为什么必须单独钉：定线**只看 `hist_wide`**，而旧实现只有一份混装直方图 + 一个
+    `samples_narrow` 计数——「要排除窄拍」这件事只用一个**总数**表达，其分布没有被
+    保留 ⇒ 事后无法把窄拍样本从直方图里扣掉，「用干净样本定线」在数据上做不到。
+    本用例把**窄拍在前、宽拍在后**混在同一份计量里，断言两边可完全分离。
+    """
+    w = IntradayWatcher([])
+    # 先来两拍窄的（11 个板块）：甲板 +3.0 只该进 hist_all
+    w._step_board_flows(_boards(10, {"甲板": 0.0}, prefix="窄"))
+    w._step_board_flows(_boards(10, {"甲板": 3.0}, prefix="窄"))
+    # 再来两拍宽的（61 个板块）：乙板 +0.03 只该进 hist_wide
+    w._step_board_flows(_boards(60, {"乙板": 0.0}, prefix="宽"))
+    w._step_board_flows(_boards(60, {"乙板": 0.03}, prefix="宽"))
+
+    p = w._probe_snapshot()
+    # 对账：全部样本 = 宽拍样本 + 窄拍样本
+    assert p["samples"] == p["samples_wide"] + p["samples_narrow"] == 61 + 11
+    assert p["beats"] == 2 and p["beats_insufficient"] == 2
+
+    # 窄拍的 +3.0（箱 7）只在 hist_all，**不在** hist_wide
+    assert p["hist_all"][7] == 1
+    assert p["hist_wide"][7] == 0
+    # 宽拍的 +0.03（箱 1）进 hist_wide，且 hist_wide 只含宽拍那 61 个样本
+    assert p["hist_wide"][1] == 1
+    assert sum(p["hist_wide"]) == 61
+    assert sum(p["hist_all"]) == 72
+    # 均值也分开：定线看 mean_wide，审计看 mean
+    assert p["mean"] == round((3.0 + 0.03) / 72, 4)
+    assert p["mean_wide"] == round(0.03 / 61, 4)
 
 
 def test_board_ratio_probe_requires_both_beats_known():

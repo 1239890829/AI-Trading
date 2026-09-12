@@ -30,7 +30,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2632 项（2570 passed / 62 skipped）· 171 文件（09-12 实测）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2635 项（2573 passed / 62 skipped）· 171 文件（09-12 实测）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。
@@ -48,19 +48,21 @@ cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2632
 # **教训与本文档的警告同源：数字标注要么当轮实测回填，要么写"实测方法"而不写死数值。**
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
 cd apps/web && npx eslint .                       # 0 error / 0 warn（P1-27 已清零；余 1 处 C 类显式豁免）
-cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 429 项 / 52 文件（09-12 实测）
+cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 438 项 / 53 文件（09-12 实测）
 cd backend && .venv/bin/python -m pyflakes app tests scripts   # 0（scripts 已纳入口径，P2-18）
 python3 scripts/doc-health.py                    # 文档体检：0 待处理（收尾必跑，见 kb/07 §8.2）
 # 生产构建前必须先停 dev server（.next 冲突已踩两次）：
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 2632 项（2570 passed / 62 skipped）· 171 文件、前端 429 项 / 52 文件、eslint **0 error / 0 warn**
+> **门禁口径**：后端 2635 项（2573 passed / 62 skipped）· 171 文件、前端 438 项 / 53 文件、eslint **0 error / 0 warn**
 > （25 条回归已按 P1-27 清零；仅 notification-drawer 保留 1 处带理由的 C 类豁免）。
 > **测试规模与告警数同属「会失真的状态标注」**——改动后要实测回填，不要沿用旧数字
 > （此前「≤1 warn / 后端 580 / 前端 97 / 219 / 257 / 263 / 342 / 1925 / 2553 / 2556 / 2557 / 2574 / 2576 / 2625 /
-> 2584 / 2585 / 2590 / 2602 / 2606 / 2619 / 2620 / 前端 423」均已被后续改动追过，教训见 `docs/retro-and-gaps.md` §七）。
+> 2584 / 2585 / 2590 / 2602 / 2606 / 2619 / 2620 / 2632 / 前端 423 / 429」均已被后续改动追过，教训见 `docs/retro-and-gaps.md` §七）。
 > ⚠️ **交接 note 里的门禁数字也会失真**（2026-09-12 实测：note 写「2574 / 2513」，当轮为 2576 / 2515，新加 8 项后为 2584 / 2523 ⇒ 差值恰好等于新增测试数，可自洽核对）——**取数一律自己跑一遍**。
+> ✅ **自洽核对法已再次生效**（2026-09-12 批次 1 收尾）：上一值为 2632 / 429，本轮 2635 / 438 ⇒ 差值 **+3 / +9**，
+> 恰好等于本轮新增的 3 条后端守卫与 1 个前端文件（`lib/market-hours.test.ts` 9 项）——**差值对不上就说明有别的改动混入，值得查**。
 > **加测试文件就会让这里过期**，改测试后请顺手回填。
 
 **发布前额外做一次接口载荷体检**（plan-review 三.7，2026-09-01 纳入）：

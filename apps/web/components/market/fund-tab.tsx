@@ -23,7 +23,8 @@ import {
 } from "@/lib/api";
 import type { LongHuRecord } from "@/types/market";
 import { BoardFlowPanel } from "@/components/market/board-flow";
-import { FlowIntradayChart, TIER_META, fmtYi, hmToSeq, signedFmt } from "@/components/market/flow-intraday-chart";
+import { FlowIntradayChart, TIER_META, fmtYi, signedFmt } from "@/components/market/flow-intraday-chart";
+import { tradingSeqFromHHMM } from "@/lib/market-hours";
 
 /**
  * 市场页「资金」Tab（2026-09-07 三段式）：
@@ -68,7 +69,7 @@ function CumCompareChart({ today, prev, refMax }: { today: CumPoint[]; prev: Cum
   const yOf = (v: number) => H - (v / max) * (H - 10) - 5;
   const toPath = (pts: CumPoint[]) =>
     pts
-      .map((p, i) => `${i === 0 ? "M" : "L"}${((hmToSeq(p.t) / 240) * W).toFixed(1)},${yOf(p.cum).toFixed(1)}`)
+      .map((p, i) => `${i === 0 ? "M" : "L"}${((tradingSeqFromHHMM(p.t) / 240) * W).toFixed(1)},${yOf(p.cum).toFixed(1)}`)
       .join(" ");
   if (today.length === 0 && prev.length === 0) return null;
   return (

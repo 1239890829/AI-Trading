@@ -153,7 +153,14 @@ async def candidate_pool(
     # ① 活跃事件：symbol 方向直接收；theme 方向反查官方成分（cap 30/题材）
     try:
         for row in store.list_events(active_only=True, limit=30):
-            for d in store.directions_of(row.id):
+            # 直接读关系属性，**不要再调 `store.directions_of(row.id)`**：`list_events` 内部
+            # 已 `selectinload(EventCard.directions)`（store.py:156），行虽 detached 但方向
+            # 已在内存里；旧写法会**逐事件重开 session 再查一遍同一条 event_direction**
+            # ⇒ 30 个事件 = 30 次冗余查询，且这些同步 SQLite 调用位于 async 函数内，
+            # 会阻塞事件循环（2026-09-12 评审 P-2）。等价性：同一张表同一条件、返回同一
+            # 模型（EventDirection），且本处只用 target_type/target 做 setdefault，
+            # 与行序无关（uq_event_direction 保证同一事件内 target 不重复）。
+            for d in row.directions:
                 if d.target_type == "symbol" and d.target.isdigit() and len(d.target) == 6:
                     symbols.setdefault(d.target, {"from": "event", "prio": 1})
                 elif d.target_type == "theme" and svc is not None:

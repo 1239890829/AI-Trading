@@ -1,5 +1,6 @@
 import type { Kline, Quote } from "@/types/market";
 import { bjDate, bjHHMM } from "@/lib/format";
+import { isContinuousSession } from "@/lib/market-hours";
 
 // bjDate / bjHHMM 已收口到 lib/format（2026-09-11 冗余清理，此前两处逐字节同体）
 
@@ -11,10 +12,10 @@ function hhmmToMin(hhmm: string): number {
   return h * 60 + m;
 }
 
-/** 连续交易时段内（上午 09:30-11:30 / 下午 13:00-15:00）。竞价 09:25 单独处理不在此列。 */
-function inTradingSession(min: number): boolean {
-  return (min >= 570 && min <= 690) || (min >= 780 && min <= 900);
-}
+// 连续竞价判定已收口到 lib/market-hours 的 `isContinuousSession`
+// （2026-09-12 评审 R-2：本文件原有一份 09:30-11:30/13:00-15:00 的私有实现，
+// 与 market-hours 的宽松口径 09:15-11:35/12:55-15:15 构成「同一问题两个答案」。
+// 两者意图不同**不可合并**，但边界必须同源——现由 market-hours 单点持有。）
 
 /**
  * 盘中 K 线实时合成：用 WS 最新 quote 更新最后一根日 K（当日 bar）。
@@ -109,7 +110,7 @@ export function mergeQuoteIntoMinutes<T extends { ts: string; price: number; cum
   const qMin = hhmmToMin(qHHMM);
   const lastMin = hhmmToMin(lastHHMM);
   if (qMin <= lastMin) return null;
-  if (!inTradingSession(qMin) || !inTradingSession(lastMin)) return null;
+  if (!isContinuousSession(qMin) || !isContinuousSession(lastMin)) return null;
   const q = quote as Quote & { amount?: number | null };
   const cumVolume = quote.volume ?? null;
   const cumAmount = q.amount ?? null;

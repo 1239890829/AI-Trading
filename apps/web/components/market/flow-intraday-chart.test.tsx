@@ -50,7 +50,7 @@ describe("FlowIntradayChart（P0-4 渲染契约）", () => {
     expect(paths).toHaveLength(5);
 
     // maxAbs=10 ⇒ yPct(10)=50-46=4；yPct(-10)=50+46=96
-    // hmToSeq("09:30")=0、hmToSeq("09:31")=1（与后端 _sina_bar_seq 同口径）
+    // tradingSeqFromHHMM("09:30")=0、("09:31")=1（与后端 _sina_bar_seq 同口径）
     expect(paths[0].getAttribute("d")).toBe("M0.0,4.0 L1.0,96.0");
     // 其余档全为 null ⇒ 无坐标（保持既有行为：不臆造零点）
     expect(paths[1].getAttribute("d")).toBe(" ");

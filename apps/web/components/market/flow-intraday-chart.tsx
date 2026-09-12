@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 import { fmtYi, signedYi } from "@/lib/format";
+import { tradingSeqFromHHMM } from "@/lib/market-hours";
 import type { FlowIntradayPoint, FlowTier } from "@/lib/api";
 
 /**
@@ -30,14 +31,11 @@ export function signedFmt(v: number | null): string {
   return signedYi(v, 1);
 }
 
-/** HH:MM → 交易分钟序（0..240），与后端 _sina_bar_seq 同口径。 */
-export function hmToSeq(t: string): number {
-  const [h, m] = t.split(":").map(Number);
-  const hm = h * 60 + m;
-  if (hm <= 570) return 0;
-  if (hm <= 690) return hm - 570;
-  return Math.min(240, 120 + (hm - 780));
-}
+// 交易分钟序（HH:MM → 0..240 轴）已下沉到 `lib/market-hours.ts::tradingSeqFromHHMM`
+// （2026-09-12 评审 R-3）。此前本文件自持一份 `hmToSeq`，而
+// `components/minute-chart.tsx` 另有一份「已开市交易分钟数」——两者是同一条交易
+// 分钟轴上的两个量（0 基轴位 / 1 基已过分钟数），却各写一份映射，且午休段算法不一致。
+// 现在轴只有一份，本文件与 minute-chart 都从 `lib/market-hours` 取。
 
 /**
  * 分钟级五档资金流累计曲线（大盘/板块通用，标题由调用方在外部给出）。
@@ -68,14 +66,14 @@ export function FlowIntradayChart({ items }: { items: FlowIntradayPoint[] }) {
           .map((p, i) => {
             const v = p[m.key];
             if (v == null) return "";
-            return `${i === 0 || items[i - 1][m.key] == null ? "M" : "L"}${hmToSeq(p.t).toFixed(1)},${yPct(v).toFixed(1)}`;
+            return `${i === 0 || items[i - 1][m.key] == null ? "M" : "L"}${tradingSeqFromHHMM(p.t).toFixed(1)},${yPct(v).toFixed(1)}`;
           })
           .join(" ")
       ),
     [items, yPct]
   );
   // 命中测试用的分钟序：同样按数据 memo（原实现每次 move 都对全表重算 hmToSeq）
-  const seqs = useMemo(() => items.map((p) => hmToSeq(p.t)), [items]);
+  const seqs = useMemo(() => items.map((p) => tradingSeqFromHHMM(p.t)), [items]);
 
   const onMove = useCallback(
     (e: React.MouseEvent) => {
@@ -98,7 +96,7 @@ export function FlowIntradayChart({ items }: { items: FlowIntradayPoint[] }) {
 
   if (items.length === 0) return null;
   const hp = hoverIdx != null ? items[hoverIdx] : null;
-  const hoverLeftPct = hp ? (hmToSeq(hp.t) / 240) * 100 : 0;
+  const hoverLeftPct = hp ? (tradingSeqFromHHMM(hp.t) / 240) * 100 : 0;
 
   return (
     <div className="w-full" data-testid="flow-intraday-chart">

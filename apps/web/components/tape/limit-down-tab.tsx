@@ -39,7 +39,13 @@ export function LimitDownTab() {
     }
   }, []);
 
-  usePollingFetch(() => load(searchParams.get("date") || undefined), null);
+  // 与 limit-up-tab 完全同构：URL 的 ?date= 是**取数唯一触发源**（2026-09-12 评审 R-7）。
+  // `key` 与「删掉 handler 里那次显式 load」必须成对出现——`useResource` 的 effect
+  // 依赖数组含 `key`（`use-resource.ts:151`）但**不含 `searchParams`**、且**无去重**：
+  // 只补 `key` 不删 load ⇒ 改一次日期发两次请求；只删 load 不补 `key` ⇒ 改日期不重拉。
+  // 诚实边界（潜在契约违反，非当前可观测缺陷）见 limit-up-tab 同处的说明。
+  const urlDate = searchParams.get("date") || undefined;
+  usePollingFetch(() => load(urlDate), null, urlDate);
 
   function syncUrl(date: string) {
     const p = new URLSearchParams(window.location.search);
@@ -50,7 +56,7 @@ export function LimitDownTab() {
   }
 
   const onDate = (v: string) => {
-    void load(v || undefined);
+    // 只改 URL——取数由上面 `key` 变化触发（勿在此再调 load）
     syncUrl(v);
   };
 

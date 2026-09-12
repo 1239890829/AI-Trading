@@ -68,7 +68,10 @@ export function AlertsTab() {
     }
   }, []);
 
-  usePollingFetch(load, 10_000);
+  // `marketHours: false`（2026-09-12 评审 R-7）：预警规则/事件/通道**不是行情数据**，
+  // 走 `useResource` 默认的「盘外 ×5 降频 + 封顶 120s」会让盘后新产生的告警最多晚 2 分钟
+  // 才出现——而盘后恰恰是复盘告警的高峰。关掉降频，维持 10s 恒定节奏。
+  usePollingFetch(load, 10_000, undefined, { marketHours: false });
 
   // P1-36：判读层「已挡（ignore）」事件——被挡清单可见，才能判断"是不是挡多了"。
   const blocked = useMemo(
