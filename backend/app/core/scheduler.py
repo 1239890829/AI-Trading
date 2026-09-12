@@ -11,11 +11,32 @@
 - `SchedulerRegistry`：`add()` / `add_periodic()` 声明，`start()` 拉起，`shutdown()` 收割；
 - 每个任务记录 `state / last_tick / failures / last_error / restarts`；
 - **死亡自愈**：任务异常退出时记 ERROR 并按指数退避重启（`restart=False` 可关）；
+- **单拍失败可见化**（O-1，2026-09-12）：`add_periodic` 托管的循环另记
+  `tick_failures / consecutive_tick_failures / last_ok_tick / last_tick_error`；
 - `snapshot()` 直接喂给 `GET /api/system/schedulers`。
 
 **heartbeat 的诚实边界**：只有经 `add_periodic()` 托管的循环才由注册表自动记
 `last_tick`；在别处 `create_task` 的外部循环（`app/picks/**`、`app/services/**` 下的
 `*_loop`）按名字登记后 `heartbeat` 字段显式标 `"external"`——**不假装有 tick 数据**。
+
+**「跑了一拍」与「跑成功了一拍」是两件事**（O-1，2026-09-12 评审）：
+改造前 `add_periodic` 的驱动在单拍异常被吞掉后**照旧**调 `self.tick(name)`，于是
+`last_tick` 会刷新、`tick_count` 会 +1，而 `failures` **只在任务整体死亡时才 +1**
+（`_on_done`）。结果：一个**每拍都失败**的任务在 `/api/system/schedulers` 上显示为
+`state=running / failures=0 / last_tick=最新`——**把"持续失败"呈现成"健康"**，
+与「任务静默死亡」同族，只是更难发现（连日志都只重复同一个 warning 行）。
+
+处置刻意**保持既有字段语义不变**（纯增量，不改口径）：
+- `last_tick` / `tick_count` / `idle_seconds` 仍表示「**循环在转**」（成败皆算）——
+  既有消费方含义不变；
+- 新增 `last_ok_tick` / `ok_idle_seconds` 表示「**最近一次真的跑成功**」——
+  这才是数据新鲜度，改造前无处可取；
+- 新增 `tick_failures`（累计）/ `consecutive_tick_failures`（连续，成功即清零）/
+  `last_tick_error`，并由 `failing_names()` 供健康哨兵取用。
+
+**为什么连续阈值取 3 也不会刷屏**：哨兵每 15 分钟才采样一次（`_INTERVAL_SECONDS`），
+瞬时抖动在下次采样前就被「成功一拍」清零了；只有**跨采样周期持续失败**才会被看到。
+故阈值是「防单次抖动」，去重 + 采样节奏才是「防刷屏」的那一层。
 
 **依赖约束**：本模块只依赖标准库，且**不得在模块级 import `app.core.config`**。
 `tests/conftest.py` 需要在 `settings` 被实例化**之前**读取
@@ -41,6 +62,13 @@ SHUTDOWN_GRACE_SECONDS = 10.0
 #: 重启退避：首次 30s 起翻倍，封顶 300s（避免"刚崩就重崩"把上游打爆）。
 _RESTART_BASE_SECONDS = 30.0
 _RESTART_MAX_SECONDS = 300.0
+
+#: `add_periodic` 循环**连续**多少拍异常才计入 `failing_names()`（O-1，2026-09-12）。
+#:
+#: 取 3 的理由与「防刷屏」无关（那一层由哨兵的 15 分钟采样 + `AnomalyPushGuard`
+#: 字符串去重承担，见模块 docstring），这里只为**滤掉单次抖动**：
+#: 上游偶发超时/熔断是正常现象，一拍失败下一拍就恢复的，不该被报成故障。
+TICK_FAILURE_ALERT_THRESHOLD = 3
 
 
 def switch_env_var(attr: str) -> str:
@@ -168,8 +196,15 @@ class TaskRecord:
     interval_seconds: float | None = None
     task: asyncio.Task | None = None
     started_at: float | None = None
+    #: 最近一次**尝试**跑完一拍的时刻（成败皆算）——表示「循环在转」，既有语义不变。
     last_tick: float | None = None
     tick_count: int = 0
+    #: 最近一次**成功**跑完一拍的时刻（O-1）——表示「数据是新的」，改造前无处可取。
+    last_ok_tick: float | None = None
+    #: 单拍异常：累计次数 / **连续**次数（成功一拍即清零）/ 最近一次的错误摘要。
+    tick_failures: int = 0
+    consecutive_tick_failures: int = 0
+    last_tick_error: str | None = None
     failures: int = 0
     restarts: int = 0
     last_error: str | None = None
@@ -261,7 +296,8 @@ class SchedulerRegistry:
 
         `tick` 返回正数可覆盖本轮之后的间隔（`None` = 沿用 `interval`）——给
         "盘中密、盘外疏"这类自适应节奏留口子。
-        单拍异常由驱动吞掉并记日志（循环继续）；`last_tick` 每拍自动更新。
+        单拍异常由驱动吞掉并记日志（循环继续）；`last_tick` 每拍自动更新，
+        另记 `last_ok_tick`（成功才更新）与 `consecutive_tick_failures`（见 O-1）。
         """
 
         async def _driver() -> None:
@@ -276,9 +312,14 @@ class SchedulerRegistry:
                     nxt = await tick()
                 except asyncio.CancelledError:
                     raise
-                except Exception:  # noqa: BLE001  单拍失败不终止循环
+                except Exception as exc:  # noqa: BLE001  单拍失败不终止循环
+                    # O-1：这里**必须先记失败、再让 `tick()` 记"循环还在转"**。
+                    # 旧写法只有 `self.tick(name)` 一行（注释写"失败也记"），
+                    # 于是持续失败的任务在 API 上显示 running / failures=0 / 最新 last_tick。
+                    self.tick_failed(name, exc)
                     log.exception("调度器 %s 单拍失败（循环继续）", name)
-                self.tick(name)  # 心跳：跑完一拍就算活着（失败也记）
+                else:
+                    self.tick_ok(name)
                 if await wait_or_stop(stop, _coerce_interval(nxt, interval)):
                     return
 
@@ -353,12 +394,56 @@ class SchedulerRegistry:
 
     # ------------------------------------------------------------------ 观测
     def tick(self, name: str) -> None:
-        """记一次心跳。`add_periodic` 的驱动会自动调；外部循环可自行调用。"""
+        """记一次心跳（**成功**语义，O-1 起）。
+
+        `add_periodic` 的驱动在单拍成功时自动调；外部循环可自行调用。
+        语义与 `tick_ok` 相同，保留 `tick` 这个名字是因为它是既有外部循环的调用口
+        （`app/picks/**`、`app/services/**` 下的 `*_loop`），改签名会让它们静默失效。
+        """
+        self.tick_ok(name)
+
+    def tick_ok(self, name: str) -> None:
+        """记一次**成功**的拍：心跳前进 + 连续失败计数清零。"""
+        rec = self._records.get(name)
+        if rec is None:
+            return
+        now = time.time()
+        rec.last_tick = now
+        rec.last_ok_tick = now
+        rec.tick_count += 1
+        # 成功即清零「连续」——这是与 `tick_failures`（累计）的分工：
+        # 累计值只用于回答"一共出过多少次"，判断"此刻是否在坏"必须看连续值。
+        rec.consecutive_tick_failures = 0
+
+    def tick_failed(self, name: str, exc: BaseException) -> None:
+        """记一次**失败**的拍（O-1）。
+
+        刻意**不动** `last_ok_tick`（数据新鲜度就该停在最后一次成功），
+        但**照旧**推进 `last_tick`（循环确实又转了一圈，`idle_seconds` 的既有
+        含义是"循环在转"、不是"数据是新的"）。两个事实分开记，正是本项修复的要点。
+        """
         rec = self._records.get(name)
         if rec is None:
             return
         rec.last_tick = time.time()
         rec.tick_count += 1
+        rec.tick_failures += 1
+        rec.consecutive_tick_failures += 1
+        # 只存类名 + 消息：与本仓探针文案同口径（稳定值），避免"每拍都不同的
+        # 错误串"在快照里制造无意义 diff。
+        rec.last_tick_error = f"{type(exc).__name__}: {exc}"
+
+    def failing_names(self) -> list[str]:
+        """**名义存活但连续失败**的任务名（O-1 的可见性出口）。
+
+        与 `dead_names()` 正交：那边答"已经死了"，这边答"还活着但活得不正常"——
+        后者改造前**完全不可见**（`state=running / failures=0`），是本项要堵的洞。
+        """
+        return [
+            r.name for r in self._records.values()
+            if r.state == "running"
+            and r.consecutive_tick_failures >= TICK_FAILURE_ALERT_THRESHOLD
+        ]
 
     def snapshot(self) -> list[dict]:
         now = time.time()
@@ -382,6 +467,14 @@ class SchedulerRegistry:
             "last_tick": _iso(rec.last_tick),
             "idle_seconds": round(now - rec.last_tick, 1) if rec.last_tick else None,
             "tick_count": rec.tick_count,
+            # —— O-1：单拍失败的可见化字段（纯增量，不影响上面既有键的含义）——
+            "last_ok_tick": _iso(rec.last_ok_tick),
+            "ok_idle_seconds": (
+                round(now - rec.last_ok_tick, 1) if rec.last_ok_tick else None
+            ),
+            "tick_failures": rec.tick_failures,
+            "consecutive_tick_failures": rec.consecutive_tick_failures,
+            "last_tick_error": rec.last_tick_error,
             "failures": rec.failures,
             "restarts": rec.restarts,
             "last_error": rec.last_error,

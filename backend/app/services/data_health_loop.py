@@ -72,6 +72,31 @@ def scheduler_probe(app_state) -> str | None:
     return "调度器已死亡（未自动重启）：" + "、".join(sorted(dead))
 
 
+def scheduler_failing_probe(app_state) -> str | None:
+    """有调度器**连续单拍异常**（但循环仍在跑）时返回一条 issue 文案，否则 None。
+
+    为什么要有（O-1，2026-09-12 评审）：`scheduler_probe` 只问「死了没」，而更隐蔽
+    的一种失效是**任务活着、每拍都抛异常**——`last_tick` 照旧刷新、累计 `failures`
+    照旧为 0，在 `/api/system/schedulers` 上就是一条**健康的记录**。历史教训
+    （情绪指标库静默停更 6 个交易日、调度传字符串日历导致 TypeError 被 except 吞）
+    正是这一形态：循环在转、产出为零、没有任何一处会报出来。
+
+    与 `scheduler_probe` 报成**两条** issue（而不是并成一条）是刻意的：两者的
+    恢复条件与处置动作不同（"死了"要查为何退出，"持续失败"要看错误摘要），
+    并成一条后任务名集合一变就会互相打穿 `AnomalyPushGuard` 的字符串去重，
+    把已经恢复的那条又推一次。
+
+    文案只含任务名（稳定值）——同 `scheduler_probe`，理由见该函数 docstring。
+    """
+    reg = getattr(app_state, "schedulers", None)
+    if reg is None:
+        return None  # 未装配注册表（精简启动/单测）不误报
+    failing = reg.failing_names()
+    if not failing:
+        return None
+    return "调度器持续失败（循环仍在跑但每拍异常）：" + "、".join(sorted(failing))
+
+
 async def data_health_loop(app_state, stop: asyncio.Event) -> None:
     """常驻循环：交易时段每 15 分钟一轮数据健康检查。startup 里 create_task。"""
     # 2026-09-09：修复双遗留 import 错误——①push_policy 在 app.services 不在 app.core
@@ -111,6 +136,11 @@ async def data_health_loop(app_state, stop: asyncio.Event) -> None:
                 sched_issue = scheduler_probe(app_state)
                 if sched_issue:
                     issues.append(sched_issue)
+                # O-1：连续单拍失败（循环仍在跑）同样走这条出口。与上一条是
+                # **两条独立 issue**，理由见 scheduler_failing_probe docstring。
+                failing_issue = scheduler_failing_probe(app_state)
+                if failing_issue:
+                    issues.append(failing_issue)
                 if issues:
                     fresh = guard.filter_new(issues)
                     if fresh and feishu_allowed(PolicyKind.ANOMALY):

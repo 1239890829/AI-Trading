@@ -11,7 +11,11 @@ sys.path.insert(0, ".")
 
 from app.core.scheduler import SchedulerRegistry
 from app.schemas.market import Quote
-from app.services.data_health_loop import limit_price_probe, scheduler_probe
+from app.services.data_health_loop import (
+    limit_price_probe,
+    scheduler_failing_probe,
+    scheduler_probe,
+)
 
 
 class _FakeHub:
@@ -115,6 +119,58 @@ def test_scheduler_probe_reports_dead_names_with_stable_text():
         assert issue is not None and "fragile" in issue
         assert issue == scheduler_probe(state)  # 逐字稳定
         await reg.shutdown()
+
+    _run(scenario())
+
+
+# ------------------------------------------------- O-1 调度器持续失败探针（同一出口）
+def test_scheduler_failing_probe_without_registry_is_not_an_issue():
+    """未装配注册表（精简启动/单测）不得误报。"""
+    assert scheduler_failing_probe(_FakeState(with_hub=False)) is None
+
+
+def test_scheduler_failing_probe_clean_registry_returns_none():
+    async def scenario():
+        reg = SchedulerRegistry()
+        reg.add("ok", lambda: asyncio.sleep(3600))
+        await reg.start()
+        state = _FakeState(with_hub=False)
+        state.schedulers = reg
+        assert scheduler_failing_probe(state) is None
+        await reg.shutdown(grace=0.05)
+
+    _run(scenario())
+
+
+def test_scheduler_failing_probe_reports_sustained_tick_failures():
+    """O-1 的核心出口：**循环还在跑、每拍都异常**的任务必须能报出来。
+
+    ⚠️ 这里刻意与 `scheduler_probe`（死亡探针）分开断言：改造前这种任务在
+    `dead_names()` 里**没有**（它没死），所以死亡探针返回 None —— 那正是
+    "系统自认一切正常"的由来。两个探针必须各答各的，不能用一个掩盖另一个。
+    """
+
+    async def scenario():
+        reg = SchedulerRegistry()
+
+        async def always_boom():
+            raise RuntimeError("per-tick failure")
+
+        reg.add_periodic("half-dead", always_boom, interval=0.01)
+        await reg.start()
+        await asyncio.sleep(0.1)
+        state = _FakeState(with_hub=False)
+        state.schedulers = reg
+
+        # 死亡探针必须仍然说"没事"——这正说明为什么需要第二个探针
+        assert scheduler_probe(state) is None
+
+        issue = scheduler_failing_probe(state)
+        assert issue is not None and "half-dead" in issue
+        # 文案逐字稳定（不含数量/时间戳）——否则打穿哨兵的去重，每 15 分钟推一次飞书
+        assert issue == scheduler_failing_probe(state)
+        assert issue.count("half-dead") == 1
+        await reg.shutdown(grace=0.05)
 
     _run(scenario())
 

@@ -7,7 +7,10 @@
 4. 启动后可观测（state / uptime / last_tick），收割后为 stopped；
 5. `add_periodic` 的 heartbeat 自动记，tick 返回值可以改本轮之后的节奏；
 6. 任务异常死亡 → 记 failures/last_error + 排重启，且出现在 `dead_names()`（哨兵出口）；
-7. snapshot 可 JSON 序列化（直接喂 REST）+ 外部循环的 heartbeat 显式标 external。
+7. snapshot 可 JSON 序列化（直接喂 REST）+ 外部循环的 heartbeat 显式标 external；
+8. **单拍持续失败不得呈现为"健康"**（O-1）：`state=running` 但
+   `consecutive_tick_failures` 到线 ⇒ 进 `failing_names()`；成功一拍即清零连续值；
+   `last_ok_tick` 与 `last_tick` 是两个事实（数据新鲜度 vs 循环在转），不可互相冒充。
 """
 from __future__ import annotations
 
@@ -156,6 +159,127 @@ def test_failed_tick_does_not_kill_the_loop():
         assert reg.snapshot()[0]["state"] == "stopped"
 
     _run(scenario())
+
+
+# ------------------------------------------------- O-1：单拍失败不得呈现为"健康"
+def test_persistently_failing_tick_is_not_presented_as_healthy():
+    """核心回归（O-1）：**每拍都失败**的任务改造前显示 `running / failures=0 / last_tick=最新`。
+
+    这是本项目最贵的一类失效（情绪指标库静默停更 6 个交易日）：循环在转、产出为零、
+    没有任何一处会报出来。本用例钉住「四个字段必须能把它区分出来」：
+    · `consecutive_tick_failures` / `tick_failures` 必须涨；
+    · `last_tick_error` 必须留下错误摘要；
+    · `last_ok_tick` 必须是 None（**一次都没成功过**——这正是数据新鲜度）。
+    """
+
+    async def scenario():
+        reg = SchedulerRegistry()
+
+        async def always_boom():
+            raise RuntimeError("upstream down")
+
+        rec = reg.add_periodic("always-broken", always_boom, interval=0.01)
+        await reg.start()
+        await asyncio.sleep(0.15)
+        row = reg.snapshot()[0]
+
+        # 循环**确实活着**——这正是危险之处，不是"死了"
+        assert row["state"] == "running"
+        assert rec.consecutive_tick_failures >= 3, "连续失败必须被计数（旧实现恒为 0）"
+        assert row["tick_failures"] == row["consecutive_tick_failures"]
+        assert "upstream down" in (row["last_tick_error"] or "")
+        assert row["last_ok_tick"] is None and row["ok_idle_seconds"] is None, (
+            "一次都没成功过 ⇒ 数据新鲜度必须是未知，不能拿 last_tick 冒充"
+        )
+        assert row["last_tick"] is not None, "循环在转这件事仍需照旧可见（既有语义不变）"
+        assert rec.name in reg.failing_names()
+        assert reg.dead_names() == [], "它没死——两件事不能混为一谈"
+        await reg.shutdown(grace=0.05)
+
+    _run(scenario())
+
+
+def test_consecutive_failures_reset_on_success_but_total_keeps():
+    """「连续」与「累计」分工：成功即清零连续值，累计值保留（回答"一共出过几次"）。"""
+
+    async def scenario():
+        reg = SchedulerRegistry()
+        n = {"i": 0}
+
+        async def tick():
+            n["i"] += 1
+            if n["i"] <= 2:
+                raise RuntimeError("blip")
+            return 0.01
+
+        rec = reg.add_periodic("recovering", tick, interval=0.01)
+        await reg.start()
+        await asyncio.sleep(0.15)
+        await reg.shutdown(grace=0.05)
+
+        assert n["i"] >= 3, "用例前提：至少要跑到第 3 拍（前两拍失败）"
+        assert rec.tick_failures >= 2, "累计失败保留"
+        assert rec.consecutive_tick_failures == 0, "成功一拍后连续计数必须清零"
+        assert rec.last_ok_tick is not None
+        assert rec.last_ok_tick >= rec.last_tick - 1.0
+
+    _run(scenario())
+
+
+def test_failing_names_threshold_boundary_and_state_filter():
+    """阈值是闭区间下界 `>= TICK_FAILURE_ALERT_THRESHOLD`，且**只认 running**。
+
+    边界两侧都要钉：少一拍不报（防单次抖动刷屏），到线即报（防真故障被漏）。
+    另钉 `state != running` 的排除——`failing_names()` 与 `dead_names()` 必须正交，
+    否则「已经死了」会被算成「还活着但失败」，处置动作就错了。
+    """
+    from app.core.scheduler import TICK_FAILURE_ALERT_THRESHOLD
+
+    reg = SchedulerRegistry()
+    reg.add("probe", lambda: asyncio.sleep(3600))  # 需要一个记录占位
+
+    async def scenario():
+        await reg.start()
+        rec = reg._records["probe"]
+        rec.task = None  # 模拟"名义 running"以外的情况：先让它不活着
+        rec.finished_reason = "exited"
+        assert rec.state == "exited"
+
+        rec.consecutive_tick_failures = TICK_FAILURE_ALERT_THRESHOLD
+        assert reg.failing_names() == [], "非 running 状态不得计入（与 dead_names 正交）"
+
+        # 恢复成 running 语义：直接构造一个未完成的 task
+        rec.task = asyncio.get_running_loop().create_future()
+        rec.finished_reason = None
+        assert rec.state == "running"
+        rec.consecutive_tick_failures = TICK_FAILURE_ALERT_THRESHOLD - 1
+        assert reg.failing_names() == [], "差一拍不报（阈值是下界，防单次抖动）"
+        rec.consecutive_tick_failures = TICK_FAILURE_ALERT_THRESHOLD
+        assert reg.failing_names() == ["probe"], "到线即报"
+
+        rec.task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await rec.task
+        await reg.shutdown(grace=0.05)
+
+    _run(scenario())
+
+
+def test_snapshot_exposes_tick_failure_fields_additively():
+    """纯增量的证明：既有键的含义与取值不变，新键只是**多出来**的。"""
+    reg = SchedulerRegistry()
+    reg.add("a", lambda: asyncio.sleep(3600))
+    _run(reg.start())
+    row = reg.snapshot()[0]
+    # 既有键集合必须仍被包含（防"增量"实为改名/删除）
+    assert {
+        "name", "state", "last_tick", "idle_seconds", "tick_count",
+        "failures", "restarts", "last_error",
+    } <= set(row)
+    assert {"last_ok_tick", "ok_idle_seconds", "tick_failures",
+            "consecutive_tick_failures", "last_tick_error"} <= set(row)
+    assert row["consecutive_tick_failures"] == 0 and row["tick_failures"] == 0
+    _run(reg.shutdown(grace=0.05))
 
 
 def test_exception_death_is_recorded_and_restart_is_scheduled():
