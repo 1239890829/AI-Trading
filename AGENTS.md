@@ -333,7 +333,7 @@ C2 全市场日 K dump（已被 TDX 替代）；"等 LLM 再做摘要"（规则�
 |---|---|
 | **docs/INDEX.md** | **文档总入口**（所有文档索引 + 使用地图） |
 | **docs/PROJECT-MASTER.md** | 技术总览：目录逐文件/数据源口径/API/阶段状态表 |
-| **docs/retro-and-gaps.md** | **唯一待办账本**——§一~§三 历史盘点 / §四 行为基线勿回退 / **§六 全量待办总账（P0/P1/P2）** / §七 偏差更正 / §八 计划文档处置 |
+| **docs/retro-and-gaps.md** | **唯一待办账本**（2026-09-13 压缩：**1226 行 / 19.2 万字符 → 294 行 / 3.5 万字符，−81%**；原文快照 `.workbuddy/artifacts/retro-and-gaps-full-snapshot-2026-09-13.md`）。结构：§一 里程碑 / **§六 待办总账**（6.1 P0 ✅全闭环 · 6.2 P1 · 6.3 P2 前瞻登记册 · 6.4 防重复开发正向索引 · **6.5 执行轮次索引（12 轮）** · **⭐6.5b 结转：仍未闭环的 9 项**） / §七 偏差更正（**错题本**，34 处） / §八 计划文档处置。**「还有什么没做」的唯一答案 = §6.5b**；执行细节去 `.workbuddy/memory/` 逐日日志 |
 | **docs/summary/** | 主题汇总 6 份（stock-strategy / factor-system / data-market / architecture-design / ai-evolution / review-governance）——**已完成方案的精华收敛处** |
 | **docs/kb/** | 权威知识库（KB-STOCK/TRADE/ENG/DEC + 00-INDEX，**全序列唯一登记处**）；**工程教训 KB-ENG 按子类分四册**（09-12 按 §5.2 条件① 拆出，引用只写 `[[KB-ENG-NN]]` 即可，查条目不必知道册名）：`03-engineering.md` = **应用与设计层**（架构/接口/口径判据/前端/方法论）/ `09-verification-pitfalls.md` = **验证层**（测试·门禁·CI·防线有效性）/ `10-data-contract-pitfalls.md` = **数据契约层**（写入·去重·传输·时间·质量门）/ `08-tooling-pitfalls.md` = 工具与环境陷阱速查（KB-ENG-01~15 操作类短条目）；`07-doc-curation.md` = 文档治理规范（v1.6：§3.2 完成即沉淀删件、`📎 示例` 状态、`scripts/doc-health.py` 一键体检）。**示例/题材案例一律标 `📎`，不得与 `✅ 已落地` 混用** |
 | docs/plan-registry.md | 历史计划去向表 + 文档处理规范（**不再新建计划文档**） |
