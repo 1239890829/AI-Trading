@@ -69,6 +69,13 @@ lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=
 
 CI（GitHub Actions）：后端 pytest+pyflakes、前端 tsc+eslint+vitest+build。推送后**自查 CI**
 （`source ~/.zshenv` 拿 GITHUB_TOKEN → `/actions/runs?head_sha=<完整SHA>` → jobs → logs），绝不问用户。
+⚠️ **仓库 slug ≠ 目录名，必须从 remote 推导、不要硬编码**：真实远端是
+`git@github.com:1239890829/AI-Trading.git`，写成 `hezifeng/ashare-ai-trader` 时 API 会**静默返空**
+（`total_count: None`、无报错），极易误判成"CI 没跑"。可靠取法：
+
+```bash
+SLUG=$(git config --get remote.origin.url | sed -E 's#.*github.com[:/]([^/]+/[^/.]+)(\.git)?#\1#')
+```
 
 ## 2. 当前状态快照（沿革记录；**会失真的数字见 §1 门禁行与 `/openapi.json`**）
 
