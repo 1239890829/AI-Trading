@@ -209,10 +209,15 @@ LEGACY_DOC_SLUGS = {
 }
 
 #: 裸名检查的**已登记例外**：(文件, slug) → 理由。
-#: 目前为**空**——2026-09-12 那条 `nfp-ashare-validation@test_chains.py` 例外随着该断言
+#: ⚠️ 加例外前先分辨「这到底是不是一个引用」——把真引用登记成例外 = 亲手关掉守卫。
+#: 空配置的历史：2026-09-12 那条 `nfp-ashare-validation@test_chains.py` 例外随着该断言
 #: 改写（不再依赖文档名做标记）已经**不再命中**，属死配置故删除：**过期的允许列表本身
 #: 就是「看着有守卫、实际不设防」**，与「永不触发的门禁」同类。
-LEGACY_SLUG_ALLOW: dict[tuple[str, str], str] = {}
+LEGACY_SLUG_ALLOW: dict[tuple[str, str], str] = {
+    ("apps/web/components/agent/kb-browser-tab.test.tsx", "plan-review"):
+        "输入搜索框的**关键词**（验证「搜索穿透折叠」能命中归档件）——"
+        "该用例的断言目的**正是**命中归档件，不是指向已删文档的指针",
+}
 
 #: 裸名检查**整体跳过的文件**：检查器自身——`LEGACY_DOC_SLUGS` 的**定义**里必然
 #: 逐个写着这些名字（引用 vs 定义的区分靠语义，脚本判不了）。代价：本文件里真写错

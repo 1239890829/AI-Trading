@@ -266,11 +266,34 @@ def _docs_root():
     return Path(__file__).resolve().parents[4] / "docs"
 
 
+#: 文档分层口径（与 `docs/kb/07-doc-curation.md` §7 分层模型对齐）。
+#: **为什么要分层**：面板原先是 `rglob("*.md")` 无差别扫描 docs/ ⇒ 79 份里只有 11 份是
+#: canonical 知识库，且 22 份归档件与 13 份逐日日志被平铺并列 —— 用户无法从界面分辨
+#: 「这是现行规则」还是「这是历史结论」，**与 kb/07「状态语义不得混用」的既有纪律冲突**。
+#: 分层只影响**默认呈现**，不减少可见内容（折叠区仍可展开、搜索仍跨全部）。
+_DOC_TIER_DIRS: dict[str, tuple[str, ...]] = {
+    "canonical": ("kb",),                                              # L0 唯一权威
+    "current": ("", "summary"),                                        # L1/L2 现役
+    "history": ("archive",),                                           # 只读历史
+    "timeline": ("daily-review", "evolution", "repo-watch", "push-templates"),  # L4 时间序列
+}
+
+
+def _tier_of(top_dir: str) -> str:
+    """顶层目录名 → 分层标识。**未登记的新目录按 `current` 处理**——
+    出方向是「多显示一点」，而不是把新内容静默藏进折叠区（失败要可见）。"""
+    for tier, dirs in _DOC_TIER_DIRS.items():
+        if top_dir in dirs:
+            return tier
+    return "current"
+
+
 @router.get("/agent/kb/tree")
 async def kb_tree() -> dict:
     """知识库文档树（AI 控制台「知识库/仓库」面板数据源）。
 
-    docs/ 下全部 .md；KB 文件额外解析其包含的 KB-ID 列表（[[KB-XXX]] 关联跳转用）。
+    docs/ 下全部 .md；每份带 `tier`（canonical/current/history/timeline）供前端分层呈现；
+    KB 文件额外解析其包含的 KB-ID 列表（[[KB-XXX]] 关联跳转用）。
     """
     import re
 
@@ -279,6 +302,7 @@ async def kb_tree() -> dict:
     if root.exists():
         for p in sorted(root.rglob("*.md")):
             rel = p.relative_to(root).as_posix()
+            dir_key = p.parent.relative_to(root).as_posix() if p.parent != root else ""
             try:
                 text = p.read_text(encoding="utf-8")
             except Exception:  # noqa: BLE001
@@ -288,7 +312,8 @@ async def kb_tree() -> dict:
                 {
                     "path": rel,
                     "name": p.name,
-                    "dir": p.parent.relative_to(root).as_posix() if p.parent != root else "",
+                    "dir": dir_key,
+                    "tier": _tier_of(dir_key.split("/")[0] if dir_key else ""),
                     "size": p.stat().st_size,
                     "kb_ids": kb_ids,
                 }

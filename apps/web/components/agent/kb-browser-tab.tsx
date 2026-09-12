@@ -1,14 +1,23 @@
 "use client";
 
 /**
- * 知识库浏览面板（2026-09-09 用户指令⑤②）：
+ * 知识库浏览面板（2026-09-09 用户指令⑤②；2026-09-12 分层重构）：
  * docs/ 全部 Markdown 的树形目录 + 渲染阅读 + [[KB-ID]]/相对链接面板内跳转。
  * 数据源：/api/agent/kb/tree + /api/agent/kb/file（路径白名单在服务端）。
+ *
+ * **分层呈现（2026-09-12）**：原先 `kb/` 置顶、其余目录平铺 ⇒ 79 份里 canonical 知识库
+ * 只占 11 份，且 22 份归档件与 13 份逐日日志与它并列，用户无法分辨「现行规则」与
+ * 「历史结论」（违反 `kb/07-doc-curation.md` 「状态语义不得混用」）。
+ * 现按 `tier` 分层：canonical 置顶 → 现役按目录 → **历史与日志折叠**。
+ * ⚠️ 折叠只改默认呈现、**不减少可见内容**：折叠区可展开，且**搜索时自动展开**
+ * （搜索不展开会让人误判「查不到」，那就把「全量可查」的承诺打掉了）。
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { MarkdownView } from "@/components/agent/markdown-view";
 import { getAgentKbFile, getAgentKbTree, type KbFileMeta } from "@/lib/api";
+
+const dirOf = (f: KbFileMeta) => f.dir || "docs/";
 
 export function KbBrowserTab() {
   const [files, setFiles] = useState<KbFileMeta[]>([]);
@@ -17,6 +26,7 @@ export function KbBrowserTab() {
   const [selected, setSelected] = useState<string | null>(null);
   const [content, setContent] = useState<string>("");
   const [query, setQuery] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const openFile = useCallback(async (path: string) => {
     setSelected(path);
@@ -61,20 +71,34 @@ export function KbBrowserTab() {
     [kbIdIndex, openFile],
   );
 
-  // 树形分组：kb/ 知识库置顶，其余按目录
+  const searching = query.trim().length > 0;
+  const historyVisible = historyOpen || searching;
+
+  // 分层分组：canonical 置顶 → 现役按目录 → 历史与日志（归档 + 时间序列）折叠
   const groups = useMemo(() => {
     const q = query.trim().toLowerCase();
     const hit = (f: KbFileMeta) =>
       !q || f.name.toLowerCase().includes(q) || f.kb_ids.some((id) => id.toLowerCase().includes(q));
-    const kbFiles = files.filter((f) => f.dir === "kb" && hit(f));
-    const rest = files.filter((f) => f.dir !== "kb" && hit(f));
-    const byDir = new Map<string, KbFileMeta[]>();
-    for (const f of rest) {
-      const d = f.dir || "docs/";
-      if (!byDir.has(d)) byDir.set(d, []);
-      byDir.get(d)!.push(f);
-    }
-    return { kbFiles, byDir: [...byDir.entries()].sort(([a], [b]) => a.localeCompare(b)) };
+    const byDir = (fs: KbFileMeta[]) => {
+      const m = new Map<string, KbFileMeta[]>();
+      for (const f of fs) {
+        const d = dirOf(f);
+        if (!m.has(d)) m.set(d, []);
+        m.get(d)!.push(f);
+      }
+      return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
+    };
+    const matched = files.filter(hit);
+    const canonical = matched.filter((f) => f.tier === "canonical");
+    const current = matched.filter((f) => f.tier === "current");
+    const history = matched.filter((f) => f.tier === "history" || f.tier === "timeline");
+    return {
+      canonical,
+      currentByDir: byDir(current),
+      historyByDir: byDir(history),
+      historyCount: history.length,
+      total: matched.length,
+    };
   }, [files, query]);
 
   const FileRow = ({ f }: { f: KbFileMeta }) => (
@@ -109,24 +133,75 @@ export function KbBrowserTab() {
             <p className="px-2 py-1 text-xs text-zinc-600 dark:text-zinc-400">加载中…</p>
           ) : failed ? (
             <p className="px-2 py-1 text-xs text-amber-800 dark:text-amber-500">文档树加载失败（后端不可达）</p>
+          ) : groups.total === 0 ? (
+            <p className="px-2 py-1 text-xs text-zinc-600 dark:text-zinc-400">无匹配文档（含历史与日志）</p>
           ) : (
             <>
-              {groups.kbFiles.length > 0 && (
+              {groups.canonical.length > 0 && (
                 <>
-                  <p className="px-2 pt-1 text-[10px] font-medium text-zinc-600 dark:text-zinc-400">知识库（canonical）</p>
-                  {groups.kbFiles.map((f) => (
+                  <p className="px-2 pt-1 text-[10px] font-medium text-zinc-600 dark:text-zinc-400">
+                    知识库（唯一权威）· {groups.canonical.length}
+                  </p>
+                  {groups.canonical.map((f) => (
                     <FileRow key={f.path} f={f} />
                   ))}
                 </>
               )}
-              {groups.byDir.map(([dir, fs]) => (
+              {groups.currentByDir.map(([dir, fs]) => (
                 <div key={dir}>
-                  <p className="px-2 pt-2 text-[10px] font-medium text-zinc-600 dark:text-zinc-400">{dir}</p>
+                  <p className="px-2 pt-2 text-[10px] font-medium text-zinc-600 dark:text-zinc-400">
+                    现役 · {dir} · {fs.length}
+                  </p>
                   {fs.map((f) => (
                     <FileRow key={f.path} f={f} />
                   ))}
                 </div>
               ))}
+              {groups.historyCount > 0 && (
+                <div className="pt-2">
+                  <button
+                    onClick={() => setHistoryOpen((v) => !v)}
+                    disabled={searching}
+                    aria-expanded={historyVisible}
+                    aria-controls="kb-history-list"
+                    title={searching ? "搜索中已自动展开全部目录" : undefined}
+                    className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-[10px] font-medium text-zinc-600 transition-colors hover:bg-zinc-100 disabled:cursor-default disabled:hover:bg-transparent dark:text-zinc-400 dark:hover:bg-zinc-900 dark:disabled:hover:bg-transparent"
+                  >
+                    <span>历史与日志 · {groups.historyCount} 份{searching ? "（已展开）" : ""}</span>
+                    <svg
+                      viewBox="0 0 12 12"
+                      aria-hidden
+                      className={`h-3 w-3 shrink-0 transition-transform ${historyVisible ? "rotate-90" : ""}`}
+                    >
+                      <path
+                        d="M4 2l4 4-4 4"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </button>
+                  {historyVisible && (
+                    <div id="kb-history-list">
+                      <p className="px-2 pt-1 text-[10px] text-zinc-600 dark:text-zinc-400">
+                        只读历史 / 逐日记录 · 引用前先确认未过时
+                      </p>
+                      {groups.historyByDir.map(([dir, fs]) => (
+                        <div key={dir}>
+                          <p className="px-2 pt-2 text-[10px] font-medium text-zinc-600 dark:text-zinc-400">
+                            {dir} · {fs.length}
+                          </p>
+                          {fs.map((f) => (
+                            <FileRow key={f.path} f={f} />
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </>
           )}
         </div>

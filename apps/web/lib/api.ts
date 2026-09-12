@@ -2496,10 +2496,17 @@ export async function getAgentExperiments(): Promise<AgentExperiment[]> {
 // AI 控制台知识库 / 仓库追踪（2026-09-09 用户指令⑤）
 // ============================================================================
 
+/** 文档分层（与 `docs/kb/07-doc-curation.md` §7 分层模型对齐）
+ *  canonical = L0 唯一权威知识库 · current = L1/L2 现役 ·
+ *  history = 只读归档（引用前须确认未过时）· timeline = L4 时间序列（逐日/逐周增长） */
+export type KbTier = "canonical" | "current" | "history" | "timeline";
+
 export interface KbFileMeta {
   path: string;
   name: string;
   dir: string;
+  /** 分层标识：决定面板默认展开还是折进「历史与日志」 */
+  tier: KbTier;
   size: number;
   /** 文件内包含的 KB-ID（[[KB-XXX]] 关联跳转索引） */
   kb_ids: string[];
