@@ -19,6 +19,15 @@ import { isTradingSession } from "@/lib/market-hours";
  *    失败**保留上一次数据**（`data` 不清空、`status` 仍为 `ready`，同时 `error` 非空），
  *    与各页既有「失败保持旧值 + 各自空态」的约定一致；只有「从未成功过」才是 `error`。
  *
+ *    ⚠️ **约束：`fn` 必须返回值，三态才成立**（2026-09-12 评审批次 2，有测试钉住）。
+ *    `ready` 的判据是 `data !== undefined` —— 若 `fn` 返回 `undefined`（含调用方写
+ *    "调用即忘"的 `fn: () => { setX(...) }` 而**不 return**），`status` 会**永远停在
+ *    `pending`**：不报错、不告警、`error` 也正常，只是三态静默失去意义。
+ *    全站 45 个调用点走的薄壳 `usePollingFetch` 恰是这种形态（它**丢弃**返回值），
+ *    故**它不适用三态**——需要三态请直接调 `useResource` 并让 `fn` 返回数据。
+ *    这是刻意取舍：把三态挂在返回值上，比让 hook 去猜「调用方是否已自行 setState」可靠。
+ *    （门控三件套与三态无关，45 处照常消费。）
+ *
  * 其余契约与 `usePollingFetch` 相同：
  * - `fn` 经 latest-ref 间接调用，调用方无须把它挂进依赖；闭包捕获的参数每次渲染取最新值。
  * - `intervalMs = null` 表示只挂载拉一次（如依赖 URL 参数的初始拉取）。
@@ -88,9 +97,14 @@ export function useResource<T = unknown>(fn: () => Promise<T>, options: Resource
   const [nonce, setNonce] = useState(0);
 
   const refresh = useCallback(() => {
+    // enabled=false 时**必须是 no-op**（2026-09-12 评审批次 2）：
+    // 下面 effect 的 `if (!enabled) return;` 会提前返回，`refreshing` 再也无人清回 false
+    // ⇒ 由于 `pending = refreshing || status === "pending"`，一次误调就会让 `pending`
+    // **永久卡在 true**（实测确认）。关闭态本就不该发请求，直接返回语义也更正确。
+    if (!enabled) return;
     setRefreshing(true);
     setNonce((n) => n + 1);
-  }, []);
+  }, [enabled]);
 
   useEffect(() => {
     if (!enabled) return;

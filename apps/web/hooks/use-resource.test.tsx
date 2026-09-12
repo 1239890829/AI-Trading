@@ -221,6 +221,49 @@ describe("useResource", () => {
     expect(result.current.pending).toBe(false);
   });
 
+  it("【守卫】enabled=false 时 refresh() 是 no-op，不得把 pending 卡在 true", async () => {
+    // 2026-09-12 评审批次 2：旧实现无条件 setRefreshing(true)，而 effect 在
+    // `if (!enabled) return;` 处提前返回 ⇒ 没有任何路径把 refreshing 清回 false，
+    // 于是 `pending` 永久为 true。注入验证：去掉 refresh 里的 `if (!enabled) return;`
+    // 本用例应精确变红。
+    const fn = vi.fn(async () => 1);
+    const { result } = renderHook(() => useResource(fn, { intervalMs: 10_000, enabled: false }));
+    await flush();
+    expect(result.current.status).toBe("unknown");
+
+    act(() => {
+      result.current.refresh();
+    });
+    await flush();
+
+    expect(fn).toHaveBeenCalledTimes(0); // 关闭态不发请求
+    expect(result.current.pending).toBe(false); // 关键：不卡 true
+    expect(result.current.status).toBe("unknown");
+  });
+
+  it("【约束】三态以「fn 是否返回值」为判据：不返回值 ⇒ 恒 pending（薄壳不适用三态）", async () => {
+    // 这条**不是缺陷修复，是把既有取舍钉成契约**（2026-09-12 评审批次 2）。
+    // 全站 45 个调用点经薄壳 usePollingFetch 以"调用即忘"形态使用（丢弃返回值），
+    // 故它们**读不到三态**。此处用「同样形状、只差一个 return」的两枝并排证明判据来源，
+    // 防止后来者误以为「恒 pending」是 bug 而去改 ready 的判定条件（那会波及全部消费方）。
+    const withValue = vi.fn(async () => "v");
+    const withoutValue = vi.fn(async () => {
+      /* 副作用型取数：不返回值，正是薄壳调用方的形态 */
+    });
+
+    const a = renderHook(() => useResource(withValue, { intervalMs: null }));
+    const b = renderHook(() => useResource(withoutValue, { intervalMs: null }));
+    await flush();
+
+    // 同样的调用次数、同样的无错误——差别只在返回值
+    expect(withValue).toHaveBeenCalledTimes(1);
+    expect(withoutValue).toHaveBeenCalledTimes(1);
+    expect(a.result.current.status).toBe("ready");
+    expect(b.result.current.status).toBe("pending");
+    expect(b.result.current.error).toBeNull();
+    expect(b.result.current.pending).toBe(true);
+  });
+
   it("卸载后不再拉取", async () => {
     const fn = vi.fn(async () => 1);
     const { unmount } = renderHook(() => useResource(fn, { intervalMs: 10_000 }));
