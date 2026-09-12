@@ -48,7 +48,7 @@ cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2691
 # **教训与本文档的警告同源：数字标注要么当轮实测回填，要么写"实测方法"而不写死数值。**
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
 cd apps/web && npx eslint .                       # 0 error / 0 warn（P1-27 已清零；余 1 处 C 类显式豁免）
-cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 444 项 / 53 文件（09-12 实测）
+cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 454 项 / 54 文件（09-12 实测）
 # ⚠️ **凡改动/新增涉及时间·时区的断言，必须再用 `TZ=UTC` 复跑一遍**（CI 跑在 UTC，本地是 UTC+8）：
 cd apps/web && TZ=UTC CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run
 # 2026-09-12 真实踩过：`longhu-tab.test.tsx` 用 `new Date(2026, 8, 2, 14, 20)` 钉"盘中"，
@@ -62,11 +62,11 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 2691 项（2629 passed / 62 skipped）· 173 文件、前端 444 项 / 53 文件、eslint **0 error / 0 warn**
+> **门禁口径**：后端 2691 项（2629 passed / 62 skipped）· 173 文件、前端 454 项 / 54 文件、eslint **0 error / 0 warn**
 > （25 条回归已按 P1-27 清零；仅 notification-drawer 保留 1 处带理由的 C 类豁免）。
 > **测试规模与告警数同属「会失真的状态标注」**——改动后要实测回填，不要沿用旧数字
 > （此前「≤1 warn / 后端 580 / 前端 97 / 219 / 257 / 263 / 342 / 1925 / 2553 / 2556 / 2557 / 2574 / 2576 / 2625 /
-> 2584 / 2585 / 2590 / 2602 / 2606 / 2619 / 2620 / 2632 / 2635 / 2674 / 前端 423 / 429」均已被后续改动追过，教训见 `docs/retro-and-gaps.md` §七）。
+> 2584 / 2585 / 2590 / 2602 / 2606 / 2619 / 2620 / 2632 / 2635 / 2674 / 前端 423 / 429 / 444」均已被后续改动追过，教训见 `docs/retro-and-gaps.md` §七）。
 > ⚠️ **交接 note 里的门禁数字也会失真**（2026-09-12 实测：note 写「2574 / 2513」，当轮为 2576 / 2515，新加 8 项后为 2584 / 2523 ⇒ 差值恰好等于新增测试数，可自洽核对）——**取数一律自己跑一遍**。
 > ✅ **自洽核对法已再次生效**（2026-09-12 批次 1 收尾）：上一值为 2632 / 429，本轮 2635 / 438 ⇒ 差值 **+3 / +9**，
 > 恰好等于本轮新增的 3 条后端守卫与 1 个前端文件（`lib/market-hours.test.ts` 9 项）——**差值对不上就说明有别的改动混入，值得查**。
@@ -82,6 +82,9 @@ lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=
 > `test_event_loop_no_block` 16−4=+12、`test_picks_pipeline` +1）——**"零新增文件"也要能对上差额**。
 > F-10 轮 2674 / 172 → **2691 / 173** ⇒ 差 **+17 项 / +1 文件**，恰好等于新增的
 > `tests/test_doc_health_anchors.py`（17 条用例）——同样三方自洽。
+> ✅ **自洽核对（2026-09-12 缺陷修复轮 §6.14）**：前端 444 / 53 → **454 / 54** ⇒ 差 **+10 项 / +1 文件**，
+> 恰好等于新增的 `components/agent/markdown-view.test.tsx`（10 条用例）；后端**未改动**（2691 / 173 不变，
+> 实测 2629 passed / 62 skipped 与记录逐字一致）——**"某一侧不变"同样是可核对的自洽项**。
 > **加测试文件就会让这里过期**，改测试后请顺手回填。
 
 **发布前额外做一次接口载荷体检**（plan-review 三.7，2026-09-01 纳入）：

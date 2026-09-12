@@ -211,8 +211,26 @@ export function MarkdownView({ content, onNavigate }: Props) {
         continue;
       }
       // 普通段落（连续非特殊行）
+      //
+      // ⚠️ **本分支是兜底分支，必须无条件先消费 1 行（故用 do...while，不可改回 while）**。
+      // 进入本分支的行已被排除「空行 / 标题 / 列表 / 引用 / 分隔线 / 围栏代码块」，但
+      // **仍可能是「以 | 开头却不构成表格」的行**——表格分支额外要求**下一行是分隔行**
+      // （GFM 语义：无分隔行不成表），不满足就落到这里；而下面的条件里恰好带着
+      // `!lines[i].trim().startsWith("|")` ⇒ 用 `while` 起手时**首轮即判定失败**：
+      // `buf` 为空、`i` 不推进 ⇒ 外层 `while (i < lines.length)` 永不退出 ⇒
+      // **同步死循环 = 整页卡死**（React 渲染期 `useMemo` 内无出路）。
+      //
+      // 实测事故（2026-09-12）：`docs/kb/00-INDEX.md` 第 193 行一个空行把 KB-ENG 表
+      // 截断，其后的 194–198 行成了**无表头/无分隔行的表格块**；而该文件正是知识库面板
+      // **默认打开**的文档 ⇒ 进入「交易智能体 → 知识库」即整页卡死（用户报告现象）。
+      // 全仓同源触发点共 4 份（另见 `docs/retro-and-gaps.md` / `api.md` /
+      // `external-data-source-survey-2026-09-11.md`，均已修复为合法表格）。
+      // 回归守卫：`markdown-view.test.tsx`（含「真实 docs/ 全量可渲染」一项）。
       const buf: string[] = [];
-      while (
+      do {
+        buf.push(lines[i]);
+        i += 1;
+      } while (
         i < lines.length &&
         lines[i].trim() !== "" &&
         !lines[i].startsWith("#") &&
@@ -222,10 +240,7 @@ export function MarkdownView({ content, onNavigate }: Props) {
         !/^\s*\d+\.\s+/.test(lines[i]) &&
         !lines[i].startsWith(">") &&
         !/^\s*---+\s*$/.test(lines[i])
-      ) {
-        buf.push(lines[i]);
-        i += 1;
-      }
+      );
       out.push(
         <p key={kb()} className="my-1.5 text-xs leading-relaxed text-zinc-700 dark:text-zinc-200">
           {inline(buf.join(" "), onNavigate, `p${k}`)}
