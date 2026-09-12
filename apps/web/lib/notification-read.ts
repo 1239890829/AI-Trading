@@ -21,7 +21,15 @@
  * ## 旧数据迁移
  * 旧键（`lastSeenTs` / `clearBeforeTs`）在首次读取时解析成 epoch 后写入新键，
  * 旧键删除。旧值若是 UTC ISO 也能被 `parseTs` 正确处理 —— 迁移顺带修掉历史错值。
+ *
+ * ## 持久化分层（2026-09-12）
+ * localStorage 是**首帧缓存**，服务端（`/api/notifications/read-state`）才是权威。
+ * 原因：localStorage 按 origin 命名空间，换源/换 profile/清站点数据即整体归零
+ * （实测 localhost↔127.0.0.1 两份存储互不可见，徽标回到 65）。两侧按**单调规则**
+ * 合并，详见文件尾部「服务端持久化」一节。
  */
+
+import { getNotificationReadState, saveNotificationReadState } from "@/lib/api";
 
 export interface ReadState {
   /** 已读水位（epoch ms）：ts ≤ 水位的条目已读 */
@@ -45,7 +53,7 @@ export const LEGACY_CLEAR_BEFORE_KEY = "ashare.notifications.clearBeforeTs";
 const BJ_OFFSET_HOURS = 8;
 
 const NAIVE_RE =
-  /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?(?:\.(\d{1,3}))?)?$/;
+  /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?(?:\.(\d{1,9}))?)?$/;
 /** 带时区标记（Z / ±HH:MM / ±HHMM）→ 是绝对时刻，交给 Date.parse。 */
 const ABSOLUTE_RE = /(?:Z|[+-]\d{2}:?\d{2})$/i;
 
@@ -53,7 +61,16 @@ const ABSOLUTE_RE = /(?:Z|[+-]\d{2}:?\d{2})$/i;
  * 通知时间戳 → epoch 毫秒；无法解析返回 `null`（**不返回 0**，0 会被误当"很久以前"）。
  *
  * 支持：`YYYY-MM-DD HH:MM:SS`（北京 naive，后端 `ts` 的实际格式）、
+ * `YYYY-MM-DD HH:MM:SS.ssssss`（**后端 alert 的实际格式，带微秒**）、
  * `YYYY-MM-DD HH:MM`、`YYYY-MM-DD`、以及带 Z/偏移的 ISO（旧键与 `Date.toISOString()`）。
+ *
+ * ⚠️ 小数位必须吃下 **1–9 位**（2026-09-12 修复）：后端 alert 的 `ts` 来自
+ * `datetime.isoformat(sep=" ")`，**带 6 位微秒**（实测 `2026-09-11 14:07:24.569986`）。
+ * 旧正则只允许 1–3 位 → 这些时间戳落到 `Date.parse` 兜底，而 `Date.parse`
+ * 把无时区标记的串按**浏览器本地时区**解释：在 Asia/Shanghai 下恰好等价（实测 delta=0ms），
+ * 但换任何非 +8 时区就会整体偏移 —— 偏移到"未来"时那些条目**永远算未读**
+ * （水位由 `Date.now()` 推进，永远追不上）；偏移到"过去"则刚到的提醒被当成已读。
+ * 本模块的整个前提是"北京 naive 语义"，因此**不能让任何一条路径偷偷依赖浏览器时区**。
  */
 export function parseTs(ts: string | null | undefined): number | null {
   if (!ts) return null;
@@ -66,7 +83,8 @@ export function parseTs(ts: string | null | undefined): number | null {
   const m = NAIVE_RE.exec(s);
   if (m) {
     const [, y, mo, d, h, mi, sec, msPart] = m;
-    const ms = msPart ? Number(msPart.padEnd(3, "0")) : 0;
+    // 微秒截断到毫秒（3 位，右侧补零）：569986 → 569
+    const ms = msPart ? Number(msPart.slice(0, 3).padEnd(3, "0")) : 0;
     // 北京墙钟 → UTC 时刻：小时减 8（可为负，Date.UTC 会归一化到前一天）
     return Date.UTC(
       Number(y),
@@ -244,6 +262,10 @@ export function getServerPrefsSnapshot(): PrefsSnapshot {
 
 export function subscribePrefs(cb: () => void): () => void {
   listeners.add(cb);
+  // 首个订阅者建立时拉一次服务端权威状态（2026-09-12）。
+  // 放在这里而不是组件的 effect 里：`subscribe` 由 React 在挂载后的被动阶段调用
+  // （不在渲染期），且"有人在听"正是需要权威状态的时刻；组件侧因此零改动。
+  void hydratePrefsFromServer();
   const onStorage = (e: StorageEvent) => {
     // 多标签页同步：别处改了已读 → 清缓存后通知本页重算（不写 storage）
     const relevant = !e.key || e.key === READ_KEY || e.key === CLEAR_KEY;
@@ -267,16 +289,152 @@ export function subscribePrefs(cb: () => void): () => void {
   };
 }
 
-/** 写入并广播（唯一的变更入口；落盘 + 换引用 + 通知订阅者）。 */
+/** 写入并广播（唯一的变更入口；落盘 + 换引用 + 通知订阅者 + 回写服务端）。 */
 export function setPrefs(next: PrefsSnapshot): void {
   cache = next;
   saveReadState(next.read);
   saveClearBefore(next.clearBefore);
   for (const l of listeners) l();
+  // 服务端回写（fire-and-forget）：hydration 未完成或正在采纳服务端值时跳过，
+  // 见模块尾部「服务端持久化」一节的闸门说明。
+  if (remoteEnabled && !suppressPush) void pushRemote(next);
 }
 
 /** 只测试用：清掉模块级缓存（避免跨用例串状态）。 */
 export function __resetPrefsCache(): void {
   cache = null;
   listeners.clear();
+  remoteEnabled = false;
+  hydrating = false;
+}
+
+/* ------------------------------------------------------------------ 服务端持久化（2026-09-12 缺陷修复）
+ *
+ * ## 为什么 localStorage 不够
+ * 已读状态此前**只**存在 localStorage，而它是**按 origin 命名空间**的：
+ * `http://localhost:3000` 与 `http://127.0.0.1:3000` 是两份互不可见的存储；
+ * 换端口、换浏览器 profile、内嵌预览分区、隐私模式、清站点数据 — 任意一种都会让
+ * 已读状态**整体归零**。实测复现：同一浏览器里 localhost 侧点过「全部已读」，
+ * 切到 127.0.0.1 侧徽标立刻回到 **65**（== 通知总数），与用户报告的
+ * 「重启后全部变未读、显示 65 条未读」完全一致。
+ *
+ * ## 分工
+ * - **服务端** = 权威状态（`/api/notifications/read-state`，落 SQLite）；
+ * - **localStorage** = 首帧快速缓存（同步可读，避免"先显示 0 未读再跳成 65"的闪动）。
+ *
+ * ## 合并必须单调（与服务端 `merge_read_state` 同规则）
+ * 水位取大、清除水位取大、逐条 id 取并集。**任何一侧领先都不会把另一侧已读的条目
+ * 变回未读** —— 这正是本次缺陷的形态，前端的合并方向也不能错。
+ *
+ * ## 何时不用网络
+ * `hydrating` / `remoteEnabled` 双闸：hydration 失败或未跑过（例如单测环境）时，
+ * 回写整体关闭，本地缓存照常工作 —— 服务端不可达只影响"能不能跨源恢复"，
+ * 不影响"当前这个源里能不能记已读"。
+ */
+
+/** 与服务端 `READ_IDS_MAX` 一致：逐条已读只登记水位之后的条目，正常情况下不会撞上界。 */
+export const READ_IDS_MAX = 500;
+
+export interface RemoteReadState {
+  seenBefore: number;
+  readIds: string[];
+  clearBefore: number;
+}
+
+/** 单调合并（纯函数）。顺序：并集去重 + 只保留尾部（较新登记的一批）。 */
+export function mergeReadState(a: RemoteReadState, b: RemoteReadState): RemoteReadState {
+  const seenIds = new Set<string>();
+  const readIds: string[] = [];
+  for (const id of [...a.readIds, ...b.readIds]) {
+    if (id && !seenIds.has(id)) {
+      seenIds.add(id);
+      readIds.push(id);
+    }
+  }
+  return {
+    seenBefore: Math.max(a.seenBefore || 0, b.seenBefore || 0),
+    clearBefore: Math.max(a.clearBefore || 0, b.clearBefore || 0),
+    readIds: readIds.length > READ_IDS_MAX ? readIds.slice(-READ_IDS_MAX) : readIds,
+  };
+}
+
+function localState(snapshot: PrefsSnapshot): RemoteReadState {
+  return {
+    seenBefore: snapshot.read.seenBefore,
+    readIds: snapshot.read.readIds,
+    clearBefore: snapshot.clearBefore,
+  };
+}
+
+function sameState(a: RemoteReadState, b: RemoteReadState): boolean {
+  return (
+    a.seenBefore === b.seenBefore &&
+    a.clearBefore === b.clearBefore &&
+    a.readIds.length === b.readIds.length &&
+    a.readIds.every((id, i) => id === b.readIds[i])
+  );
+}
+
+/** hydration 是否已完成（决定要不要回写服务端；单测里保持 false ⇒ 零网络）。 */
+let remoteEnabled = false;
+/** 防重入：React StrictMode 会 subscribe 两次，只允许发一次拉取。 */
+let hydrating = false;
+/** 采纳服务端回传值时抑制回推，避免"推-采纳-再推"自激。 */
+let suppressPush = false;
+
+function applyState(next: RemoteReadState): void {
+  suppressPush = true;
+  try {
+    setPrefs({ read: { seenBefore: next.seenBefore, readIds: next.readIds }, clearBefore: next.clearBefore });
+  } finally {
+    suppressPush = false;
+  }
+}
+
+async function pushRemote(snapshot: PrefsSnapshot): Promise<void> {
+  try {
+    const sent = localState(snapshot);
+    // 线上载荷是 snake_case（与本文件其余通知接口一致）→ 在边界显式转换
+    const saved = await saveNotificationReadState({
+      seen_before: sent.seenBefore,
+      read_ids: sent.readIds,
+      clear_before: sent.clearBefore,
+    });
+    const back: RemoteReadState = {
+      seenBefore: saved.seen_before,
+      readIds: saved.read_ids,
+      clearBefore: saved.clear_before,
+    };
+    // 服务端可能更靠前（另一标签页推进过）→ 采纳一次即可，不再回推
+    if (!sameState(back, sent)) {
+      const cur = getPrefsSnapshot();
+      const merged = mergeReadState(localState(cur), back);
+      if (!sameState(merged, localState(cur))) applyState(merged);
+    }
+  } catch {
+    /* 服务端不可达：本地缓存继续工作，下次变更再同步（不弹错、不阻塞 UI） */
+  }
+}
+
+/** 拉取权威状态并与本地单调合并；本地更靠前则回推（首次上线时把存量已读带上去）。 */
+export async function hydratePrefsFromServer(): Promise<void> {
+  if (remoteEnabled || hydrating || typeof window === "undefined") return;
+  hydrating = true;
+  try {
+    const remote = await getNotificationReadState();
+    const back: RemoteReadState = {
+      seenBefore: remote.seen_before,
+      readIds: remote.read_ids,
+      clearBefore: remote.clear_before,
+    };
+    remoteEnabled = true;
+    const cur = getPrefsSnapshot();
+    const merged = mergeReadState(localState(cur), back);
+    if (!sameState(merged, localState(cur))) applyState(merged);
+    if (!sameState(merged, back)) void pushRemote(getPrefsSnapshot());
+  } catch {
+    /* 保持 remoteEnabled = false：本地照常可用，下次订阅再试 */
+  } finally {
+    hydrating = false;
+  }
 }

@@ -17,6 +17,15 @@ vi.mock("@/lib/api", async () => {
   return {
     ...actual,
     getNotifications: vi.fn(async () => payload),
+    // 已读状态的服务端同步（2026-09-12）：组件挂载即触发 hydration。
+    // 本文件只验「渲染结果」，把服务端桩成不可达 ⇒ 快照退回纯 localStorage 语义，
+    // 与这些用例的断言口径一致（跨源持久化另有 notification-read.test.ts 覆盖）。
+    getNotificationReadState: vi.fn(async () => {
+      throw new Error("no server in tests");
+    }),
+    saveNotificationReadState: vi.fn(async () => {
+      throw new Error("no server in tests");
+    }),
   };
 });
 

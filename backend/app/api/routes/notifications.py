@@ -14,6 +14,17 @@ GET /api/notifications?alert_limit=50&news_limit=15&news_min_score=<settings 默
 session（盘前/盘中/盘后）按北京时间墙钟划分：<09:30 盘前；09:30–15:05 盘中
 （含午休——通知分类不需要午休粒度）；其余盘后。任何单一来源失败都显式降级
 （errors 字段），绝不静默空列表。
+
+已读状态（2026-09-12 缺陷修复）也挂在本模块，但它**不是**聚合的一部分，而是
+一份独立的持久化状态：
+
+- ``GET  /api/notifications/read-state`` —— 读取权威已读状态；
+- ``PUT  /api/notifications/read-state`` —— 提交本地状态，**服务端按单调规则合并**
+  后落库并回传合并结果（合并纪律见 ``app/services/notification_read_state.py``）。
+
+为什么必须落服务端：此前只存浏览器 localStorage，而它是**按 origin 命名空间**的，
+换源（localhost ↔ 127.0.0.1）／换 profile／清站点数据都会让已读状态整体归零，
+表现为「重启后全部已读变未读、徽标回到 65」（实测复现）。
 """
 from __future__ import annotations
 
@@ -22,11 +33,13 @@ import logging
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query, Request
+from pydantic import BaseModel, Field
 
 from app.core.config import settings
 from app.core.db import get_session_factory
 from app.repositories.alert_repo import AlertRepository
 from app.core.bjtime import beijing_now
+from app.services import notification_read_state as read_state_service
 
 log = logging.getLogger(__name__)
 
@@ -307,3 +320,43 @@ async def notifications(
         },
         "meta": {},
     }
+
+
+# ---------------------------------------------------------------- 已读状态（2026-09-12）
+
+
+class ReadStateIn(BaseModel):
+    """PUT 载荷。三个分量都**只增不减**，非法值由 pydantic 拦在入口。
+
+    时间戳是 epoch 毫秒（正数）；`read_ids` 上界与服务层 ``READ_IDS_MAX`` 一致，
+    防止异常客户端把单行 JSON 灌爆。
+    """
+
+    seen_before: int = Field(default=0, ge=0)
+    read_ids: list[str] = Field(default_factory=list, max_length=read_state_service.READ_IDS_MAX)
+    clear_before: int = Field(default=0, ge=0)
+
+
+def _read_state_payload(state: dict) -> dict:
+    return {
+        "seen_before": state["seen_before"],
+        "read_ids": state["read_ids"],
+        "clear_before": state["clear_before"],
+        "updated_at": state.get("updated_at"),
+    }
+
+
+@router.get("/notifications/read-state")
+def get_read_state() -> dict:
+    """权威已读状态。DB 不可用**不伪装成空状态**——已读归零正是本次要修的缺陷形态，
+    所以这里让异常直接冒泡成 5xx，前端据此保留本地缓存值（宁可显示旧状态，不可假装未读）。"""
+    return {"data": _read_state_payload(read_state_service.load_state()), "meta": {}}
+
+
+@router.put("/notifications/read-state")
+def put_read_state(body: ReadStateIn) -> dict:
+    """提交本地状态 → 服务端单调合并 → 落库并回传合并结果（前端以回传值为准）。"""
+    merged = read_state_service.save_state(
+        {"seen_before": body.seen_before, "read_ids": body.read_ids, "clear_before": body.clear_before}
+    )
+    return {"data": _read_state_payload(merged), "meta": {}}

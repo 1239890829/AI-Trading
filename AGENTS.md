@@ -30,7 +30,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2585 项（2524 passed / 61 skipped）· 168 文件（09-12 上午实测）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2602 项（2540 passed / 62 skipped）· 169 文件（09-12 上午实测）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。
@@ -39,23 +39,26 @@ cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2585
 # 原因是常驻调度与测试同时抢 SQLite/网络；**报耗时必须说明前提**，否则会被当成回归。
 # ⚠️ `--basetemp` 不可省：默认临时目录会被沙箱拒绝创建（EEXIST → PermissionError），
 # 表现为几十个 E 而非 F，极易误判成代码回归（2026-09-11 踩，见 kb/03）。
-# ⚠️ **跳过数 2 → 61 是新增守卫的参数化产物，不是覆盖率丢失**：其中 58 项来自
-# `test_import_lint.py:78`「装配层/其他：不受本规则约束」（分层规则表按模块参数化，
-# 非业务层模块显式跳过；**新增一个非业务层 .py 就 +1**，如 S2-8 新增的
-# `app/core/bjtime.py` 使 60 → 61），另 2 项为既有的「指数无涨跌停概念」后端不适用项。
+# ⚠️ **跳过数 2 → 62 是新增守卫的参数化产物，不是覆盖率丢失**：62 = **60** + 2，全额对上——
+# 60 项来自 `test_import_lint.py`「装配层/其他：不受本规则约束」（分层规则表按模块参数化，
+# 非业务层模块显式跳过；**新增一个非业务层 .py 就 +1**，如 S2-8 的 `app/core/bjtime.py`、
+# 2026-09-12 的 `app/models/notification.py`），另 2 项为既有的「指数无涨跌停概念」后端不适用项。
+# ⚠️ **本条自身也曾失真**：原文写「58 项来自 import_lint」，而 58+2=60≠61（差额 1）——
+# 实测 `pytest tests/test_import_lint.py` = 171 passed / **60 skipped** ⇒ 60+2=62 才自洽。
+# **教训与本文档的警告同源：数字标注要么当轮实测回填，要么写"实测方法"而不写死数值。**
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
 cd apps/web && npx eslint .                       # 0 error / 0 warn（P1-27 已清零；余 1 处 C 类显式豁免）
-cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 415 项 / 51 文件（09-11 实测）
+cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 423 项 / 51 文件（09-12 实测）
 cd backend && .venv/bin/python -m pyflakes app tests scripts   # 0（scripts 已纳入口径，P2-18）
 python3 scripts/doc-health.py                    # 文档体检：0 待处理（收尾必跑，见 kb/07 §8.2）
 # 生产构建前必须先停 dev server（.next 冲突已踩两次）：
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 2585 项（2524 passed / 61 skipped）· 168 文件、前端 415 项 / 51 文件、eslint **0 error / 0 warn**
+> **门禁口径**：后端 2602 项（2540 passed / 62 skipped）· 169 文件、前端 423 项 / 51 文件、eslint **0 error / 0 warn**
 > （25 条回归已按 P1-27 清零；仅 notification-drawer 保留 1 处带理由的 C 类豁免）。
 > **测试规模与告警数同属「会失真的状态标注」**——改动后要实测回填，不要沿用旧数字
-> （此前「≤1 warn / 后端 580 / 前端 97 / 219 / 257 / 263 / 342 / 1925 / 2553 / 2556 / 2557 / 2574 / 2576 / 2584 / 392」均已被后续改动追过，教训见 `docs/retro-and-gaps.md` §七）。
+> （此前「≤1 warn / 后端 580 / 前端 97 / 219 / 257 / 263 / 342 / 1925 / 2553 / 2556 / 2557 / 2574 / 2576 / 2584 / 2585 / 392」均已被后续改动追过，教训见 `docs/retro-and-gaps.md` §七）。
 > ⚠️ **交接 note 里的门禁数字也会失真**（2026-09-12 实测：note 写「2574 / 2513」，当轮为 2576 / 2515，新加 8 项后为 2584 / 2523 ⇒ 差值恰好等于新增测试数，可自洽核对）——**取数一律自己跑一遍**。
 > **加测试文件就会让这里过期**，改测试后请顺手回填。
 

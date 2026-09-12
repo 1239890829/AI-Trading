@@ -40,6 +40,12 @@ import { NewsModal, type NewsModalItem } from "@/components/news-modal";
  *  - 铃铛徽标 = 未读条数（**派生自本次 payload**，不再用会失真的字符串比较）；
  *  - 打开抽屉**不再**自动全部已读（否则红点会一闪即逝，看不到自己没读什么）。
  *
+ * 持久化（2026-09-12 缺陷修复）：已读状态**双写** —— localStorage 作首帧缓存 +
+ * 服务端权威副本（`/api/notifications/read-state`）。此前只存 localStorage，
+ * 而它按 origin 命名空间，换源/换 profile/清站点数据就让已读整体归零
+ * （实测 localhost↔127.0.0.1 徽标回到 65）。同步逻辑全在 `lib/notification-read.ts`，
+ * 本组件只消费外部存储快照，因此无需改动。
+ *
  * ⚠️ 历史缺陷（勿回退）：旧实现把「已读水位」写成 `toISOString()`（UTC 带 T），
  * 却与后端 `ts`（北京 naive 带空格）做**字面比较** —— 当天条目恒被判为已读，
  * 跨日又整天一起计入未读，表现为「一键已读后计数没了，来了新的却在旧累积上累加」。

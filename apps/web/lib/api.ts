@@ -1372,6 +1372,28 @@ export async function getNotifications(): Promise<NotificationsPayload> {
   return (await getJson<NotificationsPayload>("/api/notifications")).data;
 }
 
+/** 已读状态的服务端权威副本（2026-09-12 缺陷修复：此前只存 localStorage，
+ * 按 origin 命名空间 → 换源/换 profile/清站点数据即整体归零）。
+ * 时间戳一律 **epoch 毫秒**：曾因「两种字符串格式 + 两个时区」做字面比较而整天误判已读。 */
+export interface NotificationReadStatePayload {
+  seen_before: number;
+  read_ids: string[];
+  clear_before: number;
+  updated_at: string | null;
+}
+
+export async function getNotificationReadState(): Promise<NotificationReadStatePayload> {
+  return (await getJson<NotificationReadStatePayload>("/api/notifications/read-state")).data;
+}
+
+/** 提交本地状态；**服务端按单调规则合并后回传合并结果**，调用方以回传值为准
+ * （写-写冲突与重试都由服务端的合并规则消解，前端不做「后写覆盖先写」）。 */
+export async function saveNotificationReadState(
+  state: Omit<NotificationReadStatePayload, "updated_at">,
+): Promise<NotificationReadStatePayload> {
+  return (await sendJson<NotificationReadStatePayload>("/api/notifications/read-state", "PUT", state)).data;
+}
+
 /** ---------------------------------------------------------------- 风控（Phase 5） */
 
 export interface RiskState {

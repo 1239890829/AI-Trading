@@ -1,19 +1,36 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   __resetPrefsCache,
   countUnread,
   getPrefsSnapshot,
+  hydratePrefsFromServer,
   isCleared,
   isUnread,
   loadClearBefore,
   loadReadState,
+  mergeReadState,
   parseTs,
   setPrefs,
   withAllRead,
   withRead,
   type ReadState,
 } from "@/lib/notification-read";
+
+/**
+ * 服务端已读状态的打桩（2026-09-12 缺陷修复）。
+ * 默认实现 = reject：与"单测里不发真网络请求"一致；需要验证同步行为的用例各自覆写。
+ */
+vi.mock("@/lib/api", () => ({
+  getNotificationReadState: vi.fn(async () => {
+    throw new Error("no server in tests");
+  }),
+  saveNotificationReadState: vi.fn(async () => {
+    throw new Error("no server in tests");
+  }),
+}));
+
+import { getNotificationReadState, saveNotificationReadState } from "@/lib/api";
 
 /**
  * 回归背景（用户 2026-09-11 实测）：
@@ -28,6 +45,9 @@ const BJ = (s: string) => `2026-09-11 ${s}`; // 后端 ts 形态：北京 naive
 beforeEach(() => {
   localStorage.clear();
   __resetPrefsCache();
+  // 每个用例回到「服务端不可达」的默认桩：避免上一个用例的 mockResolvedValue 泄漏
+  vi.mocked(getNotificationReadState).mockReset().mockRejectedValue(new Error("no server in tests"));
+  vi.mocked(saveNotificationReadState).mockReset().mockRejectedValue(new Error("no server in tests"));
 });
 
 describe("parseTs", () => {
@@ -173,5 +193,109 @@ describe("外部存储快照", () => {
     const b = getPrefsSnapshot();
     expect(b).not.toBe(a);
     expect(b.read.seenBefore).toBe(9);
+  });
+});
+
+/* ------------------------------------------------------------------ 2026-09-12 缺陷修复
+ *
+ * 报告现象：应用重启后，此前已全部已读的消息再次全部变未读，并显示 65 条未读
+ * （65 == 通知总数 ⇒ 已读水位整个丢了）。
+ * 根因：已读状态只存 localStorage，而它**按 origin 命名空间**——
+ * 实测同一浏览器 http://localhost:3000 点过「全部已读」后，切到
+ * http://127.0.0.1:3000 徽标立刻回到 65。换端口/换 profile/清站点数据同理。
+ * 修法：localStorage 降为首帧缓存，服务端为权威副本，两侧**单调合并**。
+ */
+
+describe("微秒时间戳（后端 alert ts 的实际格式）", () => {
+  it("6 位微秒走北京语义，且不再落到浏览器本地时区兜底", () => {
+    // 后端 alert：datetime.isoformat(sep=" ") → '2026-09-11 14:07:24.569986'
+    expect(parseTs("2026-09-11 14:07:24.569986")).toBe(Date.UTC(2026, 8, 11, 6, 7, 24, 569));
+    // 小数位不足 3 位要右侧补零（.5 → 500ms），不是当 5ms
+    expect(parseTs("2026-09-11 14:07:24.5")).toBe(Date.UTC(2026, 8, 11, 6, 7, 24, 500));
+    expect(parseTs("2026-09-11 14:07:24.569999999")).toBe(Date.UTC(2026, 8, 11, 6, 7, 24, 569));
+  });
+
+  it("带微秒的条目可被水位覆盖（旧实现依赖 Date.parse 的本地时区解释）", () => {
+    const item = { id: "alert-1", ts: "2026-09-11 14:07:24.569986" };
+    const state: ReadState = { seenBefore: Date.UTC(2026, 8, 11, 7, 0), readIds: [] }; // 15:00 北京
+    expect(isUnread(item, state)).toBe(false);
+    expect(countUnread([item], state)).toBe(0);
+  });
+});
+
+describe("服务端持久化：单调合并", () => {
+  it("水位/清除水位取大，两个方向都不回退（已读不会变回未读）", () => {
+    const local = { seenBefore: 900, readIds: ["a"], clearBefore: 10 };
+    const remote = { seenBefore: 100, readIds: ["b"], clearBefore: 500 };
+    const out = mergeReadState(local, remote);
+    expect(out.seenBefore).toBe(900); // 本地领先不被拉回
+    expect(out.clearBefore).toBe(500); // 服务端领先被采纳
+    expect(out.readIds).toEqual(["a", "b"]); // 并集
+    // 反向同样成立
+    expect(mergeReadState(remote, local).seenBefore).toBe(900);
+  });
+
+  it("readIds 只保留尾部（较新登记的一批），不无限增长", () => {
+    const many = Array.from({ length: 600 }, (_, i) => `id-${i}`);
+    const out = mergeReadState({ seenBefore: 0, readIds: many, clearBefore: 0 }, { seenBefore: 0, readIds: [], clearBefore: 0 });
+    expect(out.readIds.length).toBe(500);
+    expect(out.readIds[out.readIds.length - 1]).toBe("id-599");
+  });
+});
+
+describe("服务端持久化：hydration", () => {
+  const remote = (seenBefore: number, readIds: string[] = [], clearBefore = 0) => ({
+    seen_before: seenBefore,
+    read_ids: readIds,
+    clear_before: clearBefore,
+    updated_at: "2026-09-12 10:00:00",
+  });
+
+  it("服务端领先（换了 origin / 清了站点数据）→ 本地采纳，徽标归零", async () => {
+    vi.mocked(getNotificationReadState).mockResolvedValue(remote(Date.UTC(2026, 8, 11, 7, 0), ["alert-7"]));
+    const items = [{ id: "alert-1", ts: "2026-09-11 14:07:24.569986" }];
+
+    expect(countUnread(items, getPrefsSnapshot().read)).toBe(1); // 本地空 → 未读
+    await hydratePrefsFromServer();
+
+    expect(getPrefsSnapshot().read.seenBefore).toBe(Date.UTC(2026, 8, 11, 7, 0));
+    expect(countUnread(items, getPrefsSnapshot().read)).toBe(0);
+  });
+
+  it("本地领先（离线点过已读）→ 回推服务端，且水位不被打回", async () => {
+    const localSeen = Date.UTC(2026, 8, 12, 4, 0);
+    setPrefs({ read: { seenBefore: localSeen, readIds: ["x"] }, clearBefore: 0 });
+    vi.mocked(getNotificationReadState).mockResolvedValue(remote(1_000));
+    vi.mocked(saveNotificationReadState).mockImplementation(async (s) => ({
+      seen_before: s.seen_before,
+      read_ids: s.read_ids,
+      clear_before: s.clear_before,
+      updated_at: "2026-09-12 10:00:01",
+    }));
+
+    await hydratePrefsFromServer();
+
+    expect(saveNotificationReadState).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(saveNotificationReadState).mock.calls[0][0]).toMatchObject({ seen_before: localSeen });
+    expect(getPrefsSnapshot().read.seenBefore).toBe(localSeen); // 没被服务端的旧值覆盖
+  });
+
+  it("服务端不可达 → 本地照常可用，且不发无谓回写", async () => {
+    await hydratePrefsFromServer(); // 默认桩 = reject
+    expect(getPrefsSnapshot().read.seenBefore).toBe(0);
+
+    const now = Date.UTC(2026, 8, 12, 4, 30);
+    setPrefs({ read: withAllRead(getPrefsSnapshot().read, now), clearBefore: 0 });
+    expect(getPrefsSnapshot().read.seenBefore).toBe(now); // 本地仍生效
+    expect(saveNotificationReadState).not.toHaveBeenCalled(); // hydration 未完成 ⇒ 不回写
+    // 本地已落盘（重启同源仍能恢复）
+    expect(JSON.parse(localStorage.getItem("ashare.notifications.read")!).seenBefore).toBe(now);
+  });
+
+  it("hydration 只跑一次（React StrictMode 会 subscribe 两次）", async () => {
+    vi.mocked(getNotificationReadState).mockResolvedValue(remote(5));
+    await Promise.all([hydratePrefsFromServer(), hydratePrefsFromServer()]);
+    await hydratePrefsFromServer();
+    expect(getNotificationReadState).toHaveBeenCalledTimes(1);
   });
 });
