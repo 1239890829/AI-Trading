@@ -271,6 +271,7 @@ async def _build_opportunities(
                         name=str(s.get("name") or ""), layer=layer,
                         source_theme=str(th.get("theme") or ""),
                         reason={
+                            "kind": "theme",  # KB-TRADE-13：候选链是题材驱动，登记时点即固化归因
                             "theme": th.get("theme"), "stage": th.get("stage"),
                             "tier": th.get("strength_tier"), "role": s.get("role"),
                             "certainty": s.get("certainty"),

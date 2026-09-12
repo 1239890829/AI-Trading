@@ -162,7 +162,8 @@ async def pre_limit_sweep(app) -> int:
         record_sighting(
             trade_date=tdate, symbol=symbol, name=str(row.get("name") or ""),
             layer="watch_no_entry", source_theme="",
-            reason={"gate": "sealed_no_entry", "pct": float(pct),
+            reason={"kind": "technical",  # KB-TRADE-13：首见即封板的观察行，同临板口径
+                    "gate": "sealed_no_entry", "pct": float(pct),
                     "note": "首见即封板——无参与机会，保持观察；开板重评（KB-STOCK-21）"},
             entry_price=None, entry_time=tstamp,
         )
@@ -203,6 +204,7 @@ async def pre_limit_sweep(app) -> int:
             layer="pre_limit",
             source_theme="",
             reason={
+                "kind": "technical",  # KB-TRADE-13：临板雷达=封板前技术形态（与 attribution 口径一致）
                 "gate": "pre_limit",
                 "pct": c["pct"],
                 "runway_pct": c["runway_pct"],

@@ -29,6 +29,36 @@ from app.core.bjtime import beijing_now
 
 log = logging.getLogger(__name__)
 
+#: 五类归因标签映射（KB-TRADE-13）：显式 reason.kind → 五类。
+#: 与 `backend/scripts/attribution_winrate.py` 的 KIND_LABEL **同源**（勿单边改动——
+#: 两边分家会让离线统计与线上聚合给出不同的类）。不在表内的 kind（如资金类
+#: flow_surge/board_flow）**不硬归五类**，聚合侧如实落「（未标注）」。
+KIND_LABELS = {
+    "news": "时事/消息",
+    "newsletter": "时事/消息",
+    "event": "时事/消息",
+    "fundamental": "基本面",
+    "emotion": "情绪面",
+    "technical": "技术面",
+    "theme": "题材共振",
+}
+
+
+def classify_kind(reason: dict, layer: str | None) -> str:
+    """台账行 → 五类归因标签（聚合侧推导 + 登记侧写值共用同一规则，KB-TRADE-13）。
+
+    推导顺序：显式 kind（映射表）→ 临板雷达层（技术面，与 attribution_winrate
+    的「技术面临板」口径一致）→ 题材驱动（候选链登记 theme）→ 空串=未标注
+    （宁缺毋滥：判不了不硬造）。"""
+    kind = str((reason or {}).get("kind") or "")
+    if kind in KIND_LABELS:
+        return KIND_LABELS[kind]
+    if layer == "pre_limit":
+        return "技术面"
+    if (reason or {}).get("theme"):
+        return "题材共振"
+    return ""
+
 
 def record_sighting(
     *,
@@ -175,10 +205,11 @@ def _dump(row: WatchLedger) -> dict:
 def tracking_review_stats(days: int = 5, session_factory=None) -> dict:
     """跟踪复盘×进化依据（KB-TRADE-13 落地，2026-09-09 用户指令「跟踪本质是实时选股」）。
 
-    近 N 天台账按「来源层 × 判定」与「确定性 × 判定」聚合——暴露系统性误判
-    （如某来源层胜率显著偏低）。数据只有已清算行参与（未清算不计）。
-    字段诚实：台账现无「时事/消息/基本面/情绪/技术」五类归因标注（gap 已挂
-    KB-TRADE-13），此处按 layer/gate/gradable 维度聚合，不冒充五类归因。
+    近 N 天台账按「来源层 × 判定」「闸门 × 判定」「**五类归因 × 判定**」聚合——暴露
+    系统性误判（如某来源层/某归因类别胜率显著偏低）。数据只有已清算行参与（未清算不计）。
+    五类归因（KB-TRADE-13，2026-09-13 落地）：新行由登记链写 reason.kind（候选链=题材共振 /
+    临板雷达=技术面 / watcher=告警 kind），历史行按 classify_kind 推导；判不了的如实落
+    「（未标注）」，资金类（flow_surge 等）不硬归五类。
     """
     sf = session_factory or get_session_factory()
     cutoff = (beijing_now().date() - timedelta(days=days - 1)).isoformat()
@@ -202,6 +233,7 @@ def tracking_review_stats(days: int = 5, session_factory=None) -> dict:
 
     by_layer: dict[str, dict] = {}
     by_gate: dict[str, dict] = {}
+    by_kind: dict[str, dict] = {}
     for r in rows:
         try:
             reason = json.loads(r.reason) if r.reason else {}
@@ -211,6 +243,9 @@ def tracking_review_stats(days: int = 5, session_factory=None) -> dict:
         by_layer.setdefault(layer, []).append(r)
         gate = str(reason.get("gate") or reason.get("kind") or "unknown").split(" ")[0]
         by_gate.setdefault(gate, []).append(r)
+        # 五类归因（KB-TRADE-13 落地）：显式 kind 优先，历史行按 classify_kind 推导，
+        # 判不了的落「（未标注）」——不硬造五类
+        by_kind.setdefault(classify_kind(reason, r.layer) or "（未标注）", []).append(r)
 
     # 次日持续性验证聚合（闭环「验证」段）：reason.d1 由 validate_previous_day 写回
     d1_list = []
@@ -234,8 +269,11 @@ def tracking_review_stats(days: int = 5, session_factory=None) -> dict:
         "total_settled": len(rows),
         "by_layer": sorted((_bucket(v, k) for k, v in by_layer.items()), key=lambda b: -b["n"]),
         "by_gate": sorted((_bucket(v, k) for k, v in by_gate.items()), key=lambda b: -b["n"]),
+        "by_kind": sorted((_bucket(v, k) for k, v in by_kind.items()), key=lambda b: -b["n"]),
         "d1_validation": d1_stats,
-        "note": "跟踪=实时选股：本表是跟踪维度的复盘×进化依据（对照 picks 的 signal_health 同看）",
+        "note": "跟踪=实时选股：本表是跟踪维度的复盘×进化依据（对照 picks 的 signal_health 同看）。"
+                "五类归因（KB-TRADE-13）：新行由登记链写 kind，历史行按 classify_kind 推导，"
+                "判不了的如实落「（未标注）」",
     }
 
 
