@@ -982,6 +982,16 @@ frozenset + 收窄正则）。⚠️ 修好之后**召回恢复真实、又冒�
 
 **待决（承接 §6.14 ①，先提后做）**：是否为「表格必须有分隔行」新增**文档侧门禁**（可覆盖全部 49 行）。
 
+**推送与 CI 复验（本轮闭环）**：修复提交 **`a343e68`**（6 文件 / +341 −9），推送后按纪律自查 CI
+（`/actions/runs?head_sha=a343e6872324cca8ac8576a1b813609429441055`，**完整 SHA**）——
+run `34701730259` = **success**，三个 job **全部通过**：
+`docs (doc-health)` ✅（J 项即本次修复对象）· `backend (pytest + pyflakes)` ✅
+（含 `test_real_repo_has_no_dead_doc_anchor`——**这条守卫此前在 CI 上是红的、在本地是瞎的**）·
+`frontend (tsc + lint)` ✅。
+⇒ **两轮连红（`02445e0` / `711d8de`）至此复绿，纪律"推送后自查 CI"闭环。**
+⚠️ 取证手法留档：查 run 用 **`curl -sL`** + **完整 SHA**；经 shell 变量中转 JSON 会被控制字符破坏
+（`Invalid control character`）——**直接管道给解析器，不要 `OUT=$(...)` 再 `echo`**。
+
 ---
 
 ## 七、文档 × 实际状态 偏差更正（2026-09-10）
