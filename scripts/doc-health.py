@@ -348,7 +348,7 @@ def check_legacy_slugs() -> tuple[list[tuple[str, int, str]], list[tuple[str, st
     （删档去向表、「原件已删除、精华并入本文」的注记）——那是治理痕迹，
     改了反而抹掉溯源，故豁免。
     """
-    skip_dirs = {"node_modules", ".next", ".turbo", "__pycache__", ".venv", "dist", "build"}
+    skip_dirs = {"node_modules", ".next", ".turbo", "__pycache__", ".venv", ".venv-research", "dist", "build"}
     out: list[tuple[str, int, str]] = []
     allowed: list[tuple[str, str]] = []
     for base in ("backend", "apps/web", "scripts"):
@@ -390,7 +390,7 @@ def check_code_refs() -> tuple[list[tuple[str, int, str]], list[tuple[str, str]]
 
     :returns: (违规列表, 命中登记例外列表)
     """
-    skip_dirs = {"node_modules", ".next", ".turbo", "__pycache__", ".venv", "dist", "build"}
+    skip_dirs = {"node_modules", ".next", ".turbo", "__pycache__", ".venv", ".venv-research", "dist", "build"}
     out: list[tuple[str, int, str]] = []
     allowed: list[tuple[str, str]] = []
     for base in ("backend", "apps/web", "scripts"):
@@ -448,7 +448,7 @@ def check_kb_pointer_files() -> list[tuple[str, int, str, str, str]]:
     实测 1 处命中 / 0 处误报 —— **宁可少报也不制造噪音**。
     """
     owner = kb_entry_owner()
-    skip_dirs = {"node_modules", ".next", ".turbo", "__pycache__", ".venv",
+    skip_dirs = {"node_modules", ".next", ".turbo", "__pycache__", ".venv", ".venv-research",
                  "dist", "build", "archive", "trash", ".workbuddy"}
     targets: list[Path] = []
     for name in ("AGENTS.md", "README.md"):
@@ -500,7 +500,7 @@ def check_kb_orphans() -> list[tuple[str, str, str]]:
         for m in re.finditer(r"^### (KB-[A-Z]+-\d+)", _read(p), re.M):
             owner_counts[m.group(1)] = 0
 
-    skip_dirs = {"node_modules", ".next", ".turbo", "__pycache__", ".venv",
+    skip_dirs = {"node_modules", ".next", ".turbo", "__pycache__", ".venv", ".venv-research",
                  "dist", "build", "archive", "trash", ".workbuddy"}
     targets: list[Path] = []
     for name in ("AGENTS.md", "README.md", "CONTEXT.md"):
@@ -797,7 +797,7 @@ ANCHOR_ROOTS = ("app", "backend", "apps", "scripts", "docs", "tests", "data", "s
 #: 而跟踪清单天然不含这些目录。**不要再往这里补目录来修"本地绿 / CI 红"**
 #: （那是枚举，治不了根；理由见 `_repo_basenames` docstring）。
 ANCHOR_SKIP_DIRS = frozenset({
-    "node_modules", ".next", ".turbo", "__pycache__", ".venv", "dist", "build", ".git"})
+    "node_modules", ".next", ".turbo", "__pycache__", ".venv", ".venv-research", "dist", "build", ".git"})
 #: 排除的文档位（**口径**，见 `check_doc_anchors` docstring 末段）
 ANCHOR_SKIP_DIR_PARTS = ("archive", "trash", "daily-review")
 ANCHOR_SKIP_FILES = ("docs/retro-and-gaps.md",)

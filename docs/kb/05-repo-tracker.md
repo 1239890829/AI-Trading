@@ -130,7 +130,7 @@ Vibe-Trading、qlib、OpenBB、quantskills、zvt
 
 | 仓库 | 状态 | 一句话结论 |
 |---|---|---|
-| vectorbt | 🔶 试用中（pip 依赖） | **100 组参数扫描首跑 1.9s / 二跑 ≈0s**（numba 列向量化）——参数网格/walk-forward 加速数量级提升；T+1/涨跌停在预处理层近似；Fair Code；free 版停更但研究侧可接受 |
+| vectorbt | 🔶 试用中（粗筛定位，附强制对账） | **篮子基准修正单票结论**：39 票分层随机样本误差中位 0.91pp / Spearman 0.974 / 前 20% 重合 89%——粗筛保序可用（单票曾误导为 26pp/0.30 两个极端）；尾部 P90 10.3pp ⇒ **vbt 初筛 → 真口径复核 top 候选**为强制流程；100 组网格 0.04s（编译后）≈ naive 的 7.5× |
 | qlib | ✅ 部分已融入（Alpha158→app/factors） | 维持「不引入本体」；**增量 = LightGBM/ML 预测层实验**（Alpha158 特征已在，训练范式可借） |
 | freqtrade | ✅ 部分已融入（出场纪律→exit_engine） | 回测引擎不可用维持；**hyperopt 三件套（回撤损失函数/SQN/回测缓存）审计采纳但未落地——本次列入补落地**；GPLv3 只抄设计 |
 | backtesting.py | ❌ 不引入 | 单标的事件回测与我们同域重叠；**AGPL-3**（QuantMind 先例：只抄设计）；取 SQN/Kelly/Expectancy 指标集（纯公式） |
