@@ -46,7 +46,9 @@ def _labeled(con, label: str, cond: str) -> dict:
 
 def main() -> int:
     con = sv.connect()
-    n = sv.build(con, sv.BuildConfig(float_shares_sql=sv.snapshot_float_shares_sql(SNAPSHOT_DIR)))
+    n = sv.build(con, sv.BuildConfig(
+        float_shares_sql=sv.snapshot_float_shares_sql(SNAPSHOT_DIR),
+        extra_cols=", fs.float_shares AS float_shares"))  # 审计 C5：市值分层所需（20260910 快照，前视近似）
     hz = sv.horizons_of(con)
     dates = [r[0] for r in con.execute("SELECT DISTINCT date_ms FROM sig ORDER BY date_ms").fetchall()]
     print(f"特征样本 {n:,} 行 | {len(dates)} 个交易日")
@@ -102,6 +104,28 @@ def main() -> int:
     print(sv.render(sv.sensitivity(con, regime, "TRUE"), hz, base=base_all))
     print("\n—— 五步全通过样本内")
     print(sv.render(sv.sensitivity(con, regime, ALL), hz, base=sv.baseline(con, where=f"({ALL})")))
+
+    print("\n" + "=" * 118)
+    print("④b 个股属性分层（审计 C5，§6.25）：价格档 × 流通市值档——负超额是否均匀")
+    print("=" * 118)
+    # 市值 = close × float_shares（float_shares 来自 20260910 快照反推：前视近似，仅作分层归属）
+    cap_expr = ("CASE WHEN close * float_shares < 3e9 THEN 'a 小盘<30亿' "
+                "WHEN close * float_shares < 1e10 THEN 'b 中盘30-100亿' "
+                "WHEN close * float_shares < 3e10 THEN 'c 大盘100-300亿' "
+                "ELSE 'd 超大盘>300亿' END")
+    price_expr = ("CASE WHEN close < 5 THEN 'a 低价<5' WHEN close <= 20 THEN 'b 中价5-20' "
+                  "ELSE 'c 高价>20' END")
+    print("—— 原版五步全通过 × 个股属性")
+    print(sv.render(sv.sensitivity(con, price_expr, ALL), hz,
+                    base=sv.baseline(con, where=f"({ALL})")))
+    print(sv.render(sv.sensitivity(con, cap_expr, ALL), hz,
+                    base=sv.baseline(con, where=f"({ALL})")))
+    print("—— 候选B（S1+跌破MA5+大盘涨）× 个股属性（KB-STOCK-30 右偏 tail 的归属检验）")
+    cand = f"({S1}) AND dev_short < 0 AND mchg > 0"
+    print(sv.render(sv.sensitivity(con, price_expr, cand), hz,
+                    base=sv.baseline(con, where=f"({cand})")))
+    print(sv.render(sv.sensitivity(con, cap_expr, cand), hz,
+                    base=sv.baseline(con, where=f"({cand})")))
 
     print("\n" + "=" * 118)
     print("⑤ 候选子规则独立验证（每条单独与全市场对照；探索性，多重比较下必有偶然显著）")
