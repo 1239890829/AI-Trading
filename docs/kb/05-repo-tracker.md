@@ -121,6 +121,31 @@ Vibe-Trading、qlib、OpenBB、quantskills、zvt
 数据源层早为 ths fuyao + easy_tdx + akshare + 腾讯多源，无需新源。
 **剩余真实差距回到系统内部**（因子库 0 消费 / 形态薄弱 / 记忆效应排序），不依赖新 repo。
 
+## trading 分组新增 10 仓批量复评（2026-09-13，用户指路）
+
+> 分组新增 10 个量化开源仓库。甄别：freqtrade/qlib/vnpy(=VeighNa) 三仓 08-30~09-03 已实测深评
+> （audit-frameworks / audit-qlib-quantmind / trading-analysis），本次**复验采纳清单落地状态**；
+> 其余 7 仓为**首次评估**——6 仓实跑冒烟 + 1 仓（Lean）无 .NET/Docker 做架构级。
+> 逐仓完整笔记：`.workbuddy/artifacts/repo-eval-20260913/findings/*.md`（7 份，含跑通证据/适配核查/License）。
+
+| 仓库 | 状态 | 一句话结论 |
+|---|---|---|
+| vectorbt | 🔶 试用中（pip 依赖） | **100 组参数扫描首跑 1.9s / 二跑 ≈0s**（numba 列向量化）——参数网格/walk-forward 加速数量级提升；T+1/涨跌停在预处理层近似；Fair Code；free 版停更但研究侧可接受 |
+| qlib | ✅ 部分已融入（Alpha158→app/factors） | 维持「不引入本体」；**增量 = LightGBM/ML 预测层实验**（Alpha158 特征已在，训练范式可借） |
+| freqtrade | ✅ 部分已融入（出场纪律→exit_engine） | 回测引擎不可用维持；**hyperopt 三件套（回撤损失函数/SQN/回测缓存）审计采纳但未落地——本次列入补落地**；GPLv3 只抄设计 |
+| backtesting.py | ❌ 不引入 | 单标的事件回测与我们同域重叠；**AGPL-3**（QuantMind 先例：只抄设计）；取 SQN/Kelly/Expectancy 指标集（纯公式） |
+| zipline-reloaded | ❌ 不引入（Apache-2.0） | Pipeline 声明式因子 DAG（防前视回看语义）值得抄进 strategy_verify/factors 核验 DSL；bundle 数据层与我们 marketdb 重复 |
+| nautilus_trader | ⏳ 储备（LGPL-3.0） | **唯一 L2/逐笔一等公民引擎**（BookType L1/L2/L3 + Fill/LatencyModel）——等 miniQMT/L2 数据触发；2.x 文档断代需钉版本 |
+| Lean (QuantConnect) | ❌ 不引入（Apache-2.0） | 架构级：Reality Modeling 五模型接口切分 + Insight 一等公民（预测+置信+时效）值得抄设计；.NET/Docker + C# + 无 A 股 model，成本不成比例 |
+| FinRL | ❌ 不引入（MIT） | 实测 PPO 2000 steps 跑通（-16.94% 仅证回路）；RL 无 basis 撞红线 3、~2400 交易日样本远不足，维持观察 |
+| backtrader | ❌ 不引入（GPL-3.0） | 单标的事件回测完全同域且已停更，零增量 |
+| vnpy=VeighNa | ❌ 维持废弃 | 与禁实盘红线正交（原判定不变） |
+
+**组合价值结论**：vectorbt（扫描加速）+ qlib 范式 ML 层（预测）+ strategy_verify（纪律）构成
+「假设→验证→模型→监控」闭环的三块拼图；nautilus 是 L2 解锁后的引擎储备；其余为思想借鉴或重合占优。
+**已融入核对修正**：freqtrade hyperopt 三件套审计标注「采纳」但代码未落地（backtest.py 无缓存/SQN/
+回撤损失）——「采纳 ≠ 落地」，与 §七「低估完成度」反向同型，记入教训。
+
 ## 历史审计索引（archive 专项审计归口，2026-09-10）
 
 > 用途：查"某仓库/工具评过没、结论是什么"**先看本表**，再按指针翻 archive 详情（archive 只读、不再更新）。
