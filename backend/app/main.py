@@ -489,6 +489,17 @@ async def lifespan(app: FastAPI):
         switch="board_surge_enabled",
     )
 
+    # --- 龙虎榜当日归档（P2-37 二期 E4）：盘后 17:05 起 data/lhb/<date>.json ---
+    lhb_stop = asyncio.Event()
+    from app.market.lhb_archive import lhb_archive_loop
+
+    reg.add(
+        "lhb-archive",
+        lambda: lhb_archive_loop(app, stop=lhb_stop),
+        stop=lhb_stop,
+        switch="lhb_archive_enabled",
+    )
+
     # --- 盘后方向对照（选股 2.0 批次 C）：15:35 对照当日简报 + 提醒收益回填 ---
     review_intraday_stop = asyncio.Event()
     from app.picks.review_intraday import intraday_review_scheduler

@@ -35,6 +35,7 @@ from app.models.alert import AlertRule
 from app.models.event import EventCard, EventDirection
 from app.models.theme_catalog import Theme, ThemeMember
 from app.notifiers import get_notifier_registry
+from app.picks import distinctiveness
 
 log = logging.getLogger(__name__)
 
@@ -177,6 +178,8 @@ class BoardSurgeDetector:
         self.beats = 0
         self.theme_names: dict[str, str] = {}
         self.baseline: dict[str, float] = {}       # theme_code → 当日首个有效拍的 amt
+        self.flow_baseline: dict[str, float] = {}  # theme_code → 首个有效拍的成员净额合计（亿）
+        self.flow_last: dict[str, dict] = {}       # 最新一拍活跃题材资金面
         self.last_alert: dict[str, tuple[str, float]] = {}  # code → (HH:MM, 当时 rel)
         self.alert_count: dict[str, int] = {}
         self.last_moments: dict[str, dict] = {}
@@ -374,13 +377,16 @@ def _append_jsonl(path: Path, line: dict) -> None:
         f.write(json.dumps(line, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
-async def persist_beat(date_str: str, hhmm: str, market_med: float, moments: dict[str, dict]) -> None:
-    """每拍落一行（全题材）；文件按日切。IO 丢线程池（KB-ENG-67 同批先例）。"""
+async def persist_beat(date_str: str, hhmm: str, market_med: float, moments: dict[str, dict],
+                       flows: dict[str, dict] | None = None) -> None:
+    """每拍落一行（全题材 + 活跃题材资金面）；文件按日切。IO 丢线程池（KB-ENG-67 同批先例）。"""
     line = {
         "ts": hhmm,
         "market_med": market_med,
         "themes": {c: {k: v for k, v in m.items()} for c, m in moments.items()},
     }
+    if flows:
+        line["flows"] = flows
     path = DATA_DIR / f"{date_str}.jsonl"
     await asyncio.to_thread(_append_jsonl, path, line)
 
@@ -411,7 +417,11 @@ def get_index_cache(app) -> ThemeIndexCache:
 
 
 async def _beat(app, detector: BoardSurgeDetector, index_cache: ThemeIndexCache) -> list[dict]:
-    """一拍：快照 → 聚合 → 落库 → 判定 → 归因 → 告警 dict。"""
+    """一拍：快照 → 聚合 → 判定 → 资金面 → 落库（含 flows） → 归因 → 告警 dict。
+
+    资金面（二期 B 路）：活跃题材（当日已提醒 ∪ rel Top5）的成员主力净额合计
+    （东财 f62 当日累计口径，Top60 成分封顶）。随 E1 行一并落库，供盘后回放。
+    """
     state = _state(app)
     svc = getattr(state, "snapshot_service", None)
     rows = getattr(svc, "snapshot", None) or []
@@ -419,14 +429,26 @@ async def _beat(app, detector: BoardSurgeDetector, index_cache: ThemeIndexCache)
         return []
     now = beijing_now()
     now_minutes = now.hour * 60 + now.minute
+    hhmm = f"{now_minutes // 60:02d}:{now_minutes % 60:02d}"
     index, _names = await asyncio.to_thread(index_cache.get)
     moments, market_med = await asyncio.to_thread(compute_theme_momentum, rows, index)
     if not moments:
         return []
     detector.theme_names = _names
-    await persist_beat(now.date().isoformat(), f"{now_minutes // 60:02d}:{now_minutes % 60:02d}",
-                       market_med, moments)
     alerts = detector.evaluate(now_minutes, moments, market_med)
+
+    # 活跃题材集合：当日已提醒 ∪ 最新一拍 rel Top5
+    member_sets = _theme_member_sets(index)
+    top_rel = sorted(
+        (c for c, m in moments.items() if m.get("n", 0) >= MIN_MEMBERS),
+        key=lambda c: -(moments[c].get("rel") or -99),
+    )[:5]
+    active = sorted({a["key"].split(":")[1] for a in alerts} | set(top_rel))[:8]
+    flows = await _collect_flows(state, detector, member_sets, active)
+
+    # 落库（E1 行 + 二期 flows 字段）：盘后回放的资金面时间线
+    await persist_beat(now.date().isoformat(), hhmm, market_med, moments, flows)
+
     if not alerts:
         return []
 
@@ -445,7 +467,6 @@ async def _beat(app, detector: BoardSurgeDetector, index_cache: ThemeIndexCache)
             pool = await provider.get_limit_up_pool(td) or []
         except Exception:  # noqa: BLE001
             pool = []
-    member_sets = _theme_member_sets(index)
     since = beijing_now_naive() - timedelta(hours=6)
     sf = get_session_factory()
     for a in alerts:
@@ -458,7 +479,68 @@ async def _beat(app, detector: BoardSurgeDetector, index_cache: ThemeIndexCache)
             news = []
         seals = seal_sequence(pool, member_sets.get(code, set())) if pool else []
         detector.attach_attribution(a, {"news": news, "seals": seals})
+        # 资金面行（B 路）：净额合计口径显式标注；取不到 → 不输出该行（三态）
+        fl = flows.get(code)
+        if fl and fl.get("net_sum") is not None:
+            a["text"] += (
+                f"\n资金面：成员主力净额合计 {fl['net_sum']:+.2f} 亿"
+                f"（Top{fl['n']} 成分，东财 f62 当日累计，未覆盖 {fl['skipped']} 只）"
+            )
+            a["meta"]["flow_net_sum"] = fl["net_sum"]
+        # 辨识度候选（C 路）：历史画像 Top5（分数随行暴露，初始权重未经实证）
+        try:
+            cand = await asyncio.to_thread(
+                distinctiveness.score_candidates, sorted(member_sets.get(code, set()))
+            )
+            line = distinctiveness.format_candidates(cand, _names)
+            if line:
+                a["text"] += f"\n{line}"
+                a["meta"]["candidates"] = [
+                    {"symbol": i["symbol"], "score": i["score"],
+                     "name": _names.get(i["symbol"], i["symbol"])}
+                    for i in cand.get("items", [])[:5] if i.get("score") is not None
+                ]
+        except Exception:  # noqa: BLE001
+            log.warning("board surge 候选画像失败（不阻断告警）：%s", code, exc_info=True)
     return alerts
+
+
+async def _collect_flows(
+    state, detector: BoardSurgeDetector, member_sets: dict[str, set[str]], active: list[str]
+) -> dict[str, dict]:
+    """活跃题材成员净额聚合（东财 f62 当日累计；基准 = 当日首个有效拍）。
+
+    失败/空 → 该题材 flows 缺席（三态：不臆造 0）；北交所成员显式计入 skipped。
+    """
+    from app.market import stock_flow
+
+    out: dict[str, dict] = {}
+    for code in active:
+        members = sorted(member_sets.get(code, set()))
+        capable = [s for s in members if stock_flow.stock_secid(s)]
+        if not capable:
+            continue
+        try:
+            payload = await stock_flow.get_stock_flow(capable[: stock_flow.MAX_SYMBOLS])
+        except Exception:  # noqa: BLE001
+            continue
+        items = payload.get("items") or {}
+        nets = [v.get("main") for v in items.values() if isinstance(v, dict)]
+        nets = [x for x in nets if isinstance(x, (int, float))]
+        if not nets:
+            continue
+        net_sum = round(sum(nets), 2)
+        base = detector.flow_baseline.get(code)
+        if base is None and net_sum != 0.0:
+            detector.flow_baseline[code] = net_sum
+        out[code] = {
+            "net_sum": net_sum,
+            "n": len(nets),
+            "skipped": len(members) - len(capable),
+            "baseline": detector.flow_baseline.get(code),
+        }
+    detector.flow_last = out
+    return out
 
 
 def _theme_member_sets(index: dict[str, list[tuple[str, str]]]) -> dict[str, set[str]]:
@@ -561,6 +643,11 @@ def todays_state(app) -> dict:
             "rel_trigger": REL_TRIGGER, "ge3_ratio": GE3_RATIO,
             "amount_growth": AMOUNT_GROWTH, "min_members": MIN_MEMBERS,
             "calibrated": False,
+        },
+        "flows": {
+            c: {"net_sum": f.get("net_sum"), "n": f.get("n"),
+                "baseline": f.get("baseline")}
+            for c, f in detector.flow_last.items()
         },
         "top_themes": [
             {

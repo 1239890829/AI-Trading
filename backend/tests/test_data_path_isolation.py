@@ -59,6 +59,7 @@ _DECLARED: dict[str, tuple[bool, str]] = {
     "market/chip.py:DEFAULT_DB_PATH": (False, "DuckDB 只读"),
     "market/marketdb_freshness.py:DEFAULT_DB_PATH": (False, "DuckDB 只读（只查新鲜度）"),
     "picks/lurk_pool.py:DB": (False, "DuckDB 只读"),
+    "picks/distinctiveness.py:MARKETDB_PATH": (False, "DuckDB 只读（画像评分；涉及写入的用例注入 tmp 出参）"),
     "picks/rps.py:DEFAULT_DB_PATH": (False, "DuckDB 只读"),
     "research/strategy_verify.py:DEFAULT_DB_PATH": (False, "DuckDB 只读"),
     "services/shadow_eval.py:DEFAULT_DB_PATH": (False, "DuckDB 只读（写入路径由入参给）"),

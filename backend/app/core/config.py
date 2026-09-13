@@ -99,6 +99,9 @@ class Settings(BaseSettings):
     board_surge_enabled: bool = True
     board_surge_interval_seconds: float = 60.0
     board_surge_channels: str = "in_app,log"  # 推送矩阵不改动（飞书盘中只留买点卡，用户 09-08 定稿）
+    # 龙虎榜当日归档（P2-37 二期 E4）：交易日 17:05-23:00 每 15 分钟尝试，
+    # 落 data/lhb/<date>.json（辨识度画像上榜次数与复盘归因的数据地基）
+    lhb_archive_enabled: bool = True
     # 大单异动阈值（亿）：题材成员当日主力净流入**首破**该值 → 盘中提醒（P1-16）。
     # 2026-09-10 源头收紧 0.3 → 1.0：实测原阈值下 151 条事件里 97% 被判读层忽略，
     # 且挤占判读预算导致 falsify/high_board_break 等从未被判读。经验初值，

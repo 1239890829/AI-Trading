@@ -104,6 +104,8 @@ SCHEDULER_SWITCH_ATTRS: tuple[str, ...] = (
     # 板块异动检测器（2026-09-13）：会读全市场快照并可能发告警——漏登记就会在
     # 每个测试里真跑（与 factor_eval 同理由必须登记）。
     "board_surge_enabled",
+    # 龙虎榜归档（2026-09-13 二期）：盘后打东财 datacenter 落盘——同理必须登记。
+    "lhb_archive_enabled",
     "picks_shadow_enabled",
     "marketdb_sync_enabled",
     "flash_news_enabled",
