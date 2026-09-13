@@ -43,29 +43,39 @@ BASELINES = ("mom5", "mom20", "kmid2")
 REPORT_DIR = Path(__file__).resolve().parents[2] / ".workbuddy" / "artifacts" / "ml-predict-20260913"
 
 
-def build_features(start: str) -> pd.DataFrame:
+def build_features(start: str, *, use_cache: bool = True) -> pd.DataFrame:
     """base CTE（口径单点复用）× 37 因子列 → 特征/标签矩阵（float32 控内存）。"""
     cols = ",\n           ".join(f"({f.expr}) AS x_{f.name}" for f in FACTORS)
     sql = f"""{_base_cte(FACTORS[0])}
     SELECT thscode, date_ms,
            f3 / NULLIF(f1, 0) - 1 AS label_exec3,
+           close_adj / NULLIF(c1, 0) - 1 AS ret1,
+           turnover, close_price,
            {cols}
     FROM lvl4
     WHERE cnt >= 61
       AND nb1_high IS NOT NULL AND nb1_low IS NOT NULL AND nb1_high > nb1_low
       AND date_ms >= CAST(? AS BIGINT)
     """
+    cache = Path("data/cache") / f"ml_features_{start.replace('-', '')}.parquet"
+    if use_cache and cache.exists():
+        print(f"  命中特征缓存 {cache}")
+        return pd.read_parquet(cache)
     con = duckdb.connect(str(MARKETDB), read_only=True)
     try:
         start_ms = int(pd.Timestamp(start, tz="Asia/Shanghai").timestamp() * 1000)
         df = con.execute(sql, [start_ms]).fetchdf()
     finally:
         con.close()
+
     df["date"] = pd.to_datetime(df["date_ms"], unit="ms", utc=True).dt.tz_convert(
         "Asia/Shanghai").dt.date
     feat_cols = [f"x_{f.name}" for f in FACTORS]
     df[feat_cols] = df[feat_cols].astype("float32")
     df = df.dropna(subset=["label_exec3"])
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(cache)
+    print(f"  特征已缓存 → {cache}")
     return df
 
 
@@ -127,8 +137,68 @@ def walk_forward(df: pd.DataFrame, oos_years: list[int]) -> tuple[list[dict], pd
             "fit_seconds": round(time.time() - t0, 1),
             "top_features": [name.removeprefix("x_") for name, _ in top],
         })
-        oos_frames.append(te[["date", "label_exec3", "pred", "x_mom5", "x_mom20", "x_kmid2"]])
+        oos_frames.append(te[["thscode", "date", "label_exec3", "pred", "ret1",
+                              "turnover", "close_price", "x_mom5", "x_mom20", "x_kmid2"]])
     return out, pd.concat(oos_frames) if oos_frames else pd.DataFrame()
+
+
+def stratified_ic(oos: pd.DataFrame, pred_col: str = "pred") -> list[dict]:
+    """分层 OOS IC（B6，§6.25 审计 B6）：回答「模型 edge 是否藏在某个层里」。
+
+    三条分层轴（数据零外呼，全部取自特征帧自身）：
+    - 市场日：当日全市场 ret1 中位 >0（强市）/<0（弱市）；
+    - 个股体量：该股年内 turnover 中位数三分位（大/中/小——成交额代理市值）；
+    - 价格档：该股年内 close_price 中位数三分位（高/中/低——整手/流动性代理）。
+    """
+    mkt = oos.groupby("date")["ret1"].median().rename("mkt_med")
+    o = oos.join(mkt, on="date")
+    o["day_regime"] = np.where(o["mkt_med"] > 0, "强市日", "弱市日")
+    def _tercile(g: pd.DataFrame, col: str) -> pd.Series:
+        q1, q2 = g[col].quantile([1 / 3, 2 / 3])
+        return pd.cut(g[col], [-np.inf, q1, q2, np.inf],
+                      labels=["低", "中", "高"])
+    o["size_tercile"] = o.groupby(["date",])["turnover"].transform(
+        lambda x: x)  # 占位：真实分位按股票聚合后再映射
+    stock_med = o.groupby("thscode").agg(t_med=("turnover", "median"),
+                                         p_med=("close_price", "median"))
+    o = o.merge(stock_med, on="thscode", how="left")
+    o["size_tercile"] = _tercile(o.drop_duplicates("thscode"), "t_med").reindex(
+        o["thscode"].map(o.drop_duplicates("thscode").set_index("thscode").index)).values if False else         pd.cut(o["thscode"].map(stock_med["t_med"]), [-np.inf] + list(
+            stock_med["t_med"].quantile([1 / 3, 2 / 3])) + [np.inf], labels=["小盘", "中盘", "大盘"])
+    o["price_tercile"] = pd.cut(o["thscode"].map(stock_med["p_med"]), [-np.inf] + list(
+        stock_med["p_med"].quantile([1 / 3, 2 / 3])) + [np.inf], labels=["低价", "中价", "高价"])
+
+    def _ic(g: pd.DataFrame) -> float:
+        if len(g) < 30:
+            return np.nan
+        return g[pred_col].rank().corr(g["label_exec3"].rank())
+
+    out: list[dict] = []
+    for axis, col in [("市场日", "day_regime"), ("体量", "size_tercile"), ("价格档", "price_tercile")]:
+        for val, g in o.groupby(col, observed=True):
+            ic_series = g.groupby("date", group_keys=False).apply(_ic).dropna()
+            if len(ic_series) == 0:
+                continue
+            out.append({"axis": axis, "stratum": str(val), "ic_mean": round(float(ic_series.mean()), 4),
+                        "days": int(len(ic_series))})
+    # 基线：mom20 同层 IC（模型是否在某层打败它）
+    base: list[dict] = []
+    for axis, col in [("市场日", "day_regime"), ("体量", "size_tercile"), ("价格档", "price_tercile")]:
+        for val, g in o.groupby(col, observed=True):
+            ic_series = g.groupby("date", group_keys=False).apply(
+                lambda gg: gg["x_mom20"].rank().corr(gg["label_exec3"].rank())
+                if len(gg) >= 30 else np.nan).dropna()
+            if len(ic_series):
+                base.append({"axis": axis, "stratum": str(val),
+                             "ic_mean": round(float(ic_series.mean()), 4), "days": int(len(ic_series))})
+    return _merge_base(out, base)
+
+
+def _merge_base(model_rows: list[dict], base_rows: list[dict]) -> list[dict]:
+    bmap = {(r["axis"], r["stratum"]): r["ic_mean"] for r in base_rows}
+    for r in model_rows:
+        r["mom20_ic"] = bmap.get((r["axis"], r["stratum"]))
+    return model_rows
 
 
 def main() -> None:
@@ -177,6 +247,11 @@ def main() -> None:
     verdict = "✅ 候选通过（进观察项，接信号另行拍板）" if verdict_pass else \
         f"❌ 否决（未同时满足 |IC|≥{IC_ABS_MIN}、方向一致 ≥{MIN_YEAR_CONSISTENCY:.0%}、打败最强单因子 {best_base:+.4f}）"
 
+    strata = stratified_ic(oos)
+    lines += ["", "## 分层 OOS IC（B6：模型 edge 是否藏在某个层里——mom20 同层对照）", ""]
+    for r in strata:
+        lines.append(f"- {r['axis']}·{r['stratum']}: 模型 IC {r['ic_mean']:+.4f} vs mom20 {r['mom20_ic']:+.4f}"
+                     f"（{r['days']} 日）")
     lines += [
         "",
         "## 汇总",
