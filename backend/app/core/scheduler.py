@@ -101,6 +101,9 @@ SCHEDULER_SWITCH_ATTRS: tuple[str, ...] = (
     "picks_review_enabled",
     "ths_sentinel_enabled",
     "sentiment_monitor_enabled",
+    # 板块异动检测器（2026-09-13）：会读全市场快照并可能发告警——漏登记就会在
+    # 每个测试里真跑（与 factor_eval 同理由必须登记）。
+    "board_surge_enabled",
     "picks_shadow_enabled",
     "marketdb_sync_enabled",
     "flash_news_enabled",

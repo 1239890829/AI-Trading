@@ -475,6 +475,20 @@ async def lifespan(app: FastAPI):
         switch="picks_buy_point_enabled",
     )
 
+    # --- 板块异动检测器（2026-09-13 第一期：自主发现 + 归因 + 强度序列落库）---
+    # 与 watcher 并行不混算：watcher 跟盘前登记方向，本任务补「盘前没人登记、
+    # 盘中自己冒出来」的题材（09-11 MLCC/PCB 案例）。阈值未经实证，告警走
+    # in_app+triage（推送矩阵未改动）。
+    board_surge_stop = asyncio.Event()
+    from app.picks.board_surge import board_surge_loop
+
+    reg.add(
+        "board-surge",
+        lambda: board_surge_loop(app, stop=board_surge_stop),
+        stop=board_surge_stop,
+        switch="board_surge_enabled",
+    )
+
     # --- 盘后方向对照（选股 2.0 批次 C）：15:35 对照当日简报 + 提醒收益回填 ---
     review_intraday_stop = asyncio.Event()
     from app.picks.review_intraday import intraday_review_scheduler

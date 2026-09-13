@@ -93,6 +93,12 @@ class Settings(BaseSettings):
     # 环境缓存（phase + promo 分位）刷新间隔：compute_market_sentiment 较重
     # （全市场宽度 + 两天涨停池），60s/拍全量重算太重且浪费数据源配额
     picks_watcher_env_refresh_seconds: float = 600.0
+    # 板块异动检测器（2026-09-13 第一期）：自主发现（不依赖盘前简报登记方向），
+    # 数据 = 全市场快照 × 官方题材成分聚合；触发阈值为**初始参数未经实证**
+    # （board_surge.py 模块头），样本积累后按 strategy_verify 纪律校准。
+    board_surge_enabled: bool = True
+    board_surge_interval_seconds: float = 60.0
+    board_surge_channels: str = "in_app,log"  # 推送矩阵不改动（飞书盘中只留买点卡，用户 09-08 定稿）
     # 大单异动阈值（亿）：题材成员当日主力净流入**首破**该值 → 盘中提醒（P1-16）。
     # 2026-09-10 源头收紧 0.3 → 1.0：实测原阈值下 151 条事件里 97% 被判读层忽略，
     # 且挤占判读预算导致 falsify/high_board_break 等从未被判读。经验初值，

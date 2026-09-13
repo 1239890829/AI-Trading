@@ -3,6 +3,7 @@
 - POST /api/picks/morning-brief/generate  生成/刷新今日盘前简报（写鉴权）
 - GET  /api/picks/morning-brief/today     今日简报（含盘中 alerts 与盘后 review）
 - GET  /api/picks/watcher/state           盘中跟踪状态（tracker 级明细）
+- GET  /api/picks/board-surge             板块异动检测状态（自主发现，2026-09-13 第一期）
 - POST /api/picks/watcher/beat            手动推进一拍（写鉴权；取证/调试用）
 - GET  /api/picks/intraday-review         近 30 日方向/提醒胜率统计（批次 C）
 - POST /api/picks/intraday-review/run     手动执行当日方向对照 + 提醒收益回填（写鉴权）
@@ -52,6 +53,19 @@ async def today_morning_brief() -> dict:
             detail=f"今日（{target}）尚无盘前简报：POST /api/picks/morning-brief/generate，或等 08:40 调度",
         )
     return {"data": payload, "meta": {}}
+
+
+@router.get("/board-surge")
+async def board_surge_state(request: Request) -> dict:
+    """板块异动检测状态（2026-09-13 第一期）：当日序列概览 + 最新一拍 Top 板块 + 已提醒事件。
+
+    触发阈值为初始参数（未经实证，见 board_surge.py 模块头）；未启动时如实说明。
+    """
+    from app.picks.board_surge import todays_state
+
+    if not settings.board_surge_enabled:
+        raise HTTPException(status_code=409, detail="board_surge_enabled=False（配置关闭）")
+    return {"data": todays_state(request.app), "meta": {}}
 
 
 @router.get("/watcher/state")
