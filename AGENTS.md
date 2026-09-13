@@ -452,8 +452,8 @@ curl 先行 → 记录字段口径与类型陷阱 → 多采样找规律 → fix
 > 拒单原因「风控拦截：…」；口径单点 `paper.risk_check_context`）。详见账本 §6.5b #2 与 `docs/risk-management.md` §1。
 > **b. PanelBoundary.resetKey → ✅ 默认随 label 变化清除**（显式 resetKey 保留给同 title 换内容；成本钉进测试）。详见账本 §6.5b #4。
 > **c. 防腐化扫描 → ✅ 不进 CI、月度手动跑**（`python3 scripts/deadcode_scan.py`，候选 ≠ 死代码，删除前逐项人工复核）。详见账本 §6.5b #5。
-> **d. 定时 automation → ✅ 3 条循环保留**（仓库发现/周报/进化总结推送）**+ 过期一次性应删**
-> （ID `58209806`，平台侧动作待执行——本会话工具面不可达，账本 §6.5b #3 留痕）。
+> **d. 定时 automation → ✅ 3 条循环保留**（仓库发现/周报/进化总结推送）**+ 过期一次性已删**
+> （ID `58209806`，用户在平台侧执行确认，2026-09-13）。
 
 > `data/parquet/snapshots/20260830/` 下 7 个损坏文件**不占决策位**：读取已容错、新快照会自动覆盖；
 > 若要清理，按删除纪律走 `scripts/safe-trash.sh`（进项目回收站，可 `--restore`）即可，不必问。
