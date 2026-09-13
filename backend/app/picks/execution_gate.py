@@ -6,6 +6,15 @@
 - gap ≤ -5%：单票异常（除权/利空嫌疑）——**标注复核**，不自动买；
 - 其余：可执行，按 picks 原定计划。
 
+**板块映射（2026-09-13 条件化审计 A1，§6.25）**：上述阈值按**主板 10% 制度**标定。
+8.5 年分层实测（昨日涨停股，开盘买→次日卖，marketdb）：
+- 主板：gap 5~9.5% 追入 -1.54%/胜率 39.8%（观察语义成立）；≥9.5% 为一字买不进（block 语义成立）；
+- 创业/科创 20%：gap 10~19%（可成交半程高开）追入 **+0.02%/胜率 44.5%（零期望，非负）**
+  ——固定 9.5% 会把这一档错标成「严重负期望」；≥19% 才买不进。
+⇒ 阈值按板块制度**比例映射**：block = 0.95×limit_pct、observe = 0.5×limit_pct
+（主板 10% → 9.5/5.0 与原值完全一致，历史行为不变；20cm → 19/10；北交 30 → 28.5/15）。
+单点口径走 ``app.market.price_rules.limit_pct``。
+
 9:25 竞价结束（stage=final）即知，不需要等盘中——这是盘中数据对盘后决策
 唯一合法的修改点（§1.2 纠偏：盘中不改选股，只管执行）。
 
@@ -31,6 +40,18 @@ STATE_UNKNOWN = "unknown"      # 竞价数据缺失：判不出，不放行
 BLOCK_GAP_PCT = 9.5
 OBSERVE_GAP_PCT = 5.0
 ANOMALY_GAP_PCT = -5.0
+
+
+def thresholds_for(symbol: str, name: str | None = None) -> tuple[float, float]:
+    """按板块制度的 (block_ge, observe_ge)——主板 10% 制度下与旧固定值逐字一致。
+
+    条件化审计 A1（§6.25）：统一 9.5% 对 20cm 股把「可成交半程高开（实测零期望）」
+    错标成「严重负期望」，且 19% 以下并未一字（买得进）——阈值必须随制度映射。
+    """
+    from app.market.price_rules import limit_pct as _rules_limit_pct
+
+    limit = _rules_limit_pct(symbol, name)
+    return (round(limit * 0.95, 2), round(limit * 0.5, 2))
 
 
 def classify_execution(
@@ -106,7 +127,18 @@ async def collect_execution_gate(
         pct = auc.get("auction_pct")
         if auc and auc.get("data_status") not in (None, "ready", "final"):
             pct = None
-        verdict = classify_execution(pct, block_ge=block_ge, observe_ge=observe_ge, anomaly_le=anomaly_le)
+        # 条件化审计 A1（§6.25）：按板块制度映射阈值；显式入参（block_ge 等被
+        # 调用方覆盖）时优先入参，未覆盖的维度按 symbol 制度派生
+        sym_block, sym_observe = thresholds_for(sym, it.get("name"))
+        if block_ge == BLOCK_GAP_PCT:
+            block_ge_i = sym_block
+        else:
+            block_ge_i = block_ge
+        if observe_ge == OBSERVE_GAP_PCT:
+            observe_ge_i = sym_observe
+        else:
+            observe_ge_i = observe_ge
+        verdict = classify_execution(pct, block_ge=block_ge_i, observe_ge=observe_ge_i, anomaly_le=anomaly_le)
         items.append({
             "symbol": sym,
             "name": it.get("name"),

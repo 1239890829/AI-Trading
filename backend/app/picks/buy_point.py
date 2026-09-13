@@ -34,6 +34,7 @@ import time
 
 from app.core.config import settings
 from app.core.db import get_session_factory
+from app.market.price_rules import limit_pct as _rules_limit_pct
 from app.market import trade_calendar as tc
 from app.models.alert import AlertRule
 from app.notifiers import get_notifier_registry
@@ -50,6 +51,7 @@ EXEC_TIERS = {"executable", "strong"}
 
 #: 触涨停区阈值（涨幅 ≥ 此值视为买不进/追高风险，不推）。10cm 保守口径；
 #: 20cm 高弹性标的由买入区间上限（现价 ±3% 收敛压力位）自然约束。
+#: 主板口径的历史默认值（条件化审计 A2 后仅作回退锚；实际按 price_rules 板块映射）
 LIMIT_ZONE_PCT = 9.5
 
 
@@ -105,8 +107,11 @@ def evaluate_buy_points(
         chg = q.get("change_pct")
         if chg is None and q.get("prev_close"):
             chg = (price / q["prev_close"] - 1) * 100  # 数据源纪律：close 能推就算
-        if chg is not None and chg >= LIMIT_ZONE_PCT:
-            skips.append({"symbol": sym, "reason": f"涨幅 {chg:+.1f}% 触涨停区（买不进/追高风险）"})
+        # 条件化审计 A2（§6.25）：涨停区按板块制度映射——固定 9.5% 会把 20cm 股
+        # 的半程高开（实测零期望，非「买不进」）误判为触顶
+        limit_zone = _rules_limit_pct(sym, it.get("name")) * 0.95
+        if chg is not None and chg >= limit_zone:
+            skips.append({"symbol": sym, "reason": f"涨幅 {chg:+.1f}% ≥ 涨停区下沿 {limit_zone:.1f}%（买不进/追高风险）"})
             continue
         hits.append({
             "item": it,

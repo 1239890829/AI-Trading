@@ -267,3 +267,19 @@ def test_check_and_dispatch_feishu_failure_keeps_records(monkeypatch, tmp_path):
     assert cards["n"] == 0
     # 下一拍去重生效（不再重复推）
     assert not asyncio.run(bp.check_and_dispatch(app))
+
+
+# ---------------------------------------------------------------- 条件化审计 A2（§6.25）
+
+
+def test_evaluate_20cm_halfway_gap_not_limit_zone():
+    """创业板 20cm 股 +12%（半程，未触 19% 涨停区下沿）不得被判「触涨停区」。"""
+    quotes = {"300001": _quote("300001", price=11.2, change_pct=12.0),
+              "600004": _quote("600004", price=11.2, change_pct=9.8)}
+    items = [_item("300001", buy_range={"low": 9.0, "high": 11.5}),
+             _item("600004", buy_range={"low": 9.0, "high": 11.5})]
+    hits, skips = asyncio.run(_ev(items, gate_stand=False, quotes=quotes))
+    # 300001 +12% < 19（20cm×0.95）→ 命中；600004 +9.8% ≥ 9.5（主板×0.95）→ skip（原语义不变）
+    assert [h["item"]["symbol"] for h in hits] == ["300001"]
+    assert [s["symbol"] for s in skips] == ["600004"]
+    assert "涨停区" in skips[0]["reason"]

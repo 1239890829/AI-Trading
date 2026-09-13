@@ -155,3 +155,32 @@ def test_route_execution_gate(monkeypatch: pytest.MonkeyPatch):
         # 缓存命中同结果
         body2 = client.get("/api/picks/execution-gate").json()
         assert body2["data"]["summary"] == d["summary"]
+
+
+# ---------------------------------------------------------------- 条件化审计 A1（§6.25）
+
+
+def test_thresholds_for_board_regimes():
+    """按板块制度映射：主板与旧固定值逐字一致（历史行为不变），20/30cm 比例映射。"""
+    assert vb_thresholds("600519") == (9.5, 5.0)
+    assert vb_thresholds("300750") == (19.0, 10.0)
+    assert vb_thresholds("688111") == (19.0, 10.0)
+    assert vb_thresholds("920821") == (28.5, 15.0)
+
+
+def vb_thresholds(sym):
+    from app.picks.execution_gate import thresholds_for
+
+    return thresholds_for(sym)
+
+
+def test_classify_20cm_halfway_gap_is_not_blocked():
+    """20cm 股竞价 +10%（半程高开，实测零期望）不得被判 blocked；主板同值仍 blocked。"""
+    from app.picks.execution_gate import classify_execution
+
+    # 创业板 +10%：用映射后阈值判定 → observe（非 blocked）
+    v20 = classify_execution(10.0, block_ge=19.0, observe_ge=10.0)
+    assert v20["state"] == "observe"
+    # 主板 +10%：原阈值语义不变 → blocked（一字买不进）
+    v10 = classify_execution(10.0, block_ge=9.5, observe_ge=5.0)
+    assert v10["state"] == "blocked"

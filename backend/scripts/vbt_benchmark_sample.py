@@ -16,7 +16,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import random
 import sys
 import time
@@ -115,7 +114,7 @@ def main() -> None:
         true_rets = pd.Series([p[0] for p in pair_rets])
         vbt_rets = pd.Series([p[1] for p in pair_rets])
         sp = float(true_rets.rank().corr(vbt_rets.rank()))
-        k = max(1, len(df_true := true_rets) // 5)
+        k = max(1, len(true_rets) // 5)
         overlap = len(set(true_rets.nlargest(k).index) & set(vbt_rets.nlargest(k).index)) / k
         med_err = float(np.nanmedian(errs))
         rows.append({"symbol": code, "last_px": last_px, "median_abs_err_pp": med_err,
