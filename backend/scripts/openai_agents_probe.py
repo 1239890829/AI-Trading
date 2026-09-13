@@ -97,9 +97,11 @@ def _mt_close(symbol: str) -> str:
 
 
 def pd_date(ms: int) -> str:
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timezone
 
-    return (datetime.fromtimestamp(ms / 1000, tz=timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
+    from app.core.bjtime import BJ_TZ  # S2-8：时区偏移单点，禁止自建 UTC+8
+
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).astimezone(BJ_TZ).strftime("%Y-%m-%d")
 
 
 async def probe_agent_tool() -> None:
