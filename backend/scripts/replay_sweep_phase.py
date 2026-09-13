@@ -101,19 +101,35 @@ def main() -> None:
         for floor in FLOOR_GRID:
             variant = apply_score_floor(built, floor)
             res = evaluate(variant, threshold=REPLACE_THRESHOLD, max_picks=MAX_PICKS, max_swaps=ms)
+            total = res["stats"]["replacements_total"]
+            print(f"  [debug] ms={ms} floor={floor}: replacements_total={total} "
+                  f"({res['stats']['replacements_per_day']}/日)", file=sys.stderr)
             combos.append({"ms": ms, "floor": floor, "daily": res["daily"]})
 
+    # 逐组合逐日 churn（成员并集差/容量）——稳定性度量单点：
+    # stats.replacements_total 是「持仓变化数（含回填）」，per_day.replaced 是
+    # 「主动换股（score-gated）」——B4 首轮把两者混用导致 0.00 假象，此处显式分开。
+    for combo in combos:
+        prev_syms: set[str] | None = None
+        for row in combo["daily"]:
+            cur = set(row["symbols"])
+            # 首日无「前一日」⇒ churn 未定义（None），聚合自然排除——不做 0 占位
+            row["churn_pct"] = (None if prev_syms is None else
+                                round(len((cur - prev_syms) | (prev_syms - cur)) / MAX_PICKS * 100, 1))
+            prev_syms = cur
+
     def agg(combo: dict, day_labels: dict[str, str], label: str) -> list[str]:
-        sel = [row for row in combo["daily"] if day_labels.get(row["date"]) == label]
+        sel = [row for row in combo["daily"]
+               if day_labels.get(row["date"]) == label and row.get("churn_pct") is not None]
         if not sel:
-            return ["—"] * 4
+            return ["—"] * 5
         n = len(sel)
-        swaps = sum(len(r["replaced"]) for r in sel)
-        turn = swaps / max(1, n) / max(1, MAX_PICKS) * 100
+        churn = sum(r["churn_pct"] for r in sel) / n
+        active_swaps = sum(len(r["replaced"]) for r in sel)
         scores = [r.get("score_avg") for r in sel if isinstance(r.get("score_avg"), (int, float))]
         avg_score = round(sum(scores) / len(scores), 1) if scores else None
         picks_avg = round(sum(len(r["symbols"]) for r in sel) / n, 1)
-        return [str(n), f"{swaps / n:.2f}", f"{turn:.0f}%",
+        return [str(n), f"{churn:.0f}%", f"{active_swaps / n:.2f}",
                 f"{avg_score if avg_score is not None else '—'}", f"{picks_avg}"]
 
     lines = [
@@ -130,7 +146,7 @@ def main() -> None:
         lines.append(f"## 按{axis_name}")
         for bucket in buckets:
             lines.append(f"### {bucket}（{sum(1 for d in days if axis.get(d.isoformat()) == bucket)} 日）")
-            lines.append("| 换股上限 | 分数下限 | 天数 | 日均换股 | 换手率 | 组合均分 | 均持仓数 |")
+            lines.append("| 换股上限 | 分数下限 | 天数 | 持仓变化率 | 主动换股/日 | 组合均分 | 均持仓数 |")
             lines.append("|---|---|---|---|---|---|---|")
             for combo in combos:
                 cells = agg(combo, axis, bucket)
@@ -139,6 +155,12 @@ def main() -> None:
                     tag = "（当前）"
                 lines.append(f"| {combo['ms']}{tag} | {combo['floor']:.0f} | " + " | ".join(cells) + " |")
             lines.append("")
+        # 对账断言（KB-ENG 纪律）：各桶天数合计 == 可计日总数（全局首日 churn 未定义被排除）
+        for combo in combos:
+            n_buk = sum(1 for row in combo["daily"]
+                        if axis.get(row["date"]) is not None and row.get("churn_pct") is not None)
+            n_all = sum(1 for row in combo["daily"] if axis.get(row["date"]) is not None)
+            assert n_all - n_buk == 1, f"分桶天数合计 {n_buk} ≠ 可计日 {n_all}（对账失败：{axis_name}）"
 
     text = "\n".join(lines)
     print(text)
