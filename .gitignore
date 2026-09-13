@@ -88,3 +88,4 @@ scripts/agent/logs/*.out
 scripts/agent/logs/run.log
 data/boardflow/*
 data/theme_momentum/*
+backend/data/cache/
