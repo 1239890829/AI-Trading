@@ -233,3 +233,32 @@ def test_route_degrades_explicitly(monkeypatch):
     finally:
         app.dependency_overrides.pop(notif.get_alert_repo, None)
         app.state.event_store = old_store
+
+
+# ---------------------------------------------------------------- 条件化/日历修复（§6.25 用户报告：周末被标盘中）
+
+
+def test_session_non_trading_day_goes_pre_open():
+    """周末/节假日（不在交易日集合）→ 一律盘前节拍（下一交易日开盘前消化）。"""
+    from app.api.routes.notifications import _session_of
+    from datetime import date
+
+    sat = {date(2026, 9, 11)}  # 仅周五是交易日 → 周六/日非交易日
+    assert _session_of(datetime(2026, 9, 12, 10, 0), trading_dates=sat) == "pre_open"
+    assert _session_of(datetime(2026, 9, 13, 14, 0), trading_dates=sat) == "pre_open"
+    # 节假日（工作日但休市）同理
+    assert _session_of(datetime(2026, 10, 1, 10, 0), trading_dates=sat) == "pre_open"
+
+
+def test_session_trading_day_wall_clock_unchanged():
+    """交易日维持墙钟语义；日历缺失（None）回退墙钟——显式降级非静默。"""
+    from app.api.routes.notifications import _session_of
+    from datetime import date
+
+    fri = {date(2026, 9, 11)}
+    assert _session_of(datetime(2026, 9, 11, 10, 0), trading_dates=fri) == "intraday"
+    assert _session_of(datetime(2026, 9, 11, 16, 0), trading_dates=fri) == "after_close"
+    assert _session_of(datetime(2026, 9, 11, 8, 0), trading_dates=fri) == "pre_open"
+    # 回退：trading_dates=None → 与旧行为逐字一致
+    assert _session_of(datetime(2026, 9, 11, 10, 0), trading_dates=None) == "intraday"
+    assert _session_of(datetime(2026, 9, 12, 10, 0), trading_dates=None) == "intraday"  # 回退态周末仍标盘中（已知降级）

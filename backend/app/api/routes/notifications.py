@@ -11,9 +11,11 @@ GET /api/notifications?alert_limit=50&news_limit=15&news_min_score=<settings 默
    **score ≥ 阈值才通知**（"新闻不逐条推送"）——评分机制与时事新闻板块（事件 tab
    relevance 排序）完全同源复用，不另起炉灶。
 
-session（盘前/盘中/盘后）按北京时间墙钟划分：<09:30 盘前；09:30–15:05 盘中
-（含午休——通知分类不需要午休粒度）；其余盘后。任何单一来源失败都显式降级
-（errors 字段），绝不静默空列表。
+session（盘前/盘中/盘后）**交易日历优先**（2026-09-13 用户报告的周末误标盘中修复）：
+非交易日（周末/节假日）一律归**盘前**节拍（下一交易日开盘前消化的资讯）；
+交易日按墙钟：<09:30 盘前；09:30–15:05 盘中（含午休——通知分类不需要午休粒度）；
+其余盘后。日历不可用（trading_days 失败）回退墙钟——宁可放行不因日历故障误判
+（与 in_trading_window 同哲学）。任何单一来源失败都显式降级（errors 字段）。
 
 已读状态（2026-09-12 缺陷修复）也挂在本模块，但它**不是**聚合的一部分，而是
 一份独立的持久化状态：
@@ -40,6 +42,7 @@ from app.core.config import settings
 from app.core.db import get_session_factory
 from app.repositories.alert_repo import AlertRepository
 from app.core.bjtime import BJ_OFFSET, beijing_now
+from app.market import trade_calendar as tc
 from app.services import notification_read_state as read_state_service
 
 log = logging.getLogger(__name__)
@@ -61,8 +64,15 @@ _FOUR_LABEL = {
 }
 
 
-def _session_of(bj: datetime) -> str:
-    """北京时间 naive 墙钟 → 盘前/盘中/盘后（口径见模块 docstring）。"""
+def _session_of(bj: datetime, trading_dates: set | None = None) -> str:
+    """北京时间 naive → 盘前/盘中/盘后。
+
+    trading_dates（交易日 date 集合，日历唯一入口 trading_days 的产物）非 None 时
+    **日历优先**：非交易日一律盘前节拍（周末/节假日的消息在下一交易日开盘前消化）；
+    None（日历不可用）回退纯墙钟——回退是显式降级而非静默错误。
+    """
+    if trading_dates is not None and bj.date() not in trading_dates:
+        return "pre_open"
     hm = bj.hour * 100 + bj.minute
     if 930 <= hm <= 1505:
         return "intraday"
@@ -75,7 +85,7 @@ def get_alert_repo(request: Request) -> AlertRepository:
     return request.app.state.alert_repo
 
 
-def _alert_items(repo: AlertRepository, limit: int) -> list[dict]:
+def _alert_items(repo: AlertRepository, limit: int, trading_dates: set | None = None) -> list[dict]:
     """watcher 确认/证伪 + 信号健康度预警 → 通知项。triggered_at 已统一北京时间 naive（2026-09-09 告警时区修复；此前存 UTC naive 在此 +8 补偿，补偿点已随存储统一移除）。
 
     P0-2（2026-09-08 用户指令「AI 盘中分析进站内通知」）：合并 AgentTriage
@@ -144,7 +154,7 @@ def _alert_items(repo: AlertRepository, limit: int) -> list[dict]:
                 "id": f"alert-{e.id}",
                 "category": category,
                 "label": kind_label,
-                "session": _session_of(bj) if bj else "intraday",
+                "session": _session_of(bj, trading_dates) if bj else "intraday",
                 "ts": bj.isoformat(sep=" ") if bj else None,
                 "title": (
                     f"【{direction or '盘中跟踪'}】{sym_part}{name_part} {kind_label}"
@@ -208,7 +218,8 @@ def _daily_pick_item() -> dict | None:
     }
 
 
-async def _news_items(store, request: Request, limit: int, min_score: float, now: datetime) -> tuple[list[dict], str | None]:
+async def _news_items(store, request: Request, limit: int, min_score: float, now: datetime,
+                      trading_dates: set | None = None) -> tuple[list[dict], str | None]:
     """事件系统 → 评分过滤后的新闻通知。返回 (items, error)。"""
     try:
         # 同步 SQLite 读搬线程池（2026-09-12）：limit=80 实测约 9.6ms；本函数被
@@ -266,7 +277,7 @@ async def _news_items(store, request: Request, limit: int, min_score: float, now
                 "id": f"event-{r.id}",
                 "category": "news",
                 "label": _FOUR_LABEL.get(four, four),
-                "session": _session_of(r.published_at) if r.published_at else "intraday",
+                "session": _session_of(r.published_at, trading_dates) if r.published_at else "intraday",
                 "ts": r.published_at.isoformat(sep=" ") if r.published_at else None,
                 "title": r.title or "（无标题）",
                 "body": (r.title or "")[:120],
@@ -298,10 +309,22 @@ async def notifications(
     min_score = news_min_score if news_min_score is not None else settings.notifications_news_min_score
     now = beijing_now().replace(tzinfo=None)  # 事件 published_at 是北京 naive，同语义相减
 
+    # 交易日历一次取（请求级）：session 分类的日历优先判定（§6.25 周末误标盘中修复）。
+    # 失败 → None → 回退墙钟（宁可放行不因日历故障误判，与 in_trading_window 同哲学）。
+    trading_dates: set | None = None
+    try:
+        provider = getattr(getattr(request.app.state, "hub", None), "provider", None)
+        if provider is not None:
+            days = await tc.trading_days(provider)
+            trading_dates = set(days) if days else None
+    except Exception:  # noqa: BLE001
+        log.warning("notifications: trading calendar unavailable, session 回退墙钟", exc_info=True)
+        trading_dates = None
+
     errors: dict[str, str] = {}
     alert_items: list[dict] = []
     try:
-        alert_items = _alert_items(repo, alert_limit)
+        alert_items = _alert_items(repo, alert_limit, trading_dates)
     except Exception as exc:  # noqa: BLE001
         log.exception("notifications: alert source failed")
         errors["alerts"] = str(exc)
@@ -316,7 +339,8 @@ async def notifications(
     news_items: list[dict] = []
     store = getattr(request.app.state, "event_store", None)
     if store is not None:
-        news_items, news_err = await _news_items(store, request, news_limit, min_score, now)
+        news_items, news_err = await _news_items(store, request, news_limit, min_score, now,
+                                                 trading_dates)
         if news_err:
             errors["news"] = news_err
     else:

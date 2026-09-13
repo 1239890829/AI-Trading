@@ -1348,7 +1348,7 @@ export interface NotificationItem {
   category: "opportunity" | "daily_picks" | "news" | "risk";
   /** 展示标签：确认/证伪/跟踪/健康预警/每日精选/国家政策/国际时事/市场热点/原材料涨价 */
   label: string;
-  /** 盘前/盘中/盘后（北京时间墙钟划分） */
+  /** 盘前/盘中/盘后（后端按交易日历优先判定：非交易日归盘前；日历缺失回退墙钟） */
   session: "pre_open" | "intraday" | "after_close";
   ts: string | null;
   title: string;

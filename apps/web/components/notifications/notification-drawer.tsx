@@ -31,7 +31,7 @@ import { NewsModal, type NewsModalItem } from "@/components/news-modal";
  *
  * 内容：个股机会（watcher 确认/证伪）+ 每日精选 + 评分过滤后的消息面/新闻/政策
  * （后端 /api/notifications 三源合并，评分与时事新闻板块 events ranking 同源）。
- * 抽屉内一层 tab 按 盘前/盘中/盘后 分类（北京时间墙钟，后端判定同口径）。
+ * 抽屉内一层 tab 按 盘前/盘中/盘后 分类（后端判定：交易日历优先，非交易日归盘前）。
  * 新闻不逐条推送：score ≥ 阈值才出现（默认 60，后端 settings 配置）。
  *
  * 已读规则（2026-09-11 重做，见 lib/notification-read.ts 的根因说明）：
