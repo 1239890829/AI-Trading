@@ -5,6 +5,25 @@ import asyncio
 
 from app.core.db import get_session_factory
 from app.paper.engine import PaperTradingEngine
+from app.paper.reconcile import reconcile
+
+
+def assert_ledger_consistent(sf):
+    """**业务不变量断言**：账本必须自洽（资金守恒 / 预留成对 / scope 隔离 / 成交对持仓）。
+
+    `GOV-002`（报告 O4）：本文件的既有断言是**行为级**的——`order.status == "filled"`、
+    `acc.cash < 1_000_000` 这类只看"函数返回了什么"。它们**证明不了钱是对的**：
+    R01（挂单冻结重复扣款）当年就是在**全部行为断言全绿**的情况下活着的
+    （`acc.cash < 1_000_000` 对"扣一次"和"扣两次"同样成立——**弱断言不含守恒量**）。
+
+    故此处改断**业务不变量**，且**直接复用生产对账器**（`IMP-003`）：判据只有一份，
+    生产怎么判这里就怎么判，不重写第二套恒等式（重写 = 第二个真相源，费率一改就静默失真）。
+    """
+    rep = reconcile(sf)
+    bad = [
+        f for s in rep["scopes"] for f in s["findings"] if f["severity"] == "error"
+    ]
+    assert rep["ok"] is True, f"账本不自洽：{bad}"
 
 
 def make_engine(quote_map):
@@ -49,6 +68,9 @@ def test_buy_fill_and_t1():
         assert pos.quantity == 200
         assert pos.available == 0  # T+1 当日不可卖
 
+    # 成交之后账本必须仍自洽（`GOV-002`：把断言从"函数返回"提到"业务不变量"）
+    assert_ledger_consistent(engine._sf)
+
 
 def test_buy_limit_up_rejected():
     reset()
@@ -78,6 +100,9 @@ def test_sell_t1_blocked_then_allowed():
     assert order2.status == "filled"
     acc = engine.ensure_account()
     assert acc.cash > 1_000_000 * 0.9  # 卖出回款（价格略降+费用）
+    # ⚠️ 上面那条是**弱断言**：它对"回款正确"与"回款少了一半"同样成立（只给了下界）。
+    # 真正的判据是业务不变量——买→卖一轮之后，账本的资金守恒/持仓对照必须仍成立。
+    assert_ledger_consistent(engine._sf)
 
 
 def test_sell_limit_down_rejected():
@@ -246,6 +271,81 @@ def test_reset_with_custom_initial_cash():
     summary = engine.account_summary(0.0)
     assert summary["total"] == 500_000.0
     assert summary["total_pnl"] == 0.0
+
+
+# ---------------------------------------------------------------- 业务不变量（GOV-002）
+
+def test_cash_conservation_holds_across_full_order_lifecycle():
+    """**资金守恒不变量**：买 → 卖 → 再挂单（未成交）全流程后，钱必须一笔不差。
+
+    `GOV-002`（报告 O4）：本文件既有用例只断"函数返回了什么"，**盖不住守恒量**——
+    报告点名的 `assert acc.cash > 1_000_000 * 0.9` 就是典型：下界断言对
+    "回款正确"与"回款被吞掉一半"**同样成立**，R01（挂单冻结重复扣款）正是在
+    **这类断言全绿**的情况下活着的。
+
+    本用例改断**恒等式**（同源：判据来自生产 `reconcile`，不在此重写）：
+        initial_cash − cash == Σ已成交买单实付 + Σ挂单中买单冻结额 − Σ卖出净收入
+    并额外断"账本自洽"（四条不变量全过）——**把这笔交易当成一次对账**。
+    """
+    reset()
+    from app.schemas.market import Quote
+    quote = Quote(
+        symbol="600519", price=100.0, limit_up_price=110.0, limit_down_price=90.0, source="t")
+    engine = make_engine({"600519": quote})
+
+    # ① 买入成交
+    assert asyncio.run(engine.place_order("600519", "buy", 100.0, 200)).status == "filled"
+    # ② 卖出成交（限价须低于现价才即时成交；当日可卖量不足 ⇒ 先解冻，模拟次日）
+    from app.models.paper import PaperPosition
+    with engine._sf() as db:
+        pos = db.query(PaperPosition).filter(PaperPosition.symbol == "600519").one()
+        pos.frozen_today = 0
+        db.commit()
+    assert asyncio.run(engine.place_order("600519", "sell", 99.0, 100)).status == "filled"
+    # ③ 再挂一笔**不成交**的买单（限价 90 < 现价 100 ⇒ 挂单 pending，占用冻结额）
+    assert asyncio.run(engine.place_order("600519", "buy", 90.0, 100)).status == "pending"
+
+    # 全流程结束 ⇒ 账本必须自洽（资金守恒 + 预留成对 + scope 隔离 + 成交对持仓）
+    assert_ledger_consistent(engine._sf)
+
+    # 守恒式显式复核一次（把不变量写在测试里，失败时能直接看出残差）
+    import app.paper.reconcile as rec
+    from app.models.paper import PaperOrder
+    with engine._sf() as db:
+        acc = engine.ensure_account()
+        orders = db.query(PaperOrder).all()
+        _, metrics = rec._cash_conservation(acc, orders)
+    assert abs(metrics["residual"]) <= rec.TOL, f"资金守恒残差 {metrics['residual']}"
+
+
+def test_ledger_consistency_assertion_can_actually_fail():
+    """**判据自证**（[[KB-ENG-65]]）：`assert_ledger_consistent` 必须真能变红。
+
+    一个"永远绿"的守卫比没有守卫更糟——它会让后续所有改动都以为账本没问题。
+    故此处**定向注入 R01 形态**（账户现金被多扣一笔、订单侧却没有对应冻结额），
+    断言判据**报错**且错误里带得出 `cash_conservation` 这条检查名。
+
+    注入只在**测试内**改数据、不碰生产代码（改完即随 fixture 重建消失）。
+    """
+    import pytest
+
+    reset()
+    from app.schemas.market import Quote
+    quote = Quote(
+        symbol="600519", price=100.0, limit_up_price=110.0, limit_down_price=90.0, source="t")
+    engine = make_engine({"600519": quote})
+    asyncio.run(engine.place_order("600519", "buy", 100.0, 100))
+
+    # 注入：凭空多扣 187.00（≈ R01「冻结额未归还 / 重复扣款」在资金面上的形态）
+    from app.models.paper import PaperAccount
+    with engine._sf() as db:
+        acc = db.query(PaperAccount).first()
+        acc.cash -= 187.00
+        db.commit()
+
+    with pytest.raises(AssertionError) as ei:
+        assert_ledger_consistent(engine._sf)
+    assert "cash_conservation" in str(ei.value), "判据变红了，但没指出是哪条不变量"
 
 
 

@@ -102,7 +102,10 @@ Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**170 个操作 / 160 �
 | POST | `/api/events/collect` | 自选新闻批量抽取（写鉴权） |
 | POST | `/api/events/{id}/review` | 人工裁决 resolved/rejected（写鉴权） |
 
-方向判定为规则词典 v1（利好/利空动词 + 国产替代对冲），实体来自官方目录名与人工别名表；每行带 basis。LLM 增强层未接入。
+方向判定**默认**为规则词典 v1（利好/利空动词 + 国产替代对冲），实体来自官方目录名与人工别名表；每行带 basis。
+LLM 增强层**已实现但默认关闭**（`app/events/llm_aux.py` → `POST /api/events/llm-aux-judge`，命中行 `matched_by=llm_aux`，
+不伪装规则命中；受 `event_llm_aux_enabled` 控制，默认 `False`）。
+⚠️ 本行原写「LLM 增强层未接入」，是**凭据/开关到位前的旧表述**，已按实测改正（2026-09-14 `GOV-002`）。
 
 ## 题材目录与官方成分（linkage-design §3）
 

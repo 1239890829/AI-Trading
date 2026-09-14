@@ -47,6 +47,9 @@
 | 相位对账 | `sentiment/reconcile.py` |
 
 **P2 延后（按设计，依赖样本积累 ≥200 或满季度）**：HMM regime / 游资席位画像 / meta-labeling 数据版 / walk-forward 门禁 / 回测成本建模 / 新闻情绪特征入模。
+> ⚠️ **状态不在此（2026-09-14 `GOV-002`）**：各项**状态与触发条件一律见账本 §6.0**
+> （整组随 `RSH-018` 维持**观察**：`RSH-016` HMM regime / 席位画像 / meta-labeling，其余见 §6.3 触发条件表）。
+> 本节只说明"为什么按设计延后"，不承担进度断言。
 
 ## 5. 仓库整合结论（trading 分组 + 新仓库评估）
 
@@ -79,7 +82,7 @@ ad-hoc headless 的真实成本样本（供未来评估）：**$1.40 / 38 轮 / 
 | 层 | 内容 | 状态 |
 |---|---|---|
 | 层 1 | pending 事件交给 GLM 结构化判定（走 analyzers 纪律 + `llm_aux` 标记不伪装） | ✅ 已落地（`events/llm_aux.py` + 20 分钟盘中轮询，默认开关） |
-| 层 2 | 情绪因子批量打分（若过池内 IC） | ⏳ 需算力/成本确认 |
+| 层 2 | 情绪因子批量打分（若过池内 IC） | 状态见账本 §6.0（**等窗**：需算力/成本确认，属零新增付费依赖纪律的待拍板项） |
 | 层 3 | **`event_card` 判定沉淀自标注数据集**（事件×方向×依据×买点五因素×T+1/T+5） | ✅ 脚本已交付（`scripts/export_event_labels.py`） |
 
 **核心洞见**：我们的 `event_card` 判定结果本身就是"强模型/规则标注 → 蒸馏小模型"路径里最缺的高质量标签数据。
@@ -92,7 +95,7 @@ ad-hoc headless 的真实成本样本（供未来评估）：**$1.40 / 38 轮 / 
 | 原始文档 | 处置 |
 |---|---|
 | ai-agent-console-plan.md / ai-brain-plan.md / evolution-brain-plan.md | 已归档（全落地） |
-| strategy-evolution-plan.md | 已归档（P0 落地，P2 延后项保留在本文 §4） |
+| strategy-evolution-plan.md | 已归档（P0 落地，见本文 §4；**P2 延后项状态 → 账本 §6.0**，不在本文维护） |
 | trading-star-merge-plan-20260909.md / trading-agent-positioning-20260909.md | 已归档 |
-| research-autonomous-agent-20260909.md | **已删除**（未落地方案 → `retro-and-gaps.md` P2-9/P2-10） |
-| llm-finetune-research-20260909.md | **已删除**（层 2 → `retro` P2-8；层 1/3 已落地见本文 §7） |
+| research-autonomous-agent-20260909.md | **已删除**（未落地方案 → 账本 §6.0：`RSH-018` 观察档） |
+| llm-finetune-research-20260909.md | **已删除**（层 2 → 账本 §6.0 等窗；层 1/3 已落地见本文 §7） |
