@@ -55,7 +55,12 @@ COOL_TAIL_MINUTES = 5    # 14:55 后不再触发（尾盘偷袭告警价值低�
 
 #: 与 board_flow 的 data/boardflow/（东财口径）**刻意分目录**——本序列是
 #: 「官方成分 × 快照等权自算」口径，混放会让两套口径难分彼此。
-DATA_DIR = Path("data/theme_momentum")
+#: ⚠️ **绝对锚定，不用裸相对 `Path("data/theme_momentum")`**（2026-09-14，KB 读写分叉同族）：
+#: 相对路径按**进程 CWD** 解析；标准启动（CWD=`backend/`）下两者落点相同，
+#: 但只要有一个以**仓库根**为 CWD 的进程触碰同一目录（脚本 / pytest / 容器 /
+#: systemd 的 WorkingDirectory），就会读出另一份"看起来存在但内容是旧的"目录——
+#: 本仓已登记的教训：**运行时文件「陈旧」比「缺失」更危险**。
+DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "theme_momentum"
 
 
 def momentum_dir() -> Path:

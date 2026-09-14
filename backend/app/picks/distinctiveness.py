@@ -30,13 +30,32 @@ from pathlib import Path
 import duckdb
 
 from app.core.bjtime import BJ_TZ, beijing_now
+from app.picks import heat_history  # 读写同源：读侧不复制路径，见下方常量区注释
 
 log = logging.getLogger(__name__)
 
 #: 默认与 lurk_pool.DB 同源（backend/data/marketdb/market.duckdb）
 MARKETDB_PATH = Path(__file__).resolve().parents[2] / "data" / "marketdb" / "market.duckdb"
-SKYROCKET_PATH = Path("data/picks/heat/skyrocket.jsonl")
-LHB_DIR = Path("data/lhb")
+
+#: ⚠️ **本模块刻意不自持数据路径常量**（2026-09-14 修复读写分叉）。
+#:
+#: 原实现是裸相对 `Path("data/picks/heat/skyrocket.jsonl")` 与 `Path("data/lhb")`——
+#: 相对路径的解析基准是**进程 CWD**，不是文件位置。而写侧
+#: `heat_history.HEAT_DIR = REPO_ROOT / "data" / "picks" / "heat"` 是**绝对锚定**
+#: （落在仓库根 `data/`）。两者在标准启动方式下（CWD=`backend/`）指向**不同文件**：
+#:
+#:   写 → <repo>/data/picks/heat/skyrocket.jsonl      （实测存在）
+#:   读 → <repo>/backend/data/picks/heat/skyrocket.jsonl（实测不存在）
+#:
+#: 后果不只是"读不到"——`load_skyrocket_hits` 缺文件时**静默返回 `{}`**，于是
+#: `W_SPIKE`（权重 20/100）分项在生产中**恒为 0 且无任何降级标记**。
+#: 2026-09-14 实测：写侧文件含 83 个 symbol / 100 次入榜，默认路径命中 **0**。
+#:
+#: 修法是**读写同源**：读侧不再复制一份路径，而是**在调用时**取写侧模块的属性
+#: （`heat_history.SKYROCKET_PATH`）——这样任何一方改名/改根都会立刻同时生效，
+#: 结构上不可能再分叉；测试也只需 patch 写侧一处即可同时移动读写两端。
+#: `lhb` 同理由 `lhb_archive.count_symbol_hits` 的默认参数提供（原先那份
+#: `LHB_DIR` 是**从未被使用的死常量**，已删）。
 
 DAY_MS = 86_400_000
 
@@ -147,14 +166,29 @@ def _kline_features(bars: list[tuple]) -> dict:
     }
 
 
+def skyrocket_path(path: Path | None = None) -> Path:
+    """飙升榜档案路径：**调用时**取写侧单点（`heat_history.SKYROCKET_PATH`）。
+
+    刻意不做成模块级常量——常量会在 import 时求值一次，一旦有人再写一份
+    "看起来一样"的相对路径，就又回到"写仓库根、读 backend/data"的分叉
+    （2026-09-14 的 W_SPIKE 恒 0 事故即此形态）。调用时取属性 ⇒ 测试 patch
+    写侧一处即可同时移动读写两端，不存在"只挪了一半"的中间态。
+    """
+    return path or heat_history.SKYROCKET_PATH
+
+
 def load_skyrocket_hits(symbols: set[str], *, path: Path | None = None, days: int = 60) -> dict[str, int]:
     """飙升榜近 N 自然日入榜次数（文件缺失 → {}，口径=前向积累）。
 
     ⚠️ 单位纪律（R26）：``date`` 字符串解析后是 epoch **秒**，故截断点也用秒
     （``_SECONDS_PER_DAY``）。原实现用 ``days * DAY_MS``（毫秒）相减，截断点被推到
     约 1962 年 ⇒ 窗口恒真、任何历史记录都计入。
+
+    ⚠️ 返回 ``{}`` 有**两种成因**（文件不存在 / 窗口内确无记录），消费方必须用
+    :func:`skyrocket_note` 取到同行的口径披露再下结论——否则「画像 0」会被误读成
+    「确实没上过榜」。
     """
-    p = path or SKYROCKET_PATH
+    p = skyrocket_path(path)
     if not p.exists():
         return {}
     cutoff = beijing_now().timestamp() - days * _SECONDS_PER_DAY
@@ -181,6 +215,30 @@ def load_skyrocket_hits(symbols: set[str], *, path: Path | None = None, days: in
     return hits
 
 
+def skyrocket_note(path: Path | None = None, days: int = 60) -> dict:
+    """飙升榜档案的**可达性披露**（缺文件时 `skyrocket_60d` 恒 0 的原因说明）。
+
+    与 ``lhb_archived_days`` 同范式（前向积累 ≠ 全窗口；披露口径而不是沉默），
+    也与 ``marketdb_note`` 同范式（缺仓时显式说明而不是给一个 0 分混进排序）。
+    ``available=False`` 时该分项对每只票都贡献 0 分，**排序权重因此失真 20/100**。
+    """
+    p = skyrocket_path(path)
+    if not p.exists():
+        return {
+            "available": False,
+            "note": f"飙升榜档案不存在（{p}）——skyrocket_60d 分项按 0 计，"
+                    f"该分项权重 {W_SPIKE:g}/{W_SPIKE + W_RET + W_HEAT + W_LIMIT + W_LHB + W_NEWHIGH:g} 未生效",
+        }
+    rows = 0
+    try:
+        rows = sum(1 for line in p.read_text(encoding="utf-8").splitlines() if line.strip())
+    except Exception:  # noqa: BLE001
+        return {"available": False, "note": f"飙升榜档案读取失败（{p}）"}
+    if rows == 0:
+        return {"available": False, "note": f"飙升榜档案为空文件（{p}）——skyrocket_60d 分项按 0 计"}
+    return {"available": True, "note": None, "records": rows, "days": days}
+
+
 def score_candidates(
     symbols: list[str],
     *,
@@ -193,9 +251,12 @@ def score_candidates(
     返回 {available: bool, marketdb_note: str|None, items: [{symbol, score, breakdown}]}。
     available=False = marketdb 缺仓（显式不可用态，items 为空——三态纪律）。
     """
+    sky_state = skyrocket_note(skyrocket_path)
     kl = load_klines(symbols, db_path)
     if not kl and not Path(db_path or MARKETDB_PATH).exists():
         return {"available": False, "marketdb_note": "marketdb 仓不存在（先跑 scripts/sync_marketdb.py）",
+                "skyrocket_available": sky_state["available"],
+                "skyrocket_note": sky_state["note"],
                 "items": []}
     sym_set = set(symbols)
     sky = load_skyrocket_hits(sym_set, path=skyrocket_path)
@@ -231,6 +292,8 @@ def score_candidates(
         })
     items.sort(key=lambda x: -(x["score"] if x["score"] is not None else -1))
     return {"available": True, "marketdb_note": None, "items": items,
+            "skyrocket_available": sky_state["available"],
+            "skyrocket_note": sky_state["note"],
             "lhb_archived_days": archived_days,
             "weights_calibrated": False}
 

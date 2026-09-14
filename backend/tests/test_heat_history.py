@@ -188,3 +188,110 @@ def test_load_heat_rows_sorted_skip_corrupt_and_limit(heat_dir):
     assert [r["date"] for r in rows] == ["2026-08-28", "2026-08-29", "2026-09-01"]
     assert rows[1]["tag"] == "AI应用"  # 0829 的好行仍在
     assert [r["date"] for r in hh.load_heat_rows(limit_days=1)] == ["2026-09-01"]
+
+
+# ------------------------------------------------- skyrocket 档案的读写同源守卫
+#
+# 事故（2026-09-14 实测，非推断）：写侧 `heat_history.SKYROCKET_PATH` 是
+# `REPO_ROOT / "data" / ...`（**绝对** ⇒ 仓库根），读侧
+# `distinctiveness.SKYROCKET_PATH` 曾是裸相对 `Path("data/picks/heat/skyrocket.jsonl")`
+# （⇒ 按进程 CWD 解析 ⇒ 标准启动下落 `backend/data/picks/heat/`）。
+# 两者是**不同文件**，而 `load_skyrocket_hits` 在文件缺失时**静默返回 `{}`**
+# ⇒ 权重 20/100 的 `W_SPIKE` 分项在生产中恒 0，且没有任何降级标记。
+# 生产数据实测：写侧 83 个 symbol / 100 次入榜，读侧默认路径命中 **0**。
+#
+# 下面三条是**成对**的：正例（写得进就读得到）／反例（缺档案必须显式披露，
+# 不许静默给 0）／结构（读侧不得自持路径常量，从形式上消灭"再分叉"的可能）。
+
+
+class _SkyProvider:
+    """飙升榜桩：只回固定行，不打网络。"""
+
+    def __init__(self, rows: list[dict]):
+        self._rows = rows
+
+    async def get_skyrocket_list(self, period: str) -> list[dict]:  # noqa: ARG002
+        return self._rows
+
+
+_SKY_ROWS = [
+    {"rank": 1, "symbol": "600519", "name": "贵州茅台", "heat": 99.0, "rank_change": 0},
+    {"rank": 2, "symbol": "000001", "name": "平安银行", "heat": 88.0, "rank_change": 3},
+]
+
+
+@pytest.fixture
+def sky_env(tmp_path, monkeypatch):
+    """档案整体搬到 tmp——**只 patch 写侧两个属性**。
+
+    读侧是"调用时取写侧属性"（`distinctiveness.skyrocket_path()`），因此**不需要**
+    第二处 patch。若将来读侧又自持一份常量，本夹具就 patch 不到它、下面第一条
+    用例立刻变红——这正是我们要的**结构性**保护。
+    """
+    d = tmp_path / "heat"
+    monkeypatch.setattr(hh, "HEAT_DIR", d)
+    monkeypatch.setattr(hh, "SKYROCKET_PATH", d / "skyrocket.jsonl")
+    return d
+
+
+def test_skyrocket_reader_reads_what_writer_wrote(sky_env, fake_clock):
+    """**读写同源**（回归守卫）：写侧落盘后，读侧默认路径必须命中同一份文件。
+
+    这条守卫的形式很关键——它**只 patch 写侧**。若读侧再出现一份自持路径，
+    读写就会各指一处，此用例立刻判红（而不是像事故那样两边都静默成功）。
+    """
+    from app.picks import distinctiveness as dv
+
+    state = SimpleNamespace(hub=SimpleNamespace(provider=_SkyProvider(_SKY_ROWS)))
+    out = asyncio.run(hh.record_daily_skyrocket(state))
+    assert out["recorded"] == len(_SKY_ROWS) and out["date"] == "2026-09-01"
+
+    assert dv.skyrocket_path() == sky_env / "skyrocket.jsonl", "读侧没有跟着写侧走"
+    assert dv.load_skyrocket_hits({"600519", "000001"}) == {"600519": 1, "000001": 1}, (
+        "写侧已落盘而读侧读不到 = 读写分叉（W_SPIKE 分项会静默恒 0）")
+    assert dv.skyrocket_note()["available"] is True
+
+
+def test_skyrocket_missing_archive_is_disclosed_not_silent(sky_env):
+    """**反例（成对）**：档案不存在时命中为 0 **必须显式披露**，不许静默给 0。
+
+    只测正例等于只守一个方向：事故的表现恰恰是"读不到也不报错"，
+    所以必须另有一条钉子钉住"读不到时要说出来"。
+    """
+    from app.picks import distinctiveness as dv
+
+    assert not (sky_env / "skyrocket.jsonl").exists()
+    assert dv.load_skyrocket_hits({"600519"}) == {}   # 缺档案 → 空（既有语义不变）
+    note = dv.skyrocket_note()
+    assert note["available"] is False
+    assert note["note"] and "skyrocket_60d" in note["note"], (
+        "缺档案时必须说明该分项按 0 计，否则「画像 0」会被误读成「确实没上过榜」")
+
+
+def test_distinctiveness_does_not_own_path_constants():
+    """**结构性防线**：读侧不得自持 skyrocket / lhb 路径常量。
+
+    路径写两处 = 迟早分叉（一方改锚定、另一方没改，且两边都不报错）。
+    读侧只允许"引用写侧单点"，故本用例直接对源码断言：
+    `app/picks/distinctiveness.py` 的**模块级赋值**里不许出现这两个名字。
+    """
+    import ast
+    from pathlib import Path as _P
+
+    from app.picks import distinctiveness as dv
+
+    tree = ast.parse(_P(dv.__file__).read_text(encoding="utf-8"))
+    assigned: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            assigned |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            assigned.add(node.target.id)
+    assert "SKYROCKET_PATH" not in assigned, (
+        "读侧又自持了 SKYROCKET_PATH —— 必须改为调用 `heat_history.SKYROCKET_PATH`")
+    assert "LHB_DIR" not in assigned, (
+        "读侧又自持了 LHB_DIR —— 上榜次数走 `lhb_archive.count_symbol_hits` 的默认参数")
+    # 写侧仍是唯一真相源，且它自己必须是绝对锚定
+    assert hh.SKYROCKET_PATH == hh.HEAT_DIR / "skyrocket.jsonl"
+    assert hh.HEAT_DIR.is_absolute(), (
+        "写侧 HEAT_DIR 变成了相对路径——解析基准会退化为进程 CWD，读写分叉会复现")

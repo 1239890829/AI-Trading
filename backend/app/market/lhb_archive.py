@@ -24,7 +24,13 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-LHB_DIR = Path("data/lhb")
+#: ⚠️ **绝对锚定，不用裸相对 `Path("data/lhb")`**（2026-09-14，KB 读写分叉同族）：
+#: 相对路径按**进程 CWD** 解析——以 `backend/` 为 CWD 启动时落 `backend/data/lhb`，
+#: 而任何以**仓库根**为 CWD 的进程（脚本 / pytest / 容器入口 / systemd 的 WorkingDirectory）
+#: 会写 `data/lhb`，两条路径**互不可见**，表现为"归档了但画像读不到"且无任何报错。
+#: 同模块族的 `board_flow._STORE_DIR` 早已是 `parents[2]/"data"` 绝对锚定，此处对齐。
+#: 锚点与落点均**未改变**标准启动方式下的实际位置（`backend/data/lhb`，当前尚无数据）。
+LHB_DIR = Path(__file__).resolve().parents[2] / "data" / "lhb"
 ARCHIVE_HOUR_MIN = 17 * 60 + 5   # 17:05 起尝试（东财收盘后 ~17:00 披露）
 ARCHIVE_HOUR_MAX = 23 * 60       # 23:00 后不再尝试
 

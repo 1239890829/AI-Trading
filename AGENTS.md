@@ -30,7 +30,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2971 项（2909 passed / 62 skipped）· 190 文件（09-14 全量实测，0 failed）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2976 项（2914 passed / 62 skipped）· 190 文件（09-14 全量实测，0 failed）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。
@@ -62,7 +62,7 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 2971 项（2909 passed / 62 skipped）· 190 文件、前端 494 项 / 57 文件、eslint **0 error / 0 warn**
+> **门禁口径**：后端 2976 项（2914 passed / 62 skipped）· 190 文件、前端 494 项 / 57 文件、eslint **0 error / 0 warn**
 > （25 条回归已按 P1-27 清零；仅 notification-drawer 保留 1 处带理由的 C 类豁免）。
 > ⚠️ **「文件数」有两个口径，混用会造出假缺口**（2026-09-14 实测）：`ls tests/*.py` 与
 > `pytest --collect-only` 的「有测试的文件数」**不等**——本仓恒差 2（存在 2 个 0 用例的测试文件）。
@@ -170,6 +170,29 @@ lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=
 > （4 条语义 + 2 条防漂移：策略符号只许出现在 2 个策略文件、调用点不得自带 `&&` 门控）
 > + `lib/format.test.ts` 4（`shouldShowQualityBadge` 单点策略）。全绿含 `--maxWorkers=1` 与 `TZ=UTC` 复跑。
 > ⚠️ **文件数口径再提醒**：本轮 `ls tests/*.py` = **192**、`--collect-only` = **190**（本仓恒差 2）。
+>
+> ✅ **自洽核对（2026-09-14 数据目录盘点轮）**：后端 2971 / 190 → **2976 / 190** ⇒ 差 **+5 项 / +0 文件**
+> = 2（`test_data_path_isolation.py` · CWD 相对路径扫描 + **判据自证**）+ 3（`test_heat_history.py` ·
+> skyrocket **读写同源往返** + 缺失**披露**（成对）+ 读侧**不得自持路径常量**（结构））。终态实测
+> **2914 passed / 62 skipped / 0 failed（2976 项 / 190 文件，161.05s，前提 8000 在跑）**；
+> **前端本轮零改动**，`TZ=UTC` + `--maxWorkers=1` 复跑仍 **494 / 57**（"某一侧不变"同样是可核对项）。
+>
+> ⚠️ **本轮的两个静默缺陷都是"注入验证 + 逐定义判定"抓出来的**（详见 `docs/kb/09` KB-ENG-82）：
+> ① **读写分叉**——同一路径写两处、锚定方式不同（写侧 `REPO_ROOT` 落**仓库根**、读侧裸相对落 `backend/data`）
+> ⇒ 读侧缺文件**静默返回 `{}`** ⇒ `W_SPIKE`（20/100）恒 0 无标记；实测 0/83 → 83/83。
+> ② **判据按"名字"全局汇总 ⇒ 同名互相豁免**——新守卫第一版把"是否锚定"收敛成全仓**名字集合**，
+> 于是"对的那份"给"错的那份"背书；**注入验证时它仍全绿**才暴露（[[KB-ENG-72]] 标准形态）⇒ 改**逐定义**（键 `<文件>:<常量名>`）。
+>
+> 📌 **数据目录边界（2026-09-14 裁定，报告：`.workbuddy/reports/data-dir-inventory-20260914.{md,html}`）**：
+> 本仓**两套数据根并存且都在被实时写入**，二者都合法，但**分工必须显式遵守**——
+> | 根 | 锚定写法 | 放什么 |
+> |---|---|---|
+> | `<repo>/data/` | `REPO_ROOT / "data" / …`（`parents[3]`） | **主库 `ashare.db`**、`parquet/`、`picks/heat`、`picks/shadow`、`review/predictions` |
+> | `<repo>/backend/data/` | `Path(__file__).resolve().parents[2] / "data" / …` | `marketdb/`、`boardflow/`、`fundflow/`、`factors/`、`minute_decisions/`、`position_plans/`、`research/`、`theme_momentum/`、`trade_calendar.json` 等 |
+>
+> **硬规则**：①**新增数据路径禁止裸相对 `Path("data/…")`**（解析基准是进程 CWD，`uvicorn`/`pytest`/容器/systemd 各不同，且两侧都不报错）——守卫 `test_no_cwd_dependent_data_paths_in_app` 判红；
+> ②**一条路径只允许定义一次**，读侧**调用时**取写侧模块属性，不得复制路径；③缺数据必须**显式披露**，空 `{}` 不得冒充"确实为 0"。
+> （统一到单一根属**架构变更**，已评估为高迁移风险，**未执行**——需要时单独排期、非交易日做。）
 
 **发布前额外做一次接口载荷体检**（plan-review 三.7，2026-09-01 纳入）：
 `node scripts/api-sweep.js`（服务在跑时）——它能抓出"HTTP 200 但数据是空的"这类

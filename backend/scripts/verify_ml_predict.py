@@ -57,7 +57,11 @@ def build_features(start: str, *, use_cache: bool = True) -> pd.DataFrame:
       AND nb1_high IS NOT NULL AND nb1_low IS NOT NULL AND nb1_high > nb1_low
       AND date_ms >= CAST(? AS BIGINT)
     """
-    cache = Path("data/cache") / f"ml_features_{start.replace('-', '')}.parquet"
+    # ⚠️ 绝对锚定（2026-09-14，KB 读写分叉同族）：原先 `Path("data/cache")` 按**进程 CWD**
+    # 解析——从仓库根跑就落 `data/cache`，从 backend/ 跑才落 `backend/data/cache`。
+    # 实测缓存文件在 `backend/data/cache/ml_features_20160101.parquet`，
+    # 故与同文件 `MARKETDB`（`parents[1]/"data"`）同锚点。
+    cache = Path(__file__).resolve().parents[1] / "data" / "cache" / f"ml_features_{start.replace('-', '')}.parquet"
     if use_cache and cache.exists():
         print(f"  命中特征缓存 {cache}")
         return pd.read_parquet(cache)
