@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import contextlib
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -258,7 +260,106 @@ def test_freshness_reason_distinguishes_rate_limit():
     assert "限流" in (limited.reason or "")
 
 
-# ---------------------------------------------------------------- ③ 成因披露
+# ---------------------------------------------------------------- ③ 冷启动首轮错峰（OPS-001）
+
+#: 为什么钉「延迟」而不是「轮内降速」（2026-09-14 实测，见 kb/03 KB-ENG-83 补记）：
+#: 探针 `concurrency=1 + 批间隔 0.15s`（≈2.7 请求/秒）在**第 32 页**被封，而生产
+#: 全速那轮（`concurrency=6`、无间隔，≈10+ 请求/秒）成功 ⇒ **慢的反而先被封**
+#: ⇒ 判据不是瞬时速率，而是**时间窗内的累计请求数**。该模型下轮内降速无效。
+
+
+def test_run_postpones_first_refresh_by_first_delay(monkeypatch):
+    """`first_delay > 0`：首轮**整体推后**，且**只在首轮**等一次。
+
+    后半句是防「把 sleep 错放进 while 里」——那样每轮都等，轮询节奏被永久拖慢，
+    而首轮错峰的目标只有一次。两件事共用一个参数，最容易在这里写错。
+    """
+    s = _svc()
+    stamps: list[float] = []
+    t0 = time.monotonic()
+
+    async def _fake_refresh():
+        stamps.append(time.monotonic() - t0)
+
+    monkeypatch.setattr(s, "refresh", _fake_refresh)
+    # 让循环快速转：否则默认休市要等 IDLE_INTERVAL_SECONDS(240s)，测不到第二轮
+    monkeypatch.setattr(s, "_next_delay", lambda *, live: 0.05)
+
+    async def _main():
+        task = asyncio.create_task(s.run(first_delay=0.3))
+        await asyncio.sleep(0.15)
+        assert stamps == [], f"首轮应仍在延迟中，实际已抓：{stamps}"
+        await asyncio.sleep(0.75)  # 越过 0.3s 延迟 + 若干轮
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    asyncio.run(_main())
+
+    assert stamps, "延迟结束后仍未抓取"
+    assert stamps[0] >= 0.28, f"首轮提前于 first_delay 执行：{stamps[0]:.3f}s"
+    gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+    assert len(gaps) >= 1, f"未观察到第二轮，测不出「只延迟一次」：{stamps}"
+    assert all(g < 0.2 for g in gaps), f"延迟被放进循环（每轮都等）：间隔 {gaps}"
+
+
+def test_run_without_first_delay_refreshes_immediately(monkeypatch):
+    """成对判据：默认 `0.0` = **既有行为不变**（既有调用方与测试不受影响）。"""
+    s = _svc()
+    stamps: list[float] = []
+    t0 = time.monotonic()
+
+    async def _fake_refresh():
+        stamps.append(time.monotonic() - t0)
+
+    monkeypatch.setattr(s, "refresh", _fake_refresh)
+    monkeypatch.setattr(s, "_next_delay", lambda *, live: 0.05)
+
+    async def _main():
+        task = asyncio.create_task(s.run())
+        await asyncio.sleep(0.2)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    asyncio.run(_main())
+    assert stamps, "默认未抓取"
+    assert stamps[0] < 0.1, f"默认应立即抓取，实际首轮在 {stamps[0]:.3f}s"
+
+
+def test_main_wires_cold_start_delay_into_snapshot_task():
+    """**装配层结构臂**（逐字比对，最高优先级；见 [[KB-ENG-87]]）。
+
+    `run()` 新增了 `first_delay`，但 `main.py` 若没把它接上，**功能等于不存在** ——
+    而上面两条 `run()` 行为用例**仍然全绿**（[[KB-ENG-65]]「判据失效却全绿」同族）。
+    这类空洞只有静态钉得住。
+    """
+    from app import main as main_mod
+
+    tree = ast.parse(Path(main_mod.__file__).read_text(encoding="utf-8"))
+    call = None
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        if not (isinstance(fn, ast.Attribute) and fn.attr == "add"):
+            continue
+        if node.args and isinstance(node.args[0], ast.Constant) \
+                and node.args[0].value == "market-snapshot":
+            call = node
+            break
+
+    assert call is not None, "main.py 未登记 market-snapshot 任务（改名了？）"
+    unparsed = ast.unparse(call)
+    assert "first_delay" in unparsed, (
+        f"market-snapshot 任务未传 first_delay ⇒ 冷启动错峰未接线：{unparsed}"
+    )
+    assert main_mod.COLD_START_SNAPSHOT_DELAY_SECONDS > 0, (
+        "COLD_START_SNAPSHOT_DELAY_SECONDS 非正数 ⇒ 错峰等于没做"
+    )
+
+
+# ---------------------------------------------------------------- ④ 成因披露
 
 _AMOUNT = 1.2345e11
 

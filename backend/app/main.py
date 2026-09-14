@@ -75,6 +75,19 @@ _REGISTERED_MODELS = (
 logging.basicConfig(level=settings.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
 
+#: 冷启动时 `market-snapshot` 首轮延迟秒数（`OPS-001`，2026-09-14）。
+#:
+#: `reg.start()` 会**同时**拉起全部常驻任务，其首批 tick 与紧随的 `hub.refresh()`
+#: （本文件下方的 lifespan）叠加，把新浪的「时间窗累计请求数」配额一次性打满 ⇒
+#: `market-snapshot` 的**首个请求**即返回 456（事故原文见 `docs/kb/03-engineering.md`
+#: KB-ENG-83；实测封禁窗口约 7.4 分钟）。
+#:
+#: 幅度依据（**非直觉**）：本任务单独跑已被长期验证安全（休市 240s / 盘中 60s 一轮
+#: 57 个请求，多轮稳定成功），故只需推后到突发窗口之后。取值 60s 与**盘中轮询间隔**
+#: 同量级，且与仓内既有错峰先例一致（`event-collector` 的 `first_delay=45.0`）。
+#: 该项首次冷启动实测的观测数据见账本 §6.7-C3。
+COLD_START_SNAPSHOT_DELAY_SECONDS = 60.0
+
 
 def _session_interval(active: float, idle: float) -> float:
     """盘中用 `active`、盘外用 `idle`——给"盘外不必 5s 空转"的调度器用（P2-9/P1-3）。"""
@@ -263,7 +276,12 @@ async def lifespan(app: FastAPI):
     )
 
     reg.add("quote-poller", hub.run)
-    reg.add("market-snapshot", snapshot_service.run)
+    # 首轮错峰（`OPS-001`）：避免与上述任务的首批 tick / 后文 `hub.refresh()` 叠加
+    # 打满上游配额 —— 判据与幅度依据见 `COLD_START_SNAPSHOT_DELAY_SECONDS` 注释。
+    reg.add(
+        "market-snapshot",
+        lambda: snapshot_service.run(first_delay=COLD_START_SNAPSHOT_DELAY_SECONDS),
+    )
 
     # 数据健康哨兵盘中循环（push_policy ② ANOMALY：交易时段 15 分钟一轮，
     # 新异常推飞书摘要卡——2026-09-08 推送矩阵）

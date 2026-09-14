@@ -104,7 +104,28 @@ class MarketSnapshotService:
         except Exception:
             log.exception("parquet save failed")
 
-    async def run(self) -> None:
+    async def run(self, *, first_delay: float = 0.0) -> None:
+        """常驻轮询循环。
+
+        **首轮错峰（`OPS-001`，2026-09-14）**：`first_delay > 0` 时，**首轮之前**等一次
+        （默认 `0.0` = 保持既有行为，既有调用方与测试不受影响）。
+
+        为什么是「**延迟**」而不是「**轮内降速**」——后者已被两次实测否定：
+
+        1. **事故当轮的首个请求就 456**（`stock count`，见 `RATE_LIMIT_STATUS` 注释）
+           ⇒ 轮内手段在结构上救不了首请求；
+        2. **慢的反而先被封**：探针 `concurrency=1 + 批间隔 0.15s`（≈2.7 请求/秒）
+           在**第 32 页**被封，而生产全速那轮（`concurrency=6`、无间隔，≈10+ 请求/秒）
+           成功 ⇒ 判据**不是瞬时速率**，而是**时间窗内的累计请求数**。
+
+        该模型下延迟是唯一有效手段：本任务单独跑（生产常态，休市 240s / 盘中 60s
+        一轮 57 个请求）**已被长期验证安全**，问题只在启动瞬间与
+        「26 个常驻任务首批 tick + `hub.refresh()`」**叠加**把窗口配额打满。
+        故只需把首轮整体推后到突发窗口之后，**不必降低自身速率**。
+        """
+        if first_delay > 0:
+            log.info("market snapshot 首轮延迟 %.0fs 启动（OPS-001 冷启动错峰）", first_delay)
+            await asyncio.sleep(first_delay)
         while True:
             # 时段感知降频（评审 O6，2026-09-01）：休市时段全市场数据静止
             # （昨收），仍 60s×56 页拉新浪纯属浪费且有被 WAF 限流风险
