@@ -116,7 +116,11 @@ A_PARKED: tuple[CandidateDef, ...] = (
         "MFI（资金流量，用 turnover 代理 tp×vol）/OBV 归一/ADX/CCI/PPO/SAR/WILLR/STOCHRSI 等 TA-Lib 25 指标",
         "multi", "A", "", "RSI≈sump20；ADX/CCI 需窗口实现",
         "parked",
-        "P1 逐个转正；MFI/OBV 优先（资金流向语义，与 fund_flow 数据互验）",
+        "P1 逐个转正；MFI/OBV 优先（资金流向语义，与 fund_flow 数据互验）"
+        "——【2026-09-14 部分转正】mfi20 / obv20 已入库（FACTORS 38→40）并实测 PASS"
+        "（IC −0.046 / −0.042，ICIR −0.40 / −0.39，覆盖 99.1%）；"
+        "⚠️ 但两者与既有 sump20 实测 IC 相关 0.96 / 0.95（彼此 0.97）⇒ 族内冗余、不重复计权；"
+        "**余 23 项（ADX/CCI/PPO/SAR/WILLR/STOCHRSI 等）仍 parked**，须逐个转正（账本 §6.0 `RSH-003` 保持开放）",
     ),
     CandidateDef(
         "ta-lib-cdl-patterns", "myhhub://instock/core/pattern/pattern_recognitions.py",

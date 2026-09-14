@@ -830,3 +830,270 @@ def test_additivity_guard_can_actually_fail(db, monkeypatch):
     monkeypatch.setattr(ev, "_base_cte", _perturbed)
     dirty = ev.evaluate_factor(con, FACTOR_BY_NAME["mom20"], market_daily)
     assert dirty["windows"] != clean["windows"], "共享列被改动却毫无差异 ⇒ 上面那条同源比对是空断言"
+
+
+# ---------------------------------------------------------------- RSH-003：MFI20 / OBV20（TA-Lib 逐个转正）
+MFI_OBV_W = 20
+MFI_OBV_DATES = 30
+
+
+def _mk_mfi_obv_db(tmp_path):
+    """MFI20 / OBV20 专用小仓（30 交易日；窗口 20 行、`min_bars` 22）。
+
+    **夹具的关键构造**：令 `high = close×1.02`、`low = close×0.98`、`close = close`，
+    则 `(H+L+C)/3 ≡ close_price` ⇒ 复权典型价 **`tp_adj ≡ close_adj`**。
+    于是期望值可直接从 `close_adj` 手算，无需在测试里把生产公式再实现一遍
+    ——后者会造出「两处都错得一样」也能全绿的假护栏（同源恒等式纪律）。
+
+    六形态（每只票独立走一条路径）：
+    - `up`    每日 +1% 单调上行 → OBV = **+1**；MFI = **100**（负流出为 0 的极限）
+    - `dn`    对称下行           → OBV = **−1**；MFI = **0**
+    - `flat`  全程持平           → OBV = **0**；MFI **必须 NULL**（无方向 ≠ 中性 50）
+    - `mix`   涨跌交替           → 无解析解，交由朴素参考逐点判定
+    - `null`  前两日 `close_adj` 缺失 → 早期窗口有效样本 <20 ⇒ NULL（三态）
+    - `exdiv` **除权形态（本条最关键）**：第 10 日 10 送 10，原始价 20.9 → 10.45，复权价连续。
+      **复权口径下方向仍单调上行 ⇒ MFI = 100**；若照抄 TA-Lib 的原价 TP，
+      该日会被读成巨量流出 ⇒ MFI 明显 < 100。该形态钉死 note 声明的口径①。
+
+    返回 `(con, series)`；`series[code] = (close_adj, volume, turnover)`，
+    均为该股按日期升序的序列，供朴素参考独立复算（与生产 SQL 共用同一份输入）。
+    """
+    dates = _days(MFI_OBV_DATES)
+    n = MFI_OBV_DATES
+    vol = 1_000_000
+    paths: dict[str, list[tuple[float, float | None]]] = {
+        "up": [(v, v) for v in (10 * (1 + 0.01 * i) for i in range(n))],
+        "dn": [(v, v) for v in (10 * (1 - 0.005 * i) for i in range(n))],
+        "flat": [(10.0, 10.0)] * n,
+        "mix": [(11.0 if i % 2 else 10.0, 11.0 if i % 2 else 10.0) for i in range(n)],
+        "null": [(10.0 + (i % 5), None if i < 2 else 10.0 + (i % 5)) for i in range(n)],
+    }
+    # exdiv：除权前 20.9 基准；第 10 日起原始价减半（10 送 10）、复权价**连续**
+    base = 20.0 * (1 + 0.005 * 9)
+    paths["exdiv"] = [
+        ((20.0 * (1 + 0.005 * i)), (20.0 * (1 + 0.005 * i))) if i < 10
+        else (base / 2 * (1 + 0.005 * (i - 9)), base * (1 + 0.005 * (i - 9)))
+        for i in range(n)
+    ]
+
+    rows_k, rows_adj = [], []
+    series: dict[str, tuple[list, list, list]] = {}
+    for code, path in paths.items():
+        ca_seq, tn_seq = [], []
+        for i, (cp, ca) in enumerate(path):
+            rows_k.append((code, dates[i], cp * 0.99, cp * 1.02, cp * 0.98, cp, vol, cp * vol))
+            rows_adj.append((code, dates[i], ca))
+            ca_seq.append(ca)
+            tn_seq.append(cp * vol)
+        series[code] = (ca_seq, [vol] * n, tn_seq)
+
+    con = duckdb.connect(str(tmp_path / "mfi_obv.duckdb"))
+    con.execute(
+        "CREATE TABLE daily_k (thscode VARCHAR, date_ms BIGINT, open_price DOUBLE,"
+        " high_price DOUBLE, low_price DOUBLE, close_price DOUBLE, volume BIGINT, turnover DOUBLE)"
+    )
+    con.execute("CREATE TABLE daily_k_adj (thscode VARCHAR, date_ms BIGINT, close_adj DOUBLE)")
+    con.executemany("INSERT INTO daily_k VALUES (?,?,?,?,?,?,?,?)", rows_k)
+    con.executemany("INSERT INTO daily_k_adj VALUES (?,?,?)", rows_adj)
+    return con, series
+
+
+def _mfi_obv_rows(con) -> dict[str, list[tuple[int, int, float | None, int, float | None]]]:
+    """用**生产** `_base_cte` 取 `(date_ms, mfi20_n, mfi20_w, obv20_n, obv20_w)`。
+
+    刻意经 `ev._base_cte` 间接取（而不是文件顶部 import 的 `_base_cte`）——
+    这样下面那条**注入自证**用例 `monkeypatch` 才落得到实处。
+    """
+    import app.factors.evaluate as ev
+
+    sql = ev._base_cte(FACTOR_BY_NAME["mfi20"]) + (
+        "\nSELECT thscode, date_ms, mfi20_n, mfi20_w, obv20_n, obv20_w"
+        " FROM lvl4 ORDER BY thscode, date_ms"
+    )
+    out: dict[str, list[tuple[int, int, float | None, int, float | None]]] = {}
+    for code, ts, mn, mv, on, ov in con.execute(sql).fetchall():
+        out.setdefault(code, []).append((ts, mn, mv, on, ov))
+    return out
+
+
+def _naive_mfi20(tp: list[float | None], turnover: list[float | None]) -> list[float | None]:
+    """朴素参考（独立于 SQL）：20 行窗口内 `TP_adj` 上升/下降日的**额**之和。
+
+    逐条对齐 `evaluate.py::lvl4.mfi20_w`：窗口按该股**自身行序**取最近 20 行（含当前行）；
+    前值取 `tp[j-1]`（与 SQL `LAG` 同义）；有效样本 <20 或 `正+负 = 0` → None；
+    `负 = 0 且 正 > 0` → 100.0（极限，不是缺失）。
+    """
+    out: list[float | None] = []
+    for i in range(len(tp)):
+        idx = range(max(0, i - MFI_OBV_W + 1), i + 1)
+        pos = neg = 0.0
+        n = 0
+        for j in idx:
+            a, prev, t = tp[j], (tp[j - 1] if j > 0 else None), turnover[j]
+            if a is None or prev is None or t is None:
+                continue
+            n += 1
+            if a > prev:
+                pos += a * t
+            elif a < prev:
+                neg += a * t
+        if n < MFI_OBV_W or pos + neg <= 0:
+            out.append(None)
+        else:
+            out.append(100.0 if neg == 0 else 100.0 - 100.0 / (1.0 + pos / neg))
+    return out
+
+
+def _naive_obv20(ca: list[float | None], volume: list[int | None]) -> list[float | None]:
+    """朴素参考（独立于 SQL）：20 行窗口内 `Σ sign(Δclose_adj)·volume / Σ volume`。
+
+    分子分母**样本面一致**（都要求 `close_adj` / 前值 / `volume` 三者非 NULL）——
+    与生产 SQL 同步收严过；有效样本 <20 或分母 ≤0 → None。
+    """
+    out: list[float | None] = []
+    for i in range(len(ca)):
+        idx = range(max(0, i - MFI_OBV_W + 1), i + 1)
+        num = den = 0.0
+        n = 0
+        for j in idx:
+            a, prev, v = ca[j], (ca[j - 1] if j > 0 else None), volume[j]
+            if a is None or prev is None or v is None:
+                continue
+            n += 1
+            den += v
+            if a > prev:
+                num += v
+            elif a < prev:
+                num -= v
+        out.append(None if (n < MFI_OBV_W or den <= 0) else num / den)
+    return out
+
+
+def test_mfi_obv_match_naive_reference(tmp_path):
+    """RSH-003 **主判据（同源）**：生产 `_base_cte` 与独立朴素参考逐点一致。
+
+    有方向信息的四形态（up / dn / mix / exdiv）逐点比对并附**防空断言**；
+    `flat` 形态**本来就没有方向**，其 MFI 参考侧必须**全 NULL**——单独断言，
+    而不是从循环里悄悄跳过（跳过等于把「该为空」这一事实也变成无人核对的区域）。
+    """
+    con, series = _mk_mfi_obv_db(tmp_path)
+    try:
+        got = _mfi_obv_rows(con)
+        for code in ("up", "dn", "mix", "exdiv"):
+            ca, vol, tn = series[code]
+            exp_mfi, exp_obv = _naive_mfi20(ca, tn), _naive_obv20(ca, vol)
+            # 防空断言：参考实现本身必须产出足量非 NULL，否则"逐点一致"可能是两个空集
+            assert sum(v is not None for v in exp_mfi) >= 5, f"{code}: MFI 参考全空，用例失效"
+            assert sum(v is not None for v in exp_obv) >= 5, f"{code}: OBV 参考全空，用例失效"
+            for k, (_, _, mv, _, ov) in enumerate(got[code]):
+                if exp_mfi[k] is None:
+                    assert mv is None, f"{code}[{k}] MFI 应 NULL，实得 {mv}"
+                else:
+                    assert mv is not None and abs(mv - exp_mfi[k]) < 1e-9, \
+                        f"{code}[{k}] MFI {mv} != {exp_mfi[k]}"
+                if exp_obv[k] is None:
+                    assert ov is None, f"{code}[{k}] OBV 应 NULL，实得 {ov}"
+                else:
+                    assert ov is not None and abs(ov - exp_obv[k]) < 1e-12, \
+                        f"{code}[{k}] OBV {ov} != {exp_obv[k]}"
+
+        # flat：MFI 两侧都应全 NULL（无方向）；OBV 分子恒 0、分母有效 ⇒ 应为 0.0，不是 NULL
+        ca, vol, tn = series["flat"]
+        assert all(v is None for v in _naive_mfi20(ca, tn)), "持平形态 MFI 参考应为全 NULL"
+        exp_obv = _naive_obv20(ca, vol)
+        assert any(v is not None for v in exp_obv), "持平形态 OBV 参考不应全空（分母有效）"
+        for k, (_, _, mv, _, ov) in enumerate(got["flat"]):
+            assert mv is None, f"flat[{k}] MFI 应为 NULL，实得 {mv}"
+            if exp_obv[k] is None:
+                assert ov is None, f"flat[{k}] OBV 应 NULL，实得 {ov}"
+            else:
+                assert ov is not None and abs(ov - exp_obv[k]) < 1e-12, \
+                    f"flat[{k}] OBV {ov} != {exp_obv[k]}"
+    finally:
+        con.close()
+
+
+def test_mfi_obv_three_state_extremes_and_gaps(tmp_path):
+    """三态判据（三条，**不可混为一谈**）：
+
+    ① 单调全流入 ⇒ MFI = **100**、OBV = **+1** —— 这是**真实的极端读数**，必须保留；
+       若用 `NULLIF(负流, 0)` 图省事，会把「最强」塌成「未判定」而丢掉全部极值样本。
+    ② 全程持平 ⇒ MFI **NULL**（无方向信息）；此处输出 50.0 就是**凭空的凑数值**
+       （三态纪律禁止「缺数当中间值」），而 OBV 是 0.0（分子恒 0、分母有效 ⇒ 真实为 0）。
+    ③ 窗口含缺失 ⇒ NULL，且**缺失不传染**（`null` 形态后段恢复出值）。
+    """
+    con, series = _mk_mfi_obv_db(tmp_path)
+    try:
+        got = _mfi_obv_rows(con)
+        up = got["up"]
+        assert up[-1][2] == pytest.approx(100.0), f"单调上行 MFI 应为 100，实得 {up[-1][2]}"
+        assert up[-1][4] == pytest.approx(1.0), f"单调上行 OBV 应为 +1，实得 {up[-1][4]}"
+        dn = got["dn"]
+        assert dn[-1][2] == pytest.approx(0.0), f"单调下行 MFI 应为 0，实得 {dn[-1][2]}"
+        assert dn[-1][4] == pytest.approx(-1.0), f"单调下行 OBV 应为 −1，实得 {dn[-1][4]}"
+
+        flat = got["flat"]
+        assert flat[-1][2] is None, f"全程持平 MFI 必须 NULL（不是 50），实得 {flat[-1][2]}"
+        assert flat[-1][4] == pytest.approx(0.0), f"全程持平 OBV 应为 0，实得 {flat[-1][4]}"
+
+        null_rows = got["null"]
+        assert null_rows[MFI_OBV_W][2] is None, "窗口落在缺失段内时必须 NULL"
+        assert null_rows[MFI_OBV_W][4] is None, "窗口落在缺失段内时必须 NULL"
+        tail = [r for r in null_rows if r[2] is not None]
+        assert tail, "缺失段滑出窗口后必须恢复出值（缺失不传染）"
+    finally:
+        con.close()
+
+
+def test_mfi_exdiv_uses_adjusted_typical_price(tmp_path):
+    """**除权口径钉死**（library.py note 声明的口径①，本用例是其唯一判别器）。
+
+    第 10 日 10 送 10：原始价 20.9 → 10.45，而复权价连续。若 TP 走复权，
+    方向始终单调上行 ⇒ MFI = 100；若照抄 TA-Lib 的**原价** TP，该日会被读成
+    巨量流出 ⇒ MFI 显著 < 100。**A 股每半年一次的分红送转季都会踩这个坑**，
+    不是罕见边界。
+    """
+    con, series = _mk_mfi_obv_db(tmp_path)
+    try:
+        rows = _mfi_obv_rows(con)["exdiv"]
+        assert rows[-1][2] == pytest.approx(100.0), (
+            f"除权日被误读为资金流出 ⇒ TP 未复权（MFI={rows[-1][2]}）"
+        )
+        assert rows[-1][4] == pytest.approx(1.0), f"复权价单调上行，OBV 应为 +1（实得 {rows[-1][4]}）"
+        ca, _, _ = series["exdiv"]
+        assert ca[9] < ca[10], "夹具自身失效：复权价未保持连续"
+    finally:
+        con.close()
+
+
+def test_mfi_exdiv_guard_can_actually_fail(tmp_path, monkeypatch):
+    """**判据自证**：把 `tp_adj` 的复权因子去掉（退回 TA-Lib 原价口径），除权日的假流出必须显形。
+
+    没有这条，上面那条用例可能只是「断言了一个恒真式」而永远全绿（KB-ENG-65：
+    **守卫必须能变红**，且必须是改真实行为，加注释充数不算）。
+    """
+    import app.factors.evaluate as ev
+
+    con, _ = _mk_mfi_obv_db(tmp_path)
+    try:
+        clean = _mfi_obv_rows(con)["exdiv"][-1][2]
+        orig = ev._base_cte
+
+        def _unadjusted(factor):
+            sql = orig(factor)
+            patched = sql.replace(
+                "(high_price + low_price + close_price) / 3.0\n"
+                "               * (close_adj / NULLIF(close_price, 0)) AS tp_adj",
+                "(high_price + low_price + close_price) / 3.0 AS tp_adj",
+            )
+            assert patched != sql, "注入未生效：tp_adj 写法已变，须同步本用例"
+            return patched
+
+        monkeypatch.setattr(ev, "_base_cte", _unadjusted)
+        dirty = _mfi_obv_rows(con)["exdiv"][-1][2]
+        assert clean == pytest.approx(100.0)
+        assert dirty is not None and dirty < 99.0, (
+            f"未复权口径下除权日未产生假流出 ⇒ 上面那条口径钳制是空断言（实得 {dirty}）"
+        )
+    finally:
+        con.close()

@@ -150,7 +150,13 @@ lvl1 AS (
            LEAD(high_price, 1) OVER w AS nb1_high,
            LEAD(low_price, 1)  OVER w AS nb1_low,
            COUNT(*) OVER (PARTITION BY thscode ORDER BY date_ms
-                          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cnt
+                          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cnt,
+           -- RSH-003（2026-09-14）MFI 的**复权**典型价 TP_adj = ((H+L+C)/3) × (close_adj/close_price)。
+           -- 为什么必须复权（而非照抄 TA-Lib 的原价 TP）：除权日原始价腰斩，未复权 TP 会把
+           -- 「10 送 10」误读成**巨额资金流出**（单日 −50% 的负向冲击）并污染随后 20 日的 MFI。
+           -- 乘上复权因子后 TP_adj 在除权处**连续**（原始价 ÷2 与复权因子 ×2 相消）。
+           (high_price + low_price + close_price) / 3.0
+               * (close_adj / NULLIF(close_price, 0)) AS tp_adj
     FROM k
     WINDOW w AS (PARTITION BY thscode ORDER BY date_ms)
 ),
@@ -165,7 +171,10 @@ lvl2 AS (
              ELSE greatest(high_price - low_price,
                            abs(high_price - pc1_raw),
                            abs(low_price - pc1_raw))
-           END AS tr_f
+           END AS tr_f,
+           -- RSH-003：MFI 需要 TP_adj 的**前值**判方向（>前值=流入日 / <前值=流出日）。
+           -- 放在 lvl2 而非 lvl1：TP_adj 在 lvl1 刚生成，**同层 SELECT 不能引用自己的别名**。
+           LAG(tp_adj) OVER (PARTITION BY thscode ORDER BY date_ms) AS tp_adj_1
     FROM lvl1
 ),
 lvl3 AS (
@@ -206,7 +215,27 @@ lvl3 AS (
            SUM(CASE WHEN volume > vol1 THEN volume - vol1 ELSE 0.0 END) OVER r20c AS vol_pos20,
            SUM(CASE WHEN volume < vol1 THEN vol1 - volume ELSE 0.0 END) OVER r20c AS vol_neg20,
            AVG(tr_f) OVER r14c AS atr14_raw,
-           COUNT(tr_f) OVER r14c AS atr14_n
+           COUNT(tr_f) OVER r14c AS atr14_n,
+           -- RSH-003（2026-09-14）：MFI20 —— 正/负资金流（TP_adj 方向 × **成交额**）。
+           -- 用 `turnover`（额）而非 `volume`（股数），以便与 `fund_flow` 的资金流口径互验。
+           -- 这与 TA-Lib 原式（用股数）是**有意的口径差异**，已写入 library.py 的 note。
+           SUM(CASE WHEN tp_adj > tp_adj_1 THEN tp_adj * turnover ELSE 0.0 END)
+               OVER r20c AS mfi_pos20,
+           SUM(CASE WHEN tp_adj < tp_adj_1 THEN tp_adj * turnover ELSE 0.0 END)
+               OVER r20c AS mfi_neg20,
+           COUNT(CASE WHEN tp_adj IS NOT NULL AND tp_adj_1 IS NOT NULL
+                           AND turnover IS NOT NULL THEN 1 END) OVER r20c AS mfi20_n,
+           -- RSH-003：OBV20 —— 按**价格方向**加权的成交量净额，及其分母与有效样本数。
+           -- 与 `vsumd20` 对偶但判据不同：后者的方向取自 volume vs 前一日量，此处取自 close_adj vs c1。
+           -- 分子分母的样本面**必须严格一致**（都要求 close_adj / c1 / volume 三者非 NULL）：
+           -- 否则「方向不可判」的行会只进分母不进分子，把占比系统性地压低。
+           SUM(CASE WHEN close_adj > c1 THEN volume
+                    WHEN close_adj < c1 THEN -volume
+                    ELSE 0.0 END) OVER r20c AS obv20_num,
+           SUM(CASE WHEN close_adj IS NOT NULL AND c1 IS NOT NULL AND volume IS NOT NULL
+                    THEN volume ELSE 0.0 END) OVER r20c AS obv20_den,
+           COUNT(CASE WHEN close_adj IS NOT NULL AND c1 IS NOT NULL AND volume IS NOT NULL
+                      THEN 1 END) OVER r20c AS obv20_n
     FROM lvl2
     WINDOW r20c AS (PARTITION BY thscode ORDER BY date_ms
                     ROWS BETWEEN 19 PRECEDING AND CURRENT ROW),
@@ -230,7 +259,23 @@ lvl4 AS (
            --      会输出 0.0（"最弱"）而非「未判定」——把缺数误读成极端值。
            -- 窗口有效样本 <20 → NULL（与 vola20/amihud20/std20 同口径，不凑 0）。
            CASE WHEN w20_n >= 20 AND close_adj IS NOT NULL
-                THEN (rank20_lt + rank20_le + 1) / (2.0 * w20_n) END AS rank20_w
+                THEN (rank20_lt + rank20_le + 1) / (2.0 * w20_n) END AS rank20_w,
+           -- RSH-003（2026-09-14）TA-Lib MFI20 = 100 − 100/(1 + 正资金流/负资金流)。
+           -- 三态守卫两条（均不可省）：
+           --   ① 窗口有效样本 <20 → NULL（与 vola20/amihud20/rank20 同口径，不凑 0）；
+           --   ② `正 + 负 = 0`（20 日 TP_adj 全程持平）⇒ **无方向信息** ⇒ NULL。
+           --      此处若输出 50.0 就是凭空的「中性值」，属凑数（三态纪律禁止）。
+           -- `负 = 0` 且 `正 > 0` **不是**缺失：数学上 MFI 的极限就是 100（全程净流入），
+           -- 显式写出以免 `NULLIF` 把这个**真实的极端读数**塌成 NULL。
+           CASE WHEN mfi20_n >= 20 AND (mfi_pos20 + mfi_neg20) > 0
+                THEN CASE WHEN mfi_neg20 = 0 THEN 100.0
+                          ELSE 100.0 - 100.0 / (1.0 + mfi_pos20 / mfi_neg20) END
+           END AS mfi20_w,
+           -- RSH-003 OBV20 归一化：净额 / 总量 ∈ [-1, 1]。
+           -- 取**占比**而非累积值：累积 OBV 是路径依赖量（依赖起点选取），跨股票不可比。
+           -- 该窗口定义与 `vsumd20` 同形，但方向判据是**价格**（close_adj vs c1）。
+           CASE WHEN obv20_n >= 20 AND obv20_den > 0
+                THEN obv20_num / obv20_den END AS obv20_w
     FROM lvl3
 )"""
 

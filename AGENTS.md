@@ -30,7 +30,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 3070 项（3008 passed / 62 skipped）· collect 196 文件（09-14 §6.33 全量实测，0 failed）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 3074 项（3012 passed / 62 skipped）· collect 196 文件（09-14 §6.34 全量实测，0 failed）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。
@@ -62,12 +62,13 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 3070 项（3008 passed / 62 skipped）· collect 196 文件（`ls` 口径 198，恒差 2）、
+> **门禁口径**：后端 3074 项（3012 passed / 62 skipped）· collect 196 文件（`ls` 口径 198，恒差 2）、
 > 前端 502 项 / 57 文件、eslint **0 error / 0 warn**
-> （2026-09-14 §6.33 实测；较上一值 3067（§6.32）增量 **+3 项 / +0 文件 / ±0**，
-> 来源自洽：后端 = 3（`test_snapshot_availability.py` 新增的 `OPS-001` 首轮错峰三守卫：
-> 行为 2 + **装配层结构臂 1**）；
-> 前端本轮**零改动** ⇒ 502 / 57 逐字不变——**"某一侧不变"同样是可核对的自洽项**）
+> （2026-09-14 §6.34 实测；较上一值 3070（§6.33）增量 **+4 项 / +0 文件 / ±0**，
+> 来源自洽：后端 = 4（`tests/test_factors.py` 新增的 `RSH-003` MFI/OBV 四用例：
+> 朴素参考逐点比对 + 三态极值与缺口 + 除权口径 + **判据自证**），
+> **实测 3012 passed / 62 skipped、157.52s（前提 8000 在跑）**，与记录值逐字一致；
+> 前端本轮**零改动** ⇒ 502 / 57 逐字不变、`TZ=UTC` 复跑同绿——**"某一侧不变"同样是可核对的自洽项**）
 > （25 条回归已按 P1-27 清零；仅 notification-drawer 保留 1 处带理由的 C 类豁免）。
 > ⚠️ **「文件数」有两个口径，混用会造出假缺口**（2026-09-14 实测）：`ls tests/*.py` 与
 > `pytest --collect-only` 的「有测试的文件数」**不等**——本仓恒差 2（存在 2 个 0 用例的测试文件）。

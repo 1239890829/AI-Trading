@@ -134,7 +134,7 @@ IC/ICIR 报告，`data/factors/eval_report.json` 也在磁盘上，但**全站�
 | 事件 / 消息面因子（传导链方向强度、题材核心度 G4） | `RSH-010` · `RSH-011` | 等窗（需 ≥60 交易日样本） |
 | `RANK20`（qlib `Rank($close,d)` = **滚动窗口内**百分位，**非截面排名**） | `RSH-001` | ✅ 已闭环（2026-09-14 §6.31；`rank20` 已入库，`FACTORS` 37→38） |
 | 多窗口扫描（同算子 × 窗口 5/10/30/60） | `RSH-002` | 可做（数据具备） |
-| 其余 TA-Lib 指标（MFI / OBV / ADX / CCI…）逐个转正 | `RSH-003` | 可做（MFI/OBV 优先，与 `fund_flow` 互验） |
+| 其余 TA-Lib 指标（MFI / OBV / ADX / CCI…）逐个转正 | `RSH-003` | 🟡 **部分闭环（2026-09-14 §6.34）**——`mfi20` / `obv20` 已入库（`FACTORS` 38→40）并实测 **PASS**；但与既有 `sump20` 实测 IC 相关 0.96 / 0.95 ⇒ 族内冗余、**登记不计权**；**余 23 项（ADX/CCI/PPO/SAR/WILLR/STOCHRSI 等）仍 parked** |
 
 > **生命周期六环**不是待办，是**入口指针** → `factor-lifecycle-governance.md`。
 > **新增因子待做项请直接登记账本 §6.0**（域前缀 `RSH`），不要写回本节。
