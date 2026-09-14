@@ -18,6 +18,7 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.core.freshness import Freshness
 from app.schemas.market import (
     AnomalyRecord,
     Kline,
@@ -85,8 +86,13 @@ class OverviewPayload(BaseModel):
     """GET /market/overview 的 data。"""
 
     indices: list[Quote]
-    # 两市成交额（元）：全市场快照求和口径；快照未就绪时为 None（前端显示 --）
+    # 两市成交额（元）：全市场快照求和口径；快照未就绪时为 None。
+    # ⚠️ `None` 有**两种成因**（未就绪 / 真无数据），消费方不得只凭它下结论
+    # ——必须同时读 `total_amount_freshness.state`（见路由 docstring）。
     total_amount: float | None
+    #: 该字段的可用性/新鲜度（S2-1 契约）。前端据此把 `None` 渲染为
+    #: 「加载中…」（`unavailable`/`unknown`）而非 `--`（真缺失）。
+    total_amount_freshness: Freshness | None = None
 
 
 class MinutePointModel(BaseModel):

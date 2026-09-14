@@ -24,6 +24,26 @@ import type {
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "/backend";
 
 /**
+ * 后端 S2-1 降级契约（`app/core/freshness.py::Freshness`）的**最小前端镜像**。
+ *
+ * 五态语义以后端模块 docstring 为准。前端只把 `state` 当渲染判据
+ * （见 `lib/format.ts::triAmount`），`reason` 留作提示文案。
+ *
+ * 为什么需要它：同一个 `null` 在界面上可能是「还没到」也可能是「真的没有」，
+ * 两者必须分开——这是本仓三态纪律（`unknown` 显式「未判定」、缺失 `--`）
+ * 在**字段级**的落地（2026-09-14，起因：成交额未就绪被渲染成 `--`）。
+ */
+export type FreshnessState = "ready" | "stale" | "degraded" | "unavailable" | "unknown";
+
+export interface Freshness {
+  state: FreshnessState;
+  reason?: string | null;
+  as_of?: string | null;
+  age_seconds?: number | null;
+  source?: string | null;
+}
+
+/**
  * WebSocket 基址。相对路径无法用协议字符串替换推导，必须基于当前页面 origin，
  * 因此做成函数（要读 window，不能在模块顶层求值）。
  *
@@ -170,9 +190,14 @@ async function sendJson<T = unknown>(
 
 export async function getMarketOverview(): Promise<{
   indices: Quote[];
-  total_amount: number;
+  total_amount: number | null;
+  total_amount_freshness: Freshness | null;
 }> {
-  const body = await getJson<{ indices: Quote[]; total_amount: number }>("/api/market/overview", 10_000);
+  const body = await getJson<{
+    indices: Quote[];
+    total_amount: number | null;
+    total_amount_freshness: Freshness | null;
+  }>("/api/market/overview", 10_000);
   return body.data;
 }
 

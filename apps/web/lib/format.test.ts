@@ -1,6 +1,6 @@
 /** 格式化工具测试：空值/边界/单位换算/红涨绿跌语义。 */
 import { describe, expect, it } from "vitest";
-import { fmt, fmtAmount, fmtHeat, fmtVolume, isHardQuality, parseNum, pctColor, pctText, qualityLabel, shouldShowQualityBadge, sourceLabel, timeText, timeTextBJ, dateTimeTextBJ, bjDate, bjHHMM, bjMonthDay, triText, winRateColor } from "./format";
+import { fmt, fmtAmount, fmtHeat, fmtVolume, isHardQuality, parseNum, pctColor, pctText, qualityLabel, shouldShowQualityBadge, sourceLabel, timeText, timeTextBJ, dateTimeTextBJ, bjDate, bjHHMM, bjMonthDay, triAmount, triText, winRateColor } from "./format";
 
 /**
  * 北京时间格式化（2026-09-11 收口）。
@@ -251,6 +251,45 @@ describe("三态文案 triText", () => {
 
   it("未登记的字面量原样透出（不臆造翻译）", () => {
     expect(triText("strong")).toBe("strong");
+  });
+});
+
+/**
+ * 成交额三态渲染（2026-09-14）。
+ *
+ * 起因是一次真实报障：「两市成交额怎么没出来了」。根因是后端重启触发新浪 WAF
+ * 限流（HTTP 456）⇒ 全市场快照约 6 分钟不就绪 ⇒ `total_amount = null`，
+ * 而两处消费点都写成 `totalAmount ? fmtAmount(totalAmount) : "--"` ——
+ * **把「尚未就绪」和「真的没有」显示成同一个 `--`**，用户无从分辨是加载中还是坏了。
+ */
+describe("triAmount（成交额三态渲染）", () => {
+  it("有值 → 金额（与 fmtAmount 同口径）", () => {
+    expect(triAmount(1.2345e11, "ready")).toBe(fmtAmount(1.2345e11));
+    // 0 是合法值，不得被真值判断吞成"无"
+    expect(triAmount(0, "ready")).toBe(fmtAmount(0));
+  });
+
+  it("未就绪 → 「加载中…」而不是 '--'（本次报障要修的就是这一格）", () => {
+    expect(triAmount(null, "unavailable")).toBe("加载中…");
+    // unknown = 有判定但判不出：按三态纪律同样不得塌缩成"缺失"
+    expect(triAmount(null, "unknown")).toBe("加载中…");
+    expect(triAmount(null, "UNKNOWN")).toBe("加载中…"); // 大小写不敏感（与 triText 同纪律）
+  });
+
+  it("链路正常却无值 → '--'（确为缺失）", () => {
+    expect(triAmount(null, "ready")).toBe("--");
+    expect(triAmount(null, "stale")).toBe("--");
+    expect(triAmount(null, "degraded")).toBe("--");
+  });
+
+  it("状态未提供 → '--'（无从判定时不假装在加载）", () => {
+    expect(triAmount(null)).toBe("--");
+    expect(triAmount(undefined, "")).toBe("--");
+  });
+
+  it("NaN 按无值处理（不显示 NaN）", () => {
+    expect(triAmount(Number.NaN, "unavailable")).toBe("加载中…");
+    expect(triAmount(Number.NaN, "ready")).toBe("--");
   });
 });
 

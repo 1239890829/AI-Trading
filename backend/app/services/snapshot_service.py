@@ -14,9 +14,30 @@ from pathlib import Path
 from app.core.freshness import Freshness
 from app.market import sina_market
 from app.market.breadth import compute_breadth
+from app.market.sina_market import SinaRateLimited
 from app.market.trade_calendar import in_trading_window
 
 log = logging.getLogger(__name__)
+
+#: 休市时段轮询间隔：全市场数据静止（昨收），仍按盘中节奏拉 56 页纯属浪费
+#: 且有被 WAF 限流风险（K 线三源全断的前科就是高频请求触发）。
+IDLE_INTERVAL_SECONDS = 240.0
+#: 常规失败退避上限（指数退避 2^n 封顶）。
+BACKOFF_CAP_SECONDS = 300.0
+#: 限流冷却**首档**（`SinaRateLimited` / HTTP 456）。连续限流则逐档加倍，
+#: 封顶 `RATE_LIMIT_COOLDOWN_CAP_SECONDS`。
+#:
+#: **为什么是渐进式而不是一个大的固定值**（2026-09-14 实测改口径）：
+#: 本环境的新浪限流是**间歇**的——观测窗口内失败 5 次 / 成功 5 次交替
+#: （13:42:17✓ 13:43:17✗ 13:45:17✗ 13:49:22✓ 13:50:22✗），且**首次失败后
+#: 245s 内必恢复**（13:33:59✗ → 13:38:04✓；13:45:17✗ → 13:49:22✓）。
+#: 若首档就固定 600s，小限流会把数据陈旧度从 ~4 分钟恶化到 10 分钟
+#: （而常规退避实测已能在 1–2 轮内恢复）——**用恢复速度换来的封禁保护是虚的**。
+#: 保留的意图由封顶值承担：`900s` 显著长于常规退避上限 `300s`，
+#: 持续限流时仍会一路退让。
+RATE_LIMIT_COOLDOWN_SECONDS = 240.0
+#: 限流冷却上限：显著高于 `BACKOFF_CAP_SECONDS`，体现"限流比普通失败更该退让"。
+RATE_LIMIT_COOLDOWN_CAP_SECONDS = 900.0
 
 
 class MarketSnapshotService:
@@ -29,6 +50,9 @@ class MarketSnapshotService:
         self.last_success: datetime | None = None
         self.last_error: str | None = None
         self.consecutive_failures = 0
+        #: 上一轮失败是否为**上游限流**（HTTP 456）。与 `consecutive_failures`
+        #: 分开：前者决定"用多长的冷却"，后者决定"指数退避到几档"，两者判据不同。
+        self.rate_limited = False
         self.saved_files = 0
         self._last_save: datetime | None = None
 
@@ -39,6 +63,9 @@ class MarketSnapshotService:
         self.last_success = datetime.now(timezone.utc)
         self.last_error = None
         self.consecutive_failures = 0
+        # 成功即视为已脱离限流：冷却标记的语义是"当前是否处于限流退避中"，
+        # 不随成功一起清零会让一次限流终生压低抓取频率。
+        self.rate_limited = False
         # parquet 写盘（polars 建表 + 文件 IO）是同步阻塞（评审 B6）：
         # 丢线程池执行，5550 行建表最坏数百毫秒不能卡事件循环
         await asyncio.to_thread(self._maybe_save)
@@ -76,20 +103,57 @@ class MarketSnapshotService:
             # （K 线三源全断的前科就是高频请求触发）。连续竞价窗口外统一
             # 降到 240s 一轮，保底新鲜度（重启后盘前仍有昨收宽度数据）；
             # 窗口内保持原轮询与失败退避。
+            #
+            # 2026-09-14：退避判据抽到 `_next_delay()`，并**新增限流分支**——
+            # 原先所有失败（含 456 限流）共用同一套退避，导致限流期内仍在
+            # 按常规节奏重试（见 `RATE_LIMIT_COOLDOWN_SECONDS` 注释）。
             live = in_trading_window()
             try:
                 await self.refresh()
+            except SinaRateLimited as exc:
+                # 子类必须排在 `except Exception` 之前，否则被父类兜住、判据失效。
+                self.consecutive_failures += 1
+                self.last_error = str(exc)
+                self.rate_limited = True
+                log.warning(
+                    "snapshot refresh rate-limited（新浪 WAF 限流第 %s 次，冷却 %.0fs 再试）: %s",
+                    self.consecutive_failures, self._next_delay(live=live), exc,
+                )
             except Exception as exc:
                 self.consecutive_failures += 1
                 self.last_error = str(exc)
+                self.rate_limited = False
                 log.warning("snapshot refresh failed (%s): %s", type(exc).__name__, exc)
-            if not live:
-                await asyncio.sleep(240.0)
-                continue
-            delay = self.poll_interval if self.consecutive_failures == 0 else min(
-                self.poll_interval * (2 ** min(self.consecutive_failures, 4)), 300.0
+            await asyncio.sleep(self._next_delay(live=live))
+
+    def _next_delay(self, *, live: bool) -> float:
+        """下一轮抓取前的等待秒数（三重判据，优先级从高到低）。
+
+        1. **限流冷却** —— `SinaRateLimited` 后退避到 `RATE_LIMIT_COOLDOWN_SECONDS`；
+        2. **时段降频** —— 休市统一 `IDLE_INTERVAL_SECONDS`（数据静止，没必要勤抓）；
+        3. **常规退避** —— 成功用 `poll_interval`；失败按 2^n 指数退避并封顶。
+
+        ⚠️ 限流**优先于休市降频**：那档（240s）是按「上游正常、只是数据静止」
+        设计的；限流期用它等于继续按正常节奏敲上游——实测 120s/240s 两轮
+        都仍在限流窗口内。
+        抽成纯函数是为了**可测**：原先它是 `run()` 里的内联分支，
+        `run()` 是 `while True`，只能靠"跑一整天观察日志"验证。
+        """
+        if self.rate_limited:
+            # 渐进式：首档 240s，连续限流逐档加倍，封顶 900s（见常量注释的实测依据）。
+            step = max(self.consecutive_failures - 1, 0)
+            return min(
+                RATE_LIMIT_COOLDOWN_SECONDS * (2 ** min(step, 3)),
+                RATE_LIMIT_COOLDOWN_CAP_SECONDS,
             )
-            await asyncio.sleep(delay)
+        if not live:
+            return IDLE_INTERVAL_SECONDS
+        if self.consecutive_failures == 0:
+            return self.poll_interval
+        return min(
+            self.poll_interval * (2 ** min(self.consecutive_failures, 4)),
+            BACKOFF_CAP_SECONDS,
+        )
 
     def freshness(self) -> Freshness:
         """全市场快照的新鲜度（S2-1 契约的 **snapshot 样板**）。
@@ -104,7 +168,13 @@ class MarketSnapshotService:
         ——"数据还新鲜，但上游正在出问题"是需要提前知道的信号。
         """
         if self.breadth is None:
-            return Freshness.unavailable(reason="全市场快照尚未就绪", source="sina")
+            # 未就绪时把**成因**说清楚：限流是"等一会儿会自愈"，与"源坏了"是
+            # 两种处境——前端据此显示「加载中…」而不是当成缺数据（见 kb 三态纪律）。
+            reason = (
+                "全市场快照尚未就绪（上游限流，正在冷却重试）"
+                if self.rate_limited else "全市场快照尚未就绪"
+            )
+            return Freshness.unavailable(reason=reason, source="sina")
         fresh_within = self.poll_interval * 3
         f = Freshness.from_age(
             as_of=self.last_success, fresh_within=fresh_within, source="sina",

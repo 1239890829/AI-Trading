@@ -543,7 +543,13 @@ async def market_overview(request: Request, hub: QuoteHub = Depends(get_hub)) ->
     指数的成交额求和——沪深300/中证1000/创业板指与上证指数/深证成指成分互相
     重叠，重复求和导致总额虚高 40%+。同花顺口径 = 沪市全市场 + 深市全市场，
     与全市场快照求和一致（compute_breadth.total_amount 同源），故改用快照。
-    快照未就绪（冷启动数秒）时诚实返回 null，前端显示 --。"""
+    快照未就绪（冷启动数秒）时诚实返回 null，前端显示 --。
+
+    三态披露（2026-09-14）：`total_amount is None` 其实有**两种**成因——
+    ① 上游尚未就绪（冷启动 / 被 WAF 限流，会自动恢复）；② 真的没有数据。
+    原先只给 `null`，前端一律渲染 `--`（= 缺失），把「未判定」塌缩成「没有」，
+    用户无法分辨"正在加载"还是"坏了"——实际报障：「两市成交额怎么没出来了」。
+    故一并返回 `total_amount_freshness`（直接复用 S2-1 契约，**不另造判据**）。"""
     indices = hub.get_indices()
     total_amount = None
     snap = getattr(request.app.state, "snapshot_service", None)
@@ -553,6 +559,9 @@ async def market_overview(request: Request, hub: QuoteHub = Depends(get_hub)) ->
         "data": {
             "indices": [q.model_dump(mode="json") for q in indices],
             "total_amount": total_amount,
+            "total_amount_freshness": (
+                snap.freshness().model_dump(mode="json") if snap is not None else None
+            ),
         },
         "meta": _meta(hub),
     }

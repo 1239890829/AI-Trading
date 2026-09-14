@@ -273,3 +273,26 @@ export function triText(v: string | null | undefined): string {
   if (!s) return "--";
   return TRI_LABELS[s.toLowerCase()] ?? s;
 }
+
+/**
+ * 「带状态字段」的渲染单点：有值 → 金额；**未就绪** → 「加载中…」；真缺失 → `--`。
+ *
+ * 为什么不能写成 `amount ? fmtAmount(amount) : "--"`：`null` 有**两种**成因——
+ * ① 上游尚未就绪（冷启动 / 被限流，会自动恢复）；② 真的没有数据。
+ * 原先两者在界面上完全同形，等于把「未判定」塌缩成「缺失」，用户无法分辨
+ * "正在加载"还是"坏了"——实际报障：「两市成交额怎么没出来了」（2026-09-14）。
+ *
+ * 判据直接取后端 S2-1 契约的 `state`，**不另造**（`lib/api.ts::Freshness`）：
+ * - `unavailable`（尚未就绪）/ `unknown`（有判定但判不出）⇒ 「加载中…」。
+ *   按三态纪律，`unknown` 不得当成"没有"；
+ * - `ready` / `stale` / `degraded` 代表数据链路是通的，此时仍无值 ⇒ 确为缺失 `--`；
+ * - `state` 未提供（`""`）⇒ 无从判定，保守显示 `--`，**不假装在加载**。
+ *
+ * ⚠️ 与 `triText` 同一条纪律：`--` 必须由**明确判定**得出，不能当兜底默认值。
+ */
+export function triAmount(amount: number | null | undefined, state?: string | null): string {
+  if (amount !== null && amount !== undefined && !Number.isNaN(amount)) return fmtAmount(amount);
+  const s = (state ?? "").trim().toLowerCase();
+  if (s === "unavailable" || s === "unknown") return "加载中…";
+  return "--";
+}

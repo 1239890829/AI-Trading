@@ -18,10 +18,11 @@ import {
   getSentiment,
   getSentimentHistory,
   type Breadth,
+  type Freshness,
   type Sentiment,
   type SentimentHistoryPayload,
 } from "@/lib/api";
-import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
+import { fmt, fmtAmount, pctColor, pctText, triAmount } from "@/lib/format";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { FadeSwap, PageSkeletonFallback, Skeleton } from "@/components/ui/loading";
 import type { LimitUpRecord, Quote } from "@/types/market";
@@ -64,6 +65,9 @@ function MarketInner() {
 
   const [indices, setIndices] = useState<Quote[]>([]);
   const [totalAmount, setTotalAmount] = useState<number | null>(null);
+  // 成交额的三态判据（S2-1 契约）。**必须与数值分开存**：`null` 有「上游尚未就绪」
+  // 与「真的没有数据」两种成因，只凭数值无法区分（2026-09-14 报障根因）。
+  const [amountFreshness, setAmountFreshness] = useState<Freshness | null>(null);
   const [pool, setPool] = useState<LimitUpRecord[]>([]);
   const [breadth, setBreadth] = useState<Breadth | null>(null);
   const [sent, setSent] = useState<Sentiment | null>(null);
@@ -85,6 +89,7 @@ function MarketInner() {
       ]);
       setIndices(overview.indices);
       setTotalAmount(overview.total_amount);
+      setAmountFreshness(overview.total_amount_freshness);
       setPool(zt.slice(0, 10));
       setError(null);
       setUpdatedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
@@ -310,7 +315,12 @@ function MarketInner() {
             <Panel title="两市成交额" className="min-h-0 overflow-hidden" source={sh?.source} dataTimestamp={sh?.data_timestamp}
               extra={<Link href="/market?tab=fund" className="text-zinc-600 dark:text-zinc-400 transition-colors hover:text-zinc-900 dark:hover:text-zinc-100">资金详情 ↗</Link>}>
               <div className="flex h-full flex-col justify-center px-4 py-3">
-                <p className="font-mono text-3xl font-semibold tracking-tight">{totalAmount ? fmtAmount(totalAmount) : "--"}</p>
+                <p
+                  title={amountFreshness?.reason ?? undefined}
+                  className="font-mono text-3xl font-semibold tracking-tight"
+                >
+                  {triAmount(totalAmount, amountFreshness?.state)}
+                </p>
                 <p className="mt-2 text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">
                   沪深京两市合计（含北交所）。实时对比/全日估算/分钟资金流见「资金」Tab。
                 </p>

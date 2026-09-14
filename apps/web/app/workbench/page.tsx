@@ -34,6 +34,7 @@ import {
   renameWatchlistGroup,
   updateWatchlistGroup,
   type DailyPickItem,
+  type Freshness,
   type IntradayTopStock,
   type PaperPositionInfo,
   type RiskState,
@@ -41,7 +42,7 @@ import {
   type SymbolBoardFund,
   getPositionLabels,
 } from "@/lib/api";
-import { fmt, fmtAmount, pctColor, pctText, signedYi, triText } from "@/lib/format";
+import { fmt, pctColor, pctText, signedYi, triAmount, triText } from "@/lib/format";
 import { isTradingSession } from "@/lib/market-hours";
 import { subscribeWatchlist, notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import { LAST_SYMBOL_KEY, originLabel, workbenchUrl } from "@/lib/routing";
@@ -69,6 +70,9 @@ function WorkbenchInner() {
   const realSymbols = useMemo(() => realData?.items.map((i) => i.symbol) ?? [], [realData]);
   const [indices, setIndices] = useState<Quote[]>([]);
   const [totalAmount, setTotalAmount] = useState<number | null>(null);
+  // 成交额的三态判据（S2-1 契约）。**必须与数值分开存**：`null` 有「上游尚未就绪」
+  // 与「真的没有数据」两种成因，只凭数值无法区分（2026-09-14 报障根因）。
+  const [amountFreshness, setAmountFreshness] = useState<Freshness | null>(null);
   // 两市成交额 vs 昨日同一时刻增减（亿元）——资金 Tab 顶摘要（2026-09-04）
   const [turnDiff, setTurnDiff] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -164,6 +168,7 @@ function WorkbenchInner() {
       setAllGroupNames(["默认", ...groupNames]);
       setIndices(overview.indices);
       setTotalAmount(overview.total_amount);
+      setAmountFreshness(overview.total_amount_freshness);
       setPositions(positions);
       setError(null);
       setUpdatedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
@@ -434,7 +439,7 @@ function WorkbenchInner() {
             title="查看资金流向详情：实时对比 / 全日估算 / 分钟资金流 / 历史回看"
             className="flex cursor-pointer items-center gap-1.5 rounded hover:text-zinc-900 dark:hover:text-zinc-100"
           >
-            两市成交额合计：<span className="font-mono tabular-nums text-zinc-700 dark:text-zinc-200">{totalAmount ? fmtAmount(totalAmount) : "--"}</span>
+            两市成交额合计：<span title={amountFreshness?.reason ?? undefined} className="font-mono tabular-nums text-zinc-700 dark:text-zinc-200">{triAmount(totalAmount, amountFreshness?.state)}</span>
             {turnDiff != null && (
               <span className={`font-mono text-[11px] tabular-nums ${turnDiff >= 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}`}>
                 {turnDiff >= 0 ? "+" : ""}

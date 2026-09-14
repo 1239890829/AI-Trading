@@ -30,7 +30,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2976 项（2914 passed / 62 skipped）· 190 文件（09-14 全量实测，0 failed）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 3002 项（2940 passed / 62 skipped）· 191 文件（09-14 全量实测，0 failed）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。
@@ -62,7 +62,7 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 2976 项（2914 passed / 62 skipped）· 190 文件、前端 494 项 / 57 文件、eslint **0 error / 0 warn**
+> **门禁口径**：后端 3002 项（2940 passed / 62 skipped）· 191 文件、前端 499 项 / 57 文件、eslint **0 error / 0 warn**
 > （25 条回归已按 P1-27 清零；仅 notification-drawer 保留 1 处带理由的 C 类豁免）。
 > ⚠️ **「文件数」有两个口径，混用会造出假缺口**（2026-09-14 实测）：`ls tests/*.py` 与
 > `pytest --collect-only` 的「有测试的文件数」**不等**——本仓恒差 2（存在 2 个 0 用例的测试文件）。
@@ -176,6 +176,23 @@ lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=
 > skyrocket **读写同源往返** + 缺失**披露**（成对）+ 读侧**不得自持路径常量**（结构））。终态实测
 > **2914 passed / 62 skipped / 0 failed（2976 项 / 190 文件，161.05s，前提 8000 在跑）**；
 > **前端本轮零改动**，`TZ=UTC` + `--maxWorkers=1` 复跑仍 **494 / 57**（"某一侧不变"同样是可核对项）。
+>
+> ✅ **自洽核对（2026-09-14 用户报障「两市成交额怎么没出来了」修复轮）**：后端 2976 / 190 → **3002 / 191**
+> ⇒ 差 **+26 项 / +1 文件**，**全部来自新建的 `tests/test_snapshot_availability.py`**
+> （456 限流识别 / 异常类型**穿透 `gather`** / 退避四态 / `run()` 的 `except` 顺序**静态钉** /
+> overview 透传**成对** / 成交额口径一致）——该文件先有 **21 项**，随后因"限流冷却改**渐进式**"
+> 又把其中 1 条拆为 1 + 4（参数化）+ 1 ⇒ 净增 **26**。终态实测
+> **2940 passed / 62 skipped / 0 failed（3002 项 / 191 文件，140.04s，前提 8000 在跑）**；
+> 前端 494 / 57 → **499 / 57** ⇒ 差 **+5 项 / +0 文件** = `lib/format.test.ts` 的 `triAmount`
+> （成交额三态渲染：有值 / 未就绪 / 真缺失 / 状态缺失 / NaN）。**6 组注入全部精确判红**
+> （含"`except` 顺序"一条：**除该静态守卫外其余 20 项全绿** ⇒ 证明这类判据只能静态钉），
+> 复原后各文件 sha256 逐字节一致、`INJECTED` 残留 0。⚠️ 同为 `ls`=**193** / collect=**191**（恒差 2）。
+>
+> 📌 **「未就绪」不得与「缺失」同形（本轮的判据，`kb/10` KB-ENG-48 续）**：`total_amount is None`
+> 有两种成因——上游尚未就绪（会自愈）与真的没有数据；原先前端一律渲染 `--`，用户在界面上
+> **无从分辨"在加载"还是"坏了"**。现在后端随值透传 `total_amount_freshness`（复用 S2-1 契约），
+> 前端渲染单点 `lib/format.ts::triAmount`（未就绪 → 「加载中…」；链路正常却无值 → `--`）。
+> 上游限流侧的处置见 `kb/03` KB-ENG-83（信号结构化 / 穿透中间转换层 / 退避按故障性质分档）。
 >
 > ⚠️ **本轮的两个静默缺陷都是"注入验证 + 逐定义判定"抓出来的**（详见 `docs/kb/09` KB-ENG-82）：
 > ① **读写分叉**——同一路径写两处、锚定方式不同（写侧 `REPO_ROOT` 落**仓库根**、读侧裸相对落 `backend/data`）
