@@ -63,6 +63,19 @@ ROLLING_WINDOW_DAYS = 250  # 滚动衰减监控窗口（约 1 年，制度 §6.1
 #: （成熟样本内排名 + `n{h} >= MIN_CROSS_SECTION`）。旧报告结论保留为 `verdict_prev` 并标待复核。
 ALGO_VERSION = "2026-09-14.ic-maturity-v3"
 
+#: **新增因子不 bump 本版本号**（RSH-001 定例，2026-09-14）：
+#: 本常量描述的是**判定口径**——signal/entry/exit、剔除规则、IC 排名与最小截面守卫、准入阈值。
+#: 纯新增因子（如 `rank20`）不改其中任何一项，也不改任何既有因子的输出：既有因子的 IC 序列与
+#: verdict **逐点不变**（base 链只增列、不改列），由 `tests/test_factors.py::
+#: test_adding_factor_does_not_change_existing_numeric_conclusions` 钉死（含注入自证）。
+#: 因子池变化本身由报告 `factors`/`summary` 列表可见，并按制度
+#: `docs/factor-lifecycle-governance.md` §8 记入版本日志——`ALGO_VERSION` 不是它的载体。
+#: 反之，若仅因新增因子就 bump，`review_required` 会列出**全部**历史结论并标「基于旧口径」，
+#: 而它们在数值上并未失效 ⇒ 属误报，会训练消费方忽略该清单（正是 GOV-001 要防的）。
+#: **判据**：改动能改变既有因子**数值结论**（IC/verdict）时才是口径变更，必须 bump 并使旧结论
+#: 走 `review_required`；只增不改则否。唯一例外是 `redundant_with` 会按新池重算——它是
+#: 「去重提示，人工取舍」（非结论），不构成 bump 理由。
+
 #: 数据质量硬结论（2026-09-07 marketdb 实测，docs/summary/factor-system.md §1.4）
 DATA_QUALITY_NOTES = {
     "survivorship": (
@@ -176,6 +189,11 @@ lvl3 AS (
            MAX(high_price) OVER r20c AS max20_h,
            MIN(low_price) OVER r20c AS min20_l,
            arg_max(rn, high_price) OVER r20c AS imax_rn20,
+           -- RSH-001（2026-09-14）：qlib RANK20 —— 现价在 20 日**滚动窗口内**的百分位排名。
+           -- 平均名次法的分子两件：窗口内 `< 现价` 与 `<= 现价` 的样本数（在 lvl4 汇合）。
+           -- 注：`list()` **包含 NULL**，故此处只取计数，分母在 lvl4 用 COUNT(close_adj)。
+           len(list_filter(list(close_adj) OVER r20c, v -> v <  close_adj)) AS rank20_lt,
+           len(list_filter(list(close_adj) OVER r20c, v -> v <= close_adj)) AS rank20_le,
            AVG(CASE WHEN ret1 > 0 THEN 1.0 ELSE 0.0 END) OVER r20c AS cntp20,
            SUM(CASE WHEN ret1 > 0 THEN ret1 ELSE 0.0 END) OVER r20c AS sump20_num,
            SUM(abs(ret1)) OVER r20c AS sump20_den,
@@ -201,7 +219,18 @@ lvl4 AS (
            CASE WHEN amihud_n >= 20 THEN amihud_raw END AS amihud20_w,
            CASE WHEN range_n >= 20 THEN range_raw END AS range20_w,
            CASE WHEN w20_n >= 20 THEN std20_raw END AS std20_w,
-           CASE WHEN atr14_n >= 14 THEN atr14_raw END AS atr14_w
+           CASE WHEN atr14_n >= 14 THEN atr14_raw END AS atr14_w,
+           -- RSH-001：qlib RANK20 平均名次百分位 = (n_lt + n_le + 1) / (2·n_valid)。
+           -- 该闭式与 pandas `rank(pct=True, method="average")`（qlib 主路径）逐点等价，
+           -- 已由 tests/test_factors.py 以朴素参考实现钉死（含并列与全并列）。
+           -- **两处守卫都不是可选的**（均属三态纪律，缺失即塌缩）：
+           --   ① 分母必须用 `w20_n` = COUNT(close_adj)（**忽略 NULL**）——
+           --      若用 `len(list(close_adj) OVER r20c)`（**含 NULL**）会把缺失日计入样本数；
+           --   ② `close_adj IS NULL` 时窗口比较全为 NULL ⇒ 分子恒为 0，若不显式置 NULL
+           --      会输出 0.0（"最弱"）而非「未判定」——把缺数误读成极端值。
+           -- 窗口有效样本 <20 → NULL（与 vola20/amihud20/std20 同口径，不凑 0）。
+           CASE WHEN w20_n >= 20 AND close_adj IS NOT NULL
+                THEN (rank20_lt + rank20_le + 1) / (2.0 * w20_n) END AS rank20_w
     FROM lvl3
 )"""
 

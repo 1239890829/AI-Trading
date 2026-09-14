@@ -21,6 +21,7 @@ from app.factors.evaluate import (
     MIN_CROSS_SECTION,
     _agg_window,
     _annotate_verdict_changes,
+    _base_cte,
     _judge_quintiles,
     _mature_key,
     _pearson,
@@ -561,3 +562,271 @@ def test_run_full_eval_archives_prev_report_and_lists_versioned_review(db, tmp_p
     # 复核清单 = 全部有旧结论的因子（含未翻转），不只是一部分
     assert review == {r["name"] for r in rep2["factors"] if r["verdict_prev"] is not None}
     assert all("2020-01-01.legacy" in x["reason"] for x in rep2["review_required"])
+
+
+# ---------------------------------------------------------------- RSH-001：rank20（qlib 滚动窗口百分位）
+RANK20_W = 20
+RANK20_DATES = 30
+
+
+def _mk_rank20_db(tmp_path):
+    """rank20 专用小仓（30 交易日；窗口 20 行、`min_bars` 21）——**手算可验证**的五种形态。
+
+    - `tie`    大量并列 → 钉「平均名次」口径（该股上必然与 `<=` 口径分叉）
+    - `flat`   全并列   → 并列口径的唯一判别器：平均名次 = (n+1)/2n < 1，`<=` 口径恒 = 1
+    - `mono`   严格单调 → 无并列，两口径一致（证明分叉**只在**并列处）
+    - `null`   前两日缺数 → 三态：窗口内含 NULL 的行必须 NULL；同时是「分母须用
+                 `COUNT(col)` 而非 `len(list(col))`」的判别点（见第三条用例）
+    - `sparse` 行不连续 → 窗口按**行**滑动而非按日历；朴素参考必须按该股**自身行序**取窗口
+
+    返回 `(con, series)`；`series[code]` 为该股按日期升序的 close_adj（**已剔除被丢弃的行**），
+    供朴素参考实现独立复算 —— 即「同源判据」：生产 SQL 与参考实现共用同一份输入。
+    """
+    dates = _days(RANK20_DATES)
+    raw: dict[str, list[float | None]] = {
+        "tie": [10.0, 12.0, 12.0, 11.0, 12.0, 10.0] * 5,
+        "flat": [7.0] * RANK20_DATES,
+        "mono": [float(20 + i) for i in range(RANK20_DATES)],
+        "null": [None if i < 2 else 10.0 + float(i % 5) for i in range(RANK20_DATES)],
+        "sparse": [9.0 + float(i % 4) for i in range(RANK20_DATES)],
+    }
+    dropped = {"sparse": {3, 4, 11, 12, 13, 22}}
+    series: dict[str, list[float | None]] = {}
+    rows_k, rows_adj = [], []
+    for code, vals in raw.items():
+        kept: list[float | None] = []
+        for i, v in enumerate(vals):
+            if i in dropped.get(code, ()):
+                continue
+            kept.append(v)
+            c = v if v is not None else 8.0
+            rows_k.append((code, dates[i], c * 0.99, c * 1.02, c * 0.98, c, 1_000_000, 5e7))
+            rows_adj.append((code, dates[i], v))
+        series[code] = kept
+    con = duckdb.connect(str(tmp_path / "rank20.duckdb"))
+    con.execute(
+        "CREATE TABLE daily_k (thscode VARCHAR, date_ms BIGINT, open_price DOUBLE,"
+        " high_price DOUBLE, low_price DOUBLE, close_price DOUBLE, volume BIGINT, turnover DOUBLE)"
+    )
+    con.execute("CREATE TABLE daily_k_adj (thscode VARCHAR, date_ms BIGINT, close_adj DOUBLE)")
+    con.executemany("INSERT INTO daily_k VALUES (?,?,?,?,?,?,?,?)", rows_k)
+    con.executemany("INSERT INTO daily_k_adj VALUES (?,?,?)", rows_adj)
+    return con, series
+
+
+def _rank20_rows(con) -> dict[str, list[tuple[int, int, float | None]]]:
+    """用**生产** `_base_cte` 取 `(date_ms, w20_n, rank20_w)`。
+
+    刻意复用生产 SQL 而不是在测试里重写一份等价 SQL —— 重写会造出「两处都错得一样」
+    也能全绿的假护栏（同源恒等式纪律）。`w20_n` 是窗口内**非 NULL** 样本数（分母）。
+    """
+    sql = _base_cte(FACTOR_BY_NAME["rank20"]) + (
+        "\nSELECT thscode, date_ms, w20_n, rank20_w FROM lvl4 ORDER BY thscode, date_ms"
+    )
+    out: dict[str, list[tuple[int, int, float | None]]] = {}
+    for code, ts, n, v in con.execute(sql).fetchall():
+        out.setdefault(code, []).append((ts, n, v))
+    return out
+
+
+def _naive_rank20(seq: list[float | None]) -> list[float | None]:
+    """朴素参考实现（独立于 SQL）：20 行滑动窗口内的**平均名次**百分位。
+
+    逐条对齐 `evaluate.py::lvl4.rank20_w`：
+    - 窗口 = 该股自身**行序**上最近 20 行（含当前行）——按行不按日历（停牌跳空自然处理）；
+    - 分母 = 窗口内非 NULL 的 close_adj 个数；
+    - 有效样本 < 20 或当前行 close_adj 缺失 → None（三态，不凑 0）；
+    - 取值 = (n_lt + n_le + 1) / (2n)，等价 pandas `rank(pct=True, method="average")`。
+    """
+    out: list[float | None] = []
+    for i, cur in enumerate(seq):
+        win = seq[max(0, i - RANK20_W + 1): i + 1]
+        valid = [v for v in win if v is not None]
+        if cur is None or len(valid) < RANK20_W:
+            out.append(None)
+            continue
+        n_lt = sum(1 for v in valid if v < cur)
+        n_le = sum(1 for v in valid if v <= cur)
+        out.append((n_lt + n_le + 1) / (2 * len(valid)))
+    return out
+
+
+def test_rank20_matches_naive_rolling_window_percentile(tmp_path):
+    """RSH-001 **主判据（同源）**：生产 `_base_cte` 的 SQL 与独立朴素参考实现逐点一致。
+
+    覆盖：并列 / 全并列 / 严格单调 / 含缺数 / 行不连续五形态，共 5 只票 × 最多 30 日。
+    """
+    con, series = _mk_rank20_db(tmp_path)
+    try:
+        got = _rank20_rows(con)
+    finally:
+        con.close()
+
+    n_val = n_null = 0
+    for code, seq in series.items():
+        exp = _naive_rank20(seq)
+        rows = got[code]
+        assert len(rows) == len(seq) == len(exp), code
+        for (ts, _n, sql_v), e in zip(rows, exp):
+            if e is None:
+                assert sql_v is None, f"{code}@{ts}: 期望 NULL，实测 {sql_v}"
+                n_null += 1
+            else:
+                assert sql_v is not None, f"{code}@{ts}: 期望 {e}，实测 NULL"
+                assert sql_v == pytest.approx(e, abs=1e-12), f"{code}@{ts}"
+                n_val += 1
+    # 防「全 NULL / 全跳过」式空断言：两侧都必须有足量样本
+    assert n_val >= 40 and n_null >= 40, (n_val, n_null)
+
+
+def test_rank20_tie_semantics_pinned_to_average_rank(tmp_path):
+    """并列语义必须钉死：全并列窗口给出 (n+1)/(2n)，**不是** 1.0（`<=`／最大名次口径）。
+
+    `flat` 股全并列且窗口恒满 20 样本 ⇒ 平均名次 = 21/40 = 0.525；`<=` 口径恒 = 1.0。
+    两口径**只在并列处**分叉，故本用例是并列语义的唯一判别器（`mono` 股则两口径一致）。
+    """
+    con, series = _mk_rank20_db(tmp_path)
+    try:
+        got = _rank20_rows(con)
+    finally:
+        con.close()
+
+    flat = [v for _ts, _n, v in got["flat"] if v is not None]
+    assert len(flat) == RANK20_DATES - RANK20_W + 1, flat      # 恰 11 行窗口已满
+    assert all(v == pytest.approx(0.525, abs=1e-12) for v in flat), flat
+    assert not any(abs(v - 1.0) < 1e-12 for v in flat), "取值落到了 <= 口径上（并列取最大名次）"
+
+    # 单调股无并列 ⇒ 两口径一致：窗口满时现价即窗口最大值 ⇒ 恒 1.0
+    mono = [v for _ts, _n, v in got["mono"] if v is not None]
+    assert mono and all(v == pytest.approx(1.0, abs=1e-12) for v in mono), mono
+
+
+def test_rank20_window_with_missing_bars_is_null_not_zero(tmp_path):
+    """三态纪律 + 分母正确性：窗口内含缺数时必须 NULL，**并证明分母不能取 `len(list(...))`**。
+
+    `null` 股前两日缺数 ⇒ 第 20 行（1-based）的窗口**行数已达 20**，但有效样本只有 18。
+    这正是判别点：若分母或用守卫误用 `len(list(close_adj) OVER r20c)`（**含 NULL**），
+    该行会算出 0.0~1.0 的**假值**（把缺数当成"最弱样本"）；正确实现必须给 NULL。
+
+    诚实边界：生产库 `close_adj` 实测**无 NULL**（10 271 084 行 / 0 例）⇒ 本路径当前是**防御性**的；
+    「窗口有效样本不足」才是活路径（次新股上市后前 20 日）。两条都必须能变红，故用手工仓覆盖。
+    """
+    con, _series = _mk_rank20_db(tmp_path)
+    try:
+        got = _rank20_rows(con)
+        # 机制证据：同一行的「窗口行数」与「有效样本数」在此确实分叉
+        probe = con.execute(
+            _base_cte(FACTOR_BY_NAME["rank20"])
+            + "\nSELECT thscode, date_ms, w20_n,"
+            " len(list(close_adj) OVER (PARTITION BY thscode ORDER BY date_ms"
+            " ROWS BETWEEN 19 PRECEDING AND CURRENT ROW)) AS n_list"
+            " FROM lvl4 WHERE thscode = 'null' ORDER BY date_ms"
+        ).fetchall()
+    finally:
+        con.close()
+
+    rows = got["null"]
+    assert rows[0][2] is None and rows[1][2] is None, "缺数行本身必须 NULL"
+    # 第 20 行：窗口 20 行已满、有效样本 18 ⇒ 必须 NULL
+    assert rows[RANK20_W - 1][1] == 18, rows[RANK20_W - 1]
+    assert rows[RANK20_W - 1][2] is None, "有效样本不足却给了值（分母／守卫误用 len(list)）"
+    assert probe[RANK20_W - 1][3] == RANK20_W and probe[RANK20_W - 1][2] == 18, probe[RANK20_W - 1]
+    # 第 21 行：窗口含 1 个缺数 ⇒ 有效样本 19 ⇒ 仍必须 NULL
+    assert rows[RANK20_W][1] == 19 and rows[RANK20_W][2] is None
+    # 第 22 行起窗口干净 ⇒ 必须有值（防「整列 NULL 也算通过」）
+    assert rows[RANK20_W + 1][1] == RANK20_W and rows[RANK20_W + 1][2] is not None
+    assert all(r[2] is not None for r in rows[RANK20_W + 1:]), "窗口已干净却仍 NULL"
+
+
+def test_adding_factor_does_not_change_existing_numeric_conclusions(db, tmp_path, monkeypatch):
+    """RSH-001 **定例的判据**：新增因子属**纯附加**——既有因子的数值结论必须逐字不变。
+
+    这正是「新增因子**不** bump `ALGO_VERSION`」的依据（见 `evaluate.py` 该常量下方注释）：
+    `ALGO_VERSION` 承载的是判定口径（signal/entry/exit、剔除、排名与截面守卫、阈值）；
+    纯新增因子不改其中任何一项，也不改任何既有因子的输出 ⇒ 不构成口径变更。若仅因新增就
+    bump，`review_required` 会把**数值并未失效**的历史结论全标为待复核（误报）。
+    因子池自身的可见性由报告 `factors`/`summary` 列表承担，并记入制度 §8 版本日志。
+
+    **与固有抖动分离**（本用例的关键设计）：`ntile(5) OVER (... ORDER BY f)` 无 tie-break，
+    并行执行下并列块的切分顺序不定（账本 `BUG-002`）⇒ `quintile` 层**天然不可复现**。
+    故不能简单地"排除 `quintile` 了事"，而是**先同池连跑两次建立抖动基线**，
+    再拿「同池两次的差异」去解释「加因子前后的差异」——把新因子的影响从既有缺陷里摘出来。
+    基线里稳定、且加因子前后不一致的字段，才是真回归。
+    """
+    con, _ = db
+    con.close()
+    db_path = tmp_path / "m.duckdb"
+    import app.factors.evaluate as ev
+
+    full = ev.run_full_eval(db_path, out_path=tmp_path / "full.json")
+    again = ev.run_full_eval(db_path, out_path=tmp_path / "again.json")  # 同池第二次
+    keep = tuple(f for f in FACTORS if f.name != "rank20")
+    assert len(keep) == len(FACTORS) - 1
+    monkeypatch.setattr(ev, "FACTORS", keep)
+    base = ev.run_full_eval(db_path, out_path=tmp_path / "base.json")
+
+    f1 = {r["name"]: r for r in full["factors"]}
+    f2 = {r["name"]: r for r in again["factors"]}
+    fb = {r["name"]: r for r in base["factors"]}
+
+    # ---- ① 固有抖动基线：IC 层必须零抖动；quintile 层应当抖（否则说明 BUG-002 已修）
+    assert all(f1[n]["windows"] == f2[n]["windows"] for n in f1), "同池两次的 windows 应零抖动"
+    assert all(f1[n]["daily_ic"] == f2[n]["daily_ic"] for n in f1), "同池两次的 daily_ic 应零抖动"
+    jitter = [n for n in f1 if "quintile" in f1[n] and f1[n]["quintile"] != f2[n]["quintile"]]
+    assert jitter, (
+        "同池两次的 quintile 未出现抖动 ⇒ BUG-002 似已修复："
+        "请把 `quintile` 移出下方 skip 集并收紧本用例"
+    )
+
+    # ---- ② 加因子前后：基线中稳定的字段必须逐字相同
+    #: 排除项及其理由：`quintile` = 上述固有抖动（BUG-002）；`verdict` 由 quintile 派生，
+    #: 同样受影响；`redundant_with`/`reasons` 是「去重提示、人工取舍」而非结论，按新池重算；
+    #: `recheck` 只在有历史结论时出现（两次都是首次跑）。
+    skip = {"quintile", "verdict", "redundant_with", "reasons", "recheck"}
+    #: 钉死「稳定集」的成员：将来新增字段必须在此显式归类，不允许悄悄溜出比对范围。
+    pinned = {
+        "best_horizon", "category", "coverage", "daily_ic", "maturity",
+        "min_bars", "name", "note", "rolling", "verdict_changed", "verdict_prev", "windows",
+    }
+    assert set(f1["mom20"]) - skip == pinned, sorted(set(f1["mom20"]) - skip)
+
+    assert set(f1) - set(fb) == {"rank20"}, "两者差异必须恰是新因子"
+    for name, rb in fb.items():
+        ra = f1[name]
+        assert sorted(ra) == sorted(rb), (name, sorted(ra), sorted(rb))
+        for k in sorted(set(ra) - skip):
+            assert ra[k] == rb[k], (name, k)
+
+
+def test_additivity_guard_can_actually_fail(db, monkeypatch):
+    """**判据自证**：把 base 链里**共享**的 `c20` 改动一点，「逐字不变」必须变红。
+
+    没有这条，上面那条同源比对可能只是「比较了两次同样的东西」而永远全绿
+    （KB-ENG-65：守卫必须能变红；必须是改真实行为，加注释充数不算）。
+
+    ⚠️ **注入必须"改序"，不能只"改值"**——本条曾两次注入失败而**全绿通过**，两次都不是
+    "守卫太弱"，而是注入本身没动到排序：
+    ① `c20 → c20 × 1.01`：`f = close/c20 − 1` 在缩放下变成 `(f−0.01)/1.01`，是 `f` 的
+       **仿射单调变换**，而 IC 走 `percent_rank`、**对单调变换完全不变**（`liq20` note 同性质）；
+    ② `c20 → c20 × (1 + 0.5·(rn % 2))`：本夹具的老股**同日上市、行号一致** ⇒ `rn % 2` 在任一
+       交易日内**跨股票取同值**，退化成又一次全局缩放，仍是仿射变换。
+    故此处按 `hash(thscode)` 缩放——**同一交易日内跨股票不同**，才能真正打乱截面排序。
+    """
+    con, market_daily = db
+    import app.factors.evaluate as ev
+
+    orig = ev._base_cte
+
+    def _perturbed(factor):
+        sql = orig(factor)
+        patched = sql.replace(
+            "LAG(close_adj, 20)  OVER w AS c20",
+            "(LAG(close_adj, 20) OVER w) * (1 + 0.5 * (hash(thscode) % 2)) AS c20",
+        )
+        assert patched != sql, "注入未生效：base 链中 c20 的写法已变，须同步本用例"
+        return patched
+
+    clean = ev.evaluate_factor(con, FACTOR_BY_NAME["mom20"], market_daily)
+    monkeypatch.setattr(ev, "_base_cte", _perturbed)
+    dirty = ev.evaluate_factor(con, FACTOR_BY_NAME["mom20"], market_daily)
+    assert dirty["windows"] != clean["windows"], "共享列被改动却毫无差异 ⇒ 上面那条同源比对是空断言"

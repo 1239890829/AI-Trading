@@ -70,7 +70,11 @@ A_EVALUATED_QLIB: tuple[CandidateDef, ...] = (
         "RSV=(c-Min(low,d))/(Max(high,d)-Min(low,d)); IMAX=IdxMax(high,d)/d; MAX=Max(high,d)/c",
         "price_structure", "A", "", "mom20/gap",
         "evaluated",
-        "imax20 PASS（Aroon，IC +0.043 停牌安全）/rsv20 FAIL/max20 FAIL；RANK20 需展开 LAG(1..19) 列，P1 落地",
+        "imax20 PASS（Aroon，IC +0.043 停牌安全）/rsv20 FAIL/max20 FAIL；"
+        "RANK20 已落地（`rank20`，2026-09-14：IC -0.042 / ICIR -0.33 / 覆盖率 0.991；"
+        "与 rsv20 实测 IC 相关 0.966 ⇒ 同族冗余登记）。"
+        "**注**：原登记「需展开 LAG(1..19) 列」不成立——DuckDB 支持窗口 `list() OVER` + "
+        "`list_filter` lambda，闭式实现即可（见 evaluate.py `_base_cte` lvl3/lvl4）",
     ),
     CandidateDef(
         "qlib-rolling-volprice", "qlib://contrib/data/loader.py#CORR/CORD/CNTP/SUMP/SUMD",

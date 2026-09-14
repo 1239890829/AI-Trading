@@ -173,7 +173,7 @@ FACTORS: tuple[FactorDef, ...] = (
         "atr14_w / NULLIF(close_price, 0)",
         "TA-Lib ATR14 归一：14 日真实波幅均值/收盘。TR 隔夜跳空 >±25% 判除权断层 → NULL（与 gap 同口径）；14 个 TR 全有效才给值。",
     ),
-    # 位置/突破族（qlib RSV/IMAX/MAX）：
+    # 位置/突破族（qlib RSV/IMAX/MAX/RANK）：
     FactorDef(
         "rsv20", "price_structure", 21,
         "(close_price - min20_l) / NULLIF(max20_h - min20_l, 0)",
@@ -188,6 +188,15 @@ FACTORS: tuple[FactorDef, ...] = (
         "max20", "price_structure", 21,
         "max20_h / NULLIF(close_price, 0)",
         "qlib MAX20：20 日最高价/现价。1=创新高（海龟突破近亲），>1=回撤深度。",
+    ),
+    FactorDef(
+        "rank20", "price_structure", 21,
+        "rank20_w",
+        "qlib RANK20：现价在 20 日**滚动窗口内**的百分位排名——"
+        "**不是截面排名**（qlib `Rank($close,d)` = `rolling(d).rank(pct=True)`）。"
+        "并列取**平均名次**（pandas 默认 `average`，即 qlib 主路径；qlib 的 scipy 回退路径走 "
+        "`percentileofscore(kind='rank')` 即 `<=` 口径，二者仅并列时不同，此处钉平均名次）。"
+        "窗口有效样本 <20 或 close_adj 缺失 → NULL。",
     ),
     # 动量统计族：
     FactorDef(
