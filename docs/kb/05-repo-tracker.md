@@ -10,7 +10,7 @@
 
 ✅ 已采纳（进入系统依赖/代码）｜ 🔶 试用中 ｜ ⏳ 候选（已评估未使用）｜ ❌ 淘汰（原因必填）
 
-## 分组收录（10 仓，2026-09-09 首轮 8 仓 + 2026-09-13 用户供仓 2 仓，均 ≥1000★）
+## 分组收录（12 仓，2026-09-09 首轮 8 仓 + 2026-09-13 用户供仓 2 仓 + 2026-09-14 经验反馈轮 2 仓，均 ≥1000★）
 
 ### ArvinLovegood/go-stock — 7.5k★ Go
 - **用途**：AI 股票分析 + 涨跌报警推送（A股/港股/美股）
@@ -82,6 +82,20 @@
 - **使用轨迹**：🔶 **已装机供 agent 按需调用**（2026-09-13 用户指示，装 `.workbuddy/skills/uzi-skill/` 独立 venv，Python 3.11 + 依赖全装）。**冒烟通过**：lite+snapshot 跑 600519 产出 746KB 报告（收盘价 ¥1275.16 与本仓口径一致；DCF/多空辩论/数据缺口披露/免责声明齐全）；**本机首跑 ≈15 分钟** ⇒ 盘后复盘可用、盘中禁用。仍**不接运行时链路**（爬虫源无质量五级、分钟级耗时）；消费方 = `ashare-daily-review` 技能「按需深度研究工具」段 + MEMORY.md §8
 - **结论**：🔶 保留（装机不接线）——两项经验已登记 P2-35/P2-36；66 评委输出为模拟观点且带买卖倾向，任何结论引用须过红线 3 声明
 
+### simonlin1212/Vibe-Research — 2.5k★ TypeScript（MIT，2026-09-14 经验反馈轮收录）
+- **用途**：本地个人投研 Agent 工作台——Codex Harness 驱动：117 数据端点注册表（23 层 + health 巡检）+ 六阶段 SOP + calc 确定性计算库 + validator/合规 gate + 报告归档 + 桌面 React UI；模型运行时可路由 Codex / Claude Code / CodeBuddy CLI（不修改 Codex 源码）
+- **实际运行评估**：**实跑**（2026-09-14）：`.agents/skills/data-access/scripts` 测试 **320 passed**（离线确定性测试，3.9s，仅补装 requests）；全仓 99 个测试文件（TS+Python）；MIT License
+- **可借鉴**：① **卡口事件分类表**（`datasources/chokepoint_keywords.json`：涨价/扩产/停产/订单合同/认证导入/收购合资/供需/管制制裁 8 类，keyword + negatives + decision_hint，**同子句判定 + negatives 否决 + `re:` 中文上下文约束**）——与我们 alert_triage/事件分类直接同构，最值得移植；② calc 确定性计算库（LLM 不算数，公式代码化，与我们「LLM 结论必须可复算」同频）；③ 数据端点注册表按层组织 + health 巡检；④ 其 CHANGELOG「体检查自己写下的痕迹而非效果 ⇒ 假绿」与 KB-ENG-65 同型互证
+- **使用轨迹**：⏳ 候选。卡口事件表候选进告警/事件分类优化（挂 P2 待立项）
+- **结论**：⏳ 收录观察——工程质量罕见地高（离线确定性测试 + 合规 gate 与红线 3 同频）；TradingAgents-astock 同作者的工程化升级线
+
+### oficcejo/aiagents-stock — 1.9k★ Python（2026-09-14 经验反馈轮收录）
+- **用途**：Streamlit 多 AI 智能体盯盘（DeepSeek 单模型）：游资龙虎榜 5 分析师团队 + 板块轮动 4 分析师 + 价格/异动监测告警 + 主力选股批量分析 + 新闻流量监测（20 平台）；miniqmt 预留
+- **实际运行评估**：结构性评估（2026-09-14）：**无 LICENSE**（Sequoia-X 同例，一票否决）；94 个 py 平铺根目录、仅 2 个测试文件；选股依赖问财登录 cookies + Playwright 无头浏览器绕过（合规灰色）；未实跑——无 License 即淘汰，实跑无意义
+- **可借鉴**：龙虎榜 → AI 评分 → 加入监测 → 价格告警的闭环叙事（我们已有同等能力链，无增量）
+- **使用轨迹**：❌ 不接入
+- **结论**：❌ 淘汰（无 LICENSE + 工程质量弱 + 与 TradingAgents-astock 场景重叠）
+
 ## 筛选经验（每轮发现前必读——下一轮检索与甄别的依据）
 
 1. **形态匹配优先**：VSCode 扩展（leek-fund）、桌面 Wails 应用形态与我们的 Web 栈天然不兼容——除非只提取经验，否则直接跳过，省评估成本
@@ -90,6 +104,9 @@
 4. **搜索词要轮换**：本轮命中主要靠「llm trading agent / stock alert monitor」；下轮补充「连板 监控」「涨停 预警」「A股 agent」「dragon tiger」等我们领域的原生词汇
 5. **≥1000★ 硬门槛**保持；trading 分组已有的仓不重复收录（去重表见 git log / kb 面板）
 6. **A 股 LLM 应用层正在爆发**（TradingAgents 系 31k+、daily_stock_analysis 64k）——每轮必查该类新仓库
+7. **检索词命中率实测（2026-09-14）**：中文双词组合命中率极低（「涨停 预警」total=3、「连板 监控」total=4、「dragon tiger stock」total=4）；混排词与英文词更有效（「A股 agent llm」total=55、「stock screener llm」total=35、「龙虎榜 数据」total=43）。下轮轮换建议：`limit-up monitor`、`A股 复盘 agent`、`stock agent framework`、`资金流 monitor`
+8. **同作者仓库矩阵要联动看**：TradingAgents-astock 作者的 Vibe-Research 是其工程化升级线（旧仓需 LLM 网关未深评 vs 新仓 320 测试全绿）——发现同作者新仓时优先评估新形态，旧仓状态可同步标注出处
+9. **无 LICENSE 一票否决二次验证**（Sequoia-X 之后 aiagents-stock 再现）——命中即淘汰，不做深评
 
 ## trading 分组 diff 台账（2026-09-09，22 仓快照 vs 历史已评）
 
@@ -166,3 +183,4 @@ Vibe-Trading、qlib、OpenBB、quantskills、zvt
 - **2026-09-09 首轮**：检索 10 组关键词 → 15 候选（≥1000★）→ 收录 8 仓（去重 trading 分组后）→ 深评 3（go-stock 编译通过/tick-stock-panel 装机通过/leek-fund 结构性）→ 浅评 5。经验 6 条。运行受限诚实记录：FinGPT 需 GPU、leek-fund 需 IDE 环境、其余需 LLM 多模型配置——均标注未实跑部分。
 - **2026-09-13 用户供仓批次**：用户指路 2 仓（serenity-skill 4k★ / UZI-Skill 6.9k★，非发现轮检索产物）→ 结构性评估（文件树核验 + 方法论/数据源文档正文抽读，均未实跑——实跑成本与形态不匹配已如实标注）→ serenity 方法论提炼进 [[KB-STOCK-34]] 并登记 P2-34（卡点因子）；UZI 两项经验登记 P2-35（杀猪盘排查）/ P2-36（估值维度），本体裁定不接入运行时。**新增一条来源类型：用户直接供仓**——评估纪律不变（结构核验优先于 README 宣称），收录门槛不变（两仓均 ≥1000★ 达标）。
 - **2026-09-13 装机轮（用户指示：「你帮我装就好啦」「我不会在 claude 主动用的，可以让它复盘的时候按需去用」）**：两仓克隆进 `.workbuddy/skills/`（遵守 MEMORY 第一规则「一切进项目目录」）；UZI 建独立 venv（Python 3.11，不污染后端环境）+ 依赖全装 + **端到端冒烟通过**（lite+snapshot 跑 600519：wave1 61.8s / 22 维缓存复用 / 报告收盘价与本仓交叉验证一致）；serenity 自带结构自校验通过。注册三处消费方：`ashare-daily-review` SKILL.md「按需深度研究工具」段（复盘按需）· MEMORY.md §8（会话入口）· 本台账使用轨迹。**诚实校准**：官方宣称 lite 1-2 分钟，本机首跑 ≈15 分钟（akshare 冷启动 + 每维 90s 上限）——登记为「盘后可用、盘中禁用」。
+- **2026-09-14 经验反馈轮**：读筛选经验 → 检索 6 组词（涨停 预警 / 连板 监控 / A股 agent llm / dragon tiger stock / stock screener llm / 龙虎榜 数据）→ ≥1000★ 命中 4 仓 → 去重 2 已收录 → **真新增 2 仓**：Vibe-Research 2.5k★ ⏳（tarball 下载替代超时 git clone；data-access 测试实跑 **320 passed**）+ aiagents-stock 1.9k★ ❌（无 LICENSE 一票否决）。先 grep archive 确认两仓无历史深评结论才做评估（未重复劳动）。经验 +3（条目 7/8/9）。

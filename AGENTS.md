@@ -30,7 +30,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2785 项（2723 passed / 62 skipped）· 182 文件（09-13 §6.26 实测）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2966 项（2904 passed / 62 skipped）· 190 文件（09-14 全量实测，0 failed）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。
@@ -48,7 +48,7 @@ cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2785
 # **教训与本文档的警告同源：数字标注要么当轮实测回填，要么写"实测方法"而不写死数值。**
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
 cd apps/web && npx eslint .                       # 0 error / 0 warn（P1-27 已清零；余 1 处 C 类显式豁免）
-cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 456 项 / 54 文件（09-13 实测）
+cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 484 项 / 56 文件（09-14 实测）
 # ⚠️ **凡改动/新增涉及时间·时区的断言，必须再用 `TZ=UTC` 复跑一遍**（CI 跑在 UTC，本地是 UTC+8）：
 cd apps/web && TZ=UTC CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run
 # 2026-09-12 真实踩过：`longhu-tab.test.tsx` 用 `new Date(2026, 8, 2, 14, 20)` 钉"盘中"，
@@ -62,11 +62,17 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 2785 项（2723 passed / 62 skipped）· 182 文件、前端 456 项 / 54 文件、eslint **0 error / 0 warn**
+> **门禁口径**：后端 2966 项（2904 passed / 62 skipped）· 190 文件、前端 484 项 / 56 文件、eslint **0 error / 0 warn**
 > （25 条回归已按 P1-27 清零；仅 notification-drawer 保留 1 处带理由的 C 类豁免）。
+> ⚠️ **「文件数」有两个口径，混用会造出假缺口**（2026-09-14 实测）：`ls tests/*.py` 与
+> `pytest --collect-only` 的「有测试的文件数」**不等**——本仓恒差 2（存在 2 个 0 用例的测试文件）。
+> master 实测：`ls` = 184 而 collect = 182；当前：`ls` = **192** 而 collect = **190**（09-14 F7 轮实测）。
+> **引用前先确认用的是哪个口径**，并把基线数字改从 `git worktree add /tmp/base <ref>` 实测取，
+> 不要沿用手写记录（09-14 曾因「ls 基线 184 vs collect 记录 182」差 2，一度像是本轮多加了文件）。
 > **测试规模与告警数同属「会失真的状态标注」**——改动后要实测回填，不要沿用旧数字
 > （此前「≤1 warn / 后端 580 / 前端 97 / 219 / 257 / 263 / 342 / 1925 / 2553 / 2556 / 2557 / 2574 / 2576 / 2625 /
-> 2584 / 2585 / 2590 / 2602 / 2606 / 2619 / 2620 / 2632 / 2635 / 2674 / 2691 / 2695 / 2708 / 2720 / 前端 423 / 429 / 444 / 454」均已被后续改动追过，教训见 `docs/retro-and-gaps.md` §七）。
+> 2584 / 2585 / 2590 / 2602 / 2606 / 2619 / 2620 / 2632 / 2635 / 2674 / 2691 / 2695 / 2708 / 2720 / 2731 / 2860 /
+> 前端 423 / 429 / 444 / 454 / 472」均已被后续改动追过，教训见 `docs/retro-and-gaps.md` §七）。
 > ⚠️ **交接 note 里的门禁数字也会失真**（2026-09-12 实测：note 写「2574 / 2513」，当轮为 2576 / 2515，新加 8 项后为 2584 / 2523 ⇒ 差值恰好等于新增测试数，可自洽核对）——**取数一律自己跑一遍**。
 > ✅ **自洽核对法已再次生效**（2026-09-12 批次 1 收尾）：上一值为 2632 / 429，本轮 2635 / 438 ⇒ 差值 **+3 / +9**，
 > 恰好等于本轮新增的 3 条后端守卫与 1 个前端文件（`lib/market-hours.test.ts` 9 项）——**差值对不上就说明有别的改动混入，值得查**。
@@ -97,6 +103,62 @@ lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=
 > 恰 = 风控接线 9（`test_paper_risk_gate.py` 7 行为级 + `test_risk.py` 2 装配/口径级）+ C 类钉子 2
 > （anchors 豁免治理 1 + data_path 前提钉死 1），文件 = `test_paper_risk_gate.py`；前端 454 → **456** ⇒ 差 **+2**
 > （resetKey 默认清除行为 + 数据刷新成本两用例，其中 1 处为改写非净增）——三方自洽。
+> ✅ **自洽核对（2026-09-14 全面审查实施轮，分支 `review/full-audit-20260914`）**：后端 2785 / 182 → **2813 / 184**
+> ⇒ 差 **+28 项 / +2 文件** = 18（`test_degradation_contracts.py`）+ 4（`test_paper_pending_cash.py`）
+> + 4（`test_write_token.py`）+ 1（`test_picks_pipeline.py`）+ 1（`test_meta_review.py` 定点守卫）；
+> 前端 456 / 54 → **472 / 56** ⇒ 差 **+16 项 / +2 文件** = 6（`env-secrecy.test.ts`）+ 3（`news-modal.test.tsx`）
+> + 4（`format.test.ts`）+ 3（`css-vars.test.ts`）。**同轮 3 个既有失败收敛为 0**：1 个文档锚点（新文件需 `git add`
+> 进索引，守卫判定面 = `git ls-files`）+ 2 个「测试绑定真实运行日」（`test_meta_review` seed 用 UTC 而过滤走北京
+> naive ⇒ **每周一凌晨必红**；`_calendar_days_ms` 未注入 `today` ⇒ 只有夹具当天是绿的）——**两条都在周一凌晨实跑复现并定点修复**。
+> ✅ **自洽核对（2026-09-14 批次 2 · 低风险正确性轮 R05/R06/R09/R11/R13/R21）**：后端 2813 / 184 → **2860 / 185**
+> ⇒ 差 **+47 项 / +1 文件**，用 `git worktree add /tmp/base master` 实测基线后**逐文件对账**（比记总量可靠）：
+> 28（`test_paper_order_guards.py`，本轮唯一新增文件 · R05/R06）+ 10（`test_position_loop.py` · R09）
+> + 4 + 1（`test_evolution.py` + `test_agent_tasks.py` · R11）+ 2（`test_backtest.py` · R13）
+> + 1 + 1（`test_data_path_isolation.py` + `test_theme_catalog.py` · R21）= **47**，全额对上。
+> 全仓基线对账：master collect = **2785 / 182** → 当前 **2860 / 185**，两批合计 **+75 项 / +3 文件**
+> （= `test_degradation_contracts.py` + `test_paper_pending_cash.py` + `test_paper_order_guards.py`）。
+> **前端本轮零改动**，实测仍 **472 / 56**（含 `TZ=UTC` 复跑同绿；另跑 `--maxWorkers=1`）——**"某一侧不变"同样是可核对的自洽项**。
+> ⚠️ **本轮两次踩到"记录值而非实测值"**：①文件数口径混用（见上一段 ⚠️）；②批 1 记的「184 文件」是
+> **collect 口径**、而我一度拿 `ls` 口径的 184 去比，凭空多出 2 个文件的"缺口"。
+> **两条修法同源：差值对不上时先用 worktree 取实测基线，再逐文件 diff——不要先怀疑自己数错。**
+> ✅ **自洽核对（2026-09-14 批次 3 · 正确性收尾轮 R18/R07-a/R19/R20/R24/R26）**：后端 2860 / 185 → **2887 / 186**
+> ⇒ 差 **+27 项 / +1 文件**，同样以 worktree 逐文件对账，**并对上了全部 102 项全仓增量**：
+> 6（`test_quote_hub.py` · R18）+ 6（`test_position_loop.py` 16 项里归 R07-a 的那 6，余 10 属批 2 R09）
+> + 4（`test_board_surge_phase2.py` · R26）+ 4（`test_quote_hub_cadence.py`）+ **7**（`test_ws_quotes_lifecycle.py`，
+> 本轮唯一新增文件）= **27**，全额对上；前端 472 / 56 → **484 / 56** ⇒ 差 **+12 项 / +0 文件**
+> = 8（`trade-form.test.tsx` 5→13 · R19）+ 4（`use-resource.test.tsx` 16→20 · R20）——**"零新增文件"同样要能对上差额**。
+> ⚠️ **本轮抓到的"清单漏项"**：差额一度显示 +27 而我的清单只凑到 +23，缺的 **+4 正是 `test_board_surge_phase2.py`（R26）**
+> ——**收尾清单本身也会漏项，唯一靠得住的是逐文件 diff**（这正是上一条纪律的第二次生效）。
+> ⚠️ **eslint 回归是"改完当场没跑全仓"漏掉的**：R19 在渲染期写 `ref.current`（`sigRef.current = orderSig`）
+> 被 `react-hooks/refs` 判为 **error**（React 官方规则：渲染必须纯），门禁要求 0 error ⇒ 已把该写入移到
+> **effect 体内首行**（依赖含 `orderSig`，草稿一改即重跑；而请求最少等 300ms 去抖 + 一个往返，
+> **任何回包都晚于本次 effect 的同步段** ⇒ 语义不变、无窗口）。**教训：局部 `eslint <file>` 通过 ≠ 全仓通过，
+> 门禁必须整仓跑**（本轮 `npx eslint .` 全量复跑后为 0）。
+>
+> ✅ **自洽核对（2026-09-14 日期陈旧类 F1–F6 实施轮）**：后端 2887 / 186（**中途快照，非基线**）→ **2954 / 189**
+> ⇒ 差 **+67 项 / +3 文件**。⚠️ **但 2887 本身就不是基线**——按纪律不先怀疑自己，取
+> `git worktree add /tmp/base master` 实测：**master collect = 2785 / 182**（同目录 `ls tests/*.py` = 184），
+> 当前 **2954 / 189** ⇒ **逐文件 diff = +169 项 / +7 文件**，全额对上：
+> 新文件 7 个 = 5（`test_agent_toggle_switches`）+ 4（`test_dated_consistency`）+ 19（`test_degradation_contracts`）
+> + 28（`test_paper_order_guards`）+ 4（`test_paper_pending_cash`）+ 12（`test_paper_t1_settlement`）+ 7（`test_ws_quotes_lifecycle`）
+> = **79**；既有文件扩充 **90**；合计 **169**。
+> **前端本轮零改动**，实测仍 **484 / 56**（`--maxWorkers=1`；含 `TZ=UTC` 复跑同绿）——**"某一侧不变"同样是可核对的自洽项**。
+> ⚠️ **"记录的中间值"比"记错"更常见**：2887 是批次 3 提交当时的数，此后 F1–F6 又加了 67 项却**未回填**
+> ⇒ 「**回填滞后于提交**」第三次留下缺口。**取数一律自己实测，勿沿用上文任何数字。**
+>
+> ✅ **自洽核对（2026-09-14 F7 三态收口 + 全仓防复发守卫轮）**：后端 2954 / 189 → **2966 / 190**
+> ⇒ 差 **+12 项 / +1 文件**，逐项对账**全额对上**：
+> 6（**新增文件** `tests/test_tradedate_freshness_guards.py` · 守卫 B1/B2/B3/B3b/B4×2）
+> + 2（`test_morning_brief.py` · 未判定必须「不置位可重试」）
+> + 1（`test_picks_autogen.py` · 未判定可重试 + 日志口径）
+> + 1（`test_ths_sentinel.py` · 未判定⇒`calendar_unknown` 可见降级）
+> + 1（`test_intraday_monitor.py` · 同形）+ 1（`test_review.py` · 未判定不得触发复盘）= **12**。
+> **前端本轮零改动**，实测仍 **484 / 56**（`--maxWorkers=1`；`TZ=UTC` 复跑同绿）。
+> ⚠️ **本轮的"回归"不在代码而在测试夹具**：`test_review.py::test_scheduler_skips_when_today_report_exists`
+> 桩的是**旧名** `tc.is_trade_day`，而 `review/service.py` 已改调三态 `is_trade_day_on` ⇒ 桩**失效**、
+> 用例隐式绑定真实日历 ⇒ 全量门禁 **1 failed**。**教训：改「判定原语的名字/元数」时，
+> 全仓 `grep` 必须用**裸 token**（`is_trade_day`）而不是带前缀的 `_is_trading_day`——
+> 本轮第一遍就是被过窄的模式漏掉了这一处**（同族：shell `grep "\|"` 在 BSD 下静默返空，见 kb）。
 
 **发布前额外做一次接口载荷体检**（plan-review 三.7，2026-09-01 纳入）：
 `node scripts/api-sweep.js`（服务在跑时）——它能抓出"HTTP 200 但数据是空的"这类
@@ -415,6 +477,10 @@ curl 先行 → 记录字段口径与类型陷阱 → 多采样找规律 → fix
   杀掉重跑再判断，勿直接改代码。
 - **排查**：页面 `performance.getEntriesByType('resource')` 看真实请求 URL；
   bash grep 在沙箱不可靠——查代码用 Grep 工具或 node -e。
+  ⚠️ **最常见触发形态是 `grep "a\|b"`**（BSD grep 默认 BRE，不支持 `\|` 交替 ⇒ 模式整体失效、
+  静默返空，已三次复现）。**更硬的规矩**：任何「某物不存在」的结论，在**据此动手改之前**
+  必须用 Grep 工具复核一次——该坑的真实危害不是漏看，而是它会被当成"不存在"的证据，
+  **诱发主动的错误修正**（2026-09-14：据此断言报告无 §5.3，实际在第 345 行）。见 KB-ENG-04。
 - **轮询/刷新类验收**：resource buffer 默认 250 条会**静默溢出**（计数停滞假象）——
   先 `performance.clearResourceTimings()` 再测间隔；headless 页面挂 5 分钟后进入
   intensive throttling，长间隔轮询计数偏低属环境行为，以"清 buffer 后短窗计数"为准。

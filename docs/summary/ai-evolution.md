@@ -23,7 +23,11 @@
   → 后置守护：回归门禁 + 劣化回滚 + 红线清单 + 预算上限
 ```
 
-- 停机开关：`ASHARE_AGENT_AUTONOMY=0`；C 类独立开关 `ASHARE_AGENT_CODE_CHANGE`。
+- 停机开关：`ASHARE_AGENT_AUTONOMY_ENABLED=0`；C 类独立开关 `ASHARE_AGENT_CODE_CHANGE_ENABLED`。
+  （变量名以 `.env.example` 为准。**勘误 2026-09-14**：本文档与代码注释此前写作少 `_ENABLED` 的短名，
+  按该名设置**根本不生效**——短名现已兼容但会告警，见 KB-ENG-76。）
+- 停机语义：关闭时议程照常生成（降级为建议清单），**且调度器的自动转正/自动回滚一并停止**；
+  元评估周报是显式例外（只产出可读 artifact，不改系统行为）。
 - 十路证据含：复盘改进项（含 `repeat_pending` 重复未落实检测）、信号健康、告警统计、台账归因、KB 健康、数据健康、`framework_backlog`（06 框架演化日志）等。
 - 设计要点：**前置人工确认会退化为"需要人喂的工具"** → 改为后置守护（管结果不管过程）。
 

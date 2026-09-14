@@ -12,7 +12,7 @@
 | **数据持久化** | 挂宿主 `./data` → 容器 `/data`。**挂 `/app/data` 不生效** |
 | **密钥（红线 4）** | API Key 只走 `backend/.env`（`env_file` 注入），**绝不进镜像层 / 前端 / git** |
 | **前端连后端** | 同源 `/backend` 相对路径 + 服务端运行时代理 `BACKEND_ORIGIN`（**改后端地址无需重新构建**）；WS **不走**代理，需 nginx 反代或自动降级 5s 轮询 |
-| **公网 / NAS 必配** | `ASHARE_API_TOKEN`（写接口鉴权）+ `ASHARE_CORS_ORIGINS`（加实际访问域名） |
+| **公网 / NAS 必配** | `ASHARE_API_TOKEN`（写接口鉴权，**backend 与 web 容器都要有**）+ `ASHARE_CORS_ORIGINS`（加实际访问域名） |
 | **发布门禁** | `node scripts/api-sweep.js`——专抓「HTTP 200 但数据为空」这类测试与类型检查都发现不了的问题 |
 
 **章节导航**：本地开发 ｜ Docker ｜ 环境变量 ｜ 前端如何连后端 ｜ 运维工具（全 GET 端点巡检）｜ 运维要点 ｜ 已踩过的坑 ｜ Docker 用户侧验证清单（8 项）
@@ -67,7 +67,7 @@ docker compose -f docker-compose.prod.yml up -d --build
 | ASHARE_REQUEST_TIMEOUT_SECONDS | Provider 超时 |
 | ASHARE_CORS_ORIGINS | 允许的前端来源（**部署到 NAS/云主机要把实际访问域名加进来**） |
 | ASHARE_REVIEW_* / ASHARE_NEWS_* | 分析器/摘要器：rules（默认）或 llm（配 *_LLM_BASE_URL / *_LLM_API_KEY / *_LLM_MODEL） |
-| ASHARE_API_TOKEN | 写接口鉴权；**部署到公网/NAS 必须配置随机值** |
+| ASHARE_API_TOKEN | 写接口鉴权；**部署到公网/NAS 必须配置随机值**。backend 从 `backend/.env` 读，**web 容器需经 compose 透传同一值**（代理层运行时附加请求头），见「写鉴权 token 的传递路径」。⚠️ 前缀**绝不能**是 `NEXT_PUBLIC_` |
 | NEXT_PUBLIC_API_BASE | 前端 REST 基址；**留空即同源 `/backend`**（推荐） |
 | NEXT_PUBLIC_WS_BASE | 前端 WebSocket 基址；留空时同源尝试，失败自动降级 5s 轮询 |
 | BACKEND_ORIGIN | **服务端**变量，前端反代的目标后端地址（默认 `http://127.0.0.1:8000`），运行时生效 |
@@ -97,6 +97,36 @@ cd apps/web
 npx next build                              # dev server 运行时禁止执行
 BACKEND_ORIGIN=http://127.0.0.1:8000 npx next start -p 3100
 curl http://127.0.0.1:3100/backend/api/health   # 应返回后端健康信息
+```
+
+### 写鉴权 token 的传递路径（2026-09-14 起）
+
+写接口的 `X-API-Token` **只在服务端流转**，浏览器侧不持有：
+
+```
+浏览器 ──(不带 token)──▶ Next Route Handler ──(附加 X-API-Token)──▶ backend
+                            ↑ 运行时读 ASHARE_API_TOKEN
+```
+
+- 历史实现用 `NEXT_PUBLIC_API_TOKEN`，而 `NEXT_PUBLIC_*` 被 Next **构建期内联**成客户端
+  bundle 里的字面量 ⇒ 等于把唯一写保护凭据公开，且会写进浏览器历史与反代访问日志。
+  已修复；防回潮守卫 `apps/web/lib/env-secrecy.test.ts`（含掩码器自证与注入验证）。
+- 因此 **web 容器也必须拿到 `ASHARE_API_TOKEN`**，由 `docker-compose.prod.yml` 透传。
+  刻意**不使用** `env_file: backend/.env` —— 那会把 THS Key / DB URL 等全部后端凭据
+  一并搬进 web 容器。推荐从单源派生，避免两处漂移：
+
+```bash
+export ASHARE_API_TOKEN="$(sed -n 's/^ASHARE_API_TOKEN=//p' backend/.env)"
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+- **判据是"两边一致"**：变量缺失时代理不附加请求头，与后端 `require_write_token` 的
+  opt-in 语义对称（本地开发零配置、后端未配时写接口照常放行）；但**后端配了而 web
+  没传 ⇒ 所有写接口 401**（读接口不受影响）。排查（不打印明文）：
+
+```bash
+docker compose -f docker-compose.prod.yml exec web printenv ASHARE_API_TOKEN | wc -c
+# 0 ⇒ 未注入（除换行外无字符）；>0 ⇒ 已注入
 ```
 
 ## 运维工具：全 GET 端点巡检
@@ -191,6 +221,11 @@ docker compose -f docker-compose.prod.yml restart backend
 - backend/.env 经 `env_file` 注入：`docker compose -f docker-compose.prod.yml exec backend env | grep ASHARE_`；
 - 确认 key **没进镜像层**：`docker history <backend镜像>` 不应出现密钥内容；
 - 严禁 `--build-arg` 传 key。
+- **写鉴权 token 也须到 web 容器**（2026-09-14 起，代理层运行时附加请求头）：
+  `docker compose -f docker-compose.prod.yml exec web printenv ASHARE_API_TOKEN | wc -c`
+  —— 配置后应 >0；**后端配了而这里为 0 ⇒ 所有写接口 401**（读接口不受影响）。
+  详见「写鉴权 token 的传递路径」。同理确认 `.env*` 未进 web 镜像层
+  （`apps/web/.dockerignore` 已排除，`COPY . .` 不会再把它带进构建层/运行镜像）。
 
 ### 6. 接口载荷体检（发布门禁）
 

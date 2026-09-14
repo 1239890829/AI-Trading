@@ -7,8 +7,15 @@ Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**170 个操作 / 160 �
 
 ## 鉴权（B6 opt-in）
 
-写端点（下表标 🔒）在 `ASHARE_API_TOKEN` 配置后要求 `X-API-Token` 头（或 `?token=`）；
-后端未配置 token = 全放行（本地 dev 零配置）。前端部署时配 `NEXT_PUBLIC_API_TOKEN` 自动携带。
+写端点（下表标 🔒）在 `ASHARE_API_TOKEN` 配置后要求 `X-API-Token` 头；
+后端未配置 token = 全放行（本地 dev 零配置）。
+
+**客户端不持有 token**（2026-09-14 修复）：token 由前端**服务端反向代理**
+`apps/web/app/backend/[...path]/route.ts` 在运行时从 `ASHARE_API_TOKEN` 读取后附加到
+非 GET/HEAD 请求。历史实现曾用 `NEXT_PUBLIC_API_TOKEN`，而 `NEXT_PUBLIC_*` 由 Next
+**构建期内联**为客户端 bundle 里的字面量 ⇒ 任意访客查看源码即可取得唯一写保护凭据。
+同轮关闭 `?token=` 查询参数通道（URL 会留在浏览器历史 / Referer / 反代访问日志）。
+防回潮守卫：`apps/web/lib/env-secrecy.test.ts`；传递路径见 `docs/deployment.md`。
 
 ## 健康与市场总览
 
