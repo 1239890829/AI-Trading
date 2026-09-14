@@ -442,8 +442,14 @@ async def collect_evidence(app_state) -> dict:
         log.warning("brief evidence: calendar failed: %s", exc)
         missing.append(f"交易日历不可用（{exc}）")
     pool_date, pool_basis = _evidence_pool_date(days, now)
-    if days and beijing_today() not in days:
-        missing.append(f"{beijing_today()} 非交易日（简报仅存档，盘中 watcher 不会跑）")
+    if days:
+        # 三态（2026-09-14 同族收口）：原写法 `beijing_today() not in days` 是**二态**——
+        # 日历是尾随窗口，未覆盖今天时 `not in` 为 True ⇒ 在**真实交易日**追加
+        # 「非交易日」这条**假事实**（记进简报的 missing 列表并随简报归档）。
+        # 只有 `False`（= 周末或日历已明确休市）才该这么写。
+        day_state = tc.is_trade_day_on(beijing_today(), days)
+        if day_state is False:
+            missing.append(f"{beijing_today()} 非交易日（简报仅存档，盘中 watcher 不会跑）")
 
     themes: dict[str, dict] = {}
     if pool_date is not None:
@@ -554,7 +560,12 @@ async def collect_evidence(app_state) -> dict:
     return {
         "brief_date": beijing_today().strftime("%Y%m%d"),
         "generated_at": beijing_now().isoformat(),
-        "is_trading_day": (beijing_today() in days) if days else None,
+        # 三态（2026-09-14 同族收口）：契约是 `boolean | null`（见 `apps/web/lib/api.ts`
+        # 的 `is_trading_day: boolean | null`），原写法 `beijing_today() in days` 只能产出
+        # boolean ⇒ 日历未覆盖今天时把「**未判定**」写成 `false`（= 断言今天不是交易日），
+        # 且该字段随每日简报**永久归档**（`data/picks/briefs/<date>.json`）⇒
+        # 事后翻记录也看不出是判错还是真休市。
+        "is_trading_day": tc.is_trade_day_on(beijing_today(), days) if days else None,
         "phase": phase,
         "promo_percentile": promo,
         "bands_source": bands_source,

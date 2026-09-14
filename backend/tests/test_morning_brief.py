@@ -399,3 +399,87 @@ def test_climate_safe_helper_passes_through_payload(monkeypatch):
     out = asyncio.run(mb.collect_climate_safe(date(2026, 9, 11)))
     assert out["alert"] == "el_nino"
     assert out["asof"] == "2026-09-11"
+
+
+# ---------------------------------------------------------------- 三态口径（同族收口）
+
+class _FakeProvider:
+    """只需 `get_limit_up_pool`；其余路径都在 `collect_evidence` 的 try 内降级。"""
+
+    async def get_limit_up_pool(self, _d):  # noqa: ANN001
+        return []
+
+
+def _hermetic_state():
+    """构造一个**零外呼**的 state：所有会打网络的入口都换成本地桩。
+
+    必要性：`collect_evidence` 里每路 IO 都包在 try 内 ⇒ 真实网络只在失败时
+    变慢/报错，测试会「能过但随机慢」。这里显式断掉，测试才是确定的。
+    """
+    return NS(hub=NS(provider=_FakeProvider()), event_store=None, snapshot_service=None)
+
+
+@pytest.fixture
+def hermetic(monkeypatch):
+    """把 collect_evidence 的每个外部依赖都钉死为本地行为。"""
+    from app.events import chains as chains_mod
+    from app.services import akshare_ext as ak_mod
+    from app.services import market_context as mc_mod
+
+    async def _no_climate(_d):  # noqa: ANN001  —— 是被 await 的协程，桩必须可 await
+        return None
+
+    monkeypatch.setattr(mb, "collect_climate_safe", _no_climate)
+    monkeypatch.setattr(chains_mod, "macro_calendar_note", lambda _d: None)
+    monkeypatch.setattr(ak_mod, "get_akshare_ext", lambda: (_ for _ in ()).throw(RuntimeError("no net")))
+    monkeypatch.setattr(mc_mod, "compute_market_sentiment", lambda *_a, **_k: None)
+    monkeypatch.setattr(mb.tc, "prev_trade_date", lambda days, anchor: None)
+    return monkeypatch
+
+
+def _cover(days_iso: list[str]):
+    return [date.fromisoformat(d) for d in days_iso]
+
+
+def test_evidence_is_trading_day_is_unknown_when_calendar_does_not_cover_today(hermetic):
+    """日历**未覆盖**今天 ⇒ `is_trading_day` 必须是 `None`，**不得**写成 `false`。
+
+    回退即红：旧写法 `(beijing_today() in days)` 在未覆盖时得 `False` ⇒
+    把「未判定」断言成「今天不是交易日」，而这个字段会随每日简报
+    **永久归档**（`data/picks/briefs/<date>.json`）⇒ 事后翻记录也看不出
+    是判错还是真休市（属「错了也看不出来」）。
+    """
+    hermetic.setattr(mb, "beijing_today", lambda: date(2026, 9, 14))
+    # 尾随窗口：末日停在上一交易日，不含 09-14
+    async def _days(_p):  # noqa: ANN001
+        return _cover(["2026-09-10", "2026-09-11"])
+    hermetic.setattr(mb.tc, "trading_days", _days)
+
+    import asyncio
+
+    ev = asyncio.run(mb.collect_evidence(_hermetic_state()))
+
+    assert ev["is_trading_day"] is None, "未判定被写成 false ⇒ 归档里留下一条假事实"
+    assert not any("非交易日" in m for m in ev["missing"]), \
+        "在真实交易日追加「非交易日」说明 ⇒ 简报面板出现假警示"
+
+
+def test_evidence_is_trading_day_false_only_when_calendar_confirms_closed(hermetic):
+    """日历**已覆盖**今天且今天不是交易日 ⇒ `False`（这才可断言「休市」）。
+
+    与上一条**成对**：只测未覆盖那一侧，会把「任何情况都返回 None」的实现判绿
+    （KB-ENG-65 假绿守卫——判据必须能区分三态，而不是只压一个方向）。
+    """
+    hermetic.setattr(mb, "beijing_today", lambda: date(2026, 9, 11))
+    # 覆盖 09-11（末日 >= 09-11）但 09-11 不在集合内 = 日历明确休市
+    async def _days(_p):  # noqa: ANN001
+        return _cover(["2026-09-09", "2026-09-10", "2026-09-14"])
+    hermetic.setattr(mb.tc, "trading_days", _days)
+
+    import asyncio
+
+    ev = asyncio.run(mb.collect_evidence(_hermetic_state()))
+
+    assert ev["is_trading_day"] is False
+    assert any("非交易日" in m for m in ev["missing"]), \
+        "确认休市却不再提示 ⇒ 用户以为简报漏生成"

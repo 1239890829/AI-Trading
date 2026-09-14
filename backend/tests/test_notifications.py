@@ -77,13 +77,20 @@ class _FakeStore:
 
 
 def _event_row(eid=1, title="工信部发布算力扶持政策", published_hours_ago=2):
+    from app.core.bjtime import beijing_now_naive
+
     return _FakeRow(
         id=eid,
         title=title,
         url="https://example.com/a",
         source="x",
         source_tier=4,
-        published_at=datetime.now() - timedelta(hours=published_hours_ago),  # 北京 naive 语义
+        # 用**北京 naive**（生产同口径），不用 `datetime.now()` 的宿主墙钟：
+        # 后者在 UTC 宿主下会比北京慢 8h，让 `published_at` 与「现在」的差值凭空多出 8h。
+        # 本行原先注释自称「北京 naive 语义」而实现是 `datetime.now()` —— 属**注释失真**；
+        # 下游断言取三态全集 / `score is not None` ⇒ 对 8h 差**不敏感**（故一直全绿），
+        # 但语义必须准，否则将来有人在此加时间敏感断言就会踩宿主时区。
+        published_at=beijing_now_naive() - timedelta(hours=published_hours_ago),
         fact_kind="fact",
         certainty="done",
         category="policy",

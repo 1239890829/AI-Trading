@@ -30,7 +30,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2966 项（2904 passed / 62 skipped）· 190 文件（09-14 全量实测，0 failed）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 2971 项（2909 passed / 62 skipped）· 190 文件（09-14 全量实测，0 failed）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。
@@ -62,7 +62,7 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 2966 项（2904 passed / 62 skipped）· 190 文件、前端 484 项 / 56 文件、eslint **0 error / 0 warn**
+> **门禁口径**：后端 2971 项（2909 passed / 62 skipped）· 190 文件、前端 494 项 / 57 文件、eslint **0 error / 0 warn**
 > （25 条回归已按 P1-27 清零；仅 notification-drawer 保留 1 处带理由的 C 类豁免）。
 > ⚠️ **「文件数」有两个口径，混用会造出假缺口**（2026-09-14 实测）：`ls tests/*.py` 与
 > `pytest --collect-only` 的「有测试的文件数」**不等**——本仓恒差 2（存在 2 个 0 用例的测试文件）。
@@ -159,6 +159,17 @@ lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=
 > 用例隐式绑定真实日历 ⇒ 全量门禁 **1 failed**。**教训：改「判定原语的名字/元数」时，
 > 全仓 `grep` 必须用**裸 token**（`is_trade_day`）而不是带前缀的 `_is_trading_day`——
 > 本轮第一遍就是被过窄的模式漏掉了这一处**（同族：shell `grep "\|"` 在 BSD 下静默返空，见 kb）。
+>
+> ✅ **自洽核对（2026-09-14 全面审查轮 · 收尾：缺陷修复 + 报告交付）**：后端 2966 / 190 → **2971 / 190**
+> ⇒ 差 **+5 项 / +0 文件** = 1（`test_tradedate_freshness_guards.py` · 守卫 **B1b**：禁止把该名字**绑定**为
+> 局部变量，堵 AST 只看 `ast.Call` 的盲区）+ 2（`test_degradation_contracts.py` · 惰性补录**成对**行为守卫：
+> `False`（确认休市）才可拦截 / `None`（日历未覆盖今天）须**乐观补录**）+ 2（`test_morning_brief.py` ·
+> `is_trading_day` 三态**成对**守卫：`None` 与 `False` 两向都测）。终态实测
+> **2909 passed / 62 skipped / 0 failed（2971 项 / 190 文件，121.89s，前提 8000 在跑）**。
+> 前端 484 / 56 → **494 / 57** ⇒ 差 **+10 项 / +1 文件** = `components/quality-badge.test.tsx` 6
+> （4 条语义 + 2 条防漂移：策略符号只许出现在 2 个策略文件、调用点不得自带 `&&` 门控）
+> + `lib/format.test.ts` 4（`shouldShowQualityBadge` 单点策略）。全绿含 `--maxWorkers=1` 与 `TZ=UTC` 复跑。
+> ⚠️ **文件数口径再提醒**：本轮 `ls tests/*.py` = **192**、`--collect-only` = **190**（本仓恒差 2）。
 
 **发布前额外做一次接口载荷体检**（plan-review 三.7，2026-09-01 纳入）：
 `node scripts/api-sweep.js`（服务在跑时）——它能抓出"HTTP 200 但数据是空的"这类

@@ -212,10 +212,18 @@ class ToolContext:
 
 
 def _latest_trade_day(ctx: ToolContext) -> date:
-    """最近交易日：优先用交易日历，拿不到就退周末回退规则（与 /api/limit-up 同口径）。
+    """最近**已确认**交易日：优先用交易日历，拿不到就退周末回退规则（与 /api/limit-up 同口径）。
 
     绝不直接用 date.today() 当默认——周六周日拿它去查池子只会得到空结果，
     而模型会照着"没有数据"回答用户（2026-09-06 周日实测：今天=周日 → 必须退到周五）。
+
+    ⚠️ **本函数不做「今天是否交易日」的判定，只取最近一个已确认的交易日**——
+    这两件事的语义不同，别拿它替代 `tc.is_trade_day_on(d) -> True/False/None`：
+      * 返回值是 `date`（契约如此），**无法表达 unknown**；
+      * 日历**未覆盖今天**（限频/双源失败时 `trading_days()` 刻意返回旧快照）时，
+        结果会**回退到上一交易日**。这**不等于**"今天休市"，只是"没有更晚的已确认交易日"。
+    输入来源已收口：`ctx.trading_days` 取自 `tc.trading_days(provider)`（freshness 为
+    「覆盖今天」优先，见 F2），异常时退化为 `set()` 走下面的正向兜底 ⇒ **不会把未知判成休市**。
     """
     if ctx.trading_days:
         today = beijing_today().isoformat()
