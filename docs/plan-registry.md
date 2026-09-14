@@ -4,7 +4,14 @@
 > **⚠️ 重要变更（2026-09-10 晚，用户指令）**：**计划文档不再长期保留**——方案落地后，精华提炼进 `docs/summary/` 或 `retro-and-gaps.md` §六，**原件即删除**（规范见 `kb/07-doc-curation.md` §3.2）。
 > **新增待办一律写 `retro-and-gaps.md` §六（唯一明细账本）**，不再新建计划文档。本表转为**历史计划去向表**，供追溯。
 
-## 一、历史计划去向（全部已闭环）
+## 一、历史计划去向
+
+> ⚠️ **2026-09-14 更正**：本节原标题写「**全部已闭环**」，经全仓复查发现该断言**对 `docs/archive/` 的计划类文档为假**——
+> 它们长期处于「已归档但**未销账**」的灰色地带（**未走** §三 的四步流程）。已补登记至
+> `docs/retro-and-gaps.md` **§6.7-B**：`archive/assistant-optimization-plan.md`（P1/P2 共 14 项**状态未知**、头部仍写「未实施」）·
+> `archive/plan-review.md`（Auditor 与 AI 结论有效期 / 监控告警）· `archive/minute-chart-plan.md` ·
+> `archive/architecture-linkage-plan-2026-09-01.md` · `archive/full-project-review-2026-09-01.md`。
+> **本表只覆盖 `docs/` 根目录的计划文档，不含 `archive/`**——引用「全部已闭环」前请先确认口径。
 
 | # | 原计划文档 | 定稿 | 落地状态 | 精华去向 |
 |---|---|---|---|---|
