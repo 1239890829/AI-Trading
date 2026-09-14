@@ -102,6 +102,12 @@ CONTRACTS: list[dict] = [
         "universe": lambda: set(_role_base_score()),
         "note": "S2-10：后端新增角色而前端无配色 ⇒ 徽标无色",
     },
+    {
+        "name": "新鲜度状态→陈旧标记",
+        "file": "format.ts",
+        "universe": lambda: set(_freshness_states()),
+        "note": "IMP-002：后端新增状态而无标记 ⇒ 界面与「实时」渲染同形（红线 2 界面层缺口）",
+    },
 ]
 
 #: 扫描到但**不需要**契约的字典（纯前端概念，无后端枚举源）
@@ -127,6 +133,12 @@ def _tri_labels():
     from app.picks.push_cards import _TRI_LABELS
 
     return _TRI_LABELS
+
+
+def _freshness_states():
+    from app.core.freshness import STATES
+
+    return STATES
 
 
 def _role_base_score():

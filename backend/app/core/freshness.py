@@ -36,6 +36,16 @@ from pydantic import BaseModel
 #: 缺省新鲜窗口（秒）。调用方应优先传自己的轮询周期派生值，不要一律用这个。
 DEFAULT_FRESH_WITHIN_SECONDS = 60.0
 
+#: **五态全集 —— 唯一来源**（2026-09-14 新增，`IMP-002`）。
+#:
+#: 为什么需要一个显式常量：状态集此前只存在于本模块的 docstring 表格里，
+#: 既没法被引用、也没法被守卫。前端 `lib/format.ts::TRI_AMOUNT_MARK`（状态→「陈旧/降级」
+#: 标记）是**按状态取文案**的，后端新增一个状态而前端没跟 ⇒ 界面**不报错**，
+#: 只是该状态**不带任何标记**，于是与「实时」渲染同形——正是红线 2
+#: （不得把过期/降级数据冒充实盘）在界面层的缺口形态。
+#: `tests/test_cross_end_contract.py` 以本常量为契约 universe：前端字典必须覆盖它。
+STATES: tuple[str, ...] = ("ready", "stale", "degraded", "unavailable", "unknown")
+
 
 def age_seconds_of(as_of: datetime | None) -> float | None:
     """`as_of` 距现在的秒数。naive 时间戳**按 UTC 解释**（本仓库存的一律是 UTC）。

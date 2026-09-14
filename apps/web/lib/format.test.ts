@@ -271,9 +271,34 @@ describe("triAmount（成交额三态渲染）", () => {
 
   it("未就绪 → 「加载中…」而不是 '--'（本次报障要修的就是这一格）", () => {
     expect(triAmount(null, "unavailable")).toBe("加载中…");
-    // unknown = 有判定但判不出：按三态纪律同样不得塌缩成"缺失"
-    expect(triAmount(null, "unknown")).toBe("加载中…");
-    expect(triAmount(null, "UNKNOWN")).toBe("加载中…"); // 大小写不敏感（与 triText 同纪律）
+  });
+
+  it("unknown → 「未判定」（不得与 unavailable 合并显示）", () => {
+    // 2026-09-14 IMP-002 修正：原实现把 unknown 也渲染成「加载中…」，
+    // 与 lib/api.ts docstring 自述纪律（「unknown 显式「未判定」」）及 triText 的映射矛盾
+    // ——同一份数据在飞书卡片显示「未判定」、界面显示「加载中…」。
+    expect(triAmount(null, "unknown")).toBe("未判定");
+    expect(triAmount(null, "UNKNOWN")).toBe("未判定"); // 大小写不敏感（与 triText 同纪律）
+  });
+
+  it("有值但时效存疑 → 数值带标记（IMP-002：stale/degraded 不得与 ready 同形）", () => {
+    // 后端五态语义里 stale/degraded **按定义就是「有数据」**（app/core/freshness.py 状态表），
+    // 所以「有值」这条分支必须看 state，否则状态标记在界面上被擦掉 = 红线 2 的界面层缺口。
+    expect(triAmount(1.2345e11, "stale")).toBe(`${fmtAmount(1.2345e11)}（陈旧）`);
+    expect(triAmount(1.2345e11, "degraded")).toBe(`${fmtAmount(1.2345e11)}（降级）`);
+    expect(triAmount(1.2345e11, "unknown")).toBe(`${fmtAmount(1.2345e11)}（未判定）`);
+    // 三态必须两两可辨 —— 这正是本项要修的东西
+    const ready = triAmount(1.2345e11, "ready");
+    expect(new Set([ready, triAmount(1.2345e11, "stale"), triAmount(1.2345e11, "degraded")]).size).toBe(3);
+  });
+
+  it("有值且状态无异议 → 纯净金额（不添噪）", () => {
+    expect(triAmount(1.2345e11, "ready")).toBe(fmtAmount(1.2345e11));
+    // unavailable + 有值是自相矛盾的输入：值是真的就照显，但不假装标注
+    expect(triAmount(1.2345e11, "unavailable")).toBe(fmtAmount(1.2345e11));
+    // 状态未提供 = 无从判定 ⇒ 不加标记（不假装标注），值照显
+    expect(triAmount(1.2345e11)).toBe(fmtAmount(1.2345e11));
+    expect(triAmount(1.2345e11, "")).toBe(fmtAmount(1.2345e11));
   });
 
   it("链路正常却无值 → '--'（确为缺失）", () => {

@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 
 sys.path.insert(0, ".")
 
-from app.core.freshness import Freshness, age_seconds_of
+from app.core.freshness import STATES, Freshness, age_seconds_of
 from app.schemas.market import Quote
 from app.services import market_context as mc
 from app.services.snapshot_service import MarketSnapshotService
@@ -23,6 +23,30 @@ def _run(coro):
 
 
 # ---------- 契约本身 ----------
+
+
+def test_states_constant_covers_every_constructor():
+    """`STATES` 必须覆盖全部构造器实际产出的 state（2026-09-14，`IMP-002`）。
+
+    为什么这条钉子必要：`STATES` 被前端字典契约（`test_cross_end_contract.py`
+    「新鲜度状态→陈旧标记」）当作 **universe**。若某天新增一个构造器产出新状态
+    而忘了登记进 `STATES`，契约面就会**比真实面窄** —— 守卫全绿、界面却可能
+    静默不带标记（[[KB-ENG-72]]：**清单覆盖了什么 ≠ 真实覆盖面**）。
+    故此处用「**构造器实际产出**」反向校验常量，而不是只比对 docstring 表格。
+    """
+    produced = {
+        Freshness.ready().state,
+        Freshness.stale(reason="x").state,
+        Freshness.degraded(reason="x").state,
+        Freshness.unavailable(reason="x").state,
+        Freshness.unknown(reason="x").state,
+        Freshness.from_age(as_of=None, fresh_within=60).state,
+        Freshness().state,  # 默认值
+    }
+    missing = produced - set(STATES)
+    assert not missing, f"STATES 漏了这些真实产出的 state：{sorted(missing)}"
+    assert len(STATES) == len(set(STATES)), "STATES 有重复项"
+    assert all(isinstance(s, str) and s == s.lower() for s in STATES), "state 一律小写（前端按小写取键）"
 
 
 def test_from_age_three_states():

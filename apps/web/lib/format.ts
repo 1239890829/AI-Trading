@@ -275,7 +275,36 @@ export function triText(v: string | null | undefined): string {
 }
 
 /**
- * 「带状态字段」的渲染单点：有值 → 金额；**未就绪** → 「加载中…」；真缺失 → `--`。
+ * 金额 + 状态 → 「陈旧 / 降级 / 未判定」标记后缀（**文案单点**）。
+ *
+ * 为什么必须有这个后缀（IMP-002，2026-09-14）：后端五态语义里 `stale` / `degraded`
+ * **按定义就是「有数据」**（见 `app/core/freshness.py` 状态表：`stale` = 有数据但超出
+ * 新鲜窗口；`degraded` = 有数据但来自降级路径）。于是「有值」这条分支一旦不看 state，
+ * `ready` 与 `stale` / `degraded` 就**渲染完全同形**——实测场景：成交额
+ * `state=degraded` 且已陈旧 22 分钟时，界面与「实时」无差别，唯一的差别藏在 `title` 里。
+ * 这是**红线 2（不得把过期缓存冒充实盘）在界面层的缺口**：后端诚实标了降级，
+ * 前端把它擦掉了。
+ *
+ * `unknown`（无法判定，连时间戳都没有）同样要显式——按本仓三态纪律不得用默认值冒充判定
+ * （`lib/api.ts::FreshnessState` docstring 与 `triText` 早已如此，此处补齐）。
+ *
+ * ⚠️ **键集必须覆盖后端五态全集**（`app/core/freshness.py::STATES`）——由
+ * `backend/tests/test_cross_end_contract.py` 的「新鲜度状态→陈旧标记」契约守住。
+ * 空串 = 「该状态不需要标记」。**不要**靠省略键来表达"不需要标记"：后端新增一个状态时，
+ * 省略的键会静默变成"无标记"，界面与「实时」同形且不报错，
+ * 正是 `IMP-002` 本项要堵的缺口形态（`?? q` 同族：缺键不报错，只是显示错了）。
+ */
+const TRI_AMOUNT_MARK: Record<string, string> = {
+  ready: "",
+  stale: "陈旧",
+  degraded: "降级",
+  unavailable: "",
+  unknown: "未判定",
+};
+
+/**
+ * 「带状态字段」的渲染单点：有值 → 金额（按 state 带标记）；未就绪 → 「加载中…」；
+ * 真缺失 → `--`；无法判定 → 「未判定」。
  *
  * 为什么不能写成 `amount ? fmtAmount(amount) : "--"`：`null` 有**两种**成因——
  * ① 上游尚未就绪（冷启动 / 被限流，会自动恢复）；② 真的没有数据。
@@ -283,16 +312,27 @@ export function triText(v: string | null | undefined): string {
  * "正在加载"还是"坏了"——实际报障：「两市成交额怎么没出来了」（2026-09-14）。
  *
  * 判据直接取后端 S2-1 契约的 `state`，**不另造**（`lib/api.ts::Freshness`）：
- * - `unavailable`（尚未就绪）/ `unknown`（有判定但判不出）⇒ 「加载中…」。
- *   按三态纪律，`unknown` 不得当成"没有"；
- * - `ready` / `stale` / `degraded` 代表数据链路是通的，此时仍无值 ⇒ 确为缺失 `--`；
+ * - 有值 ⇒ 金额；`stale` / `degraded` / `unknown` 三种**时效存疑**态追加标记后缀
+ *   （IMP-002）。`unavailable` 与 `state` 未提供时不加标记：前者「无可用数据却给了值」
+ *   本身自相矛盾，后者是**无从判定**（不假装标注）；
+ * - 无值 + `unavailable`（尚未就绪）⇒ 「加载中…」；
+ * - 无值 + `unknown`（有判定但判不出）⇒ 「未判定」。⚠️ **本行 2026-09-14 由
+ *   「加载中…」改为「未判定」**：原实现把 `unknown` 与 `unavailable` 合并显示，
+ *   与 `lib/api.ts` docstring 自述的纪律（「`unknown` 显式「未判定」」）及 `triText`
+ *   的映射**互相矛盾**——同一份数据在飞书卡片与界面得到两个答案；
+ * - 无值 + `ready` / `stale` / `degraded`（链路是通的）⇒ 确为缺失 `--`；
  * - `state` 未提供（`""`）⇒ 无从判定，保守显示 `--`，**不假装在加载**。
  *
  * ⚠️ 与 `triText` 同一条纪律：`--` 必须由**明确判定**得出，不能当兜底默认值。
  */
 export function triAmount(amount: number | null | undefined, state?: string | null): string {
-  if (amount !== null && amount !== undefined && !Number.isNaN(amount)) return fmtAmount(amount);
   const s = (state ?? "").trim().toLowerCase();
-  if (s === "unavailable" || s === "unknown") return "加载中…";
+  if (amount !== null && amount !== undefined && !Number.isNaN(amount)) {
+    const base = fmtAmount(amount);
+    const mark = TRI_AMOUNT_MARK[s];
+    return mark ? `${base}（${mark}）` : base;
+  }
+  if (s === "unavailable") return "加载中…";
+  if (s === "unknown") return "未判定";
   return "--";
 }

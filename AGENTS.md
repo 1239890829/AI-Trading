@@ -30,7 +30,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 3014 项（2952 passed / 62 skipped）· 192 文件（09-14 全量实测，0 failed）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 3023 项（2961 passed / 62 skipped）· collect 193 文件（09-14 全量实测，0 failed）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。
@@ -48,7 +48,7 @@ cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 3014
 # **教训与本文档的警告同源：数字标注要么当轮实测回填，要么写"实测方法"而不写死数值。**
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
 cd apps/web && npx eslint .                       # 0 error / 0 warn（P1-27 已清零；余 1 处 C 类显式豁免）
-cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 499 项 / 57 文件（09-14 实测）
+cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 502 项 / 57 文件（09-14 实测）
 # ⚠️ **凡改动/新增涉及时间·时区的断言，必须再用 `TZ=UTC` 复跑一遍**（CI 跑在 UTC，本地是 UTC+8）：
 cd apps/web && TZ=UTC CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run
 # 2026-09-12 真实踩过：`longhu-tab.test.tsx` 用 `new Date(2026, 8, 2, 14, 20)` 钉"盘中"，
@@ -62,7 +62,11 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 3014 项（2952 passed / 62 skipped）· 192 文件、前端 499 项 / 57 文件、eslint **0 error / 0 warn**
+> **门禁口径**：后端 3023 项（2961 passed / 62 skipped）· collect 193 文件（`ls` 口径 195，恒差 2）、
+> 前端 502 项 / 57 文件、eslint **0 error / 0 warn**
+> （2026-09-14 §6.27 实测；较上一值 3014 / 192 / 499 增量 **+9 项 / +1 文件 / +3 项**，
+> 来源自洽：后端 = `test_cmd_guidance_guard.py` 8 项（新文件）+ `test_freshness.py` STATES 钉子 1 项；
+> 前端 = `format.test.ts` 的 `triAmount` 用例 5→8 项、文件数不变）
 > （25 条回归已按 P1-27 清零；仅 notification-drawer 保留 1 处带理由的 C 类豁免）。
 > ⚠️ **「文件数」有两个口径，混用会造出假缺口**（2026-09-14 实测）：`ls tests/*.py` 与
 > `pytest --collect-only` 的「有测试的文件数」**不等**——本仓恒差 2（存在 2 个 0 用例的测试文件）。

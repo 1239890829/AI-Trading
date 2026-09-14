@@ -16,5 +16,5 @@ cd apps/web
 npm install --no-fund --no-audit
 
 echo "完成。启动："
-echo "  backend: cd backend && .venv/bin/uvicorn app.main:app --reload --port 8000"
+echo "  backend: cd backend && .venv/bin/uvicorn app.main:app --port 8000  # 勿加 --reload（与 SQLite 锁组合会挂死）"
 echo "  web:     cd apps/web && npm run dev"

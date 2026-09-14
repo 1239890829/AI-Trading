@@ -173,7 +173,9 @@ function WorkbenchInner() {
       setError(null);
       setUpdatedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
     } catch {
-      setError("无法连接后端行情服务。请先启动：cd backend && uvicorn app.main:app --reload --port 8000");
+      // ⚠️ 文案里禁止出现 `--reload`（AGENTS.md §6.1）：它与 SQLite 锁组合会反复挂死，
+      // 教用户照抄 = 复现已知事故。此前本行就是反例（IMP-001）。
+      setError("无法连接后端行情服务。请先启动：cd backend && .venv/bin/uvicorn app.main:app --port 8000（勿加 --reload）");
     } finally {
       // pending 三态哨兵（审查 F2/R2）：首次拉取完成前左栏渲染行骨架，
       // 不再抢跑「自选为空或行情未就绪」文案（加载中≠确认空）

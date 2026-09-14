@@ -27,7 +27,8 @@ cd backend
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp ../.env.example .env   # 按需修改
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --port 8000
+# ⚠️ 勿加 --reload：与 SQLite 锁组合会反复挂死（见 AGENTS.md §6.1）
 
 # 前端（Node 18.18+）
 cd apps/web
