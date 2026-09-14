@@ -11,7 +11,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { getWatchLedger, placePaperOrder, type WatchLedgerPayload } from "@/lib/api";
-import { fmt, pctColor, pctText } from "@/lib/format";
+import { fmt, pctColor, pctText, winRateColor } from "@/lib/format";
 
 export function WatchLedgerPanel() {
   const [data, setData] = useState<WatchLedgerPayload | undefined>(undefined);
@@ -59,7 +59,7 @@ export function WatchLedgerPanel() {
           {st && (
             <span className="text-zinc-600 dark:text-zinc-400">
               已清算 {st.settled} · 胜率{" "}
-              <span className={st.win_rate != null && st.win_rate >= 0.5 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}>
+              <span className={winRateColor(st.win_rate, "01")}>
                 {st.win_rate != null ? `${(st.win_rate * 100).toFixed(0)}%` : "--"}
               </span>
               {st.avg_pnl_pct != null && (

@@ -1,4 +1,4 @@
-import { qualityLabel } from "@/lib/format";
+import { qualityLabel, shouldShowQualityBadge } from "@/lib/format";
 import type { Quality } from "@/types/market";
 
 const STYLES: Record<Quality, string> = {
@@ -29,7 +29,12 @@ const REASON_LABELS: Record<string, string> = {
   empty_order_book: "盘口为空",
 };
 
-export function QualityBadge({ quality, reasons }: { quality: Quality; reasons?: string[] }) {
+export function QualityBadge({ quality, reasons }: { quality?: Quality | null; reasons?: string[] }) {
+  // 可见性策略的**唯一决策点**在 `shouldShowQualityBadge`（2026-09-14 口径统一）：
+  // 组件自门控，调用点一律直接渲染，不得再自己加 `isHardQuality(...) &&`——
+  // 那正是此前「盘面显示正常 / 工作台不显示」漂移的成因。
+  // `!quality` 先行只为**类型收窄**（策略判据本身已能处理缺失值，见 shouldShowQualityBadge）。
+  if (!quality || !shouldShowQualityBadge(quality)) return null;
   // 休市（QuoteHub 盘外标记 market_closed）：常态而非故障，展示灰色"休市"，
   // 与刷新失败（橙"过期"）区分开——2026-09-01 盘前误标"可疑/非法"修复的展示层。
   const closed = quality === "stale" && !!reasons?.includes("market_closed");

@@ -8,7 +8,7 @@ import { MasonryColumns } from "@/components/masonry-columns";
 import { WatchLedgerPanel } from "@/components/hunting/watch-ledger-panel";
 import { PickCard, fromIntradayStock } from "@/components/picks/pick-card";
 import { StockLink } from "@/components/stock-link";
-import { pctColor, pctText, timeText } from "@/lib/format";
+import { pctColor, pctText, timeText, winRateColor } from "@/lib/format";
 import { themesUrl } from "@/lib/routing";
 import type {
   BriefAlert,
@@ -678,9 +678,17 @@ function DailyCurve({ daily }: { daily: IntradayReviewStats["daily"] }) {
     <svg viewBox={`0 0 ${W} ${H + 14}`} className="w-full" role="img" aria-label="每日方向对照堆叠柱">
       {daily.map((x, i) => {
         const segs: [string, number][] = [
-          ["var(--color-up, #16a34a)", x.fermented],
+          // 方向色必须取本仓权威 token：原先写 `var(--color-up, #16a34a)` /
+          // `var(--color-down, #dc2626)`，而这两个变量**全仓从未定义**
+          // （globals.css 定义的是 --accent / --accent-down）⇒ 浏览器必然采用
+          // fallback，于是「发酵」（正向）被画成**绿**、「证伪」（负向）被画成**红**，
+          // 与 A 股红涨绿跌及 tailwind.config 的 up/down 定义**完全相反**。
+          // 改用字面量而非 `var(--accent)`：SVG fill 不参与 Tailwind 的明暗档切换，
+          // 这里需要的是亮暗两档都成立的中深色（红 #f43f5e / 绿 #10b981），
+          // 与 sparkline.tsx / kline-chart-pro.tsx 的既有取值保持一致。
+          ["#f43f5e", x.fermented],
           ["#f59e0b", x.half],
-          ["var(--color-down, #dc2626)", x.falsified],
+          ["#10b981", x.falsified],
           ["#a1a1aa", x.flat],
         ];
         let y = H;
@@ -721,7 +729,7 @@ export function StatsPanel({ stats }: { stats: IntradayReviewStats }) {
         </div>
         <div className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
           <div className="text-zinc-600 dark:text-zinc-400">确认提醒 T+1 胜率</div>
-          <div className={`mt-1 font-mono text-lg tabular-nums ${(t1.win_rate ?? 0) >= 50 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}`}>
+          <div className={`mt-1 font-mono text-lg tabular-nums ${winRateColor(t1.win_rate, "pct")}`}>
             {t1.win_rate != null ? `${t1.win_rate}%` : "—"}
           </div>
           <div className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
@@ -739,7 +747,7 @@ export function StatsPanel({ stats }: { stats: IntradayReviewStats }) {
         </div>
         <div className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
           <div className="text-zinc-600 dark:text-zinc-400">T+3 胜率</div>
-          <div className={`mt-1 font-mono text-lg tabular-nums ${(t3.win_rate ?? 0) >= 50 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}`}>
+          <div className={`mt-1 font-mono text-lg tabular-nums ${winRateColor(t3.win_rate, "pct")}`}>
             {t3.win_rate != null ? `${t3.win_rate}%` : "—"}
           </div>
           <div className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">样本 {t3.n}（未到期不计）</div>

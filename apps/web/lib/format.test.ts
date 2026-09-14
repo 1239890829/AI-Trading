@@ -1,6 +1,6 @@
 /** 格式化工具测试：空值/边界/单位换算/红涨绿跌语义。 */
 import { describe, expect, it } from "vitest";
-import { fmt, fmtAmount, fmtHeat, fmtVolume, isHardQuality, parseNum, pctColor, pctText, qualityLabel, sourceLabel, timeText, timeTextBJ, dateTimeTextBJ, bjDate, bjHHMM, bjMonthDay, triText } from "./format";
+import { fmt, fmtAmount, fmtHeat, fmtVolume, isHardQuality, parseNum, pctColor, pctText, qualityLabel, shouldShowQualityBadge, sourceLabel, timeText, timeTextBJ, dateTimeTextBJ, bjDate, bjHHMM, bjMonthDay, triText, winRateColor } from "./format";
 
 /**
  * 北京时间格式化（2026-09-11 收口）。
@@ -61,6 +61,33 @@ describe("isHardQuality", () => {
   });
 });
 
+describe("shouldShowQualityBadge（徽标可见性策略的唯一决策点）", () => {
+  it("只压 low/medium 两档瞬态；high 必须渲染（三态可辨：正常 ≠ 字段缺失）", () => {
+    // 09-02 的降噪目标只有 low/medium；high 被一起隐掉是副作用 ⇒ 2026-09-14 归位
+    expect(shouldShowQualityBadge("high")).toBe(true);
+    expect(shouldShowQualityBadge("stale")).toBe(true);
+    expect(shouldShowQualityBadge("invalid")).toBe(true);
+  });
+
+  it("low/medium 不渲染（闪烁来源，2026-09-02 修复对象）", () => {
+    expect(shouldShowQualityBadge("low")).toBe(false);
+    expect(shouldShowQualityBadge("medium")).toBe(false);
+  });
+
+  it("缺失/空串不渲染；未知档位**渲染**（宁可多显示异常，不可静默吞掉新档位）", () => {
+    expect(shouldShowQualityBadge(null)).toBe(false);
+    expect(shouldShowQualityBadge(undefined)).toBe(false);
+    expect(shouldShowQualityBadge("")).toBe(false);
+    expect(shouldShowQualityBadge("brand-new-level")).toBe(true);
+  });
+
+  it("与 isHardQuality 是**两个不同问题**，不可互相替代", () => {
+    // 这是本轮缺陷的根因：把「是否硬质量问题」当成「是否渲染徽标」用了
+    expect(isHardQuality("high")).toBe(false);
+    expect(shouldShowQualityBadge("high")).toBe(true);
+  });
+});
+
 describe("fmt", () => {
   it("null/undefined/NaN → --", () => {
     expect(fmt(null)).toBe("--");
@@ -113,6 +140,47 @@ describe("pctColor / pctText", () => {
     expect(pctText(1.5)).toBe("+1.50%");
     expect(pctText(-1.5)).toBe("-1.50%");
     expect(pctText(null)).toBe("--");
+  });
+});
+
+// 胜率着色的**三态**守卫（2026-09-14 审查批次 B5）。
+//
+// 被守的缺陷：旧写法 `(rate ?? 0) >= 50` 把"样本不足 / 未到期"当成 0% ⇒ 染跌色，
+// 而同一容器里的文案正写着「样本不足」——**颜色把"没数据"说成"表现差"**，两者
+// 自相矛盾。本仓「三态 > 二态」纪律要求缺失显式为未判定（中性色），与 pctColor
+// 对 null 的处理同源。
+//
+// 另一处被钉住的是**口径必须显式**：本仓胜率两套量纲并存（signal-health / 角色
+// 胜率 = 0-1 小数；intraday-review / 盘后复盘 = 0-100 百分数），因此 `scale`
+// 刻意不设默认值；最后一条用例直接证明混用会翻转结论。
+describe("winRateColor（胜率三态着色）", () => {
+  const NEUTRAL = "text-zinc-600 dark:text-zinc-400";
+  const UP = "text-up-ink dark:text-up";
+  const DOWN = "text-down-ink dark:text-down";
+
+  it("缺失一律中性——「样本不足」不是负面色（三态纪律）", () => {
+    expect(winRateColor(null, "pct")).toBe(NEUTRAL);
+    expect(winRateColor(undefined, "01")).toBe(NEUTRAL);
+    expect(winRateColor(NaN, "pct")).toBe(NEUTRAL);
+  });
+
+  it("pct 口径（0-100）：>= 50 正向", () => {
+    expect(winRateColor(50, "pct")).toBe(UP);
+    expect(winRateColor(49.9, "pct")).toBe(DOWN);
+    expect(winRateColor(0, "pct")).toBe(DOWN);
+  });
+
+  it("01 口径（0-1）：>= 0.5 正向，与 pct 同一天花板", () => {
+    expect(winRateColor(0.5, "01")).toBe(UP);
+    expect(winRateColor(0.499, "01")).toBe(DOWN);
+    expect(winRateColor(1, "01")).toBe(UP);
+  });
+
+  it("两口径不可混用——同一数字换口径结论相反", () => {
+    // 0.55 在 01 口径下是 55%（正向）；误当 pct 口径则被读成 0.55%（负向）。
+    // 这正是 `scale` 不设默认值的原因：让口径差异在调用点可见。
+    expect(winRateColor(0.55, "01")).toBe(UP);
+    expect(winRateColor(0.55, "pct")).toBe(DOWN);
   });
 });
 

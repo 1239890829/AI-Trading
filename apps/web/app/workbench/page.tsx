@@ -41,7 +41,7 @@ import {
   type SymbolBoardFund,
   getPositionLabels,
 } from "@/lib/api";
-import { fmt, fmtAmount, isHardQuality, pctColor, pctText, signedYi, triText } from "@/lib/format";
+import { fmt, fmtAmount, pctColor, pctText, signedYi, triText } from "@/lib/format";
 import { isTradingSession } from "@/lib/market-hours";
 import { subscribeWatchlist, notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import { LAST_SYMBOL_KEY, originLabel, workbenchUrl } from "@/lib/routing";
@@ -759,7 +759,7 @@ function WorkbenchInner() {
                       {q.price == null ? <span className="font-sans text-zinc-600 dark:text-zinc-400">未开盘</span> : <PriceFlash value={q.price}>{fmt(q.price)}</PriceFlash>}
                     </td>
                     <td className={`w-[58px] px-1 py-2 text-right font-mono text-xs tabular-nums ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</td>
-                    <td className="w-[44px] px-0.5 py-2 text-right">{isHardQuality(q.quality) && <QualityBadge quality={q.quality} reasons={q.quality_reasons} />}</td>
+                    <td className="w-[44px] px-0.5 py-2 text-right"><QualityBadge quality={q.quality} reasons={q.quality_reasons} /></td>
                     <td className="w-[22px] pr-1.5 text-right">
                       {(pick || top) && (
                         <button

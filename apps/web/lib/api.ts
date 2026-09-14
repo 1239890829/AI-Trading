@@ -137,9 +137,17 @@ async function getJson<T>(path: string, timeoutMs: number = DEFAULT_TIMEOUT_MS):
   return request<T>(path, {}, timeoutMs);
 }
 
-/** B6 写接口鉴权配套：部署时配置 NEXT_PUBLIC_API_TOKEN 后写请求自动携带；
- *  留空=不带 header（本地 dev 零影响），与后端 settings.api_token 的 opt-in 语义对称。 */
-const API_WRITE_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN;
+/**
+ * 写接口鉴权 token **刻意不在这里**（2026-09-14 安全修复）。
+ *
+ * 原实现读 `process.env.NEXT_PUBLIC_API_TOKEN` 并塞进 `X-API-Token` 请求头。
+ * `NEXT_PUBLIC_*` 会被 Next **构建期内联**为客户端 bundle 中的字面量 ⇒ 该 token
+ * 等价于公开常量：任何访客都能从页面源码里取出唯一写保护凭据。
+ *
+ * 现在 token 由服务端反向代理（`app/backend/[...path]/route.ts`）读取
+ * `ASHARE_API_TOKEN` 并注入 —— 凭据只存在于服务端进程，浏览器侧不再持有任何 token。
+ * 由于默认 `API_BASE` 就是同源 `/backend`，这次改动对调用方完全透明。
+ */
 
 async function sendJson<T = unknown>(
   path: string,
@@ -153,7 +161,6 @@ async function sendJson<T = unknown>(
       method,
       headers: {
         ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-        ...(API_WRITE_TOKEN ? { "X-API-Token": API_WRITE_TOKEN } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     },

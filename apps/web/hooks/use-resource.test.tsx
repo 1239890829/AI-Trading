@@ -274,4 +274,146 @@ describe("useResource", () => {
     await advance(60_000);
     expect(fn).toHaveBeenCalledTimes(1);
   });
+
+  // ── R20：过期响应串数据 / 多重计时链 ────────────────────────────────────────
+  // 缺陷一：`data` 与 `error` **未与 key 绑定** ⇒ key 从 A 变 B 后，B 的请求还在途
+  // （甚至已失败）时，对外仍报 A 的数据，界面把 A 的东西挂在 B 的标题下。
+  // 缺陷二：`onVisibility` 回可见时**无条件再发一次**；若已有请求在途，两条
+  // `run().then(schedule)` 各排一个定时器 ⇒ 计时链叠加，之后每周期取数翻倍。
+
+  it("【R20】key 变化后、新请求结算前，不得把旧 key 的数据充当新 key 的结果", async () => {
+    let releaseB!: (v: string) => void;
+    const pendingB = new Promise<string>((r) => {
+      releaseB = r;
+    });
+    const fn = vi.fn(async (k: string) => (k === "a" ? "A-DATA" : pendingB));
+    const { result, rerender } = renderHook(
+      ({ k }: { k: string }) => useResource(() => fn(k), { intervalMs: 60_000, key: k }),
+      { initialProps: { k: "a" } }
+    );
+    await flush();
+    expect(result.current.data).toBe("A-DATA");
+    expect(result.current.status).toBe("ready");
+
+    rerender({ k: "b" });
+    await flush(); // B 的请求仍在途
+    expect(result.current.status).toBe("pending"); // 未判定 ≠ 拿 A 的值顶替
+    expect(result.current.data).toBeUndefined();
+
+    await act(async () => {
+      releaseB("B-DATA");
+    });
+    await flush();
+    expect(result.current.data).toBe("B-DATA");
+    expect(result.current.status).toBe("ready");
+  });
+
+  it("【R20】新 key 失败时 error 与数据都归属新 key，不混入旧 key 的结论", async () => {
+    let fail = false;
+    const fn = vi.fn(async () => {
+      if (fail) throw new Error("boom");
+      return "A-DATA";
+    });
+    const { result, rerender } = renderHook(
+      ({ k }: { k: string }) => useResource(fn, { intervalMs: 60_000, key: k }),
+      { initialProps: { k: "a" } }
+    );
+    await flush();
+    expect(result.current.data).toBe("A-DATA");
+
+    fail = true;
+    rerender({ k: "b" });
+    await flush();
+    // 旧实现：data 仍是 "A-DATA" ⇒ status 被算成 ready（旧值 + 新错误混作一体）
+    expect(result.current.status).toBe("error");
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.error).toBeInstanceOf(Error);
+  });
+
+  it("【R20】回可见时若有请求在途，不得再发一次（单飞）", async () => {
+    const gates: Array<(v: number) => void> = [];
+    const fn = vi.fn(
+      () =>
+        new Promise<number>((r) => {
+          gates.push(r);
+        })
+    );
+    renderHook(() => useResource(fn, { intervalMs: 10_000 }));
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    // 结算首拉 → 轮询链启动
+    await act(async () => {
+      gates.shift()!(1);
+    });
+    await flush();
+
+    // 定时器触发 → 第 2 次取数在途
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(fn).toHaveBeenCalledTimes(2);
+
+    // 在途期间 隐藏 → 回可见：应合并在途的那一次，**不得**再发第 3 次
+    await act(async () => {
+      setVisibility("hidden");
+    });
+    await act(async () => {
+      setVisibility("visible");
+    });
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("【R20】回可见与定时器先后收尾于同一次取数时，计时链仍只有一条（每周期 1 次）", async () => {
+    // ⚠️ 判据必须让"两条链"可观测：有单飞在，两条链**每周期也只发 1 次请求**
+    //（两个计时器各自 tick，后一个被合并）⇒ 只看请求数会漏判。
+    // 故在"制造双链"之后把取数切成**同步结算**（hold=false）：此时两个计时器先后
+    // 触发时前一次已收尾、单飞不再合并 ⇒ 双链表现为**每周期 2 次**（= 原始症状）。
+    let hold = true;
+    const gates: Array<(v: number) => void> = [];
+    const fn = vi.fn(() =>
+      hold
+        ? new Promise<number>((r) => {
+            gates.push(r);
+          })
+        : Promise.resolve(1)
+    );
+    renderHook(() => useResource(fn, { intervalMs: 10_000 }));
+
+    // 结算首拉 → 轮询链启动
+    await act(async () => {
+      gates.shift()!(1);
+    });
+    await flush();
+
+    // 定时器触发 → 第 2 次取数在途；期间来回切可见性，让"定时器回调"与
+    // "visibilitychange 回调"都将在本次取数收尾时重排下一拍（旧实现各排一个）
+    hold = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    await act(async () => {
+      setVisibility("hidden");
+    });
+    await act(async () => {
+      setVisibility("visible");
+    });
+
+    hold = false;
+    await act(async () => {
+      gates.splice(0).forEach((r) => r(1));
+    });
+    await flush();
+
+    // 用实得基线核算"每个周期恰好 +1"：双链会 +2（这正是"2→4→6"的由来）
+    const settled = fn.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(fn.mock.calls.length).toBe(settled + 1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(fn.mock.calls.length).toBe(settled + 2);
+  });
 });

@@ -42,17 +42,30 @@ function sourceText(source?: string | null): string | null {
 // 模块级缓存：词典与文章无关，全站共用一份；失败缓存 null（识别是增强层，
 // 失败降级为纯文本，绝不阻塞正文渲染）。
 let entityDictCache: EntityDict | null | undefined;
+/** 失败后的重试闸门（0 = 立即可试）。
+ *
+ * **不得用"失败即写 null"来充当"已判定"**：判定条件是
+ * `entityDictCache !== undefined`，而 `null !== undefined` 成立 ⇒ 一次瞬时失败
+ * 会让词典在**本次会话内永不重试**（与后端 heatmap 行业映射的
+ * "一次失败=永久失败"是同一类缺陷，见 B4-A / test_degradation_contracts.py）。
+ * 现在失败只开冷却窗，过期后自动重试。 */
+let entityDictRetryAfter = 0;
+const ENTITY_DICT_RETRY_MS = 60_000;
 
-async function loadEntityDict(): Promise<EntityDict | null> {
+/** 导出仅供守卫测试（`news-modal.test.tsx`）——生产调用点在本模块内。 */
+export async function loadEntityDict(): Promise<EntityDict | null> {
   if (entityDictCache !== undefined) return entityDictCache;
+  if (Date.now() < entityDictRetryAfter) return null; // 冷却期内不重复打网络
   try {
     const r = await fetch(`${API_BASE}/api/assistant/entity-dict`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = await r.json();
     entityDictCache = (j?.data as EntityDict) ?? null;
   } catch {
-    entityDictCache = null;
+    entityDictRetryAfter = Date.now() + ENTITY_DICT_RETRY_MS;
+    // 保持 undefined ⇒ 冷却到期后自动重试（后端返回的空词典仍按 null 正常缓存）
   }
-  return entityDictCache;
+  return entityDictCache ?? null;
 }
 
 /** 表格块：数据类文章的排行榜/涨跌榜按真表格渲染（横向可滚，斑马纹，小字号）。 */

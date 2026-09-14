@@ -1,6 +1,6 @@
 "use client";
 
-import { pctText } from "@/lib/format";
+import { pctText, winRateColor } from "@/lib/format";
 import type { IntradayReviewStats, SignalHealthPayload } from "@/lib/api";
 import type { RolePerformance } from "@/components/hunting/pick-sections";
 
@@ -114,7 +114,7 @@ export function HuntingStatsBar({
           {bestRole ? (
             <>
               {bestRole.role}
-              <span className={`ml-1.5 text-[10px] font-normal ${bestRole.win_rate >= 50 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}`}>
+              <span className={`ml-1.5 text-[10px] font-normal ${winRateColor(bestRole.win_rate, "pct")}`}>
                 胜率 {bestRole.win_rate}%
               </span>
             </>
@@ -132,7 +132,7 @@ export function HuntingStatsBar({
         label="跟踪 · T+1 胜率"
         tip="口径：盘中确认提醒次日收益 >0 占比（近 30 日）；与精选口径独立不混算"
       >
-        <div className={`mt-0.5 font-mono text-sm font-semibold tabular-nums ${(t1?.win_rate ?? 0) >= 50 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}`}>
+        <div className={`mt-0.5 font-mono text-sm font-semibold tabular-nums ${winRateColor(t1?.win_rate, "pct")}`}>
           {t1?.win_rate != null ? `${t1.win_rate}%` : <span className="font-sans font-normal text-zinc-600 dark:text-zinc-400">样本不足</span>}
         </div>
         <div className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
@@ -142,7 +142,7 @@ export function HuntingStatsBar({
 
       {/* 跟踪口径 ②：确认提醒 T+3 */}
       <StatCard label="跟踪 · T+3 胜率" tip="口径：确认提醒三日收益 >0 占比（未到期不计）">
-        <div className={`mt-0.5 font-mono text-sm font-semibold tabular-nums ${(t3?.win_rate ?? 0) >= 50 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}`}>
+        <div className={`mt-0.5 font-mono text-sm font-semibold tabular-nums ${winRateColor(t3?.win_rate, "pct")}`}>
           {t3?.win_rate != null ? `${t3.win_rate}%` : <span className="font-sans font-normal text-zinc-600 dark:text-zinc-400">样本不足</span>}
         </div>
         <div className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">样本 {t3?.n ?? 0}（未到期不计）</div>

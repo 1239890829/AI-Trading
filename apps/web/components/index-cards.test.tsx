@@ -49,9 +49,13 @@ describe("IndexCards 指数点击交互", () => {
     expect(active?.getAttribute("title")).toContain("深证成指");
   });
 
-  it("质量徽标只对持久问题（stale/invalid）出现，low/medium 瞬态不出（2026-09-02 可疑标签闪烁修复）", () => {
+  it("质量徽标：正常显示「正常」、low/medium 瞬态不出、持久问题常显（2026-09-14 口径统一）", () => {
     const mk = (quality: string, reasons: string[]) =>
       ({ ...baseAudit, symbol: "000001", name: "上证指数", market: "SH", price: 3300.5, change_pct: 0, quality, quality_reasons: reasons }) as Quote;
+    // baseline 的默认档就是 high ⇒ 正常必须可见（隐藏它会让「正常」与「字段缺失」不可辨）
+    const high = render(<IndexCards indices={[mk("high", [])]} />);
+    expect(high.container.textContent).toContain("正常");
+    high.unmount();
     // 盘中瞬时 low（如 change_pct_mismatch 下一拍即恢复）不显示徽标——显示就闪
     const low = render(<IndexCards indices={[mk("low", ["change_pct_mismatch"])]} />);
     expect(low.container.textContent).not.toContain("可疑");

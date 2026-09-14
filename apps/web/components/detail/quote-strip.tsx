@@ -3,7 +3,7 @@
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
 import { SuspendedBadge } from "@/components/detail/suspended-badge";
-import { fmt, fmtAmount, fmtVolume, pctColor, pctText, isHardQuality, sourceLabel, timeText } from "@/lib/format";
+import { fmt, fmtAmount, fmtVolume, pctColor, pctText, sourceLabel, timeText } from "@/lib/format";
 import type { Quote, TradingStatusInfo } from "@/types/market";
 
 export function QuoteStrip({
@@ -46,9 +46,10 @@ export function QuoteStrip({
         <div className="flex items-baseline gap-2">
           <span className="text-base font-semibold">{quote.name ?? "--"}</span>
           <span className="font-mono text-xs text-zinc-600 dark:text-zinc-400">{quote.market}.{quote.symbol}</span>
-          {/* 仅硬质量态出徽标（过期/休市/非法）；"正常"常驻是噪音、low"可疑"
-              盘中瞬态闪现（2026-09-02 可疑标签修复，口径同列表行/指数卡） */}
-          {isHardQuality(quote.quality) && <QualityBadge quality={quote.quality} reasons={quote.quality_reasons} />}
+          {/* 可见性策略单点在 QualityBadge 内部（shouldShowQualityBadge）：正常出静音灰「正常」，
+              low/medium 瞬态不出（2026-09-02 闪烁修复），stale/invalid 常显。
+              2026-09-14 口径统一：此前调用点各自判断，导致同一数据在盘面/工作台表现相反。 */}
+          <QualityBadge quality={quote.quality} reasons={quote.quality_reasons} />
           <SuspendedBadge status={tradingStatus} />
           {!hideWatchlist &&
             (inWatchlist ? (

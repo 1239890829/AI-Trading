@@ -1,7 +1,7 @@
 "use client";
 
 import { StockLink } from "@/components/stock-link";
-import { pctColor, pctText } from "@/lib/format";
+import { pctColor, pctText, winRateColor } from "@/lib/format";
 import type { PickReviewRow } from "@/lib/api";
 
 /**
@@ -46,7 +46,7 @@ export function RolePerformanceTable({ rows }: { rows: RolePerformance[] }) {
             <tr key={r.role} className="border-t border-zinc-100 dark:border-zinc-800/60">
               <td className="py-1">{r.role}</td>
               <td className="text-right font-mono tabular-nums">{r.count}</td>
-              <td className={`text-right font-mono tabular-nums ${r.win_rate >= 50 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}`}>
+              <td className={`text-right font-mono tabular-nums ${winRateColor(r.win_rate, "pct")}`}>
                 {r.win_rate}%
               </td>
               <td className={`text-right font-mono tabular-nums ${pctColor(r.avg_excess)}`}>

@@ -61,6 +61,24 @@ export function pctText(v: number | null | undefined): string {
 }
 
 /**
+ * 胜率着色：`>= 50%` 正向、以下负向；**null / undefined 一律中性**。
+ *
+ * 三态纪律：胜率缺失（样本不足 / 未到期）是「未判定」，既不好也不坏。
+ * 旧写法 `(rate ?? 0) >= 50` 把缺失当成 0% ⇒ 染成跌色，与同一容器里的
+ * 「样本不足」文案自相矛盾——把"没数据"暗示成"表现差"。
+ *
+ * ⚠️ `scale` 必须由调用方显式声明：本仓胜率**两种口径并存且都属既成事实**——
+ * `signal-health` / 角色胜率为 0-1 小数，`intraday-review` / 盘后复盘为 0-100 百分数
+ * （见 `hunting/stats-bar.tsx` 顶部注释）。混用会把 0.55 误判为「低于 50%」，
+ * 所以这里不开默认值，让口径差异在调用点可见。
+ */
+export function winRateColor(rate: number | null | undefined, scale: "01" | "pct"): string {
+  if (rate === null || rate === undefined || Number.isNaN(rate)) return "text-zinc-600 dark:text-zinc-400";
+  const v = scale === "01" ? rate * 100 : rate;
+  return v >= 50 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down";
+}
+
+/**
  * 事件/快讯时间统一显示（2026-09-09 修「列表时间与详情时间不一致」）。
  *
  * 后端 event_card.published_at 全库统一为北京时间字符串
@@ -197,9 +215,38 @@ export function qualityLabel(q: string): string {
  * low（可疑）/medium（延迟）来自盘中源字段瞬时不同步（如价格已更新而涨跌幅
  * 滞后一拍触发 change_pct_mismatch 判 low），下一个 tick 即恢复 high——徽标
  * 一秒弹现又消失，正是闪烁来源。这两档不再上界面；stale（过期/休市）与
- * invalid（非法）是持久态，稳定显示不闪。 */
+ * invalid（非法）是持久态，稳定显示不闪。
+ *
+ * ⚠️ **本函数不回答"要不要渲染徽标"**——那是 `shouldShowQualityBadge` 的职责。
+ * 09-02 的降噪目标只是 `low`/`medium` 两档，`high`（正常）**从未被决策过**；
+ * 早期把本函数直接当作渲染门控，副作用是连「正常」一起隐掉，并让调用点各自
+ * 判断、口径漂移（盘面指数卡显示「正常」而工作台不显示）。 */
 export function isHardQuality(q: string): boolean {
   return q === "stale" || q === "invalid";
+}
+
+/**
+ * 质量徽标**可见性策略的唯一决策点**（2026-09-14 口径统一）。
+ *
+ * 背景：此前 5 个调用点各自写判断，漂移成两派——`market/page.tsx` 无条件渲染
+ * （显示「正常」），`index-cards.tsx` / `workbench/page.tsx` / `quote-strip.tsx`
+ * 用 `isHardQuality` 门控（不显示）。同一「指数质量」概念、同一份数据，两个页面
+ * 表现相反。
+ *
+ * 策略（2026-09-14 拍板）：
+ * | 档位 | 是否渲染 | 理由 |
+ * |---|---|---|
+ * | `high` | ✅ 渲染为**静音灰**「正常」 | 隐藏它会让「正常」与「字段缺失」不可辨——三态必须可辨；且 `QualityBadge` 本为 `high` 定义了最静音样式（不加底色） |
+ * | `medium` / `low` | ❌ 不渲染 | 盘中瞬态，下一拍即恢复 ⇒ 闪烁来源（09-02 修复对象） |
+ * | `stale` / `invalid` | ✅ 常显 | 持久态 |
+ * | 未知档位 | ✅ 渲染 | 宁可多显示异常，不可静默吞掉（新增档位不至于在界面消失） |
+ *
+ * 门控**由 `components/quality-badge.tsx` 内部承担**，调用点一律直接渲染
+ * `<QualityBadge/>`，不得再自行加条件——否则本函数就白设了。
+ */
+export function shouldShowQualityBadge(q: string | null | undefined): boolean {
+  if (!q) return false;
+  return q !== "medium" && q !== "low";
 }
 
 /**

@@ -24,6 +24,21 @@ async function proxy(req: NextRequest) {
   headers.delete("host");
   // 长度由 fetch 依据实际 body 重算，透传旧值会不一致
   headers.delete("content-length");
+  // 客户端送来的写鉴权头一律丢弃，只认服务端环境变量（防伪造/防误配）
+  headers.delete("x-api-token");
+
+  // 写接口鉴权（B6）：token 只在**服务端**持有并注入，绝不下发浏览器。
+  //
+  // 历史缺陷（2026-09-14 修复）：`lib/api.ts` 曾用 `NEXT_PUBLIC_API_TOKEN` 携带该头，
+  // 而 `NEXT_PUBLIC_*` 由 Next **构建期内联**成客户端 bundle 里的字面量 ⇒ 任何访客
+  // 「查看网页源码」即可取得唯一写保护凭据；该头还会进浏览器历史与反代访问日志。
+  // 归位后浏览器只发同源 `/backend/...`，token 由本层附加。
+  //
+  // 未配置 = 不带头，与后端 `require_write_token` 的 opt-in 语义对称（本地零影响）。
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    const token = process.env.ASHARE_API_TOKEN;
+    if (token) headers.set("x-api-token", token);
+  }
 
   const init: RequestInit & { duplex?: string } = {
     method: req.method,
