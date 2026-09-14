@@ -289,6 +289,8 @@ deprecated 因子满足：新数据窗口重新跑全量评估 → 四维全过 
 | 项 | 制度 | 承接物 |
 |---|---|---|
 | 月度全量再评估 | 每月首个周末跑 `run_factor_eval.py`（全 37+ 因子），报告按 generated_at 版本化留存 | automation（待用户确认后排期） |
+| ↳ 版本化留存落地 | ✅ 2026-09-14（`GOV-001`）：覆盖前先把旧报告归档到 `data/factors/history/eval_report.<口径版本>.<生成时间>.json`（幂等）。**此前该承诺只写在本表里，落盘实为单文件原地覆盖** ⇒ 历史结论只剩上一次的 `verdict_prev`，更早的不可枚举 | `evaluate.py::_archive_previous` |
+| ↳ 口径变更复核清单 | ✅ 2026-09-14（`GOV-001`）：报告新增 `review_required` —— 旧口径与当前不同、或旧报告**未声明**口径（未判定）时，列出**全部**旧口径结论（**含三态未翻转的**，因"未翻转 ≠ 不受影响"）。只读层 `freshness`/`ic_evidence` 增 `algo_version`/`algo_current`（三态） | `evaluate.py::_build_review_required` · `report.py` |
 | 增量窗口对比 | 每次报告自动附「近 250 日 IC vs 全期 IC」对比，偏差 ≥50% 标衰减警告 | evaluate.py P1 增加 rolling 窗口输出 |
 | 版本日志 | 每次入库/出库/复活/口径变更记一行（本文件 §8） | 人工（有消费影响，不自动化） |
 | 阈值复审 | 每半年复核准入阈值是否需校准（如截面扩容后 IC 分布变化） | 人工评审 |

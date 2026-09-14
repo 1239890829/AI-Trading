@@ -641,6 +641,116 @@ def _annotate_verdict_changes(results: list[dict], prev: dict[str, str]) -> list
     return recheck
 
 
+# ---------------------------------------------------------------- 版本化留存与复核清单
+#: 版本化留存子目录名（相对评估报告所在目录）。制度文档
+#: `docs/factor-lifecycle-governance.md` §7.2 承诺「报告按 generated_at 版本化留存」，
+#: 而落盘路径长期是**单文件原地覆盖**——历史结论只剩上一次的 `verdict_prev`，更早的
+#: 不可枚举（[[KB-ENG-72]]：**文档承诺 ≠ 实际覆盖**）。
+HISTORY_DIRNAME = "history"
+
+
+def _history_dir(out_path: str | Path) -> Path:
+    """归档目录**跟随报告落点**（不锚定模块级常量）⇒ 测试传 tmp 出参时同样成立。"""
+    return Path(out_path).parent / HISTORY_DIRNAME
+
+
+def _archive_previous(out_path: str | Path | None) -> Path | None:
+    """把**将被覆盖**的旧报告归档到 `history/`，返回归档路径（无可归档返回 None）。
+
+    归档名含**旧报告自己声明的口径版本**与生成时间 ⇒ 可同时回答
+    「哪些结论是旧口径算的」，即口径变更后复核清单的输入。
+    **幂等**：同名已存在则不重写（重复归档同一份旧报告不产生新文件）。
+    旧报告缺失 / 不可解析 ⇒ None，**不阻塞评估**（与 `_prev_verdicts` 同姿势）。
+    """
+    if out_path is None:
+        return None
+    src = Path(out_path)
+    try:
+        if not src.exists():
+            return None
+        old = json.loads(src.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001  旧报告损坏 = 无可归档（不阻塞）
+        return None
+    if not isinstance(old, dict):
+        return None
+    declared = old.get("algo_version")
+    ver = declared if isinstance(declared, str) and declared else "unknown"
+    # 时间戳去冒号以跨文件系统安全（`2026-09-07T17:00:46` → `2026-09-07T170046`）
+    gen = str(old.get("generated_at") or "undated").replace(":", "")
+    dst = _history_dir(src) / f"eval_report.{ver}.{gen}.json"
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if not dst.exists():
+            dst.write_text(json.dumps(old, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:  # noqa: BLE001  归档失败不得阻塞本轮评估
+        log.warning("factor report archive failed: %s", dst)
+        return None
+    return dst
+
+
+def _prev_algo_version(out_path: str | Path | None) -> str | None:
+    """旧报告**自己声明**的口径版本。
+
+    **三态**：声明了 → 该字符串；旧报告存在但无该字段（口径版本机制之前的产出）→ None
+    ⇒ 调用方须按「未判定」处理，**不得塌缩成「确定过期」**（§1「三态 > 二态」纪律）。
+    旧报告缺失 / 损坏同样 None。
+    """
+    if out_path is None:
+        return None
+    try:
+        p = Path(out_path)
+        if not p.exists():
+            return None
+        old = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(old, dict):
+        return None
+    declared = old.get("algo_version")
+    return declared if isinstance(declared, str) and declared else None
+
+
+def _build_review_required(
+    results: list[dict], prev: dict[str, str], prev_algo: str | None, cur_algo: str,
+) -> list[dict]:
+    """列出**全部基于旧口径的历史结论**（含未翻转的）——GOV-001 核心（**纯函数**）。
+
+    为什么不能只看翻转（`recheck`）：**未翻转 ≠ 不受影响**。旧结论是用旧口径算出来的
+    数，口径一改它就该被人工复核——哪怕三态恰好停在原位。只看翻转会让「结论没变」
+    被读成「结论仍然成立」，而报告 F5 要防的正是「旧报告继续被当调参依据」。
+
+    三种情形（**三态纪律：`未判定` 不等于 `未变更`**）：
+
+    - 无历史结论（首次跑，`prev` 为空）⇒ `[]`；
+    - 旧报告口径 == 当前口径 ⇒ `[]`（翻转项另由 `recheck` 承载，两清单职责不重叠）；
+    - 旧报告口径 != 当前口径 ⇒ 列出全部旧结论，`reason` 标「基于旧口径 X」；
+    - 旧报告**未声明**口径（机制之前的产出）⇒ 同样列出全部旧结论，`reason` 标
+      「未判定是否同源」——**旧报告不可知不等于可以继续当调参依据**（实测活案例：
+      2026-09-14 磁盘报告产出于 09-07，无该字段）。
+    """
+    if not prev:
+        return []
+    if prev_algo == cur_algo:
+        return []
+    if prev_algo is None:
+        reason = f"旧报告未声明口径版本 ⇒ 是否与当前口径 {cur_algo} 同源**未判定**"
+    else:
+        reason = f"结论基于旧口径 {prev_algo}（当前 {cur_algo}）"
+    out: list[dict] = []
+    for r in results:
+        v0 = prev.get(r["name"])
+        if v0 is None:
+            continue  # 旧口径下本无该因子结论（新增因子）⇒ 无历史结论可复核
+        out.append({
+            "name": r["name"],
+            "verdict_prev": v0,
+            "verdict_now": r["verdict"],
+            "changed": v0 != r["verdict"],
+            "reason": reason,
+        })
+    return out
+
+
 def run_full_eval(db_path: str | Path, *, out_path: str | Path | None = None) -> dict:
     import duckdb
 
@@ -683,11 +793,24 @@ def run_full_eval(db_path: str | Path, *, out_path: str | Path | None = None) ->
 
         # 口径版本追溯（R15-R17 验收）：与旧报告逐因子做差，旧结论保留为 verdict_prev，
         # 翻转项标 recheck=pending——**修复不静默把通过改成失败**，翻转必须显式留痕待复核。
-        recheck = _annotate_verdict_changes(results, _prev_verdicts(out_path))
+        # GOV-001 增量：重算前先把旧报告**归档**（制度 §7.2 承诺的版本化留存，此前只在
+        # 文档里、落盘仍是原地覆盖），并读出旧报告自己声明的口径版本 —— 口径变更时据此
+        # 列出**全部**旧口径结论（含未翻转），而不只是翻转项（未翻转 ≠ 不受影响）。
+        prev_verdicts = _prev_verdicts(out_path)
+        prev_algo = _prev_algo_version(out_path)
+        archived = _archive_previous(out_path)
+        recheck = _annotate_verdict_changes(results, prev_verdicts)
+        review_required = _build_review_required(results, prev_verdicts, prev_algo, ALGO_VERSION)
+        algo_changed = (None if prev_algo is None else prev_algo != ALGO_VERSION)
 
         report = {
             "generated_at": beijing_now().isoformat(timespec="seconds"),
             "algo_version": ALGO_VERSION,
+            # 口径变更的可判定性（GOV-001）：上一份报告声明的口径 + 是否已变 + 被归档的旧报告名。
+            # `prev_algo_version is None` = 上一份报告无该字段（未判定），不得读成「口径未变」。
+            "prev_algo_version": prev_algo,
+            "algo_changed": algo_changed,
+            "archived_prev_report": (archived.name if archived is not None else None),
             "protocol": {
                 "algo_version": ALGO_VERSION,  # R15-R17：口径变更必须能定位到受影响产物
                 "signal": "T 收盘", "entry": "T+1 收盘（保守执行口径）",
@@ -708,6 +831,12 @@ def run_full_eval(db_path: str | Path, *, out_path: str | Path | None = None) ->
                 "recheck_policy": {
                     "prev_verdict": "verdict_prev（来自被覆盖的旧报告）",
                     "on_change": "verdict_changed=True 且 recheck='pending'（不静默改写旧结论）",
+                    # GOV-001：翻转清单 ≠ 复核清单——口径变更时**未翻转的旧口径结论同样要复核**
+                    "versioned_review": (
+                        "review_required 列出**全部**需复核的历史结论（含三态未变的）："
+                        "旧口径与当前不同、或旧报告未声明口径（未判定）时均非空；"
+                        "仅当无历史结论或口径确认为同一版本时才为空"
+                    ),
                 },
                 # 收益量纲口径（R17）：期间收益 → 简单线性年化，近似且不可实现
                 "annualization": {
@@ -740,6 +869,8 @@ def run_full_eval(db_path: str | Path, *, out_path: str | Path | None = None) ->
             "factors": results,
             # 口径变更引起的结论翻转（旧结论见各因子 verdict_prev）——待人工复核
             "recheck": recheck,
+            # 口径变更时**全部**基于旧口径的历史结论（含未翻转）——GOV-001「版本化复核清单」
+            "review_required": review_required,
             "summary": {
                 "pass": sorted(r["name"] for r in results if r["verdict"] == "PASS"),
                 "conditional": sorted(r["name"] for r in results if r["verdict"] == "CONDITIONAL"),

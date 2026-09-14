@@ -39,6 +39,17 @@ REPORT_PATH = Path(__file__).resolve().parents[2] / "data" / "factors" / "eval_r
 DEFAULT_MAX_AGE_DAYS = 40
 
 
+def _current_algo_version() -> str:
+    """代码**当前**的算法口径版本。
+
+    延迟 import：只读层不必为了一次字符串比较把批处理模块（`evaluate`，全历史扫描引擎）
+    拉进导入链。
+    """
+    from app.factors.evaluate import ALGO_VERSION
+
+    return ALGO_VERSION
+
+
 def load_report() -> dict | None:
     """读取评估报告。**不抛异常**——读不出来返回 None，由调用方决定降级姿势。"""
     try:
@@ -62,13 +73,40 @@ def _age_days(generated_at: str | None) -> int | None:
 
 
 def freshness(max_age_days: int = DEFAULT_MAX_AGE_DAYS) -> dict:
-    """报告新鲜度（三态：缺失 / 新鲜 / 超期）。"""
+    """报告新鲜度（三态：缺失 / 新鲜 / 超期）+ **口径版本维度**（GOV-001）。
+
+    `stale` **只表示时间维度**（`generated_at` 超宽限），语义不变——既有消费方
+    依赖它判断"该重跑了"。口径维度是**新增的独立字段**：
+
+    - `algo_current=True`  报告口径 == 代码当前口径；
+    - `algo_current=False` 口径**已变更** ⇒ 结论须复核后方可用（见 `algo_note`）；
+    - `algo_current=None`  报告无 `algo_version` 字段（口径版本机制之前的产出）
+      ⇒ **未判定**，不塌缩成 False（§1「三态 > 二态」纪律）。
+
+    为什么必须分开：**未超期 ≠ 结论仍然成立**。实测活案例（2026-09-14）——磁盘报告
+    产出于 09-07（无 `algo_version`），代码口径已到 `2026-09-14.ic-maturity-v3`，
+    而仅按时间判定时 `age_days=7 < 40` ⇒ 旧口径结论照样被判"新鲜"送进进化议程。
+    """
     rep = load_report()
     if rep is None:
         return {"available": False, "reason": f"评估报告缺失或不可解析：{REPORT_PATH}",
                 "path": str(REPORT_PATH)}
     age = _age_days(rep.get("generated_at"))
     stale = age is None or age > max_age_days
+
+    declared = rep.get("algo_version")
+    declared = declared if isinstance(declared, str) and declared else None
+    current = _current_algo_version()
+    algo_current = None if declared is None else (declared == current)
+
+    if algo_current is False:
+        algo_note = (f"报告口径 {declared} 与代码当前 {current} 不一致 ⇒ "
+                     f"结论须复核后方可用于调参（GOV-001）")
+    elif algo_current is None:
+        algo_note = "旧报告未声明口径版本 ⇒ 是否与当前口径同源**未判定**"
+    else:
+        algo_note = None
+
     return {
         "available": True,
         "stale": stale,
@@ -77,6 +115,11 @@ def freshness(max_age_days: int = DEFAULT_MAX_AGE_DAYS) -> dict:
         "generated_at": rep.get("generated_at"),
         "reason": (None if not stale else
                    ("报告时间无法解析" if age is None else f"报告已 {age} 天，超过 {max_age_days} 天宽限")),
+        # 口径维度（与时间维度正交，勿混用）
+        "algo_version": declared,
+        "algo_version_current": current,
+        "algo_current": algo_current,
+        "algo_note": algo_note,
         "path": str(REPORT_PATH),
     }
 
@@ -170,6 +213,11 @@ def ic_evidence(limit: int = 6, max_age_days: int = DEFAULT_MAX_AGE_DAYS) -> dic
         "age_days": fresh["age_days"],
         "generated_at": fresh["generated_at"],
         "note": fresh["reason"],
+        # 口径维度（GOV-001）：与 `stale`（时间）正交——「未超期」不等于「结论仍成立」。
+        # 消费方（进化议程）据此判断这份因子结论是否与**当前口径**同源。
+        "algo_version": fresh["algo_version"],
+        "algo_current": fresh["algo_current"],
+        "algo_note": fresh["algo_note"],
         "counts": {
             "pass": len(summary.get("pass") or []),
             "conditional": len(summary.get("conditional") or []),

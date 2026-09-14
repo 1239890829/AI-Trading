@@ -519,3 +519,45 @@ def test_run_full_eval_records_algo_version_and_recheck(db, tmp_path):
     for x in rep2["recheck"]:
         assert x["verdict_prev"] != x["verdict_now"]
     assert victim["name"] in [x["name"] for x in rep2["recheck"]]
+
+
+def test_run_full_eval_archives_prev_report_and_lists_versioned_review(db, tmp_path):
+    """GOV-001 端到端：覆盖前**归档**旧报告；口径变更时 `review_required` 覆盖**全部**旧结论。
+
+    做法：先跑一次拿真实结论 → 把落盘报告的口径伪造成旧版本 → 再跑一次。
+    第二轮必须同时满足：① 第一轮报告已归档进 `history/`；② `prev_algo_version` = 伪造值；
+    ③ `algo_changed=True`；④ `review_required` = **所有有旧结论的因子**（含三态未变的），
+    而 `recheck` 严格是它的子集（只管翻转）——**翻转清单 ≠ 复核清单**。
+    """
+    con, _ = db
+    con.close()
+    db_path = tmp_path / "m.duckdb"
+    out = tmp_path / "factors" / "report.json"
+
+    rep1 = run_full_eval(db_path, out_path=out)
+    assert rep1["prev_algo_version"] is None     # 首次跑：无旧报告
+    assert rep1["algo_changed"] is None          # 无历史 ⇒ **未判定**（不是"未变更"）
+    assert rep1["review_required"] == []
+    assert rep1["archived_prev_report"] is None
+
+    # 伪造旧口径（模拟「报告由更早的口径产出」）
+    old = json.loads(out.read_text(encoding="utf-8"))
+    old["algo_version"] = "2020-01-01.legacy"
+    out.write_text(json.dumps(old, ensure_ascii=False), encoding="utf-8")
+
+    rep2 = run_full_eval(db_path, out_path=out)
+
+    hist = out.parent / "history"
+    assert hist.is_dir(), "旧报告未被版本化留存（制度 §7.2 的承诺仍只写在文档里）"
+    assert any("2020-01-01.legacy" in p.name for p in hist.iterdir())
+    assert rep2["archived_prev_report"] and "2020-01-01.legacy" in rep2["archived_prev_report"]
+
+    assert rep2["prev_algo_version"] == "2020-01-01.legacy"
+    assert rep2["algo_changed"] is True
+
+    review = {x["name"] for x in rep2["review_required"]}
+    recheck = {x["name"] for x in rep2["recheck"]}
+    assert recheck <= review, "翻转项必须包含在复核清单内"
+    # 复核清单 = 全部有旧结论的因子（含未翻转），不只是一部分
+    assert review == {r["name"] for r in rep2["factors"] if r["verdict_prev"] is not None}
+    assert all("2020-01-01.legacy" in x["reason"] for x in rep2["review_required"])

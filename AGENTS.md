@@ -30,7 +30,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 3039 项（2977 passed / 62 skipped）· collect 194 文件（09-14 全量实测，0 failed）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 3053 项（2991 passed / 62 skipped）· collect 195 文件（09-14 §6.29 全量实测，0 failed）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。
@@ -62,17 +62,16 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 3039 项（2977 passed / 62 skipped）· collect 194 文件（`ls` 口径 196，恒差 2）、
+> **门禁口径**：后端 3053 项（2991 passed / 62 skipped）· collect 195 文件（`ls` 口径 197，恒差 2）、
 > 前端 502 项 / 57 文件、eslint **0 error / 0 warn**
-> （2026-09-14 §6.27 实测；较上一值 3014 / 192 / 499 增量 **+25 项 / +2 文件 / +3 项**，
-> 来源逐文件对账自洽：后端 = 8（`test_cmd_guidance_guard.py`，新文件）+ 1（`test_freshness.py` STATES 钉子）
-> + 14（`test_paper_reconcile.py`，新文件）+ 1（`test_endpoint_smoke` 136→137）+ 1（`test_import_lint` 235→236）
-> —— 后两条是**守卫按设计自动纳入**（新增 GET 路由被 openapi 扫荡覆盖 / 新增模块进分层规则表）；
-> 前端 = `format.test.ts` 的 `triAmount` 用例 5→8 项、文件数不变）
+> （2026-09-14 §6.29 实测；较上一值 3039 / 194 / 502 增量 **+14 项 / +1 文件 / ±0**，
+> 来源逐文件对账自洽：后端 = 13（`test_factor_versioned_review.py`，新文件 · `GOV-001` 版本化复核清单）
+> + 1（`test_factors.py` 端到端：归档 + `algo_changed` + `review_required ⊇ recheck`）；
+> 前端本轮**零改动** ⇒ 502 / 57 逐字不变——**"某一侧不变"同样是可核对的自洽项**）
 > （25 条回归已按 P1-27 清零；仅 notification-drawer 保留 1 处带理由的 C 类豁免）。
 > ⚠️ **「文件数」有两个口径，混用会造出假缺口**（2026-09-14 实测）：`ls tests/*.py` 与
 > `pytest --collect-only` 的「有测试的文件数」**不等**——本仓恒差 2（存在 2 个 0 用例的测试文件）。
-> master 实测：`ls` = 184 而 collect = 182；当前：`ls` = **192** 而 collect = **190**（09-14 F7 轮实测）。
+> master 实测：`ls` = 184 而 collect = 182；当前：`ls` = **197** 而 collect = **195**（09-14 §6.29 实测）。
 > **引用前先确认用的是哪个口径**，并把基线数字改从 `git worktree add /tmp/base <ref>` 实测取，
 > 不要沿用手写记录（09-14 曾因「ls 基线 184 vs collect 记录 182」差 2，一度像是本轮多加了文件）。
 > **测试规模与告警数同属「会失真的状态标注」**——改动后要实测回填，不要沿用旧数字
