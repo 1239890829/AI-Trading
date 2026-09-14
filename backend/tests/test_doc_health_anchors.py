@@ -321,13 +321,58 @@ _NEUTRAL = {
     "check_claim_entries_missing_falsifier": (),
     "check_claim_exempt_ids": (),
     "check_empty_sections": ((), ()),
+    # 2026-09-14 GOV-010：K / L / M / N 四项是 J 之后新增的，原先**漏在中性表外**
+    # ⇒ 它们对**真实仓库**跑，任何并发文档写入都会让本文件的结论行用例假红
+    # （当日 15:10 全量门禁 2 红，成因即另一会话正在改 docs/，非代码回归）。
+    "check_table_delimiters": (),
+    "check_task_ids_defined": (),
+    "check_task_carrier_pointers": (),
+    "check_memory_index": ((), ()),
+    "kb_file_advisories": (),
+    "check_catalog_closure": ((), ()),
 }
 
 
+def _checks_called_by_main(mod: ModuleType) -> set[str]:
+    """用 AST 读出 `main()` 实际调用了哪些检查函数（不执行它）。
+
+    用途：钉住「中性表必须覆盖 main 的全部检查」。手写枚举是**会腐化的清单**——
+    main 每加一项检查，未登记项就会悄悄回到真实仓库上跑（[[KB-ENG-72]] 同族：
+    清单覆盖了什么 ≠ 真实覆盖面），而这正是本文件结论行用例非 hermetic 的成因。
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(mod.main)))
+    called = {
+        n.func.id
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Name)
+        and (n.func.id.startswith("check_") or n.func.id.startswith("kb_"))
+    }
+    # 只收「确实是模块级函数」的名字：`kb_over` / `kb_big` 这类**局部变量**同名混入
+    # 会让守卫自己假红（守卫假红比漏报更易被当成噪声关掉）。
+    return {n for n in called if callable(getattr(mod, n, None))}
+
+
 def _stub_all_but_anchors(mod: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
-    """把 J 以外的检查全部打成"空结果"，以隔离结论行本身。"""
+    """把 J 以外的检查全部打成"空结果"，以隔离结论行本身。
+
+    ⚠️ 覆盖度即正确性（GOV-010）：只打桩**已知**的检查等于把「新加的检查」
+    留给真实仓库 ⇒ 隔离是假的。故打桩后立即用 AST 反查 main 的调用面，
+    遗漏即报红并点名，避免下次新增检查时重复踩同一个坑。
+    """
     for name, ret in _NEUTRAL.items():
         monkeypatch.setattr(mod, name, lambda *a, _r=ret, **k: _r)
+
+    unstubbed = _checks_called_by_main(mod) - set(_NEUTRAL) - {"check_doc_anchors"}
+    assert not unstubbed, (
+        f"main() 调用了未打桩的检查 {sorted(unstubbed)}——它们会对**真实仓库**执行，"
+        "使结论行用例再次变成非 hermetic（并发改 docs/ 即假红）。"
+        "请在 _NEUTRAL 补上它们的中性返回值（返回值形状照该函数签名给）。"
+    )
 
 
 def _conclusion(stdout: str) -> str:

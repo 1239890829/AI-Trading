@@ -1287,6 +1287,102 @@ def check_memory_index() -> tuple[list[tuple[str, int]], list[tuple[str, int, st
     return oversized, dead
 
 
+#: O 项（GOV-008，2026-09-14）：编目表所在的**章节标题**与 KB 分表的表头特征。
+#: 「可定位」是「一份好文档」第一条（**找不到 = 等于不存在**），而 `docs/INDEX.md`
+#: §0.0 是唯一的编目面；它长期**只靠人守**——新增文档忘了登记，没有任何一项检查会红。
+CATALOG_SECTION = "## 0.0 书库编目"
+CATALOG_KB_SUBTABLE = "| 编号 | 册 |"
+
+
+def catalog_entries() -> tuple[set[str], set[str]]:
+    """解析 `docs/INDEX.md` §0.0 编目表 → (文件条目集, 目录条目集)，路径相对 `docs/`。
+
+    三种写法都要认（编目表实际三种都在用，只认一种会把其余全判成"未登记"）：
+      · `AGENTS.md`（根） / `.workbuddy/memory/` ⇒ 解析为**仓库相对**路径；
+      · `kb/00-INDEX.md` ⇒ docs 相对；
+      · 区间行（`SM-01..06` 的 `summary/stock-strategy` · `factor-system` · …）
+        ⇒ 后续**裸名继承前一个带路径 token 的目录**。
+    """
+    txt = _read(DOCS / "INDEX.md")
+    if CATALOG_SECTION not in txt:
+        return set(), set()
+    body = txt.split(CATALOG_SECTION, 1)[1]
+    nxt = re.search(r"\n## ", body)
+    if nxt:
+        body = body[: nxt.start()]
+    main_tbl, _, kb_tbl = body.partition(CATALOG_KB_SUBTABLE)
+
+    files: set[str] = set()
+    dirs: set[str] = set()
+    for kb, tbl in ((False, main_tbl), (True, kb_tbl)):
+        for line in tbl.splitlines():
+            if not line.startswith("|"):
+                continue
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if len(cells) < 2 or set(cells[0]) <= set("-: "):
+                continue
+            last_dir = ""
+            for tok in re.findall(r"`([^`]+)`", cells[1]):
+                if PLACEHOLDER_RE.search(tok):
+                    continue                      # 模板占位名（`overview-*.md` 等）
+                tok = tok.strip()
+                if tok.endswith("/"):
+                    d = ("kb/" if kb else "") + tok
+                    dirs.add(d)
+                    last_dir = d
+                    continue
+                if "/" in tok:
+                    last_dir = tok.rsplit("/", 1)[0] + "/"
+                    if not tok.endswith(".md"):
+                        tok += ".md"
+                    files.add(tok if tok.startswith(".workbuddy/") else ("kb/" if kb else "") + tok)
+                else:
+                    stem = tok if tok.endswith(".md") else tok + ".md"
+                    files.add(("kb/" if kb else "") + last_dir + stem)
+    return files, dirs
+
+
+def check_catalog_closure() -> tuple[list[str], list[str]]:
+    """O 项：`docs/INDEX.md` 编目表 ⇄ `docs/**.md` 的**双向闭包** → (未登记, 幽灵条目)。
+
+    两个方向都是真缺口（GOV-008）：
+      · **未登记**：文件在、编目里没有 ⇒ 找不到 = 等于不存在（`kb/11` 判据一）；
+      · **幽灵条目**：编目里有、文件不在 ⇒ 读者按编目跳过去是空处，且与 B 项的
+        "死链"不是同一面（B 只认 `docs/**.md` 形态的**正文引用**，不认编目表）。
+
+    ⚠️ **为什么必须先实测再上哨兵**（[[KB-ENG-68]]）：编目表的写法有**三种基线**
+    （docs 相对 / 仓库相对 / 区间行裸名），朴素抽取会把 `kb/*` 12 份、`summary/*` 6 份、
+    `evolution/`、`repo-watch/` 全部误判成"未登记"——**先把错误编目固化成门禁，
+    比没有门禁更糟**（它会逼人去"修"一份本来正确的文档）。
+    故本项上线前已按当前仓库实测：**83 份 md / 48 条文件条目 / 10 条目录条目，双向 0 命中**。
+
+    ⚠️ **保险丝**：编目表/文件缺失 ⇒ 判红，不静默跳过（守卫覆盖面失效比误报危险）。
+    """
+    unregistered: list[str] = []
+    ghosts: list[str] = []
+
+    idx = DOCS / "INDEX.md"
+    if not idx.exists():
+        return ["docs/INDEX.md（编目表本体缺失）"], []
+    files, dirs = catalog_entries()
+    if not files and not dirs:
+        return ["docs/INDEX.md §0.0 编目表解析为空"], []
+
+    for rel in files:
+        if not (DOCS / rel).exists() and not (ROOT / rel).exists():
+            ghosts.append(rel)
+    for d in dirs:
+        if not (DOCS / d).is_dir() and not (ROOT / d).is_dir():
+            ghosts.append(d)
+
+    for p in sorted(DOCS.rglob("*.md")):
+        rel = p.relative_to(DOCS).as_posix()
+        if rel in files or any(rel.startswith(d) for d in dirs):
+            continue
+        unregistered.append(rel)
+    return unregistered, ghosts
+
+
 def main() -> int:
     quiet = "--quiet" in sys.argv
     scan_all = "--all" in sys.argv
@@ -1313,6 +1409,7 @@ def main() -> int:
     task_ids = check_task_ids_defined()
     carriers = check_task_carrier_pointers()
     idx_over, idx_dead = check_memory_index()
+    cat_unreg, cat_ghost = check_catalog_closure()
 
     def line(label: str, ok: bool, detail: str = "") -> None:
         nonlocal problems
@@ -1437,11 +1534,22 @@ def main() -> int:
     for f, n in idx_over:
         print(f"       {f}：{n} 字符 > {INDEX_CHAR_CAP}"
               f" ⇒ 内容应进 L3 文档、索引只留指针（kb/07 §4.4 反固化条款）")
-    if idx_dead and not quiet:
-        for f, ln, tok in idx_dead[:12]:
-            print(f"       {f}:{ln} → {tok}（全仓不存在）")
-        if len(idx_dead) > 12:
-            print(f"       …另有 {len(idx_dead) - 12} 处")
+        if idx_dead and not quiet:
+            for f, ln, tok in idx_dead[:12]:
+                print(f"       {f}:{ln} → {tok}（全仓不存在）")
+            if len(idx_dead) > 12:
+                print(f"       …另有 {len(idx_dead) - 12} 处")
+    line("O 编目完整性", not cat_unreg and not cat_ghost,
+         f"未登记 {len(cat_unreg)} 份 / 幽灵条目 {len(cat_ghost)} 条"
+         + ("（docs/INDEX.md §0.0 ⇄ docs/**.md 双向闭包）" if not (cat_unreg or cat_ghost) else ""))
+    if cat_unreg and not quiet:
+        for rel in cat_unreg[:12]:
+            print(f"       + {rel}（在 docs/ 下但编目表未登记）")
+        if len(cat_unreg) > 12:
+            print(f"       …另有 {len(cat_unreg) - 12} 份")
+    if cat_ghost and not quiet:
+        for rel in cat_ghost[:12]:
+            print(f"       - {rel}（编目表登记但全仓不存在）")
     # H 项**刻意走 WARN 而非 FAIL**：先补存量再上哨兵，且只作提示。
     # 若计 FAIL，未补完的条目会让整份体检长期挂红 ⇒ 被整体无视（KB-ENG-58）。
     line("H-KB 豁免名单有效", not claim_ghost,

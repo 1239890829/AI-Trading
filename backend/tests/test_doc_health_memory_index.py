@@ -206,3 +206,45 @@ def test_missing_index_file_fails_loud(probe: Probe) -> None:
     """
     (probe.root / ENTRY).unlink()
     assert ENTRY in [tok for _, _, tok in probe.dead()]
+
+
+# ------------------------------------------------- B / N 分工交接（GOV-009，2026-09-14）
+
+def test_scan_files_cover_the_index_entry() -> None:
+    """**交接前提钉（GOV-009）**：索引入口 `MEMORY.md` 必须在 **B 项的扫描面**内。
+
+    分工是「**N 判非 docs 前缀、B 判 docs 前缀**」，两半**都不完整**——
+    索引里 `docs/…` 形态的指针**只有 B 能看见**（N 刻意跳过 docs/，见
+    `test_docs_prefix_is_left_to_check_b`）。若哪天有人把 `MEMORY.md` 从
+    `SCAN_FILES` 挪走（"它只是索引、不是文档"是很自然的误判），**N 全绿、B 不再扫它**
+    ⇒ 索引里的 docs 死链**没有任何一项检查会报**，而门禁依旧全绿。
+
+    这正是 [[KB-ENG-72]] 的典型形态：**A 假定 B 覆盖，而 B 的覆盖面由第三处的常量决定**，
+    任一侧都不会自己变红。2026-09-14 双向注入已确认交接**当前成立**，缺的只是这颗钉子。
+    """
+    mod = _load()
+    assert ".workbuddy/memory/MEMORY.md" in mod.SCAN_FILES, (
+        "索引入口已不在 B 项扫描面（SCAN_FILES）内 ⇒ 索引里的 `docs/**.md` 死链"
+        "将无人判（N 跳过 docs/，B 不扫该文件）。分工交接断裂，请恢复该条目。"
+    )
+    # 顺带钉住另一半：`docs/INDEX.md` 同属 B 面（它是 MEMORY.md 的展开版，同为索引）。
+    assert "docs/INDEX.md" in mod.SCAN_FILES
+
+
+def test_n_does_not_judge_docs_prefix_statically() -> None:
+    """**分工边界的结构钉**：N 的判定面**在结构上**就不含 `docs/`。
+
+    `test_docs_prefix_is_left_to_check_b` 是**行为**钉（改判据会红）；本例补**结构**钉：
+    直接断言常量面不含 `docs/`。行为钉防"改了判据"，结构钉防"改了配置"——
+    若有人把 `docs/` 加进 `INDEX_DIR_PREFIXES`，行为钉仍绿（那个用例写的是**不存在**的
+    docs 路径，加 `docs/` 只会让它**变红**……除非同时被 `RECORD_MARKERS` 之类豁免），
+    而"两套口径"这种漂移**最常发生在常量层**，故两颗钉子都要有。
+    """
+    mod = _load()
+    assert "docs/" not in mod.INDEX_DIR_PREFIXES, (
+        "`docs/` 进入 N 的目录前缀 ⇒ N 与 B 对同一形态的指针各判一次，"
+        "两套口径必漂移（KB-ENG-26 同族）。docs/ 前缀归 B，见 §6.0 GOV-009。"
+    )
+    # 反向也钉：B 的指针正则只认 docs/ 形态 ⇒ `.workbuddy/` 指针确实由 N 独占。
+    assert mod.REF_RE.search(".workbuddy/memory/MEMORY.md") is None
+    assert mod.REF_RE.search("docs/kb/07-doc-curation.md") is not None
