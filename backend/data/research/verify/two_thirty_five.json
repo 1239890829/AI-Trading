@@ -21,7 +21,7 @@
   },
   "source": "scripts/verify_two_thirty_five.py",
   "cost_bps": 0.0,
-  "recorded_at": "2026-09-11T17:52:18",
+  "recorded_at": "2026-09-13T21:11:51",
   "gate_failed": [
     "市场中性超额 -0.85% ≤ 0",
     "年度为正 1/11 < 60%（不稳定）"
