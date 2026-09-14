@@ -13,9 +13,22 @@ node_modules/
 out/
 
 # Env & secrets
+# `.env.*` 必须整体忽略：只写 `.env` 会漏掉 `.env.production` / `.env.development` /
+# `.env.prod` 等全部变体（2026-09-14 实测三者均 NOT-IGNORED）——一个「生产环境变量
+# 文件」就能把写鉴权 token 送进仓库，与红线 4「API Key 只存 backend/.env」直接冲突。
+# 例外只放 *.example（模板，无密钥）。
 .env
+.env.*
 .env.bak*
 *.local
+*.pem
+*.key
+id_rsa*
+*.ppk
+credentials.json
+secrets.yaml
+secrets.yml
+!*.env.example
 
 # Data & runtime
 data/raw/*
@@ -89,3 +102,12 @@ scripts/agent/logs/run.log
 data/boardflow/*
 data/theme_momentum/*
 backend/data/cache/
+
+# ⚠️ 上面两条 `data/…` 规则**当前从不匹配**（2026-09-14 实测 `git check-ignore` 判定为未忽略）：
+# 生产常量写的是**相对路径**（`app/market/board_flow.py` / `app/picks/board_surge.py` 里的
+# `Path("data/…")`），而服务按 AGENTS.md §1 从 `backend/` 启动 ⇒ 实际落盘在
+# `backend/data/…`。规则照仓库根写就永远是死规则，**运行数据会被误提交**
+# （2026-09-14 实测 `backend/data/theme_momentum/2026-09-14.jsonl` 单日 1.8MB 处于未跟踪待提交态）。
+# 此处按**实际落盘路径**补规则；`data/*` 两条保留不动（若哪天有人从仓库根跑，它们才生效）。
+# 根治办法是让常量不依赖 CWD，但那会移动既有数据目录 ⇒ 属行为变更，另行拍板（账本 §6.6 行 37）。
+backend/data/theme_momentum/

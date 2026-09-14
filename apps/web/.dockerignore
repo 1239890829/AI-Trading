@@ -5,3 +5,8 @@ Dockerfile
 .dockerignore
 *.test.ts
 *.test.tsx
+# 凭据文件绝不进镜像层：`COPY . .` 会把它拷进构建层，再经 `COPY --from=build /web ./`
+# 留在运行镜像里（任何人 `docker save` 即可取出）。需要构建期变量请走 `--build-arg`
+# / compose `build.args`，不要放文件——文件已在此排除。
+.env
+.env.*
