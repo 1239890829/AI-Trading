@@ -8,6 +8,8 @@
  * - 聊天窗：SSE 流式渲染、中断（AbortController）/重新生成、最小化收回悬浮球
  * - 实体跳转：回答中的个股/题材经 entity-dict 词典识别 → 点击跳工作台详情/题材梯队
  * - 上下文：发送时带上当前页面 path/title/选中标的，后端注入系统提示
+ * - 会话历史（IMP-004）：会话内容落 localStorage（最近 10 条）+ 历史列表，
+ *   刷新不丢；存储契约与裁剪规则见 `lib/assistant-sessions.ts`
  *
  * 挂载在 app/layout.tsx（NavBar 之后），z-50 盖过导航（z-40）。
  */
@@ -20,6 +22,20 @@ import { isAllowedNav } from "@/lib/nav-targets";
 import { RichText } from "@/components/assistant/rich-text";
 import { AssistantMark } from "@/components/assistant/assistant-mark";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import {
+  MAX_SESSIONS,
+  loadCurrentId,
+  loadSessions,
+  newSessionId,
+  removeSession as removeStoredSession,
+  saveCurrentId,
+  saveSessions,
+  titleFromMessages,
+  toStoredMessages,
+  upsertSession,
+  type StoredMsg,
+  type StoredSession,
+} from "@/lib/assistant-sessions";
 
 const BALL = 48;
 const MARGIN = 16;
@@ -41,15 +57,31 @@ const SUGGESTIONS = [
   "每日精选的选股逻辑是什么？",
 ];
 
-interface ChatMsg {
-  id: number;
-  role: "user" | "assistant";
-  content: string;
-  status: "ok" | "streaming" | "interrupted" | "error";
-  /** 本条回答引用到的实时快照溯源（来源 + 数据时间）；无快照为空 */
-  sources?: { symbol: string; name: string; source: string; as_of: string }[];
-  /** 本条回答实际调用过的工具（中文短标签，后端 tool_label 给；旧事件无 labels 时退回键名） */
-  tools?: string[];
+/**
+ * 消息类型 = 存储契约（`lib/assistant-sessions.ts` 的 `StoredMsg`）。
+ *
+ * 刻意**共用同一个类型**而不是各写一份：会话要落盘，两边字段一旦漂移，
+ * 症状是"存进去读不回来"或"恢复了却少一块溯源"，而它只在刷新后才显形。
+ */
+type ChatMsg = StoredMsg;
+
+/** 会话内容是否与已存的一致 —— 切会话/重渲染不该无谓刷新 `updatedAt` 与写盘。 */
+function sameStoredMessages(a: readonly StoredMsg[], b: readonly StoredMsg[]): boolean {
+  return a.length === b.length && JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** 会话时间：今天只给 `HH:MM`，更早给 `MM-DD HH:MM`（浮窗里不写年份，省地方）。 */
+function formatSessionTime(ms: number): string {
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  const hm = `${p(d.getHours())}:${p(d.getMinutes())}`;
+  return sameDay ? hm : `${p(d.getMonth() + 1)}-${p(d.getDate())} ${hm}`;
 }
 
 /** 生成期进度（后端 status 事件）：thinking = 组织回答；tools = 正在取数 */
@@ -123,6 +155,9 @@ export function FloatingAssistant() {
   const [bubbles, setBubbles] = useState<AgentBubble[]>([]);
   const [docked, setDocked] = useState<"left" | "right" | null>(null);
   const [orbHovered, setOrbHovered] = useState(false);
+  const [sessions, setSessions] = useState<StoredSession[]>([]);
+  const [currentId, setCurrentId] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const idRef = useRef(0);
@@ -130,12 +165,28 @@ export function FloatingAssistant() {
   const dictTriedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const stickRef = useRef(true);
+  /** 会话列表的权威副本：落盘/切换都读它，避免闭包里拿到过期数组。 */
+  const sessionsRef = useRef<StoredSession[]>([]);
+  /** 首帧恢复是否已完成 —— 未完成前不许落盘（否则会拿空列表覆盖历史）。 */
+  const loadedRef = useRef(false);
+  /**
+   * 流式代际号。切换/新建/删除会话会 `+1` 弃掉在途的流：
+   * 被弃的流**不得再写消息表、也不得再关掉界面上的"生成中"**
+   * （否则它的中断兜底会把**新会话**的最后一条标成"已停止"，或把新流的
+   * 状态栏关掉 —— 都是在用户看来毫无因果的错乱）。
+   */
+  const streamGenRef = useRef(0);
 
   const nextId = () => ++idRef.current;
   const syncRef = (updater: (prev: ChatMsg[]) => ChatMsg[]) => {
     msgsRef.current = updater(msgsRef.current);
     return msgsRef.current;
   };
+  /** 会话列表的**唯一写入口**：ref 与 state 必须同步，否则下一次读到的还是旧数组。 */
+  const commitSessions = useCallback((next: StoredSession[]) => {
+    sessionsRef.current = next;
+    setSessions(next);
+  }, []);
 
   // ---- 初始化：位置恢复 + 视口跟踪 ----------------------------------------
   useEffect(() => {
@@ -152,13 +203,60 @@ export function FloatingAssistant() {
       x: window.innerWidth - BALL - MARGIN,
       y: window.innerHeight - BALL - MARGIN - 64,
     });
+    // 会话恢复（IMP-004）：先取列表，再按"记住的 id → 最新的那条 → 全新会话"三级兜底。
+    // 三级都要有：记住的 id 可能已被淘汰/删除（列表上界 10 条），此时落回最新的一条，
+    // 而不是让用户看到一片空白。
+    try {
+      const list = loadSessions();
+      commitSessions(list);
+      const want = loadCurrentId();
+      const cur = (want ? list.find((s) => s.id === want) : undefined) ?? list[0];
+      if (cur) {
+        setCurrentId(cur.id);
+        // ⚠️ `msgsRef` 才是后续所有变更的底稿（见 syncRef）：只 setMessages 不写它，
+        // 恢复出来的历史会在**第一次发问时被整段覆盖掉**（提问看起来像把历史删了，
+        // 而刷新一下又都回来了 —— 2026-09-15 组件测试抓到的形态）。
+        msgsRef.current = cur.messages;
+        setMessages(cur.messages);
+        // id 计数器必须越过已恢复的最大 id，否则新消息会与旧消息**撞 key**
+        idRef.current = cur.messages.reduce((mx, m) => Math.max(mx, m.id), 0);
+      } else {
+        setCurrentId(newSessionId());
+      }
+    } catch {
+      setCurrentId(newSessionId());
+    } finally {
+      loadedRef.current = true;
+    }
     const onResize = () => {
       setViewport({ w: window.innerWidth, h: window.innerHeight });
       setPos((p) => (p ? clampPos(p) : p));
     };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
-  }, []);
+  }, [commitSessions]);
+
+  // ---- 会话落盘（IMP-004）--------------------------------------------------
+  // 触发条件：消息变了 **且不在流式中**。流式期间每个 delta 都会改 messages，
+  // 逐个 delta 序列化全量历史会让长对话明显卡顿；收流后落一次即可 ——
+  // 中途刷新最多丢"正在生成的这一条"，而它本来也无法恢复成生成中
+  // （见 `assistant-sessions.ts` 规矩 1：streaming 落盘即转 interrupted）。
+  useEffect(() => {
+    if (!loadedRef.current || !currentId || streaming) return;
+    const stored = toStoredMessages(messages);
+    if (!stored.length) return; // 空会话不入列表：新建会话不会凭空多出空记录
+    const prev = sessionsRef.current.find((s) => s.id === currentId);
+    if (prev && sameStoredMessages(prev.messages, stored)) return; // 内容没变就不写
+    const next = upsertSession(sessionsRef.current, {
+      id: currentId,
+      title: titleFromMessages(stored),
+      updatedAt: Date.now(),
+      messages: stored,
+    });
+    commitSessions(next);
+    saveSessions(next);
+    saveCurrentId(currentId);
+  }, [messages, streaming, currentId, commitSessions]);
 
   // ---- AI 判读提醒（悬浮球气泡）------------------------------------------
   // 只有判读为 notify 且未确认的才出现；规则触发本身不冒泡（防刷屏）。
@@ -269,6 +367,7 @@ export function FloatingAssistant() {
   }, []);
 
   const runStream = useCallback(async (history: ChatMsg[]) => {
+    const gen = ++streamGenRef.current;
     const assistantId = nextId();
     setMessages(syncRef((prev) => [
       ...prev,
@@ -312,11 +411,17 @@ export function FloatingAssistant() {
       const decoder = new TextDecoder();
       let buf = "";
       for (;;) {
+        // 会话已被切走/新建/删除 ⇒ 这条流的一切产出都作废（见 streamGenRef 注释）
+        if (gen !== streamGenRef.current) break;
         const { done, value } = await reader.read();
         if (done) break;
         buf += decoder.decode(value, { stream: true });
         let idx: number;
         while ((idx = buf.indexOf("\n\n")) >= 0) {
+          // 再查一次：能插进来的只有 `await reader.read()` 那一处 await，
+          // 因此"切会话"必然发生在读到数据与处理数据之间 —— 少了这道，
+          // 上面那道守卫会晚一拍，缓冲里的 delta 仍会写进**新会话**。
+          if (gen !== streamGenRef.current) break;
           const raw = buf.slice(0, idx);
           buf = buf.slice(idx + 2);
           for (const line of raw.split("\n")) {
@@ -387,6 +492,8 @@ export function FloatingAssistant() {
         }
       }
     } catch (err) {
+      // 已被弃掉的流不写消息表：否则它会把**新会话**的最后一条标成"已停止"
+      if (gen !== streamGenRef.current) return;
       const aborted = err instanceof DOMException && err.name === "AbortError";
       setMessages(syncRef((prev) => {
         if (!prev.length) return prev;
@@ -409,9 +516,12 @@ export function FloatingAssistant() {
         return next;
       }));
     } finally {
-      abortRef.current = null;
-      setStreaming(false);
-      setActivity(null);
+      // 被弃掉的流不得再动界面状态（否则会把新流的"生成中"关掉）
+      if (gen === streamGenRef.current) {
+        abortRef.current = null;
+        setStreaming(false);
+        setActivity(null);
+      }
     }
   }, [patchLast]);
 
@@ -454,9 +564,57 @@ export function FloatingAssistant() {
     void runStream(history);
   };
 
-  const clearChat = () => {
-    if (streaming) abortRef.current?.abort();
+  /**
+   * 弃掉在途的流（切会话 / 新建 / 删除前的统一动作）。
+   * **顺序不能反**：必须先 `+1` 让在途流失效，再 abort —— 否则它的中断兜底会
+   * 先一步把消息写进"新会话"。
+   */
+  const discardStream = () => {
+    if (!streaming) return;
+    streamGenRef.current += 1;
+    abortRef.current?.abort();
+    setStreaming(false);
+    setActivity(null);
+  };
+
+  /** 新建会话：当前会话在收流时已落盘，这里只切到一个空会话（空会话不入历史）。 */
+  const startNewSession = () => {
+    discardStream();
     setMessages(syncRef(() => []));
+    const id = newSessionId();
+    setCurrentId(id);
+    saveCurrentId(id);
+    setHistoryOpen(false);
+  };
+
+  const switchSession = (id: string) => {
+    setHistoryOpen(false);
+    if (id === currentId) return;
+    const target = sessionsRef.current.find((s) => s.id === id);
+    if (!target) return;
+    discardStream();
+    const restored = target.messages.map((m) => ({ ...m }));
+    setMessages(syncRef(() => restored));
+    // 计数器只增不减：跨会话也绝不撞 key
+    idRef.current = restored.reduce((mx, m) => Math.max(mx, m.id), idRef.current);
+    setCurrentId(id);
+    saveCurrentId(id);
+    stickRef.current = true;
+  };
+
+  const dropSession = (id: string) => {
+    const next = removeStoredSession(sessionsRef.current, id);
+    commitSessions(next);
+    saveSessions(next);
+    // 删空了就得收起列表：历史入口只在"有会话"时渲染，留着打开的空列表会无处可退
+    if (!next.length) setHistoryOpen(false);
+    if (id !== currentId) return;
+    // 删的正是当前会话 ⇒ 原地换成全新会话，不留下"当前 id 指向已删记录"的状态
+    discardStream();
+    setMessages(syncRef(() => []));
+    const nid = newSessionId();
+    setCurrentId(nid);
+    saveCurrentId(nid);
   };
 
   // ---- 跳转 ----------------------------------------------------------------
@@ -649,13 +807,34 @@ export function FloatingAssistant() {
             {messages.length > 0 && (
               <button
                 type="button"
-                aria-label="清空对话"
-                title="清空对话"
-                onClick={clearChat}
+                aria-label="新建会话"
+                title="新建会话"
+                onClick={startNewSession}
                 className="rounded-md p-1.5 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                  <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+              </button>
+            )}
+            {sessions.length > 0 && (
+              <button
+                type="button"
+                data-testid="assistant-history-toggle"
+                aria-label="历史会话"
+                aria-expanded={historyOpen}
+                title="历史会话"
+                onClick={() => setHistoryOpen((v) => !v)}
+                className={`rounded-md p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 ${
+                  historyOpen
+                    ? "text-rose-600 dark:text-rose-400"
+                    : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
+                }`}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M12 7v5l3 2" />
+                  <path d="M3.05 11a9 9 0 1 1 .5 4" />
+                  <path d="M3 4v5h5" />
                 </svg>
               </button>
             )}
@@ -672,7 +851,63 @@ export function FloatingAssistant() {
             </button>
           </div>
 
-          {/* 消息区 */}
+          {/* 会话历史列表（IMP-004）：**替换**消息区而不是另开一页 ——
+              400px 浮窗里分页会割裂上下文，替换式列表能保留头部与输入区不动。
+              列表本身不再另加弹层，省掉一套定位/边界计算。 */}
+          {historyOpen ? (
+            <div
+              data-testid="assistant-history"
+              className="min-h-0 flex-1 overflow-y-auto px-2 py-2"
+            >
+              <div className="flex items-center justify-between px-2 pb-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+                <span>历史会话</span>
+                <span data-testid="assistant-history-count">
+                  {sessions.length} / {MAX_SESSIONS}
+                </span>
+              </div>
+              <ul className="space-y-1">
+                {sessions.map((s) => (
+                  <li key={s.id} className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      data-testid="assistant-history-item"
+                      data-session-id={s.id}
+                      aria-current={s.id === currentId ? "true" : undefined}
+                      onClick={() => switchSession(s.id)}
+                      className={`min-w-0 flex-1 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800 ${
+                        s.id === currentId ? "bg-rose-50 dark:bg-rose-500/10" : ""
+                      }`}
+                    >
+                      <div className="truncate text-[12px] text-zinc-800 dark:text-zinc-200">
+                        {s.title}
+                      </div>
+                      <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-zinc-500 dark:text-zinc-400">
+                        {s.id === currentId && (
+                          <span className="rounded bg-rose-600 px-1 py-px text-[9px] text-white">
+                            当前
+                          </span>
+                        )}
+                        <span>
+                          {s.messages.length} 条 · {formatSessionTime(s.updatedAt)}
+                        </span>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`删除会话：${s.title}`}
+                      title="删除会话"
+                      onClick={() => dropSession(s.id)}
+                      className="shrink-0 rounded-md p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+                        <path d="M6 6l12 12M18 6 6 18" />
+                      </svg>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
           <div
             ref={scrollRef}
             onScroll={onScroll}
@@ -710,7 +945,7 @@ export function FloatingAssistant() {
             {messages.map((m, i) =>
               m.role === "user" ? (
                 // user：面板内唯一的大面积品牌色块（--accent 同源 rose），终点感明确
-                <div key={m.id} className="flex justify-end">
+                <div key={m.id} data-msg-id={m.id} className="flex justify-end">
                   <div className="max-w-[85%] whitespace-pre-wrap rounded-xl rounded-br-sm bg-rose-600 px-3.5 py-2 text-sm text-white">
                     {m.content}
                   </div>
@@ -718,7 +953,7 @@ export function FloatingAssistant() {
               ) : (
                 // assistant：去气泡平铺——回复是"内容"不是"卡片"，信息密度与呼吸感兼得；
                 // 出错时才给 amber 提示条，正常态零底色
-                <div key={m.id} className="max-w-[96%]">
+                <div key={m.id} data-msg-id={m.id} className="max-w-[96%]">
                   <div
                     className={
                       m.status === "error"
@@ -785,6 +1020,7 @@ export function FloatingAssistant() {
               ),
             )}
           </div>
+          )}
 
           {/* 输入区 */}
           <div className="border-t border-zinc-200 px-3 py-2.5 dark:border-zinc-800">
