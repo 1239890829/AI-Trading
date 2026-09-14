@@ -209,6 +209,10 @@ CODE_REF_ALLOW = {
         "到 `tmp_path`，临时树里的 `a.md` 只是宽容名单的**键**——键的形状必须是「文档相对路径」，"
         "所以它长得像文档指针但不是。真实扫描面由同文件末条 "
         "`test_real_repo_has_no_dead_doc_anchor` 在真仓库上覆盖",
+    ("backend/tests/test_doc_health_memory_index.py", "kb/definitely-missing.md"):
+        "**合成文档名**（同上面两条 `a.md`）：该测试把索引面 monkeypatch 到 `tmp_path`，"
+        "临时树里这个凭空造出的路径用来钉「`docs/` 前缀的指针**由 B 项管、N 项不重复要求**」"
+        "这条判据，不是仓库文档指针。真实索引面由 N 项在真仓库上覆盖",
     # ⚠️ 本文件自身也吃过同一次亏：上面这条理由的第一版把 `docs/` 前缀写了出来，
     # 结果 `check_code_refs` 把**自己的说明文字**判成死引用（`scripts/doc-health.py:184`）。
     # 与 `STALE_ANCHOR_ALLOW` 的取舍同源：**描述缺陷的文字本身必须点名缺陷名**，
@@ -1047,6 +1051,242 @@ def check_table_delimiters() -> list[tuple[str, int, str]]:
     return hits
 
 
+# ---------------------------------------------------------------------------
+# L / M 项：任务清单的**唯一性**与**指针完备性**（2026-09-14 · kb/07 §3.3 的机制化）
+#
+# 动机：用户 2026-09-14 确立「全仓任务一律登记账本 §6.0，单文档不得各自维护任务清单」。
+# 规则若只写在 md 里就是摆设（kb/07 §9 自我淘汰条款）⇒ 固化为两项机检。
+# 上游教训：当日两轮全仓复查**共漏登记 42 项**，成因是「按来源判覆盖面」+「单一指针」。
+# ---------------------------------------------------------------------------
+
+#: 统一任务 ID 形态（定义于账本 §6.0，规则见 kb/07 §3.3 ①）。
+TASK_ID_RE = re.compile(r"\b(?:BUG|IMP|RSH|GOV|OPS)-\d{3}\b")
+TASK_SEC_START = re.compile(r"^### 6\.0 ", re.M)
+TASK_SEC_END = re.compile(r"^### 6\.1 ", re.M)
+
+
+def active_md_targets() -> list[Path]:
+    """活文档面 = `SCAN_FILES` + `docs/` 下非 archive / 非 L4 的 `*.md`。
+
+    ⚠️ **刻意排除 `.workbuddy/`**：那里的 reports / artifacts 是**过程快照**（一次性），
+    其未完成项已归集账本；要求快照加指针等于**改写历史**（同 `archive/` 只读原则）。
+    新报告若含任务清单，靠 kb/07 §3.3 ③ 的执行点保证（**新增当轮登记**）。
+    """
+    out = [ROOT / f for f in SCAN_FILES]
+    for p in sorted(DOCS.rglob("*.md")):
+        rel = p.relative_to(DOCS)
+        if "archive" in rel.parts:
+            continue
+        if rel.parts and rel.parts[0] in L4_DIRS:
+            continue
+        out.append(p)
+    return out
+
+
+def ledger_task_ids() -> set[str]:
+    """账本 §6.0 区段中**已定义**的任务 ID 集合。
+
+    ⚠️ 区段找不到时返回**空集**（fail-loud）：届时所有 ID 引用都会被判红，逼人先修账本结构——
+    **而不是静默放行**（[[KB-ENG-72]]：守卫覆盖面失效比误报危险得多）。
+    """
+    txt = _read(DOCS / "retro-and-gaps.md")
+    m = TASK_SEC_START.search(txt)
+    if not m:
+        return set()
+    rest = txt[m.end():]
+    e = TASK_SEC_END.search(rest)
+    return set(TASK_ID_RE.findall(rest[: e.start()] if e else rest))
+
+
+#: L 项的已登记例外：`(文件, ID) → 理由`。**必须写明理由**（同 `CODE_REF_ALLOW` 的做法）。
+#: 目前一处：讲 L 项判据自身时举的**示例 ID**——它不是对任务的引用，而是**判据的说明材料**
+#: （`\d{3}` 之外无法用形态区分"示例"与"真引用"，故显式留痕而非把扫描放宽）。
+TASK_ID_ALLOW: dict[tuple[str, str], str] = {
+    ("docs/kb/07-doc-curation.md", "BUG-999"):
+        "L 项判据文档里的**示例文本**（举一个未定义 ID 说明判据会精确判红），非任务引用",
+}
+
+
+def check_task_ids_defined() -> list[tuple[str, int, str]]:
+    """L 项：文档里引用的任务 ID 必须在账本 §6.0 **查得到**——否则就是失效指针。
+
+    为什么需要：ID 一旦被改名/删除，旧引用会**静默指向另一个任务或空处**
+    （本仓已踩过：`B`/`C`/`F` 三字母各有 2–3 种含义，跨文档引用必然错引）。
+    """
+    defined = ledger_task_ids()
+    out: list[tuple[str, int, str]] = []
+    for t in active_md_targets():
+        if not t.exists():
+            continue
+        rel = str(t.relative_to(ROOT))
+        for ln, line in enumerate(_read(t).splitlines(), 1):
+            for tid in TASK_ID_RE.findall(line):
+                if tid in defined or (rel, tid) in TASK_ID_ALLOW:
+                    continue
+                out.append((rel, ln, tid))
+    return out
+
+
+#: M 项判据：文档里出现这类**标题**即视为「承载任务清单」，必须带归集指针。
+#: 收紧依据（2026-09-14 实测扫描面 8 份命中，其中 3 份误报，逐条排除）：
+#:  · `(?!KB-)` —— KB 条目标题里的「待办」是**知识命名**（如 KB-DEC-020「待办必须有出口」），不是清单；
+#:  · 排除标题含「已实施 / 已交付 / 已闭环 / 已完成 / 已销账」——那是**结果记录**，不是待办
+#:    （如 `architecture-design.md` §2「资金流三级重构——**P0 已实施**」）。
+TASK_CARRIER_HEAD_RE = re.compile(
+    r"^#{2,4}\s+(?!KB-)"
+    r"(?![^\n]*(?:已实施|已交付|已闭环|已完成|已销账))"
+    r"[^\n]*(?:待办|未做|待实施|待完成|TODO|行动项|任务清单|后续规划|待决)"
+)
+
+#: 归集指针标记：**必须出现在任务清单标题行或其下 3 行内**（见 check 函数）。
+TASK_CARRIER_POINTER = "§6.0"
+
+#: 指针的**就近窗口**：标题行 + 往下 3 行。
+#: ⚠️ 为什么必须靠近（2026-09-14 注入验证暴露的盲区）：初版判据是「文档**任意位置**含 §6.0
+#: ⇒ 整篇豁免」，结果文档末尾一句「新增待办请直接登记账本 §6.0」就把整篇洗白了——
+#: 注入 I2（删掉标题里的指针）**未变红**。⇒ 判据必须锚定在**清单所在处**，
+#: 而不是「文档提到过 §6.0」（[[KB-ENG-72]]：守卫全绿 ≠ 判定面完整；**注入后仍全绿先怀疑判据**）。
+TASK_CARRIER_WINDOW = 4
+
+#: 已登记例外（确属误报或按只读原则豁免）——**必须写明理由**（同 `CODE_REF_ALLOW` 的做法：
+#: 显式留痕而非静默排除）。
+TASK_CARRIER_ALLOW: dict[tuple[str, str], str] = {}
+
+#: M 项扫描面的**结构性排除**——不是"这次算了"，而是这两份**在定义上**就不该被本项要求
+#: （排除须有理由，同 `LEGACY_SLUG_SKIP_FILES` / `ANCHOR_SKIP_FILES` 的做法）：
+#:  · `docs/retro-and-gaps.md` —— **它就是清单本体**（§6.0 正是被指向的目标），要求它指向自己无意义；
+#:  · `docs/kb/07-doc-curation.md` —— **它就是本条规则的正文**（§3.3），其标题里出现「任务清单」
+#:    是在**定义规则**，不是在承载清单。
+TASK_CARRIER_SKIP_FILES = frozenset({
+    "docs/retro-and-gaps.md",
+    "docs/kb/07-doc-curation.md",
+})
+
+
+def check_task_carrier_pointers() -> list[tuple[str, int, str]]:
+    """M 项：承载任务清单的**活文档**必须带「归集至账本 §6.0」的指针。
+
+    为什么需要：**任务分散在多份文档正是 2026-09-14 本条规则的起因**——
+    实测 5 份文档各有自己的待办清单（`summary/` 3 份 + `kb/11` + `AGENTS.md`），
+    与账本并存 ⇒ 两处维护、必有一处滞后。规则只写 md 里无机制承载（kb/07 §9）。
+    """
+    out: list[tuple[str, int, str]] = []
+    for t in active_md_targets():
+        if not t.exists():
+            continue
+        rel = str(t.relative_to(ROOT))
+        if rel in TASK_CARRIER_SKIP_FILES:
+            continue
+        lines = _read(t).splitlines()
+        for ln, line in enumerate(lines, 1):
+            if not TASK_CARRIER_HEAD_RE.match(line):
+                continue
+            if (rel, line.strip()) in TASK_CARRIER_ALLOW:
+                continue
+            window = lines[ln - 1: ln - 1 + TASK_CARRIER_WINDOW]
+            if any(TASK_CARRIER_POINTER in w for w in window):
+                continue
+            out.append((rel, ln, line.strip()))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# N 项：**记忆索引自身**的体检（2026-09-14 · kb/07 §4.4 的机制化）
+#
+# 动机（用户 2026-09-14 指令）：*「让 memory 只作为索引器和入口指引，不再承担完整内容存储，
+# 从而避免经常超出限制。」* 规则若只写在 md 里就是摆设（kb/07 §9 自我淘汰条款）⇒ 固化为机检。
+# 两层防线缺一不可：
+#   ① **体积上限**——体积是"是否在存内容"的**代理判据**。健康的索引只会因「主题变多」而变长，
+#      不会因「某个主题的内容变多」而变长；后者必是内容混入（§4.4 ③ 反固化条款）。
+#   ② **指针闭包**——B 项只认 `docs/**.md` 形态，**索引里指向 `.workbuddy/`、仓库根文件、
+#      代码路径的指针它一条都扫不到**；而索引烂掉的主要方式恰恰是这些指针失效（文件搬家/改名）。
+# ---------------------------------------------------------------------------
+
+#: 入口索引面：会话入口（`MEMORY.md`）+ 它的**展开版**（`docs/INDEX.md` §0 主题路由）。
+#: 二者共用一套指针判据。
+#: ⚠️ 2026-09-14 记录：展开版曾短暂另立为 `kb/12-topic-router.md`，因与 `INDEX.md` §0
+#: 回答的是同一个问题（「我要查 X → 去 Y」）而被否决、已并入 `INDEX.md` §0 并撤销
+#: ⇒ 本项**不要**再去索引第三个文件：**索引面越宽，越容易把重复当成互补**（`kb/07` §4.1）。
+INDEX_FILES = (".workbuddy/memory/MEMORY.md", "docs/INDEX.md")
+
+#: **字符数上限**，只约束**入口** MEMORY.md。
+#: 依据：平台对 MEMORY.md 的会话配额（3000 chars）；重构后实测 ≈1900 字符 ⇒ 留有余量。
+#: 展开版 `docs/INDEX.md` 的长度归 `kb/07` §7 的层配额，**不套用本条**。
+INDEX_CHAR_CAP = 3000
+INDEX_CHAR_CAP_FILE = ".workbuddy/memory/MEMORY.md"
+
+#: 目录式引用的允许前缀（避免把 `kb/`、`docs/kb/` 这类简写当成待验目录）。
+INDEX_DIR_PREFIXES = (".workbuddy/", "scripts/", "apps/", "backend/", "data/", "skills/")
+
+#: 带扩展名的路径片段。`docs/` 开头的**刻意排除**——B 项已覆盖，两处重复会造出"两套口径"。
+INDEX_PTR_RE = re.compile(
+    r"(?<![\w/.\-])([.\w\-][\w\-./]*\.(?:md|py|ts|tsx|js|mjs|json|sh|css|html|ya?ml|toml))")
+#: 目录式引用：`…/xxx/`（只认白名单前缀，防止把普通词组当路径）。
+#: 尾部负向前瞻 `(?![\w\-./])` 不是装饰：少了它，`.workbuddy/memory/YYYY-MM-DD.md`
+#: 会被截成 `.workbuddy/memory/` —— 一个**被凭空造出来的目录指针**（且恰好是合法的），
+#: 于是占位名豁免失效、判据开始验一个从没被写过的东西。
+INDEX_DIR_RE = re.compile(
+    r"(?<![\w/.\-])((?:\.workbuddy|scripts|apps|backend|data|skills)/[\w\-./]*/)(?![\w\-./])")
+
+
+def index_pointer_candidates(line: str) -> list[str]:
+    """提取一行里**待验**的指针（去重保序）。
+
+    ⚠️ **只收"带路径结构"的 token**（含 `/`），**裸文件名一律不收**——判据依据（2026-09-14 首跑实测）：
+    首版把裸名也算作指针，7 处命中里 **4 处是"指代"而非"指针"**（索引正文自称 `MEMORY.md`、
+    上文已给全路径后行文用简称 `md-html-parity.py`）⇒ 纯假阳性。
+    而**红满天的门禁会被整体无视**（[[KB-ENG-58]]）。裸名本就不具备"可唯一定位"的性质，
+    验它等于自造噪声。⇒ 真正含糊的裸名引用改由**文档侧**修（补全为完整路径），
+    与判据放宽**分开处理**（[[KB-ENG-65]]：修判据 ≠ 修守卫）。
+    """
+    toks = [m.group(1) for m in INDEX_PTR_RE.finditer(line)
+            if "/" in m.group(1) and not m.group(1).startswith("docs/")]
+    toks += [m.group(1) for m in INDEX_DIR_RE.finditer(line)]
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in toks:
+        t = t.rstrip(".,;:)]}")
+        if t and t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
+def check_memory_index() -> tuple[list[tuple[str, int]], list[tuple[str, int, str]]]:
+    """N 项：入口索引的**体积**与**指针闭包** → (超限文件, 死指针)。
+
+    ⚠️ 两根"保险丝"（都不是装饰）：
+      · 索引文件**不存在** ⇒ 直接判红（fail-loud），而不是"没得查于是跳过"——
+        跳过等于守卫静默失效（[[KB-ENG-72]]：守卫覆盖面失效比误报危险得多）。
+      · 路径可解的双基准 `ROOT/` 与 `docs/`：索引里写 `kb/08-tooling-pitfalls.md`
+        （相对 docs 的简写）与 `docs/kb/08-tooling-pitfalls.md`（仓库相对）**都合法**，
+        只认一种会把另一种全判成误报 ⇒ **修文档之前先确认判据本身是否诚实**。
+    """
+    oversized: list[tuple[str, int]] = []
+    dead: list[tuple[str, int, str]] = []
+    for rel in INDEX_FILES:
+        p = ROOT / rel
+        if not p.exists():
+            dead.append((rel, 1, rel))
+            continue
+        txt = _read(p)
+        if rel == INDEX_CHAR_CAP_FILE and len(txt) > INDEX_CHAR_CAP:
+            oversized.append((rel, len(txt)))
+        for ln, line in enumerate(txt.splitlines(), 1):
+            if any(k in line for k in RECORD_MARKERS):
+                continue                      # 记录性引用（"已删除/已归档"）不算断链，同 B 项口径
+            for tok in index_pointer_candidates(line):
+                if PLACEHOLDER_RE.search(tok):
+                    continue                  # 模板占位名（YYYY-MM-DD.md 等）
+                if tok.endswith("/"):
+                    ok = (ROOT / tok).is_dir() or (DOCS / tok).is_dir()
+                else:
+                    ok = (ROOT / tok).exists() or (DOCS / tok).exists()
+                if not ok:
+                    dead.append((rel, ln, tok))
+    return oversized, dead
+
+
 def main() -> int:
     quiet = "--quiet" in sys.argv
     scan_all = "--all" in sys.argv
@@ -1070,6 +1310,9 @@ def main() -> int:
     empty, empty_ghost = check_empty_sections()
     anchors, anchor_ghost = check_doc_anchors()
     tables = check_table_delimiters()
+    task_ids = check_task_ids_defined()
+    carriers = check_task_carrier_pointers()
+    idx_over, idx_dead = check_memory_index()
 
     def line(label: str, ok: bool, detail: str = "") -> None:
         nonlocal problems
@@ -1166,6 +1409,39 @@ def main() -> int:
             print(f"       {f}:{ln} → {txt[:64]}")
         if len(tables) > 12:
             print(f"       …另有 {len(tables) - 12} 处")
+    l_detail = (f"{len(task_ids)} 处引用了账本 §6.0 未定义的 ID"
+                f"（任务改名/删除后旧引用会静默指错；规则见 kb/07 §3.3）")
+    if TASK_ID_ALLOW:
+        l_detail += f"；已登记例外 {len(TASK_ID_ALLOW)} 处"
+    line("L 任务 ID 指针", not task_ids, l_detail)
+    if task_ids and not quiet:
+        for f, ln, tid in task_ids[:12]:
+            print(f"       {f}:{ln} → {tid}（账本 §6.0 无此 ID）")
+        if len(task_ids) > 12:
+            print(f"       …另有 {len(task_ids) - 12} 处")
+    m_detail = (f"{len(carriers)} 处任务清单缺「归集至账本 §6.0」指针"
+                f"（任务不得分散在多份文档，见 kb/07 §3.3）")
+    if TASK_CARRIER_ALLOW:
+        m_detail += f"；已登记例外 {len(TASK_CARRIER_ALLOW)} 处"
+    line("M 任务载体指针", not carriers, m_detail)
+    if carriers and not quiet:
+        for f, ln, txt in carriers[:12]:
+            print(f"       {f}:{ln} → {txt[:64]}")
+        if len(carriers) > 12:
+            print(f"       …另有 {len(carriers) - 12} 处")
+    n_detail = (f"{len(idx_dead)} 处指针失效"
+                f"（B 只认 `docs/*.md`；本项扫 `.workbuddy/`、根文件、代码路径）")
+    if idx_over:
+        n_detail += f"；⚠️ 体积超限 {len(idx_over)} 份"
+    line("N 索引体积与指针", not idx_dead and not idx_over, n_detail)
+    for f, n in idx_over:
+        print(f"       {f}：{n} 字符 > {INDEX_CHAR_CAP}"
+              f" ⇒ 内容应进 L3 文档、索引只留指针（kb/07 §4.4 反固化条款）")
+    if idx_dead and not quiet:
+        for f, ln, tok in idx_dead[:12]:
+            print(f"       {f}:{ln} → {tok}（全仓不存在）")
+        if len(idx_dead) > 12:
+            print(f"       …另有 {len(idx_dead) - 12} 处")
     # H 项**刻意走 WARN 而非 FAIL**：先补存量再上哨兵，且只作提示。
     # 若计 FAIL，未补完的条目会让整份体检长期挂红 ⇒ 被整体无视（KB-ENG-58）。
     line("H-KB 豁免名单有效", not claim_ghost,
@@ -1194,6 +1470,9 @@ def main() -> int:
               + (f"（{'、'.join(f'{s}@{f}' for f, s in legacy_ok)}）" if legacy_ok else "（无）"))
         print(f"[INFO] F4 登记锚名 {len(STALE_ANCHORS)} 个 / 例外 {len(STALE_ANCHOR_ALLOW)} 处"
               + (f"（{'、'.join(f'{n}@{f}' for f, n in STALE_ANCHOR_ALLOW)}）" if STALE_ANCHOR_ALLOW else "（无）"))
+        print(f"[INFO] L/M 任务单点归集：ID 例外 {len(TASK_ID_ALLOW)} 处 · "
+              f"载体例外 {len(TASK_CARRIER_ALLOW)} 处 · 结构性排除 {len(TASK_CARRIER_SKIP_FILES)} 份"
+              f"（{'、'.join(sorted(TASK_CARRIER_SKIP_FILES))}）")
         n_claim = len(re.findall(r"^### KB-[A-Z]+-\d+", _read(DOCS / "kb" / "01-stock-picking.md"), re.M)) \
             + len(re.findall(r"^### KB-[A-Z]+-\d+", _read(DOCS / "kb" / "02-trading-lessons.md"), re.M))
         print(f"[INFO] H 主张类覆盖面：{n_claim} 条中 {len(CLAIM_EXEMPT)} 条豁免（做法/定义/框架），"

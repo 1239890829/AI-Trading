@@ -2,7 +2,8 @@
 
 > 定位：**docs 唯一入口**。查东西先来这里；写新文档必须在此登记。
 > 维护约定：**已完成方案的精华提炼进 `summary/` 或 `retro-and-gaps.md` §六后，原件即删除**（规范见 `kb/07-doc-curation.md` §3.2）；过时/被取代的移入 `archive/`。
-> 最后整理：2026-09-12（**KB 系统性整理第一轮 + 文档缺陷修复 + 控制台面板分层**）：①**8 处 `full.md` 死锚**清除（6 份现役正文 + 本表 + README）——该文件**从未存在**，而 B/F 检查项都扫不到裸名，故新增 **F4 废弃锚名检查**（上线即实测出全部 8 处，注入验证通过）；②`retro-and-gaps.md` **完成记账下沉**（原 §一/§二/§三/§五 的 54 行已完成明细 → §一 里程碑 + 指针，明细在逐日日志；511 → 453 行），并补记 2 项**原本无出口的待决项**（P2-30 盘口 L2 / P2-31 外部付费源）；③**控制台「知识库」面板分层折叠**：79 份平铺 → `canonical`(11) / `current`(33) / `history`+`timeline`(35 折起)，`kb/07` §1 补「治理分层 ↔ 面板呈现」对照表；④门禁数字实测回填（后端 2619 项 / 171 文件、前端 429 项 / 52 文件）。详见 `.workbuddy/memory/2026-09-12.md`。
+> 最后整理：2026-09-14（**记忆使用方式重构**：`.workbuddy/memory/MEMORY.md` 由"内容+指针混合"改为**纯索引**（内容按归属拆分进各权威文档，**零丢失**）；**本文件 §0 由「使用地图」扩为「主题路由」**——按主题列「**先读 → 再读 → 红线**」，并新增**任务动线**（按序）· **症状反查**（踩过的坑）· **已拍板 / 勿顺手修清单** · **硬约束速查**；`kb/07` §4.1 由"双索引"升级为**三入口分工**并新增 **§4.4 记忆读写协议**（先索引后跳转 + 写入判据 + 反固化条款），同时**否决**另立"主题路由册"——初版 `kb/12-topic-router.md` 与本节**功能重叠**，**已移入回收站并并入本节**；`kb/11` §4.1 补**产物落点纪律**；`doc-health` 新增 **N 项**（`MEMORY.md` 体积上限 + 索引指针闭包）。详见 `.workbuddy/memory/2026-09-14.md`）
+> 上次整理：2026-09-12（**KB 系统性整理第一轮 + 文档缺陷修复 + 控制台面板分层**）：①**8 处 `full.md` 死锚**清除（6 份现役正文 + 本表 + README）——该文件**从未存在**，而 B/F 检查项都扫不到裸名，故新增 **F4 废弃锚名检查**（上线即实测出全部 8 处，注入验证通过）；②`retro-and-gaps.md` **完成记账下沉**（原 §一/§二/§三/§五 的 54 行已完成明细 → §一 里程碑 + 指针，明细在逐日日志；511 → 453 行），并补记 2 项**原本无出口的待决项**（P2-30 盘口 L2 / P2-31 外部付费源）；③**控制台「知识库」面板分层折叠**：79 份平铺 → `canonical`(11) / `current`(33) / `history`+`timeline`(35 折起)，`kb/07` §1 补「治理分层 ↔ 面板呈现」对照表；④门禁数字实测回填（后端 2619 项 / 171 文件、前端 429 项 / 52 文件）。详见 `.workbuddy/memory/2026-09-12.md`。
 > 上次整理：2026-09-10（**全量重盘 + 执行到底**：40+ 待办归集唯一总账；8 份已完成方案文档删除；**15 处状态偏差更正**——9 低估完成度 / 3 高估完成度 / 1 断言未验证 / **1 需求口径本身不成立** / 另 1 死链清理；**P0-1 止盈 tracker** 落地；**P1-26 后端测试 17m27s→5m55s**；**P1-27 eslint 25→0 warn**；**P1-1/P1-3 板块资金 watcher 规则 + 助手工具**；**P1-19 炸板率双源收尾**；**P1-4 自选行 / P1-5 题材卡资金徽标**（东财 f62 口径，与合力口径并列不混算）；文档体检查缺——根文档 25 份 100% 登记、长表外移 784 行、死链 0）。
 
 ## 0.0 书库编目（编号 / 层 / 领域 / 用途）
@@ -32,7 +33,7 @@
 | **MD-02** | `sentiment.md` | L2 | 方法论 | 情绪指标清单 + 阶段判定 + **历史误判案例库** |
 | **MD-03** | `theme-prediction.md` | L2 | 方法论 | 新题材预判 |
 | **MD-04** | `factor-lifecycle-governance.md` | L2 | 治理 | 因子全生命周期管理 |
-| **MD-05** | `factor-candidates.md` | L2 | 登记册 | 候选因子登记（原 `app/factors/candidates.py` 迁出，纯文档） |
+| **MD-05** | `factor-candidates.md` | L2 | 登记册 | 候选因子登记（原 `app/factors/candidates.py` **已迁出删除**，纯文档） |
 | **MD-06** | `backtest-rules.md` | L2 | 禁令 | 回测强制禁令（代码级校验） |
 | **MD-07** | `risk-management.md` | L2 | 风控 | 风险拦截位置与规则。⚠️ 旧稿曾把「预检」写成「强制拦截」（**文档高估**），已更正 |
 | **FN-01** | `strategy-registry.md` | L2 | 登记册 | **策略级**生命周期（核心辨析：**因子 ≠ 策略**） |
@@ -80,7 +81,101 @@
 
 ---
 
-## 0. 使用地图（我要查 X → 去 Y）
+## 0. 主题路由（我要做什么 → 去读什么）
+
+> **本节的职责**：回答「**做某件事，该按什么顺序读哪些文档**」。
+> **分工互斥**（不得互相承载内容）：`kb/00-INDEX.md` 回答「某条**知识**是什么」（KB-ID）·
+> `retro-and-gaps.md` **§6.0** 回答「**还有什么没做**」（唯一任务清单）· `CONTEXT.md` 回答「某个**词**什么意思」。
+> **读写协议**（先索引后跳转 / 写入判据 / 反固化条款）见 `kb/07-doc-curation.md` §4.4；
+> 会话第一入口是 `.workbuddy/memory/MEMORY.md`（纯指针，≤3000 字符）。
+>
+> **维护触发**（本节自身也会漂移，故有明确时点）：① 被引用的文档**改名 / 归档 / 删除** ⇒
+> **当轮**改本节对应行；② 出现新的高频任务类型 ⇒ 在 §0.1 加一行主题（**不是加长已有行的描述**）；
+> ③ 改完跑 `python3 scripts/doc-health.py`——**N 项**会捕获本节失效指针、**B 项**捕获 `docs/*.md` 死链。
+> ⚠️ **本节只放指针与技术红线，不放内容**：某主题的细节变多 ⇒ **扩它指向的那份文档**。
+
+### 0.1 按主题（先读 → 再读 → 红线）
+
+> **只在该主题**「再读」**确有需要时才深入**——未命中即跳过。**减少单次读取量**是本表存在的理由。
+
+| 主题 | 先读（入口，必读） | 再读（需深入时） | 红线（最常咬人） |
+|---|---|---|---|
+| **T1 起栈与环境** | `AGENTS.md` §1 快速启动 | `deployment.md` · `PROJECT-MASTER.md` | `--reload` **禁用**（与 SQLite 锁组合挂死）；端口固定 **3000/8000**；生产构建前**先停 3000** |
+| **T2 门禁与测试** | `AGENTS.md` §1 门禁命令块 | `kb/09-verification-pitfalls.md` · `kb/03-engineering.md` | 必带 `--basetemp`、**勿叠 `-q`**；涉时区断言**必须 `TZ=UTC` 复跑**；vitest 加 `--maxWorkers=1`；**必须整仓跑** |
+| **T3 数据源与行情口径** | `data-source-comparison.md` → `data-sources.md` | `data-dictionary.md` · `websocket.md` | **⚡ 交易日数据时效禁「固定时长」**⇒ 语义 = **必须覆盖今天**；口径/披露信息放**提前 return 之外** |
+| **T4 选股与策略** | `kb/00-INDEX.md` 选股表 | `summary/stock-strategy.md` · `strategy-registry.md` · `factor-lifecycle-governance.md` + `factor-candidates.md` | **示例 ≠ 规范**（题材案例一律 `📎`）；策略/因子落地**必须先过实证**；回测禁令见 `backtest-rules.md` |
+| **T5 复盘与治理** | 复盘 `kb/06-review-framework.md`（**先读它**）；治理 `retro-and-gaps.md` §6.0 | `daily-review-sop.md` · `daily-review-checklist.md` · `review-agent.md` · `kb/07` · `kb/11` | 任务**只有一个清单**（§6.0）；**待办必须有出口**；删除只走 `scripts/safe-trash.sh` |
+| **T6 前端与 UI** | `summary/architecture-design.md`（§0 联动设计原则） | `architecture.md` · `kb/03-engineering.md` | **验收以实际渲染为准**（agent-browser 文本通道）；**新增页面/板块需先论证** |
+| **T7 外部工具与技能** | `.workbuddy/skills/<name>/SKILL.md`（**技能自述即文档**） | 本表 **WB-04** · `llm-gateway-probe.md` | 外部结论**必带免责声明**；`uzi-skill` 用**独立 venv**、首跑约 15 分钟、**仅盘后** |
+| **T8 决策与"为什么当初这么定"** | `kb/04-decisions.md`（KB-DEC） | `retro-and-gaps.md` §七（偏差错题本）· `archive/` | **已拍板勿重开**；被取代的条目改 ❌ 并写明取代者，**永不删除** |
+
+### 0.2 任务动线（**按序**读——顺序错会先读一堆无关的）
+
+| 我要做的事 | 动线（按序） |
+|---|---|
+| **修一个 bug** | `AGENTS.md` §1 起栈 → 复现 → 症状反查（§0.3）→ 相关 `kb/0X` 条目 → 改 → 门禁（T2）→ 账本登记 |
+| **加一个功能** | `AGENTS.md` §0 红线 → `summary/architecture-design.md` §0（**先论证是否需要新页面**）→ `architecture.md` → 实现 → 门禁 → 按 `kb/07` §3.2 处置方案文档 |
+| **改数据源 / 数据口径** | `data-source-comparison.md` → `data-sources.md` → **改完回填对比文档** → 门禁（含 `TZ=UTC` 复跑） |
+| **做一次复盘** | `kb/06-review-framework.md`（**强制先读**）→ `daily-review-sop.md` → `daily-review-checklist.md` → 产物存档 |
+| **写 / 整理文档** | `kb/07-doc-curation.md`（流程）→ `kb/11-doc-catalog.md`（判据）→ 改动 → `python3 scripts/doc-health.py` |
+| **登记或收口任务** | `retro-and-gaps.md` **§6.0**（唯一入口）→ 按 §6.0 ⑤ 做**双向完备自查** |
+| **验证策略/因子是否有效** | `strategy-registry.md`（是否已测过）→ `backtest-rules.md`（禁令）→ 实证 → 结论**必须带失效条件** |
+| **调研外部仓库/工具** | `.workbuddy/skills/external-tool-adoption-review/` → `kb/05-repo-tracker.md`（A/B 证据分级）→ 台账登记 |
+
+### 0.3 症状反查（**踩过的坑** → 只记得"当时踩过一次"时用它）
+
+> 完整条目表在 `kb/00-INDEX.md`；本表只收**症状可辨识**的那些。
+
+| 症状 | 去哪条 |
+|---|---|
+| shell `grep` 搜 `\|` 交替**静默返回空** | `kb/03-engineering.md` KB-ENG-04（**下结论一律用 Grep 工具**，在 `kb/08`） |
+| 同文件多处 Edit 并行改，**只生效最后一处** | `kb/08-tooling-pitfalls.md` KB-ENG-01 |
+| 测试开头**成簇 `E`**（不是 `F`） | `kb/09` KB-ENG-53：先怀疑**环境**（缺 `--basetemp`），不要先怀疑代码 |
+| **本地全绿、CI 红** | `kb/09` KB-ENG-57（时区/大文件/顺序）· KB-ENG-70（判定面 ≠ CI 检出） |
+| 守卫**注入了却不报红** | `kb/09` KB-ENG-65（三种假绿形态）· KB-ENG-66（只改注释不算）· KB-ENG-81（两侧同判据 = 双向自洽的假绿） |
+| 测试**只在特定日历日变红** | `kb/09` KB-ENG-56：真实运行日驱动 ⇒ 有注入参数就必须用 |
+| 门禁**全绿但新文件根本没被扫到** | `kb/09` KB-ENG-60（扫描面写窄） |
+| 门禁**一上线就红满天**、随后被整体无视 | `kb/09` KB-ENG-58（**过载 = 被忽略**） |
+| 下游过滤后**条目全丢** | `kb/10-data-contract-pitfalls.md` KB-ENG-22（写入侧须落齐下游依赖字段） |
+| 队列消费**旧条目被永久挤出** | `kb/10` KB-ENG-23（先过滤再 limit） |
+| 时间戳**跨格式/时区比较错判** | `kb/10` KB-ENG-50（一律先转 epoch） |
+| 时间呈现**报错量级**（如「期间收益」当天收益用） | `kb/09` KB-ENG-78（量纲必须进字段名与标签） |
+| 中间层块级导致 **overflow 全失效** | `kb/03` KB-ENG-16（flex 高度链逐层接力） |
+| **「服务在跑」但跑的不是新代码** | `AGENTS.md` §5 + T1：复验须用能区分新旧代码的探针 |
+
+### 0.4 已拍板 / 勿重开（**动手前先看这节**，避免重做已验证过的事）
+
+| 事项 | 裁定 | 唯一权威 |
+|---|---|---|
+| 亮色模式对比度 | ✅ 保留主题切换，**逐类修 base** | 账本 **P2-24** |
+| 外部付费数据源 | ✅ **不接入**——不是预算暂缓，是**花了钱也买不到要的东西** | 账本 **RSH-020** |
+| 控制台·自定义规则 UI | ✅ **保留**（成本近零，且是全系统唯一自定义阈值入口） | 账本 **P1-17** |
+| 实盘接入（国信 miniQMT） | ⏸ **搁置**（不接受 Windows 依赖） | `live-trading-guosen-plan.md` |
+| 部署环境（NAS / 云 / Vercel） | ⏸ **搁置**（用户明确不追问） | 账本 §6.5b #9 |
+| 防腐化扫描固化进 CI | ❌ **不进 CI**，改**月度手动**跑 `scripts/deadcode_scan.py` | 账本 §6.5b #5 |
+| L2 盘口数据源 | ❌ **已验证否证**（`ths` 无五档结论） | 账本 P2-30 |
+
+**「勿当 bug 顺手修」**（看着像缺陷，实为已裁定的正确行为——顺手改会制造更严重的问题）：
+
+| 现象 | 为什么不能顺手修 | 裁定出处 |
+|---|---|---|
+| `read_ids` 剪裁致 >500 条后**少量回弹** | 改法属**口径变更**；顺手改成水位会**把未读擦成已读**（比现状更严重的语义破坏） | 账本 §6.5b #6 + `apps/web/lib/notification-read.ts` 的 `READ_IDS_MAX` 边界注释 |
+| `test_data_path_isolation` 沙箱断言边界 | **已收口**：挂账边界转为**结构保证**（前提钉子 `test_sandbox_root_not_inside_repo_data`，见 `backend/tests/test_data_path_isolation.py`），将来挪沙箱位置时钉子会变红并给出修法 | 账本 §6.5b #7 |
+
+### 0.5 硬约束速查（最常用的事实 → **唯一权威处**）
+
+| 约束 | 唯一权威 |
+|---|---|
+| **北京时间** | `backend/app/core/bjtime.py`：`beijing_now[_naive]()` / `beijing_today()`；**禁止 `date.today()`**；绝不发不带标记的 naive UTC 串 |
+| **三态 > 二态** | `unknown` 显式「未判定」、缺失 `--`；文案单点 `push_cards.tri_text` / `apps/web/lib/format.ts` 的 `triText` |
+| **`current_time` 不可信** | 一律 `date "+%Y-%m-%d %H:%M:%S %Z"` 实测（KB-TRADE-01） |
+| **数字四纪律** | 基线用 `git worktree add /tmp/base <ref>` **实测取**；文件数两口径本仓**恒差 2**；差值对不上**先取基线逐文件 diff**；**三方自洽**（详见 `AGENTS.md` 门禁口径段） |
+| **产物落点** | 一律进 `.workbuddy/{memory,skills,reports,artifacts,tools,trash}`，**不散落 `~/`**（`kb/11` §4.1） |
+| **删除** | `scripts/safe-trash.sh <路径> --reason "..."`；**禁 `rm`**（`kb/07` §6.2） |
+| **文档体检** | `python3 scripts/doc-health.py`——**每个功能点收尾必跑**，有问题 `exit 1` |
+| **报告交付** | `.workbuddy/tools/md-report-html.py` 渲染（**收尾最后一步才渲染**）+ `.workbuddy/tools/md-html-parity.py` 对账 |
+
+### 0.6 具体问题速查（比主题更细的一步跳）
 
 | 想知道… | 看 |
 |---|---|
@@ -104,7 +199,7 @@
 | 因子库是什么、怎么用 | `summary/factor-system.md` → `factor-lifecycle-governance.md` |
 | 怎么接实盘（国信） | `live-trading-guosen-plan.md` |
 | 两个新仓库评估 / 自动化精简 / 助手大脑化 | `summary/ai-evolution.md`（09-08；**主体已落地**，状态见 `plan-registry.md`） |
-| 策略进化（信号健康 / 筹码引擎 / 复盘闭环） | `summary/ai-evolution.md`（09-08；**P0 全落地**：`picks/signal_health.py` + `market/chip.py` + `review/strategy_health.py`；P2 按设计延后） |
+| 策略进化（信号健康 / 筹码引擎 / 复盘闭环） | `summary/ai-evolution.md`（09-08；**P0 全落地**：`backend/app/picks/signal_health.py` + `backend/app/market/chip.py` + `backend/app/review/strategy_health.py`；P2 按设计延后） |
 | trading 分组仓库值不值得用 | `kb/05-repo-tracker.md`（A/B 证据分级 + 台账 diff） |
 | trading 分组新增 star 怎么处理 | `summary/ai-evolution.md`（09-09 diff：22 仓去重已评后真新增 8 仓；告警时区修复+KB 补录+分级计划） |
 
@@ -168,7 +263,7 @@
 | hotspot-pipeline-design.md | 热点消息捕获→传导→映射建设方案（09-07） · **已删除**（P0 快讯流已实施 c84d382；P1/P2 待办见 `retro-and-gaps.md` §6.2/6.3） |
 | nfp-ashare-validation.md | 非农意外差→A 股适用性验证报告 · **已删除**（精华见 `summary/data-market.md`） |
 | llm-gateway-probe.md | LLM 网关健康探针（claude_cli 别名监控） |
-| factor-candidates.md | 候选因子登记册（原 `app/factors/candidates.py` 迁出，纯文档；治理见 factor-lifecycle-governance） |
+| factor-candidates.md | 候选因子登记册（原 `app/factors/candidates.py` **已迁出删除**，纯文档；治理见 factor-lifecycle-governance） |
 | factor-ic-review-20260908.md | tech_score 权重 IC 复核（500 只等步抽样 × 近 60 交易日，T+5 Spearman） · **已删除**（精华见 `summary/factor-system.md`） |
 
 ## 4. 本轮调研（2026-09-07）
