@@ -30,7 +30,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 3023 项（2961 passed / 62 skipped）· collect 193 文件（09-14 全量实测，0 failed）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 3039 项（2977 passed / 62 skipped）· collect 194 文件（09-14 全量实测，0 failed）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。
@@ -62,10 +62,12 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 3023 项（2961 passed / 62 skipped）· collect 193 文件（`ls` 口径 195，恒差 2）、
+> **门禁口径**：后端 3039 项（2977 passed / 62 skipped）· collect 194 文件（`ls` 口径 196，恒差 2）、
 > 前端 502 项 / 57 文件、eslint **0 error / 0 warn**
-> （2026-09-14 §6.27 实测；较上一值 3014 / 192 / 499 增量 **+9 项 / +1 文件 / +3 项**，
-> 来源自洽：后端 = `test_cmd_guidance_guard.py` 8 项（新文件）+ `test_freshness.py` STATES 钉子 1 项；
+> （2026-09-14 §6.27 实测；较上一值 3014 / 192 / 499 增量 **+25 项 / +2 文件 / +3 项**，
+> 来源逐文件对账自洽：后端 = 8（`test_cmd_guidance_guard.py`，新文件）+ 1（`test_freshness.py` STATES 钉子）
+> + 14（`test_paper_reconcile.py`，新文件）+ 1（`test_endpoint_smoke` 136→137）+ 1（`test_import_lint` 235→236）
+> —— 后两条是**守卫按设计自动纳入**（新增 GET 路由被 openapi 扫荡覆盖 / 新增模块进分层规则表）；
 > 前端 = `format.test.ts` 的 `triAmount` 用例 5→8 项、文件数不变）
 > （25 条回归已按 P1-27 清零；仅 notification-drawer 保留 1 处带理由的 C 类豁免）。
 > ⚠️ **「文件数」有两个口径，混用会造出假缺口**（2026-09-14 实测）：`ls tests/*.py` 与

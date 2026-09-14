@@ -158,3 +158,20 @@ async def reset_account(body: ResetIn, request: Request):
     return {"data": {"cash": round(acc.cash, 2), "initial_cash": round(acc.initial_cash, 2),
                      "total": round(acc.cash, 2), "total_pnl": 0.0, "total_pnl_pct": 0.0,
                      "market_value": 0.0}}
+
+
+@router.get("/paper/reconcile")
+async def paper_reconcile(request: Request):
+    """模拟账本**只读对账**（`IMP-003` / 报告 F1）。
+
+    把「账本对不对」从「人去翻流水」变成四条可执行的不变量——资金守恒 /
+    预留与未决单一致 / scope 隔离 / 成交与持仓变动对照；每条异常都带
+    `order_ids`（可追到具体订单）。详见 `app/paper/reconcile.py` 的模块 docstring。
+
+    **只读**：不改余额、不重算、不落库。`ok=false` 只表示**账本不自洽**，
+    不表示需要立刻重算——**重算是资金口径变更，须用户拍板**。
+    """
+    from app.paper.reconcile import reconcile
+
+    engine = _engine(request)
+    return {"data": reconcile(engine._sf)}
