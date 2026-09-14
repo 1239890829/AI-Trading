@@ -23,7 +23,7 @@ import logging
 from sqlalchemy import select
 
 from app.core.db import get_session_factory
-from app.picks.morning_brief import _is_trading_day
+from app.picks.morning_brief import _trade_day_state
 from app.core.bjtime import beijing_now
 
 log = logging.getLogger(__name__)
@@ -90,9 +90,20 @@ async def picks_autogen_tick(app, *, now, run_hour: int, run_minute: int) -> boo
         log.warning("picks autogen: hub 未就绪，本 tick 跳过")
         return False
 
-    # 交易日历判定（与盘前简报同一保守口径：日历失败=跳过，恢复后自然补跑）
-    if not await _is_trading_day(hub, now.date()):
-        log.info("picks autogen: %s 非交易日，跳过", now.date())
+    # 交易日历判定（三态，F7）：**unknown ≠ 非交易日**。
+    # 三种返回都要能区分开——原写法 `if not await _is_trading_day(...)` 把
+    # 「未判定」也打成「非交易日」并记同一条日志（口径失真）。
+    # 本调度是**每 tick 轮询**（唯一持久闸门是 `_today_row_exists`），故返回 False
+    # 天然可重试，未判定时下一拍会再来。
+    day_state = await _trade_day_state(hub, now.date())
+    if day_state is not True:
+        if day_state is False:
+            log.info("picks autogen: %s 非交易日，跳过", now.date())
+        else:
+            log.warning(
+                "picks autogen: %s 日历未覆盖今天或源不可用（未判定）⇒ 本拍跳过，等待重试",
+                now.date(),
+            )
         return False
 
     from app.services.picks_pipeline import PipelineDeps, generate_picks_pipeline

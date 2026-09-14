@@ -17,39 +17,48 @@ from datetime import date, time as dt_time, timedelta
 from pathlib import Path
 from typing import Any
 
-from app.core.ttl_cache import cache_on
 from app.core.bjtime import beijing_now, beijing_today
 
 log = logging.getLogger(__name__)
 
 
 async def default_trade_date(hub) -> date:
-    """最近交易日：优先官方交易日历（ths，缓存 24h），失败回退周末规则。"""
-    cache = cache_on(hub, "provider.trading_days", 86400, maxsize=1)
-    hit, days = cache.get("days")
-    if not hit:
-        for p in hub.providers if hasattr(hub, "providers") else [hub.provider]:
-            if hasattr(p, "get_trading_days"):
-                try:
-                    got = await p.get_trading_days()
-                    if got:  # 失败/空结果不缓存，下次请求换源重试
-                        days = got
-                        cache.set("days", days)
-                        break
-                except Exception:
-                    continue
-    if days:
+    """最近交易日 —— **唯一入口走 `trade_calendar`**（2026-09-14 收口）。
+
+    ⚠️ **原实现在此处自建了一份 24 小时的日历缓存**（`cache_on(hub, "provider.trading_days",
+    86400)`），且与 `api/routes/market.py::_prev_trade_date_async` **共用同一实例**
+    （`cache_on` 以 `(holder, name)` 为键挂在 hub 上，**且首次调用传入的 TTL 生效** ——
+    两处各写各的 TTL 是无效的）。事故形态：进程在盘前/前夜填充缓存，当天开盘后缓存仍在
+    有效期内，而**源头日历是尾随窗口、不含未来日期**（09-13 22:28 抓 ⇒ 末日 09-11），
+    于是 `past[-1]` 整个交易日都取到上一交易日 —— 2026-09-14 盘中实测「盘面板块数据全是
+    09-11 的」，影响本函数的**全部 14 个调用点**（market.py×7 / theme_catalog.py×5 /
+    picks_intraday.py×2）。
+
+    现在统一走 `trade_calendar.trading_days()`：它已按「**覆盖今天**」判新鲜度
+    （见 `trade_calendar._is_fresh`），并有 12h 上限 + 5 分钟重取下限。
+    **日历缓存只此一处**（同族反模式见 implementation §5.4 / §5.5）。
+
+    日历不可用（含 `RuntimeError`）时退到周末规则 —— 不 500、不静默。
+    """
+    from app.market.trade_calendar import last_trade_date, prev_trade_date, trading_days
+
+    days: list[date] = []
+    try:
+        days = await trading_days(hub.provider if hasattr(hub, "provider") else hub)
+    except Exception as exc:  # noqa: BLE001  日历故障不该让行情接口 500
+        log.warning("default_trade_date: trading calendar unavailable: %s", exc)
+
+    latest = last_trade_date(days, beijing_today()) if days else None
+    if latest is not None:
         now = beijing_now()
-        today_str = now.strftime("%Y%m%d")
-        past = [d for d in days if d <= today_str]
-        if past:
-            latest = past[-1]
-            # 盘前（<09:15）当日涨停池/龙虎榜尚未形成，数据源返回的其实是
-            # 最近收盘的池——日期必须一并回溯，否则"内容 8-31、日期标 9-1"
-            # （2026-09-01 00:24 实测：86 只池内容为 8-31 收盘、trade_date 标 09-01）。
-            if latest == now.date().strftime("%Y%m%d") and now.time().replace(tzinfo=None) < dt_time(9, 15) and len(past) >= 2:
-                latest = past[-2]
-            return date(int(latest[:4]), int(latest[4:6]), int(latest[6:]))
+        # 盘前（<09:15）当日涨停池/龙虎榜尚未形成，数据源返回的其实是最近收盘的池
+        # ——日期必须一并回溯，否则"内容 8-31、日期标 9-1"
+        # （2026-09-01 00:24 实测：86 只池内容为 8-31 收盘、trade_date 标 09-01）。
+        if latest == beijing_today() and now.time().replace(tzinfo=None) < dt_time(9, 15):
+            prev = prev_trade_date(days, latest)
+            if prev is not None:
+                return prev
+        return latest
     return default_trade_date_weekend_fallback()
 
 

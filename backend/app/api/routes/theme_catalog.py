@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from app.api.deps import get_hub, normalize_symbol, require_write_token
 from app.core.ttl_cache import cache_on
+from app.picks.pre_limit_radar import board_limit_pct, is_sealed
 from app.services.quote_hub import QuoteHub
 from app.services.market_snapshot import default_trade_date, load_snapshot_map
 from app.services.theme_catalog_service import (
@@ -472,7 +473,9 @@ async def theme_catalog_detail(
             "price": row.get("price"),
             "turnover_rate": row.get("turnover_rate"),
             "float_market_cap_yi": round(nmc_wan / 1e4, 2) if nmc_wan else None,  # 万元→亿
-            "limit_up": bool(reason) or (change_pct or 0) >= 9.7,
+            # 封板判定走单点：原实现硬编码 9.7 —— 创业板/科创板 +10% 被误判成涨停、
+            # +19.9% 反而不算，北交所 30% 同理（容差 0.3 见 pre_limit_radar.seal_threshold）。
+            "limit_up": bool(reason) or is_sealed(change_pct or 0, board_limit_pct(r.symbol, r.name)),
             "break_count": (getattr(em, "break_count", None) if em else None),
             "seal_amount": seal_amount,  # 原样（元），前端 fmtAmount 自适应
             "boards": getattr(ths_rec, "consecutive_boards", None) if ths_rec else None,
@@ -574,10 +577,11 @@ async def theme_reconciliation(
     svc: ThemeCatalogService = Depends(get_service),
 ) -> dict:
     """涨停归因 × 官方成分校验：归因冲突（有归因但非官方成分）与目录外题材。"""
-    if svc.catalog_size() == 0:
-        await svc.sync_catalog()
-
-    # 涨停池归因（ths 官方 reason 串）——复用 theme_service 的取数定位方式
+    # 硬依赖（ths 涨停池）**先判**，再谈副作用：`sync_catalog()` 会真打
+    # fuyao 目录接口（实测拉到 390 个题材）并写库，而 ths 不可用时本端点
+    # 注定 503——先同步再 503 等于白做一次网络 + 库写入，且这笔副作用会跨用例
+    # 污染共享内存库（test_endpoint_smoke 头部已登记过同类副作用）。
+    # 失败要快、且不留下痕迹。
     hub = request.app.state.hub
     from app.services.theme_service import _pick_provider
 
@@ -585,6 +589,10 @@ async def theme_reconciliation(
     if ths is None:
         raise HTTPException(status_code=503, detail="同花顺源不可用，无法取涨停归因")
 
+    if svc.catalog_size() == 0:
+        await svc.sync_catalog()
+
+    # 涨停池归因（ths 官方 reason 串）——复用 theme_service 的取数定位方式
     trade_date: date | None = None
     if date_str:
         try:

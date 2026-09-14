@@ -17,6 +17,7 @@ import pytest
 
 from app.data_providers.eastmoney import ProviderError
 from app.schemas.market import Quote
+from app.services import quote_hub as qh
 from app.services.quote_hub import QuoteHub
 
 
@@ -193,6 +194,86 @@ def test_update_symbols_reuses_queue_and_refilters_broadcast():
 
     # 未知队列返回 False，不抛
     assert hub.update_symbols(asyncio.Queue(), {"600519"}) is False
+
+
+# ------------------------------------------- 订阅出站队列有界（R24，2026-09-14）
+
+
+def _hub_with_quote(symbol: str = "600519", price: float = 1700.0) -> QuoteHub:
+    """只放一条缓存的 Hub：用于直接驱动 `_broadcast`（不走 provider）。"""
+    hub = QuoteHub(provider=None, poll_interval=1.0)
+    hub.quotes[symbol] = _q(symbol, price)
+    return hub
+
+
+def test_subscriber_queue_is_bounded():
+    """R24：订阅出站队列必须**有界**。
+
+    旧实现 `asyncio.Queue()`（maxsize=0）⇒ `put_nowait` 永不失败，消费者一旦
+    卡住（慢网络 / 半死连接 / 已成孤儿的 writer），积压无上限（实测 1000+ 条），
+    投递侧还完全察觉不到，内存随运行时长单调增长。"""
+    hub = _hub_with_quote()
+    assert hub.subscribe({"600519"}).maxsize == qh.SUBSCRIBER_QUEUE_MAX
+    assert qh.SUBSCRIBER_QUEUE_MAX > 0
+
+
+def test_full_subscriber_queue_drops_oldest_and_keeps_latest():
+    """R24：队列满时**丢最旧、保最新**，长度钉在上限，且丢弃要计数。
+
+    行情是"最新即正确"的快照型数据 ⇒ 该丢的是积压的旧帧。若反过来丢新帧
+    （或阻塞广播 / 抛异常），客户端就会被永久冻结在过期帧上——那才是真降级。"""
+    hub = _hub_with_quote()
+    q = hub.subscribe({"600519"})
+
+    extra = 5
+    for _ in range(qh.SUBSCRIBER_QUEUE_MAX + extra):
+        hub._broadcast("quotes")
+
+    assert q.qsize() == qh.SUBSCRIBER_QUEUE_MAX  # 有界：不随投递次数增长
+    assert hub.dropped_frames == extra
+
+    seqs = []
+    while not q.empty():
+        seqs.append(q.get_nowait()["seq"])
+    # 丢的是最旧的 extra 帧（seq 1..extra），留下的是最后 SUBSCRIBER_QUEUE_MAX 帧
+    assert seqs[0] == extra + 1
+    assert seqs[-1] == qh.SUBSCRIBER_QUEUE_MAX + extra
+    assert seqs == list(range(extra + 1, qh.SUBSCRIBER_QUEUE_MAX + extra + 1))
+
+
+def test_no_drop_below_capacity_keeps_counter_clean():
+    """R24：未满时**零丢弃**——否则计数会恒为非零，取证面失去意义。
+
+    这条同时钉住"日志节流不会把正常情况报成降级"。"""
+    hub = _hub_with_quote()
+    q = hub.subscribe(None)  # 全量订阅
+    hub._broadcast("quotes")
+
+    assert q.qsize() == 1
+    assert hub.dropped_frames == 0
+    assert hub.subscriber_stats() == {
+        "subscribers": 1,
+        "queue_max": qh.SUBSCRIBER_QUEUE_MAX,
+        "dropped_frames": 0,
+    }
+    # unsubscribe 后连接数归零（丢弃计数是累计值，刻意不随断开清零）
+    hub.unsubscribe(q)
+    assert hub.subscriber_stats()["subscribers"] == 0
+
+
+def test_dropped_frame_is_logged_not_silent(caplog):
+    """R24：丢帧 = 降级，必须留痕（红线 2：不得静默降级）。"""
+    import logging as _logging
+
+    hub = _hub_with_quote()
+    hub.subscribe({"600519"})
+
+    with caplog.at_level(_logging.WARNING, logger="app.services.quote_hub"):
+        for _ in range(qh.SUBSCRIBER_QUEUE_MAX + 1):
+            hub._broadcast("quotes")
+
+    assert any("出站队列已满" in r.getMessage() for r in caplog.records)
+    assert hub.dropped_frames == 1
 
 
 def test_poll_interval_floor_allows_one_second():

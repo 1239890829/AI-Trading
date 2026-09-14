@@ -123,8 +123,14 @@ def _picks_combos() -> dict[str, str]:
 
 
 def _role_of(plan: dict, symbol: str) -> str | None:
+    """该标的的开仓角色（决定止损/回撤档位）。
+
+    `open_pending` 一并认：开仓挂单受理时的角色意图与成交后应走的档位是同一个，
+    挂单成交后（match_pending）不会再补写 `action="open"` 记录——若此处不认，
+    这类持仓会静默掉到默认档位（止损放宽），而它恰恰是最初被触发的那批标的。
+    """
     for d in reversed(plan.get("decisions", [])):
-        if d.get("symbol") == symbol and d.get("action") == "open":
+        if d.get("symbol") == symbol and d.get("action") in ("open", "open_pending"):
             return d.get("role")
     return None
 
@@ -228,33 +234,56 @@ def position_monitor_state() -> dict:
 
 
 def _real_positions() -> dict[str, dict]:
-    """真实持仓（RealTrade 净额聚合）：symbol → {cost, quantity}（加权成本）。
+    """真实持仓（**与持仓页面同一事实视图**）：symbol → {quantity, cost, name, overridden}。
+
+    `cost` 约定：正常情况下是正的加权摊薄成本；**成本不可用时为 `None`**
+    （只可能来自人工覆盖把总成本记成 0/负）——消费方**必须先判空**再算止损，
+    详见下方 R07 注释。
 
     返回值 `{}` 有两种含义，**必须靠 `_REAL_READ` 区分**（S1-2）：
     - `state=empty`：确实无持仓（正常，无需提醒）
     - `state=failed`：读取失败 ⇒ **本轮真实持仓止损检查已跳过**（降级，必须可见）
+
+    R07（2026-09-14）：本函数**曾另写一份"净现金投入"成本算法**，与
+    `real_position_service.aggregate_positions`（页面/API 用的摊薄成本）口径不一致，
+    且**完全不读 `RealPositionOverride`**。合成账本「买 1000 股 @10、卖 400 股 @12」下
+    页面剩余成本 10.00、监护算 8.67（净现金投入 5200/600）；登记人工覆盖
+    （200 股 / 成本 11）后监护仍看 600 股 / 8.67 ⇒ **止损提醒线与实际持仓对不上**，
+    且部分卖出后提醒线被自己"算低"，该提醒的时候不提醒。
+
+    现改为直接复用 `load_positions()`：口径只有一个（费用/成本结转/人工覆盖
+    全部跟随该实现演进，单一真相源），本函数只做**形状适配 + 三态记账**。
+    刻意不在这里"就地修正"成本——第二份算法的存在本身就是缺陷。
     """
     try:
-        from sqlalchemy import select
-
         from app.core.db import get_session_factory
-        from app.models.real_position import RealTrade
+        from app.services.real_position_service import load_positions
 
-        with get_session_factory()() as db:
-            trades = db.execute(select(RealTrade)).scalars().all()
-        net: dict[str, dict] = {}
-        for t in trades:
-            cur = net.setdefault(t.symbol, {"quantity": 0, "cost_sum": 0.0, "name": t.name or ""})
-            if t.side == "buy":
-                cur["quantity"] += t.quantity
-                cur["cost_sum"] += t.fill_price * t.quantity
-            else:
-                cur["quantity"] -= t.quantity
-                cur["cost_sum"] -= t.fill_price * t.quantity
-        out = {
-            s: {"quantity": v["quantity"], "cost": v["cost_sum"] / v["quantity"], "name": v["name"]}
-            for s, v in net.items() if v["quantity"] > 0
-        }
+        held = load_positions(get_session_factory())
+        out: dict[str, dict] = {}
+        unfunded: list[str] = []
+        for p in held:
+            if p.quantity <= 0:
+                continue  # 已清仓：页面仍展示其已实现盈亏，监护无事可做
+            entry = {
+                "quantity": p.quantity,
+                "cost": p.avg_cost,
+                "name": p.name or "",
+                "overridden": p.overridden,
+            }
+            if p.avg_cost is None or p.avg_cost <= 0:
+                # ⚠️ 后果是**静默漏报**而非误报：按 0 计算时判据是 `price <= 0`，
+                # 正价格恒不成立 ⇒ 该持仓**永远不会触发止损**，且外面看不出来。
+                # 故显式置 cost=None 并留痕，交由消费方跳过；**不臆造**一个成本。
+                entry["cost"] = None
+                unfunded.append(p.symbol)
+            out[p.symbol] = entry
+        if unfunded:
+            log.warning(
+                "真实持仓缺少有效成本，止损判定跳过（不会触发提醒）：%s"
+                "——请在持仓页修正人工覆盖的成本",
+                ", ".join(unfunded[:10]),
+            )
         _REAL_READ.update(state="ok" if out else "empty", as_of=beijing_now(),
                           age_seconds=0.0, reason=None, failures=0)
         return out
@@ -318,6 +347,12 @@ async def evaluate_once(app) -> list[dict]:
     # S1-2 同族：读失败与「确实无持仓」必须可区分——否则一次 DB 抖动就让
     # **模拟仓自动离场（含硬止损）整轮跳过**，而 failed 与 empty 返回值完全相同。
     try:
+        # R04（2026-09-14）：**先结算 T+1，再读持仓**。
+        # `available = quantity - frozen_today` 是派生值，而解冻此前只在下单路径发生
+        # ⇒ 「买入后不再下单」的持仓 frozen 永不清零，`available` 恒为 0，
+        # 监护每轮都走第 419 行「T+1 当日买入不可卖」分支 —— **硬止损被无限期跳过**。
+        # 结算失败即视为读取失败（进 degraded），不带着不可信的 available 去判断。
+        await engine.settle_t1()
         from app.models.paper import PaperPosition
 
         with engine._sf() as db:
@@ -403,6 +438,20 @@ async def evaluate_once(app) -> list[dict]:
         if getattr(order, "status", "") == "rejected":
             log.warning("自动离场被撮合拒绝 %s: %s", sym, getattr(order, "reason", ""))
             continue
+        if getattr(order, "status", "") != "filled":
+            # 卖单**已受理但未成交**（限价高于现价，即本轮的行情读值与撮合内部
+            # 重新取价之间价格下滑——R09）。旧实现与仓位引擎同型：直接记 `exits`、
+            # 清峰值、发「自动离场」通知 ⇒ **持仓还在，却被记为已离场**，事后复盘
+            # 与峰值轨迹全部对不上。此处只留痕「挂单受理」，离场判定留给下一轮
+            # （持仓仍在持仓表里，下一轮仍会被检查到）。
+            if key not in _NOTIFIED:
+                _NOTIFIED.add(key)
+                _notify(app, sym, name, "position_exit_pending",
+                        f"离场挂单受理未成交：{reason}（限价 {price} 未达现价，等待撮合）")
+            fired.append({"symbol": sym, "action": "exit_pending", "reason": reason})
+            log.warning("[离场引擎] 离场挂单受理未成交 %s %d 股 @ 限价 %s（%s）",
+                        sym, pos["available"], price, reason)
+            continue
         plan["exits"].append({"ts": beijing_now().strftime("%H:%M:%S"), "symbol": sym,
                               "reason": reason, "qty": pos["available"], "price": price})
         peaks.pop(sym, None)
@@ -437,12 +486,24 @@ async def evaluate_once(app) -> list[dict]:
             continue
         pct = q.get("change_pct")
         cost = rp["cost"]
+        if cost is None or cost <= 0:
+            # 成本不可用（人工覆盖把总成本记成 0/负）：**无法判定止损**。
+            # 不能拿 0 参与计算——判据会退化成 `price <= 0`，正价格恒不成立，
+            # 该持仓会**静默永不触发**。`_real_positions` 已对该标的告警留痕。
+            continue
+        # 成本来源可见（R07）：同一条提醒，成本来自**人工覆盖**还是**流水摊薄**
+        # 对用户意味着不同的核对动作——不写清就无从判断该去改覆盖还是补流水。
+        cost_src = "人工覆盖" if rp.get("overridden") else "流水摊薄"
         stop = _stop_pct(None)
         if price <= cost * (1 - stop):
             key = f"real:{sym}:stop"
             if key not in _NOTIFIED:
                 _NOTIFIED.add(key)
-                text = f"真实持仓止损提醒：现价 {price} 已低于成本 {cost:.2f} 的 -{stop:.0%} 线——请确认是否卖出（确认后删除持仓流水，标签自动消失）"
+                text = (
+                    f"真实持仓止损提醒：现价 {price} 已低于成本 {cost:.2f}（{cost_src}）"
+                    f"的 -{stop:.0%} 线——请确认是否卖出；"
+                    "若已实际卖出，**登记卖出流水**即可（不必删除历史流水）"
+                )
                 _notify(app, sym, rp.get("name") or "", "real_exit_alert", text, critical=True)
                 fired.append({"symbol": sym, "action": "real_alert", "reason": text})
         elif pct is not None and is_sealed(pct, board_limit_pct(sym)):

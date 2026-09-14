@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
 
+from app.api.deps import require_write_token
 from app.schemas.envelope import Envelope
 from app.schemas.risk import OrderCheckRequest, OrderCheckResponse, RiskStatePayload
 
@@ -19,7 +20,7 @@ async def risk_state(engine=Depends(get_risk_engine)) -> Envelope[RiskStatePaylo
     return Envelope(data=RiskStatePayload(**engine.state_payload()))
 
 
-@router.post("/risk/check-order")
+@router.post("/risk/check-order", dependencies=[Depends(require_write_token)])
 async def check_order(
     body: OrderCheckRequest,
     request: Request,

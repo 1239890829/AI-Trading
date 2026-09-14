@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from datetime import date, datetime, time
 from pathlib import Path
 
@@ -55,6 +56,20 @@ _TURNOVER_CACHE = TTLCache("turnover-today", ttl=30.0, maxsize=2)
 _FLOW_RT_CACHE = TTLCache("fundflow-rt", ttl=30.0, maxsize=1)
 #: 历史资金流内存缓存（6h；真正增量在落盘文件）
 _FLOW_HIST_CACHE = TTLCache("fundflow-hist", ttl=6 * 3600.0, maxsize=1)
+
+def _write_store_atomic(store: dict) -> None:
+    """原子写日流水库（tmp + os.replace）。
+
+    直接 write_text 的窗口期里进程被杀 / 磁盘写满会留下**半截 JSON**，读取侧
+    `_read_flow_store` 对半截文件只能判为损坏 ⇒ 历史成交额对比整段丢失。
+    与 board_flow._write_json_atomic / morning_brief / heat_history 同型
+    （多份同类实现待收口，见审查报告「重复实现」项）。
+    """
+    _FLOW_STORE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _FLOW_STORE.with_name(f"{_FLOW_STORE.name}.tmp")
+    tmp.write_text(json.dumps(store, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, _FLOW_STORE)
+
 
 _HTTP = None
 
@@ -468,8 +483,7 @@ def _snapshot_today_if_closed(rt: dict) -> None:
             return
         store["days"][d] = {"sh": sh, "sz": sz, "close_pct": None, "source": "snapshot"}
         store["updated_at"] = today.isoformat(timespec="seconds")
-        _FLOW_STORE.parent.mkdir(parents=True, exist_ok=True)
-        _FLOW_STORE.write_text(json.dumps(store, ensure_ascii=False), encoding="utf-8")
+        _write_store_atomic(store)
         _FLOW_HIST_CACHE.invalidate()
         log.info("fund-flow daily snapshot saved for %s", d)
     except Exception:  # noqa: BLE001  快照失败不影响实时返回
@@ -691,9 +705,8 @@ async def _pull_em_fflow_into_store() -> bool:
             await asyncio.sleep(2.0)  # 防熔断
     if ok:
         try:
-            _FLOW_STORE.parent.mkdir(parents=True, exist_ok=True)
             store["updated_at"] = beijing_now().isoformat(timespec="seconds")
-            _FLOW_STORE.write_text(json.dumps(store, ensure_ascii=False), encoding="utf-8")
+            _write_store_atomic(store)
             _FLOW_HIST_CACHE.invalidate()
         except Exception:
             log.warning("fundflow store persist failed", exc_info=True)
@@ -704,10 +717,20 @@ async def _pull_em_fflow_into_store() -> bool:
 
 async def get_turnover_day(hub, day: date) -> dict:
     """指定历史交易日 vs 前一交易日：全日成交额增减 + 两日分时累计曲线对比。"""
-    from app.market.trade_calendar import is_trade_day, prev_trade_date, trading_days
+    from app.market.trade_calendar import is_trade_day_on, prev_trade_date, trading_days
 
     cal = await trading_days(_calendar_provider(hub))
-    if not is_trade_day(cal, day):
+    # 三态（F7，2026-09-14）：`day` 是调用方显式传入的日期（前端从历史日列表里选），
+    # 正常情况下必然被日历覆盖；但若传入的是**今天**而日历尚未覆盖，原二态写法会
+    # 把「未判定」答成「非交易日」。未知与确定必须分开表述。
+    day_state = is_trade_day_on(day, cal)
+    if day_state is None:
+        return {
+            "available": False,
+            "reason": f"{day.isoformat()} 交易日归属未判定（日历未覆盖该日）",
+            "degraded": [],
+        }
+    if day_state is False:
         return {"available": False, "reason": f"{day.isoformat()} 非交易日", "degraded": []}
     pd_ = prev_trade_date(cal, day)
     sh_bars, sz_bars = await asyncio.gather(_sina_mk_bars(SH_SYMBOL), _sina_mk_bars(SZ_SYMBOL))

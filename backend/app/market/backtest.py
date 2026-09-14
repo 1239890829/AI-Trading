@@ -10,6 +10,12 @@
 - §5 可解释：基准（买入持有）、超额、最大回撤及时长、夏普/Sortino/Calmar、
   胜率、盈亏比、样本内外分离（in_ratio）。
 
+**样本结束的持仓口径（R14，2026-09-14 修）**：数据流结束**不再**冒充退市强平。
+默认按末根收盘**估值**（权益含浮动盈亏），持仓另存 `BacktestReport.open_position`，
+**不产生成交**，因此不进胜率/盈亏比/成交笔数（它们只由已配对成交得出）。
+真实退市须**显式事件**（bar 上 `delisted=True`）才清算；另有可选 `liquidate_at_end`
+假设清算，产物标 `synthetic=True` 且不计入成交统计。
+
 红线 3：报告只描述统计事实与策略偏向，不输出确定性买卖建议。
 """
 from __future__ import annotations
@@ -43,11 +49,29 @@ class BarView:
         return self._i + 1
 
     def __getitem__(self, idx: int) -> dict:
-        if idx > self._i:
-            raise FutureDataError(f"bar[{idx}] 超出 as_of={self._i}（未来数据不可访问）")
-        if idx < -len(self):
+        """按可见窗口取 bar。**负索引必须先归一再校验**（R13，2026-09-14）。
+
+        🔴 原实现：先判 `idx > self._i`（未来）与 `idx < -len(self)`（越界），
+        再 `return self._bars[idx]` —— 而 `self._bars` 是**完整序列**。
+        `view[-1]` 因此返回**全序列最后一根**（= 未来），把整段未来行情喂给策略：
+        正索引守卫（`view[len(view)]`）全绿，最常见的 `view[-1]` 写法却是漏的。
+        合成复现（120 根夹具，as_of=第 5 行）：`view[-1]` 返回第 **119** 行（末根），
+        且**与 as_of 完全无关**——前视 114 根；第 118 行时返回 119（前视 1 根）。
+
+        修法：把负索引按**可见长度**换算成窗口内的绝对下标，再统一校验，
+        取值只用换算后的下标——不再把用户给的 idx 直接丢给完整列表。
+        """
+        n = self._i + 1  # 可见长度 = 0..self._i
+        abs_i = idx if idx >= 0 else n + idx
+        if abs_i < 0:
             raise FutureDataError("负索引越过可用历史起点")
-        return self._bars[idx]
+        if abs_i >= n:
+            raise FutureDataError(
+                f"bar[{idx}] 超出 as_of={self._i}（未来数据不可访问）"
+                if idx >= 0 else
+                f"bar[{idx}] 超出可见窗口（长度 {n}）"
+            )
+        return self._bars[abs_i]
 
     def closes(self, n: int | None = None) -> list[float]:
         """截至 as_of 的收盘序列（可选最近 n 根）。"""
@@ -103,6 +127,28 @@ class Trade:
     fee: float  # 佣金+印花税合计
     ok: bool
     reason: str = ""  # 拒绝原因：limit_up / limit_down / t1 / insufficient_cash / delisted
+    synthetic: bool = False  # R14：True = 引擎按调用方要求**假设**清算的产物，非真实成交
+
+
+@dataclass
+class OpenPosition:
+    """数据流结束时仍未平仓的持仓（R14）——**估值不是成交**。
+
+    `unrealized_pnl` 只进权益（`equity[-1]` 已是含浮动盈亏的市值），
+    **不进** `win_rate` / `profit_loss_ratio` / `n_trades`——后者只由
+    `pair_trades_ts` 的已配对成交得出，两者在报告里天然分离。
+    """
+
+    qty: int
+    entry_ts: str  # 首笔建仓的成交 bar
+    entry_price: float  # 首笔建仓成交价（含滑点）
+    last_ts: str  # 数据流末根 bar
+    mark_price: float  # 末根收盘（估值价）
+    mark_value: float  # qty × mark_price
+    cost: float  # 持仓成本（加权平均，含买入费用）
+    unrealized_pnl: float  # mark_value − cost
+    unrealized_pnl_pct: float  # unrealized_pnl / cost
+    liquidated_by: str = ""  # ""=仍持有 / "assumed_liquidation"=假设清算
 
 
 @dataclass
@@ -128,6 +174,7 @@ class BacktestReport:
     extra_metrics: dict = field(default_factory=dict)  # performance.py 全量 28 项
     config: dict = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    open_position: OpenPosition | None = None  # 数据流末仍未平仓的持仓（按末价估值）
 
 
 # ---------------------------------------------------------------- 内置策略库
@@ -214,12 +261,19 @@ def run_backtest(
     bars: list[dict],
     strategy: Strategy,
     cfg: BacktestConfig | None = None,
+    *,
+    liquidate_at_end: bool = False,
 ) -> BacktestReport:
     """逐 bar 推进的日线回测。bars 升序（ts/open/high/low/close/volume）。
 
     流程（禁令 §2：信号 bar 收盘产生 → 下一 bar 开盘撮合）：
       bar i 开盘：撮合上一收盘产生的 pending 目标；
       bar i 收盘：strategy(BarView(bars, i)) → 新 pending 目标。
+
+    `liquidate_at_end`（默认 False，R14）：True 时在数据流末按末根收盘做**假设清算**，
+    产物标 `synthetic=True` 且**不计入成交/胜率统计**——这是「可选假设」，不是真实成交。
+    默认 False 则持仓按末价估值并记入 `report.open_position`，不产生任何成交。
+    真实退市走 bar 上的显式事件 `delisted=True`（见循环内）。
     """
     cfg = cfg or BacktestConfig()
     if len(bars) < 60:
@@ -228,15 +282,25 @@ def run_backtest(
 
     cash = cfg.initial_cash
     qty = 0
+    open_cost = 0.0  # 当前持仓成本（加权平均，含买入费用）→ 供未实现盈亏
+    pos_entry_ts: str = ""
+    pos_entry_price = 0.0
     last_buy_ts: str | None = None
     pending_target: float | None = None
     trades: list[Trade] = []
     equity_ts: list[str] = []
     equity: list[float] = []
-    refused_delisted = 0
+    delisted_seen = False
+    delisted_ts: str | None = None
 
     for i, bar in enumerate(bars):
         prev_close = bars[i - 1]["close"] if i > 0 else bar["open"]
+
+        # 退市之后不再有任何撮合与信号：只把净值推到末根（持仓已在退市 bar 清算）
+        if delisted_seen:
+            equity_ts.append(str(bar["ts"]))
+            equity.append(cash)
+            continue
 
         # ---- 开盘撮合 pending 目标（若上一收盘发出过信号）----
         if pending_target is not None:
@@ -262,7 +326,11 @@ def run_backtest(
                     amount = price * sell_qty
                     fee = _fees(cfg, amount, "sell")
                     cash += amount - fee
+                    # 按卖出比例摊掉成本（加权平均口径）；清仓时归零
+                    open_cost -= open_cost * sell_qty / qty
                     qty -= sell_qty
+                    if qty <= 0:
+                        open_cost = 0.0
                     trades.append(Trade(bar["ts"], bar["ts"], "sell", price, bar["open"], sell_qty, fee, True))
 
             # 买入腿：目标仓位升高 → 买入差额
@@ -280,32 +348,78 @@ def run_backtest(
                         amount = price * buy_qty
                         fee = _fees(cfg, amount, "buy")
                         cash -= amount + fee
+                        if qty == 0:  # 新开仓 → 记录建仓价（用于 open_position 展示）
+                            pos_entry_ts = str(bar["ts"])
+                            pos_entry_price = price
                         qty += buy_qty
+                        open_cost += amount + fee
                         last_buy_ts = bar["ts"]
                         trades.append(Trade(bar["ts"], bar["ts"], "buy", price, bar["open"], buy_qty, fee, True))
             pending_target = None
 
+        # ---- 显式退市事件（R14）----
+        # 退市是**公司事件**，必须由数据显式声明（bar 上 `delisted=True`），
+        # 不能由「回测窗口结束」冒充。清算按该 bar 收盘（不是市场卖出，
+        # 故不适用 T+1 / 涨跌停约束），计为真实成交并写明 reason=delisted。
+        if bar.get("delisted"):
+            if qty > 0:
+                amount = bar["close"] * qty
+                fee = _fees(cfg, amount, "sell")
+                cash += amount - fee
+                trades.append(
+                    Trade(bar["ts"], bar["ts"], "sell", bar["close"], bar["close"], qty, fee, True, "delisted")
+                )
+                qty = 0
+                open_cost = 0.0
+            delisted_seen = True
+            delisted_ts = str(bar["ts"])
+
         # ---- 收盘 mark + 策略调用（as_of = 当前 bar）----
         equity_ts.append(str(bar["ts"]))
         equity.append(cash + qty * bar["close"])
+        if delisted_seen:
+            pending_target = None
+            continue
         view = BarView(bars, i)
         target = float(strategy(view))
         if not (0.0 <= target <= 1.0):
             raise ValueError(f"策略输出非法：target={target}（须在 [0,1]）")
         pending_target = target
 
-    # 数据流结束仍有持仓 → 按最后收盘强制平仓并标记（禁令 §1：退市不被静默剔除）
+    # ---- 数据流结束：持仓按末价估值，**不再冒充退市强平**（R14）----
+    # 回测窗口结束 ≠ 公司退市。默认只把持仓按末根收盘 mark-to-market：
+    #   equity[-1] 已含浮动盈亏（见循环内 equity.append），因此这里**无需**改权益；
+    #   也**不产生成交** ⇒ 胜率/盈亏比/成交笔数只反映已配对成交（口径分离）。
+    open_position: OpenPosition | None = None
     if qty > 0:
         last = bars[-1]
-        amount = last["close"] * qty
-        fee = _fees(cfg, amount, "sell")
-        cash += amount - fee
-        trades.append(Trade(last["ts"], last["ts"], "sell", last["close"], last["close"], qty, fee, True, "delisted"))
-        equity[-1] = cash
-        qty = 0
-        refused_delisted += 1
+        mark = last["close"]
+        mark_value = mark * qty
+        open_position = OpenPosition(
+            qty=qty,
+            entry_ts=pos_entry_ts,
+            entry_price=pos_entry_price,
+            last_ts=str(last["ts"]),
+            mark_price=mark,
+            mark_value=round(mark_value, 4),
+            cost=round(open_cost, 4),
+            unrealized_pnl=round(mark_value - open_cost, 4),
+            unrealized_pnl_pct=round(mark_value / open_cost - 1.0, 6) if open_cost > 0 else 0.0,
+        )
+        if liquidate_at_end:
+            # 可选**假设**清算：显式标 synthetic，不计真实成交/胜率（替代方案原文）
+            amount = mark * qty
+            fee = _fees(cfg, amount, "sell")
+            cash += amount - fee
+            trades.append(
+                Trade(str(last["ts"]), str(last["ts"]), "sell", mark, mark, qty, fee, True,
+                      "assumed_liquidation", True)
+            )
+            equity[-1] = cash
+            qty = 0
+            open_position.liquidated_by = "assumed_liquidation"
 
-    return _build_report(trades, equity_ts, equity, bars, cfg, refused_delisted)
+    return _build_report(trades, equity_ts, equity, bars, cfg, open_position, delisted_ts)
 
 
 def _build_report(
@@ -314,7 +428,8 @@ def _build_report(
     equity: list[float],
     bars: list[dict],
     cfg: BacktestConfig,
-    refused_delisted: int,
+    open_position: OpenPosition | None = None,
+    delisted_ts: str | None = None,
 ) -> BacktestReport:
     n = len(equity)
     benchmark = [cfg.initial_cash * bars[i]["close"] / bars[0]["open"] for i in range(n)]
@@ -329,15 +444,32 @@ def _build_report(
     # 曲线类 + 交易类指标统一来自 performance 模块（单一口径来源）；
     # 报告字段保持原有 round 精度，extra_metrics 为 28 项全量（round 6）
     ts_index = {ts: i for i, ts in enumerate(equity_ts)}
-    pairs = pair_trades_ts(trades, ts_index)
+    # R14：synthetic（假设清算）产物**不进配对** ⇒ 不进 n_trades / win_rate /
+    # profit_loss_ratio / profit_factor / 连胜连亏——它们只统计真实成交。
+    pairs = pair_trades_ts([t for t in trades if not t.synthetic], ts_index)
     perf = compute_performance(equity, pairs)
 
     notes = [
         "撮合口径：信号收盘产生→次 bar 开盘±滑点；T+1；一字涨停拒买/跌停拒卖；费用全配置化",
         "样本内外分离报告（禁令 §5）；评分为统计事实，不构成买卖建议",
     ]
-    if refused_delisted:
-        notes.append(f"数据流结束时仍有持仓，已按最后收盘强制平仓并标记 delisted（×{refused_delisted}）")
+    if open_position is not None:
+        p = open_position
+        if p.liquidated_by == "assumed_liquidation":
+            notes.append(
+                f"数据流末持仓 {p.qty} 股按**假设清算**处理（synthetic ×1，"
+                f"reason=assumed_liquidation）：已计入现金与权益，**不计入成交/胜率统计**"
+            )
+        else:
+            notes.append(
+                f"数据流结束时仍有持仓 {p.qty} 股：**按末根收盘估值，未强制平仓**"
+                f"（浮动盈亏 {p.unrealized_pnl:+.2f} 元已含在权益内，"
+                f"该持仓不计入成交/胜率统计）"
+            )
+    if delisted_ts is not None:
+        notes.append(
+            f"末段存在**显式退市事件**（{delisted_ts}）：按该 bar 收盘清算，计为真实成交（reason=delisted）"
+        )
     notes.append("p_value 为每笔收益率均值 t 检验（正态近似，小样本偏乐观）；avg_holding_bars 单位为交易日")
 
     return BacktestReport(
@@ -359,6 +491,7 @@ def _build_report(
         in_return=round(in_ret, 4),
         out_return=round(out_ret, 4),
         pairs=pairs,
+        open_position=open_position,
         extra_metrics=perf,
         config={
             "initial_cash": cfg.initial_cash,

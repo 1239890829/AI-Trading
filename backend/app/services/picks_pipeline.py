@@ -366,7 +366,11 @@ def _prev_combo_symbols() -> list[str]:
             return []
         try:
             return [i["symbol"] for i in json.loads(row.items)]
-        except Exception:
+        except Exception:  # noqa: BLE001
+            # 返回 [] 会被下游当成「上一份组合为空」⇒ 换股门槛与 carryover 一起失效
+            # （等价于放开换手约束）。这里保留原返回语义但**必须留下痕迹**，
+            # 否则数据损坏与「确实没选过股」两者在观测上无法区分。
+            log.warning("上一份组合解析失败（换股门槛将按空组合处理）date=%s", row.date, exc_info=True)
             return []
 
 
@@ -517,13 +521,24 @@ async def deep_score_candidates(
             sub: dict[str, float] = {}
             bases: dict[str, str] = {}
             # 技术（防飞刀口径 score_stock，v3 含 RPS 横截面）
+            # 两段各自兜底（2026-09-14）：**取数失败**与**评分自身异常**是两回事。
+            # 原实现共用一个 `except`，把评分代码的 bug 也写成「K线数据缺失，中性」——
+            # 依据文案把排查引向数据源（错方向），且 `dicts` 被一并清空，
+            # 连带 ATR / 均线（出场纪律的输入）一起退化成 None。
+            dicts: list[dict] = []
             try:
                 bars = await hub.provider.get_kline(sym, "1d", None, None)
                 dicts = [b.model_dump() if hasattr(b, "model_dump") else dict(b) for b in bars][-250:]
-                s_tech, b_tech = score_tech(score_stock(dicts, rps=rps_map.get(sym), rps_note=rps_note))
-            except Exception:
-                dicts = []
-                s_tech, b_tech = 50.0, "K线数据缺失，中性"
+            except Exception as exc:  # noqa: BLE001
+                s_tech, b_tech = 50.0, f"K线数据缺失（{type(exc).__name__}），中性"
+            else:
+                try:
+                    s_tech, b_tech = score_tech(
+                        score_stock(dicts, rps=rps_map.get(sym), rps_note=rps_note)
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    s_tech, b_tech = 50.0, f"技术评分异常（{type(exc).__name__}），中性处理"
+                    log.warning("picks tech score failed for %s", sym, exc_info=True)
             # 出场纪律的输入：ATR（止损宽度）与均线（失效条件参照）
             atr_pct = _atr_pct(dicts)
             ma5 = _ma_value(dicts, 5)

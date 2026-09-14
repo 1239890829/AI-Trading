@@ -136,16 +136,26 @@ def test_true_duplicate_factor_caught(con):
 
 
 def test_calendar_days_ms_from_persisted(monkeypatch):
-    """持久化日历 → UTC+8 零点毫秒，升序，末元素 = 日历最后一天。"""
+    """持久化日历 → UTC+8 零点毫秒，升序，末元素 = 日历最后一天（无补足）。
+
+    🔴 2026-09-14 修正（[[KB-ENG-56]] 同族）：本用例原**不注入 `today`**，
+    而实现是「日历落后于今天时用工作日补足」（`sync_marketdb.py:333-338`）
+    ⇒ 只要真实运行日晚于 2026-09-11，`out[-1]` 就不是 9-11 而是被补到当天，
+    断言**除了 2026-09-11 当天以外每天都红**。这类"真实运行日驱动"的断言，
+    一周里只有特定日历日才是绿的 ⇒ 守卫等于没写。
+    修法与相邻两条同风格：注入 `today=` 把基准日钉在夹具同一天
+    （该注入参数本就是为此而设，见 `_calendar_days_ms` docstring「仅测试注入用」）。
+    """
     from datetime import date, datetime
 
     from app.market import trade_calendar as tc
 
-    monkeypatch.setattr(tc, "_load_persisted", lambda: [date(2026, 9, 10), date(2026, 9, 11)])
-    out = _calendar_days_ms()
+    asof = date(2026, 9, 11)  # 周五；与持久化日历末元素同日 ⇒ 不触发补足分支
+    monkeypatch.setattr(tc, "_load_persisted", lambda: [date(2026, 9, 10), asof])
+    out = _calendar_days_ms(today=asof)
     tz8 = BJ_TZ
     assert out == sorted(out)
-    assert out[-1] == int(datetime(2026, 9, 11, tzinfo=tz8).timestamp() * 1000)
+    assert out[-1] == int(datetime(asof.year, asof.month, asof.day, tzinfo=tz8).timestamp() * 1000)
 
 
 def test_calendar_days_ms_extends_stale_calendar_to_today(monkeypatch):

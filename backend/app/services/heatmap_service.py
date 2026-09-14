@@ -18,9 +18,14 @@ from datetime import datetime, timezone
 log = logging.getLogger(__name__)
 
 _CACHE_TTL = 24 * 3600.0
+#: 失败后的**重试冷却**（秒）。原实现用 `_industry_failed` 标志位一旦置位就
+#: 在每个请求上短路返回，使下面 `_CACHE_TTL` 的冷却与重试分支**永不可达**——
+#: 一次瞬时失败（TDX 抖动 / 网络断）会让本进程此后整个生命周期内
+#: 全市场云图都落「未分类」，且看不出是坏在哪一天的哪一次失败。
+_FAIL_COOLDOWN = 600.0
 _industry_cache: dict[str, str] = {}
 _industry_cached_at: float = 0.0
-_industry_failed: bool = False
+_industry_retry_after: float = 0.0
 
 # 同步版 get_industry_map / invalidate_industry_cache 已删除（2026-09-07
 # 健康度审查 C3：全仓 0 引用，路由只用 async 版）。
@@ -28,11 +33,13 @@ _industry_failed: bool = False
 
 async def get_industry_map_async(provider=None) -> dict[str, str]:
     """个股 → 行业板块名（TDX HY 板块直连，24h 内存缓存；失败返回空映射由调用方降级）。"""
-    global _industry_cache, _industry_cached_at, _industry_failed
-    if _industry_cache or _industry_failed:
-        return _industry_cache
-    if time.time() - _industry_cached_at < _CACHE_TTL:
-        return _industry_cache
+    global _industry_cache, _industry_cached_at, _industry_retry_after
+    if _industry_cache:
+        if time.time() - _industry_cached_at < _CACHE_TTL:
+            return _industry_cache
+    elif time.time() < _industry_retry_after:
+        # 上次失败且在冷却期内：先不重试（避免每个请求都撞），但**不置永久失败**
+        return {}
 
     import asyncio
 
@@ -60,11 +67,13 @@ async def get_industry_map_async(provider=None) -> dict[str, str]:
     try:
         _industry_cache = await asyncio.to_thread(_sync)
         _industry_cached_at = time.time()
+        _industry_retry_after = 0.0
         log.info("heatmap industry map loaded: %d symbols", len(_industry_cache))
     except Exception as exc:
-        _industry_failed = True
-        _industry_cached_at = time.time()  # 失败也冷却一段时间，避免每次请求都撞
-        log.warning("heatmap industry map unavailable: %s", exc)
+        # 已有的旧映射继续用（行业归属变化慢，陈旧映射远好于整场「未分类」）；
+        # 完全无缓存时才靠 _industry_retry_after 做退避重试。
+        _industry_retry_after = time.time() + _FAIL_COOLDOWN
+        log.warning("heatmap industry map unavailable（%ds 后重试）: %s", int(_FAIL_COOLDOWN), exc)
     return _industry_cache
 
 

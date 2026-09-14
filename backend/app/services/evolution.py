@@ -13,8 +13,12 @@
 
 安全模型（后置守护）：
 - **红线清单**：风控/资金/推送/凭据/删除类——即使未来白名单扩张也碰不到。
-- **停机开关**：`ASHARE_AGENT_AUTONOMY=0` → 只生成议程不执行（降级建议清单）；
-  C 类另有独立开关 `ASHARE_AGENT_CODE_CHANGE`（最危险能力可单独关）。
+- **停机开关**：`ASHARE_AGENT_AUTONOMY_ENABLED=0` → 只生成议程不执行（降级建议清单），
+  **且调度器里的自动转正 / 自动回滚一并停止**（R10，2026-09-14：此前这两处位于
+  自治判据之外，关掉开关仍会写库改状态——"停机"只覆盖了局部入口）。
+  C 类另有独立开关 `ASHARE_AGENT_CODE_CHANGE_ENABLED`（最危险能力可单独关）。
+  ⚠️ 变量名以 `.env.example` 为准；历史上手册写的短名（少 `_ENABLED`）仍兼容但会告警，
+  见 `app/core/config.py` 的 `_apply_legacy_toggle_aliases`。
 - **预算**：每日 LLM 调用与自动任务数上限，超限议程照常生成但执行被拦。
 - **频率闸**：同一参数 24h 内只允许一次自动变更（防抖动、防来回翻烧饼）。
 - **C 类每日 ≤1**：audit 计数；文件白名单 + 禁改清单 + 干净工作区 + 回归门禁。
@@ -818,27 +822,72 @@ def _parse_items(raw: str) -> list[dict]:
     return out
 
 
+#: 本进程「正在生成中」的议程日期 —— 用途是**互斥**，不是猜陈旧度。
+#: 刻意用进程内集合而非时间阈值：判据精确（进程重启后集合必为空 ⇒ 上一个
+#: 进程留下的 `generating` 行可立即被重跑），且不引入「阈值定多少」这种
+#: 拍脑袋参数。`_AGENDA_INFLIGHT.add()` 与认领行之间**没有 await**，
+#: 故 asyncio 单线程下不可能出现「集合里有、行却还没建」的中间态。
+_AGENDA_INFLIGHT: set[str] = set()
+
+
 async def generate_agenda(session_factory=None) -> dict:
     """生成（或复用）今日议程：预算检查 → 收集证据 → LLM → 解析落库。
 
     ORM 纪律：实例不跨 session——每次更新都 `db.get` fresh load 后改属性，
     改完在**同一 session 内** dump（expire_on_commit 下 detached 访问会炸）。
+
+    R11（2026-09-14）修两处：
+    - **重试撞唯一键**：`AgentAgenda.date` 是 unique，旧实现对 `failed` 是
+      「不 return，继续往下走去 `db.add(新行)`」⇒ 重试 100% 抛 `IntegrityError`，
+      当日报错后再也无法自愈（`reconcile`/调度器两条重试路径都走不通）。
+      现在改为**原地复用该行**（status 归位 generating、清 error/finished_at）。
+    - **generating 中断不可恢复**：旧判据 `status not in ("failed",)` 把进程被
+      杀时留下的 `generating` 当成"正在进行"，永久返回同一份空快照；而
+      `reconcile_on_startup` 当时只收敛 AgentTask、不管 AgentAgenda ⇒ 当天议程
+      永久缺失且无人可见。现在用进程内 in-flight 集合做互斥（重启后为空 ⇒
+      中断行可重跑），并由启动对账把残留 generating 标为 failed。
     """
     sf = session_factory or get_session_factory()
     today = beijing_now().date().isoformat()
+
+    if today in _AGENDA_INFLIGHT:
+        with sf() as db:
+            cur = db.execute(select(AgentAgenda).where(AgentAgenda.date == today)).scalars().first()
+        if cur is not None:
+            return _agenda_dump(cur)
+
+    _AGENDA_INFLIGHT.add(today)
+    try:
+        return await _generate_agenda(sf, today)
+    finally:
+        _AGENDA_INFLIGHT.discard(today)
+
+
+async def _generate_agenda(sf, today: str) -> dict:
+    """`generate_agenda` 的持锁主体：认领今日议程行 → 预算 → 证据 → LLM → 落库。
+
+    调用方保证：本进程内同日只有一处在跑（`_AGENDA_INFLIGHT`）。
+    """
     with sf() as db:
         exist = db.execute(select(AgentAgenda).where(AgentAgenda.date == today)).scalars().first()
-        if exist is not None and exist.status not in ("failed",):
+        if exist is not None and exist.status in ("ready", "skipped"):
             return _agenda_dump(exist)
+        if exist is not None:
+            # failed（重试）或 generating（上一轮已中断）→ **原地复用**。
+            # 二者共用一行是本函数的关键约束：date 上有唯一约束，新建必然撞键。
+            agenda_id = exist.id
+            exist.status = "generating"
+            exist.error = None
+            exist.finished_at = None
+            db.commit()
+        else:
+            row = AgentAgenda(date=today, status="generating")
+            db.add(row)
+            db.commit()
+            agenda_id = row.id
 
     budget = _budget_status(sf)
     reason = _within_budget(budget, need_llm=True, need_task=False)
-
-    with sf() as db:
-        row = AgentAgenda(date=today, status="generating")
-        db.add(row)
-        db.commit()
-        agenda_id = row.id
 
     if reason:
         with sf() as db:
@@ -881,6 +930,10 @@ async def generate_agenda(session_factory=None) -> dict:
             row.inputs = json.dumps(inputs, ensure_ascii=False, default=str)
             row.items = json.dumps(items, ensure_ascii=False, default=str)
             row.status = "ready"
+            # finished_at 同补：skipped / failed 两条路径都在写，唯独成功路径漏了，
+            # 于是"跑完了"的议程反而没有完成时间（三态口径下 finished_at 恒为空的
+            # 含义是"还没结束"，与 ready 自相矛盾）。
+            row.finished_at = beijing_now_naive()
             db.commit()
             out = _agenda_dump(row)
     except Exception as exc:
@@ -1012,7 +1065,8 @@ def execute_agenda(agenda: dict, session_factory=None) -> dict:
     sf = session_factory or get_session_factory()
     if not autonomy_enabled():
         return {**agenda, "status": "skipped",
-                "error": {"code": "AutonomyOff", "message": "自主执行已关闭（ASHARE_AGENT_AUTONOMY=0），议程仅作建议"}}
+                "error": {"code": "AutonomyOff",
+                          "message": "自主执行已关闭（ASHARE_AGENT_AUTONOMY_ENABLED=0），议程仅作建议"}}
     budget = _budget_status(sf)
     items: list[dict] = []
     executed = 0
@@ -1148,6 +1202,13 @@ async def evolution_scheduler(app, stop: asyncio.Event, *, run_hour: int, run_mi
 
     顺带每日一次实验裁决（后置验证：到期实验对比 signal_health，劣化自动回滚）——
     conclude_due 幂等（只处理 running 且到期的），节流靠 _last_conclude_date。
+
+    **授权判据（R10，2026-09-14）**：本调度器里的三处自动动作按性质分两类。
+    - 「自治类」（会改变系统行为）——到期实验裁决（含自动回滚）、影子队列评估
+      （达标转正）：**都要先过 `autonomy_enabled()`**。停机 = 零自治状态迁移，
+      包括不再自动回滚；需要人工回滚走 `conclude_due` 的直接调用（非调度路径）。
+    - 「建议类」（只产出可读artifact，等同停机时仍允许生成的议程）——元评估周报：
+      **刻意不过开关**，这是显式定义的例外，不是漏判。
     """
     global _LAST_CONCLUDE_DATE, _LAST_SHADOW_DATE, _LAST_META_WEEK
     # WARNING 而非 INFO：app logger 级别为 WARNING，INFO 不落盘（KB-ENG-18）——
@@ -1160,7 +1221,10 @@ async def evolution_scheduler(app, stop: asyncio.Event, *, run_hour: int, run_mi
             _SCHED_LAST_TICK["at"] = now.isoformat(timespec="seconds")
             _SCHED_LAST_TICK["date"] = today.isoformat()
             # 每日一次：到期实验裁决（劣化自动回滚）
-            if _LAST_CONCLUDE_DATE != today.isoformat() and now.hour >= 16:
+            # ⚠️ 必须先过自治判据（R10）：裁决会**回滚参数变更单**——那是改系统行为，
+            # 属"自治"而非"记账"。此前它位于开关之外，关掉 autonomy 仍照跑，
+            # "停机开关"名不副实（审查 R10 静态确认的正是这一处）。
+            if autonomy_enabled() and _LAST_CONCLUDE_DATE != today.isoformat() and now.hour >= 16:
                 with contextlib.suppress(Exception):
                     from app.services.experiments import conclude_due
 
@@ -1177,7 +1241,8 @@ async def evolution_scheduler(app, stop: asyncio.Event, *, run_hour: int, run_mi
                                                ensure_ascii=False))
             # 每日一次：影子队列评估（P1-4：剧变检测 → 达标转正 / 剧变拒绝）——
             # 在议程生成前跑，转正结果进当日议程证据（独立节流标志，不与实验裁决互斥）
-            if _LAST_SHADOW_DATE != today.isoformat() and now.hour >= 15:
+            # ⚠️ 同上：转正会改参数生效状态 ⇒ 自治类动作，必须与议程执行同一判据（R10）。
+            if autonomy_enabled() and _LAST_SHADOW_DATE != today.isoformat() and now.hour >= 15:
                 with contextlib.suppress(Exception):
                     from app.services.experiments import evaluate_and_promote_shadow
 
@@ -1207,6 +1272,8 @@ async def evolution_scheduler(app, stop: asyncio.Event, *, run_hour: int, run_mi
                     _log_skip_once(today.isoformat(), "not-trade-day",
                                    f"非交易日（last_trade_date={tc.last_trade_date(days, asof=today)}）")
                     # 元评估周报（P2-①）：周五盘后 agenda 之后自动生成（幂等：一周一份）
+                    # **显式例外**（R10）：只产出一份可读周报，不改系统行为，与"停机时
+                    # 仍照常生成议程"同类 ⇒ 刻意不过 autonomy 判据（不是漏判）。
                     if now.weekday() == 4 and _LAST_META_WEEK != today.isocalendar()[:2]:
                         with contextlib.suppress(Exception):
                             from app.services.meta_review import generate_meta_review

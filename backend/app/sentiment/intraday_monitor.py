@@ -32,7 +32,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.core.db import get_session_factory
-from app.market.trade_calendar import in_trading_window, is_trade_day, trading_days
+from app.market.trade_calendar import in_trading_window, is_trade_day_on, trading_days
 from app.models.alert import AlertRule
 from app.notifiers import get_notifier_registry
 from app.repositories.alert_repo import AlertRepository
@@ -241,8 +241,19 @@ class SentimentMonitor:
                 days = await trading_days(self.provider, lookback_days=40)
             except Exception:
                 days = None
-        if (days and not is_trade_day(days, today)) or not in_trading_window(now):
+        # ⚠️ 三态（F7，2026-09-14）：原写法 `(days and not is_trade_day(days, today))`
+        # 在「日历未覆盖今天」时返回 False ⇒ 当成**确认休市** ⇒ 静默 idle，盘中
+        # 情绪监控整段不工作。与 ths_sentinel 同源同修（同一反模式）。
+        if not in_trading_window(now):
             self.state = "idle"
+            return self.snapshot()
+        day_state = is_trade_day_on(today, days)
+        if day_state is False:
+            self.state = "idle"
+            return self.snapshot()
+        if day_state is None:
+            self.state = "calendar_unknown"
+            self.last_error = "交易日历未覆盖今天或源不可用：未判定，本拍不探测"
             return self.snapshot()
 
         try:

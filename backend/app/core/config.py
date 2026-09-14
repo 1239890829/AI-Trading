@@ -1,10 +1,39 @@
 from __future__ import annotations
 
+import logging
+import os
 from pathlib import Path
+from typing import Any
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+log = logging.getLogger(__name__)
+
+#: 历史短名开关 → (正式字段, 正式环境变量)（R10，2026-09-14）。
+#: 生效语义见 `Settings._apply_legacy_toggle_aliases`：短名仍兼容但必告警，**正式名优先**。
+#: ⚠️ 这里是短名唯一允许出现的地方（`.env.example` 只登记正式名）。
+_LEGACY_TOGGLE_ALIASES: dict[str, tuple[str, str]] = {
+    "ASHARE_AGENT_AUTONOMY": ("agent_autonomy_enabled", "ASHARE_AGENT_AUTONOMY_ENABLED"),
+    "ASHARE_AGENT_CODE_CHANGE": ("agent_code_change_enabled", "ASHARE_AGENT_CODE_CHANGE_ENABLED"),
+}
+
+_TRUTHY = {"1", "true", "t", "yes", "y", "on"}
+_FALSY = {"0", "false", "f", "no", "n", "off"}
+
+
+def _parse_bool_env(raw: Any) -> bool | None:
+    """宽松解析布尔环境变量；无法识别返回 None（是否报错交给 pydantic 决定）。"""
+    if isinstance(raw, bool):
+        return raw
+    v = str(raw).strip().lower()
+    if v in _TRUTHY:
+        return True
+    if v in _FALSY:
+        return False
+    return None
 
 
 class Settings(BaseSettings):
@@ -283,7 +312,10 @@ class Settings(BaseSettings):
     # 盘后 15:45 自动汇总五路证据（复盘改进项/signal_health/告警判读统计/…）
     # → LLM 生成「今日进化议程」→ 按变更类别自动执行（A 参数/B 文档；C 代码 P1）。
     # 安全模型=后置守护：证据门槛 + 值域钳制 + 红线 + 预算 + 自动回滚（P1 实验记录本）。
-    # **停机开关**：ASHARE_AGENT_AUTONOMY=0 时只生成议程不执行（降级为建议清单）。
+    # **停机开关**：`ASHARE_AGENT_AUTONOMY_ENABLED=0` 时只生成议程不执行（降级为建议清单），
+    # 且调度器的自动转正/自动回滚一并停止（见 `evolution_scheduler` 的授权判据）。
+    # ⚠️ 变量名以 `.env.example` 为准（`env_prefix="ASHARE_"` + 字段名大写）；
+    # 手册里长期写作 `ASHARE_AGENT_AUTONOMY=0` 的短名**照旧生效但会告警**（R10 兼容层）。
     agent_autonomy_enabled: bool = True
     agent_code_change_enabled: bool = True  # C 类代码执行器独立开关（最危险能力可单独关）
     agent_venv_python: str = ""             # 沙箱门禁用的 pytest 解释器（默认 backend/.venv/bin/python）
@@ -292,9 +324,56 @@ class Settings(BaseSettings):
     agent_daily_llm_budget: int = 8        # 每日进化相关 LLM 调用上限（防失控烧钱）
     agent_daily_task_budget: int = 3       # 每日自动执行的改进任务数上限
 
+    @model_validator(mode="before")
+    @classmethod
+    def _apply_legacy_toggle_aliases(cls, data: Any) -> Any:
+        """把历史短名开关映射到正式字段（R10，2026-09-14）。
+
+        背景：`env_prefix="ASHARE_"` 使环境变量名 = `ASHARE_` + 字段名大写，
+        即 **`ASHARE_AGENT_AUTONOMY_ENABLED`**（`.env.example` 一直是对的）。
+        而代码注释 / `docs/summary/ai-evolution.md` / `docs/kb/04` 长期写作
+        **`ASHARE_AGENT_AUTONOMY=0`**（少 `_ENABLED`）⇒ 按说明设置**根本不生效**：
+        operator 以为已停机，实际自治仍在跑（审查 R10「配置复现」已复现）。
+
+        语义（fail-closed，三条都不可省）：
+        1. **只设短名** → 照旧生效，但打 WARNING 提示改用正式名（不让旧部署静默失效）；
+        2. **正式名也设了** → **正式名优先**，短名一律不覆盖即不改写 data；
+        3. **两者冲突** → 额外 WARNING 指出以正式名为准。
+        第 2 / 3 条是「停机意图不可被陈旧变量推翻」的落地：若让短名覆盖，
+        一个遗留在 shell 里的 `ASHARE_AGENT_AUTONOMY=1` 就能把已关闭的能力
+        重新打开——这正是要 fail-closed 的方向。
+
+        实测口径见 `tests/test_agent_toggle_switches.py`（`_env_file=None`，
+        只依赖进程环境，不复用仓库 .env）。
+        """
+        if not isinstance(data, dict):
+            return data
+        for legacy, (field, official) in _LEGACY_TOGGLE_ALIASES.items():
+            raw = os.environ.get(legacy)
+            if raw is None or not str(raw).strip():
+                continue
+            parsed = _parse_bool_env(raw)
+            if field in data:
+                current = _parse_bool_env(data[field])
+                if parsed is not None and current is not None and current != parsed:
+                    log.warning(
+                        "%s=%s 已被忽略：%s=%s 优先（两者取值冲突）。请删除已废弃的短名。",
+                        legacy, raw, official, data[field],
+                    )
+                else:
+                    log.warning(
+                        "%s 已废弃，请改用 %s（本次两者取值一致，结果不受影响）。",
+                        legacy, official,
+                    )
+                continue
+            log.warning("%s=%s 已生效，但该变量名**已废弃**：请改用 %s。",
+                        legacy, raw, official)
+            data[field] = raw
+        return data
+
     # ---- 写接口鉴权（B6，opt-in）----
     # 留空 = 本地开发全放行；部署到公网/NAS 时配置任意随机值，
-    # 之后所有写请求必须带 X-API-Token 头（前端 NEXT_PUBLIC_API_TOKEN 自动携带）
+    # 之后所有写请求必须带 X-API-Token 头（由前端服务端反向代理注入，浏览器不持有）
     api_token: str = ""
 
     @property

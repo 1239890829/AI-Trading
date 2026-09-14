@@ -33,12 +33,17 @@ async def require_write_token(request: Request) -> None:
     """写接口鉴权（技术评审 B6，opt-in 设计）：
 
     - 未配置 ``ASHARE_API_TOKEN``（本地开发默认）→ 全部放行，零影响；
-    - 已配置 → 所有写请求必须携带 ``X-API-Token`` 头（或 ?token= 查询参数），
+    - 已配置 → 所有写请求必须携带 ``X-API-Token`` 头，
       面署到公网/NAS 时只需在 .env 配一个值即可获得写保护。
+
+    ⚠️ **查询参数通道（``?token=``）已刻意关闭（2026-09-14）**：token 出现在 URL 上
+    会被浏览器历史、`Referer` 头、反代/网关访问日志逐层留存，等于把凭据从
+    「进程内存」扩散到「多份日志」。本系统前端的部署形态是同源反向代理，
+    服务端注入请求头才是正路，查询参数只是历史包袱。
     """
     token = settings.api_token
     if not token:
         return
-    provided = request.headers.get("X-API-Token") or request.query_params.get("token")
+    provided = request.headers.get("X-API-Token")
     if provided != token:
         raise HTTPException(status_code=401, detail="写操作需要 X-API-Token（服务端已启用鉴权）")

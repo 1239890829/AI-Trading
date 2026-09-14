@@ -38,6 +38,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
+from app.api.deps import require_write_token
 from app.core.config import settings
 from app.core.db import get_session_factory
 from app.repositories.alert_repo import AlertRepository
@@ -391,7 +392,7 @@ def get_read_state() -> dict:
     return {"data": _read_state_payload(read_state_service.load_state()), "meta": {}}
 
 
-@router.put("/notifications/read-state")
+@router.put("/notifications/read-state", dependencies=[Depends(require_write_token)])
 def put_read_state(body: ReadStateIn) -> dict:
     """提交本地状态 → 服务端单调合并 → 落库并回传合并结果（前端以回传值为准）。"""
     merged = read_state_service.save_state(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.deps import require_write_token
 from app.repositories.alert_repo import AlertRepository
@@ -88,7 +88,7 @@ async def delete_rule(rule_id: int, repo: AlertRepository = Depends(get_alert_re
 
 @router.get("/alerts/events")
 async def list_events(
-    limit: int = 50,
+    limit: int = Query(default=50, ge=1, le=200),
     rule_id: int | None = None,
     repo: AlertRepository = Depends(get_alert_repo),
 ) -> Envelope[list[dict]]:

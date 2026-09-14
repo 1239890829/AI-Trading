@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from datetime import date, datetime, time as dt_time, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -36,7 +37,7 @@ from app.schemas.envelope import (
     ThemeBoardPayload,
 )
 from app.market.normalizer import main_board
-from app.market.trade_calendar import trading_days
+from app.market.trade_calendar import prev_trade_date, trading_days
 from app.market.trading_status import bar_date, resolve_trading_status
 from app.schemas.market import (
     OrderBook,
@@ -84,14 +85,62 @@ def _hub_freshness(hub: QuoteHub) -> dict:
 
 
 def _meta(hub: QuoteHub) -> dict:
+    """行情信封的 meta。
+
+    `batch_coverage`（R18，2026-09-14）：上一轮批量请求的**返回覆盖率**
+    （1.0 = 请求集全部返回，0.0 = 一只都没回，None = 未判定/空自选）。
+    它量的是"源有没有漏返回"，与 `freshness`（量时间年龄）是两个不同的轴：
+    源可能每一轮都"成功"却稳定漏掉几只，此时 Hub 级 freshness 仍 ready——
+    逐标的 `Quote.quality`/`freshness()` 负责诚实，本字段提供**系统级**读数
+    （例如"覆盖率从 1.0 掉到 0.92 并持续"是源侧退化的早期信号）。
+
+    ⚠️ 刻意**不**把完整缺失清单放进每个响应：自选可达数百只，全量列表是
+    纯载荷浪费。清单保留在 Hub 对象上（`hub.last_missing_symbols`）供日志
+    与诊断使用，日志侧只在缺失集**变化**时打印。
+
+    `push`（R24，2026-09-14）：WebSocket 推送链路的取证面 —— 订阅连接数、
+    出站队列上限、**累计丢弃帧数**。丢弃只可能发生在出站队列满时，即客户端
+    停止消费而服务端仍在按 1Hz 生产（慢网络 / 半死连接 / 已成孤儿的 writer）；
+    它是"推送正在丢帧"的唯一系统级读数，也是判定"该降级了"的依据之一。
+    """
     return {
         "provider": hub.provider.name,
         "is_realtime": bool(getattr(hub.provider, "realtime", False)) and not hub.is_stale(),
         "is_stale": hub.is_stale(),
         "freshness": _hub_freshness(hub),
+        "batch_coverage": getattr(hub, "last_batch_coverage", None),
+        "push": hub.subscriber_stats() if hasattr(hub, "subscriber_stats") else None,
         "last_success_refresh": hub.last_success_refresh.isoformat() if hub.last_success_refresh else None,
         "generated_at": utcnow().isoformat(),
     }
+
+
+async def _dated_meta(hub: QuoteHub, trade_date: date) -> dict:
+    """**按日期取数**的载荷专用 meta：数据日期落后于最近交易日时**必须降级**（红线 2）。
+
+    为什么需要它（2026-09-14 实测）：`_meta()` 描述的是 **Hub 的实时健康度**，而 `data`
+    的业务日期是**另一个轴**；此前二者之间**没有任何一致性校验**，于是同一响应里并存
+    `data.trade_date = "2026-09-11"`、`meta.is_realtime = true`、`meta.is_stale = false`、
+    `freshness.state = "ready"`、`freshness.age_seconds = 0.9` —— **过期数据拿到了最强的
+    实时背书**。这正是红线 2「禁止把过期缓存冒充实盘」要禁止的形态。
+
+    判据用**日历覆盖的最近交易日**（`_latest_trade_date` 已走日历唯一入口），
+    不引入第二套日期口径。日期不落后时原样返回，不做任何额外断言。
+    """
+    meta = _meta(hub)
+    latest = await _latest_trade_date(hub)
+    if trade_date >= latest:
+        return meta
+    meta["is_realtime"] = False
+    meta["is_stale"] = True
+    fresh = dict(meta.get("freshness") or {})
+    fresh["state"] = "stale"
+    fresh["reason"] = f"数据日期 {trade_date.isoformat()} 早于最近交易日 {latest.isoformat()}"
+    meta["freshness"] = fresh
+    # 显式给出「实际日期 / 应有日期」，让前端与调试都不必猜（三态：不隐藏落后）
+    meta["data_date"] = trade_date.isoformat()
+    meta["expected_date"] = latest.isoformat()
+    return meta
 
 
 @router.get("/market/sentiment", response_model=Envelope[SentimentPayload])
@@ -114,7 +163,9 @@ async def market_sentiment(request: Request, hub: QuoteHub = Depends(get_hub)) -
     return {"data": result, "meta": _meta(hub)}
 
 
-_sent_hist_backfilled = {"done": False}
+#: 复盘报告回填的**进程级**一次性闸门。失败时只写 retry_after（退避重试），
+#: 不置 done —— 见下面的注释（原实现把失败也当完成）。
+_sent_hist_backfilled = {"done": False, "retry_after": 0.0}
 
 
 @router.get("/market/ladder-check")
@@ -258,24 +309,37 @@ async def market_sentiment_history(
 
     # ① 历史报告回填（进程内只跑一次；表空且无报告时零成本）
     backfilled = 0
-    if not _sent_hist_backfilled["done"]:
+    if not _sent_hist_backfilled["done"] and time.time() >= _sent_hist_backfilled["retry_after"]:
         try:
             backfilled = backfill_from_reports(sf)
+            # **只有成功才置 done**：原实现无论成败都置 True，而这是进程级一次标志，
+            # 一次瞬时失败（DB 忙 / 报告目录未就绪）会让历史回填在本次进程生命周期内
+            # 永不重试 —— 用户看到「历史序列只有最近几天」却无从判断是本就无数据
+            # 还是回填坏了（数字出得来、结论是错的，属"错了也看不出来"）。
+            _sent_hist_backfilled["done"] = True
         except Exception:
-            log.warning("sentiment history backfill failed", exc_info=True)
-        _sent_hist_backfilled["done"] = True
+            _sent_hist_backfilled["retry_after"] = time.time() + 600.0  # 退避 10 分钟
+            log.warning("sentiment history backfill failed（10 分钟后重试）", exc_info=True)
 
     # ② 惰性补录：交易日 15:05 后缺当日记录 → 现算落库
     now_bj = beijing_now_naive()
     today_key = now_bj.strftime("%Y%m%d")
     try:
-        from app.market.trade_calendar import trading_days
+        from app.market.trade_calendar import is_trade_day_on, trading_days
 
         days_list = await trading_days(hub.provider)
-        is_trade_day = now_bj.date() in days_list
+        # 三态写法（2026-09-14，账本 §6.6 行 14）：`now.date() in days_list` 是**二态**
+        # 判定，而源头日历是**尾随窗口**（不含未来日期）——双源失败 + 限频窗口下拿到
+        # 旧快照（末日停在上一交易日）时，`in` 会把「**未判定**」塌缩成「**确认非交易日**」，
+        # 静默跳过 15:05 的惰性补录**且无任何告警**（与 F7 六处同一反模式）。
+        # 与下面的 except 分支**同口径**：真不确定时退回「工作日即交易日」的乐观判据
+        # ——宁可多重算一次（`upsert_if_absent` 幂等，已有记录不会重复落），
+        # 不可静默漏一天。
+        state = is_trade_day_on(now_bj.date(), days_list)
+        trade_day_ok = (now_bj.weekday() < 5) if state is None else state
     except Exception:
-        is_trade_day = now_bj.weekday() < 5
-    if is_trade_day and (now_bj.hour, now_bj.minute) >= (15, 5):
+        trade_day_ok = now_bj.weekday() < 5
+    if trade_day_ok and (now_bj.hour, now_bj.minute) >= (15, 5):
         try:
             from app.services.market_context import get_cached_sentiment
 
@@ -753,26 +817,20 @@ async def minute_decisions(
 
 
 async def _prev_trade_date_async(hub, before: date) -> date | None:
-    """before 之前的最近交易日（交易日历缓存优先，失败回退周末规则）；拿不到返回 None。"""
-    cache = cache_on(hub, "provider.trading_days", 86400, maxsize=1)
-    hit, days = cache.get("days")
-    if not hit:
-        for p in hub.providers if hasattr(hub, "providers") else [hub.provider]:
-            if hasattr(p, "get_trading_days"):
-                try:
-                    got = await p.get_trading_days()
-                    if got:
-                        days = got
-                        cache.set("days", days)
-                        break
-                except Exception:
-                    continue
-    if days:
-        s = before.strftime("%Y%m%d")
-        past = [d for d in days if d < s]
-        if past:
-            latest = past[-1]
-            return date(int(latest[:4]), int(latest[4:6]), int(latest[6:]))
+    """before 之前的最近交易日（**走日历唯一入口 `trading_days`**；日历不可用退周末规则）。
+
+    ⚠️ 原实现自建了与 `market_snapshot.default_trade_date` **共用**的 24h 日历缓存
+    （`cache_on` 以 `(holder, name)` 为键挂在 hub 上 ⇒ 两处各写各的 TTL 实际只有**首次**
+    生效）。那份缓存的失效形态见 `market_snapshot.default_trade_date` 的 docstring。
+    2026-09-14 收口：**日历缓存只留 `trade_calendar` 一处**。
+    """
+    try:
+        days = await trading_days(hub.provider)
+        got = prev_trade_date(days, before) if days else None
+        if got is not None:
+            return got
+    except Exception:  # noqa: BLE001  日历不可用不该让调用方 500
+        log.warning("_prev_trade_date_async: trading calendar unavailable", exc_info=True)
     cand = before - timedelta(days=1)
     if cand.weekday() == 6:  # 周日
         cand -= timedelta(days=2)
@@ -794,7 +852,7 @@ async def limit_up(
     records.sort(key=lambda r: (r.consecutive_boards or 0), reverse=True)
     return {
         "data": {"trade_date": trade_date.isoformat(), "pool": [r.model_dump(mode="json") for r in records]},
-        "meta": _meta(hub),
+        "meta": await _dated_meta(hub, trade_date),
     }
 
 
@@ -812,7 +870,7 @@ async def limit_down(
     records.sort(key=lambda r: (r.consecutive_days or 0), reverse=True)
     return {
         "data": {"trade_date": trade_date.isoformat(), "pool": [r.model_dump(mode="json") for r in records]},
-        "meta": _meta(hub),
+        "meta": await _dated_meta(hub, trade_date),
     }
 
 
@@ -1043,7 +1101,7 @@ async def longhu(
         raise HTTPException(status_code=502, detail=f"龙虎榜数据源失败：{exc}")
     return {
         "data": {"trade_date": trade_date.isoformat(), "records": [r.model_dump(mode="json") for r in records]},
-        "meta": _meta(hub),
+        "meta": await _dated_meta(hub, trade_date),
     }
 
 
@@ -1261,6 +1319,25 @@ async def speed_rank(
     }
 
 
+async def _latest_trade_date(hub: QuoteHub) -> date:
+    """最近一个**交易日**（走日历唯一入口 `trading_days`）。
+
+    原实现直接调 `default_trade_date_weekend_fallback()`——它只处理周六/周日，
+    遇节假日（如国庆假期里的工作日）会返回**当天这个非交易日**，龙虎榜必然返回空；
+    用户看到"没有数据"却无法区分"确实没上榜"与"查的是非交易日"。
+    日历不可用才退到周末规则（并记 warning，不静默）。
+    """
+    try:
+        days = await trading_days(hub.provider)
+        past = [d for d in days if d <= beijing_today()]
+        if past:
+            return max(past)
+        log.warning("longhu: 交易日历无 ≤ 今日的交易日，退到周末回退规则")
+    except Exception:  # noqa: BLE001  日历不可用不该让龙虎榜 500
+        log.warning("longhu: 交易日历不可用，退到周末回退规则", exc_info=True)
+    return default_trade_date_weekend_fallback()
+
+
 @router.get("/longhu/{symbol}")
 async def longhu_detail(
     symbol: str,
@@ -1268,7 +1345,7 @@ async def longhu_detail(
     hub: QuoteHub = Depends(get_hub),
 ) -> dict:
     """个股龙虎榜：当日席位明细（买5/卖5+类型识别）+ 上榜历史（含 T+1/3/5/10 表现）。"""
-    trade_date = date.fromisoformat(date_str) if date_str else default_trade_date_weekend_fallback()
+    trade_date = date.fromisoformat(date_str) if date_str else await _latest_trade_date(hub)
 
     async def _detail():
         try:
@@ -1619,7 +1696,7 @@ async def _theme_board_cached(request: Request, hub: QuoteHub, trade_date: date)
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    payload = {"data": board, "meta": _meta(hub)}
+    payload = {"data": board, "meta": await _dated_meta(hub, trade_date)}
     cache.set(trade_date, payload)
     return payload
 

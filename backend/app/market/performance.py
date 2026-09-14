@@ -49,7 +49,7 @@ class TradePair:
     proceeds: float  # 卖出金额扣费
     pnl: float  # proceeds - cost
     pnl_pct: float  # pnl / cost
-    reason: str = ""  # 卖出腿 reason（delisted 平仓也入对）
+    reason: str = ""  # 卖出腿 reason（delisted 显式清算入对；synthetic 假设清算不入对，R14）
 
 
 def pair_trades_ts(trades: list, ts_index: dict[str, int]) -> list[TradePair]:
@@ -58,6 +58,9 @@ def pair_trades_ts(trades: list, ts_index: dict[str, int]) -> list[TradePair]:
     与引擎原内联配对逻辑一致：buy 记 open_cost（价×量+费），下一个 ok sell
     生成配对；未配对的 sell 忽略。entry_i/exit_i 由 ts 在 ts_index
     （ts→bar 序号，由引擎的 equity_ts 建）中的位置回推。
+
+    ⚠️ 调用方负责**先剔除 `synthetic=True` 的假设清算产物**（R14）：本函数不看该字段，
+    传进来的都会被配对。它是「成交统计的唯一入口」，过滤必须在入口之前完成。
     """
     pairs: list[TradePair] = []
     open_cost = 0.0

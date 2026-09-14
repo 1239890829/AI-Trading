@@ -26,7 +26,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.core.db import get_session_factory
-from app.market.trade_calendar import in_trading_window, is_trade_day, trading_days
+from app.market.trade_calendar import in_trading_window, is_trade_day_on, trading_days
 from app.models.alert import AlertRule
 from app.notifiers import get_notifier_registry
 from app.repositories.alert_repo import AlertRepository
@@ -128,8 +128,20 @@ class ThsReasonSentinel:
                 days = None
         # 门禁：休市/非交易时段不探测——拿到的是回退或残留数据（日期回退教训），
         # 判定毫无意义还可能把昨日原因误判成今日缺失。
-        if (days and not is_trade_day(days, today)) or not in_trading_window(now):
+        # ⚠️ 三态（F7，2026-09-14）：原写法 `(days and not is_trade_day(days, today))`
+        # 在「日历未覆盖今天」时 `is_trade_day` 返回 False ⇒ 当成**确认休市** ⇒
+        # 静默 `idle`。而「未覆盖」的真实语义是 **unknown**，不得塌缩成「确定」。
+        if not in_trading_window(now):
             self.state = "idle"
+            return self.snapshot()
+        day_state = is_trade_day_on(today, days)
+        if day_state is False:
+            self.state = "idle"
+            return self.snapshot()
+        if day_state is None:
+            # 未判定：**不探测**（避免用残留数据误报），但必须**可见**，不得静默 idle。
+            self.state = "calendar_unknown"
+            self.last_error = "交易日历未覆盖今天或源不可用：未判定，本拍不探测"
             return self.snapshot()
 
         try:

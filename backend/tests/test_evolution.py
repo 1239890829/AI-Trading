@@ -188,6 +188,96 @@ def test_budget_exhausted_blocks_llm(sf, monkeypatch):
     assert "预算" in agenda["error"]["message"]
 
 
+# ---------------------------------------------------------------- R11 议程状态机
+
+def _seed_agenda(sf, status, **kw):
+    today = evo.beijing_now().date().isoformat()
+    with sf() as db:
+        db.add(AgentAgenda(date=today, status=status, **kw))
+        db.commit()
+    return today
+
+
+def _counting_llm(monkeypatch, payload):
+    calls = {"n": 0}
+
+    async def fake(fn):
+        calls["n"] += 1
+        return payload
+
+    monkeypatch.setattr(evo, "_llm_call", fake)
+    monkeypatch.setattr("app.core.llm_client.chat_completion", lambda *a, **k: payload)
+    return calls
+
+
+def test_failed_agenda_retries_in_place_without_unique_violation(sf, monkeypatch):
+    """R11-1：`failed` 议程重试必须**原地复用该行**。
+
+    `AgentAgenda.date` 是 unique，旧实现对 `failed` 是「不 return，继续往下走
+    `db.add(新行)`」⇒ 重试必抛 IntegrityError：当日报错后再也无法自愈，
+    而"失败就重试"正是调度分支与手动触发的共同路径。
+    回退即红：本用例会以 IntegrityError 收场（而不是断言失败）。
+    """
+    _counting_llm(monkeypatch, json.dumps({"items": []}))
+    today = _seed_agenda(sf, "failed", error='{"code":"Boom","message":"上一轮炸了"}')
+
+    # 直接测 generate_agenda：run_evolution_now 在 autonomy 开启时会继续
+    # execute_agenda，把 status 改成 executed（那是另一段职责）。
+    agenda = asyncio.run(evo.generate_agenda(sf))
+
+    assert agenda["status"] == "ready"
+    assert agenda["error"] is None, "重试成功后必须清掉上一轮的 error"
+    assert agenda["finished_at"] is not None
+    with sf() as db:
+        rows = db.query(AgentAgenda).filter(AgentAgenda.date == today).all()
+    assert len(rows) == 1, f"重试必须复用原行，实际 {len(rows)} 行（撞唯一键的近因）"
+
+
+def test_stale_generating_agenda_is_retried(sf, monkeypatch):
+    """R11-2：进程被杀留下的 `generating` 必须可重跑，不能永久返回空快照。
+
+    旧判据 `status not in ("failed",)` 把 generating 视为"正在进行"⇒ 当天议程
+    永久缺失，`get_agenda` 永远回同一份空 items，界面一直显示"生成中"。
+    回退即红：返回值会是那行残留的 generating，而不是 ready。
+    """
+    _counting_llm(monkeypatch, json.dumps({"items": []}))
+    today = _seed_agenda(sf, "generating")
+
+    agenda = asyncio.run(evo.generate_agenda(sf))
+
+    assert agenda["status"] == "ready" and agenda["date"] == today
+    assert agenda["finished_at"] is not None
+
+
+def test_inflight_agenda_is_not_generated_twice(sf, monkeypatch):
+    """互斥：本进程已有一轮在跑 ⇒ 不重复消耗 LLM 预算，返回当前快照。
+
+    这是「可重跑」的反向约束——没有它，修复 R11-2 就会变成调度器与 API
+    双触发各跑一遍（每次都是真实 LLM 调用）。
+    """
+    calls = _counting_llm(monkeypatch, json.dumps({"items": []}))
+    today = _seed_agenda(sf, "generating")
+    evo._AGENDA_INFLIGHT.add(today)
+    try:
+        out = asyncio.run(evo.generate_agenda(sf))
+    finally:
+        evo._AGENDA_INFLIGHT.discard(today)
+
+    assert out["status"] == "generating" and out["date"] == today
+    assert calls["n"] == 0, "在跑期间不得再次调用 LLM"
+
+
+def test_ready_agenda_is_reused_idempotently(sf, monkeypatch):
+    """反向对照：已就绪的议程照旧复用（不重跑、不重复花钱）。"""
+    calls = _counting_llm(monkeypatch, json.dumps({"items": []}))
+    _seed_agenda(sf, "ready", items='[{"class":"B","finding":"x","status":"executed"}]')
+
+    agenda = asyncio.run(evo.generate_agenda(sf))
+
+    assert agenda["status"] == "ready" and len(agenda["items"]) == 1
+    assert calls["n"] == 0
+
+
 def test_parse_items_drops_garbage_and_c_class_deferred(sf, monkeypatch):
     """非法项丢弃；C 类不静默忽略而是 deferred 留痕。"""
     payload = json.dumps({"items": [
@@ -395,6 +485,93 @@ def test_scheduler_skips_non_trading_day(sf, monkeypatch):
                 await asyncio.wait_for(asyncio.shield(task), timeout=2)
 
     asyncio.run(main())
+
+
+# ---------------------------------------------------------------- 停机范围（R10，2026-09-14）
+
+
+def _run_scheduler_ticks(monkeypatch, *, autonomy: bool, seconds: float = 0.25) -> dict:
+    """驱动**真实** `evolution_scheduler` 若干 tick，返回两个自治写入口的调用计数。
+
+    R10 的缺陷形态是「停机开关未覆盖调度器的自动转正/回滚」——所以这里不测单个函数，
+    而是跑真调度循环、看它到底有没有去碰这两个写入口。
+
+    窗口刻意错开议程：时钟固定 16:30，`run_hour=23:59` ⇒ 只打开
+    「实验裁决（hour≥16）」与「影子评估（hour≥15）」两处，**不触发议程生成**
+    （否则要连 LLM、交易日历一起桩掉，噪声压过被测点）。
+    时钟与日期都自算、不读持久化日历 ⇒ 不与真实运行日耦合。
+    """
+    import contextlib
+
+    import app.services.experiments as ex
+
+    calls = {"conclude": 0, "shadow": 0}
+
+    def _spy(name: str):
+        def _fn(*_a, **_k):
+            calls[name] += 1
+            return []
+
+        return _fn
+
+    monkeypatch.setattr(ex, "conclude_due", _spy("conclude"))
+    monkeypatch.setattr(ex, "evaluate_and_promote_shadow", _spy("shadow"))
+    monkeypatch.setattr(evo, "autonomy_enabled", lambda: autonomy)
+    # 模块级节流标志跨测试残留：不重置则前一个测试跑过就等于本次被跳过（假绿）
+    monkeypatch.setattr(evo, "_LAST_CONCLUDE_DATE", "")
+    monkeypatch.setattr(evo, "_LAST_SHADOW_DATE", "")
+    monkeypatch.setattr(evo, "_MIN_TICK_INTERVAL_SEC", 0.01)
+
+    class _Hub:
+        provider = None
+
+    class _State:
+        hub = _Hub()
+
+    class _App:
+        state = _State()
+
+    today = evo.beijing_now().date()  # ⚠️ 必须在替换 beijing_now **之前**取
+    clock = {"now": datetime(today.year, today.month, today.day, 16, 30, tzinfo=BJ_TZ)}
+    monkeypatch.setattr(evo, "beijing_now", lambda: clock["now"])
+
+    async def main():
+        stop = asyncio.Event()
+        task = asyncio.create_task(
+            evo.evolution_scheduler(_App(), stop, run_hour=23, run_minute=59,
+                                    check_interval_seconds=0.02),
+        )
+        try:
+            await asyncio.sleep(seconds)
+        finally:
+            stop.set()
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(task), timeout=2)
+
+    asyncio.run(main())
+    return calls
+
+
+def test_scheduler_runs_autonomous_writers_when_enabled(monkeypatch):
+    """**正向对照**（KB-ENG-65：单侧"零调用"断言可能只是窗口没走到）。
+
+    自治开启时必须真的调到这两个写入口，否则下一条"零调用"测试毫无信息量。
+    """
+    calls = _run_scheduler_ticks(monkeypatch, autonomy=True)
+    assert calls["conclude"] == 1, "自治开启时到期实验裁决应被调度（且每日仅一次）"
+    assert calls["shadow"] == 1, "自治开启时影子评估应被调度（且每日仅一次）"
+
+
+def test_scheduler_skips_autonomous_writers_when_stopped(monkeypatch):
+    """停机开关必须覆盖自动转正/回滚：autonomy=0 时这两个写入口一次都不许进。
+
+    此前它们位于 `autonomy_enabled()` 判据之外 ⇒「停机」只停住议程执行，
+    调度仍在自动改参/回滚（审查 R10 静态确认）。
+    """
+    calls = _run_scheduler_ticks(monkeypatch, autonomy=False)
+    assert calls == {"conclude": 0, "shadow": 0}, (
+        "自治关闭时不得有任何自动状态迁移（含劣化自动回滚）"
+    )
 
 
 def test_b_class_never_touches_real_evolution_dir(sf, monkeypatch, tmp_path):

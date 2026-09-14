@@ -519,6 +519,46 @@ def test_reconciliation_without_date_resolves_trade_date(monkeypatch: pytest.Mon
     assert r.json()["data"]["pool_size"] == 1
 
 
+def test_reconciliation_missing_ths_fails_fast_without_side_effects(monkeypatch):
+    """缺 ths 硬依赖 → **可控降级**（503 + 原因），且不得先做写明会带副作用的动作。
+
+    `sync_catalog()` 会真打 fuyao 目录接口并写库；若把依赖检查放在它之后，
+    「注定 503 的请求」仍会制造一次网络 + 库写入——而 `test_endpoint_smoke`
+    按 openapi 遍历会打到本端点，那笔写就会跨用例污染共享内存库
+    （该文件头部已登记过同类副作用：把题材挤出 max_themes=10 的截断）。
+    回退即红：`synced["n"]` 会是 1（同步先于依赖检查发生）。
+    """
+    svc = _svc()
+    synced = {"n": 0}
+
+    async def fake_catalog():
+        synced["n"] += 1
+        return [{"code": GRAIN, "name": "粮食概念"}]
+
+    monkeypatch.setattr(svc, "fetch_catalog", fake_catalog)
+    # 强制进入「目录为空 → 懒同步」分支（共享内存库里通常非空，否则本用例没有区分力）
+    monkeypatch.setattr(ThemeCatalogService, "catalog_size", lambda self: 0)
+
+    class _NoThsHub:
+        name = "mock"
+        provider = SimpleNamespace(name="mock")  # 类型名非 ThsFuyaoProvider ⇒ 取不到源
+
+    from fastapi import FastAPI
+
+    from app.api.routes import theme_catalog as route
+
+    a = FastAPI()
+    a.include_router(route.router, prefix="/api")
+    a.state.hub = _NoThsHub()
+    a.state.theme_catalog = svc
+    with TestClient(a) as client:
+        r = client.get("/api/themes/reconciliation")
+
+    assert r.status_code == 503, "缺依赖是可控降级（503），不是 500"
+    assert "同花顺源不可用" in r.json()["detail"], "降级必须给出可读原因"
+    assert synced["n"] == 0, "注定 503 的请求不得先做目录同步（真打外网 + 写库）"
+
+
 # ------------------------------------------------- B1 热股榜：题材人气聚合
 
 

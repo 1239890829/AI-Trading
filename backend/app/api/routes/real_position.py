@@ -14,7 +14,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from app.api.deps import get_hub
+from app.api.deps import get_hub, require_write_token
 from app.core.bjtime import beijing_today
 from app.core.db import get_session_factory
 from app.services.quote_hub import QuoteHub
@@ -125,7 +125,7 @@ async def list_positions(hub: QuoteHub = Depends(get_hub)) -> dict:
     return {"data": {"items": items, "cleared": cleared, "total": total, "count": len(items)}, "meta": {}}
 
 
-@router.post("/trades")
+@router.post("/trades", dependencies=[Depends(require_write_token)])
 async def create_trade(body: TradeIn) -> dict:
     symbol = body.symbol.strip()
     if not symbol:
@@ -150,7 +150,7 @@ async def create_trade(body: TradeIn) -> dict:
         return {"data": {"id": row.id, "symbol": symbol, "side": body.side, "fill_price": body.fill_price, "quantity": body.quantity}, "meta": {}}
 
 
-@router.delete("/trades/{trade_id}")
+@router.delete("/trades/{trade_id}", dependencies=[Depends(require_write_token)])
 async def delete_trade(trade_id: int) -> dict:
     with _sf() as db:
         from sqlalchemy import select
@@ -167,7 +167,7 @@ async def delete_trade(trade_id: int) -> dict:
     return {"data": {"deleted": trade_id, "symbol": symbol}, "meta": {}}
 
 
-@router.patch("/positions/{symbol}")
+@router.patch("/positions/{symbol}", dependencies=[Depends(require_write_token)])
 async def override_position(symbol: str, body: OverrideIn) -> dict:
     with _sf() as db:
         from sqlalchemy import select
@@ -186,7 +186,7 @@ async def override_position(symbol: str, body: OverrideIn) -> dict:
     return {"data": {"symbol": symbol, "quantity": body.quantity, "total_cost": body.total_cost, "overridden": True}, "meta": {}}
 
 
-@router.delete("/positions/{symbol}")
+@router.delete("/positions/{symbol}", dependencies=[Depends(require_write_token)])
 async def delete_position(symbol: str) -> dict:
     """整只删除：清掉该标的全部流水与覆盖（清仓/记错标的时用）。"""
     with _sf() as db:

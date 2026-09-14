@@ -43,10 +43,11 @@ import threading
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
+from app.api.deps import require_write_token
 from app.assistant.cognition import describe_gap, looks_like_false_denial
 from app.assistant.context import build_market_context, resolve_symbols
 from app.assistant.prompt import PageContext, build_system_prompt
@@ -174,7 +175,7 @@ async def _tool_context(
     )
 
 
-@router.post("/assistant/chat")
+@router.post("/assistant/chat", dependencies=[Depends(require_write_token)])
 async def assistant_chat(req: ChatRequest, request: Request) -> StreamingResponse:
     provider = settings.llm_provider
     model = settings.review_llm_model or settings.news_llm_model or "default"

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from app.core.bjtime import beijing_now
 
@@ -58,14 +59,28 @@ def load_plan(d: str | None = None) -> dict:
     try:
         return json.loads(p.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001  损坏则重建（决策台账允许丢，交易在数据库）
+        # 但**残件必须留档**：原实现直接覆盖重建，事后无从判断是"写坏了"还是"被改坏了"。
+        try:
+            stamp = beijing_now().strftime("%Y%m%d-%H%M%S")
+            p.replace(p.with_name(f"{p.stem}.corrupt-{stamp}.json"))
+        except Exception:  # noqa: BLE001  留档失败不该阻断重建
+            log.warning("position plan 残件留档失败 %s", p, exc_info=True)
+        log.warning("position plan %s 损坏，残件已留档并重建空台账", d, exc_info=True)
         return {"date": d, "decisions": [], "exits": [], "peaks": {}}
 
 
 def save_plan(plan: dict) -> None:
+    """原子写（tmp + os.replace，同目录 rename 在 POSIX 上是原子的）。
+
+    直接 write_text 的窗口期里进程被杀 / 磁盘写满会留下**半截 JSON**，
+    而 load_plan 对半截文件只能判为损坏 ⇒ 当日决策台账整体作废。
+    与 morning_brief / heat_history / board_flow 同型。
+    """
     _PLAN_DIR.mkdir(parents=True, exist_ok=True)
-    _plan_path(plan["date"]).write_text(
-        json.dumps(plan, ensure_ascii=False, indent=1), encoding="utf-8"
-    )
+    target = _plan_path(plan["date"])
+    tmp = target.with_name(f"{target.name}.tmp")
+    tmp.write_text(json.dumps(plan, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.replace(tmp, target)
 
 
 def phase_caps(market_phase: str | None, gate: dict | None) -> tuple[float, int, str]:
@@ -85,11 +100,35 @@ def role_weight(role: str | None) -> float:
     return ROLE_WEIGHT.get(role or "", DEFAULT_WEIGHT)
 
 
-def _open_positions(engine) -> list[dict]:
+def _open_positions(engine) -> list[dict] | None:
+    """当前持仓（数量 > 0）。**读取失败返回 None，调用方必须拒绝开仓。**
+
+    原实现 `except → []` 把「读不到」伪装成「没有持仓」，后果是两条风控同时失效：
+    只数上限（len(held) >= max_pos）恒不触发、总敞口（exposure/initial）恒算成 0。
+    风控方向的降级只能 fail-closed——读不到持仓就不许开新仓（撮合/风控是红线硬拦截）。
+    """
     try:
         return [p for p in engine.positions_with_pnl({}) if (p.get("quantity") or 0) > 0]
     except Exception:  # noqa: BLE001
-        return []
+        log.warning("仓位引擎：持仓读取失败，拒绝开仓（风控不降级）", exc_info=True)
+        return None
+
+
+def _pending_orders(engine, side: str | None = None) -> list[dict] | None:
+    """未成交挂单。**读取失败返回 None，调用方必须拒绝开仓**（风控不降级）。
+
+    R09（2026-09-14）：`pending` 是**真实会发生**的状态——触发侧读的是快照价，
+    而 `place_order` 内部会重新取一次实时行情，两个时刻之间只要价格动过，
+    限价单就会被挂起（买：限价 < 现价；卖：限价 > 现价）。旧实现只排除
+    `rejected`，于是「挂单已受理」被当成「已开仓」：写 decisions、记 log、
+    发 position_open 通知；且名额判据只数持仓，未决挂单既不占名额也不计敞口
+    ⇒ 同一触发可对同一只票反复挂单，只数上限与总敞口约束同时失效。
+    """
+    try:
+        return list(engine.pending_orders(side))
+    except Exception:  # noqa: BLE001
+        log.warning("仓位引擎：挂单读取失败，拒绝开仓（风控不降级）", exc_info=True)
+        return None
 
 
 def _today_gate_and_phase() -> tuple[dict, str | None]:
@@ -134,25 +173,46 @@ async def maybe_open(
         return {"opened": False, "reason": "无有效价格"}
 
     held = _open_positions(engine)
+    if held is None:
+        return {"opened": False, "reason": "持仓读取失败（风控不可信，拒绝开仓）"}
     if any(p.get("symbol") == symbol for p in held):
         return {"opened": False, "reason": "已持仓"}
+
+    pending = _pending_orders(engine, "buy")
+    if pending is None:
+        return {"opened": False, "reason": "挂单读取失败（风控不可信，拒绝开仓）"}
+    dup = next((o for o in pending if o.get("symbol") == symbol), None)
+    if dup is not None:
+        return {
+            "opened": False,
+            "reason": f"已挂单未成交（{dup.get('quantity')} 股 @ {dup.get('price')}，等待撮合）",
+        }
 
     gate, phase = _today_gate_and_phase()
     total_cap, max_pos, cap_note = phase_caps(phase, gate)
     if total_cap <= 0 or max_pos <= 0:
         return {"opened": False, "reason": f"仓位封零：{cap_note}"}
-    if len(held) >= max_pos:
-        return {"opened": False, "reason": f"持仓只数已满（{len(held)}/{max_pos}，{cap_note}）"}
+    # 名额 = 持仓 + **未决挂单**：挂单已经占用名额与资金，若不计入，同一触发
+    # 可在撮合前反复挂出，只数上限形同虚设（R09）。
+    held_symbols = {p.get("symbol") for p in held}
+    occupied = len(held) + len(
+        {o.get("symbol") for o in pending if o.get("symbol") not in held_symbols}
+    )
+    if occupied >= max_pos:
+        return {"opened": False, "reason": f"持仓/挂单只数已满（{occupied}/{max_pos}，{cap_note}）"}
 
     # confirm 触发的确定性要求：非买点路径必须 cert=高（宁缺毋滥，KB-TRADE-11）
     if trigger == "confirm" and certainty_level != "高":
         return {"opened": False, "reason": f"confirm 触发但确定性 {certainty_level or '未知'} ≠ 高"}
 
-    # 总敞口约束：现持仓市值 / 初始资金 < 总上限
+    # 总敞口约束： (现持仓市值 + 买入挂单冻结额) / 初始资金 < 总上限
+    # 冻结额必须计入——挂单的钱已经从可用资金里划走、又不在持仓市值内（R01 同源口径），
+    # 漏掉它会让「已占用多少仓位」系统性偏低，从而在资金已投出的情况下继续加仓。
     try:
         acc = engine.ensure_account()
         initial = float(acc.initial_cash or 1_000_000.0)
         exposure = sum((p.get("last_price") or p.get("cost_price") or 0) * p.get("quantity", 0) for p in held)
+        exposure += float(engine.frozen_cash())
         if exposure / initial >= total_cap:
             return {"opened": False, "reason": f"总敞口 {exposure / initial:.0%} 已达上限 {total_cap:.0%}"}
         weight = role_weight(role)
@@ -170,6 +230,33 @@ async def maybe_open(
     if getattr(order, "status", "") == "rejected":
         reason = getattr(order, "reason", "rejected")
         return {"opened": False, "reason": f"撮合拒绝：{reason}"}
+
+    if getattr(order, "status", "") != "filled":
+        # 挂单**已受理但未成交**（限价未达现价）——R09：此处旧实现一路按成交处理，
+        # 后果是「挂单」被记成「已开仓」并发 position_open 通知（用户以为已建仓）。
+        # 台账仍要留痕（本模块契约：决策全程可复盘），但用**可区分的 action**，
+        # 使按 `action == "open"` 统计已开仓的消费方不被误导。
+        plan = load_plan()
+        plan["decisions"].append(
+            {
+                "ts": beijing_now().strftime("%H:%M:%S"),
+                "symbol": symbol, "name": name, "trigger": trigger,
+                "action": "open_pending", "qty": qty, "price": price,
+                "weight": weight, "total_cap": total_cap, "role": role,
+                "order_id": getattr(order, "id", None),
+                "reason": f"{cap_note}；限价 {price} 未达现价，挂单已受理、等待撮合",
+            }
+        )
+        save_plan(plan)
+        log.info(
+            "[仓位引擎] 开仓挂单受理未成交 %s %s %d 股 @ 限价 %s（%s）",
+            symbol, name, qty, price, cap_note,
+        )
+        return {
+            "opened": False, "accepted": True, "pending": True,
+            "qty": qty, "price": price, "order_id": getattr(order, "id", None),
+            "reason": f"挂单受理未成交（限价 {price} 未达现价），等待撮合",
+        }
 
     filled = getattr(order, "filled_price", None) or price
     plan = load_plan()

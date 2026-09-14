@@ -270,7 +270,18 @@ async def review_scheduler(
             ymd = today.strftime("%Y%m%d")
             if (now.hour, now.minute) >= (run_hour, run_minute):
                 days = await tc.trading_days(service.hub.provider)
-                if tc.is_trade_day(days, today) and not report_exists(service.session_factory, ymd):
+                # 三态（F7，2026-09-14）：`is_trade_day(days, today)` 在日历未覆盖
+                # 今天时返回 False ⇒ 复盘调度静默跳过。unknown 不得塌缩成
+                # 「确认休市」——本调度每 tick 轮询，故未判定时跳过本拍即可自愈，
+                # 但必须**可见**（记日志），否则无从判断「今天是休市还是判定不了」。
+                day_state = tc.is_trade_day_on(today, days)
+                if day_state is None:
+                    log.warning(
+                        "review scheduler: %s 日历未覆盖今天或源不可用（未判定）"
+                        "⇒ 本拍跳过，等待重试",
+                        today,
+                    )
+                elif day_state and not report_exists(service.session_factory, ymd):
                     log.info("review scheduler trigger: %s", today)
                     try:
                         await service.run(today)

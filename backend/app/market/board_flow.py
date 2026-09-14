@@ -25,8 +25,13 @@
 - 双域 failover：push2 → push2delay（延迟口径显式标注），全败 available=False。
 
 ## 落盘（读路径零外呼，性能第一）
-- data/boardflow/daily.json：收盘后（≥15:05）快照两 kind Top50 榜位 + Top50 行 + Top20/kind 成员
-  Top20；保留 60 交易日。排名Δ = 今日榜位 − 昨日落盘榜位（正=上升）。
+- data/boardflow/daily.json：**交易日**收盘后（≥15:05）快照两 kind Top50 榜位 + Top50 行 +
+  Top20/kind 成员 Top20；保留 60 交易日。排名Δ = 今日榜位 − 昨日落盘榜位（正=上升）。
+  ⚠️ 「交易日」闸门是 2026-09-14 补的（F5）：此前只判时刻，**非交易日也会写**一个以
+  当天（周六/周日）为键的快照 —— 源在非交易日返回上一交易日终值，键却是今天，
+  实测污染 daily.json 的 2026-09-12 / 2026-09-13 两条（与 09-11 逐字节相同）。
+  危害不止多两行：`_yesterday_ranks` 取「< today 的最新一天」，周末那条会被当成
+  「昨日榜位」，使下一个交易日的排名Δ整体错位一天。
 - data/boardflow/daykline.json：Top20/kind 板块日度主力净额序列（≤120 bar/板块，收盘快照时刷新）。
   连续流入天数与 20 日区间只从这里算，读路径不外呼。
 - 紧凑数组落盘：boards=[code,name,主力净额亿,主力占比,涨跌幅]；members=[code,name,主力净额亿,主力占比]。
@@ -474,6 +479,13 @@ _TOP_MEMBER_BOARDS = 20   # 成员 Top20 + daykline 的沉淀深度（每 kind�
 _DAYS_RETENTION = 60      # daily.json 保留交易日数
 _BARS_RETENTION = 120     # daykline.json 每板块保留 bar 数
 
+#: 交易日闸门（F5，2026-09-14）。⚠️ 必须是**可注入的间接层**：测试 monkeypatch
+#: `bf._is_trade_day` 即可固定判定，**不得**在函数体内直接调
+#: `trade_calendar.is_trade_day_on(...)` —— 那样闸门读的是系统日历，
+#: 而夹具把 `bf.beijing_now` 钉在 2026-09-07（周一）⇒ 周末/节假日跑测试必红，
+#: 「一周只有几天绿的守卫等于没写」（见 kb 门禁纪律）。
+_is_trade_day = trade_calendar.is_trade_day_on
+
 
 async def _fetch_board_dayk(board_code: str) -> list | None:
     """push2his fflow daykline → [[date, main_yi, close_pct]]（含今日 bar 由快照时机保证收盘后拉取）。重试 3 次。
@@ -527,17 +539,28 @@ async def _gather_bounded(coros, limit: int = 5):
 
 
 async def snapshot_daily_if_closed() -> bool:
-    """收盘后（≥15:05）且当日未落盘时沉淀：两 kind Top50 榜位/行 + Top20/kind 成员 Top20 + daykline。
+    """收盘后（≥15:05）**且当日为交易日**、且当日未落盘时沉淀：两 kind Top50 榜位/行 + Top20/kind 成员 Top20 + daykline。
 
     由 review_intraday 调度 tick 调用（15:00-23:00 窗口内每分钟尝试，当日幂等）。
     返回是否写入。任何子项失败只跳过该子项并 warning，不阻塞其余沉淀。
+
+    **交易日闸门（F5，2026-09-14）两道，只在能确定时拦截**（三态纪律）：
+      ① 日历已明确 ⇒ `_is_trade_day(today)` 为 `False`（周末 / 节假日）⇒ 直接跳过；
+      ② 日历未覆盖今天（`None`）⇒ **不阻断**，改用「源数据自身的末日」反推：
+         非交易日时源返回的是上一交易日终值 ⇒ 所有 daykline 末根日期都 < 今天。
+    判据 ② 取不到末日（dayk 全部拉取失败）时**放行** —— 宁可多写一行（下一分钟被
+    幂等挡住），也不因源抖动漏掉真实交易日的数据；调度每分钟重试，误跳过可自愈。
     """
     now = beijing_now()
     if (now.hour, now.minute) < (_SNAPSHOT_HOUR, _SNAPSHOT_MINUTE):
         return False
+    today_d = now.date()
+    trade_day = _is_trade_day(today_d)
+    if trade_day is False:
+        return False  # 周末 / 日历已明确今天休市 ⇒ 确定非交易日，不落盘
     daily = _read_store_memo(_DAILY_STORE, "daily") or {"days": {}}
     days: dict = daily.get("days") or {}
-    today = now.date().isoformat()
+    today = today_d.isoformat()
     if today in days:
         return False
 
@@ -545,6 +568,7 @@ async def snapshot_daily_if_closed() -> bool:
     boards_store: dict = dayk_store.get("boards") or {}
 
     snap_day: dict = {"ranks": {}, "boards": {}, "members": {}}
+    observed: str | None = None  # 源数据末日：各板块 dayk 末根日期取最大（判据 ②）
     for kind in ("concept", "industry"):
         rows, _deg = await get_board_list(kind)
         if not rows:
@@ -570,6 +594,9 @@ async def snapshot_daily_if_closed() -> bool:
         for code, bars in zip(member_codes, dayks):
             if not bars:
                 continue
+            d_max = max(b[0] for b in bars)
+            if observed is None or d_max > observed:
+                observed = d_max
             name = next((r["name"] for r in top if r["board_code"] == code), code)
             old = (boards_store.get(code) or {}).get("bars") or []
             merged = {b[0]: b for b in old}
@@ -581,6 +608,15 @@ async def snapshot_daily_if_closed() -> bool:
                 "updated_at": now.isoformat(timespec="seconds"),
                 "bars": sorted(merged.values(), key=lambda b: b[0])[-_BARS_RETENTION:],
             }
+
+    if trade_day is None and observed is not None and observed < today:
+        # 判据 ②：日历未覆盖，但源数据末日早于今天 ⇒ 今天不是交易日（源在非交易日
+        # 只会返回上一交易日终值）。**不落盘**，避免造出与上一交易日同值的假快照。
+        log.info(
+            "boardflow snapshot skipped: 日历未覆盖 %s 且源数据末日 %s < 今日 ⇒ 判定非交易日",
+            today, observed,
+        )
+        return False
 
     days[today] = snap_day
     daily["days"] = {d: v for d, v in sorted(days.items())[-_DAYS_RETENTION:]}

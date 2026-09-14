@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace as NS
 
 import duckdb
 import pytest
 
+from app.core.bjtime import beijing_now
 from app.market import lhb_archive
 from app.picks import board_surge as bs
 from app.picks import distinctiveness as dv
@@ -130,6 +131,70 @@ def test_format_candidates_none_when_unavailable():
         {"symbol": "600519", "score": 82.0}, {"symbol": "000001", "score": None}]},
         names={"600519": "贵州茅台"})
     assert line == "辨识度候选：贵州茅台(82)"
+
+
+# ------------------------------------------------- R26 窗口单位与口径（2026-09-14）
+
+
+def test_skyrocket_window_ignores_stale_records(tmp_path):
+    """R26：飙升榜窗口必须真的截断——过期记录不得计入。
+
+    原实现 ``beijing_now().timestamp() - days * DAY_MS`` 是**秒减毫秒**，
+    截断点被推到约 1962 年 ⇒ ``ts >= cutoff`` 恒真，**26 年前的记录也计入**。
+    回退即红：本断言会变成 3（三条全部计入）。
+    """
+    today = beijing_now().date()
+    sky = tmp_path / "skyrocket.jsonl"
+    recs = [
+        {"date": "2000-01-01", "symbol": "600519"},                                # 26 年前
+        {"date": (today - timedelta(days=100)).isoformat(), "symbol": "600519"},    # 超窗
+        {"date": (today - timedelta(days=59)).isoformat(), "symbol": "600519"},     # 窗内
+    ]
+    sky.write_text("\n".join(json.dumps(r) for r in recs) + "\n", encoding="utf-8")
+
+    hits = dv.load_skyrocket_hits({"600519"}, path=sky)
+
+    assert hits.get("600519") == 1, f"只应计入窗内 1 条，实际 {hits.get('600519')}"
+
+
+def test_skyrocket_window_boundary_is_60_days(tmp_path):
+    """边界：第 60 天内的计入、第 61 天起不计入（两侧各取一例，避免只测一端）。"""
+    today = beijing_now().date()
+    sky = tmp_path / "skyrocket.jsonl"
+    recs = [
+        {"date": (today - timedelta(days=59)).isoformat(), "symbol": "600519"},
+        {"date": (today - timedelta(days=61)).isoformat(), "symbol": "600519"},
+    ]
+    sky.write_text("\n".join(json.dumps(r) for r in recs) + "\n", encoding="utf-8")
+
+    assert dv.load_skyrocket_hits({"600519"}, path=sky).get("600519") == 1
+
+
+def test_kline_window_is_bar_counted():
+    """R26：涨幅窗口按 60 **根**裁剪，更早的历史涨幅不得计入。
+
+    构造「前 20 根每天 +10%、后 60 根横盘」：裁到最近 60 根后应得 0；
+    若不裁剪（旧行为按自然日取数）会得 19 —— 回退即红。
+    """
+    bars: list[tuple] = []
+    price = 100.0
+    for i in range(20):                      # 前 20 根：每天 +10%（≥9.8%）
+        price *= 1.10
+        bars.append((i * dv.DAY_MS, price, 1000.0))
+    for i in range(20, 80):                  # 后 60 根：横盘
+        bars.append((i * dv.DAY_MS, price, 1000.0))
+
+    f = dv._kline_features(bars)
+
+    assert f["up_98pct_60d"] == 0, "窗口应只含最近 60 根（横盘段），早期 +10% 不得计入"
+
+
+def test_kline_feature_name_is_honest_not_limit_up():
+    """口径标注（R26）：固定 9.8% 阈值 ⇒ 字段名不得叫「涨停」（20cm/北交所会漏计）。"""
+    f = dv._kline_features([(0, 100.0, 1000.0), (dv.DAY_MS, 111.0, 1000.0)])
+    assert "up_98pct_60d" in f and "limit_up_60d" not in f
+    assert f["up_98pct_60d"] == 1
+
 
 
 # ---------------------------------------------------------------- B：资金面接线

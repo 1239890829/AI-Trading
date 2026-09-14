@@ -5,6 +5,10 @@
   保守执行口径，剔除隔夜跳空虚增；fwd_close_1（T 收盘进）仅作损耗对比，不参与判定；
 - T+1 一字板（nb1_high = nb1_low）样本剔除——涨停一字买不进；
 - 每日截面 <30 只的 IC 不计入聚合（小截面失真）；
+- **收益量纲（R17，2026-09-14 修）**：`fwd = f{h}/f1 - 1` 是 T+1 收盘 → T+h 收盘的
+  **期间收益**，持有 **h−1 个交易日**——**不是日收益**。年化只能按 `243/(h−1)` 线性缩放，
+  且该缩放值在**重叠持有**下**不可实现** ⇒ 一律标 `*_ann_pct` + 显式 `simple_linear`
+  口径标签，可实现的组合年化走净值曲线（本模块不产出，字段三态为 `None`）；
 - 复权口径：因子与前瞻收益全用 close_adj；gap/range20 例外（未复权 + 过滤/稀释，
   见 library.py note）。
 
@@ -43,13 +47,21 @@ log = logging.getLogger(__name__)
 IC_ABS_MIN = 0.02          # |RankIC 均值| 下限
 ICIR_ABS_MIN = 0.30        # |ICIR|（IC 均值/IC 标准差，非年化）下限
 YEAR_CONSISTENCY_MIN = 0.60  # 分年 IC 与全期同号年份占比下限
-LS_ANN_MIN = 0.03          # Q5-Q1 多空年化差下限（与 IC 同号）
+# Q5-Q1 多空差下限（与 IC 同号）。**单位口径（R17）**：分母是「期间收益 × 243/(h−1)」
+# ——简单线性年化的**近似值**，重叠持有下不是可实现年化收益，仅作跨窗口量纲可比。
+LS_ANN_MIN = 0.03
 SAME_DIR_PAIRS_MIN = 3     # 五分位相邻 4 对中至少 3 对与多空方向一致
 COVERAGE_MIN = 0.90        # 截面覆盖率下限
 IC_CORR_DEDUP = 0.70       # 因子间 IC 相关去重阈值
 MIN_CROSS_SECTION = 30     # 每日截面最少股票数
 DAYS_PER_YEAR = 243        # A 股年均交易日（年化用）
 ROLLING_WINDOW_DAYS = 250  # 滚动衰减监控窗口（约 1 年，制度 §6.1/§7.2）
+
+#: 算法口径版本（R15-R17 验收：算法口径变化必须能定位到受影响产物）。
+#: 2026-09-14 变更：① 年化由「期间收益误当日收益 ×243」改为「期间收益 ×243/(h−1)」（近似）；
+#: ② 年度多空由「只取 Q5」改为「同年 Q5 − Q1」；③ **IC 按窗口分别排名与过滤**
+#: （成熟样本内排名 + `n{h} >= MIN_CROSS_SECTION`）。旧报告结论保留为 `verdict_prev` 并标待复核。
+ALGO_VERSION = "2026-09-14.ic-maturity-v3"
 
 #: 数据质量硬结论（2026-09-07 marketdb 实测，docs/summary/factor-system.md §1.4）
 DATA_QUALITY_NOTES = {
@@ -195,12 +207,34 @@ lvl4 AS (
 
 
 def _base_sql(factor: FactorDef) -> str:
-    """单因子日 IC 全流程：base 链 → scored(因子+fwd+一字过滤) → ranked → daily。"""
-    horizons_sql = ", ".join(f"corr(rf, rr{h}) AS ic{h}" for h in HORIZONS_EXEC)
+    """单因子日 IC 全流程：base 链 → scored(因子+fwd+一字过滤) → ranked → daily。
+
+    **成熟度口径（R16，2026-09-14 修）**：`percent_rank() OVER (PARTITION BY date_ms
+    ORDER BY fwd_h)` 会给 **NULL 也分配名次**（窗口排序把 NULL 排在分区端点），
+    于是「T+h 尚未到来」的样本会带着一个**假名次**混进 `corr(rf, rr{h})` 的配对里；
+    而 `n` 用的是**全部截面**，最小截面守卫因此被虚增样本绕过
+    （审查复现：截面 32 只、20 日窗口仅 24 只有标签，SQL 仍报 n=32 且 ic20 为有限数）。
+
+    两处修法都必要（`kb/09` KB-ENG-72：**修判据 ≠ 修守卫，两件事都要做**）：
+    ① **按窗口分别排名**——`PARTITION BY date_ms, (fwd_exec_h IS NOT NULL)`
+       把每个交易日切成「该窗口已成熟 / 未成熟」两个分区，成熟分区内的 `percent_rank`
+       就是在**成熟样本内部**的名次（未成熟分区取出的值一律被 CASE 置 NULL）；
+    ② **按窗口分别过滤**——`daily` 输出各窗口自己的成熟计数 `n{h}`（close 口径 `nc{h}`），
+       守卫改用 `n{h} >= MIN_CROSS_SECTION`（见 `_mature_key` / `_agg_window`）。
+
+    `n`（全部截面）保留原义，只用于覆盖率——覆盖率统计的是「有因子值的截面」，
+    与某窗口是否成熟无关，滤掉会虚增覆盖率。
+    """
+    horizons_sql = ", ".join(f"corr(rf{h}, rr{h}) AS ic{h}" for h in HORIZONS_EXEC)
     rank_sql = ", ".join(
-        f"percent_rank() OVER (PARTITION BY date_ms ORDER BY fwd_exec_{h}) AS rr{h}"
+        f"percent_rank() OVER (PARTITION BY date_ms, (fwd_exec_{h} IS NOT NULL) "
+        f"ORDER BY f) AS rf{h}, "
+        f"CASE WHEN fwd_exec_{h} IS NOT NULL THEN percent_rank() OVER "
+        f"(PARTITION BY date_ms, (fwd_exec_{h} IS NOT NULL) "
+        f"ORDER BY fwd_exec_{h}) END AS rr{h}"
         for h in HORIZONS_EXEC
     )
+    n_sql = ", ".join(f"count(fwd_exec_{h}) AS n{h}" for h in HORIZONS_EXEC)
     fwd_sql = ", ".join(
         f"f{h} / NULLIF(f1, 0) - 1 AS fwd_exec_{h}" for h in HORIZONS_EXEC
     )
@@ -216,20 +250,31 @@ scored AS (
 ),
 ranked AS (
     SELECT *,
-           percent_rank() OVER (PARTITION BY date_ms ORDER BY f) AS rf,
            {rank_sql},
-           percent_rank() OVER (PARTITION BY date_ms ORDER BY fwd_close_{HORIZON_CLOSE}) AS rrc1
+           percent_rank() OVER (PARTITION BY date_ms, (fwd_close_{HORIZON_CLOSE} IS NOT NULL)
+                                ORDER BY f) AS rfc{HORIZON_CLOSE},
+           CASE WHEN fwd_close_{HORIZON_CLOSE} IS NOT NULL THEN percent_rank() OVER
+                (PARTITION BY date_ms, (fwd_close_{HORIZON_CLOSE} IS NOT NULL)
+                 ORDER BY fwd_close_{HORIZON_CLOSE}) END AS rrc{HORIZON_CLOSE}
     FROM scored
     WHERE f IS NOT NULL
 ),
 daily AS (
-    SELECT date_ms, COUNT(*) AS n, {horizons_sql},
-           corr(rf, rrc1) AS icc{HORIZON_CLOSE}
+    SELECT date_ms, COUNT(*) AS n, {n_sql},
+           count(fwd_close_{HORIZON_CLOSE}) AS nc{HORIZON_CLOSE},
+           {horizons_sql},
+           corr(rfc{HORIZON_CLOSE}, rrc{HORIZON_CLOSE}) AS icc{HORIZON_CLOSE}
     FROM ranked
     GROUP BY date_ms
 )
 SELECT * FROM daily ORDER BY date_ms
 """
+
+
+#: 各窗口的**成熟样本数**列名（R16）：执行口径 `n{h}`、close 口径 `nc{h}`。
+#: 两个口径必须分开命名——`HORIZON_CLOSE` 若与某个执行窗口同值时用同一列名会串。
+def _mature_key(horizon: int) -> str:
+    return f"nc{horizon}" if horizon == HORIZON_CLOSE else f"n{horizon}"
 
 
 def _quintile_sql(factor: FactorDef, horizon: int) -> str:
@@ -271,13 +316,24 @@ class WindowStats:
     consistency: float | None = None  # 分年同号占比
 
 
-def _agg_window(daily: list[dict], horizon: int, ic_all: float) -> WindowStats | None:
+def _agg_window(
+    daily: list[dict], horizon: int, ic_all: float, *,
+    n_key: str | None = None, min_cross_section: int = MIN_CROSS_SECTION,
+) -> WindowStats | None:
+    """聚合单窗口的日 IC 序列。
+
+    **R16（2026-09-14）**：`n_key` 给定时，逐日按**该窗口自己的成熟截面数**
+    再执行一次 `MIN_CROSS_SECTION` —— 旧实现只在调用方按共享的 `n`（全部截面）筛一次，
+    而 `n{h} <= n` 恒成立 ⇒ 三十只里只有二十只有 20 日标签的日子照样计入 IC，
+    守卫形同虚设。判据本身（30）不变，变的是它的**输入**。
+    """
     key = f"ic{horizon}"
     # NaN 防御：截面零方差（同涨同跌日）时 corr = 0/0 = NaN，不得混入统计
     pts = [
         (r["date_ms"], r[key]) for r in daily
         if r.get(key) is not None and isinstance(r[key], (int, float))
         and not math.isnan(r[key])
+        and (n_key is None or int(r.get(n_key) or 0) >= min_cross_section)
     ]
     ics = [ic for _, ic in pts]
     if len(ics) < 30:
@@ -308,25 +364,76 @@ def _agg_window(daily: list[dict], horizon: int, ic_all: float) -> WindowStats |
     )
 
 
-def _judge_quintiles(qrows: list[dict]) -> dict:
-    """全期五分位 → 多空差/单调性/年化。q1=因子值最低组，q5=最高组。"""
+def _judge_quintiles(qrows: list[dict], horizon: int) -> dict:
+    """全期五分位 → 多空差/单调性/年化。q1=因子值最低组，q5=最高组。
+
+    **量纲契约（R17，2026-09-14 修）**：`_quintile_sql` 的 `fwd = f{h}/f1 - 1` 是
+    **T+1 收盘 → T+h 收盘的期间收益**，持有期 = `horizon - 1` 个交易日。
+    旧实现把期间收益命名为 `q_avg_daily` 并直接 `×243`——19 日的 2% 被报成 486%。
+    本函数把三种量**分开命名、分开返回**，不再混用：
+
+    - `q_avg_period` / `long_short_period` —— **期间收益**（一手量，缩放前）；
+    - `q_avg_daily_approx` —— 期间收益 ÷ (h−1)，**日均近似**；
+    - `q_avg_ann_simple_pct` / `long_short_ann_pct` —— 期间收益 × 243/(h−1)，
+      **简单线性年化，仅为近似**：样本内每日都在建仓，同一时刻有 h−1 个重叠批次，
+      该缩放值**不是可实现的年化收益**，只用于跨窗口量纲可比；
+    - `implementable_annual_return_pct` —— **恒为 None**（三态显式「未判定」）：
+      可实现的组合年化必须来自逐日建仓/持仓的净值曲线，本模块不产出，
+      **不得**用上面的缩放值冒充（审查 R17 验收第 4 条）。
+
+    `yearly_ls_*` 为**同年 Q5 − Q1**（旧实现只取 Q5、不减 Q1——那仍是含市场 beta
+    的绝对收益，不是多空收益）。
+    """
+    hold_days = horizon - 1
+    if hold_days < 1:
+        raise ValueError(f"horizon 必须 ≥2（持有期 = horizon−1 个交易日），实收 {horizon}")
     allq = {r["q"]: r["avg_fwd"] for r in qrows if r["yr"] == "ALL"}
     if len(allq) < 5:
         return {"available": False, "reason": "分位组不足 5（截面过小）"}
+
+    def _ann_pct(period: float) -> float:
+        """期间收益 → 简单线性年化百分数（近似，**非**可实现年化收益）。"""
+        return round(period * DAYS_PER_YEAR / hold_days * 100, 2)
+
     ls = allq[5] - allq[1]
     diffs = [allq[i + 1] - allq[i] for i in range(1, 5)]
     direction = math.copysign(1, ls) if ls != 0 else 0.0
     same_pairs = sum(1 for d in diffs if d != 0 and math.copysign(1, d) == direction)
+
+    # 分年多空：同年 Q1 与 Q5 必须都在，缺一组则该年不产出（三态，不凑 0）
+    by_year: dict[str, dict[int, float]] = {}
+    for r in qrows:
+        if r["yr"] == "ALL":
+            continue
+        by_year.setdefault(r["yr"], {})[r["q"]] = r["avg_fwd"]
+    yearly_period = {
+        y: round(qs[5] - qs[1], 6)
+        for y, qs in sorted(by_year.items()) if 1 in qs and 5 in qs
+    }
+
     return {
         "available": True,
-        "q_avg_daily": {str(k): round(v, 6) for k, v in sorted(allq.items())},
-        "q_ann": {str(k): round(v * DAYS_PER_YEAR * 100, 2) for k, v in sorted(allq.items())},
-        "long_short_ann_pct": round(ls * DAYS_PER_YEAR * 100, 2),
-        "monotonic_pairs": same_pairs,  # /4
-        "yearly_ls_ann_pct": {
-            r["yr"]: round((r["avg_fwd"] - 0.0) * DAYS_PER_YEAR * 100, 2)
-            for r in qrows if r["yr"] != "ALL" and r["q"] == 5
+        "horizon": horizon,
+        "hold_days": hold_days,
+        "annualization": "simple_linear",  # 期间收益 × 243/(h−1)，近似
+        "q_avg_period": {str(k): round(v, 6) for k, v in sorted(allq.items())},
+        "q_avg_daily_approx": {
+            str(k): round(v / hold_days, 8) for k, v in sorted(allq.items())
         },
+        "q_avg_ann_simple_pct": {str(k): _ann_pct(v) for k, v in sorted(allq.items())},
+        "long_short_period": round(ls, 6),
+        "long_short_ann_pct": _ann_pct(ls),
+        "monotonic_pairs": same_pairs,  # /4
+        "yearly_ls_period": yearly_period,
+        "yearly_ls_ann_pct": {y: _ann_pct(v) for y, v in yearly_period.items()},
+        # 三态：本模块不产出可执行组合曲线 ⇒ 可实现的年化收益「未判定」，
+        # 不得用上面的缩放值顶替（审查 R17 验收第 4 条）
+        "implementable_annual_return_pct": None,
+        "note": (
+            f"期间收益 = T+1→T+{horizon} 收盘（持有 {hold_days} 个交易日）；"
+            f"年化 = 期间收益 × {DAYS_PER_YEAR}/{hold_days}（简单线性，近似）；"
+            "样本内每日重叠建仓 ⇒ 该缩放值非可实现年化收益"
+        ),
     }
 
 
@@ -338,19 +445,38 @@ def evaluate_factor(con, factor: FactorDef, market_daily: dict[int, int]) -> dic
 
     # 协议排除（MIN_CROSS_SECTION）：每日截面 <30 只的 IC 不计入聚合（小截面失真）。
     # 覆盖率统计**不含**此过滤——小截面日是真实的覆盖信号，滤掉会虚增覆盖率。
+    # R16：这里只是「整体截面」的粗筛（n_h ≤ n，故不会放过 n_h 不足的日子）；
+    # **真正生效的判据**在 `_agg_window` 里按各窗口成熟计数 `n{h}` 再筛一次。
     daily_ic = [r for r in daily if r["n"] >= MIN_CROSS_SECTION]
+
+    # 成熟度留痕（R16）：每个窗口的成熟样本均值与成熟率 —— 「n 是多少只」必须能被看见，
+    # 否则"截面 32 只"与"该窗口只有 24 只有标签"这两种完全不同的输入会长得一模一样。
+    maturity: dict[str, dict] = {}
+    for h in (*HORIZONS_EXEC, HORIZON_CLOSE):
+        k = _mature_key(h)
+        usable = [r for r in daily if r.get(k) is not None]
+        m_sum = sum(int(r[k]) for r in usable)
+        n_sum = sum(int(r["n"]) for r in usable)
+        maturity[str(h)] = {
+            "days": len(usable),
+            "days_ge_min": sum(1 for r in usable if int(r[k]) >= MIN_CROSS_SECTION),
+            "mean_mature": round(m_sum / len(usable), 1) if usable else None,
+            "mature_rate": round(m_sum / n_sum, 4) if n_sum else None,
+        }
 
     wins: dict[int, WindowStats] = {}
     ic_series: dict[int, list[tuple[int, float]]] = {}
     for h in (*HORIZONS_EXEC, HORIZON_CLOSE):
-        w = _agg_window(daily_ic, h, ic_all=0.0)  # consistency 需 ic_all，二次填充
+        n_key = _mature_key(h)
+        w = _agg_window(daily_ic, h, ic_all=0.0, n_key=n_key)  # consistency 需 ic_all，二次填充
         if w is not None:
-            w2 = _agg_window(daily_ic, h, ic_all=w.ic_mean)
+            w2 = _agg_window(daily_ic, h, ic_all=w.ic_mean, n_key=n_key)
             wins[h] = w2
-            # 与 _agg_window 同口径过滤 NaN（截面零方差日的 corr=NaN 不得进入序列）
+            # 与 _agg_window 同口径过滤：NaN（截面零方差日）+ 该窗口成熟截面不足
             ic_series[h] = [
                 (r["date_ms"], r[f"ic{h}"]) for r in daily_ic
-                if r.get(f"ic{h}") is not None and not math.isnan(r[f"ic{h}"])
+                if int(r.get(n_key) or 0) >= MIN_CROSS_SECTION
+                and r.get(f"ic{h}") is not None and not math.isnan(r[f"ic{h}"])
             ]
 
     exec_wins = {h: w for h, w in wins.items() if h in HORIZONS_EXEC}
@@ -367,6 +493,7 @@ def evaluate_factor(con, factor: FactorDef, market_daily: dict[int, int]) -> dic
             "coverage": None, "windows": {}, "verdict": "FAIL",
             "reasons": ["有效交易日样本不足（<30 日截面）"],
             "daily_ic": {},
+            "maturity": maturity,
         }
     best_h = max(pool, key=lambda h: abs(pool[h].icir))
 
@@ -374,10 +501,10 @@ def evaluate_factor(con, factor: FactorDef, market_daily: dict[int, int]) -> dic
     cov_pairs = [r["n"] / market_daily[r["date_ms"]] for r in daily if r["date_ms"] in market_daily]
     coverage = round(_mean(cov_pairs), 4) if cov_pairs else None
 
-    # 主窗口五分位
+    # 主窗口五分位（必须传 best_h：年化缩放系数 = 243/(h−1)，R17）
     qrows = con.execute(_quintile_sql(factor, best_h)).fetchall()
     qcols = [d[0] for d in con.description]
-    quint = _judge_quintiles([dict(zip(qcols, r)) for r in qrows])
+    quint = _judge_quintiles([dict(zip(qcols, r)) for r in qrows], best_h)
 
     w = wins[best_h]
     reasons: list[str] = []
@@ -390,6 +517,8 @@ def evaluate_factor(con, factor: FactorDef, market_daily: dict[int, int]) -> dic
         ls_ann is not None
         and math.copysign(1, ls_ann) == math.copysign(1, w.ic_mean)
     )
+    # 分层准入：|多空年化| 门槛。**单位是百分数**，且该值是 243/(h−1) 线性缩放的近似
+    # （重叠持有下非可实现收益）——阈值本身不变，但缩放系数修正后判定会自然变严（R17）。
     layered_ok = (
         quint.get("available")
         and ls_ann is not None and abs(ls_ann) >= LS_ANN_MIN * 100
@@ -403,7 +532,11 @@ def evaluate_factor(con, factor: FactorDef, market_daily: dict[int, int]) -> dic
     if not stable_ok:
         reasons.append(f"稳定性未过线：分年同号占比 {w.consistency}（需 ≥{YEAR_CONSISTENCY_MIN}）")
     if not layered_ok:
-        reasons.append(f"分层未过线：多空年化 {ls_ann}%、单调对 {mono}/4（需 |多空|≥{LS_ANN_MIN * 100}% 同号且 ≥{SAME_DIR_PAIRS_MIN}/4）")
+        reasons.append(
+            f"分层未过线：多空年化 {ls_ann}%"
+            f"（= 期间收益 ×{DAYS_PER_YEAR}/{best_h - 1} 的简单线性近似）、"
+            f"单调对 {mono}/4（需 |多空|≥{LS_ANN_MIN * 100}% 同号且 ≥{SAME_DIR_PAIRS_MIN}/4）"
+        )
     if not cov_ok:
         reasons.append(f"覆盖率未过线：{coverage}（需 ≥{COVERAGE_MIN}）")
 
@@ -455,6 +588,7 @@ def evaluate_factor(con, factor: FactorDef, market_daily: dict[int, int]) -> dic
             for h, v in wins.items()
         },
         "quintile": quint,
+        "maturity": maturity,  # R16：各窗口成熟样本均值 / 成熟率 / 过线天数
         "verdict": verdict,
         "reasons": reasons,
         "daily_ic": {str(h): ic_series.get(h, []) for h in (best_h,)},
@@ -462,6 +596,51 @@ def evaluate_factor(con, factor: FactorDef, market_daily: dict[int, int]) -> dic
 
 
 # ---------------------------------------------------------------- 全量评估
+def _prev_verdicts(out_path: str | Path | None) -> dict[str, str]:
+    """读取**将被覆盖**的旧报告的逐因子结论。
+
+    R15-R17 验收要求「旧结论保留并标待复核，修复不自动把通过改失败」——
+    口径修复会改变量纲与阈值判定，因此重算前先把旧结论取出来做差，
+    让 PASS→FAIL 这类翻转**显式留痕**而不是被静默覆盖。
+    旧报告缺失 / 损坏 = 无旧结论（返回 {}，不阻塞评估）。
+    """
+    if out_path is None:
+        return {}
+    try:
+        p = Path(out_path)
+        if not p.exists():
+            return {}
+        old = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001  旧报告损坏等同无旧结论
+        return {}
+    entries = old.get("factors") if isinstance(old, dict) else None
+    if not isinstance(entries, list):
+        return {}
+    return {
+        e["name"]: e.get("verdict") for e in entries
+        if isinstance(e, dict) and e.get("name")
+    }
+
+
+def _annotate_verdict_changes(results: list[dict], prev: dict[str, str]) -> list[dict]:
+    """给每个因子挂上旧结论（`verdict_prev`）与翻转标记（`verdict_changed`/`recheck`）。
+
+    返回「待复核」清单（**纯函数**，便于单测——口径修复不静默翻转历史结论）。
+    """
+    recheck: list[dict] = []
+    for r in results:
+        v0 = prev.get(r["name"])
+        r["verdict_prev"] = v0
+        changed = v0 is not None and v0 != r["verdict"]
+        r["verdict_changed"] = changed
+        if changed:
+            r["recheck"] = "pending"
+            recheck.append({
+                "name": r["name"], "verdict_prev": v0, "verdict_now": r["verdict"],
+            })
+    return recheck
+
+
 def run_full_eval(db_path: str | Path, *, out_path: str | Path | None = None) -> dict:
     import duckdb
 
@@ -502,12 +681,44 @@ def run_full_eval(db_path: str | Path, *, out_path: str | Path | None = None) ->
                         f"与 {a['name']} 主窗口 IC 相关 {rho:.2f} ≥ {IC_CORR_DEDUP}（去重提示，人工取舍）"
                     )
 
+        # 口径版本追溯（R15-R17 验收）：与旧报告逐因子做差，旧结论保留为 verdict_prev，
+        # 翻转项标 recheck=pending——**修复不静默把通过改成失败**，翻转必须显式留痕待复核。
+        recheck = _annotate_verdict_changes(results, _prev_verdicts(out_path))
+
         report = {
             "generated_at": beijing_now().isoformat(timespec="seconds"),
+            "algo_version": ALGO_VERSION,
             "protocol": {
+                "algo_version": ALGO_VERSION,  # R15-R17：口径变更必须能定位到受影响产物
                 "signal": "T 收盘", "entry": "T+1 收盘（保守执行口径）",
                 "exit": [f"T+{h} 收盘" for h in HORIZONS_EXEC],
-                "exclusions": ["T+1 一字板", "每日截面 <30 只", "次新（cnt < min_bars）"],
+                "exclusions": [
+                    "T+1 一字板",
+                    f"每日截面 <{MIN_CROSS_SECTION} 只",
+                    "次新（cnt < min_bars）",
+                ],
+                # IC 截面口径（R16）：按窗口**分别**排名与过滤
+                "ic_maturity": {
+                    "ranking": "每个窗口在**自身已成熟样本内**排名（同日切成成熟/未成熟两分区）",
+                    "min_cross_section": MIN_CROSS_SECTION,
+                    "guard_input": "各窗口自己的成熟截面数 n{h}（close 口径 nc{h}），非全截面 n",
+                    "note": ("旧实现按全截面排名且以 n 守卫 ⇒ 未成熟样本带假名次进入 corr，"
+                             "截面 32 只而 20 日仅 24 只有标签的日子照样计入 IC"),
+                },
+                "recheck_policy": {
+                    "prev_verdict": "verdict_prev（来自被覆盖的旧报告）",
+                    "on_change": "verdict_changed=True 且 recheck='pending'（不静默改写旧结论）",
+                },
+                # 收益量纲口径（R17）：期间收益 → 简单线性年化，近似且不可实现
+                "annualization": {
+                    "period_return": "T+1 收盘 → T+h 收盘，持有 h−1 个交易日",
+                    "method": "simple_linear",
+                    "factor": "243/(h−1)",
+                    "approximation": True,
+                    "implementable": False,
+                    "note": ("样本内每日重叠建仓，同一时刻存在 h−1 个未平仓批次 ⇒ "
+                             "缩放值不是可实现的年化收益；可实现口径须走逐日净值曲线"),
+                },
                 "thresholds": {
                     "ic_abs_min": IC_ABS_MIN, "icir_abs_min": ICIR_ABS_MIN,
                     "year_consistency_min": YEAR_CONSISTENCY_MIN,
@@ -527,6 +738,8 @@ def run_full_eval(db_path: str | Path, *, out_path: str | Path | None = None) ->
             },
             "data_quality": DATA_QUALITY_NOTES,
             "factors": results,
+            # 口径变更引起的结论翻转（旧结论见各因子 verdict_prev）——待人工复核
+            "recheck": recheck,
             "summary": {
                 "pass": sorted(r["name"] for r in results if r["verdict"] == "PASS"),
                 "conditional": sorted(r["name"] for r in results if r["verdict"] == "CONDITIONAL"),

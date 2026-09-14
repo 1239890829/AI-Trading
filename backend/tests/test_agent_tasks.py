@@ -147,6 +147,33 @@ def test_reconcile_on_startup_marks_interrupted(monkeypatch, tmp_path):
     assert at.get_task("abc")["error"]["code"] == "Interrupted"
 
 
+def test_reconcile_on_startup_marks_stale_agenda_failed(monkeypatch, tmp_path):
+    """R11：残留 `generating` 的议程必须一并收敛（此前只管 AgentTask）。
+
+    不收敛的后果是**当天议程永久缺失且界面一直显示"生成中"**：
+    `generate_agenda` 见 status 非 failed 即返回同一份空快照，15:45 调度分支的
+    `existing["status"] == "failed"` 也永不满足 ⇒ 两条重试路径同时失效。
+    """
+    from app.models.agent import AgentAgenda
+
+    factory, _ = _patch(monkeypatch, tmp_path)
+    with factory() as db:
+        db.add(AgentTask(id="abc", type="review", status="running"))
+        db.add(AgentAgenda(date="2026-09-14", status="generating"))
+        db.add(AgentAgenda(date="2026-09-13", status="ready"))  # 已完成的不许动
+        db.commit()
+
+    n = at.reconcile_on_startup()
+    assert n == 2, "任务 1 + 议程 1"
+    with factory() as db:
+        stale = db.query(AgentAgenda).filter(AgentAgenda.date == "2026-09-14").one()
+        done = db.query(AgentAgenda).filter(AgentAgenda.date == "2026-09-13").one()
+    assert stale.status == "failed" and stale.finished_at is not None
+    assert json.loads(stale.error)["code"] == "Interrupted"
+    assert json.loads(stale.error)["retryable"] is True
+    assert done.status == "ready" and done.finished_at is None
+
+
 def test_list_tasks_filter_by_type(monkeypatch, tmp_path):
     _patch(monkeypatch, tmp_path)
     with at.get_session_factory()() as db:

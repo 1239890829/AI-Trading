@@ -244,7 +244,12 @@ def _tick_app() -> NS:
 
 
 def _tick(brief_dir, monkeypatch, *, now, last_run, trading=True):
-    """跑单步调度；返回 (last_run, build_and_save 是否被调用)。"""
+    """跑单步调度；返回 (last_run, build_and_save 是否被调用)。
+
+    `trading` 是**三态**（F7）：`True` / `False` / `None`（= 日历未覆盖或源不可用，
+    「未判定」）。桩直接把值原样返回，因此 `trading=None` 走到 `_premarket_tick`
+    的未判定分支。
+    """
     import asyncio
 
     calls: list[str] = []
@@ -258,7 +263,7 @@ def _tick(brief_dir, monkeypatch, *, now, last_run, trading=True):
         mb.save_brief(payload)  # 与真实 build_and_save 同行为：生成即落盘
         return payload
 
-    monkeypatch.setattr(mb, "_is_trading_day", fake_trading)
+    monkeypatch.setattr(mb, "_trade_day_state", fake_trading)
     monkeypatch.setattr(mb, "build_and_save", fake_build)
     new_last = asyncio.run(
         mb._premarket_tick(
@@ -298,6 +303,37 @@ def test_scheduler_skip_non_trading_day(brief_dir, monkeypatch):
     )
     assert built is False
     assert new_last == "20260905"  # 置位防整分钟重试，即便非交易日
+
+
+def test_scheduler_defers_when_calendar_unknown(brief_dir, monkeypatch):
+    """**未判定（日历未覆盖今天 / 源不可用）→ 不生成、且不置位 last_run**（F7 定点守卫）。
+
+    2026-09-14 实测事故：原实现把「日历覆盖不到今天」与「源不可用」都塌缩成
+    `False`（非交易日），而跳过分支**照常 `return key`** ⇒ 当日 `last_run == key`，
+    在 08:40–12:00 的历时时窗内**不再重试**，简报最终缺失
+    （`data/picks/briefs/20260914.json` 不存在，最新停在 09-11）。
+    本测试钉住两条：① 不触发生成；② 返回值**不等于当日 key**（= 未置位 ⇒ 可重试）。
+
+    *回退即红*：把 `_trade_day_state` 改回二态（`None` 当 `False`）⇒ `new_last`
+    变成 `"20260902"`，本测试立刻变红。
+    """
+    new_last, built = _tick(
+        brief_dir, monkeypatch, now=datetime(2026, 9, 2, 8, 41), last_run=None,
+        trading=None,
+    )
+    assert built is False
+    assert new_last == "", "未判定不得置位 last_run（否则当日不再重试）"
+    assert mb.load_brief("20260902") is None
+
+
+def test_scheduler_unknown_does_not_advance_existing_last_run(brief_dir, monkeypatch):
+    """未判定时也不得把 `last_run` **推进**到当日（同族：丧失重试的另一种写法）。"""
+    new_last, built = _tick(
+        brief_dir, monkeypatch, now=datetime(2026, 9, 2, 8, 41), last_run="20260901",
+        trading=None,
+    )
+    assert built is False
+    assert new_last == "20260901"  # 保留原值，不推进到当日
 
 
 def test_scheduler_not_due_after_noon(brief_dir, monkeypatch):

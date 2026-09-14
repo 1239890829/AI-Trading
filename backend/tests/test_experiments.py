@@ -21,6 +21,29 @@ def _factory(tmp_path, name="exp.db"):
     return sessionmaker(bind=engine)
 
 
+@pytest.fixture(autouse=True)
+def _clean_style_override():
+    """本文件**每个**用例后都还原 `style_router` 的全局 provider（顺序依赖，2026-09-14）。
+
+    为什么单靠下面的 `sf` fixture 不够：两条 shadow 流程用例
+    （`test_shadow_flow_promotes_mild_change` / `..._rejects_dramatic_change`）
+    **自建 sf**、不使用该 fixture，因此它们经 `promote_shadow → apply_change →
+    refresh_runtime_overrides` 注入的 provider（闭包持有 tmp 库的 sessionmaker）
+    会**留在全局**。后果不是"多一份缓存"，而是把 `style_router._load_override`
+    短路成 provider 优先 ⇒ 后续 `tests/test_style_router.py` 里所有读
+    `settings.picks_style_offsets_json` 的用例全部看不到自己的 monkeypatch。
+
+    实测：`pytest tests/test_experiments.py tests/test_style_router.py` 必红 2 例
+    （`test_config_override_merges` / `test_config_invalid_raises`），
+    而单独跑 test_style_router 全绿 —— 典型顺序依赖。基线（`dc2cc35`）复现一致，
+    与 R12 改动无关，是既有的隔离缺口。
+    """
+    yield
+    from app.picks.style_router import set_override_provider
+
+    set_override_provider(None)
+
+
 @pytest.fixture()
 def sf(tmp_path, monkeypatch):
     factory = _factory(tmp_path)
@@ -81,10 +104,38 @@ def test_due_experiment_degradation_auto_rolls_back(sf, monkeypatch):
     out = ex.conclude_due(sf)[0]
     assert out["status"] == "rolled_back"
     assert "自动回滚" in out["result"]["conclusion"]
+    assert out["result"]["rollback"]["runtime_value_restored"] is True
     # 变更单确实被回滚（覆盖层还原）
     from app.services.agent_params import current_value
 
     assert current_value("picks_style_offsets_json", session_factory=sf) == ""
+
+
+def test_auto_rollback_of_superseded_change_keeps_newer_value(sf, monkeypatch):
+    """R12：实验自动回滚一条**已被取代**的变更单时，只归档、不得覆盖新版本。
+
+    场景：A 生效并挂上 30 日实验 → 之后 B 生效取代 A → A 的实验到期判劣化。
+    旧实现会把 A 的 before 写回覆盖层，等于**一次数据裁决顺手撤销了 B**。
+    """
+    from app.services.agent_params import apply_change, current_value, propose
+
+    a = propose("picks_replace_threshold", "52", session_factory=sf)
+    apply_change(a["id"], session_factory=sf)
+    _seed_experiment(sf, baseline_win_rate=0.50, change_id=a["id"])
+    b = propose("picks_replace_threshold", "58", session_factory=sf)
+    apply_change(b["id"], session_factory=sf)
+
+    _mock_health(monkeypatch, win_rate=0.45)          # A 的实验判劣化 → 自动回滚 A
+    out = ex.conclude_due(sf)[0]
+
+    assert out["status"] == "rolled_back"
+    rb = out["result"]["rollback"]
+    assert rb["runtime_value_restored"] is False
+    assert rb["skipped_reason"] == "superseded"
+    assert rb["active_change_id"] == b["id"], "当前值的拥有者是 B"
+    assert current_value("picks_replace_threshold", session_factory=sf) == "58.0", (
+        "自动回滚陈旧变更不得把 B 的 58 退回 A 的 before"
+    )
 
 
 def test_insufficient_extends_window_never_fake_verdict(sf, monkeypatch):

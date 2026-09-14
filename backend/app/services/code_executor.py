@@ -215,7 +215,7 @@ def execute_c_item(item: dict, session_factory, agenda_date: str,
     files = [str(f) for f in (item.get("files") or [])]
     if not settings.agent_code_change_enabled:
         return {**item, "status": "deferred",
-                "result": "C 类代码执行器已关闭（ASHARE_AGENT_CODE_CHANGE=0）"}
+                "result": "C 类代码执行器已关闭（ASHARE_AGENT_CODE_CHANGE_ENABLED=0）"}
 
     # 1) 预检（便宜检查在前：文件合法性 → 每日上限 → 工作区干净）
     reason = _validate_files(files)

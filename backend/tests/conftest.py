@@ -94,6 +94,28 @@ _leader_archive_mod.ARCHIVE_PATH = _DATA_SANDBOX / "leader_archive.json"
 _cognition_mod.GAP_LOG_PATH = _DATA_SANDBOX / "cognition_gaps.jsonl"
 
 
+# ------------------------------------------- 运行期落盘隔离（第三批，2026-09-14）
+#
+# ⚠️ 前两批用的是**人工清点**（"还有哪些常量指向 data/"），于是漏掉了靠
+# `REPO_ROOT` 间接构造的那一类：`_DECLARED` 的扫描判据要求赋值表达式里同时出现
+# `__file__` 与 `'data'`，而 `REPORT_DIR = REPO_ROOT / "data" / ...` 里**没有**
+# `__file__` ⇒ 整族常量对守卫不可见（`tests/test_data_path_isolation.py`
+# 的扫描面已同步补上传递闭包，见该文件）。
+#
+# 本次改用**进程内审计钩子实测**（不依赖"看着像不像"，也不被常驻 8000 的写入污染）：
+# `sys.addaudithook` 记录本进程对仓库 data/ 的全部写操作，整场 2790 项 pytest
+# **只写 7 个真实文件**——`data/review/predictions/20991201..20991207.json`
+# （`tests/test_predict.py` 用 `save_report` 直写，测试自带 2099 年假日期）。
+# 其余 REPO_ROOT 派生的目录（`data/picks/briefs`、`data/picks/heat`、
+# `data/review/methodology`）实测零写入 ⇒ 不重定向（无差别重定向会改变读语义）。
+#
+# 危害同第二批：测试残留 2099 年假报告在**生产目录**里，而该目录的
+# `20260831.json` 是真实预判——一旦有测试用真实日期，就会静默覆盖真数据。
+import app.predict.storage as _predict_storage  # noqa: E402
+
+_predict_storage.REPORT_DIR = _DATA_SANDBOX / "predictions"
+
+
 # ---------------------------------------------------------------- 共享 TestClient
 import pytest  # noqa: E402
 

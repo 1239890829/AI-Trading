@@ -139,7 +139,7 @@ def main() -> None:
         f"- 误差 vs 价格秩相关 = **{price_corr:.3f}**"
         f"（>0 支持「整手粒度主导」假设，<0/≈0 则口径语义主导）",
         "",
-        "| 层 | 票数 | \|err\|中位 | Spearman 中位 | 前20%重合 |",
+        r"| 层 | 票数 | \|err\|中位 | Spearman 中位 | 前20%重合 |",
         "|---|---|---|---|---|",
         f"| 低价 ≤10 | {len(low)} | {low['median_abs_err_pp'].median():.2f} | "
         f"{low['spearman'].median():.3f} | {low['top20_overlap'].median():.0%} |",

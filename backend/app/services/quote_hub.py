@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import deque
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable
 
@@ -14,11 +15,60 @@ from app.schemas.market import Quote, utcnow
 
 log = logging.getLogger(__name__)
 
+SUBSCRIBER_QUEUE_MAX = 64
+"""单个订阅者的出站队列上限（R24，2026-09-14）。
 
-def _in_market_hours(dt: datetime) -> bool:
-    """含集合竞价与收盘定价时段的宽松交易窗口（09:15-15:05）。
-    2026-09-07 R2 收口：时刻判定单点在 trade_calendar.in_wide_market_window。"""
-    return tc.in_wide_market_window(dt)
+**为什么必须有界**：旧实现用无界 `asyncio.Queue()`，`put_nowait` 永不失败 ⇒
+消费者一旦卡住（慢网络 / 半死连接 / writer 已成孤儿），积压**没有上限**
+（2026-09-14 实测 1000+ 条），而投递侧完全察觉不到，内存随运行时长单调增长。
+
+64 ≈ 1 分钟的 1Hz 推送量：足够吸收抖动；且队列只是"待发送帧"的缓冲区——
+行情是**最新即正确**的快照型数据，积压的中间帧没有价值。
+"""
+
+_DROP_LOG_EVERY = 100
+"""丢弃日志节流：首次丢必报，之后每 100 帧报一次（1Hz 下不至于刷屏）。"""
+
+
+@dataclass
+class Subscriber:
+    """一个订阅连接的出站队列与它的账簿。
+
+    `symbols is None` = 订阅全量。此前订阅集装在单元素列表 `cell` 里（为了
+    "原地改写、绝不换队列"），改用显式字段后同一不变量仍在，且多了 `dropped`
+    这个记账位置——丢弃是降级，必须能定位到是**哪个**连接在积压。
+    """
+
+    symbols: set[str] | None
+    queue: asyncio.Queue
+    dropped: int = 0
+    created_at: datetime = field(default_factory=utcnow)
+
+
+def offer(queue: asyncio.Queue, msg: dict) -> bool:
+    """非阻塞投递到出站队列；队列满时**丢最旧、保最新**，返回本次是否发生了丢弃。
+
+    为什么丢旧而不是阻塞或拒绝新：投递侧是 1Hz 广播循环与 WS reader，**都不能阻塞**
+    （阻塞广播会拖垮所有订阅者）。行情是快照型数据，客户端真正需要的是"最新那一帧"
+    ⇒ 丢最旧是语义损失最小的选择，同时把内存钉在上限内。
+    返回值用于累计丢弃计数并告警（丢弃 = 降级，不能静默，见 `_broadcast`）。
+    """
+    try:
+        queue.put_nowait(msg)
+        return False
+    except asyncio.QueueFull:
+        pass
+    # 满：挪出最旧的一条给新帧腾位置。单线程事件循环内 get_nowait 必成功，
+    # 两个 except 分支只为防御"满队列居然取不出"这种不可能状态，不让它抛出。
+    try:
+        queue.get_nowait()
+    except asyncio.QueueEmpty:  # pragma: no cover - 满队列不可能是空的
+        return False
+    try:
+        queue.put_nowait(msg)
+    except asyncio.QueueFull:  # pragma: no cover - 同上
+        return False
+    return True
 
 
 async def _empty() -> list:
@@ -51,14 +101,22 @@ class QuoteHub:
         self.indices: dict[str, Quote] = {}
         self.quotes: dict[str, Quote] = {}
         self.quote_history: deque[tuple[str, datetime, float | None]] = deque(maxlen=history_len)
-        # 每个元素是 ([symbols_cell], queue)：symbols 装在单元素列表里以便
-        # update_symbols 原地改写（writer 与 reader 共享同一队列，绝不换队列）
-        self._subscribers: list[tuple[list[set[str] | None], asyncio.Queue]] = []
+        # 每个元素是一个 Subscriber（符号集 + 出站队列 + 丢弃计数）。订阅集**原地改写**，
+        # 绝不换队列：writer 正 parked 在队列 get() 上，换队列会让它永远等在孤儿队列。
+        self._subscribers: list[Subscriber] = []
+        # 推送链路**累计**丢弃帧数（R24）：只记在连接上会随断开一起消失，
+        # 而"卡住的客户端断开"恰恰是最需要看到这个数字的时刻。
+        self.dropped_frames = 0
         self._seq = 0
         self.last_success_refresh: datetime | None = None
         self.last_attempt: datetime | None = None
         self.last_error: str | None = None
         self.consecutive_failures = 0
+        # 批量请求的**返回覆盖率**（R18，2026-09-14）：成功按"请求完成"记账是不够的
+        # ——源可能返回 A 却漏 B，此时 B 的旧缓存会被当成实时广播。
+        # 这两个字段是该轮的取证面（缺失清单 + 覆盖率），也是 freshness 降级的依据。
+        self.last_missing_symbols: list[str] = []
+        self.last_batch_coverage: float | None = None
         # 休市状态沿触发（红线 2：休市日数据不得冒充实时）
         self._closed_marked = False
 
@@ -107,6 +165,7 @@ class QuoteHub:
                 self.quotes[symbol] = q
                 if q.price is not None and q.data_timestamp is not None:
                     self.quote_history.append((q.symbol, q.data_timestamp, q.price))
+        self._mark_batch_gaps(watchlist, by_symbol)
         self.consecutive_failures = 0
         self.last_error = None
         self.last_success_refresh = utcnow()
@@ -118,19 +177,34 @@ class QuoteHub:
             self._broadcast("quotes")
 
     async def _refresh_closed_state(self) -> None:
-        """休市判定（红线 2）：非交易日或非交易时段的数据一律标 stale，
-        防止休市日"刷新一直成功"把周五收盘数据冒充实时（待办池 #16）。
-        日历不可用时返回 None → 不干预（未知不判，保持原行为）。"""
-        verdict: bool | None = None
+        """休市判定（红线 2）—— **只在「确定休市」时**把缓存标 stale。
+
+        三态单点裁决（2026-09-14 修复，见 implementation §5.4）：
+        归属判定改走 `tc.market_open_state`，它区分 `closed` 与 `unknown`。
+        原实现是 `verdict = tc.is_trade_day(days, now.date()) and _in_market_hours(now)`，
+        **缺「日历是否覆盖今天」的守卫** ⇒ 进程内缓存日历跨日陈旧（不含今天）时
+        `is_trade_day` 返回 False，被当成「**确认休市**」⇒
+        `_mark_all_stale("market_closed")` ⇒ 前端显示「休市 · 展示最近交易日数据」。
+        这不是一次性事件：源头日历是**尾随窗口、不含未来日期**，任何午夜前填充的缓存
+        必然不含次日 ⇒ **每个交易日开盘后都会复现**（实测 09:30–10:28 共 58 分钟）。
+
+        三种状态各自的处置（`unknown` **不得**被塌缩）：
+        - `closed`（周末 / 节假日 / 时段外）⇒ 标 `stale("market_closed")`；
+        - `open`   ⇒ 不干预，数据质量由 validator 定级；
+        - `unknown`（处于交易时段内、但日历未覆盖今天）⇒ **不标休市**：既不能冒充休市、
+          也不能冒充实时 —— 交给数据质量如实定级（KB 核心纪律「三态 > 二态」）。
+        日历不可用 / 为空 → 返回不干预（未知不判，保持原行为）。
+        """
         try:
             now = beijing_now()
             days = await tc.trading_days(self.provider)
-            if days:
-                verdict = tc.is_trade_day(days, now.date()) and _in_market_hours(now)
+            if not days:
+                return
+            state = tc.market_open_state(days, now)
         except Exception as exc:
             log.debug("market-open check unavailable: %s", exc)
             return
-        if verdict is False:
+        if state == tc.MARKET_CLOSED:
             # 每轮重标（2026-09-01 修复：原沿触发只在首轮标 stale，之后 refresh()
             # 又把 validator 判定的新数据存回缓存——盘前质量在 stale/low/invalid
             # 之间震荡，出现"可疑/非法"误标）。休市态稳定为 stale("market_closed")。
@@ -138,9 +212,47 @@ class QuoteHub:
                 self._closed_marked = True
                 log.info("market closed: cached quotes marked stale")
             self._mark_all_stale(reason="market_closed")
-        elif verdict is True and self._closed_marked:
-            # 重新开盘：恢复由下次校验决定，这里只清标记（数据会被本轮 refresh 刷新）
+        elif self._closed_marked:
+            # 非确定休市（`open` 或 `unknown`）：清标记以恢复 quotes 广播。
+            # `unknown` 必须走这里 —— 继续带着 `_closed_marked` 会让前端停在"休市"
+            # 且不广播（见 `refresh()` 的 `if not self._closed_marked`）。
             self._closed_marked = False
+
+    def _mark_batch_gaps(self, watchlist: list[str], by_symbol: dict[str, Quote]) -> None:
+        """批量**部分成功**时，未返回的标的必须降级——不能拿旧缓存冒充实时（红线 2）。
+
+        缺陷（R18，2026-09-14）：原实现只对「返回了的符号」写缓存。缺失符号既没被
+        更新、也没被标记，``quality`` 仍是上一次的 ``high``，而 Hub 已记成功并
+        ``_broadcast("quotes")`` ⇒ 合成场景下 B 是**前一天的报价**却随 quotes 广播，
+        消费方只看 ``quality`` 或只看 Hub 状态都会被误导。根因是成功按"请求完成"
+        记账，没有按**请求集**核对返回覆盖率与逐标的年龄。
+
+        修法：逐标的 freshness 为权威。缺失但**有旧缓存**的标 ``stale("batch_missing")``
+        —— 保留旧值不丢数据，但明确它已不是本轮的实时数据；无缓存的保持缺席
+        （调用方按 missing 处理，不臆造）。休市时 ``_refresh_closed_state`` 会用
+        ``market_closed`` 覆盖（更贴近成因），故本方法必须先于它执行。
+        """
+        missing = [s for s in watchlist if s not in by_symbol]
+        coverage = (len(watchlist) - len(missing)) / len(watchlist) if watchlist else None
+        prev_missing = self.last_missing_symbols
+        self.last_missing_symbols = missing
+        self.last_batch_coverage = coverage
+
+        for symbol in missing:
+            cached = self.quotes.get(symbol)
+            if cached is not None:
+                mark_stale(cached, "batch_missing")
+
+        # 只在**缺失集变化**时留痕，避免 1Hz 轮询把日志刷成噪声
+        if missing != prev_missing:
+            if missing:
+                log.warning(
+                    "批量行情部分缺失：%d/%d 只未返回（覆盖率 %.0f%%），已标 stale：%s%s",
+                    len(missing), len(watchlist), (coverage or 0.0) * 100,
+                    ", ".join(missing[:10]), " …" if len(missing) > 10 else "",
+                )
+            elif prev_missing:
+                log.info("批量行情覆盖率已恢复 100%%（%d 只）", len(watchlist))
 
     def _safe_watchlist(self) -> list[str]:
         try:
@@ -161,10 +273,9 @@ class QuoteHub:
         前缀回退逻辑兜底。订阅集每轮从 _subscribers 现算，零额外状态；
         订阅者断开（unsubscribe）后自动移出。"""
         symbols = set(self._safe_watchlist())
-        for cell, _ in self._subscribers:
-            sub = cell[0]
-            if sub:
-                symbols.update(s for s in sub if len(s) == 6 and s.isdigit())
+        for sub in self._subscribers:
+            if sub.symbols:
+                symbols.update(s for s in sub.symbols if len(s) == 6 and s.isdigit())
         return sorted(symbols)
 
     def _mark_all_stale(self, reason: str = "refresh_failed") -> None:
@@ -236,38 +347,68 @@ class QuoteHub:
         绝不 unsubscribe+subscribe 换新队列**：writer 正 parked 在旧队列的
         get() 上，换队列后 writer 永远等在孤儿队列（2026-09-01 实测事故：
         前端 loadBase 触发 subscribe → 推送静默死亡 → 前端 32s 自愈重连 →
-        用户体感"约 30 秒才更新一次"）。符号集存单元格以便原地更新。"""
-        queue: asyncio.Queue = asyncio.Queue()
-        self._subscribers.append(([symbols, ], queue))
+        用户体感"约 30 秒才更新一次"）。符号集存单元格以便原地更新。
+
+        队列**有界**（`SUBSCRIBER_QUEUE_MAX`，R24）：旧实现无界，消费者卡住时
+        积压无上限且投递侧无法察觉。有界后投递走 `offer()`（丢最旧、保最新）。
+        """
+        queue: asyncio.Queue = asyncio.Queue(maxsize=SUBSCRIBER_QUEUE_MAX)
+        self._subscribers.append(Subscriber(symbols=symbols, queue=queue))
         return queue
 
     def update_symbols(self, queue: asyncio.Queue, symbols: set[str] | None) -> bool:
         """原地更新订阅集（同一队列，writer 无感）。队列不存在返回 False。"""
-        for cell, q in self._subscribers:
-            if q is queue:
-                cell[0] = symbols
+        for sub in self._subscribers:
+            if sub.queue is queue:
+                sub.symbols = symbols
                 return True
         return False
 
     def unsubscribe(self, queue: asyncio.Queue) -> None:
-        self._subscribers = [(cell, q) for cell, q in self._subscribers if q is not queue]
+        self._subscribers = [s for s in self._subscribers if s.queue is not queue]
+
+    def subscriber_stats(self) -> dict:
+        """推送链路的取证面（R24）：连接数、队列上限、累计丢弃帧数。
+
+        丢弃只可能发生在**出站队列**满时——即客户端（或已成孤儿的 writer）
+        停止消费而服务端仍在按 1Hz 生产。这个数字是"推送正在丢帧"的唯一
+        系统级读数；`dropped_frames` 刻意做成**累计**而非当前值，
+        因为最该看到它的时刻正是那个连接断开之后。
+        """
+        return {
+            "subscribers": len(self._subscribers),
+            "queue_max": SUBSCRIBER_QUEUE_MAX,
+            "dropped_frames": self.dropped_frames,
+        }
 
     def _broadcast(self, msg_type: str) -> None:
         seq = self.next_seq()
         ts = utcnow().isoformat()
-        for cell, queue in self._subscribers:
-            symbols = cell[0]
+        for sub in self._subscribers:
+            symbols = sub.symbols
             payload = self.get_quotes(sorted(symbols) if symbols is not None else None)
             if not payload:
                 continue
-            queue.put_nowait(
+            dropped = offer(
+                sub.queue,
                 {
                     "type": msg_type,
                     "seq": seq,
                     "ts": ts,
                     "data": [q.model_dump(mode="json") for q in payload],
-                }
+                },
             )
+            if dropped:
+                sub.dropped += 1
+                self.dropped_frames += 1
+                if sub.dropped == 1 or sub.dropped % _DROP_LOG_EVERY == 0:
+                    log.warning(
+                        "订阅出站队列已满（maxsize=%d），丢弃最旧帧保最新——该连接可能已卡住："
+                        "本连接累计丢 %d 帧，全局累计 %d 帧",
+                        SUBSCRIBER_QUEUE_MAX,
+                        sub.dropped,
+                        self.dropped_frames,
+                    )
 
     # ---------- 后台循环 ----------
 

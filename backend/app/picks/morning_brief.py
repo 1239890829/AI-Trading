@@ -648,13 +648,29 @@ async def build_and_save(app_state, *, trigger: str = "manual") -> dict:
     return payload
 
 
-async def _is_trading_day(hub, d: date) -> bool:
+async def _trade_day_state(hub, d: date) -> bool | None:
+    """`d` 是否交易日 —— **三态**（F7，2026-09-14）。
+
+    | 返回 | 情形 | 调用方应如何 |
+    |---|---|---|
+    | `True`  | 日历覆盖且含 d | 正常执行 |
+    | `False` | 周末 / 日历已明确 d 非交易日 | 跳过（可置位，确定不会变） |
+    | `None`  | 日历未覆盖 d（尾随源）或源不可用 | **延后重试，不得置位** |
+
+    原实现返回 `bool` 且把**异常也当成 `False`**（`except` 里 `return False`），
+    与「日历覆盖不到今天 ⇒ `d in days` 为 False」合并成同一个「非交易日」结论。
+    后果（2026-09-14 实测）：盘前简报当日**根本没生成**（`data/picks/briefs/`
+    最新停在 09-11，缺 `20260914.json`），且跳过分支照常置位 `last_run`
+    ⇒ 当日**不再重试**，在 08:40–12:00 的历时时窗内不可能自愈。
+    命名从 `_is_trading_day` 改为 `_trade_day_state`：三元返回值的函数不该叫
+    `is_*`，那会诱导调用方写 `if not await ...`（`picks_autogen` 正是这么写的）。
+    """
     try:
         days = await tc.trading_days(hub.provider)
     except Exception as exc:
         log.warning("premarket brief: calendar failed: %s", exc)
-        return False
-    return d in (days or [])
+        return None  # 源不可用 = 未判定，**不是**「非交易日」
+    return tc.is_trade_day_on(d, days)
 
 
 async def _premarket_tick(
@@ -682,11 +698,23 @@ async def _premarket_tick(
             key, existing.get("generated_at"), existing.get("trigger"),
         )
         return key
-    if await _is_trading_day(app.state.hub, now.date()):
+    state = await _trade_day_state(app.state.hub, now.date())
+    if state is True:
         await build_and_save(app, trigger="schedule")
-    else:
+        return key
+    if state is False:
         log.info("premarket brief skipped: %s 非交易日", key)
-    return key
+        return key
+    # state is None：日历未覆盖今天（尾随源）或日历源不可用 —— 「未判定」。
+    # **不得**当成非交易日、更不得置位 last_run：置位会让今天彻底不再重试
+    # （2026-09-14 实测事故）。返回 last_run 原值 ⇒ 下一拍（60s 后）再来，
+    # 由 `trading_days()` 的覆盖判据在几分钟内给出确定答案。
+    log.warning(
+        "premarket brief deferred: %s 日历未覆盖今天或源不可用（未判定）"
+        "⇒ 本拍不生成、不置位 last_run，等待重试",
+        key,
+    )
+    return last_run or ""
 
 
 async def premarket_scheduler(

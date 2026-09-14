@@ -218,3 +218,190 @@ def test_survival_labels_legacy_rows_as_unspecified(sf):
     assert "未记录归因" in st["reason_labels"]["unspecified"]
     # 并且它不可作为入参提交（封闭集合只收 ROLLBACK_REASONS）
     assert "unspecified" not in ap.ROLLBACK_REASONS
+
+
+# ---------------------------------------------------------------- R12（2026-09-14）
+# 缺陷两条，**都不是"数值离谱"**：
+# ① 回滚不校验"我回滚的还是不是当前生效的那一条"——`before` 采集于提案时，回滚却无条件
+#    写回 ⇒ 50→52→58 之后回滚早先那条，恢复成 50 而不是 58，**中间那次变更被静默抹掉**；
+#    且 draft/shadow **从未生效**却同样走"恢复 before"路径（用没生效过的单子改参数）。
+# ② 浮点白名单接受 `nan`——`math.isfinite` 缺失时 `nan < lo` / `nan > hi` **恒为 False**，
+#    上下界校验不是"松一点"而是**完全没生效**；落库成 "nan" 后消费点的阈值比较同样恒
+#    False ⇒ 门槛静默失效且全链路无一处报错。
+# 验收标准明确要求「断言**实际消费值**而非只查 status」——所以下面每一条都落到
+# `current_value` / `runtime_params.get`，不看 `status`：
+# 「状态已 rolled_back 但运行值没动」与「真回滚」必须可区分，只看 status 会把两者混成一个。
+
+
+def _rt(key: str, default):
+    import app.core.runtime_params as rp
+
+    return rp.get(key, default)
+
+
+def test_stale_change_rollback_keeps_newer_value(sf):
+    """**R12 主判据**：陈旧变更的回滚不得覆盖新版本（只归档不改值）。"""
+    a = ap.propose("picks_replace_threshold", "52", session_factory=sf)
+    ap.apply_change(a["id"], sf)
+    b = ap.propose("picks_replace_threshold", "58", session_factory=sf)
+    assert b["before"] == 52.0, "B 的 before 应采集到 A 生效后的值"
+    ap.apply_change(b["id"], sf)
+    assert ap.current_value("picks_replace_threshold", session_factory=sf) == "58.0"
+
+    out = ap.rollback_change(a["id"], session_factory=sf, reason_code="superseded")
+
+    assert out["runtime_value_restored"] is False
+    assert out["skipped_reason"] == "superseded"
+    assert out["active_change_id"] == b["id"], "当前值的拥有者是 B，不是 A"
+    # 实际消费值 —— 旧实现在此会变成 ""（A.before），把 B 的 58 静默抹掉
+    assert ap.current_value("picks_replace_threshold", session_factory=sf) == "58.0"
+    assert _rt("picks_replace_threshold", 15.0) == 58.0
+
+
+def test_rollback_of_active_owner_restores_immediate_predecessor(sf):
+    """反向对照：**拥有者**的回滚必须照常写值（防"一律不写值"把回滚能力整个关掉）。"""
+    a = ap.propose("picks_replace_threshold", "52", session_factory=sf)
+    ap.apply_change(a["id"], sf)
+    b = ap.propose("picks_replace_threshold", "58", session_factory=sf)
+    ap.apply_change(b["id"], sf)
+
+    out = ap.rollback_change(b["id"], session_factory=sf, reason_code="manual")
+
+    assert out["runtime_value_restored"] is True and out["skipped_reason"] is None
+    assert ap.current_value("picks_replace_threshold", session_factory=sf) == "52.0"
+    assert _rt("picks_replace_threshold", 15.0) == 52.0
+
+
+def test_never_applied_change_rollback_cannot_touch_runtime(sf):
+    """draft / shadow **从未生效** ⇒ 回滚只能归档，绝不能把提案时采集的 before 写回覆盖层。
+
+    ⚠️ 判据必须让「写回」与「不写回」**产生不同结果**：若草案的 `before` 恰好等于当前值，
+    错误实现写回后值不变，用例照样全绿（KB-ENG-65 假绿形态㈡同族）。这里刻意让草案
+    搁置期间当前值被改写成 58，而两份草案的 `before` 停在 52 —— 写回即会退回 52。
+    """
+    a = ap.propose("picks_replace_threshold", "52", session_factory=sf)
+    ap.apply_change(a["id"], sf)
+
+    draft = ap.propose("picks_replace_threshold", "70", session_factory=sf)   # before=52.0
+    shadow = ap.propose("picks_replace_threshold", "80", session_factory=sf)
+    ap.shadow_change(shadow["id"], sf)                                       # before=52.0
+
+    c = ap.propose("picks_replace_threshold", "58", session_factory=sf)
+    ap.apply_change(c["id"], sf)                                             # 当前值 → 58.0
+    assert ap.current_value("picks_replace_threshold", session_factory=sf) == "58.0"
+
+    for cid in (draft["id"], shadow["id"]):
+        out = ap.rollback_change(cid, session_factory=sf, reason_code="manual")
+        assert out["runtime_value_restored"] is False
+        assert out["skipped_reason"] == "never_applied"
+        assert ap.current_value("picks_replace_threshold", session_factory=sf) == "58.0", (
+            "未生效的变更单回滚后运行值必须原样不动"
+        )
+    assert _rt("picks_replace_threshold", 15.0) == 58.0
+
+
+def test_apply_rebases_before_so_rollback_does_not_erase_interim_change(sf):
+    """生效时**基线重定**：草案搁置期间值已被改写 ⇒ `before` 取事务内真前驱。
+
+    旧实现下 D.before 停在提案时的 "52.0"，生效 58 后回滚会退到 52，把 B 的 60 抹掉。
+    """
+    a = ap.propose("picks_replace_threshold", "52", session_factory=sf)
+    ap.apply_change(a["id"], sf)
+
+    d = ap.propose("picks_replace_threshold", "58", session_factory=sf)   # 草案搁置
+    assert d["before"] == 52.0
+    b = ap.propose("picks_replace_threshold", "60", session_factory=sf)
+    ap.apply_change(b["id"], sf)                                          # 值变成 60
+
+    applied = ap.apply_change(d["id"], sf)
+    assert applied["rebased_from"] == "52.0", "漂移必须留痕（不静默改基线）"
+    assert applied["before"] == 60.0
+    assert ap.current_value("picks_replace_threshold", session_factory=sf) == "58.0"
+
+    out = ap.rollback_change(d["id"], session_factory=sf, reason_code="manual")
+    assert out["runtime_value_restored"] is True
+    assert ap.current_value("picks_replace_threshold", session_factory=sf) == "60.0", (
+        "回滚应退回**生效前的真前驱** 60，而不是提案时的 52"
+    )
+    # B 的值重新成为当前值 ⇒ 它的存活统计回归（superseded 不计）
+    assert ap.survival_stats(sf)["still_effective"] == 1
+
+
+def test_rollback_without_owner_never_resurrects_value(sf):
+    """覆盖行被**带外改写**（不经变更单）后，已 applied 的单子不再拥有当前值 ⇒ 不得复活旧值。
+
+    判据同样要能区分：`a.before` 是空串，带外值是 70 —— 写回必然把 70 抹掉。
+    """
+    from app.models.agent import AgentParam
+
+    a = ap.propose("picks_replace_threshold", "52", session_factory=sf)
+    ap.apply_change(a["id"], sf)
+    with sf() as db:                       # 带外改写：直接改覆盖行，不产生变更单
+        db.merge(AgentParam(key="picks_replace_threshold", value="70.0"))
+        db.commit()
+
+    out = ap.rollback_change(a["id"], session_factory=sf, reason_code="manual")
+
+    assert out["runtime_value_restored"] is False
+    assert out["skipped_reason"] == "no_owner"
+    assert out["active_change_id"] is None
+    assert ap.current_value("picks_replace_threshold", session_factory=sf) == "70.0", (
+        "无主回滚不得把 52 的 before（空串）写回覆盖层——那是凭一条已不在生效的单子复活旧值"
+    )
+    assert _rt("picks_replace_threshold", 15.0) == 70.0
+
+
+def test_non_finite_scalar_values_rejected(sf):
+    """标量通道：NaN/±Infinity 一律拒绝，且**一条都不落库**。
+
+    ⚠️ 与下一条**刻意分开**：写在同一个 `for` 里时标量先抛错会让 JSON 通道的断言
+    永远执行不到 —— 两个通道共用一条用例 = 其中一个通道可以静默失效仍全绿
+    （KB-ENG-72「守卫覆盖面」同族：判据本身失效，注入后照样全绿）。
+    """
+    for bad in (float("nan"), "nan", float("inf"), "-inf", float("-inf"), "Infinity"):
+        with pytest.raises(ValueError, match="有限"):
+            ap.propose("picks_replace_threshold", bad, session_factory=sf)
+        with pytest.raises(ValueError, match="有限"):
+            ap.propose("picks_max_swaps_per_day", bad, session_factory=sf)
+    assert ap.list_changes(session_factory=sf) == []   # 无变更单落库
+    assert ap.survival_stats(sf)["total_changes"] == 0
+
+
+def test_non_finite_json_offsets_rejected(sf):
+    """JSON 通道：`json.loads` **默认接受**非标准的 NaN/Infinity 字面量 ⇒ 必须显式挡。
+
+    `abs(nan) > OFFSET_MAX` 恒为 False ⇒ 幅度校验对 NaN 完全失效（不是"松一点"）。
+    """
+    for raw in ('{"发酵": {"tech": NaN}}', '{"发酵": {"tech": Infinity}}',
+                '{"发酵": {"echelon": -Infinity}}'):
+        with pytest.raises(ValueError, match="非有限"):
+            ap.propose("picks_style_offsets_json", raw, session_factory=sf)
+    assert ap.list_changes(session_factory=sf) == []
+
+
+def test_parse_overrides_rejects_non_finite_directly():
+    """`parse_overrides` 是**唯一入口**（提案校验与运行时读取共用）⇒ 单独钉一次。"""
+    for raw in ('{"发酵": {"tech": NaN}}', '{"发酵": {"tech": Infinity}}'):
+        with pytest.raises(ValueError, match="非有限"):
+            sr.parse_overrides(raw)
+    assert sr.parse_overrides('{"发酵": {"tech": 0.02}}') == {"发酵": {"tech": 0.02}}
+
+
+def test_legacy_non_finite_override_row_is_not_consumed(sf):
+    """读侧兜底：加严之前落库的 `"nan"` 脏行不得被注入覆盖层。
+
+    写侧拒了新值，但**已有行**仍在库里。若读侧不挡，一个 NaN 会让消费点的阈值比较
+    恒 False（门槛静默失效）且全链路无一处报错——这正是 R12 的危险形态。
+    """
+    import app.core.runtime_params as rp
+    from app.models.agent import AgentParam
+
+    rp.clear()
+    with sf() as db:
+        db.merge(AgentParam(key="picks_replace_threshold", value="nan"))
+        db.commit()
+
+    assert ap.typed_value("picks_replace_threshold", sf) is None
+    ap.refresh_runtime_overrides(sf)
+    assert _rt("picks_replace_threshold", 15.0) == 15.0, "脏行不得让门槛静默失效"
+    rp.clear()

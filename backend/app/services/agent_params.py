@@ -12,11 +12,19 @@
   （重启才能生效的参数变更风险远大于收益）
 - 回滚：每次生效都记 before，一键回滚并留审计
 
+**回滚的并发口径（R12，2026-09-14）**：`before` 采集于提案时，而生效可能发生在很久以后；
+期间同 key 可能已被别的变更单改写。于是两处都要防：
+- **生效时重定基线**：事务内若当前值 ≠ 提案时的 `before`，把 `before` 刷新为事务内当前值
+  （`before` 的语义是"这条变更生效前的值"，不是"提案那一刻的值"）——否则回滚会抹掉中间那次变更；
+- **回滚时 CAS**：仅当这条变更单**仍是当前值的拥有者**才写运行值；陈旧变更、从未生效的
+  draft/shadow、以及被后来者取代的自动实验回滚，一律**只归档不改值**。
+
 纪律：本模块**不自动改任何参数**；所有生效动作来自人工点确认或显式 API 调用。
 """
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from sqlalchemy import select
@@ -86,14 +94,21 @@ PARAM_REGISTRY: dict[str, dict[str, Any]] = {
 
 
 def _validate(key: str, value: Any) -> str:
-    """校验并规范化参数值（非法抛 ValueError）。返回落库的字符串形式。"""
+    """校验并规范化参数值（非法抛 ValueError）。返回落库的字符串形式。
+
+    R12（2026-09-14）：**非有限值先拒**。`nan` 的坑不在"数值离谱"，而在
+    **Python 的有序比较对 NaN 恒为 False** —— `nan < lo` 与 `nan > hi` 都是 False
+    ⇒ 上下界校验**整体失效**（不是"松一点"，是"完全没生效"）；落库成 `"nan"` 之后
+    消费点的 `v < threshold` 同样恒 False ⇒ **门槛静默失效且不报错**。
+    `inf` 目前碰巧被 `max` 挡住，但那依赖"每个标量参数都恰好有上界"，不能当防护。
+    """
     if key not in PARAM_REGISTRY:
         raise ValueError(f"参数 {key} 不在白名单（可改：{'、'.join(PARAM_REGISTRY)}）")
     if key == "picks_style_offsets_json":
         from app.picks.style_router import parse_overrides
 
         raw = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
-        parse_overrides(raw)  # 非法 → ValueError（维度未知/幅度越界/非对象）
+        parse_overrides(raw)  # 非法 → ValueError（维度未知/幅度越界/非对象/非有限）
         return raw
 
     meta = PARAM_REGISTRY[key]
@@ -103,6 +118,8 @@ def _validate(key: str, value: Any) -> str:
             num = float(value)
         except (TypeError, ValueError):
             raise ValueError(f"{key} 需要数值，收到 {value!r}") from None
+        if not math.isfinite(num):
+            raise ValueError(f"{key} 需要有限数值，收到 {value!r}（NaN/Infinity 不接受）")
         if kind == "int" and num != int(num):
             raise ValueError(f"{key} 需要整数，收到 {value!r}")
         lo, hi = meta.get("min"), meta.get("max")
@@ -129,6 +146,11 @@ def typed_value(key: str, session_factory=None) -> float | int | None:
     except (TypeError, ValueError):
         log.warning("agent_params: %s 落库值不是数值（%r），按未设置处理", key, raw)
         return None
+    # R12 兜底：**已有**落库行可能来自校验加严之前（例如 "nan"）。读侧同样要挡住——
+    # 一个 NaN 进覆盖层会让消费点的阈值比较恒 False，且全链路无一处报错。
+    if not math.isfinite(num):
+        log.warning("agent_params: %s 落库值非有限（%r），按未设置处理", key, raw)
+        return None
     return int(num) if meta["type"] == "int" else num
 
 
@@ -138,14 +160,48 @@ def _setting_default(key: str) -> str:
     return str(getattr(settings, key, "") or "")
 
 
+def _effective_value(key: str, db) -> str:
+    """事务内取当前生效值（覆盖层优先，否则静态配置默认）。**不另开 session**。
+
+    回滚的 CAS 与生效时的基线重定都必须与写操作在**同一个事务**里读，
+    否则读到的"当前值"在 commit 前就可能已经过期（这正是 R12 的原始形态）。
+    """
+    row = db.get(AgentParam, key)
+    if row is not None and row.value is not None:
+        return row.value
+    return _setting_default(key)
+
+
 def current_value(key: str, session_factory=None) -> str:
     """当前生效值：覆盖层优先，否则静态配置默认。"""
     sf = session_factory or get_session_factory()
     with sf() as db:
-        row = db.get(AgentParam, key)
-        if row is not None and row.value is not None:
-            return row.value
-    return _setting_default(key)
+        return _effective_value(key, db)
+
+
+def _active_change_id(key: str, db) -> int | None:
+    """当前值的**拥有者**变更单 id；无覆盖行 / 无匹配 → None（R12）。
+
+    判据 = 「status == applied **且** `after` 等于当前覆盖值」中 id 最大的一条。
+    **刻意不是**"最后一条 applied"：覆盖行被（手工清理 / 重置）删除后，
+    后者仍会认领一个已经不在生效的值，回滚于是把它**复活**回来。
+    要求 `after == 当前值` 就没有这个缺口——值不在生效，就没有拥有者。
+    """
+    row = db.get(AgentParam, key)
+    if row is None or row.value is None:
+        # 覆盖层没有行 ⇒ 当前值来自静态默认，**没有任何变更单拥有它**
+        return None
+    cur = row.value
+    ids = [
+        r.id for r in db.execute(
+            select(AgentParamChange).where(
+                AgentParamChange.key == key,
+                AgentParamChange.status == "applied",
+                AgentParamChange.after == cur,
+            )
+        ).scalars().all()
+    ]
+    return max(ids) if ids else None
 
 
 def refresh_runtime_overrides(session_factory=None) -> None:
@@ -287,6 +343,19 @@ def apply_change(change_id: int, session_factory=None, *, mutation_source: str |
                 from app.services.agent_tasks import update_mutation_result
                 update_mutation_result(mutation_id, "failed", "已回滚的变更单不能再次生效（请新建变更单）")
             raise ValueError("已回滚的变更单不能再次生效（请新建变更单）")
+        # R12（2026-09-14）：`before` 的语义是「这条变更**生效前**的值」。
+        # 提案到生效之间同 key 可能已被别的变更单改写，此时若仍以提案时的旧值当基线，
+        # 回滚会把中间那次变更**整个抹掉**（合成复现：50→52→58，回滚早先那条 50→52
+        # 恢复成 50 而不是 58，等于静默丢弃 B）。真前驱必须**在事务内**取，漂移留痕。
+        current = _effective_value(row.key, db)
+        rebased_from: str | None = None
+        if current != row.before:
+            rebased_from = row.before
+            row.before = current
+            log.warning(
+                "参数 %s 变更单 #%d 基线重定：提案时 before=%r，生效时当前值=%r",
+                row.key, change_id, rebased_from, current,
+            )
         db.merge(AgentParam(key=row.key, value=row.after,
                             updated_at=beijing_now_naive()))
         row.status = "applied"
@@ -294,7 +363,12 @@ def apply_change(change_id: int, session_factory=None, *, mutation_source: str |
         db.commit()
         db.refresh(row)
         out = _dump(row)
+        out["rebased_from"] = rebased_from
     refresh_runtime_overrides(sf)
+    if rebased_from is not None:
+        record_audit("user", "param.apply.rebased", row.key,
+                     before=rebased_from, after=row.before,
+                     rollback_ref=f"change:{change_id}")
     record_audit("user", "param.apply", row.key, before=row.before, after=row.after,
                  rollback_ref=f"change:{change_id}")
     if mutation_id:
@@ -363,6 +437,14 @@ def rollback_change(
     归因（2026-09-10 P1-15）：只记"回滚了"不记"为什么回滚"，存活率就只是个数字。
     `code` 必须在 `ROLLBACK_REASONS` 内（非法直接抛错，不静默落到 other——
     兜底成 other 会让归因统计里出现一个什么都往里扔的垃圾桶）。
+
+    **CAS（R12，2026-09-14）**：只有「这条变更单真的生效过」**且**「它仍是当前值的
+    拥有者」才写运行值；否则**只归档**（改状态+记归因，不碰覆盖层）。三类都要挡：
+    ① 陈旧变更（后续有别的变更单改了同一个 key）；② draft/shadow（**从未生效**——
+       旧实现无条件把提案时采集的 `before` 写回覆盖层，等于用一条没生效过的单子改参数）；
+    ③ 自动实验回滚（30 日实验劣化回滚一条已被取代的变更）。
+    返回值带 `runtime_value_restored` / `skipped_reason`，便于调用方与守卫**断言实际
+    消费值**，而不是只看 `status`（状态是 `rolled_back` 但值没动的两种情况必须可区分）。
     """
     if reason_code not in ROLLBACK_REASONS:
         raise ValueError(
@@ -375,13 +457,22 @@ def rollback_change(
             raise ValueError("变更单不存在")
         if row.status == "rolled_back":
             return _dump(row)
-        restored = row.before if row.before is not None else ""
-        if row.before is None:
-            cur = db.get(AgentParam, row.key)
-            if cur is not None:
-                db.delete(cur)
+        owner = _active_change_id(row.key, db)
+        if row.status != "applied":
+            skipped: str | None = "never_applied"
+        elif owner != change_id:
+            skipped = "superseded" if owner is not None else "no_owner"
         else:
-            db.merge(AgentParam(key=row.key, value=restored, updated_at=beijing_now_naive()))
+            skipped = None
+        if skipped is None:
+            restored = row.before if row.before is not None else ""
+            if row.before is None:
+                cur = db.get(AgentParam, row.key)
+                if cur is not None:
+                    db.delete(cur)
+            else:
+                db.merge(AgentParam(key=row.key, value=restored,
+                                    updated_at=beijing_now_naive()))
         row.status = "rolled_back"
         row.rolled_back_at = beijing_now_naive()
         row.rollback_reason = json.dumps(
@@ -390,9 +481,19 @@ def rollback_change(
         db.commit()
         db.refresh(row)
         out = _dump(row)
+        out["runtime_value_restored"] = skipped is None
+        out["skipped_reason"] = skipped
+        out["active_change_id"] = owner
     refresh_runtime_overrides(sf)
-    record_audit("user", "param.rollback", row.key, before=row.after, after=row.before,
-                 rollback_ref=f"change:{change_id}")
+    if skipped is None:
+        record_audit("user", "param.rollback", row.key, before=row.after, after=row.before,
+                     rollback_ref=f"change:{change_id}")
+    else:
+        # 归档型回滚**没有改动运行值**，就不该留下一条"before→after"的假审计——
+        # 那会让审计看起来像真回滚过一次。
+        record_audit("user", "param.rollback.skipped", row.key,
+                     after={"skipped_reason": skipped, "current_owner": owner},
+                     rollback_ref=f"change:{change_id}")
     # 归因同时进审计（任务中心能按时间看到"谁因为什么回滚了什么"）
     record_audit("user", "param.rollback.reason", row.key,
                  after={"code": reason_code, "note": note[:500]},

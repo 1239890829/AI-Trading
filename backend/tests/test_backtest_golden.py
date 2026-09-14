@@ -50,10 +50,17 @@ def _snapshot() -> dict:
             {
                 "signal_ts": t.signal_ts, "fill_ts": t.fill_ts, "side": t.side,
                 "price": round(t.price, 6), "qty": t.qty, "fee": round(t.fee, 6),
-                "ok": t.ok, "reason": t.reason,
+                "ok": t.ok, "reason": t.reason, "synthetic": t.synthetic,
             }
             for t in report.trades
         ],
+        # R14：末段持仓改为估值展示（不再冒充退市强平）——golden 必须钉住它，
+        # 否则「末段又多出一笔假成交」这类回归不会有任何报警。
+        "open_position": (
+            {k: (round(v, 6) if isinstance(v, float) else v)
+             for k, v in vars(report.open_position).items()}
+            if report.open_position is not None else None
+        ),
         "metrics_extra": report.extra_metrics,
         "in_return": report.in_return,
         "out_return": report.out_return,

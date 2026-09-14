@@ -352,6 +352,33 @@ def test_pipeline_produces_full_card_and_persists(deps, monkeypatch):
     assert json.loads(row.items)[0]["symbol"] == card["symbol"]
 
 
+def test_tech_score_exception_is_not_reported_as_missing_data(deps, monkeypatch):
+    """技术评分**自身异常**时，依据文案必须指向「评分异常」，不得写成「K线数据缺失」。
+
+    背景（2026-09-14 审查批次 B4）：原实现把「取数失败」与「评分自身抛错的 bug」
+    合用一个 `except`，两者都写成「K线数据缺失，中性」——依据文案把排查引向数据源
+    （错方向），且 `dicts` 被一并清空，连带 ATR / 均线（出场纪律的输入）一起退化。
+
+    **回退即红**：恢复共用 except 后 `bases["tech"]` 变成「K线数据缺失，中性」。
+    """
+    monkeypatch.setattr(pl, "evaluate_stand_aside", _benign_gate)
+
+    def _boom(*_a, **_k):
+        raise TypeError("fake scoring bug")
+
+    monkeypatch.setattr(pl, "score_stock", _boom)
+    out = _run(deps, _Hub())
+
+    items = out["data"]["items"]
+    assert items, "评分异常不该让候选整体消失（降级为中性 50 继续出卡片）"
+    for it in items:
+        tech = it["bases"]["tech"]
+        assert "技术评分异常" in tech, tech
+        assert "K线数据缺失" not in tech, f"评分 bug 被写成取数失败（排查方向被带偏）：{tech}"
+    # 数据**其实取到了**（桩的 get_kline 正常）：不应因评分抛错而连带丢 ATR/均线
+    assert any(it["stop_loss"] is not None for it in items), "评分异常连带清空了 ATR/均线输入"
+
+
 def test_gate_strips_buy_range_and_keeps_record(deps):
     """闸门触发档（真实判据）：撤买入区间但**记录仍保留**（复盘要能看见）。
 

@@ -41,19 +41,80 @@ import asyncio
 import json
 import logging
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time as dt_time, timedelta, timezone
 from pathlib import Path
 from app.core.bjtime import beijing_now, beijing_today  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 
 INDEX_SYMBOL = "sh000001"  # 上证综指
+
+#: 缓存**上限**时长（秒）。⚠️ 自 2026-09-14 起它不再是唯一的失效条件 —— 见
+#: `_is_fresh()`：交易日历的真实时效语义是「**必须覆盖今天**」，而非「活了多少秒」。
 _CACHE_TTL_SEC = 12 * 3600
+
+#: 「覆盖重取」的最小间隔（秒）：缓存不满足覆盖判据、但距上次**尝试**不足此值时，
+#: 仍先返回旧快照（不视为新鲜、但也不重取）。
+#: 理由：节假日与源故障会让「不覆盖今天」长期为真，若无此下限，每个请求都会打一次
+#: 上游 —— 从「一次陈旧」变成「持续重取风暴」，比原缺陷更差。
+_REFRESH_MIN_INTERVAL_SEC = 5 * 60
+
+#: 「今日快照」下界（09:30 = 连续竞价开始）。抓取时刻晚于当日该时刻 ⇒ 若今日是
+#: 交易日，源头**必然**已把今日给出；此时列表仍不含今日，只可能是「今日确实休市」。
+#: ⚠️ 不能用「抓取时刻在今天」做判据：凌晨抓的快照会带着不含今日的列表存活一整天，
+#: 假休市窗口从分钟级扩大到**整个交易日**（2026-09-14 论证，见 implementation §5.4）。
+_SESSION_OPEN = dt_time(9, 30)
+
 _MIN_DAYS = 5  # 少于这个天数视为拉取失败，宁可报错也不用
+
+#: 市场状态三态（KB 核心纪律「三态 > 二态」）。`unknown` 是**一等公民**：
+#: 日历未覆盖今天时，既不能断言开市、也不能断言休市 —— 它是「未判定」。
+MARKET_OPEN = "open"
+MARKET_CLOSED = "closed"
+MARKET_UNKNOWN = "unknown"
 
 _lock = asyncio.Lock()
 _cached_days: list[date] = []
 _cached_at = 0.0
+#: 快照落库时的**墙钟**（北京时间）。与 `_cached_at`（单调钟，只用于算年龄）分工：
+#: 本字段回答「这份快照是在今天的什么时刻抓的」，是覆盖判据的输入。
+_cached_at_wall: datetime | None = None
+#: 上次**尝试**抓取的时刻（单调钟）。用于 `_REFRESH_MIN_INTERVAL_SEC` 限频；
+#: 记「尝试」而非「成功」—— 源故障时成功时刻永远不更新，限频会失效。
+_last_attempt_mono = 0.0
+
+
+def _is_fresh(now_mono: float | None = None) -> bool:
+    """缓存是否可**直接复用**（判据 = 未超上限 TTL **且** 覆盖今天）。
+
+    为什么不能只看 TTL（2026-09-14 实测缺陷）：源头日历是**尾随窗口、不含未来日期**
+    （09-13 22:28 抓 ⇒ 末日 09-11；09-14 10:28 抓 ⇒ 末日 09-14）。于是任何在午夜前
+    填充的缓存**必然不含次日**，只要刷新边界落在开盘后，「假休市」窗口就每个交易日
+    必然复发（实测 09:30–10:28 共 58 分钟，全站显示"休市 · 展示最近交易日数据"）。
+    把判据改为「覆盖今天」，这类窗口降为 0。
+
+    覆盖成立的两条路径（**缺一不可**，两个反例都更差）：
+      ① `days[-1] >= today` —— 列表已含今天。**单独用它不够**：节假日（尾随源的末日
+         停在上一交易日）会被判成"未覆盖"，进而被误当"开放"。
+      ② 快照抓于「今天 09:30 之后」—— 已过开盘，源头若把今日算作交易日就必然给出。
+         **单独用它也不够**：凌晨抓的快照会带着不含今日的列表活一整天（见 _SESSION_OPEN）。
+    """
+    if not _cached_days:
+        return False
+    if (now_mono if now_mono is not None else time.monotonic()) - _cached_at >= _CACHE_TTL_SEC:
+        return False
+    today = beijing_today()
+    if _cached_days[-1] >= today:
+        return True
+    snap = _cached_at_wall
+    return bool(snap and snap.date() == today and snap.time() >= _SESSION_OPEN)
+
+
+def _should_refresh() -> bool:
+    """是否**允许**发起重取（在 `_is_fresh()` 为假之后调用）。限频见 `_REFRESH_MIN_INTERVAL_SEC`。"""
+    if not _cached_days:
+        return True
+    return time.monotonic() - _last_attempt_mono >= _REFRESH_MIN_INTERVAL_SEC
 
 
 def _normalize(days: list[date]) -> list[date]:
@@ -185,17 +246,25 @@ async def trading_days(provider, lookback_days: int = 120) -> list[date]:
 
     优先 ths 官方日历（权威、近一年、含节假日调整），失败后退到上证日 K 推导。
     两者都失败时抛 `RuntimeError` 而不是返回猜测值——猜测的日历比没有日历更危险。
+
+    缓存判据见 `_is_fresh()`：**「覆盖今天」优先于「活了多少秒」**。
     """
-    global _cached_days, _cached_at
+    global _cached_days, _cached_at, _cached_at_wall, _last_attempt_mono
     now = time.monotonic()
-    if _cached_days and now - _cached_at < _CACHE_TTL_SEC:
+    if _is_fresh(now):
         return list(_cached_days)
 
     async with _lock:
         # 双检：等锁期间可能已被别的协程填满
-        if _cached_days and time.monotonic() - _cached_at < _CACHE_TTL_SEC:
+        if _is_fresh():
+            return list(_cached_days)
+        # 限频：不满足覆盖判据、但距上次尝试不足 `_REFRESH_MIN_INTERVAL_SEC` ⇒ 先返回
+        # 旧快照。**刻意不返回空**——略旧的日历远好于「无日历」（调用方会降级成
+        # 工作日推断，节假日误放行）。重取窗口由限频收敛，见 `_should_refresh()`。
+        if not _should_refresh():
             return list(_cached_days)
 
+        _last_attempt_mono = time.monotonic()
         days: list[date] = []
         source = ""
         try:
@@ -230,6 +299,7 @@ async def trading_days(provider, lookback_days: int = 120) -> list[date]:
                 )
         _cached_days = days
         _cached_at = time.monotonic()
+        _cached_at_wall = beijing_now()
         if source != "persisted":
             _persist_if_better(days, source)
         log.info("trading calendar loaded: %s days from %s, last=%s",
@@ -245,7 +315,79 @@ def is_trade_day(days: list[date], d: date) -> bool:
     return i < len(days) and days[i] == d
 
 
+def known_trade_days() -> list[date]:
+    """**同步、零外呼**返回已知交易日：进程内缓存优先，退回持久化快照。
+
+    用途：写路径（如 EOD 落盘闸门）需要一个便宜的「今天是不是交易日」判据，
+    但 `trading_days()` 是 async 且可能触发网络 —— 写路径不宜为一次判据承担
+    外呼失败风险。已知多少用多少，**判定不足时如实返回「未覆盖」**，
+    由调用方按三态处理（见 `is_trade_day_on`）。
+    """
+    return list(_cached_days) or list(_load_persisted() or [])
+
+
+def is_trade_day_on(d: date, days: list[date] | None = None) -> bool | None:
+    """`d` 是否为交易日 —— **三态**：`True` / `False` / `None`（未判定）。
+
+    | 返回 | 情形 | 可否据此拦截 |
+    |---|---|---|
+    | `False` | ① 周末；② 日历已覆盖 d 且 d 不是交易日（节假日） | ✅ 可以 |
+    | `None`  | 日历未覆盖 d（尾随源 + 缓存过旧） | ❌ **不得**当非交易日用 |
+    | `True`  | 日历覆盖且含 d | ✅ 可以 |
+
+    为什么周末单独判而不等日历（2026-09-14）：尾随日历在周末**永远不覆盖今天**
+    （末日停在周五），若只走「覆盖才判」就会把周末降级成 `None`，让 `unknown`
+    白白丢掉一个本可确定的事实。三态的价值在于**只在真不确定时不确定**。
+
+    `days` 参数（2026-09-14 F7）：调用方若已自行 `await trading_days()`（或单测
+    注入了一份确定的列表），应**显式传入**——否则这里会去读进程缓存
+    `known_trade_days()`，两者可能不是同一份，测试会隐式绑定真实日历
+    （「一周只有几天是绿的守卫」）。不传则退回 `known_trade_days()`（同步、零外呼）。
+    """
+    if d.weekday() >= 5:
+        return False
+    days = known_trade_days() if days is None else days
+    if not days or days[-1] < d:
+        return None
+    return is_trade_day(days, d)
+
+
+def is_today_trade_day() -> bool | None:
+    """今天是否交易日（`beijing_today()` 口径，三态同 `is_trade_day_on`）。"""
+    return is_trade_day_on(beijing_today())
+
+
 # ---- 交易时段判定（2026-09-01：盘前空数据不再误标"可疑"，validator/QuoteHub 共用）----
+
+def market_open_state(days: list[date] | None, now: datetime | None = None) -> str:
+    """市场状态**三态**裁决 —— 唯一实现（`open` / `closed` / `unknown`）。
+
+    为什么要有这个函数（2026-09-14 实测缺陷，见 implementation §5.4）：
+    同一情形曾有两处**相反**的判定 —— `in_trading_window`（读持久化文件、**有**
+    `days[-1] >= today` 守卫 ⇒ 放行）与 `QuoteHub._refresh_closed_state`（读进程内
+    缓存、**无**守卫 ⇒ 判休市）。于是「日历未覆盖今天」这一情形被两处分别塌缩成
+    「开放」与「确认休市」，违背核心纪律「三态 > 二态」；后者导致全站「休市」误标，
+    且**每个交易日开盘后必然复发**（缓存相位落在 09:30 之后的那些进程）。
+
+    `closed` **只在有确定依据时**返回（三条互斥路径）：
+      ① 周末；② 日历覆盖今天且今天不是交易日（节假日）；③ 当前不在宽窗口内
+      （盘前/盘后/夜间 —— 「此刻没有实时行情」本身是确定的，与今天是否交易日无关）。
+    `unknown` **只在一种情形**返回：处于可能的交易时段内，但日历未覆盖今天
+      —— 此时既无日历背书开市、也不能因源没更新就断言休市。
+
+    调用方纪律：`unknown` **不得**被任何一方塌缩 —— 既不标 `market_closed`，
+    也不标 `ready`，改由数据质量（validator / freshness）如实定级。
+    """
+    now = now or beijing_now()
+    if now.weekday() >= 5:
+        return MARKET_CLOSED
+    covered = bool(days) and days[-1] >= now.date()
+    if covered and not is_trade_day(days, now.date()):
+        return MARKET_CLOSED  # 日历明确今天休市（节假日）
+    if not in_wide_market_window(now):
+        return MARKET_CLOSED  # 时段外：此刻不存在实时行情，与交易日归属无关
+    return MARKET_OPEN if covered else MARKET_UNKNOWN
+
 
 def in_trading_window(now: datetime | None = None) -> bool:
     """同步判定当前是否处于**连续竞价**时段（交易日 09:30–11:30 / 13:00–15:00，北京时间）。
@@ -254,17 +396,13 @@ def in_trading_window(now: datetime | None = None) -> bool:
     （09:15–09:25）与开盘前形态一样不完整——价格在撮合、high/low 未建立，
     2026-09-01 09:21 实测竞价时段再次全体误标"可疑/非法"，故窗口缩到连续竞价。
     交易日判断用持久化日历兜底（trading_days() 成功抓取后落盘的
-    data/trade_calendar.json）；日历缺失或未覆盖今天时退化为
-    「工作日 + 时刻」判定——节假日少量误放行可接受，宁可放行也不因
-    日历故障把盘中误判成休市。注意与 QuoteHub._in_market_hours（09:15–15:05，
-    管休市 stale 标记）口径不同、各司其职。
+    data/trade_calendar.json）；日历缺失或未覆盖今天时为 `unknown` ⇒ **放行**
+    ——节假日少量误放行可接受，宁可放行也不因日历故障把盘中误判成休市。
+    **归属裁决走单点 `market_open_state`**（2026-09-14 收口，此前与 QuoteHub 口径相反）。
     """
     now = now or beijing_now()
-    if now.weekday() >= 5:
-        return False
-    days = _load_persisted()
-    if days and days[-1] >= now.date() and not is_trade_day(days, now.date()):
-        return False  # 日历明确今天休市（节假日）
+    if market_open_state(_load_persisted(), now) == MARKET_CLOSED:
+        return False  # 周末 / 节假日 / 时段外 —— 三种确定的 NOT open
     hhmm = now.hour * 100 + now.minute  # 模块级 import time 遮蔽 datetime.time，用 hhmm 整数比较
     return (930 <= hhmm <= 1130) or (1300 <= hhmm <= 1500)
 
@@ -330,7 +468,9 @@ def recent_trade_dates(days: list[date], anchor: date, count: int) -> list[date]
 
 
 def invalidate_cache() -> None:
-    """测试用：清空进程内缓存。"""
-    global _cached_days, _cached_at
+    """测试用：清空进程内缓存（含覆盖判据的墙钟与限频位）。"""
+    global _cached_days, _cached_at, _cached_at_wall, _last_attempt_mono
     _cached_days = []
     _cached_at = 0.0
+    _cached_at_wall = None
+    _last_attempt_mono = 0.0

@@ -269,7 +269,10 @@ class MockProvider:
         rnd = random.Random(_seed("zt", trade_date))
         records = []
         for idx, (code, name, mkt) in enumerate(UNIVERSE[:6]):
-            limit_pct = 20.0 if code.startswith(("300", "688")) else 10.0
+            # 幅度走单点：原实现手写 ("300","688")→20 否则 10，漏 301/302/689 与
+            # 北交所 43/83/87/88/92 段——与 price_rules 双写迟早漂移（该模块已有一份
+            # 单点引用 `_rules_limit_pct`，这里只是把它用全）。
+            limit_pct = _rules_limit_pct(code, name)
             price = round(_base_price(code) * (1 + limit_pct / 100), 2)
             first = rnd.randint(9 * 3600 + 2500, 14 * 3600 + 3000)
             records.append(
@@ -296,7 +299,7 @@ class MockProvider:
         rnd = random.Random(_seed("dt", trade_date))
         records = []
         for code, name, mkt in UNIVERSE[:4]:
-            limit_pct = -20.0 if code.startswith(("300", "688")) else -10.0
+            limit_pct = -_rules_limit_pct(code, name)
             price = round(_base_price(code) * (1 + limit_pct / 100), 2)
             records.append(
                 LimitDownRecord(

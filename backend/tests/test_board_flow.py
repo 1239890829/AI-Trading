@@ -274,8 +274,77 @@ def test_snapshot_skipped_before_1505(monkeypatch, fresh_memo):
     assert not (fresh_memo / "daily.json").exists()
 
 
+# ------------------------------------------------- F5 交易日闸门（2026-09-14）
+
+def _stub_snapshot_sources(monkeypatch, last_bar: str = "2026-09-06"):
+    """桩住三处外呼，让落盘路径只差「闸门判定」一个变量。"""
+    async def fake_list(kind):
+        rows = _rows_fixture()
+        for r in rows:
+            r["kind"] = kind
+        return rows, []
+
+    async def fake_members(code):
+        return {"available": True, "rows": [
+            {"symbol": "600001", "name": "甲股", "main_net_yi": 3.0, "main_net_ratio": 12.0}
+        ]}
+
+    async def fake_dayk(code):
+        return [["2026-09-05", 1.5, 1.1], [last_bar, 2.5, -0.3]]
+
+    monkeypatch.setattr(bf, "get_board_list", fake_list)
+    monkeypatch.setattr(bf, "get_board_members", fake_members)
+    monkeypatch.setattr(bf, "_fetch_board_dayk", fake_dayk)
+
+
+def test_snapshot_skipped_on_non_trading_day(monkeypatch, fresh_memo):
+    """闸门①：日历明确今天不是交易日（周六/周日/节假日）⇒ 不落盘。
+
+    *回退即红*：删掉 `snapshot_daily_if_closed` 里的 `trade_day is False` 分支，
+    本用例变红（实测：还原缺陷后 daily.json 里出现 "2026-09-07" 键）。
+    真实事故：daily.json 曾被写入 2026-09-12(六)/2026-09-13(日) 两条，内容与
+    09-11 逐字节相同（源在非交易日返回上一交易日终值，键却是今天）—— 后果不止多
+    两行：`_yesterday_ranks` 取「< today 的最新一天」，周末那条会被当成"昨日榜位"。
+    """
+    monkeypatch.setattr(bf, "beijing_now", lambda: _bj(hour=15, minute=6))
+    monkeypatch.setattr(bf, "_is_trade_day", lambda _d: False)
+    _stub_snapshot_sources(monkeypatch)
+    assert _run(bf.snapshot_daily_if_closed()) is False
+    assert not (fresh_memo / "daily.json").exists()
+
+
+def test_snapshot_backstop_skips_when_source_has_no_today_bar(monkeypatch, fresh_memo):
+    """闸门②：日历未覆盖今天（`None`）时，用**源数据末日**反推 —— 末日 < 今天 ⇒ 不落盘。
+
+    这是「三态」在写路径上的落地：`unknown` 不许塌缩成「就当是交易日」，
+    但也不能只凭"未判定"就拒绝（那会漏掉真实交易日的数据），故用源数据自证。
+    """
+    monkeypatch.setattr(bf, "beijing_now", lambda: _bj(hour=15, minute=6))
+    monkeypatch.setattr(bf, "_is_trade_day", lambda _d: None)
+    _stub_snapshot_sources(monkeypatch, last_bar="2026-09-06")  # 源末日 = 上一交易日
+    assert _run(bf.snapshot_daily_if_closed()) is False
+    assert not (fresh_memo / "daily.json").exists()
+
+
+def test_snapshot_backstop_allows_when_source_has_today_bar(monkeypatch, fresh_memo):
+    """闸门②的**反面**：未判定但源已给出今日 bar ⇒ 放行（不得因「未判定」漏数据）。
+
+    只钉"跳过"那一侧会退化成恒真（把闸门写成 `return False` 也能通过），
+    所以这一对必须成对存在 —— 三态纪律要求 unknown 两侧都不塌缩。
+    """
+    monkeypatch.setattr(bf, "beijing_now", lambda: _bj(hour=15, minute=6))
+    monkeypatch.setattr(bf, "_is_trade_day", lambda _d: None)
+    _stub_snapshot_sources(monkeypatch, last_bar="2026-09-07")  # 源已含今日 bar
+    assert _run(bf.snapshot_daily_if_closed()) is True
+    daily = json.loads((fresh_memo / "daily.json").read_text())
+    assert "2026-09-07" in daily["days"]
+
+
 def test_snapshot_happy_path_and_idempotent(monkeypatch, fresh_memo):
     monkeypatch.setattr(bf, "beijing_now", lambda: _bj())
+    # F5：闸门必须**显式注入**，否则用例会隐式绑定真实日历（`.data/trade_calendar.json`
+    # 的覆盖窗口一变，observed 兜底就会让本用例变红）—— 有注入点就必须用。
+    monkeypatch.setattr(bf, "_is_trade_day", lambda _d: True)
 
     async def fake_list(kind):
         rows = _rows_fixture()
@@ -311,6 +380,7 @@ def test_snapshot_happy_path_and_idempotent(monkeypatch, fresh_memo):
 def test_snapshot_daykline_merge_dedup(monkeypatch, fresh_memo):
     """daykline 累计库：旧 bar 保留、同日覆盖、按日期有序。"""
     monkeypatch.setattr(bf, "beijing_now", lambda: _bj())
+    monkeypatch.setattr(bf, "_is_trade_day", lambda _d: True)  # F5 闸门注入，同上
 
     async def fake_list(kind):
         rows = _rows_fixture()[:1]

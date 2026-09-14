@@ -1,10 +1,11 @@
 """每日组合自动生成调度测试（2026-09-09，picks_autogen）。
 
 覆盖：当日已有组合跳过（幂等，不覆盖手动生成）/ 周末与 14:00 截止 /
-缺失+交易日 → 生成 / 非交易日跳过。
+缺失+交易日 → 生成 / 非交易日跳过 / **未判定（`None`）跳过且可重试**（F7 三态）。
 """
 
 import asyncio
+import logging
 from datetime import datetime, timedelta
 
 from app.picks import picks_autogen as pa
@@ -87,7 +88,7 @@ def test_tick_generates_when_missing_and_trading_day(tmp_path, monkeypatch):
     async def _trading(hub, d):
         return True
 
-    monkeypatch.setattr(pa, "_is_trading_day", _trading)
+    monkeypatch.setattr(pa, "_trade_day_state", _trading)
     out = asyncio.run(pa.picks_autogen_tick(_app_stub(), now=_dt(9, 40), run_hour=9, run_minute=26))
     assert out is True
     assert counter["n"] == 1
@@ -104,10 +105,54 @@ def test_tick_skips_non_trading_day(tmp_path, monkeypatch):
     async def _not_trading(hub, d):
         return False
 
-    monkeypatch.setattr(pa, "_is_trading_day", _not_trading)
+    monkeypatch.setattr(pa, "_trade_day_state", _not_trading)
     out = asyncio.run(pa.picks_autogen_tick(_app_stub(), now=_dt(9, 40), run_hour=9, run_minute=26))
     assert out is False
     assert counter["n"] == 0
+
+
+def test_tick_defers_when_calendar_unknown(tmp_path, monkeypatch, caplog):
+    """**未判定（`None`）→ 跳过，且下一次轮询必须重新判定**（F7 定点守卫）。
+
+    本调度与盘前简报不同：它**没有持久化 last_run**，唯一持久闸门是
+    `_today_row_exists`，因此「可重试」不是靠"不置位"，而是靠
+    **未判定路径不得写下任何"今日已处置"的痕迹**。
+    两条判据缺一不可（KB-ENG-65 ㈠：桩里只写 `return None` 而无计数，
+    等于没判——被挡住的实现对这条断言同样全绿）：
+
+    1. **调用计数**：第二拍仍要重新走日历判定（桩内计数 = 2）；
+    2. **日志口径**：未判定必须留下**可见的 warning**，且**不得**被表述为
+       「非交易日」——原实现两者共用一条 info，口径失真（`None` 与 `False`
+       在日志里看起来一模一样，事故当天排查时正是被这一条误导）。
+
+    *回退即红*：把 `if day_state is not True:` 改回 `if not day_state:`（二态塌缩）
+    ⇒ 判据 2 立刻变红（日志变成「非交易日」、级别降为 info）。
+    """
+    sf = _factory(tmp_path)
+    monkeypatch.setattr(pa, "get_session_factory", lambda: sf)
+    counter = {"n": 0}
+    _stub_generate(monkeypatch, counter)
+
+    calls = {"n": 0}
+
+    async def _unknown(hub, d):
+        calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(pa, "_trade_day_state", _unknown)
+    with caplog.at_level(logging.WARNING):
+        out1 = asyncio.run(
+            pa.picks_autogen_tick(_app_stub(), now=_dt(9, 40), run_hour=9, run_minute=26)
+        )
+        out2 = asyncio.run(
+            pa.picks_autogen_tick(_app_stub(), now=_dt(9, 40), run_hour=9, run_minute=26)
+        )
+    msgs = [r.getMessage() for r in caplog.records]
+    assert out1 is False and out2 is False
+    assert counter["n"] == 0, "未判定不得触发生成"
+    assert calls["n"] == 2, "未判定路径必须可重试：第二拍仍要重新走日历判定"
+    assert any("未判定" in m for m in msgs), "未判定必须留下可见告警，不得静默按非交易日处理"
+    assert not any("非交易日" in m for m in msgs), "未判定不得被表述为「非交易日」（口径失真）"
 
 
 def test_wait_snapshot_ready_polls_until_breadth():
@@ -145,7 +190,7 @@ def test_tick_proceeds_without_snapshot_service(tmp_path, monkeypatch):
     async def _trading(hub, d):
         return True
 
-    monkeypatch.setattr(pa, "_is_trading_day", _trading)
+    monkeypatch.setattr(pa, "_trade_day_state", _trading)
     # 无 snapshot_service：_wait_snapshot_ready 直接返回 False，不阻塞
     out = asyncio.run(pa.picks_autogen_tick(_app_stub(), now=_dt(9, 40), run_hour=9, run_minute=26))
     assert out is True

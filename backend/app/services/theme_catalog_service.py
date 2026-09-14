@@ -26,6 +26,7 @@ from app.core.config import settings
 from app.core.db import utcnow
 from app.core.ttl_cache import TTLCache
 from app.models.theme_catalog import Theme, ThemeMember, ThemeOverride
+from app.picks.pre_limit_radar import board_limit_pct, is_sealed
 
 log = logging.getLogger(__name__)
 
@@ -622,7 +623,8 @@ def aggregate_theme_strength(
     - up/down/flat：涨/跌/平家数（涨跌家数比是最直观的资金合力证据）
     - avg_change_pct：成分等权平均涨幅（少数大票不会绑架题材观感）
     - total_amount：板块成交额合计（元）
-    - limit_up_count：涨停家数（change_pct ≥ 9.8 近似口径，20cm 板剔除）
+    - limit_up_count：涨停家数（按板块的单点封板判定 `is_sealed`：主板 ≥9.7 /
+      创业科创 ≥19.7 / 北交所 ≥29.7；**不再用「≥9.8、20cm 板剔除」的近似口径**）
     - top_gainers：涨幅前 3（name/symbol/change_pct）
     每项带 basis；成分无行情的按缺失计数（missing），不冒充 0。
     """
@@ -648,9 +650,10 @@ def aggregate_theme_strength(
                 down += 1
             else:
                 flat += 1
-            # 20cm 板（300/301/688/689 开头）阈值 19.8，其余 9.8
-            is_20cm = sym.startswith(("300", "301", "688", "689"))
-            if chg >= (19.8 if is_20cm else 9.8):
+            # 封板口径**单点**（2026-09-14 收口）：此前这里是第三份独立硬编码实现
+            # ——`19.8 if is_20cm else 9.8`，只有两档，**遗漏北交所 30% 板**
+            # （83/87/92 段的 +9.9% 会被误计为涨停）。现与题材路由、临板雷达同源。
+            if is_sealed(chg, board_limit_pct(sym, str(q.get("name") or ""))):
                 limit_up += 1
             amount = q.get("amount")
             if amount is not None:

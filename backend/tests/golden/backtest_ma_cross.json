@@ -602,42 +602,54 @@
   1357024.172609,
   1358248.789334,
   1358988.684436,
-  1358220.244655
+  1359246.444655
  ],
- "excess_return": 0.0213,
+ "excess_return": 0.0223,
  "in_return": 0.1949,
  "metrics_extra": {
-  "annual_return": 0.282771,
-  "avg_holding_bars": 27.333333,
+  "annual_return": 0.283559,
+  "avg_holding_bars": 28.2,
   "avg_loss_pct": -1.087224,
-  "avg_win_pct": 6.585352,
-  "best_trade_pct": 7.131633,
-  "calmar": 22.166688,
+  "avg_win_pct": 6.448782,
+  "best_trade_pct": 6.713418,
+  "calmar": 22.228478,
   "cvar_95_daily": -0.001942,
-  "downside_deviation_annual": 0.022261,
-  "expectancy_pct": 5.30659,
-  "expectancy_ratio": 6.057036,
+  "downside_deviation_annual": 0.022469,
+  "expectancy_pct": 4.941581,
+  "expectancy_ratio": 5.931422,
   "max_drawdown": 0.012757,
   "max_drawdown_days": 10,
   "max_loss_streak": 1,
-  "max_win_streak": 5,
-  "n_trades": 6,
-  "p_value": 6e-06,
-  "profit_factor": 30.28518,
-  "profit_loss_ratio": 6.83135,
-  "recovery_factor": 28.081237,
-  "sharpe": 8.584394,
-  "sortino": 11.248664,
-  "sqn": 4.52032,
-  "total_return": 0.35822,
-  "ulcer_index": 0.774027,
-  "ulcer_pi": 36.532422,
+  "max_win_streak": 4,
+  "n_trades": 5,
+  "p_value": 0.000254,
+  "profit_factor": 23.72569,
+  "profit_loss_ratio": 6.460825,
+  "recovery_factor": 28.161682,
+  "sharpe": 8.613104,
+  "sortino": 11.172237,
+  "sqn": 3.658282,
+  "total_return": 0.359246,
+  "ulcer_index": 0.77402,
+  "ulcer_pi": 36.634582,
   "var_95_daily": -0.001632,
-  "volatility_annual": 0.02917,
-  "win_rate": 0.833333,
+  "volatility_annual": 0.029144,
+  "win_rate": 0.8,
   "worst_trade_pct": -1.087224
  },
- "out_return": 0.1367,
+ "open_position": {
+  "cost": 1259419.8902,
+  "entry_price": 124.662627,
+  "entry_ts": "d0276",
+  "last_ts": "d0299",
+  "liquidated_by": "",
+  "mark_price": 133.689435,
+  "mark_value": 1350263.2915,
+  "qty": 10100,
+  "unrealized_pnl": 90843.4013,
+  "unrealized_pnl_pct": 0.072131
+ },
+ "out_return": 0.1375,
  "trades": [
   {
    "fee": 258.3,
@@ -647,7 +659,8 @@
    "qty": 9500,
    "reason": "",
    "side": "buy",
-   "signal_ts": "d0020"
+   "signal_ts": "d0020",
+   "synthetic": false
   },
   {
    "fee": 747.58,
@@ -657,7 +670,8 @@
    "qty": 9500,
    "reason": "",
    "side": "sell",
-   "signal_ts": "d0026"
+   "signal_ts": "d0026",
+   "synthetic": false
   },
   {
    "fee": 255.33,
@@ -667,7 +681,8 @@
    "qty": 9600,
    "reason": "",
    "side": "buy",
-   "signal_ts": "d0049"
+   "signal_ts": "d0049",
+   "synthetic": false
   },
   {
    "fee": 796.34,
@@ -677,7 +692,8 @@
    "qty": 9600,
    "reason": "",
    "side": "sell",
-   "signal_ts": "d0083"
+   "signal_ts": "d0083",
+   "synthetic": false
   },
   {
    "fee": 271.49,
@@ -687,7 +703,8 @@
    "qty": 9700,
    "reason": "",
    "side": "buy",
-   "signal_ts": "d0105"
+   "signal_ts": "d0105",
+   "synthetic": false
   },
   {
    "fee": 847.72,
@@ -697,7 +714,8 @@
    "qty": 9700,
    "reason": "",
    "side": "sell",
-   "signal_ts": "d0139"
+   "signal_ts": "d0139",
+   "synthetic": false
   },
   {
    "fee": 291.64,
@@ -707,7 +725,8 @@
    "qty": 9900,
    "reason": "",
    "side": "buy",
-   "signal_ts": "d0162"
+   "signal_ts": "d0162",
+   "synthetic": false
   },
   {
    "fee": 907.26,
@@ -717,7 +736,8 @@
    "qty": 9900,
    "reason": "",
    "side": "sell",
-   "signal_ts": "d0196"
+   "signal_ts": "d0196",
+   "synthetic": false
   },
   {
    "fee": 309.33,
@@ -727,7 +747,8 @@
    "qty": 10000,
    "reason": "",
    "side": "buy",
-   "signal_ts": "d0219"
+   "signal_ts": "d0219",
+   "synthetic": false
   },
   {
    "fee": 961.0,
@@ -737,7 +758,8 @@
    "qty": 10000,
    "reason": "",
    "side": "sell",
-   "signal_ts": "d0252"
+   "signal_ts": "d0252",
+   "synthetic": false
   },
   {
    "fee": 327.36,
@@ -747,17 +769,8 @@
    "qty": 10100,
    "reason": "",
    "side": "buy",
-   "signal_ts": "d0276"
-  },
-  {
-   "fee": 1026.2,
-   "fill_ts": "d0299",
-   "ok": true,
-   "price": 133.689435,
-   "qty": 10100,
-   "reason": "delisted",
-   "side": "sell",
-   "signal_ts": "d0299"
+   "signal_ts": "d0276",
+   "synthetic": false
   }
  ]
 }

@@ -165,6 +165,26 @@ def test_market_closed_skips_probe(monkeypatch):
     assert prov.calls == 0
 
 
+def test_calendar_uncovered_defers_visibly(monkeypatch):
+    """F7 定点守卫 · 日历未覆盖今天（**未判定**）⇒ 可见降级，不静默 idle、不探测。
+
+    与 `test_ths_sentinel.py::test_calendar_uncovered_defers_visibly` 同源同形
+    （同一反模式的两个实例）。区别只在于：这里的 `idle` 会让**盘中情绪监控整段
+    不工作**，是 2026-09-14「怎么今天全都是休市」的一等成因。
+
+    *回退即红*：把 `is_trade_day_on` 改回二态 ⇒ `state` 变 `"idle"`、
+    `last_error` 为空 ⇒ 三条断言全红。
+    """
+    _capture(monkeypatch)
+    prov = FakeProvider()
+    m = SentimentMonitor(provider=prov)
+    # 日历末日 09-01，而 now=WED(09-02) ⇒ 未覆盖今天（尾随窗口的真实形态）
+    snap = asyncio.run(m.probe_once(now=WED, trade_days=[date(2026, 9, 1)]))
+    assert snap["state"] == "calendar_unknown", "未判定不得塌缩成 idle（=「确认休市」）"
+    assert snap["last_error"], "未判定必须**可见**（last_error 非空），不得静默"
+    assert prov.calls == 0, "未判定不得探测（残留数据会误报）"
+
+
 def test_high_board_break_alert(monkeypatch):
     """③ 昨日 3 连板今日炸板 → 单拍告警，文案含标的/板数/处置。"""
     repo, registry = _capture(monkeypatch)

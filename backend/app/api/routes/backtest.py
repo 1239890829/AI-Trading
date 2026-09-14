@@ -9,9 +9,10 @@ git 历史可恢复 engine 实现 app/market/walkforward.py）。
 """
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
+from app.api.deps import require_write_token
 from app.core.errors import AppError
 from app.market.backtest import (
     STRATEGY_REGISTRY,
@@ -21,6 +22,7 @@ from app.market.backtest import (
 from app.schemas.backtest import (
     BacktestEquityPoint,
     BacktestMetrics,
+    BacktestOpenPosition,
     BacktestPayload,
     BacktestTrade,
 )
@@ -38,7 +40,7 @@ class BacktestRunRequest(BaseModel):
     mandate: str | None = Field(default=None, description="mandate 文件名（不含 .yaml）")
 
 
-@router.post("/backtest/run", response_model=Envelope[BacktestPayload])
+@router.post("/backtest/run", response_model=Envelope[BacktestPayload], dependencies=[Depends(require_write_token)])
 async def run_symbol_backtest(req: BacktestRunRequest) -> dict:
     """单标的日线策略回测（TDX QFQ 日K）。
 
@@ -103,13 +105,17 @@ async def run_symbol_backtest(req: BacktestRunRequest) -> dict:
             BacktestTrade(
                 signal_ts=t.signal_ts, fill_ts=t.fill_ts, side=t.side,
                 price=round(t.price, 4), ref_price=t.ref_price, qty=t.qty,
-                fee=t.fee, ok=t.ok, reason=t.reason,
+                fee=t.fee, ok=t.ok, reason=t.reason, synthetic=t.synthetic,
             )
             for t in report.trades
         ],
         config=report.config,
         metrics_extra=report.extra_metrics,
         notes=report.notes,
+        open_position=(
+            BacktestOpenPosition(**vars(report.open_position))
+            if report.open_position is not None else None
+        ),
     )
     return {"data": payload, "meta": {"applied": r.applied, "mandate": r.mandate}}
 

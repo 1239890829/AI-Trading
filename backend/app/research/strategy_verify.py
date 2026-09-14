@@ -208,21 +208,46 @@ def date_lo(con: duckdb.DuckDBPyConnection, n_days: int, *, table: str = "sig") 
 
 # ---------------------------------------------------------------- 聚合
 
+def _sq(text: str) -> str:
+    """SQL 字符串字面量转义（单引号加倍）——分组标签来自调用方，必须转义。"""
+    return str(text).replace("'", "''")
+
+
 def _agg(hz: Sequence[int], cost_bps: float) -> str:
-    """每个窗口输出：n / 均值 / 中位 / 胜率 / 标准差 / 市场中性均值。"""
+    """每个窗口输出：n（成熟） / p（未成熟） / 均值 / 中位 / 胜率 / 标准差 / 市场中性均值。
+
+    **成熟度口径（R15，2026-09-14 修）**：前瞻收益 `fwd{h}` 在「T+h 尚未到来」时是 NULL。
+    旧实现把胜率写作 `avg(CASE WHEN net > 0 THEN 1.0 ELSE 0 END)`，而
+    `NULL > 0` 求值为 **NULL 并落入 ELSE 0** ⇒ 未成熟样本被**当成亏损**计入分子；
+    同时分母是 `count(*)`（全部样本）而非 `count(fwd{h})`（成熟样本）。
+    两个偏差叠加的后果是「两笔成熟盈利 + 一笔未成熟」报成 **66.67%** 而不是 100%，
+    且 **horizon 越长胜率被系统性压得越低**（长窗口 pending 更多）——
+    这不是噪声而是方向固定的偏差，会让长窗口的核验结论被一致地看衰。
+
+    现改为「只对成熟样本求均值」：`fwd{h} IS NULL` 的行整体排除在 `avg` 之外。
+    全无成熟样本时 `avg` 返回 **NULL（unknown）** 而不是 0 —— 三态纪律：
+    「没到期」不等于「零胜率」。
+
+    `p{h}` 单列未成熟计数，让「分母被谁稀释」在结果里可见（`n{h} + p{h}` = 该组总样本）。
+    """
     parts = []
     for h in hz:
         net = f"(fwd{h} - {cost_bps / 100.0})"
         parts.append(
-            f"count(fwd{h}) AS n{h}, avg({net}) AS m{h}, quantile_cont({net}, 0.5) AS med{h}, "
-            f"avg(CASE WHEN {net} > 0 THEN 1.0 ELSE 0 END) AS w{h}, "
+            f"count(fwd{h}) AS n{h}, count(*) - count(fwd{h}) AS p{h}, "
+            f"avg({net}) AS m{h}, quantile_cont({net}, 0.5) AS med{h}, "
+            f"avg(CASE WHEN fwd{h} IS NOT NULL THEN CASE WHEN {net} > 0 THEN 1.0 ELSE 0.0 END END) "
+            f"AS w{h}, "
             f"stddev_samp({net}) AS s{h}, avg({net} - mfwd{h}) AS x{h}"
         )
     return ", ".join(parts)
 
 
 def _agg_cols(hz: Sequence[int]) -> list[str]:
-    return [c for h in hz for c in (f"n{h}", f"m{h}", f"med{h}", f"w{h}", f"s{h}", f"x{h}")]
+    return [
+        c for h in hz
+        for c in (f"n{h}", f"p{h}", f"m{h}", f"med{h}", f"w{h}", f"s{h}", f"x{h}")
+    ]
 
 
 def stats(con, *, where: str = "TRUE", group: str = "'__all__'", cfg: VerifyConfig = VerifyConfig(),
@@ -278,11 +303,30 @@ def funnel(con, conds: dict[str, str], *, where: str = "TRUE", cfg: VerifyConfig
 
 def single(con, conds: dict[str, str], *, where: str = "TRUE", cfg: VerifyConfig = VerifyConfig(),
            horizons: Sequence[int] | None = None) -> list[dict]:
-    """② 单条件独立：每条条件单独作用（判断哪一步本身有信息量）。"""
-    whens = " ".join(f"WHEN ({c}) THEN '{k} 单独'" for k, c in conds.items())
-    labels = [f"{k} 单独" for k in conds] + ["zz 都不满足"]
-    return stats(con, where=where, group=f"CASE {whens} ELSE 'zz 都不满足' END", cfg=cfg,
-                 horizons=horizons, labels=labels)
+    """② 单条件独立：每条条件**各自独立过滤**后的表现（判断哪一步本身有信息量）。
+
+    R15（2026-09-14）修正：旧实现把全部条件塞进**同一个 `CASE ... WHEN`**，语义是
+    「首命中分配」⇒ 各条件样本**互斥**：同时满足 A 与 B 的样本只会落进先写的那一组。
+    后果有两层——
+    ① 「独立贡献」实际是「扣除前序条件后的增量」，条件间的信息重叠被记成了依赖；
+    ② **调换书写顺序就会改变结论**（谁写在前面谁吃掉重叠样本），结论不可复现。
+
+    现改为逐条件**独立 WHERE** 再合并：重叠样本可**同时**进入多组，顺序无关。
+
+    刻意**不**保留「各行 n 之和 = 总样本量」这一性质：那是互斥划分的产物，
+    不是独立性的证据。改用 `zz 都不满足` 一行显式给出「一条都不命中」的样本量，
+    「未覆盖的那部分」因此仍然可见。
+    """
+    hz = tuple(horizons) if horizons else horizons_of(con, cfg.table)
+    rows: list[dict] = []
+    for k, c in conds.items():
+        label = f"{k} 单独"
+        rows.extend(stats(con, where=f"({where}) AND ({c})", group=f"'{_sq(label)}'",
+                          cfg=cfg, horizons=hz, labels=[label]))
+    rest = "TRUE" if not conds else " AND ".join(f"NOT ({c})" for c in conds.values())
+    rows.extend(stats(con, where=f"({where}) AND ({rest})", group="'zz 都不满足'",
+                      cfg=cfg, horizons=hz, labels=["zz 都不满足"]))
+    return rows
 
 
 def sensitivity(con, expr: str, others: str | None = None, *, cfg: VerifyConfig = VerifyConfig(),
@@ -333,7 +377,9 @@ def summarize_row(r: dict, horizon: int = 5, *, cost_bps: float = 0.0) -> dict:
     +1.33% 但中位 −0.08%、跑赢 49.3%，均值单独看像有效）。`excess` = 市场中性均值，
     是区分 beta 与 alpha 的唯一正确基准。
 
-    返回键：`n` / `mean` / `median` / `win_rate` / `std` / `excess` / `horizon` / `cost_bps`。
+    返回键：`n` / `pending` / `mean` / `median` / `win_rate` / `std` / `excess` / `horizon` / `cost_bps`。
+    `pending` = 该组中**前瞻收益尚未到期**的样本数（R15，2026-09-14）——
+    `n + pending` = 该组总样本；`win_rate` 的分母就是 `n`（成熟样本），不是总数。
     """
     def _f(key: str) -> float | None:
         v = r.get(key)
@@ -341,6 +387,7 @@ def summarize_row(r: dict, horizon: int = 5, *, cost_bps: float = 0.0) -> dict:
 
     return {
         "n": int(r.get(f"n{horizon}") or r.get("n") or 0),
+        "pending": int(r.get(f"p{horizon}") or 0),
         "mean": _f(f"m{horizon}"),
         "median": _f(f"med{horizon}"),
         "win_rate": _f(f"w{horizon}"),

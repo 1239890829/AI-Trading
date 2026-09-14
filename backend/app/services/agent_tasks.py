@@ -657,7 +657,16 @@ def list_audit(limit: int = 50, target: str | None = None, task_id: str | None =
 
 
 def reconcile_on_startup() -> int:
-    """启动时把残留 running 任务标为 failed（重启=进程没了，不假装还在跑）。"""
+    """启动时把残留 running 任务标为 failed（重启=进程没了，不假装还在跑）。
+
+    R11（2026-09-14）：**AgentAgenda 一并收敛**。此前只管 AgentTask，议程行停在
+    `generating` 就再没有人来收——`generate_agenda` 见 status 非 failed 便直接返回
+    同一份空快照，15:45 调度分支的 `existing["status"] == "failed"` 也永不满足
+    ⇒ **当天议程永久缺失，且界面上一直显示"生成中"**。这与 AgentTask 是同一类
+    「进程死亡留下的状态」，必须同源处理；error 口径也保持一致（Interrupted/retryable）。
+
+    返回值是**两类之和**（任务 + 议程），调用方只用于日志/健康观测。
+    """
     with get_session_factory()() as db:
         rows = db.execute(
             select(AgentTask).where(AgentTask.status.in_(("queued", "running")))
@@ -669,6 +678,19 @@ def reconcile_on_startup() -> int:
                                   "retryable": True}, ensure_ascii=False)
             r.finished_at = beijing_now_naive()
             n += 1
+
+        from app.models.agent import AgentAgenda
+
+        agendas = db.execute(
+            select(AgentAgenda).where(AgentAgenda.status == "generating")
+        ).scalars().all()
+        for a in agendas:
+            a.status = "failed"
+            a.error = json.dumps({"code": "Interrupted", "message": "服务重启，议程生成中断",
+                                  "retryable": True}, ensure_ascii=False)
+            a.finished_at = beijing_now_naive()
+            n += 1
+
         if n:
             db.commit()
     return n

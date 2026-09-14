@@ -24,6 +24,7 @@ regime 按财报日历选基础权重表（业绩驱动期/空窗期），本模
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Callable
 
 #: 六维权重的合法维度（与 regime.WEIGHTS_BY_REGIME 同一套键）
@@ -82,6 +83,11 @@ def parse_overrides(raw: str) -> dict[str, dict[str, float]]:
             if dim not in DIMS:
                 raise ValueError(f"未知维度「{dim}」（合法：{DIMS}）")
             delta_f = float(delta)
+            # R12（2026-09-14）：`json.loads` 默认接受非标准的 `NaN`/`Infinity` 字面量，
+            # 而 `abs(nan) > OFFSET_MAX` 恒 False ⇒ 幅度校验对 NaN **完全失效**（不是松一点）。
+            # 这里挡在唯一入口上：提案校验与运行时读取（_load_override）都走本函数。
+            if not math.isfinite(delta_f):
+                raise ValueError(f"偏移 {delta!r} 非有限值（NaN/Infinity 不接受）")
             if abs(delta_f) > OFFSET_MAX:
                 raise ValueError(f"偏移 {delta_f} 超出 ±{OFFSET_MAX} 上限（初版纪律）")
             out.setdefault(phase, {})[dim] = delta_f

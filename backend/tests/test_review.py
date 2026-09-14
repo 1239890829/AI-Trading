@@ -427,9 +427,14 @@ def test_scheduler_skips_when_today_report_exists(monkeypatch):
         return []
 
     monkeypatch.setattr(storage, "report_exists", _fake_exists)
-    # 让"今天是交易日"恒真，其余走真实调度逻辑
     monkeypatch.setattr(tc, "trading_days", _fake_trading_days)
-    monkeypatch.setattr(tc, "is_trade_day", lambda days, day: True)
+    # 让"今天是交易日"恒真，其余走真实调度逻辑。
+    # ⚠️ F7（2026-09-14）：`review/service.py` 已改调**三态** `is_trade_day_on`
+    # （二态原语在日历未覆盖今天时返回 False，会被当成「确认休市」）。
+    # 只桩旧名 `is_trade_day` 已**不再生效**，且会让本用例隐式绑定真实日历
+    # ——这正是「测试绑定真实运行日 ⇒ 一周只有几天是绿的」的形态（实测本用例
+    # 在全量门禁里变红，是本轮唯一回归）。
+    monkeypatch.setattr(tc, "is_trade_day_on", lambda d, days=None: True)
 
     async def go():
         """跑几个 tick 就停。无报告时每个 tick 都会重试，所以断言用增量而非绝对次数。"""
@@ -454,6 +459,56 @@ def test_scheduler_skips_when_today_report_exists(monkeypatch):
     assert len(calls) == baseline, (
         f"当日报告已存在时调度器应跳过，却仍触发了 {len(calls) - baseline} 次"
     )
+
+
+def test_scheduler_defers_when_calendar_unknown(monkeypatch, caplog):
+    """F7 定点守卫 · 日历未覆盖今天（**未判定**）⇒ 不复盘，且告警**可见**。
+
+    同族第 4 处（`review/service.py:277`）。本处处置是「本拍跳过」——调度每 tick
+    轮询，未判定天然可重试，与盘前简报不同**不需要**动 `last_run`。要钉的是两点：
+
+    ① 未判定**不得**被当成交易日去 `run()`：否则会给一个**归属不明**的日子
+       生成复盘（复盘按 trade_date 落库，日期错了等于污染历史）；
+    ② 不得静默：必须留下 warning，否则「真的休市」与「判定不了」在日志里
+       无法区分——2026-09-14 排查时正是被这一点误导。
+
+    *回退即红*：把 `is_trade_day_on` 换回二态并把 `None` 当交易日（`is not False`）
+    ⇒ `calls` 非空；去掉 warning 分支 ⇒ 判据 ② 变红。
+    """
+    import asyncio
+
+    from app.market import trade_calendar as tc
+    from app.review.service import review_scheduler
+
+    calls: list = []
+
+    class _FakeSvc:
+        session_factory = get_session_factory()
+        hub = SimpleNamespace(provider=None)
+
+        async def run(self, when):
+            calls.append(when)
+
+    async def _fake_trading_days(provider):
+        return []
+
+    monkeypatch.setattr(tc, "trading_days", _fake_trading_days)
+    # 未判定：日历未覆盖今天（尾随窗口的真实形态）
+    monkeypatch.setattr(tc, "is_trade_day_on", lambda d, days=None: None)
+
+    async def go():
+        stop = asyncio.Event()
+        task = asyncio.create_task(
+            review_scheduler(_FakeSvc(), run_hour=0, run_minute=0,
+                             check_interval_seconds=0.01, stop=stop)
+        )
+        await asyncio.sleep(0.05)
+        stop.set()
+        await task
+
+    asyncio.run(go())
+    assert not calls, "未判定不得触发复盘（会给归属不明的日子生成报告）"
+    assert "未判定" in caplog.text, "未判定必须留下可见告警，不得静默跳过"
 
 
 def test_disposition_survives_report_reread():

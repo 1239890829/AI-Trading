@@ -196,12 +196,75 @@ def test_funnel_counts_are_cumulative(con):
     assert rows["3_ 全部通过"] == 0  # 0 条也必须显式出现，不能从结果里消失
 
 
-def test_single_partitions_all_rows(con):
-    """单条件独立必须把样本**划分**完整（各自命中数之和 = 总样本量）。"""
-    rows = sv.single(con, {"S1": "chg BETWEEN 0.5 AND 1.5", "S2": "vr >= 1"})
-    assert sum(r["n"] for r in rows) == 5 * KEPT
-    by = {r["grp"]: r["n"] for r in rows}
-    assert by["S1 单独"] == KEPT and by["S2 单独"] == 4 * KEPT  # S1 优先命中，其余落到 S2
+def test_single_conditions_are_independent_not_mutually_exclusive(con):
+    """R15（2026-09-14 修）：单条件必须**各自独立**统计，重叠样本可同时进入多组。
+
+    旧实现是 `CASE WHEN (S1) ... WHEN (S2) ...`，**首命中分配** ⇒ 各条件互斥：
+    S1 命中的行不会再进 S2，「独立贡献」被记成「增量贡献」，且**调换书写顺序
+    结论就变**。本用例同时钉住两条性质：
+      ① n 之和不等于总样本量（重叠被重复计数 = 独立性的证据）；
+      ② **顺序置换后逐组数值完全相同**（结论可复现）。
+    仅断言 ① 不够：一个"两边都少算"的实现也能凑出不等号。
+    """
+    a = {r["grp"]: r for r in sv.single(con, {"S1": "chg BETWEEN 0.5 AND 1.5", "S2": "vr >= 1"})}
+    b = {r["grp"]: r for r in sv.single(con, {"S2": "vr >= 1", "S1": "chg BETWEEN 0.5 AND 1.5"})}
+    # 合成数据里 chg 恒定（A +1%/日、其余 0%/日）⇒ S1 命中 A 的全部 20 行，
+    # S2（vr 恒 1）命中全部 100 行 ⇒ 重叠 20 行必须**同时**出现在两组里。
+    assert a["S1 单独"]["n"] == KEPT
+    assert a["S2 单独"]["n"] == 5 * KEPT          # 旧实现这里是 4*KEPT（被 S1 吃掉 20 行）
+    assert a["S1 单独"]["n"] + a["S2 单独"]["n"] > 5 * KEPT   # 重叠被重复计数
+    assert a["zz 都不满足"]["n"] == 0
+    # 顺序置换不改变任何一组的数值（逐字段比对，不只看 n）
+    assert {k: {kk: vv for kk, vv in v.items()} for k, v in a.items()} == \
+           {k: {kk: vv for kk, vv in v.items()} for k, v in b.items()}
+
+
+# ---------------------------------------------------------------- R15 成熟度口径
+
+def test_win_rate_denominator_is_mature_samples_only(con):
+    """R15 主判据：胜率分母 = **成熟样本数**（`count(fwd_h)`），不是全部样本。
+
+    旧实现 `avg(CASE WHEN net > 0 THEN 1 ELSE 0 END)` 有两处偏差叠加：
+    ① `NULL > 0` → NULL → 落 ELSE 0 ⇒ 未成熟样本被**当成亏损**计入分子；
+    ② 分母是 `count(*)` ⇒ 长窗口（pending 更多）的胜率被**方向固定地**压低。
+    合成数据解析解：每只票 20 行、末尾 5 行 fwd5 未到期 ⇒ 成熟 75 / 未成熟 25；
+    成熟样本里 A/D/E 盈（3×15=45）、B 恰好 0（不算盈）、C 亏 ⇒ 45/75 = **0.6**。
+    旧口径会报 45/100 = 0.45。
+    """
+    base = sv.baseline(con, horizons=[5])
+    assert base["n5"] == 75 and base["p5"] == 25
+    assert base["n5"] + base["p5"] == base["n"] == 5 * KEPT   # 分子分母都看得见
+    assert abs(base["w5"] - 0.6) < 1e-9
+    # 明确排除旧口径（45/100），否则本断言对"分子漏算"这类退化也成立
+    assert abs(base["w5"] - 0.45) > 0.1
+
+
+def test_pending_count_tracks_horizon_length(con):
+    """未成熟计数必须随窗口长度单调增加（fwd1 尾部 1 行 / fwd10 尾部 10 行）。"""
+    base = sv.baseline(con, horizons=[1, 5, 10])
+    assert (base["n1"], base["p1"]) == (95, 5)
+    assert (base["n10"], base["p10"]) == (50, 50)
+    assert base["n1"] + base["p1"] == base["n10"] + base["p10"] == 5 * KEPT
+
+
+def test_all_pending_group_reports_unknown_not_zero(con):
+    """全未成熟分组的胜率必须是 **NULL（unknown）**，不是 0 —— 三态纪律。
+
+    尾部 5 行（rn 36..40）的 fwd5 全为 NULL。旧实现会给出 `w5 = 0.0`
+    （"零胜率"），那是把一个**未到期的窗口**读成了**确定的失败**。
+    """
+    rows = sv.stats(con, group="CASE WHEN rn > 35 THEN 'pad' ELSE 'mat' END", horizons=[5])
+    by = {r["grp"]: r for r in rows}
+    assert by["pad"]["n5"] == 0 and by["pad"]["p5"] == 25
+    assert by["pad"]["w5"] is None and by["pad"]["m5"] is None
+    assert by["mat"]["n5"] == 75 and by["mat"]["w5"] is not None
+
+
+def test_summarize_row_exposes_pending(con):
+    """核验登记必须同时给出 `n` 与 `pending`——只给 n 会掩盖"分母被谁稀释"。"""
+    out = sv.summarize_row(sv.baseline(con, horizons=[5]), horizon=5)
+    assert out["n"] == 75 and out["pending"] == 25
+    assert abs(out["win_rate"] - 0.6) < 1e-4
 
 
 def test_sensitivity_keeps_other_conditions_fixed(con):
