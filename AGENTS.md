@@ -627,8 +627,12 @@ curl 先行 → 记录字段口径与类型陷阱 → 多采样找规律 → fix
 - **日常开发一律在 `develop`**；`master` 只收**验证通过的合并**。
   用户原话：「以后就在这个分支上开发，没问题的提交才合并到 master，**或者是你觉得可以合并的时候再合并**」
   ⇒ 授权范围 = 我**可自行判断**何时把 `develop` 合进 `master`，不必每次请示；**但不要在没跑绿门禁时合**。
-- **合并方式**：`master` 是 `develop` 的祖先时走**纯快进**（`git push origin develop:master`），
-  不造合并提交；不可快进时再谈 merge/rebase。
+- **合并方式（两种都接受；按"要不要留 PR 记录"选，同一轮别混用）**：
+  · **纯快进**：`master` 是 `develop` 的祖先时可直接 `git push origin develop:master`（不造合并提交）；
+  · **走 PR**（用户 2026-09-15 实际采用）：网页开 PR 再合并 ⇒ 产生 **merge 提交**
+    （首个实例：`0a5b5b2 Merge pull request #1 from 1239890829/develop`）。好处是**留下评审记录与 CI 结论**，
+    代价是 master 历史出现合并点、`git log --first-parent` 才清爽。
+  ⚠️ 不要用 `--force`/rebase 改写 master 历史。
 - **历史事实**：此前 40+ 提交堆积在 `review/full-audit-20260914`（该分支已于 2026-09-15 合并入 master 后删除）。
 - **CI 触发条件（2026-09-15 已修）**：`on: push: branches: [master, main, **develop**]` + `pull_request`
   ⇒ **推 `develop` 就会跑 CI**（原只写 master/main ⇒ 开发分支拿不到任何反馈，门禁被推迟到合并那一刻）。
