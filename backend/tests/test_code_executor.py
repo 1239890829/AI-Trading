@@ -41,8 +41,9 @@ def mini_repo(tmp_path):
 
 
 @pytest.fixture()
-def sf(tmp_path):
+def sf(tmp_path, monkeypatch):
     from app.models.watchlist import Base
+    from app.services import agent_tasks
 
     (tmp_path / "audit.db").touch()
     from sqlalchemy import create_engine
@@ -51,8 +52,17 @@ def sf(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path}/audit.db")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine)
+    monkeypatch.setattr(agent_tasks, "get_session_factory", lambda: factory)
     yield factory
     engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def enable_code_changes_for_enabled_path_tests(monkeypatch):
+    """Enabled-path tests model an administrator's explicit opt-in."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "agent_code_change_enabled", True)
 
 
 def _item(**kw) -> dict:
@@ -134,8 +144,14 @@ def test_code_change_disabled(mini_repo, sf, monkeypatch):
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "agent_code_change_enabled", False)
+    before_head = _git(mini_repo, "rev-parse", "HEAD")[1]
+    before_status = _git(mini_repo, "status", "--porcelain")[1]
+    monkeypatch.setattr(ce, "_llm_patch", lambda *a, **k: pytest.fail("关闭时不得请求 patch"))
     item = ce.execute_c_item(_item(), sf, "2026-09-08", repo_root=mini_repo)
-    assert item["status"] == "deferred" and "关闭" in item["result"]
+    assert item["status"] == "deferred"
+    assert "关闭" in item["result"] and "不得修改、提交或合并" in item["result"]
+    assert _git(mini_repo, "rev-parse", "HEAD")[1] == before_head
+    assert _git(mini_repo, "status", "--porcelain")[1] == before_status
 
 
 # ---------------------------------------------------------------- diff 提取

@@ -1,5 +1,9 @@
 """C 类代码执行器（docs/summary/ai-evolution.md P1-⑤）——AI 自主改代码，最危险能力。
 
+本能力安全默认关闭，只有管理员显式设置
+``ASHARE_AGENT_CODE_CHANGE_ENABLED=1`` 才能进入执行流程。关闭时仅保留上游的
+建议、议程或 patch 预览，不得修改工作区、提交或合并；开关检查位于任何 LLM/Git 操作之前。
+
 安全设计（纵深防御，任何一层拒绝即终止）：
 1. **白名单**：仅 backend/app/** 与 backend/tests/** 的 ``*.py``（前端/脚本/文档 v1 明确
    deferred——node_modules 沙箱复杂度高且 LLM 改 TSX 风险更大，不冒进）。
@@ -215,7 +219,8 @@ def execute_c_item(item: dict, session_factory, agenda_date: str,
     files = [str(f) for f in (item.get("files") or [])]
     if not settings.agent_code_change_enabled:
         return {**item, "status": "deferred",
-                "result": "C 类代码执行器已关闭（ASHARE_AGENT_CODE_CHANGE_ENABLED=0）"}
+                "result": "C 类代码执行器已关闭（ASHARE_AGENT_CODE_CHANGE_ENABLED=0）："
+                          "仅保留建议、议程或 patch 预览，不得修改、提交或合并代码"}
 
     # 1) 预检（便宜检查在前：文件合法性 → 每日上限 → 工作区干净）
     reason = _validate_files(files)

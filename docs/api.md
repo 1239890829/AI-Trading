@@ -212,13 +212,13 @@ LLM 增强层**已实现但默认关闭**（`app/events/llm_aux.py` → `POST /a
 
 - `GET /api/agent/task-types` — **可创建**任务类型（= 有 handler 的类型：生成复盘报告 / 数据体检）。登记类条目（mutation 变更留痕 / escalation 告警升级待办）**不在此列**——它们没有执行体，出现只会建出必然失败的任务（见 KB-ENG-41）
 - `POST /api/agent/tasks` 🔒 — 创建并启动任务（同类型互斥；未知/登记类类型返回 422）
-- `GET /api/agent/tasks` — 任务列表（`?type=&limit=`；含**只读留痕合一**：议程自动执行以 `read_only` 条目并入同一时间线）
+- `GET /api/agent/tasks` — 任务列表（`?type=&limit=`；含**只读留痕合一**：议程执行留痕以 `read_only` 条目并入同一时间线）
 - `GET /api/agent/tasks/{id}` — 任务详情（步骤轨迹 + `params` 全量：登记类条目的正文就在 params 里）
 - `POST /api/agent/tasks/{id}/cancel` 🔒 — 取消（只读留痕条目不可取消）
 - `POST /api/agent/tasks/{id}/resolve` 🔒 — **处置待办（P1-36）**：`{outcome: done\|dismissed, note?}` → succeeded / canceled；仅 `needs_confirm` 可改，终态幂等
 - `GET /api/agent/audit` — 执行层审计（`?target=&task_id=`）
 - `GET /api/agent/agenda` / `GET /api/agent/agendas` — 当日议程 / 历史议程
-- `POST /api/agent/agenda/run` 🔒 — 手动跑一次进化议程（降级兜底；常规由 15:45 定时自动执行）
+- `POST /api/agent/agenda/run` 🔒 — 手动跑一次进化议程（降级兜底；常规由 15:45 定时生成；自主执行默认关闭，仅管理员显式启用后执行）
 
 **提醒与告警判读（降噪层）**
 

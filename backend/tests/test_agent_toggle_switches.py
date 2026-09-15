@@ -45,23 +45,26 @@ def _settings() -> Settings:
     return Settings(_env_file=None)
 
 
-def test_official_env_name_controls_both_toggles(monkeypatch):
-    assert _settings().agent_autonomy_enabled is True  # 默认开
-    monkeypatch.setenv(OFFICIAL_AUTONOMY, "0")
-    monkeypatch.setenv(OFFICIAL_CODE, "0")
+def test_defaults_are_off_and_official_names_explicitly_enable(monkeypatch):
+    defaults = _settings()
+    assert defaults.agent_autonomy_enabled is False
+    assert defaults.agent_code_change_enabled is False
+
+    monkeypatch.setenv(OFFICIAL_AUTONOMY, "1")
+    monkeypatch.setenv(OFFICIAL_CODE, "1")
     s = _settings()
-    assert s.agent_autonomy_enabled is False
-    assert s.agent_code_change_enabled is False
+    assert s.agent_autonomy_enabled is True
+    assert s.agent_code_change_enabled is True
 
 
 def test_legacy_short_name_controls_both_toggles_and_warns(monkeypatch, caplog):
     """短名照旧生效（兼容），但必须告警——静默兼容等于把坑留在原地。"""
-    monkeypatch.setenv(LEGACY_AUTONOMY, "0")
-    monkeypatch.setenv(LEGACY_CODE, "0")
+    monkeypatch.setenv(LEGACY_AUTONOMY, "1")
+    monkeypatch.setenv(LEGACY_CODE, "1")
     with caplog.at_level(logging.WARNING, logger="app.core.config"):
         s = _settings()
-    assert s.agent_autonomy_enabled is False
-    assert s.agent_code_change_enabled is False
+    assert s.agent_autonomy_enabled is True
+    assert s.agent_code_change_enabled is True
     text = caplog.text
     assert LEGACY_AUTONOMY in text and OFFICIAL_AUTONOMY in text
     assert LEGACY_CODE in text and OFFICIAL_CODE in text
