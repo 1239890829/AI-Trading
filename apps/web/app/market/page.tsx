@@ -10,7 +10,8 @@ import { HeatmapTab } from "@/components/market/heatmap-tab";
 import { EventsTab } from "@/components/market/events-tab";
 import { FundTab } from "@/components/market/fund-tab";
 import { indexDetailSymbol } from "@/lib/api";
-import { tapeUrl, workbenchUrlWithBack } from "@/lib/routing";
+import { tapeUrl } from "@/lib/routing";
+import { symbolDetailClick, useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import {
   getBreadth,
   getLimitUpPool,
@@ -58,6 +59,8 @@ type ViewKey = (typeof VIEWS)[number]["key"];
 
 function MarketInner() {
   const router = useRouter();
+  // 个股/指数详情**就地弹窗**（2026-09-15）：指数卡与标的池行不再跳工作台
+  const { open: openSymbolDetail } = useSymbolDetail();
   const sp = useSearchParams();
   const raw = sp.get("tab");
   const view: ViewKey =
@@ -176,8 +179,9 @@ function MarketInner() {
           )}
 
           {/* 指数带：紧凑 2 行（名称+质量+涨跌幅 / 价格+成交额）。
-              联动切片 F（L 指数入口）：点击 → 工作台指数详情（带前缀规范形态），
-              带 from 返回——指数与个股同一跳转纪律，不裸拼 URL。 */}
+              联动切片 F（L 指数入口）：点击 → **就地弹出指数详情**（带前缀规范形态，
+              与个股同一入口 `useSymbolDetail`，不裸拼 URL）。
+              2026-09-15 详情弹窗化：原先跳工作台，用户会丢掉当前 tab 与页面上下文。 */}
           <div className="grid shrink-0 grid-cols-3 gap-2 md:grid-cols-6">
             {indices.length === 0 && pending
               ? Array.from({ length: 6 }, (_, i) => (
@@ -189,7 +193,7 @@ function MarketInner() {
               : indices.map((q) => (
               <button
                 key={q.symbol}
-                onClick={() => router.push(workbenchUrlWithBack(indexDetailSymbol(q.symbol, q.market)))}
+                onClick={() => openSymbolDetail({ symbol: indexDetailSymbol(q.symbol, q.market) })}
                 title={`查看 ${q.name ?? q.symbol} 指数详情${q.quality_reasons?.length ? "｜" + q.quality_reasons.join("；") : ""}`}
                 className="cursor-pointer rounded-lg border border-zinc-200 px-2.5 py-1.5 text-left transition-colors hover:bg-zinc-100/60 dark:border-zinc-800 dark:hover:bg-zinc-800/40"
               >
@@ -343,7 +347,7 @@ function MarketInner() {
                     {pool.map((r) => (
                       <tr
                         key={r.symbol}
-                        onClick={() => router.push(workbenchUrlWithBack(r.symbol))}
+                        onClick={() => openSymbolDetail({ symbol: r.symbol })}
                         title="查看个股详情"
                         className="cursor-pointer border-b border-zinc-100 last:border-0 transition-colors hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900/60"
                       >

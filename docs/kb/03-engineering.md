@@ -531,3 +531,59 @@ watcher 单条 alert 是小查询/小文件写，属"①低 ②中 ③高（read
   见 `docs/factor-lifecycle-governance.md` §4.3），但 note 已改为「方向不预设 + 实测读数 + 族内近邻」。
 - **关联**：[[KB-ENG-86]]（注入要改序——同为「预判与实测不一致」）· [[KB-ENG-65]]（判据失效却全绿）·
   [[KB-ENG-72]]（清单覆盖 ≠ 真实覆盖面：**这里缺的是「邻居覆盖」**）
+
+### KB-ENG-92 双向可达的两个弹窗层要「状态与渲染宿主分离」；改点击行为不等于废掉链接
+- **需求**（2026-09-15 用户）：工作台右栏的个股/指数详情是全站最重的面板，其他页面看某只个股只能
+  跳 `/workbench`，**丢掉当前页的列表与 tab 上下文**，看完还要按「← 返回来源页」回来。
+  改造＝把详情面板封装成**全站通用弹窗**，所有"跳工作台看详情"的入口改走弹窗。
+- **决策一｜复用面板，不复制实现**。`StockDetailPanel` 是**自治**的（给 `symbol` 就自行取
+  K线/盘口/逐笔/分时/资金/财务/资讯，并自带 WS）、**不读 URL、不依赖页面 context**，且已被
+  `/stock/[symbol]` 复用 ⇒ 弹窗内原样渲染同一个组件。收益：面板任何能力增强**自动惠及弹窗**，
+  不存在两份真相源；代价：弹窗必须给足尺寸（它是完整功能面，不是摘要卡）。
+- **决策二｜两个弹窗层互相要求对方在"内层"——嵌套解不了（本条目最值钱）**：
+  - 详情弹窗里的面板要调 `useDetailModal()`（相关事件行）⇒ 弹窗必须渲染在 `DetailModalProvider` **内层**；
+  - `detail-modal.tsx` 的「查看个股详情」要调 `useSymbolDetail()` ⇒ 它必须在 `SymbolDetailProvider` **内层**。
+  - 两个 Provider 直接嵌套**必然有一侧落在外层拿到 noop 默认值**，症状是"点了没反应"——本仓
+    2026-09-09 已在通知抽屉踩过同款（Provider 没包住 NavBar）。这是一个**偏序矛盾**，加一层包不住。
+  - **解法**：把 **state** 与 **渲染宿主** 拆开——Provider 只提供 context + state，弹窗由
+    `<SymbolDetailModalHost/>` 渲染，Host 放进 `DetailModalProvider` 的 children 内，两个方向同时满足。
+  - **一般化**：A 的渲染产物需要 B 的 context、B 的渲染产物也需要 A 的 context 时，用
+    「**Provider 供状态 + 独立宿主在需要处渲染**」，不要试图用嵌套。
+- **决策三｜改点击行为，不等于废链接**。左键点击＝就地弹窗（`symbolDetailClick` 统一点击判定，
+  ⌘/Ctrl/Shift/中键**放行**浏览器默认行为）；`href` 仍保留 `workbenchUrlWithBack(symbol)`。
+  三条收益：① 右键/中键/⌘+点击仍能新标签打开真实 URL；② 分享链接、`/stock/[symbol]` 中转页、
+  助手深链全部继续有效；③ 既有断言 `a[href^="/workbench?symbol="]` **一条都不用改**
+  （本轮实测：改造后前端既有用例全绿，增量全在新增文件）。
+  **反例警示**：把 href 一并删掉会同时废掉跨页分享能力与既有断言，而"点击弹窗"这个新行为
+  **不会因此更正确**。
+- **决策四｜深链意图要能反解析**。`?ct=` / `?rt=` 原本只有解析侧（`app/workbench/page.tsx` 读 query）。
+  弹窗化后助手回复里的"600519 的资金流向图"必须**直接开在资金图页签** ⇒ 新增
+  `parseWorkbenchDetailUrl`（`lib/detail-tabs.ts`），与 `lib/nav-targets.ts` 的构造器**互逆**，
+  并由交叉断言钉住——构造 ↔ 解析漂移**不会报错，只会静默开错 tab**。
+  ⚠️ 安全边界：只解析**站内相对路径**；带协议的绝对 URL 与 protocol-relative（`//host/…`）
+  **一律拒绝**，否则 `https://evil.com/workbench?symbol=600519` 会被当成站内详情弹窗。
+- **决策五｜"弹窗 vs 页内切换"要有唯一判据**。工作台右栏就是同一份面板 ⇒ 在工作台上再弹一层
+  既冗余，又会让「左栏点自选＝切右栏」与「搜索框选股＝弹窗」行为分叉。故 Provider 在
+  `pathname === "/workbench"` 时**回落为 `router.replace` 页内切换**，并原样保留 `from`
+  （否则跳过来再切股会丢掉「← 返回来源页」）。
+- **循环依赖断环**：`detail-modal → symbol-detail-modal → stock-detail → stock-events → detail-modal`
+  是真实存在的环。把 context 抽到**零业务依赖**的 `symbol-detail-context.ts`，让 `detail-modal`
+  只依赖该文件，环即消失（也顺带让业务侧不必把 957 行的面板子树拉进依赖图）。
+- **验收（实测，非推理）**：盘面页点涨停池个股 → 弹窗且 URL 仍 `/tape?tab=limitup`；市场页点指数卡 →
+  `aria-label="指数详情 sh000001"`、右列自动收窄为「涨速/板块」、图表区只留 K线/分时
+  （**指数专属分支在弹窗内同样生效**）；尺寸实测 **1229×582 @ 视口 1280×633** ＝
+  `min(1600px,96vw) × min(1000px,92vh)`；Esc / 关闭按钮 / 点遮罩均可关；工作台内选股 →
+  **不弹窗**、URL 变 `/workbench?symbol=600519`。
+- **同日第二轮｜5 个弹窗收敛到统一外壳**。第一轮只解决"标的详情能被任何页面打开"，**弹窗外壳仍是
+  5 份**（news / concept / pick / detail / symbol）——`detail-modal` 自己的头注就写过"此前三者各写各的"，
+  结果从 3 份涨到 5 份。后果不是丑，是**行为不一致**：遮罩点击有的 `onMouseDown + target 判定`、
+  有的 `onClick + stopPropagation`（后者要求面板显式阻止冒泡，**漏一处就"点正文即关闭"**）；
+  `role="dialog"` 有的挂遮罩、有的挂面板；遮罩浓度与毛玻璃混用。
+  ⇒ 抽 `components/ui/modal-shell.tsx`（尺寸三档 + `zIndex` + 头/体/尾三槽 + 统一关闭按钮），
+  5 个弹窗全改走它，用 **10 条判据**钉住共同不变量。**两条可复用判断**：① `sm|md` 高度随内容
+  （`max-h-85vh`）、**`lg` 必须给确定高度**——详情面板靠 `flex-1` 撑图表；② 业务侧一律从**零依赖的
+  `symbol-detail-context`** 取 `useSymbolDetail`，别把面板重子树拉进依赖图。
+  ⚠️ **代价要显式认领**：关闭按钮由文字改 × 图标（`aria-label="关闭"`）⇒ 上一轮按文案写的
+  `getByText("关闭")` 当场变红；**改外壳必然翻掉按文案写的断言**，改按无障碍名查即可。
+- **关联**：[[KB-ENG-16]]（高度链——弹窗内容区必须用 grid 让面板拿到**确定高度**，否则图表撑不开）·
+  [[KB-ENG-85]]（能力描述失真：文档里写"跳工作台"就会持续误导后来者）

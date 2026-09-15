@@ -108,7 +108,7 @@
 | **T3 数据源与行情口径** | `data-source-comparison.md` → `data-sources.md` | `data-dictionary.md` · `websocket.md` | **⚡ 交易日数据时效禁「固定时长」**⇒ 语义 = **必须覆盖今天**；口径/披露信息放**提前 return 之外** |
 | **T4 选股与策略** | `kb/00-INDEX.md` 选股表 | `summary/stock-strategy.md` · `strategy-registry.md` · `factor-lifecycle-governance.md` + `factor-candidates.md` | **示例 ≠ 规范**（题材案例一律 `📎`）；策略/因子落地**必须先过实证**；回测禁令见 `backtest-rules.md` |
 | **T5 复盘与治理** | 复盘 `kb/06-review-framework.md`（**先读它**）；治理 `retro-and-gaps.md` §6.0 | `daily-review-sop.md` · `daily-review-checklist.md` · `review-agent.md` · `kb/07` · `kb/11` | 任务**只有一个清单**（§6.0）；**待办必须有出口**；删除只走 `scripts/safe-trash.sh` |
-| **T6 前端与 UI** | `summary/architecture-design.md`（§0 联动设计原则） | `architecture.md` · `kb/03-engineering.md` | **验收以实际渲染为准**（agent-browser 文本通道）；**新增页面/板块需先论证** |
+| **T6 前端与 UI** | `summary/architecture-design.md`（§1 跨页面联动设计） | `architecture.md` · `kb/03-engineering.md` | **验收以实际渲染为准**（agent-browser 文本通道）；**新增页面/板块需先论证**；**详情弹窗化**（个股/指数在任何页面就地弹窗，不跳工作台）见 [[KB-ENG-92]] |
 | **T7 外部工具与技能** | `.workbuddy/skills/<name>/SKILL.md`（**技能自述即文档**） | 本表 **WB-04** · `llm-gateway-probe.md` | 外部结论**必带免责声明**；`uzi-skill` 用**独立 venv**、首跑约 15 分钟、**仅盘后** |
 | **T8 决策与"为什么当初这么定"** | `kb/04-decisions.md`（KB-DEC） | `retro-and-gaps.md` §七（偏差错题本）· `archive/` | **已拍板勿重开**；被取代的条目改 ❌ 并写明取代者，**永不删除** |
 

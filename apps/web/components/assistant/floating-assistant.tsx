@@ -16,7 +16,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE, type AgentBubble } from "@/lib/api";
-import { workbenchUrl, themesUrl } from "@/lib/routing";
+import { themesUrl } from "@/lib/routing";
+import { parseWorkbenchDetailUrl } from "@/lib/detail-tabs";
+import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { createEntityMatcher, type EntityDict, type EntityMatch } from "@/lib/entity-links";
 import { isAllowedNav } from "@/lib/nav-targets";
 import { RichText } from "@/components/assistant/rich-text";
@@ -142,6 +144,8 @@ function snapEdge(p: { x: number; y: number }): { x: number; y: number } {
 
 export function FloatingAssistant() {
   const router = useRouter();
+  // 助手回复里的个股实体 → 就地弹窗看详情（2026-09-15 详情弹窗化，原先跳工作台）
+  const { open: openSymbolDetail } = useSymbolDetail();
   const [mounted, setMounted] = useState(false);
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
@@ -618,7 +622,7 @@ export function FloatingAssistant() {
   };
 
   // ---- 跳转 ----------------------------------------------------------------
-  // 四类落点：个股 → 工作台（命中页签则直达该页签）；题材 → 盘面题材梯队；
+  // 四类落点：个股 → **就地弹窗**（命中页签则直达该页签）；题材 → 盘面题材梯队；
   // 功能入口 → 注册表给出的站内深链。
   // nav 与「个股 + 页签」的 URL 在识别阶段已过白名单守卫，这里再过一次
   // （防御渲染期被篡改），未过则按类型降级，绝不 push 非常规 URL。
@@ -629,17 +633,27 @@ export function FloatingAssistant() {
   const onNavigate = useCallback(
     (m: EntityMatch) => {
       if (m.url && isAllowedNav(m.url)) {
-        // 深链优先：功能入口 / 个股+页签走注册表 URL
+        // 深链优先。2026-09-15 详情弹窗化：个股深链（`/workbench?symbol=…&ct=…&rt=…`）
+        // 经解析还原为弹窗入参，**页签意图一并带走**（"看看 600519 的资金流向图"
+        // 直接落在资金图页签）；其余站内功能入口深链照常跳转。
+        const target = parseWorkbenchDetailUrl(m.url);
+        if (target) {
+          openSymbolDetail(target);
+          setOpen(false);
+          return;
+        }
         router.push(m.url);
       } else if (m.type === "nav") {
         // nav 必有 url，走到这里即守卫未过（防御性降级）
         router.push(themesUrl(m.name));
+      } else if (m.type === "stock" && m.code) {
+        openSymbolDetail({ symbol: m.code });
       } else {
-        router.push(m.type === "stock" && m.code ? workbenchUrl(m.code) : themesUrl(m.name));
+        router.push(themesUrl(m.name));
       }
       setOpen(false);
     },
-    [router],
+    [router, openSymbolDetail],
   );
 
   // ---- 自动滚动（用户上翻即停止跟随） --------------------------------------

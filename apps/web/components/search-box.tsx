@@ -1,10 +1,9 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, addToWatchlist, searchSymbols } from "@/lib/api";
 import { notifyWatchlistChanged } from "@/lib/watchlist-sync";
-import { workbenchUrlWithBack } from "@/lib/routing";
+import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import type { SymbolSearchItem } from "@/types/market";
 
 /** 输入停稳后的防抖时长（ms）。Enter 可跳过防抖立即搜索。 */
@@ -16,7 +15,9 @@ const MIN_QUERY_LEN = 2;
 // compositionEnd 后用最终上屏词立即搜索（跳过防抖）。
 
 export function SearchBox() {
-  const router = useRouter();
+  // 选中搜索结果 → **就地弹窗**看详情（2026-09-15 详情弹窗化）。
+  // 工作台页内则由 Provider 回落为「切换右栏」（见 symbol-detail-modal 的 open）。
+  const { open: openSymbolDetail } = useSymbolDetail();
   const [q, setQ] = useState("");
   const [items, setItems] = useState<SymbolSearchItem[]>([]);
   const [open, setOpen] = useState(false);
@@ -99,8 +100,8 @@ export function SearchBox() {
   function go(item: SymbolSearchItem) {
     setOpen(false);
     setQ("");
-    resetTransient(); // 跳转清空后，飞行中的旧请求若返回不得再弹开面板
-    router.push(workbenchUrlWithBack(item.symbol));
+    resetTransient(); // 弹窗后清空，飞行中的旧请求若返回不得再弹开面板
+    openSymbolDetail({ symbol: item.symbol });
   }
 
   /** 关键词变短到阈值以下时的状态清理（onChange 删字 / go 跳转清空两条路径）。 */

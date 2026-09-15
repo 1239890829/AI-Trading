@@ -10,6 +10,7 @@ import Link from "next/link";
 
 import { getLurkPool, getRelayRank, type LurkPoolPayload, type RelayRankItem } from "@/lib/api";
 import { workbenchUrl } from "@/lib/routing";
+import { symbolDetailClick, useSymbolDetail } from "@/components/detail/symbol-detail-context";
 
 type State<T> =
   | { status: "idle" }
@@ -17,10 +18,13 @@ type State<T> =
   | { status: "error"; msg: string }
   | { status: "ready"; data: T };
 
+/** 接力/潜伏表里的个股：点击**就地弹窗**看详情（2026-09-15 详情弹窗化）。 */
 function SymbolLink({ symbol, name }: { symbol: string; name?: string }) {
+  const { open } = useSymbolDetail();
   return (
     <Link
       href={workbenchUrl(symbol)}
+      onClick={symbolDetailClick(open, { symbol })}
       className="font-mono text-zinc-700 hover:text-sky-600 dark:text-zinc-300 dark:hover:text-sky-400"
       title={`${symbol}${name ? ` ${name}` : ""} · 查看详情`}
     >

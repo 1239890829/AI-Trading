@@ -14,7 +14,9 @@
    事件标的池等"机会输出"必须带「不构成买卖建议」声明。
 4. **API Key 只存 `backend/.env`**（已 gitignored），绝不入库/入前端/入文档。
 5. 撮合规则（T+1/涨跌停拒/整手/费用/停牌拒）是硬拦截，不可绕过。
-6. **新增页面/板块需先论证**：默认通过复用、扩展、联动实现需求（联动设计原则，见 `docs/summary/architecture-design.md` §0）。
+6. **新增页面/板块需先论证**：默认通过复用、扩展、联动实现需求（联动设计原则，见 `docs/summary/architecture-design.md` §1 跨页面联动设计）。
+   ⚠️ **2026-09-15 更正**：此处原写「§0」，但 `GOV-002`（2026-09-14）收敛后该文正文已从 **§1** 起，**§0 不存在** ——
+   属 `doc-health` 查不出的"指针失效"（[[KB-ENG-85]]）。**引用章节前先确认锚点存在**。
 
 ---
 
@@ -48,7 +50,9 @@ cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 coll
 # **教训与本文档的警告同源：数字标注要么当轮实测回填，要么写"实测方法"而不写死数值。**
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
 cd apps/web && npx eslint .                       # 0 error / 0 warn（P1-27 已清零；余 1 处 C 类显式豁免）
-cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 536 项 / 59 文件（09-15 §6.37 实测）
+cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 571 项 / 62 文件（09-15 弹窗外壳统一轮实测）
+# ⚠️ 默认并行度偶发 **SIGKILL(exit 137) 且零输出**（非测试失败）⇒ 先降并行度复跑：
+#   npx vitest run --maxWorkers=1
 # ⚠️ **凡改动/新增涉及时间·时区的断言，必须再用 `TZ=UTC` 复跑一遍**（CI 跑在 UTC，本地是 UTC+8）：
 cd apps/web && TZ=UTC CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run
 # 2026-09-12 真实踩过：`longhu-tab.test.tsx` 用 `new Date(2026, 8, 2, 14, 20)` 钉"盘中"，
@@ -63,7 +67,23 @@ lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=
 ```
 
 > **门禁口径**：后端 collect **3088 项（3026 passed / 62 skipped / 0 failed）**、
-> 前端 **536 项 / 59 文件**、eslint **0 error / 0 warn**
+> 前端 **571 项 / 62 文件**、eslint **0 error / 0 warn**
+> （2026-09-15 弹窗外壳统一轮实测；较上一值「后端 3088 / 前端 561·61」（详情弹窗化轮）增量
+> **后端 ±0 项**（本轮**纯前端改动**，git 核对 `backend/` 无代码改动；仍照跑一遍，
+> 实测 **3026 passed / 62 skipped**，与上轮**逐字一致**）
+> + **前端 +10 项 / +1 文件**，来源自洽：新增 `components/ui/modal-shell.test.tsx` 10 例
+> （**5 个弹窗收敛到统一外壳**：portal / 遮罩 / Esc / 尺寸档 / 层级 / 头尾槽只实现一处，
+> 并顺带统一了此前不一致的三处——遮罩点击判定方式、`role="dialog"` 挂载位置、
+> 业务侧一律改依赖零依赖的 `symbol-detail-context` 而非整个面板子树；见 [[KB-ENG-92]]）
+> · `TZ=UTC` 复跑同绿 · 浏览器实测 5 个弹窗全部正常（资讯 / 概念 / 精选详情 /
+> 内容详情 / 标的详情，含遮罩点击与 Esc 关闭））
+> （2026-09-15 详情弹窗化轮实测；较上一值「后端 3088 / 前端 536·59」（§6.37）增量
+> **后端 ±0 项**（本轮**纯前端改动**，后端逐字未变——实测 3026 passed / 62 skipped / 198.95s，
+> 与 §6.37 记录逐字一致；「某一侧不变」同样是可核对的自洽项）
+> + **前端 +25 项 / +2 文件**，来源自洽：10（新文件 `components/detail/symbol-detail-modal.test.tsx`）
+> + 6（新文件 `components/stock-link.test.tsx`）+ 9（`lib/detail-tabs.test.ts` 4 → 13，
+> URL→弹窗入参解析）· `TZ=UTC` 复跑同绿 · 浏览器实测三处入口（盘面涨停池 / 市场指数卡 /
+> 事件面板标的池）点开弹窗且 **URL 不跳转**、指数分支在弹窗内同样生效，见 [[KB-ENG-92]]）
 > （2026-09-15 §6.37 实测；较上一值「后端 3088 / 前端 533·58」（§6.36）增量
 > **后端 ±0 项**（该轮亦为**纯前端改动**——`lib/api.ts` 切片，后端逐字未变）
 > + **前端 +3 项 / +1 文件**，来源自洽：新增门面守卫 `lib/api-facade.test.ts` 3 例

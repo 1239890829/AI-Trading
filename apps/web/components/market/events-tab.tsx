@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { NewsModal, type NewsModalItem } from "@/components/news-modal";
 import { useDetailModal } from "@/components/detail/detail-modal";
+import { symbolDetailClick, useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { Panel } from "@/components/panel";
 import { StockPools, directionLabel } from "@/components/event-panel";
 import { getImpactEvents, type EventSort, type ImpactEvent } from "@/lib/api";
@@ -71,6 +72,8 @@ export function EventsTab() {
   const [l1Only, setL1Only] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
   const { open: openDetail } = useDetailModal();
+  // 方向 chip 若指向个股 → **就地弹窗**（2026-09-15 详情弹窗化）；指向题材仍走跳转
+  const { open: openSymbolDetail } = useSymbolDetail();
 
   const load = useCallback(async () => {
     const r = await getImpactEvents(false, 100, sort);
@@ -288,6 +291,7 @@ export function EventsTab() {
                       <a
                         key={`${d.target_type}-${d.target}`}
                         href={isStock ? workbenchUrl(d.target) : themesUrl(d.target)}
+                        onClick={isStock ? symbolDetailClick(openSymbolDetail, { symbol: d.target }) : undefined}
                         title={tip || `关联${isStock ? "个股" : "题材"} ${d.target}（${d.basis || "入选理由见标的池"}）`}
                         className="inline-flex items-center gap-1 rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200"
                       >

@@ -1,7 +1,6 @@
 "use client";
 
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import { Panel } from "@/components/panel";
 import {
   getHeatmap,
@@ -11,7 +10,7 @@ import {
   type HeatmapStock,
 } from "@/lib/api";
 import { fmtAmount, pctText } from "@/lib/format";
-import { workbenchUrl } from "@/lib/routing";
+import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 
 /**
@@ -162,7 +161,8 @@ const HeatmapCell = memo(function HeatmapCell({
 });
 
 export function HeatmapTab() {
-  const router = useRouter();
+  // 云图标的点击：**就地弹窗**看详情（2026-09-15 详情弹窗化，原先跳工作台）
+  const { open: openSymbolDetail } = useSymbolDetail();
   const [data, setData] = useState<HeatmapPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState("");
@@ -236,7 +236,10 @@ export function HeatmapTab() {
     (s: HeatmapStock) => setHover((p) => (p === s ? null : p)),
     []
   );
-  const handleOpen = useCallback((symbol: string) => router.push(workbenchUrl(symbol)), [router]);
+  const handleOpen = useCallback(
+    (symbol: string) => openSymbolDetail({ symbol }),
+    [openSymbolDetail],
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">

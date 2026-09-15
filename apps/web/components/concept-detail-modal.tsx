@@ -7,15 +7,15 @@
  * - 细分 tab：当日涨停成员按 ths 涨停原因官方标签分组（逐字，不改写）；
  *   同花顺官方 API 无二级概念层级（四类 tag 已实测穷尽），子概念成分待
  *   数据源支持后接入——界面不提供关键词自创分组。
- * 外壳与 PickDetailModal 同款（portal + 背景点击 + Esc）。
+ * 外壳走全站统一的 `ModalShell`（2026-09-15：portal / 遮罩 / Esc / 尺寸档收在一处）。
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { createPortal } from "react-dom";
+import { useCallback, useMemo, useState } from "react";
 
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { getConceptDetail, type ConceptDetail } from "@/lib/api";
 import { fmtAmount, pctColor, pctText } from "@/lib/format";
 import { useStockRowNav } from "@/components/stock-link";
+import { ModalShell } from "@/components/ui/modal-shell";
 
 export function ConceptDetailModal({
   code,
@@ -31,14 +31,6 @@ export function ConceptDetailModal({
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<string>("__all__");
   const [q, setQ] = useState("");
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   const load = useCallback(async () => {
     try {
@@ -62,40 +54,32 @@ export function ConceptDetailModal({
     return filtered.filter((m) => m.symbol.includes(kw) || (m.name ?? "").includes(kw));
   }, [detail, tab, q]);
 
-  return createPortal(
-    <div
-      className="anim-backdrop-in fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-      onClick={onClose}
-      role="presentation"
+  return (
+    <ModalShell
+      onClose={onClose}
+      label={`${detail?.name ?? name} 概念详情`}
+      size="md"
+      radius="2xl"
+      bodyClassName="overflow-hidden"
+      header={
+        <>
+          <h2 className="truncate text-base font-semibold text-zinc-900 dark:text-zinc-50">
+            {detail?.name ?? name}
+            <span className="ml-2 font-mono text-[11px] text-zinc-600 dark:text-zinc-400">{code}</span>
+          </h2>
+          <p className="mt-0.5 text-[11px] text-zinc-600 dark:text-zinc-400">
+            {detail
+              ? `官方成分 ${detail.total} 只（与同花顺逐符号一致） · 今日涨停 ${detail.limit_up_count}`
+              : "加载中…"}
+          </p>
+        </>
+      }
+      footer={
+        <>
+          {detail?.meta_note ?? "成分=同花顺官方目录"} · 细分 tab 为当日涨停成员的官方归因标签（官方 API 未提供二级概念成分，待数据源支持）
+        </>
+      }
     >
-      <div
-        className="anim-scale-in flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900"
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-      >
-        {/* 头部 */}
-        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-zinc-200 px-4 py-3 dark:border-zinc-700">
-          <div className="min-w-0">
-            <h2 className="truncate text-base font-semibold text-zinc-900 dark:text-zinc-50">
-              {detail?.name ?? name}
-              <span className="ml-2 font-mono text-[11px] text-zinc-600 dark:text-zinc-400">{code}</span>
-            </h2>
-            <p className="mt-0.5 text-[11px] text-zinc-600 dark:text-zinc-400">
-              {detail
-                ? `官方成分 ${detail.total} 只（与同花顺逐符号一致） · 今日涨停 ${detail.limit_up_count}`
-                : "加载中…"}
-            </p>
-          </div>
-          <button
-            onClick={onClose}
-            className="shrink-0 rounded-lg px-2 py-1 text-sm text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-            aria-label="关闭"
-          >
-            ✕
-          </button>
-        </div>
-
         {/* 细分 tab + 搜索：单行布局——tab 容器横向滚动（概念多时不换行不挤压），
             搜索框 shrink-0 固定右侧，整行高度恒定 */}
         <div className="flex shrink-0 items-center gap-2 border-b border-zinc-100 px-4 py-2 dark:border-zinc-800">
@@ -183,12 +167,7 @@ export function ConceptDetailModal({
           )}
         </div>
 
-        <p className="shrink-0 border-t border-zinc-100 px-4 py-1.5 text-[10px] leading-relaxed text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
-          {detail?.meta_note ?? "成分=同花顺官方目录"} · 细分 tab 为当日涨停成员的官方归因标签（官方 API 未提供二级概念成分，待数据源支持）
-        </p>
-      </div>
-    </div>,
-    document.body,
+    </ModalShell>
   );
 }
 

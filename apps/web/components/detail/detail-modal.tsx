@@ -14,14 +14,17 @@
  * 3. **无 url 兜底** —— 不再因为没链接就不可点；弹窗内显式「原文链接缺失」。
  * 4. **可跳转** —— theme/capital/echelon 类按 nav-targets 单点跳对应功能页。
  */
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { createPortal } from "react-dom";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { getEventsForSymbol, getNewsContent, type ArticleBlock, type EventSummary } from "@/lib/api";
 import { CapitalFlowPanel } from "@/components/detail/capital-flow-panel";
 import { eventTimeText } from "@/lib/format";
-import { workbenchUrlWithBack, themesUrl } from "@/lib/routing";
+import { themesUrl } from "@/lib/routing";
+// 只依赖**零业务依赖**的 context 模块（不 import symbol-detail-modal）：
+// 否则形成 detail-modal → symbol-detail-modal → stock-detail → stock-events → detail-modal 的环
+import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
+import { ModalShell } from "@/components/ui/modal-shell";
 
 export type DetailKind = "news" | "event" | "feed" | "theme" | "capital" | "echelon" | "generic";
 
@@ -49,9 +52,6 @@ interface DetailCtx {
 }
 
 const Ctx = createContext<DetailCtx>({ open: () => {}, close: () => {} });
-
-/** 客户端挂载标志的空订阅（`useSyncExternalStore` 惯用法，P1-27） */
-const subscribeNoop = () => () => {};
 
 export function useDetailModal(): DetailCtx {
   return useContext(Ctx);
@@ -83,11 +83,9 @@ export function DetailModalProvider({ children }: { children: React.ReactNode })
 function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose: () => void }) {
   const router = useRouter();
   const { open } = useDetailModal();
-  // 客户端挂载标志（SSR/hydration 安全）：`useSyncExternalStore` 取代
-  // `useEffect(() => setMounted(true), [])`——服务端快照 false、客户端 true，
-  // 渲染结果与 effect 版一致（首帧 null → 挂载后渲染内容），但不在 effect 里
-  // 同步 setState（P1-27）。
-  const mounted = useSyncExternalStore(subscribeNoop, () => true, () => false);
+  // 「查看个股详情」→ 标的详情弹窗（2026-09-15 详情弹窗化，原先跳工作台）
+  const { open: openSymbolDetail } = useSymbolDetail();
+  // 客户端挂载标志与 portal 目标由 `ModalShell` 统一处理（2026-09-15 弹窗外壳统一）
   const [state, setState] = useState<{ status: "idle" | "loading" | "error" | "empty"; blocks?: ArticleBlock[]; msg?: string }>(
     { status: "idle" },
   );
@@ -162,48 +160,26 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
     // 实际重跑时机与 payload.kind 完全一致，行为不变。
   }, [payload.url, payload.kind, isFeed, attempt]);
 
-  // Esc 关闭（与全站弹窗一致）
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  if (!mounted) return null;
-
-  return createPortal(
-    <div
-      className="anim-backdrop-in fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
-      onClick={onClose}
-      role="presentation"
-    >
-      <div
-        className="anim-scale-in max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white p-4 shadow-xl dark:bg-zinc-900"
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label={payload.title}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-[11px] text-zinc-600 dark:text-zinc-400">
-              {KIND_LABEL[payload.kind]}
-              {payload.date ? ` · ${eventTimeText(payload.date)}` : ""}
-              {payload.source ? ` · ${payload.source}` : ""}
-            </div>
-            <h3 className="mt-0.5 text-sm font-medium text-zinc-800 dark:text-zinc-100">{payload.title}</h3>
+  return (
+    <ModalShell
+      onClose={onClose}
+      label={payload.title}
+      size="md"
+      // 内容详情弹窗可**从其他弹窗内**被打开（如概念弹窗里点事件），
+      // 故层级高于所有 z-50 弹窗（含标的详情弹窗），与既有实现一致。
+      zIndex={60}
+      header={
+        <>
+          <div className="text-[11px] text-zinc-600 dark:text-zinc-400">
+            {KIND_LABEL[payload.kind]}
+            {payload.date ? ` · ${eventTimeText(payload.date)}` : ""}
+            {payload.source ? ` · ${payload.source}` : ""}
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="shrink-0 rounded border border-zinc-200 px-2 py-0.5 text-xs text-zinc-600 dark:text-zinc-400 hover:border-zinc-400 dark:border-zinc-700"
-          >
-            关闭
-          </button>
-        </div>
-
+          <h3 className="mt-0.5 text-sm font-medium text-zinc-800 dark:text-zinc-100">{payload.title}</h3>
+        </>
+      }
+      bodyClassName="overflow-y-auto px-4 py-3"
+    >
         {/* 元信息（判定结果/方向/板块等，跨模块透传） */}
         {payload.meta && payload.meta.length > 0 && (
           <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
@@ -345,12 +321,14 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
             <button
               type="button"
               onClick={() => {
+                // 先关内容详情再开标的详情：两层同为 z-50 弹窗，叠加会让用户
+                // 关掉上层后"还留着一个"（而且 Esc 会同时关两层，行为不一致）。
                 onClose();
-                router.push(workbenchUrlWithBack(payload.symbol as string));
+                openSymbolDetail({ symbol: payload.symbol as string });
               }}
               className="rounded border border-zinc-200 px-2 py-1 text-[11px] text-zinc-600 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-300"
             >
-              去个股页 {payload.symbol}
+              查看个股详情 {payload.symbol}
             </button>
           )}
           {payload.theme && (
@@ -376,8 +354,6 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
             </a>
           )}
         </div>
-      </div>
-    </div>,
-    document.body,
+    </ModalShell>
   );
 }

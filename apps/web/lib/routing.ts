@@ -15,6 +15,28 @@ export function workbenchUrl(symbol: string): string {
 }
 
 /**
+ * 工作台深链 + tab 意图（2026-09-15 详情弹窗化新增）。
+ *
+ * 动机：详情面板弹窗化后，`ct`/`rt` 不再只服务于「跳转到工作台」——
+ * 它们在**工作台页内切换**（弹窗 Provider 在 /workbench 上回落为页内 replace）
+ * 与**弹窗初始 tab**两种场景下都要被构造。此前 `lib/nav-targets.ts` 各处
+ * 用 `` `${workbenchUrl(s)}&ct=kline` `` 手拼，再多一处消费方就会出现两种拼法。
+ * 参数顺序固定为 symbol → ct → rt → from，与既有一致（产物逐字不变）。
+ *
+ * `ct` / `rt` 取值域见 `lib/detail-tabs.ts`（那里是解析侧，此处是构造侧）。
+ */
+export function workbenchTabUrl(
+  symbol: string,
+  tab?: { chartTab?: string; rightTab?: string; from?: string | null },
+): string {
+  const sp = new URLSearchParams({ symbol });
+  if (tab?.chartTab) sp.set("ct", tab.chartTab);
+  if (tab?.rightTab) sp.set("rt", tab.rightTab);
+  if (tab?.from) sp.set("from", tab.from);
+  return `/workbench?${sp.toString()}`;
+}
+
+/**
  * 在任意**站内** URL 上追加来源参数（返回入口用）。
  * 抽出来的动机（2026-09-11，P2-28②）：以前只有"工作台 + from"这一个形态，
  * 个股深链（`?ct=` / `?rt=`）也要带返回入口，若各自手拼就会出现两种拼法。

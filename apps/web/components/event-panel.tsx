@@ -13,6 +13,7 @@ import {
   type ImpactEvent,
 } from "@/lib/api";
 import { themesUrl, workbenchUrlWithBack } from "@/lib/routing";
+import { symbolDetailClick, useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { Skeleton } from "@/components/ui/loading";
 
@@ -46,6 +47,8 @@ export { directionLabel };
 
 /** 单个事件的标的池展开（E2/L9：事件 → 标的 → 详情）。market 事件 Tab 复用。 */
 export function StockPools({ eventId }: { eventId: number }) {
+  // 标的池里的个股：点击**就地弹窗**（2026-09-15 详情弹窗化，原先跳工作台）
+  const { open: openSymbolDetail } = useSymbolDetail();
   const [pools, setPools] = useState<EventStockPool[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -81,6 +84,7 @@ export function StockPools({ eventId }: { eventId: number }) {
                 <Link
                   key={s.symbol}
                   href={workbenchUrlWithBack(s.symbol)}
+                  onClick={symbolDetailClick(openSymbolDetail, { symbol: s.symbol })}
                   className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
                   title={`${s.symbol} ${s.name} · 查看详情`}
                 >
@@ -102,6 +106,8 @@ export function EventPanel() {
   const [phase, setPhase] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { open } = useDetailModal();
+  // 方向 chip 指向个股时：点击**就地弹窗**（2026-09-15 详情弹窗化）；题材仍走跳转
+  const { open: openSymbolDetail } = useSymbolDetail();
 
   const load = useCallback(async () => {
     const r = await getImpactEvents(false, 100, "relevance");
@@ -209,6 +215,11 @@ export function EventPanel() {
                     <Link
                       key={`${d.target_type}-${d.target}`}
                       href={d.target_type === "symbol" ? workbenchUrlWithBack(d.target) : themesUrl(d.target)}
+                      onClick={
+                        d.target_type === "symbol"
+                          ? symbolDetailClick(openSymbolDetail, { symbol: d.target })
+                          : undefined
+                      }
                       title={[d.chain, d.basis].filter(Boolean).join(" ｜ ") || `关联${d.target_type === "symbol" ? "个股" : "题材"} ${d.target}`}
                       className="inline-flex items-center gap-1 rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200"
                     >

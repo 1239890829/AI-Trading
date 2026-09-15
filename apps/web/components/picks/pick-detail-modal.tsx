@@ -1,9 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
-import { createPortal } from "react-dom";
-
 import { PickCard, SUB_LABELS, fromDailyPick, fromIntradayStock } from "@/components/picks/pick-card";
+import { ModalShell } from "@/components/ui/modal-shell";
 import type { DailyPickItem, IntradayTopStock } from "@/lib/api";
 
 /**
@@ -13,8 +11,8 @@ import type { DailyPickItem, IntradayTopStock } from "@/lib/api";
  * 两类名单现在共用**同一张卡**（PickCard，2026-09-10 两卡合并）：每日精选走
  * `fromDailyPick`、盘中跟踪走 `fromIntradayStock`，字段互补后合成一张完整卡片；
  * 盘中缺的收盘口径维度（六维评分/估值/买入区间）由卡底口径注记说明，不留白。
- * 弹窗外壳与 NewsModal 同款（portal + 背景点击 + Esc）。红线 3：内容全部为
- * 可解释依据与条件陈述，不构成买卖建议。
+ * 弹窗外壳走全站统一的 `ModalShell`（2026-09-15：portal / 遮罩 / Esc / 尺寸档
+ * 收在一处，不再各自实现）。红线 3：内容全部为可解释依据与条件陈述，不构成买卖建议。
  */
 
 export type PickDetailTarget =
@@ -23,56 +21,29 @@ export type PickDetailTarget =
   | null;
 
 export function PickDetailModal({ target, onClose }: { target: PickDetailTarget; onClose: () => void }) {
-  // Esc 关闭（挂载即监听，target 为 null 时是无操作）
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   if (!target) return null;
   const title = target.kind === "pick" ? "每日精选 · 选股详情" : "盘中跟踪 · 入选详情";
 
-  return createPortal(
-    <div
-      className="anim-backdrop-in fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
-      data-testid="pick-detail-modal"
+  return (
+    <ModalShell
+      onClose={onClose}
+      label={title}
+      testid="pick-detail-modal"
+      size="sm"
+      header={<h2 className="text-[15px] font-semibold text-zinc-900 dark:text-zinc-100">{title}</h2>}
+      bodyClassName="overflow-y-auto px-4 py-3"
+      bodyTestId="pick-detail-body"
+      footer={
+        target.kind === "pick"
+          ? `六维评分：${SUB_LABELS.map(([, l]) => l).join(" / ")} · 一票否决后加权 · 数据仅供投研参考，不构成买卖建议`
+          : "盘中实时口径 · 随盘面重算 · 数据仅供投研参考，不构成买卖建议"
+      }
     >
-      <div className="anim-scale-in flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="flex items-start justify-between gap-3 border-b border-zinc-100 px-5 py-3 dark:border-zinc-800/80">
-          <h2 className="text-[15px] font-semibold text-zinc-900 dark:text-zinc-100">{title}</h2>
-          <button
-            onClick={onClose}
-            className="shrink-0 rounded p-1 text-zinc-600 dark:text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-            aria-label="关闭"
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-            </svg>
-          </button>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3" data-testid="pick-detail-body">
-          {target.kind === "pick" ? (
-            <PickCard item={fromDailyPick(target.item)} />
-          ) : (
-            <PickCard item={fromIntradayStock(target.item)} />
-          )}
-        </div>
-        <div className="border-t border-zinc-100 px-5 py-2 text-[10px] text-zinc-600 dark:text-zinc-400 dark:border-zinc-800/80">
-          {target.kind === "pick"
-            ? `六维评分：${SUB_LABELS.map(([, l]) => l).join(" / ")} · 一票否决后加权 · 数据仅供投研参考，不构成买卖建议`
-            : "盘中实时口径 · 随盘面重算 · 数据仅供投研参考，不构成买卖建议"}
-        </div>
-      </div>
-    </div>,
-    document.body,
+      {target.kind === "pick" ? (
+        <PickCard item={fromDailyPick(target.item)} />
+      ) : (
+        <PickCard item={fromIntradayStock(target.item)} />
+      )}
+    </ModalShell>
   );
 }

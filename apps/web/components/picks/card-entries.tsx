@@ -6,8 +6,9 @@
  * 入口收敛为三个，且**无数据不出现**：
  * - **消息**（事件 + 资讯合并为一个）→ 弹通用详情弹窗（feed 列表），**不跳转**；
  *   该股既无关联事件也无资讯时整个按钮不渲染（避免"点了只有一句暂无"的噪音）。
- * - **资金** → 跳个股页（资金图/主力净额）；**梯队** → 跳题材页。
- *   两者跳的是明确功能页，且都阻止冒泡（卡片整块可点会带走路由）。
+ * - **资金** → 弹窗内展示资金图（`kind: "capital"`，复用工作台组件），**不跳转**；
+ *   **梯队** → 跳题材页（题材页仍是独立功能面，这一条保留跳转）。
+ *   两者都阻止冒泡（卡片整块可点会带走路由）。
  *
  * 冒泡纪律：CardShell 整卡 onClick=stockNav，任何子元素按钮一律 stopAnd()。
  */
@@ -16,7 +17,7 @@ import { useRouter } from "next/navigation";
 
 import { getEventsForSymbol } from "@/lib/api";
 import { useDetailModal } from "@/components/detail/detail-modal";
-import { themesUrl, workbenchUrlWithBack } from "@/lib/routing";
+import { themesUrl } from "@/lib/routing";
 
 const BTN =
   "rounded border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-600 hover:border-zinc-400 hover:text-zinc-700 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200";

@@ -11,10 +11,13 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 
 import { API_BASE, getNewsContent, type ArticleBlock, type ArticleContent } from "@/lib/api";
-import { withFrom, workbenchUrlWithBack, themesUrl } from "@/lib/routing";
+import { withFrom, themesUrl } from "@/lib/routing";
+import { parseWorkbenchDetailUrl } from "@/lib/detail-tabs";
+import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { createEntityMatcher, type EntityDict, type EntityMatch, type EntityMatcher } from "@/lib/entity-links";
 import { isAllowedNav } from "@/lib/nav-targets";
 import { RichText } from "@/components/assistant/rich-text";
+import { ModalShell } from "@/components/ui/modal-shell";
 import { eventTimeText } from "@/lib/format";
 
 export interface NewsModalItem {
@@ -189,6 +192,8 @@ function ArticleBlocks({
 
 export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClose: () => void }) {
   const router = useRouter();
+  // 正文里的个股实体 → **就地弹窗**看详情（2026-09-15 详情弹窗化）
+  const { open: openSymbolDetail } = useSymbolDetail();
   const [content, setContent] = useState<ArticleContent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -217,21 +222,31 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
     };
   }, [item, matcher]);
 
-  // 实体点击导航：深链优先（功能入口 / 个股+页签）；个股 → 工作台详情（带 from）；
+  // 实体点击导航：深链优先（功能入口 / 个股+页签）；个股 → **就地弹窗**；
   // 题材 → 题材梯队。来源参数走 withFrom，深链与首页两种形态只此一种拼法。
+  //
+  // 2026-09-15 详情弹窗化：个股相关落点不再跳工作台——
+  // - 注册表产出的个股深链（`/workbench?symbol=…&ct=…&rt=…`）经
+  //   `parseWorkbenchDetailUrl` 还原成弹窗入参，**页签意图（K线/资金/逐笔…）一并带走**；
+  // - 无法识别为标的详情的站内深链（"涨停池""题材梯队"等功能入口）照常跳转。
   const onNavigate = useCallback(
     (m: EntityMatch) => {
       if (m.url && isAllowedNav(m.url)) {
+        const target = parseWorkbenchDetailUrl(m.url);
+        if (target) {
+          openSymbolDetail(target);
+          return;
+        }
         router.push(withFrom(m.url));
       } else if (m.type === "stock" && m.code) {
-        router.push(workbenchUrlWithBack(m.code));
+        openSymbolDetail({ symbol: m.code });
       } else if (m.type === "theme") {
         router.push(themesUrl(m.name));
       } else if (m.type === "nav" && m.url) {
         router.push(m.url);
       }
     },
-    [router],
+    [router, openSymbolDetail],
   );
 
   // 拉取正文；失败记 error 走降级（setState 仅出现在异步回调，不经 effect 同步触发）
@@ -254,23 +269,6 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
     // eslint-disable-next-line react-hooks/exhaustive-deps -- loading 作触发闸门，item.url 由渲染期守卫保证一致
   }, [item?.url, loading]);
 
-  // Esc 关闭
-  useEffect(() => {
-    if (!item) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [item, onClose]);
-
-  const handleBackdrop = useCallback(
-    (e: React.MouseEvent) => {
-      if (e.target === e.currentTarget) onClose();
-    },
-    [onClose],
-  );
-
   if (!item) return null;
 
   const shownTitle = content?.title ?? item.title;
@@ -280,30 +278,15 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
   // item.date，两者都经 eventTimeText 统一格式。
   const shownTime = eventTimeText(item.date ?? content?.published ?? null);
 
-  return createPortal(
-    <div
-      className="anim-backdrop-in fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
-      onMouseDown={handleBackdrop}
-      role="dialog"
-      aria-modal="true"
-      aria-label={shownTitle}
-      data-testid="news-modal"
-    >
-      <div className="anim-scale-in flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900">
-        {/* 头部：标题 + 元信息 + 关闭 */}
-        <div className="border-b border-zinc-100 px-5 py-3.5 dark:border-zinc-800/80">
-          <div className="flex items-start justify-between gap-3">
-            <h2 className="text-[15px] font-semibold leading-snug text-zinc-900 dark:text-zinc-100">{shownTitle}</h2>
-            <button
-              onClick={onClose}
-              className="shrink-0 rounded p-1 text-zinc-600 dark:text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-              aria-label="关闭"
-            >
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-              </svg>
-            </button>
-          </div>
+  return (
+    <ModalShell
+      onClose={onClose}
+      label={shownTitle}
+      testid="news-modal"
+      size="md"
+      header={
+        <>
+          <h2 className="text-[15px] font-semibold leading-snug text-zinc-900 dark:text-zinc-100">{shownTitle}</h2>
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-zinc-600 dark:text-zinc-400">
             {item.kindLabel && <span className="rounded bg-zinc-100 px-1 py-px dark:bg-zinc-800">{item.kindLabel}</span>}
             {shownSource && <span>{shownSource}</span>}
@@ -311,10 +294,24 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
             {content?.cached && <span className="text-zinc-600 dark:text-zinc-400">缓存</span>}
             {content?.truncated && <span className="text-amber-800 dark:text-amber-500">长文已截断，完整内容见原文</span>}
           </div>
-        </div>
-
-        {/* 正文 / 降级 / 加载 */}
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4" data-testid="news-modal-body">
+        </>
+      }
+      footer={
+        <>
+          <span className="text-zinc-600 dark:text-zinc-400">内容归原作者/来源媒体所有，本站仅作研究参考</span>
+          <a
+            href={item.url}
+            target="_blank"
+            rel="noreferrer"
+            className="font-medium text-blue-700 transition-colors hover:text-blue-500 dark:text-blue-400"
+          >
+            查看原文 ↗
+          </a>
+        </>
+      }
+      bodyClassName="overflow-y-auto px-5 py-4"
+      bodyTestId="news-modal-body"
+    >
           {loading && (
             <div className="space-y-2.5" data-testid="news-modal-loading">
               {[92, 100, 96, 88, 60].map((w, i) => (
@@ -368,22 +365,6 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
               )}
             </div>
           )}
-        </div>
-
-        {/* 底部：原文链接（版权边界：始终保留跳转） */}
-        <div className="flex items-center justify-between border-t border-zinc-100 px-5 py-2.5 text-[11px] dark:border-zinc-800/80">
-          <span className="text-zinc-600 dark:text-zinc-400">内容归原作者/来源媒体所有，本站仅作研究参考</span>
-          <a
-            href={item.url}
-            target="_blank"
-            rel="noreferrer"
-            className="font-medium text-blue-700 transition-colors hover:text-blue-500 dark:text-blue-400"
-          >
-            查看原文 ↗
-          </a>
-        </div>
-      </div>
-    </div>,
-    document.body,
+    </ModalShell>
   );
 }

@@ -7,6 +7,7 @@ import { RankDelta, ThemeCardView } from "@/components/theme-card";
 import { getThemes, getThemesHot, getThemeStrength, getAuctionBenchmark, getSkyrocket } from "@/lib/api";
 import { fmtHeat, pctColor, pctText, timeText } from "@/lib/format";
 import { workbenchUrlWithBack } from "@/lib/routing";
+import { symbolDetailClick, useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { sortAuctionBenchmark } from "@/lib/auction";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import type { AuctionBenchmarkItem, SkyrocketRow, ThemeStrengthRow, ThemesHotPayload } from "@/lib/api";
@@ -49,6 +50,9 @@ const TIER_LEGEND = "领涨 = 成建制·发酵/高潮·封板牢　|　强势 =
 
 export function ThemesTab() {
   const searchParams = useSearchParams();
+  // 竞价标杆/人气榜/飙升榜的个股链接：点击**就地弹窗**（2026-09-15 详情弹窗化），
+  // href 保留（右键新窗口/复制链接仍走工作台深链）
+  const { open } = useSymbolDetail();
   const [data, setData] = useState<ThemeBoardPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -320,6 +324,7 @@ export function ThemesTab() {
             <Link
               key={b.symbol}
               href={workbenchUrlWithBack(b.symbol)}
+              onClick={symbolDetailClick(open, { symbol: b.symbol })}
               className="flex shrink-0 items-center gap-1 text-xs hover:opacity-70"
               title={b.tags.length ? `官方题材：${b.tags.join("、")}` : "无官方题材归属"}
             >
@@ -347,6 +352,7 @@ export function ThemesTab() {
             <Link
               key={s.symbol}
               href={workbenchUrlWithBack(s.symbol)}
+              onClick={symbolDetailClick(open, { symbol: s.symbol })}
               className="flex shrink-0 items-center gap-1 text-xs hover:text-rose-600 dark:hover:text-rose-400"
               title={s.themes.length ? `官方题材：${s.themes.join("、")}` : "无官方题材归属"}
             >
@@ -374,6 +380,7 @@ export function ThemesTab() {
             <Link
               key={s.symbol}
               href={workbenchUrlWithBack(s.symbol)}
+              onClick={symbolDetailClick(open, { symbol: s.symbol })}
               className="flex shrink-0 items-center gap-1 text-xs hover:text-rose-600 dark:hover:text-rose-400"
             >
               <span className="font-mono text-zinc-600 dark:text-zinc-400">#{s.rank}</span>

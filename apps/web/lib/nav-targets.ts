@@ -13,7 +13,7 @@
  * - 产出必经 `isAllowedNav` 守卫：只允许站内白名单路径，防模型/文本注入站外链接；
  * - 别名只收**足够具体**的词（"涨停池"而非"涨停"），否则正文满屏链接反而干扰阅读。
  */
-import { workbenchUrl, themesUrl, tapeUrl } from "@/lib/routing";
+import { workbenchUrl, workbenchTabUrl, themesUrl, tapeUrl } from "@/lib/routing";
 
 /** 允许跳转的站内路径白名单（不含 /stock 中转页：它只是重定向，不是落点）。 */
 export const NAV_ALLOWED_PATHS = [
@@ -28,17 +28,20 @@ export const NAV_ALLOWED_PATHS = [
 export const NAV_TARGETS = {
   stock: (symbol: string) => workbenchUrl(symbol),
   // 图表区 tab（ct 与 StockDetailPanel 的 ChartTab 同域：kline|minute|flow）
-  stock_kline: (symbol: string) => `${workbenchUrl(symbol)}&ct=kline`,
-  stock_minute: (symbol: string) => `${workbenchUrl(symbol)}&ct=minute`,
-  stock_flow: (symbol: string) => `${workbenchUrl(symbol)}&ct=flow`,
+  // ⚠️ 2026-09-15 起这些 URL 有**两个消费方**：工作台深链跳转，以及
+  // 「就地弹窗打开详情」的解析侧（lib/detail-tabs.parseWorkbenchDetailUrl）。
+  // 构造一律走 workbenchTabUrl，不手拼 &ct=——两边漂移不会报错，只会静默开错 tab。
+  stock_kline: (symbol: string) => workbenchTabUrl(symbol, { chartTab: "kline" }),
+  stock_minute: (symbol: string) => workbenchTabUrl(symbol, { chartTab: "minute" }),
+  stock_flow: (symbol: string) => workbenchTabUrl(symbol, { chartTab: "flow" }),
   // 右栏 tab（rt 与 RightTab 同域：book|trades|trade|real|profile|info|speed|boards|dt）
   // 口径：只登记**个股研究面**的页签。刻意不登记 trade / real（模拟交易、真实持仓
   // 是账户面，不是"看这只票"，助手回复里也不该引导去下单）与 speed / boards（指数专属）。
-  stock_book: (symbol: string) => `${workbenchUrl(symbol)}&rt=book`,
-  stock_trades: (symbol: string) => `${workbenchUrl(symbol)}&rt=trades`,
-  stock_dt: (symbol: string) => `${workbenchUrl(symbol)}&rt=dt`,
-  stock_profile: (symbol: string) => `${workbenchUrl(symbol)}&rt=profile`,
-  stock_info: (symbol: string) => `${workbenchUrl(symbol)}&rt=info`,
+  stock_book: (symbol: string) => workbenchTabUrl(symbol, { rightTab: "book" }),
+  stock_trades: (symbol: string) => workbenchTabUrl(symbol, { rightTab: "trades" }),
+  stock_dt: (symbol: string) => workbenchTabUrl(symbol, { rightTab: "dt" }),
+  stock_profile: (symbol: string) => workbenchTabUrl(symbol, { rightTab: "profile" }),
+  stock_info: (symbol: string) => workbenchTabUrl(symbol, { rightTab: "info" }),
   theme_ladder: (focus?: string) => themesUrl(focus),
   limitup: (date?: string) => tapeUrl("limitup", date ? { date } : undefined),
   limitdown: (date?: string) => tapeUrl("limitdown", date ? { date } : undefined),
