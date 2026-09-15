@@ -61,7 +61,13 @@ ROLLING_WINDOW_DAYS = 250  # 滚动衰减监控窗口（约 1 年，制度 §6.1
 #: 2026-09-14 变更：① 年化由「期间收益误当日收益 ×243」改为「期间收益 ×243/(h−1)」（近似）；
 #: ② 年度多空由「只取 Q5」改为「同年 Q5 − Q1」；③ **IC 按窗口分别排名与过滤**
 #: （成熟样本内排名 + `n{h} >= MIN_CROSS_SECTION`）。旧报告结论保留为 `verdict_prev` 并标待复核。
-ALGO_VERSION = "2026-09-14.ic-maturity-v3"
+#: 2026-09-15 变更（**`BUG-002` 修复**）：`_quintile_sql` 的 `ntile(5)` 补唯一 tie-break
+#: （`ORDER BY f, thscode`）。原式排序键在截面内大量并列 ⇒ 分位归属随并行执行顺序变化，
+#: 同一输入连跑可出不同 verdict（`rank20` 实测 5 次中 3 次过分层判据、2 次不过）。
+#: ⚠️ **这是口径变更**：并列样本的归属由「随机」变为「确定」，分位成员随之改变——
+#: 实测 tie-break 后的 `(yr,q,avg_fwd,n)` 指纹与修复前**任何一次**观测都不相同
+#: （`rank20` 多空年化由 −8.72~−8.90% 变为 −8.39%）。故必须 bump，并使旧结论走 `review_required`。
+ALGO_VERSION = "2026-09-15.ntile-tiebreak-v4"
 
 #: **新增因子不 bump 本版本号**（RSH-001 定例，2026-09-14）：
 #: 本常量描述的是**判定口径**——signal/entry/exit、剔除规则、IC 排名与最小截面守卫、准入阈值。
@@ -353,7 +359,24 @@ def _mature_key(horizon: int) -> str:
 
 def _quintile_sql(factor: FactorDef, horizon: int) -> str:
     """主窗口五分位（复用完整 base 链——gap/range20 的表达式依赖 lvl3/lvl4 列）：
-    全期（yr='ALL'）+ 分年。avg 为逐样本等权（日间不等权，近似）。"""
+    全期（yr='ALL'）+ 分年。avg 为逐样本等权（日间不等权，近似）。
+
+    **排序键必须唯一（`BUG-002` 修复，2026-09-15）**：`ntile(5) ... ORDER BY f`
+    的排序键 `f` 在截面内**大量并列**（整数索引类因子如 `imax20` 取值仅 0~19、
+    计数类如 `cntp20` 亦然）⇒ 分位切点落在并列块中间时，**谁进哪一组取决于执行顺序**
+    ⇒ 并行（默认 `threads` = 核数）下同一输入连跑连出不同结论，`monotonic_pairs`
+    在整数阈值 `SAME_DIR_PAIRS_MIN` 上抖动 ⇒ verdict 不可位级复现。
+
+    故补 `thscode` 作 tie-break：`(date_ms, thscode)` 是主键 ⇒ `ORDER BY f, thscode`
+    是**全序**，分位归属完全确定。实测（`market.duckdb` 1027 万行，2026-09-15）：
+    `rank20` 原式 3 次跑出 3 个不同 `(yr,q,avg_fwd,n)` 指纹、分层判据 5 次里通过 3 次
+    （`mono_pairs` 出现 2 与 3 两种取值，跨 `>=3` 阈值）⇒ verdict 在 PASS/CONDITIONAL
+    间翻转；加 tie-break 后 3 次指纹**逐字相同**。
+
+    ⚠️ **并列样本仍是"被硬切"到相邻组**（`ntile` 语义即等分，不保证并列同组）；
+    tie-break 只保证**切分位置确定且可复现**，不改变"并列可被拆开"这一性质。
+    若将来需要"并列整组同归属"，那是**另一套口径**（组大小将不再相等），须另行拍板。
+    """
     return f"""{_base_cte(factor)},
 scored AS (
     SELECT thscode, date_ms,
@@ -365,7 +388,7 @@ scored AS (
 ),
 ranked AS (
     SELECT *,
-           ntile(5) OVER (PARTITION BY date_ms ORDER BY f) AS q
+           ntile(5) OVER (PARTITION BY date_ms ORDER BY f, thscode) AS q
     FROM scored
     WHERE f IS NOT NULL AND fwd IS NOT NULL
 )

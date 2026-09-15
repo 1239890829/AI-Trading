@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 
 import duckdb
@@ -747,11 +748,19 @@ def test_adding_factor_does_not_change_existing_numeric_conclusions(db, tmp_path
     bump，`review_required` 会把**数值并未失效**的历史结论全标为待复核（误报）。
     因子池自身的可见性由报告 `factors`/`summary` 列表承担，并记入制度 §8 版本日志。
 
-    **与固有抖动分离**（本用例的关键设计）：`ntile(5) OVER (... ORDER BY f)` 无 tie-break，
-    并行执行下并列块的切分顺序不定（账本 `BUG-002`）⇒ `quintile` 层**天然不可复现**。
-    故不能简单地"排除 `quintile` 了事"，而是**先同池连跑两次建立抖动基线**，
-    再拿「同池两次的差异」去解释「加因子前后的差异」——把新因子的影响从既有缺陷里摘出来。
-    基线里稳定、且加因子前后不一致的字段，才是真回归。
+    **与固有抖动分离**（本用例的关键设计）：`quintile` 层曾**天然不可复现**——
+    `ntile(5) OVER (... ORDER BY f)` 无 tie-break，并行执行下并列块的切分顺序不定
+    （账本 `BUG-002`）。故本用例**先同池连跑两次建立抖动基线**，再拿「同池两次的差异」
+    去解释「加因子前后的差异」——把新因子的影响从既有缺陷里摘出来，基线里稳定、
+    且加因子前后不一致的字段才是真回归。
+
+    **2026-09-15 `BUG-002` 修复后，本用例的判据收紧了两次**：
+    ① 第 ① 段的抖动断言由**正向**（"quintile 应当抖"）翻转为**反向**（"必须零抖动"）——
+       修复前它靠"允许抖动"来保持可用，现在它改为**守护"不再抖动"**；
+    ② `quintile` / `verdict` 一并移出下方 `skip` 集 ⇒ 它们现在也要接受
+       「纯新增因子不得改变既有结论」的逐字比对（原先被排除正是因为它们抖）。
+    ⚠️ 这是**判据方向**的变更，不是放宽：收紧了比对范围，且新增了独立的确定性守卫
+    （`test_quintile_is_bitwise_reproducible`）。
     """
     con, _ = db
     con.close()
@@ -769,24 +778,25 @@ def test_adding_factor_does_not_change_existing_numeric_conclusions(db, tmp_path
     f2 = {r["name"]: r for r in again["factors"]}
     fb = {r["name"]: r for r in base["factors"]}
 
-    # ---- ① 固有抖动基线：IC 层必须零抖动；quintile 层应当抖（否则说明 BUG-002 已修）
+    # ---- ① 全层零抖动（`BUG-002` 已于 2026-09-15 修复）
+    # 修复前此处是**正向**断言（`assert jitter`，要求 quintile 必须抖）——那是为了把
+    # 「固有缺陷造成的差异」从「新因子造成的真回归」里摘出去；tie-break 补上后，
+    # quintile 与其派生的 verdict 都是确定量，故翻转为反向断言。
     assert all(f1[n]["windows"] == f2[n]["windows"] for n in f1), "同池两次的 windows 应零抖动"
     assert all(f1[n]["daily_ic"] == f2[n]["daily_ic"] for n in f1), "同池两次的 daily_ic 应零抖动"
     jitter = [n for n in f1 if "quintile" in f1[n] and f1[n]["quintile"] != f2[n]["quintile"]]
-    assert jitter, (
-        "同池两次的 quintile 未出现抖动 ⇒ BUG-002 似已修复："
-        "请把 `quintile` 移出下方 skip 集并收紧本用例"
-    )
+    assert not jitter, f"同池两次的 quintile 仍抖动 ⇒ BUG-002 未修净（或 tie-break 被移除）：{jitter}"
 
     # ---- ② 加因子前后：基线中稳定的字段必须逐字相同
-    #: 排除项及其理由：`quintile` = 上述固有抖动（BUG-002）；`verdict` 由 quintile 派生，
-    #: 同样受影响；`redundant_with`/`reasons` 是「去重提示、人工取舍」而非结论，按新池重算；
+    #: 排除项及其理由：`redundant_with`/`reasons` 是「去重提示、人工取舍」而非结论，按新池重算；
     #: `recheck` 只在有历史结论时出现（两次都是首次跑）。
-    skip = {"quintile", "verdict", "redundant_with", "reasons", "recheck"}
+    #: ⚠️ `quintile` / `verdict` **已于 2026-09-15 移出排除集**（BUG-002 修复后它们确定可复现）。
+    skip = {"redundant_with", "reasons", "recheck"}
     #: 钉死「稳定集」的成员：将来新增字段必须在此显式归类，不允许悄悄溜出比对范围。
     pinned = {
         "best_horizon", "category", "coverage", "daily_ic", "maturity",
-        "min_bars", "name", "note", "rolling", "verdict_changed", "verdict_prev", "windows",
+        "min_bars", "name", "note", "quintile", "rolling", "verdict",
+        "verdict_changed", "verdict_prev", "windows",
     }
     assert set(f1["mom20"]) - skip == pinned, sorted(set(f1["mom20"]) - skip)
 
@@ -830,6 +840,115 @@ def test_additivity_guard_can_actually_fail(db, monkeypatch):
     monkeypatch.setattr(ev, "_base_cte", _perturbed)
     dirty = ev.evaluate_factor(con, FACTOR_BY_NAME["mom20"], market_daily)
     assert dirty["windows"] != clean["windows"], "共享列被改动却毫无差异 ⇒ 上面那条同源比对是空断言"
+
+
+# ---------------------------------------------------------------- BUG-002：分层归属确定性守卫
+#: **并列大户**（整数索引 / 计数类）——tie-break 缺失时它们最先暴露，故守卫选它们做样本。
+_TIE_PRONE = ("imax20", "cntp20", "rank20")
+
+
+def test_quintile_is_bitwise_reproducible(db, tmp_path, monkeypatch):
+    """`BUG-002` 验收（[[KB-ENG-79]] 明写的判据）：**同一输入连跑 ≥3 次，逐因子结论逐字相等**。
+
+    为什么必须是"连跑比字"而不是"断言某个具体数值"：并列块的切分顺序**本来就是任意的**
+    （这正是缺陷），故修复**没有**一个"正确数值"可钉——能钉的只有**不变性**
+    （[[KB-ENG-65]]：判据要能变红；[[KB-ENG-98]]：要问这一层到底有没有被行使）。
+
+    **为什么单独成例**（不并进上面那条加因子用例）：那条比的是「加因子前后」，
+    跑的是全量因子池、且**只比两次**；本条的判据是**同一池连跑 N 次的自比**，
+    跑的是**并列大户子集**（成本可控且直击风险面）。两条判据的"被比对对象"不同，
+    合并会让失败信息无法区分是「新因子改了结论」还是「归属不可复现」。
+
+    ⚠️ **判据盲区（如实登记）**：本用例的样本是合成仓；若真实库的并列分布与合成仓不同，
+    本用例可能仍然全绿（判据只覆盖"有并列"的形态，不覆盖"并列跨切点"的每一个具体位置）。
+    故它是**必要不充分**的守卫——补它的是下面那条与样本无关的**结构判据**。
+    """
+    con, _ = db
+    con.close()
+    db_path = tmp_path / "m.duckdb"
+    import app.factors.evaluate as ev
+
+    keep = tuple(f for f in FACTORS if f.name in _TIE_PRONE)
+    assert len(keep) == len(_TIE_PRONE), "并列大户子集与因子池已不同步，请核对 FACTORS"
+    monkeypatch.setattr(ev, "FACTORS", keep)
+
+    fingerprints = []
+    for i in range(3):
+        rep = ev.run_full_eval(db_path, out_path=tmp_path / f"run{i}.json")
+        # 逐字比对**整份因子记录**（含 quintile / verdict / windows）——不挑字段，
+        # 免得将来新增字段悄悄溜出判据范围
+        fingerprints.append(json.dumps(rep["factors"], sort_keys=True, ensure_ascii=False))
+
+    assert len(set(fingerprints)) == 1, (
+        "同池连跑 3 次结论不一致 ⇒ 分层归属仍不可复现（BUG-002 回潮）："
+        f"指纹数={len(set(fingerprints))}"
+    )
+
+
+#: **按行序取值**的窗口函数：并列（peer）时取到哪一行**取决于执行顺序** ⇒ 需要全序。
+#: 与之相对，`rank`/`dense_rank`/`percent_rank`/`cume_dist` 对并列**同值同秩**、
+#: 聚合与 `lag`/`lead` 也不依赖 peer 内部顺序 ⇒ **不需要** tie-break。这个区分是本
+#: 守卫不误报的前提，不可简化为"凡 ORDER BY 都要加 thscode"。
+_ORDER_SENSITIVE_FUNCS = ("ntile", "row_number", "first_value", "last_value", "nth_value")
+
+
+def _window_specs(sql: str) -> list[tuple[str, str, str]]:
+    """从 SQL 里抽出 `(函数名, PARTITION BY 子句, ORDER BY 子句)`，正确处理嵌套括号。"""
+    out: list[tuple[str, str, str]] = []
+    low = sql.lower()
+    for fn in _ORDER_SENSITIVE_FUNCS:
+        pos = 0
+        while True:
+            i = low.find(f"{fn}(", pos)
+            if i < 0:
+                break
+            pos = i + 1
+            m = re.compile(r"over\s*\(", re.I).search(sql, i)
+            if not m:
+                continue
+            depth, j = 1, m.end()
+            while j < len(sql) and depth:
+                if sql[j] == "(":
+                    depth += 1
+                elif sql[j] == ")":
+                    depth -= 1
+                j += 1
+            spec = sql[m.end():j - 1]
+            part = re.search(r"partition\s+by(.*?)(?:\border\s+by\b|$)", spec, re.I | re.S)
+            order = re.search(r"\border\s+by(.*)", spec, re.I | re.S)
+            out.append((fn, part.group(1) if part else "", order.group(1) if order else ""))
+    return out
+
+
+def test_cross_sectional_bucketing_order_by_has_unique_tiebreak():
+    """结构判据（与样本无关）：**跨截面分桶**的窗口函数，其 ORDER BY 必须含唯一键 `thscode`。
+
+    这是 [[KB-ENG-79]] 那条可迁移判据的落地——「**凡"分层/分位/分桶"类 SQL，
+    先问「排序键唯一吗」**」。`(date_ms, thscode)` 是本库主键 ⇒ 截面内补 `thscode`
+    即得**全序**；只按因子值 `f` 排序时，并列块谁进哪一组由执行顺序决定。
+
+    **判据只扫"生成的 SQL"、不扫源码文本**：源码 docstring 里正讲着本缺陷、写着
+    `ORDER BY f` 作反例（`_quintile_sql` 的说明即如此）⇒ 文本口径会**自我指涉假红**
+    （[[KB-ENG-98]] 附带陷阱：结构性守卫不能用字符串匹配）。只扫
+    `_base_cte` / `_base_sql` / `_quintile_sql` 的**返回值**即可绕开全部注释。
+
+    **只在 `PARTITION BY` 含 `date_ms`（= 按日横切）时才要求**：按 `thscode` 分区的
+    时序窗口（`ROW_NUMBER/LAG/AVG` 等）里 `date_ms` 本身就是全序，无需再加键。
+    """
+    import app.factors.evaluate as ev
+
+    checked = 0
+    for f in FACTORS:
+        for sql in (ev._base_cte(f), ev._base_sql(f), ev._quintile_sql(f, 20)):
+            for fn, part, order in _window_specs(sql):
+                if "date_ms" not in part:
+                    continue  # 按股票分区的时序窗口：date_ms 已是全序
+                checked += 1
+                assert "thscode" in order, (
+                    f"{f.name}: `{fn}` 按 date_ms 横切但 ORDER BY 无唯一 tie-break ⇒ "
+                    f"并列块归属随执行顺序变（BUG-002）。ORDER BY 子句={order.strip()!r}"
+                )
+    assert checked, "未解析到任何跨截面窗口函数——判据失效（SQL 形态已变，须同步本用例）"
 
 
 # ---------------------------------------------------------------- RSH-003：MFI20 / OBV20（TA-Lib 逐个转正）
