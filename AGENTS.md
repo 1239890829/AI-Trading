@@ -42,7 +42,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 collect 3149 项（3078 passed / 71 skipped / 0 failed）（09-15 §6.45 实测；前提：8000 在跑）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 collect 3176 项（3105 passed / 71 skipped / 0 failed）（09-15 §6.46 实测；前提：8000 在跑）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。
@@ -89,8 +89,24 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 collect **3149 项（3078 passed / 71 skipped / 0 failed）**、
+> **门禁口径**：后端 collect **3176 项（3105 passed / 71 skipped / 0 failed）**、
 > 前端 **576 项 / 62 文件**、eslint **0 error / 0 warn**
+> （2026-09-15 §6.46 `BUG-002`（`ntile` 无 tie-break）确定性修复轮实测；**较上一值「后端 3174 / 前端 576·62」增量
+> 后端 collect +2 / passed +2 / skipped ±0**，来源自洽：`backend/tests/test_factors.py` **36 → 38**，
+> 新增两条判据不同源的守卫（① 行为：同池连跑 3 次整份因子记录逐字相等 ② 结构：扫**生成的 SQL**，
+> `PARTITION BY date_ms` 且按行序取值的窗口函数须含 `thscode`）；另 1 例**既有**用例
+> `test_adding_factor_does_not_change_existing_numeric_conclusions` 的抖动断言由**正向翻转为反向**
+> （判据加强、不增用例数）⇒ 恒等式 `+2 = 2 passed + 0 skipped`。
+> ⚠️ **本轮基线是实测的，不是沿用文档上一行**：`git worktree add --detach /tmp/ci-sim HEAD` 干净检出实测
+> **3174 collect / 3103 passed / 71 skipped**（198 文件）。⚠️ **文档上一行写的 `3149`（§6.45）与实测基线差 25** ——
+> 差额来自 §6.45 之后合并的 **PR #6 / #7**（`codex/disable-autonomous-code-execution` /
+> `codex/harden-code-executor`）：那两批**只更新了自身分支内的文档，未回填本口径行**。
+> ⇒ **纪律：口径行的「上一值」必须以干净检出实测为准，不得沿用文档里的上一行**——
+> 否则本轮增量会被算成 **+27** 并把 25 项归错因。
+> ⚠️ **另有一处「改了却看不出」的陷阱**：`ALGO_VERSION` bump 后**不会**让用例数变化，
+> 但它改变的是**结论口径**（旧结论须走 `review_required`）⇒ **门禁数字全绿 ≠ 无需复核**（口径变更另走 `IMP-026`）。
+> + **前端 ±0**（本轮**纯后端改动**，git 核对 `apps/web/` 无改动；仍照跑，实测 576 passed / 62 files
+> 逐字一致、全量与 `TZ=UTC` 复跑同绿——**"某一侧不变"同样是可核对的自洽项**）
 > （2026-09-15 §6.45 `market.py` 切片（`IMP-005` 批 3）轮实测；较上一值「后端 3140 / 前端 576·62」增量
 > **后端 collect +9 / passed ±0 / skipped +9**，来源自洽且**分两步**：
 > +1 = 第 1 步新增 `routes/market_envelope.py`；+8 = 第 2 步新增 8 个域分片
