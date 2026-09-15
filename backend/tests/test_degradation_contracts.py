@@ -353,27 +353,32 @@ def test_longhu_default_date_uses_trading_calendar(monkeypatch):
 
     注入法：把「今天」钉成节假日（日历里没有），日历上的最近交易日是上一天 ——
     旧实现（只处理 Sat/Sun）在周中节假日会返回今天这个非交易日，龙虎榜必然空。
+
+    ⚠️ 2026-09-15 IMP-005 第三批：`latest_trade_date` 已从 `market.py` 抽到
+    **`market_envelope`**（并改为公开名）。patch 必须打在**真正读时钟／读日历的
+    那一层**——打在 `market_route` 命名空间只会改到那里的一条 import 引用，
+    helper 自身的模块全局不受影响（本函数的 docstring 是老教训，此次是它的复现）。
     """
     from datetime import date as _date
 
-    from app.api.routes import market as market_route
+    from app.api.routes import market_envelope
 
     holiday = _date(2026, 10, 1)  # 国庆（周四，周中节假日）
-    monkeypatch.setattr(market_route, "beijing_today", lambda: holiday)
+    monkeypatch.setattr(market_envelope, "beijing_today", lambda: holiday)
 
     async def fake_days(_provider):  # noqa: ANN001
         return [_date(2026, 9, 29), _date(2026, 9, 30)]
 
-    monkeypatch.setattr(market_route, "trading_days", fake_days)
+    monkeypatch.setattr(market_envelope, "trading_days", fake_days)
     hub = type("H", (), {"provider": object()})()
-    assert asyncio.run(market_route._latest_trade_date(hub)) == _date(2026, 9, 30)
+    assert asyncio.run(market_envelope.latest_trade_date(hub)) == _date(2026, 9, 30)
 
 
 def test_longhu_default_date_falls_back_when_calendar_unavailable(monkeypatch):
     """日历不可用时退到周末规则（不 500、不静默）。"""
     from datetime import date as _date
 
-    from app.api.routes import market as market_route
+    from app.api.routes import market_envelope
     from app.services import market_snapshot
 
     # ⚠️ 回退函数 `default_trade_date_weekend_fallback` 读的是**它自己模块**的
@@ -384,30 +389,41 @@ def test_longhu_default_date_falls_back_when_calendar_unavailable(monkeypatch):
     async def boom(_provider):  # noqa: ANN001
         raise RuntimeError("calendar down")
 
-    monkeypatch.setattr(market_route, "trading_days", boom)
+    monkeypatch.setattr(market_envelope, "trading_days", boom)
     hub = type("H", (), {"provider": object()})()
-    assert asyncio.run(market_route._latest_trade_date(hub)) == _date(2026, 9, 11)
+    assert asyncio.run(market_envelope.latest_trade_date(hub)) == _date(2026, 9, 11)
 
 
 def test_longhu_route_wires_the_calendar_date(monkeypatch):
     """钉住**接线**而非仅 helper：默认日期必须真的走日历。
 
-    第一版只调 `_latest_trade_date(hub)`，于是把路由里那一行改回
+    第一版只调 `latest_trade_date(hub)`，于是把路由里那一行改回
     `default_trade_date_weekend_fallback()` 的注入**不会变红**（实测如此）——
     测试与修复点错位。本用例改从路由入口进，观察 provider 实际收到的日期。
+
+    ⚠️ 2026-09-15 IMP-005 第三批：本用例**跨三个 patch 目标**，各自对应一层真实引用 ——
+    ① 要观察的接线在**路由入口**（`market_route.longhu_detail`，仍在 `market.py`）；
+    ② 路由体内直接调的是 `market.py` 命名空间里的 `meta_payload` 引用（`from ... import`
+       绑定的是**对象**，patch 源模块改不了这里）⇒ meta 挡板要打在 `market_route`；
+    ③ `latest_trade_date` 内部读的时钟与日历在**它自己模块**（`market_envelope`）
+       ⇒ 那两个要打在 `market_envelope`。
+    三处少打任何一处，要么报 `'H' object has no attribute 'is_stale'`（meta 挡板失效），
+    要么退化成"只调 helper"那版（接线断掉也照样绿）。
     """
     from datetime import date as _date
 
     from app.api.routes import market as market_route
+    from app.api.routes import market_envelope
 
     holiday = _date(2026, 10, 1)  # 国庆（周中节假日）
-    monkeypatch.setattr(market_route, "beijing_today", lambda: holiday)
-    monkeypatch.setattr(market_route, "_meta", lambda _hub: {})  # 本用例只关心日期接线
+    monkeypatch.setattr(market_envelope, "beijing_today", lambda: holiday)
+    # 本用例只关心日期接线（打在路由命名空间：路由直接调的就是这里的引用）
+    monkeypatch.setattr(market_route, "meta_payload", lambda _hub: {})
 
     async def fake_days(_provider):  # noqa: ANN001
         return [_date(2026, 9, 29), _date(2026, 9, 30)]
 
-    monkeypatch.setattr(market_route, "trading_days", fake_days)
+    monkeypatch.setattr(market_envelope, "trading_days", fake_days)
 
     seen: dict = {}
 

@@ -10,7 +10,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from app.api.deps import get_hub
-from app.core.freshness import Freshness
 from app.core.ttl_cache import cache_on
 from app.data_providers.eastmoney import ProviderError
 from app.data_quality.validator import validate_order_book
@@ -52,7 +51,6 @@ from app.services.quote_enrich import fetch_quotes_list
 from app.services.quote_hub import QuoteHub
 from app.services.market_snapshot import (
     default_trade_date,
-    default_trade_date_weekend_fallback,
     load_snapshot_map,
 )
 from app.services.speed_sampler import SpeedSampler
@@ -60,87 +58,19 @@ from app.services.dragon_service import apply_position_with_5d
 from app.services.theme_catalog_service import official_multi_day_changes
 from app.core.bjtime import beijing_now, beijing_now_naive, beijing_today  # S2-8 时区收敛
 
+
+# 跨域共用的信封辅助（IMP-005 批 3 抽到 market_envelope，去掉下划线前缀以便分片共享）
+from app.api.routes.market_envelope import (
+    meta_payload,
+    dated_meta,
+    latest_trade_date,
+)
+
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["market"])
 
 
-def _hub_freshness(hub: QuoteHub) -> dict:
-    """行情链新鲜度（S2-1 契约）。**保留 `is_stale` 布尔**供既有消费方使用。
 
-    刻意用 `getattr` 回退而非直接调 `hub.freshness()`：多处测试桩只实现了
-    `is_stale`（历史接口面），强依赖新方法会把"加一个只读字段"变成破坏性改动。
-    回退路径同样按 Freshness 规则派生（缺时间戳 → unknown），**不假装 ready**。
-    """
-    fn = getattr(hub, "freshness", None)
-    if callable(fn):
-        fresh = fn()
-    else:
-        fresh = Freshness.from_age(
-            as_of=getattr(hub, "last_success_refresh", None),
-            fresh_within=getattr(hub, "stale_after", 10.0) or 10.0,
-            source=getattr(getattr(hub, "provider", None), "name", None),
-            missing_reason="行情链未提供成功刷新时间，无法判定新鲜度",
-        )
-    return fresh.model_dump(mode="json")
-
-
-def _meta(hub: QuoteHub) -> dict:
-    """行情信封的 meta。
-
-    `batch_coverage`（R18，2026-09-14）：上一轮批量请求的**返回覆盖率**
-    （1.0 = 请求集全部返回，0.0 = 一只都没回，None = 未判定/空自选）。
-    它量的是"源有没有漏返回"，与 `freshness`（量时间年龄）是两个不同的轴：
-    源可能每一轮都"成功"却稳定漏掉几只，此时 Hub 级 freshness 仍 ready——
-    逐标的 `Quote.quality`/`freshness()` 负责诚实，本字段提供**系统级**读数
-    （例如"覆盖率从 1.0 掉到 0.92 并持续"是源侧退化的早期信号）。
-
-    ⚠️ 刻意**不**把完整缺失清单放进每个响应：自选可达数百只，全量列表是
-    纯载荷浪费。清单保留在 Hub 对象上（`hub.last_missing_symbols`）供日志
-    与诊断使用，日志侧只在缺失集**变化**时打印。
-
-    `push`（R24，2026-09-14）：WebSocket 推送链路的取证面 —— 订阅连接数、
-    出站队列上限、**累计丢弃帧数**。丢弃只可能发生在出站队列满时，即客户端
-    停止消费而服务端仍在按 1Hz 生产（慢网络 / 半死连接 / 已成孤儿的 writer）；
-    它是"推送正在丢帧"的唯一系统级读数，也是判定"该降级了"的依据之一。
-    """
-    return {
-        "provider": hub.provider.name,
-        "is_realtime": bool(getattr(hub.provider, "realtime", False)) and not hub.is_stale(),
-        "is_stale": hub.is_stale(),
-        "freshness": _hub_freshness(hub),
-        "batch_coverage": getattr(hub, "last_batch_coverage", None),
-        "push": hub.subscriber_stats() if hasattr(hub, "subscriber_stats") else None,
-        "last_success_refresh": hub.last_success_refresh.isoformat() if hub.last_success_refresh else None,
-        "generated_at": utcnow().isoformat(),
-    }
-
-
-async def _dated_meta(hub: QuoteHub, trade_date: date) -> dict:
-    """**按日期取数**的载荷专用 meta：数据日期落后于最近交易日时**必须降级**（红线 2）。
-
-    为什么需要它（2026-09-14 实测）：`_meta()` 描述的是 **Hub 的实时健康度**，而 `data`
-    的业务日期是**另一个轴**；此前二者之间**没有任何一致性校验**，于是同一响应里并存
-    `data.trade_date = "2026-09-11"`、`meta.is_realtime = true`、`meta.is_stale = false`、
-    `freshness.state = "ready"`、`freshness.age_seconds = 0.9` —— **过期数据拿到了最强的
-    实时背书**。这正是红线 2「禁止把过期缓存冒充实盘」要禁止的形态。
-
-    判据用**日历覆盖的最近交易日**（`_latest_trade_date` 已走日历唯一入口），
-    不引入第二套日期口径。日期不落后时原样返回，不做任何额外断言。
-    """
-    meta = _meta(hub)
-    latest = await _latest_trade_date(hub)
-    if trade_date >= latest:
-        return meta
-    meta["is_realtime"] = False
-    meta["is_stale"] = True
-    fresh = dict(meta.get("freshness") or {})
-    fresh["state"] = "stale"
-    fresh["reason"] = f"数据日期 {trade_date.isoformat()} 早于最近交易日 {latest.isoformat()}"
-    meta["freshness"] = fresh
-    # 显式给出「实际日期 / 应有日期」，让前端与调试都不必猜（三态：不隐藏落后）
-    meta["data_date"] = trade_date.isoformat()
-    meta["expected_date"] = latest.isoformat()
-    return meta
 
 
 @router.get("/market/sentiment", response_model=Envelope[SentimentPayload])
@@ -160,7 +90,7 @@ async def market_sentiment(request: Request, hub: QuoteHub = Depends(get_hub)) -
         result = await get_cached_sentiment(request.app.state, hub)
     except CalendarUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return {"data": result, "meta": _meta(hub)}
+    return {"data": result, "meta": meta_payload(hub)}
 
 
 #: 复盘报告回填的**进程级**一次性闸门。失败时只写 retry_after（退避重试），
@@ -188,7 +118,7 @@ async def ladder_check(request: Request, hub: QuoteHub = Depends(get_hub)) -> di
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"天梯交叉验证失败：{exc}") from exc
-    payload = {"data": data, "meta": _meta(hub)}
+    payload = {"data": data, "meta": meta_payload(hub)}
     cache.set((), payload)
     return payload
 
@@ -221,7 +151,7 @@ async def sparkline(
     hit, payload = cache.get(key)
     if hit:
         # model_copy 标注 cached，不改共享缓存对象
-        return {"data": payload.model_copy(update={"cached": True}), "meta": _meta(hub)}
+        return {"data": payload.model_copy(update={"cached": True}), "meta": meta_payload(hub)}
 
     if period == "minute":
         items = await _minute_sparkline_items(hub, syms)
@@ -252,7 +182,7 @@ async def sparkline(
 
     payload = SparklinePayload(items=items)
     cache.set(key, payload)
-    return {"data": payload, "meta": _meta(hub)}
+    return {"data": payload, "meta": meta_payload(hub)}
 
 
 async def _minute_sparkline_items(hub, syms: list[str]) -> list[SparklineItem]:
@@ -374,7 +304,7 @@ async def market_sentiment_history(
             "周期起点 = 最近一次 强(回暖/升温/高潮)·中(分歧)·弱(退潮/冰点) 分段切换日",
         ],
     )
-    return {"data": payload, "meta": _meta(hub)}
+    return {"data": payload, "meta": meta_payload(hub)}
 
 
 @router.get("/market/breadth", response_model=Envelope[BreadthData])
@@ -384,7 +314,7 @@ async def market_breadth(request: Request) -> dict:
     payload = svc.breadth_payload()
     if payload["breadth"] is None:
         raise HTTPException(status_code=503, detail="全市场快照尚未就绪（冷启动抓取约需数秒）")
-    return {"data": payload, "meta": _meta(request.app.state.hub)}
+    return {"data": payload, "meta": meta_payload(request.app.state.hub)}
 
 
 @router.get("/market/heatmap")
@@ -409,7 +339,7 @@ async def market_heatmap(request: Request, hub: QuoteHub = Depends(get_hub)) -> 
 
     industry_map = await get_industry_map_async()
     data = build_heatmap(rows, industry_map)
-    payload = {"data": data, "meta": _meta(hub)}
+    payload = {"data": data, "meta": meta_payload(hub)}
     cache.set((), payload)
     return payload
 
@@ -423,7 +353,7 @@ async def market_turnover(hub: QuoteHub = Depends(get_hub)) -> dict:
     """
     from app.market.fund_flow import get_turnover_today
 
-    return {"data": await get_turnover_today(hub), "meta": _meta(hub)}
+    return {"data": await get_turnover_today(hub), "meta": meta_payload(hub)}
 
 
 @router.get("/market/turnover/history")
@@ -434,7 +364,7 @@ async def market_turnover_history(
     """近 N 个交易日全日成交额 + vs 前一交易日增减（由近及远）。"""
     from app.market.fund_flow import get_turnover_history
 
-    return {"data": await get_turnover_history(hub, days), "meta": _meta(hub)}
+    return {"data": await get_turnover_history(hub, days), "meta": meta_payload(hub)}
 
 
 @router.get("/market/turnover/day")
@@ -449,7 +379,7 @@ async def market_turnover_day(
         d = datetime.strptime(date, "%Y-%m-%d").date()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"date 格式须为 YYYY-MM-DD：{date!r}") from exc
-    return {"data": await get_turnover_day(hub, d), "meta": _meta(hub)}
+    return {"data": await get_turnover_day(hub, d), "meta": meta_payload(hub)}
 
 
 @router.get("/market/fund-flow/intraday")
@@ -482,7 +412,7 @@ async def market_fund_flow_history(
     """日度资金流序列（沪深合计，由近及远；本地落盘优先，落后时拉东财补齐）。"""
     from app.market.fund_flow import get_fund_flow_history
 
-    return {"data": await get_fund_flow_history(hub, days), "meta": _meta(hub)}
+    return {"data": await get_fund_flow_history(hub, days), "meta": meta_payload(hub)}
 
 
 @router.get("/market/board-fund-flow")
@@ -563,7 +493,7 @@ async def market_overview(request: Request, hub: QuoteHub = Depends(get_hub)) ->
                 snap.freshness().model_dump(mode="json") if snap is not None else None
             ),
         },
-        "meta": _meta(hub),
+        "meta": meta_payload(hub),
     }
 
 
@@ -574,7 +504,7 @@ async def quotes(
 ) -> dict:
     wanted = [s.strip() for s in symbols.split(",") if s.strip()] if symbols else None
     data = hub.get_quotes(wanted)
-    return {"data": [q.model_dump(mode="json") for q in data], "meta": _meta(hub)}
+    return {"data": [q.model_dump(mode="json") for q in data], "meta": meta_payload(hub)}
 
 
 @router.get("/quotes/{symbol}", response_model=Envelope[Quote])
@@ -593,7 +523,7 @@ async def quote(
 
             q = await target.get_quote(symbol)
             if q is not None:
-                return {"data": validate_quote(q).model_dump(mode="json"), "meta": _meta(hub)}
+                return {"data": validate_quote(q).model_dump(mode="json"), "meta": meta_payload(hub)}
         except HTTPException:
             raise
         except Exception as exc:
@@ -620,10 +550,10 @@ async def quote(
         # ths 快照缺涨跌停价，从腾讯补齐——撮合与前端拒单提示都依赖它；
         # 同理缺 pe/pb/市值（2026-09-01：详情行情条 PE 不再缺失）
         live = await enrich_quote(hub.provider, live)
-        return {"data": validate_quote(live).model_dump(mode="json"), "meta": _meta(hub)}
+        return {"data": validate_quote(live).model_dump(mode="json"), "meta": meta_payload(hub)}
     # 缓存命中：先拷贝再补价，enrich_quote 是原地修改，不能动共享缓存对象
     cached = await enrich_quote(hub.provider, found[0].model_copy())
-    return {"data": cached.model_dump(mode="json"), "meta": _meta(hub)}
+    return {"data": cached.model_dump(mode="json"), "meta": meta_payload(hub)}
 
 
 async def _trading_status_payload(hub: QuoteHub, bars, timeframe: str) -> dict | None:
@@ -666,7 +596,7 @@ async def _kline_payload(hub: QuoteHub, symbol: str, timeframe: str, limit: int,
             "bars": [b.model_dump(mode="json") for b in bars],
             "trading_status": await _trading_status_payload(hub, bars, timeframe),
         },
-        "meta": _meta(hub),
+        "meta": meta_payload(hub),
     }
 
 
@@ -695,7 +625,7 @@ async def order_book(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
     if ob is None:
         raise HTTPException(status_code=404, detail=f"{symbol} 无盘口数据")
     validate_order_book(ob)
-    return {"data": ob.model_dump(mode="json"), "meta": _meta(hub)}
+    return {"data": ob.model_dump(mode="json"), "meta": meta_payload(hub)}
 
 
 @router.get("/trades/{symbol}", response_model=Envelope[list[Trade]])
@@ -705,7 +635,7 @@ async def trades(symbol: str, limit: int = Query(default=50, ge=1, le=200), hub:
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"逐笔数据源失败：{exc}")
     rows = rows[-limit:]
-    return {"data": [t.model_dump(mode="json") for t in rows], "meta": _meta(hub)}
+    return {"data": [t.model_dump(mode="json") for t in rows], "meta": meta_payload(hub)}
 
 
 @router.get("/minute-line/{symbol}", response_model=Envelope[MinuteLinePayload])
@@ -739,7 +669,7 @@ async def minute_line(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
         baseline = await asyncio.to_thread(load_vr_baseline, symbol)
     except Exception as exc:
         log.warning("vr baseline failed for %s: %s", symbol, exc)
-    return {"data": {"symbol": symbol, "points": points, "vr_baseline_5m": baseline}, "meta": _meta(hub)}
+    return {"data": {"symbol": symbol, "points": points, "vr_baseline_5m": baseline}, "meta": meta_payload(hub)}
 
 
 @router.get("/market/minute-signals/{symbol}", response_model=Envelope[MinuteSignalsPayload])
@@ -780,7 +710,7 @@ async def minute_signals(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
             "recorded": recorded,
             "basis": out.get("basis") or {},
         },
-        "meta": _meta(hub),
+        "meta": meta_payload(hub),
     }
 
 
@@ -861,7 +791,7 @@ async def limit_up(
     records.sort(key=lambda r: (r.consecutive_boards or 0), reverse=True)
     return {
         "data": {"trade_date": trade_date.isoformat(), "pool": [r.model_dump(mode="json") for r in records]},
-        "meta": await _dated_meta(hub, trade_date),
+        "meta": await dated_meta(hub, trade_date),
     }
 
 
@@ -879,7 +809,7 @@ async def limit_down(
     records.sort(key=lambda r: (r.consecutive_days or 0), reverse=True)
     return {
         "data": {"trade_date": trade_date.isoformat(), "pool": [r.model_dump(mode="json") for r in records]},
-        "meta": await _dated_meta(hub, trade_date),
+        "meta": await dated_meta(hub, trade_date),
     }
 
 
@@ -917,7 +847,7 @@ async def market_anomalies(
         }
 
     _, payload = await cache.get_or_set(key, _build)
-    return {"data": payload, "meta": _meta(hub)}
+    return {"data": payload, "meta": meta_payload(hub)}
 
 
 @router.get("/market/anomalies/stock", response_model=Envelope[AnomalyPayload])
@@ -947,7 +877,7 @@ async def market_anomalies_stock(
         }
 
     _, payload = await cache.get_or_set(key, _build)
-    return {"data": payload, "meta": _meta(hub)}
+    return {"data": payload, "meta": meta_payload(hub)}
 
 
 @router.get("/market/board-fund/by-symbols")
@@ -1024,7 +954,7 @@ async def market_board_fund_by_symbols(
         }
 
     _, payload = await cache.get_or_set(key, _build)
-    return {"data": payload, "meta": _meta(hub)}
+    return {"data": payload, "meta": meta_payload(hub)}
 
 
 @router.get("/market/heat/skyrocket")
@@ -1051,7 +981,7 @@ async def market_skyrocket(
         return {"rows": rows[:100], "period": period}
 
     _, payload = await cache.get_or_set(key, _build)
-    return {"data": payload, "meta": _meta(hub)}
+    return {"data": payload, "meta": meta_payload(hub)}
 
 
 @router.get("/market/heat/rank-trend")
@@ -1088,7 +1018,7 @@ async def market_hot_rank_trend(
         }
 
     _, payload = await cache.get_or_set(key, _build)
-    return {"data": payload, "meta": _meta(hub)}
+    return {"data": payload, "meta": meta_payload(hub)}
 
 
 @router.get("/longhu", response_model=Envelope[LongHuPayload])
@@ -1110,7 +1040,7 @@ async def longhu(
         raise HTTPException(status_code=502, detail=f"龙虎榜数据源失败：{exc}")
     return {
         "data": {"trade_date": trade_date.isoformat(), "records": [r.model_dump(mode="json") for r in records]},
-        "meta": await _dated_meta(hub, trade_date),
+        "meta": await dated_meta(hub, trade_date),
     }
 
 
@@ -1137,7 +1067,7 @@ async def longhu_theme_trail(
     key = (days,)
     hit, payload = cache.get(key)
     if hit:
-        return {"data": payload, "meta": _meta(hub)}
+        return {"data": payload, "meta": meta_payload(hub)}
 
     anchor = await default_trade_date(hub)
     cal = await trading_days(hub.provider)
@@ -1166,7 +1096,7 @@ async def longhu_theme_trail(
         "note": "概念等分守恒口径（单股净额按概念数均摊，非真实拆分）；仅统计日榜（range_days=1）",
     }
     cache.set(key, payload)
-    return {"data": payload, "meta": _meta(hub)}
+    return {"data": payload, "meta": meta_payload(hub)}
 
 
 @router.get("/auction/{symbol}", response_model=Envelope[AuctionSnapshot])
@@ -1181,7 +1111,7 @@ async def auction(symbol: str, stage: str = Query(default="final", description="
         raise HTTPException(status_code=502, detail=f"竞价数据源失败：{exc}")
     if not rows:
         raise HTTPException(status_code=404, detail=f"{symbol} 无竞价数据")
-    return {"data": rows[0], "meta": _meta(hub)}
+    return {"data": rows[0], "meta": meta_payload(hub)}
 
 
 @router.get("/auction-benchmark", response_model=Envelope[list[AuctionBenchmarkItem]])
@@ -1195,7 +1125,7 @@ async def auction_benchmark(
         rows = await hub.provider.get_auction_benchmark(d)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"竞价基准数据源失败：{exc}")
-    return {"data": rows, "meta": _meta(hub)}
+    return {"data": rows, "meta": meta_payload(hub)}
 
 
 @router.get("/auction-premium")
@@ -1217,7 +1147,7 @@ async def auction_premium(
     hit, payload = cache.get(asof)
     if hit:
         return payload
-    payload = {"data": await collect_premium(hub, asof), "meta": _meta(hub)}
+    payload = {"data": await collect_premium(hub, asof), "meta": meta_payload(hub)}
     cache.set(asof, payload)
     return payload
 
@@ -1244,7 +1174,7 @@ async def boards(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"板块数据源失败：{exc}")
     rows.sort(key=lambda r: (r.get("change_pct") or 0), reverse=True)
-    payload = {"data": {"type": type, "boards": rows}, "meta": _meta(hub)}
+    payload = {"data": {"type": type, "boards": rows}, "meta": meta_payload(hub)}
     cache.set(type, payload)
     return payload
 
@@ -1291,7 +1221,7 @@ async def speed_rank(
             return {
                 "data": {"theme": theme, "theme_name": theme_name, "window": "5m",
                          "items": [], "note": "题材成分尚未同步，稍后再试"},
-                "meta": _meta(hub),
+                "meta": meta_payload(hub),
             }
     else:
         raise HTTPException(status_code=400, detail="theme 与 symbols 至少给一个")
@@ -1324,27 +1254,9 @@ async def speed_rank(
             "basis": "涨速 = 最近 5 分钟涨跌幅（同花顺行情口径）",
             "items": items[:limit],
         },
-        "meta": _meta(hub),
+        "meta": meta_payload(hub),
     }
 
-
-async def _latest_trade_date(hub: QuoteHub) -> date:
-    """最近一个**交易日**（走日历唯一入口 `trading_days`）。
-
-    原实现直接调 `default_trade_date_weekend_fallback()`——它只处理周六/周日，
-    遇节假日（如国庆假期里的工作日）会返回**当天这个非交易日**，龙虎榜必然返回空；
-    用户看到"没有数据"却无法区分"确实没上榜"与"查的是非交易日"。
-    日历不可用才退到周末规则（并记 warning，不静默）。
-    """
-    try:
-        days = await trading_days(hub.provider)
-        past = [d for d in days if d <= beijing_today()]
-        if past:
-            return max(past)
-        log.warning("longhu: 交易日历无 ≤ 今日的交易日，退到周末回退规则")
-    except Exception:  # noqa: BLE001  日历不可用不该让龙虎榜 500
-        log.warning("longhu: 交易日历不可用，退到周末回退规则", exc_info=True)
-    return default_trade_date_weekend_fallback()
 
 
 @router.get("/longhu/{symbol}")
@@ -1354,7 +1266,7 @@ async def longhu_detail(
     hub: QuoteHub = Depends(get_hub),
 ) -> dict:
     """个股龙虎榜：当日席位明细（买5/卖5+类型识别）+ 上榜历史（含 T+1/3/5/10 表现）。"""
-    trade_date = date.fromisoformat(date_str) if date_str else await _latest_trade_date(hub)
+    trade_date = date.fromisoformat(date_str) if date_str else await latest_trade_date(hub)
 
     async def _detail():
         try:
@@ -1386,7 +1298,7 @@ async def longhu_detail(
         "avg_after_5d": round(sum(h["after_5d"] for h in win) / len(win), 2) if win else None,
         "win_rate_5d": round(sum(1 for h in win if h["after_5d"] > 0) / len(win), 3) if win else None,
     }
-    return {"data": {"detail": detail, "history": history, "stats": stats}, "meta": _meta(hub)}
+    return {"data": {"detail": detail, "history": history, "stats": stats}, "meta": meta_payload(hub)}
 
 
 @router.get("/capital-flow/{symbol}")
@@ -1414,7 +1326,7 @@ async def capital_flow(
             "streak_in": streak,
             "definition": "主力净流入 = 超大单净额 + 大单净额（新浪按单笔成交金额划分：≥50万股或100万元视为大单级别，具体阈值为新浪口径，属估算数据非交易所披露）",
         },
-        "meta": _meta(hub),
+        "meta": meta_payload(hub),
     }
 
 
@@ -1425,7 +1337,7 @@ async def financials(symbol: str, periods: int = Query(default=8, ge=1, le=20), 
         rows = await hub.provider.get_financials(symbol, periods)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"财务数据源失败：{exc}")
-    return {"data": {"symbol": symbol, "periods": rows}, "meta": _meta(hub)}
+    return {"data": {"symbol": symbol, "periods": rows}, "meta": meta_payload(hub)}
 
 
 # /limit-break 端点已删除（2026-09-07 健康度审查 C1：前端/脚本 0 引用，仅
@@ -1440,7 +1352,7 @@ async def company(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
         profile = await hub.provider.get_company_profile(symbol)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"公司资料数据源失败：{exc}")
-    return {"data": profile, "meta": _meta(hub)}
+    return {"data": profile, "meta": meta_payload(hub)}
 
 
 @router.get("/announcements/{symbol}")
@@ -1455,14 +1367,14 @@ async def announcements(
     key = (symbol, limit)
     hit, cached = cache.get(key)
     if hit:
-        return {"data": cached, "meta": {**_meta(hub), "cached": True}}
+        return {"data": cached, "meta": {**meta_payload(hub), "cached": True}}
     try:
         rows = await hub.provider.get_announcements(symbol, limit)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"公告数据源失败：{exc}")
     data = {"symbol": symbol, "items": rows}
     cache.set(key, data)
-    return {"data": data, "meta": _meta(hub)}
+    return {"data": data, "meta": meta_payload(hub)}
 
 
 @router.get("/news/content", response_model=Envelope[dict])
@@ -1485,7 +1397,7 @@ async def news_content(
     cache = cache_on(request.app.state, "news.content", 600, maxsize=256)
     hit, cached = cache.get(url)
     if hit:
-        return {"data": {**cached, "cached": True}, "meta": {**_meta(hub), "cached": True}}
+        return {"data": {**cached, "cached": True}, "meta": {**meta_payload(hub), "cached": True}}
 
     try:
         article = await fetch_article(url)
@@ -1494,7 +1406,7 @@ async def news_content(
     except Exception as exc:  # 网络层异常统一收敛为可降级失败
         raise HTTPException(status_code=502, detail=f"正文抓取失败：{exc}")
     cache.set(url, article)
-    return {"data": article, "meta": _meta(hub)}
+    return {"data": article, "meta": meta_payload(hub)}
 
 
 @router.get("/news/{symbol}")
@@ -1509,14 +1421,14 @@ async def news(
     key = (symbol, limit)
     hit, cached = cache.get(key)
     if hit:
-        return {"data": cached, "meta": {**_meta(hub), "cached": True}}
+        return {"data": cached, "meta": {**meta_payload(hub), "cached": True}}
     try:
         rows = await hub.provider.get_news(symbol, limit)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"新闻数据源失败：{exc}")
     data = {"symbol": symbol, "items": rows}
     cache.set(key, data)
-    return {"data": data, "meta": _meta(hub)}
+    return {"data": data, "meta": meta_payload(hub)}
 
 
 @router.get("/search", response_model=Envelope[list[SymbolSearchItem]])
@@ -1543,7 +1455,7 @@ async def search(q: str = Query(min_length=1, max_length=20), hub: QuoteHub = De
     except ProviderError as exc:
         log.warning("search failed: %s", exc)
         raise HTTPException(status_code=502, detail="搜索数据源暂不可用，请稍后重试") from exc
-    payload = {"data": rows, "meta": {**_meta(hub), "cached": hit}}
+    payload = {"data": rows, "meta": {**meta_payload(hub), "cached": hit}}
     return JSONResponse(content=payload, headers={"Cache-Control": "no-store"})
 
 
@@ -1705,7 +1617,7 @@ async def _theme_board_cached(request: Request, hub: QuoteHub, trade_date: date)
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    payload = {"data": board, "meta": await _dated_meta(hub, trade_date)}
+    payload = {"data": board, "meta": await dated_meta(hub, trade_date)}
     cache.set(trade_date, payload)
     return payload
 
@@ -1766,7 +1678,7 @@ async def market_entry_checklist(
                 "→ 只给市场层通用条件，个股层的封单质量/角色/题材阶段均未判定。"
             ) + data["note"],
         })
-    return {"data": data, "meta": _meta(hub)}
+    return {"data": data, "meta": meta_payload(hub)}
 
 
 @router.get("/chip")
