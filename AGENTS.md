@@ -32,7 +32,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 collect 3149 项（3078 passed / 71 skipped / 0 failed）（09-15 §6.45 实测；前提：8000 在跑）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 collect 3159 项（3088 passed / 71 skipped / 0 failed）（09-15 §6.46 实测；前提：8000 在跑）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。
@@ -47,11 +47,15 @@ cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 coll
 # 2026-09-12 的 `app/models/notification.py`、09-15 的 `api/routes/market_envelope.py` + 8 个域分片），
 # 另 2 项为既有的「指数无涨跌停概念」后端不适用项。
 # ⚠️ **分母要能机械核验，别只写结论**：`app/` 下非业务层模块 = **69** =
-# 31（`api/` 装配层）+ 38（其他非业务层：core/data_quality/models/repositories/schemas/websocket）
-# ⇒ 与 `skipped − 2` 逐字相符。**此类数字每次新增/删除非业务层 .py 都会变，回填前先实测。**
-# ⚠️ **推论：「+N 个文件 ⇒ +N 个测试」≠「+N 项覆盖」**——增量可能全部是**跳过的参数化项**
-# （09-15 切片：collect +9 / passed ±0 / skipped +9）。报数字时只说 collect 涨了，
+# 30（`api/` 装配层）+ 1（`main.py`）+ 38（其他非业务层：core 13 / models 11 / schemas 7 /
+# repositories 3 / data_quality 2 / websocket 2）⇒ 与 `skipped − 2 = 69` 逐字相符。
+# **此类数字每次新增/删除非业务层 .py 都会变，回填前先实测。**
+# ⚠️ **推论：「+N 个文件 ⇒ +N 个测试」≠「+N 项覆盖」**——增量可能是**跳过的参数化项**
+# （批 3：collect +9 / passed ±0 / skipped +9）。报数字时只说 collect 涨了，
 # 等于把「没跑的用例」记成「覆盖增强」（见 [[KB-ENG-97]]）。
+# ⚠️ **反向同理**：业务层新文件（`app/services/**` 等）落 **passed** 而非 skipped
+# （批 4：collect +10 / passed +10 / skipped ±0）⇒ **同一个「切片」动作在两层的增量形态相反，
+# 报增量前先确认该层在 `_is_business()` 里的归属**（见 [[KB-ENG-98]]）。
 # ⚠️ **本条自身也曾失真**：原文写「58 项来自 import_lint」，而 58+2=60≠61（差额 1）——
 # 实测 `pytest tests/test_import_lint.py` = 171 passed / **60 skipped** ⇒ 60+2=62 才自洽。
 # **教训与本文档的警告同源：数字标注要么当轮实测回填，要么写"实测方法"而不写死数值。**
@@ -79,8 +83,19 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 collect **3149 项（3078 passed / 71 skipped / 0 failed）**、
+> **门禁口径**：后端 collect **3159 项（3088 passed / 71 skipped / 0 failed）**、
 > 前端 **576 项 / 62 文件**、eslint **0 error / 0 warn**
+> （2026-09-15 §6.46 `theme_service.py` 切片（`IMP-005` 批 4）轮实测；较上一值「后端 3149 / 前端 576·62」增量
+> **后端 collect +10 / passed +10 / skipped ±0**，来源自洽：`−1`（旧单文件 `services/theme_service.py` 消失）
+> `+11`（10 个业务域分片 + 包 `__init__.py`）⇒ 净 **+10 个文件**；`app/services/**` 属**业务层**
+> ⇒ 全部计入 **passed**（与批 3 的 `api/**` 恰好相反）⇒ 恒等式 `+10 = +10 passed + 0 skipped`。
+> ⚠️ **同一个「切片」动作在两层的门禁增量形态相反**：装配层（`api/**`）落 `skipped`、业务层（`services/**`）落 `passed`
+> ⇒ **报增量前必须先确认该层在 `_is_business()` 里的归属**，否则会把「真跑了的用例」写成「跳过的参数化项」，或反过来。
+> **「行为不变」由五路机械判据保证**：V1 逐语句正文逐字（43/43）+ V2 **注释零丢失**（本批新增判据）+
+> V3 名字集合 43→43 无重名 + V4 域表覆盖 + V5 门面转发；另 **OpenAPI 契约逐字节相同**（166 paths / 177 ops / 106 schemas）
+> 与**确定性对照台**（IO 定点打桩后 `build_theme_board` 前后输出**逐字节相同**，105,597 B）。见 [[KB-ENG-98]]）
+> + **前端 ±0**（本轮**纯后端改动**，git 核对 `apps/web/` 无改动；仍照跑，实测 576 passed / 62 files
+> 逐字一致、全量与 `TZ=UTC` 复跑同绿——**"某一侧不变"同样是可核对的自洽项**）
 > （2026-09-15 §6.45 `market.py` 切片（`IMP-005` 批 3）轮实测；较上一值「后端 3140 / 前端 576·62」增量
 > **后端 collect +9 / passed ±0 / skipped +9**，来源自洽且**分两步**：
 > +1 = 第 1 步新增 `routes/market_envelope.py`；+8 = 第 2 步新增 8 个域分片
