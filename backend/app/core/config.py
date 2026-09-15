@@ -310,14 +310,17 @@ class Settings(BaseSettings):
 
     # ---- AI 大脑自主进化（docs/summary/ai-evolution.md v2）----
     # 盘后 15:45 自动汇总五路证据（复盘改进项/signal_health/告警判读统计/…）
-    # → LLM 生成「今日进化议程」→ 按变更类别自动执行（A 参数/B 文档；C 代码 P1）。
+    # → LLM 生成「今日进化议程」。自主执行默认关闭，只有管理员通过正式环境变量
+    # 显式开启后，才会按变更类别执行（A 参数/B 文档；C 代码 P1）。
     # 安全模型=后置守护：证据门槛 + 值域钳制 + 红线 + 预算 + 自动回滚（P1 实验记录本）。
-    # **停机开关**：`ASHARE_AGENT_AUTONOMY_ENABLED=0` 时只生成议程不执行（降级为建议清单），
+    # **安全默认**：`ASHARE_AGENT_AUTONOMY_ENABLED=0`，只生成议程不执行（降级为建议清单），
     # 且调度器的自动转正/自动回滚一并停止（见 `evolution_scheduler` 的授权判据）。
+    # C 类代码修改还必须单独显式设置 `ASHARE_AGENT_CODE_CHANGE_ENABLED=1`；关闭时
+    # 只保留建议/议程/patch 预览能力，不得修改工作区、提交或合并。
     # ⚠️ 变量名以 `.env.example` 为准（`env_prefix="ASHARE_"` + 字段名大写）；
     # 手册里长期写作 `ASHARE_AGENT_AUTONOMY=0` 的短名**照旧生效但会告警**（R10 兼容层）。
-    agent_autonomy_enabled: bool = True
-    agent_code_change_enabled: bool = True  # C 类代码执行器独立开关（最危险能力可单独关）
+    agent_autonomy_enabled: bool = False
+    agent_code_change_enabled: bool = False  # C 类代码执行器须由管理员独立显式开启
     agent_venv_python: str = ""             # 沙箱门禁用的 pytest 解释器（默认 backend/.venv/bin/python）
     agent_evolution_hour: int = 15
     agent_evolution_minute: int = 45

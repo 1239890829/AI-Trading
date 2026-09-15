@@ -22,6 +22,12 @@ def _factory(tmp_path, name="evo.db"):
     return sessionmaker(bind=engine)
 
 
+@pytest.fixture(autouse=True)
+def enable_autonomy_for_enabled_path_tests(monkeypatch):
+    """Enabled-path tests model an administrator's explicit opt-in."""
+    monkeypatch.setattr(evo.settings, "agent_autonomy_enabled", True)
+
+
 @pytest.fixture()
 def sf(tmp_path, monkeypatch):
     factory = _factory(tmp_path)
@@ -280,6 +286,7 @@ def test_ready_agenda_is_reused_idempotently(sf, monkeypatch):
 
 def test_parse_items_drops_garbage_and_c_class_deferred(sf, monkeypatch):
     """非法项丢弃；C 类不静默忽略而是 deferred 留痕。"""
+    monkeypatch.setattr(evo.settings, "agent_code_change_enabled", True)
     payload = json.dumps({"items": [
         {"class": "A", "finding": "缺 param 字段", "action": "x", "priority": 1},
         {"class": "C", "finding": "补一个边界校验", "action": "改 engine.py", "priority": 2},
