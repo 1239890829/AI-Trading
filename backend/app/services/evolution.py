@@ -9,8 +9,13 @@
   对复盘 action_items 逐条裁决（review_item 回执 → 执行后回写 applied）。
 - 执行：A 类走参数变更单**自动生效**（白名单 + 红线 + 24h 频率闸 + 预算；
   30 日后置验证劣化自动回滚）；B 类写进化日报（docs/evolution/）；
-  C 类走代码执行器（worktree 沙箱 → LLM patch → git apply --check →
-  回归门禁 → commit → ff-only 合并；app/services/code_executor.py）。
+  C 类走代码执行器（worktree 沙箱 → LLM patch → **diff 级授权** → git apply --check →
+  **git 权威复核** → 回归门禁 → 明确暂存 → 隔离分支 commit；
+  app/services/code_executor.py）。⚠️ **C 类只提议、不落地**（2026-09-15 加固，审计 O1）：
+  产出 = patch + `evolution/*` 分支上的 commit + 审计，**不合并回主分支**；
+  落地一律走 `codex/*` → PR → 完整 CI → 网页版审查。
+  ⇒ C 类条目 status 仍为 `executed`（= 执行器跑完并产出），但 `result` 会写明「未合并」
+  与落地路径，`merged=False` / `review_required=True` 在返回值中显式给出。
 
 安全模型（后置守护）：
 - **红线清单**：风控/资金/推送/凭据/删除类——即使未来白名单扩张也碰不到。
@@ -23,7 +28,8 @@
   见 `app/core/config.py` 的 `_apply_legacy_toggle_aliases`。
 - **预算**：每日 LLM 调用与自动任务数上限，超限议程照常生成但执行被拦。
 - **频率闸**：同一参数 24h 内只允许一次自动变更（防抖动、防来回翻烧饼）。
-- **C 类每日 ≤1**：audit 计数；文件白名单 + 禁改清单 + 干净工作区 + 回归门禁。
+- **C 类每日 ≤1**：audit 计数；文件白名单（**不含 `backend/tests/**`**，见执行器 docstring）
+  + 禁改清单 + 受保护面 + diff 级授权 + git 权威复核 + 干净工作区 + 回归门禁；**不合并**。
 """
 from __future__ import annotations
 
