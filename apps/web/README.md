@@ -26,6 +26,10 @@ npm run dev   # http://localhost:3000（后端需已在 8000 端口运行）
 - `components/kline-chart.tsx` — lightweight-charts K 线（红涨绿跌）
 - `components/panel.tsx` — 统一面板（强制展示数据来源/数据时间/质量标识）
 - `lib/api.ts` — 后端 REST 客户端（`NEXT_PUBLIC_API_BASE` 默认 http://127.0.0.1:8000）
+- `app/backend/[...path]/route.ts` + `lib/proxy-headers.ts` — 服务端反代，运行时从
+  `ASHARE_API_TOKEN` 取凭据并附加到**全部**请求（浏览器侧不持有，见 `docs/api.md` §鉴权）
+- `app/api/ws-credential/route.ts` + `lib/ws-credential.ts` — 同源运行时下发 WS 子协议凭据
+  （浏览器不能给 WebSocket 设自定义请求头，故走 `Sec-WebSocket-Protocol`）
 
 ## 注意
 

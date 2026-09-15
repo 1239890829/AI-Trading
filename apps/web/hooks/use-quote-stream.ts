@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getQuotes, wsBase } from "@/lib/api";
+import { wsSubprotocols } from "@/lib/ws-credential";
 import type { Quote } from "@/types/market";
 
 export type StreamStatus = "connecting" | "live" | "polling" | "closed" | "stale" | "error";
@@ -134,13 +135,22 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
     };
     document.addEventListener("visibilitychange", onVisibility);
 
-    const connect = () => {
+    const connect = async () => {
       if (closed) return;
       // 重连时保持当前状态显示（不闪回 connecting 误导用户）
       setStatus((prev) => (retry === 0 ? "connecting" : prev));
+      // R22：/ws/quotes 在启用鉴权后要求**子协议**携带凭据（浏览器不允许给
+      // WebSocket 设自定义请求头，而 ?token= 通道已刻意关闭）。凭据由同源
+      // `/api/ws-credential` 运行时下发；未配置时回空数组 ⇒ 不传第二个参数
+      // ⇒ 与加固前行为逐字一致。
+      const protocols = await wsSubprotocols();
+      // await 期间可能已卸载/断开：这里必须重新判一次，否则会创建一个
+      // 无人回收的 socket（cleanup 已经跑过了）。
+      if (closed) return;
       let ws: WebSocket;
       try {
-        ws = new WebSocket(`${wsBase()}/ws/quotes?symbols=${symbolsRef.current.join(",")}`);
+        const url = `${wsBase()}/ws/quotes?symbols=${symbolsRef.current.join(",")}`;
+        ws = protocols.length ? new WebSocket(url, protocols) : new WebSocket(url);
         wsRef.current = ws;
       } catch {
         startPolling();
@@ -206,14 +216,14 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
         if (closed) return;
         retry += 1;
         if (retry >= 3) startPolling();
-        reconnectTimer = setTimeout(connect, Math.min(1000 * 2 ** retry, 10000));
+        reconnectTimer = setTimeout(() => void connect(), Math.min(1000 * 2 ** retry, 10000));
       };
       ws.onerror = () => {
         wsRef.current?.close();
       };
     };
 
-    connect();
+    void connect();
 
     return () => {
       closed = true;

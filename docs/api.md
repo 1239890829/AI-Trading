@@ -1,21 +1,64 @@
 # REST API
 
-Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**170 个操作 / 160 条路径**（2026-09-10 实测回填；端点数以 `/openapi.json` 为权威，本文档按域分节供检索——**数字会随改动漂移，勿以本行为准**）。
+> **定位**：后端 HTTP 接口的**按域检索手册**。统一契约、鉴权边界、逐端点说明都在这里。
+> **上游**：`backend/app/api/routes/**`（端点实现）＋ `backend/app/core/auth.py`（鉴权策略单点）
+> ｜ **下游**：前端 `apps/web/lib/api.ts` 分片、`scripts/api-sweep.js` 巡检、任何联调任务。
+> **权威性**：端点数以 `/openapi.json` 为准，本文按域分节**供人检索**——数字会漂移，勿以本行为准。
+> **状态**：现役（鉴权段 2026-09-15 R22 重写：默认拒绝 + WS 子协议凭据）。
+
+Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**177 个操作 / 166 条路径**（2026-09-15 实测回填：`len(app.openapi()["paths"])` 与逐 path 计方法数；端点数以 `/openapi.json` 为权威，本文档按域分节供检索——**数字会随改动漂移，勿以本行为准**）。
 
 统一响应：`{"data": ..., "meta": {...}}`（Envelope[T]，meta 含 `provider / is_realtime / is_stale / last_success_refresh / generated_at`）。
 数据源失败返回 **HTTP 502**（前端显示错误态，绝不降级伪造）；错误统一契约 `{detail, code}`。
 
-## 鉴权（B6 opt-in）
+## 鉴权（R22 统一鉴权边界，2026-09-15 起）
 
-写端点（下表标 🔒）在 `ASHARE_API_TOKEN` 配置后要求 `X-API-Token` 头；
-后端未配置 token = 全放行（本地 dev 零配置）。
+**默认拒绝**：`ASHARE_API_TOKEN` 配置后，**所有** HTTP 路由都要求 `X-API-Token` 头，
+写接口与 GET 一视同仁；唯一豁免是 `GET /api/health`（存活探针，被 compose healthcheck
+以无凭据方式调用，只回运行状态，不读持仓、不触发 LLM）。
 
-**客户端不持有 token**（2026-09-14 修复）：token 由前端**服务端反向代理**
-`apps/web/app/backend/[...path]/route.ts` 在运行时从 `ASHARE_API_TOKEN` 读取后附加到
-非 GET/HEAD 请求。历史实现曾用 `NEXT_PUBLIC_API_TOKEN`，而 `NEXT_PUBLIC_*` 由 Next
-**构建期内联**为客户端 bundle 里的字面量 ⇒ 任意访客查看源码即可取得唯一写保护凭据。
-同轮关闭 `?token=` 查询参数通道（URL 会留在浏览器历史 / Referer / 反代访问日志）。
-防回潮守卫：`apps/web/lib/env-secrecy.test.ts`；传递路径见 `docs/deployment.md`。
+```bash
+# 默认（ASHARE_AUTH_MODE=local）：token 留空 = 全放行，本地 dev 零配置
+# 共享/公网（ASHARE_AUTH_MODE=shared）：token 必配，未配则**拒绝启动**
+export ASHARE_AUTH_MODE=shared
+export ASHARE_API_TOKEN="$(openssl rand -hex 32)"
+curl -H "X-API-Token: $ASHARE_API_TOKEN" http://127.0.0.1:8000/api/market/overview
+```
+
+- **为何是"默认拒绝"而不是"敏感读清单"**：清单式是**默认放行 + 逐条登记才保护**，
+  于是「新加了会花钱/读持仓的端点但忘了登记」与「登记好了」在运行时**长得一模一样**
+  （都 200）。这正是 R22 的病灶形态——原实现只按"写接口"分类，导致花钱/敏感 GET
+  （`/assistant/daily-summary`、`/news/digest/{symbol}`、`/system/llm-probe?force=1`、
+  `/real/positions` …）**整类漏保护**。默认拒绝把失效方向翻转为**401**（吵闹、立刻暴露），
+  代价是新增端点须先确认"它确实该受保护"（答案 99% 是"是"）。
+- **豁免粒度**：豁免登记在 `core/auth.py::AUTH_EXEMPT_PATHS`（全库仅 1 条）。
+  ⚠️ **不要按 router 豁免**——`health_route.router` 里除 `/health` 还挂着 6 个
+  `/system/*`（含会真实花钱的 `/system/llm-probe`）。已把 `/health` 拆到独立的
+  `liveness_router`，本项由 `backend/tests/test_auth_boundary.py` 钉住。
+- **配置拼错 = 拒绝启动**：`auth_mode` 取值非法、或 `shared` 且 token 为空 ⇒
+  `RuntimeError`（fail closed）。拼错一个字母（`shared` → `share`）会让判定静默退回
+  `local`，即**把共享部署降级成全开**，故宁可拒绝启动。
+- **客户端不持有 token**：token 由前端**服务端反向代理**
+  `apps/web/app/backend/[...path]/route.ts` 在运行时从 `ASHARE_API_TOKEN` 读取后附加到
+  **全部**请求（2026-09-14 起只给非 GET/HEAD，R22 后改为一律注入——否则读接口会 401）。
+  历史实现曾用 `NEXT_PUBLIC_API_TOKEN`，而 `NEXT_PUBLIC_*` 由 Next **构建期内联**为客户端
+  bundle 里的字面量 ⇒ 任意访客查看源码即可取得唯一凭据。`?token=` 查询参数通道同样
+  已刻意关闭（URL 会留在浏览器历史 / Referer / 反代访问日志）。
+  防回潮守卫：`apps/web/lib/env-secrecy.test.ts`；传递路径见 `docs/deployment.md`。
+- **WebSocket `/ws/quotes`**：浏览器 `WebSocket` 构造器**不允许设置自定义请求头**，
+  故凭据走 **`Sec-WebSocket-Protocol` 子协议**：`ashare-token.<base64url(token)>`
+  （base64url 去填充，因为子协议值必须是 HTTP token 字符集）。
+  凭据由同源 `GET /api/ws-credential` 在**运行时**下发（非构建期内联、不进 URL、
+  不落 localStorage）。服务端**必须原样回显**该子协议，否则客户端按
+  RFC 6455 §4.1 主动判定连接失败。未启用鉴权时该端点返回 `{subprotocol: null}`，
+  前端不传第二个参数 ⇒ 与加固前行为逐字一致。
+  ⚠️ **残留风险**：能打开前端的访客可取得该凭据进而直连后端端口——它保护的是
+  "后端端口不对未授权者开放"，**不是"区分前端访客身份"**（后者需会话/身份层，
+  R22 不要求现在上）。配套纪律：后端端口只绑回环。
+- **机械门禁**：`backend/tests/test_auth_boundary.py`（25 例：姿态 fail-closed、
+  **遍历 `app.openapi()` 逐条断言无凭据必 401**、豁免集合恰为 `/api/health`、
+  WS 子协议往返与拒绝路径、四路注入自证）；前端 `lib/ws-credential.test.ts` /
+  `lib/proxy-headers.test.ts` / `hooks/use-quote-stream.test.tsx`。
 
 ## 健康与市场总览
 

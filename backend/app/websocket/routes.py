@@ -7,10 +7,20 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.core.auth import (
+    is_api_token_valid,
+    ws_decode_subprotocol_token,
+    ws_token_subprotocol,
+)
 from app.services.quote_hub import offer
 
 log = logging.getLogger(__name__)
 router = APIRouter()
+
+#: WebSocket 关闭码：1008 = Policy Violation（RFC 6455 §7.4.1）。
+#: 刻意不用 4401 之类的应用自定义码——1008 的语义（"你违反了服务端策略"）
+#: 在此恰好准确，且被所有浏览器识别为"正常关闭、别当异常重试"。
+_WS_CLOSE_UNAUTHORIZED = 1008
 
 
 def _now_iso() -> str:
@@ -49,14 +59,36 @@ def _report_task_failures(fut: "asyncio.Future") -> None:
 
 @router.websocket("/ws/quotes")
 async def quotes_ws(websocket: WebSocket):
-    """行情推送。
+    """行情推送。**入站凭据在 `accept()` 之前校验**（R22 统一鉴权边界）。
 
     - 连接参数 ?symbols=600519,000001 指定订阅，缺省为全部自选
     - 服务端消息：{"type":"snapshot"|"quotes"|"stale","seq":n,"ts":iso,"data":[Quote...]}
     - 客户端消息：{"action":"ping"} → {"type":"pong"}；
       {"action":"subscribe","symbols":[...]} 更新本连接的订阅集（会回推新快照）
+
+    ⚠️ **为什么校验必须在 `accept()` 之前**：`accept()` 一发出，升级就算完成，
+    对端的 `onopen` 已经触发——此时再 `close()`，客户端看到的形态是
+    「连上了又掉线」，既会污染 `onopen` 里的状态（`setStatus("live")`、重连计数归零），
+    也让"被拒绝"与"网络抖动"在客户端**无法区分**。未 accept 就 close，
+    ASGI 服务器（uvicorn）会直接以 HTTP 403 拒绝握手 ⇒ 拒绝发生在建连之前，语义干净。
+
+    ⚠️ **凭据通道是子协议而不是请求头**：浏览器的 `WebSocket` 构造器不允许设置
+    自定义请求头（平台约束，非本项目取舍）；而 `?token=` 查询参数通道已被本项目
+    刻意关闭（会进浏览器历史 / Referer / 反代访问日志）。子协议是**请求头**，
+    不进 URL，故是唯一既可用又符合既有决策的通道。详见 `core/auth.py` 模块 docstring。
+
+    ⚠️ **只做校验与回显，不赋予子协议任何语义**：回显是**协议硬要求**而非设计选择——
+    客户端提议了子协议而服务端一个都不选，浏览器会主动判定连接失败（见
+    `core/auth.py::ws_decode_subprotocol_token` 的完整说明）。故这里的回显值
+    一律取**客户端自己提议的那一个**，服务端不生成、不替换、不追加。
     """
-    await websocket.accept()
+    raw_protocols = websocket.headers.get("sec-websocket-protocol")
+    offered = ws_token_subprotocol(raw_protocols)
+    if not is_api_token_valid(ws_decode_subprotocol_token(offered)):
+        await websocket.close(code=_WS_CLOSE_UNAUTHORIZED)
+        return
+
+    await websocket.accept(subprotocol=offered)
     hub = websocket.app.state.hub
 
     raw = websocket.query_params.get("symbols", "")

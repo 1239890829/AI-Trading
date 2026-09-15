@@ -374,9 +374,16 @@ class Settings(BaseSettings):
             data[field] = raw
         return data
 
-    # ---- 写接口鉴权（B6，opt-in）----
-    # 留空 = 本地开发全放行；部署到公网/NAS 时配置任意随机值，
-    # 之后所有写请求必须带 X-API-Token 头（由前端服务端反向代理注入，浏览器不持有）
+    # ---- 访问鉴权（B6 写鉴权 → R22 统一鉴权边界）----
+    # 机制不变（一个共享 token，服务器持有、浏览器不持有）；变的是**失败模式**：
+    #   local （默认）：假定只在回环上服务 ⇒ token 留空即全放行，本地开发零摩擦；
+    #   shared         ：假定会有回环之外的访客 ⇒ token **必配**，未配则**拒绝启动**。
+    # ⚠️ 为什么需要 shared（R22 的病灶）：local 姿态下「忘记配 token」与「配好了」
+    # 在运行期**长得一模一样**（都返回 200、都无任何日志差异）⇒ 静默全开。
+    # 把「忘了配」从**静默全开**变成**起不来**，是本次加固的止险点。
+    auth_mode: str = "local"
+    # token 留空 = 见上；配好后所有写请求与敏感读请求必须带 X-API-Token 头
+    # （由前端服务端反向代理注入，浏览器不持有）
     api_token: str = ""
 
     @property
@@ -390,6 +397,17 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [s.strip() for s in self.cors_origins.split(",") if s.strip()]
+
+    @property
+    def auth_required(self) -> bool:
+        """是否校验入站凭据。
+
+        `shared` 姿态**恒需要**（这也是它存在的意义：token 漏配时不是"放行"而是
+        「启动就失败」，见 `app.core.auth.validate_auth_posture`）；`local` 姿态
+        仅在**显式配了 token** 时需要（此时等价于旧 B6 行为，便于只想加一层写保护的
+        本地用户，不必理解 mode 概念）。
+        """
+        return self.auth_mode == "shared" or bool(self.api_token)
 
 
 settings = Settings()
