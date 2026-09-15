@@ -66,8 +66,16 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 collect **3088 项（3026 passed / 62 skipped / 0 failed）**、
+> **门禁口径**：后端 collect **3097 项（3035 passed / 62 skipped / 0 failed）**、
 > 前端 **571 项 / 62 文件**、eslint **0 error / 0 warn**
+> （2026-09-15 §6.38 后端切片轮实测；较上一值「后端 3088 / 前端 571·62」增量
+> **后端 +9 项**（`assistant/tools.py` 切成 `tools/` 包 ⇒ `test_import_lint.py` 按模块参数化，
+> 新增分片计入；实测 **3035 passed / 62 skipped / 0 failed**，`skipped` 不变故差额全落在 passed）
+> + **前端 ±0**（该轮**纯后端改动**，「某一侧不变」同样是可核对的自洽项）
+> ⚠️ **同轮曾出现 1 项偶发**（当时 load≈26，8 核机器上我并发跑了前端全量）：
+> `test_provider_budget::test_remaining_budget_is_shared_across_sources` 断言 `hang.calls==1` 失败，
+> 根因是 s0 的**墙钟**开销在满载下超出 0.15s 预算 ⇒ 第二个源被**直接跳过**（单独跑绿）
+> ⇒ 已登记 `BUG-007`（**CI 冒烟风险**：runner 更慢更抖），详见账本 §6.39）
 > （2026-09-15 弹窗外壳统一轮实测；较上一值「后端 3088 / 前端 561·61」（详情弹窗化轮）增量
 > **后端 ±0 项**（本轮**纯前端改动**，git 核对 `backend/` 无代码改动；仍照跑一遍，
 > 实测 **3026 passed / 62 skipped**，与上轮**逐字一致**）
