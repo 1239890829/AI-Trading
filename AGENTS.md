@@ -48,7 +48,7 @@ cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 coll
 # **教训与本文档的警告同源：数字标注要么当轮实测回填，要么写"实测方法"而不写死数值。**
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
 cd apps/web && npx eslint .                       # 0 error / 0 warn（P1-27 已清零；余 1 处 C 类显式豁免）
-cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 533 项 / 58 文件（09-15 §6.36 实测）
+cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 536 项 / 59 文件（09-15 §6.37 实测）
 # ⚠️ **凡改动/新增涉及时间·时区的断言，必须再用 `TZ=UTC` 复跑一遍**（CI 跑在 UTC，本地是 UTC+8）：
 cd apps/web && TZ=UTC CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run
 # 2026-09-12 真实踩过：`longhu-tab.test.tsx` 用 `new Date(2026, 8, 2, 14, 20)` 钉"盘中"，
@@ -63,7 +63,12 @@ lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=
 ```
 
 > **门禁口径**：后端 collect **3088 项（3026 passed / 62 skipped / 0 failed）**、
-> 前端 **533 项 / 58 文件**、eslint **0 error / 0 warn**
+> 前端 **536 项 / 59 文件**、eslint **0 error / 0 warn**
+> （2026-09-15 §6.37 实测；较上一值「后端 3088 / 前端 533·58」（§6.36）增量
+> **后端 ±0 项**（该轮亦为**纯前端改动**——`lib/api.ts` 切片，后端逐字未变）
+> + **前端 +3 项 / +1 文件**，来源自洽：新增门面守卫 `lib/api-facade.test.ts` 3 例
+> （**切片把 2751 行的 `lib/api.ts` 拆成 14 分片 + 26 行薄门面，判据"行为不变"经四路机械证明**，
+> 见 §6.37 与 [[KB-ENG-91]]）· 全量 + `TZ=UTC` 复跑同绿 · 四业务域运行时冒烟全出真实数据）
 > （2026-09-15 §6.36 实测；较上一值「后端 3088 / 前端 502·57」（§6.35、§6.34）增量
 > **后端 ±0 项**（本轮**纯前端改动**，后端逐字未变 —— collect 3088 与 §6.35 记录**逐字一致**，
 > 「某一侧不变」同样是可核对的自洽项；耗时因 8000 在跑而偏长，==前提相关，勿当回归==）
