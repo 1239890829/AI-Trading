@@ -42,7 +42,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 collect 3176 项（3105 passed / 71 skipped / 0 failed）（09-15 §6.46 实测；前提：8000 在跑）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 collect 3205 项（3130 passed / 75 skipped / 0 failed）（09-15 §6.48 实测；前提：8000 在跑）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。
@@ -51,13 +51,14 @@ cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 coll
 # 原因是常驻调度与测试同时抢 SQLite/网络；**报耗时必须说明前提**，否则会被当成回归。
 # ⚠️ `--basetemp` 不可省：默认临时目录会被沙箱拒绝创建（EEXIST → PermissionError），
 # 表现为几十个 E 而非 F，极易误判成代码回归（2026-09-11 踩，见 kb/03）。
-# ⚠️ **跳过数 2 → 71 是新增守卫与切片分片的参数化产物，不是覆盖率丢失**：71 = **69** + 2，全额对上——
-# 69 项来自 `test_import_lint.py`「装配层/其他：不受本规则约束」（分层规则表按模块参数化，
+# ⚠️ **跳过数 2 → 75 是新增守卫与切片分片的参数化产物，不是覆盖率丢失**：75 = **73** + 2，全额对上——
+# 73 项来自 `test_import_lint.py`「装配层/其他：不受本规则约束」（分层规则表按模块参数化，
 # 非业务层模块显式跳过；**新增一个非业务层 .py 就 +1**，如 S2-8 的 `app/core/bjtime.py`、
-# 2026-09-12 的 `app/models/notification.py`、09-15 的 `api/routes/market_envelope.py` + 8 个域分片），
+# 2026-09-12 的 `app/models/notification.py`、09-15 的 `api/routes/market_envelope.py` + 8 个域分片、
+# 09-15 `IMP-027` 的 `app/bootstrap/` 三个文件（`__init__` / `services` / `schedulers`）），
 # 另 2 项为既有的「指数无涨跌停概念」后端不适用项。
-# ⚠️ **分母要能机械核验，别只写结论**：`app/` 下非业务层模块 = **69** =
-# 31（`api/` 装配层）+ 38（其他非业务层：core/data_quality/models/repositories/schemas/websocket）
+# ⚠️ **分母要能机械核验，别只写结论**：`app/` 下非业务层模块 = **73** =
+# 34（装配层：`api/**` 30 + `bootstrap/**` 3 + `main.py` 1）+ 39（其他非业务层：core/data_quality/models/repositories/schemas/websocket）
 # ⇒ 与 `skipped − 2` 逐字相符。**此类数字每次新增/删除非业务层 .py 都会变，回填前先实测。**
 # ⚠️ **推论：「+N 个文件 ⇒ +N 个测试」≠「+N 项覆盖」**——增量可能全部是**跳过的参数化项**
 # （09-15 切片：collect +9 / passed ±0 / skipped +9）。报数字时只说 collect 涨了，
@@ -67,7 +68,7 @@ cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 coll
 # **教训与本文档的警告同源：数字标注要么当轮实测回填，要么写"实测方法"而不写死数值。**
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
 cd apps/web && npx eslint .                       # 0 error / 0 warn（P1-27 已清零；余 1 处 C 类显式豁免）
-cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 576 项 / 62 文件（09-15 §6.43 板块权限准入轮实测）
+cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 593 项 / 65 文件（09-15 §6.47 R22 轮实测）
 # ⚠️ 默认并行度偶发 **SIGKILL(exit 137) 且零输出**（非测试失败）⇒ 先降并行度复跑：
 #   npx vitest run --maxWorkers=1
 # ⚠️ **凡改动/新增涉及时间·时区的断言，必须再用 `TZ=UTC` 复跑一遍**（CI 跑在 UTC，本地是 UTC+8）：
@@ -89,14 +90,22 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 collect **3204 项（3132 passed / 72 skipped / 0 failed）**、
+> **门禁口径**：后端 collect **3207 项（3132 passed / 75 skipped / 0 failed）**、
 > 前端 **593 项 / 65 文件**、eslint **0 error / 0 warn**
-> （2026-09-15 最终技术方案轮实测；较 R22 基线 **后端 collect +2 = passed +2 / skipped ±0**：
+> （2026-09-16 最终技术方案与装配重构集成轮实测；较装配重构基线 **后端 collect +2 = passed +2 / skipped ±0**：
 > 新增猎场同键并发单航班守卫 1 项 + 通知个股机会策略净增 1 项；前端 **±0**，本地时区与
 > `TZ=UTC` 均为 593/65。全量首两轮在 `test_events_api_lifecycle` 稳定复现 `BUG-012` 同族的
 > `StaticPool :memory: + refresh` 失败，取证为生产自治默认开启后测试未显式停机；`conftest.py`
 > 补测试环境 `ASHARE_AGENT_AUTONOMY_ENABLED=false` 后全量复跑 0 failed，生产默认值不变。
-> （2026-09-15 §6.48 R22 统一鉴权边界轮实测；较上一值「后端 3176 / 前端 576·62」增量
+> （2026-09-15 §6.48 装配重构轮（`IMP-027`）实测；较上一值「后端 3202 / 前端 593·65」增量
+> **后端 collect +3 = passed ±0 + skipped +3**，来源自洽：新增 `app/bootstrap/` 三个文件
+> （`__init__.py` / `services.py` / `schedulers.py`）落在 `app/` 非业务层 ⇒
+> `test_import_lint.py` 分层规则按模块参数化**显式跳过**（[[KB-ENG-97]] 同族：
+> **这 3 项增量是「没跑的用例」，不是覆盖增强**）。
+> **机械核验**：`skipped(75) − 2 = 73` = `app/` 下非业务层模块数
+> = **34**（装配层：`api/**` 30 + `bootstrap/**` 3 + `main.py` 1）+ **39**（其他非业务层）⇒ 逐字相符。
+> + **前端 ±0**（本轮**纯后端 + 文档改动**，git 核对 `apps/web/` 无改动 ⇒ 上轮 593·65 本轮实测逐字一致）
+> （2026-09-15 §6.47 R22 统一鉴权边界轮实测；较上一值「后端 3176 / 前端 576·62」增量
 > **后端 collect +26 = passed +25 + skipped +1**，来源自洽且**分两类**：
 > `+25` = 新文件 `backend/tests/test_auth_boundary.py`（姿态 fail-closed / 遍历
 > `app.openapi()` 逐条断言无凭据必 401 / 豁免集合恰为 `/api/health` / WS 子协议往返与拒绝 /
