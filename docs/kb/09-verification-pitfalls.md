@@ -1130,3 +1130,50 @@ jsdom 里对"重复 key"不发 `console.error`**（实测捕获为空）⇒ 想�
 才能说清"与本次改动无关"—— 否则只能猜，而猜错的方向恰好是"回滚一个没坏的东西"。
 
 **关联**：[[KB-ENG-65]]（判据必须能变红）· [[KB-ENG-72]]（覆盖 ≠ 真实覆盖面）· [[KB-ENG-60]]（扫描面写窄 = 全绿）· [[KB-ENG-87]]（"换个参数再跑"要改产生它的那一层）
+
+---
+
+### KB-ENG-93 Python 侧「只搬位置」的四条判据与三类静默失效；两个门禁项的判定面是**探针实测**出来的
+
+**场景（2026-09-15，`IMP-005` 第二批）**：`app/assistant/tools.py` **1934 行 → `tools/` 包 9 个业务域分片 + 186 行门面**
+（`core` / `registry` / `dispatch` / `market` / `themes` / `picks` / `agent` / `events` / `account`）。
+判据照搬 [[KB-ENG-91]] 四条，落地时又抓到 **Python 特有的三类静默失效**：
+
+1. **`AnnAssign` 漏名 ⇒ 双向同判据的假绿**：`TOOL_SPECS: dict[str, ToolSpec] = {...}` 是 `ast.AnnAssign`
+   （目标在 `node.target`，**不是** `node.targets`）⇒ 提取器只读 `targets` 时这两条（`TOOL_SPECS` / `TOOL_LABELS`）
+   **整条被丢**，而"门面覆盖"检查用的又是**同一套提取器** ⇒ 两面一致地少，谁都不报（[[KB-ENG-81]] 同族：
+   **两侧同判据 ⇒ 必须另有一条独立于它的检查**）。修法两条：① `defined_names()` 覆盖
+   `FunctionDef/ClassDef/AnnAssign/Assign`（多目标展开）；② **名字集合从落盘文件重新解析**，
+   不复用内存里的中间结果 —— 「表里声明过的名字必须真的落在某个分片里」这条检查立刻抓出了它。
+2. **函数内局部 import 被当成顶层需求**：`_t_minute_decisions` 等会在函数体里
+   `from app.core.bjtime import beijing_now` `from app.market import minute_decisions as md` ⇒
+   生成器按"用到的名字"补了一层顶层 import ⇒ `pyflakes` **两连报**
+   （`imported but unused` + `redefinition of unused`）。修法：按语句收集**局部绑定名**并从外部 import 需求里扣除。
+3. **`__name__` 会随搬家变值**：`log = logging.getLogger(__name__)` 搬进子模块后 `__name__` 变成
+   `app.assistant.tools.core` ⇒ **文本逐字相同、语义却变了**。修法：作为**声明式替换**登记
+   （改成硬编码原日志名 + 就地注释说明理由），并让工具**打印替换条数**——
+   "允许的偏差"必须**具名登记**，否则"逐字相同"这句话本身就是假的。
+   ⚠️ 替换表还要**把注释与语句分开**：首版把注释一起塞进"新语句"，比对时凭空多出一处不一致。
+
+**门面（Python 没有 `export`）**：实测外部引用了 `_valid_date` / `_valid_symbols` / `_latest_trade_day`
+这些**私有名**，还有 `T.tool_label` 这种属性访问 ⇒ 门面必须**逐个 re-export 全部顶层名**并用 `__all__` 登记
+（`__init__.py` 的"导入但未使用"由 `__all__` 兜住，`pyflakes` 0）。
+⚠️ 但**由 import 引入的名字**（如 `TTLCache`）不再在门面上可见 —— 属如实声明的边界（实测无人引用）。
+
+**两个门禁项的真实判定面（用探针实测，不靠名字猜）**：
+
+- `F 代码注释死引用`：输出格式为 `→ docs/{rel}（不存在）` ⇒ **只认 `docs/` 下的路径**。
+  往 `app/` 的代码注释里写一个不存在的 `app/xxx.py` **不会**变红（探针实测）。
+- `J 文档代码锚点`：往 `docs/` 里写不存在的代码路径**会**变红（探针 → `FAIL 1 处`；还原 → `OK`）✓；
+  但对「**同名目录存在**」的路径（`backend/app/assistant/tools.py`，在文件裂成包之后）**容忍**
+  —— 这正是本仓"文件 → 目录"式重构不被 J 误报的原因。
+- ⇒ **「扫描结果为 0」必须先确认判据的判定面，再用探针换方式复核**（本仓纪律又一次实证；
+  [[KB-ENG-72]]：判据**覆盖了什么** ≠ 你以为它覆盖什么）。
+
+**守卫真的响了（正向对照）**：切片后 `tests/test_event_loop_no_block.py` 的 `GUARDED_ROUTES`
+按**具体路径**钉着 `app/assistant/tools.py` ⇒ 全量跑出 `1 failed`，报错原文
+「**app/assistant/tools.py 不存在（改路径了？同步更新本清单）**」⇒ 改路径即绿。
+⇒ **按路径枚举扫描面的守卫，在被扫对象搬家时会响亮报错、不静默**（与"glob 写窄 ⇒ 静默全绿"形成对照，
+[[KB-ENG-60]]）；但也提醒：**扫描面写死路径 = 一次无提示的重命名就会让它失效**，二者需权衡。
+
+**关联**：[[KB-ENG-91]]（TS 侧同类切片）· [[KB-ENG-81]]（两侧同判据的假绿）· [[KB-ENG-60]]（扫描面写窄）· [[KB-ENG-72]]（覆盖 ≠ 真实覆盖面）

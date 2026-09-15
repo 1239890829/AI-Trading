@@ -388,10 +388,11 @@ GUARDED_ROUTES: list[tuple[str, str, str, str]] = [
         "热点验证环的活跃事件（端点 + 调度双入口，均落在事件循环上）",
     ),
     (
-        "app/assistant/tools.py",
+        "app/assistant/tools/events.py",
         "asyncio.to_thread(store.list_events, active_only=True, limit=limit)",
         "store.list_events",
-        "助手 `news` 工具的事件源（limit 3~30，实测上限 7.2ms）",
+        "助手 `news` 工具的事件源（limit 3~30，实测上限 7.2ms）"
+        "—— IMP-005 切片后该 handler 住在 tools/events.py（原 tools.py 单文件已拆）",
     ),
     (
         "app/picks/morning_brief.py",
