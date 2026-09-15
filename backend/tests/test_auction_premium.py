@@ -173,6 +173,7 @@ def test_collect_premium_calendar_unavailable(monkeypatch: pytest.MonkeyPatch):
 def test_route_auction_premium(monkeypatch: pytest.MonkeyPatch):
     from app.api.deps import get_hub
     from app.api.routes import market as market_route
+    from app.api.routes import market_board as board_route
 
     pool = [_Rec(symbol="600001", name="甲", consecutive_boards=2)]
     auction = [{"symbol": "600001", "name": "甲", "auction_pct": 4.0, "data_status": "final"}]
@@ -182,7 +183,7 @@ def test_route_auction_premium(monkeypatch: pytest.MonkeyPatch):
         return _ASOF
 
     # S2-4：实现已上移到 services/market_snapshot，打桩点随之改到导入方模块名
-    monkeypatch.setattr(market_route, "default_trade_date", fake_default_trade_date)
+    monkeypatch.setattr(board_route, "default_trade_date", fake_default_trade_date)
 
     app = FastAPI()
     app.include_router(market_route.router, prefix="/api")

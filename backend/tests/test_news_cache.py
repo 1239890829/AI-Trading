@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.deps import get_hub
 from app.api.routes import market as market_route
 from app.core.errors import register_error_handlers
 
@@ -36,7 +37,9 @@ def client():
     app = FastAPI()
     register_error_handlers(app)
     app.include_router(market_route.router, prefix="/api")
-    app.dependency_overrides[market_route.get_hub] = lambda: hub
+    # 依赖覆盖的 key 必须是**同一个函数对象**：`get_hub` 的唯一来源是 `app.api.deps`
+    # （门面只装配 router，不再持有各分片的 import 引用 —— IMP-005 批 3）
+    app.dependency_overrides[get_hub] = lambda: hub
     with TestClient(app) as c:
         # TestClient 生命周期内携带 hub 引用，便于断言调用次数
         c.hub = hub  # type: ignore[attr-defined]

@@ -410,7 +410,7 @@ def test_snapshot_daykline_merge_dedup(monkeypatch, fresh_memo):
 def test_route_validation_422():
     from fastapi import HTTPException
 
-    from app.api.routes.market import market_board_fund_flow, market_board_flow_minute
+    from app.api.routes.market_flow import market_board_fund_flow, market_board_flow_minute
 
     with pytest.raises(HTTPException) as e:
         _run(market_board_fund_flow(kind="bad", range="intraday"))

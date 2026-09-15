@@ -20,7 +20,8 @@ import asyncio
 import pytest
 
 import app.services.market_context as mc
-from app.api.routes import market as market_route
+from app.api.routes import market_sentiment as sentiment_route
+from app.api.routes import market_themes as themes_route
 from app.api.routes import picks as picks_route
 from app.events.ranking import collect_rank_context
 from app.risk.engine import RiskEngine
@@ -142,8 +143,8 @@ def test_all_consumers_share_one_compute(monkeypatch):
     _patch(monkeypatch, counter)
     req = _Request(state)
 
-    envelope = _run(market_route.market_sentiment(req, HUB))          # 市场页情绪卡
-    phase = _run(market_route._market_phase_cached(req, HUB))          # 介入条件清单
+    envelope = _run(sentiment_route.market_sentiment(req, HUB))          # 市场页情绪卡
+    phase = _run(themes_route._market_phase_cached(req, HUB))          # 介入条件清单
     routed = _run(picks_route._live_style_routing(req, HUB, None))     # 猎场相位路由
     ctx = _run(collect_rank_context(state, [], []))                    # 事件排序
     engine = RiskEngine(hub=HUB, snapshot_service=state.snapshot_service,
@@ -177,7 +178,7 @@ def test_market_sentiment_route_wraps_own_envelope(monkeypatch):
     state, counter = _State(), {"n": 0}
     _patch(monkeypatch, counter)
 
-    out = _run(market_route.market_sentiment(_Request(state), HUB))
+    out = _run(sentiment_route.market_sentiment(_Request(state), HUB))
 
     assert set(out) == {"data", "meta"}
     assert out["data"]["phase"] == "高潮"
@@ -193,7 +194,7 @@ def test_market_sentiment_route_maps_calendar_unavailable_to_503(monkeypatch):
     _patch(monkeypatch, counter, raises=CalendarUnavailable("快照未就绪"))
 
     with pytest.raises(HTTPException) as ei:
-        _run(market_route.market_sentiment(_Request(state), HUB))
+        _run(sentiment_route.market_sentiment(_Request(state), HUB))
     assert ei.value.status_code == 503
 
 
@@ -202,7 +203,7 @@ def test_entry_checklist_degrades_to_none_not_500(monkeypatch):
     state, counter = _State(), {"n": 0}
     _patch(monkeypatch, counter, raises=RuntimeError("boom"))
 
-    assert _run(market_route._market_phase_cached(_Request(state), HUB)) is None
+    assert _run(themes_route._market_phase_cached(_Request(state), HUB)) is None
 
 
 def test_rank_context_records_degradation(monkeypatch):

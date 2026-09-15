@@ -15,6 +15,7 @@ import asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.api.deps import get_hub
 from app.api.routes import health as health_route
 from app.api.routes import market as market_route
 from app.data_providers import composite as composite_mod
@@ -73,7 +74,7 @@ def _make_app(comp: CompositeProvider) -> FastAPI:
     app.include_router(health_route.router, prefix="/api")
     app.include_router(market_route.router, prefix="/api")
     app.dependency_overrides[health_route.get_hub] = lambda: _Hub(comp)
-    app.dependency_overrides[market_route.get_hub] = lambda: _Hub(comp)
+    app.dependency_overrides[get_hub] = lambda: _Hub(comp)
     return app
 
 

@@ -32,7 +32,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 collect 3140 项（3078 passed / 62 skipped / 0 failed）（09-15 §6.43 实测；前提：8000 在跑）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 collect 3149 项（3078 passed / 71 skipped / 0 failed）（09-15 §6.45 实测；前提：8000 在跑）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。
@@ -41,10 +41,17 @@ cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 coll
 # 原因是常驻调度与测试同时抢 SQLite/网络；**报耗时必须说明前提**，否则会被当成回归。
 # ⚠️ `--basetemp` 不可省：默认临时目录会被沙箱拒绝创建（EEXIST → PermissionError），
 # 表现为几十个 E 而非 F，极易误判成代码回归（2026-09-11 踩，见 kb/03）。
-# ⚠️ **跳过数 2 → 62 是新增守卫的参数化产物，不是覆盖率丢失**：62 = **60** + 2，全额对上——
-# 60 项来自 `test_import_lint.py`「装配层/其他：不受本规则约束」（分层规则表按模块参数化，
+# ⚠️ **跳过数 2 → 71 是新增守卫与切片分片的参数化产物，不是覆盖率丢失**：71 = **69** + 2，全额对上——
+# 69 项来自 `test_import_lint.py`「装配层/其他：不受本规则约束」（分层规则表按模块参数化，
 # 非业务层模块显式跳过；**新增一个非业务层 .py 就 +1**，如 S2-8 的 `app/core/bjtime.py`、
-# 2026-09-12 的 `app/models/notification.py`），另 2 项为既有的「指数无涨跌停概念」后端不适用项。
+# 2026-09-12 的 `app/models/notification.py`、09-15 的 `api/routes/market_envelope.py` + 8 个域分片），
+# 另 2 项为既有的「指数无涨跌停概念」后端不适用项。
+# ⚠️ **分母要能机械核验，别只写结论**：`app/` 下非业务层模块 = **69** =
+# 31（`api/` 装配层）+ 38（其他非业务层：core/data_quality/models/repositories/schemas/websocket）
+# ⇒ 与 `skipped − 2` 逐字相符。**此类数字每次新增/删除非业务层 .py 都会变，回填前先实测。**
+# ⚠️ **推论：「+N 个文件 ⇒ +N 个测试」≠「+N 项覆盖」**——增量可能全部是**跳过的参数化项**
+# （09-15 切片：collect +9 / passed ±0 / skipped +9）。报数字时只说 collect 涨了，
+# 等于把「没跑的用例」记成「覆盖增强」（见 [[KB-ENG-97]]）。
 # ⚠️ **本条自身也曾失真**：原文写「58 项来自 import_lint」，而 58+2=60≠61（差额 1）——
 # 实测 `pytest tests/test_import_lint.py` = 171 passed / **60 skipped** ⇒ 60+2=62 才自洽。
 # **教训与本文档的警告同源：数字标注要么当轮实测回填，要么写"实测方法"而不写死数值。**
@@ -72,8 +79,27 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 collect **3140 项（3078 passed / 62 skipped / 0 failed）**、
+> **门禁口径**：后端 collect **3149 项（3078 passed / 71 skipped / 0 failed）**、
 > 前端 **576 项 / 62 文件**、eslint **0 error / 0 warn**
+> （2026-09-15 §6.45 `market.py` 切片（`IMP-005` 批 3）轮实测；较上一值「后端 3140 / 前端 576·62」增量
+> **后端 collect +9 / passed ±0 / skipped +9**，来源自洽且**分两步**：
+> +1 = 第 1 步新增 `routes/market_envelope.py`；+8 = 第 2 步新增 8 个域分片
+> （`market_sentiment/quotes/flow/themes/longhu/pools/board/stock.py`）。
+> ⚠️ **9 项全部落在 skipped 而非 passed**，因为 `test_import_lint.py` 的分层规则把 `app/api/**`
+> 判为**装配层**（`_is_business()` 返回 `False`）⇒ 显式跳过；机械核验：`app/` 下非业务层模块
+> = **69** = 31（`api/` 装配层）+ 38（其他非业务层），与 `skipped − 2 = 69` **逐字相符**
+> ⇒ **非覆盖率丢失**（恒等式 `+9 = 0 passed + 9 skipped`）。
+> ⚠️ **推论（本轮新增纪律）：「+8 个文件 ⇒ +8 个测试」不等于「+8 项覆盖」**——
+> 增量可能是**参数化跳过项**；报门禁数字时只说 collect 涨了，等于把「没跑的用例」记成「覆盖增强」。
+> 真正约束新分片的判据是 `test_routes_do_not_import_each_others_privates`（遍历全部 `api/routes/**`、
+> **不因分层规则跳过**），且它**因切片才首次被赋权**（切片前 50 端点同处一文件，跨模块私有导入不可能发生）。
+> **「行为不变」由四路机械判据保证**：**OpenAPI 契约逐条相同**（166 paths / 177 ops / 106 schemas 全等，
+> `operationId`/`parameters`/**`tags`** 逐条比对——此项曾抓到门面与子 router 重复声明 tags 导致
+> `["market","market"]`，而"路由表条数相同"的判据**完全抓不到**）+ 静态自证 C1–C4
+> （62 定义无遗漏无重复 / 正文逐字 / 50 端点集合一致 / 遮蔽关系集合不变）。
+> 见 [[KB-ENG-97]] / [[KB-ENG-93]]）
+> + **前端 ±0**（本轮**纯后端改动**，git 核对 `apps/web/` 无改动；仍照跑，实测 576 passed / 62 files
+> 逐字一致、全量与 `TZ=UTC` 复跑同绿——**"某一侧不变"同样是可核对的自洽项**）
 > （2026-09-15 §6.43 板块权限准入轮实测；较上一值「后端 3132 / 前端 575·62」增量
 > **后端 +8 项**（3 板块权限（`test_tradability`）+1（`test_picks_pipeline`）
 > +1（`test_review_picks_dimension`）+2（`test_intraday_opportunity`）

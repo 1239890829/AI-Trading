@@ -356,8 +356,9 @@ def test_longhu_default_date_uses_trading_calendar(monkeypatch):
 
     ⚠️ 2026-09-15 IMP-005 第三批：`latest_trade_date` 已从 `market.py` 抽到
     **`market_envelope`**（并改为公开名）。patch 必须打在**真正读时钟／读日历的
-    那一层**——打在 `market_route` 命名空间只会改到那里的一条 import 引用，
-    helper 自身的模块全局不受影响（本函数的 docstring 是老教训，此次是它的复现）。
+    那一层**——打在门面（`app.api.routes.market`）命名空间只会改到那里的一条
+    import 引用，helper 自身的模块全局不受影响（本函数的 docstring 是老教训，
+    此次是它的复现：切片后门面连那条 import 都不再持有）。
     """
     from datetime import date as _date
 
@@ -402,9 +403,10 @@ def test_longhu_route_wires_the_calendar_date(monkeypatch):
     测试与修复点错位。本用例改从路由入口进，观察 provider 实际收到的日期。
 
     ⚠️ 2026-09-15 IMP-005 第三批：本用例**跨三个 patch 目标**，各自对应一层真实引用 ——
-    ① 要观察的接线在**路由入口**（`market_route.longhu_detail`，仍在 `market.py`）；
-    ② 路由体内直接调的是 `market.py` 命名空间里的 `meta_payload` 引用（`from ... import`
-       绑定的是**对象**，patch 源模块改不了这里）⇒ meta 挡板要打在 `market_route`；
+    ① 要观察的接线在**路由入口**（`longhu_route.longhu_detail`，切片后住进
+       `market_longhu.py`；门面只装配 router，不再持有分片函数名）；
+    ② 路由体内直接调的是**该分片命名空间**里的 `meta_payload` 引用（`from ... import`
+       绑定的是**对象**，patch 源模块改不了这里）⇒ meta 挡板要打在 `market_longhu`；
     ③ `latest_trade_date` 内部读的时钟与日历在**它自己模块**（`market_envelope`）
        ⇒ 那两个要打在 `market_envelope`。
     三处少打任何一处，要么报 `'H' object has no attribute 'is_stale'`（meta 挡板失效），
@@ -412,13 +414,13 @@ def test_longhu_route_wires_the_calendar_date(monkeypatch):
     """
     from datetime import date as _date
 
-    from app.api.routes import market as market_route
     from app.api.routes import market_envelope
+    from app.api.routes import market_longhu as longhu_route
 
     holiday = _date(2026, 10, 1)  # 国庆（周中节假日）
     monkeypatch.setattr(market_envelope, "beijing_today", lambda: holiday)
     # 本用例只关心日期接线（打在路由命名空间：路由直接调的就是这里的引用）
-    monkeypatch.setattr(market_route, "meta_payload", lambda _hub: {})
+    monkeypatch.setattr(longhu_route, "meta_payload", lambda _hub: {})
 
     async def fake_days(_provider):  # noqa: ANN001
         return [_date(2026, 9, 29), _date(2026, 9, 30)]
@@ -438,7 +440,7 @@ def test_longhu_route_wires_the_calendar_date(monkeypatch):
             return []
 
     hub = type("H", (), {"provider": _Provider()})()
-    out = asyncio.run(market_route.longhu_detail("600519", None, hub))
+    out = asyncio.run(longhu_route.longhu_detail("600519", None, hub))
     assert seen["date"] == _date(2026, 9, 30), "默认日期没走交易日历（接线断了）"
     assert out["data"]["detail"]["trade_date"] == "2026-09-30"
 
@@ -486,10 +488,10 @@ def test_sentiment_backfill_gate_only_closes_on_success(client, monkeypatch):
 
     回退即红：旧实现下 `done` 会变成 True。
     """
-    from app.api.routes import market as market_route
+    from app.api.routes import market_sentiment as sentiment_route
     from app.market import sentiment_history as sh
 
-    monkeypatch.setattr(market_route, "_sent_hist_backfilled", {"done": False, "retry_after": 0.0})
+    monkeypatch.setattr(sentiment_route, "_sent_hist_backfilled", {"done": False, "retry_after": 0.0})
 
     def boom(_sf):  # noqa: ANN001
         raise RuntimeError("db busy")
@@ -497,20 +499,20 @@ def test_sentiment_backfill_gate_only_closes_on_success(client, monkeypatch):
     monkeypatch.setattr(sh, "backfill_from_reports", boom)
     r = client.get("/api/market/sentiment-history", params={"days": 10})
     assert r.status_code == 200, r.text
-    assert market_route._sent_hist_backfilled["done"] is False, "失败被记成完成 ⇒ 本进程内永不重试"
-    assert market_route._sent_hist_backfilled["retry_after"] > 0, "失败后未设退避"
+    assert sentiment_route._sent_hist_backfilled["done"] is False, "失败被记成完成 ⇒ 本进程内永不重试"
+    assert sentiment_route._sent_hist_backfilled["retry_after"] > 0, "失败后未设退避"
 
 
 def test_sentiment_backfill_gate_closes_on_success(client, monkeypatch):
-    from app.api.routes import market as market_route
+    from app.api.routes import market_sentiment as sentiment_route
     from app.market import sentiment_history as sh
 
-    monkeypatch.setattr(market_route, "_sent_hist_backfilled", {"done": False, "retry_after": 0.0})
+    monkeypatch.setattr(sentiment_route, "_sent_hist_backfilled", {"done": False, "retry_after": 0.0})
     monkeypatch.setattr(sh, "backfill_from_reports", lambda _sf: 2)
     r = client.get("/api/market/sentiment-history", params={"days": 10})
     assert r.status_code == 200, r.text
-    assert market_route._sent_hist_backfilled["done"] is True
-    assert market_route._sent_hist_backfilled["retry_after"] == 0.0
+    assert sentiment_route._sent_hist_backfilled["done"] is True
+    assert sentiment_route._sent_hist_backfilled["retry_after"] == 0.0
 
 
 # ---------------------------------------------------------------- 8b. 惰性补录的交易日闸门（三态）
@@ -519,19 +521,20 @@ def test_sentiment_backfill_gate_closes_on_success(client, monkeypatch):
 def _patch_lazy_capture(monkeypatch, days_list):
     """把 15:05 后惰性补录路径的输入全部钉死，返回记录容器。
 
-    生产的取数路径：`market.py` 在函数内 `from app.market.trade_calendar import
-    ...`，故 monkeypatch **模块属性**即可生效（不是补丁函数内名字）。
+    生产的取数路径：`market_sentiment.py`（切片前为 `market.py`）在函数内
+    `from app.market.trade_calendar import ...`，故 monkeypatch **模块属性**即可生效
+    （不是补丁函数内名字）。
     """
     import datetime as dt
 
-    from app.api.routes import market as market_route
+    from app.api.routes import market_sentiment as sentiment_route
     from app.market import sentiment_history as sh
     from app.market import trade_calendar as tc
     from app.services import market_context as mc
 
     # 周一 15:30（北京）——已过 15:05 闸门
-    monkeypatch.setattr(market_route, "beijing_now_naive", lambda: dt.datetime(2026, 9, 14, 15, 30))
-    monkeypatch.setattr(market_route, "_sent_hist_backfilled", {"done": True, "retry_after": 0.0})
+    monkeypatch.setattr(sentiment_route, "beijing_now_naive", lambda: dt.datetime(2026, 9, 14, 15, 30))
+    monkeypatch.setattr(sentiment_route, "_sent_hist_backfilled", {"done": True, "retry_after": 0.0})
 
     async def _days(_provider):  # noqa: ANN001
         return days_list

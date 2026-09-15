@@ -57,7 +57,7 @@ def test_fallback_uses_latest_day_and_marks_source(monkeypatch):
 
 
 def test_route_fallback_takes_over_on_provider_failure(monkeypatch):
-    from app.api.routes import market as market_route
+    from app.api.routes import market_quotes as quotes_route
     from app.market import minute_backfill as mb
 
     class _P:
@@ -82,7 +82,7 @@ def test_route_fallback_takes_over_on_provider_failure(monkeypatch):
                  "source": "tdx_m1"}]
 
     monkeypatch.setattr(mb, "tdx_minute_line_fallback", _fake_fallback)
-    payload = asyncio.run(market_route.minute_line("600519", hub=_Hub()))
+    payload = asyncio.run(quotes_route.minute_line("600519", hub=_Hub()))
     assert seen == ["600519"], "降级函数被路由调用且传入原始符号"
     assert payload["data"]["points"][0]["source"] == "tdx_m1"
     assert payload["data"]["symbol"] == "600519"
@@ -90,7 +90,7 @@ def test_route_fallback_takes_over_on_provider_failure(monkeypatch):
 
 def test_route_502_when_fallback_also_fails(monkeypatch):
     """双源皆挂 → 502，detail 带主源+备源双错（排障需要看全貌）。"""
-    from app.api.routes import market as market_route
+    from app.api.routes import market_quotes as quotes_route
     from app.market import minute_backfill as mb
 
     class _P:
@@ -111,7 +111,7 @@ def test_route_502_when_fallback_also_fails(monkeypatch):
 
     monkeypatch.setattr(mb, "tdx_minute_line_fallback", _boom)
     with pytest.raises(HTTPException) as ei:
-        asyncio.run(market_route.minute_line("600519", hub=_Hub()))
+        asyncio.run(quotes_route.minute_line("600519", hub=_Hub()))
     assert ei.value.status_code == 502
     assert "tencent minute HTTP 403" in ei.value.detail, "主源错误保留"
     assert "TDX 备源" in ei.value.detail, "备源错误保留"
@@ -119,7 +119,7 @@ def test_route_502_when_fallback_also_fails(monkeypatch):
 
 def test_route_index_symbol_502_with_guard_note(monkeypatch):
     """指数符号（带前缀）不进 TDX 降级（市场映射撞车风险），守卫错误进 502 detail。"""
-    from app.api.routes import market as market_route
+    from app.api.routes import market_quotes as quotes_route
 
     class _P:
         name = "chain(test)"
@@ -135,7 +135,7 @@ def test_route_index_symbol_502_with_guard_note(monkeypatch):
             return False
 
     with pytest.raises(HTTPException) as ei:
-        asyncio.run(market_route.minute_line("sh000001", hub=_Hub()))
+        asyncio.run(quotes_route.minute_line("sh000001", hub=_Hub()))
     assert ei.value.status_code == 502
     assert "裸 6 位" in ei.value.detail, "守卫拒绝原因可见（指数不适用 TDX 降级）"
 
