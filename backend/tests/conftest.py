@@ -7,6 +7,10 @@ os.environ["ASHARE_DATA_PROVIDER"] = "mock"
 os.environ["ASHARE_POLL_INTERVAL_SECONDS"] = "3600"
 os.environ["ASHARE_WATCHLIST"] = "600519,000001,300750,601318"
 os.environ["ASHARE_DATABASE_URL"] = "sqlite:///:memory:"
+# 生产默认开启受限自治；测试必须显式停机。否则 15:45 后每个 TestClient lifespan
+# 会启动影子评估/实验裁决，与 StaticPool 的单连接内存库争用，表现为刚 commit 的
+# 行在 refresh 时消失。自治行为由对应单测直接调用，不借全量门禁跑生产循环。
+os.environ["ASHARE_AGENT_AUTONOMY_ENABLED"] = "false"
 
 # 调度器全家桶在测试里一律关闭（本机 .env 是生产配置，开关全 on）。
 #
@@ -146,4 +150,3 @@ def client():
 
     with TestClient(app) as c:
         yield c
-

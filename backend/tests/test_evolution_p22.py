@@ -1,6 +1,7 @@
 """P2-2 复盘强制改进抽查（evolution 证据增强）单测。"""
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,15 @@ def sf(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'p22.db'}")
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine)
+
+
+@pytest.fixture(autouse=True)
+def _fixed_beijing_now(monkeypatch):
+    """Keep the seven-day fixtures independent of the wall-clock date."""
+    from app.services import evolution
+
+    fixed_now = datetime.fromisoformat("2026-09-10T12:00:00+08:00")
+    monkeypatch.setattr(evolution, "beijing_now", lambda: fixed_now)
 
 
 def _row(trade_date: str, title: str, category: str = "process", status: str = "pending"):

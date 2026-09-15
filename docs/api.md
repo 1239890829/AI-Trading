@@ -261,7 +261,7 @@ LLM 增强层**已实现但默认关闭**（`app/events/llm_aux.py` → `POST /a
 - `POST /api/agent/tasks/{id}/resolve` 🔒 — **处置待办（P1-36）**：`{outcome: done\|dismissed, note?}` → succeeded / canceled；仅 `needs_confirm` 可改，终态幂等
 - `GET /api/agent/audit` — 执行层审计（`?target=&task_id=`）
 - `GET /api/agent/agenda` / `GET /api/agent/agendas` — 当日议程 / 历史议程
-- `POST /api/agent/agenda/run` 🔒 — 手动跑一次进化议程（降级兜底；常规由 15:45 定时生成；自主执行默认关闭，仅管理员显式启用后执行）
+- `POST /api/agent/agenda/run` 🔒 — 手动跑一次进化议程（降级兜底；常规由进程内调度器 15:45 生成；受限自治默认开启，紧急停机可关闭；C 类代码仍独立关闭且只提议）
 
 **提醒与告警判读（降噪层）**
 
