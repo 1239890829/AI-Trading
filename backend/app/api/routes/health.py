@@ -8,8 +8,20 @@ from app.services.quote_hub import QuoteHub
 
 router = APIRouter(tags=["system"])
 
+#: 存活探针专用 router：**全库唯一不挂凭据守卫的路由器**（挂载见 `main.py`）。
+#:
+#: ⚠️ **为什么必须与 `router` 分开**（2026-09-15 R22 实测教训）：凭据豁免的粒度是
+#: **路由器**（`main.py` 按 router 传 `dependencies=`），而本文件同时装着 `/health`
+#: 与 `/system/*`。首版把整个 `router` 豁免掉，于是 `/api/system/llm-probe`（`force=1`
+#: 会**真实花钱**）、`/system/caches`、`/system/metrics`、`/system/providers`、
+#: `/system/marketdb-quality`、`/system/schedulers` 六个端点被**连带放开**——
+#: 全部返回 200。这是"豁免挂在错误的粒度上"的典型形态：**看起来只开了一条**，
+#: 实际开了一组。由 `tests/test_auth_boundary.py` 的行为式门禁抓出（它遍历
+#: OpenAPI 逐条发无凭据请求，只有逐条探测才看得见"同 router 的邻居被一起放开"）。
+liveness_router = APIRouter(tags=["system"])
 
-@router.get("/health")
+
+@liveness_router.get("/health")
 async def health(hub: QuoteHub = Depends(get_hub)) -> dict:
     stale = hub.is_stale()
     return {

@@ -7,8 +7,32 @@
  * 只读：不触碰任何写接口（POST/PUT/DELETE）。
  *
  * 用法：node scripts/api-sweep.js [baseUrl]
+ *
+ * ⚠️ R22（2026-09-15）起后端为**默认拒绝**鉴权：配了 ASHARE_API_TOKEN 后**所有**路由
+ * 都要凭据，唯一豁免 GET /api/health。故本脚本会自动带上 X-API-Token，取值顺序：
+ *   ① 环境变量 ASHARE_API_TOKEN
+ *   ② backend/.env 的 ASHARE_API_TOKEN 行
+ *   ③ 都取不到 ⇒ 不带头（本地 local 姿态下正确）
+ * 不带凭据跑出来的「满屏 401」是缺凭据，不是数据问题——脚本会显式提示。
  */
+const { readFileSync } = require("node:fs");
+const { dirname, join } = require("node:path");
+
 const BASE = process.argv[2] || "http://127.0.0.1:8000";
+
+/** 取巡检凭据（只读、不打印明文）。取不到返回空串 = 不带头。 */
+function resolveToken() {
+  if (process.env.ASHARE_API_TOKEN) return process.env.ASHARE_API_TOKEN.trim();
+  try {
+    const text = readFileSync(join(__dirname, "..", "backend", ".env"), "utf8");
+    const m = text.match(/^\s*ASHARE_API_TOKEN\s*=\s*(.+)$/m);
+    return m ? m[1].trim().replace(/^["']|["']$/g, "") : "";
+  } catch {
+    return ""; // 没有 backend/.env（如 CI 检出）⇒ 不带头
+  }
+}
+const TOKEN = resolveToken();
+const AUTH_HEADERS = TOKEN ? { "X-API-Token": TOKEN } : {};
 
 // 路径参数替换值（用真实存在的数据，才能验出真问题）
 const PATH_VALUES = {
@@ -101,12 +125,12 @@ function inspect(body) {
 }
 
 async function main() {
-  const spec = await (await fetch(`${BASE}/openapi.json`)).json();
+  const spec = await (await fetch(`${BASE}/openapi.json`, { headers: AUTH_HEADERS })).json();
   const targets = [];
 
   // event_id 是自增序列（今天 386，明天就不是了）——写死必然过期，运行时取一个真实值
   try {
-    const r = await fetch(`${BASE}/api/events?limit=1`);
+    const r = await fetch(`${BASE}/api/events?limit=1`, { headers: AUTH_HEADERS });
     const j = await r.json();
     const firstId = j?.data?.items?.[0]?.id;
     if (firstId != null) PATH_VALUES.event_id = String(firstId);
@@ -146,7 +170,10 @@ async function main() {
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 45000);
-      const r = await fetch(t.url, { signal: ctrl.signal, headers: { "Accept": "application/json" } });
+      const r = await fetch(t.url, {
+        signal: ctrl.signal,
+        headers: { Accept: "application/json", ...AUTH_HEADERS },
+      });
       clearTimeout(timer);
       const body = await r.text();
       let note = "";
@@ -162,6 +189,19 @@ async function main() {
 
   console.log(`\n扫描 ${results.length} 个 GET 端点（base=${BASE}）`);
   console.log(`通过 ${ok.length} / 异常 ${bad.length}\n`);
+
+  // R22：401 满屏几乎必然是「后端配了 token 而巡检没带凭据」——先提示再往下看明细，
+  // 避免把鉴权缺配误读成"全站挂了"。
+  const n401 = results.filter((r) => r.status === 401).length;
+  if (n401 > 0) {
+    console.log(
+      `⚠️  ${n401} 个端点返回 401。` +
+        (TOKEN
+          ? "已带凭据仍 401 ⇒ 凭据与后端不一致（或后端 auth_mode=shared 配了另一个值）。\n"
+          : "本次**未带凭据** ⇒ 后端已启用 R22 默认拒绝鉴权。设置 ASHARE_API_TOKEN" +
+            "（或让 backend/.env 可读）后重跑；这不是数据问题。\n")
+    );
+  }
 
   if (bad.length) {
     console.log("=== 异常明细 ===");

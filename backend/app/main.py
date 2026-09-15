@@ -6,9 +6,10 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.deps import require_api_token
 from app.api.routes import agent as agent_route
 from app.api.routes import backtest as backtest_route
 from app.api.routes import health as health_route
@@ -27,6 +28,7 @@ from app.api.routes import real_position as real_position_route
 from app.api.routes import assistant as assistant_route
 from app.api.routes import ext_data as ext_data_route
 from app.api.routes import notifications as notifications_route
+from app.core.auth import validate_auth_posture
 from app.core.config import settings
 from app.core.db import get_engine, get_session_factory
 from app.core.scheduler import SHUTDOWN_GRACE_SECONDS, SchedulerRegistry, wait_or_stop
@@ -652,6 +654,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
 
+# ── 鉴权姿态校验（R22，fail closed）──────────────────────────────────────────
+# 必须在**模块级**调用（即"导入 app 对象"这一步就生效），使 uvicorn / 测试夹具 /
+# 脚本直连等**任何**启动路径拿到同一结论——放在 lifespan 里就只有"经 ASGI 启动"
+# 这一条路径会被覆盖。校验内容（取值合法性 + shared 必配 token）见 core/auth.py。
+validate_auth_posture()
+
 # 统一错误契约：所有错误响应形态 {detail, code}（技术评审 B1）
 from app.core.errors import register_error_handlers  # noqa: E402
 
@@ -686,24 +694,38 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(health_route.router, prefix="/api")
-app.include_router(market_route.router, prefix="/api")
-app.include_router(backtest_route.router, prefix="/api")
-app.include_router(watchlist_route.router, prefix="/api")
-app.include_router(paper_route.router, prefix="/api")
-app.include_router(review_route.router, prefix="/api")
+# ── 路由挂载：默认拒绝（R22 统一鉴权边界）────────────────────────────────────
+# `dependencies=_AUTH_GUARD` = 该 router 下**每一条**路由都要求入站凭据。
+# 只有 `/api/health`（存活探针）例外，且是**结构性**例外：它不挂守卫，
+# 于是"哪些路由可以没有凭据"这件事在**挂载处**一眼可读，而不是藏在守卫内部
+# 的路径判断里。漏挂 guard 由 `tests/test_auth_boundary.py` 反向断言变红
+# （无守卫的路由集合必须**恰等于** `core/auth.py::AUTH_EXEMPT_PATHS`）。
+#
+# ⚠️ 为什么不用"敏感读清单"：清单式是**默认放行**，漏登记即静默开放——R22 的
+# 病灶（只按"写接口"分类 ⇒ 花钱/敏感 GET 整类漏保护）正是这种形态。详见 core/auth.py。
+_AUTH_GUARD = [Depends(require_api_token)]
+
+app.include_router(health_route.liveness_router, prefix="/api")  # ← 唯一豁免：存活探针
+app.include_router(health_route.router, prefix="/api", dependencies=_AUTH_GUARD)  # /system/*（含花钱的 llm-probe）
+app.include_router(market_route.router, prefix="/api", dependencies=_AUTH_GUARD)
+app.include_router(backtest_route.router, prefix="/api", dependencies=_AUTH_GUARD)
+app.include_router(watchlist_route.router, prefix="/api", dependencies=_AUTH_GUARD)
+app.include_router(paper_route.router, prefix="/api", dependencies=_AUTH_GUARD)
+app.include_router(review_route.router, prefix="/api", dependencies=_AUTH_GUARD)
 # predict 路由已删（2026-09-08 审查 P0-4：REST 5 端点全孤立）；predict 包
 # 瘦成 auto-verify 库保留（review/service.maybe_auto_verify 消费预判引擎）。
-app.include_router(alert_route.router, prefix="/api")
-app.include_router(risk_route.router, prefix="/api")
-app.include_router(news_route.router, prefix="/api")
-app.include_router(theme_catalog_route.router, prefix="/api")
-app.include_router(events_route.router, prefix="/api")
-app.include_router(real_position_route.router, prefix="/api")
-app.include_router(agent_route.router, prefix="/api")  # AI 控制台（任务中心/审计）
-app.include_router(picks_route.router, prefix="/api")
-app.include_router(picks_intraday_route.router, prefix="/api")
-app.include_router(assistant_route.router, prefix="/api")
-app.include_router(ext_data_route.router, prefix="/api")
-app.include_router(notifications_route.router, prefix="/api")
+app.include_router(alert_route.router, prefix="/api", dependencies=_AUTH_GUARD)
+app.include_router(risk_route.router, prefix="/api", dependencies=_AUTH_GUARD)
+app.include_router(news_route.router, prefix="/api", dependencies=_AUTH_GUARD)
+app.include_router(theme_catalog_route.router, prefix="/api", dependencies=_AUTH_GUARD)
+app.include_router(events_route.router, prefix="/api", dependencies=_AUTH_GUARD)
+app.include_router(real_position_route.router, prefix="/api", dependencies=_AUTH_GUARD)
+app.include_router(agent_route.router, prefix="/api", dependencies=_AUTH_GUARD)  # AI 控制台（任务中心/审计）
+app.include_router(picks_route.router, prefix="/api", dependencies=_AUTH_GUARD)
+app.include_router(picks_intraday_route.router, prefix="/api", dependencies=_AUTH_GUARD)
+app.include_router(assistant_route.router, prefix="/api", dependencies=_AUTH_GUARD)
+app.include_router(ext_data_route.router, prefix="/api", dependencies=_AUTH_GUARD)
+app.include_router(notifications_route.router, prefix="/api", dependencies=_AUTH_GUARD)
+# WebSocket 走**子协议**凭据（浏览器不允许自定义请求头），无法复用上面的
+# HTTP 依赖注入 ⇒ 在 `websocket/routes.py` 内于 `accept()` 之前自行校验。
 app.include_router(ws_router)

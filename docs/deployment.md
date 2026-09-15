@@ -12,7 +12,8 @@
 | **数据持久化** | 挂宿主 `./data` → 容器 `/data`。**挂 `/app/data` 不生效** |
 | **密钥（红线 4）** | API Key 只走 `backend/.env`（`env_file` 注入），**绝不进镜像层 / 前端 / git** |
 | **前端连后端** | 同源 `/backend` 相对路径 + 服务端运行时代理 `BACKEND_ORIGIN`（**改后端地址无需重新构建**）；WS **不走**代理，需 nginx 反代或自动降级 5s 轮询 |
-| **公网 / NAS 必配** | `ASHARE_API_TOKEN`（写接口鉴权，**backend 与 web 容器都要有**）+ `ASHARE_CORS_ORIGINS`（加实际访问域名） |
+| **公网 / NAS 必配** | `ASHARE_AUTH_MODE=shared` + `ASHARE_API_TOKEN`（**R22 默认拒绝：全部接口**，backend 与 web 容器都要有）+ `ASHARE_CORS_ORIGINS`（加实际访问域名） |
+| **鉴权漏配 = 全站 401** | 后端配了 token 而 web 容器没拿到 ⇒ 连读接口也 401（代理层不附加请求头） |
 | **发布门禁** | `node scripts/api-sweep.js`——专抓「HTTP 200 但数据为空」这类测试与类型检查都发现不了的问题 |
 
 **章节导航**：本地开发 ｜ Docker ｜ 环境变量 ｜ 前端如何连后端 ｜ 运维工具（全 GET 端点巡检）｜ 运维要点 ｜ 已踩过的坑 ｜ Docker 用户侧验证清单（8 项）
@@ -68,7 +69,8 @@ docker compose -f docker-compose.prod.yml up -d --build
 | ASHARE_REQUEST_TIMEOUT_SECONDS | Provider 超时 |
 | ASHARE_CORS_ORIGINS | 允许的前端来源（**部署到 NAS/云主机要把实际访问域名加进来**） |
 | ASHARE_REVIEW_* / ASHARE_NEWS_* | 分析器/摘要器：rules（默认）或 llm（配 *_LLM_BASE_URL / *_LLM_API_KEY / *_LLM_MODEL） |
-| ASHARE_API_TOKEN | 写接口鉴权；**部署到公网/NAS 必须配置随机值**。backend 从 `backend/.env` 读，**web 容器需经 compose 透传同一值**（代理层运行时附加请求头），见「写鉴权 token 的传递路径」。⚠️ 前缀**绝不能**是 `NEXT_PUBLIC_` |
+| ASHARE_AUTH_MODE | `local`（默认）/ `shared`。`shared` 表示"会有回环之外的访客"⇒ **必须配 token**（未配则**拒绝启动**）。取值拼错同样拒绝启动（否则静默退回 `local`＝全放行）。⚠️ **2026-09-15 R22 新增** |
+| ASHARE_API_TOKEN | 访问鉴权；**R22 起为默认拒绝**——配了之后**所有** HTTP 路由都要 `X-API-Token`（写接口与 GET 一视同仁），唯一豁免 `GET /api/health`。**部署到公网/NAS 必须配置随机值**（`openssl rand -hex 32`）。backend 从 `backend/.env` 读，**web 容器需经 compose 透传同一值**（代理层运行时给**全部**请求附加请求头），见「鉴权凭据的传递路径」。⚠️ 前缀**绝不能**是 `NEXT_PUBLIC_` |
 | NEXT_PUBLIC_API_BASE | 前端 REST 基址；**留空即同源 `/backend`**（推荐） |
 | NEXT_PUBLIC_WS_BASE | 前端 WebSocket 基址；留空时同源尝试，失败自动降级 5s 轮询 |
 | BACKEND_ORIGIN | **服务端**变量，前端反代的目标后端地址（默认 `http://127.0.0.1:8000`），运行时生效 |
@@ -90,6 +92,8 @@ docker compose -f docker-compose.prod.yml up -d --build
 WebSocket 例外：Route Handler 不代理 WS 升级。生产环境要么前置 nginx 反代并放开
 `Upgrade` 头，要么显式设置 `NEXT_PUBLIC_WS_BASE`；两者都不做时 `useQuoteStream`
 自动降级为 5s 轮询，功能完整只是不够实时。开发环境由 `.env.development` 直连后端。
+启用鉴权后 WS 还需带**子协议凭据**（经同源 `/api/ws-credential` 下发），
+nginx 反代时**不要剥掉 `Sec-WebSocket-Protocol`**；详见下文「WebSocket 面」。
 
 ### 生产模式自检
 
@@ -100,45 +104,82 @@ BACKEND_ORIGIN=http://127.0.0.1:8000 npx next start -p 3100
 curl http://127.0.0.1:3100/backend/api/health   # 应返回后端健康信息
 ```
 
-### 写鉴权 token 的传递路径（2026-09-14 起）
+### 鉴权凭据的传递路径（2026-09-14 起；2026-09-15 R22 扩面）
 
-写接口的 `X-API-Token` **只在服务端流转**，浏览器侧不持有：
+**HTTP 面**的 `X-API-Token` **只在服务端流转**，浏览器侧不持有：
 
 ```
 浏览器 ──(不带 token)──▶ Next Route Handler ──(附加 X-API-Token)──▶ backend
-                            ↑ 运行时读 ASHARE_API_TOKEN
+                            ↑ 运行时读 ASHARE_API_TOKEN，给**全部**请求附加
 ```
 
 - 历史实现用 `NEXT_PUBLIC_API_TOKEN`，而 `NEXT_PUBLIC_*` 被 Next **构建期内联**成客户端
-  bundle 里的字面量 ⇒ 等于把唯一写保护凭据公开，且会写进浏览器历史与反代访问日志。
+  bundle 里的字面量 ⇒ 等于把唯一凭据公开，且会写进浏览器历史与反代访问日志。
   已修复；防回潮守卫 `apps/web/lib/env-secrecy.test.ts`（含掩码器自证与注入验证）。
+- **2026-09-15 R22 起注入面扩到全部请求**：此前只有非 GET/HEAD 注入，因为当时保护面
+  只是写接口；现在保护面是"默认拒绝"，读接口同样要求凭据 ⇒ 若沿用旧条件，
+  **配了 token 的环境下所有读接口 401**。传递实现收敛到
+  `apps/web/lib/proxy-headers.ts::buildUpstreamHeaders`（单点）。
 - 因此 **web 容器也必须拿到 `ASHARE_API_TOKEN`**，由 `docker-compose.prod.yml` 透传。
   刻意**不使用** `env_file: backend/.env` —— 那会把 THS Key / DB URL 等全部后端凭据
   一并搬进 web 容器。推荐从单源派生，避免两处漂移：
 
 ```bash
+export ASHARE_AUTH_MODE="$(sed -n 's/^ASHARE_AUTH_MODE=//p' backend/.env)"
 export ASHARE_API_TOKEN="$(sed -n 's/^ASHARE_API_TOKEN=//p' backend/.env)"
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-- **判据是"两边一致"**：变量缺失时代理不附加请求头，与后端 `require_write_token` 的
-  opt-in 语义对称（本地开发零配置、后端未配时写接口照常放行）；但**后端配了而 web
-  没传 ⇒ 所有写接口 401**（读接口不受影响）。排查（不打印明文）：
+- **判据是"两边一致"**：变量缺失时代理不附加请求头，与后端的姿态语义对称
+  （`local` + 未配 token = 本地开发零配置、后端全放行）；但**后端配了而 web
+  没传 ⇒ 全部接口 401**（R22 前只有写接口会 401）。排查（不打印明文）：
 
 ```bash
 docker compose -f docker-compose.prod.yml exec web printenv ASHARE_API_TOKEN | wc -c
 # 0 ⇒ 未注入（除换行外无字符）；>0 ⇒ 已注入
 ```
 
+### WebSocket 面：子协议凭据（2026-09-15 R22）
+
+浏览器 `WebSocket` 构造器**不允许设置自定义请求头**（平台约束，非本项目选择），
+而 `?token=` 通道已刻意关闭 ⇒ 唯一可用通道是 **`Sec-WebSocket-Protocol` 子协议**。
+
+```
+浏览器 ──GET /api/ws-credential──▶ Next Route Handler（运行时读 ASHARE_API_TOKEN）
+   ▲                                    └─ 返回 {"subprotocol":"ashare-token.<b64url>"}
+   └── 内存持有，new WebSocket(url, [该子协议]) ──▶ backend /ws/quotes
+```
+
+- **这是全系统唯一"凭据出服务端"的地方**——回显约束（RFC 6455 §4.1：客户端提议了子协议
+  而服务端一个都没选 ⇒ 客户端主动判定连接失败）要求浏览器**自己知道**凭据。
+  三重约束保证它不比 HTTP 面更弱：① `/api/ws-credential` 在同源 Next 服务端，**构建期不内联**
+  任何秘密；② 返回的是**编码后的子协议**而非明文 token，不进 URL / 浏览器历史 / Referer / 反代日志；
+  ③ 只在**内存**持有，不落 localStorage / cookie。
+- ⚠️ **残留风险（别当成"已解决"）**：能打开前端的访客可取得该凭据，进而绕过前端
+  直连后端端口。它保护的是"后端端口不对未授权者开放"，**不是"区分前端访客身份"**。
+  配套纪律：后端端口只绑回环（`docker-compose.prod.yml` 已如此），共享部署把反代作为唯一入口。
+- 未启用鉴权时 `/api/ws-credential` 返回 `{"subprotocol": null}`，前端**不传第二个参数**
+  （注意 `new WebSocket(url, [])` 与 `new WebSocket(url)` 在浏览器里**不等价**）
+  ⇒ 与加固前行为逐字一致。
+- WS **不走** Next 代理（Route Handler 不代理升级），故此凭据对 nginx 反代场景同样适用：
+  nginx 只要不剥掉 `Sec-WebSocket-Protocol` 即可。
+
 ## 运维工具：全 GET 端点巡检
 
 ```bash
 node scripts/api-sweep.js                    # 默认打 http://127.0.0.1:8000
 node scripts/api-sweep.js http://nas:8000    # 指定目标
+
+# R22 后：后端启用鉴权时必须给凭据，否则**全部端点 401**（会被误读成"全站挂了"）
+ASHARE_API_TOKEN="$(sed -n 's/^ASHARE_API_TOKEN=//p' backend/.env)" node scripts/api-sweep.js
 ```
 
 从 `/openapi.json` 取权威清单（不会漏也不会多），自动替换路径参数、填必需查询参数，
 逐个打真实后端并输出非 2xx 明细与慢端点。**只读**，不触碰写接口。
+凭据取值顺序：环境变量 `ASHARE_API_TOKEN` → 未设置则尝试 `backend/.env`；
+两者皆空即不带头（本地 `local` 姿态下正确）。
+⚠️ **"401 满屏" 不是数据问题**：那说明后端配了 token 而巡检没带凭据，
+先核对凭据再解读结果（R22 前该现象不存在，因为保护面只有写接口）。
 2026-08-30 首次运行：52 个 GET 端点，47 通过；5 个异常均为真实原因而非代码缺陷
 （东财逐笔被限流、非交易日无竞价数据、复盘报告/预判/预警规则本就不存在）。
 

@@ -4,12 +4,19 @@
 #
 # 数据落点：容器内 /data（REPO_ROOT=/ 推导出的默认路径），挂载宿主 ./data 持久化。
 # API Key：只经 backend/.env 注入（env_file），绝不打进镜像层。
-# 写鉴权 token：backend 用 env_file，**web 只透传 ASHARE_API_TOKEN 一个变量**
-#   （代理层运行时读取并附加请求头，浏览器不持有）。部署前先
-#   `export ASHARE_API_TOKEN="$(sed -n 's/^ASHARE_API_TOKEN=//p' backend/.env)"`。
+# 访问鉴权（R22，2026-09-15）：默认拒绝——配了 ASHARE_API_TOKEN 后**所有** HTTP 路由
+#   都要求 X-API-Token（唯一豁免 GET /api/health，供 healthcheck 无凭据调用），
+#   写接口与 GET 一视同仁。backend 用 env_file；**web 只透传 ASHARE_API_TOKEN 一个变量**
+#   （代理层 lib/proxy-headers.ts 运行时读取并给**全部**请求附加头，浏览器不持有）。
+#   部署前先：
+#   `export ASHARE_API_TOKEN="$(sed -n 's/^ASHARE_API_TOKEN=//p' backend/.env)"`
+#   `export ASHARE_AUTH_MODE="$(sed -n 's/^ASHARE_AUTH_MODE=//p' backend/.env)"`（shared 时）
+#   ⚠️ 后端配了 token 而 web 没拿到 ⇒ **全部接口 401**（R22 前只有写接口会 401）。
 # WebSocket：Route Handler 不代理 WS 升级——默认 5s 轮询降级可用；
 #   要实时 WS，要么前置 nginx 放开 Upgrade 头，要么设 NEXT_PUBLIC_WS_BASE
 #   （注意：该项是构建期内联，改了要 --build 重构 web 镜像）。
+#   ⚠️ 启用鉴权后 WS 另需**子协议凭据** ashare-token.<base64url>（经同源
+#   GET /api/ws-credential 运行时下发）⇒ 反代/WAF 不要剥掉 Sec-WebSocket-Protocol 头。
 services:
   backend:
     build: ./backend
@@ -33,14 +40,16 @@ services:
     environment:
       # 运行时读取：指向容器网络内的 backend，改后端地址无需重建镜像
       BACKEND_ORIGIN: http://backend:8000
-      # 写接口鉴权（2026-09-14 起）：代理层 app/backend/[...path]/route.ts 在**运行时**
-      # 读取本变量，附加到非 GET/HEAD 请求头。浏览器侧不持有 token。
+      # 访问鉴权（R22，2026-09-15）：代理层 lib/proxy-headers.ts 在**运行时**
+      # 读取本变量，附加到**全部**请求（不再只给非 GET/HEAD——保护面已是默认拒绝，
+      # 读接口同样要凭据）。浏览器侧不持有 token。
       # **刻意不用 `env_file: backend/.env`**——那会把 THS Key / DB URL 等全部后端凭据
       # 一并搬进 web 容器，扩大泄露面；这里只透传这一个变量。
       # 部署时把同一个值传给 compose（推荐从 backend/.env 派生，避免两处漂移）：
       #   export ASHARE_API_TOKEN="$(sed -n 's/^ASHARE_API_TOKEN=//p' backend/.env)"
-      # 未设置 = 不附加请求头，与后端 require_write_token 的 opt-in 语义对称
-      # （本地零影响；但后端配了而这里没传 ⇒ 所有写接口 401，见 docs/deployment.md）。
+      # 未设置 = 不附加请求头，与后端「local + 未配 token = 全放行」的姿态语义对称
+      # （本地零影响；但后端配了而这里没传 ⇒ **全部接口** 401，见 docs/deployment.md）。
+      # WS 凭据由同源 GET /api/ws-credential 从同一变量派生，无需额外变量。
       ASHARE_API_TOKEN: ${ASHARE_API_TOKEN:-}
     ports:
       - "3000:3000"

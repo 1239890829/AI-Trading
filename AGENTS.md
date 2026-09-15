@@ -89,8 +89,33 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 collect **3176 项（3105 passed / 71 skipped / 0 failed）**、
-> 前端 **576 项 / 62 文件**、eslint **0 error / 0 warn**
+> **门禁口径**：后端 collect **3202 项（3130 passed / 72 skipped / 0 failed）**、
+> 前端 **593 项 / 65 文件**、eslint **0 error / 0 warn**
+> （2026-09-15 §6.48 R22 统一鉴权边界轮实测；较上一值「后端 3176 / 前端 576·62」增量
+> **后端 collect +26 = passed +25 + skipped +1**，来源自洽且**分两类**：
+> `+25` = 新文件 `backend/tests/test_auth_boundary.py`（姿态 fail-closed / 遍历
+> `app.openapi()` 逐条断言无凭据必 401 / 豁免集合恰为 `/api/health` / WS 子协议往返与拒绝 /
+> 四路注入自证）；`+1` = 新模块 `app/core/auth.py` 属 `app/core/**` ⇒ `test_import_lint.py`
+> 分层规则判**非业务层** ⇒ 显式跳过（[[KB-ENG-97]] 同族：**这点增量是「没跑的用例」，不是覆盖**）。
+> **机械核验（两道）**：① `pytest tests/test_import_lint.py -rs` ⇒ `SKIPPED [70] 装配层/其他`
+> 且 `70 = skipped(72) − 2`（另 2 项为既有的「指数无涨跌停概念」不适用项）逐字相符；
+> ② 按该守卫自己的判据（`_ASSEMBLY_PREFIXES/_ASSEMBLY_FILES/_BUSINESS_PREFIXES`）复算
+> `app/` 下模块：**70 = 31（装配层：`api/**` + `main.py`）+ 39（其他非业务层）**，
+> 其中 39 比上一轮 **38 恰好 +1**（`core/auth.py`）。⇒ 恒等式 `+26 = 25 passed + 1 skipped`。
+> + **前端 +17 项 / +3 文件**，来源自洽：新文件 `lib/proxy-headers.test.ts`（5，
+> 代理注入单点——含"不得手搓凭据头"反向断言）+ `lib/ws-credential.test.ts`（8，
+> 取凭据与缓存失败方向）+ `hooks/use-quote-stream.test.tsx`（4，**await 窗口竞态**：
+> `connect()` 因取凭据变 async 后，卸载发生在 await 期间不得再建 socket；另覆盖
+> "未配置 ⇒ 不传第二个参数"——`new WebSocket(url, [])` 与 `new WebSocket(url)` 在浏览器里
+> **不等价**）；`lib/env-secrecy.test.ts` 6 例为**改写**（原「注入写鉴权头」改为
+> 「运行时读凭据且不自己拼头」）。
+> **四路注入自证（后端全红）**：① 摘掉某 router 的守卫 ⇒ 该 router 端点集体逃逸被抓；
+> ② 整 router 豁免 ⇒ **实测连带放开 6 条 `/system/*`（含会真实花钱的 `/system/llm-probe`）**，
+> 这就是「豁免粒度错误」——豁免挂在 router 上而 router 里还有别的端点（见 §6.4 纪律）；
+> ③ WS 去掉子协议校验 ⇒ 无功可连；④ 空 token fail-open ⇒ 被姿态校验与运行期判定双杀。
+> **前端两路注入自证（精确变红）**：删掉 await 后的 `if (closed) return;` 与把
+> `new WebSocket(url)` 无条件改成 `new WebSocket(url, protocols)` ⇒ 4 例中 **2 例红**
+> （恰为对应的那两条），还原后复绿。
 > （2026-09-15 §6.46 `BUG-002`（`ntile` 无 tie-break）确定性修复轮实测；**较上一值「后端 3174 / 前端 576·62」增量
 > 后端 collect +2 / passed +2 / skipped ±0**，来源自洽：`backend/tests/test_factors.py` **36 → 38**，
 > 新增两条判据不同源的守卫（① 行为：同池连跑 3 次整份因子记录逐字相等 ② 结构：扫**生成的 SQL**，
@@ -691,6 +716,25 @@ curl 先行 → 记录字段口径与类型陷阱 → 多采样找规律 → fix
 ### 6.4 行为基线（勿回退）
 红涨绿跌 · tabular-nums · 所有数据带来源/时间/质量标注 · mock 不冒充实盘 ·
 布局锁一屏（容器内滚动）· 每处可解释输出带 basis · 右列宽度用户可调（260-480px）。
+**鉴权默认拒绝**（R22，2026-09-15）：`ASHARE_API_TOKEN` 配了之后**所有** HTTP 路由
+都要 `X-API-Token`（唯一豁免 `GET /api/health`）、`/ws/quotes` 要子协议凭据。
+**新增端点无须做任何事**——它自动受保护；**要豁免才需要动清单**（`core/auth.py::AUTH_EXEMPT_PATHS`，
+全库仅 1 条 + 有测试钉住）。三条纪律：
+
+1. **豁免只能挂到"真正只想开一个端点"的对象上**：`include_router(某 router, dependencies=...)`
+   是**整组**生效。R22 实施时踩到——豁免 `health_route.router` 连带放开 6 条 `/system/*`
+   （含 `force=1` 会真实花钱的 `/system/llm-probe`）。已把 `/health` 拆到独立的
+   `liveness_router`。**新增 router 前先看它里面有几个端点。**
+2. **判据要用行为式，不要用结构式**：本版 FastAPI 的 `include_router` 生成 `_IncludedRouter`
+   包装对象，`route.path` 是**未加 prefix** 的原始路由、router 级 `dependencies` **不在**其上
+   ⇒ 遍历 `route.dependant` 会得出"176 条全部无守卫"的错误结论。正确做法是遍历
+   `app.openapi()["paths"]` **逐条发无凭据请求断言 401**（不关心守卫挂在哪一层）。
+   ⚠️ `app.openapi()` 结果被实例缓存 ⇒ **注入自证前必须先清 `openapi_schema = None`**，
+   否则新注入的路由根本不在探测面里（假绿）。
+3. **失败方向必须是 fail-closed**：`shared` 姿态未配 token、`auth_mode` 取值拼错
+   ⇒ **拒绝启动**（拼错一个字母会让判定静默退回 `local` = 共享部署全放行）；
+   运行期判定也独立堵死空 token（**不能把启动校验当唯一防线**——测试夹具/脚本直连/自定义
+   ASGI 入口都可能绕过 `main.py`）。
 
 ### 6.5 GitHub Collaboration Workflow（适用于整个仓库）
 

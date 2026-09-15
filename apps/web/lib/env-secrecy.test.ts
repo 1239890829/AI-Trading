@@ -163,18 +163,24 @@ describe("前端凭据禁令（NEXT_PUBLIC_* 不得承载密钥）", () => {
     expect(maskCommentsAndStrings('headers.set("x-api-token", token)')).not.toContain('"x-api-token"');
   });
 
-  it("服务端代理确实注入写鉴权头（否则生产环境写接口会 401）", () => {
+  it("服务端代理在运行时读取凭据，且不自己手搓凭据头", () => {
     const proxy = readFileSync(path.join(WEB_ROOT, "app/backend/[...path]/route.ts"), "utf8");
     const masked = maskComments(proxy);
+    // 凭据只能来自**服务端环境变量**（运行时读取；绝不能是 NEXT_PUBLIC_*）
     expect(masked).toContain("process.env.ASHARE_API_TOKEN");
-    // 客户端伪造成一律丢弃，只认服务端环境变量
-    expect(masked).toContain('headers.delete("x-api-token")');
-    // 必须**只对非 GET/HEAD** 注入：给 GET 也加头等于把凭据撒到所有读请求上。
-    // 用「注入点前一段代码里必须有方法判断」做相对位置断言，而不是只看全文有没有这句话。
-    const setIdx = masked.indexOf('headers.set("x-api-token"');
-    expect(setIdx, "代理里没有注入 x-api-token 的语句").toBeGreaterThan(-1);
-    const window = masked.slice(Math.max(0, setIdx - 300), setIdx);
-    expect(window, "注入 x-api-token 之前没有做请求方法判断").toContain('req.method !== "GET"');
+    // 头构造（"客户端伪造头一律丢弃" + "要不要带头"）收敛到共享纯函数，
+    // **行为式**判定见 `lib/proxy-headers.test.ts`。
+    //
+    // 为什么删掉了原先那条"注入语句前 300 字符内必须有 req.method !== 'GET'"的
+    // **相对位置断言**：它守的命题是"别给 GET 也加头"。R22 之后该命题**反了**——
+    // 后端改为默认拒绝，只给非 GET 注入会让全部读请求 401，必须一律注入。
+    // 且这种断言**换个写法就漏判**（把判断挪进函数、或改成早返回，断言仍绿）。
+    // 现在改守一个更硬、更小的命题：凭据头的名字**不得出现在本层**——
+    // 出现即意味着有第二份规则，两份必然漂移。
+    expect(masked).toContain("buildUpstreamHeaders(");
+    expect(masked, "代理层不应再出现凭据头字面量（规则归 lib/proxy-headers.ts）").not.toContain(
+      "x-api-token",
+    );
   });
 });
 

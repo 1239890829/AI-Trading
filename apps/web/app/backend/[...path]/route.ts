@@ -1,5 +1,7 @@
 import type { NextRequest } from "next/server";
 
+import { buildUpstreamHeaders } from "@/lib/proxy-headers";
+
 /**
  * 后端反向代理：**运行时**读取 BACKEND_ORIGIN。
  *
@@ -11,6 +13,7 @@ import type { NextRequest } from "next/server";
  * Route Handler 每次请求都在服务端求值，改环境变量重启即生效。
  * 唯一代价：Next 的 rewrite 不代理 WebSocket 升级，WS 需要显式配
  * NEXT_PUBLIC_WS_BASE 或用前置反代（连接失败时 useQuoteStream 自动降级轮询）。
+ * ⚠️ WS 走**子协议凭据**（R22），其投递路径见 `app/api/ws-credential/route.ts`。
  */
 const DEFAULT_BACKEND = "http://127.0.0.1:8000";
 
@@ -19,26 +22,10 @@ async function proxy(req: NextRequest) {
   const path = req.nextUrl.pathname.replace(/^\/backend/, "");
   const target = `${backend}${path}${req.nextUrl.search}`;
 
-  const headers = new Headers(req.headers);
-  // host 必须删掉，否则后端按 Next 自己的 Host 处理（CORS 校验会错）
-  headers.delete("host");
-  // 长度由 fetch 依据实际 body 重算，透传旧值会不一致
-  headers.delete("content-length");
-  // 客户端送来的写鉴权头一律丢弃，只认服务端环境变量（防伪造/防误配）
-  headers.delete("x-api-token");
-
-  // 写接口鉴权（B6）：token 只在**服务端**持有并注入，绝不下发浏览器。
-  //
-  // 历史缺陷（2026-09-14 修复）：`lib/api.ts` 曾用 `NEXT_PUBLIC_API_TOKEN` 携带该头，
-  // 而 `NEXT_PUBLIC_*` 由 Next **构建期内联**成客户端 bundle 里的字面量 ⇒ 任何访客
-  // 「查看网页源码」即可取得唯一写保护凭据；该头还会进浏览器历史与反代访问日志。
-  // 归位后浏览器只发同源 `/backend/...`，token 由本层附加。
-  //
-  // 未配置 = 不带头，与后端 `require_write_token` 的 opt-in 语义对称（本地零影响）。
-  if (req.method !== "GET" && req.method !== "HEAD") {
-    const token = process.env.ASHARE_API_TOKEN;
-    if (token) headers.set("x-api-token", token);
-  }
+  // 凭据注入：**一律注入**（含 GET/HEAD）——后端是默认拒绝，除 /api/health 外
+  // 所有路由都要凭据，只给写请求注入会让全部读请求 401。取值与"客户端伪造头一律
+  // 丢弃"的规则集中在 `lib/proxy-headers.ts`（那里有行为式测试，本文件不再自查）。
+  const headers = buildUpstreamHeaders(req.headers, process.env.ASHARE_API_TOKEN);
 
   const init: RequestInit & { duplex?: string } = {
     method: req.method,

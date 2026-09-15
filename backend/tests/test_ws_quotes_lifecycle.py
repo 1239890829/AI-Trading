@@ -93,8 +93,21 @@ class _FakeWS:
         self.app = SimpleNamespace(state=SimpleNamespace(hub=hub))
         self.query_params = {"symbols": symbols}
         self.sent: list[dict] = []
+        # R22（2026-09-15）：路由现在会在 accept() **之前**校验子协议凭据。
+        # 本文件不测鉴权（那是 `test_auth_boundary.py` 的职责），故给一个空头集
+        # ⇒ `local` 姿态下判定直接放行，本文件的行为与加固前逐字一致。
+        self.headers: dict[str, str] = {}
+        self.closed_with: int | None = None
 
-    async def accept(self) -> None:
+    async def accept(self, subprotocol: str | None = None) -> None:
+        # 签名必须与 Starlette 的 `WebSocket.accept(subprotocol=None)` 一致：
+        # 路由在用子协议携带凭据时会传参，写死成无参会让本替身变成"因签名过窄而红"，
+        # 那种红说明的是替身失真，不是被测行为出错。
+        self.accepted_subprotocol = subprotocol
+        return None
+
+    async def close(self, code: int = 1000, reason: str | None = None) -> None:
+        self.closed_with = code
         return None
 
     async def send_json(self, msg: dict) -> None:
