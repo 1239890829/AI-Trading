@@ -113,6 +113,8 @@ export interface NotificationsPayload {
   count: number;
   generated_at: string;
   news_min_score: number;
+  /** 当前固定为只展示多维门控后的个股机会；字段用于防前后端策略漂移。 */
+  policy: "stock_opportunities_only";
   /** 单源失败显式透出（降级可见），全部成功为 null */
   errors: Record<string, string> | null;
 }

@@ -45,15 +45,15 @@ def _settings() -> Settings:
     return Settings(_env_file=None)
 
 
-def test_defaults_are_off_and_official_names_explicitly_enable(monkeypatch):
+def test_restricted_autonomy_defaults_on_but_code_changes_default_off(monkeypatch):
     defaults = _settings()
-    assert defaults.agent_autonomy_enabled is False
+    assert defaults.agent_autonomy_enabled is True
     assert defaults.agent_code_change_enabled is False
 
-    monkeypatch.setenv(OFFICIAL_AUTONOMY, "1")
+    monkeypatch.setenv(OFFICIAL_AUTONOMY, "0")
     monkeypatch.setenv(OFFICIAL_CODE, "1")
     s = _settings()
-    assert s.agent_autonomy_enabled is True
+    assert s.agent_autonomy_enabled is False
     assert s.agent_code_change_enabled is True
 
 

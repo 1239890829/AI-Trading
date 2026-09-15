@@ -29,8 +29,9 @@ import { NewsModal, type NewsModalItem } from "@/components/news-modal";
 /**
  * 站内通知中心（2026-09-07 用户需求③）：导航栏铃铛 → 右侧抽屉。
  *
- * 内容：个股机会（watcher 确认/证伪）+ 每日精选 + 评分过滤后的消息面/新闻/政策
- * （后端 /api/notifications 三源合并，评分与时事新闻板块 events ranking 同源）。
+ * 内容只保留经过置信档、多维评分、红线、闸门、买入区间、涨停区与实时行情
+ * 共同门控后的个股机会。板块异动、题材方向、每日精选与新闻留在各自分析页面，
+ * 不再作为会打断用户的通知。
  * 抽屉内一层 tab 按 盘前/盘中/盘后 分类（后端判定：交易日历优先，非交易日归盘前）。
  * 新闻不逐条推送：score ≥ 阈值才出现（默认 60，后端 settings 配置）。
  *
@@ -287,7 +288,7 @@ export function NotificationBell() {
       <button
         onClick={() => setOpen(true)}
         aria-label={unread > 0 ? `打开通知中心（${unread} 条未读）` : "打开通知中心"}
-        title="通知中心：个股机会 / 每日精选 / 评分过滤后的消息面（盘前·盘中·盘后）"
+        title="通知中心：仅多维筛选后的个股机会（盘前·盘中·盘后）"
         className="relative rounded-md border border-zinc-200 p-2 text-sm text-zinc-600 transition-colors hover:text-zinc-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -402,7 +403,7 @@ export function NotificationBell() {
                 )}
                 {payload && bySession[tab].length === 0 && (
                   <p className="px-2 py-8 text-center text-xs text-zinc-600 dark:text-zinc-400">
-                    {tab === "intraday" ? "盘中暂无通知（watcher 确认/证伪提醒与评分达标新闻会出现在这里）" : "该时段暂无通知"}
+                    {tab === "intraday" ? "盘中暂无通过多维筛选的个股机会" : "该时段暂无个股机会"}
                   </p>
                 )}
                 {shownNotices.map((i) =>
@@ -448,8 +449,8 @@ export function NotificationBell() {
               </div>
 
               <div className="border-t border-zinc-100 px-4 py-2 text-[10px] leading-relaxed text-zinc-600 dark:text-zinc-400 dark:border-zinc-800/80">
-                新闻仅推送评分 ≥ {payload?.news_min_score ?? 60} 的条目（与时事新闻板块同一评分机制）；
-                名单类通知均为可解释依据，不构成买卖建议。
+                仅推送通过有效筛选、逻辑校验与多维评估的个股机会；板块机会不通知。
+                所有提醒均附可解释依据与失效条件，不构成买卖建议。
               </div>
             </div>
           </div>,

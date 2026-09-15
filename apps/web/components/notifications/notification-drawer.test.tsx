@@ -54,6 +54,7 @@ function makePayload(items: NotificationItem[]): NotificationsPayload {
     count: items.length,
     generated_at: "2026-09-11 12:40:00",
     news_min_score: 60,
+    policy: "stock_opportunities_only",
     errors: null,
   };
 }

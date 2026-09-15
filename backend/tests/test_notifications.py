@@ -1,4 +1,4 @@
-"""站内通知中心聚合端点测试（三源合并 + 评分过滤 + 降级显式）。"""
+"""站内通知中心：只输出多维门控后的有效个股机会。"""
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -100,22 +100,22 @@ def _event_row(eid=1, title="工信部发布算力扶持政策", published_hours
 
 
 # ---------------------------------------------------------------- 单元
-def test_alert_items_filters_watcher_rule_only():
+def test_alert_items_filters_buy_point_rule_only():
     from app.api.routes.notifications import _alert_items
 
     repo = _FakeRepo(
-        rules=[_Rule(1, "__picks_watcher__"), _Rule(2, "用户自建价格提醒")],
+        rules=[_Rule(1, "__picks_buy_point__"), _Rule(2, "__picks_watcher__")],
         events=[
-            _Event(11, 1, "300001", {"kind": "confirm", "direction": "算力", "text": "量比 2.1 确认"}, 1),
-            _Event(12, 2, "600000", {"kind": "confirm", "direction": "x", "text": "不应出现"}, 1),
+            _Event(11, 1, "600001", {"kind": "buy_point", "name": "甲公司", "text": "六维与买入区间均通过"}, 1),
+            _Event(12, 2, "600000", {"kind": "board_flow_surge", "direction": "算力", "text": "板块机会不应出现"}, 1),
         ],
     )
     items = _alert_items(repo, limit=50)
     assert len(items) == 1  # 用户规则事件不进通知中心
     assert items[0]["id"] == "alert-11"
     assert items[0]["category"] == "opportunity"
-    assert items[0]["label"] == "确认"
-    assert items[0]["symbol"] == "300001"
+    assert items[0]["label"] == "个股机会"
+    assert items[0]["symbol"] == "600001"
     assert items[0]["session"] in {"pre_open", "intraday", "after_close"}
 
 
@@ -123,12 +123,24 @@ def test_alert_items_ignores_placeholder_symbol():
     from app.api.routes.notifications import _alert_items
 
     repo = _FakeRepo(
-        rules=[_Rule(1, "__picks_watcher__")],
-        events=[_Event(11, 1, "000000", {"kind": "falsify", "direction": "算力", "text": "方向证伪"}, 1)],
+        rules=[_Rule(1, "__picks_buy_point__")],
+        events=[_Event(11, 1, "000000", {"kind": "buy_point", "name": "占位", "text": "无效"}, 1)],
     )
     items = _alert_items(repo, limit=50)
-    assert items[0]["symbol"] is None  # 方向级提醒无个股：None（三态），不臆造
-    assert items[0]["label"] == "证伪"
+    assert items == []
+
+
+def test_alert_items_rejects_non_buy_point_and_missing_name():
+    from app.api.routes.notifications import _alert_items
+
+    repo = _FakeRepo(
+        rules=[_Rule(1, "__picks_buy_point__")],
+        events=[
+            _Event(11, 1, "600001", {"kind": "confirm", "name": "甲公司"}, 1),
+            _Event(12, 1, "600002", {"kind": "buy_point", "name": ""}, 1),
+        ],
+    )
+    assert _alert_items(repo, limit=50) == []
 
 
 # ---------------------------------------------------------------- _daily_pick_item
@@ -160,13 +172,16 @@ def test_daily_pick_item_ts_is_real_generation_time(monkeypatch):
 
 
 # ---------------------------------------------------------------- 路由
-def test_route_merges_sources(monkeypatch):
+def test_route_returns_stock_opportunities_only(monkeypatch):
     import app.api.routes.notifications as notif
     from app.main import app
 
     app.dependency_overrides[notif.get_alert_repo] = lambda: _FakeRepo(
-        rules=[_Rule(1, "__picks_watcher__")],
-        events=[_Event(11, 1, "300001", {"kind": "confirm", "direction": "算力", "text": "确认"}, 1)],
+        rules=[_Rule(1, "__picks_buy_point__"), _Rule(2, "__picks_watcher__")],
+        events=[
+            _Event(11, 1, "600001", {"kind": "buy_point", "name": "甲公司", "text": "多维筛选通过"}, 1),
+            _Event(12, 2, "000000", {"kind": "board_flow_surge", "direction": "算力", "text": "板块机会"}, 1),
+        ],
     )
     picks_row = _FakeRow(
         date="2026-09-07",
@@ -183,24 +198,25 @@ def test_route_merges_sources(monkeypatch):
         r = client.get("/api/notifications", params={"news_min_score": 0})
         assert r.status_code == 200
         body = r.json()["data"]
-        cats = {i["category"] for i in body["items"]}
-        assert {"opportunity", "daily_picks", "news"} <= cats
+        assert len(body["items"]) == 1
+        assert body["items"][0]["category"] == "opportunity"
+        assert body["items"][0]["symbol"] == "600001"
+        assert body["policy"] == "stock_opportunities_only"
         assert body["errors"] is None
-        # ts 倒序：精选（当日 09:26 北京，由 created_at +8 推出）与新闻（2h 前）与提醒（1h 前 UTC→北京）共存
-        assert body["count"] >= 3
-        news = next(i for i in body["items"] if i["category"] == "news")
-        assert news["label"] == "国家政策"
-        assert news["score"] is not None
+        assert body["count"] == 1
     finally:
         app.dependency_overrides.pop(notif.get_alert_repo, None)
         app.state.event_store = old_store
 
 
-def test_route_score_threshold_filters_news(monkeypatch):
+def test_legacy_news_threshold_does_not_change_stock_only_policy(monkeypatch):
     import app.api.routes.notifications as notif
     from app.main import app
 
-    app.dependency_overrides[notif.get_alert_repo] = lambda: _FakeRepo(rules=[], events=[])
+    app.dependency_overrides[notif.get_alert_repo] = lambda: _FakeRepo(
+        rules=[_Rule(1, "__picks_buy_point__")],
+        events=[_Event(11, 1, "600001", {"kind": "buy_point", "name": "甲公司", "text": "机会"}, 1)],
+    )
     picks_row = _FakeRow(date="2026-09-07", items="[]", meta="{}",
                          created_at=datetime(2026, 9, 7, 1, 26, 58))
     monkeypatch.setattr(notif, "get_session_factory", lambda: lambda: _FakeDB(picks_row))
@@ -208,11 +224,11 @@ def test_route_score_threshold_filters_news(monkeypatch):
     app.state.event_store = _FakeStore([_event_row()])
     try:
         client = TestClient(app)
-        # 阈值 100：低分事件被过滤，news 分类为空；其余来源不受影响
+        # 参数为旧客户端兼容保留；通知源已不再含新闻与每日精选。
         r = client.get("/api/notifications", params={"news_min_score": 100})
         body = r.json()["data"]
-        assert all(i["category"] != "news" for i in body["items"])
-        assert any(i["category"] == "daily_picks" for i in body["items"])
+        assert [i["symbol"] for i in body["items"]] == ["600001"]
+        assert all(i["category"] == "opportunity" for i in body["items"])
     finally:
         app.dependency_overrides.pop(notif.get_alert_repo, None)
         app.state.event_store = old_store

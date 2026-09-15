@@ -19,13 +19,15 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from copy import deepcopy
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.deps import require_write_token
-from app.core.config import settings
-from app.services.market_snapshot import default_trade_date, load_snapshot_map
 from app.core.bjtime import beijing_now
+from app.core.config import settings
+from app.core.ttl_cache import cache_on
+from app.services.market_snapshot import default_trade_date, load_snapshot_map
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/picks", tags=["picks-intraday"])
@@ -209,21 +211,31 @@ async def _build_opportunities(
     读 Parquet 是同步阻塞，丢线程池（market.themes 同款处理，曾卡死事件循环）；
     结果缓存 60s（cache key 含参数，两端点同 key 命中同一份）。
     """
+    cache = cache_on(request.app.state, "picks.opportunities", 60, maxsize=4)
+    key = (trade_date, top_themes, stocks_per_theme)
+    _, cached = await cache.get_or_set(
+        key,
+        lambda: _build_opportunities_uncached(
+            request, trade_date, top_themes, stocks_per_theme
+        ),
+    )
+    # 缓存只保存不可变的装配基线。风险字段取请求时的实时快照，必须写在副本上：
+    # 旧实现把缓存对象原地修改，两条并发端点会共享/覆盖同一棵 dict，放大数量与字段抖动。
+    payload = deepcopy(cached)
+    _attach_risk_to_themes(payload["data"], _snapshot_by(request))
+    return payload
+
+
+async def _build_opportunities_uncached(
+    request: Request, trade_date, top_themes: int, stocks_per_theme: int
+) -> dict:
+    """构建一份可缓存的机会基线；同键并发由调用方 ``get_or_set`` 单飞。"""
     import asyncio
 
-    from app.core.ttl_cache import cache_on
     from app.picks.intraday_opportunity import assemble
     from app.services.theme_service import _pick_provider, build_theme_board
 
     hub = request.app.state.hub
-
-    cache = cache_on(request.app.state, "picks.opportunities", 60, maxsize=4)
-    key = (trade_date, top_themes, stocks_per_theme)
-    hit, payload = cache.get(key)
-    if hit:
-        # 装配结果命中缓存，但现价/止损每拍都在变 ⇒ 风险字段不进缓存，此处按当前快照重算
-        _attach_risk_to_themes(payload["data"], _snapshot_by(request))
-        return payload
 
     snapshot_map = await asyncio.to_thread(load_snapshot_map, request.app.state.snapshot_service, trade_date)
     board = await build_theme_board(hub.provider, trade_date, snapshot_map=snapshot_map)
@@ -374,9 +386,6 @@ async def _build_opportunities(
                     registered += 1
             if registered:
                 log.info("watch ledger: %d candidates registered (gate: 临板区, 未封板——KB-DEC-011)", registered)
-    cache.set(key, payload)
-    # 同上：缓存的是装配结果（题材/判定/依据），风险字段按本次快照另行补全
-    _attach_risk_to_themes(payload["data"], _snapshot_by(request))
     return payload
 
 

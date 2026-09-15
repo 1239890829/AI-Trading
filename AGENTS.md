@@ -89,8 +89,13 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 collect **3202 项（3130 passed / 72 skipped / 0 failed）**、
+> **门禁口径**：后端 collect **3204 项（3132 passed / 72 skipped / 0 failed）**、
 > 前端 **593 项 / 65 文件**、eslint **0 error / 0 warn**
+> （2026-09-15 最终技术方案轮实测；较 R22 基线 **后端 collect +2 = passed +2 / skipped ±0**：
+> 新增猎场同键并发单航班守卫 1 项 + 通知个股机会策略净增 1 项；前端 **±0**，本地时区与
+> `TZ=UTC` 均为 593/65。全量首两轮在 `test_events_api_lifecycle` 稳定复现 `BUG-012` 同族的
+> `StaticPool :memory: + refresh` 失败，取证为生产自治默认开启后测试未显式停机；`conftest.py`
+> 补测试环境 `ASHARE_AGENT_AUTONOMY_ENABLED=false` 后全量复跑 0 failed，生产默认值不变。
 > （2026-09-15 §6.48 R22 统一鉴权边界轮实测；较上一值「后端 3176 / 前端 576·62」增量
 > **后端 collect +26 = passed +25 + skipped +1**，来源自洽且**分两类**：
 > `+25` = 新文件 `backend/tests/test_auth_boundary.py`（姿态 fail-closed / 遍历
@@ -410,7 +415,7 @@ screener 彻底删除、消融验证启动（`07f29a7`/`c38cb05`）。
 `gate` 空仓闸门 / `risk` 风险档位与出场纪律）· 跨日回放 + 参数扫描
 （**稳定性靠 `MAX_SWAPS_PER_DAY`，不靠分差门槛**——涨停股梯队分差 30+ 使 15 分门槛形同虚设）·
 因子库 P0 评估闭环（qlib Alpha158 族 + TA-Lib，`app/factors/`）· 进化大脑每日议程（15:45 生成；
-自主执行与代码修改均默认关闭，须管理员显式开启；代码变更走 worktree 沙箱且**只提议不落地**，
+受限自治默认开启，代码修改仍默认关闭且须管理员显式开启；代码变更走 worktree 隔离且**只提议不落地**，
 落地须走 `codex/*` → PR → CI → 审查，见 §0 红线 7）。
 
 **09-10 已完成**（单日大批，逐项状态以 §六 账本为准）：

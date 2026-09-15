@@ -1,15 +1,14 @@
-"""站内通知中心聚合端点（2026-09-07 用户需求③）。
+"""站内个股机会通知端点（2026-09-15 收敛）。
 
 GET /api/notifications?alert_limit=50&news_limit=15&news_min_score=<settings 默认>
 
-三类来源合并为一条时间线，前端按 盘前/盘中/盘后 tab 分类展示：
+通知中心只消费 ``__picks_buy_point__`` 规则产生的有效个股事件。该规则的上游是
+``picks.buy_point.evaluate_buy_points``：每日精选候选须同时通过置信档、多维评分、
+红线否决、空仓闸门、买入区间、涨停区和实时行情检查后才会落事件。
 
-1. opportunity 个股机会：盘中 watcher 的确认/证伪提醒（AlertEvent，规则名
-   ``__picks_watcher__`` 专属——用户自建价格规则不进通知中心，研究页已有专属视图）。
-2. daily_picks 每日精选：最近一份组合生成即一条（同日天然去重），标注门控状态。
-3. news 消息面/新闻/政策：事件系统 + ``app.events.ranking.score_event`` 评分，
-   **score ≥ 阈值才通知**（"新闻不逐条推送"）——评分机制与时事新闻板块（事件 tab
-   relevance 排序）完全同源复用，不另起炉灶。
+板块资金异动、题材方向确认/证伪、信号健康、每日精选摘要和新闻仍保留在各自页面与
+审计表中，但不再进入消息通知。这样「可研究的信息」与「值得打断用户的个股机会」
+不再混为一谈。飞书原本就只发送同一买点规则的逐股卡片，口径保持一致。
 
 session（盘前/盘中/盘后）**交易日历优先**（2026-09-13 用户报告的周末误标盘中修复）：
 非交易日（周末/节假日）一律归**盘前**节拍（下一交易日开盘前消化的资讯）；
@@ -50,11 +49,8 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["notifications"])
 
-WATCHER_RULE = "__picks_watcher__"
-# 信号健康度预警规则（app/picks/signal_health.py）：与 watcher 分立的系统规则，
-# 但同属通知中心应展示的「系统主动提醒」（策略失效预警 vs 个股事件提醒）。
-SIGNAL_HEALTH_RULE = "__signal_health__"
-_NOTIF_RULE_NAMES = (WATCHER_RULE, SIGNAL_HEALTH_RULE)
+BUY_POINT_RULE = "__picks_buy_point__"
+_NOTIF_RULE_NAMES = (BUY_POINT_RULE,)
 
 # 时事新闻板块的四级分类标签（app/events/impact.py FOUR_LABEL 同值同源）
 _FOUR_LABEL = {
@@ -87,7 +83,7 @@ def get_alert_repo(request: Request) -> AlertRepository:
 
 
 def _alert_items(repo: AlertRepository, limit: int, trading_dates: set | None = None) -> list[dict]:
-    """watcher 确认/证伪 + 信号健康度预警 → 通知项。triggered_at 已统一北京时间 naive（2026-09-09 告警时区修复；此前存 UTC naive 在此 +8 补偿，补偿点已随存储统一移除）。
+    """多维门控后的买点事件 → 个股机会通知。triggered_at 为北京时间 naive。
 
     P0-2（2026-09-08 用户指令「AI 盘中分析进站内通知」）：合并 AgentTriage
     判读结论与响应建议进 body——AI 的盘中分析在通知中心直接可见。
@@ -125,25 +121,15 @@ def _alert_items(repo: AlertRepository, limit: int, trading_dates: set | None = 
                 snap = json.loads(e.snapshot)
             except Exception:  # noqa: BLE001
                 snap = {}
-        kind = snap.get("kind") or "watcher"
+        kind = snap.get("kind") or ""
+        # 规则名和事件形状双重收口：历史脏行、占位代码、缺名称或非 buy_point
+        # 都不冒充「真正机会」。上游缺证据时宁缺毋滥。
+        stock_name = (snap.get("name") or "").strip() if isinstance(snap.get("name"), str) else ""
+        if kind != "buy_point" or not e.symbol or e.symbol == "000000" or not stock_name:
+            continue
         direction = snap.get("direction") or ""
         text = (snap.get("text") or "").strip()
         bj = e.triggered_at  # 北京时间 naive（存储已统一，勿再 +8）
-        kind_label = (
-            "确认" if kind == "confirm"
-            else ("证伪" if kind == "falsify"
-                  else ("健康预警" if kind == "signal_health" else "跟踪"))
-        )
-        category = "risk" if kind == "signal_health" else "opportunity"
-        # 方向级事件（falsify）symbol 是占位 "000000"，不进标题（占位代码泄漏到 UI）
-        is_stock = bool(e.symbol and e.symbol != "000000")
-        sym_part = f" {e.symbol}" if is_stock else ""
-        # 2026-09-09 用户指令：提醒必须完整包含代码+名称（缺任一即补全）——
-        # 名称优先取快照（实时），缺失显式「（名称待补）」不臆造
-        stock_name = ""
-        if is_stock:
-            stock_name = (snap.get("name") or "").strip() if isinstance(snap.get("name"), str) else ""
-        name_part = f" {stock_name}" if stock_name else ""
         body = text or "（无正文）"
         # P0-2：AI 盘中分析合入 body（判读结论 + 响应建议）
         tri = triage_by_event.get(e.id)
@@ -153,17 +139,13 @@ def _alert_items(repo: AlertRepository, limit: int, trading_dates: set | None = 
         items.append(
             {
                 "id": f"alert-{e.id}",
-                "category": category,
-                "label": kind_label,
+                "category": "opportunity",
+                "label": "个股机会",
                 "session": _session_of(bj, trading_dates) if bj else "intraday",
                 "ts": bj.isoformat(sep=" ") if bj else None,
-                "title": (
-                    f"【{direction or '盘中跟踪'}】{sym_part}{name_part} {kind_label}"
-                    if is_stock
-                    else f"【{direction or '题材级'}】{kind_label}（方向级提醒，无个股）"
-                ).strip(),
+                "title": f"【{direction or '盘中买点'}】{e.symbol} {stock_name}".strip(),
                 "body": body,
-                "symbol": e.symbol if e.symbol and e.symbol != "000000" else None,
+                "symbol": e.symbol,
                 "url": None,
                 "score": None,
             }
@@ -306,7 +288,7 @@ async def notifications(
     news_min_score: float | None = Query(default=None, ge=0, le=100),
     repo: AlertRepository = Depends(get_alert_repo),
 ) -> dict:
-    """三类通知合并时间线（来源与分类口径见模块 docstring）。"""
+    """只返回经过买点多维门控的有效个股机会；旧查询参数保留兼容。"""
     min_score = news_min_score if news_min_score is not None else settings.notifications_news_min_score
     now = beijing_now().replace(tzinfo=None)  # 事件 published_at 是北京 naive，同语义相减
 
@@ -330,24 +312,7 @@ async def notifications(
         log.exception("notifications: alert source failed")
         errors["alerts"] = str(exc)
 
-    pick_item: dict | None = None
-    try:
-        pick_item = _daily_pick_item()
-    except Exception as exc:  # noqa: BLE001
-        log.exception("notifications: daily picks source failed")
-        errors["daily_picks"] = str(exc)
-
-    news_items: list[dict] = []
-    store = getattr(request.app.state, "event_store", None)
-    if store is not None:
-        news_items, news_err = await _news_items(store, request, news_limit, min_score, now,
-                                                 trading_dates)
-        if news_err:
-            errors["news"] = news_err
-    else:
-        errors["news"] = "event store unavailable"
-
-    items = [*alert_items, *news_items, *([pick_item] if pick_item else [])]
+    items = alert_items
     items.sort(key=lambda x: x["ts"] or "", reverse=True)
     return {
         "data": {
@@ -355,6 +320,7 @@ async def notifications(
             "count": len(items),
             "generated_at": now.isoformat(sep=" "),
             "news_min_score": min_score,
+            "policy": "stock_opportunities_only",
             "errors": errors or None,
         },
         "meta": {},
