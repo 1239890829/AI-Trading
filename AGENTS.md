@@ -665,22 +665,30 @@ curl 先行 → 记录字段口径与类型陷阱 → 多采样找规律 → fix
 红涨绿跌 · tabular-nums · 所有数据带来源/时间/质量标注 · mock 不冒充实盘 ·
 布局锁一屏（容器内滚动）· 每处可解释输出带 basis · 右列宽度用户可调（260-480px）。
 
-### 6.5 分支与提交（2026-09-15 用户确立，取代「长期堆在一个特性分支」）
+### 6.5 GitHub Collaboration Workflow（适用于整个仓库）
 
-- **日常开发一律在 `develop`**；`master` 只收**验证通过的合并**。
-  用户原话：「以后就在这个分支上开发，没问题的提交才合并到 master，**或者是你觉得可以合并的时候再合并**」
-  ⇒ 授权范围 = 我**可自行判断**何时把 `develop` 合进 `master`，不必每次请示；**但不要在没跑绿门禁时合**。
-- **合并方式（两种都接受；按"要不要留 PR 记录"选，同一轮别混用）**：
-  · **纯快进**：`master` 是 `develop` 的祖先时可直接 `git push origin develop:master`（不造合并提交）；
-  · **走 PR**（用户 2026-09-15 实际采用）：网页开 PR 再合并 ⇒ 产生 **merge 提交**
-    （首个实例：`0a5b5b2 Merge pull request #1 from 1239890829/develop`）。好处是**留下评审记录与 CI 结论**，
-    代价是 master 历史出现合并点、`git log --first-parent` 才清爽。
-  ⚠️ 不要用 `--force`/rebase 改写 master 历史。
-- **历史事实**：此前 40+ 提交堆积在 `review/full-audit-20260914`（该分支已于 2026-09-15 合并入 master 后删除）。
-- **CI 触发条件（2026-09-15 已修）**：`on: push: branches: [master, main, **develop**]` + `pull_request`
-  ⇒ **推 `develop` 就会跑 CI**（原只写 master/main ⇒ 开发分支拿不到任何反馈，门禁被推迟到合并那一刻）。
-  ⚠️ 别再把它删回去；三份 job（后端 pytest+pyflakes / 前端 tsc+vitest+eslint+`next build` / 文档体检）
-  在开发分支上提前跑，**只增反馈、不减约束**。
+> 本节是仓库级 GitHub 协作规范，适用于所有功能、修复、重构与文档任务；取代此前以 `develop`
+> 为日常开发分支及允许 Codex 自行合并 `master` 的约定。历史分支和提交仍保留在 Git 历史中。
+
+- `master` 是受保护的主分支。开发任何功能、修复或重构前，必须先同步远程最新的 `master`；
+  禁止直接在 `master` 上修改、提交或推送代码。
+- 每项任务必须从最新的 `master` 创建独立分支。Codex 创建的分支统一命名为
+  `codex/<简短英文任务名>`。
+- 只修改当前任务需要的文件；不得覆盖、删除或回滚用户已有的无关改动。
+- 修改完成后必须运行适用于本次改动的测试、代码检查和构建命令；具体门禁及环境注意事项见 §1。
+- 提交前必须检查 Git diff 和仓库状态，确认提交范围准确且不包含无关文件。
+- 禁止提交 `.env`、API Key、Token、密码、私有数据、缓存文件或无关构建产物。
+- 使用清晰的英文 commit message。
+- 完成后必须提交修改，将功能分支推送到 GitHub，并设置 upstream。
+- 未经用户明确授权，禁止合并到 `master`、强制推送、删除远程分支或执行破坏性 Git 操作。
+- 如果任务需求存在会明显影响实现方案的歧义，应先询问用户；否则直接完成开发、测试、提交和推送。
+- 每次交付必须汇报：分支名称、主要改动、修改文件、测试结果、commit SHA、远程分支或 PR 链接，
+  以及遗留问题或风险。
+- Codex 负责本地实现和功能分支交付；网页版 ChatGPT 负责规划以及对功能分支进行最终代码审查。
+  审查通过后，才能由用户决定是否合并到 `master`。
+- **CI 触发条件（2026-09-15 已修）**：`on: push: branches: [master, main, **develop**]` + `pull_request`。
+  三份 job 分别执行后端 pytest+pyflakes、前端 tsc+vitest+eslint+`next build`、文档体检；不得削弱这些门禁。
+  功能分支若需 GitHub CI 结果，应创建 PR 触发 `pull_request` 检查，但不得代替本地适用门禁。
 - ⚠️ **`gh` 工具**：已装在本机 `~/.local/bin/gh`（v2.100.0；该目录**不在非交互 shell 的 PATH** 里，
   脚本里用绝对路径）。**尚未认证** ⇒ `gh auth login` 后我才能代读 CI 运行/日志与建 PR。
   本环境 `github.com` 需走本地代理 `127.0.0.1:7897`（沙箱代理 51931 到不了），`api.github.com` 可直连。
