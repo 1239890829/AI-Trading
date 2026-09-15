@@ -75,7 +75,9 @@ lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=
 > ⚠️ **同轮曾出现 1 项偶发**（当时 load≈26，8 核机器上我并发跑了前端全量）：
 > `test_provider_budget::test_remaining_budget_is_shared_across_sources` 断言 `hang.calls==1` 失败，
 > 根因是 s0 的**墙钟**开销在满载下超出 0.15s 预算 ⇒ 第二个源被**直接跳过**（单独跑绿）
-> ⇒ 已登记 `BUG-007`（**CI 冒烟风险**：runner 更慢更抖），详见账本 §6.39）
+> ⇒ 已登记并于**同日修复** `BUG-007`（§6.40）——复读该判据时发现它**既会假红也会假绿**：
+> 阈值型（`elapsed < 0.3`）+ 仅 1.5× 余量 ⇒ 满载下偶发假红；而注入"每源一份配额"的**真缺陷**时
+> 它**完全漏判**（缺陷形态 0.25s 恰好落在阈值之下）⇒ 已改为**结构关系判据**（第二个源拿到的是"残值"）
 > （2026-09-15 弹窗外壳统一轮实测；较上一值「后端 3088 / 前端 561·61」（详情弹窗化轮）增量
 > **后端 ±0 项**（本轮**纯前端改动**，git 核对 `backend/` 无代码改动；仍照跑一遍，
 > 实测 **3026 passed / 62 skipped**，与上轮**逐字一致**）
@@ -628,10 +630,10 @@ curl 先行 → 记录字段口径与类型陷阱 → 多采样找规律 → fix
 - **合并方式**：`master` 是 `develop` 的祖先时走**纯快进**（`git push origin develop:master`），
   不造合并提交；不可快进时再谈 merge/rebase。
 - **历史事实**：此前 40+ 提交堆积在 `review/full-audit-20260914`（该分支已于 2026-09-15 合并入 master 后删除）。
-- ⚠️ **CI 触发条件的坑（务必先看这条）**：`.github/workflows/ci.yml` 现在只写
-  `on: push: branches: [master, main]` + `pull_request` ⇒ **推 `develop` 不会跑 CI**，
-  要 CI 反馈只能推 master 或开 PR。**若要让开发分支也享受 CI，需把 `develop` 加进 `push.branches`**
-  （一行改动；已向用户提出，待其确认后执行）。
+- **CI 触发条件（2026-09-15 已修）**：`on: push: branches: [master, main, **develop**]` + `pull_request`
+  ⇒ **推 `develop` 就会跑 CI**（原只写 master/main ⇒ 开发分支拿不到任何反馈，门禁被推迟到合并那一刻）。
+  ⚠️ 别再把它删回去；三份 job（后端 pytest+pyflakes / 前端 tsc+vitest+eslint+`next build` / 文档体检）
+  在开发分支上提前跑，**只增反馈、不减约束**。
 - ⚠️ **`gh` 工具**：已装在本机 `~/.local/bin/gh`（v2.100.0；该目录**不在非交互 shell 的 PATH** 里，
   脚本里用绝对路径）。**尚未认证** ⇒ `gh auth login` 后我才能代读 CI 运行/日志与建 PR。
   本环境 `github.com` 需走本地代理 `127.0.0.1:7897`（沙箱代理 51931 到不了），`api.github.com` 可直连。
