@@ -29,7 +29,16 @@ import httpx
 
 from app.core.ttl_cache import cache_on
 from app.models.alert import AlertEvent, AlertRule
-from app.notifiers import Notifier, _symbol_snapshot
+
+# ⚠️ 必须从**定义处** `base` 导入，不能写 `from app.notifiers import ...`：
+# 包 `__init__.py` 会 re-export `FeishuNotifier`（第 18 行），若此处再回引包，
+# 就形成 `app.notifiers` ⇄ `app.notifiers.feishu` 的**加载期环**。实测（2026-09-15）：
+# 仅交换 `__init__.py` 里两行 import 的顺序（零逻辑改动）即
+# `ImportError: cannot import name 'Notifier' from partially initialized module 'app.notifiers'`
+# ⇒ 环当前"能跑"完全依赖行序，属潜伏缺陷。改指向 `base` 后环消失且与行序无关。
+# 注：下方 `get_notifier_registry` 确实定义在包内，只能从包导入——但那是**函数内**
+# 延迟导入，不参与加载期依赖图。
+from app.notifiers.base import Notifier, _symbol_snapshot
 
 log = logging.getLogger(__name__)
 

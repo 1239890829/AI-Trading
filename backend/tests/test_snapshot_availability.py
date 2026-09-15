@@ -327,34 +327,51 @@ def test_run_without_first_delay_refreshes_immediately(monkeypatch):
     assert stamps[0] < 0.1, f"默认应立即抓取，实际首轮在 {stamps[0]:.3f}s"
 
 
-def test_main_wires_cold_start_delay_into_snapshot_task():
+def test_assembly_wires_cold_start_delay_into_snapshot_task():
     """**装配层结构臂**（逐字比对，最高优先级；见 [[KB-ENG-87]]）。
 
-    `run()` 新增了 `first_delay`，但 `main.py` 若没把它接上，**功能等于不存在** ——
+    `run()` 新增了 `first_delay`，但装配层若没把它接上，**功能等于不存在** ——
     而上面两条 `run()` 行为用例**仍然全绿**（[[KB-ENG-65]]「判据失效却全绿」同族）。
     这类空洞只有静态钉得住。
+
+    ⚠️ **2026-09-15（`IMP-027` 装配重构）扫描面迁移**：调度器声明从 `app/main.py`
+    搬到 `app/bootstrap/schedulers.py` ⇒ 旧判据扫 `main.py` 会**判据失效**（找不到
+    该调用，报"未登记"假红；若改成 `is not None` 跳过则变成静默失效）。
+    此处把扫描面从**单文件**改为**装配层白名单**（`app/main.py` + `app/bootstrap/*.py`）：
+    搬家不失效，且下次在装配层内部再拆分也仍然生效。
+    **判据强度一字未降**——断言、口径、失败文案全部保留，只换了"去哪找"。
     """
     from app import main as main_mod
 
-    tree = ast.parse(Path(main_mod.__file__).read_text(encoding="utf-8"))
+    assert main_mod is not None  # 装配层入口必须存在（防白名单写空导致恒真）
+
+    import app.bootstrap.schedulers as sched_mod  # noqa: F401  （扫描面之一，同时验证可导入）
+
+    targets = [Path(main_mod.__file__)]
+    targets += sorted(Path(sched_mod.__file__).parent.glob("*.py"))
+
     call = None
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        fn = node.func
-        if not (isinstance(fn, ast.Attribute) and fn.attr == "add"):
-            continue
-        if node.args and isinstance(node.args[0], ast.Constant) \
-                and node.args[0].value == "market-snapshot":
-            call = node
+    for target in targets:
+        tree = ast.parse(target.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            if not (isinstance(fn, ast.Attribute) and fn.attr == "add"):
+                continue
+            if node.args and isinstance(node.args[0], ast.Constant) \
+                    and node.args[0].value == "market-snapshot":
+                call = node
+                break
+        if call is not None:
             break
 
-    assert call is not None, "main.py 未登记 market-snapshot 任务（改名了？）"
+    assert call is not None, "装配层未登记 market-snapshot 任务（改名了？）"
     unparsed = ast.unparse(call)
     assert "first_delay" in unparsed, (
         f"market-snapshot 任务未传 first_delay ⇒ 冷启动错峰未接线：{unparsed}"
     )
-    assert main_mod.COLD_START_SNAPSHOT_DELAY_SECONDS > 0, (
+    assert sched_mod.COLD_START_SNAPSHOT_DELAY_SECONDS > 0, (
         "COLD_START_SNAPSHOT_DELAY_SECONDS 非正数 ⇒ 错峰等于没做"
     )
 
