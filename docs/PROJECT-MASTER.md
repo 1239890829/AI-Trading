@@ -54,7 +54,10 @@ A 股实时行情 + AI 量化投研 + 模拟交易工作台。**只做**行情�
 ashare-ai-trader/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py                    # FastAPI 组装：lifespan(建库/种子/引擎/3后台任务) + 路由挂载 + CORS
+│   │   ├── main.py                    # FastAPI 组装：app 构造 + 鉴权守卫 + 中间件 + 路由挂载（183 行）
+│   │   ├── bootstrap/                 # 启动装配（2026-09-15 `IMP-027` 自 main.py 切出）
+│   │   │   ├── services.py            # build_services()：建库/种子/引擎/快照/风控/模拟盘/复盘…
+│   │   │   └── schedulers.py          # register_schedulers()：25 个常驻循环的**唯一声明处**
 │   │   ├── api/
 │   │   │   ├── deps.py                # get_hub / get_watchlist_repository
 │   │   │   └── routes/

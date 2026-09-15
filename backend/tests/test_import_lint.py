@@ -9,7 +9,7 @@
 
 | 层 | 允许 import | 禁止 import |
 |---|---|---|
-| `app/api/**`、`app/main.py` | 全部 | —（装配层） |
+| `app/api/**`、`app/main.py`、`app/bootstrap/**` | 全部 | —（装配层） |
 | `app/picks`、`app/services`、`app/market`、`app/events`、`app/review` … | `app.core` / 同层 / 下游 | `app.api` |
 
 **例外**：`app/api/deps.py` 自身属于装配层；`app/api/routes/*` 之间同包复用不在此规则范围。
@@ -25,7 +25,11 @@ import pytest
 APP_DIR = Path(__file__).resolve().parents[1] / "app"
 
 #: 装配层（允许向下依赖任意层）
-_ASSEMBLY_PREFIXES = ("api/",)
+#: ⚠️ `bootstrap/` 于 2026-09-15（`IMP-027` 装配重构）加入：它是 `main.py` 切出的
+#: 启动装配（服务构建 + 常驻循环声明），与 `main.py` 同层——**必须显式登记**，
+#: 否则会落进"既非装配层也非业务层"的第三类而被静默跳过：跳过本身无害，
+#: 但会让"装配层有哪些"这件事只能靠数文件反推（`skipped − 2` 那类口径）。
+_ASSEMBLY_PREFIXES = ("api/", "bootstrap/")
 _ASSEMBLY_FILES = {"main.py"}
 
 #: 不得反向依赖 API 层的业务层前缀

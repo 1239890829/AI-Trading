@@ -393,8 +393,13 @@ def test_schedulers_endpoint_exposes_state(client):
 
 
 def test_session_interval_helper_uses_idle_outside_window(monkeypatch):
-    """P2-9/P1-3 的口径入口：盘外必须给 idle 节奏（否则 5s/60s 空转继续）。"""
-    from app.main import _session_interval
+    """P2-9/P1-3 的口径入口：盘外必须给 idle 节奏（否则 5s/60s 空转继续）。
+
+    ⚠️ 2026-09-15（`IMP-027` 装配重构）：该辅助函数随调度器声明一起搬到
+    `app/bootstrap/schedulers.py`（它只服务于声明清单里的 `_risk_tick` /
+    `_alert_quotes_tick`）⇒ import 路径同步更新，**判据本身未改**。
+    """
+    from app.bootstrap.schedulers import _session_interval
     from app.market import trade_calendar
 
     monkeypatch.setattr(trade_calendar, "in_trading_window", lambda *a, **k: True)

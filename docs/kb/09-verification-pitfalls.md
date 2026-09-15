@@ -604,10 +604,12 @@ F 只认 `docs/xxx.md` ⇒ 漏裸名（故补 **F2**）；本项漏 `10+` ⇒ �
 ### KB-ENG-73 死代码判定的盲区：**装饰器注册对「名字计数」天然不可见**——判定前必读定义处上下文
 
 **事故**（2026-09-13 §6.18）：批次 4 死代码 spot-check 把 `_perf_middleware` 判为「全仓零引用 ⇒ 可删」，
-实际它是被 `@app.middleware("http")`（`app/main.py:617`）注册的活跃中间件，是 `/api/system/metrics`
+实际它是被 `@app.middleware("http")`（`app/main.py` 的 `_perf_middleware`）注册的活跃中间件，是 `/api/system/metrics`
 perf 管线的数据源。**成因**：装饰器行不含被装饰函数名——按名字统计引用的扫描器与人工 spot-check
 都对它不可见。同族：`@router.get` 路由、`@pytest.fixture`、pydantic 校验器、`@event.listens_for`。
 ⚠️ 上轮扫描**已经**排除了 `@router.*` 却仍漏了 middleware——**按已知清单排除 = 只防上一次踩过的**。
+⚠️ **本条原写作 `app/main.py:617`（行号），2026-09-15 装配重构后已失效** ⇒ 一律改用**符号名**引用
+（行号会随搬家漂移，而"引用的东西还在不在"才是判据该问的事；同族：[[KB-ENG-85]] 指针失效）。
 
 **判据固化**（`scripts/deadcode_scan.py`，2026-09-13 入库）：装饰器源码命中注册型模式 ⇒ 排除出候选；
 `tests/` 下 `test_*` / `Test*` 按 pytest 约定收集同样排除；`import X as Y` 跨名引用因 X 仍出现在

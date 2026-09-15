@@ -60,13 +60,15 @@
 
 ## 3. 定时调度方式
 
-- **实现**：FastAPI `lifespan` 里 `asyncio.create_task(review_scheduler(...))`，进程内协程，**不依赖外部 cron**（部署环境暂无持久调度器）。
+- **实现**：常驻协程，**不依赖外部 cron**（部署环境暂无持久调度器）。自 2026-09-15（`IMP-027`）
+  起，全部常驻循环的声明集中在 `app/bootstrap/schedulers.py::register_schedulers()`，
+  由 `SchedulerRegistry` 统一启动/收割（不再是散落的 `asyncio.create_task`）。
 - **触发条件**（全部满足才跑，且当天只跑一次）：
   1. 今天在 `trade_calendar` 里是**交易日**（走权威日历，不靠 weekday 猜）；
   2. 当前北京时间已过 `review_run_hour:review_run_minute`（默认 15:30）；
   3. 今天还没跑过（`last_run` 去重）。
 - **不补跑历史**：非交易日/时间未到就跳过。补跑某一天请用 `POST /api/review/run?trade_date=YYYYMMDD`，否则分不清"这份报告是哪天生成的"。
-- **关闭**：`lifespan` 退出时 `stop.set()` 并 `await` 任务取消。
+- **关闭**：`lifespan` 退出时由 `reg.shutdown()` 按**同一份声明**统一收割（能自己退的走 stop 事件，其余 cancel），不再有第二份手写停机清单。
 - **开关**：`ASHARE_REVIEW_SCHEDULER_ENABLED=false` 可完全关闭自动调度，只保留手动触发。
 
 ---
