@@ -130,7 +130,9 @@ export function IntradayThemeRow({
             {t.max_boards ?? "?"} 板 · {t.limit_up_count ?? "?"} 家涨停
             {t.has_succession === false && " · 梯队断层"}
           </span>
-          <span className="ml-auto text-zinc-600 dark:text-zinc-400">{expanded ? "收起 ▲" : `${t.stocks.length} 只候选 ▼`}</span>
+          <span className="ml-auto text-zinc-600 dark:text-zinc-400">
+            {expanded ? "收起 ▲" : `${t.participants?.length ?? 0} 只可参与候选 ▼`}
+          </span>
         </button>
         <JumpLink
           href={themesUrl(t.theme)}
@@ -165,14 +167,49 @@ export function IntradayThemeRow({
           {t.risks.length > 0 && (
             <p className="mt-1 text-[11px] text-amber-800 dark:text-amber-300">风险：{t.risks.join("；")}</p>
           )}
-          {t.stocks.length > 0 ? (
-            /* 猎场批次③：行式表格 → 与精选同构的 PickCard 瀑布流（判定/理由在卡上，不再截断） */
-            <div className="mt-2">
-              <MasonryColumns gap="gap-2">
-                {t.stocks.map((s) => (
-                  <PickCard key={s.symbol} item={fromIntradayStock(s)} />
-                ))}
-              </MasonryColumns>
+          {t.stocks.length > 0 || (t.participants?.length ?? 0) > 0 ? (
+            <div className="mt-2 space-y-3">
+              {/* ① 可参与候选（2026-09-15 猎场口径）：题材内**尚未涨停**、报价可成交的
+                  联动个股——这才是"可以买"的那一组。空列表要给出**原因**（没挖 / 挖空了
+                  是两回事），否则用户无法判断"今天没机会"还是"系统没干活"。 */}
+              <div>
+                <p className="mb-1.5 flex flex-wrap items-baseline gap-2 text-[11px] text-zinc-600 dark:text-zinc-400">
+                  <span className="font-medium text-zinc-700 dark:text-zinc-300">可参与候选</span>
+                  <span>
+                    {t.participants?.length ?? 0} 只 · 尚未涨停、报价可成交
+                  </span>
+                </p>
+                {(t.participants?.length ?? 0) > 0 ? (
+                  <MasonryColumns gap="gap-2">
+                    {(t.participants ?? []).map((s) => (
+                      <PickCard key={s.symbol} item={fromIntradayStock(s)} />
+                    ))}
+                  </MasonryColumns>
+                ) : (
+                  <p className="text-[11px] text-zinc-600 dark:text-zinc-400">
+                    {t.participants_note ?? "无合格可参与候选。"}
+                  </p>
+                )}
+              </div>
+
+              {/* ② 涨停梯队（参考信息）：已封板/开盘即涨停 —— **当日买不进**，
+                  只用来回答"资金集中在哪个方向"。刻意沉在下半区并加边注，
+                  避免与上面的候选混为一谈（这正是本轮口径变更要修的病）。 */}
+              {t.stocks.length > 0 && (
+                <div className="rounded-lg border border-dashed border-amber-500/40 p-2">
+                  <p className="mb-1.5 flex flex-wrap items-baseline gap-2 text-[11px] text-amber-800 dark:text-amber-300">
+                    <span className="font-medium">涨停梯队 · 仅参考</span>
+                    <span>
+                      {t.stocks.length} 只 · 当日封过涨停板，逐只标注可参与性（开板回落者其实可成交）
+                    </span>
+                  </p>
+                  <MasonryColumns gap="gap-2">
+                    {t.stocks.map((s) => (
+                      <PickCard key={s.symbol} item={fromIntradayStock(s)} />
+                    ))}
+                  </MasonryColumns>
+                </div>
+              )}
             </div>
           ) : (
             <p className="mt-2 text-[11px] text-zinc-600 dark:text-zinc-400">该题材暂无梯队成员。</p>
@@ -193,6 +230,9 @@ export function OpportunitySection({
   expanded: string | null;
   onToggle: (theme: string) => void;
 }) {
+  // 板块权限挡下的容器成分只数：>0 时口径行要说明——「候选为什么这么少」
+  // 与「没有候选」是两件事，页面必须能区分（三态纪律）
+  const boardBlocked = opps.linkage_stats?.excluded_board ?? 0;
   return (
     <section className="space-y-2">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -216,8 +256,12 @@ export function OpportunitySection({
         <p className="text-[10px] text-zinc-600 dark:text-zinc-400">口径：{opps.caveats.join("；")}</p>
       )}
       <p className="text-[10px] text-zinc-600 dark:text-zinc-400">
-        辨识度=人气×高度×角色（市场记住它的成本）；确定性=题材阶段基座×封板质量修正（延续预期的支撑）。
-        两者独立判定不合并打分；判定依据悬停可见、等级可回放。仅模拟跟踪，不构成买卖建议。
+        板块权限：账户只开沪深主板（创业板/科创板/北交所/B 股不进候选与参考区）
+        {boardBlocked > 0 ? `，本日已挡下 ${boardBlocked} 只容器成分` : ""}；
+        可参与候选＝题材内尚未涨停、报价可成交的联动个股（联动确定性＝题材基座×距封板跑道）；
+        涨停梯队仅作题材集中度的参考信息——已封板/开盘即涨停者当日买不进。
+        辨识度＝人气×高度×角色，确定性＝题材阶段基座×封板质量修正，两者独立判定不合并打分；
+        判定依据悬停可见、等级可回放。仅模拟跟踪，不构成买卖建议。
       </p>
       {/* 跟踪台账（猎场批次 A）：入选即登记、收盘清算、逐股判定与历史统计 */}
       <WatchLedgerPanel />

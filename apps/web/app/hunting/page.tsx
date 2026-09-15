@@ -238,6 +238,7 @@ function HuntingInner() {
   const alerts = brief?.alerts ?? [];
   const reviewed = (brief?.directions ?? []).filter((d) => d.review);
   const topItems = top?.items ?? [];
+  const topRefItems = top?.reference_items ?? [];
   const briefMissing = picksLoaded && intradayLoaded && brief === null;
   const pending = !picksLoaded || !intradayLoaded;
 
@@ -271,7 +272,7 @@ function HuntingInner() {
   // 不能硬编码：硬编码会在参数被调整后继续显示旧数（口径漂移）。
   const replaceThreshold = data?.meta?.replace_threshold;
   const maxSwaps = data?.meta?.max_swaps_per_day;
-  const feedEmpty = topItems.length === 0 && pickTotal === 0;
+  const feedEmpty = topItems.length === 0 && topRefItems.length === 0 && pickTotal === 0;
 
   return (
     <main className="mx-auto flex h-full w-full max-w-[1400px] flex-col gap-3 overflow-hidden px-4 py-3">
@@ -413,31 +414,71 @@ function HuntingInner() {
             <p className="py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">
               暂无跟踪标的与精选组合——盘中候选成形后自动出现；也可点右上「生成/刷新组合」跑一次五维评分管线
               <br />
-              （候选池 = 活跃事件标的池 ∪ 当日涨停池 ∪ 热股榜；六维评分达到入选门槛者入选，最多 5
+              （候选池 = 题材联动可参与股 ∪ 活跃事件标的池 ∪ 当日涨停池 ∪ 热股榜——开盘即涨停的个股不进候选，
+              只作题材集中度的参考信息；六维评分达到入选门槛者入选，最多 5
               只、够格几只就是几只，全程可解释不构成买卖建议）。
             </p>
           ) : (
             <>
-              {/* ① 盘中跟踪（在上） */}
-              {topItems.length > 0 && (
+              {/* ① 盘中跟踪（在上）——2026-09-15 口径：上方是**可参与**候选，
+                  下方虚线框是涨停梯队（仅参考，当日买不进）。两者刻意分区+标注，
+                  避免"名单看着很强但一只都买不进"（用户指令：所有加入猎场的个股
+                  必须是投资者实际可以参与的）。 */}
+              {(topItems.length > 0 || topRefItems.length > 0) && (
                 <FadeIn>
                   <div className="space-y-2">
                     <div className="flex flex-wrap items-baseline gap-2">
                       <h2 className="text-xs font-medium text-zinc-600 dark:text-zinc-400">盘中跟踪</h2>
                       <span className="text-[10px] text-zinc-600 dark:text-zinc-400">
-                        {topItems.length} 只 · 当日实时动态名单（随盘面重算，非收盘名单）
+                        {topItems.length} 只可参与候选 · 当日实时动态名单（尚未涨停、报价可成交）
+                      </span>
+                      <span
+                        className="rounded border border-zinc-300 px-1.5 py-0.5 text-[10px] text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
+                        title="账户交易权限口径：名单已按权限过滤——创业板/科创板/北交所/B 股不进候选与参考区"
+                      >
+                        权限 {top?.tradable_boards ?? "沪市主板 / 深市主板"}
                       </span>
                     </div>
-                    <MasonryColumns>
-                      {topItems.map((it) => (
-                        <PickCard
-                          key={it.symbol}
-                          item={fromIntradayStock(it)}
-                          positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null}
-                        />
-                      ))}
-                    </MasonryColumns>
+                    {topItems.length > 0 ? (
+                      <MasonryColumns>
+                        {topItems.map((it) => (
+                          <PickCard
+                            key={it.symbol}
+                            item={fromIntradayStock(it)}
+                            positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null}
+                          />
+                        ))}
+                      </MasonryColumns>
+                    ) : (
+                      <p className="text-[11px] text-zinc-600 dark:text-zinc-400">
+                        当前无可参与候选（题材未形成集中、或候选涨幅/成交额未达联动门槛）——
+                        0 只是合法结论，不硬凑。
+                      </p>
+                    )}
                     {top?.criteria && <p className="text-[10px] text-zinc-600 dark:text-zinc-400">{top.criteria}</p>}
+
+                    {topRefItems.length > 0 && (
+                      <details className="rounded-lg border border-dashed border-amber-500/40 p-2">
+                        <summary className="cursor-pointer text-[11px] text-amber-800 dark:text-amber-300">
+                          涨停梯队 {topRefItems.length} 只 · 仅参考（已封板/开盘即涨停，当日买不进）
+                        </summary>
+                        <p className="mt-1.5 text-[10px] text-zinc-600 dark:text-zinc-400">
+                          {top?.reference_criteria ??
+                            "这些个股已封在涨停或开盘即涨停，全天无买入机会；它们的价值是揭示资金的集中方向。"}
+                        </p>
+                        <div className="mt-2">
+                          <MasonryColumns>
+                            {topRefItems.map((it) => (
+                              <PickCard
+                                key={it.symbol}
+                                item={fromIntradayStock(it)}
+                                positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null}
+                              />
+                            ))}
+                          </MasonryColumns>
+                        </div>
+                      </details>
+                    )}
                   </div>
                 </FadeIn>
               )}

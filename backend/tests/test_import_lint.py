@@ -127,3 +127,85 @@ def test_routes_do_not_import_each_others_privates():
                     offenders.append(f"{rel} ← {node.module}: {privates}")
     assert not offenders, "路由间跨模块私有导入：" + "；".join(offenders)
 
+
+
+#: 已登记的**历史失效惰性导入**：豁免，但**留名**（不是静默忽略）。
+#: 每条都指向账本缺陷号；修掉一条就删一条——下面的
+#: `test_dead_import_exemptions_are_still_real` 会因"豁免已不存在"而变红，
+#: 逼你清理（与 `test_cross_end_contract` 的 exempt 清单同款纪律）。
+#: 键取 `相对路径::模块::名字`，刻意不含行号——行号会随改动漂移，
+#: 用它作键会让豁免在无关改动后静默失效。
+_KNOWN_DEAD_IMPORTS = {
+    # BUG-008（2026-09-15 本守卫发现）：`_daily_plan` 的两段在
+    # `contextlib.suppress(Exception)` 里导入不存在的模块 ⇒ 简报「今日计划」的
+    # ①昨日复盘结论 与 ②未完成 action_items **恒为空**（功能静默死亡）。
+    # 正确来源：`app.review.storage.get_report` / `app.review.models.ReviewReportRow`。
+    "picks/morning_brief.py::app.picks.review_store::get_report",
+    "picks/morning_brief.py::app.models.review::ReviewReport",
+}
+
+
+def _iter_app_imports():
+    """`app/` 内全部 `from app.x import y` → (相对路径, 模块, 名字, 行号)。"""
+    for path, rel in _iter_py():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.ImportFrom) and node.level == 0 and node.module):
+                continue
+            if not node.module.startswith("app."):
+                continue
+            for alias in node.names:
+                if alias.name != "*":
+                    yield rel, node.module, alias.name, node.lineno
+
+
+def test_function_level_imports_are_resolvable():
+    """**函数内导入必须真能解析**（2026-09-15 新增，事故直出）。
+
+    为什么单设一道：本仓大量采用「函数内导入」避免循环依赖（route 尤其重）。
+    这类导入写错名字时，`ImportError` 会被调用处宽泛的 `except Exception`
+    （或 `contextlib.suppress`）吞成一句 warning ⇒ **门禁全绿、功能静默失效**。
+
+    实测事故（2026-09-15）：`picks_intraday` 把 `attach_participants` 写在
+    `tradability` 的导入行里（实际它在 `intraday_opportunity`），结果是
+    "题材联动挖掘失败（ImportError）"写进 payload、候选清单恒为空——
+    而当时 3067 条后端测试**没有一条**发现它，是启动服务看真实渲染才暴露的。
+    同一道守卫当场又抓出两处**既有**失效导入（见 `_KNOWN_DEAD_IMPORTS`）。
+
+    做法：AST 取出全部 `from app.x import y`（忽略 `*`），`importlib` 真导入 +
+    名字校验；名字取不到时**再试子模块**（`from app.api.routes import picks`
+    导入的是模块，不是包的属性——只查 `hasattr` 会误报）。
+
+    与 `test_business_layer_never_imports_api` 的分工：那条管**方向**，
+    这条管**名字是否存在**。方向对、名字错同样是事故。
+    """
+    import importlib
+
+    bad: list[str] = []
+    for rel, module, name, lineno in _iter_app_imports():
+        key = f"{rel}::{module}::{name}"
+        if key in _KNOWN_DEAD_IMPORTS:
+            continue
+        try:
+            mod = importlib.import_module(module)
+        except Exception as exc:  # noqa: BLE001 — 导入失败本身就是要报的错
+            bad.append(f"{rel}:{lineno} 无法导入 {module}（{exc!r}）")
+            continue
+        if hasattr(mod, name):
+            continue
+        try:  # 子模块导入（包属性里看不到，但 import 是合法的）
+            importlib.import_module(f"{module}.{name}")
+        except Exception:  # noqa: BLE001
+            bad.append(f"{rel}:{lineno} {module} 无 {name}")
+    assert not bad, "函数内导入无法解析（会被调用处 except 吞成静默失效）：\n" + "\n".join(bad)
+
+
+def test_dead_import_exemptions_are_still_real():
+    """豁免清单必须条条命真——修好一条却忘了删豁免，这里变红。
+
+    没有这条，`_KNOWN_DEAD_IMPORTS` 会长成一张只增不减的"历史垃圾清单"，
+    把守卫的覆盖面一点点吃掉（豁免最怕的不是多，而是没人回头看）。
+    """
+    seen = {f"{rel}::{module}::{name}" for rel, module, name, _ in _iter_app_imports()}
+    stale = sorted(k for k in _KNOWN_DEAD_IMPORTS if k not in seen)
+    assert not stale, f"这些豁免已不存在（已修好或已改名），请从清单里删掉：{stale}"

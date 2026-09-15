@@ -106,6 +106,22 @@ export interface TradingCard {
   /* --- 判定：目前仅盘中名单提供 --- */
   distinctiveness: CardJudgement | null;
   certainty: CardJudgement | null;
+  /**
+   * 联动确定性（2026-09-15 新口径）：候选是**尚未涨停**的题材联动股，
+   * 没有封单可看，延续预期只能来自「题材基座 × 距封板跑道」。
+   */
+  linkage: CardJudgement | null;
+  /**
+   * 可参与性（2026-09-15 猎场口径）：加入猎场的个股必须是投资者**实际可以参与的**。
+   * 「不可参与」= 已封板 / 开盘即涨停 —— 这类卡片是**参考信息**，不是候选。
+   */
+  tradability: CardJudgement | null;
+  /**
+   * 板块（沪市主板/深市主板/创业板/…）。透出理由是**账户权限**（2026-09-15 起
+   * 只开沪深主板）：让"这只票属于哪个板、我有没有权限买"在卡片上直接可见，
+   * 而不是要用户记住代码段规则。
+   */
+  board: string | null;
   /* --- 依据行（归一：盘前是六维 basis 摘要，盘中是「入选 + 涨停原因」） --- */
   basisRows: { label: string; value: string }[];
   vetoes: string[];
@@ -150,6 +166,9 @@ export function fromDailyPick(it: DailyPickItem): TradingCard {
   }
   // 筹码是附注维度（不进六维权重），排在六维之后
   if (it.bases?.["chip"]) basisRows.push({ label: "筹码", value: it.bases["chip"] });
+  // 「来源」= 入选来源依据（2026-09-15）：题材联动股写明"从哪个题材挖出来、为什么"。
+  // 放**首位**——它回答的是"为什么进组合"，比六维分解更靠前。
+  if (it.source_basis) basisRows.unshift({ label: "来源", value: it.source_basis });
 
   return {
     symbol: it.symbol,
@@ -172,6 +191,10 @@ export function fromDailyPick(it: DailyPickItem): TradingCard {
     tier: null,
     distinctiveness: null,
     certainty: null,
+    linkage: null,
+    tradability: toJudgement(it.tradability),
+    // 盘前名单的卡片暂无板块字段（后端 picks 侧未透出）⇒ null，不臆造
+    board: null,
     basisRows,
     vetoes: it.vetoes ?? [],
     buyRange: it.buy_range ?? null,
@@ -198,8 +221,13 @@ export function fromIntradayStock(it: IntradayTopStock | OpportunityStock): Trad
   // 「入选」= pick_basis——只有分层名单才产生（要解释「为什么在这档」）
   const pickBasis = "pick_basis" in it ? it.pick_basis : null;
   if (pickBasis) basisRows.push({ label: "入选", value: pickBasis });
+  // 「联动」= participants 的 basis（从哪个题材挖出来、距封板还有多少跑道）。
+  // 与 pick_basis 分开两行：前者是"为什么进猎场"，后者是"为什么排在这一档"。
+  if ("basis" in it && it.basis) basisRows.push({ label: "联动", value: it.basis });
   // 「涨停原因」= reason——同花顺官方原串（ladder 行自带），两条路径都有
   if (it.reason) basisRows.push({ label: "涨停原因", value: it.reason });
+  // 「首封」= 可参与性判据的直接证据（开盘即涨停 vs 盘中封板）
+  if (it.first_seal_time) basisRows.push({ label: "首封", value: it.first_seal_time });
 
   return {
     symbol: it.symbol,
@@ -222,6 +250,9 @@ export function fromIntradayStock(it: IntradayTopStock | OpportunityStock): Trad
     tier: "tier" in it ? (it.tier ?? null) : null,
     distinctiveness: toJudgement(it.distinctiveness),
     certainty: toJudgement(it.certainty),
+    linkage: "linkage" in it ? toJudgement(it.linkage) : null,
+    tradability: toJudgement(it.tradability),
+    board: it.board ?? null,
     basisRows,
     vetoes: [],
     buyRange: null,
@@ -235,7 +266,7 @@ export function fromIntradayStock(it: IntradayTopStock | OpportunityStock): Trad
     relatedEvents: [],
     // 「不补，显式标注口径」：缺的是收盘才有的维度，说明一次即可，不逐个渲染占位
     caliberNote:
-      "盘中实时口径 · 随盘面重算：含辨识度/确定性判定与出场纪律；" +
+      "盘中实时口径 · 随盘面重算：含联动确定性判定与出场纪律；" +
       "不含收盘六维评分、估值与买入区间（收盘后生成次日名单）。判定为条件陈述，不构成买卖建议。",
   };
 }
@@ -357,6 +388,31 @@ export function PickCard({
         }
       />
 
+      {/* 可参与性（2026-09-15 猎场口径）：加入猎场的个股必须是投资者**实际可以参与的**。
+          这张 chip 把"能不能买"放在卡片第一屏，而不是让用户自己从"已封板"推导；
+          参考区的卡片一律显示「仅参考 · 当日买不进」，从视觉上就不与候选混淆。 */}
+      {item.tradability && (
+        <div className="mt-1.5">
+          <Chip
+            text={
+              item.tradability.level === "可参与"
+                ? "可参与 · 报价可成交"
+                : item.tradability.level === "不可参与"
+                  ? "仅参考 · 当日买不进"
+                  : "可参与性未判定"
+            }
+            title={`可参与性判定（猎场口径：只收实际可以参与的个股）：${item.tradability.basis}`}
+            className={
+              item.tradability.level === "可参与"
+                ? "border-sky-500/50 bg-sky-500/10 text-sky-700 dark:text-sky-300"
+                : item.tradability.level === "不可参与"
+                  ? "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300"
+                  : "border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
+            }
+          />
+        </div>
+      )}
+
       {/* 估值（仅盘前名单）：数据源确实不提供时（新股/亏损/长期停牌）显示"暂无"并注明原因，
           不留白、不臆造，与个股详情页口径一致。 */}
       {(item.pe_ttm != null || item.pb != null) && (
@@ -438,6 +494,12 @@ export function PickCard({
             />
           )}
           {item.strengthTier && <Chip text={item.strengthTier} title="题材强度档" />}
+          {item.board && (
+            <Chip
+              text={item.board}
+              title="板块与账户交易权限（2026-09-15 起账户只开沪深主板）——本名单已按权限过滤，不含创业板/科创板/北交所/B 股"
+            />
+          )}
           {item.riskTier && (
             <Chip
               text={item.riskTier}
@@ -479,9 +541,12 @@ export function PickCard({
         </div>
       )}
 
-      {/* 判定（辨识度/确定性，仅盘中名单）：三态，依据悬停可见 */}
-      {(item.distinctiveness || item.certainty) && (
+      {/* 判定（辨识度/确定性/联动，仅盘中名单）：三态，依据悬停可见。
+          联动确定性是 2026-09-15 新口径下**候选卡片的主判定**（候选尚未涨停，
+          封板质量那一套判据不适用 ⇒ 辨识度/确定性为 null 时不渲染，不拿占位糊上）。 */}
+      {(item.distinctiveness || item.certainty || item.linkage) && (
         <div className="mt-2 flex flex-wrap gap-1">
+          {item.linkage && <JudgeChip label="联动确定性" level={item.linkage.level} basis={item.linkage.basis} />}
           {item.distinctiveness && (
             <JudgeChip label="辨识度" level={item.distinctiveness.level} basis={item.distinctiveness.basis} />
           )}

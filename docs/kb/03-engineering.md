@@ -587,3 +587,34 @@ watcher 单条 alert 是小查询/小文件写，属"①低 ②中 ③高（read
   `getByText("关闭")` 当场变红；**改外壳必然翻掉按文案写的断言**，改按无障碍名查即可。
 - **关联**：[[KB-ENG-16]]（高度链——弹窗内容区必须用 grid 让面板拿到**确定高度**，否则图表撑不开）·
   [[KB-ENG-85]]（能力描述失真：文档里写"跳工作台"就会持续误导后来者）
+
+### KB-ENG-96 宽泛 `except` / `suppress` 会把 `ImportError` 吞成**静默失效**（2026-09-15）
+
+**场景（实测，两条独立事故）**：
+
+1. **本轮新写的代码**：`api/routes/picks_intraday.py` 把 `attach_participants` 写在
+   `from app.picks.tradability import ...` 的导入行里——它实际在 `app.picks.intraday_opportunity`。
+   该导入位于 `try/except Exception`（诚实降级用），于是 `ImportError` 被吞成 payload 里的
+   一句 `题材联动挖掘失败（ImportError）`：**功能恒空、204 个前端用例 + 3067 个后端用例全绿**。
+   **是启动服务看真实渲染才暴露的**——不是测试抓的。
+2. **既有的代码**：同一文件的台账登记段 `from app.market.trading_status import in_trading_window`
+   ——该函数在 09-11 的 P1-3「交易时段窗口收口」里被移到了 `app.market.trade_calendar`，
+   **调用点没跟着改**。它同样在 `contextlib.suppress(Exception)` 里 ⇒ 该段**自写入以来从未执行过**
+   （题材候选一只都没进过台账）。
+   新增守卫同日又抓出第三处：`picks/morning_brief.py::_daily_plan` 的两行导入指向
+   **根本不存在的模块**（`app.picks.review_store` / `app.models.review`）⇒ 简报「今日计划」的两段恒为空。
+
+**为什么危险**：`except Exception` 在选股链路上是**正确**的（数据源缺失要降级不要 500），
+但它对**拼写错误零容忍度为零**——"数据源挂了"与"我写错了模块名"在观测上完全同形，
+而前者天天发生、后者一次就永久静默。判据越宽，事故越像正常。
+
+**修法（已落地，通用而非定点）**：`tests/test_import_lint.py::test_function_level_imports_are_resolvable`
+—— AST 取出 `app/` 全部 `from app.x import y`（忽略 `*`），`importlib.import_module` + 名字校验；
+名字取不到时**再试子模块**（`from app.api.routes import picks` 导入的是模块，只查 `hasattr` 会误报）。
+配套 `test_dead_import_exemptions_are_still_real` 保证豁免清单不会长成只增不减的垃圾清单。
+**两条纪律**：
+- 宽泛 `except` 里的**每一个导入**都值得怀疑——它们是"永远不会报错的失败点"；
+- 日志要带 `exc_info=True`：本处第一版只打 `"挖掘失败: %s"`，从零重查花的时间远超多打一行的成本。
+
+**关联**：[[KB-ENG-95]]（同类：判据面选错 ⇒ 本地恒绿 / CI 恒红）· [[KB-ENG-94]]（推演型守卫的假绿）·
+[[KB-ENG-61]]（陈旧数据比缺失更危险，同族"观测不到"问题）

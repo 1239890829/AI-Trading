@@ -82,7 +82,9 @@ def test_select_candidates_skips_sealed_and_registered():
         {"symbol": "600001", "name": "已封板", "change_pct": 10.01, "price": 11.0},
         # 临板区 → 入选
         {"symbol": "600002", "name": "临板股", "change_pct": 7.2, "price": 10.5, "turnover_rate": 8.1},
-        # 20cm 临板区 → 入选
+        # 创业板临板（20cm 口径 14% 属临板区）→ **板块权限拒绝**（2026-09-15 用户
+        # 「创业板的不进，只有主板的权限现在」）。20cm 涨限判定本身由
+        # `test_board_limit_pct_*` 单独钉住，不靠这条用例覆盖。
         {"symbol": "300001", "name": "创业临板", "change_pct": 14.0, "price": 22.0},
         # 未达临板下沿 → 拒绝
         {"symbol": "600003", "name": "没动静", "change_pct": 2.1, "price": 5.0},
@@ -92,10 +94,26 @@ def test_select_candidates_skips_sealed_and_registered():
         {"symbol": "600005", "name": "无数据", "change_pct": None, "price": 3.0},
     ]
     out = select_candidates(rows, {"600004"})
-    assert [c["symbol"] for c in out] == ["600002", "300001"]  # runway 升序：2.5 < 5.7
+    assert [c["symbol"] for c in out] == ["600002"]
     assert out[0]["runway_pct"] == 2.5
     assert out[0]["limit_pct"] == 10.0
-    assert out[1]["limit_pct"] == 20.0
+
+
+def test_select_candidates_excludes_boards_without_permission():
+    """非主板板块（创业板/科创板/北交所/B 股）不进候选——提醒了也执行不了。
+
+    2026-09-15 用户「创业板的不进，只有主板的权限现在」。判据单点 =
+    `tradability.is_tradable`，与 `board_limit_pct` 同源同表。
+    """
+    rows = [
+        {"symbol": "600001", "name": "主板票", "change_pct": 7.2, "price": 10.5},
+        {"symbol": "300001", "name": "创业票", "change_pct": 14.0, "price": 22.0},
+        {"symbol": "688001", "name": "科创票", "change_pct": 14.0, "price": 30.0},
+        {"symbol": "920001", "name": "北交票", "change_pct": 20.0, "price": 12.0},
+        {"symbol": "900901", "name": "沪B票", "change_pct": 7.0, "price": 1.2},
+        {"symbol": "000002", "name": "深主板", "change_pct": 6.8, "price": 8.0},
+    ]
+    assert [c["symbol"] for c in select_candidates(rows, set())] == ["600001", "000002"]
 
 
 def test_broken_seal_reenters_zone():

@@ -58,6 +58,13 @@ export interface DailyPickItem {
     label: string;
     reasons: string[];
   } | null;
+  // --- 可参与性（2026-09-15 猎场口径）+ 入选来源 ---
+  /** 可参与性三态：可参与 / 不可参与 / unknown（后端 picks/tradability.assess） */
+  tradability?: TradabilityJudgement | null;
+  /** 入选来源：theme_linkage / event / limit_up / hot / carryover */
+  source?: string | null;
+  /** 来源依据（题材联动股写明"从哪个题材挖出来、为什么"） */
+  source_basis?: string | null;
   // --- 筹码信号（CYQ 近似 × 量价；None=未触发，available=false=数据缺失）---
   chip_signal?: {
     available: boolean;
@@ -139,6 +146,30 @@ export interface DailyPicksPayload {
     kept_count?: number;
     /** 昨日成员出列留痕（跌破门槛/掉出候选池/容量截断），供复盘归因 */
     removed?: { symbol: string; score: number | null; reason: string }[];
+    /** 可参与性口径留痕（2026-09-15）：剔除明细 + 题材联动挖掘 + 候选池来源计数 */
+    tradability_policy?: {
+      open_seal_cutoff: string;
+      excluded_open_sealed: {
+        count: number;
+        items: { symbol: string; name: string | null; first_seal_time: string | null }[];
+      };
+      theme_linkage: {
+        themes?: {
+          theme: string; count: number; share: number | null; max_boards: number;
+          container: string | null; candidates: number; note: string | null;
+        }[];
+        added?: number;
+        note?: string | null;
+      };
+      candidate_sources: Record<string, number>;
+      /** 可交易板块白名单（账户口径） */
+      tradable_boards?: string;
+      /** 候选池因板块权限被剔除的明细 */
+      excluded_board?: {
+        count: number;
+        items: { symbol: string; name: string; board: string; from: string }[];
+      };
+    };
   } | null;
 }
 
@@ -458,6 +489,19 @@ export interface OpportunityJudgement {
   basis: string;
 }
 
+/**
+ * 可参与性判定（2026-09-15 猎场口径）。
+ *
+ * **刻意与 `OpportunityJudgement` 分开**：那套是「机会度」（高/中/低/unknown），
+ * 这套是「能不能买」（可参与/不可参与/unknown）。两者的字面量完全不同，
+ * 复用一个类型会让"谁是谁"在类型层就分不清——而混用恰恰是本轮要修的病灶
+ * （拿封板质量冒充可操作性）。
+ */
+export interface TradabilityJudgement {
+  level: "可参与" | "不可参与" | "unknown";
+  basis: string;
+}
+
 export interface OpportunityStock {
   symbol: string;
   name: string | null;
@@ -467,8 +511,22 @@ export interface OpportunityStock {
   /** 同花顺官方涨停原因原串（`+` 分隔）。ladder 行自带；缺失为 null。 */
   reason: string | null;
   hot_rank: number | null;
+  /** 首封时间（涨停池官方字段）：可参与性判据「开盘即涨停」的依据 */
+  first_seal_time?: string | null;
+  /** 可参与性三态（2026-09-15）：涨停梯队恒为「不可参与」——它们当日买不进 */
+  tradability?: TradabilityJudgement | null;
+  /** 仅作参考（涨停梯队标记；**不是**猎场候选） */
+  reference_only?: boolean;
+  /** 板块中文名（沪市主板/深市主板/创业板/科创板/北交所/B股）——账户权限可视 */
+  board?: string | null;
+  /** 账户是否有该板块交易权限（2026-09-15：仅沪深主板为 true） */
+  tradable?: boolean | null;
   distinctiveness: OpportunityJudgement;
   certainty: OpportunityJudgement;
+  /** 联动置信度（仅 participants：尚未涨停的题材联动候选有） */
+  linkage?: OpportunityJudgement | null;
+  /** 一句话入选依据（participants 由后端生成，直接展示） */
+  basis?: string | null;
   /** 现价/止损/出场：与 intraday-top 同源补全（attach_risk_fields），缺失显式 null。 */
   price?: number | null;
   stop_ref?: { pct: number; price: number; basis: string } | null;
@@ -488,7 +546,12 @@ export interface OpportunityTheme {
   max_boards: number | null;
   limit_up_count: number | null;
   has_succession: boolean | null;
+  /** 涨停梯队：**仅参考信息**（已封板/开盘即涨停，当日买不进；非主板已剔除） */
   stocks: OpportunityStock[];
+  /** 猎场候选：题材内**尚未涨停**、报价可成交的联动个股（2026-09-15 口径） */
+  participants?: OpportunityStock[];
+  /** 未挖掘/挖空的原因（区分"没挖"与"挖空了"，空列表时读它） */
+  participants_note?: string | null;
   /** 机会三层（需求 4）：today_strongest / quiet_starting / brewing */
   opportunity_layer?: string | null;
   layer_basis?: string | null;
@@ -504,6 +567,20 @@ export interface IntradayOpportunities {
   summary: { limit_up_total: number | null; market_max_boards: number | null; top_theme: string | null };
   hot_available: boolean;
   caveats: string[];
+  /** 题材联动挖掘汇总（2026-09-15）：挖了几个题材、补入几只 */
+  linkage_stats?: {
+    themes_mined: number;
+    candidates: number;
+    /** 被板块权限挡下的成分只数（解释「候选为什么这么少」） */
+    excluded_board?: number;
+    excluded_board_labels?: Record<string, number>;
+  } | null;
+  /** 挖掘失败时的显式说明（非静默降级） */
+  linkage_note?: string | null;
+  /** 参考区（涨停梯队）因板块权限被剔除的只数 */
+  board_excluded_reference?: number | null;
+  /** 当前可交易板块白名单（账户口径） */
+  tradable_boards?: string | null;
 }
 
 export interface WatchLedgerRow {
@@ -574,6 +651,18 @@ export interface IntradayTopStock {
   strength_tier: string | null;
   distinctiveness: { level: string; basis: string } | null;
   certainty: { level: string; basis: string } | null;
+  /** 联动置信度（2026-09-15 新口径：items 全是尚未涨停的题材联动候选） */
+  linkage?: { level: string; basis: string } | null;
+  /** 可参与性三态（items 恒为「可参与」——这是保证的透出，不是事后标签） */
+  tradability?: TradabilityJudgement | null;
+  /** 首封时间（仅参考区有） */
+  first_seal_time?: string | null;
+  /** 仅作参考（涨停梯队；**不是**猎场候选） */
+  reference_only?: boolean;
+  /** 板块中文名（账户权限口径可视：沪市主板/深市主板/…） */
+  board?: string | null;
+  /** 账户是否有该板块交易权限（2026-09-15 起仅沪深主板为 true） */
+  tradable?: boolean | null;
   reason: string | null;
   tier: number;
   pick_basis: string;
@@ -587,9 +676,18 @@ export interface IntradayTopStock {
 
 export interface IntradayTopPayload {
   trade_date: string | null;
+  /** 猎场候选：**可参与**（尚未涨停、报价可成交） */
   items: IntradayTopStock[];
+  /** 涨停梯队：**仅参考信息**（已封板/开盘即涨停，当日买不进） */
+  reference_items?: IntradayTopStock[];
   total_candidates: number;
+  reference_total?: number;
+  /** 参考区因板块权限被剔除的只数 */
+  board_excluded_reference?: number;
+  /** 当前可交易板块白名单（账户口径） */
+  tradable_boards?: string;
   criteria: string;
+  reference_criteria?: string;
   hot_available: boolean;
   caveats: string[];
 }

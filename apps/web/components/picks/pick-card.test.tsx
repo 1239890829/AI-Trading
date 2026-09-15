@@ -331,3 +331,122 @@ describe("StandAsideBanner", () => {
     expect(screen.getByRole("alert")).toBeTruthy(); // 横幅本身照常
   });
 });
+
+/* ---------------------------------------------------------------- 可参与性口径（2026-09-15） */
+
+/**
+ * 猎场口径变更（用户指令：只收「投资者实际可以参与的」个股）在前端的落点：
+ * ① 可参与性徽标必须渲染，且「不可参与」不能与「可参与」共用同一种视觉语言；
+ * ② 联动确定性是**候选卡片的主判定**（候选尚未涨停，封板质量判据不适用）；
+ * ③ 参考区（涨停梯队）卡片的可参与性判定与首封时间证据都要可见。
+ */
+describe("PickCard · 可参与性三态（2026-09-15 猎场口径）", () => {
+  /** 可参与候选：尚未涨停的题材联动股（新口径下 items 的形态）。 */
+  const participant: IntradayTopStock = {
+    symbol: "301662",
+    name: "宏工科技",
+    role: null,
+    boards: null,
+    change_pct: 14.35,
+    theme: "固态电池",
+    stage: "启动",
+    strength_tier: "观察",
+    distinctiveness: null,
+    certainty: null,
+    linkage: { level: "高", basis: "题材启动 · 涨停 3 家 · 已进临板区（距封板 5.35pct）" },
+    tradability: { level: "可参与", basis: "未封在涨停板，报价可成交" },
+    reason: null,
+    tier: 1,
+    pick_basis:
+      "联动确定性高：题材成建制且已进临板区（仍未封板、可成交）；题材内涨停 3 家形成集中，本股尚未涨停（14.3%，距封板 5.35pct）——已进临板区",
+    price: 67.1,
+  };
+
+  /** 参考区的涨停梯队成员：开盘即涨停，当日买不进。 */
+  const ladder: IntradayTopStock = {
+    ...participant,
+    symbol: "002912",
+    name: "中新赛克",
+    role: "龙头",
+    boards: 4,
+    change_pct: 10.02,
+    first_seal_time: "09:25:00",
+    linkage: null,
+    tradability: {
+      level: "不可参与",
+      basis: "开盘即涨停（竞价即封，首封 09:25）——封单自开盘起，全天无买入机会",
+    },
+    tier: 1,
+    reference_only: true,
+  };
+
+  it("可参与候选：渲染「可参与」徽标 + 联动确定性判定 + 依据行", () => {
+    render(<PickCard item={fromIntradayStock(participant)} />);
+    expect(screen.getByText("可参与 · 报价可成交")).toBeTruthy();
+    expect(screen.getByText(/联动确定性·高/)).toBeTruthy();
+    // 依据行：分层名单走 pick_basis（"为什么排在这一档"）
+    expect(screen.getByText("入选")).toBeTruthy();
+    expect(screen.getByText(/题材内涨停 3 家形成集中/)).toBeTruthy();
+    // 未涨停 ⇒ 不臆造封板语义字段（角色/连板/辨识度/确定性都不渲染）
+    expect(screen.queryByText(/辨识度/)).toBeNull();
+    expect(screen.queryByText(/中军|龙头|首板/)).toBeNull();
+  });
+
+  it("题材手风琴候选：依据行走「联动」行（与「入选」分开两行）", () => {
+    // 手风琴路径的 participants 带 `basis`（OpportunityStock），分层名单则只有
+    // pick_basis —— 两条路径的依据行标签不同，是刻意的：前者答"为什么进猎场"，
+    // 后者答"为什么排这一档"。混成一行会让两个问题只剩一个答案。
+    const acc: OpportunityStock = {
+      symbol: "301662",
+      name: "宏工科技",
+      role: null,
+      boards: null,
+      change_pct: 14.35,
+      reason: null,
+      hot_rank: null,
+      distinctiveness: { level: "低", basis: "首板且无人气数据" },
+      certainty: { level: "unknown", basis: "题材阶段缺失" },
+      linkage: { level: "高", basis: "题材启动 · 涨停 3 家 · 已进临板区" },
+      tradability: { level: "可参与", basis: "未封在涨停板，报价可成交" },
+      basis: "题材内涨停 3 家形成集中，本股尚未涨停（14.3%，距封板 5.35pct）——已进临板区",
+    };
+    render(<PickCard item={fromIntradayStock(acc)} />);
+    expect(screen.getByText("联动")).toBeTruthy();
+    expect(screen.getByText(/本股尚未涨停/)).toBeTruthy();
+  });
+
+  it("参考区梯队：渲染「仅参考 · 当日买不进」+ 首封时间证据", () => {
+    render(<PickCard item={fromIntradayStock(ladder)} />);
+    expect(screen.getByText("仅参考 · 当日买不进")).toBeTruthy();
+    expect(screen.getByText("首封")).toBeTruthy();
+    expect(screen.getByText("09:25:00")).toBeTruthy();
+    // 参考区不该出现「可参与」——两种口径不能混用同一个徽标
+    expect(screen.queryByText("可参与 · 报价可成交")).toBeNull();
+  });
+
+  it("板块徽标：把「这个板我有没有权限买」放在卡片上", () => {
+    // 2026-09-15 用户「只有主板的权限现在」——板块是账户口径的可视证据，
+    // 而不是要用户记住代码段规则（名单本身已按权限过滤，这里是可核对性）
+    render(<PickCard item={fromIntradayStock({ ...participant, board: "深市主板" })} />);
+    expect(screen.getByText("深市主板")).toBeTruthy();
+    // 字段缺失时整块不渲染（不拿「板块 --」把缺数据伪装成有数据）
+    const { container } = render(<PickCard item={fromIntradayStock(participant)} />);
+    expect(container.textContent).not.toContain("深市主板");
+  });
+
+  it("盘前名单：入选原因里带「来源」行（题材联动股可追溯）", () => {
+    render(
+      <PickCard
+        item={fromDailyPick({
+          ...base,
+          source: "theme_linkage",
+          source_basis: "题材内涨停 4 家形成集中，本股尚未涨停（3.0%）",
+          tradability: { level: "可参与", basis: "未封在涨停板，报价可成交" },
+        })}
+      />,
+    );
+    expect(screen.getByText("来源")).toBeTruthy();
+    expect(screen.getByText(/本股尚未涨停/)).toBeTruthy();
+    expect(screen.getByText("可参与 · 报价可成交")).toBeTruthy();
+  });
+});

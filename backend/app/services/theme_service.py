@@ -184,8 +184,13 @@ def seal_phase(first_seal_time: str | None) -> str | None:
     return phase
 
 
-def _parse_hhmmss(ts: str | None) -> int | None:
-    """``"09:33"`` / ``"093300"`` → HHMMSS 整数；无法解析 → None。"""
+def parse_hhmmss(ts: str | None) -> int | None:
+    """``"09:33"`` / ``"093300"`` → HHMMSS 整数；无法解析 → None。
+
+    2026-09-15 由 ``_parse_hhmmss`` 提升为公开名（行为零变化）：封板时间解析
+    此后有两处消费方（本模块的早封率、`picks/tradability` 的开盘即涨停判定），
+    私有名跨模块引用会诱发第二份实现——那正是"同一口径两套代码"的开端。
+    """
     if not ts:
         return None
     digits = "".join(ch for ch in str(ts) if ch.isdigit())
@@ -1086,7 +1091,7 @@ def _build_card(
             reopen_count += 1
         fst = (em.first_seal_time if em else None) or rec.first_seal_time
         phase = seal_phase(fst)
-        early_samples.append(_parse_hhmmss(fst))
+        early_samples.append(parse_hhmmss(fst))
         retention_pairs.append((rec.seal_amount, rec.max_seal_money))
         if phase:
             seal_dist[phase] += 1

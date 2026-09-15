@@ -14,7 +14,7 @@ import pytest
 from app.services.theme_service import (
     MIDDLE_WEIGHT_MIN_CAP,
     UNCLASSIFIED,
-    _parse_hhmmss,
+    parse_hhmmss,
     assign_primary_themes,
     classify_role,
     early_seal_rate,
@@ -181,17 +181,17 @@ def test_seal_phase_returns_none_when_unparsable():
 
 
 def test_parse_hhmmss_variants():
-    assert _parse_hhmmss("09:33:00") == 93300
-    assert _parse_hhmmss("093300") == 93300
-    assert _parse_hhmmss("10:30") == 103000  # HHMM 补零成 HHMMSS
-    assert _parse_hhmmss("") is None
-    assert _parse_hhmmss(None) is None
-    assert _parse_hhmmss("abc") is None
+    assert parse_hhmmss("09:33:00") == 93300
+    assert parse_hhmmss("093300") == 93300
+    assert parse_hhmmss("10:30") == 103000  # HHMM 补零成 HHMMSS
+    assert parse_hhmmss("") is None
+    assert parse_hhmmss(None) is None
+    assert parse_hhmmss("abc") is None
 
 
 def test_early_seal_rate_counts_only_before_10am():
     # 2/3 早封；None 样本（时间缺失）从分母剔除
-    got = early_seal_rate([_parse_hhmmss("09:31"), _parse_hhmmss("10:30"), None, _parse_hhmmss("09:58")])
+    got = early_seal_rate([parse_hhmmss("09:31"), parse_hhmmss("10:30"), None, parse_hhmmss("09:58")])
     assert got == round(2 / 3, 4)
 
 

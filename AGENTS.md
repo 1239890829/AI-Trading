@@ -32,7 +32,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 collect 3088 项（3026 passed / 62 skipped / 0 failed）（09-15 §6.36 实测）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 collect 3140 项（3078 passed / 62 skipped / 0 failed）（09-15 §6.43 实测；前提：8000 在跑）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。
@@ -50,7 +50,7 @@ cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 coll
 # **教训与本文档的警告同源：数字标注要么当轮实测回填，要么写"实测方法"而不写死数值。**
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
 cd apps/web && npx eslint .                       # 0 error / 0 warn（P1-27 已清零；余 1 处 C 类显式豁免）
-cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 571 项 / 62 文件（09-15 弹窗外壳统一轮实测）
+cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 576 项 / 62 文件（09-15 §6.43 板块权限准入轮实测）
 # ⚠️ 默认并行度偶发 **SIGKILL(exit 137) 且零输出**（非测试失败）⇒ 先降并行度复跑：
 #   npx vitest run --maxWorkers=1
 # ⚠️ **凡改动/新增涉及时间·时区的断言，必须再用 `TZ=UTC` 复跑一遍**（CI 跑在 UTC，本地是 UTC+8）：
@@ -72,8 +72,19 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 collect **3097 项（3035 passed / 62 skipped / 0 failed）**、
-> 前端 **571 项 / 62 文件**、eslint **0 error / 0 warn**
+> **门禁口径**：后端 collect **3140 项（3078 passed / 62 skipped / 0 failed）**、
+> 前端 **576 项 / 62 文件**、eslint **0 error / 0 warn**
+> （2026-09-15 §6.43 板块权限准入轮实测；较上一值「后端 3132 / 前端 575·62」增量
+> **后端 +8 项**（3 板块权限（`test_tradability`）+1（`test_picks_pipeline`）
+> +1（`test_review_picks_dimension`）+2（`test_intraday_opportunity`）
+> +1（`test_pre_limit_radar`），collect 与 passed 两侧同为 +8、skipped 恒 62 ⇒ 自洽）
+> + **前端 +1 项**（`pick-card.test.tsx` 板块徽标）
+> （2026-09-15 §6.42 猎场「可参与」口径轮实测；较上一值「后端 3097 / 前端 571·62」增量
+> **后端 +35 项**（`= 20`（新文件 `tests/test_tradability.py`）`+ 7`（`test_picks_pipeline.py`）
+> `+ 1`（`test_review_picks_dimension.py`）`+ 4`（`test_intraday_opportunity.py`）
+> `+ 3`（`test_import_lint.py`：新增「函数内导入可解析」守卫 2 例 + 新业务模块进分层参数化 1 例），
+> **collect 与 passed 两侧同为 +35、skipped 恒 62 ⇒ 自洽**）
+> + **前端 +4 项**（`pick-card.test.tsx` 新增可参与性三态 4 例）
 > （2026-09-15 §6.38 后端切片轮实测；较上一值「后端 3088 / 前端 571·62」增量
 > **后端 +9 项**（`assistant/tools.py` 切成 `tools/` 包 ⇒ `test_import_lint.py` 按模块参数化，
 > 新增分片计入；实测 **3035 passed / 62 skipped / 0 failed**，`skipped` 不变故差额全落在 passed）

@@ -1,5 +1,10 @@
 """盘中机会视图（intraday_opportunity）单测：辨识度/确定性三态判定与组装。"""
-from app.picks.intraday_opportunity import assemble, certainty, distinctiveness
+from app.picks.intraday_opportunity import (
+    assemble,
+    attach_participants,
+    certainty,
+    distinctiveness,
+)
 
 
 # ---------------------------------------------------------------- distinctiveness
@@ -229,3 +234,140 @@ def test_assemble_empty_board_is_honest():
     out = assemble({"trade_date": "2026-09-03", "themes": [], "summary": {}}, [], False)
     assert out["themes"] == []
     assert out["hot_available"] is False
+
+
+# ---------------------------------------------------------------- attach_participants（2026-09-15 口径）
+
+
+def _theme_card(**over):
+    card = {
+        "theme": "功能糖", "stage": "发酵", "strength_tier": "T1",
+        "limit_up_count": 4, "catalog_code": "BK0009",
+        "stocks": [{"symbol": "600010", "first_seal_time": "09:25:00"}],
+    }
+    card.update(over)
+    return card
+
+
+def _snap_rows(*rows):
+    return {r["symbol"]: r for r in rows}
+
+
+def _row(symbol, pct, amount=1.0e8, name="甲"):
+    return {"symbol": symbol, "name": name, "change_pct": pct, "amount": amount, "price": 10.0}
+
+
+def test_attach_participants_mines_concentrated_theme_only():
+    """只有「涨停集中」的题材才挖——单家涨停的题材硬挖只会得到噪音（用户指令原文）。"""
+    cards = [
+        _theme_card(theme="功能糖", limit_up_count=4, catalog_code="BK0009"),
+        _theme_card(theme="零散", limit_up_count=2, catalog_code="BK0010"),
+    ]
+    stats = attach_participants(
+        cards,
+        snapshot_by=_snap_rows(_row("600011", 3.0)),
+        sealed_symbols={"600010"},
+        limit_up_total=20,
+        members_by_code={"BK0009": ["600010", "600011"], "BK0010": ["600012"]},
+    )
+    # 审计键：themes_mined / candidates / excluded_board(+labels)——板块权限挡下的只数
+    # 必须能查，否则"候选怎么只有 1 只"与"没数据"在页面上长得一样
+    assert stats["themes_mined"] == 1 and stats["candidates"] == 1
+    assert stats["excluded_board"] == 0
+    assert [c["symbol"] for c in cards[0]["participants"]] == ["600011"]
+    assert cards[0]["participants_note"] is None
+    # 未达阈值的题材：空列表 + **原因**（空列表必须能区分"没挖"与"挖空了"）
+    assert cards[1]["participants"] == []
+    assert "未达集中阈值" in cards[1]["participants_note"]
+
+
+def test_attach_participants_without_container_is_explicit():
+    """未挂靠到官方容器的题材：写明原因而不是留一个看起来"没候选"的空列表。"""
+    cards = [_theme_card(catalog_code=None)]
+    attach_participants(
+        cards, snapshot_by={}, sealed_symbols=set(),
+        limit_up_total=10, members_by_code={},
+    )
+    assert cards[0]["participants"] == []
+    assert "官方概念容器" in cards[0]["participants_note"]
+
+
+def test_attach_participants_share_gate_uses_total():
+    """家数够但占当日涨停比例不足（分母来自 summary）⇒ 同样不挖。"""
+    cards = [_theme_card(limit_up_count=3, catalog_code="BK0009")]
+    attach_participants(
+        cards,
+        snapshot_by=_snap_rows(_row("600011", 3.0)),
+        sealed_symbols=set(),
+        limit_up_total=60,          # 3/60 = 5% < 10%
+        members_by_code={"BK0009": ["600011"]},
+    )
+    assert cards[0]["participants"] == []
+    assert "未达集中阈值" in cards[0]["participants_note"]
+
+
+def test_assemble_ladder_row_carries_first_seal_time():
+    """`assemble` 的 ladder 行必须透出 `first_seal_time`——可参与性判据的唯一依据。
+
+    2026-09-15 实测暴露：该字段此前**只喂给 certainty 判定、没进输出**
+    （`certainty(first_seal_time=rung.get(...))` 用完即弃），于是参考区卡片只能说
+    "已封板"，说不出用户点名的"开盘就买不进"。字段缺失时 `assess` 会退化成
+    "首封时间未知"——结论仍保守，但**丢掉了那条最能说明问题的证据**。
+    """
+    board = {
+        "trade_date": "2026-09-15",
+        "themes": [
+            {
+                "theme": "白酒概念", "stage": "发酵", "strength_tier": "T1",
+                "formation": "成建制", "strength_score": 80.0, "stage_basis": [],
+                "ladder": [
+                    {"symbol": "600519", "name": "甲", "role": "龙头", "boards": 2,
+                     "change_pct": 10.0, "first_seal_time": "09:25:00"},
+                ],
+                "performance": {"limit_up_count": 4, "max_boards": 2, "has_succession": True},
+            }
+        ],
+        "summary": {"limit_up_total": 20, "market_max_boards": 3, "top_theme": "白酒概念"},
+    }
+    out = assemble(board, [], False)
+    rung = out["themes"][0]["stocks"][0]
+    assert rung["first_seal_time"] == "09:25:00"
+    # 可参与性标注不在这里做（需要实时盘口，见路由的 attach_tradability）——
+    # 留一个显式断言，免得日后有人以为"漏了"，把第二个判据来源加回来
+    assert "tradability" not in rung
+
+
+def test_attach_participants_distinguishes_missing_snapshot_from_no_candidate():
+    """快照整批缺失 ⇒ 写「不可判定」，**不是**「没有可参与标的」。
+
+    2026-09-15 实测：后端冷启动后首次请求（全市场快照尚未抓完）返回 0 候选，
+    页面与"今天确实没机会"完全同形——而它会被 60s 装配缓存放大成一分钟的空名单。
+    三态纪律：判不了就说判不了。
+    """
+    cards = [_theme_card(limit_up_count=4, catalog_code="BK0009")]
+    stats = attach_participants(
+        cards,
+        snapshot_by={},                      # 快照整批缺失
+        sealed_symbols=set(),
+        limit_up_total=20,
+        members_by_code={"BK0009": ["600011", "600012", "600013"]},
+    )
+    assert cards[0]["participants"] == []
+    assert "不可判定" in cards[0]["participants_note"]
+    assert "快照未覆盖" in cards[0]["participants_note"]
+    assert stats["missing_quote"] == 3
+
+
+def test_attach_participants_no_candidate_is_a_conclusion_not_a_data_gap():
+    """快照齐备但成分都不达标 ⇒ 就是「没有候选」（结论），不得说成数据缺失。"""
+    cards = [_theme_card(limit_up_count=4, catalog_code="BK0009")]
+    attach_participants(
+        cards,
+        snapshot_by=_snap_rows(_row("600011", 0.2)),   # 涨幅未达联动下沿
+        sealed_symbols=set(),
+        limit_up_total=20,
+        members_by_code={"BK0009": ["600011"]},
+    )
+    assert cards[0]["participants"] == []
+    assert "不可判定" not in cards[0]["participants_note"]
+    assert "无可参与成分" in cards[0]["participants_note"]

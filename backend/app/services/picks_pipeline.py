@@ -62,6 +62,21 @@ from app.picks.regime import detect_regime, earnings_event_ratio, weights_for
 from app.picks.risk import build_invalidations, exit_discipline, risk_tier_of, stop_loss_reference
 from app.picks.rps import get_rps_service
 from app.picks.style_router import apply_style_offsets, route_style, style_note
+from app.picks.tradability import (
+    CANDIDATE_PER_THEME,
+    MIN_THEME_LIMIT_UPS,
+    MIN_THEME_SHARE,
+    # 取别名：`assess` 已被 halt_risk（停牌/异动风险评估）占用，两者语义不同
+    # （异动风险 vs 可参与性），同名会静默覆盖——pyflakes 当场拦下。
+    assess as assess_tradability,
+    board_label,
+    index_views,
+    is_open_sealed,
+    is_tradable,
+    linkage_candidates,
+    resolve_containers,
+    theme_focus,
+)
 from app.services.quote_enrich import fill_valuation
 from app.services.quote_hub import QuoteHub
 from app.core.bjtime import beijing_now
@@ -71,6 +86,19 @@ log = logging.getLogger(__name__)
 CANDIDATE_CAP = 40      # 候选池上限（深度评分前）
 DEEP_DIVE_CAP = 24      # 深度评分上限（每只要拉 K 线/财务/资金流）
 CONCURRENCY = 6
+
+#: 候选池装配顺序（来源优先级）。**不是**插入顺序的同义反复：本轮新增的
+#: 「题材联动」来源必须在最前占位（见 `candidate_pool` ②b 的配额说明），
+#: 而它的取数天然发生在其他来源之后 ⇒ 用一张显式顺序表解耦「取数顺序」与
+#: 「装配顺序」。同档内保持插入序（`sorted` 稳定），故既有来源的相对次序零变化。
+_SOURCE_ORDER = {
+    "theme_linkage": 0,  # ① 可参与的题材联动股（2026-09-15 用户指令，最优先）
+    "event": 1,          # ② 活跃事件直接命中的个股
+    "event_theme": 1,    # ② 事件题材成分（同档，保持插入序）
+    "limit_up": 2,       # ③ 当日涨停池
+    "hot": 3,            # ④ 热股榜
+    "carryover": 9,      # 昨日组合成员由调用方另行追加，不参与这里的排序
+}
 
 
 # ---------------------------------------------------------------- 依赖契约
@@ -142,16 +170,27 @@ async def candidate_pool(
     *,
     limit_up_pool: list | None = None,
     active_events: list | None = None,
+    linkages: list[dict] | None = None,
+    audit: dict | None = None,
 ) -> list[dict]:
-    """候选池 = 活跃事件标的池 ∪ 当日涨停池 ∪ 热股榜 top，去重剔 ST，cap 40。
+    """候选池 = 题材联动可参与股 ∪ 活跃事件标的池 ∪ 当日涨停池 ∪ 热股榜 top，去重剔 ST，cap 40。
 
-    三路来源天然覆盖「突发消息引发的极端盘面」：事件池是消息源，
-    涨停池是大幅拉升的极端表现，热股榜是关注度信号。
+    各路来源天然覆盖不同侧面：**题材联动是"可参与"的针对性来源**（2026-09-15
+    用户指令：开盘即涨停的个股买不进，只作题材集中度的参考信息，转而挖掘该题材内
+    尚未涨停、有联动机会的可参与个股），事件池是消息源，涨停池是大幅拉升的极端
+    表现，热股榜是关注度信号。装配顺序见 `_SOURCE_ORDER`（联动股最前）。
 
     :param active_events: 活跃事件行（`store.list_events` 的结果）。管线内**预取一次
         复用**（与 `limit_up_pool` 同型，P2-4 的取数单点原则）；缺省 None 时本函数
         自己取（独立调用方/测试的兼容路径）。传入 `[]` 表示"已取过、结果为空"，
         **不等于**缺省——不会触发重复取数。
+    :param linkages: 题材联动候选（`mine_theme_linkage` 的产物，管线预取）。缺省 None
+        = 未预取 → 本来源缺席（**不静默**：审计里显式记 note，见下）。
+    :param audit: 装配审计字典（就地写入）。补这一个出参而不是改返回类型：
+        「哪几只被剔除、各来源进来几只」是口径可核对的前提，而返回类型是既有契约
+        （route / 调度 / 多处测试都在用）。记录项：
+        `sources`（各来源计数）、`excluded_open_sealed`（被剔除的开盘即涨停明细）、
+        `theme_linkage`（题材集中度与补入结果）。
     """
     symbols: dict[str, dict] = {}
     # G-2（2026-09-12 评审批次 5）：本函数由 async 管线直接 await（调度 15:00+ 与
@@ -214,8 +253,39 @@ async def candidate_pool(
     except Exception as exc:
         log.warning("picks candidate: events failed: %s", exc)
 
+    # ①b 题材联动挖掘结果（2026-09-15 用户指令）—— 由调用方预取（同 P2-4 取数单点）。
+    # 插到最前由 `_SOURCE_ORDER` 决定，不靠插入顺序（取数天然发生在其他来源之后）。
+    n_linkage = 0
+    if linkages is None:
+        if audit is not None:
+            audit["theme_linkage"] = {
+                "note": "未预取（linkages=None）——题材联动来源本轮缺席，不臆造",
+                "themes": [],
+                "added": 0,
+            }
+    else:
+        for c in linkages:
+            sym = str(c.get("symbol") or "")
+            if sym and sym not in symbols:
+                symbols[sym] = {"from": "theme_linkage", "prio": 2, "linkage": c}
+                n_linkage += 1
+
     # ② 当日涨停池（突发大幅拉升的极端表现）—— 由调用方预取（P2-4）
+    # ⚠️ **开盘即涨停的成员在此被剔除**（2026-09-15 用户指令）：首封 ≤ 09:30 的
+    # 一字板／秒板，全天零买入机会，放进候选池只会产出"看着很强但买不进"的组合。
+    # 它们不作候选，但**不浪费**——其题材集中度正是 ①b 联动挖掘的输入（见
+    # `mine_theme_linkage`）。判据委托 `picks/tradability.is_open_sealed` 单点实现。
+    excluded: list[dict] = []
     for r in limit_up_pool or []:
+        if is_open_sealed(getattr(r, "first_seal_time", None)) is True:
+            excluded.append(
+                {
+                    "symbol": r.symbol,
+                    "name": getattr(r, "name", None),
+                    "first_seal_time": getattr(r, "first_seal_time", None),
+                }
+            )
+            continue
         symbols.setdefault(r.symbol, {"from": "limit_up", "prio": 1})
 
     # ③ 热股榜 top 20（关注度信号，B1 同源）
@@ -225,13 +295,29 @@ async def candidate_pool(
     except Exception as exc:
         log.warning("picks candidate: hot list failed: %s", exc)
 
+    # 装配：按来源优先级排序后截断。`sorted` 稳定 ⇒ 同档内保持插入序，
+    # 既有来源（事件 → 事件题材 → 涨停池 → 热榜）的相对次序与改动前**逐字一致**，
+    # 唯一变化是联动股整体前移（这正是本轮规则的目的）。
+    ordered = sorted(symbols.items(), key=lambda kv: _SOURCE_ORDER.get(kv[1]["from"], 3))
     out = []
-    for sym, meta in symbols.items():
+    for sym, meta in ordered:
         if not sym.isdigit() or len(sym) != 6:
             continue
         out.append({"symbol": sym, **meta})
         if len(out) >= CANDIDATE_CAP:
             break
+
+    if audit is not None:
+        sources: dict[str, int] = {}
+        for item in out:
+            sources[item["from"]] = sources.get(item["from"], 0) + 1
+        audit["sources"] = sources
+        audit["excluded_open_sealed"] = {
+            "count": len(excluded),
+            "items": excluded[:20],  # 明细留痕有界（不把 40 行塞进 meta）
+        }
+        tl = audit.setdefault("theme_linkage", {"themes": [], "added": 0})
+        tl["added"] = n_linkage
     return out
 
 
@@ -270,6 +356,103 @@ def limit_up_context(pool: list) -> dict:
                 t["changes"].append(r.change_pct)
             t["levels"][boards] = t["levels"].get(boards, 0) + 1
     out["market_max_boards"] = max(boards_all) if boards_all else 0
+    return out
+
+
+async def mine_theme_linkage(
+    svc,
+    lu_ctx: dict,
+    snapshot_rows: list[dict] | None,
+    *,
+    per_theme: int = CANDIDATE_PER_THEME,
+) -> dict:
+    """题材联动挖掘：涨停集中的题材 → 该题材内**尚未涨停**的可参与个股。
+
+    **为什么需要**（2026-09-15 用户指令）：开盘即涨停的个股全天买不进，把它选进
+    组合只是拿"事后已知的极强标的"抬高名义胜率。它们的正确用法是**参考信息**——
+    它们揭示当日资金集中的方向；既然该方向上多数个股已被封死，就在同一个官方题材
+    容器里找**还没被封死**的票：资金外溢的第一落点、且此刻报价可成交。
+
+    **为什么用"成分重叠"而不是题材名匹配**：涨停原因是同花顺的动态标签（「功能糖」），
+    官方概念是目录名（「代糖概念」），名字对不上。按成分重叠反向定位容器是既有的
+    `official_match` 口径（同一组常量），挖出来的容器与卡片上显示的官方概念必然是
+    同一个——不会出现"卡片说代糖、挖掘用功能糖"这种口径分裂。
+
+    诚实降级（三态纪律）：快照不可用 / 无题材达到集中阈值 / 无官方容器 —— 全部
+    返回 `note` 说明原因并给空结果，**不臆造**候选（判不了不冒充可参与）。
+
+    :returns: ``{"themes": [...], "items": [...], "note": str|None}``。
+        `items` 元素为 `linkage_candidates` 的产物（含 basis / tradability），
+        由 `candidate_pool` 组装进候选池。
+    """
+    out: dict = {"themes": [], "items": [], "note": None}
+    stats = (lu_ctx or {}).get("themes") or {}
+    records = (lu_ctx or {}).get("records") or {}
+    if not stats or not records:
+        out["note"] = "当日无涨停池题材数据——联动挖掘跳过"
+        return out
+
+    focus = theme_focus(stats, limit_up_total=len(records))
+    if not focus:
+        out["note"] = (
+            f"无题材达到集中阈值（题材内涨停 ≥{MIN_THEME_LIMIT_UPS} 家"
+            f"且占当日涨停 ≥{MIN_THEME_SHARE:.0%}）——不硬挖"
+        )
+        return out
+    if svc is None:
+        out["note"] = "题材目录服务不可用——无官方成分可挖"
+        return out
+    if not snapshot_rows:
+        out["note"] = "全市场快照不可用——可参与性依赖实时盘口，跳过而不臆造"
+        return out
+
+    # G-2：同步 SQLite 全表读（theme_member 7 万行）→ 线程池，不占事件循环
+    from app.picks.board_surge import build_theme_index
+
+    symbol_index, _names = await asyncio.to_thread(build_theme_index)
+    sizes, members_by_code = index_views(symbol_index)
+    snapshot_by = {r["symbol"]: r for r in snapshot_rows if r.get("symbol")}
+    sealed = set(records)
+
+    items: list[dict] = []
+    themes_out: list[dict] = []
+    for f in focus:
+        containers = resolve_containers(set(f["symbols"]), symbol_index, sizes)
+        if not containers:
+            themes_out.append(
+                {**f, "container": None, "container_code": None, "candidates": 0,
+                 "note": "无官方容器可挂靠（成分重叠 < 2）"}
+            )
+            continue
+        container = containers[0]
+        cands = linkage_candidates(
+            container=container,
+            member_symbols=members_by_code.get(container["code"]) or [],
+            sealed_symbols=sealed,
+            snapshot_by=snapshot_by,
+            theme_limit_ups=f["count"],
+            theme_stage=_theme_stage_of(lu_ctx, f["theme"]).get("stage"),
+            per_theme=per_theme,
+        )
+        items.extend(cands)
+        themes_out.append(
+            {
+                **f,
+                "container": container["name"],
+                "container_code": container["code"],
+                "container_hits": container["hits"],
+                "candidates": len(cands),
+                "note": None if cands else "容器内无可参与成分（未涨停但涨幅/成交额/快照均达标者为 0）",
+            }
+        )
+    out["themes"] = themes_out
+    out["items"] = items
+    if not items:
+        out["note"] = "题材集中已识别，但容器内无合格可参与成分（见 themes[].note）"
+    log.info(
+        "picks 题材联动：集中题材 %s，补入可参与候选 %d 只",
+        [t["theme"] for t in themes_out], len(items),
+    )
     return out
 
 
@@ -682,6 +865,15 @@ async def deep_score_candidates(
                 "symbol": sym, "name": c["name"], "price": c["price"], "change_pct": c["change_pct"],
                 "halt_risk": halt,
                 "halt_risk_labels": risk_labels(halt),
+                # 可参与性（2026-09-15 用户指令）：候选池已剔除"开盘即涨停"，故这里
+                # 正常路径恒为「可参与」——它是**保证**的透出，而不是事后补的标签。
+                # 尾盘板等非开盘即封的涨停股走 sealed=True 分支，依据文案写明首封时间。
+                "tradability": assess_tradability(
+                    sealed=bool(lu), first_seal_time=(lu or {}).get("first_seal_time")
+                ),
+                # 入选来源与来源依据：题材联动股要能让用户看见"它是从哪个题材挖出来的"
+                "source": c.get("from"),
+                "source_basis": (c.get("linkage") or {}).get("basis"),
                 # 估值此前**只用于基本面打分，没有透出到卡片**——选股页因此永远看不到 PE，
                 # 而个股详情页有（走 /api/quotes 的 fill_valuation）。同一标的两个口径不一致。
                 "pe_ttm": pe,
@@ -752,6 +944,10 @@ def assemble_card(k: dict) -> dict:
         # 筹码信号（派发警示/启动观察）+ meta 三档置信（规则版）
         "chip_signal": k.get("chip_signal"),
         "confidence": k.get("confidence"),
+        # 可参与性（2026-09-15 用户指令）+ 入选来源（题材联动股可追溯）
+        "tradability": k.get("tradability"),
+        "source": k.get("source"),
+        "source_basis": k.get("source_basis"),
     }
 
 
@@ -813,7 +1009,21 @@ async def generate_picks_pipeline(
     # ① 当日涨停池（**单次取数**，下游三处复用；P2-4）
     td, limit_up_pool = await _fetch_limit_up_pool(hub)
 
-    # ①a 候选池
+    # ①a 涨停板生态上下文（梯队地位判定的题材级证据）—— 纯函数，池已取。
+    # ⚠️ 位置在候选池**之前**（2026-09-15 起）：题材联动挖掘要用它的题材集中度
+    # 定位容器。此前它在候选池之后（①c），只是因为它当时的唯一消费方是深评。
+    lu_ctx = limit_up_context(limit_up_pool)
+
+    # ①b 题材联动挖掘（2026-09-15 用户指令）：把"开盘即涨停"的参考价值兑现成
+    # 可参与候选——涨停集中的题材内，尚未涨停、有联动机会的官方成分股。
+    # 全市场快照只用于**筛选**（谁可参与），最终价格仍由 ② 的批量行情同源提供。
+    # 快照不可用 → 该来源诚实缺席（note 写进 meta），不臆造。
+    snapshot_rows = list(getattr(deps.snapshot_service, "snapshot", None) or [])
+    linkage = await mine_theme_linkage(svc, lu_ctx, snapshot_rows)
+    audit: dict = {"theme_linkage": {"themes": linkage.get("themes") or [],
+                                     "note": linkage.get("note")}}
+
+    # ①c 候选池
     # G-2 / 取数单点（P2-4 同型）：活跃事件**取一次**（同步 SQLite + selectinload →
     # 线程池），下游三处复用（候选池题材反查 / regime 的 ev_texts / 消息命中索引）。
     # 此前同一条查询在本管线里跑了**三遍**。失败 → 空表，下游各自诚实降级（不臆造）。
@@ -824,10 +1034,14 @@ async def generate_picks_pipeline(
         active_events = []
 
     candidates = await candidate_pool(
-        hub, store, svc, limit_up_pool=limit_up_pool, active_events=active_events
+        hub, store, svc,
+        limit_up_pool=limit_up_pool,
+        active_events=active_events,
+        linkages=linkage.get("items") or [],
+        audit=audit,
     )
 
-    # ①b 昨日组合成员兜底纳入（carryover）：
+    # ①d 昨日组合成员兜底纳入（carryover）：
     # 组合稳定性要求 incumbent 有"被重新评估的权利"——否则一只票今天没涨停、
     # 没上热榜、事件又过期，就会被静默踢出，组合天天大换血（跨日回放实测：
     # 纯涨停股候选池下日均换手 60%）。纳入后它仍要重新评分，分数不够照样被换，
@@ -840,10 +1054,7 @@ async def generate_picks_pipeline(
             candidates.append({"symbol": s, "from": "carryover", "prio": 1})
     carryover_set = set(prev_symbols) - have
 
-    # ①c 涨停板生态上下文（梯队地位判定的题材级证据）—— 纯函数，池已取
-    lu_ctx = limit_up_context(limit_up_pool)
-
-    # ①d 市场基准（上证当日涨跌幅）：题材基准匹配不到时的诚实回退
+    # ①e 市场基准（上证当日涨跌幅）：题材基准匹配不到时的诚实回退
     market_pct = None
     try:
         ov = await hub.provider.get_market_overview()
@@ -853,15 +1064,26 @@ async def generate_picks_pipeline(
     except Exception as exc:
         log.warning("picks: market overview failed: %s", exc)
 
-    # ② 批量快照 + 预筛（剔 ST/退/无行情）
+    # ② 批量快照 + 预筛（剔 ST/退/无行情/**无交易权限板块**）
     quotes = await _batch_quotes(hub, [c["symbol"] for c in candidates])
     deep: list[dict] = []
+    board_excluded: list[dict] = []
     for c in candidates:
         q = quotes.get(c["symbol"])
         if q is None or q.price is None or q.price <= 0:
             continue
         name = q.name or ""
         if "ST" in name.upper() or "退" in name:
+            continue
+        # 板块权限（用户 2026-09-15「只有主板的权限现在」）：创业板/科创板/北交所/B 股
+        # 进不了组合 —— 与"买不进"同义。判据单点 = `picks/tradability.is_tradable`。
+        # 放在**这里**而不是各来源入口：候选池有 4 路来源，逐一过滤 = 四份判据；
+        # 这里是与 ST/退 同一处的**既有可交易性收口**，一处即全覆盖。
+        if not is_tradable(c["symbol"], name):
+            board_excluded.append(
+                {"symbol": c["symbol"], "name": name,
+                 "board": board_label(c["symbol"], name), "from": c.get("from")}
+            )
             continue
         c.update({"name": name, "price": q.price, "change_pct": q.change_pct, "amount": q.amount})
         c["_prio"] = c.get("prio", 0) * 1000 + (q.change_pct or 0)
@@ -1060,6 +1282,19 @@ async def generate_picks_pipeline(
         "market_pct": market_pct,
         "limit_up_count": len(lu_ctx["records"]),
         "market_max_boards": lu_ctx["market_max_boards"],
+        # 可参与性口径留痕（2026-09-15 用户指令）：被剔除的开盘即涨停明细 +
+        # 题材联动挖掘结果 + 候选池各来源计数。没有这三项，"为什么今天名单里
+        # 没有某只票"在复盘时就成了无解释的数字变化（与本文件 ⑤b 同源纪律）。
+        "tradability_policy": {
+            "open_seal_cutoff": "09:30",
+            "excluded_open_sealed": audit.get("excluded_open_sealed") or {"count": 0, "items": []},
+            "theme_linkage": audit.get("theme_linkage") or {},
+            "candidate_sources": audit.get("sources") or {},
+            # 板块权限（2026-09-15 用户「只有主板的权限」）：可交易板块白名单 +
+            # 被剔除明细。它解释了"为什么候选池明明有 40 只、深评只有十几只"。
+            "tradable_boards": "沪市主板 / 深市主板（含主板 ST）",
+            "excluded_board": {"count": len(board_excluded), "items": board_excluded[:20]},
+        },
         "generated_at": beijing_now().isoformat(),
     }
     # G-2：落库是同步 SQLite 写（+ 大对象 json.dumps）→ 线程池（判据见 candidate_pool 顶部）

@@ -191,6 +191,12 @@ def test_collect_picks_missing_reviews_marks_gap():
 
 
 def _payload():
+    """opportunities payload：`stocks`=涨停梯队（仅参考）、`participants`=可参与候选。
+
+    2026-09-15 口径变更后 `top_watch_stocks` 的 `items` 取 participants、
+    `reference_items` 取 stocks；本 fixture 两侧都造，才能同时钉住"谁入选"与
+    "谁只作参考"——只造一侧会让另一半静默失去覆盖。
+    """
     return {
         "trade_date": "20260904",
         "hot_available": True,
@@ -198,49 +204,135 @@ def _payload():
         "themes": [
             {
                 "theme": "算力", "stage": "发酵", "strength_tier": "T1",
+                "participants": [
+                    # linkage=高 → tier 1
+                    {"symbol": "300011", "name": "P1", "change_pct": 7.2,
+                     "linkage": {"level": "高", "basis": "题材发酵 · 已进临板区"},
+                     "tradability": {"level": "可参与", "basis": "未封在涨停板，报价可成交"},
+                     "basis": "题材内涨停 4 家形成集中，本股尚未涨停（7.2%）"},
+                    # linkage=中 → tier 2
+                    {"symbol": "300012", "name": "P2", "change_pct": 3.4,
+                     "linkage": {"level": "中", "basis": "题材发酵 · 涨幅 3.4% 有跟进迹象"},
+                     "tradability": {"level": "可参与", "basis": "未封在涨停板，报价可成交"},
+                     "basis": "题材内涨停 4 家形成集中，本股尚未涨停（3.4%）"},
+                    # linkage=低 → 一律不入选（三态纪律：绝不拿"低"凑数）
+                    {"symbol": "300013", "name": "P3", "change_pct": 1.1,
+                     "linkage": {"level": "低", "basis": "联动迹象弱"},
+                     "tradability": {"level": "可参与", "basis": "未封在涨停板，报价可成交"},
+                     "basis": "联动迹象弱"},
+                ],
                 "stocks": [
                     {"symbol": "300001", "name": "A", "role": "龙头", "boards": 3,
-                     "change_pct": 10.0, "reason": "核心",
+                     "change_pct": 10.0, "reason": "核心", "first_seal_time": "09:25:00",
+                     "tradability": {"level": "不可参与",
+                                     "basis": "开盘即涨停（竞价即封，首封 09:25）——全天无买入机会"},
                      "distinctiveness": {"level": "高", "basis": "人气第2"},
                      "certainty": {"level": "高", "basis": "题材发酵"}},
                     {"symbol": "300002", "name": "B", "role": "跟风", "boards": 1,
-                     "change_pct": 5.0, "reason": None,
+                     "change_pct": 5.0, "reason": None, "first_seal_time": "14:05:00",
+                     "tradability": {"level": "不可参与", "basis": "已封在涨停板"},
                      "distinctiveness": {"level": "低", "basis": "无人气"},
                      "certainty": {"level": "中", "basis": "题材发酵"}},
-                    {"symbol": "300003", "name": "C", "role": "中军", "boards": 2,
-                     "change_pct": 7.0, "reason": None,
-                     "distinctiveness": {"level": "中", "basis": "2板"},
-                     "certainty": {"level": "unknown", "basis": "阶段缺失"}},
                 ],
             },
             {
                 "theme": "机器人", "stage": "启动", "strength_tier": "T2",
+                "participants": [
+                    {"symbol": "600110", "name": "Q1", "change_pct": 5.0,
+                     "linkage": {"level": "中", "basis": "题材启动 · 涨幅 5.0% 有跟进迹象"},
+                     "tradability": {"level": "可参与", "basis": "未封在涨停板，报价可成交"},
+                     "basis": "题材内涨停 3 家形成集中，本股尚未涨停（5.0%）"},
+                    # unknown（题材阶段缺失）→ 不入选
+                    {"symbol": "600111", "name": "Q2", "change_pct": 4.0,
+                     "linkage": {"level": "unknown", "basis": "题材阶段缺失"},
+                     "tradability": {"level": "可参与", "basis": "未封在涨停板，报价可成交"},
+                     "basis": "题材阶段缺失"},
+                ],
                 "stocks": [
                     {"symbol": "600100", "name": "D", "role": "首板", "boards": 1,
-                     "change_pct": 10.0, "reason": None,
+                     "change_pct": 10.0, "reason": None, "first_seal_time": "10:31:00",
+                     "tradability": {"level": "不可参与", "basis": "已封在涨停板（首封 10:31）"},
                      "distinctiveness": {"level": "高", "basis": "人气第5"},
                      "certainty": {"level": "中", "basis": "题材启动"}},
-                    {"symbol": "600101", "name": "E", "role": "首板", "boards": 1,
-                     "change_pct": 3.0, "reason": None,
-                     "distinctiveness": {"level": "高", "basis": "人气第8"},
-                     "certainty": {"level": "低", "basis": "题材启动"}},
                 ],
             },
         ],
     }
 
 
-def test_top_watch_tier_order_and_exclusion():
+def test_top_watch_items_are_participants_only():
+    """`items` 只收可参与的联动候选；低/unknown 不入选；涨停梯队不在 items 里。"""
     out = top_watch_stocks(_payload())
     symbols = [i["symbol"] for i in out["items"]]
-    # T1: cert高+dist高；T2: cert高；T3: cert中+dist高（D）
-    assert symbols == ["300001", "600100"]
+    # tier1（linkage 高）在前，tier2 按涨幅降序（600110 5.0% > 300012 3.4%）
+    assert symbols == ["300011", "600110", "300012"]
     assert out["items"][0]["tier"] == 1
-    # unknown/低一律不入选
-    assert "300003" not in symbols and "300002" not in symbols and "600101" not in symbols
+    # 三态纪律：低/unknown 一律不入选
+    assert "300013" not in symbols and "600111" not in symbols
+    # 涨停梯队**一只都不在** items（旧口径的病根：名单全是买不进的票）
+    for sym in ("300001", "300002", "600100"):
+        assert sym not in symbols
+    # 未涨停 ⇒ 不臆造封板语义字段
+    assert out["items"][0]["role"] is None and out["items"][0]["boards"] is None
+    assert out["items"][0]["certainty"] is None
     assert out["criteria"] and out["trade_date"] == "20260904"
+
+
+def test_top_watch_reference_items_are_ladder_with_tradability():
+    """涨停梯队进 `reference_items`，且每只都带可参与性判定（开盘即涨停须被点名）。"""
+    out = top_watch_stocks(_payload())
+    ref = {r["symbol"]: r for r in out["reference_items"]}
+    assert set(ref) == {"300001", "300002", "600100"}
+    assert all(r["reference_only"] is True for r in out["reference_items"])
+    assert all((r["tradability"] or {}).get("level") == "不可参与" for r in out["reference_items"])
+    assert "开盘即涨停" in ref["300001"]["tradability"]["basis"]
+    assert ref["300001"]["first_seal_time"] == "09:25:00"
+    assert out["reference_total"] == 3
+    # 摘要文案必须让"上面那批买不进"一眼可见，且**不得带 Markdown 记号**
+    # （这些字符串直接进 innerText，`**…**` 会被原样显示出来——2026-09-15 实测）
+    assert "仅作题材集中度的参考信息" in out["reference_criteria"]
+    assert "**" not in out["reference_criteria"] and "**" not in out["criteria"]
 
 
 def test_top_watch_limit_keeps_strongest():
     out = top_watch_stocks(_payload(), limit=1)
-    assert [i["symbol"] for i in out["items"]] == ["300001"]
+    assert [i["symbol"] for i in out["items"]] == ["300011"]
+    assert [i["symbol"] for i in out["reference_items"]] == ["300001"]  # 梯队按连板降序
+
+
+def test_top_watch_reference_drops_boards_without_permission():
+    """参考区也不展示无交易权限的板块，且**计数留痕**（不是静默消失）。
+
+    2026-09-15 用户「创业板的不进，只有主板的权限现在」。参考区虽是"仅参考"，
+    但它是给人看的名单——留着买不了的票只会占位并误导注意力。
+    """
+    payload = {
+        "trade_date": "20260915",
+        "hot_available": True,
+        "caveats": [],
+        "board_excluded_reference": 1,
+        "themes": [
+            {
+                "theme": "固态电池", "stage": "启动", "strength_tier": "T1",
+                "participants": [],
+                "stocks": [
+                    {"symbol": "002882", "name": "金龙羽", "board": "深市主板", "tradable": True,
+                     "boards": 1, "change_pct": 9.99, "first_seal_time": "09:30:06",
+                     "tradability": {"level": "不可参与", "basis": "已封在涨停板"},
+                     "distinctiveness": {"level": "低", "basis": ""},
+                     "certainty": {"level": "高", "basis": ""}},
+                    {"symbol": "301662", "name": "宏工科技", "board": "创业板", "tradable": False,
+                     "boards": 1, "change_pct": 20.0, "first_seal_time": "09:31:00",
+                     "tradability": {"level": "不可参与", "basis": "已封在涨停板"},
+                     "distinctiveness": {"level": "低", "basis": ""},
+                     "certainty": {"level": "高", "basis": ""}},
+                ],
+            }
+        ],
+    }
+    out = top_watch_stocks(payload)
+    assert [r["symbol"] for r in out["reference_items"]] == ["002882"]
+    assert out["reference_items"][0]["board"] == "深市主板"
+    assert out["board_excluded_reference"] == 1
+    assert "非主板" in out["reference_criteria"]
+    assert "沪市主板" in out["tradable_boards"]
