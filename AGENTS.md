@@ -62,6 +62,12 @@ cd apps/web && TZ=UTC CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run
 # ⇒ **"本地全绿" 不构成 CI 绿；时区是宿主属性，不改代码也能翻断言**。
 cd backend && .venv/bin/python -m pyflakes app tests scripts   # 0（scripts 已纳入口径，P2-18）
 python3 scripts/doc-health.py                    # 文档体检：0 待处理（收尾必跑，见 kb/07 §8.2）
+# ⚠️ **新增任何「路径存在性」判据前，先问一句：它在 CI 检出里长什么样？**
+# 判定面必须取自 git 跟踪清单（`_tracked_paths/_tracked_dirs`），**不要用 `Path.exists()`**：
+# `.workbuddy/`、`data/picks/` 等都是 gitignored ⇒ CI 检出里没有 ⇒ 用文件系统口径必然
+# 「本地恒绿 / CI 恒红」（2026-09-15 N/O 两项实测，见 [[KB-ENG-95]]）。
+# 怀疑「本地绿/CI 红」时，**先用干净检出复现**（比推 CI 等结果快得多）：
+#   git worktree add --detach /tmp/ci-sim HEAD && (cd /tmp/ci-sim && python3 scripts/doc-health.py)
 # 生产构建前必须先停 dev server（.next 冲突已踩两次）：
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
