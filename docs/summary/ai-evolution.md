@@ -19,9 +19,30 @@
   → 默认只输出建议议程；管理员显式开启后才分级执行：
      A 类 调参数（自动生效 + 30 日劣化自动回滚）
      B 类 改文档 / 写 KB
-     C 类 改代码（worktree 沙箱 → LLM diff → apply --check → 全量门禁 → commit → ff-only 合并；每日 ≤1）
+     C 类 改代码（worktree 沙箱 → LLM diff → **diff 级授权** → apply --check →
+                **git 权威复核** → 全量门禁 → 明确暂存 → 隔离分支 commit；
+                **只提议不落地**，每日 ≤1）
   → 后置守护：回归门禁 + 劣化回滚 + 红线清单 + 预算上限
 ```
+
+**C 类「只提议不落地」契约（2026-09-15 加固，审计 O1 / 账本 BUG-003）**：
+执行器产出 = patch 文件（归档 `.workbuddy/evolution-patches/`）+ `evolution/*` 隔离分支上的
+commit + 审计记录，**不合并回主分支**；落地一律走 `codex/*` 分支 → PR → 完整 CI → 网页版审查。
+返回值显式给出 `merged=False` / `review_required=True`。逐层判据（任一层拒绝即终止）：
+
+| 层 | 判据 |
+|---|---|
+| 1 白名单 | 仅 `backend/app/**` 的 `*.py`。⚠️ **`backend/tests/**` 禁止**——门禁在**宿主解释器**跑 pytest，允许 AI 生成测试 = 允许 AI 在宿主上执行任意代码；本仓无「无宿主凭据/无外网/只读挂载/限资源」的隔离容器 ⇒ 不拿 worktree 冒充沙箱 |
+| 2 禁改清单 | migrations（DB 结构）/ `config.py` / `db.py` / `ttl_cache.py` / `__init__`（导出面）/ `conftest.py` |
+| 3 受保护面 | 工作流（`.github/` 等）、依赖与构建配置、迁移、凭据文件、治理与文档（`AGENTS.md`/`docs/`/`skills/`/`.workbuddy/`） |
+| 4 diff 级授权（**应用前**） | 解析 unified diff **全部**文件头，逐个拒绝：未声明文件、绝对路径、`..` 穿越、仓库外、符号链接逃逸、重命名/删除/新增 |
+| 5 git 权威复核（**应用后**） | `git diff --name-status --no-renames` 取**实际**变更集合与批准集合逐一比对；**判据不与被判对象同源** |
+| 6 门禁 | 沙箱内 pytest 全量 + pyflakes，600s 超时 |
+| 7 暂存 | 仅 `git add -- <已验证文件>`；**禁止 `git add -A`**（无范围暂存会卷入意外产物） |
+| 8 落地 | **无**——不合并、不推送 |
+
+⚠️ 只校验议程声明的 `files` 是不够的：那校验的是**意图**，patch 才是**事实**，真正的越界
+发生在「声明 A、实际改 B」这一层。见 [[KB-DEC-026]] [[KB-ENG-98]]。
 
 - 安全默认：`ASHARE_AGENT_AUTONOMY_ENABLED=0`、`ASHARE_AGENT_CODE_CHANGE_ENABLED=0`。
   只有管理员显式设为 `1` 才能启用相应能力；C 类执行要求两个开关同时开启。
