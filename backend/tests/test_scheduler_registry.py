@@ -32,6 +32,24 @@ async def _forever(stop: asyncio.Event) -> None:
         await asyncio.sleep(0.01)
 
 
+async def _wait_until(pred, *, timeout: float = 2.0, step: float = 0.005) -> bool:
+    """等到 `pred()` 为真（True）或超时（False）。
+
+    ⚠️ **为什么不用「固定睡眠 + 计数断言」**（2026-09-15 实测偶发，账本 `BUG-008`）：
+    `await asyncio.sleep(0.2)` 之后断言"至少跳了 2 拍"，而循环节拍是**墙钟**驱动的
+    —— 满载时这 0.2s 可能只够跑 1 拍，于是断言把**循环还在转**误报成**循环死了**
+    （实测：全量跑 1 failed / 单独跑 8/8 绿）。
+    判据应当等**"第 N 拍发生过"这个事实**，并给足超时；**只有超时才算真失败**。
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if pred():
+            return True
+        await asyncio.sleep(step)
+    return pred()
+
+
 def test_undeclared_switch_fails_fast():
     """漏登记的开关在测试环境不会被关掉 —— 必须启动期就炸，不能静默放行。"""
     reg = SchedulerRegistry()
@@ -152,7 +170,10 @@ def test_failed_tick_does_not_kill_the_loop():
 
         reg.add_periodic("flaky", tick, interval=0.01)
         await reg.start()
-        await asyncio.sleep(0.2)
+        # 等「第 2 拍」这个**事实**发生，而不是等一个固定时长（理由见 `_wait_until`）
+        assert await _wait_until(lambda: n["i"] >= 2), (
+            "第一拍抛异常后循环必须继续（2s 内始终没出现第 2 拍 ⇒ 循环真的死了）"
+        )
         await reg.shutdown()
 
         assert n["i"] >= 2, "第一拍抛异常后循环必须继续"

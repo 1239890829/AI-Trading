@@ -62,6 +62,12 @@ cd apps/web && TZ=UTC CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run
 # ⇒ **"本地全绿" 不构成 CI 绿；时区是宿主属性，不改代码也能翻断言**。
 cd backend && .venv/bin/python -m pyflakes app tests scripts   # 0（scripts 已纳入口径，P2-18）
 python3 scripts/doc-health.py                    # 文档体检：0 待处理（收尾必跑，见 kb/07 §8.2）
+# ⚠️ **新增任何「路径存在性」判据前，先问一句：它在 CI 检出里长什么样？**
+# 判定面必须取自 git 跟踪清单（`_tracked_paths/_tracked_dirs`），**不要用 `Path.exists()`**：
+# `.workbuddy/`、`data/picks/` 等都是 gitignored ⇒ CI 检出里没有 ⇒ 用文件系统口径必然
+# 「本地恒绿 / CI 恒红」（2026-09-15 N/O 两项实测，见 [[KB-ENG-95]]）。
+# 怀疑「本地绿/CI 红」时，**先用干净检出复现**（比推 CI 等结果快得多）：
+#   git worktree add --detach /tmp/ci-sim HEAD && (cd /tmp/ci-sim && python3 scripts/doc-health.py)
 # 生产构建前必须先停 dev server（.next 冲突已踩两次）：
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
@@ -75,7 +81,9 @@ lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=
 > ⚠️ **同轮曾出现 1 项偶发**（当时 load≈26，8 核机器上我并发跑了前端全量）：
 > `test_provider_budget::test_remaining_budget_is_shared_across_sources` 断言 `hang.calls==1` 失败，
 > 根因是 s0 的**墙钟**开销在满载下超出 0.15s 预算 ⇒ 第二个源被**直接跳过**（单独跑绿）
-> ⇒ 已登记 `BUG-007`（**CI 冒烟风险**：runner 更慢更抖），详见账本 §6.39）
+> ⇒ 已登记并于**同日修复** `BUG-007`（§6.40）——复读该判据时发现它**既会假红也会假绿**：
+> 阈值型（`elapsed < 0.3`）+ 仅 1.5× 余量 ⇒ 满载下偶发假红；而注入"每源一份配额"的**真缺陷**时
+> 它**完全漏判**（缺陷形态 0.25s 恰好落在阈值之下）⇒ 已改为**结构关系判据**（第二个源拿到的是"残值"）
 > （2026-09-15 弹窗外壳统一轮实测；较上一值「后端 3088 / 前端 561·61」（详情弹窗化轮）增量
 > **后端 ±0 项**（本轮**纯前端改动**，git 核对 `backend/` 无代码改动；仍照跑一遍，
 > 实测 **3026 passed / 62 skipped**，与上轮**逐字一致**）
@@ -625,13 +633,17 @@ curl 先行 → 记录字段口径与类型陷阱 → 多采样找规律 → fix
 - **日常开发一律在 `develop`**；`master` 只收**验证通过的合并**。
   用户原话：「以后就在这个分支上开发，没问题的提交才合并到 master，**或者是你觉得可以合并的时候再合并**」
   ⇒ 授权范围 = 我**可自行判断**何时把 `develop` 合进 `master`，不必每次请示；**但不要在没跑绿门禁时合**。
-- **合并方式**：`master` 是 `develop` 的祖先时走**纯快进**（`git push origin develop:master`），
-  不造合并提交；不可快进时再谈 merge/rebase。
+- **合并方式（两种都接受；按"要不要留 PR 记录"选，同一轮别混用）**：
+  · **纯快进**：`master` 是 `develop` 的祖先时可直接 `git push origin develop:master`（不造合并提交）；
+  · **走 PR**（用户 2026-09-15 实际采用）：网页开 PR 再合并 ⇒ 产生 **merge 提交**
+    （首个实例：`0a5b5b2 Merge pull request #1 from 1239890829/develop`）。好处是**留下评审记录与 CI 结论**，
+    代价是 master 历史出现合并点、`git log --first-parent` 才清爽。
+  ⚠️ 不要用 `--force`/rebase 改写 master 历史。
 - **历史事实**：此前 40+ 提交堆积在 `review/full-audit-20260914`（该分支已于 2026-09-15 合并入 master 后删除）。
-- ⚠️ **CI 触发条件的坑（务必先看这条）**：`.github/workflows/ci.yml` 现在只写
-  `on: push: branches: [master, main]` + `pull_request` ⇒ **推 `develop` 不会跑 CI**，
-  要 CI 反馈只能推 master 或开 PR。**若要让开发分支也享受 CI，需把 `develop` 加进 `push.branches`**
-  （一行改动；已向用户提出，待其确认后执行）。
+- **CI 触发条件（2026-09-15 已修）**：`on: push: branches: [master, main, **develop**]` + `pull_request`
+  ⇒ **推 `develop` 就会跑 CI**（原只写 master/main ⇒ 开发分支拿不到任何反馈，门禁被推迟到合并那一刻）。
+  ⚠️ 别再把它删回去；三份 job（后端 pytest+pyflakes / 前端 tsc+vitest+eslint+`next build` / 文档体检）
+  在开发分支上提前跑，**只增反馈、不减约束**。
 - ⚠️ **`gh` 工具**：已装在本机 `~/.local/bin/gh`（v2.100.0；该目录**不在非交互 shell 的 PATH** 里，
   脚本里用绝对路径）。**尚未认证** ⇒ `gh auth login` 后我才能代读 CI 运行/日志与建 PR。
   本环境 `github.com` 需走本地代理 `127.0.0.1:7897`（沙箱代理 51931 到不了），`api.github.com` 可直连。

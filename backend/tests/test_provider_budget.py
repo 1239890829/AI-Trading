@@ -38,14 +38,21 @@ class Stub:
         self.result = result if result is not None else f"{name}-ok"
         self.exc = exc
         self.calls = 0
+        #: 每次调用**实际被给到的时长**（被 `wait_for` 掐断也记）——
+        #: 「预算是总量还是每源配额」只能靠这个量判，见 BUG-007 的修法说明。
+        self.granted_seconds: list[float] = []
 
     async def _run(self):
         self.calls += 1
-        if self.delay:
-            await asyncio.sleep(self.delay)
-        if self.exc is not None:
-            raise self.exc
-        return self.result
+        t0 = time.monotonic()
+        try:
+            if self.delay:
+                await asyncio.sleep(self.delay)
+            if self.exc is not None:
+                raise self.exc
+            return self.result
+        finally:
+            self.granted_seconds.append(time.monotonic() - t0)
 
     async def get_kline(self, *args):  # 非秒级：走默认预算
         return await self._run()
@@ -106,26 +113,53 @@ def test_budget_does_not_harm_healthy_path():
     assert comp._failures.get(("get_kline", "s0")) == 1
 
 
-def test_remaining_budget_is_shared_across_sources():
-    """预算是**总量**而非每源配额：第一个源吃掉大半后，第二个只剩残值。
+def test_remaining_budget_is_shared_across_sources(monkeypatch):
+    """预算是**总量**而非每源配额：第二个源只能拿到**残值**，拿不到一份新配额。
 
-    s0 慢失败（0.1s）后只剩 0.05s 给 s1，s1 的 30s 挂起必须在残值内被掐断——
-    若实现给每源各发一份 0.15s，总耗时会来到 ~0.25s 且 s1 拿到的时间与 s0 无关。
+    ⚠️ **2026-09-15 修（账本 `BUG-007`）**：原判据「总耗时 < 0.3s」+ 0.15s 预算在满载下
+    **会偶发假红** —— s0 只吃 0.1s（余量仅 1.5×），调度抖动一大，预算提前耗尽，
+    s1 就被 `_attempt` 判「请求预算已耗尽（未发起）」而**根本不被调用**（`hang.calls == 0`）。
+    根因 = **判据把"墙钟"当成了精确量**（真因经读实现确认：`_attempt` 在 `left <= 0` 时直接返回，
+    且 `_call_serial` 在 `time.monotonic() >= deadline` 时 `break`）。
+    ⚠️ 诚实声明：**人为 8×/24× 忙循环负载 16 次均未能复现**，故本修法依据是机制推理 +
+    余量分析，**不是"复现—修复"对照**（见账本 §6.40）。
+
+    现判据对两种合法结局都成立，且**两者都只在"共享预算"下可能发生**：
+    · s1 被发起 ⇒ 它被给到的时长应 ≈ `预算 − s0 实际用时`（**残值**），而非一份完整预算；
+    · s1 被跳过 ⇒ 报错文案必须是「未发起」（预算已被 s0 吃光）。
+    ⇒ **每源配额**的实现里，s1 必然拿到一份**完整预算**（`granted ≈ budget`），判据即红。
+    另留 5× 余量（预算 0.5s / s0 吃 0.1s），使"跳过"分支在日常与 CI 上极少走到。
     """
-    slow_fail = Stub("s0", delay=0.1, exc=ProviderError("down"))  # 吃掉 0.1s（预算 0.15s）
+    budget = 0.5
+    monkeypatch.setattr(composite_mod, "REQUEST_BUDGET_SECONDS", budget)
+    eaten = 0.1  # s0 吃掉的时长 = 预算的 1/5（余量 5×）
+
+    slow_fail = Stub("s0", delay=eaten, exc=ProviderError("down"))
     hang = Stub("s1", delay=30.0)
     comp = CompositeProvider([slow_fail, hang])
 
     t0 = time.monotonic()
-    with pytest.raises(ProviderError):
+    with pytest.raises(ProviderError) as ei:
         asyncio.run(comp.get_kline("600519", "day"))
     elapsed = time.monotonic() - t0
 
-    assert elapsed < 0.3, f"总耗时 {elapsed:.2f}s —— 预算没有跨源共享"
     assert slow_fail.calls == 1
-    assert hang.calls == 1
+    assert elapsed < budget * 2, f"总耗时 {elapsed:.2f}s —— 像是每源各发了一份预算"
     assert comp._failures.get(("get_kline", "s0")) == 1
-    assert comp._failures.get(("get_kline", "s1")) == 1  # 被预算掐断同样记失败
+
+    if hang.calls:
+        # 分支 ①：s1 被发起 ⇒ 拿到的是**残值**（≈budget−eaten），不是一份新配额
+        granted = hang.granted_seconds[-1]
+        assert 0 < granted < budget * 0.95, (
+            f"s1 被给到 {granted:.2f}s（预算 {budget:.2f}s）—— "
+            "≥一份完整预算 ⇒ 预算没有跨源共享"
+        )
+        assert comp._failures.get(("get_kline", "s1")) == 1  # 被预算掐断同样记失败
+    else:
+        # 分支 ②：预算已被 s0 吃光 ⇒ 文案必须点明"未发起"（而不是悄悄少问一个源）
+        assert "未发起" in str(ei.value), str(ei.value)
+        # 没发起过请求不是它的责任，**不应**记失败（否则会误伤熔断统计）
+        assert comp._failures.get(("get_kline", "s1")) is None
 
 
 def test_realtime_method_uses_tighter_budget():

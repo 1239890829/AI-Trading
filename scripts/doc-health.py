@@ -825,8 +825,8 @@ ANCHOR_ALLOW: dict[tuple[str, str], str] = {
 }
 
 
-def _tracked_basenames() -> set[str] | None:
-    """**git 跟踪**文件名集合；`ROOT` 不是 git 仓库根时返回 `None`（调用方回退 `os.walk`）。
+def _tracked_paths() -> set[str] | None:
+    """**git 跟踪**的相对路径集合 = **CI 检出里存在的路径**；非 git 环境返回 `None`。
 
     先验 `rev-parse --show-toplevel == ROOT`：只有在 `ROOT` 本身就是仓库根时才认，
     避免"`ROOT` 恰好落在别的仓库内、拿到隔壁仓库的文件清单"这种静默错面。
@@ -842,12 +842,65 @@ def _tracked_basenames() -> set[str] | None:
             cwd=ROOT, capture_output=True, timeout=60, check=True)
     except (OSError, subprocess.SubprocessError):
         return None
-    names = {
-        Path(p).name
-        for p in ls.stdout.decode("utf-8", "replace").split("\0")
-        if p
-    }
-    return names or None
+    paths = {p for p in ls.stdout.decode("utf-8", "replace").split("\0") if p}
+    return paths or None
+
+
+def _tracked_basenames() -> set[str] | None:
+    """**git 跟踪**文件名集合；`ROOT` 不是 git 仓库根时返回 `None`（调用方回退 `os.walk`）。
+
+    判定面的理由见 `_repo_basenames` 的 docstring（**门禁的判定面必须等于 CI 的检出内容**）。
+    """
+    paths = _tracked_paths()
+    return {Path(p).name for p in paths} if paths else None
+
+
+def _tracked_tops() -> set[str] | None:
+    """CI 检出里**可能存在**的顶层条目名（路径首段）。`None` = 无 git 环境（合成树单测）。"""
+    paths = _tracked_paths()
+    return {p.split("/", 1)[0] for p in paths} if paths else None
+
+
+def _tracked_dirs() -> set[str] | None:
+    """CI 检出里**存在**的目录集合（含全部祖先）。`None` = 无 git 环境（合成树单测）。"""
+    paths = _tracked_paths()
+    if paths is None:
+        return None
+    dirs: set[str] = set()
+    for p in paths:
+        parts = p.split("/")
+        for i in range(1, len(parts)):
+            dirs.add("/".join(parts[:i]))
+    return dirs
+
+
+def _in_checkout_universe(tok: str, tops: set[str] | None, dirs: set[str] | None) -> bool:
+    """该路径**能不能被仓库证明**？不能就不判它（判了就是"本地绿 / CI 红"）。
+
+    为什么必须有这条（2026-09-15 实测）：`.workbuddy/` 是 **gitignored 的工作区目录**
+    （`git ls-files .workbuddy` = **0 条**）⇒ CI 检出里根本没有这棵树，而本地有。
+    于是 N（索引指针）/ O（编目闭包）**本地恒绿、CI 恒红**：CI 上实测 `N 14 处指针失效`
+    + `O 幽灵条目 5 条`（全是 `.workbuddy/**`），而后端与前端 job 全绿 ⇒ 正是
+    `_repo_basenames` 早就写明的通例被违反（**判定面必须等于检出内容**）。
+
+    判据取**两级**，缺一不可（单用任一级都实测出误报）：
+      ① **顶层段在检出里**（`.workbuddy` ∉ ⇒ 整棵树都不判）；
+      ② **父目录在检出里**（`data/picks/x.md`：`data` 在、但 `data/picks` 不在
+         —— 它是 gitignored 的运行产物目录 ⇒ 不判；而 `docs/kb/xxx.md` 的父目录
+         `docs/kb` 在 ⇒ **照判**，于是"指针指向已删的文档"这个主用途不受影响）。
+         ⚠️ 这里的示例名必须用占位词（`xxx`）：写真实形态会被 **F 项**当成代码注释里的
+         死引用判红（2026-09-15 实测，写了字面量示例当场红 1 处）。
+      仓库根下的裸名（`AGENTS.md` 等）父目录即根 ⇒ 一律判。
+    `tops/dirs = None`（无 git 环境，如合成树单测）⇒ 返回 True ⇒ 退回文件系统口径。
+    """
+    if tops is None or dirs is None:
+        return True
+    t = tok.strip("/")
+    if t.split("/", 1)[0] not in tops:
+        return False
+    if "/" not in t:
+        return True          # 仓库根下的裸名（AGENTS.md / CONTEXT.md / .env.example …）
+    return t.rsplit("/", 1)[0] in dirs
 
 
 def _repo_basenames() -> set[str]:
@@ -1264,9 +1317,16 @@ def check_memory_index() -> tuple[list[tuple[str, int]], list[tuple[str, int, st
     """
     oversized: list[tuple[str, int]] = []
     dead: list[tuple[str, int, str]] = []
+    tops = _tracked_tops()          # 判定面 = CI 检出内容（见 _in_checkout_universe）
+    ck_dirs = _tracked_dirs()
     for rel in INDEX_FILES:
         p = ROOT / rel
         if not p.exists():
+            # ⚠️ 保险丝（"索引缺失要响亮"）只对该仓库**拥有**的索引生效：
+            # `.workbuddy/memory/MEMORY.md` 是 gitignored 的本地索引 ⇒ CI 检出里必然缺席，
+            # 判红等于让 docs job 恒红（2026-09-15 实测）。
+            if not _in_checkout_universe(rel, tops, ck_dirs):
+                continue
             dead.append((rel, 1, rel))
             continue
         txt = _read(p)
@@ -1278,6 +1338,8 @@ def check_memory_index() -> tuple[list[tuple[str, int]], list[tuple[str, int, st
             for tok in index_pointer_candidates(line):
                 if PLACEHOLDER_RE.search(tok):
                     continue                  # 模板占位名（YYYY-MM-DD.md 等）
+                if not _in_checkout_universe(tok, tops, ck_dirs):
+                    continue      # 该路径在检出里本就不存在（gitignored：.workbuddy/ data/picks/ …）
                 if tok.endswith("/"):
                     ok = (ROOT / tok).is_dir() or (DOCS / tok).is_dir()
                 else:
@@ -1368,15 +1430,28 @@ def check_catalog_closure() -> tuple[list[str], list[str]]:
     if not files and not dirs:
         return ["docs/INDEX.md §0.0 编目表解析为空"], []
 
+    tops = _tracked_tops()          # 判定面 = CI 检出内容（见 _in_checkout_universe）
+    # ⚠️ 变量名**不得用 `dirs`**：上面 `files, dirs = catalog_entries()` 的 `dirs` 是
+    # **编目表里的目录条目**，撞名覆盖会让"区间行裸名继承"整段失效（本轮实测假报 38 处未登记）。
+    ck_dirs = _tracked_dirs()
+    tracked = _tracked_paths() or set()
     for rel in files:
+        if not _in_checkout_universe(rel, tops, ck_dirs):
+            continue
         if not (DOCS / rel).exists() and not (ROOT / rel).exists():
             ghosts.append(rel)
     for d in dirs:
+        if not _in_checkout_universe(d, tops, ck_dirs):
+            continue
         if not (DOCS / d).is_dir() and not (ROOT / d).is_dir():
             ghosts.append(d)
 
     for p in sorted(DOCS.rglob("*.md")):
         rel = p.relative_to(DOCS).as_posix()
+        # 反向同理：**只判检出里的文件**，否则本地未提交的草稿会被报成"未登记"
+        # （本地红 / CI 绿，同样属判定面不一致）
+        if tops is not None and f"docs/{rel}" not in tracked:
+            continue
         if rel in files or any(rel.startswith(d) for d in dirs):
             continue
         unregistered.append(rel)
@@ -1534,11 +1609,15 @@ def main() -> int:
     for f, n in idx_over:
         print(f"       {f}：{n} 字符 > {INDEX_CHAR_CAP}"
               f" ⇒ 内容应进 L3 文档、索引只留指针（kb/07 §4.4 反固化条款）")
-        if idx_dead and not quiet:
-            for f, ln, tok in idx_dead[:12]:
-                print(f"       {f}:{ln} → {tok}（全仓不存在）")
-            if len(idx_dead) > 12:
-                print(f"       …另有 {len(idx_dead) - 12} 处")
+    # ⚠️ 明细打印**不得嵌在上面的 for 里**（2026-09-15 修）：原先它嵌在 `for f, n in idx_over`
+    # 内部，于是"体积不超限、只有死指针"时（= 最需要明细的情形）**一条明细都不打** ——
+    # CI 日志只剩 FAIL 行，看不到是哪 14 处，排查被迫改走 worktree 复现。诊断信息必须在
+    # 最需要它的时候在场。
+    if idx_dead and not quiet:
+        for f, ln, tok in idx_dead[:12]:
+            print(f"       {f}:{ln} → {tok}（全仓不存在）")
+        if len(idx_dead) > 12:
+            print(f"       …另有 {len(idx_dead) - 12} 处")
     line("O 编目完整性", not cat_unreg and not cat_ghost,
          f"未登记 {len(cat_unreg)} 份 / 幽灵条目 {len(cat_ghost)} 条"
          + ("（docs/INDEX.md §0.0 ⇄ docs/**.md 双向闭包）" if not (cat_unreg or cat_ghost) else ""))
