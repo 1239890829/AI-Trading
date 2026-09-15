@@ -101,7 +101,13 @@ def select_candidates(
     规则（KB-DEC-011）：未封板 + 进入临板区 + 当日未登记。
     已封板 = 涨停后才发现 = 一律不入册；炸板后重回临板区的票视为新的临板信号
     （此前从未在涨停前提醒过 → 允许预警，回封尝试可操作）。
+
+    **板块权限**（2026-09-15 用户「创业板的不进，只有主板的权限现在」）：账户只开
+    沪深主板 ⇒ 非主板板块**不进候选**（既不入册也不提醒）。判据单点 =
+    `tradability.is_tradable`，与此处的涨限判定（`board_limit_pct`）同源同表。
     """
+    from app.picks.tradability import is_tradable
+
     out: list[dict] = []
     for row in snapshot_rows or []:
         symbol = str(row.get("symbol") or "")
@@ -109,6 +115,8 @@ def select_candidates(
         if not symbol or pct is None or symbol in registered_symbols:
             continue
         name = str(row.get("name") or "")
+        if not is_tradable(symbol, name):
+            continue  # 无交易权限的板块：提醒了也执行不了，属噪音
         limit = board_limit_pct(symbol, name)
         if is_sealed(float(pct), limit):
             continue  # 已封板——涨停后才发现，一律不入册（用户指令）
@@ -150,11 +158,16 @@ async def pre_limit_sweep(app) -> int:
 
     # 特殊情形（用户指令 4）：一字板/秒板**选对但无参与机会**——首见即封板 → 只登记观察
     # （watch_no_entry，不入持仓池）；某日开板重回临板区 → 通知重新纳入（见下方 board_reopen）
+    # 板块权限同 `select_candidates`（非主板不入册，否则台账会被买不了的票填满）。
+    from app.picks.tradability import is_tradable
+
     n_watch = 0
     for row in rows:
         symbol = str(row.get("symbol") or "")
         pct = row.get("change_pct")
         if not symbol or pct is None or symbol in registered:
+            continue
+        if not is_tradable(symbol, str(row.get("name") or "")):
             continue
         limit = board_limit_pct(symbol, str(row.get("name") or ""))
         if not is_sealed(float(pct), limit):

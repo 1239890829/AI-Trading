@@ -7,7 +7,10 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from app.api.routes import market as market_route
+from app.api.routes import market_longhu as longhu_route
+from app.api.routes import market_pools as pools_route
+from app.api.routes import market_quotes as quotes_route
+from app.api.routes import market_stock as stock_route
 from app.schemas.envelope import (
     Envelope,
     KlinePayload,
@@ -77,7 +80,7 @@ def _longhu() -> LongHuRecord:
 def test_quotes_envelope_no_field_loss():
     import asyncio
 
-    payload = asyncio.run(market_route.quotes(symbols="600519", hub=_FakeHub()))
+    payload = asyncio.run(quotes_route.quotes(symbols="600519", hub=_FakeHub()))
     env = Envelope[list[Quote]].model_validate(payload)
     assert env.data[0].symbol == "600519"
     # 关键不变式：model_dump 产生的字段集 == 模型字段集（丢字段 = 前端断粮）
@@ -87,7 +90,7 @@ def test_quotes_envelope_no_field_loss():
 def test_kline_envelope():
     import asyncio
 
-    payload = asyncio.run(market_route._kline_payload(_FakeHub(), "600519", "1d", 10, None, None))
+    payload = asyncio.run(quotes_route._kline_payload(_FakeHub(), "600519", "1d", 10, None, None))
     env = Envelope[KlinePayload].model_validate(payload)
     assert env.data.bars[0].close == 1500.0
     assert env.data.timeframe == "1d"
@@ -97,7 +100,7 @@ def test_limit_up_envelope():
     import asyncio
 
     hub = _FakeHub()
-    p1 = asyncio.run(market_route.limit_up(date_str=None, hub=hub))
+    p1 = asyncio.run(pools_route.limit_up(date_str=None, hub=hub))
     for payload in (p1,):
         env = Envelope[LimitUpPoolPayload].model_validate(payload)
         assert env.data.pool[0].consecutive_boards == 2
@@ -107,7 +110,7 @@ def test_limit_up_envelope():
 def test_longhu_envelope():
     import asyncio
 
-    payload = asyncio.run(market_route.longhu(date_str=None, hub=_FakeHub()))
+    payload = asyncio.run(longhu_route.longhu(date_str=None, hub=_FakeHub()))
     env = Envelope[LongHuPayload].model_validate(payload)
     assert env.data.records[0].net_buy == 1.2e8
 
@@ -116,7 +119,7 @@ def test_search_envelope():
     import asyncio
     import json
 
-    resp = asyncio.run(market_route.search(q="茅台", hub=_FakeHub()))
+    resp = asyncio.run(stock_route.search(q="茅台", hub=_FakeHub()))
     # 路由返回 JSONResponse（带 no-store 头）：envelope 结构必须不变
     assert resp.headers["cache-control"] == "no-store"
     payload = json.loads(resp.body)

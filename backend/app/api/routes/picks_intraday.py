@@ -196,6 +196,9 @@ def _attach_risk_to_themes(data: dict, snap_by: dict[str, dict]) -> None:
 
     for th in data.get("themes") or []:
         attach_risk_fields(th.get("stocks") or [], snap_by)
+        # 2026-09-15：候选组（participants）同样要补——否则"可参与候选"反而没有
+        # 现价/止损/出场，而"仅参考"的梯队有，字段丰度倒挂
+        attach_risk_fields(th.get("participants") or [], snap_by)
 
 
 async def _build_opportunities(
@@ -248,13 +251,84 @@ async def _build_opportunities(
 
     attach_official(request, payload["data"].get("themes") or [])
 
-    # 猎场批次 A（需求 7）+ 2026-09-09 收紧（用户：跟踪过多且缺乏依据）：
+    # 猎场候选口径（2026-09-15 用户指令）：涨停梯队退居**参考信息**，候选改为
+    # 「题材内**尚未涨停**的联动可参与个股」。容器直接取卡片刚挂好的
+    # `catalog_code`（成分重叠挂靠产物）⇒ 页面显示的官方概念与挖掘用的容器必然是
+    # 同一个；成分表复用 board_surge 的当日题材倒排缓存（同一份数据，不新建取数）。
+    # 挖掘失败**不静默**：写 linkage_note，页面据此显示"本轮无可参与联动候选"。
+    try:
+        import asyncio as _asyncio
+
+        from app.picks.board_surge import get_index_cache
+        from app.picks.intraday_opportunity import attach_participants
+        from app.picks.tradability import attach_tradability, index_views
+
+        index, _names = await _asyncio.to_thread(get_index_cache(request.app).get)
+        _sizes, members_by_code = await _asyncio.to_thread(index_views, index)
+        themes = payload["data"].get("themes") or []
+        snap_by = _snapshot_by(request)
+        # 涨停梯队的可参与性：按**实时盘口**逐只判定（开板/炸板股其实买得进，
+        # 一律写"买不进"是过度断言）；无盘口才退回涨停池口径。
+        for th in themes:
+            attach_tradability(th.get("stocks") or [], snap_by)
+        # "尚未涨停"的权威判据 = 当日涨停池成员（= 各卡片梯队行的并集）
+        sealed = {
+            s.get("symbol")
+            for th in themes
+            for s in (th.get("stocks") or [])
+            if s.get("symbol")
+        }
+        payload["data"]["linkage_stats"] = attach_participants(
+            themes,
+            snapshot_by=snap_by,
+            sealed_symbols=sealed,
+            limit_up_total=(payload["data"].get("summary") or {}).get("limit_up_total"),
+            members_by_code=members_by_code,
+        )
+
+        # 板块权限拆分（用户 2026-09-15：「创业板的不进，只有主板的权限现在」）：
+        # ⚠️ **必须在 `sealed`（涨停池全量）与联动挖掘之后**才拆展示面 —— 若先拆，
+        # 非主板涨停股就不再算"已封板"，会被当成"尚未涨停"挖进候选（实测风险点）。
+        # 拆出来的票不是删掉，而是计数留痕：页面要能解释"为什么梯队只剩 3 只"。
+        board_excluded = 0
+        for th in themes:
+            stocks = th.get("stocks") or []
+            kept = [s for s in stocks if s.get("tradable") is not False]
+            board_excluded += len(stocks) - len(kept)
+            th["stocks"] = kept
+        payload["data"]["board_excluded_reference"] = board_excluded
+        payload["data"]["tradable_boards"] = "沪市主板 / 深市主板（含主板 ST）"
+    except Exception as exc:  # noqa: BLE001 — 挖掘失败不拖垮机会视图，显式标注
+        # exc_info 不可省：本处曾真实吞掉一个 ImportError（把 attach_participants
+        # 当成了 tradability 的导出），只留一句"失败"会让人从零重查（2026-09-15）。
+        log.warning("theme linkage mining failed: %s", exc, exc_info=True)
+        payload["data"]["linkage_note"] = (
+            f"题材联动挖掘失败（{type(exc).__name__}）——本轮无可参与联动候选"
+        )
+
+    # 猎场批次 A（需求 7）+ 2026-09-09 收紧（用户：跟踪过多且缺乏依据）+ 2026-09-15 口径：
     # 机会候选登记加**量化硬门槛**，避免盲目大面积跟踪——
     #   ① 只在交易时段登记（非交易时段端点被调用不产生台账数据）
-    #   ② 候选须满足任一：已涨停(boards≥1) / 涨幅≥5% / 判定 certainty=高
+    #   ② 候选须满足任一：进入临板区（板性×0.65 起）/ 联动判定=高
+    #
+    # ⚠️ 2026-09-15 两处**看起来是改动、实际不改准入集合**的替换（留痕，防误读成放宽）：
+    #   a) 遍历对象由 `stocks`（涨停梯队）改为 `participants`（尚未涨停的联动候选）。
+    #      **旧遍历是空转**：梯队成员在涨停池内 ⇒ `is_sealed` 恒真 ⇒ 全部 continue
+    #      （所以这个循环此前几乎从不产出台账行，台账行实际只来自临板雷达）。
+    #   b) `cert_high` 由 certainty（封板质量）改为 linkage=="高"。而 linkage 判「高」
+    #      的定义里已含 `pct ≥ pre_limit_floor`（见 picks/tradability.linkage_confidence），
+    #      ⇒ guard 的第二分支恒不改变判定结果。替换只是让"为什么算高"可读、可追溯。
+    #   ⇒ **准入集合 = 「未封板且进入临板区」**，与 KB-DEC-011 逐字一致，未放宽。
     # watcher 确认与买点触发（dispatch_alert 路径）不受此门槛限制（本就是强信号）。
     with contextlib.suppress(Exception):
-        from app.market.trading_status import in_trading_window
+        # ⚠️ 导入路径修正（2026-09-15，被新增的「函数内导入可解析」守卫抓出）：
+        # 原写 `app.market.trading_status`，但该模块只有**个股停牌判定**；
+        # `in_trading_window` 在 `app.market.trade_calendar`（P1-3 收口后的单点，
+        # 2026-09-11 的 `9ef498c` 移走了它，此处调用点没跟着改）。
+        # 后果：`contextlib.suppress(Exception)` 把 ImportError 吞成静默
+        # ⇒ **本段台账登记自写入以来从未执行过**（题材候选一只都没入过册）。
+        # 这正是「宽泛 except 让守卫失效」的教科书案例——修的是路径，留住的是教训。
+        from app.market.trade_calendar import in_trading_window
         from app.picks.watch_ledger import record_sighting
 
         now = beijing_now()
@@ -264,21 +338,20 @@ async def _build_opportunities(
             registered = 0
             for th in payload["data"].get("themes") or []:
                 layer = "today_strongest" if th.get("strength_tier") in ("领涨", "强势") else "quiet_starting"
-                for s in th.get("stocks") or []:
+                for s in th.get("participants") or []:
                     if not s.get("symbol"):
                         continue
-                    boards = s.get("boards") or 0
                     pct = s.get("change_pct")
-                    cert_high = (s.get("certainty") or {}).get("level") == "高"
+                    linkage_high = (s.get("linkage") or {}).get("level") == "高"
                     # KB-DEC-011（2026-09-09 用户指令，修订 KB-DEC-008）：涨停前识别才准入——
-                    # ① 已封板的候选一律不入册（封板后发现的=迟到，boards≥1 不再是准入条件）；
+                    # ① 已封板的候选一律不入册（封板后发现的=迟到；boards≥1 不再是准入条件）；
                     # ② 未封板但未达临板区（板性×0.65）且判定不足——不跟踪
                     from app.picks.pre_limit_radar import board_limit_pct, is_sealed, pre_limit_floor
 
                     limit_pct = board_limit_pct(str(s["symbol"]), str(s.get("name") or ""))
                     if pct is None or is_sealed(float(pct), limit_pct):
                         continue
-                    if float(pct) < pre_limit_floor(limit_pct) and not cert_high:
+                    if float(pct) < pre_limit_floor(limit_pct) and not linkage_high:
                         continue  # 未进临板区且判定不足——不跟踪
                     record_sighting(
                         trade_date=tdate, symbol=str(s["symbol"]),
@@ -288,18 +361,19 @@ async def _build_opportunities(
                             "kind": "theme",  # KB-TRADE-13：候选链是题材驱动，登记时点即固化归因
                             "theme": th.get("theme"), "stage": th.get("stage"),
                             "tier": th.get("strength_tier"), "role": s.get("role"),
-                            "certainty": s.get("certainty"),
-                            "gate": f"pre_limit pct={pct} floor={pre_limit_floor(limit_pct)} limit={limit_pct:.0f}cm cert_high={cert_high}",
-                            "basis": (s.get("reason") or "")[:200],
+                            "linkage": s.get("linkage"),
+                            "tradability": s.get("tradability"),
+                            "gate": f"pre_limit pct={pct} floor={pre_limit_floor(limit_pct)} limit={limit_pct:.0f}cm linkage_high={linkage_high}",
+                            "basis": (s.get("basis") or "")[:200],
                         },
-                        is_leader=s.get("role") in ("龙头", "空间板"),
-                        boards=boards,
+                        is_leader=False,  # 未涨停 ⇒ 无梯队角色，不冒充龙头
+                        boards=0,
                         entry_price=None,  # 登记时以告警触发价优先；此处无价格由清算兜底
                         entry_time=tstamp,
                     )
                     registered += 1
             if registered:
-                log.info("watch ledger: %d candidates registered (gate: 临板区 or cert=高, 未封板——KB-DEC-011)", registered)
+                log.info("watch ledger: %d candidates registered (gate: 临板区, 未封板——KB-DEC-011)", registered)
     cache.set(key, payload)
     # 同上：缓存的是装配结果（题材/判定/依据），风险字段按本次快照另行补全
     _attach_risk_to_themes(payload["data"], _snapshot_by(request))
@@ -426,10 +500,14 @@ async def intraday_opportunities(
     top_themes: int = Query(default=5, ge=1, le=20),
     stocks_per_theme: int = Query(default=8, ge=1, le=30),
 ) -> dict:
-    """盘中机会：先题材（阶段/强度/依据）后题材内个股（辨识度/确定性 + 判定依据）。
+    """盘中机会：先题材（阶段/强度/依据）后题材内个股——**候选与参考分离**。
 
-    复用题材梯队看板（build_theme_board）+ 热股榜（人气维度），不在本端点重建题材
-    逻辑；辨识度/确定性判定规则见 app.picks.intraday_opportunity（纯函数，可回测）。
+    2026-09-15 口径变更（用户指令）：`themes[].stocks` 是涨停梯队（已封板，**仅参考**，
+    每只带 `tradability` 标注"不可参与"），`themes[].participants` 才是猎场候选
+    （该题材内**尚未涨停**、报价可成交的联动个股）。复用题材梯队看板
+    （build_theme_board）+ 热股榜（人气维度），不在本端点重建题材逻辑；
+    辨识度/确定性/联动判定规则见 app.picks.intraday_opportunity 与
+    app.picks.tradability（纯函数，可回测）。
     热股榜源失败时整体静默降级（hot_available=False，辨识度给 unknown），看板不受影响。
     """
     
@@ -445,9 +523,10 @@ async def intraday_top(
 ) -> dict:
     """盘中跟踪「最推荐标的」：opportunities 的多维筛选切片（工作台动态分组口径）。
 
-    筛选规则与 tier 语义见 app.picks.intraday_opportunity.top_watch_stocks
-    （确定性优先、辨识度次之，unknown/低不入选）；与复盘（picks 维度）共用
-    同一份口径，保证「分组里看到的」和「复盘对照的」是同一批标的。
+    2026-09-15 口径变更（用户指令）：`items` = **可参与**的题材联动候选（尚未涨停、
+    报价可成交）；涨停梯队移入 `reference_items`（仅作题材集中度的参考信息）。
+    筛选规则与 tier 语义见 app.picks.intraday_opportunity.top_watch_stocks；
+    与复盘（picks 维度）共用同一份口径，保证「分组里看到的」和「复盘对照的」是同一批标的。
     """
     from app.picks.intraday_opportunity import attach_risk_fields, top_watch_stocks
 
@@ -458,8 +537,10 @@ async def intraday_top(
 
     # 2026-09-09 用户需求「盘中跟踪卡片与每日精选一致」：补现价/止损参考/出场纪律
     # （与 PickCard 分节同构；现价来自全市场快照，缺失显式 null 不臆造）。
-    # 2026-09-10：改为与题材手风琴共用同一实现——此前是内联在这里的独有逻辑，
-    # 导致同一张选股卡片（PickCard）在 /intraday-opportunities 路径上缺这三项。
-    # top_watch_stocks 会重建 item dict，故补全须在本函数内对它自己的 items 做一次。
-    attach_risk_fields(data.get("items") or [], _snapshot_by(request))
+    # 2026-09-10：改为与题材手风琴共用同一实现。
+    # 2026-09-15：参考区（涨停梯队）**同样**补全——它也是要给人看的卡片，
+    # 不能因为是"参考"就少字段（此前只有 items 走这一步，正是当年反馈的同类问题）。
+    snap_by = _snapshot_by(request)
+    attach_risk_fields(data.get("items") or [], snap_by)
+    attach_risk_fields(data.get("reference_items") or [], snap_by)
     return {"data": data, "meta": {}}

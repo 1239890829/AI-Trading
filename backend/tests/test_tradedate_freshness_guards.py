@@ -89,12 +89,16 @@ _TTL_CARRIERS: dict[str, int] = {
 #: 登记的门槛不是"TTL 长"本身，而是必须说清：**为什么它不会因跨日而陈旧**。
 #: 判据锚点 = 2026-09-14 的根因——「时效语义是**必须覆盖今天**，却用固定时长表达」。
 LONG_TTL_REGISTRY: dict[tuple[str, str], str] = {
-    ("app/api/routes/market.py", "market.board-fund.main-board"): (
+    ("app/api/routes/market_flow.py", "market.board-fund.main-board"): (
         "**不适用「覆盖今天」判据**：缓存内容 = 个股的所属板块/行业归属"
         "（`get_company_profile` 的 board_groups），语义是「这只股是做什么的」，"
         "**不带交易日维度**——成分调整才变，与「今天是不是交易日」无关；"
         "键是 symbol（非日期），因此不存在'午夜前填充 ⇒ 次日不含今天'的失效形态"
         "（该形态的前提正是'缓存内容按日切片'）。6h 的作用是避免自选轮询反复打 F10。"
+        "**宿主文件变更记录**：本键原为 `app/api/routes/market.py`，2026-09-15 `IMP-005` 批 3 "
+        "把该文件按业务域切片（共 8 分片 + 门面），本位点随 `board-fund` 域落入 `market_flow.py`；"
+        "**缓存语义与 TTL 均未变，仅搬家**——守卫按 `(宿主文件, 位点名)` 集合相等判定，"
+        "故改名后正确报红（[[KB-ENG-95]] 的『位点宿主变更』形态）。"
     ),
     ("app/services/akshare_ext.py", "ext-macro-cpi"): (
         "**不适用「覆盖今天」判据**：`macro_china_cpi` = 月度 CPI 序列，"

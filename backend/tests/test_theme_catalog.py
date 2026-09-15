@@ -384,7 +384,7 @@ def test_verify_board_multi_day_replaces_and_flags(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(svc, "fetch_catalog", fake_catalog)
     monkeypatch.setattr(svc, "fetch_board_bars", fake_bars)
 
-    from app.api.routes.market import _verify_board_multi_day
+    from app.api.routes.market_themes import _verify_board_multi_day
 
     payload = {
         "themes": [
@@ -442,7 +442,7 @@ def test_verify_board_multi_day_upgrades_persistence_position(monkeypatch: pytes
     asyncio.run(svc.sync_catalog())  # 自同步目录：不依赖其他测试留下的库状态（内存库顺序耦合是隐患）
     monkeypatch.setattr(svc, "fetch_board_bars", fake_bars)
 
-    from app.api.routes.market import _verify_board_multi_day
+    from app.api.routes.market_themes import _verify_board_multi_day
 
     persistence = news_persistence(core_type="业绩兑现", limit_up_count=8,
                                    has_second_board=True, active_days=2, main_net_inflow=5e8)

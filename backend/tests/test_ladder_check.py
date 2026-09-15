@@ -238,11 +238,12 @@ def test_ladder_check_route_and_cache(monkeypatch: pytest.MonkeyPatch):
 
     from fastapi import FastAPI
 
+    from app.api.deps import get_hub
     from app.api.routes import market as market_route
 
     a = FastAPI()
     a.include_router(market_route.router, prefix="/api")
-    a.dependency_overrides[market_route.get_hub] = lambda: _Hub()
+    a.dependency_overrides[get_hub] = lambda: _Hub()
     from app.core.errors import register_error_handlers
 
     register_error_handlers(a)

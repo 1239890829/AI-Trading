@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from app.api.routes import market as market_route
+from app.api.routes import market_flow as flow_route
 from app.api.routes import theme_catalog as tc_route
 
 
@@ -74,7 +74,7 @@ def test_by_symbols_uses_industry_l2_and_attaches_fund(monkeypatch):
         {"600519": {"白酒Ⅱ": "1277", "味蕾经济": "1653"}},
     )
     payload = asyncio.run(
-        market_route.market_board_fund_by_symbols(
+        flow_route.market_board_fund_by_symbols(
             request=_request(), symbols="600519", hub=_hub(provider)
         )
     )
@@ -96,7 +96,7 @@ def test_by_symbols_failed_profile_is_absent_not_fabricated(monkeypatch):
     _patch_board_list(monkeypatch, {"industry": [], "concept": []})
     provider = _ProfileProvider({}, {}, boom={"600519"})
     payload = asyncio.run(
-        market_route.market_board_fund_by_symbols(
+        flow_route.market_board_fund_by_symbols(
             request=_request(), symbols="600519", hub=_hub(provider)
         )
     )
@@ -114,7 +114,7 @@ def test_by_symbols_board_not_listed_is_absent(monkeypatch):
         {"600519": {"白酒Ⅱ": "1277"}},
     )
     payload = asyncio.run(
-        market_route.market_board_fund_by_symbols(
+        flow_route.market_board_fund_by_symbols(
             request=_request(), symbols="600519", hub=_hub(provider)
         )
     )
@@ -129,14 +129,14 @@ def test_by_symbols_rejects_empty_and_oversized():
 
     for bad in ("", " , "):
         with pytest.raises(HTTPException) as ei:
-            asyncio.run(market_route.market_board_fund_by_symbols(
+            asyncio.run(flow_route.market_board_fund_by_symbols(
                 request=_request(), symbols=bad, hub=_hub(_ProfileProvider({}, {}))
             ))
         assert ei.value.status_code == 422
 
     too_many = ",".join(f"{600000 + i}" for i in range(51))
     with pytest.raises(HTTPException) as ei:
-        asyncio.run(market_route.market_board_fund_by_symbols(
+        asyncio.run(flow_route.market_board_fund_by_symbols(
             request=_request(), symbols=too_many, hub=_hub(_ProfileProvider({}, {}))
         ))
     assert ei.value.status_code == 422
@@ -159,7 +159,7 @@ def test_by_symbols_concept_fallback_is_level_labelled(monkeypatch):
         {"000001": {"跨境支付": "1071"}},
     )
     payload = asyncio.run(
-        market_route.market_board_fund_by_symbols(
+        flow_route.market_board_fund_by_symbols(
             request=_request(), symbols="000001", hub=_hub(provider)
         )
     )

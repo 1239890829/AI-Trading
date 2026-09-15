@@ -35,6 +35,7 @@ from datetime import date
 
 import pytest
 
+from app.api.routes import market_envelope
 from app.core.bjtime import BJ_TZ
 from app.core.freshness import Freshness
 from app.market import trade_calendar as tc
@@ -115,8 +116,8 @@ class _FixedProvider:
 
 
 class _Hub:
-    """最小 hub 桩：`_meta()` 只用 provider.name / provider.realtime / is_stale() /
-    last_success_refresh，且刻意走 `getattr` 回退（见 `_hub_freshness` docstring）。"""
+    """最小 hub 桩：`meta_payload()` 只用 provider.name / provider.realtime / is_stale() /
+    last_success_refresh，且刻意走 `getattr` 回退（见 `hub_freshness` docstring）。"""
 
     def __init__(self, provider, *, stale: bool = False) -> None:
         self.provider = provider
@@ -144,11 +145,18 @@ def clean_calendar(monkeypatch, tmp_path):
 
 
 def _pin(monkeypatch, today: date, now) -> None:
-    """把「日历侧」与「服务侧」两处时钟一起钉死 —— 钉一半会得到看似随机的失败。"""
+    """把「日历侧」「服务侧」「信封侧」三处时钟一起钉死 —— 钉一半会得到看似随机的失败。
+
+    `market_envelope`（2026-09-15 IMP-005 第三批抽出的共享信封模块）是**第三个**
+    读时钟的层：`latest_trade_date()` 用的是**它自己命名空间**的 `beijing_today`。
+    漏钉这一处，patch 会打在空气上、断言改绑真实运行日 —— 正是本函数首版踩过的
+    「钉住外部时钟要钉到真正读时钟的那一层」。
+    """
     monkeypatch.setattr(tc, "beijing_now", lambda: now)
     monkeypatch.setattr(tc, "beijing_today", lambda: today)
     monkeypatch.setattr(market_snapshot, "beijing_now", lambda: now)
     monkeypatch.setattr(market_snapshot, "beijing_today", lambda: today)
+    monkeypatch.setattr(market_envelope, "beijing_today", lambda: today)
 
 
 # ---------------------------------------------------------------- G1 跨相位一致
@@ -231,27 +239,26 @@ def test_dated_meta_degrades_when_payload_date_lags(monkeypatch, clean_calendar)
     （把 `is_realtime` 写成常量 False 也能通过），所以必须同时钉住**不降级**那一侧
     （三态纪律：既不许把过期当实时，也不许把实时当过期）。
 
-    *回退即红*：把 `market.py` 中 4 处 `await _dated_meta(hub, trade_date)` 改回
-    `_meta(hub)`，或删掉 `_dated_meta` 的降级分支 ⇒ 第 2 段断言
+    *回退即红*：把 `market.py` 中 4 处 `await dated_meta(hub, trade_date)` 改回
+    `meta_payload(hub)`，或删掉 `dated_meta` 的降级分支 ⇒ 第 2 段断言
     `stale["is_realtime"] is False` 变红（注入实测：红；复原：绿）。
-    """
-    from app.api.routes import market as market_route
 
+    ⚠️ 2026-09-15 IMP-005 第三批：`dated_meta` / `latest_trade_date` / `meta_payload`
+    已从 `market.py` 抽到 **`market_envelope`** 且**去掉下划线**（跨分片共享的辅助
+    必须是公开名 —— 路由间禁止 import 私有名）。本用例因此改指**实现所在模块**：
+    patch `market_route` 命名空间会打在空气上（那里的同名名字只是 import 进来的引用）。
+    """
     hub = _Hub(_FixedProvider(_FULL))
     _pin(monkeypatch, _TODAY_0914, _bj(2026, 9, 14, 10, 0))
-    # ⚠️ `_latest_trade_date` 用的是 **market.py 自己命名空间**里的 beijing_today
-    # （模块级 import）—— 只钉 market_snapshot 那个会让本用例绑定真实运行日
-    # （"钉住外部时钟要钉到真正读时钟的那一层"，同族教训见 test_degradation_contracts）。
-    monkeypatch.setattr(market_route, "beijing_today", lambda: _TODAY_0914)
 
     # ① 基线：数据日期 == 最近交易日 ⇒ 原样返回，不得过度降级
-    fresh = _run(market_route._dated_meta(hub, _TODAY_0914))
+    fresh = _run(market_envelope.dated_meta(hub, _TODAY_0914))
     assert fresh["is_realtime"] is True, "新鲜载荷被误降级（把实时当过期，同样是失真）"
     assert fresh["is_stale"] is False
     assert (fresh.get("freshness") or {}).get("state") == "ready"
 
     # ② 落后一天：必须降级，且给出实际/应有两个日期（不隐藏落后）
-    stale = _run(market_route._dated_meta(hub, date(2026, 9, 11)))
+    stale = _run(market_envelope.dated_meta(hub, date(2026, 9, 11)))
     assert stale["is_realtime"] is False, (
         "过期载荷拿到了实时背书（红线 2：禁止把过期缓存冒充实盘）"
     )

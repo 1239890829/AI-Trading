@@ -566,3 +566,229 @@ def test_deps_are_explicit_not_request_shaped(deps):
     state = type("S", (), {"event_store": _Store(), "snapshot_service": _Snapshot()})()
     built = pl.PipelineDeps.from_state(state)
     assert built.theme_catalog is None  # 缺省不报错（theme 匹配不到就走诚实降级）
+
+
+# ---------------------------------------------------------------- 可参与性口径（2026-09-15 用户指令）
+
+
+class _SealRec:
+    """涨停池记录桩：**首封时间可变**——本组用例的判定全看它。"""
+
+    def __init__(self, symbol: str, first_seal_time: str, boards: int = 1):
+        self.symbol = symbol
+        self.name = symbol
+        self.consecutive_boards = boards
+        self.break_count = 0
+        self.first_seal_time = first_seal_time
+        self.float_market_cap = 8.0e9
+        self.amount = 3.0e8
+        self.reason = "白酒概念"
+        self.change_pct = 10.0
+
+
+def _lu_ctx(n_up: int = 3, n_filler: int = 0) -> dict:
+    """涨停板生态上下文桩：n_up 家同属「白酒概念」，n_filler 家属其它题材。
+
+    n_filler 用来把"占当日涨停比例"压到阈值以下——集中度判据有两维，
+    只造一维的 fixture 会让另一维静默失去覆盖。
+    """
+    syms = [f"6000{i:02d}" for i in range(n_up)]
+    rec = {"first_seal_time": "09:25:00", "consecutive_boards": 1}
+    records = {s: dict(rec) for s in syms}
+    records.update({f"3000{i:02d}": dict(rec) for i in range(n_filler)})
+    return {
+        "records": records,
+        "market_max_boards": 1,
+        "themes": {
+            "白酒概念": {
+                "symbols": syms, "max_boards": 1, "changes": [10.0] * n_up,
+                "levels": {1: n_up},
+            }
+        },
+    }
+
+
+def test_candidate_pool_drops_open_sealed_and_audits_it():
+    """开盘即涨停（首封 ≤09:30）的涨停池成员**不进候选池**，且明细必须留痕。
+
+    留痕不是可选项：没有 `excluded_open_sealed`，"今天名单里为什么没有那只一字板"
+    在复盘时就成了一句无法核对的解释（与本文件 ⑤b 出列留痕同源纪律）。
+    """
+    pool = [
+        _SealRec("600111", "09:25:00"),  # 竞价一字板——全天买不进
+        _SealRec("600112", "09:31:00"),  # 09:30 之后封板：当日曾有参与窗口
+        _SealRec("600113", "14:20:00"),  # 尾盘板
+    ]
+    audit: dict = {}
+    got = asyncio.run(
+        pl.candidate_pool(_BareHub(), _Store(), None, limit_up_pool=pool, audit=audit)
+    )
+    syms = [p["symbol"] for p in got]
+    assert "600111" not in syms, "开盘即涨停被选进了候选池——这正是本轮要修的病"
+    assert {"600112", "600113"} <= set(syms), "非开盘即封的涨停股不该被误伤"
+    exc = audit["excluded_open_sealed"]
+    assert exc["count"] == 1
+    assert exc["items"][0] == {"symbol": "600111", "name": "600111",
+                               "first_seal_time": "09:25:00"}
+
+
+def test_candidate_pool_puts_linkage_sources_first():
+    """**装配顺序独立于取数顺序**：联动股取数最晚拿到，却排在最前。
+
+    这不是排序洁癖——候选池 cap 40、深评 cap 24，来源靠后就等于被截断掉。
+    而题材联动的取数天然发生在事件/涨停池之后（要先算出题材集中度），
+    故顺序必须由 `_SOURCE_ORDER` 显式给定，不能靠 dict 插入序。
+    """
+    linkages = [{"symbol": "000001", "basis": "联动甲"}, {"symbol": "000002"}]
+    got = asyncio.run(
+        pl.candidate_pool(
+            _BareHub(), _Store(), None,
+            limit_up_pool=[_SealRec("600113", "14:20:00")], linkages=linkages,
+        )
+    )
+    # theme_linkage(0) → event(1) → limit_up(2)；同档内保持插入序
+    assert [p["symbol"] for p in got] == ["000001", "000002", "600519", "600113"]
+    assert got[0]["from"] == "theme_linkage" and got[0]["prio"] == 2
+
+
+def test_candidate_pool_records_linkage_absence():
+    """未预取联动股（linkages=None）时来源缺席必须**显式记账**，不能静默少一路。"""
+    audit: dict = {}
+    asyncio.run(
+        pl.candidate_pool(_BareHub(), _Store(), None, limit_up_pool=[], audit=audit)
+    )
+    assert "未预取" in audit["theme_linkage"]["note"]
+    assert audit["sources"] == {"event": 1}
+
+
+def test_mine_theme_linkage_degrades_honestly():
+    """三态降级：无集中题材 / 目录不可用 / 快照不可用 —— 各自给**原因**，不臆造。"""
+    snap = [{"symbol": "600000", "name": "甲", "change_pct": 3.0, "amount": 1.0e8}]
+
+    # ① 家数不足（2 < 3）
+    got = asyncio.run(pl.mine_theme_linkage(object(), _lu_ctx(2), snap))
+    assert got["items"] == [] and "集中阈值" in got["note"]
+
+    # ② 家数够但占当日涨停比例不足（3/43 ≈ 7% < 10%）—— 极端日不硬挖
+    got = asyncio.run(pl.mine_theme_linkage(object(), _lu_ctx(3, n_filler=40), snap))
+    assert got["items"] == [] and "集中阈值" in got["note"]
+
+    # ③ 题材目录服务不可用
+    got = asyncio.run(pl.mine_theme_linkage(None, _lu_ctx(3), snap))
+    assert got["items"] == [] and "目录服务不可用" in got["note"]
+
+    # ④ 全市场快照不可用：可参与性依赖实时盘口 ⇒ 跳过而不是拿"没有盘口"当"可参与"
+    got = asyncio.run(pl.mine_theme_linkage(object(), _lu_ctx(3), []))
+    assert got["items"] == [] and "快照不可用" in got["note"]
+
+
+def test_mine_theme_linkage_end_to_end(monkeypatch):
+    """端到端：涨停集中题材 → 成分重叠定容器 → 容器内未涨停成分 → 可参与候选。
+
+    这里把 `build_theme_index` 打成桩（它是同步 SQLite 全表读，属外部边界），
+    其余全走真实实现——保证钉住的是"筛选链"本身，而不是一个被 mock 掉的过程。
+    """
+    from app.picks import board_surge
+
+    index = {
+        "600000": [("BK0001", "白酒概念")],
+        "600001": [("BK0001", "白酒概念")],
+        "600002": [("BK0001", "白酒概念")],
+        # 同容器内的**未涨停**成分（要挖的就是它）
+        "600009": [("BK0001", "白酒概念")],
+    }
+    monkeypatch.setattr(
+        board_surge, "build_theme_index", lambda *a, **k: (index, {"BK0001": "白酒概念"})
+    )
+    snap = [
+        {"symbol": "600009", "name": "联动甲", "change_pct": 6.8, "amount": 1.0e8, "price": 12.0},
+        {"symbol": "600003", "name": "非成分", "change_pct": 8.0, "amount": 1.0e8, "price": 9.0},
+    ]
+    out = asyncio.run(pl.mine_theme_linkage(object(), _lu_ctx(3), snap))
+
+    assert out["note"] is None
+    # 600000/600001/600002 在涨停池里（"尚未涨停"判据）；600003 不是容器成分 ⇒ 均不入选
+    assert [c["symbol"] for c in out["items"]] == ["600009"]
+    c = out["items"][0]
+    assert c["tradability"]["level"] == "可参与"
+    assert c["linkage"]["level"] == "高"  # 6.8% 已进主板临板区
+    t = out["themes"][0]
+    assert t["theme"] == "白酒概念" and t["container"] == "白酒概念"
+    assert t["container_code"] == "BK0001" and t["candidates"] == 1
+
+
+def test_pipeline_meta_records_tradability_policy(deps):
+    """meta 落 `tradability_policy`：口径、剔除明细、联动结果、来源计数四件套齐全。"""
+    out = _run(deps, _Hub())
+    pol = out["data"]["meta"]["tradability_policy"]
+    assert pol["open_seal_cutoff"] == "09:30"
+    assert pol["excluded_open_sealed"]["count"] == 0  # 桩池首封 09:35，非开盘即封
+    assert "theme_linkage" in pol and "candidate_sources" in pol
+
+
+def test_assemble_card_carries_tradability_and_source():
+    """卡片必须透出「可参与性」与「入选来源」——否则用户无法核对新口径是否生效。"""
+    card = pl.assemble_card(
+        {
+            "symbol": "600001", "name": "甲", "price": 10.0, "change_pct": 3.0,
+            "score": 70.0, "sub_scores": {}, "bases": {}, "vetoes": [],
+            "echelon_role": "首板", "theme": "白酒概念", "theme_stage": "发酵",
+            "boards": None, "related_events": [],
+            "tradability": {"level": "可参与", "basis": "未封在涨停板，报价可成交"},
+            "source": "theme_linkage",
+            "source_basis": "题材内涨停 4 家形成集中，本股尚未涨停（3.0%）",
+        }
+    )
+    assert card["tradability"]["level"] == "可参与"
+    assert card["source"] == "theme_linkage" and "尚未涨停" in card["source_basis"]
+
+
+def test_pipeline_excludes_boards_without_permission(deps):
+    """**账户权限**（2026-09-15 用户「只有主板的权限现在」）：非主板不进组合。
+
+    过滤点刻意选在**既有的可交易性收口**（与「剔 ST/退」同一处）而不是各来源入口——
+    候选池有 4 路来源，逐一过滤就是 4 份判据；一处即全覆盖。
+
+    构造方式：让**上游涨停池**里带一只创业板票（最贴近真实的进入路径），
+    而不是在 `get_quotes` 里改名——后者会因 `quotes` 的键与原 symbol 不匹配
+    而在更早的"无行情"分支被拦掉，测不到板块过滤本身。
+    """
+    from app.picks.tradability import is_tradable
+
+    class _MixedProvider(_Provider):
+        async def get_limit_up_pool(self, d):
+            self.pool_dates.append(d)
+            return [
+                _PoolRec("600519", 3, "白酒概念+消费刺激"),
+                _PoolRec("000858", 1, "白酒概念"),
+                _PoolRec("300750", 1, "锂电池"),      # 创业板：无交易权限
+            ]
+
+        async def get_quotes(self, symbols):
+            out = []
+            for s in symbols:
+                out.append(
+                    Quote(
+                        symbol=s, source="tencent",
+                        name={"600519": "贵州茅台", "000858": "五粮液",
+                              "300750": "宁德时代"}.get(s, f"票{s}"),
+                        price=100.0, change_pct=3.2, amount=3.0e9,
+                        pe_ttm=30.0, pb=8.0, total_mktcap_yi=1000.0, float_mktcap_yi=1000.0,
+                    )
+                )
+            return out
+
+    class _MixedHub:
+        def __init__(self):
+            self.provider = _MixedProvider()
+
+    out = _run(deps, _MixedHub())
+    pol = out["data"]["meta"]["tradability_policy"]
+    assert pol["tradable_boards"].startswith("沪市主板")
+    # 创业板票必须出现在剔除明细里（否则"组合里为什么没有它"无从核对）
+    excluded = {i["symbol"]: i["board"] for i in pol["excluded_board"]["items"]}
+    assert excluded.get("300750") == "创业板"
+    assert pol["excluded_board"]["count"] >= 1
+    # 组合与落选名单里都不得出现非主板
+    for item in out["data"]["items"]:
+        assert is_tradable(item["symbol"]), item
