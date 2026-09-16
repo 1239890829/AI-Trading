@@ -249,7 +249,20 @@ class Settings(BaseSettings):
     # LLM 分析器（未配置时自动降级到 rules）
     review_llm_base_url: str = ""
     review_llm_api_key: str = ""
-    review_llm_model: str = ""
+    # ---- 模型名（**全仓唯一写死点**，2026-09-16 用户指令）----
+    # 切换模型的唯一方式是改这里或 `ASHARE_REVIEW_LLM_MODEL`（.env 优先）；
+    # 所有消费方（进化议程 / 悬浮球 / 告警判读 / 元评估 / 事件辅助 / 代码执行器 /
+    # 网关探针）一律读本字段，**不得在别处写字面量**——
+    # 守卫 `tests/test_llm_model_single_source.py` 会判红。
+    #
+    # 为什么默认值不再是空串：空串时 claude_cli 会把 `--model ""` 透传，
+    # 由 CLI 侧默认兜底，于是「项目配的模型」与「实际用的模型」不一致，
+    # 出问题只能靠人肉分辨。2026-09-16 就是这么炸的：
+    # 用户已把本机 claude 默认模型切到 deepseek-v4-flash，而后端 .env 仍写
+    # `glm-5.3`，该模型上游已下架 ⇒ 调用**挂起不返回**（实测 150s 无输出，
+    # 而 deepseek-v4-flash 3.3s 正常）⇒ 15:45 进化议程失败、告警判读降级
+    # 为 `llm_fallback`。写死一个可用默认值 = 少一层"两边不一致"的失败面。
+    review_llm_model: str = "deepseek-v4-flash"
 
     # ---- P2-3 层1：pending 事件 LLM 辅助判定（app/events/llm_aux.py）----
     # 规则引擎判不出方向（direction=0 / 无方向行）的事件攒批交给 LLM 判一次，

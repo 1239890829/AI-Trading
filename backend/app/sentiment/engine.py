@@ -498,6 +498,28 @@ def compute_sentiment(
         "reasons": heat["basis"] + earn["basis"],
         "promotion": promo,
         "prev_perf": prev,
+        # 空仓闸门（`picks/gate.evaluate_stand_aside`）的**结构化输入**（2026-09-16）。
+        #
+        # 为什么必须由引擎暴露：这四项此前由消费方各自现取——picks 管线为了
+        # `break_rate` 又单打了一次 `get_limit_break_pool`（同一次生成里该上游被
+        # 打了两次），`limit_down` 则各自读 breadth。于是「闸门输入」有了两份实现：
+        # 上游失败时一份为 None、另一份有值，闸门结论随取数路径而变。
+        #
+        # 更关键的是**读时重算闸门**（2026-09-16，猎场头部动态化）：闸门原本只在
+        # 组合生成时算一次并落库定格全天，而同一页面的 style_routing 是读时重算的
+        # ——实测同一次响应里出现「落库相位=退潮（横幅喊空仓观望）」与「实时相位=
+        # 高潮（chip 显示题材进攻）」并存，两个相反结论紧挨着展示。要修就必须让读侧
+        # 能拿到与生成时同口径的输入，而重算若还要回源打上游就注定了两套取数逻辑。
+        # 收口在这里：引擎已经算出了全部四项，原样带出即可，读侧零额外网络调用。
+        "gate_inputs": {
+            "promotion_1to2": promo.get("promo_1to2"),
+            "break_rate": break_rate,
+            "limit_down": limit_down,
+            "prev_zt_median_pct": prev.get("median_pct"),
+            # 炸板率口径留痕：真实炸板池 vs 价格法近似，两者的可信度不同，
+            # 闸门理由里也要能说清这次用的是哪个（`break_note` 已是同一语义的文案版）。
+            "break_caliber": "pool" if break_count is not None else ("approx" if break_rate is not None else "missing"),
+        },
         "ladder": ladder,
         "indicators": indicators,
         "self_check": issues,

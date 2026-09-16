@@ -106,6 +106,36 @@ export interface StyleRouting {
   phase_note?: string;
 }
 
+/** 闸门输入留痕（后端 `evaluate_stand_aside` 的 `signals` 原样带出）。
+ *  对照「生成时 vs 当前」必须靠它——没有输入就无法解释结论为何变化，
+ *  而**不允许在前端重算规则**（重算 = 两份口径必然漂移）。 */
+export interface StandAsideSignals {
+  promotion_1to2?: number | null;
+  promotion_1to2_pctl?: number | null;
+  break_rate?: number | null;
+  break_rate_pctl?: number | null;
+  limit_down?: number | null;
+  prev_zt_median_pct?: number | null;
+  promo_caliber?: string;
+  break_caliber?: string;
+}
+
+/** 实时复核对照面（后端 `_live_gate` 的 `recheck`）。 */
+export interface StandAsideRecheck {
+  /** 本次复核用的相位 */
+  phase: string | null;
+  /** 本次复核锚定的交易日 */
+  trade_date: string | null;
+  /** 本次复核时刻（UTC ISO） */
+  judged_at: string | null;
+  /** 生成时刻落库的相位（对照基准） */
+  stored_phase: string | null;
+  /** 相位是否发生变化（闸门结论变化的**主因**，前端据此决定要不要提示复核） */
+  phase_changed: boolean;
+  inputs_source: string;
+  break_caliber?: string | null;
+}
+
 export interface StandAsideGate {
   stand_aside: boolean;
   level: "none" | "mild" | "strong";
@@ -117,6 +147,15 @@ export interface StandAsideGate {
   /** 本次是否**撤除买入区间**（相位级信号/多信号叠加 → true；单条量化擦线 → false）。
    *  后端算好带出，前端只读不算（重算 = 两份口径必然漂移）。旧行无此字段时按 undefined 处理。 */
   strip_buy_range?: boolean;
+  /** 结论来源（2026-09-16）：`stored`=组合生成时刻落库的判断；`live`=读取时刻按实时情绪重算；
+   *  `unavailable`=实时复核不可用，本对象其实是生成时刻结论（附 `gate_note` 说明原因）。 */
+  gate_source?: "stored" | "live" | "unavailable" | string;
+  /** `gate_source="unavailable"` 时的原因说明（三态纪律：来源显式，未知不伪装成"未触发"） */
+  gate_note?: string;
+  /** 闸门输入留痕（解释结论为何变化时读它） */
+  signals?: StandAsideSignals;
+  /** 仅 `gate_source="live"` 时有值 */
+  recheck?: StandAsideRecheck | null;
 }
 
 export interface DailyPicksPayload {
@@ -127,9 +166,19 @@ export interface DailyPicksPayload {
   note?: string;
   meta?: {
     weights: Record<string, number>;
+    /** 组合生成时刻（ISO，带 +08:00）——「生成时 vs 当前」对照文案的时间锚点 */
+    generated_at?: string;
     regime?: PickRegime;
     style_routing?: StyleRouting | null;
     gate?: StandAsideGate;
+    /** **读取时刻**按实时情绪重算的闸门（2026-09-16 猎场头部动态化）。
+     *
+     *  `gate` 是组合生成时刻（09:26）定格的全天结论——实测该时刻在场仅 3 只涨停、
+     *  最高 2 板，据此判「退潮」并撤除买入区间，而当日收盘口径是「高潮」。
+     *  本字段是同一判据用实时输入重算的结果：不一致时以**它**为准展示，
+     *  `gate` 作为对照保留（它仍是当日 `buy_range` 被撤的原因，复盘要它）。
+     *  旧后端不返回本字段 → undefined，前端退化为只显示 `gate`。 */
+    gate_live?: StandAsideGate | null;
     market_phase?: string | null;
     candidate_count?: number;
     limit_up_count?: number;

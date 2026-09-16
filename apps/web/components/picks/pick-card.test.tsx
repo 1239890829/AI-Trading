@@ -332,6 +332,126 @@ describe("StandAsideBanner", () => {
   });
 });
 
+/* ------------------------------------------- 闸门动态对照（2026-09-16 用户问题 7） */
+
+/**
+ * 用户原话：「猎场头部的情绪判断不应在当天提前定死，而应依据盘面变化动态调整」。
+ *
+ * 实测缺陷（2026-09-16）：组合 09:26 生成时在场仅 3 只涨停、最高 2 板 ⇒ 判「退潮」
+ * 并撤除买入区间，该结论落库后**定格全天**；而同一页面紧邻的风格 chip 是读取时重算的，
+ * 显示「高潮 · 题材进攻」。两个相反结论同屏，且定格的是更悲观的那个 ——
+ * 当天实际有多只标的给出介入机会。
+ *
+ * 后端因此新增读取时复核（`meta.gate_live`）。本组用例守的是**对照面必须诚实**：
+ * ① 已解除要说得出来；② 已解除**不得**暗示当日名单恢复可买（buy_range 已落库撤除）；
+ * ③ 往严方向的变化（生成时未触发→现在触发）同样要提示；
+ * ④ 「复核不可用」既不能说成"已触发"也不能说成"已解除"。
+ */
+describe("StandAsideBanner · 闸门动态对照", () => {
+  /** 生成时刻落库值（gate_source=stored）。 */
+  const storedGate: StandAsideGate = {
+    stand_aside: true,
+    level: "strong",
+    reasons: ["情绪相位「退潮」——赚钱效应处于周期低位", "首板晋级率 8% 处于历史 9 分位"],
+    advice: "市场情绪明显转弱，建议空仓观望，切忌盲目出手",
+    phase: "退潮",
+    strip_buy_range: true,
+    gate_source: "stored",
+    signals: { promotion_1to2: 0.08, promotion_1to2_pctl: 9, limit_down: 0 },
+  };
+
+  /** 读取时刻复核结果（gate_source=live）——收盘口径「高潮」，闸门不该触发。 */
+  const liveCleared: StandAsideGate = {
+    stand_aside: false,
+    level: "none",
+    reasons: [],
+    advice: "市场情绪未见系统性风险，按组合纪律执行即可",
+    phase: "高潮",
+    strip_buy_range: false,
+    gate_source: "live",
+    signals: { promotion_1to2: 0.36, promotion_1to2_pctl: 62, break_rate: 0.11, break_caliber: "pool", limit_down: 0 },
+    recheck: {
+      phase: "高潮", trade_date: "2026-09-16", judged_at: "2026-09-16T10:48:06+00:00",
+      stored_phase: "退潮", phase_changed: true, inputs_source: "sentiment.gate_inputs",
+    },
+  };
+
+  it("已解除：说明生成时判了什么、当前换成什么，并讲清「不回溯」", () => {
+    render(<StandAsideBanner gate={liveCleared} stored={storedGate} generatedAt="2026-09-16T09:26:35+08:00" />);
+    const box = screen.getByTestId("stand-aside-cleared");
+    expect(box.textContent).toContain("09:26");
+    expect(box.textContent).toContain("退潮");
+    expect(box.textContent).toContain("已解除");
+    // 撤区间是生成时已落库的动作 → 必须明说不可回溯，否则等于暗示"可以买了"
+    expect(box.textContent).toContain("不回溯");
+    expect(box.textContent).toContain("不构成买入建议");
+    // 已解除不是警报：用 role=status 而非 role=alert（视觉与语义都要往下降）
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("已解除：逐项对照两侧相位与输入（解释「结论为何变化」）", () => {
+    render(<StandAsideBanner gate={liveCleared} stored={storedGate} />);
+    const cmp = screen.getByTestId("stand-aside-comparison");
+    expect(cmp.textContent).toContain("生成时相位「退潮」");
+    expect(cmp.textContent).toContain("当前相位「高潮」");
+    expect(cmp.textContent).toContain("首板晋级率 8%（历史 9 分位）");
+    expect(cmp.textContent).toContain("首板晋级率 36%（历史 62 分位）");
+  });
+
+  it("往严方向：生成时未触发、现在触发 → 必须提示（漏报比误报贵）", () => {
+    const liveOn: StandAsideGate = {
+      ...storedGate,
+      gate_source: "live",
+      reasons: ["炸板率 41% 处于历史 95 分位——封板异常不牢"],
+      advice: "市场情绪偏弱，建议控制仓位、减少出手频率",
+      level: "mild",
+    };
+    const storedOff: StandAsideGate = { ...storedGate, stand_aside: false, reasons: [], phase: "高潮" };
+    render(<StandAsideBanner gate={liveOn} stored={storedOff} generatedAt="2026-09-16T09:26:35+08:00" />);
+    const box = screen.getByTestId("stand-aside-banner");
+    expect(box.textContent).toContain("未触发闸门");
+    expect(box.textContent).toContain("已触发");
+    expect(screen.getByRole("alert")).toBeTruthy();
+  });
+
+  it("复核不可用：照落库值显示 + 原因说明，既不谎称已解除也不谎称已触发", () => {
+    const degraded: StandAsideGate = {
+      ...storedGate,
+      gate_source: "unavailable",
+      gate_note: "实时情绪不可用（全市场快照尚未就绪），显示生成时刻结论",
+    };
+    render(<StandAsideBanner gate={degraded} stored={storedGate} />);
+    const box = screen.getByTestId("stand-aside-banner");
+    expect(box.textContent).toContain("全市场快照尚未就绪");
+    expect(screen.queryByTestId("stand-aside-cleared")).toBeNull();
+    expect(box.textContent).not.toContain("未触发闸门");
+    // 落库结论本身照常展示（降级不等于把风险提示也撤掉）
+    expect(box.textContent).toContain("建议空仓观望");
+  });
+
+  it("两次都触发但理由变了：展示对照行，主结论仍用实时理由", () => {
+    const liveOn: StandAsideGate = {
+      ...storedGate,
+      gate_source: "live",
+      reasons: ["炸板率 41% 处于历史 95 分位——封板异常不牢"],
+    };
+    render(<StandAsideBanner gate={liveOn} stored={storedGate} />);
+    expect(screen.getByTestId("stand-aside-banner").textContent).toContain("炸板率 41%");
+    expect(screen.getByTestId("stand-aside-comparison").textContent).toContain("生成时相位「退潮」");
+  });
+
+  it("旧后端形态（只传落库值、无复核）：不做差异判断，也不渲染「已解除」", () => {
+    // 前端 gateView = gate_live ?? gate ⇒ 复核缺失时传进来的就是 stored 对象本身。
+    // 若此处按触发态比较会误判为「生成时未触发、现在触发」——那是事实的反面。
+    render(<StandAsideBanner gate={storedGate} />);
+    expect(screen.queryByTestId("stand-aside-cleared")).toBeNull();
+    expect(screen.queryByTestId("stand-aside-comparison")).toBeNull();
+    const box = screen.getByTestId("stand-aside-banner");
+    expect(box.textContent).not.toContain("未触发闸门");
+    expect(box.textContent).toContain("建议空仓观望");
+  });
+});
+
 /* ---------------------------------------------------------------- 可参与性口径（2026-09-15） */
 
 /**

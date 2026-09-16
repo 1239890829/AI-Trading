@@ -31,12 +31,34 @@
 
 ## 1 现场（每条任务收尾时更新）
 
-- **当前分支**：`master`。接手审阅偏差修复已由
-  `codex/fix-handoff-review-deviations` 经 PR #19 合并，功能分支在交付后删除。
+- **当前分支**：`codex/hunting-dynamic-and-notif-tabs`（用户七问交付，`IMP-035`；未合并前
+  §1 头行以本行为准。上一条已交付基线 `codex/fix-handoff-review-deviations` 经 PR #19 合并）。
 - **已交付基线**：以最新 `origin/master` 为准；交付后
   `git log --oneline origin/master..HEAD | wc -l` 实测 **0**。
 - **服务**：后端 8000（单实例；**绝不用 `--reload`**，原因见 `AGENTS.md` §6.1）、前端 3000。
-- **门禁基线（`RSH-003` 切片 2 收尾实测，接手时可直接对照）**：后端 **collect 3339
+- **门禁基线（`IMP-035` 用户七问交付 收尾实测，接手时可直接对照）**：后端 **collect 3366
+  （3290 passed / 76 skipped / 0 failed / 301.48s，8000 在跑且**无并发负载**）**、`pyflakes` **0**、
+  `doc-health` **全部通过**、`tsc` **0**、`eslint` **0 error / 0 warn**、
+  前端 **643 项 / 69 文件**（本地与 `TZ=UTC` **逐字一致**）。
+  ⚠️ **报数必须带前提，否则会被当成回归**：前端那两次数值是在**解除后端并发**的前提下取的
+  （`--maxWorkers=2`，或后端全量已跑完）。**与后端全量并发跑时默认并行度偶发 1 项红** ——
+  `components/agent/markdown-view.test.tsx::docs/ 下全部 md 均可渲染完成` 超时 5240ms（>5s 默认）。
+  该项**是已登记的 `BUG-010`**（D 档观察项，判据挂在墙钟上，与 `BUG-008` 同族），
+  账本原文已写明「与后端全量并发跑时 4 轮中 3 轮红、解除并发后 ×3 全绿」，本轮**第三次独立复现同一触发条件**；
+  隔离复跑 10 项全绿、整文件仅 1.6~2.8s ⇒ **非本轮引入**（本轮只改前端配色字典与契约清单）。
+  ⚠️ **较上值 3339/608·67 的 Δ 全部机械归因**（不写"涨了"就完事）：
+  · 后端 **+27 collect = +27 passed / ±0 skipped** = `+10`（新 `tests/test_picks_live_gate.py`）
+    + `+7`（新 `tests/test_llm_model_single_source.py`）+ `+7`（`tests/test_notifications.py` 实测 13→20）
+    + `+3`（`tests/test_sentiment.py` 实测 25→28，基线用**干净检出** worktree 实测）。
+    实测 `tests/test_import_lint.py` 前后**均为 268（194 passed / 74 skipped）** ⇒ 本轮**无新增后端模块**，
+    `skipped 76` 不变**自洽**（[[KB-ENG-97]]：跳过数不变 = 无覆盖丢失）。
+  · 前端 **+35 项 / +2 文件** = `+18`（新 `apps/web/lib/picks-gate.test.ts`）
+    + `+6`（新 `apps/web/components/notifications/notification-event-tab.test.tsx`）
+    + `+11`（`pick-card.test.tsx` +6 / `notification-drawer.test.tsx` +4 / `notification-row-landing.test.tsx` +1，
+    由 `git diff` 逐文件计 `it(`/`test(` 净增数得出）。
+  ⚠️ **门禁数字的权威位是本文件 §1；`AGENTS.md` §1 的门禁头行必须与本文件同轮同步**（本轮已同步）。
+  详见 `§IMP-035`。
+- **门禁基线（`RSH-003` 切片 2 收尾实测）**：后端 **collect 3339
   （3263 passed / 76 skipped / 0 failed / 240.74s；收尾复跑 237.56s，均在 8000 在跑时）**、`pyflakes` **0**、
   `doc-health` **全部通过**、`tsc` **0**、`eslint` **0 error / 0 warn**、
   前端 **608 项 / 67 文件**（本地与 `TZ=UTC` **逐字一致**；`apps/web/` 本轮**零改动**）。
@@ -132,6 +154,7 @@
 
 | 任务 ID | 状态 | 日期 | 一句话 |
 |---|---|---|---|
+| `IMP-035` | ✅ 闭环 | 2026-09-16 | 用户七问交付：通知中心新增「资讯 / 事件」tab（与盘面页同源、浏览面不计未读）· 判读模型写死 `deepseek-v4-flash` · 重跑进化 · 盘中提醒**按标的去重** · **猎场闸门读时重算**（降级三态）· `KB-STOCK-37`；同轮补齐 `LEVEL_STYLE` 缺失的 `L3` 键（契约守卫抓出） |
 | `RSH-003` | 🟡 部分闭环 | 2026-09-16 | 候选因子「入池前结构新颖性筛查」切片交付（三判据 + CLI + 18 例）；**四候选真实库实测**：`willr20`/`cmo20` 论证重复（+1.000）· `kurt20` 提示冗余（0.765）· `skew20` 无冗余证据（0.523）；同轮修掉**薄样本配对劫持择优结论**与**CLI 参数被静默丢弃**两处缺陷。**切片 2（同日）**：补指数平滑原语（EMA/Wilder，含「成对权重」陷阱守卫）+ 实测 `ppo20`/`adx14` —— `ppo20` 提示冗余（+0.779）· `adx14` 无冗余证据（+0.309）；抓出**窗口函数在 `WHERE` 后求值**与**名次列 `FILTER` 形同虚设**两处缺陷 |
 | `RSH-027` | 🟡 部分闭环 | 2026-09-16 | 场景化 KB 路由（四场景逐行对应蓝图 §5）+ 引用三态快照 + 覆盖度恒等式；同轮修掉议程第八路**静默漏 16/178 条**的偏差 |
 | `IMP-034` | ✅ 闭环 | 2026-09-16 | 提醒链路过期断言**实为 10 处**（非登记的 5 处），逐处按现实改写；`notifications` 三个死函数连同其用例删除 |
@@ -142,6 +165,69 @@
 | `GOV-014` | ✅ 闭环 | 2026-09-16 | 建立交接明细层与双向索引守卫；注入自证抓出并修掉守卫的两处判据盲区，流程已固化为技能 |
 | `RSH-026` | 🟡 部分闭环 | 2026-09-16 | 个股机会学习闭环第一批已交付，并完成独立验收轮（抓出并修掉 1 处 schema 分叉） |
 | `BUG-014` | ✅ 闭环 | 2026-09-16 | 两处迁移把表建到默认库 ⇒ 全新库缺 5 张表；已改 `op.get_bind()` 并加两条守卫 |
+
+## IMP-035 用户七问交付：资讯/事件 tab · 模型写死 · 提醒去重 · 猎场闸门读时重算（闭环）
+- **账本**：`docs/retro-and-gaps.md` §6.0 `IMP-035` ｜ **日期**：2026-09-16 ｜ **状态**：✅ 闭环
+- **缺口与验收标准**：用户当日七问逐条给结论并落地。验收 = ①七问**每条有可复算/可观察证据**
+  （不凭推理）；②落地项有守卫 + **注入自证**；③门禁全绿。**「今日已错过的盘中机会不可追补」
+  如实声明、不做假回填**（回填一个不存在的历史提醒 = 伪造证据）。
+- **改动**（按问编号）：
+  - **Q1 通知中心**：先确认**已停推**新闻/事件（`IMP-028` 收口 `stock_opportunities_only`）⇒ 新增
+    「资讯 / 事件」tab（`components/notifications/event-feed.tsx`）。展示口径（四级分类/三级影响力配色、
+    点击落点）抽到 **`apps/web/lib/event-view.ts` 共享**，**与盘面页事件标签同源同一端点**
+    （`GET /api/events/impact`）；**抽屉是窄栏但落点必须一致，版式各自决定** ⇒ 该模块**刻意不提供 JSX**。
+    **浏览面不计未读**（事件不是"我的提醒"，混进未读会让红点失真）。
+  - **Q3 模型写死**：`review_llm_model` 默认 `deepseek-v4-flash`（`backend/app/core/config.py`），
+    配 7 例单源守卫（`backend/tests/test_llm_model_single_source.py`）。
+    实测：deepseek **3.339s / rc=0**；glm-5.3 **挂起至 SIGTERM(137)** ——
+    ⚠️ **两者 stderr 都带 `unrecognized_model`** ⇒ **警告文本与成败正交，不能拿它判可用性**。
+  - **Q4 进化重跑**：`议程完成：status=executed items=4`（全 B 类），48s，`llm_used=1/8`；
+    产物 `docs/evolution/2026-09-16.md`（该目录为**跟踪目录**，故随本轮入库）。
+  - **Q5 盘中提醒未提示**：根因 = `_already_recent` 按 **`rule_id`** 去重 ⇒ 当日 121 条 `pre_limit`
+    （=121 只**不同标的**）**只逃出 1 条**；已按用户选择「两处都改」修：去重键改**标的** +
+    DB 侧 `real_symbol_only` 修窗口截断（实测 `count 89→200`）。
+  - **Q7 闸门动态化（核心）**：根因是**读时重算 vs 落库冻结**——`_live_style_routing` 每次读取重算相位，
+    而 `gate` / `market_phase` 来自 **09:26 落库** ⇒ 出现「chip 显示实时高潮、闸门仍按生成时刻退潮」
+    **两个相反结论并排**。修法：引擎新增 **`sentiment.gate_inputs` 结构化出口**（四项本就算过，
+    读侧**零额外网络调用**；第六个消费方仍共用 **60s 共享情绪槽**，**不新开槽**）+
+    `picks.py` 的 `_live_gate` / `_attach_gates`；落库值标 `gate_source="stored"`、实时重算值放
+    `meta.gate_live`。**降级三态** `gate_source ∈ {stored, live, unavailable}` ——
+    **不得把 `stand_aside=False` 凭空造出**（那等于把"不知道"伪装成"安全"）。
+    前端 `lib/picks-gate.ts` 纯函数（`gateActive` / `gateDrift` / `gateInputLines` / `compareGates` /
+    `clockOf`）+ `StandAsideBanner` 动态对照；`gateDrift` 差异枚举
+    `none|cleared|newly_triggered|reasons_changed|unavailable`，**只有 `gate_source==="live"` 才做差异判断**。
+  - **Q6 方法论**：`KB-STOCK-37`（情绪高涨 ≠ 上车机会：**先分"接力真假"、再分"钱扩散还是收缩"**）；
+    「拉证券横盘」**明标待验证假设**并写明**本系统当前没有这条检测**（不当既有能力）。
+  - **门禁抓出的缺口（同轮修）**：新增 `lib/event-view.ts` 触发跨端契约「防遗漏」守卫 ⇒ 登记
+    `FOUR_STYLE`（← `events.impact.FOUR_LABEL`）与 `LEVEL_STYLE`（← `events.ranking.LEVEL_REASON`）；
+    登记时暴露**前端 `LEVEL_STYLE` 缺 `L3` 键**——后端分级全集恒为 `L1/L2/L3`，默认只是**过滤**不发
+    （`include_l3` 默认 False）⇒ 补 `L3` 键，否则开启该参数即**无色徽标**。
+    **「默认不渲染」不构成豁免理由**（豁免 = 放行一个真缺口）。
+- **机械证据**：后端 collect **3366**（**3290 passed / 76 skipped / 0 failed / 301.48s**）；
+  前端 **643 项 / 69 文件**（本地与 `TZ=UTC` 逐字一致）。Δ 全部机械归因，见 **§1 门禁基线**块。
+- **注入自证**（三处，**均正确报红**）：
+  ① `gateDrift` 去掉 `gate_source` 来源守卫 ⇒ 旧后端形态（复核缺失、传进来的是落库对象）被判成
+  「盘中**新增**触发」——**与事实正好相反**；② 降级说明停渲染 ⇒ 报红；
+  ③ `LEVEL_STYLE` 移除 `L3` 键 ⇒ 契约守卫报「event-view.ts 里没有覆盖后端全集 `['L1','L2','L3']` 的字典」。
+- **UI 实测**（agent-browser 文本 + 几何量，**不靠推理代替观察**）：
+  · 通知中心 `rowCount=30` / `notification-actions=30` / `notification-judgment=30`；标签 =
+    「个股机会」「资讯 / 事件」；切到事件态 `notification-row=0`、`unreadDots=0`（未读不被污染）。
+  · **「行情与判读一体化、放标签下方右边」以几何量确证**：操作组与其**标签行同一行**
+    （`sameRowAsLabel=true`）、位于**主体下方**（`belowBody=true`）、**右对齐**（`ml-auto`，右间距 11px）。
+    ⚠️ **首测取错选择器**（卡片内有两个 `mt-1`，`querySelector` 取到**正文段**而非标签行）
+    ⇒ 一度得出 `sameRow=false` 的**错误结论**；改用「操作组的父节点」为基准才正确
+    —— **量布局必须锚在所测元素自己的容器上，别用同 class 的首匹配**。
+  · 事件 tab：`event-feed-row=30`、`L2` 徽标**有样式**（非空 className）；
+    猎场 `stand-aside-cleared` + `role="status"`：生成时「退潮」晋级率 8%（历史 9 分位）
+    ⇄ 当前「高潮」36%（98 分位）/ 炸板率 11%（2 分位）。
+- **门禁**：后端 **3366（3290 passed / 76 skipped / 0 failed）** / 前端 **643·69** / `tsc` **0** /
+  `eslint` **0 error / 0 warn** / `pyflakes` **0** / `doc-health` **全部通过**。
+- **遗留与下一步**：① **`IMP-036`**（A 档）：`components/event-panel.tsx` 仍保留**第三份**
+  `FOUR_STYLE`，且契约守卫的扫描面只覆盖 `apps/web/lib/*.ts`、**不覆盖 `components/`** ⇒ 该守卫对组件目录
+  **存在判据盲区**；② **`RSH-028`**（C 档·等窗）：「越不信越拉 / 拉证券横盘」类主力反向操作的**盘面判据**
+  未实现（`KB-STOCK-37` 已标待验证假设），需样本；
+  ③ 通知中心「未读」只统计 `_NOTIF_KINDS`（资讯/事件为浏览面不计未读）——这是**设计口径不是缺陷**；
+  ④ 今日盘中**已错过**的机会**不可追补**（已向用户明示，不伪造历史提醒）。
 
 ## RSH-003 候选因子「入池前结构新颖性筛查」切片（本项仍开放）
 - **账本**：`docs/retro-and-gaps.md` §6.0 `RSH-003` ｜ **日期**：2026-09-16 ｜ **状态**：🟡 部分闭环

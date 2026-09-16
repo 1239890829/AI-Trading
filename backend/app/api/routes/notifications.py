@@ -66,7 +66,46 @@ log = logging.getLogger(__name__)
 router = APIRouter(tags=["notifications"])
 
 BUY_POINT_RULE = "__picks_buy_point__"
-_NOTIF_RULE_NAMES = (BUY_POINT_RULE,)
+#: `__picks_watcher__` 是**一个规则产出 8 种 kind** 的聚合规则（见 `alert_triage._already_recent`
+#: 的分布表）：其中只有 `pre_limit`（临板预警）与 `flow_surge`（大单异动）带**真实标的**，
+#: 其余（board_low_absorb / board_flow_surge / falsify / high_board_break …）的
+#: symbol 一律是 `000000`（板块级/方向级），**天然过不了下方的形状门**。
+WATCHER_RULE = "__picks_watcher__"
+
+#: 可进通知中心的**事件形状**（`snapshot.kind`），而非规则名。
+#:
+#: ⚠️ 2026-09-16 从「规则名收口」改为「形状收口」——用户实盘反馈：
+#: 当日 121 条临板预警**全部带真实代码**（如 09:27:44 锡华科技 8.3%、黑猫股份 7.2%，
+#: 均为 10cm 非一字板、有介入机会），却因白名单只认 `__picks_buy_point__` 而
+#: **一条都没进通知中心**；而 `__picks_buy_point__` 当日**一次都没触发**
+#: （`alert_rule` 表里根本没有该行——规则是懒创建的），于是通知中心整天为 0 条。
+#:
+#: 口径不变的部分：**仍然只收「个股级」且「值得打断用户」的机会**——
+#:   - `buy_point`：多维门控后的买点（原有）；
+#:   - `pre_limit`：**涨停前**的临板预警（"距封板 1.4pct，10cm"），语义即"介入机会"。
+#:
+#: 刻意**不含** `flow_surge`（大单异动）：它虽有代码，但语义是"资金异动 / 题材成员跟踪"，
+#: 不是买点——纳入与否属交易信号口径，留待用户拍板（候选，非默认开启）。
+_NOTIF_KINDS = ("buy_point", "pre_limit")
+_NOTIF_RULE_NAMES = (BUY_POINT_RULE, WATCHER_RULE)
+
+#: 各形状在通知中心的外显标签（缺省回退"个股机会"，不静默显示成空字符串）
+_KIND_LABEL = {"buy_point": "个股机会", "pre_limit": "临板预警"}
+
+#: **读取窗口**（与 `alert_limit` 是两件事）。
+#:
+#: ⚠️ 必须显著大于返回条数，理由与"为什么必须在 DB 侧按标的过滤"是一件事：
+#: 读取是「按 triggered_at 倒序取前 N 条」再筛形状，若直接用 `alert_limit=50`
+#: 去读，最近 50 条里临板的期望只有 ~8 条 ⇒ **等于把刚放开的形状又在读取阶段
+#: 掐掉**（改完看不见效果，最难查的那种）。
+#:
+#: ⚠️⚠️ 2026-09-16 **再次踩到同一类坑，但根因不同**：窗口按条数计，而板块级事件
+#: 占单日 83%（703 条里 582 条 `symbol=000000`）——它们一条都不会进通知中心，
+#: 却把窗口吃光。实测窗口 500 时当天 121 条临板只出来 **89 条**。
+#: 修法不是把这个数字调大（那只是把边界推远），而是**在 DB 侧用
+#: `real_symbol_only=True` 过滤**（见 `alert_repo.list_events`）：个股级事件
+#: 单日实测峰值 ~156 条 ⇒ 500 覆盖 3 个交易日以上，且查询量降为原来的 1/5。
+_NOTIF_FETCH_LIMIT = 500
 
 
 def _session_of(bj: datetime, trading_dates: set | None = None) -> str:
@@ -90,8 +129,20 @@ def get_alert_repo(request: Request) -> AlertRepository:
     return request.app.state.alert_repo
 
 
-def _alert_items(repo: AlertRepository, limit: int, trading_dates: set | None = None) -> list[dict]:
+def _alert_items(
+    repo: AlertRepository, limit: int, trading_dates: set | None = None
+) -> tuple[list[dict], dict[str, int]]:
     """多维门控后的买点事件 → 个股机会通知。triggered_at 为北京时间 naive。
+
+    `limit` 是**返回条数上限**；底层读取用 `_NOTIF_FETCH_LIMIT`（更宽，且已在
+    DB 侧限定"带真实标的"），理由见该常量的注释——否则「刚放开的形状」会被
+    读取窗口悄悄掐掉。
+
+    返回 `(items, seen)`：`seen` 是读取窗口内**各形状的原始条数**（含被形状门
+    挡下的；因读取已限定个股级，这里不再出现板块级形状）。**统计全部形状**
+    而不是只统计白名单那两种——空态要回答的是「今天到底有没有个股级事件」，
+    只报白名单会漏掉最有用的对照（如 `flow_surge` 有货但语义不是买点）。
+    白名单两键恒在（0 也返回），其余形状只在 >0 时出现。
 
     P0-2（2026-09-08 用户指令「AI 盘中分析进站内通知」）：合并 AgentTriage
     判读结论与响应建议进 body——AI 的盘中分析在通知中心直接可见。
@@ -99,8 +150,20 @@ def _alert_items(repo: AlertRepository, limit: int, trading_dates: set | None = 
     rules = {r.id: r for r in repo.list_rules()}
     notif_rule_ids = {rid for rid, r in rules.items() if r.name in _NOTIF_RULE_NAMES}
     if not notif_rule_ids:
-        return []
-    events = [e for e in repo.list_events(limit=limit) if e.rule_id in notif_rule_ids]
+        return [], {}
+    fetch_limit = max(limit, _NOTIF_FETCH_LIMIT)
+    # DB 侧按**真实标的**过滤：板块级事件（占单日 83%）一条都不会进通知中心，
+    # 却会把按条数计的窗口吃光（实测 121 条临板只出来 89 条）。见 `_NOTIF_FETCH_LIMIT`。
+    raw = repo.list_events(limit=fetch_limit, real_symbol_only=True)
+    if len(raw) >= fetch_limit:
+        # 窗口饱和 = 更早的条目**已被静默截断**。这正是"改完看着生效、但用户
+        # 看到的仍不是全部"的成因，所以不能只靠注释，必须在日志里喊出来。
+        log.warning(
+            "notifications: 个股级事件读取窗口已满（%d 条）⇒ 更早的条目被截断；"
+            "若单日个股级事件持续超过该值，需调大 _NOTIF_FETCH_LIMIT",
+            fetch_limit,
+        )
+    events = [e for e in raw if e.rule_id in notif_rule_ids]
 
     # AI 判读与响应建议（P0-2）：event_id → (verdict, reason)
     triage_by_event: dict[int, tuple[str, str]] = {}
@@ -122,6 +185,9 @@ def _alert_items(repo: AlertRepository, limit: int, trading_dates: set | None = 
         log.exception("notifications: triage merge failed")
 
     items: list[dict] = []
+    # 白名单两键**恒在**（0 也返回）：空态要能一眼看出"临板预警 0 条"，
+    # 缺键与 0 条在渲染侧是两回事（缺键 = 没统计，0 = 统计了确实没有）。
+    seen: dict[str, int] = {k: 0 for k in _NOTIF_KINDS}
     for e in events:
         snap = e.snapshot if isinstance(e.snapshot, dict) else {}
         if isinstance(e.snapshot, str):
@@ -130,10 +196,15 @@ def _alert_items(repo: AlertRepository, limit: int, trading_dates: set | None = 
             except Exception:  # noqa: BLE001
                 snap = {}
         kind = snap.get("kind") or ""
-        # 规则名和事件形状双重收口：历史脏行、占位代码、缺名称或非 buy_point
-        # 都不冒充「真正机会」。上游缺证据时宁缺毋滥。
+        # 全部形状计数（不只白名单）：空态里"个股级 0 条"必须能对上"板块级 N 条"，
+        # 否则读侧仍分不清"没扫到"与"扫到的都不是个股级"。
+        if kind:
+            seen[kind] = seen.get(kind, 0) + 1
+        # 形状 + 标签双重收口（2026-09-16 起）：`kind` 必须在本端点明列的**个股级**
+        # 机会形状内，且必须带真实标的与名称。历史脏行、占位代码（`000000` 是
+        # 板块/方向/健康类事件的占位）都不冒充「真正机会」。上游缺证据时宁缺毋滥。
         stock_name = (snap.get("name") or "").strip() if isinstance(snap.get("name"), str) else ""
-        if kind != "buy_point" or not e.symbol or e.symbol == "000000" or not stock_name:
+        if kind not in _NOTIF_KINDS or not e.symbol or e.symbol == "000000" or not stock_name:
             continue
         direction = snap.get("direction") or ""
         text = (snap.get("text") or "").strip()
@@ -148,7 +219,7 @@ def _alert_items(repo: AlertRepository, limit: int, trading_dates: set | None = 
             {
                 "id": f"alert-{e.id}",
                 "category": "opportunity",
-                "label": "个股机会",
+                "label": _KIND_LABEL.get(kind, "个股机会"),
                 "session": _session_of(bj, trading_dates) if bj else "intraday",
                 "ts": bj.isoformat(sep=" ") if bj else None,
                 "title": f"【{direction or '盘中买点'}】{e.symbol} {stock_name}".strip(),
@@ -158,7 +229,7 @@ def _alert_items(repo: AlertRepository, limit: int, trading_dates: set | None = 
                 "score": None,
             }
         )
-    return items
+    return items, seen
 
 
 @router.get("/notifications")
@@ -187,14 +258,18 @@ async def notifications(
 
     errors: dict[str, str] = {}
     alert_items: list[dict] = []
+    shapes_seen: dict[str, int] = {}
     try:
-        alert_items = _alert_items(repo, alert_limit, trading_dates)
+        alert_items, shapes_seen = _alert_items(repo, alert_limit, trading_dates)
     except Exception as exc:  # noqa: BLE001
         log.exception("notifications: alert source failed")
         errors["alerts"] = str(exc)
 
     items = alert_items
     items.sort(key=lambda x: x["ts"] or "", reverse=True)
+    # 截断在**筛选之后**（读取窗口见 `_NOTIF_FETCH_LIMIT`）：先按形状挑出个股机会，
+    # 再按时间倒序取前 `alert_limit` 条——而不是"先取最近 N 条再看有没有个股机会"。
+    items = items[:alert_limit]
     # 空态诊断（`BUG-016` 子项③，2026-09-16）：**只在空态附加**。
     # 空响应体本身不含任何能区分「真无机会 / 链路未跑 / 上游空」的信息 ——
     # 三者都是 `{"items": [], "count": 0}`，这正是「不可解释」的根因。
@@ -214,6 +289,21 @@ async def notifications(
                 "state": "unavailable",
                 "note": "空态诊断不可用（内部错误）：**这不代表没有机会**，请查后端日志。",
             }
+        if not isinstance(diagnostics, dict):
+            # 同一纪律再兜一层：诊断函数若返回非 dict（契约破坏），也不能让
+            # `data.diagnostics` 退化成 None —— 那正是本端点要消灭的"同形"。
+            diagnostics = {
+                "state": "unavailable",
+                "note": "空态诊断返回了非预期结构：**这不代表没有机会**，请查后端日志。",
+            }
+        # 形状计数（2026-09-16）：空态下必须能区分「买点链没选出票」与
+        # 「临板预警也没触发」——两者都表现为空列表。**只加可诊断面，不改推送口径**。
+        #
+        # ⚠️ 用**新 dict** 而不是 `diagnostics["shapes"] = ...` 就地改：
+        #    诊断函数返回的对象属**调用方**（也属测试里的桩），就地 mutate 会把副作用
+        #    留在那里 —— 守卫用例断言 `body["diagnostics"] == sentinel` 时，
+        #    因两侧是同一对象而**恒真**，等于把"接线正确"这条判据悄悄掏空。
+        diagnostics = {**diagnostics, "shapes": shapes_seen}
     return {
         "data": {
             "items": items,

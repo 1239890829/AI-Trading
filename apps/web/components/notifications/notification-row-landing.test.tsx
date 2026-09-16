@@ -209,3 +209,38 @@ describe("通知中心：个股提醒的落点统一（IMP-033）", () => {
     expect(screen.queryByTestId("notification-badge")).toBeNull();
   });
 });
+
+/**
+ * 「行情 + 判读」**一体化**（2026-09-16 用户要求：「行情与判读应该为一体的，
+ * 可以放标签下方右边」）。
+ *
+ * 改造前：卡片**外面**并排挂着两个各自带框的按钮（`行情 ↗` / `判读`），
+ * 与卡片不对齐、视觉上是三块互不相干的东西。
+ * 改造后：两者进卡片、共用一个容器与边框、以竖线分隔，置于标签行右侧。
+ *
+ * ⚠️ 为什么必须守**结构**而不只是"两个文本都在"：
+ * 把这两个入口重新挪到卡片外，文本断言**照样全绿**（两者仍在页面上），
+ * 但用户看到的就是原来那个"三块不对齐"的形态——判据必须钉住**归属容器**。
+ */
+describe("通知中心：行情/判读一体化（2026-09-16）", () => {
+  it("两个入口同属**一个**操作组，且该组在卡片内（不是挂在卡片外）", async () => {
+    payload = makePayload([item()]);
+    renderBell();
+    await openDrawer();
+
+    const row = screen.getByTestId("notification-row");
+    const actions = screen.getByTestId("notification-actions");
+
+    // ① 一体化：同一个容器里同时装得下「行情」与「判读」
+    expect(actions.textContent).toContain("行情");
+    expect(actions.querySelector('[data-testid="notification-judgment"]')).toBeTruthy();
+    expect(actions.querySelector("a[href]")).toBeTruthy(); // 行情是真链接（右键可新标签打开）
+    // ② 位置：它在**卡片内部**（用户要的"标签下方右边"以卡片为坐标系才有意义）
+    expect(row.contains(actions)).toBe(true);
+    // ③ 只有**一个**操作组（不是每行渲染两组：卡片内一份 + 卡片外一份）
+    expect(screen.getAllByTestId("notification-actions").length).toBe(1);
+    // ④ 卡片内不得出现"按钮嵌按钮/链接"的非法结构（浏览器会拆标签、点击语义互相吞掉）
+    expect(row.querySelector("button button")).toBeNull();
+    expect(row.querySelector("button a")).toBeNull();
+  });
+});
