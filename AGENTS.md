@@ -68,7 +68,7 @@ cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 coll
 # **教训与本文档的警告同源：数字标注要么当轮实测回填，要么写"实测方法"而不写死数值。**
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
 cd apps/web && npx eslint .                       # 0 error / 0 warn（P1-27 已清零；余 1 处 C 类显式豁免）
-cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 598 项 / 66 文件（09-16 `IMP-031` 轮实测）
+cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 603 项 / 67 文件（09-16 `IMP-033` 轮实测；其中 1 项为既有 `BUG-010` 并发超时候选）
 # ⚠️ 默认并行度偶发 **SIGKILL(exit 137) 且零输出**（非测试失败）⇒ 先降并行度复跑：
 #   npx vitest run --maxWorkers=1
 # ⚠️ **凡改动/新增涉及时间·时区的断言，必须再用 `TZ=UTC` 复跑一遍**（CI 跑在 UTC，本地是 UTC+8）：
@@ -99,7 +99,18 @@ lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=
 ```
 
 > **门禁口径**：后端 collect **3247 项（3171 passed / 76 skipped / 0 failed）**、
-> 前端 **598 项 / 66 文件**、eslint **0 error / 0 warn**
+> 前端 **603 项 / 67 文件**、eslint **0 error / 0 warn**
+> （2026-09-16 `IMP-033` 提醒落点统一为个股详情弹窗轮实测；较上一值「后端 3247 / 前端 598·66」
+> 增量 **前端 +5 项 / +1 文件**，来源自洽：**恰等于**新文件
+> `components/notifications/notification-row-landing.test.tsx` 的用例数（5）；
+> 后端 **±0**，理由是**本轮未改后端代码与后端测试**，故沿用上轮实测值（本轮**复跑复验**为同一数字）。
+> 本地时区与 `TZ=UTC` **均为 603/67**。
+> ⚠️ 前端那 603 里**有 1 项**是全量并发下超时的 `BUG-010`（D 档观察项，非回归）——
+> 归因见 `docs/handoff.md` §1；**两道全量不要并发跑**。
+> ⚠️ **本轮后端 pytest 曾真红一轮**：`doc-health` J 项 + `test_doc_health_anchors.py`
+> 报 `docs/handoff.md:88 → <新建但尚未 git add 的测试文件>（全仓不存在）`
+> —— 判定面取自 `git ls-files` ⇒ **未跟踪的新文件在本地就是"不存在"**。
+> **修法 = 先 `git add`**（见 [[KB-ENG-102]] 同族反向情形 / [[KB-ENG-95]]）。）
 > （2026-09-16 `IMP-031` AI 判读气泡点击语义修正 + 选股提醒链路梳理轮实测；较上一值「后端 3247 / 前端 593·65」
 > 增量 **前端 +5 项 / +1 文件**，来源自洽：**恰等于**新文件
 > `components/assistant/floating-assistant-alert-bubble.test.tsx` 的用例数（5）；

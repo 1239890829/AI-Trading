@@ -23,7 +23,8 @@ import { StockLink } from "@/components/stock-link";
 import { IncrementalSentinel } from "@/components/ui/incremental-sentinel";
 import { useIncremental } from "@/hooks/use-incremental";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
-import { useDetailModal } from "@/components/detail/detail-modal";
+import { useDetailModal, type DetailPayload } from "@/components/detail/detail-modal";
+import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { NewsModal, type NewsModalItem } from "@/components/news-modal";
 
 /**
@@ -51,6 +52,13 @@ import { NewsModal, type NewsModalItem } from "@/components/news-modal";
  * 却与后端 `ts`（北京 naive 带空格）做**字面比较** —— 当天条目恒被判为已读，
  * 跨日又整天一起计入未读，表现为「一键已读后计数没了，来了新的却在旧累积上累加」。
  * 一律先 `parseTs` 转 epoch 再比大小。
+ *
+ * 落点口径（2026-09-16 `IMP-033`）：
+ *  - **有代码的条目（个股机会）** ⇒ 行体与「行情 ↗」**都开该股详情弹窗**，
+ *    与悬浮球 `openSymbolDetail`、猎场 `StockLink` **三处同落点**（[[KB-ENG-92]] 详情弹窗化）；
+ *  - **判读全文**（分类 / 评分 / 理由）改由行右侧**「判读」**入口打开 ⇒ 行体换落点
+ *    **不以丢失能力为代价**（同族：`IMP-031` 收敛主按钮时补「全部 N 条」）；
+ *  - **无代码的条目**（如消息面）保持行体 → 通用详情弹窗，不静默失败。
  */
 
 const SESSION_TABS: { key: NotificationItem["session"]; label: string }[] = [
@@ -80,6 +88,28 @@ function timeText(ts: string | null): string {
   return ts.length >= 16 ? ts.slice(11, 16) : ts;
 }
 
+/**
+ * **判读详情**弹窗的载荷（2026-09-16 `IMP-033`）。
+ *
+ * 抽成**单一构造函数**而不是在两处各拼一份：行体与「判读」按钮展示的是**同一份判读**，
+ * 两份拼装一旦漂移（如忘了带 `symbol`、或分类映射改了），
+ * 就会出现"同一个东西从两个入口点开看到不同内容"——正是本项要消除的那类不一致。
+ */
+function judgmentPayload(item: NotificationItem): DetailPayload {
+  return {
+    kind: item.category === "news" ? "event" : "generic",
+    title: item.title,
+    body: item.body,
+    symbol: item.symbol,
+    source: null,
+    date: item.ts,
+    meta: [
+      { label: "分类", value: item.label },
+      ...(item.score != null ? [{ label: "评分", value: String(item.score) }] : []),
+    ],
+  };
+}
+
 function NotificationRow({
   item,
   unread,
@@ -93,6 +123,8 @@ function NotificationRow({
   onOpenNews: (n: NewsModalItem) => void;
 }) {
   const { open: openDetail } = useDetailModal();
+  // 2026-09-16 `IMP-033`：个股提醒的落点与悬浮球 / 猎场统一（就地开该股详情弹窗）。
+  const { open: openSymbolDetail } = useSymbolDetail();
   // 2026-09-09：无 url 的通知（快讯类大多无原文链接）此前渲染成死 div 点不动。
   // 现统一可点：有 url 走 NewsModal 看原文；无 url 走通用详情弹窗看 body+评分。
   const clickable = item.url?.startsWith("http") ?? false;
@@ -152,18 +184,13 @@ function NotificationRow({
       className={shell}
       onClick={() => {
         onRead();
-        openDetail({
-          kind: item.category === "news" ? "event" : "generic",
-          title: item.title,
-          body: item.body,
-          symbol: item.symbol,
-          source: null,
-          date: item.ts,
-          meta: [
-            { label: "分类", value: item.label },
-            ...(item.score != null ? [{ label: "评分", value: String(item.score) }] : []),
-          ],
-        });
+        // 2026-09-16 `IMP-033` **落点统一**：有代码 ⇒ 直接开**该股详情弹窗**，
+        // 与悬浮球（`openSymbolDetail`）与猎场（`StockLink`）三处同落点。
+        // ⚠️ 判读全文**不再由行体承载** ⇒ 改由行右侧「判读」入口打开（见 `NotificationBell`）——
+        // **统一落点不得以丢失能力为代价**（同族纪律见 `IMP-031`：收敛主按钮时补「全部 N 条」）。
+        // 无代码的条目（如消息面）保持原样走通用详情弹窗，不静默失败。
+        if (item.symbol) openSymbolDetail({ symbol: item.symbol });
+        else openDetail(judgmentPayload(item));
       }}
     >
       {inner}
@@ -178,6 +205,8 @@ export function NotificationBell() {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<NotificationItem["session"]>("intraday");
   const [newsItem, setNewsItem] = useState<NewsModalItem | null>(null);
+  // 行体已改为开个股详情弹窗，判读全文改由行右侧「判读」入口打开（`IMP-033`）。
+  const { open: openDetail } = useDetailModal();
   // 已读偏好（水位 + 逐条 id + 清除水位）：**外部存储订阅**，见 lib/notification-read.ts。
   // 首帧（含 hydration）给服务端空快照，hydration 后自动切到 localStorage 真实值。
   const prefs = useSyncExternalStore(subscribePrefs, getPrefsSnapshot, getServerPrefsSnapshot);
@@ -422,6 +451,22 @@ export function NotificationBell() {
                       >
                         行情 ↗
                       </StockLink>
+                      {/* 2026-09-16 `IMP-033`：行体已改为**开个股详情弹窗** ⇒ 判读全文
+                          需要一个显式入口（原先由行体承载）。放在行的**按钮之外**
+                          （与 `StockLink` 并列）——把按钮嵌进行体的 `<button>` 里是非法 HTML，
+                          且会让点击语义互相吞掉。 */}
+                      <button
+                        type="button"
+                        data-testid="notification-judgment"
+                        title="在弹窗中查看该条 AI 判读全文（分类 / 评分 / 理由）"
+                        className="mt-2.5 shrink-0 rounded border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
+                        onClick={() => {
+                          markOneRead(i);
+                          openDetail(judgmentPayload(i));
+                        }}
+                      >
+                        判读
+                      </button>
                     </div>
                   ) : (
                     <NotificationRow

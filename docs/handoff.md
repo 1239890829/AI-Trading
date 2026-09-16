@@ -31,21 +31,20 @@
 
 ## 1 现场（每条任务收尾时更新）
 
-- **分支**：`codex/alert-bubble-symbol-detail`（自 `origin/master` 创建；本轮交付 `IMP-031`）。
-  上一轮分支 `codex/ledger-stage-consistency` 已随 PR #15 合并并**删除**（本地与远程均已清）。
-- **基线**：`origin/master` = `662f9fa`（PR #15 合并提交）。
+- **分支**：`codex/notification-row-symbol-detail`（自 `origin/master` 创建；本轮交付 `IMP-033`）。
+  上一轮分支 `codex/alert-bubble-symbol-detail` 已随 PR #16 合并并**删除**（本地与远程均已清）。
+- **基线**：`origin/master` = `98a5c65`（PR #16 合并提交）。
 - **服务**：后端 8000（uvicorn，单实例；**绝不用 `--reload`**，原因见 `AGENTS.md` §6.1）、前端 3000。
 - **门禁基线（本次收尾实测，接手时可直接对照）**：后端 **collect 3247（3171 passed / 76 skipped / 0 failed）**、
-  前端 **598 项 / 66 文件 · 597 passed / 1 failed**、`eslint` **0/0**、`doc-health` **全部通过**。
+  前端 **603 项 / 67 文件 · 602 passed / 1 failed**、`eslint` **0/0**、`doc-health` **全部通过**。
   ⚠️ **那 1 failed 是 `BUG-010`（D 档观察项），不是回归**：用例 =
   `components/agent/markdown-view.test.tsx::docs/ 下全部 md 均可渲染完成`（固定 5s 墙钟）。
-  本轮**决定性归因（对照跑）**：临时移出本轮新增的 2 个文件后，基线**同样 `1 failed / 592 passed`、同一用例同一形态**
-  ⇒ 与新增文档/用例无关；增量 `597−592=5`、`66−65=1` **恰等于**新增用例数 ⇒ **新增用例全部通过**。
-  该用例单独跑 **10/10 · 1000ms**（`docs/` 已 87 份 md，阈值 5000ms）。宿主实测 **load 28.16 / 8 核**。
-  按原判**不改判据、不放宽阈值**（详见 `BUG-010` 行与 `AGENTS.md` 门禁段）。
-  前端较上轮 593/65 的 **+5 / +1** 即本轮新增的气泡用例文件。
-  ⚠️ **两道全量不要并发跑**：并发会因 CPU 竞争让 `markdown-view.test.tsx` 的 docs 全量渲染用例
-  超时假红（账本 `BUG-010`，D 档不主动动）——**它的红不代表代码回归**。
+  本轮**归因（对照跑，非推理）**：单独跑该文件 **10 passed / 2170ms**（docs 渲染用例 **1897ms**），
+  失败只出现在**全量并发**时；宿主实测 **load 39.16 / 8 核**。按原判**不改判据、不放宽阈值**
+  （详细归因史见 `BUG-010` 行与 `AGENTS.md` 门禁段）。
+  ⚠️ **两道全量不要并发跑**：并发会因 CPU 竞争让上述用例超时假红——**它的红不代表代码回归**。
+  前端较上轮 598/66 的 **+5 / +1** 即本轮新增的提醒落点用例文件；
+  **本地时区与 `TZ=UTC` 逐字一致（603/67）** ⇒ 本轮用例**不含时区敏感断言**。
 - **归属不明的既有未跟踪文件（非本轮产物，**保留、勿删**）**：`git status --short` 里的 5 个 `??` 项，
   分布在 5 个目录 —— `backend/data/lhb/`、`backend/data/minute_decisions/`、
   `backend/data/position_plans/`、`docs/daily-review/`、`docs/evolution/`。
@@ -59,11 +58,76 @@
 
 | 任务 ID | 状态 | 日期 | 一句话 |
 |---|---|---|---|
+| `IMP-033` | ✅ 闭环 | 2026-09-16 | 通知抽屉行体改为**开该股详情**（与悬浮球 / 猎场同落点），判读全文改由新增「判读」入口保全 |
 | `IMP-031` | ✅ 闭环 | 2026-09-16 | AI 判读气泡点开**就地打开该股详情弹窗**（不再跳告警页）；同轮梳理出提醒链路断点清单 |
 | `GOV-015` | ✅ 闭环 | 2026-09-16 | 账本「未完成档 ⇄ 闭环记录」一致性守卫（`doc-health` Q 项）；顺带把滞留 A 档的 `BUG-014` 销账 |
 | `GOV-014` | ✅ 闭环 | 2026-09-16 | 建立交接明细层与双向索引守卫；注入自证抓出并修掉守卫的两处判据盲区，流程已固化为技能 |
 | `RSH-026` | 🟡 部分闭环 | 2026-09-16 | 个股机会学习闭环第一批已交付，并完成独立验收轮（抓出并修掉 1 处 schema 分叉） |
 | `BUG-014` | ✅ 闭环 | 2026-09-16 | 两处迁移把表建到默认库 ⇒ 全新库缺 5 张表；已改 `op.get_bind()` 并加两条守卫 |
+
+## IMP-033 提醒落点统一为个股详情弹窗（判读全文改由「判读」入口保全）
+
+- **账本**：`docs/retro-and-gaps.md` §6.0 `IMP-033` ｜ **日期**：2026-09-16 ｜ **状态**：✅ 闭环
+- **缺口与验收标准**：同一条个股提醒里，**点行体**开的是通用判读弹窗、**点「行情 ↗」**开的是
+  该股详情弹窗 ⇒ **一行两个入口落两个落点**；而悬浮球（`openSymbolDetail`）与猎场（`StockLink`）
+  早已统一到**个股详情**（[[KB-ENG-92]]「个股在任何页面就地弹窗」）。
+  本项要消除的正是这类"**同一行点正文与点代码弹出不同内容**"。
+  验收标准（账本原文）：**以实际渲染为准**（`agent-browser` 文本通道读弹窗内容），
+  并补「**同一 symbol 三处入口落点相同**」的用例。
+- **改动**：仅 **1 个源文件 + 1 个新测试文件**（纯前端）。
+  · `components/notifications/notification-drawer.tsx` —— ① 行体 `onClick` 改为
+    `if (item.symbol) openSymbolDetail({ symbol }) else openDetail(judgmentPayload(item))`；
+  ② 新增**单一构造函数** `judgmentPayload(item)`（行体与「判读」入口共用，防两处口径漂移）；
+  ③ 行右侧新增「判读」入口（`data-testid=notification-judgment`，置于行体 `<button>` **之外**、
+    与 `StockLink` 并列——嵌进 `<button>` 是非法 HTML 且点击语义互吞）；
+  ④ 文件头补「落点口径」说明段。
+  · **刻意没动**：`symbol-detail-modal.tsx` 的**既有全局落点设计**（见下「口径澄清」）、
+    后端任何文件、`detail-modal` 的通用弹窗语义。
+- **机械证据**：
+  · 前端全量 **603 项 / 67 文件**（较上轮 `598/66` **+5 / +1**，增量**恰等于**本项新增用例文件）。
+  · 通知目录单跑 **10 passed**（`notification-drawer.test.tsx` 5 + `notification-row-landing.test.tsx` 5）。
+  · UI 实测 4 项（`agent-browser` 文本/DOM 通道，非推理）：
+    ① 工作台点行体 ⇒ `?symbol=603330`、右栏渲染「天洋新材 SH.603330 9.50 +5.56%」；
+    ② 工作台点「行情 ↗」⇒ 先切到 `600105` 做**对照**，点后回到 `603330` ⇒ **与行体同落点**；
+    ③ `/market` 点行体 ⇒ `[data-testid=symbol-detail-modal]`、`aria-label="个股详情 603330"`，
+       **URL 停在 `/market` 不变**（未跳转）；
+    ④ 「判读」⇒ 通用弹窗含「分类 确认 / 评分 78 / AI 判读（建议关注）：放量突破前高，量比 2.3」。
+  · 层级取证：`document.elementFromPoint(640,400)` 命中的元素 **属于个股弹窗、不属于抽屉**
+    ⇒ 弹窗确实盖在抽屉之上（不是被遮罩挡住而"看起来没反应"）。
+- **注入自证**：3 路，读数走 vitest `--reporter=json`（**精确条数 + 点名**，不用子串猜）。
+  `[A]` 行体改回无条件 `openDetail` ⇒ **2 红**；`[B]` 摘掉 `data-testid="notification-judgment"`
+  ⇒ **2 红**；`[C]` 无代码也强行开个股弹窗 ⇒ **1 红**。
+  每路先断言「靶点被改动」（`needle in original` 且 `mutated != original`）；还原后 `sha256`
+  逐字一致、复跑全绿。**未放宽任何判据、未 skip、未删用例**。
+- **门禁**：前端 `tsc --noEmit` **0** · `eslint` **0 error / 0 warn** ·
+  `vitest` 本地时区 **603/67（602 passed · 1 failed）**、`TZ=UTC` **逐字一致 603/67**（⇒ 新增用例
+  **不含时区敏感断言**）· 后端 pytest **3171 passed / 76 skipped / 0 failed**（collect 3247；
+  与上一轮**逐字相同**——本轮无后端代码与后端测试改动）· `pyflakes app tests scripts` **0** ·
+  `doc-health` **全部通过（19 项，0 待处理）**。
+  ⚠️ **后端 pytest 曾红过一轮，根因是「门禁输入面 ≠ 代码面」的第二次命中**：
+  `doc-health` J 项 + `test_doc_health_anchors.py::test_real_repo_has_no_dead_doc_anchor`
+  报 `docs/handoff.md:88 → notification-row-landing.test.tsx（全仓不存在）`——
+  J 的判定面是 `_repo_basenames()`，取自 **`git ls-files`**（`doc-health.py:914-932`）、
+  比对按 **basename**（`:1042`）⇒ **本轮新建、尚未 `git add`** 的测试文件在本地**就是"不存在"**。
+  **修法 = `git add` 该文件**（提交后在 CI 里当然存在），**不是改文档措辞、更不是登记豁免**；
+  复跑后 `doc-health` 与后端全量**双绿**。⚠️ 这与 [[KB-ENG-95]]（本地绿 / CI 红）**方向相反、
+  根因相同**——都是「判定面 = git 跟踪清单」在**本地工作区 ≠ 检出内容**时的两种表现；
+  已补记进 [[KB-ENG-102]]。**通例：新增文件与引用它的文档在同一轮时，先 `git add` 再跑门禁。**
+  ⚠️ 那 **1 failed 是 `BUG-010`（D 档观察项），不是本轮回归**：
+  用例 = `components/agent/markdown-view.test.tsx::docs/ 下全部 md 均可渲染完成`（固定 5s 墙钟）。
+  **归因（对照跑，非推理）**：单独跑该文件 **10 passed / 2170ms**（其中 docs 渲染用例 **1897ms**，
+  阈值 5000ms）⇒ 余量充足；失败只出现在**全量并发**时，宿主实测 **load 39.16 / 8 核**。
+  按原判**不改判据、不放宽阈值**（同 `BUG-010` 行与 `AGENTS.md` 门禁段）。
+- **口径澄清（须让接手者知道，别当成 bug）**：在 `/workbench` 上 `openSymbolDetail` **按既有
+  全局设计**走**右栏页内切换**（`router.replace`，不叠弹窗）而非弹窗——依据是
+  `symbol-detail-modal.tsx` 头注：右栏本就是**同一份** `StockDetailPanel`，再叠一层冗余，
+  且会让「左栏点自选 = 切右栏」与「搜索框选股 = 弹窗」两条路径**行为分叉**。
+  ⇒ 工作台上的表现是「**不跳转 + 就地看到该股详情**」，**弹窗形态出现在非工作台页面**；
+  用户诉求的「不跳转到提醒页面」在两种页面形态下**均满足**。
+  若要求工作台也强制弹窗，属**跨模块 UI 口径变更**（会与全站其余入口分叉）⇒ **另立拍板项**。
+- **遗留与下一步**：`IMP-034`（提醒链路过期断言与死代码清理）——本轮**刻意未顺手改**，
+  避免把"清死代码"与"改落点"混成一锅（其中 `morning_brief._daily_plan` 的两处失效导入
+  另属 `BUG-009`）。另：`IMP-031` / 本项共同梳理出的链路断点见 `summary/pick-signal-chain.md`。
 
 ## IMP-031 AI 判读气泡点击就地打开个股详情弹窗（不再跳转提醒页）
 
