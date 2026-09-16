@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import subprocess
 from enum import Enum
@@ -24,6 +25,8 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 import httpx
+
+log = logging.getLogger(__name__)
 
 
 class LLMFailure(str, Enum):
@@ -182,13 +185,22 @@ def chat_completion_via_cli(
             cmd, capture_output=True, text=True, timeout=timeout, check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        raise LLMError(f"claude_cli 调用超时：{exc}", LLMFailure.TIMEOUT) from exc
+        # 失败信息必须自带 model —— 2026-09-16 事故里报的是裸「claude_cli 调用超时」，
+        # 模型名只藏在被截断的命令行里，于是一眼看不出"是模型被下架了"。
+        # 该事故的形态值得写进提示：上游下架某模型时，CLI 不是快速报错而是**挂起**。
+        raise LLMError(
+            f"claude_cli 调用超时（model={model}）：{exc}"
+            "；提示：若该模型已被上游网关下架，现象正是「挂起直到超时」而不是快速失败"
+            "——请核对 ASHARE_REVIEW_LLM_MODEL / settings.review_llm_model 所配模型是否仍可用",
+            LLMFailure.TIMEOUT,
+        ) from exc
     except OSError as exc:
         raise LLMError(f"claude_cli 启动失败：{exc}", LLMFailure.UNAVAILABLE) from exc
     if proc.returncode != 0:
         kind = classify_cli_failure(proc.returncode, proc.stdout, proc.stderr)
         raise LLMError(
-            f"claude_cli 退出码 {proc.returncode}：{(proc.stderr or proc.stdout)[:200]}",
+            f"claude_cli 退出码 {proc.returncode}（model={model}）："
+            f"{(proc.stderr or proc.stdout)[:200]}",
             kind,
         )
     try:
@@ -198,12 +210,29 @@ def chat_completion_via_cli(
     if body.get("is_error"):
         kind = classify_cli_failure(proc.returncode, proc.stdout, proc.stderr)
         raise LLMError(
-            f"claude_cli 返回错误：{str(body.get('result'))[:200]}", kind,
+            f"claude_cli 返回错误（model={model}）：{str(body.get('result'))[:200]}", kind,
         )
     content = body.get("result")
     if not isinstance(content, str) or not content.strip():
         raise LLMError("claude_cli 回复为空", LLMFailure.EMPTY)
+    _warn_if_model_unrecognized(proc.stderr, model)
     return content
+
+
+def _warn_if_model_unrecognized(stderr: str, model: str) -> None:
+    """CLI 报 `unrecognized_model` 时留一条日志——**它不是失败信号，但也不是噪音**。
+
+    实测（2026-09-16）：该警告与调用成败**正交**——`deepseek-v4-flash` 带此警告
+    仍然 3.3s 正常返回；而 `glm-5.3` 带同一警告则挂起至超时。也就是说它只说明
+    「该名字不在 CLI 内置别名表里、被原样透传给网关」，**真正决定可用性的是上游**。
+    ⇒ 历史文档把它单方面写成"无害警告"是不完整的（09-04 那次它伴随退出码 1、
+    LLM 通道全天不可用）；这里保留可见性，避免下次又靠人肉分辨。
+    """
+    if stderr and "unrecognized_model" in stderr:
+        log.warning(
+            "claude_cli 未识别模型名 %r（已透传给上游网关）；"
+            "是否可用取决于上游是否仍提供该模型", model,
+        )
 
 
 def chat_completion(

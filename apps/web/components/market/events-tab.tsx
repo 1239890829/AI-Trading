@@ -7,6 +7,14 @@ import { symbolDetailClick, useSymbolDetail } from "@/components/detail/symbol-d
 import { Panel } from "@/components/panel";
 import { StockPools, directionLabel } from "@/components/event-panel";
 import { getImpactEvents, type EventSort, type ImpactEvent } from "@/lib/api";
+import {
+  FOUR_STYLE,
+  LEVEL_STYLE,
+  TAG_STYLE,
+  eventDetailPayload,
+  eventNewsItem,
+  levelTitle,
+} from "@/lib/event-view";
 import { themesUrl, workbenchUrl } from "@/lib/routing";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { Skeleton } from "@/components/ui/loading";
@@ -21,21 +29,11 @@ import { useIncremental } from "@/hooks/use-incremental";
  *   每条展示排序分与理由（可解释、可追溯，title 悬浮看全部理由）。
  * - 事件标签：业绩/公告/异动/资金/行业（规则派生，对照同花顺常用分类补覆盖），
  *   支持按标签筛选，条目内联标签徽标。
+ *
+ * ⚠️ 2026-09-16：配色表与点击落点构造**已抽到 `lib/event-view.ts`** ——
+ * 通知中心新增「资讯 / 事件」tab 后，同一份 `ImpactEvent` 有两个渲染入口，
+ * 两份拼装必然漂移（同一事件从两个入口点开看到不同内容）。本组件只保留版式。
  */
-
-const FOUR_STYLE: Record<string, string> = {
-  international: "bg-sky-500/15 text-sky-700 border-sky-500/40 dark:text-sky-300",
-  policy: "bg-amber-500/15 text-amber-800 border-amber-500/40 dark:text-amber-300",
-  hot: "bg-zinc-500/15 text-zinc-700 border-zinc-500/40 dark:text-zinc-300",
-  material: "bg-teal-500/15 text-teal-700 border-teal-500/40 dark:text-teal-300",
-};
-
-const LEVEL_STYLE: Record<string, string> = {
-  L1: "bg-up/20 text-up-ink dark:text-up border-up/50",
-  L2: "bg-zinc-500/15 text-zinc-600 border-zinc-500/40 dark:text-zinc-300",
-};
-
-const TAG_STYLE = "bg-indigo-500/10 text-indigo-700 border-indigo-500/30 dark:text-indigo-300";
 
 const FOUR_FILTERS = [
   { key: "all", label: "全部" },
@@ -211,7 +209,7 @@ export function EventsTab() {
                 )}
                 <span
                   className={`shrink-0 rounded border px-1 py-0.5 text-[10px] font-semibold ${LEVEL_STYLE[e.impact_level] ?? ""}`}
-                  title={e.impact_level === "L1" ? "L1 必上：政策/行业级/国际重大" : "L2 选上：事实类+有标的链"}
+                  title={levelTitle(e.impact_level)}
                 >
                   {e.impact_level}
                 </span>
@@ -222,9 +220,7 @@ export function EventsTab() {
                 </span>
                 {e.url ? (
                   <button
-                    onClick={() =>
-                      setModalItem({ title: e.title, url: e.url!, date: e.published_at ?? null, source: e.source ?? null, kindLabel: "快讯", digest: e.summary ?? null })
-                    }
+                    onClick={() => setModalItem(eventNewsItem(e))}
                     className="text-left text-sm text-zinc-800 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
                   >
                     {e.title}
@@ -234,24 +230,7 @@ export function EventsTab() {
                   // 此前渲染成死 span 点不动。改为走通用详情弹窗，展示判定状态 +
                   // 方向/依据/传导链 + 正文摘要（summary）或判定理由。
                   <button
-                    onClick={() => {
-                      const d = e.directions?.[0];
-                      openDetail({
-                        kind: "event",
-                        title: e.title,
-                        url: null,
-                        theme: d?.target ?? null,
-                        source: e.source ?? null,
-                        date: e.published_at ?? null,
-                        meta: [
-                          ...(e.judge_status_label ? [{ label: "判定", value: e.judge_status_label }] : []),
-                          ...(d ? [{ label: "方向", value: d.direction > 0 ? "利好" : d.direction < 0 ? "利空" : "待判" }] : []),
-                          ...(d?.basis ? [{ label: "依据", value: d.basis }] : []),
-                          ...(d?.chain ? [{ label: "传导链", value: d.chain }] : []),
-                        ],
-                        body: e.summary ?? e.judge_reason ?? null,
-                      });
-                    }}
+                    onClick={() => openDetail(eventDetailPayload(e))}
                     className="text-left text-sm text-zinc-800 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
                   >
                     {e.title}

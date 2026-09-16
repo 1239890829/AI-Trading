@@ -4,8 +4,9 @@
 人工看等于没有——这正是"预警"沦为噪音的原因。
 
 设计：
-1. **确定性规则优先**（不消耗 LLM）：同一规则在冷却窗口内已判读过 → ignore
-   （去重）；事件被用户确认过 → 不再冒泡。
+1. **确定性规则优先**（不消耗 LLM）：**同一标的**在冷却窗口内已判读过 → ignore
+   （去重，身份 = 规则 + 标的；2026-09-16 从"仅规则"收紧，见 `_already_recent`
+   的根因表）；事件被用户确认过 → 不再冒泡。
 2. **LLM 判读**：把事件 + 当下环境（情绪相位、是否持仓、近 1h 同类事件数）
    喂给模型，要求严格输出 `{verdict, reason}`；verdict ∈ notify/ignore/escalate。
 3. **降级**：LLM 不可用/超时/输出非法 → verdict=notify 且 model 标
@@ -26,7 +27,7 @@ import logging
 from typing import Any
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.db import get_session_factory
 from app.models.agent import AgentTriage
@@ -126,19 +127,46 @@ async def _llm_verdict(ctx: dict) -> tuple[str, str] | None:
 
 
 def _already_recent(event: AlertEvent, session_factory) -> bool:
-    """同一规则在**事件触发时间**的冷却窗口内是否已有判读（确定性去重）。
+    """**同一标的**在**事件触发时间**的冷却窗口内是否已有判读（确定性去重）。
 
     ⚠️ 用事件时间而非判读时间：否则一条 3 小时前发生的旧事件（补判读时
     triage.created_at=现在）会把当前的新事件误判成"冷却期重复"而永久静默
     （2026-09-08 单测抓到）。
+
+    ⚠️⚠️ **去重身份必须是「规则 + 标的」，不能只有规则**（2026-09-16 用户实盘
+    反馈后收紧，见下方根因）。原实现只比 `rule_id`，而 `__picks_watcher__`
+    **一个规则同时产出 8 种 kind、共 695 条/日**：
+
+    | kind | 当日条数 | symbol |
+    |---|---|---|
+    | board_low_absorb | 293 | 全 `000000`（板块级） |
+    | board_flow_surge | 242 | 全 `000000`（板块级） |
+    | **pre_limit** | **121** | **真实代码（逐只）** |
+    | flow_surge | 35 | 真实代码 |
+    | falsify / high_board_break / timeout / signal_health | 12 | 全 `000000` |
+
+    于是"第一批里任一条被判读"就足以把**同一 ±30 分钟窗口内所有后续事件**
+    （含 121 只**各自不同**的临板股）判成 `ignore`——实测当日 121 条临板预警
+    里 **120 条**的判读理由正是「同类事件在冷却窗口内已提醒（去重）」，
+    **只逃出去 1 条（002531 天顺风能）**。用户因此错过了多只分明有介入机会的标的
+    （临板 7~9%、10cm 非一字板）。**按标的去重**后，每只股票各自拥有判读机会。
+
+    无代码事件（板块/方向/健康类）统一落 `000000` 桶 ⇒ 行为与改造前一致
+    （本就彼此同类），**不会**因本次收紧而放大板块级噪音。
     """
     base = event.triggered_at or beijing_now_naive()
     lo = base - timedelta(minutes=COOLDOWN_MINUTES)
     hi = base + timedelta(minutes=COOLDOWN_MINUTES)
+    # 归一化：None / "" / "000000" 视为同一「无标的」桶；
+    # 用 SQL 侧 coalesce+nullif 而不是 Python 过滤——过滤会把窗口内无关行全捞回来
+    # （窗口内可达数百条），再逐条比对得不偿失。
+    key = (event.symbol or "").strip() or "000000"
+    norm_sym = func.coalesce(func.nullif(AlertEvent.symbol, ""), "000000")
     with session_factory() as db:
         near = db.execute(
             select(AlertEvent.id).where(
                 AlertEvent.rule_id == event.rule_id,
+                norm_sym == key,  # ← 本次收紧：同标的（而非仅同规则）
                 AlertEvent.id != event.id,
                 AlertEvent.triggered_at >= lo,
                 AlertEvent.triggered_at <= hi,

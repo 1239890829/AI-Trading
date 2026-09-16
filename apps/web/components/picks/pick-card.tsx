@@ -6,6 +6,7 @@ import { CardHead, CardShell } from "@/components/picks/card-shell";
 import { CardEntryRow } from "@/components/picks/card-entries";
 import { useStockRowNav } from "@/components/stock-link";
 import { fmt, pctColor, pctText, triText } from "@/lib/format";
+import { clockOf, compareGates, gateActive, type GateComparison } from "@/lib/picks-gate";
 import { roleClass } from "@/lib/role-style";
 import type {
   DailyPickItem,
@@ -664,14 +665,64 @@ export function PickCard({
  *  提示档（单条量化阈值擦线）只提示、**保留买入区间**。两者横幅都在——差别在标的层，
  *  且必须写在横幅上，否则用户无法从界面看出「这次能不能按区间参与」。
  *  读 `strip_buy_range`（后端算好带出），不在前端重算规则。
+ *
+ *  ## 动态对照（2026-09-16 用户问题 7：「猎场判断必须动态化」）
+ *
+ *  `gate` 是**实时复核**结果（后端读时重算），`stored` 是生成时刻落库值。两者不一致时
+ *  必须把差异讲清楚——今天实测的是「生成时判退潮·建议空仓观望 → 收盘口径高潮·已解除」，
+ *  而当天恰好有多只标的给了介入机会。只显示实时值会让用户以为"系统改主意了"，
+ *  只显示落库值则是**把开盘 3 分钟的瞬时快照当全天结论**（这正是要修的缺陷）。
+ *
+ *  ⚠️ 已解除时**不得暗示当日名单恢复可买**：`buy_range` 在生成时已被撤除并落库，
+ *  读时复核是展示层行为，不回溯改写名单。文案必须说清这一层，否则等于给出
+ *  「系统说可以买了」的错误印象（红线 3）。
  */
-export function StandAsideBanner({ gate }: { gate: StandAsideGate }) {
-  if (!gate.stand_aside) return null;
+export function StandAsideBanner({
+  gate,
+  stored,
+  generatedAt,
+}: {
+  gate: StandAsideGate;
+  stored?: StandAsideGate | null;
+  generatedAt?: string | null;
+}) {
+  const cmp = compareGates(gate, stored);
+  const at = clockOf(generatedAt);
+  const live = gateActive(gate);
+
+  // 已解除：中性提示（不是"风险警报"，也**不是**"可以买了"）
+  if (cmp.drift === "cleared") {
+    return (
+      <div
+        role="status"
+        data-testid="stand-aside-cleared"
+        className="shrink-0 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-800 dark:text-emerald-300"
+      >
+        <div className="font-medium">
+          ✓ 生成时{at ? `（${at}）` : ""}按「{cmp.storedPhase ?? "未知"}」判空仓观望，按当前盘面复核
+          <strong className="font-medium">已解除</strong>
+        </div>
+        <GateComparisonLines cmp={cmp} />
+        <div className="mt-1 font-medium text-amber-800 dark:text-amber-300">
+          ⚠ 生成时的撤除档决定已生效且<strong className="font-medium">不回溯</strong>：当日名单的买入区间已随之撤除，
+          下方标的仍为仅观察。本条只表示「当前盘面不再支持空仓观望的判断」，不改变当日已生成名单的形态，
+          也不构成买入建议。
+        </div>
+        {gate.disclaimer && <div className="mt-1 text-[10px] opacity-70">{gate.disclaimer}</div>}
+      </div>
+    );
+  }
+
+  // 生成时未触发、现在触发：往严的方向变（漏报比误报贵，必须显著）
+  const newly = cmp.drift === "newly_triggered";
+  if (!live && !newly) return null;
+
   const strong = gate.level === "strong";
   const stripped = gate.strip_buy_range;
   return (
     <div
       role="alert"
+      data-testid="stand-aside-banner"
       className={`shrink-0 rounded-lg border px-3 py-2 text-xs ${
         strong
           ? "border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-300"
@@ -679,11 +730,18 @@ export function StandAsideBanner({ gate }: { gate: StandAsideGate }) {
       }`}
     >
       <div className="font-medium">⚠ {gate.advice}</div>
+      {newly && (
+        <div className="mt-0.5 font-medium">
+          生成时{at ? `（${at}）` : ""}未触发闸门，按当前盘面复核
+          <strong className="font-medium">已触发</strong>——盘中新增的风险信号。
+        </div>
+      )}
       <ul className="mt-1 space-y-0.5">
         {gate.reasons.map((r) => (
           <li key={r}>· {r}</li>
         ))}
       </ul>
+      {cmp.drift === "reasons_changed" && <GateComparisonLines cmp={cmp} />}
       {stripped !== undefined && (
         <div className="mt-1 font-medium">
           {stripped
@@ -691,7 +749,28 @@ export function StandAsideBanner({ gate }: { gate: StandAsideGate }) {
             : "→ 本次保留买入区间：按「控制仓位、减少出手频率」酌情执行，非空仓信号"}
         </div>
       )}
+      {gate.gate_source === "unavailable" && gate.gate_note && (
+        <div className="mt-1 text-[10px] opacity-80">ⓘ {gate.gate_note}</div>
+      )}
       {gate.disclaimer && <div className="mt-1 text-[10px] opacity-70">{gate.disclaimer}</div>}
+    </div>
+  );
+}
+
+/** 「生成时 → 当前」逐项对照行（相位 + 闸门输入）。两侧都空则整节不出现。 */
+function GateComparisonLines({ cmp }: { cmp: GateComparison }) {
+  const hasSide = cmp.storedInputs.length > 0 || cmp.liveInputs.length > 0;
+  if (!hasSide && !cmp.livePhase) return null;
+  return (
+    <div data-testid="stand-aside-comparison" className="mt-1 space-y-0.5 text-[10px] opacity-90">
+      <div>
+        生成时相位「{cmp.storedPhase ?? "未知"}」
+        {cmp.storedInputs.length > 0 && <> · {cmp.storedInputs.join(" · ")}</>}
+      </div>
+      <div>
+        当前相位「{cmp.livePhase ?? "未知"}」
+        {cmp.liveInputs.length > 0 && <> · {cmp.liveInputs.join(" · ")}</>}
+      </div>
     </div>
   );
 }

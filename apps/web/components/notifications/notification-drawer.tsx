@@ -27,6 +27,7 @@ import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { useDetailModal, type DetailPayload } from "@/components/detail/detail-modal";
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { NewsModal, type NewsModalItem } from "@/components/news-modal";
+import { EventFeed } from "@/components/notifications/event-feed";
 
 /**
  * 站内通知中心（2026-09-07 用户需求③）：导航栏铃铛 → 右侧抽屉。
@@ -36,6 +37,15 @@ import { NewsModal, type NewsModalItem } from "@/components/news-modal";
  * 不再作为会打断用户的通知。
  * 抽屉内一层 tab 按 盘前/盘中/盘后 分类（后端判定：交易日历优先，非交易日归盘前）。
  * 新闻不逐条推送：score ≥ 阈值才出现（默认 60，后端 settings 配置）。
+ *
+ * ⚠️ 2026-09-16（用户需求①）**收口不变，但补回可见性**：
+ * `IMP-028` 的收口让「资讯 / 事件」在通知中心**彻底不可见**（实测生产库当日
+ * `event_card` 798 条、通知中心 0 条）。现于抽屉**顶层**加一个「资讯 / 事件」tab：
+ *  - 它是**浏览面**（只读 `GET /api/events/impact`，与盘面页事件标签同源），
+ *    **不是**推送面 —— 铃铛徽标与未读红点**仍只由个股机会驱动**；
+ *  - 顶层两个 tab 是两条**正交**的轴：`个股机会`（推送，按时段分页）
+ *    与 `资讯事件`（浏览，按排序/影响力筛选）。**不把资讯塞进时段 tab** ——
+ *    盘前/盘中/盘后是时间轴，塞进内容轴会让「盘中」语义含混。
  *
  * 已读规则（2026-09-11 重做，见 lib/notification-read.ts 的根因说明）：
  *  - 未读 = **条目级**：`ts` 晚于已读水位、且未被单独点开；未读条目左侧带红点；
@@ -61,6 +71,14 @@ import { NewsModal, type NewsModalItem } from "@/components/news-modal";
  *    **不以丢失能力为代价**（同族：`IMP-031` 收敛主按钮时补「全部 N 条」）；
  *  - **无代码的条目**（如消息面）保持行体 → 通用详情弹窗，不静默失败。
  */
+
+/** 顶层模式：推送面（个股机会）↔ 浏览面（资讯 / 事件）。 */
+type DrawerMode = "opportunity" | "events";
+
+const MODE_TABS: { key: DrawerMode; label: string; title: string }[] = [
+  { key: "opportunity", label: "个股机会", title: "经多维门控的个股买点提醒（会打断你，按盘前/盘中/盘后分页）" },
+  { key: "events", label: "资讯 / 事件", title: "事件影响力视图（浏览面，不计入未读；与盘面页事件标签同源）" },
+];
 
 const SESSION_TABS: { key: NotificationItem["session"]; label: string }[] = [
   { key: "pre_open", label: "盘前" },
@@ -140,6 +158,98 @@ function plainNote(s: string): string {
   return s.replace(/\*\*/g, "").replace(/`/g, "");
 }
 
+/** 事件形状（后端 `snapshot.kind`）的外显名。
+ *
+ * ⚠️ 未知形状**原样显示键名**，不吞成"其他"——诊断面上"看到一个没见过的形状"
+ * 恰恰是最该被看见的信息，归一化成"其他"等于把新情况藏起来。
+ */
+const SHAPE_LABEL: Record<string, string> = {
+  buy_point: "买点",
+  pre_limit: "临板预警",
+  flow_surge: "大单异动",
+  board_low_absorb: "板块低吸",
+  board_flow_surge: "板块资金异动",
+  falsify: "方向证伪",
+  high_board_break: "高板断裂",
+  timeout: "判定超时",
+  signal_health: "信号健康",
+};
+
+/** 通知中心**只收**这两个形状（与后端 `_NOTIF_KINDS` 同源，勿单侧改动）。
+ *  两者都要求带真实代码 ⇒ 它们为 0 时，"空"是上游问题而非筛选问题。 */
+const NOTIF_KINDS = ["buy_point", "pre_limit"] as const;
+
+/**
+ * 形状计数（2026-09-16 用户实盘反馈）。
+ *
+ * **为什么必须单独报**：`state` / `decisions` 都来自买点链，只回答"买点链有没有
+ * 选出票"；而通知中心实际收**两个**形状。当日实测：`__picks_buy_point__` 规则
+ * 整天未触发（`alert_rule` 表里根本没那行，规则是懒创建的），而 `pre_limit`
+ * 刷了 121 条 —— 只看 `state` 会读成"上游空"，**把"另一个形状有货"整个漏掉**，
+ * 这正是"用户看到机会却没收到通知"的读侧成因。
+ */
+function ShapeCounts({ shapes }: { shapes: Record<string, number> }) {
+  const keys = Object.keys(shapes);
+  // 空对象 ≠ 各键为 0：后端在「连规则行都没有」时返回 `{}`（规则懒创建、从未触发），
+  // 而"统计过，确实是 0"返回的是 `{buy_point: 0, pre_limit: 0}`。
+  // 两者要查的方向不同（查规则注册 / 查扫描调度），**不可合并成同一句话**。
+  if (keys.length === 0) {
+    return (
+      <p
+        data-testid="notification-empty-shapes"
+        data-stock-level={0}
+        className="border-t border-zinc-200 pt-2 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
+      >
+        两个来源规则都<strong className="font-medium">没有行</strong>（规则是懒创建的）
+        ⇒ 不是&ldquo;今天没机会&rdquo;，而是
+        <strong className="font-medium">规则从未触发过</strong>，查规则注册与调度。
+      </p>
+    );
+  }
+  const stockLevel = NOTIF_KINDS.reduce((n, k) => n + (shapes[k] ?? 0), 0);
+  const rest = Object.entries(shapes)
+    .filter(([k, v]) => v > 0 && !(NOTIF_KINDS as readonly string[]).includes(k))
+    .sort((a, b) => b[1] - a[1]);
+  const restTotal = rest.reduce((n, [, v]) => n + v, 0);
+  return (
+    <div
+      data-testid="notification-empty-shapes"
+      data-stock-level={stockLevel}
+      className="space-y-1 border-t border-zinc-200 pt-2 dark:border-zinc-700"
+    >
+      <p className="text-zinc-700 dark:text-zinc-300">
+        <span className="text-zinc-500 dark:text-zinc-500">
+          <strong className="font-medium">个股级</strong>事件（读取窗口内）：
+        </span>
+        {NOTIF_KINDS.map((k) => `${SHAPE_LABEL[k]} ${shapes[k] ?? 0}`).join(" · ")}
+      </p>
+      {stockLevel === 0 ? (
+        <p className="text-zinc-600 dark:text-zinc-400">
+          两种个股级形状一条都没触发 ⇒ 空列表
+          <strong className="font-medium">不是被筛选挡掉</strong>，是上游根本没扫到
+          （查临板扫描与买点规则的调度）。
+        </p>
+      ) : (
+        <p className="text-zinc-600 dark:text-zinc-400">
+          个股级共 {stockLevel} 条却未进列表 ⇒ 有代码但
+          <strong className="font-medium">缺股票名称</strong>
+          （标签门挡下），属数据问题而非行情问题。
+        </p>
+      )}
+      {restTotal > 0 && (
+        <p className="text-zinc-500 dark:text-zinc-500">
+          其余 {restTotal} 条为本就不进通知中心的形状（词义不是买点，如大单异动）：
+          {rest
+            .slice(0, 4)
+            .map(([k, v]) => `${SHAPE_LABEL[k] ?? k} ${v}`)
+            .join("、")}
+          {rest.length > 4 ? ` 等 ${rest.length} 种` : ""}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function NotificationEmptyState({
   payload,
   tab,
@@ -173,6 +283,9 @@ function NotificationEmptyState({
         {diag.trade_date ? ` · ${diag.trade_date}` : ""}
         {diag.as_of ? ` · 诊断于 ${diag.as_of.slice(11, 16)}` : ""}
       </p>
+      {/* 形状计数：`state`/`decisions` 只看买点链，答不了"临板预警有没有触发"
+          ⇒ 必须并列报出（当日 121 条临板全未进列表就是靠这一对照才定位到的）。 */}
+      {diag.shapes && <ShapeCounts shapes={diag.shapes} />}
       {reasons.length > 0 && (
         <ul className="space-y-1 border-t border-zinc-200 pt-2 dark:border-zinc-700">
           {reasons.map((r) => (
@@ -208,26 +321,60 @@ function NotificationRow({
   // 2026-09-09：无 url 的通知（快讯类大多无原文链接）此前渲染成死 div 点不动。
   // 现统一可点：有 url 走 NewsModal 看原文；无 url 走通用详情弹窗看 body+评分。
   const clickable = item.url?.startsWith("http") ?? false;
-  const inner = (
-    <>
-      <div className="flex flex-wrap items-center gap-1.5">
-        {unread && (
-          <span
-            data-testid="notification-unread-dot"
-            aria-label="未读"
-            title="未读"
-            className="h-1.5 w-1.5 shrink-0 rounded-full bg-rose-500"
-          />
-        )}
-        <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${CATEGORY_TONE[item.category]}`}>
-          {item.label}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-xs font-medium text-zinc-900 dark:text-zinc-50" title={item.title}>
-          {item.title}
-        </span>
-        <span className="shrink-0 font-mono text-[10px] text-zinc-600 dark:text-zinc-400">{timeText(item.ts)}</span>
-      </div>
-      <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">{item.body}</p>
+
+  /** 行体（标题 + 正文）的落点：原文 > 个股详情 > 通用判读。 */
+  const openLanding = () => {
+    onRead();
+    if (clickable) {
+      onOpenNews({ title: item.title, url: item.url!, date: item.ts, source: null, kindLabel: item.label });
+    } else if (item.symbol) {
+      // 2026-09-16 `IMP-033` **落点统一**：有代码 ⇒ 开**该股详情弹窗**，
+      // 与悬浮球（`openSymbolDetail`）与猎场（`StockLink`）三处同落点。
+      // ⚠️ 判读全文**不由此处承载** ⇒ 走下方「判读」入口——
+      // **统一落点不得以丢失能力为代价**（同族纪律见 `IMP-031`）。
+      // 无代码的条目（如消息面）保持通用详情弹窗，不静默失败。
+      openSymbolDetail({ symbol: item.symbol });
+    } else {
+      openDetail(judgmentPayload(item));
+    }
+  };
+
+  const shell = `rounded-lg border p-2.5 transition-colors ${
+    unread
+      ? "border-rose-200 bg-rose-50/40 dark:border-rose-500/25 dark:bg-rose-500/5"
+      : "border-zinc-100 dark:border-zinc-800/60"
+  }`;
+  return (
+    // ⚠️ 卡片是 `<div>`、主体是内层 `<button>`：**不能**把整个卡片做成 button。
+    // 2026-09-16 用户要求「行情与判读一体化，放标签下方右边」——两者必须与主体并列
+    // 落在**同一张卡片内**，而 `<button>` 嵌 `<button>`/`<a>` 是非法 HTML
+    // （浏览器会拆标签、点击语义互相吞掉）。故改成"卡片容器 + 内层主体按钮 + 尾部操作组"。
+    <div className={shell} data-testid="notification-row">
+      <button
+        type="button"
+        className={`block w-full text-left ${clickable ? "cursor-pointer" : ""}`}
+        onClick={openLanding}
+      >
+        <div className="flex flex-wrap items-center gap-1.5">
+          {unread && (
+            <span
+              data-testid="notification-unread-dot"
+              aria-label="未读"
+              title="未读"
+              className="h-1.5 w-1.5 shrink-0 rounded-full bg-rose-500"
+            />
+          )}
+          <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${CATEGORY_TONE[item.category]}`}>
+            {item.label}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-xs font-medium text-zinc-900 dark:text-zinc-50" title={item.title}>
+            {item.title}
+          </span>
+          <span className="shrink-0 font-mono text-[10px] text-zinc-600 dark:text-zinc-400">{timeText(item.ts)}</span>
+        </div>
+        <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">{item.body}</p>
+      </button>
+      {/* 标签行：左侧仍是分类/评分；右侧 = **一体化的操作组**（行情 + 判读） */}
       <div className="mt-1 flex items-center gap-2 text-[10px] text-zinc-600 dark:text-zinc-400">
         <span className="rounded bg-zinc-100 px-1 py-px dark:bg-zinc-800">{CATEGORY_LABEL[item.category]}</span>
         {item.score != null && (
@@ -236,45 +383,37 @@ function NotificationRow({
           </span>
         )}
         {clickable && <span className="text-sky-700 dark:text-sky-500">查看全文 ↗</span>}
+        {/* 一体化操作组（2026-09-16 用户要求）：两个动作**同一容器、共享边框、以竖线分隔**，
+            而不是两个各自带框、飘在卡片外的按钮。无代码条目不渲染（点了会弹一只空股）。 */}
+        {item.symbol && (
+          <div
+            data-testid="notification-actions"
+            className="ml-auto flex items-stretch overflow-hidden rounded border border-zinc-200 text-[10px] dark:border-zinc-700"
+          >
+            <StockLink
+              symbol={item.symbol}
+              className="px-1.5 py-0.5 text-zinc-600 dark:text-zinc-400"
+              title={`查看 ${item.symbol} 行情详情`}
+            >
+              行情 ↗
+            </StockLink>
+            <span className="w-px self-stretch bg-zinc-200 dark:bg-zinc-700" aria-hidden />
+            <button
+              type="button"
+              data-testid="notification-judgment"
+              title="在弹窗中查看该条 AI 判读全文（分类 / 评分 / 理由）"
+              className="px-1.5 py-0.5 text-zinc-600 transition-colors hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+              onClick={() => {
+                onRead();
+                openDetail(judgmentPayload(item));
+              }}
+            >
+              判读
+            </button>
+          </div>
+        )}
       </div>
-    </>
-  );
-  const shell = `block w-full rounded-lg border p-2.5 text-left transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/40 ${
-    unread
-      ? "border-rose-200 bg-rose-50/40 dark:border-rose-500/25 dark:bg-rose-500/5"
-      : "border-zinc-100 dark:border-zinc-800/60"
-  } ${clickable ? "cursor-pointer" : ""}`;
-  if (clickable) {
-    return (
-      <button
-        type="button"
-        className={shell}
-        onClick={() => {
-          onRead();
-          onOpenNews({ title: item.title, url: item.url!, date: item.ts, source: null, kindLabel: item.label });
-        }}
-      >
-        {inner}
-      </button>
-    );
-  }
-  return (
-    <button
-      type="button"
-      className={shell}
-      onClick={() => {
-        onRead();
-        // 2026-09-16 `IMP-033` **落点统一**：有代码 ⇒ 直接开**该股详情弹窗**，
-        // 与悬浮球（`openSymbolDetail`）与猎场（`StockLink`）三处同落点。
-        // ⚠️ 判读全文**不再由行体承载** ⇒ 改由行右侧「判读」入口打开（见 `NotificationBell`）——
-        // **统一落点不得以丢失能力为代价**（同族纪律见 `IMP-031`：收敛主按钮时补「全部 N 条」）。
-        // 无代码的条目（如消息面）保持原样走通用详情弹窗，不静默失败。
-        if (item.symbol) openSymbolDetail({ symbol: item.symbol });
-        else openDetail(judgmentPayload(item));
-      }}
-    >
-      {inner}
-    </button>
+    </div>
   );
 }
 
@@ -284,9 +423,14 @@ export function NotificationBell() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<NotificationItem["session"]>("intraday");
+  // 顶层模式（2026-09-16 需求①）：默认停在**推送面**——铃铛点开要看的是机会，
+  // 不是资讯流。资讯 tab 只在用户显式切过去时才拉数据（`EventFeed` 的 `enabled`）。
+  const [mode, setMode] = useState<DrawerMode>("opportunity");
+  // 顶部「刷新」在资讯 tab 下的落点：`EventFeed` 是自取数的，故用自增令牌通知它重拉
+  // （与 `sort` 一并作为轮询 hook 的 key）。不改用 lifting state：那会把 events 的
+  // 三态（items/countsAll/error）搬进本组件，而它们只在那个 tab 里有意义。
+  const [eventsRefresh, setEventsRefresh] = useState(0);
   const [newsItem, setNewsItem] = useState<NewsModalItem | null>(null);
-  // 行体已改为开个股详情弹窗，判读全文改由行右侧「判读」入口打开（`IMP-033`）。
-  const { open: openDetail } = useDetailModal();
   // 已读偏好（水位 + 逐条 id + 清除水位）：**外部存储订阅**，见 lib/notification-read.ts。
   // 首帧（含 hydration）给服务端空快照，hydration 后自动切到 localStorage 真实值。
   const prefs = useSyncExternalStore(subscribePrefs, getPrefsSnapshot, getServerPrefsSnapshot);
@@ -433,27 +577,33 @@ export function NotificationBell() {
                   )}
                 </h2>
                 <div className="flex items-center gap-2">
+                  {/* 已读/清除是**推送面**的操作（作用域 = `/api/notifications` 的已读水位）。
+                      资讯 tab 下隐藏：那里没有未读概念，按钮点了也没有可见反馈。 */}
+                  {mode === "opportunity" && (
+                    <>
+                      <button
+                        onClick={markAllRead}
+                        disabled={unread === 0}
+                        data-testid="notification-mark-all-read"
+                        className="rounded px-1.5 py-0.5 text-[11px] text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-700 disabled:opacity-40 disabled:hover:bg-transparent dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                        title="全部标记为已读（未读红点与徽标清零）"
+                      >
+                        全部已读
+                      </button>
+                      <button
+                        onClick={clearAll}
+                        className="rounded px-1.5 py-0.5 text-[11px] text-zinc-600 dark:text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                        title="隐藏当前全部条目（本地清除，随时可清 storage 恢复）"
+                      >
+                        一键清除
+                      </button>
+                    </>
+                  )}
                   <button
-                    onClick={markAllRead}
-                    disabled={unread === 0}
-                    data-testid="notification-mark-all-read"
-                    className="rounded px-1.5 py-0.5 text-[11px] text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-700 disabled:opacity-40 disabled:hover:bg-transparent dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-                    title="全部标记为已读（未读红点与徽标清零）"
-                  >
-                    全部已读
-                  </button>
-                  <button
-                    onClick={clearAll}
-                    className="rounded px-1.5 py-0.5 text-[11px] text-zinc-600 dark:text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-                    title="隐藏当前全部条目（本地清除，随时可清 storage 恢复）"
-                  >
-                    一键清除
-                  </button>
-                  <button
-                    onClick={() => void load()}
+                    onClick={() => (mode === "opportunity" ? void load() : setEventsRefresh((n) => n + 1))}
                     className="rounded p-1 text-zinc-600 dark:text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
                     aria-label="刷新通知"
-                    title="重新拉取（页面打开期间每 60s 自动检查新通知）"
+                    title="重新拉取（页面打开期间每 60s 自动检查新内容）"
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                       <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" />
@@ -471,6 +621,37 @@ export function NotificationBell() {
                 </div>
               </div>
 
+              {/* 顶层 tab：个股机会（推送面）/ 资讯·事件（浏览面）。
+                  与下方时段 tab 是**两条正交的轴**，故单独一层，不与之合并。 */}
+              <div
+                className="flex gap-1 border-b border-zinc-100 px-4 py-2 dark:border-zinc-800/80"
+                data-testid="notification-mode-tabs"
+                role="tablist"
+                aria-label="通知中心内容类型"
+              >
+                {MODE_TABS.map((m) => (
+                  <button
+                    key={m.key}
+                    role="tab"
+                    aria-selected={mode === m.key}
+                    data-testid={`notification-mode-${m.key}`}
+                    onClick={() => setMode(m.key)}
+                    title={m.title}
+                    className={`flex-1 rounded-md px-3 py-1 text-xs transition-colors ${
+                      mode === m.key
+                        ? "bg-zinc-900 font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
+                        : "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+
+              {mode === "events" ? (
+                <EventFeed active={mode === "events"} refreshToken={eventsRefresh} />
+              ) : (
+                <>
               {/* tab：盘前 / 盘中 / 盘后（红点 = 该时段有未读） */}
               <div className="flex gap-1 border-b border-zinc-100 px-4 py-2 dark:border-zinc-800/80">
                 {SESSION_TABS.map((t) => (
@@ -513,49 +694,20 @@ export function NotificationBell() {
                 {payload && bySession[tab].length === 0 && (
                   <NotificationEmptyState payload={payload} tab={tab} />
                 )}
-                {shownNotices.map((i) =>
-                  i.symbol ? (
-                    <div key={i.id} className="flex items-start gap-2">
-                      <NotificationRow
-                        item={i}
-                        unread={isItemUnread(i)}
-                        onRead={() => markOneRead(i)}
-                        onOpenNews={setNewsItem}
-                      />
-                      <StockLink
-                        symbol={i.symbol}
-                        className="mt-2.5 shrink-0 rounded border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-600 dark:text-zinc-400 dark:border-zinc-700"
-                        title={`查看 ${i.symbol} 行情详情`}
-                      >
-                        行情 ↗
-                      </StockLink>
-                      {/* 2026-09-16 `IMP-033`：行体已改为**开个股详情弹窗** ⇒ 判读全文
-                          需要一个显式入口（原先由行体承载）。放在行的**按钮之外**
-                          （与 `StockLink` 并列）——把按钮嵌进行体的 `<button>` 里是非法 HTML，
-                          且会让点击语义互相吞掉。 */}
-                      <button
-                        type="button"
-                        data-testid="notification-judgment"
-                        title="在弹窗中查看该条 AI 判读全文（分类 / 评分 / 理由）"
-                        className="mt-2.5 shrink-0 rounded border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
-                        onClick={() => {
-                          markOneRead(i);
-                          openDetail(judgmentPayload(i));
-                        }}
-                      >
-                        判读
-                      </button>
-                    </div>
-                  ) : (
-                    <NotificationRow
-                      key={i.id}
-                      item={i}
-                      unread={isItemUnread(i)}
-                      onRead={() => markOneRead(i)}
-                      onOpenNews={setNewsItem}
-                    />
-                  ),
-                )}
+                {/* 单一渲染路径（2026-09-16 用户要求「行情与判读一体化」后简化）：
+                    此前按有无 symbol 分成两支，个股条目在卡片**外面**并排挂
+                    「行情 ↗」与「判读」两个独立按钮 ⇒ 视觉上三块互不相干、且与卡片
+                    不对齐。现两者收进卡片内成为**一个操作组**（见 `NotificationRow`），
+                    故这里不再需要分支与包裹层。 */}
+                {shownNotices.map((i) => (
+                  <NotificationRow
+                    key={i.id}
+                    item={i}
+                    unread={isItemUnread(i)}
+                    onRead={() => markOneRead(i)}
+                    onOpenNews={setNewsItem}
+                  />
+                ))}
                 {/* 哨兵须在滚动容器内部（本 div overflow-y-auto），否则不随滚动移动、只触发一次 */}
                 <IncrementalSentinel
                   sentinelRef={sentinelRef}
@@ -570,10 +722,22 @@ export function NotificationBell() {
                   </p>
                 )}
               </div>
+                </>
+              )}
 
               <div className="border-t border-zinc-100 px-4 py-2 text-[10px] leading-relaxed text-zinc-600 dark:text-zinc-400 dark:border-zinc-800/80">
-                仅推送通过有效筛选、逻辑校验与多维评估的个股机会；板块机会不通知。
-                所有提醒均附可解释依据与失效条件，不构成买卖建议。
+                {mode === "opportunity" ? (
+                  <>
+                    仅推送通过有效筛选、逻辑校验与多维评估的个股机会；板块机会不通知。
+                    所有提醒均附可解释依据与失效条件，不构成买卖建议。
+                  </>
+                ) : (
+                  <>
+                    资讯 / 事件是<strong className="font-medium">浏览面</strong>
+                    （源自东财快讯等公开渠道的事件影响力视图），不计入未读、不主动打断；
+                    方向判读由规则引擎给出，不构成买卖建议。
+                  </>
+                )}
               </div>
             </div>
           </div>,

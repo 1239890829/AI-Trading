@@ -128,11 +128,21 @@ def test_remaining_budget_is_shared_across_sources(monkeypatch):
     · s1 被发起 ⇒ 它被给到的时长应 ≈ `预算 − s0 实际用时`（**残值**），而非一份完整预算；
     · s1 被跳过 ⇒ 报错文案必须是「未发起」（预算已被 s0 吃光）。
     ⇒ **每源配额**的实现里，s1 必然拿到一份**完整预算**（`granted ≈ budget`），判据即红。
-    另留 5× 余量（预算 0.5s / s0 吃 0.1s），使"跳过"分支在日常与 CI 上极少走到。
+
+    ⚠️ **2026-09-17 修（账本 `BUG-019`，承接 `BUG-007` 的残余）**：原参数（预算 0.5s / s0 吃 0.1s）
+    的**判别窗口只有 0.1s**（残值 0.4 vs 整份 0.5），而 `granted` 量的是**墙钟实际耗时**
+    （见 `Stub._run` 的 `finally`：被 `wait_for` 取消也记），实测抖动 **0.08~0.12s**
+    ⇒ 判别力与噪声**同量级**，真偶发：全量跑抓到 `0.5186s > 0.475`，隔离复跑 20 轮红 1 轮
+    （`0.480s`，贴阈值）。**修法 = 拉大两端的距离，不动判别逻辑**——
+    预算放宽到 1.0s、s0 吃 0.6s ⇒ 残值 0.4 vs 整份 1.0（**分离度 2.5×**），
+    阈值取 `0.8 × 预算`：健康侧实测上限 ≤0.55、缺陷侧 ≈1.0，**两侧各留 ≥0.25s 余量**
+    （> 实测抖动 0.12s 的 2 倍）。
+    历史口径（5× 余量 / 0.1s）保留在此仅为可追溯：那个余量保护的是**总耗时**
+    （`elapsed < budget*2`），**不是**本条判据的判别窗口——两者是不同的量，当初被混为一谈。
     """
-    budget = 0.5
+    budget = 1.0
     monkeypatch.setattr(composite_mod, "REQUEST_BUDGET_SECONDS", budget)
-    eaten = 0.1  # s0 吃掉的时长 = 预算的 1/5（余量 5×）
+    eaten = 0.6  # s0 吃掉的时长 = 预算的 3/5 ⇒ 残值 0.4s（与整份 1.0s 拉开 2.5×）
 
     slow_fail = Stub("s0", delay=eaten, exc=ProviderError("down"))
     hang = Stub("s1", delay=30.0)
@@ -150,7 +160,7 @@ def test_remaining_budget_is_shared_across_sources(monkeypatch):
     if hang.calls:
         # 分支 ①：s1 被发起 ⇒ 拿到的是**残值**（≈budget−eaten），不是一份新配额
         granted = hang.granted_seconds[-1]
-        assert 0 < granted < budget * 0.95, (
+        assert 0 < granted < budget * 0.8, (
             f"s1 被给到 {granted:.2f}s（预算 {budget:.2f}s）—— "
             "≥一份完整预算 ⇒ 预算没有跨源共享"
         )

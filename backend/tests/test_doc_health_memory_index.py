@@ -34,6 +34,8 @@ N 项**自身失效的方式**恰好与它要防的缺陷同形（都是"看起�
 from __future__ import annotations
 
 import importlib.util
+import subprocess
+import types
 from pathlib import Path
 from types import ModuleType
 
@@ -248,3 +250,144 @@ def test_n_does_not_judge_docs_prefix_statically() -> None:
     # 反向也钉：B 的指针正则只认 docs/ 形态 ⇒ `.workbuddy/` 指针确实由 N 独占。
     assert mod.REF_RE.search(".workbuddy/memory/MEMORY.md") is None
     assert mod.REF_RE.search("docs/kb/07-doc-curation.md") is not None
+
+
+# --------------------------- 判定面 = CI 检出内容（2026-09-16，PR #19 事故）
+#
+# 背景：`.workbuddy/` 是 gitignored 的工作区目录，`_in_checkout_universe` 原本靠
+# 「顶层段在 + 父目录在」这套**两级结构代理**把它整棵跳过。2026-09-16 `PR #19`
+# 往 `.workbuddy/skills/` 强提交了 2 个技能文件 ⇒ `.workbuddy` **首次进入 `tops`**
+# ⇒ 门① 放行；而门② 对**目录形态**取的是**父目录**（`.workbuddy`，它正好在）⇒ 也放行
+# ⇒ `N 6 处 + O 4 条`**只在 CI 红**（本机这 4 个目录都在，故本地恒绿）。
+#
+# ⚠️ 上面那批用例**全部跑在 `tmp_path` 合成树**里：那里 `_tracked_paths()` 拿不到 git
+# ⇒ `tops is None` ⇒ 直接 `return True` ⇒ 走的是**文件系统回退路径**。也就是说
+# 「跟踪清单路径」此前**一颗钉子都没有**——缺陷恰好长在没人钉的那半边。
+# ⇒ 本节用**构造的 tops/dirs** 直测判定函数，把它补上。
+
+#: 构造的判定面：`data` / `.workbuddy` / `scripts` 在检出里；
+#: `.workbuddy` 下**只有 `skills/`**（正是 PR #19 强提交 2 个技能文件后的形状）。
+_TOPS = {"data", ".workbuddy", "scripts"}
+_DIRS = {"data", ".workbuddy", ".workbuddy/skills", "scripts"}
+
+
+def _judge(mod: ModuleType, monkeypatch: pytest.MonkeyPatch,
+           tok: str, ignored: set[str]) -> bool:
+    """直测 `_in_checkout_universe`：`_is_gitignored` 换桩，隔离本仓 `.gitignore` 的当下取值。
+
+    用例要表达的是**规则**（"ignored ⇒ 不判"），不是"本仓此刻恰好如此"——
+    后者由本文件末尾的端到端用例负责。
+    """
+    monkeypatch.setattr(mod, "_is_gitignored", lambda rel, is_dir: rel in ignored)
+    return mod._in_checkout_universe(tok, _TOPS, _DIRS)
+
+
+def test_dir_pointer_anchor_is_itself(monkeypatch: pytest.MonkeyPatch) -> None:
+    """**根因钉**：目录形态（尾斜杠）的锚点是**它自己**，不是父目录。
+
+    `.workbuddy/memory/` 的父目录 `.workbuddy` 在检出里，但 `.workbuddy/memory`
+    不在（gitignored）⇒ 必须**不判**。改回"取父目录"这条立刻红。
+    """
+    mod = _load()
+    assert _judge(mod, monkeypatch, ".workbuddy/memory/",
+                  {".workbuddy/memory"}) is False, (
+        "目录形态取父目录 ⇒ `.workbuddy/**` 的任意子路径都蒙混过关"
+        "（PR #19 的 CI 红正是这么来的）"
+    )
+    assert _judge(mod, monkeypatch, ".workbuddy/skills/",
+                  {".workbuddy/memory"}) is True, (
+        "`.workbuddy/skills` 真在检出里 ⇒ 照判；不得因它是 `.workbuddy` 下就一刀切跳过"
+    )
+
+
+def test_absent_dir_is_still_judged_when_not_ignored(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """**防撤守卫钉**（本节重点）：第三级不得放宽成"凡缺席即不判"。
+
+    `scripts/no-such-dir/` 既不在检出里、也**不是** gitignored ⇒ 它是**真问题**
+    （写错的目录名 / 已删的目录）⇒ 必须**照判**。
+    只把②改成"目录形态取自身"、而**不补**"能不能进检出"这一级的实现，本条会红
+    ——那是把"修判据"做成了"撤守卫"（KB-ENG-65）。
+    """
+    mod = _load()
+    assert _judge(mod, monkeypatch, "scripts/no-such-dir/", set()) is True, (
+        "非 gitignored 的缺席目录被静默跳过 ⇒ 目录名写错将无人发现"
+    )
+
+
+def test_file_pointer_anchor_is_parent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """**回归钉**：文件形态仍按**父目录**判（2026-09-15 起就是对的，不得被顺手改掉）。"""
+    mod = _load()
+    assert _judge(mod, monkeypatch, ".workbuddy/skills/ashare-ledger-continue/SKILL.md",
+                  set()) is True, "父目录在检出里 ⇒ 照判"
+    assert _judge(mod, monkeypatch, ".workbuddy/memory/MEMORY.md",
+                  {".workbuddy/memory/MEMORY.md"}) is False, "gitignored 的索引本体 ⇒ 不判"
+
+
+def test_gitignored_asks_dir_form_with_trailing_slash(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """**尾斜杠钉**（2026-09-16 实测）：目录形态必须**带 `/`** 去问 git。
+
+    实测 `git check-ignore data/picks/` 命中，而 `data/picks`（无斜杠）**不命中**
+    ——`.gitignore` 的 `data/` 规则覆盖其下的文件，**不含目录节点自身**。
+    少一个 `/` 就答反，而答反的方向恰好是"本该跳过的变成判红"。
+    """
+    mod = _load()
+    seen: list[list[str]] = []
+
+    class _Done:
+        returncode = 0
+
+    def fake(cmd: list[str], **kw: object) -> object:
+        seen.append(cmd)
+        return _Done()
+
+    monkeypatch.setattr(mod, "subprocess",
+                        types.SimpleNamespace(run=fake,
+                                              SubprocessError=subprocess.SubprocessError))
+    mod._is_gitignored("data/picks", True)
+    mod._is_gitignored("data/picks", False)
+    assert seen[0][-1] == "data/picks/", "目录形态必须带尾斜杠去问"
+    assert seen[1][-1] == "data/picks", "文件形态不得凭空多出尾斜杠"
+
+
+def test_gitignored_fails_open_when_git_unavailable(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """**fail-open 钉**：拿不准（无 git / 命令失败 / 超时）⇒ **照判**，不得静默跳过。
+
+    方向不能反：跳过 = 守卫覆盖面静默失效（KB-ENG-72），误报至少有人看得见。
+    """
+    mod = _load()
+
+    def boom(cmd: list[str], **kw: object) -> object:
+        raise OSError("git 不可用")
+
+    monkeypatch.setattr(mod, "subprocess",
+                        types.SimpleNamespace(run=boom,
+                                              SubprocessError=subprocess.SubprocessError))
+    assert mod._is_gitignored(".workbuddy/memory", True) is False
+
+
+def test_real_repo_gitignored_workbuddy_dirs_are_skipped() -> None:
+    """**端到端钉（真实仓库 + 真实 `.gitignore`）**：`.workbuddy/` 下的目录指针不得被判。
+
+    前面几条用构造面钉**规则**，本条钉**本仓当下的前提**：`.workbuddy/` 确实在
+    `.gitignore` 里、其子目录进不了检出。前提被改（有人把 `.workbuddy/` 移出
+    `.gitignore`，或把判定面换回文件系统口径）⇒ 本条立刻红。
+    **代理成立的前提变了必须有人喊**——这正是 PR #19 事故的教训：
+    前提的判定面由第三处的常量（`.gitignore` + 谁被强提交）决定，
+    而代理自己不会因此变红。
+    """
+    mod = _load()
+    tops, dirs = mod._tracked_tops(), mod._tracked_dirs()
+    assert tops is not None and dirs is not None, "本用例要求在 git 仓库内运行"
+    skipped = (".workbuddy/memory/", ".workbuddy/artifacts/",
+               ".workbuddy/reports/", ".workbuddy/trash/")
+    for tok in skipped:
+        assert mod._in_checkout_universe(tok, tops, dirs) is False, (
+            f"{tok} 被判成「检出里可能有」⇒ 该目录只存在于本机 ⇒ CI 上必然红"
+        )
+    # 反向：真在检出里的目录照判（不得为了修前面这条把整棵 `.workbuddy` 一刀切跳过）。
+    assert mod._in_checkout_universe(".workbuddy/skills/", tops, dirs) is True, (
+        "`.workbuddy/skills/` 下有已跟踪的技能文件 ⇒ 它在检出里 ⇒ 必须照判"
+    )

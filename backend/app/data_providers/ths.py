@@ -2,9 +2,23 @@
 
 - 认证：X-api-key（key 只放 .env，禁止入库入前端）
 - thscode 格式：600519.SH / 000001.SZ
-- 能力：行情快照、交易日历、涨停/跌停/炸板池、连板天梯、龙虎榜（含概念标签）、
-  财务三表、估值、集合竞价、异动、热榜、全市场导出
+- **已实现**能力（须与下方方法一一对应）：行情快照 / 指数快照 / 交易日历 /
+  涨停池 / 炸板池 / 连板天梯 / 龙虎榜（含概念标签）/ 集合竞价（快照 + 基准）/
+  异动（列表 + 个股）/ 热榜（人气 + 飙升 + 排名趋势 + 历史）/ 日K（含复权）
+- **官方有端点但本项目未接入**（勿据此认为可用；判据见
+  `tests/test_provider_capabilities.py::test_ths_docstring_unimplemented_endpoints_stay_unwired`）：
+  跌停池 `special-data/limit-down-pool`、财务四端点 `financials/indicators` /
+  `financials/income-statements` / `financials/balance-sheets` /
+  `financials/cash-flow-statements`、估值 `valuations/snapshot`、搜索 `meta/tickers/search`
+- **已用但不在本 Provider**：全市场快照 `prices/snapshot` 由 `scripts/sync_marketdb.py`
+  直连（绕过 Provider 链 ⇒ 不进熔断 / 请求预算 / health 视图，见 `IMP-037`）
+- 端点清单与接入评估见 `docs/data-sources.md` §8.3 / §8.6
 - 边界：不含 L2 十档/逐笔/分钟K（官方 capability-map 声明）
+
+⚠️ 2026-09-16 `GOV-016`：本 docstring 此前把「跌停池、财务三表、估值、全市场导出」
+列为已具备能力，而**四者在代码中均无对应方法**（`get_limit_down_pool` 从未实现）。
+该类漂移是 `doc-health` 查不出的（它只校验文档，不校验 docstring 与实现的对应），
+故在此显式分「已实现 / 未接入」两栏——**新增能力时两栏都要改**。
 """
 from __future__ import annotations
 

@@ -91,8 +91,27 @@ def test_trades_renders_rows():
 
 
 def test_trades_empty_says_unavailable():
+    """取不到必须**如实说取不到**，并给出原因（`IMP-038` 起附"为什么"）。
+
+    ⚠️ 本用例依赖 `conftest` 关掉 TDX 备源（`ASHARE_TRADES_TDX_FALLBACK_ENABLED=false`）：
+    TDX 走真实 TCP、mock 替不掉它，若开着，这里会**真的连上 TDX 并拿到 200 行真数据**，
+    断言以"找不到取不到"的形式变红，而真因是**测试触网**（2026-09-16 全量实测踩到）。
+    """
     out = _run("trades", {"symbols": "600519"}, _ctx(_Prov(trades=[])))
     assert "取不到" in out
+    # "两源都为空"不得被说成"取数失败"（反之亦然）——诊断信息要指向真实原因
+    assert "取数失败" not in out
+
+
+def test_trades_chain_failure_reports_reason_not_silent_empty():
+    """链抛异常 ⇒ 文案必须带**失败原因**，不能与"两源都为空"混为一谈。"""
+
+    class _Boom(_Prov):
+        async def get_trades(self, symbol):
+            raise RuntimeError("eastmoney WAF blocked")
+
+    out = _run("trades", {"symbols": "600519"}, _ctx(_Boom()))
+    assert "取不到" in out and "取数失败" in out and "eastmoney WAF blocked" in out
 
 
 # ---------------------------------------------------------------- 集合竞价（最关键）

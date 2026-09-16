@@ -107,17 +107,60 @@ lsof -ti tcp:3000 -sTCP:LISTEN | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DE
 #   "这次只是改文案所以不用跑" 是最贵的一句话：本轮两次丢失都是靠随后的判据才发现的。
 ```
 
-> **门禁口径**：后端 collect **3339 项（3263 passed / 76 skipped / 0 failed）**、
-> 前端 **608 项 / 67 文件**、eslint **0 error / 0 warn**
-> （2026-09-16 `RSH-003` **切片 2**（指数平滑原语 + PPO/ADX 实测）轮实测；后端 **240.74s**（收尾复跑 **237.56s**；均在 8000 在跑时）；
-> `tsc` **0** · `pyflakes` **0** · `doc-health` **全部通过**；本地时区与 `TZ=UTC` **均为 608/67**。
-> ⚠️ **较上一值「后端 3306 / 前端 608·67」增量 后端 collect +33 = passed +33 / skipped ±0**，
-> 来源自洽且分两类：`+32` = 新文件 `backend/tests/test_smoothing.py`（32 例，**全 passed**）；
-> `+1` = `test_import_lint.py` 分层参数化新增一个**业务层**模块 `app/factors/smoothing.py`
-> （实测用例名 `test_business_layer_never_imports_api[-factors/smoothing.py]`）。
+> **门禁口径**：后端 collect **3432 项（3356 passed / 76 skipped / 0 failed）**、
+> 前端 **650 项 / 70 文件**、eslint **0 error / 0 warn**、`tsc` **0** · `pyflakes` **0** ·
+> `doc-health` **全部通过**（`P 交接索引` 16 条 / `Q 档位一致性` 0 冲突）
+> （2026-09-17 `BUG-018` + `BUG-019` CI 转绿轮实测；后端 **306.87s**，前提 **8000 在跑**、
+> **`load average` 15.95** —— **报耗时（含前端数字）必须带负载前提**，否则会被当成回归）。
+> ⚠️ **较上一值「后端 3431 / 前端 650·70」的 Δ 已机械归因**：
+> 后端 **+1 collect = +1 passed / ±0 skipped** = 新用例
+> `tests/test_watch_ledger_kind.py::test_window_cutoff_expiry_is_pinned`（`BUG-018` 的到期日两侧契约）·
+> `test_import_lint.py` 参数化面未变（无新增 `.py`）⇒ `skipped 76` 不变**自洽**（[[KB-ENG-97]]）·
+> `test_provider_budget.py` 改的是常量与 docstring、**用例数不变**（`BUG-019`）⇒ 不产生 collect 增量。
+> 前端 **±0**（`apps/web/` 本轮**零改动**，`git status` 核对无差异）。
+> ⚠️ **前端那 1 项红 = 已登记的 `BUG-010`**（`markdown-view.test.tsx::docs/ 下全部 md 均可渲染完成`，
+> 预算固定 5000ms）：本轮全量并发下实测 **8716ms / 5305ms**、`TZ=UTC` **6655ms**，
+> 而**隔离复跑 10/10 全绿、该用例仅 1407ms** ⇒ 由**宿主负载**（同机 `load 15.95~17.19`，
+> 另有其他应用抢占 CPU）造成，**非回归**；但**余量已被吃光**（`docs/` 只增不减），
+> 建议提高该用例 `timeout` 或改按文件粒度断言（**未擅自改，留待拍板**）。
+> ⚠️ **本轮 3 项真红全部由「全量门禁」抓出**（单跑受影响的文件时全绿）：
+> ① `BUG-018`（CI 重跑跨北京午夜）· ② 本轮**自己**造的 KB 索引格式回归
+> （`docs/kb/00-INDEX.md` 日期栏写成 `2026-09-12 / 09-17`，解析器要求**严格单日期**）·
+> ③ `BUG-019`（预算共享判据判别窗口 < 噪声）⇒ **"我只改了 X"不构成不跑全量的理由**。
+> ⚠️ **权威位仍是 `docs/handoff.md` §1**（本头行必须与它同轮同步；历史各轮 Δ 归因见该处）。
+> （2026-09-16 `GOV-016`（`ths.py` docstring 能力承诺 > 实现）轮实测；后端 collect **3373 项
+> （3297 passed / 76 skipped / 0 failed）**、前端 **643 项 / 69 文件**、eslint **0 error / 0 warn**；
+> 后端 **252.32s**，前提 **8000 在跑且无并发负载**；`tsc` **0** · `pyflakes` **0** ·
+> `doc-health` **全部通过**（`P 交接索引` 13 条 / `Q 档位一致性` 0 冲突）；
+> 本地时区与 `TZ=UTC` **均为 643/69**）。
+> ⚠️ **较上一值「后端 3372 / 前端 643·69」的 Δ 全部机械归因**：
+> 后端 **+1 collect = +1 passed / ±0 skipped** = `tests/test_provider_capabilities.py`
+> 新增 1 例守卫 `test_ths_docstring_unimplemented_endpoints_stay_unwired`；
+> **本轮无新增/删除后端模块** ⇒ `tests/test_import_lint.py` 未变、`skipped 76` 不变**自洽**
+> （[[KB-ENG-97]]：跳过数不变 = 无覆盖丢失）。前端 **±0**（`apps/web/` 零改动）。
+> ⚠️ **门禁数字的权威位仍是 `docs/handoff.md` §1**（本头行必须与它同轮同步）。
+> （2026-09-16 `BUG-017`（`doc-health` 跳过谓词·目录形态锚点）轮实测；后端 **416.23s**，
+> 前提 **8000 在跑**——⚠️ 该耗时**含本轮跑测期间的文档编辑负载**，**非空载**，勿直接与其他轮对标；
+> 较上一值「后端 3366 / 前端 643·69」**+6 collect = +6 passed / ±0 skipped**
+> = 新钉子 `backend/tests/test_doc_health_memory_index.py`（14 → 20 例）；同轮另发现 master 上一条
+> 与本轮无关的红（`9364ef0` 的两项 SQLite/共享状态用例，**同一提交树实测为 success** ⇒ 判为偶发），
+> 归因见 `docs/handoff.md` §1 与 `§BUG-017`（[[KB-ENG-111]]））。
+> （2026-09-16 `IMP-035` **用户七问交付**（资讯/事件 tab · 模型写死 · 提醒去重 · 猎场闸门读时重算）轮实测；
+> 后端 **301.48s**，前提 **8000 在跑且无并发负载**；`tsc` **0** · `pyflakes` **0** · `doc-health` **全部通过**；
+> 本地时区与 `TZ=UTC` **均为 643/69**）。
+> ⚠️ **报数必须带前提**：前端那两次数值在**解除后端并发**时取得；**与后端全量并发跑时默认并行度偶发 1 项红**
+> —— `components/agent/markdown-view.test.tsx::docs/ 下全部 md 均可渲染完成` 超时 5240ms，
+> **是已登记的 `BUG-010`（D 档观察项，判据挂在墙钟上）**，隔离复跑 10 项全绿（整文件 1.6~2.8s）⇒ **非回归**。
+> ⚠️ **较上一值「后端 3339 / 前端 608·67」的 Δ 全部机械归因**：
+> 后端 **+27 = +27 passed / ±0 skipped** = `+10`（新 `tests/test_picks_live_gate.py`）
+> + `+7`（新 `tests/test_llm_model_single_source.py`）+ `+7`（`test_notifications.py` 13→20）
+> + `+3`（`test_sentiment.py` 25→28，基线用**干净检出 worktree** 实测）。
 > **非业务层模块数未变** ⇒ 实测 `tests/test_import_lint.py` = **194 passed / 74 skipped**（共 268 例），
 > `74 = 76 − 2` 与上轮**逐字相同**（[[KB-ENG-97]]：跳过数不变 = 无覆盖丢失）。
-> 前端 **±0**（本轮 `apps/web/` **零改动**，`git status` 核对无差异 ⇒ 与上轮逐字一致）。
+> 前端 **+35 项 / +2 文件** = `+18`（新 `lib/picks-gate.test.ts`）+ `+6`（新
+> `notification-event-tab.test.tsx`）+ `+11`（`pick-card` +6 / `notification-drawer` +4 /
+> `notification-row-landing` +1；由 `git diff` 逐文件计 `it(`/`test(` 净增）。
+> ⚠️ **权威位仍是 `docs/handoff.md` §1**（本头行必须与它同轮同步，否则下一位会拿旧基线把正常增量当回归）。
 > ⚠️ **上一轮的门禁头行在本文件也曾落后**：它写着 **3247 / 603·67**（`IMP-033` 轮），
 > 而 `docs/handoff.md` §1 已到 **3287 / 608·67** —— 中间两轮（`BUG-016` 子项③、`RSH-027`）
 > 更新了 handoff、**未同步本文件**（各自的 Δ 归因在 handoff §1 可查）。
