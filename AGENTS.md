@@ -90,8 +90,12 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 collect **3207 项（3132 passed / 75 skipped / 0 failed）**、
+> **门禁口径**：后端 collect **3213 项（3138 passed / 75 skipped / 0 failed）**、
 > 前端 **593 项 / 65 文件**、eslint **0 error / 0 warn**
+> （2026-09-16 `IMP-030` 主动漏洞发现探针轮实测；较上一值「后端 3207 / 前端 593·65」增量
+> **后端 collect +6 = passed +6 / skipped ±0**：5 条新行为测试来自
+> `tests/test_evolution_probes.py`，另 +1 是新增业务模块 `services/evolution_probes.py` 自动进入
+> `test_import_lint.py` 分层参数化；前端 **±0**，本地时区与 `TZ=UTC` 均为 593/65。）
 > （2026-09-16 最终技术方案与装配重构集成轮实测；较装配重构基线 **后端 collect +2 = passed +2 / skipped ±0**：
 > 新增猎场同键并发单航班守卫 1 项 + 通知个股机会策略净增 1 项；前端 **±0**，本地时区与
 > `TZ=UTC` 均为 593/65。全量首两轮在 `test_events_api_lifecycle` 稳定复现 `BUG-012` 同族的
@@ -769,21 +773,22 @@ curl 先行 → 记录字段口径与类型陷阱 → 多采样找规律 → fix
 - 如果任务需求存在会明显影响实现方案的歧义，应先询问用户；否则直接完成开发、测试、提交和推送。
 - 每次交付必须汇报：分支名称、主要改动、修改文件、测试结果、commit SHA、远程分支或 PR 链接，
   以及遗留问题或风险。
-- Codex 负责本地实现和功能分支交付；网页版 ChatGPT 负责规划以及对功能分支进行最终代码审查。
-- 本次规则合并进 `master` 后，用户授予 Codex 长期授权：当以下条件全部满足时，Codex 可以直接合并
+- Codex 负责本地实现、验证、功能分支交付与合并；**不再要求网页版 ChatGPT 对功能分支进行最终代码审查**
+  （2026-09-16 用户长期授权）。该授权只适用于 Codex 开发流程，不改变 §0 红线 7 对应用内 LLM
+  自主改码执行器的隔离与禁止落地约束。
+- 用户授予 Codex 长期授权：当以下条件全部满足时，Codex 可以直接合并
   功能分支的 Pull Request，无需再次征求用户确认：
   1. 当前任务要求已经完整实现；
   2. 适用的本地测试、代码检查和构建均通过；
   3. GitHub CI 必需检查全部通过；
   4. 分支与最新 `master` 不存在未解决冲突；
-  5. 网页版 ChatGPT 的代码审查结论为通过，且不存在阻塞问题或要求修改项；
-  6. Pull Request 中不存在未解决的 `Request changes` 或阻塞性审查意见；
-  7. diff 中不存在敏感信息、无关文件或未经说明的破坏性修改。
+  5. Pull Request 中不存在未解决的 `Request changes` 或阻塞性审查意见；
+  6. diff 中不存在敏感信息、无关文件或未经说明的破坏性修改。
 - 满足全部条件后，Codex 应自动合并 Pull Request，无需等待用户再次确认。任一条件不满足时不得合并；
   应修复问题并重新验证。如果无法解决，应向用户汇报阻塞原因。
-- 自动合并授权不包含强制推送、绕过 CI、绕过审查、改写 `master` 历史或执行其他破坏性 Git 操作。
+- 自动合并授权不包含强制推送、绕过 CI、忽略已有阻塞性审查意见、改写 `master` 历史或执行其他破坏性 Git 操作。
 - 合并后必须汇报 Pull Request 链接、合并 commit SHA、测试和 CI 结果，以及是否存在遗留风险。
-- 未经用户另行授权，不要删除远程功能分支。
+- Pull Request 合并并确认分支提交已进入最新 `origin/master` 后，应立即删除对应本地与远程功能分支。
 - **CI 触发条件（2026-09-15 已修）**：`on: push: branches: [master, main, **develop**]` + `pull_request`。
   三份 job 分别执行后端 pytest+pyflakes、前端 tsc+vitest+eslint+`next build`、文档体检；不得削弱这些门禁。
   功能分支若需 GitHub CI 结果，应创建 PR 触发 `pull_request` 检查，但不得代替本地适用门禁。

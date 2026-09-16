@@ -394,9 +394,11 @@ def _collect_triage_stats(session_factory) -> dict:
         return {"available": False, "note": f"读取失败：{exc}"}
 
 
-def collect_inputs(session_factory=None) -> dict:
+def collect_inputs(session_factory=None, app=None) -> dict:
     """多路证据汇总（第八/九路 + 第十路 review + framework_backlog P2-2）。"""
     sf = session_factory or get_session_factory()
+    from app.services.evolution_probes import collect_vulnerability_evidence
+
     return {
         "review": _collect_review_improvements(sf),
         "signal_health": _collect_signal_health(sf),
@@ -417,6 +419,7 @@ def collect_inputs(session_factory=None) -> dict:
         "tracking": _collect_tracking_stats(sf),
         # P2-2（2026-09-09）：复盘框架自优化待办（06 §7 演化日志最近条目）
         "framework_backlog": _collect_framework_backlog(),
+        "vulnerability_probes": collect_vulnerability_evidence(sf, app),
     }
 
 
@@ -839,7 +842,7 @@ def _parse_items(raw: str) -> list[dict]:
 _AGENDA_INFLIGHT: set[str] = set()
 
 
-async def generate_agenda(session_factory=None) -> dict:
+async def generate_agenda(session_factory=None, app=None) -> dict:
     """生成（或复用）今日议程：预算检查 → 收集证据 → LLM → 解析落库。
 
     ORM 纪律：实例不跨 session——每次更新都 `db.get` fresh load 后改属性，
@@ -867,12 +870,12 @@ async def generate_agenda(session_factory=None) -> dict:
 
     _AGENDA_INFLIGHT.add(today)
     try:
-        return await _generate_agenda(sf, today)
+        return await _generate_agenda(sf, today, app)
     finally:
         _AGENDA_INFLIGHT.discard(today)
 
 
-async def _generate_agenda(sf, today: str) -> dict:
+async def _generate_agenda(sf, today: str, app=None) -> dict:
     """`generate_agenda` 的持锁主体：认领今日议程行 → 预算 → 证据 → LLM → 落库。
 
     调用方保证：本进程内同日只有一处在跑（`_AGENDA_INFLIGHT`）。
@@ -911,7 +914,7 @@ async def _generate_agenda(sf, today: str) -> dict:
     # 其中 _collect_data_health 会 `duckdb.connect(market.duckdb)` 跑 `MAX(date_ms)`
     # （1027 万行库），另有多次 SQLite 全表读 + 文件读 + shutil.disk_usage。
     # 本函数是 async（被 run_evolution_now / API 手动触发），直接调用会阻塞事件循环。
-    inputs = await asyncio.to_thread(collect_inputs, sf)
+    inputs = await asyncio.to_thread(collect_inputs, sf, app)
     messages = [
         {"role": "system", "content": _SYSTEM_PROMPT},
         {"role": "user", "content": json.dumps(inputs, ensure_ascii=False, default=str)},
@@ -1176,10 +1179,10 @@ def record_summary_audit(date: str, items: list[dict]) -> None:
             after={"date": date, "executed": len(executed), "total": len(items)})
 
 
-async def run_evolution_now(session_factory=None) -> dict:
+async def run_evolution_now(session_factory=None, app=None) -> dict:
     """手动/调度触发：生成今日议程 → autonomy 开启时立即执行。"""
     sf = session_factory or get_session_factory()
-    agenda = await generate_agenda(sf)
+    agenda = await generate_agenda(sf, app)
     if agenda["status"] == "ready" and autonomy_enabled():
         agenda = execute_agenda(agenda, sf)
     return agenda
@@ -1271,7 +1274,7 @@ async def evolution_scheduler(app, stop: asyncio.Event, *, run_hour: int, run_mi
                     existing = get_agenda(today.isoformat())
                     if existing is None or existing["status"] == "failed":
                         log.warning("[EVOLUTION] %s 15:45 窗口触发：开始生成议程", today)
-                        agenda = await run_evolution_now()
+                        agenda = await run_evolution_now(app=app)
                         log.warning("[EVOLUTION] %s 议程完成：status=%s items=%d",
                                     today, agenda.get("status"), len(agenda.get("items") or []))
                     else:

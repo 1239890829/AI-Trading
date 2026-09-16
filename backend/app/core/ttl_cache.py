@@ -48,6 +48,10 @@ class TTLCache:
         self.hits = 0
         self.misses = 0
         self.evictions = 0
+        self.factory_calls = 0
+        self.coalesced_waiters = 0
+        self.same_key_parallel_violations = 0
+        self._active_factories: dict[Any, int] = {}
         _LIVE.add(self)
 
     # ---- 同步读写 ----
@@ -103,6 +107,9 @@ class TTLCache:
                 "misses": self.misses,
                 "hit_rate": round(self.hits / total, 3) if total else None,
                 "evictions": self.evictions,
+                "factory_calls": self.factory_calls,
+                "coalesced_waiters": self.coalesced_waiters,
+                "same_key_parallel_violations": self.same_key_parallel_violations,
             }
 
     # ---- 异步单飞 ----
@@ -141,10 +148,26 @@ class TTLCache:
         async with self._lock_for(key):
             hit, value = self.get(key)
             if hit:
+                with self._mu:
+                    self.coalesced_waiters += 1
                 return True, value
-            result = factory()
-            if inspect.isawaitable(result):
-                result = await result
+            with self._mu:
+                active = self._active_factories.get(key, 0) + 1
+                self._active_factories[key] = active
+                self.factory_calls += 1
+                if active > 1:
+                    self.same_key_parallel_violations += 1
+            try:
+                result = factory()
+                if inspect.isawaitable(result):
+                    result = await result
+            finally:
+                with self._mu:
+                    left = self._active_factories.get(key, 1) - 1
+                    if left:
+                        self._active_factories[key] = left
+                    else:
+                        self._active_factories.pop(key, None)
             if result is not None or cache_none:
                 self.set(key, result)
             return False, result
