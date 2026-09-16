@@ -68,7 +68,7 @@ cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 coll
 # **教训与本文档的警告同源：数字标注要么当轮实测回填，要么写"实测方法"而不写死数值。**
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
 cd apps/web && npx eslint .                       # 0 error / 0 warn（P1-27 已清零；余 1 处 C 类显式豁免）
-cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 593 项 / 65 文件（09-15 §6.47 R22 轮实测）
+cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 598 项 / 66 文件（09-16 `IMP-031` 轮实测）
 # ⚠️ 默认并行度偶发 **SIGKILL(exit 137) 且零输出**（非测试失败）⇒ 先降并行度复跑：
 #   npx vitest run --maxWorkers=1
 # ⚠️ **凡改动/新增涉及时间·时区的断言，必须再用 `TZ=UTC` 复跑一遍**（CI 跑在 UTC，本地是 UTC+8）：
@@ -91,7 +91,12 @@ lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=
 ```
 
 > **门禁口径**：后端 collect **3247 项（3171 passed / 76 skipped / 0 failed）**、
-> 前端 **593 项 / 65 文件**、eslint **0 error / 0 warn**
+> 前端 **598 项 / 66 文件**、eslint **0 error / 0 warn**
+> （2026-09-16 `IMP-031` AI 判读气泡点击语义修正 + 选股提醒链路梳理轮实测；较上一值「后端 3247 / 前端 593·65」
+> 增量 **前端 +5 项 / +1 文件**，来源自洽：**恰等于**新文件
+> `components/assistant/floating-assistant-alert-bubble.test.tsx` 的用例数（5）；
+> 后端 **±0** 的理由是**本轮未改后端代码**（纯前端 + 文档），故沿用上轮实测值。
+> 本地时区与 `TZ=UTC` **均为 598/66**。）
 > （2026-09-16 `GOV-015` 账本档位一致性守卫 + `BUG-014` 销账轮实测；较上一值「后端 3235 / 前端 593·65」
 > 增量 **后端 collect +12 = passed +12 / skipped ±0**。机械核验：`+12` **恰等于**新文件
 > `backend/tests/test_doc_health_ledger_stages.py` 的 `--collect-only` 计数 **12**；
