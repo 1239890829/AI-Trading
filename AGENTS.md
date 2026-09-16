@@ -42,7 +42,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 collect 3227 项（3151 passed / 76 skipped / 0 failed）（09-16 BUG-014+GOV-014 轮实测；前提：8000 在跑）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 collect 3235 项（3159 passed / 76 skipped / 0 failed）（09-16 RSH-026 第二批实测；前提：8000 在跑）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。

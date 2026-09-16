@@ -461,6 +461,23 @@ async def replay_opportunity_run(run_id: str) -> dict:
     return {"data": result, "meta": {}}
 
 
+@router.get("/opportunity-scorecard")
+async def opportunity_scorecard(
+    date: str | None = Query(default=None, description="YYYY-MM-DD，缺省=北京今天"),
+    top_k: int = Query(default=5, ge=1, le=50, description="精排队列前 K 名"),
+) -> dict:
+    """当日机会决策的**成本后**记分卡（只读，不输出买卖建议）。
+
+    与 `/opportunity-learning` 的分工：那个回答「归档了多少、覆盖率多少」，
+    这个回答「按成本后口径看，已发生的决策长什么样」。**样本低于下限时
+    `verdict` 恒为 `insufficient_sample`**，调用方不得据此晋级策略。
+    """
+    from app.picks.opportunity_learning import opportunity_scorecard as _scorecard
+
+    target = date or beijing_now().date().isoformat()
+    return {"data": _scorecard(target, top_k=top_k), "meta": {}}
+
+
 @router.get("/position-labels")
 async def position_labels(request: Request) -> dict:
     """闭环「标签」（2026-09-09 用户指令 3）：symbol → sim/real。

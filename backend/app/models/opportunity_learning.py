@@ -64,6 +64,13 @@ class OpportunityOutcomeLabel(Base):
     reference_price: Mapped[float | None] = mapped_column(Float, default=None)
     outcome_price: Mapped[float | None] = mapped_column(Float, default=None)
     return_pct: Mapped[float | None] = mapped_column(Float, default=None)
+    # ── 成本与可成交性口径（`RSH-026` 第二批，2026-09-16）与 `return_pct` **并列而非替换** ──
+    # `return_pct` = 信号方向毛收益（决策时点价 → D0 收盘，不含成本，恒有值）；
+    # `net_return_pct` = 扣双边交易成本后的净收益，**仅 `fill_state == "ok"` 时有值**。
+    # 不可成交/无现价时净收益留 `None`，**严禁记 0**：把"买不到"写成"零收益"会系统性高估策略。
+    fill_state: Mapped[str] = mapped_column(String(16), default="ok", index=True)
+    cost_pct: Mapped[float | None] = mapped_column(Float, default=None)
+    net_return_pct: Mapped[float | None] = mapped_column(Float, default=None)
     reason: Mapped[str] = mapped_column(Text, default="")
     source: Mapped[str] = mapped_column(String(32), default="daily_close")
     labeled_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
