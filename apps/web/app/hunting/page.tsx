@@ -134,6 +134,10 @@ function HuntingInner() {
     if (sec === "review") setReviewOpen(true);
   }
 
+  // 闸门展示口径（2026-09-16）：优先**读取时刻复核**结果，缺省退回生成时刻落库值
+  // （旧后端 / 复核不可用时不至于整个横幅消失）。对照面始终传 stored。
+  const gateView = data?.meta?.gate_live ?? data?.meta?.gate;
+
   // ?sec= 滚动定位（展开已在上方渲染期完成，这里只负责滚动）
   useEffect(() => {
     if (!secValid) return;
@@ -364,8 +368,19 @@ function HuntingInner() {
       {data?.note && <div className="shrink-0 text-xs text-zinc-600 dark:text-zinc-400">{data.note}</div>}
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
-        {/* ── 空仓闸门横幅（风险提示置顶）── */}
-        {data?.meta?.gate && data.meta.gate.stand_aside && <StandAsideBanner gate={data.meta.gate} />}
+        {/* ── 空仓闸门横幅（风险提示置顶）──
+            2026-09-16 动态化：以**读取时刻复核**（meta.gate_live）为准展示，
+            生成时刻落库值（meta.gate）作对照。此前只显示落库值 ⇒ 开盘 3 分钟的
+            瞬时快照被当全天结论挂着，实测白天出现「横幅喊空仓观望 + 紧邻 chip 显示
+            题材进攻」两个相反结论。实时复核不可用时 gate_live 退化为落库值 + 原因说明，
+            故这里仍以它为主、gate 作对照即可（不必再判分支）。 */}
+        {gateView && (
+          <StandAsideBanner
+            gate={gateView}
+            stored={data?.meta?.gate}
+            generatedAt={data?.meta?.generated_at}
+          />
+        )}
 
         {/* ── 相位→风格路由（审查 §4.1）：当日风格 + 权重偏移，路由未生效时显式说明 ── */}
         {data?.meta?.style_routing && (

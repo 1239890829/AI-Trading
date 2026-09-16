@@ -313,7 +313,7 @@ def test_output_contract():
     for key in ("phase", "phase_unreliable", "temperature", "confidence", "phase_basis",
                 "heat", "earning", "promotion", "prev_perf", "ladder", "indicators",
                 "self_check", "misjudge_caveats", "switch_conditions", "verify_next",
-                "trade_date", "prev_trade_date", "judged_at"):
+                "trade_date", "prev_trade_date", "judged_at", "gate_inputs"):
         assert key in s, f"缺少输出字段 {key}"
     assert s["phase"] in {"冰点", "修复", "发酵", "高潮", "分歧", "退潮"}
     assert s["verify_next"], "每条判断必须带次日可验证条件"
@@ -332,3 +332,57 @@ def test_indicator_names_updated():
              snapshot=[_row("600002", 3.0)])
     names = {i["name"] for i in s["indicators"]}
     assert {"1进2 晋级率", "昨日涨停今日中位", "跌停家数"} <= names
+
+
+# ---------------------------------------------------------------- 闸门输入出口（2026-09-16）
+
+def test_gate_inputs_mirror_the_returned_axes():
+    """`gate_inputs` 是空仓闸门的**结构化输入出口**，必须与同一次返回的各轴逐字一致。
+
+    为什么要有这个出口：闸门原本只在组合生成时算一次并落库定格全天（实测 09:26
+    判「退潮」、收盘口径实为「高潮」）。修法是读侧按实时输入重算，而重算若还要
+    自己回源打上游（涨停池 / 炸板池 / breadth）就等于又开了一套取数逻辑。
+    收口到引擎后，读侧零额外网络调用——本用例钉住「出口值 = 各轴值」这一契约，
+    任一处将来改成各算各的，这里立刻变红。
+    """
+    pool_y = [_rec("600001", 1), _rec("600002", 1)]
+    pool_t = [_rec("600001", 2), _rec("600003", 1)]
+    s = _run(pool_today=pool_t, pool_yesterday=pool_y,
+             snapshot=[_row("600001", 4.0), _row("600002", -1.0)])
+
+    gi = s["gate_inputs"]
+    assert gi["promotion_1to2"] == s["promotion"]["promo_1to2"]
+    assert gi["prev_zt_median_pct"] == s["prev_perf"]["median_pct"]
+    assert gi["limit_down"] == _breadth()["limit_down"]
+
+
+def test_gate_inputs_present_even_when_pools_are_empty():
+    """**键恒在**：空池子时也要返回 `gate_inputs`（值为 None），不能整键缺失。
+
+    「缺键 = 引擎没暴露」与「值为 None = 当天确实没有该指标」是两件事，读侧
+    （`_live_gate`）靠这个区分"上游升级期间的回退"与"指标缺失"。整键缺失会让
+    读侧静默退化成"输入全空 → 闸门不触发"，把数据缺失伪装成安全。
+    """
+    s = _run(pool_today=[], pool_yesterday=[], snapshot=[])
+    assert "gate_inputs" in s
+    gi = s["gate_inputs"]
+    assert set(gi) == {"promotion_1to2", "break_rate", "limit_down",
+                       "prev_zt_median_pct", "break_caliber"}
+    assert gi["promotion_1to2"] is None
+    assert gi["break_caliber"] in ("approx", "missing")
+
+
+def test_gate_inputs_break_caliber_distinguishes_pool_from_approx():
+    """炸板率口径必须留痕：真实炸板池 vs 价格法近似，可信度不同。
+
+    只有明确给了 `break_count`（真实炸板池）才算 `pool`；缺省时按
+    「价格法 − 封单法」近似算，口径标 `approx` —— 下游闸门理由里也要能说清。
+    """
+    approx = _run(pool_today=[], pool_yesterday=[], snapshot=[])
+    assert approx["gate_inputs"]["break_caliber"] == "approx"
+    assert approx["gate_inputs"]["break_rate"] is not None  # 近似值可用，只是口径不同
+
+    pooled = _run(pool_today=[_rec("600001", 1)], pool_yesterday=[], snapshot=[],
+                  break_count=5)
+    assert pooled["gate_inputs"]["break_caliber"] == "pool"
+    assert pooled["gate_inputs"]["break_rate"] == round(5 / (1 + 5), 3)

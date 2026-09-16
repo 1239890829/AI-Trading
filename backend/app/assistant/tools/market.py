@@ -9,6 +9,8 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+from app.market.tdx_tick import fetch_trades_with_tdx_fallback, trades_failure_detail
+
 from .core import (
     TIMEFRAMES,
     ToolContext,
@@ -165,14 +167,33 @@ async def _t_orderbook(ctx: ToolContext, **kw) -> str:
 
 
 async def _t_trades(ctx: ToolContext, **kw) -> str:
-    """逐笔成交（P2-28① 批量登记）。"""
+    """逐笔成交（P2-28① 批量登记）。
+
+    2026-09-16 `IMP-038`：改走 `fetch_trades_with_tdx_fallback`（provider 链主源 +
+    TDX 直连备源），与 `/api/trades/{symbol}` 共用同一条降级链。**"两源都失败"与
+    "两源都为空"必须给出不同文案**——把数据源故障说成"没有逐笔"是在制造事实。
+    """
     codes, e = _valid_symbols(kw.get("symbols", ""), ctx.known_symbols or None)
     if e:
         return f"参数不合法：{e}"
-    rows = list((await ctx.provider.get_trades(codes[0])) or [])
+    rows, source, detail = await fetch_trades_with_tdx_fallback(
+        ctx.provider.get_trades, codes[0], limit=200
+    )
     if not rows:
-        return f"逐笔成交：{codes[0]} 取不到（数据源未提供逐笔）"
-    return _fmt_rows(f"逐笔成交 {codes[0]}", rows[:30], [
+        # 保留「取不到」这一结论词（`tests/test_depth_tools.py` 钉住的用户可见契约：
+        # 取不到要**如实说取不到**），后面接**原因**——"取数失败"与"两源都为空"
+        # 必须可分辨，否则模型会把数据源故障讲成"该股没有逐笔"。
+        #
+        # ⚠️ 判据用 `trades_failure_detail`（故障白名单），**不能写 `if detail:`**：
+        # 备源未启用时 `detail = "chain: empty; tdx: disabled"` 同样非空，
+        # 那样会把"没有数据"讲成"取数失败"（2026-09-16 实测踩到）。
+        failed = trades_failure_detail(detail)
+        if failed:
+            why = f"取数失败（{failed}）"
+        else:
+            why = "两源均未给出数据（非取数故障）" + (f"：{detail}" if detail else "")
+        return f"逐笔成交：{codes[0]} 取不到——{why}"
+    return _fmt_rows(f"逐笔成交 {codes[0]}（源 {source}）", rows[:30], [
         ("time", "时间"), ("price", "价格"), ("volume", "量"), ("side", "方向"),
     ], total=len(rows))
 

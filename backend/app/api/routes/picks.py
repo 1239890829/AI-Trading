@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -90,6 +91,113 @@ async def _live_style_routing(request: Request, hub: QuoteHub, stored: dict | No
     return live
 
 
+def _gate_unavailable(stored: dict | None, note: str) -> dict:
+    """实时复核不可用时的降级面：**保留生成时刻结论**，只标注不可用（不伪装成"未触发"）。
+
+    与 `_live_style_routing` 的降级同款纪律（三态：来源显式，未知不伪装）。若连
+    生成时刻结论也没有（旧行无 gate），返回的字典不含 `stand_aside` 键——前端
+    `gate.stand_aside` 为 undefined 即 falsy，横幅不渲染，也**不会**被误读成"闸门未触发"。
+    """
+    out = dict(stored) if isinstance(stored, dict) else {}
+    out["gate_source"] = "unavailable"
+    out["gate_note"] = note
+    return out
+
+
+async def _live_gate(request: Request, hub: QuoteHub, stored: dict | None) -> dict:
+    """空仓闸门按**读取时刻**重算（2026-09-16，猎场头部动态化）。
+
+    **修的是什么**：闸门（`picks/gate.evaluate_stand_aside`）此前只在组合生成时
+    算一次并持久化进 `meta.gate`，此后全天定格；而紧挨着它的 `style_routing` 是
+    读取时重算的。2026-09-16 实测同一次 `/api/picks/today` 响应里同时出现
+    「落库相位 = 退潮（横幅：建议空仓观望，已撤除买入区间）」与
+    「实时相位 = 高潮，风格路由=题材进攻」——**两个相反结论同屏展示**，且定格的是
+    更悲观的那个。用户判断（问题 7）完全命中：情绪判定不该在当天提前定死。
+
+    **为什么定格会错得这么离谱**：组合 09:26 自动生成，此刻在场只有 3 只涨停、
+    最高 2 板（meta.limit_up_count=3 / market_max_boards=2），引擎据此判「退潮」
+    并无不当——**那是 09:26 的真实状态**。缺陷不在判据，在于**把开盘 3 分钟的
+    瞬时快照当成了全天结论**。同一交易日收盘口径实测：涨停 89 家、最高 6 板、
+    1进2 晋级率 36%（vs 生成时 8%）、炸板率 11% ⇒ 相位「高潮」，闸门本不该触发。
+
+    **输入同源**：四项输入取自 `sent["gate_inputs"]`（sentiment 引擎本次新增的
+    结构化出口）——引擎本就算过它们，收口后读侧**零额外网络调用**，只在本地做
+    两次历史分位（实测合计 ~10.3ms/251 样本，走 `asyncio.to_thread` 不占事件循环）。
+    生成时与读时因此**必然同口径**，不存在"两份取数逻辑各自漂移"。
+
+    **不做什么**：落库的 `meta.gate` **原样保留**（它记录了生成时刻的真实判断，
+    是复盘归因的证据，也是 `items[].buy_range` 已被撤除的原因）；本函数只**新增**
+    一个对照面 `meta.gate_live`。也不动推送口径——这是展示层复核，不是新的告警源。
+    """
+    from app.picks.gate import evaluate_stand_aside
+    from app.services.market_context import CalendarUnavailable, get_cached_sentiment
+
+    try:
+        sent = await get_cached_sentiment(request.app.state, hub)
+    except CalendarUnavailable as exc:
+        return _gate_unavailable(stored, f"实时情绪不可用（{exc}），显示生成时刻结论")
+    except Exception as exc:  # noqa: BLE001  读时重算是降级而非故障：保留落库结论，不覆盖成"未触发"
+        log.warning("live gate sentiment failed: %s", exc)
+        return _gate_unavailable(stored, f"实时情绪计算失败（{exc}），显示生成时刻结论")
+
+    gi = sent.get("gate_inputs") or {}
+    promo_1to2 = gi.get("promotion_1to2")
+    break_rate = gi.get("break_rate")
+    promo_pctl = None
+    break_pctl = None
+    try:
+        from app.sentiment import metric_history
+
+        # 与生成时同一处函数、同样合并为一次线程跳（两个分位一起算）：
+        # 从事件循环里做同步磁盘读会卡住整个进程（G-2 的同一教训）。
+        def _both_pctl() -> tuple[float | None, float | None]:
+            p = (metric_history.percentile_of_value("promo_1to2", promo_1to2) or {}).get("percentile")
+            b = (metric_history.percentile_of_value("break_rate", break_rate) or {}).get("percentile")
+            return p, b
+
+        promo_pctl, break_pctl = await asyncio.to_thread(_both_pctl)
+    except Exception as exc:  # noqa: BLE001  分位不可用时闸门自动回落绝对经验值并在理由里写明（不静默）
+        log.warning("live gate percentile failed: %s", exc)
+
+    gate = evaluate_stand_aside(
+        phase=sent.get("phase"),
+        promotion_1to2=promo_1to2,
+        promotion_1to2_pctl=promo_pctl,
+        break_rate=break_rate,
+        break_rate_pctl=break_pctl,
+        limit_down=gi.get("limit_down"),
+        prev_zt_median_pct=gi.get("prev_zt_median_pct"),
+        phase_unreliable=bool(sent.get("phase_unreliable")),
+    )
+    gate["gate_source"] = "live"
+    # 对照面：实时相位 vs 生成时刻相位、本次复核用的交易日。前端凭此说明
+    # 「结论为何变化」，不必自己推断（也不该在前端重算规则）。
+    gate["recheck"] = {
+        "phase": sent.get("phase"),
+        "trade_date": sent.get("trade_date"),
+        "judged_at": sent.get("judged_at"),
+        "stored_phase": (stored or {}).get("phase"),
+        "phase_changed": (stored or {}).get("phase") != sent.get("phase"),
+        "inputs_source": "sentiment.gate_inputs",
+        "break_caliber": gi.get("break_caliber"),
+    }
+    return gate
+
+
+async def _attach_gates(request: Request, hub: QuoteHub, meta: dict) -> dict:
+    """给 meta 挂上「生成时刻闸门」与「读取时刻闸门」两面对照面。
+
+    落库值打 `gate_source="stored"`（**不覆盖内容**——它是生成时刻的真实判断，
+    也是当日 `buy_range` 被撤除的原因，复盘归因依赖它）。
+    """
+    stored = meta.get("gate")
+    if isinstance(stored, dict):
+        stored = {**stored, "gate_source": "stored"}
+        meta["gate"] = stored
+    meta["gate_live"] = await _live_gate(request, hub, stored)
+    return meta
+
+
 @router.get("/today")
 async def today_picks(request: Request, hub: QuoteHub = Depends(get_hub)) -> dict:
     today = beijing_today().isoformat()
@@ -103,6 +211,7 @@ async def today_picks(request: Request, hub: QuoteHub = Depends(get_hub)) -> dic
                 return {"data": {"date": None, "items": [], "meta": None, "note": "尚未生成组合：POST /api/picks/generate（或等收盘管线）"}, "meta": {}}
             meta = parse_pick_meta(row.meta)  # 炒作阶段与空仓闸门状态（前端横幅需要）
             meta["style_routing"] = await _live_style_routing(request, hub, meta.get("style_routing"))
+            meta = await _attach_gates(request, hub, meta)
             return {
                 "data": {
                     "date": row.date,
@@ -114,6 +223,7 @@ async def today_picks(request: Request, hub: QuoteHub = Depends(get_hub)) -> dic
             }
         meta = parse_pick_meta(row.meta)
         meta["style_routing"] = await _live_style_routing(request, hub, meta.get("style_routing"))
+        meta = await _attach_gates(request, hub, meta)
         return {
             "data": {
                 "date": row.date,

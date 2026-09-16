@@ -108,6 +108,22 @@ CONTRACTS: list[dict] = [
         "universe": lambda: set(_freshness_states()),
         "note": "IMP-002：后端新增状态而无标记 ⇒ 界面与「实时」渲染同形（红线 2 界面层缺口）",
     },
+    {
+        "name": "事件四级分类配色",
+        "file": "event-view.ts",
+        "universe": lambda: set(_four_labels()),
+        "note": "2026-09-16：后端新增第五级分类而前端 `FOUR_STYLE` 无配色 ⇒ 徽标无色（静默降级，非报错）",
+    },
+    {
+        "name": "事件影响力分级配色",
+        "file": "event-view.ts",
+        "universe": lambda: set(_level_reasons()),
+        "note": (
+            "2026-09-16：后端 `impact_level` 全集为 L1/L2/L3，默认只是**过滤**掉 L3 不下发"
+            "（`include_l3` 默认 False），分级定义里 L3 恒在 ⇒ 前端缺 L3 键时"
+            "开启 include_l3 即无色徽标。**「默认不渲染」不构成豁免理由**"
+        ),
+    },
 ]
 
 #: 扫描到但**不需要**契约的字典（纯前端概念，无后端枚举源）
@@ -145,6 +161,18 @@ def _role_base_score():
     from app.picks.echelon import ROLE_BASE_SCORE
 
     return ROLE_BASE_SCORE
+
+
+def _four_labels():
+    from app.events.impact import FOUR_LABEL
+
+    return FOUR_LABEL
+
+
+def _level_reasons():
+    from app.events.ranking import LEVEL_REASON
+
+    return LEVEL_REASON
 
 
 # ---------------------------------------------------------------- 覆盖性

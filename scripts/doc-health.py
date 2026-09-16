@@ -883,33 +883,79 @@ def _tracked_dirs() -> set[str] | None:
     return dirs
 
 
+def _is_gitignored(rel: str, is_dir: bool) -> bool:
+    """该路径是不是 gitignored——即「**永远**进不了 CI 检出」，而非"这次恰好没有"？
+
+    ⚠️ **目录形态必须带尾斜杠去问**（2026-09-16 实测）：`git check-ignore data/picks/`
+    命中，而 `data/picks`（无斜杠）**不命中**——`.gitignore` 里的 `data/` 规则覆盖其下的
+    文件，**不含目录节点自身**。少一个 `/` 就答反，而答反的方向恰好是"本该跳过的变成判红"。
+
+    拿不准（无 git 环境 / 命令失败 / 超时）一律返回 `False` = **照判**：
+    宁可误报不可漏报（[[KB-ENG-72]]：守卫覆盖面失效比误报危险得多）。
+    """
+    arg = rel + "/" if is_dir and not rel.endswith("/") else rel
+    try:
+        r = subprocess.run(["git", "check-ignore", "-q", "--", arg],
+                           cwd=ROOT, capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0
+
+
 def _in_checkout_universe(tok: str, tops: set[str] | None, dirs: set[str] | None) -> bool:
     """该路径**能不能被仓库证明**？不能就不判它（判了就是"本地绿 / CI 红"）。
 
     为什么必须有这条（2026-09-15 实测）：`.workbuddy/` 是 **gitignored 的工作区目录**
-    （`git ls-files .workbuddy` = **0 条**）⇒ CI 检出里根本没有这棵树，而本地有。
-    于是 N（索引指针）/ O（编目闭包）**本地恒绿、CI 恒红**：CI 上实测 `N 14 处指针失效`
-    + `O 幽灵条目 5 条`（全是 `.workbuddy/**`），而后端与前端 job 全绿 ⇒ 正是
-    `_repo_basenames` 早就写明的通例被违反（**判定面必须等于检出内容**）。
+    ⇒ CI 检出里根本没有这棵树，而本地有。于是 N（索引指针）/ O（编目闭包）
+    **本地恒绿、CI 恒红**：CI 上实测 `N 14 处指针失效` + `O 幽灵条目 5 条`
+    （全是 `.workbuddy/**`），而后端与前端 job 全绿 ⇒ 正是 `_repo_basenames`
+    早就写明的通例被违反（**判定面必须等于检出内容**）。
 
-    判据取**两级**，缺一不可（单用任一级都实测出误报）：
-      ① **顶层段在检出里**（`.workbuddy` ∉ ⇒ 整棵树都不判）；
-      ② **父目录在检出里**（`data/picks/x.md`：`data` 在、但 `data/picks` 不在
-         —— 它是 gitignored 的运行产物目录 ⇒ 不判；而 `docs/kb/xxx.md` 的父目录
-         `docs/kb` 在 ⇒ **照判**，于是"指针指向已删的文档"这个主用途不受影响）。
-         ⚠️ 这里的示例名必须用占位词（`xxx`）：写真实形态会被 **F 项**当成代码注释里的
-         死引用判红（2026-09-15 实测，写了字面量示例当场红 1 处）。
+    判据取**三级**。前两级是"结构代理"（便宜、无需起子进程），第三级才是
+    「**能不能**进检出」的**定义**——代理与定义必须并存：
+
+      ① **顶层段在检出里**（`data` 在、而 `kb` 不在 ⇒ 后者整棵树都不判；
+         `kb/` 这类相对 `docs/` 的简写由 **B 项**按双基准负责，见 GOV-009）。
+
+      ② **存在性锚点在检出里**——锚点取法**随形态而变**，这一点是坑：
+         · **文件形态**取**父目录**（`data/picks/x.md`：`data/picks` 不在检出里 ⇒ 进不了②）；
+         · **目录形态**（尾斜杠）取**它自己**（`.workbuddy/memory/` 要问的是
+           `.workbuddy/memory` 在不在，**不是** `.workbuddy`）。
+
+         ⚠️ **目录形态取父目录 = 少算一层**（2026-09-16 定位的真因）：那样只要
+         `.workbuddy` 在检出面里，`.workbuddy/**` 的**任意**子路径都能蒙混过关。
+         此前 `.workbuddy` 恒不在 `tops` ⇒ 门① 先拦下 ⇒ 缺陷**不可见**；
+         2026-09-16 `PR #19` 往 `.workbuddy/skills/` 强提交了 2 个技能文件 ⇒
+         `.workbuddy` **首次进入 `tops`** ⇒ 门① 放行、门② 因"父目录 `.workbuddy` 在"
+         而放行 ⇒ `N 6 处 + O 4 条`**只在 CI 红**（本地这些目录都在，故恒绿）。
+         ⇒ 通例：**代理成立依赖的前提变了，代理不会自己报警**——前提写在文档里、
+         而判定面由第三处的常量（这里是 `.gitignore` + 强提交）决定（[[KB-ENG-72]] 同族）。
+
+      ③ 锚点不在检出里 ⇒ 用「**能不能**进检出」定夺（`git check-ignore`，见
+         `_is_gitignored`）：gitignored ⇒ 不判；非 ignored 而缺席 ⇒ 是**真问题**
+         （写错的目录名 / 已删的目录）⇒ **照判**。
+         ⚠️ **③ 不是②的放宽，是②的补全**：只按②改（目录形态取自身）会把
+         `.workbuddy/**` 之外**所有**缺席目录一并静默放过——**含真写错的**——
+         那是把"修判据"做成了"撤守卫"（[[KB-ENG-65]]：修判据 ≠ 修守卫）。
+         ⚠️ 但 ③ **不能**放宽到"凡缺席即不判"：本仓删除纪律要求处置物先进
+         `.workbuddy/trash/`（gitignored），若按"缺席即跳过"写，回收站里的副本
+         会持续把死引用喂绿（[[KB-ENG-70]]）。
+
       仓库根下的裸名（`AGENTS.md` 等）父目录即根 ⇒ 一律判。
     `tops/dirs = None`（无 git 环境，如合成树单测）⇒ 返回 True ⇒ 退回文件系统口径。
     """
     if tops is None or dirs is None:
         return True
+    is_dir = tok.endswith("/")
     t = tok.strip("/")
     if t.split("/", 1)[0] not in tops:
         return False
     if "/" not in t:
         return True          # 仓库根下的裸名（AGENTS.md / CONTEXT.md / .env.example …）
-    return t.rsplit("/", 1)[0] in dirs
+    anchor = t if is_dir else t.rsplit("/", 1)[0]
+    if anchor in dirs:
+        return True
+    return not _is_gitignored(t, is_dir)
 
 
 def _repo_basenames() -> set[str]:

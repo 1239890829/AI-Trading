@@ -2,8 +2,10 @@
 
 > 实测日期：2026-08-29（周六，最近交易日 2026-08-28）
 > §0–§11 是不同日期的历史取证，不可拼成当前能力表；最新纠正见 §12。
-> 后续状态唯一入口：`docs/retro-and-gaps.md` §6.0 `BUG-018` / `IMP-040`。
+> 后续状态唯一入口：`docs/retro-and-gaps.md` §6.0 `BUG-020` / `IMP-040`。
 > 每次改动数据源前必读；改完请把新结论回填本文。
+> **同族**：**接入面清单与使用度审计 → `data-sources.md` §8（2026-09-16）** —— 它按「源 × 已接/未接 × 调用点」逐项点清，
+> 并**推翻本文两处结论**：§4 表「ths 财务 report 格式仍全失败」（实测**已通**）、§2.4「ths 跌停池漏报」（实测**逐只一致**，样本仅 4 只 ⇒ **待大跌日复测**）。
 
 ---
 
@@ -432,7 +434,7 @@ ths 官方 API 无资金流端点（仅基金持仓，见 endpoints-fund.md）�
 
 ## 12. 数据源全链路复核（2026-09-16）
 
-本节纠正历史断言；执行状态以账本 §6.0 `BUG-018` / `IMP-040` 为准。
+本节纠正历史断言；执行状态以账本 §6.0 `BUG-020` / `IMP-040` 为准。
 完整方案附件与脱敏测量记录保留在本次任务 Markdown 交付中，不另立仓内任务清单。
 审计快照为 `4ba78af`，修复从当时最新 `origin/master`（`9364ef0`）独立建立，不能混报两者测试分母。
 
@@ -489,8 +491,7 @@ ths 官方 API 无资金流端点（仅基金持仓，见 endpoints-fund.md）�
 但不是 L2 或承诺服务。[Tushare](https://tushare.pro/document/1?doc_id=290) 基础日线与实时/分钟权限分开，
 本轮不增加付费依赖。[巨潮](https://list.cninfo.com.cn/cninfo/) 原文可公开核查不代表批量 API 与再分发自动免费。
 [BaoStock 维护者说明](https://pypi.org/project/baostock/) 声明有自己的数据服务器，不能如旧 §9 一样直接归为本仓直连的同源聚合；可列历史核验候选，本轮未实测连通性。
-借鉴 [OpenBB Provider](https://docs.openbb.co/odp/python/developer/extension_types/provider) 的查询/结果标准化，
-不为修复引入整个平台。
+借鉴 [OpenBB Provider](https://docs.openbb.co/odp/python/developer/extension_types/provider) 的查询/结果标准化，不为修复引入整个平台。
 
 准入顺序：身份/字段/时间正确 → 使用权限 → 完整性与失败真实 → 目标时效 → 运行成本。
 措施：方法级共享 deadline、真实上游限额、TTLCache 单飞、批量合并、冷热隔离、有界任务与队列，

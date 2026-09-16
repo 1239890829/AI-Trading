@@ -121,6 +121,20 @@ export interface NotificationDiagnostics {
   state: "no_pick_set" | "no_run" | "ran_rejected" | "ran_eligible" | "unavailable";
   trade_date: string;
   as_of: string;
+  /** 读取窗口内**各事件形状的原始条数**（2026-09-16 新增）。
+   *
+   * **为什么必须单独报**：`state` / `decisions` 都来自买点链（`__picks_buy_point__`），
+   * 只回答"买点链有没有选出票"；而通知中心实际收两个形状
+   * （`buy_point` + `pre_limit`，见后端 `_NOTIF_KINDS`）——当买点链整天没触发
+   * （2026-09-16 实测：`alert_rule` 表里根本没那行）而临板预警刷了一整天时，
+   * 只看 `state` 会得出"上游空"的误导结论。
+   *
+   * 语义要点：
+   *  - 键是形状名（`buy_point` / `pre_limit` / `board_low_absorb` / …），值是**原始条数**；
+   *  - 白名单两键**恒在**（0 也返回）⇒ 「缺键 = 没统计」与「0 条 = 确实没有」可区分；
+   *  - 统计的是**读取窗口**（后端 `_NOTIF_FETCH_LIMIT`）而非全天；窗口外的旧事件不计入。
+   *  - `symbol=000000` 的板块级形状也会出现——正是它们当对照物才有诊断价值。 */
+  shapes?: Record<string, number>;
   /** 当日盘前精选摘要；`unavailable` 时只有 `present` / `count` */
   pick_set: {
     present: boolean;

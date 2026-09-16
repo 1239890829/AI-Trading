@@ -135,9 +135,13 @@ def test_failure_is_not_cached(monkeypatch):
 
 
 def test_all_consumers_share_one_compute(monkeypatch):
-    """市场页 / 介入条件清单 / 猎场相位路由 / 事件排序 / 风控：五次消费，一次计算。
+    """市场页 / 介入条件清单 / 猎场相位路由 / 猎场闸门复核 / 事件排序 / 风控：
+    六次消费，一次计算。
 
     这是 P1-3 的核心回归位。任一消费方将来重新自建取数逻辑，这里立刻变红。
+    第六个消费方是 2026-09-16 新增的猎场闸门读时重算（`_live_gate`）——它必须
+    复用同一槽：闸门复核每次读页面都要跑，若自带取数逻辑就等于把最重的读路径
+    再走一遍（这也是它敢在读侧做的前提）。
     """
     state, counter = _State(), {"n": 0}
     _patch(monkeypatch, counter)
@@ -146,6 +150,7 @@ def test_all_consumers_share_one_compute(monkeypatch):
     envelope = _run(sentiment_route.market_sentiment(req, HUB))          # 市场页情绪卡
     phase = _run(themes_route._market_phase_cached(req, HUB))          # 介入条件清单
     routed = _run(picks_route._live_style_routing(req, HUB, None))     # 猎场相位路由
+    gate = _run(picks_route._live_gate(req, HUB, None))                # 猎场闸门复核
     ctx = _run(collect_rank_context(state, [], []))                    # 事件排序
     engine = RiskEngine(hub=HUB, snapshot_service=state.snapshot_service,
                         session_factory=None, app_state=state)
@@ -155,6 +160,7 @@ def test_all_consumers_share_one_compute(monkeypatch):
     assert envelope["data"]["phase"] == "高潮"
     assert phase == "高潮"
     assert routed["phase_source"] == "live"
+    assert gate["gate_source"] == "live"   # 复核成功，非 degraded
     assert ctx.phase == "高潮"
     assert engine.state in ("数据不足", "进攻", "防守", "中性")  # 只要求它跑通
 

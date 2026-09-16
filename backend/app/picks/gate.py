@@ -117,10 +117,34 @@ def evaluate_stand_aside(
         # 判定本身不可信时不升级为强预警，但把不确定性明示出来（诚实原则）
         reasons.append("⚠️ 情绪判定自指检查未通过，上述结论置信度下调")
 
+    # 原始输入 + 实际使用的口径（percentile / absolute / missing）留痕。
+    #
+    # ⚠️ **未触发路径也必须带**（2026-09-16 修）：原先只在触发分支返回，于是
+    # 「复核后已解除」时没有任何输入可比——而"当前晋级率多少"正是解释结论为何
+    # 变化的关键（实测场景：生成时 8%/9 分位 → 复核 36%/62 分位）。缺了它，用户
+    # 只能看到"生成时说退潮、现在说高潮"两个标签，无从判断该信哪个。
+    # 语义上也是对称的：「为什么这天触发了」与「为什么这天没触发」必须同样可回答。
+    signals = {
+        "promotion_1to2": promotion_1to2,
+        "promotion_1to2_pctl": promotion_1to2_pctl,
+        "break_rate": break_rate,
+        "break_rate_pctl": break_rate_pctl,
+        "limit_down": limit_down,
+        "prev_zt_median_pct": prev_zt_median_pct,
+        "promo_caliber": (
+            "percentile" if promotion_1to2_pctl is not None
+            else "absolute" if promotion_1to2 is not None else "missing"
+        ),
+        "break_caliber": (
+            "percentile" if break_rate_pctl is not None
+            else "absolute" if break_rate is not None else "missing"
+        ),
+    }
+
     if not reasons:
         return {
             "stand_aside": False, "level": "none", "reasons": [], "advice": ADVICE_NONE,
-            "phase": phase, "strip_buy_range": False,
+            "phase": phase, "strip_buy_range": False, "signals": signals,
         }
 
     severe = (phase in SEVERE_PHASES) or len(reasons) >= 2
@@ -138,24 +162,7 @@ def evaluate_stand_aside(
         # 分档结论**在此算出并落库**（唯一真相源）：后端 apply_gate_to_picks 与前端
         # 横幅都只读这个字段，不在各自那一侧重算一遍规则（重算 = 两份口径必然漂移）。
         "strip_buy_range": (phase in STRIP_PHASES) or len(reasons) >= STRIP_MIN_REASONS,
-        # 原始输入 + 实际使用的口径（percentile / absolute / missing）留痕：
-        # 「为什么这天触发了闸门」必须能只看落库数据就回答，不用回去猜当时库里有几天样本。
-        "signals": {
-            "promotion_1to2": promotion_1to2,
-            "promotion_1to2_pctl": promotion_1to2_pctl,
-            "break_rate": break_rate,
-            "break_rate_pctl": break_rate_pctl,
-            "limit_down": limit_down,
-            "prev_zt_median_pct": prev_zt_median_pct,
-            "promo_caliber": (
-                "percentile" if promotion_1to2_pctl is not None
-                else "absolute" if promotion_1to2 is not None else "missing"
-            ),
-            "break_caliber": (
-                "percentile" if break_rate_pctl is not None
-                else "absolute" if break_rate is not None else "missing"
-            ),
-        },
+        "signals": signals,
     }
 
 

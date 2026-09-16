@@ -305,3 +305,77 @@ describe("通知中心：空态诊断（BUG-016 子项③）", () => {
     expect(box.textContent).toContain("不等于没有机会");
   });
 });
+
+/**
+ * 空态**形状计数**（2026-09-16 用户实盘反馈「盘中机会为什么没提示」）。
+ *
+ * 场景：当日 `__picks_buy_point__` 规则整天未触发（`alert_rule` 表里没那行），
+ * 而 `__picks_watcher__` 的临板预警刷了 121 条 —— 通知中心却是 0 条。
+ * 上面那组诊断（`state` / `decisions`）**只来自买点链**，它只会说"上游空/全被否"，
+ * 把"另一个形状有货"整个漏掉。故必须并列报出形状计数。
+ *
+ * ⚠️ 这组用例的**判据边界**：只验「渲染出来的形状计数是否讲对了话」，
+ * 不验后端是否算对（那在 `backend/tests/test_notifications.py`）。
+ */
+describe("通知中心：空态形状计数（2026-09-16）", () => {
+  const shapeDiag: NonNullable<NotificationsPayload["diagnostics"]> = {
+    ...ranRejectedDiag,
+    // 与当日实测同构：个股级 0 条，板块级 535 条
+    shapes: { buy_point: 0, pre_limit: 0, board_low_absorb: 293, board_flow_surge: 242 },
+  };
+
+  it("个股级为 0 → 明说「不是被筛选挡掉」，并把板块级当对照物报出", async () => {
+    payload = diagPayload(shapeDiag);
+    render(<NotificationBell />);
+    await openDrawer();
+
+    const shapes = await screen.findByTestId("notification-empty-shapes");
+    // 机器可读的口径，供 e2e/其它断言复用（别只靠文案匹配）
+    expect(shapes.dataset.stockLevel).toBe("0");
+    expect(shapes.textContent).toContain("买点 0");
+    expect(shapes.textContent).toContain("临板预警 0");
+    expect(shapes.textContent).toContain("不是被筛选挡掉");
+    // 对照物：没有它，"没扫到"与"扫到的都不是个股级"仍然同形
+    expect(shapes.textContent).toContain("板块低吸 293");
+    // 同样是纯文本渲染面 ⇒ 标记不得漏到界面上（同 plainNote 的教训）
+    expect(shapes.textContent).not.toContain("**");
+    expect(shapes.textContent).not.toContain("`");
+  });
+
+  it("个股级有货却列表为空 → 指向「缺名称」，而不是「上游没扫到」", async () => {
+    // 这两种处境的处置完全不同（前者查数据，后者查调度），不可同形。
+    // 注：无代码的事件在**后端读取阶段**就被排除了（`real_symbol_only`），
+    //     所以这里剩下的唯一成因是"有代码、缺名称"。
+    payload = diagPayload({
+      ...ranRejectedDiag,
+      shapes: { buy_point: 0, pre_limit: 121 },
+    });
+    render(<NotificationBell />);
+    await openDrawer();
+
+    const shapes = await screen.findByTestId("notification-empty-shapes");
+    expect(shapes.dataset.stockLevel).toBe("121");
+    expect(shapes.textContent).toContain("缺股票名称");
+    expect(shapes.textContent).not.toContain("不是被筛选挡掉");
+  });
+
+  it("shapes 为空对象 → 说「规则从未触发过」，与「统计过是 0」区分开", async () => {
+    // 后端在「连规则行都没有」时返回 `{}`；与 `{buy_point: 0}` 是两个不同的结论
+    payload = diagPayload({ ...ranRejectedDiag, shapes: {} });
+    render(<NotificationBell />);
+    await openDrawer();
+
+    const shapes = await screen.findByTestId("notification-empty-shapes");
+    expect(shapes.dataset.stockLevel).toBe("0");
+    expect(shapes.textContent).toContain("规则从未触发过");
+  });
+
+  it("旧后端不返回 shapes → 不渲染该块（不得臆造形状计数）", async () => {
+    payload = diagPayload(ranRejectedDiag); // 无 shapes 键
+    render(<NotificationBell />);
+    await openDrawer();
+
+    await screen.findByTestId("notification-empty-diagnosis");
+    expect(screen.queryByTestId("notification-empty-shapes")).toBeNull();
+  });
+});

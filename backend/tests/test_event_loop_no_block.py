@@ -165,6 +165,17 @@ GUARDED: list[tuple[str, str, str, str]] = [
         "_persist_picks",
         "组合落库：同步 SQLite 读改写 + 两次大对象 json.dumps（管线末尾）",
     ),
+    # ---- IMP-038（2026-09-16）：TDX 逐笔（直连 TCP 7709） ----
+    # 逐笔是**前端 10s 轮询的热路径**（个股详情右列 trades 页签），而 TDX 是同步
+    # IPC；裸调用会把整个事件循环连同 QuoteHub 的秒级推送一起卡住。
+    # 该文件是**新增**的（`IMP-038` 逐笔降级备源），故登记调用点以防后人去掉 to_thread。
+    (
+        "app/market/tdx_tick.py",
+        "asyncio.to_thread(fetch_tdx_trades",
+        "fetch_tdx_trades",
+        "TDX 逐笔：TCP 7709 同步 IPC（单页 1000 笔 median 27–40ms，全天 4 页 150–300ms；"
+        "建连 616.9ms ⇒ 模块级单例复用后 21.8ms）",
+    ),
 ]
 
 _IDS = [f"{Path(g[0]).stem}::{g[2]}" for g in GUARDED]

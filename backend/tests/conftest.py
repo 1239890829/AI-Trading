@@ -43,6 +43,18 @@ os.environ["ASHARE_REVIEW_MODEL"] = "rules"
 os.environ["ASHARE_NEWS_MODEL"] = "rules"
 os.environ["ASHARE_LLM_PROVIDER"] = "openai"
 
+# 逐笔的 **TDX 直连降级备源**必须关掉（`IMP-038`，2026-09-16）。
+#
+# 为什么单靠 `ASHARE_DATA_PROVIDER=mock` 不够：TDX 走 **TCP 7709 真实网络**，
+# 不是 HTTP provider，**mock 替不掉它**。`app.market.tdx_tick` 的降级链是
+# 「链 → TDX」，链**命中**时确实不会碰 TDX，但**链返回空或抛异常时**会
+# ⇒ `tests/test_depth_tools.py` 的 `_Prov(trades=[])` 桩、以及任何链上失败的用例
+# 都会真的去连 TDX 服务器（2026-09-16 全量实测：两条用例静默拿到 200 行真实逐笔，
+# 断言以"找不到 10.5"的形式变红，而真因是**测试触网**）。单测不得有网才过、
+# 不得随行情变 ⇒ 与调度器全家桶、`ASHARE_DATA_PROVIDER=mock` 同一纪律。
+# 要测降级链本身，直接注入假 `fetch_tdx_trades`（见 `tests/test_tdx_tick.py`）。
+os.environ["ASHARE_TRADES_TDX_FALLBACK_ENABLED"] = "false"
+
 # 复盘报告的**落盘目录**也必须隔离。
 #
 # 库走 :memory: 只挡住了"数据行"这一侧；`app.review.storage.REPORT_DIR` 指向的是

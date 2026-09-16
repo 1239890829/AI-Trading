@@ -29,7 +29,7 @@
 | **SM-01..08** | `summary/stock-strategy` · `factor-system` · `data-market` · `architecture-design` · `ai-evolution` · `review-governance` · `system-final-blueprint` · `pick-signal-chain` | L2 | 主题汇总 | **查主题先看这里**；`system-final-blueprint` 是任务四后目标架构与验收总纲；**`pick-signal-chain` = 选股提醒链路（`dispatch_alert` 扇出 / 双家族分裂 / 断点清单 G1–G5）**。维护：主题结论更新 |
 | **DT-01** | `data-source-comparison.md` | L2 | 数据源 | 四源实测对比与选型。**改数据源前必读，改完回填** |
 | **DT-02** | `data-sources.md` | L2 | 数据源 | 接入策略：主源 → 备源 → 降级链 |
-| **DT-03** | `external-data-source-survey-2026-09-11.md` | L1 | 调研 | 外部付费源调研（**均官方公开信息、零实测，📎**）。**已拍板不接入** ⇒ 只读留痕 |
+| **DT-03** | `external-data-source-survey-2026-09-11.md` | L1 | 调研 | 外部付费源调研。§0–§7 = 官方公开信息（零实测，📎）；**§8 = 2026-09-16 复评（本机实测）**：FTShare 免费档实测 + 1000 次/天预算精算 + 四家价格/覆盖横向对比 + **升级决策 = 不升级**。**已拍板不接入付费档** ⇒ 只读留痕 |
 | **MD-01** | `theme-sentiment-methodology.md` | L2 | 方法论 | A 股热点题材与情绪分析 v1 |
 | **MD-02** | `sentiment.md` | L2 | 方法论 | 情绪指标清单 + 阶段判定 + **历史误判案例库** |
 | **MD-03** | `theme-prediction.md` | L2 | 方法论 | 新题材预判 |
@@ -136,7 +136,7 @@
 | shell 检索返空，或依赖不可移植的 BRE `\|` | `kb/03-engineering.md` KB-ENG-04（多分支用 `rg` / `grep -E`；“不存在”结论须第二工具复核，详见 `kb/08`） |
 | 同文件多处 Edit 并行改，**只生效最后一处** | `kb/08-tooling-pitfalls.md` KB-ENG-01 |
 | 测试开头**成簇 `E`**（不是 `F`） | `kb/09` KB-ENG-53：先怀疑**环境**（缺 `--basetemp`），不要先怀疑代码 |
-| **本地全绿、CI 红** | `kb/09` KB-ENG-57（时区/大文件/顺序）· KB-ENG-70（判定面 ≠ CI 检出） |
+| **本地全绿、CI 红** | `kb/09` KB-ENG-57（时区/大文件/顺序）· KB-ENG-70（判定面 ≠ CI 检出）· KB-ENG-111（**结构代理失衡**：被部分跟踪的 gitignored 顶层，前提变了代理不报警） |
 | 守卫**注入了却不报红** | `kb/09` KB-ENG-65（三种假绿形态）· KB-ENG-66（只改注释不算）· KB-ENG-81（两侧同判据 = 双向自洽的假绿） |
 | 测试**只在特定日历日变红** | `kb/09` KB-ENG-56：真实运行日驱动 ⇒ 有注入参数就必须用 |
 | 门禁**全绿但新文件根本没被扫到** | `kb/09` KB-ENG-60（扫描面写窄） |
@@ -198,7 +198,7 @@
 | 控制台三模块梳理（任务中心/参数/告警） | `summary/review-governance.md`（09-10：三模块定位+实证数据+告警运作逻辑白话版+规则评估与优化建议） |
 | 板块资金页核对 + 瀑布流改造 | `summary/review-governance.md`（09-10：东财 vs 同花顺板块体系差异实证（非 bug）+ 列表→卡片瀑布流+滚动分页改造记录） |
 | AI 大脑自主进化（v2，取代人工确认模型） | `summary/ai-evolution.md`（09-08：每日进化议程/盘后自动闭环三类执行/后置验证自动回滚/方向校验/红线与停机开关/10 项延伸能力） |
-| 数据源怎么选、备源顺序 | `data-source-comparison.md`（实测对比）→ `data-sources.md`（接入策略） |
+| 数据源怎么选、备源顺序、**哪些源没被用满** | `data-source-comparison.md`（实测对比）→ `data-sources.md`（接入策略 + **§8 使用度审计**） |
 | 某个 API 端点的参数 | `api.md`（⚠️ 端点计数停在 09-01/92 个，以 `/openapi.json` 为权威） |
 | 每天怎么跑复盘 | `daily-review-sop.md` → `daily-review-checklist.md` → `daily-review/`（逐日存档） |
 | 情绪/题材方法论 | `theme-sentiment-methodology.md` / `sentiment.md` / `theme-prediction.md` |
@@ -233,8 +233,8 @@
 | 文档 | 摘要 |
 |---|---|
 | data-source-comparison.md | 四源实测对比与选型（改数据源前必读；改完回填） |
-| data-sources.md | 接入策略：主源→备源→降级链 |
-| external-data-source-survey-2026-09-11.md | **外部付费源调研**（Tushare / FTShare / KlineShare / QuantDash + PTrade）：价格档位 + 能力矩阵 + 与本项目对比。⚠️ **均为官方公开信息，零实测**；核心结论：**四家均无 L2（最高五档），且两家与我们同源（东财/新浪/ths 二次聚合）**；🔶 **唯一未决建议 = KlineShare 旗舰版作 ths 打板备源（须先验「涨停原因」字段）已登记为总账 `retro-and-gaps.md` P2-31**（此前该待决项只存在于本文档内，无出口） |
+| data-sources.md | 接入策略：主源→备源→降级链；**§8 全量清单与使用度审计（2026-09-16）**：fuyao 59 端点 × 已接 23 · TDX 20 数据类方法 × 已用 3 · 零调用/仅测试/单点清单 · **可替代 5 处（首推逐笔改走 TDX）** · 推翻 3 条既有结论 |
+| external-data-source-survey-2026-09-11.md | **外部付费源调研**（Tushare / FTShare / KlineShare / QuantDash + PTrade）：价格档位 + 能力矩阵 + 与本项目对比。§0–§7 ⚠️ **均为官方公开信息，零实测**；核心结论：**四家均无 L2（最高五档），且两家与我们同源（东财/新浪/ths 二次聚合）**。**§8 = 2026-09-16 复评（本机实测）**：FTShare 免费档实测（v1 通 / v2v3v4 全 403）、**涨停池为本仓 ths 的严格超集（交集 32/32）但无涨停原因**、1000 次/天预算精算（≈191/日，余量 5×）、**四家横向对比 ⇒ 无任何付费源可覆盖免费档 161 项，且 FTShare 免费档本身 ¥0**；**决策 = 不升级付费档**；**§8.10 = 付费档横向排序**（KlineShare 权限矩阵从 `public/v1/catalog` 实测解出；**FTShare 付费档真实价格 19:33 到手** ⇒ **最优单档 = FTShare 基础版 ¥159/月（¥1,908/年）**，**单项最省 = Tushare 研报库 ¥500/年**，**最差 = FTShare 专业版 ¥799/月（零增量且最贵）**）。🔶 未决建议见总账 `retro-and-gaps.md` P2-31 |
 | orderbook-source-evaluation.md | 五档盘口数据源评估（08-29/30，ths 无五档结论）· **已归档** → `archive/orderbook-source-evaluation.md` |
 
 ## 3. 方法论与功能设计（现役）
