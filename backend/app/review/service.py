@@ -196,7 +196,9 @@ class ReviewService:
     async def _finalize(self, report: ReviewReport, health: dict | None) -> ReviewReport:
         saved = save_report(self.session_factory, report)
 
-        # --- 信号健康度预警接线（P1）：warning/drift → 通知中心/飞书 ---
+        # --- 信号健康度预警接线（P1）：warning/drift → 告警台账/飞书 ---
+        # 落点不是消息通知中心（该中心只收 __picks_buy_point__ 买点，IMP-028）；
+        # 告警事件可在 AI 控制台「提醒与告警」页追查。
         # 当日同状态去重在 maybe_alert 内部；失败只记 log（告警不阻断复盘收尾）。
         if health is not None:
             try:

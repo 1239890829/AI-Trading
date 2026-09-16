@@ -156,7 +156,11 @@ def trailing_rule(cost: float, price: float, peak: float, role: str | None) -> d
 
 def _notify(app, symbol: str, name: str, kind: str, text: str, *, critical: bool = False,
             key: str | None = None) -> None:
-    """通知中心 + （critical 时）飞书。失败只记日志。
+    """当日简报 alerts[] + （critical 时）飞书。失败只记日志。
+
+    落点不是通知中心（`IMP-028` 后该中心只收 `__picks_buy_point__` 买点）：
+    持仓监护提醒进猎场页「盘中提醒」，`AlertEvent` 可在控制台「提醒与告警」追查
+    （2026-09-16 `IMP-034` 订正原「通知中心 +」措辞）。
 
     key 传入时作为落盘去重键（跨重启生效）；不传则由 append_alert 兜底生成。
     """
@@ -463,7 +467,7 @@ async def evaluate_once(app) -> list[dict]:
     # ---------- 真实持仓（只提醒，CRITICAL 级） ----------
     real_pos = _real_positions()
     if _REAL_READ["state"] == "failed":
-        # S1-2：读失败必须与「确实无持仓」可区分——当日一次在通知中心留痕（kind 独立，
+        # S1-2：读失败必须与「确实无持仓」可区分——当日一次在告警台账留痕（kind 独立，
         # 前端可按系统级渲染），并进 fired 供健康哨兵观测。**降级不推送飞书**（盘中飞书
         # 只保留买点卡），但绝不能再静默当作"没有真实持仓"。
         key = f"position-monitor-degraded:{today}"

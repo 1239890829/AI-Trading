@@ -1,4 +1,4 @@
-"""站内个股机会通知端点（2026-09-15 收敛）。
+"""站内个股机会通知端点（2026-09-15 收敛；2026-09-16 `IMP-034` 清理死代码）。
 
 GET /api/notifications?alert_limit=50&news_limit=15&news_min_score=<settings 默认>
 
@@ -9,6 +9,12 @@ GET /api/notifications?alert_limit=50&news_limit=15&news_min_score=<settings 默
 板块资金异动、题材方向确认/证伪、信号健康、每日精选摘要和新闻仍保留在各自页面与
 审计表中，但不再进入消息通知。这样「可研究的信息」与「值得打断用户的个股机会」
 不再混为一谈。飞书原本就只发送同一买点规则的逐股卡片，口径保持一致。
+
+⚠️ **`news_limit` / `news_min_score` 仅为旧客户端兼容保留、已不被消费**
+（响应里的 ``news_min_score`` 同理，取值仍是配置默认）。`IMP-028` 收敛时留下的
+``_daily_pick_item`` / ``_news_items`` / ``_classify_four_row`` 三个不再被引用的
+生产者已于 `IMP-034` **删除**（连同守着一个够不到的落点的用例）——留着它们会给出
+虚假的覆盖信心（同族教训见 `kb/09-verification-pitfalls.md`）。
 
 session（盘前/盘中/盘后）**交易日历优先**（2026-09-13 用户报告的周末误标盘中修复）：
 非交易日（周末/节假日）一律归**盘前**节拍（下一交易日开盘前消化的资讯）；
@@ -26,22 +32,32 @@ session（盘前/盘中/盘后）**交易日历优先**（2026-09-13 用户报�
 为什么必须落服务端：此前只存浏览器 localStorage，而它是**按 origin 命名空间**的，
 换源（localhost ↔ 127.0.0.1）／换 profile／清站点数据都会让已读状态整体归零，
 表现为「重启后全部已读变未读、徽标回到 65」（实测复现）。
+
+## 空态可解释性（`BUG-016` 子项③，2026-09-16）
+
+用户现场反馈「为什么消息通知一个也没有呢」取证后发现：**空响应体本身无法区分**
+三种完全不同的处境 ——「真无机会（跑了但全被否）」「链路未跑」「上游空（盘前没选出）」，
+三者都表现为 ``{"items": [], "count": 0}``。
+
+因此 ``GET /api/notifications`` 在 **`items` 为空时**额外返回 ``data.diagnostics``
+（`state` 四态 + 候选档位分布 + 逐股否决原因；实现与口径见
+``app/picks/notification_diagnostics.py``）。⚠️ **非空态不返回该字段（恒 `null`）**，
+且本项**只增加可诊断面、不改任何推送口径**（改档位门属交易信号口径变更，须用户拍板）。
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
 from app.api.deps import require_write_token
 from app.core.config import settings
-from app.core.db import get_session_factory
 from app.repositories.alert_repo import AlertRepository
-from app.core.bjtime import BJ_OFFSET, beijing_now
+from app.core.bjtime import beijing_now
 from app.market import trade_calendar as tc
 from app.services import notification_read_state as read_state_service
 
@@ -51,14 +67,6 @@ router = APIRouter(tags=["notifications"])
 
 BUY_POINT_RULE = "__picks_buy_point__"
 _NOTIF_RULE_NAMES = (BUY_POINT_RULE,)
-
-# 时事新闻板块的四级分类标签（app/events/impact.py FOUR_LABEL 同值同源）
-_FOUR_LABEL = {
-    "international": "国际时事",
-    "policy": "国家政策",
-    "hot": "市场热点",
-    "material": "原材料涨价",
-}
 
 
 def _session_of(bj: datetime, trading_dates: set | None = None) -> str:
@@ -153,133 +161,6 @@ def _alert_items(repo: AlertRepository, limit: int, trading_dates: set | None = 
     return items
 
 
-def _daily_pick_item() -> dict | None:
-    """最近一份每日精选组合 → 一条通知（date 唯一约束 → 同日天然去重）。"""
-    from sqlalchemy import select
-
-    from app.models.daily_pick import DailyPickSet
-
-    with get_session_factory()() as db:
-        row = db.execute(select(DailyPickSet).order_by(DailyPickSet.date.desc()).limit(1)).scalar_one_or_none()
-    if row is None:
-        return None
-    try:
-        items = json.loads(row.items or "[]")
-    except Exception:  # noqa: BLE001
-        items = []
-    top = "、".join(
-        str(it.get("name") or it.get("symbol")) for it in items[:5] if isinstance(it, dict)
-    )
-    try:
-        meta = json.loads(row.meta or "{}") if isinstance(row.meta, str) else (row.meta or {})
-    except Exception:  # noqa: BLE001
-        meta = {}
-    gate_stand = bool((meta.get("gate") or {}).get("stand_aside"))
-    gate_note = "，空仓闸门触发（仅观察）" if gate_stand else ""
-    # 时间戳 = **真实生成时刻**（评审 F-9，2026-09-12）。旧实现写死
-    # `f"{row.date} 08:40:00"`，两个问题：
-    # ① 08:40 是配置漂移的残留——自动生成实为 09:26（`picks_autogen_scheduler` 的
-    #    run_hour=9 / run_minute=26），DB 实测 `created_at` 01:26:58 UTC +8 = 09:26:58
-    #    北京，与配置精确吻合；组合也可能由人工在盘中/盘后触发，写死则一律显示盘前。
-    # ② 它与本模块第 312 行的 `ts` 倒序直接冲突：alert/news 用真实时间，只有这一条
-    #    用一个假时间，排序结果与"实际发生顺序"不一致。
-    # ⚠️ 换算必须走 `BJ_OFFSET`，**不能**用 `to_beijing_naive()`：后者对 naive 输入按
-    #    「已经是北京时间」处理（bjtime 口径），对 UTC 语义的 `created_at` 是零变换，
-    #    会静默早 8 小时——正是 S2-8 那类事故的形态。
-    ts = (row.created_at + BJ_OFFSET).isoformat(sep=" ") if row.created_at else None
-    return {
-        "id": f"picks-{row.date}",
-        "category": "daily_picks",
-        "label": "每日精选",
-        "session": "pre_open",  # 组合盘前/盘后生成，归盘前节拍
-        "ts": ts,
-        "title": f"每日精选 · {row.date}（{len(items)} 只{gate_note}）",
-        "body": f"Top：{top or '—'}。名单为盘中跟踪的输入，机会确认以盘中提醒为准，避免开盘即回落被误判。",
-        "symbol": None,
-        "url": "/picks",
-        "score": None,
-    }
-
-
-async def _news_items(store, request: Request, limit: int, min_score: float, now: datetime,
-                      trading_dates: set | None = None) -> tuple[list[dict], str | None]:
-    """事件系统 → 评分过滤后的新闻通知。返回 (items, error)。"""
-    try:
-        # 同步 SQLite 读搬线程池（2026-09-12）：limit=80 实测约 9.6ms；本函数被
-        # `/api/notifications` 调用，前端通知抽屉按轮询取数。
-        rows = await asyncio.to_thread(store.list_events, active_only=False, limit=80)
-    except Exception as exc:  # noqa: BLE001
-        return [], str(exc)
-
-    # 72h 窗口：通知是「新事」视图，老事件再高分也不打扰（score 内新鲜度另有权重）
-    cutoff = now - timedelta(hours=72)
-    recent = [r for r in rows if r.published_at and r.published_at >= cutoff]
-    if not recent:
-        return [], None
-
-    try:
-        from app.events.impact import impact_level
-        from app.events.ranking import collect_rank_context, score_event
-    except Exception as exc:  # noqa: BLE001
-        return [], f"ranking import failed: {exc}"
-
-    theme_names = sorted({
-        d.target for r in recent for d in (r.directions or []) if d.target_type == "theme"
-    })
-    symbols = sorted({
-        d.target for r in recent for d in (r.directions or []) if d.target_type == "symbol"
-    })
-    try:
-        ctx = await collect_rank_context(request.app.state, theme_names, symbols)
-    except Exception as exc:  # noqa: BLE001
-        return [], f"rank context failed: {exc}"
-
-    items: list[dict] = []
-    for r in recent:
-        four = _classify_four_row(r)
-        level = impact_level(
-            r.title, four=four, certainty=r.certainty, fact_kind=r.fact_kind,
-            source_tier=r.source_tier, n_directions=len(r.directions or []),
-        )
-        symbol_vals = [ctx.stock_chg.get(d.target) for d in (r.directions or []) if d.target_type == "symbol"]
-        rank = score_event(
-            impact_level=level,
-            four=four,
-            source_tier=r.source_tier,
-            published_at=r.published_at,
-            half_life_hours=r.half_life_hours,
-            theme_names=[d.target for d in (r.directions or []) if d.target_type == "theme"],
-            symbol_chg=symbol_vals,
-            ctx=ctx,
-            now=now,
-        )
-        if rank["score"] < min_score:
-            continue  # 评分过滤：不逐条推送
-        items.append(
-            {
-                "id": f"event-{r.id}",
-                "category": "news",
-                "label": _FOUR_LABEL.get(four, four),
-                "session": _session_of(r.published_at, trading_dates) if r.published_at else "intraday",
-                "ts": r.published_at.isoformat(sep=" ") if r.published_at else None,
-                "title": r.title or "（无标题）",
-                "body": (r.title or "")[:120],
-                "symbol": None,
-                "url": r.url,
-                "score": rank["score"],
-            }
-        )
-    items.sort(key=lambda x: (-(x["score"] or 0), x["ts"] or ""))
-    return items[:limit], None
-
-
-def _classify_four_row(row) -> str:
-    """与 routes/events 内联逻辑同源的四分类（涨价 → 政策 → 国际 → 热点）。"""
-    from app.events.impact import classify_four
-
-    return classify_four(row.title, row.category)
-
-
 @router.get("/notifications")
 async def notifications(
     request: Request,
@@ -314,6 +195,25 @@ async def notifications(
 
     items = alert_items
     items.sort(key=lambda x: x["ts"] or "", reverse=True)
+    # 空态诊断（`BUG-016` 子项③，2026-09-16）：**只在空态附加**。
+    # 空响应体本身不含任何能区分「真无机会 / 链路未跑 / 上游空」的信息 ——
+    # 三者都是 `{"items": [], "count": 0}`，这正是「不可解释」的根因。
+    # ⚠️ 非空态**刻意不附加**：那是本子项的判据边界之外，且本端点是 30s 轮询热路径，
+    #    不该为"用户不会问的场景"每拍多读两次库。
+    diagnostics: dict | None = None
+    if not items:
+        try:
+            from app.picks.notification_diagnostics import notification_diagnostics
+
+            diagnostics = await asyncio.to_thread(notification_diagnostics)
+        except Exception:  # noqa: BLE001  诊断失败不得拖垮通知端点本身
+            log.exception("notifications: diagnostics failed")
+            # ⚠️ 回 dict 而非 None：None 在本端点里**已被"非空态"占用**，
+            #    两者同形就等于把"诊断坏了"伪装成"有通知"。异常一律显式降级。
+            diagnostics = {
+                "state": "unavailable",
+                "note": "空态诊断不可用（内部错误）：**这不代表没有机会**，请查后端日志。",
+            }
     return {
         "data": {
             "items": items,
@@ -322,6 +222,7 @@ async def notifications(
             "news_min_score": min_score,
             "policy": "stock_opportunities_only",
             "errors": errors or None,
+            "diagnostics": diagnostics,
         },
         "meta": {},
     }

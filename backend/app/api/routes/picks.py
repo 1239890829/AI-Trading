@@ -289,7 +289,9 @@ async def picks_signal_health() -> dict:
     """信号健康度（方向1×5 反馈环）：每日精选命中记录的滚动胜率 + CUSUM 下漂。
 
     status: ok | warning | drift | insufficient（样本 <10 组合日，显式不判 ok）| error。
-    预警已接线（通知中心 + 自动 action_items）。
+    预警已接线（告警台账 `alert_event` + 通道矩阵 + 自动 action_items；
+    **不进消息通知中心**——该中心只收 `__picks_buy_point__` 买点，`IMP-028`）。
+    告警详情在 AI 控制台「提醒与告警」页（`/api/alerts/events`）查看。
     **本端点只覆盖「每日精选组合」一级**；跨策略键的评估见 `/strategy-health`。
     """
     from app.picks.signal_health import collect_signal_health

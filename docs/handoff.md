@@ -31,39 +31,466 @@
 
 ## 1 现场（每条任务收尾时更新）
 
-- **分支**：`codex/notification-row-symbol-detail`（自 `origin/master` 创建；本轮交付 `IMP-033`）。
-  上一轮分支 `codex/alert-bubble-symbol-detail` 已随 PR #16 合并并**删除**（本地与远程均已清）。
-- **基线**：`origin/master` = `98a5c65`（PR #16 合并提交）。
-- **服务**：后端 8000（uvicorn，单实例；**绝不用 `--reload`**，原因见 `AGENTS.md` §6.1）、前端 3000。
-- **门禁基线（本次收尾实测，接手时可直接对照）**：后端 **collect 3247（3171 passed / 76 skipped / 0 failed）**、
-  前端 **603 项 / 67 文件 · 602 passed / 1 failed**、`eslint` **0/0**、`doc-health` **全部通过**。
-  ⚠️ **那 1 failed 是 `BUG-010`（D 档观察项），不是回归**：用例 =
+- **分支**：`codex/notif-empty-rootcause`（自 `origin/master` 创建；已交付 `BUG-016` 诊断轮 + `IMP-034` 清理轮
+  + `RSH-027` 切片 1 轮）。
+  上一轮分支 `codex/notification-row-symbol-detail` 已随 PR #17 合并并**删除**（本地与远程均已清）。
+- **基线**：`origin/master` = `b3f4164`（PR #17 合并提交，2026-09-16 12:00）。
+- **服务**：后端 8000（单实例；**绝不用 `--reload`**，原因见 `AGENTS.md` §6.1）、前端 3000。
+- **门禁基线（`RSH-003` 切片 2 收尾实测，接手时可直接对照）**：后端 **collect 3339
+  （3263 passed / 76 skipped / 0 failed / 240.74s；收尾复跑 237.56s，均在 8000 在跑时）**、`pyflakes` **0**、
+  `doc-health` **全部通过**、`tsc` **0**、`eslint` **0 error / 0 warn**、
+  前端 **608 项 / 67 文件**（本地与 `TZ=UTC` **逐字一致**；`apps/web/` 本轮**零改动**）。
+  ⚠️ **较上值 3306/3230 的 Δ = +33 collect = +33 passed / ±0 skipped**，**已机械归因**（非覆盖率虚增）：
+  `+32` = 新文件 `tests/test_smoothing.py`（32 例，**全 passed**）；`+1` = `test_import_lint.py`
+  分层参数化新增一个**业务层**模块 `app/factors/smoothing.py`（实测用例名
+  `test_business_layer_never_imports_api[-factors/smoothing.py]`）。**非业务层模块数未变**
+  ⇒ 实测 `tests/test_import_lint.py` = **194 passed / 74 skipped**、`74 = 76 − 2` 与上轮**逐字相同**
+  （[[KB-ENG-97]]）。详见 `§RSH-003`。
+  ⚠️ **门禁数字的权威位是本文件 §1；`AGENTS.md` §1 的门禁头行必须与本文件同轮同步**
+  —— 本轮已同步（上一轮曾发现它**落后两轮**、仍写 3247/603·67）。
+- **门禁基线（上一轮 `RSH-003` 切片 1 收尾实测）**：后端 **collect 3306
+  （3230 passed / 76 skipped / 0 failed / 236.05s，8000 在跑）**、`pyflakes` **0**、
+  `doc-health` **全部通过**、`tsc` **0**、`eslint` **0 error / 0 warn**、
+  前端 **608 项 / 67 文件**（本地与 `TZ=UTC` **逐字一致**；`apps/web/` 本轮零改动）。
+  ⚠️ **较上值 3287/3211 的 Δ = +19 collect = +19 passed / ±0 skipped**，**已机械归因**（非覆盖率虚增）：
+  `+18` = 新文件 `tests/test_factor_novelty.py`；`+1` = `test_import_lint.py` 分层参数化新增
+  一个**业务层**模块 `app/factors/novelty.py`（实测用例名
+  `test_business_layer_never_imports_api[-factors/novelty.py]`）。**非业务层模块数未变**
+  ⇒ 实测 `tests/test_import_lint.py` = **193 passed / 74 skipped**、`74 = 76 − 2` 与上轮**逐字相同**
+  （[[KB-ENG-97]]）。详见 `§RSH-003`。
+  ⚠️ **门禁数字的权威位是本文件 §1；`AGENTS.md` §1 的门禁头行必须与本文件同轮同步**
+  —— 本轮发现 `AGENTS.md` 头行**落后两轮**（仍写 3247/603·67），已一并订正。
+- **门禁基线（上一轮 `BUG-016` 子项③ 收尾实测）**：后端 **collect 3287
+  （3211 passed / 76 skipped / 0 failed）**、`pyflakes` **0**、`doc-health` **全部通过**、
+  前端 **608 项 / 67 文件**（本地与 `TZ=UTC` **一致** ⇒ 该轮用例不含时区敏感断言）。
+  ⚠️ **较上值 3265/3189 的 Δ = +22 collect = +22 passed / ±0 skipped**，**已机械归因**（非覆盖率虚增）：
+  `+17` = 新文件 `tests/test_notification_diagnostics.py`；`+4` = `tests/test_notifications.py` 的
+  **端点接线守卫**（空态真调用并挂上 / 非空态**刻意不调用** / 抛错显式降级 / 两分支不变式）；
+  `+1` = `test_import_lint.py` 分层参数化新增一个**业务层**模块 `app/picks/notification_diagnostics.py`。
+  **非业务层模块数未变** ⇒ `skipped(76) − 2 = 74` 与上轮**逐字相同**
+  （[[KB-ENG-97]]：跳过数不变 = 无覆盖丢失）。前端 Δ **+5 用例 / ±0 文件** =
+  同一文件内新增的空态诊断 5 例。详见 `§BUG-016`。
+  ⚠️ **较上值 3245/3169 的 Δ = +20 collect = +20 passed / ±0 skipped**，**已机械归因**（非覆盖率虚增）：
+  `+18` = 新文件 `tests/test_kb_routing.py`；`+1` = 新 GET 端点 `/api/picks/kb-routing` 自动进入
+  全量冒烟参数化（实测 `test_get_endpoint_never_returns_500[/api/picks/kb-routing-get-params91]`）；
+  `+1` = `test_import_lint.py` 的分层参数化新增一个**业务层**模块 `app/picks/kb_routing.py`
+  —— **在 HEAD 干净检出实测该文件为 190/74，本轮为 191/74**，逐字对上。
+  **非业务层模块数未变**（`models/opportunity_learning.py` 是**既有文件改动**、非新增文件）
+  ⇒ `skipped(76) − 2 = 74` 与上轮**逐字相同**（[[KB-ENG-97]]：跳过数不变 = 无覆盖丢失）。
+  详见 `§RSH-027`。
+  ⚠️ **前端那 1 failed 是 `BUG-010`（D 档观察项），不是回归**：用例 =
   `components/agent/markdown-view.test.tsx::docs/ 下全部 md 均可渲染完成`（固定 5s 墙钟）。
-  本轮**归因（对照跑，非推理）**：单独跑该文件 **10 passed / 2170ms**（docs 渲染用例 **1897ms**），
+  上轮**归因（对照跑，非推理）**：单独跑该文件 **10 passed / 2170ms**（docs 渲染用例 **1897ms**），
   失败只出现在**全量并发**时；宿主实测 **load 39.16 / 8 核**。按原判**不改判据、不放宽阈值**
   （详细归因史见 `BUG-010` 行与 `AGENTS.md` 门禁段）。
+  ✅ **本轮（`BUG-016` 子项③）未复现该超时**：前端全量连跑两次（本地 + `TZ=UTC`）均 **608/67 全绿**
+  ⇒ 与「红只出现在高负载并发时」的既有归因一致；**仍不改判据、不放宽阈值**。
   ⚠️ **两道全量不要并发跑**：并发会因 CPU 竞争让上述用例超时假红——**它的红不代表代码回归**。
-  前端较上轮 598/66 的 **+5 / +1** 即本轮新增的提醒落点用例文件；
-  **本地时区与 `TZ=UTC` 逐字一致（603/67）** ⇒ 本轮用例**不含时区敏感断言**。
-- **归属不明的既有未跟踪文件（非本轮产物，**保留、勿删**）**：`git status --short` 里的 5 个 `??` 项，
-  分布在 5 个目录 —— `backend/data/lhb/`、`backend/data/minute_decisions/`、
-  `backend/data/position_plans/`、`docs/daily-review/`、`docs/evolution/`。
-  **均为运行期产物、尚未纳入版本控制**，具体文件名请跑 `git status --short` 取。
-  ⚠️ **此处刻意不写具体文件名（不是省略，是纪律）**：它们不在 git 里 ⇒ 写死即成为
-  **门禁判定面上的死锚点**。2026-09-16 实测踩到：本条原先写死两个 `docs/` 下的未跟踪文件名
-  ⇒ **CI docs job 红（B 死链 2 处）而本地恒绿** —— 与 [[KB-ENG-95]]「判定面必须等于 CI 检出内容」
-  同族。**修法是改文案，不是登记豁免**（豁免会让下一次换个文件重演）。
+  **本地时区与 `TZ=UTC` 逐字一致（608/67）** ⇒ 本轮用例**不含时区敏感断言**。
+  ⚠️ **后端全量耗时强依赖「8000 是否在跑」**：本轮 8000 在跑，实测 **253.61s**（4m14s）。
+- **⚠️ 两个「门禁输入面 ≠ 代码面」的实例（`IMP-034` 轮新增，务必记住）**：
+  ① **文档改动会让后端 job 变红**——后端有一类守卫**以 `docs/` 为输入**（`test_doc_*` /
+  `test_cmd_guidance_guard` / `test_doc_status_truthfulness`）⇒ **「本轮没改后端代码」不构成「不用跑后端门禁」**；
+  ② 反向：`docs/` 里写**未跟踪文件名**会让 **CI docs job** 红而**本地恒绿**（[[KB-ENG-95]]）。
+  ⇒ **收尾一律跑全量后端 + 干净检出复验**，不要按改动面裁剪。（[[KB-ENG-102]]）
+- **⚠️ 第三个实例（`RSH-027` 轮实测，「先 `git add` 再跑门禁」再次应验）**：本轮把新文件
+  （`picks/kb_routing.py` / `tests/test_kb_routing.py` / 迁移）写进 `docs/handoff.md` 后跑体检
+  ⇒ **`doc-health` J 文档代码锚点判红 4 处**（`kb_routing.py（全仓不存在）` 等），真因 = **文件尚是 `??` 未跟踪**，
+  而 J 的判定面取自 **`git ls-files`**。**修法 = `git add`**（不是改文案、不是登记豁免）；
+  入库后 J 转绿。⚠️ 与 [[KB-ENG-95]] 方向相反、根因相同。
+- **⚠️ 诊断轮特有的口径提醒（`BUG-016` 轮新增）**：`data/ashare.db` 里的学习类表
+  （`opportunity_decision_snapshot` / `opportunity_outcome_label`）**今日才由 `RSH-026` 迁移建立**
+  （PR #13 于 **09:58** 合并、PR #14 于 **10:20** 合并）⇒ **不能用「表为空」反推「循环没跑」**：
+  运行中的后端无 `--reload`，未必带该段代码。**判「链路是否在跑」要看事件面
+  （`alert_event` 的 `triggered_at` 时间线）**，不要看新表的行数。
+- **工作区现场：`git status --porcelain` 为空（2026-09-16 16:2x 起）** ——
+  此前长期列在这里的「归属不明的既有未跟踪文件」**已全部处置完毕**，本段不再登记任何 `??` 项。
+  ⚠️ **处置判据（今后遇到 `??` 一律照此，**勿凭印象**）**：判据是「**同系列历史文件的跟踪状态**」，
+  一条 `git log --diff-filter=A -- <同目录>` 即可查清 ——
+  ① 有入库记录 ⇒ 属**已入库系列的新成员** ⇒ 按同惯例提交（`chore(data)` / `chore(evolution)`）；
+  ② 无记录且可再生产 ⇒ 补 `.gitignore` 规则（按实际落盘路径写），**不删文件**；
+  ③ 命中 `api_key` / `token` / `password` 等 ⇒ **绝不入库**（红线 4）。
+  ⚠️ **本条纠正了一个已发生的误判（勿重蹈）**：上述目录下的文件曾被登记为
+  「运行期产物、尚未纳入版本控制」「不得提交」⇒ 直接后果是**工作区连续多轮不干净**
+  （违反用户 2026-09-16 明确的「交接的时候工作区必须是要干净的」）。
+  实测 `git log --diff-filter=A` 显示**同目录同命名模式的历史文件全部已跟踪**，
+  且以专门提交进主分支（`985f486` / `dbadeef` / `1064898`）⇒ **系误判**，已按惯例入库。
+  **纪律：「看起来像运行产物」不构成「不该入库」的证据。**
+  ⚠️ 本节仍**刻意不写具体文件名（不是省略，是纪律）**：新增的 `docs/` 路径若在被 `git add`
+  之前就写进本文，B 项判定面（`git ls-files`）会立即把它当死链 ⇒ **CI docs job 红而本地恒绿**。
+  2026-09-16 实测踩到：本条原先写死两个 `docs/` 下的未跟踪文件名 ⇒ **CI `B 死链 2 处`**。
+  边界：B 项**只认 `docs/` 面的引用** ⇒ 写未跟踪的 docs 路径**必红**、非 docs 路径**不红**
+  （所以"本地没红"证明不了什么）。**修法是改文案，不是登记豁免**（豁免会让下一次换个文件重演）。
+- **交付状态（2026-09-16 收口）**：本功能分支的提交**已全部推送并开 PR #18**
+  （`codex/notif-empty-rootcause` ⇒ `master`）⇒ **不再有"只存在于本地"的提交**。
+  ⚠️ **收尾硬判据（交接前必跑，两条都要过）**：
+  `git status --porcelain` 为空 **且** `git log --oneline origin/master..HEAD | wc -l` = 0。
+  **本地 commit ≠ 已交付**——只要没合并，本文描述的东西在远端 `master` 上就不存在，
+  接手者按本文去找必然对不上。**常规 PR 合并属授权内动作，不是"停下来等用户"的理由。**
 
 ## 2 条目一览（与账本 §6.0-H 逐字对应）
 
 | 任务 ID | 状态 | 日期 | 一句话 |
 |---|---|---|---|
+| `RSH-003` | 🟡 部分闭环 | 2026-09-16 | 候选因子「入池前结构新颖性筛查」切片交付（三判据 + CLI + 18 例）；**四候选真实库实测**：`willr20`/`cmo20` 论证重复（+1.000）· `kurt20` 提示冗余（0.765）· `skew20` 无冗余证据（0.523）；同轮修掉**薄样本配对劫持择优结论**与**CLI 参数被静默丢弃**两处缺陷。**切片 2（同日）**：补指数平滑原语（EMA/Wilder，含「成对权重」陷阱守卫）+ 实测 `ppo20`/`adx14` —— `ppo20` 提示冗余（+0.779）· `adx14` 无冗余证据（+0.309）；抓出**窗口函数在 `WHERE` 后求值**与**名次列 `FILTER` 形同虚设**两处缺陷 |
+| `RSH-027` | 🟡 部分闭环 | 2026-09-16 | 场景化 KB 路由（四场景逐行对应蓝图 §5）+ 引用三态快照 + 覆盖度恒等式；同轮修掉议程第八路**静默漏 16/178 条**的偏差 |
+| `IMP-034` | ✅ 闭环 | 2026-09-16 | 提醒链路过期断言**实为 10 处**（非登记的 5 处），逐处按现实改写；`notifications` 三个死函数连同其用例删除 |
+| `BUG-016` | 🟡 已取证 · 子项③已交付 · ①/②待拍板 | 2026-09-16 | 空态根因链已量化；**子项③「让为什么空可见」已交付**（四态 `diagnostics` + 前端空态渲染 + 5 路注入自证）；档位门 ①/② 仍待拍板 |
 | `IMP-033` | ✅ 闭环 | 2026-09-16 | 通知抽屉行体改为**开该股详情**（与悬浮球 / 猎场同落点），判读全文改由新增「判读」入口保全 |
 | `IMP-031` | ✅ 闭环 | 2026-09-16 | AI 判读气泡点开**就地打开该股详情弹窗**（不再跳告警页）；同轮梳理出提醒链路断点清单 |
 | `GOV-015` | ✅ 闭环 | 2026-09-16 | 账本「未完成档 ⇄ 闭环记录」一致性守卫（`doc-health` Q 项）；顺带把滞留 A 档的 `BUG-014` 销账 |
 | `GOV-014` | ✅ 闭环 | 2026-09-16 | 建立交接明细层与双向索引守卫；注入自证抓出并修掉守卫的两处判据盲区，流程已固化为技能 |
 | `RSH-026` | 🟡 部分闭环 | 2026-09-16 | 个股机会学习闭环第一批已交付，并完成独立验收轮（抓出并修掉 1 处 schema 分叉） |
 | `BUG-014` | ✅ 闭环 | 2026-09-16 | 两处迁移把表建到默认库 ⇒ 全新库缺 5 张表；已改 `op.get_bind()` 并加两条守卫 |
+
+## RSH-003 候选因子「入池前结构新颖性筛查」切片（本项仍开放）
+- **账本**：`docs/retro-and-gaps.md` §6.0 `RSH-003` ｜ **日期**：2026-09-16 ｜ **状态**：🟡 部分闭环
+- **缺口与验收标准**：`RSH-003` 的施工口径已由用户拍板为 **novelty-first**（`RSH-024` 销账：
+  「不盲目堆积指标」，优先 ADX/PPO，明显同族项 parked），但**此前没有任何可复算的"结构新颖性"判据**——
+  剩余指标只能靠人工印象决定"要不要转正"。本切片把"新颖性"落成**三个可复算判据**，
+  验收边界 = **判据可复算 + 档位可复现 + 能对"换皮指标"说"不"**；
+  **不做** 计权 / 准入判定 / 改 `FACTORS`（那些属 `evaluate` 的 IC/ICIR/分层/覆盖率那一整套）。
+- **改动**：
+  - `backend/app/factors/novelty.py`（**新，只读证据层**）：三判据 —— ①逐日**截面秩相关**
+    （`rank_corr`，同一次扫描算出候选 × 既有池全部配对的逐日相关）；②前 K **头部集合重合**
+    （`topk_overlap`，前 `TOPK_FRAC=20%` 且 ≥`TOPK_MIN=10` 只）；③近邻**三分位组内条件 IC**
+    （`conditional_ic`，`COND_GROUPS=3`，**刻意不参与判档**——阈值属口径问题须人工拍板）。
+    四态输出：`duplicate`（|ρ| ≥ `DUP_RANK_CORR=0.999`，**是数学结论**）/ `redundant_hint`
+    （≥ `IC_CORR_DEDUP=0.70`，沿用既有常量**不新造**）/ `distinct` / `insufficient_sample`
+    （有效截面日 < `MIN_DAYS_FOR_VERDICT=30`，与 `MIN_LABELS_FOR_VERDICT` 同族纪律）。
+    **口径同源**：复用 `evaluate` 的 `_base_cte` / `HORIZONS_EXEC` / `IC_CORR_DEDUP` / `MIN_CROSS_SECTION`
+    （用例 `test_base_cte_identity_is_shared_with_evaluate` 钉死是**同一个函数对象**）。
+  - `backend/scripts/factor_novelty.py`（**新，只读 CLI**）：四候选**分两类职责**，不是"再加四个指标"——
+    `willr20` / `cmo20` = **机制自证**（分别与既有 `rsv20` / `sump20` 呈**仿射**关系，
+    判据若抓不到它们就是失效的）；`kurt20` / `skew20` = **判别力对照**（池内 40 项无任何高阶矩
+    ⇒ 若判据把"结构上真新"的也判重，说明它在**一律判重**）。
+    ⚠️ **`cci20` 刻意不做**：DuckDB 的 `mad()` 是**中位绝对偏差**，TA-Lib 的 MD 是**平均绝对偏差**
+    （同名不同物）⇒ 照抄即**静默换口径**（数值看着合理、语义已变），正确实现需给 base 链加一层，
+    属**框架扩展**（已记入账本遗留项）。
+  - `backend/tests/test_factor_novelty.py`（**新，18 例**）：合成小仓（40 只 × 70 交易日 / 含
+    `daily_k_adj`）⇒ **不依赖真实 marketdb**、秒级可跑；覆盖仿射自证 / 反序（|ρ|=1 但头部零重合）
+    / 判别力对照 / 薄样本劫持 / **CLI 接线**五类。
+  - `docs/kb/09-verification-pitfalls.md` + `docs/kb/00-INDEX.md`：新增 [[KB-ENG-107]]（按 |ρ| 择优前
+    必须先设样本门槛）与 [[KB-ENG-108]]（命令行里有 ≠ 被测对象收到了）；**顺带补上
+    `KB-ENG-104` / `KB-ENG-105` 两行缺失的索引**（有定义、索引表无行）。
+  - **切片 2（指数平滑能力 + PPO / ADX 实测）**：
+    - `backend/app/factors/smoothing.py`（**新，原语层**）：`ema` / `wilder` 两种指数平滑的**窗口 SQL 生成器**
+      —— `EMA_i = c·EMA_{i-1} + a·x_i`（`c = 1−a`），落成**闭式** `EMA_i = Σz/Σv`（`z_j = x_j·(1/c)^rrel_j`、
+      `v_j = (1/c)^rrel_j`），**不写递归 CTE**。`alpha_for` 按 kind 取值（`ema → 2/(n+1)`、`wilder → 1/n`），
+      **不设默认兜底**（kind 拼错必须抛错，不许静默给一个值）。截断窗 `SMOOTHING_WINDOW_BARS=400` +
+      溢出护栏 `MAX_SAFE_LOG_EXPONENT=600.0`（本库 `max_bars=2435` ⇒ `ema12` 407 / `ema26` 187 / `wilder14` 180）。
+      **核心正确性条件是「成对权重」**：指数必须取「该行距**当前行**的距离」；误取「距**帧首行**的距离」
+      会让满帧下偏移恒为常数 ⇒ 权重全相等 ⇒ **静默退化成等权 SMA**（数值合理、不报错、单看产物看不出来）。
+    - `backend/scripts/factor_novelty.py`：接上 `PanelExtension` 扩展钩子 —— `ppo20` =
+      `100·(ema12 − ema26)/NULLIF(ema26,0)` 对 `close_adj`；`adx14` = Wilder 四级链
+      （±DM → Wilder 平滑 → DI → DX → 再 Wilder 平滑），共 **12 个 CTE**、末级 `adx_s2_s`。
+      多级链**每次换 `tag`**、第二级 `source` = 第一级末级名。**无扩展时 `novelty.py` 逐字不变**
+      （`_PANEL_SQL_BASELINE_SHA256` 冻结哈希守卫）。
+    - `backend/tests/test_smoothing.py`（**新，32 例**）：合成仓（不依赖真实 marketdb）+ **独立 Python
+      朴素递归参照**逐点比对。覆盖：精确性（~1e-9）· **陷阱回归**（错误形态偏差 ~8.15 vs 正确形态 ~1e-15，
+      量级可断言）· 溢出护栏 · warmup 语义 · 缺失值 · 入参守卫 · 多级链 · 扩展钩子集成。
+    - `docs/kb/09-verification-pitfalls.md` + `docs/kb/00-INDEX.md`：新增 [[KB-ENG-109]]（静默退化）
+      与 [[KB-ENG-110]]（窗口求值位置 / 名次列 `FILTER` 形同虚设 / `corr` 零方差返回 NaN）；编号闭包连续。
+  - **刻意没动**：`FACTORS`（**零新增、零计权**）、一切**推送 / 交易口径**；
+    `skew20` 即便判 `distinct` 也**不自动转正**（下文「`distinct` ≠ 准入」）。
+- **机械证据**：
+  - **真实库实测**（默认口径：4 候选 × 既有池 40 项 × 回看 250 交易日 ⇒ **249 个截面日**；
+    T+1 收盘进 / T+5 收盘出；单日成熟样本门槛 30。数字取自产物 JSON 的 `meta` / `nearest`）：
+    `willr20` → **`duplicate`**（最近邻 `rsv20`，秩相关均值 **+1.000** / 中位 +1.000 / 有效日 249）
+    · `cmo20` → **`duplicate`**（最近邻 `sump20`，**+1.000 / +1.000** / 249）
+    · `kurt20` → **`redundant_hint`**（最近邻 `wvma20`，**+0.765 / +0.772** / 230）
+    · `skew20` → **`distinct`**（最近邻 `cord20`，**+0.523 / +0.548** / 230）。
+    ⚠️ **勿把"头部重合率均值"当成"秩相关中位"**：`kurt20` / `skew20` 的头部重合均值是
+    **0.675 / 0.490**，与秩相关中位（**0.772 / 0.548**）**不是同一个量**——
+    本轮曾把前者标成"中位"，已订正（四个数字都取自产物 JSON，勿凭记忆转述）。
+  - **两条机制自证恰好命中**（本切片最强的判据有效性证据）：`willr20` 是 `rsv20` 的**仿射换皮**
+    （WILLR = 100·rsv20 − 100）、`cmo20` 是 `sump20` 的仿射换皮（CMO = 200·sump20 − 100）
+    ⇒ 两者**不可能提供新信息**（此结论与阈值怎么选**无关**）。
+  - **意外发现（对"不盲目堆积指标"的直接支撑）**：**高阶矩不是天然的新信息源**——
+    池内虽无任何高阶矩，`kurt20` 仍与 `wvma20` 秩相关 **0.765**（≥ 0.70 提示线）；
+    即"指标族里没有、故必然新颖"这个直觉**不成立**，必须实测。
+  - **产物**（证据面，可复跑）：`.workbuddy/artifacts/rsh-003/novelty_report_20260916.json`
+    （本切片 CLI 的完整报告，含逐配对 `n_days` / `verdict_eligible` / `thin_pairs`）与
+    `eval_report_20260914.json`（既有）。
+  - **耗时（修复 CLI 丢参后的两次对照，同一真实库；160 个 `corr` 列）**：
+    回看 250 交易日（249 个截面日）**295s**（CLI 外部计时 297s）vs `--lookback 8`（7 个截面日）
+    **47.7s** ⇒ **缩短回看窗确实能省时间（约 6×）**，成本随"窗口内截面日数"近似线性、
+    窗口链（`lvl1`~`lvl3`）是固定底价。⚠️ 前一版把它**写反**了（"与 `--lookback` 基本无关"），
+    见下文「遗留」的订正；    两次运行的 `meta.lookback_days` 分别是 250 / 8（**已核对，不是丢参**）。
+  - **切片 2 真实库实测**（同一 CLI / 默认口径；产物
+    `.workbuddy/artifacts/rsh-003/novelty_report_20260916_ppo_adx.json`，`meta` 实录
+    `lookback_days=250` / `horizon=5` / `n_candidate_days=249` / `n_incumbents=40` /
+    `extension.source="adx_s2_s"` / `n_ctes=12` / `elapsed_sec=282.8`）：
+    `ppo20` → **`redundant_hint`**（最近邻 `mom20`，秩相关均值 **+0.778535** / 中位 **+0.791143** / 有效日 249；
+    头部重合均值 +0.7825 / 中位 +0.792776）·
+    `adx14` → **`distinct`**（最近邻 `std20`，**+0.308566** / **+0.316292** / 有效日 249；
+    头部重合均值 +0.335281 / 中位 +0.326844）。两者 `thin_pairs` 与 `uncompared` **均为空**。
+    ⚠️ **`ppo20` 的冗余来自"动量族"而不是"用了 EMA"**：次近邻 `sump20` +0.764596、`beta20` +0.764579、
+    `mom60` +0.645324 —— 即 PPO 与既有动量指标的**共线是内容层面的**，不能归因成平滑方式。
+    ⚠️ **`adx14` 与既有 `atr14` 仅 +0.236064**（次近邻 `rsqr20` +0.250696、`range20` +0.226507）——
+    ADX 的信息在 **DI 的定向差**，`atr14` 只有波动**幅度**；两者同源（都含 TR）但**不同物**，与设计预期一致。
+  - **切片 2 机制自证 5/5**（探针 `.workbuddy/artifacts/rsh-003/component_probe.py` v2，**26.7s**，产物
+    `component_probe.json`）：`wilder_atr|atr14_w` = **+0.973489**（249 日 / **0 NULL 日** ⇒
+    "可平滑、但**未退化**成等权"）· `ppo20|ppo20_eq` = **+0.812190**（224 日 / 25 NULL 日）·
+    **正对照 `atr14_w_a|atr14_w` = +1.000000（机器校验，精确命中）** ·
+    边界效应探针 `avg_tr14_ctrl|atr14_w` = **+0.999174**（236 日 / 13 NULL 日）。
+    ⚠️ **正对照不是装饰**：它证明"测量通路本身能输出 1"⇒ 负对照的 <1 读数才可信（见下 KB-ENG-109 同族纪律）。
+  - **切片 2 耗时**：主跑 `--lookback 250 --horizon 5` = **282.8s**（CLI 内计），与切片 1 的 295s 同量级 ⇒
+    **再证"列数是主导成本项、成本随窗口内截面日数近似线性"**（切片 2 只加 2 候选，而未变慢）。
+- **注入自证**：
+  - **① 薄样本劫持（判据真 bug）**：把 `nearest` 退回 `pairs[0]`（按 |ρ| 直接取第一）
+    ⇒ `test_thin_pair_cannot_become_the_nearest_neighbor` **真红**，且**首条**报错直指
+    「最近邻被样本不足的配对劫持」（断言顺序**刻意**把核心断言排在前置条件之后、|ρ| 比较之前
+    ——否则注入后会先停在 `assert 0.9999 > 0.9999` 这种读不出病因的地方）⇒ [[KB-ENG-107]]。
+  - **② 参数静默丢弃（CLI 真 bug）**：把 `parse_args(argv)` 改回 `parse_args(argv or [])`
+    ⇒ `test_cli_reads_sys_argv` **2.2s 变红**，报错直指「用的是**模块默认库**而非 argv 给的库」
+    ⇒ [[KB-ENG-108]]。
+  - **③ 判据不冗余**：`neg_mom20` = −1·`mom20` ⇒ |ρ| = 1 但**头部零重合**，
+    用例断言两个判据给出**不同**结论 ⇒ 证明头部重合不是秩相关的复述。
+  - ⚠️ **诚实标注：下面这条不是注入自证，是测试自身的失效（当年漏网的成因）**——
+    合成仓原先把伪随机噪声的种子初始化在**股票循环之外** ⇒ 噪声在**同一日对全截面同值**
+    ⇒ `mom5/mom10/mom20/mom60` 与任何动量候选的秩相关**全为 1**，"最近邻是谁"退化成并列里的
+    任意一项（实测被判成 `mom5`），「能否认出被仿射的那一个」这条判据**失去检验力**。
+    改为**每只股票一条独立噪声流**（种子按序号偏移、幅度 0.02）后消失——**未放宽任何断言**。
+    ⇒ 教训：**造得"看起来会红"的夹具，可能只是在测自己的噪声源**。
+  - **切片 2 注入自证（`test_smoothing.py`，4/4 逐条命中）**：
+    ① 把指数取成"距**帧首行**的距离"（即上文那个陷阱形态）⇒ **判红 8 项**
+    （含结构守卫 `test_prep_offset_is_partition_wide_not_frame_local` 与陷阱回归本身）；
+    ② 让分母**不随 `src` 置空**（`v` 恒为 1）⇒ 红 3 项；③ 把 warmup 放宽为 `rrel >= 1` ⇒ 红 7 项；
+    ④ 把溢出护栏阈值由 600 放大到 1e9 ⇒ 红 2 项。
+    ⚠️ 四处注入均先断言 **`mut != orig`**：证明"注入确实改到了判定面上的那串 SQL"——
+    否则"红了"也可能只是改坏了别处，与守卫无关（[[KB-ENG-105]] 同族纪律）。
+  - **切片 2 探针自身的两次假红（已修正，勿回退）**：
+    ① v1 的"内联同式复刻"正对照实测 **0.999174** 而非 0.9999 ⇒ 机械取证定位到
+    `n_days = 236 = 249 − 13`，而 13 恰为 14 根窗的 warmup —— 即 **DuckDB 的窗口函数在 `WHERE`
+    之后求值**、输入行集只有回看窗内的行（[[KB-ENG-110]] 第一条）。修法：该探针**降级为"边界效应探针"**，
+    另外建立**真正的机器校验**（同一表达式以两个别名各算一遍 ⇒ ρ 必须**精确** = 1.000000，实测命中）。
+    ② v2 首跑的边界效应判据读出 `n_null_days=0` 而报红 ⇒ 根因是 **DuckDB 的 `corr` 在输入零方差时
+    返回 NaN 而不是 NULL**，`v is None` 判空**恒假**（[[KB-ENG-110]] 第三条）⇒ 改为 NaN-aware 判空。
+- **门禁（切片 2 收尾实测；2026-09-16，后端跑时 8000 在跑）**：后端 **collect 3339 / 3263 passed /
+  76 skipped / 0 failed**（**240.74s**；收尾复跑 **237.56s**）· `pyflakes` **0** · `doc-health` **全部通过** ·
+  `tsc` **0** · `eslint` **0 error / 0 warn** · 前端 **608 项 / 67 文件**（本地与 `TZ=UTC`
+  **逐字一致**；`apps/web/` 本轮**零改动** ⇒ 与上轮基线相同）。
+  ⚠️ **Δ 机械归因（切片 2 较切片 1 的 3306 / 3230 ⇒ +33 collect = +33 passed / ±0 skipped，非覆盖率虚增）**：
+  `+32` = 新文件 `tests/test_smoothing.py`（32 例，**全 passed**）；`+1` = `test_import_lint.py`
+  分层参数化新增一个**业务层**模块 `app/factors/smoothing.py`（实测用例名
+  `test_business_layer_never_imports_api[-factors/smoothing.py]` 存在）。
+  **非业务层模块数未变** ⇒ 实测 `tests/test_import_lint.py` = **194 passed / 74 skipped**，
+  `74 = 76 − 2` 与上轮**逐字相同**（[[KB-ENG-97]]：跳过数不变 = 无覆盖丢失）。
+  （切片 1 的对应归因：+19 = `+18` 新文件 `tests/test_factor_novelty.py` + `+1` 业务层 `novelty.py`。）
+- **遗留与下一步**：
+  - **`skew20` 是否转正待用户拍板**：`distinct` 只表示"**无明显的冗余证据**"，
+    **不等于应当准入**（准入仍需过 `evaluate` 的 IC/ICIR/分层/覆盖率那一整套，且须过样本门）。
+  - **`kurt20` 建议不单独入池**（0.765 ≥ 0.70 提示线）。
+  - **`cci20` 需框架扩展**（base 链加一层 `avg(|x − avg(x)|)`）后才可正确实现。
+  - ✅ **ADX / PPO 已实测（切片 2，2026-09-16）**：`ppo20` = `redundant_hint`（+0.779，与**动量族**共线）、
+    `adx14` = `distinct`（+0.309）。**`distinct` ≠ 准入** ⇒ 是否转正**仍待用户拍板**。
+  - **待拍板：`adx14` / `ppo20` 的档位**。`adx14` 即便判 `distinct`，转正仍须过 `evaluate` 的
+    IC/ICIR/分层/覆盖率**整套** + 样本门；`ppo20` 若要采用，需先说明"与 `mom20` 共线 +0.779"为何可接受。
+  - **待拍板：`_rank_corr_pass` 的 `FILTER` 修法**（[[KB-ENG-110]] 第二条）：当前 `FILTER` 过滤的是
+    `percent_rank()` 的**输出**，而 `percent_rank()` **对 NULL 行返回非空**（实测 `1.0`，
+    `count(pr)=4` vs `count(x)=3`）⇒ 该过滤**形同虚设**、结论**偏保守**（可能**漏判**冗余）。
+    改为引用**原始列**即可修好，但这会**重算既有 4 候选的 ρ** ⇒ 属**口径变更**，须用户拍板后再动。
+  - **条件 IC 的阈值**（多小算"无贡献"）属**口径问题、须人工拍板**；本模块只并排摆出数字、
+    不做自动断言（这也是它不参与判档的原因）。
+  - ✅ **已订正（勿回退）**：「缩小 `--lookback` 省不了时间」**结论反了**——实测 250 → **295s**、
+    8 → **47.7s**（约 6×）。原结论是从代码推出来的（"`date_ms >= cutoff` 只是事后过滤，
+    下推不到窗口里"），该推理**只对窗口链成立、对 `corr` 段不成立**；且当时"支持"它的那次
+    "实测"是**假证据**（`--lookback 8` 从未被解析）。⇒ 源码注释 / 账本 / 本条**三处已同步订正**。
+  - **后续扩候选仍须分批**：160 列已 **295s**（切片 2 加 2 候选**并未变慢** —— 印证"列数是主导成本项"），
+    成本随窗口内截面日数近似线性 ⇒ 可先用 `--lookback` 小窗做初筛。
+  - ⚠️ **多级链的 warmup 不自动叠加（切片 2 实测语义，勿想当然）**：第二级只要求**当前行**有值，
+    起点 = `max(本级 window, 前级首个有值行)`。若要求**两段都排满**，必须由候选表达式**显式置空**
+    （本切片 `adx14` 即写 `CASE WHEN cnt >= 2×14 = 800 THEN adx END`）。想当然以为"链上会自动叠加"，
+    会让开头若干根 ADX 建在只有**一级**平滑的 DI 上 —— **数值合理、不报错**（[[KB-ENG-109]] 同族）。
+
+## RSH-027 场景化 KB 路由与引用记录（切片 1 已交付，本项仍开放）
+- **账本**：`docs/retro-and-gaps.md` §6.0 `RSH-027` ｜ **日期**：2026-09-16 ｜ **状态**：🟡 部分闭环
+- **缺口与验收标准**：蓝图 §5 要求「按盘前/事件/盘中/复盘/进化调用指定 KB，并记录 `kb_ids` 与冲突依据」，
+  并附三条禁令（示例不得作硬规则 / 不得越过交易硬门 / 不进入个股收益打分）+ 一条**诚实注记**：
+  「用有/无 KB 影子对照证明增益，**否则仅保留解释价值**」（原文自述当前**尚未证明**能提高选股结果）。
+  本切片的验收边界 = **路由契约 + 引用记录 + 引用校验 + 覆盖度自证**；
+  **不做检索本身、也不做消融**（消融须等样本，属切片 2）。
+- **改动**：
+  - `backend/app/picks/kb_routing.py`（**新，676 行**）：四场景 ⇄ 蓝图 §5 **逐行对应**的路由表 +
+    唯一索引解析器 + 覆盖度恒等式 + 三态引用快照 + 三道红线守卫。
+  - `backend/app/services/evolution.py`：`_collect_knowledge_base()`（**议程第八路**）由
+    **自建私有正则**改为**复用**唯一解析器，并把 `coverage` 自证暴露到议程 —— **偏差修复**。
+  - `backend/app/models/opportunity_learning.py` + `backend/migrations/versions/c5d2f8a3b7e1_snapshot_kb_citations.py`（**新，51 行**）：
+    `opportunity_decision_snapshot` 增 `kb_ids` / `kb_refs` 两列（`down_revision = b4f1a7c2e9d3`；
+    **刻意不建索引** = 少一处 schema 分叉面；全程 `op.*`，遵 `BUG-014` 教训）。
+  - `backend/app/picks/opportunity_learning.py`：写入侧 `build_intraday_records` / `build_notification_records` /
+    `archive_intraday_pipeline` / `archive_notification_pipeline` 一律经 `snapshot_citations()` 快照；
+    读侧 `replay_run` 回读两列、`learning_summary` 增 `kb_ref_states` 计数。
+  - `backend/app/api/routes/picks_intraday.py`：新增只读端点 `GET /api/picks/kb-routing`（带 300s 缓存）。
+  - `backend/tests/test_kb_routing.py`（**新，416 行 / 18 例**）：10 组守卫，每组对应一个具体失效方式。
+  - `docs/kb/09-verification-pitfalls.md` + `docs/kb/00-INDEX.md`：新增 [[KB-ENG-104]] 与索引行。
+  - **刻意没动**：一切**推送 / 交易口径**（`IMP-028` 通知口径、撮合与风控、`RSH-026` 既有标签语义）；
+    `enters_scoring` **全部为 `False`** —— **不宣称 KB 已入模**（原文未证增益，宣称即谎报）。
+- **机械证据**：
+  - **路由表 ⇄ 蓝图原文逐行比对**：用例从 `docs/summary/system-final-blueprint.md` **现场解析**该表
+    （不抄一份副本），逐字比对场景标签与册/状态约束 ⇒ 4/4 对应。
+  - **偏差量化（本条最实质的证据）**：旧私有正则匹配 **162** / 唯一实现 **178**；差集 **16** 条，
+    成因 **`4 + 12` 无余数** —— `📎` 不认 → `KB-STOCK-01/02/03/04`（4）；
+    状态列多词备注 → `KB-STOCK-27/29/30/31/32/33/34/35/36`（9）+ `KB-ENG-79`/`KB-ENG-82`（2）
+    + `KB-DEC-003`（1）。**`old_not_new == []`** ⇒ 新解析器是旧面的**严格超集**（无新增误判）。
+    ⚠️ 漏掉的恰是**最经过实证的一批**（`KB-STOCK-27` 三倍态战法**实测否决**、`KB-ENG-79`
+    `ntile()` 无 tie-break **连跑 3 次 3 个结论**、`KB-DEC-003` 是「❌ 部分取代」= **勿回退信号**）。
+  - **第二处偏差**：册前缀写死四册 ⇒ 第五册 `KB-REPO` 不可见、`| KB-REPO-* |` 册级行连"像索引行"都不算。
+    该行由**朴素统计 179 vs 解析 178 差 1** 才发现 —— 「**只差 1 行**」正是最容易放过的信号。
+  - **覆盖度恒等式（本切片的机械判据）**：
+    `candidate_rows == total + len(book_level_rows) + len(unparsed_rows)`。
+    实测 `unparsed_rows == ()` / `unknown_books == ()` / `coverage_identity_holds == True`。
+    ⇒ **断言面从「我认得的」扩到「表里所有的」**；只断言 `unparsed == 0` **是自证不足**
+    （册级行会被前缀判据静默排除，连"未解析"都不进）。
+  - **端点实证**（后端 8000 在跑，`curl --noproxy '*'`）：`GET /api/picks/kb-routing` ⇒
+    `index.coverage_identity_holds: true`、`unparsed_rows: []`、`unknown_books: []`、
+    `book_level_rows: ["KB-REPO"]`、`registered_books` **5 册**、`scoring_books: [KB-STOCK, KB-TRADE]`、
+    `known_statuses` **5 档** + 四场景路由表（`pre_open_event` / `intraday_pick` /
+    `post_close_review` / `system_evolution`，`enters_scoring` **全 `false`**）。
+    ⚠️ **报数字必须带取数时刻**：本条 `KB-ENG-104` **自身入库**使
+    `total` **178 → 179**、`candidate_rows` **179 → 180**、`by_status.✅` **163 → 164**
+    （其余档位不变：`🔶:5 / ⏳:4 / ❌:2 / 📎:4`）—— 恒等式不变；不说时刻会被当成回归。
+  - **迁移实测**：真实库 `alembic_version = c5d2f8a3b7e1`（已应用）⇒ `opportunity_decision_snapshot`
+    **20 列**（含 `kb_ids` / `kb_refs`）；`test_db_migrations.py` **5 passed**（生产 / alembic 新建 /
+    模型**三方同形**）。
+  - **端到端落库实证（本轮最强的一条，非"未抛异常"）**：真实库现有 **2 行** `stage=notification` 快照
+    （`run_id` 两个，2026-09-16 05:00/05:01 UTC），其 `kb_ids = "[]"` 且
+    `kb_refs = {"state":"not_consulted","status":{},"support":[],"conflict":{}}` ——
+    ⚠️ **该值与迁移的 `server_default='{}'` 不同** ⇒ 只可能来自 `snapshot_citations()`；
+    且 `state` 既非 `legacy` 亦非空 ⇒ **证明确实跑的是新写入路径**（不是列存在、值仍是默认）。
+    这正是 `RSH-026` 验收轮缺的那一刀（那轮只证到 `state=ready` ⇒ **不足以证明 INSERT**）。
+  - **三态引用的必要性（为什么不能只存 ID 列表）**：`kb_ids == "[]"` **区分不了「没引」与「全被驳回」**
+    ⇒ 必须并列一个 `kb_refs` 状态映射（`not_consulted` / `cited` / `rejected`）；迁移前的旧行标
+    **`legacy`**、**不猜**成 `not_consulted`（猜 = 把"无证据"写成"证据表明没有"）。
+  - **两处初版偏差自查纠正（据蓝图原文，非推理）**：**(a)** 初版把盘中约束写成**册过滤**（只放
+    `KB-TRADE`），而原文是**状态过滤**（「已落地或试验中的交易纪律」）⇒ 按册过滤会连带挡掉
+    `KB-STOCK-07/11/12/13/21` 等 **✅ 交易纪律**；**(b)** 初版给盘中 `enters_scoring=True` 属
+    **未验证即宣称入模** ⇒ 改为全 `False` + `ablation_evidence` 必填 +
+    `assert_scoring_admission_is_evidence_gated()` 机制化拦截。
+- **注入自证**：**7 项真红 → 恢复全绿**。靶点 = 把状态列正则退回旧口径（删 `📎`），
+  判红的是 `test_kb_routing.py` 中依赖状态解析的 7 条（含 `📎` 不得作硬规则、覆盖度恒等式、
+  被漏条目的逐条回归）。另三路结构性守卫（放宽状态限 / 塞 `KB-DEC` 进打分册 /
+  无证据置 `enters_scoring=True`）各有用例钉住，且别名守卫打在**源码真实字面量**上
+  （正则从 `opportunity_learning.py` 抓取，不抄副本）。
+  ⚠️ **另有一条「真实命中 > 人工注入」**：`doc-health` **P 交接索引**在本轮**真的判红过**
+  （`账本索引已登记 RSH-027，但 docs/handoff.md 无 '## RSH-027' 条目`）——
+  这是该守卫上线后的首次真实阳性，无需再造合成注入（[[KB-ENG-102]]）。
+- **门禁（实测回填，勿凭记忆）**：
+  - 后端 `pytest --basetemp=/tmp/… --junitxml=…` ⇒ **collect 3265 / 3189 passed / 76 skipped / 0 failed**
+    （**213.74s**；8000 在跑。⚠️ `pyproject.toml` addopts 已含 `-q`，**不可再叠 `-q`** ⇒ 取数走 junitxml）。
+  - **Δ 归因自洽**：较上值 `3245 / 3169` ⇒ **Δ = +20 collect = +20 passed / ±0 skipped**：
+    `+18` = 新文件 `test_kb_routing.py`；`+1` = 新 GET 端点进入全量冒烟参数化
+    （实测 `…[/api/picks/kb-routing-get-params91]`）；`+1` = `test_import_lint.py` 新增**业务层**模块参数化
+    （**HEAD 干净检出实测 190/74 ⇒ 本轮 191/74**）。
+    **非业务层模块数未变** ⇒ `skipped(76) − 2 = 74` 与上轮**逐字相同**（[[KB-ENG-97]]）。
+  - 目标文件单跑：`test_kb_routing.py` **18 passed / 0 skipped** · `test_db_migrations.py` **5** ·
+    `test_opportunity_learning.py` **14** · `pyflakes app tests scripts` **0**。
+  - `doc-health` **全部通过**（P 项 9 条目双向闭包 · Q 项 0 冲突）· 前端 `apps/web/` **零改动** ⇒ 沿用 **603/67**。
+  - ⚠️ **本轮 `doc-health` J 项真红过一次**（新文件未 `git add` 却被 handoff 点名）⇒ 见 §1 现场第三条实例。
+  - **干净检出复验（= 模拟 CI 检出，`git worktree add --detach /tmp/ci-sim-027 <commit>`）**：
+    `doc-health` **全部通过**；文档类守卫 8 文件 **96 passed**（`test_doc_health_*` 6 份 +
+    `test_cmd_guidance_guard` + `test_doc_status_truthfulness`）⇒ **无「本地绿 / CI 红」**。
+    ⚠️ 检出须取自**提交**而非 `HEAD` 工作树（J 项判定面 = `git ls-files`）。
+- **遗留与下一步**：**切片 2 = 有/无 KB 影子消融**（候选召回 / Precision@K / 净期望），
+  当前 `verdict` 只能恒为 `insufficient_sample`（可成交样本远低于
+  `opportunity_learning.MIN_LABELS_FOR_VERDICT = 30`）⇒ 与 `RSH-026` 剩余部分（purged walk-forward、
+  校准与 Champion/Challenger 影子晋级）**同因阻塞：等样本积累**，硬跑即「用不足样本装判据」。
+  本切片**不含检索实现**（`kb_routing` 只给"允许引哪些"，不给"怎么找"）——
+  若要接检索，须另立任务并先明确"检索失败/无命中"如何留痕。
+
+## IMP-034 提醒链路过期断言与死代码清理（闭环）
+- **账本**：`docs/retro-and-gaps.md` §6.0 `IMP-034` ｜ **日期**：2026-09-16 ｜ **状态**：✅ 闭环
+- **缺口与验收标准**：`IMP-028` 把通知中心收敛为「只推个股买点」后，**留下两类残留**：
+  ① 全仓仍有多处注释自称「通知中心」/「不经 LLM 判读」——**断言与实现脱钩**；
+  ② `notifications._daily_pick_item` / `_news_items` 已被端点弃用却仍有测试在测——**测试守着一个够不到的落点**。
+  验收标准：断言**逐处按现实改写**（非删注释）；死代码**删除须连同其测试**，不留虚假覆盖信心。
+- **改动**：
+  - `backend/app/picks/pre_limit_radar.py`（2 处：模块 docstring 落点段 + `:236` 行内注释；另 `:147` `pre_limit_sweep` docstring）
+  - `backend/app/picks/position_engine.py:275`（开仓留痕落点）
+  - `backend/app/picks/exit_engine.py`（2 处：`_notify` docstring + `:470` 降级留痕）
+  - `backend/app/services/alert_triage.py:351`（方向级事件去向）
+  - `backend/app/api/routes/picks.py:292`（信号健康预警接线）
+  - `backend/app/review/service.py:199`（同上）
+  - `backend/app/core/config.py:104`（`notifications_news_min_score` 已空转）
+  - `backend/app/api/routes/notifications.py`（**净删 127 行**死代码 + 4 个失效导入；docstring 补清理说明）
+  - `backend/tests/test_notifications.py`（**净删 53 行**：1 用例 + 4 夹具）
+  - `backend/tests/test_event_loop_no_block.py`（删 `GUARDED_ROUTES` 中已无对应代码的 1 条目 + 3 处注释同步）
+  - `docs/summary/pick-signal-chain.md`（§G4 5→10 处并标已处理 · §G5 标已删除 · §6 两条 P1 标已实施 · §7.1 升级为实机证据）
+  - **刻意没动**：`morning_brief._daily_plan` 的两处失效导入（属 `BUG-009`，**另属一项**）；`notifications` 端点响应体（`policy` / `news_min_score` 字段保留，旧客户端兼容）；`signal_health.py:217`（经核**仍成立**，不误删）；`_NOTIF_RULE_NAMES` 白名单（口径属 `IMP-028`，不在本项范围）。
+- **机械证据**：
+  - **断言侧实为 10 处，非登记的 5 处**。三类去向经代码取证钉死：`notifications.py:56/88/91/124`（只收 `__picks_buy_point__` + `kind=="buy_point"` + 有效 symbol/name）；`watcher.py:942`（`append_alert(target, …)`，target 来自 `brief_for_today()` ⇒ **当日简报 `alerts[]`**）+ `watcher.py:1005` 起 `repo.record_trigger(rule.id, …)`（watcher 系统规则，规则名**不在**白名单）；前端 `app/hunting/page.tsx:238/611`（「盘中提醒」）+ `lib/api/alerts.ts:91`（`/api/alerts/events` ⇒ 控制台「提醒与告警」）；方向级 → `components/market/events-tab.tsx:110` ← `/api/events/impact`。
+  - **两处「疑似失效」经核为真、刻意保留**：`picks.py:292` 的「自动 action_items」确实接线（`review/service.py:149-151` → `review/strategy_health.py:168 build_signal_health_action_item`，`priority="P0" if drift else "P1"`；`review/synthesis.py` 内**无** `health` 引用 ⇒ 该链路**只能**来自这里，判据唯一）；`signal_health.py:217`「通知中心按规则名分流」机制未变。
+  - **死代码可删性判据**：`notifications.py` 端点 `:184` 仅 `items = alert_items` ⇒ 三函数**无任何调用点**；`pyflakes app tests scripts` = **0**（删前删后均为 0，故不能只靠 pyflakes 判定 —— 它是**模块级**的，认不到「函数存在但无人调用」）。
+  - **`notifications_news_min_score` 全仓只有 2 处引用**（`config.py:106` 定义 + `notifications.py:161` 回显）⇒ 确认**无过滤消费**。
+- **注入自证**：无新增守卫（本轮为**订正 + 清理**轮）。**但门禁提供了两处真实阳性注入的等价物**（**先真红、后修**，非先绿后补断言）：
+  - ① `test_event_loop_no_block.py::test_route_sync_io_calls_are_offloaded[notifications::store.list_events#5]` **真红**：报 `app/api/routes/notifications.py 找不到 asyncio.to_thread(store.list_events, active_only=False, limit=80) ⇒ 该调用点未走 to_thread` —— 即**守卫在替一个已删代码报警**。修法 = 删条目（7 条其余登记项与裸调用判据**未动**）。
+  - ② `test_cmd_guidance_guard.py::test_repo_has_no_reload_guidance` **真红**：命中 `retro-and-gaps.md:163` 与本文件 `:99` 的「起栈未加 `--reload`」措辞（判据 = 同一行**同时**出现「起服务命令锚点」与 `--reload` 且无禁用标记）。这是 **`BUG-016` 轮遗留**（该轮只跑 7 个 `test_doc_*`、**未跑全量** ⇒ 文案红漏检）。修法 = **改文案**（本意在「未热重载」，命令锚点非必要信息），**不加豁免标记**（守卫 docstring 明写「把标记塞进豁免 = 判据失效」）。
+- **门禁（实测回填，勿凭记忆）**：
+  - 后端 `pytest --basetemp=/tmp/… --junitxml=…` ⇒ **collect 3245 / 3169 passed / 76 skipped / 0 failed**（8000 在跑；`pyproject.toml` addopts 已含 `-q`，**不可再叠 `-q`**，取数走 junitxml）。
+  - **Δ 归因自洽**：较上值 `3247 / 3171` ⇒ **Δ = −2 collect = −2 passed / ±0 skipped**，两项各 −1：删 `test_daily_pick_item_ts_is_real_generation_time`、`GUARDED_ROUTES` 少一条参数化项。**非业务层模块数未变** ⇒ `skipped(76) − 2 = 74` 与上轮**逐字相同**（`[[KB-ENG-97]]`：跳过数不变即无覆盖率丢失）。
+  - `pyflakes app tests scripts` **0** · `doc-health` **全部通过** · 前端 `apps/web/` **零改动**（`git status --short` 核对）⇒ 沿用上轮 **603 项 / 67 文件**，未复跑。
+- **遗留与下一步**：无新增遗留。本项的**同族未清项**（登记范围外、本轮未动，**属不同授权面**）：`summary/pick-signal-chain.md` §6 的两条 **P0 建议**（`verdict` 提升为通知中心统一闸门 / 家族 B 纳入 `dispatch_alert`）——二者**均改变推送口径**，按「改进先提后做」**待拍板**。另 `BUG-016` 的可做子项（空态暴露候选数/最高档/否决原因）亦待拍板，见 `§BUG-016`。
+
+## BUG-016 通知中心「三跳全空」根因链（可做子项③已交付，档位门①/②待拍板）
+- **账本**：`docs/retro-and-gaps.md` §6.0 `BUG-016` ｜ **日期**：2026-09-16 ｜ **状态**：🟡 已取证 · **可做子项③已交付** · 档位门 ①/② 待拍板
+- **缺口与验收标准**：用户问「为什么消息通知一个也没有呢,新闻也没有在里面」。
+  验收标准 = **分清「设计口径 / 数据如实为空 / 系统侧失效」三种成因**，并给出可复现证据；
+  **不以猜测结案**。可做部分（空态可诊断）**不改推送口径**。
+- **结论（三层，机制不同）**：
+  1. **新闻不在通知里是设计** —— `IMP-028` 收敛后 `_NOTIF_RULE_NAMES` 只留 `BUY_POINT_RULE`，
+     端点 `notifications.py:315` 为 `items = alert_items`；`_news_items` / `_daily_pick_item` 成死代码（归 `IMP-034`）。
+     新闻实际入口 = 盘面页**「事件」标签**（`market/events-tab.tsx` ← `/api/events/impact`）。
+  2. **个股机会 0 条 = 如实为空，且历史上从未有 1 条** —— 买点链第一道必要条件
+     `tier ∈ EXEC_TIERS = {executable, strong}` 在 **13 天 / 51 只候选上 0 命中**。
+  3. **无法区分「设计生效」与「阈值不可达」** —— 0 命中本身没有区分度 ⇒ 需拍板（见下）。
+- **机械证据（全部只读、可复跑）**：
+  · `alert_event` 内 `kind LIKE '%buy_point%'` = **0 / 1997**（跨度 `2026-09-02 11:01:34` → `09-16 11:29:51`，覆盖 11 个交易日）
+  · `alert_rule` = 5 条（`__picks_watcher__` / `__ths_reason_sentinel__` / `__sentiment_monitor__` / `__llm_gateway_probe__` / `__signal_health__`），**无 `__picks_buy_point__`**
+  · `daily_pick_set` 13 天 51 只候选：档位 `None×30` + `observe×21`，**`executable`/`strong` = 0**；`score` 区间 **30.8–63.8**（线：`EXECUTABLE_SCORE=60` / `STRONG_SCORE=75`）；`buy_range` 非空仅 3 只（全部 09-14，且同为 `observe` 档）
+  · 今日唯一候选 `603162`：`tier=observe` + `observation_only=True` + `buy_range=None` + `gate.stand_aside=True`（相位「退潮」、`strip_buy_range=True`）⇒ 四重否决
+  · `GET /api/notifications` ⇒ `{"items":[],"count":0,"policy":"stock_opportunities_only","errors":null}`（**正常空，非故障**）
+  · `GET /api/events?limit=3` ⇒ **3 条**（新闻数据在）
+  · 前置逐一排除：`trade_calendar.json` 243 天且**含今天**（`source=official`）⇒ 日历门不成立；
+    实测 `in_trading_window(10:00/11:00)=True`；`_today_picks_payload()` ⇒ 1 条 ⇒ 三道前置门**均不成立**
+  · 归档路径可用性：对**生产库副本**（`/tmp`）调用 `archive_notification_pipeline` ⇒ `inserted=1`，`evidence.gate_reason="快照无现价（不臆造）"`，`data_state=unknown`
+- **⚠️ 本轮自我更正（必须保留）**：曾把 `opportunity_decision_snapshot` **0 行**读作「买点循环未跑到判定阶段」。
+  **该推断不成立**：该表由 `RSH-026` 首批迁移 `7d4e2c9a6b1f` 建立，而其 PR #13 于**今日 09:58** 才合并、
+  批次二迁移 `b4f1a7c2e9d3` 于 **10:20** 合并；后端进程起栈时**未加 `--reload`** ⇒ 晨盘时段运行中的后端
+  **未必带这段代码** ⇒ **0 行不能证明循环没跑**。同族教训：**把「无证据」读成「证据表明没有」**。
+- **✅ 可做子项③ 已交付（2026-09-16）——「让为什么空看得见」**（**不改任何推送口径**）：
+  · `backend/app/picks/notification_diagnostics.py`（**新**）：状态机**四态 + 一降级、互斥且穷尽** ——
+    `no_pick_set`（上游空）/ `no_run`（链路未跑到判定）/ `ran_rejected`（跑了但全被否）/ `ran_eligible`（有通过却仍空 = 真异常）/ `unavailable`（读库失败）。
+    ⚠️ **`no_run` 与 `ran_rejected` 必须分开**：前者要查调度与时段，后者要看原因；合并即把「无证据」写成「证据表明没有」（本项自我更正过的同一类错）。
+  · 端点 `GET /api/notifications`：**仅在 `items` 为空时**附 `data.diagnostics`（`asyncio.to_thread` 包裹；诊断自身抛错也**回 dict**`state="unavailable"`，**不回 `None`** —— 否则「诊断坏了」与「有通知所以不诊断」在响应里**同形**）。
+    **响应不变式**：`items` 空 ⇒ `diagnostics` 必为 dict；非空 ⇒ 必为 `None`。
+  · 前端：`notification-drawer.tsx` 的 `NotificationEmptyState`（替换原来那句「盘中暂无通过多维筛选的个股机会」）+ `lib/api/alerts.ts` 的 `NotificationDiagnostics` 类型；
+    **只在整份 payload 为空时**展示诊断（「本时段空、别时段有」不算空态，那只是切到了没内容的 tab）。
+  · **两条读法纪律写进 note**（由**实测**驱动，不是免责声明）：① `reasons` 取**最新一拍**（实测同一只票 13:15「置信档 observe 不足」→ 13:21「快照无现价（不臆造）」）⇒ **不是全天分布**；
+    ② 判定**按门顺序短路**（`快照无现价` → `置信档` → 红线 → 闸门 → 买区 → 涨停区）⇒ **「原因没提档位」不等于「档位已通过」**。
+    ⚠️ 这两条恰好都指向本项**待拍板的档位门**，误读一次就会把 ①/② 拍错方向。
+- **机械证据（③ 部分，全部实测）**：
+  · 真库 `GET /api/notifications` ⇒ `state=ran_rejected` / `polls=26` / `by_decision={rejected:1}`（**按 symbol 去重，不是记录数**）/ `top_tier=observe` / 逐股原因「快照无现价（不臆造）」(603162)。
+  · **实际渲染取证**（agent-browser 文本通道，非推理）：抽屉显示「本时段无通知：候选全部被否决」+ note 全文 + 「候选 1 只 · 最高档 observe · 判定 26 拍 · 2026-09-16 · 诊断于 13:26」+ 逐股一行（含代码）。
+  · **反引号那处是渲染实测才发现的**：只剥 `**` 时界面会原样显示反引号 —— 读代码时它看起来「已经处理了 Markdown」。
+- **注入自证 5/5 全红后还原（`diff -q` 逐字一致）**：
+  · 后端 [A] 合并 `no_run`/`ran_rejected` ⇒ **2 红**；[B] 取消按 symbol 去重（改回按记录数）⇒ **2 红**。
+  · 前端 [A′] 去掉「整份 payload 为空」判据 ⇒ **1 红**；[B′] 不剥 Markdown 标记 ⇒ **1 红**；[C′] 只剥星号不剥反引号 ⇒ **1 红**。
+  · 接线守卫的必要性（[[KB-ENG-100]]）：纯函数用例**不经过 HTTP 层**，端点里那三行接线被删，17 项纯函数用例**照样全绿** ⇒ 另补 4 项端点级守卫（空态真调用并挂上 / 非空态**刻意不调用** / 抛错显式降级 / 两分支不变式）。
+- **门禁（实测回填）**：后端 **collect 3287 / 3211 passed / 76 skipped / 0 failed**（253.61s，8000 在跑）；
+  **Δ +22 机械归因** = +17（新 `tests/test_notification_diagnostics.py`）+ 4（接线守卫）+ 1（新业务模块 `picks/notification_diagnostics.py` 进 `test_import_lint` 分层参数化）；
+  `skipped 76` 不变（`74 = 76 − 2` 逐字同 ⇒ 无新增非业务层文件）。
+  前端 **608 passed / 67 文件**（本地与 `TZ=UTC` **一致**）⇒ Δ **+5 用例 / ±0 文件**。
+  `tsc` 0 · `eslint` 0 · `pyflakes app tests scripts` 0 · `doc-health` 全部通过（含**干净检出**复验）。
+- **顺带修掉两处环境隐患（本轮实测踩到，均已入册）**：
+  · [[KB-ENG-105]]：**同一批次内对同一文件的两处编辑会静默丢一处**（「工具报成功 ≠ 落盘」）—— 本轮撞**两次**，
+    两次都靠**随后的判据**（用例失败 / 读回文本）才发现；两次若按「只是改文案所以不用跑」处理，会留下「旧行为 + 新文档」的自洽组合，**门禁全绿也抓不到**。
+  · [[KB-ENG-106]]：`lsof -ti tcp:<port>` 收的是**所有持有该端口 fd 的进程（含客户端）** ⇒ 用 `lsof -ti tcp:8000 | xargs kill -9` 重启后端会**连带打死 Next dev server**（本轮撞**三次**）。
+    实测口径差：`lsof -ti tcp:8000` ⇒ **4 pid**（uvicorn + Next dev + 2 worker）；加 `-sTCP:LISTEN` ⇒ **1 pid**。`AGENTS.md` §1 的按端口 kill 命令已补 `-sTCP:LISTEN`。
+- **遗留与下一步**：
+  · **待拍板（涉交易信号口径，本轮仍未动）**：① 保持 `{executable, strong}` 门并在界面明示「可能长期不触发」；
+    ② 下调档位门（**改推送口径，风险 = 推噪音**）；③ 已按 ③ 交付可诊断面 ⇒ **本轮起据实评估有了数据来源**，但 ①/② 仍须用户拍板。
+  · 死代码清理已归 `IMP-034`（闭环）；通知口径本身不改（`IMP-028` 是设计决策）。
 
 ## IMP-033 提醒落点统一为个股详情弹窗（判读全文改由「判读」入口保全）
 

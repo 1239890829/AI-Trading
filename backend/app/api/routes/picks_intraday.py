@@ -9,6 +9,7 @@
 - POST /api/picks/intraday-review/run     手动执行当日方向对照 + 提醒收益回填（写鉴权）
 - GET  /api/picks/intraday-opportunities  盘中机会：题材强→弱 + 题材内个股辨识度/确定性（2026-09-03）
 - GET  /api/picks/intraday-top           盘中跟踪最推荐标的（多维筛选切片，2026-09-04）
+- GET  /api/picks/kb-routing              场景化 KB 路由表 + 知识库索引覆盖度（2026-09-16，RSH-027）
 
 简报 payload 存 data/picks/briefs/YYYYMMDD.json（morning_brief 模块 docstring
 有持久化决策：不进 prediction_reports 表，避免与 predict 按 target_date 的
@@ -476,6 +477,33 @@ async def opportunity_scorecard(
 
     target = date or beijing_now().date().isoformat()
     return {"data": _scorecard(target, top_k=top_k), "meta": {}}
+
+
+@router.get("/kb-routing")
+async def kb_routing(request: Request) -> dict:
+    """场景化知识库路由表 + 索引覆盖度（只读，`RSH-027` 切片 1）。
+
+    与 `/opportunity-learning` 的关系：那个回答「归档了什么、KB 引用状态分布如何」
+    （`kb_ref_states`），这个回答「**按蓝图 §5，各场景允许调用哪些知识、禁止什么**」
+    以及「知识库索引被解析得完整不完整」。
+
+    ⚠️ `index.unparsed_rows` 非空或 `coverage_identity_holds` 为 `false`
+    ⇒ 索引表出现了当前解析器不认的新写法（**静默漏条目**的预警信号），
+    不是"没有数据"。这正是 `RSH-027` 修掉的那类偏差的可见化。
+
+    路由表与索引都是进程内不变的静态事实（KB 索引只在发版时变），故缓存 300s。
+    """
+    from app.picks.kb_routing import index_overview, routing_table
+
+    async def build() -> dict:
+        return {
+            "data": {"scenarios": routing_table(), "index": index_overview()},
+            "meta": {"note": "KB 尚未进入个股收益打分；须先通过有/无 KB 影子消融（蓝图 §5）"},
+        }
+
+    cache = cache_on(request.app.state, "picks.kb_routing", 300, maxsize=1)
+    _, payload = await cache.get_or_set("kb-routing", build)
+    return payload
 
 
 @router.get("/position-labels")

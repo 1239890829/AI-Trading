@@ -23,7 +23,13 @@
 全市场快照；新进入临板区的股票：
 
 1. `record_sighting(layer="pre_limit", gate=...)` —— 先登记（封板前一刻的入场价）
-2. `dispatch_alert(kind="pre_limit")` —— 规则直发通知中心，**不经 LLM 判读（零延迟）**
+2. `dispatch_alert(kind="pre_limit")` —— 规则直发，**不经 LLM 判读（零延迟）**
+
+落点（2026-09-16 `IMP-034` 订正，原注释自称「直发通知中心」已失效）：本族提醒
+进**当日简报 `alerts[]`**（猎场页「盘中提醒」区块）并落一条 `AlertEvent`
+（AI 控制台「提醒与告警」页可查）；**不进消息通知中心**——`IMP-028`（09-15）
+收敛后该中心只消费 `__picks_buy_point__` 规则下的 `kind="buy_point"` 个股买点，
+本模块走 watcher 系统规则（`ensure_system_rule`），规则名不在白名单内。
 
 当日幂等：以台账首见唯一为准（重启安全——去重源是台账而非内存）。
 新鲜度守卫：快照 `last_success` 超 120s（非交易时段/数据停更）雷达静默，防陈旧数据误报。
@@ -138,7 +144,7 @@ def select_candidates(
 
 
 async def pre_limit_sweep(app) -> int:
-    """单轮扫描：选候选 → 先登记（台账）→ 再提醒（通知中心）。返回新入册数。"""
+    """单轮扫描：选候选 → 先登记（台账）→ 再提醒（当日简报 alerts[]；不进通知中心）。"""
     state = app.state if hasattr(app, "state") else app
     svc = getattr(state, "snapshot_service", None)
     rows = getattr(svc, "snapshot", None) or []
@@ -233,7 +239,9 @@ async def pre_limit_sweep(app) -> int:
         if row is None:
             continue  # 并发下已被登记
         n_new += 1
-        # 2) 提醒：规则直发（append_alert → AlertEvent → 通知中心），不经 LLM 判读
+        # 2) 提醒：规则直发（append_alert → 当日简报 alerts[] → AlertEvent），
+        #    不经 LLM 判读。落点不是通知中心——IMP-028 后该中心只收
+        #    __picks_buy_point__ 买点；本族在猎场页「盘中提醒」查看（IMP-034 订正）。
         alert = {
             "kind": "pre_limit",
             # 去重键由调用方生成（append_alert 契约）——2026-09-09 曾漏此字段导致
