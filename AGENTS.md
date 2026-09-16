@@ -86,6 +86,14 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 # 「本地恒绿 / CI 恒红」（2026-09-15 N/O 两项实测，见 [[KB-ENG-95]]）。
 # 怀疑「本地绿/CI 红」时，**先用干净检出复现**（比推 CI 等结果快得多）：
 #   git worktree add --detach /tmp/ci-sim HEAD && (cd /tmp/ci-sim && python3 scripts/doc-health.py)
+# ⚠️ **改了 `docs/`（或 `AGENTS.md`）⇒ 后端门禁也必须跑，"后端代码零改动" 不构成豁免**
+# （2026-09-16 实测踩到：`IMP-031` 轮只改了 frontend + docs，判定"后端零改动不用跑后端"，
+#  结果 PR #16 的 **CI backend job 红**——`tests/test_doc_status_truthfulness.py`
+#  判据 2 要求 `docs/summary/*.md` **谈状态就必须带 §6.0 指针**，而新建的
+#  `docs/summary/pick-signal-chain.md` 含「未做」却无指针。
+#  ⇒ **后端门禁里有一类"扫 `docs/` 的文档守卫"**（`test_doc_status_truthfulness.py` 等），
+#    它们的输入是文档 ⇒ 只改文档照样让后端红。**"没改 .py" 与 "后端不会红" 是两件事。**
+#  修法 = 按 `GOV-002` 惯例在 summary 文档头部加 `§6.0` 权威指针，**不是改守卫、不是登记豁免**。）
 # 生产构建前必须先停 dev server（.next 冲突已踩两次）：
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
