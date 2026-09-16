@@ -121,10 +121,10 @@ def to_tencent_symbol(symbol: str) -> str:
     s = symbol.strip().lower()
     if s.startswith(("sh", "sz", "bj")):
         return s
+    if s.startswith(("4", "8", "920")):  # 北交所；920 必须先于沪市 9 段判断
+        return f"bj{s}"
     if s.startswith(("6", "9", "5")):  # 沪市主板/科创/B 股、沪市 ETF
         return f"sh{s}"
-    if s.startswith(("4", "8")):  # 北交所
-        return f"bj{s}"
     return f"sz{s}"
 
 
@@ -289,16 +289,16 @@ class TencentProvider:
         found = _ROW_RE.findall(text)
         if not found:
             raise ProviderError("tencent snapshot empty reply")
-        by_code = {code: (prefix, fields) for prefix, code, raw in found if (fields := raw.split("~"))}
+        # 市场也是身份的一部分：sz000001 与 sh000001 不能共享裸代码键。
+        by_code = {prefix + code: (prefix, fields) for prefix, code, raw in found if (fields := raw.split("~"))}
         # key 用调用方传入的原始 symbol：个股（裸 6 位）与指数（sh000001 等带前缀）
         # 都能命中。旧实现 key 是响应里的裸代码，带前缀查询永远 miss——
         # 表现为"tencent snapshot no rows"假象而非"不支持"，2026-08-31 修复。
         out: dict[str, tuple[str, list[str]]] = {}
         for s in symbols:
             code = to_tencent_symbol(s)
-            bare = code[2:] if code[:2] in ("sh", "sz", "bj") else code
-            if bare in by_code:
-                out[s] = by_code[bare]
+            if code in by_code:
+                out[s] = by_code[code]
         return out
 
     async def get_quotes(self, symbols: list[str]) -> list[Quote]:

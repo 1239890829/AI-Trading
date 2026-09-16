@@ -107,7 +107,12 @@ lsof -ti tcp:3000 -sTCP:LISTEN | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DE
 #   "这次只是改文案所以不用跑" 是最贵的一句话：本轮两次丢失都是靠随后的判据才发现的。
 ```
 
-> **门禁口径**：后端 collect **3339 项（3263 passed / 76 skipped / 0 failed）**、
+> **最新数据源切片（2026-09-17）**：`codex/data-source-routing-audit` 的实测与未合并/未部署状态
+> 以 `docs/handoff.md` §1 / §BUG-018 为准：后端 **3360 collect（3284 passed / 76 skipped / 0 failed，248.83s）**，
+> 前端本地/UTC均 **608 passed / 67文件**；tsc/eslint/pyflakes/构建通过；doc-health **N/O未通过**（原master同样复现）。
+> 耗时前提：8000在跑、起始load 5.36/6.76/7.16。下面是 `9364ef0` 及此前轮次的历史口径，不能混作本切片结果。
+>
+> **历史门禁口径**：后端 collect **3339 项（3263 passed / 76 skipped / 0 failed）**、
 > 前端 **608 项 / 67 文件**、eslint **0 error / 0 warn**
 > （2026-09-16 `RSH-003` **切片 2**（指数平滑原语 + PPO/ADX 实测）轮实测；后端 **240.74s**（收尾复跑 **237.56s**；均在 8000 在跑时）；
 > `tsc` **0** · `pyflakes` **0** · `doc-health` **全部通过**；本地时区与 `TZ=UTC` **均为 608/67**。

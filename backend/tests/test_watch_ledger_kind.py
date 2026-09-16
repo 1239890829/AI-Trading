@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 
 sys.path.insert(0, ".")
 
@@ -42,7 +43,9 @@ def test_classify_kind_rules():
     assert classify_kind({}, "quiet_starting") == ""
 
 
-def test_by_kind_aggregation():
+def test_by_kind_aggregation(monkeypatch):
+    # 固定窗口和样本的相对位置；真实日期跨过五天后不应让分桶测试失效。
+    monkeypatch.setattr("app.picks.watch_ledger.beijing_now", lambda: datetime.fromisoformat("2026-09-12T15:00:00+08:00"))
     _reset()
     sf = get_session_factory()
     today = "2026-09-12"
