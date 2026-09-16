@@ -272,7 +272,9 @@ async def maybe_open(
     save_plan(plan)
     log.info("[仓位引擎] 开模拟仓 %s %s %d 股 @ %s（%s）", symbol, name, qty, filled, cap_note)
 
-    # 通知中心留痕（in-app；飞书矩阵不动——开仓不是 CRITICAL，收盘清算见分晓）
+    # 当日简报 alerts[] 留痕（猎场页「盘中提醒」；飞书矩阵不动——开仓不是 CRITICAL，
+    # 收盘清算见分晓）。⚠️ 不写通知中心：该中心只收 __picks_buy_point__ 买点
+    # （IMP-028；2026-09-16 IMP-034 订正原「通知中心留痕」措辞）。
     try:
         from app.picks.morning_brief import append_alert, brief_for_today
 

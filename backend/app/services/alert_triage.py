@@ -348,7 +348,7 @@ def pending_bubbles(limit: int = 5, session_factory=None) -> list[dict]:
             if ev.triggered_at and ev.triggered_at < cutoff:
                 continue  # 过时效：不弹（历史可查，不打扰）
             if not ev.symbol or ev.symbol == "000000":
-                continue  # 无代码 = 无效个股提醒（方向级事件走通知中心）
+                continue  # 无代码 = 无效个股提醒（方向级事件在盘面页「事件」标签，不进通知中心）
             snap: dict = {}
             if isinstance(ev.snapshot, str):
                 with contextlib.suppress(Exception):

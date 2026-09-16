@@ -101,8 +101,9 @@ class Settings(BaseSettings):
     # 改本配置只影响新建规则与监控判定，不会回写已有 DB 行）。
     sentiment_break_rate_threshold: float = 0.40
 
-    # 站内通知中心（api/routes/notifications.py）：事件评分 ≥ 此阈值才进通知
-    # （"新闻不逐条推送"；评分与时事新闻板块 events ranking 同源复用）。
+    # ⚠️ 已被 `IMP-028`（09-15）收敛为空转配置：通知中心不再有新闻条目，
+    # 该值只是 `/api/notifications` 响应里 `news_min_score` 字段的兼容取值
+    #（端点内无任何过滤消费它；旧客户端读到的仍是此默认值）。保留以免配置报错。
     notifications_news_min_score: float = 60.0
 
     # ---- 盘前简报与盘中跟踪（选股 2.0，批次 B）----

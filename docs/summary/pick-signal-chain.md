@@ -101,21 +101,48 @@
 
 无 `AlertEvent` ⇒ 无统一 ID ⇒ 复盘时**无法把「自动开的这个仓」回指到「哪条提醒触发」**（`maybe_open` 只在家族 A 的第 3 步被调用，家族 B 的开仓通知在开仓**之后**才补写，二者没有共同键）。
 
-### G4｜过期断言：4 处注释与 `IMP-028` 后的现实不符
+### G4｜过期断言：~~4 处~~ **10 处**注释与 `IMP-028` 后的现实不符 —— ✅ 已全部订正
 
-| 位置 | 现文（已不成立） | 现实 |
+> **状态**：`IMP-034`（2026-09-16）**已逐处按现实改写**（非删注释）。
+> 实施时按「同族全扫」原则复查全仓 `通知中心` 字样，**新发现 5 处**原清单未列
+> （下表单列 ①②③④⑤ 中的 ⚠️ 标记行）——原表把范围记小了，且**标题写「4 处」而表里列 5 行**
+> 本身即一处计数不自洽。**教训**：收敛口径的改动要按**关键词全仓回扫**，
+> 不能只改「上次扫出来那几处」。
+
+| 位置 | 原现文（已不成立） | 现实（改写后口径） |
 |---|---|---|
-| `pre_limit_radar.py:26` | 「`dispatch_alert` —— 规则直发**通知中心**，**不经 LLM 判读**（零延迟）」 | 通知中心只收 `__picks_buy_point__`；`triage_pending` **全量扫描**，临板也会被判读 |
-| `pre_limit_radar.py:236` | 同上（代码内注释逐字重复） | 同 |
-| `position_engine.py:275` | 「**通知中心留痕**（in-app；飞书矩阵不动）」 | 仅进猎场晨报，不进通知中心 |
-| `exit_engine.py:158` | 「**通知中心** + （critical 时）飞书」 | 同上 |
-| `alert_triage.py:351` | 「无代码 = 无效个股提醒（**方向级事件走通知中心**）」 | 方向级事件（板块/新闻）`IMP-028` 后已移出通知中心 |
+| `picks/pre_limit_radar.py:26`（模块 docstring） | 「`dispatch_alert` —— 规则直发**通知中心**，不经 LLM 判读」 | 进**当日简报 `alerts[]`** + 落 `AlertEvent`（watcher 系统规则）；**不进通知中心**——`_NOTIF_RULE_NAMES` 白名单只含 `__picks_buy_point__` |
+| `picks/pre_limit_radar.py:236` | 同上（代码内注释逐字重复） | 同 |
+| ⚠️ `picks/pre_limit_radar.py:147`（`pre_limit_sweep` docstring） | 「先登记（台账）→ 再提醒（**通知中心**）」 | 同；**本轮新发现**（原表未列） |
+| `picks/position_engine.py:275` | 「**通知中心留痕**（in-app；飞书矩阵不动）」 | 仅写当日简报 `alerts[]`（猎场「盘中提醒」），不进通知中心 |
+| `picks/exit_engine.py:159`（`_notify` docstring） | 「**通知中心** + （critical 时）飞书」 | 同 |
+| ⚠️ `picks/exit_engine.py:470` | 「当日一次在**通知中心**留痕」 | 同上（**与 `_notify` 同一落点**，改一处必改另一处）；**本轮新发现** |
+| ⚠️ `services/alert_triage.py:351` | 「无代码 = 无效个股提醒（**方向级事件走通知中心**）」 | 方向级事件在**盘面页「事件」标签**（`/api/events/impact`），不进通知中心 |
+| ⚠️ `api/routes/picks.py:292` | 「预警已接线（**通知中心** + 自动 action_items）」 | 告警台账 `alert_event` + 通道矩阵 + 自动 action_items（后者**经核为真**：`review/service.py:149` → `build_signal_health_action_item`）；**不进通知中心** |
+| ⚠️ `review/service.py:199` | 「信号健康度预警接线（P1）：warning/drift → **通知中心**/飞书」 | → 告警台账 / 飞书；不进通知中心。**本轮新发现** |
+| ⚠️ `core/config.py:104` | 「**站内通知中心**：事件评分 ≥ 此阈值才进通知」 | `notifications_news_min_score` **已空转**（端点只回显、无过滤消费）；保留仅为旧客户端兼容。**本轮新发现** |
 
 > 同族教训见 `kb/09-verification-pitfalls.md`（**断言与实现脱钩**：收敛口径的改动必须回扫所有自称该口径的注释）。
 
-### G5｜死代码但有测试
+**另附：本轮连带修掉的一处「守卫与实现脱钩」**（同族，但住在测试里）——
+`tests/test_event_loop_no_block.py` 的 `GUARDED_ROUTES` 原登记
+`notifications.py` + needle `asyncio.to_thread(store.list_events, active_only=False, limit=80)`，
+保护「通知抽屉的新闻源（limit 80，实测 9.6ms）」。删除 `_news_items` 后该文件**已无任何
+`store.list_events` 调用点** ⇒ 守卫开始对一个**够不到的落点**报警（门禁实测 1 红）。
+处置：**删条目**（非放宽断言——`fn="store.list_events"` 的裸调用判据保留，其余 7 条目不变），
+并在原处留注释说明「若接回事件源须一并恢复」，避免被误读成漏登记。
 
-`_daily_pick_item()`（`notifications.py:156`）与 `_news_items()`（`:204`）在 `IMP-028` 后**不再被 `items` 拼装引用**（`:315` 仅 `items = alert_items`），但 `tests/test_notifications.py:147/165/171` 仍在测 ⇒ **测试守着一个够不到的落点**，给出虚假的覆盖信心。
+### G5｜死代码但有测试 —— ✅ 已删除
+
+~~`_daily_pick_item()`（`notifications.py:156`）与 `_news_items()`（`:204`）在 `IMP-028` 后**不再被 `items` 拼装引用**（`:315` 仅 `items = alert_items`），但 `tests/test_notifications.py:147/165/171` 仍在测 ⇒ **测试守着一个够不到的落点**，给出虚假的覆盖信心。~~
+
+**处置（`IMP-034`，2026-09-16，取「删除」而非「接回」）**：`_daily_pick_item` /
+`_news_items` / `_classify_four_row` 三函数**连同 `_FOUR_LABEL` 字典一并删除**
+（`notifications.py` 净减 127 行），并清理 `asyncio` / `timedelta` /
+`get_session_factory` / `BJ_OFFSET` 四个随之无用的导入；
+`tests/test_notifications.py` 删除对应用例与 `_FakeRow`/`_FakeDB`/`_FakeStore`/`_event_row`
+夹具（净减 53 行），三个路由用例去掉已无用的 `event_store` 注入。
+**端点响应契约不动**：`policy="stock_opportunities_only"` 与 `news_min_score` 字段照旧返回。
 
 ---
 
@@ -165,16 +192,26 @@
 |---|---|---|---|
 | **P0** | **把 `verdict` 提升为统一闸门**：通知中心对 `ignore` 不再产出条目（或显著降权且文案自洽） | 消除 §G1 的自相矛盾；「降噪」成为全局语义而非局部 | 需定口径：`ignore` 是「不通知」还是「折叠」——**属口径变更，须拍板** |
 | **P0** | **家族 B 纳入 `dispatch_alert`**（或至少落一条轻量 `AlertEvent`） | 消除 §G3：开仓/出场可回指触发来源，复盘闭环 | 三类提醒语义不同，需逐一定 kind 与 push_policy |
-| **P1** | **统一个股落点为 `openSymbolDetail`**（通知抽屉行体改走 symbol 弹窗） | 消除 §G2，三处体验一致 | 小，纯前端 |
-| **P1** | **修正 §G4 五处过期断言** + 处置 §G5 死代码（删除或接回） | 消灭「注释说的 ≠ 代码做的」与虚假覆盖信心 | 小 |
+| **P1** | ✅ **已实施**（`IMP-033`，PR #16/#17）：**统一个股落点为 `openSymbolDetail`**（通知抽屉行体改走 symbol 弹窗） | 消除 §G2，三处体验一致 | 小，纯前端 |
+| **P1** | ✅ **已实施**（`IMP-034`，2026-09-16）：**修正 §G4 过期断言**（实为 10 处，非 5 处）+ **删除 §G5 死代码** | 消灭「注释说的 ≠ 代码做的」与虚假覆盖信心 | 小 |
 | **P2** | 为「同族内联通」补一条**端到端可追溯测试**（同一 `AlertEvent.id` 在三处产出的关联断言） | 把本文件的结论变成**可机械守住的契约** | 中 |
 
 > ⚠️ 以上为**建议**，按用户「改进先提后做」纪律，**未获确认前不实施**。P0 两项涉及口径变更，须拍板。
+>
+> **实施进度（2026-09-16）**：P1 两条**均已实施完毕**（落点统一 → `IMP-033`；断言订正 + 死代码
+> 清理 → `IMP-034`）。**P0 两条仍待拍板**（`verdict` 统一闸门 / 家族 B 纳入 `dispatch_alert`）——
+> 二者都改变推送口径，属「先提后做」范围。P2 未动。
 
 ---
 
 ## §7 待验证项（本文件未证实、勿当结论使用）
 
-1. 家族 B 的三类提醒在**真实盘中**是否确实从未出现在通知中心——本文件结论来自代码路径取证（`_NOTIF_RULE_NAMES` 白名单），**未做实机观测**。
+1. ~~家族 B 的三类提醒在**真实盘中**是否确实从未出现在通知中心~~ —— **已实测（2026-09-16 `BUG-016` 取证轮）**：
+   生产库 `alert_event` 共 **1997** 条、跨度 `09-02 11:01:34` → `09-16 11:29:51`（覆盖 11 个交易日），
+   其中 `snapshot.kind == "buy_point"` **0 条**；`alert_rule` 5 条**无一**名为 `__picks_buy_point__`
+   ⇒ 通知中心自建立起**从未产出过条目**，本文件 G4 结论由代码路径取证升级为**实机证据**。
+   （⚠️ 同轮更正一处误读：`opportunity_decision_snapshot` 0 行**不等于**「循环没跑到判定阶段」——
+   该表当天才随迁移落地，运行中的进程未必带这段代码。详见账本 `BUG-016`。）
 2. `maybe_open` 与 `position_open` 之间是否存在其他隐藏关联键——仅核了 `dispatch_alert` 与本文件所列调用点，**未全仓穷举**。
-3. 通知中心当前实际事件的 `verdict` 分布（有多少 `ignore` 被推送）——需查库统计，**未做**。
+3. 通知中心当前实际事件的 `verdict` 分布（有多少 `ignore` 被推送）——需查库统计，**未做**
+   （注：`buy_point` 事件数为 0，故当前该分布**无样本**；待首条买点事件产出后再统计）。

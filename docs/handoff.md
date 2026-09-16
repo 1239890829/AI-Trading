@@ -31,20 +31,30 @@
 
 ## 1 现场（每条任务收尾时更新）
 
-- **分支**：`codex/notif-empty-rootcause`（自 `origin/master` 创建；本轮交付 `BUG-016` 诊断轮）。
+- **分支**：`codex/notif-empty-rootcause`（自 `origin/master` 创建；已交付 `BUG-016` 诊断轮 + `IMP-034` 清理轮）。
   上一轮分支 `codex/notification-row-symbol-detail` 已随 PR #17 合并并**删除**（本地与远程均已清）。
 - **基线**：`origin/master` = `b3f4164`（PR #17 合并提交，2026-09-16 12:00）。
-- **服务**：后端 8000（uvicorn，单实例；**绝不用 `--reload`**，原因见 `AGENTS.md` §6.1）、前端 3000。
-- **门禁基线（本次收尾实测，接手时可直接对照）**：后端 **collect 3247（3171 passed / 76 skipped / 0 failed）**、
+- **服务**：后端 8000（单实例；**绝不用 `--reload`**，原因见 `AGENTS.md` §6.1）、前端 3000。
+- **门禁基线（本次收尾实测，接手时可直接对照）**：后端 **collect 3245（3169 passed / 76 skipped / 0 failed）**、
   前端 **603 项 / 67 文件 · 602 passed / 1 failed**、`eslint` **0/0**、`doc-health` **全部通过**。
-  ⚠️ **那 1 failed 是 `BUG-010`（D 档观察项），不是回归**：用例 =
+  ⚠️ **较上值 3247/3171 的 Δ = −2 collect = −2 passed / ±0 skipped**，**已机械归因**（非回归）：
+  `−1` = 删 `test_notifications.py::test_daily_pick_item_ts_is_real_generation_time`（连同被删的死代码），
+  `−1` = `test_event_loop_no_block.py` 的 `GUARDED_ROUTES` 少一条参数化项（其保护的调用点已随死代码消失）。
+  **非业务层模块数未变** ⇒ `skipped(76) − 2 = 74` 与上轮逐字相同（[[KB-ENG-97]]：跳过数不变 = 无覆盖丢失）。
+  详见 `§IMP-034`。
+  ⚠️ **前端那 1 failed 是 `BUG-010`（D 档观察项），不是回归**：用例 =
   `components/agent/markdown-view.test.tsx::docs/ 下全部 md 均可渲染完成`（固定 5s 墙钟）。
-  本轮**归因（对照跑，非推理）**：单独跑该文件 **10 passed / 2170ms**（docs 渲染用例 **1897ms**），
+  上轮**归因（对照跑，非推理）**：单独跑该文件 **10 passed / 2170ms**（docs 渲染用例 **1897ms**），
   失败只出现在**全量并发**时；宿主实测 **load 39.16 / 8 核**。按原判**不改判据、不放宽阈值**
   （详细归因史见 `BUG-010` 行与 `AGENTS.md` 门禁段）。
   ⚠️ **两道全量不要并发跑**：并发会因 CPU 竞争让上述用例超时假红——**它的红不代表代码回归**。
-  前端较上轮 598/66 的 **+5 / +1** 即本轮新增的提醒落点用例文件；
-  **本地时区与 `TZ=UTC` 逐字一致（603/67）** ⇒ 本轮用例**不含时区敏感断言**。
+  前端 603/67 为上轮实测值；`IMP-034` 轮 `apps/web/` **零改动**（`git status --short` 核对）⇒ **沿用未复跑**。
+  **本地时区与 `TZ=UTC` 逐字一致（603/67）** ⇒ 上轮用例**不含时区敏感断言**。
+- **⚠️ 两个「门禁输入面 ≠ 代码面」的实例（`IMP-034` 轮新增，务必记住）**：
+  ① **文档改动会让后端 job 变红**——后端有一类守卫**以 `docs/` 为输入**（`test_doc_*` /
+  `test_cmd_guidance_guard` / `test_doc_status_truthfulness`）⇒ **「本轮没改后端代码」不构成「不用跑后端门禁」**；
+  ② 反向：`docs/` 里写**未跟踪文件名**会让 **CI docs job** 红而**本地恒绿**（[[KB-ENG-95]]）。
+  ⇒ **收尾一律跑全量后端 + 干净检出复验**，不要按改动面裁剪。（[[KB-ENG-102]]）
 - **⚠️ 诊断轮特有的口径提醒（`BUG-016` 轮新增）**：`data/ashare.db` 里的学习类表
   （`opportunity_decision_snapshot` / `opportunity_outcome_label`）**今日才由 `RSH-026` 迁移建立**
   （PR #13 于 **09:58** 合并、PR #14 于 **10:20** 合并）⇒ **不能用「表为空」反推「循环没跑」**：
@@ -63,6 +73,7 @@
 
 | 任务 ID | 状态 | 日期 | 一句话 |
 |---|---|---|---|
+| `IMP-034` | ✅ 闭环 | 2026-09-16 | 提醒链路过期断言**实为 10 处**（非登记的 5 处），逐处按现实改写；`notifications` 三个死函数连同其用例删除 |
 | `BUG-016` | 🟡 已取证 · 待拍板 | 2026-09-16 | 通知中心空是**设计口径 + 候选档位 0/51 命中**叠加；根因链已量化，**修法（是否下调档位门）待拍板** |
 | `IMP-033` | ✅ 闭环 | 2026-09-16 | 通知抽屉行体改为**开该股详情**（与悬浮球 / 猎场同落点），判读全文改由新增「判读」入口保全 |
 | `IMP-031` | ✅ 闭环 | 2026-09-16 | AI 判读气泡点开**就地打开该股详情弹窗**（不再跳告警页）；同轮梳理出提醒链路断点清单 |
@@ -70,6 +81,39 @@
 | `GOV-014` | ✅ 闭环 | 2026-09-16 | 建立交接明细层与双向索引守卫；注入自证抓出并修掉守卫的两处判据盲区，流程已固化为技能 |
 | `RSH-026` | 🟡 部分闭环 | 2026-09-16 | 个股机会学习闭环第一批已交付，并完成独立验收轮（抓出并修掉 1 处 schema 分叉） |
 | `BUG-014` | ✅ 闭环 | 2026-09-16 | 两处迁移把表建到默认库 ⇒ 全新库缺 5 张表；已改 `op.get_bind()` 并加两条守卫 |
+
+## IMP-034 提醒链路过期断言与死代码清理（闭环）
+- **账本**：`docs/retro-and-gaps.md` §6.0 `IMP-034` ｜ **日期**：2026-09-16 ｜ **状态**：✅ 闭环
+- **缺口与验收标准**：`IMP-028` 把通知中心收敛为「只推个股买点」后，**留下两类残留**：
+  ① 全仓仍有多处注释自称「通知中心」/「不经 LLM 判读」——**断言与实现脱钩**；
+  ② `notifications._daily_pick_item` / `_news_items` 已被端点弃用却仍有测试在测——**测试守着一个够不到的落点**。
+  验收标准：断言**逐处按现实改写**（非删注释）；死代码**删除须连同其测试**，不留虚假覆盖信心。
+- **改动**：
+  - `backend/app/picks/pre_limit_radar.py`（2 处：模块 docstring 落点段 + `:236` 行内注释；另 `:147` `pre_limit_sweep` docstring）
+  - `backend/app/picks/position_engine.py:275`（开仓留痕落点）
+  - `backend/app/picks/exit_engine.py`（2 处：`_notify` docstring + `:470` 降级留痕）
+  - `backend/app/services/alert_triage.py:351`（方向级事件去向）
+  - `backend/app/api/routes/picks.py:292`（信号健康预警接线）
+  - `backend/app/review/service.py:199`（同上）
+  - `backend/app/core/config.py:104`（`notifications_news_min_score` 已空转）
+  - `backend/app/api/routes/notifications.py`（**净删 127 行**死代码 + 4 个失效导入；docstring 补清理说明）
+  - `backend/tests/test_notifications.py`（**净删 53 行**：1 用例 + 4 夹具）
+  - `backend/tests/test_event_loop_no_block.py`（删 `GUARDED_ROUTES` 中已无对应代码的 1 条目 + 3 处注释同步）
+  - `docs/summary/pick-signal-chain.md`（§G4 5→10 处并标已处理 · §G5 标已删除 · §6 两条 P1 标已实施 · §7.1 升级为实机证据）
+  - **刻意没动**：`morning_brief._daily_plan` 的两处失效导入（属 `BUG-009`，**另属一项**）；`notifications` 端点响应体（`policy` / `news_min_score` 字段保留，旧客户端兼容）；`signal_health.py:217`（经核**仍成立**，不误删）；`_NOTIF_RULE_NAMES` 白名单（口径属 `IMP-028`，不在本项范围）。
+- **机械证据**：
+  - **断言侧实为 10 处，非登记的 5 处**。三类去向经代码取证钉死：`notifications.py:56/88/91/124`（只收 `__picks_buy_point__` + `kind=="buy_point"` + 有效 symbol/name）；`watcher.py:942`（`append_alert(target, …)`，target 来自 `brief_for_today()` ⇒ **当日简报 `alerts[]`**）+ `watcher.py:1005` 起 `repo.record_trigger(rule.id, …)`（watcher 系统规则，规则名**不在**白名单）；前端 `app/hunting/page.tsx:238/611`（「盘中提醒」）+ `lib/api/alerts.ts:91`（`/api/alerts/events` ⇒ 控制台「提醒与告警」）；方向级 → `components/market/events-tab.tsx:110` ← `/api/events/impact`。
+  - **两处「疑似失效」经核为真、刻意保留**：`picks.py:292` 的「自动 action_items」确实接线（`review/service.py:149-151` → `review/strategy_health.py:168 build_signal_health_action_item`，`priority="P0" if drift else "P1"`；`review/synthesis.py` 内**无** `health` 引用 ⇒ 该链路**只能**来自这里，判据唯一）；`signal_health.py:217`「通知中心按规则名分流」机制未变。
+  - **死代码可删性判据**：`notifications.py` 端点 `:184` 仅 `items = alert_items` ⇒ 三函数**无任何调用点**；`pyflakes app tests scripts` = **0**（删前删后均为 0，故不能只靠 pyflakes 判定 —— 它是**模块级**的，认不到「函数存在但无人调用」）。
+  - **`notifications_news_min_score` 全仓只有 2 处引用**（`config.py:106` 定义 + `notifications.py:161` 回显）⇒ 确认**无过滤消费**。
+- **注入自证**：无新增守卫（本轮为**订正 + 清理**轮）。**但门禁提供了两处真实阳性注入的等价物**（**先真红、后修**，非先绿后补断言）：
+  - ① `test_event_loop_no_block.py::test_route_sync_io_calls_are_offloaded[notifications::store.list_events#5]` **真红**：报 `app/api/routes/notifications.py 找不到 asyncio.to_thread(store.list_events, active_only=False, limit=80) ⇒ 该调用点未走 to_thread` —— 即**守卫在替一个已删代码报警**。修法 = 删条目（7 条其余登记项与裸调用判据**未动**）。
+  - ② `test_cmd_guidance_guard.py::test_repo_has_no_reload_guidance` **真红**：命中 `retro-and-gaps.md:163` 与本文件 `:99` 的「起栈未加 `--reload`」措辞（判据 = 同一行**同时**出现「起服务命令锚点」与 `--reload` 且无禁用标记）。这是 **`BUG-016` 轮遗留**（该轮只跑 7 个 `test_doc_*`、**未跑全量** ⇒ 文案红漏检）。修法 = **改文案**（本意在「未热重载」，命令锚点非必要信息），**不加豁免标记**（守卫 docstring 明写「把标记塞进豁免 = 判据失效」）。
+- **门禁（实测回填，勿凭记忆）**：
+  - 后端 `pytest --basetemp=/tmp/… --junitxml=…` ⇒ **collect 3245 / 3169 passed / 76 skipped / 0 failed**（8000 在跑；`pyproject.toml` addopts 已含 `-q`，**不可再叠 `-q`**，取数走 junitxml）。
+  - **Δ 归因自洽**：较上值 `3247 / 3171` ⇒ **Δ = −2 collect = −2 passed / ±0 skipped**，两项各 −1：删 `test_daily_pick_item_ts_is_real_generation_time`、`GUARDED_ROUTES` 少一条参数化项。**非业务层模块数未变** ⇒ `skipped(76) − 2 = 74` 与上轮**逐字相同**（`[[KB-ENG-97]]`：跳过数不变即无覆盖率丢失）。
+  - `pyflakes app tests scripts` **0** · `doc-health` **全部通过** · 前端 `apps/web/` **零改动**（`git status --short` 核对）⇒ 沿用上轮 **603 项 / 67 文件**，未复跑。
+- **遗留与下一步**：无新增遗留。本项的**同族未清项**（登记范围外、本轮未动，**属不同授权面**）：`summary/pick-signal-chain.md` §6 的两条 **P0 建议**（`verdict` 提升为通知中心统一闸门 / 家族 B 纳入 `dispatch_alert`）——二者**均改变推送口径**，按「改进先提后做」**待拍板**。另 `BUG-016` 的可做子项（空态暴露候选数/最高档/否决原因）亦待拍板，见 `§BUG-016`。
 
 ## BUG-016 通知中心「三跳全空」根因链（已取证，修法待拍板）
 - **账本**：`docs/retro-and-gaps.md` §6.0 `BUG-016` ｜ **日期**：2026-09-16 ｜ **状态**：🟡 已取证 · 待拍板
@@ -95,7 +139,7 @@
   · 归档路径可用性：对**生产库副本**（`/tmp`）调用 `archive_notification_pipeline` ⇒ `inserted=1`，`evidence.gate_reason="快照无现价（不臆造）"`，`data_state=unknown`
 - **⚠️ 本轮自我更正（必须保留）**：曾把 `opportunity_decision_snapshot` **0 行**读作「买点循环未跑到判定阶段」。
   **该推断不成立**：该表由 `RSH-026` 首批迁移 `7d4e2c9a6b1f` 建立，而其 PR #13 于**今日 09:58** 才合并、
-  批次二迁移 `b4f1a7c2e9d3` 于 **10:20** 合并；uvicorn **无 `--reload`** ⇒ 晨盘时段运行中的后端
+  批次二迁移 `b4f1a7c2e9d3` 于 **10:20** 合并；后端进程起栈时**未加 `--reload`** ⇒ 晨盘时段运行中的后端
   **未必带这段代码** ⇒ **0 行不能证明循环没跑**。同族教训：**把「无证据」读成「证据表明没有」**。
 - **注入自证**：无（本轮为诊断轮，未新增守卫；可做部分的守卫待实施时补）。
 - **门禁**：纯文档改动 ⇒ 见本轮 §1 现场的门禁基线与 `doc-health` 实测（P/H/O/Q 项全过）。

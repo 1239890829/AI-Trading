@@ -334,6 +334,10 @@ def test_sync_io_calls_are_offloaded(rel: str, needle: str, fn: str, why: str) -
 # ⚠️ **第二层（async 端点 → 同步 helper）也扫过**：`notifications._alert_items` /
 # `_daily_pick_item`、`events._theme_names`（内含 `get_catalog`）、`market` 的情绪历史
 # 系列 —— 逐项实测**全部 <5ms**，按上表同一条线判定不搬。故本层只登记 `EventStore.list_events`。
+#
+# 📌 `_daily_pick_item` / `_news_items` 已于 `IMP-034`（2026-09-16）**连同其用例删除**
+#（`IMP-028` 收敛后它们不再被 `items` 拼装引用）。上段是**当轮实测记录**，保留原貌以便
+# 复核当时判定；勿据此以为这两个函数还在。**下一次复用本表时请只按现存对象复测**。
 
 # ⚠️ **反向断言的接收者必须限定为 `store.list_events`（不能只写 `list_events`）**：
 # 仓内另有 `AlertRepository.list_events`（实测 0.36ms，判定不搬）与
@@ -376,12 +380,13 @@ GUARDED_ROUTES: list[tuple[str, str, str, str]] = [
         "题材焦点聚合（limit 2000）——实测 85ms",
     ),
     (
-        "app/api/routes/notifications.py",
-        "asyncio.to_thread(store.list_events, active_only=False, limit=80)",
-        "store.list_events",
-        "通知抽屉的新闻源（limit 80）——实测 9.6ms，前端按轮询取数",
-    ),
-    (
+        # ⚠️ 此处原有 `notifications.py` 一项，needle =
+        # `asyncio.to_thread(store.list_events, active_only=False, limit=80)`，
+        # 保护的是「通知抽屉的新闻源（limit 80，实测 9.6ms）」。
+        # `IMP-034`（2026-09-16）删除 `_news_items` 死代码后，该文件**已不存在任何
+        # `store.list_events` 调用点**（`_alert_items` 里是 `repo.list_events`，不匹配
+        # `store.list_events(`）⇒ 条目所保护的落点消失，**故删条目而非放宽断言**。
+        # 若将来给该文件接回事件源，请连同 needle 与反向断言一起恢复。
         "app/events/verify.py",
         "asyncio.to_thread(store.list_events, active_only=True, limit=limit)",
         "store.list_events",
@@ -415,8 +420,9 @@ def test_route_sync_io_calls_are_offloaded(rel: str, needle: str, fn: str, why: 
     ⚠️ **注入验证时的预期形状**：反向断言按**文件**判，所以 `events.py` 的 5 条登记项
     共用同一份反向检查 —— 在该文件里注入一处裸调用会**同时红 5 条**，这不是守卫失灵，
     而是"5 条登记项描述的是同一个文件"的必然结果。判读时看**报出的行**而不是条目数：
-    2026-09-12 实测：注入 `events.py` 一处 ⇒ 5 红（4 条走反向、1 条走正向）；
-    注入 `notifications.py` 一处 ⇒ **精确 1 红**（走正向 needle）。
+    2026-09-12 实测：注入 `events.py` 一处 ⇒ 5 红（4 条走反向、1 条走正向）。
+    （原记「注入 `notifications.py` 一处 ⇒ 精确 1 红」已随 `IMP-034` 删该条目失效——
+    该文件当前无 `store.list_events` 调用点可注入，见上方清单内注释。）
     """
     path = BACKEND / rel
     assert path.exists(), f"{rel} 不存在（改路径了？同步更新本清单）"
