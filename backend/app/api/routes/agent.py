@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.api.deps import require_write_token
@@ -215,9 +215,9 @@ async def list_agendas(limit: int = Query(14, ge=1, le=60)):
 
 
 @router.post("/agent/agenda/run", dependencies=[Depends(require_write_token)])
-async def run_agenda():
+async def run_agenda(request: Request):
     """手动触发一轮进化（正常由 15:45 scheduler 自动跑；此处为降级兜底）。"""
-    return {"data": await evo.run_evolution_now()}
+    return {"data": await evo.run_evolution_now(app=request.app)}
 
 
 @router.get("/agent/experiments")

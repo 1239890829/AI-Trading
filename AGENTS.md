@@ -90,8 +90,12 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 collect **3207 项（3132 passed / 75 skipped / 0 failed）**、
+> **门禁口径**：后端 collect **3213 项（3138 passed / 75 skipped / 0 failed）**、
 > 前端 **593 项 / 65 文件**、eslint **0 error / 0 warn**
+> （2026-09-16 `IMP-030` 主动漏洞发现探针轮实测；较上一值「后端 3207 / 前端 593·65」增量
+> **后端 collect +6 = passed +6 / skipped ±0**：5 条新行为测试来自
+> `tests/test_evolution_probes.py`，另 +1 是新增业务模块 `services/evolution_probes.py` 自动进入
+> `test_import_lint.py` 分层参数化；前端 **±0**，本地时区与 `TZ=UTC` 均为 593/65。）
 > （2026-09-16 最终技术方案与装配重构集成轮实测；较装配重构基线 **后端 collect +2 = passed +2 / skipped ±0**：
 > 新增猎场同键并发单航班守卫 1 项 + 通知个股机会策略净增 1 项；前端 **±0**，本地时区与
 > `TZ=UTC` 均为 593/65。全量首两轮在 `test_events_api_lifecycle` 稳定复现 `BUG-012` 同族的
