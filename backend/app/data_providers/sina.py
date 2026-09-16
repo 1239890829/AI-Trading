@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 import httpx
 
 from app.data_providers.eastmoney import ProviderError
-from app.data_providers.tencent import to_tencent_symbol  # 同一 sh/sz 前缀规则
+from app.data_providers.tencent import INDEX_SECIDS, to_tencent_symbol  # 同一市场前缀规则
 from app.schemas.market import OrderBook, OrderBookLevel, Quote
 
 SOURCE = "sina"
@@ -65,7 +65,7 @@ class SinaProvider:
             body = line.split('="', 1)[1].rsplit('"', 1)[0]
             fields = body.split(",")
             if len(fields) >= 32:
-                out[key.removeprefix("sh").removeprefix("sz").removeprefix("bj")] = fields
+                out[key] = fields
         if not out:
             raise ProviderError("sina empty reply")
         return out
@@ -76,20 +76,26 @@ class SinaProvider:
         rows = await self._fetch(symbols)
         quotes = []
         for s in symbols:
-            f = rows.get(s)
+            code = to_tencent_symbol(s)
+            f = rows.get(code)
             if not f:
                 continue
+            volume = _num(f[8])
+            # 沪市指数该字段为手，深市指数/个股为股；不能沿用个股的量纲。
+            # 2026-09-16 四个沪市指数与腾讯/THS 同日交叉核验恰为 100 倍。
+            if code.startswith("sh000") and volume is not None:
+                volume *= 100
             quotes.append(
                 Quote(
                     symbol=s,
                     name=f[0] or None,
-                    market="SH" if to_tencent_symbol(s).startswith("sh") else "SZ",
+                    market=code[:2].upper(),
                     price=_num(f[3]),
                     open=_num(f[1]),
                     high=_num(f[4]),
                     low=_num(f[5]),
                     prev_close=_num(f[2]),
-                    volume=_num(f[8]),  # 新浪已是股
+                    volume=volume,
                     amount=_num(f[9]),
                     change=(_num(f[3]) - _num(f[2])) if _num(f[3]) is not None and _num(f[2]) else None,
                     change_pct=(
@@ -110,11 +116,13 @@ class SinaProvider:
         return quotes[0] if quotes else None
 
     async def get_indices(self) -> list[Quote]:
-        return await self.get_quotes(["000001", "399001", "399006", "000688", "000300", "000852"])
+        quotes = await self.get_quotes([code.removeprefix("s_") for code in INDEX_SECIDS])
+        # 上游查询显式指定市场；对外仍遵守 get_indices 的裸代码契约。
+        return [quote.model_copy(update={"symbol": quote.symbol[2:]}) for quote in quotes]
 
     async def get_order_book(self, symbol: str) -> OrderBook | None:
         rows = await self._fetch([symbol])
-        f = rows.get(symbol)
+        f = rows.get(to_tencent_symbol(symbol))
         if not f:
             return None
 

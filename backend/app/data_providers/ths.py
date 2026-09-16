@@ -176,7 +176,9 @@ class ThsFuyaoProvider:
         return Quote(
             symbol=code,
             name=it.get("name"),
-            market="SH" if it.get("thscode", "").endswith(".SH") else "SZ",
+            market="BJ" if it.get("thscode", "").endswith(".BJ") else (
+                "SH" if it.get("thscode", "").endswith(".SH") else "SZ"
+            ),
             price=num(it.get("last_price")),
             open=num(it.get("open_price")),
             high=num(it.get("high_price")),
@@ -197,7 +199,7 @@ class ThsFuyaoProvider:
 
     async def get_indices(self) -> list[Quote]:
         data = await self._get(
-            "/api/a-share/prices/snapshot",
+            "/api/a-share-index/prices/snapshot",
             {"thscodes": ",".join(self.INDEX_NAMES)},
         )
         quotes = []
