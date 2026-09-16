@@ -31,30 +31,40 @@
 
 ## 1 现场（每条任务收尾时更新）
 
-- **分支**：`codex/notif-empty-rootcause`（自 `origin/master` 创建；已交付 `BUG-016` 诊断轮 + `IMP-034` 清理轮）。
+- **分支**：`codex/notif-empty-rootcause`（自 `origin/master` 创建；已交付 `BUG-016` 诊断轮 + `IMP-034` 清理轮
+  + `RSH-027` 切片 1 轮）。
   上一轮分支 `codex/notification-row-symbol-detail` 已随 PR #17 合并并**删除**（本地与远程均已清）。
 - **基线**：`origin/master` = `b3f4164`（PR #17 合并提交，2026-09-16 12:00）。
 - **服务**：后端 8000（单实例；**绝不用 `--reload`**，原因见 `AGENTS.md` §6.1）、前端 3000。
-- **门禁基线（本次收尾实测，接手时可直接对照）**：后端 **collect 3245（3169 passed / 76 skipped / 0 failed）**、
-  前端 **603 项 / 67 文件 · 602 passed / 1 failed**、`eslint` **0/0**、`doc-health` **全部通过**。
-  ⚠️ **较上值 3247/3171 的 Δ = −2 collect = −2 passed / ±0 skipped**，**已机械归因**（非回归）：
-  `−1` = 删 `test_notifications.py::test_daily_pick_item_ts_is_real_generation_time`（连同被删的死代码），
-  `−1` = `test_event_loop_no_block.py` 的 `GUARDED_ROUTES` 少一条参数化项（其保护的调用点已随死代码消失）。
-  **非业务层模块数未变** ⇒ `skipped(76) − 2 = 74` 与上轮逐字相同（[[KB-ENG-97]]：跳过数不变 = 无覆盖丢失）。
-  详见 `§IMP-034`。
+- **门禁基线（`RSH-027` 切片 1 收尾实测，接手时可直接对照）**：后端 **collect 3265
+  （3189 passed / 76 skipped / 0 failed）**、`pyflakes` **0**、`doc-health` **全部通过**、
+  前端 **603 项 / 67 文件**（`apps/web/` **零改动**，`git diff HEAD -- apps/web` 为空 ⇒ 沿用未复跑）。
+  ⚠️ **较上值 3245/3169 的 Δ = +20 collect = +20 passed / ±0 skipped**，**已机械归因**（非覆盖率虚增）：
+  `+18` = 新文件 `tests/test_kb_routing.py`；`+1` = 新 GET 端点 `/api/picks/kb-routing` 自动进入
+  全量冒烟参数化（实测 `test_get_endpoint_never_returns_500[/api/picks/kb-routing-get-params91]`）；
+  `+1` = `test_import_lint.py` 的分层参数化新增一个**业务层**模块 `app/picks/kb_routing.py`
+  —— **在 HEAD 干净检出实测该文件为 190/74，本轮为 191/74**，逐字对上。
+  **非业务层模块数未变**（`models/opportunity_learning.py` 是**既有文件改动**、非新增文件）
+  ⇒ `skipped(76) − 2 = 74` 与上轮**逐字相同**（[[KB-ENG-97]]：跳过数不变 = 无覆盖丢失）。
+  详见 `§RSH-027`。
   ⚠️ **前端那 1 failed 是 `BUG-010`（D 档观察项），不是回归**：用例 =
   `components/agent/markdown-view.test.tsx::docs/ 下全部 md 均可渲染完成`（固定 5s 墙钟）。
   上轮**归因（对照跑，非推理）**：单独跑该文件 **10 passed / 2170ms**（docs 渲染用例 **1897ms**），
   失败只出现在**全量并发**时；宿主实测 **load 39.16 / 8 核**。按原判**不改判据、不放宽阈值**
   （详细归因史见 `BUG-010` 行与 `AGENTS.md` 门禁段）。
   ⚠️ **两道全量不要并发跑**：并发会因 CPU 竞争让上述用例超时假红——**它的红不代表代码回归**。
-  前端 603/67 为上轮实测值；`IMP-034` 轮 `apps/web/` **零改动**（`git status --short` 核对）⇒ **沿用未复跑**。
   **本地时区与 `TZ=UTC` 逐字一致（603/67）** ⇒ 上轮用例**不含时区敏感断言**。
+  ⚠️ **后端全量耗时强依赖「8000 是否在跑」**：本轮 8000 在跑，实测 **213.74s**（3m33s）。
 - **⚠️ 两个「门禁输入面 ≠ 代码面」的实例（`IMP-034` 轮新增，务必记住）**：
   ① **文档改动会让后端 job 变红**——后端有一类守卫**以 `docs/` 为输入**（`test_doc_*` /
   `test_cmd_guidance_guard` / `test_doc_status_truthfulness`）⇒ **「本轮没改后端代码」不构成「不用跑后端门禁」**；
   ② 反向：`docs/` 里写**未跟踪文件名**会让 **CI docs job** 红而**本地恒绿**（[[KB-ENG-95]]）。
   ⇒ **收尾一律跑全量后端 + 干净检出复验**，不要按改动面裁剪。（[[KB-ENG-102]]）
+- **⚠️ 第三个实例（`RSH-027` 轮实测，「先 `git add` 再跑门禁」再次应验）**：本轮把新文件
+  （`picks/kb_routing.py` / `tests/test_kb_routing.py` / 迁移）写进 `docs/handoff.md` 后跑体检
+  ⇒ **`doc-health` J 文档代码锚点判红 4 处**（`kb_routing.py（全仓不存在）` 等），真因 = **文件尚是 `??` 未跟踪**，
+  而 J 的判定面取自 **`git ls-files`**。**修法 = `git add`**（不是改文案、不是登记豁免）；
+  入库后 J 转绿。⚠️ 与 [[KB-ENG-95]] 方向相反、根因相同。
 - **⚠️ 诊断轮特有的口径提醒（`BUG-016` 轮新增）**：`data/ashare.db` 里的学习类表
   （`opportunity_decision_snapshot` / `opportunity_outcome_label`）**今日才由 `RSH-026` 迁移建立**
   （PR #13 于 **09:58** 合并、PR #14 于 **10:20** 合并）⇒ **不能用「表为空」反推「循环没跑」**：
@@ -124,13 +134,21 @@
     （册级行会被前缀判据静默排除，连"未解析"都不进）。
   - **端点实证**（后端 8000 在跑，`curl --noproxy '*'`）：`GET /api/picks/kb-routing` ⇒
     `index.coverage_identity_holds: true`、`unparsed_rows: []`、`unknown_books: []`、
-    `book_level_rows: ["KB-REPO"]`、`by_status: {✅:163, 🔶:5, ⏳:4, ❌:2, 📎:4}`、
-    `registered_books` 5 册、`scoring_books: [KB-STOCK, KB-TRADE]` + 四场景路由表。
-    ⚠️ `total` 随**本条 `KB-ENG-104` 自身入库**由 **178 → 179**（恒等式不变）——
-    报数字须说明取数时刻，否则会被当成回归。
+    `book_level_rows: ["KB-REPO"]`、`registered_books` **5 册**、`scoring_books: [KB-STOCK, KB-TRADE]`、
+    `known_statuses` **5 档** + 四场景路由表（`pre_open_event` / `intraday_pick` /
+    `post_close_review` / `system_evolution`，`enters_scoring` **全 `false`**）。
+    ⚠️ **报数字必须带取数时刻**：本条 `KB-ENG-104` **自身入库**使
+    `total` **178 → 179**、`candidate_rows` **179 → 180**、`by_status.✅` **163 → 164**
+    （其余档位不变：`🔶:5 / ⏳:4 / ❌:2 / 📎:4`）—— 恒等式不变；不说时刻会被当成回归。
   - **迁移实测**：真实库 `alembic_version = c5d2f8a3b7e1`（已应用）⇒ `opportunity_decision_snapshot`
     **20 列**（含 `kb_ids` / `kb_refs`）；`test_db_migrations.py` **5 passed**（生产 / alembic 新建 /
     模型**三方同形**）。
+  - **端到端落库实证（本轮最强的一条，非"未抛异常"）**：真实库现有 **2 行** `stage=notification` 快照
+    （`run_id` 两个，2026-09-16 05:00/05:01 UTC），其 `kb_ids = "[]"` 且
+    `kb_refs = {"state":"not_consulted","status":{},"support":[],"conflict":{}}` ——
+    ⚠️ **该值与迁移的 `server_default='{}'` 不同** ⇒ 只可能来自 `snapshot_citations()`；
+    且 `state` 既非 `legacy` 亦非空 ⇒ **证明确实跑的是新写入路径**（不是列存在、值仍是默认）。
+    这正是 `RSH-026` 验收轮缺的那一刀（那轮只证到 `state=ready` ⇒ **不足以证明 INSERT**）。
   - **三态引用的必要性（为什么不能只存 ID 列表）**：`kb_ids == "[]"` **区分不了「没引」与「全被驳回」**
     ⇒ 必须并列一个 `kb_refs` 状态映射（`not_consulted` / `cited` / `rejected`）；迁移前的旧行标
     **`legacy`**、**不猜**成 `not_consulted`（猜 = 把"无证据"写成"证据表明没有"）。
@@ -147,7 +165,22 @@
   ⚠️ **另有一条「真实命中 > 人工注入」**：`doc-health` **P 交接索引**在本轮**真的判红过**
   （`账本索引已登记 RSH-027，但 docs/handoff.md 无 '## RSH-027' 条目`）——
   这是该守卫上线后的首次真实阳性，无需再造合成注入（[[KB-ENG-102]]）。
-- **门禁**：（见下方 §1 现场「本轮收尾实测」）
+- **门禁（实测回填，勿凭记忆）**：
+  - 后端 `pytest --basetemp=/tmp/… --junitxml=…` ⇒ **collect 3265 / 3189 passed / 76 skipped / 0 failed**
+    （**213.74s**；8000 在跑。⚠️ `pyproject.toml` addopts 已含 `-q`，**不可再叠 `-q`** ⇒ 取数走 junitxml）。
+  - **Δ 归因自洽**：较上值 `3245 / 3169` ⇒ **Δ = +20 collect = +20 passed / ±0 skipped**：
+    `+18` = 新文件 `test_kb_routing.py`；`+1` = 新 GET 端点进入全量冒烟参数化
+    （实测 `…[/api/picks/kb-routing-get-params91]`）；`+1` = `test_import_lint.py` 新增**业务层**模块参数化
+    （**HEAD 干净检出实测 190/74 ⇒ 本轮 191/74**）。
+    **非业务层模块数未变** ⇒ `skipped(76) − 2 = 74` 与上轮**逐字相同**（[[KB-ENG-97]]）。
+  - 目标文件单跑：`test_kb_routing.py` **18 passed / 0 skipped** · `test_db_migrations.py` **5** ·
+    `test_opportunity_learning.py` **14** · `pyflakes app tests scripts` **0**。
+  - `doc-health` **全部通过**（P 项 9 条目双向闭包 · Q 项 0 冲突）· 前端 `apps/web/` **零改动** ⇒ 沿用 **603/67**。
+  - ⚠️ **本轮 `doc-health` J 项真红过一次**（新文件未 `git add` 却被 handoff 点名）⇒ 见 §1 现场第三条实例。
+  - **干净检出复验（= 模拟 CI 检出，`git worktree add --detach /tmp/ci-sim-027 <commit>`）**：
+    `doc-health` **全部通过**；文档类守卫 8 文件 **96 passed**（`test_doc_health_*` 6 份 +
+    `test_cmd_guidance_guard` + `test_doc_status_truthfulness`）⇒ **无「本地绿 / CI 红」**。
+    ⚠️ 检出须取自**提交**而非 `HEAD` 工作树（J 项判定面 = `git ls-files`）。
 - **遗留与下一步**：**切片 2 = 有/无 KB 影子消融**（候选召回 / Precision@K / 净期望），
   当前 `verdict` 只能恒为 `insufficient_sample`（可成交样本远低于
   `opportunity_learning.MIN_LABELS_FOR_VERDICT = 30`）⇒ 与 `RSH-026` 剩余部分（purged walk-forward、
