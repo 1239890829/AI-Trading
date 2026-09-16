@@ -21,7 +21,7 @@ import hashlib
 import json
 from collections import Counter
 from datetime import datetime
-from typing import Any
+from typing import Any, Iterable
 
 from sqlalchemy import select
 
@@ -30,6 +30,7 @@ from app.core.db import get_session_factory, utcnow
 from app.market import price_rules
 from app.models.opportunity_learning import OpportunityDecisionSnapshot, OpportunityOutcomeLabel
 from app.paper.engine import calc_fee
+from app.picks.kb_routing import snapshot_citations
 
 STRATEGY_VERSION = "stock-opportunity-funnel-v1"
 FEATURE_VERSION = "pit-evidence-v1"
@@ -56,6 +57,29 @@ FILL_SEAL_GAP_PCT = 0.15
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _load_json(raw: str | None, default: Any) -> Any:
+    """归档 JSON 列 → 对象；坏值/空值回落到 `default`（**读取侧不因单行坏值整批失败**）。"""
+    try:
+        value = json.loads(raw or "")
+    except Exception:  # noqa: BLE001
+        return default
+    return value if isinstance(value, type(default)) else default
+
+
+def _kb_ref_state(raw: str | None) -> str:
+    """快照的 KB 引用状态（蓝图 §5）。
+
+    `legacy` = 该列引入（迁移 `c5d2f8a3b7e1`）之前的行 —— **不猜**成 `not_consulted`：
+    「历史上确实没记」与「记了、就是没引」是两件事，混起来会让迁移前的老数据
+    被读成新口径的证据。`unparsed` = 列坏值（应报警，不该静默并档）。
+    """
+    payload = _load_json(raw, {})
+    if not payload:
+        return "legacy"
+    state = payload.get("state")
+    return str(state) if state else "unparsed"
 
 
 def _hash(value: Any, length: int = 32) -> str:
@@ -134,12 +158,21 @@ def _archived_change_pct(evidence: dict) -> float | None:
     return float(value) if isinstance(value, (int, float)) else None
 
 
-def build_intraday_records(payload: dict, *, trade_date: str, as_of: datetime) -> tuple[str, list[dict]]:
-    """Turn one opportunity tree into candidate → hard-gate → rank evidence."""
+def build_intraday_records(
+    payload: dict, *, trade_date: str, as_of: datetime, kb_ids: Iterable[str] = (),
+) -> tuple[str, list[dict]]:
+    """Turn one opportunity tree into candidate → hard-gate → rank evidence.
+
+    `kb_ids` = 本阶段决策**实际引用**的 KB 条目（蓝图 §5）。缺省空 ⇒ 快照记
+    `state="not_consulted"`（这是现状，不是异常——蓝图 §5 自述选股运行时尚未接 KB）。
+    引用一律经 `kb_routing.snapshot_citations()` 校验后落 `kb_ids` / `kb_refs` 两列，
+    **本函数不自行拼这两个字段**（避免出现第二份引用口径）。
+    """
     from app.picks.intraday_opportunity import top_watch_stocks
 
     as_of = as_of.replace(tzinfo=None)
     run_id = _hash({"scenario": "intraday", "trade_date": trade_date, "as_of": as_of.isoformat()})
+    kb_ids_json, kb_refs_json = snapshot_citations("intraday_opportunity", kb_ids)
     ranked = top_watch_stocks(payload, limit=10_000).get("items") or []
     rank_by_key = {
         (str(row.get("symbol") or ""), str(row.get("theme") or "")): n
@@ -186,6 +219,7 @@ def build_intraday_records(payload: dict, *, trade_date: str, as_of: datetime) -
                 "name": str(audit.get("name") or stock.get("name") or ""),
                 "source_theme": theme_name, "strategy_version": STRATEGY_VERSION,
                 "feature_version": FEATURE_VERSION, "data_state": state,
+                "kb_ids": kb_ids_json, "kb_refs": kb_refs_json,
                 "entry_price": float(price) if isinstance(price, (int, float)) and price > 0 else None,
             }
             candidate_evidence = {
@@ -233,6 +267,7 @@ def build_intraday_records(payload: dict, *, trade_date: str, as_of: datetime) -
                 "strategy_version": STRATEGY_VERSION,
                 "feature_version": FEATURE_VERSION,
                 "data_state": state,
+                "kb_ids": kb_ids_json, "kb_refs": kb_refs_json,
                 "entry_price": float(price) if isinstance(price, (int, float)) and price > 0 else None,
             }
             tradability_level = tradability.get("level")
@@ -265,10 +300,16 @@ def build_intraday_records(payload: dict, *, trade_date: str, as_of: datetime) -
 def build_notification_records(
     items: list[dict], *, trade_date: str, as_of: datetime,
     hits: list[dict], skips: list[dict], dispatch_by_symbol: dict[str, str],
+    kb_ids: Iterable[str] = (),
 ) -> tuple[str, list[dict]]:
-    """Archive every notification-gate input, including negative decisions."""
+    """Archive every notification-gate input, including negative decisions.
+
+    `kb_ids` 语义同 `build_intraday_records`：仅记录**实际引用**的 KB 条目；
+    本阶段属 `intraday_pick` 场景（别名 `buy_point`）。
+    """
     as_of = as_of.replace(tzinfo=None)
     run_id = _hash({"scenario": "notification", "trade_date": trade_date, "as_of": as_of.isoformat()})
+    kb_ids_json, kb_refs_json = snapshot_citations("buy_point", kb_ids)
     hit_by = {str(h.get("item", {}).get("symbol") or ""): h for h in hits}
     skip_by = {str(s.get("symbol") or ""): str(s.get("reason") or "") for s in skips}
     records: list[dict] = []
@@ -305,6 +346,7 @@ def build_notification_records(
             "decision": decision, "rank": None, "strategy_version": STRATEGY_VERSION,
             "feature_version": FEATURE_VERSION,
             "data_state": "unknown" if "快照无现价" in skip_by.get(symbol, "") else "ready",
+            "kb_ids": kb_ids_json, "kb_refs": kb_refs_json,
             "entry_price": float(price) if isinstance(price, (int, float)) and price > 0 else None,
             "evidence": evidence,
         })
@@ -351,20 +393,21 @@ def archive_records(run_id: str, records: list[dict], session_factory=None) -> d
 
 
 def archive_intraday_pipeline(payload: dict, *, trade_date: str, as_of: datetime | None = None,
-                              session_factory=None) -> dict:
+                              kb_ids: Iterable[str] = (), session_factory=None) -> dict:
     run_id, records = build_intraday_records(
-        payload, trade_date=trade_date, as_of=as_of or beijing_now()
+        payload, trade_date=trade_date, as_of=as_of or beijing_now(), kb_ids=kb_ids,
     )
     return archive_records(run_id, records, session_factory)
 
 
 def archive_notification_pipeline(
     items: list[dict], *, trade_date: str, hits: list[dict], skips: list[dict],
-    dispatch_by_symbol: dict[str, str], as_of: datetime | None = None, session_factory=None,
+    dispatch_by_symbol: dict[str, str], kb_ids: Iterable[str] = (),
+    as_of: datetime | None = None, session_factory=None,
 ) -> dict:
     run_id, records = build_notification_records(
         items, trade_date=trade_date, as_of=as_of or beijing_now(), hits=hits, skips=skips,
-        dispatch_by_symbol=dispatch_by_symbol,
+        dispatch_by_symbol=dispatch_by_symbol, kb_ids=kb_ids,
     )
     return archive_records(run_id, records, session_factory)
 
@@ -437,6 +480,9 @@ def replay_run(run_id: str, session_factory=None) -> dict:
             "snapshot_id": row.snapshot_id, "stage": row.stage, "symbol": row.symbol,
             "theme": row.source_theme, "archived": row.decision, "replayed": replayed,
             "matches": matches, "evidence": evidence,
+            # 蓝图 §5 的 KB 引用项（重放时要能看到「当时引了什么」）
+            "kb_ids": _load_json(row.kb_ids, []),
+            "kb_refs": _load_json(row.kb_refs, {}),
         })
     return {"run_id": run_id, "records": len(items), "mismatches": mismatches, "items": items}
 
@@ -537,6 +583,9 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
     decision_counts = Counter(f"{s.stage}:{s.decision}" for s in snapshots)
     state_counts = Counter(o.state for o, _stage in outcomes)
     fill_counts = Counter(o.fill_state for o, _stage in outcomes)
+    # KB 引用状态分布（蓝图 §5）：把「KB 尚未接入选股运行时」这件事**变成可读出的数**，
+    # 而不是靠读代码推断——现状应全为 `not_consulted`（+ 迁移前的 `legacy`）。
+    kb_ref_counts = Counter(_kb_ref_state(s.kb_refs) for s in snapshots)
     eligible = len(outcomes)
     labeled = state_counts.get("labeled", 0)
     return {
@@ -549,9 +598,14 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
         # 可成交性分布：`sealed`（封板买不到）与 `no_quote`（无现价）都**不进净期望**，
         # 但必须在此可见——否则「净收益样本变少」会被误读成「机会变少」。
         "fill_states": dict(sorted(fill_counts.items())),
+        "kb_ref_states": dict(sorted(kb_ref_counts.items())),
         "cost_model": COST_MODEL_VERSION,
         "label_coverage": round(labeled / eligible, 4) if eligible else None,
-        "note": "样本不足时仅报告覆盖率与事实分布，不据此晋级策略；净收益口径见 cost_model",
+        "note": (
+            "样本不足时仅报告覆盖率与事实分布，不据此晋级策略；净收益口径见 cost_model；"
+            "kb_ref_states 记录本次决策的 KB 引用状态（not_consulted=未引用，现状如此；"
+            "KB 进入个股收益打分须先过有/无 KB 消融，见蓝图 §5）"
+        ),
     }
 
 

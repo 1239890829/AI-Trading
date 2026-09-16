@@ -462,44 +462,48 @@ def _collect_tracking_stats(session_factory) -> dict:
 def _collect_knowledge_base() -> dict:
     """第八路（2026-09-09 知识库机制）：docs/kb/ 落地跟踪进议程。
 
-    读 00-INDEX.md 索引表格（| ID | 一句话 | 状态 | 来源日 |），统计各状态条数：
+    解析走 `app/picks/kb_routing.load_kb_index()`——**知识库索引的唯一解析实现**。
+
+    ⚠️ **2026-09-16（`RSH-027`）修偏差**：本函数原自带一条私有正则
+    （`^\\| (KB-...) \\| (.+?) \\| ([✅🔶⏳❌]) \\| (\\d{4}-\\d{2}-\\d{2}) \\|`），
+    因两处口径过窄而**静默漏掉 16 / 178 条**（实测：旧正则匹配 162，唯一实现 178）：
+    ① 要求状态列后紧跟 ` | `，而实际允许多词备注（`✅ 已测否`）⇒ 漏 12 条
+    （`KB-STOCK-27/29~36`、`KB-DEC-003`、`KB-ENG-79/82`，含最经过实证的一批）；
+    ② 不认 `📎` 且册前缀写死四册 ⇒ 漏 4 条示例与册级行 `KB-REPO-*`。
+    后果是议程的 `⏳` 候选池与 `by_status` 统计**系统性偏低且无人发现**
+    （[[KB-ENG-97]] 同族：过滤面 ≠ 表格面，且静默）。
+    现除复用唯一实现外，额外返回 `coverage`（含恒等式自证），使覆盖度**可见**。
+
     ⏳ 待落地条目可成为议程 C 类改进项候选；❌ 被取代条目防止回退；
     ⏳ 超 14 天未动的列入 stale_pending 复查。知识库缺失/解析失败显式 unavailable（三态）。
     """
-    import re as _re
+    from app.picks.kb_routing import STATUS_PENDING, load_kb_index
 
-    kb_index = PROJECT_ROOT / "docs" / "kb" / "00-INDEX.md"
-    if not kb_index.exists():
-        return {"available": False, "note": "docs/kb/00-INDEX.md 不存在（知识库未初始化）"}
-    try:
-        pattern = _re.compile(
-            r"^\| (KB-(?:STOCK|TRADE|ENG|DEC)-\d+) \| (.+?) \| ([✅🔶⏳❌]) \| (\d{4}-\d{2}-\d{2}) \|"
-        )
-        entries: list[dict] = []
-        for line in kb_index.read_text(encoding="utf-8").splitlines():
-            m = pattern.match(line.strip())
-            if m:
-                entries.append(
-                    {"id": m.group(1), "title": m.group(2), "status": m.group(3), "since": m.group(4)}
-                )
-        if not entries:
-            return {"available": False, "note": "00-INDEX.md 无可解析条目（表格格式漂移？）"}
-        by_status: dict[str, int] = {}
-        for e in entries:
-            by_status[e["status"]] = by_status.get(e["status"], 0) + 1
-        pending = [e for e in entries if e["status"] == "⏳"]
-        stale_cutoff = (beijing_now().date() - timedelta(days=14)).isoformat()
-        stale_pending = [e["id"] for e in pending if e["since"] < stale_cutoff]
-        return {
-            "available": True,
-            "total": len(entries),
-            "by_status": by_status,
-            "pending": [{"id": e["id"], "title": e["title"][:50]} for e in pending[:8]],
-            "stale_pending_14d": stale_pending,
-            "note": "⏳ 待落地条目可成为 C 类改进项候选；❌ 条目防止回退（知识库永不删条目）",
-        }
-    except Exception as exc:  # noqa: BLE001  证据缺席不阻塞议程
-        return {"available": False, "note": f"知识库解析失败: {exc}"}
+    index = load_kb_index()
+    if not index.available:
+        return {"available": False, "note": index.note or "知识库索引不可用"}
+    pending = sorted(
+        (e for e in index.entries.values() if e.status == STATUS_PENDING),
+        key=lambda e: e.id,
+    )
+    stale_cutoff = (beijing_now().date() - timedelta(days=14)).isoformat()
+    stale_pending = [e.id for e in pending if e.since < stale_cutoff]
+    return {
+        "available": True,
+        "total": index.total,
+        "by_status": index.by_status(),
+        "pending": [{"id": e.id, "title": e.title[:50]} for e in pending[:8]],
+        "stale_pending_14d": stale_pending,
+        # 覆盖度自证进证据：`candidate_rows == total + 册级行 + 未解析行`。
+        # 只要索引表出现新写法而解析器没跟上，`consistent` 立刻变 False。
+        "coverage": {
+            "candidate_rows": index.candidate_rows,
+            "book_level_rows": list(index.book_level_rows),
+            "unparsed_rows": list(index.unparsed_rows),
+            "consistent": index.coverage_identity_holds(),
+        },
+        "note": "⏳ 待落地条目可成为 C 类改进项候选；❌ 条目防止回退（知识库永不删条目）",
+    }
 
 
 def _collect_recent_prediction(session_factory) -> dict:

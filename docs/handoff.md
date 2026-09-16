@@ -73,6 +73,7 @@
 
 | 任务 ID | 状态 | 日期 | 一句话 |
 |---|---|---|---|
+| `RSH-027` | 🟡 部分闭环 | 2026-09-16 | 场景化 KB 路由（四场景逐行对应蓝图 §5）+ 引用三态快照 + 覆盖度恒等式；同轮修掉议程第八路**静默漏 16/178 条**的偏差 |
 | `IMP-034` | ✅ 闭环 | 2026-09-16 | 提醒链路过期断言**实为 10 处**（非登记的 5 处），逐处按现实改写；`notifications` 三个死函数连同其用例删除 |
 | `BUG-016` | 🟡 已取证 · 待拍板 | 2026-09-16 | 通知中心空是**设计口径 + 候选档位 0/51 命中**叠加；根因链已量化，**修法（是否下调档位门）待拍板** |
 | `IMP-033` | ✅ 闭环 | 2026-09-16 | 通知抽屉行体改为**开该股详情**（与悬浮球 / 猎场同落点），判读全文改由新增「判读」入口保全 |
@@ -81,6 +82,78 @@
 | `GOV-014` | ✅ 闭环 | 2026-09-16 | 建立交接明细层与双向索引守卫；注入自证抓出并修掉守卫的两处判据盲区，流程已固化为技能 |
 | `RSH-026` | 🟡 部分闭环 | 2026-09-16 | 个股机会学习闭环第一批已交付，并完成独立验收轮（抓出并修掉 1 处 schema 分叉） |
 | `BUG-014` | ✅ 闭环 | 2026-09-16 | 两处迁移把表建到默认库 ⇒ 全新库缺 5 张表；已改 `op.get_bind()` 并加两条守卫 |
+
+## RSH-027 场景化 KB 路由与引用记录（切片 1 已交付，本项仍开放）
+- **账本**：`docs/retro-and-gaps.md` §6.0 `RSH-027` ｜ **日期**：2026-09-16 ｜ **状态**：🟡 部分闭环
+- **缺口与验收标准**：蓝图 §5 要求「按盘前/事件/盘中/复盘/进化调用指定 KB，并记录 `kb_ids` 与冲突依据」，
+  并附三条禁令（示例不得作硬规则 / 不得越过交易硬门 / 不进入个股收益打分）+ 一条**诚实注记**：
+  「用有/无 KB 影子对照证明增益，**否则仅保留解释价值**」（原文自述当前**尚未证明**能提高选股结果）。
+  本切片的验收边界 = **路由契约 + 引用记录 + 引用校验 + 覆盖度自证**；
+  **不做检索本身、也不做消融**（消融须等样本，属切片 2）。
+- **改动**：
+  - `backend/app/picks/kb_routing.py`（**新，676 行**）：四场景 ⇄ 蓝图 §5 **逐行对应**的路由表 +
+    唯一索引解析器 + 覆盖度恒等式 + 三态引用快照 + 三道红线守卫。
+  - `backend/app/services/evolution.py`：`_collect_knowledge_base()`（**议程第八路**）由
+    **自建私有正则**改为**复用**唯一解析器，并把 `coverage` 自证暴露到议程 —— **偏差修复**。
+  - `backend/app/models/opportunity_learning.py` + `backend/migrations/versions/c5d2f8a3b7e1_snapshot_kb_citations.py`（**新，51 行**）：
+    `opportunity_decision_snapshot` 增 `kb_ids` / `kb_refs` 两列（`down_revision = b4f1a7c2e9d3`；
+    **刻意不建索引** = 少一处 schema 分叉面；全程 `op.*`，遵 `BUG-014` 教训）。
+  - `backend/app/picks/opportunity_learning.py`：写入侧 `build_intraday_records` / `build_notification_records` /
+    `archive_intraday_pipeline` / `archive_notification_pipeline` 一律经 `snapshot_citations()` 快照；
+    读侧 `replay_run` 回读两列、`learning_summary` 增 `kb_ref_states` 计数。
+  - `backend/app/api/routes/picks_intraday.py`：新增只读端点 `GET /api/picks/kb-routing`（带 300s 缓存）。
+  - `backend/tests/test_kb_routing.py`（**新，416 行 / 18 例**）：10 组守卫，每组对应一个具体失效方式。
+  - `docs/kb/09-verification-pitfalls.md` + `docs/kb/00-INDEX.md`：新增 [[KB-ENG-104]] 与索引行。
+  - **刻意没动**：一切**推送 / 交易口径**（`IMP-028` 通知口径、撮合与风控、`RSH-026` 既有标签语义）；
+    `enters_scoring` **全部为 `False`** —— **不宣称 KB 已入模**（原文未证增益，宣称即谎报）。
+- **机械证据**：
+  - **路由表 ⇄ 蓝图原文逐行比对**：用例从 `docs/summary/system-final-blueprint.md` **现场解析**该表
+    （不抄一份副本），逐字比对场景标签与册/状态约束 ⇒ 4/4 对应。
+  - **偏差量化（本条最实质的证据）**：旧私有正则匹配 **162** / 唯一实现 **178**；差集 **16** 条，
+    成因 **`4 + 12` 无余数** —— `📎` 不认 → `KB-STOCK-01/02/03/04`（4）；
+    状态列多词备注 → `KB-STOCK-27/29/30/31/32/33/34/35/36`（9）+ `KB-ENG-79`/`KB-ENG-82`（2）
+    + `KB-DEC-003`（1）。**`old_not_new == []`** ⇒ 新解析器是旧面的**严格超集**（无新增误判）。
+    ⚠️ 漏掉的恰是**最经过实证的一批**（`KB-STOCK-27` 三倍态战法**实测否决**、`KB-ENG-79`
+    `ntile()` 无 tie-break **连跑 3 次 3 个结论**、`KB-DEC-003` 是「❌ 部分取代」= **勿回退信号**）。
+  - **第二处偏差**：册前缀写死四册 ⇒ 第五册 `KB-REPO` 不可见、`| KB-REPO-* |` 册级行连"像索引行"都不算。
+    该行由**朴素统计 179 vs 解析 178 差 1** 才发现 —— 「**只差 1 行**」正是最容易放过的信号。
+  - **覆盖度恒等式（本切片的机械判据）**：
+    `candidate_rows == total + len(book_level_rows) + len(unparsed_rows)`。
+    实测 `unparsed_rows == ()` / `unknown_books == ()` / `coverage_identity_holds == True`。
+    ⇒ **断言面从「我认得的」扩到「表里所有的」**；只断言 `unparsed == 0` **是自证不足**
+    （册级行会被前缀判据静默排除，连"未解析"都不进）。
+  - **端点实证**（后端 8000 在跑，`curl --noproxy '*'`）：`GET /api/picks/kb-routing` ⇒
+    `index.coverage_identity_holds: true`、`unparsed_rows: []`、`unknown_books: []`、
+    `book_level_rows: ["KB-REPO"]`、`by_status: {✅:163, 🔶:5, ⏳:4, ❌:2, 📎:4}`、
+    `registered_books` 5 册、`scoring_books: [KB-STOCK, KB-TRADE]` + 四场景路由表。
+    ⚠️ `total` 随**本条 `KB-ENG-104` 自身入库**由 **178 → 179**（恒等式不变）——
+    报数字须说明取数时刻，否则会被当成回归。
+  - **迁移实测**：真实库 `alembic_version = c5d2f8a3b7e1`（已应用）⇒ `opportunity_decision_snapshot`
+    **20 列**（含 `kb_ids` / `kb_refs`）；`test_db_migrations.py` **5 passed**（生产 / alembic 新建 /
+    模型**三方同形**）。
+  - **三态引用的必要性（为什么不能只存 ID 列表）**：`kb_ids == "[]"` **区分不了「没引」与「全被驳回」**
+    ⇒ 必须并列一个 `kb_refs` 状态映射（`not_consulted` / `cited` / `rejected`）；迁移前的旧行标
+    **`legacy`**、**不猜**成 `not_consulted`（猜 = 把"无证据"写成"证据表明没有"）。
+  - **两处初版偏差自查纠正（据蓝图原文，非推理）**：**(a)** 初版把盘中约束写成**册过滤**（只放
+    `KB-TRADE`），而原文是**状态过滤**（「已落地或试验中的交易纪律」）⇒ 按册过滤会连带挡掉
+    `KB-STOCK-07/11/12/13/21` 等 **✅ 交易纪律**；**(b)** 初版给盘中 `enters_scoring=True` 属
+    **未验证即宣称入模** ⇒ 改为全 `False` + `ablation_evidence` 必填 +
+    `assert_scoring_admission_is_evidence_gated()` 机制化拦截。
+- **注入自证**：**7 项真红 → 恢复全绿**。靶点 = 把状态列正则退回旧口径（删 `📎`），
+  判红的是 `test_kb_routing.py` 中依赖状态解析的 7 条（含 `📎` 不得作硬规则、覆盖度恒等式、
+  被漏条目的逐条回归）。另三路结构性守卫（放宽状态限 / 塞 `KB-DEC` 进打分册 /
+  无证据置 `enters_scoring=True`）各有用例钉住，且别名守卫打在**源码真实字面量**上
+  （正则从 `opportunity_learning.py` 抓取，不抄副本）。
+  ⚠️ **另有一条「真实命中 > 人工注入」**：`doc-health` **P 交接索引**在本轮**真的判红过**
+  （`账本索引已登记 RSH-027，但 docs/handoff.md 无 '## RSH-027' 条目`）——
+  这是该守卫上线后的首次真实阳性，无需再造合成注入（[[KB-ENG-102]]）。
+- **门禁**：（见下方 §1 现场「本轮收尾实测」）
+- **遗留与下一步**：**切片 2 = 有/无 KB 影子消融**（候选召回 / Precision@K / 净期望），
+  当前 `verdict` 只能恒为 `insufficient_sample`（可成交样本远低于
+  `opportunity_learning.MIN_LABELS_FOR_VERDICT = 30`）⇒ 与 `RSH-026` 剩余部分（purged walk-forward、
+  校准与 Champion/Challenger 影子晋级）**同因阻塞：等样本积累**，硬跑即「用不足样本装判据」。
+  本切片**不含检索实现**（`kb_routing` 只给"允许引哪些"，不给"怎么找"）——
+  若要接检索，须另立任务并先明确"检索失败/无命中"如何留痕。
 
 ## IMP-034 提醒链路过期断言与死代码清理（闭环）
 - **账本**：`docs/retro-and-gaps.md` §6.0 `IMP-034` ｜ **日期**：2026-09-16 ｜ **状态**：✅ 闭环

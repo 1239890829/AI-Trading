@@ -37,6 +37,18 @@ class OpportunityDecisionSnapshot(Base):
     data_state: Mapped[str] = mapped_column(String(16), default="ready")
     entry_price: Mapped[float | None] = mapped_column(Float, default=None)
     evidence: Mapped[str] = mapped_column(Text, default="{}")
+    # ── 场景化 KB 路由的记录项（蓝图 §5，`RSH-027` 切片 1）─────────────────────
+    # `kb_ids` = 该决策**实际引用并采纳**的 KB 条目 ID（JSON 数组，保序去重）。
+    # `kb_refs` = 引用状态 + 支持/冲突依据（JSON 对象），形如
+    #   `{"state": "not_consulted"|"cited"|"rejected", "status": {...}, "support": [...], "conflict": {...}}`。
+    # ⚠️ **`state` 不可省**：`kb_ids == "[]"` 既可能是「本就没引 KB」（现状），
+    # 也可能是「引了但全被驳回」（异常）——两者在读取侧必须可区分
+    # （「规则缺失」与「无事件」不可同形，`BUG-016` 教训）。写入一律走
+    # `kb_routing.snapshot_citations()`，别处不得手搓这两个字段。
+    # ⚠️ 本列**不参与**任何决策：KB 进入个股收益打分须先过有/无 KB 消融
+    # （蓝图 §5），由 `kb_routing.assert_scoring_admission_is_evidence_gated()` 拦。
+    kb_ids: Mapped[str] = mapped_column(Text, default="[]")
+    kb_refs: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     __table_args__ = (
