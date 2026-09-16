@@ -31,9 +31,9 @@
 
 ## 1 现场（每条任务收尾时更新）
 
-- **分支**：`codex/notification-row-symbol-detail`（自 `origin/master` 创建；本轮交付 `IMP-033`）。
-  上一轮分支 `codex/alert-bubble-symbol-detail` 已随 PR #16 合并并**删除**（本地与远程均已清）。
-- **基线**：`origin/master` = `98a5c65`（PR #16 合并提交）。
+- **分支**：`codex/notif-empty-rootcause`（自 `origin/master` 创建；本轮交付 `BUG-016` 诊断轮）。
+  上一轮分支 `codex/notification-row-symbol-detail` 已随 PR #17 合并并**删除**（本地与远程均已清）。
+- **基线**：`origin/master` = `b3f4164`（PR #17 合并提交，2026-09-16 12:00）。
 - **服务**：后端 8000（uvicorn，单实例；**绝不用 `--reload`**，原因见 `AGENTS.md` §6.1）、前端 3000。
 - **门禁基线（本次收尾实测，接手时可直接对照）**：后端 **collect 3247（3171 passed / 76 skipped / 0 failed）**、
   前端 **603 项 / 67 文件 · 602 passed / 1 failed**、`eslint` **0/0**、`doc-health` **全部通过**。
@@ -45,6 +45,11 @@
   ⚠️ **两道全量不要并发跑**：并发会因 CPU 竞争让上述用例超时假红——**它的红不代表代码回归**。
   前端较上轮 598/66 的 **+5 / +1** 即本轮新增的提醒落点用例文件；
   **本地时区与 `TZ=UTC` 逐字一致（603/67）** ⇒ 本轮用例**不含时区敏感断言**。
+- **⚠️ 诊断轮特有的口径提醒（`BUG-016` 轮新增）**：`data/ashare.db` 里的学习类表
+  （`opportunity_decision_snapshot` / `opportunity_outcome_label`）**今日才由 `RSH-026` 迁移建立**
+  （PR #13 于 **09:58** 合并、PR #14 于 **10:20** 合并）⇒ **不能用「表为空」反推「循环没跑」**：
+  运行中的后端无 `--reload`，未必带该段代码。**判「链路是否在跑」要看事件面
+  （`alert_event` 的 `triggered_at` 时间线）**，不要看新表的行数。
 - **归属不明的既有未跟踪文件（非本轮产物，**保留、勿删**）**：`git status --short` 里的 5 个 `??` 项，
   分布在 5 个目录 —— `backend/data/lhb/`、`backend/data/minute_decisions/`、
   `backend/data/position_plans/`、`docs/daily-review/`、`docs/evolution/`。
@@ -58,12 +63,47 @@
 
 | 任务 ID | 状态 | 日期 | 一句话 |
 |---|---|---|---|
+| `BUG-016` | 🟡 已取证 · 待拍板 | 2026-09-16 | 通知中心空是**设计口径 + 候选档位 0/51 命中**叠加；根因链已量化，**修法（是否下调档位门）待拍板** |
 | `IMP-033` | ✅ 闭环 | 2026-09-16 | 通知抽屉行体改为**开该股详情**（与悬浮球 / 猎场同落点），判读全文改由新增「判读」入口保全 |
 | `IMP-031` | ✅ 闭环 | 2026-09-16 | AI 判读气泡点开**就地打开该股详情弹窗**（不再跳告警页）；同轮梳理出提醒链路断点清单 |
 | `GOV-015` | ✅ 闭环 | 2026-09-16 | 账本「未完成档 ⇄ 闭环记录」一致性守卫（`doc-health` Q 项）；顺带把滞留 A 档的 `BUG-014` 销账 |
 | `GOV-014` | ✅ 闭环 | 2026-09-16 | 建立交接明细层与双向索引守卫；注入自证抓出并修掉守卫的两处判据盲区，流程已固化为技能 |
 | `RSH-026` | 🟡 部分闭环 | 2026-09-16 | 个股机会学习闭环第一批已交付，并完成独立验收轮（抓出并修掉 1 处 schema 分叉） |
 | `BUG-014` | ✅ 闭环 | 2026-09-16 | 两处迁移把表建到默认库 ⇒ 全新库缺 5 张表；已改 `op.get_bind()` 并加两条守卫 |
+
+## BUG-016 通知中心「三跳全空」根因链（已取证，修法待拍板）
+- **账本**：`docs/retro-and-gaps.md` §6.0 `BUG-016` ｜ **日期**：2026-09-16 ｜ **状态**：🟡 已取证 · 待拍板
+- **缺口与验收标准**：用户问「为什么消息通知一个也没有呢,新闻也没有在里面」。
+  验收标准 = **分清「设计口径 / 数据如实为空 / 系统侧失效」三种成因**，并给出可复现证据；
+  **不以猜测结案**。可做部分（空态可诊断）**不改推送口径**。
+- **结论（三层，机制不同）**：
+  1. **新闻不在通知里是设计** —— `IMP-028` 收敛后 `_NOTIF_RULE_NAMES` 只留 `BUY_POINT_RULE`，
+     端点 `notifications.py:315` 为 `items = alert_items`；`_news_items` / `_daily_pick_item` 成死代码（归 `IMP-034`）。
+     新闻实际入口 = 盘面页**「事件」标签**（`market/events-tab.tsx` ← `/api/events/impact`）。
+  2. **个股机会 0 条 = 如实为空，且历史上从未有 1 条** —— 买点链第一道必要条件
+     `tier ∈ EXEC_TIERS = {executable, strong}` 在 **13 天 / 51 只候选上 0 命中**。
+  3. **无法区分「设计生效」与「阈值不可达」** —— 0 命中本身没有区分度 ⇒ 需拍板（见下）。
+- **机械证据（全部只读、可复跑）**：
+  · `alert_event` 内 `kind LIKE '%buy_point%'` = **0 / 1997**（跨度 `2026-09-02 11:01:34` → `09-16 11:29:51`，覆盖 11 个交易日）
+  · `alert_rule` = 5 条（`__picks_watcher__` / `__ths_reason_sentinel__` / `__sentiment_monitor__` / `__llm_gateway_probe__` / `__signal_health__`），**无 `__picks_buy_point__`**
+  · `daily_pick_set` 13 天 51 只候选：档位 `None×30` + `observe×21`，**`executable`/`strong` = 0**；`score` 区间 **30.8–63.8**（线：`EXECUTABLE_SCORE=60` / `STRONG_SCORE=75`）；`buy_range` 非空仅 3 只（全部 09-14，且同为 `observe` 档）
+  · 今日唯一候选 `603162`：`tier=observe` + `observation_only=True` + `buy_range=None` + `gate.stand_aside=True`（相位「退潮」、`strip_buy_range=True`）⇒ 四重否决
+  · `GET /api/notifications` ⇒ `{"items":[],"count":0,"policy":"stock_opportunities_only","errors":null}`（**正常空，非故障**）
+  · `GET /api/events?limit=3` ⇒ **3 条**（新闻数据在）
+  · 前置逐一排除：`trade_calendar.json` 243 天且**含今天**（`source=official`）⇒ 日历门不成立；
+    实测 `in_trading_window(10:00/11:00)=True`；`_today_picks_payload()` ⇒ 1 条 ⇒ 三道前置门**均不成立**
+  · 归档路径可用性：对**生产库副本**（`/tmp`）调用 `archive_notification_pipeline` ⇒ `inserted=1`，`evidence.gate_reason="快照无现价（不臆造）"`，`data_state=unknown`
+- **⚠️ 本轮自我更正（必须保留）**：曾把 `opportunity_decision_snapshot` **0 行**读作「买点循环未跑到判定阶段」。
+  **该推断不成立**：该表由 `RSH-026` 首批迁移 `7d4e2c9a6b1f` 建立，而其 PR #13 于**今日 09:58** 才合并、
+  批次二迁移 `b4f1a7c2e9d3` 于 **10:20** 合并；uvicorn **无 `--reload`** ⇒ 晨盘时段运行中的后端
+  **未必带这段代码** ⇒ **0 行不能证明循环没跑**。同族教训：**把「无证据」读成「证据表明没有」**。
+- **注入自证**：无（本轮为诊断轮，未新增守卫；可做部分的守卫待实施时补）。
+- **门禁**：纯文档改动 ⇒ 见本轮 §1 现场的门禁基线与 `doc-health` 实测（P/H/O/Q 项全过）。
+- **遗留与下一步**：
+  · **待拍板（涉交易信号口径，本轮不动）**：① 保持 `{executable, strong}` 门并在界面明示「可能长期不触发」；
+    ② 下调档位门（**改推送口径，风险 = 推噪音**）；③ 先补可诊断面再据实评估。
+  · **可做部分**（选 ③ 时落地）：通知中心空态暴露「今日候选数 / 最高档位 / 否决原因」，端点暴露判定摘要 —— **不改口径**。
+  · 死代码清理归 `IMP-034`；通知口径本身不改（`IMP-028` 是设计决策）。
 
 ## IMP-033 提醒落点统一为个股详情弹窗（判读全文改由「判读」入口保全）
 
