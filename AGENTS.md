@@ -68,7 +68,7 @@ cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 coll
 # **教训与本文档的警告同源：数字标注要么当轮实测回填，要么写"实测方法"而不写死数值。**
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
 cd apps/web && npx eslint .                       # 0 error / 0 warn（P1-27 已清零；余 1 处 C 类显式豁免）
-cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 598 项 / 66 文件（09-16 `IMP-031` 轮实测）
+cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 603 项 / 67 文件（09-16 `IMP-033` 轮实测；其中 1 项为既有 `BUG-010` 并发超时候选）
 # ⚠️ 默认并行度偶发 **SIGKILL(exit 137) 且零输出**（非测试失败）⇒ 先降并行度复跑：
 #   npx vitest run --maxWorkers=1
 # ⚠️ **凡改动/新增涉及时间·时区的断言，必须再用 `TZ=UTC` 复跑一遍**（CI 跑在 UTC，本地是 UTC+8）：
