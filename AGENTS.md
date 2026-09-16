@@ -107,37 +107,27 @@ lsof -ti tcp:3000 -sTCP:LISTEN | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DE
 #   "这次只是改文案所以不用跑" 是最贵的一句话：本轮两次丢失都是靠随后的判据才发现的。
 ```
 
-> **门禁口径**：后端 collect **3431 项（3355 passed / 76 skipped / 0 failed）**、
-> 前端 **650 项 / 70 文件**、eslint **0 error / 0 warn**
-> （2026-09-16 `IMP-038`（逐笔成交接入 TDX 降级备源）轮实测；后端 **347.29s**（低载）／
-> **651.03s**（高载，load 13.5）——**报耗时必须带负载前提**，前提 **8000 在跑**；
-> `tsc` **0** · `pyflakes` **0** · `doc-health` **全部通过**（`P 交接索引` 14 条 / `Q 档位一致性` 0 冲突）。
-> ⚠️ **`TZ=UTC` 全量 = 650 项 / 70 文件（与本地逐字一致），其中 1 项红 = 已登记的 `BUG-010`**
-> （`markdown-view.test.tsx::docs/ 下全部 md 均可渲染完成` 超时 5000ms），其余 649 passed。
-> **已定性为宿主负载抖动、非回归**：`uptime` 实测 **load average 13.50**；同一套用例本轮
-> 本地 **249s** / UTC **471s / 1153s / 1395s**（正常 ~250s）⇒ **报前端数字必须带这个前提**。
-> ⚠️ **`BUG-010` 的新证据（值得记）**：该用例渲染 `docs/**` 全部 md、预算固定 5000ms；
-> `--testTimeout=60000` 隔离复跑 **10/10 全绿**、该用例实测 **3403ms**（≈ 预算 68%）。
-> ⇒ ① 非回归；② 但余量只剩 **1.47×**，而 `docs/` 只增不减（上轮记录整文件 1.6~2.8s）⇒
-> **一条正在被文档增长吃掉的预算**，建议单独提高该用例 `timeout` 或按文件粒度断言（**未擅自改**）。
-> ⚠️ **较上一值「后端 3373 / 前端 643·69」的 Δ 全部机械归因且逐字对上**：
-> 后端 **+58 collect = +58 passed / ±0 skipped** = **+55**（新 `tests/test_tdx_tick.py`）
-> + **+1**（`test_depth_tools.py` 11→12）+ **+1**（`test_import_lint.py` 268→269，
-> 因新增**业务层**模块 `app/market/tdx_tick.py`）+ **+1**（`test_event_loop_no_block.py` 的
-> `GUARDED` **参数化**新增 `tdx_tick` 条目）⇒ 55+1+1+1 = **58** ✓。
-> **非业务层模块数未变** ⇒ `skipped 76` 不变**自洽**（[[KB-ENG-97]]：跳过数不变 = 无覆盖丢失）。
-> ⚠️ **另遇一次偶发红（已由复跑证伪）**：`tests/test_api.py::test_paper_fills_and_reset`
-> （`sqlalchemy.exc.Invalid…`）—— 隔离复跑 1 passed/2.31s、整文件 13 passed/9.33s，
-> **同树再跑全量为 3355 passed / 0 failed** ⇒ 共享状态偶发，**非回归**（与 `9364ef0` 同族）；
-> ⚠️ **完整栈未取到，按实标注为未归因**。
-> 前端 **+7 项 / +1 文件** = **恰等于**新文件 `components/detail/book-trades-view.test.tsx`
-> 的用例数（7）；`lib/format.test.ts` 只加断言、**不加用例**。
-> ⚠️ **本轮 3 次真红全部由「全量门禁」抓出，而单跑受影响的文件时全绿**：
-> ① `test_depth_tools.py` 两条（**测试触网 ⇒ 假绿形态**）·
-> ② `test_trades_empty_says_unavailable`（判据写错：`detail` 非空 ≠ 故障）·
-> ③ `test_env_docs.py::test_env_example_covers_every_setting`（新增配置项未同步 `.env.example`）。
-> ⇒ **"我只改了 X" 不构成不跑全量的理由**（改 `docs/` 同理——后端门禁里有一类扫 `docs/` 的文档守卫）。
-> ⚠️ **权威位仍是 `docs/handoff.md` §1**（本头行必须与它同轮同步）。
+> **门禁口径**：后端 collect **3432 项（3356 passed / 76 skipped / 0 failed）**、
+> 前端 **650 项 / 70 文件**、eslint **0 error / 0 warn**、`tsc` **0** · `pyflakes` **0** ·
+> `doc-health` **全部通过**（`P 交接索引` 16 条 / `Q 档位一致性` 0 冲突）
+> （2026-09-17 `BUG-018` + `BUG-019` CI 转绿轮实测；后端 **306.87s**，前提 **8000 在跑**、
+> **`load average` 15.95** —— **报耗时（含前端数字）必须带负载前提**，否则会被当成回归）。
+> ⚠️ **较上一值「后端 3431 / 前端 650·70」的 Δ 已机械归因**：
+> 后端 **+1 collect = +1 passed / ±0 skipped** = 新用例
+> `tests/test_watch_ledger_kind.py::test_window_cutoff_expiry_is_pinned`（`BUG-018` 的到期日两侧契约）·
+> `test_import_lint.py` 参数化面未变（无新增 `.py`）⇒ `skipped 76` 不变**自洽**（[[KB-ENG-97]]）·
+> `test_provider_budget.py` 改的是常量与 docstring、**用例数不变**（`BUG-019`）⇒ 不产生 collect 增量。
+> 前端 **±0**（`apps/web/` 本轮**零改动**，`git status` 核对无差异）。
+> ⚠️ **前端那 1 项红 = 已登记的 `BUG-010`**（`markdown-view.test.tsx::docs/ 下全部 md 均可渲染完成`，
+> 预算固定 5000ms）：本轮全量并发下实测 **8716ms / 5305ms**、`TZ=UTC` **6655ms**，
+> 而**隔离复跑 10/10 全绿、该用例仅 1407ms** ⇒ 由**宿主负载**（同机 `load 15.95~17.19`，
+> 另有其他应用抢占 CPU）造成，**非回归**；但**余量已被吃光**（`docs/` 只增不减），
+> 建议提高该用例 `timeout` 或改按文件粒度断言（**未擅自改，留待拍板**）。
+> ⚠️ **本轮 3 项真红全部由「全量门禁」抓出**（单跑受影响的文件时全绿）：
+> ① `BUG-018`（CI 重跑跨北京午夜）· ② 本轮**自己**造的 KB 索引格式回归
+> （`docs/kb/00-INDEX.md` 日期栏写成 `2026-09-12 / 09-17`，解析器要求**严格单日期**）·
+> ③ `BUG-019`（预算共享判据判别窗口 < 噪声）⇒ **"我只改了 X"不构成不跑全量的理由**。
+> ⚠️ **权威位仍是 `docs/handoff.md` §1**（本头行必须与它同轮同步；历史各轮 Δ 归因见该处）。
 > （2026-09-16 `GOV-016`（`ths.py` docstring 能力承诺 > 实现）轮实测；后端 collect **3373 项
 > （3297 passed / 76 skipped / 0 failed）**、前端 **643 项 / 69 文件**、eslint **0 error / 0 warn**；
 > 后端 **252.32s**，前提 **8000 在跑且无并发负载**；`tsc` **0** · `pyflakes` **0** ·
