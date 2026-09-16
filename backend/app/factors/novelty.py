@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import logging
 import math
+from dataclasses import dataclass
 from typing import Any, Sequence
 
 from app.factors.evaluate import (
@@ -90,6 +91,20 @@ MIN_DAYS_FOR_VERDICT = 30
 #: 默认回看交易日数（约 1 年，与 `evaluate.ROLLING_WINDOW_DAYS` 同量级）。
 DEFAULT_LOOKBACK_DAYS = 250
 
+#: **无扩展路径的冻结指纹**（2026-09-16）：`sha256(_panel_sql(specs, 1700000000000, 21))`，
+#: 其中 `specs` = 两个合成 `FactorDef`（`alpha_probe` / `beta_probe`，`min_bars=21`；
+#: spec 逐字写死在 `tests/test_smoothing.py::test_extension_is_load_bearing_and_keeps_baseline_sql`），
+#: 该 spec 下 SQL 长 **9127** 字符。用途 = 加「面板扩展」钩子时，证明**不传扩展的 SQL 与钩子前
+#: 逐字相同** ⇒ 既有 4 候选（`willr20`/`cmo20`/`kurt20`/`skew20`）的档位不可能因为这次改动而变。
+#: ⚠️ **本条曾被记成一个不可复现的值**（`b4ac4881…`）：按文档写的 spec 实测是 9127 字符 /
+#: `f40134c5…`，与原值差 **13 字符** —— 而两个名字在 SQL 里各出现 **3 次**（共 6 处）
+#: ⇒ 13 这个差值**不可能**由任意"两个名字"的长度产生 ⇒ 原值来源不明（大概率来自某个已不存在的
+#: 模板版本）。**教训：机械凭据必须能由它自己的文档复现**，否则它提供的是虚假的确定性。
+#: 已按可复现 spec 重算，并用「**HEAD 版本 vs 工作区**」的逐字对照独立复核（2026-09-16 实测：
+#: 两边同为 9127 字符、`f40134c5…`、`==` 为真）。
+#: ⚠️ 若确实要改无扩展路径，**必须**同时说明理由并更新本值——它是"你没动生产路径"的唯一机械凭据。
+_PANEL_SQL_BASELINE_SHA256 = "f40134c5ae282ae96577a7f5e039af5bde3b472810f80280a771048eba332370"
+
 
 def _cutoff_ms(con: Any, lookback_days: int) -> int:
     """回看窗口起点（毫秒）：取倒数第 `lookback_days` 个交易日。
@@ -106,8 +121,38 @@ def _cutoff_ms(con: Any, lookback_days: int) -> int:
     return int(row[0])
 
 
+@dataclass(frozen=True)
+class PanelExtension:
+    """研究用**面板扩展**：在 base 链之后追加若干 CTE，并把 `scored` 的取数源指向末级。
+
+    ## 为什么需要它
+    候选表达式一律在 `lvl4` 上求值，而 `lvl4` 只有**等权**窗口聚合的列
+    （`AVG/SUM/STDDEV/corr` 那一批）⇒ **指数平滑类**指标（PPO 的 EMA12/26、ADX 的 Wilder
+    递归）在这里**一行都写不出来**。扩展钩子让这类候选把"自己需要的列"加在 base 链之后，
+    而不必改动 `_base_cte`（那是**生产**评估链，动它就要 bump `ALGO_VERSION`）。
+
+    ## 硬约束（由调用方保证，`test_smoothing.py` 有对应守卫）
+    - `ctes` 里每一级都必须是 **`SELECT *, <新增列> FROM <上一级>`** 形态 ⇒ **列只增不改**。
+      若某级改了既有列（如 `thscode` / `f1` / `f5` / `cnt` / `nb1_*`），
+      `scored` 的守卫与前瞻收益会被**静默改写**，而所有判据看上去照常工作。
+    - `ctes` 不含 `WITH`（`WITH` 由 `_base_cte` 提供），每项形如 `"名 AS (SELECT ...)"`。
+    - `source` 必须是末级 CTE 名；未提供扩展时 `scored` 一律 `FROM lvl4`。
+
+    ⚠️ **无扩展路径必须逐字不变**：`extension=None` 时 `_panel_sql` 的输出与加钩子前**完全相同**
+    （由 `_PANEL_SQL_BASELINE_SHA256` 冻结）——否则既有 4 个候选的结论会跟着动。
+    """
+
+    ctes: tuple[str, ...]
+    source: str
+    #: 口径说明（透传进报告 `meta.extension`），让读者知道本轮筛的是**哪套口径**的候选。
+    note: str = ""
+
+
 def _panel_sql(
-    specs: Sequence[FactorDef], cutoff_ms: int, min_bars: int
+    specs: Sequence[FactorDef],
+    cutoff_ms: int,
+    min_bars: int,
+    extension: PanelExtension | None = None,
 ) -> str:
     """构造「候选 + 既有」同一次扫描的基座（含每个 spec 的当日截面 `percent_rank`）。
 
@@ -137,11 +182,14 @@ def _panel_sql(
         f"percent_rank() OVER (PARTITION BY date_ms ORDER BY {_col(s.name)}) AS {_rank(s.name)}"
         for s in specs
     )
-    return f"""{_base_cte(specs[0])},
+    #: ⚠️ `extra`/`src` 的默认值**必须**让无扩展路径与加钩子前逐字相同（冻结哈希见模块常量）。
+    extra = "" if extension is None else ",\n" + ",\n".join(extension.ctes)
+    src = "lvl4" if extension is None else extension.source
+    return f"""{_base_cte(specs[0])}{extra},
 scored AS (
     SELECT thscode, date_ms, f5 / NULLIF(f1, 0) - 1 AS fwd,
            {exprs}
-    FROM lvl4
+    FROM {src}
     WHERE cnt >= {min_bars}
       AND date_ms >= {cutoff_ms}
       AND nb1_high IS NOT NULL AND nb1_low IS NOT NULL AND nb1_high > nb1_low
@@ -165,6 +213,7 @@ def _rank_corr_pass(
     candidates: Sequence[FactorDef],
     incumbents: Sequence[FactorDef],
     cutoff_ms: int,
+    extension: PanelExtension | None = None,
 ) -> dict[int, dict[str, float | None]]:
     """第一遍：逐日截面秩相关（候选 × 全体既有）。
 
@@ -184,7 +233,7 @@ def _rank_corr_pass(
         f"(WHERE {_rank(c)} IS NOT NULL AND {_rank(i)} IS NOT NULL) AS \"{c}|{i}\""
         for c, i in pairs
     )
-    sql = f"""{_panel_sql((*candidates, *incumbents), cutoff_ms, min_bars)}
+    sql = f"""{_panel_sql((*candidates, *incumbents), cutoff_ms, min_bars, extension)}
 SELECT date_ms, count(*) AS n, {corr_cols}
 FROM rk
 GROUP BY date_ms
@@ -199,7 +248,11 @@ ORDER BY date_ms"""
 
 
 def _detail_sql(
-    cand: FactorDef, near: FactorDef, cutoff_ms: int, horizon: int
+    cand: FactorDef,
+    near: FactorDef,
+    cutoff_ms: int,
+    horizon: int,
+    extension: PanelExtension | None = None,
 ) -> str:
     """第二遍（仅最近邻）：头部重合 + 无条件/条件 IC。
 
@@ -210,11 +263,13 @@ def _detail_sql(
     """
     min_bars = cand.min_bars
     cc, nn = _col(cand.name), _col(near.name)
-    return f"""{_base_cte(cand)},
+    extra = "" if extension is None else ",\n" + ",\n".join(extension.ctes)
+    src = "lvl4" if extension is None else extension.source
+    return f"""{_base_cte(cand)}{extra},
 scored AS (
     SELECT thscode, date_ms, f{horizon} / NULLIF(f1, 0) - 1 AS fwd,
            ({cand.expr}) AS {cc}, ({near.expr}) AS {nn}
-    FROM lvl4
+    FROM {src}
     WHERE cnt >= {min_bars}
       AND date_ms >= {cutoff_ms}
       AND nb1_high IS NOT NULL AND nb1_low IS NOT NULL AND nb1_high > nb1_low
@@ -293,6 +348,7 @@ def screen_candidates(
     horizon: int = 5,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     min_cross_section: int = MIN_CROSS_SECTION,
+    extension: PanelExtension | None = None,
 ) -> dict:
     """对候选因子做结构新颖性筛查（只读；不写库、不改 `FACTORS`）。
 
@@ -312,7 +368,7 @@ def screen_candidates(
         raise ValueError("候选名重复：秩相关列以名称为键，重名会静默覆盖")
 
     cutoff_ms = _cutoff_ms(con, lookback_days)
-    corr_by_day = _rank_corr_pass(con, candidates, pool, cutoff_ms)
+    corr_by_day = _rank_corr_pass(con, candidates, pool, cutoff_ms, extension)
 
     days = sorted(corr_by_day)
     #: 逐日「有效截面」= 该日至少有一个配对算得出秩相关（用于样本量透明度）
@@ -369,7 +425,9 @@ def screen_candidates(
         }
         if nearest is not None:
             near_def = next(i for i in pool if i.name == nearest["incumbent"])
-            detail = _detail_rows(con, cand, near_def, cutoff_ms, horizon, min_cross_section)
+            detail = _detail_rows(
+                con, cand, near_def, cutoff_ms, horizon, min_cross_section, extension
+            )
             # g1/g2/g3 = 近邻值的**低/中/高**三分位（`ntile` 升序），组内重算候选的 IC。
             cond_groups = [
                 {"group": f"g{g}", "ic": _mean(detail["ic_g"][f"g{g}"])}
@@ -406,6 +464,16 @@ def screen_candidates(
             "redundant_hint_rank_corr": IC_CORR_DEDUP,
             "topk": {"frac": TOPK_FRAC, "min": TOPK_MIN},
             "min_days_for_verdict": MIN_DAYS_FOR_VERDICT,
+            #: 面板扩展的**口径留痕**（无扩展时为 None）：候选是在"哪一套附加口径"下筛的，
+            #: 必须写进报告——否则同一个候选名在不同口径下的结论会长得一模一样。
+            "extension": (
+                None if extension is None
+                else {
+                    "source": extension.source,
+                    "n_ctes": len(extension.ctes),
+                    "note": extension.note,
+                }
+            ),
             "note": (
                 "verdict 只有 duplicate 是数学结论（单调仿射 ⇒ 排序信息完全相同）；"
                 "redundant_hint 沿用 IC_CORR_DEDUP=0.70，语义为「去重提示，人工取舍」；"
@@ -427,9 +495,10 @@ def _detail_rows(
     cutoff_ms: int,
     horizon: int,
     min_cross_section: int,
+    extension: PanelExtension | None = None,
 ) -> dict:
     """跑第二遍并把逐日行收成按指标分组的列（IC 日按 `min_cross_section` 过滤）。"""
-    sql = _detail_sql(cand, near, cutoff_ms, horizon)
+    sql = _detail_sql(cand, near, cutoff_ms, horizon, extension)
     rows = con.execute(sql).fetchall()
     overlap: list[float] = []
     ic: list[float | None] = []
