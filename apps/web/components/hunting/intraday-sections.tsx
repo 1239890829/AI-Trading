@@ -647,7 +647,7 @@ export function AlertItem({ a }: { a: BriefAlert }) {
         </span>
         <span className="font-medium text-zinc-900 dark:text-zinc-50">{a.direction}</span>
         {a.symbol && (
-          <StockLink symbol={a.symbol} className="text-zinc-600 dark:text-zinc-400" title="点击进工作台看该股详情">
+          <StockLink symbol={a.symbol} className="text-zinc-600 dark:text-zinc-400" title="点击看该股详情">
             {a.name}（{a.symbol}）
           </StockLink>
         )}

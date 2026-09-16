@@ -6,7 +6,10 @@
  * - 悬浮球：pointer 拖动、松手吸附左右边缘、位置 localStorage 持久化；
  *   「移动 < 4px」判定为点击（展开/收起），避免拖动误触
  * - 聊天窗：SSE 流式渲染、中断（AbortController）/重新生成、最小化收回悬浮球
- * - 实体跳转：回答中的个股/题材经 entity-dict 词典识别 → 点击跳工作台详情/题材梯队
+ * - 实体跳转：回答中的个股/题材经 entity-dict 词典识别 → 个股**就地弹窗**看详情、
+ *   题材跳梯队页（2026-09-15 详情弹窗化，此前跳工作台）
+ * - AI 判读提醒气泡：判读为 notify 的告警冒泡，点「查看详情」直达该股详情弹窗
+ *   （2026-09-16，此前跳控制台告警页会丢当前页面上下文）
  * - 上下文：发送时带上当前页面 path/title/选中标的，后端注入系统提示
  * - 会话历史（IMP-004）：会话内容落 localStorage（最近 10 条）+ 历史列表，
  *   刷新不丢；存储契约与裁剪规则见 `lib/assistant-sessions.ts`
@@ -755,7 +758,8 @@ export function FloatingAssistant() {
         )}
       </div>
 
-      {/* 提醒气泡：AI 判读后才出现（规则触发 ≠ 值得提醒）；点开进控制台告警页 */}
+      {/* 提醒气泡：AI 判读后才出现（规则触发 ≠ 值得提醒）；
+          点「查看详情」**就地打开该股详情弹窗**（2026-09-16），多条时另有入口进告警页 */}
       {bubbles.length > 0 && !open && (
         <div
           data-testid="assistant-alert-bubble"
@@ -783,11 +787,33 @@ export function FloatingAssistant() {
           <div className="mt-2 flex items-center gap-1.5">
             <button
               type="button"
-              onClick={() => router.push("/agent?tab=alerts")}
+              data-testid="assistant-alert-view"
+              onClick={() => {
+                // 2026-09-16 用户指令：个股提醒点开**直接看这只股的详情弹窗**，不再跳告警页
+                // ——原实现 `router.push("/agent?tab=alerts")` 会把用户从当前页面连根拔走，
+                // 而气泡里的正文已经说明是哪只股，用户想看的就是那只股本身。
+                // 兜底：无代码的判读（后端 `pending_bubbles` 已按「缺 symbol+name 视为无效」过滤，
+                // 此处是防御性分支）才回退告警页，不静默失败。
+                const b = bubbles[0];
+                if (b.symbol) openSymbolDetail({ symbol: b.symbol });
+                else router.push("/agent?tab=alerts");
+              }}
               className="rounded-md border border-zinc-300 px-2 py-0.5 text-[11px] text-zinc-700 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
             >
-              查看
+              查看详情
             </button>
+            {/* 气泡只展示第一条；多条时保留通往告警页（全量 + 判读记录）的入口，
+                否则第 2 条起再无入口 —— 收敛主按钮不能以丢失能力为代价 */}
+            {bubbles.length > 1 && (
+              <button
+                type="button"
+                data-testid="assistant-alert-all"
+                onClick={() => router.push("/agent?tab=alerts")}
+                className="rounded-md px-2 py-0.5 text-[11px] text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+              >
+                全部 {bubbles.length} 条
+              </button>
+            )}
             <button
               type="button"
               onClick={() => void ackBubble(bubbles[0].id)}

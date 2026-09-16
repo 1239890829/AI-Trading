@@ -31,12 +31,19 @@
 
 ## 1 现场（每条任务收尾时更新）
 
-- **分支**：`codex/ledger-stage-consistency`（自 `origin/master` 创建；本轮交付 `GOV-015`）。
-  上一轮分支 `codex/opportunity-cost-and-scorecard` 已随 PR #14 合并并**删除**（本地与远程均已清）。
-- **基线**：`origin/master` = `b99261f73311b6410f05c9e6b5eba0b6791d4d86`（PR #14 合并提交）。
+- **分支**：`codex/alert-bubble-symbol-detail`（自 `origin/master` 创建；本轮交付 `IMP-031`）。
+  上一轮分支 `codex/ledger-stage-consistency` 已随 PR #15 合并并**删除**（本地与远程均已清）。
+- **基线**：`origin/master` = `662f9fa`（PR #15 合并提交）。
 - **服务**：后端 8000（uvicorn，单实例；**绝不用 `--reload`**，原因见 `AGENTS.md` §6.1）、前端 3000。
 - **门禁基线（本次收尾实测，接手时可直接对照）**：后端 **collect 3247（3171 passed / 76 skipped / 0 failed）**、
-  前端 **593 项 / 65 文件**（本地时区与 `TZ=UTC` 一致）、`eslint` **0/0**、`doc-health` **全部通过**。
+  前端 **598 项 / 66 文件 · 597 passed / 1 failed**、`eslint` **0/0**、`doc-health` **全部通过**。
+  ⚠️ **那 1 failed 是 `BUG-010`（D 档观察项），不是回归**：用例 =
+  `components/agent/markdown-view.test.tsx::docs/ 下全部 md 均可渲染完成`（固定 5s 墙钟）。
+  本轮**决定性归因（对照跑）**：临时移出本轮新增的 2 个文件后，基线**同样 `1 failed / 592 passed`、同一用例同一形态**
+  ⇒ 与新增文档/用例无关；增量 `597−592=5`、`66−65=1` **恰等于**新增用例数 ⇒ **新增用例全部通过**。
+  该用例单独跑 **10/10 · 1000ms**（`docs/` 已 87 份 md，阈值 5000ms）。宿主实测 **load 28.16 / 8 核**。
+  按原判**不改判据、不放宽阈值**（详见 `BUG-010` 行与 `AGENTS.md` 门禁段）。
+  前端较上轮 593/65 的 **+5 / +1** 即本轮新增的气泡用例文件。
   ⚠️ **两道全量不要并发跑**：并发会因 CPU 竞争让 `markdown-view.test.tsx` 的 docs 全量渲染用例
   超时假红（账本 `BUG-010`，D 档不主动动）——**它的红不代表代码回归**。
 - **归属不明的既有未跟踪文件（非本轮产物，**保留、勿删**）**：`git status --short` 里的 5 个 `??` 项，
@@ -52,10 +59,67 @@
 
 | 任务 ID | 状态 | 日期 | 一句话 |
 |---|---|---|---|
+| `IMP-031` | ✅ 闭环 | 2026-09-16 | AI 判读气泡点开**就地打开该股详情弹窗**（不再跳告警页）；同轮梳理出提醒链路断点清单 |
 | `GOV-015` | ✅ 闭环 | 2026-09-16 | 账本「未完成档 ⇄ 闭环记录」一致性守卫（`doc-health` Q 项）；顺带把滞留 A 档的 `BUG-014` 销账 |
 | `GOV-014` | ✅ 闭环 | 2026-09-16 | 建立交接明细层与双向索引守卫；注入自证抓出并修掉守卫的两处判据盲区，流程已固化为技能 |
 | `RSH-026` | 🟡 部分闭环 | 2026-09-16 | 个股机会学习闭环第一批已交付，并完成独立验收轮（抓出并修掉 1 处 schema 分叉） |
 | `BUG-014` | ✅ 闭环 | 2026-09-16 | 两处迁移把表建到默认库 ⇒ 全新库缺 5 张表；已改 `op.get_bind()` 并加两条守卫 |
+
+## IMP-031 AI 判读气泡点击就地打开个股详情弹窗（不再跳转提醒页）
+
+- **账本**：`docs/retro-and-gaps.md` §6.0 `IMP-031` ｜ **日期**：2026-09-16 ｜ **状态**：✅ 闭环
+- **缺口与验收标准**：悬浮球「AI 判读提醒」气泡的主按钮原为 `router.push("/agent?tab=alerts")`
+  ⇒ 用户**正看着某个页面**时点一条「`603330` · 某某 · 理由」的提醒，会被**连根拔到告警页**；
+  而气泡正文已经说明是哪只股。**验收标准**：点个股提醒 ⇒ **就地弹出该股详情弹窗、且不跳页**；
+  无代码的判读不静默失败；多条时不因收敛主按钮而丢失「看全量」的能力。
+- **改动**：
+  - `apps/web/components/assistant/floating-assistant.tsx` —— 主按钮改
+    `if (b.symbol) openSymbolDetail({ symbol: b.symbol })`，无 symbol 才回退告警页（防御性分支）；
+    新增 `data-testid="assistant-alert-all"` 的「全部 N 条」入口（`bubbles.length > 1` 时出现）；
+    同步修 3 处过期文案（气泡注释 / 文件头 docstring 的「实体跳转」条目）。
+  - `apps/web/components/assistant/floating-assistant-alert-bubble.test.tsx`（**新建，5 例**）。
+  - `apps/web/components/hunting/intraday-sections.tsx` —— 1 处过期 title 文案
+    （「点击进工作台看该股详情」→「点击看该股详情」：2026-09-15 详情弹窗化后前者已不成立）。
+  - **刻意没动**：告警页 `/agent?tab=alerts` 本身、后端 `pending_bubbles` 口径、下发通道与判读逻辑。
+- **机械证据**：
+  - 前端门禁 `vitest` **598 passed / 66 files**（较上轮 593/65 **+5 项 / +1 文件**，恰等于新测试文件；
+    本地时区与 `TZ=UTC` **均 598/66**）；`tsc --noEmit` **0 error**；`eslint .` **0 error / 0 warn**。
+  - 气泡数据源实测路径：`floating-assistant.tsx:277` → `getAgentBubbles(5)` →
+    `GET /api/agent/triage/pending`（`routes/agent.py:100`）→ `alert_triage.pending_bubbles`；
+    轮询间隔 **30s**，失败静默清空（不打扰）。
+- **注入自证 2/2**（脚本 `/tmp/inject_bubble_click.py`，改后 `sha256` 逐字还原并复绿）：
+  - `[A]` 主按钮改回**无条件** `router.push` ⇒ **2 条红**，点名「打开」「两条路」；
+  - `[B]` 去掉无 symbol 的兜底分支 ⇒ **1 条红**，点名「反向对照」。
+  - ⚠️ **首版脚本两个 bug 导致「假自证」，已沉淀教训**：① vitest 汇总行含 ANSI 转义 ⇒ 正则读不到
+    （加 `NO_COLOR=1` + `strip_ansi()`）；② 判据写成「子串出现在整份输出里」而输出**同时含通过与失败
+    用例名** ⇒ 恒真。改为**从 `Tests\s+(\d+)\s+failed` 取计数、并要求红的条数与点名都精确符合预期**。
+- **门禁**：
+  - 前端 `tsc --noEmit` **0 error**；`eslint .` **0 error / 0 warn**。
+  - `vitest run`：**598 项 / 66 文件**，其中 **597 passed / 1 failed**。那 1 failed =
+    `BUG-010`（D 档已知墙钟敏感项，**非本轮引入**，归因见 `§1 现场`）。
+    增量 `+5 项 / +1 文件` **恰等于**本轮新增用例数 ⇒ **新增 5 条全部通过**。
+    ⚠️ 本条**不写成「全绿」**：如实记录既定事实，避免下一位把已知项误读成回归。
+  - 后端 `app/**` 本轮**未改动**，本轮修复后本地全量复跑 **3171 passed / 76 skipped / 0 failed**
+    （202.05s，8000 在跑）。⚠️ 但 **「没改 `.py`」≠「后端门禁不会红」**——见下方 CI 判红。
+  - **CI 判红与修复（真回归，不是假红）**：PR #16 首跑 `35050416236` 的 **backend job 红**，
+    唯一失败 = `tests/test_doc_status_truthfulness.py::test_summary_status_claims_point_to_ledger`，
+    报 `docs/summary/pick-signal-chain.md: 命中 ['未做'] 但无 §6.0 指针`。
+    该守卫即 `GOV-002` **判据 2**（结构约束：`docs/summary/*.md` 谈状态 ⇒ 必须带账本 §6.0 指针），
+    其**输入是文档** ⇒ **只改文档照样让后端红**。
+    **根因 = 本轮门禁口径取窄**：据「后端零改动」推定「不必跑后端门禁」，漏掉"后端有一类扫 `docs/` 的守卫"。
+    **修法 = 补指针**（按该守卫既定惯例在文档头部加权威指针，并说明本文的「未做」指**取证边界**），
+    **不改守卫、不登记豁免、不放宽判据**。commit `8e55b73`；同时把该纪律写进 `AGENTS.md` §1 防复发。
+    ✅ **该守卫的这次真实判红本身就是最强的「注入自证」**——它确实抓得住这个形态，无需再造合成注入。
+    复验：本地 `7 passed` ＋ **干净检出**（`/tmp/ci-sim`）`7 passed`；`doc-health` 本地与干净检出**双验全通过**。
+  - `doc-health` **19 项全部通过**（P 交接索引 5 条双向闭包 / Q 档位一致 0 冲突），
+    并已用**干净检出**（`git worktree add --detach /tmp/ci-sim HEAD`）复验 ⇒ 判定面 = CI 检出内容。
+- **遗留与下一步**（本项顺带产出的发现，**均已另登记、未在本项动手**）：
+  - 本修正使悬浮球落点为 `symbol` 弹窗，而**通知抽屉行体仍是 `generic`** ⇒ 同类功能落点不一致 ⇒ **`IMP-033`**。
+  - 链路梳理结论落在 **`docs/summary/pick-signal-chain.md`**（新编号 **SM-08**）：
+    `append_alert` 存在**两个家族**（经 `dispatch_alert` 入事件流 / 引擎直写晨报不入事件流）⇒
+    猎场「盘中提醒」是**混合视图** ⇒ **`IMP-032`**；判读 `verdict` **只作用于悬浮球、不作用于通知中心**
+    ⇒「已降噪」仍被推送 ⇒ **`BUG-015`**；另有 5 处过期断言 + 2 个死代码函数（带 3 个测试）⇒ **`IMP-034`**。
+  - ⚠️ `BUG-015` / `IMP-032` 均属**口径变更**（通知口径 / 事件 kind 与 push_policy），按「改进先提后做」**留 B 档待批**。
 
 ## GOV-015 账本档位一致性守卫（含 `BUG-014` 销账）
 

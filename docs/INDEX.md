@@ -26,7 +26,7 @@
 | **AG-06** | `PROJECT-MASTER.md` | L2 | 总览 | 全项目技术总览（08-29 基线，细节以代码为准）。维护：结构变化 |
 | **AG-07** | `handoff.md` | L2 | 交接 | **任务明细层**：每个动过手的任务一条（缺口与验收标准 / 改动 / 机械证据 / 注入自证 / 门禁 / 遗留）。与账本 **§6.0-H** 双向索引，由 `doc-health` **P 项**判红。维护：每完成一段可独立验收的工作**当轮**追加条目 |
 | **KW-00..11** | `kb/00-INDEX.md` … `kb/11-doc-catalog.md` | L2/L3 | 知识 | 见下方「KB 知识库」分表 |
-| **SM-01..07** | `summary/stock-strategy` · `factor-system` · `data-market` · `architecture-design` · `ai-evolution` · `review-governance` · `system-final-blueprint` | L2 | 主题汇总 | **查主题先看这里**；`system-final-blueprint` 是任务四后目标架构与验收总纲。维护：主题结论更新 |
+| **SM-01..08** | `summary/stock-strategy` · `factor-system` · `data-market` · `architecture-design` · `ai-evolution` · `review-governance` · `system-final-blueprint` · `pick-signal-chain` | L2 | 主题汇总 | **查主题先看这里**；`system-final-blueprint` 是任务四后目标架构与验收总纲；**`pick-signal-chain` = 选股提醒链路（`dispatch_alert` 扇出 / 双家族分裂 / 断点清单 G1–G5）**。维护：主题结论更新 |
 | **DT-01** | `data-source-comparison.md` | L2 | 数据源 | 四源实测对比与选型。**改数据源前必读，改完回填** |
 | **DT-02** | `data-sources.md` | L2 | 数据源 | 接入策略：主源 → 备源 → 降级链 |
 | **DT-03** | `external-data-source-survey-2026-09-11.md` | L1 | 调研 | 外部付费源调研（**均官方公开信息、零实测，📎**）。**已拍板不接入** ⇒ 只读留痕 |
@@ -112,6 +112,7 @@
 | **T6 前端与 UI** | `summary/architecture-design.md`（§1 跨页面联动设计） | `architecture.md` · `kb/03-engineering.md` | **验收以实际渲染为准**（agent-browser 文本通道）；**新增页面/板块需先论证**；**详情弹窗化**（个股/指数在任何页面就地弹窗，不跳工作台）见 [[KB-ENG-92]] |
 | **T7 外部工具与技能** | `.workbuddy/skills/<name>/SKILL.md`（**技能自述即文档**） | 本表 **WB-04** · `llm-gateway-probe.md` | 外部结论**必带免责声明**；`uzi-skill` 用**独立 venv**、首跑约 15 分钟、**仅盘后** |
 | **T8 决策与"为什么当初这么定"** | `kb/04-decisions.md`（KB-DEC） | `retro-and-gaps.md` §七（偏差错题本）· `archive/` | **已拍板勿重开**；被取代的条目改 ❌ 并写明取代者，**永不删除** |
+| **T9 提醒与通知链路** | `summary/pick-signal-chain.md`（**先读它**：定位/触发/流向/断点） | `services/alert_triage.py`（判读闸门）· `api/routes/notifications.py`（通知收口）· `picks/watcher.py::dispatch_alert`（唯一汇聚点）· `services/push_policy.py` | **收敛口径时必须回扫自称该口径的注释**（`IMP-028` 遗留 5 处过期断言，见该文 §G4）；**判读闸门现状只作用于悬浮球**（§G1）；改通知来源须同步 §3.1 规则清单 |
 
 ### 0.2 任务动线（**按序**读——顺序错会先读一堆无关的）
 

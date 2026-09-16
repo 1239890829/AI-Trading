@@ -68,7 +68,7 @@ cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 coll
 # **教训与本文档的警告同源：数字标注要么当轮实测回填，要么写"实测方法"而不写死数值。**
 cd apps/web && npx tsc --noEmit                   # 类型 0 错误
 cd apps/web && npx eslint .                       # 0 error / 0 warn（P1-27 已清零；余 1 处 C 类显式豁免）
-cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 593 项 / 65 文件（09-15 §6.47 R22 轮实测）
+cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run   # 前端 598 项 / 66 文件（09-16 `IMP-031` 轮实测）
 # ⚠️ 默认并行度偶发 **SIGKILL(exit 137) 且零输出**（非测试失败）⇒ 先降并行度复跑：
 #   npx vitest run --maxWorkers=1
 # ⚠️ **凡改动/新增涉及时间·时区的断言，必须再用 `TZ=UTC` 复跑一遍**（CI 跑在 UTC，本地是 UTC+8）：
@@ -86,24 +86,46 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 # 「本地恒绿 / CI 恒红」（2026-09-15 N/O 两项实测，见 [[KB-ENG-95]]）。
 # 怀疑「本地绿/CI 红」时，**先用干净检出复现**（比推 CI 等结果快得多）：
 #   git worktree add --detach /tmp/ci-sim HEAD && (cd /tmp/ci-sim && python3 scripts/doc-health.py)
+# ⚠️ **改了 `docs/`（或 `AGENTS.md`）⇒ 后端门禁也必须跑，"后端代码零改动" 不构成豁免**
+# （2026-09-16 实测踩到：`IMP-031` 轮只改了 frontend + docs，判定"后端零改动不用跑后端"，
+#  结果 PR #16 的 **CI backend job 红**——`tests/test_doc_status_truthfulness.py`
+#  判据 2 要求 `docs/summary/*.md` **谈状态就必须带 §6.0 指针**，而新建的
+#  `docs/summary/pick-signal-chain.md` 含「未做」却无指针。
+#  ⇒ **后端门禁里有一类"扫 `docs/` 的文档守卫"**（`test_doc_status_truthfulness.py` 等），
+#    它们的输入是文档 ⇒ 只改文档照样让后端红。**"没改 .py" 与 "后端不会红" 是两件事。**
+#  修法 = 按 `GOV-002` 惯例在 summary 文档头部加 `§6.0` 权威指针，**不是改守卫、不是登记豁免**。）
 # 生产构建前必须先停 dev server（.next 冲突已踩两次）：
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
 > **门禁口径**：后端 collect **3247 项（3171 passed / 76 skipped / 0 failed）**、
-> 前端 **593 项 / 65 文件**、eslint **0 error / 0 warn**
+> 前端 **598 项 / 66 文件**、eslint **0 error / 0 warn**
+> （2026-09-16 `IMP-031` AI 判读气泡点击语义修正 + 选股提醒链路梳理轮实测；较上一值「后端 3247 / 前端 593·65」
+> 增量 **前端 +5 项 / +1 文件**，来源自洽：**恰等于**新文件
+> `components/assistant/floating-assistant-alert-bubble.test.tsx` 的用例数（5）；
+> 后端 **±0** 的理由是**本轮未改后端代码**（纯前端 + 文档），故沿用上轮实测值。
+> 本地时区与 `TZ=UTC` **均为 598/66**。）
 > （2026-09-16 `GOV-015` 账本档位一致性守卫 + `BUG-014` 销账轮实测；较上一值「后端 3235 / 前端 593·65」
 > 增量 **后端 collect +12 = passed +12 / skipped ±0**。机械核验：`+12` **恰等于**新文件
 > `backend/tests/test_doc_health_ledger_stages.py` 的 `--collect-only` 计数 **12**；
 > 同轮另一处测试改动 `backend/tests/test_doc_health_anchors.py` **只补 `_NEUTRAL` 一项、不新增用例**；
 > `skipped` 保持不变的理由是**本轮未新增 `app/` 非业务层模块**（`scripts/` 与 `tests/` 不进该口径）。
 > 前端 **±0**，本地时区与 `TZ=UTC` 均为 593/65。
-> ⚠️ **本轮实测到 `BUG-010`（D 档观察项）的确切触发条件，勿把它当成本轮回归**：后端全量与前端
-> 全量**并发**跑时，`components/agent/markdown-view.test.tsx::docs/ 下全部 md 均可渲染完成`
-> 因 CPU 竞争 **4 轮中 3 轮超时 5s**；**解除并发后 ×3 全绿**（本地时区 + `TZ=UTC`）。
-> ⇒ 该用例判据挂在**墙钟**上（与 `BUG-008` 同族），**它的红不代表代码回归**。
-> 门禁实操：**不要并发跑这两道全量**；CI 的两个 job 各占独立 runner，不受此影响。
-> 按 `BUG-010` 原判：**不单点放宽超时**（那只是把阈值往上挪），须与 `BUG-008` 一并按族排期。）
+> ⚠️ **`BUG-010`（D 档观察项）的触发条件是「宿主负载」，不是「并发」——别把它的红当成本轮回归**：
+> 用例 = `components/agent/markdown-view.test.tsx::docs/ 下全部 md 均可渲染完成`（固定 5s 墙钟）。
+> ① 与后端全量**并发**跑时 **4 轮 3 红**，解除并发后 ×3 全绿；
+> ② **2026-09-16 `IMP-031` 轮更正**：**未跑后端全量**（前端全量单独跑）时**连续 3 轮全红**，
+> 宿主 `uptime` 实测 **load 28.16 / 8 核** ⇒ 「并发」只是满载的一种成因，**自变量是负载本身**。
+> **归因证据（对照跑，非推理）**：临时移出该轮新增的 1 份 `docs/` md + 1 个前端测试文件后，
+> 基线**同样 `1 failed / 592 passed`、同一用例同一形态** ⇒ 与新增文档/用例**无关**；
+> 增量自洽 `597−592=5`、`66−65=1` 恰等于新增用例数 ⇒ **新增用例全部通过**。
+> 该用例单独跑 **10/10 · 1000ms**（`docs/` 已 87 份 md，阈值 5000ms，**5× 余量**）。
+> ⚠️ **更本质的一点**：该用例的判定目标是「渲染不得死循环」，而同文件第 32–34 行**明确记录
+> 真死循环的表现是「挂死」而非变红**（同步渲染期占死事件循环、超时打断不了）⇒
+> **这个 5s 超时抓不到它要抓的缺陷**，属「判据与目标错位」（[[KB-ENG-94]] 同族）。
+> 按 `BUG-010` 原判：**不改判据、不单点放宽超时**（放宽只是掩盖），真正的修法是改成结构性判据
+> ——须与 `BUG-008` 一并**按族排期拍板**。门禁实操：看到这条红**先看 `uptime` 负载**，
+> 再看对照跑；**它的红不代表代码回归**。CI 各 job 独立 runner，不受本地负载影响。
 > （2026-09-16 `BUG-014` + `GOV-014` 轮实测；较上一值「后端 3225 / 前端 593·65」增量
 > **后端 collect +2 = passed +2 / skipped ±0**，机械核验 = `git diff -U0 HEAD -- 'backend/tests/*.py'`
 > 新增 `def test_` **10 个、删除 0 个**，其中 8 个已计入上一值 `RSH-026` 口径 ⇒ 本轮净 **+2**，
