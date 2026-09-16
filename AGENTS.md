@@ -42,7 +42,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 collect 3247 项（3171 passed / 76 skipped / 0 failed）（09-16 GOV-015 轮实测；前提：8000 在跑）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 collect 3306 项（3230 passed / 76 skipped / 0 failed / 236.05s）（09-16 RSH-003 轮实测；前提：8000 在跑）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。
@@ -107,8 +107,22 @@ lsof -ti tcp:3000 -sTCP:LISTEN | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DE
 #   "这次只是改文案所以不用跑" 是最贵的一句话：本轮两次丢失都是靠随后的判据才发现的。
 ```
 
-> **门禁口径**：后端 collect **3247 项（3171 passed / 76 skipped / 0 failed）**、
-> 前端 **603 项 / 67 文件**、eslint **0 error / 0 warn**
+> **门禁口径**：后端 collect **3306 项（3230 passed / 76 skipped / 0 failed）**、
+> 前端 **608 项 / 67 文件**、eslint **0 error / 0 warn**
+> （2026-09-16 `RSH-003` 结构新颖性筛查切片轮（含 CLI 丢参缺陷修复）实测；后端 **236.05s**（8000 在跑）；
+> `tsc` **0** · `pyflakes` **0** · `doc-health` **全部通过**；本地时区与 `TZ=UTC` **均为 608/67**。
+> ⚠️ **较上一值「后端 3287 / 前端 608·67」增量 后端 collect +19 = passed +19 / skipped ±0**，
+> 来源自洽且分两类：`+18` = 新文件 `backend/tests/test_factor_novelty.py`；
+> `+1` = `test_import_lint.py` 分层参数化新增一个**业务层**模块 `app/factors/novelty.py`
+> （实测用例名 `test_business_layer_never_imports_api[-factors/novelty.py]`）。
+> **非业务层模块数未变** ⇒ 实测 `tests/test_import_lint.py` = **193 passed / 74 skipped**，
+> `74 = 76 − 2` 与上轮**逐字相同**（[[KB-ENG-97]]：跳过数不变 = 无覆盖丢失）。
+> 前端 **±0**（本轮 `apps/web/` **零改动**，`git status` 核对无差异 ⇒ 与上轮逐字一致）。
+> ⚠️ **本文件此前的门禁口径头行落后两轮**：它写着 **3247 / 603·67**（`IMP-033` 轮），
+> 而 `docs/handoff.md` §1 已到 **3287 / 608·67** —— 中间两轮（`BUG-016` 子项③、`RSH-027`）
+> 更新了 handoff、**未同步本文件**（各自的 Δ 归因在 handoff §1 可查）。
+> ⇒ **纪律：门禁数字以 `docs/handoff.md` §1 为权威位，本头行必须与它同轮同步**，
+> 否则下一位接手者会拿旧基线去比、把正常增量误判成回归。
 > （2026-09-16 `IMP-033` 提醒落点统一为个股详情弹窗轮实测；较上一值「后端 3247 / 前端 598·66」
 > 增量 **前端 +5 项 / +1 文件**，来源自洽：**恰等于**新文件
 > `components/notifications/notification-row-landing.test.tsx` 的用例数（5）；
