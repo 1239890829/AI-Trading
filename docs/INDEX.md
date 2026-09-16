@@ -133,7 +133,7 @@
 
 | 症状 | 去哪条 |
 |---|---|
-| shell `grep` 搜 `\|` 交替**静默返回空** | `kb/03-engineering.md` KB-ENG-04（**下结论一律用 Grep 工具**，在 `kb/08`） |
+| shell 检索返空，或依赖不可移植的 BRE `\|` | `kb/03-engineering.md` KB-ENG-04（多分支用 `rg` / `grep -E`；“不存在”结论须第二工具复核，详见 `kb/08`） |
 | 同文件多处 Edit 并行改，**只生效最后一处** | `kb/08-tooling-pitfalls.md` KB-ENG-01 |
 | 测试开头**成簇 `E`**（不是 `F`） | `kb/09` KB-ENG-53：先怀疑**环境**（缺 `--basetemp`），不要先怀疑代码 |
 | **本地全绿、CI 红** | `kb/09` KB-ENG-57（时区/大文件/顺序）· KB-ENG-70（判定面 ≠ CI 检出） |
