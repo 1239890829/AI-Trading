@@ -95,7 +95,16 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 #    它们的输入是文档 ⇒ 只改文档照样让后端红。**"没改 .py" 与 "后端不会红" 是两件事。**
 #  修法 = 按 `GOV-002` 惯例在 summary 文档头部加 `§6.0` 权威指针，**不是改守卫、不是登记豁免**。）
 # 生产构建前必须先停 dev server（.next 冲突已踩两次）：
-lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
+lsof -ti tcp:3000 -sTCP:LISTEN | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
+# ⚠️ **按端口 kill 一律带 `-sTCP:LISTEN`**：`lsof -ti tcp:<port>` 收的是「**所有持有该端口 fd 的进程**」
+# —— **包含客户端**（Next dev 是 8000 的客户端、浏览器是 3000 的客户端）
+# ⇒ 用 `lsof -ti tcp:8000 | xargs kill -9` 重启后端会**连带打死前端 dev server**，
+#    且前端无任何报错、日志停在重启那一刻，因果在本进程日志里**看不见**（2026-09-16 实测踩三次，见 [[KB-ENG-106]]）。
+# 杀完**复查两个端口**，不要只确认"我杀的那个没了"。
+# ⚠️ **改完立刻跑那条能覆盖它的判据；同一批次不要对同一文件并发两处编辑**——
+#   「工具报成功」**不是**落盘证据，第二处改动可能**静默丢失**，
+#   而代码会停在「旧行为 + 新文档」的自洽组合上 ⇒ **门禁全绿也抓不到**（[[KB-ENG-105]]）。
+#   "这次只是改文案所以不用跑" 是最贵的一句话：本轮两次丢失都是靠随后的判据才发现的。
 ```
 
 > **门禁口径**：后端 collect **3247 项（3171 passed / 76 skipped / 0 failed）**、

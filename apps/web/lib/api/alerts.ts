@@ -108,6 +108,50 @@ export interface NotificationItem {
   score: number | null;
 }
 
+/** 空态诊断（`BUG-016` 子项③，2026-09-16）。
+
+ * **为什么需要它**：空响应体本身区分不出三种处境——「真无机会（跑了但全被否）」
+ * 「链路未跑」「上游空（盘前没选出）」，三者都是 `{items: [], count: 0}`。
+ * 后端仅在 `items` 为空时附上本字段（非空态恒为 `null`），用于把"为什么空"讲清楚。
+ *
+ * ⚠️ 本字段**只是解释**，不改变任何推送口径（档位门等属交易信号口径，须用户拍板）。
+ */
+export interface NotificationDiagnostics {
+  /** 四态 + 一降级：上游空 / 链路未跑 / 全被否 / 有通过却空 / 诊断不可用 */
+  state: "no_pick_set" | "no_run" | "ran_rejected" | "ran_eligible" | "unavailable";
+  trade_date: string;
+  as_of: string;
+  /** 当日盘前精选摘要；`unavailable` 时只有 `present` / `count` */
+  pick_set: {
+    present: boolean;
+    count: number;
+    tier_counts?: Record<string, number>;
+    score_range?: [number, number] | null;
+    observation_only?: number;
+    no_buy_range?: number;
+    gate?: {
+      stand_aside: boolean;
+      level: string | null;
+      phase: string | null;
+      reasons: string[];
+    };
+  };
+  /** 当日 `notification` 阶段判定证据摘要；`unavailable` 时只有 `present` / `polls` */
+  decisions: {
+    present: boolean;
+    polls: number;
+    by_decision?: Record<string, number>;
+    symbols?: string[];
+    tier_counts?: Record<string, number>;
+    top_tier?: string | null;
+    unknown_tiers?: string[];
+    /** 逐股否决原因；`count` 按 symbol 去重（不是记录数） */
+    reasons?: { reason: string; count: number; symbols: string[] }[];
+    last_as_of?: string | null;
+  };
+  note: string;
+}
+
 export interface NotificationsPayload {
   items: NotificationItem[];
   count: number;
@@ -117,6 +161,8 @@ export interface NotificationsPayload {
   policy: "stock_opportunities_only";
   /** 单源失败显式透出（降级可见），全部成功为 null */
   errors: Record<string, string> | null;
+  /** 空态诊断；**非空态恒为 null**（后端刻意只在空态附加），旧后端也可能不返回该键 */
+  diagnostics?: NotificationDiagnostics | null;
 }
 
 export async function getNotifications(): Promise<NotificationsPayload> {

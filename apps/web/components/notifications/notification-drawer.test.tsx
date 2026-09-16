@@ -186,3 +186,122 @@ describe("通知中心：未读计数与红点", () => {
     await waitFor(() => expect(screen.queryByText("新条目")).toBeNull());
   });
 });
+
+/**
+ * 空态诊断（`BUG-016` 子项③，2026-09-16）。
+ *
+ * 用户现场反馈「为什么消息通知一个也没有呢」——旧界面只回一句
+ * 「盘中暂无通过多维筛选的个股机会」，把三种处境（全被否 / 链路没跑 / 盘前没选出）
+ * **说成同一件事**。这组用例守两件事：
+ *  ① 后端给了诊断 ⇒ **真的渲染出来**（含逐股原因，不是只改个标题）；
+ *  ② 后端没给 / 不该给 ⇒ **不臆造**，退回原有一句话。
+ */
+function diagPayload(
+  diag: NotificationsPayload["diagnostics"],
+  items: NotificationItem[] = [],
+): NotificationsPayload {
+  return { ...makePayload(items), diagnostics: diag };
+}
+
+const ranRejectedDiag: NonNullable<NotificationsPayload["diagnostics"]> = {
+  state: "ran_rejected",
+  trade_date: "2026-09-16",
+  as_of: "2026-09-16 13:16:00",
+  pick_set: {
+    present: true,
+    count: 1,
+    tier_counts: { observe: 1 },
+    score_range: [50.6, 50.6],
+    observation_only: 1,
+    no_buy_range: 1,
+    gate: { stand_aside: true, level: "strong", phase: "退潮", reasons: ["大盘退潮"] },
+  },
+  decisions: {
+    present: true,
+    polls: 16,
+    by_decision: { rejected: 1 },
+    symbols: ["603162"],
+    tier_counts: { observe: 1 },
+    top_tier: "observe",
+    unknown_tiers: [],
+    reasons: [{ reason: "置信档 observe 不足（需 executable/strong）", count: 1, symbols: ["603162"] }],
+    last_as_of: "2026-09-16 13:15:00",
+  },
+  // 与后端真实 note 同构：**强调** + `行内代码` 两种标记都有（否则剥离断言会平凡通过）
+  note: "判定链**已跑**（16 拍 / 1 只），全部被否决；门顺序短路：`快照无现价` → `置信档`。",
+};
+
+describe("通知中心：空态诊断（BUG-016 子项③）", () => {
+  it("空态且有诊断 → 渲染状态、原因与逐股明细", async () => {
+    payload = diagPayload(ranRejectedDiag);
+    render(<NotificationBell />);
+    await openDrawer();
+
+    const box = await screen.findByTestId("notification-empty-diagnosis");
+    expect(box.dataset.state).toBe("ran_rejected");
+    expect(box.textContent).toContain("候选全部被否决");
+    expect(box.textContent).toContain("置信档 observe 不足（需 executable/strong）");
+    expect(box.textContent).toContain("603162");
+    // 计数口径：按 symbol 去重 ⇒ 16 拍不显示成 16 只
+    expect(box.textContent).toContain("1 只");
+    expect(box.textContent).toContain("判定 16 拍");
+    expect(box.textContent).toContain("最高档 observe");
+    // 后端 note 按 Markdown 写，抽屉是纯文本 ⇒ 星号与反引号都不得出现在界面上
+    // （反引号这条是**渲染实测**发现的：只剥 `**` 时界面会原样显示 `` `快照无现价` ``）
+    expect(box.textContent).not.toContain("**");
+    expect(box.textContent).not.toContain("`");
+  });
+
+  it("空态但后端没给诊断（旧后端/字段缺失）→ 退回原有一句话，不臆造", async () => {
+    payload = makePayload([]); // 无 diagnostics 键
+    render(<NotificationBell />);
+    await openDrawer();
+
+    expect(screen.queryByTestId("notification-empty-diagnosis")).toBeNull();
+    expect(screen.getByText("盘中暂无通过多维筛选的个股机会")).toBeTruthy();
+  });
+
+  it("非空态 → 不展示诊断块（即使该字段被误带上）", async () => {
+    // 反向断言：诊断的语义是"整份 payload 为空"，不是"某 tab 为空"。
+    // 若前端改成像后端一样无条件渲染，本条立刻红。
+    payload = diagPayload(ranRejectedDiag, [
+      item({ id: "a", ts: "2026-09-16 10:00:00", title: "有通知" }),
+    ]);
+    render(<NotificationBell />);
+    await openDrawer();
+
+    expect(await screen.findByText("有通知")).toBeTruthy();
+    expect(screen.queryByTestId("notification-empty-diagnosis")).toBeNull();
+  });
+
+  it("本时段空但别的时段有 → 不展示诊断（只是切到了没内容的 tab）", async () => {
+    payload = diagPayload(ranRejectedDiag, [
+      item({ id: "a", session: "pre_open", ts: "2026-09-16 08:30:00", title: "盘前那条" }),
+    ]);
+    render(<NotificationBell />);
+    await openDrawer(); // 默认 tab = 盘中
+
+    expect(screen.queryByTestId("notification-empty-diagnosis")).toBeNull();
+    expect(screen.getByText("盘中暂无通过多维筛选的个股机会")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("盘前"));
+    expect(await screen.findByText("盘前那条")).toBeTruthy();
+  });
+
+  it("诊断不可用（unavailable）→ 明说不可用，不得显示成「没有机会」", async () => {
+    payload = diagPayload({
+      ...ranRejectedDiag,
+      state: "unavailable",
+      note: "诊断数据读取失败（OperationalError: db down）⇒ **本字段为空不等于没有机会**。",
+      decisions: { present: false, polls: 0 },
+      pick_set: { present: false, count: 0 },
+    });
+    render(<NotificationBell />);
+    await openDrawer();
+
+    const box = await screen.findByTestId("notification-empty-diagnosis");
+    expect(box.dataset.state).toBe("unavailable");
+    expect(box.textContent).toContain("诊断不可用");
+    expect(box.textContent).toContain("不等于没有机会");
+  });
+});

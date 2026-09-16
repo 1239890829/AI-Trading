@@ -32,9 +32,21 @@ session（盘前/盘中/盘后）**交易日历优先**（2026-09-13 用户报�
 为什么必须落服务端：此前只存浏览器 localStorage，而它是**按 origin 命名空间**的，
 换源（localhost ↔ 127.0.0.1）／换 profile／清站点数据都会让已读状态整体归零，
 表现为「重启后全部已读变未读、徽标回到 65」（实测复现）。
+
+## 空态可解释性（`BUG-016` 子项③，2026-09-16）
+
+用户现场反馈「为什么消息通知一个也没有呢」取证后发现：**空响应体本身无法区分**
+三种完全不同的处境 ——「真无机会（跑了但全被否）」「链路未跑」「上游空（盘前没选出）」，
+三者都表现为 ``{"items": [], "count": 0}``。
+
+因此 ``GET /api/notifications`` 在 **`items` 为空时**额外返回 ``data.diagnostics``
+（`state` 四态 + 候选档位分布 + 逐股否决原因；实现与口径见
+``app/picks/notification_diagnostics.py``）。⚠️ **非空态不返回该字段（恒 `null`）**，
+且本项**只增加可诊断面、不改任何推送口径**（改档位门属交易信号口径变更，须用户拍板）。
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime
@@ -183,6 +195,25 @@ async def notifications(
 
     items = alert_items
     items.sort(key=lambda x: x["ts"] or "", reverse=True)
+    # 空态诊断（`BUG-016` 子项③，2026-09-16）：**只在空态附加**。
+    # 空响应体本身不含任何能区分「真无机会 / 链路未跑 / 上游空」的信息 ——
+    # 三者都是 `{"items": [], "count": 0}`，这正是「不可解释」的根因。
+    # ⚠️ 非空态**刻意不附加**：那是本子项的判据边界之外，且本端点是 30s 轮询热路径，
+    #    不该为"用户不会问的场景"每拍多读两次库。
+    diagnostics: dict | None = None
+    if not items:
+        try:
+            from app.picks.notification_diagnostics import notification_diagnostics
+
+            diagnostics = await asyncio.to_thread(notification_diagnostics)
+        except Exception:  # noqa: BLE001  诊断失败不得拖垮通知端点本身
+            log.exception("notifications: diagnostics failed")
+            # ⚠️ 回 dict 而非 None：None 在本端点里**已被"非空态"占用**，
+            #    两者同形就等于把"诊断坏了"伪装成"有通知"。异常一律显式降级。
+            diagnostics = {
+                "state": "unavailable",
+                "note": "空态诊断不可用（内部错误）：**这不代表没有机会**，请查后端日志。",
+            }
     return {
         "data": {
             "items": items,
@@ -191,6 +222,7 @@ async def notifications(
             "news_min_score": min_score,
             "policy": "stock_opportunities_only",
             "errors": errors or None,
+            "diagnostics": diagnostics,
         },
         "meta": {},
     }

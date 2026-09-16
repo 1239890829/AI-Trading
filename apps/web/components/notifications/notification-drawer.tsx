@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 
 import {
   getNotifications,
+  type NotificationDiagnostics,
   type NotificationItem,
   type NotificationsPayload,
 } from "@/lib/api";
@@ -108,6 +109,85 @@ function judgmentPayload(item: NotificationItem): DetailPayload {
       ...(item.score != null ? [{ label: "评分", value: String(item.score) }] : []),
     ],
   };
+}
+
+/**
+ * 空态文案与诊断（`BUG-016` 子项③，2026-09-16）。
+ *
+ * **为什么要有**：用户现场反馈「为什么消息通知一个也没有呢」。旧实现只有一句
+ * 「盘中暂无通过多维筛选的个股机会」——而它同时覆盖了三种**完全不同的处境**：
+ * 「跑了但全被否」「链路根本没跑」「盘前就没选出候选」。三者要做的事不一样
+ * （看原因 / 查调度时段 / 看盘前选股），一句话讲不清，等于把"无证据"写成"证据表明没有"。
+ *
+ * ⚠️ 诊断字段**只在整份 payload 为空时**才由后端附带（非空态恒 `null`）：
+ * 因此「本时段空、别的时段有」不要展示诊断（那不是"空态"，只是切到了没内容的 tab）。
+ */
+const NOTIF_STATE_HEADLINE: Record<NotificationDiagnostics["state"], string> = {
+  no_pick_set: "盘前没选出候选",
+  no_run: "今日判定链还没跑到通知阶段",
+  ran_rejected: "候选全部被否决",
+  ran_eligible: "有候选通过却通知为空（需排查）",
+  unavailable: "诊断不可用",
+};
+
+/** 后端 `note` 按 Markdown 写（`**强调**` / `` `行内代码` ``）；抽屉里是**纯文本** ⇒ 剥掉标记。
+
+ * 实测踩到（2026-09-16）：只剥 `**` 时，note 里的 `` `快照无现价` `` 会**把反引号原样显示**
+ * 在界面上（渲染快照确凿可见）——"以实际渲染为准"才会发现这类问题，
+ * 读代码时它看起来"已经处理了 Markdown"。
+ */
+function plainNote(s: string): string {
+  return s.replace(/\*\*/g, "").replace(/`/g, "");
+}
+
+function NotificationEmptyState({
+  payload,
+  tab,
+}: {
+  payload: NotificationsPayload;
+  tab: NotificationItem["session"];
+}) {
+  const diag = payload.count === 0 ? (payload.diagnostics ?? null) : null;
+  if (!diag) {
+    return (
+      <p className="px-2 py-8 text-center text-xs text-zinc-600 dark:text-zinc-400">
+        {tab === "intraday" ? "盘中暂无通过多维筛选的个股机会" : "该时段暂无个股机会"}
+      </p>
+    );
+  }
+  const d = diag.decisions;
+  const ps = diag.pick_set;
+  const reasons = d.reasons ?? [];
+  return (
+    <div
+      data-testid="notification-empty-diagnosis"
+      data-state={diag.state}
+      className="space-y-2 rounded-lg border border-zinc-200 bg-zinc-50/70 px-3 py-3 text-xs dark:border-zinc-700 dark:bg-zinc-800/40"
+    >
+      <p className="font-medium text-zinc-800 dark:text-zinc-100">
+        本时段无通知：{NOTIF_STATE_HEADLINE[diag.state] ?? diag.state}
+      </p>
+      <p className="text-zinc-600 dark:text-zinc-400">{plainNote(diag.note)}</p>
+      <p className="text-[11px] text-zinc-500 dark:text-zinc-500">
+        候选 {ps.count} 只 · 最高档 {d.top_tier ?? "无"} · 判定 {d.polls} 拍
+        {diag.trade_date ? ` · ${diag.trade_date}` : ""}
+        {diag.as_of ? ` · 诊断于 ${diag.as_of.slice(11, 16)}` : ""}
+      </p>
+      {reasons.length > 0 && (
+        <ul className="space-y-1 border-t border-zinc-200 pt-2 dark:border-zinc-700">
+          {reasons.map((r) => (
+            <li key={r.reason} className="text-zinc-700 dark:text-zinc-300">
+              <span className="text-zinc-500 dark:text-zinc-500">{r.count} 只：</span>
+              {r.reason}
+              {r.symbols.length > 0 && (
+                <span className="text-zinc-500 dark:text-zinc-500">（{r.symbols.join("、")}）</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 function NotificationRow({
@@ -431,9 +511,7 @@ export function NotificationBell() {
                   </p>
                 )}
                 {payload && bySession[tab].length === 0 && (
-                  <p className="px-2 py-8 text-center text-xs text-zinc-600 dark:text-zinc-400">
-                    {tab === "intraday" ? "盘中暂无通过多维筛选的个股机会" : "该时段暂无个股机会"}
-                  </p>
+                  <NotificationEmptyState payload={payload} tab={tab} />
                 )}
                 {shownNotices.map((i) =>
                   i.symbol ? (
