@@ -35,9 +35,14 @@
   因本轮同时交付 `RSH-026` / `BUG-014` / `GOV-014` 三项而改名 —— **该分支当时零提交、远程无此分支**，改名零风险）。
 - **基线**：`origin/master` = `148ec3851cf9da0f84fe243289a9d6a79f1dd4de`（PR #12 合并提交）。
 - **服务**：后端 8000（uvicorn，单实例；**绝不用 `--reload`**，原因见 `AGENTS.md` §6.1）、前端 3000。
-- **归属不明的既有未跟踪文件（非本轮产物，**保留、勿删**）**：
-  `backend/data/lhb/20260915.json`、`backend/data/minute_decisions/scan-2026-09-15.json`、
-  `docs/daily-review/2026-09-15-evolution-summary.md`、`docs/evolution/2026-09-15.md`。
+- **归属不明的既有未跟踪文件（非本轮产物，**保留、勿删**）**：`git status --short` 里的 5 个 `??` 项，
+  分布在 5 个目录 —— `backend/data/lhb/`、`backend/data/minute_decisions/`、
+  `backend/data/position_plans/`、`docs/daily-review/`、`docs/evolution/`。
+  **均为运行期产物、尚未纳入版本控制**，具体文件名请跑 `git status --short` 取。
+  ⚠️ **此处刻意不写具体文件名（不是省略，是纪律）**：它们不在 git 里 ⇒ 写死即成为
+  **门禁判定面上的死锚点**。2026-09-16 实测踩到：本条原先写死两个 `docs/` 下的未跟踪文件名
+  ⇒ **CI docs job 红（B 死链 2 处）而本地恒绿** —— 与 [[KB-ENG-95]]「判定面必须等于 CI 检出内容」
+  同族。**修法是改文案，不是登记豁免**（豁免会让下一次换个文件重演）。
 
 ## 2 条目一览（与账本 §6.0-H 逐字对应）
 
