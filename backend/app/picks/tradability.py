@@ -379,6 +379,7 @@ def linkage_candidates(
     theme_stage: str | None,
     per_theme: int = PER_THEME,
     stats: dict | None = None,
+    audit_rows: list[dict] | None = None,
 ) -> list[dict]:
     """题材容器内**尚未涨停**的联动候选（纯函数，可参与性优先）。
 
@@ -406,9 +407,34 @@ def linkage_candidates(
     out: list[dict] = []
     blocked: dict[str, int] = {}
     missing_quote = 0
+
+    def audit(
+        code: str, *, candidate: str, hard_gate: str, reason: str,
+        row: dict | None = None, facts: dict | None = None,
+    ) -> None:
+        if audit_rows is None:
+            return
+        quote = row or {}
+        audit_rows.append({
+            "symbol": code,
+            "name": str(quote.get("name") or ""),
+            "candidate_decision": candidate,
+            "hard_gate_decision": hard_gate,
+            "reason": reason,
+            "price": quote.get("price"),
+            "change_pct": quote.get("change_pct"),
+            "amount": quote.get("amount"),
+            "board": board_label(code, str(quote.get("name") or "")) if code else None,
+            "facts": facts or {},
+        })
+
     for sym in member_symbols or []:
         code = str(sym)
-        if not code.isdigit() or len(code) != 6 or code in sealed_symbols:
+        if not code.isdigit() or len(code) != 6:
+            continue
+        if code in sealed_symbols:
+            audit(code, candidate="rejected", hard_gate="rejected", reason="已在涨停池，当前不作为可参与候选",
+                  facts={"sealed_pool": True})
             continue
         row = snapshot_by.get(code)
         if not row:
@@ -416,25 +442,42 @@ def linkage_candidates(
             # 那时"一只候选都没有"与"数据没到"在页面上完全同形（2026-09-15 实测：
             # 后端冷启动后首次请求返回 0 候选，与"今天确实没机会"无法区分）。
             missing_quote += 1
+            audit(code, candidate="unknown", hard_gate="unknown", reason="全市场快照缺失，无法判定",
+                  facts={"quote_present": False})
             continue
         name = str(row.get("name") or "")
         if not is_tradable(code, name):
             # 板块权限挡下的成分股：计入审计（不静默丢）
             label = board_label(code, name)
             blocked[label] = blocked.get(label, 0) + 1
+            audit(code, candidate="rejected", hard_gate="rejected", reason=f"账户无{label}交易权限", row=row,
+                  facts={"quote_present": True, "board_tradable": False})
             continue
         pct = row.get("change_pct")
         if not isinstance(pct, (int, float)):
+            audit(code, candidate="unknown", hard_gate="unknown", reason="涨幅缺失，无法判定联动", row=row,
+                  facts={"quote_present": True, "board_tradable": True, "change_pct": None})
             continue
         pct = float(pct)
         if pct < LINKAGE_MIN_PCT:
+            audit(code, candidate="rejected", hard_gate="passed", reason=f"涨幅 {pct:.2f}% 低于联动下沿", row=row,
+                  facts={"quote_present": True, "board_tradable": True, "change_pct": pct,
+                         "linkage_min_pct": LINKAGE_MIN_PCT})
             continue
         amount = row.get("amount")
         amount_f = float(amount) if isinstance(amount, (int, float)) and amount > 0 else 0.0
         if amount_f < LINKAGE_MIN_AMOUNT:
+            audit(code, candidate="rejected", hard_gate="passed", reason=f"成交额 {amount_f:.0f} 低于流动性门槛", row=row,
+                  facts={"quote_present": True, "board_tradable": True, "change_pct": pct,
+                         "linkage_min_pct": LINKAGE_MIN_PCT, "amount": amount_f,
+                         "amount_min": LINKAGE_MIN_AMOUNT})
             continue
         limit = board_limit_pct(code, name)
         if pct >= seal_threshold(limit):
+            audit(code, candidate="rejected", hard_gate="rejected", reason="实时涨幅已进入封板线，报价不可参与", row=row,
+                  facts={"quote_present": True, "board_tradable": True, "change_pct": pct,
+                         "linkage_min_pct": LINKAGE_MIN_PCT, "amount": amount_f,
+                         "amount_min": LINKAGE_MIN_AMOUNT, "seal_line": seal_threshold(limit)})
             continue  # 涨停池滞后/口径差异：快照已封板，不是"尚未涨停"
         metrics = seal_metrics(code, name, pct)
         conf = linkage_confidence(
@@ -462,6 +505,10 @@ def linkage_candidates(
                 "container_code": (container or {}).get("code"),
             }
         )
+        audit(code, candidate="included", hard_gate="passed", reason="候选与可参与硬门均通过", row=row,
+              facts={"quote_present": True, "board_tradable": True, "change_pct": pct,
+                     "linkage_min_pct": LINKAGE_MIN_PCT, "amount": amount_f,
+                     "amount_min": LINKAGE_MIN_AMOUNT, "seal_line": seal_threshold(limit)})
     if stats is not None:
         stats["excluded_board"] = sum(blocked.values())
         stats["excluded_board_labels"] = dict(sorted(blocked.items(), key=lambda kv: -kv[1]))

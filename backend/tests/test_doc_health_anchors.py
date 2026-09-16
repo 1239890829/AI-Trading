@@ -330,6 +330,12 @@ _NEUTRAL = {
     "check_memory_index": ((), ()),
     "kb_file_advisories": (),
     "check_catalog_closure": ((), ()),
+    # 2026-09-16 `GOV-014`：P 项（交接索引）新增时**本守卫再次真命中**（第二次），
+    # 报红并点名 `check_handoff_index` —— 正是 GOV-010 加这颗 AST 反查钉的用途。
+    # ⚠️ 返回值形状按签名给：第 4 位是**保险丝说明**（`str | None`），中性值必须为 `None`；
+    # 若误写成 `""`，`bool("") is False` 会让「保险丝生效」与「中性打桩」变得无法区分，
+    # 以后改判据时这条用例就再也测不出东西了（[[KB-ENG-98]]：先问"这一层有没有被行使"）。
+    "check_handoff_index": ((), (), (), None),
 }
 
 

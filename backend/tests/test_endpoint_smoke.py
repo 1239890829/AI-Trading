@@ -65,6 +65,7 @@ PATH_VALUES = {
     # 补于 2026-09-11：缺它时 `/api/events/{event_id}` 被静默跳过
     # （由 test_path_values_cover_every_path_parameter 抓出）
     "event_id": "1",
+    "run_id": "missing-run",
 }
 
 #: 必需查询参数的填充值（同样与 api-sweep.js 的 QUERY_VALUES 同口径）

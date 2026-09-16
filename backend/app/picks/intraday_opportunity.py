@@ -354,6 +354,7 @@ def attach_participants(
             continue
         mined += 1
         stats: dict = {}
+        audit_rows: list[dict] = []
         cands = linkage_candidates(
             container={"code": code, "name": t.get("theme")},
             member_symbols=members_by_code.get(code) or [],
@@ -363,8 +364,11 @@ def attach_participants(
             theme_stage=t.get("stage"),
             per_theme=per_theme,
             stats=stats,
+            audit_rows=audit_rows,
         )
         t["participants"] = cands
+        # 只在归档前短暂携带，路由完成 point-in-time 写入后会移除，避免扩大公开响应。
+        t["_candidate_audit"] = audit_rows
         total += len(cands)
         missing_quote += stats.get("missing_quote") or 0
         # 板块权限挡下的成分股数**逐题材留痕**：否则"这个题材 0 只候选"

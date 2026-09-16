@@ -52,6 +52,7 @@ const PATH_VALUES = {
   // 板块代码（2026-09-10 补：此前缺省值 → /market/board-fund-flow/{board_code}/*
   // 两个下钻端点一直被跳过，属巡检盲区。BK1024=绿色电力，实测存在）
   board_code: "BK1024",
+  run_id: "missing-run",
 };
 
 // 查询参数默认值：只给**必需**参数填，选填的一律不带（走后端默认）

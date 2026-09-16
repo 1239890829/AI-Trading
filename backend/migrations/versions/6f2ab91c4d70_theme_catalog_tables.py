@@ -18,9 +18,18 @@ depends_on = None
 def upgrade() -> None:
     import sqlalchemy as sa
 
-    from app.core.db import get_engine
+    from alembic import op
 
-    engine = get_engine()
+    # ⚠️ 必须走迁移上下文连接（op.get_bind()）——本迁移曾用 get_engine()，
+    # 那是 **settings 默认库**的 engine（本仓 = data/ashare.db）⇒ 在全新库 /
+    # 临时库 / 测试库路径上，theme / theme_member / theme_override 三表会被建到
+    # **默认库**而非迁移目标库（生产库当年"碰巧建对"，因为默认库正是它，故从未暴露）。
+    # 后果：任何换 DATABASE_URL 的新环境跑完整链仍**缺这三张表** ⇒ 题材目录运行时炸；
+    # 且 run_migrations(临时 engine) 会顺带往默认库写表。
+    # 与 core/migrations.py 的承诺（"迁移全程在传入 engine 的连接上执行……不会把表建到别处"）
+    # 直接冲突 ⇒ 改共享连接。**表结构与内容零变化**，故对已应用本迁移的生产库无影响。
+    # 同族第 3 例（前两例：e7a2b9c4d1f8 / 9c4d7e2a1b3f，2026-09-16 账本 BUG-014 收口）。
+    bind = op.get_bind()
     metadata = sa.MetaData()
 
     theme = sa.Table(
@@ -63,14 +72,14 @@ def upgrade() -> None:
     sa.Index("ix_theme_override_theme_code", theme_override.c.theme_code)
     sa.Index("ix_theme_override_symbol", theme_override.c.symbol)
 
-    metadata.create_all(engine)
+    metadata.create_all(bind)
 
 
 def downgrade() -> None:
     import sqlalchemy as sa
 
-    from app.core.db import get_engine
+    from alembic import op
 
-    engine = get_engine()
+    bind = op.get_bind()
     for table in ("theme_override", "theme_member", "theme"):
-        sa.Table(table, sa.MetaData(), autoload_with=engine).drop(engine)
+        sa.Table(table, sa.MetaData(), autoload_with=bind).drop(bind)

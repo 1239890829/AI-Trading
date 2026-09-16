@@ -42,7 +42,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 collect 3205 项（3130 passed / 75 skipped / 0 failed）（09-15 §6.48 实测；前提：8000 在跑）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 collect 3227 项（3151 passed / 76 skipped / 0 failed）（09-16 BUG-014+GOV-014 轮实测；前提：8000 在跑）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。
@@ -90,8 +90,27 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 collect **3213 项（3138 passed / 75 skipped / 0 failed）**、
+> **门禁口径**：后端 collect **3227 项（3151 passed / 76 skipped / 0 failed）**、
 > 前端 **593 项 / 65 文件**、eslint **0 error / 0 warn**
+> （2026-09-16 `BUG-014` + `GOV-014` 轮实测；较上一值「后端 3225 / 前端 593·65」增量
+> **后端 collect +2 = passed +2 / skipped ±0**，机械核验 = `git diff -U0 HEAD -- 'backend/tests/*.py'`
+> 新增 `def test_` **10 个、删除 0 个**，其中 8 个已计入上一值 `RSH-026` 口径 ⇒ 本轮净 **+2**，
+> 均在 `tests/test_db_migrations.py`：`test_opportunity_learning_tables_match_their_models`（新建）
+> + `test_migration_scripts_never_use_the_default_engine`（**AST 结构守卫**，禁止迁移脚本调用
+> `get_engine()`）。⚠️ **本轮首跑是 3 failed**（`3148 passed`），三项**全为真回归**且都已修：
+> ① `test_cmd_guidance_guard::test_repo_has_no_reload_guidance` —— 新建的 `docs/handoff.md` 写下
+> 「后端 8000（uvicorn，单实例·无 `--reload`）」⇒ 该行**同时含 `uvicorn` 与 `--reload` 却无禁用标记**，
+> **修文案（改「绝不用 `--reload`」）而非放宽守卫**；②③ `test_doc_health_anchors.py` 两条结论行用例 ——
+> `GOV-010` 的 **AST 反查守卫再次真命中**，点名新检查 `check_handoff_index` 未进 `_NEUTRAL`
+> （这是该守卫**第二次**抓到真漏打桩，0 误报）⇒ 补入且第 4 位中性值必须是 `None`（写字面值 `""`
+> 会让"保险丝生效"与"中性"不可区分）。前端 **±0**，本地时区与 `TZ=UTC` 均为 593/65。）
+> （2026-09-16 `RSH-026` 个股机会学习闭环第一批实测；较上一值「后端 3213 / 前端 593·65」增量
+> **后端 collect +12 = passed +11 / skipped +1**：7 条新闭环测试来自
+> `tests/test_opportunity_learning.py`，+1 为 `test_tradability.py` 逐股过滤审计，+2 为两个新增 GET
+> 端点自动进入全量冒烟参数化，+1 为新增业务模块 `picks/opportunity_learning.py` 进入 import-lint；
+> `models/opportunity_learning.py` 属非业务层，产生 **+1 显式跳过**。机械核验：`76 − 2 = 74`
+> = **34 装配层 + 40 其他非业务层**，较上轮 73 恰好只新增该模型模块。前端 **±0**，本地时区与
+> `TZ=UTC` 均为 593/65。）
 > （2026-09-16 `IMP-030` 主动漏洞发现探针轮实测；较上一值「后端 3207 / 前端 593·65」增量
 > **后端 collect +6 = passed +6 / skipped ±0**：5 条新行为测试来自
 > `tests/test_evolution_probes.py`，另 +1 是新增业务模块 `services/evolution_probes.py` 自动进入
@@ -793,7 +812,10 @@ curl 先行 → 记录字段口径与类型陷阱 → 多采样找规律 → fix
   三份 job 分别执行后端 pytest+pyflakes、前端 tsc+vitest+eslint+`next build`、文档体检；不得削弱这些门禁。
   功能分支若需 GitHub CI 结果，应创建 PR 触发 `pull_request` 检查，但不得代替本地适用门禁。
 - ⚠️ **`gh` 工具**：已装在本机 `~/.local/bin/gh`（v2.100.0；该目录**不在非交互 shell 的 PATH** 里，
-  脚本里用绝对路径）。**尚未认证** ⇒ `gh auth login` 后我才能代读 CI 运行/日志与建 PR。
+  脚本里用绝对路径）。**✅ 已认证**（2026-09-16 实测：`gh auth status` → 账号 `1239890829`，
+  token scopes `gist` / `read:org` / `repo`）⇒ 可代读 CI 运行/日志、建 PR 与合并。
+  ⚠️ **本行曾写「尚未认证」并据此要求用户先 `gh auth login`** —— 属"事实性过期"：
+  凭据早已就绪，却让人误以为通道未通（[[KB-ENG-85]] 同族：**指针/状态失效**）。
   本环境 `github.com` 需走本地代理 `127.0.0.1:7897`（沙箱代理 51931 到不了），`api.github.com` 可直连。
 
 ---
