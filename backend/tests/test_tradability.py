@@ -354,3 +354,29 @@ def test_linkage_candidates_filters_board_and_audits():
     assert all(c["board"] in ("沪市主板", "深市主板") for c in got)
     assert stats["excluded_board"] == 3
     assert stats["excluded_board_labels"] == {"创业板": 1, "科创板": 1, "北交所": 1}
+
+
+def test_linkage_candidate_audit_keeps_each_filter_reason():
+    """聚合计数不够回放：每只被挡标的必须保留独立事实与失败层。"""
+    from app.picks.tradability import linkage_candidates
+
+    rows = [
+        _snap("600001", "主板甲", 3.0),
+        _snap("300002", "创业乙", 5.0),
+        _snap("600003", "主板丙", 0.2),
+    ]
+    audit: list[dict] = []
+    got = linkage_candidates(
+        container={"code": "X", "name": "小概念"},
+        member_symbols=[r["symbol"] for r in rows] + ["600099"],
+        sealed_symbols=set(), snapshot_by={r["symbol"]: r for r in rows},
+        theme_limit_ups=3, theme_stage="发酵", audit_rows=audit,
+    )
+    assert [r["symbol"] for r in got] == ["600001"]
+    by = {r["symbol"]: r for r in audit}
+    assert by["600001"]["candidate_decision"] == "included"
+    assert by["300002"]["hard_gate_decision"] == "rejected"
+    assert by["300002"]["facts"]["board_tradable"] is False
+    assert by["600003"]["hard_gate_decision"] == "passed"
+    assert by["600003"]["candidate_decision"] == "rejected"
+    assert by["600099"]["candidate_decision"] == "unknown"

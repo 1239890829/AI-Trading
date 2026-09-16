@@ -396,26 +396,34 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
     # 猎场批次 A（需求 9/10）：跟踪台账收盘清算——入选价 vs 当日收盘，逐股判定
     # + 统计。失败只记日志（清算幂等，下一轮补）。
     ledger_settled = None
+    opportunity_labels = None
     with contextlib.suppress(Exception):
         from app.picks.watch_ledger import get_day, settle_day, validate_previous_day
+        from app.picks.opportunity_learning import label_trade_date, pending_symbols
         from app.core.bjtime import beijing_now as _bnow
         from app.core.db import get_session_factory as _gsf
 
         tdate = _bnow().date().isoformat()
         provider = _tencent_provider(state.hub) or state.hub.provider
         closes: dict[str, float] = {}
-        for r in get_day(tdate, _gsf()):
-            if r["status"] != "tracking":
-                continue
+        ledger_symbols = {
+            r["symbol"] for r in get_day(tdate, _gsf()) if r["status"] == "tracking"
+        }
+        symbols = ledger_symbols | pending_symbols(tdate, _gsf())
+        for symbol in sorted(symbols):
             with contextlib.suppress(Exception):
-                dc = await _daily_closes(provider, r["symbol"])
+                dc = await _daily_closes(provider, symbol)
                 c = dc.get(_bnow().date())
                 if c is not None:
-                    closes[r["symbol"]] = c
+                    closes[symbol] = c
         ledger_settled = settle_day(tdate, closes, _gsf())
+        opportunity_labels = label_trade_date(tdate, closes, _gsf())
         # 次日持续性验证（闭环「验证」段）：T-1 行写回 T 收盘表现
         d1_n = validate_previous_day(closes, _gsf())
-        log.info("watch ledger settle: %s | D+1 验证 %s 行", ledger_settled, d1_n)
+        log.info(
+            "watch ledger settle: %s | opportunity labels: %s | D+1 验证 %s 行",
+            ledger_settled, opportunity_labels, d1_n,
+        )
 
     log.info(
         "intraday review saved: %s（%d 方向 %s；提醒回填 %s）",
@@ -424,7 +432,7 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
         backfill.get("alerts_updated"),
     )
     return {"ok": True, "brief_date": target, "directions": reviews, "alert_backfill": backfill,
-            "ledger_settled": ledger_settled}
+            "ledger_settled": ledger_settled, "opportunity_labels": opportunity_labels}
 
 
 # ---------------------------------------------------------------- IO：提醒收益回算

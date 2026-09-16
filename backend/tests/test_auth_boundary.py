@@ -58,6 +58,7 @@ _PATH_VALUES = {
     "name": "default",
     "board_code": "BK1024",
     "order_id": "1",
+    "run_id": "missing-run",
 }
 
 _METHODS = ("get", "post", "put", "patch", "delete")

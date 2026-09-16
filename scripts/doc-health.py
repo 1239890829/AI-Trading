@@ -1160,11 +1160,13 @@ def ledger_task_ids() -> set[str]:
 
 
 #: L 项的已登记例外：`(文件, ID) → 理由`。**必须写明理由**（同 `CODE_REF_ALLOW` 的做法）。
-#: 目前一处：讲 L 项判据自身时举的**示例 ID**——它不是对任务的引用，而是**判据的说明材料**
+#: 目前两处：讲 L 项判据自身时举的**示例 ID**——它不是对任务的引用，而是**判据的说明材料**
 #: （`\d{3}` 之外无法用形态区分"示例"与"真引用"，故显式留痕而非把扫描放宽）。
 TASK_ID_ALLOW: dict[tuple[str, str], str] = {
     ("docs/kb/07-doc-curation.md", "BUG-999"):
         "L 项判据文档里的**示例文本**（举一个未定义 ID 说明判据会精确判红），非任务引用",
+    ("docs/handoff.md", "OPS-999"):
+        "`GOV-014` 条目里**注入自证**用的幽灵 ID（说明 P 项能抓到「索引有、条目无」），非任务引用",
 }
 
 
@@ -1466,6 +1468,122 @@ def check_catalog_closure() -> tuple[list[str], list[str]]:
     return unregistered, ghosts
 
 
+# ---------------------------------------------------------------------------
+# P 项：账本 §6.0-H「交接索引」⇄ `docs/handoff.md` 明细条目的**双向闭包**
+#
+# 动机（用户 2026-09-16 指令）：*「在账本中为每个任务建立索引，指向交接文档中对应的任务条目……
+# 确保这种对应关系清晰、一致，覆盖所有后续任务。」* —— 规则只写在 md 里就是摆设
+# （`kb/07` §9 自我淘汰条款）⇒ 固化为机检。
+#
+# 分工（**不是重复**，两处回答不同问题）：
+#   · 账本 §6.0     = 任务清单（有哪些 / 优先级 / 状态 / 前置）；
+#   · 账本 §6.0-H   = 「任务 → 明细」的**索引**；
+#   · `docs/handoff.md` = 明细（做了什么 / 凭什么算完 / 门禁 / 遗留）。
+#
+# 三个方向都是真缺口：
+#   · **索引无条目**：账本说"明细在 handoff §X"，读者跳过去是空处（= 死指针）；
+#   · **条目无索引**：handoff 里有条目但索引查不到 ⇒ 从唯一入口**找不到** = 等于不存在；
+#   · **条目缺反链**：只读到明细的人不知道任务**状态与前置**，也无法核对是否已闭环。
+#
+# 保险丝（fail-loud，不静默跳过，口径同 O 项）：账本无 §6.0-H 小节 / handoff 文件缺失 /
+# 条目数为 0 ⇒ **判红**。理由：**守卫覆盖面失效比误报危险得多**（[[KB-ENG-72]]）。
+#
+# ⚠️ **本项上线时靠「注入自证」抓出两个真实盲区**（2026-09-16，三路注入 [A]/[B]/[C]）：
+#   本来三路**全部判绿** —— 即守卫看起来在工作，其实两路是摆设。根因是**同一类错**：
+#   判据用「词边界 `\b`」与「子串包含」表达"是同一个东西"，而 `-` 既是 ID 分隔符
+#   又是非词字符、又是 `§6.0-H` 的合法字符 ⇒ 多一个后缀仍被认作命中。
+#   · [A] 把标题改成 `## BUG-014-X` ⇒ 仍被认成 `BUG-014` 条目存在；
+#   · [B] 把回链改成 `§6.0-HHH` ⇒ 仍"包含" `§6.0`；
+#   · [C] 账本加幽灵行 `OPS-999` ⇒ ✅ 正常判红。
+#   ⇒ **判据一律写「后向断言」`(?![\w-])`，不许用 `\b`、不许用 `in`**。
+#   ⇒ 更一般的教训：**守卫上线必须做注入自证，且三路都要能红**；只验一路（[C]）会把
+#     两路摆设当成"守卫已验证"（见 `kb/09` 同族：**看不见的失效**）。
+# ---------------------------------------------------------------------------
+
+HANDOFF_FILE = "docs/handoff.md"
+#: 账本里的交接索引小节标题（形态固定，供机器定位；改标题即断守卫，故写死在此并留痕）。
+#: ⚠️ **收尾用 `(?![\w-])` 而不是 `\b`**：`\b` 在 `-` 处也成立 ⇒ `#### 6.0-HHH` 会被误判为
+#: 「小节在」⇒ 小节被改名后守卫**静默失守**（2026-09-16 注入自证实测，见下方长注释）。
+HANDOFF_INDEX_HEAD_RE = re.compile(r"^#{3,5}\s*6\.0-H(?![\w-])")
+#: 条目标题：`## <TASK-ID> …`（允许前置一个显式 HTML 锚点 ⇒ 便于跨文档点击跳转）。
+#: ⚠️ **ID 收尾同样不能用 `\b`**：`## BUG-014-X` 里 `BUG-014` 后面是 `-`（非词字符）⇒
+#: `\b` 成立 ⇒ 标题被改残后仍算"条目存在"，`ho_missing` 与 `ho_unindexed` **两路同时失守**。
+HANDOFF_ENTRY_HEAD_RE = re.compile(
+    r"^##\s+(?:<a\s+id=\"[^\"]+\"></a>\s*)?((?:BUG|IMP|RSH|GOV|OPS)-\d{3})(?![\w-])"
+)
+#: 条目**反链**判据：正文须出现该标记（与任务 ID 同现），否则读者回不到账本行。
+#: ⚠️ **必须是正则而非「子串包含」**：本文件（`doc-health.py`）自己的说明里就反复写着 `§6.0-H`，
+#: 条目正文只要提到小节名就能"满足"包含判据 ⇒ 真正丢掉账本回链反而判绿（2026-09-16 实测）。
+HANDOFF_BACKLINK_RE = re.compile(r"§6\.0(?![\w-])")
+
+
+def ledger_handoff_index_ids() -> set[str] | None:
+    """账本 §6.0-H 小节里**已登记**的任务 ID；小节缺失 ⇒ `None`（fail-loud）。"""
+    lines = _read(DOCS / "retro-and-gaps.md").splitlines()
+    head = next((i for i, ln in enumerate(lines) if HANDOFF_INDEX_HEAD_RE.match(ln)), None)
+    if head is None:
+        return None
+    ids: set[str] = set()
+    for ln in lines[head + 1:]:
+        if HEADING_RE.match(ln):            # 遇到下一个标题 ⇒ 本小节结束
+            break
+        if ln.lstrip().startswith("|"):
+            # ⚠️ **只取第一列（任务 ID 列）**：若整行取 ID，"明细条目"列里的 `§RSH-026`
+            # 会让"条目在索引里"恒真 ⇒ 判据自证失效（无法再抓「条目没登记」）。
+            first_cell = ln.split("|")[1] if ln.count("|") >= 2 else ""
+            ids.update(TASK_ID_RE.findall(first_cell))
+    return ids
+
+
+def handoff_entry_ids() -> tuple[dict[str, int], list[str]]:
+    """`docs/handoff.md` 的条目 → (ID→行号, 缺反链的 ID 列表)；文件缺失 ⇒ (`{}`, [])。"""
+    path = ROOT / HANDOFF_FILE
+    if not path.exists():
+        return {}, []
+    lines = _read(path).splitlines()
+    starts: list[tuple[int, str]] = []
+    for i, ln in enumerate(lines):
+        m = HANDOFF_ENTRY_HEAD_RE.match(ln)
+        if m:
+            starts.append((i, m.group(1)))
+    ids: dict[str, int] = {}
+    no_backlink: list[str] = []
+    for k, (i, tid) in enumerate(starts):
+        ids[tid] = i + 1
+        end = starts[k + 1][0] if k + 1 < len(starts) else len(lines)
+        body = "\n".join(lines[i:end])
+        if HANDOFF_BACKLINK_RE.search(body) is None:
+            no_backlink.append(tid)
+    return ids, no_backlink
+
+
+def check_handoff_index() -> tuple[list[str], list[str], list[str], str | None]:
+    """P 项：双向闭包 + 反链 → (索引无条目, 条目无索引, 条目缺反链, 保险丝说明)。
+
+    ⚠️ **为什么条目用「标题前缀匹配任务 ID」而不是 URL 锚点**：Markdown 的标题锚点由
+    渲染器 slug 化（中文标题的 slug 规则各平台不同、且标题一改锚点即变）⇒ 拿锚点当判据
+    会把"文档改个措辞"变成门禁失败。判据锚定在**任务 ID** 这个稳定键上，
+    跨文档点击则由条目标题里的**显式 `<a id>`**（可选）承担。
+
+    ⚠️ **保险丝单独走第 4 个返回值，不塞进前三个列表里**：首版把哨兵串（如
+    `"（账本 §6.0-H 小节缺失）"`）直接放进列表 ⇒ 调用方按常规差异打印，输出
+    「**账本索引已登记 （账本 §6.0-H 小节缺失），但 handoff 无该条目**」这种自相矛盾的话
+    （把"判据找不到"说成"某 ID 已登记"，2026-09-16 注入自证 [D] 实测）。
+    **fail-loud 的文案必须比正常分支更清楚**，否则排障时先被自己的日志误导。
+    """
+    if not (ROOT / HANDOFF_FILE).exists():
+        return [], [], [], f"{HANDOFF_FILE} 不存在（明细层缺失，守卫无判定面）"
+    indexed = ledger_handoff_index_ids()
+    if indexed is None:
+        return [], [], [], "账本 §6.0-H 小节缺失（索引层缺失，守卫无判定面）"
+    entries, no_backlink = handoff_entry_ids()
+    if not entries:
+        return [], [], [], f"{HANDOFF_FILE} 条目数为 0（明细层为空，守卫无判定面）"
+    missing_entry = sorted(indexed - set(entries))
+    unindexed = sorted(set(entries) - indexed)
+    return missing_entry, unindexed, sorted(no_backlink), None
+
+
 def main() -> int:
     quiet = "--quiet" in sys.argv
     scan_all = "--all" in sys.argv
@@ -1493,6 +1611,7 @@ def main() -> int:
     carriers = check_task_carrier_pointers()
     idx_over, idx_dead = check_memory_index()
     cat_unreg, cat_ghost = check_catalog_closure()
+    ho_missing, ho_unindexed, ho_noback, ho_sentinel = check_handoff_index()
 
     def line(label: str, ok: bool, detail: str = "") -> None:
         nonlocal problems
@@ -1637,6 +1756,23 @@ def main() -> int:
     if cat_ghost and not quiet:
         for rel in cat_ghost[:12]:
             print(f"       - {rel}（编目表登记但全仓不存在）")
+    p_bad = bool(ho_missing or ho_unindexed or ho_noback or ho_sentinel)
+    p_detail = (f"账本 §6.0-H ⇄ {HANDOFF_FILE} 双向闭包"
+                + ("（保险丝：判定面不可用）" if ho_sentinel else
+                   "" if p_bad else
+                   f"（条目 {len(handoff_entry_ids()[0])} 条，全部登记且带反链）"))
+    line("P 交接索引", not p_bad, p_detail)
+    if ho_sentinel and not quiet:
+        # 保险丝与"真的对不上"是**两种不同的病**，文案必须分得开（否则排障会先被日志误导）。
+        print(f"       ⛔ {ho_sentinel}")
+        print("          ⇒ 这是「守卫没有判定面」，不等于「文档没问题」；先修好该载体再复跑")
+    if p_bad and not ho_sentinel and not quiet:
+        for tid in ho_missing:
+            print(f"       账本索引已登记 {tid}，但 {HANDOFF_FILE} 无 `## {tid}` 条目")
+        for tid in ho_unindexed:
+            print(f"       {HANDOFF_FILE} 有 {tid} 条目，但账本 §6.0-H 未登记")
+        for tid in ho_noback:
+            print(f"       {tid} 条目缺回链（正文须出现「§6.0 <任务 ID>」形态的账本指针）")
     # H 项**刻意走 WARN 而非 FAIL**：先补存量再上哨兵，且只作提示。
     # 若计 FAIL，未补完的条目会让整份体检长期挂红 ⇒ 被整体无视（KB-ENG-58）。
     line("H-KB 豁免名单有效", not claim_ghost,

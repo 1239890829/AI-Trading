@@ -318,6 +318,31 @@ async def _build_opportunities_uncached(
             f"题材联动挖掘失败（{type(exc).__name__}）——本轮无可参与联动候选"
         )
 
+    # RSH-026 S1：在叠加请求级字段前归档 point-in-time 决策链。归档失败不把
+    # 行情接口拖死，但必须把 degraded 状态写进响应，不能静默声称“可回放”。
+    try:
+        from app.picks.opportunity_learning import archive_intraday_pipeline
+
+        evidence = await asyncio.to_thread(
+            lambda: archive_intraday_pipeline(
+                payload["data"],
+                trade_date=trade_date.isoformat() if hasattr(trade_date, "isoformat") else str(trade_date),
+                as_of=beijing_now(),
+            )
+        )
+        payload["data"]["decision_evidence"] = {
+            "state": "ready", "run_id": evidence["run_id"], "records": evidence["records"]
+        }
+    except Exception as exc:  # noqa: BLE001 — 显式降级；候选本身仍可展示
+        log.exception("opportunity evidence archive failed")
+        payload["data"]["decision_evidence"] = {
+            "state": "degraded", "run_id": None,
+            "reason": f"证据归档失败（{type(exc).__name__}）",
+        }
+    finally:
+        for theme in payload["data"].get("themes") or []:
+            theme.pop("_candidate_audit", None)
+
     # 猎场批次 A（需求 7）+ 2026-09-09 收紧（用户：跟踪过多且缺乏依据）+ 2026-09-15 口径：
     # 机会候选登记加**量化硬门槛**，避免盲目大面积跟踪——
     #   ① 只在交易时段登记（非交易时段端点被调用不产生台账数据）
@@ -412,6 +437,28 @@ async def watch_ledger(
         },
         "meta": {},
     }
+
+
+@router.get("/opportunity-learning")
+async def opportunity_learning(
+    date: str | None = Query(default=None, description="YYYY-MM-DD，缺省=北京今天"),
+) -> dict:
+    """个股机会漏斗与结果标签覆盖率（只读，不输出买卖建议）。"""
+    from app.picks.opportunity_learning import learning_summary
+
+    target = date or beijing_now().date().isoformat()
+    return {"data": learning_summary(target), "meta": {}}
+
+
+@router.get("/opportunity-learning/replay/{run_id}")
+async def replay_opportunity_run(run_id: str) -> dict:
+    """仅用归档证据离线重放一次候选/硬门/精排/通知决策。"""
+    from app.picks.opportunity_learning import replay_run
+
+    result = replay_run(run_id)
+    if not result["records"]:
+        raise HTTPException(status_code=404, detail="未找到该决策运行")
+    return {"data": result, "meta": {}}
 
 
 @router.get("/position-labels")

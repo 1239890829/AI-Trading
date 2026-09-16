@@ -1,0 +1,74 @@
+"""Point-in-time opportunity decisions and their separately versioned outcomes."""
+from __future__ import annotations
+
+from datetime import datetime
+
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.core.db import utcnow
+from app.models.watchlist import Base
+
+
+class OpportunityDecisionSnapshot(Base):
+    """Append-only evidence for one symbol at one pipeline stage."""
+
+    __tablename__ = "opportunity_decision_snapshot"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # ⚠️ 唯一性由**表级 UniqueConstraint** 承担、索引保持非唯一：这不是笔误，而是与
+    # **已应用的生产迁移**（`migrations/versions/7d4e2c9a6b1f`，真实库版本号已到该 revision）
+    # 逐字对齐的结果。写成 `unique=True, index=True`（unique index）语义等价、但形状不同
+    # ⇒ `create_all` 兜底分支建出的库与 alembic 建出的库会分叉（2026-09-16 实测）。
+    # 已应用的迁移是历史、不可回改，故以模型对齐迁移，而不是反过来。
+    snapshot_id: Mapped[str] = mapped_column(String(64), index=True)
+    run_id: Mapped[str] = mapped_column(String(64), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime, index=True)
+    scenario: Mapped[str] = mapped_column(String(32), index=True)
+    stage: Mapped[str] = mapped_column(String(24), index=True)
+    symbol: Mapped[str] = mapped_column(String(12), index=True)
+    name: Mapped[str] = mapped_column(String(64), default="")
+    source_theme: Mapped[str] = mapped_column(String(64), default="")
+    decision: Mapped[str] = mapped_column(String(24), index=True)
+    rank: Mapped[int | None] = mapped_column(Integer, default=None)
+    strategy_version: Mapped[str] = mapped_column(String(64))
+    feature_version: Mapped[str] = mapped_column(String(64))
+    data_state: Mapped[str] = mapped_column(String(16), default="ready")
+    entry_price: Mapped[float | None] = mapped_column(Float, default=None)
+    evidence: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("snapshot_id"),
+        UniqueConstraint(
+            "run_id", "stage", "symbol", "source_theme",
+            name="uq_opportunity_snapshot_run_stage_symbol_theme",
+        ),
+    )
+
+
+class OpportunityOutcomeLabel(Base):
+    """Outcome attached later without rewriting the point-in-time snapshot."""
+
+    __tablename__ = "opportunity_outcome_label"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    snapshot_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("opportunity_decision_snapshot.snapshot_id"), index=True
+    )
+    horizon: Mapped[str] = mapped_column(String(16), default="d0_close")
+    target_date: Mapped[str] = mapped_column(String(10), index=True)
+    state: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    label: Mapped[str] = mapped_column(String(16), default="unknown")
+    reference_price: Mapped[float | None] = mapped_column(Float, default=None)
+    outcome_price: Mapped[float | None] = mapped_column(Float, default=None)
+    return_pct: Mapped[float | None] = mapped_column(Float, default=None)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(String(32), default="daily_close")
+    labeled_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("snapshot_id", "horizon", name="uq_opportunity_outcome_snapshot_horizon"),
+    )

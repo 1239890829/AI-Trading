@@ -60,6 +60,19 @@ reason(上榜原因 EXPLAIN) / trade_date`。
 
 `symbol(唯一) / name / note / source / quality / version + 审计字段`。
 
+## OpportunityDecisionSnapshot / OpportunityOutcomeLabel（SQLite）
+
+- `opportunity_decision_snapshot` 是 append-only 的逐时点决策证据：`run_id / snapshot_id /
+  trade_date / as_of / scenario / stage(candidate|hard_gate|rank|notification) / symbol /
+  source_theme / decision / rank / strategy_version / feature_version / data_state /
+  entry_price / evidence(JSON)`。被过滤标的同样逐股留存，缺行情必须记为 `unknown`，不得
+  塌缩成“未入选”。
+- `opportunity_outcome_label` 与快照分表，避免盘后事实改写当时证据：`snapshot_id / horizon /
+  target_date / state(pending|labeled|unknown) / label(positive|flat|negative|unknown) /
+  reference_price / outcome_price / return_pct / reason / source / labeled_at`。
+- 当前已接 `d0_close`；缺收盘价保持 `pending` 可重试，决策时价格缺失终结为 `unknown`，
+  绝不以 0 收益代替。样本不足只报告覆盖率与事实分布，不触发策略晋级。
+
 ## 信号等级（§10/§11 · **设计稿，未实现**）
 
 > ⚠️ 全仓**没有**按下面六个等级分档的实现。唯一近似物是 `services/dragon_service.py` 的

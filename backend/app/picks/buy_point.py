@@ -231,6 +231,28 @@ def build_buy_point_alert(hit: dict) -> dict:
     }
 
 
+async def _archive_notification_decisions(
+    *, items: list[dict], trade_date: str, hits: list[dict], skips: list[dict],
+    dispatch_by_symbol: dict[str, str], as_of,
+) -> None:
+    """Best-effort evidence write with a loud log on failure.
+
+    Notification delivery must not be blocked by the learning store, while the
+    failure must remain visible instead of pretending the decision was archived.
+    """
+    try:
+        from app.picks.opportunity_learning import archive_notification_pipeline
+
+        await asyncio.to_thread(
+            lambda: archive_notification_pipeline(
+                items, trade_date=trade_date, hits=hits, skips=skips,
+                dispatch_by_symbol=dispatch_by_symbol, as_of=as_of,
+            )
+        )
+    except Exception:  # noqa: BLE001 — learning evidence cannot block notifications
+        log.exception("buy point decision evidence archive failed")
+
+
 async def check_and_dispatch(app) -> list[dict]:
     """一拍检查：交易日+盘中 → 当日精选+快照 → 判定 → 聚合卡单发 + 逐票留痕。
 
@@ -259,18 +281,30 @@ async def check_and_dispatch(app) -> list[dict]:
     for s in skips:
         log.info("buy point skip %s: %s", s["symbol"], s["reason"])
     if not hits:
+        await _archive_notification_decisions(
+            items=payload["items"], trade_date=now.date().isoformat(), hits=hits, skips=skips,
+            dispatch_by_symbol={}, as_of=now,
+        )
         return []
 
     # 逐票去重落库（append_alert key 去重；已推过的票当日不再进卡）
     from app.picks.watcher import dispatch_alert
 
     dispatched: list[dict] = []
+    dispatch_by_symbol: dict[str, str] = {}
     for h in hits:
         ok = await dispatch_alert(app, build_buy_point_alert(h), rule_provider=ensure_buy_point_rule)
+        symbol = str(h["item"].get("symbol") or "")
         if ok:
             dispatched.append(h)
+            dispatch_by_symbol[symbol] = "notified"
         else:
+            dispatch_by_symbol[symbol] = "suppressed"
             log.info("buy point deduped: %s（当日已推）", h["item"].get("symbol"))
+    await _archive_notification_decisions(
+        items=payload["items"], trade_date=now.date().isoformat(), hits=hits, skips=skips,
+        dispatch_by_symbol=dispatch_by_symbol, as_of=now,
+    )
     if not dispatched:
         return []
 
