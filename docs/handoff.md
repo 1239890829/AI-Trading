@@ -101,7 +101,18 @@
   逐字一致、复跑全绿。**未放宽任何判据、未 skip、未删用例**。
 - **门禁**：前端 `tsc --noEmit` **0** · `eslint` **0 error / 0 warn** ·
   `vitest` 本地时区 **603/67（602 passed · 1 failed）**、`TZ=UTC` **逐字一致 603/67**（⇒ 新增用例
-  **不含时区敏感断言**）· 后端 pytest **见下方收尾回填** · `doc-health` **见下方收尾回填**。
+  **不含时区敏感断言**）· 后端 pytest **3171 passed / 76 skipped / 0 failed**（collect 3247；
+  与上一轮**逐字相同**——本轮无后端代码与后端测试改动）· `pyflakes app tests scripts` **0** ·
+  `doc-health` **全部通过（19 项，0 待处理）**。
+  ⚠️ **后端 pytest 曾红过一轮，根因是「门禁输入面 ≠ 代码面」的第二次命中**：
+  `doc-health` J 项 + `test_doc_health_anchors.py::test_real_repo_has_no_dead_doc_anchor`
+  报 `docs/handoff.md:88 → notification-row-landing.test.tsx（全仓不存在）`——
+  J 的判定面是 `_repo_basenames()`，取自 **`git ls-files`**（`doc-health.py:914-932`）、
+  比对按 **basename**（`:1042`）⇒ **本轮新建、尚未 `git add`** 的测试文件在本地**就是"不存在"**。
+  **修法 = `git add` 该文件**（提交后在 CI 里当然存在），**不是改文档措辞、更不是登记豁免**；
+  复跑后 `doc-health` 与后端全量**双绿**。⚠️ 这与 [[KB-ENG-95]]（本地绿 / CI 红）**方向相反、
+  根因相同**——都是「判定面 = git 跟踪清单」在**本地工作区 ≠ 检出内容**时的两种表现；
+  已补记进 [[KB-ENG-102]]。**通例：新增文件与引用它的文档在同一轮时，先 `git add` 再跑门禁。**
   ⚠️ 那 **1 failed 是 `BUG-010`（D 档观察项），不是本轮回归**：
   用例 = `components/agent/markdown-view.test.tsx::docs/ 下全部 md 均可渲染完成`（固定 5s 墙钟）。
   **归因（对照跑，非推理）**：单独跑该文件 **10 passed / 2170ms**（其中 docs 渲染用例 **1897ms**，
