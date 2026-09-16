@@ -42,7 +42,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
-cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 collect 3235 项（3159 passed / 76 skipped / 0 failed）（09-16 RSH-026 第二批实测；前提：8000 在跑）
+cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 collect 3247 项（3171 passed / 76 skipped / 0 failed）（09-16 GOV-015 轮实测；前提：8000 在跑）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
 # （只剩 `....  [100%]`，`passed/skipped` 全看不见）——取数会以为"测试没跑完"。
@@ -90,8 +90,20 @@ python3 scripts/doc-health.py                    # 文档体检：0 待处理（
 lsof -ti tcp:3000 | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 ```
 
-> **门禁口径**：后端 collect **3227 项（3151 passed / 76 skipped / 0 failed）**、
+> **门禁口径**：后端 collect **3247 项（3171 passed / 76 skipped / 0 failed）**、
 > 前端 **593 项 / 65 文件**、eslint **0 error / 0 warn**
+> （2026-09-16 `GOV-015` 账本档位一致性守卫 + `BUG-014` 销账轮实测；较上一值「后端 3235 / 前端 593·65」
+> 增量 **后端 collect +12 = passed +12 / skipped ±0**。机械核验：`+12` **恰等于**新文件
+> `backend/tests/test_doc_health_ledger_stages.py` 的 `--collect-only` 计数 **12**；
+> 同轮另一处测试改动 `backend/tests/test_doc_health_anchors.py` **只补 `_NEUTRAL` 一项、不新增用例**；
+> `skipped` 保持不变的理由是**本轮未新增 `app/` 非业务层模块**（`scripts/` 与 `tests/` 不进该口径）。
+> 前端 **±0**，本地时区与 `TZ=UTC` 均为 593/65。
+> ⚠️ **本轮实测到 `BUG-010`（D 档观察项）的确切触发条件，勿把它当成本轮回归**：后端全量与前端
+> 全量**并发**跑时，`components/agent/markdown-view.test.tsx::docs/ 下全部 md 均可渲染完成`
+> 因 CPU 竞争 **4 轮中 3 轮超时 5s**；**解除并发后 ×3 全绿**（本地时区 + `TZ=UTC`）。
+> ⇒ 该用例判据挂在**墙钟**上（与 `BUG-008` 同族），**它的红不代表代码回归**。
+> 门禁实操：**不要并发跑这两道全量**；CI 的两个 job 各占独立 runner，不受此影响。
+> 按 `BUG-010` 原判：**不单点放宽超时**（那只是把阈值往上挪），须与 `BUG-008` 一并按族排期。）
 > （2026-09-16 `BUG-014` + `GOV-014` 轮实测；较上一值「后端 3225 / 前端 593·65」增量
 > **后端 collect +2 = passed +2 / skipped ±0**，机械核验 = `git diff -U0 HEAD -- 'backend/tests/*.py'`
 > 新增 `def test_` **10 个、删除 0 个**，其中 8 个已计入上一值 `RSH-026` 口径 ⇒ 本轮净 **+2**，

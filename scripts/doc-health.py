@@ -1584,6 +1584,163 @@ def check_handoff_index() -> tuple[list[str], list[str], list[str], str | None]:
     return missing_entry, unindexed, sorted(no_backlink), None
 
 
+# ---------------------------------------------------------------------------
+# Q 项：账本「未完成状态档」⇄「闭环记录」不得互相矛盾
+#
+# 动机（2026-09-16 实测，非推理）：`BUG-014` 的**代码修复与两条守卫都已交付**
+# （commit `80c6428`：两处迁移改 `op.get_bind()` + 全新库 5 表行为守卫 + AST 根因守卫），
+# 但它在账本里**同时**处于三种状态：A 可做档仍列为「可做 P1」（行文还是「**修法**：…」
+# 的待办语气）· F 闭环登记档**根本没有它** · §6.0-H 却已标 `✅ 闭环`。
+#
+# 这不是笔误，而是「**销账只做了一半**」的必然形态——而账本自己的两句话正好交叉出后果：
+#   · F 档标题自称「**移出 A 档**；号码保留、永不复用」；
+#   · §6.0 的排序规则是「状态档 → 优先级 → **编号**」。
+# ⇒ 已闭环项留在未完成档 = **谎报可做**，且因按编号排序会被排到 P1 **首位**，
+#   下一个执行者必然先领到它、翻完代码才发现无事可做（**发现成本被推给下一个人**；
+#   [[KB-ENG-85]] 同族的「指针/状态失效」）。本项把它变成机检。
+#
+# 双向都判——两个方向对应**两种真实漏法**，本次实测 `BUG-014` **两向同时命中**：
+#   · 方向一「谎报可做」：已闭环（F 档有行 **或** §6.0-H 标 ✅）却仍在 A–E 档未划销；
+#   · 方向二「记录不完整」：§6.0-H 标 ✅ 闭环但 F 档无该行（即本次的 `BUG-014`）。
+#     ⇒ 只判方向一会漏掉「A 档删干净了、F 档忘了加」这种半成品销账。
+#
+# 豁免：行内**划销**（首列含 `~~`）表示「在案留痕」，不参与判红（B 档已有 3 例：
+# `BUG-002` / `BUG-003` / `BUG-007`）。同理，§6.0-H 的 `🟡 部分闭环` **不算闭环**——
+# 部分闭环按规则**应留在原档**（如 `RSH-026`），把它判红会逼人做假账。
+#
+# 保险丝（fail-loud，口径同 O/P 项，理由见 [[KB-ENG-72]]）：账本缺失 / A 档标题改名 /
+# §6.0-H 小节缺失 / **闭环记录总数为 0** ⇒ **判红**。最后一条最要紧：
+# 闭环集合为空时"未完成档未命中"是**恒真**的，本项会静默变摆设。
+# ---------------------------------------------------------------------------
+
+LEDGER_FILE = "docs/retro-and-gaps.md"
+#: 未完成状态档标题：`**A 可做（…）**` … `**E 搁置（…）**`（行首形态固定，改名即断守卫）。
+LEDGER_OPEN_STAGE_RE = re.compile(r"^\*\*([A-E])\s")
+#: 闭环登记档标题：`**F ✅ 本轮已闭环（移出 A 档；号码保留、永不复用）**`。
+LEDGER_CLOSED_STAGE_RE = re.compile(r"^\*\*F\s")
+#: 表格**首列**（任务 ID 列）里的 ID。
+#: ⚠️ 收尾同样用后向断言 `(?![\w-])` 而不是 `\b`：`\b` 在 `-` 处成立 ⇒ `BUG-014-X`
+#: 会被认成 `BUG-014`，判据随即静默失守（P 项上线时已实测过这一类，[[KB-ENG-99]]）。
+LEDGER_ROW_ID_RE = re.compile(r"\b((?:BUG|IMP|RSH|GOV|OPS)-\d{3})(?![\w-])")
+#: 划销标记：首列含它 ⇒ 在案留痕，豁免本项。
+LEDGER_STRUCK = "~~"
+
+
+def ledger_handoff_index_status() -> dict[str, str] | None:
+    """账本 §6.0-H 索引的 `任务 ID → 状态列原文`；小节缺失 ⇒ `None`（fail-loud）。
+
+    与 `ledger_handoff_index_ids()` 分开实现（**不改既有函数**）：那个只取"有没有登记"，
+    本项要取"**状态列写了什么**"（`✅ 闭环` / `🟡 部分闭环`）。合在一起会让 P 项的
+    「索引无条目」判据跟着状态列变化，属无谓耦合。
+    """
+    lines = _read(DOCS / "retro-and-gaps.md").splitlines()
+    head = next((i for i, ln in enumerate(lines) if HANDOFF_INDEX_HEAD_RE.match(ln)), None)
+    if head is None:
+        return None
+    status: dict[str, str] = {}
+    for ln in lines[head + 1:]:
+        if HEADING_RE.match(ln):            # 遇到下一个标题 ⇒ 本小节结束
+            break
+        if not ln.lstrip().startswith("|") or ln.count("|") < 3:
+            continue
+        cells = ln.split("|")
+        for tid in LEDGER_ROW_ID_RE.findall(cells[1]):
+            status[tid] = cells[2].strip()
+    return status
+
+
+def ledger_stage_tables() -> tuple[dict[str, dict[str, str]], dict[str, str], str | None]:
+    """账本 §6.0 的「未完成档 → {ID: 在列/划销}」与「F 闭环登记档 → {ID: 来源}」。
+
+    返回 `(open_stages, closed_rows, sentinel)`；`sentinel` 非 `None` ⇒ **判定面不可用**
+    （账本缺失 / §6.0 小节缺失），调用方须**判红**而不是当作"无冲突"。
+    """
+    path = DOCS / "retro-and-gaps.md"
+    if not path.exists():
+        return {}, {}, f"{LEDGER_FILE} 不存在（账本缺失，守卫无判定面）"
+    txt = _read(path)
+    m = TASK_SEC_START.search(txt)
+    if not m:
+        return {}, {}, "账本 §6.0 小节缺失（守卫无判定面）"
+    rest = txt[m.end():]
+    e = TASK_SEC_END.search(rest)
+    body = rest[: e.start()] if e else rest
+
+    open_stages: dict[str, dict[str, str]] = {}
+    closed_rows: dict[str, str] = {}
+    stage: str | None = None
+    for ln in body.splitlines():
+        if HANDOFF_INDEX_HEAD_RE.match(ln):
+            # ⚠️ **必须在此收边界**：§6.0-H 索引表紧跟在 F 档之后，形态同样是 `| ID | … |`。
+            # 不收边界时它会被当成"F 档行的延续" ⇒ 索引里的每个 ID 都变成"闭环记录"
+            # ⇒ `RSH-026`（H 里是 `🟡 部分闭环`、账本里本项仍开放）被错判成已闭环
+            # （首版实测即如此，见下方单测 `test_index_rows_are_not_mistaken_for_closed_rows`）。
+            break
+        if LEDGER_CLOSED_STAGE_RE.match(ln):
+            stage = "F"
+            continue
+        mo = LEDGER_OPEN_STAGE_RE.match(ln)
+        if mo:
+            stage = mo.group(1)
+            open_stages.setdefault(stage, {})
+            continue
+        if stage is None or not ln.lstrip().startswith("|"):
+            continue
+        first_cell = ln.split("|")[1] if ln.count("|") >= 2 else ""
+        ids = LEDGER_ROW_ID_RE.findall(first_cell)
+        if not ids:
+            continue
+        if stage == "F":
+            for tid in ids:
+                closed_rows[tid] = f"{LEDGER_FILE} F 闭环登记档"
+        else:
+            for tid in ids:
+                open_stages[stage][tid] = "划销" if LEDGER_STRUCK in first_cell else "在列"
+    return open_stages, closed_rows, None
+
+
+def check_ledger_stage_consistency() -> tuple[list[tuple[str, str]], str | None]:
+    """Q 项：已闭环的任务**不得**留在未完成档；§6.0-H 标 ✅ 的**必须**在 F 档有行。
+
+    返回 `(冲突列表 [(任务 ID, 说明)], 保险丝说明)`——保险丝走**单独返回值**、
+    不塞进冲突列表（同 P 项的实测教训：把"判据不可用"混进"某 ID 已登记"会造成
+    自相矛盾的排障日志）。
+    """
+    open_stages, closed_rows, sentinel = ledger_stage_tables()
+    if sentinel:
+        return [], sentinel
+    if "A" not in open_stages:
+        return [], ("账本 A 可做档标题改名/缺失（本项判定面锚定在 A–F 档标题上）"
+                    "，守卫无判定面")
+    status = ledger_handoff_index_status()
+    if status is None:
+        return [], "账本 §6.0-H 小节缺失（闭环记录的一半判定面缺失）"
+    indexed_closed = {tid for tid, st in status.items() if st.startswith("✅") and "闭环" in st}
+    closed = set(closed_rows) | indexed_closed
+    if not closed:
+        return [], ("F 闭环登记档与 §6.0-H 的 ✅ 闭环记录合计为 0"
+                    " ⇒ 本项否命题恒成立、会静默变摆设，先修账本再复跑")
+
+    out: list[tuple[str, str]] = []
+    for stage in sorted(open_stages):
+        for tid, mark in sorted(open_stages[stage].items()):
+            if mark == "划销" or tid not in closed:
+                continue
+            where = closed_rows.get(tid) or f"{LEDGER_FILE} §6.0-H"
+            out.append((
+                tid,
+                f"{stage} 档仍按「在列」计入未完成，但 {where} 已记该任务闭环"
+                f" ⇒ 谎报可做（销账须三处一致：未完成档移除 + F 档登记 + §6.0-H 标 ✅）",
+            ))
+    for tid in sorted(indexed_closed - set(closed_rows)):
+        out.append((
+            tid,
+            "§6.0-H 已标 ✅ 闭环，但 F 闭环登记档无该行 ⇒ 闭环记录不完整"
+            "（读者从唯一入口跳去 F 档会扑空）",
+        ))
+    return out, None
+
+
 def main() -> int:
     quiet = "--quiet" in sys.argv
     scan_all = "--all" in sys.argv
@@ -1612,6 +1769,7 @@ def main() -> int:
     idx_over, idx_dead = check_memory_index()
     cat_unreg, cat_ghost = check_catalog_closure()
     ho_missing, ho_unindexed, ho_noback, ho_sentinel = check_handoff_index()
+    q_bad, q_sentinel = check_ledger_stage_consistency()
 
     def line(label: str, ok: bool, detail: str = "") -> None:
         nonlocal problems
@@ -1773,6 +1931,18 @@ def main() -> int:
             print(f"       {HANDOFF_FILE} 有 {tid} 条目，但账本 §6.0-H 未登记")
         for tid in ho_noback:
             print(f"       {tid} 条目缺回链（正文须出现「§6.0 <任务 ID>」形态的账本指针）")
+    q_detail = ("账本「未完成档」⇄「闭环记录」不得互相矛盾"
+                + ("（保险丝：判定面不可用）" if q_sentinel else
+                   "" if q_bad else
+                   f"（未完成档 {sum(len(v) for v in ledger_stage_tables()[0].values())} 行 ⇄ "
+                   f"闭环记录 F 档 {len(ledger_stage_tables()[1])} 条 + §6.0-H，0 处冲突）"))
+    line("Q 档位一致性", not q_bad and not q_sentinel, q_detail)
+    if q_sentinel and not quiet:
+        print(f"       ⛔ {q_sentinel}")
+        print("          ⇒ 这是「守卫没有判定面」，不等于「账本没问题」；先修好该载体再复跑")
+    elif q_bad and not quiet:
+        for tid, why in q_bad:
+            print(f"       {tid}：{why}")
     # H 项**刻意走 WARN 而非 FAIL**：先补存量再上哨兵，且只作提示。
     # 若计 FAIL，未补完的条目会让整份体检长期挂红 ⇒ 被整体无视（KB-ENG-58）。
     line("H-KB 豁免名单有效", not claim_ghost,
