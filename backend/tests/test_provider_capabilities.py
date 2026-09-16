@@ -7,6 +7,10 @@
 """
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
+import app.data_providers.ths as ths_mod
 from app.data_providers import (
     CompositeProvider,
     EastmoneyProvider,
@@ -98,3 +102,92 @@ def test_registry_shape():
     for src, caps in pc.CAPABILITIES.items():
         for method, entry in caps.items():
             assert entry.get("level") in pc.LEVELS, f"{src}.{method} level 非法"
+
+
+#: `GOV-016` 定点回归（2026-09-16）：这些 fuyao 端点**官方有、本项目未接入**，
+#: 而 `ths.py` 模块 docstring 曾把它们列进「已实现」能力清单 ⇒ 读者据此以为已接入
+#: （[[KB-ENG-85]] 同族：不产生死链、不产生未登记文件，**只产生错误的读者预期**）。
+#: 判据**双向自洽**：docstring 说「未接入」⇒ 全 `app/` 生产代码里就**不该**出现该路径。
+#: 因此本用例不靠人记得同步——谁真把端点接上了，它先红、逼着同轮改 docstring。
+_THS_UNWIRED_ENDPOINTS = (
+    "special-data/limit-down-pool",
+    "financials/indicators",
+    "financials/income-statements",
+    "financials/balance-sheets",
+    "financials/cash-flow-statements",
+    "valuations/snapshot",
+    "meta/tickers/search",
+)
+
+
+def _app_code_string_literals() -> list[tuple[str, str]]:
+    """`app/**/*.py` 里**非 docstring** 的字符串字面量（端点路径只会出现在这类里）。
+
+    必须排除 docstring：docstring 的职责恰恰是**提到**这些路径（标为未接入）。
+    只剥模块 docstring 不够——函数 docstring 里也可能引用端点名（`ths.py` 就有一处）。
+    """
+    # `app` 是**命名空间包**（无 `__init__.py`）⇒ `app.__file__ is None`，不能拿它定位根。
+    root = Path(ths_mod.__file__).parents[1]
+    out: list[tuple[str, str]] = []
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        doc_ids: set[int] = set()
+        for node in ast.walk(tree):
+            body = getattr(node, "body", None)
+            if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
+                    and isinstance(body[0].value.value, str):
+                doc_ids.add(id(body[0].value))
+        lits = [
+            n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in doc_ids
+        ]
+        out.append((str(path.relative_to(root)), "\n".join(lits)))
+    return out
+
+
+def _doc_bullets(doc: str) -> list[str]:
+    """把模块 docstring 拆成 `- ` 起头的条目（含缩进续行）→ 每条的整段文本。
+
+    ⚠️ 不能用裸子串 `"未接入" in doc` 判「两栏结构存在」：正文的 ⚠️ 说明里
+    同样会写到「已实现 / 未接入」字样 ⇒ 栏标题被改掉后断言**照样通过**
+    （首版实测：注入 `[C]` 未红，即此因）。必须锚在**条目首行**上。
+    """
+    bullets: list[list[str]] = []
+    for ln in doc.splitlines():
+        if ln.startswith("- "):
+            bullets.append([ln])
+        elif bullets and ln[:2] == "  " and ln.strip():
+            bullets[-1].append(ln.strip())
+    return [" ".join(b) for b in bullets]
+
+
+def test_ths_docstring_unimplemented_endpoints_stay_unwired():
+    """`GOV-016`：docstring 标「未接入」的端点，生产代码里必须真的没有。"""
+    bullets = _doc_bullets(ths_mod.__doc__ or "")
+    impl = next((b for b in bullets if b.startswith("- **已实现**")), None)
+    unwired = next((b for b in bullets if b.startswith("- **官方有端点但本项目未接入**")), None)
+    assert impl is not None and unwired is not None, (
+        "ths.py docstring 的「已实现 / 未接入」两栏结构缺失"
+        " ⇒ GOV-016 的判定面被破坏（本用例判红而非跳过）"
+    )
+
+    hits = [
+        f"{rel} 出现 {ep}"
+        for rel, lits in _app_code_string_literals()
+        for ep in _THS_UNWIRED_ENDPOINTS
+        if ep in lits
+    ]
+    assert not hits, (
+        "docstring 声称「未接入」、生产代码里却已出现该端点：\n  "
+        + "\n  ".join(hits)
+        + "\n⇒ 要么接错了源，要么 docstring 没同轮同步（GOV-016）"
+    )
+
+    # 归属自洽：每个未接入端点必须在**未接入栏**、且**不在已实现栏**。
+    # 后半句是关键——「挪到未接入栏」若做成「两栏都写」，读者的错误预期并未消除。
+    misplaced = [ep for ep in _THS_UNWIRED_ENDPOINTS if ep not in unwired]
+    assert not misplaced, f"未接入栏缺 {misplaced} ⇒ 清单被删或写错了栏（GOV-016 要求「不要直接删」）"
+    leaked = [ep for ep in _THS_UNWIRED_ENDPOINTS if ep in impl]
+    assert not leaked, f"已实现栏出现 {leaked} ⇒ 未接入端点被当成了已具备能力（GOV-016 复发）"

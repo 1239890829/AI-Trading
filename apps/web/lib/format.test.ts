@@ -188,6 +188,10 @@ describe("sourceLabel / qualityLabel / timeText", () => {
   it("provider keys never leak raw (project convention)", () => {
     expect(sourceLabel("tencent")).toBe("腾讯");
     expect(sourceLabel("ths")).toBe("同花顺");
+    // 通达信（TDX 直连）此前无中文名，界面上直接露出裸 key：
+    // `tdx` = 逐笔降级备源（IMP-038）；`tdx_m1` = 分时降级备源（minute_backfill）。
+    expect(sourceLabel("tdx")).toBe("通达信");
+    expect(sourceLabel("tdx_m1")).toBe("通达信");
     expect(sourceLabel(null)).toBe("--");
     expect(sourceLabel("unknown")).toBe("unknown"); // 未知源原样透传
   });

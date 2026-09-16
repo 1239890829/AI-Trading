@@ -25,6 +25,7 @@ from app.schemas.envelope import (
 )
 from app.market.trade_calendar import trading_days
 from app.market.trading_status import bar_date, resolve_trading_status
+from app.market.tdx_tick import fetch_trades_with_tdx_fallback, trades_failure_detail
 from app.schemas.market import (
     OrderBook,
     Quote,
@@ -269,12 +270,40 @@ async def order_book(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
 
 @router.get("/trades/{symbol}", response_model=Envelope[list[Trade]])
 async def trades(symbol: str, limit: int = Query(default=50, ge=1, le=200), hub: QuoteHub = Depends(get_hub)) -> dict:
-    try:
-        rows = await hub.provider.get_trades(symbol)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"逐笔数据源失败：{exc}")
+    """逐笔成交。provider 链（东财）为主源，**TDX 直连为降级备源**（`IMP-038`，2026-09-16）。
+
+    为什么加备源：`get_trades` 此前是**单点**——链上 4 源里 ths / tencent / sina
+    都是 `return []` 占位，唯一真源东财 `push2his` 被 WAF 拦（本机实测 3/3
+    `ProviderError`，0.12–0.22s 快速失败），本端点恒 **502**。现由
+    `app.market.tdx_tick` 兜底（单次 IPC median 20ms，复用连接）。
+
+    状态码口径（`IMP-038` 收尾修正）：**只有真故障才 502**（`trades_failure_detail`
+    非空）；两源都**没给出数据**（空 / 备源未启用）⇒ **200 + 空列表**，
+    原因放 `meta.trades_detail`。"没数据"与"取数故障"是两件事，混用会让前端把
+    源故障显示成"该股没有逐笔"（红线 2/3 同族）。
+
+    ⚠️ 备源不是主源的理由见 `fetch_trades_with_tdx_fallback` 的 docstring
+    （测试必须无网 + TDX 是直连旁路不进链治理 + 与既有 TDX 备源角色一致）。
+
+    ⚠️ **口径**：TDX 给的是 **3 秒快照聚合**（非真实逐笔），东财是逐笔明细。
+    实际来源由 `meta.trades_source` 与逐行 `Trade.source` 标注（tdx / eastmoney），
+    前端据此显示口径——不要在 UI 上写死"逐笔"二字。
+    """
+    rows, source, detail = await fetch_trades_with_tdx_fallback(
+        hub.provider.get_trades, symbol, limit=limit
+    )
+    # 只有**真故障**才 502；"两源都没给出数据"是 200 + 空列表 + 原因
+    # （判据见 `trades_failure_detail`，**不是** `if detail:`——后者会把
+    #  `chain: empty; tdx: disabled` 这类非故障状态也报成 502）。
+    failed = trades_failure_detail(detail)
+    if not rows and failed:
+        raise HTTPException(status_code=502, detail=f"逐笔数据源失败：{failed}")
     rows = rows[-limit:]
-    return {"data": [t.model_dump(mode="json") for t in rows], "meta": meta_payload(hub)}
+    meta = meta_payload(hub)
+    meta["trades_source"] = source
+    if not rows:
+        meta["trades_detail"] = detail or "两源均未给出数据"
+    return {"data": [t.model_dump(mode="json") for t in rows], "meta": meta}
 
 
 @router.get("/minute-line/{symbol}", response_model=Envelope[MinuteLinePayload])

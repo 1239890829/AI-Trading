@@ -190,6 +190,10 @@ const SOURCE_LABELS: Record<string, string> = {
   tencent: "腾讯",
   eastmoney: "东方财富",
   sina: "新浪",
+  // 通达信（TDX 直连，easy_tdx）。`tdx` = 逐笔主源（IMP-038）；`tdx_m1` = 分时降级备源
+  // （`minute_backfill.tdx_minute_line_fallback`，此前无中文名，界面上直接露出裸 key）。
+  tdx: "通达信",
+  tdx_m1: "通达信",
   mock: "演示数据",
 };
 

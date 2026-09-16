@@ -31,11 +31,86 @@
 
 ## 1 现场（每条任务收尾时更新）
 
-- **当前分支**：`codex/hunting-dynamic-and-notif-tabs`（用户七问交付，`IMP-035`；未合并前
-  §1 头行以本行为准。上一条已交付基线 `codex/fix-handoff-review-deviations` 经 PR #19 合并）。
+- **当前分支**：`codex/hunting-dynamic-and-notif-tabs`（**同分支承载三批**：用户七问交付
+  `IMP-035` + `BUG-017` doc-health 跳过谓词修复 + **数据源审计批**（`GOV-016` / `IMP-038`，
+  含 `RSH-029` 等登记）；三批在**同一工作区并行交付**、文档层互引，故一并提交。
+  未合并前 §1 头行以本行为准。
+  上一条已交付基线 `codex/fix-handoff-review-deviations` 经 PR #19 合并）。
 - **已交付基线**：以最新 `origin/master` 为准；交付后
   `git log --oneline origin/master..HEAD | wc -l` 实测 **0**。
 - **服务**：后端 8000（单实例；**绝不用 `--reload`**，原因见 `AGENTS.md` §6.1）、前端 3000。
+- **门禁基线（`IMP-038` 逐笔 TDX 降级备源 收尾实测，接手时可直接对照）**：后端 **collect 3431
+  （3355 passed / 76 skipped / 0 failed / 347.29s，8000 在跑）**、`pyflakes` **0**、
+  `doc-health` **全部通过**（`P 交接索引` 14 条 / `Q 档位一致性` 0 冲突）、`tsc` **0**、
+  `eslint` **0 error / 0 warn**、前端 **650 项 / 70 文件**（本地实测）。
+  ⚠️ **较上值 3373/643·69 的 Δ = +58 collect = +58 passed / ±0 skipped**，**已机械归因且逐字对上**：
+  **+55** = 新文件 `tests/test_tdx_tick.py`（五组语义判据：时间戳/方向/分页/降级链/**故障分类**）·
+  **+1** = `tests/test_depth_tools.py` 新增 `test_trades_chain_failure_reports_reason_not_silent_empty`
+  （11→12）· **+1** = `tests/test_import_lint.py` 因新增**业务层**模块 `app/market/tdx_tick.py`
+  （268→269；**非业务层模块数未变** ⇒ `skipped 76` 不变**自洽**，[[KB-ENG-97]]）·
+  **+1** = `tests/test_event_loop_no_block.py` 的 `GUARDED` **参数化**新增 `tdx_tick` 条目。
+  ⇒ 55+1+1+1 = **58** ✓。前端 **+7 项 / +1 文件**，**恰等于**新文件
+  `components/detail/book-trades-view.test.tsx` 的用例数（7）；`lib/format.test.ts` 只加断言、**不加用例**。
+  ⚠️ **一次偶发红（已由复跑证伪）**：文档改动后的首轮复跑（load average **13.50**、
+  耗时 **573.61s**）出现 **1 failed = `tests/test_api.py::test_paper_fills_and_reset`**
+  （`sqlalchemy.exc.Invalid…`）；**隔离复跑 1 passed / 2.31s、整文件 13 passed / 9.33s**，
+  且**同一提交树的再一轮全量复跑为 3355 passed / 0 failed（651.03s）** ⇒ 判为
+  **共享状态（module 级 `client` fixture + SQLite）偶发**，**非本轮回归**（与 `BUG-017` 轮
+  记录的 `9364ef0` 同族）。⚠️ 该红的**完整栈未取到**——按实标注为**未归因**；
+  若再现请优先怀疑 `tests/test_api.py` docstring 所述「用例间共享同一份进程状态」。
+  ⚠️ **耗时口径**：347.29s 是**低载**实测；651.03s 是**高载**（load 13.5）实测 ——
+  **报耗时必须带负载前提**，否则会被当成回归。
+  ⚠️ **本轮 3 次真红全部由「全量门禁」而非单跑抓出**：① `test_depth_tools.py` 两条
+  （**测试触网 ⇒ 假绿形态**，见 §IMP-038）· ② `test_trades_empty_says_unavailable`
+  （判据写错：`detail` 非空 ≠ 故障）· ③ `test_env_docs.py::test_env_example_covers_every_setting`
+  （新增配置项未同步 `.env.example`）。**"我只改了 X" 不构成不跑全量的理由。**
+  ⚠️ **`TZ=UTC` 全量 = 650 项 / 70 文件，其中 1 项红**，红点是**已登记的 `BUG-010`**
+  （`components/agent/markdown-view.test.tsx::docs/ 下全部 md 均可渲染完成` 超时 5000ms）
+  —— **已定性为负载抖动、非回归**（证据见下），其余 **649 passed**。
+  即**项数/文件数与本地逐字一致**（650 / 70）。
+  ⚠️ **本轮 `TZ=UTC` 取证过程本身不可复用于"次数"判断**：前两次尝试出现
+  **5 个文件加载错误（65/70 文件 / 587 项）**与**1 failed + 6 errors（64 文件）**，
+  形态均为 `[vitest-pool]: Failed to start forks worker … Timeout waiting for worker to respond`
+  —— **宿主负载**所致：`uptime` 实测 **load average 13.50**，同一套用例本地 **249s** /
+  UTC **471s / 1153s / 1395s**（正常 ~250s）。**报"前端数字"时必须带这个前提。**
+  ⚠️ **`BUG-010` 的定性证据（本轮补强，值得记）**：该用例**渲染 `docs/**` 下全部 md**，
+  预算固定在 **5000ms**。实测——
+  `--testTimeout=60000` 隔离复跑 **10/10 全绿**，该用例实测 **3403ms**（≈ 预算的 68%）。
+  ⇒ ① 它不是回归（放宽预算即绿）；② 但**余量只剩 1.47×**，而 `docs/` 只增不减
+  （上一轮记录整文件 1.6~2.8s，本轮该用例单项已 3.4s）⇒ **这是一条正在被文档增长吃掉的预算**。
+  建议（**未擅自改**，属改守卫）：给该用例单独提高 `timeout`，或按文件粒度断言而非整目录一次渲染。
+  ⚠️ 本轮改动文件在 `TZ=UTC` 下**定向复跑 52/52 全绿**
+  （`lib/format.test.ts` 45 + `components/detail/book-trades-view.test.tsx` 7）；
+  且新用例**刻意不断言渲染出的时间字符串**（`timeText()` 按宿主时区渲染），
+  时间戳口径由后端 `test_row_to_trade_uses_true_utc_not_pseudo_utc` 钉住 ⇒ UTC 面风险本就低。
+  ⚠️ **门禁数字的权威位仍是本 §1**；`AGENTS.md` 头行须与它同轮同步。
+- **门禁基线（`GOV-016` docstring 漂移修正 收尾实测，接手时可直接对照）**：后端 **collect 3373
+  （3297 passed / 76 skipped / 0 failed / 252.32s，8000 在跑）**、`pyflakes` **0**、
+  `doc-health` **全部通过**（`P 交接索引` 13 条 / `Q 档位一致性` 0 冲突）、
+  前端 **643 项 / 69 文件**（本地与 `TZ=UTC` **逐字一致**；`apps/web/` 本轮**零改动**）。
+  ⚠️ **较上值 3372/643·69 的 Δ = +1 collect = +1 passed / ±0 skipped**，**已机械归因**：
+  恰等于 `tests/test_provider_capabilities.py` 新增的 1 例守卫
+  `test_ths_docstring_unimplemented_endpoints_stay_unwired`；**本轮无新增/删除后端模块**
+  ⇒ `tests/test_import_lint.py` 不变、`skipped 76` 不变**自洽**（[[KB-ENG-97]]：跳过数不变 = 无覆盖丢失）。
+  ⚠️ **前端那两次数值是在「后端全量已跑完」之后取的**（两道全量**未并发**）⇒ 本轮**未**出现 `BUG-010` 抖动。
+  详见 `§GOV-016`。
+- **门禁基线（`BUG-017` doc-health 跳过谓词修复 收尾实测，接手时可直接对照）**：后端 **collect 3372
+  （3296 passed / 76 skipped / 0 failed / 416.23s，8000 在跑）**、`pyflakes` **0**、
+  `doc-health` **全部通过**、`tsc` **0**、`eslint` **0 error / 0 warn**、
+  前端 **643 项 / 69 文件**（本地与 `TZ=UTC` **逐字一致**；`apps/web/` 本轮**零改动**）。
+  ⚠️ **耗时前提**：416.23s 高于 `IMP-035` 轮的 301.48s —— 本轮跑后端全量时**同时在改文档**
+  （非 CPU 密集，但共享 SQLite/网络）⇒ **不是回归**；要横向对标耗时应空载复跑。
+  ⚠️ **较上值 3366/643·69 的 Δ 全部机械归因**：后端 **+6 collect = +6 passed / ±0 skipped**
+  = 新钉子 `backend/tests/test_doc_health_memory_index.py`（实测 **14 → 20** 例，`+6`）；
+  **本轮无新增/删除后端模块** ⇒ `tests/test_import_lint.py` 不变、`skipped 76` 不变**自洽**
+  （[[KB-ENG-97]]：跳过数不变 = 无覆盖丢失）。前端 **±0**（`apps/web/` 零改动，`git status` 核对无差异）。
+  ⚠️ **master 上另有一条与本轮无关的红**：`9364ef0`（PR #19 合并）的 CI **`backend` job 也红** ——
+  两项 `tests/test_notification_read_state.py::test_put_read_state_roundtrip_and_monotonic`
+  （`assert 0 == 9999999999999`）与 `tests/test_risk.py::test_risk_check_order_api`
+  （`sqlalchemy.exc.InvalidRequestError: Could not refresh instance '<PaperAccount …>'`），
+  属在册的「SQLite / 共享状态偶发族」（本仓用 `pytest-randomly` ⇒ 顺序随种子变）；
+  而**同一提交树（`ab06193` ⊃ `9364ef0`）本轮实测 `backend` job 为 success** ⇒ 判为**偶发，非本轮引入**。
+  详见 `§BUG-017`。
 - **门禁基线（`IMP-035` 用户七问交付 收尾实测，接手时可直接对照）**：后端 **collect 3366
   （3290 passed / 76 skipped / 0 failed / 301.48s，8000 在跑且**无并发负载**）**、`pyflakes` **0**、
   `doc-health` **全部通过**、`tsc` **0**、`eslint` **0 error / 0 warn**、
@@ -154,6 +229,9 @@
 
 | 任务 ID | 状态 | 日期 | 一句话 |
 |---|---|---|---|
+| `IMP-038` | ✅ 闭环 | 2026-09-16 | 逐笔成交接入 **TDX 降级备源**（原登记「东财通而空」实为**完全不可用**：3/3 WAF 快速失败、端点恒 502；链上另 3 源全是 `return []` 占位 ⇒ 单点归零）。新增 `app/market/tdx_tick.py`（手动分页 + 长连接单例 + `bs_flag` 与东财**相反**的映射）+ 两个消费方共用降级链；**三向交叉验证** Σvol 26,243 手 ↔ fuyao 日线 26,235.24 手 + 盘后 8 笔；**注入自证 7/7（后端）+ 1/1（前端）**、**UI 实测**（口径行 / 北京时区 / 量纲）⇒ 顺带修掉量列**恒渲染 0** 的真实缺陷；收尾修正「**没数据 ≠ 取数失败**」判据（`trades_failure_detail` 白名单 ⇒ 路由只在**真故障**时 502） |
+| `GOV-016` | ✅ 闭环 | 2026-09-16 | `ths.py` docstring 把**未实现**能力（跌停池 / 财务三表 / 估值 / 全市场导出）列为已具备 ⇒ 读者以为已接入。能力清单重构为「已实现 / 未接入 / 已用但不在本 Provider」三段（含 7 条**精确**端点路径）+ **+1 例**双向守卫（「未接入」栏 ⇄ 生产代码零命中），**注入自证 4/4 报红** |
+| `BUG-017` | ✅ 闭环 | 2026-09-16 | **`doc-health` 跳过谓词的目录形态锚点少算一层** ⇒ PR #19 强提交 `.workbuddy/skills/*` 后 `.workbuddy` 首次进入判定面、门② 却因"父目录在"放行 ⇒ **CI `docs` job 恒红（本地恒绿）**。改为三级判据（锚点随形态变 + `git check-ignore` 定夺"能不能进检出"）⇒ 干净检出 `rc 1→0` |
 | `IMP-035` | ✅ 闭环 | 2026-09-16 | 用户七问交付：通知中心新增「资讯 / 事件」tab（与盘面页同源、浏览面不计未读）· 判读模型写死 `deepseek-v4-flash` · 重跑进化 · 盘中提醒**按标的去重** · **猎场闸门读时重算**（降级三态）· `KB-STOCK-37`；同轮补齐 `LEVEL_STYLE` 缺失的 `L3` 键（契约守卫抓出） |
 | `RSH-003` | 🟡 部分闭环 | 2026-09-16 | 候选因子「入池前结构新颖性筛查」切片交付（三判据 + CLI + 18 例）；**四候选真实库实测**：`willr20`/`cmo20` 论证重复（+1.000）· `kurt20` 提示冗余（0.765）· `skew20` 无冗余证据（0.523）；同轮修掉**薄样本配对劫持择优结论**与**CLI 参数被静默丢弃**两处缺陷。**切片 2（同日）**：补指数平滑原语（EMA/Wilder，含「成对权重」陷阱守卫）+ 实测 `ppo20`/`adx14` —— `ppo20` 提示冗余（+0.779）· `adx14` 无冗余证据（+0.309）；抓出**窗口函数在 `WHERE` 后求值**与**名次列 `FILTER` 形同虚设**两处缺陷 |
 | `RSH-027` | 🟡 部分闭环 | 2026-09-16 | 场景化 KB 路由（四场景逐行对应蓝图 §5）+ 引用三态快照 + 覆盖度恒等式；同轮修掉议程第八路**静默漏 16/178 条**的偏差 |
@@ -165,6 +243,174 @@
 | `GOV-014` | ✅ 闭环 | 2026-09-16 | 建立交接明细层与双向索引守卫；注入自证抓出并修掉守卫的两处判据盲区，流程已固化为技能 |
 | `RSH-026` | 🟡 部分闭环 | 2026-09-16 | 个股机会学习闭环第一批已交付，并完成独立验收轮（抓出并修掉 1 处 schema 分叉） |
 | `BUG-014` | ✅ 闭环 | 2026-09-16 | 两处迁移把表建到默认库 ⇒ 全新库缺 5 张表；已改 `op.get_bind()` 并加两条守卫 |
+
+## IMP-038 逐笔成交接入 TDX 降级备源（闭环）
+- **账本**：`docs/retro-and-gaps.md` §6.0 `IMP-038` ｜ **日期**：2026-09-16 ｜ **状态**：✅ 闭环
+- **缺口与验收标准**：登记原文为「东财 `push2his` 在本机**通而空**」，要求「落地前必须实测
+  字段口径 / 单次返回条数与时间窗 / 与东财『大单』分档是否可比」，并警告**不得混拼**异源口径。
+  验收 = ① 实测现状与候选源能力；② 逐笔端点从**恒 502** 恢复可用；③ 口径（方向、量纲、
+  时间戳）**可分辨且诚实**，不得把备源数据冒充原口径。
+- **改动**（分支 `codex/hunting-dynamic-and-notif-tabs`）：
+  ⚠️ **分支名已落定**：本项与 `GOV-016` / `BUG-017` 是同一工作区并行交付的三批改动，
+  **统一由该分支承载**——**没有**新建 `codex/data-source-audit`（原稿的分支设想作废）。
+  `GOV-016` 账本行的分支名曾误记为 `codex/data-source-audit`，已按实际订正。
+  - **新增** `backend/app/market/tdx_tick.py` —— TDX 逐笔适配层：手动分页（每页 ≤1000、
+    后取的页 `insert(0,…)`）+ 模块级长连接单例（`RLock`，复用 21.8ms vs 每次新建 616.9ms）
+    + `bs_flag` 映射 + 北交所市场段判定 + **真 UTC** 时间戳。
+  - **新增** `backend/tests/test_tdx_tick.py`（**55 例**）—— 五组语义判据（时间戳 / 方向 /
+    分页 / 降级链 / **故障分类**），全部不触网。
+  - `backend/app/api/routes/market_quotes.py` —— `/trades/{symbol}` 改走降级链，`meta.trades_source`。
+  - `backend/app/assistant/tools/market.py` —— `_t_trades` 共用同一条链（**"都失败"与"都为空"文案分离**）。
+  - **收尾修正（本轮第二次真红，全量门禁才抓到）**：`tdx_tick.trades_failure_detail()`
+    新增 + 两个消费方改用（详见下"机械证据"末条）。
+  - `backend/app/core/config.py` —— 新增 `trades_tdx_fallback_enabled`（默认 `True`）；
+    `backend/tests/conftest.py` 置 `false`（**测试不得触网**）；**同步 `.env.example`**
+    （`tests/test_env_docs.py::test_env_example_covers_every_setting` 守卫，**本轮第三次真红**）。
+  - `backend/app/services/provider_capabilities.py` —— `get_trades` 条目补记 TDX 备源 +
+    单点清单节加「逐笔已不是单点」说明（**链内注册表语义不变**，`single_point_methods()` 仍列 eastmoney）。
+  - `backend/tests/test_event_loop_no_block.py` —— `GUARDED` 新增 `tdx_tick` 调用点（防后人去掉 `to_thread`）。
+  - **前端**：`components/detail/book-trades-view.tsx`（口径行 + 量纲修正）·
+    `lib/format.ts`（`SOURCE_LABELS` 补 `tdx`/`tdx_m1`）· 新增
+    `components/detail/book-trades-view.test.tsx`（**7 例**）· `lib/format.test.ts` 补 2 断言。
+  - **刻意没动**：`get_capital_flow`（资金流仍在 sina，不碰聚合资金口径）· 东财
+    `normalizer.normalize_trade` 的伪 UTC（**属口径变更**，见下"遗留"）· `tdx_kline.py`
+    的 `_tdx_market`（其调用面是日K/分钟K，不在本项范围）。
+- **机械证据**：
+  - **现状实测**：`EastmoneyProvider.get_trades('600519')` **3/3 抛 `ProviderError`**
+    （`Server disconnected without sending a response.`，0.12–0.22s）；线上 `GET /api/trades/600519`
+    改前 **HTTP 502**（`tencent: empty; sina: empty; eastmoney: Server disconnected…; ths: empty`）。
+  - **修后**：`HTTP 200`，`rows=30`，`meta.trades_source="tdx"`；**稳态延迟 0.023s**
+    （实测序列 1.01s → 0.186 → 0.144 → 0.023 → 0.023 → 0.023 → 0.024s；链上 3 个空占位
+    3 次失败后进 60s 熔断冷却 ⇒ 与设计预期一致）。
+  - **数据质量三向交叉验证**：9/16 600519 —— fuyao 日线 2,623,524 股 = **26,235.24 手** ·
+    TDX `get_tick_chart` Σvol **26,235 手** · TDX `get_transactions` Σvol **26,243 手**
+    （= 26,235 + 盘后 8 笔）· 收盘竞价 15:00:03 price **1258.00** ✓。9/15：13,761.72 ↔ 13,762 / 13,767 ✓。
+  - **粒度实证**：全日 3867 行 = 3867 个唯一时间点；秒位只落 3 的倍数；相邻时间差众数 **3s**（3217/3866）
+    ⇒ 「3 秒快照聚合」有据（不是照抄库文档）。
+  - **方向交叉实证**：价格上行段 `bs_flag=0` 占 **121/138** ⇒ 确认 `0=买`（与东财相反）。
+  - **性能**：单页 100 笔 median **20.1ms** · 单页 1000 笔 27–40ms · 全天 4 页 150–300ms；
+    建连 median **616.9ms** vs 复用 **21.8ms**（28×）。
+  - **覆盖率边界**：920819 有数据；430047 / 830799 实测返 **0 行**（非报错）；
+    判错市场**不报错只返空**（600519 传 SZ 返 0 行）。
+  - **收尾修正实测（判据归位）**：改前两个消费方都写 `if detail:` ⇒ 备源关闭时
+    `detail = "chain: empty; tdx: disabled"` **非空** ⇒ 把"没数据"讲成"取数失败"
+    （`test_trades_empty_says_unavailable` 判红）。改后 `trades_failure_detail()`
+    取白名单补集：空/未启用 ⇒ `""`（不报故障），真异常 ⇒ 故障片段。
+    路由层同步：**只有真故障才 502**；没数据 ⇒ **200 + 空列表 + `meta.trades_detail`**。
+  - **HTTP 端到端复验（重启 8000 后）**：`GET /api/trades/600519?limit=3` → **200**，
+    `data[0].source = "tdx"`、`ts = "2026-09-16T07:07:45Z"`（= 北京 15:07:45，**真 UTC** ✓）；
+    延迟序列 **4.29s**（上一轮 TDX 连接超时被丢弃 ⇒ 本次重建）→ **0.026s** → **0.022s**
+    （**连接复用生效**）。`GET /api/trades/830799` → 502，detail 只含故障片段
+    （`tdx: empty` 被正确过滤，**不再混进 502 文案**）。
+    ⚠️ 取证期间 TDX 服务器一度 **`121.37.207.165:7709 timed out`**（8s 超时）——
+    **外部条件，非代码回归**；重试即恢复，且这条路径正好实测了"协议级错误丢弃单例、下次重建"。
+  - **测试触网（假绿）实测**：全量首跑 2 红（`test_depth_tools.py`），真因是
+    **测试桩返回 `[]`/dict ⇒ 链被判失败 ⇒ 降级到 TDX ⇒ 真的连上服务器拿到 200 行真数据**
+    ⇒ 用例"过"了。修法 = `settings.trades_tdx_fallback_enabled` 开关 + `_row_source()` 容 dict
+    —— **不是改断言**。
+- **注入自证**：后端 **7/7 实跑变红**（`.workbuddy/artifacts/imp-038/injection_selfcheck.py`）——
+  `[①]` 时间戳回退成东财式伪 UTC · `[②]` 方向表照搬东财 · `[③]` 让库自动分页 ·
+  `[③b]` 手动分页但 `append` 而非 `insert(0,…)`（库内错误分页的真实形态）·
+  `[④]` 降级链把"都失败"与"都为空"混为一谈 ·
+  `[⑤]` 助手故障分类退回 `if detail:` · `[⑥]` 路由退回 `if not rows and detail:`（⑤⑥ = 收尾补，
+  正是本轮真红过的那两版实现）。前端 **1/1**（口径写死成「3 秒快照聚合」⇒ 东财分支判红）。
+  八路还原后 `sha256` **逐字一致**、复跑全绿。
+  ⚠️ 脚本按**注入点所在文件**分别跑对应用例（判据分散在 3 个文件里，只跑一个文件会漏掉 ⑤⑥）；
+  且支持 `--backend-only` —— 前端那路要跑 vitest，与本仓"两道全量不并发"纪律冲突，故可拆两次执行。
+- **UI 实测（agent-browser 文本通道，非推理）**：`/workbench?symbol=600519&rt=trades` 实际渲染 ——
+  口径行 `口径：通达信 3 秒快照聚合 · 共 30 笔（时间升序，量：手）`；表格首行
+  `14:56:00 | 1,258.50 | 18 | B`、末行 `15:24:55 | 1,258.00 | 1 | ·` ⇒ **北京时间正确**
+  （真 UTC 决策的端到端验证）、**量不再恒为 0**。
+  ⚠️ **顺带修掉一处真实显示缺陷**：量列原用 `fmtVolume`（按"后端统一为股"÷100 转手），
+  而 `Trade.volume` **本身就是手** ⇒ **每行渲染成 0**；此前不可见只因该端点一直 502。
+- **门禁**：见 §1 置顶基线。
+- **遗留与下一步**：
+  - ⚠️ **东财备源的 `normalize_trade` 用"伪 UTC"**（`wall.replace(tzinfo=utc)`，其单测
+    `test_normalizer.py` 钉住 `t.ts.hour == 9`）⇒ 若东财恢复可用，UI 上会把 09:30 显示成 **17:30**。
+    **属口径变更（改它 = 改既有断言）**，按纪律**未擅动**，需拍板。当前东财恒失败，不影响实际观感。
+  - ⚠️ **盘中实时性未验证**：取证在 20:20 之后（盘后），需下一交易日盘中复测刷新延迟。
+  - ⚠️ **TDX 是直连旁路**：不进 composite 熔断/预算/health 视图（与 `sync_marketdb.py` 同族，
+    见 `IMP-037`）。若要纳入治理，需把 TDX 做成**链内 provider**（改动面 = 注册表 + 链装配 +
+    单点清单语义，属另一项）。
+  - ⚠️ **逐笔列表「最新在最下」**：表格按时间升序渲染（与 `pos=-100` 时代的既有行为一致），
+    盘中打开需滚到底才见最新一笔。**属交互改进、非本项缺口**，按「改进先提后做」未擅动。
+  - ⚠️ **TDX 单例无心跳 / 无空闲回收**：`_get_client` 建的是 `MacClient(timeout=…)`
+    （**未传** `auto_reconnect` / `heartbeat_interval`），只在"协议级异常"时丢弃单例；
+    若服务端**静默半死**（socket 在但不应答），下一次调用要等满 `DEFAULT_TIMEOUT=8s`
+    才重建（取证时实测过一次 `121.37.207.165:7709 timed out`，重试即恢复）。
+    ⚠️ 与仓内既有 TDX 用法**不同**：`tdx_kline.py` / `minute_backfill.py` 都是
+    `with MacClient() as client:`（每次新建，即 616.9ms 那档）——本层刻意改为模块级复用。
+    加心跳/空闲 TTL 属改进项，**未登记为任务**（无实际痛点证据，先记录不立项）。
+
+## GOV-016 `ths.py` docstring 能力承诺 > 实现：能力清单重构为「已实现 / 未接入」两栏（闭环）
+- **账本**：`docs/retro-and-gaps.md` §6.0 `GOV-016` ｜ **日期**：2026-09-16 ｜ **状态**：✅ 闭环
+- **缺口与验收标准**：`app/data_providers/ths.py` 模块 docstring 声明能力含「涨停/**跌停**/炸板池、
+  连板天梯、龙虎榜、**财务三表、估值**、集合竞价、异动、热榜、**全市场导出**」，逐项核对代码后
+  **四者无对应方法**（`get_limit_down_pool` 从未实现；`scripts/sync_marketdb.py` 的直连不属本文件）。
+  验收 = 能力清单**与代码逐条对得上**，且未实现项**保留可查**（不删——删掉就丢了「官方有、我们没用」）。
+- **改动**：`backend/app/data_providers/ths.py` **只改 docstring、0 行代码变更**——能力清单拆为三段：
+  「**已实现**」（与下方方法一一对应）/「**官方有端点但本项目未接入**」（**7 个精确端点路径**）/
+  「**已用但不在本 Provider**」（`prices/snapshot` ← `scripts/sync_marketdb.py` 直连）。
+  `backend/tests/test_provider_capabilities.py` **+1 例**守卫（该文件本就是「能力注册表 ⇄ 代码」防漂移位）。
+  **刻意没动**：`get_limit_down_pool` 等**一律不补实现**——那属 `IMP-037` 待拍板的口径变更，不在本项范围。
+- **机械证据**：AST 实测 `ThsFuyaoProvider` **公共方法 21 个**（`aclose` + 20 个 `get_*`）、私有 4 个；
+  `hasattr(cls, "get_limit_down_pool")` 实测 **False**。7 个未接入端点在 `app/**/*.py` 的
+  **非 docstring 字符串字面量**中实测 **0 命中**——`meta/tickers/list`（已用）与
+  `api/routes/market_stock.py` 的 `@router.get("/financials/{symbol}")` 是**同前缀不同路径**，不误伤
+  （⇒ 故 docstring 里的 `financials/*` 通配必须改成 4 条精确路径，否则守卫无法机械判定）。
+- **注入自证 4/4（全部实跑变红，非假设）**：`[A]` 把 `special-data/limit-down-pool` 接进生产代码
+  ⇒ 红并**点名文件**；`[B]` 从「未接入」栏删掉 `valuations/snapshot` ⇒ 红；`[C]` 改掉栏标题
+  ⇒ 红（判定面消失）；`[D]` 把未接入端点**同时写进「已实现」栏** ⇒ 红。还原后 `sha256` 逐字一致、复绿。
+  ⚠️ **首版 `[C]` 未红 = 守卫真有盲区**：结构断言原用**裸子串** `"未接入" in doc`，而正文 ⚠️ 说明里
+  同样含「已实现 / 未接入」字样 ⇒ 改掉栏标题后**照样通过**。改为**锚定条目首行** + **按栏归属判定**
+  后 `[C]`/`[D]` 才红——与 `GOV-010`/`GOV-014` 同族：**判据取窄 = 摆设**。
+- **门禁**：见 §1 最新门禁基线（后端 `pyflakes` **0** · `doc-health` **全部通过**；本轮后端 collect **+1**）。
+- **遗留与下一步**：未接入端点是否接线 + 三入口收敛 = `IMP-037`（**待批**，含口径变更）。无其他未做项。
+
+## BUG-017 `doc-health` 跳过谓词的目录形态锚点少算一层 ⇒ CI `docs` job 恒红（闭环）
+- **账本**：`docs/retro-and-gaps.md` §6.0 `BUG-017` ｜ **日期**：2026-09-16 ｜ **状态**：✅ 闭环
+- **缺口与验收标准**：PR #20 的 CI `docs (doc-health)` job 红，而**本机同一条命令全绿**。
+  验收 = ① 定性「是 master 存量红还是本轮引入」并给出机械证据；② 修掉根因且**不削守卫覆盖面**；
+  ③ 干净检出上端到端 `rc 1→0`；④ 把"为什么没人钉住它"补成常驻钉子。
+- **改动**：
+  - `scripts/doc-health.py` —— `_in_checkout_universe` 的**门② 锚点随形态变**（文件形态取**父目录**、
+    目录形态取**它自己**），并新增第三级：锚点不在检出里时用 `_is_gitignored`（`git check-ignore`）
+    定夺「**能不能**进检出」。**刻意没动**门①（顶层段）与 `ANCHOR_*` / F 项登记表。
+  - `backend/tests/test_doc_health_memory_index.py` —— 新增 **6 例**（构造 `tops/dirs` 直测判定函数）
+    + 1 例真实仓库端到端；文件由 **14 → 20** 例。**刻意没动**原有 14 例（它们跑在无 git 回退路径上，
+    语义正确）。
+  - `docs/kb/09-verification-pitfalls.md` 新增 [[KB-ENG-111]]（43 行，≤60 硬门）；
+    `docs/kb/00-INDEX.md` 登记该条；`docs/INDEX.md` §0.3 症状反查「本地全绿、CI 红」补指针。
+  - `AGENTS.md` §1 门禁头行同轮同步。
+- **机械证据**（可复算）：
+  - 根因链：`git ls-files | grep -c '^\.workbuddy'` = **2**（PR #19 强提交的 2 个技能文件）
+    ⇒ `.workbuddy` ∈ `_tracked_tops()` **且** ∈ `_tracked_dirs()` ⇒ 门① 放行、门②（父目录 `.workbuddy` 在）
+    也放行 ⇒ `.workbuddy/**` 任意子路径被判定为"检出里可能有"。
+  - 对照：`fa35c2c`（08:13 master，三 job 绿）与 `9364ef0`（PR #19 合并，docs+backend 双红）之间
+    `git diff fa35c2c 9364ef0 -- scripts/doc-health.py` **只有两处文案**（逐行确认不碰判定逻辑）
+    ⇒ 差别只可能在**数据面**。
+  - 干净检出复现（`git worktree add --detach /tmp/ci-sim HEAD`）⇒ `[FAIL] N 6 处指针失效` +
+    `[FAIL] O 幽灵条目 4 条`，**10 条明细全部带尾斜杠**、文件形态**一处未红**。
+  - 修复后同一检出、同一 HEAD：`[OK] N 0 处` / `[OK] O 0 条` / `结论：全部通过`，退出码 **1 → 0**。
+  - ⚠️ **取证陷阱（本轮踩到）**：`ROOT` 由 `__file__` 推导 ⇒
+    `cd /tmp/ci-sim && python3 <主仓绝对路径>/scripts/doc-health.py` 判的是**主仓**（那里 4 个目录都在
+    ⇒ `幽灵条目 0 条`，**假绿**）；必须用**检出内部的脚本副本**。
+  - 判据真值表（13 例）：`.workbuddy/{memory,artifacts,trash,reports}/` → **不判**；
+    `.workbuddy/skills/` → **判**（真在检出里）；`data/picks/` → **不判**；
+    `scripts/no-such-dir/` → **判**（非 gitignored 的缺席目录 = 真问题）。13 次判定合计 **0.260s**
+    ⇒ 不引入可感性能开销。
+- **注入自证（4/4 报红，逐路只动一处）**：`[A]` 门② 回退父目录 ⇒ `test_dir_pointer_anchor_is_itself` 红；
+  `[B]` 撤掉第三级（改成"缺席即不判"）⇒ `test_absent_dir_is_still_judged_when_not_ignored` 红
+  —— **这条是「修判据」与「撤守卫」的分界位**；`[C]` 目录形态去掉尾斜杠 ⇒ 尾斜杠钉红；
+  `[D]` 判定面换回文件系统口径 ⇒ 真实仓库端到端钉红。还原后与备份**逐字相同**、20 例全绿。
+- **门禁**：后端 **collect 3372（3296 passed / 76 skipped / 0 failed / 416.23s，8000 在跑）**、
+  `pyflakes` **0**、`doc-health` **全部通过**、`tsc` **0**、`eslint` **0 / 0**、
+  前端 **643 项 / 69 文件**（本地与 `TZ=UTC` 逐字一致；本轮未改前端）。
+- **遗留与下一步**：① master 的 `backend` job 另有一处**偶发红**（两项 SQLite/共享状态用例），
+  已在 §1 记录并给出"同树绿 ⇒ 非本轮引入"的证据，**未修**（属既有 `BUG-008`/`BUG-010` 同族观察面）；
+  ② `event-panel.tsx` 的第三份 `FOUR_STYLE` 与「守卫不扫 `components/`」的判据盲区仍挂在
+  `IMP-036`（A 档）；③ 本轮**未**新建 worktree 之外的临时产物，`/tmp/ci-sim` 与 `/tmp/ci-green`
+  完成后清理。
 
 ## IMP-035 用户七问交付：资讯/事件 tab · 模型写死 · 提醒去重 · 猎场闸门读时重算（闭环）
 - **账本**：`docs/retro-and-gaps.md` §6.0 `IMP-035` ｜ **日期**：2026-09-16 ｜ **状态**：✅ 闭环

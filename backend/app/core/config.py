@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     # 主源 + 备源（逗号分隔）：ths | tencent | sina | eastmoney | mock；mock 只能单独使用
     data_provider: str = "ths"
     provider_fallbacks: str = "tencent,eastmoney,sina"
+    # 逐笔的 **TDX 直连降级备源**开关（`IMP-038`，2026-09-16）。
+    # 为什么需要这个开关（不是"多一个配置项"）：TDX 走 **TCP 7709 真实网络**，
+    # 不是 HTTP provider，**mock 替不掉它**。测试环境若开着，凡链上返回空/异常的用例
+    # （如 `tests/test_depth_tools.py` 的 `trades=[]` 桩）都会**真的去连 TDX 服务器**
+    # ⇒ 单测变成"有网才过、结果随行情变"。故 conftest 显式置 false
+    # （与 `ASHARE_DATA_PROVIDER=mock`、调度器全家桶关闭同一纪律：**测试不得触网**）。
+    trades_tdx_fallback_enabled: bool = True
     ths_api_key: str = ""  # 同花顺 fuyao 官方 API Key（放 .env，勿提交）
     ths_base_url: str = "https://fuyao.aicubes.cn"
     # 题材官方成分视为有效的时长（architecture-design §1）；过期后懒同步。
