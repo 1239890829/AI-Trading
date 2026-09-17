@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import {
   INDEX_DEFAULT_RIGHT_TAB,

@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.source_ast import read_source_ast
+
 APP_DIR = Path(__file__).resolve().parents[1] / "app"
 
 #: 装配层（允许向下依赖任意层）
@@ -59,7 +61,7 @@ def _iter_py():
 
 def _imported_modules(path: Path) -> set[str]:
     """AST 收集**所有**被导入的模块名（含函数内导入）。"""
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    tree = read_source_ast(path)
     out: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -123,7 +125,7 @@ def test_routes_do_not_import_each_others_privates():
     for path, rel in _iter_py():
         if not rel.startswith("api/routes/"):
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        tree = read_source_ast(path)
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("app.api.routes."):
                 privates = [a.name for a in node.names if a.name.startswith("_") and not a.name.startswith("__")]
@@ -152,7 +154,7 @@ _KNOWN_DEAD_IMPORTS = {
 def _iter_app_imports():
     """`app/` 内全部 `from app.x import y` → (相对路径, 模块, 名字, 行号)。"""
     for path, rel in _iter_py():
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        tree = read_source_ast(path)
         for node in ast.walk(tree):
             if not (isinstance(node, ast.ImportFrom) and node.level == 0 and node.module):
                 continue

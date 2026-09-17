@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * R4 前后端指标黄金样本对照——涨跌停幅度（前端侧）。
  *

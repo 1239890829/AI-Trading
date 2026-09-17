@@ -117,6 +117,8 @@ class QuoteHub:
         # 这两个字段是该轮的取证面（缺失清单 + 覆盖率），也是 freshness 降级的依据。
         self.last_missing_symbols: list[str] = []
         self.last_batch_coverage: float | None = None
+        # 仅记录此前已取得、但本轮未返回的指数；不冒称覆盖了首次缺失的全集。
+        self.last_missing_indices: list[str] = []
         # 休市状态沿触发（红线 2：休市日数据不得冒充实时）
         self._closed_marked = False
 
@@ -152,6 +154,7 @@ class QuoteHub:
             else:
                 log.warning("quote refresh failed (%s): %s — keeping last good data", type(exc).__name__, exc)
             return
+        self._mark_index_gaps(new_indices)
         for q in new_indices:
             prev = self.indices.get(q.symbol)
             validate_quote(q, prev)
@@ -217,6 +220,18 @@ class QuoteHub:
             # `unknown` 必须走这里 —— 继续带着 `_closed_marked` 会让前端停在"休市"
             # 且不广播（见 `refresh()` 的 `if not self._closed_marked`）。
             self._closed_marked = False
+
+    def _mark_index_gaps(self, returned: list[Quote]) -> None:
+        """源漏返回的已缓存指数保留原值和时间，但必须在 REST/推送前标陈旧。"""
+        missing = sorted(self.indices.keys() - {q.symbol for q in returned})
+        for symbol in missing:
+            mark_stale(self.indices[symbol], "index_batch_missing")
+        if missing != self.last_missing_indices:
+            if missing:
+                log.warning("指数行情部分缺失，旧缓存已标 stale：%s", ", ".join(missing))
+            else:
+                log.info("此前缺失的缓存指数已全部返回")
+        self.last_missing_indices = missing
 
     def _mark_batch_gaps(self, watchlist: list[str], by_symbol: dict[str, Quote]) -> None:
         """批量**部分成功**时，未返回的标的必须降级——不能拿旧缓存冒充实时（红线 2）。

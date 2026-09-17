@@ -14,6 +14,7 @@ const REASON_LABELS: Record<string, string> = {
   off_session: "非交易时段",
   market_closed: "休市——展示最近交易日数据",
   refresh_failed: "行情刷新失败",
+  index_batch_missing: "本轮未返回该指数，展示旧行情",
   missing_price: "缺最新价",
   non_positive_price: "价格非正",
   high_below_low: "最高价低于最低价",

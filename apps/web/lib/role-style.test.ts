@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 import { ROLE_FALLBACK_STYLE, ROLE_STYLE, roleClass } from "@/lib/role-style";

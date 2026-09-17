@@ -63,6 +63,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.source_ast import read_source_ast
+
 BACKEND = Path(__file__).resolve().parents[1]
 
 #: 权威模块：交易日判定的唯一实现处，独占二态原语 `is_trade_day()`。
@@ -141,7 +143,7 @@ def _iter_sources(*subdirs: str):
 
 def _parse(path: Path) -> ast.Module | None:
     try:
-        return ast.parse(path.read_text(encoding="utf-8"))
+        return read_source_ast(path)
     except SyntaxError:  # pragma: no cover - 语法错误由 pyflakes/pytest 先报
         return None
 
