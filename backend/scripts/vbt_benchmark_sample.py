@@ -153,7 +153,8 @@ def main() -> None:
     ]
     text = "\n".join(lines)
     print(text)
-    out = Path(__file__).resolve().parents[2] / ".workbuddy" / "artifacts" / "repo-eval-20260913" / "findings" / "vbt-basket-benchmark.md"
+    out = Path(__file__).resolve().parents[2] / "artifacts" / "research" / "repo-eval-20260913" / "findings" / "vbt-basket-benchmark.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(text, encoding="utf-8")
     print(f"\n已存 {out}")
 

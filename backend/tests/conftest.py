@@ -131,6 +131,12 @@ import app.predict.storage as _predict_storage  # noqa: E402
 
 _predict_storage.REPORT_DIR = _DATA_SANDBOX / "predictions"
 
+# BUG-021: the full suite indirectly saves today's empty position plan too.
+# Per-test monkeypatches do not cover those callers; isolate the shared default.
+import app.picks.position_engine as _position_engine  # noqa: E402
+
+_position_engine._PLAN_DIR = _DATA_SANDBOX / "position_plans"
+
 
 # ---------------------------------------------------------------- 共享 TestClient
 import pytest  # noqa: E402

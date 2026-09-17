@@ -6,6 +6,18 @@
 
 ---
 
+<!-- project-entry:start -->
+## 项目入口
+
+- 作业边界与发布流程：本文件 §0、§1、§6.5。
+- 唯一文档入口：`docs/INDEX.md`；唯一状态账本：`docs/retro-and-gaps.md` §6.0。
+- 当前现场与实测：`docs/handoff.md` §1；经验按 `docs/kb/00-INDEX.md` 定位。
+- 接续工作：`skills/ashare-ledger-continue/SKILL.md`；当轮交接：`skills/ashare-task-handoff/SKILL.md`。
+- 发布核验：`scripts/audit/release_check.py`；恢复清单：`scripts/audit/platform_assets.py`。
+- 报告渲染与校验：`scripts/reports/md-report-html.py`、`scripts/reports/md-html-parity.py`。
+- 本地产物与恢复副本：忽略的 `artifacts/`；迁移状态归账本 `GOV-018`，不建立新的 MEMORY 权威入口。
+<!-- project-entry:end -->
+
 ## 0. 红线（违反即事故）
 
 1. **禁止**连接真实券商 / 自动真实下单。系统只有模拟交易（`/api/paper/*`）。
@@ -107,7 +119,14 @@ lsof -ti tcp:3000 -sTCP:LISTEN | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DE
 #   "这次只是改文案所以不用跑" 是最贵的一句话：本轮两次丢失都是靠随后的判据才发现的。
 ```
 
-> **门禁口径**：后端 collect **3453 项（3377 passed / 76 skipped / 0 failed）**、
+> **最新门禁口径（2026-09-17 融合首批）**：后端 **3521 collect = 3445 passed + 76 skipped，0 failed**；
+> 前端本地/UTC 均 **650 passed / 70 文件**；tsc **0**、eslint **0/0**、pyflakes **0**、生产构建通过。
+> 后端 **189.42s**：8000/3000 均未运行，未与前端全量并发，期间有只读代码核查；前端单 worker **47.24s / 45.19s**。
+> 基线 `4052c80` 实测 collect **3453 / 211 文件** → 本批 **3521 / 214 文件**；
+> **+68 = 发布核验 35 + 资产恢复 5 + 迁移工具 22 + 索引守卫 5 + 数据隔离 1**；import-lint 两侧均 **269**，skipped 不变。
+> `doc-health` **22 条交接索引 / 0 档位冲突**；权威现场与证据见 `docs/handoff.md` §1。
+>
+> **历史门禁口径**：后端 collect **3453 项（3377 passed / 76 skipped / 0 failed）**、
 > 前端 **650 项 / 70 文件**、eslint **0 error / 0 warn**、`tsc` **0** · `pyflakes` **0** ·
 > `doc-health` **全部通过**（`P 交接索引` 18 条 / `Q 档位一致性` 0 冲突）
 > （2026-09-17 `BUG-020` 数据源身份修复**集成**（PR #21）轮实测；后端 **259.88s**，前提 **8000 在跑**；
@@ -126,7 +145,7 @@ lsof -ti tcp:3000 -sTCP:LISTEN | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DE
 > ⚠️ **合并会引入「双方各自不超、合并后超」的红**：本轮 `doc-health` 的 **C 超层配额**曾
 > FAIL `docs/data-source-comparison.md(501>500)`（基点 446 / master 449 / PR#21 498 / 合并 501）
 > ⇒ 无损压缩至 **499 行**后通过。**集成分支必须重跑门禁，不能拿两边的绿拼成"应该绿"。**
-> ⚠️ **提交前必须让 `git status --short` 为空**：`git add -A` **之后**再编辑的文件，
+> ⚠️ **提交前查未暂存漂移，提交后才要求本任务工作区干净**：`git add -A` **之后**再编辑的文件，
 > 用 `git commit`（**不带 `-a`**）**不会**进提交 —— 本轮 `AGENTS.md` / `handoff.md` 的门禁回填
 > 就是这样静默丢失的（`merge --stat` 显示的是双方差异、CI 照样绿、`doc-health` 也查不出）。
 > 补救与判据见 [[KB-ENG-113]]。
@@ -777,7 +796,7 @@ C2 全市场日 K dump（已被 TDX 替代）；"等 LLM 再做摘要"（规则�
 
 | 文档 | 内容 / 地位 |
 |---|---|
-| **`.workbuddy/memory/MEMORY.md`** | **会话第一入口**（**纯索引，≤3000 字符**）——**只放指针、不存内容**；读法协议见 `docs/kb/07-doc-curation.md` §4.4 |
+| **本文件的「项目入口」块** | 会话短入口（≤3000 字符，只放指针）；文档与任务分别由 `docs/INDEX.md`、`docs/retro-and-gaps.md` §6.0 管理，不新建 MEMORY 权威文件 |
 | **docs/INDEX.md** | **文档总入口**：编目（§0.0）+ **主题路由**（§0：按主题列「先读→再读→红线」，含**任务动线** / **症状反查** / **已拍板·勿顺手修清单** / **硬约束速查**）——接到任务不知从哪读起时先看 §0 |
 | **docs/PROJECT-MASTER.md** | 技术总览：目录逐文件/数据源口径/API/阶段状态表 |
 | **docs/retro-and-gaps.md** | **唯一待办账本**（2026-09-13 压缩：**1226 行 / 19.2 万字符 → 294 行 / 3.5 万字符，−81%**；原文快照 `.workbuddy/artifacts/retro-and-gaps-full-snapshot-2026-09-13.md`）。结构：§一 里程碑 / **§六 待办总账**（6.1 P0 ✅全闭环 · 6.2 P1 · 6.3 P2 前瞻登记册 · 6.4 防重复开发正向索引 · **6.5 执行轮次索引（12 轮）** · **⭐6.5b 结转：仍未闭环的 9 项**） / §七 偏差更正（**错题本**，34 处） / §八 计划文档处置。**「还有什么没做」的唯一答案 = ⭐ §6.0 任务登记总表**（2026-09-14 建；§6.5b 已**降为详述与证据层**，其未完成项全部登记在 §6.0）；执行细节去 `.workbuddy/memory/` 逐日日志 |
@@ -895,14 +914,17 @@ curl 先行 → 记录字段口径与类型陷阱 → 多采样找规律 → fix
 > 本节是仓库级 GitHub 协作规范，适用于所有功能、修复、重构与文档任务；取代此前以 `develop`
 > 为日常开发分支及允许 Codex 自行合并 `master` 的约定。历史分支和提交仍保留在 Git 历史中。
 
-- `master` 是受保护的主分支。开发任何功能、修复或重构前，必须先同步远程最新的 `master`；
+- `master` 是主分支；2026-09-17 实测平台保护未启用（`protected=false`），平台设置仍归 `GOV-012` 待批。开发任何功能、修复或重构前，必须先同步远程最新的 `master`；
   禁止直接在 `master` 上修改、提交或推送代码。
 - 功能开发必须在从最新 `master` 创建的独立分支中完成；Codex 创建的分支统一命名为
   `codex/<简短英文任务名>`，禁止直接在 `master` 上开发或提交。
 - 功能分支必须通过 Pull Request 合并到 `master`，不得通过直接推送绕过 Pull Request。
 - 只修改当前任务需要的文件；不得覆盖、删除或回滚用户已有的无关改动。
 - 修改完成后必须运行适用于本次改动的测试、代码检查和构建命令；具体门禁及环境注意事项见 §1。
-- 提交前必须检查 Git diff 和仓库状态，确认提交范围准确且不包含无关文件。
+- 提交前精确暂存本任务文件：`git diff --exit-code` 查未暂存漂移，
+  `git diff --cached --name-status` 对范围，`git diff --cached --check` 查补丁，再读暂存正文确认回填。
+  `git ls-files --others --exclude-standard` 逐项分类；正常 staged A/M/D 是预期，不要求 status 为空。
+  提交后核实际 commit 文件集与本任务工作区干净，禁止用 `git add -A` 吸收无关改动或清用户脏树。
 - 禁止提交 `.env`、API Key、Token、密码、私有数据、缓存文件或无关构建产物。
 - 使用清晰的英文 commit message。
 - 完成后必须提交修改，将功能分支推送到 GitHub，并设置 upstream。
@@ -916,14 +938,17 @@ curl 先行 → 记录字段口径与类型陷阱 → 多采样找规律 → fix
   功能分支的 Pull Request，无需再次征求用户确认：
   1. 当前任务要求已经完整实现；
   2. 适用的本地测试、代码检查和构建均通过；
-  3. GitHub CI 必需检查全部通过；
-  4. 分支与最新 `master` 不存在未解决冲突；
+  3. 对准确 PR HEAD 运行 `python3 scripts/audit/release_check.py <PR编号> --expected-head <完整SHA>`：
+     最新 master 必须已集成，当前 CI 最新 attempt 的三 job 必须全部存在且 completed/success；
+     其它 Actions/commit status 阻塞同样阻止合并。空结果、读取失败、旧 SHA、skipped/cancelled 均不得放行；
+     本地门禁和准确 diff 审阅另行完成；此脚本是客户端约束，不能替代 `GOV-012` 平台保护；
+  4. 最新 `master` 已集成并重验；新提交、base 漂移或重跑 CI 使旧验收失效；
   5. Pull Request 中不存在未解决的 `Request changes` 或阻塞性审查意见；
   6. diff 中不存在敏感信息、无关文件或未经说明的破坏性修改。
 - 满足全部条件后，Codex 应自动合并 Pull Request，无需等待用户再次确认。任一条件不满足时不得合并；
   应修复问题并重新验证。如果无法解决，应向用户汇报阻塞原因。
 - 自动合并授权不包含强制推送、绕过 CI、忽略已有阻塞性审查意见、改写 `master` 历史或执行其他破坏性 Git 操作。
-- 合并后必须汇报 Pull Request 链接、合并 commit SHA、测试和 CI 结果，以及是否存在遗留风险。
+- 合并时使用 `gh pr merge <PR编号> --merge --match-head-commit <完整SHA>`；合并后复验 master CI 与实际运行版本，汇报 PR、合并 SHA、测试和遗留。
 - Pull Request 合并并确认分支提交已进入最新 `origin/master` 后，应立即删除对应本地与远程功能分支。
 - **CI 触发条件（2026-09-15 已修）**：`on: push: branches: [master, main, **develop**]` + `pull_request`。
   三份 job 分别执行后端 pytest+pyflakes、前端 tsc+vitest+eslint+`next build`、文档体检；不得削弱这些门禁。

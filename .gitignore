@@ -66,6 +66,8 @@ backend/data/repo-watch/
 
 # Agent memory / workspace state
 .workbuddy/
+# Local evidence, recovery copies and code proposals; never publish these assets.
+/artifacts/
 apps/web/tsconfig.tsbuildinfo
 data/*.bak-*
 

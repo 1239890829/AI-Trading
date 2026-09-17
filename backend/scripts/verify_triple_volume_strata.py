@@ -126,7 +126,8 @@ def main() -> int:
               "", "⚠️ 快速统计口径：未复权/不含费用/不含涨跌停不可成交——观察项仍需完整回测确认。"]
     text = "\n".join(lines)
     print(text)
-    out = Path(__file__).resolve().parents[2] / ".workbuddy" / "artifacts" / "c4-triple-volume-strata.md"
+    out = Path(__file__).resolve().parents[2] / "artifacts" / "research" / "c4-triple-volume-strata.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(text, encoding="utf-8")
     print(f"\n已存 {out}", file=sys.stderr)
     return 0

@@ -12,7 +12,7 @@
 
 检查项（对应 §8.2）：
   A 未登记文档   docs 根 *.md 未出现在 docs/INDEX.md
-  B 死链         AGENTS.md / README.md / docs 活文档 / .workbuddy/memory/MEMORY.md 里
+  B 死链         AGENTS.md / README.md / docs 活文档 / 项目入口里
                  `docs/xxx.md` 指向不存在的文件（**排除记录性引用**：同句含
                  已删除/已归档/被取代/归档/移入/待建 等 的引述，以及占位名如 `YYYY-MM-DD.md`）
                  **默认不扫 archive/ 与逐日 memory 日志**——它们是只读历史/append-only 记录，
@@ -67,9 +67,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
 
-# 引用扫描面（按 §8.2：文档 / AGENTS.md / MEMORY.md）
+# 引用扫描面（按 §8.2：文档 / AGENTS.md，含短入口块）
 SCAN_FILES = ["AGENTS.md", "README.md", "docs/INDEX.md", "docs/plan-registry.md",
-              "docs/retro-and-gaps.md", ".workbuddy/memory/MEMORY.md"]
+              "docs/retro-and-gaps.md"]
 REF_RE = re.compile(r"docs/([\w\-./]+\.md)")
 #: 代码注释里的 docs 引用：断言 `docs/` 不是更长路径（如 skills/hithink-finance/docs/）的尾巴
 CODE_REF_RE = re.compile(r"(?<![\w/.-])docs/([\w\-./]+\.md)")
@@ -168,7 +168,7 @@ def check_dead_links(scan_all: bool = False) -> list[tuple[str, int, str]]:
                 continue                      # L4 逐日记录：append-only，不改历史
         targets.append(p)
     if scan_all:
-        targets += sorted((ROOT / ".workbuddy" / "memory").glob("*.md"))
+        targets += sorted((ROOT / "artifacts" / "logs").glob("*.md"))
     out: list[tuple[str, int, str]] = []
     for t in targets:
         if not t.exists():
@@ -454,7 +454,7 @@ def check_kb_pointer_files() -> list[tuple[str, int, str, str, str]]:
     """
     owner = kb_entry_owner()
     skip_dirs = {"node_modules", ".next", ".turbo", "__pycache__", ".venv", ".venv-research",
-                 "dist", "build", "archive", "trash", ".workbuddy"}
+                 "dist", "build", "archive", "trash", ".workbuddy", "artifacts"}
     targets: list[Path] = []
     for name in ("AGENTS.md", "README.md"):
         if (ROOT / name).exists():
@@ -506,7 +506,7 @@ def check_kb_orphans() -> list[tuple[str, str, str]]:
             owner_counts[m.group(1)] = 0
 
     skip_dirs = {"node_modules", ".next", ".turbo", "__pycache__", ".venv", ".venv-research",
-                 "dist", "build", "archive", "trash", ".workbuddy"}
+                 "dist", "build", "archive", "trash", ".workbuddy", "artifacts"}
     targets: list[Path] = []
     for name in ("AGENTS.md", "README.md", "CONTEXT.md"):
         if (ROOT / name).exists():
@@ -1317,16 +1317,17 @@ def check_task_carrier_pointers() -> list[tuple[str, int, str]]:
 #: ⚠️ 2026-09-14 记录：展开版曾短暂另立为 `kb/12-topic-router.md`，因与 `INDEX.md` §0
 #: 回答的是同一个问题（「我要查 X → 去 Y」）而被否决、已并入 `INDEX.md` §0 并撤销
 #: ⇒ 本项**不要**再去索引第三个文件：**索引面越宽，越容易把重复当成互补**（`kb/07` §4.1）。
-INDEX_FILES = (".workbuddy/memory/MEMORY.md", "docs/INDEX.md")
+INDEX_FILES = ("AGENTS.md", "docs/INDEX.md")
 
-#: **字符数上限**，只约束**入口** MEMORY.md。
-#: 依据：平台对 MEMORY.md 的会话配额（3000 chars）；重构后实测 ≈1900 字符 ⇒ 留有余量。
+#: 字符数上限只约束 AGENTS.md 的短入口块；保留旧入口的 3000 字符预算。
 #: 展开版 `docs/INDEX.md` 的长度归 `kb/07` §7 的层配额，**不套用本条**。
 INDEX_CHAR_CAP = 3000
-INDEX_CHAR_CAP_FILE = ".workbuddy/memory/MEMORY.md"
+INDEX_CHAR_CAP_FILE = "AGENTS.md"
+ENTRY_START = "<!-- project-entry:start -->"
+ENTRY_END = "<!-- project-entry:end -->"
 
 #: 目录式引用的允许前缀（避免把 `kb/`、`docs/kb/` 这类简写当成待验目录）。
-INDEX_DIR_PREFIXES = (".workbuddy/", "scripts/", "apps/", "backend/", "data/", "skills/")
+INDEX_DIR_PREFIXES = (".workbuddy/", "scripts/", "apps/", "backend/", "data/", "skills/", "artifacts/")
 
 #: 带扩展名的路径片段。`docs/` 开头的**刻意排除**——B 项已覆盖，两处重复会造出"两套口径"。
 INDEX_PTR_RE = re.compile(
@@ -1336,7 +1337,7 @@ INDEX_PTR_RE = re.compile(
 #: 会被截成 `.workbuddy/memory/` —— 一个**被凭空造出来的目录指针**（且恰好是合法的），
 #: 于是占位名豁免失效、判据开始验一个从没被写过的东西。
 INDEX_DIR_RE = re.compile(
-    r"(?<![\w/.\-])((?:\.workbuddy|scripts|apps|backend|data|skills)/[\w\-./]*/)(?![\w\-./])")
+    r"(?<![\w/.\-])((?:\.workbuddy|scripts|apps|backend|data|skills|artifacts)/[\w\-./]*/)(?![\w\-./])")
 
 
 def index_pointer_candidates(line: str) -> list[str]:
@@ -1379,17 +1380,24 @@ def check_memory_index() -> tuple[list[tuple[str, int]], list[tuple[str, int, st
     for rel in INDEX_FILES:
         p = ROOT / rel
         if not p.exists():
-            # ⚠️ 保险丝（"索引缺失要响亮"）只对该仓库**拥有**的索引生效：
-            # `.workbuddy/memory/MEMORY.md` 是 gitignored 的本地索引 ⇒ CI 检出里必然缺席，
-            # 判红等于让 docs job 恒红（2026-09-15 实测）。
-            if not _in_checkout_universe(rel, tops, ck_dirs):
-                continue
+            # Both project-owned entries are required even in a clean checkout.
             dead.append((rel, 1, rel))
             continue
         txt = _read(p)
-        if rel == INDEX_CHAR_CAP_FILE and len(txt) > INDEX_CHAR_CAP:
-            oversized.append((rel, len(txt)))
-        for ln, line in enumerate(txt.splitlines(), 1):
+        line_offset = 1
+        if rel == INDEX_CHAR_CAP_FILE:
+            if (txt.count(ENTRY_START) != 1 or txt.count(ENTRY_END) != 1
+                    or txt.index(ENTRY_START) > txt.index(ENTRY_END)):
+                dead.append((rel, 1, "project-entry markers missing, duplicated or reversed"))
+                continue
+            prefix, block = txt.split(ENTRY_START, 1)
+            line_offset = prefix.count("\n") + 2
+            txt = block.split(ENTRY_END, 1)[0].removeprefix("\n").removesuffix("\n")
+            if not txt.strip():
+                dead.append((rel, line_offset, "project-entry is empty"))
+            if len(txt) > INDEX_CHAR_CAP:
+                oversized.append((rel, len(txt)))
+        for ln, line in enumerate(txt.splitlines(), line_offset):
             if any(k in line for k in RECORD_MARKERS):
                 continue                      # 记录性引用（"已删除/已归档"）不算断链，同 B 项口径
             for tok in index_pointer_candidates(line):
@@ -1454,7 +1462,7 @@ def catalog_entries() -> tuple[set[str], set[str]]:
                     last_dir = tok.rsplit("/", 1)[0] + "/"
                     if not tok.endswith(".md"):
                         tok += ".md"
-                    files.add(tok if tok.startswith(".workbuddy/") else ("kb/" if kb else "") + tok)
+                    files.add(tok if tok.startswith((".workbuddy/", "skills/", "scripts/", "artifacts/")) else ("kb/" if kb else "") + tok)
                 else:
                     stem = tok if tok.endswith(".md") else tok + ".md"
                     files.add(("kb/" if kb else "") + last_dir + stem)
@@ -1934,7 +1942,7 @@ def main() -> int:
         if len(carriers) > 12:
             print(f"       …另有 {len(carriers) - 12} 处")
     n_detail = (f"{len(idx_dead)} 处指针失效"
-                f"（B 只认 `docs/*.md`；本项扫 `.workbuddy/`、根文件、代码路径）")
+                f"（B 只认 `docs/*.md`；本项扫项目短入口与文档索引的非 docs 路径）")
     if idx_over:
         n_detail += f"；⚠️ 体积超限 {len(idx_over)} 份"
     line("N 索引体积与指针", not idx_dead and not idx_over, n_detail)

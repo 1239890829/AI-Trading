@@ -40,7 +40,7 @@ MARKETDB = Path(__file__).resolve().parents[1] / "data" / "marketdb" / "market.d
 IC_ABS_MIN = 0.02                 # 与 evaluate.py 同值
 MIN_YEAR_CONSISTENCY = 0.75       # 分年方向一致占比门槛
 BASELINES = ("mom5", "mom20", "kmid2")
-REPORT_DIR = Path(__file__).resolve().parents[2] / ".workbuddy" / "artifacts" / "ml-predict-20260913"
+REPORT_DIR = Path(__file__).resolve().parents[2] / "artifacts" / "research" / "ml-predict-20260913"
 
 
 def build_features(start: str, *, use_cache: bool = True) -> pd.DataFrame:

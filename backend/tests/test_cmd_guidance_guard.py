@@ -63,7 +63,7 @@ FLAG = "--reload"
 
 #: 不扫的目录（只读快照 / 依赖 / 本地痕迹 / 缓存）
 SKIP_DIRS = {
-    ".git", "node_modules", ".next", ".venv", "data", "archive", ".workbuddy",
+    ".git", "node_modules", ".next", ".venv", "data", "archive", ".workbuddy", "artifacts",
     "__pycache__", ".pytest_cache", ".turbo", "dist", "build", ".ruff_cache",
     ".mypy_cache", "coverage", "htmlcov", "site-packages", "vendor",
 }
