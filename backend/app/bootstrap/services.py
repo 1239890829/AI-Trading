@@ -8,7 +8,7 @@
    决定 `picks-shadow` 调度器的 `enabled`。顺序照抄，不重排。
 2. **延迟导入保持延迟**。诸如 `from app.picks.shadow import ShadowRunner` 原本写在
    函数体内；提到模块级会改变加载期依赖图，可能**引入新的 import 环**
-   （`.workbuddy/tools/py-import-cycle-detect.py` 可核验）。一律维持函数内导入。
+   （`scripts/audit/import_cycles.py` 可列静态候选，仍须实际导入核验）。一律维持函数内导入。
 3. **失败降级形态不变**：题材目录未配 key 时 `theme_catalog = None`（端点 503，
    其余功能不受影响）；agent 运行时对账与参数覆盖层恢复允许失败
    （`contextlib.suppress`）⇒ 不得改成会抛的写法。

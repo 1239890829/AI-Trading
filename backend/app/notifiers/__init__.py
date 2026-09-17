@@ -66,13 +66,15 @@ class NotifierRegistry:
     def names(self) -> list[str]:
         return list(self._notifiers.keys())
 
-    async def dispatch(self, event: AlertEvent, rule: AlertRule) -> list[str]:
+    async def dispatch(self, event: AlertEvent, rule: AlertRule, *, exclude: tuple[str, ...] = ()) -> list[str]:
         channels = []
         try:
             wanted = json.loads(rule.channels or "[]")
         except Exception:
             wanted = ["in_app", "log"]
         for ch in wanted:
+            if ch in exclude:
+                continue
             notifier = self._notifiers.get(ch)
             if not notifier:
                 continue

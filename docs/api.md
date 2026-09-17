@@ -194,6 +194,13 @@ LLM 增强层**已实现但默认关闭**（`app/events/llm_aux.py` → `POST /a
 | GET | `/api/alerts/events?limit=&rule_id=` | 触发记录 |
 | 🔒 POST | `/api/alerts/events/{id}/ack` | 确认事件 |
 
+规则告警的飞书投递通过 Outbox 留痕（范围与状态见账本 §6.0 `IMP-044`）。事件列表新增
+`channel_states[]`：outbox_id、channel、state、reason、created_at_ms、expires_at_ms、accepted_at_ms。
+`accepted` 只表示平台受理；`unknown` 表示发送结果不确定，不能自动当作未发送而补发。
+`pending/leased/expired/suppressed` 分别表示待领取、处理中、过期及偏好/有效性拦截；原因字段可查。
+旧 `delivered_channels` 为兼容保留的受理/站内持久化投影，不等于送达或已读；`ack` 仍是站内确认。
+其它通知入口尚未接入 Outbox，缺少 channel_states 不代表发送成功。历史事件不回填外发任务。
+
 ## 盘后复盘与预判（AI）
 
 | 方法 | 路径 | 说明 |

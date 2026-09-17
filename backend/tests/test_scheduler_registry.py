@@ -413,7 +413,9 @@ def test_alert_engine_skips_tick_outside_trading_window(monkeypatch):
     from app.market import trade_calendar
     from app.market.alert_engine import AlertEngine
 
-    engine = AlertEngine(None, None, interval=5.0)  # type: ignore[arg-type]
+    from types import SimpleNamespace
+    repo = SimpleNamespace(outbox=SimpleNamespace(reconcile=lambda now: None))
+    engine = AlertEngine(repo, None, interval=5.0)
     assert engine._idle_interval == 300.0
 
     ticks: list[int] = []

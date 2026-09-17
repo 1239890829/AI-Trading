@@ -5,6 +5,8 @@ from datetime import datetime
 
 from app.models.alert import AlertEvent, AlertRule
 from app.core.bjtime import beijing_now_naive
+from app.models.notification_outbox import NotificationOutbox
+from app.repositories.notification_outbox import NotificationOutboxRepository, enqueue_feishu
 
 #: 事件**不指向具体个股**时的占位代码（板块级 / 方向级 / 信号健康级统一用它）。
 #:
@@ -17,6 +19,7 @@ PLACEHOLDER_SYMBOL = "000000"
 class AlertRepository:
     def __init__(self, session_factory):
         self._session_factory = session_factory
+        self.outbox = NotificationOutboxRepository(session_factory)
 
     def list_rules(self, enabled_only: bool = False) -> list[AlertRule]:
         with self._session_factory() as db:
@@ -62,12 +65,19 @@ class AlertRepository:
             rule = db.query(AlertRule).filter(AlertRule.id == rule_id).one_or_none()
             if not rule:
                 return False
+            # Preserve attempts when the user deletes a rule and its events.
+            ids = [e.id for e in rule.events]
+            db.query(NotificationOutbox).filter(NotificationOutbox.event_id.in_(ids)).update(
+                {NotificationOutbox.event_id: None}, synchronize_session=False,
+            )
             db.delete(rule)
             db.commit()
             return True
 
     def record_trigger(self, rule_id: int, symbol: str, trigger_value: float, threshold: float,
-                       snapshot: dict | None = None, delivered_channels: list[str] | None = None) -> AlertEvent:
+                       snapshot: dict | None = None, delivered_channels: list[str] | None = None,
+                       outbox_target: str | None = None, now_ms: int = 0,
+                       expires_at_ms: int = 0) -> AlertEvent:
         with self._session_factory() as db:
             event = AlertEvent(
                 rule_id=rule_id,
@@ -80,9 +90,15 @@ class AlertRepository:
             db.add(event)
             rule = db.query(AlertRule).filter(AlertRule.id == rule_id).one()
             rule.last_triggered_at = beijing_now_naive()
+            if outbox_target is not None:
+                enqueue_feishu(db, event, rule, target=outbox_target, now_ms=now_ms, expires_at_ms=expires_at_ms)
             db.commit()
             db.refresh(event)
             return event
+
+    def get_event(self, event_id: int | None) -> AlertEvent | None:
+        with self._session_factory() as db:
+            return db.get(AlertEvent, event_id) if event_id is not None else None
 
     def list_events(self, limit: int = 50, rule_id: int | None = None,
                     acknowledged: bool | None = None,

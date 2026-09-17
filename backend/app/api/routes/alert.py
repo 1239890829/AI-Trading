@@ -98,6 +98,7 @@ async def list_events(
     # `watcher.ensure_system_rule` / `record_sighting` 同族（见 `test_event_loop_no_block.py`
     # 「已审计、刻意不搬」段）。搬线程的调度开销与收益同量级，不加。
     events = repo.list_events(limit=limit, rule_id=rule_id)
+    channel_states = repo.outbox.states_for_events([e.id for e in events])
     out = []
     triage_map: dict[int, tuple[str, str, str]] = {}
     try:
@@ -121,6 +122,8 @@ async def list_events(
         # model 一并返回：`llm_fallback` 表示「AI 判读不可用、按规则提醒」，
         # 界面必须能区分（P1-36「今日已挡事件」要展示是否降级）——不伪装成 AI 判断。
         d["triage"] = {"verdict": tri[0], "reason": tri[1], "model": tri[2]} if tri else None
+        # Legacy delivered_channels is an acceptance projection, never a read receipt.
+        d["channel_states"] = channel_states.get(e.id, [])
         out.append(d)
     return Envelope(data=out)
 
