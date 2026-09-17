@@ -23,6 +23,8 @@ import math
 import duckdb
 import pytest
 
+from tests.duckdb_fixtures import insert_rows
+
 from app.factors import smoothing
 from app.factors.smoothing import (
     SMOOTHING_WINDOW_BARS,
@@ -113,7 +115,7 @@ def con():
     """
     c = duckdb.connect(":memory:")
     c.execute(f"CREATE TABLE px ({_PX_COLS})")
-    c.executemany("INSERT INTO px VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", _px_rows())
+    insert_rows(c, "px", _px_rows())
     yield c
     c.close()
 
@@ -577,8 +579,8 @@ def _write_market_db(path) -> None:
                 vol = 1_000_000 + ((i * 37 + si * 11) % 500) * 1_000
                 ks.append((f"90.XXSHE{600000 + si}", ts, o, hi, lo, px, vol, vol * px))
                 ads.append((f"90.XXSHE{600000 + si}", ts, px))
-        c.executemany("INSERT INTO daily_k VALUES (?, ?, ?, ?, ?, ?, ?, ?)", ks)
-        c.executemany("INSERT INTO daily_k_adj VALUES (?, ?, ?)", ads)
+        insert_rows(c, "daily_k", ks)
+        insert_rows(c, "daily_k_adj", ads)
     finally:
         c.close()
 

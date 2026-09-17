@@ -212,8 +212,8 @@ class EastmoneyProvider:
         """跌停池（2026-09-04 新增，市场页跌停入口联动）。
 
         实测：不带 date 参数返回 rc:102 data:null（与 ZT/ZB 池不同），date 必带；
-        空池（data.pool 缺失）返回空列表——是否视为"失败"由 composite._is_empty 统一裁决，
-        与 /limit-up 行为保持一致。
+        仅业务成功且 tc 与完整 pool 一致才返回；缺失/损坏/截断不得冒充合法空池。
+        qdate 不作为请求日期证据（上游可能返回最近交易日，见 data-sources §3.1）。
         """
         payload = await self._get_json(
             "https://push2ex.eastmoney.com/getTopicDTPool",
@@ -226,9 +226,22 @@ class EastmoneyProvider:
                 "date": trade_date.strftime("%Y%m%d"),
             },
         )
-        pool = (payload.get("data") or {}).get("pool") or []
+        if not isinstance(payload, dict) or type(payload.get("rc")) is not int or payload["rc"] != 0:
+            raise ProviderError("eastmoney limit-down business response failed")
+        data = payload.get("data")
+        if not isinstance(data, dict) or not isinstance(data.get("pool"), list):
+            raise ProviderError("eastmoney limit-down pool missing or malformed")
+        pool = data["pool"]
+        if type(data.get("tc")) is not int or data["tc"] != len(pool):
+            raise ProviderError("eastmoney limit-down pool incomplete")
+        symbols = [str(r.get("c") or "") if isinstance(r, dict) else "" for r in pool]
+        if (any(len(s) != 6 or not s.isascii() or not s.isdigit() for s in symbols)
+                or len(set(symbols)) != len(symbols)):
+            raise ProviderError("eastmoney limit-down pool has invalid or duplicate symbols")
         records = [nz.normalize_limit_down(r, trade_date) for r in pool]
-        return [r for r in records if r is not None]
+        if any(r is None for r in records):
+            raise ProviderError("eastmoney limit-down pool normalization failed")
+        return records
 
     @staticmethod
     def _fmt_hhmmss(v) -> str | None:

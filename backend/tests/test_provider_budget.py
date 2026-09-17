@@ -11,9 +11,9 @@
 4. 秒级方法用更紧的预算（Hub 以 1Hz 轮询这些方法，等不起）；
 5. 预算值对外可观测（`provider_health()`），不是藏在代码里的魔法数。
 
-⚠️ 预算**只**作用于通用路由路径（`_call` → `_call_serial` / `_call_hedged`）。
-`search` / `get_limit_down_pool` 刻意不接：它们的"空结果 = 合法语义"（无匹配 / 0 家跌停）
-必须建立在**问完所有源**之上，预算提前中断会把"没问完"变成假的"搜不到 / 没有跌停"。
+⚠️ 本文件覆盖通用路由路径（`_call` → `_call_serial` / `_call_hedged`）。
+跌停池在 BUG-020 中接入同一预算（专项回归见 test_limit_down_failures.py），
+预算提前中断必须报错，不能伪装合法空池。search 的既有独立路径本切片未改。
 """
 from __future__ import annotations
 
