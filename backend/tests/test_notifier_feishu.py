@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 
 import httpx
+import pytest
 
 from app.models.alert import AlertEvent, AlertRule
 from app.notifiers import NotifierRegistry
@@ -287,3 +288,63 @@ def test_event_with_card_snapshot_renders_interactive():
     notifier = FeishuNotifier(webhook="https://example.invalid/hook", client=_client(calls, {"code": 0}))
     assert asyncio.run(notifier.send(ev, _rule()))
     assert calls[0]["msg_type"] == "interactive" and calls[0]["card"] == CARD
+
+
+@pytest.mark.parametrize("body,accepted", [
+    ({}, False), ({"code": None}, False), ({"StatusCode": None}, False),
+    ({"code": False}, False), ({"code": 0.0}, False), ({"code": "0"}, False),
+    ([], False), (None, False), ("ok", False),
+    ({"code": 0, "StatusCode": 1}, False),
+    ({"code": 0, "StatusCode": None}, False),
+    ({"code": 0}, True), ({"StatusCode": 0}, True),
+    ({"code": 0, "StatusCode": 0}, True),
+])
+def test_receipt_requires_explicit_integer_success(body, accepted):
+    from app.notifiers.feishu import _is_success_body
+
+    assert _is_success_body(body) is accepted
+
+
+@pytest.mark.parametrize("via", ["webhook", "app"])
+@pytest.mark.parametrize("kind", ["text", "event_card", "direct_card"])
+@pytest.mark.parametrize("body", [{}, [], {"code": None}, {"code": 0}])
+def test_actual_send_paths_do_not_claim_unconfirmed_acceptance(via, kind, body):
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        if "tenant_access_token" in request.url.path:
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "test-token"})
+        return httpx.Response(200, json=body)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            notifier = FeishuNotifier(
+                webhook="https://offline.invalid/hook" if via == "webhook" else "",
+                secret="", app_id=f"receipt-{via}-{kind}-{repr(body)}",
+                app_secret="test-only", open_id="test-receiver", client=client,
+            )
+            event = _event()
+            if kind == "direct_card":
+                return await notifier.send_interactive(CARD)
+            if kind == "event_card":
+                event.snapshot = json.dumps({"card": CARD})
+            registry = NotifierRegistry()
+            registry.register(notifier)
+            channels = await registry.dispatch(event, _rule())
+            return "feishu" in channels
+
+    assert asyncio.run(run()) is (body == {"code": 0})
+    # Unknown receipt does not trigger a second send (duplicate-delivery risk).
+    assert len([path for path in calls if "tenant_access_token" not in path]) == 1
+
+
+def test_token_without_success_code_never_sends_message(caplog):
+    calls = []
+    notifier = FeishuNotifier(
+        webhook="", secret="", app_id="receipt-token-no-code", app_secret="test-only",
+        open_id="test-receiver", client=_client(calls, {"tenant_access_token": "test-token"}),
+    )
+    assert asyncio.run(notifier.send(_event(), _rule())) is False
+    assert len(calls) == 1
+    assert "test-token" not in caplog.text
