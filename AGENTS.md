@@ -13,6 +13,7 @@
 - 唯一文档入口：`docs/INDEX.md`；唯一状态账本：`docs/retro-and-gaps.md` §6.0。
 - 当前现场与实测：`docs/handoff.md` §1；经验按 `docs/kb/00-INDEX.md` 定位。
 - 接续工作：`skills/ashare-ledger-continue/SKILL.md`；当轮交接：`skills/ashare-task-handoff/SKILL.md`。
+- 盘后复盘：`skills/ashare-daily-review/SKILL.md`，流程与逐项核验归既有 SOP / checklist。
 - 发布核验：`scripts/audit/release_check.py`；恢复清单：`scripts/audit/platform_assets.py`。
 - 报告渲染与校验：`scripts/reports/md-report-html.py`、`scripts/reports/md-html-parity.py`。
 - 本地产物与恢复副本：忽略的 `artifacts/`；迁移状态归账本 `GOV-018`，不建立新的 MEMORY 权威入口。
@@ -119,11 +120,11 @@ lsof -ti tcp:3000 -sTCP:LISTEN | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DE
 #   "这次只是改文案所以不用跑" 是最贵的一句话：本轮两次丢失都是靠随后的判据才发现的。
 ```
 
-> **最新门禁口径（2026-09-17 BUG-022 分时图坐标切片，本地完整验收）**：后端 **3596 collect = 3520 passed + 76 skipped，0 failed**；
+> **最新门禁口径（2026-09-17 BUG-020 指数完整性与 GOV-018 复盘入口，本地完整验收）**：后端 **3622 collect = 3546 passed + 76 skipped，0 failed**；
 > 前端本地/UTC 均 **675 passed / 71 文件**；tsc **0**、eslint **0/0**、pyflakes **0**、生产构建通过。
-> 后端 **107.88s**：8000/3000 与隔离图表服务停用、前后端全量串行；只读核查、OpenAPI 导入与 pyflakes，开始负载 3.54/3.38/3.21；前端单 worker **71.70s / 62.54s**，期间只读核查与账单页面操作。
-> 基线 `f9870d3` 的后端 **3596 / 219 文件** 及全部用例身份不变；前端旧 651 项保留，新增 **24** = 轴函数 **12** + 新组件文件 **12**，本地/UTC 身份一致。
-> 完整 OpenAPI **170 paths / 零差异**；专项 **34 passed**，真实 Canvas **46/46**（隔离夹具，非实盘）。PR #26 已合并且 master CI 通过；本图表切片远端交付按准确 PR HEAD 核验，W01 剩余契约仍开放。权威证据与预算见 `docs/handoff.md` §1。
+> 后端 **170.44s**：8000/3000 停用，前后端全量串行，期间有文档与只读取证；收尾负载抽样 13.23/11.13/7.37，不与空载耗时直接比较。前端单 worker **65.36s / 65.53s**，期间有只读核查及短专项测试。
+> 基线 `8a16c3c`：后端 **3596 → 3622 / 219 → 220 文件**，原用例身份全部保留，新增 **26** = 完整性回归 **25** + 新业务模块进入 import-lint **1**；skipped 76 不变。前端全部 675 项身份不变。
+> 完整 OpenAPI **170 paths / 零差异**；关联七文件 **118 passed**；隔离 REST/health/WS 完整性与连接回收验收通过。PR #27 已交付，本批远端结果按准确 PR HEAD 与回执核验；BUG-020 / GOV-018 整体仍开放。权威证据与预算见 `docs/handoff.md` §1。
 >
 > **历史门禁口径（2026-09-17 BUG-020 跌停失败语义切片）**：后端 **3546 collect = 3470 passed + 76 skipped，0 failed**；
 > 前端本地/UTC 均 **650 passed / 70 文件**；tsc **0**、eslint **0/0**、pyflakes **0**、生产构建通过。

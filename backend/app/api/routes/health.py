@@ -24,8 +24,10 @@ liveness_router = APIRouter(tags=["system"])
 @liveness_router.get("/health")
 async def health(hub: QuoteHub = Depends(get_hub)) -> dict:
     stale = hub.is_stale()
+    index_batch = hub.index_batch() if hasattr(hub, "index_batch") else None
+    incomplete = bool(index_batch and index_batch["missing_symbols"])
     return {
-        "status": "ok" if not stale else "degraded",
+        "status": "degraded" if stale or incomplete else "ok",
         "app": settings.app_name,
         "version": settings.version,
         "provider": hub.provider.name,
@@ -35,6 +37,7 @@ async def health(hub: QuoteHub = Depends(get_hub)) -> dict:
         "consecutive_failures": hub.consecutive_failures,
         "last_error": hub.last_error,
         "is_stale": stale,
+        "index_batch": index_batch,
     }
 
 

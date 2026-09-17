@@ -61,6 +61,10 @@ def meta_payload(hub: QuoteHub) -> dict:
     纯载荷浪费。清单保留在 Hub 对象上（`hub.last_missing_symbols`）供日志
     与诊断使用，日志侧只在缺失集**变化**时打印。
 
+    `index_batch` 则核对固定的 6 个基准指数，包含首次缺席的代码与覆盖率。
+    它描述最近完成的批次，覆盖率 None 表示尚未判定；请求失败仍保留旧批次证据，
+    须结合 last_success_refresh/freshness 判断年龄，不能视为最新请求成功证明。
+
     `push`（R24，2026-09-14）：WebSocket 推送链路的取证面 —— 订阅连接数、
     出站队列上限、**累计丢弃帧数**。丢弃只可能发生在出站队列满时，即客户端
     停止消费而服务端仍在按 1Hz 生产（慢网络 / 半死连接 / 已成孤儿的 writer）；
@@ -72,6 +76,7 @@ def meta_payload(hub: QuoteHub) -> dict:
         "is_stale": hub.is_stale(),
         "freshness": hub_freshness(hub),
         "batch_coverage": getattr(hub, "last_batch_coverage", None),
+        "index_batch": hub.index_batch() if hasattr(hub, "index_batch") else None,
         "push": hub.subscriber_stats() if hasattr(hub, "subscriber_stats") else None,
         "last_success_refresh": hub.last_success_refresh.isoformat() if hub.last_success_refresh else None,
         "generated_at": utcnow().isoformat(),

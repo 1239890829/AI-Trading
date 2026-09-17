@@ -277,7 +277,7 @@ def test_hub_get_quotes_falls_back_to_indices():
             return []
 
     hub = QuoteHub(provider=Up(), poll_interval=5, get_watchlist=lambda: ["600519"])
-    hub.indices = {"000001": Quote(symbol="000001", name="上证指数", price=3300.0, source="up")}
+    hub.indices = {"000001": Quote(symbol="000001", market="SH", name="上证指数", price=3300.0, source="up")}
     hub.quotes = {"600519": Quote(symbol="600519", price=100.0, source="up")}
     got = hub.get_quotes(["600519", "sh000001"])
     assert [x.symbol for x in got] == ["600519", "sh000001"]

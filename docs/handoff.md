@@ -31,9 +31,12 @@
 
 ## 1 现场（每条任务收尾时更新）
 
-- **当前切片（2026-09-17，提交前快照）**：PR #26 已合并 `f9870d3`，PR/master CI 三 job 均通过，交付回执在原项目 artifacts/runs/index-response-20260917/verification/delivery.json。当前分支 `codex/minute-axis-consistency`，工作区 `/tmp/ashare-minute-axis`，实施 W01 / BUG-022 首批；本地结果见下，远端交付以本分支 PR 与归档回执为准，不能据此销账整个 W01。
-- **当前预算依据**：14:02 账户页实测剩余 135 分钟，预留 40、常规 95；下列 152 分钟为上一轮快照。不改变计费，集中交付并核对 PR/master 实际消耗。
-- **当前完整门禁（BUG-022）**：后端 **3596 collect / 3520 passed / 76 skipped / 0 failed，107.88s，219 文件**；前端本地/UTC **675 passed / 71 文件**，单 worker **71.70s / 62.54s**。8000/3000 与隔离图表服务均已停用，前后端全量串行；后端开始负载 3.54/3.38/3.21，期间只读核查、OpenAPI 导入与 pyflakes；前端期间只读核查与账单页面操作。tsc **0**、eslint **0/0**、pyflakes **0**、生产构建通过，文档守卫通过。构建首轮因跨根目录依赖软链失败，改为独立依赖副本后成功；未修改打包配置或门禁。
+- **当前切片（2026-09-17，提交前快照）**：PR #27 已合并 `8a16c3c`，PR/master CI 三 job 均通过；回执在原项目 artifacts/runs/minute-axis-20260917/verification/delivery.json。当前分支 `codex/index-cold-completeness`，工作区 `/tmp/ashare-index-completeness`，实施 BUG-020 冷启动指数完整性及 GOV-018 盘后复盘入口提炼；8000/3000 均未启动，生产未加载本批代码。远端交付以本分支 PR 与归档回执为准。
+- **当前预算依据**：本批发布前 14:52–14:53 账户页实测 1883/2000 已用、剩余 117 分钟，预留 40、常规 77，billable $0；前一批 135 分钟为历史快照。本批两切片共用一次完整 PR 与 master CI，发布后回执记录实际增量，不改变计费或跳门禁。
+- **当前完整门禁（BUG-020 / GOV-018）**：后端 **3622 collect / 3546 passed / 76 skipped / 0 failed，170.44s，220 文件**；前端本地/UTC **675 passed / 71 文件**，单 worker **65.36s / 65.53s**。8000/3000 停用，前后端全量串行；后端期间文档与只读取证，收尾负载 13.23/11.13/7.37；前端期间有只读核查及短专项测试。tsc **0**、eslint **0/0**、pyflakes **0**、生产构建通过。
+  相对 `8a16c3c`：后端 **+26** = 新完整性文件 **25** + 新业务模块纳入 import-lint **1**；原用例身份无删除，skipped 不变；前端全部用例身份不变。完整 OpenAPI **170 paths / 零差异**，关联七文件 **118 passed**，独立 HTTP transport → Hub → REST/health/WS 验收通过，连接收尾 0 残留。输入均为隔离夹具，不冒充生产验证；长证据在 artifacts/runs/index-completeness-20260917/verification。
+- **本轮曾红的全量**：读取市场校验后，旧 `test_providers_chain` 手填上证指数夹具缺 market，出现 1 failed；补明确 SH 并增加未知市场拒绝反例后全量通过，未放宽校验。初轮 3537/76、第二轮 3544/76 + 1 failed 均保留回执，不冒称一次全绿。
+- **上一批完整门禁（BUG-022）**：后端 **3596 collect / 3520 passed / 76 skipped / 0 failed，107.88s，219 文件**；前端本地/UTC **675 passed / 71 文件**，单 worker **71.70s / 62.54s**。8000/3000 与隔离图表服务均已停用，前后端全量串行；后端开始负载 3.54/3.38/3.21，期间只读核查、OpenAPI 导入与 pyflakes；前端期间只读核查与账单页面操作。tsc **0**、eslint **0/0**、pyflakes **0**、生产构建通过，文档守卫通过。构建首轮因跨根目录依赖软链失败，改为独立依赖副本后成功；未修改打包配置或门禁。
   相对 `f9870d3`，后端全部用例身份相同；前端旧 651 项保留，新增 **24** = 轴函数 **12** + 新组件文件 **12**，本地/UTC 身份一致。完整 OpenAPI **170 paths / 零差异**；真实 Canvas **46/46**（隔离夹具，非实盘），专项 **34 passed**。长证据在本批 artifacts/verification，交付后归档至原项目 artifacts/runs/minute-axis-20260917。
 
 - **上一批施工记录**：用户允许合理使用剩余 Actions 额度并继续实施。PR #25 合并为 `e976c10` 后创建 `codex/index-response-identity`，东财指数返回身份与缺项保护已随 PR #26 交付。
@@ -1330,6 +1333,10 @@
 
 ## BUG-020 行情身份与失败写保护已修，完整性与源时间仍待闭环
 - **账本**：`docs/retro-and-gaps.md` §6.0 `BUG-020` ｜ **日期**：2026-09-17 ｜ **状态**：🟡 部分闭环
+- **本轮首次指数完整性**：基点 `8a16c3c`；固定六指数目录供主备源请求与 Hub 核对，市场不符/未知/重复身份在写缓存前排除。首次缺项只记录，不造报价；已有缺项继续保留值和时间并标 stale，恢复自动清除。
+- **消费契约**：REST meta、health 与 WS 初始/重订阅/广播共用 `index_batch`（expected_count、coverage、missing_symbols）。覆盖率 None 表示未取得批次；请求失败不改写最近完成批次证据。health 因不完整降级，正常返回项的时间 freshness 不受误伤；无报价的指数订阅仍收到缺失证据。
+- **独立反例**：首版 15 项在主干实现上 14 failed / 1 passed；进一步读路径复核新增市场串值与大写订阅反例，修前 8 failed / 2 passed（14 deselected）。最终 25 项新增回归、关联七文件 118 passed。注入旧缓存集合判据精确 11 failed / 5 passed，恢复后文件 SHA-256 一致；旧缓存测试四处期望同步加入首次缺席项，价格/时间/质量断言保留。
+- **本轮门禁与运行**：完整门禁及隔离 ASGI/WS 验收见 §1 和本批 artifacts/runs/index-completeness-20260917/verification。该切片不承诺源时间质量、全天源 SLA 或生产已加载，BUG-020 仍开放。
 - **本轮题材切片（2026-09-17）**：`codex/theme-member-write-guard`；从最新 master 建工作区后复用 PR #24，按当时 §1 用户额度约束保留本地提交；最新授权恢复后与 IMP-041 集中交付，PR #24 已合并且 master CI 通过。
 - **缺口与验收**：HTTP 200 业务错误被解析成空集，可能删除旧成员并推进 synced_at；失败必须保留两者，有效增删与空集仍需正确写入。
 - **改动**：fetch_members 在写事务前校验 code、数据就绪时间戳、成员数组和有效唯一代码；sync_stale_members 仅返回成功写入项，失败不计成功或空成分，分别记录日志。
@@ -1407,6 +1414,8 @@
 
 ## GOV-018 平台目录退出与恢复
 - **账本**：`docs/retro-and-gaps.md` §6.0 `GOV-018` ｜ **日期**：2026-09-17 ｜ **状态**：🟡 实施中
+- **盘后复盘入口批（2026-09-17）**：本地忽略的 170 行旧技能已全文审阅并核对初始恢复点；有用流程提炼为 `skills/ashare-daily-review/SKILL.md`，复用 SOP/checklist/KB，API 差异按当前路由复核。AGENTS/INDEX、SOP/checklist 和仓库跟踪 KB 同步切换，废弃平台解释器、另端口绕行和 pytest 后覆盖生产日历的命令。具体迁移矩阵见 `docs/platform-directory-migration.md` §5。
+- **恢复与边界**：原件仅在主干交付后，按已核哈希送入项目可恢复回收站并回读验证；相邻未知资产、Serenity 嵌套 Git 和未审完的 UZI 包保留。新入口撤下旧第三方调用，未实际运行复盘、发送通知或更改调度。此批门禁见 §1，MIG-3/5 整体仍开放。
 - **缺口与验收标准**：项目依赖平台专属入口和未跟踪资产；按 MIG-0–5 清单逐项提炼，恢复可验证后按用途迁移，未知不删，不操作用户全局目录。
 - **改动**：本批提炼两份项目技能、报告/CSS/完整 OpenAPI 对照工具；切换 patch 归档、四份研究脚本、回收入口、文档索引与 N 门禁；完整消费者与迁移依据见 `docs/platform-directory-migration.md`。
 - **机械证据**：本机实盘 3,253 条（1,644 文件、1,608 目录、1 符号链接）；2 tracked、3 untracked、3,248 ignored。完整私有清单及恢复包在原项目 `artifacts/backups/platform-exit-20260917-0938/`；3,253 条回读哈希吻合，包 SHA-256 `5eefaf19fdbf7555f22d90d7920415bfe0ceb944739ae895d52794d2613e0355`。

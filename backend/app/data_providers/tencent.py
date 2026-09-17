@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 import httpx
 
 from app.data_providers.eastmoney import ProviderError
+from app.market.indices import INDEX_CATALOG
 from app.schemas.market import (
     Kline,
     OrderBook,
@@ -31,7 +32,7 @@ log = logging.getLogger(__name__)
 SOURCE = "tencent"
 from app.core.bjtime import BJ_TZ, beijing_now  # S2-8 时区收敛
 
-INDEX_SECIDS = ["s_sh000001", "s_sz399001", "s_sz399006", "s_sh000688", "s_sh000300", "s_sh000852"]
+INDEX_SECIDS = [f"s_{market.lower()}{symbol}" for symbol, market, _ in INDEX_CATALOG]
 
 _TIMEFRAME_PARAM = {
     "1m": "m1", "5m": "m5", "15m": "m15", "30m": "m30", "60m": "m60",

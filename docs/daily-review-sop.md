@@ -5,7 +5,7 @@
 > 复盘产出的新规律**默认是候选假设**，须过数据验证才可进体系（`kb/04-decisions.md` KB-DEC-019）。
 > **导航**：§读法 → 执行顺序 → 各阶段要点 → 与后端 Agent 的分工 → 常见误判。判断口径另见 `kb/06-review-framework.md`（七阶段框架，复盘任务先读）。
 >
-> 适用：A 股每交易日收盘后（15:30 之后）。执行者：workbuddy（skill `ashare-daily-review`）。
+> 适用：A 股每交易日收盘后（15:30 之后）。项目入口：`skills/ashare-daily-review/SKILL.md`。
 > 配套：`docs/review-agent.md`（后端 Agent 机制）· `docs/sentiment.md`（情绪双轴判据）·
 > `docs/theme-prediction.md`（题材预判评分卡）· `docs/retro-and-gaps.md`（项目盘点账本）。
 >
@@ -23,7 +23,7 @@
    只按结果奖惩会让策略向运气漂移。
 4. **改进项必须可验证。** 禁止"下次注意""加强关注"这类无法验证的表述；
    每条必须带 `target`（改哪里）+ `proposed_change`（怎么改）。
-5. **不自动改任何配置或代码。** 改进项一律人工确认后实施（见 §6）。
+5. **应用内复盘 Agent 只产提议。** 外部开发任务按既有用户授权与 `AGENTS.md` §6.5 实施；策略、参数和凭据边界不因复盘扩大。
 
 ---
 

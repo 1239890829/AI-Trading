@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable
@@ -11,6 +11,7 @@ from app.core.bjtime import beijing_now  # S2-8 时区收敛
 from app.core.freshness import Freshness
 from app.data_quality.validator import mark_stale, validate_quote
 from app.market import trade_calendar as tc
+from app.market.indices import INDEX_MARKETS, INDEX_SUBSCRIPTIONS
 from app.schemas.market import Quote, utcnow
 
 log = logging.getLogger(__name__)
@@ -117,8 +118,9 @@ class QuoteHub:
         # 这两个字段是该轮的取证面（缺失清单 + 覆盖率），也是 freshness 降级的依据。
         self.last_missing_symbols: list[str] = []
         self.last_batch_coverage: float | None = None
-        # 仅记录此前已取得、但本轮未返回的指数；不冒称覆盖了首次缺失的全集。
+        # 以共同请求目录为分母；首次缺席也计数，但不臆造报价。
         self.last_missing_indices: list[str] = []
+        self.last_index_coverage: float | None = None
         # 休市状态沿触发（红线 2：休市日数据不得冒充实时）
         self._closed_marked = False
 
@@ -154,6 +156,11 @@ class QuoteHub:
             else:
                 log.warning("quote refresh failed (%s): %s — keeping last good data", type(exc).__name__, exc)
             return
+        # 裸代码只有在市场也匹配且身份唯一时才能写入指数缓存。
+        counts = Counter((q.symbol, q.market) for q in new_indices)
+        new_indices = [q for q in new_indices
+                       if q.symbol in INDEX_MARKETS and INDEX_MARKETS[q.symbol] == q.market
+                       and counts[q.symbol, q.market] == 1]
         self._mark_index_gaps(new_indices)
         for q in new_indices:
             prev = self.indices.get(q.symbol)
@@ -222,16 +229,26 @@ class QuoteHub:
             self._closed_marked = False
 
     def _mark_index_gaps(self, returned: list[Quote]) -> None:
-        """源漏返回的已缓存指数保留原值和时间，但必须在 REST/推送前标陈旧。"""
-        missing = sorted(self.indices.keys() - {q.symbol for q in returned})
+        """核对完整请求集；缺席旧值保留原时间并标陈旧，首次缺席只记录缺失。"""
+        missing = sorted(INDEX_MARKETS.keys() - {q.symbol for q in returned})
         for symbol in missing:
-            mark_stale(self.indices[symbol], "index_batch_missing")
+            if symbol in self.indices:
+                mark_stale(self.indices[symbol], "index_batch_missing")
         if missing != self.last_missing_indices:
             if missing:
-                log.warning("指数行情部分缺失，旧缓存已标 stale：%s", ", ".join(missing))
+                log.warning("指数行情缺失（已有缓存标 stale，无缓存保持缺席）：%s", ", ".join(missing))
             else:
-                log.info("此前缺失的缓存指数已全部返回")
+                log.info("此前缺失的指数已全部返回")
         self.last_missing_indices = missing
+        self.last_index_coverage = (len(INDEX_MARKETS) - len(missing)) / len(INDEX_MARKETS)
+
+    def index_batch(self) -> dict:
+        """最近完成的指数批次完整性；None 表示尚未取得批次，失败不改写旧证据。"""
+        return {
+            "expected_count": len(INDEX_MARKETS),
+            "coverage": self.last_index_coverage,
+            "missing_symbols": list(self.last_missing_indices),
+        }
 
     def _mark_batch_gaps(self, watchlist: list[str], by_symbol: dict[str, Quote]) -> None:
         """批量**部分成功**时，未返回的标的必须降级——不能拿旧缓存冒充实时（红线 2）。
@@ -344,8 +361,8 @@ class QuoteHub:
                 q = self.quotes.get(s)
                 if q is None and len(s) >= 3 and s[:2].lower() in ("sh", "sz", "bj"):
                     q = self.indices.get(s[2:])
-                    if q is not None:
-                        q = q.model_copy(update={"symbol": s})
+                    q = (q.model_copy(update={"symbol": s})
+                         if q is not None and q.market == s[:2].upper() else None)
                 if q is not None:
                     out.append(q)
             return out
@@ -402,7 +419,8 @@ class QuoteHub:
         for sub in self._subscribers:
             symbols = sub.symbols
             payload = self.get_quotes(sorted(symbols) if symbols is not None else None)
-            if not payload:
+            index_subscribed = symbols is None or any(s.lower() in INDEX_SUBSCRIPTIONS for s in symbols)
+            if not payload and not (index_subscribed and self.last_missing_indices):
                 continue
             dropped = offer(
                 sub.queue,
@@ -411,6 +429,7 @@ class QuoteHub:
                     "seq": seq,
                     "ts": ts,
                     "data": [q.model_dump(mode="json") for q in payload],
+                    "meta": {"index_batch": self.index_batch()},
                 },
             )
             if dropped:
