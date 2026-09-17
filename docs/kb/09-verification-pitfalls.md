@@ -810,7 +810,7 @@ useEffect(() => {
 得出「**HTML 丢失 2 处内容**、md 里 **10 处裸 `<`** 会被当成标签起始吞掉后续文字」，
 并已准备去"修"渲染器。
 
-**复核结论：撤回。渲染器无此缺陷。** `.workbuddy/tools/md-report-html.py::_inline()` **首行即**
+**复核结论：撤回。渲染器无此缺陷。** `scripts/reports/md-report-html.py::_inline()` **首行即**
 `html.escape(text, quote=False)` ⇒ 裸 `<` 渲染为 `&lt;`，本就安全。逐条目对账实测 **1191/1191 全绿**。
 
 **根因（缺陷在判据，不在被测物）**：比对脚本在 **md 侧**用了 HTML 去标签 `strip('<[^>]*>')`——
@@ -831,7 +831,7 @@ html 侧经 `unescape` 后这些字符**原样存在**，md 侧被删 ⇒ 又是
 3. **判据必须能变红**（[[KB-ENG-65]]）：注入删除一个片段 ⇒ 必须**精确**报出该处、断裂点吻合；
    否则判据等于没写。本轮的教训更硬一层：**判据还会反过来制造 bug**（若不复核，就会去改正确代码）。
 
-**修法（已落地）**：固化为 `.workbuddy/tools/md-html-parity.py`（零依赖，三项判据：
+**修法（已落地）**：固化为 `scripts/reports/md-html-parity.py`（零依赖，三项判据：
 逐条目文本命中 / 结构计数相等 / 时间戳新鲜；失败打印**第一个断裂点**即保留前缀 + 断裂片段 + md 原文，
 `exit 1`）。**三组注入验证**：A 删掉 `&lt; 24h 且数据为多日聚合` ⇒ 精确报 **L574** 一处、断裂点吻合；
 B 破坏 table 计数 ⇒ `37=35` 判红；C 时间戳倒挂 ⇒ 判红。**真实报告实测 1191/1191 无损**。
@@ -851,7 +851,7 @@ B 破坏 table 计数 ⇒ `37=35` 判红；C 时间戳倒挂 ⇒ 判红。**真�
 刚写的结论**。同一份报告的全量对账（`md-html-parity.py`）随后报出 **371/373、2 处未命中**，
 这次是**真阳性**。
 
-**真缺陷位置**：`.workbuddy/tools/md-report-html.py::_split_row()` —— 表格切分用裸
+**真缺陷位置**：`scripts/reports/md-report-html.py::_split_row()` —— 表格切分用裸
 `line.strip().strip("|").split("|")`，**不识别转义竖线** `\|`（md 表格里 `\|` 是"字面竖线"）。
 后果不是"少一格"这么轻，而是三件事**同时**发生：
 
@@ -1310,7 +1310,7 @@ CI 检出里根本没有这棵树，而本地有 ⇒ **N（索引指针）/ O（
 ⇒ 最终 OpenAPI 里 tags 变成 **`["market", "market"]`**。
 计数（paths 166 / ops 177 / schemas 106）与参数**全对**，**只有 tags 不一致**。
 ⇒ 判据若写成「路由表条数相同 / 端点集合相同」就**完全抓不到**——必须**逐条比对每个操作的字段**
-（本仓工具逐条比 `operationId` / `parameters` / `tags`，见 `.workbuddy/tools/openapi-contract-diff.py`）。
+（本仓工具逐条比 `operationId` / `parameters` / `tags`，见 `scripts/audit/openapi-contract-diff.py`）。
 落地选择：**门面刻意不声明 tags**，标签由子 router 独占声明。
 
 **静默失效 3：切片把「同文件内的私有函数调用」变成「跨模块导入私有名」。**
@@ -1964,16 +1964,18 @@ NULL 行拿到 `1.0`，`count(pr) = 4` 而 `count(x) = 3`）⇒ 过滤**从不�
   3. **`doc-health` / 后端文档守卫查的是「结构与指针一致性」，不查「数字是否为本轮最新」**
      —— 文档自身自洽（旧数字 + 旧基线块），故**全绿**。
 - **可机械执行的判据（收尾必做，两条都要）**：
-  `git add -A && git status --short` **必须为空**（非空 ⇒ 仍有未暂存改动，`commit` 会把它们丢掉）；
-  `git commit -F <msg> && git status --short` **再确认一次为空**。
+  精确暂存本任务文件后，`git diff --exit-code` 须无未暂存漂移；用
+  `git diff --cached --name-status`、暂存正文与 `git diff --cached --check` 核范围及回填。
+  正常 staged A/M/D 是预期；`git ls-files --others --exclude-standard` 逐项分类，提交后才检查任务工作区干净。
+  **2026-09-17 GH-03 更正**：旧版误把“无未暂存改动”写成“暂存后 status 为空”，二者不等价。
   ⚠️ **`git commit -a` 不能替代这条**：`-a` 只纳入**已跟踪**文件的修改，**不覆盖新增未跟踪文件**。
 - **与同族的关系**：[[KB-ENG-105]]（同一批次对同一文件两处编辑 ⇒ 第二处静默丢失）是
   **编辑器/工具层**的丢失；本条是 **git 层**的丢失 —— **后果同型（「工具报成功」的假象）、层次不同**，
   因此**两条判据都要**。共同根判据：**「我做了改动」必须以可复算的观察为准，不以工具回执为准。**
 - **同族陷阱（本轮实测，同一提交里就撞上）**：`ln -s <主工作区>/node_modules apps/web/node_modules`
   建的**符号链接** **不匹配 `.gitignore` 的 `node_modules/`**（末尾斜杠只匹配**目录**）⇒
-  `git add -A` 会把它当作**新增文件**收进提交。而在 worktree 里跑前端门禁**必须**用这种链接
-  （worktree 里没有 `node_modules`）⇒ **收尾一律用精确路径 `git add <file>...`，不要 `git add -A`**；
+  `git add -A` 会把它当作**新增文件**收进提交。worktree 的依赖应安装或复制为真实目录
+  （Turbopack 构建可能拒绝跨根目录链接）⇒ **收尾一律用精确路径 `git add <file>...`，不要 `git add -A`**；
   或先 `git status --untracked-files=all` 逐条核对 `??` 项。
 - **影响面为什么这次很轻（但不能靠运气）**：本例丢失的**只是记账**（`AGENTS.md` 头行 + §1 门禁回填），
   因为 `docs/data-source-comparison.md` 的 499 行压缩**在 `add` 之前**完成 ⇒ 已进提交，

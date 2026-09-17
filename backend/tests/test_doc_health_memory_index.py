@@ -45,7 +45,7 @@ REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "doc-health.py"
 
 #: 临时索引面：与 `INDEX_FILES` 同形，但落在 tmp_path 下（绝不碰真实仓库）。
-ENTRY = "index/MEMORY.md"
+ENTRY = "AGENTS.md"
 ROUTER = "docs/INDEX.md"
 
 
@@ -67,6 +67,8 @@ class Probe:
     def write(self, rel: str, text: str) -> None:
         p = self.root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
+        if rel == ENTRY:
+            text = self.mod.ENTRY_START + "\n" + text + "\n" + self.mod.ENTRY_END
         p.write_text(text, encoding="utf-8")
 
     def touch(self, rel: str) -> None:
@@ -225,7 +227,7 @@ def test_scan_files_cover_the_index_entry() -> None:
     任一侧都不会自己变红。2026-09-14 双向注入已确认交接**当前成立**，缺的只是这颗钉子。
     """
     mod = _load()
-    assert ".workbuddy/memory/MEMORY.md" in mod.SCAN_FILES, (
+    assert "AGENTS.md" in mod.SCAN_FILES, (
         "索引入口已不在 B 项扫描面（SCAN_FILES）内 ⇒ 索引里的 `docs/**.md` 死链"
         "将无人判（N 跳过 docs/，B 不扫该文件）。分工交接断裂，请恢复该条目。"
     )
@@ -388,6 +390,23 @@ def test_real_repo_gitignored_workbuddy_dirs_are_skipped() -> None:
             f"{tok} 被判成「检出里可能有」⇒ 该目录只存在于本机 ⇒ CI 上必然红"
         )
     # 反向：真在检出里的目录照判（不得为了修前面这条把整棵 `.workbuddy` 一刀切跳过）。
-    assert mod._in_checkout_universe(".workbuddy/skills/", tops, dirs) is True, (
-        "`.workbuddy/skills/` 下有已跟踪的技能文件 ⇒ 它在检出里 ⇒ 必须照判"
+    assert mod._in_checkout_universe("skills/", tops, dirs) is True, (
+        "`skills/` 下有已跟踪的技能文件 ⇒ 它在检出里 ⇒ 必须照判"
     )
+
+
+@pytest.mark.parametrize("form", ["missing", "duplicate", "reversed", "empty"])
+def test_project_entry_markers_fail_loud(probe: Probe, form: str) -> None:
+    start, end = probe.mod.ENTRY_START, probe.mod.ENTRY_END
+    content = {"missing": "No entry", "duplicate": start + start + "body" + end,
+               "reversed": end + "body" + start, "empty": start + "\n\n" + end}[form]
+    (probe.root / ENTRY).write_text(content)
+    assert probe.dead()
+
+
+def test_entry_cap_does_not_constrain_the_rest_of_agents(probe: Probe) -> None:
+    probe.write(ENTRY, "See `scripts/check.py`")
+    probe.touch("scripts/check.py")
+    with (probe.root / ENTRY).open("a") as stream:
+        stream.write("\n" + "正文" * probe.mod.INDEX_CHAR_CAP)
+    assert probe.oversized() == [] and probe.dead() == []

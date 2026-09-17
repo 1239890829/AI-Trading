@@ -66,7 +66,7 @@ DENIED_SUBSTRINGS = (
 
 #: 受保护目录段（**任意层级**出现即命中）：CI 工作流、治理、文档、技能、迁移、测试
 _PROTECTED_DIR_SEGMENTS = frozenset({
-    ".github", ".gitlab", ".circleci", ".workbuddy",
+    ".github", ".gitlab", ".circleci", ".workbuddy", ".workbuddy-ai", "artifacts",
     "docs", "skills", "migrations", "tests",
 })
 
@@ -99,8 +99,8 @@ C_DAILY_MAX = 1
 MAX_FILES = 3
 MAX_CONTEXT_LINES = 160
 
-#: patch 归档目录（**gitignored**；沙箱会被删除，patch 必须留在仓库外供人工审阅）
-PATCH_ARCHIVE_DIR = PROJECT_ROOT / ".workbuddy" / "evolution-patches"
+#: patch 归档目录（**gitignored**；沙箱会被删除，patch 必须留在任务临时检出之外供人工审阅）
+PATCH_ARCHIVE_DIR = PROJECT_ROOT / "artifacts" / "evolution-patches"
 
 
 # ---------------------------------------------------------------- 脱敏
@@ -566,7 +566,7 @@ def _run_gate(worktree: Path, changed: list[str]) -> tuple[bool, str]:
 
 
 def _archive_patch(diff: str, tag: str) -> Path | None:
-    """把 patch 落盘到归档目录（沙箱随后会被删除，patch 必须留在仓库外供人工审阅）。"""
+    """把 patch 落盘到归档目录（沙箱随后会被删除，patch 必须留在任务临时检出之外供人工审阅）。"""
     try:
         PATCH_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
         path = PATCH_ARCHIVE_DIR / f"{tag}.patch"
@@ -677,7 +677,7 @@ def execute_c_item(item: dict, session_factory, agenda_date: str,
         rc, commit = _git(["rev-parse", "--short", "HEAD"], sandbox)
         rc, diffstat = _git(["diff", "--stat", "HEAD~1..HEAD"], sandbox)
 
-        # 10) 归档 patch（沙箱随后删除，patch 必须留在仓库外供人工审阅）
+        # 10) 归档 patch（沙箱随后删除，patch 必须留在任务临时检出之外供人工审阅）
         archived = _archive_patch(diff, tag)
         keep_branch = True
 

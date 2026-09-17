@@ -128,7 +128,7 @@ def enable_code_changes_for_enabled_path_tests(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def isolate_patch_archive(tmp_path, monkeypatch):
-    """patch 归档目录默认指向真实仓库 `.workbuddy/`——测试必须重定向，避免污染工作区。"""
+    """patch 归档目录默认指向真实仓库 `artifacts/`——测试必须重定向，避免污染工作区。"""
     monkeypatch.setattr(ce, "PATCH_ARCHIVE_DIR", tmp_path / "patch-archive")
 
 

@@ -2,10 +2,8 @@ name: CI
 
 on:
   push:
-    # ⚠️ `develop` 是**日常开发分支**（2026-09-15 用户确立，见 AGENTS.md §6.5）：
-    # 只列 master/main 的话，开发分支每次推送都**拿不到任何 CI 反馈**，
-    # 等于把"门禁"推迟到合并那一刻才发现——那时改动面已经最大。
-    # 加它不会放松任何约束，只是让同一套 job 在开发分支上提前跑。
+    # Current work uses codex/* branches and pull_request CI (AGENTS.md §6.5).
+    # Keep develop pushes covered for legacy compatibility; PR #4 is not a merge target.
     branches: [master, main, develop]
   pull_request:
 

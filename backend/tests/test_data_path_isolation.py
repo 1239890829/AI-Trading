@@ -104,7 +104,7 @@ _DECLARED: dict[str, tuple[bool, str]] = {
     "market/minute_backfill.py:parquet_dir_tdx": (False, "只读 parquet 目录"),
     "market/minute_decisions.py:SCAN_DIR": (False, "由调度写；用例 monkeypatch 到 tmp_path"),
     "market/trade_calendar.py:_PERSIST_PATH": (False, "写前有劣质备源守卫（<80% 不覆盖官方日历）"),
-    "picks/position_engine.py:_PLAN_DIR": (False, "由盘中计划器写，测试用例注入 tmp"),
+    "picks/position_engine.py:_PLAN_DIR": (True, "全量测试间接写出当日空计划；统一隔离，BUG-021"),
     "research/verify_registry.py:VERIFY_DIR": (False, "由核验 CLI 写，测试传 tmp 出参"),
     "sentiment/metric_history.py:_STORE_PATH": (False, "由调度写；用例注入内存/tmp"),
     "services/replay_gate.py:BASELINE_PATH": (False, "只读基线（写入走 CLI 出参）"),
@@ -372,6 +372,7 @@ def test_test_writable_paths_are_sandboxed():
     """
     import app.assistant.cognition as cognition
     import app.predict.storage as predict_storage
+    import app.picks.position_engine as position_engine
     import app.review.storage as review_storage
     import app.services.leader_archive as leader_archive
 
@@ -383,6 +384,7 @@ def test_test_writable_paths_are_sandboxed():
         "assistant/cognition.py:GAP_LOG_PATH": cognition,
         "predict/storage.py:REPORT_DIR": predict_storage,
         "review/storage.py:REPORT_DIR": review_storage,
+        "picks/position_engine.py:_PLAN_DIR": position_engine,
     }
     for key in writable:
         module = modules.get(key)
@@ -395,6 +397,16 @@ def test_test_writable_paths_are_sandboxed():
 
 
 # ---------------------------------------------------------------- 功能回归
+
+
+def test_position_plan_write_lands_in_sandbox():
+    from app.picks import position_engine as pe
+
+    assert not _is_real_data_path(pe._PLAN_DIR), "Assert isolation before any write"
+    plan = {"date": "2099-01-03", "decisions": [], "exits": [], "peaks": {"fixture": 1}}
+    pe.save_plan(plan)
+    assert json.loads(pe._plan_path(plan["date"]).read_text()) == plan
+    assert pe.load_plan(plan["date"]) == plan
 
 
 class _StubProvider:
