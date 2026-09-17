@@ -12,7 +12,7 @@ import {
   Time,
 } from "lightweight-charts";
 import type { MinutePoint as P } from "@/lib/api";
-import { computeMinuteAxis } from "@/lib/minute-axis";
+import { computeMinuteAxis, isPositivePrice } from "@/lib/minute-axis";
 import { tradingSeqFromHHMM } from "@/lib/market-hours";
 import { readChartTheme, useChartTheme, type ChartTheme } from "@/lib/chart-theme";
 import type { MinuteNewsEvent } from "@/lib/event-markers";
@@ -20,7 +20,7 @@ import type { MinuteNewsEvent } from "@/lib/event-markers";
 /**
  * 当日分时图（docs/archive/minute-chart-plan.md 模块 1+2+P1，2026-08-30）。
  *
- * 坐标系：以昨收为中心对称展开（涨跌停贴边、横盘日 0.5% 地板防抖）；
+ * 坐标系：单一价格域派生涨跌幅上下界，横盘日保留 0.5% 地板；
  * 右轴绝对价格、左轴涨跌幅（隐藏 % 序列承载）；昨收虚线基准。
  * 曲线：价格（面积）+ 均价线（黄）+ 上证叠加（紫虚线，左轴 % 归一）+ 量能副图（红涨绿跌）。
  * 量比：精确口径（TDX 5 日同期基线）优先，缺失回退近似（昨日量 × 已开市分钟/240）。
@@ -28,11 +28,11 @@ import type { MinuteNewsEvent } from "@/lib/event-markers";
  * 两种场景下 bars[-2] 都恰好是"分时日的上一交易日"）。分子分母同为股，单位已实测一致。
  * 交互：十字光标浮层（触摸同源），ref 直改 DOM 不走 React state。
  * 纵轴区间（2026-09-04 用户需求）：有板块涨跌幅限制（limitPct，来自 lib/price-limit：
- * 主板 ±10（含 ST）/ 创业·科创 ±20 / 北交 ±30）→ 恒为 [跌停价, 涨停价] 全限制区间，
- * 涨停/跌停虚线贴上下边缘、价格区几乎撑满图高；指数/无法识别 → 回退原「当日波幅
+ * 主板 ±10（含 ST）/ 创业·科创 ±20 / 北交 ±30）→ 以名义限制区间为参考，
+ * 涨停/跌停线只使用调用方提供的实际价格；指数/无法识别 → 回退原「当日波幅
  * 对称区间」（昨收中心，0.5% 地板防抖）。
  * ⚠️ 2026-09-11：真实行情若越出名义带（除权/换源/昨收口径不一致），区间并入越界点，
- * 不再把曲线裁到图外；左轴百分比带随价格带同步放大（保证左右轴不脱锚）。
+ * 不再把曲线裁到图外；两轴及所有叠加序列随新极值同步更新。
  * prevClose 缺失时整体降级为库默认自适应坐标 + 浮层隐藏涨跌幅，绝不臆造基准。
  *
  * 创建/数据分离（2026-09-02 用户反馈"刷新闪烁"）：原实现 effect 依赖 points——
@@ -207,6 +207,8 @@ export function MinuteChart({
   exactBaseline,
   newsEvents,
   limitPct,
+  upperPrice,
+  lowerPrice,
   className,
 }: {
   points: P[];
@@ -219,11 +221,14 @@ export function MinuteChart({
   /** 当日新闻分钟事件点（仅含时刻落在槽区间的条目；公告只有日期不进分时）。 */
   newsEvents?: MinuteNewsEvent[] | null;
   /**
-   * 板块涨跌幅限制（%，来自 lib/price-limit）：有值 → 纵轴恒为全限制区间
-   * [跌停价, 涨停价]，涨停/跌停虚线贴边；null/undefined（指数/判不出）→
+   * 板块名义涨跌幅限制（%，来自 lib/price-limit）：有值 → 作为显示范围参考；
+   * null/undefined（指数/判不出）→
    * 回退当日波幅对称区间。缺失绝不臆造。
    */
   limitPct?: number | null;
+  /** 实际限价只用 Quote 的已有字段，缺失一侧不推算、不画线。 */
+  upperPrice?: number | null;
+  lowerPrice?: number | null;
   className?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -231,6 +236,19 @@ export function MinuteChart({
   // 画布配色随主题走（P2-26）：theme 变化 → applyTheme 把新色套到既有 series 上，不重建图表。
   const theme = useChartTheme();
   const pal = MINUTE_PALETTE[theme];
+  const axis = useMemo(() => {
+    if (!isPositivePrice(prevClose)) return null;
+    const prices = points.flatMap((p) => [p.price, p.avg]);
+    prices.push(upperPrice, lowerPrice);
+    if (index && isPositivePrice(index.prevClose)) {
+      for (const p of index.points) {
+        if (isPositivePrice(p.price)) prices.push(prevClose * p.price / index.prevClose);
+      }
+    }
+    return computeMinuteAxis({ prevClose, limitPct: limitPct ?? null, prices, auctionPrice: auction?.price });
+  }, [points, prevClose, limitPct, upperPrice, lowerPrice, auction, index]);
+  const invalidPrices = points.flatMap((p) => [p.price, p.avg]).concat(auction?.price, index?.points.map(p => p.price) ?? [])
+    .filter((v) => v != null && !isPositivePrice(v)).length;
 
   // 量比统一计算：精确口径（TDX 5 日同期基线）优先，缺失回退近似（昨日量×时间占比）。
   const computeLB = useCallback(
@@ -259,9 +277,9 @@ export function MinuteChart({
       lb = computeLB(last.cum_volume, bjIso);
     }
     let idxPct: number | null = null;
-    if (index && index.points.length > 0) {
+    if (index && isPositivePrice(index.prevClose) && index.points.length > 0) {
       const lastIdx = index.points[index.points.length - 1];
-      idxPct = ((lastIdx.price - index.prevClose) / index.prevClose) * 100;
+      if (isPositivePrice(lastIdx.price)) idxPct = ((lastIdx.price - index.prevClose) / index.prevClose) * 100;
     }
     return { lb, idxPct };
   }, [points, index, computeLB]);
@@ -319,7 +337,7 @@ export function MinuteChart({
     for (let i = 0; i < s.slots.length; i++) {
       prevPriceByHHMM.set(slotHHMMs[i], prevP);
       const p = byHHMM.get(slotHHMMs[i]);
-      if (p && p.price != null) prevP = p.price;
+      if (p && isPositivePrice(p.price)) prevP = p.price;
     }
     const volColor = (q: P): string => {
       const prevPrice = prevPriceByHHMM.get(bjHHMM(q)) ?? null;
@@ -331,11 +349,11 @@ export function MinuteChart({
         const v = p ? pick(p) : null;
         return (v == null ? { time: sec as Time } : { time: sec as Time, value: v }) as { time: Time; value?: T };
       });
-    s.price.setData(over((p) => p.price) as never);
-    if (s.pct && base != null && base > 0) {
-      s.pct.setData(over((p) => (p.price != null ? ((p.price - base) / base) * 100 : null)) as never);
+    s.price.setData(over((p) => isPositivePrice(p.price) ? p.price : null) as never);
+    if (s.pct && isPositivePrice(base)) {
+      s.pct.setData(over((p) => (isPositivePrice(p.price) ? ((p.price - base) / base) * 100 : null)) as never);
     }
-    s.avg?.setData(over((p) => p.avg) as never);
+    s.avg?.setData(over((p) => isPositivePrice(p.avg) ? p.avg : null) as never);
     if (s.vol) {
       const volData: { time: Time; value?: number; color?: string }[] = s.slots.map((sec, i) => {
         const p = byHHMM.get(slotHHMMs[i]);
@@ -347,11 +365,12 @@ export function MinuteChart({
   }
 
   const hasPoints = points.length > 0;
+  const pointDate = hasPoints ? new Date(new Date(points[0].ts).getTime() + BJ_OFFSET * 1000).toISOString().slice(0, 10) : "";
   // 低频配置（晚到即整图重建一次，次数 ≤3）：昨收/大盘叠加/竞价/量比基线/事件点
   useEffect(() => {
     if (!ref.current || !hasPoints) return;
     const cur = pointsRef.current;
-    const hasBase = prevClose != null && prevClose > 0;
+    const hasBase = isPositivePrice(prevClose);
     // 首建配色同步读 DOM（不读 state）：主题是 documentElement 上的 class，它才是权威值。
     const p = MINUTE_PALETTE[readChartTheme()];
 
@@ -374,6 +393,8 @@ export function MinuteChart({
       },
       rightPriceScale: { borderVisible: false },
       leftPriceScale: hasBase ? { visible: true, borderVisible: false } : { visible: false },
+      // 库的左右轴可独立拖伸，会破坏价↔百分比映射。纵轴统一自动缩放；时间缩放保留。
+      handleScale: { axisPressedMouseMove: { price: false, time: true } },
       crosshair: { mode: CrosshairMode.Normal },
     });
     const s = seriesRef.current;
@@ -421,7 +442,8 @@ export function MinuteChart({
     if (hasBase) {
       s.pct = chart.addLineSeries({
         priceScaleId: "left",
-        visible: false,
+        // visible=false 会把整个序列移出轴缩放；这里只隐藏曲线。
+        lineVisible: false,
         lastValueVisible: false,
         priceLineVisible: false,
         crosshairMarkerVisible: false,
@@ -452,42 +474,10 @@ export function MinuteChart({
     lastPointsRef.current = cur;
 
     if (hasBase) {
-      // ---- 纵轴区间（2026-09-04 用户需求；2026-09-07 刻度锚定修正）----
-      // 有板块涨跌幅限制 → 恒为全限制区间：左右轴均按名义 ±lim 精确锚定
-      // （price = prevClose×(1+pct/100) 线性同锚，昨收恒居正中）——左轴刻度
-      // 恰好 ±10/±20/±30/±5。此前用四舍五入后的实际涨跌停价反推百分比，
-      // 低价股出现 ±10.24%/±9.76% 类偏差刻度（2026-09-07 用户指出跌停侧
-      // 仍残留百分之十几）。涨停/跌停虚线画在名义价，与交易所四舍五入后的
-      // 实际涨跌停价差 <0.005 元，视觉无差。指数/无法识别 → 回退当日波幅
-      // 对称区间（原口径）。
-      const lim = limitPct != null && limitPct > 0 ? limitPct : null;
-      // 名义涨跌停价（仅作坐标锚点与虚线位置，不做分位四舍五入）
-      const limUp = lim != null ? prevClose! * (1 + lim / 100) : null;
-      const limDn = lim != null ? Math.max(prevClose! * (1 - lim / 100), 0) : null;
-      const axis = computeMinuteAxis({
-        prevClose: prevClose!,
-        // 三态归一：prop 为可选（undefined）时显式收敛为 null = 「判不出 → 回退波幅区间」
-        limitPct: limitPct ?? null,
-        prices: cur.map((p) => p.price),
-        // 竞价点纳入区间，防止被裁剪出可视区（限制模式天然覆盖，回退模式需要）
-        auctionPrice: auction?.price,
-      });
-      const { min: rangeMin, max: rangeMax, pctBand } = axis;
-      dbg.__minuteRange = { min: rangeMin, max: rangeMax };
-      dbg.__minuteOutOfBand = axis.outOfBand;
-      series.applyOptions({
-        autoscaleInfoProvider: () => ({
-          priceRange: { minValue: rangeMin, maxValue: rangeMax },
-        }),
-      });
-      // 限制模式：价格区几乎撑满图高（上下各留 2% 呼吸位），涨停线才真正紧靠顶部；
-      // 底部 26% 让位量能副图（vol 起点 78%）。左轴同步同 margins 保网格对齐。
-      // 回退模式不动 margins，维持原观感。
-      if (lim != null) {
-        const margins = { top: 0.02, bottom: 0.26 };
-        chart.priceScale("right").applyOptions({ scaleMargins: margins });
-        chart.priceScale("left").applyOptions({ scaleMargins: margins });
-      }
+      // 两轴必须使用相同留白；所有序列的范围由下方 axis effect 统一更新。
+      const margins = isPositivePrice(limitPct) ? { top: 0.02, bottom: 0.26 } : { top: 0.2, bottom: 0.1 };
+      chart.priceScale("right").applyOptions({ scaleMargins: margins });
+      chart.priceScale("left").applyOptions({ scaleMargins: margins });
       s.priceLines.push({
         pl: series.createPriceLine({
           price: prevClose!,
@@ -500,11 +490,11 @@ export function MinuteChart({
         pick: (q) => q.prevClose,
       });
 
-      // 涨停/跌停虚线（红涨/绿跌 A 股惯例），贴住纵轴上下边缘
-      if (limUp != null && limDn != null) {
+      // 实际限价与显示范围分离：允许单侧缺失，不用名义比例冒充交易限价。
+      if (isPositivePrice(upperPrice)) {
         s.priceLines.push({
           pl: series.createPriceLine({
-            price: limUp,
+            price: upperPrice,
             color: p.limitUp,
             lineWidth: 1,
             lineStyle: 1, // dashed
@@ -513,9 +503,11 @@ export function MinuteChart({
           }),
           pick: (q) => q.limitUp,
         });
+      }
+      if (isPositivePrice(lowerPrice)) {
         s.priceLines.push({
           pl: series.createPriceLine({
-            price: limDn,
+            price: lowerPrice,
             color: p.limitDown,
             lineWidth: 1,
             lineStyle: 1, // dashed
@@ -526,19 +518,8 @@ export function MinuteChart({
         });
       }
 
-      // 左轴涨跌幅与右轴价格严格同锚（price = prevClose×(1+pct/100)）：
-      // 限制模式刻度精确等于名义限制（跌停↔-lim、昨收↔0、涨停↔+lim），
-      // 2026-09-07 修正：不再用实际涨跌停价反推（分位四舍五入导致刻度偏差）；
-      // 回退模式维持 ±pctBand 对称。2026-09-11：越界数据并入价格带后，
-      // pctBand 同步放大，保证左右轴不脱锚。
-      s.pct?.applyOptions({
-        autoscaleInfoProvider: () => ({
-          priceRange: { minValue: -pctBand, maxValue: pctBand },
-        }),
-      });
-
       // ---- 大盘叠加：上证归一化 % 曲线（可见，左轴同刻度）----
-      if (index && index.points.length > 0) {
+      if (index && isPositivePrice(index.prevClose) && index.points.length > 0) {
         const idxSeries = chart.addLineSeries({
           priceScaleId: "left",
           color: p.index,
@@ -555,23 +536,17 @@ export function MinuteChart({
         idxSeries.setData(
           slots.map((sec) => {
             const i = idxByHHMM.get(slotHHMM(sec));
-            return i
+            return i && isPositivePrice(i.price)
               ? ({ time: sec as Time, value: ((i.price - index.prevClose) / index.prevClose) * 100 } as LineData)
               : ({ time: sec as Time } as LineData);
           }) as never
         );
-        // 叠加曲线不得撑破个股的对称区间：钳制到 ±pctBand 视觉带内
-        idxSeries.applyOptions({
-          autoscaleInfoProvider: () => ({
-            priceRange: { minValue: -pctBand, maxValue: pctBand },
-          }),
-        });
         s.index = idxSeries; // 留引用：主题切换换色用（P2-26）
       }
     }
 
     // ---- 集合竞价点（09:25，金色）：槽序列首点即 9:25 ----
-    if (auction?.price && cur.length > 0) {
+    if (isPositivePrice(auction?.price) && cur.length > 0) {
       const auctionSeries = chart.addLineSeries({
         color: p.auction,
         lineWidth: 1,
@@ -594,7 +569,7 @@ export function MinuteChart({
       for (const p of cur) byHHMM.set(bjHHMM(p), p);
       for (const e of newsEvents ?? []) {
         const p = byHHMM.get(e.hhmm);
-        if (!p) continue; // 槽尚无行情点（事件在未来/数据缺口）：不画
+        if (!p || !isPositivePrice(p.price)) continue; // 无有效价格锚时不画
         const sec = base0 + Number(e.hhmm.slice(0, 2)) * 3600 + Number(e.hhmm.slice(3, 5)) * 60;
         evData.push({ time: sec as Time, value: p.price });
       }
@@ -652,8 +627,8 @@ export function MinuteChart({
       const d = nearestPoint(time);
       if (!d) return;
       const bjIso = new Date(new Date(d.ts).getTime() + 8 * 3600 * 1000).toISOString();
-      const changePct = hasBase ? ((d.price - prevClose!) / prevClose!) * 100 : null;
-      const avgDevPct = d.avg != null && d.avg > 0 ? ((d.price - d.avg) / d.avg) * 100 : null;
+      const changePct = hasBase && isPositivePrice(d.price) ? ((d.price - prevClose!) / prevClose!) * 100 : null;
+      const avgDevPct = isPositivePrice(d.avg) && isPositivePrice(d.price) ? ((d.price - d.avg) / d.avg) * 100 : null;
       const lb = lbRef.current(d.cum_volume, bjIso);
       const pts = pointsRef.current;
       const minuteAmount =
@@ -699,9 +674,9 @@ export function MinuteChart({
         if (cls !== undefined && el.getAttribute("class") !== cls) el.setAttribute("class", cls);
       };
       put("hhmm", bjIso.slice(11, 16));
-      put("price", d.price.toFixed(2));
+      put("price", isPositivePrice(d.price) ? d.price.toFixed(2) : "--");
       put("pct", fmtPct(changePct), `font-mono text-[11px] tabular-nums ${pctCls(changePct)}`);
-      put("avg", d.avg != null ? d.avg.toFixed(2) : "--");
+      put("avg", isPositivePrice(d.avg) ? d.avg.toFixed(2) : "--");
       put("avgdev", avgDevPct != null ? fmtPct(avgDevPct) : "", pctCls(avgDevPct));
       put("lb", lb != null ? lb.toFixed(2) : "--", `font-mono ${lbCls}`);
       put("vol", d.volume != null ? Math.round(d.volume / 100).toLocaleString() + " 手" : "--");
@@ -800,7 +775,24 @@ export function MinuteChart({
       void unsub;
     };
     // 低频配置变化才重建；points 走增量 effect（下）。evByHHMM 供 crosshair 闭包。
-  }, [hasPoints, prevClose, index, auction, exactBaseline, newsEvents, limitPct]);
+  }, [hasPoints, pointDate, prevClose, index, auction, exactBaseline, newsEvents, limitPct, upperPrice, lowerPrice]);
+
+  // 用最终价格域逐端派生左轴，均价/竞价/事件/指数不再各自撑大某一侧。
+  // 更新 provider 会使库原位重算坐标；高频行情不重建 chart 或重置时间缩放。
+  useEffect(() => {
+    const s = seriesRef.current;
+    if (!s.chart || !ref.current) return;
+    const dbg = ref.current as HTMLDivElement & { __minuteRange?: { min: number; max: number } | null; __minuteOutOfBand?: boolean };
+    dbg.__minuteRange = axis ? { min: axis.min, max: axis.max } : null;
+    dbg.__minuteOutOfBand = axis?.outOfBand ?? false;
+    if (!axis) return;
+    for (const series of [s.price, s.avg, s.auction, s.events]) {
+      series?.applyOptions({ autoscaleInfoProvider: () => ({ priceRange: { minValue: axis.min, maxValue: axis.max } }) });
+    }
+    for (const series of [s.pct, s.index]) {
+      series?.applyOptions({ autoscaleInfoProvider: () => ({ priceRange: { minValue: axis.pctMin, maxValue: axis.pctMax } }) });
+    }
+  }, [axis, exactBaseline, newsEvents]);
 
   // 数据增量 effect：points 高频变化（WS 合成/60s 校准）→ 全量 setData 原地重灌。
   // 不用 series.update()：槽位序列尾部是全天 whitespace（X 轴固定全程），
@@ -870,7 +862,7 @@ export function MinuteChart({
   // 仍是服务端快照 "dark" 而实际 class 已是 light，用 state 取值会闪一帧深色画布。
   useEffect(() => {
     const p = MINUTE_PALETTE[readChartTheme()];
-    applyTheme(p, prevClose != null && prevClose > 0);
+    applyTheme(p, isPositivePrice(prevClose));
     fillAll(seriesRef.current, pointsRef.current, prevClose, p);
   }, [theme, prevClose, applyTheme]);
 
@@ -878,7 +870,11 @@ export function MinuteChart({
     <div className="flex h-full w-full flex-col">
       {/* 角标行：量比 + 竞价 + 上证叠加图例——独立文档流行（原 absolute right-2 top-1.5
           浮层压在图表右上角价格标签/最新价区域），不占图表绘制空间、互不遮挡 */}
-      <div className="flex shrink-0 items-center justify-end gap-2 px-2 pb-0.5 pt-1 text-[11px]">
+      <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 px-2 pb-0.5 pt-1 text-[11px]">
+        {invalidPrices > 0 && <span className="text-amber-800 dark:text-amber-300">{invalidPrices} 个无效价格已留空</span>}
+        {!isPositivePrice(prevClose) && <span className="text-amber-800 dark:text-amber-300">涨跌幅基准无效，仅展示价格</span>}
+        {index && !isPositivePrice(index.prevClose) && <span className="text-amber-800 dark:text-amber-300">叠加指数基准无效</span>}
+        {axis?.outOfBand && <span className="text-amber-800 dark:text-amber-300" title="已保留越界行情，请核对日期、参考价与来源">超出名义参考范围</span>}
         {auction?.pct != null && (
           <span
             className={`rounded border px-1.5 py-0.5 font-mono tabular-nums ${

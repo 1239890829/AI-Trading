@@ -3,6 +3,28 @@ import { describe, expect, it } from "vitest";
 import { computeMinuteAxis } from "./minute-axis";
 
 describe("computeMinuteAxis 分时图纵轴区间", () => {
+  it.each([
+    [10, 10, [11.5]], [10, 10, [8]], [10, 20, [13]], [10, 30, [6]],
+    [3000, null, [3001, 2999]], [10, null, [25]], [0.85, 10, [0.94, 0.77]],
+  ])("价格与百分比在整个区间同位置：%s/%s/%s", (prevClose, limitPct, prices) => {
+    const a = computeMinuteAxis({ prevClose, limitPct, prices });
+    for (const fraction of [0, 0.25, 0.5, 0.75, 1]) {
+      const price = a.min + (a.max - a.min) * fraction;
+      const pct = a.pctMin + (a.pctMax - a.pctMin) * fraction;
+      expect(pct).toBeCloseTo((price / prevClose - 1) * 100, 8);
+    }
+  });
+
+  it("零、负数与非有限价格不参与轴范围", () => {
+    const a = computeMinuteAxis({ prevClose: 10, limitPct: null, prices: [10.1, 0, -1, NaN, Infinity], auctionPrice: -10 });
+    expect(a.min).toBeCloseTo(9.9);
+    expect(a.max).toBeCloseTo(10.1);
+  });
+
+  it.each([0, -1, NaN, Infinity])("非法参考价 %s 不生成百分比轴", (prevClose) => {
+    expect(() => computeMinuteAxis({ prevClose, limitPct: 10, prices: [10] })).toThrow(RangeError);
+  });
+
   it("限制模式：锚定名义 ±lim，昨收居中、刻度恰为 ±lim", () => {
     const a = computeMinuteAxis({ prevClose: 10, limitPct: 10, prices: [10.1, 9.95, 10.3] });
     expect(a.min).toBeCloseTo(9, 6);

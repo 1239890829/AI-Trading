@@ -780,6 +780,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                     </div>
                   )}
                 <MinuteChart
+                  key={symbol}
                   points={displayMinutes}
                   prevClose={quote?.prev_close ?? null}
                   yesterdayVol={displayBars.length >= 2 ? (displayBars[displayBars.length - 2]?.volume ?? null) : null}
@@ -788,6 +789,8 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                   exactBaseline={vrBaseline}
                   newsEvents={minuteNewsEvents}
                   limitPct={priceLimitPct(symbol, quote?.name ?? null)}
+                  upperPrice={quote?.limit_up_price ?? null}
+                  lowerPrice={quote?.limit_down_price ?? null}
                   className="h-full"
                 />
                 </div>
