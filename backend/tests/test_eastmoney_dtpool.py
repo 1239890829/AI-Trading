@@ -20,10 +20,11 @@ from app.market.normalizer import normalize_limit_down
 
 _D = date(2026, 9, 4)
 
-# 2026-09-04 实测样本（截取 2 条）
+# 2026-09-04 实测样本截取 2 条；夹具 tc 随截取改为 2，表示完整的两条测试池。
 _RAW = {
+    "rc": 0,
     "data": {
-        "tc": 9,
+        "tc": 2,
         "qdate": 20260904,
         "pool": [
             {

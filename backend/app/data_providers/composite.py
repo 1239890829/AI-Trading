@@ -59,7 +59,7 @@ _ROUTED = (
 #: 观测范围 = _ROUTED + 未列入 _ROUTED 但可路由的方法（get_minute_line、ths 专属）。
 #: 仅用于 /api/system/providers 展示"每个源实现了哪些方法"，不参与路由选择。
 _OBSERVABLE_METHODS = _ROUTED + (
-    "get_minute_line", "get_hot_stock_list", "get_hot_stock_list_history",
+    "get_limit_down_pool", "get_minute_line", "get_hot_stock_list", "get_hot_stock_list_history",
     "get_skyrocket_list", "get_hot_rank_trend",
     "get_auction_snapshot", "get_auction_benchmark", "get_adjustment_events",
     "get_anomaly_list", "get_anomaly_stock",
@@ -350,26 +350,35 @@ class CompositeProvider:
         通用 _call 的「空=失败累计」会把三源一致的合法空池误报为
         "all providers failed"，还会把源打进熔断。
 
-        规则：任一源正常返回（无论空否）→ 采用（多源时取第一个非空，否则空）；
-        全部异常/熔断 → ProviderError。
+        规则：未实现的方法不入链；源负责校验完整响应，只有列表（含 []）才算成功。
+        多源仍取第一个非空，否则使用首个合法空池；全部失败或预算耗尽均抛错。
+        与通用链共享 deadline、熔断与成功来源统计，合法空池也能恢复健康状态。
         """
+        method = "get_limit_down_pool"
+        deadline = time.monotonic() + self.budget_for(method)
         errors: list[str] = []
-        saw_empty = False
-        for p in self._pick("get_limit_down_pool"):
-            if self._in_cooldown("get_limit_down_pool", p.name):
-                errors.append(f"{p.name}: 熔断冷却中（{self._cooldown_left('get_limit_down_pool', p.name):.0f}s）")
+        empty_source = None
+        for p in self._pick(method):
+            if self._in_cooldown(method, p.name):
+                errors.append(f"{p.name}: 熔断冷却中（{self._cooldown_left(method, p.name):.0f}s）")
                 continue
-            try:
-                rows = await p.get_limit_down_pool(trade_date)
+            if time.monotonic() >= deadline:
+                raise ProviderError(f"{method}: 请求预算已耗尽，未发起 {p.name}")
+            _, rows, exc = await self._attempt(method, p, (trade_date,), deadline)
+            if exc is None and isinstance(rows, list):
+                self._record_success(method, p.name)
                 if rows:
+                    self._settle_last_good(method, p.name)
                     return rows
-                saw_empty = True  # 该源正常响应但空池——合法，继续看其他源
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"{p.name}: {exc}")
-                self._record_failure("get_limit_down_pool", p.name)
-        if saw_empty:
-            return []  # 有源明确返回空池 → 合法空，不报错
-        raise ProviderError(f"all providers failed for get_limit_down_pool: {'; '.join(errors)}")
+                empty_source = empty_source or p.name
+                continue
+            self._note_failure(method, p.name, exc or ProviderError("invalid pool result"), errors)
+            if isinstance(exc, BudgetExhausted):
+                raise ProviderError(f"{method}: {exc}")
+        if empty_source is not None:
+            self._settle_last_good(method, empty_source)
+            return []
+        raise ProviderError(f"all providers failed for {method}: {'; '.join(errors)}")
 
     async def get_longhu_records(self, trade_date: date) -> list:
         return await self._call("get_longhu_records", trade_date)
