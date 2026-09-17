@@ -448,7 +448,7 @@ ths 官方 API 无资金流端点（仅基金持仓，见 endpoints-fund.md）�
 | `tencent.py::to_tencent_symbol` 与新浪/THS 解析 | 920 段被路由到 SH，BJ 被解析为 SZ。本切片修复；不代表全证券历史规则已审完 |
 | `composite.py::get_limit_down_pool` | 2026-09-17 修复：移除腾讯/新浪空桩，东财要求 rc=0、tc 与完整池一致且证券代码有效唯一；失败/预算耗尽抛错，合法空池恢复健康统计。10:40 单次真实请求 1/1（rc=0、tc=0、pool=[]，0.161s）；qdate 不作为日期证明，不推断整日可用率；状态见 §6.0 `BUG-020` |
 | `theme_catalog_service.py::fetch_members` / `_write_members` | 2026-09-17 修复：写事务前要求 code=0、就绪时间戳、成员数组完整且代码有效唯一；拒绝业务错误、未就绪或损坏响应，保留旧成员及 synced_at；有效空集仍允许删除；批量只报告成功代码。无总数契约，不能识别上游未声明的截断，不冒充历史成分版本库 |
-| `quote_hub.py::refresh` | 自选已有缺失项核验，指数没有同等检查；指数部分成功不能刷新整链后保留缺失项旧质量 |
+| `quote_hub.py::refresh` / `eastmoney.py::get_indices` | PR #25 已将漏返回的旧指数保留原价/时间并标 stale；本切片修正东财按市场与代码匹配，只返回真实行，不用空报价覆盖旧缓存，重复身份/坏行报错。首次请求全集、源时间质量、生产窗口复验仍归 §6.0 `BUG-020` |
 
 身份独立 fixture 修改前 **10 failed / 7 passed**；增补单位判据后又抓到 **2 failed / 19 passed**，修后相关 **67 passed**；
 不等于已验证所有交易窗口。没有改生产数据库、启动调度、发送通知或接入真实券商。
