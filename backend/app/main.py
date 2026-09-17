@@ -45,6 +45,7 @@ from app.review.models import (  # noqa: F401  注册复盘三张表
 from app.market.sentiment_history import SentimentHistoryRow  # noqa: F401  注册情绪序列表
 from app.models.watch_ledger import WatchLedger  # noqa: F401  注册盘中跟踪台账表（猎场批次 A）
 from app.models.notification import NotificationReadState  # noqa: F401  注册通知已读状态表（2026-09-12）
+from app.models.notification_outbox import NotificationAttempt, NotificationOutbox
 from app.models.opportunity_learning import (  # noqa: F401  point-in-time 机会证据与结果标签
     OpportunityDecisionSnapshot,
     OpportunityOutcomeLabel,
@@ -62,6 +63,7 @@ _REGISTERED_MODELS = (
     EventCard, EventDirection,
     WatchLedger,
     NotificationReadState,
+    NotificationOutbox, NotificationAttempt,
     OpportunityDecisionSnapshot, OpportunityOutcomeLabel,
 )
 

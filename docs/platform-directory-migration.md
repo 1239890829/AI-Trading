@@ -86,3 +86,15 @@ SHA-256 `c9c12f634bd28d730a869f8e75b95a3c3f5fde081f33e9e8c69f955b125c9b9d`，
 
 PR #28 主干检查通过后已执行上述回收：原件哈希与恢复副本一致，已核为空的旧父目录
 同步退出，doc-health 通过且未重建旧入口。回执位于 artifacts/runs/index-completeness-20260917/verification/migration-retirement.json；相邻未审资产保留，整体状态仍见账本 §6.0 `GOV-018`。
+
+## 6 导入环工具提炼（2026-09-17）
+
+旧 `.workbuddy/tools/py-import-cycle-detect.py` 已全文阅读，271 行 / 10,267 字节，
+SHA-256 `166fb841f325aad8ce1ef1c99ba31a0d833df391c76e930f6516ff048eec9716`，与 §1 恢复成员一致。
+保留 SCC 和最短环路径方法，提炼至 `scripts/audit/import_cycles.py`；重写扫描入口，仅读项目包，
+不遍历虚拟环境/软链。修正类体误归延迟、from 子模块遗漏、语法错误被跳过后报绿及延迟环退出码混淆。
+两个 bootstrap 模块的现役指引同步更新；历史审计中的旧路径仍是来源记录。
+工具只列静态候选，条件导入可能形成候选，动态导入与隐式包初始化边未覆盖，不能替代真实导入验证。
+验收包括类体/函数体、相对与别名导入、最短路径、自环、语法错、虚拟环境及软链；干净检出同验。
+原件只在新入口合入且主干通过后，经哈希复核送入项目可恢复回收站，再做恢复回读；不动相邻未知资产。
+源清单、目标哈希和最终回收状态存 artifacts/runs/notification-outbox-20260917/verification，整体任务保持开放。

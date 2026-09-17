@@ -49,6 +49,7 @@ class AlertEvent(Base):
     threshold: Mapped[float] = mapped_column(Float)
     triggered_at: Mapped[datetime] = mapped_column(DateTime, default=beijing_now_naive, index=True)
     acknowledged: Mapped[bool] = mapped_column(Integer, default=0)
+    # Legacy name: channel acceptance/persistence only, not confirmed delivery/read.
     delivered_channels: Mapped[str | None] = mapped_column(String(256), default=None)
     # 触发瞬间的报价快照（JSON）
     snapshot: Mapped[str | None] = mapped_column(String(1024), default=None)

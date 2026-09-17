@@ -18,7 +18,7 @@
 
 **⚠️ 延迟导入保持延迟**：诸如 `from app.picks.shadow import shadow_loop` 原本写在函数内，
 提到模块级会改变加载期依赖图，可能**引入新的 import 环**（用
-`.workbuddy/tools/py-import-cycle-detect.py` 核验）。一律维持函数内导入。
+`scripts/audit/import_cycles.py` 列静态候选，仍须实际导入核验）。一律维持函数内导入。
 
 **⚠️ 开关是"声明期 fail-fast"**：`add(..., switch=...)` 传了未登记的开关名会立刻抛错
 （`SCHEDULER_SWITCH_ATTRS` 是唯一真相源）。新增调度器时**必须**同步登记，否则测试

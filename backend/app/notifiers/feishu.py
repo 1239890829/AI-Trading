@@ -144,6 +144,16 @@ class FeishuNotifier(Notifier):
     def is_available(self) -> bool:
         return self.webhook_available or self.app_available
 
+    def delivery_target(self) -> str:
+        """Opaque destination identity; pending work must not follow a new recipient."""
+        if self.webhook_available:
+            route = ["webhook", self.webhook]
+        elif self.app_available:
+            route = ["app", self.app_id, self.open_id]
+        else:
+            return ""
+        return hashlib.sha256(json.dumps(route).encode()).hexdigest()
+
     async def _fetch_tenant_token(self) -> str:
         """换取 tenant_access_token；失败上抛（调用方记日志并返回 False）。"""
         payload = {"app_id": self.app_id, "app_secret": self.app_secret}
