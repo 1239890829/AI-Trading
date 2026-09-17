@@ -120,12 +120,20 @@ class EastmoneyProvider:
     async def get_indices(self) -> list[Quote]:
         secids = [sid for sid, _ in INDEX_SECIDS]
         rows = await self._ulist(secids, "f12,f13,f14,f2,f3,f4,f6,f124")
-        by_code = {r.get("f12"): r for r in rows}
-        quotes: list[Quote] = []
-        for sid, fallback_name in INDEX_SECIDS:
-            raw = by_code.get(sid.split(".", 1)[1]) or {"f12": sid.split(".", 1)[1], "f14": fallback_name}
-            quotes.append(nz.normalize_index(raw))
-        return quotes
+        if not isinstance(rows, list):
+            raise ProviderError("invalid index rows")
+        by_secid = {}
+        for raw in rows:
+            if not isinstance(raw, dict):
+                raise ProviderError("invalid index row")
+            sid = f"{raw.get('f13')}.{raw.get('f12')}"
+            if sid not in secids:
+                continue
+            if sid in by_secid:
+                raise ProviderError(f"duplicate index identity: {sid}")
+            by_secid[sid] = raw
+        # 缺项保持缺席，由 Hub 保留旧值并标 stale；不能造空报价覆盖旧缓存。
+        return [nz.normalize_index(by_secid[sid]) for sid in secids if sid in by_secid]
 
     async def get_quotes(self, symbols: list[str]) -> list[Quote]:
         if not symbols:
