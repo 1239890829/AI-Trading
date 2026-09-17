@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { sortAuctionBenchmark } from "./auction";
 import type { AuctionBenchmarkItem } from "./api";

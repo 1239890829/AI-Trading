@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { mergeQuoteIntoBars, mergeQuoteIntoMinutes } from "@/lib/kline-live";
 import type { Kline, Quote } from "@/types/market";

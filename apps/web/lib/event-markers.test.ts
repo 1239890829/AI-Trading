@@ -1,3 +1,4 @@
+// @vitest-environment node
 /** 事件点映射测试：日期对齐/非交易日丢弃/同日合并/重要度/排序/空值安全。 */
 import { describe, expect, it } from "vitest";
 import { buildEventMarks, buildMinuteNewsEvents } from "./event-markers";
