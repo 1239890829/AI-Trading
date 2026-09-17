@@ -31,10 +31,17 @@
 
 ## 1 现场（每条任务收尾时更新）
 
-- **当前切片（2026-09-17，发布前快照）**：`codex/limit-down-failure-semantics`，已集成最新 master `d16be3c`；`BUG-020` 跌停子项验收完成，后续先做题材失败写保护。
+- **当前切片（2026-09-17，本地验收快照）**：`codex/theme-member-write-guard`，工作区 `/tmp/ashare-theme-write`；自最新 master `d16be3c` 建立，再快进复用 PR #24 的 `8b155a7`。本批题材保护本地验收通过，收尾提交以本分支最新 Git 记录为准，未推送或创建 PR。
+- **用户约束**：收到 Actions 用量 90% 提醒后，用户明确选择「暂停新增 Actions，完成本地验收并保留待交付提交」。本轮不再 push、新建/更新 PR、合并或重跑；不改计费。恢复交付须用户调整此约束，并重新核对最新 master、准确 HEAD 与 CI，不能沿用本次旧证据直接合并。
+- **在途交付**：[PR #24](https://github.com/1239890829/AI-Trading/pull/24) 保持打开，HEAD `8b155a771b5a733ca420b9add506ba14abecec7b`；既有 run `35176013949` attempt 1 的 backend/frontend/docs 三 job 均 success，只读 release-check 通过；因额度约束未合并。
 - **首批交付**：[PR #23](https://github.com/1239890829/AI-Trading/pull/23) 已合并为 `d16be3c`；准确 HEAD `dc5732e` 的 CI run `35174599669` attempt 1 三 job 均 success。
-  合并后 master CI run `35175576651`，状态以该运行记录为准；本机 master 已快进，服务仍均未启动。
+  合并后 master CI run `35175576651` attempt 1 三 job 均 success；本机 master 已快进，服务仍均未启动。
   首批证据保存在原项目 `artifacts/runs/fusion-foundation-20260917/`；恢复包不动。
+- **题材切片门禁**：后端 **3566 collect / 3490 passed / 76 skipped / 0 failed，190.74s**；8000/3000 停用，后端与前端全量串行，期间有只读核查与独立 SQLite 的 API 验收。
+  前端本地/UTC **650 passed / 70 文件**，单 worker **44.50s / 46.06s**；tsc **0**、eslint **0/0**、pyflakes **0**、构建通过。
+  基线 **3546/215 文件 → 3566/216 文件**；新增 **20** 全来自 `tests/test_theme_member_write_guard.py`，import-lint **269** 与 skipped **76** 均不变；前端源码零差异。
+  doc-health **22 条索引 / 0 档位冲突**；完整 OpenAPI **170 paths / 零差异**。隔离实际路由+服务+SQLite：无凭据 401、业务失败 502 且旧成员/时间不变、有效空集 200 且正确清空。
+  长证据由本批 artifacts/verification 归档到原项目 artifacts/runs/theme-write-20260917；跌停批次位于 artifacts/runs/limit-down-20260917，提交身份与校验收据随附。上游为测试夹具，未做 THS 实源或生产加载验收。
 - **跌停切片门禁**：后端 **3546 collect / 3470 passed / 76 skipped / 0 failed，198.33s**；8000/3000 停用，未与前端全量并发，期间有文档与 Git 核查。
   前端本地/UTC **650 passed / 70 文件**，单 worker **44.41s / 46.82s**；tsc **0**、eslint **0/0**、pyflakes **0**、构建通过。
   基线 **3521/214 文件 → 3546/215 文件**；新增 **25** 全来自 `tests/test_limit_down_failures.py`，import-lint **269** 与 skipped **76** 均不变。
@@ -1295,6 +1302,15 @@
 
 ## BUG-020 行情身份与指数路径已修，失败语义仍待闭环
 - **账本**：`docs/retro-and-gaps.md` §6.0 `BUG-020` ｜ **日期**：2026-09-17 ｜ **状态**：🟡 部分闭环
+- **本轮题材切片（2026-09-17）**：`codex/theme-member-write-guard`；从最新 master 建工作区后复用 PR #24，按 §1 用户额度约束保留本地提交，远端发布暂停。
+- **缺口与验收**：HTTP 200 业务错误被解析成空集，可能删除旧成员并推进 synced_at；失败必须保留两者，有效增删与空集仍需正确写入。
+- **改动**：fetch_members 在写事务前校验 code、数据就绪时间戳、成员数组和有效唯一代码；sync_stale_members 仅返回成功写入项，失败不计成功或空成分，分别记录日志。
+- **机械证据**：独立 SQLite 文件夹具，修改前 18 failed / 2 passed，修后相关 64 passed；覆盖错误码、缺项、坏成员、重复、同步时间不变、合法空集和失败后恢复。
+- **注入自证**：将服务完整回退到 `8b155a7` 原实现，20 条测试中 18 failed / 2 passed；还原后 SHA-256 与注入前一致，证据见本批 artifacts/verification。
+- **门禁**：完整本地验收见 §1；无生产库写入或服务启动，HTTP 响应由隔离夹具提供；远端 CI 尚未触发，不将本地通过记为已交付。
+- **遗留与下一步**：响应没有成员总数，无法识别上游未声明的截断；时间戳就绪不代表历史成分有效期。本 ID 仍待指数缺失/时间戳质量与多窗口生产复验。
+
+**此前跌停切片（PR #24）：**
 - **本轮跌停切片（2026-09-17）**：`codex/limit-down-failure-semantics`；先更新最新 origin/master 建工作区，再复用首批 PR #23 的测试隔离与发布工具，发布前重新集成主干。
 - **缺口与验收**：HTTP 200 / rc=102 被当空池，腾讯/新浪占位又遮住传输失败；失败须抵达 HTTP 502，合法空池仍成功，预算耗尽不得报空。
 - **改动**：删除两个未实现空桩并同步能力表；东财校验业务码/结构/完整计数/代码唯一性；跌停链复用共享 deadline、熔断与成功来源统计，不接第二源、不改阈值。

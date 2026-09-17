@@ -7,8 +7,8 @@
 设计纪律（延续项目范式）：
 - **纯计算与 IO 分离**：parse_* 与 reconcile 是纯函数，可直接单测；
   fetch/sync 才碰网络与数据库。
-- **不臆造**：目录/成分解析失败的部分跳过并计数，不用猜测值补位；
-  全部失败抛错由路由转 502。
+- **不臆造**：目录解析跳过缺字段项并计数；成分响应不通过写前校验则抛错，
+  保留旧成员与同步时间；显式同步路由将失败转为 502。
 - 归属置信度分层见 app/models/theme_catalog.py 的 docstring。
 """
 
@@ -312,10 +312,25 @@ class ThemeCatalogService:
         return parse_catalog_items(r.json())
 
     async def fetch_members(self, code: str) -> list[dict]:
+        """只返回经校验可替换的响应；业务失败/损坏不能触发旧成员删除。"""
         r = await self._client.get(f"{self._base}/api/a-share-index/constituents/ths-stock-list",
                                    params={"thscode": code})
         r.raise_for_status()
-        return parse_member_items(r.json())
+        payload = r.json()
+        if not isinstance(payload, dict) or type(payload.get("code")) is not int or payload["code"] != 0:
+            raise RuntimeError("theme members: upstream business failure")
+        data = payload.get("data")
+        if (not isinstance(data, dict) or not isinstance(data.get("item"), list)
+                or type(data.get("timestamp")) is not int or data["timestamp"] <= 0):
+            raise RuntimeError("theme members: snapshot missing or not ready")
+        if any(not isinstance(row, dict) for row in data["item"]):
+            raise RuntimeError("theme members: malformed member")
+        items = parse_member_items(payload)
+        symbols = [row["symbol"] for row in items]
+        if (len(items) != len(data["item"]) or len(set(symbols)) != len(symbols)
+                or any(not symbol.isascii() for symbol in symbols)):
+            raise RuntimeError("theme members: incomplete or duplicate members")
+        return items
 
     async def fetch_board_bars(self, code: str, calendar_days: int = 35) -> list[dict]:
         """官方板块日 K（close 序列），供 3/5/10 日涨跌幅交叉验证（T3/B3）。"""
@@ -405,27 +420,26 @@ class ThemeCatalogService:
         sem = asyncio.Semaphore(concurrency)
 
         empty_after: list[str] = []
+        synced: set[str] = set()
 
         async def _one(code: str) -> None:
             async with sem:
                 try:
                     n = await self.sync_members(code)
+                    synced.add(code)
                     if n == 0:
                         empty_after.append(code)
                 except Exception as exc:  # noqa: BLE001 单个题材失败不拖垮整批
                     log.warning("theme members sync failed %s: %s", code, exc)
-                    empty_after.append(code)
 
         await asyncio.gather(*(_one(c) for c in codes))
-        # 空题材告警（校验规则）：成分为空 → 该题材下所有个股归属整体缺失。
-        # 2026-09-01 审计实锤：352/390 题材成分从未同步（永鼎股份查不到官方已标的
-        # 「光纤概念」）。同步后仍为空 = 官方题材确无成分（罕见）或拉取失败（重试）。
+        # 仅统计官方有效空快照；失败已单独告警，且保留旧成分与同步时间。
         if empty_after:
             log.warning(
-                "theme members sync: %d/%d 个题材成分为空（官方无成分或拉取失败，下轮重试）: %s",
+                "theme members sync: %d/%d 个题材官方有效成分为空: %s",
                 len(empty_after), len(codes), empty_after[:10],
             )
-        return codes
+        return [code for code in codes if code in synced]
 
     def stale_codes(self, max_themes: int = 20) -> list[str]:
         """最久未同步（或从未同步成分）的题材代码，TTL 用 settings.theme_members_ttl_hours。"""
