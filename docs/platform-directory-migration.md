@@ -83,3 +83,6 @@ SHA-256 `c9c12f634bd28d730a869f8e75b95a3c3f5fde081f33e9e8c69f955b125c9b9d`，
 关联入口为 AGENTS 短入口、INDEX 技能行、每日 SOP / checklist 和仓库跟踪 KB。
 验收含技能格式、跟踪清单中的引用可达、门禁与干净检出；原件的回收、空目录检查、
 恢复回读和最终哈希记录在本批忽略的 artifacts 回执，未回收前不能冒称旧入口已消失。
+
+PR #28 主干检查通过后已执行上述回收：原件哈希与恢复副本一致，已核为空的旧父目录
+同步退出，doc-health 通过且未重建旧入口。回执位于 artifacts/runs/index-completeness-20260917/verification/migration-retirement.json；相邻未审资产保留，整体状态仍见账本 §6.0 `GOV-018`。

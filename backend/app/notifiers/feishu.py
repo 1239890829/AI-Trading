@@ -84,11 +84,15 @@ def format_alert_text(event: AlertEvent, rule: AlertRule) -> str:
     return "\n".join(lines)
 
 
-def _is_success_body(body: dict[str, Any]) -> bool:
-    """飞书新版返回 {"code":0,...}，老版返回 {"StatusCode":0,...}；两套都认。"""
-    code = body.get("code")
-    status = body.get("StatusCode")
-    return (code in (None, 0)) and (status in (None, 0))
+def _is_success_body(body: object) -> bool:
+    """只认明确整数零码（兼容两种键）；受理不等于送达或已读。
+
+    空、畸形或冲突回执均未确认，不能记成功，也不能据此断言未送达。
+    """
+    if not isinstance(body, dict):
+        return False
+    codes = [body[key] for key in ("code", "StatusCode") if key in body]
+    return bool(codes) and all(type(code) is int and code == 0 for code in codes)
 
 
 class FeishuNotifier(Notifier):
@@ -153,7 +157,7 @@ class FeishuNotifier(Notifier):
         body = resp.json()
         token = body.get("tenant_access_token")
         if not _is_success_body(body) or not token:
-            raise RuntimeError(f"tenant_token rejected: {body}")
+            raise RuntimeError("tenant_token acceptance unconfirmed or token missing")
         return str(token)
 
     async def _get_tenant_token(self) -> str:
@@ -216,7 +220,7 @@ class FeishuNotifier(Notifier):
             cache_on(get_notifier_registry(), "feishu_tenant_token", _TOKEN_TTL_SECONDS, maxsize=4).invalidate(
                 self.app_id
             )
-            log.warning("feishu app message rejected: %s (event=%s)", body, event.id)
+            log.warning("feishu app message acceptance unconfirmed: %s (event=%s)", body, event.id)
             return False
         return True
 
@@ -324,7 +328,7 @@ class FeishuNotifier(Notifier):
             log.warning("feishu %s card non-json response", via)
             return False
         if not _is_success_body(body):
-            log.warning("feishu %s card rejected: %s", via, body)
+            log.warning("feishu %s card acceptance unconfirmed: %s", via, body)
             return False
         return True
 
@@ -363,7 +367,7 @@ class FeishuNotifier(Notifier):
             return False
         if not _is_success_body(body):
             log.warning(
-                "feishu webhook rejected: %s (event=%s)", body, event.id
+                "feishu webhook acceptance unconfirmed: %s (event=%s)", body, event.id
             )
             return False
         return True

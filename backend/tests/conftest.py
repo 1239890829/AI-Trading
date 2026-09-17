@@ -7,12 +7,12 @@ os.environ["ASHARE_DATA_PROVIDER"] = "mock"
 os.environ["ASHARE_POLL_INTERVAL_SECONDS"] = "3600"
 os.environ["ASHARE_WATCHLIST"] = "600519,000001,300750,601318"
 os.environ["ASHARE_DATABASE_URL"] = "sqlite:///:memory:"
-# 生产默认开启受限自治；测试必须显式停机。否则 15:45 后每个 TestClient lifespan
-# 会启动影子评估/实验裁决，与 StaticPool 的单连接内存库争用，表现为刚 commit 的
-# 行在 refresh 时消失。自治行为由对应单测直接调用，不借全量门禁跑生产循环。
+# 生产默认开启受限自治；测试显式停止影子评估/实验裁决。
+# 此开关不停止建议议程；共享 client 在下方单独隔离该后台任务。
+# 自治和议程调度的专门测试仍直接调用真实循环。
 os.environ["ASHARE_AGENT_AUTONOMY_ENABLED"] = "false"
 
-# 调度器全家桶在测试里一律关闭（本机 .env 是生产配置，开关全 on）。
+# 带配置开关的调度器在测试里关闭；无开关任务不在这份清单内。
 #
 # 为什么必须关：lifespan 关闭对 stop-aware 调度器是 stop.set() + await task，
 # 而 stop.set() 打不断 in-flight 的 tick await——一旦某 tick 卡在网络调用上
@@ -165,6 +165,16 @@ def client():
     from fastapi.testclient import TestClient
 
     from app.main import app
+    from app.services import evolution
 
-    with TestClient(app) as c:
-        yield c
+    async def idle_agenda(app, stop, **kwargs):
+        await stop.wait()
+
+    # BUG-012 / IMP-043: autonomy=False still generates advisory agendas after
+    # 15:45. Those unrelated background reads can roll back another session on
+    # the shared StaticPool connection. Keep the task lifecycle, isolate its work.
+    # test_evolution drives the real scheduler directly without this fixture.
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(evolution, "evolution_scheduler", idle_agenda)
+        with TestClient(app) as c:
+            yield c

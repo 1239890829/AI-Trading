@@ -45,6 +45,18 @@ from __future__ import annotations
 
 import pytest
 
+from tests.offline_smoke import isolate_sources
+
+
+@pytest.fixture(scope="module", autouse=True)
+def offline_sources():
+    # Module scope also covers the shared TestClient's lifespan startup/shutdown.
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        unexpected = isolate_sources(monkeypatch)
+        yield
+        assert not unexpected, "冒烟仍有未隔离的真实网络尝试"
+
+
 #: 路径参数替换值（与 `scripts/api-sweep.js` 的 PATH_VALUES 同口径）
 PATH_VALUES = {
     "symbol": "600519",
