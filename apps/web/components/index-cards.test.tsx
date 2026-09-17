@@ -42,6 +42,15 @@ describe("IndexCards 指数点击交互", () => {
     expect(screen.getByText("3,300.50")).toBeTruthy(); // fmt 带千分位
   });
 
+  it("指数漏返回时保留旧价格，并明确显示过期及缺失原因", () => {
+    render(<IndexCards indices={[{
+      ...indices[0], quality: "stale", quality_reasons: ["index_batch_missing"],
+    }]} />);
+    expect(screen.getByText("3,300.50")).toBeTruthy();
+    expect(screen.getByTitle("本轮未返回该指数，展示旧行情").textContent).toBe("过期");
+    expect(screen.queryByText("正常")).toBeNull();
+  });
+
   it("选中态：selected 匹配的指数卡获得高亮（aria/title 无关，验证样式类切换）", () => {
     const { container } = render(<IndexCards indices={indices} selected="sz399001" onSelect={vi.fn()} />);
     const active = container.querySelector("button.bg-zinc-200\\/80");
