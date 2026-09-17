@@ -31,23 +31,49 @@
 
 ## 1 现场（每条任务收尾时更新）
 
-- **当前分支**：`codex/data-source-routing-audit`（**数据源路由修正**，见 §`IMP-040` / §`BUG-020`）。
-  本 PR 原自述「**待 PR #20 集成后在最新 master 重验**，不能据本分支单测通过跳过该条件」——
-  该前置条件现已满足：已把最新 `master`（含 PR #20）合入本分支并解决 4 处冲突。
+- **当前分支**：`master`（最新交付 = **PR #21**，合并 commit `c0aa3ef`；功能分支
+  `codex/data-source-routing-audit` 本地与远程**均已删除**）。任务见 §`IMP-040` / §`BUG-020`。
+  该 PR 原自述「**待 PR #20 集成后在最新 master 重验**，不能据本分支单测通过跳过该条件」——
+  该前置条件**已满足**：已把最新 `master`（含 PR #20）合入该分支并解决 4 处冲突后才合并。
   其中 `backend/tests/test_watch_ledger_kind.py` **取 master 侧的时钟钉法**：两个工作区
   对该文件的修法**同源**（都钉死到 `2026-09-12 15:00 +08:00`），但 master 侧更完整
   ——它把**到期日两侧**都写成契约用例（`test_window_cutoff_expiry_is_pinned`），故取 master 侧。
-  ⚠️ **本 PR 与 master 曾发生 `BUG-018` 编号撞车**（本 PR 的「数据来源身份与失败语义」P0 项
-  ⇄ 已合并的「台账归因测试**到期型**缺陷」）⇒ **本 PR 侧改号为 `BUG-020`**，
+  ⚠️ **该 PR 与 master 曾发生 `BUG-018` 编号撞车**（它的「数据来源身份与失败语义」P0 项
+  ⇄ 已合并的「台账归因测试**到期型**缺陷」）⇒ **该 PR 侧改号为 `BUG-020`**，
   改号范围与理由见 §`BUG-020` 末段（**不是**把已闭环项重开）。
-  未合并前 §1 头行以本行为准。
+  ⚠️ **该 PR 相对 `origin/master` 的净贡献只有 7 个文件 / +291−50**（`sina.py` / `tencent.py` /
+  `ths.py` + 新增 `tests/test_provider_security_identity.py` + 3 份文档）——其余（含前端 **20 处**）
+  **已在 PR #20 中合入**，故合并时那 58 个「改动面」绝大多数是 **master 侧内容**，
+  **勿误判成该 PR 的改动面**（`git diff --cached origin/master --name-status` 一跑即明）。
   上一批 `codex/hunting-dynamic-and-notif-tabs`（**五批合一**：用户七问 `IMP-035` + `BUG-017`
   doc-health 跳过谓词修复 + 数据源审计批 `GOV-016`/`IMP-038` + CI 转绿两修
   `BUG-018`/`BUG-019`）已由 **PR #20** 合并（合并 commit `4590a78`），功能分支已删除；
   **合并后 master 的 CI 三 job 全绿**（合并前 master 自身是 `docs` + `backend` 双红）。
-- **已交付基线**：以最新 `origin/master` 为准；交付后
-  `git log --oneline origin/master..HEAD | wc -l` 实测 **0**。
+- **已交付基线**：最新交付 = **PR #21**（合并 commit `c0aa3ef`）；交付后
+  `git log --oneline origin/master..HEAD | wc -l` 实测 **0**；**master 侧 CI run `35164380194`
+  三 job 全 success**（`backend` / `frontend` / `docs`）。
 - **服务**：后端 8000（单实例；**绝不用 `--reload`**，原因见 `AGENTS.md` §6.1）、前端 3000。
+- **门禁基线（`BUG-020` 数据源身份修复集成（PR #21）收尾实测，接手时可直接对照）**：后端
+  **collect 3453（3377 passed / 76 skipped / 0 failed / 259.88s，8000 在跑）**、
+  `pyflakes` **0**、`doc-health` **全部通过**（`P 交接索引` **18 条** / `Q 档位一致性` 0 冲突）、
+  `tsc` **0**、`eslint` **0 error / 0 warn**、前端 **650 项 / 70 文件**（本地与 `TZ=UTC` **逐字一致**）。
+  ⚠️ **较上值 3432/650·70 的 Δ = +21 collect = +21 passed / ±0 skipped**，**已机械归因**
+  （两侧各自 `--collect-only` 求和，**不凭记忆**）：master 实测 **3432（210 文件）** →
+  集成态 **3453（211 文件）**，**+1 文件** = 新增 `tests/test_provider_security_identity.py`
+  **21 例**（全 passed），`3377 + 76 = 3453` 自洽；`tests/test_import_lint.py` 两侧实测
+  **逐字相同 269 例** ⇒ 参数化面未变（[[KB-ENG-97]]：**跳过数不变 = 无覆盖丢失**）。
+  前端 **±0** 且**有独立依据**：该 PR 在 `apps/web/` 下**零差异**（见上「净贡献」）⇒ 与上轮逐字一致。
+  ⚠️ **`TZ=UTC` 那一项红 = 已登记的 `BUG-010`**（`markdown-view.test.tsx::docs/ 下全部 md 均可渲染完成`
+  5000ms 超时），**本地与 UTC 同项同因**（各 1 项）⇒ **非时区问题、非本轮引入**；隔离复跑仍绿。
+  ⚠️ **集成曾引入 1 项新 FAIL 并已消除**：`doc-health` 的 **C 超层配额**
+  `docs/data-source-comparison.md(501>500)` —— **双方各自不超、合并后超 1 行**
+  （基点 446 / master 449 / PR#21 498 / 合并 501）⇒ 已无损压缩该文件 `:7-9` 的「同族」块（3→2 行）
+  与文末 OpenBB 句（2→1 行）至 **499 行**（留 1 行余量）。
+  ⇒ **"两边各自绿"拼不出"集成绿"**；集成分支**必须重跑门禁**。
+  ⚠️ **本基线块曾"写了却没进提交"**：首轮合并提交用 `git commit -F`（**不带 `-a`**），
+  而 `AGENTS.md` 头行与本节回填是在 `git add -A` **之后**才编辑的 ⇒ **两处静默丢失**，
+  由本条补账提交（`codex/handoff-post-merge-sync`）追回。**判据：提交前 `git status --short` 必须为空**
+  （详见 [[KB-ENG-113]]）。
 - **门禁基线（`BUG-018` + `BUG-019` CI 转绿两修 收尾实测，接手时可直接对照）**：后端
   **collect 3432（3356 passed / 76 skipped / 0 failed / 306.87s，8000 在跑、`load average` 15.95）**、
   `pyflakes` **0**、`doc-health` **全部通过**（`P 交接索引` 16 条 / `Q 档位一致性` 0 冲突）、

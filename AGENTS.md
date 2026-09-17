@@ -107,26 +107,29 @@ lsof -ti tcp:3000 -sTCP:LISTEN | xargs kill -9; cd apps/web && CODEBUDDY_SAFE_DE
 #   "这次只是改文案所以不用跑" 是最贵的一句话：本轮两次丢失都是靠随后的判据才发现的。
 ```
 
-> **门禁口径**：后端 collect **3432 项（3356 passed / 76 skipped / 0 failed）**、
+> **门禁口径**：后端 collect **3453 项（3377 passed / 76 skipped / 0 failed）**、
 > 前端 **650 项 / 70 文件**、eslint **0 error / 0 warn**、`tsc` **0** · `pyflakes` **0** ·
-> `doc-health` **全部通过**（`P 交接索引` 16 条 / `Q 档位一致性` 0 冲突）
-> （2026-09-17 `BUG-018` + `BUG-019` CI 转绿轮实测；后端 **306.87s**，前提 **8000 在跑**、
-> **`load average` 15.95** —— **报耗时（含前端数字）必须带负载前提**，否则会被当成回归）。
-> ⚠️ **较上一值「后端 3431 / 前端 650·70」的 Δ 已机械归因**：
-> 后端 **+1 collect = +1 passed / ±0 skipped** = 新用例
-> `tests/test_watch_ledger_kind.py::test_window_cutoff_expiry_is_pinned`（`BUG-018` 的到期日两侧契约）·
-> `test_import_lint.py` 参数化面未变（无新增 `.py`）⇒ `skipped 76` 不变**自洽**（[[KB-ENG-97]]）·
-> `test_provider_budget.py` 改的是常量与 docstring、**用例数不变**（`BUG-019`）⇒ 不产生 collect 增量。
-> 前端 **±0**（`apps/web/` 本轮**零改动**，`git status` 核对无差异）。
+> `doc-health` **全部通过**（`P 交接索引` 18 条 / `Q 档位一致性` 0 冲突）
+> （2026-09-17 `BUG-020` 数据源身份修复**集成**（PR #21）轮实测；后端 **259.88s**，前提 **8000 在跑**；
+> **报耗时（含前端数字）必须带负载前提**，否则会被当成回归）。
+> ⚠️ **较上一值「后端 3432 / 前端 650·70」的 Δ 已机械归因（两侧 collect 各自实测求和，不凭记忆）**：
+> master 实测 **3432（210 文件）** → 集成态 **3453（211 文件）**，
+> **+1 文件** = 新增 `tests/test_provider_security_identity.py` **21 例**（全 passed），
+> `3377 + 76 = 3453` 自洽 ⇒ 后端 **+21 collect = +21 passed / ±0 skipped**；
+> `tests/test_import_lint.py` 两侧实测**逐字相同 269 例** ⇒ 参数化面未变（[[KB-ENG-97]]：跳过数不变 = 无覆盖丢失）。
+> 前端 **±0** 且**有独立依据**：该 PR 相对 `origin/master` 在 `apps/web/` 下**零差异**
+> （`git diff --cached origin/master --name-status` 实测）⇒ 与上轮逐字一致。
 > ⚠️ **前端那 1 项红 = 已登记的 `BUG-010`**（`markdown-view.test.tsx::docs/ 下全部 md 均可渲染完成`，
-> 预算固定 5000ms）：本轮全量并发下实测 **8716ms / 5305ms**、`TZ=UTC` **6655ms**，
-> 而**隔离复跑 10/10 全绿、该用例仅 1407ms** ⇒ 由**宿主负载**（同机 `load 15.95~17.19`，
-> 另有其他应用抢占 CPU）造成，**非回归**；但**余量已被吃光**（`docs/` 只增不减），
+> 预算固定 5000ms）：本轮**本地与 `TZ=UTC` 同项同因**（各 1 项）⇒ **非时区问题、非本轮引入**；
+> 根因是**宿主负载**（该用例要渲染 `docs/**` 全部 md，而 `docs/` 只增不减）⇒ **余量已被吃光**，
 > 建议提高该用例 `timeout` 或改按文件粒度断言（**未擅自改，留待拍板**）。
-> ⚠️ **本轮 3 项真红全部由「全量门禁」抓出**（单跑受影响的文件时全绿）：
-> ① `BUG-018`（CI 重跑跨北京午夜）· ② 本轮**自己**造的 KB 索引格式回归
-> （`docs/kb/00-INDEX.md` 日期栏写成 `2026-09-12 / 09-17`，解析器要求**严格单日期**）·
-> ③ `BUG-019`（预算共享判据判别窗口 < 噪声）⇒ **"我只改了 X"不构成不跑全量的理由**。
+> ⚠️ **合并会引入「双方各自不超、合并后超」的红**：本轮 `doc-health` 的 **C 超层配额**曾
+> FAIL `docs/data-source-comparison.md(501>500)`（基点 446 / master 449 / PR#21 498 / 合并 501）
+> ⇒ 无损压缩至 **499 行**后通过。**集成分支必须重跑门禁，不能拿两边的绿拼成"应该绿"。**
+> ⚠️ **提交前必须让 `git status --short` 为空**：`git add -A` **之后**再编辑的文件，
+> 用 `git commit`（**不带 `-a`**）**不会**进提交 —— 本轮 `AGENTS.md` / `handoff.md` 的门禁回填
+> 就是这样静默丢失的（`merge --stat` 显示的是双方差异、CI 照样绿、`doc-health` 也查不出）。
+> 补救与判据见 [[KB-ENG-113]]。
 > ⚠️ **权威位仍是 `docs/handoff.md` §1**（本头行必须与它同轮同步；历史各轮 Δ 归因见该处）。
 > （2026-09-16 `GOV-016`（`ths.py` docstring 能力承诺 > 实现）轮实测；后端 collect **3373 项
 > （3297 passed / 76 skipped / 0 failed）**、前端 **643 项 / 69 文件**、eslint **0 error / 0 warn**；
