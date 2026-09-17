@@ -19,6 +19,8 @@ from pathlib import Path
 import duckdb
 import pytest
 
+from tests.duckdb_fixtures import insert_rows
+
 from app.factors.evaluate import HORIZONS_EXEC, IC_CORR_DEDUP, _base_cte
 from app.factors.library import FACTOR_BY_NAME, FACTORS, FactorDef
 from app.factors.novelty import (
@@ -105,8 +107,8 @@ def _write_market_db(path: Path) -> None:
                 vol = 1_000_000 + int(rnd * 500_000)
                 rows_k.append((code, ts, o, hi, lo, price, vol, vol * price))
                 rows_adj.append((code, ts, price))
-        con.executemany("INSERT INTO daily_k VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows_k)
-        con.executemany("INSERT INTO daily_k_adj VALUES (?, ?, ?)", rows_adj)
+        insert_rows(con, "daily_k", rows_k)
+        insert_rows(con, "daily_k_adj", rows_adj)
     finally:
         con.close()
 

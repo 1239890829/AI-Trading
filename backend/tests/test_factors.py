@@ -15,6 +15,8 @@ from datetime import datetime, timedelta, timezone
 import duckdb
 import pytest
 
+from tests.duckdb_fixtures import insert_rows
+
 from app.factors.evaluate import (
     ALGO_VERSION,
     DATA_QUALITY_NOTES,
@@ -89,8 +91,8 @@ def _mk_db(tmp_path):
             turnover = 5e7 + rnd * 1e8
             rows_k.append((code, ts, o, hi, lo, price, 1_000_000, turnover))
             rows_adj.append((code, ts, price))
-    con.executemany("INSERT INTO daily_k VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows_k)
-    con.executemany("INSERT INTO daily_k_adj VALUES (?, ?, ?)", rows_adj)
+    insert_rows(con, "daily_k", rows_k)
+    insert_rows(con, "daily_k_adj", rows_adj)
     return con, dict(con.execute("SELECT date_ms, count(*) FROM daily_k_adj GROUP BY date_ms").fetchall())
 
 
@@ -144,11 +146,8 @@ def test_limit_up_one_word_excluded(db):
     days = _days(60)
     rows = [(f"90.XXSHE{i}", ts, 10.0, 10.0, 10.0, 10.0, 100, 1e8)
             for i in range(40) for ts in days]
-    con2.executemany("INSERT INTO daily_k VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
-    con2.executemany(
-        "INSERT INTO daily_k_adj VALUES (?, ?, ?)",
-        [(f"90.XXSHE{i}", ts, 10.0) for i in range(40) for ts in days],
-    )
+    insert_rows(con2, "daily_k", rows)
+    insert_rows(con2, "daily_k_adj", [(f"90.XXSHE{i}", ts, 10.0) for i in range(40) for ts in days])
     md = dict(con2.execute("SELECT date_ms, count(*) FROM daily_k_adj GROUP BY date_ms").fetchall())
     r2 = evaluate_factor(con2, FACTOR_BY_NAME["mom5"], md)
     assert r2["verdict"] == "FAIL"
@@ -354,8 +353,8 @@ def _mk_hetero_db(tmp_path, name: str, *, short_rows: int):
             rows_k.append((code, ts, o, round(max(o, price) * 1.01, 4),
                            round(min(o, price) * 0.99, 4), price, 1_000_000, 5e7 + rnd * 1e8))
             rows_adj.append((code, ts, price))
-    con.executemany("INSERT INTO daily_k VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows_k)
-    con.executemany("INSERT INTO daily_k_adj VALUES (?, ?, ?)", rows_adj)
+    insert_rows(con, "daily_k", rows_k)
+    insert_rows(con, "daily_k_adj", rows_adj)
     return con
 
 
@@ -610,8 +609,8 @@ def _mk_rank20_db(tmp_path):
         " high_price DOUBLE, low_price DOUBLE, close_price DOUBLE, volume BIGINT, turnover DOUBLE)"
     )
     con.execute("CREATE TABLE daily_k_adj (thscode VARCHAR, date_ms BIGINT, close_adj DOUBLE)")
-    con.executemany("INSERT INTO daily_k VALUES (?,?,?,?,?,?,?,?)", rows_k)
-    con.executemany("INSERT INTO daily_k_adj VALUES (?,?,?)", rows_adj)
+    insert_rows(con, "daily_k", rows_k)
+    insert_rows(con, "daily_k_adj", rows_adj)
     return con, series
 
 
@@ -1012,8 +1011,8 @@ def _mk_mfi_obv_db(tmp_path):
         " high_price DOUBLE, low_price DOUBLE, close_price DOUBLE, volume BIGINT, turnover DOUBLE)"
     )
     con.execute("CREATE TABLE daily_k_adj (thscode VARCHAR, date_ms BIGINT, close_adj DOUBLE)")
-    con.executemany("INSERT INTO daily_k VALUES (?,?,?,?,?,?,?,?)", rows_k)
-    con.executemany("INSERT INTO daily_k_adj VALUES (?,?,?)", rows_adj)
+    insert_rows(con, "daily_k", rows_k)
+    insert_rows(con, "daily_k_adj", rows_adj)
     return con, series
 
 
