@@ -28,6 +28,7 @@ from datetime import date, datetime, timedelta, timezone
 import httpx
 
 from app.data_providers.eastmoney import ProviderError
+from app.market.indices import INDEX_CATALOG
 from app.schemas.market import AnomalyRecord, Kline, LimitUpRecord, LongHuRecord, Quote
 
 log = logging.getLogger(__name__)
@@ -192,10 +193,7 @@ class ThsFuyaoProvider:
             source=SOURCE,
         )
 
-    INDEX_NAMES = {
-        "000001.SH": "上证指数", "399001.SZ": "深证成指", "399006.SZ": "创业板指",
-        "000688.SH": "科创50", "000300.SH": "沪深300", "000852.SH": "中证1000",
-    }
+    INDEX_NAMES = {f"{symbol}.{market}": name for symbol, market, name in INDEX_CATALOG}
 
     async def get_indices(self) -> list[Quote]:
         data = await self._get(

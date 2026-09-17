@@ -55,7 +55,7 @@ def test_missing_cached_index_preserves_value_and_source_time_but_is_stale(hub):
     assert missing.received_at == old["received_at"]
     assert hub.indices["000688"].quality == Quality.high
     assert hub.indices["000688"].price == 1001
-    assert hub.last_missing_indices == ["000001"]
+    assert hub.last_missing_indices == ["000001", "000300", "000852", "399001", "399006"]
     assert hub.freshness().state == "ready"  # 逐项披露，不误伤成功的数据
 
 
@@ -63,7 +63,7 @@ def test_empty_index_reply_marks_all_cached_indices_stale(hub):
     refresh(hub)
     hub.provider.indices = []
     refresh(hub)
-    assert hub.last_missing_indices == ["000001", "000688"]
+    assert hub.last_missing_indices == ["000001", "000300", "000688", "000852", "399001", "399006"]
     assert all(q.quality == Quality.stale for q in hub.get_indices())
 
 
@@ -81,7 +81,7 @@ def test_index_gap_recovers_when_provider_returns(hub):
     assert hub.indices["000001"].quality == Quality.stale
     hub.provider.indices = [quote("000001", 3001), quote("000688", 1001)]
     refresh(hub)
-    assert hub.last_missing_indices == []
+    assert hub.last_missing_indices == ["000300", "000852", "399001", "399006"]
     assert hub.indices["000001"].quality == Quality.high
     assert hub.indices["000001"].price == 3001
 
@@ -106,7 +106,7 @@ def test_confirmed_closed_reason_overrides_index_gap(hub, monkeypatch):
     hub.provider.indices = []
     refresh(hub)
     assert hub.indices["000001"].quality_reasons == ["market_closed"]
-    assert hub.last_missing_indices == ["000001", "000688"]
+    assert hub.last_missing_indices == ["000001", "000300", "000688", "000852", "399001", "399006"]
 
 
 def test_market_overview_preserves_per_index_stale_status(hub):

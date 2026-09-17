@@ -7,6 +7,7 @@ from datetime import date, datetime
 import httpx
 
 from app.market import normalizer as nz
+from app.market.indices import INDEX_CATALOG
 from app.schemas.market import (
     Kline,
     LimitDownRecord,
@@ -27,12 +28,8 @@ UA = (
 
 # 指数 secid：沪 1.、深 0.
 INDEX_SECIDS = [
-    ("1.000001", "上证指数"),
-    ("0.399001", "深证成指"),
-    ("0.399006", "创业板指"),
-    ("1.000688", "科创50"),
-    ("1.000300", "沪深300"),
-    ("1.000852", "中证1000"),
+    (f"{'1' if market == 'SH' else '0'}.{symbol}", name)
+    for symbol, market, name in INDEX_CATALOG
 ]
 
 TIMEFRAME_KLT = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "60m": 60, "1d": 101, "1w": 102}
