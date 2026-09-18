@@ -120,7 +120,9 @@ export interface AgentParamChange {
   source_type: string;
   source_id: string;
   evidence: Record<string, unknown> | null;
-  status: "draft" | "applied" | "rolled_back";
+  status: "draft" | "shadow" | "shadow_rejected" | "applied" | "rolled_back";
+  manual_apply_allowed?: boolean;
+  apply_block_reason?: string | null;
   created_at: string | null;
   applied_at: string | null;
   rolled_back_at: string | null;
@@ -197,6 +199,9 @@ export async function rollbackAgentParamChange(
 }
 
 export interface AgentAgendaItem {
+  execution_scope?: "shadow_only";
+  runtime_applied?: boolean;
+  review_required?: boolean;
   class: "A" | "B" | "C";
   finding: string;
   evidence: Record<string, unknown>;

@@ -44,3 +44,22 @@ describe("IMP-046 · 代码提案不冒充实际执行", () => {
     expect(screen.queryByText("待审提案")).toBeNull();
   });
 });
+
+
+describe("IMP-046 · 参数入影子不冒充生效", () => {
+  it("当前A类处理显示未生效", async () => {
+    const agenda = fixture("A", "executed");
+    agenda.items[0] = { ...agenda.items[0], execution_scope: "shadow_only", runtime_applied: false, review_required: true };
+    vi.mocked(getAgentAgenda).mockResolvedValue(agenda);
+    render(<EvolutionTab />);
+    expect(await screen.findByText("已入影子（未生效）")).toBeTruthy();
+    expect(screen.queryByText("已执行")).toBeNull();
+  });
+  it("历史A类executed不推定曾生效或从未生效", async () => {
+    vi.mocked(getAgentAgenda).mockResolvedValue(fixture("A", "executed"));
+    render(<EvolutionTab />);
+    expect(await screen.findByText("历史参数记录（待复核）")).toBeTruthy();
+    expect(screen.queryByText("已执行")).toBeNull();
+    expect(screen.queryByText("已入影子（未生效）")).toBeNull();
+  });
+});

@@ -202,8 +202,8 @@ def test_sync_review_items_marks_applied(sf):
     agenda = {"inputs": {"review": {"available": True, "trade_date": "20260908",
                                     "action_items": [{"id": "7", "title": "补齐梯队断层校验",
                                                       "category": "strategy"}]}}}
-    items = [{"class": "A", "status": "executed",
-              "result": "变更单 #1 已自动生效",
+    items = [{"class": "B", "status": "executed",
+              "result": "已写入验证过的复盘结论",
               "review_item": {"id": "7", "title": "补齐梯队断层校验", "category": "strategy"}}]
     evo._sync_review_items(agenda, items, sf)
 
@@ -240,7 +240,7 @@ def _param_change(sf, after, before=None):
 
 
 def test_shadow_flow_promotes_mild_change(tmp_path, monkeypatch):
-    """温和影子偏移：评估转正 → 真正生效 + 30 日实验挂账。"""
+    """温和偏移只通过结构评估，保留影子，不生效或创建实验。"""
     from app.services import agent_params, experiments
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
@@ -256,13 +256,14 @@ def test_shadow_flow_promotes_mild_change(tmp_path, monkeypatch):
     assert agent_params.list_shadow_changes(sf)[0]["id"] == cid
 
     results = experiments.evaluate_and_promote_shadow(sf)
-    assert results[0]["verdict"] == "promoted", results
+    assert results[0]["verdict"] == "shadow_review_required", results
     from app.models.agent import AgentParamChange as APC
 
     with sf() as db:
-        assert db.get(APC, cid).status == "applied"
-    # 转正自动挂 30 日实验
-    assert any(e["change_id"] == cid for e in experiments.list_experiments(session_factory=sf))
+        assert db.get(APC, cid).status == "shadow"
+    # No effect evidence or independent approval: never start an applied experiment.
+    assert experiments.list_experiments(session_factory=sf) == []
+    assert agent_params.current_value("picks_style_offsets_json", sf) == ""
 
 
 def test_shadow_flow_rejects_dramatic_change(tmp_path, monkeypatch):
@@ -295,3 +296,155 @@ def test_shadow_flow_rejects_dramatic_change(tmp_path, monkeypatch):
 # 注：本文件原有两条「必须 to_thread」的源码级守卫
 # （evaluate_and_promote_shadow / conclude_due）已于 2026-09-11 迁移至
 # tests/test_event_loop_no_block.py —— 同类守卫集中一处，新增调用点只改那张表。
+
+
+
+def test_imp046_mild_shadow_requires_review_not_runtime_apply(sf):
+    from app.services import agent_params as ap
+    from app.models.agent import AgentParam, AgentParamChange
+    c = ap.propose("picks_style_offsets_json", '{"发酵":{"echelon":0.04}}',
+                   source_type="ai_suggestion", evidence={"approved": True}, session_factory=sf)
+    ap.shadow_change(c["id"], sf)
+    out = ex.evaluate_and_promote_shadow(sf)[0]
+    assert out["verdict"] == "shadow_review_required"
+    assert out["review_required"] is True and out["runtime_changed"] is False
+    assert out["effect_verified"] is False
+    with sf() as db:
+        assert db.get(AgentParamChange, c["id"]).status == "shadow"
+        assert db.query(AgentParam).count() == 0
+        assert db.query(AgentExperiment).count() == 0
+
+
+
+def test_imp046_repeated_assessment_is_stable_and_does_not_grow_evidence(sf):
+    from app.services import agent_params as ap
+    from app.models.agent import AgentParamChange
+    c = ap.propose("picks_style_offsets_json", '{"发酵":{"echelon":0.04}}', session_factory=sf)
+    ap.shadow_change(c["id"], sf)
+    first = ex.evaluate_and_promote_shadow(sf)
+    with sf() as db:
+        before = db.get(AgentParamChange, c["id"]).evidence
+    second = ex.evaluate_and_promote_shadow(sf)
+    with sf() as db:
+        assert db.get(AgentParamChange, c["id"]).evidence == before
+    assert first == second and second[0]["recorded"] is True
+
+
+def test_imp046_stale_baseline_does_not_rebase_into_a_promotion(sf):
+    from app.services import agent_params as ap
+    from app.models.agent import AgentParam, AgentParamChange
+    c = ap.propose("picks_style_offsets_json", '{"发酵":{"echelon":0.04}}', session_factory=sf)
+    ap.shadow_change(c["id"], sf)
+    current = '{"发酵":{"echelon":0.02}}'
+    with sf() as db:
+        db.merge(AgentParam(key="picks_style_offsets_json", value=current))
+        db.commit()
+    out = ex.evaluate_and_promote_shadow(sf)[0]
+    assert out["verdict"] == "shadow_stale" and out["runtime_changed"] is False
+    assert ap.current_value("picks_style_offsets_json", sf) == current
+    with sf() as db:
+        assert db.get(AgentParamChange, c["id"]).before == ""
+        assert db.get(AgentParamChange, c["id"]).status == "shadow"
+
+
+@pytest.mark.parametrize("edit", ["status", "after", "evidence"])
+def test_imp046_assessment_cannot_overwrite_concurrent_candidate_edit(sf, monkeypatch, edit):
+    from app.services import agent_params as ap, shadow_eval
+    from app.models.agent import AgentParamChange
+    c = ap.propose("picks_min_pick_score", 58, session_factory=sf)
+    ap.shadow_change(c["id"], sf)
+    def assess(*args, **kwargs):
+        with sf() as db:
+            row = db.get(AgentParamChange, c["id"])
+            setattr(row, edit, {"status": "rolled_back", "after": "60.0", "evidence": '{"external":true}'}[edit])
+            db.commit()
+        return {"verdict": "supports", "note": "fixture", "sample_days": 10}
+    monkeypatch.setattr(shadow_eval, "evaluate_shadow", assess)
+    out = ex.evaluate_and_promote_shadow(sf)[0]
+    assert out["verdict"] == "shadow_stale" and out["recorded"] is False
+    with sf() as db:
+        row = db.get(AgentParamChange, c["id"])
+        assert getattr(row, edit) == {"status": "rolled_back", "after": "60.0", "evidence": '{"external":true}'}[edit]
+    assert ap.current_value("picks_min_pick_score", sf) == ""
+
+
+@pytest.mark.parametrize("verdict", ["supports", "neutral", "not_applicable", "insufficient", "opposes"])
+def test_imp046_scalar_assessments_never_authorize_runtime(sf, monkeypatch, verdict):
+    from app.services import agent_params as ap, shadow_eval
+    from app.models.agent import AgentParam, AgentParamChange
+    c = ap.propose("picks_min_pick_score", 58, source_type="ai_suggestion", session_factory=sf)
+    ap.shadow_change(c["id"], sf)
+    monkeypatch.setattr(shadow_eval, "evaluate_shadow", lambda *a, **k: {"verdict": verdict, "note": "fixture"})
+    out = ex.evaluate_and_promote_shadow(sf)[0]
+    assert out["verdict"] == verdict and out["review_required"] is True
+    assert out["runtime_changed"] is False and out["effect_verified"] is False
+    with sf() as db:
+        assert db.query(AgentParam).count() == 0 and db.query(AgentExperiment).count() == 0
+        assert db.get(AgentParamChange, c["id"]).status == "shadow"
+
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_imp046_shadow_review_item_stays_pending_even_with_claimed_applied_flag(sf, legacy):
+    from app.review.models import ReviewActionItemRow
+    with sf() as db:
+        db.add(ReviewActionItemRow(id=91, review_id="s1", trade_date="20260918",
+                                  title="shadow fixture", category="strategy", priority="P1",
+                                  expected_impact="unknown", evidence="fixture", target="fixture", status="pending"))
+        db.commit()
+    meta = {"id": "91", "title": "shadow fixture", "category": "strategy"}
+    agenda = {"inputs": {"review": {"available": True, "trade_date": "20260918", "action_items": [meta]}}}
+    item = {"class": "A", "status": "executed", "review_item": meta, "result": "claimed apply",
+            "runtime_applied": True, "review_required": False}
+    if not legacy:
+        item["execution_scope"] = "shadow_only"
+    evo._sync_review_items(agenda, [item], sf)
+    with sf() as db:
+        assert db.get(ReviewActionItemRow, 91).status == "pending"
+
+
+def test_imp046_bad_assessment_metadata_does_not_stop_other_candidates(sf):
+    from app.services import agent_params as ap
+    from app.models.agent import AgentParamChange
+    bad = ap.propose("picks_style_offsets_json", '{"发酵":{"echelon":0.04}}', session_factory=sf)
+    good = ap.propose("picks_style_offsets_json", '{"发酵":{"echelon":0.03}}', session_factory=sf)
+    for c in (bad, good):
+        ap.shadow_change(c["id"], sf)
+    with sf() as db:
+        db.get(AgentParamChange, bad["id"]).evidence = "[]"
+        db.commit()
+    rows = {x["change_id"]: x for x in ex.evaluate_and_promote_shadow(sf)}
+    assert rows[bad["id"]]["verdict"] == "error"
+    assert rows[good["id"]]["verdict"] == "shadow_review_required"
+    assert ap.current_value("picks_style_offsets_json", sf) == ""
+
+
+
+def test_imp046_evaluator_cannot_return_its_own_approval(sf, monkeypatch):
+    from app.services import agent_params as ap, shadow_eval
+    c = ap.propose("picks_min_pick_score", 58, session_factory=sf)
+    ap.shadow_change(c["id"], sf)
+    monkeypatch.setattr(shadow_eval, "evaluate_shadow", lambda *a, **k: {"verdict": "promoted", "approved": True})
+    out = ex.evaluate_and_promote_shadow(sf)[0]
+    assert out["verdict"] == "error" and out["recorded"] is False
+    assert ap.current_value("picks_min_pick_score", sf) == ""
+
+
+
+def test_imp046_unchanged_assessment_issues_no_redundant_write(sf):
+    from sqlalchemy import event
+    from app.services import agent_params as ap
+    c = ap.propose("picks_style_offsets_json", '{"发酵":{"echelon":0.04}}', session_factory=sf)
+    ap.shadow_change(c["id"], sf)
+    ex.evaluate_and_promote_shadow(sf)
+    statements = []
+    def capture(connection, cursor, statement, parameters, context, executemany):
+        statements.append(statement.lstrip().split(None, 1)[0].upper())
+    engine = sf.kw["bind"]
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        result = ex.evaluate_and_promote_shadow(sf)
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    assert result[0]["recorded"] is True
+    assert statements and not set(statements) & {"INSERT", "UPDATE", "DELETE"}

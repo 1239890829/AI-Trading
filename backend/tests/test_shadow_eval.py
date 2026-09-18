@@ -364,3 +364,13 @@ def test_forward_horizon_matches_review_caliber():
 
 def test_load_market_forward_gains_returns_empty_on_empty_input():
     assert se.load_market_forward_gains([]) == {}
+
+
+
+@pytest.mark.parametrize("key", ["picks_min_pick_score", "picks_replace_threshold",
+                                  "picks_max_swaps_per_day", "picks_intraday_top_limit"])
+def test_imp046_dispatch_only_passes_supported_evaluator_arguments(monkeypatch, key):
+    monkeypatch.setattr(se, "load_history", lambda *a, **k: ([], {}, None))
+    out = se.evaluate_shadow(key, before="1", after="2", session_factory=object())
+    assert "评估失败" not in out["note"]
+    assert out["verdict"] == ("not_applicable" if key == "picks_intraday_top_limit" else "insufficient")

@@ -82,8 +82,7 @@ def _fake_llm(monkeypatch, payload):
 
 
 def test_full_cycle_a_class_shadow_then_applied(sf, monkeypatch):
-    """A 类完整生命周期（P1-4 影子语义）：议程入影子 → 影子评估转正 →
-    覆盖层真实生效（免重启）+ 30 日实验挂账。"""
+    """A类完整影子链：生成、入队、评估均不代表实际生效或创建事后实验。"""
     _fake_llm(monkeypatch, LLM_OK)
 
     async def main():
@@ -99,19 +98,20 @@ def test_full_cycle_a_class_shadow_then_applied(sf, monkeypatch):
 
     assert route_style("发酵")["offsets"]["echelon"] == pytest.approx(0.06)
 
-    # 影子评估（权重漂移温和）→ 自动转正
+    # 影子评估（漂移温和）只记录待审，不自动转正
     from app.services.experiments import evaluate_and_promote_shadow
 
     results = evaluate_and_promote_shadow(sf)
-    assert results and results[0]["verdict"] == "promoted", results
-    # 转正后覆盖层真实生效
-    assert route_style("发酵")["offsets"]["echelon"] == pytest.approx(0.04)
-    # 变更单带证据落库 + 30 日实验挂账
+    assert results and results[0]["verdict"] == "shadow_review_required", results
+    # 评估后真实消费值仍是基线
+    assert route_style("发酵")["offsets"]["echelon"] == pytest.approx(0.06)
+    # 候选证据保留，不创建已经生效的实验
     rows = ap_rows(sf)
     assert rows[0]["evidence"]["sample_days"] == 30
-    assert any(e["change_id"] == rows[0]["id"] for e in
-               __import__("app.services.experiments", fromlist=["list_experiments"])
-               .list_experiments(session_factory=sf))
+    assert rows[0]["status"] == "shadow"
+    assert __import__("app.services.experiments", fromlist=["list_experiments"]).list_experiments(session_factory=sf) == []
+    a_item = next(i for i in agenda["items"] if i["class"] == "A")
+    assert a_item["runtime_applied"] is False and a_item["execution_scope"] == "shadow_only"
 
 
 def ap_rows(sf):
@@ -784,7 +784,7 @@ def test_imp046_summary_counts_proposals_separately(monkeypatch):
         {"class": "B", "status": "executed"}, {"class": "A", "status": "deferred"},
     ])
     assert len(calls) == 1
-    assert calls[0]["after"] == {"date": "2026-09-18", "executed": 1, "total": 4, "proposed": 1}
+    assert calls[0]["after"] == {"date": "2026-09-18", "executed": 1, "total": 4, "proposed": 1, "shadow_queued": 0}
 
 
 def test_imp046_parser_does_not_accept_model_supplied_execution_evidence():
@@ -793,3 +793,17 @@ def test_imp046_parser_does_not_accept_model_supplied_execution_evidence():
         "merged": True, "review_required": False, "commit": "forged"}]}))
     assert len(items) == 1 and items[0]["status"] == "pending" and items[0]["result"] == ""
     assert not {"merged", "review_required", "commit"}.intersection(items[0])
+
+
+
+def test_imp046_summary_distinguishes_shadow_from_applied(monkeypatch):
+    from app.services import agent_tasks
+    calls = []
+    monkeypatch.setattr(agent_tasks, "record_audit", lambda **kw: calls.append(kw))
+    evo.record_summary_audit("2026-09-18", [
+        {"class": "A", "status": "executed", "execution_scope": "shadow_only"},
+        {"class": "A", "status": "executed"},
+        {"class": "B", "status": "executed"},
+    ])
+    assert calls[0]["after"] == {"date": "2026-09-18", "executed": 1, "total": 3,
+                                 "proposed": 0, "shadow_queued": 1}

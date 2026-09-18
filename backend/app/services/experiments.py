@@ -15,7 +15,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.core.bjtime import beijing_now_naive
 from app.core.db import get_session_factory
@@ -192,9 +192,8 @@ def list_experiments(limit: int = 30, session_factory=None) -> list[dict]:
 #
 # 2026-09-08 用户指令「新策略需经数据验证有效后方可启用」：A 类参数变更不再
 # 直接生效，先入影子队列（不写运行时覆盖层）。评估 = 影子权重 vs 现行权重的
-# **剧变检测**（L1 距离 + 维度灭声）——通过则转正（真正生效 + 挂 30 日胜率
-# 劣化回滚实验）；剧变/灭声 → 拒绝归档。效果验证由转正后的 30 日实验承担
-# （本评估回答的是「会不会一步改出极端权重」，不是「效果好不好」——不冒充）。
+# **剧变检测**（L1 距离 + 维度灭声），不能代替效果或批准。
+# 结构通过只保存待审证据，剧变/灭声可拒绝；不调用promote或创建事后实验。
 
 #: 影子权重剧变阈值：同相位下影子与现行 offsets 的 L1 距离上限
 SHADOW_L1_MAX = 0.25
@@ -208,94 +207,102 @@ SHADOW_FLOOR = 0.05
 _SHADOW_PHASES = tuple(PHASE_ORDER)
 
 
-def evaluate_and_promote_shadow(session_factory=None) -> list[dict]:
-    """影子队列逐条评估 → 达标转正（apply + 30 日实验） / 剧变拒绝归档。
+def _store_shadow_assessment(candidate: dict, assessment: dict, sf) -> bool:
+    """Conditional evidence update; never overwrite a changed/withdrawn candidate."""
+    from app.models.agent import AgentParamChange as C
 
-    挂在每日议程调度器里（议程生成前执行）。
+    evidence = json.loads(candidate["evidence"]) if candidate["evidence"] else {}
+    if not isinstance(evidence, dict):
+        raise ValueError("影子依据不是对象")
+    previous = evidence.get("shadow_verdict")
+    if isinstance(previous, dict) and {k: v for k, v in previous.items() if k != "at"} == assessment:
+        # Still check the identity even when there is no new evidence to write.
+        with sf() as db:
+            row = db.get(C, candidate["id"])
+            return bool(row and row.status == "shadow" and all(
+                getattr(row, key) == value for key, value in candidate.items()))
+    evidence["shadow_verdict"] = {**assessment, "at": beijing_now_naive().isoformat(timespec="seconds")}
+    target_status = "shadow_rejected" if assessment["verdict"] == "shadow_rejected" else "shadow"
+    with sf() as db:
+        stmt = update(C.__table__).where(C.__table__.c.status == "shadow")
+        for key, value in candidate.items():
+            stmt = stmt.where(getattr(C.__table__.c, key) == value)
+        result = db.execute(stmt.values(status=target_status,
+                                       evidence=json.dumps(evidence, ensure_ascii=False, allow_nan=False)))
+        if result.rowcount != 1:
+            db.rollback()
+            return False
+        db.commit()
+        return True
+
+
+def evaluate_and_promote_shadow(session_factory=None) -> list[dict]:
+    """Historical name retained: assess only, never promote or attach an experiment.
+
+    Structural drift is not effect evidence. All positive/neutral assessments
+    remain shadow; unsafe structure may be rejected. A separate verified review
+    and activation contract is required, not a flag in model-supplied evidence.
     """
-    from app.models.agent import AgentParamChange
-    from app.picks.style_router import apply_style_offsets, parse_overrides
-    from app.services.agent_params import promote_shadow
+    from app.models.agent import AgentParamChange as C
+    from app.picks.style_router import apply_style_offsets, parse_overrides, DEFAULT_ROUTES, DIMS
+    from app.services.agent_params import current_value
 
     sf = session_factory or get_session_factory()
-    out: list[dict] = []
     with sf() as db:
-        rows = db.execute(
-            select(AgentParamChange).where(AgentParamChange.status == "shadow")
-        ).scalars().all()
-        shadow_ids = [r.id for r in rows]
-    for cid in shadow_ids:
+        candidates = [dict(id=row.id, key=row.key, before=row.before, after=row.after,
+                           evidence=row.evidence, source_type=row.source_type, source_id=row.source_id)
+                      for row in db.execute(select(C).where(C.status == "shadow")).scalars().all()]
+    out: list[dict] = []
+    for candidate in candidates:
+        cid, key = candidate["id"], candidate["key"]
+        before, after = candidate["before"] or "", candidate["after"] or ""
+        item = {"change_id": cid, "key": key, "review_required": True,
+                "runtime_changed": False, "effect_verified": False, "experiment_id": None}
         try:
-            with sf() as db:
-                row = db.get(AgentParamChange, cid)
-                if row is None:
-                    continue
-                key = row.key
-                after_raw = row.after or ""
-                before_raw = row.before or ""
-
-            if key != "picks_style_offsets_json":
-                # S2-11：原先这里一律返回 `shadow_eval_unsupported` —— 白名单 1→5 之后
-                # 其余 4 个参数躺在影子队列里"没人验"，promote 与否全凭人工拍板。
-                # 现改为走 `shadow_eval` 的历史快照对照模拟（仍可能判 insufficient，
-                # 但那是"样本不足"，不是"没有评估器"——两者不可混为一谈）。
+            current = current_value(key, sf)
+            assessment = {"version": 2, "key": key, "before": before, "after": after,
+                          "review_required": True, "runtime_changed": False, "effect_verified": False}
+            matches = (parse_overrides(before) == parse_overrides(current)
+                       if key == "picks_style_offsets_json" else before == current)
+            if not matches:
+                assessment.update(verdict="shadow_stale", note="当前参数与候选基线不同；保留影子，需重新评估")
+            elif key != "picks_style_offsets_json":
                 from app.services.shadow_eval import evaluate_shadow
-
-                ev = evaluate_shadow(key, before=before_raw, after=after_raw,
-                                     session_factory=sf)
-                out.append({"change_id": cid, "key": key,
-                            "verdict": ev.get("verdict", "shadow_eval_unsupported"),
-                            "note": ev.get("note", ""),
-                            "metrics": ev.get("metrics", {}),
-                            "sample_days": ev.get("sample_days", 0),
-                            "caveat": ev.get("caveat")})
+                ev = evaluate_shadow(key, before=before, after=after, session_factory=sf)
+                if ev.get("verdict") not in {"supports", "opposes", "neutral", "insufficient", "not_applicable", "unsupported"}:
+                    raise ValueError("未知评估状态，不作为晋级批准")
+                assessment.update(verdict=ev.get("verdict", "unsupported"),
+                                  note=ev.get("note", ""), metrics=ev.get("metrics", {}),
+                                  sample_days=ev.get("sample_days", 0), caveat=ev.get("caveat"))
+            else:
+                shadow_ov, current_ov = parse_overrides(after), parse_overrides(before)
+                worst_l1, dim_floor_hit, dim = 0.0, False, ""
+                for phase in _SHADOW_PHASES:
+                    base = dict(DEFAULT_ROUTES.get(phase, ("均衡", {}))[1])
+                    cur_w = apply_style_offsets(base, current_ov.get(phase, {}))
+                    shd_w = apply_style_offsets(base, shadow_ov.get(phase, {}))
+                    worst_l1 = max(worst_l1, sum(abs(shd_w[d] - cur_w[d]) for d in DIMS))
+                    for d, v in shd_w.items():
+                        if v < SHADOW_FLOOR:
+                            dim_floor_hit, dim = True, d
+                if dim_floor_hit:
+                    verdict, note = "shadow_rejected", f"影子权重出现灭声维度（{dim} < {SHADOW_FLOOR}）"
+                elif worst_l1 > SHADOW_L1_MAX:
+                    verdict, note = "shadow_rejected", f"权重剧变（最大 L1 距离 {worst_l1:.3f} > {SHADOW_L1_MAX}）"
+                else:
+                    verdict, note = "shadow_review_required", (
+                        f"权重漂移温和（最大 L1 距离 {worst_l1:.3f}）只表示结构未剧变；"
+                        "尚缺完整效果证据与独立批准，保留影子，未生效")
+                assessment.update(verdict=verdict, note=note, metrics={"worst_l1": worst_l1,
+                                  "dimension_floor_hit": dim_floor_hit}, scope="structure_only")
+            recorded = _store_shadow_assessment(candidate, assessment, sf)
+            if not recorded:
+                out.append({**item, "verdict": "shadow_stale", "recorded": False,
+                            "note": "评估期间候选已变化或被撤回；不覆盖新状态，不应用参数"})
                 continue
-
-            shadow_ov = parse_overrides(after_raw)      # 非法 → 拒绝
-            current_ov = parse_overrides(before_raw or "")
-            worst_l1, dim_floor_hit, dim = 0.0, False, ""
-            for phase in _SHADOW_PHASES:
-                from app.picks.style_router import DEFAULT_ROUTES, DIMS
-
-                base = dict(DEFAULT_ROUTES.get(phase, ("均衡", {}))[1])
-                cur_w = apply_style_offsets(base, current_ov.get(phase, {}))
-                shd_w = apply_style_offsets(base, shadow_ov.get(phase, {}))
-                l1 = sum(abs(shd_w[d] - cur_w[d]) for d in DIMS)
-                worst_l1 = max(worst_l1, l1)
-                for d, v in shd_w.items():
-                    if v < SHADOW_FLOOR:
-                        dim_floor_hit, dim = True, d
-
-            if dim_floor_hit:
-                verdict = "shadow_rejected"
-                note = f"影子权重出现灭声维度（{dim} < {SHADOW_FLOOR}）——防单维被关掉"
-            elif worst_l1 > SHADOW_L1_MAX:
-                verdict = "shadow_rejected"
-                note = f"权重剧变（最大 L1 距离 {worst_l1:.3f} > {SHADOW_L1_MAX}）——防一步改出极端风格"
-            else:
-                verdict = "promoted"
-                note = f"权重漂移温和（最大 L1 距离 {worst_l1:.3f}）——转正生效，效果由 30 日实验守护"
-
-            if verdict == "promoted":
-                promoted = promote_shadow(cid, sf)
-                exp = attach_experiment(promoted["id"], key,
-                                        hypothesis=f"影子转正：{note}", session_factory=sf)
-                out.append({"change_id": cid, "key": key, "verdict": verdict,
-                            "note": note, "experiment_id": exp["id"] if exp else None})
-            else:
-                with sf() as db:
-                    row = db.get(AgentParamChange, cid)
-                    row.status = "shadow_rejected"
-                    try:
-                        ev = json.loads(row.evidence) if row.evidence else {}
-                    except Exception:  # noqa: BLE001
-                        ev = {}
-                    ev["shadow_verdict"] = {"at": beijing_now_naive().isoformat(timespec="seconds"),
-                                            "note": note}
-                    row.evidence = json.dumps(ev, ensure_ascii=False)
-                    db.commit()
-                out.append({"change_id": cid, "key": key, "verdict": verdict, "note": note})
-        except Exception as exc:  # noqa: BLE001  单条失败不影响队列其余
-            log.exception("shadow evaluation failed (change=%s): %s", cid, exc)
-            out.append({"change_id": cid, "verdict": "error", "note": str(exc)[:150]})
+            out.append({**assessment, **item, "recorded": True})
+        except Exception as exc:  # Single-candidate failure must not stop the queue.
+            log.warning("shadow assessment failed (change=%s): %s", cid, type(exc).__name__)
+            out.append({**item, "verdict": "error", "recorded": False,
+                        "note": f"影子评估或证据保存失败（{type(exc).__name__}）；未应用参数"})
     return out
