@@ -124,6 +124,27 @@ def _age_days(recorded_at: str | None) -> int | None:
     return max((beijing_now_naive() - then).days, 0)
 
 
+def gate_evidence(record: dict) -> dict:
+    """Expose recorded machine checks, never certify strategy adoption."""
+    gate = record.get("gate")
+    if gate is None:
+        state = "legacy_unverified"
+    elif (isinstance(gate, dict) and gate.get("gate_version") == 2
+          and gate.get("scope") == "machine_checks_only"
+          and gate.get("review_required") is True
+          and gate.get("verdict") == record.get("verdict")
+          and gate.get("verdict") in {"pass", "observe", "reject"}
+          and isinstance(gate.get("failed"), list) and isinstance(gate.get("unchecked"), list)
+          and all(isinstance(v, str) for v in gate["failed"] + gate["unchecked"])
+          and gate.get("machine_checks_complete") is (not gate["unchecked"])
+          and (gate.get("verdict") != "pass" or not (gate["failed"] or gate["unchecked"]))):
+        state = "recorded"
+    else:
+        state = "invalid"
+    return {"gate": gate if state == "recorded" else None,
+            "gate_evidence_state": state, "review_required": True}
+
+
 def verification_of(key: str, *, max_age_days: int = DEFAULT_MAX_AGE_DAYS) -> dict:
     """单个策略键的核验结论（三态）。
 
@@ -134,6 +155,7 @@ def verification_of(key: str, *, max_age_days: int = DEFAULT_MAX_AGE_DAYS) -> di
     if rec is None:
         return {
             "available": False,
+            "gate": None, "gate_evidence_state": "absent", "review_required": True,
             "stale": None,
             "age_days": None,
             "recorded_at": None,
@@ -148,6 +170,7 @@ def verification_of(key: str, *, max_age_days: int = DEFAULT_MAX_AGE_DAYS) -> di
     stale = age is None or age > max_age_days
     return {
         "available": True,
+        **gate_evidence(rec),
         "stale": stale,
         "age_days": age,
         "max_age_days": max_age_days,

@@ -339,3 +339,16 @@ def test_welch_t_sign(con):
     a = sv.baseline(con, where="thscode = 'E.SH'")
     b = sv.baseline(con, where="thscode = 'B.SH'")
     assert sv.welch_t(a["m5"], a["s5"], a["n5"], b["m5"], b["s5"], b["n5"]) > 0
+
+
+
+def test_bug027_actual_sql_all_pending_summary_stays_zero(con):
+    rows = sv.stats(con, group="CASE WHEN rn > 35 THEN 'pad' ELSE 'mat' END", horizons=[5])
+    pending = next(row for row in rows if row["grp"] == "pad")
+    summary = sv.summarize_row(pending)
+    assert pending["n"] == 25 and summary["n"] == 0 and summary["pending"] == 25
+    assert summary["sample_basis"] == "mature" and summary["validation_errors"] == []
+    result = sv.gate_verdict(summary, yearly_pos=9, yearly_tot=10,
+                            limit_up_share=0.05, excess_median=0.2, excess_win_rate=0.57)
+    assert result["verdict"] == sv.VERDICT_OBSERVE
+    assert any("样本不足" in reason for reason in result["failed"])
