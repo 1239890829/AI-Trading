@@ -206,7 +206,7 @@ export interface AgentAgendaItem {
   priority: number;
   param?: { key: string; after: unknown };
   summary?: string;
-  status: "pending" | "executed" | "deferred" | "rejected" | "failed";
+  status: "pending" | "proposed" | "executed" | "deferred" | "rejected" | "failed";
   result: string;
 }
 

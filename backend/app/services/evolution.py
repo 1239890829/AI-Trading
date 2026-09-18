@@ -10,13 +10,11 @@
   对复盘 action_items 逐条裁决（review_item 回执 → 执行后回写 applied）。
 - 执行：A 类走参数变更单**自动生效**（白名单 + 红线 + 24h 频率闸 + 预算；
   30 日后置验证劣化自动回滚）；B 类写进化日报（docs/evolution/）；
-  C 类走代码执行器（worktree 沙箱 → LLM patch → **diff 级授权** → git apply --check →
-  **git 权威复核** → 回归门禁 → 明确暂存 → 隔离分支 commit；
-  app/services/code_executor.py）。⚠️ **C 类只提议、不落地**（2026-09-15 加固，审计 O1）：
-  产出 = patch + `evolution/*` 分支上的 commit + 审计，**不合并回主分支**；
-  落地一律走 `codex/*` → PR → 完整 CI → 网页版审查。
-  ⇒ C 类条目 status 仍为 `executed`（= 执行器跑完并产出），但 `result` 会写明「未合并」
-  与落地路径，`merged=False` / `review_required=True` 在返回值中显式给出。
+  C 类仅生成待审补丁：读取明确文件 → LLM 文本 diff → 路径授权 → git apply --check
+  → 归档与审计。应用内不应用补丁、不执行门禁/回放、不建分支或提交；
+  新条目 status=proposed，历史 executed 不代表已落地，均不回写复盘 applied。
+  实际实施仍走获准开发者 codex/* → PR → 完整 CI → 审查。
+  返回值 merged=False / review_required=True / code_applied=False。
 
 安全模型（后置守护）：
 - **红线清单**：风控/资金/推送/凭据/删除类——即使未来白名单扩张也碰不到。
@@ -781,9 +779,9 @@ _SYSTEM_PROMPT = (
     "知识沉淀→B 类并带 review_item 与 summary）；不可自动化的**不要输出**（系统会自动标 deferred 并写明能力边界）\n"
     "- class=A 仅限 picks_style_offsets_json（after 是 {相位:{维度:delta}}，|delta|≤0.06）；"
     "没有充分数据依据就不要提 A 类\n"
-    "- class=C 是**代码修改**：仅限 backend/app/、backend/tests/ 下的 .py；改动必须小而聚焦"
+    "- class=C 仅生成待审代码提案：仅限 backend/app/ 下既有 .py，禁止 backend/tests/；改动必须小而聚焦"
     "（修 bug、补校验、加守卫），禁止改架构、禁止碰 migrations/config/风控/资金/推送逻辑；"
-    "执行器会用回归门禁（全量 pytest+pyflakes）验证，门禁不过会被丢弃\n"
+    "只做路径和 git apply --check 静态检查，不应用、不运行测试或回放、不提交；实际实施需独立审查\n"
     "- 不确定就不提；宁缺毋滥；最多 3 项；没有值得改的就输出空 items\n"
     "- 不提供买卖建议，不改风控/资金/推送相关任何东西\n"
     "- 裁决复盘改进项时遵循 docs/kb/06-review-framework.md（复盘执行框架 v1.0）："
@@ -1155,7 +1153,8 @@ def _sync_review_items(agenda: dict, items: list[dict], sf) -> None:
     from app.review.storage import ActionItemStaleError, update_action_item_status
 
     for it in items:
-        if it.get("status") != "executed":
+        if it.get("class") == "C" or it.get("status") != "executed":
+            # 包含历史 executed C 条目：产出补丁不代表改进项已落地。
             continue
         ri = it.get("review_item") or {}
         item_id = str(ri.get("id") or "")
@@ -1175,12 +1174,13 @@ def _sync_review_items(agenda: dict, items: list[dict], sf) -> None:
 
 
 def record_summary_audit(date: str, items: list[dict]) -> None:
-    executed = [i for i in items if i.get("status") == "executed"]
+    executed = [i for i in items if i.get("status") == "executed" and i.get("class") != "C"]
     with contextlib.suppress(Exception):
         from app.services.agent_tasks import record_audit as _ra
 
         _ra(actor="ai", action="agenda.execute", target="evolution",
-            after={"date": date, "executed": len(executed), "total": len(items)})
+            after={"date": date, "executed": len(executed), "total": len(items),
+                   "proposed": sum(i.get("status") == "proposed" for i in items)})
 
 
 async def run_evolution_now(session_factory=None, app=None) -> dict:

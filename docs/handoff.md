@@ -1,44 +1,49 @@
-# 当前交接：原任务要求核实与 BUG-027 研究判定
+# 当前交接：IMP-046 的 C 类纯提案安全切片
 
-> 当前方案仍为 [v9.2](implementation-plan.md)；原Codex指令逐条对账见该文§8.1。任务状态只在 [W04 / BUG-027](stages/w04-research.md#bug-027)；长期分工见 [协作规范](collaboration-workflow.md)。
+> 方案仍为 [v9.2](implementation-plan.md)，原21条用户消息对账保留在§8.1。任务状态只在 [W05](stages/w05-agents.md)，长期分工见 [协作规范](collaboration-workflow.md)。
 
-## 1. 当前现场
+## 1. 当前现场与继承
 
-- 用户因Codex无额度授权ChatGPT继续执行并核实原要求。本轮作者为ChatGPT；没有调用Codex、其它模型或付费接口，作者测试不是独立审核。
-- 工作区 `/tmp/ashare-plan-led-backlog`；**当前分支改为 `codex/research-admission-integrity`**，从父分支 `codex/plan-led-backlog` 的 `e6f2917813ed5470c6b150a77ee78a4181e14eab` 分出，继承其治理与BUG-025全部成果。不是从旧master重建；父分支保留，不能覆盖或重复合入。
-- 本轮只修BUG-027成熟计数、缺失/非有限证据、判定身份和直接消费者；不改研究SQL、股票策略参数、费用数值、数据库schema、生产服务或真实外发。
-- 交付方式：本地完整验证后推送当前功能分支，不创建PR、不直接合master、不改变CI配置。用户允许选择无CI合并，统筹评估仍选择保全远端分支并等待审查/CI，不用省分钟换取未经验证的主干。
+- 用户继续指令授权ChatGPT在Codex额度不足期间临时代执行；本轮没有调用Codex、外部模型、真实行情或通知。作者自检不是独立审核。
+- 工作区 `/tmp/ashare-plan-led-backlog`；当前分支 `codex/code-proposal-only`，继承 `codex/research-admission-integrity` 的完整基点 `61bb122a045ebfa38f4b9c9be6e7485efd2f9b73`，再向前包含BUG-025与方案治理成果。两个父分支都保留，不从旧master重新开发。
+- 开工远端master为 `d4ebf94839b1cda33e94fe705a78cfb45e9925b2`，本片继承此基线。旧PR #4不动；原项目的四份未跟踪业务/复盘文件与运行服务不动。
+- 本轮选择IMP-046的C类安全切片，范围是代码提案、实际状态与直接消费者；没有改变A/B参数、实验转正、费用、数据库schema或生产开关。
 
-## 2. 原Codex要求核实
+## 2. 已实现范围
 
-精确解析任务 `01a0acfd-221b-7763-9aae-299d78b8738a` 的21条真实用户消息，排除1条注入插件列表；逐条源ordinal已对账。原v9正文此前全文已读，本轮验证SHA未变；数据源、外部智能体、GitHub/目录、逐文件附录四附件正文本轮全文补读。
-需求覆盖不等于执行完成：目录物理退出、所有底层文件/历史patch深审、原图的实际加载版本及研究效果仍有未验部分。用户明确延后的“指数分时重复刻度”已补进BUG-022，原图片本轮未恢复目视，不猜根因。
-持续节省归IMP-043，每批记本地检查与云端触发成本、返工和下一观察点；旧90/60分钟均为历史，不当作当前余额。旧暂停Actions后来被允许合理用剩余额度取代，不能用旧确认一直停工。
+- 代码开关仍默认关闭；开启也只允许文本补丁提案。移除应用内实际apply、工作树/分支创建、commit、宿主pytest/pyflakes、策略回放；不合并或推送。
+- 保留原路径/白名单/受保护面与独立Git差异校验工具。读上下文前校验符号链接与文件存在，统一短路径；提案绑定完整HEAD/文件摘要，生成中发生变化则暂缓。
+- 路径授权与 `git apply --check` 只检查文本适用性，不能证明代码正确、安全或测试通过。产物仅归档在 `artifacts/evolution-patches/`；归档失败不能返回proposed。
+- 新C类条目为proposed，明确code_applied=False、gate_ran=False、merged=False、review_required=True。模型输入中的伪造结果字段不认证。
+- 新旧C类条目都不自动把复盘改进项标applied；摘要区分proposed与执行，界面新提案显示待审、历史executed显示待复核。B类正常展示与回写保留。
+- 生成前登记任务和code.propose审计，失败尝试也计现有每日上限，并兼容历史code.apply计数。生成/格式/归档失败正常回填终态；存储故障显式返回失败，不能保证不可写存储已完成回填。
 
-## 3. 本轮代码与验证边界
+## 3. 验证与证据
 
-- 零成熟样本保持零；只有旧总样本的输入可读但标legacy_total。无效计数/比例/非有限收益不伪装成有效测量，摘要携带validation_errors且JSON安全。
-- gate保留pass/observe/reject，但缺必验值或数值非法均不pass；完整机器条款通过仍标machine_checks_only与review_required，不等于OOS/去重/完整准入已验证。
-- 两个研究脚本保存完整gate及unchecked；登记册区分新记录和legacy_unverified/invalid，决策台账不再把pass直接写成“准入”。历史文件不回写，旧结论保留但提示复核。
-- 旧实现上的68项反例全部判红；修复后专项145通过，含真实DuckDB聚合到gate、隔离文件存储与读取、实际脚本元数据及决策台账消费者。完整本地检查及最后回填后的复验见本批verification.json、final-checks.json和delivery.json，不沿用旧数字假报新结果。
-- 研究SQL中的当前股本回推、年度raw收益代理及未purge切分等方法学近似仍需IMP-020继续核验。没有操作真实库或跑新的策略研究结果；BUG-026样本单位和IMP-046安全边界未因本片完成而销账。
+旧实现上的9项独立反例全部判红；测试在危险调用入口拦截，没有执行任何模型生成代码。相关后端107项通过、前端状态3项通过、改动模块pyflakes通过；最终全量、静态检查和提交版干净检出的实际结果见本批verification.json、test-summary.json与delivery.json，不将专项结果冒充全量。
 
-最终后端全量：3861 collect = 3783 passed + 78 skipped，0失败；新增78项BUG-027用例、原测试ID无删除。前端本地/UTC各681 passed/72文件，静态检查与构建通过。最终业务源码与验证输入哈希一致，后续只回填交接/任务状态并做相关复验；这不是独立审核、云端CI或运行上线。
+发现一处旧测试的顺序依赖：A类单独跑时临时库缺alert_rule。原61bb122干净检出同一测试也失败；已在test_evolution的临时建表前显式注册其消费者模型，业务逻辑和断言不改，记录baseline-order.log。原C类测试ID保留，旧宿主执行/提交期待改为更强的不启动断言，不删除安全覆盖。
 
-## 4. 持久证据、成本与恢复
+证据在原项目忽略的 `artifacts/runs/imp046-code-proposal-20260918/`：intake、before-files.tar、red、baseline-order、focused与UI日志、输入哈希和后续完整验证/交付回执。测试库、补丁与最小Git仓库均为独立夹具；没有对生产服务启用C能力。
 
-回执在原项目 `artifacts/runs/bug027-requirements-20260918/`：before-files.tar、intake、仅用户消息导出、requirements-reconciliation、source-manifest、红绿测试与后续完整日志。原项目其它未跟踪数据/报告及8000/3000服务不动；旧会话不改写。
-本轮完整后端跑2次：差异复查恢复原keyword-only费用接口后补跑最终全量；前端本地/UTC各一次，未因后端签名补验而重复构建。最后任务状态/交接回填只做相关文档/消费者复验，输入和返工成本见cost-report.json。未发起的云端CI不写成通过，不虚构节省百分比或已核实余额。
-恢复只针对本批明确文件；无数据迁移，不用重写旧报告修复结论。保留机器/历史身份限制，恢复时不把未知证据重新当作准入。作者验证、独立审核、CI、合并与运行加载分别确认。
+最终完整本地结果：后端3883 collect = 3805 passed + 78 skipped，0失败；新增22项、原测试ID删除0。前端本地/UTC各684 passed/73文件；tsc、ESLint、pyflakes、Next构建和doc-health通过。全量检查后输入哈希一致，仅任务状态和交接结果回填再做相关复验；没有生产视觉/运行加载验收。
+
+## 4. 未完成边界与交付
+
+IMP-046尚未整体完成：参数影子转正仍需明确批准和完整效果证据；统一模型usage/token/重试/取消、跨进程配额预留、真正OS隔离运行器和能力就绪仍未验收。本片不引入隔离运行器，直接移除危险宿主执行路径。IMP-025的其它历史/任务中心消费面仍需核验，不能凭徽标修正全部销账。
+
+BUG-026样本单位、BUG-022指数重复刻度、GOV-018平台目录退出以及持续CI节省仍保留。旧21条要求不重建第二账本，旧分钟余额不当现在余额。
+
+本轮完整本地验证后只提交并推送功能分支，不创建PR、不改工作流、不绕CI合master。作者自检、独立审阅、云端CI、合并、生产加载分别记录；未实际发生的不写完成。没有生产数据迁移，恢复不能重新启用宿主执行，可保留静态提案或关闭C能力。
 
 ## 5. Codex恢复后的接续提示
 
 ```text
-先核工作区 /tmp/ashare-plan-led-backlog 与当前分支 codex/research-admission-integrity，不再假定工作区仍在父分支。
-父分支 codex/plan-led-backlog 的e6f2917及此前方案/BUG-025已继承；本轮ChatGPT因你无额度按用户授权续作BUG-027。
-读取AGENTS、实施方案§8.1原要求对账、W04/BUG-027、W08/IMP-043及本交接；按最新HEAD核实际差异和验证日志。
-BUG-027修成熟/非有限/缺失证据与直接消费者，未改变研究方法、模型参数或历史报告；机器pass仍须终审。
-先复核本片，禁止重复实现或把父分支已做项当缺失；BUG-022原指数图、GOV-018目录退出、持续CI节省仍须后续推进。
-独立审阅与准确版本CI未完成不得合并；远端功能分支保存不是主干上线，不用skip/修改工作流绕检查。
-持续节省每批记录，不因过去提速结束，也不为优化停止当前业务。保持网页统筹审核/Codex执行的长期分工。
+先读AGENTS、当前handoff、实施方案§8.1和W05/IMP-046。
+工作区/tmp/ashare-plan-led-backlog现位于codex/code-proposal-only；父分支61bb122的BUG-027及e6f2917的BUG-025、方案成果均已继承，不重复开发。
+本轮ChatGPT按用户授权临时代执行C类纯提案安全切片，模型调用为零；核最新完整SHA、实际diff、红绿和完整验证回执。
+代码提案不应用、不执行、不提交；新proposed与历史executed都不能自动回写复盘applied。
+先独立审阅本片，不生成作者自批；准确版本CI与审查未齐不得合并或上线。
+下一安全切片优先核参数影子转正的批准/效果证据路径；完整预算/取消和其它P0分别保留，不扩展成新平台。
+继续每批记录成本/重复运行和影响范围，不为节省删除断言，也不因云端额度不足停止安全的本地开发。
 ```

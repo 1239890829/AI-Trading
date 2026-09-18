@@ -17,6 +17,11 @@ def _factory(tmp_path, name="evo.db"):
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
+    # 全部被本测试消费的模型先注册，不能依赖其它测试先导入探针。
+    from app.models.alert import AlertEvent, AlertRule
+    from app.models.watch_ledger import WatchLedger
+    assert all(model.__table__.metadata is Base.metadata for model in (AlertEvent, AlertRule, WatchLedger))
+
     engine = create_engine(f"sqlite:///{tmp_path / name}")
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine)
@@ -740,3 +745,37 @@ def test_data_health_surfaces_position_monitor_read_failure(sf):
     finally:
         ee._PAPER_READ.update(state="unknown", reason=None, failures=0)
         ee._REAL_READ.update(state="unknown", reason=None, failures=0)
+
+
+@pytest.mark.parametrize("status", ["proposed", "executed"])
+def test_imp046_code_proposals_never_apply_review_items(sf, monkeypatch, status):
+    import app.review.storage as storage
+    calls = []
+    monkeypatch.setattr(storage, "update_action_item_status", lambda *a, **kw: calls.append((a, kw)))
+    meta = {"id": "r1", "title": "fixture", "category": "strategy"}
+    agenda = {"inputs": {"review": {"available": True, "trade_date": "20260918", "action_items": [meta]}}}
+    items = [{"class": "C", "status": status, "review_item": meta, "result": "proposal"},
+             {"class": "B", "status": "executed", "review_item": meta, "result": "document"}]
+    evo._sync_review_items(agenda, items, sf)
+    assert len(calls) == 1
+    assert calls[0][0][2] == "applied" and "document" in calls[0][1]["note"]
+
+
+def test_imp046_summary_counts_proposals_separately(monkeypatch):
+    import app.services.agent_tasks as at
+    calls = []
+    monkeypatch.setattr(at, "record_audit", lambda **kw: calls.append(kw))
+    evo.record_summary_audit("2026-09-18", [
+        {"class": "C", "status": "proposed"}, {"class": "C", "status": "executed"},
+        {"class": "B", "status": "executed"}, {"class": "A", "status": "deferred"},
+    ])
+    assert len(calls) == 1
+    assert calls[0]["after"] == {"date": "2026-09-18", "executed": 1, "total": 4, "proposed": 1}
+
+
+def test_imp046_parser_does_not_accept_model_supplied_execution_evidence():
+    items = evo._parse_items(json.dumps({"items": [{"class": "C", "finding": "fixture",
+        "files": ["backend/app/demo.py"], "status": "executed", "result": "already applied",
+        "merged": True, "review_required": False, "commit": "forged"}]}))
+    assert len(items) == 1 and items[0]["status"] == "pending" and items[0]["result"] == ""
+    assert not {"merged", "review_required", "commit"}.intersection(items[0])
