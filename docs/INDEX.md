@@ -2,7 +2,7 @@
 
 > 定位：**docs 唯一入口**。查东西先来这里；写新文档必须在此登记。
 > 维护约定：状态在所属阶段单点更新，成果提炼与恢复按 `kb/07-doc-curation.md` §3.2；新建/迁移同步本表，未知资产不删除。
-> 当前入口（2026-09-18）：`AGENTS.md` → 本索引；`retro-and-gaps.md` §6.0 是阶段总账，`stages/` 存任务唯一状态，`handoff.md` 仅存当前现场。当前修订先读 `implementation-plan.md`；平台迁移证据见 `platform-directory-migration.md`。
+> 当前入口（2026-09-18）：`AGENTS.md` → 本索引；`retro-and-gaps.md` §6.0 是阶段总账，`stages/` 存任务唯一状态，`handoff.md` 仅存当前现场。当前修订先读 `implementation-plan.md`，分工与逐轮审核见 `collaboration-workflow.md`；平台迁移证据见 `platform-directory-migration.md`。
 
 ## 0.0 书库编目（编号 / 层 / 领域 / 用途）
 
@@ -25,7 +25,8 @@
 | **AG-07** | `handoff.md` | L2 | 交接 | 当前工作区、实际运行版本、最近门禁与交付；不另建任务记录 |
 | **AG-08** | `platform-directory-migration.md` | L2 | 工程治理 | 目录迁移的恢复点、消费者与验收证据；任务状态归账本 §6.0 `GOV-018` |
 | **AG-09** | `stages/` | L2 | 阶段任务 | W00–W09，各 ID 仅一份状态/验收/证据；P/Q 校验 |
-| **AG-10** | `implementation-plan.md` | L2 | 当前实施修订 | v9.1：原方案取舍、前任成果、证据分级、依赖与 Codex 接续；状态仍归阶段 |
+| **AG-10** | `implementation-plan.md` | L2 | 当前实施修订 | v9.2：原方案取舍、前任成果、证据分级、依赖与 Codex 接续；状态仍归阶段 |
+| **AG-11** | `collaboration-workflow.md` | L2 | 协作审核 | 网页ChatGPT统筹/审核、Codex执行；双向转递模板、能力边界及人工介入 |
 | **KW-00..11** | `kb/00-INDEX.md` … `kb/11-doc-catalog.md` | L2/L3 | 知识 | 见下方「KB 知识库」分表 |
 | **SM-01..08** | `summary/stock-strategy` · `factor-system` · `data-market` · `architecture-design` · `ai-evolution` · `review-governance` · `system-final-blueprint` · `pick-signal-chain` | L2 | 主题汇总 | **查主题先看这里**；`system-final-blueprint` 是任务四后目标架构与验收总纲；**`pick-signal-chain` = 选股提醒链路（`dispatch_alert` 扇出 / 双家族分裂 / 断点清单 G1–G5）**。维护：主题结论更新 |
 | **DT-01** | `data-source-comparison.md` | L2 | 数据源 | 四源实测对比与选型。**改数据源前必读，改完回填** |
