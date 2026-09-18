@@ -1,5 +1,7 @@
 # 选股策略汇总（Stock Strategy Summary）
 
+> 当前选股重构见 ../hunting-decision-design.md：开放多轴情境，不以潜伏/连板/趋势或四类封版；KB37条、完整策略与候选因子分别有用途。本文既有实现保留，历史缺口先核现代码，不凭旧“全部已落地”推断现时有效。
+
 > **定位**：选股/盘中/回测相关的一次性方案与报告，**精华已提炼至此**；原始文档已归档（指针见文末）。
 > **现役不在此**：`theme-sentiment-methodology.md`（题材情绪方法论）、`theme-prediction.md`（新题材预判）、`sentiment.md`（情绪口径）、`picks-replay-baseline.md`（回放基线数据）——均保留原位。
 > **整理**：2026-09-10（依据 `kb/07-doc-curation.md`）。

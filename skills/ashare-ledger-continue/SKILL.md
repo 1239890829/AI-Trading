@@ -5,6 +5,8 @@ description: Codex收到完成提示后读取固定仓库入口和阶段记录�
 
 # 账本接续
 
+全项目范围：执行前按docs/product-closure-design.md、docs/hunting-decision-design.md和docs/feature-closure-audit.md核大小功能及当前切片消费者。局部补充不替代主任务；后台开放情境，前台简洁不删必要能力。收尾必须核原任务、新要求、事实回填及剩余项，不能以答完猎场问题结束整批。
+
 当前工作方式见 docs/collaboration-workflow.md。网页ChatGPT统筹计划、任务增删重排及独立审核；Codex执行，用户只触发，不自批、不依赖Bridge或自动调度器。
 
 1. 在已明确的AI-Trading项目中，先读AGENTS和固定分支codex/collaboration-runtime-state的docs/handoff.md，再读协作规范、实施方案和唯一当前阶段任务。新会话未绑定项目时先定位，不猜项目或最新分支。

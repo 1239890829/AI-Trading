@@ -5,6 +5,8 @@ description: 把本轮执行、审核和下一步写回固定仓库记录，用�
 
 # 原位交接
 
+全项目范围：执行前按docs/product-closure-design.md、docs/hunting-decision-design.md和docs/feature-closure-audit.md核大小功能及当前切片消费者。局部补充不替代主任务；后台开放情境，前台简洁不删必要能力。收尾必须核原任务、新要求、事实回填及剩余项，不能以答完猎场问题结束整批。
+
 依据AGENTS和docs/collaboration-workflow.md，任务唯一状态只写所属阶段；handoff只定位当前任务、工作区和证据。自动转递/Bridge不是前置，旧全自动要求已被用户选择的短提示接力替代。
 
 1. Codex回填本轮编号、真实实现/偏差、修改文件、准确代码提交、测试命令/结果/环境、未验证项及证据定位。执行中发现新问题与建议也写在本条目，不代写网页审核通过。
