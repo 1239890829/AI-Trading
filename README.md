@@ -16,7 +16,7 @@ uvicorn app.main:app --port 8000
 # ⚠️ 勿加 --reload：与 SQLite 锁组合会反复挂死（见 AGENTS.md §6.1）
 # API 文档: http://127.0.0.1:8000/docs
 
-# 2) 前端（Node 18.18+）
+# 2) 前端（Node.js 22，与仓库 CI 一致）
 cd apps/web
 npm install
 npm run dev
@@ -28,24 +28,18 @@ cd backend && pytest
 
 无网络 / 演示模式：`ASHARE_DATA_PROVIDER=mock uvicorn app.main:app --port 8000`（数据标记 source=mock）。
 
-## 阶段路线图（对应 `docs/PROJECT-MASTER.md` §十二）
+## 当前能力与实施入口
 
-> 待办明细账本：`docs/retro-and-gaps.md`（唯一明细）；阶段复盘见 `docs/archive/plan-review.md`（已归档，只读）。
+当前改造从 [阶段总账](docs/retro-and-gaps.md#60-阶段索引) 进入 W00–W09；任务状态、实施范围和验收只在对应阶段文档维护。历史阶段回顾见 [历史复盘](docs/archive/plan-review.md)，不据历史完成标记领取新任务。
 
-| 阶段 | 内容 | 状态 |
-|---|---|---|
-| 1 基础框架 | 目录/配置/SQLite/日志/健康检查/基础布局/全局搜索/主题切换 | ✅ |
-| 2 行情基础设施 | Provider 链 ths→tencent→eastmoney→sina、Normalizer、5 级质量校验、QuoteHub、REST 端点（**数量以 `/openapi.json` 为权威**）、WS 推送、指数/个股/K线/分时/盘口/逐笔 + 数据可靠性（Parquet 原子写/容错读） | ✅ |
-| 3 市场与板块 | 市场宽度、情绪周期判定+历史序列、板块排行、题材梯队看板、涨停池、云图、新题材预判 | ✅；余：题材事件树/生命周期 |
-| 4 投研数据 | 龙虎榜深度（席位/历史）、资金流、新闻+摘要 v1、公告、财务、估值、公司资料、集合竞价、复权因子 | ✅；余：营业部关系图谱、筹码、解禁、两融、大宗 |
-| 5 量化系统 | 多因子技术评估（单股+全市场选股器+六维评分卡，防飞刀口径）+ 风控引擎 v1（7 档市场状态→仓位参数→下单预检） | ✅ |
-| 6 模拟交易与回测 | 撮合引擎（T+1/涨跌停/费用/挂单）+ 交易页签 + B/S 点 + 成本线 + 重置 + 日线回测引擎（代码级防泄露）+ 历史回放 + 分钟级 TDX 底座 | ✅ |
-| 7 AI 系统 | 盘后复盘 Agent（规则分析/模型路由/方法论版本化/元结论迭代）+ 新题材预判 + 新闻摘要 v1 | 🔶；**LLM 接入代码已就绪**（LLMAnalyzer/LLMSummarizer 完整实现+路由降级，2026-09-02），余：LLM 凭据（填 `.env` 即用）、四角色编排 |
-| 8 通知与部署 | 预警规则/触发/通道抽象/管理页 + 同源反代 + 运维巡检工具 | 🔶；**飞书通道已落地**（feishu notifier + 未配置徽标，2026-09-02），余：webhook 凭据（`ASHARE_ALERT_FEISHU_WEBHOOK`）、Docker 生产化、监控 |
-| 9 联动系统 | 统一路由（URL 唯一真相源）、题材⇄个股双向联动、官方板块 K 线交叉验证、事件驱动面板 + 个股相关事件行 | ✅ 全部完成（切片 E 2026-09-03：L7/L8/L10 跳转 + themesUrl） |
-| 10 系统重构 | 系统盘点（docs/architecture-redesign.md）→ P0 K线三源+熔断+回放限流、P1 事件采集调度+角色胜率、**页面合并：导航 13→5**（盘面四合一 /tape、云图入市场、研究折叠 /research、自选入工作台）、P2 基本面 ROE/毛利率补全、screener 冻结 + skills 归档 | ✅（2026-09-01） |
+| 能力 | 主要范围 |
+|---|---|
+| 行情与研究 | 多源行情、数据质量与降级、题材、资金、新闻事件及公司资料 |
+| 机会与风险 | 候选、资格硬门、排序、盘中跟踪与可解释的不提醒原因 |
+| 模拟与复盘 | 模拟账户、真实持仓手工账本、回测/回放与决策证据；二者账本互不混用 |
+| 助手与通知 | 研究助手、复盘、通知中心及飞书通道；渠道受理不等于送达/已读 |
 
-测试：后端 pytest + 前端 vitest，CI（GitHub Actions）四门禁全绿。**当前规模以 `AGENTS.md` §1 门禁行为准**——此处不复写数字（会随每次加测试漂移，教训见 KB-ENG-36）。
+具体能力和限制以当前代码及所属阶段证据为准。测试命令见 `AGENTS.md` §1；最近实测结果及前提以 `docs/handoff.md` §1 为准，不在这里复制动态计数或声称所有能力已经完成。
 
 ## 数据管线（核心设计）
 
@@ -67,7 +61,7 @@ apps/web        Next.js 工作台（workbench / market / watchlist / boards / he
                 themes / screener / backtest / longhu / predict 等，components 含图表与回放）
 backend/app     FastAPI（api / core / models / repositories / services / data_providers /
                 data_quality / websocket / market / paper / review / predict / schemas / migrations）
-backend/tests   pytest 329 例（防泄露回测/迁移三态/情绪序列/选股器/复盘/预判/鉴权…）
+backend/tests   pytest 回归（防泄露回测/迁移/行情/选股/复盘/鉴权及治理守卫）
 data/           SQLite 业务库 + parquet 快照与分时 + trade_calendar.json 日历兜底
 docs/          文档：INDEX（总入口）/ kb（知识库）/ summary（主题汇总）/ 现役规范 + archive 归档
                 （已完成方案的精华进 summary 后原件即删，见 docs/kb/07-doc-curation.md）
@@ -84,6 +78,6 @@ skills/         仓库随行技能：design-taste（**唯一权威视觉规范**
 - 回测强制禁令（代码级）：[docs/backtest-rules.md](docs/backtest-rules.md)
 - 复盘 Agent：[docs/review-agent.md](docs/review-agent.md) · 新题材预判：[docs/theme-prediction.md](docs/theme-prediction.md)
 - 情绪判定与误判复盘：[docs/sentiment.md](docs/sentiment.md)（含「历史误判案例库」）
-- 欠缺清单（**唯一待办总账**）：[docs/retro-and-gaps.md](docs/retro-and-gaps.md) §六
+- 阶段总账与任务入口：[docs/retro-and-gaps.md](docs/retro-and-gaps.md#60-阶段索引)
 - 文档总入口：[docs/INDEX.md](docs/INDEX.md) · 计划去向：[docs/plan-registry.md](docs/plan-registry.md)
 - 其余：api / websocket / data-dictionary / risk-management / mcp / deployment
