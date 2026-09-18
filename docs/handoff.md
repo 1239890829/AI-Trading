@@ -2,6 +2,8 @@
 
 > 当前方案仍为 [v9.2](implementation-plan.md)，21条原Codex要求对账保留在§8.1；状态唯一归 [W05](stages/w05-agents.md)，长期权责见 [协作规范](collaboration-workflow.md)。
 
+> 2026-09-18后续治理评估：用户提供Codex Bridge，本轮只追加协作规范§12及GOV-022候选说明；未修改下述业务实现。静态源码与无网络DOM夹具核到上下文完整性风险，未安装App/扩展或调用模型。读取协作规范再决定有限试用，不能按“已打通自动闭环”继续。实际当前HEAD以Git为准，业务验证基点仍是d2cd90e。评估证据在原项目 artifacts/runs/codexbridge-assessment-20260918；本轮仅跑文档相关检查，旧业务测试数不是重新运行。
+
 ## 1. 当前现场与继承
 
 - 用户“继续”授权ChatGPT在Codex无额度期间临时代执行；没有调用Codex、外部模型或真实行情/通知。作者自检不冒充独立审核。
