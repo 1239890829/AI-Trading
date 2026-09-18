@@ -348,12 +348,26 @@ def test_data_health_structure(sf):
 # ---------------------------------------------------------------- 调度器复现（2026-09-09 15:45 议程未触发事故）
 
 
-def test_scheduler_fires_when_clock_crosses_window(sf, monkeypatch):
+@pytest.fixture()
+def scheduler_calendar(tmp_path, monkeypatch):
+    """测试专用日历，走真实持久化读写；不冒充交易所数据、不写生产文件。"""
+    from datetime import date
+    from app.market import trade_calendar as tc
+
+    monkeypatch.setattr(tc, "_PERSIST_PATH", tmp_path / "calendar-fixture.json")
+    monkeypatch.setattr(tc, "_persisted_cache", None)
+    # 只定义测试输入：9/10在集合，9/11不在集合；后者模拟休市，非真实日历声明。
+    days = [date(2026, 9, d) for d in (4, 7, 8, 9, 10)]
+    tc._persist(days, "isolated-test-fixture-not-live")
+    assert tc._load_persisted() == days
+    return days
+
+
+def test_scheduler_fires_when_clock_crosses_window(sf, monkeypatch, scheduler_calendar):
     """复现 09-09 事故：真实 evolution_scheduler 循环跨过 15:45 窗口必须生成议程。
 
-    用受控时钟 + 真实持久化交易日历驱动真实调度循环；窗口前不生成、跨过后生成。
-    若此测试挂，说明调度逻辑本身有 bug；若过，则当日未触发是进程环境问题，
-    须靠调度器 WARNING 日志与 /api/agent/agenda meta 的 liveness 现场取证。
+    用受控时钟 + 隔离持久化日历夹具驱动真实调度循环；窗口前不生成、跨过后生成。
+    本测试只验证调度时序；生产日历就绪和运行实例的触发需另行取证。
     """
     from datetime import datetime
 
@@ -362,18 +376,18 @@ def test_scheduler_fires_when_clock_crosses_window(sf, monkeypatch):
 
     today = evo.beijing_now().date()
 
-    # 真实持久化日历（与线上同一份数据），保证交易日守卫用的是真实口径
+    # 使用真实读取函数读取隔离夹具，不依赖本机未跟踪的日历文件
     real_days = tc._load_persisted()
-    assert real_days, "持久化交易日历必须可读"
+    assert real_days == scheduler_calendar, "隔离日历持久化往返必须一致"
 
     # ⚠️ 2026-09-12 修复：受控时钟锚到**日历里真实存在的交易日**（末元素），不再取"真实今天"。
     # 原写法是 `assert real_days[-1] >= 今天` + 时钟 = 真实今天，这在**周末与法定节假日必然失败**：
     # 日历只装交易日，周六运行时末元素是周五，于是 ①前提断言挂；②即便绕过前提，
     # 调度器的交易日守卫也会（正确地）判非交易日而不生成议程——一年里约 1/3 的日子必挂。
     # 本测试的主题是「时钟跨过 15:45 窗口是否触发」，与"运行日恰为交易日"无关，故把二者解耦：
-    # 锚定日仍取自**真实日历**（保留真实口径），只是不再绑定当天的日历位置。
+    # 锚定日取自**测试持久化日历**（真实读取/调度逻辑），只是不再绑定当天的日历位置。
     probe_day = real_days[-1]
-    assert probe_day in real_days, "夹具前提：锚定日必须来自真实日历"
+    assert probe_day in real_days, "夹具前提：锚定日必须来自测试日历"
     assert tc.last_trade_date(real_days, asof=probe_day) == probe_day, (
         "夹具前提：锚定日必须是交易日，否则调度器守卫会（正确地）拒绝生成议程"
     )
@@ -437,20 +451,20 @@ def test_scheduler_fires_when_clock_crosses_window(sf, monkeypatch):
     asyncio.run(main())
 
 
-def test_scheduler_skips_non_trading_day(sf, monkeypatch):
+def test_scheduler_skips_non_trading_day(sf, monkeypatch, scheduler_calendar):
     """非交易日跨过 15:45 窗口**不得**生成议程——守卫的另一侧定点回归。
 
     2026-09-12 补：原有覆盖只测"交易日必须触发"，**"非交易日必须不触发"无人守**。
     而 09-12（周六）跑全量时正是这一侧暴露的——当时失败被误读为"测试挂了"，
     实为测试断言写宽（把"日历覆盖交易日"写成了"日历覆盖今天"）。
-    锚定日取真实日历末交易日 **+1 天**（必为周末或隔日，确定性、与运行日无关）。
+    锚定日取测试日历末日 **+1 天**，本夹具显式不含该日；不以周末近似休市。
     """
     import contextlib
 
     from app.market import trade_calendar as tc
 
     real_days = tc._load_persisted()
-    assert real_days, "持久化交易日历必须可读"
+    assert real_days == scheduler_calendar, "隔离日历持久化往返必须一致"
     probe_day = real_days[-1] + timedelta(days=1)
     assert tc.last_trade_date(real_days, asof=probe_day) != probe_day, (
         "夹具前提：锚定日必须**不是**交易日"
