@@ -278,7 +278,7 @@ ALIASES: dict[str, str] = {
 # ---- 快照引用状态三态（**必须可区分**，`BUG-016` 同族教训）------------------------
 #: 该阶段**没有**引用任何 KB（= 消融的「无 KB」臂；属设计现状，不是坏了）。
 REF_STATE_NOT_CONSULTED = "not_consulted"
-#: 引用并全部通过校验。
+#: 至少一条引用通过校验；其余驳回仍记录在 conflict。
 REF_STATE_CITED = "cited"
 #: 有引用但**全部被驳回**（形如把 `📎` 当硬规则、引了未授权册）——这是**异常**。
 REF_STATE_REJECTED = "rejected"
@@ -467,6 +467,16 @@ def parse_kb_id(kb_id: str) -> str | None:
 # ---------------------------------------------------------------- 引用校验
 
 
+def _citation_index_error(index: KbIndex) -> str:
+    """Reading partial diagnostics is allowed; certifying citations is not."""
+    if not index.available or not index.entries:
+        return "知识库索引不可用，无法验证引用"
+    if index.unparsed_rows or index.unknown_books or not index.coverage_identity_holds():
+        # A duplicate ID reduces entries without reducing the source-row count.
+        return "知识库索引完整性异常，无法验证引用"
+    return ""
+
+
 def validate_kb_citations(
     scenario: str, kb_ids: Iterable[str], index: KbIndex | None = None,
 ) -> tuple[list[str], dict[str, str]]:
@@ -481,11 +491,13 @@ def validate_kb_citations(
     `⏳` 待落地条目来支撑盘中买点」，即蓝图禁止的「示例当硬规则」与
     「拿未落地的东西当判据」。
 
+    BUG-025：索引不可用、空或完整性异常时拒绝认证；不能退化为只校验册名。
     `index` 可注入（默认读磁盘）：便于守卫构造**假的**索引来注入自证。
     """
     rt = route(scenario)
     kb_index = index if index is not None else load_kb_index()
     allowed = set(rt.books)
+    index_error = _citation_index_error(kb_index)
     accepted: list[str] = []
     rejected: dict[str, str] = {}
     for raw in kb_ids:
@@ -504,20 +516,27 @@ def validate_kb_citations(
                 f"（允许：{'、'.join(rt.books)}）"
             )
             continue
-        if kb_index.available:
-            entry = kb_index.entries.get(kb_id)
-            if entry is None:
-                rejected[kb_id] = "知识库索引中不存在该条目（不得引用未登记的 ID）"
-                continue
-            statuses = rt.statuses_for(book)
-            if statuses and entry.status not in statuses:
-                allowed_txt = "、".join(statuses)
-                rejected[kb_id] = (
-                    f"{rt.blueprint_label} 场景只允许 {allowed_txt} 状态的条目，"
-                    f"而 {kb_id} 为 {entry.status}"
-                    + (f"（{entry.status_note}）" if entry.status_note else "")
-                )
-                continue
+        if index_error:
+            rejected[kb_id] = index_error
+            continue
+        entry = kb_index.entries.get(kb_id)
+        if entry is None:
+            rejected[kb_id] = "知识库索引中不存在该条目（不得引用未登记的 ID）"
+            continue
+        if (entry.id != kb_id or entry.book != book
+                or entry.status not in KNOWN_STATUSES
+                or not isinstance(entry.title, str) or not entry.title.strip()):
+            rejected[kb_id] = "知识库条目身份、状态或标题异常，无法验证引用"
+            continue
+        statuses = rt.statuses_for(book)
+        if statuses and entry.status not in statuses:
+            allowed_txt = "、".join(statuses)
+            rejected[kb_id] = (
+                f"{rt.blueprint_label} 场景只允许 {allowed_txt} 状态的条目，"
+                f"而 {kb_id} 为 {entry.status}"
+                + (f"（{entry.status_note}）" if entry.status_note else "")
+            )
+            continue
         accepted.append(kb_id)
     return accepted, rejected
 
@@ -545,6 +564,7 @@ def snapshot_citations(
 ) -> tuple[str, str]:
     """决策快照的 KB 引用字段 → `(kb_ids_json, kb_refs_json)`（蓝图 §5 的记录项）。
 
+    `requested` 单独保存实际请求，不代表检索正文已读取；旧快照不回写。
     `kb_ids_json` = 被采纳的条目（保序去重）；`kb_refs_json` = 引用状态 + 支持/冲突依据，
     形如 `{"state": ..., "status": {id: "✅"}, "support": [...], "conflict": {id: 理由}}`。
 
@@ -552,7 +572,9 @@ def snapshot_citations(
     必须在读取侧可区分——`kb_ids == []` 本身区分不了这两者，而前者是现状、后者是异常。
     """
     kb_index = index if index is not None else load_kb_index()
-    accepted, rejected = validate_kb_citations(scenario, kb_ids, kb_index)
+    # Materialize once: callers may supply a one-shot generator.
+    requested = list(dict.fromkeys(value for raw in kb_ids if (value := str(raw).strip())))
+    accepted, rejected = validate_kb_citations(scenario, requested, kb_index)
     if accepted:
         state = REF_STATE_CITED
     elif rejected:
@@ -561,6 +583,7 @@ def snapshot_citations(
         state = REF_STATE_NOT_CONSULTED
     payload: dict[str, Any] = {
         "state": state,
+        "requested": requested,  # Requests are not evidence of verified citations.
         "status": {kb_id: kb_index.status_of(kb_id) for kb_id in accepted},
         # 「支持依据」= 被采纳条目的状态档 + 索引里的一句话（可回溯到具体条目）
         "support": [
@@ -571,8 +594,9 @@ def snapshot_citations(
         # 「冲突依据」= 被驳回的条目 + 理由（驳回一定要有理由，见 validate_kb_citations）
         "conflict": rejected,
     }
-    if not kb_index.available:
-        payload["index_note"] = kb_index.note
+    index_error = _citation_index_error(kb_index)
+    if index_error:
+        payload["index_note"] = kb_index.note or index_error
     return _json(accepted), _json(payload)
 
 

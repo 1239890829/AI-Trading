@@ -414,3 +414,176 @@ def test_kb_routing_route_is_registered():
 
     paths = {getattr(r, "path", None) for r in router.routes}
     assert "/picks/kb-routing" in paths
+
+
+# BUG-025: missing or corrupt evidence must not become a verified citation.
+@pytest.mark.parametrize("scenario,kb_id", [
+    ("pre_open_event", "KB-STOCK-999"),
+    ("intraday_pick", "KB-STOCK-999"),
+    ("post_close_review", "KB-TRADE-999"),
+    ("system_evolution", "KB-ENG-999"),
+])
+@pytest.mark.parametrize("available", [False, True])
+def test_bug025_empty_index_cannot_verify_citations(scenario, kb_id, available):
+    index = kr.KbIndex(available=available, note="test empty index")
+    accepted, rejected = kr.validate_kb_citations(scenario, [kb_id], index)
+    assert accepted == []
+    assert "索引" in rejected[kb_id]
+    ids, raw = kr.snapshot_citations(scenario, [kb_id], index)
+    refs = json.loads(raw)
+    assert json.loads(ids) == []
+    assert refs["state"] == kr.REF_STATE_REJECTED
+    assert refs["support"] == [] and refs["status"] == {}
+    assert refs["requested"] == [kb_id]
+    assert refs["index_note"]
+
+
+def _bug025_index(tmp_path):
+    path = tmp_path / "citation-index.md"
+    path.write_text("| KB-STOCK-07 | verified discipline | ✅ | 2026-09-16 |\n")
+    return path, kr.load_kb_index(path)
+
+
+@pytest.mark.parametrize("extra_row", [
+    "| KB-STOCK-08 | broken status | ? | 2026-09-16 |\n",
+    "| KB-STOCK-07 | conflicting duplicate | 📎 | 2026-09-16 |\n",
+    "| KB-UNKNOWN-01 | unknown book | ✅ | 2026-09-16 |\n",
+])
+def test_bug025_partial_or_ambiguous_index_cannot_verify(tmp_path, extra_row):
+    path, _ = _bug025_index(tmp_path)
+    path.write_text(path.read_text() + extra_row)
+    index = kr.load_kb_index(path)
+    # Preserve parser diagnostics while refusing to certify a damaged index.
+    assert index.available and index.entries
+    ids, raw = kr.snapshot_citations("pre_open_event", ["KB-STOCK-07"], index)
+    refs = json.loads(raw)
+    assert json.loads(ids) == []
+    assert refs["state"] == kr.REF_STATE_REJECTED
+    assert "完整性" in refs["conflict"]["KB-STOCK-07"]
+    assert refs["index_note"]
+
+
+@pytest.mark.parametrize("changes", [
+    {"id": "KB-STOCK-08"}, {"book": "KB-ENG"},
+    {"title": "   "}, {"status": "unknown"},
+])
+def test_bug025_entry_identity_and_status_must_be_real(tmp_path, changes):
+    _, index = _bug025_index(tmp_path)
+    index.entries["KB-STOCK-07"] = replace(index.entries["KB-STOCK-07"], **changes)
+    accepted, rejected = kr.validate_kb_citations("pre_open_event", ["KB-STOCK-07"], index)
+    assert accepted == []
+    assert rejected["KB-STOCK-07"]
+
+
+def test_bug025_requests_are_separate_ordered_and_generator_safe(tmp_path):
+    _, index = _bug025_index(tmp_path)
+    requested = (x for x in [" KB-STOCK-07 ", "", "KB-STOCK-999", "KB-STOCK-07"])
+    ids, raw = kr.snapshot_citations("intraday_pick", requested, index)
+    refs = json.loads(raw)
+    assert json.loads(ids) == ["KB-STOCK-07"]
+    assert refs["requested"] == ["KB-STOCK-07", "KB-STOCK-999"]
+    assert refs["state"] == kr.REF_STATE_CITED
+    assert set(refs["conflict"]) == {"KB-STOCK-999"}
+    assert refs["support"] == [{"kb_id": "KB-STOCK-07", "status": "✅", "title": "verified discipline"}]
+
+
+def test_bug025_no_request_is_not_consulted_even_if_index_is_missing():
+    ids, raw = kr.snapshot_citations("intraday_pick", ["", "  "], kr.KbIndex())
+    refs = json.loads(raw)
+    assert json.loads(ids) == [] and refs["requested"] == []
+    assert refs["state"] == kr.REF_STATE_NOT_CONSULTED
+    assert refs["conflict"] == {} and refs["support"] == []
+    assert refs["index_note"]
+
+
+@pytest.mark.parametrize("failure", ["missing", "empty", "invalid_utf8"])
+def test_bug025_disk_failure_recovers_with_one_index_read(tmp_path, monkeypatch, failure):
+    path = tmp_path / "restored-index.md"
+    if failure == "empty":
+        path.write_text("")
+    elif failure == "invalid_utf8":
+        path.write_bytes(b"\xff")
+    monkeypatch.setattr(kr, "KB_INDEX_PATH", path)
+    original_loader = kr.load_kb_index
+    reads = []
+
+    def counted_load():
+        reads.append(True)
+        return original_loader()
+
+    monkeypatch.setattr(kr, "load_kb_index", counted_load)
+    ids, refs = kr.snapshot_citations("intraday_pick", ["KB-STOCK-07"])
+    assert len(reads) == 1
+    assert json.loads(ids) == []
+    assert json.loads(refs)["state"] == kr.REF_STATE_REJECTED
+    path.write_text("| KB-STOCK-07 | restored discipline | ✅ | 2026-09-16 |\n")
+    ids, refs = kr.snapshot_citations("intraday_pick", ["KB-STOCK-07"])
+    assert len(reads) == 2
+    assert json.loads(ids) == ["KB-STOCK-07"]
+    assert json.loads(refs)["state"] == kr.REF_STATE_CITED
+
+
+def test_bug025_unavailable_index_cannot_certify_retained_entries(tmp_path):
+    _, index = _bug025_index(tmp_path)
+    index.available = False
+    accepted, rejected = kr.validate_kb_citations("intraday_pick", ["KB-STOCK-07"], index)
+    assert accepted == [] and "不可用" in rejected["KB-STOCK-07"]
+
+
+def test_bug025_missing_index_does_not_weaken_scenario_permission():
+    accepted, rejected = kr.validate_kb_citations(
+        "intraday_pick", ["KB-DEC-014", "not-an-id"], kr.KbIndex(),
+    )
+    assert accepted == []
+    assert "未授权册" in rejected["KB-DEC-014"]
+    assert "合法" in rejected["not-an-id"]
+
+
+def test_bug025_archive_replay_and_summary_preserve_evidence(tmp_path, monkeypatch):
+    path, _ = _bug025_index(tmp_path)
+    monkeypatch.setattr(kr, "KB_INDEX_PATH", path)
+    sf = _factory(tmp_path)
+    old_run, old_rows = build_intraday_records(
+        _payload(), trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5),
+        kb_ids=["KB-STOCK-07"],
+    )
+    assert old_rows
+    archive_records(old_run, old_rows, sf)
+    old_refs = old_rows[0]["kb_refs"]
+    # An index failure must affect new evidence only, not prior decisions.
+    path.write_text("broken index")
+    new_run, new_rows = build_intraday_records(
+        _payload(), trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 10),
+        kb_ids=["KB-STOCK-07"],
+    )
+    assert new_run != old_run and new_rows
+    assert all(json.loads(row["kb_refs"])["state"] == "rejected" for row in new_rows)
+    archive_records(new_run, new_rows, sf)
+    # Repeat archive attempts cannot overwrite the existing accepted evidence.
+    archive_records(old_run, [{**row, "kb_ids": "[]", "kb_refs": "{}"} for row in old_rows], sf)
+    legacy_run, legacy_rows = build_intraday_records(
+        _payload(), trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 15),
+    )
+    for row in legacy_rows:
+        row["kb_ids"], row["kb_refs"] = "[]", "{}"
+    archive_records(legacy_run, legacy_rows, sf)
+    _, notifications = build_notification_records(
+        [{"symbol": "600001", "name": "甲", "confidence": {"tier": "高"}}],
+        trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 20),
+        hits=[{"item": {"symbol": "600001"}, "price": 10.0, "chg": 3.0}],
+        skips=[], dispatch_by_symbol={"600001": "suppressed"}, kb_ids=["KB-STOCK-07"],
+    )
+    assert notifications and json.loads(notifications[0]["kb_refs"])["state"] == "rejected"
+
+    def forbidden_reload(*args, **kwargs):
+        raise AssertionError("Replay must use archived references, not the live index")
+
+    monkeypatch.setattr(kr, "load_kb_index", forbidden_reload)
+    replay = replay_run(old_run, sf)
+    assert replay["mismatches"] == 0
+    assert replay["items"][0]["kb_refs"] == json.loads(old_refs)
+    assert replay_run(new_run, sf)["items"][0]["kb_refs"]["state"] == "rejected"
+    assert replay_run(legacy_run, sf)["items"][0]["kb_refs"] == {}
+    assert learning_summary("2026-09-16", sf)["kb_ref_states"] == {
+        "cited": len(old_rows), "rejected": len(new_rows), "legacy": len(legacy_rows),
+    }
