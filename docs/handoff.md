@@ -1,6 +1,6 @@
-# 当前交接：v9.6 历史涨停/龙头研究规划候选，待独立审核后合入
+# 当前交接：v9.6 历史涨停/龙头研究基线，下一主切片候选 BUG-028
 
-**当前模式：PLANNING_CANDIDATE_REVIEW。** `master` 当前共享基线为 `49de250c`（PR #43 后的 v9.5 收口）；PR #44 / 分支 `chatgpt/limit-up-dragon-research-v9.6` 只新增/更新规划与研究文档，没有执行业务代码、回测、数据抓取、Jev 批量调用或生产参数变更。v9.6 候选新增 [历史涨停/强连板/龙头研究蓝图](limit-up-dragon-research.md)、W04/RSH-031 与 U43；在独立审核/CI/合并前，`master` 仍是共享事实源，不能把本分支设计写成已实施或已证明有效。最新候选来源为 [实施方案](implementation-plan.md)、[历史涨停/龙头研究](limit-up-dragon-research.md)、[持续演进蓝图](continuous-evolution.md)、[Jev 蓝图](jev-integration.md)、[产品闭环](product-closure-design.md)、[开放情境猎场](hunting-decision-design.md)、[大小功能覆盖](feature-closure-audit.md)、[计划去向](plan-registry.md)、[协作规范](collaboration-workflow.md)。
+**当前模式：READY_FOR_NEXT_PLANNED_SLICE（仅在 PR #44 的准确候选通过完整 CI 并合入 `master` 后生效）。** 在 PR #44 尚未合并时，当前共享事实仍是 `master@49de250c` 的 v9.5；不得从功能分支抢先施工。PR #44 只改变规划/账本/Skills/治理守卫测试，没有业务逻辑、回测、数据抓取、Jev 批量调用或生产参数变更。v9.6 新增 [历史涨停/强连板/龙头研究蓝图](limit-up-dragon-research.md)、W04/RSH-031 与 U43，并把“继续任务/继续”规范为一次只授权一个动态最高优先级切片。合入后最新来源为 [实施方案](implementation-plan.md)、[历史涨停/龙头研究](limit-up-dragon-research.md)、[持续演进蓝图](continuous-evolution.md)、[Jev 蓝图](jev-integration.md)、[产品闭环](product-closure-design.md)、[开放情境猎场](hunting-decision-design.md)、[大小功能覆盖](feature-closure-audit.md)、[计划去向](plan-registry.md)、[协作规范](collaboration-workflow.md)。
 
 ## 1. 固定入口与范围
 
@@ -38,7 +38,7 @@
 ## 5. 当前接续规则
 
 2026-09-18 规划批已完成理论/产品/大小功能/知识使用/文档治理层面的逐项去向；其 DESIGN_ONLY 边界只描述该历史规划批，不再作为全项目“当前模式”。计划中的实际开发、原始数据/候选实证和运行验收仍按各 stage 的真实状态继续。
-Codex收到短提示后先从最新 `master` 重读 AGENTS、handoff、协作规范和对应 stage；没有网页明确派工时不自行修 BUG 或扫描任务开工。网页按风险/收益/输入选择有限切片，Codex实现回填，网页审核并重新规划。所有大小消费者持续纳入，原金融/权限/发布保护保留。
+Codex收到短提示后先从最新 `master` 重读 AGENTS、handoff、协作规范和对应 stage。默认由网页按风险/收益/输入选择有限切片；handoff 处于可执行模式时，用户也可明确调用 `ashare-ledger-continue` 说“继续任务/继续”，由 Skill 按 P0/P1/P2、依赖、解锁价值和证据成熟度自动领取一个唯一可开工切片。Codex实现回填，网页审核并重新规划；不得借一次“继续”连续扫描执行整个账本。所有大小消费者持续纳入，原金融/权限/发布保护保留。
 文字版完整图以product-closure-design §8为准；展示图片只是解释副本，不是状态源。图必须包含后续获准实施的方向，不得宣称已经自动执行或真实券商下单，不出现普通前台配置/调试中心或后台固定分类上限。
 
 ## 6. 2026-09-19 分支收敛结果
@@ -62,7 +62,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 PR #44 合并且当前模式恢复为可执行后，用户在 Codex 端只需明确调用 `ashare-ledger-continue` 说“继续任务/继续”；若上述首选仍可开工且无新的更高优先级事实，Skill 可直接领取一个切片，不需用户复制任务卡。
 
-## 7. Jev、工具链与协作流当前基线
+## 8. Jev、工具链与协作流当前基线
 
 - Jev 只保留 bounded semantic verify、条件 capability routing、metadata-only usage 与研究/审核辅助；确定性金融规则、权限、撮合、风控和真实执行不得委托给 Jev。
 - BillionsBobby/JevRouter 只采用经过固定版本校验的内核与 privacy-safe wrapper；旧 `jev-route` 已退出活动链。OpenRouter 当前明确不接入，也不使用聊天中出现过的旧 Key。
