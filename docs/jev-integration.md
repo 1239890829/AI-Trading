@@ -1042,3 +1042,58 @@ claim + source excerpt
 ```
 
 **不在活跃默认链里的东西**：旧 `jev-route`、自动模型代理、Jev Stop-hook、OpenRouter provider、Jev 直接交易决策、jev-context auto mode。
+
+## 28. Universal Verification 第一批落地（2026-09-19）
+
+新增 `backend/app/core/semantic_verify.py`：只做 **evidence → claim** 支持关系判断，不做事实检索。输出固定为 `supported / contradicted / insufficient`，单次请求可并行验证多条 claim。
+
+首批助手接线原则：
+
+- 现有 deterministic grounding 继续第一优先；已经能机械证明数字编造/交易指令越权时，不再多花一次 Jev；
+- verifier 默认 `off`，显式 `shadow` 才启用；
+- shadow 通过 StreamingResponse background task 在流结束后运行，不改变 SSE 协议、不阻断回答、不增加首 token 或 `done` 延迟；
+- **只要存在 `extra_block` 就整轮跳过 verifier**：不仅 evidence 私有，最终 claim 本身也可能复述持仓/精选/内部结论，不能只“删 evidence”后继续发 claim；
+- 只要使用过任一非公共工具也整轮跳过；只有纯公共市场/新闻/事件工具链才允许进入 Jev。持仓、自选、模拟账户、参数治理等私有上下文与由其生成的 claim 一律不外发；用户问题本身若出现“我的持仓/仓位/成本价/账户/余额/自选/资产/盈亏”等私人语义，也整轮跳过，防止 claim 复述用户提供的私有信息；
+- claim 由确定性分句/事实标记筛选，最多 4 条；证据默认最多 12,000 字符，避免无边界 token 消耗。
+
+真实 synthetic smoke：
+
+- “合同已签署并生效” → `supported`；
+- “净利润同比增长50%”而 evidence 未披露增速 → `insufficient`；
+- “公司已取消合同”而 evidence 明确合同生效 → `contradicted`；
+- `jev-1.13.0`，986 input tokens，约 1.35s。
+
+这只是接线 smoke，不是准确率结论。是否常开 shadow、是否未来产生用户可见 verifier 状态，必须由 RSH-030 金标准决定。
+
+## 29. RSH-030 人工金标准 v1
+
+新增 `backend/scripts/jev_goldset.py` 和固定样本队列 `data/labels/jev_goldset_events_v1.jsonl`。
+
+### 29.1 样本纪律
+
+- 从真实 `event_card` 稳定分层抽样；v1 固定 seed = `jev-rsh030-v1`；
+- 共 240 条，`policy / statement / data / rumor / corporate / other` 各 40 条；
+- 现有规则结果只放在 `reference_rule`，**绝不复制到 human**；
+- `human.category / human.certainty / human.actionable` 初始全部为 `null`；
+- scorer 只把已填写的 `human` 当真值，规则标签不能参与 accuracy 计算。
+
+### 29.2 使用方式
+
+```bash
+cd backend
+python scripts/jev_goldset.py export-events \
+  --db ../data/ashare.db \
+  --out ../data/labels/jev_goldset_events_v1.jsonl \
+  --count 240 --seed jev-rsh030-v1
+
+# 人工标注前：允许 human 为空
+python scripts/jev_goldset.py validate ../data/labels/jev_goldset_events_v1.jsonl
+
+# 人工标注完成后必须严格校验
+python scripts/jev_goldset.py validate ../data/labels/jev_goldset_events_v1.jsonl --require-human
+
+# 预测结果必须另存 predictions.jsonl，再和 human 真值评分
+python scripts/jev_goldset.py score ../data/labels/jev_goldset_events_v1.jsonl predictions.jsonl
+```
+
+v1 导出已机械验证：240 行、6 类各 40、`human_complete=0`；使用同一真实库 + seed 再导出与入库队列 `cmp` 逐字一致，未标注队列 SHA-256 = `fc8776d15f563b10b694b8108be84f24ad331c85b536045c9689018f194c3ef7`（189,954 bytes）。严格校验在未人工标注时返回失败，这是预期行为，用来阻止“未标完就算准确率”。该 hash 是**未标注队列指纹**；人工填写 `human` 后文件 hash 改变属正常现象。

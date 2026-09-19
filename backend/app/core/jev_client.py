@@ -258,6 +258,7 @@ def status_snapshot() -> dict:
             "alert_triage": str(getattr(cfg, "jev_alert_triage_mode", "off")),
             "event_aux": str(getattr(cfg, "jev_event_aux_mode", "off")),
             "assistant_tools": str(getattr(cfg, "jev_assistant_tool_mode", "off")),
+            "assistant_verify": str(getattr(cfg, "jev_assistant_verify_mode", "off")),
         },
         "usage_log_enabled": bool(getattr(cfg, "jev_usage_log_enabled", False)),
         "metrics": metrics_snapshot(),

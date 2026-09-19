@@ -49,6 +49,7 @@ os.environ["ASHARE_JEV_USAGE_LOG_ENABLED"] = "false"
 os.environ["ASHARE_JEV_ALERT_TRIAGE_MODE"] = "off"
 os.environ["ASHARE_JEV_EVENT_AUX_MODE"] = "off"
 os.environ["ASHARE_JEV_ASSISTANT_TOOL_MODE"] = "off"
+os.environ["ASHARE_JEV_ASSISTANT_VERIFY_MODE"] = "off"
 
 # 逐笔的 **TDX 直连降级备源**必须关掉（`IMP-038`，2026-09-16）。
 #

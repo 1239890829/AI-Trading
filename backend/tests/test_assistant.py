@@ -655,6 +655,109 @@ def test_chat_route_grounding_silent_when_supported(client, monkeypatch):
     assert evs[-1] == {"type": "done"}
 
 
+def test_chat_semantic_verify_shadow_runs_for_public_market_evidence(client, monkeypatch):
+    """Universal verifier may run only when the answer was built from public evidence."""
+    captured = []
+    monkeypatch.setattr(settings, "jev_assistant_verify_mode", "shadow")
+    monkeypatch.setattr(
+        assistant_routes,
+        "_open_stream",
+        lambda msgs: _FakeStream(["贵州茅台现价 1500.5 元。"]),
+    )
+    _mock_snapshot(client, monkeypatch)
+    monkeypatch.setattr(assistant_routes, "_build_extra_context", lambda _req: "")
+    monkeypatch.setattr(
+        assistant_routes,
+        "_run_assistant_semantic_verify",
+        lambda payload: captured.append(dict(payload)),
+    )
+
+    resp = client.post("/api/assistant/chat", json={
+        "messages": [{"role": "user", "content": "贵州茅台现在多少？"}],
+    })
+    evs = _parse_sse(resp.text)
+    assert evs[-1] == {"type": "done"}
+    assert len(captured) == 1
+    assert captured[0]["claims"] == ["贵州茅台现价 1500.5 元"]
+    assert "1500.5" in "\n".join(captured[0]["evidence"])
+
+
+def test_chat_semantic_verify_skips_when_private_extra_context_exists(client, monkeypatch):
+    """Claim text itself can reveal private context, so any private extra block disables export."""
+    captured = []
+    monkeypatch.setattr(settings, "jev_assistant_verify_mode", "shadow")
+    monkeypatch.setattr(
+        assistant_routes,
+        "_open_stream",
+        lambda msgs: _FakeStream(["贵州茅台现价 1500.5 元。"]),
+    )
+    _mock_snapshot(client, monkeypatch)
+    monkeypatch.setattr(
+        assistant_routes,
+        "_build_extra_context",
+        lambda _req: "PRIVATE_POSITION_CONTEXT_SHOULD_NOT_LEAVE_PROCESS",
+    )
+    monkeypatch.setattr(
+        assistant_routes,
+        "_run_assistant_semantic_verify",
+        lambda payload: captured.append(dict(payload)),
+    )
+
+    resp = client.post("/api/assistant/chat", json={
+        "messages": [{"role": "user", "content": "贵州茅台现在多少？"}],
+    })
+    assert _parse_sse(resp.text)[-1] == {"type": "done"}
+    assert captured == [{}]
+
+
+def test_chat_semantic_verify_skips_when_request_itself_is_private(client, monkeypatch):
+    """User-provided portfolio/account wording can leak through the generated claim."""
+    captured = []
+    monkeypatch.setattr(settings, "jev_assistant_verify_mode", "shadow")
+    monkeypatch.setattr(
+        assistant_routes,
+        "_open_stream",
+        lambda msgs: _FakeStream(["贵州茅台现价 1500.5 元。"]),
+    )
+    _mock_snapshot(client, monkeypatch)
+    monkeypatch.setattr(assistant_routes, "_build_extra_context", lambda _req: "")
+    monkeypatch.setattr(
+        assistant_routes,
+        "_run_assistant_semantic_verify",
+        lambda payload: captured.append(dict(payload)),
+    )
+
+    resp = client.post("/api/assistant/chat", json={
+        "messages": [{"role": "user", "content": "我的持仓贵州茅台现在多少？"}],
+    })
+    assert _parse_sse(resp.text)[-1] == {"type": "done"}
+    assert captured == [{}]
+
+
+def test_chat_semantic_verify_skips_when_deterministic_grounding_already_failed(client, monkeypatch):
+    """Do not pay Jev twice when deterministic grounding already proves a violation."""
+    captured = []
+    monkeypatch.setattr(settings, "jev_assistant_verify_mode", "shadow")
+    monkeypatch.setattr(
+        assistant_routes,
+        "_open_stream",
+        lambda msgs: _FakeStream(["贵州茅台现价 1888.8 元。"]),
+    )
+    _mock_snapshot(client, monkeypatch)
+    monkeypatch.setattr(
+        assistant_routes,
+        "_run_assistant_semantic_verify",
+        lambda payload: captured.append(dict(payload)),
+    )
+
+    resp = client.post("/api/assistant/chat", json={
+        "messages": [{"role": "user", "content": "贵州茅台现在多少？"}],
+    })
+    evs = _parse_sse(resp.text)
+    assert [e for e in evs if e.get("type") == "grounding"]
+    assert captured == [{}]
+
+
 def test_chat_route_grounding_skipped_without_evidence(client, monkeypatch):
     """没有注入任何数据时跳过校验（无基准即校验=全盘误杀，宁缺勿滥）。
 

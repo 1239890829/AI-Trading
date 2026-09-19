@@ -1521,13 +1521,16 @@
 
 ## IMP-045 Jev 语义决策中间层
 - **账本**：`docs/retro-and-gaps.md` §6.0 `IMP-045` ｜ **日期**：2026-09-19 ｜ **状态**：🟡 部分闭环
-- **缺口与验收标准**：`alert_triage` 与 `events/llm_aux` 的首批 shadow/cascade 结构已接线；目标仍是“规则 → Jev 窄判断 → 低置信/冲突才升级 DeepSeek”。当前仍缺摘要/引用 verifier、题材候选 Noul 正式链与 KB/search rerank 自动化；第一阶段默认 shadow，不改变选股分或交易结论。
+- **缺口与验收标准**：`alert_triage` / `events/llm_aux` 既有 shadow/cascade 继续；Universal Verification 第一批也已接线，但默认 `off`，只在显式 shadow 下判断 public evidence→claim 的 `supported/contradicted/insufficient`。现阶段仍开放 = verifier 人工金标准/阈值、题材候选 Noul 正式链、KB/search rerank 自动化；任何 verifier 结果都不得直接改选股分、交易结论或用户回答。
 - **项目真数据试验**：从 `data/ashare.db` 只读抽取 2026-09-18~19 的 active、未 LLM 判定、无非零方向事件；候选池 678 条，确定性抽样 24 条。Jev `jev-1.13.0` 24/24 HTTP 200；category 与现规则一致 15/24，certainty 一致 20/24，至少一个标签分歧 11/24。**这是一致率，不是准确率**，因为现有标签也是规则产物。
 - **已暴露的规则边界**：①“美联储隔夜逆回购使用规模”被现规则因子串“回购”误落 `corporate`，Jev 判 `data`（0.94）；②“美联储施密德表示…”被“财政部”先命中 `policy`，Jev 判 `statement`（0.96）。这些只证明语义审计价值，不证明 Jev 永远正确。
 - **题材候选试验**：基于项目 391 个官方题材先由代码缩候选，再逐候选 Noul。芯片/AI政策消息对“人工智能”0.91、“芯片概念”0.84；算力服务合同对“算力租赁”0.83；纯 RRP 数据对“参股银行/券商/互联网金融”仅 0.03/0.02/0.04。Noul 是模型对 yes 的概率，不是上涨概率。
 - **设计纪律**：不让 Jev自由生成题材；代码提供候选集合，Jev 只判断候选。宽泛“综合催化分”本轮过于宽松（24 条中 19 条 ≥1.5），不作为过滤器；优先多个窄 Noul / Choice。
 - **已接线**：① `alert_triage` 用 Jev Choice 做 notify/ignore/escalate；shadow 仍以 DeepSeek 为用户可见结论，cascade 只有达校准阈值才可直接消费。② `events/llm_aux` 用多 Noul 只判“是否值得继续做非零题材方向”，cascade 只允许高把握中性预过滤，**不让 Jev 生成题材**；若剩余 DeepSeek 子批失败，整批仍不标 judged，保持原事务语义。
-- **真实接线 smoke（2026-09-19）**：项目真实 question schema 已直接调用 `jev-1.13.0` 成功。合成合同事件 `Noul=0.53`、纯统计事件 `Noul=0.03`；这证明中文事件不可把 0.5 当高置信阈值，也支持当前 cascade 只允许 `<=0.05` 的极低 yes-probability 中性提前退出。首轮 smoke 还抓到未落库 `EventCard.id=None` 会导致答案映射键覆盖，已新增“ID 必须非空且唯一”的网络前 fail-closed 守卫与回归用例。**遗留**：默认保持 shadow；补人工标签后再决定 cascade 阈值。题材候选 Noul、摘要/引用 verifier 与 KB/rerank 仍开放；是否减少 DeepSeek 调用必须由 `RSH-030` 给出真实 usage 证据。
+- **真实接线 smoke（2026-09-19）**：项目真实 question schema 已直接调用 `jev-1.13.0` 成功。合成合同事件 `Noul=0.53`、纯统计事件 `Noul=0.03`；这证明中文事件不可把 0.5 当高置信阈值，也支持当前 cascade 只允许 `<=0.05` 的极低 yes-probability 中性提前退出。首轮 smoke 还抓到未落库 `EventCard.id=None` 会导致答案映射键覆盖，已新增“ID 必须非空且唯一”的网络前 fail-closed 守卫与回归用例。
+- **Universal Verification 第一批（2026-09-19）**：新增 `app/core/semantic_verify.py`，固定三态 `supported / contradicted / insufficient`，一批 claim 同请求并行；不做事实检索，只判“给定 evidence 是否支持给定 claim”。助手只在 `ASHARE_JEV_ASSISTANT_VERIFY_MODE=shadow` 时排队 BackgroundTask，默认 `off`；deterministic grounding 已判违例则不重复调用。隐私边界更保守：只要本轮存在 `extra_block`（可能含持仓/精选/内部结论）、使用任何非公共工具，或用户问题本身含“我的持仓/仓位/成本价/账户/余额/自选/资产/盈亏”等私人语义，整轮 verifier 跳过，避免 claim 文本本身泄漏私有信息；公共 evidence 也最多 12k 字符、最多 4 条 claim。真实 synthetic smoke：合同生效→supported、未披露利润增速→insufficient、与生效合同相冲突的“已取消”→contradicted；`jev-1.13.0` / 986 input tokens / ~1.35s。**遗留**：必须有 verifier 人工标签后才能讨论常开 shadow 或用户可见状态；当前绝不阻断/改写回答。
+- **本轮门禁（2026-09-19 Universal Verification / gold-set slice）**：专项 `semantic_verify + goldset + assistant + grounding + Jev guards` **93 passed**；最终后端全量 **3698 passed / 80 skipped / 0 failed，145.12s**；`pyflakes app tests scripts` 0；`doc-health` 全部通过；前端 `tsc --noEmit` 0、`eslint .` 0，本地与 `TZ=UTC` 均 **71 files / 675 tests**，Next production build 成功。Jev real smoke 三态通过；`jev-pref` verifier/goldset 两切片均 approve（secrets 同时通过）；`jev-review` verifier fresh review correctness=7.7 / modularity=8.1 / security=7.6 / reliability=7.6，仅 low-level 泛化建议，无中高严重度项。
+- **遗留**：事件/告警默认保持现状；补人工标签后再决定任何 cascade 阈值。题材候选 Noul 正式链、KB/rerank 自动化仍开放；是否减少 DeepSeek 调用必须由 `RSH-030` 给出真实 usage 证据。
 
 ## IMP-046 Jev Agent Router：AI 助手 / 交易智能体 / 浏览器研究
 - **账本**：`docs/retro-and-gaps.md` §6.0 `IMP-046` ｜ **日期**：2026-09-19 ｜ **状态**：🟡 部分闭环
@@ -1541,12 +1544,12 @@
 
 ## RSH-030 Jev 语义特征与额度节省实证
 - **账本**：`docs/retro-and-gaps.md` §6.0 `RSH-030` ｜ **日期**：2026-09-19 ｜ **状态**：🟡 部分闭环
-- **缺口与验收标准**：已有项目真数据分歧、题材候选样例、`jev-context` 人工锚点与统一 usage/routing telemetry，但仍没有 200–500 条人工金标准、长期升级率/DeepSeek-Codex token A/B，也没有证明任何 Jev 语义特征能改善选股或做T。完成标准仍是可复算实验，不以 demo 代替结论。
+- **缺口与验收标准**：RSH-030 v1 的 240 条人工标注队列已经固定，但**金标准本身尚未完成**：当前 `human.category/certainty/actionable = 0/240 完成`。已有项目真数据分歧、题材候选样例、`jev-context` 人工锚点与统一 usage/routing telemetry；仍缺人工完成 240 条、verifier 专用 claim/evidence 人工样本、长期升级率/DeepSeek-Codex-ChatGPT token A/B，也没有证明任何 Jev 语义特征能改善选股或做T。完成标准仍是可复算实验，不以 demo 代替结论。
 - **A/B 设计**：同一人工标注集至少比较 ①规则 ②规则+Jev ③规则+现有 LLM ④规则+Jev+LLM fallback；指标 = 类别/题材 Precision/Recall、假阳/假阴、校准/低置信覆盖、升级率、端到端延迟、TypeSafe input tokens、现有 LLM/Codex 调用量和费用。
-- **样本要求**：优先从现有 `event_card` 分层抽样 200–500 条，覆盖 policy/statement/data/rumor/corporate/other、否定/转述/多主体/模糊传闻/提示注入文本；人工标签与模型输出分离保存，防止把规则标签当真值。
+- **人工样本 v1 已生成**：`data/labels/jev_goldset_events_v1.jsonl` 共 **240 条**，固定 seed `jev-rsh030-v1`；policy/statement/data/rumor/corporate/other 各 40。`reference_rule` 保存现有规则类别/确定性/actionable/方向，只作参考；`human.category/certainty/actionable` 初始均为 `null`。新增 `backend/scripts/jev_goldset.py` 支持稳定导出、普通/严格校验与 prediction scoring；strict validate 在 0/240 未标注时返回失败，防止把规则标签或空标签冒充 gold。对真实库以相同 seed 重导出与入库队列逐字一致；未标注队列 SHA-256=`fc8776d15f563b10b694b8108be84f24ad331c85b536045c9689018f194c3ef7`（189,954 bytes）。
 - **语义特征路线**：新增 `app/research/jev_shadow.py`，固定 `lurk/first_start/limit_relay/trend_acceleration/break_to_trend/restart/pullback_reversal/event_driven/unclear` 选股形态、bounded tactic router 与复盘失败 taxonomy；只产 shadow 标签，不写生产评分/订单。事件确定性、主体直接性、题材相关性等同样只进研究集；未证明净期望或 Precision@K 增益前，不进入生产选股打分。
 - **本轮成本证据**：24 条项目真数据审计共 26,534 input tokens，按公开 $0.042 / MTok 估算约 $0.001114（非后台账单）；平均完整网络往返 1.65s、中位 1.36s。前述 8 条合成试验和 3 条题材试验另有独立回执。
 - **额度节省判据**：只有“同等或更好的目标任务质量 + 大模型升级次数/token 实测下降”才能宣称节省 Codex/ChatGPT/LLM 额度；不能拿 Jev 低单价直接推导整体节省。
 - **上下文节省实测**：5 组人工锚点中，Jev 对**已召回**关键锚点 filter recall=100%；weighted retrieval token reduction=5.28%；其中“情绪→空仓闸门” upstream retrieval recall 仅 2/3，证明过滤不能修复召回 ⇒ `jev-context` 保持 ask-only，不切 auto。
 - **Jev 自身价值门**：真实 30–50 次调用后若几乎不改变下一步、质量不升且 DeepSeek/Codex/ChatGPT token 不降、低置信升级率高形成双重成本、或与另一 Jev 组件重复，则主动停用；旧 `jev-route` 已成为首个按此规则退出的组件。`jev-guard` 保留因只读工具可 skip、技能扫描可 cache；`jev-context` ask-only；`jev-browser` 只在 DOM 动作/目标不确定时调用；`jev-review` / `jev-pref` 只用于高影响/语义治理切片。
-- **遗留与下一步**：人工金标准、长期 token A/B、选股/做T walk-forward/消融完成后再决定生产阈值与 Challenger。下一项 Jev 高优先增量是 `IMP-045` 的 **Universal Verification**（claim + 最小证据片段 → supported / contradicted / insufficient），不是继续增加路由器。
+- **遗留与下一步**：下一人工步骤是完成 v1 的 240 条 event 标注，并另建 verifier 的 claim/evidence 人工样本；其后才能跑规则 / Jev / DeepSeek / fallback 的正式 A/B 与阈值。长期 token A/B、选股/做T walk-forward/消融仍开放。Universal Verification 代码第一批已落地，但默认 `off`，目前只具备接线 smoke 与专项测试证据，不能宣称准确率。
