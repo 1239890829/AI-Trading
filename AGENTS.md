@@ -25,7 +25,7 @@
 2. **禁止**把 mock 数据、过期缓存冒充实盘。数据源失败 → 标 `stale` + health=degraded。
 3. **禁止**输出确定性买卖结论（必涨/稳赚）。一切结论 = 偏向 + 依据 + 失效条件；
    事件标的池等"机会输出"必须带「不构成买卖建议」声明。
-4. **API Key 只存 `backend/.env`**（已 gitignored），绝不入库/入前端/入文档。
+4. **API Key 只存 `backend/.env`**（已 gitignored），绝不入库/入前端/入文档。仓库现为 **Public**：tracked 文件还**禁止**固化个人 home 绝对路径（统一改用 `$HOME/...` / `<repo>/...`）、本地邮箱/机器名、真实 `.env` / 私钥 / 证书 / token-like 值；提交前必须通过 `python3 scripts/audit/public_repo_scan.py`。本仓 Git author 固定使用 GitHub noreply 邮箱，勿再产生本机 `.local` 作者邮箱。
 5. 撮合规则（T+1/涨跌停拒/整手/费用/停牌拒）是硬拦截，不可绕过。
 6. **新增页面/板块需先论证**：默认通过复用、扩展、联动实现需求（联动设计原则，见 `docs/summary/architecture-design.md` §1 跨页面联动设计）。
    ⚠️ **2026-09-15 更正**：此处原写「§0」，但 `GOV-002`（2026-09-14）收敛后该文正文已从 **§1** 起，**§0 不存在** ——
@@ -55,6 +55,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 cd apps/web && npm run dev                        # http://localhost:3000/workbench
 
 # 测试与门禁（每次改动全部跑，全绿才算完；**数字必须实测回填，勿凭记忆**）
+python3 scripts/audit/public_repo_scan.py                     # Public repo 密钥/隐私硬门（约 3s）
 cd backend && .venv/bin/pytest --basetemp=/tmp/pytest-basetemp     # 后端 collect 3339 项（3263 passed / 76 skipped / 0 failed / 240.74s；收尾复跑 237.56s）（09-16 RSH-003 切片 2 轮实测；前提：8000 在跑）
 # ⚠️ 不要在这条命令上再叠一个 `-q`：`pyproject.toml` 的 addopts 已有 `-q`，
 # 叠加后等价于 `-qq`（extra-quiet），pytest 9.1.1 在该级别下**不打印汇总行**
@@ -937,7 +938,7 @@ curl 先行 → 记录字段口径与类型陷阱 → 多采样找规律 → fix
   `git diff --cached --name-status` 对范围，`git diff --cached --check` 查补丁，再读暂存正文确认回填。
   `git ls-files --others --exclude-standard` 逐项分类；正常 staged A/M/D 是预期，不要求 status 为空。
   提交后核实际 commit 文件集与本任务工作区干净，禁止用 `git add -A` 吸收无关改动或清用户脏树。
-- 禁止提交 `.env`、API Key、Token、密码、私有数据、缓存文件或无关构建产物。
+- 禁止提交 `.env`、API Key、Token、密码、私有数据、缓存文件或无关构建产物；Public 仓库还禁止提交个人 home 绝对路径、本地邮箱/机器名。`public_repo_scan.py` 为 required CI 的组成部分，不得通过豁免/删除扫描器来绕过。
 - 使用清晰的英文 commit message。
 - 完成后必须提交修改，将功能分支推送到 GitHub，并设置 upstream。
 - 如果任务需求存在会明显影响实现方案的歧义，应先询问用户；否则直接完成开发、测试、提交和推送。
