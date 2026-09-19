@@ -71,7 +71,8 @@ handoff 若明确 DESIGN_ONLY / REVIEW / BLOCKED，则不得执行；计划存�
 ## 9. 日常短提示
 
 “Codex执行完了”：网页读取当轮执行事实后审核。
-“ChatGPT审核完了”：Codex从最新 `master` 读取真实结论和当前模式；DESIGN_ONLY / REVIEW / BLOCKED 时不执行。\n“继续任务/继续”（明确调用 `ashare-ledger-continue`）：若 handoff 允许实施，则动态选择并执行一个最高优先级可开工切片；若存在未收口 PR/CI、依赖未满足或高影响排序歧义，只报告候选/阻塞。
+“ChatGPT审核完了”：Codex从最新 `master` 读取真实结论和当前模式；DESIGN_ONLY / REVIEW / BLOCKED 时不执行。
+“继续任务/继续”（明确调用 `ashare-ledger-continue`）：若 handoff 允许实施，则动态选择并执行一个最高优先级可开工切片；若存在未收口 PR/CI、依赖未满足或高影响排序歧义，只报告候选/阻塞。
 
 ## 10. 路线切换规则
 
