@@ -1581,6 +1581,15 @@ def check_decision_propagation() -> list[str]:
                 f"落后于 implementation-plan 的 U{max_u:02d}"
             )
 
+    # READY 模式的 handoff 头部必须描述已生效现场，不能遗留“待合并/合并后才生效”的候选态。
+    handoff_text = _read(DOCS / "handoff.md")
+    handoff_head = handoff_text.split("\n## 1.", 1)[0]
+    if "READY_FOR_NEXT_PLANNED_SLICE" in handoff_head:
+        stale_ready_markers = ("仅在 PR #", "未合并前", "合并后，本文件", "合并并恢复")
+        for token in stale_ready_markers:
+            if token in handoff_head:
+                errors.append(f"docs/handoff.md：READY 头部仍含候选态文字 {token}")
+
     takeover = _read(ROOT / "skills/ashare-ledger-continue/SKILL.md")
     required_takeover = (
         "docs/handoff.md",
