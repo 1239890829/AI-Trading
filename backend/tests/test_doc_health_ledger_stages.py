@@ -71,6 +71,28 @@ def test_real_ledger_has_no_stage_conflict():
     assert mod.check_phase_tasks() == []
 
 
+def test_active_collaboration_entry_does_not_pin_retired_feature_branch():
+    root = Path(__file__).resolve().parents[2]
+    active_surfaces = [
+        root / "docs" / "handoff.md",
+        root / "docs" / "collaboration-workflow.md",
+        root / "skills" / "ashare-ledger-continue" / "SKILL.md",
+    ]
+    retired_markers = (
+        "codex/collaboration-runtime-state",
+        "当前模式：DESIGN_ONLY",
+        "当前固定入口为codex/",
+        "固定入口分支codex/",
+    )
+    offenders = {
+        path.relative_to(root).as_posix(): marker
+        for path in active_surfaces
+        for marker in retired_markers
+        if marker in path.read_text()
+    }
+    assert offenders == {}
+
+
 @pytest.mark.parametrize("state", ["待执行", "部分完成", "待条件", "待交付", "进行中"])
 def test_open_states_do_not_require_closed_record(probe, state):
     edit(probe, "stages/w00-phase.md", "待执行", state)
