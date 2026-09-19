@@ -44,7 +44,8 @@ def task(tid="BUG-014", status="待执行", deps="无", evidence="尚未实施",
 @pytest.fixture
 def probe(tmp_path, monkeypatch):
     mod = load()
-    docs = tmp_path / "docs"
+    root = tmp_path
+    docs = root / "docs"
     (docs / "stages").mkdir(parents=True)
     (docs / "archive").mkdir()
     monkeypatch.setattr(mod, "ROOT", tmp_path)
