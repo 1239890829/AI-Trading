@@ -2,7 +2,7 @@
 
 > 定位：**docs 唯一入口**。查东西先来这里；写新文档必须在此登记。
 > 维护约定：状态在所属阶段单点更新，成果提炼与恢复按 `kb/07-doc-curation.md` §3.2；新建/迁移同步本表，未知资产不删除。
-> 当前入口（2026-09-19）：从最新 `master` 的 `AGENTS.md` → 本索引；`retro-and-gaps.md` §6.0 是阶段总账，`stages/` 存任务唯一状态，`handoff.md` 仅存当前现场。 `implementation-plan.md` 是 v9.3 规划修订，不单独定义当前执行模式；允许动作以最新 `handoff.md` + 所属 stage 为准。分工与逐轮审核见 `collaboration-workflow.md`；平台迁移证据见 `platform-directory-migration.md`。
+> 当前入口（2026-09-19）：从最新 `master` 的 `AGENTS.md` → 本索引；`retro-and-gaps.md` §6.0 是阶段总账，`stages/` 存任务唯一状态，`handoff.md` 仅存当前现场。 `implementation-plan.md` 是 v9.4 规划修订，不单独定义当前执行模式；允许动作以最新 `handoff.md` + 所属 stage 为准。分工与逐轮审核见 `collaboration-workflow.md`；平台迁移证据见 `platform-directory-migration.md`。
 
 ## 0.0 书库编目（编号 / 层 / 领域 / 用途）
 
@@ -20,12 +20,12 @@
 | **KW-00** | `CONTEXT.md`（根） | L2 | 术语 | **领域词汇表（Ubiquitous Language）唯一权威**；只放术语、不放实现。维护：grilling 会话即时更新 |
 | **AG-03** | `INDEX.md` | L3 | 编目 | **文档总入口**（本表即编目）。维护：新增/删除文档时 |
 | **AG-04** | `retro-and-gaps.md` | L2 | 账本 | 阶段总账与任务管理规则，§6.0 索引 W00–W09；不复制任务状态 |
-| **AG-05** | `plan-registry.md` | L3 | 计划 | 历史计划去向，旧状态不作当前指令 |
+| **AG-05** | `plan-registry.md` | L3 | 计划 | 历史计划去向、文档权责与重大决策传播契约；旧状态不作当前指令 |
 | **AG-06** | `PROJECT-MASTER.md` | L2 | 总览 | 全项目技术总览（08-29 基线，细节以代码为准）。维护：结构变化 |
 | **AG-07** | `handoff.md` | L2 | 交接 | 当前工作区、实际运行版本、最近门禁与交付；不另建任务记录 |
 | **AG-08** | `platform-directory-migration.md` | L2 | 工程治理 | 目录迁移的恢复点、消费者与验收证据；任务状态归账本 §6.0 `GOV-018` |
 | **AG-09** | `stages/` | L2 | 阶段任务 | W00–W09，各 ID 仅一份状态/验收/证据；P/Q 校验 |
-| **AG-10** | `implementation-plan.md` | L2 | 当前实施修订 | v9.3：原方案取舍、前任成果、证据分级、依赖与 Codex 接续；状态仍归阶段 |
+| **AG-10** | `implementation-plan.md` | L2 | 当前实施修订 | v9.4：吸收 Jev 与重大决策传播治理；原方案取舍、证据分级和长期实施方向；状态仍归阶段 |
 | **AG-11** | `collaboration-workflow.md` | L2 | 协作审核 | 账本驱动；网页统筹审核、Codex执行，用户一句话触发，`master` 共享入口与原型退出 |
 | **AG-12** | `product-closure-design.md` | L2 | 产品闭环 | 全模块用途、前后台分工、业务/研究/工程链和确认流程图；非已上线报告 |
 | **AG-13** | `feature-closure-audit.md` | L2 | 细功能审计 | 大小动作/接口/后台任务的覆盖、源码发现与未验边界；任务状态仍归阶段 |

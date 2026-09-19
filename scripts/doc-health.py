@@ -43,6 +43,8 @@
                  **判定面 = git 跟踪清单**（= CI 检出内容），不是本地文件系统
                  ——否则回收站副本会把死引用持续"喂绿"（2026-09-12 修正，见 `_repo_basenames`、KB-ENG-70）
   K 表格分隔行   以 `|` 开头的**行块首行**，其下一行必须是 GFM 分隔行（`|---|---|`）。
+  R 重大决策传播  当前总方案版本、Jev 现役蓝图、INDEX/AGENTS/handoff/接手 Skill 等根入口必须一致；
+                 防止“专题已升级而总方案或接手入口仍停在旧版本”。
                  动机 = §6.14 的渲染器死循环事故：`docs/` 里曾用**空行给同一张表分组**，
                  在严格 GFM 下必然打碎。渲染器那半已有 `markdown-view.test.tsx` 守住，
                  **文档这半此前没有任何机制**（这类书写不会让任何既有检查变红）。
@@ -1510,6 +1512,83 @@ def check_catalog_closure() -> tuple[list[str], list[str]]:
     return unregistered, ghosts
 
 
+# R：重大决策传播根入口守卫。语义影响面仍由 plan-registry §1.1 + 网页审核判断；
+# 本项只钉可以机械判定的版本、现役专题和接手读取链，防止“专题已更新、入口没跟上”。
+def check_decision_propagation() -> list[str]:
+    errors: list[str] = []
+    plan = _read(DOCS / "implementation-plan.md")
+    match = re.search(r"^# .*?(v\d+\.\d+)\s*$", plan, re.M)
+    if not match:
+        return ["implementation-plan：无法解析当前方案版本"]
+    version = match.group(1)
+
+    # 根入口必须显式带当前版本；summary/专题不维护手工文件名单，避免扫描面再次腐化。
+    version_surfaces = (
+        ROOT / "AGENTS.md",
+        DOCS / "INDEX.md",
+        DOCS / "handoff.md",
+    )
+    for path in version_surfaces:
+        if version not in _read(path):
+            errors.append(f"{path.relative_to(ROOT)}：未同步当前方案版本 {version}")
+
+    # 自动发现“当前方案/当前治理/当前实施/目标链”版本指针。历史证据里单纯出现旧 v9.x 不判；
+    # 只有一行明确声称它是**当前**入口/目标链时才要求与 implementation-plan 同版。
+    current_pointer_re = re.compile(
+        r"(?:当前方案|当前治理|当前实施|当前.*修订|目标链).*?\b(v\d+\.\d+)\b"
+    )
+    seen_current_pointer_paths: set[Path] = set()
+    for path in active_md_targets():
+        if not path.exists() or path in seen_current_pointer_paths:
+            continue
+        seen_current_pointer_paths.add(path)
+        rel = path.relative_to(ROOT)
+        # implementation-plan 自己是版本定义，不拿定义行再对自己做传播检查。
+        if rel.as_posix() == "docs/implementation-plan.md":
+            continue
+        for lineno, line in enumerate(_read(path).splitlines(), 1):
+            match_pointer = current_pointer_re.search(line)
+            if match_pointer and match_pointer.group(1) != version:
+                errors.append(
+                    f"{rel}:{lineno}：当前方案指针仍为 {match_pointer.group(1)}，应为 {version}"
+                )
+
+    jev_surfaces = (
+        DOCS / "implementation-plan.md",
+        DOCS / "INDEX.md",
+        DOCS / "handoff.md",
+        ROOT / "AGENTS.md",
+        ROOT / "skills/ashare-ledger-continue/SKILL.md",
+    )
+    for path in jev_surfaces:
+        if "jev-integration.md" not in _read(path):
+            errors.append(f"{path.relative_to(ROOT)}：缺 Jev 现役蓝图入口")
+
+    registry = _read(DOCS / "plan-registry.md")
+    if "重大决策传播契约（防遗漏）" not in registry or "已更新" not in registry or "不适用" not in registry:
+        errors.append("docs/plan-registry.md：重大决策传播契约缺失/不完整")
+
+    takeover = _read(ROOT / "skills/ashare-ledger-continue/SKILL.md")
+    required_takeover = (
+        "docs/handoff.md",
+        "docs/INDEX.md",
+        "docs/plan-registry.md",
+        "docs/implementation-plan.md",
+        "docs/jev-integration.md",
+        "docs/retro-and-gaps.md",
+        "docs/stages/",
+    )
+    for token in required_takeover:
+        if token not in takeover:
+            errors.append(f"skills/ashare-ledger-continue/SKILL.md：接手读取链缺 {token}")
+
+    if "plan-registry.md" not in _read(ROOT / "skills/ashare-task-handoff/SKILL.md"):
+        errors.append("skills/ashare-task-handoff/SKILL.md：交接缺重大决策传播入口")
+    if "plan-registry.md" not in _read(DOCS / "collaboration-workflow.md"):
+        errors.append("docs/collaboration-workflow.md：协作规范缺重大决策传播入口")
+    return errors
+
+
 # P/Q：阶段索引与任务单点状态。替代旧 A–F/H 三处同步，保留闭包、
 # 缺判定面必红、闭环证据与部分完成边界，并增加重复 ID、依赖与旧号去向检查。
 PHASE_IDS = {f"W{i:02}" for i in range(10)}
@@ -1728,6 +1807,7 @@ def main() -> int:
     cat_unreg, cat_ghost = check_catalog_closure()
     phase_index_errors = check_phase_index()
     phase_task_errors = check_phase_tasks()
+    propagation_errors = check_decision_propagation()
 
     def line(label: str, ok: bool, detail: str = "") -> None:
         nonlocal problems
@@ -1874,8 +1954,9 @@ def main() -> int:
             print(f"       - {rel}（编目表登记但全仓不存在）")
     line("P 阶段索引", not phase_index_errors, f"{len(phase_index_errors)} 处错误（总账 ⇄ 十阶段）")
     line("Q 任务完整性", not phase_task_errors, f"{len(phase_task_errors)} 处错误（唯一状态、依赖、证据及旧号去向）")
+    line("R 重大决策传播", not propagation_errors, f"{len(propagation_errors)} 处错误（方案版本、Jev入口、Skill读取链）")
     if not quiet:
-        for message in phase_index_errors + phase_task_errors:
+        for message in phase_index_errors + phase_task_errors + propagation_errors:
             print(f"       {message}")
     # H 项**刻意走 WARN 而非 FAIL**：先补存量再上哨兵，且只作提示。
     # 若计 FAIL，未补完的条目会让整份体检长期挂红 ⇒ 被整体无视（KB-ENG-58）。

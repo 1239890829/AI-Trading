@@ -2,8 +2,9 @@
 
 > 产品展示修订：进化、参数、任务与运营告警控制退出普通交易前台，后台已有审计、权限、停止与恢复保留；真实风险/结果仍可见。网页统筹/审核与Codex实施依 ../collaboration-workflow.md，只靠账本短提示，不再建设模型互调工具链。
 
-> 当前实施与权限修订见 [实施校准 v9.3](../implementation-plan.md)，状态唯一归账本 §6.0；本页历史“自动转正/事后回滚”描述不构成新的线上参数授权，保留背景并由 IMP-052 核当前消费者。
+> 当前实施与权限修订见 [实施校准 v9.4](../implementation-plan.md)，状态唯一归账本 §6.0；本页历史“自动转正/事后回滚”描述不构成新的线上参数授权，保留背景并由 IMP-052 核当前消费者。
 > **定位**：AI 控制台 / 自主进化 / 策略进化 / 仓库整合 / LLM 微调 的**已落地结论与待办**汇总。
+> **Jev 当前边界不在本页维护**：TypeSafe/Jev 的 bounded semantic verify、条件 capability routing、human-gold/额度实证与回退统一见 [Jev 蓝图](../jev-integration.md)；本页历史 LLM/进化记录不能覆盖该现役规则。
 > **现役不在此**：`llm-gateway-probe.md`（网关探针）、`review-agent.md`（复盘模块说明）。
 > **整理**：2026-09-10。
 

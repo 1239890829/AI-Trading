@@ -8,7 +8,7 @@
 - 作业边界与发布流程：本文件 §0、§1、§6.5。
 - 固定分工：网页 ChatGPT 负责计划、阶段账本统筹和逐轮审核；Codex 只执行获准切片。协作协议与人工介入点见 `docs/collaboration-workflow.md`。
 - 唯一文档入口：`docs/INDEX.md`；阶段总账：`docs/retro-and-gaps.md` §6.0，任务在其索引的阶段页单点维护。
-- 施工取舍：最新用户要求与 docs/implementation-plan.md 的 v9.3 明确修订优先；原 v9 未修订部分保留，旧项按真实价值复核，登记不等于必须实施。
+- 施工取舍：最新用户要求与 docs/implementation-plan.md 的 v9.4 明确修订优先；原 v9 未修订部分保留，旧项按真实价值复核，登记不等于必须实施。
 - 当前现场与实测：`docs/handoff.md` §1；经验按 `docs/kb/00-INDEX.md` 定位。
 - 接续工作：`skills/ashare-ledger-continue/SKILL.md`；当轮交接：`skills/ashare-task-handoff/SKILL.md`。
 - 盘后复盘：`skills/ashare-daily-review/SKILL.md`，流程与逐项核验归既有 SOP / checklist。
@@ -77,7 +77,7 @@ python3 scripts/doc-health.py
 
 ## 2. 方案主导与评估纪律
 
-执行用户指定的最终融合方案 v9 及配套附件，并应用 docs/implementation-plan.md 的 v9.3 明确修订；最新用户指令优先。旧账本只提供问题证据，不自动产生施工义务；项目机制、流程、交接、设计及架构均可审视和调整。
+执行用户指定的最终融合方案 v9 及配套附件，并应用 docs/implementation-plan.md 的 v9.4 明确修订；最新用户指令优先。旧账本只提供问题证据，不自动产生施工义务；项目机制、流程、交接、设计及架构均可审视和调整。
 
 先核当前代码、已合并成果与真实消费者，再比较现状、最小修补和替代方案。只推进收益显著、可靠且风险可控的改动；清楚写用途、依据、影响面、成本、验收及恢复路径。允许有理据偏离方案，但性能不得劣化、关键机制不得削弱；优化用可比测量和行为证据证明，不宣称未证实的“全局最优”。无法证明的主张保留为待验证条件。
 
@@ -99,6 +99,7 @@ python3 scripts/doc-health.py
 - `docs/handoff.md` 只写当前现场和最近验收；已完成历史由 Git、阶段基线和 `docs/archive/ledger-transition-20260917.md` 追溯。退出任务不等于删除代码或业务资产。
 - 编号永不复用；新增先检索阶段页及旧号处置表。专题写知识与接口，不另排任务状态；长日志进忽略的 artifacts。完整规则见总账，P/Q 门禁验证阶段闭包与任务完整性。
 - 所有新文件进 `docs/INDEX.md` 编目；引用章节先查锚点，历史节号不能冒充现行入口。
+- 新模型、工具链、架构、产品语义、协作或治理规则一旦改变长期系统取舍，必须按 `docs/plan-registry.md` §1.1 做重大决策传播核对；总方案、专题蓝图、INDEX、stage 及受影响的 AGENTS/Skills/handoff 同步或明确“不适用+理由”。只改专题文档不算文档闭环。
 
 ## 4. 平台目录退出与恢复
 

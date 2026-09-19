@@ -1,6 +1,6 @@
 # 选股信号链路与提醒体系（定位 / 触发 / 流向 / 断点）
 
-> v9.3目标链见 ../product-closure-design.md 与 ../hunting-decision-design.md；盘前/盘中来源保留，页面/消息/模拟/复盘逐步共用机会及决定版本。原双家族断点继续作为事实证据，不因UI合并就假定已打通；控制台调试视图迁后台，用户风险结果保留。
+> v9.4目标链见 ../implementation-plan.md、../product-closure-design.md 与 ../hunting-decision-design.md；Jev 语义协处理边界见 ../jev-integration.md；盘前/盘中来源保留，页面/消息/模拟/复盘逐步共用机会及决定版本。原双家族断点继续作为事实证据，不因UI合并就假定已打通；控制台调试视图迁后台，用户风险结果保留。
 
 > **编号**：SM-08 ｜ **层**：L2 ｜ **领域**：链路汇总 ｜ **状态**：现役
 > **⚠️ 状态不在此（`GOV-002` 收敛）**：**任何「未做 / 待办 / 进度」断言一律去 `retro-and-gaps.md` §6.0**
