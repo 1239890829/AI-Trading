@@ -46,7 +46,7 @@
 - **方案依据**：原账本改造授权、主方案§11–§12及现行v9.3。
 - **范围**：复用十阶段/旧号去向/当前方案入口；需求、派工、执行事实、审查与恢复各归其位，不重新迁移已建主体。
 - **验收**：原123个ID有唯一可核去向；阶段全可达、任务状态/依赖合法、完成有证据、退出有理由，无平行账本。历史编号数量不等于当前任务完成率。
-- **证据**：原 Codex 建主体，ChatGPT 于 2026-09-18 补旧号、空交接和终态核查；PR #39 集成进一步修复 fork 后任务 ID 碰撞，冻结 123 个历史源 ID，JEV 治理改用 GOV-024，阶段 P/Q 双向守卫均为 0。集成 head 3e657c6 上 doc-health、public_repo_scan、git diff --check 全绿，PR #39 GitHub CI run #340 的 docs/backend/frontend 三项 required check 全绿。2026-09-19 合并后复核又发现 handoff/协作 Skill 仍把已删除累计功能分支写成“当前固定入口”、部分文档把 9/18 DESIGN_ONLY 写成当前模式；post-merge reconciliation 改为 `master` 共享入口并新增回归守卫，作为本项单点维护的后续纠偏。
+- **证据**：原 Codex 建主体，ChatGPT 于 2026-09-18 补旧号、空交接和终态核查；PR #39 集成进一步修复 fork 后任务 ID 碰撞，冻结 123 个历史源 ID，JEV 治理改用 GOV-024，阶段 P/Q 双向守卫均为 0。集成 head 3e657c6 上 doc-health、public_repo_scan、git diff --check 全绿，PR #39 GitHub CI run #340 的 docs/backend/frontend 三项 required check 全绿。2026-09-19 合并后复核又发现 handoff/协作 Skill 仍把已删除累计功能分支写成“当前固定入口”、部分文档把 9/18 DESIGN_ONLY 写成当前模式；post-merge reconciliation（PR #40）改为 `master` 共享入口并新增回归守卫，作为本项单点维护的后续纠偏。
 - **下一步**：本项闭环；今后新增任务只在所属阶段页单点登记，handoff 仅记录当前现场。若再出现编号碰撞、幽灵依赖、并行状态表或退役功能分支重新成为“当前入口”，由现有 P/Q 与协作入口回归守卫阻断并当轮修复。
 - **恢复**：固定版本和原文恢复，运行数据与未知平台资产不受本次文案影响。
 - **实施步骤**：原号集合不变；当前入口只指方案/阶段；过时勿重开规则按证据复核，安全限制独立；长日志留原持久证据目录，handoff只定位当前模式/工作区/任务。
