@@ -1522,19 +1522,34 @@ def check_decision_propagation() -> list[str]:
         return ["implementation-plan：无法解析当前方案版本"]
     version = match.group(1)
 
+    # 根入口必须显式带当前版本；summary/专题不维护手工文件名单，避免扫描面再次腐化。
     version_surfaces = (
         ROOT / "AGENTS.md",
         DOCS / "INDEX.md",
         DOCS / "handoff.md",
-        DOCS / "summary/system-final-blueprint.md",
-        DOCS / "summary/ai-evolution.md",
-        DOCS / "summary/architecture-design.md",
-        DOCS / "summary/pick-signal-chain.md",
-        DOCS / "summary/review-governance.md",
     )
     for path in version_surfaces:
         if version not in _read(path):
             errors.append(f"{path.relative_to(ROOT)}：未同步当前方案版本 {version}")
+
+    # 自动发现“当前方案/当前治理/当前实施/目标链”版本指针。历史证据里单纯出现旧 v9.x 不判；
+    # 只有一行明确声称它是**当前**入口/目标链时才要求与 implementation-plan 同版。
+    current_pointer_re = re.compile(
+        r"(?:当前方案|当前治理|当前实施|当前.*修订|目标链).*?\b(v\d+\.\d+)\b"
+    )
+    for path in active_md_targets():
+        if not path.exists():
+            continue
+        rel = path.relative_to(ROOT)
+        # implementation-plan 自己是版本定义，不拿定义行再对自己做传播检查。
+        if rel.as_posix() == "docs/implementation-plan.md":
+            continue
+        for lineno, line in enumerate(_read(path).splitlines(), 1):
+            match_pointer = current_pointer_re.search(line)
+            if match_pointer and match_pointer.group(1) != version:
+                errors.append(
+                    f"{rel}:{lineno}：当前方案指针仍为 {match_pointer.group(1)}，应为 {version}"
+                )
 
     jev_surfaces = (
         DOCS / "implementation-plan.md",
