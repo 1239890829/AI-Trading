@@ -77,7 +77,7 @@
 | **KW-02** | `02-trading-lessons.md` | 交易教训 KB-TRADE | 13 | — |
 | **KW-03** | `03-engineering.md` | KB-ENG **应用与设计层** | 24 | — |
 | **KW-04** | `04-decisions.md` | 决策 KB-DEC | 23 | — |
-| **KW-05** | `05-repo-tracker.md` | 仓库追踪台账 | 表驱动 | A/B 证据分级 |
+| **KW-05** | `05-repo-tracker.md` | repo 候选追踪台账 | 表驱动 | `continuous-evolution` 的 repo 子集；Watch/Scout 分离，Stars 非硬门 |
 | **KW-06** | `06-review-framework.md` | 复盘框架 v1.0 | 框架 | **复盘任务先读它** |
 | **KW-07** | `07-doc-curation.md` | 文档治理**流程** | 规范 | 分类/归属/配额/淘汰的操作流程 |
 | **KW-08** | `08-tooling-pitfalls.md` | KB-ENG **工具操作**速查 | 15 | 每条 3~5 行 |
