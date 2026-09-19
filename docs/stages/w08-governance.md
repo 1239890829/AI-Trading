@@ -32,7 +32,7 @@
 - **方案依据**：docs/jev-integration.md；2026-09-19 官方 Use Case Map 与本仓真实 smoke。
 - **范围**：Jev 只做 bounded 语义判断、验证与条件能力路由；确定性金融规则、权限、撮合、风控与真实执行仍由代码负责。统一 HTTP/key 入口为 backend/app/core/jev_client.py，测试默认禁真实触网。
 - **验收**：不新增第二套凭据/endpoint；隐私输入失败关闭；真实调用只在能改变下一步或减少更贵模型成本时保留；全局 model/effort 自动切换未证明价值前保持停用。
-- **证据**：jev-1.13.0 smoke、JevRouter 权限过滤、metadata-only usage、Universal Verification 与 gold-set 工具已落地；旧 jev-route 因不能真正切宿主模型且固定增加一轮调用已退出。
+- **证据**：PR #31–#34 已依次合入 Jev adapter/影子路由、价值审计与 capability routing 收敛、Universal Verification/gold-set、预标注与审核优先级；jev-1.13.0 smoke、JevRouter 权限过滤、metadata-only usage 均已有证据。旧 jev-route 因不能真正切宿主模型且固定增加一轮调用已退出。
 - **下一步**：以 RSH-030 人工金标准和长期 token A/B 决定 shadow/cascade 与组件去留，不以 demo 或单次 confidence 调生产阈值。
 - **恢复**：任一 Jev 组件失效时回退确定性规则/现有 LLM 路径；不扩大权限、不修改真实交易硬门。
 
