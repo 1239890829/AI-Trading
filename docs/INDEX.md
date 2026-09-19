@@ -30,7 +30,8 @@
 | **AG-12** | `product-closure-design.md` | L2 | 产品闭环 | 全模块用途、前后台分工、业务/研究/工程链和确认流程图；非已上线报告 |
 | **AG-13** | `feature-closure-audit.md` | L2 | 细功能审计 | 大小动作/接口/后台任务的覆盖、源码发现与未验边界；任务状态仍归阶段 |
 | **AG-14** | `continuous-evolution.md` | L2 | 持续演进 | 外部模型/工具/量化方法/数据/工程创新的发现、证据梯度、筛选、重开与准入前治理；状态归 GOV-025/真实 owner stage |
-| **MD-08** | `hunting-decision-design.md` | L2 | 选股与呈现 | 开放情境、KB37项映射、候选/时机/反证、猎场UI及分层验收 |\n| **MD-09** | `limit-up-dragon-research.md` | L2 | 选股研究 | 历史涨停/强连板/龙头形成：全样本+失败对照、点时证据、Jev语义MapReduce、旧→新盲测及向猎场回流 |
+| **MD-08** | `hunting-decision-design.md` | L2 | 选股与呈现 | 开放情境、KB37项映射、候选/时机/反证、猎场UI及分层验收 |
+| **MD-09** | `limit-up-dragon-research.md` | L2 | 选股研究 | 历史涨停/强连板/龙头形成：全样本+失败对照、点时证据、Jev语义MapReduce、旧→新盲测及向猎场回流 |
 | **KW-00..11** | `kb/00-INDEX.md` … `kb/11-doc-catalog.md` | L2/L3 | 知识 | 见下方「KB 知识库」分表 |
 | **SM-01..08** | `summary/stock-strategy` · `factor-system` · `data-market` · `architecture-design` · `ai-evolution` · `review-governance` · `system-final-blueprint` · `pick-signal-chain` | L2 | 主题汇总 | **查主题先看这里**；`system-final-blueprint` 是任务四后目标架构与验收总纲；**`pick-signal-chain` = 选股提醒链路（`dispatch_alert` 扇出 / 双家族分裂 / 断点清单 G1–G5）**。维护：主题结论更新 |
 | **DT-01** | `data-source-comparison.md` | L2 | 数据源 | 四源实测对比与选型。**改数据源前必读，改完回填** |
@@ -240,7 +241,8 @@
 |---|---|
 | theme-sentiment-methodology.md | A 股热点题材与情绪分析方法论 v1 |
 | sentiment.md | 情绪指标清单与阶段判定（§5.5）+ **历史误判案例库**（非交易日回退自指 bug 全链条 + 九条误判链 + 17 项优化清单状态） |
-| theme-prediction.md | 新题材预判方法论 |\n| limit-up-dragon-research.md | 历史涨停/强连板/龙头全样本研究蓝图：点时样本、失败对照、Jev语义特征、walk-forward/盲测与猎场回流 |
+| theme-prediction.md | 新题材预判方法论 |
+| limit-up-dragon-research.md | 历史涨停/强连板/龙头全样本研究蓝图：点时样本、失败对照、Jev语义特征、walk-forward/盲测与猎场回流 |
 | review-methodology-20260910.md | 外部复盘视角「五层提问框架」 · **已删除**（净化并入 `kb/06-review-framework.md` **附录 A**，仍标非权威、不替代 KB） |
 | kb/07-doc-curation.md | **文档整理方法论**（09-10）：分层模型/归属三问/精华五要素/计划压缩归档/双索引串联/合并拆分/三级淘汰/试运行条款 + 本仓库现状体检与首批整理候选。整理文档类任务先读。 |
 | longhu.md | 龙虎榜模块设计（口径与席位） · **已删除**（精华见 `summary/data-market.md`） |
