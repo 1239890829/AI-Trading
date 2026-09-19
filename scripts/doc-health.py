@@ -1673,7 +1673,10 @@ PHASE_IDS = {f"W{i:02}" for i in range(10)}
 PHASE_PATH_RE = re.compile(r"stages/(w\d{2})-[a-z-]+\.md")
 TASK_HEAD_RE = re.compile(r"^## ((?:BUG|IMP|RSH|GOV|OPS)-\d{3})$")
 TASK_FIELD_RE = re.compile(r"^- \*\*([^*]+)\*\*：(.*)$")
-TASK_FIELDS = {"状态", "优先级", "依赖", "方案依据", "范围", "验收", "证据", "下一步", "恢复"}
+TASK_FIELDS = {"状态", "优先级", "阶段门", "门内序", "门禁角色", "依赖", "效果前置", "方案依据", "范围", "验收", "证据", "下一步", "恢复"}
+GATE_ORDER = {f"G{i}": i for i in range(6)}
+GATE_IDS = set(GATE_ORDER) | {"GX"}
+GATE_ROLES = {"阻断", "非阻断", "持续治理", "验收"}
 TASK_STATES = {"待执行", "进行中", "部分完成", "待条件", "待交付", "已完成", "已退出", "已合并"}
 LEGACY_LEDGER = "archive/ledger-transition-20260917.md"
 # 固定迁移来源 84434a4 的旧 A–F 首列 ID；浅检出也可验，不从目标表反推分母。
@@ -1856,6 +1859,110 @@ def check_phase_tasks() -> list[str]:
 
 
 
+def _task_ref_list(raw: str) -> list[str]:
+    if not raw or raw == "无":
+        return []
+    return [part for part in re.split(r"[、，,；;]\s*", raw) if part]
+
+
+def check_stage_gates() -> list[str]:
+    """S：有序阶段门。W 是归属，G 是执行门，P 是门内优先级。"""
+    entries, parse_errors = phase_tasks()
+    errors = list(parse_errors)
+    tasks = {tid: (rel, fields) for tid, rel, fields in entries}
+    if not tasks:
+        return errors + ["阶段门任务为空，守卫无判定面"]
+
+    seen_order: dict[tuple[str, int], str] = {}
+    retired = {"已退出", "已合并"}
+
+    for tid, (_, fields) in tasks.items():
+        gate = fields.get("阶段门", "")
+        role = fields.get("门禁角色", "")
+        order_raw = fields.get("门内序", "")
+
+        if gate not in GATE_IDS:
+            errors.append(f"{tid}：非法阶段门 {gate or '<空>'}")
+        if role not in GATE_ROLES:
+            errors.append(f"{tid}：非法门禁角色 {role or '<空>'}")
+        try:
+            order = int(order_raw)
+            if order <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            errors.append(f"{tid}：门内序必须为正整数")
+            order = -1
+
+        if gate == "GX" and role != "持续治理":
+            errors.append(f"{tid}：GX 只能使用持续治理角色")
+        if role == "持续治理" and gate != "GX":
+            errors.append(f"{tid}：持续治理只能归 GX")
+        if gate == "G5" and role != "验收":
+            errors.append(f"{tid}：G5 只能使用验收角色")
+        if role == "验收" and gate != "G5":
+            errors.append(f"{tid}：验收角色只能归 G5")
+
+        if gate in GATE_IDS and order > 0:
+            key = (gate, order)
+            other = seen_order.get(key)
+            if other and other != tid:
+                errors.append(f"{tid}：{gate} 门内序 {order} 与 {other} 重复")
+            else:
+                seen_order[key] = tid
+
+    effect_graph: dict[str, set[str]] = {}
+    for tid, (_, fields) in tasks.items():
+        gate = fields.get("阶段门", "")
+        for dep in _task_ref_list(fields.get("依赖", "")):
+            if dep not in tasks:
+                continue
+            dep_fields = tasks[dep][1]
+            dep_gate = dep_fields.get("阶段门", "")
+            if dep_fields.get("门禁角色") == "持续治理":
+                errors.append(f"{tid}：硬依赖不得指向持续治理任务 {dep}")
+            if gate in GATE_ORDER and dep_gate in GATE_ORDER and GATE_ORDER[dep_gate] > GATE_ORDER[gate]:
+                errors.append(f"{tid}：硬依赖 {dep} 位于更高阶段门 {dep_gate}>{gate}")
+        effect_deps = set(_task_ref_list(fields.get("效果前置", "")))
+        effect_graph[tid] = effect_deps
+        for dep in effect_deps:
+            if dep not in tasks:
+                errors.append(f"{tid}：效果前置不存在或不是当前任务 {dep}")
+            elif tasks[dep][1].get("状态") in retired and fields.get("状态") not in {"已完成", *retired}:
+                errors.append(f"{tid}：效果前置指向已退出/合并任务 {dep}")
+
+    visiting: set[str] = set()
+    done: set[str] = set()
+
+    def visit_effect(tid: str) -> None:
+        if tid in visiting:
+            errors.append(f"{tid}：效果前置成环")
+            return
+        if tid in done:
+            return
+        visiting.add(tid)
+        for dep in sorted(effect_graph.get(tid, set()) & tasks.keys()):
+            visit_effect(dep)
+        visiting.remove(tid)
+        done.add(tid)
+
+    for tid in tasks:
+        visit_effect(tid)
+
+    ledger = _read(DOCS / "retro-and-gaps.md")
+    required_tokens = (
+        "### 5.9 阶段门、优先级与跨阶段治理",
+        "G0 事实与安全底座",
+        "G5 验收与发布",
+        "GX 持续治理",
+        "CROSS_GATE_EXCEPTION",
+        "效果前置",
+    )
+    for token in required_tokens:
+        if token not in ledger:
+            errors.append(f"docs/retro-and-gaps.md：阶段门治理缺 {token}")
+    return errors
+
+
 def main() -> int:
     quiet = "--quiet" in sys.argv
     scan_all = "--all" in sys.argv
@@ -1885,6 +1992,7 @@ def main() -> int:
     cat_unreg, cat_ghost = check_catalog_closure()
     phase_index_errors = check_phase_index()
     phase_task_errors = check_phase_tasks()
+    stage_gate_errors = check_stage_gates()
     propagation_errors = check_decision_propagation()
 
     def line(label: str, ok: bool, detail: str = "") -> None:
@@ -2033,8 +2141,9 @@ def main() -> int:
     line("P 阶段索引", not phase_index_errors, f"{len(phase_index_errors)} 处错误（总账 ⇄ 十阶段）")
     line("Q 任务完整性", not phase_task_errors, f"{len(phase_task_errors)} 处错误（唯一状态、依赖、证据及旧号去向）")
     line("R 重大决策传播", not propagation_errors, f"{len(propagation_errors)} 处错误（方案版本、Jev入口、Skill读取链）")
+    line("S 阶段门治理", not stage_gate_errors, f"{len(stage_gate_errors)} 处错误（G门/顺位/角色/硬依赖/效果前置）")
     if not quiet:
-        for message in phase_index_errors + phase_task_errors + propagation_errors:
+        for message in phase_index_errors + phase_task_errors + propagation_errors + stage_gate_errors:
             print(f"       {message}")
     # H 项**刻意走 WARN 而非 FAIL**：先补存量再上哨兵，且只作提示。
     # 若计 FAIL，未补完的条目会让整份体检长期挂红 ⇒ 被整体无视（KB-ENG-58）。
