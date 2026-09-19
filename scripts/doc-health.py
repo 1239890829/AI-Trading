@@ -1568,6 +1568,19 @@ def check_decision_propagation() -> list[str]:
     if "重大决策传播契约（防遗漏）" not in registry or "已更新" not in registry or "不适用" not in registry:
         errors.append("docs/plan-registry.md：重大决策传播契约缺失/不完整")
 
+    # handoff 的“累计用户要求范围”必须追上 implementation-plan 的最大 U 编号。
+    # 历史“原40条需求”等事实不参与；这里只钉显式的 U01–Uxx 当前汇总，避免新增 U43 后入口静默落后一轮。
+    plan_u_ids = [int(n) for n in re.findall(r"\bU(\d{2})\b", plan)]
+    if plan_u_ids:
+        max_u = max(plan_u_ids)
+        handoff_text = _read(DOCS / "handoff.md")
+        handoff_range = re.search(r"U01[–-]U(\d{2})", handoff_text)
+        if handoff_range and int(handoff_range.group(1)) != max_u:
+            errors.append(
+                f"docs/handoff.md：累计要求范围 U01–U{int(handoff_range.group(1)):02d} "
+                f"落后于 implementation-plan 的 U{max_u:02d}"
+            )
+
     takeover = _read(ROOT / "skills/ashare-ledger-continue/SKILL.md")
     required_takeover = (
         "docs/handoff.md",
