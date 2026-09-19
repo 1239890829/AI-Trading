@@ -16,7 +16,7 @@ description: AI-Trading 的外部创新发现与准入前筛选 Skill；从最�
 3. `docs/continuous-evolution.md`
 4. `docs/plan-registry.md`
 5. `docs/INDEX.md`
-6. `docs/retro-and-gaps.md` 与真正相关的 stage
+6. `docs/retro-and-gaps.md` 与真正相关的 `docs/stages/*`
 7. 与候选相关的专题蓝图、KB、策略/因子/数据登记；AI候选同时读 `docs/jev-integration.md`
 
 先知道现有能力和已否证方案，再去外部找，避免重复研究和“换名字重做”。
