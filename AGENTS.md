@@ -8,10 +8,11 @@
 - 作业边界与发布流程：本文件 §0、§1、§6.5。
 - 固定分工：网页 ChatGPT 负责计划、阶段账本统筹和逐轮审核；Codex 只执行获准切片。协作协议与人工介入点见 `docs/collaboration-workflow.md`。
 - 唯一文档入口：`docs/INDEX.md`；阶段总账：`docs/retro-and-gaps.md` §6.0，任务在其索引的阶段页单点维护。
-- 施工取舍：最新用户要求与 docs/implementation-plan.md 的 v9.4 明确修订优先；原 v9 未修订部分保留，旧项按真实价值复核，登记不等于必须实施。
+- 施工取舍：最新用户要求与 docs/implementation-plan.md 的 v9.5 明确修订优先；原 v9 未修订部分保留，旧项按真实价值复核，登记不等于必须实施。
 - 当前现场与实测：`docs/handoff.md` §1；经验按 `docs/kb/00-INDEX.md` 定位。
 - 接续工作：`skills/ashare-ledger-continue/SKILL.md`；当轮交接：`skills/ashare-task-handoff/SKILL.md`。
 - 盘后复盘：`skills/ashare-daily-review/SKILL.md`，流程与逐项核验归既有 SOP / checklist。
+- 外部创新雷达：`skills/ashare-innovation-radar/SKILL.md`；长期发现/筛选规则见 `docs/continuous-evolution.md`。雷达只提出候选/验证，不自动安装或准入。
 - 发布核验：`scripts/audit/release_check.py`；恢复清单：`scripts/audit/platform_assets.py`。
 - 报告渲染与校验：`scripts/reports/md-report-html.py`、`scripts/reports/md-html-parity.py`。
 - 本地产物与恢复副本：忽略的 `artifacts/`；迁移状态归账本 `GOV-018`，不建立新的 MEMORY 权威入口。
@@ -77,13 +78,15 @@ python3 scripts/doc-health.py
 
 ## 2. 方案主导与评估纪律
 
-执行用户指定的最终融合方案 v9 及配套附件，并应用 docs/implementation-plan.md 的 v9.4 明确修订；最新用户指令优先。旧账本只提供问题证据，不自动产生施工义务；项目机制、流程、交接、设计及架构均可审视和调整。
+执行用户指定的最终融合方案 v9 及配套附件，并应用 docs/implementation-plan.md 的 v9.5 明确修订；最新用户指令优先。旧账本只提供问题证据，不自动产生施工义务；项目机制、流程、交接、设计及架构均可审视和调整。
 
 先核当前代码、已合并成果与真实消费者，再比较现状、最小修补和替代方案。只推进收益显著、可靠且风险可控的改动；清楚写用途、依据、影响面、成本、验收及恢复路径。允许有理据偏离方案，但性能不得劣化、关键机制不得削弱；优化用可比测量和行为证据证明，不宣称未证实的“全局最优”。无法证明的主张保留为待验证条件。
 
 完整任务范围包含所有模块及小功能。按 docs/product-closure-design.md、docs/hunting-decision-design.md 和 docs/feature-closure-audit.md 明确用途、输入、消费者、失败反馈和证据；不得用模块级完成替代子功能检查。用户中途增加要求是叠加，除非明确取代，不能视为主任务终止。后台情境不以示例或固定四类封版；前台简洁不削弱后台识别。
 
 优先正确性、可靠通知、追溯闭环和真实用户价值，再研究、智能体、性能与精简。安全止险可前移；不为研究样本不足阻塞独立正确性切片。持续寻找不合理设计和新风险，经论证可合并、调整或退出任务，不追求任务数量或文档数量。
+
+长期规划不得只从仓内问题循环推导。对有战略影响的模型/工具/量化方法/数据/工程方案，按 `docs/continuous-evolution.md` 主动核外部原始来源、反证和替代；Stars、营销、论文/项目自报收益只产生候选。未经许可/隐私/费用/权限硬门和同基线 E2–E5 验证，不安装、不改生产、不因“更先进”重构现有系统。
 
 ## 3. 状态与文档分工
 
