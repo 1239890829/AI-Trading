@@ -302,6 +302,25 @@ def test_decision_propagation_detects_stale_handoff_requirement_range(monkeypatc
     assert any("累计要求范围" in error and "U45" in error for error in errors)
 
 
+def test_decision_propagation_rejects_ready_handoff_with_pending_merge_text(monkeypatch):
+    mod = load()
+    target = mod.DOCS / "handoff.md"
+    original_read = mod._read
+
+    def patched_read(path):
+        text = original_read(path)
+        if path == target:
+            head, sep, tail = text.partition("\n## 1.")
+            assert "READY_FOR_NEXT_PLANNED_SLICE" in head
+            head += "\n仅在 PR #999 通过后生效；未合并前不得执行。"
+            return head + sep + tail
+        return text
+
+    monkeypatch.setattr(mod, "_read", patched_read)
+    errors = mod.check_decision_propagation()
+    assert any("READY 头部仍含候选态文字" in error for error in errors)
+
+
 def test_active_collaboration_entry_does_not_pin_retired_feature_branch():
     root = Path(__file__).resolve().parents[2]
     active_surfaces = [

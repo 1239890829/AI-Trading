@@ -1,6 +1,6 @@
 # 当前交接：v9.7 阶段门治理基线，G0 首选 BUG-028
 
-**当前模式：READY_FOR_NEXT_PLANNED_SLICE（仅在 PR #45 的准确候选通过完整 CI 并合入 `master` 后生效）。** PR #45 未合并前，共享事实仍是 `master@8ebd710e` 的 v9.6，不得抢先按本分支施工；PR #45 合并后，本文件随 `master` 生效为 v9.7/U45 阶段门治理基线。该候选只改计划/账本/Skills/治理守卫与任务调度元数据，不执行 BUG-028 等业务切片。下一轮从 G0 账本门重新计算。
+**当前模式：READY_FOR_NEXT_PLANNED_SLICE。** v9.7/U45 阶段门治理已由 PR #45 合入 `master`；当前施工必须从最新 `master` 读取总账 §5.9、所属 stage 与本 handoff。当前主门为 G0，下一主切片由账本实时推导；本次治理合并本身没有执行 BUG-028 等业务任务。
 
 ## 1. 固定入口与范围
 
@@ -38,7 +38,7 @@
 ## 5. 当前接续规则
 
 2026-09-18 规划批已完成理论/产品/大小功能/知识使用/文档治理层面的逐项去向；其 DESIGN_ONLY 边界只描述该历史规划批，不再作为全项目“当前模式”。计划中的实际开发、原始数据/候选实证和运行验收仍按各 stage 的真实状态继续。
-Codex收到短提示后先从最新 `master` 重读 AGENTS、handoff、协作规范和对应 stage。默认由网页按风险/收益/输入选择有限切片；handoff 处于可执行模式时，用户也可明确调用 `ashare-ledger-continue` 说“继续任务/继续”，由 Skill 按 P0/P1/P2、依赖、解锁价值和证据成熟度自动领取一个唯一可开工切片。Codex实现回填，网页审核并重新规划；不得借一次“继续”连续扫描执行整个账本。所有大小消费者持续纳入，原金融/权限/发布保护保留。
+Codex收到短提示后先从最新 `master` 重读 AGENTS、handoff、协作规范、总账 §5.9 和对应 stage。网页派工与用户调用 `ashare-ledger-continue` 的“继续任务/继续”使用同一算法：**最低可行动阻断 G 门 → 门禁角色 → P0/P1/P2 → 门内序 → 硬依赖**；`效果前置` 只限制效果主张/晋级，不得被忽略。一次“继续”只授权一个主切片，Codex不得连续扫账本或自行跨门。
 文字版完整图以product-closure-design §8为准；展示图片只是解释副本，不是状态源。图必须包含后续获准实施的方向，不得宣称已经自动执行或真实券商下单，不出现普通前台配置/调试中心或后台固定分类上限。
 
 ## 6. 2026-09-19 分支收敛结果
@@ -60,9 +60,9 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - 上述候选均为 G0 可行动阻断项；同门按门禁角色 → P0/P1/P2 → 门内序选择，已完成/退出/合并项不参与。
 - 只有 G0 可行动阻断项闭环/转为真实不可行动条件后，才计算 G1；不得因 RSH-031、新 UI、Agent 或性能任务“更有价值”直接跳门。
 - RSH-031 定位为 `G1/P1/非阻断/门内序70`：允许后续在 G0 闭环后进入历史研究资产建设；`效果前置=RSH-026, IMP-020, RSH-030` 未满足前不得宣称龙头战法有效或接生产权重。
-- GX 治理可作为伴随切片，但本 v9.7 规划 PR 本身尚未合并，因此当前只收口治理候选，不启动 BUG-028。
+- GX 治理只可作为不冲突的伴随切片；当前没有未收口的阶段门治理候选，下一主切片按 G0 账本执行。
 
-v9.7 合并并恢复 `READY_FOR_NEXT_PLANNED_SLICE` 后，用户对 Codex 说“使用 ashare-ledger-continue，继续任务”即可按上述门序领取一个切片；没有网页登记的 `CROSS_GATE_EXCEPTION` 就不能跨门。
+当前已处于 `READY_FOR_NEXT_PLANNED_SLICE`：用户对 Codex 说“使用 ashare-ledger-continue，继续任务”即可按上述门序领取一个切片；没有网页登记的 `CROSS_GATE_EXCEPTION` 就不能跨门。
 
 ## 8. Jev、工具链与协作流当前基线
 
@@ -70,6 +70,6 @@ v9.7 合并并恢复 `READY_FOR_NEXT_PLANNED_SLICE` 后，用户对 Codex 说“
 - BillionsBobby/JevRouter 只采用经过固定版本校验的内核与 privacy-safe wrapper；旧 `jev-route` 已退出活动链。OpenRouter 当前明确不接入，也不使用聊天中出现过的旧 Key。
 - Universal Verification 仍为 off/shadow；RSH-030 的 240 条固定队列已经 Jev 预标注，但 human gold 仍为 0/240。未完成人工独立标注前，不启用 cascade、不调生产阈值、不宣称准确率或额度节省。
 - 网页 ChatGPT / Codex 协作固定为“`master` 账本事实源 + 用户短提示”：网页负责规划/审核，Codex负责明确切片执行；Bridge、自动互调、自动审核回执均不是必需依赖。功能分支可以短暂存在，但不能成为长期固定入口。
-- 当前总方案升级为 v9.4：Jev 进入长期系统分层，同时新增 `plan-registry.md` §1.1 重大决策传播契约。今后新模型/工具链/架构/协作决定若只更新专题蓝图而漏总方案、INDEX、stage 或接手入口，视为治理缺陷并由 doc-health/Skill 双重守卫阻断明显漂移。
+- v9.4 引入 Jev 长期系统分层与 `plan-registry.md` §1.1 重大决策传播契约；后续版本继续继承该规则。新模型/工具链/架构/协作决定若只更新专题蓝图而漏总方案、INDEX、stage 或接手入口，视为治理缺陷。
 - v9.5 把“当前方案不是永久终局”制度化：`continuous-evolution.md` + `ashare-innovation-radar` 主动发现外部新模型/工具/量化方法/数据与反证；只产生 WATCH/SHORTLISTED/LAB 建议，任何真实采用仍回原 stage、证据门、PR/审核/CI。
-- v9.6 候选新增 RSH-031：历史涨停/强连板/空间板/弱市穿越/题材梯队与异常板块拉升采用全量事件+失败对照+point-in-time+旧→新盲测；Jev 只做 bounded MapReduce/rerank/verification，效果准入继续由 RSH-026/IMP-020，猎场接线只走 IMP-049 challenger/shadow。
+- v9.6 已新增 RSH-031：历史涨停/强连板/空间板/弱市穿越/题材梯队与异常板块拉升采用全量事件+失败对照+point-in-time+旧→新盲测；Jev 只做 bounded MapReduce/rerank/verification，效果准入继续由 RSH-026/IMP-020，猎场接线只走 IMP-049 challenger/shadow。
