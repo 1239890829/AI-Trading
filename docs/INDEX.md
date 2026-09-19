@@ -48,7 +48,7 @@
 | **FN-07** | `data-dictionary.md` | L2 | 数据 | 数据对象审计字段约定（source/quality） |
 | **FN-08** | `picks-replay-baseline.md` | L1 | 快照 | 精选 60 日回放基线（08-31 评审指名保留）。**时点快照，只读** |
 | **FN-09** | `llm-gateway-probe.md` | L2 | 运维 | LLM 网关健康探针（`claude_cli` 别名监控） |
-| **FN-10** | `jev-integration.md` | L2 | AI/Agent 架构 | **Jev 全局与项目唯一现役蓝图**：Codex 路由/Guard/Review/Context/Browser + 事件/助手/选股/战法/情绪/因子/做T/复盘/额度治理。维护：Jev 能力、阈值、shadow/cascade 或 cc-switch 路由变化时 |
+| **FN-10** | `jev-integration.md` | L2 | AI/Agent 架构 | **Jev 全局与项目唯一现役蓝图**：官方 Use Case Map 对照、社区组件价值审计、JevRouter capability routing、Guard/Review/Context/Browser、事件/助手/选股/战法/情绪/因子/做T/复盘、调用预算与额度治理。维护：Jev 能力/版本、组件去留、阈值、shadow/cascade、cc-switch 或 provider 路由变化时 |
 | **EX-01** | `live-trading-guosen-plan.md` | L2 | 搁置 | 国信 miniQMT 实盘蓝图。**用户已搁置**（不接受 Windows 依赖），恢复条件见文档头 |
 | **RV-01** | `review-agent.md` | L2 | 复盘 | 盘后复盘 Agent 架构 |
 | **RV-02** | `daily-review-sop.md` | L2 | 复盘 | 每日复盘 SOP（怎么判） |
