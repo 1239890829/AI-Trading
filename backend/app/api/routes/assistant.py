@@ -39,6 +39,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import threading
 import time
 from pathlib import Path
@@ -46,6 +47,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
+from starlette.background import BackgroundTask
 
 from app.api.deps import require_write_token
 from app.assistant.cognition import describe_gap, looks_like_false_denial
@@ -73,6 +75,51 @@ router = APIRouter(tags=["assistant"])
 
 MAX_MESSAGES = 40
 MAX_CONTENT_CHARS = 8000
+
+_PUBLIC_VERIFY_TOOLS = {
+    "quotes", "orderbook", "trades", "auction", "kline", "minute",
+    "market_overview", "boards", "board_flow", "capital_flow",
+    "commodity", "climate", "limit_up", "limit_down", "limit_break",
+    "longhu", "hot", "anomaly", "sentiment", "themes", "theme_members",
+    "events", "news", "chain", "basics",
+}
+# Conservative privacy gate: if the user's request itself suggests personal portfolio/
+# account context, do not export the generated claim text even when public market
+# evidence is also present. False positives only cost a skipped shadow check.
+_PRIVATE_VERIFY_REQUEST_RE = re.compile(
+    r"(我的?(?:持仓|仓位|账户|自选|资产|盈亏)|"
+    r"(?:持仓|成本价|可用资金|账户余额|总资产|浮盈|浮亏|我持有|我买了|我卖了))"
+)
+
+
+def _run_assistant_semantic_verify(payload: dict) -> None:
+    """Background-only semantic verification; never changes the streamed answer."""
+    if not payload:
+        return
+    try:
+        from app.core.semantic_verify import verify_claims
+
+        result = verify_claims(
+            payload.get("claims") or [],
+            payload.get("evidence") or [],
+            purpose="assistant_evidence_verify",
+            max_evidence_chars=int(payload.get("max_evidence_chars") or 12_000),
+        )
+        if result.get("ok"):
+            log.info(
+                "assistant semantic verify shadow claims=%s counts=%s model=%s latency_ms=%s",
+                len(result.get("items") or []),
+                result.get("counts"),
+                result.get("model"),
+                result.get("latency_ms"),
+            )
+        else:
+            log.info(
+                "assistant semantic verify skipped reason=%s",
+                result.get("reason"),
+            )
+    except Exception as exc:  # noqa: BLE001 - shadow verifier must never affect chat
+        log.info("assistant semantic verify unavailable: %s", type(exc).__name__)
 
 
 class ChatMessageIn(BaseModel):
@@ -224,6 +271,7 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
     except Exception as exc:  # noqa: BLE001
         log.warning("assistant extra context skipped: %s", exc)
     combined_block = market_block + (("\n" + extra_block) if extra_block else "")
+    semantic_verify_payload: dict = {}
 
     async def _stream_round(messages: list[dict[str, str]], collect: bool, sink: list[str] | None = None):
         """跑一轮流式生成。collect=True 时剥离工具标记，并把原始增量写入 sink。"""
@@ -380,11 +428,62 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
             # 数据就没有"编造 vs 有据"的判定基准，校验只会全盘误杀）。
             answer_text = "".join(strip_tool_calls(part) for part in sink)
             evidence_texts = [t for t in (market_block, extra_block, tool_block) if t]
+            violations: list[dict] = []
             if answer_text.strip() and evidence_texts:
                 violations = grounding_violations(answer_text, evidence_texts)
                 if violations:
                     log.warning("assistant grounding violations=%s", violations)
                     yield _sse({"type": "grounding", "violations": violations})
+
+            # Universal Verification (shadow-only first slice):
+            # - deterministic grounding remains first and cheapest;
+            # - if it already found a violation, do not spend another Jev call;
+            # - any extra_block disables semantic verification entirely because the
+            #   answer/claim itself may repeat positions/private project context;
+            # - any non-public used tool likewise disables the whole verifier round.
+            verify_mode = str(
+                getattr(settings, "jev_assistant_verify_mode", "off") or "off"
+            ).strip().lower()
+            private_context_present = bool(extra_block)
+            private_tool_present = bool(
+                used_tools and not set(used_tools).issubset(_PUBLIC_VERIFY_TOOLS)
+            )
+            private_request_present = bool(
+                _PRIVATE_VERIFY_REQUEST_RE.search(req.messages[-1].content)
+            )
+            if (
+                verify_mode == "shadow"
+                and not violations
+                and answer_text.strip()
+                and not private_context_present
+                and not private_tool_present
+                and not private_request_present
+            ):
+                from app.core.semantic_verify import select_verifiable_claims
+
+                public_evidence: list[str] = []
+                if market_block:
+                    public_evidence.append(market_block)
+                if tool_block and used_tools:
+                    public_evidence.append(tool_block)
+                claims = select_verifiable_claims(
+                    answer_text,
+                    max_claims=int(
+                        getattr(settings, "jev_assistant_verify_max_claims", 4)
+                    ),
+                )
+                if claims and public_evidence:
+                    semantic_verify_payload.update(
+                        claims=claims,
+                        evidence=public_evidence,
+                        max_evidence_chars=int(
+                            getattr(
+                                settings,
+                                "jev_assistant_verify_max_evidence_chars",
+                                12_000,
+                            )
+                        ),
+                    )
             # 认知缺口自曝（2026-09-11）：没调工具却声称"我没有这项数据"——
             # 大概率是工具覆盖缺口或提示词没说清，而非真的取不到。
             # 只留痕、不改答案：这是**信号**，日志累积起来就是一份自动产出的缺口清单。
@@ -446,6 +545,10 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
         event_stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        background=BackgroundTask(
+            _run_assistant_semantic_verify,
+            semantic_verify_payload,
+        ),
     )
 
 

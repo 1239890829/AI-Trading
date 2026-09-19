@@ -301,6 +301,11 @@ class Settings(BaseSettings):
     jev_assistant_tool_mode: str = "shadow"
     jev_assistant_tool_min_noul: float = 0.60
     jev_assistant_tool_max_groups: int = 3
+    # Universal Verification：只判 evidence→claim 支持关系，不做事实检索。
+    # 默认 off，先用 RSH-030 金标准验证后再决定是否常开 shadow。
+    jev_assistant_verify_mode: str = "off"  # off | shadow
+    jev_assistant_verify_max_claims: int = 4
+    jev_assistant_verify_max_evidence_chars: int = 12_000
 
     # ---- P2-3 层1：pending 事件 LLM 辅助判定（app/events/llm_aux.py）----
     # 规则引擎判不出方向（direction=0 / 无方向行）的事件攒批交给 LLM 判一次，
