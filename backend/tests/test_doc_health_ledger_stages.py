@@ -20,14 +20,18 @@ def load():
     return mod
 
 
-def task(tid="BUG-014", status="待执行", deps="无", evidence="尚未实施"):
+def task(tid="BUG-014", status="待执行", deps="无", evidence="尚未实施", *, gate="G0", order=10, role="阻断", effect="无"):
     return f"""## {tid}
 
 **修复实际缺口**
 
 - **状态**：{status}
 - **优先级**：P0
+- **阶段门**：{gate}
+- **门内序**：{order}
+- **门禁角色**：{role}
 - **依赖**：{deps}
+- **效果前置**：{effect}
 - **方案依据**：最终方案 W00
 - **范围**：修复迁移连接
 - **验收**：在隔离目标库断言表与字段
@@ -46,7 +50,9 @@ def probe(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "ROOT", tmp_path)
     monkeypatch.setattr(mod, "DOCS", docs)
     monkeypatch.setattr(mod, "LEGACY_SOURCE_IDS", frozenset({"GOV-014"}), raising=False)
-    index = "### 6.0 阶段索引\n\n| 阶段 | 内容 |\n|---|---|\n"
+    index = ("### 5.9 阶段门、优先级与跨阶段治理\n"
+             "G0 事实与安全底座 · G5 验收与发布 · GX 持续治理 · CROSS_GATE_EXCEPTION · 效果前置\n\n"
+             "### 6.0 阶段索引\n\n| 阶段 | 内容 |\n|---|---|\n")
     for i in range(10):
         rel = f"stages/w{i:02}-phase.md"
         index += f"| W{i:02} | [阶段]({rel}) |\n"
@@ -69,6 +75,7 @@ def test_real_ledger_has_no_stage_conflict():
     mod = load()
     assert mod.check_phase_index() == []
     assert mod.check_phase_tasks() == []
+    assert mod.check_stage_gates() == []
 
 
 def test_real_decision_propagation_is_closed():
@@ -536,3 +543,38 @@ def test_merge_cannot_form_retirement_chain_or_cycle(probe):
                  task("IMP-001", status="已合并") +
                  "- **处置依据**：错误回指。\n- **合并至**：BUG-014\n")
     assert any("合并去向无效" in e for e in probe.check_phase_tasks())
+
+
+def test_stage_gate_rejects_higher_gate_hard_dependency(probe):
+    p = probe.DOCS / "stages/w00-phase.md"
+    p.write_text(p.read_text() + task("IMP-001", gate="G1", order=20, role="阻断"))
+    edit(probe, "stages/w00-phase.md", "- **依赖**：无", "- **依赖**：IMP-001")
+    errors = probe.check_stage_gates()
+    assert any("更高阶段门" in error for error in errors)
+
+
+def test_stage_gate_rejects_duplicate_gate_order(probe):
+    p = probe.DOCS / "stages/w00-phase.md"
+    p.write_text(p.read_text() + task("IMP-001", gate="G0", order=10, role="非阻断"))
+    errors = probe.check_stage_gates()
+    assert any("门内序 10" in error and "重复" in error for error in errors)
+
+
+def test_stage_gate_rejects_hard_dependency_on_continuous_governance(probe):
+    p = probe.DOCS / "stages/w00-phase.md"
+    p.write_text(p.read_text() + task("GOV-001", gate="GX", order=20, role="持续治理"))
+    edit(probe, "stages/w00-phase.md", "- **依赖**：无", "- **依赖**：GOV-001")
+    errors = probe.check_stage_gates()
+    assert any("硬依赖不得指向持续治理任务 GOV-001" in error for error in errors)
+
+
+def test_stage_gate_rejects_missing_effect_prerequisite(probe):
+    edit(probe, "stages/w00-phase.md", "- **效果前置**：无", "- **效果前置**：RSH-999")
+    errors = probe.check_stage_gates()
+    assert any("效果前置不存在" in error for error in errors)
+
+
+def test_stage_gate_requires_g5_acceptance_role(probe):
+    edit(probe, "stages/w00-phase.md", "- **阶段门**：G0", "- **阶段门**：G5")
+    errors = probe.check_stage_gates()
+    assert any("G5 只能使用验收角色" in error for error in errors)
