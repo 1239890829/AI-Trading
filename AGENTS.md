@@ -8,7 +8,7 @@
 - 作业边界与发布流程：本文件 §0、§1、§6.5。
 - 固定分工：网页 ChatGPT 负责计划、阶段账本统筹和逐轮审核；Codex 只执行获准切片。协作协议与人工介入点见 `docs/collaboration-workflow.md`。
 - 唯一文档入口：`docs/INDEX.md`；阶段总账：`docs/retro-and-gaps.md` §6.0，任务在其索引的阶段页单点维护。
-- 施工取舍：最新用户要求与 docs/implementation-plan.md 的 v9.5 明确修订优先；原 v9 未修订部分保留，旧项按真实价值复核，登记不等于必须实施。
+- 施工取舍：最新用户要求与 docs/implementation-plan.md 的 v9.6 明确修订优先；原 v9 未修订部分保留，旧项按真实价值复核，登记不等于必须实施。
 - 当前现场与实测：`docs/handoff.md` §1；经验按 `docs/kb/00-INDEX.md` 定位。
 - 接续工作：`skills/ashare-ledger-continue/SKILL.md`；当轮交接：`skills/ashare-task-handoff/SKILL.md`。
 - 盘后复盘：`skills/ashare-daily-review/SKILL.md`，流程与逐项核验归既有 SOP / checklist。
