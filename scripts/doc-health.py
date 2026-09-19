@@ -1537,9 +1537,11 @@ def check_decision_propagation() -> list[str]:
     current_pointer_re = re.compile(
         r"(?:当前方案|当前治理|当前实施|当前.*修订|目标链).*?\b(v\d+\.\d+)\b"
     )
+    seen_current_pointer_paths: set[Path] = set()
     for path in active_md_targets():
-        if not path.exists():
+        if not path.exists() or path in seen_current_pointer_paths:
             continue
+        seen_current_pointer_paths.add(path)
         rel = path.relative_to(ROOT)
         # implementation-plan 自己是版本定义，不拿定义行再对自己做传播检查。
         if rel.as_posix() == "docs/implementation-plan.md":
