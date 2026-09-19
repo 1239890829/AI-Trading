@@ -46,7 +46,7 @@
 - **依赖**：无
 - **方案依据**：docs/continuous-evolution.md；implementation-plan v9.5 §6.1；用户要求系统不依赖人工喂入新技术，同时不得按热度盲目采用。
 - **范围**：持续发现 AI/模型/Agent、量化/选股方法、数据源、研究方法、工程/安全/产品与规则变化；按来源等级、硬门、E0–E5 证据梯度筛选。雷达只拥有发现/拒绝/观察/实验建议，不拥有安装、付费、权限扩大、生产阈值或策略准入权。
-- **验收**：新会话可调用 ashare-innovation-radar 从最新 master 恢复现有基线并产出候选卡；外部宣传与已核事实分开；SHORTLISTED/LAB 有 falsifier、基线、成本/隐私/许可/恢复；真实实验归已有 stage；重大采用触发 plan-registry §1.1；雷达自身有有用候选率、漏发现、噪声和成本复评，不能只积压 WATCH。
+- **验收**：新会话可调用 ashare-innovation-radar 从最新 master 恢复现有基线并产出候选卡；外部宣传与已核事实分开，外部内容按不可信数据处理；SHORTLISTED/LAB 有 falsifier、基线、成本/隐私/许可/恢复以及 `last_reviewed/review_due/experiment_budget/stop_rule`；真实实验归已有 stage；重大采用触发 plan-registry §1.1；雷达同时支持问题驱动、前沿驱动、反证驱动并把 missed-signal 反馈回查询/来源；雷达自身有有用候选率、漏发现、噪声和成本复评，不能只积压 WATCH。
 - **证据**：2026-09-19 首轮外部核查已覆盖 TypeSafe/Jev、Microsoft RD-Agent/Qlib、OpenHands、MCP Registry/A2A、QuantConnect LEAN/vectorbt、TSFM/金融 Agent benchmark 等方向；结论按候选/参考/观察分级，没有把外部项目自报收益写成本项目效果。v9.5 新增 continuous-evolution 蓝图与 ashare-innovation-radar Skill。
 - **下一步**：用真实后续雷达轮验证发现质量和噪声；优先挑能挑战当前真实瓶颈且成本低的少量 SHORTLISTED 做 E2/E3，不为填清单实施。多轮证明雷达有净收益后，才评估是否需要自动定时扫描或更高频率。
 - **恢复**：停用雷达或降低频率不影响生产；原始扫描留忽略 artifacts，未准入候选不得改变运行配置、策略、权限或真实外发。
