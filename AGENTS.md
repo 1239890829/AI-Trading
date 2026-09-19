@@ -10,7 +10,7 @@
 - 唯一文档入口：`docs/INDEX.md`；阶段总账：`docs/retro-and-gaps.md` §6.0，任务在其索引的阶段页单点维护。
 - 施工取舍：最新用户要求与 docs/implementation-plan.md 的 v9.6 明确修订优先；原 v9 未修订部分保留，旧项按真实价值复核，登记不等于必须实施。
 - 当前现场与实测：`docs/handoff.md` §1；经验按 `docs/kb/00-INDEX.md` 定位。
-- 接续工作：`skills/ashare-ledger-continue/SKILL.md`；当轮交接：`skills/ashare-task-handoff/SKILL.md`。
+- 接续工作：`skills/ashare-ledger-continue/SKILL.md`；当轮交接：`skills/ashare-task-handoff/SKILL.md`。handoff 允许实施时，用户在 Codex 端明确说“继续任务/继续”可授权该 Skill 按 stage 的优先级/依赖/解锁价值动态领取**一个**可开工切片；REVIEW/BLOCKED 或排序不唯一时只报告候选。
 - 盘后复盘：`skills/ashare-daily-review/SKILL.md`，流程与逐项核验归既有 SOP / checklist。
 - 外部创新雷达：`skills/ashare-innovation-radar/SKILL.md`；长期发现/筛选规则见 `docs/continuous-evolution.md`。雷达只提出候选/验证，不自动安装或准入。
 - 发布核验：`scripts/audit/release_check.py`；恢复清单：`scripts/audit/platform_assets.py`。
