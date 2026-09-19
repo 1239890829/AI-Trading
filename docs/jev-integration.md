@@ -50,8 +50,9 @@ Codex / ChatGPT：复杂代码、综合研究、架构与审核
 | Jev Orchestrator | `~/.agents/skills/jev-orchestrator` | 每轮判断哪里该用 Jev、哪里应升级 |
 | 通用 Jev MCP | `~/.local/bin/evaluate-mcp` | 所有 Codex/Claude 项目可直接做 typed evaluation |
 | stdin Jev CLI | `~/.local/bin/jev-json` | Web ChatGPT/脚本无法直接用 MCP 时做 bounded 判断；敏感字段网络前拒绝 |
-| Advisory task router | `~/.local/bin/jev-route` | 只建议 deterministic/Jev/DeepSeek/Codex/ChatGPT/human 层级，不执行任务 |
-| 全局 usage 报表 | `~/.local/bin/jev-usage-report` | 汇总 Jev token/延迟/purpose 与任务路由分布，不存任务正文 |
+| Privacy-safe capability router | `~/.local/bin/jev-capability-route` | 基于固定版本 BillionsBobby/JevRouter；仅在 ≥2 个真实能力候选竞争时做权限/风险/确认/Schema 感知路由；不保存任务正文 |
+| JevRouter source pin | `~/.local/share/jevrouter` | 上游 Router/Policy/Provider 内核；2026-09-19 验证 commit `c83660f8370f52124055b771a38d4a7ea06e8434`、44/44 tests；wrapper 每次校验 HEAD + tracked worktree clean，漂移则网络前拒绝 |
+| 全局 usage 报表 | `~/.local/bin/jev-usage-report` | 汇总 Jev token/延迟/purpose 与 capability-routing 元数据；旧 task-router 仅作为 deprecated 历史记录 |
 | jev-review | Codex plugin `0.1.1` | 非简单代码切片的结构化工程反馈 |
 | jev-guard | Codex plugin `0.3.1` | 工具执行前后做意图/危险/提示注入防护 |
 | jev-context | `~/.local/share/jev-context` | 大输出/代码候选的语义过滤，当前 ask-only |
@@ -66,9 +67,9 @@ Codex / ChatGPT：复杂代码、综合研究、架构与审核
 
 浏览器文本桥每次动态读取 cc-switch 当前模型，因此以后切 DeepSeek 版本不需要改 Jev Browser。
 
-## 3. 对 169 个 awesome-jev-projects 的归纳
+## 3. 社区 Jev 项目目录的模式归纳
 
-2026-09-19 全量拉取 `logicrw/awesome-jev-projects` 的 169 个项目并按 `jevDecisionPoint`、类别、收益点与证据状态归类。对本项目最有迁移价值的不是“复制某个项目”，而是以下模式：
+2026-09-19 对 `logicrw/awesome-jev-projects` 及相关 Jev 社区目录做了两轮抓取与本地审计。目录总数会持续变化（不同抓取时点/目录甚至给出不同收录量），因此**不把“收录多少项目”当结论**；真正用于决策的是项目的 decision point、实现边界、调用频率、隐私/权限模型、可复现实测和我们自己的 A/B。对本项目最有迁移价值的不是“复制某个项目”，而是以下模式：
 
 | 社区模式 | 代表方向 | 我们吸收的能力 |
 |---|---|---|
@@ -86,28 +87,32 @@ Codex / ChatGPT：复杂代码、综合研究、架构与审核
 
 ## 4. Codex 全局工作流
 
-### 4.1 每轮任务
+### 4.1 每轮任务：先判断“要不要 Jev”，而不是先调用 Jev
 
-非简单任务可先用 `jev-route` 做**一次 advisory routing**，选择
-`deterministic / jev / deepseek / codex / chatgpt_deep / human` 中最便宜且足够的处理层。
-它不执行任务，也不扩大权限；route/confidence/model 记录在用户级元数据账中，**不保存任务正文**。
+旧实验 `jev-route` 会给每个非简单任务先分一次 `deterministic / jev / deepseek / codex / chatgpt_deep / human`。二次审计后**已停用并删除活动命令**：它不能真正切换当前宿主模型，却会为本来就明显的任务多花一次 Jev。
+
+当前规则：
 
 ```text
 任务进入
   ↓
-jev-route（非简单任务、一次）
-  ↓
-确定性可完成？ ──是→ 代码/工具直接完成
-  ↓否
-是否是 bounded semantic decision？
-  ├─ 是 → evaluate / jev-json / Jev
-  │        ├─ 高置信低风险 → 使用结果
-  │        └─ 模糊/冲突/高风险 → DeepSeek/Codex
-  └─ 否 → DeepSeek → Codex / ChatGPT deep
+确定性可完成 / 用户已指定工具 / 只有一个合法下一步？
+  ├─ 是 → 直接执行，不调用 Jev
+  └─ 否
+       ↓
+是否只是一个 bounded Choice/Noul/Score？
+  ├─ 是 → evaluate / jev-json
+  └─ 否
+       ↓
+是否存在 ≥2 个真实、当前可用的 Tool/Skill/MCP/CLI/Subagent 候选，
+且哪一个更合适并不显然？
+  ├─ 是 → jev-capability-route（JevRouter 内核）
+  └─ 否 → DeepSeek / Codex / ChatGPT 按任务本身处理
 ```
 
-Web ChatGPT 无法直接使用本机 MCP 时，可经已授权电脑调用 stdin-only `jev-json`；
-它与项目 adapter 一样在网络前拒绝敏感字段。
+`jev-capability-route` 只做 capability decision。Jev 给概率；Router 代码负责 availability、actor permissions、risk、confirmation、input schema 和安全 fallback。它不会执行选中的能力，也不会保存 request/context 正文，只写元数据 receipt。
+
+Web ChatGPT 无法直接使用本机 MCP 时，可经已授权电脑调用 stdin-only `jev-json`；它与项目 adapter 一样在网络前拒绝敏感字段。
 
 ### 4.2 上下文
 
@@ -550,7 +555,7 @@ Jev 适合处理**非数值规则能直接覆盖的语义异常**：
 - jev-context 5 组人工锚点：已召回锚点过滤 recall=100%，weighted retrieval token reduction=5.28%，因此**暂不自动化**；
 - 告警/事件/助手当前全部默认 shadow，所以不会因为“省额度”改变生产行为；
 - 项目 `data/jev/usage.jsonl` 与用户级 `~/.local/share/jev-global/usage.jsonl` 只记元数据；`backend/scripts/jev_usage_report.py` 和全局 `jev-usage-report` 可零网络汇总；
-- `jev-route` 的路由收据可以统计有多少任务本可落到 deterministic/Jev/DeepSeek，但**只有后续与实际 Codex/ChatGPT 使用量对照后**才能算额度节省。
+- 旧 `jev-route` 已停用，历史 `routes.jsonl` 只保留为 deprecated 实验数据；新 `capability-routes.jsonl` 只记录真正发生“多能力竞争”时的 decision_id / selected / jev_choice / confidence / token / latency / filtered/fallback 元数据。只有与实际 Codex/DeepSeek/ChatGPT 使用量和任务质量对照后，才能算额度节省。
 
 ## 18. 分阶段启用
 
@@ -559,8 +564,8 @@ Jev 适合处理**非数值规则能直接覆盖的语义异常**：
 - Keychain；
 - TypeSafe Skill；
 - evaluate MCP + stdin-only `jev-json`；
-- advisory `jev-route` + metadata-only `jev-usage-report`；
-- jev-review（MCP 真实 smoke 已通过）；
+- privacy-safe `jev-capability-route`（BillionsBobby/JevRouter 内核）+ metadata-only `jev-usage-report`；旧 `jev-route` 已停用；
+- jev-review（MCP 真实 smoke 已通过，按需用于高影响/语义复杂代码切片）；
 - jev-guard；
 - jev-context ask-only；
 - jev-browser + DeepSeek text bridge；
@@ -663,3 +668,377 @@ Jev 适合处理**非数值规则能直接覆盖的语义异常**：
 8. **选股/做T/因子增益必须回测**。
 9. **Jev 不能扩大 Agent 权限**。
 10. **所有项目模块复用统一 adapter/telemetry，不再各写一套外呼。**
+11. **单一候选、确定性步骤、用户已明确指定工具时禁止为了“用 Jev”再发一次判断。**
+12. **社区 Jev 工具只有同时满足“独特问题 + 有可测收益 + 不扩大权限/隐私面 + 调用频率可控”才进入活跃栈。**
+
+## 21. 2026-09-19 二次价值审计：以 TypeSafe 官方 Use Case Map 为基准
+
+来源：
+
+- TypeSafe 官方：[Example use cases](https://docs.typesafe.ai/concepts/use-case-map)
+- 社区雷达：[awesome-jev-projects](https://logicrw.github.io/awesome-jev-projects/)
+- JevRouter：[BillionsBobby/JevRouter](https://github.com/BillionsBobby/JevRouter)
+
+官方 Use Case Map 给出的核心设计原则与本项目当前方向高度一致：**代码拥有 control flow，TypeSafe 负责 semantic decisions / language understanding**。因此本轮不再追求“哪里都塞 Jev”，而是按官方 decision shape 判断是否值得使用。
+
+### 21.1 官方类别 → 本系统映射
+
+| 官方类别 | 官方含义（摘要） | 本系统当前状态 | 结论 |
+|---|---|---|---|
+| AI Automation Software | 代码控制流程，Jev 处理高频语义判断 | alert / event / assistant shadow | **已正确落地** |
+| Real-time applications | 快速语义决策嵌入 UI/实时循环 | alert / browser | **保留，但禁止进入交易执行硬门** |
+| AI MapReduce over Big Data | 大语料搜索、Agent trace 分类、特征抽取 | 尚未生产化 | **高价值研究方向，必须离线批处理+预算上限** |
+| Universal Verification | 验证 prompt / extraction / tool call / 引用 / 回答，识别 hallucination / injection / failure | guard/pref 有一部分；投资研究证据验证尚未完整 | **下一优先级最高的缺口** |
+| Harness Engineering | model routing、context retrieval、guardrail、trace classification | evaluate / JevRouter / guard / context / review | **已形成全局层，但本轮收敛调用频率** |
+| Search & Retrieval | relevance / rerank / context selection | jev-context ask-only；KB 自动 rerank 未开启 | **有条件价值，先保 recall** |
+| Model routing | intent/difficulty/risk → 更合适模型 | 旧 task-router 停用；capability router 生效 | **模型切换暂不自动化** |
+| LLM Guardrails | 检查 input/output/tool call | jev-guard + 项目 verifier 计划 | **保留；敏感数据最小化** |
+| Semantic code lint | 团队语义规则 | jev-pref | **保留按需，不全 diff 常开** |
+| Feature extraction | 从文本提概率语义特征，交经典 ML / ground-truth 验证 | research/jev_shadow.py | **高价值，但只进研究/Challenger** |
+| Structured data extraction | 从非结构文本取已知字段 | 当前多数已有确定性解析 | **低优先；parser 失败兜底才考虑** |
+
+### 21.2 官方地图暴露出的真正新增机会
+
+#### A. Universal Verification：比“再加一个选股分”更值得优先
+
+最值得补的是**证据支持关系验证**，不是让 Jev 多预测一次涨跌：
+
+```text
+DeepSeek / Assistant 生成结论
+        ↓
+把“结论 + 最小证据片段”交 Jev
+        ↓
+Noul/Choice：
+- 证据是否真的支持结论？
+- 是否把 rumor 写成 fact？
+- 是否遗漏限定条件？
+- 工具返回是否与最终文案矛盾？
+        ↓
+通过 / 降级措辞 / 重新取证 / 升级人工
+```
+
+这直接对应现有 IMP-045 的摘要/引用 verifier，不新建第二套任务。优先应用于：
+
+- AI 助手引用新闻/公告后的结论；
+- 事件 → 题材传导解释；
+- 研究报告中的“证据支持结论”；
+- Web research 的来源一致性；
+- 自动复盘中的因果归因文案。
+
+**不适合**让 Jev 自己验证事实真伪；事实仍要回源。Jev 判断的是“给定证据是否支持给定主张”。
+
+#### B. AI MapReduce：离线挖掘事件/Agent trace，不进盘中热路径
+
+适合把大量历史材料拆成小判断：
+
+- 历史新闻/公告按事件类型、直接性、题材传导、确定性分桶；
+- Agent tool trace 按失败类型/无效步骤/重复调用分类；
+- 大量复盘按 selection/entry/exit/risk/environment/data/execution 聚合；
+- 从历史语料产生候选语义因子，再交 RSH-030 walk-forward。
+
+这类任务可以批量、低优先级运行，并设置**最大样本数 / 最大 Jev input tokens / 可中断**。不应在用户每次打开页面时重新跑。
+
+#### C. Search / Rerank：只做“第二阶段精排”
+
+官方允许 semantic search / ranking，但本仓实测已经证明：Jev 不能修复上游没召回。正确结构始终是：
+
+```text
+SQL / rg / vector / 规则召回
+        ↓
+候选集已经足够高 recall
+        ↓
+Jev relevance / ranking
+        ↓
+只把 Top-N 交给 DeepSeek/Codex
+```
+
+因此 jev-context 保持 ask-only；未来 KB/研究资料 rerank 也必须先有人工 anchor recall 基线。
+
+## 22. 社区组件二次审计：最终保留 / 降级 / 停用
+
+判断标准只有四个：
+
+1. 是否解决**独特问题**，而不是和现有工具重复；
+2. 是否有本机/本仓的**可复现实证**；
+3. 是否不会扩大权限、secret、源码外发或持久化面；
+4. 调用频率是否可控，节省的高价模型成本是否有机会覆盖 Jev 开销。
+
+| 组件/模式 | 最终状态 | 为什么值得/不值得 | 调用纪律 |
+|---|---|---|---|
+| typesafe-ai Skill | **保留** | 方法论来源，不主动产生 API 成本 | 只指导怎么拆 typed decision |
+| evaluate / typesafe-mcp | **保留，核心 primitive** | 通用 Choice/Noul/Score；避免每项目自造 HTTP | 只有真正 bounded question 才调用 |
+| jev-json | **保留** | Web ChatGPT/脚本无法 MCP 时的安全 stdin 接口 | 不做高层推理，不传 secret |
+| BillionsBobby/JevRouter 内核 | **新增保留，条件调用** | 权限/风险/confirmation/schema/大候选路由是独特价值；44/44 tests + 真实 API 权限过滤已验证 | 仅 ≥2 个真实能力候选且选择不明显 |
+| 上游 JevRouter 默认 CLI receipt | **不启用** | 会保存完整 request/context/raw response 到项目 .jevrouter/，与 metadata-only 原则冲突 | 使用 privacy-safe wrapper |
+| 旧 jev-route | **停用并删除活动命令** | 不能真正切当前 Codex 模型；每个非简单任务先调用一次是额外浪费 | 历史 routes.jsonl 仅保留审计 |
+| jev-guard | **保留** | 安全价值独立；只读工具可 skip，无 Jev 调用；写/危险/不可信结果才判断 | 不把它当 sandbox；敏感内容最小化 |
+| jev-review | **保留按需** | 对高影响/语义复杂代码提供第二视角；真实 MCP 已验证 | 简单机械修改/纯文档不强制调用；tests/CI 永远优先 |
+| jev-pref | **保留项目级按需** | 能表达“shadow 不得无证据进生产”等静态 lint 难表达规则 | 只审治理相关/高影响 diff；大 diff 分切片 |
+| jev-context | **保留 ask-only** | filter recall 对已召回锚点 100%，但本仓 weighted reduction 仅 5.28% | 只用于宽搜索/大输出；精确 rg/少量结果禁止调用 |
+| jev-browser / Ultrafast | **保留条件调用** | 未知 DOM 下一步选择有真实价值；CLICK/TYPE_TEXT 已端到端验证 | 已知 deterministic 步骤直接 Browser Harness；只有动作/目标不确定才用 Jev |
+| 0xNatoshi Jev Codex Router | **暂不采用** | 自动模型/effort 路由有潜力，但需要额外代理链；本机没有其依赖 router，且不能证明优于现状 | 等真实会话 A/B 后再议 |
+| Agent supervisor / Stop hook 类 | **暂不安装** | 可能减少早停，但会增加每轮/每停点调用；现有 ledger + tests + completion rules 已较强 | 只有出现可量化“早停问题”再试验 |
+| Trading-as-Jev-signal 项目 | **只吸收实验方法，不安装** | 正确价值是 shadow risk/feature，不是 Jev 直接 BUY/SELL | 所有交易结果必须回测/影子/硬门 |
+
+### 22.1 jev-guard 为什么没有被删
+
+它看似“每个工具都问 Jev”，但源码/文档显示：
+
+- Read/Grep/Glob/WebFetch 等 read-only tool 可直接 skip；
+- 本地 edit/search 的结果扫描也有 skip；
+- instruction-file scan 有 content-hash cache；
+- 主要成本集中在真正有副作用的 action、外部不可信内容、技能/规则审计。
+
+这与本项目的高自治 Codex 工作流匹配。它的价值不是“提升代码质量”，而是**在 agent 自动化增强后给工具执行面增加第二道语义安全检查**，因此与 jev-review / jev-pref 不重复。
+
+### 22.2 jev-context 为什么不删除也不自动化
+
+它已经证明：
+
+- 条件 filter recall（对已召回人工锚点）= 100%；
+- weighted retrieval payload reduction = 5.28%；
+- upstream retrieval 有 2/3 的漏召回案例。
+
+所以它不是无价值，而是**收益只在候选很多时出现**。保留 ask-only 比“删除”或“全局 auto”都更合理。
+
+### 22.3 Browser Jev 的调用门槛
+
+```text
+已知 URL + 已知 selector/检查条件
+→ 直接 Browser Harness / 普通 browser，不用 Jev
+
+页面结构未知，但 DOM/ARIA 控件可枚举
+→ jev-browser
+
+canvas / iframe / upload / popup / 视觉布局
+→ 普通 browser/computer-use
+
+任何 DONE
+→ 独立验证最终状态
+```
+
+这样避免“每次浏览器验证都让 Jev 重新决定本来已知的下一步”。
+
+## 23. BillionsBobby/JevRouter：为什么采用内核、但不照搬默认安装
+
+### 23.1 它解决了什么我们原来没有完整解决的问题
+
+JevRouter 的价值不是“再做一个 Choice”，而是把 Jev 决策和**本地策略层**明确分开：
+
+```text
+真实候选能力
+  ↓
+Jev：哪个最合适？给概率/置信
+  ↓
+Router：
+- available？
+- actor permissions 足够？
+- risk 是否允许？
+- 是否必须 confirmation？
+- input schema 合法？
+  ↓
+selected / needs_confirmation / no_decision / safe fallback
+```
+
+这正好补上普通 `evaluate` MCP 的一个缺口：`evaluate` 负责 typed judgment，但不会替你管理宿主能力权限和风险。
+
+### 23.2 本机验证
+
+- 上游固定到 commit `c83660f8370f52124055b771a38d4a7ea06e8434`；
+- `npm run typecheck` 通过；
+- 上游 tests：**44/44 pass**；
+- 真实 TypeSafe route：`jev-1.13.0`；
+- 一次普通 3 候选路由约 1.57s / 395 input tokens；
+- 正确 manifest + actor permissions smoke：Jev 以 **0.99** 选中 `edit_code`，但 caller 没有 `write_repo`，Router 标记 `filtered=true / actor_missing_permissions:write_repo`，并安全退到 `search_code`；
+- privacy-safe wrapper 再测：同样能保留 `jev_choice=edit_code`，实际 `selected=run_tests`，约 **698ms / 383 input tokens**，且不生成项目 `.jevrouter` 目录。
+
+这个结果证明：**Jev 的判断可以错在“用户最想做什么”与“调用者当前被允许做什么”之间，但代码策略层仍能把它收回来。**
+
+### 23.3 为什么不用上游默认 CLI receipt
+
+上游 `route --stdin` 会把完整 receipt 写到当前目录 `.jevrouter/decisions/`，其中包含：
+
+- request；
+- context；
+- candidate ids；
+- raw Jev response；
+- probabilities / confidence。
+
+对一个独立路由项目这是优点，但对我们的全局 Codex 工作流会扩大：
+
+- 私有任务正文落盘；
+- 项目目录污染；
+- Git 误提交面；
+- 长期日志清理负担。
+
+因此采用**SDK 内核 + 本机 privacy-safe wrapper**：
+
+`~/.local/bin/jev-capability-route`
+
+只持久化：
+
+- decision_id；
+- status；
+- selected；
+- jev_choice；
+- confidence；
+- model；
+- input/output token；
+- latency；
+- candidate_count / filtered_count；
+- fallback reason。
+
+不持久化 request/context。
+
+### 23.4 JevRouter 使用门槛
+
+必须同时满足：
+
+1. 候选数 ≥ 2；
+2. 候选必须是当前宿主**真的能调用**的能力；
+3. 选择存在语义歧义，不能靠确定性规则直接决定；
+4. candidate manifest 的 permission / risk / availability 真实填写；
+5. 高风险动作最终仍由宿主/人类确认。
+
+单一候选会由 wrapper 在**网络请求前直接拒绝**，避免浪费 Jev。
+
+## 24. OpenRouter：当前明确不接入
+
+### 24.1 Jev 不会因为走 OpenRouter 就变免费
+
+2026-09-19 核对 OpenRouter 模型页：TypeSafe Jev 1.13 仍是 **$0.042 / 1M input tokens，output $0**。因此为了调用 Jev 去配置 OpenRouter Key没有成本优势。
+
+JevRouter 已支持直接 `JEV_API_KEY`，而我们已经通过 macOS Keychain 持久化 TypeSafe Key，所以：
+
+```text
+Jev / JevRouter
+→ 继续直接 TypeSafe
+→ 不增加 OpenRouter 中间层
+```
+
+### 24.2 `openrouter/free` 是另一回事
+
+OpenRouter 确实提供 `openrouter/free` 生成式模型路由，token 价格为 0；当前 Free 方案公开限制约 **50 requests/day**，而且会从可用免费模型中动态选择。
+
+它适合：
+
+- 临时实验；
+- 非关键文本生成；
+- DeepSeek 故障时人工选择的低保证应急。
+
+它不适合：
+
+- 生产交易/研究事实链；
+- 稳定的 Jev typed decision；
+- 需要固定模型行为的 browser text helper；
+- 需要高请求量或明确 SLA 的后台任务。
+
+当前已有 cc-switch DeepSeek，新增 OpenRouter free fallback 只会扩大 provider 分叉和不确定性，所以**不配置**。
+
+### 24.3 Key 处理结论
+
+- 本轮**没有**把 OpenRouter Key 写入 `.zshenv` / `.zprofile` / Codex config / Claude settings；
+- 当前 JevRouter 走现有 Keychain TypeSafe Key；
+- 如果未来确实需要 OpenRouter，应重新生成新的 Key，再放 Keychain/secret manager，不复用聊天中出现过的旧 Key。
+
+## 25. Jev 调用预算纪律：怎样防止“便宜所以滥用”
+
+Jev 单价低，不代表每个判断都应该调用。真正需要控制的是**调用次数 × 输入长度 × 是否真的替代了更贵步骤**。
+
+### 25.1 调用前四问
+
+每次准备调用 Jev 前必须依次判断：
+
+1. **能不能确定性解决？** 能 → 不调用。
+2. **答案空间是否 bounded？** 不是 → 交 DeepSeek/Codex/ChatGPT。
+3. **有没有至少两个真实候选/一个明确 yes-no 属性/一个明确 rubric？** 没有 → 不调用。
+4. **结果会不会改变下一步，或产生可测量证据？** 不会 → 不调用。
+
+### 25.2 高频位置的预算规则
+
+| 场景 | 当前规则 | 原因 |
+|---|---|---|
+| Codex capability routing | 只有 ≥2 个真实候选且选择不明显 | 避免每个任务前固定烧一轮 |
+| jev-guard | 按插件 read-only skip / cache；不额外手动重复 guard | 安全调用值得，但不要双重检查同一动作 |
+| jev-review | 高影响/语义复杂/跨模块 coherent slice 才跑 | 小机械 diff 的 tests/static 足够 |
+| jev-pref | 触及治理语义/生产 admission/交易红线时跑 | 普通格式/文案 diff 不值得 |
+| jev-context | 只有候选很多、baseline payload 显著时跑 | 本仓实测平均只省 5.28% |
+| jev-browser | 下一动作/目标元素不确定时跑 | 已知操作直接 Harness 更便宜 |
+| event/alert/assistant runtime | 继续 shadow，按 telemetry 决定是否 cascade | 需要目标域校准 |
+| 大规模历史挖掘 | batch/offline + 样本/token 上限 | 防止 MapReduce 变成无界账单 |
+
+### 25.3 什么时候应该主动删掉一个 Jev 用法
+
+满足任一条件就进入删除/停用候选：
+
+- 30–50 次真实调用后，几乎从不改变确定性/大模型下一步；
+- 质量不提升，而且高级模型 token 也没有下降；
+- 平均输入比被替代的大模型上下文还大；
+- 失败/低置信导致大多数请求仍要升级，形成双重成本；
+- 与另一个 Jev 组件解决同一问题但多维护一层；
+- 为了接入它需要扩大权限、保存大量正文或复制 secret。
+
+旧 `jev-route` 就是本轮按这个标准被停用的第一个实例。
+
+## 26. 后续 Jev 优先级：只做最有增量的三类
+
+### P0：Universal Verification（IMP-045 继续）
+
+优先实现最小 evidence verifier，而不是再加一个 router：
+
+```text
+claim + source excerpt
+→ Jev Noul/Choice
+→ supported / contradicted / insufficient
+→ 低置信回源或 DeepSeek
+```
+
+目标指标：引用支持 precision、rumor→fact 误写率、重新取证率、额外延迟。
+
+### P1：Research/KB second-stage rerank（IMP-045）
+
+只对高-recall 候选集合做 relevance/ranking；先建立人工 anchor，再决定自动化。目标是减少交给 DeepSeek/Codex 的上下文，而不是替代 SQL/vector/rg。
+
+### P1：Semantic feature extraction + historical MapReduce（RSH-030）
+
+把事件直接性、政策确定性、题材传导、叙事拥挤、相位一致性等做成 shadow feature，和价格/资金/情绪特征一起做 time-split / walk-forward / ablation。
+
+只有 ground-truth 证明增量后才进 Challenger。
+
+### 暂缓
+
+- 自动切 Codex 模型/effort：先没有足够真实会话 A/B；
+- Stop/Foreman supervisor：当前没有量化的“Agent 经常过早停止”问题；
+- Jev 直接交易 BUY/SELL/HOLD：违反本项目决策纪律；
+- Structured extraction 全面 Jev 化：现有确定性 parser 成本更低、可审计性更强。
+
+## 27. 二次审计后的最终活跃栈
+
+```text
+                           ┌────────────────────┐
+                           │  Deterministic code │
+                           │ rules/tests/risk    │
+                           └─────────┬──────────┘
+                                     ↓
+              ┌────────────────────────────────────┐
+              │     Jev primitive / router layer   │
+              │ evaluate · jev-json                │
+              │ jev-capability-route (conditional) │
+              └─────────────┬──────────────────────┘
+                            ↓
+         ┌──────────────────┼────────────────────┐
+         ↓                  ↓                    ↓
+   jev-guard          jev-pref/review      jev-browser
+  risky/untrusted      high-impact diff     ambiguous DOM
+         │                  │                    │
+         └──────────────────┼────────────────────┘
+                            ↓
+                  DeepSeek / Codex / ChatGPT
+                    only when actually needed
+                            ↓
+                    tests / backtest / CI
+                            ↓
+                    metadata-only telemetry
+```
+
+**不在活跃默认链里的东西**：旧 `jev-route`、自动模型代理、Jev Stop-hook、OpenRouter provider、Jev 直接交易决策、jev-context auto mode。

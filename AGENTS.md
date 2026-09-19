@@ -978,14 +978,17 @@ curl 先行 → 记录字段口径与类型陷阱 → 多采样找规律 → fix
 
 > 详细架构、已安装全局能力、AShare 各域落点与启用门槛见 `docs/jev-integration.md`（FN-10）。
 
-- **每个非简单任务先做 Jev 适用性判断**：确定性代码能直接解决则不调用模型；需要窄语义分类/路由/相关性/验证时优先使用 Jev；低置信、冲突、复杂综合再升级当前 cc-switch DeepSeek / Codex / ChatGPT。
-- **项目业务不得各写一套 TypeSafe 客户端**：后端统一走 `app/core/jev_client.py`；Codex 通用判断可走全局 `evaluate` MCP。
+- **每个非简单任务先判断 Jev 是否值得用，但“判断”不等于“调用”**：确定性代码、用户已指定工具、只有一个合法下一步时直接执行，不得为了“用 Jev”再发请求。
+- **项目业务不得各写一套 TypeSafe 客户端**：后端统一走 `app/core/jev_client.py`；Codex 一般 Choice/Noul/Score 走全局 `evaluate` MCP；只有 ≥2 个真实 Tool/Skill/MCP/CLI/Subagent 候选且选择不明显时才用 `jev-capability-route`。
 - **默认 shadow**：alert triage、pending event prefilter、assistant tool-group router 先量分歧/覆盖/成本，不经标注校准不得直接改变生产结果。
-- **非简单代码切片**：正常 tests/CI 优先，随后使用 `jev-review`；项目语义边界再用 `jev-pref`，不得为提高 Jev 分数过度设计。
-- **浏览器验证**：普通 DOM/ARIA 交互优先评估 `jev-browser`；复杂 iframe/canvas/上传/弹窗/视觉布局回退既有 browser/computer-use；最终状态必须独立复核。
+- **jev-review 按价值使用**：高影响、跨模块、语义复杂或 tests/static 无法充分覆盖的 coherent code slice 才评审；简单机械修改、纯文档、确定性 guard 已充分覆盖的变更不强制调用。正常 tests/CI 永远优先于 Jev 分数。
+- **jev-pref 按治理风险使用**：触及 shadow→production、交易/风控红线、概率语义、前后台边界、策略/因子/做T口径时使用；普通格式/文案/机械 diff 不为凑流程调用。
+- **jev-context 保持 ask-only**：精确 rg/少量候选直接使用；只有宽检索/大输出且可能真实减少后续上下文时才过滤，不能用它证明“仓库不存在”。
+- **浏览器验证按不确定性路由**：已知 URL/selector/验证条件直接 Browser Harness/普通 browser；只有 DOM/ARIA 下一动作或目标元素不确定时才用 `jev-browser`；复杂 iframe/canvas/上传/弹窗/视觉布局回退既有 browser/computer-use；最终状态必须独立复核。
 - **高风险永不委托**：T+1、涨跌停、费用、仓位、RiskEngine、真实下单、资金/权限、时间/数值计算、回测真值仍由确定性代码负责。
 - **概率语义不可混用**：Noul=yes 概率，Choice/Score 的 confidence 是模型结构化置信信息；它们都不是上涨概率、策略胜率或代码正确率。
-- **节省额度必须实测**：只在“质量不降 + DeepSeek/Codex/ChatGPT 调用/token 实际下降”时宣称节省；Jev 聚合指标由 `GET /api/system/providers` 的 `jev` 字段与 RSH-030 对照收集。
+- **节省额度必须实测**：只在“质量不降 + DeepSeek/Codex/ChatGPT 调用/token 实际下降”时宣称节省；Jev 聚合指标由 `GET /api/system/providers` 的 `jev` 字段、全局 metadata receipts 与 RSH-030 对照收集。
+- **社区 Jev 工具进入活跃栈必须同时满足**：解决独特问题、有本机/本仓证据、不扩大权限/隐私面、调用频率可控。旧 `jev-route` 已因“不能自动切模型却固定多烧一轮”停用；OpenRouter provider 当前不接。
 
 ---
 
