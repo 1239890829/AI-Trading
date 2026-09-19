@@ -1,6 +1,6 @@
-# 当前交接：PR #39 后主干收敛完成，等待下一明确实施切片
+# 当前交接：主干收敛完成，v9.4 治理传播切片进行中
 
-**当前模式：READY_FOR_NEXT_PLANNED_SLICE。** 2026-09-18 的 DESIGN_ONLY 规划批已经完成并作为历史范围保留；2026-09-19 的 Jev、公开仓库治理与累计协作功能栈均已进入主干。当前没有活动 Codex 施工分支或自动下一任务；下一轮由网页 ChatGPT 先读最新 `master`、阶段账本与证据，再明确派发有限切片。最新来源为 [实施方案](implementation-plan.md)、[产品闭环](product-closure-design.md)、[开放情境猎场](hunting-decision-design.md)、[大小功能覆盖](feature-closure-audit.md)、[计划去向](plan-registry.md)、[协作规范](collaboration-workflow.md)。
+**当前模式：GOVERNANCE_DOC_UPDATE。** 2026-09-18 的 DESIGN_ONLY 规划批已经完成并作为历史范围保留；2026-09-19 的 Jev、公开仓库治理与累计协作功能栈均已进入主干。当前业务代码没有活动施工派工；本轮只更新 v9.4 总方案、重大决策传播治理、接手/交接 Skills 与文档守卫。业务下一轮仍由网页 ChatGPT 读最新 `master`、阶段账本与证据后明确派发有限切片。最新来源为 [实施方案](implementation-plan.md)、[产品闭环](product-closure-design.md)、[开放情境猎场](hunting-decision-design.md)、[大小功能覆盖](feature-closure-audit.md)、[计划去向](plan-registry.md)、[协作规范](collaboration-workflow.md)。
 
 ## 1. 固定入口与范围
 
@@ -56,3 +56,4 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - BillionsBobby/JevRouter 只采用经过固定版本校验的内核与 privacy-safe wrapper；旧 `jev-route` 已退出活动链。OpenRouter 当前明确不接入，也不使用聊天中出现过的旧 Key。
 - Universal Verification 仍为 off/shadow；RSH-030 的 240 条固定队列已经 Jev 预标注，但 human gold 仍为 0/240。未完成人工独立标注前，不启用 cascade、不调生产阈值、不宣称准确率或额度节省。
 - 网页 ChatGPT / Codex 协作固定为“`master` 账本事实源 + 用户短提示”：网页负责规划/审核，Codex负责明确切片执行；Bridge、自动互调、自动审核回执均不是必需依赖。功能分支可以短暂存在，但不能成为长期固定入口。
+- 当前总方案升级为 v9.4：Jev 进入长期系统分层，同时新增 `plan-registry.md` §1.1 重大决策传播契约。今后新模型/工具链/架构/协作决定若只更新专题蓝图而漏总方案、INDEX、stage 或接手入口，视为治理缺陷并由 doc-health/Skill 双重守卫阻断明显漂移。
