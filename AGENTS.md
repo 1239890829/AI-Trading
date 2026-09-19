@@ -927,8 +927,7 @@ curl 先行 → 记录字段口径与类型陷阱 → 多采样找规律 → fix
 > 本节是仓库级 GitHub 协作规范，适用于所有功能、修复、重构与文档任务；取代此前以 `develop`
 > 为日常开发分支及允许 Codex 自行合并 `master` 的约定。历史分支和提交仍保留在 Git 历史中。
 
-- `master` 是主分支；2026-09-17 实测平台保护未启用（`protected=false`），平台设置仍归 `GOV-012` 待批。开发任何功能、修复或重构前，必须先同步远程最新的 `master`；
-  禁止直接在 `master` 上修改、提交或推送代码。
+- `master` 是主分支；**2026-09-19 已启用 GitHub 平台级 branch protection（`GOV-012` 闭环）**：必须经 Pull Request，required checks = `backend (pytest + pyflakes)` / `frontend (tsc + lint)` / `docs (doc-health)`，`strict=true`，管理员同样受约束；force-push / 删除 `master` 禁止，未解决 PR 对话禁止合并。开发任何功能、修复或重构前，必须先同步远程最新的 `master`；禁止直接在 `master` 上修改、提交或推送代码。
 - 功能开发必须在从最新 `master` 创建的独立分支中完成；Codex 创建的分支统一命名为
   `codex/<简短英文任务名>`，禁止直接在 `master` 上开发或提交。
 - 功能分支必须通过 Pull Request 合并到 `master`，不得通过直接推送绕过 Pull Request。
@@ -954,7 +953,7 @@ curl 先行 → 记录字段口径与类型陷阱 → 多采样找规律 → fix
   3. 对准确 PR HEAD 运行 `python3 scripts/audit/release_check.py <PR编号> --expected-head <完整SHA>`：
      最新 master 必须已集成，当前 CI 最新 attempt 的三 job 必须全部存在且 completed/success；
      其它 Actions/commit status 阻塞同样阻止合并。空结果、读取失败、旧 SHA、skipped/cancelled 均不得放行；
-     本地门禁和准确 diff 审阅另行完成；此脚本是客户端约束，不能替代 `GOV-012` 平台保护；
+     本地门禁和准确 diff 审阅另行完成；此脚本是客户端发布证据，**补充而非替代**已启用的 `GOV-012` 平台 branch protection；
   4. 最新 `master` 已集成并重验；新提交、base 漂移或重跑 CI 使旧验收失效；
   5. Pull Request 中不存在未解决的 `Request changes` 或阻塞性审查意见；
   6. diff 中不存在敏感信息、无关文件或未经说明的破坏性修改。
