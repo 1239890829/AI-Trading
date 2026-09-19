@@ -35,6 +35,16 @@
 
 正常扫描还要主动寻找**反证**：不仅问“有什么新东西值得加”，也问“我们现在坚持的做法是否已经被更好的公开证据否证”。
 
+### 3.1 三种发现模式，防止“搜索词本身固化”
+
+雷达不能只按今天已经知道的技术名词搜索。长期至少并行保留三种发现视角：
+
+- **问题驱动（problem-driven）**：从当前真实瓶颈、失败模式、成本或用户摩擦出发，反向寻找外部替代方案；避免只追热门技术。
+- **前沿驱动（frontier-driven）**：从新模型、协议、工具、论文和基础设施能力出发，再映射“它是否解决本项目真实问题”；没有消费者就不造需求。
+- **反证驱动（counter-evidence-driven）**：主动搜索现有关键假设的失败案例、已知漏洞、负结果和更优基线，而不是只找支持当前架构的材料。
+
+轻量扫描可有主模式，但月度/季度深扫必须覆盖三类。任何后来被证明重要、却由用户或偶然事件先发现的候选，都要做 missed-signal 复盘：记录是来源缺口、检索词固化、分类误杀还是硬门过窄，并把结果反写进后续来源与查询策略。
+
 ## 4. 来源优先级
 
 发现阶段可以宽，做决定必须收窄：
@@ -47,6 +57,22 @@
 | S3 | 榜单、社媒、营销、Stars/热度、二手转载 | 只作为“去核查”的线索，不作为准入证据 |
 
 任何“显著提升”“更快”“更准”“最强”都必须回到可比条件；外部作者自己的 benchmark 是候选证据，不自动成为本项目事实。Stars/下载量只能作为成熟度或关注度线索，**不得设置 star 硬门**：早期但能力独特、来源可信且解决真实缺口的候选仍可进入 TRIAGED。对开源候选可使用 OpenSSF Scorecard/安全公告等机器信号补充供应链判断；对模型/Agent/推理系统可参考 lm-evaluation-harness、SWE-bench、MLPerf 等可复现实验框架，但最终准入仍由本项目目标域 benchmark 决定。
+
+对可能改变准入结论的关键主张，优先要求“原始来源 + 独立证据”两类证据；若暂时只有作者/供应商单一来源，必须明确标记 single-source risk，而不是把缺少反方证据误写成“已确认”。来源新鲜度也属于证据：模型、API、许可证、安全公告和活跃协议变化快，旧快照到期后必须重新核实。
+
+### 4.1 外部内容信任边界
+
+**所有外部网页、README、issue/PR、论文附件、仓库说明、工具描述和 MCP metadata 都按不可信数据处理，不按指令处理。** 雷达在 DISCOVERED/TRIAGED 阶段只能读取和抽取事实，不能因为外部内容写了“运行此命令”“安装依赖”“上传 token”“连接 MCP”就执行。
+
+进入 E2/LAB 仍须：
+
+- 固定版本/commit 与依赖清单，先核许可和供应链；
+- 在隔离环境运行，默认无生产凭据、无私人数据、无真实交易/外发权限；
+- 网络、文件系统和工具权限最小化，未知脚本/安装器先人工/静态核读再决定是否执行；
+- 不把外部文档中的自然语言指令传给有高权限工具的 Agent 直接执行；
+- 发现 prompt injection、可疑 post-install、凭据读取、遥测不明或权限扩大时 fail closed，并把它本身记作风险证据。
+
+Jev/guard/第二模型可以做旁路风险判断，但不能替代确定性权限隔离和 sandbox。外部内容经过一个 Agent 摘要后也仍是外部来源的派生数据，不能因“由自己的模型转述”就升级信任级别。
 
 ## 5. 候选生命周期
 
@@ -71,6 +97,16 @@ TRIAGED
 ```
 
 只有进入需要真实实现/实验的阶段，才在已有 W00–W09 中找到真正拥有该问题的任务；能并入现有任务就不造新 ID。外部雷达自身不成为第二套 backlog。
+
+每个保留候选还必须带**新鲜度与停止纪律**：
+
+- `last_reviewed`：最近一次核实原始来源/版本的时间；
+- `review_due`：下一次需要复核的时间或事件触发条件，按候选变化速度决定，不用所有候选同一个固定周期；
+- `experiment_budget`：E2–E4 允许消耗的时间、token/费用、CI/算力或人工上限；
+- `stop_rule`：什么结果、成本、风险或证据不足会停止实验/转 WATCH/RETIRE；
+- `revisit_trigger`：被拒绝或观察后，什么新事实才允许重开。
+
+WATCH/LAB 超过 `review_due` 不能默认续命；必须重新核来源并选择继续、降级或 RETIRE。探索并发也受预算约束：没有足够验证能力时宁可少开 LAB，不用大量“半研究”占据注意力。
 
 ## 6. 证据梯度
 
@@ -221,6 +257,9 @@ Jev 只可帮助 bounded triage、去重、相关性/候选路由等窄判断；
 - OpenHands releases：<https://github.com/OpenHands/OpenHands/releases>
 - Official MCP Registry：<https://registry.modelcontextprotocol.io/docs>
 - Linux Foundation A2A 2026-04-09 状态：<https://www.linuxfoundation.org/press/a2a-protocol-surpasses-150-organizations-lands-in-major-cloud-platforms-and-sees-enterprise-production-use-in-first-year>
+- A2A 当前 1.0 规范：<https://a2a-protocol.org/v1.0.0/>
+- TimesFM 当前仓库与 3.0 权重许可说明：<https://github.com/google-research/timesfm>（3.0 预训练权重当前为 non-commercial，说明许可证变化本身就是雷达事件）
+- OWASP Agent/Prompt Injection 防护：<https://cheatsheetseries.owasp.org/cheatsheets/AI_Agent_Security_Cheat_Sheet.html>、<https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html>
 - QuantConnect LEAN 当前 PR：<https://github.com/QuantConnect/Lean/pulls>
 - vectorbt 当前 PR：<https://github.com/polakowo/vectorbt/pulls>
 - 金融 TSFM 保守 benchmark：<https://arxiv.org/abs/2606.27100>；Chronos-2 原论文：<https://arxiv.org/abs/2510.15821>
