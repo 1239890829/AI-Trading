@@ -100,6 +100,9 @@ describe("MarkdownView · 真实知识库文档可渲染", () => {
 
   it("docs/ 下全部 md 均可渲染完成", () => {
     // 修复前：其中 4 份会在本循环里死循环，**整个测试进程挂住**（不是单条失败）。
+    // 当前 corpus 已达 90+ 份 / 2MB+；GitHub runner 曾实测 5.185s，超过 Vitest 默认 5s。
+    // 这里的同步死循环本来就无法被 timer timeout 打断（见文件头说明），因此给 corpus
+    // 扫描显式 15s 只消除规模型假红，不降低结构性死循环守卫强度。
     const files: string[] = [];
     const walk = (dir: string) => {
       for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -115,5 +118,5 @@ describe("MarkdownView · 真实知识库文档可渲染", () => {
       renderDoc(fs.readFileSync(f, "utf8"));
       cleanup();
     }
-  });
+  }, 15_000);
 });
