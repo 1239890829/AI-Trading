@@ -79,6 +79,10 @@ async def system_providers(request: Request, hub: QuoteHub = Depends(get_hub)) -
     # 否则轮询该端点就等于反复烧额度。要立刻体检走 GET /api/system/llm-probe?force=1
     probe = getattr(request.app.state, "llm_probe", None)
     payload["llm_gateway"] = probe.snapshot(cached=True) if probe is not None else {"state": "not_started"}
+    # Jev 只读状态：不触发 API 调用，不回传凭据或请求正文。
+    from app.core.jev_client import status_snapshot as jev_status_snapshot
+
+    payload["jev"] = jev_status_snapshot()
     return payload
 
 

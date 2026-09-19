@@ -42,6 +42,13 @@ for _switch_env in SCHEDULER_SWITCH_ENV_VARS:
 os.environ["ASHARE_REVIEW_MODEL"] = "rules"
 os.environ["ASHARE_NEWS_MODEL"] = "rules"
 os.environ["ASHARE_LLM_PROVIDER"] = "openai"
+# TypeSafe/Jev 也是外部网络增强层：本机 Keychain 会把 TYPESAFE_API_KEY 注入新 shell，
+# 因此测试必须显式关掉；专项测试通过 monkeypatch + 假 _post 验证，不得碰真实 API。
+os.environ["ASHARE_JEV_ENABLED"] = "false"
+os.environ["ASHARE_JEV_USAGE_LOG_ENABLED"] = "false"
+os.environ["ASHARE_JEV_ALERT_TRIAGE_MODE"] = "off"
+os.environ["ASHARE_JEV_EVENT_AUX_MODE"] = "off"
+os.environ["ASHARE_JEV_ASSISTANT_TOOL_MODE"] = "off"
 
 # 逐笔的 **TDX 直连降级备源**必须关掉（`IMP-038`，2026-09-16）。
 #

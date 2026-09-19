@@ -271,6 +271,37 @@ class Settings(BaseSettings):
     # 为 `llm_fallback`。写死一个可用默认值 = 少一层"两边不一致"的失败面。
     review_llm_model: str = "deepseek-v4-flash"
 
+    # ---- TypeSafe Jev：窄语义判断 / 路由 / 影子验证 ----
+    # 凭据不进 ASHARE_* 配置：统一从进程环境 TYPESAFE_API_KEY / JEV_API_KEY 读取，
+    # 便于本机 Keychain、容器 secret 或部署环境注入；绝不写入前端/文档/仓库。
+    jev_enabled: bool = True
+    jev_base_url: str = "https://api.typesafe.ai"
+    # 生产默认跟随最新模型；需要可复现实验时由 ASHARE_JEV_MODEL 固定具体版本。
+    jev_model: str = "jev-latest"
+    jev_timeout_seconds: float = 8.0
+    # 防误把整份日志/源码发给外部服务；超限必须由调用方缩小 state。
+    jev_max_state_chars: int = 20_000
+    # 只记录 usage 元数据，不记录 state/questions 正文；用于跨重启核算节省率。
+    jev_usage_log_enabled: bool = True
+    jev_usage_log_path: str = str(REPO_ROOT / "data" / "jev" / "usage.jsonl")
+    # 告警判读两阶段：off=不用；shadow=Jev 与 DeepSeek 并跑但不改行为；
+    # cascade=高置信 Jev 直接消费，低置信/失败升级 DeepSeek。
+    # 默认 shadow：先积累目标域分歧与置信分布，阈值未校准前不改变用户可见结论。
+    jev_alert_triage_mode: str = "shadow"
+    # 仅 cascade 使用；默认值只是保守占位，正式采用前须由 RSH-030 标注集校准。
+    jev_alert_triage_accept_confidence: float = 0.90
+    # pending 事件前置层：shadow 只比较；cascade 仅允许高置信“无直接题材催化”
+    # 跳过 DeepSeek。非中性事件仍由 DeepSeek 做题材归属，Jev 不自由生成题材名。
+    jev_event_aux_mode: str = "shadow"
+    # cascade 中若 Noul(存在直接非零题材催化) <= 本值，则按中性收敛。
+    # 正式启用 cascade 前须由 RSH-030 人工金标准校准。
+    jev_event_aux_neutral_max_noul: float = 0.05
+    # AI 助手工具清单路由：shadow 只量路由覆盖；cascade 才缩短提示词里的工具清单。
+    # 路由不改变执行白名单；dispatch 仍以 TOOL_SPECS 为唯一授权面。
+    jev_assistant_tool_mode: str = "shadow"
+    jev_assistant_tool_min_noul: float = 0.60
+    jev_assistant_tool_max_groups: int = 3
+
     # ---- P2-3 层1：pending 事件 LLM 辅助判定（app/events/llm_aux.py）----
     # 规则引擎判不出方向（direction=0 / 无方向行）的事件攒批交给 LLM 判一次，
     # 命中写 direction 行（matched_by=llm_aux）+ 全批记 llm_judged_at 防重复。

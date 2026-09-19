@@ -48,6 +48,7 @@
 | **FN-07** | `data-dictionary.md` | L2 | 数据 | 数据对象审计字段约定（source/quality） |
 | **FN-08** | `picks-replay-baseline.md` | L1 | 快照 | 精选 60 日回放基线（08-31 评审指名保留）。**时点快照，只读** |
 | **FN-09** | `llm-gateway-probe.md` | L2 | 运维 | LLM 网关健康探针（`claude_cli` 别名监控） |
+| **FN-10** | `jev-integration.md` | L2 | AI/Agent 架构 | **Jev 全局与项目唯一现役蓝图**：Codex 路由/Guard/Review/Context/Browser + 事件/助手/选股/战法/情绪/因子/做T/复盘/额度治理。维护：Jev 能力、阈值、shadow/cascade 或 cc-switch 路由变化时 |
 | **EX-01** | `live-trading-guosen-plan.md` | L2 | 搁置 | 国信 miniQMT 实盘蓝图。**用户已搁置**（不接受 Windows 依赖），恢复条件见文档头 |
 | **RV-01** | `review-agent.md` | L2 | 复盘 | 盘后复盘 Agent 架构 |
 | **RV-02** | `daily-review-sop.md` | L2 | 复盘 | 每日复盘 SOP（怎么判） |
@@ -112,7 +113,7 @@
 | **T4 选股与策略** | `kb/00-INDEX.md` 选股表 | `summary/stock-strategy.md` · `strategy-registry.md` · `factor-lifecycle-governance.md` + `factor-candidates.md` | **示例 ≠ 规范**（题材案例一律 `📎`）；策略/因子落地**必须先过实证**；回测禁令见 `backtest-rules.md` |
 | **T5 复盘与治理** | 复盘 `kb/06-review-framework.md`（**先读它**）；治理 `retro-and-gaps.md` §6.0 | `daily-review-sop.md` · `daily-review-checklist.md` · `review-agent.md` · `handoff.md`（任务明细）· `kb/07` · `kb/11` | 任务**只有一个清单**（§6.0）；**待办必须有出口**；删除只走 `scripts/safe-trash.sh` |
 | **T6 前端与 UI** | `summary/architecture-design.md`（§1 跨页面联动设计） | `architecture.md` · `kb/03-engineering.md` | **验收以实际渲染为准**（agent-browser 文本通道）；**新增页面/板块需先论证**；**详情弹窗化**（个股/指数在任何页面就地弹窗，不跳工作台）见 [[KB-ENG-92]] |
-| **T7 外部工具与技能** | `skills/` 下已入库的技能入口 | 本表 **WB-04** · `llm-gateway-probe.md` | 旧目录未审第三方资产不能据名称直接搬入或执行；许可和外部权限按原边界 |
+| **T7 外部工具与技能** | `skills/` 下已入库的技能入口 | `jev-integration.md` · 本表 **WB-04** · `llm-gateway-probe.md` | Jev 先做 bounded 语义判断、低置信再升级；旧目录未审第三方资产不能据名称直接搬入或执行；许可和外部权限按原边界 |
 | **T8 决策与"为什么当初这么定"** | `kb/04-decisions.md`（KB-DEC） | `retro-and-gaps.md` §七（偏差错题本）· `archive/` | **已拍板勿重开**；被取代的条目改 ❌ 并写明取代者，**永不删除** |
 | **T9 提醒与通知链路** | `summary/pick-signal-chain.md`（**先读它**：定位/触发/流向/断点） | `services/alert_triage.py`（判读闸门）· `api/routes/notifications.py`（通知收口）· `picks/watcher.py::dispatch_alert`（唯一汇聚点）· `services/push_policy.py` | **收敛口径时必须回扫自称该口径的注释**（`IMP-028` 遗留 5 处过期断言，见该文 §G4）；**判读闸门现状只作用于悬浮球**（§G1）；改通知来源须同步 §3.1 规则清单 |
 

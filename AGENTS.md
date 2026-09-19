@@ -46,7 +46,7 @@
 ## 1. 快速启动
 
 ```bash
-# 后端（venv 已建好；.env 含 THS key，LLM 走 `claude -p` → GLM-5.3 网关）
+# 后端（venv 已建好；.env 含 THS key，LLM 走 `claude -p` → cc-switch 当前 DeepSeek，2026-09-19 实测 `deepseek-v4-flash`）
 cd backend && source .venv/bin/activate
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 # ⚠️ 绝不用 --reload：与 SQLite 锁组合会反复挂死（2026-09-02 定位，见 §6.1）
@@ -784,7 +784,7 @@ P2 基本面 ROE/毛利率 · P3 skills 归档。
 | 项 | 触发条件 | 状态（→ 账本 §6.0） |
 |---|---|---|
 | ~~推送通道接入~~ | — | ✅ **已完成**：飞书 webhook 落地（盘中只保留买点卡，2026-09-08 定稿） |
-| ~~LLM 接入~~ | — | ✅ **已完成**：`claude -p` → GLM-5.3 网关 + `events/llm_aux.py`（pending 事件二次判定） |
+| ~~LLM 接入~~ | — | ✅ **已完成**：`claude -p` → cc-switch 当前 DeepSeek（2026-09-19 为 `deepseek-v4-flash`）+ `events/llm_aux.py`（pending 事件二次判定） |
 | 生产部署（Docker/编排/监控） | 用户定环境 | ⏸ **搁置** → **`OPS-004`**（镜像与编排已交付 09-04，本机无 Docker） |
 | 事件复盘回写（E4：T+N 胜率回写事件权重） | 上线运行积累数据后 | 🔶 **等窗** → **`RSH-017`**（需先有 T+N 事件样本积累，属事件因子闭环） |
 
@@ -973,11 +973,25 @@ curl 先行 → 记录字段口径与类型陷阱 → 多采样找规律 → fix
   凭据早已就绪，却让人误以为通道未通（[[KB-ENG-85]] 同族：**指针/状态失效**）。
   本环境 `github.com` 需走本地代理 `127.0.0.1:7897`（沙箱代理 51931 到不了），`api.github.com` 可直连。
 
+
+### 6.6 TypeSafe/Jev 固定协处理流程
+
+> 详细架构、已安装全局能力、AShare 各域落点与启用门槛见 `docs/jev-integration.md`（FN-10）。
+
+- **每个非简单任务先做 Jev 适用性判断**：确定性代码能直接解决则不调用模型；需要窄语义分类/路由/相关性/验证时优先使用 Jev；低置信、冲突、复杂综合再升级当前 cc-switch DeepSeek / Codex / ChatGPT。
+- **项目业务不得各写一套 TypeSafe 客户端**：后端统一走 `app/core/jev_client.py`；Codex 通用判断可走全局 `evaluate` MCP。
+- **默认 shadow**：alert triage、pending event prefilter、assistant tool-group router 先量分歧/覆盖/成本，不经标注校准不得直接改变生产结果。
+- **非简单代码切片**：正常 tests/CI 优先，随后使用 `jev-review`；项目语义边界再用 `jev-pref`，不得为提高 Jev 分数过度设计。
+- **浏览器验证**：普通 DOM/ARIA 交互优先评估 `jev-browser`；复杂 iframe/canvas/上传/弹窗/视觉布局回退既有 browser/computer-use；最终状态必须独立复核。
+- **高风险永不委托**：T+1、涨跌停、费用、仓位、RiskEngine、真实下单、资金/权限、时间/数值计算、回测真值仍由确定性代码负责。
+- **概率语义不可混用**：Noul=yes 概率，Choice/Score 的 confidence 是模型结构化置信信息；它们都不是上涨概率、策略胜率或代码正确率。
+- **节省额度必须实测**：只在“质量不降 + DeepSeek/Codex/ChatGPT 调用/token 实际下降”时宣称节省；Jev 聚合指标由 `GET /api/system/providers` 的 `jev` 字段与 RSH-030 对照收集。
+
 ---
 
 ## 7. 待用户决策（阻塞项，勿催促，列清单等待）
 
-> 已解决不再列：~~推送通道~~ ✅ 飞书 webhook（09-08 定稿，盘中只留买点卡）、~~LLM 凭据~~ ✅ `claude -p` → GLM-5.3、
+> 已解决不再列：~~推送通道~~ ✅ 飞书 webhook（09-08 定稿，盘中只留买点卡）、~~LLM 凭据~~ ✅ `claude -p` → cc-switch 当前 DeepSeek（2026-09-19 `deepseek-v4-flash`）、
 > ~~定时 automation 去留~~ ✅（见已决 ④）、~~RiskEngine 接入撮合~~ ✅（见已决 ④）。
 > **本节只列「需要人拍板」的**；样本不足类阻塞（P1-30、P1-7+P2-11、P1-23、P2-14、P1-42）不进这里，它们等时间不等人。
 

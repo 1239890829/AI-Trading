@@ -44,6 +44,17 @@ RECENT_LIMIT = 5
 
 _VERDICTS = ("notify", "ignore", "escalate")
 
+_JEV_CRITERIA = {
+    "notify": "需要用户现在看到：与持仓/自选直接相关，或是明确趋势/风险变化；一般级重要性。",
+    "ignore": "重复、噪音、幅度很小、过时或对用户决策没有可解释影响。",
+    "escalate": "影响面大或系统性异常，不只是普通提醒，应进入任务中心进一步处理。",
+}
+_JEV_REASON = {
+    "notify": "Jev结构化判读：值得提醒",
+    "ignore": "Jev结构化判读：噪音/重复，可忽略",
+    "escalate": "Jev结构化判读：影响面较大，升级处理",
+}
+
 _SYSTEM_PROMPT = (
     "你是 A 股盘中告警判读助手。给定一条系统告警事件与当下环境，判断它值不值得提醒用户。\n"
     "只输出 JSON：{\"verdict\": \"notify|ignore|escalate\", \"reason\": \"中文一句话，≤30 字\"}\n"
@@ -85,6 +96,62 @@ def _event_context(event: AlertEvent, session_factory) -> dict:
         "text": str(snap.get("text") or "")[:200],
         "kind": snap.get("kind") or "",
         "last_hour_same_rule": len(recent),
+    }
+
+
+async def _jev_verdict(ctx: dict) -> dict | None:
+    """Jev 三分类前置层；失败/非法返回 None，调用方继续 DeepSeek/规则路径。"""
+    from app.core.config import settings
+    from app.core.jev_client import evaluate
+
+    mode = str(getattr(settings, "jev_alert_triage_mode", "off") or "off").strip().lower()
+    if mode not in {"shadow", "cascade"}:
+        return None
+    questions = {
+        "verdict": {
+            "type": "choice",
+            "instructions": {
+                "task": "根据告警事件与上下文，选择本系统应如何处理该提醒。",
+                "rules": [
+                    "只判断提醒优先级，不给买卖建议。",
+                    "若证据不足，不要把普通提醒升级为系统性异常。",
+                    "重复、过时或决策无关的信息应 ignore。",
+                ],
+            },
+            "criteria": _JEV_CRITERIA,
+        }
+    }
+
+    def _call() -> dict:
+        return evaluate(ctx, questions, purpose="alert_triage")
+
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(_call),
+            timeout=float(getattr(settings, "jev_timeout_seconds", 8.0)) + 2.0,
+        )
+    except Exception as exc:  # noqa: BLE001 — 增强层故障不得拖垮告警
+        log.info("alert triage jev unavailable: %s", type(exc).__name__)
+        return None
+    if not result.get("ok"):
+        return None
+    answer = (result.get("answers") or {}).get("verdict")
+    if not isinstance(answer, dict):
+        return None
+    verdict = str(answer.get("choice") or "").strip().lower()
+    confidence = answer.get("confidence")
+    probabilities = answer.get("probabilities")
+    if verdict not in _VERDICTS or not isinstance(confidence, (int, float)):
+        return None
+    if not 0.0 <= float(confidence) <= 1.0 or not isinstance(probabilities, dict):
+        return None
+    if set(probabilities) != set(_VERDICTS):
+        return None
+    return {
+        "verdict": verdict,
+        "confidence": float(confidence),
+        "model": str(result.get("model") or "jev"),
+        "latency_ms": float(result.get("latency_ms") or 0.0),
     }
 
 
@@ -197,14 +264,43 @@ async def triage_event(event: AlertEvent, session_factory=None) -> dict | None:
         if _already_recent(event, sf):
             return _save(event.id, "ignore", "同类事件在冷却窗口内已提醒（去重）", "rules", sf)
 
-    # 2) LLM 判读
+    # 2) Jev 低成本结构化判读（默认 shadow，不改变用户可见行为）。
     ctx = _event_context(event, sf)
+    from app.core.config import settings
+    from app.core.jev_client import record_comparison
+
+    mode = str(getattr(settings, "jev_alert_triage_mode", "off") or "off").strip().lower()
+    jev = await _jev_verdict(ctx) if mode in {"shadow", "cascade"} else None
+    if mode == "cascade" and jev is not None:
+        min_conf = float(getattr(settings, "jev_alert_triage_accept_confidence", 0.90))
+        if float(jev["confidence"]) >= min_conf:
+            verdict = str(jev["verdict"])
+            reason = f"{_JEV_REASON[verdict]}（置信 {float(jev['confidence']):.2f}）"
+            if verdict in ("notify", "escalate"):
+                with contextlib.suppress(Exception):
+                    note = _response_note(event, sf)
+                    if note:
+                        reason = f"{reason}｜{note}"
+            return _save(event.id, verdict, reason, "jev", sf)
+
+    # 3) DeepSeek 复杂判读：Jev 低置信/不可用，或 shadow 模式一律继续。
     got = await _llm_verdict(ctx)
     if got is None:
         return _save(event.id, "notify", "AI 判读不可用，按规则提醒（未做噪音过滤）",
                      "llm_fallback", sf)
     verdict, reason = got
-    # 3) 响应建议（P1-5 盘中回路，只读）：notify/escalate 追加题材上下文与观察指引
+    if jev is not None:
+        record_comparison(
+            "alert_triage",
+            str(jev["verdict"]),
+            verdict,
+            confidence=float(jev["confidence"]),
+        )
+        log.info(
+            "alert triage Jev comparison mode=%s agree=%s confidence=%.3f",
+            mode, str(jev["verdict"]) == verdict, float(jev["confidence"]),
+        )
+    # 4) 响应建议（P1-5 盘中回路，只读）：notify/escalate 追加题材上下文与观察指引
     if verdict in ("notify", "escalate"):
         with contextlib.suppress(Exception):
             note = _response_note(event, sf)

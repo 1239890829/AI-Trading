@@ -25,7 +25,7 @@
 
 **结论**：联动主体已闭环。原记两项增强项**均无未闭环欠债**，且状态不以本节为准：
 - `E4 复盘回写` = 账本 `RSH-017`（**等窗**：文档自注「上线运行积累数据后」）。
-- `E3 LLM 增强` = **已闭合**：LLM 通道（`claude -p` → GLM-5.3）可用，`events/llm_aux.py` 已落地
+- `E3 LLM 增强` = **已闭合**：LLM 通道走 `claude -p` → cc-switch 当前 DeepSeek（2026-09-19 实测 `deepseek-v4-flash`），`events/llm_aux.py` 已落地
   （见 `ai-evolution.md` §7 层 1）；「LLM 增强层待凭据」在 `retro-and-gaps.md` §五 遗留承接表中
   **已明确闭合、无需跟踪**。原行「待凭据支持」是**凭据到位前的旧表述**，已改正（`GOV-002`）。
 

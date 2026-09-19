@@ -1,0 +1,59 @@
+{
+  "$schema": "https://raw.githubusercontent.com/doeixd/jev-pref/v0.4.1/packages/jev-pref/schema.json",
+  "suites": [
+    "prefs",
+    "secrets"
+  ],
+  "gateThreshold": 0.8,
+  "advisoryThreshold": 0.75,
+  "failOn": "gates",
+  "hunks": true,
+  "maxHunks": 20,
+  "prefs": [
+    {
+      "id": "no_model_probability_as_market_probability",
+      "name": "模型概率不得冒充交易概率",
+      "description": "Jev/LLM 的 confidence、Noul 或分类概率不得被当作上涨概率、胜率、代码正确率或回测成功率。",
+      "scope": "hunk",
+      "gate": true,
+      "question": "这段改动是否把 Jev/LLM 的 confidence、Noul 或分类概率直接解释或使用为股票上涨概率、策略胜率、代码正确率或回测成功率？",
+      "guidance": "只根据本改动中明确的字段语义、文案、计算或阈值使用判定；正常的模型置信度展示或路由阈值不算违规。"
+    },
+    {
+      "id": "no_ai_real_trade_bypass",
+      "name": "AI 不得越过交易硬门",
+      "description": "Jev/LLM/Agent 不得新增真实下单、资金动作或绕过 T+1/涨跌停/整手/费用/停牌/风控硬门的执行路径。",
+      "scope": "hunk",
+      "gate": true,
+      "question": "这段改动是否让 Jev、LLM 或 Agent 能直接执行真实券商/资金动作，或绕过既有 T+1、涨跌停、整手、费用、停牌、风险检查等硬拦截？",
+      "guidance": "只看本改动新增或改变的实际执行路径；只读研究、模拟交易、解释、影子建议不算违规。"
+    },
+    {
+      "id": "shadow_requires_evidence_before_production",
+      "name": "影子信号转生产需证据",
+      "description": "研究/影子/Jev 语义信号不得在没有可见验证门槛时直接影响生产选股、仓位、风控或推送。",
+      "scope": "change",
+      "gate": false,
+      "question": "这次改动是否把 research/shadow/experimental/Jev 语义信号直接接入生产选股评分、仓位、风险硬门或用户推送，而改动中看不到样本门槛、回测/对照证据或明确的 evidence gate？",
+      "guidance": "若仍是 shadow/telemetry/advisory，或生产消费被样本量、回测、Champion/Challenger、人工审批等门槛隔离，则回答否。"
+    },
+    {
+      "id": "frontend_hides_internal_governance",
+      "name": "前台不暴露内部治理噪声",
+      "description": "Jev/Agent 调试、路由、进化和阈值治理应留后台，不能包装成用户交易结论。",
+      "scope": "hunk",
+      "gate": false,
+      "question": "这段改动是否把 Jev/Agent 的调试参数、内部路由、模型分数、进化控制或治理细节作为用户前台的核心交易操作/推荐，而不是后台诊断或必要的来源/风险说明？",
+      "guidance": "必要的风险提示、来源、降级状态和可解释依据不算内部治理噪声。"
+    },
+    {
+      "id": "quant_logic_change_needs_evidence",
+      "name": "量化口径变更需可验证依据",
+      "description": "策略、因子、情绪、做T、评分或阈值口径的生产变更应带可验证证据门槛。",
+      "scope": "change",
+      "gate": false,
+      "question": "这次改动是否改变生产策略/因子/情绪/做T/评分/阈值口径，却只依据模型主观判断或描述，未在改动中体现回测、固定样本、影子对照、版本复核或其它可复算验证路径？",
+      "guidance": "纯重构、只读影子特征、文档研究计划、保持既有数值口径的修改不算生产口径变更。"
+    }
+  ]
+}

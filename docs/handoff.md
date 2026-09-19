@@ -1505,3 +1505,45 @@
 - **完整本地门禁**：后端 3502 passed / 76 skipped、前端本地/UTC 各 651/70，静态、构建与 OpenAPI 通过；时间与负载见 §1。全量前端耗时受宿主负载影响，本批只用交错对照判断目标测试收益，不把全量墙钟差当成固定优化比例。
 - **交付收据**：PR #25 准确 HEAD `c0710a1b58900f934fd439ee2bc894f398ef4970`，PR run `35183403966` / master run `35183821892` 各 attempt 1、三 job 全成功；合并 `e976c1063541270eeb77abb365303f2ddcf3a06b`，实际树一致。后端 PR 223.86s/master 209.01s（pytest 均 3502 passed / 76 skipped）；job 269s/250s。前端 job 165s/117s，两个 runner 的差异不当作固定提速。两轮 job 逐项上取整合计估算 17 分钟，按此前实际 169 扣减 17 得 152，本次账户页面已确认，保留 40。
 - **归档与清理**：原项目 artifacts/runs/ci-efficiency-20260917 保存全部验证、发布与分钟收据；旧 CI 和指数缓存工作区的本机产物均打包、逐项哈希读回后清理，原平台恢复包与未知资产保留。
+
+## GOV-019 TypeSafe/Jev 项目治理、额度度量与回退策略
+- **账本**：`docs/retro-and-gaps.md` §6.0 `GOV-019` ｜ **日期**：2026-09-19 ｜ **状态**：🟡 部分闭环
+- **缺口与验收标准**：统一 adapter、安全外发、低置信回退、usage/latency/agreement/routing telemetry 与零成本 health 已落地；跨进程 metadata-only usage JSONL + 零网络历史汇总已落地；当前开放项收敛为 **RSH-030 目标域阈值/质量校准**。完成标准不变：不把“免费/省额度”或单次 confidence 当结论。
+- **已完成基础设施（仓库外）**：Codex 用户级 `typesafe-ai` skill；`jev-review@plugins-cli 0.1.1`；本地 `jev-browser` skill + `~/.local/bin/jev-browser`；TypeSafe Key 存 macOS Keychain，并映射为 `JEV_API_KEY` / `TYPESAFE_API_KEY`，不写入仓库。
+- **浏览器底座**：`browser-use/jev-ultrafast` 安装在 `~/.local/share/jev-ultrafast`，本机精确 HEAD `1231850a0bf1a0c0341fe408ef1668dbbfdfac46`；Browser Harness 0.1.13 已连 Chrome，doctor 显示 daemon / active connection 均 OK。
+- **安全边界**：Jev 只做窄语义判断/路由/验证；确定性规则、权限、撮合、风控与执行仍由代码负责。任何真实下单、资金与风控绕过均不得进入 Jev 的动作空间。
+- **价格口径**：TypeSafe 公开口径当前为输入 $0.042 / MTok（$42 / billion），输出免费；账户可能有 promotional credits，但项目不得依赖“永久免费”假设。费用判断以账户与当轮 usage 为准。
+- **机械证据**：TypeSafe `/v1/models` 已由新 shell 通过 Keychain 环境返回 HTTP 200；两个环境变量内容一致。Jev 浏览器安装后 `ruff` 通过、`pytest 31 passed`、两份 JS `node --check` 通过、`uv build` 成功。
+- **项目内机械守卫**：`app/core/jev_client.py` 是唯一 HTTP/key 入口；`test_jev_single_source.py` 禁第二套 TypeSafe endpoint/credential 读取；`test_jev_client.py` 已覆盖无 key 不触网、敏感字段/密钥形态拒绝、state 大小上限、瞬时限流重试、answer shape、HTTP 错误不回显正文与 telemetry；`tests/conftest.py` 显式 `ASHARE_JEV_ENABLED=false`，永久 Keychain 环境也不会让 pytest 真实触网。
+- **本轮最终门禁（2026-09-19）**：Jev/助手/事件/告警专项 **244 passed**；live smoke 修复后关联 **166 passed**；最终后端全量 **3683 passed / 79 skipped / 0 failed，107.05s**；`pyflakes app tests scripts` 0；`doc-health` 全部通过。前端 `tsc --noEmit` 0、`eslint .` 0，本地与 `TZ=UTC` 均 **71 files / 675 tests**，Next production build 成功（8/8 静态页）。`jev-pref` 对 core / event-alert / assistant / quant-shadow 四域均 `approve`，secrets suite 同时通过；`jev-review` 真实 MCP 已打通并完成核心/事件/助手/量化切片评审；live-smoke 修复后的**当前代码**最终评分中，事件 correctness=7.9 / reliability=8.1，助手 correctness=7.9 / modularity=8.2，只有 low-severity 泛化建议，无中高严重度项。未为 Jev 分数做无证据重构；一次 previousEvaluation 复评尝试因只保存了部分旧评分、不满足插件完整 schema 而未产生有效结果，故未伪造 delta，最终以当前代码 fresh review + 可复现 smoke/测试为准。
+- **遗留与下一步**：adapter/telemetry 与跨重启 metadata-only usage 历史已完成；`data/jev/usage.jsonl` 明确 gitignore，`backend/scripts/jev_usage_report.py` 可零网络汇总。`GET /api/system/providers` 的 `jev` 字段仍刻意只报进程内即时统计。任何 `shadow → cascade` 的生产阈值必须来自 `RSH-030` 的人工金标准与目标域验证。
+
+## IMP-045 Jev 语义决策中间层
+- **账本**：`docs/retro-and-gaps.md` §6.0 `IMP-045` ｜ **日期**：2026-09-19 ｜ **状态**：🟡 部分闭环
+- **缺口与验收标准**：`alert_triage` 与 `events/llm_aux` 的首批 shadow/cascade 结构已接线；目标仍是“规则 → Jev 窄判断 → 低置信/冲突才升级 DeepSeek”。当前仍缺摘要/引用 verifier、题材候选 Noul 正式链与 KB/search rerank 自动化；第一阶段默认 shadow，不改变选股分或交易结论。
+- **项目真数据试验**：从 `data/ashare.db` 只读抽取 2026-09-18~19 的 active、未 LLM 判定、无非零方向事件；候选池 678 条，确定性抽样 24 条。Jev `jev-1.13.0` 24/24 HTTP 200；category 与现规则一致 15/24，certainty 一致 20/24，至少一个标签分歧 11/24。**这是一致率，不是准确率**，因为现有标签也是规则产物。
+- **已暴露的规则边界**：①“美联储隔夜逆回购使用规模”被现规则因子串“回购”误落 `corporate`，Jev 判 `data`（0.94）；②“美联储施密德表示…”被“财政部”先命中 `policy`，Jev 判 `statement`（0.96）。这些只证明语义审计价值，不证明 Jev 永远正确。
+- **题材候选试验**：基于项目 391 个官方题材先由代码缩候选，再逐候选 Noul。芯片/AI政策消息对“人工智能”0.91、“芯片概念”0.84；算力服务合同对“算力租赁”0.83；纯 RRP 数据对“参股银行/券商/互联网金融”仅 0.03/0.02/0.04。Noul 是模型对 yes 的概率，不是上涨概率。
+- **设计纪律**：不让 Jev自由生成题材；代码提供候选集合，Jev 只判断候选。宽泛“综合催化分”本轮过于宽松（24 条中 19 条 ≥1.5），不作为过滤器；优先多个窄 Noul / Choice。
+- **已接线**：① `alert_triage` 用 Jev Choice 做 notify/ignore/escalate；shadow 仍以 DeepSeek 为用户可见结论，cascade 只有达校准阈值才可直接消费。② `events/llm_aux` 用多 Noul 只判“是否值得继续做非零题材方向”，cascade 只允许高把握中性预过滤，**不让 Jev 生成题材**；若剩余 DeepSeek 子批失败，整批仍不标 judged，保持原事务语义。
+- **真实接线 smoke（2026-09-19）**：项目真实 question schema 已直接调用 `jev-1.13.0` 成功。合成合同事件 `Noul=0.53`、纯统计事件 `Noul=0.03`；这证明中文事件不可把 0.5 当高置信阈值，也支持当前 cascade 只允许 `<=0.05` 的极低 yes-probability 中性提前退出。首轮 smoke 还抓到未落库 `EventCard.id=None` 会导致答案映射键覆盖，已新增“ID 必须非空且唯一”的网络前 fail-closed 守卫与回归用例。**遗留**：默认保持 shadow；补人工标签后再决定 cascade 阈值。题材候选 Noul、摘要/引用 verifier 与 KB/rerank 仍开放；是否减少 DeepSeek 调用必须由 `RSH-030` 给出真实 usage 证据。
+
+## IMP-046 Jev Agent Router：AI 助手 / 交易智能体 / 浏览器研究
+- **账本**：`docs/retro-and-gaps.md` §6.0 `IMP-046` ｜ **日期**：2026-09-19 ｜ **状态**：🟡 部分闭环
+- **缺口与验收标准**：AI 助手的 bounded **tool-group routing** 已接 shadow；代码先声明 6 个只读工具组，Jev 多 Noul 可同时选多组，执行授权仍由 `TOOL_SPECS` 控制。浏览器研究已复用用户级 `jev-browser`。当前主要开放项 = 真正的 model/effort router（先 shadow 统计，不插未知代理层）与长期路由覆盖率校准。
+- **浏览器真实验收**：`jev-browser run https://example.com 'Open the More information link…'` 在未配置文本 helper 的情况下，仅用 Jev + Browser Harness 完成真实 CLICK 导航；3,398ms 到 `https://www.iana.org/help/example-domains`，最终独立 URL 可核。说明 CLICK/SELECT/SCROLL/WAIT 路径已可用。
+- **文本输入链已闭合**：新增 localhost-only OpenAI-compatible bridge（`127.0.0.1:8777`），禁 Claude Code 工具、禁会话持久化，每次动态读取 cc-switch 当前模型；2026-09-19 实测 `deepseek-v4-flash`。Jev Browser 的 `TYPE_TEXT` 已在本地表单完成“Jev 选框 → DeepSeek 生成字段 → Harness 输入/点击 → 独立终态”端到端约 5.3s。复杂 UI/iframe/canvas/上传/弹窗仍回退既有 browser/computer-use。
+- **助手动作空间红线**：真实券商下单、资金转移、账户/风控修改、绕过模拟盘撮合硬门均不得被注册为 Jev 可执行工具。可注册的是只读行情/研究/回测/解释/网页核验，以及明确安全的模拟工具。
+- **模型路由目标**：Jev 可判断“规则即可 / Jev 可答 / 小模型生成 / Codex/ChatGPT 深推理 / 人工复核”，但最终路由阈值必须有实际任务数据；不得把“省额度”作为降低正确性/安全性的理由。
+- **注入自证计划**：伪造未注册工具名、越权参数、旧页面节点、低置信/冲突、浏览器 `DONE` 但结果未满足、真实交易动作等反例必须全部 fail-closed；浏览器最终状态另行验证。
+- **助手工具路由**：`app/assistant/jev_tool_router.py` 已按 6 组多 Noul 接入；shadow 与 DeepSeek 首轮并行、不拖首 token，route 失败/无组过阈值 fail-open 全工具清单；cascade 只缩提示词展示面，不改变 dispatch 白名单。真实同一问题“持仓股票今天有什么重要公告和盘中事件？”首轮暴露误选：`selection_research=0.87`、`market_realtime=0.76`；给各组补明确负边界后复测收敛为 `events_news=0.98 + account_positions=0.96`，`selection_research` 降至 **0.12**、`market_realtime` 降至 **0.38**。这证明先 shadow 校准而非直接 cascade 的必要性。telemetry 记录 baseline/selected 工具数与实际 used_tools coverage。**遗留**：先积累真实 coverage miss rate 与 token 缩减，再决定是否开启 cascade。
+
+## RSH-030 Jev 语义特征与额度节省实证
+- **账本**：`docs/retro-and-gaps.md` §6.0 `RSH-030` ｜ **日期**：2026-09-19 ｜ **状态**：🟡 部分闭环
+- **缺口与验收标准**：已有项目真数据分歧、题材候选样例、`jev-context` 人工锚点与统一 usage/routing telemetry，但仍没有 200–500 条人工金标准、长期升级率/DeepSeek-Codex token A/B，也没有证明任何 Jev 语义特征能改善选股或做T。完成标准仍是可复算实验，不以 demo 代替结论。
+- **A/B 设计**：同一人工标注集至少比较 ①规则 ②规则+Jev ③规则+现有 LLM ④规则+Jev+LLM fallback；指标 = 类别/题材 Precision/Recall、假阳/假阴、校准/低置信覆盖、升级率、端到端延迟、TypeSafe input tokens、现有 LLM/Codex 调用量和费用。
+- **样本要求**：优先从现有 `event_card` 分层抽样 200–500 条，覆盖 policy/statement/data/rumor/corporate/other、否定/转述/多主体/模糊传闻/提示注入文本；人工标签与模型输出分离保存，防止把规则标签当真值。
+- **语义特征路线**：新增 `app/research/jev_shadow.py`，固定 `lurk/first_start/limit_relay/trend_acceleration/break_to_trend/restart/pullback_reversal/event_driven/unclear` 选股形态、bounded tactic router 与复盘失败 taxonomy；只产 shadow 标签，不写生产评分/订单。事件确定性、主体直接性、题材相关性等同样只进研究集；未证明净期望或 Precision@K 增益前，不进入生产选股打分。
+- **本轮成本证据**：24 条项目真数据审计共 26,534 input tokens，按公开 $0.042 / MTok 估算约 $0.001114（非后台账单）；平均完整网络往返 1.65s、中位 1.36s。前述 8 条合成试验和 3 条题材试验另有独立回执。
+- **额度节省判据**：只有“同等或更好的目标任务质量 + 大模型升级次数/token 实测下降”才能宣称节省 Codex/ChatGPT/LLM 额度；不能拿 Jev 低单价直接推导整体节省。
+- **上下文节省实测**：5 组人工锚点中，Jev 对**已召回**关键锚点 filter recall=100%；weighted retrieval token reduction=5.28%；其中“情绪→空仓闸门” upstream retrieval recall 仅 2/3，证明过滤不能修复召回 ⇒ `jev-context` 保持 ask-only，不切 auto。**遗留**：人工金标准、长期 token A/B、选股/做T walk-forward/消融完成后再决定生产阈值与 Challenger。
