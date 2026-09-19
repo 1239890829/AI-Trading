@@ -1865,6 +1865,45 @@ def _task_ref_list(raw: str) -> list[str]:
     return [part for part in re.split(r"[、，,；;]\s*", raw) if part]
 
 
+def derive_current_stage_selection(tasks: dict[str, tuple[str, dict[str, str]]]) -> tuple[str | None, str | None, list[str]]:
+    """Derive the lowest actionable blocker gate and its ordered candidates."""
+    actionable_states = {"待执行", "进行中", "部分完成", "待交付"}
+    done_states = {"已完成"}
+    priority_rank = {"P0": 0, "P1": 1, "P2": 2}
+
+    def hard_deps_done(fields: dict[str, str]) -> bool:
+        for dep in _task_ref_list(fields.get("依赖", "")):
+            if dep not in tasks or tasks[dep][1].get("状态") not in done_states:
+                return False
+        return True
+
+    blockers: dict[str, list[tuple[str, dict[str, str]]]] = {gate: [] for gate in GATE_ORDER}
+    for tid, (_, fields) in tasks.items():
+        gate = fields.get("阶段门", "")
+        if (
+            gate in GATE_ORDER
+            and fields.get("门禁角色") == "阻断"
+            and fields.get("状态") in actionable_states
+            and hard_deps_done(fields)
+        ):
+            blockers[gate].append((tid, fields))
+
+    for gate in sorted(GATE_ORDER, key=GATE_ORDER.get):
+        candidates = blockers[gate]
+        if not candidates:
+            continue
+        candidates.sort(
+            key=lambda item: (
+                priority_rank.get(item[1].get("优先级"), 99),
+                int(item[1].get("门内序", "999999")),
+                item[0],
+            )
+        )
+        ids = [tid for tid, _ in candidates]
+        return gate, ids[0], ids
+    return None, None, []
+
+
 def check_stage_gates() -> list[str]:
     """S：有序阶段门。W 是归属，G 是执行门，P 是门内优先级。"""
     entries, _ = phase_tasks()
@@ -1960,6 +1999,37 @@ def check_stage_gates() -> list[str]:
     for token in required_tokens:
         if token not in ledger:
             errors.append(f"docs/retro-and-gaps.md：阶段门治理缺 {token}")
+
+    governance_surfaces = {
+        ROOT / "AGENTS.md": ("§5.9", "CROSS_GATE_EXCEPTION"),
+        ROOT / "skills/ashare-ledger-continue/SKILL.md": ("最低", "CROSS_GATE_EXCEPTION", "效果前置"),
+        ROOT / "skills/ashare-task-handoff/SKILL.md": ("CROSS_GATE_EXCEPTION", "效果前置"),
+        DOCS / "collaboration-workflow.md": ("CROSS_GATE_EXCEPTION", "效果前置"),
+        DOCS / "plan-registry.md": ("文档自治治理契约", "阶段门"),
+    }
+    for path, tokens in governance_surfaces.items():
+        text = _read(path)
+        for token in tokens:
+            if token not in text:
+                errors.append(f"{path.relative_to(ROOT)}：阶段门传播缺 {token}")
+
+    gate, task, candidates = derive_current_stage_selection(tasks)
+    handoff = _read(DOCS / "handoff.md")
+    if gate:
+        gate_match = re.search(r"^- \*\*当前主门\*\*：(G[0-5])\s*$", handoff, re.M)
+        task_match = re.search(r"^- \*\*主切片首选\*\*：((?:BUG|IMP|RSH|GOV|OPS)-\d{3})\s*$", handoff, re.M)
+        if not gate_match:
+            errors.append(f"docs/handoff.md：缺机器可读当前主门，账本推导为 {gate}")
+        elif gate_match.group(1) != gate:
+            errors.append(f"docs/handoff.md：当前主门 {gate_match.group(1)} 与账本推导 {gate} 不一致")
+        if not task_match:
+            errors.append(f"docs/handoff.md：缺机器可读主切片首选，账本推导为 {task}")
+        elif task_match.group(1) != task:
+            errors.append(f"docs/handoff.md：主切片首选 {task_match.group(1)} 与账本推导 {task} 不一致")
+        if candidates:
+            expected = " → ".join(candidates)
+            if expected not in handoff:
+                errors.append(f"docs/handoff.md：当前门候选顺位未反映账本推导 {expected}")
     return errors
 
 
