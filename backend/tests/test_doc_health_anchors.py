@@ -340,6 +340,8 @@ _NEUTRAL = {
     # ⚠️ 返回形状 `(冲突列表, 保险丝说明)`：中性值必须是 `((), None)` ——
     # 保险丝写成 `""` 会让 `bool("") is False` 使"保险丝未触发"与"中性打桩"无法区分。
     "check_phase_tasks": (),
+    # 2026-09-19 v9.7：S 项（阶段门治理）加入 main 后必须同步纳入 hermetic 中性表。
+    "check_stage_gates": (),
     # 2026-09-19 v9.4：R 项（重大决策传播）加入 main 后必须同步纳入 hermetic 中性表；
     # 否则结论行测试会偷偷读取真实仓库，正是本测试要阻止的覆盖漂移。
     "check_decision_propagation": (),
