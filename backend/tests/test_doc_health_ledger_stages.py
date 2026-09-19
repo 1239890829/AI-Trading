@@ -20,14 +20,18 @@ def load():
     return mod
 
 
-def task(tid="BUG-014", status="待执行", deps="无", evidence="尚未实施"):
+def task(tid="BUG-014", status="待执行", deps="无", evidence="尚未实施", *, gate="G0", order=10, role="阻断", effect="无"):
     return f"""## {tid}
 
 **修复实际缺口**
 
 - **状态**：{status}
 - **优先级**：P0
+- **阶段门**：{gate}
+- **门内序**：{order}
+- **门禁角色**：{role}
 - **依赖**：{deps}
+- **效果前置**：{effect}
 - **方案依据**：最终方案 W00
 - **范围**：修复迁移连接
 - **验收**：在隔离目标库断言表与字段
@@ -40,13 +44,16 @@ def task(tid="BUG-014", status="待执行", deps="无", evidence="尚未实施")
 @pytest.fixture
 def probe(tmp_path, monkeypatch):
     mod = load()
-    docs = tmp_path / "docs"
+    root = tmp_path
+    docs = root / "docs"
     (docs / "stages").mkdir(parents=True)
     (docs / "archive").mkdir()
     monkeypatch.setattr(mod, "ROOT", tmp_path)
     monkeypatch.setattr(mod, "DOCS", docs)
     monkeypatch.setattr(mod, "LEGACY_SOURCE_IDS", frozenset({"GOV-014"}), raising=False)
-    index = "### 6.0 阶段索引\n\n| 阶段 | 内容 |\n|---|---|\n"
+    index = ("### 5.9 阶段门、优先级与跨阶段治理\n"
+             "G0 事实与安全底座 · G5 验收与发布 · GX 持续治理 · CROSS_GATE_EXCEPTION · 效果前置\n\n"
+             "### 6.0 阶段索引\n\n| 阶段 | 内容 |\n|---|---|\n")
     for i in range(10):
         rel = f"stages/w{i:02}-phase.md"
         index += f"| W{i:02} | [阶段]({rel}) |\n"
@@ -54,7 +61,23 @@ def probe(tmp_path, monkeypatch):
     (docs / "retro-and-gaps.md").write_text(index)
     (docs / "stages/w00-phase.md").write_text((docs / "stages/w00-phase.md").read_text() + task())
     (docs / mod.LEGACY_LEDGER).write_text("| GOV-014 | 已完成 | Git 原文 | 旧闭环留痕 |\n")
-    (docs / "handoff.md").write_text("# 当前现场\n")
+    (docs / "handoff.md").write_text(
+        "# 当前现场\n"
+        "- **当前主门**：G0\n"
+        "- **主切片首选**：BUG-014\n"
+        "- **门内候选**：BUG-014\n"
+    )
+    (root / "AGENTS.md").write_text("§5.9 CROSS_GATE_EXCEPTION\n")
+    (docs / "collaboration-workflow.md").write_text("CROSS_GATE_EXCEPTION 效果前置\n")
+    (docs / "plan-registry.md").write_text("文档自治治理契约 阶段门\n")
+    (root / "skills" / "ashare-ledger-continue").mkdir(parents=True)
+    (root / "skills" / "ashare-task-handoff").mkdir(parents=True)
+    (root / "skills" / "ashare-ledger-continue" / "SKILL.md").write_text(
+        "最低 CROSS_GATE_EXCEPTION 效果前置\n"
+    )
+    (root / "skills" / "ashare-task-handoff" / "SKILL.md").write_text(
+        "CROSS_GATE_EXCEPTION 效果前置\n"
+    )
     return mod
 
 
@@ -69,6 +92,7 @@ def test_real_ledger_has_no_stage_conflict():
     mod = load()
     assert mod.check_phase_index() == []
     assert mod.check_phase_tasks() == []
+    assert mod.check_stage_gates() == []
 
 
 def test_real_decision_propagation_is_closed():
@@ -269,13 +293,13 @@ def test_decision_propagation_detects_stale_handoff_requirement_range(monkeypatc
     def patched_read(path):
         text = original_read(path)
         if path == target:
-            assert "U01–U44" in text
-            return text.replace("U01–U44", "U01–U43", 1)
+            assert "U01–U45" in text
+            return text.replace("U01–U45", "U01–U44", 1)
         return text
 
     monkeypatch.setattr(mod, "_read", patched_read)
     errors = mod.check_decision_propagation()
-    assert any("累计要求范围" in error and "U44" in error for error in errors)
+    assert any("累计要求范围" in error and "U45" in error for error in errors)
 
 
 def test_active_collaboration_entry_does_not_pin_retired_feature_branch():
@@ -536,3 +560,74 @@ def test_merge_cannot_form_retirement_chain_or_cycle(probe):
                  task("IMP-001", status="已合并") +
                  "- **处置依据**：错误回指。\n- **合并至**：BUG-014\n")
     assert any("合并去向无效" in e for e in probe.check_phase_tasks())
+
+
+def test_stage_gate_rejects_higher_gate_hard_dependency(probe):
+    p = probe.DOCS / "stages/w00-phase.md"
+    p.write_text(p.read_text() + task("IMP-001", gate="G1", order=20, role="阻断"))
+    edit(probe, "stages/w00-phase.md", "- **依赖**：无", "- **依赖**：IMP-001")
+    errors = probe.check_stage_gates()
+    assert any("更高阶段门" in error for error in errors)
+
+
+def test_stage_gate_rejects_duplicate_gate_order(probe):
+    p = probe.DOCS / "stages/w00-phase.md"
+    p.write_text(p.read_text() + task("IMP-001", gate="G0", order=10, role="非阻断"))
+    errors = probe.check_stage_gates()
+    assert any("门内序 10" in error and "重复" in error for error in errors)
+
+
+def test_stage_gate_rejects_hard_dependency_on_continuous_governance(probe):
+    p = probe.DOCS / "stages/w00-phase.md"
+    p.write_text(p.read_text() + task("GOV-001", gate="GX", order=20, role="持续治理"))
+    edit(probe, "stages/w00-phase.md", "- **依赖**：无", "- **依赖**：GOV-001")
+    errors = probe.check_stage_gates()
+    assert any("硬依赖不得指向持续治理任务 GOV-001" in error for error in errors)
+
+
+def test_stage_gate_rejects_missing_effect_prerequisite(probe):
+    edit(probe, "stages/w00-phase.md", "- **效果前置**：无", "- **效果前置**：RSH-999")
+    errors = probe.check_stage_gates()
+    assert any("效果前置不存在" in error for error in errors)
+
+
+def test_stage_gate_requires_g5_acceptance_role(probe):
+    edit(probe, "stages/w00-phase.md", "- **阶段门**：G0", "- **阶段门**：G5")
+    errors = probe.check_stage_gates()
+    assert any("G5 只能使用验收角色" in error for error in errors)
+
+
+def test_stage_gate_derives_lowest_actionable_blocker(probe):
+    entries, _ = probe.phase_tasks()
+    tasks = {tid: (rel, fields) for tid, rel, fields in entries}
+    gate, selected, candidates = probe.derive_current_stage_selection(tasks)
+    assert gate == "G0"
+    assert selected == "BUG-014"
+    assert candidates == ["BUG-014"]
+
+
+def test_stage_gate_does_not_skip_lower_gate_for_higher_blocker(probe):
+    p = probe.DOCS / "stages/w00-phase.md"
+    p.write_text(p.read_text() + task("IMP-001", gate="G1", order=20, role="阻断"))
+    entries, _ = probe.phase_tasks()
+    tasks = {tid: (rel, fields) for tid, rel, fields in entries}
+    gate, selected, _ = probe.derive_current_stage_selection(tasks)
+    assert (gate, selected) == ("G0", "BUG-014")
+
+
+def test_stage_gate_advances_after_lower_blocker_completed(probe):
+    edit(probe, "stages/w00-phase.md", "- **状态**：待执行", "- **状态**：已完成")
+    edit(probe, "stages/w00-phase.md", "- **证据**：尚未实施", "- **证据**：PR #1")
+    p = probe.DOCS / "stages/w00-phase.md"
+    p.write_text(p.read_text() + task("IMP-001", gate="G1", order=20, role="阻断"))
+    entries, _ = probe.phase_tasks()
+    tasks = {tid: (rel, fields) for tid, rel, fields in entries}
+    gate, selected, _ = probe.derive_current_stage_selection(tasks)
+    assert (gate, selected) == ("G1", "IMP-001")
+
+
+def test_stage_gate_rejects_handoff_selection_mismatch(probe):
+    handoff = probe.DOCS / "handoff.md"
+    handoff.write_text(handoff.read_text().replace("BUG-014", "IMP-999"))
+    errors = probe.check_stage_gates()
+    assert any("主切片首选" in error and "账本推导" in error for error in errors)

@@ -2,7 +2,7 @@
 
 > 定位：**docs 唯一入口**。查东西先来这里；写新文档必须在此登记。
 > 维护约定：状态在所属阶段单点更新，成果提炼与恢复按 `kb/07-doc-curation.md` §3.2；新建/迁移同步本表，未知资产不删除。
-> 当前入口（2026-09-19）：从最新 `master` 的 `AGENTS.md` → 本索引；`retro-and-gaps.md` §6.0 是阶段总账，`stages/` 存任务唯一状态，`handoff.md` 仅存当前现场。 `implementation-plan.md` 是 v9.6 规划修订，不单独定义当前执行模式；允许动作以最新 `handoff.md` + 所属 stage 为准。分工与逐轮审核见 `collaboration-workflow.md`；平台迁移证据见 `platform-directory-migration.md`。
+> 当前入口（2026-09-19）：从最新 `master` 的 `AGENTS.md` → 本索引；`retro-and-gaps.md` §5.9 是执行门序治理、§6.0 是 W00–W09 领域索引，`stages/` 存任务唯一状态与调度元数据，`handoff.md` 仅存当前主门/现场。 `implementation-plan.md` 是 v9.7 规划修订，不单独定义当前执行模式；允许动作以最新 `handoff.md` + 所属 stage 为准。分工与逐轮审核见 `collaboration-workflow.md`；平台迁移证据见 `platform-directory-migration.md`。
 
 ## 0.0 书库编目（编号 / 层 / 领域 / 用途）
 
@@ -19,13 +19,13 @@
 | **AG-02** | `README.md`（根） | L3 | 对外 | 项目简介 + 指针式入口。维护：结构性变化 |
 | **KW-00** | `CONTEXT.md`（根） | L2 | 术语 | **领域词汇表（Ubiquitous Language）唯一权威**；只放术语、不放实现。维护：grilling 会话即时更新 |
 | **AG-03** | `INDEX.md` | L3 | 编目 | **文档总入口**（本表即编目）。维护：新增/删除文档时 |
-| **AG-04** | `retro-and-gaps.md` | L2 | 账本 | 阶段总账与任务管理规则，§6.0 索引 W00–W09；不复制任务状态 |
+| **AG-04** | `retro-and-gaps.md` | L2 | 账本 | §5.9 G0–G5/GX 阶段门、任务调度治理；§6.0 索引 W00–W09 领域归属；不复制任务状态 |
 | **AG-05** | `plan-registry.md` | L3 | 计划 | 历史计划去向、文档权责与重大决策传播契约；旧状态不作当前指令 |
 | **AG-06** | `PROJECT-MASTER.md` | L2 | 总览 | 全项目技术总览（08-29 基线，细节以代码为准）。维护：结构变化 |
 | **AG-07** | `handoff.md` | L2 | 交接 | 当前工作区、实际运行版本、最近门禁与交付；不另建任务记录 |
 | **AG-08** | `platform-directory-migration.md` | L2 | 工程治理 | 目录迁移的恢复点、消费者与验收证据；任务状态归账本 §6.0 `GOV-018` |
 | **AG-09** | `stages/` | L2 | 阶段任务 | W00–W09，各 ID 仅一份状态/验收/证据；P/Q 校验 |
-| **AG-10** | `implementation-plan.md` | L2 | 当前实施修订 | v9.6：living plan；吸收 Jev、开放世界持续演进及历史涨停/龙头研究闭环；状态仍归阶段 |
+| **AG-10** | `implementation-plan.md` | L2 | 当前实施修订 | v9.7：living plan；新增 G0–G5/GX 阶段门治理，W领域归属/P优先级/执行门分离；状态仍归阶段 |
 | **AG-11** | `collaboration-workflow.md` | L2 | 协作审核 | 账本驱动；网页统筹审核、Codex执行，用户一句话触发，`master` 共享入口与原型退出 |
 | **AG-12** | `product-closure-design.md` | L2 | 产品闭环 | 全模块用途、前后台分工、业务/研究/工程链和确认流程图；非已上线报告 |
 | **AG-13** | `feature-closure-audit.md` | L2 | 细功能审计 | 大小动作/接口/后台任务的覆盖、源码发现与未验边界；任务状态仍归阶段 |
@@ -119,7 +119,7 @@
 | **T2 门禁与测试** | `AGENTS.md` §1 门禁命令块 | `kb/09-verification-pitfalls.md` · `kb/03-engineering.md` | 必带 `--basetemp`、**勿叠 `-q`**；涉时区断言**必须 `TZ=UTC` 复跑**；vitest 加 `--maxWorkers=1`；**必须整仓跑** |
 | **T3 数据源与行情口径** | `data-source-comparison.md` → `data-sources.md` | `data-dictionary.md` · `websocket.md` | 时效按数据类型、交易日历与来源可见时间判定；盘前/休市可用上一有效交易日，盘中旧数据不能冒充当前；不以一律“今天”或固定TTL替代业务语义 |
 | **T4 选股与策略** | `hunting-decision-design.md` → `kb/00-INDEX.md` 选股表 | 历史涨停/龙头研究 `limit-up-dragon-research.md` · `summary/stock-strategy.md` · `strategy-registry.md` · `factor-lifecycle-governance.md` + `factor-candidates.md` | **示例 ≠ 规范**；赢家复盘≠预测能力；策略/因子落地**必须先过点时全分母、OOS/前向和成本实证**；回测禁令见 `backtest-rules.md` |
-| **T5 复盘与治理** | 复盘 `kb/06-review-framework.md`（**先读它**）；治理 `retro-and-gaps.md` §6.0 | `daily-review-sop.md` · `daily-review-checklist.md` · `review-agent.md` · `handoff.md`（当前现场）· `kb/07` · `kb/11` | 任务在索引的阶段页单点维护；删除只走 `scripts/safe-trash.sh` |
+| **T5 复盘与治理** | 复盘 `kb/06-review-framework.md`；执行治理 `retro-and-gaps.md` §5.9/§6.0 | `plan-registry.md` §1.1/§1.3 · `collaboration-workflow.md` · `handoff.md` · `kb/07` · `kb/11` | W只管归属、G0–G5管门序、P0–P2管门内重要性；硬依赖未完成不得跨门；任务只在 stage 单点维护 |
 | **T6 前端与 UI** | `summary/architecture-design.md`（§1 跨页面联动设计） | `architecture.md` · `kb/03-engineering.md` | **验收以实际渲染为准**（agent-browser 文本通道）；**新增页面/板块需先论证**；**详情弹窗化**（个股/指数在任何页面就地弹窗，不跳工作台）见 [[KB-ENG-92]] |
 | **T7 外部工具与技能** | `continuous-evolution.md` → `skills/ashare-innovation-radar/SKILL.md` | `jev-integration.md` · 本表 **WB-04** · `llm-gateway-probe.md` | 外部热度只产候选；先许可/隐私/费用/权限硬门与证据梯度，未经 owner stage 不安装/准入 |
 | **T8 决策与"为什么当初这么定"** | `kb/04-decisions.md`（KB-DEC） | `archive/ledger-transition-20260917.md` · `implementation-plan.md` | 既有决定可依新证据和最新授权复核；保留取代关系与依据，不据历史标题锁死设计 |
