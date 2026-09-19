@@ -1,6 +1,6 @@
-# 当前交接：v9.4 决策传播治理 PR #41 待独立审核/CI
+# 当前交接：v9.4 决策传播治理基线，等待下一明确实施切片
 
-**当前模式：GOVERNANCE_DOC_UPDATE。** 2026-09-18 的 DESIGN_ONLY 规划批已经完成并作为历史范围保留；2026-09-19 的 Jev、公开仓库治理与累计协作功能栈均已进入主干。当前业务代码没有活动施工派工；本轮只更新 v9.4 总方案、重大决策传播治理、接手/交接 Skills 与文档守卫。业务下一轮仍由网页 ChatGPT 读最新 `master`、阶段账本与证据后明确派发有限切片。最新来源为 [实施方案](implementation-plan.md)、[Jev 蓝图](jev-integration.md)、[产品闭环](product-closure-design.md)、[开放情境猎场](hunting-decision-design.md)、[大小功能覆盖](feature-closure-audit.md)、[计划去向](plan-registry.md)、[协作规范](collaboration-workflow.md)。
+**当前模式：READY_FOR_NEXT_PLANNED_SLICE。** 2026-09-18 的 DESIGN_ONLY 规划批已经完成并作为历史范围保留；2026-09-19 的 Jev、公开仓库治理与累计协作功能栈均已进入主干。当前业务代码没有活动施工派工；v9.4 总方案、重大决策传播治理、接手/交接 Skills 与文档守卫由 PR #41 承载，是否已合并以 GitHub 实际状态为准；本文件只有进入 `master` 后才成为共享当前现场。业务下一轮仍由网页 ChatGPT 读最新 `master`、阶段账本与证据后明确派发有限切片。最新来源为 [实施方案](implementation-plan.md)、[Jev 蓝图](jev-integration.md)、[产品闭环](product-closure-design.md)、[开放情境猎场](hunting-decision-design.md)、[大小功能覆盖](feature-closure-audit.md)、[计划去向](plan-registry.md)、[协作规范](collaboration-workflow.md)。
 
 ## 1. 固定入口与范围
 
