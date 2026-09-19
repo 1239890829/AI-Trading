@@ -1,6 +1,6 @@
 # 计划去向、文档权责与冲突裁定
 
-> 本文只管“哪份内容对哪个问题有效”，不维护任务进度。现行设计为 [实施方案](implementation-plan.md)、[产品闭环](product-closure-design.md)、[猎场决策](hunting-decision-design.md) 和 [细功能覆盖](feature-closure-audit.md)；阶段任务只从 [总账](retro-and-gaps.md#60-阶段索引) 进入，现场只看 [handoff](handoff.md)。
+> 本文只管“哪份内容对哪个问题有效”，不维护任务进度。现行长期/产品设计入口为 [实施方案](implementation-plan.md)、[持续演进](continuous-evolution.md)、[产品闭环](product-closure-design.md)、[猎场决策](hunting-decision-design.md)、[历史涨停/龙头研究](limit-up-dragon-research.md) 和 [细功能覆盖](feature-closure-audit.md)；执行顺序只读 [总账 §5.9](retro-and-gaps.md#59-阶段门优先级与跨阶段治理)，领域归属读 §6.0，任务状态读所属 stage，现场只看 [handoff](handoff.md)。
 > 2026-09-18 规划批范围（历史限定）：完成理论、计划与文档收口，不执行开发账本。该批范围不再代表全项目“当前模式”；当前允许动作看最新 `master` 的 `handoff` / stage。本次整理不等于任何业务能力已实现、已上线或已验证盈利。
 
 ## 1. 文档各自拥有的问题
