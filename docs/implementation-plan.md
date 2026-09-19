@@ -6,7 +6,8 @@
 > 2026-09-18 规划收口版；网页 ChatGPT 负责理论、设计、计划与审核，后续工程由 Codex 执行。**DESIGN_ONLY 仅是 2026-09-18 这一规划批的交付边界**：该批不执行账本业务任务、不改业务代码、不跑交易/组件修复试验，不启动模型、服务或发布。当前允许动作与工程现场始终以最新 `master` 的 `docs/handoff.md` 和所属 stage 为准。
 > 设计：[产品闭环](product-closure-design.md)｜[开放情境猎场](hunting-decision-design.md)｜[历史涨停/龙头研究](limit-up-dragon-research.md)｜[大小功能覆盖](feature-closure-audit.md)。状态只归 [阶段总账](retro-and-gaps.md#60-阶段索引)，当前模式与现场只看 [handoff](handoff.md)。
 > **2026-09-19 v9.4 增量**：吸收 TypeSafe/Jev 与最近多轮合并后的长期架构决策，并新增“重大决策传播契约”。Jev 的详细实现、证据和调用纪律仍只在 [Jev 蓝图](jev-integration.md)；本文件只固定其系统层角色、准入门和未来建设方向，避免专题已升级而总方案/索引/接手入口滞后。
-> **2026-09-19 v9.5 增量**：新增 [开放世界持续演进蓝图](continuous-evolution.md)。当前计划是 living plan：稳定原则长期保留，但模型、工具链、数据、研究方法、选股假设和实现方案必须持续接受外部新证据挑战；外部候选必须经来源核实、隔离复现、同基线比较、目标域验证和原发布门后才可采用。\n> **2026-09-19 v9.6 增量**：新增 [历史涨停/强连板/龙头研究蓝图](limit-up-dragon-research.md) 与 W04/RSH-031。把涨停、空间板、弱市穿越、题材梯队与板块异常从零散案例升级为“全量事件 + 失败对照 + 点时证据 + 从旧到新盲测 + 猎场 shadow 回流”的研究闭环；Jev 只承担 bounded 历史语义 MapReduce、rerank 与 claim↔evidence verification，不能成为涨停预测器或绕过研究准入。
+> **2026-09-19 v9.5 增量**：新增 [开放世界持续演进蓝图](continuous-evolution.md)。当前计划是 living plan：稳定原则长期保留，但模型、工具链、数据、研究方法、选股假设和实现方案必须持续接受外部新证据挑战；外部候选必须经来源核实、隔离复现、同基线比较、目标域验证和原发布门后才可采用。
+> **2026-09-19 v9.6 增量**：新增 [历史涨停/强连板/龙头研究蓝图](limit-up-dragon-research.md) 与 W04/RSH-031。把涨停、空间板、弱市穿越、题材梯队与板块异常从零散案例升级为“全量事件 + 失败对照 + 点时证据 + 从旧到新盲测 + 猎场 shadow 回流”的研究闭环；Jev 只承担 bounded 历史语义 MapReduce、rerank 与 claim↔evidence verification，不能成为涨停预测器或绕过研究准入。
 
 ## 0. 本次完成什么，不完成什么
 
@@ -145,7 +146,8 @@ W00–W09仍是领域归属，P0–P5只是本文逻辑实施阶段，不新建�
 | U39 情境不受示例类别封顶 | 猎场§2/§5；未知有事实入口，候选不自动启用 |
 | U40 本轮只收口理论/计划/文档 | 本文§0/§9、协作§3.1、W00本轮记录和handoff；不执行业务任务 |
 | U41 新决策/新功能加入后防文档漏更 | plan-registry §1.1；本文§1/§6；GOV-022；continue/handoff Skills 与 doc-health 根入口守卫 |
-| U42 不固步自封、主动发现并严格筛选外部创新 | continuous-evolution；本文§6.1；GOV-025；ashare-innovation-radar；外部候选不自动产生采用权 |\n| U43 历史涨停/强连板/龙头形成→题材分支/消息/技术/情绪/资金/指数多维归因→失败对照→从旧到新盲测→起爆前发现→猎场回流；Jev 参与窄语义批处理/筛选/验证 | limit-up-dragon-research；W04/RSH-031；RSH-026/030、IMP-020/049；不从赢家倒推、不建第二评分系统 |
+| U42 不固步自封、主动发现并严格筛选外部创新 | continuous-evolution；本文§6.1；GOV-025；ashare-innovation-radar；外部候选不自动产生采用权 |
+| U43 历史涨停/强连板/龙头形成→题材分支/消息/技术/情绪/资金/指数多维归因→失败对照→从旧到新盲测→起爆前发现→猎场回流；Jev 参与窄语义批处理/筛选/验证 | limit-up-dragon-research；W04/RSH-031；RSH-026/030、IMP-020/049；不从赢家倒推、不建第二评分系统 |
 
 ### 8.1 原Codex任务21条对账（历史来源，非新派工）
 
