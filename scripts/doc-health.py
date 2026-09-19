@@ -1593,12 +1593,23 @@ def check_decision_propagation() -> list[str]:
         evolution_surfaces = (
             DOCS / "INDEX.md",
             DOCS / "handoff.md",
+            DOCS / "plan-registry.md",
             ROOT / "AGENTS.md",
             ROOT / "skills/ashare-ledger-continue/SKILL.md",
         )
         for path in evolution_surfaces:
             if "continuous-evolution.md" not in _read(path):
                 errors.append(f"{path.relative_to(ROOT)}：缺开放世界持续演进入口")
+
+        governance = _read(DOCS / "stages" / "w08-governance.md")
+        if "## GOV-025" not in governance or "continuous-evolution.md" not in governance:
+            errors.append("docs/stages/w08-governance.md：开放世界治理缺 GOV-025/蓝图归属")
+
+        repo_tracker = _read(DOCS / "kb" / "05-repo-tracker.md")
+        if "Stars 只作成熟度/关注度弱信号" not in repo_tracker:
+            errors.append("docs/kb/05-repo-tracker.md：repo 发现仍缺“Stars 仅作弱信号”反固化规则")
+        if re.search(r"(?:≥\s*)?1000★\s*硬门槛.*(?:保持|必须|要求)", repo_tracker):
+            errors.append("docs/kb/05-repo-tracker.md：不得恢复 1000★ Star 硬门")
 
         radar = ROOT / "skills/ashare-innovation-radar/SKILL.md"
         radar_text = _read(radar)
