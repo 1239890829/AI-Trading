@@ -1138,7 +1138,8 @@ v1 导出已机械验证：240 行、6 类各 40、`human_complete=0`；使用�
 ### 29.5 Gold scoring 的完成度门
 
 `score` 默认要求所有 row 的 `human.category / human.certainty / human.actionable` 都合法且完成；未完成时直接拒绝，防止部分样本被误写成“完整准确率”。只有人工明确需要查看标注进度时，才可显式传 `--allow-partial`；输出会带 `human_complete / human_total / partial=true`，不能作为生产阈值依据。prediction event_id 也必须唯一，重复 ID 直接 fail-closed。
-\n
+
+
 ## 30. RSH-031：历史涨停/强连板/龙头研究中的 Jev 边界
 
 详细研究协议见 [历史涨停/强连板/龙头研究蓝图](limit-up-dragon-research.md)。这里仅固定 Jev 的全局调用边界，避免未来实现把“适合语义抽取”误解成“适合直接预测涨停”。
