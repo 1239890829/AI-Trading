@@ -48,6 +48,8 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 当前平台事实以 W00/GOV-012 为准：`master` branch protection、Secret Scanning、Push Protection、required public repo scan 已启用；依赖安全修复已由 PR #38 合并。Jev 现役设计与实证入口为 [jev-integration.md](jev-integration.md)，阶段状态只在对应 W04/W05/W08 任务页维护。
 
+本次合并后事实指针与账本关联收口由 PR #40 承载；不为记录 PR 自身再追加会改变被审版本的自指提交。
+
 ## 7. Jev、工具链与协作流当前基线
 
 - Jev 只保留 bounded semantic verify、条件 capability routing、metadata-only usage 与研究/审核辅助；确定性金融规则、权限、撮合、风控和真实执行不得委托给 Jev。
