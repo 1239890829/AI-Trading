@@ -1,6 +1,6 @@
 # 当前交接：v9.6 历史涨停/龙头研究规划候选，待独立审核后合入
 
-**当前模式：PLANNING_CANDIDATE_REVIEW。** `master` 当前共享基线为 `49de250c`（PR #43 后的 v9.5 收口）；本分支 `chatgpt/limit-up-dragon-research-v9.6` 只新增/更新规划与研究文档，没有执行业务代码、回测、数据抓取、Jev 批量调用或生产参数变更。v9.6 候选新增 [历史涨停/强连板/龙头研究蓝图](limit-up-dragon-research.md)、W04/RSH-031 与 U43；在独立审核/CI/合并前，`master` 仍是共享事实源，不能把本分支设计写成已实施或已证明有效。最新候选来源为 [实施方案](implementation-plan.md)、[历史涨停/龙头研究](limit-up-dragon-research.md)、[持续演进蓝图](continuous-evolution.md)、[Jev 蓝图](jev-integration.md)、[产品闭环](product-closure-design.md)、[开放情境猎场](hunting-decision-design.md)、[大小功能覆盖](feature-closure-audit.md)、[计划去向](plan-registry.md)、[协作规范](collaboration-workflow.md)。
+**当前模式：PLANNING_CANDIDATE_REVIEW。** `master` 当前共享基线为 `49de250c`（PR #43 后的 v9.5 收口）；PR #44 / 分支 `chatgpt/limit-up-dragon-research-v9.6` 只新增/更新规划与研究文档，没有执行业务代码、回测、数据抓取、Jev 批量调用或生产参数变更。v9.6 候选新增 [历史涨停/强连板/龙头研究蓝图](limit-up-dragon-research.md)、W04/RSH-031 与 U43；在独立审核/CI/合并前，`master` 仍是共享事实源，不能把本分支设计写成已实施或已证明有效。最新候选来源为 [实施方案](implementation-plan.md)、[历史涨停/龙头研究](limit-up-dragon-research.md)、[持续演进蓝图](continuous-evolution.md)、[Jev 蓝图](jev-integration.md)、[产品闭环](product-closure-design.md)、[开放情境猎场](hunting-decision-design.md)、[大小功能覆盖](feature-closure-audit.md)、[计划去向](plan-registry.md)、[协作规范](collaboration-workflow.md)。
 
 ## 1. 固定入口与范围
 
