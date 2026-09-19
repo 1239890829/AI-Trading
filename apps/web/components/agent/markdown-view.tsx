@@ -53,7 +53,7 @@ function inline(text: string, onNavigate?: Props["onNavigate"], keyBase = ""): R
       const mm = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(tok);
       if (mm) {
         const [, label, href] = mm;
-        if (href.endsWith(".md")) {
+        if (/^(?![a-z][a-z\d+.-]*:|\/\/)(?:[^#]+\.md(?:#.*)?|#.+)$/i.test(href)) {
           nodes.push(
             <button
               key={key}
@@ -152,7 +152,11 @@ export function MarkdownView({ content, onNavigate }: Props) {
         const level = hm[1].length;
         const size = level === 1 ? "text-base font-semibold" : level === 2 ? "text-sm font-semibold" : "text-xs font-semibold";
         out.push(
-          <div key={kb()} className={`mt-3 mb-1 ${size} text-zinc-900 dark:text-zinc-50`}>
+          <div
+            key={kb()}
+            data-md-anchor={hm[2].toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, "").trim().replace(/\s+/g, "-")}
+            className={`mt-3 mb-1 ${size} text-zinc-900 dark:text-zinc-50`}
+          >
             {inline(hm[2], onNavigate, `h${level}`)}
           </div>,
         );

@@ -652,8 +652,8 @@ def evaluate_shadow(key: str, *, before: Any, after: Any, session_factory=None) 
                 market_gains = load_market_forward_gains(pairs)
 
     try:
-        out = fn(before=before, after=after, sets=sets, reviews=reviews,
-                 market_gains=market_gains or None)
+        extra = {"market_gains": market_gains or None} if key == "picks_min_pick_score" else {}
+        out = fn(before=before, after=after, sets=sets, reviews=reviews, **extra)
     except Exception as exc:  # noqa: BLE001 —— 评估器炸了不能拖垮 promote 流程
         log.warning("影子评估失败 key=%s: %s", key, exc)
         return {"key": key, "before": before, "after": after,

@@ -203,7 +203,8 @@ def main() -> int:
             "limit_up_share": lu.get("limit_up_share"),
         },
         source="scripts/verify_two_thirty_five.py",
-        extra={"gate_failed": gate["failed"], "conditions": CONDS},
+        extra={"gate_failed": gate["failed"], "gate_unchecked": gate["unchecked"],
+               "gate": gate, "conditions": CONDS},
     )
     print(f"    {headline}")
     print(f"    判据命中：{gate['note']}")

@@ -251,6 +251,28 @@ def list_params(session_factory=None) -> list[dict]:
     return out
 
 
+def _manual_apply_reason(row: AgentParamChange) -> str | None:
+    """Manual configuration is distinct from approving a researched candidate.
+
+    Payload flags and mutation_source are attribution, not approval evidence.
+    The existing authenticated manual-config route remains available; this is
+    not principal isolation against a caller who already owns its write token.
+    """
+    if row.status != "draft":
+        return f"当前状态 {row.status} 不允许直接生效；影子/拒绝项须独立审查"
+    if row.source_type != "manual":
+        return "非人工草稿缺少可独立核验的晋级批准与效果证据，保留待审"
+    try:
+        evidence = json.loads(row.evidence) if row.evidence else {}
+    except (TypeError, ValueError):
+        return "变更依据无法解析，须复核后重新提案"
+    if not isinstance(evidence, dict):
+        return "变更依据不是对象，须复核后重新提案"
+    if "shadow_started_at" in evidence or "shadow_verdict" in evidence:
+        return "曾进入影子评估的候选不能降回草稿绕过独立审查"
+    return None
+
+
 def _dump(row: AgentParamChange) -> dict:
     def _j(raw: str | None) -> Any:
         if not raw:
@@ -269,12 +291,15 @@ def _dump(row: AgentParamChange) -> dict:
             "code": "other", "note": str(parsed_reason),
         }
 
+    apply_reason = _manual_apply_reason(row) if row.status != "applied" else None
     return {
         "id": row.id, "key": row.key,
         "before": _j(row.before), "after": _j(row.after),
         "source_type": row.source_type, "source_id": row.source_id,
         "evidence": _j(row.evidence),
         "status": row.status,
+        "manual_apply_allowed": row.status == "draft" and apply_reason is None,
+        "apply_block_reason": apply_reason,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "applied_at": row.applied_at.isoformat() if row.applied_at else None,
         "rolled_back_at": row.rolled_back_at.isoformat() if row.rolled_back_at else None,
@@ -310,9 +335,22 @@ def apply_change(change_id: int, session_factory=None, *, mutation_source: str |
     """生效：写覆盖层 + 注入运行时 + 审计。draft/applied 之外不可重复生效。
 
     mutation_source（2026-09-08 用户指令「改动前必须先建任务」）：人工路径传
-    "user" 自动建留痕任务；A 类自动路径在外层 _execute_a 已建，传 None 跳过。
+    "user" 自动建留痕任务；这仅是归因，不是候选晋级批准。只接受人工草稿，自动/影子候选不得借本入口生效。
     """
     sf = session_factory or get_session_factory()
+    # Reject before recording a mutation task; repeat against the writing session.
+    with sf() as check_db:
+        candidate = check_db.get(AgentParamChange, change_id)
+        if candidate is None:
+            raise ValueError("变更单不存在")
+        if candidate.status == "applied":
+            return _dump(candidate)  # Legacy/idempotent read, never re-apply.
+        reason = _manual_apply_reason(candidate)
+        if reason:
+            raise ValueError(reason)
+        _validate(candidate.key, candidate.after)
+        identity_fields = ("key", "before", "after", "source_type", "source_id", "evidence")
+        checked_identity = tuple(getattr(candidate, name) for name in identity_fields)
     mutation_id = None
     if mutation_source is not None:
         from app.services.agent_tasks import record_mutation
@@ -343,6 +381,18 @@ def apply_change(change_id: int, session_factory=None, *, mutation_source: str |
                 from app.services.agent_tasks import update_mutation_result
                 update_mutation_result(mutation_id, "failed", "已回滚的变更单不能再次生效（请新建变更单）")
             raise ValueError("已回滚的变更单不能再次生效（请新建变更单）")
+        reason = _manual_apply_reason(row)
+        try:
+            if tuple(getattr(row, name) for name in identity_fields) != checked_identity:
+                raise ValueError("候选内容在确认期间变化，须重新确认，未生效")
+            if reason:
+                raise ValueError(reason)
+            _validate(row.key, row.after)
+        except ValueError:
+            if mutation_id:
+                from app.services.agent_tasks import update_mutation_result
+                update_mutation_result(mutation_id, "failed", "候选状态或内容已变化，未生效")
+            raise
         # R12（2026-09-14）：`before` 的语义是「这条变更**生效前**的值」。
         # 提案到生效之间同 key 可能已被别的变更单改写，此时若仍以提案时的旧值当基线，
         # 回滚会把中间那次变更**整个抹掉**（合成复现：50→52→58，回滚早先那条 50→52
@@ -382,7 +432,7 @@ def shadow_change(change_id: int, session_factory=None) -> dict:
 
     影子状态 = 不写运行时覆盖层（provider 仍用旧值）、不生效；影子评估由
     experiments.evaluate_and_promote_shadow 在议程前执行（权重剧变检测），
-    达标自动 promote（此时才真正 apply + 挂 30 日实验）。
+    只保留结构/影响评估；温和漂移或 supports 都不是效果证明或晋级批准。
     影子开始时间记进 evidence JSON（不改表结构）。
     """
     sf = session_factory or get_session_factory()
@@ -406,9 +456,12 @@ def shadow_change(change_id: int, session_factory=None) -> dict:
 
 
 def promote_shadow(change_id: int, session_factory=None) -> dict:
-    """影子达标转正：真正生效（apply_change）——由 experiments 评估器调用。"""
-    out = apply_change(change_id, session_factory)
-    return out
+    """Legacy entry fails closed until independently verifiable review exists.
+
+    Do not add a boolean/string flag here: it would let the evaluator approve
+    itself. Evidence/authority binding and atomic activation need a later slice.
+    """
+    raise ValueError("影子转正需独立审查及完整效果证据；当前接口不支持批准，不得自动生效")
 
 
 def list_shadow_changes(session_factory=None) -> list[dict]:

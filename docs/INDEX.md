@@ -1,11 +1,8 @@
 # 文档索引（INDEX）
 
 > 定位：**docs 唯一入口**。查东西先来这里；写新文档必须在此登记。
-> 维护约定：**已完成方案的精华提炼进 `summary/` 或 `retro-and-gaps.md` §六后，原件即删除**（规范见 `kb/07-doc-curation.md` §3.2）；过时/被取代的移入 `archive/`。
-> 当前入口（2026-09-17）：`AGENTS.md` 短入口 → 本文件；任务状态只在账本 §6.0。迁移证据见 `platform-directory-migration.md`，平台旧目录只保留待审历史，不作新产物入口。
-> 上次整理：2026-09-14（**记忆使用方式重构**：`.workbuddy/memory/MEMORY.md` 由"内容+指针混合"改为**纯索引**（内容按归属拆分进各权威文档，**零丢失**）；**本文件 §0 由「使用地图」扩为「主题路由」**——按主题列「**先读 → 再读 → 红线**」，并新增**任务动线**（按序）· **症状反查**（踩过的坑）· **已拍板 / 勿顺手修清单** · **硬约束速查**；`kb/07` §4.1 由"双索引"升级为**三入口分工**并新增 **§4.4 记忆读写协议**（先索引后跳转 + 写入判据 + 反固化条款），同时**否决**另立"主题路由册"——初版 `kb/12-topic-router.md` 与本节**功能重叠**，**已移入回收站并并入本节**；`kb/11` §4.1 补**产物落点纪律**；`doc-health` 新增 **N 项**（`MEMORY.md` 体积上限 + 索引指针闭包）。详见 `.workbuddy/memory/2026-09-14.md`）
-> 上次整理：2026-09-12（**KB 系统性整理第一轮 + 文档缺陷修复 + 控制台面板分层**）：①**8 处 `full.md` 死锚**清除（6 份现役正文 + 本表 + README）——该文件**从未存在**，而 B/F 检查项都扫不到裸名，故新增 **F4 废弃锚名检查**（上线即实测出全部 8 处，注入验证通过）；②`retro-and-gaps.md` **完成记账下沉**（原 §一/§二/§三/§五 的 54 行已完成明细 → §一 里程碑 + 指针，明细在逐日日志；511 → 453 行），并补记 2 项**原本无出口的待决项**（P2-30 盘口 L2 / P2-31 外部付费源）；③**控制台「知识库」面板分层折叠**：79 份平铺 → `canonical`(11) / `current`(33) / `history`+`timeline`(35 折起)，`kb/07` §1 补「治理分层 ↔ 面板呈现」对照表；④门禁数字实测回填（后端 2619 项 / 171 文件、前端 429 项 / 52 文件）。详见 `.workbuddy/memory/2026-09-12.md`。
-> 上次整理：2026-09-10（**全量重盘 + 执行到底**：40+ 待办归集唯一总账；8 份已完成方案文档删除；**15 处状态偏差更正**——9 低估完成度 / 3 高估完成度 / 1 断言未验证 / **1 需求口径本身不成立** / 另 1 死链清理；**P0-1 止盈 tracker** 落地；**P1-26 后端测试 17m27s→5m55s**；**P1-27 eslint 25→0 warn**；**P1-1/P1-3 板块资金 watcher 规则 + 助手工具**；**P1-19 炸板率双源收尾**；**P1-4 自选行 / P1-5 题材卡资金徽标**（东财 f62 口径，与合力口径并列不混算）；文档体检查缺——根文档 25 份 100% 登记、长表外移 784 行、死链 0）。
+> 维护约定：状态在所属阶段单点更新，成果提炼与恢复按 `kb/07-doc-curation.md` §3.2；新建/迁移同步本表，未知资产不删除。
+> 当前入口（2026-09-18）：`AGENTS.md` → 本索引；`retro-and-gaps.md` §6.0 是阶段总账，`stages/` 存任务唯一状态，`handoff.md` 仅存当前现场。当前修订先读 `implementation-plan.md`，分工与逐轮审核见 `collaboration-workflow.md`；平台迁移证据见 `platform-directory-migration.md`。
 
 ## 0.0 书库编目（编号 / 层 / 领域 / 用途）
 
@@ -18,15 +15,21 @@
 
 | 编号 | 文档 | 层 | 领域 | 用途 / 维护触发 |
 |---|---|---|---|---|
-| **AG-01** | `AGENTS.md`（根） | L3 | 工程治理 | **作业手册**：红线 / 启动 / 门禁口令 / 状态 / 待决。维护：每次改动**实测回填**门禁数字 |
+| **AG-01** | `AGENTS.md`（根） | L3 | 工程治理 | 作业边界、门禁命令与发布纪律；测试实测只在 handoff |
 | **AG-02** | `README.md`（根） | L3 | 对外 | 项目简介 + 指针式入口。维护：结构性变化 |
 | **KW-00** | `CONTEXT.md`（根） | L2 | 术语 | **领域词汇表（Ubiquitous Language）唯一权威**；只放术语、不放实现。维护：grilling 会话即时更新 |
 | **AG-03** | `INDEX.md` | L3 | 编目 | **文档总入口**（本表即编目）。维护：新增/删除文档时 |
-| **AG-04** | `retro-and-gaps.md` | L2 | 账本 | **唯一待办账本**。§6.5b = 「还有什么没做」唯一答案；§6.5 = 执行轮次索引；§七 = 偏差错题本。维护：完成一项划一项 |
-| **AG-05** | `plan-registry.md` | L3 | 计划 | 历史计划去向表 + **不再新建计划文档**。维护：计划归档时 |
+| **AG-04** | `retro-and-gaps.md` | L2 | 账本 | 阶段总账与任务管理规则，§6.0 索引 W00–W09；不复制任务状态 |
+| **AG-05** | `plan-registry.md` | L3 | 计划 | 历史计划去向，旧状态不作当前指令 |
 | **AG-06** | `PROJECT-MASTER.md` | L2 | 总览 | 全项目技术总览（08-29 基线，细节以代码为准）。维护：结构变化 |
-| **AG-07** | `handoff.md` | L2 | 交接 | **任务明细层**：每个动过手的任务一条（缺口与验收标准 / 改动 / 机械证据 / 注入自证 / 门禁 / 遗留）。与账本 **§6.0-H** 双向索引，由 `doc-health` **P 项**判红。维护：每完成一段可独立验收的工作**当轮**追加条目 |
+| **AG-07** | `handoff.md` | L2 | 交接 | 当前工作区、实际运行版本、最近门禁与交付；不另建任务记录 |
 | **AG-08** | `platform-directory-migration.md` | L2 | 工程治理 | 目录迁移的恢复点、消费者与验收证据；任务状态归账本 §6.0 `GOV-018` |
+| **AG-09** | `stages/` | L2 | 阶段任务 | W00–W09，各 ID 仅一份状态/验收/证据；P/Q 校验 |
+| **AG-10** | `implementation-plan.md` | L2 | 当前实施修订 | v9.3：原方案取舍、前任成果、证据分级、依赖与 Codex 接续；状态仍归阶段 |
+| **AG-11** | `collaboration-workflow.md` | L2 | 协作审核 | 账本驱动；网页统筹审核、Codex执行，用户一句话触发，固定入口与原型退出 |
+| **AG-12** | `product-closure-design.md` | L2 | 产品闭环 | 全模块用途、前后台分工、业务/研究/工程链和确认流程图；非已上线报告 |
+| **AG-13** | `feature-closure-audit.md` | L2 | 细功能审计 | 大小动作/接口/后台任务的覆盖、源码发现与未验边界；任务状态仍归阶段 |
+| **MD-08** | `hunting-decision-design.md` | L2 | 选股与呈现 | 开放情境、KB37项映射、候选/时机/反证、猎场UI及分层验收 |
 | **KW-00..11** | `kb/00-INDEX.md` … `kb/11-doc-catalog.md` | L2/L3 | 知识 | 见下方「KB 知识库」分表 |
 | **SM-01..08** | `summary/stock-strategy` · `factor-system` · `data-market` · `architecture-design` · `ai-evolution` · `review-governance` · `system-final-blueprint` · `pick-signal-chain` | L2 | 主题汇总 | **查主题先看这里**；`system-final-blueprint` 是任务四后目标架构与验收总纲；**`pick-signal-chain` = 选股提醒链路（`dispatch_alert` 扇出 / 双家族分裂 / 断点清单 G1–G5）**。维护：主题结论更新 |
 | **DT-01** | `data-source-comparison.md` | L2 | 数据源 | 四源实测对比与选型。**改数据源前必读，改完回填** |
@@ -48,7 +51,7 @@
 | **FN-07** | `data-dictionary.md` | L2 | 数据 | 数据对象审计字段约定（source/quality） |
 | **FN-08** | `picks-replay-baseline.md` | L1 | 快照 | 精选 60 日回放基线（08-31 评审指名保留）。**时点快照，只读** |
 | **FN-09** | `llm-gateway-probe.md` | L2 | 运维 | LLM 网关健康探针（`claude_cli` 别名监控） |
-| **FN-10** | `jev-integration.md` | L2 | AI/Agent 架构 | **Jev 全局与项目唯一现役蓝图**：官方 Use Case Map 对照、社区组件价值审计、JevRouter capability routing、Guard/Review/Context/Browser、事件/助手/选股/战法/情绪/因子/做T/复盘、调用预算与额度治理。维护：Jev 能力/版本、组件去留、阈值、shadow/cascade、cc-switch 或 provider 路由变化时 |
+| **FN-10** | `jev-integration.md` | L2 | AI/Agent 架构 | Jev 现役蓝图：bounded semantic verify、条件 capability routing、gold-set/usage 证据与回退边界；任务状态归 GOV-024 / IMP-045 / IMP-046 / RSH-030 |
 | **EX-01** | `live-trading-guosen-plan.md` | L2 | 搁置 | 国信 miniQMT 实盘蓝图。**用户已搁置**（不接受 Windows 依赖），恢复条件见文档头 |
 | **RV-01** | `review-agent.md` | L2 | 复盘 | 盘后复盘 Agent 架构 |
 | **RV-02** | `daily-review-sop.md` | L2 | 复盘 | 每日复盘 SOP（怎么判） |
@@ -90,6 +93,9 @@
 
 ## 0. 主题路由（我要做什么 → 去读什么）
 
+本轮全产品入口： [产品闭环](product-closure-design.md) → [细功能审计](feature-closure-audit.md) 与 [猎场决策](hunting-decision-design.md) → [实施方案](implementation-plan.md) → [阶段任务](retro-and-gaps.md#60-阶段索引)。用户追加局部要求不缩小这个范围。
+
+
 > **本节的职责**：回答「**做某件事，该按什么顺序读哪些文档**」。
 > **分工互斥**（不得互相承载内容）：`kb/00-INDEX.md` 回答「某条**知识**是什么」（KB-ID）·
 > `retro-and-gaps.md` **§6.0** 回答「**还有什么没做**」（唯一任务清单）· `CONTEXT.md` 回答「某个**词**什么意思」。
@@ -107,14 +113,14 @@
 
 | 主题 | 先读（入口，必读） | 再读（需深入时） | 红线（最常咬人） |
 |---|---|---|---|
-| **T1 起栈与环境** | `AGENTS.md` §1 快速启动 | `deployment.md` · `PROJECT-MASTER.md` | `--reload` **禁用**（与 SQLite 锁组合挂死）；端口固定 **3000/8000**；生产构建前**先停 3000** |
+| **T1 起栈与环境** | `AGENTS.md` §1 快速启动 | `deployment.md` · `PROJECT-MASTER.md` | `--reload` **禁用**（与 SQLite 锁组合挂死）；端口固定 **3000/8000**；仅同工作区共享构建目录时先停止对应 dev，独立工作区不得误停原服务 |
 | **T2 门禁与测试** | `AGENTS.md` §1 门禁命令块 | `kb/09-verification-pitfalls.md` · `kb/03-engineering.md` | 必带 `--basetemp`、**勿叠 `-q`**；涉时区断言**必须 `TZ=UTC` 复跑**；vitest 加 `--maxWorkers=1`；**必须整仓跑** |
-| **T3 数据源与行情口径** | `data-source-comparison.md` → `data-sources.md` | `data-dictionary.md` · `websocket.md` | **⚡ 交易日数据时效禁「固定时长」**⇒ 语义 = **必须覆盖今天**；口径/披露信息放**提前 return 之外** |
+| **T3 数据源与行情口径** | `data-source-comparison.md` → `data-sources.md` | `data-dictionary.md` · `websocket.md` | 时效按数据类型、交易日历与来源可见时间判定；盘前/休市可用上一有效交易日，盘中旧数据不能冒充当前；不以一律“今天”或固定TTL替代业务语义 |
 | **T4 选股与策略** | `kb/00-INDEX.md` 选股表 | `summary/stock-strategy.md` · `strategy-registry.md` · `factor-lifecycle-governance.md` + `factor-candidates.md` | **示例 ≠ 规范**（题材案例一律 `📎`）；策略/因子落地**必须先过实证**；回测禁令见 `backtest-rules.md` |
-| **T5 复盘与治理** | 复盘 `kb/06-review-framework.md`（**先读它**）；治理 `retro-and-gaps.md` §6.0 | `daily-review-sop.md` · `daily-review-checklist.md` · `review-agent.md` · `handoff.md`（任务明细）· `kb/07` · `kb/11` | 任务**只有一个清单**（§6.0）；**待办必须有出口**；删除只走 `scripts/safe-trash.sh` |
+| **T5 复盘与治理** | 复盘 `kb/06-review-framework.md`（**先读它**）；治理 `retro-and-gaps.md` §6.0 | `daily-review-sop.md` · `daily-review-checklist.md` · `review-agent.md` · `handoff.md`（当前现场）· `kb/07` · `kb/11` | 任务在索引的阶段页单点维护；删除只走 `scripts/safe-trash.sh` |
 | **T6 前端与 UI** | `summary/architecture-design.md`（§1 跨页面联动设计） | `architecture.md` · `kb/03-engineering.md` | **验收以实际渲染为准**（agent-browser 文本通道）；**新增页面/板块需先论证**；**详情弹窗化**（个股/指数在任何页面就地弹窗，不跳工作台）见 [[KB-ENG-92]] |
-| **T7 外部工具与技能** | `skills/` 下已入库的技能入口 | `jev-integration.md` · 本表 **WB-04** · `llm-gateway-probe.md` | Jev 先做 bounded 语义判断、低置信再升级；旧目录未审第三方资产不能据名称直接搬入或执行；许可和外部权限按原边界 |
-| **T8 决策与"为什么当初这么定"** | `kb/04-decisions.md`（KB-DEC） | `retro-and-gaps.md` §七（偏差错题本）· `archive/` | **已拍板勿重开**；被取代的条目改 ❌ 并写明取代者，**永不删除** |
+| **T7 外部工具与技能** | `skills/` 下已入库的技能入口 | `jev-integration.md` · 本表 **WB-04** · `llm-gateway-probe.md` | 旧目录未审第三方资产不能据名称直接搬入或执行；许可和外部权限按原边界 |
+| **T8 决策与"为什么当初这么定"** | `kb/04-decisions.md`（KB-DEC） | `archive/ledger-transition-20260917.md` · `implementation-plan.md` | 既有决定可依新证据和最新授权复核；保留取代关系与依据，不据历史标题锁死设计 |
 | **T9 提醒与通知链路** | `summary/pick-signal-chain.md`（**先读它**：定位/触发/流向/断点） | `services/alert_triage.py`（判读闸门）· `api/routes/notifications.py`（通知收口）· `picks/watcher.py::dispatch_alert`（唯一汇聚点）· `services/push_policy.py` | **收敛口径时必须回扫自称该口径的注释**（`IMP-028` 遗留 5 处过期断言，见该文 §G4）；**判读闸门现状只作用于悬浮球**（§G1）；改通知来源须同步 §3.1 规则清单 |
 
 ### 0.2 任务动线（**按序**读——顺序错会先读一堆无关的）
@@ -122,11 +128,11 @@
 | 我要做的事 | 动线（按序） |
 |---|---|
 | **修一个 bug** | `AGENTS.md` §1 起栈 → 复现 → 症状反查（§0.3）→ 相关 `kb/0X` 条目 → 改 → 门禁（T2）→ 账本登记 |
-| **加一个功能** | `AGENTS.md` §0 红线 → `summary/architecture-design.md` §0（**先论证是否需要新页面**）→ `architecture.md` → 实现 → 门禁 → 按 `kb/07` §3.2 处置方案文档 |
+| **加一个功能** | `AGENTS.md` §0 红线 → `summary/architecture-design.md` §1（**先论证是否需要新页面**）→ `architecture.md` → 实现 → 门禁 → 按 `kb/07` §3.2 处置方案文档 |
 | **改数据源 / 数据口径** | `data-source-comparison.md` → `data-sources.md` → **改完回填对比文档** → 门禁（含 `TZ=UTC` 复跑） |
 | **做一次复盘** | `kb/06-review-framework.md`（**强制先读**）→ `daily-review-sop.md` → `daily-review-checklist.md` → 产物存档 |
 | **写 / 整理文档** | `kb/07-doc-curation.md`（流程）→ `kb/11-doc-catalog.md`（判据）→ 改动 → `python3 scripts/doc-health.py` |
-| **登记或收口任务** | `retro-and-gaps.md` **§6.0**（唯一入口）→ 按 §6.0 ⑤ 做**双向完备自查** → 在 **§6.0-H** 建索引并在 `handoff.md` 写对应条目（`doc-health` **P 项**核对双向闭包） |
+| **登记或收口任务** | `retro-and-gaps.md` §6.0 → 所属阶段唯一任务条目 → 实测/证据与状态更新 → handoff 当前现场 → doc-health P/Q |
 | **验证策略/因子是否有效** | `strategy-registry.md`（是否已测过）→ `backtest-rules.md`（禁令）→ 实证 → 结论**必须带失效条件** |
 | **调研外部仓库/工具** | `kb/05-repo-tracker.md`（A/B 证据分级）→ 台账登记；技能迁移取 AG-08 的消费者与许可依据 |
 
@@ -151,24 +157,11 @@
 | 中间层块级导致 **overflow 全失效** | `kb/03` KB-ENG-16（flex 高度链逐层接力） |
 | **「服务在跑」但跑的不是新代码** | `AGENTS.md` §5 + T1：复验须用能区分新旧代码的探针 |
 
-### 0.4 已拍板 / 勿重开（**动手前先看这节**，避免重做已验证过的事）
+### 0.4 既有决定与复核边界
 
-| 事项 | 裁定 | 唯一权威 |
-|---|---|---|
-| 亮色模式对比度 | ✅ 保留主题切换，**逐类修 base** | 账本 **P2-24** |
-| 外部付费数据源 | ✅ **不接入**——不是预算暂缓，是**花了钱也买不到要的东西** | 账本 **RSH-020** |
-| 控制台·自定义规则 UI | ✅ **保留**（成本近零，且是全系统唯一自定义阈值入口） | 账本 **P1-17** |
-| 实盘接入（国信 miniQMT） | ⏸ **搁置**（不接受 Windows 依赖） | `live-trading-guosen-plan.md` |
-| 部署环境（NAS / 云 / Vercel） | ⏸ **搁置**（用户明确不追问） | 账本 §6.5b #9 |
-| 防腐化扫描固化进 CI | ❌ **不进 CI**，改**月度手动**跑 `scripts/deadcode_scan.py` | 账本 §6.5b #5 |
-| L2 盘口数据源 | ❌ **已验证否证**（`ths` 无五档结论） | 账本 P2-30 |
+历史决定不自动产生施工义务，也不阻止有据修正。禁止真实券商/真实自动下单、不新增付费或权限、未知资产不删除等仍按当前授权边界执行；结构、交互、策略假设与文档规则可按实施校准复核。安全/恢复低频能力不能据低使用量删除。
 
-**「勿当 bug 顺手修」**（看着像缺陷，实为已裁定的正确行为——顺手改会制造更严重的问题）：
-
-| 现象 | 为什么不能顺手修 | 裁定出处 |
-|---|---|---|
-| `read_ids` 剪裁致 >500 条后**少量回弹** | 改法属**口径变更**；顺手改成水位会**把未读擦成已读**（比现状更严重的语义破坏） | 账本 §6.5b #6 + `apps/web/lib/notification-read.ts` 的 `READ_IDS_MAX` 边界注释 |
-| `test_data_path_isolation` 沙箱断言边界 | **已收口**：挂账边界转为**结构保证**（前提钉子 `test_sandbox_root_not_inside_repo_data`，见 `backend/tests/test_data_path_isolation.py`），将来挪沙箱位置时钉子会变红并给出修法 | 账本 §6.5b #7 |
+旧 P0/P1/P2 子编号和 §6.5b 等是历史定位，不能当现行任务指针。恢复当时文字查固定 Git 版本；当前任务从阶段总账进入。已交付实现先核消费者和残余缺口，不因旧文标题重新开发。
 
 ### 0.5 硬约束速查（最常用的事实 → **唯一权威处**）
 
@@ -177,7 +170,7 @@
 | **北京时间** | `backend/app/core/bjtime.py`：`beijing_now[_naive]()` / `beijing_today()`；**禁止 `date.today()`**；绝不发不带标记的 naive UTC 串 |
 | **三态 > 二态** | `unknown` 显式「未判定」、缺失 `--`；文案单点 `push_cards.tri_text` / `apps/web/lib/format.ts` 的 `triText` |
 | **`current_time` 不可信** | 一律 `date "+%Y-%m-%d %H:%M:%S %Z"` 实测（KB-TRADE-01） |
-| **数字四纪律** | 基线用 `git worktree add /tmp/base <ref>` **实测取**；文件数两口径本仓**恒差 2**；差值对不上**先取基线逐文件 diff**；**三方自洽**（详见 `AGENTS.md` 门禁口径段） |
+| **统计与对账** | 比较同一 Git 跟踪面、版本、环境与实际测试 ID；路径含中文时用 NUL 分隔读取。passed/skipped 分开，差额逐项解释，不将历史“恒差”写成永久事实 |
 | **产物落点** | 按用途进项目 `skills/`、`scripts/`、`docs/`、忽略的 `artifacts/`；用户全局目录不属本任务授权（`kb/11` §4.1） |
 | **删除** | `scripts/safe-trash.sh <路径> --reason "..."`；**禁 `rm`**（`kb/07` §6.2） |
 | **文档体检** | `python3 scripts/doc-health.py`——**每个功能点收尾必跑**，有问题 `exit 1` |
@@ -194,19 +187,19 @@
 | 新闻/事件模块排查与改造 | `summary/architecture-design.md` §4 + `kb/03-engineering.md`（根因/刷新方案/判定状态机/弹窗改造；剩余待办见 `retro-and-gaps.md` P0-2~P0-5） |
 | 系统全貌/技术栈/模块清单 | `PROJECT-MASTER.md`（08-29 基线）+ 本 INDEX |
 | 全面审查结论/重构执行计划 | `summary/review-governance.md`（09-08 四路深扫：死代码/孤立端点/闪现根因/猎场融合方案/P0-P2 计划） |
-| 任务四后最终技术方案/自治与选股闭环 | `summary/system-final-blueprint.md`（09-15：数量竞态、个股通知、受限自治、因子/KB/智能体审查、分阶段验收） |
+| 任务四后历史架构与当前实施修订 | `summary/system-final-blueprint.md`（历史基线）→ `implementation-plan.md`（当前修订）→ 阶段任务 |
 | AI 助手怎么升级成"大脑+执行层" | `summary/ai-evolution.md`（09-08：权限分级 L0-L3/四道拦截/任务中心+复盘+告警+参数+日志模块设计/研究页下线方案） |
 | AI 助手更名论证（已定稿「交易智能体」） | `summary/ai-evolution.md`（09-09 P2-1：已是"进化体"的能力盘点+命名三选项+拍板记录「交易智能体·自主进化体」） |
 | LLM 微调/训练资料与结合方式 | `summary/ai-evolution.md` §7（09-09：FinGPT/FinGLM/RD-Agent 资料清单+A 股实证基准+三层结合路径，近期零新增付费依赖；层 2 待算力 → 总账 P2-8） |
 | 控制台三模块梳理（任务中心/参数/告警） | `summary/review-governance.md`（09-10：三模块定位+实证数据+告警运作逻辑白话版+规则评估与优化建议） |
 | 板块资金页核对 + 瀑布流改造 | `summary/review-governance.md`（09-10：东财 vs 同花顺板块体系差异实证（非 bug）+ 列表→卡片瀑布流+滚动分页改造记录） |
-| AI 大脑自主进化（v2，取代人工确认模型） | `summary/ai-evolution.md`（09-08：每日进化议程/盘后自动闭环三类执行/后置验证自动回滚/方向校验/红线与停机开关/10 项延伸能力） |
+| 自主迭代与参数晋级的当前边界 | `implementation-plan.md` §6；W05/IMP-052 与 W04/IMP-020；`summary/ai-evolution.md` 仅提供历史设计与已有实现背景 |
 | 数据源怎么选、备源顺序、**哪些源没被用满** | `data-source-comparison.md`（实测对比）→ `data-sources.md`（接入策略 + **§8 使用度审计**） |
 | 某个 API 端点的参数 | `api.md`（⚠️ 端点计数停在 09-01/92 个，以 `/openapi.json` 为权威） |
 | 每天怎么跑复盘 | `daily-review-sop.md` → `daily-review-checklist.md` → `daily-review/`（逐日存档） |
 | 情绪/题材方法论 | `theme-sentiment-methodology.md` / `sentiment.md` / `theme-prediction.md` |
 | 因子库是什么、怎么用 | `summary/factor-system.md` → `factor-lifecycle-governance.md` |
-| 怎么接实盘（国信） | `live-trading-guosen-plan.md` |
+| 实盘历史方案为何搁置 | `live-trading-guosen-plan.md`（历史参考，禁止据此执行真实券商接入） |
 | 两个新仓库评估 / 自动化精简 / 助手大脑化 | `summary/ai-evolution.md`（09-08；**主体已落地**，状态见 `plan-registry.md`） |
 | 策略进化（信号健康 / 筹码引擎 / 复盘闭环） | `summary/ai-evolution.md`（09-08；**P0 全落地**：`backend/app/picks/signal_health.py` + `backend/app/market/chip.py` + `backend/app/review/strategy_health.py`；P2 按设计延后） |
 | trading 分组仓库值不值得用 | `kb/05-repo-tracker.md`（A/B 证据分级 + 台账 diff） |
@@ -218,8 +211,8 @@
 |---|---|
 | **kb/** | **知识库（09-09 建库，唯一权威）**：`kb/00-INDEX.md` 总索引 → 选股知识 KB-STOCK / 交易教训 KB-TRADE / 工程教训 KB-ENG（**按子类分四册**：`03-engineering.md` 应用与设计 / `09-verification-pitfalls.md` 验证层 / `10-data-contract-pitfalls.md` 数据契约 / `08-tooling-pitfalls.md` 工具操作速查）/ 决策 KB-DEC；沉淀红线=对话中当轮入库；**文档治理流程见 `kb/07-doc-curation.md`（v1.6）**，**判据标准（「好文档」七条判据 / KB 收敛标准 / 卡帕西三层映射 / 非 docs 面治理）见 `kb/11-doc-catalog.md`**；体检一键跑 `python3 scripts/doc-health.py`。**状态语义：示例/题材案例一律 `📎`，不得与 `✅ 已落地` 混用**（KB-DEC-019） |
 | **`skills/`、`scripts/`、`artifacts/`** | 按用途存技能、复用工具和忽略的本地产物；旧平台目录保留恢复及待审内容，迁移依据见 `platform-directory-migration.md`，当前状态归账本 §6.0 `GOV-018` |
-| **plan-registry.md** | **计划文档登记表**：历史计划去向表 + 文档处理规范（**不再新建计划文档**，待办一律进 `retro-and-gaps.md` §六） |
-| **retro-and-gaps.md** | **唯一待办总账**：§一 = 交付里程碑（已完成明细**只留指针**，正文在 `.workbuddy/memory/` 逐日日志）｜**§六 = 全量待办（P0/P1/P2，逐项代码核实）**｜§七 = 文档×状态偏差更正｜§八 = 计划文档处置 |
+| **plan-registry.md** | 历史计划去向；当前任务从 `retro-and-gaps.md` §6.0 进入所属阶段，按真实价值准入 |
+| **retro-and-gaps.md** | 阶段总账：只维护领域目标、优先级及链接；任务在 stages 单点，现场在 handoff，当前修订在 implementation-plan |
 | **strategy-registry.md** | **策略级登记册（09-10 建）**：5 条策略键（`daily_picks` / `intraday_watch` / `pullback_reversal` / `triple_volume` / `two_thirty_five`）｜§0 **因子≠策略**辨析 ｜§2 逐条量化证据 + 样本环境 ｜§3 处置台账 ｜§4 衰减监控机制（P1-37/38/39）。**监控端点 `GET /api/picks/strategy-health`** |
 | **summary/** | **主题汇总目录（7 份）**：`stock-strategy`（选股策略）/ `factor-system`（因子体系）/ `data-market`（数据源行情）/ `architecture-design`（架构设计）/ `ai-evolution`（AI 进化）/ `review-governance`（复盘治理）/ `system-final-blueprint`（任务四后目标架构与验收总纲）——查主题先看这里 |
 | PROJECT-MASTER.md | 全项目唯一总览（08-29 基线，细节以代码为准） |
@@ -288,7 +281,7 @@
 |---|---|
 | system-review-2026-09-02.md | 09-02 全量体检与优化方案 · **已删除**（精华见 `summary/review-governance.md`） |
 | plan-review.md | 08-31 全盘计划复盘与整合清单 · **已归档**（已被 09 系列审计取代）→ `archive/plan-review.md` |
-| retro-and-gaps.md | **唯一待办总账**（08-29 立项，2026-09-12 收敛）：§一 历史里程碑（只留指针）｜§六 待办明细｜§七 偏差更正｜§八 计划处置 |
+| **retro-and-gaps.md** | 阶段总账：只维护领域目标、优先级及链接；任务在 stages 单点，现场在 handoff，当前修订在 implementation-plan |
 | system-review-20260909.md | 09-09 系统全面审查（基线含猎场批次 A+B、进化 P0/P1） · **已删除**（精华见 `summary/review-governance.md`） |
 | hunting-review-20260909.md | 09-09 猎场实盘台账复盘（37 只 × 涨停池 34 家逐笔对照） · **已删除**（精华见 `summary/review-governance.md`） |
 | daily-review/ | 逐日复盘报告（YYYY-MM-DD.md） |

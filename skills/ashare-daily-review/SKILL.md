@@ -8,7 +8,7 @@ description: 执行 AShare AI Trader 的盘后复盘，核验当天数据、判�
 从 `git rev-parse --show-toplevel` 定位项目，先读根目录 `AGENTS.md`。
 执行前读 `docs/daily-review-sop.md` 的判据与 `docs/daily-review-checklist.md` 的逐项清单；
 定性判断按 `docs/kb/06-review-framework.md`。它们维护完整流程，本技能只补执行入口和易错边界。
-任务状态归 `docs/retro-and-gaps.md` §6.0，交接归 `docs/handoff.md`。
+任务由 `docs/retro-and-gaps.md` §6.0 索引到所属阶段，状态只更新该页；当前现场归 `docs/handoff.md`。
 
 ## 先确认可用现场
 

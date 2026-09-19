@@ -147,19 +147,28 @@ def _landed_note(r) -> str:
 
 def _from_verification() -> list[dict]:
     """策略核验结论（准入/否决的依据）。"""
-    from app.research.verify_registry import list_records
+    from app.research.verify_registry import gate_evidence, list_records
 
     out = []
     for rec in list_records():
+        context = gate_evidence(rec)
+        gate = context["gate"]
+        passed_label = ("机器条款通过（待终审）" if gate is not None
+                        else "历史通过（待复核）")
         verdict = {
-            "pass": "准入", "observe": "观察", "reject": "否决",
+            "pass": passed_label, "observe": "观察", "reject": "否决",
         }.get(rec.get("verdict") or "", rec.get("verdict") or "?")
+        if gate is not None:
+            outcome = (f"判据命中 {len(gate['failed'])} 项；未验 {len(gate['unchecked'])} 项；"
+                       "完整准入仍需终审")
+        else:
+            outcome = "历史或无效判据记录，完整性未核验；不得据此自动准入"
         out.append(_entry(
             kind="策略核验",
             subject=rec.get("key") or "?",
             decision=verdict,
             basis=(rec.get("headline") or "")[:200],
-            outcome=f"判据命中 {len(rec.get('gate_failed') or []) or 0} 项",
+            outcome=outcome,
             at=(rec.get("recorded_at") or "")[:19],
         ))
     return out

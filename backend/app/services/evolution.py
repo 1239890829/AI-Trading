@@ -8,15 +8,13 @@
   因子 IC 月度复核未到期时显式标注）。
 - 诊断：LLM 汇总证据 → 严格 JSON 议程（A 参数 / B 文档 / C 代码），
   对复盘 action_items 逐条裁决（review_item 回执 → 执行后回写 applied）。
-- 执行：A 类走参数变更单**自动生效**（白名单 + 红线 + 24h 频率闸 + 预算；
-  30 日后置验证劣化自动回滚）；B 类写进化日报（docs/evolution/）；
-  C 类走代码执行器（worktree 沙箱 → LLM patch → **diff 级授权** → git apply --check →
-  **git 权威复核** → 回归门禁 → 明确暂存 → 隔离分支 commit；
-  app/services/code_executor.py）。⚠️ **C 类只提议、不落地**（2026-09-15 加固，审计 O1）：
-  产出 = patch + `evolution/*` 分支上的 commit + 审计，**不合并回主分支**；
-  落地一律走 `codex/*` → PR → 完整 CI → 网页版审查。
-  ⇒ C 类条目 status 仍为 `executed`（= 执行器跑完并产出），但 `result` 会写明「未合并」
-  与落地路径，`merged=False` / `review_required=True` 在返回值中显式给出。
+- 执行：A 类只建影子变更单（不写运行覆盖层；白名单 + 红线 + 24h 频率闸 + 预算；
+  已有已生效变更仍保留后置回滚）；B 类写进化日报（docs/evolution/）；
+  C 类仅生成待审补丁：读取明确文件 → LLM 文本 diff → 路径授权 → git apply --check
+  → 归档与审计。应用内不应用补丁、不执行门禁/回放、不建分支或提交；
+  新条目 status=proposed，历史 executed 不代表已落地，均不回写复盘 applied。
+  实际实施仍走获准开发者 codex/* → PR → 完整 CI → 审查。
+  返回值 merged=False / review_required=True / code_applied=False。
 
 安全模型（后置守护）：
 - **红线清单**：风控/资金/推送/凭据/删除类——即使未来白名单扩张也碰不到。
@@ -781,9 +779,9 @@ _SYSTEM_PROMPT = (
     "知识沉淀→B 类并带 review_item 与 summary）；不可自动化的**不要输出**（系统会自动标 deferred 并写明能力边界）\n"
     "- class=A 仅限 picks_style_offsets_json（after 是 {相位:{维度:delta}}，|delta|≤0.06）；"
     "没有充分数据依据就不要提 A 类\n"
-    "- class=C 是**代码修改**：仅限 backend/app/、backend/tests/ 下的 .py；改动必须小而聚焦"
+    "- class=C 仅生成待审代码提案：仅限 backend/app/ 下既有 .py，禁止 backend/tests/；改动必须小而聚焦"
     "（修 bug、补校验、加守卫），禁止改架构、禁止碰 migrations/config/风控/资金/推送逻辑；"
-    "执行器会用回归门禁（全量 pytest+pyflakes）验证，门禁不过会被丢弃\n"
+    "只做路径和 git apply --check 静态检查，不应用、不运行测试或回放、不提交；实际实施需独立审查\n"
     "- 不确定就不提；宁缺毋滥；最多 3 项；没有值得改的就输出空 items\n"
     "- 不提供买卖建议，不改风控/资金/推送相关任何东西\n"
     "- 裁决复盘改进项时遵循 docs/kb/06-review-framework.md（复盘执行框架 v1.0）："
@@ -1020,10 +1018,11 @@ def _execute_a(item: dict, sf, agenda_date: str) -> dict:
     有效后方可启用——不再直接生效）。
 
     影子流：propose → shadow（不写运行时覆盖层）→ 议程调度器每日评估
-    （experiments.evaluate_and_promote_shadow：权重剧变检测）→ 达标转正
-    （真正生效 + 挂 30 日胜率劣化回滚实验）→ 剧变/灭声拒绝归档。
-    转正后仍受 experiments 30 日劣化自动回滚守护（后置安全网不变）。
+    （experiments.evaluate_and_promote_shadow：历史名称，仅评估）→ 保存待审证据。
+    权重漂移温和或离线supports不是批准；不能自动生效或把复盘项标为applied。
+    已有生效记录的后置守护与CAS回滚保留。
     """
+    item = {**item, "execution_scope": "shadow_only", "runtime_applied": False, "review_required": True}
     param = item.get("param") or {}
     key = param.get("key") or ""
     if key in REDLINE_KEYS:
@@ -1045,7 +1044,7 @@ def _execute_a(item: dict, sf, agenda_date: str) -> dict:
             evidence=item.get("evidence") or {}, session_factory=sf,
         )
         shadowed = agent_params.shadow_change(change["id"], sf)
-        result = f"变更单 #{shadowed['id']} 已入影子队列（待数据评估，达标自动转正）"
+        result = f"变更单 #{shadowed['id']} 已入影子队列（未生效；完整效果证据与独立审阅通过前不得转正）"
         update_mutation_result(mutation_id, "succeeded", f"{result}；变更单 #{shadowed['id']}")
         return {**item, "status": "executed", "result": result,
                 "mutation_task_id": mutation_id, "shadow_change_id": shadowed["id"]}
@@ -1155,7 +1154,8 @@ def _sync_review_items(agenda: dict, items: list[dict], sf) -> None:
     from app.review.storage import ActionItemStaleError, update_action_item_status
 
     for it in items:
-        if it.get("status") != "executed":
+        if it.get("class") in ("A", "C") or it.get("status") != "executed":
+            # 包含历史A/C：入影子或产出补丁不代表运行生效，输入flag也不是凭证。
             continue
         ri = it.get("review_item") or {}
         item_id = str(ri.get("id") or "")
@@ -1175,12 +1175,15 @@ def _sync_review_items(agenda: dict, items: list[dict], sf) -> None:
 
 
 def record_summary_audit(date: str, items: list[dict]) -> None:
-    executed = [i for i in items if i.get("status") == "executed"]
+    executed = [i for i in items if i.get("status") == "executed" and i.get("class") not in ("A", "C")]
     with contextlib.suppress(Exception):
         from app.services.agent_tasks import record_audit as _ra
 
         _ra(actor="ai", action="agenda.execute", target="evolution",
-            after={"date": date, "executed": len(executed), "total": len(items)})
+            after={"date": date, "executed": len(executed), "total": len(items),
+                   "proposed": sum(i.get("status") == "proposed" for i in items),
+                   "shadow_queued": sum(i.get("class") == "A" and i.get("status") == "executed"
+                                        and i.get("execution_scope") == "shadow_only" for i in items)})
 
 
 async def run_evolution_now(session_factory=None, app=None) -> dict:
@@ -1255,9 +1258,8 @@ async def evolution_scheduler(app, stop: asyncio.Event, *, run_hour: int, run_mi
                         log.warning("[EVOLUTION] 实验裁决 %d 条：%s", len(results),
                                     json.dumps([{r["id"]: r["status"]} for r in results],
                                                ensure_ascii=False))
-            # 每日一次：影子队列评估（P1-4：剧变检测 → 达标转正 / 剧变拒绝）——
-            # 在议程生成前跑，转正结果进当日议程证据（独立节流标志，不与实验裁决互斥）
-            # ⚠️ 同上：转正会改参数生效状态 ⇒ 自治类动作，必须与议程执行同一判据（R10）。
+            # 每日一次影子评估：只记录结构/影响证据，或拒绝不安全结构，不自动转正。
+            # 仍受自治开关控制，因为会更新候选评估记录；不改变既有停机范围。
             if autonomy_enabled() and _LAST_SHADOW_DATE != today.isoformat() and now.hour >= 15:
                 with contextlib.suppress(Exception):
                     from app.services.experiments import evaluate_and_promote_shadow
