@@ -1,6 +1,6 @@
-# 当前交接：v9.6 历史涨停/龙头研究基线，下一主切片候选 BUG-028
+# 当前交接：v9.7 阶段门治理候选，合并后 G0 首选 BUG-028
 
-**当前模式：READY_FOR_NEXT_PLANNED_SLICE（仅在 PR #44 的准确候选通过完整 CI 并合入 `master` 后生效）。** 在 PR #44 尚未合并时，当前共享事实仍是 `master@49de250c` 的 v9.5；不得从功能分支抢先施工。PR #44 只改变规划/账本/Skills/治理守卫测试，没有业务逻辑、回测、数据抓取、Jev 批量调用或生产参数变更。v9.6 新增 [历史涨停/强连板/龙头研究蓝图](limit-up-dragon-research.md)、W04/RSH-031 与 U43，并把“继续任务/继续”规范为一次只授权一个动态最高优先级切片。合入后最新来源为 [实施方案](implementation-plan.md)、[历史涨停/龙头研究](limit-up-dragon-research.md)、[持续演进蓝图](continuous-evolution.md)、[Jev 蓝图](jev-integration.md)、[产品闭环](product-closure-design.md)、[开放情境猎场](hunting-decision-design.md)、[大小功能覆盖](feature-closure-audit.md)、[计划去向](plan-registry.md)、[协作规范](collaboration-workflow.md)。
+**当前模式：PLANNING_CANDIDATE_REVIEW。** 当前共享 `master@8ebd710e` 已含 v9.6/U43/U44 与 PR #44 全绿合并结果；本分支 `chatgpt/stage-gate-governance-v9.7` 只改计划/账本/Skills/治理守卫与任务调度元数据，不执行 BUG-028 等业务切片。v9.7 候选新增 U45：W00–W09 只管领域归属，G0–G5 管执行门序，GX 为持续治理；每个任务有门内序、门禁角色、硬依赖和效果前置。候选未通过完整 CI 并合入前，不按 v9.7 规则施工。
 
 ## 1. 固定入口与范围
 
@@ -50,17 +50,17 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 本次合并后事实指针与账本关联收口由 PR #40 承载；不为记录 PR 自身再追加会改变被审版本的自指提交。
 
-## 7. v9.6 合并后的当前执行优先级快照
+## 7. v9.7 合并后的当前阶段门快照
 
-本节只记录**当前候选顺序**，不是第二套永久 backlog；每轮仍由 `ashare-ledger-continue` 从最新 stage 动态重算。
+本节只记录当前现场，不维护第二份 backlog；权威算法在总账 §5.9，任务元数据在所属 stage。
 
-1. **当前第一优先：收口 PR #44 自身**。CI/传播守卫未全绿前不从旧 v9.5 master 开新业务切片。
-2. **合并后主切片首选 BUG-028**（W04/P0）：已存在未来尾部改变早期确认的隔离反例；先修 point-in-time/历史 asof，避免“提前发现”研究建立在未来污染上。
-3. **第二竞争候选 BUG-026**（W04/P0）：修样本单位、重复刷新、horizon 与收益身份；它直接解锁 RSH-026 → IMP-020 → RSH-031 正式效果验证。
-4. **随后按真实证据在 BUG-029 / IMP-006 / BUG-020 等 P0 中重排**：优先影响更多消费者且已有强反例的源头问题，不机械按阶段号清零。
-5. **RSH-031 不作为第一主施工刀插队**：Phase 0 的历史覆盖/污染地图、event universe 与描述性 atlas 可在不冲突时早做；正式语义特征、战法和起爆前增益必须等待 RSH-026/IMP-020，猎场接线还受 BUG-029/IMP-006/IMP-049 约束。
+- **当前主门：G0 事实与安全底座**。
+- G0 当前可行动阻断顺位：`BUG-028 (P0/10) → BUG-026 (P0/20) → BUG-020 (P0/30)`；已完成项不参与队列。
+- 只有 G0 可行动阻断项闭环/转为真实不可行动条件后，才计算 G1；不得因 RSH-031、新 UI、Agent 或性能任务“更有价值”直接跳门。
+- RSH-031 定位为 `G1/P1/非阻断/门内序70`：允许后续在 G0 闭环后进入历史研究资产建设；`效果前置=RSH-026, IMP-020, RSH-030` 未满足前不得宣称龙头战法有效或接生产权重。
+- GX 治理可作为伴随切片，但本 v9.7 规划 PR 本身尚未合并，因此当前只收口治理候选，不启动 BUG-028。
 
-PR #44 合并且当前模式恢复为可执行后，用户在 Codex 端只需明确调用 `ashare-ledger-continue` 说“继续任务/继续”；若上述首选仍可开工且无新的更高优先级事实，Skill 可直接领取一个切片，不需用户复制任务卡。
+v9.7 合并并恢复 `READY_FOR_NEXT_PLANNED_SLICE` 后，用户对 Codex 说“使用 ashare-ledger-continue，继续任务”即可按上述门序领取一个切片；没有网页登记的 `CROSS_GATE_EXCEPTION` 就不能跨门。
 
 ## 8. Jev、工具链与协作流当前基线
 
