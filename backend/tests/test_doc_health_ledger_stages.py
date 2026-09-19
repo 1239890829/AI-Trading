@@ -252,7 +252,7 @@ def test_open_evolution_guard_catches_removed_core_invariant(monkeypatch, rel, n
         text = original_read(path)
         if path == target:
             assert needle in text
-            return text.replace(needle, "", 1)
+            return text.replace(needle, "")
         return text
 
     monkeypatch.setattr(mod, "_read", patched_read)
