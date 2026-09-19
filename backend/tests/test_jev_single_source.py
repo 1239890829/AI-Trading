@@ -51,6 +51,12 @@ def test_business_modules_use_adapter_not_direct_typesafe_url():
     assert offenders == []
 
 
+def test_jev_blueprint_links_all_active_ledger_owners():
+    repo = APP.parents[1]
+    blueprint = (repo / "docs" / "jev-integration.md").read_text()
+    for task_id in ("GOV-024", "IMP-045", "IMP-046", "RSH-030"):
+        assert task_id in blueprint
+
 
 def test_default_jev_usage_receipt_path_is_gitignored():
     import subprocess

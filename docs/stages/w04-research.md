@@ -117,7 +117,7 @@
 - **方案依据**：docs/jev-integration.md §29。
 - **范围**：固定事件队列、独立人工标签、规则/Jev/现有 LLM/fallback 对照，以及 TypeSafe 与更贵模型 token/调用量、延迟和质量的同条件度量；不把 agreement 写成 accuracy。
 - **验收**：v1 240 条 human.category/certainty/actionable 独立完成且通过 strict human validation；verifier 另有独立 claim/evidence 人工集；生产阈值、额度节省或选股增益只允许由可复算 A/B / walk-forward 得出。
-- **证据**：240 条固定队列已完成 Jev 预标注与审核优先级，human 仍 0/240；规则/Jev agreement 为 category 55.42%、certainty 77.92%、actionable 57.50%，仅用于安排人工审核。当前极保守 actionable cascade 在该平衡队列上无节省证据。
+- **证据**：PR #33 建立 verifier/gold-set 工具，PR #34 完成固定队列 Jev 预标注与审核优先级并均已合入 `master`。240 条固定队列当前 human 仍 0/240；规则/Jev agreement 为 category 55.42%、certainty 77.92%、actionable 57.50%，仅用于安排人工审核。当前极保守 actionable cascade 在该平衡队列上无节省证据。
 - **下一步**：独立完成 240 条人工标注和 verifier 人工样本，再比较规则、Jev、DeepSeek 与 fallback；长期 token A/B、选股/做T walk-forward/消融保持开放。
 - **恢复**：预标注永不回写 human；任何实验失败只停用对应 Jev 增量，不覆盖原始队列、规则结果或否证证据。
 

@@ -1,13 +1,13 @@
-# 当前交接：累计规划要求复核完成，未启动业务实施
+# 当前交接：PR #39 后主干收敛完成，等待下一明确实施切片
 
-**当前模式：DESIGN_ONLY。** 用户重复原四组要求并要求核对中途追加，仍属于理论/计划/文档完善，不执行账本业务任务。最新来源为 [实施方案](implementation-plan.md)、[产品闭环](product-closure-design.md)、[开放情境猎场](hunting-decision-design.md)、[大小功能覆盖](feature-closure-audit.md)、[计划去向](plan-registry.md)、[协作规范](collaboration-workflow.md)。
+**当前模式：READY_FOR_NEXT_PLANNED_SLICE。** 2026-09-18 的 DESIGN_ONLY 规划批已经完成并作为历史范围保留；2026-09-19 的 Jev、公开仓库治理与累计协作功能栈均已进入主干。当前没有活动 Codex 施工分支或自动下一任务；下一轮由网页 ChatGPT 先读最新 `master`、阶段账本与证据，再明确派发有限切片。最新来源为 [实施方案](implementation-plan.md)、[产品闭环](product-closure-design.md)、[开放情境猎场](hunting-decision-design.md)、[大小功能覆盖](feature-closure-audit.md)、[计划去向](plan-registry.md)、[协作规范](collaboration-workflow.md)。
 
 ## 1. 固定入口与范围
 
-仓库1239890829/AI-Trading；固定入口分支codex/collaboration-runtime-state；已知本机目录/tmp/ashare-plan-led-backlog。本次设备未连接，通过GitHub核对并修改文档，不推断本机已同步，不动其未知改动。当前唯一协调项仍 [W00/GOV-020](stages/w00-foundation.md#gov-020) 的planning-finalization-01；这是同一规划批的完整性复核，不新增任务或业务派工。
-复核基点7f9f4a71c3c16f4fee1a1c728727eb64c7096769。原40条需求、21条Codex来源、37条KB用途、三专题和已有业务成果全部继承。原任务全局状态保持原样；规划交付与业务完成/运行验证/发布相互独立。
+仓库 `1239890829/AI-Trading`；共享事实固定从 `master` 读取：`AGENTS.md` → `docs/INDEX.md` / `docs/retro-and-gaps.md` → `docs/handoff.md` → 对应 stage。功能分支只是施工载体，合并后可删除，不能再充当固定入口。2026-09-19 本次审计起点为 `master@2b89c0c077b9f0978f4a510217cbecf3976ece8f`（PR #39）；该起点远端仅保留 `master` 且无 open PR。PR #4 与 PR #36 均已 closed/unmerged，旧 `develop` 及累计功能分支已删除；历史事实从 Git/PR 追溯，不再写成当前入口。
+2026-09-18 规划复核基点为 `7f9f4a71c3c16f4fee1a1c728727eb64c7096769`。原40条需求、21条Codex来源、37条KB用途、三专题和已有业务成果全部继承；该规划批与后续 2026-09-19 工程/治理合并分开记账。
 
-## 2. 原请求与中途追加的逐项去向
+## 2. 2026-09-18 规划批：原请求与中途追加的逐项去向
 
 下表是本轮规划验收索引，不是第二套任务进度表。各项“覆盖”表示设计与验收方法有实际落点，不表示已经实现或实证有效。
 
@@ -24,25 +24,35 @@
 | 更新关联文档、清理无用重复并可追溯 | 当前资料各有职责，旧矛盾集中裁定；清理的是旧施工承诺/重复日志，不删除独有知识、历史证据或业务调度 | plan-registry；W08；Git父版本 |
 | 完整流程图供确认，只做本次规划 | 产品图包含市场/独立记录与机会的关联，开发图区分DESIGN_ONLY和明确实施；本轮不执行BUG/研究/组件试验 | product-closure-design §8；implementation-plan §0/§9 |
 
-## 3. 本次复核发现并修正的残余
+## 3. 2026-09-18 规划复核发现并修正的残余
 
 ①W07原整体依赖IMP-049与“非猎场可独立”正文不一致，改为按消费者列接口前置；不降低任何安全/发布要求，也不因去依赖而授予实施。②W09仍只写U01–U39，补齐U40规划限制；纠正“全链同ID”及“只有首帧可本地”的过强句，按各对象及隐私用途保留独立身份/本地表现。③W08多个历史“本轮”预算、门禁、清理描述混在当前安排，收敛为绑定版本的历史基线与持续规则，明确当前无新业务派工。
 以上是跨文档语义收尾，不是重写所有理论。无需重做已经完整的知识映射、原40条需求或业务代码；不把这些文案修正计成业务功能已完成。
 
-## 4. 验证与没有做的事情
+## 4. 2026-09-18 规划批验证与未执行事项
 
 本次核对固定基点文件、要求去向、角色/模式、依赖语义、ID/状态保留和Git差异；只改本文件及W07/W08/W09四份已有Markdown，无新增文件/业务任务，也无代码、配置、CI、模型、服务、部署或App卸载。
 仅做文本/结构及共享版本核查，不运行本机doc-health、业务测试、React/Canvas、回测或Codex往返；不复用旧3851/151数字作为本轮成绩。实际全仓逐行/运行/效果未验内容仍保留原任务，不能把“图已确认”写成实装成功。
 旧26a0c44/9d439c5/29eae6f/7f9f4a及证据路径照原记录保留；本机最后delivery.json曾超时，不能补造存在。原知识八文件的批量注释未重试，其当前用法已由plan-registry集中裁定，不再作为独立编辑欠债。
 
-## 5. 结论与下一步
+## 5. 当前接续规则
 
-本批原请求和中途追加在理论/产品/大小功能/知识使用/文档治理层面已逐项核去向并补齐不一致，可交付给用户确认；不宣称未来再无可改进之处。未完成的是计划中的实际开发、原始数据/候选实证和运行验收，不再将它们错误列成本次规划必须现在执行的事项。
-Codex收到短提示先读本模式：没有当前业务派工，不自行修BUG或扫描任务开工。用户另行明确进入实施后，网页再按风险/收益/输入选择有限切片，Codex实现回填，网页审核并重新规划。所有大小消费者持续纳入，原金融/权限/发布保护保留。
+2026-09-18 规划批已完成理论/产品/大小功能/知识使用/文档治理层面的逐项去向；其 DESIGN_ONLY 边界只描述该历史规划批，不再作为全项目“当前模式”。计划中的实际开发、原始数据/候选实证和运行验收仍按各 stage 的真实状态继续。
+Codex收到短提示后先从最新 `master` 重读 AGENTS、handoff、协作规范和对应 stage；没有网页明确派工时不自行修 BUG 或扫描任务开工。网页按风险/收益/输入选择有限切片，Codex实现回填，网页审核并重新规划。所有大小消费者持续纳入，原金融/权限/发布保护保留。
 文字版完整图以product-closure-design §8为准；展示图片只是解释副本，不是状态源。图必须包含后续获准实施的方向，不得宣称已经自动执行或真实券商下单，不出现普通前台配置/调试中心或后台固定分类上限。
 
-## 6. 2026-09-19 分支收敛补记
+## 6. 2026-09-19 分支收敛结果
 
-本轮以最新 master 为基线审查历史功能分支。codex/plan-led-backlog、codex/code-proposal-only、codex/research-admission-integrity、codex/shadow-review-required 均被 codex/collaboration-runtime-state 完整包含，因此只集成最终总分支并在成功后删除被替代分支，避免重复合并。总分支与 2026-09-19 主线新增的 Jev/公开仓库安全发生任务 ID 碰撞：历史治理任务保留 GOV-019；主线 JEV 治理因旧号冻结规则迁为 GOV-024，JEV IMP-045 / IMP-046 保留；总分支原 IMP 任务改为 IMP-051 / IMP-052，RSH-030 迁入 W04；旧 PR #4 / develop 已被账本明确判定“不直接合并旧方案”，待本轮集成完成后关闭并删除。
+PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2b89c0c`）。`codex/plan-led-backlog`、`codex/code-proposal-only`、`codex/research-admission-integrity`、`codex/shadow-review-required` 均由最终累计分支覆盖并在合并后删除；最终累计分支自身也已删除。任务 ID 冲突已按冻结规则收口：历史治理任务保留 GOV-019，Jev 治理使用 GOV-024，Jev IMP-045 / IMP-046 与 RSH-030 保留，累计分支原 provisional IMP 编号迁为 IMP-051 / IMP-052。
+旧 PR #4 / `develop` 已 closed/unmerged 并删除，不再作为待合并项；Dependabot PR #36 也已 closed/unmerged，其实际依赖安全修复由 PR #38 统一完成。当前工程接续不得从这些退役分支恢复“当前状态”。
 
-当前平台事实以 W00/GOV-012 为准：master branch protection、Secret Scanning、Push Protection、required public repo scan 已启用；依赖安全修复已由 PR #38 合并并通过 PR 与 master CI。Jev 现役设计与实证入口为 jev-integration.md，阶段状态只在对应 W04/W05/W08 任务页维护。
+当前平台事实以 W00/GOV-012 为准：`master` branch protection、Secret Scanning、Push Protection、required public repo scan 已启用；依赖安全修复已由 PR #38 合并。Jev 现役设计与实证入口为 [jev-integration.md](jev-integration.md)，阶段状态只在对应 W04/W05/W08 任务页维护。
+
+本次合并后事实指针与账本关联收口由 PR #40 承载；不为记录 PR 自身再追加会改变被审版本的自指提交。
+
+## 7. Jev、工具链与协作流当前基线
+
+- Jev 只保留 bounded semantic verify、条件 capability routing、metadata-only usage 与研究/审核辅助；确定性金融规则、权限、撮合、风控和真实执行不得委托给 Jev。
+- BillionsBobby/JevRouter 只采用经过固定版本校验的内核与 privacy-safe wrapper；旧 `jev-route` 已退出活动链。OpenRouter 当前明确不接入，也不使用聊天中出现过的旧 Key。
+- Universal Verification 仍为 off/shadow；RSH-030 的 240 条固定队列已经 Jev 预标注，但 human gold 仍为 0/240。未完成人工独立标注前，不启用 cascade、不调生产阈值、不宣称准确率或额度节省。
+- 网页 ChatGPT / Codex 协作固定为“`master` 账本事实源 + 用户短提示”：网页负责规划/审核，Codex负责明确切片执行；Bridge、自动互调、自动审核回执均不是必需依赖。功能分支可以短暂存在，但不能成为长期固定入口。
