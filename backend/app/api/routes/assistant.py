@@ -109,9 +109,12 @@ def _sse(obj: dict) -> str:
 
 
 def _build_messages(
-    req: ChatRequest, market_block: str = "", tools_enabled: bool = False
+    req: ChatRequest,
+    market_block: str = "",
+    tools_enabled: bool = False,
+    tool_names: set[str] | None = None,
 ) -> list[dict[str, str]]:
-    system = build_system_prompt(req.page, tools_enabled=tools_enabled)
+    system = build_system_prompt(req.page, tools_enabled=tools_enabled, tool_names=tool_names)
     if market_block:
         system += "\n" + market_block
     msgs = [{"role": "system", "content": system}]
@@ -281,7 +284,47 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
             "model": model,
             "sources": market_sources,
         })
-        messages = _build_messages(req, combined_block, tools_enabled=tools_enabled)
+        tool_route = None
+        route_task: asyncio.Task | None = None
+        prompt_tool_names: set[str] | None = None
+        route_mode = str(
+            getattr(settings, "jev_assistant_tool_mode", "off") or "off"
+        ).strip().lower()
+        if tools_enabled and route_mode in {"shadow", "cascade"}:
+            from app.assistant.jev_tool_router import route_tool_groups
+
+            if route_mode == "shadow":
+                # 与首轮 DeepSeek 并行，不增加首 token 等待；只做覆盖率/缩减率统计。
+                route_task = asyncio.create_task(
+                    asyncio.to_thread(
+                        route_tool_groups,
+                        req.messages[-1].content,
+                        req.page,
+                    )
+                )
+            else:
+                try:
+                    tool_route = await asyncio.to_thread(
+                        route_tool_groups,
+                        req.messages[-1].content,
+                        req.page,
+                    )
+                    if tool_route.get("narrowed"):
+                        prompt_tool_names = set(tool_route.get("tools") or [])
+                except Exception as exc:  # noqa: BLE001 — 路由增强失败必须 fail-open
+                    log.info("assistant Jev tool route failed open: %s", type(exc).__name__)
+                    tool_route = None
+
+        if prompt_tool_names is None:
+            # 保留既有调用契约：shadow/off 与 Jev 接入前逐字同形，现有测试桩/调用方不受影响。
+            messages = _build_messages(req, combined_block, tools_enabled=tools_enabled)
+        else:
+            messages = _build_messages(
+                req,
+                combined_block,
+                tools_enabled=tools_enabled,
+                tool_names=prompt_tool_names,
+            )
         tool_block: str | None = None  # 工具真实返回——grounding 证据池的第二部分
         try:
             sink: list[str] = []
@@ -360,6 +403,23 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
                     log.debug("cognition gap record skipped")
                 # 注：这里**刻意不发 SSE 事件**——新增事件类型属协议变更，
                 # 可能影响前端解析。可见化走议程证据（已有展示位），不改协议。
+
+            # Jev tool-router shadow/cascade 的覆盖度只写聚合 telemetry，不改变 SSE 协议。
+            # shadow 任务若到这里仍没完成就取消，绝不为了统计拖慢用户的 done。
+            if tools_enabled and route_mode in {"shadow", "cascade"}:
+                from app.assistant.jev_tool_router import observe_route
+
+                if route_task is not None:
+                    if route_task.done():
+                        try:
+                            tool_route = route_task.result()
+                        except Exception as exc:  # noqa: BLE001
+                            log.info("assistant Jev shadow route unavailable: %s", type(exc).__name__)
+                            tool_route = None
+                    else:
+                        route_task.cancel()
+                if tool_route is not None:
+                    observe_route(tool_route, used_tools)
             yield _sse({"type": "done"})
         except asyncio.CancelledError:
             # 客户端断开（点了停止/关窗/跳页）：底层传输由 _stream_round 的 finally 关闭

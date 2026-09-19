@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import pytest
+
 from app.models.event import EventCard, EventDirection
 from app.models.watchlist import Base
 
@@ -54,6 +56,11 @@ def _settings(monkeypatch, **kw):
     monkeypatch.setattr(settings, "event_llm_aux_min_batch", kw.get("min_batch", 2))
     monkeypatch.setattr(settings, "event_llm_aux_max_batch", kw.get("max_batch", 12))
     monkeypatch.setattr(settings, "event_llm_aux_age_max_h", kw.get("age_max_h", 5.0))
+    monkeypatch.setattr(settings, "jev_enabled", kw.get("jev_enabled", False))
+    monkeypatch.setattr(settings, "jev_event_aux_mode", kw.get("jev_mode", "off"))
+    monkeypatch.setattr(
+        settings, "jev_event_aux_neutral_max_noul", kw.get("neutral_max_noul", 0.05)
+    )
     # 复用 review LLM 字段指向（测试不走真调用，值随意）
     monkeypatch.setattr(settings, "llm_provider", "openai")
     monkeypatch.setattr(settings, "review_llm_base_url", "http://x")
@@ -205,3 +212,119 @@ def test_below_min_batch_skips(tmp_path, monkeypatch):
     out = la.judge_pending_batch(sf, theme_names=["半导体概念"])
     assert out["skipped"] is True
     assert "攒批下限" in out["reason"]
+
+
+
+def test_jev_shadow_keeps_full_deepseek_batch_and_records_comparison(tmp_path, monkeypatch):
+    from app.core import jev_client
+
+    sf = _factory(tmp_path)
+    _settings(monkeypatch, jev_enabled=True, jev_mode="shadow")
+    a = _event(sf, "纯数据罗列", age_min=10)
+    b = _event(sf, "芯片产业明确催化", age_min=11)
+    jev_client._reset_metrics_for_tests()
+    monkeypatch.setattr(la, "_jev_actionability", lambda rows: {a.id: 0.03, b.id: 0.94})
+
+    seen = {}
+
+    def fake_deepseek(rows):
+        seen["ids"] = [r.id for r in rows]
+        return [
+            {"direction": 0, "theme": None, "chain": "", "reason": "中性"},
+            {"direction": 1, "theme": "半导体概念", "chain": "产业催化", "reason": "明确"},
+        ], None
+
+    monkeypatch.setattr(la, "_deepseek_items", fake_deepseek)
+    out = la.judge_pending_batch(sf, theme_names=["半导体概念"])
+
+    assert seen["ids"] == [a.id, b.id]
+    assert out["jev_mode"] == "shadow"
+    assert out["jev_prefiltered_neutral"] == 0
+    assert out["deepseek_candidates"] == 2
+    cmp = jev_client.metrics_snapshot()["comparisons"]["event_llm_aux"]
+    assert cmp["total"] == 2 and cmp["agree"] == 2
+    assert cmp["avg_confidence"] is None
+
+
+
+def test_jev_cascade_prefilters_only_high_confidence_neutral(tmp_path, monkeypatch):
+    sf = _factory(tmp_path)
+    _settings(monkeypatch, jev_enabled=True, jev_mode="cascade", neutral_max_noul=0.05)
+    neutral = _event(sf, "例行数据", age_min=10)
+    actionable = _event(sf, "半导体明确政策催化", age_min=11)
+    monkeypatch.setattr(
+        la, "_jev_actionability",
+        lambda rows: {neutral.id: 0.02, actionable.id: 0.91},
+    )
+
+    def fake_deepseek(rows):
+        assert [r.id for r in rows] == [actionable.id]
+        return [
+            {"direction": 1, "theme": "半导体概念", "chain": "政策支持", "reason": "明确"}
+        ], None
+
+    monkeypatch.setattr(la, "_deepseek_items", fake_deepseek)
+    out = la.judge_pending_batch(sf, theme_names=["半导体概念"])
+
+    assert out["jev_prefiltered_neutral"] == 1
+    assert out["deepseek_candidates"] == 1
+    assert out["directions_written"] == 1
+    with sf() as db:
+        assert db.query(EventDirection).filter_by(event_id=neutral.id).count() == 0
+        assert db.query(EventDirection).filter_by(event_id=actionable.id).count() == 1
+        assert all(r.llm_judged_at is not None for r in db.query(EventCard).all())
+
+
+
+def test_jev_cascade_all_neutral_skips_deepseek_entirely(tmp_path, monkeypatch):
+    sf = _factory(tmp_path)
+    _settings(monkeypatch, jev_enabled=True, jev_mode="cascade", neutral_max_noul=0.05)
+    a = _event(sf, "纯行情数据A", age_min=10)
+    b = _event(sf, "纯行情数据B", age_min=11)
+    monkeypatch.setattr(la, "_jev_actionability", lambda rows: {a.id: 0.01, b.id: 0.03})
+    monkeypatch.setattr(
+        la, "_deepseek_items", lambda rows: (_ for _ in ()).throw(
+            AssertionError("all-neutral cascade must not call DeepSeek")
+        ),
+    )
+
+    out = la.judge_pending_batch(sf, theme_names=["半导体概念"])
+    assert out["deepseek_candidates"] == 0
+    assert out["jev_prefiltered_neutral"] == 2
+    assert out["directions_written"] == 0
+    with sf() as db:
+        assert all(r.llm_judged_at is not None for r in db.query(EventCard).all())
+
+
+def test_jev_prefilter_does_not_allow_partial_mark_when_deepseek_fails(tmp_path, monkeypatch):
+    sf = _factory(tmp_path)
+    _settings(monkeypatch, jev_enabled=True, jev_mode="cascade", neutral_max_noul=0.05)
+    neutral = _event(sf, "例行数据", age_min=10)
+    remaining = _event(sf, "待DeepSeek判题材", age_min=11)
+    monkeypatch.setattr(
+        la, "_jev_actionability", lambda rows: {neutral.id: 0.01, remaining.id: 0.8}
+    )
+    monkeypatch.setattr(la, "_deepseek_items", lambda rows: (None, "synthetic failure"))
+
+    out = la.judge_pending_batch(sf, theme_names=["半导体概念"])
+    assert out["skipped"] is True
+    with sf() as db:
+        assert all(r.llm_judged_at is None for r in db.query(EventCard).all())
+        assert db.query(EventDirection).filter_by(matched_by="llm_aux").count() == 0
+
+
+
+def test_jev_actionability_rejects_ambiguous_event_identity_before_network(monkeypatch):
+    """未落库/重复 ID 无法安全把 answers 对回事件，必须在 Jev 调用前 fail-closed。"""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "jev_event_aux_mode", "shadow")
+    monkeypatch.setattr(
+        __import__("app.core.jev_client", fromlist=["evaluate"]),
+        "evaluate",
+        lambda *_a, **_k: pytest.fail("ambiguous ids must not call Jev"),
+    )
+    a = EventCard(fingerprint="a", title="A")
+    b = EventCard(fingerprint="b", title="B")
+    assert a.id is None and b.id is None
+    assert la._jev_actionability([a, b]) is None

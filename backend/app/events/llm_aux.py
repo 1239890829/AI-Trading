@@ -122,6 +122,112 @@ def _insert_directions(sf, event_id: int, hits: list[dict]) -> int:
         return n
 
 
+def _deepseek_items(cands: list[EventCard]) -> tuple[list[dict] | None, str | None]:
+    """让当前 DeepSeek 对指定事件做题材/方向判定；不写库。"""
+    from app.core.config import settings
+    from app.core.llm_client import LLMError, chat_completion, extract_json_object
+
+    titles = [c.title for c in cands]
+    prompt = (
+        "你是 A 股消息面判定器。对以下新闻批量判断其对 A 股题材的方向影响。\n"
+        "只输出 JSON，不要解释。格式：{\"items\":[{\"direction\":-1|0|1,"
+        "\"theme\":\"受影响题材名(无则null)\",\"chain\":\"传导一句话(无则空)\","
+        "\"reason\":\"一句话依据\"}]}\n"
+        "direction: 1=利好相关题材/标的, -1=利空, 0=中性(纯数据罗列/常规澄清/"
+        "无题材驱动)。items 数量必须与输入条数一致，顺序对应。\n"
+        "注意：龙虎榜/成交量/资金流向/限售解禁数据类、公司常规澄清通常为 0；"
+        "政策定调/产业事件/海外映射等明确方向才非 0。"
+    )
+    try:
+        raw = chat_completion(
+            base_url=settings.review_llm_base_url,
+            api_key=settings.review_llm_api_key,
+            model=settings.review_llm_model,
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": __import__("json").dumps(titles, ensure_ascii=False)},
+            ],
+            provider=settings.llm_provider,
+            cli_path=settings.llm_cli_path,
+            timeout=180.0,
+        )
+    except LLMError as exc:
+        return None, f"LLM 调用失败：{exc}"
+    except Exception as exc:
+        return None, f"异常：{exc}"
+    try:
+        parsed = extract_json_object(raw) or {}
+        items = parsed.get("items") or []
+        if not isinstance(items, list) or len(items) != len(titles):
+            return None, f"输出条数不符（{len(items)}/{len(titles)}）"
+        return items, None
+    except Exception as exc:
+        return None, f"解析失败：{exc}"
+
+
+def _jev_actionability(cands: list[EventCard]) -> dict[int, float] | None:
+    """批量判断事件是否值得继续做非零 A 股题材方向判定。
+
+    只输出每条事件的 Noul 概率，不生成题材名、不写库。失败返回 None；
+    shadow/cascade 如何消费由 judge_pending_batch 决定。
+    """
+    from app.core.config import settings
+    from app.core.jev_client import evaluate
+
+    mode = str(getattr(settings, "jev_event_aux_mode", "off") or "off").strip().lower()
+    if mode not in {"shadow", "cascade"} or not cands:
+        return None
+    ids = [c.id for c in cands]
+    if any(event_id is None for event_id in ids) or len(set(ids)) != len(ids):
+        # pending candidates must be persisted EventCard rows; ambiguous identity makes
+        # answer-to-event alignment unsafe, so do not spend an API call.
+        log.warning("jev event prefilter skipped: candidate ids must be unique and non-null")
+        return None
+
+    events = [
+        {
+            "title": c.title,
+            "summary": str(c.summary or "")[:1200],
+            "source": c.source,
+            "source_tier": c.source_tier,
+        }
+        for c in cands
+    ]
+    questions: dict[str, dict] = {}
+    for idx in range(len(cands)):
+        questions[f"event_{idx}"] = {
+            "type": "noul",
+            "instructions": {
+                "task": f"判断 events[{idx}] 是否存在足够直接、可解释的 A 股题材方向催化，值得后续赋非零方向。",
+                "rules": [
+                    "纯行情、龙虎榜/成交量/资金流向等交易统计通常不是题材催化。",
+                    "常规澄清、无明确传导的海外公司消息、信息不足通常为否。",
+                    "明确产业政策、供需变化、重大签约中标、量产突破、制裁/限制及可解释海外映射可为是。",
+                    "这里只判断是否值得继续做题材方向判定，不预测股票涨跌。",
+                ],
+            },
+            "criteria": {
+                "true": "存在直接的产业/政策/公司事件及可解释传导，值得继续判断受影响题材与方向。",
+                "false": "缺乏直接题材催化，或主要是纯数据/行情/常规澄清/弱关联。",
+            },
+        }
+
+    result = evaluate({"events": events}, questions, purpose="event_llm_aux")
+    if not result.get("ok"):
+        return None
+    answers = result.get("answers") or {}
+    out: dict[int, float] = {}
+    for idx, cand in enumerate(cands):
+        answer = answers.get(f"event_{idx}")
+        if not isinstance(answer, dict):
+            return None
+        p = answer.get("noul")
+        if not isinstance(p, (int, float)) or isinstance(p, bool) or not 0.0 <= float(p) <= 1.0:
+            return None
+        out[cand.id] = float(p)
+    return out
+
+
 def judge_pending_batch(sf=None, *, theme_names: list[str] | None = None,
                         min_batch: int | None = None, max_batch: int | None = None,
                         age_max_h: float | None = None) -> dict:
@@ -147,54 +253,41 @@ def judge_pending_batch(sf=None, *, theme_names: list[str] | None = None,
     if len(cands) < mn:
         return {"skipped": True, "reason": f"候选 {len(cands)} < 攒批下限 {mn}"}
 
-    # 只把「标题里可能带题材」的送 LLM：全部送（是否中性由 LLM 判，且 theme 归位后校验）
-    titles = [c.title for c in cands]
-    prompt = (
-        "你是 A 股消息面判定器。对以下新闻批量判断其对 A 股题材的方向影响。\n"
-        "只输出 JSON，不要解释。格式：{\"items\":[{\"direction\":-1|0|1,"
-        "\"theme\":\"受影响题材名(无则null)\",\"chain\":\"传导一句话(无则空)\","
-        "\"reason\":\"一句话依据\"}]}\n"
-        "direction: 1=利好相关题材/标的, -1=利空, 0=中性(纯数据罗列/常规澄清/"
-        "无题材驱动)。items 数量必须与输入条数一致，顺序对应。\n"
-        "注意：龙虎榜/成交量/资金流向/限售解禁数据类、公司常规澄清通常为 0；"
-        "政策定调/产业事件/海外映射等明确方向才非 0。"
-    )
+    from app.core.jev_client import record_comparison
 
-    from app.core.llm_client import LLMError, chat_completion, extract_json_object
+    mode = str(getattr(settings, "jev_event_aux_mode", "off") or "off").strip().lower()
+    jev_probs = _jev_actionability(cands) if mode in {"shadow", "cascade"} else None
 
-    try:
-        raw = chat_completion(
-            base_url=settings.review_llm_base_url,
-            api_key=settings.review_llm_api_key,
-            model=settings.review_llm_model,
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": __import__("json").dumps(titles, ensure_ascii=False)},
-            ],
-            provider=settings.llm_provider,
-            cli_path=settings.llm_cli_path,
-            timeout=180.0,
-        )
-    except LLMError as exc:
-        log.warning("llm_aux judge failed (batch skipped, retry next round): %s", exc)
-        return {"skipped": True, "reason": f"LLM 调用失败：{exc}"}
-    except Exception as exc:  # noqa: BLE001 —— 判定失败不致命
-        log.warning("llm_aux judge unexpected (batch skipped): %s", exc)
-        return {"skipped": True, "reason": f"异常：{exc}"}
+    # cascade 只允许“极高把握为中性/弱关联”的事件跳过 DeepSeek。
+    # 正向/利空事件仍交 DeepSeek 产出官方题材归属；Jev 不自由生成题材。
+    pre_neutral: set[int] = set()
+    deepseek_cands = list(cands)
+    if mode == "cascade" and jev_probs:
+        neutral_max = float(getattr(settings, "jev_event_aux_neutral_max_noul", 0.05))
+        pre_neutral = {
+            cand.id for cand in cands
+            if float(jev_probs.get(cand.id, 1.0)) <= neutral_max
+        }
+        deepseek_cands = [cand for cand in cands if cand.id not in pre_neutral]
 
-    try:
-        parsed = extract_json_object(raw) or {}
-        items = parsed.get("items") or []
-        if not isinstance(items, list) or len(items) != len(titles):
-            # 条数不符 → 无法安全对齐，整批跳过（不半写）
-            log.warning("llm_aux output mismatch: %d items for %d titles", len(items), len(titles))
-            return {"skipped": True, "reason": f"输出条数不符（{len(items)}/{len(titles)}）"}
-    except Exception as exc:  # noqa: BLE001
-        log.warning("llm_aux parse failed (batch skipped): %s", exc)
-        return {"skipped": True, "reason": f"解析失败：{exc}"}
+    items_by_id: dict[int, dict] = {
+        event_id: {"direction": 0, "theme": None, "chain": "", "reason": "Jev高置信中性前置"}
+        for event_id in pre_neutral
+    }
+    if deepseek_cands:
+        deepseek_items, error = _deepseek_items(deepseek_cands)
+        if deepseek_items is None:
+            # 保持原有整批语义：只要还有 DeepSeek 子集失败，本轮一个事件都不标记，
+            # 包括已被 Jev 判中性的行，避免半批状态。
+            log.warning("llm_aux judge failed (batch skipped, retry next round): %s", error)
+            return {"skipped": True, "reason": error or "LLM 判定失败"}
+        items_by_id.update({
+            cand.id: item for cand, item in zip(deepseek_cands, deepseek_items)
+        })
 
     hit_count = mark_count = 0
-    for cand, item in zip(cands, items):
+    for cand in cands:
+        item = items_by_id.get(cand.id)
         if not isinstance(item, dict):
             continue
         try:
@@ -202,7 +295,19 @@ def judge_pending_batch(sf=None, *, theme_names: list[str] | None = None,
         except (TypeError, ValueError):
             continue
         theme = _match_theme(item.get("theme"), theme_names)
-        if direction == 0 or theme is None:
+        actionable = direction != 0 and theme is not None
+
+        # shadow/cascade 中仍进 DeepSeek 的事件都有参考结论；Noul 没有独立
+        # confidence，因此只记一致/分歧，不伪造 avg_confidence。
+        if jev_probs is not None and cand.id not in pre_neutral:
+            record_comparison(
+                "event_llm_aux",
+                "actionable" if float(jev_probs[cand.id]) >= 0.5 else "neutral",
+                "actionable" if actionable else "neutral",
+                confidence=None,
+            )
+
+        if not actionable:
             continue  # 中性/题材对不上 → 不落行（但该事件已试过，下面统一标记）
         n = _insert_directions(sf, cand.id, [{
             "target": theme,
@@ -220,6 +325,9 @@ def judge_pending_batch(sf=None, *, theme_names: list[str] | None = None,
         "candidates": len(cands),
         "hit_events": mark_count,
         "directions_written": hit_count,
+        "jev_mode": mode,
+        "jev_prefiltered_neutral": len(pre_neutral),
+        "deepseek_candidates": len(deepseek_cands),
     }
 
 

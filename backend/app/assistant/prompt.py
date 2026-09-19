@@ -141,13 +141,18 @@ def _render_brief(tools_enabled: bool) -> str:
 PROJECT_BRIEF = _render_brief(False)
 
 
-def build_system_prompt(page: PageContext | None, tools_enabled: bool = False) -> str:
+def build_system_prompt(
+    page: PageContext | None,
+    tools_enabled: bool = False,
+    tool_names: set[str] | None = None,
+) -> str:
     prompt = _render_brief(tools_enabled)
-    # 工具清单只在启用时注入：不启用就不该让模型以为自己有手（幻觉的最大来源）
+    # 工具清单只在启用时注入：不启用就不该让模型以为自己有手（幻觉的最大来源）。
+    # tool_names 只缩提示词展示面；执行授权仍由 TOOL_SPECS / dispatch 独立校验。
     if tools_enabled:
         from app.assistant.tools import tool_manifest
 
-        prompt += "\n" + tool_manifest() + "\n"
+        prompt += "\n" + tool_manifest(tool_names) + "\n"
     if page and (page.path or page.symbol):
         lines = ["", "## 当前页面上下文（用户正在看这里）"]
         if page.title:

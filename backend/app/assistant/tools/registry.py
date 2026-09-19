@@ -241,8 +241,13 @@ def tool_label(name: str) -> str:
     return TOOL_LABELS.get(name) or name
 
 
-def tool_manifest() -> str:
-    """给提示词的工具清单（只读 + 受限，明确边界）。"""
+def tool_manifest(allowed_names: set[str] | None = None) -> str:
+    """给提示词的工具清单；可由 Jev 只缩展示面，不改变执行白名单。"""
+    allowed = None if allowed_names is None else set(allowed_names)
+    if allowed is not None:
+        unknown = allowed - set(TOOL_SPECS)
+        if unknown:
+            raise ValueError(f"unknown assistant tools: {sorted(unknown)}")
     lines = [
         "## 可用工具（只读，受限）",
         "需要真实数据时，在回答**开头单独一行**写 {{tool:名称|参数=值}}，",
@@ -253,6 +258,8 @@ def tool_manifest() -> str:
         "指数宽度/题材/精选/持仓/事件等绝大部分数据需求——**先取数，再下结论**，"
         "不要凭印象回答「我没有这项数据」。",
     ]
-    for spec in TOOL_SPECS.values():
+    for name, spec in TOOL_SPECS.items():
+        if allowed is not None and name not in allowed:
+            continue
         lines.append(f"- {{{{tool:{spec.name}|{spec.params}}}}} → {spec.desc}")
     return "\n".join(lines)

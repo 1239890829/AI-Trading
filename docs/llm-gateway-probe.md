@@ -17,9 +17,11 @@
 
 ## 排除掉的一个误判
 
-`[claude-code:unrecognized_model] {"model":"glm-5.3"}` 是 **CLI 写 stderr 的无害警告**
-（CLI 已知模型表里没这个别名，做不了成本/能力推断）。实测 `returncode=0`、
-stdout 是纯净 JSON、调用正常。**别再把它当故障信号** —— 它是 09-04 那次误判的源头。
+`[claude-code:unrecognized_model]` 这类 stderr 提示**不能用来判断模型是否可用**。
+2026-09-16 实测：`deepseek-v4-flash` 带同类提示仍约 3.3s 正常返回，而旧
+`glm-5.3` 带同类提示却会挂起至超时；因此该文本与成败**正交**。当前 cc-switch
+运行模型已切到 DeepSeek，2026-09-19 实测为 `deepseek-v4-flash`。故障分类必须看
+returncode / timeout / stdout / HTTP 状态与 `LLMFailure`，**不得 match 该警告文本**。
 
 ## 失败分类（`app/core/llm_client.py`）
 

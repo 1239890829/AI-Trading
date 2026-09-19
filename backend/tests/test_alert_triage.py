@@ -321,3 +321,102 @@ def test_triage_pending_skips_judged(sf, monkeypatch):
     assert second == []
     with sf() as db:
         assert db.query(AgentTriage).count() == 1
+
+
+
+def _enable_jev(monkeypatch, mode: str, confidence: float = 0.90):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "jev_enabled", True)
+    monkeypatch.setattr(settings, "jev_alert_triage_mode", mode)
+    monkeypatch.setattr(settings, "jev_alert_triage_accept_confidence", confidence)
+
+
+def test_jev_shadow_never_changes_deepseek_verdict(sf, monkeypatch):
+    """shadow 只记分歧：Jev=ignore、DeepSeek=notify 时，用户可见仍是 DeepSeek。"""
+    from app.core import jev_client
+
+    _enable_jev(monkeypatch, "shadow")
+    jev_client._reset_metrics_for_tests()
+
+    async def fake_jev(_ctx):
+        return {"verdict": "ignore", "confidence": 0.98, "model": "jev-test", "latency_ms": 5}
+
+    async def fake_llm(_ctx):
+        return ("notify", "DeepSeek 保留提醒")
+
+    monkeypatch.setattr(tri, "_jev_verdict", fake_jev)
+    monkeypatch.setattr(tri, "_llm_verdict", fake_llm)
+    out = asyncio.run(tri.triage_event(_event(sf), sf))
+    assert out["verdict"] == "notify" and out["model"] == "llm"
+    cmp = jev_client.metrics_snapshot()["comparisons"]["alert_triage"]
+    assert cmp["total"] == 1 and cmp["disagree"] == 1
+    assert cmp["avg_confidence"] == 0.98
+
+
+def test_jev_cascade_high_confidence_skips_deepseek(sf, monkeypatch):
+    """cascade 高置信直接消费 Jev，DeepSeek 不应再调用。"""
+    _enable_jev(monkeypatch, "cascade", confidence=0.90)
+
+    async def fake_jev(_ctx):
+        return {"verdict": "ignore", "confidence": 0.96, "model": "jev-test", "latency_ms": 5}
+
+    async def no_llm(_ctx):
+        pytest.fail("high-confidence Jev must skip DeepSeek")
+
+    monkeypatch.setattr(tri, "_jev_verdict", fake_jev)
+    monkeypatch.setattr(tri, "_llm_verdict", no_llm)
+    out = asyncio.run(tri.triage_event(_event(sf), sf))
+    assert out["verdict"] == "ignore" and out["model"] == "jev"
+    assert "0.96" in out["reason"]
+
+
+
+def test_jev_cascade_low_confidence_escalates_to_deepseek(sf, monkeypatch):
+    """阈值未达到时不得为了省额度硬吃 Jev 结论。"""
+    from app.core import jev_client
+
+    _enable_jev(monkeypatch, "cascade", confidence=0.90)
+    jev_client._reset_metrics_for_tests()
+
+    async def fake_jev(_ctx):
+        return {"verdict": "notify", "confidence": 0.61, "model": "jev-test", "latency_ms": 5}
+
+    async def fake_llm(_ctx):
+        return ("escalate", "DeepSeek 判断为系统性异常")
+
+    monkeypatch.setattr(tri, "_jev_verdict", fake_jev)
+    monkeypatch.setattr(tri, "_llm_verdict", fake_llm)
+    out = asyncio.run(tri.triage_event(_event(sf), sf))
+    assert out["verdict"] == "escalate" and out["model"] == "llm"
+    cmp = jev_client.metrics_snapshot()["comparisons"]["alert_triage"]
+    assert cmp["total"] == 1 and cmp["disagree"] == 1
+
+
+def test_jev_off_does_not_call_jev(sf, monkeypatch):
+    _enable_jev(monkeypatch, "off")
+
+    async def no_jev(_ctx):
+        pytest.fail("off mode must not call Jev")
+
+    async def fake_llm(_ctx):
+        return ("ignore", "DeepSeek")
+
+    monkeypatch.setattr(tri, "_jev_verdict", no_jev)
+    monkeypatch.setattr(tri, "_llm_verdict", fake_llm)
+    out = asyncio.run(tri.triage_event(_event(sf), sf))
+    assert out["model"] == "llm" and out["verdict"] == "ignore"
+
+
+def test_jev_cascade_unavailable_falls_through_to_deepseek(sf, monkeypatch):
+    _enable_jev(monkeypatch, "cascade")
+
+    async def fake_jev(_ctx):
+        return None
+
+    async def fake_llm(_ctx):
+        return ("notify", "DeepSeek fallback")
+
+    monkeypatch.setattr(tri, "_jev_verdict", fake_jev)
+    monkeypatch.setattr(tri, "_llm_verdict", fake_llm)
+    out = asyncio.run(tri.triage_event(_event(sf), sf))
+    assert out["model"] == "llm" and out["verdict"] == "notify"

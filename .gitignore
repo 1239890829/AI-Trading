@@ -39,6 +39,8 @@ data/cache/*
 data/imports/*
 data/picks/*
 data/review/*
+# Jev 运行态 usage 仅用于本地额度/升级率审计；只含元数据，也不得误提交。
+data/jev/*
 !data/*/.gitkeep
 *.sqlite3
 *.db
