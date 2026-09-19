@@ -981,7 +981,7 @@ curl 先行 → 记录字段口径与类型陷阱 → 多采样找规律 → fix
 - **每个非简单任务先判断 Jev 是否值得用，但“判断”不等于“调用”**：确定性代码、用户已指定工具、只有一个合法下一步时直接执行，不得为了“用 Jev”再发请求。
 - **项目业务不得各写一套 TypeSafe 客户端**：后端统一走 `app/core/jev_client.py`；Codex 一般 Choice/Noul/Score 走全局 `evaluate` MCP；只有 ≥2 个真实 Tool/Skill/MCP/CLI/Subagent 候选且选择不明显时才用 `jev-capability-route`。
 - **默认 shadow / off 必须分清**：alert triage、pending event prefilter、assistant tool-group router 维持既有 shadow；Universal Verification 当前默认 `off`，只有显式 shadow 才运行，且只判 public evidence→claim。存在 `extra_block` 私有上下文、任一非公共工具，或用户问题本身含“我的持仓/仓位/成本价/账户/余额/自选/资产/盈亏”等私有语义时整轮 verifier 跳过，避免 claim 本身泄漏私人信息。
-- **人工金标准不得被规则污染**：`data/labels/jev_goldset_events_v1.jsonl` 的 `reference_rule` 仅供对照；准确率/阈值只认独立填写的 `human` 字段。未完成 `--require-human` 严格校验前，不得宣称 gold set 已完成或据此调生产阈值。
+- **人工金标准不得被规则或 Jev 预标注污染**：`data/labels/jev_goldset_events_v1.jsonl` 的 `reference_rule` 仅供对照，`*_predictions_jev-*.jsonl` / `*_review_priority.jsonl` 仅用于安排人工审核顺序；准确率/阈值只认独立填写的 `human` 字段。任何自动脚本都不得把 rule/Jev prediction 复制进 `human`。未完成 `--require-human` 严格校验前，不得宣称 gold set 已完成或据此调生产阈值。规则/Jev agreement 永远标为 agreement/disagreement，禁止写成 accuracy。
 - **jev-review 按价值使用**：高影响、跨模块、语义复杂或 tests/static 无法充分覆盖的 coherent code slice 才评审；简单机械修改、纯文档、确定性 guard 已充分覆盖的变更不强制调用。正常 tests/CI 永远优先于 Jev 分数。
 - **jev-pref 按治理风险使用**：触及 shadow→production、交易/风控红线、概率语义、前后台边界、策略/因子/做T口径时使用；普通格式/文案/机械 diff 不为凑流程调用。
 - **jev-context 保持 ask-only**：精确 rg/少量候选直接使用；只有宽检索/大输出且可能真实减少后续上下文时才过滤，不能用它证明“仓库不存在”。

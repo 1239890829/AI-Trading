@@ -1,0 +1,17 @@
+{
+  "queue_rows": 240,
+  "prediction_rows": 240,
+  "calls": 40,
+  "model_requested": "jev-1.13.0",
+  "models_returned": {
+    "jev-1.13.0": 40
+  },
+  "batch_size": 6,
+  "actionable_threshold": 0.5,
+  "input_tokens": 206482,
+  "output_tokens": 29441,
+  "total_latency_ms": 34642.72,
+  "avg_request_latency_ms": 866.07,
+  "queue_path": "../data/labels/jev_goldset_events_v1.jsonl",
+  "queue_sha256": "fc8776d15f563b10b694b8108be84f24ad331c85b536045c9689018f194c3ef7"
+}

@@ -1,0 +1,43 @@
+{
+  "rows": 240,
+  "provenance": {
+    "queue_sha256": "fc8776d15f563b10b694b8108be84f24ad331c85b536045c9689018f194c3ef7",
+    "prediction_sha256": "c344ce0a881db27f6c22001a43d4d9e3876cd699ddd4be333d3105606a0ddc08",
+    "prediction_rows": 240,
+    "model_requested": "jev-1.13.0",
+    "models_returned": {
+      "jev-1.13.0": 40
+    }
+  },
+  "review_priority_sha256": "7b5242d941215bcca5365cb7e7e51099fabee31eaa907a5fe351abed143778be",
+  "reason_counts": {
+    "actionable_disagreement": 102,
+    "actionable_uncertain": 150,
+    "category_disagreement": 107,
+    "category_low_confidence": 90,
+    "certainty_disagreement": 53,
+    "certainty_low_confidence": 56
+  },
+  "top_event_ids": [
+    7954,
+    2880,
+    3455,
+    3560,
+    4038,
+    270,
+    4032,
+    5184,
+    3077,
+    5579,
+    5700,
+    3874,
+    6907,
+    7508,
+    7482,
+    1039,
+    7126,
+    7752,
+    4907,
+    2002
+  ]
+}
