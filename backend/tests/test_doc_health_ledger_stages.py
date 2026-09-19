@@ -60,7 +60,23 @@ def probe(tmp_path, monkeypatch):
     (docs / "retro-and-gaps.md").write_text(index)
     (docs / "stages/w00-phase.md").write_text((docs / "stages/w00-phase.md").read_text() + task())
     (docs / mod.LEGACY_LEDGER).write_text("| GOV-014 | 已完成 | Git 原文 | 旧闭环留痕 |\n")
-    (docs / "handoff.md").write_text("# 当前现场\n")
+    (docs / "handoff.md").write_text(
+        "# 当前现场\n"
+        "- **当前主门**：G0\n"
+        "- **主切片首选**：BUG-014\n"
+        "- **门内候选**：BUG-014\n"
+    )
+    (root / "AGENTS.md").write_text("§5.9 CROSS_GATE_EXCEPTION\n")
+    (docs / "collaboration-workflow.md").write_text("CROSS_GATE_EXCEPTION 效果前置\n")
+    (docs / "plan-registry.md").write_text("文档自治治理契约 阶段门\n")
+    (root / "skills" / "ashare-ledger-continue").mkdir(parents=True)
+    (root / "skills" / "ashare-task-handoff").mkdir(parents=True)
+    (root / "skills" / "ashare-ledger-continue" / "SKILL.md").write_text(
+        "最低 CROSS_GATE_EXCEPTION 效果前置\n"
+    )
+    (root / "skills" / "ashare-task-handoff" / "SKILL.md").write_text(
+        "CROSS_GATE_EXCEPTION 效果前置\n"
+    )
     return mod
 
 
@@ -578,3 +594,39 @@ def test_stage_gate_requires_g5_acceptance_role(probe):
     edit(probe, "stages/w00-phase.md", "- **阶段门**：G0", "- **阶段门**：G5")
     errors = probe.check_stage_gates()
     assert any("G5 只能使用验收角色" in error for error in errors)
+
+
+def test_stage_gate_derives_lowest_actionable_blocker(probe):
+    entries, _ = probe.phase_tasks()
+    tasks = {tid: (rel, fields) for tid, rel, fields in entries}
+    gate, selected, candidates = probe.derive_current_stage_selection(tasks)
+    assert gate == "G0"
+    assert selected == "BUG-014"
+    assert candidates == ["BUG-014"]
+
+
+def test_stage_gate_does_not_skip_lower_gate_for_higher_blocker(probe):
+    p = probe.DOCS / "stages/w00-phase.md"
+    p.write_text(p.read_text() + task("IMP-001", gate="G1", order=20, role="阻断"))
+    entries, _ = probe.phase_tasks()
+    tasks = {tid: (rel, fields) for tid, rel, fields in entries}
+    gate, selected, _ = probe.derive_current_stage_selection(tasks)
+    assert (gate, selected) == ("G0", "BUG-014")
+
+
+def test_stage_gate_advances_after_lower_blocker_completed(probe):
+    edit(probe, "stages/w00-phase.md", "- **状态**：待执行", "- **状态**：已完成")
+    edit(probe, "stages/w00-phase.md", "- **证据**：尚未实施", "- **证据**：PR #1")
+    p = probe.DOCS / "stages/w00-phase.md"
+    p.write_text(p.read_text() + task("IMP-001", gate="G1", order=20, role="阻断"))
+    entries, _ = probe.phase_tasks()
+    tasks = {tid: (rel, fields) for tid, rel, fields in entries}
+    gate, selected, _ = probe.derive_current_stage_selection(tasks)
+    assert (gate, selected) == ("G1", "IMP-001")
+
+
+def test_stage_gate_rejects_handoff_selection_mismatch(probe):
+    handoff = probe.DOCS / "handoff.md"
+    handoff.write_text(handoff.read_text().replace("BUG-014", "IMP-999"))
+    errors = probe.check_stage_gates()
+    assert any("主切片首选" in error and "账本推导" in error for error in errors)
