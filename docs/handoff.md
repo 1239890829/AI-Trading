@@ -346,7 +346,7 @@
 | `BUG-012` | 🟡 部分闭环 | 2026-09-17 | 共享 API 夹具的后台议程隔离 |
 | `IMP-041` | ✅ 闭环 | 2026-09-17 | 后端测试夹具装载与 CI 分钟治理 |
 | `BUG-021` | ✅ 闭环 | 2026-09-17 | 持仓计划测试写入隔离 |
-| `GOV-012` | 🟡 客户端已实现 · 平台待批 | 2026-09-17 | 精确发布证据与平台边界 |
+| `GOV-012` | ✅ 平台保护已启用 | 2026-09-19 | PR + required CI + 管理员同约束 + public fork/Actions 加固 |
 | `GOV-017` | ✅ 闭环 | 2026-09-17 | 发布与提交判据纠偏 |
 | `GOV-018` | 🟡 实施中 | 2026-09-17 | 平台目录退出：清单、恢复与分用途迁移 |
 | `BUG-019` | ✅ 闭环 | 2026-09-17 | 预算共享判据的**「判别窗口 ≈ 噪声」**⇒ **真偶发**（与 `BUG-018` 的到期型**定性相反**）：残值 `0.4s` vs 整份 `0.5s` 只差 `0.1s`，而 `granted` 量**墙钟实际耗时**、抖动 `0.08~0.12s` ⇒ 判别力被淹没。**两份 diff 均为空** ⇒ 非本轮引入，是 `BUG-007` 的残余。修法**只拉大两端距离**（预算 `0.5→1.0`、慢源吃 `0.1→0.6`、阈值 `0.95→0.8×`，分离度 **1.25×→2.5×**）；注入自证 **1/1** 报红、还原 `sha256` 逐字一致；修后 **20/20 全绿** |
@@ -1406,13 +1406,14 @@
 - **遗留与下一步**：按能力建立真实上游共享预算、点时字段契约、冷热分工和盘中对照，免费候选先验证许可/语义/独立性；去重衔接其它数据源任务时以 §6.0 当前版本为准。
 
 ## GOV-012 客户端发布核验与平台保护边界
-- **账本**：`docs/retro-and-gaps.md` §6.0 `GOV-012` ｜ **日期**：2026-09-17 ｜ **状态**：🟡 客户端已实现 · 平台待批
-- **缺口与验收标准**：发布须绑定当前 master、PR HEAD、实际集成树及最新 attempt 全部必需 Actions job，未知不得当绿；合并后复验主干。
-- **改动**：只读发布核验脚本与行为测试，复用现有三份 CI job。平台保护设置仍待批，不改仓库权限、套餐或可见性。
-- **机械证据**：开工 master `4052c80a4479ac41038c09b3c1a273ca88e77ece`；Actions run `35167371281` attempt 1 三 job success；protected=false。PR #4 冲突，不合并。
-- **注入自证**：合成缺陷覆盖空/缺项/重复、旧 SHA、取消/跳过、主干漂移和阻塞审查；实测见收尾回填。
-- **门禁**：本批完整实测见 §1；合并前仍须对实际 PR 最新 HEAD 运行发布核验，不能拿单测代替远端 CI。
-- **遗留与下一步**：Checks API 不可读时记录 Actions API 的核验边界；平台保护仍不能宣称完成。
+- **账本**：`docs/retro-and-gaps.md` §6.0 `GOV-012` ｜ **日期**：2026-09-19 ｜ **状态**：✅ 平台保护已启用
+- **平台保护**：`master` 已启用 GitHub branch protection：必须 Pull Request；required status checks=`backend (pytest + pyflakes)` / `frontend (tsc + lint)` / `docs (doc-health)`，`strict=true`；`enforce_admins=true`，因此仓库管理员也不能直接绕过；force-push 与删除 `master` 均禁止；PR 未解决对话时禁止合并；required approving reviews=0，避免单维护者自锁。
+- **公开仓库写权限边界**：当前 collaborator 列表只有 `1239890829`（admin），没有其他 write/admin collaborator。公开用户可以 fork / 提 PR / issue，但不能直接 push 到 origin。
+- **Actions 加固**：默认 `GITHUB_TOKEN` 已是 read-only 且禁止 workflow 自动审批 PR；仓库 Actions 从 `allowed_actions=all` 收紧为 `selected`，仅允许 GitHub-owned actions（当前 CI 仅用 `actions/checkout` / `actions/setup-python` / `actions/setup-node`）；外部 fork PR approval policy=`all_external_contributors`，任何外部贡献者 workflow 每次都需仓库方批准后才运行。
+- **仓库卫生**：`delete_branch_on_merge=true`，合并后平台自动删除功能分支；ruleset 当前仍为空，branch protection 已承担主干强制门禁，不重复叠加第二套服务端规则。
+- **客户端核验**：`scripts/audit/release_check.py` 继续作为 PR HEAD/base/integration tree/最新 Actions attempt 的发布证据，**补充而非替代**平台保护；Checks API 权限不足时仍按既有 Actions API 边界记录。
+- **边界**：required reviews 不设 1 人，因为当前只有单维护者，GitHub 不允许作者自行批准自己的 PR；保护重点是 PR + CI + 管理员不可绕过，而不是制造不可合并状态。
+- **遗留**：无平台侧开放项。若未来新增 collaborator / GitHub App 写权限或引入第三方 Action，必须重新审计本节。
 
 ## GOV-017 提交前后判据纠偏
 - **账本**：`docs/retro-and-gaps.md` §6.0 `GOV-017` ｜ **日期**：2026-09-17 ｜ **状态**：✅ 闭环
@@ -1421,7 +1422,7 @@
 - **机械证据**：本批正常暂存 A/M/D 与未暂存 diff 是两种独立状态；按精确文件清单暂存后核正文，提交后再核任务工作区。
 - **注入自证**：无独立软件守卫；使用真实 Git 状态验证命令语义。
 - **门禁**：本批完整实测见 §1，最终提交另经 GitHub 三份必需 CI。
-- **遗留与下一步**：本项指引修复已完成；本批提交与 PR 按 §6.5 交付，平台保护仍归 `GOV-012`，余目录退出归 `GOV-018`。
+- **遗留与下一步**：本项指引修复已完成；本批提交与 PR 按 §6.5 交付。`GOV-012` 平台保护已于 2026-09-19 闭环，余目录退出归 `GOV-018`。
 
 ## GOV-018 平台目录退出与恢复
 - **账本**：`docs/retro-and-gaps.md` §6.0 `GOV-018` ｜ **日期**：2026-09-17 ｜ **状态**：🟡 实施中
