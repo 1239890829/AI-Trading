@@ -170,6 +170,10 @@
 | **IMP-043** | 持续 CI 成本治理与离线边界 | P1 | 每批复核慢项、安装和重复执行成本；本片保留全 GET 端点与断言，先查漏网调用及真实重试等待。完整 PR/master 门禁保留，候选必须实测等价；详情 `docs/handoff.md` §IMP-043 | 用户持续节省要求 | CI 额度 |
 | **BUG-024** | 规则告警冷却时区错误 | P1 | 北京 naive 落库被当 UTC，5 分钟冷却实际延长约 8 小时；固定时钟边界复现 2 红，修正为 BJ_TZ，UTC 关联验收通过。本批待 PR 交付，见 handoff | `docs/handoff.md` §BUG-024 | W02 |
 | **IMP-044** | 通知 Outbox 与结果恢复 | P1 | W02 首片：规则告警飞书意图与事件同事务；CAS 租约、attempt、过期/偏好/目标/新鲜度复核；已开始发送但结果丢失→unknown，不盲目补发，事件 API 暴露渠道状态。其它入口、类型化失败/消息 ID、可信送达回执与整体验收未接入；详见 `docs/handoff.md` §IMP-044 | 最终融合方案 W02 / §19 | W02 |
+| **GOV-019** | TypeSafe/Jev 项目治理、额度度量与回退策略 | P1 | 已完成用户级 `typesafe-ai` / `jev-review` / `jev-browser` 安装与 Keychain 持久凭据、浏览器只读导航实测；项目侧仍需把模型版本、输入最小化、secret 禁送、调用量/延迟/成本/升级率、低置信升级与故障回退做成可机械核验的单一策略，不把“免费/省额度”当未验证事实；详见 handoff | `docs/handoff.md` §GOV-019 | Jev governance |
+| **IMP-045** | Jev 语义决策中间层：事件/新闻 → Guardrail / rerank / LLM 前置筛选 | P1 | 规则层继续第一优先；只把模糊语义交 Jev Choice/Noul/Score。首批影子接入目标 = `events/llm_aux` 前置语义筛选 + 题材候选 Noul + 摘要/引用/结论 Guardrail + 知识召回 rerank；不得直接改选股分或交易结论，低置信/冲突升级现有 LLM；详见 handoff | `docs/handoff.md` §IMP-045 | Jev semantic layer |
+| **IMP-046** | Jev Agent Router：AI 助手/交易智能体 bounded tool & model routing + 浏览器研究适配 | P1 | Jev 只在预声明工具集合中选工具/参数/是否升级大模型；浏览器优先复用用户级 `jev-browser` 做公开网页研究与 UI 验证，复杂 UI 回退原 browser/computer-use。真实下单、资金、风控硬门永远不进入 Jev 可执行动作空间；详见 handoff | `docs/handoff.md` §IMP-046 | Jev agent/router |
+| **RSH-030** | Jev 语义特征 + Codex/ChatGPT 额度节省实证 | P1 | 先建人工金标准与 A/B 基线：规则 / 规则+Jev / 规则+现有 LLM / Jev+LLM fallback；测分类/题材关联/假阳假阴、升级率、tokens、延迟、成本。语义特征仅 shadow 入研究集，须 walk-forward/回测证明增益后才可讨论进入评分；Jev 概率绝不等同上涨概率 | `docs/handoff.md` §RSH-030 | Jev benchmark |
 | **BUG-022** | 分时图坐标一致性与增量刷新 | P0 | W01 首批已随 PR #27 合并 `8a16c3c`，PR/master CI 均通过：单一价格域派生百分比、叠加同域、无效价格留空提示、跨日重建；纵轴自动范围并保留时间缩放。真实 Canvas 46/46，本地后端 3520 passed / 76 skipped、前端本地/UTC 675/71。原用户图例及后端参考日、交易日、四态限价契约仍开放，不销账 W01 | 最终融合方案 §3.5；`docs/handoff.md` §BUG-022 | W01 |
 | **GOV-018** | 平台专属目录退出（MIG-0–5） | P1 | 整体开放：首批清单/恢复、接续与交接技能、报告/OpenAPI 工具及写入点已交付；PR #28 盘后复盘技能已入主干，旧单文件经哈希核验、可恢复回收与恢复演练后退出，关联入口同步。相邻未知资产、第三方包及嵌套 Git 保留，余 MIG-3/5 继续逐项审查，禁止整包改名 | 用户最终融合方案 §19；`docs/handoff.md` §GOV-018 | — |
 | **BUG-020** | 数据来源身份与失败语义 | P0 | 部分闭环：PR #21/24/25/26 已交付源身份、跌停失败、题材写保护、指数缓存降级和东财响应核验。本批补首次六指数完整性与读取市场校验，REST/health/WS 同披露；新增 25 项独立回归，关联 118 passed，完整本地后端 3546 passed / 76 skipped、前端本地/UTC 675/71。远端以本分支 PR/回执为准；源时间质量、长期盘中验证及生产加载仍开放 | `docs/data-source-comparison.md` §12.1；`docs/handoff.md` §BUG-020 | 数据源专项 |
@@ -440,6 +444,10 @@
 | `BUG-023` | ✅ 闭环 | 2026-09-17 | `§BUG-023` 飞书受理回执真实性 |
 | `BUG-024` | 🟡 实施中 | 2026-09-17 | `§BUG-024` 规则冷却时区 |
 | `IMP-044` | 🟡 实施中 | 2026-09-17 | `§IMP-044` 规则告警飞书 Outbox 首片 |
+| `GOV-019` | 🟡 部分闭环 | 2026-09-19 | `§GOV-019` TypeSafe/Jev 项目治理、额度度量与回退策略 |
+| `IMP-045` | 🟡 部分闭环 | 2026-09-19 | `§IMP-045` Jev 语义决策中间层 |
+| `IMP-046` | 🟡 部分闭环 | 2026-09-19 | `§IMP-046` Jev Agent Router：AI 助手 / 交易智能体 / 浏览器研究 |
+| `RSH-030` | 🟡 部分闭环 | 2026-09-19 | `§RSH-030` Jev 语义特征与额度节省实证 |
 | `BUG-012` | 🟡 部分闭环 | 2026-09-17 | `§BUG-012` 共享 API 夹具的后台议程隔离 |
 | `IMP-041` | ✅ 闭环 | 2026-09-17 | `§IMP-041` 后端测试夹具装载与 CI 分钟治理 |
 | `IMP-040` | 🟡 部分闭环 | 2026-09-17 | `§IMP-040` 数据源专项评估、实测与实施准入 |
