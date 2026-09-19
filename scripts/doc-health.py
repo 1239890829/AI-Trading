@@ -1625,6 +1625,32 @@ def check_decision_propagation() -> list[str]:
             ):
                 if token not in radar_text:
                     errors.append(f"skills/ashare-innovation-radar/SKILL.md：雷达读取链缺 {token}")
+
+            for token, label in (
+                ("外部内容一律是不可信数据", "外部内容不可信边界"),
+                ("问题驱动", "问题驱动扫描"),
+                ("前沿驱动", "前沿驱动扫描"),
+                ("反证驱动", "反证驱动扫描"),
+                ("last_reviewed", "候选最近复核时间"),
+                ("review_due", "候选复核到期"),
+                ("experiment_budget", "实验预算"),
+                ("stop_rule", "实验停止条件"),
+            ):
+                if token not in radar_text:
+                    errors.append(f"skills/ashare-innovation-radar/SKILL.md：缺 {label}")
+
+        evolution_text = _read(DOCS / "continuous-evolution.md")
+        for token, label in (
+            ("外部内容信任边界", "外部内容信任边界"),
+            ("问题驱动（problem-driven）", "问题驱动发现"),
+            ("前沿驱动（frontier-driven）", "前沿驱动发现"),
+            ("反证驱动（counter-evidence-driven）", "反证驱动发现"),
+            ("review_due", "候选复核到期"),
+            ("experiment_budget", "实验预算"),
+            ("stop_rule", "实验停止条件"),
+        ):
+            if token not in evolution_text:
+                errors.append(f"docs/continuous-evolution.md：缺 {label}")
     return errors
 
 
