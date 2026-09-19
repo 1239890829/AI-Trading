@@ -1405,15 +1405,20 @@
 - **门禁**：随 `BUG-020` 的同树完整检查；暂无生产性能/收益提升结论。
 - **遗留与下一步**：按能力建立真实上游共享预算、点时字段契约、冷热分工和盘中对照，免费候选先验证许可/语义/独立性；去重衔接其它数据源任务时以 §6.0 当前版本为准。
 
-## GOV-012 客户端发布核验与平台保护边界
-- **账本**：`docs/retro-and-gaps.md` §6.0 `GOV-012` ｜ **日期**：2026-09-19 ｜ **状态**：✅ 平台保护已启用
+## GOV-012 客户端发布核验、平台保护与 Public Repo 隐私门
+- **账本**：`docs/retro-and-gaps.md` §6.0 `GOV-012` ｜ **日期**：2026-09-19 ｜ **状态**：✅ 平台保护 + 当前/未来 secret/privacy 门已闭环
 - **平台保护**：`master` 已启用 GitHub branch protection：必须 Pull Request；required status checks=`backend (pytest + pyflakes)` / `frontend (tsc + lint)` / `docs (doc-health)`，`strict=true`；`enforce_admins=true`，因此仓库管理员也不能直接绕过；force-push 与删除 `master` 均禁止；PR 未解决对话时禁止合并；required approving reviews=0，避免单维护者自锁。
 - **公开仓库写权限边界**：当前 collaborator 列表只有 `1239890829`（admin），没有其他 write/admin collaborator。公开用户可以 fork / 提 PR / issue，但不能直接 push 到 origin。
 - **Actions 加固**：默认 `GITHUB_TOKEN` 已是 read-only 且禁止 workflow 自动审批 PR；仓库 Actions 从 `allowed_actions=all` 收紧为 `selected`，仅允许 GitHub-owned actions（当前 CI 仅用 `actions/checkout` / `actions/setup-python` / `actions/setup-node`）；外部 fork PR approval policy=`all_external_contributors`，任何外部贡献者 workflow 每次都需仓库方批准后才运行。
+- **GitHub secret protection**：仓库已启用 **Secret Scanning** 与 **Push Protection**，当前 open alerts=0；同时启用 Dependabot security updates 与 **Private Vulnerability Reporting**（外部安全问题可私下报告，避免在公开 issue 泄漏细节）。尝试启用 non-provider patterns / validity checks 后平台仍返回 disabled，因此不能把这两项宣称为已启用，当前自定义扫描器负责补常见非 provider / 项目特有模式。
+- **Public repo required guard**：新增 `scripts/audit/public_repo_scan.py` 并挂入 required `docs` job。它只扫描 **tracked** 内容，失败时只输出 detector/path/line，不回显 secret；覆盖 TypeSafe/OpenRouter/OpenAI/Anthropic/GitHub/AWS/Google、Feishu/Lark/Slack/Discord webhook、Telegram/Stripe/Twilio/SendGrid/HuggingFace/npm/GitLab token、私钥块、Basic-Auth URL、个人 home 绝对路径、本地邮箱/机器名、误跟踪 `.env`/私钥/证书/DB 文件。唯一保留的 tracked `apps/web/.env.development` 只允许 `NEXT_PUBLIC_WS_BASE` 且值必须是 localhost/127.0.0.1。
+- **本轮内容清理**：清理 4 处 tracked 个人机器路径/命令快照（两份 archive 验证脚本改为 repo-relative Path、daily-review 的 claude 绝对路径改占位、KB 的 home 路径改 `<repo>`）；`test_code_executor.py` 的完整 `ghp_...` 假 token 字面量改为运行时拼接，避免 GitHub/本地 secret scanner 噪音。
+- **现状扫描证据**：当前 tracked + 全 Git blob 历史未发现 TypeSafe/OpenRouter/OpenAI/Anthropic/AWS/Google/private-key 等真实 provider secret；历史 exact-pattern 唯一命中为 `test_code_executor.py` 的合成 GitHub token-like 测试值（3 个旧 blob，非真实凭据）。飞书/Slack/Discord/Telegram 等 webhook/token 当前 tracked 0 命中；tracked position-plan/market research JSON 未发现 account/user/email/phone/broker/client 等账户身份字段。
+- **Git 作者隐私**：本仓 local Git identity 已固定为 `1239890829 <56590493+1239890829@users.noreply.github.com>`，防止未来提交继续产生本机邮箱。**历史提交元数据仍存在旧的本机作者名/ `.local` 邮箱/机器名**；它不是可用凭据，但属于历史 PII。完全抹除需 destructive history rewrite，并且 GitHub PR refs/cache 可能仍保留旧对象，通常还需 GitHub Support 清理；因此本轮不在“无真实 secret”的前提下擅自破坏全部 commit/PR SHA，作为独立历史隐私决策保留。
 - **仓库卫生**：`delete_branch_on_merge=true`，合并后平台自动删除功能分支；ruleset 当前仍为空，branch protection 已承担主干强制门禁，不重复叠加第二套服务端规则。
-- **客户端核验**：`scripts/audit/release_check.py` 继续作为 PR HEAD/base/integration tree/最新 Actions attempt 的发布证据，**补充而非替代**平台保护；Checks API 权限不足时仍按既有 Actions API 边界记录。
+- **客户端核验**：`scripts/audit/release_check.py` 继续作为 PR HEAD/base/integration tree/最新 Actions attempt 的发布证据，**补充而非替代**平台保护；`public_repo_scan.py` 是 required docs check 的一部分，不得通过删除/豁免扫描器绕过。
 - **边界**：required reviews 不设 1 人，因为当前只有单维护者，GitHub 不允许作者自行批准自己的 PR；保护重点是 PR + CI + 管理员不可绕过，而不是制造不可合并状态。
-- **遗留**：无平台侧开放项。若未来新增 collaborator / GitHub App 写权限或引入第三方 Action，必须重新审计本节。
+- **遗留**：平台当前/未来 secret/privacy 门已闭环。唯一开放的是“是否为隐藏旧作者本地 PII 做全仓 destructive history rewrite + GitHub Support 清理”；若未来新增 collaborator / GitHub App 写权限、第三方 Action 或新的外部 secret provider，必须重新审计本节。
 
 ## GOV-017 提交前后判据纠偏
 - **账本**：`docs/retro-and-gaps.md` §6.0 `GOV-017` ｜ **日期**：2026-09-17 ｜ **状态**：✅ 闭环

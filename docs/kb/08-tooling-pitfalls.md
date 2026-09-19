@@ -83,4 +83,4 @@
 
 ### KB-ENG-15 memory 日志写入用绝对路径
 - 后台/复合命令里相对路径 `>> .workbuddy/memory/...` 因 cwd 漂移写错位置（09-08 实际发生）。
-- **正确做法**：一律绝对路径 `/Users/hezifeng/Desktop/project/ms/ashare-ai-trader/.workbuddy/memory/YYYY-MM-DD.md`。
+- **正确做法**：一律从仓库根动态解析绝对路径，例如 `<repo>/.workbuddy/memory/YYYY-MM-DD.md`；文档中不得固化个人 home 目录或机器用户名。

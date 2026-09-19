@@ -20,7 +20,7 @@
 
 ```
 error.code    : LLMError
-error.message : claude_cli 调用超时：Command ['/Users/hezifeng/.nvm/versions/node/v24.14.0/bin/claude', '-p', '{"review": {...}}']
+error.message : claude_cli 调用超时：Command ['<claude-cli>', '-p', '{"review": {...}}']
 ```
 
 | 轮次 | 起 | 止 | 耗时 | 结果 |

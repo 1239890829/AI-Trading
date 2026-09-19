@@ -96,5 +96,8 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Public repo 密钥 / 隐私扫描
+        run: python3 scripts/audit/public_repo_scan.py
+
       - name: 文档体检（未登记 / 死链 / 超层配额 / 摘要缺失）
         run: python3 scripts/doc-health.py

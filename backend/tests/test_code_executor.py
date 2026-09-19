@@ -568,7 +568,8 @@ def test_redact_scrubs_credentials_and_truncates():
     scrubbed = ce._redact("Authorization: Bearer abcdefghijklmnop end")
     assert "abcdefghijklmnop" not in scrubbed and "[REDACTED]" in scrubbed
     assert "sk-abcdefghijklmnop" not in ce._redact("key=sk-abcdefghijklmnop")
-    assert "ghp_ABCDEFGHIJKLMNOPQRST" not in ce._redact("token ghp_ABCDEFGHIJKLMNOPQRST")
+    fake_github_token = "ghp_" + ("A" * 24)
+    assert fake_github_token not in ce._redact(f"token {fake_github_token}")
     assert "hunter2" not in ce._redact("password: hunter2")
     assert len(ce._redact("x" * 500)) == 200
     assert "\n" not in ce._redact("a\nb")

@@ -1,9 +1,12 @@
 """ta 0.11.0 真实数据验证：marketdb 真实 A 股日K → 指标正确性（vs 手写基准）+ 性能。"""
+from pathlib import Path
+
 import duckdb
 import numpy as np
 import pandas as pd
 
-DB = "/Users/hezifeng/Desktop/project/ms/ashare-ai-trader/backend/data/marketdb/market.duckdb"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DB = str(REPO_ROOT / "backend" / "data" / "marketdb" / "market.duckdb")
 from ta.trend import MACD, SMAIndicator
 from ta.volatility import BollingerBands
 from ta.momentum import RSIIndicator

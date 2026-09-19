@@ -1,11 +1,13 @@
 """akquant 0.3.58 真实数据验证：回测链路 + talib 指标质量（vs ta/wilder）+ 因子引擎 + akshare 联动。"""
 import time
+from pathlib import Path
 
 import duckdb
 import numpy as np
 import pandas as pd
 
-DB = "/Users/hezifeng/Desktop/project/ms/ashare-ai-trader/backend/data/marketdb/market.duckdb"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DB = str(REPO_ROOT / "backend" / "data" / "marketdb" / "market.duckdb")
 con = duckdb.connect(DB, read_only=True)
 df = con.execute(
     "select date_ms, open_price as open, high_price as high, low_price as low, "
