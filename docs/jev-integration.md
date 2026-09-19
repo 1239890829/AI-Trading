@@ -1097,3 +1097,43 @@ python scripts/jev_goldset.py score ../data/labels/jev_goldset_events_v1.jsonl p
 ```
 
 v1 导出已机械验证：240 行、6 类各 40、`human_complete=0`；使用同一真实库 + seed 再导出与入库队列 `cmp` 逐字一致，未标注队列 SHA-256 = `fc8776d15f563b10b694b8108be84f24ad331c85b536045c9689018f194c3ef7`（189,954 bytes）。严格校验在未人工标注时返回失败，这是预期行为，用来阻止“未标完就算准确率”。该 hash 是**未标注队列指纹**；人工填写 `human` 后文件 hash 改变属正常现象。
+
+### 29.3 Jev 预标注与人工审核优先级（不写 human）
+
+为了降低 240 条人工标注的机械成本，新增 `predict-jev / prioritize / compare-reference` 三个子命令。它们的职责严格分开：
+
+- `predict-jev`：用固定 `jev-1.13.0` 为每条 event 生成独立 prediction；**绝不修改 gold queue 的 `human` 字段**；
+- `prioritize`：按“规则/Jev 分歧 + Jev 自身不确定度”给人工审核排序，优先看信息量最大的样本；
+- `compare-reference`：只计算现有规则与 Jev 的 agreement/cross-tab/confidence 分布，输出字段明确叫 `agreement_not_accuracy`；现有规则不是 human ground truth。
+
+产物：
+
+- `data/labels/jev_goldset_events_v1_predictions_jev-1.13.0.jsonl`
+- `data/labels/jev_goldset_events_v1_predictions_jev-1.13.0.meta.json`
+- `data/labels/jev_goldset_events_v1_review_priority.jsonl`
+- `data/labels/jev_goldset_events_v1_review_priority.meta.json`
+- `data/labels/jev_goldset_events_v1_rule_agreement.json`
+
+完整 240 条实跑：40 个请求（batch=6），返回模型全为 `jev-1.13.0`；input **206,482 tokens**、output 29,441、总网络往返约 34.64s、平均约 **866ms/request**。按当时公开 $0.042 / MTok input 估算约 **$0.008672**（不是账单）。预测文件 SHA-256 = `c344ce0a881db27f6c22001a43d4d9e3876cd699ddd4be333d3105606a0ddc08`；review-priority SHA-256 = `7b5242d941215bcca5365cb7e7e51099fabee31eaa907a5fe351abed143778be`。
+
+`prioritize` / `compare-reference` 现在必须同时读取 prediction meta，并核对 `queue_sha256` 与 prediction row count；版本错配在分析前直接失败。review-priority 另写 meta sidecar，保存 queue/prediction/review-priority 三个指纹和原因统计。
+
+**与现有规则的一致率（不是准确率）**：
+
+- category：133/240 = **55.42%**；
+- certainty：187/240 = **77.92%**；
+- actionable：138/240 = **57.50%**。
+
+审核优先级统计：category 分歧 107、certainty 分歧 53、actionable 分歧 102；category confidence <0.75 有 90 条，certainty confidence <0.75 有 56 条；actionable Noul 在 0.25–0.75 的不确定区间有 **150/240**。
+
+这批结果还削弱了“Jev 很快就能大量过滤 event”的假设：actionable Noul **<=0.05 为 0/240**、<=0.10 为 9/240、<=0.20 为 41/240，>=0.90 也是 0/240。当前 `events/llm_aux` 的极保守 `<=0.05` neutral cascade 在这份**平衡研究队列**上不会节省任何深化调用。该队列不是生产 pending pool，所以不能据此直接改阈值；正确下一步仍是完成 human gold 后做 threshold/Precision/Recall/成本联合校准。
+
+### 29.4 真实 API 舍入边界
+
+240 条首轮运行曾在中途安全失败：Choice probability 展示值因逐项舍入不满足“精确 sum=1±0.001”。输出使用原子写入，因此失败后没有留下半份 predictions/meta。二次审计 JevRouter 官方 provider 也只校验每个概率有限且在 [0,1]，不强制序列化后的展示值精确求和。
+
+预标注工具现在只容忍**两位小数逐项舍入可解释的上界**：`max(0.001, 0.0051 × label_count)`；仍要求每个 probability 在 [0,1]、keys 与 criteria 完全一致，超出舍入上界继续 fail-closed；raw probabilities 原样保存，不私自归一化。这个修正有专门回归用例，不能退化成“任意概率和都接受”。
+
+### 29.5 Gold scoring 的完成度门
+
+`score` 默认要求所有 row 的 `human.category / human.certainty / human.actionable` 都合法且完成；未完成时直接拒绝，防止部分样本被误写成“完整准确率”。只有人工明确需要查看标注进度时，才可显式传 `--allow-partial`；输出会带 `human_complete / human_total / partial=true`，不能作为生产阈值依据。prediction event_id 也必须唯一，重复 ID 直接 fail-closed。

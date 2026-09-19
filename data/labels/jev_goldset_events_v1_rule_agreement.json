@@ -1,0 +1,129 @@
+{
+  "warning": "Rule/Jev agreement is diagnostic only; existing rule labels are not human ground truth.",
+  "queue_rows": 240,
+  "prediction_rows": 240,
+  "missing_predictions": 0,
+  "agreement_not_accuracy": {
+    "category": {
+      "n": 240,
+      "agreement_count": 133,
+      "agreement_rate": 0.554167,
+      "disagreement_count": 107,
+      "cross": {
+        "corporate": {
+          "corporate": 31,
+          "data": 1,
+          "other": 1,
+          "policy": 4,
+          "rumor": 1,
+          "statement": 2
+        },
+        "data": {
+          "corporate": 5,
+          "data": 24,
+          "other": 2,
+          "policy": 7,
+          "statement": 2
+        },
+        "other": {
+          "corporate": 6,
+          "data": 16,
+          "other": 11,
+          "policy": 5,
+          "rumor": 1,
+          "statement": 1
+        },
+        "policy": {
+          "corporate": 8,
+          "data": 2,
+          "policy": 26,
+          "statement": 4
+        },
+        "rumor": {
+          "corporate": 12,
+          "other": 3,
+          "policy": 5,
+          "rumor": 19,
+          "statement": 1
+        },
+        "statement": {
+          "corporate": 3,
+          "data": 3,
+          "other": 3,
+          "policy": 9,
+          "statement": 22
+        }
+      }
+    },
+    "certainty": {
+      "n": 240,
+      "agreement_count": 187,
+      "agreement_rate": 0.779167,
+      "disagreement_count": 53,
+      "cross": {
+        "done": {
+          "done": 144,
+          "proposed": 37,
+          "rumor": 7
+        },
+        "proposed": {
+          "done": 4,
+          "proposed": 27,
+          "rumor": 3
+        },
+        "rumor": {
+          "done": 2,
+          "rumor": 16
+        }
+      }
+    },
+    "actionable": {
+      "n": 240,
+      "agreement_count": 138,
+      "agreement_rate": 0.575,
+      "disagreement_count": 102,
+      "cross": {
+        "False": {
+          "False": 118,
+          "True": 78
+        },
+        "True": {
+          "False": 24,
+          "True": 20
+        }
+      }
+    }
+  },
+  "category_confidence": {
+    "mean": 0.772042,
+    "median": 0.85,
+    "lt_0_75": 90,
+    "lt_0_60": 68
+  },
+  "certainty_confidence": {
+    "mean": 0.851792,
+    "median": 0.96,
+    "lt_0_75": 56,
+    "lt_0_60": 38
+  },
+  "actionable_noul": {
+    "mean": 0.456417,
+    "median": 0.41,
+    "le_0_05": 0,
+    "le_0_10": 9,
+    "le_0_20": 41,
+    "uncertain_0_25_0_75": 150,
+    "ge_0_80": 26,
+    "ge_0_90": 0,
+    "ge_0_95": 0
+  },
+  "provenance": {
+    "queue_sha256": "fc8776d15f563b10b694b8108be84f24ad331c85b536045c9689018f194c3ef7",
+    "prediction_sha256": "c344ce0a881db27f6c22001a43d4d9e3876cd699ddd4be333d3105606a0ddc08",
+    "prediction_rows": 240,
+    "model_requested": "jev-1.13.0",
+    "models_returned": {
+      "jev-1.13.0": 40
+    }
+  }
+}
