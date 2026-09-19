@@ -1867,8 +1867,8 @@ def _task_ref_list(raw: str) -> list[str]:
 
 def check_stage_gates() -> list[str]:
     """S：有序阶段门。W 是归属，G 是执行门，P 是门内优先级。"""
-    entries, parse_errors = phase_tasks()
-    errors = list(parse_errors)
+    entries, _ = phase_tasks()
+    errors: list[str] = []
     tasks = {tid: (rel, fields) for tid, rel, fields in entries}
     if not tasks:
         return errors + ["阶段门任务为空，守卫无判定面"]
