@@ -33,6 +33,8 @@ def sf(tmp_path, monkeypatch):
     monkeypatch.setattr(at2, "get_session_factory", lambda: factory)
     yield factory
     sr.set_override_provider(None)  # 清理运行时注入，避免污染其他测试
+    from app.core import runtime_params
+    runtime_params.clear()
 
 
 def test_unknown_key_rejected(sf):
@@ -59,7 +61,7 @@ def test_same_value_rejected(sf):
 def test_propose_apply_rollback_full_cycle(sf):
     """draft → apply（覆盖层生效+免重启）→ rollback（恢复默认）全链。"""
     change = ap.propose("picks_style_offsets_json", VALID, session_factory=sf,
-                        source_type="review_action_item", source_id="ai-42",
+                        source_type="manual", source_id="manual-review-42",
                         evidence={"sample_days": 30, "win_rate": 0.55})
     assert change["status"] == "draft"
     assert change["before"] in (None, "")  # 空串=无覆盖用静态默认，_j 规范化为 None
@@ -405,3 +407,127 @@ def test_legacy_non_finite_override_row_is_not_consumed(sf):
     ap.refresh_runtime_overrides(sf)
     assert _rt("picks_replace_threshold", 15.0) == 15.0, "脏行不得让门槛静默失效"
     rp.clear()
+
+
+
+@pytest.mark.parametrize("status", ["shadow", "shadow_rejected", "rejected", "failed", "unknown"])
+def test_imp046_unreviewed_apply_never_changes_runtime(sf, status):
+    from app.models.agent import AgentParam, AgentParamChange, AgentTask
+    change = ap.propose("picks_min_pick_score", 58, session_factory=sf,
+                        evidence={"approved": True, "reviewer": "user", "supports": True})
+    with sf() as db:
+        db.get(AgentParamChange, change["id"]).status = status
+        db.commit()
+        before_tasks = db.query(AgentTask).count()
+    audits = at_audits(sf)
+    with pytest.raises(ValueError):
+        ap.apply_change(change["id"], sf, mutation_source="user")
+    with sf() as db:
+        assert db.query(AgentParam).count() == 0
+        assert db.get(AgentParamChange, change["id"]).status == status
+        assert db.query(AgentTask).count() == before_tasks
+    assert at_audits(sf) == audits
+
+
+@pytest.mark.parametrize("source", ["ai_suggestion", "review_action_item", "scheduler", "", "unknown"])
+def test_imp046_nonmanual_draft_cannot_bypass_shadow_review(sf, source):
+    change = ap.propose("picks_min_pick_score", 58, source_type=source,
+                        evidence={"approved": True, "sample_days": 999}, session_factory=sf)
+    with pytest.raises(ValueError, match="审"):
+        ap.apply_change(change["id"], sf, mutation_source="user")
+    assert ap.current_value("picks_min_pick_score", sf) == ""
+    assert ap.list_changes(session_factory=sf)[0]["status"] == "draft"
+
+
+@pytest.mark.parametrize("status", ["draft", "shadow", "applied", "rolled_back", "shadow_rejected"])
+def test_imp046_legacy_promote_entry_cannot_authorize_itself(sf, monkeypatch, status):
+    from app.models.agent import AgentParamChange
+    change = ap.propose("picks_min_pick_score", 58, session_factory=sf)
+    with sf() as db:
+        db.get(AgentParamChange, change["id"]).status = status
+        db.commit()
+    monkeypatch.setattr(ap, "apply_change", lambda *a, **k: pytest.fail("must not call apply"))
+    with pytest.raises(ValueError, match="审"):
+        ap.promote_shadow(change["id"], sf)
+
+
+@pytest.mark.parametrize("after", ["nan", "-1", "101", "bad"])
+def test_imp046_revalidate_stored_candidate_before_any_apply(sf, after):
+    from app.models.agent import AgentParamChange, AgentTask
+    c = ap.propose("picks_min_pick_score", 58, session_factory=sf)
+    with sf() as db:
+        db.get(AgentParamChange, c["id"]).after = after
+        db.commit()
+        tasks = db.query(AgentTask).count()
+    with pytest.raises(ValueError):
+        ap.apply_change(c["id"], sf, mutation_source="user")
+    assert ap.current_value("picks_min_pick_score", sf) == ""
+    with sf() as db:
+        assert db.query(AgentTask).count() == tasks
+
+
+def test_imp046_shadow_history_cannot_be_reset_to_manual_draft(sf):
+    from app.models.agent import AgentParamChange
+    c = ap.propose("picks_min_pick_score", 58, session_factory=sf)
+    ap.shadow_change(c["id"], sf)
+    with sf() as db:
+        db.get(AgentParamChange, c["id"]).status = "draft"
+        db.commit()
+    with pytest.raises(ValueError, match="审"):
+        ap.apply_change(c["id"], sf, mutation_source="user")
+
+
+def test_imp046_apply_metadata_is_derived_not_model_approved(sf):
+    c = ap.propose("picks_min_pick_score", 58, source_type="ai_suggestion",
+                   evidence={"manual_apply_allowed": True, "approved": True}, session_factory=sf)
+    assert c["manual_apply_allowed"] is False and c["apply_block_reason"]
+    manual = ap.propose("picks_min_pick_score", 59, session_factory=sf)
+    assert manual["manual_apply_allowed"] is True
+
+
+
+def test_imp046_real_apply_route_rejects_shadow_and_keeps_manual_configuration(sf):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.routes import agent as routes
+    from app.models.agent import AgentTask
+    app = FastAPI()
+    app.include_router(routes.router)
+    # Explicitly isolate application behavior; authentication has separate tests.
+    app.dependency_overrides[routes.require_write_token] = lambda: None
+    shadow = ap.propose("picks_min_pick_score", 58, source_type="ai_suggestion", session_factory=sf)
+    ap.shadow_change(shadow["id"], sf)
+    manual = ap.propose("picks_intraday_top_limit", 9, session_factory=sf)
+    with TestClient(app) as client:
+        blocked = client.post(f"/agent/params/changes/{shadow['id']}/apply")
+        assert blocked.status_code == 422 and "审" in blocked.json()["detail"]
+        assert ap.current_value("picks_min_pick_score", sf) == ""
+        ok = client.post(f"/agent/params/changes/{manual['id']}/apply")
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["data"]["status"] == "applied"
+    assert ap.current_value("picks_intraday_top_limit", sf) == "9"
+    with sf() as db:
+        tasks = db.query(AgentTask).all()
+        assert len(tasks) == 1 and tasks[0].status == "succeeded"
+
+
+
+@pytest.mark.parametrize("field,value", [("status", "shadow"), ("after", "60.0"), ("evidence", '{"changed":true}')])
+def test_imp046_candidate_changed_after_manual_precheck_is_not_applied(sf, monkeypatch, field, value):
+    from app.services import agent_tasks
+    from app.models.agent import AgentParamChange, AgentParam, AgentTask
+    c = ap.propose("picks_min_pick_score", 58, session_factory=sf)
+    record = agent_tasks.record_mutation
+    def change_during_record(**kwargs):
+        task_id = record(**kwargs)
+        with sf() as db:
+            setattr(db.get(AgentParamChange, c["id"]), field, value)
+            db.commit()
+        return task_id
+    monkeypatch.setattr(agent_tasks, "record_mutation", change_during_record)
+    with pytest.raises(ValueError):
+        ap.apply_change(c["id"], sf, mutation_source="user")
+    with sf() as db:
+        assert db.query(AgentParam).count() == 0
+        assert db.query(AgentTask).one().status == "failed"
+        assert getattr(db.get(AgentParamChange, c["id"]), field) == value

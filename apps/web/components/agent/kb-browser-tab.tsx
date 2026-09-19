@@ -12,7 +12,7 @@
  * ⚠️ 折叠只改默认呈现、**不减少可见内容**：折叠区可展开，且**搜索时自动展开**
  * （搜索不展开会让人误判「查不到」，那就把「全量可查」的承诺打掉了）。
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { MarkdownView } from "@/components/agent/markdown-view";
 import { getAgentKbFile, getAgentKbTree, type KbFileMeta } from "@/lib/api";
@@ -27,16 +27,32 @@ export function KbBrowserTab() {
   const [content, setContent] = useState<string>("");
   const [query, setQuery] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [anchor, setAnchor] = useState("");
+  const reader = useRef<HTMLElement>(null);
+  const request = useRef(0);
 
-  const openFile = useCallback(async (path: string) => {
+  const openFile = useCallback(async (path: string, fragment = "") => {
+    const current = ++request.current;
     setSelected(path);
+    setContent("");
+    setAnchor("");
     try {
       const f = await getAgentKbFile(path);
+      if (current !== request.current) return;
       setContent(f.content);
+      setAnchor(fragment);
     } catch {
+      if (current !== request.current) return;
       setContent(`> 文档加载失败：${path}`);
     }
   }, []);
+
+  useEffect(() => {
+    if (!anchor) return;
+    const heading = [...(reader.current?.querySelectorAll<HTMLElement>("[data-md-anchor]") ?? [])]
+      .find((node) => node.dataset.mdAnchor === anchor);
+    heading?.scrollIntoView({ block: "start" });
+  }, [content, anchor]);
 
   useEffect(() => {
     (async () => {
@@ -65,10 +81,26 @@ export function KbBrowserTab() {
   const onNavigate = useCallback(
     (target: string) => {
       const idMatch = /^(KB-(?:STOCK|TRADE|ENG|DEC)-\d+)$/.exec(target.trim());
-      const path = idMatch ? kbIdIndex.get(idMatch[1]) : target.replace(/^\.\//, "");
-      if (path) void openFile(path);
+      if (idMatch) {
+        const path = kbIdIndex.get(idMatch[1]);
+        if (path) void openFile(path);
+        return;
+      }
+      // Resolve relative to the open document; only files in the served tree are navigable.
+      try {
+        const base = "https://docs.invalid/";
+        const rooted = target.startsWith("docs/");
+        const url = new URL(rooted ? target.slice(5) : target, base + (rooted ? "" : selected ?? ""));
+        if (url.origin !== new URL(base).origin) return;
+        const relative = decodeURIComponent(url.pathname.slice(1));
+        const legacyRoot = target.split("#")[0].replace(/^\.\//, "");
+        const path = [relative, legacyRoot].find((p) => files.some((f) => f.path === p));
+        if (path) void openFile(path, decodeURIComponent(url.hash.slice(1)));
+      } catch {
+        // Malformed links in a document must not break the reader.
+      }
     },
-    [kbIdIndex, openFile],
+    [files, kbIdIndex, openFile, selected],
   );
 
   const searching = query.trim().length > 0;
@@ -208,7 +240,7 @@ export function KbBrowserTab() {
       </aside>
 
       {/* 渲染阅读区 */}
-      <section className="min-w-0 flex-1 overflow-y-auto rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+      <section ref={reader} className="min-w-0 flex-1 overflow-y-auto rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
         {!selected ? (
           <p className="py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">左侧选择一篇文档</p>
         ) : (

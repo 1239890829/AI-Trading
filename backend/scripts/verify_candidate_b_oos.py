@@ -278,7 +278,8 @@ def main() -> int:
             "caveat": "候选B 系用全样本（含测试段）发现 ⇒ 本成绩不构成干净的样本外证据",
         },
         source="scripts/verify_candidate_b_oos.py",
-        extra={"gate_failed": gate["failed"], "rule": main_name, "condition": main_cond},
+        extra={"gate_failed": gate["failed"], "gate_unchecked": gate["unchecked"],
+               "gate": gate, "rule": main_name, "condition": main_cond},
     )
     print(f"    {headline}")
     print(f"    判据命中：{gate['note']}")

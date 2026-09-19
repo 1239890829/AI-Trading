@@ -7,6 +7,8 @@ S2-11 背景：`strategy_verify.py` 是离线重计算（duckdb 全历史），�
 """
 from __future__ import annotations
 
+import json
+
 from pathlib import Path
 
 import pytest
@@ -84,7 +86,7 @@ def test_gate_verdict_ignores_raw_median_and_winrate():
     （不达标）。若此处误用原始口径，判据在上涨市里恒真，闸门形同虚设。
     """
     g = sv.gate_verdict(_ok_metrics(median=-0.08, win_rate=0.493), yearly_pos=9, yearly_tot=11)
-    assert g["verdict"] == sv.VERDICT_PASS, "原始口径不得影响判定"
+    assert g["verdict"] == sv.VERDICT_OBSERVE, "原始口径不影响判定，但缺中性证据不得放行"
     assert g["failed"] == []
     # 但必须显式声明"未验"，绝不能伪装成已验
     assert any("中性中位未验" in u for u in g["unchecked"])
@@ -94,8 +96,8 @@ def test_gate_verdict_ignores_raw_median_and_winrate():
 
 def test_gate_verdict_unchecked_needs_neutral_caliber():
     """拿不到中性口径时**跳过**判据并记 `unchecked`，不静默放行。"""
-    g = sv.gate_verdict(_ok_metrics(), yearly_pos=10, yearly_tot=11)
-    assert g["verdict"] == sv.VERDICT_PASS
+    g = sv.gate_verdict(_ok_metrics(), yearly_pos=10, yearly_tot=11, limit_up_share=0.05)
+    assert g["verdict"] == sv.VERDICT_OBSERVE
     assert len(g["unchecked"]) == 2
     assert "未验" in g["note"]
 
@@ -323,3 +325,157 @@ def test_recorded_at_is_beijing_naive(vdir):
     dt = datetime.fromisoformat(ts)
     assert dt.tzinfo is None
     assert "+" not in ts and ts[-1] != "Z"
+
+
+# BUG-027: independent expected values, never a call to the implementation as oracle.
+def _bug027_complete(**changes):
+    metrics = {"n": 500, "excess": 0.5}
+    kwargs = dict(yearly_pos=9, yearly_tot=10, limit_up_share=0.05,
+                  excess_median=0.2, excess_win_rate=0.57)
+    for key, value in changes.items():
+        if key in metrics:
+            metrics[key] = value
+        else:
+            kwargs[key] = value
+    return sv.gate_verdict(metrics, **kwargs)
+
+
+def test_bug027_zero_mature_does_not_fall_back_to_total():
+    summary = sv.summarize_row({"n": 250, "n5": 0, "p5": 250})
+    assert summary["n"] == 0 and summary["pending"] == 250
+    assert summary["sample_basis"] == "mature"
+
+
+def test_bug027_legacy_total_remains_readable_but_not_mature_evidence():
+    summary = sv.summarize_row({"n": 500, "x5": 0.5})
+    assert summary["n"] == 500 and summary["sample_basis"] == "legacy_total"
+    gate = sv.gate_verdict(summary, yearly_pos=9, yearly_tot=10,
+                          limit_up_share=0.05, excess_median=0.2, excess_win_rate=0.57)
+    assert gate["verdict"] == sv.VERDICT_OBSERVE and gate["unchecked"]
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf"), "bad", True])
+def test_bug027_summary_never_emits_invalid_numbers(value):
+    summary = sv.summarize_row({"n": 500, "n5": 500, "p5": 0, "x5": value})
+    assert summary["excess"] is None
+    assert summary["validation_errors"]
+    json.dumps(summary, allow_nan=False)
+
+
+@pytest.mark.parametrize("changes", [
+    {"n5": -1}, {"n5": 1.5}, {"n5": float("nan")},
+    {"p5": -1}, {"p5": float("inf")}, {"n5": 300, "p5": 300},
+])
+def test_bug027_invalid_or_inconsistent_counts_do_not_pass(changes):
+    row = {"n": 500, "n5": 500, "p5": 0, "x5": 0.5}
+    row.update(changes)
+    summary = sv.summarize_row(row)
+    assert summary["validation_errors"]
+    result = sv.gate_verdict(summary, yearly_pos=9, yearly_tot=10,
+                            limit_up_share=0.05, excess_median=0.2, excess_win_rate=0.57)
+    assert result["verdict"] != sv.VERDICT_PASS
+
+
+@pytest.mark.parametrize("field", ["n", "excess", "excess_median", "excess_win_rate",
+                                   "yearly_pos", "yearly_tot", "limit_up_share"])
+@pytest.mark.parametrize("value", [None, float("nan"), float("inf"), -float("inf"), True])
+def test_bug027_missing_nonfinite_or_boolean_evidence_cannot_pass(field, value):
+    gate = _bug027_complete(**{field: value})
+    assert gate["verdict"] == sv.VERDICT_OBSERVE
+    assert gate["unchecked"] and gate["machine_checks_complete"] is False
+    assert gate["review_required"] is True
+
+
+@pytest.mark.parametrize("changes", [
+    {"n": -1}, {"n": 500.5}, {"yearly_tot": 0}, {"yearly_pos": -1},
+    {"yearly_pos": 11}, {"yearly_tot": 9.5},
+    {"excess_win_rate": -0.1}, {"excess_win_rate": 1.1},
+    {"limit_up_share": -0.1}, {"limit_up_share": 1.1},
+])
+def test_bug027_out_of_range_evidence_is_unknown_not_pass(changes):
+    gate = _bug027_complete(**changes)
+    assert gate["verdict"] == sv.VERDICT_OBSERVE and gate["unchecked"]
+
+
+@pytest.mark.parametrize("changes", [
+    {"min_n": 0}, {"min_n": float("nan")}, {"min_n": 2.5},
+    {"yearly_floor": float("nan")}, {"yearly_floor": 1.1},
+    {"limit_up_ceiling": float("inf")}, {"limit_up_ceiling": -0.1},
+])
+def test_bug027_invalid_gate_configuration_fails_closed(changes):
+    with pytest.raises(ValueError):
+        _bug027_complete(**changes)
+
+
+def test_bug027_complete_machine_pass_still_requires_final_review():
+    gate = _bug027_complete()
+    assert gate["verdict"] == sv.VERDICT_PASS
+    assert gate["machine_checks_complete"] is True and gate["review_required"] is True
+    assert gate["scope"] == "machine_checks_only" and gate["gate_version"] == 2
+
+
+def test_bug027_registry_retains_legacy_record_without_silent_certification(vdir):
+    path = vr.save_record("legacy", verdict="pass", headline="historical", metrics={"n": 500})
+    before = path.read_bytes()
+    view = vr.verification_of("legacy")
+    assert view["verdict"] == "pass"  # Preserve, do not rewrite history.
+    assert view["gate_evidence_state"] == "legacy_unverified"
+    assert view["review_required"] is True and view["gate"] is None
+    assert path.read_bytes() == before
+
+
+def test_bug027_registry_exposes_machine_evidence_and_unchecked(vdir):
+    gate = _bug027_complete(excess_median=None)
+    path = vr.save_record("current", verdict=gate["verdict"], headline="pending evidence",
+                          extra={"gate": gate, "gate_unchecked": gate["unchecked"]})
+    before = path.read_bytes()
+    view = vr.verification_of("current")
+    assert view["gate_evidence_state"] == "recorded"
+    assert view["gate"] == gate and view["review_required"] is True
+    assert path.read_bytes() == before
+
+
+
+def test_bug027_raw_bad_but_complete_neutral_evidence_can_pass():
+    gate = sv.gate_verdict(_ok_metrics(median=-5.0, win_rate=0.1),
+                          yearly_pos=9, yearly_tot=10, limit_up_share=0.05,
+                          excess_median=0.2, excess_win_rate=0.57)
+    assert gate["verdict"] == sv.VERDICT_PASS
+    assert gate["failed"] == [] and gate["unchecked"] == []
+
+
+@pytest.mark.parametrize("gate", ["bad", {}, {"gate_version": 2},
+                                  {"gate_version": 2, "review_required": False}])
+def test_bug027_registry_does_not_certify_malformed_gate(vdir, gate):
+    path = vr.save_record("malformed", verdict="pass", headline="bad metadata", extra={"gate": gate})
+    before = path.read_bytes()
+    view = vr.verification_of("malformed")
+    assert view["gate_evidence_state"] == "invalid" and view["gate"] is None
+    assert view["review_required"] is True and path.read_bytes() == before
+
+
+
+@pytest.mark.parametrize("name", ["verify_candidate_b_oos.py", "verify_two_thirty_five.py"])
+def test_bug027_real_producer_metadata_survives_save_and_read(vdir, name):
+    import ast
+    source = ROOT / "scripts" / name
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    calls = [node for node in ast.walk(tree)
+             if isinstance(node, ast.Call) and (
+                 (isinstance(node.func, ast.Name) and node.func.id == "save_record")
+                 or (isinstance(node.func, ast.Attribute) and node.func.attr == "save_record"))]
+    assert len(calls) == 1
+    expression = next(item.value for item in calls[0].keywords if item.arg == "extra")
+    gate = _bug027_complete(excess_median=None)
+    extra = eval(compile(ast.Expression(expression), str(source), "eval"),
+                 {"gate": gate, "main_name": "fixture", "main_cond": "TRUE", "CONDS": {}})
+    assert extra["gate"] == gate and extra["gate_unchecked"] == gate["unchecked"]
+    vr.save_record("producer", verdict=gate["verdict"], headline="fixture", extra=extra)
+    view = vr.verification_of("producer")
+    assert view["gate_evidence_state"] == "recorded" and view["review_required"] is True
+    assert view["gate"]["machine_checks_complete"] is False
+
+
+def test_bug027_summary_retains_keyword_only_cost_parameter():
+    with pytest.raises(TypeError):
+        sv.summarize_row({}, 5, 0.0)

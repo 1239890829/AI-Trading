@@ -17,7 +17,7 @@ import { timeTextBJ } from "@/lib/format";
  * AI 控制台 · 进化 tab（AI 大脑 v2，docs/summary/ai-evolution.md）。
  *
  * 展示今日进化议程：LLM 的发现/依据/动作/执行状态与结果——
- * **没有"待确认"态**（后置守护模型：议程项要么已执行、要么写明为什么没执行）。
+ * C 类只显示待审代码提案；提案生成与实际执行分开。
  * 手动「立即进化」按钮是 LLM 不可用时的降级兜底（正常由 15:45 自动跑）。
  */
 
@@ -29,6 +29,7 @@ const CLASS_META: Record<string, { label: string; cls: string }> = {
 
 const STATUS_META: Record<string, { label: string; cls: string }> = {
   executed: { label: "已执行", cls: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" },
+  proposed: { label: "待审提案", cls: "bg-amber-500/10 text-amber-800 dark:text-amber-300" },
   deferred: { label: "暂缓", cls: "bg-amber-500/10 text-amber-800 dark:text-amber-300" },
   rejected: { label: "已拒绝", cls: "bg-red-500/10 text-red-700 dark:text-red-300" },
   failed: { label: "失败", cls: "bg-red-500/10 text-red-700 dark:text-red-300" },
@@ -36,7 +37,7 @@ const STATUS_META: Record<string, { label: string; cls: string }> = {
 };
 
 const AGENDA_STATUS: Record<string, string> = {
-  generating: "生成中", ready: "已生成待执行", executed: "已执行",
+  generating: "生成中", ready: "已生成待执行", executed: "已处理",
   failed: "失败", skipped: "已跳过",
 };
 
@@ -98,7 +99,7 @@ export function EvolutionTab() {
               今日进化议程 {agenda ? `· ${agenda.date}` : ""}
             </h3>
             <p className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
-              LLM 汇总复盘改进项 / 信号健康 / 告警判读 → 自动执行可落地的改进；手动按钮仅作降级兜底
+              LLM 汇总复盘改进项 / 信号健康 / 告警判读 → 按权限处理；代码仅生成待审提案，不自动执行
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -152,7 +153,12 @@ export function EvolutionTab() {
           <div className="space-y-2">
             {(agenda.items ?? []).map((it, idx) => {
               const cm = CLASS_META[it.class] ?? { label: it.class, cls: "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400" };
-              const sm = STATUS_META[it.status] ?? STATUS_META.pending;
+              const sm = it.class === "C" && it.status === "executed"
+                ? { ...STATUS_META.pending, label: "历史代码记录（待复核）" }
+                : it.class === "A" && it.status === "executed"
+                  ? { ...STATUS_META.deferred, label: it.execution_scope === "shadow_only"
+                    ? "已入影子（未生效）" : "历史参数记录（待复核）" }
+                  : STATUS_META[it.status] ?? STATUS_META.pending;
               return (
                 <div key={idx} className="rounded-lg border border-zinc-100 p-2.5 dark:border-zinc-800">
                   <div className="flex flex-wrap items-center gap-1.5">
@@ -177,7 +183,7 @@ export function EvolutionTab() {
                   )}
                   {it.result && (
                     <p className={`mt-1 rounded px-1.5 py-1 text-[10px] ${
-                      it.status === "executed"
+                      it.status === "executed" && it.class === "B"
                         ? "bg-emerald-500/5 text-emerald-700 dark:text-emerald-300"
                         : it.status === "failed" || it.status === "rejected"
                           ? "bg-red-500/5 text-red-700 dark:text-red-300"
@@ -201,7 +207,7 @@ export function EvolutionTab() {
         {experiments === undefined ? (
           <div className="h-6 w-full animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
         ) : experiments.length === 0 ? (
-          <p className="text-[11px] text-zinc-600 dark:text-zinc-400">暂无进行中的实验（A 类参数自动生效时会自动挂账）。</p>
+          <p className="text-[11px] text-zinc-600 dark:text-zinc-400">暂无进行中的实验。影子候选不会自动转正或创建已生效实验。</p>
         ) : (
           <div className="space-y-1">
             {experiments.slice(0, 5).map((e) => {

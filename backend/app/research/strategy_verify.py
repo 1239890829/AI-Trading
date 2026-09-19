@@ -367,34 +367,73 @@ def year_counts(rows: list[dict], horizon: int = 5, *, cost_bps: float = 0.0) ->
     return sum(1 for v in vals if v > 0), len(vals)
 
 
+def _finite_number(value: object) -> float | None:
+    """Parse a measurement without accepting booleans or NaN/Infinity."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _sample_count(value: object) -> int | None:
+    number = _finite_number(value)
+    if number is None or number < 0 or not number.is_integer():
+        return None
+    return int(number)
+
+
 def summarize_row(r: dict, horizon: int = 5, *, cost_bps: float = 0.0) -> dict:
-    """从一行统计结果里抽出**可落盘**的关键量（S2-11 核验登记）。
+    """JSON-safe mature measurements, retaining but identifying legacy totals.
 
-    核验器本身只负责算与渲染；要落盘就得有稳定字段名，否则每个消费脚本各写一遍
-    `m5/med5/w5/x5` 的映射——那正是 P1-41 之前"每个脚本一份手写 SQL"的翻版。
-
-    六个量刻意**全给**（含中位与胜率）：只看均值会被右偏分布骗（候选 B 样本外
-    +1.33% 但中位 −0.08%、跑赢 49.3%，均值单独看像有效）。`excess` = 市场中性均值，
-    是区分 beta 与 alpha 的唯一正确基准。
-
-    返回键：`n` / `pending` / `mean` / `median` / `win_rate` / `std` / `excess` / `horizon` / `cost_bps`。
-    `pending` = 该组中**前瞻收益尚未到期**的样本数（R15，2026-09-14）——
-    `n + pending` = 该组总样本；`win_rate` 的分母就是 `n`（成熟样本），不是总数。
+    Zero mature samples are never replaced with the group's total. This changes
+    new summaries only, not historical stored reports. Invalid input is explicit.
     """
-    def _f(key: str) -> float | None:
-        v = r.get(key)
-        return None if v is None else round(float(v), 4)
+    h = _sample_count(horizon)
+    cost = _finite_number(cost_bps)
+    if h is None or h == 0 or cost is None or cost < 0:
+        raise ValueError("horizon需为正整数，cost_bps需为有限非负数")
+    errors: list[str] = []
+    mature_key, pending_key = f"n{h}", f"p{h}"
+    basis = "mature" if mature_key in r else "legacy_total"
+    total = _sample_count(r.get("n"))
+    n = _sample_count(r.get(mature_key)) if mature_key in r else total
+    if n is None:
+        errors.append("成熟样本计数缺失或不是有限非负整数")
+    if "n" in r and total is None:
+        errors.append("总样本计数无效")
+    if pending_key in r:
+        pending = _sample_count(r[pending_key])
+        if pending is None:
+            errors.append("未成熟样本计数无效")
+    elif basis == "mature" and total is not None and n is not None and n <= total:
+        pending = total - n
+    else:
+        pending = None
+    if basis == "mature" and total is not None and n is not None:
+        if n > total or (pending is not None and n + pending != total):
+            errors.append("成熟与未成熟样本之和不等于总样本")
 
+    def metric(key: str, *, proportion: bool = False, nonnegative: bool = False):
+        raw = r.get(key)
+        value = _finite_number(raw)
+        if raw is not None and (value is None or (proportion and not 0 <= value <= 1)
+                                or (nonnegative and value < 0)):
+            errors.append(f"{key} 非有限或超出合法范围")
+            return None
+        return None if value is None else round(value, 4)
+
+    values = {
+        "mean": metric(f"m{h}"), "median": metric(f"med{h}"),
+        "win_rate": metric(f"w{h}", proportion=True),
+        "std": metric(f"s{h}", nonnegative=True), "excess": metric(f"x{h}"),
+    }
     return {
-        "n": int(r.get(f"n{horizon}") or r.get("n") or 0),
-        "pending": int(r.get(f"p{horizon}") or 0),
-        "mean": _f(f"m{horizon}"),
-        "median": _f(f"med{horizon}"),
-        "win_rate": _f(f"w{horizon}"),
-        "std": _f(f"s{horizon}"),
-        "excess": _f(f"x{horizon}"),
-        "horizon": horizon,
-        "cost_bps": cost_bps,
+        "n": n if n is not None else 0, "pending": pending,
+        **values, "horizon": h, "cost_bps": cost,
+        "summary_version": 2, "sample_basis": basis, "validation_errors": errors,
     }
 
 
@@ -410,76 +449,73 @@ def gate_verdict(
     yearly_floor: float = 0.6,
     limit_up_ceiling: float = 0.3,
 ) -> dict:
-    """**KB-DEC-019 准入闸门的可机判部分**（S2-11）。
+    """Machine-check recommendation, never autonomous promotion approval.
 
-    此前准入五条只写在文档里，判定时靠人读数字下结论——既不可回查，也无法复核。
-    这里把其中**四条能量化的**变成可执行判据；剩下两条（样本外盲测 / 与既有信号
-    不重复计分）依赖人工，故本函数只给建议，**终审仍是人**。
-
-    判定顺序（**先硬后软**，硬伤直接否决）：
-      1. 样本不足 `n < min_n`      → observe（**不是 reject**：样本少 ≠ 无效）
-      2. 市场中性超额 ≤ 0          → reject（连 beta 都跑不赢，无从谈 alpha）
-      3. 中位 ≤ 0 或跑赢比例 < 50% → observe（收益右偏，均值被少数极端样本抬起）
-      4. 年度为正比例 < 60%        → observe（效应不稳定，可能是某几年特例）
-      5. 疑似涨停占比 > 30%        → observe（纸面最优档买不进，可成交性存疑）
-
-    ⚠️ **第 3 条必须用中性口径**（`excess_median` / `excess_win_rate`），
-    不能拿 `metrics` 里的 `median` / `win_rate` 顶替——那是**原始**收益的中位与跑赢比例。
-    教训（2026-09-11 实测）：候选B 测试段原始中位 +3.33%、跑赢 68.1%，看着完全达标；
-    换成中性口径却是 **中位 −0.08%、跑赢 49.3%**，结论从 pass 翻转为 observe。
-    市场上涨时人人跑赢，**原始胜率天然 >50%，用它当判据形同虚设**——
-    与「PROMO_FLOOR=30% 落在 241 日分布之外、近似恒真」是同一类错误。
-
-    中性口径拿不到时，本函数**跳过**第 3 条并记入 `unchecked`，**绝不**用原始口径
-    冒充中性给出 pass——「没验」必须能被看见，不能伪装成「验过」。
-
-    :returns: `{"verdict", "failed", "unchecked", "note"}`，`failed` 是**全部**命中项
-        （不止第一条），因为「哪一项不达标」比「达不达标」更有诊断价值。
+    Missing, invalid or incomplete evidence observes. A measured non-positive
+    neutral excess rejects. Raw returns cannot substitute for neutral metrics.
+    OOS, leakage and overlapping signals still require independent final review.
     """
-    n = int(metrics.get("n") or 0)
-    excess = metrics.get("excess")
+    minimum = _sample_count(min_n)
+    year_floor = _finite_number(yearly_floor)
+    limit_ceiling = _finite_number(limit_up_ceiling)
+    if (minimum is None or minimum == 0 or year_floor is None or not 0 <= year_floor <= 1
+            or limit_ceiling is None or not 0 <= limit_ceiling <= 1):
+        raise ValueError("准入配置必须为有效正样本数及[0,1]内有限阈值")
     failed: list[str] = []
     unchecked: list[str] = []
+    if metrics.get("sample_basis") not in (None, "mature"):
+        unchecked.append("成熟度未验：旧总样本数不代表成熟样本")
+    if metrics.get("validation_errors"):
+        unchecked.append(f"样本摘要校验未通过：{metrics['validation_errors']}")
 
-    if n < min_n:
-        failed.append(f"样本不足（n={n} < {min_n}）")
+    n = _sample_count(metrics.get("n"))
+    if n is None:
+        unchecked.append("样本数未验（缺失或不是有限非负整数）")
+    elif n < minimum:
+        failed.append(f"样本不足（n={n} < {minimum}）")
+    excess = _finite_number(metrics.get("excess"))
     if excess is None:
-        failed.append("缺少市场中性超额")
+        unchecked.append("市场中性超额未验（缺失或非有限）")
     elif excess <= 0:
         failed.append(f"市场中性超额 {excess:+.2f}% ≤ 0")
+    median = _finite_number(excess_median)
+    if median is None:
+        unchecked.append("中性中位未验（缺 excess_median 或非有限）")
+    elif median <= 0:
+        failed.append(f"中性中位 {median:+.2f}% ≤ 0（收益右偏）")
+    win = _finite_number(excess_win_rate)
+    if win is None or not 0 <= win <= 1:
+        unchecked.append("中性跑赢比例未验（缺 excess_win_rate、非有限或超范围）")
+    elif win < 0.5:
+        failed.append(f"中性跑赢比例 {win * 100:.1f}% < 50%")
+    positive_years, total_years = _sample_count(yearly_pos), _sample_count(yearly_tot)
+    if (positive_years is None or total_years is None or total_years == 0
+            or positive_years > total_years):
+        unchecked.append("年度稳定性未验（需合法已观测年数及正收益年数）")
+    elif positive_years / total_years < year_floor:
+        failed.append(f"年度为正 {positive_years}/{total_years} < {year_floor:.0%}（不稳定）")
+    limit_share = _finite_number(limit_up_share)
+    if limit_share is None or not 0 <= limit_share <= 1:
+        unchecked.append("涨停可成交代理未验（缺失、非有限或超范围）")
+    elif limit_share > limit_ceiling:
+        failed.append(f"疑似涨停占比 {limit_share * 100:.1f}% > {limit_ceiling:.0%}（难成交）")
 
-    if excess_median is not None:
-        if excess_median <= 0:
-            failed.append(f"中性中位 {excess_median:+.2f}% ≤ 0（收益右偏）")
-    else:
-        unchecked.append("中性中位未验（缺 excess_median）")
-    if excess_win_rate is not None:
-        if excess_win_rate < 0.5:
-            failed.append(f"中性跑赢比例 {excess_win_rate * 100:.1f}% < 50%")
-    else:
-        unchecked.append("中性跑赢比例未验（缺 excess_win_rate）")
-    if yearly_tot:
-        ratio = (yearly_pos or 0) / yearly_tot
-        if ratio < yearly_floor:
-            failed.append(f"年度为正 {yearly_pos}/{yearly_tot} < {yearly_floor:.0%}（不稳定）")
-    if limit_up_share is not None and limit_up_share > limit_up_ceiling:
-        failed.append(f"疑似涨停占比 {limit_up_share * 100:.1f}% > {limit_up_ceiling:.0%}（难成交）")
-
-    # 中性超额 ≤ 0 是唯一直接否决项（连同日市场均值都跑不赢，无从谈 alpha）；
-    # 其余命中项一律 observe——"有硬伤"≠"无效"，降级而非否决。
-    if any("市场中性超额" in f and "≤ 0" in f for f in failed):
+    if excess is not None and excess <= 0:
         verdict = VERDICT_REJECT
-    elif failed:
+    elif failed or unchecked:
         verdict = VERDICT_OBSERVE
     else:
         verdict = VERDICT_PASS
-    note = "；".join(failed) if failed else "已验条款全部通过"
+    note = "；".join(failed)
     if unchecked:
-        # 「没验」优先于「通过」——不能让跳过的条款被读成已通过
-        note = f"{note}（未验：{'；'.join(unchecked)}）" if note else f"未验：{'；'.join(unchecked)}"
+        note = (note + "；" if note else "") + "未验：" + "；".join(unchecked)
     elif not failed:
-        note = "四条可机判条款全部通过（样本外与重复计分仍需人工终审）"
-    return {"verdict": verdict, "failed": failed, "unchecked": unchecked, "note": note}
+        note = "机器条款通过（样本外、重复计分及完整准入仍需终审）"
+    return {
+        "verdict": verdict, "failed": failed, "unchecked": unchecked, "note": note,
+        "gate_version": 2, "scope": "machine_checks_only",
+        "machine_checks_complete": not unchecked, "review_required": True,
+    }
 
 
 # ---------------------------------------------------------------- 输出

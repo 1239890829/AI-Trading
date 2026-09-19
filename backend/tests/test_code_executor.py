@@ -1,14 +1,8 @@
-"""C 类代码执行器单测：预检红线 / diff 级授权 / 应用后 git 复核 / 攻击性用例 / 门禁。
+"""C 类提案安全回归：真实临时Git + 替身模型，绝不执行生成代码。
 
-沙箱全链用真实 git 仓库（tmp init）+ monkeypatch LLM 与门禁命令；
-pytest 全量门禁本身的正确性由 CI 主工作区保障，此处只验证编排逻辑。
-
-⚠️ 本文件**只能由人类开发者修改**（`backend/tests/**` 已于 2026-09-15 移出 AI 白名单）：
-门禁在**宿主解释器**里跑 pytest，允许 AI 写测试 = 允许 AI 借测试在宿主上执行任意代码。
-见 `app/services/code_executor.py` 模块 docstring 第 1 条与 `test_ai_cannot_touch_tests_*`。
-
-对齐审计要求（O1 加固）：执行器**只提议、不落地**——产出 = patch + 隔离分支 commit +
-审计，落地走 `codex/*` → PR → 完整 CI → 网页版审查。
+保留路径/白名单/实际差异的独立反例。IMP-046 将旧宿主门禁/提交场景改为
+启动前拒绝执行；原测试ID保留，但不再用“隔离分支”冒充OS隔离。
+测试由用户授权的工程执行侧维护，不接受应用内LLM生成的测试。
 """
 from __future__ import annotations
 
@@ -225,11 +219,11 @@ def test_ai_cannot_touch_tests_precheck_blocks_before_any_llm_call(mini_repo, sf
 # ---------------------------------------------------------------- 每日上限 / 工作区
 
 
-def test_daily_limit_blocks_second_c(sf):
+def test_daily_limit_blocks_second_c(mini_repo, sf):
     with sf() as db:
         db.add(AgentAudit(actor="ai", action="code.apply", target="abc:backend/app/x.py"))
         db.commit()
-    item = ce.execute_c_item(_item(), sf, "2026-09-08", repo_root=Path("/tmp"))
+    item = ce.execute_c_item(_item(), sf, "2026-09-08", repo_root=mini_repo)
     assert item["status"] == "deferred" and "上限" in item["result"]
 
 
@@ -452,96 +446,72 @@ def test_verify_applied_accepts_clean_modify(mini_repo):
 
 
 def test_gate_timeout_blocks_real_sleep(tmp_path, monkeypatch):
-    """攻击⑩：门禁超时（真实 sleep，走 `_run_gate` 的超时分支）。"""
+    """旧超时场景现须在启动前阻止；即使配置了慢命令也不能执行。"""
     monkeypatch.setattr(ce, "GATE_TIMEOUT_SECONDS", 1)
     monkeypatch.setattr(ce, "_gate_commands", lambda w, c: [(tmp_path, ["sleep", "5"])])
+    monkeypatch.setattr(ce.subprocess, "run", lambda *a, **k: pytest.fail("must not launch even a timed host gate"))
     ok, msg = ce._run_gate(tmp_path, [])
-    assert ok is False and "超时" in msg
+    assert ok is False and "隔离" in msg
 
 
 def test_gate_timeout_rejects_full_cycle(mini_repo, sf, monkeypatch):
-    """端到端：门禁超时 → rejected、主分支零接触、沙箱分支清理。"""
+    """旧超时链路改为不启动门禁：静态提案可交付，不能宣称测试通过。"""
     before = _git(mini_repo, "rev-parse", "HEAD")[1]
     _stub_llm(monkeypatch, _DIFF)
-    monkeypatch.setattr(ce, "GATE_TIMEOUT_SECONDS", 1)
-    monkeypatch.setattr(ce, "_gate_commands",
-                        lambda w, c: [(w / "backend", ["sleep", "5"])])
+    monkeypatch.setattr(ce, "_gate_commands", lambda *a: pytest.fail("no host command discovery"))
     out = ce.execute_c_item(_item(), sf, "2026-09-08", repo_root=mini_repo)
-    assert out["status"] == "rejected" and "超时" in out["result"]
+    assert out["status"] == "proposed" and out["gate_ran"] is False
     assert _git(mini_repo, "rev-parse", "HEAD")[1] == before
     assert "evolution/" not in _git(mini_repo, "branch", "--list", "evolution/*")[1]
 
 
 def test_gate_failure_discards_sandbox(mini_repo, sf, monkeypatch):
-    """门禁失败 → rejected、主分支零接触、沙箱分支清理。"""
+    """旧失败门禁不再可达；根本不建工作树，也不读取伪造的绿门禁。"""
     before = _git(mini_repo, "rev-parse", "HEAD")[1]
     _stub_llm(monkeypatch, _DIFF)
-    _stub_gate(monkeypatch, fail=True)
+    monkeypatch.setattr(ce, "_run_gate", lambda *a: pytest.fail("host gate must not be reached"))
     item = ce.execute_c_item(_item(), sf, "2026-09-08", repo_root=mini_repo)
-
-    assert item["status"] == "rejected" and "门禁" in item["result"]
-    assert _git(mini_repo, "rev-parse", "HEAD")[1] == before  # 主分支未动
+    assert item["status"] == "proposed" and "未运行测试" in item["result"]
+    assert _git(mini_repo, "rev-parse", "HEAD")[1] == before
     assert "evolution/" not in _git(mini_repo, "branch", "--list", "evolution/*")[1]
-    # 文件内容未被修改（沙箱已丢弃）
-    assert "用法" not in (mini_repo / "backend/app/demo.py").read_text(encoding="utf-8")
+    assert "用法" not in (mini_repo / "backend/app/demo.py").read_text()
 
 
 # ---------------------------------------------------------------- 沙箱全链（真 git）
 
 
 def test_full_cycle_proposes_without_merging(mini_repo, sf, monkeypatch):
-    """合法 diff + 门禁过 → **只在隔离分支留下待审阅 commit**，主分支零改动。
-
-    加固前此用例断言「合并回主分支」，那正是被移除的能力（审计 O1）：
-    应用内 LLM 不应具备自改代码并落地的权限——落地一律走 `codex/*` → PR → CI → 审查。
-    """
-    before = _git(mini_repo, "rev-parse", "HEAD")[1]
+    """合法补丁只归档文本和真实审计；所有Git refs与源码保持不变。"""
+    from app.models.agent import AgentTask
+    before = _git(mini_repo, "show-ref")[1]
     _stub_llm(monkeypatch, _DIFF)
-    _stub_gate(monkeypatch, fail=False)
     item = ce.execute_c_item(_item(), sf, "2026-09-08", repo_root=mini_repo)
-
-    assert item["status"] == "executed", item.get("result")
-    assert item["commit"] and item["files_changed"] == ["backend/app/demo.py"]
-
-    # 1) 不再合并：主分支 HEAD 与工作区文件均未变
-    assert _git(mini_repo, "rev-parse", "HEAD")[1] == before
-    assert "用法：add(1, 2) == 3" not in (mini_repo / "backend/app/demo.py").read_text(encoding="utf-8")
-    # 2) 隔离分支**保留**且带着那个 commit（供人工审阅 / 取用）
-    assert item["branch"].startswith("evolution/")
-    assert item["branch"] in _git(mini_repo, "branch", "--list", "evolution/*")[1]
-    assert item["commit"] == _git(mini_repo, "rev-parse", "--short", item["branch"])[1]
-    assert "用法：add(1, 2) == 3" in _git(
-        mini_repo, "show", f"{item['branch']}:backend/app/demo.py")[1]
-    # 3) patch 已归档到仓库外（沙箱会被删，patch 必须留下供人工审阅）
-    assert item["merged"] is False and item["review_required"] is True
-    patch_path = Path(item["patch_path"])
-    assert patch_path.exists() and "diff --git" in patch_path.read_text(encoding="utf-8")
-    # 4) 明确暂存：沙箱内的临时 patch 文件**未**被卷入 commit
-    assert ".evo.patch" not in _git(mini_repo, "show", "--stat", item["branch"])[1]
-    # 5) 审计留痕
+    assert item["status"] == "proposed" and item["apply_check"] is True
+    assert item["commit"] is None and item["branch"] is None and item["files_changed"] == []
+    assert item["merged"] is False and item["review_required"] is True and item["gate_ran"] is False
+    assert _git(mini_repo, "show-ref")[1] == before
+    assert _git(mini_repo, "status", "--porcelain")[1] == ""
+    assert Path(item["patch_path"]).read_text() == _DIFF
     with sf() as db:
-        rows = db.query(AgentAudit).filter(AgentAudit.action == "code.apply").all()
-        assert len(rows) == 1 and rows[0].target.startswith(item["commit"])
+        audits = db.query(AgentAudit).filter(AgentAudit.action == "code.propose").all()
+        assert len(audits) == 1 and audits[0].task_id == item["mutation_task_id"]
+        assert db.query(AgentAudit).filter(AgentAudit.action == "code.apply").count() == 0
+        task = db.get(AgentTask, item["mutation_task_id"])
+        assert task.status == "succeeded" and '"code_proposal"' in task.params
+        assert '"code_applied": false' in task.params
 
 
 def test_worktree_cleanup_failure_does_not_lose_proposal(mini_repo, sf, monkeypatch, caplog):
-    """攻击⑪：worktree 清理失败必须**留痕且不吞掉提议结果**（静默会掩盖残留、撞下次 add）。"""
+    """消除旧清理失败面：提案全链不创建、删除或清理任何工作树。"""
     real_git = ce._git
-
-    def flaky_git(args, cwd, timeout=60):
-        if args[:2] == ["worktree", "remove"]:
-            return 1, "fatal: 模拟清理失败"
+    def checked(args, cwd, timeout=60):
+        assert args[0] != "worktree", "proposal must not depend on worktree creation/cleanup"
         return real_git(args, cwd, timeout)
-
     _stub_llm(monkeypatch, _DIFF)
-    _stub_gate(monkeypatch)
-    monkeypatch.setattr(ce, "_git", flaky_git)
-
-    with caplog.at_level("WARNING", logger="app.services.code_executor"):
-        item = ce.execute_c_item(_item(), sf, "2026-09-08", repo_root=mini_repo)
-
-    assert item["status"] == "executed", item.get("result")
-    assert "worktree 清理失败" in caplog.text
+    monkeypatch.setattr(ce, "_git", checked)
+    item = ce.execute_c_item(_item(), sf, "2026-09-08", repo_root=mini_repo)
+    assert item["status"] == "proposed" and Path(item["patch_path"]).exists()
+    assert "worktree 清理失败" not in caplog.text
 
 
 def test_unapplicable_diff_rejected(mini_repo, sf, monkeypatch):
@@ -601,14 +571,203 @@ def _git_call_literals(src: str) -> list[list[str]]:
 
 
 def test_source_bans_unscoped_staging_and_auto_merge():
-    """结构性约束：不得无范围暂存（`add -A`）、不得自动合并/推送。"""
-    calls = _git_call_literals(Path(ce.__file__).read_text(encoding="utf-8"))
-    assert calls, "未解析到任何 _git([...]) 调用——判据失效（AST 口径过期）"
-
+    """无范围暂存禁令升级为无应用、暂存、提交、工作树、合并或推送。"""
+    src = Path(ce.__file__).read_text()
+    calls = _git_call_literals(src)
+    assert calls
     for args in calls:
-        assert "-A" not in args, f"出现无范围暂存：{args}"
-        assert args[0] not in ("merge", "push"), f"出现落地动作：{args}"
+        assert args[0] in {"status", "diff", "rev-parse", "apply"}, args
+        if args[0] == "apply":
+            assert args[1] == "--check", args
+    assert ce._gate_commands(Path("/tmp"), []) == []
+    assert not any(isinstance(n, ast.Name) and n.id == "run_comparison" for n in ast.walk(ast.parse(src)))
 
-    adds = [a for a in calls if a and a[0] == "add"]
-    assert adds, "未解析到暂存调用——判据失效"
-    assert all("--" in a for a in adds), f"暂存必须显式限定路径：{adds}"
+
+# IMP-046: traps stop the old path before any generated code could execute.
+def _readonly_git(monkeypatch):
+    original = ce._git
+    calls = []
+    def checked(args, cwd, timeout=60):
+        calls.append(args)
+        assert args[0] in {"status", "rev-parse", "diff", "apply"}, args
+        if args[0] == "apply":
+            assert "--check" in args, "proposal must never apply a patch"
+        return original(args, cwd, timeout)
+    monkeypatch.setattr(ce, "_git", checked)
+    return calls
+
+
+def test_imp046_proposal_never_executes_patch(mini_repo, sf, monkeypatch):
+    before = _git(mini_repo, "rev-parse", "HEAD")[1]
+    calls = _readonly_git(monkeypatch)
+    _stub_llm(monkeypatch, _DIFF)
+    monkeypatch.setattr(ce, "_run_gate", lambda *a: pytest.fail("must not execute generated app code"))
+    out = ce.execute_c_item(_item(), sf, "2026-09-18", repo_root=mini_repo)
+    assert out["status"] == "proposed" and out["review_required"] is True
+    assert out["merged"] is False and out["code_applied"] is False and out["gate_ran"] is False
+    assert out["commit"] is None and out["branch"] is None and out["files_changed"] == []
+    assert out["base_commit"] == before and out["proposed_files"] == ["backend/app/demo.py"]
+    assert Path(out["patch_path"]).read_text() == _DIFF
+    assert _git(mini_repo, "rev-parse", "HEAD")[1] == before
+    assert _git(mini_repo, "status", "--porcelain")[1] == ""
+    assert not _git(mini_repo, "branch", "--list", "evolution/*")[1]
+    assert ["apply", "--check"] in [a[:2] for a in calls]
+
+
+def test_imp046_legacy_gate_cannot_launch_process(tmp_path, monkeypatch):
+    monkeypatch.setattr(ce.subprocess, "run", lambda *a, **k: pytest.fail("host process prohibited"))
+    ok, note = ce._run_gate(tmp_path, ["backend/app/demo.py"])
+    assert ok is False and "隔离" in note
+
+
+@pytest.mark.parametrize("raw", ["no diff", None])
+def test_imp046_invalid_generation_has_terminal_task(mini_repo, sf, monkeypatch, raw):
+    from app.models.agent import AgentTask
+    _readonly_git(monkeypatch)
+    _stub_llm(monkeypatch, raw)
+    out = ce.execute_c_item(_item(), sf, "2026-09-18", repo_root=mini_repo)
+    assert out["status"] == "rejected"
+    with sf() as db:
+        tasks = db.query(AgentTask).all()
+        assert len(tasks) == 1 and tasks[0].status == "failed" and tasks[0].finished_at
+
+
+def test_imp046_generation_exception_has_terminal_task(mini_repo, sf, monkeypatch):
+    from app.models.agent import AgentTask
+    _readonly_git(monkeypatch)
+    def broken(*args):
+        raise RuntimeError("password: private-value")
+    monkeypatch.setattr(ce, "_llm_patch", broken)
+    out = ce.execute_c_item(_item(), sf, "2026-09-18", repo_root=mini_repo)
+    assert out["status"] == "failed" and "private-value" not in out["result"]
+    with sf() as db:
+        tasks = db.query(AgentTask).all()
+        assert len(tasks) == 1 and tasks[0].status == "failed" and tasks[0].finished_at
+
+
+def test_imp046_archive_failure_never_reports_proposed(mini_repo, sf, monkeypatch):
+    _readonly_git(monkeypatch)
+    _stub_llm(monkeypatch, _DIFF)
+    monkeypatch.setattr(ce, "_archive_patch", lambda *a: None)
+    out = ce.execute_c_item(_item(), sf, "2026-09-18", repo_root=mini_repo)
+    assert out["status"] == "failed" and "归档" in out["result"]
+    assert out["patch_path"] is None and out["commit"] is None
+
+
+def test_imp046_symlink_rejected_before_context_or_model(mini_repo, sf, monkeypatch):
+    os.symlink("core/config.py", mini_repo / "backend/app/link.py")
+    _git(mini_repo, "add", "--", "backend/app/link.py")
+    _git(mini_repo, "commit", "-qm", "fixture")
+    _readonly_git(monkeypatch)
+    monkeypatch.setattr(ce, "_read_context", lambda *a: pytest.fail("must not read symlink context"))
+    monkeypatch.setattr(ce, "_llm_patch", lambda *a: pytest.fail("must not send symlink context"))
+    out = ce.execute_c_item(_item(files=["backend/app/link.py"]), sf, "2026-09-18", repo_root=mini_repo)
+    assert out["status"] == "rejected" and "符号链接" in out["result"]
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_imp046_untrusted_result_fields_are_not_evidence(mini_repo, sf, monkeypatch, enabled):
+    monkeypatch.setattr(ce.settings, "agent_code_change_enabled", enabled)
+    bad = _item(files=[], merged=True, review_required=False, code_applied=True,
+                gate_ran=True, commit="forged", branch="master", patch_path="fake", files_changed=["fake"],
+                apply_check=True, patch_sha256="forged")
+    out = ce.execute_c_item(bad, sf, "2026-09-18", repo_root=mini_repo)
+    assert out["merged"] is False and out["review_required"] is True
+    assert out["code_applied"] is False and out["gate_ran"] is False
+    assert out["commit"] is None and out["branch"] is None and out["patch_path"] is None
+    assert out["files_changed"] == [] and bad["merged"] is True
+    assert out["apply_check"] is False and out["patch_sha256"] is None
+
+
+
+def test_imp046_proposal_persists_through_real_agenda(mini_repo, sf, monkeypatch):
+    import json
+    from app.models.agent import AgentAgenda
+    from app.services import evolution as evo
+    monkeypatch.setattr(ce, "PROJECT_ROOT", mini_repo)
+    monkeypatch.setattr(evo.settings, "agent_autonomy_enabled", True)
+    _readonly_git(monkeypatch)
+    _stub_llm(monkeypatch, _DIFF)
+    with sf() as db:
+        db.add(AgentAgenda(date="2026-09-18", status="ready"))
+        db.commit()
+    out = evo.execute_agenda({"date": "2026-09-18", "items": [_item()]}, sf)
+    assert out["items"][0]["status"] == "proposed"
+    with sf() as db:
+        stored = db.query(AgentAgenda).one()
+        item = json.loads(stored.items)[0]
+        assert item["status"] == "proposed" and item["code_applied"] is False
+        assert item["gate_ran"] is False and item["review_required"] is True
+
+
+def test_imp046_failed_attempt_counts_toward_daily_limit(mini_repo, sf, monkeypatch):
+    _stub_llm(monkeypatch, "no diff")
+    first = ce.execute_c_item(_item(), sf, "2026-09-18", repo_root=mini_repo)
+    assert first["status"] == "rejected"
+    monkeypatch.setattr(ce, "_llm_patch", lambda *a: pytest.fail("failed attempt cannot reset quota"))
+    second = ce.execute_c_item(_item(), sf, "2026-09-18", repo_root=mini_repo)
+    assert second["status"] == "deferred" and "上限" in second["result"]
+
+
+def test_imp046_source_drift_defers_without_archival(mini_repo, sf, monkeypatch):
+    def model(*args):
+        (mini_repo / "backend/app/demo.py").write_text("# concurrent user edit\n")
+        return _DIFF
+    monkeypatch.setattr(ce, "_llm_patch", model)
+    monkeypatch.setattr(ce, "_archive_patch", lambda *a: pytest.fail("stale proposal cannot be archived as current"))
+    out = ce.execute_c_item(_item(), sf, "2026-09-18", repo_root=mini_repo)
+    assert out["status"] == "deferred" and "变化" in out["result"]
+    assert (mini_repo / "backend/app/demo.py").read_text() == "# concurrent user edit\n"
+
+
+@pytest.mark.parametrize("raw", [123, "x" * (128 * 1024 + 1)], ids=["invalid-type", "oversized"])
+def test_imp046_bad_or_oversized_output_is_rejected(mini_repo, sf, monkeypatch, raw):
+    monkeypatch.setattr(ce, "_llm_patch", lambda *a: raw)
+    out = ce.execute_c_item(_item(), sf, "2026-09-18", repo_root=mini_repo)
+    assert out["status"] == "rejected" and out["patch_path"] is None
+
+
+def test_imp046_short_paths_use_canonical_context(mini_repo, sf, monkeypatch):
+    seen = []
+    def model(item, context):
+        seen.append(context)
+        return _DIFF
+    monkeypatch.setattr(ce, "_llm_patch", model)
+    out = ce.execute_c_item(_item(files=["app/demo.py"]), sf, "2026-09-18", repo_root=mini_repo)
+    assert out["status"] == "proposed" and out["proposed_files"] == ["backend/app/demo.py"]
+    assert len(seen) == 1 and "return a + b" in seen[0]
+
+
+
+def test_imp046_missing_task_audit_blocks_model(mini_repo, sf, monkeypatch):
+    from app.services import agent_tasks as at
+    def fail_audit(**kwargs):
+        raise RuntimeError("audit store unavailable")
+    monkeypatch.setattr(at, "record_mutation", fail_audit)
+    monkeypatch.setattr(ce, "_llm_patch", lambda *a: pytest.fail("no model without audit"))
+    out = ce.execute_c_item(_item(), sf, "2026-09-18", repo_root=mini_repo)
+    assert out["status"] == "failed" and out["patch_path"] is None
+
+
+def test_imp046_final_audit_failure_is_visible(mini_repo, sf, monkeypatch):
+    from app.services import agent_tasks as at
+    _stub_llm(monkeypatch, _DIFF)
+    def broken(*args):
+        raise RuntimeError("audit unavailable")
+    monkeypatch.setattr(at, "update_mutation_result", broken)
+    out = ce.execute_c_item(_item(), sf, "2026-09-18", repo_root=mini_repo)
+    assert out["status"] == "failed" and "留痕回填失败" in out["result"]
+    assert Path(out["patch_path"]).exists() and out["code_applied"] is False
+
+
+def test_imp046_picks_proposal_does_not_run_strategy_replay(mini_repo, sf, monkeypatch):
+    from app.services import replay_gate
+    path = mini_repo / "backend/app/picks/demo.py"
+    path.parent.mkdir()
+    path.write_text((mini_repo / "backend/app/demo.py").read_text())
+    _git(mini_repo, "add", "--", "backend/app/picks/demo.py")
+    _git(mini_repo, "commit", "-qm", "fixture picks")
+    _stub_llm(monkeypatch, _mk_diff("backend/app/picks/demo.py"))
+    monkeypatch.setattr(replay_gate, "run_comparison", lambda *a, **k: pytest.fail("proposal cannot run replay"))
+    out = ce.execute_c_item(_item(files=["backend/app/picks/demo.py"]), sf, "2026-09-18", repo_root=mini_repo)
+    assert out["status"] == "proposed" and out["replay_comparison"] is None

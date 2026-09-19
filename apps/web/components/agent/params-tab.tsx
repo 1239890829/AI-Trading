@@ -37,6 +37,8 @@ function pretty(v: unknown): string {
 }
 
 const STATUS_META: Record<string, { label: string; cls: string }> = {
+  shadow: { label: "影子候选（未生效）", cls: "bg-amber-500/10 text-amber-800 dark:text-amber-300" },
+  shadow_rejected: { label: "影子已拒绝", cls: "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400" },
   draft: { label: "待确认", cls: "bg-amber-500/10 text-amber-800 dark:text-amber-300" },
   applied: { label: "已生效", cls: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" },
   rolled_back: { label: "已回滚", cls: "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400" },
@@ -264,7 +266,7 @@ export function ParamsTab() {
         ) : (
           <div className="space-y-1.5">
             {changes.map((c) => {
-              const meta = STATUS_META[c.status] ?? STATUS_META.draft;
+              const meta = STATUS_META[c.status] ?? { ...STATUS_META.rolled_back, label: "状态未知（待核实）" };
               return (
                 <div key={c.id} className="rounded-lg border border-zinc-100 px-2 py-1.5 dark:border-zinc-800">
                   <div className="flex items-center justify-between gap-2">
@@ -276,13 +278,19 @@ export function ParamsTab() {
                   {c.evidence && Object.keys(c.evidence).length > 0 && (
                     <p className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">依据：{pretty(c.evidence)}</p>
                   )}
+                  {c.apply_block_reason && c.status !== "applied" && c.status !== "rolled_back" && (
+                    <p className="mt-0.5 text-[10px] text-amber-800 dark:text-amber-300">{c.apply_block_reason}</p>
+                  )}
                   {c.rollback_reason && (
                     <p className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
                       回滚归因：{survival?.reason_labels?.[c.rollback_reason.code] ?? c.rollback_reason.code}
                       {c.rollback_reason.note ? `（${c.rollback_reason.note}）` : ""}
                     </p>
                   )}
-                  {c.status === "draft" && (
+                  {c.status === "draft" && c.manual_apply_allowed === undefined && (
+                    <p className="mt-0.5 text-[10px] text-amber-800 dark:text-amber-300">接口未提供生效许可，请核对前后端版本。</p>
+                  )}
+                  {c.status === "draft" && c.manual_apply_allowed === true && (
                     <div className="mt-1 flex gap-1.5">
                       <button
                         disabled={busy}

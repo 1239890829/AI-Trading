@@ -164,3 +164,24 @@ def test_empty_everywhere_is_explicitly_empty(monkeypatch):
     assert out["available"] is False
     assert out["entries"] == []
     assert out["note"]
+
+
+
+def test_bug027_verification_view_never_conflates_machine_pass_and_admission(monkeypatch):
+    from app.research import strategy_verify as sv, verify_registry as vr
+    good = sv.gate_verdict({"n": 500, "excess": 0.5}, yearly_pos=9, yearly_tot=10,
+                           limit_up_share=0.05, excess_median=0.2, excess_win_rate=0.57)
+    missing = sv.gate_verdict({"n": 500, "excess": 0.5}, yearly_pos=9, yearly_tot=10,
+                              limit_up_share=0.05, excess_median=None, excess_win_rate=0.57)
+    records = [
+        {"key": "legacy", "verdict": "pass"},
+        {"key": "current", "verdict": "pass", "gate": good},
+        {"key": "missing", "verdict": "observe", "gate": missing},
+    ]
+    monkeypatch.setattr(vr, "list_records", lambda: records)
+    rows = {row["subject"]: row for row in dl._from_verification()}
+    assert rows["legacy"]["decision"] == "历史通过（待复核）"
+    assert rows["current"]["decision"] == "机器条款通过（待终审）"
+    assert rows["missing"]["decision"] == "观察"
+    assert "未验 1 项" in rows["missing"]["outcome"]
+    assert all(row["decision"] != "准入" for row in rows.values())
