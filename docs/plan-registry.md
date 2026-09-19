@@ -10,7 +10,7 @@
 | implementation-plan | 当前目标、取舍、需求来源、实施依赖、规划完成标准，以及重大新决策进入后的长期系统定位 | 当前运行余额、逐轮长日志、第二套任务状态 |
 | continuous-evolution | 外部新模型/工具/方法/数据的发现面、证据梯度、筛选/准入前治理与重开触发 | 候选施工状态、新闻流水、未经验证的采用承诺 |
 | product-closure-design | 全模块目标、跨模块对象/接口语义、前后台边界、反馈与演进 | 某一模型的参数全集、已上线断言 |
-| hunting-decision-design | 开放情境、KB用途、进入条件、未知/冲突、猎场信息架构 | 仅几类股票的封闭枚举、效果保证 |
+| hunting-decision-design | 开放情境、KB用途、进入条件、未知/冲突、猎场信息架构 | 仅几类股票的封闭枚举、效果保证 |\n| limit-up-dragon-research | 历史涨停/强连板/龙头全样本研究问题、点时样本/失败对照、Jev研究分工、旧→新盲测与猎场回流协议 | 任务状态、已验证因子清单、生产涨停评分或收益承诺 |
 | feature-closure-audit | 所有已识别大小功能的覆盖/来源/设计去向和未验边界 | 新的任务编号体系或“代码目录=已审通过” |
 | stages | 每项任务的派工、执行事实、审核结论和下一步 | 覆盖主方案的新目标、执行端自批 |
 | handoff | 当前模式、工作区/分支、唯一协调项及当前允许动作 | 复制整个方案、每轮再生成新版本下载稿 |
@@ -27,7 +27,7 @@
 | 变化类型 | 必须核对的权威面 | 只有在受影响时更新 |
 |---|---|---|
 | 架构 / 模型 / AI工具链 | `implementation-plan.md`、本表、唯一专题蓝图、`docs/INDEX.md`、所属 stage | `AGENTS.md`、协作 Skills、`handoff.md`、仍声称描述“当前架构”的 summary |
-| 产品 / 交易 / 研究语义 | 产品/猎场/细功能权威文档、所属 stage；若改变长期取舍则同步 implementation-plan | handoff、AGENTS、相关专题/summary |
+| 产品 / 交易 / 研究语义 | 产品/猎场/历史涨停研究/细功能权威文档、所属 stage；若改变长期取舍则同步 implementation-plan | handoff、AGENTS、相关专题/summary |
 | 协作 / 权限 / 发布 / 治理 | `collaboration-workflow.md`、`AGENTS.md`、相关 Skills、本表、W08；若改变当前现场则同步 handoff | implementation-plan、INDEX、专题治理文档 |
 | 仅当前执行状态 | stage + handoff | 不为状态快照改写长期方案 |
 | 历史证据 / 旧基线 | 原历史载体保持原文，本表写清被何种新规则覆盖 | INDEX/summary 仅补“当前去哪里读”，不篡改历史证据 |
