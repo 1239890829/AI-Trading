@@ -1,6 +1,6 @@
 # 当前交接：主干收敛完成，v9.4 治理传播切片进行中
 
-**当前模式：GOVERNANCE_DOC_UPDATE。** 2026-09-18 的 DESIGN_ONLY 规划批已经完成并作为历史范围保留；2026-09-19 的 Jev、公开仓库治理与累计协作功能栈均已进入主干。当前业务代码没有活动施工派工；本轮只更新 v9.4 总方案、重大决策传播治理、接手/交接 Skills 与文档守卫。业务下一轮仍由网页 ChatGPT 读最新 `master`、阶段账本与证据后明确派发有限切片。最新来源为 [实施方案](implementation-plan.md)、[产品闭环](product-closure-design.md)、[开放情境猎场](hunting-decision-design.md)、[大小功能覆盖](feature-closure-audit.md)、[计划去向](plan-registry.md)、[协作规范](collaboration-workflow.md)。
+**当前模式：GOVERNANCE_DOC_UPDATE。** 2026-09-18 的 DESIGN_ONLY 规划批已经完成并作为历史范围保留；2026-09-19 的 Jev、公开仓库治理与累计协作功能栈均已进入主干。当前业务代码没有活动施工派工；本轮只更新 v9.4 总方案、重大决策传播治理、接手/交接 Skills 与文档守卫。业务下一轮仍由网页 ChatGPT 读最新 `master`、阶段账本与证据后明确派发有限切片。最新来源为 [实施方案](implementation-plan.md)、[Jev 蓝图](jev-integration.md)、[产品闭环](product-closure-design.md)、[开放情境猎场](hunting-decision-design.md)、[大小功能覆盖](feature-closure-audit.md)、[计划去向](plan-registry.md)、[协作规范](collaboration-workflow.md)。
 
 ## 1. 固定入口与范围
 
@@ -18,7 +18,7 @@
 | 选股提前发现、进入时机和成因 | 首次观察/触发/可执行/模拟成交分开，先验事实/时间/竞争解释/失效并存；金健只作未定区间示例，不作抓涨或成交保证 | hunting-decision-design §1/§4/§7/§8 |
 | 不限少数战法/形态，充分用知识 | 驱动/结构/角色/环境/时点/执行域/成熟度开放组合；37条KB及候选登记有用途，未知情境不硬归类，负结果与准入区分 | hunting-decision-design §2/§3/§5；plan-registry §3/§4 |
 | 猎场重新设计但不偏离UI风格，其他板块同理 | 沿原组件/字号/亮暗/配色；主屏按当前状态解释为何/等什么/失效，详情再看证据；工作台、市场、图表、消息、记录和复盘均有独立目标 | product-closure-design §2/§4/§5；hunting-decision-design §6 |
-| 历史要求叠加、同义去重、新要求保留 | U01–U40及21条原消息ordinal保持；冲突在语义处裁定，不以最新局部问句抹去主任务，历史成果不重做 | implementation-plan §8/§8.1；plan-registry §1–§3 |
+| 历史要求叠加、同义去重、新要求保留 | U01–U41及21条原消息ordinal保持；冲突在语义处裁定，不以最新局部问句抹去主任务，历史成果不重做 | implementation-plan §8/§8.1；plan-registry §1–§3 |
 | 全面论证后主动补缺、融合、调整 | 现状/最小修补/复用/替代比较，收益/成本/风险/恢复与反证齐备才增删重排；允许不改、拒绝或补证，不机械领下一行 | implementation-plan §6/§7；collaboration-workflow §4 |
 | 废弃旧协作自动化，改用账本短提示 | 互调/自动唤醒/自动回执/Bridge依赖退出，历史原型已退役；网页规划审核、Codex执行、用户只触发读取 | collaboration-workflow §1–§3/§7；W08/GOV-022 |
 | 更新关联文档、清理无用重复并可追溯 | 当前资料各有职责，旧矛盾集中裁定；清理的是旧施工承诺/重复日志，不删除独有知识、历史证据或业务调度 | plan-registry；W08；Git父版本 |
