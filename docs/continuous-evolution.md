@@ -211,8 +211,21 @@ Jev 只可帮助 bounded triage、去重、相关性/候选路由等窄判断；
 | Chronos / TimesFM 等 TSFM | RESEARCH WATCH | 预训练时间序列模型可作为传统/现有模型之外的研究假设 | 跨域公开 benchmark 不能证明 A股选股/择时增量；必须冻结数据、做 Champion 对照、walk-forward 与消融 |
 | FinGPT | WATCH | 开源金融 LLM / 数据与微调方法参考 | 需要先证明相对当前 DeepSeek/Jev/确定性链有新增任务价值 |
 | 金融 Agent benchmark / task suite | REFERENCE | 可借鉴任务拆分、ground-truth 与失败类型设计 | 只吸收评测结构；任何公开模型名次都不等于当前模型版本或 A股系统效果 |
+| GitHub Actions Node/runtime 与 runner image 演进 | WATCH | CI 供应链兼容、提前发现环境变化 | master 当前门禁仍绿；先跟踪 action/runtime 与 runner 官方变化，不因提示直接改稳定 workflow |
 
 首批样本的作用是证明：雷达既能发现“可能改变架构”的 Jev/RD-Agent，也会主动把 A2A、TSFM 等保留为 WATCH/REFERENCE，而不是把热度转换成工程任务。
+
+首批核查的原始来源锚点（核查日期 2026-09-19；后续必须刷新，不能永久复用本快照）：
+
+- RD-Agent 当前 PR / holdout 隔离：<https://github.com/microsoft/RD-Agent/pulls>、<https://github.com/microsoft/RD-Agent/pull/1442>
+- OpenHands releases：<https://github.com/OpenHands/OpenHands/releases>
+- Official MCP Registry：<https://registry.modelcontextprotocol.io/docs>
+- Linux Foundation A2A 2026-04-09 状态：<https://www.linuxfoundation.org/press/a2a-protocol-surpasses-150-organizations-lands-in-major-cloud-platforms-and-sees-enterprise-production-use-in-first-year>
+- QuantConnect LEAN 当前 PR：<https://github.com/QuantConnect/Lean/pulls>
+- vectorbt 当前 PR：<https://github.com/polakowo/vectorbt/pulls>
+- 金融 TSFM 保守 benchmark：<https://arxiv.org/abs/2606.27100>；Chronos-2 原论文：<https://arxiv.org/abs/2510.15821>
+- GitHub Actions Node20 退役说明：<https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/>；runner images：<https://github.com/actions/runner-images>
+
 
 ## 15. 成功指标
 
