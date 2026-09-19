@@ -17,7 +17,7 @@ description: AI-Trading 的外部创新发现与准入前筛选 Skill；从最�
 4. `docs/plan-registry.md`
 5. `docs/INDEX.md`
 6. `docs/retro-and-gaps.md` 与真正相关的 `docs/stages/*`
-7. 与候选相关的专题蓝图、KB、策略/因子/数据登记；AI候选同时读 `docs/jev-integration.md`
+7. 与候选相关的专题蓝图、KB、策略/因子/数据登记；AI候选同时读 `docs/jev-integration.md`；repo 类候选同时读 `docs/kb/05-repo-tracker.md`，避免重复评估已知项目
 
 先知道现有能力和已否证方案，再去外部找，避免重复研究和“换名字重做”。
 
@@ -54,6 +54,12 @@ description: AI-Trading 的外部创新发现与准入前筛选 Skill；从最�
 - 监管/交易所/市场微观结构变化。
 
 同时主动搜当前方案的**反证和替代**，不能只搜支持现状的材料。
+
+### Watch 与 Scout 不混用
+
+- **Watch**：已知/已采用/已评 repo 的 release、breaking、deprecated、关键路径变化交给现有 `backend/scripts/repo_watch.py`；不要把一次“无更新”当成外部扫描完成。
+- **Scout**：本 Skill 负责发现全新 repo、模型、论文、标准、监管变化、benchmark 和方法论。repo 新候选若最终需要长期追踪，再进入 repo 台账/Watch。
+- Stars/Trending 只帮助发现，不设数量硬门；早期项目若能解决真实缺口且来源可核，同样可以进入 TRIAGED。
 
 ## 4. 来源纪律
 
