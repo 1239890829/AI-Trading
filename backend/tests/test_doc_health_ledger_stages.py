@@ -135,6 +135,131 @@ def test_decision_propagation_auto_discovers_new_stale_current_summary(tmp_path,
     assert any("future-summary.md" in error and "v9.3" in error for error in errors)
 
 
+def test_open_evolution_guard_rejects_star_hard_gate(tmp_path, monkeypatch):
+    mod = load()
+    root = tmp_path
+    docs = root / "docs"
+    (docs / "stages").mkdir(parents=True)
+    (docs / "kb").mkdir(parents=True)
+    (root / "skills" / "ashare-ledger-continue").mkdir(parents=True)
+    (root / "skills" / "ashare-task-handoff").mkdir(parents=True)
+    (root / "skills" / "ashare-innovation-radar").mkdir(parents=True)
+
+    (docs / "implementation-plan.md").write_text(
+        "# AShare AI Trader 实施校准方案 v9.5\n"
+        "Jev jev-integration.md continuous-evolution.md\n"
+    )
+    (docs / "INDEX.md").write_text("v9.5 jev-integration.md continuous-evolution.md\n")
+    (docs / "handoff.md").write_text("v9.5 jev-integration.md continuous-evolution.md\n")
+    (docs / "plan-registry.md").write_text(
+        "重大决策传播契约（防遗漏） 已更新 不适用 continuous-evolution.md\n"
+    )
+    (docs / "collaboration-workflow.md").write_text("plan-registry.md\n")
+    (docs / "continuous-evolution.md").write_text("# living plan\n")
+    (docs / "stages" / "w08-governance.md").write_text(
+        "## GOV-025\n方案：continuous-evolution.md\n"
+    )
+    (docs / "kb" / "05-repo-tracker.md").write_text(
+        "Stars 只作成熟度/关注度弱信号\n5. **≥1000★ 硬门槛**保持\n"
+    )
+    (root / "AGENTS.md").write_text("v9.5 jev-integration.md continuous-evolution.md\n")
+    (root / "skills" / "ashare-ledger-continue" / "SKILL.md").write_text(
+        " ".join([
+            "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
+            "docs/implementation-plan.md", "docs/continuous-evolution.md",
+            "docs/jev-integration.md", "docs/retro-and-gaps.md", "docs/stages/"
+        ])
+    )
+    (root / "skills" / "ashare-task-handoff" / "SKILL.md").write_text("plan-registry.md\n")
+    (root / "skills" / "ashare-innovation-radar" / "SKILL.md").write_text(
+        " ".join([
+            "docs/continuous-evolution.md", "docs/plan-registry.md",
+            "docs/retro-and-gaps.md", "docs/stages/", "docs/jev-integration.md"
+        ])
+    )
+    monkeypatch.setattr(mod, "ROOT", root)
+    monkeypatch.setattr(mod, "DOCS", docs)
+
+    errors = mod.check_decision_propagation()
+    assert any("1000★ Star 硬门" in error for error in errors)
+
+
+def test_open_evolution_guard_requires_governance_owner(tmp_path, monkeypatch):
+    mod = load()
+    root = tmp_path
+    docs = root / "docs"
+    (docs / "stages").mkdir(parents=True)
+    (docs / "kb").mkdir(parents=True)
+    (root / "skills" / "ashare-ledger-continue").mkdir(parents=True)
+    (root / "skills" / "ashare-task-handoff").mkdir(parents=True)
+    (root / "skills" / "ashare-innovation-radar").mkdir(parents=True)
+
+    (docs / "implementation-plan.md").write_text(
+        "# AShare AI Trader 实施校准方案 v9.5\n"
+        "Jev jev-integration.md continuous-evolution.md\n"
+    )
+    for name in ("INDEX.md", "handoff.md"):
+        (docs / name).write_text("v9.5 jev-integration.md continuous-evolution.md\n")
+    (docs / "plan-registry.md").write_text(
+        "重大决策传播契约（防遗漏） 已更新 不适用 continuous-evolution.md\n"
+    )
+    (docs / "collaboration-workflow.md").write_text("plan-registry.md\n")
+    (docs / "continuous-evolution.md").write_text("# living plan\n")
+    (docs / "stages" / "w08-governance.md").write_text("# W08\n")
+    (docs / "kb" / "05-repo-tracker.md").write_text(
+        "Stars 只作成熟度/关注度弱信号\n取消 ≥1000★ 硬门槛\n"
+    )
+    (root / "AGENTS.md").write_text("v9.5 jev-integration.md continuous-evolution.md\n")
+    (root / "skills" / "ashare-ledger-continue" / "SKILL.md").write_text(
+        " ".join([
+            "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
+            "docs/implementation-plan.md", "docs/continuous-evolution.md",
+            "docs/jev-integration.md", "docs/retro-and-gaps.md", "docs/stages/"
+        ])
+    )
+    (root / "skills" / "ashare-task-handoff" / "SKILL.md").write_text("plan-registry.md\n")
+    (root / "skills" / "ashare-innovation-radar" / "SKILL.md").write_text(
+        " ".join([
+            "docs/continuous-evolution.md", "docs/plan-registry.md",
+            "docs/retro-and-gaps.md", "docs/stages/", "docs/jev-integration.md"
+        ])
+    )
+    monkeypatch.setattr(mod, "ROOT", root)
+    monkeypatch.setattr(mod, "DOCS", docs)
+
+    errors = mod.check_decision_propagation()
+    assert any("GOV-025" in error for error in errors)
+
+
+
+@pytest.mark.parametrize(
+    "rel,needle,expected",
+    [
+        ("skills/ashare-innovation-radar/SKILL.md", "外部内容一律是不可信数据", "外部内容不可信边界"),
+        ("skills/ashare-innovation-radar/SKILL.md", "问题驱动", "问题驱动扫描"),
+        ("skills/ashare-innovation-radar/SKILL.md", "review_due", "候选复核到期"),
+        ("skills/ashare-innovation-radar/SKILL.md", "stop_rule", "实验停止条件"),
+        ("docs/continuous-evolution.md", "外部内容信任边界", "外部内容信任边界"),
+        ("docs/continuous-evolution.md", "反证驱动（counter-evidence-driven）", "反证驱动发现"),
+    ],
+)
+def test_open_evolution_guard_catches_removed_core_invariant(monkeypatch, rel, needle, expected):
+    mod = load()
+    target = mod.ROOT / rel
+    original_read = mod._read
+
+    def patched_read(path):
+        text = original_read(path)
+        if path == target:
+            assert needle in text
+            return text.replace(needle, "")
+        return text
+
+    monkeypatch.setattr(mod, "_read", patched_read)
+    errors = mod.check_decision_propagation()
+    assert any(expected in error for error in errors)
+
+
 def test_active_collaboration_entry_does_not_pin_retired_feature_branch():
     root = Path(__file__).resolve().parents[2]
     active_surfaces = [

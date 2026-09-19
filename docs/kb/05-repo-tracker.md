@@ -1,6 +1,6 @@
-# 仓库追踪台账（agent 分组）
+# 仓库追踪台账（开放进化的 repo 子集）
 
-> 用途：GitHub「agent」star 分组内各仓库的**用途 / 服务于哪个功能 / 使用轨迹 / 评估结论**。
+> 用途：GitHub/repo 类外部候选的**用途 / 服务于哪个功能 / 使用轨迹 / 评估结论**。本文件是 `continuous-evolution.md` 的 repo 子集，不代表全部外部发现面；模型发布、论文、标准、监管/交易所与 benchmark 等由 `ashare-innovation-radar` 发现后按各自证据载体留痕。
 > 本文件是仓库发现闭环的数据源：每周发现轮**先读本文件的「筛选经验」**改进检索与甄别 →
 > 发现新候选 → 评估 → 回填本文件 → 系统内实际使用后更新「使用轨迹」→ 结论反哺经验。
 > 面板消费：AI 控制台「仓库追踪」tab（Markdown 渲染）。
@@ -10,7 +10,7 @@
 
 ✅ 已采纳（进入系统依赖/代码）｜ 🔶 试用中 ｜ ⏳ 候选（已评估未使用）｜ ❌ 淘汰（原因必填）
 
-## 分组收录（12 仓，2026-09-09 首轮 8 仓 + 2026-09-13 用户供仓 2 仓 + 2026-09-14 经验反馈轮 2 仓，均 ≥1000★）
+## 分组收录（12 仓，2026-09-09 首轮 8 仓 + 2026-09-13 用户供仓 2 仓 + 2026-09-14 经验反馈轮 2 仓；历史首轮样本均 ≥1000★，**不再作为后续硬门**）
 
 ### ArvinLovegood/go-stock — 7.5k★ Go
 - **用途**：AI 股票分析 + 涨跌报警推送（A股/港股/美股）
@@ -102,11 +102,14 @@
 2. **场景匹配**：crypto 7×24 做市（hummingbot/jesse/freqtrade）与 A 股 T+1 涨跌停生态差异大——只借鉴其**通知分层/工程实践**，不引入其交易逻辑
 3. **测试覆盖是质量信号**：go-stock agent 层 27 个测试文件 vs tick-stock-panel 0 个——同等功能下选有测试的做深评
 4. **搜索词要轮换**：本轮命中主要靠「llm trading agent / stock alert monitor」；下轮补充「连板 监控」「涨停 预警」「A股 agent」「dragon tiger」等我们领域的原生词汇
-5. **≥1000★ 硬门槛**保持；trading 分组已有的仓不重复收录（去重表见 git log / kb 面板）
+5. **取消 ≥1000★ 硬门槛**：Stars 只作成熟度/关注度弱信号。早期但能力独特、来源可信、能解决真实缺口的项目可进入 TRIAGED；高 Star 也不能替代 LICENSE、源码/测试、适配、隐私/权限和本项目实证。trading 分组已有仓仍去重（去重表见 git log / kb 面板）
 6. **A 股 LLM 应用层正在爆发**（TradingAgents 系 31k+、daily_stock_analysis 64k）——每轮必查该类新仓库
 7. **检索词命中率实测（2026-09-14）**：中文双词组合命中率极低（「涨停 预警」total=3、「连板 监控」total=4、「dragon tiger stock」total=4）；混排词与英文词更有效（「A股 agent llm」total=55、「stock screener llm」total=35、「龙虎榜 数据」total=43）。下轮轮换建议：`limit-up monitor`、`A股 复盘 agent`、`stock agent framework`、`资金流 monitor`
 8. **同作者仓库矩阵要联动看**：TradingAgents-astock 作者的 Vibe-Research 是其工程化升级线（旧仓需 LLM 网关未深评 vs 新仓 320 测试全绿）——发现同作者新仓时优先评估新形态，旧仓状态可同步标注出处
 9. **无 LICENSE 一票否决二次验证**（Sequoia-X 之后 aiagents-stock 再现）——命中即淘汰，不做深评
+10. **Watch ≠ Scout**：本文件与 `repo_watch.py` 负责已知仓库与历史结论的增量跟踪，不能证明“外部世界已扫描”；全新候选发现须走 `ashare-innovation-radar` 的多来源 Scout。
+11. **来源分层**：官方 release/源码/论文/监管/交易所为主证据；独立 benchmark/复现用于验证；Trending、Stars、社媒、视频只提供发现线索。
+12. **主动找反证与重开条件**：WATCH/REJECT 应说明什么变化才重评；同作者新版本、关键 issue 修复、LICENSE 变化、目标域可复现实证或旧前提失效时允许推翻旧结论。
 
 ## trading 分组 diff 台账（2026-09-09，22 仓快照 vs 历史已评）
 

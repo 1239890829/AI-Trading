@@ -18,10 +18,11 @@ description: AI-Trading 新会话接手、上下文恢复与账本继续的唯�
 3. `docs/INDEX.md`：权威入口与文档定位；
 4. `docs/plan-registry.md`：文档权责、历史取代关系、重大决策传播契约；
 5. `docs/implementation-plan.md`：当前总方案与长期取舍；
-6. `docs/product-closure-design.md`、`docs/hunting-decision-design.md`、`docs/feature-closure-audit.md`：产品/选股/细功能目标；
-7. `docs/jev-integration.md`：Jev 当前唯一专题蓝图；
-8. `docs/retro-and-gaps.md` → 实际相关 `docs/stages/*`：唯一任务状态、依赖、证据和下一步；
-9. 只有 handoff/stage 指向某个施工分支或 PR 时，才进一步读取该分支/提交/CI 作为实现证据。
+6. `docs/continuous-evolution.md`：长期开放世界发现、筛选与准入前治理；
+7. `docs/product-closure-design.md`、`docs/hunting-decision-design.md`、`docs/feature-closure-audit.md`：产品/选股/细功能目标；
+8. `docs/jev-integration.md`：Jev 当前唯一专题蓝图；
+9. `docs/retro-and-gaps.md` → 实际相关 `docs/stages/*`：唯一任务状态、依赖、证据和下一步；
+10. 只有 handoff/stage 指向某个施工分支或 PR 时，才进一步读取该分支/提交/CI 作为实现证据。
 
 **禁止**把最近聊天、旧下载稿、已删除或长期功能分支、旧 DESIGN_ONLY、Bridge/自动互调状态当作接手入口。
 
@@ -36,6 +37,7 @@ description: AI-Trading 新会话接手、上下文恢复与账本继续的唯�
 - 当前 P0/P1 的真实未完成/待条件事项；
 - 是否已有网页明确派工、准确任务 ID 与验收；
 - 下一候选切片是什么、为什么；**没有明确派工时只汇报候选，不自行开工**。
+- 若当前问题涉及长期替代/新技术，是否需要调用 `ashare-innovation-radar`；雷达输出不等于派工。
 
 摘要用于本会话恢复上下文，不建立新状态表；任务状态仍只写所属 stage。
 

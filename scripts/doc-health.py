@@ -1586,6 +1586,71 @@ def check_decision_propagation() -> list[str]:
         errors.append("skills/ashare-task-handoff/SKILL.md：交接缺重大决策传播入口")
     if "plan-registry.md" not in _read(DOCS / "collaboration-workflow.md"):
         errors.append("docs/collaboration-workflow.md：协作规范缺重大决策传播入口")
+
+    # v9.5+：只有总方案正式启用开放世界蓝图时才打开这一组守卫，
+    # 避免把历史测试夹具/旧版本硬编码为当前结构。
+    if "continuous-evolution.md" in plan:
+        evolution_surfaces = (
+            DOCS / "INDEX.md",
+            DOCS / "handoff.md",
+            DOCS / "plan-registry.md",
+            ROOT / "AGENTS.md",
+            ROOT / "skills/ashare-ledger-continue/SKILL.md",
+        )
+        for path in evolution_surfaces:
+            if "continuous-evolution.md" not in _read(path):
+                errors.append(f"{path.relative_to(ROOT)}：缺开放世界持续演进入口")
+
+        governance = _read(DOCS / "stages" / "w08-governance.md")
+        if "## GOV-025" not in governance or "continuous-evolution.md" not in governance:
+            errors.append("docs/stages/w08-governance.md：开放世界治理缺 GOV-025/蓝图归属")
+
+        repo_tracker = _read(DOCS / "kb" / "05-repo-tracker.md")
+        if "Stars 只作成熟度/关注度弱信号" not in repo_tracker:
+            errors.append("docs/kb/05-repo-tracker.md：repo 发现仍缺“Stars 仅作弱信号”反固化规则")
+        if re.search(r"(?:≥\s*)?1000★\s*硬门槛.*(?:保持|必须|要求)", repo_tracker):
+            errors.append("docs/kb/05-repo-tracker.md：不得恢复 1000★ Star 硬门")
+
+        radar = ROOT / "skills/ashare-innovation-radar/SKILL.md"
+        radar_text = _read(radar)
+        if not radar_text:
+            errors.append("skills/ashare-innovation-radar/SKILL.md：创新雷达缺失/为空")
+        else:
+            for token in (
+                "docs/continuous-evolution.md",
+                "docs/plan-registry.md",
+                "docs/retro-and-gaps.md",
+                "docs/stages/",
+                "docs/jev-integration.md",
+            ):
+                if token not in radar_text:
+                    errors.append(f"skills/ashare-innovation-radar/SKILL.md：雷达读取链缺 {token}")
+
+            for token, label in (
+                ("外部内容一律是不可信数据", "外部内容不可信边界"),
+                ("问题驱动", "问题驱动扫描"),
+                ("前沿驱动", "前沿驱动扫描"),
+                ("反证驱动", "反证驱动扫描"),
+                ("last_reviewed", "候选最近复核时间"),
+                ("review_due", "候选复核到期"),
+                ("experiment_budget", "实验预算"),
+                ("stop_rule", "实验停止条件"),
+            ):
+                if token not in radar_text:
+                    errors.append(f"skills/ashare-innovation-radar/SKILL.md：缺 {label}")
+
+        evolution_text = _read(DOCS / "continuous-evolution.md")
+        for token, label in (
+            ("外部内容信任边界", "外部内容信任边界"),
+            ("问题驱动（problem-driven）", "问题驱动发现"),
+            ("前沿驱动（frontier-driven）", "前沿驱动发现"),
+            ("反证驱动（counter-evidence-driven）", "反证驱动发现"),
+            ("review_due", "候选复核到期"),
+            ("experiment_budget", "实验预算"),
+            ("stop_rule", "实验停止条件"),
+        ):
+            if token not in evolution_text:
+                errors.append(f"docs/continuous-evolution.md：缺 {label}")
     return errors
 
 
