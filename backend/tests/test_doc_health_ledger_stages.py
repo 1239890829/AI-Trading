@@ -269,13 +269,13 @@ def test_decision_propagation_detects_stale_handoff_requirement_range(monkeypatc
     def patched_read(path):
         text = original_read(path)
         if path == target:
-            assert "U01–U42" in text
-            return text.replace("U01–U42", "U01–U41", 1)
+            assert "U01–U44" in text
+            return text.replace("U01–U44", "U01–U43", 1)
         return text
 
     monkeypatch.setattr(mod, "_read", patched_read)
     errors = mod.check_decision_propagation()
-    assert any("累计要求范围" in error and "U42" in error for error in errors)
+    assert any("累计要求范围" in error and "U44" in error for error in errors)
 
 
 def test_active_collaboration_entry_does_not_pin_retired_feature_branch():

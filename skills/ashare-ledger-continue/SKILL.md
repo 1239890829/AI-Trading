@@ -7,7 +7,7 @@ description: AI-Trading 新会话接手、上下文恢复与账本继续的唯�
 
 本 Skill 同时承担三件事：**新会话快速接手、恢复当前项目上下文、继续已获准任务**。不得再建立第二个“项目接手 Skill”或靠聊天长提示维护上下文。
 
-全项目范围仍按 `docs/product-closure-design.md`、`docs/hunting-decision-design.md`、`docs/feature-closure-audit.md` 核大小功能及消费者。后台开放情境，普通前台简洁；局部切片不能缩小整项目目标。
+全项目范围仍按 `docs/product-closure-design.md`、`docs/hunting-decision-design.md`、`docs/limit-up-dragon-research.md`（存在且相关时）、`docs/feature-closure-audit.md` 核大小功能及消费者。后台开放情境，普通前台简洁；局部切片不能缩小整项目目标。
 
 ## 1. 固定读取链
 
@@ -19,9 +19,9 @@ description: AI-Trading 新会话接手、上下文恢复与账本继续的唯�
 4. `docs/plan-registry.md`：文档权责、历史取代关系、重大决策传播契约；
 5. `docs/implementation-plan.md`：当前总方案与长期取舍；
 6. `docs/continuous-evolution.md`：长期开放世界发现、筛选与准入前治理；
-7. `docs/product-closure-design.md`、`docs/hunting-decision-design.md`、`docs/feature-closure-audit.md`：产品/选股/细功能目标；
+7. `docs/product-closure-design.md`、`docs/hunting-decision-design.md`、`docs/feature-closure-audit.md`：产品/选股/细功能目标；若 INDEX/方案/stage 指向 `docs/limit-up-dragon-research.md`，同轮读取该历史涨停/龙头研究蓝图；
 8. `docs/jev-integration.md`：Jev 当前唯一专题蓝图；
-9. `docs/retro-and-gaps.md` → 实际相关 `docs/stages/*`：唯一任务状态、依赖、证据和下一步；
+9. `docs/retro-and-gaps.md` → 先扫描 W00–W09 的活动任务元数据（ID/状态/优先级/依赖/下一步），再深入实际候选 `docs/stages/*`：唯一任务状态、依赖、证据和下一步；
 10. 只有 handoff/stage 指向某个施工分支或 PR 时，才进一步读取该分支/提交/CI 作为实现证据。
 
 **禁止**把最近聊天、旧下载稿、已删除或长期功能分支、旧 DESIGN_ONLY、Bridge/自动互调状态当作接手入口。
@@ -36,12 +36,26 @@ description: AI-Trading 新会话接手、上下文恢复与账本继续的唯�
 - Jev 当前允许做什么、禁止做什么、有哪些证据门未过；
 - 当前 P0/P1 的真实未完成/待条件事项；
 - 是否已有网页明确派工、准确任务 ID 与验收；
-- 下一候选切片是什么、为什么；**没有明确派工时只汇报候选，不自行开工**。
+- 下一候选切片是什么、为什么；若用户只是询问/审阅则只汇报候选；若用户在 Codex 端**明确调用本 Skill 并说“继续任务/继续”**，按 §3 的动态选刀规则把这句话视为“授权执行一个最高优先级可开工切片”，但不得跨第二个主切片。
 - 若当前问题涉及长期替代/新技术，是否需要调用 `ashare-innovation-radar`；雷达输出不等于派工。
 
 摘要用于本会话恢复上下文，不建立新状态表；任务状态仍只写所属 stage。
 
-## 3. 执行与防漏
+## 3. 全局动态选刀规则
+
+本 Skill 不维护第二张永久排队表；任务状态、P0/P1/P2、依赖和下一步仍只由 stage 拥有。每次“继续”都从最新 `master` 重算，避免近期新增任务把旧顺序冲掉后仍机械执行。
+
+1. **先收口当前候选版本**：handoff 若存在待审核、待 CI、待合并的规划/治理候选，且它会改变任务或共享入口，先完成该闭环，不从旧 master 启动新业务切片。
+2. **只从可开工任务里选**：`已完成/已退出/已合并` 排除；`待条件` 只有条件已实际满足才进入；依赖未满足不因标签高就强行开工。
+3. **P0 正确性/安全/证据真实性 > P1 核心能力 > P2 优化**。同为 P0 时，优先会污染更多下游的源头缺陷：未来数据/时点、样本单位/分母/收益身份、数据源时间/身份、统一事实/执行契约，再到局部表现。
+4. **同级按解锁价值排序**：优先能解锁多个核心任务或用户主目标的项；再比较已有反例/证据成熟度、用户价值、可逆性与最小切片成本。新提出不自动插队，旧任务也不因排队久自动领先。
+5. **研究可先采样，效果不能越门**：如 RSH-031 Phase 0 的历史覆盖/污染地图、event universe/描述性 atlas 可先行；正式特征/战法增益仍等待 RSH-026/IMP-020 等点时、全分母、OOS/成本门。
+6. 每次只执行**一个主切片**；最多另带一个不冲突、低风险治理切片。完成/阻塞后回填，再从最新 master 重新选择。
+7. 接手摘要必须列“首选候选 + 主要竞争候选 + 为什么选/为什么暂不选”。若排序存在无法由现有规则消解的高影响语义冲突，停止在候选选择，不由 Codex 自创项目优先级。
+
+用户明确调用本 Skill 并说“继续任务/继续”时，如果 handoff 当前模式允许实施、没有未收口的候选版本，且首选切片按以上规则唯一，则这句话就是该**单一切片**的执行授权；无需用户再复制任务卡。若 handoff 明确 DESIGN_ONLY / REVIEW / BLOCKED，或候选不唯一，则只恢复上下文和报告候选，不执行。
+
+## 4. 执行与防漏
 
 1. 收到“ChatGPT审核完了”只代表开始重读；先核 master、当前任务轮次、实际工作区/分支/HEAD、计划和证据。
 2. 初次明确派工可实施；需修改只做限定整改；阻塞就停止。重复通知不重做，同一工作区不并行写。

@@ -1,6 +1,6 @@
-# 当前交接：v9.5 开放世界持续演进基线，等待下一明确实施切片
+# 当前交接：v9.6 历史涨停/龙头研究基线，下一主切片候选 BUG-028
 
-**当前模式：READY_FOR_NEXT_PLANNED_SLICE。** 2026-09-18 的 DESIGN_ONLY 规划批已经完成并作为历史范围保留；2026-09-19 的 Jev、公开仓库治理与累计协作功能栈均已进入主干。当前业务代码没有活动施工派工；v9.4 决策传播治理已由 PR #41 进入 `master`；v9.5 开放世界持续演进蓝图、创新雷达 Skill 与 GOV-025 已由 PR #42 进入 `master`，当前共享基线为 merge commit `d51f3209`。业务下一轮仍由网页 ChatGPT 读最新 `master`、阶段账本与证据后明确派发有限切片。最新来源为 [实施方案](implementation-plan.md)、[持续演进蓝图](continuous-evolution.md)、[Jev 蓝图](jev-integration.md)、[产品闭环](product-closure-design.md)、[开放情境猎场](hunting-decision-design.md)、[大小功能覆盖](feature-closure-audit.md)、[计划去向](plan-registry.md)、[协作规范](collaboration-workflow.md)。
+**当前模式：READY_FOR_NEXT_PLANNED_SLICE（仅在 PR #44 的准确候选通过完整 CI 并合入 `master` 后生效）。** 在 PR #44 尚未合并时，当前共享事实仍是 `master@49de250c` 的 v9.5；不得从功能分支抢先施工。PR #44 只改变规划/账本/Skills/治理守卫测试，没有业务逻辑、回测、数据抓取、Jev 批量调用或生产参数变更。v9.6 新增 [历史涨停/强连板/龙头研究蓝图](limit-up-dragon-research.md)、W04/RSH-031 与 U43，并把“继续任务/继续”规范为一次只授权一个动态最高优先级切片。合入后最新来源为 [实施方案](implementation-plan.md)、[历史涨停/龙头研究](limit-up-dragon-research.md)、[持续演进蓝图](continuous-evolution.md)、[Jev 蓝图](jev-integration.md)、[产品闭环](product-closure-design.md)、[开放情境猎场](hunting-decision-design.md)、[大小功能覆盖](feature-closure-audit.md)、[计划去向](plan-registry.md)、[协作规范](collaboration-workflow.md)。
 
 ## 1. 固定入口与范围
 
@@ -18,7 +18,7 @@
 | 选股提前发现、进入时机和成因 | 首次观察/触发/可执行/模拟成交分开，先验事实/时间/竞争解释/失效并存；金健只作未定区间示例，不作抓涨或成交保证 | hunting-decision-design §1/§4/§7/§8 |
 | 不限少数战法/形态，充分用知识 | 驱动/结构/角色/环境/时点/执行域/成熟度开放组合；37条KB及候选登记有用途，未知情境不硬归类，负结果与准入区分 | hunting-decision-design §2/§3/§5；plan-registry §3/§4 |
 | 猎场重新设计但不偏离UI风格，其他板块同理 | 沿原组件/字号/亮暗/配色；主屏按当前状态解释为何/等什么/失效，详情再看证据；工作台、市场、图表、消息、记录和复盘均有独立目标 | product-closure-design §2/§4/§5；hunting-decision-design §6 |
-| 历史要求叠加、同义去重、新要求保留 | U01–U42及21条原消息ordinal保持；冲突在语义处裁定，不以最新局部问句抹去主任务，历史成果不重做 | implementation-plan §8/§8.1；plan-registry §1–§3 |
+| 历史要求叠加、同义去重、新要求保留 | U01–U44及21条原消息ordinal保持；冲突在语义处裁定，不以最新局部问句抹去主任务，历史成果不重做 | implementation-plan §8/§8.1；plan-registry §1–§3 |
 | 全面论证后主动补缺、融合、调整 | 现状/最小修补/复用/替代比较，收益/成本/风险/恢复与反证齐备才增删重排；允许不改、拒绝或补证，不机械领下一行 | implementation-plan §6/§7；collaboration-workflow §4 |
 | 废弃旧协作自动化，改用账本短提示 | 互调/自动唤醒/自动回执/Bridge依赖退出，历史原型已退役；网页规划审核、Codex执行、用户只触发读取 | collaboration-workflow §1–§3/§7；W08/GOV-022 |
 | 更新关联文档、清理无用重复并可追溯 | 当前资料各有职责，旧矛盾集中裁定；清理的是旧施工承诺/重复日志，不删除独有知识、历史证据或业务调度 | plan-registry；W08；Git父版本 |
@@ -38,7 +38,7 @@
 ## 5. 当前接续规则
 
 2026-09-18 规划批已完成理论/产品/大小功能/知识使用/文档治理层面的逐项去向；其 DESIGN_ONLY 边界只描述该历史规划批，不再作为全项目“当前模式”。计划中的实际开发、原始数据/候选实证和运行验收仍按各 stage 的真实状态继续。
-Codex收到短提示后先从最新 `master` 重读 AGENTS、handoff、协作规范和对应 stage；没有网页明确派工时不自行修 BUG 或扫描任务开工。网页按风险/收益/输入选择有限切片，Codex实现回填，网页审核并重新规划。所有大小消费者持续纳入，原金融/权限/发布保护保留。
+Codex收到短提示后先从最新 `master` 重读 AGENTS、handoff、协作规范和对应 stage。默认由网页按风险/收益/输入选择有限切片；handoff 处于可执行模式时，用户也可明确调用 `ashare-ledger-continue` 说“继续任务/继续”，由 Skill 按 P0/P1/P2、依赖、解锁价值和证据成熟度自动领取一个唯一可开工切片。Codex实现回填，网页审核并重新规划；不得借一次“继续”连续扫描执行整个账本。所有大小消费者持续纳入，原金融/权限/发布保护保留。
 文字版完整图以product-closure-design §8为准；展示图片只是解释副本，不是状态源。图必须包含后续获准实施的方向，不得宣称已经自动执行或真实券商下单，不出现普通前台配置/调试中心或后台固定分类上限。
 
 ## 6. 2026-09-19 分支收敛结果
@@ -50,7 +50,19 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 本次合并后事实指针与账本关联收口由 PR #40 承载；不为记录 PR 自身再追加会改变被审版本的自指提交。
 
-## 7. Jev、工具链与协作流当前基线
+## 7. v9.6 合并后的当前执行优先级快照
+
+本节只记录**当前候选顺序**，不是第二套永久 backlog；每轮仍由 `ashare-ledger-continue` 从最新 stage 动态重算。
+
+1. **当前第一优先：收口 PR #44 自身**。CI/传播守卫未全绿前不从旧 v9.5 master 开新业务切片。
+2. **合并后主切片首选 BUG-028**（W04/P0）：已存在未来尾部改变早期确认的隔离反例；先修 point-in-time/历史 asof，避免“提前发现”研究建立在未来污染上。
+3. **第二竞争候选 BUG-026**（W04/P0）：修样本单位、重复刷新、horizon 与收益身份；它直接解锁 RSH-026 → IMP-020 → RSH-031 正式效果验证。
+4. **随后按真实证据在 BUG-029 / IMP-006 / BUG-020 等 P0 中重排**：优先影响更多消费者且已有强反例的源头问题，不机械按阶段号清零。
+5. **RSH-031 不作为第一主施工刀插队**：Phase 0 的历史覆盖/污染地图、event universe 与描述性 atlas 可在不冲突时早做；正式语义特征、战法和起爆前增益必须等待 RSH-026/IMP-020，猎场接线还受 BUG-029/IMP-006/IMP-049 约束。
+
+PR #44 合并且当前模式恢复为可执行后，用户在 Codex 端只需明确调用 `ashare-ledger-continue` 说“继续任务/继续”；若上述首选仍可开工且无新的更高优先级事实，Skill 可直接领取一个切片，不需用户复制任务卡。
+
+## 8. Jev、工具链与协作流当前基线
 
 - Jev 只保留 bounded semantic verify、条件 capability routing、metadata-only usage 与研究/审核辅助；确定性金融规则、权限、撮合、风控和真实执行不得委托给 Jev。
 - BillionsBobby/JevRouter 只采用经过固定版本校验的内核与 privacy-safe wrapper；旧 `jev-route` 已退出活动链。OpenRouter 当前明确不接入，也不使用聊天中出现过的旧 Key。
@@ -58,3 +70,4 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - 网页 ChatGPT / Codex 协作固定为“`master` 账本事实源 + 用户短提示”：网页负责规划/审核，Codex负责明确切片执行；Bridge、自动互调、自动审核回执均不是必需依赖。功能分支可以短暂存在，但不能成为长期固定入口。
 - 当前总方案升级为 v9.4：Jev 进入长期系统分层，同时新增 `plan-registry.md` §1.1 重大决策传播契约。今后新模型/工具链/架构/协作决定若只更新专题蓝图而漏总方案、INDEX、stage 或接手入口，视为治理缺陷并由 doc-health/Skill 双重守卫阻断明显漂移。
 - v9.5 把“当前方案不是永久终局”制度化：`continuous-evolution.md` + `ashare-innovation-radar` 主动发现外部新模型/工具/量化方法/数据与反证；只产生 WATCH/SHORTLISTED/LAB 建议，任何真实采用仍回原 stage、证据门、PR/审核/CI。
+- v9.6 候选新增 RSH-031：历史涨停/强连板/空间板/弱市穿越/题材梯队与异常板块拉升采用全量事件+失败对照+point-in-time+旧→新盲测；Jev 只做 bounded MapReduce/rerank/verification，效果准入继续由 RSH-026/IMP-020，猎场接线只走 IMP-049 challenger/shadow。

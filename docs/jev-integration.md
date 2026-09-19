@@ -2,7 +2,7 @@
 
 > **定位**：Jev 在本项目与 Codex 全局工作流中的唯一现役设计/运行说明。
 > **状态**：2026-09-19；项目内 Jev 主线已通过 PR #31–#34 分批合入 `master`，后续状态仍以 `docs/retro-and-gaps.md` §6.0 为唯一真相源。
-> **账本映射**：治理/额度/回退 → W08/GOV-024；Universal Verification 与语义中间层 → W05/IMP-045；JevRouter/受限能力路由 → W05/IMP-046；人工金标准、语义特征与额度实证 → W04/RSH-030。本文只定义设计与证据，不复制这些任务的状态。
+> **账本映射**：治理/额度/回退 → W08/GOV-024；Universal Verification 与语义中间层 → W05/IMP-045；JevRouter/受限能力路由 → W05/IMP-046；人工金标准、语义特征与额度实证 → W04/RSH-030；历史涨停/强连板/龙头研究本体 → W04/RSH-031。本文只定义设计与证据，不复制这些任务的状态。
 > **原则**：Jev 是高速、低成本、结构化的**语义协处理器**，不是替代确定性代码、回测、风控、DeepSeek、Codex 或 ChatGPT 的“第二个大脑”。
 
 ## 1. 为什么引入 Jev
@@ -1138,3 +1138,51 @@ v1 导出已机械验证：240 行、6 类各 40、`human_complete=0`；使用�
 ### 29.5 Gold scoring 的完成度门
 
 `score` 默认要求所有 row 的 `human.category / human.certainty / human.actionable` 都合法且完成；未完成时直接拒绝，防止部分样本被误写成“完整准确率”。只有人工明确需要查看标注进度时，才可显式传 `--allow-partial`；输出会带 `human_complete / human_total / partial=true`，不能作为生产阈值依据。prediction event_id 也必须唯一，重复 ID 直接 fail-closed。
+
+
+## 30. RSH-031：历史涨停/强连板/龙头研究中的 Jev 边界
+
+详细研究协议见 [历史涨停/强连板/龙头研究蓝图](limit-up-dragon-research.md)。这里仅固定 Jev 的全局调用边界，避免未来实现把“适合语义抽取”误解成“适合直接预测涨停”。
+
+### 30.1 允许：历史语料的 bounded MapReduce
+
+对当时已经可见的新闻、公告、政策、涨停原因与证据文本，Jev 可以批量输出预定义 Choice/Noul/Score 特征，例如：
+
+- event_type / certainty / novelty；
+- source_type / source_reliability；
+- directness_to_company / directness_to_theme；
+- 产业链或题材分支映射的 bounded 候选；
+- stale/priced-in、narrative_crowding、phase_consistency 的研究标签；
+- evidence conflict / claim support 的 verifier 结果。
+
+输入窗口、事件时间、样本身份、题材成员和控制流由确定性代码拥有；Jev 不得看到未来收益后再生成早期特征。
+
+### 30.2 允许：检索后的第二阶段精排
+
+先用确定性时间/实体/关键词/来源约束召回当时可见材料，再由 Jev 做相关性、直接性、冲突度精排。是否真的减少昂贵模型调用，要和相同 recall 基线做实测；“Jev 便宜”不是省额度的证明。
+
+### 30.3 允许：自动复盘的 Universal Verification
+
+研究摘要出现“X 因 Y 涨停”“A 题材传导到 B 分支”“该消息在起爆前已存在”等主张时，可用现有 verifier 思路核：
+
+- claim 是否由 evidence 支持；
+- evidence 的 available_at 是否早于 decision_asof；
+- 公司直接受益与题材相关是否被混写；
+- 相关性是否被写成已证因果；
+- 同一来源是否被重复包装成多份独立证据。
+
+失败只降低/撤销该解释，不改变价格事实或交易硬门。
+
+### 30.4 人工 anchor 与晋级
+
+RSH-031 可提出按市场状态、事件类型、板高、题材阶段分层的历史涨停域人工 anchor，但标注工具、prediction/human 分离、gold 完成度门、threshold/Precision/Recall/成本校准仍统一归 RSH-030。Jev 预标不得写入 human。
+
+任何 Jev 历史语义特征若想进入猎场，仍和普通因子一样经过 point-in-time、matched baseline、walk-forward、ablation、multiple-testing、成本/可成交及最近 untouched holdout；通过后也只先作为 challenger/shadow。
+
+### 30.5 禁止
+
+- 让 Jev 直接回答“某股明天涨停概率”并用于生产排序；
+- 用最终连板高度、后续涨幅或后来新闻反向生成早期语义；
+- 把 Jev confidence 当策略胜率；
+- 让 Jev 调交易硬门、仓位、权限、证券规则或策略准入；
+- 因为 Jev 能把赢家故事解释得更顺，就宣称起爆前识别能力提升。
