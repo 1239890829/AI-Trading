@@ -1529,6 +1529,8 @@ def check_decision_propagation() -> list[str]:
         DOCS / "summary/system-final-blueprint.md",
         DOCS / "summary/ai-evolution.md",
         DOCS / "summary/architecture-design.md",
+        DOCS / "summary/pick-signal-chain.md",
+        DOCS / "summary/review-governance.md",
     )
     for path in version_surfaces:
         if version not in _read(path):
