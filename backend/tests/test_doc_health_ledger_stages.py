@@ -74,9 +74,12 @@ def test_real_ledger_has_no_stage_conflict():
 def test_active_collaboration_entry_does_not_pin_retired_feature_branch():
     root = Path(__file__).resolve().parents[2]
     active_surfaces = [
+        root / "AGENTS.md",
+        root / "docs" / "INDEX.md",
         root / "docs" / "handoff.md",
         root / "docs" / "collaboration-workflow.md",
         root / "skills" / "ashare-ledger-continue" / "SKILL.md",
+        root / "skills" / "ashare-task-handoff" / "SKILL.md",
     ]
     retired_markers = (
         "codex/collaboration-runtime-state",
