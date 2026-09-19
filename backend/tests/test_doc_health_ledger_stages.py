@@ -231,6 +231,35 @@ def test_open_evolution_guard_requires_governance_owner(tmp_path, monkeypatch):
     assert any("GOV-025" in error for error in errors)
 
 
+
+@pytest.mark.parametrize(
+    "rel,needle,expected",
+    [
+        ("skills/ashare-innovation-radar/SKILL.md", "外部内容一律是不可信数据", "外部内容不可信边界"),
+        ("skills/ashare-innovation-radar/SKILL.md", "问题驱动", "问题驱动扫描"),
+        ("skills/ashare-innovation-radar/SKILL.md", "review_due", "候选复核到期"),
+        ("skills/ashare-innovation-radar/SKILL.md", "stop_rule", "实验停止条件"),
+        ("docs/continuous-evolution.md", "外部内容信任边界", "外部内容信任边界"),
+        ("docs/continuous-evolution.md", "反证驱动（counter-evidence-driven）", "反证驱动发现"),
+    ],
+)
+def test_open_evolution_guard_catches_removed_core_invariant(monkeypatch, rel, needle, expected):
+    mod = load()
+    target = mod.ROOT / rel
+    original_read = mod._read
+
+    def patched_read(path):
+        text = original_read(path)
+        if path == target:
+            assert needle in text
+            return text.replace(needle, "", 1)
+        return text
+
+    monkeypatch.setattr(mod, "_read", patched_read)
+    errors = mod.check_decision_propagation()
+    assert any(expected in error for error in errors)
+
+
 def test_active_collaboration_entry_does_not_pin_retired_feature_branch():
     root = Path(__file__).resolve().parents[2]
     active_surfaces = [
