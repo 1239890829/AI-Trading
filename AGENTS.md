@@ -939,6 +939,7 @@ curl 先行 → 记录字段口径与类型陷阱 → 多采样找规律 → fix
   `git ls-files --others --exclude-standard` 逐项分类；正常 staged A/M/D 是预期，不要求 status 为空。
   提交后核实际 commit 文件集与本任务工作区干净，禁止用 `git add -A` 吸收无关改动或清用户脏树。
 - 禁止提交 `.env`、API Key、Token、密码、私有数据、缓存文件或无关构建产物；Public 仓库还禁止提交个人 home 绝对路径、本地邮箱/机器名。`public_repo_scan.py` 为 required CI 的组成部分，不得通过豁免/删除扫描器来绕过。
+- **npm 依赖安全**：收到 Dependabot/npm audit 告警时，优先做可验证的最小安全补丁；禁止直接 `npm audit fix --force`。本机 npm 默认镜像 `npmmirror` 不实现 audit API，安全复核须显式 `npm audit --registry=https://registry.npmjs.org`。有 lock/shrinkwrap 的子项目必须同步锁文件并用 `npm ci` 重新验证；无 lock 的归档示例至少用一次性临时 lock + 官方 registry audit 证明修复后无已知漏洞。
 - 使用清晰的英文 commit message。
 - 完成后必须提交修改，将功能分支推送到 GitHub，并设置 upstream。
 - 如果任务需求存在会明显影响实现方案的歧义，应先询问用户；否则直接完成开发、测试、提交和推送。
