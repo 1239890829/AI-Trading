@@ -202,15 +202,15 @@ Jev 只可帮助 bounded triage、去重、相关性/候选路由等窄判断；
 | 候选 | 当前定位 | 可能价值 | 当前不直接采用的原因 |
 |---|---|---|---|
 | TypeSafe/Jev | 已部分采用，继续 E3/E4 | bounded semantic verify / 条件能力路由 | human gold 与长期 A/B 未完成 |
-| Microsoft RD-Agent + Qlib | SHORTLISTED / LAB 参考 | 自动“研究→开发→反馈”、因子/模型研究闭环 | 上游 2026 仍在处理 holdout 隔离、退市证券、环境与反馈治理；必须按 A股口径独立复现 |
+| Microsoft RD-Agent + Qlib | SHORTLISTED / LAB 参考 | 官方项目提供自动“研究→开发→反馈”和量化 factor/model 共优化范式；作者报告的收益只作 E0/E1 主张 | 当前没有本项目 A股同条件证据；先固定版本、数据和 baseline 独立复现，作者自报 benchmark 不作为准入结论 |
 | OpenHands | WATCH / 工程参考 | Agent profile、secret/MCP scope、每轮成本/自动化治理模式 | 与现有 Codex/ChatGPT 职责重叠；不为框架完整度重建执行栈 |
 | MCP Registry | WATCH / 发现基础设施参考 | 标准化 MCP 发现/发布/校验 | 项目当前无需为“发现工具”引入新的运行依赖 |
 | A2A | WATCH | Agent 跨系统互操作标准 | 当前账本短提示已足够；没有真实跨组织 Agent 互操作需求 |
 | QuantConnect LEAN | REFERENCE | 成熟执行/回测架构、walk-forward 等方法参考 | A股现有架构不应为对齐框架整体迁移 |
-| vectorbt | REFERENCE/WATCH | 快速研究、walk-forward 与防泄漏实践线索 | 相关改进仍可能处于 PR/演进中；先吸收方法，不默认换框架 |
-| Chronos-2 / TimesFM 等 TSFM | RESEARCH WATCH | 多变量/相关序列的预训练时序研究 | 2026 金融 benchmark 显示提升依赖数据关系且对随机游走的增量可能很小；必须目标域消融 |
+| vectorbt | REFERENCE/WATCH | 快速研究/参数扫描方法与既有 vbt_bridge 对照 | 本仓只允许其作粗筛/实验辅助；A股 T+1/涨跌停/费用/可成交真口径仍须由现有验证链复核，不默认换框架 |
+| Chronos / TimesFM 等 TSFM | RESEARCH WATCH | 预训练时间序列模型可作为传统/现有模型之外的研究假设 | 跨域公开 benchmark 不能证明 A股选股/择时增量；必须冻结数据、做 Champion 对照、walk-forward 与消融 |
 | FinGPT | WATCH | 开源金融 LLM / 数据与微调方法参考 | 需要先证明相对当前 DeepSeek/Jev/确定性链有新增任务价值 |
-| Finance Agent Benchmark | REFERENCE | 金融 Agent 评测任务设计 | 历史模型成绩不代表当前模型或 A股效果，只吸收 benchmark 结构 |
+| 金融 Agent benchmark / task suite | REFERENCE | 可借鉴任务拆分、ground-truth 与失败类型设计 | 只吸收评测结构；任何公开模型名次都不等于当前模型版本或 A股系统效果 |
 
 首批样本的作用是证明：雷达既能发现“可能改变架构”的 Jev/RD-Agent，也会主动把 A2A、TSFM 等保留为 WATCH/REFERENCE，而不是把热度转换成工程任务。
 
