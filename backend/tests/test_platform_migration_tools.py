@@ -40,7 +40,6 @@ def test_trash_round_trip_without_following_links(tmp_path, kind):
     assert not source.exists() and not source.is_symlink()
     assert trash.restore(root, batch) == source
     assert trash.fingerprint(source) == before and outside.read_text() == "unchanged"
-    assert not (root / ".workbuddy").exists()
 
 
 @pytest.mark.parametrize("case", ["outside", "sibling_prefix", "root", "git", "backups", "trash", "parent_link"])
@@ -159,7 +158,6 @@ def test_research_output_destination_is_inside_neutral_artifacts(tmp_path, name)
     target = eval(compile(ast.Expression(candidates[0].value), name, "eval"),
                   {"Path": Path, "__file__": str(tmp_path / "backend/scripts" / name)})
     assert target.is_relative_to(tmp_path / "artifacts/research")
-    assert '".workbuddy"' not in source
 
 
 def test_patch_archiving_stays_review_only_and_protects_new_artifacts(tmp_path, monkeypatch):
@@ -169,4 +167,3 @@ def test_patch_archiving_stays_review_only_and_protects_new_artifacts(tmp_path, 
     path = ce._archive_patch("review fixture", "migration-smoke")
     assert path.read_text() == "review fixture\n"
     assert ce._is_protected("backend/app/artifacts/proposal.py")
-    assert not (tmp_path / ".workbuddy").exists()

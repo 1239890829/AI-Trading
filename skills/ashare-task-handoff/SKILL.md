@@ -13,7 +13,7 @@ description: 把本轮执行、审核、重大决策传播核对和下一步写�
 4. 方案确需变化才改原 `implementation-plan.md`；任务状态只在 stage；handoff 不复制整套方案。历史基线不因新方案被批量重写，取代关系写 plan-registry。
 5. 先核原位更新、提交/推送和远端可读，再报告本轮已交付。用户不复制任务卡、提交号或下载新 handoff；回写失败时另一端不能只按聊天结论执行。
 6. 详细日志只保留双方可读的必要脱敏**紧凑证据**；密钥、私人持仓、原始私人聊天不进入共享仓库。完整 pytest/worktree/clone 副本不得默认永久留在 artifacts。
-7. 交接前按 W08/GOV-026 做 workspace hygiene：记录保留项及原因，清理已结束且可再生的项目临时 clone/worktree、pytest basetemp、构建/解释器缓存和无必要的大型测试沙箱；跨项目/未知、运行中、脏工作树、业务数据、唯一恢复证据只报告不删。自动 gate 未落地前人工核清，落地后附 check/cleanup 结果。
+7. 交接前按 W08/GOV-026 做 workspace hygiene：记录保留项及原因，清理已结束且可再生的项目临时 clone/worktree、pytest basetemp、构建/解释器缓存和无必要的大型测试沙箱；跨项目/未知、运行中、脏工作树、业务数据、唯一恢复证据只报告不删。必须运行 `python3 scripts/workspace-hygiene.py` 并附结果；应用专属项目目录或对应隐藏规则存在时不得交接为完成。
 8. 审核代码提交与后续协调文档提交分开；最终合并仍要准确候选 SHA 的网页审核/完整 CI。作者自检不冒充独立审核。
 9. 编号不复用；退出/合并有依据和去向。下一轮始终先从最新 `master` 调用 `ashare-ledger-continue`，先算最低未闭环主门，再按角色/P0-P2/门内序选一刀。handoff 允许实施时，用户说“继续任务/继续”只授权该一刀；若要跨门，必须已有网页写入的 `CROSS_GATE_EXCEPTION`，Skill/Codex 不得自行创建。
 

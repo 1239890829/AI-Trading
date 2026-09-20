@@ -73,7 +73,7 @@
 - **实际运行评估**：结构性评估（2026-09-13）：文件树核验 28 文件、`deep-research-workflow` / `evidence-ladder` 正文抽读——**内容是真方法论非水词**；skill 本体未装（我们自己就是 agent，装提示词包无意义）
 - **可借鉴**：①「主题→系统变化→受约束环节」三段转换；②八层产业链 checklist；③稀缺层信号堆叠（含「市场仍按旧行业归类公司」的错误定价视角——六条中最值得自动化的一条）；④证据阶梯的「候选证据标准」与「弱证据不得单独支撑头部候选」；⑤「点名排名低的热门方向并说明为什么」的完成标准（与红线 3 同频）
 - **使用轨迹**：方法论已提炼进 [[KB-STOCK-34]]，由 `skills/ashare-daily-review/SKILL.md` 消费；旧安装包的 28 个非 Git 文件已逐一审阅并核对恢复点，保留原件供追溯，旧 MEMORY §8 调用指针已失效。固定来源/公司配额及未经验证的评分权重不进入策略；「卡点」因子仍归 §6.3 P2-34。
-- **结论**：保留方法论参考，因子化前须独立实证；完整目录退出状态归账本 §6.0 `GOV-018` 与 `platform-directory-migration.md`，本条不宣称第三方包已迁入项目运行链。
+- **结论**：保留方法论参考，因子化前须独立实证；旧平台目录已于 2026-09-20 退出，历史迁移证据见 `docs/archive/platform-directory-migration-20260920.md`；第三方包本体不进入项目运行链。
 
 ### wbh604/UZI-Skill — 6.9k★ Python（agent skill 插件，A 股全流程分析，用户供仓）
 - **用途**：单票 22 维数据采集（akshare/efinance/tushare/baostock 多源 failover）→ 22 种华尔街模型 → 66 位模拟投资人评委（规则引擎）→ 600KB HTML 报告；14+ slash 命令（含 `scan-trap` 杀猪盘排查）
@@ -146,7 +146,7 @@ Vibe-Trading、qlib、OpenBB、quantskills、zvt
 > 分组新增 10 个量化开源仓库。甄别：freqtrade/qlib/vnpy(=VeighNa) 三仓 08-30~09-03 已实测深评
 > （audit-frameworks / audit-qlib-quantmind / trading-analysis），本次**复验采纳清单落地状态**；
 > 其余 7 仓为**首次评估**——6 仓实跑冒烟 + 1 仓（Lean）无 .NET/Docker 做架构级。
-> 逐仓完整笔记：`.workbuddy/artifacts/repo-eval-20260913/findings/*.md`（7 份，含跑通证据/适配核查/License）。
+> 逐仓完整笔记：`docs/archive/repo-eval-20260913/*.md`（7 份，含跑通证据/适配核查/License）。
 
 | 仓库 | 状态 | 一句话结论 |
 |---|---|---|
@@ -185,5 +185,5 @@ Vibe-Trading、qlib、OpenBB、quantskills、zvt
 
 - **2026-09-09 首轮**：检索 10 组关键词 → 15 候选（≥1000★）→ 收录 8 仓（去重 trading 分组后）→ 深评 3（go-stock 编译通过/tick-stock-panel 装机通过/leek-fund 结构性）→ 浅评 5。经验 6 条。运行受限诚实记录：FinGPT 需 GPU、leek-fund 需 IDE 环境、其余需 LLM 多模型配置——均标注未实跑部分。
 - **2026-09-13 用户供仓批次**：用户指路 2 仓（serenity-skill 4k★ / UZI-Skill 6.9k★，非发现轮检索产物）→ 结构性评估（文件树核验 + 方法论/数据源文档正文抽读，均未实跑——实跑成本与形态不匹配已如实标注）→ serenity 方法论提炼进 [[KB-STOCK-34]] 并登记 P2-34（卡点因子）；UZI 两项经验登记 P2-35（杀猪盘排查）/ P2-36（估值维度），本体裁定不接入运行时。**新增一条来源类型：用户直接供仓**——评估纪律不变（结构核验优先于 README 宣称），收录门槛不变（两仓均 ≥1000★ 达标）。
-- **2026-09-13 装机轮（用户指示：「你帮我装就好啦」「我不会在 claude 主动用的，可以让它复盘的时候按需去用」）**：两仓克隆进 `.workbuddy/skills/`（遵守 MEMORY 第一规则「一切进项目目录」）；UZI 建独立 venv（Python 3.11，不污染后端环境）+ 依赖全装 + **端到端冒烟通过**（lite+snapshot 跑 600519：wave1 61.8s / 22 维缓存复用 / 报告收盘价与本仓交叉验证一致）；serenity 自带结构自校验通过。注册三处消费方：`ashare-daily-review` SKILL.md「按需深度研究工具」段（复盘按需）· MEMORY.md §8（会话入口）· 本台账使用轨迹。**诚实校准**：官方宣称 lite 1-2 分钟，本机首跑 ≈15 分钟（akshare 冷启动 + 每维 90s 上限）——登记为「盘后可用、盘中禁用」。
+- **2026-09-13 装机轮（历史）**：当时曾本地安装 UZI/Serenity 并做过冒烟；该安装只证明当时版本可运行，不构成永久运行依赖。2026-09-20 平台目录退休时，两套第三方整仓不再迁入项目：Serenity 方法论继续由 [[KB-STOCK-34]] 承接，UZI 已提炼的 P2-35/P2-36 经验继续留在 KB，本体按“已评估、不接运行时”处理。原安装与冒烟细节可从最终平台恢复包追溯。
 - **2026-09-14 经验反馈轮**：读筛选经验 → 检索 6 组词（涨停 预警 / 连板 监控 / A股 agent llm / dragon tiger stock / stock screener llm / 龙虎榜 数据）→ ≥1000★ 命中 4 仓 → 去重 2 已收录 → **真新增 2 仓**：Vibe-Research 2.5k★ ⏳（tarball 下载替代超时 git clone；data-access 测试实跑 **320 passed**）+ aiagents-stock 1.9k★ ❌（无 LICENSE 一票否决）。先 grep archive 确认两仓无历史深评结论才做评估（未重复劳动）。经验 +3（条目 7/8/9）。

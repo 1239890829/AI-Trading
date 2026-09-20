@@ -89,7 +89,7 @@ from typing import Any, Iterable, Sequence
 
 #: 仓库根（`backend/app/picks/kb_routing.py` → `parents[3]`）。
 #: 与 `app/services/evolution.py:64` 同口径；`docs/**` 属 git 跟踪面 ⇒ CI 检出里也在
-#: （[[KB-ENG-95]]：判定面必须等于 CI 检出内容，故**不得**指向 `data/`、`.workbuddy/`）。
+#: （[[KB-ENG-95]]：判定面必须等于 CI 检出内容，故**不得**指向 `data/`、`artifacts/` 等本地忽略资产）。
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 #: 知识库总索引（状态表与⏳候选池的唯一真相源）。

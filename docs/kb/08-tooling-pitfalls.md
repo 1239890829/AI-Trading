@@ -81,6 +81,6 @@
 - `/tmp/start_backend_8000.sh` 被临时目录清理导致「启动失败」假象。
 - **正确做法**：脚本内容固定（cd backend && exec uvicorn），被清就重建；更稳的做法是记进 deployment.md 用时重写。
 
-### KB-ENG-15 memory 日志写入用绝对路径
-- 后台/复合命令里相对路径 `>> .workbuddy/memory/...` 因 cwd 漂移写错位置（09-08 实际发生）。
-- **正确做法**：一律从仓库根动态解析绝对路径，例如 `<repo>/.workbuddy/memory/YYYY-MM-DD.md`；文档中不得固化个人 home 目录或机器用户名。
+### KB-ENG-15 本地日志写入须锚定仓库根
+- 后台/复合命令里对本地日志使用未锚定相对路径，曾因 cwd 漂移写错位置（09-08 实际发生）。
+- **正确做法**：从仓库根动态解析，例如 `<repo>/artifacts/logs/YYYY-MM-DD.md`；文档和脚本不得固化个人 home 目录或机器用户名。

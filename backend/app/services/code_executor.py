@@ -38,8 +38,10 @@ DENIED_SUBSTRINGS = (
 
 #: 受保护目录段（**任意层级**出现即命中）：CI 工作流、治理、文档、技能、迁移、测试
 _PROTECTED_DIR_SEGMENTS = frozenset({
-    ".github", ".gitlab", ".circleci", ".workbuddy", ".workbuddy-ai", "artifacts",
-    "docs", "skills", "migrations", "tests",
+    ".github", ".gitlab", ".circleci",
+    ".claude", ".claude-plugin", ".cursor", ".cursor-plugin", ".codex",
+    ".opencode", ".gemini", ".vscode", ".idea", ".windsurf", ".cline", ".aider", ".agents",
+    "artifacts", "docs", "skills", "migrations", "tests",
 })
 
 #: 受保护文件名（精确）

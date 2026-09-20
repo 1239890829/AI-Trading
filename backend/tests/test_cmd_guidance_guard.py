@@ -31,7 +31,7 @@
 ## 扫描面
 
 跳过**只读历史快照与本地痕迹**：`.git` / `node_modules` / `.next` / `backend/.venv` /
-`data` / `docs/archive` / `.workbuddy` / 各类缓存。其余文本文件全扫。
+`data` / `docs/archive` / `artifacts` / 各类缓存。其余文本文件全扫。
 
 ## 与 GOV-010 的关系
 
@@ -63,15 +63,15 @@ FLAG = "--reload"
 
 #: 不扫的目录（只读快照 / 依赖 / 本地痕迹 / 缓存）
 SKIP_DIRS = {
-    ".git", "node_modules", ".next", ".venv", "data", "archive", ".workbuddy", "artifacts",
+    ".git", "node_modules", ".next", ".venv", "data", "archive", "artifacts",
     "__pycache__", ".pytest_cache", ".turbo", "dist", "build", ".ruff_cache",
     ".mypy_cache", "coverage", "htmlcov", "site-packages", "vendor",
 }
 
 #: 名称**前缀**命中的目录一律剪枝 —— 本仓存在编号变体与并行环境，
 #: 逐个枚举必然漏：`backend/.venv-research`（第二个 venv，实测 **26508** 个候选文件 =
-#: 剪枝前扫描量的 **97%**，把本守卫从 <1s 拖到 80s）、`.workbuddy-ai` 等。
-SKIP_DIR_PREFIXES = (".venv", ".workbuddy")
+#: 剪枝前扫描量的 **97%**，会把本守卫从 <1s 拖到 80s；本地 artifacts 同样不进扫描面。
+SKIP_DIR_PREFIXES = (".venv",)
 
 #: 只看文本类文件（二进制/大产物不读）
 TEXT_SUFFIXES = {
@@ -156,15 +156,15 @@ def test_bare_mention_without_command_is_ignored(tmp_path: Path, line: str) -> N
     assert find_violations(tmp_path) == []
 
 
-def test_skips_archive_and_workbuddy(tmp_path: Path) -> None:
-    """`docs/archive/` 与 `.workbuddy/` 是只读快照 / 本地痕迹 ⇒ 不扫。
+def test_skips_archive_and_local_artifacts(tmp_path: Path) -> None:
+    """`docs/archive/` 与 `artifacts/` 是历史快照 / 本地产物 ⇒ 不扫。
 
     夹具用**真实存在**的 `docs/archive/` 文件名：判据本身只看**目录名**，
     而写一个不存在的 `docs/archive/xxx.md` 会被 `doc-health` 的 F 项
     （代码注释死引用）判红 —— 那是真阳性的假阳性，不如直接用真名绕开。
     """
     bad = "uvicorn app.main:app --reload --port 8000\n"
-    for rel in ("docs/archive/plan-review.md", ".workbuddy/memory/2026-09-14.md", "node_modules/pkg/a.md"):
+    for rel in ("docs/archive/plan-review.md", "artifacts/logs/2026-09-14.md", "node_modules/pkg/a.md"):
         p = tmp_path / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(bad, encoding="utf-8")

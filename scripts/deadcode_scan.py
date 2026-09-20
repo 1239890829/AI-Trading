@@ -83,7 +83,7 @@ def tracked_files(files: dict[str, str] | None) -> list[str]:
     names = []
     for raw in out.stdout.split(b"\0"):
         rel = raw.decode("utf-8", "replace")
-        if not rel or rel.startswith((".workbuddy", "artifacts/")):
+        if not rel or rel.startswith("artifacts/"):
             continue
         base = rel.rsplit("/", 1)[-1]
         if base in SKIP_FILES or rel.endswith(SKIP_SUFFIX):

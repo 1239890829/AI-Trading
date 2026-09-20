@@ -426,7 +426,7 @@
 - **日期**：2026-09-15（外部审计 O1；账本 `BUG-003`）。
 - **背景**：原执行器在门禁通过后**直接 `git merge --ff-only` 合回主分支**——应用内的 LLM 因此
   具备「自己改代码并落地」的完整能力，没有任何人工确认环节。
-- **决策**：执行器**只提议**，产出 = patch（归档 `.workbuddy/evolution-patches/`）
+- **决策**：执行器**只提议**，产出 = patch（归档 `artifacts/evolution-patches/`）
   + `evolution/*` 隔离分支 commit + 审计记录；**移除应用内自动合并**，不推送。
   落地一律走 `codex/*` → PR → 完整 CI → 网页版审查。返回值显式 `merged=False` / `review_required=True`。
 - **七层判据**（任一层拒绝即终止）：① 白名单（仅 `backend/app/**/*.py`）
