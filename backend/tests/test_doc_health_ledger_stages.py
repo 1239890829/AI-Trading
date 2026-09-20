@@ -110,35 +110,35 @@ def test_u49_proactive_discovery_guard_detects_missing_review_stage(tmp_path, mo
     (root / "skills" / "ashare-task-handoff").mkdir(parents=True)
 
     (docs / "implementation-plan.md").write_text(
-        "# AShare AI Trader 实施校准方案 v9.10\nU49 Proactive Discovery Gate\n"
+        "# AShare AI Trader 实施校准方案 v9.11\nU49 Proactive Discovery Gate U50 DEGRADED_FULL_CONTROL\n"
     )
-    (docs / "INDEX.md").write_text("v9.10 jev-integration.md U49 主动缺陷发现门 Preflight Review\n")
+    (docs / "INDEX.md").write_text("v9.11 jev-integration.md U49 主动缺陷发现门 Preflight Review U50 降级全权闭环\n")
     (docs / "handoff.md").write_text(
-        "v9.10 jev-integration.md U01–U49 U49 主动审计回执 Preflight Review\n"
+        "v9.11 jev-integration.md U01–U50 U49 主动审计回执 Preflight Review U50 降级授权回执 DEGRADED_FULL_CONTROL\n"
     )
     (docs / "plan-registry.md").write_text(
-        "重大决策传播契约（防遗漏） 已更新 不适用 用户没问还有没有问题\n"
+        "重大决策传播契约（防遗漏） 已更新 不适用 用户没问还有没有问题 DEGRADED_FULL_CONTROL DegradedRelease\n"
     )
     (docs / "collaboration-workflow.md").write_text(
-        "plan-registry.md U49 主动缺陷发现门 Preflight Review\n"
+        "plan-registry.md U49 主动缺陷发现门 Preflight Review U50 DEGRADED_FULL_CONTROL DegradedRelease\n"
     )
-    (docs / "stages" / "w08-governance.md").write_text("Proactive Discovery Gate Preflight Review\n")
+    (docs / "stages" / "w08-governance.md").write_text("Proactive Discovery Gate Preflight Review U50 DEGRADED_FULL_CONTROL DegradedRelease\n")
     (root / "AGENTS.md").write_text(
-        "v9.10 jev-integration.md U49 主动缺陷发现门 Preflight Review\n"
+        "v9.11 jev-integration.md U49 主动缺陷发现门 Preflight Review DEGRADED_FULL_CONTROL DegradedRelease\n"
     )
     (root / "skills" / "living-system-governor" / "SKILL.md").write_text(
-        "主动缺陷发现门（Proactive Discovery Gate） Preflight Review\n"
+        "主动缺陷发现门（Proactive Discovery Gate） Preflight Review DEGRADED_FULL_CONTROL DegradedRelease\n"
     )
     (root / "skills" / "ashare-ledger-continue" / "SKILL.md").write_text(
         " ".join([
             "jev-integration.md", "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
             "docs/implementation-plan.md", "docs/ai/jev-integration.md",
-            "docs/retro-and-gaps.md", "docs/stages/", "U49 主动缺陷发现门", "Preflight", "Review",
+            "docs/retro-and-gaps.md", "docs/stages/", "U49 主动缺陷发现门", "Preflight", "Review", "DEGRADED_FULL_CONTROL", "DegradedRelease",
         ])
     )
     # 其它传播面完整，只故意删交接 Skill 的 Review，模拟两阶段所有权静默退化。
     (root / "skills" / "ashare-task-handoff" / "SKILL.md").write_text(
-        "plan-registry.md U49 主动审计回执 Preflight\n"
+        "plan-registry.md U49 主动审计回执 Preflight DEGRADED_FULL_CONTROL DegradedRelease\n"
     )
 
     monkeypatch.setattr(mod, "ROOT", root)
@@ -147,6 +147,25 @@ def test_u49_proactive_discovery_guard_detects_missing_review_stage(tmp_path, mo
     errors = mod.check_decision_propagation()
     assert any(
         "ashare-task-handoff/SKILL.md" in error and "缺 Review" in error
+        for error in errors
+    )
+
+
+def test_u50_degraded_full_control_guard_detects_missing_release_surface(monkeypatch):
+    mod = load()
+    target = mod.ROOT / "scripts/audit/release_check.py"
+    original_read = mod._read
+
+    def patched_read(path):
+        text = original_read(path)
+        if path == target:
+            return text.replace("DegradedRelease", "MissingDegradedStage")
+        return text
+
+    monkeypatch.setattr(mod, "_read", patched_read)
+    errors = mod.check_decision_propagation()
+    assert any(
+        "scripts/audit/release_check.py" in error and "U50 降级全权闭环传播缺失" in error
         for error in errors
     )
 
@@ -428,13 +447,13 @@ def test_decision_propagation_detects_stale_handoff_requirement_range(monkeypatc
         if path == target:
             # 以真实当前最大 U 编号为正样本，再只注入“一轮落后”的反例。
             # 不把具体旧版本 U48 永久固化成正确值，否则下一次新增 U 会自锁。
-            assert "U01–U49" in text
-            return text.replace("U01–U49", "U01–U48", 1)
+            assert "U01–U50" in text
+            return text.replace("U01–U50", "U01–U49", 1)
         return text
 
     monkeypatch.setattr(mod, "_read", patched_read)
     errors = mod.check_decision_propagation()
-    assert any("累计要求范围 U01–U48" in error and "U49" in error for error in errors)
+    assert any("累计要求范围 U01–U49" in error and "U50" in error for error in errors)
 
 
 def test_decision_propagation_rejects_ready_handoff_with_pending_merge_text(monkeypatch):
