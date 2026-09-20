@@ -466,7 +466,7 @@ async def watch_ledger(
 async def opportunity_learning(
     date: str | None = Query(default=None, description="YYYY-MM-DD，缺省=北京今天"),
 ) -> dict:
-    """个股机会漏斗与结果标签覆盖率（只读，不输出买卖建议）。"""
+    """个股机会漏斗与结果标签覆盖率；selected 旧口径与全漏斗分母分开（只读）。"""
     from app.picks.opportunity_learning import learning_summary
 
     target = date or beijing_now().date().isoformat()
@@ -493,10 +493,11 @@ async def opportunity_scorecard(
     strategy_version: str | None = Query(default=None, max_length=64, description="策略版本；缺省用当前版本"),
     feature_version: str | None = Query(default=None, max_length=64, description="特征版本；缺省用当前版本"),
 ) -> dict:
-    """当日机会决策记分卡：审计行与独立样本分开，D0 只作成本调整代理。
+    """当日机会决策记分卡：审计行、全漏斗分母与 selected 独立样本分开。
 
-    Top-K 必须绑定单一 run/as-of 并按 symbol 去重；日级判据按 symbol×trade_date
-    去重。`d0_close` 受 A 股 T+1 限制，不得解释为可实现净收益。
+    Top-K 必须绑定单一 run/as-of 并按 symbol 去重；日级 selected 判据按 symbol×trade_date
+    去重。全漏斗 market label 未齐时 verdict 为 ``incomplete_denominator``，不能用 selected
+    样本先行宣称效果。`d0_close` 受 A 股 T+1 限制，不得解释为可实现净收益。
     """
     from app.picks.opportunity_learning import (
         FEATURE_VERSION, OUTCOME_HORIZON, STRATEGY_VERSION,

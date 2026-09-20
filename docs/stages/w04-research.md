@@ -100,8 +100,8 @@
 - **方案依据**：主方案 §9、W04
 - **范围**：延续候选/硬门/精排/通知快照；补 D0/D1/D3/D5、MFE/MAE、漏选/负例/弃权/未成交与可见时间；U47 将首见参考轨、可执行触发轨与实际 shadow fill 轨分开，并增加后续涨停/首次封板的结果标签及提前量，但结果标签不得反向参与当时特征。
 - **验收**：股票池、公司行动与版本点时正确；标签独立，分母包含未入选与失败，复盘能回指决定。
-- **证据**：既有 append-only 快照、离线重放、d0_close 标签已交付；不能重复建同类库。
-- **下一步**：刷新真实覆盖与缺失情况；吸收事件/题材/跨库候选的可用性，不自动回写生产权重。
+- **证据**：既有 append-only 快照、离线重放、d0_close 标签已交付；不能重复建同类库。2026-09-20 降级全权切片复核确认 selected-only outcome 会把 rejected/unknown 从结果分母中静默消失，并使旧 `label_coverage=1.0` 可被误读为全漏斗 100%；同时 pending outcome 在真正评估前的默认 `fill_state=ok` 会提前暗示可成交。当前候选已改为：每个 funnel snapshot 都建同表 outcome identity；selected/actionable 行进入实时 `pending`，rejected/unknown 进入 `deferred/not_actionable`，不扩大盘后逐股外部 close 请求；显式离线回填可给 deferred 记录市场结果但不计可执行净收益；scorecard 新增 full-funnel denominator coverage，未齐时 verdict 强制 `incomplete_denominator`；同一旧 run 重放只补缺失 outcome、不重写或复制 snapshot。仓内 RSH-026 核心、盘后复盘、API、通知/执行与迁移回归均通过。当前远程 Mac 没有可核的长期生产运行库，因此本轮**不声称**真实历史覆盖比例已测出。
+- **下一步**：本轮先交付“全漏斗 outcome 身份 + denominator gate + 跨版本自愈”纵切；后续继续补真实运行库覆盖盘点、D1/D3/D5、MFE/MAE、首次封板/time_to_limit 与公司行动/停牌/交易日版本化标签。真实覆盖未核前不进入 IMP-020 效果结论，也不自动回写生产权重。
 - **恢复**：保留原始样本和旧标签版本；错误派生标签另版重算。
 - **开工前置**：原始样本采集/标签协议可立即设计；不因整套执行快照尚未统一而停止积累。先标明现有数据的来源和不合格范围。
 - **效果说明**：相关 BUG-020 与 IMP-006 的输入/快照契约可信；标签成熟且有独立样本，才能讨论效果。

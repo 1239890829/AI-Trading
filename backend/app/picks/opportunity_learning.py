@@ -240,6 +240,14 @@ def _archived_change_pct(evidence: dict) -> float | None:
     return float(value) if _finite_number(value) else None
 
 
+def _selected_outcome_snapshot(stage: str, decision: str) -> bool:
+    """Whether this snapshot belongs to the realtime selected/actionable outcome lane."""
+    return (
+        (stage == "rank" and decision == "ranked")
+        or (stage == "notification" and decision in {"eligible", "notified", "suppressed"})
+    )
+
+
 def build_intraday_records(
     payload: dict, *, trade_date: str, as_of: datetime, kb_ids: Iterable[str] = (),
 ) -> tuple[str, list[dict]]:
@@ -447,16 +455,42 @@ def build_notification_records(
     return run_id, records
 
 
+def _new_outcome_label(snapshot_id: str, record: dict) -> OpportunityOutcomeLabel:
+    selected = _selected_outcome_snapshot(record["stage"], record["decision"])
+    return OpportunityOutcomeLabel(
+        snapshot_id=snapshot_id, horizon=OUTCOME_HORIZON,
+        target_date=record["trade_date"],
+        state="pending" if selected else "deferred", label="unknown",
+        reference_price=record.get("entry_price"),
+        fill_state="pending" if selected else "not_actionable",
+        reason=(
+            "等待收盘价" if selected
+            else f"全漏斗分母已登记；{record['stage']}:{record['decision']} 非实时动作样本，等待离线结果回填"
+        ),
+    )
+
+
 def archive_records(run_id: str, records: list[dict], session_factory=None) -> dict:
     """Persist a whole run atomically; rerunning the same run is idempotent."""
     sf = session_factory or get_session_factory()
     inserted = 0
+    outcomes_inserted = 0
     with sf() as db:
         existing = set(db.execute(
             select(OpportunityDecisionSnapshot.snapshot_id).where(
                 OpportunityDecisionSnapshot.run_id == run_id
             )
         ).scalars().all())
+        existing_outcomes = {
+            row.snapshot_id: row for row in db.execute(
+                select(OpportunityOutcomeLabel)
+                .join(OpportunityDecisionSnapshot,
+                      OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
+                .where(OpportunityDecisionSnapshot.run_id == run_id,
+                       OpportunityOutcomeLabel.horizon == OUTCOME_HORIZON)
+            ).scalars().all()
+        }
+        outcomes_repaired = 0
         for record in records:
             # 旧拍/补录仍须 append-only 保留；“当前最新”只在读侧按 as_of 决定，
             # 不能为防倒退而删除历史证据，否则离线回放与晚到数据会失真。
@@ -467,6 +501,25 @@ def archive_records(run_id: str, records: list[dict], session_factory=None) -> d
                 "evidence": evidence,
             }, 40)
             if snapshot_id in existing:
+                # Cross-version self-heal: legacy snapshots may predate full-funnel
+                # outcome identities. Replaying the exact run may attach the missing
+                # outcome row, but never rewrites or duplicates the snapshot itself.
+                existing_outcome = existing_outcomes.get(snapshot_id)
+                if existing_outcome is None:
+                    outcome = _new_outcome_label(snapshot_id, record)
+                    db.add(outcome)
+                    existing_outcomes[snapshot_id] = outcome
+                    outcomes_inserted += 1
+                elif (
+                    existing_outcome.state == "pending"
+                    and existing_outcome.labeled_at is None
+                    and existing_outcome.fill_state == "ok"
+                ):
+                    # Legacy ORM default claimed fillability before assessment. Pending
+                    # rows are mutable workflow state, so correct that false claim on
+                    # exact-run replay without touching snapshot evidence or labeled rows.
+                    existing_outcome.fill_state = "pending"
+                    outcomes_repaired += 1
                 continue
             row = OpportunityDecisionSnapshot(
                 snapshot_id=snapshot_id,
@@ -474,18 +527,20 @@ def archive_records(run_id: str, records: list[dict], session_factory=None) -> d
                 **{k: v for k, v in record.items() if k != "evidence"},
             )
             db.add(row)
-            if record["stage"] in ("rank", "notification") and record["decision"] in (
-                "ranked", "eligible", "notified", "suppressed",
-            ):
-                db.add(OpportunityOutcomeLabel(
-                    snapshot_id=snapshot_id, horizon=OUTCOME_HORIZON,
-                    target_date=record["trade_date"], state="pending", label="unknown",
-                    reference_price=record.get("entry_price"), reason="等待收盘价",
-                ))
+            # RSH-026: every funnel snapshot owns an outcome identity so rejected/unknown
+            # rows cannot disappear from the denominator. Only selected/actionable rows
+            # enter the realtime close-fetch lane; denominator-only rows stay deferred
+            # until an explicit offline backfill supplies the same market-close fact.
+            db.add(_new_outcome_label(snapshot_id, record))
             existing.add(snapshot_id)
+            existing_outcomes[snapshot_id] = None
             inserted += 1
+            outcomes_inserted += 1
         db.commit()
-    return {"run_id": run_id, "inserted": inserted, "records": len(records)}
+    return {
+        "run_id": run_id, "inserted": inserted, "outcomes_inserted": outcomes_inserted,
+        "outcomes_repaired": outcomes_repaired, "records": len(records),
+    }
 
 
 def archive_intraday_pipeline(payload: dict, *, trade_date: str, as_of: datetime | None = None,
@@ -635,20 +690,27 @@ def replay_run(run_id: str, session_factory=None) -> dict:
     return {"run_id": run_id, "records": len(items), "mismatches": mismatches, "items": items}
 
 
-def pending_symbols(trade_date: str, session_factory=None) -> set[str]:
+def pending_symbols(
+    trade_date: str, session_factory=None, *, include_deferred: bool = False,
+) -> set[str]:
+    """Symbols awaiting outcomes; realtime callers exclude denominator-only deferred rows."""
     sf = session_factory or get_session_factory()
+    states = ("pending", "deferred") if include_deferred else ("pending",)
     with sf() as db:
         rows = db.execute(
             select(OpportunityDecisionSnapshot.symbol)
             .join(OpportunityOutcomeLabel,
                   OpportunityOutcomeLabel.snapshot_id == OpportunityDecisionSnapshot.snapshot_id)
             .where(OpportunityDecisionSnapshot.trade_date == trade_date,
-                   OpportunityOutcomeLabel.state == "pending")
+                   OpportunityOutcomeLabel.state.in_(states))
         ).scalars().all()
     return set(rows)
 
 
-def label_trade_date(trade_date: str, close_by_symbol: dict[str, float], session_factory=None) -> dict:
+def label_trade_date(
+    trade_date: str, close_by_symbol: dict[str, float], session_factory=None, *,
+    include_deferred: bool = False,
+) -> dict:
     """Attach D0 close labels; missing closes stay pending and can be retried.
 
     `return_pct` 是 D0 信号方向毛变化；历史列 `net_return_pct` 是同一 D0 窗口的
@@ -657,6 +719,7 @@ def label_trade_date(trade_date: str, close_by_symbol: dict[str, float], session
     """
     sf = session_factory or get_session_factory()
     labeled = unknown = pending = 0
+    states = ("pending", "deferred") if include_deferred else ("pending",)
     with sf() as db:
         rows = db.execute(
             select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
@@ -664,9 +727,10 @@ def label_trade_date(trade_date: str, close_by_symbol: dict[str, float], session
                   OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
             .where(OpportunityDecisionSnapshot.trade_date == trade_date,
                    OpportunityOutcomeLabel.horizon == OUTCOME_HORIZON,
-                   OpportunityOutcomeLabel.state == "pending")
+                   OpportunityOutcomeLabel.state.in_(states))
         ).all()
         for outcome, snapshot in rows:
+            denominator_only = outcome.state == "deferred"
             reference = (
                 outcome.reference_price if _positive_finite(outcome.reference_price)
                 else snapshot.entry_price if _positive_finite(snapshot.entry_price)
@@ -676,9 +740,16 @@ def label_trade_date(trade_date: str, close_by_symbol: dict[str, float], session
                 evidence = json.loads(snapshot.evidence or "{}")
             except Exception:
                 evidence = {}
-            fill_state, fill_basis = assess_fill_state(
-                snapshot.symbol, _archived_change_pct(evidence)
-            )
+            if denominator_only:
+                fill_state = "not_actionable"
+                fill_basis = (
+                    f"{snapshot.stage}:{snapshot.decision} 为全漏斗分母样本；"
+                    "只记录市场结果，不计可执行净收益"
+                )
+            else:
+                fill_state, fill_basis = assess_fill_state(
+                    snapshot.symbol, _archived_change_pct(evidence)
+                )
             outcome.fill_state = fill_state
             if not _positive_finite(reference):
                 outcome.state = "unknown"
@@ -726,20 +797,38 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
             )
         ).scalars().all()
         outcomes = db.execute(
-            select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot.stage)
+            select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
             .join(OpportunityDecisionSnapshot,
                   OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
             .where(OpportunityDecisionSnapshot.trade_date == trade_date)
         ).all()
     stage_counts = Counter(s.stage for s in snapshots)
     decision_counts = Counter(f"{s.stage}:{s.decision}" for s in snapshots)
-    state_counts = Counter(o.state for o, _stage in outcomes)
-    fill_counts = Counter(o.fill_state for o, _stage in outcomes)
+    state_counts = Counter(o.state for o, _snapshot in outcomes)
+    fill_counts = Counter(o.fill_state for o, _snapshot in outcomes)
     # KB 引用状态分布（蓝图 §5）：把「KB 尚未接入选股运行时」这件事**变成可读出的数**，
     # 而不是靠读代码推断——现状应全为 `not_consulted`（+ 迁移前的 `legacy`）。
     kb_ref_counts = Counter(_kb_ref_state(s.kb_refs) for s in snapshots)
-    eligible = len(outcomes)
-    labeled = state_counts.get("labeled", 0)
+    selected_outcomes = [
+        (outcome, snapshot) for outcome, snapshot in outcomes
+        if _selected_outcome_snapshot(snapshot.stage, snapshot.decision)
+    ]
+    eligible = len(selected_outcomes)
+    labeled = sum(1 for outcome, _snapshot in selected_outcomes if outcome.state == "labeled")
+    funnel_symbols = {row.symbol for row in snapshots}
+    outcome_symbols = {snapshot.symbol for _outcome, snapshot in outcomes}
+    labeled_symbols = {
+        snapshot.symbol for outcome, snapshot in outcomes
+        if outcome.state == "labeled" and _finite_number(outcome.return_pct)
+    }
+    missing_outcome_symbols = sorted(funnel_symbols - outcome_symbols)
+    unlabeled_symbols = sorted(funnel_symbols - labeled_symbols)
+    funnel_opportunities = {(row.run_id, row.symbol) for row in snapshots}
+    outcome_opportunities = {(snapshot.run_id, snapshot.symbol) for _outcome, snapshot in outcomes}
+    labeled_opportunities = {
+        (snapshot.run_id, snapshot.symbol) for outcome, snapshot in outcomes
+        if outcome.state == "labeled" and _finite_number(outcome.return_pct)
+    }
     return {
         "trade_date": trade_date,
         "snapshots": len(snapshots),
@@ -752,9 +841,35 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
         "fill_states": dict(sorted(fill_counts.items())),
         "kb_ref_states": dict(sorted(kb_ref_counts.items())),
         "cost_model": COST_MODEL_VERSION,
+        # compatibility: historical field is row-level coverage among rows that
+        # already have an outcome identity, not full-funnel denominator coverage.
         "label_coverage": round(labeled / eligible, 4) if eligible else None,
+        "label_coverage_scope": "selected_outcome_rows_legacy",
+        "funnel_denominator": {
+            "snapshot_rows": len(snapshots),
+            "symbols": len(funnel_symbols),
+            "outcome_rows": len(outcomes),
+            "outcome_symbols": len(outcome_symbols),
+            "labeled_symbols": len(labeled_symbols),
+            "outcome_attachment_coverage": (
+                round(len(outcome_symbols) / len(funnel_symbols), 4) if funnel_symbols else None
+            ),
+            "label_coverage": (
+                round(len(labeled_symbols) / len(funnel_symbols), 4) if funnel_symbols else None
+            ),
+            "missing_outcome_symbols": missing_outcome_symbols,
+            "unlabeled_symbols": unlabeled_symbols,
+            "run_symbol_opportunities": len(funnel_opportunities),
+            "outcome_opportunities": len(outcome_opportunities),
+            "labeled_opportunities": len(labeled_opportunities),
+            "opportunity_label_coverage": (
+                round(len(labeled_opportunities) / len(funnel_opportunities), 4)
+                if funnel_opportunities else None
+            ),
+        },
         "note": (
-            "样本不足时仅报告覆盖率与事实分布，不据此晋级策略；D0 成本调整代理口径见 cost_model；"
+            "label_coverage 为兼容旧接口的 outcome-row 行级覆盖率；全漏斗必须看 funnel_denominator。"
+            "样本不足或全漏斗标签未完整时只报告覆盖率与事实分布，不据此晋级策略；D0 成本调整代理口径见 cost_model；"
             "kb_ref_states 记录本次决策的 KB 引用状态（not_consulted=未引用，现状如此；"
             "KB 进入个股收益打分须先过有/无 KB 消融，见蓝图 §5）"
         ),
@@ -787,6 +902,11 @@ def opportunity_scorecard(
     """
     sf = session_factory or get_session_factory()
     with sf() as db:
+        all_snapshots = db.execute(
+            select(OpportunityDecisionSnapshot).where(
+                OpportunityDecisionSnapshot.trade_date == trade_date
+            )
+        ).scalars().all()
         all_rows = db.execute(
             select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
             .join(
@@ -795,6 +915,11 @@ def opportunity_scorecard(
             )
             .where(OpportunityDecisionSnapshot.trade_date == trade_date)
         ).all()
+    funnel_snapshots = [
+        snapshot for snapshot in all_snapshots
+        if snapshot.strategy_version == strategy_version
+        and snapshot.feature_version == feature_version
+    ]
     rows = [
         pair for pair in all_rows
         if pair[0].horizon == horizon
@@ -834,9 +959,31 @@ def opportunity_scorecard(
         if not _finite_number(outcome.return_pct)
         or (outcome.net_return_pct is not None and not _finite_number(outcome.net_return_pct))
     )
-    valid_signal_rows = [
-        pair for pair in labeled_rows if _finite_number(pair[0].return_pct)
+    # Performance metrics remain selection-conditioned; denominator-only rejected/unknown
+    # rows are labeled for missed-opportunity analysis but never silently enter fill/net metrics.
+    selected_labeled_rows = [
+        pair for pair in labeled_rows
+        if _selected_outcome_snapshot(pair[1].stage, pair[1].decision)
     ]
+    valid_signal_rows = [
+        pair for pair in selected_labeled_rows if _finite_number(pair[0].return_pct)
+    ]
+
+    funnel_symbols = {snapshot.symbol for snapshot in funnel_snapshots}
+    outcome_symbols = {snapshot.symbol for _outcome, snapshot in rows}
+    labeled_funnel_symbols = {
+        snapshot.symbol for outcome, snapshot in rows
+        if outcome.state == "labeled" and _finite_number(outcome.return_pct)
+    }
+    missing_outcome_symbols = sorted(funnel_symbols - outcome_symbols)
+    unlabeled_funnel_symbols = sorted(funnel_symbols - labeled_funnel_symbols)
+    funnel_opportunities = {(snapshot.run_id, snapshot.symbol) for snapshot in funnel_snapshots}
+    outcome_opportunities = {(snapshot.run_id, snapshot.symbol) for _outcome, snapshot in rows}
+    labeled_opportunities = {
+        (snapshot.run_id, snapshot.symbol) for outcome, snapshot in rows
+        if outcome.state == "labeled" and _finite_number(outcome.return_pct)
+    }
+    denominator_complete = bool(funnel_opportunities) and not (funnel_opportunities - labeled_opportunities)
 
     # Independent day-level sample: one stock cannot become N samples merely because
     # it crossed stages/themes or the endpoint refreshed repeatedly.  Keep every raw
@@ -911,8 +1058,10 @@ def opportunity_scorecard(
         default=None,
     )
 
-    verdict = "insufficient_sample" if len(proxy) < MIN_LABELS_FOR_VERDICT else (
-        "cost_proxy_positive_observed"
+    verdict = (
+        "incomplete_denominator" if funnel_symbols and not denominator_complete
+        else "insufficient_sample" if len(proxy) < MIN_LABELS_FOR_VERDICT
+        else "cost_proxy_positive_observed"
         if sum(proxy) / len(proxy) > 0 else "cost_proxy_nonpositive_observed"
     )
     proxy_mean = round(sum(proxy) / len(proxy), 2) if proxy else None
@@ -973,6 +1122,28 @@ def opportunity_scorecard(
             "symbols": len({snapshot.symbol for _outcome, snapshot in rows}),
             "symbol_trade_date_samples": len(samples),
         },
+        "funnel_denominator": {
+            "snapshot_rows": len(funnel_snapshots),
+            "symbols": len(funnel_symbols),
+            "outcome_symbols": len(outcome_symbols),
+            "labeled_symbols": len(labeled_funnel_symbols),
+            "outcome_attachment_coverage": (
+                round(len(outcome_symbols) / len(funnel_symbols), 4) if funnel_symbols else None
+            ),
+            "label_coverage": (
+                round(len(labeled_funnel_symbols) / len(funnel_symbols), 4) if funnel_symbols else None
+            ),
+            "complete": denominator_complete,
+            "missing_outcome_symbols": missing_outcome_symbols,
+            "unlabeled_symbols": unlabeled_funnel_symbols,
+            "run_symbol_opportunities": len(funnel_opportunities),
+            "outcome_opportunities": len(outcome_opportunities),
+            "labeled_opportunities": len(labeled_opportunities),
+            "opportunity_label_coverage": (
+                round(len(labeled_opportunities) / len(funnel_opportunities), 4)
+                if funnel_opportunities else None
+            ),
+        },
         "min_labels_for_verdict": MIN_LABELS_FOR_VERDICT,
         "labeled": len(samples),
         "fillable": len(proxy),
@@ -1006,7 +1177,8 @@ def opportunity_scorecard(
         "verdict": verdict,
         "note": (
             "只描述已归档事实，不构成买卖建议；独立样本按 symbol×trade_date 去重，原始行数保留在 audit。"
-            "样本低于下限时 verdict 恒为 insufficient_sample。D0 成本调整值仅为同日收盘代理，"
-            "不是 A 股 T+1 下可实现净收益；可成交代理仍存在选择性偏差。"
+            "全漏斗 symbol 尚有未标结果时 verdict 恒为 incomplete_denominator；分母完整后若可执行样本低于下限，"
+            "verdict 才为 insufficient_sample。D0 成本调整值仅为同日收盘代理，不是 A 股 T+1 下可实现净收益；"
+            "deferred/not_actionable 只服务漏选/失败分母，不进入可执行净收益。"
         ),
     }
