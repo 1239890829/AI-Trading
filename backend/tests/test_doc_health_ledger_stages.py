@@ -133,7 +133,7 @@ def test_u49_proactive_discovery_propagation_detects_missing_surface(tmp_path, m
         " ".join([
             "jev-integration.md", "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
             "docs/implementation-plan.md", "docs/ai/jev-integration.md",
-            "docs/retro-and-gaps.md", "docs/stages/", "U49 主动缺陷发现门",
+            "docs/retro-and-gaps.md", "docs/stages/", "U49 主动缺陷发现门", "Preflight", "Review",
         ])
     )
     # 故意只保留旧传播入口，模拟“总方案写了 U49，但交接 Skill 漏同步”。
@@ -144,7 +144,7 @@ def test_u49_proactive_discovery_propagation_detects_missing_surface(tmp_path, m
 
     errors = mod.check_decision_propagation()
     assert any(
-        "ashare-task-handoff/SKILL.md" in error and "U49 主动缺陷发现传播缺失" in error
+        "ashare-task-handoff/SKILL.md" in error and "缺 Review" in error
         for error in errors
     )
 
