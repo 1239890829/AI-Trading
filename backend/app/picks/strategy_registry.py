@@ -16,10 +16,10 @@
 3. **三态纪律**：样本不足不判 ok —— `insufficient`（组日数不足）/ `thin`
    （总笔数不足）/ `no_pipeline`（该策略无逐日落库，本就无法滚动评估）。
    三者都**不告警**（那不失效信号）。
-4. **与文档同步**：键集合与 `docs/strategy-registry.md` §1 总表由测试守卫
+4. **与文档同步**：键集合与 `docs/strategy/strategy-registry.md` §1 总表由测试守卫
    （`tests/test_strategy_registry.py`），改一处必须改另一处。
 
-登记册（人工可读版）见 `docs/strategy-registry.md`；制度见 [[KB-DEC-019]]。
+登记册（人工可读版）见 `docs/strategy/strategy-registry.md`；制度见 [[KB-DEC-019]]。
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ STATUS_REJECTED = "rejected"
 
 @dataclass(frozen=True)
 class StrategySpec:
-    """一个策略键的元数据（与 `docs/strategy-registry.md` §1 总表一一对应）。"""
+    """一个策略键的元数据（与 `docs/strategy/strategy-registry.md` §1 总表一一对应）。"""
 
     key: str
     name: str

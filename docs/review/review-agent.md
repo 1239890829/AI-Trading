@@ -160,7 +160,7 @@
   不同步的话界面会表现为"点了确认、回读还是待处置"（2026-09-01 实测）。
 - 写接口走 `require_write_token`（**R22 后与 `require_api_token` 同判定**：未配
   `ASHARE_API_TOKEN` 时全放行、本地 dev 零影响；配了之后**所有**接口包括读都要
-  `X-API-Token`，见 `docs/api.md` §鉴权）。
+  `X-API-Token`，见 `docs/system/api.md` §鉴权）。
 
 ---
 

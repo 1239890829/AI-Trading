@@ -1,7 +1,7 @@
 """provider 能力注册表（OpenBB 调研采纳：能力注册 + 可查询，第 6 组）。
 
 背景：4 个真实源（ths/tencent/eastmoney/sina）的可用能力散落在各 provider
-方法里，"谁有什么"只存在于 docs/data-source-comparison.md 的手工实测文档。
+方法里，"谁有什么"只存在于 docs/data/data-source-comparison.md 的手工实测文档。
 本模块把那份实测矩阵变成**代码可查询**的结构，供运维端点、监控扩展
 （ths_sentinel 式单点告警）与选源决策使用。
 
@@ -64,7 +64,7 @@ def _n(note: str = "") -> dict:
     return {"level": UNSUPPORTED, **({"note": note} if note else {})}
 
 
-#: 真值矩阵（来源：docs/data-source-comparison.md 2026-08-29 四源实测 + 代码方法面）。
+#: 真值矩阵（来源：docs/data/data-source-comparison.md 2026-08-29 四源实测 + 代码方法面）。
 #: 键 = composite/直调消费的方法名；每源覆盖**全部**消费面（UNSUPPORTED 显式列出）。
 CAPABILITIES: dict[str, dict[str, dict]] = {
     "ths": {

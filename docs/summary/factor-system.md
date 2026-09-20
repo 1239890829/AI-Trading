@@ -1,9 +1,9 @@
 # 因子体系汇总（Factor System Summary）
 
-> 当前使用见 ../hunting-decision-design.md §3/§5。因子、情境、过滤器和完整策略分开；同源不自动冗余、已有高相关证据不重复计权。后续修订与负结果全部保留，旧数字/数据可用性需按原样本版本核验；新情境不使否决自动转正。
+> 当前使用见 ../product/hunting-decision-design.md §3/§5。因子、情境、过滤器和完整策略分开；同源不自动冗余、已有高相关证据不重复计权。后续修订与负结果全部保留，旧数字/数据可用性需按原样本版本核验；新情境不使否决自动转正。
 
-> **定位**：因子库的**结论与口径**汇总（建设方案 + IC 复核的精华）；治理制度与登记册保留原位，见文末。
-> **现役不在此**：`factor-lifecycle-governance.md`（全生命周期制度，**入口**）、`factor-candidates.md`（候选因子登记册）。
+> **定位**：因子库的**结论与口径**汇总（建设方案 + IC 复核的精华）；治理制度与登记册归 `../strategy/`，见文末。
+> **现役不在此**：`../strategy/factor-lifecycle-governance.md`（全生命周期制度，**入口**）、`../strategy/factor-candidates.md`（候选因子登记册）。
 > **整理**：2026-09-10。
 
 ---
@@ -73,7 +73,7 @@ app/factors/evaluate.py  评估引擎（IC 计算）
    `recheck=pending`——修正不得静默把「通过」改成「失败」（阈值字面不变，但分母修正后
    真实多空年化 <3% 的因子会由过线变未过线，**这是预期后果**）。
 
-> 该量的完整定义表与阈值影响见 `docs/factor-lifecycle-governance.md` §3.1。全量结果重算后
+> 该量的完整定义表与阈值影响见 `docs/strategy/factor-lifecycle-governance.md` §3.1。全量结果重算后
 > 历史表格里的 −268% / −239% / −151% 一类「多空年化」需整体缩小 **19 倍**（主窗 20 日）。
 
 ## 5. 09-02 十项候选因子核查（2026-09-10 逐项实测）
@@ -147,5 +147,5 @@ IC/ICIR 报告，`data/factors/eval_report.json` 也在磁盘上，但**全站�
 |---|---|
 | summary/factor-system.md | 精华并入本文 §1/§5 + `factor-lifecycle-governance.md`；原件归档 |
 | factor-ic-review-20260908.md | 精华并入本文 §3/§4；原件归档 |
-| factor-lifecycle-governance.md | **保留原位**（治理入口） |
-| factor-candidates.md | **保留原位**（登记册数据） |
+| ../strategy/factor-lifecycle-governance.md | **现役分类目录**（治理入口） |
+| ../strategy/factor-candidates.md | **现役分类目录**（登记册数据） |

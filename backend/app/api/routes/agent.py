@@ -273,7 +273,8 @@ def _docs_root():
 #: 分层只影响**默认呈现**，不减少可见内容（折叠区仍可展开、搜索仍跨全部）。
 _DOC_TIER_DIRS: dict[str, tuple[str, ...]] = {
     "canonical": ("kb",),                                              # L0 唯一权威
-    "current": ("", "summary"),                                        # L1/L2 现役
+    "current": ("", "summary", "system", "data", "product", "strategy",
+                "ai", "review", "research"),                           # L1/L2 现役
     "history": ("archive",),                                           # 只读历史
     "timeline": ("daily-review", "evolution", "repo-watch", "push-templates"),  # L4 时间序列
 }

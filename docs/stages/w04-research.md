@@ -143,7 +143,7 @@
 - **门禁角色**：非阻断
 - **依赖**：无
 - **效果前置**：无
-- **方案依据**：docs/jev-integration.md §29。
+- **方案依据**：docs/ai/jev-integration.md §29。
 - **范围**：固定事件队列、独立人工标签、规则/Jev/现有 LLM/fallback 对照，以及 TypeSafe 与更贵模型 token/调用量、延迟和质量的同条件度量；不把 agreement 写成 accuracy。
 - **验收**：v1 240 条 human.category/certainty/actionable 独立完成且通过 strict human validation；verifier 另有独立 claim/evidence 人工集；生产阈值、额度节省或选股增益只允许由可复算 A/B / walk-forward 得出。
 - **证据**：PR #33 建立 verifier/gold-set 工具，PR #34 完成固定队列 Jev 预标注与审核优先级并均已合入 `master`。240 条固定队列当前 human 仍 0/240；规则/Jev agreement 为 category 55.42%、certainty 77.92%、actionable 57.50%，仅用于安排人工审核。当前极保守 actionable cascade 在该平衡队列上无节省证据。
@@ -161,7 +161,7 @@
 - **门禁角色**：非阻断
 - **依赖**：无
 - **效果前置**：RSH-026, IMP-020, RSH-030
-- **方案依据**：[历史涨停/龙头研究蓝图](../limit-up-dragon-research.md)；hunting-decision-design §2/4/7/8；Jev 蓝图 §21/26/30；用户 U43。
+- **方案依据**：[历史涨停/龙头研究蓝图](../research/limit-up-dragon-research.md)；hunting-decision-design §2/4/7/8；Jev 蓝图 §21/26/30；用户 U43。
 - **范围**：按历史交易制度建立全量涨停/炸板/临板与匹配对照；以市场→板块/概念→题材/分支→催化→个股→角色/演变的层级对象分析首板、强连板、空间板、弱市穿越、断板反包、趋势化、二/三浪与再启动。研究消息/公告、技术、相对强弱、资金代理、情绪、指数/双创、题材梯队及异常板块拉升的真假持续性；不只收集赢家。
 - **验收**：样本及题材成员 point-in-time，正负分母完整；探索段与最近 untouched holdout 分离，污染案例不计盲测胜利；候选机制预注册并做 matched baseline、purged walk-forward/embargo、ablation 与 multiple-testing 纪律；报告首板前/封板前/二板前 Recall、Precision@K/PR-AUC、first_seen 提前量、龙头/最大板高排序、题材持续性、假启动、不可成交、成本/MFE/MAE、假阳性与漏选，按市场状态/板块制度/市值/事件类分层；负结果和窄域结论保留。
 - **Jev 分工**：历史新闻/公告/涨停原因做离线 bounded MapReduce，抽取事件类型、新颖度、确定性、公司/题材直接性、产业链分支、来源/冲突、叙事拥挤和相位一致性；确定性召回后可做 second-stage rerank；自动归因用 Universal Verification 核 claim↔evidence。Jev 不直接预测涨停、不使用未来收益造特征、不改交易硬门/策略权重、不以 confidence 冒充胜率。

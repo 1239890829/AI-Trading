@@ -1,6 +1,6 @@
 """Eastmoney 行情字段 → 统一 schema 的 Normalizer。
 
-字段口径实测于 2026-08-28（详见 docs/data-sources.md）：
+字段口径实测于 2026-08-28（详见 docs/data/data-sources.md）：
 - ulist/clist 族：f2 价、f3 涨幅%、f4 涨跌、f5 成交量(手)、f6 成交额(元)、
   f8 换手率、f15/16/17/18 = 高/低/开/昨收、f12/13/14 = 代码/市场/名称、f124 时间戳
 - 涨停池 getTopicZTPool：p=价格×100、fbt/lbt=HHMMSS、fund=封单额(元)、zbc=炸板次数

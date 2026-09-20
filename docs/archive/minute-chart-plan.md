@@ -2,7 +2,7 @@
 
 > 现状基线（2026-08-30 实测）：`minute-chart.tsx` 仅面积线+单色量能副图；无均价线、无十字光标浮层、无昨收锚定；Y 轴由 lightweight-charts 自动缩放——**一字板时 min==max，曲线悬在中线**（用户反馈实锤）。
 > 数据侧：`/api/minute-line` 返回 `{ts, price, volume, cum_amount}`；腾讯 minute/query 响应里的 `data.date`（真实交易日）与 `qt[code][4]`（昨收）**均被丢弃**；后端用 `datetime.now()` 拼时间戳，非交易日请求会把历史数据打上今天日期（隐患）。
-> 红线对齐：做 T 信号只输出「偏向+依据+失效条件」（AGENTS 红线 3）；回测口径全部遵循 `docs/backtest-rules.md`（as_of 推进、禁同 bar 收盘价撮合、T+1/涨跌停拦截、成本计入、样本内外分离）。
+> 红线对齐：做 T 信号只输出「偏向+依据+失效条件」（AGENTS 红线 3）；回测口径全部遵循 `docs/strategy/backtest-rules.md`（as_of 推进、禁同 bar 收盘价撮合、T+1/涨跌停拦截、成本计入、样本内外分离）。
 
 ---
 
@@ -148,7 +148,7 @@ class IndicatorHit(BaseModel):
 
 **数据依赖**：当日分时（有）+ 昨收（模块 0）+ 实时换手（快照 turnover_rate × 流通股本）+ 近 5 日日波动率（日 K 已有）+ 5 日同期分钟量（精确量比，可先缺省——缺该输入时指标 2/4 的量比条件降级为当日均量口径并标注 `degraded`）。
 
-### 4.3 历史准确率回测口径（对齐 docs/backtest-rules.md，全部代码级校验）
+### 4.3 历史准确率回测口径（对齐 docs/strategy/backtest-rules.md，全部代码级校验）
 
 - **推进方式**：逐分钟 as_of 推进，信号只读 ≤t 数据；均价/累计量严格从头累计（结构上杜绝未来函数）。
 - **撮合**：触发后**下一分钟**成交，价格 = 下一分钟 VWAP（cum_amount 差分 / cum_volume 差分）；禁用触发分钟价格。涨停价不撮合买、跌停价不撮合卖、T+1 约束当日买入不可卖（做 T 场景=底仓高抛低吸，卖出消耗底仓可用量）。

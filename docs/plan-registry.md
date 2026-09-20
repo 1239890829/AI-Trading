@@ -1,6 +1,6 @@
 # 计划去向、文档权责与冲突裁定
 
-> 本文只管“哪份内容对哪个问题有效”，不维护任务进度。现行长期/产品设计入口为 [实施方案](implementation-plan.md)、[持续演进](continuous-evolution.md)、[产品闭环](product-closure-design.md)、[猎场决策](hunting-decision-design.md)、[历史涨停/龙头研究](limit-up-dragon-research.md) 和 [细功能覆盖](feature-closure-audit.md)；执行顺序只读 [总账 §5.9](retro-and-gaps.md#59-阶段门优先级与跨阶段治理)，领域归属读 §6.0，任务状态读所属 stage，现场只看 [handoff](handoff.md)。
+> 本文只管“哪份内容对哪个问题有效”，不维护任务进度。现行长期/产品设计入口为 [实施方案](implementation-plan.md)、[持续演进](ai/continuous-evolution.md)、[产品闭环](product/product-closure-design.md)、[猎场决策](product/hunting-decision-design.md)、[历史涨停/龙头研究](research/limit-up-dragon-research.md) 和 [细功能覆盖](product/feature-closure-audit.md)；执行顺序只读 [总账 §5.9](retro-and-gaps.md#59-阶段门优先级与跨阶段治理)，领域归属读 §6.0，任务状态读所属 stage，现场只看 [handoff](handoff.md)。
 > 2026-09-18 规划批范围（历史限定）：完成理论、计划与文档收口，不执行开发账本。该批范围不再代表全项目“当前模式”；当前允许动作看最新 `master` 的 `handoff` / stage。本次整理不等于任何业务能力已实现、已上线或已验证盈利。
 
 ## 1. 文档各自拥有的问题
@@ -59,7 +59,7 @@
 
 ### 1.2 Living Plan 与开放世界重评
 
-“当前方案”表示当前证据下的首选，不表示永久最终答案。外部创新与反证的现役入口为 [开放世界持续演进蓝图](continuous-evolution.md)：雷达可持续发现模型、工具、量化方法、数据源、工程和产品替代，但候选状态不构成施工授权，也不在本文维护第二套 backlog。
+“当前方案”表示当前证据下的首选，不表示永久最终答案。外部创新与反证的现役入口为 [开放世界持续演进蓝图](ai/continuous-evolution.md)：雷达可持续发现模型、工具、量化方法、数据源、工程和产品替代，但候选状态不构成施工授权，也不在本文维护第二套 backlog。
 
 外部候选只有在改变长期设计时才触发 §1.1 传播；未过 E3/E4 的候选留 WATCH/LAB，不修改总方案。既有决定如果关键前提失效、出现稳定反例、外部有同条件可复现实证或维护/成本结构显著变化，允许重新打开；拒绝/观察项须保留可核重开条件，避免“曾拒绝一次 = 永久封禁”。
 

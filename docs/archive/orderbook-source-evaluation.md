@@ -17,7 +17,7 @@
 | 数据形态 | 五档价+量（快照切片，非逐笔合并还原） | `tencent.py get_order_book` ← qt.gtimg 快照字符串 |
 | 更新频率 | 上游 ~3-6s 切片 × 本地 5s 轮询，端到端 5-10s | `poll_interval_seconds=5` |
 | 覆盖度 | 全 A 股 | 同快照接口 |
-| 备源 | 新浪（同级别快照）、东财（push2 本机被 WAF 限流，已实测） | docs/data-source-comparison.md |
+| 备源 | 新浪（同级别快照）、东财（push2 本机被 WAF 限流，已实测） | docs/data/data-source-comparison.md |
 | 消费方 | 盘口展示、质量校验、paper 撮合（最新价+涨跌停价） | 实际未用到档位深度 |
 | 合规 | 免费接口爬取：本地个人研究属行业普遍现状；**对外提供服务/转售/商用分发不合规**（交易所行情授权体系） | — |
 

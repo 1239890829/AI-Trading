@@ -25,7 +25,7 @@ from app.picks.strategy_registry import (
 # import 即注册进 Base.metadata（create_all 需要）
 _REGISTERED = (DailyPickReview, DailyPickSet, WatchLedger)
 
-REGISTRY_DOC = Path(__file__).resolve().parents[2] / "docs" / "strategy-registry.md"
+REGISTRY_DOC = Path(__file__).resolve().parents[2] / "docs" / "strategy" / "strategy-registry.md"
 
 
 @pytest.fixture()
@@ -68,10 +68,10 @@ class TestRegistryConsistency:
         assert len(keys) == len(set(keys))
 
     def test_doc_lists_every_key(self):
-        """docs/strategy-registry.md §1 总表必须含全部代码侧策略键（反漂移守卫）。"""
+        """docs/strategy/strategy-registry.md §1 总表必须含全部代码侧策略键（反漂移守卫）。"""
         text = REGISTRY_DOC.read_text(encoding="utf-8")
         missing = [s.key for s in SPECS if f"`{s.key}`" not in text]
-        assert not missing, f"以下策略键未登记进 docs/strategy-registry.md：{missing}"
+        assert not missing, f"以下策略键未登记进 docs/strategy/strategy-registry.md：{missing}"
 
     def test_doc_status_symbol_matches_code(self):
         """文档状态符号与代码 status 必须一致（active→🟢 / observing→🟡 / rejected→⛔）。"""

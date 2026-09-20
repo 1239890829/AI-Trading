@@ -5,7 +5,7 @@ description: 把本轮执行、审核、重大决策传播核对和下一步写�
 
 # 原位交接
 
-全项目范围按 `docs/product-closure-design.md`、`docs/hunting-decision-design.md`、`docs/feature-closure-audit.md` 核大小功能及消费者。任务唯一状态和阶段门元数据只写所属 stage；handoff 只定位当前模式、当前主门/切片、现场和最近关键基线。
+全项目范围按 `docs/product/product-closure-design.md`、`docs/product/hunting-decision-design.md`、`docs/product/feature-closure-audit.md` 核大小功能及消费者。任务唯一状态和阶段门元数据只写所属 stage；handoff 只定位当前模式、当前主门/切片、现场和最近关键基线。
 
 1. Codex 回填本轮编号、阶段门/门内序/门禁角色、硬依赖与效果前置核验、真实实现/偏差、修改文件、准确代码提交、测试命令/结果/环境、未验证项及证据。新问题和建议写本条，不代写网页审核通过。
 2. 网页收到“Codex执行完了”后，从最新 `master` 的固定入口读取 handoff / stage，并核真实分支、代码与证据；给通过/需修改/阻塞后重新评估下一步。

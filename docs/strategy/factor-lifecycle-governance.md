@@ -2,7 +2,7 @@
 > **同族文档（因子体系，2026-09-10 归口）**：建设方案 → `summary/factor-system.md`；候选登记册 → `factor-candidates.md`；IC 复核报告 → `summary/factor-system.md`。本文 = 全生命周期制度（**入口文档**）。
 
 > 定位：在 `docs/summary/factor-system.md`（因子库建设方案，P0 评估闭环）之上，把「评估」扩展为**全生命周期闭环**：挖掘 → 筛选评估 → 入库登记 → 使用 → 出库 → 衰减监控与更新，六环联动，每一环有明确的存在价值与承接物。
-> 配套代码资产：`backend/app/factors/library.py`（注册表=唯一口径锚）、`backend/app/factors/evaluate.py`（评估引擎）、`backend/app/factors/report.py`（评估报告运行时只读层）、`backend/scripts/run_factor_eval.py`（跑批 CLI）；候选登记册现为**纯文档** `docs/factor-candidates.md`（2026-09-08 起仅以文档形态维护）。
+> 配套代码资产：`backend/app/factors/library.py`（注册表=唯一口径锚）、`backend/app/factors/evaluate.py`（评估引擎）、`backend/app/factors/report.py`（评估报告运行时只读层）、`backend/scripts/run_factor_eval.py`（跑批 CLI）；候选登记册现为**纯文档** `docs/strategy/factor-candidates.md`（2026-09-08 起仅以文档形态维护）。
 > 版本：v1（2026-09-07）。评估数据全部为 marketdb 10 年日 K 实测（1023.8 万行 / 5555 只 / 2016-09-05~2026-09-03），非推演。
 
 ---

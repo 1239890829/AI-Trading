@@ -45,7 +45,7 @@ class Quote(AuditFields):
     prev_close: float | None = None
     change: float | None = None
     change_pct: float | None = None
-    volume: float | None = None  # 单位见 docs/data-sources.md
+    volume: float | None = None  # 单位见 docs/data/data-sources.md
     amount: float | None = None  # 元
     turnover_rate: float | None = None
     pe_ttm: float | None = None

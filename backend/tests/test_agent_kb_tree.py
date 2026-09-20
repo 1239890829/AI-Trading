@@ -24,8 +24,15 @@ from app.api.routes.agent import _tier_of, kb_tree
 #: 与 `docs/kb/07-doc-curation.md` §7 文档分层模型对齐的期望口径
 EXPECTED_TIER: dict[str, str] = {
     "kb": "canonical",           # L0 唯一权威
-    "": "current",               # docs/ 根（L1/L2 现役：INDEX / PROJECT-MASTER 等）
+    "": "current",               # docs/ 根（仅 6 个跨域控制面入口）
     "summary": "current",        # L2 现役专题
+    "system": "current",
+    "data": "current",
+    "product": "current",
+    "strategy": "current",
+    "ai": "current",
+    "review": "current",
+    "research": "current",
     "archive": "history",        # 只读历史
     "daily-review": "timeline",  # L4 时间序列
     "evolution": "timeline",

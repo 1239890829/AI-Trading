@@ -75,7 +75,7 @@ ALGO_VERSION = "2026-09-15.ntile-tiebreak-v4"
 #: verdict **逐点不变**（base 链只增列、不改列），由 `tests/test_factors.py::
 #: test_adding_factor_does_not_change_existing_numeric_conclusions` 钉死（含注入自证）。
 #: 因子池变化本身由报告 `factors`/`summary` 列表可见，并按制度
-#: `docs/factor-lifecycle-governance.md` §8 记入版本日志——`ALGO_VERSION` 不是它的载体。
+#: `docs/strategy/factor-lifecycle-governance.md` §8 记入版本日志——`ALGO_VERSION` 不是它的载体。
 #: 反之，若仅因新增因子就 bump，`review_required` 会列出**全部**历史结论并标「基于旧口径」，
 #: 而它们在数值上并未失效 ⇒ 属误报，会训练消费方忽略该清单（正是 GOV-001 要防的）。
 #: **判据**：改动能改变既有因子**数值结论**（IC/verdict）时才是口径变更，必须 bump 并使旧结论
@@ -740,7 +740,7 @@ def _annotate_verdict_changes(results: list[dict], prev: dict[str, str]) -> list
 
 # ---------------------------------------------------------------- 版本化留存与复核清单
 #: 版本化留存子目录名（相对评估报告所在目录）。制度文档
-#: `docs/factor-lifecycle-governance.md` §7.2 承诺「报告按 generated_at 版本化留存」，
+#: `docs/strategy/factor-lifecycle-governance.md` §7.2 承诺「报告按 generated_at 版本化留存」，
 #: 而落盘路径长期是**单文件原地覆盖**——历史结论只剩上一次的 `verdict_prev`，更早的
 #: 不可枚举（[[KB-ENG-72]]：**文档承诺 ≠ 实际覆盖**）。
 HISTORY_DIRNAME = "history"

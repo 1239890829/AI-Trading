@@ -18,7 +18,7 @@
 - **门禁角色**：非阻断
 - **依赖**：无
 - **效果前置**：无
-- **方案依据**：docs/jev-integration.md §23 及真实 JevRouter smoke。
+- **方案依据**：docs/ai/jev-integration.md §23 及真实 JevRouter smoke。
 - **范围**：AShare 助手按只读工具组做 bounded routing；全局仅在至少两个真实可用能力竞争且选择不明显时调用 capability router。执行授权仍由 TOOL_SPECS、actor permissions、risk、confirmation 和 input schema 控制。
 - **验收**：Jev decision 不直接执行能力；无权限候选必须过滤；浏览器复杂场景可回退既有 browser/computer-use；真实券商、资金和风控修改永不进入 Jev 动作空间。
 - **证据**：PR #31 已合入项目 Jev adapter/助手工具路由底座，PR #32 完成价值审计并收敛为条件 capability routing；真实 TypeSafe 选择 edit_code 后，Router 因 caller 缺 write_repo 正确过滤并安全回退；业务助手 6 个只读工具组 shadow 已接线；jev-browser 已完成 CLICK/TYPE_TEXT 真实链路 smoke。
@@ -36,7 +36,7 @@
 - **门禁角色**：非阻断
 - **依赖**：无
 - **效果前置**：RSH-030
-- **方案依据**：docs/jev-integration.md §28–29。
+- **方案依据**：docs/ai/jev-integration.md §28–29。
 - **范围**：事件/提醒的 bounded Choice/Noul 与助手 evidence→claim 三态 verifier；不自由生成题材、不检索事实、不直接改选股分或交易结论。
 - **验收**：默认 off/shadow 不改变用户可见结果；私人上下文、非公共工具或 deterministic grounding 已失败时跳过 verifier；任何 cascade 阈值只能来自独立人工标签。
 - **证据**：PR #31 已合入事件/告警 Jev shadow 接线，PR #33 已合入 `semantic_verify.py` 三态 verifier 与 gold-set 工具，PR #34 已合入预标注/审核优先级产物；三态 smoke（supported/contradicted/insufficient）与专项测试已完成，原 DeepSeek 用户可见路径保持不变。

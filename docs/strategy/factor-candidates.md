@@ -6,7 +6,7 @@
 原 docstring：
 
 ```python
-"""候选因子登记册（docs/factor-lifecycle-governance.md §2.3）。
+"""候选因子登记册（docs/strategy/factor-lifecycle-governance.md §2.3）。
 
 定位：环节①「挖掘」与环节⑥「更新」的承接物——所有从外部来源/系统内准因子
 挖掘出的候选在此登记（含来源、原始定义、数据可行性分级、去重预判），

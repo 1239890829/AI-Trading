@@ -19,11 +19,11 @@
 |---|---|---|---|---|
 | **L0 权威知识** | `docs/kb/01~04` | 经复盘/实测验证的知识点（KB-STOCK/TRADE/ENG/DEC） | ⭐ 唯一权威 | KB-STOCK-24 缩量语义 |
 | **L1 框架与规范** | `docs/kb/05~07` | 流程规则：仓库台账、复盘框架、本文档 | 流程权威 | 06-review-framework |
-| **L2 总纲与设计** | `docs/` 根（无日期） | 系统总纲、架构、数据字典、现役设计 | 设计基线 | PROJECT-MASTER、architecture、api.md |
-| **L3 专题报告** | `docs/` 根（**带日期**） | 单次调研/审计/复盘的分析结论 | 一次性证据 | board-fund-page-audit-20260910 |
+| **L2 总纲与设计** | `docs/` 分类目录 + 根控制面 | 系统总纲、架构、数据字典、现役设计 | 设计基线 | `system/architecture.md`、`product/product-closure-design.md`、`implementation-plan.md` |
+| **L3 专题报告** | 对应分类目录或提炼后进入 `archive/` | 单次调研/审计/复盘的分析结论 | 一次性证据 | 时点调研、专项审计 |
 | **L4 过程存档** | `daily-review/`、`evolution/`、`repo-watch/` | 逐日记录、进化日志、仓库发现轮 | 时间序列 | daily-review/2026-09-09.md |
 | **L5 只读历史** | `docs/archive/` | 被取代的决策、已执行完的计划 | 只读（不删） | github-repo-audit-*.md |
-| **L6 参考输入** | `docs/` 根 | 外部方法论/他人材料，**头部须标非权威** | 参考（不替代 L0）；**09-10 起同主题参考输入一律并入对应 KB 附录**（如五层提问框架 → `kb/06` 附录 A） |
+| **L6 参考输入** | 对应领域分类或 KB 附录 | 外部方法论/他人材料，**头部须标非权威** | 参考（不替代 L0）；**09-10 起同主题参考输入一律并入对应 KB 附录**（如五层提问框架 → `kb/06` 附录 A） |
 
 **判定口诀**：先问"这是标准、设计、某次分析、过程记录、历史、还是外部参考"，六选一即可定层，不按作者或文件字数归类。
 
@@ -432,6 +432,12 @@ ID 继续用 BUG/IMP/RSH/GOV/OPS 三位递增序号，永不复用。新增先�
 - factor 类 **4 份**（factor-candidates / factor-library-design / factor-lifecycle-governance / factor-ic-review-20260908）
 - 数据源类 **3 份**（data-source-comparison / data-sources / orderbook-source-evaluation）
 - 计划类 **7 份**（含疑似已落地者，需逐份确认状态）
+
+### 10.1 2026-09-20 物理分类收口
+
+上表是 2026-09-10 的历史实测，不回写当时数字。2026-09-20 再治理后，`docs/` 根 Markdown 从 **36 份收口为 6 份控制面入口**；30 份领域/历史文档完成引用迁移：现役正文进入 `system/`、`data/`、`product/`、`strategy/`、`ai/`、`review/`、`research/`，4 份时点/搁置件降入 `archive/`。
+
+新增规则：文档“已登记”不等于“落位正确”。`doc-health` O2 同时检查根目录白名单与顶层分类目录白名单；新增领域文档不得再平铺根目录。分类职责与根目录 6 个控制面清单以 `docs/INDEX.md` §0.0.1 为权威。
 
 ## 11. 附录 B：首批整理执行结果（2026-09-10）
 

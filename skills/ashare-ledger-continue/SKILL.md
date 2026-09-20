@@ -7,7 +7,7 @@ description: AI-Trading 新会话接手、上下文恢复与账本继续的唯�
 
 本 Skill 同时承担三件事：**新会话快速接手、恢复当前项目上下文、继续已获准任务**。不得再建立第二个“项目接手 Skill”或靠聊天长提示维护上下文。
 
-全项目范围仍按 `docs/product-closure-design.md`、`docs/hunting-decision-design.md`、`docs/limit-up-dragon-research.md`（存在且相关时）、`docs/feature-closure-audit.md` 核大小功能及消费者。后台开放情境，普通前台简洁；局部切片不能缩小整项目目标。
+全项目范围仍按 `docs/product/product-closure-design.md`、`docs/product/hunting-decision-design.md`、`docs/research/limit-up-dragon-research.md`（存在且相关时）、`docs/product/feature-closure-audit.md` 核大小功能及消费者。后台开放情境，普通前台简洁；局部切片不能缩小整项目目标。
 
 ## 1. 固定读取链
 
@@ -18,9 +18,9 @@ description: AI-Trading 新会话接手、上下文恢复与账本继续的唯�
 3. `docs/INDEX.md`：权威入口与文档定位；
 4. `docs/plan-registry.md`：文档权责、历史取代关系、重大决策传播契约；
 5. `docs/implementation-plan.md`：当前总方案与长期取舍；
-6. `docs/continuous-evolution.md`：长期开放世界发现、筛选与准入前治理；
-7. `docs/product-closure-design.md`、`docs/hunting-decision-design.md`、`docs/feature-closure-audit.md`：产品/选股/细功能目标；若 INDEX/方案/stage 指向 `docs/limit-up-dragon-research.md`，同轮读取该历史涨停/龙头研究蓝图；
-8. `docs/jev-integration.md`：Jev 当前唯一专题蓝图；
+6. `docs/ai/continuous-evolution.md`：长期开放世界发现、筛选与准入前治理；
+7. `docs/product/product-closure-design.md`、`docs/product/hunting-decision-design.md`、`docs/product/feature-closure-audit.md`：产品/选股/细功能目标；若 INDEX/方案/stage 指向 `docs/research/limit-up-dragon-research.md`，同轮读取该历史涨停/龙头研究蓝图；
+8. `docs/ai/jev-integration.md`：Jev 当前唯一专题蓝图；
 9. `docs/retro-and-gaps.md` §5.9/§6.0 → 先读取 G0–G5/GX 阶段门治理，再扫描 W00–W09 活动任务的 ID/状态/阶段门/门内序/门禁角色/优先级/依赖/效果前置/下一步；随后只深入当前门的实际候选 `docs/stages/*`；
 10. 只有 handoff/stage 指向某个施工分支或 PR 时，才进一步读取该分支/提交/CI 作为实现证据。
 

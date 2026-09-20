@@ -370,7 +370,7 @@ AST 调用点 **44** 处（prod 37 / test 5 / script 2）—— 任何中间数�
 ## 落点与门禁（本项目）
 
 - **成果写进已有分类文档**，`kb/07 §3.2` 明令 **⛔ 禁止新建文档承载成果**：
-  选型结论 → `docs/data-source-comparison.md`；接入面清单与使用度 → `docs/data-sources.md`。
+  选型结论 → `docs/data/data-source-comparison.md`；接入面清单与使用度 → `docs/data/data-sources.md`。
 - **任务一律登记到 `docs/retro-and-gaps.md` §6.0**（`kb/07 §3.3` 单点归集），
   本文档只留「详述 + 证据 + 指针」，**不另立任务清单**。
 - 改完 `docs/` **必须跑** `python3 scripts/doc-health.py` + 后端 8 个文档守卫
@@ -392,7 +392,7 @@ AST 调用点 **44** 处（prod 37 / test 5 / script 2）—— 任何中间数�
 - 东财 K 线：push2his 全系列域名不可达、push2delay 的 `klines` 恒为空 → **本机不可用**
   （但失败仅 0.10s 快速失败，且排第 3 顺位，**不构成性能问题，不要为它改代码**）
 
-### 2026-09-16 实测（使用度面，`docs/data-sources.md` §8）
+### 2026-09-16 实测（使用度面，`docs/data/data-sources.md` §8）
 
 - 源总量 = **8 行情源 + 2 本地存储 + 2 非行情服务**；fuyao **23/59** 端点 · TDX **3/20** 数据类方法 · akshare **9/11**
 - 零调用 **11** · 仅测试 **5** · 单点生产 **3**

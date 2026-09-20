@@ -281,10 +281,10 @@
 - **现状诚实边界（勿把"有制度"当"已闭环"）**：
   | 环节 | 现状 | 缺口 |
   |---|---|---|
-  | 登记 | ✅ 已有**策略/战法**级登记册 `docs/strategy-registry.md` + 代码守卫 `app/picks/strategy_registry.py`（P1-37，2026-09-10）；2026-09-11 起带 `verify_key` 与核验产物背书 | —（因子登记册另有 `docs/factor-candidates.md`） |
+  | 登记 | ✅ 已有**策略/战法**级登记册 `docs/strategy/strategy-registry.md` + 代码守卫 `app/picks/strategy_registry.py`（P1-37，2026-09-10）；2026-09-11 起带 `verify_key` 与核验产物背书 | —（因子登记册另有 `docs/strategy/factor-candidates.md`） |
   | 验证 | ✅ 强：`app/research/strategy_verify.py` 五道检验 + 样本外盲测模板（P1-41）；2026-09-11 起**判据可机判**（`gate_verdict`）+ **结论落盘可回查**（`verify_registry`） | 结论此前只流向 stdout，现可回查；**判据仍只覆盖五条中的四条** |
   | 监控 | ✅ 已泛化到**策略键级** `GET /api/picks/strategy-health`（`min_picks` + `thin` 档，P1-38，2026-09-10） | 精确度仍受样本量限制（`daily_picks` 常报 insufficient） |
-  | 退役 | ✅ 策略级处置台账 = `docs/strategy-registry.md §3`（三行 D-1/D-2/D-3，附证据链与样本边界，P1-39，2026-09-10） | 参数级另有 30 日劣化自动回滚（`experiments.py`） |
+  | 退役 | ✅ 策略级处置台账 = `docs/strategy/strategy-registry.md §3`（三行 D-1/D-2/D-3，附证据链与样本边界，P1-39，2026-09-10） | 参数级另有 30 日劣化自动回滚（`experiments.py`） |
 - **关联**：[[KB-DEC-018]] [[KB-DEC-020]] [[KB-STOCK-27]] [[KB-STOCK-28]] [[KB-STOCK-29]] [[KB-STOCK-30]] [[KB-ENG-39]] [[KB-ENG-40]] [[KB-ENG-41]]
 
 ### KB-DEC-020 告警「escalate」= 人工处置待办（needs_confirm + resolve），系统不自动执行
@@ -384,7 +384,7 @@
     的明确需求，且届时有独立验证窗口。
 - **决策 ③：值得纳入的方向 = 把**本系统自身**能力包成 MCP 工具面**（非引入外部 MCP）。
   这是「接入 AI 生态」的更贴题路径，且**已在账本**（§6.3 **P2-10** MCP server /
-  **P2-13** MCP 工具层封装），契约与信封设计见 `docs/mcp.md`（先 API 契约、再 MCP 封装，共用 Service 层）
+  **P2-13** MCP 工具层封装），契约与信封设计见 `docs/system/mcp.md`（先 API 契约、再 MCP 封装，共用 Service 层）
   ⇒ **不另立新项，按既有 P2-10/P2-13 走**。
 - **代价**：无（本轮为评估，零代码变更）。**重议条件**：①桌面端付费订阅成为团队既有资产
   且出现「AI 辅助人工看盘」的真实场景；②图表库出现 v4 无法满足的硬需求。

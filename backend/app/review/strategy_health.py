@@ -248,7 +248,7 @@ def build_strategy_key_action_items(session_factory) -> list[ActionItem]:
             evidence=ev,
             target=f"picks/strategy_registry + {s.get('source')}",
             proposed_change=(
-                "对照 docs/strategy-registry.md 该条目的「失效判据」人工复核；"
+                "对照 docs/strategy/strategy-registry.md 该条目的「失效判据」人工复核；"
                 "确认失效则在处置台账追加一行（含证据链与样本边界），并按三选一动作处置"
             ),
         ))

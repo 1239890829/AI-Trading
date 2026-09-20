@@ -53,7 +53,7 @@ def test_business_modules_use_adapter_not_direct_typesafe_url():
 
 def test_jev_blueprint_links_all_active_ledger_owners():
     repo = APP.parents[1]
-    blueprint = (repo / "docs" / "jev-integration.md").read_text()
+    blueprint = (repo / "docs" / "ai" / "jev-integration.md").read_text()
     for task_id in ("GOV-024", "IMP-045", "IMP-046", "RSH-030"):
         assert task_id in blueprint
 
