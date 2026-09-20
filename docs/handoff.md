@@ -1,6 +1,6 @@
 # 当前交接：IMP-006 执行事实统一候选待独立审核
 
-**当前模式：REVIEW。** G1/P0 阻断项 **IMP-006** 已在 `chatgpt/imp006-execution-snapshot` 形成实施候选（最终代码/测试候选 `a48c49f`；其后端与 `1a15703` 相同，仅追加非 ready UI 价格身份修正）并回填为 `待交付`；该候选已完成本地后端 `4015 passed, 80 skipped`、全仓 pyflakes、前端双时区 `695/695`、TS/ESLint/build 及 public-repo/workspace hygiene，但这些仍是作者实施与自检。当前只允许对 PR #60 的准确 HEAD 做独立代码审核、required CI 与必要的限定整改；**不得**因作者自检全绿就标完成、合并或继续 IMP-044/IMP-049/IMP-053。候选复用现有 `OpportunityDecisionSnapshot`，用 `execution-facts-v1` 将 reference、动作时 snapshot 与 paper fill 分名，并把非 `ready` 行情 fail-closed；未改变选股阈值、仓位参数、真实交易权限或策略收益口径。BUG-020 的真实交易时段生产会话仍为 G0 `待条件`；若其外部条件转为可行动，低门 G0 仍须重新优先。
+**当前模式：REVIEW。** G1/P0 阻断项 **IMP-006** 已在 `chatgpt/imp006-execution-snapshot` 形成实施候选（生产代码候选 `a48c49f`；其后端与 `1a15703` 相同，仅追加非 ready UI 价格身份修正；PR #60 另含治理测试兼容修正 `488594f`）并回填为 `待交付`；该候选已完成本地后端 `4015 passed, 80 skipped`、全仓 pyflakes、前端双时区 `695/695`、TS/ESLint/build 及 public-repo/workspace hygiene，但这些仍是作者实施与自检。当前只允许对 PR #60 的准确 HEAD 做独立代码审核、required CI 与必要的限定整改；**不得**因作者自检全绿就标完成、合并或继续 IMP-044/IMP-049/IMP-053。候选复用现有 `OpportunityDecisionSnapshot`，用 `execution-facts-v1` 将 reference、动作时 snapshot 与 paper fill 分名，并把非 `ready` 行情 fail-closed；未改变选股阈值、仓位参数、真实交易权限或策略收益口径。BUG-020 的真实交易时段生产会话仍为 G0 `待条件`；若其外部条件转为可行动，低门 G0 仍须重新优先。
 
 ## 1. 固定入口与范围
 
