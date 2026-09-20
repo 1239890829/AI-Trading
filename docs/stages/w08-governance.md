@@ -106,7 +106,7 @@
 
 **平台目录退出与内容提炼**
 
-- **状态**：待交付
+- **状态**：已完成
 - **优先级**：P1
 - **阶段门**：G4
 - **门内序**：90
@@ -116,8 +116,8 @@
 - **方案依据**：主方案§12.4、U46 与用户 2026-09-20 明确要求项目内退出所有应用专属目录。
 - **范围**：旧平台内容按用途提炼到项目中性的 skills/scripts/docs/artifacts；第三方整仓只保留已提炼知识，不整包改名。
 - **验收**：最终恢复包逐 payload 校验；所有活消费者改到中性路径；旧平台目录无运行消费者且物理不存在；应用专属目录由 workspace-hygiene 本地+CI 阻断复活。
-- **证据**：最终恢复包 3,249 payload 全量回读通过，archive SHA-256 `ed57f245ee440bd6b56607b5466ce605cb1d430a6862ac08fb227059cf373324`。18 个项目 Skill、4 个 TDX 探针及独有研究证据完成提炼；UZI/Serenity 本体不迁，方法/经验由 KB 承接。2026-09-20 主工作区确认无进程引用后，`.workbuddy` 与 `.workbuddy-ai` 已物理删除。
-- **下一步**：本轮实现/物理退出已完成，等待准确候选提交、required CI 与网页最终交付；通过后改 `已完成`。后续不恢复旧平台入口。
+- **证据**：最终恢复包 3,249 payload 全量回读通过，archive SHA-256 `ed57f245ee440bd6b56607b5466ce605cb1d430a6862ac08fb227059cf373324`。18 个项目 Skill、4 个 TDX 探针及独有研究证据完成提炼；UZI/Serenity 本体不迁，方法/经验由 KB 承接。2026-09-20 主工作区确认无进程引用后，`.workbuddy` 与 `.workbuddy-ai` 已物理删除。PR #48 首个准确候选 `86cb841aa1efda2782b2735a7a7baa9f742374dc` 的 GitHub CI run `35481601773` 已确认 backend / frontend / docs 三项 required check 全绿，docs job 同时通过 public-repo scan、workspace-hygiene 与 doc-health。
+- **下一步**：本项闭环；后续不恢复旧平台入口。若应用专属目录或隐藏规则再次出现，由 GOV-026/workspace-hygiene 当轮阻断和清理，不重开旧迁移工程。
 - **恢复**：需要历史取证时只读 `docs/archive/platform-directory-migration-20260920.md`、Git 历史和本机最终恢复包；恢复到隔离目录，不恢复为项目现役结构。
 - **实施步骤**：已完成“清单/恢复点 → 提炼 → 消费者改写 → 守卫 → 物理删除 → 独立验证”的闭环。
 
