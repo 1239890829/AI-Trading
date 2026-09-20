@@ -124,7 +124,7 @@ def test_u49_proactive_discovery_guard_detects_missing_review_stage(tmp_path, mo
     )
     (docs / "stages" / "w08-governance.md").write_text("Proactive Discovery Gate Preflight Review\n")
     (root / "AGENTS.md").write_text(
-        "v9.10 jev-integration.md U49 主动缺陷发现门\n"
+        "v9.10 jev-integration.md U49 主动缺陷发现门 Preflight Review\n"
     )
     (root / "skills" / "living-system-governor" / "SKILL.md").write_text(
         "主动缺陷发现门（Proactive Discovery Gate） Preflight Review\n"
