@@ -15,6 +15,7 @@ import sys
 
 WORKFLOW = ".github/workflows/ci.yml"
 REQUIRED_JOBS = {"backend (pytest + pyflakes)", "frontend (tsc + lint)", "docs (doc-health)"}
+REVIEW_VERDICT = "APPROVED / MERGE_IF_GATES_PASS"
 
 
 def require(condition: bool, reason: str) -> None:
@@ -45,6 +46,30 @@ def latest_runs(runs: list[dict]) -> list[dict]:
     return list(latest.values())
 
 
+def exact_web_review_receipt(comments: list[dict], pr_number: int, expected_head: str) -> dict | None:
+    """Return the newest project-level web Review receipt bound to this exact PR/HEAD.
+
+    This is a process-consistency check, not cryptographic reviewer identity proof:
+    single-account repositories cannot prove web-vs-author identity through GitHub.
+    """
+    stage_re = re.compile(r"(?mi)^\s*-\s*Stage:\s*`Review`\s*(?:\([^\n]*\))?\s*$")
+    pr_re = re.compile(rf"(?mi)^\s*-\s*PR:\s*#{pr_number}\s*$")
+    head_re = re.compile(rf"(?mi)^\s*-\s*Reviewed HEAD:\s*`{re.escape(expected_head)}`\s*$")
+    verdict_re = re.compile(
+        rf"Web Review verdict:\s*`{re.escape(REVIEW_VERDICT)}`\s*"
+        rf"for HEAD\s*`{re.escape(expected_head)}`\s*only\.?",
+        re.IGNORECASE,
+    )
+    valid = []
+    for comment in comments:
+        body = comment.get("body") or ""
+        if stage_re.search(body) and pr_re.search(body) and head_re.search(body) and verdict_re.search(body):
+            valid.append(comment)
+    if not valid:
+        return None
+    return max(valid, key=lambda item: (item.get("created_at") or "", item.get("id") or 0))
+
+
 def validate(snapshot: dict, expected_head: str) -> dict:
     pr, base = snapshot["pr"], snapshot["base"]
     require(pr["state"] == "open" and pr["draft"] is False, "PR is not open and ready")
@@ -65,6 +90,9 @@ def validate(snapshot: dict, expected_head: str) -> dict:
         if review["state"] in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}:
             reviews[review["user"]["login"]] = review["state"]
     require("CHANGES_REQUESTED" not in reviews.values(), "Unresolved Request changes")
+
+    receipt = exact_web_review_receipt(snapshot["review_comments"], pr["number"], expected_head)
+    require(receipt is not None, "Missing project-level web Review receipt for exact PR/HEAD")
 
     runs = latest_runs(snapshot["runs"])
     ci = [run for run in runs if run["path"] == WORKFLOW and run["event"] == "pull_request"]
@@ -99,7 +127,15 @@ def validate(snapshot: dict, expected_head: str) -> dict:
         "run_id": run["id"], "attempt": run["run_attempt"],
         "jobs": [{"id": job["id"], "name": job["name"], "conclusion": job["conclusion"]} for job in jobs],
         "branch_protected": base["protected"],
-        "scope": "Actions and commit statuses; client check, not server branch protection",
+        "web_review_receipt": {
+            "id": receipt.get("id"),
+            "author": (receipt.get("user") or {}).get("login"),
+            "created_at": receipt.get("created_at"),
+        },
+        "scope": (
+            "Actions, commit statuses and exact-HEAD project web Review receipt; "
+            "process-consistency check, not cryptographic reviewer identity proof"
+        ),
     }
 
 
@@ -127,6 +163,7 @@ def collect(repo: str, number: int, head: str) -> dict:
         "jobs": paged(f"{prefix}/actions/runs/{run['id']}/attempts/{run['run_attempt']}/jobs?per_page=100", "jobs"),
         "commit_status": gh_json("api", f"{prefix}/commits/{head}/status"),
         "reviews": paged(f"{prefix}/pulls/{number}/reviews?per_page=100"),
+        "review_comments": paged(f"{prefix}/issues/{number}/comments?per_page=100"),
         "review_decision": review["reviewDecision"],
         "unresolved_threads": any(not t["isResolved"] for t in review["reviewThreads"]["nodes"]),
         "reviews_complete": not review["reviewThreads"]["pageInfo"]["hasNextPage"],

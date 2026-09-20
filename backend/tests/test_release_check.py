@@ -13,6 +13,21 @@ spec.loader.exec_module(release)
 HEAD, BASE = "a" * 40, "b" * 40
 
 
+def review_comment(*, head=HEAD, pr=23):
+    return dict(
+        id=91,
+        created_at="2026-09-20T00:00:00Z",
+        user=dict(login="web-review-account"),
+        body=(
+            "## Independent web review receipt\n\n"
+            "- Stage: `Review` (web-owned; not author self-approval)\n"
+            f"- PR: #{pr}\n"
+            f"- Reviewed HEAD: `{head}`\n"
+            f"**Web Review verdict: `{release.REVIEW_VERDICT}` for HEAD `{head}` only.**\n"
+        ),
+    )
+
+
 def snapshot():
     run = dict(id=31, workflow_id=7, run_number=4, run_attempt=2,
                path=release.WORKFLOW, event="pull_request", head_sha=HEAD, pull_requests=[dict(number=23)],
@@ -27,6 +42,7 @@ def snapshot():
         jobs=[dict(id=i, run_id=31, head_sha=HEAD, name=name, status="completed", conclusion="success")
               for i, name in enumerate(sorted(release.REQUIRED_JOBS))],
         review_decision=None, unresolved_threads=False, reviews_complete=True, reviews=[],
+        review_comments=[review_comment()],
         commit_status=dict(sha=HEAD, state="pending", total_count=0, statuses=[]),
     )
 
@@ -42,12 +58,20 @@ def test_required_jobs_match_the_actual_workflow():
     assert {job.get("name", key) for key, job in workflow["jobs"].items()} == release.REQUIRED_JOBS
 
 
+def test_web_review_receipt_is_bound_to_exact_pr_and_head():
+    receipt = release.exact_web_review_receipt([review_comment()], 23, HEAD)
+    assert receipt and receipt["id"] == 91
+    assert release.exact_web_review_receipt([review_comment(head=BASE)], 23, HEAD) is None
+    assert release.exact_web_review_receipt([review_comment(pr=24)], 23, HEAD) is None
+
+
 @pytest.mark.parametrize("case", [
     "empty_runs", "empty_jobs", "missing_job", "duplicate_job", "extra_job", "old_head",
     "old_job_head", "old_job_run", "old_jobs_attempt", "newer_attempt_cancelled", "newer_run_pending",
     "job_skipped", "job_cancelled", "job_pending", "run_failure", "base_advanced", "head_changed",
     "mergeability_unknown", "conflict", "review_changes", "review_thread", "review_pagination",
-    "review_rest_changes", "status_failure", "status_old_head", "draft", "closed", "foreign_repo",
+    "review_rest_changes", "missing_web_review", "old_web_review_head", "wrong_web_review_pr",
+    "status_failure", "status_old_head", "draft", "closed", "foreign_repo",
 ])
 def test_bad_or_incomplete_evidence_cannot_release(case):
     s = snapshot()
@@ -74,6 +98,9 @@ def test_bad_or_incomplete_evidence_cannot_release(case):
     elif case == "review_thread": s["unresolved_threads"] = True
     elif case == "review_pagination": s["reviews_complete"] = False
     elif case == "review_rest_changes": s["reviews"] = [dict(user=dict(login="reviewer"), state="CHANGES_REQUESTED")]
+    elif case == "missing_web_review": s["review_comments"] = []
+    elif case == "old_web_review_head": s["review_comments"] = [review_comment(head=BASE)]
+    elif case == "wrong_web_review_pr": s["review_comments"] = [review_comment(pr=24)]
     elif case == "status_failure":
         s["commit_status"]["statuses"] = [dict(state="failure")]
         s["commit_status"]["total_count"] = 1

@@ -24,8 +24,9 @@
 - **证据**：历史26a0c44到9d439c5批检查过跟踪源、原项目scripts/.github、LaunchAgents与进程命令；通过safe-trash成对移除旧脚本及44项专属测试、核SHA并做一次脚本恢复再退出。对应retirement.json及Git保留；不是本次新查，也不宣称整台机器不存在未知外部引用。
   - 2026-09-19 v9.4 治理切片 PR #41 新增传播契约与 doc-health R 守卫；首次主动扫当前版本指针即额外抓出 `summary/pick-signal-chain.md`、`summary/review-governance.md` 两处残留 v9.3，证明人工记忆不足以防漏，并已纳入同一守卫面。
   - 2026-09-20 用户追问“为什么不说就不能主动发现”触发治理复盘：确认原流程虽然写有反证/持续演进，但没有把隐藏缺陷扫描设成每轮强制触发，因此同日升级为 v9.10/U49，并同步 Governor v1.2.0、continue/handoff Skills、协作规范、AGENTS、plan-registry、INDEX、handoff 与 doc-health 传播守卫。
+  - 同轮 U49 Preflight 又确认 `release_check.py` 只校验 GitHub reviews/threads/CI，不校验项目级网页 Review 回执本身。PR #63 exact-HEAD Review 已在合并前存在且 post-merge master CI 全绿，因此不是该 PR 的放行事故；但流程缺口真实存在。后续治理切片为 `release_check.py` 增加 PR Conversation exact-PR/exact-HEAD Review 回执校验与正反测试，并明确它只做流程一致性、不宣称 GitHub 身份隔离。
 - **处置依据**：人工触发已代替自动发送需求；继续开发互调增加权限/状态/维护成本。退出不等于自动链成功，废弃子目标不得重新派工。
-- **下一步**：后续每轮用真实“继续→实施→审核→收口”验证 U49 是否无需用户提醒就产生主动审计回执，并统计它发现的真实缺陷、误报与额外成本；如审计退化成无限扫描或形式化勾选，按 living-system-governor 生命周期修正。当前业务主门仍是 G1/IMP-044，GX 不借 U49 跨门。
+- **下一步**：先收口本轮发布门 companion：exact-HEAD 网页 Review 回执进入 `release_check.py` 的机器判定并通过完整 CI；随后回 G1/IMP-044。长期继续用真实“继续→实施→审核→收口”验证 U49 的发现质量、误报与成本；GX 不借 U49 跨门。
 - **恢复**：26a0c44和项目回收记录保存旧文件；恢复只作调查且不覆盖目标，不恢复旧自治目标或撤销金融/CI保护。
 - **分工**：网页方案/账本/审核与净收益复评，Codex回填执行事实，用户触发及重大取舍。Bridge个人App/扩展/对话未卸载删除，不影响本流程。
 
