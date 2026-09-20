@@ -100,6 +100,55 @@ def test_real_decision_propagation_is_closed():
     assert mod.check_decision_propagation() == []
 
 
+def test_u49_proactive_discovery_propagation_detects_missing_surface(tmp_path, monkeypatch):
+    mod = load()
+    root = tmp_path
+    docs = root / "docs"
+    (docs / "stages").mkdir(parents=True)
+    (root / "skills" / "living-system-governor").mkdir(parents=True)
+    (root / "skills" / "ashare-ledger-continue").mkdir(parents=True)
+    (root / "skills" / "ashare-task-handoff").mkdir(parents=True)
+
+    (docs / "implementation-plan.md").write_text(
+        "# AShare AI Trader 实施校准方案 v9.10\nU49 Proactive Discovery Gate\n"
+    )
+    (docs / "INDEX.md").write_text("v9.10 jev-integration.md U49 主动缺陷发现门\n")
+    (docs / "handoff.md").write_text(
+        "v9.10 jev-integration.md U01–U49 U49 主动审计回执\n"
+    )
+    (docs / "plan-registry.md").write_text(
+        "重大决策传播契约（防遗漏） 已更新 不适用 用户没问还有没有问题\n"
+    )
+    (docs / "collaboration-workflow.md").write_text(
+        "plan-registry.md U49 主动缺陷发现门\n"
+    )
+    (docs / "stages" / "w08-governance.md").write_text("Proactive Discovery Gate\n")
+    (root / "AGENTS.md").write_text(
+        "v9.10 jev-integration.md U49 主动缺陷发现门\n"
+    )
+    (root / "skills" / "living-system-governor" / "SKILL.md").write_text(
+        "主动缺陷发现门（Proactive Discovery Gate）\n"
+    )
+    (root / "skills" / "ashare-ledger-continue" / "SKILL.md").write_text(
+        " ".join([
+            "jev-integration.md", "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
+            "docs/implementation-plan.md", "docs/ai/jev-integration.md",
+            "docs/retro-and-gaps.md", "docs/stages/", "U49 主动缺陷发现门",
+        ])
+    )
+    # 故意只保留旧传播入口，模拟“总方案写了 U49，但交接 Skill 漏同步”。
+    (root / "skills" / "ashare-task-handoff" / "SKILL.md").write_text("plan-registry.md\n")
+
+    monkeypatch.setattr(mod, "ROOT", root)
+    monkeypatch.setattr(mod, "DOCS", docs)
+
+    errors = mod.check_decision_propagation()
+    assert any(
+        "ashare-task-handoff/SKILL.md" in error and "U49 主动缺陷发现传播缺失" in error
+        for error in errors
+    )
+
+
 def test_decision_propagation_detects_stale_current_pointer(tmp_path, monkeypatch):
     mod = load()
     root = tmp_path
