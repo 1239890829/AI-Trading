@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import create_engine, delete, select
 from sqlalchemy.orm import sessionmaker
@@ -20,8 +20,13 @@ from app.picks.opportunity_learning import (
     build_intraday_records,
     build_notification_records,
     label_trade_date,
+    due_outcome_symbols,
+    ensure_outcome_horizons,
+    label_due_outcomes,
     learning_summary,
     opportunity_scorecard,
+    outcome_target_dates,
+    pending_outcome_targets,
     pending_symbols,
     replay_run,
     round_trip_net_pct,
@@ -271,6 +276,108 @@ def test_deferred_denominator_backfill_records_market_result_without_fill_claim(
     assert outcome.net_return_pct is None and outcome.cost_pct is None
     summary = learning_summary("2026-09-16", sf)
     assert summary["funnel_denominator"]["label_coverage"] == 1.0
+
+
+def test_multihorizon_targets_use_trading_sessions_not_calendar_days():
+    days = [
+        date(2026, 9, 18), date(2026, 9, 21), date(2026, 9, 22),
+        date(2026, 9, 23), date(2026, 9, 24), date(2026, 9, 25),
+    ]
+    assert outcome_target_dates("2026-09-18", days) == {
+        "d0_close": "2026-09-18", "d1_close": "2026-09-21",
+        "d3_close": "2026-09-23", "d5_close": "2026-09-25",
+    }
+    # Calendar does not contain the anchor/future: fail closed rather than weekday guessing.
+    assert outcome_target_dates("2026-09-19", days) == {"d0_close": "2026-09-19"}
+    assert outcome_target_dates("2026-09-25", days) == {"d0_close": "2026-09-25"}
+
+
+def test_future_horizons_are_idempotent_and_do_not_expand_realtime_deferred_requests(tmp_path):
+    sf = _factory(tmp_path)
+    run_id, rows = build_intraday_records(
+        _payload(), trade_date="2026-09-18", as_of=datetime(2026, 9, 18, 10, 5)
+    )
+    archive_records(run_id, rows, sf)
+    days = [
+        date(2026, 9, 18), date(2026, 9, 21), date(2026, 9, 22),
+        date(2026, 9, 23), date(2026, 9, 24), date(2026, 9, 25),
+    ]
+    first = ensure_outcome_horizons("2026-09-18", days, sf)
+    second = ensure_outcome_horizons("2026-09-18", days, sf)
+    assert first["inserted"] == 18 and second["inserted"] == 0
+    assert first["missing_horizons"] == []
+    assert due_outcome_symbols("2026-09-21", sf) == {"600001"}
+    assert due_outcome_symbols("2026-09-21", sf, include_deferred=True) == {"600001", "600002"}
+    # D0 compatibility helper must ignore future pending rows.
+    assert pending_symbols("2026-09-18", sf) == {"600001"}
+
+
+def test_pending_future_targets_are_selected_only_bounded_and_recover_overdue(tmp_path):
+    sf = _factory(tmp_path)
+    run_id, rows = build_intraday_records(
+        _payload(), trade_date="2026-09-18", as_of=datetime(2026, 9, 18, 10, 5)
+    )
+    archive_records(run_id, rows, sf)
+    days = [
+        date(2026, 9, 18), date(2026, 9, 21), date(2026, 9, 22),
+        date(2026, 9, 23), date(2026, 9, 24), date(2026, 9, 25),
+    ]
+    ensure_outcome_horizons("2026-09-18", days, sf)
+
+    # Monday D1 was missed; Tuesday run must still discover it for selected-only recovery.
+    targets = pending_outcome_targets("2026-09-22", sf, lookback_days=30)
+    assert targets["2026-09-21"] == {"600001"}
+    assert "600002" not in set().union(*targets.values()), "deferred denominator must not expand realtime fetches"
+
+    repaired = label_due_outcomes("2026-09-21", {"600001": 10.5}, sf)
+    assert repaired["labeled"] == 1
+    assert "2026-09-21" not in pending_outcome_targets("2026-09-22", sf, lookback_days=30)
+
+    # A bounded live recovery surface must not grow without limit.
+    assert pending_outcome_targets("2026-10-31", sf, lookback_days=30) == {}
+
+
+def test_d1_label_is_reference_proxy_not_shadow_fill_and_deferred_stays_nonactionable(tmp_path):
+    sf = _factory(tmp_path)
+    run_id, rows = build_intraday_records(
+        _payload(), trade_date="2026-09-18", as_of=datetime(2026, 9, 18, 10, 5)
+    )
+    archive_records(run_id, rows, sf)
+    days = [
+        date(2026, 9, 18), date(2026, 9, 21), date(2026, 9, 22),
+        date(2026, 9, 23), date(2026, 9, 24), date(2026, 9, 25),
+    ]
+    ensure_outcome_horizons("2026-09-18", days, sf)
+    realtime = label_due_outcomes("2026-09-21", {"600001": 10.5, "600002": 8.4}, sf)
+    assert realtime["labeled"] == 1
+    offline = label_due_outcomes(
+        "2026-09-21", {"600001": 10.5, "600002": 8.4}, sf, include_deferred=True
+    )
+    assert offline["labeled"] == 5
+    with sf() as db:
+        selected = db.execute(
+            select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
+            .join(OpportunityDecisionSnapshot,
+                  OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
+            .where(OpportunityOutcomeLabel.horizon == "d1_close",
+                   OpportunityDecisionSnapshot.stage == "rank",
+                   OpportunityDecisionSnapshot.symbol == "600001")
+        ).one()
+        rejected = db.execute(
+            select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
+            .join(OpportunityDecisionSnapshot,
+                  OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
+            .where(OpportunityOutcomeLabel.horizon == "d1_close",
+                   OpportunityDecisionSnapshot.stage == "rank",
+                   OpportunityDecisionSnapshot.symbol == "600002")
+        ).one()
+    assert selected[0].state == "labeled" and selected[0].net_return_pct is not None
+    assert "reference" in selected[0].reason and "非 shadow fill" in selected[0].reason
+    assert rejected[0].state == "labeled" and rejected[0].fill_state == "not_actionable"
+    assert rejected[0].net_return_pct is None
+    card = opportunity_scorecard("2026-09-18", horizon="d1_close", session_factory=sf)
+    assert card["metric_identity"]["realizable_return"] is False
+    assert "cost_adjusted_reference_proxy_pct" in card["expectancy"]
 
 
 def test_missing_entry_price_becomes_unknown_not_zero_return(tmp_path):

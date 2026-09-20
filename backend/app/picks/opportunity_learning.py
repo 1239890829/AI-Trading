@@ -6,12 +6,12 @@ calling a market-data provider or consulting today's mutable configuration.
 
 **两种收益口径，勿混用（2026-09-16 `RSH-026` 第二批）**
 
-- `return_pct` = **毛收益**：决策时点价 → D0 收盘，**不含成本**。它衡量的是
-  「信号方向对不对」，**不是**可实现盈亏；且 A 股 T+1 ⇒ 当日买入当日不可卖，
-  该收益在规则上**不可实现**。
-- `net_return_pct` 是历史列名；对当前 `d0_close` 标签，它实际表示**成本调整 D0 代理**：
-  决策时点价 → 同日收盘，再扣双边费用。A 股 T+1 禁止当日买入当日卖出，故它**不是可实现净收益**。
-  仅在决策时点可成交（`fill_state == "ok"`）时给值；不可成交一律记 `None`，缺价不造 0。
+- `return_pct` = **毛市场结果**：决策时点 reference → 指定 horizon 的收盘，**不含成本**。
+  `d0_close` 受 A 股 T+1 约束不可实现；`d1/d3/d5_close` 虽满足时间约束，仍只是 reference 轨，
+  不是实际 shadow fill 的交易净收益。
+- `net_return_pct` 是历史列名；现在统一表示**成本调整 reference 代理**：
+  决策时点 reference → horizon 目标交易日收盘，再扣双边费用。只有决策时点可成交
+  (`fill_state == "ok"`) 才给值；不可成交/非动作分母一律 `None`，缺价不造 0。
 - 成本费率**不在此另立**：取自 `app.paper.engine.calc_fee`（与 `paper/reconcile.py` 同源）；
   涨停幅度取自 `app.market.price_rules.limit_pct`（全仓单一实现）。
 """
@@ -21,7 +21,7 @@ import hashlib
 import json
 import math
 from collections import Counter
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Iterable
 
 from sqlalchemy import select
@@ -36,6 +36,13 @@ from app.picks.kb_routing import snapshot_citations
 STRATEGY_VERSION = "stock-opportunity-funnel-v2"
 FEATURE_VERSION = "pit-evidence-v2"
 OUTCOME_HORIZON = "d0_close"
+OUTCOME_HORIZONS = {
+    "d0_close": 0,
+    "d1_close": 1,
+    "d3_close": 3,
+    "d5_close": 5,
+}
+FUTURE_OUTCOME_HORIZONS = tuple(h for h in OUTCOME_HORIZONS if h != OUTCOME_HORIZON)
 STAGES = ("candidate", "hard_gate", "rank", "notification")
 
 #: 成本口径版本。**变更费率假设或可成交判据时必须递增**——结果标签是 append-only 的，
@@ -455,6 +462,90 @@ def build_notification_records(
     return run_id, records
 
 
+def outcome_target_dates(trade_date: str, trading_days: list[date]) -> dict[str, str]:
+    """Map D0/D1/D3/D5 to exact trading-session dates; never guess calendar days.
+
+    If the injected calendar does not contain the anchor or does not extend far
+    enough, unavailable future horizons are omitted. Callers may retry later when
+    the authoritative calendar covers more sessions.
+    """
+    anchor = date.fromisoformat(trade_date)
+    normalized = sorted({d for d in trading_days if isinstance(d, date)})
+    targets = {OUTCOME_HORIZON: trade_date}
+    if anchor not in normalized:
+        return targets
+    index = normalized.index(anchor)
+    for horizon, offset in OUTCOME_HORIZONS.items():
+        if offset == 0:
+            continue
+        target_index = index + offset
+        if target_index < len(normalized):
+            targets[horizon] = normalized[target_index].isoformat()
+    return targets
+
+
+def _new_horizon_outcome(
+    snapshot: OpportunityDecisionSnapshot, horizon: str, target_date: str,
+) -> OpportunityOutcomeLabel:
+    selected = _selected_outcome_snapshot(snapshot.stage, snapshot.decision)
+    return OpportunityOutcomeLabel(
+        snapshot_id=snapshot.snapshot_id, horizon=horizon, target_date=target_date,
+        state="pending" if selected else "deferred", label="unknown",
+        reference_price=snapshot.entry_price,
+        fill_state="pending" if selected else "not_actionable",
+        reason=(
+            f"等待 {horizon}@{target_date} 收盘价" if selected
+            else (
+                f"全漏斗分母已登记；{snapshot.stage}:{snapshot.decision} 非实时动作样本；"
+                f"等待离线 {horizon}@{target_date} 结果回填"
+            )
+        ),
+    )
+
+
+def ensure_outcome_horizons(
+    trade_date: str, trading_days: list[date], session_factory=None,
+) -> dict:
+    """Ensure D1/D3/D5 identities for one decision date without rewriting snapshots."""
+    targets = outcome_target_dates(trade_date, trading_days)
+    future_targets = {h: d for h, d in targets.items() if h != OUTCOME_HORIZON}
+    sf = session_factory or get_session_factory()
+    inserted = 0
+    snapshots_count = 0
+    with sf() as db:
+        snapshots = db.execute(
+            select(OpportunityDecisionSnapshot).where(
+                OpportunityDecisionSnapshot.trade_date == trade_date
+            )
+        ).scalars().all()
+        snapshots_count = len(snapshots)
+        if snapshots and future_targets:
+            snapshot_ids = [snapshot.snapshot_id for snapshot in snapshots]
+            existing = set(db.execute(
+                select(OpportunityOutcomeLabel.snapshot_id, OpportunityOutcomeLabel.horizon)
+                .where(
+                    OpportunityOutcomeLabel.snapshot_id.in_(snapshot_ids),
+                    OpportunityOutcomeLabel.horizon.in_(tuple(future_targets)),
+                )
+            ).all())
+            for snapshot in snapshots:
+                for horizon, target_date in future_targets.items():
+                    key = (snapshot.snapshot_id, horizon)
+                    if key in existing:
+                        continue
+                    db.add(_new_horizon_outcome(snapshot, horizon, target_date))
+                    existing.add(key)
+                    inserted += 1
+            db.commit()
+    return {
+        "trade_date": trade_date,
+        "targets": targets,
+        "missing_horizons": sorted(set(FUTURE_OUTCOME_HORIZONS) - set(future_targets)),
+        "snapshots": snapshots_count,
+        "inserted": inserted,
+    }
+
+
 def _new_outcome_label(snapshot_id: str, record: dict) -> OpportunityOutcomeLabel:
     selected = _selected_outcome_snapshot(record["stage"], record["decision"])
     return OpportunityOutcomeLabel(
@@ -690,6 +781,150 @@ def replay_run(run_id: str, session_factory=None) -> dict:
     return {"run_id": run_id, "records": len(items), "mismatches": mismatches, "items": items}
 
 
+def pending_outcome_targets(
+    as_of_date: str, session_factory=None, *, lookback_days: int = 30,
+    horizons: Iterable[str] = FUTURE_OUTCOME_HORIZONS,
+) -> dict[str, set[str]]:
+    """Selected/actionable future-horizon rows due on or before ``as_of_date``.
+
+    This is the bounded crash-recovery surface for the after-close loop. Deferred
+    denominator-only rows are intentionally excluded so research completeness can
+    never multiply realtime provider requests.
+    """
+    as_of = date.fromisoformat(as_of_date)
+    lower = (as_of - timedelta(days=max(1, int(lookback_days)))).isoformat()
+    wanted = tuple(horizons)
+    sf = session_factory or get_session_factory()
+    with sf() as db:
+        rows = db.execute(
+            select(OpportunityOutcomeLabel.target_date, OpportunityDecisionSnapshot.symbol)
+            .join(OpportunityDecisionSnapshot,
+                  OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
+            .where(
+                OpportunityOutcomeLabel.target_date >= lower,
+                OpportunityOutcomeLabel.target_date <= as_of_date,
+                OpportunityOutcomeLabel.horizon.in_(wanted),
+                OpportunityOutcomeLabel.state == "pending",
+            )
+        ).all()
+    out: dict[str, set[str]] = {}
+    for target_date, symbol in rows:
+        out.setdefault(target_date, set()).add(symbol)
+    return dict(sorted(out.items()))
+
+
+def due_outcome_symbols(
+    target_date: str, session_factory=None, *, include_deferred: bool = False,
+    horizons: Iterable[str] | None = None,
+) -> set[str]:
+    """Symbols with outcome rows due on one target trading date."""
+    sf = session_factory or get_session_factory()
+    states = ("pending", "deferred") if include_deferred else ("pending",)
+    wanted = tuple(horizons or OUTCOME_HORIZONS)
+    with sf() as db:
+        rows = db.execute(
+            select(OpportunityDecisionSnapshot.symbol)
+            .join(OpportunityOutcomeLabel,
+                  OpportunityOutcomeLabel.snapshot_id == OpportunityDecisionSnapshot.snapshot_id)
+            .where(
+                OpportunityOutcomeLabel.target_date == target_date,
+                OpportunityOutcomeLabel.horizon.in_(wanted),
+                OpportunityOutcomeLabel.state.in_(states),
+            )
+        ).scalars().all()
+    return set(rows)
+
+
+def _label_outcome_rows(
+    rows: list[tuple[OpportunityOutcomeLabel, OpportunityDecisionSnapshot]],
+    close_by_symbol: dict[str, float],
+) -> dict[str, int]:
+    labeled = unknown = pending = 0
+    for outcome, snapshot in rows:
+        denominator_only = not _selected_outcome_snapshot(snapshot.stage, snapshot.decision)
+        reference = (
+            outcome.reference_price if _positive_finite(outcome.reference_price)
+            else snapshot.entry_price if _positive_finite(snapshot.entry_price)
+            else None
+        )
+        try:
+            evidence = json.loads(snapshot.evidence or "{}")
+        except Exception:
+            evidence = {}
+        if denominator_only:
+            fill_state = "not_actionable"
+            fill_basis = (
+                f"{snapshot.stage}:{snapshot.decision} 为全漏斗分母样本；"
+                "只记录市场结果，不计可执行净收益"
+            )
+        else:
+            fill_state, fill_basis = assess_fill_state(
+                snapshot.symbol, _archived_change_pct(evidence)
+            )
+        outcome.fill_state = fill_state
+        if not _positive_finite(reference):
+            outcome.state = "unknown"
+            outcome.label = "unknown"
+            outcome.reason = f"{outcome.horizon} 决策时点价格缺失，不能计算收益"
+            outcome.labeled_at = utcnow()
+            unknown += 1
+            continue
+        close = close_by_symbol.get(snapshot.symbol)
+        if not _positive_finite(close):
+            outcome.reason = f"{fill_basis}；等待 {outcome.horizon}@{outcome.target_date} 有限且为正的收盘价"
+            pending += 1
+            continue
+        ret = round((float(close) / float(reference) - 1) * 100, 2)
+        outcome.state = "labeled"
+        outcome.reference_price = float(reference)
+        outcome.outcome_price = float(close)
+        outcome.return_pct = ret
+        outcome.label = "positive" if ret >= 0 else ("flat" if ret >= -2.0 else "negative")
+        if fill_state == "ok":
+            net, cost, _qty = round_trip_net_pct(float(reference), float(close))
+            outcome.cost_pct = cost
+            outcome.net_return_pct = net
+            identity = "D0 同日成本调整代理" if outcome.horizon == OUTCOME_HORIZON else "跨日 reference 成本调整代理"
+            outcome.reason = (
+                f"{outcome.horizon}@{outcome.target_date}：决策时点 reference 至收盘毛 {ret:+.2f}%，"
+                f"{identity} {net:+.2f}%（{cost:.4f}%，{COST_MODEL_VERSION}）；非 shadow fill"
+            )
+        else:
+            outcome.cost_pct = None
+            outcome.net_return_pct = None
+            outcome.reason = (
+                f"{outcome.horizon}@{outcome.target_date}：决策时点 reference 至收盘毛 {ret:+.2f}%；"
+                f"{fill_basis}"
+            )
+        outcome.labeled_at = utcnow()
+        labeled += 1
+    return {"labeled": labeled, "unknown": unknown, "pending": pending}
+
+
+def label_due_outcomes(
+    target_date: str, close_by_symbol: dict[str, float], session_factory=None, *,
+    include_deferred: bool = False, horizons: Iterable[str] = FUTURE_OUTCOME_HORIZONS,
+) -> dict:
+    """Label D1/D3/D5 rows due on an exact target trading date."""
+    sf = session_factory or get_session_factory()
+    states = ("pending", "deferred") if include_deferred else ("pending",)
+    wanted = tuple(horizons)
+    with sf() as db:
+        rows = db.execute(
+            select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
+            .join(OpportunityDecisionSnapshot,
+                  OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
+            .where(
+                OpportunityOutcomeLabel.target_date == target_date,
+                OpportunityOutcomeLabel.horizon.in_(wanted),
+                OpportunityOutcomeLabel.state.in_(states),
+            )
+        ).all()
+        counts = _label_outcome_rows(rows, close_by_symbol)
+        db.commit()
+    return {"target_date": target_date, "horizons": list(wanted), **counts}
+
+
 def pending_symbols(
     trade_date: str, session_factory=None, *, include_deferred: bool = False,
 ) -> set[str]:
@@ -702,6 +937,7 @@ def pending_symbols(
             .join(OpportunityOutcomeLabel,
                   OpportunityOutcomeLabel.snapshot_id == OpportunityDecisionSnapshot.snapshot_id)
             .where(OpportunityDecisionSnapshot.trade_date == trade_date,
+                   OpportunityOutcomeLabel.horizon == OUTCOME_HORIZON,
                    OpportunityOutcomeLabel.state.in_(states))
         ).scalars().all()
     return set(rows)
@@ -718,7 +954,6 @@ def label_trade_date(
     两者都不是可实现交易收益；封板/无现价留 `None`，不造 0。
     """
     sf = session_factory or get_session_factory()
-    labeled = unknown = pending = 0
     states = ("pending", "deferred") if include_deferred else ("pending",)
     with sf() as db:
         rows = db.execute(
@@ -729,63 +964,9 @@ def label_trade_date(
                    OpportunityOutcomeLabel.horizon == OUTCOME_HORIZON,
                    OpportunityOutcomeLabel.state.in_(states))
         ).all()
-        for outcome, snapshot in rows:
-            denominator_only = outcome.state == "deferred"
-            reference = (
-                outcome.reference_price if _positive_finite(outcome.reference_price)
-                else snapshot.entry_price if _positive_finite(snapshot.entry_price)
-                else None
-            )
-            try:
-                evidence = json.loads(snapshot.evidence or "{}")
-            except Exception:
-                evidence = {}
-            if denominator_only:
-                fill_state = "not_actionable"
-                fill_basis = (
-                    f"{snapshot.stage}:{snapshot.decision} 为全漏斗分母样本；"
-                    "只记录市场结果，不计可执行净收益"
-                )
-            else:
-                fill_state, fill_basis = assess_fill_state(
-                    snapshot.symbol, _archived_change_pct(evidence)
-                )
-            outcome.fill_state = fill_state
-            if not _positive_finite(reference):
-                outcome.state = "unknown"
-                outcome.label = "unknown"
-                outcome.reason = "决策时点价格缺失，不能计算收益"
-                outcome.labeled_at = utcnow()
-                unknown += 1
-                continue
-            close = close_by_symbol.get(snapshot.symbol)
-            if not _positive_finite(close):
-                # 缺失/NaN/Inf/非正收盘价都不是有效结果；保持 pending，允许后续用正确数据重试。
-                outcome.reason = f"{fill_basis}；等待有限且为正的收盘价"
-                pending += 1
-                continue
-            ret = round((float(close) / float(reference) - 1) * 100, 2)
-            outcome.state = "labeled"
-            outcome.reference_price = float(reference)
-            outcome.outcome_price = float(close)
-            outcome.return_pct = ret
-            outcome.label = "positive" if ret >= 0 else ("flat" if ret >= -2.0 else "negative")
-            if fill_state == "ok":
-                net, cost, _qty = round_trip_net_pct(float(reference), float(close))
-                outcome.cost_pct = cost
-                outcome.net_return_pct = net
-                outcome.reason = (
-                    f"决策时点价至收盘毛 {ret:+.2f}%，扣双边成本净 {net:+.2f}%"
-                    f"（{cost:.4f}%，{COST_MODEL_VERSION}）"
-                )
-            else:
-                outcome.cost_pct = None
-                outcome.net_return_pct = None
-                outcome.reason = f"决策时点价至收盘毛 {ret:+.2f}%；{fill_basis}"
-            outcome.labeled_at = utcnow()
-            labeled += 1
+        counts = _label_outcome_rows(rows, close_by_symbol)
         db.commit()
-    return {"trade_date": trade_date, "labeled": labeled, "unknown": unknown, "pending": pending}
+    return {"trade_date": trade_date, **counts}
 
 
 def learning_summary(trade_date: str, session_factory=None) -> dict:
@@ -796,12 +977,13 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
                 OpportunityDecisionSnapshot.trade_date == trade_date
             )
         ).scalars().all()
-        outcomes = db.execute(
+        all_outcomes = db.execute(
             select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
             .join(OpportunityDecisionSnapshot,
                   OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
             .where(OpportunityDecisionSnapshot.trade_date == trade_date)
         ).all()
+    outcomes = [pair for pair in all_outcomes if pair[0].horizon == OUTCOME_HORIZON]
     stage_counts = Counter(s.stage for s in snapshots)
     decision_counts = Counter(f"{s.stage}:{s.decision}" for s in snapshots)
     state_counts = Counter(o.state for o, _snapshot in outcomes)
@@ -829,6 +1011,23 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
         (snapshot.run_id, snapshot.symbol) for outcome, snapshot in outcomes
         if outcome.state == "labeled" and _finite_number(outcome.return_pct)
     }
+    horizon_coverage: dict[str, dict] = {}
+    for horizon in OUTCOME_HORIZONS:
+        horizon_rows = [pair for pair in all_outcomes if pair[0].horizon == horizon]
+        horizon_labeled = {
+            (snapshot.run_id, snapshot.symbol) for outcome, snapshot in horizon_rows
+            if outcome.state == "labeled" and _finite_number(outcome.return_pct)
+        }
+        horizon_coverage[horizon] = {
+            "rows": len(horizon_rows),
+            "states": dict(sorted(Counter(outcome.state for outcome, _snapshot in horizon_rows).items())),
+            "target_dates": sorted({outcome.target_date for outcome, _snapshot in horizon_rows}),
+            "labeled_opportunities": len(horizon_labeled),
+            "opportunity_label_coverage": (
+                round(len(horizon_labeled) / len(funnel_opportunities), 4)
+                if funnel_opportunities else None
+            ),
+        }
     return {
         "trade_date": trade_date,
         "snapshots": len(snapshots),
@@ -845,6 +1044,7 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
         # already have an outcome identity, not full-funnel denominator coverage.
         "label_coverage": round(labeled / eligible, 4) if eligible else None,
         "label_coverage_scope": "selected_outcome_rows_legacy",
+        "horizon_coverage": horizon_coverage,
         "funnel_denominator": {
             "snapshot_rows": len(snapshots),
             "symbols": len(funnel_symbols),
@@ -897,8 +1097,8 @@ def opportunity_scorecard(
     by symbol *before* K is cut.  If ``run_id`` is omitted, the latest eligible
     rank run is selected and returned explicitly.
 
-    ``d0_close`` is signal-direction / cost-adjusted **proxy evidence**, not a
-    realizable A-share return: T+1 forbids same-day exit.
+    Every horizon remains reference-price proxy evidence rather than actual shadow-fill return.
+    ``d0_close`` additionally violates A-share T+1 same-day exit.
     """
     sf = session_factory or get_session_factory()
     with sf() as db:
@@ -1030,7 +1230,11 @@ def opportunity_scorecard(
             round(bucket.pop("net_sum") / bucket["fillable"], 2)
             if bucket["fillable"] else None
         )
-        bucket["cost_adjusted_d0_proxy_expectancy_pct"] = value
+        metric_key = (
+            "cost_adjusted_d0_proxy_expectancy_pct"
+            if horizon == OUTCOME_HORIZON else "cost_adjusted_reference_proxy_expectancy_pct"
+        )
+        bucket[metric_key] = value
         bucket["net_expectancy_pct"] = value  # compatibility alias; see metric_identity
 
     # Precision@K: first choose exactly one run, then unique symbols, then cut K.
@@ -1070,7 +1274,8 @@ def opportunity_scorecard(
         "D0 收盘衡量信号方向；成本调整值仍是同日收盘代理。A 股 T+1 禁止当日买入当日卖出，"
         "因此不是可实现净收益；合法 D1/D3/D5 等交易标签由 RSH-026 后续版本化补齐。"
         if horizon == OUTCOME_HORIZON else
-        "该 horizon 仅按归档标签身份统计；BUG-026 不把它自动认定为可实现交易收益。"
+        f"{horizon} 使用决策时点 reference 到目标交易日收盘的结果；虽满足 T+1 时间约束，"
+        "仍不是实际 shadow fill 净收益，只能称成本调整 reference 代理。"
     )
 
     return {
@@ -1087,9 +1292,9 @@ def opportunity_scorecard(
             "gross_metric": "signal_direction_return_pct",
             "cost_adjusted_metric": (
                 "cost_adjusted_d0_proxy_pct" if horizon == OUTCOME_HORIZON
-                else "cost_adjusted_proxy_pct"
+                else "cost_adjusted_reference_proxy_pct"
             ),
-            "realizable_return": False if horizon == OUTCOME_HORIZON else None,
+            "realizable_return": False,
             "cost_model_version": COST_MODEL_VERSION,
             "note": identity_note,
         },
@@ -1154,7 +1359,10 @@ def opportunity_scorecard(
             "net_pct": proxy_mean,  # compatibility alias; explicitly non-realizable above
             "gross_signal_pct": round(sum(gross) / len(gross), 2) if gross else None,
             "gross_on_cost_proxy_sample_pct": gross_proxy_mean,
-            "cost_adjusted_d0_proxy_pct": proxy_mean,
+            (
+                "cost_adjusted_d0_proxy_pct"
+                if horizon == OUTCOME_HORIZON else "cost_adjusted_reference_proxy_pct"
+            ): proxy_mean,
             "gross_labels": len(gross),
             "fillable_labels": len(proxy),
             "net_pct_identity": "deprecated alias of cost_adjusted_d0_proxy_pct; not realizable",

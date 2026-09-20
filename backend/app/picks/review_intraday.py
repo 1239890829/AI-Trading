@@ -397,9 +397,14 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
     # + 统计。失败只记日志（清算幂等，下一轮补）。
     ledger_settled = None
     opportunity_labels = None
+    opportunity_horizons = None
+    horizon_prepared: list[dict] = []
     with contextlib.suppress(Exception):
         from app.picks.watch_ledger import get_day, settle_day, validate_previous_day
-        from app.picks.opportunity_learning import label_trade_date, pending_symbols
+        from app.picks.opportunity_learning import (
+            ensure_outcome_horizons, label_due_outcomes, label_trade_date, pending_outcome_targets,
+            pending_symbols,
+        )
         from app.core.bjtime import beijing_now as _bnow
         from app.core.db import get_session_factory as _gsf
 
@@ -409,20 +414,43 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
         ledger_symbols = {
             r["symbol"] for r in get_day(tdate, _gsf()) if r["status"] == "tracking"
         }
-        symbols = ledger_symbols | pending_symbols(tdate, _gsf())
+        with contextlib.suppress(Exception):
+            days = await tc.trading_days(state.hub.provider)
+            # D5 is five sessions out. Revisit a bounded window larger than D5 so a
+            # short scheduler/deployment outage can still create missing identities.
+            recent = [d for d in days if d <= _bnow().date()][-10:]
+            horizon_prepared = [
+                ensure_outcome_horizons(d.isoformat(), days, _gsf()) for d in recent
+            ]
+        due_targets = pending_outcome_targets(tdate, _gsf(), lookback_days=30)
+        due_symbols = {symbol for symbols in due_targets.values() for symbol in symbols}
+        symbols = ledger_symbols | pending_symbols(tdate, _gsf()) | due_symbols
+        daily_by_symbol: dict[str, dict[date, float]] = {}
         for symbol in sorted(symbols):
             with contextlib.suppress(Exception):
                 dc = await _daily_closes(provider, symbol)
+                daily_by_symbol[symbol] = dc
                 c = dc.get(_bnow().date())
                 if c is not None:
                     closes[symbol] = c
         ledger_settled = settle_day(tdate, closes, _gsf())
         opportunity_labels = label_trade_date(tdate, closes, _gsf())
+        opportunity_horizons = []
+        for target_date, target_symbols in due_targets.items():
+            target_day = date.fromisoformat(target_date)
+            target_closes = {
+                symbol: daily_by_symbol[symbol][target_day]
+                for symbol in target_symbols
+                if symbol in daily_by_symbol and target_day in daily_by_symbol[symbol]
+            }
+            opportunity_horizons.append(
+                label_due_outcomes(target_date, target_closes, _gsf())
+            )
         # 次日持续性验证（闭环「验证」段）：T-1 行写回 T 收盘表现
         d1_n = validate_previous_day(closes, _gsf())
         log.info(
-            "watch ledger settle: %s | opportunity labels: %s | D+1 验证 %s 行",
-            ledger_settled, opportunity_labels, d1_n,
+            "watch ledger settle: %s | opportunity labels: %s | future horizons: %s | D+1 验证 %s 行",
+            ledger_settled, opportunity_labels, opportunity_horizons, d1_n,
         )
 
     log.info(
@@ -432,7 +460,9 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
         backfill.get("alerts_updated"),
     )
     return {"ok": True, "brief_date": target, "directions": reviews, "alert_backfill": backfill,
-            "ledger_settled": ledger_settled, "opportunity_labels": opportunity_labels}
+            "ledger_settled": ledger_settled, "opportunity_labels": opportunity_labels,
+            "opportunity_horizons": opportunity_horizons,
+            "outcome_horizons_prepared": horizon_prepared}
 
 
 # ---------------------------------------------------------------- IO：提醒收益回算
