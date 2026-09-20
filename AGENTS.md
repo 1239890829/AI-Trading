@@ -8,12 +8,12 @@
 - 作业边界与发布流程：本文件 §0、§1、§6.5。
 - 固定分工：网页 ChatGPT 负责计划、阶段账本统筹和逐轮审核；Codex 只执行获准切片。协作协议与人工介入点见 `docs/collaboration-workflow.md`。
 - 唯一文档入口：`docs/INDEX.md`；执行治理：`docs/retro-and-gaps.md` §5.9（G0–G5/GX）；领域索引：§6.0（W00–W09）；任务状态与调度元数据在所属阶段页单点维护。
-- 施工取舍：最新用户要求与 docs/implementation-plan.md 的 v9.9 明确修订优先；原 v9 未修订部分保留，旧项按真实价值复核，登记不等于必须实施。
+- 施工取舍：最新用户要求与 docs/implementation-plan.md 的 v9.10 明确修订优先；原 v9 未修订部分保留，旧项按真实价值复核，登记不等于必须实施。
 - 当前现场与实测：`docs/handoff.md` §1；经验按 `docs/kb/00-INDEX.md` 定位。
 - 接续工作：`skills/ashare-ledger-continue/SKILL.md`；当轮交接：`skills/ashare-task-handoff/SKILL.md`。总账 `docs/retro-and-gaps.md` §5.9 的 G0–G5/GX 是唯一执行门序；用户“继续任务/继续”只授权 Skill 在**最低未闭环主门**按角色/P0-P2/门内序领取一个切片。硬依赖未完成不得跨门；`CROSS_GATE_EXCEPTION` 只能由网页在 handoff 明示。
 - 盘后复盘：`skills/ashare-daily-review/SKILL.md`，流程与逐项核验归既有 SOP / checklist。
 - 外部创新雷达：`skills/ashare-innovation-radar/SKILL.md`；长期发现/筛选规则见 `docs/ai/continuous-evolution.md`。雷达只提出候选/验证，不自动安装或准入。
-- 跨模块长期治理与重大重构：`skills/living-system-governor/SKILL.md`。它把 U48/GOV-027 的目标优先、证据分层、机制生命周期、反证、Champion/Challenger、成本收益与重开纪律变成上层思考协议；**不替代**总账阶段门、stage 单点状态、领域登记册、风险/权限或发布门。 后续用户长期要求、重复纠偏与真实复盘若形成稳定可复用的方法论，按该 Skill §19 的自我进化协议决定是否进入 Core / Domain Extension / Experience；一次性要求不自动固化，实质变化必须有版本与 Git/PR 证据。
+- 跨模块长期治理与重大重构：`skills/living-system-governor/SKILL.md`。它把 U48/GOV-027 的目标优先、证据分层、机制生命周期、反证、Champion/Challenger、成本收益与重开纪律，以及 U49 的主动缺陷发现门变成上层思考协议；**不替代**总账阶段门、stage 单点状态、领域登记册、风险/权限或发布门。 后续用户长期要求、重复纠偏与真实复盘若形成稳定可复用的方法论，按该 Skill §19 的自我进化协议决定是否进入 Core / Domain Extension / Experience；一次性要求不自动固化，实质变化必须有版本与 Git/PR 证据。
 - 发布核验：`scripts/audit/release_check.py`；工作区卫生：`scripts/workspace-hygiene.py`。
 - 报告渲染与校验：`scripts/reports/md-report-html.py`、`scripts/reports/md-html-parity.py`。
 - 本地产物与恢复副本只进忽略的 `artifacts/`；项目内禁止应用专属状态/插件目录，不建立 MEMORY 或其它应用私有权威入口。
@@ -80,7 +80,7 @@ python3 scripts/doc-health.py
 
 ## 2. 方案主导与评估纪律
 
-执行用户指定的最终融合方案 v9 及配套附件，并应用 docs/implementation-plan.md 的 v9.9 当前修订；该方案已累积吸收此前增量与 U48，最新用户指令优先。旧账本只提供问题证据，不自动产生施工义务；项目机制、流程、交接、设计及架构均可审视和调整。
+执行用户指定的最终融合方案 v9 及配套附件，并应用 docs/implementation-plan.md 的 v9.10 当前修订；该方案已累积吸收此前增量与 U49，最新用户指令优先。旧账本只提供问题证据，不自动产生施工义务；项目机制、流程、交接、设计及架构均可审视和调整。
 
 先核当前代码、已合并成果与真实消费者，再比较现状、最小修补和替代方案。只推进收益显著、可靠且风险可控的改动；清楚写用途、依据、影响面、成本、验收及恢复路径。允许有理据偏离方案，但性能不得劣化、关键机制不得削弱；优化用可比测量和行为证据证明，不宣称未证实的“全局最优”。无法证明的主张保留为待验证条件。
 
@@ -102,6 +102,8 @@ python3 scripts/doc-health.py
 首次开工、审核整改与合并按协作规范 §3.1 分别校验；明确派工可授权首次实施，CHANGES_REQUESTED可授权限定整改，但两者都不代替成果审核或合并CI，避免“未开工就要求已审核”的循环。
 
 长期协作规则（自 2026-09-18 起）：方案、优先级、任务增删及验收标准由网页 ChatGPT 统筹；Codex 可回填执行事实、证据和阻塞，并提出改进建议，但不能自行改规划或批准自己。每轮完成先提交审核包，收到绑定当前版本的有效网页审核与明确下一步后才继续。必要独立复现属于审核，不把业务代码实现默认转交网页侧。
+
+- **U49 主动缺陷发现门**：用户无需再问“还有没有问题”。网页在继续选刀前、代码审核放行前、阻断项闭环/阶段门切换后及事故/用户纠偏后，必须对当前切片及直接上下游做一次有界反证扫描；至少核不可能门禁/自锁、双事实源/配置漂移、顺序与部分失败窗口、幂等/去重/unknown、权限/fail-open、动态状态冻结、测试固化坏行为、陈旧指针/重大决策传播。换门时扩大到跨模块边界；发现问题先分级并回原 owner/stage，不以“主动发现”为理由自动跨门或无限全仓扫描。主动审计回执分两阶段：网页开工/继续前写 `Preflight`，网页成果放行前写绑定准确 HEAD/diff 的 `Review`；Codex/作者自检不得自产 Review。缺 Review 不得把该轮称为完整审核/收口。
 
 - `docs/retro-and-gaps.md` §6.0 是 W00–W09 总入口；`docs/stages/` 每个任务一份状态、范围、证据和下一步。完成后只留必要结论与 PR/commit。
 - `docs/handoff.md` 只写当前现场和最近验收；已完成历史由 Git、阶段基线和 `docs/archive/ledger-transition-20260917.md` 追溯。退出任务不等于删除代码或业务资产。

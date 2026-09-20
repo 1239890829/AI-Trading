@@ -2,7 +2,7 @@
 
 > 定位：**docs 唯一入口**。查东西先来这里；写新文档必须在此登记。
 > 维护约定：状态在所属阶段单点更新，成果提炼与恢复按 `kb/07-doc-curation.md` §3.2；新建/迁移同步本表，未知资产不删除。
-> 当前入口（2026-09-20）：从最新 `master` 的 `AGENTS.md` → 本索引；`retro-and-gaps.md` §5.9 是执行门序治理、§6.0 是 W00–W09 领域索引，`stages/` 存任务唯一状态与调度元数据，`handoff.md` 仅存当前主门/现场。 `implementation-plan.md` 是 v9.8 规划修订，不单独定义当前执行模式；允许动作以最新 `handoff.md` + 所属 stage 为准。分工与逐轮审核见 `collaboration-workflow.md`；旧平台目录已退休，历史迁移证据归 `archive/platform-directory-migration-20260920.md`。
+> 当前入口（2026-09-20）：从最新 `master` 的 `AGENTS.md` → 本索引；`retro-and-gaps.md` §5.9 是执行门序治理、§6.0 是 W00–W09 领域索引，`stages/` 存任务唯一状态与调度元数据，`handoff.md` 仅存当前主门/现场。 `implementation-plan.md` 是 v9.10 规划修订，不单独定义当前执行模式；允许动作以最新 `handoff.md` + 所属 stage 为准。分工与逐轮审核见 `collaboration-workflow.md`；旧平台目录已退休，历史迁移证据归 `archive/platform-directory-migration-20260920.md`。
 
 ## 0.0 书库编目（编号 / 层 / 领域 / 用途）
 
@@ -25,7 +25,7 @@
 | **AG-07** | `handoff.md` | L2 | 交接 | 当前工作区、实际运行版本、最近门禁与交付；不另建任务记录 |
 | **AG-08** | `archive/platform-directory-migration-20260920.md` | L1 | 工程治理历史 | 旧平台目录迁移/恢复/最终退休证据；`GOV-018` 已完成，禁止恢复为现役入口 |
 | **AG-09** | `stages/` | L2 | 阶段任务 | W00–W09，各 ID 仅一份状态/验收/证据；P/Q 校验 |
-| **AG-10** | `implementation-plan.md` | L2 | 当前实施修订 | v9.9：living plan；继承 G0–G5/GX 阶段门治理、猎场双轨验证，并新增 U48 全系统机制生命周期/衰退重验/知识与成本反馈；状态仍归阶段 |
+| **AG-10** | `implementation-plan.md` | L2 | 当前实施修订 | v9.10：living plan；继承 G0–G5/GX、猎场双轨与 U48 生命周期，并新增 U49 主动缺陷发现门；状态仍归阶段 |
 | **AG-11** | `collaboration-workflow.md` | L2 | 协作审核 | 账本驱动；网页统筹审核、Codex执行，用户一句话触发，`master` 共享入口与原型退出 |
 | **AG-12** | `product/product-closure-design.md` | L2 | 产品闭环 | 全模块用途、前后台分工、业务/研究/工程链和确认流程图；非已上线报告 |
 | **AG-13** | `product/feature-closure-audit.md` | L2 | 细功能审计 | 大小动作/接口/后台任务的覆盖、源码发现与未验边界；任务状态仍归阶段 |
@@ -143,7 +143,7 @@
 | **T7 外部工具与技能** | `ai/continuous-evolution.md` → `skills/ashare-innovation-radar/SKILL.md` | `ai/jev-integration.md` · 本表 **WB-04** · `system/llm-gateway-probe.md` | 外部热度只产候选；先许可/隐私/费用/权限硬门与证据梯度，未经 owner stage 不安装/准入 |
 | **T8 决策与"为什么当初这么定"** | `kb/04-decisions.md`（KB-DEC） | `archive/ledger-transition-20260917.md` · `implementation-plan.md` | 既有决定可依新证据和最新授权复核；保留取代关系与依据，不据历史标题锁死设计 |
 | **T9 提醒与通知链路** | `summary/pick-signal-chain.md`（**先读它**：定位/触发/流向/断点） | `services/alert_triage.py`（判读闸门）· `api/routes/notifications.py`（通知收口）· `picks/watcher.py::dispatch_alert`（唯一汇聚点）· `services/push_policy.py` | **收敛口径时必须回扫自称该口径的注释**（`IMP-028` 遗留 5 处过期断言，见该文 §G4）；**判读闸门现状只作用于悬浮球**（§G1）；改通知来源须同步 §3.1 规则清单 |
-| **T10 跨模块长期治理 / 重大重构** | `skills/living-system-governor/SKILL.md` → `implementation-plan.md` §6/§6.2 → `retro-and-gaps.md` §5.9 | `ai/continuous-evolution.md` · `plan-registry.md` · W08/GOV-027 · 对应领域登记册/专题 | 先恢复真实上下文并比较 KEEP/FIX/MERGE/EXPERIMENT/WATCH/RETIRE；Skill 只提供上层治理协议，不自创任务状态、不越阶段门、不替代领域 owner |
+| **T10 跨模块长期治理 / 重大重构** | `skills/living-system-governor/SKILL.md` → `implementation-plan.md` §6/§6.2 → `retro-and-gaps.md` §5.9 | `ai/continuous-evolution.md` · `plan-registry.md` · W08/GOV-027 · 对应领域登记册/专题 | 先恢复真实上下文，运行主动缺陷发现门，再比较 KEEP/FIX/MERGE/EXPERIMENT/WATCH/RETIRE；Skill 只提供上层治理协议，不自创任务状态、不越阶段门、不替代领域 owner |
 
 ### 0.2 任务动线（**按序**读——顺序错会先读一堆无关的）
 

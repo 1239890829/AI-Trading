@@ -1670,6 +1670,43 @@ def check_decision_propagation() -> list[str]:
                 f"落后于 implementation-plan 的 U{max_u:02d}"
             )
 
+    # U49：主动缺陷发现不能只停在总方案。它属于协作/审核治理，
+    # 必须传播到实际触发 Skill、交接回执、W08 owner 与当前 handoff。
+    # 各面使用不同短语是有意的：守卫核“语义锚点存在”，不要求复制同一段文字。
+    if re.search(r"\bU49\b", plan) and "Proactive Discovery Gate" in plan:
+        proactive_surfaces = {
+            ROOT / "AGENTS.md": ("U49 主动缺陷发现门", "Preflight", "Review"),
+            DOCS / "INDEX.md": ("U49 主动缺陷发现门",),
+            DOCS / "collaboration-workflow.md": ("U49 主动缺陷发现门", "Preflight", "Review"),
+            DOCS / "plan-registry.md": ("用户没问还有没有问题",),
+            # handoff 是运行态：当前可能只到 Preflight，不能要求尚未产生的
+            # Review 提前存在，否则主动审核门会再次制造时序自锁。阶段存在性在下方另判。
+            DOCS / "handoff.md": ("U49 主动审计回执",),
+            DOCS / "stages" / "w08-governance.md": ("Proactive Discovery Gate", "Preflight", "Review"),
+            ROOT / "skills/living-system-governor/SKILL.md": (
+                "主动缺陷发现门（Proactive Discovery Gate）", "Preflight", "Review",
+            ),
+            ROOT / "skills/ashare-ledger-continue/SKILL.md": (
+                "U49 主动缺陷发现门", "Preflight", "Review",
+            ),
+            ROOT / "skills/ashare-task-handoff/SKILL.md": (
+                "U49 主动审计回执", "Preflight", "Review",
+            ),
+        }
+        for path, tokens in proactive_surfaces.items():
+            text = _read(path)
+            for token in tokens:
+                if token not in text:
+                    errors.append(
+                        f"{path.relative_to(ROOT)}：U49 主动缺陷发现传播缺失（缺 {token}）"
+                    )
+
+        handoff_u49 = _read(DOCS / "handoff.md")
+        if "U49 主动审计回执" in handoff_u49 and not any(
+            stage in handoff_u49 for stage in ("Preflight", "Review")
+        ):
+            errors.append("docs/handoff.md：U49 主动审计回执缺当前阶段 Preflight/Review")
+
     # READY 模式的 handoff 头部必须描述已生效现场，不能遗留“待合并/合并后才生效”的候选态。
     handoff_text = _read(DOCS / "handoff.md")
     handoff_head = handoff_text.split("\n## 1.", 1)[0]

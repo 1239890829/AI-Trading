@@ -1,7 +1,7 @@
 # 架构与设计汇总（Architecture & Design Summary）
 
 > 当前产品修订见 ../product/product-closure-design.md 与 ../product/feature-closure-audit.md：跨页面主流程与每个小动作都核身份/时点/失败/恢复；业务计算后台拥有，前端只呈现和接收必要用户操作。本文记录既有架构，不代表新设计已实施。
-> 当前 AI/语义协处理层以 ../implementation-plan.md v9.9 与 ../ai/jev-integration.md 为准；本文只保留已实施业务架构口径，不复制 Jev 的现役状态或阈值。
+> 当前 AI/语义协处理层以 ../implementation-plan.md v9.10 与 ../ai/jev-integration.md 为准；本文只保留已实施业务架构口径，不复制 Jev 的现役状态或阈值。
 
 > **定位**：跨页面联动 / 资金流 / 热点管道 / 事件模块四份**设计方案已实施部分**的**稳定职责与口径说明**。
 > **现役入口不在此**：当前系统契约分别归 `../system/architecture.md`、`../system/api.md`、`../system/deployment.md`、`../system/mcp.md`、`../system/websocket.md`；08-29 的 `../archive/PROJECT-MASTER.md` 仅作历史基线。

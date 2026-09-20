@@ -100,6 +100,79 @@ def test_real_decision_propagation_is_closed():
     assert mod.check_decision_propagation() == []
 
 
+def test_u49_proactive_discovery_guard_detects_missing_review_stage(tmp_path, monkeypatch):
+    mod = load()
+    root = tmp_path
+    docs = root / "docs"
+    (docs / "stages").mkdir(parents=True)
+    (root / "skills" / "living-system-governor").mkdir(parents=True)
+    (root / "skills" / "ashare-ledger-continue").mkdir(parents=True)
+    (root / "skills" / "ashare-task-handoff").mkdir(parents=True)
+
+    (docs / "implementation-plan.md").write_text(
+        "# AShare AI Trader 实施校准方案 v9.10\nU49 Proactive Discovery Gate\n"
+    )
+    (docs / "INDEX.md").write_text("v9.10 jev-integration.md U49 主动缺陷发现门 Preflight Review\n")
+    (docs / "handoff.md").write_text(
+        "v9.10 jev-integration.md U01–U49 U49 主动审计回执 Preflight Review\n"
+    )
+    (docs / "plan-registry.md").write_text(
+        "重大决策传播契约（防遗漏） 已更新 不适用 用户没问还有没有问题\n"
+    )
+    (docs / "collaboration-workflow.md").write_text(
+        "plan-registry.md U49 主动缺陷发现门 Preflight Review\n"
+    )
+    (docs / "stages" / "w08-governance.md").write_text("Proactive Discovery Gate Preflight Review\n")
+    (root / "AGENTS.md").write_text(
+        "v9.10 jev-integration.md U49 主动缺陷发现门 Preflight Review\n"
+    )
+    (root / "skills" / "living-system-governor" / "SKILL.md").write_text(
+        "主动缺陷发现门（Proactive Discovery Gate） Preflight Review\n"
+    )
+    (root / "skills" / "ashare-ledger-continue" / "SKILL.md").write_text(
+        " ".join([
+            "jev-integration.md", "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
+            "docs/implementation-plan.md", "docs/ai/jev-integration.md",
+            "docs/retro-and-gaps.md", "docs/stages/", "U49 主动缺陷发现门", "Preflight", "Review",
+        ])
+    )
+    # 其它传播面完整，只故意删交接 Skill 的 Review，模拟两阶段所有权静默退化。
+    (root / "skills" / "ashare-task-handoff" / "SKILL.md").write_text(
+        "plan-registry.md U49 主动审计回执 Preflight\n"
+    )
+
+    monkeypatch.setattr(mod, "ROOT", root)
+    monkeypatch.setattr(mod, "DOCS", docs)
+
+    errors = mod.check_decision_propagation()
+    assert any(
+        "ashare-task-handoff/SKILL.md" in error and "缺 Review" in error
+        for error in errors
+    )
+
+
+def test_u49_runtime_handoff_allows_preflight_before_review(monkeypatch):
+    """运行态只到 Preflight 时不得要求未来 Review 提前存在。"""
+    mod = load()
+    target = mod.DOCS / "handoff.md"
+    original_read = mod._read
+
+    def patched_read(path):
+        text = original_read(path)
+        if path == target:
+            # 保留当前 U49 Preflight 回执，但移除 Review 字样，模拟“尚未进入成果审核”。
+            return text.replace("Review", "Preflight")
+        return text
+
+    monkeypatch.setattr(mod, "_read", patched_read)
+    errors = mod.check_decision_propagation()
+    assert not any(
+        error.startswith("docs/handoff.md：U49 主动缺陷发现传播缺失")
+        or "U49 主动审计回执缺当前阶段" in error
+        for error in errors
+    )
+
+
 def test_decision_propagation_detects_stale_current_pointer(tmp_path, monkeypatch):
     mod = load()
     root = tmp_path
@@ -353,13 +426,15 @@ def test_decision_propagation_detects_stale_handoff_requirement_range(monkeypatc
     def patched_read(path):
         text = original_read(path)
         if path == target:
-            assert "U01–U48" in text
-            return text.replace("U01–U48", "U01–U47", 1)
+            # 以真实当前最大 U 编号为正样本，再只注入“一轮落后”的反例。
+            # 不把具体旧版本 U48 永久固化成正确值，否则下一次新增 U 会自锁。
+            assert "U01–U49" in text
+            return text.replace("U01–U49", "U01–U48", 1)
         return text
 
     monkeypatch.setattr(mod, "_read", patched_read)
     errors = mod.check_decision_propagation()
-    assert any("累计要求范围" in error and "U48" in error for error in errors)
+    assert any("累计要求范围 U01–U48" in error and "U49" in error for error in errors)
 
 
 def test_decision_propagation_rejects_ready_handoff_with_pending_merge_text(monkeypatch):
