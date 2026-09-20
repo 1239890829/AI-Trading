@@ -632,3 +632,89 @@ def test_intraday_archive_carries_seal_state_version_facts():
     assert hard_gate["evidence"]["facts"] == facts
     rank = next(r for r in rows if r["symbol"] == "600001" and r["stage"] == "rank")
     assert rank["evidence"]["seal_state"]["version"] == facts["version"]
+
+
+def test_notification_contract_separates_reference_action_and_dispatch_version():
+    item = {
+        "symbol": "600001", "name": "甲", "price": 10.0,
+        "confidence": {"tier": "executable"}, "vetoes": [],
+        "buy_range": {"low": 10.2, "high": 10.8},
+    }
+    hit = {"item": item, "price": 10.5, "chg": 5.0}
+    snap = {
+        "state": "ready", "price": 10.5, "change_pct": 5.0,
+        "prev_close": 10.0, "source": "sina_market",
+        "received_at": "2026-09-21T02:30:00+00:00",
+    }
+    kw = dict(
+        items=[item], trade_date="2026-09-21",
+        as_of=datetime(2026, 9, 21, 10, 30), hits=[hit], skips=[],
+        pick_generated_at="2026-09-21T09:26:00+08:00",
+        execution_by_symbol={"600001": snap},
+    )
+    _, eligible = build_notification_records(dispatch_by_symbol={}, **kw)
+    _, notified = build_notification_records(dispatch_by_symbol={"600001": "notified"}, **kw)
+    c1 = eligible[0]["evidence"]["execution_contract"]
+    c2 = notified[0]["evidence"]["execution_contract"]
+    assert c1["reference_entry"]["price"] == 10.0
+    assert c1["executable_snapshot"]["price"] == 10.5
+    assert c1["reference_entry"]["semantics"] == "reference_only_not_fill"
+    assert c1["executable_snapshot"]["semantics"] == "action_time_quote_not_fill"
+    assert c1["decision_id"] == c2["decision_id"]
+    assert c1["decision_version"] == c2["decision_version"]
+
+    refreshed_only = {
+        **snap,
+        "received_at": "2026-09-21T02:31:00+00:00",
+        "as_of": "2026-09-21T10:31:00+08:00",
+        "ticktime": "10:31:00",
+    }
+    _, refreshed = build_notification_records(
+        dispatch_by_symbol={}, execution_by_symbol={"600001": refreshed_only},
+        **{k: v for k, v in kw.items() if k != "execution_by_symbol"},
+    )
+    assert refreshed[0]["evidence"]["execution_contract"]["decision_version"] == c1["decision_version"], (
+        "只有采样时间刷新、物质事实未变时不得制造新 decision_version"
+    )
+
+    newer = {**snap, "price": 10.6, "received_at": "2026-09-21T02:31:00+00:00"}
+    _, changed = build_notification_records(
+        dispatch_by_symbol={}, execution_by_symbol={"600001": newer},
+        **{k: v for k, v in kw.items() if k != "execution_by_symbol"},
+    )
+    c3 = changed[0]["evidence"]["execution_contract"]
+    assert c3["decision_id"] == c1["decision_id"]
+    assert c3["decision_version"] != c1["decision_version"]
+
+
+def test_notification_archive_keeps_late_older_snapshot_but_latest_read_stays_newer(tmp_path):
+    """晚到旧拍必须保留作回放；当前视图只在读侧按 as_of 选择较新版本。"""
+    from app.picks.opportunity_learning import latest_notification_execution
+
+    sf = _factory(tmp_path)
+    item = {"symbol": "600001", "name": "甲", "price": 10.0}
+    hit = {"item": item, "price": 10.5, "chg": 5.0}
+
+    def rows(at: datetime, price: float):
+        run_id, records = build_notification_records(
+            [item], trade_date="2026-09-21", as_of=at,
+            hits=[{**hit, "price": price}], skips=[], dispatch_by_symbol={},
+            pick_generated_at="2026-09-21T09:26:00+08:00",
+            execution_by_symbol={"600001": {"state": "ready", "price": price}},
+        )
+        return run_id, records
+
+    new_run, new_rows = rows(datetime(2026, 9, 21, 10, 31), 10.6)
+    old_run, old_rows = rows(datetime(2026, 9, 21, 10, 30), 10.5)
+    assert archive_records(new_run, new_rows, sf)["inserted"] == 1
+    assert archive_records(old_run, old_rows, sf)["inserted"] == 1
+
+    with sf() as db:
+        stored = db.execute(
+            select(OpportunityDecisionSnapshot)
+            .where(OpportunityDecisionSnapshot.trade_date == "2026-09-21")
+        ).scalars().all()
+    assert len(stored) == 2, "append-only 历史不能因晚到而删除旧拍"
+    latest = latest_notification_execution("2026-09-21", sf)["600001"]
+    assert latest["executable_snapshot"]["price"] == 10.6
+    assert latest["archived_as_of"].startswith("2026-09-21T10:31:00")

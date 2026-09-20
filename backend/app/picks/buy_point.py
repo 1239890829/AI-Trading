@@ -204,10 +204,89 @@ def _quotes_from_snapshot(state) -> dict[str, dict]:
     return {r["symbol"]: r for r in rows if r.get("symbol")}
 
 
+def _execution_snapshots(
+    state, items: list[dict], quotes: dict[str, dict], *, checked_at,
+) -> dict[str, dict]:
+    """把本拍全市场快照冻结成可归档执行事实；不二次取行情（IMP-006）。"""
+    svc = getattr(state, "snapshot_service", None)
+    freshness = None
+    try:
+        freshness = svc.freshness() if svc is not None and hasattr(svc, "freshness") else None
+    except Exception:  # noqa: BLE001 — 新鲜度读取失败必须显式 unknown，但不阻断买点判定
+        freshness = None
+    base_state = getattr(freshness, "state", None) or "unknown"
+    fresh_as_of = getattr(freshness, "as_of", None)
+    if hasattr(fresh_as_of, "isoformat"):
+        fresh_as_of = fresh_as_of.isoformat()
+    age = getattr(freshness, "age_seconds", None)
+    reason = getattr(freshness, "reason", None)
+    fresh_source = getattr(freshness, "source", None)
+    out: dict[str, dict] = {}
+    for item in items or []:
+        symbol = str(item.get("symbol") or "")
+        if not symbol:
+            continue
+        q = quotes.get(symbol) or {}
+        out[symbol] = {
+            "state": base_state if q else "unavailable",
+            "as_of": fresh_as_of,
+            "age_seconds": age,
+            "freshness_reason": reason,
+            "source": q.get("source") or fresh_source,
+            "received_at": q.get("received_at"),
+            "ticktime": q.get("ticktime"),
+            "price": q.get("price"),
+            "change_pct": q.get("change_pct"),
+            "prev_close": q.get("prev_close"),
+            "checked_at": checked_at.isoformat() if hasattr(checked_at, "isoformat") else str(checked_at),
+        }
+    return out
+
+
+def _reject_unfresh_execution(
+    hits: list[dict], skips: list[dict], execution_by_symbol: dict[str, dict],
+) -> tuple[list[dict], list[dict]]:
+    """动作时快照只有 ready 才能进入执行；其它状态保留为明确拒绝证据。"""
+    ready_hits: list[dict] = []
+    out_skips = list(skips)
+    for hit in hits:
+        symbol = str((hit.get("item") or {}).get("symbol") or "")
+        snap = execution_by_symbol.get(symbol) or {}
+        state = str(snap.get("state") or "unknown")
+        if state == "ready":
+            ready_hits.append(hit)
+            continue
+        reason = snap.get("freshness_reason") or "动作时行情新鲜度不可确认"
+        out_skips.append({
+            "symbol": symbol,
+            "reason": f"执行快照 {state}（{reason}），只保留参考、不执行",
+        })
+    return ready_hits, out_skips
+
+
+def _execution_ref(contract: dict | None) -> dict | None:
+    """下游只保存稳定引用和必要价格身份；完整事实只留 OpportunityDecisionSnapshot。"""
+    if not isinstance(contract, dict) or not contract.get("decision_version"):
+        return None
+    reference = contract.get("reference_entry") or {}
+    snapshot = contract.get("executable_snapshot") or {}
+    return {
+        "contract_version": contract.get("contract_version"),
+        "decision_id": contract.get("decision_id"),
+        "decision_version": contract.get("decision_version"),
+        "reference_price": reference.get("price"),
+        "execution_snapshot_price": snapshot.get("price"),
+        "execution_snapshot_state": snapshot.get("state"),
+        "execution_snapshot_as_of": snapshot.get("as_of"),
+        "execution_snapshot_source": snapshot.get("source"),
+    }
+
+
 def build_buy_point_alert(hit: dict) -> dict:
-    """单票买点事件（落库与 in_app/log 分发；飞书聚合卡在 check_and_dispatch 显式单发）。"""
+    """单票买点事件；meta 只携带 IMP-006 的执行事实引用，不复制权威快照正文。"""
     it = hit["item"]
     chg = hit.get("chg")
+    execution_ref = _execution_ref(hit.get("execution_contract"))
     chg_txt = f"{chg:+.2f}%" if chg is not None else "--"
     return {
         "key": f"buy-point-{it.get('symbol')}",
@@ -223,17 +302,19 @@ def build_buy_point_alert(hit: dict) -> dict:
         "at": beijing_now().isoformat(),
         "meta": {
             "kind": "buy_point",
-            "price": hit["price"],
+            "price": hit["price"],  # 向后兼容；权威执行事实由 execution_ref 指向归档 decision/version
             "buy_range": [hit["low"], hit["high"]],
             "tier": (it.get("confidence") or {}).get("tier"),
             "change_pct": chg,
+            "execution_ref": execution_ref,
         },
     }
 
 
 async def _archive_notification_decisions(
     *, items: list[dict], trade_date: str, hits: list[dict], skips: list[dict],
-    dispatch_by_symbol: dict[str, str], as_of,
+    dispatch_by_symbol: dict[str, str], as_of, pick_generated_at: str | None,
+    execution_by_symbol: dict[str, dict],
 ) -> None:
     """Best-effort evidence write with a loud log on failure.
 
@@ -247,6 +328,7 @@ async def _archive_notification_decisions(
             lambda: archive_notification_pipeline(
                 items, trade_date=trade_date, hits=hits, skips=skips,
                 dispatch_by_symbol=dispatch_by_symbol, as_of=as_of,
+                pick_generated_at=pick_generated_at, execution_by_symbol=execution_by_symbol,
             )
         )
     except Exception:  # noqa: BLE001 — learning evidence cannot block notifications
@@ -277,13 +359,35 @@ async def check_and_dispatch(app) -> list[dict]:
     gate_stand = bool(gate.get("stand_aside"))
 
     quotes = _quotes_from_snapshot(state)
+    pick_generated_at = ((payload.get("meta") or {}).get("generated_at"))
+    execution_by_symbol = _execution_snapshots(
+        state, payload["items"], quotes, checked_at=now,
+    )
     hits, skips = evaluate_buy_points(payload["items"], gate_stand=gate_stand, quotes=quotes)
+    hits, skips = _reject_unfresh_execution(hits, skips, execution_by_symbol)
+    # 派发前先按同一批输入计算 decision_id/version；最终只归档一次（带 notified/suppressed）。
+    # decision_version 不含 dispatch 状态，因此提醒、自动模拟仓、最终归档引用同一版判断。
+    from app.picks.opportunity_learning import build_notification_records
+
+    _preview_run, preview = build_notification_records(
+        payload["items"], trade_date=now.date().isoformat(), as_of=now,
+        hits=hits, skips=skips, dispatch_by_symbol={},
+        pick_generated_at=pick_generated_at, execution_by_symbol=execution_by_symbol,
+    )
+    execution_contract_by_symbol = {
+        r["symbol"]: (r.get("evidence") or {}).get("execution_contract")
+        for r in preview
+    }
+    for h in hits:
+        sym = str((h.get("item") or {}).get("symbol") or "")
+        h["execution_contract"] = execution_contract_by_symbol.get(sym)
     for s in skips:
         log.info("buy point skip %s: %s", s["symbol"], s["reason"])
     if not hits:
         await _archive_notification_decisions(
             items=payload["items"], trade_date=now.date().isoformat(), hits=hits, skips=skips,
-            dispatch_by_symbol={}, as_of=now,
+            dispatch_by_symbol={}, as_of=now, pick_generated_at=pick_generated_at,
+            execution_by_symbol=execution_by_symbol,
         )
         return []
 
@@ -303,7 +407,8 @@ async def check_and_dispatch(app) -> list[dict]:
             log.info("buy point deduped: %s（当日已推）", h["item"].get("symbol"))
     await _archive_notification_decisions(
         items=payload["items"], trade_date=now.date().isoformat(), hits=hits, skips=skips,
-        dispatch_by_symbol=dispatch_by_symbol, as_of=now,
+        dispatch_by_symbol=dispatch_by_symbol, as_of=now, pick_generated_at=pick_generated_at,
+        execution_by_symbol=execution_by_symbol,
     )
     if not dispatched:
         return []

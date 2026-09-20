@@ -192,3 +192,28 @@ def test_minute_signals_and_decisions_contract(client):
         assert it["outcome"] is None or it["outcome"] in (
             "correct", "wrong", "invalid", "expired"
         )
+
+
+def test_daily_picks_attach_latest_execution_is_read_only(monkeypatch):
+    """IMP-006：每日精选只读挂最新执行事实，不自行生成 decision。"""
+    from app.api.routes import picks as route
+    import app.picks.opportunity_learning as ol
+
+    contract = {
+        "decision_id": "OD-demo",
+        "decision_version": "ODV-demo",
+        "reference_entry": {"price": 9.8},
+        "executable_snapshot": {"price": 10.0, "state": "ready"},
+        "gate_decision": "passed",
+    }
+    calls = []
+    monkeypatch.setattr(
+        ol, "latest_notification_execution",
+        lambda day, sf=None: calls.append(day) or {"600001": contract},
+    )
+    src = [{"symbol": "600001", "name": "甲"}, {"symbol": "600002", "name": "乙"}]
+    out = route._attach_latest_execution(src, "2026-09-21")
+    assert calls == ["2026-09-21"]
+    assert out[0]["execution"]["decision_version"] == "ODV-demo"
+    assert out[1]["execution"] is None
+    assert "execution" not in src[0], "读侧不得回写 DailyPickSet 原始 items"

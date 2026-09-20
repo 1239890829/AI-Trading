@@ -21,6 +21,42 @@ export interface ExitDiscipline {
   disclaimer: string;
 }
 
+export interface ExecutionSnapshot {
+  state: string;
+  price: number | null;
+  change_pct: number | null;
+  prev_close?: number | null;
+  source?: string | null;
+  as_of?: string | null;
+  received_at?: string | null;
+  ticktime?: string | null;
+  age_seconds?: number | null;
+  freshness_reason?: string | null;
+  checked_at?: string | null;
+  semantics?: string;
+}
+
+export interface ExecutionDecisionContract {
+  contract_version: string;
+  decision_id: string;
+  decision_version: string;
+  strategy_version: string;
+  feature_version: string;
+  reference_entry: {
+    price: number | null;
+    as_of: string | null;
+    source: string;
+    semantics: string;
+  };
+  executable_snapshot: ExecutionSnapshot;
+  gate_decision: "passed" | "rejected" | string;
+  gate_reason?: string | null;
+  dispatch?: string | null;
+  archived_decision?: string | null;
+  archived_as_of?: string | null;
+  snapshot_id?: string | null;
+}
+
 export interface DailyPickItem {
   symbol: string;
   name: string | null;
@@ -65,6 +101,8 @@ export interface DailyPickItem {
   source?: string | null;
   /** 来源依据（题材联动股写明"从哪个题材挖出来、为什么"） */
   source_basis?: string | null;
+  /** IMP-006：最新动作时复核事实。reference_entry 与 executable_snapshot 都不是成交。 */
+  execution?: ExecutionDecisionContract | null;
   // --- 筹码信号（CYQ 近似 × 量价；None=未触发，available=false=数据缺失）---
   chip_signal?: {
     available: boolean;
