@@ -2,7 +2,6 @@
 refer-to/
 feature/
 sdd-docs/*
-.workbuddy
 CODE_REVIEW_REPORT.md
 
 # ---- Secrets / local env ----
@@ -52,9 +51,7 @@ coverage.xml
 # ---- Jupyter ----
 .ipynb_checkpoints/
 
-# ---- IDE / editor ----
-.idea/
-.vscode/
+# ---- Editor swap files ----
 *.swp
 *.swo
 

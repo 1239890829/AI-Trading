@@ -2,7 +2,7 @@
 
 > 定位：**docs 唯一入口**。查东西先来这里；写新文档必须在此登记。
 > 维护约定：状态在所属阶段单点更新，成果提炼与恢复按 `kb/07-doc-curation.md` §3.2；新建/迁移同步本表，未知资产不删除。
-> 当前入口（2026-09-19）：从最新 `master` 的 `AGENTS.md` → 本索引；`retro-and-gaps.md` §5.9 是执行门序治理、§6.0 是 W00–W09 领域索引，`stages/` 存任务唯一状态与调度元数据，`handoff.md` 仅存当前主门/现场。 `implementation-plan.md` 是 v9.7 规划修订，不单独定义当前执行模式；允许动作以最新 `handoff.md` + 所属 stage 为准。分工与逐轮审核见 `collaboration-workflow.md`；平台迁移证据见 `platform-directory-migration.md`。
+> 当前入口（2026-09-20）：从最新 `master` 的 `AGENTS.md` → 本索引；`retro-and-gaps.md` §5.9 是执行门序治理、§6.0 是 W00–W09 领域索引，`stages/` 存任务唯一状态与调度元数据，`handoff.md` 仅存当前主门/现场。 `implementation-plan.md` 是 v9.7 规划修订，不单独定义当前执行模式；允许动作以最新 `handoff.md` + 所属 stage 为准。分工与逐轮审核见 `collaboration-workflow.md`；旧平台目录已退休，历史迁移证据归 `archive/platform-directory-migration-20260920.md`。
 
 ## 0.0 书库编目（编号 / 层 / 领域 / 用途）
 
@@ -23,7 +23,7 @@
 | **AG-05** | `plan-registry.md` | L3 | 计划 | 历史计划去向、文档权责与重大决策传播契约；旧状态不作当前指令 |
 | **AG-06** | `PROJECT-MASTER.md` | L2 | 总览 | 全项目技术总览（08-29 基线，细节以代码为准）。维护：结构变化 |
 | **AG-07** | `handoff.md` | L2 | 交接 | 当前工作区、实际运行版本、最近门禁与交付；不另建任务记录 |
-| **AG-08** | `platform-directory-migration.md` | L2 | 工程治理 | 目录迁移的恢复点、消费者与验收证据；任务状态归账本 §6.0 `GOV-018` |
+| **AG-08** | `archive/platform-directory-migration-20260920.md` | L1 | 工程治理历史 | 旧平台目录迁移/恢复/最终退休证据；`GOV-018` 已完成，禁止恢复为现役入口 |
 | **AG-09** | `stages/` | L2 | 阶段任务 | W00–W09，各 ID 仅一份状态/验收/证据；P/Q 校验 |
 | **AG-10** | `implementation-plan.md` | L2 | 当前实施修订 | v9.7：living plan；新增 G0–G5/GX 阶段门治理，W领域归属/P优先级/执行门分离；状态仍归阶段 |
 | **AG-11** | `collaboration-workflow.md` | L2 | 协作审核 | 账本驱动；网页统筹审核、Codex执行，用户一句话触发，`master` 共享入口与原型退出 |
@@ -63,10 +63,10 @@
 | **DR-03** | `evolution/` | L1 | 存档 | 进化议程每日执行日志 |
 | **DR-04** | `push-templates/` | L2 | 模板 | 飞书推送卡片模板（v2 版式定稿） |
 | **AR-01** | `archive/` | L1 | 历史 | 保留期间**只读**；结论已吸收且无活引用/活动依赖、Git 可恢复时可按 kb/07 §6 整件退休，不把 archive 当永久仓库 |
-| **WB-01** | `artifacts/logs/` | L1 | 日志 | 新日志只存过程证据；旧平台日志待按迁移清单提炼，不再承担权威入口 |
+| **WB-01** | `artifacts/logs/` | L1 | 日志 | 只存过程证据；稳定结论提炼进 docs，日志从不承担权威入口 |
 | **WB-02** | `artifacts/reports/` | L1 | 报告 | 本地报告；可复用结论提炼进现有 docs，私有快照不入 Git |
 | **WB-03** | `artifacts/` | L1 | 证据 | 调研快照、补丁、恢复副本均忽略；长期只留紧凑证据/必要恢复点，大型测试沙箱与过期恢复副本按 GOV-026 收口 |
-| **WB-04** | `skills/` | L3 | 技能 | 项目中性技能目录；账本接续、交接、盘后复盘与 `ashare-innovation-radar` 外部创新雷达入口；旧目录其它资产待逐项审阅 |
+| **WB-04** | `skills/` | L3 | 技能 | 项目中性技能唯一目录；含接续/交接/复盘/创新雷达及迁出的数据源、CI、文档对账、策略实证、测试隔离、UI 验收等项目 Skill；禁止应用私有技能根 |
 | **WB-05** | `artifacts/trash/` | L1 | 回收站 | `scripts/safe-trash.sh`，逐条恢复记录与哈希；拒绝项目外路径和恢复覆盖；不是永久仓库，退出条件由 GOV-026 管理 |
 
 ### KB 知识库分表（`docs/kb/`，**全序列唯一登记处 = `00-INDEX.md`**）
@@ -212,7 +212,7 @@
 | 文档 | 摘要 |
 |---|---|
 | **kb/** | **知识库（09-09 建库，唯一权威）**：`kb/00-INDEX.md` 总索引 → 选股知识 KB-STOCK / 交易教训 KB-TRADE / 工程教训 KB-ENG（**按子类分四册**：`03-engineering.md` 应用与设计 / `09-verification-pitfalls.md` 验证层 / `10-data-contract-pitfalls.md` 数据契约 / `08-tooling-pitfalls.md` 工具操作速查）/ 决策 KB-DEC；沉淀红线=对话中当轮入库；**文档治理流程见 `kb/07-doc-curation.md`（v1.6）**，**判据标准（「好文档」七条判据 / KB 收敛标准 / 卡帕西三层映射 / 非 docs 面治理）见 `kb/11-doc-catalog.md`**；体检一键跑 `python3 scripts/doc-health.py`。**状态语义：示例/题材案例一律 `📎`，不得与 `✅ 已落地` 混用**（KB-DEC-019） |
-| **`skills/`、`scripts/`、`artifacts/`** | 按用途存技能、复用工具和忽略的本地产物；旧平台目录保留恢复及待审内容，迁移依据见 `platform-directory-migration.md`，当前状态归账本 §6.0 `GOV-018` |
+| **`skills/`、`scripts/`、`artifacts/`** | 项目中性唯一落点：技能 / 复用工具 / 本地证据与恢复资产；应用专属目录已退出并由 `scripts/workspace-hygiene.py` 阻止复活，历史迁移见 `archive/platform-directory-migration-20260920.md` |
 | **plan-registry.md** | 历史计划去向；当前任务从 `retro-and-gaps.md` §6.0 进入所属阶段，按真实价值准入 |
 | **retro-and-gaps.md** | 阶段总账：只维护领域目标、优先级及链接；任务在 stages 单点，现场在 handoff，当前修订在 implementation-plan |
 | **strategy-registry.md** | **策略级登记册（09-10 建）**：5 条策略键（`daily_picks` / `intraday_watch` / `pullback_reversal` / `triple_volume` / `two_thirty_five`）｜§0 **因子≠策略**辨析 ｜§2 逐条量化证据 + 样本环境 ｜§3 处置台账 ｜§4 衰减监控机制（P1-37/38/39）。**监控端点 `GET /api/picks/strategy-health`** |

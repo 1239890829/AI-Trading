@@ -13,9 +13,9 @@
 - 接续工作：`skills/ashare-ledger-continue/SKILL.md`；当轮交接：`skills/ashare-task-handoff/SKILL.md`。总账 `docs/retro-and-gaps.md` §5.9 的 G0–G5/GX 是唯一执行门序；用户“继续任务/继续”只授权 Skill 在**最低未闭环主门**按角色/P0-P2/门内序领取一个切片。硬依赖未完成不得跨门；`CROSS_GATE_EXCEPTION` 只能由网页在 handoff 明示。
 - 盘后复盘：`skills/ashare-daily-review/SKILL.md`，流程与逐项核验归既有 SOP / checklist。
 - 外部创新雷达：`skills/ashare-innovation-radar/SKILL.md`；长期发现/筛选规则见 `docs/continuous-evolution.md`。雷达只提出候选/验证，不自动安装或准入。
-- 发布核验：`scripts/audit/release_check.py`；恢复清单：`scripts/audit/platform_assets.py`。
+- 发布核验：`scripts/audit/release_check.py`；工作区卫生：`scripts/workspace-hygiene.py`。
 - 报告渲染与校验：`scripts/reports/md-report-html.py`、`scripts/reports/md-html-parity.py`。
-- 本地产物与恢复副本：忽略的 `artifacts/`；迁移状态归账本 `GOV-018`，不建立新的 MEMORY 权威入口。
+- 本地产物与恢复副本只进忽略的 `artifacts/`；项目内禁止应用专属状态/插件目录，不建立 MEMORY 或其它应用私有权威入口。
 <!-- project-entry:end -->
 
 ## 0. 红线（违反即事故）
@@ -66,6 +66,7 @@ TZ=UTC CODEBUDDY_SAFE_DELETE_ENABLED=0 npx vitest run --maxWorkers=1
 # 确认当前工作区 dev server 已停止后，才生产构建
 CODEBUDDY_SAFE_DELETE_ENABLED=0 npx next build
 # 从仓库根目录运行（docs 改动同样会影响后端文档守卫）
+python3 scripts/workspace-hygiene.py
 python3 scripts/doc-health.py
 ```
 
@@ -105,11 +106,11 @@ python3 scripts/doc-health.py
 - 所有新文件进 `docs/INDEX.md` 编目；引用章节先查锚点，历史节号不能冒充现行入口。
 - 新模型、工具链、架构、产品语义、协作或治理规则一旦改变长期系统取舍，必须按 `docs/plan-registry.md` §1.1 做重大决策传播核对；总方案、专题蓝图、INDEX、stage 及受影响的 AGENTS/Skills/handoff 同步或明确“不适用+理由”。只改专题文档不算文档闭环。
 
-## 4. 平台目录退出与恢复
+## 4. 项目目录中立性、卫生与恢复
 
-W08 的 `GOV-018` 必须完成，按 `docs/platform-directory-migration.md` 与主方案 MIG-0～5 执行：跟踪、未跟踪、忽略资产和消费者全部清点 → 恢复包与哈希验证 → 内容按用途提炼到 skills/scripts/docs → 同步代码、门禁、入口 → 干净检出与实际消费者验收 → 确认失效后清理。
+W08 `GOV-018` 已完成旧平台目录提炼与退出；历史迁移/恢复证据只从 `docs/archive/platform-directory-migration-20260920.md`、Git 与本机受控恢复包追溯，不恢复旧平台入口。项目源码树不得出现 `.workbuddy/.workbuddy-ai/.claude/.cursor/.codex/.opencode/.gemini/.vscode/.idea` 等应用专属状态或插件目录；`scripts/workspace-hygiene.py` 在本地收尾和 CI 双重阻断，根/子项目 `.gitignore` 也不得隐藏这些目录。
 
-禁止整包改名、直接删除未知内容或遗忘本机未跟踪资产；许可/保留期不清的内容先隔离保留。tracked/独有内容的物理清理走 `scripts/safe-trash.sh` 可恢复；复核恢复不得覆盖现有目标。**工作区卫生另归 W08/GOV-026**：每轮收尾必须分类项目拥有的临时 clone/worktree、pytest basetemp、构建/解释器缓存、忽略 artifacts 与恢复副本；已确认可再生、无活动进程、无脏工作树、无活引用/唯一证据且命中批准白名单的临时/缓存项可直接清理以真实释放空间。业务数据、用户/跨项目仓库、插件管理器资产、运行中或所有权不明内容不得自动删除。账本改造不能冒称平台目录已退出。
+tracked/独有内容的物理清理走 `scripts/safe-trash.sh` 可恢复；许可/所有权/保留期不清的内容先隔离。**工作区生命周期归 W08/GOV-026**：每轮收尾分类项目拥有的临时 clone/worktree、pytest basetemp、构建缓存、忽略 artifacts 与恢复副本；已确认可再生、无活动进程、无脏工作树、无活引用/唯一证据且命中批准白名单的临时/缓存项可直接清理以释放空间。业务数据、用户/跨项目仓库、包管理器依赖树、运行中或所有权不明内容不得自动删除。
 
 ## 5. 数据与运行边界
 

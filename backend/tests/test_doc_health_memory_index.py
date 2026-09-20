@@ -2,7 +2,7 @@
 
 ## 为什么单独立一个测试文件
 
-N 项服务的对象不是 `docs/` 正文，而是**索引自身**（`.workbuddy/memory/MEMORY.md`
+N 项服务的对象不是 `docs/` 正文，而是**索引自身**（`artifacts/local-state/memory/MEMORY.md`
 与它的展开版 `docs/INDEX.md` §0）——它是 2026-09-14「记忆只作索引器」改造的**机制承载**。
 规则若只写在 `kb/07` §4.4 里就是摆设（§9 自我淘汰条款），所以固化为机检 + 本测试。
 
@@ -11,7 +11,7 @@ N 项**自身失效的方式**恰好与它要防的缺陷同形（都是"看起�
 1. **体积上限失守** ⇒ 索引重新长回内容库 ⇒ 触发平台配额 ⇒ 关键约束被截断，
    而 `doc-health` 其余各项**全绿**（内容写得再长也不违反任何一条既有检查）；
 2. **指针闭包盲区** ⇒ 被引用文件搬家/改名后，索引里的路径**静默指向空处**，
-   而 B 项只认 `docs/**.md` 形态，**对 `.workbuddy/`、仓库根文件、代码路径一条都扫不到**。
+   而 B 项只认 `docs/**.md` 形态，**对 `artifacts/local-state/`、仓库根文件、代码路径一条都扫不到**。
 
 ⇒ 按项目纪律把**注入验证固化成常驻测试**（同 K/I/J 项的做法）：只手动注入一次的话，
 下次有人改判据时没人会再注入。
@@ -109,9 +109,9 @@ def probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Probe:
 
 def test_clean_index_passes(probe: Probe) -> None:
     """正向对照：干净的小索引 + 合法指针 ⇒ 两项都不报（防"一律报红"的假守卫）。"""
-    probe.touch(".workbuddy/tools/md-report-html.py")
-    probe.write(ENTRY, "| 我要… | 去 |\n|---|---|\n| 跑门禁 | `.workbuddy/tools/md-report-html.py` |\n")
-    probe.write(ROUTER, "# 12\n\n见 `.workbuddy/tools/md-report-html.py`。\n")
+    probe.touch("artifacts/local-state/tools/md-report-html.py")
+    probe.write(ENTRY, "| 我要… | 去 |\n|---|---|\n| 跑门禁 | `artifacts/local-state/tools/md-report-html.py` |\n")
+    probe.write(ROUTER, "# 12\n\n见 `artifacts/local-state/tools/md-report-html.py`。\n")
     assert probe.oversized() == []
     assert probe.dead() == []
 
@@ -149,14 +149,14 @@ def test_cap_applies_to_entry_only(probe: Probe) -> None:
 
 def test_dead_pointer_is_flagged(probe: Probe) -> None:
     """**注入验证**：指向不存在的代码路径 ⇒ 命中（这正是 B 项扫不到的那类）。"""
-    probe.write(ENTRY, "见 `.workbuddy/tools/does-not-exist.py`。\n")
-    assert probe.dead_tokens() == [".workbuddy/tools/does-not-exist.py"]
+    probe.write(ENTRY, "见 `artifacts/local-state/tools/does-not-exist.py`。\n")
+    assert probe.dead_tokens() == ["artifacts/local-state/tools/does-not-exist.py"]
 
 
 def test_dead_dir_pointer_is_flagged(probe: Probe) -> None:
     """目录式引用（以 `/` 结尾）按**目录**判存在性，不是按文件。"""
-    probe.write(ENTRY, "见 `.workbuddy/skills/no-such-skill/`。\n")
-    assert probe.dead_tokens() == [".workbuddy/skills/no-such-skill/"]
+    probe.write(ENTRY, "见 `artifacts/local-state/skills/no-such-skill/`。\n")
+    assert probe.dead_tokens() == ["artifacts/local-state/skills/no-such-skill/"]
 
 
 def test_bare_filename_is_not_a_pointer(probe: Probe) -> None:
@@ -198,7 +198,7 @@ def test_record_marker_is_exempt(probe: Probe) -> None:
 
 def test_placeholder_path_is_exempt(probe: Probe) -> None:
     """模板占位名（`YYYY-MM-DD.md`）不是真引用。"""
-    probe.write(ENTRY, "日志写 `.workbuddy/memory/YYYY-MM-DD.md`。\n")
+    probe.write(ENTRY, "日志写 `artifacts/local-state/memory/YYYY-MM-DD.md`。\n")
     assert probe.dead() == []
 
 
@@ -249,17 +249,17 @@ def test_n_does_not_judge_docs_prefix_statically() -> None:
         "`docs/` 进入 N 的目录前缀 ⇒ N 与 B 对同一形态的指针各判一次，"
         "两套口径必漂移（KB-ENG-26 同族）。docs/ 前缀归 B，见 §6.0 GOV-009。"
     )
-    # 反向也钉：B 的指针正则只认 docs/ 形态 ⇒ `.workbuddy/` 指针确实由 N 独占。
-    assert mod.REF_RE.search(".workbuddy/memory/MEMORY.md") is None
+    # 反向也钉：B 的指针正则只认 docs/ 形态 ⇒ `artifacts/local-state/` 指针确实由 N 独占。
+    assert mod.REF_RE.search("artifacts/local-state/memory/MEMORY.md") is None
     assert mod.REF_RE.search("docs/kb/07-doc-curation.md") is not None
 
 
 # --------------------------- 判定面 = CI 检出内容（2026-09-16，PR #19 事故）
 #
-# 背景：`.workbuddy/` 是 gitignored 的工作区目录，`_in_checkout_universe` 原本靠
+# 背景：`artifacts/local-state/` 是 gitignored 的工作区目录，`_in_checkout_universe` 原本靠
 # 「顶层段在 + 父目录在」这套**两级结构代理**把它整棵跳过。2026-09-16 `PR #19`
-# 往 `.workbuddy/skills/` 强提交了 2 个技能文件 ⇒ `.workbuddy` **首次进入 `tops`**
-# ⇒ 门① 放行；而门② 对**目录形态**取的是**父目录**（`.workbuddy`，它正好在）⇒ 也放行
+# 往 `artifacts/local-state/skills/` 强提交了 2 个技能文件 ⇒ `artifacts/local-state` **首次进入 `tops`**
+# ⇒ 门① 放行；而门② 对**目录形态**取的是**父目录**（`artifacts/local-state`，它正好在）⇒ 也放行
 # ⇒ `N 6 处 + O 4 条`**只在 CI 红**（本机这 4 个目录都在，故本地恒绿）。
 #
 # ⚠️ 上面那批用例**全部跑在 `tmp_path` 合成树**里：那里 `_tracked_paths()` 拿不到 git
@@ -267,10 +267,10 @@ def test_n_does_not_judge_docs_prefix_statically() -> None:
 # 「跟踪清单路径」此前**一颗钉子都没有**——缺陷恰好长在没人钉的那半边。
 # ⇒ 本节用**构造的 tops/dirs** 直测判定函数，把它补上。
 
-#: 构造的判定面：`data` / `.workbuddy` / `scripts` 在检出里；
-#: `.workbuddy` 下**只有 `skills/`**（正是 PR #19 强提交 2 个技能文件后的形状）。
-_TOPS = {"data", ".workbuddy", "scripts"}
-_DIRS = {"data", ".workbuddy", ".workbuddy/skills", "scripts"}
+#: 构造的判定面：`data` / `artifacts/local-state` / `scripts` 在检出里；
+#: `artifacts/local-state` 下**只有 `skills/`**（正是 PR #19 强提交 2 个技能文件后的形状）。
+_TOPS = {"data", "artifacts", "scripts"}
+_DIRS = {"data", "artifacts", "artifacts/local-state/skills", "scripts"}
 
 
 def _judge(mod: ModuleType, monkeypatch: pytest.MonkeyPatch,
@@ -287,18 +287,18 @@ def _judge(mod: ModuleType, monkeypatch: pytest.MonkeyPatch,
 def test_dir_pointer_anchor_is_itself(monkeypatch: pytest.MonkeyPatch) -> None:
     """**根因钉**：目录形态（尾斜杠）的锚点是**它自己**，不是父目录。
 
-    `.workbuddy/memory/` 的父目录 `.workbuddy` 在检出里，但 `.workbuddy/memory`
+    `artifacts/local-state/memory/` 的父目录 `artifacts/local-state` 在检出里，但 `artifacts/local-state/memory`
     不在（gitignored）⇒ 必须**不判**。改回"取父目录"这条立刻红。
     """
     mod = _load()
-    assert _judge(mod, monkeypatch, ".workbuddy/memory/",
-                  {".workbuddy/memory"}) is False, (
-        "目录形态取父目录 ⇒ `.workbuddy/**` 的任意子路径都蒙混过关"
+    assert _judge(mod, monkeypatch, "artifacts/local-state/memory/",
+                  {"artifacts/local-state/memory"}) is False, (
+        "目录形态取父目录 ⇒ `artifacts/local-state/**` 的任意子路径都蒙混过关"
         "（PR #19 的 CI 红正是这么来的）"
     )
-    assert _judge(mod, monkeypatch, ".workbuddy/skills/",
-                  {".workbuddy/memory"}) is True, (
-        "`.workbuddy/skills` 真在检出里 ⇒ 照判；不得因它是 `.workbuddy` 下就一刀切跳过"
+    assert _judge(mod, monkeypatch, "artifacts/local-state/skills/",
+                  {"artifacts/local-state/memory"}) is True, (
+        "`artifacts/local-state/skills` 真在检出里 ⇒ 照判；不得因它是 `artifacts/local-state` 下就一刀切跳过"
     )
 
 
@@ -320,10 +320,10 @@ def test_absent_dir_is_still_judged_when_not_ignored(
 def test_file_pointer_anchor_is_parent(monkeypatch: pytest.MonkeyPatch) -> None:
     """**回归钉**：文件形态仍按**父目录**判（2026-09-15 起就是对的，不得被顺手改掉）。"""
     mod = _load()
-    assert _judge(mod, monkeypatch, ".workbuddy/skills/ashare-ledger-continue/SKILL.md",
+    assert _judge(mod, monkeypatch, "artifacts/local-state/skills/ashare-ledger-continue/SKILL.md",
                   set()) is True, "父目录在检出里 ⇒ 照判"
-    assert _judge(mod, monkeypatch, ".workbuddy/memory/MEMORY.md",
-                  {".workbuddy/memory/MEMORY.md"}) is False, "gitignored 的索引本体 ⇒ 不判"
+    assert _judge(mod, monkeypatch, "artifacts/local-state/memory/MEMORY.md",
+                  {"artifacts/local-state/memory/MEMORY.md"}) is False, "gitignored 的索引本体 ⇒ 不判"
 
 
 def test_gitignored_asks_dir_form_with_trailing_slash(
@@ -367,14 +367,14 @@ def test_gitignored_fails_open_when_git_unavailable(
     monkeypatch.setattr(mod, "subprocess",
                         types.SimpleNamespace(run=boom,
                                               SubprocessError=subprocess.SubprocessError))
-    assert mod._is_gitignored(".workbuddy/memory", True) is False
+    assert mod._is_gitignored("artifacts/local-state/memory", True) is False
 
 
-def test_real_repo_gitignored_workbuddy_dirs_are_skipped() -> None:
-    """**端到端钉（真实仓库 + 真实 `.gitignore`）**：`.workbuddy/` 下的目录指针不得被判。
+def test_real_repo_gitignored_local_artifact_dirs_are_skipped() -> None:
+    """**端到端钉（真实仓库 + 真实 `.gitignore`）**：`artifacts/local-state/` 下的目录指针不得被判。
 
-    前面几条用构造面钉**规则**，本条钉**本仓当下的前提**：`.workbuddy/` 确实在
-    `.gitignore` 里、其子目录进不了检出。前提被改（有人把 `.workbuddy/` 移出
+    前面几条用构造面钉**规则**，本条钉**本仓当下的前提**：`artifacts/local-state/` 确实在
+    `.gitignore` 里、其子目录进不了检出。前提被改（有人把 `artifacts/local-state/` 移出
     `.gitignore`，或把判定面换回文件系统口径）⇒ 本条立刻红。
     **代理成立的前提变了必须有人喊**——这正是 PR #19 事故的教训：
     前提的判定面由第三处的常量（`.gitignore` + 谁被强提交）决定，
@@ -383,13 +383,13 @@ def test_real_repo_gitignored_workbuddy_dirs_are_skipped() -> None:
     mod = _load()
     tops, dirs = mod._tracked_tops(), mod._tracked_dirs()
     assert tops is not None and dirs is not None, "本用例要求在 git 仓库内运行"
-    skipped = (".workbuddy/memory/", ".workbuddy/artifacts/",
-               ".workbuddy/reports/", ".workbuddy/trash/")
+    skipped = ("artifacts/local-state/memory/", "artifacts/local-state/artifacts/",
+               "artifacts/local-state/reports/", "artifacts/local-state/trash/")
     for tok in skipped:
         assert mod._in_checkout_universe(tok, tops, dirs) is False, (
             f"{tok} 被判成「检出里可能有」⇒ 该目录只存在于本机 ⇒ CI 上必然红"
         )
-    # 反向：真在检出里的目录照判（不得为了修前面这条把整棵 `.workbuddy` 一刀切跳过）。
+    # 反向：真在检出里的目录照判（不得为了修前面这条把整棵 `artifacts/local-state` 一刀切跳过）。
     assert mod._in_checkout_universe("skills/", tops, dirs) is True, (
         "`skills/` 下有已跟踪的技能文件 ⇒ 它在检出里 ⇒ 必须照判"
     )

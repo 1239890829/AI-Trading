@@ -21,7 +21,7 @@
 
 | # | 分界点 | 钉子 |
 |---|---|---|
-| 1 | 三种基线：`docs/` 相对 · 仓库相对（`（根）`/`.workbuddy/`）· 区间行裸名继承目录 | `test_*_baseline*` |
+| 1 | 三种基线：`docs/` 相对 · 仓库相对（`（根）`/`artifacts/`）· 区间行裸名继承目录 | `test_*_baseline*` |
 | 2 | **双向**都是缺口：未登记 / 幽灵条目 | `test_unregistered_*` · `test_ghost_*` |
 | 3 | 目录级条目覆盖其下全部文件（`DR-01 daily-review/`） | `test_directory_entry_covers_children` |
 | 4 | 占位名（`YYYY-MM-DD.md`）与区间行省略号不是真条目 | `test_placeholder_is_not_an_entry` |
@@ -151,8 +151,8 @@ def test_root_marked_entry_resolves_against_repo_root(probe: Probe) -> None:
 
 
 def test_workbuddy_entry_resolves_against_repo_root(probe: Probe) -> None:
-    probe.write(".workbuddy/memory/MEMORY.md")
-    probe.catalog("| **WB-01** | `.workbuddy/memory/` | L1 | 日志 | 逐日日志 |")
+    probe.write("artifacts/logs/INDEX.md")
+    probe.catalog("| **WB-01** | `artifacts/logs/` | L1 | 日志 | 逐日日志 |")
     assert probe.ghosts() == []
 
 

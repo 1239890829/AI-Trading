@@ -99,5 +99,8 @@ jobs:
       - name: Public repo 密钥 / 隐私扫描
         run: python3 scripts/audit/public_repo_scan.py
 
+      - name: 工作区卫生（禁止应用专属目录 / 隐藏规则）
+        run: python3 scripts/workspace-hygiene.py
+
       - name: 文档体检（未登记 / 死链 / 超层配额 / 摘要缺失）
         run: python3 scripts/doc-health.py

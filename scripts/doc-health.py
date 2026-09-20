@@ -456,7 +456,7 @@ def check_kb_pointer_files() -> list[tuple[str, int, str, str, str]]:
     """
     owner = kb_entry_owner()
     skip_dirs = {"node_modules", ".next", ".turbo", "__pycache__", ".venv", ".venv-research",
-                 "dist", "build", "archive", "trash", ".workbuddy", "artifacts"}
+                 "dist", "build", "archive", "trash", "artifacts"}
     targets: list[Path] = []
     for name in ("AGENTS.md", "README.md"):
         if (ROOT / name).exists():
@@ -508,7 +508,7 @@ def check_kb_orphans() -> list[tuple[str, str, str]]:
             owner_counts[m.group(1)] = 0
 
     skip_dirs = {"node_modules", ".next", ".turbo", "__pycache__", ".venv", ".venv-research",
-                 "dist", "build", "archive", "trash", ".workbuddy", "artifacts"}
+                 "dist", "build", "archive", "trash", "artifacts"}
     targets: list[Path] = []
     for name in ("AGENTS.md", "README.md", "CONTEXT.md"):
         if (ROOT / name).exists():
@@ -1177,9 +1177,8 @@ TASK_SEC_START = re.compile(r"^### 6\.0 ", re.M)
 def active_md_targets() -> list[Path]:
     """活文档面 = `SCAN_FILES` + `docs/` 下非 archive / 非 L4 的 `*.md`。
 
-    ⚠️ **刻意排除 `.workbuddy/`**：那里的 reports / artifacts 是**过程快照**（一次性），
-    其未完成项已归集账本；要求快照加指针等于**改写历史**（同 `archive/` 只读原则）。
-    新报告若含任务清单，靠 kb/07 §3.3 ③ 的执行点保证（**新增当轮登记**）。
+    ⚠️ **刻意排除 `artifacts/` 与历史目录**：过程快照不参与活文档任务闭包；
+    稳定结论先提炼到现役文档，未完成项归集账本。
     """
     out = [ROOT / f for f in SCAN_FILES]
     for p in sorted(DOCS.rglob("*.md")):
@@ -1316,7 +1315,7 @@ ENTRY_START = "<!-- project-entry:start -->"
 ENTRY_END = "<!-- project-entry:end -->"
 
 #: 目录式引用的允许前缀（避免把 `kb/`、`docs/kb/` 这类简写当成待验目录）。
-INDEX_DIR_PREFIXES = (".workbuddy/", "scripts/", "apps/", "backend/", "data/", "skills/", "artifacts/")
+INDEX_DIR_PREFIXES = ("scripts/", "apps/", "backend/", "data/", "skills/", "artifacts/")
 
 #: 带扩展名的路径片段。`docs/` 开头的**刻意排除**——B 项已覆盖，两处重复会造出"两套口径"。
 INDEX_PTR_RE = re.compile(
@@ -1326,7 +1325,7 @@ INDEX_PTR_RE = re.compile(
 #: 会被截成 `.workbuddy/memory/` —— 一个**被凭空造出来的目录指针**（且恰好是合法的），
 #: 于是占位名豁免失效、判据开始验一个从没被写过的东西。
 INDEX_DIR_RE = re.compile(
-    r"(?<![\w/.\-])((?:\.workbuddy|scripts|apps|backend|data|skills|artifacts)/[\w\-./]*/)(?![\w\-./])")
+    r"(?<![\w/.\-])((?:scripts|apps|backend|data|skills|artifacts)/[\w\-./]*/)(?![\w\-./])")
 
 
 def index_pointer_candidates(line: str) -> list[str]:
@@ -1451,7 +1450,7 @@ def catalog_entries() -> tuple[set[str], set[str]]:
                     last_dir = tok.rsplit("/", 1)[0] + "/"
                     if not tok.endswith(".md"):
                         tok += ".md"
-                    files.add(tok if tok.startswith((".workbuddy/", "skills/", "scripts/", "artifacts/")) else ("kb/" if kb else "") + tok)
+                    files.add(tok if tok.startswith(("skills/", "scripts/", "artifacts/")) else ("kb/" if kb else "") + tok)
                 else:
                     stem = tok if tok.endswith(".md") else tok + ".md"
                     files.add(("kb/" if kb else "") + last_dir + stem)

@@ -48,10 +48,8 @@ data/jev/*
 # 助手认知缺口留痕（运行时持续追加，不入库）
 cognition_gaps.jsonl
 
-# OS / IDE
+# OS
 .DS_Store
-.idea/
-.vscode/
 
 # Local market DB (DuckDB, 367MB, 不入 git —— CI/他机用 sync_marketdb.py 自行回补)
 backend/data/marketdb/
@@ -66,8 +64,6 @@ backend/data/factors/
 # 仓库跟踪基线（repo_watch.py 运行时 state；报告入 docs/repo-watch/）
 backend/data/repo-watch/
 
-# Agent memory / workspace state
-.workbuddy/
 # Local evidence, recovery copies and code proposals; never publish these assets.
 /artifacts/
 apps/web/tsconfig.tsbuildinfo
@@ -91,15 +87,12 @@ docs/archive/theme-audit-2026-09-01.json
 .mypy_cache/
 .ruff_cache/
 
-# Agent 本地状态（同类 .workbuddy/ 见上）
-.workbuddy-ai/
-
 # 相位核验中间产物（可再生产：scripts/verify_intraday_phase_fit.py --refresh）
 backend/data/research/phase_verify/
 
 # launchd/cron 运行期日志（每次触发追加，非源码；2026-09-12 加入）
 # 判据：内容对后续读者零价值（只有时间戳与错误行），却会每次运行都产生 diff。
-# 例外：logs/review-*.json 是盘后复盘的 claude -p 原始产物（含成本与 session），仍跟踪。
+# 例外：logs/review-*.json 是盘后复盘的 agent 原始产物（含成本与 session），仍跟踪。
 scripts/agent/logs/*.err
 scripts/agent/logs/*.out
 scripts/agent/logs/run.log

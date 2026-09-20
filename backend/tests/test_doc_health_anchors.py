@@ -244,7 +244,7 @@ def test_real_repo_has_no_dead_doc_anchor() -> None:
     文档点名的死路径（改文档或登记 `ANCHOR_ALLOW`），这是**期望的双红**。
 
     ⚠️ **这条守卫曾在本地是瞎的**（2026-09-12）：判定面用的是 `os.walk`，会把
-    `.workbuddy/trash/` 里的**回收站副本**算作"文件存在"⇒ 本地恒绿、CI 变红
+    `artifacts/trash/` 里的**回收站副本**算作"文件存在"⇒ 本地恒绿、CI 变红
     （实测遮盖 `docs/kb/00-INDEX.md:192 → run_review.sh`）。判定面改为 git 跟踪
     清单后本条才真正具备"本地能看见 CI 所见"的能力（见 KB-ENG-70）。
     """
@@ -278,7 +278,7 @@ def test_untracked_local_copy_cannot_mask_dead_anchor(
 ) -> None:
     """**回收站副本不得"救活"死引用**——两种口径对照，缺陷与修复各跑一遍。
 
-    与本仓删除纪律直接冲突的场景：文件处置一律先进 `.workbuddy/trash/`（禁止 `rm`），
+    与本仓删除纪律直接冲突的场景：tracked/独有文件处置进入 `artifacts/trash/`，
     该目录 gitignored 但 `os.walk` 照走 ⇒ **越守纪律，门禁越假绿**。
     """
     mod = _load()
@@ -288,7 +288,7 @@ def test_untracked_local_copy_cannot_mask_dead_anchor(
     monkeypatch.setattr(mod, "DOCS", docs)
     monkeypatch.setattr(mod, "ANCHOR_ALLOW", {})
     (docs / "a.md").write_text("见 `run_review.sh`。\n", encoding="utf-8")
-    trash = tmp_path / ".workbuddy" / "trash" / "2026-09-12" / "scripts"
+    trash = tmp_path / "artifacts" / "trash" / "2026-09-12" / "scripts"
     trash.mkdir(parents=True)
     (trash / "run_review.sh").write_text("", encoding="utf-8")   # 本地有、但未跟踪
 

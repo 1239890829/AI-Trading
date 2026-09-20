@@ -100,3 +100,27 @@ SHA-256 `166fb841f325aad8ce1ef1c99ba31a0d833df391c76e930f6516ff048eec9716`，与
 验收包括类体/函数体、相对与别名导入、最短路径、自环、语法错、虚拟环境及软链；干净检出同验。
 原件只在新入口合入且主干通过后，经哈希复核送入项目可恢复回收站，再做恢复回读；不动相邻未知资产。
 源清单、目标哈希和最终回收状态存 artifacts/runs/notification-outbox-20260917/verification，整体任务保持开放。
+
+## 7 最终退休批（2026-09-20）
+
+用户明确要求项目内不再保留任何应用专属目录。本批在旧恢复包基础上重新对源树做完整备份，
+最终恢复点为本机忽略的 `artifacts/backups/platform-retirement-20260920-final/`：
+- `recovery.tar.gz` SHA-256 `ed57f245ee440bd6b56607b5466ce605cb1d430a6862ac08fb227059cf373324`；
+- 3,249 个 payload 逐条回读校验通过；恢复包约 31 MiB；
+- 该包只作本机恢复证据，不发布、不成为现役入口。
+
+最终处置不是整包改名：
+- 18 个项目自建且仍可复用的 Skill 提炼到项目唯一 `skills/`；
+- TDX 数据源四个可复跑探针迁到 `scripts/audit/data-source-probes/`；
+- 数据源与仓库评估的少量独有 Markdown 证据迁到 `docs/archive/`；
+- 已先行迁出的报告/OpenAPI/导入环工具继续以 `scripts/` 中现役版本为准；
+- UZI/Serenity 两个第三方整仓不再复制，已提炼方法由 KB-STOCK-34、P2-35/P2-36 与 repo tracker 承接；
+- 旧 memory/reports/trash、重复快照、一次性切分脚本与 `.workbuddy-ai` 指针不再作为活动资产迁移。
+
+项目目录中立性改由 `scripts/workspace-hygiene.py` 守卫：应用专属状态/插件目录及其 `.gitignore`
+隐藏规则都会失败；CI 与交接收尾均运行。旧 `scripts/audit/platform_assets.py` 与专属测试随迁移完成退出，
+需要复盘迁移方法时从本归档文档与 Git 历史读取，不恢复旧平台目录。
+2026-09-20 最终执行确认：删除前再次核验无运行进程引用且最终恢复包 SHA-256 一致；
+主工作区 `.workbuddy`（约 77 MiB）与 `.workbuddy-ai`（约 24 KiB）随后物理删除，
+`test ! -e` 双向确认通过。项目内其它应用插件元数据（GSAP 归档下的 Claude/Cursor
+manifest）由同一提交删除，合并后以 `workspace-hygiene.py` 的全树扫描作为持续验收。

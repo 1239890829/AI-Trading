@@ -1,9 +1,7 @@
 # Dependencies
 node_modules/
 
-# IDE
-.vscode/
-.idea/
+# Editor swap files
 *.swp
 *.swo
 

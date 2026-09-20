@@ -13,11 +13,8 @@ PUBLIC_MARKDOWN = tuple(
     path
     for path in REPO_ROOT.rglob("*.md")
     if not {
-        ".agents",
-        ".codex",
         ".git",
         ".venv",
-        ".workbuddy",
         "dist",
         "internal",
         "node_modules",
