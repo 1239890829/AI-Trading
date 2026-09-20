@@ -386,7 +386,7 @@ ID 继续用 BUG/IMP/RSH/GOV/OPS 三位递增序号，永不复用。新增先�
   · **记录性引用 / 占位名**沿用 B 项口径（`RECORD_MARKERS` 同句豁免、`PLACEHOLDER_RE` 占位名豁免）
   · **注入验证**：短入口超限 ⇒ 1 红；删掉索引文件 ⇒ 1 红；**12 条自证用例**见 `backend/tests/test_doc_health_memory_index.py`
 - 扫 ⏳ 超期（kb 00-INDEX 状态列）—— 需人工/议程侧核（脚本不判）
-- **扫死链 —— B 项，口径见下（2026-09-10 修订）**：抓 `docs/xxx.md` 形式的引用，逐条 `Path.exists()`。
+- **扫死链 —— B + B2，口径见下（2026-09-10 建 B；2026-09-20 补 B2）**：B 抓 `docs/xxx.md` 形式的显式引用；B2 解析 Markdown 相对链接的真实位置，专门阻断目录迁移后“名字没变、相对基准变了”的隐性断链。两者都逐条 `Path.exists()`。
   1. **扫描面**：`AGENTS.md` / `README.md` / `docs/INDEX.md` / `plan-registry.md` / `retro-and-gaps.md` /
      `docs/kb/00-INDEX.md` / **`AGENTS.md` 的短入口块** / docs 活文档。
   2. **默认排除**（`--all` 可强制全扫）：`docs/archive/`（只读历史，内部引用指向"当时存在的文件"）、
