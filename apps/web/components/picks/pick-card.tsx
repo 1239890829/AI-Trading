@@ -108,7 +108,7 @@ export interface TradingCard {
   distinctiveness: CardJudgement | null;
   certainty: CardJudgement | null;
   /**
-   * 联动确定性（2026-09-15 新口径）：候选是**尚未涨停**的题材联动股，
+   * 联动确定性（2026-09-15 新口径）：候选是**当前未封板**、通过联动门槛的题材个股，
    * 没有封单可看，延续预期只能来自「题材基座 × 距封板跑道」。
    */
   linkage: CardJudgement | null;
@@ -391,18 +391,18 @@ export function PickCard({
 
       {/* 可参与性（2026-09-15 猎场口径）：加入猎场的个股必须是投资者**实际可以参与的**。
           这张 chip 把"能不能买"放在卡片第一屏，而不是让用户自己从"已封板"推导；
-          参考区的卡片一律显示「仅参考 · 当日买不进」，从视觉上就不与候选混淆。 */}
+          参考区按 current 状态显示「仅参考 / 未判定」；曾封板但当前已开板者会进入候选并从参考区去重。 */}
       {item.tradability && (
         <div className="mt-1.5">
           <Chip
             text={
               item.tradability.level === "可参与"
-                ? "可参与 · 报价可成交"
+                ? "可参与评估 · 当前未封板"
                 : item.tradability.level === "不可参与"
-                  ? "仅参考 · 当日买不进"
+                  ? "当前不可参与"
                   : "可参与性未判定"
             }
-            title={`可参与性判定（猎场口径：只收实际可以参与的个股）：${item.tradability.basis}`}
+            title={`可参与性判定（候选资格，不代表成交保证）：${item.tradability.basis}`}
             className={
               item.tradability.level === "可参与"
                 ? "border-sky-500/50 bg-sky-500/10 text-sky-700 dark:text-sky-300"
@@ -543,7 +543,7 @@ export function PickCard({
       )}
 
       {/* 判定（辨识度/确定性/联动，仅盘中名单）：三态，依据悬停可见。
-          联动确定性是 2026-09-15 新口径下**候选卡片的主判定**（候选尚未涨停，
+          联动确定性是 2026-09-15 新口径下**候选卡片的主判定**（候选当前未封板，
           封板质量那一套判据不适用 ⇒ 辨识度/确定性为 null 时不渲染，不拿占位糊上）。 */}
       {(item.distinctiveness || item.certainty || item.linkage) && (
         <div className="mt-2 flex flex-wrap gap-1">

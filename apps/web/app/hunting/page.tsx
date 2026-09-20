@@ -436,7 +436,7 @@ function HuntingInner() {
           ) : (
             <>
               {/* ① 盘中跟踪（在上）——2026-09-15 口径：上方是**可参与**候选，
-                  下方虚线框是涨停梯队（仅参考，当日买不进）。两者刻意分区+标注，
+                  下方虚线框是涨停梯队（历史参考，当前封板/未判状态按快照显示）。两者刻意分区+标注，
                   避免"名单看着很强但一只都买不进"（用户指令：所有加入猎场的个股
                   必须是投资者实际可以参与的）。 */}
               {(topItems.length > 0 || topRefItems.length > 0) && (
@@ -445,7 +445,7 @@ function HuntingInner() {
                     <div className="flex flex-wrap items-baseline gap-2">
                       <h2 className="text-xs font-medium text-zinc-600 dark:text-zinc-400">盘中跟踪</h2>
                       <span className="text-[10px] text-zinc-600 dark:text-zinc-400">
-                        {topItems.length} 只可参与候选 · 当日实时动态名单（尚未涨停、报价可成交）
+                        {topItems.length} 只可参与候选 · 当日实时动态名单（当前未封板、可进入参与评估）
                       </span>
                       <span
                         className="rounded border border-zinc-300 px-1.5 py-0.5 text-[10px] text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
@@ -475,11 +475,11 @@ function HuntingInner() {
                     {topRefItems.length > 0 && (
                       <details className="rounded-lg border border-dashed border-amber-500/40 p-2">
                         <summary className="cursor-pointer text-[11px] text-amber-800 dark:text-amber-300">
-                          涨停梯队 {topRefItems.length} 只 · 仅参考（已封板/开盘即涨停，当日买不进）
+                          涨停梯队 {topRefItems.length} 只 · 历史参考（当前状态见卡片判定）
                         </summary>
                         <p className="mt-1.5 text-[10px] text-zinc-600 dark:text-zinc-400">
                           {top?.reference_criteria ??
-                            "这些个股已封在涨停或开盘即涨停，全天无买入机会；它们的价值是揭示资金的集中方向。"}
+                            "这些个股记录的是今日曾封板身份；当前仍封、已开板或状态未判以卡片的时点判定为准。它们首先用于揭示资金集中方向。"}
                         </p>
                         <div className="mt-2">
                           <MasonryColumns>

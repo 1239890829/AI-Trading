@@ -567,3 +567,68 @@ def test_scorecard_stage_diagnostics_dedupe_within_stage_not_globally(tmp_path):
     assert card["by_stage"]["rank"]["labels"] == 1
     assert card["by_stage"]["notification"]["labels"] == 1
     assert card["audit"]["repeated_labeled_rows"] == 3
+
+
+def test_replay_v2_distinguishes_ever_sealed_from_current_sealed():
+    from app.picks.opportunity_learning import replay_decision
+
+    opened = {
+        "quote_present": True, "board_tradable": True,
+        "change_pct": 6.8, "linkage_min_pct": 1.0,
+        "amount": 2e8, "amount_min": 3e7, "seal_line": 9.7,
+        "ever_sealed": True, "current_sealed": False,
+        "snapshot_state": "ready", "version": "2026-09-21T10:05:00+08:00",
+    }
+    assert replay_decision("candidate", {"facts": opened}) == "included"
+    assert replay_decision(
+        "hard_gate", {"facts": opened, "tradability_level": "可参与"}
+    ) == "passed"
+
+    resealed = {**opened, "current_sealed": True}
+    assert replay_decision("candidate", {"facts": resealed}) == "rejected"
+    unknown = {**opened, "current_sealed": None, "snapshot_state": "stale"}
+    assert replay_decision("candidate", {"facts": unknown}) == "unknown"
+
+
+def test_replay_keeps_legacy_v1_sealed_pool_semantics():
+    from app.picks.opportunity_learning import replay_decision
+
+    legacy = {
+        "quote_present": True, "board_tradable": True, "change_pct": 6.8,
+        "sealed_pool": True,
+    }
+    assert replay_decision("candidate", {"facts": legacy}) == "rejected"
+    assert replay_decision(
+        "hard_gate", {"facts": legacy, "tradability_level": "不可参与"}
+    ) == "rejected"
+
+
+def test_intraday_archive_carries_seal_state_version_facts():
+    payload = _payload()
+    payload["themes"][0]["participants"] = [payload["themes"][0]["participants"][0]]
+    facts = {
+        "quote_present": True, "board_tradable": True,
+        "change_pct": 6.8, "linkage_min_pct": 1.0,
+        "amount": 2e8, "amount_min": 3e7, "seal_line": 9.7,
+        "ever_sealed": True, "current_sealed": False,
+        "snapshot_state": "ready", "version": "2026-09-21T10:05:00+08:00",
+    }
+    payload["themes"][0]["participants"][0]["seal_state"] = {
+        "ever_sealed": True, "current_sealed": False,
+        "snapshot_state": "ready", "version": facts["version"],
+    }
+    payload["themes"][0]["_candidate_audit"] = [{
+        "symbol": "600001", "name": "甲", "candidate_decision": "included",
+        "hard_gate_decision": "passed", "reason": "曾封板后当前开板重评",
+        "price": 10.0, "change_pct": 6.8, "amount": 2e8,
+        "board": "沪市主板", "facts": facts,
+    }]
+    _run_id, rows = build_intraday_records(
+        payload, trade_date="2026-09-21", as_of=datetime(2026, 9, 21, 10, 5)
+    )
+    candidate = next(r for r in rows if r["symbol"] == "600001" and r["stage"] == "candidate")
+    hard_gate = next(r for r in rows if r["symbol"] == "600001" and r["stage"] == "hard_gate")
+    assert candidate["evidence"]["facts"] == facts
+    assert hard_gate["evidence"]["facts"] == facts
+    rank = next(r for r in rows if r["symbol"] == "600001" and r["stage"] == "rank")
+    assert rank["evidence"]["seal_state"]["version"] == facts["version"]

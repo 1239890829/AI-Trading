@@ -266,7 +266,7 @@ def test_attach_participants_mines_concentrated_theme_only():
     stats = attach_participants(
         cards,
         snapshot_by=_snap_rows(_row("600011", 3.0)),
-        sealed_symbols={"600010"},
+        ever_sealed_symbols={"600010"},
         limit_up_total=20,
         members_by_code={"BK0009": ["600010", "600011"], "BK0010": ["600012"]},
     )
@@ -285,7 +285,7 @@ def test_attach_participants_without_container_is_explicit():
     """未挂靠到官方容器的题材：写明原因而不是留一个看起来"没候选"的空列表。"""
     cards = [_theme_card(catalog_code=None)]
     attach_participants(
-        cards, snapshot_by={}, sealed_symbols=set(),
+        cards, snapshot_by={}, ever_sealed_symbols=set(),
         limit_up_total=10, members_by_code={},
     )
     assert cards[0]["participants"] == []
@@ -298,7 +298,7 @@ def test_attach_participants_share_gate_uses_total():
     attach_participants(
         cards,
         snapshot_by=_snap_rows(_row("600011", 3.0)),
-        sealed_symbols=set(),
+        ever_sealed_symbols=set(),
         limit_up_total=60,          # 3/60 = 5% < 10%
         members_by_code={"BK0009": ["600011"]},
     )
@@ -348,7 +348,7 @@ def test_attach_participants_distinguishes_missing_snapshot_from_no_candidate():
     stats = attach_participants(
         cards,
         snapshot_by={},                      # 快照整批缺失
-        sealed_symbols=set(),
+        ever_sealed_symbols=set(),
         limit_up_total=20,
         members_by_code={"BK0009": ["600011", "600012", "600013"]},
     )
@@ -364,7 +364,7 @@ def test_attach_participants_no_candidate_is_a_conclusion_not_a_data_gap():
     attach_participants(
         cards,
         snapshot_by=_snap_rows(_row("600011", 0.2)),   # 涨幅未达联动下沿
-        sealed_symbols=set(),
+        ever_sealed_symbols=set(),
         limit_up_total=20,
         members_by_code={"BK0009": ["600011"]},
     )

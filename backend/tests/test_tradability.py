@@ -47,7 +47,8 @@ def test_open_sealed_accepts_compact_and_returns_unknown():
 
 def test_assess_sealed_now_is_not_participable():
     r = assess(sealed=True, first_seal_time="09:25:00")
-    assert r["level"] == "不可参与" and "开盘即涨停" in r["basis"] and "竞价即封" in r["basis"]
+    assert r["level"] == "不可参与" and "竞价即封" in r["basis"] and "当前" in r["basis"]
+    assert "全天无买入机会" not in r["basis"]
     # 盘中封板（非开盘即封）同样不可参与，但文案要点明首封时间（可追溯）
     r2 = assess(sealed=True, first_seal_time="10:31:00")
     assert r2["level"] == "不可参与" and "10:31" in r2["basis"]
@@ -61,11 +62,12 @@ def test_assess_unsealed_is_participable():
     assert assess(sealed=False, first_seal_time="09:25:00")["level"] == "可参与"
 
 
-def test_assess_after_close_falls_back_to_seal_time():
-    """盘后口径（sealed=None，无实时盘口）：只有"开盘即封"才判不可参与。"""
-    assert assess(sealed=None, first_seal_time="09:26:00")["level"] == "不可参与"
-    assert assess(sealed=None, first_seal_time="14:20:00")["level"] == "可参与"
-    assert assess(sealed=None)["level"] == "unknown"
+def test_assess_unknown_current_never_infers_from_first_seal_history():
+    """首封时间是历史事实，不足以证明当前仍封或已开；current unknown 必须保持 unknown。"""
+    for first in ("09:26:00", "14:20:00", None):
+        got = assess(sealed=None, first_seal_time=first)
+        assert got["level"] == "unknown"
+        assert "current" in got["basis"]
 
 
 def test_seal_metrics_uses_board_specific_limits():
@@ -197,7 +199,7 @@ def _candidates(member_symbols, sealed=(), snaps=None):
     return linkage_candidates(
         container={"code": "X", "name": "小概念"},
         member_symbols=member_symbols,
-        sealed_symbols=set(sealed),
+        ever_sealed_symbols=set(sealed),
         snapshot_by={r["symbol"]: r for r in rows},
         theme_limit_ups=4,
         theme_stage="发酵",
@@ -211,8 +213,8 @@ def test_linkage_candidates_filter_chain():
     assert syms == ["600002", "600001"]  # 涨幅降序
 
 
-def test_linkage_candidates_excludes_sealed_pool_members():
-    # 涨停池是"尚未涨停"的权威判据：即使快照显示未封板，在池内也不作候选
+def test_linkage_candidates_ever_sealed_without_timed_snapshot_stays_out():
+    # 涨停池只证明“今日曾封板”；没有可信 current as-of 时不能声称已经开板，故仍不进候选。
     got = _candidates(["600001", "600002"], sealed={"600002"})
     assert [c["symbol"] for c in got] == ["600001"]
 
@@ -223,7 +225,7 @@ def test_linkage_candidates_carry_tradability_and_basis():
     # 每只候选都必须自带"可参与"判定与可追溯依据（卡片直接展示，不二次加工）
     assert top["tradability"]["level"] == "可参与"
     assert top["linkage"]["level"] == "高"      # 6.8% 已进临板区
-    assert "尚未涨停" in top["basis"] and "距封板" in top["basis"]
+    assert "当前未封板" in top["basis"] and "距封板" in top["basis"]
     assert top["container"] == "小概念" and top["container_code"] == "X"
     assert top["runway_pct"] == round(9.7 - 6.8, 2)
 
@@ -243,21 +245,17 @@ def test_candidate_quota_smaller_than_display_capacity():
 # ---------------------------------------------------------------- 参考区标注
 
 
-def test_attach_tradability_marks_ladder_as_not_participable():
-    """无实时盘口时：涨停池成员一律按已封板处理（保守方向），首封时间进依据文案。"""
+def test_attach_tradability_without_timed_snapshot_is_unknown():
+    """曾封板只是历史身份；无可信 current as-of 时不能硬说仍封板或已经开板。"""
     stocks = [
         {"symbol": "600001", "name": "甲", "first_seal_time": "09:25:00"},
         {"symbol": "600002", "name": "乙", "first_seal_time": "14:20:00"},
         {"symbol": "600003", "name": "丙"},
     ]
     attach_tradability(stocks)
-    assert stocks[0]["tradability"]["level"] == "不可参与"
-    assert "开盘即涨停" in stocks[0]["tradability"]["basis"]
-    assert stocks[1]["tradability"]["level"] == "不可参与"
-    assert "14:20" in stocks[1]["tradability"]["basis"]
-    # 首封时间缺失时结论不变（"已封板"本身足够判定），只是文案不含时间
-    assert stocks[2]["tradability"]["level"] == "不可参与"
-    assert all("无实时盘口" in s["tradability"]["basis"] for s in stocks)
+    assert all(s["tradability"]["level"] == "unknown" for s in stocks)
+    assert all(s["seal_state"]["current_sealed"] is None for s in stocks)
+    assert all("可信时点" in s["tradability"]["basis"] for s in stocks)
 
 
 def test_attach_tradability_uses_realtime_quote_for_open_board():
@@ -276,13 +274,13 @@ def test_attach_tradability_uses_realtime_quote_for_open_board():
         "600001": {"change_pct": 10.0},   # ≥ 9.7 封板线
         "600002": {"change_pct": 9.5},    # 打开回落
     }
-    attach_tradability(stocks, snap)
+    attach_tradability(stocks, snap, snapshot_state="ready", snapshot_as_of="2026-09-15T03:33:00+00:00")
     assert stocks[0]["tradability"]["level"] == "不可参与"
     assert stocks[1]["tradability"]["level"] == "可参与"
-    assert "后开板" in stocks[1]["tradability"]["basis"]
-    # 无盘口的那只退回涨停池口径（保守）
-    assert stocks[2]["tradability"]["level"] == "不可参与"
-    assert "无实时盘口" in stocks[2]["tradability"]["basis"]
+    assert "当前开板" in stocks[1]["tradability"]["basis"]
+    # 无 current 报价：只知道“今日曾封板”，当前状态不可判，不能伪造仍封板。
+    assert stocks[2]["tradability"]["level"] == "unknown"
+    assert stocks[2]["seal_state"]["current_sealed"] is None
 
 
 # ---------------------------------------------------------------- 板块权限（账户级约束）
@@ -344,7 +342,7 @@ def test_linkage_candidates_filters_board_and_audits():
     got = linkage_candidates(
         container={"code": "X", "name": "小概念"},
         member_symbols=[r["symbol"] for r in rows],
-        sealed_symbols=set(),
+        ever_sealed_symbols=set(),
         snapshot_by={r["symbol"]: r for r in rows},
         theme_limit_ups=3,
         theme_stage="发酵",
@@ -369,7 +367,7 @@ def test_linkage_candidate_audit_keeps_each_filter_reason():
     got = linkage_candidates(
         container={"code": "X", "name": "小概念"},
         member_symbols=[r["symbol"] for r in rows] + ["600099"],
-        sealed_symbols=set(), snapshot_by={r["symbol"]: r for r in rows},
+        ever_sealed_symbols=set(), snapshot_by={r["symbol"]: r for r in rows},
         theme_limit_ups=3, theme_stage="发酵", audit_rows=audit,
     )
     assert [r["symbol"] for r in got] == ["600001"]
@@ -380,3 +378,67 @@ def test_linkage_candidate_audit_keeps_each_filter_reason():
     assert by["600003"]["hard_gate_decision"] == "passed"
     assert by["600003"]["candidate_decision"] == "rejected"
     assert by["600099"]["candidate_decision"] == "unknown"
+
+
+def test_ever_sealed_open_board_reenters_with_fresh_snapshot():
+    audit=[]
+    got = linkage_candidates(
+        container={"code":"X","name":"小概念"},
+        member_symbols=["600002"],
+        ever_sealed_symbols={"600002"},
+        snapshot_by={"600002": _snap("600002","乙",9.2)},
+        theme_limit_ups=4, theme_stage="发酵",
+        snapshot_state="ready", snapshot_as_of="2026-09-21T02:31:00+00:00",
+        audit_rows=audit,
+    )
+    assert [c["symbol"] for c in got] == ["600002"]
+    st=got[0]["seal_state"]
+    assert st["ever_sealed"] is True and st["current_sealed"] is False
+    assert st["version"] == "2026-09-21T02:31:00+00:00"
+    assert "曾封板" in got[0]["tradability"]["basis"]
+    assert "不保证成交" in got[0]["tradability"]["basis"]
+
+
+def test_ever_sealed_requires_fresh_timed_snapshot_before_reentry():
+    for state, asof in [("stale", "2026-09-21T02:31:00+00:00"), ("ready", None)]:
+        audit=[]
+        got = linkage_candidates(
+            container={"code":"X","name":"小概念"}, member_symbols=["600002"],
+            ever_sealed_symbols={"600002"}, snapshot_by={"600002": _snap("600002","乙",9.2)},
+            theme_limit_ups=4, theme_stage="发酵", snapshot_state=state, snapshot_as_of=asof,
+            audit_rows=audit,
+        )
+        assert got == []
+        assert audit[0]["candidate_decision"] == "unknown"
+
+
+def test_open_reseal_reopen_versions_and_member_dedup_are_consistent():
+    def run(pct, version):
+        audit=[]
+        got=linkage_candidates(
+            container={"code":"X","name":"小概念"},
+            member_symbols=["600002","600002"], ever_sealed_symbols={"600002"},
+            snapshot_by={"600002": _snap("600002","乙",pct)},
+            theme_limit_ups=4, theme_stage="发酵", snapshot_state="ready", snapshot_as_of=version,
+            audit_rows=audit,
+        )
+        return got,audit
+    opened,_=run(9.2,"v1")
+    resealed,a2=run(9.8,"v2")
+    reopened,_=run(9.1,"v3")
+    assert len(opened)==1 and opened[0]["seal_state"]["version"]=="v1"
+    assert resealed==[] and a2[0]["hard_gate_decision"]=="rejected"
+    assert len(reopened)==1 and reopened[0]["seal_state"]["version"]=="v3"
+
+
+def test_attach_tradability_does_not_use_stale_quote_to_claim_open_board():
+    stocks=[{"symbol":"600002","name":"乙","first_seal_time":"09:57:00"}]
+    snap={"600002":{"change_pct":9.2}}
+    attach_tradability(stocks, snap, snapshot_state="stale", snapshot_as_of="v1")
+    assert stocks[0]["tradability"]["level"] == "unknown"
+    attach_tradability(stocks, snap, snapshot_state="ready", snapshot_as_of="v2")
+    assert stocks[0]["tradability"]["level"] == "可参与"
+    assert stocks[0]["seal_state"] == {
+        "ever_sealed": True, "current_sealed": False, "snapshot_state": "ready",
+        "version": "v2",
+    }

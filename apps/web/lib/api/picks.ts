@@ -551,6 +551,16 @@ export interface TradabilityJudgement {
   basis: string;
 }
 
+export interface SealState {
+  /** 今日是否曾进入涨停池（历史身份，不等于当前仍封板） */
+  ever_sealed: boolean;
+  /** 当前封板状态；null = 无可信时点快照，不能判 */
+  current_sealed: boolean | null;
+  snapshot_state: string;
+  /** 当前状态判定使用的快照版本/as-of */
+  version: string | null;
+}
+
 export interface OpportunityStock {
   symbol: string;
   name: string | null;
@@ -562,8 +572,10 @@ export interface OpportunityStock {
   hot_rank: number | null;
   /** 首封时间（涨停池官方字段）：可参与性判据「开盘即涨停」的依据 */
   first_seal_time?: string | null;
-  /** 可参与性三态（2026-09-15）：涨停梯队恒为「不可参与」——它们当日买不进 */
+  /** 可参与性三态：曾封板只保留身份，当前开板需可信时点快照重评 */
   tradability?: TradabilityJudgement | null;
+  /** 曾封板 / 当前封板双状态，防止“在涨停池”被误当成“当前仍封板” */
+  seal_state?: SealState | null;
   /** 仅作参考（涨停梯队标记；**不是**猎场候选） */
   reference_only?: boolean;
   /** 板块中文名（沪市主板/深市主板/创业板/科创板/北交所/B股）——账户权限可视 */
@@ -572,7 +584,7 @@ export interface OpportunityStock {
   tradable?: boolean | null;
   distinctiveness: OpportunityJudgement;
   certainty: OpportunityJudgement;
-  /** 联动置信度（仅 participants：尚未涨停的题材联动候选有） */
+  /** 联动置信度（仅 participants：当前未封板并通过联动门槛的候选有） */
   linkage?: OpportunityJudgement | null;
   /** 一句话入选依据（participants 由后端生成，直接展示） */
   basis?: string | null;
@@ -595,9 +607,9 @@ export interface OpportunityTheme {
   max_boards: number | null;
   limit_up_count: number | null;
   has_succession: boolean | null;
-  /** 涨停梯队：**仅参考信息**（已封板/开盘即涨停，当日买不进；非主板已剔除） */
+  /** 涨停梯队：今日曾封板的历史身份；当前状态另见 seal_state/tradability。可参与者会去重进入主候选，不在参考区重复。 */
   stocks: OpportunityStock[];
-  /** 猎场候选：题材内**尚未涨停**、报价可成交的联动个股（2026-09-15 口径） */
+  /** 猎场候选：当前未封板、通过题材/流动性门槛，可进入参与评估；不等价于保证成交。 */
   participants?: OpportunityStock[];
   /** 未挖掘/挖空的原因（区分"没挖"与"挖空了"，空列表时读它） */
   participants_note?: string | null;
@@ -623,6 +635,11 @@ export interface IntradayOpportunities {
     /** 被板块权限挡下的成分只数（解释「候选为什么这么少」） */
     excluded_board?: number;
     excluded_board_labels?: Record<string, number>;
+    opened_after_seal?: number;
+    current_sealed?: number;
+    current_unknown?: number;
+    snapshot_state?: string;
+    snapshot_as_of?: string | null;
   } | null;
   /** 挖掘失败时的显式说明（非静默降级） */
   linkage_note?: string | null;
@@ -700,10 +717,12 @@ export interface IntradayTopStock {
   strength_tier: string | null;
   distinctiveness: { level: string; basis: string } | null;
   certainty: { level: string; basis: string } | null;
-  /** 联动置信度（2026-09-15 新口径：items 全是尚未涨停的题材联动候选） */
+  /** 联动置信度：items 为当前未封板、通过候选门槛的题材联动候选 */
   linkage?: { level: string; basis: string } | null;
-  /** 可参与性三态（items 恒为「可参与」——这是保证的透出，不是事后标签） */
+  /** 候选资格三态；「可参与」只表示进入评估，不等价于保证成交 */
   tradability?: TradabilityJudgement | null;
+  /** 曾封板历史身份 + 当前封板状态版本；主列表与参考区同一契约 */
+  seal_state?: SealState | null;
   /** 首封时间（仅参考区有） */
   first_seal_time?: string | null;
   /** 仅作参考（涨停梯队；**不是**猎场候选） */
@@ -725,9 +744,9 @@ export interface IntradayTopStock {
 
 export interface IntradayTopPayload {
   trade_date: string | null;
-  /** 猎场候选：**可参与**（尚未涨停、报价可成交） */
+  /** 猎场候选：当前未封板，可进入参与评估；盘口深度/排队仍由后续执行链复核。 */
   items: IntradayTopStock[];
-  /** 涨停梯队：**仅参考信息**（已封板/开盘即涨停，当日买不进） */
+  /** 涨停梯队历史参考：曾封板身份；current 状态另见 seal_state/tradability */
   reference_items?: IntradayTopStock[];
   total_candidates: number;
   reference_total?: number;

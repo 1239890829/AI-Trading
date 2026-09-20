@@ -177,7 +177,7 @@ async def candidate_pool(
 
     各路来源天然覆盖不同侧面：**题材联动是"可参与"的针对性来源**（2026-09-15
     用户指令：开盘即涨停的个股买不进，只作题材集中度的参考信息，转而挖掘该题材内
-    尚未涨停、有联动机会的可参与个股），事件池是消息源，涨停池是大幅拉升的极端
+    当前未封板、通过联动/流动性门槛的评估候选），事件池是消息源，涨停池是大幅拉升的极端
     表现，热股榜是关注度信号。装配顺序见 `_SOURCE_ORDER`（联动股最前）。
 
     :param active_events: 活跃事件行（`store.list_events` 的结果）。管线内**预取一次
@@ -271,10 +271,10 @@ async def candidate_pool(
                 n_linkage += 1
 
     # ② 当日涨停池（突发大幅拉升的极端表现）—— 由调用方预取（P2-4）
-    # ⚠️ **开盘即涨停的成员在此被剔除**（2026-09-15 用户指令）：首封 ≤ 09:30 的
-    # 一字板／秒板，全天零买入机会，放进候选池只会产出"看着很强但买不进"的组合。
-    # 它们不作候选，但**不浪费**——其题材集中度正是 ①b 联动挖掘的输入（见
-    # `mine_theme_linkage`）。判据委托 `picks/tradability.is_open_sealed` 单点实现。
+    # ⚠️ **开盘即封成员不通过“原始涨停池来源”直接晋级**：首封 ≤09:30 是强历史特征，
+    # 但不是 current 状态。若它随后真实开板，必须经 ①b 的带时点 theme_linkage
+    # 重新通过“当前未封板 + 联动/流动性/权限”门槛后才能进入候选；不能靠涨停池身份自动授权。
+    # 判据委托 `picks/tradability.is_open_sealed` 单点实现。
     excluded: list[dict] = []
     for r in limit_up_pool or []:
         if is_open_sealed(getattr(r, "first_seal_time", None)) is True:
@@ -365,13 +365,15 @@ async def mine_theme_linkage(
     snapshot_rows: list[dict] | None,
     *,
     per_theme: int = CANDIDATE_PER_THEME,
+    snapshot_state: str | None = None,
+    snapshot_as_of: str | None = None,
 ) -> dict:
-    """题材联动挖掘：涨停集中的题材 → 该题材内**尚未涨停**的可参与个股。
+    """题材联动挖掘：涨停集中的题材 → 该题材内**当前未封板**、通过门槛的评估候选。
 
     **为什么需要**（2026-09-15 用户指令）：开盘即涨停的个股全天买不进，把它选进
     组合只是拿"事后已知的极强标的"抬高名义胜率。它们的正确用法是**参考信息**——
     它们揭示当日资金集中的方向；既然该方向上多数个股已被封死，就在同一个官方题材
-    容器里找**还没被封死**的票：资金外溢的第一落点、且此刻报价可成交。
+    容器里找**当前未封板**且通过联动/流动性门槛的票：资金外溢的第一落点；进入评估不等于保证成交。
 
     **为什么用"成分重叠"而不是题材名匹配**：涨停原因是同花顺的动态标签（「功能糖」），
     官方概念是目录名（「代糖概念」），名字对不上。按成分重叠反向定位容器是既有的
@@ -412,7 +414,7 @@ async def mine_theme_linkage(
     symbol_index, _names = await asyncio.to_thread(build_theme_index)
     sizes, members_by_code = index_views(symbol_index)
     snapshot_by = {r["symbol"]: r for r in snapshot_rows if r.get("symbol")}
-    sealed = set(records)
+    ever_sealed = set(records)
 
     items: list[dict] = []
     themes_out: list[dict] = []
@@ -428,8 +430,10 @@ async def mine_theme_linkage(
         cands = linkage_candidates(
             container=container,
             member_symbols=members_by_code.get(container["code"]) or [],
-            sealed_symbols=sealed,
+            ever_sealed_symbols=ever_sealed,
             snapshot_by=snapshot_by,
+            snapshot_state=snapshot_state,
+            snapshot_as_of=snapshot_as_of,
             theme_limit_ups=f["count"],
             theme_stage=_theme_stage_of(lu_ctx, f["theme"]).get("stage"),
             per_theme=per_theme,
@@ -1015,11 +1019,24 @@ async def generate_picks_pipeline(
     lu_ctx = limit_up_context(limit_up_pool)
 
     # ①b 题材联动挖掘（2026-09-15 用户指令）：把"开盘即涨停"的参考价值兑现成
-    # 可参与候选——涨停集中的题材内，尚未涨停、有联动机会的官方成分股。
+    # 可参与评估候选——涨停集中的题材内，当前未封板、有联动机会的官方成分股。
     # 全市场快照只用于**筛选**（谁可参与），最终价格仍由 ② 的批量行情同源提供。
     # 快照不可用 → 该来源诚实缺席（note 写进 meta），不臆造。
     snapshot_rows = list(getattr(deps.snapshot_service, "snapshot", None) or [])
-    linkage = await mine_theme_linkage(svc, lu_ctx, snapshot_rows)
+    snapshot_state = "unknown"
+    snapshot_as_of = None
+    try:
+        fresh_fn = getattr(deps.snapshot_service, "freshness", None)
+        fresh = fresh_fn() if callable(fresh_fn) else None
+        snapshot_state = getattr(fresh, "state", None) or "unknown"
+        as_of = getattr(fresh, "as_of", None) or getattr(deps.snapshot_service, "last_success", None)
+        snapshot_as_of = as_of.isoformat() if hasattr(as_of, "isoformat") else (str(as_of) if as_of else None)
+    except Exception:  # noqa: BLE001 — 快照事实拿不到就保持 unknown，不伪造 current
+        snapshot_state, snapshot_as_of = "unknown", None
+    linkage = await mine_theme_linkage(
+        svc, lu_ctx, snapshot_rows,
+        snapshot_state=snapshot_state, snapshot_as_of=snapshot_as_of,
+    )
     audit: dict = {"theme_linkage": {"themes": linkage.get("themes") or [],
                                      "note": linkage.get("note")}}
 

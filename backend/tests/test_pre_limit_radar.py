@@ -122,3 +122,57 @@ def test_broken_seal_reenters_zone():
     out = select_candidates(rows, set())
     assert len(out) == 1 and out[0]["symbol"] == "600006"
     assert out[0]["runway_pct"] == 1.2
+
+
+def test_registered_no_entry_can_reenter_only_when_explicitly_reopenable():
+    rows=[{"symbol":"600006","name":"炸板股","change_pct":8.5,"price":9.3}]
+    assert select_candidates(rows,{"600006"}) == []
+    got=select_candidates(rows,{"600006"},reopen_symbols={"600006"})
+    assert [x["symbol"] for x in got] == ["600006"]
+
+
+def test_sweep_reaches_board_reopen_once_for_registered_no_entry(monkeypatch):
+    """状态机守卫：sealed_no_entry 不能被“已登记”过滤永久堵死，开板后必须真能走到重评提醒。"""
+    import asyncio
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from app.picks import pre_limit_radar as radar
+    import app.picks.watch_ledger as ledger
+    import app.picks.morning_brief as brief
+    import app.picks.watcher as watcher
+
+    radar._REOPEN.clear()
+    now = radar.beijing_now()
+    td = now.date().isoformat()
+    existing = {
+        "symbol": "600006", "reason": {"gate": "sealed_no_entry"},
+        "layer": "watch_no_entry",
+    }
+    monkeypatch.setattr(ledger, "get_day", lambda _td: [existing])
+    monkeypatch.setattr(ledger, "record_sighting", lambda **_kw: None)
+    monkeypatch.setattr(brief, "brief_for_today", lambda: ("brief.json", {}))
+    alerts = []
+    monkeypatch.setattr(brief, "append_alert", lambda _target, row: alerts.append(row))
+    async def fake_dispatch(_app, _alert):
+        return True
+    monkeypatch.setattr(watcher, "dispatch_alert", fake_dispatch)
+
+    svc = SimpleNamespace(
+        snapshot=[{"symbol": "600006", "name": "炸板股", "change_pct": 8.5,
+                   "price": 9.3, "turnover_rate": 8.0}],
+        last_success=datetime.now(timezone.utc),
+    )
+    app = SimpleNamespace(state=SimpleNamespace(snapshot_service=svc))
+
+    assert asyncio.run(radar.pre_limit_sweep(app)) == 0  # 已登记，不重复写 sighting
+    assert [a["kind"] for a in alerts] == ["board_reopen"]
+    assert alerts[0]["symbol"] == "600006"
+    assert alerts[0]["seal_state"]["ever_sealed"] is True
+    assert alerts[0]["seal_state"]["current_sealed"] is False
+    assert alerts[0]["seal_state"]["version"] == svc.last_success.isoformat()
+    assert "不代表保证成交" in alerts[0]["text"]
+    assert (td, "600006") in radar._REOPEN
+
+    asyncio.run(radar.pre_limit_sweep(app))
+    assert len(alerts) == 1, "同交易日开板重评只提醒一次"

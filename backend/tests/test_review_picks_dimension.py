@@ -336,3 +336,20 @@ def test_top_watch_reference_drops_boards_without_permission():
     assert out["board_excluded_reference"] == 1
     assert "非主板" in out["reference_criteria"]
     assert "沪市主板" in out["tradable_boards"]
+
+
+def test_reopened_former_limit_up_is_main_candidate_not_duplicate_reference():
+    payload=_payload()
+    theme=payload["themes"][0]
+    theme["participants"].append({
+        "symbol":"300001","name":"A","change_pct":8.8,
+        "linkage":{"level":"高","basis":"回封前开板"},
+        "tradability":{"level":"可参与","basis":"今日曾封板后当前开板，可进入参与评估；未核盘口深度，不保证成交"},
+        "seal_state":{"ever_sealed":True,"current_sealed":False,"snapshot_state":"ready","version":"v2"},
+        "basis":"今日曾封板后开板重评",
+    })
+    out=top_watch_stocks(payload)
+    assert "300001" in [x["symbol"] for x in out["items"]]
+    assert "300001" not in [x["symbol"] for x in out["reference_items"]]
+    main=next(x for x in out["items"] if x["symbol"]=="300001")
+    assert main["seal_state"]["ever_sealed"] is True

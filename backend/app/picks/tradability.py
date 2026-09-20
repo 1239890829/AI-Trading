@@ -17,11 +17,12 @@
 
 | 场景 | 不可参与的定义 | 理由 |
 |---|---|---|
-| 盘中（当日实时） | 当前封在涨停板（`sealed=True`） | 此刻报价买不进 |
-| 盘后（T+1 组合） | 当日**开盘即涨停**（首封 ≤ 09:30） | 其余涨停股次日开盘未必一字，仍有参与窗口；开盘即封者延续概率最高 |
+| 盘中（当日实时） | 当前封在涨停板（`sealed=True`） | 当前无法参与，后续若开板须按新快照重评 |
+| 历史/盘后 | 首封时间、炸板次数等 | 只作历史身份与复盘证据，不能替代 current 状态 |
 
 **开盘即涨停**（`is_open_sealed`）：首封时间 ≤ 09:30:00，覆盖集合竞价一字板
-（09:25 竞价即封）与开盘秒板。这类个股封单从开盘起，全天零买入机会。
+（09:25 竞价即封）与开盘秒板。它是强历史特征，但不能据此预言全天持续封板；
+当前是否仍封必须由带版本的实时/准实时快照判定。
 
 **题材联动挖掘**：不新建数据源——官方题材容器用**成分重叠挂靠**定位
 （与 `services/official_match` 同口径同常量：命中 ≥2 只、成分 ≤300 只，
@@ -116,7 +117,7 @@ def is_tradable(symbol: str, name: str | None = None) -> bool:
     """该代码是否在**账户可交易板块**内（当前 = 沪深主板，含主板 ST）。
 
     与 `assess()`（可参与性）分工不同、**判据也不可互替**：
-    `assess` 回答"此刻报价买不买得进"（封板状态，逐拍变化），
+    `assess` 回答“当前是否封板、能否进入参与评估”（不等价于成交保证），
     `is_tradable` 回答"这个板块我有没有权限买"（账户属性，与盘面无关）。
     两者都为真，才是"真正可操作"。
     """
@@ -153,52 +154,33 @@ def _hhmm(first_seal_time: str | None) -> str | None:
 
 
 def assess(*, sealed: bool | None, first_seal_time: str | None = None) -> dict:
-    """可参与性三态判定 → ``{"level": "可参与"|"不可参与"|"unknown", "basis": str}``。
+    """当前可参与性三态；首封时间只作历史证据，不能替代 current 状态。
 
-    :param sealed: 当前（或当日收盘时）**是否封在涨停板**。三态：
-        `True` 已封板 / `False` 未封板 / `None` 无实时盘口或状态未知。
-    :param first_seal_time: 涨停池首封时间（未涨停股传 None）。
-
-    判定链（顺序即优先级）：
-
-    1. `sealed=True` → 不可参与（此刻报价买不进）；首封 ≤09:30 时依据文案写明
-       "开盘即涨停"，这是本轮政策点名要剔除的形态；
-    2. `sealed=False` → 可参与；
-    3. `sealed=None`（盘后口径：当日是否封板已知，但没有实时盘口）→ 退回首封时间
-       证据：开盘即封 → 不可参与；非开盘即封 → 可参与；时间缺失 → unknown。
+    `sealed=True/False` 必须来自当前有效时点的盘口/快照；`None` 就是 current unknown。
+    即使 09:25 首封，也不能据此预言“全天封死”——真实涨停池存在开板→再封。
     """
     seal_t = parse_hhmmss(first_seal_time)
     hhmm = _hhmm(first_seal_time)
-
     if sealed is True:
         if seal_t is not None and seal_t <= OPEN_SEAL_CUTOFF_HHMMSS:
             when = "竞价即封" if seal_t <= AUCTION_END_HHMMSS else "开盘即封"
             return {
                 "level": "不可参与",
-                "basis": f"开盘即涨停（{when}，首封 {hhmm}）——封单自开盘起，全天无买入机会",
+                "basis": f"当前仍封在涨停板（{when}，首封 {hhmm}）——当前不可参与；后续若开板须按新快照重评",
             }
         return {
             "level": "不可参与",
-            "basis": f"已封在涨停板（首封 {hhmm or '时间未知'}）——当前报价买不进",
+            "basis": f"当前仍封在涨停板（首封 {hhmm or '时间未知'}）——当前不可参与；后续状态需按新快照重评",
         }
-
     if sealed is False:
-        return {"level": "可参与", "basis": "未封在涨停板，报价可成交"}
-
-    open_sealed = is_open_sealed(first_seal_time)
-    if open_sealed is True:
-        return {
-            "level": "不可参与",
-            "basis": f"当日开盘即涨停（首封 {hhmm}）——次日大概率继续一字，无买入机会",
-        }
-    if open_sealed is False:
         return {
             "level": "可参与",
-            "basis": f"当日非开盘即封（首封 {hhmm}），次日存在参与窗口",
+            "basis": "当前未封板，可进入参与评估；未核盘口深度/排队，不保证成交",
         }
+    history = f"（今日首封 {hhmm}）" if hhmm else ""
     return {
         "level": "unknown",
-        "basis": "封板状态与首封时间均不可得，可参与性无法判定",
+        "basis": f"当前封板状态无可信时点证据{history}，不可用首封历史替代 current 判定",
     }
 
 
@@ -338,7 +320,7 @@ def linkage_confidence(
     """联动置信度三态（高/中/低/unknown）+ 依据。
 
     与 `intraday_opportunity.certainty` **刻意不同**：certainty 的证据是封板质量，
-    而联动候选**尚未封板**，没有封单可看——它的延续预期只能来自题材基座
+    而联动候选按 current 快照**当前未封板**，即使今日曾封板也不能沿用封单质量冒充当前状态——它的延续预期来自题材基座
     （阶段 + 成建制家数）与个股相对涨停位的位置（跑道是否已收窄到临板区）。
     """
     if pct is None or theme_stage is None:
@@ -373,96 +355,99 @@ def linkage_candidates(
     *,
     container: dict | None,
     member_symbols: list[str],
-    sealed_symbols: set[str],
-    snapshot_by: dict[str, dict],
+    ever_sealed_symbols: set[str] | None = None,
+    snapshot_by: dict[str, dict] | None = None,
     theme_limit_ups: int,
     theme_stage: str | None,
     per_theme: int = PER_THEME,
     stats: dict | None = None,
     audit_rows: list[dict] | None = None,
+    snapshot_state: str | None = None,
+    snapshot_as_of: str | None = None,
 ) -> list[dict]:
-    """题材容器内**尚未涨停**的联动候选（纯函数，可参与性优先）。
+    """题材容器内当前未封板的联动候选。
 
-    筛选链（顺序即优先级，任一不满足即剔除）：
-
-    1. 六位数字代码；
-    2. **板块权限**（`is_tradable`）——账户只开沪深主板，创业板/科创板/北交所/B 股
-       与"买不进"是一回事（用户 2026-09-15 指令），从源头就不产出；
-    3. **不在涨停池**（`sealed_symbols`）——"尚未涨停"的权威来源是涨停池，
-       不以快照涨幅推断（炸板回落的票不在池内，本就应算可参与）；
-    4. 全市场快照有该股且 `change_pct` 可读（缺失 = 判不了，宁缺毋滥）；
-    5. 有联动迹象：涨幅 ≥ :data:`LINKAGE_MIN_PCT`；
-    6. 有流动性：成交额 ≥ :data:`LINKAGE_MIN_AMOUNT`；
-    7. 双保险：涨幅 < 封板线（防涨停池口径滞后把已封板的选进来）。
-
-    排序：涨幅降序（资金关注强度），同分按成交额降序；取前 `per_theme` 只。
-
-    输出每项自带 `tradability`（必然"可参与"——未封板）、`board`（板块中文名）与
-    `linkage`（置信三态 + 依据），`basis` 是一句话入选理由，供卡片直接展示。
-
-    :param stats: 审计出参（就地写入）。**为什么需要**：板块权限过滤会把一批成分股
-        挡在门外，"今天候选怎么只有 2 只"必须能查到原因（是权限挡的、还是没联动迹象），
-        否则页面与"没数据"长得一模一样。写入 `excluded_board` 与 `excluded_board_labels`。
+    `ever_sealed_symbols` 只表示“今日曾进入涨停池”的历史身份，**不能**直接当当前封板态。
+    对这类票，只有带时点且 `snapshot_state=ready` 的当前快照才能证明已经开板；
+    stale/degraded/无 as-of 一律 unknown。
     """
+    ever_sealed_symbols = set(ever_sealed_symbols or set())
+    snapshot_by = snapshot_by or {}
     out: list[dict] = []
     blocked: dict[str, int] = {}
     missing_quote = 0
+    opened_after_seal = 0
+    current_sealed_count = 0
+    current_unknown = 0
+    seen: set[str] = set()
 
-    def audit(
-        code: str, *, candidate: str, hard_gate: str, reason: str,
-        row: dict | None = None, facts: dict | None = None,
-    ) -> None:
+    def audit(code: str, *, candidate: str, hard_gate: str, reason: str,
+              row: dict | None = None, facts: dict | None = None) -> None:
         if audit_rows is None:
             return
         quote = row or {}
         audit_rows.append({
-            "symbol": code,
-            "name": str(quote.get("name") or ""),
-            "candidate_decision": candidate,
-            "hard_gate_decision": hard_gate,
-            "reason": reason,
-            "price": quote.get("price"),
-            "change_pct": quote.get("change_pct"),
-            "amount": quote.get("amount"),
+            "symbol": code, "name": str(quote.get("name") or ""),
+            "candidate_decision": candidate, "hard_gate_decision": hard_gate,
+            "reason": reason, "price": quote.get("price"),
+            "change_pct": quote.get("change_pct"), "amount": quote.get("amount"),
             "board": board_label(code, str(quote.get("name") or "")) if code else None,
             "facts": facts or {},
         })
 
     for sym in member_symbols or []:
         code = str(sym)
-        if not code.isdigit() or len(code) != 6:
+        if code in seen:
             continue
-        if code in sealed_symbols:
-            audit(code, candidate="rejected", hard_gate="rejected", reason="已在涨停池，当前不作为可参与候选",
-                  facts={"sealed_pool": True})
+        seen.add(code)
+        if not code.isdigit() or len(code) != 6:
             continue
         row = snapshot_by.get(code)
         if not row:
-            # ⚠️ 记数而不是静默跳过：**冷启动/停更**时全市场快照可能整批缺失，
-            # 那时"一只候选都没有"与"数据没到"在页面上完全同形（2026-09-15 实测：
-            # 后端冷启动后首次请求返回 0 候选，与"今天确实没机会"无法区分）。
             missing_quote += 1
             audit(code, candidate="unknown", hard_gate="unknown", reason="全市场快照缺失，无法判定",
-                  facts={"quote_present": False})
+                  facts={"quote_present": False, "ever_sealed": code in ever_sealed_symbols,
+                         "snapshot_state": snapshot_state or "unknown", "version": snapshot_as_of})
             continue
         name = str(row.get("name") or "")
         if not is_tradable(code, name):
-            # 板块权限挡下的成分股：计入审计（不静默丢）
-            label = board_label(code, name)
-            blocked[label] = blocked.get(label, 0) + 1
+            label = board_label(code, name); blocked[label] = blocked.get(label, 0) + 1
             audit(code, candidate="rejected", hard_gate="rejected", reason=f"账户无{label}交易权限", row=row,
-                  facts={"quote_present": True, "board_tradable": False})
+                  facts={"quote_present": True, "board_tradable": False, "ever_sealed": code in ever_sealed_symbols})
             continue
         pct = row.get("change_pct")
         if not isinstance(pct, (int, float)):
-            audit(code, candidate="unknown", hard_gate="unknown", reason="涨幅缺失，无法判定联动", row=row,
-                  facts={"quote_present": True, "board_tradable": True, "change_pct": None})
+            audit(code, candidate="unknown", hard_gate="unknown", reason="涨幅缺失，无法判定当前封板状态", row=row,
+                  facts={"quote_present": True, "board_tradable": True, "ever_sealed": code in ever_sealed_symbols,
+                         "snapshot_state": snapshot_state or "unknown", "version": snapshot_as_of})
             continue
         pct = float(pct)
+        limit = board_limit_pct(code, name)
+        ever = code in ever_sealed_symbols
+        if ever and (snapshot_state != "ready" or not snapshot_as_of):
+            current_unknown += 1
+            audit(code, candidate="unknown", hard_gate="unknown",
+                  reason="今日曾封板，但当前快照无可信时点，不能据旧报价声称已开板", row=row,
+                  facts={"quote_present": True, "board_tradable": True, "ever_sealed": True,
+                         "current_sealed": None, "snapshot_state": snapshot_state or "unknown",
+                         "version": snapshot_as_of})
+            continue
+        current_sealed = pct >= seal_threshold(limit)
+        seal_state = {
+            "ever_sealed": ever, "current_sealed": current_sealed,
+            "snapshot_state": snapshot_state or "unknown",
+            "version": snapshot_as_of,
+        }
+        if current_sealed:
+            current_sealed_count += 1
+            audit(code, candidate="rejected", hard_gate="rejected", reason="当前仍在封板线，不能参与", row=row,
+                  facts={"quote_present": True, "board_tradable": True, "change_pct": pct,
+                         "seal_line": seal_threshold(limit), **seal_state})
+            continue
         if pct < LINKAGE_MIN_PCT:
             audit(code, candidate="rejected", hard_gate="passed", reason=f"涨幅 {pct:.2f}% 低于联动下沿", row=row,
                   facts={"quote_present": True, "board_tradable": True, "change_pct": pct,
-                         "linkage_min_pct": LINKAGE_MIN_PCT})
+                         "linkage_min_pct": LINKAGE_MIN_PCT, **seal_state})
             continue
         amount = row.get("amount")
         amount_f = float(amount) if isinstance(amount, (int, float)) and amount > 0 else 0.0
@@ -470,90 +455,81 @@ def linkage_candidates(
             audit(code, candidate="rejected", hard_gate="passed", reason=f"成交额 {amount_f:.0f} 低于流动性门槛", row=row,
                   facts={"quote_present": True, "board_tradable": True, "change_pct": pct,
                          "linkage_min_pct": LINKAGE_MIN_PCT, "amount": amount_f,
-                         "amount_min": LINKAGE_MIN_AMOUNT})
+                         "amount_min": LINKAGE_MIN_AMOUNT, **seal_state})
             continue
-        limit = board_limit_pct(code, name)
-        if pct >= seal_threshold(limit):
-            audit(code, candidate="rejected", hard_gate="rejected", reason="实时涨幅已进入封板线，报价不可参与", row=row,
-                  facts={"quote_present": True, "board_tradable": True, "change_pct": pct,
-                         "linkage_min_pct": LINKAGE_MIN_PCT, "amount": amount_f,
-                         "amount_min": LINKAGE_MIN_AMOUNT, "seal_line": seal_threshold(limit)})
-            continue  # 涨停池滞后/口径差异：快照已封板，不是"尚未涨停"
-        metrics = seal_metrics(code, name, pct)
-        conf = linkage_confidence(
-            theme_limit_ups=theme_limit_ups, theme_stage=theme_stage, pct=pct, limit_pct=limit
-        )
-        out.append(
-            {
-                "symbol": code,
-                "name": name,
-                "board": board_label(code, name),
-                "change_pct": round(pct, 2),
-                "price": row.get("price"),
-                "amount": amount_f or None,
-                "turnover_rate": row.get("turnover_rate"),
-                **metrics,
-                "tradability": assess(sealed=False),
-                "linkage": conf,
-                "basis": (
-                    f"题材内涨停 {theme_limit_ups} 家形成集中，本股尚未涨停"
-                    f"（{pct:.1f}%，距封板 {metrics['runway_pct']}pct）——"
-                    + ("已进临板区" if metrics.get("in_pre_limit") else "可参与观察")
-                ),
-                # 容器信息：说明"这只票是从哪个官方概念里挖出来的"（可追溯）
-                "container": (container or {}).get("name"),
-                "container_code": (container or {}).get("code"),
+        if ever:
+            opened_after_seal += 1
+            tradability = {
+                "level": "可参与",
+                "basis": "今日曾封板后当前开板，可进入参与评估；未核盘口深度/排队，不保证成交",
             }
-        )
-        audit(code, candidate="included", hard_gate="passed", reason="候选与可参与硬门均通过", row=row,
+        else:
+            tradability = {
+                "level": "可参与",
+                "basis": "当前未封在涨停板，可进入参与评估；未核盘口深度/排队，不保证成交",
+            }
+        metrics = seal_metrics(code, name, pct)
+        conf = linkage_confidence(theme_limit_ups=theme_limit_ups, theme_stage=theme_stage, pct=pct, limit_pct=limit)
+        out.append({
+            "symbol": code, "name": name, "board": board_label(code, name),
+            "change_pct": round(pct, 2), "price": row.get("price"), "amount": amount_f or None,
+            "turnover_rate": row.get("turnover_rate"), **metrics,
+            "tradability": tradability, "seal_state": seal_state, "linkage": conf,
+            "basis": (
+                ("今日曾封板后已开板重评；" if ever else "")
+                + f"题材内涨停 {theme_limit_ups} 家形成集中，本股当前未封板（{pct:.1f}%，距封板 {metrics['runway_pct']}pct）——"
+                + ("已进临板区" if metrics.get("in_pre_limit") else "可参与观察")
+            ),
+            "container": (container or {}).get("name"), "container_code": (container or {}).get("code"),
+        })
+        audit(code, candidate="included", hard_gate="passed", reason=tradability["basis"], row=row,
               facts={"quote_present": True, "board_tradable": True, "change_pct": pct,
                      "linkage_min_pct": LINKAGE_MIN_PCT, "amount": amount_f,
-                     "amount_min": LINKAGE_MIN_AMOUNT, "seal_line": seal_threshold(limit)})
+                     "amount_min": LINKAGE_MIN_AMOUNT, "seal_line": seal_threshold(limit), **seal_state})
     if stats is not None:
         stats["excluded_board"] = sum(blocked.values())
         stats["excluded_board_labels"] = dict(sorted(blocked.items(), key=lambda kv: -kv[1]))
         stats["missing_quote"] = missing_quote
-        stats["members"] = len(member_symbols or [])
+        stats["members"] = len(seen)
+        stats["opened_after_seal"] = opened_after_seal
+        stats["current_sealed"] = current_sealed_count
+        stats["current_unknown"] = current_unknown
     out.sort(key=lambda c: (-c["change_pct"], -(c["amount"] or 0.0)))
     return out[:per_theme]
 
 
-def attach_tradability(stocks: list[dict], snapshot_by: dict[str, dict] | None = None) -> None:
-    """就地给**涨停梯队（参考区）**个股补 `tradability`（纯函数，就地改写）。
-
-    为什么不能一律写死"已封板"：涨停池是**当日曾封板**的集合，含**炸板后回落**
-    的个股（实测 2026-09-15 09:57 首封的 002491，11:33 时 +9.5% 已开板）。
-    对这类票说"当前报价买不进"是过度断言——开板后是买得进的。
-    故有实时盘口时以盘口为准（三态），无盘口时才退回涨停池口径。
-
-    :param snapshot_by: symbol → 全市场快照行。缺省 None ⇒ 无盘口信息，
-        涨停池成员一律按"已封板"处理（**保守**方向：宁可少报可参与，
-        也不把"买不进"的票说成能买）。
-    """
+def attach_tradability(
+    stocks: list[dict], snapshot_by: dict[str, dict] | None = None, *,
+    snapshot_state: str | None = None, snapshot_as_of: str | None = None,
+) -> None:
+    """给曾封板参考行补当前可参与性；历史身份与当前状态分离。"""
     for s in stocks or []:
         if not isinstance(s, dict):
             continue
-        sym = str(s.get("symbol") or "")
-        name = str(s.get("name") or "")
-        # 板块事实（供前端与调用方筛选）：「有没有权限买」与「此刻封没封」是两个判据，
-        # 分别落 `tradable` 与 `tradability`，不合并成一个布尔（合并就丢了可解释性）
-        s["board"] = board_label(sym, name)
-        s["tradable"] = is_tradable(sym, name)
+        sym = str(s.get("symbol") or ""); name = str(s.get("name") or "")
+        s["board"] = board_label(sym, name); s["tradable"] = is_tradable(sym, name)
         first_seal = s.get("first_seal_time")
         row = (snapshot_by or {}).get(sym) or {}
         pct = row.get("change_pct")
-        if isinstance(pct, (int, float)):
-            limit = board_limit_pct(sym, name)
-            sealed = float(pct) >= seal_threshold(limit)
-            s["tradability"] = assess(sealed=sealed, first_seal_time=first_seal)
-            if not sealed:
-                # 开板/炸板中：这是**真可参与**的票，依据里点明"曾封板后开板"，
-                # 免得读的人以为系统在推荐一只已经涨停的票
-                s["tradability"]["basis"] = (
-                    f"今日曾封板（首封 {_hhmm(first_seal) or '时间未知'}）后开板，"
-                    f"当前未封在涨停板（{float(pct):.1f}%）、报价可成交"
-                )
+        if snapshot_state != "ready" or not snapshot_as_of or not isinstance(pct, (int, float)):
+            s["seal_state"] = {
+                "ever_sealed": True, "current_sealed": None,
+                "snapshot_state": snapshot_state or "unknown", "version": snapshot_as_of,
+            }
+            s["tradability"] = {
+                "level": "unknown",
+                "basis": "今日曾封板；当前无可信时点快照，无法判定是否仍封板",
+            }
             continue
-        # 无实时盘口：按涨停池口径保守处理
-        s["tradability"] = assess(sealed=True, first_seal_time=first_seal)
-        s["tradability"]["basis"] += "；无实时盘口，按涨停池口径判定"
+        limit = board_limit_pct(sym, name); sealed = float(pct) >= seal_threshold(limit)
+        s["seal_state"] = {
+            "ever_sealed": True, "current_sealed": sealed,
+            "snapshot_state": snapshot_state, "version": snapshot_as_of,
+        }
+        if sealed:
+            s["tradability"] = assess(sealed=True, first_seal_time=first_seal)
+        else:
+            s["tradability"] = {
+                "level": "可参与",
+                "basis": f"今日曾封板（首封 {_hhmm(first_seal) or '时间未知'}）后当前开板（{float(pct):.1f}%），可进入参与评估；未核盘口深度/排队，不保证成交",
+            }

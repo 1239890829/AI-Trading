@@ -22,7 +22,7 @@
 - **范围**：backend/app/picks/lurk_pool.py 的_scan/scan_lurk_pool及backend/tests/test_lurk_pool.py与真实API消费者；不改策略阈值制造赢家。
 - **验收**：同一历史前缀追加/修改未来bar不改变既有确认；短历史不用负索引；asof参与SQL上界与证券规则时点，不只是陈旧注记；空库、未成熟、NaN/重复日期、复权及较新确认语义有正反例。
 - **证据**：PR #52 / 代码提交 `c0e4673` 把负索引、SQL 上界和 recent 语义同片修复；新增 `lurk-point-in-time-v2`、`probe_ms`、`requested_asof` 与交易日 lag。修前 `test_lurk_pool` 15 项中 9 项真实判红（短历史借未来、尾部反向改早期确认、asof 仍读未来、空表崩溃、首个而非最近确认、重复日期/NaN、自然日 recent、历史创业板规则）；修后 lurk 专项 17/17（含历史 asof 后未来行突变不影响结果），通过 price-limit/degradation/event-loop 联合回归共 85 passed / 2 skipped。真实 378MiB marketdb（截至 2026-09-18）同输入全量：旧版 142、新版 162，交集 127，其中 125 个 confirm_ms 完全一致；把新 `_scan` 放进旧“55 自然日”取数窗后 0 只具备完整 40 根量能前史，证明旧池整体不能再作严格前瞻证据。历史 `asof=2026-09-10` 实测旧版仍返回 `trade_date=2026-09-18`，新版返回 `2026-09-10`。本片未改 30% 振幅、1.2/1.3/0.7 量能或试盘涨幅等策略阈值。
-- **下一步**：BUG-028、BUG-026 已闭环；BUG-020 代码缺口已修但生产盘中验收为 `待条件`，当前不属可行动 G0 阻断项，因此主门按 §5.9 计算到 G1 / BUG-029。潜伏形态是否有稳定收益仍须走 RSH-026 / IMP-020 的效果证据，不能把 point-in-time 正确性写成策略有效性。
+- **下一步**：BUG-028、BUG-026 已闭环；BUG-020 代码缺口已修但生产盘中验收为 `待条件`，当前不属可行动 G0 阻断项，因此主门按 §5.9 计算到 G1；BUG-029 已闭环，下一阻断项为 IMP-006。潜伏形态是否有稳定收益仍须走 RSH-026 / IMP-020 的效果证据，不能把 point-in-time 正确性写成策略有效性。
 - **恢复**：旧输出和旧统计仅作历史故障证据，明确标记“pre-v2 / 非严格 point-in-time”，不得恢复为研究基线；若 v2 回退，只能回退本片代码并保持旧结果失去前瞻资格的事实。
 - **步骤**：已完成：①40 根量能前史硬门并禁止负索引；②`asof`/当前日进入 SQL 上界；③按 55 个真实交易日取前史、按交易日判 recent；④重复日期/NaN fail-closed；⑤最近确认取最新并记录试盘时点；⑥试盘日调用历史板块涨跌停规则；⑦真实库同输入重算并区分“正确性修复”与“策略阈值变化”。
 
@@ -41,7 +41,7 @@
 - **范围**：backend/app/picks/opportunity_learning.py、backend/app/models/opportunity_learning.py、backend/tests/test_opportunity_learning.py 及实际评分卡/API消费者；复用归档表，不重建流水线。
 - **验收**：一只股票多阶段/重复刷新不能冒充多只独立机会；Top-K 按声明的单轮/时点及唯一标的计算；horizon、样本单位、费用版本可见；D0 扣费代理不标作可实现净收益；NaN/缺数不算有效样本。
 - **证据**：PR #53 / 代码提交 `ad71f4b` 闭环样本身份与指标身份。修前同一股票 9 次刷新 × 4 阶段的 36 条已标审计行被直接算成 `labeled=36 / fillable=36 / Top-K=5 / net_positive_observed`，足以错误越过 30 条门槛；修后同一输入保留 `audit_rows=36`，但明确拆为 `runs=9 / run×symbol opportunities=9 / symbols=1 / symbol×trade_date samples=1`，`repeated_labeled_rows=35`、`fillable=1`、`verdict=insufficient_sample`，Top-K 只取最新或显式指定的单一 rank run，并在截 K 前按 symbol 去重。scorecard 现显式过滤 horizon/strategy_version/feature_version，暴露 cost model 与 raw/run/opportunity/symbol/day 五层分母；NaN/Inf/非正收盘价不再落成有效标签；不能证明当前成本版本的旧行不进入 D0 成本代理。历史 `net_return_pct` 保留兼容列名，但 `d0_close` 明确为不可实现的成本调整代理，A 股 T+1 下不得叫可实现净收益。新增 7 类 BUG-026 回归，专项 21/21；相关 API/缓存/导入回归全绿；全后端 4061 tests collected，完整 pytest exit 0，最终独立重跑 `pyflakes app tests` 亦 exit 0。无数据库迁移、旧归档行不删除、不改策略阈值，前端无直接 scorecard 消费者。
-- **下一步**：BUG-026 已闭环；后续 BUG-020 代码缺口已修但生产盘中验收为 `待条件`，当前不计可行动 G0 阻断项，因此主门为 G1 / BUG-029。D1/D3/D5、MFE/MAE、真实可交易退出与跨日效果仍归 RSH-026 / IMP-020，本片不据 D0 代理声称策略有效。
+- **下一步**：BUG-026 已闭环；后续 BUG-020 代码缺口已修但生产盘中验收为 `待条件`，当前不计可行动 G0 阻断项，因此主门为 G1；BUG-029 已闭环，下一阻断项为 IMP-006。D1/D3/D5、MFE/MAE、真实可交易退出与跨日效果仍归 RSH-026 / IMP-020，本片不据 D0 代理声称策略有效。
 - **实施步骤**：已完成：①盘点实际消费者，仅后端 `/opportunity-scorecard` 路由直接消费；②公开 raw row、run、run×symbol opportunity、symbol、symbol×day 五层分母；③原始归档 append-only，统计层按 symbol×trade_date 去重；④Top-K 先固定单一 run/as-of、再按 symbol 去重、再截 K；⑤显式过滤 horizon/策略/特征版本，并以已持久化版本证据限制成本代理；⑥NaN/Inf/非正价格 fail-closed；⑦D0 毛变化与成本调整代理均明确非可实现收益，合法跨日标签继续由 RSH-026 版本化补齐。
 - **效果说明**：分母正确后仍需独立交易日/事件簇、成本/可成交及 OOS；30 条不是证明优势的通用门槛。
 - **恢复**：旧快照与审计行完整保留；指标口径版本化，旧 API 兼容时必须带限制，不靠恢复误导指标回滚。

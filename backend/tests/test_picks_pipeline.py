@@ -608,14 +608,10 @@ def _lu_ctx(n_up: int = 3, n_filler: int = 0) -> dict:
     }
 
 
-def test_candidate_pool_drops_open_sealed_and_audits_it():
-    """开盘即涨停（首封 ≤09:30）的涨停池成员**不进候选池**，且明细必须留痕。
-
-    留痕不是可选项：没有 `excluded_open_sealed`，"今天名单里为什么没有那只一字板"
-    在复盘时就成了一句无法核对的解释（与本文件 ⑤b 出列留痕同源纪律）。
-    """
+def test_candidate_pool_drops_open_sealed_from_raw_pool_source_and_audits_it():
+    """首封 ≤09:30 的成员不靠“原始涨停池来源”直接晋级；开板后只能经 current 重评路径回来。"""
     pool = [
-        _SealRec("600111", "09:25:00"),  # 竞价一字板——全天买不进
+        _SealRec("600111", "09:25:00"),  # 竞价即封——历史强特征，raw pool 不直接授权
         _SealRec("600112", "09:31:00"),  # 09:30 之后封板：当日曾有参与窗口
         _SealRec("600113", "14:20:00"),  # 尾盘板
     ]
@@ -624,7 +620,7 @@ def test_candidate_pool_drops_open_sealed_and_audits_it():
         pl.candidate_pool(_BareHub(), _Store(), None, limit_up_pool=pool, audit=audit)
     )
     syms = [p["symbol"] for p in got]
-    assert "600111" not in syms, "开盘即涨停被选进了候选池——这正是本轮要修的病"
+    assert "600111" not in syms, "没有 current 重评证据时，开盘即封不应通过 raw pool 来源晋级"
     assert {"600112", "600113"} <= set(syms), "非开盘即封的涨停股不该被误伤"
     exc = audit["excluded_open_sealed"]
     assert exc["count"] == 1
@@ -792,3 +788,40 @@ def test_pipeline_excludes_boards_without_permission(deps):
     # 组合与落选名单里都不得出现非主板
     for item in out["data"]["items"]:
         assert is_tradable(item["symbol"]), item
+
+
+def test_mine_theme_linkage_reopens_ever_sealed_only_with_timed_ready_snapshot(monkeypatch):
+    """真实语义：涨停池成员是 ever-sealed；只有 current ready/as-of 证明已开板才可重进评估。"""
+    from app.picks import board_surge
+    index = {
+        "600000": [("BK0001", "白酒概念")],
+        "600001": [("BK0001", "白酒概念")],
+        "600002": [("BK0001", "白酒概念")],
+    }
+    monkeypatch.setattr(board_surge, "build_theme_index", lambda *a, **k: (index, {"BK0001": "白酒概念"}))
+    snap=[{"symbol":"600000","name":"曾封开板","change_pct":6.8,"amount":1.0e8,"price":12.0}]
+
+    unknown = asyncio.run(pl.mine_theme_linkage(object(), _lu_ctx(3), snap))
+    assert unknown["items"] == []
+
+    ready = asyncio.run(pl.mine_theme_linkage(
+        object(), _lu_ctx(3), snap, snapshot_state="ready", snapshot_as_of="2026-09-21T10:05:00+08:00"
+    ))
+    assert [c["symbol"] for c in ready["items"]] == ["600000"]
+    cand=ready["items"][0]
+    assert cand["seal_state"]["ever_sealed"] is True
+    assert cand["seal_state"]["current_sealed"] is False
+    assert "不保证成交" in cand["tradability"]["basis"]
+
+
+def test_open_sealed_raw_source_can_reenter_only_via_linkage_recheck():
+    pool=[_SealRec("600111","09:25:00")]
+    linkage={"symbol":"600111","basis":"曾封后开板重评",
+             "tradability":{"level":"可参与","basis":"当前未封板；不保证成交"}}
+    audit={}
+    got=asyncio.run(pl.candidate_pool(
+        _BareHub(), _Store(), None, limit_up_pool=pool, linkages=[linkage], audit=audit
+    ))
+    row=next(x for x in got if x["symbol"]=="600111")
+    assert row["from"] == "theme_linkage"
+    assert audit["excluded_open_sealed"]["count"] == 1  # 原始涨停池来源仍未直接授权

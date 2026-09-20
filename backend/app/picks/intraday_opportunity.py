@@ -18,8 +18,8 @@
 
 | 输出 | 内容 | 性质 |
 |---|---|---|
-| `themes[].stocks` | 涨停梯队（封板质量判辨识度/确定性） | **参考信息**——当日买不进 |
-| `themes[].participants` | 题材内**尚未涨停**的联动股 | **猎场候选**——报价可成交 |
+| `themes[].stocks` | 当日曾封板梯队（封板历史质量） | **历史参考**——current 封板状态另由 seal_state/tradability 判 |
+| `themes[].participants` | 题材内**当前未封板**且通过联动门槛的股票 | **猎场候选**——可进入参与评估，不保证成交 |
 
 两者都由 `top_watch_stocks` 汇总：`items` 取 participants（可参与），
 `reference_items` 取涨停梯队（仅参考）。`stocks` 每只额外带 `tradability`
@@ -304,17 +304,19 @@ def attach_participants(
     themes: list[dict],
     *,
     snapshot_by: dict[str, dict],
-    sealed_symbols: set[str],
-    limit_up_total: int | None,
-    members_by_code: dict[str, list[str]],
+    ever_sealed_symbols: set[str] | None = None,
+    limit_up_total: int | None = None,
+    members_by_code: dict[str, list[str]] | None = None,
     per_theme: int = PER_THEME,
+    snapshot_state: str | None = None,
+    snapshot_as_of: str | None = None,
 ) -> dict:
-    """给题材卡片补 `participants`：该题材内**尚未涨停**的联动可参与个股。
+    """给题材卡片补 `participants`：该题材内**当前未封板**、通过联动与流动性门槛的评估候选。
 
     **口径变更（2026-09-15 用户指令）**：卡片原来的 `stocks` 逐条是涨停梯队成员——
-    已封板 = 当日买不进，被选进猎场只是拿"事后已知谁封死了"抬高名义胜率。
+    旧口径把“今日进入涨停池”直接等同于“当前仍封板”，会把历史身份误当 current 状态。
     现在涨停梯队退居**参考信息**，真正进入猎场候选的是 `participants`：
-    题材内尚未涨停、但已见联动迹象（涨幅/成交额达标）的个股，报价可成交。
+    题材内当前未封板、且已见联动迹象（涨幅/成交额达标）的个股；它们只进入参与评估，盘口深度/排队仍需后续执行链复核。
 
     只对**涨停集中**的题材挖掘（`tradability.is_concentrated`）——用户指令是
     "若多数涨停个股集中在同一板块或同一题材概念，则进一步挖掘…"；单家涨停的
@@ -328,16 +330,21 @@ def attach_participants(
     - `participants_note`：未挖掘/挖空时的**原因**（三态纪律：空列表必须能区分
       "没有合格候选" 与 "压根没挖"，否则两种情形在页面上长得一模一样）
 
-    :param sealed_symbols: 当日涨停池成员——"尚未涨停"的权威判据
+    :param ever_sealed_symbols: 当日曾进入涨停池的成员——历史身份，不等于当前仍封板
     :param limit_up_total: 当日涨停总数（集中度分母；None/0 ⇒ 只按家数判）
     :param members_by_code: 官方题材 code → 成分 symbol（`board_surge.build_theme_index`
         + `tradability.index_views` 的产物，由路由预取）
     """
+    ever_sealed_symbols = set(ever_sealed_symbols or set())
+    members_by_code = members_by_code or {}
     mined = 0
     total = 0
     blocked = 0
     blocked_labels: dict[str, int] = {}
     missing_quote = 0
+    opened_after_seal = 0
+    current_sealed = 0
+    current_unknown = 0
     for t in themes or []:
         count = int(t.get("limit_up_count") or 0)
         code = t.get("catalog_code")
@@ -358,8 +365,10 @@ def attach_participants(
         cands = linkage_candidates(
             container={"code": code, "name": t.get("theme")},
             member_symbols=members_by_code.get(code) or [],
-            sealed_symbols=sealed_symbols,
+            ever_sealed_symbols=ever_sealed_symbols,
             snapshot_by=snapshot_by,
+            snapshot_state=snapshot_state,
+            snapshot_as_of=snapshot_as_of,
             theme_limit_ups=count,
             theme_stage=t.get("stage"),
             per_theme=per_theme,
@@ -371,6 +380,9 @@ def attach_participants(
         t["_candidate_audit"] = audit_rows
         total += len(cands)
         missing_quote += stats.get("missing_quote") or 0
+        opened_after_seal += stats.get("opened_after_seal") or 0
+        current_sealed += stats.get("current_sealed") or 0
+        current_unknown += stats.get("current_unknown") or 0
         # 板块权限挡下的成分股数**逐题材留痕**：否则"这个题材 0 只候选"
         # 分不清是"没有联动迹象"还是"有，但都在没权限的板块"
         blocked += stats.get("excluded_board") or 0
@@ -398,6 +410,11 @@ def attach_participants(
         "excluded_board_labels": dict(sorted(blocked_labels.items(), key=lambda kv: -kv[1])),
         # 快照未覆盖的成分总数：>0 且候选为 0 时说明"判不了"，不是"没有"
         "missing_quote": missing_quote,
+        "opened_after_seal": opened_after_seal,
+        "current_sealed": current_sealed,
+        "current_unknown": current_unknown,
+        "snapshot_state": snapshot_state or "unknown",
+        "snapshot_as_of": snapshot_as_of,
     }
 
 
@@ -408,14 +425,14 @@ def top_watch_stocks(payload: dict, *, limit: int | None = None) -> dict:
 
     | | 旧（09-04 ~ 09-15） | 新（09-15 起） |
     |---|---|---|
-    | `items` 来源 | 涨停梯队（已封板） | 题材 `participants`（**尚未涨停**） |
+    | `items` 来源 | 涨停梯队（曾封板身份） | 题材 `participants`（**当前未封板**） |
     | 判据 | certainty=封板质量（封单/首封/炸板） | linkage=题材基座 × 距封板跑道 |
-    | 隐含可操作性 | 全是"买不进"的标的 | 全部"报价可成交" |
+    | 隐含可操作性 | 把历史封板误当 current | 仅表示可进入参与评估，不承诺成交 |
     | 涨停梯队 | 混在 `items` 里 | 移入 `reference_items`，显式标注仅参考 |
 
     机会度优先级（显式 if 链，可回测、可复盘对照）：
 
-      1. linkage=高 —— 题材成建制（涨停 ≥3 家）且个股已进临板区但**仍未封板**
+      1. linkage=高 —— 题材成建制（涨停 ≥3 家）且个股已进临板区、**当前未封板**
       2. linkage=中 —— 题材成建制且个股涨幅已过跟进线
 
     `低`/`unknown` 一律不入选（三态纪律：判不出不冒充机会，绝不拿「低」凑数）。
@@ -431,11 +448,17 @@ def top_watch_stocks(payload: dict, *, limit: int | None = None) -> dict:
         limit = runtime_params.get("picks_intraday_top_limit", TOP_WATCH_LIMIT)
     items: list[dict] = []
     reference: list[dict] = []
+    participant_symbols = {
+        str(s.get("symbol") or "")
+        for t in payload.get("themes") or []
+        for s in (t.get("participants") or [])
+        if s.get("symbol")
+    }
     for t in payload.get("themes") or []:
         for s in t.get("participants") or []:
             level = (s.get("linkage") or {}).get("level")
             if level == "高":
-                tier, basis = 1, "联动确定性高：题材成建制且已进临板区（仍未封板、可成交）"
+                tier, basis = 1, "联动确定性高：题材成建制且已进临板区（当前未封板、进入参与评估）"
             elif level == "中":
                 tier, basis = 2, "联动确定性中：题材成建制且个股已见跟进迹象"
             else:
@@ -444,7 +467,7 @@ def top_watch_stocks(payload: dict, *, limit: int | None = None) -> dict:
                 {
                     "symbol": s.get("symbol"),
                     "name": s.get("name"),
-                    # 未涨停 ⇒ 无梯队角色/连板数，**不臆造**"跟风/补涨"这类封板语义标签
+                    # participant 的 current 状态不等于梯队角色；不臆造"跟风/补涨"这类封板语义标签
                     "role": None,
                     "boards": None,
                     "change_pct": s.get("change_pct"),
@@ -458,6 +481,7 @@ def top_watch_stocks(payload: dict, *, limit: int | None = None) -> dict:
                     "certainty": None,
                     "linkage": s.get("linkage"),
                     "tradability": s.get("tradability"),
+                    "seal_state": s.get("seal_state"),
                     "board": s.get("board"),
                     "tier": tier,
                     "pick_basis": f"{basis}；{s.get('basis') or ''}".rstrip("；"),
@@ -483,8 +507,9 @@ def top_watch_stocks(payload: dict, *, limit: int | None = None) -> dict:
                     "tradable": s.get("tradable"),
                     "distinctiveness": s.get("distinctiveness"),
                     "certainty": s.get("certainty"),
-                    # 可参与性：这些是已封板/开盘即涨停的个股，当日买不进——仅参考
+                    # 参考区保留“今日曾封板”历史身份；current 状态由 tradability/seal_state 随行说明
                     "tradability": s.get("tradability"),
+                    "seal_state": s.get("seal_state"),
                     "reference_only": True,
                 }
             )
@@ -492,11 +517,13 @@ def top_watch_stocks(payload: dict, *, limit: int | None = None) -> dict:
     items.sort(key=lambda x: (x["tier"], -(x["change_pct"] or 0.0)))
     # 兜底再筛一次：即使调用方漏做了板块拆分，参考区也不会混进买不了的票。
     # 用的仍是生产者写下的**同一个事实**（`tradable`），不是第二个判据实现。
-    reference = [r for r in reference if r.get("tradable") is not False]
+    reference = [
+        r for r in reference
+        if r.get("tradable") is not False and str(r.get("symbol") or "") not in participant_symbols
+    ]
     reference.sort(key=lambda x: -(x.get("boards") or 0))
-    closed = sum(
-        1 for r in reference if (r.get("tradability") or {}).get("level") == "不可参与"
-    )
+    closed = sum(1 for r in reference if (r.get("tradability") or {}).get("level") == "不可参与")
+    unknown = sum(1 for r in reference if (r.get("tradability") or {}).get("level") in (None, "unknown"))
     return {
         "trade_date": payload.get("trade_date"),
         "items": items[:limit],
@@ -505,12 +532,12 @@ def top_watch_stocks(payload: dict, *, limit: int | None = None) -> dict:
         "reference_total": len(reference),
         "criteria": (
             "机会度＝联动确定性（题材成建制 × 距封板跑道）优先、当日涨幅次之；"
-            "候选须同时满足「未封在涨停板」与「账户有交易权限（当前仅沪深主板）」；"
-            "低/unknown 不入选"
+            "候选须同时满足「当前未封板」与「账户有交易权限（当前仅沪深主板）」；"
+            "可参与仅表示进入评估，不保证盘口成交；低/unknown 不入选"
         ),
         "reference_criteria": (
-            f"涨停梯队 {len(reference)} 只（其中 {closed} 只已封板/开盘即涨停，当日无法买入）"
-            f"——仅作题材集中度的参考信息，不构成可参与候选"
+            f"涨停梯队历史参考 {len(reference)} 只（当前不可参与 {closed} 只、当前状态未判 {unknown} 只）"
+            f"——仅作题材集中度的参考信息；已开板并进入 participant 的股票已从参考区去重"
             + (
                 f"；另有 {board_excluded} 只属非主板板块（账户无交易权限）已不在本页展示"
                 if board_excluded
