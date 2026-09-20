@@ -23,8 +23,9 @@ K 线（实测曾用 6 个交易日前的数据静默出池）。故输出额外
 from __future__ import annotations
 
 import logging
+import math
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import duckdb
@@ -39,32 +40,53 @@ log = logging.getLogger(__name__)
 from app.core.bjtime import BJ_TZ, beijing_now  # S2-8 时区收敛
 
 DB = Path(__file__).resolve().parents[2] / "data" / "marketdb" / "market.duckdb"
-FETCH_DAYS = 55      # 拉取交易日跨度（窗口+确认扫描余量）
-LOOKBACK_DAYS = 5    # 确认日在最近 N 交易日内的才算「观察中」
+FETCH_DAYS = 55      # 拉取最近 55 个实际交易日（不是 55 个自然日）
+LOOKBACK_DAYS = 5    # 确认距最新数据 <= N 个交易日才算「观察中」
 TOP_N = 30
+MIN_VOLUME_HISTORY = 40
+LOGIC_VERSION = "lurk-point-in-time-v2"
 
 
-def _limit_pct(code: str) -> float:
-    """潜伏形态的涨幅上限（小数）：委托单点 price_rules.limit_pct。
+def _limit_pct(code: str, *, asof: date | None = None) -> float:
+    """潜伏形态涨幅上限（小数），按试盘日委托统一 price_rules。
 
-    2026-09-11 收口：原为本模块第三份硬编码实现（且无 ST 分支）。marketdb 的
-    daily_k 无名称列 → 传空 name；并轨后主板 ST 亦为 10%，与无名称兜底一致，
-    口径不再依赖名称，故此委托不引入偏差。
+    `asof` 用于可由代码段和制度生效日确定的历史板块规则。marketdb 无历史名称，
+    因而 2026-07-06 前主板 ST 5% 特例仍无法可靠还原；调用方不得把这条未知边界
+    写成已 point-in-time 完整覆盖。
     """
-    return price_rules.limit_pct(str(code).split(".")[0]) / 100.0
+    return price_rules.limit_pct(str(code).split(".")[0], asof=asof) / 100.0
 
 
 def _scan(bars: list[tuple]) -> dict | None:
-    """单股形态扫描：返回最近确认日（date_ms）若命中；None 否则。"""
+    """单股形态扫描：只在完整历史上判断，并返回**最近**一次试盘/确认时点。"""
     n = len(bars)
-    if n < 26:
+    if n < MIN_VOLUME_HISTORY + 2:
         return None
-    cap = _limit_pct(bars[0][0] if isinstance(bars[0][0], str) else "600000")
+
+    # point-in-time 研究宁可弃权也不“修”坏输入：重复/乱序日期和 NaN 会让窗口
+    # 被压缩或比较失真，不能继续算成一个看似正常的形态。
+    prev_ms: int | float | None = None
+    for bar in bars:
+        if len(bar) < 7:
+            return None
+        try:
+            ts = float(bar[1])
+            values = [float(x) for x in bar[2:7]]
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(ts) or any(not math.isfinite(x) for x in values):
+            return None
+        if prev_ms is not None and ts <= prev_ms:
+            return None
+        prev_ms = ts
+
+    code = bars[0][0] if isinstance(bars[0][0], str) else "600000"
+    last_probe = None
     last_conf = None
-    for i in range(25, n):  # 留 20 根潜伏窗
-        # 潜伏前提
-        wc = [bars[k][5] for k in range(i - 20, i)]  # close
-        if not wc or min(wc) <= 0:
+    for i in range(MIN_VOLUME_HISTORY, n):
+        # 潜伏前提：30 根旧量能 + 10 根近量能是硬前史，禁止负索引借用未来尾部。
+        wc = [bars[k][5] for k in range(i - 20, i)]
+        if min(wc) <= 0:
             continue
         amp = (max(wc) - min(wc)) / min(wc)
         if amp > 0.30:
@@ -73,21 +95,24 @@ def _scan(bars: list[tuple]) -> dict | None:
         v_prior = sum(bars[k][6] for k in range(i - 40, i - 10)) / 30
         if v_prior <= 0 or v_recent > v_prior * 1.2:
             continue
-        # 试盘
+
         o, h, c, v = bars[i][2], bars[i][3], bars[i][5], bars[i][6]
         pc = bars[i - 1][5]
         if pc <= 0:
             continue
+        probe_date = datetime.fromtimestamp(bars[i][1] / 1000.0, tz=BJ_TZ).date()
+        cap = _limit_pct(code, asof=probe_date)
         chg = c / pc - 1
         if not (0.02 <= chg < cap - 0.01):
             continue
-        v5 = sum(bars[k][6] for k in range(max(0, i - 5), i)) / 5
+        v5 = sum(bars[k][6] for k in range(i - 5, i)) / 5
         if v5 <= 0 or v < v5 * 1.3:
             continue
         body = max(o, c) - min(o, c)
-        if body <= 0 or (h - max(o, c)) / body < 0.4:  # noqa: E501
+        if body <= 0 or (h - max(o, c)) / body < 0.4:
             continue
-        floor = min(bars[k][5] for k in range(max(0, i - 5), i))
+        floor = min(bars[k][5] for k in range(i - 5, i))
+
         for k in range(1, 7):
             j = i + k
             if j >= n:
@@ -99,61 +124,136 @@ def _scan(bars: list[tuple]) -> dict | None:
                 continue
             if min(bars[x][4] for x in range(i, j + 1)) < floor:
                 break
-            last_conf = bars[j][1]  # date_ms
+            # 不在第一次命中后退出：文档语义是“最近确认”，后面出现新的合法形态
+            # 应覆盖旧确认；未来数据只能形成**未来的新确认**，不能改写既有前缀判断。
+            last_probe = bars[i][1]
+            last_conf = bars[j][1]
             break
-        if last_conf is not None:
-            break
-    return {"confirm_ms": last_conf} if last_conf else None
+
+    if last_conf is None:
+        return None
+    return {"probe_ms": last_probe, "confirm_ms": last_conf}
 
 
 def scan_lurk_pool(db_path: Path | None = None, *, asof: date | None = None) -> dict:
-    """全市场扫描 → 潜伏观察池。
+    """全市场扫描 → 潜伏观察池，历史回放按 `asof` 真正截断。
 
-    返回 `{trade_date, as_of, stale_days, stale, stale_note, items:[{symbol, confirm_ms}]}`。
-    `as_of` = 池实际依据的 K 线日期（= 库内 `MAX(date_ms)`），`stale_days` = 该日期相对
-    `asof`（默认今天，上海）滞后的**交易日数**——停更时消费方据此自行判断可信度，
-    本函数不因停更而丢弃结果（中线观察池，不进评分权重）。
-
-    :param asof: 陈旧判定基准日；None = 今天。测试/回放可显式传入以获得确定结果。
+    `as_of` 是本次扫描实际可见的最新 K 线日；`requested_asof` 是调用方请求时点。
+    历史 `asof` 会同时参与 SQL 上界、形态窗口和试盘日涨跌停制度，绝不只影响陈旧说明。
     """
+
     db = str(db_path or DB)
-    if not Path(db).exists():
-        # 仓未建（CI/新机）≠ 停更：没有任何 K 线可依据。返回与正常结构同形的
-        # 显式不可用态——绝不静默 500，也不拿空池冒充「今日无候选」（三态纪律）。
+    requested_asof = asof or beijing_now().date()
+
+    def unavailable(note: str) -> dict:
         return {
-            "trade_date": None, "as_of": None, "stale_days": None, "stale": True,
-            "stale_note": f"marketdb 仓不存在（{db}）——先跑 scripts/sync_marketdb.py 回补",
+            "trade_date": None,
+            "as_of": None,
+            "requested_asof": requested_asof.isoformat(),
+            "stale_days": None,
+            "stale": True,
+            "stale_note": note,
+            "logic_version": LOGIC_VERSION,
             "items": [],
         }
-    con = duckdb.connect(db, read_only=True)
-    mx = con.execute("select max(date_ms) from daily_k").fetchone()[0]
-    lo = mx - FETCH_DAYS * 86_400_000
-    rows = con.execute(
-        "select thscode, date_ms, open_price, high_price, low_price, close_price, volume "
-        "from daily_k where date_ms >= ? order by thscode, date_ms", [lo]
-    ).fetchall()
-    con.close()
+
+    if not Path(db).exists():
+        return unavailable(
+            f"marketdb 仓不存在（{db}）——先跑 scripts/sync_marketdb.py 回补"
+        )
+
+    cutoff_ms = int(
+        (
+            datetime(
+                requested_asof.year,
+                requested_asof.month,
+                requested_asof.day,
+                tzinfo=BJ_TZ,
+            )
+            + timedelta(days=1)
+        ).timestamp() * 1000
+    ) - 1
+    try:
+        con = duckdb.connect(db, read_only=True)
+        # live 路径也按 requested_asof 截断：即使上游误写未来日期，当前 API
+        # 也不能把“未来 K 线”当作今天已知事实。历史回放与实时路径共用同一上界。
+        mx = con.execute(
+            "select max(date_ms) from daily_k where date_ms <= ?", [cutoff_ms]
+        ).fetchone()[0]
+        if mx is None:
+            con.close()
+            return unavailable(
+                f"marketdb 截至 {requested_asof.isoformat()} 无可用 K 线——不以空池冒充无候选"
+            )
+
+        # FETCH_DAYS 是**交易日条数**。先取最近 N 个市场日期，再据此拉全市场，
+        # 避免按 55 个自然日截窗在长假附近凑不够 40 根前史。
+        trade_ms = [
+            row[0]
+            for row in con.execute(
+                "select distinct date_ms from daily_k where date_ms <= ? "
+                "order by date_ms desc limit ?",
+                [mx, FETCH_DAYS],
+            ).fetchall()
+        ]
+        trade_ms.reverse()
+        if not trade_ms:
+            con.close()
+            return unavailable(
+                f"marketdb 截至 {requested_asof.isoformat()} 无可用交易日"
+            )
+        lo = trade_ms[0]
+        rows = con.execute(
+            "select thscode, date_ms, open_price, high_price, low_price, "
+            "close_price, volume from daily_k "
+            "where date_ms >= ? and date_ms <= ? order by thscode, date_ms",
+            [lo, mx],
+        ).fetchall()
+        con.close()
+    except Exception as exc:  # noqa: BLE001
+        try:
+            con.close()
+        except Exception:
+            pass
+        log.warning("lurk_pool: marketdb 读取失败：%s", exc)
+        return unavailable(f"marketdb daily_k 不可读：{exc}")
+
     by_code: dict[str, list] = defaultdict(list)
     for code, t, o, h, l, c, v in rows:
-        if None in (o, h, l, c, v):
-            continue
+        # 不在装配层丢坏行；交给 _scan 对整只股票 fail-closed，避免删掉一根后
+        # 让窗口“自动补齐”成另一段历史。
         by_code[code].append((code, t, o, h, l, c, v))
+
+    trade_pos = {ms: idx for idx, ms in enumerate(trade_ms)}
+    latest_pos = len(trade_ms) - 1
     items: list[dict] = []
-    day_ms = 86_400_000
     for code, bars in by_code.items():
         hit = _scan(bars)
-        if not hit or (mx - hit["confirm_ms"]) > LOOKBACK_DAYS * day_ms:
+        if not hit:
             continue
-        # 上证/深/创等统一去后缀为系统内部 code（600118.SH → 600118）；北交所 8/4/920 保留数字
-        items.append({"symbol": code.split(".")[0], "confirm_ms": hit["confirm_ms"]})
+        conf_pos = trade_pos.get(hit["confirm_ms"])
+        if conf_pos is None:
+            continue
+        lag_sessions = latest_pos - conf_pos
+        if lag_sessions > LOOKBACK_DAYS:
+            continue
+        items.append(
+            {
+                "symbol": code.split(".")[0],
+                "probe_ms": hit["probe_ms"],
+                "confirm_ms": hit["confirm_ms"],
+                "confirm_lag_sessions": lag_sessions,
+            }
+        )
     items.sort(key=lambda x: x["confirm_ms"], reverse=True)
 
     data_date = datetime.fromtimestamp(mx / 1000.0, tz=BJ_TZ).date()
-    stale_days = trading_day_lag(data_date, asof or beijing_now().date())
+    stale_days = trading_day_lag(data_date, requested_asof)
     stale = stale_days > MAX_STALE_TRADE_DAYS
     return {
         "trade_date": data_date.isoformat(),
         "as_of": data_date.isoformat(),
+        "requested_asof": requested_asof.isoformat(),
         "stale_days": stale_days,
         "stale": stale,
         "stale_note": (
@@ -161,6 +261,11 @@ def scan_lurk_pool(db_path: Path | None = None, *, asof: date | None = None) -> 
             f"（阈值 {MAX_STALE_TRADE_DAYS}，含阈值内属正常）——"
             "marketdb 停更时先跑 scripts/sync_marketdb.py"
         ) if stale else "",
+        "logic_version": LOGIC_VERSION,
+        "rule_note": (
+            "试盘涨幅上限按试盘日板块制度；marketdb 无历史名称，"
+            "2026-07-06 前主板 ST 5% 特例仍不可可靠还原"
+        ),
         "items": items[:TOP_N],
     }
 

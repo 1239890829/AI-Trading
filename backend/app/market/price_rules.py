@@ -7,8 +7,13 @@ R1 收口为单一实现。注意 halt_risk.limit_pct(board) 是「板块键」�
 """
 from __future__ import annotations
 
+from datetime import date
 
-def limit_pct(symbol: str, name: str | None = None) -> float:
+
+_CHINEXT_20CM_FROM = date(2020, 8, 24)
+
+
+def limit_pct(symbol: str, name: str | None = None, *, asof: date | None = None) -> float:
     """涨跌停幅度（百分数）：创业板/科创板 20、北交所 30、主板 10。
 
     **ST 不再降档（2026-07-06 起）**：沪深交易所 2026-04-24 修订《交易规则》、
@@ -21,6 +26,11 @@ def limit_pct(symbol: str, name: str | None = None) -> float:
     删除是为了给「并轨」留显式落点：若未来规则回退，改动点在此一处可见。
 
     返回百分数（20.0）；validator 的小数口径自行 /100。
+
+    `asof` 仅用于能由「代码段 + 制度生效日」确定的历史板块规则。目前至少
+    钉住创业板 2020-08-24 的 10%→20% 切换。marketdb 没有历史证券名称，
+    因而 2026-07-06 前主板 ST 的 5% 特例不能仅凭 symbol 可靠还原；历史研究
+    必须把这条边界显式披露，不能拿当前名称反推过去身份。
 
     **代码段口径（2026-09-11 补齐，前端 lib/price-limit.ts 同步）**
     - 20%：创业板 300/301/**302**、科创板 688/689。302 段此前漏收（旧列表只到 301）
@@ -40,7 +50,13 @@ def limit_pct(symbol: str, name: str | None = None) -> float:
     （N 前缀豁免由 breadth 的容差逻辑处理）。
     """
     sym = str(symbol or "")
-    if sym.startswith(("300", "301", "302", "688", "689")):
+    if sym.startswith(("300", "301", "302")):
+        # 创业板存量股票自 2020-08-24 起由 10% 调整为 20%。历史研究必须
+        # 按试盘日规则判断，不能把 2026 当前 20cm 制度倒灌到旧样本。
+        if asof is not None and asof < _CHINEXT_20CM_FROM:
+            return 10.0
+        return 20.0
+    if sym.startswith(("688", "689")):
         return 20.0
     if sym.startswith(("43", "83", "87", "88", "92")):
         return 30.0
