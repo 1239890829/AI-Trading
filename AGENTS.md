@@ -13,7 +13,7 @@
 - 接续工作：`skills/ashare-ledger-continue/SKILL.md`；当轮交接：`skills/ashare-task-handoff/SKILL.md`。总账 `docs/retro-and-gaps.md` §5.9 的 G0–G5/GX 是唯一执行门序；用户“继续任务/继续”只授权 Skill 在**最低未闭环主门**按角色/P0-P2/门内序领取一个切片。硬依赖未完成不得跨门；`CROSS_GATE_EXCEPTION` 只能由网页在 handoff 明示。
 - 盘后复盘：`skills/ashare-daily-review/SKILL.md`，流程与逐项核验归既有 SOP / checklist。
 - 外部创新雷达：`skills/ashare-innovation-radar/SKILL.md`；长期发现/筛选规则见 `docs/ai/continuous-evolution.md`。雷达只提出候选/验证，不自动安装或准入。
-- 跨模块长期治理与重大重构：`skills/living-system-governor/SKILL.md`。它把 U48/GOV-027 的目标优先、证据分层、机制生命周期、反证、Champion/Challenger、成本收益与重开纪律变成上层思考协议；**不替代**总账阶段门、stage 单点状态、领域登记册、风险/权限或发布门。
+- 跨模块长期治理与重大重构：`skills/living-system-governor/SKILL.md`。它把 U48/GOV-027 的目标优先、证据分层、机制生命周期、反证、Champion/Challenger、成本收益与重开纪律变成上层思考协议；**不替代**总账阶段门、stage 单点状态、领域登记册、风险/权限或发布门。 后续用户长期要求、重复纠偏与真实复盘若形成稳定可复用的方法论，按该 Skill §19 的自我进化协议决定是否进入 Core / Domain Extension / Experience；一次性要求不自动固化，实质变化必须有版本与 Git/PR 证据。
 - 发布核验：`scripts/audit/release_check.py`；工作区卫生：`scripts/workspace-hygiene.py`。
 - 报告渲染与校验：`scripts/reports/md-report-html.py`、`scripts/reports/md-html-parity.py`。
 - 本地产物与恢复副本只进忽略的 `artifacts/`；项目内禁止应用专属状态/插件目录，不建立 MEMORY 或其它应用私有权威入口。
