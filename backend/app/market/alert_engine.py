@@ -16,6 +16,8 @@ from app.schemas.market import Quote
 
 log = logging.getLogger(__name__)
 
+_BUY_POINT_SEND_SPACING_SECONDS = 0.5
+
 
 class AlertEngine:
     """后台轮询预警规则，生成 AlertEvent 并通过通知通道派发。"""
@@ -32,6 +34,7 @@ class AlertEngine:
         self._fresh_within = max(settings.poll_interval_seconds, settings.stale_after_seconds)
         self._registry = get_notifier_registry()
         self._quotes: dict[str, dict] = {}
+        self._last_buy_point_send_monotonic = 0.0
         # 盘外空转节奏（P2-9）：不得低于 interval，也不低于 5 分钟
         self._idle_interval = max(300.0, interval)
 
@@ -189,6 +192,16 @@ class AlertEngine:
             if reason:
                 outbox.finish(row, "suppressed", reason, self._now_ms())
                 continue
+            try:
+                intent_kind = (json.loads(row.payload).get("intent") or {}).get("kind")
+            except (TypeError, ValueError):
+                intent_kind = None
+            if intent_kind == "picks_buy_point":
+                elapsed = time.monotonic() - self._last_buy_point_send_monotonic
+                if elapsed < _BUY_POINT_SEND_SPACING_SECONDS:
+                    await asyncio.sleep(_BUY_POINT_SEND_SPACING_SECONDS - elapsed)
+            # The pacing wait may cross expiry; begin_send is the authoritative
+            # last-moment boundary and must re-check lease/expiry after waiting.
             if not outbox.begin_send(row, self._now_ms()):
                 outbox.finish(row, "expired", "send_window_closed", self._now_ms())
                 continue
@@ -196,6 +209,8 @@ class AlertEngine:
                 result = await asyncio.wait_for(notifier.send_result(event, rule), timeout=25.0)
             except Exception:
                 result = None
+            if intent_kind == "picks_buy_point":
+                self._last_buy_point_send_monotonic = time.monotonic()
             # Cancellation/process loss leaves a started lease for conservative
             # reconciliation. Only an explicit platform rejection may become a
             # permanent failure; timeout/network/malformed receipts stay unknown.

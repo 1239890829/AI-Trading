@@ -305,6 +305,19 @@ def test_send_interactive_unconfigured_returns_false():
     assert not asyncio.run(notifier.send_interactive(CARD))
 
 
+def test_direct_app_card_rejection_invalidates_cached_token():
+    calls: list = []
+    app_id = "cli_direct_card_reject"
+    notifier = FeishuNotifier(
+        webhook="", secret="", app_id=app_id, app_secret="s3cret", open_id="ou_recv",
+        client=_app_client(calls, msg_body={"code": 99991663, "msg": "token invalid"}),
+    )
+    assert asyncio.run(notifier.send_interactive(CARD)) is False
+    assert asyncio.run(notifier.send_interactive(CARD)) is False
+    token_calls = [c for c in calls if "tenant_access_token" in c[0]]
+    assert len(token_calls) == 2
+
+
 def test_event_with_card_snapshot_renders_interactive():
     """snapshot 带 card → send() 走 interactive 分支（通用卡片事件能力）。"""
     calls: list = []

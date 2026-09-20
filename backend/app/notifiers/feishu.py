@@ -334,7 +334,15 @@ class FeishuNotifier(Notifier):
                         )
             except Exception:
                 return DeliveryResult("unknown", "app_card_request_unconfirmed")
-            return _response_result(resp, "app_card")
+            result = _response_result(resp, "app_card")
+            if result.outcome != "accepted":
+                from app.notifiers import get_notifier_registry
+
+                cache_on(
+                    get_notifier_registry(), "feishu_tenant_token",
+                    _TOKEN_TTL_SECONDS, maxsize=4,
+                ).invalidate(self.app_id)
+            return result
         return DeliveryResult("explicit_rejected", "channel_unconfigured")
 
     async def send_interactive(self, card: dict) -> bool:

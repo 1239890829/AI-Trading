@@ -1,6 +1,6 @@
-# 当前交接：G1/IMP-044 U49 Preflight 已冻结
+# 当前交接：IMP-044 网页临时代执行候选待独立 Review
 
-**当前模式：READY_FOR_NEXT_PLANNED_SLICE。** v9.10/U49 已生效；PR #64 又把 exact-HEAD 网页 Review 回执纳入 `release_check.py` 机器门。该 companion 的 reviewed HEAD `dd75593e3daf6c2343b41f0e91160c4f7aadc167`、Review comment `5749537877`、PR CI `35507688071` 与合并后 `master@6cbe746750d02bd387ead71d5d85cec50445e8e5` / push CI `35508271019` 均已核全绿，因此治理 companion 退出候选计算。当前唯一主业务切片恢复为 **G1/P0 IMP-044**；本轮 U49 Preflight 已在最新 master 上重新核真实通知链并冻结验收，允许 Codex 只实施这一刀。G1/P0 **IMP-006** 已正式闭环：PR #60 的 reviewed HEAD `87b099540a4b6c3d54c56a9d57293dc1963ee450` 经独立网页审核回执（PR comment `5749077515`，`APPROVED / MERGE_IF_GATES_PASS`）、exact-head `release_check.py`、required CI run `35502888440` 三 job 全绿后合入 `master`，merge commit `fa0185412db5c0d3f47445081da822f121cceff1`；合并后 master CI run `35503775542` 的 backend/frontend/docs 亦全部成功。GitHub 原生 `APPROVE` 因连接身份同时为 PR 作者被平台拒绝；现已明确网页审核回执与 GitHub 原生 Review 分层，单账号场景不得把 self-approve 限制变成自锁，也不得通过小号、自批或放宽 CI 绕过门禁。IMP-006 只证明 reference / executable snapshot / paper fill 的工程事实契约闭环，不证明买点收益。BUG-020 的真实交易时段生产会话仍为 G0 `待条件`，因此当前最低可行动阻断门仍是 G1，下一主切片为 **IMP-044（Outbox、类型化回执与中断恢复）**；若 BUG-020 条件先转为可行动，G0 重新优先。
+**当前模式：REVIEW / 待交付。** v9.10/U49 与 exact-HEAD Review 机器门均已在主干生效。用户因 Codex 暂无额度，2026-09-20 明确授权网页当前会话临时代执行 **G1/P0 IMP-044**；候选分支 `chatgpt/imp044-outbox` 从 `master@aca43e408a9555da43de9e7f42bb10361c92b6e9` 实施。Preflight 约定的类型化回执、durable DB dedup、AlertEvent+Outbox 同事务、渠道单一权威、buy-point 专用 pre-send recheck 已形成候选并完成多轮作者自检，但**本网页会话是实现作者，因此不得自产 U49 Review / APPROVED**。当前只允许冻结树全量门禁、精确提交/推送/PR、CI 与后续独立审核整改；IMP-044 未独立 Review/合并前仍占用 G1 阻断位，不授权 IMP-032/BUG-016/IMP-049/IMP-053。G1/P0 **IMP-006** 已正式闭环：PR #60 的 reviewed HEAD `87b099540a4b6c3d54c56a9d57293dc1963ee450` 经独立网页审核回执（PR comment `5749077515`，`APPROVED / MERGE_IF_GATES_PASS`）、exact-head `release_check.py`、required CI run `35502888440` 三 job 全绿后合入 `master`，merge commit `fa0185412db5c0d3f47445081da822f121cceff1`；合并后 master CI run `35503775542` 的 backend/frontend/docs 亦全部成功。GitHub 原生 `APPROVE` 因连接身份同时为 PR 作者被平台拒绝；现已明确网页审核回执与 GitHub 原生 Review 分层，单账号场景不得把 self-approve 限制变成自锁，也不得通过小号、自批或放宽 CI 绕过门禁。IMP-006 只证明 reference / executable snapshot / paper fill 的工程事实契约闭环，不证明买点收益。BUG-020 的真实交易时段生产会话仍为 G0 `待条件`，因此当前最低可行动阻断门仍是 G1，下一主切片为 **IMP-044（Outbox、类型化回执与中断恢复）**；若 BUG-020 条件先转为可行动，G0 重新优先。
 
 
 ## 1. 固定入口与范围
@@ -92,5 +92,16 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **已证实 P0-4 Outbox 判据不兼容**：现有 `_delivery_block` 仅理解 price/change；`picks_buy_point` 会被 `_extract_value=None` 误判 `condition_no_longer_met`。必须用 `intent.kind=picks_buy_point` 专用 recheck，并绑定 latest decision_id/version、执行 snapshot freshness、渠道/target 与有效期。
 - **新增顺序裁定**：`决策归档 → AlertEvent + durable dedup + Feishu intent 同事务 → brief/watch-ledger/paper 派生消费者 → 异步发送`。每日去重权威迁到 DB；优先给 AlertEvent 增 nullable unique dedup_key，以 `trade_date+symbol+kind` 稳定哈希实现 create-once。brief 只做 best-effort 展示，不再拥有发送资格。
 - **非目标**：不在这一刀迁开板/风控/日报等其它来源；不解决 IMP-049/053 的盘中 gate/buy_range 动态重评；不改策略阈值、仓位或真实交易边界。
-- **允许下一动作**：Codex 从此 master 开一个 IMP-044 功能分支，只实现 W02 最新“类型化回执 + durable dedup + buy-point Outbox + 专用 pre-send recheck”纵切；完成后提交准确 HEAD、完整测试与恢复证据，网页再做 U49 `Review`。不得自行领取 IMP-032/BUG-016/IMP-049/053。
+- **Preflight 处置**：该授权已用于本轮网页临时代执行；从现在起不再领取新业务切片。当前只允许完成 IMP-044 候选冻结、全量门禁、PR/CI 与独立 Review 所需整改；不得自行领取 IMP-032/BUG-016/IMP-049/053。
 
+
+## 10. IMP-044 实施候选（作者自检，非独立 Review）
+
+- **作者/授权**：本网页会话按用户“Codex 无额度，网页先继续做”的明确授权临时代执行；这改变执行者，不改变独立 Review 门。
+- **实施基点**：`master@aca43e408a9555da43de9e7f42bb10361c92b6e9`；分支 `chatgpt/imp044-outbox`。
+- **工程事实**：AlertEvent 新增 nullable unique `dedup_key` 与 migration `f8c1d4e7a2b6`；buy-point 使用 `trade_date|kind|symbol` 稳定哈希并通过 `record_trigger_once` 与 Feishu Outbox intent 同事务 create-once。card 与 execution_ref 落同一 AlertEvent snapshot，Outbox 只保存最小 intent identity；brief/watch-ledger/paper 都后置为派生消费者。
+- **渠道/回执**：`DeliveryResult` 分 `accepted / explicit_rejected / unknown`；明确平台拒绝落 `permanent_failed`，网络/5xx/畸形/冲突回执落 `unknown` 且不自动重发。旧 `send()` / `send_interactive()` 只作 bool 兼容包装，买点主链不再 direct Feishu。配置 `picks_buy_point_channels` 为唯一外发权限，默认 `in_app,log,feishu` 保留历史实际产品行为。
+- **发前复核**：`intent.kind=picks_buy_point` 不走 price/change `_extract_value`；专用 recheck 要求 event card/execution_ref 完整、event 自身 execution snapshot 为 ready、最新归档同 symbol 的 exact decision_id/version 仍一致且 eligible/passed、最新 executable snapshot 仍 ready，同时复用 rule/channels/target/交易窗口与 Outbox expiry 门。
+- **作者级反证已抓并修复**：① Feishu 新旧两套发送实现曾并存，已收为 `send_result` 单语义 + bool 包装；② 并发 create-once 的 unique 冲突曾在 ORM autoflush 提前逃逸，已把 parent query 移到 add 前并将 flush/commit 纳入同一 IntegrityError 恢复边界；③ 旧迁移测试用新 ORM 写旧 schema 会自锁，已改用 raw SQL 构造真实历史行；④ event 自身 execution_ref 非 ready 即使最新归档仍 ready 也必须 suppressed，已补反例；⑤ channels 移除 feishu 后断言零 Outbox/零 direct IO。
+- **当前验证**：最终工作树已从零完成全量 backend：`4039 passed / 80 skipped`，随后全仓 `pyflakes app tests scripts` 通过；聚焦 buy-point/Feishu/Outbox/watcher/migration 回归亦全绿，并覆盖并发 create-once、事件+Outbox 原子回滚、brief 失败后 durable intent 保留、渠道关闭零 direct IO、event/decision stale、typed reject/unknown、Outbox pacing。`public_repo_scan.py`、`workspace-hygiene.py`、`doc-health.py`、`git diff --check` 全部通过。该证据只证明作者候选通过本地门，不替代独立 U49 Review / PR required CI。
+- **独立审核边界**：本段只是作者执行事实/自检，不是 U49 `Review`。冻结 HEAD 推到 PR 后，即使 required CI 全绿，缺独立网页 Review 回执时新版 `release_check.py` 应保持 BLOCKED；不得由本会话补写 APPROVED 来绕过。

@@ -75,14 +75,14 @@ def queue(rig, *, lifetime=300_000):
     return e, repo.outbox.pending_ids()[0], now
 
 
-def queue_buy_point(rig, *, price=10.5, as_of=None):
+def queue_buy_point(rig, *, price=10.5, as_of=None, symbol="600000", dedup_key=None):
     from app.picks.opportunity_learning import archive_notification_pipeline, latest_notification_execution
 
     repo, factory, _, service, notifier, *_ = rig
     trade_date = "2026-09-21"
     as_of = as_of or datetime(2026, 9, 21, 10, 30)
     item = {
-        "symbol": "600000", "name": "甲", "price": 10.0,
+        "symbol": symbol, "name": "甲", "price": 10.0,
         "confidence": {"tier": "executable"}, "vetoes": [],
         "buy_range": {"low": 10.2, "high": 10.8},
     }
@@ -90,13 +90,13 @@ def queue_buy_point(rig, *, price=10.5, as_of=None):
     archive_notification_pipeline(
         [item], trade_date=trade_date, as_of=as_of, hits=[hit], skips=[],
         dispatch_by_symbol={}, pick_generated_at="2026-09-21T09:26:00+08:00",
-        execution_by_symbol={"600000": {
+        execution_by_symbol={symbol: {
             "state": "ready", "price": price, "change_pct": 5.0,
             "prev_close": 10.0, "source": "isolated-test",
         }},
         session_factory=factory,
     )
-    latest = latest_notification_execution(trade_date, factory)["600000"]
+    latest = latest_notification_execution(trade_date, factory)[symbol]
     rule = repo.create_rule(
         name="buy-point", condition_type="picks_buy_point", threshold=0,
         scope="all", channels=["in_app", "feishu"], cooldown_seconds=0, enabled=True,
@@ -109,8 +109,8 @@ def queue_buy_point(rig, *, price=10.5, as_of=None):
     }
     now = service._now_ms()
     event, created = repo.record_trigger_once(
-        rule.id, "600000", 0, 0,
-        dedup_key="b" * 64,
+        rule.id, symbol, 0, 0,
+        dedup_key=dedup_key or ("b" * 64),
         snapshot={"kind": "buy_point", "name": "甲", "card": {"header": {}}, "execution_ref": ref},
         outbox_target=notifier.delivery_target(),
         now_ms=now, expires_at_ms=now + 60_000,
@@ -211,6 +211,22 @@ def test_buy_point_intent_uses_dedicated_recheck_not_price_rule(rig):
     assert row.state == "accepted" and len(sent) == 1
 
 
+def test_buy_point_outbox_preserves_card_send_pacing(rig, monkeypatch):
+    _, factory, _, service, _, sent, *_ = rig
+    queue_buy_point(rig, symbol="600000", dedup_key="d" * 64)
+    queue_buy_point(rig, symbol="600001", dedup_key="e" * 64)
+    sleeps = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr("app.market.alert_engine.asyncio.sleep", fake_sleep)
+    asyncio.run(service._deliver_pending())
+    assert len(sent) == 2
+    assert sleeps and 0 < sleeps[0] <= 0.5
+    assert all(row.state == "accepted" for row in rows(factory))
+
+
 def test_buy_point_intent_suppressed_when_event_execution_is_not_ready(rig):
     from app.models.alert import AlertEvent
 
@@ -290,9 +306,10 @@ def test_two_connections_cannot_create_same_durable_buy_point(rig):
         )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        results = [pool.submit(create_once), pool.submit(create_once)]
-        created = [future.result()[1] for future in results]
-    assert sum(created) == 1
+        futures = [pool.submit(create_once), pool.submit(create_once)]
+        results = [future.result() for future in futures]
+    assert sum(created for _event, created in results) == 1
+    assert results[0][0].id == results[1][0].id
     assert len(repo.list_events()) == 1
     assert len(rows(factory)) == 1
 
@@ -321,37 +338,6 @@ def test_buy_point_event_and_outbox_rollback_together(rig):
     assert repo.list_events() == []
     assert rows(factory) == []
     assert sent == []
-
-
-def test_two_connections_create_one_durable_buy_point_intent(rig):
-    repo, factory, rule, service, notifier, *_ = rig
-    now = service._now_ms()
-    barrier = Barrier(2)
-
-    def create():
-        barrier.wait()
-        return AlertRepository(factory).record_trigger_once(
-            rule.id, "600000", 0, 0,
-            dedup_key="c" * 64,
-            snapshot={"kind": "buy_point", "card": {"header": {}}, "execution_ref": {
-                "decision_id": "OD-concurrent", "decision_version": "ODV-concurrent",
-            }},
-            outbox_target=notifier.delivery_target(),
-            now_ms=now, expires_at_ms=now + 60_000,
-            outbox_intent={
-                "kind": "picks_buy_point", "trade_date": "2026-09-21",
-                "decision_id": "OD-concurrent", "decision_version": "ODV-concurrent",
-            },
-        )
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        a, b = pool.submit(create), pool.submit(create)
-        ra, rb = a.result(), b.result()
-
-    assert sum(created for _event, created in (ra, rb)) == 1
-    assert ra[0].id == rb[0].id
-    assert len(repo.list_events()) == 1
-    assert len(rows(factory)) == 1
 
 
 def test_two_connections_cannot_claim_same_intent(rig):
