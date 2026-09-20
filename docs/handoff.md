@@ -1,6 +1,6 @@
-# 当前交接：v9.7 阶段门治理基线，G0 首选 BUG-028
+# 当前交接：G0 point-in-time 底座推进，首选 BUG-026
 
-**当前模式：READY_FOR_NEXT_PLANNED_SLICE。** v9.7/U45 阶段门治理已由 PR #45 合入 `master`；当前施工必须从最新 `master` 读取总账 §5.9、所属 stage 与本 handoff。当前主门为 G0，下一主切片由账本实时推导；本次治理合并本身没有执行 BUG-028 等业务任务。
+**当前模式：READY_FOR_NEXT_PLANNED_SLICE。** v9.7/U45 阶段门治理继续有效；BUG-028 已由 PR #52 按 point-in-time v2 闭环，当前施工必须从最新 `master` 读取总账 §5.9、所属 stage 与本 handoff。当前主门仍为 G0，下一主切片由账本实时推导为 BUG-026；本次正确性修复不构成潜伏策略收益已验证。
 
 ## 1. 固定入口与范围
 
@@ -55,12 +55,12 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 本节只记录当前现场，不维护第二份 backlog；权威算法在总账 §5.9，任务元数据在所属 stage。
 
 - **当前主门**：G0
-- **主切片首选**：BUG-028
-- **门内候选**：BUG-028 → BUG-026 → BUG-020
-- 上述候选均为 G0 可行动阻断项；同门按门禁角色 → P0/P1/P2 → 门内序选择，已完成/退出/合并项不参与。
-- 只有 G0 可行动阻断项闭环/转为真实不可行动条件后，才计算 G1；不得因 RSH-031、新 UI、Agent 或性能任务“更有价值”直接跳门。
+- **主切片首选**：BUG-026
+- **门内候选**：BUG-026 → BUG-020
+- BUG-028 已完成并退出候选计算；剩余候选均为 G0 可行动阻断项，同门按门禁角色 → P0/P1/P2 → 门内序选择，已完成/退出/合并项不参与。
+- 只有剩余 G0 可行动阻断项闭环/转为真实不可行动条件后，才计算 G1；不得因 RSH-031、新 UI、Agent 或性能任务“更有价值”直接跳门。BUG-028 的旧 pre-v2 潜伏池输出已失去严格前瞻证据资格，后续研究只认 v2 重算。
 - RSH-031 定位为 `G1/P1/非阻断/门内序70`：允许后续在 G0 闭环后进入历史研究资产建设；`效果前置=RSH-026, IMP-020, RSH-030` 未满足前不得宣称龙头战法有效或接生产权重。
-- GX 治理只可作为不冲突的伴随切片。2026-09-20 `GOV-018` 已闭环：`.workbuddy` / `.workbuddy-ai` 已物理删除，有价值内容进入项目中性 `skills/scripts/docs/artifacts`，第三方 UZI/Serenity 本体不再复制；PR #48 已合入 `master`（merge `b6b5ba0`，最终 required CI run `35481812431` backend/frontend/docs 全绿）。`GOV-026` 已落地 `scripts/workspace-hygiene.py` 并接 CI/交接；本轮又把 docs 根从 36 份 Markdown 收口为 6 个控制面，领域正文进入 system/data/product/strategy/ai/review/research，`doc-health` O2 阻断根目录回堆与未知分类；最终一致性复核 PR #50 又把 09-17/09-18 四份复盘/进化时间序列补入主干，剩余 4 个 backend/data JSON 明确保留为本机运行证据。以上**不改变 G0 主门或 BUG-028 首选**。
+- GX 治理只可作为不冲突的伴随切片。2026-09-20 `GOV-018` 已闭环：`.workbuddy` / `.workbuddy-ai` 已物理删除，有价值内容进入项目中性 `skills/scripts/docs/artifacts`，第三方 UZI/Serenity 本体不再复制；PR #48 已合入 `master`（merge `b6b5ba0`，最终 required CI run `35481812431` backend/frontend/docs 全绿）。`GOV-026` 已落地 `scripts/workspace-hygiene.py` 并接 CI/交接；本轮又把 docs 根从 36 份 Markdown 收口为 6 个控制面，领域正文进入 system/data/product/strategy/ai/review/research，`doc-health` O2 阻断根目录回堆与未知分类；最终一致性复核 PR #50 又把 09-17/09-18 四份复盘/进化时间序列补入主干，剩余 4 个 backend/data JSON 明确保留为本机运行证据。以上治理变更不改变阶段门算法；BUG-028 本轮闭环后，G0 主门保持不变，首选已按门内序推进为 BUG-026。
 
 当前已处于 `READY_FOR_NEXT_PLANNED_SLICE`：用户对 Codex 说“使用 ashare-ledger-continue，继续任务”即可按上述门序领取一个切片；没有网页登记的 `CROSS_GATE_EXCEPTION` 就不能跨门。
 
