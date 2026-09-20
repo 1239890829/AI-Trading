@@ -151,6 +151,28 @@ def test_u49_proactive_discovery_guard_detects_missing_review_stage(tmp_path, mo
     )
 
 
+def test_u49_runtime_handoff_allows_preflight_before_review(monkeypatch):
+    """运行态只到 Preflight 时不得要求未来 Review 提前存在。"""
+    mod = load()
+    target = mod.DOCS / "handoff.md"
+    original_read = mod._read
+
+    def patched_read(path):
+        text = original_read(path)
+        if path == target:
+            # 保留当前 U49 Preflight 回执，但移除 Review 字样，模拟“尚未进入成果审核”。
+            return text.replace("Review", "Preflight")
+        return text
+
+    monkeypatch.setattr(mod, "_read", patched_read)
+    errors = mod.check_decision_propagation()
+    assert not any(
+        error.startswith("docs/handoff.md：U49 主动缺陷发现传播缺失")
+        or "U49 主动审计回执缺当前阶段" in error
+        for error in errors
+    )
+
+
 def test_decision_propagation_detects_stale_current_pointer(tmp_path, monkeypatch):
     mod = load()
     root = tmp_path
