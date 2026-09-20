@@ -41,14 +41,34 @@
 - **效果前置**：无
 - **方案依据**：主方案 F01、§5、W03
 - **范围**：复用 decision ledger、执行 gate 和 RSH-026 快照；页面/提醒/模拟动作共用同一当时事实，生成态保持不可变。
-- **验收**：统一 snapshot/decision/version；年龄、参数与迟滞可解释；旧/新影子逐条对照，关键风险场景同口径。
+- **验收**：统一 snapshot/decision/version；年龄、参数与迟滞可解释；旧/新影子逐条对照，关键风险场景同口径。U47 额外要求同一 decision/version 内明确区分 `reference_entry`（首次观察/触发的反事实参考价）与 `executable_snapshot/fill`（动作前重检后的可成交事实），任何 UI、统计或复盘都不得把前者冒充成交价。
 - **证据**：已有生成、盘中重检和逐股快照；它们尚不等于全执行链统一。
 - **下一步**：先核时效/版本分叉和消费者；跨模块追溯比新建快照库优先。
 - **恢复**：保留旧生成态及影子记录；差异未经批准不切外推，缺数据显式降级。
 - **开工前置**：只需选定场景、现有快照与可重复载荷；不等待 BUG-020/IMP-044 全任务完成。
 - **发布前置**：相关数据字段通过 BUG-020；切外发时依赖 IMP-044 的持久化/过期重检；无外发影子对照可先行。
 - **实施步骤**：①核 backend/app/api/routes/picks.py 与 backend/app/picks/buy_point.py 的生成态/实时态；②复用 opportunity_learning/现有 gate 的 version+as_of；③按字段时效生成一致执行截面，拒旧序列；④页面/提醒/模拟动作同源关联；⑤保留原生成判断、差异原因和影子结果，不先改策略阈值。
-- **v9.3契约**：统一opportunity/decision版本及first_seen/trigger/asof/失效。GET装配中的机会归档与登记迁至已有后台拥有者；可保留只读缓存/访问日志，但打开页面不能生成研究样本、收费推理或动作。视图计算与业务判定分开，不机械把CSS和图形坐标搬后端。
+- **v9.3/v9.8契约**：统一opportunity/decision版本及first_seen/trigger/asof/失效；`first_seen` 不覆盖，盘中每次有意义的新事实形成可追溯 decision version，允许早盘等待/拒绝在午后条件变化后重新进入评估，但旧判定仍可重放。GET装配中的机会归档与登记迁至已有后台拥有者；可保留只读缓存/访问日志，但打开页面不能生成研究样本、收费推理或动作。视图计算与业务判定分开，不机械把CSS和图形坐标搬后端。
+
+
+## IMP-053
+
+**猎场动态机会自动影子执行与双轨验证**
+
+- **状态**：待条件
+- **优先级**：P1
+- **阶段门**：G2
+- **门内序**：15
+- **门禁角色**：阻断
+- **依赖**：IMP-006, IMP-049
+- **效果前置**：RSH-026, IMP-020
+- **方案依据**：U47；hunting-decision-design §4/§6/§8；product-closure-design；现有 `watch_ledger.py`、`shadow.py` 与 `PaperTradingEngine`。
+- **范围**：复用现有撮合、T+1、整手、费用、涨跌停、停牌与资金约束，为“猎场已达到可执行条件”的 decision/version 建独立 hunting-shadow scope；不污染用户手工模拟账户，也不把现有“每日精选→次日开盘” shadow 偷换语义。观察/等待/被拒绝对象只进参考轨，不因出现于猎场就自动占用模拟资金。
+- **验收**：①参考轨保留 first_seen/trigger/reference_price，执行轨另记 submit/fill/reject/no_fill/expired/exit、成交价、费用、滑点与持有规则；两轨统计和 UI 名称不可混用；②动作前以 IMP-006 同版 snapshot 重检，早盘等待/拒绝可在后续新 decision version 条件成立后首次提交，开盘状态不冻结全天；③同一 decision/version 幂等，重复轮询不增仓/增样本，新一轮独立机会必须有新版本/episode；④资金/仓位采用可复算、版本化的标准化协议，不连接真实券商；⑤拒单/未成交/过期也进入分母，成交收益只能按真实 shadow fill 与合法退出计算；⑥回放时只用当时可见信息，未来低点、后续涨停和盘后原因不得倒填。
+- **证据**：当前 `watch_ledger` 以首见价对照收盘，能验证“当时发现后价格怎样”，但不是成交；当前 `picks-shadow` 主要在每日精选定稿后的下一交易日晨窗按开盘价进入。两者均不能代表“猎场每个盘中可执行买点已自动模拟成交”，因此本项是明确缺口，不据此声称策略已有增益。
+- **下一步**：满足以下条件再实施：IMP-006 与 IMP-049 已完成，并能用同一 opportunity/decision version 区分 reference、actionable 与动作前重检事实。条件满足后只选一个已准入、可动作的猎场场景做最小纵切，对照 reference→recheck→shadow order→fill/no-fill→exit→review 全链，再扩到其它情境。UI 只消费同版事实，不先造漂亮胜率。
+- **研究边界**：工程链路完成不等于买点有效；胜率、净收益、早发现与“更低位置后涨停”的效果主张必须等待 RSH-026/IMP-020 的点时全分母、成本与 OOS/前向证据。
+- **恢复**：停 hunting-shadow 新动作即可；保留 reference 记录、订单/拒单/成交审计和旧 daily-picks shadow。回退不得把参考价重命名为成交价，也不得删除失败/未成交分母。
 
 
 ## IMP-007

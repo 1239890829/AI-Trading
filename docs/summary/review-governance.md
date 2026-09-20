@@ -1,6 +1,6 @@
 # 复盘与治理汇总（Review & Governance Summary）
 
-> 当前治理按 ../implementation-plan.md v9.7，并按 ../plan-registry.md §1.1 做重大决策传播核对：细功能逐项审、先验本轮再复评下一步价值，证据支持才增删合并任务。报告已采纳/已实施不等于效果已证明；普通复盘读结果，操作处置与调试在受控后台。大小功能见 ../product/feature-closure-audit.md。
+> 当前治理按 ../implementation-plan.md v9.8，并按 ../plan-registry.md §1.1 做重大决策传播核对：细功能逐项审、先验本轮再复评下一步价值，证据支持才增删合并任务。报告已采纳/已实施不等于效果已证明；普通复盘读结果，操作处置与调试在受控后台。大小功能见 ../product/feature-closure-audit.md。
 
 > **定位**：系统审查 / 复盘策略 / 控制台三模块 / 页面核对 / 猎场复盘 的**结论汇总**（只留仍未解决项与可复用教训）。
 > **现役不在此**：`../review/daily-review-sop.md`、`../review/daily-review-checklist.md`、`../plan-registry.md`、`../kb/06-review-framework.md`（**复盘 SOP + 附录 A 五层提问框架**）、`../retro-and-gaps.md`（**唯一待办总账 §6.0**）、`../strategy/sentiment.md`（历史误判案例库）。

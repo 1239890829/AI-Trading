@@ -2,7 +2,7 @@
 
 > 定位：**docs 唯一入口**。查东西先来这里；写新文档必须在此登记。
 > 维护约定：状态在所属阶段单点更新，成果提炼与恢复按 `kb/07-doc-curation.md` §3.2；新建/迁移同步本表，未知资产不删除。
-> 当前入口（2026-09-20）：从最新 `master` 的 `AGENTS.md` → 本索引；`retro-and-gaps.md` §5.9 是执行门序治理、§6.0 是 W00–W09 领域索引，`stages/` 存任务唯一状态与调度元数据，`handoff.md` 仅存当前主门/现场。 `implementation-plan.md` 是 v9.7 规划修订，不单独定义当前执行模式；允许动作以最新 `handoff.md` + 所属 stage 为准。分工与逐轮审核见 `collaboration-workflow.md`；旧平台目录已退休，历史迁移证据归 `archive/platform-directory-migration-20260920.md`。
+> 当前入口（2026-09-20）：从最新 `master` 的 `AGENTS.md` → 本索引；`retro-and-gaps.md` §5.9 是执行门序治理、§6.0 是 W00–W09 领域索引，`stages/` 存任务唯一状态与调度元数据，`handoff.md` 仅存当前主门/现场。 `implementation-plan.md` 是 v9.8 规划修订，不单独定义当前执行模式；允许动作以最新 `handoff.md` + 所属 stage 为准。分工与逐轮审核见 `collaboration-workflow.md`；旧平台目录已退休，历史迁移证据归 `archive/platform-directory-migration-20260920.md`。
 
 ## 0.0 书库编目（编号 / 层 / 领域 / 用途）
 
@@ -25,7 +25,7 @@
 | **AG-07** | `handoff.md` | L2 | 交接 | 当前工作区、实际运行版本、最近门禁与交付；不另建任务记录 |
 | **AG-08** | `archive/platform-directory-migration-20260920.md` | L1 | 工程治理历史 | 旧平台目录迁移/恢复/最终退休证据；`GOV-018` 已完成，禁止恢复为现役入口 |
 | **AG-09** | `stages/` | L2 | 阶段任务 | W00–W09，各 ID 仅一份状态/验收/证据；P/Q 校验 |
-| **AG-10** | `implementation-plan.md` | L2 | 当前实施修订 | v9.7：living plan；新增 G0–G5/GX 阶段门治理，W领域归属/P优先级/执行门分离；状态仍归阶段 |
+| **AG-10** | `implementation-plan.md` | L2 | 当前实施修订 | v9.8：living plan；继承 G0–G5/GX 阶段门治理，并新增猎场双轨验证/动态盘中决策/UI体验分层；状态仍归阶段 |
 | **AG-11** | `collaboration-workflow.md` | L2 | 协作审核 | 账本驱动；网页统筹审核、Codex执行，用户一句话触发，`master` 共享入口与原型退出 |
 | **AG-12** | `product/product-closure-design.md` | L2 | 产品闭环 | 全模块用途、前后台分工、业务/研究/工程链和确认流程图；非已上线报告 |
 | **AG-13** | `product/feature-closure-audit.md` | L2 | 细功能审计 | 大小动作/接口/后台任务的覆盖、源码发现与未验边界；任务状态仍归阶段 |
