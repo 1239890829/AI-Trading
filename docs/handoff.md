@@ -1,6 +1,6 @@
-# 当前交接：G0 数据真实性底座推进，首选 BUG-020
+# 当前交接：G1 核心事实契约推进，首选 BUG-029
 
-**当前模式：READY_FOR_NEXT_PLANNED_SLICE。** v9.7/U45 阶段门治理继续有效；BUG-028 已由 PR #52 闭环 point-in-time，BUG-026 由 PR #53 闭环评分卡样本/指标身份。当前施工必须从最新 `master` 读取总账 §5.9、所属 stage 与本 handoff；当前主门仍为 G0，重算后的下一主切片为 BUG-020。两项修复只保证事实与统计口径可信，不构成潜伏或机会策略收益已验证。
+**当前模式：READY_FOR_NEXT_PLANNED_SLICE。** v9.7/U45 阶段门治理继续有效；BUG-028 / BUG-026 / BUG-020 已依次闭环 G0 的点时、样本身份与数据源时间/身份真实性。BUG-020 由 PR #54 承载，当前施工必须从最新 `master` 读取总账 §5.9、所属 stage 与本 handoff。G0 已无可行动阻断项，当前主门推进到 G1，下一主切片按账本门内序为 BUG-029；这些正确性修复不构成任何策略收益已验证。
 
 ## 1. 固定入口与范围
 
@@ -54,13 +54,13 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 本节只记录当前现场，不维护第二份 backlog；权威算法在总账 §5.9，任务元数据在所属 stage。
 
-- **当前主门**：G0
-- **主切片首选**：BUG-020
-- **门内候选**：BUG-020
-- BUG-028 与 BUG-026 已完成并退出候选计算；BUG-020 是当前唯一 G0 可行动阻断项，仍按门禁角色 → P0/P1/P2 → 门内序治理，不得因后续任务“更有价值”跳过。
-- 只有 BUG-020 闭环/转为真实不可行动条件后，才计算 G1。BUG-028 的旧 pre-v2 潜伏池输出已失去严格前瞻证据资格；BUG-026 之前按审计行直接计样本的 scorecard 也不得再作效果证据。D0 成本调整值只是不可实现代理，跨日合法标签继续归 RSH-026 / IMP-020。
-- RSH-031 定位为 `G1/P1/非阻断/门内序70`：允许后续在 G0 闭环后进入历史研究资产建设；`效果前置=RSH-026, IMP-020, RSH-030` 未满足前不得宣称龙头战法有效或接生产权重。
-- GX 治理只可作为不冲突的伴随切片。2026-09-20 `GOV-018` 已闭环：`.workbuddy` / `.workbuddy-ai` 已物理删除，有价值内容进入项目中性 `skills/scripts/docs/artifacts`，第三方 UZI/Serenity 本体不再复制；PR #48 已合入 `master`（merge `b6b5ba0`，最终 required CI run `35481812431` backend/frontend/docs 全绿）。`GOV-026` 已落地 `scripts/workspace-hygiene.py` 并接 CI/交接；本轮又把 docs 根从 36 份 Markdown 收口为 6 个控制面，领域正文进入 system/data/product/strategy/ai/review/research，`doc-health` O2 阻断根目录回堆与未知分类；最终一致性复核 PR #50 又把 09-17/09-18 四份复盘/进化时间序列补入主干，剩余 4 个 backend/data JSON 明确保留为本机运行证据。以上治理变更不改变阶段门算法；BUG-028 / BUG-026 已依次闭环，G0 主门保持不变，首选现按门内序推进为 BUG-020。
+- **当前主门**：G1
+- **主切片首选**：BUG-029
+- **门内阻断候选**：BUG-029 → IMP-006 → IMP-044
+- G0 的 BUG-028 / BUG-026 / BUG-020 均已完成并退出候选计算；G1 按门禁角色 → P0/P1/P2 → 门内序继续，不因 RSH-031、新 UI、Agent 或研究任务“更有价值”跳过前三个阻断项。
+- BUG-020 的 current-value 接纳门现区分 source event time / received time、缺失/拒绝/合法空集与身份歧义；旧可信值不会被晚到/非法观测覆盖。2026-09-20 周日实源探针只证明休市链最终正确标 stale，不代表长期盘中 SLA。
+- RSH-031 为 `G1/P1/非阻断/门内序70`，即使同处 G1 也排在阻断项之后；且 `效果前置=RSH-026, IMP-020, RSH-030` 未满足前不得宣称龙头战法有效或接生产权重。
+- GX 治理只可作为不冲突的伴随切片。2026-09-20 `GOV-018` 已闭环：`.workbuddy` / `.workbuddy-ai` 已物理删除，有价值内容进入项目中性 `skills/scripts/docs/artifacts`，第三方 UZI/Serenity 本体不再复制；PR #48 已合入 `master`（merge `b6b5ba0`，最终 required CI run `35481812431` backend/frontend/docs 全绿）。`GOV-026` 已落地 `scripts/workspace-hygiene.py` 并接 CI/交接；本轮又把 docs 根从 36 份 Markdown 收口为 6 个控制面，领域正文进入 system/data/product/strategy/ai/review/research，`doc-health` O2 阻断根目录回堆与未知分类；最终一致性复核 PR #50 又把 09-17/09-18 四份复盘/进化时间序列补入主干，剩余 4 个 backend/data JSON 明确保留为本机运行证据。以上治理变更不改变阶段门算法；BUG-028 / BUG-026 / BUG-020 已依次闭环 G0，阶段门现推进到 G1，首选按门内序为 BUG-029。
 
 当前已处于 `READY_FOR_NEXT_PLANNED_SLICE`：用户对 Codex 说“使用 ashare-ledger-continue，继续任务”即可按上述门序领取一个切片；没有网页登记的 `CROSS_GATE_EXCEPTION` 就不能跨门。
 
