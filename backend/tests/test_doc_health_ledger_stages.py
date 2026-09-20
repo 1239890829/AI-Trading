@@ -293,13 +293,13 @@ def test_decision_propagation_detects_stale_handoff_requirement_range(monkeypatc
     def patched_read(path):
         text = original_read(path)
         if path == target:
-            assert "U01–U45" in text
-            return text.replace("U01–U45", "U01–U44", 1)
+            assert "U01–U46" in text
+            return text.replace("U01–U46", "U01–U45", 1)
         return text
 
     monkeypatch.setattr(mod, "_read", patched_read)
     errors = mod.check_decision_propagation()
-    assert any("累计要求范围" in error and "U45" in error for error in errors)
+    assert any("累计要求范围" in error and "U46" in error for error in errors)
 
 
 def test_decision_propagation_rejects_ready_handoff_with_pending_merge_text(monkeypatch):
