@@ -390,27 +390,22 @@ symbol×trade_date=1`，`repeated_labeled_rows=35`、`fillable=1`、`verdict=ins
 因此校验只能“贴标签”，不能阻止坏观测改变事实：晚到旧包能覆盖更新报价，未来时间戳的 invalid 行也能覆盖正常值；
 `Freshness.from_age()` 又把负年龄夹成 0，使明显跑到未来的数据看起来“刚刚新鲜”。
 
-**四个时间身份不能混用**：
-- source event time / `data_timestamp`：源声称该行情发生的时间；
-- source available time：源什么时候让它可取；
-- `received_at`：本机什么时候收到；
-- current cache write time：系统什么时候决定采纳。
-`received_at` 新只证明“包晚到了”，不能证明“行情更新了”。缺 source time 时可暂作 degraded 观察，但不得借 received_at 升成 ready。
+**四个时间身份不能混用**：source event time / `data_timestamp` 是源声称事件发生的时间；source available time 是源何时可取；
+`received_at` 是本机何时收到；current cache write time 是系统何时决定采纳。`received_at` 新只证明“包晚到了”，不能证明“行情更新了”。
+缺 source time 时只能 degraded/unknown；已有带源时间的可信值时，无源时间新包不得覆盖它。
 
 **接纳门**：
 1. source event time 明显超未来时钟容差（本仓 5 分钟）→ degraded/invalid，不推进 current；
-2. 与已有可信值相比 event time 倒退 → 拒绝，且该规则不因休市而关闭；
-3. 已有带源时间的可信值时，新观测缺 source time → 拒绝；首次无源时间观测可保留为 degraded，而非伪造 ready；
-4. `price=None`、结构 invalid、同一请求 symbol 重复、返回未请求 symbol → 不推进 current；
-5. 指数有固定 `(symbol, market)` 目录，错 market、duplicate、unexpected identity 均可精确拒绝，不靠代码前缀猜；
-6. 拒绝不是删除证据：保留旧可信 value/source time，并把“本轮没有可信刷新”标成 stale + 稳定原因。
+2. event time 相对 current 倒退 → 拒绝，且该规则不因盘前/休市而关闭；
+3. `price=None`、结构 invalid、重复 requested symbol、未请求 symbol → 不推进 current；
+4. 指数按固定 `(symbol, market)` 目录核 identity，错 market / duplicate / unexpected 均拒绝；
+5. 拒绝不是删证据：保留旧可信 value/source time，并把“本轮没有可信刷新”标 stale + 稳定原因；首次不可信观测保持缺席；
+6. freshness / coverage / source_rejections 三轴分开：分别回答“已有值多新 / 本轮接纳多少 / 返回但为何被拒”。合法空集、纯缺失和源拒绝不得同形。
 
-**三轴必须分开**：freshness 回答“已有值有多新”；coverage 回答“请求集本轮接纳了多少”；`source_rejections` 回答
-“源其实返回了，但哪些因时间/身份/结构不可信而没被采纳”。把三者压成一个 `is_stale` 会让合法空集、源缺失、源拒绝同形。
-因此最近已完成批次的拒绝数量/原因进入 REST meta、WS meta 与 `/health`，而不因单只缺失把整个 Hub freshness 改成 stale。
+**消费者闭环**：最近已完成批次的拒绝数量/原因进入 REST meta、WS meta 与 `/health`；已有旧值时 QualityBadge 显示 stale 原因。
+恢复后的干净批次会清空拒绝摘要，不能让历史故障永久污染健康状态。
 
-**实源边界证据**：2026-09-20（周日）只读探针中，provider 链交易日历最新有效日为 2026-09-18；腾讯返回的
-6 个指数原始对象虽是 `quality=high`，其 source timestamp 均停在 2026-09-18。经过 QuoteHub 后 6/6 正确显示
-`stale/market_closed`，证明“provider high / 请求刚成功”都不能单独等价于“当前实时”。该探针只验证休市链，不外推长期 SLA。
+**实源边界**：2026-09-20（周日）用本片代码显式加载主仓部署 `.env`，`build_provider(settings)` 成功构建 `chain(ths→tencent→eastmoney→sina)`。有界只读探针的交易日历最新日为 2026-09-18，指数 6/6 覆盖、拒绝数 0；600519 实际由腾讯返回，source timestamp 为 2026-09-18，而 received_at 为 2026-09-20。QuoteHub 保留源时间并统一标 `stale/market_closed`。这证明休市链与 source-time/received-time 分离，但不外推真实交易时段或长期盘中 SLA。
 
-**判据**：任何缓存、事件流、行情/公告/指标修订链在写 `current` 前，都先问“这是**更新的事实**，还是只是**更新到达的包**？”
+**判据**：任何缓存、事件流、行情/公告/指标修订链在写 `current` 前，都先问“这是**更新的事实**，还是只是**更新到达的包**？”；
+真实源辅证与生产链验收必须分开记账，免 Key 单源验证不能冒充部署实际 provider 链。
