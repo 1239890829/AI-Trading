@@ -54,7 +54,7 @@ SWEEP_INTERVAL = 6.0
 #: 非活跃窗口的休眠间隔（秒）
 IDLE_INTERVAL = 30.0
 #: 开板重评已通知（进程内去重；重启重复一次可接受）
-_REOPEN: set[str] = set()
+_REOPEN: set[tuple[str, str]] = set()
 
 # 交易时段（含集合竞价尾段）："HH:MM" 区间
 _ACTIVE_WINDOWS = (("09:20", "11:30"), ("13:00", "15:00"))
@@ -100,7 +100,8 @@ def radar_active_now(now: datetime | None = None) -> bool:
 
 
 def select_candidates(
-    snapshot_rows: list[dict], registered_symbols: set[str]
+    snapshot_rows: list[dict], registered_symbols: set[str], *,
+    reopen_symbols: set[str] | None = None,
 ) -> list[dict]:
     """纯函数：从全市场快照选出「涨停前临板」候选（供雷达提醒+入册）。
 
@@ -115,10 +116,11 @@ def select_candidates(
     from app.picks.tradability import is_tradable
 
     out: list[dict] = []
+    reopen_symbols = reopen_symbols or set()
     for row in snapshot_rows or []:
         symbol = str(row.get("symbol") or "")
         pct = row.get("change_pct")
-        if not symbol or pct is None or symbol in registered_symbols:
+        if not symbol or pct is None or (symbol in registered_symbols and symbol not in reopen_symbols):
             continue
         name = str(row.get("name") or "")
         if not is_tradable(symbol, name):
@@ -153,6 +155,7 @@ async def pre_limit_sweep(app) -> int:
     last = getattr(svc, "last_success", None)
     if last is None or (datetime.now(timezone.utc) - last).total_seconds() > SNAPSHOT_FRESH_SECONDS:
         return 0
+    snapshot_as_of = last.isoformat() if hasattr(last, "isoformat") else str(last)
 
     from app.picks.watch_ledger import get_day, record_sighting
 
@@ -160,7 +163,11 @@ async def pre_limit_sweep(app) -> int:
     tstamp = beijing_now().strftime("%H:%M:%S")
     day_rows = {r.get("symbol"): r for r in get_day(tdate)}
     registered = set(day_rows)
-    candidates = select_candidates(rows, registered)
+    reopenable = {
+        symbol for symbol, row in day_rows.items()
+        if ((row.get("reason") or {}).get("gate")) == "sealed_no_entry"
+    }
+    candidates = select_candidates(rows, registered, reopen_symbols=reopenable)
 
     # 特殊情形（用户指令 4）：一字板/秒板**选对但无参与机会**——首见即封板 → 只登记观察
     # （watch_no_entry，不入持仓池）；某日开板重回临板区 → 通知重新纳入（见下方 board_reopen）
@@ -183,7 +190,9 @@ async def pre_limit_sweep(app) -> int:
             layer="watch_no_entry", source_theme="",
             reason={"kind": "technical",  # KB-TRADE-13：首见即封板的观察行，同临板口径
                     "gate": "sealed_no_entry", "pct": float(pct),
-                    "note": "首见即封板——无参与机会，保持观察；开板重评（KB-STOCK-21）"},
+                    "seal_state": {"ever_sealed": True, "current_sealed": True,
+                                   "snapshot_state": "ready", "version": snapshot_as_of},
+                    "note": "首见时当前封板——保持观察；后续若开板按新快照重评（KB-STOCK-21）"},
             entry_price=None, entry_time=tstamp,
         )
         registered.add(symbol)
@@ -192,8 +201,9 @@ async def pre_limit_sweep(app) -> int:
     # 开板重评：登记为 no_entry 的票回落临板区 → 通知重新纳入（每票每日一次）
     for c in candidates:
         row0 = day_rows.get(c["symbol"]) or {}
-        if ((row0.get("reason") or {}).get("gate")) == "sealed_no_entry" and c["symbol"] not in _REOPEN:
-            _REOPEN.add(c["symbol"])
+        reopen_key = (tdate, c["symbol"])
+        if ((row0.get("reason") or {}).get("gate")) == "sealed_no_entry" and reopen_key not in _REOPEN:
+            _REOPEN.add(reopen_key)
             with contextlib.suppress(Exception):
                 from app.picks.morning_brief import append_alert, brief_for_today
 
@@ -202,9 +212,11 @@ async def pre_limit_sweep(app) -> int:
                     "kind": "board_reopen", "symbol": c["symbol"], "name": c["name"],
                     "key": f"board-reopen-{c['symbol']}",
                     "direction": "开板重评",
-                    "text": f"一字板开板回落 {c['pct']:.1f}%（距封板 {c['runway_pct']}pct）——重新纳入候选，"
-                            f"全方位评估（题材阶段/封单/大盘合力）通过后可参与",
-                    "meta": {"trigger_value": c.get("price")},
+                    "text": f"今日曾封板后当前开板回落 {c['pct']:.1f}%（距封板 {c['runway_pct']}pct）——重新纳入评估候选，"
+                            f"仍需题材/流动性/执行条件复核，不代表保证成交",
+                    "seal_state": {"ever_sealed": True, "current_sealed": False,
+                                   "snapshot_state": "ready", "version": snapshot_as_of},
+                    "meta": {"trigger_value": c.get("price"), "snapshot_as_of": snapshot_as_of},
                 })
             log.info("[临板雷达] 开板重评 %s %s", c["symbol"], c["name"])
 

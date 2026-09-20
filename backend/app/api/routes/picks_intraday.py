@@ -176,16 +176,35 @@ async def run_intraday_review(
 # ---------------------------------------------------------------- 盘中机会视图
 
 
-def _snapshot_by(request: Request) -> dict[str, dict]:
-    """全市场快照 symbol → 行（现价来源）。取不到返回空 dict——三态降级，不臆造。"""
+def _snapshot_context(request: Request) -> tuple[dict[str, dict], str, str | None]:
+    """当前全市场快照 + freshness state + 版本时点。"""
     out: dict[str, dict] = {}
     try:
-        for row in getattr(request.app.state.snapshot_service, "snapshot", None) or []:
+        svc = request.app.state.snapshot_service
+        for row in getattr(svc, "snapshot", None) or []:
             if row.get("symbol"):
                 out[row["symbol"]] = row
-    except Exception:  # noqa: BLE001 — 快照不可用不拖垮列表，现价显式 null
-        pass
-    return out
+        fn = getattr(svc, "freshness", None)
+        fresh = fn() if callable(fn) else None
+        state = getattr(fresh, "state", None) or "unknown"
+        as_of = getattr(fresh, "as_of", None) or getattr(svc, "last_success", None)
+        return out, state, as_of.isoformat() if hasattr(as_of, "isoformat") else (str(as_of) if as_of else None)
+    except Exception:  # noqa: BLE001
+        return out, "unknown", None
+
+
+def _snapshot_by(request: Request) -> dict[str, dict]:
+    return _snapshot_context(request)[0]
+
+
+def _ever_sealed_symbols(board: dict) -> set[str]:
+    """从未裁剪的题材板提取“今日曾封板”身份，禁止从 UI 展示配额反推。"""
+    return {
+        str(stock.get("symbol"))
+        for theme in (board.get("themes") or [])
+        for stock in (theme.get("ladder") or [])
+        if stock.get("symbol")
+    }
 
 
 def _attach_risk_to_themes(data: dict, snap_by: dict[str, dict]) -> None:
@@ -213,7 +232,8 @@ async def _build_opportunities(
     结果缓存 60s（cache key 含参数，两端点同 key 命中同一份）。
     """
     cache = cache_on(request.app.state, "picks.opportunities", 60, maxsize=4)
-    key = (trade_date, top_themes, stocks_per_theme)
+    _snap, snapshot_state, snapshot_version = _snapshot_context(request)
+    key = (trade_date, top_themes, stocks_per_theme, snapshot_state, snapshot_version)
     _, cached = await cache.get_or_set(
         key,
         lambda: _build_opportunities_uncached(
@@ -265,7 +285,7 @@ async def _build_opportunities_uncached(
     attach_official(request, payload["data"].get("themes") or [])
 
     # 猎场候选口径（2026-09-15 用户指令）：涨停梯队退居**参考信息**，候选改为
-    # 「题材内**尚未涨停**的联动可参与个股」。容器直接取卡片刚挂好的
+    # 「题材内**当前未封板**、通过候选门槛的联动个股」。容器直接取卡片刚挂好的
     # `catalog_code`（成分重叠挂靠产物）⇒ 页面显示的官方概念与挖掘用的容器必然是
     # 同一个；成分表复用 board_surge 的当日题材倒排缓存（同一份数据，不新建取数）。
     # 挖掘失败**不静默**：写 linkage_note，页面据此显示"本轮无可参与联动候选"。
@@ -279,29 +299,31 @@ async def _build_opportunities_uncached(
         index, _names = await _asyncio.to_thread(get_index_cache(request.app).get)
         _sizes, members_by_code = await _asyncio.to_thread(index_views, index)
         themes = payload["data"].get("themes") or []
-        snap_by = _snapshot_by(request)
-        # 涨停梯队的可参与性：按**实时盘口**逐只判定（开板/炸板股其实买得进，
-        # 一律写"买不进"是过度断言）；无盘口才退回涨停池口径。
+        snap_by, snapshot_state, snapshot_as_of = _snapshot_context(request)
+        # 涨停梯队的 current 状态按**带版本快照**逐只判定；涨停池只提供“今日曾封板”身份。
+        # 缺可信时点时保持 unknown，不用首封历史伪造当前仍封或已经开板。
         for th in themes:
-            attach_tradability(th.get("stocks") or [], snap_by)
-        # "尚未涨停"的权威判据 = 当日涨停池成员（= 各卡片梯队行的并集）
-        sealed = {
-            s.get("symbol")
-            for th in themes
-            for s in (th.get("stocks") or [])
-            if s.get("symbol")
-        }
+            attach_tradability(
+                th.get("stocks") or [], snap_by,
+                snapshot_state=snapshot_state, snapshot_as_of=snapshot_as_of,
+            )
+        # “曾封板”身份必须来自 build_theme_board 的**完整**当日涨停池梯队，而不是
+        # `assemble(top_themes/stocks_per_theme)` 裁剪后的 UI 行；否则没进展示配额的涨停股
+        # 会被误当成“从未封板”。board 仍保留全部 theme cards / ladder，assemble 才裁剪。
+        ever_sealed = _ever_sealed_symbols(board)
         payload["data"]["linkage_stats"] = attach_participants(
             themes,
             snapshot_by=snap_by,
-            sealed_symbols=sealed,
+            ever_sealed_symbols=ever_sealed,
             limit_up_total=(payload["data"].get("summary") or {}).get("limit_up_total"),
             members_by_code=members_by_code,
+            snapshot_state=snapshot_state,
+            snapshot_as_of=snapshot_as_of,
         )
 
         # 板块权限拆分（用户 2026-09-15：「创业板的不进，只有主板的权限现在」）：
         # ⚠️ **必须在 `sealed`（涨停池全量）与联动挖掘之后**才拆展示面 —— 若先拆，
-        # 非主板涨停股就不再算"已封板"，会被当成"尚未涨停"挖进候选（实测风险点）。
+        # 非主板涨停股就会丢失“曾封板”身份，污染 current-state 重评（实测风险点）。
         # 拆出来的票不是删掉，而是计数留痕：页面要能解释"为什么梯队只剩 3 只"。
         board_excluded = 0
         for th in themes:
@@ -350,7 +372,7 @@ async def _build_opportunities_uncached(
     #   ② 候选须满足任一：进入临板区（板性×0.65 起）/ 联动判定=高
     #
     # ⚠️ 2026-09-15 两处**看起来是改动、实际不改准入集合**的替换（留痕，防误读成放宽）：
-    #   a) 遍历对象由 `stocks`（涨停梯队）改为 `participants`（尚未涨停的联动候选）。
+    #   a) 遍历对象由 `stocks`（曾封板梯队）改为 `participants`（当前未封板的联动候选）。
     #      **旧遍历是空转**：梯队成员在涨停池内 ⇒ `is_sealed` 恒真 ⇒ 全部 continue
     #      （所以这个循环此前几乎从不产出台账行，台账行实际只来自临板雷达）。
     #   b) `cert_high` 由 certainty（封板质量）改为 linkage=="高"。而 linkage 判「高」
@@ -616,7 +638,7 @@ async def intraday_opportunities(
 
     2026-09-15 口径变更（用户指令）：`themes[].stocks` 是涨停梯队（已封板，**仅参考**，
     每只带 `tradability` 标注"不可参与"），`themes[].participants` 才是猎场候选
-    （该题材内**尚未涨停**、报价可成交的联动个股）。复用题材梯队看板
+    （该题材内**当前未封板**、可进入参与评估的联动个股；不保证成交）。复用题材梯队看板
     （build_theme_board）+ 热股榜（人气维度），不在本端点重建题材逻辑；
     辨识度/确定性/联动判定规则见 app.picks.intraday_opportunity 与
     app.picks.tradability（纯函数，可回测）。
@@ -635,8 +657,8 @@ async def intraday_top(
 ) -> dict:
     """盘中跟踪「最推荐标的」：opportunities 的多维筛选切片（工作台动态分组口径）。
 
-    2026-09-15 口径变更（用户指令）：`items` = **可参与**的题材联动候选（尚未涨停、
-    报价可成交）；涨停梯队移入 `reference_items`（仅作题材集中度的参考信息）。
+    2026-09-15 口径变更（用户指令）：`items` = **可参与评估**的题材联动候选（当前未封板且通过门槛；不保证成交）；
+    曾封板梯队移入 `reference_items` 作为历史参考，若当前开板并进入 participant 则从参考区去重。
     筛选规则与 tier 语义见 app.picks.intraday_opportunity.top_watch_stocks；
     与复盘（picks 维度）共用同一份口径，保证「分组里看到的」和「复盘对照的」是同一批标的。
     """

@@ -169,14 +169,14 @@ export function IntradayThemeRow({
           )}
           {t.stocks.length > 0 || (t.participants?.length ?? 0) > 0 ? (
             <div className="mt-2 space-y-3">
-              {/* ① 可参与候选（2026-09-15 猎场口径）：题材内**尚未涨停**、报价可成交的
+              {/* ① 可参与候选（2026-09-15 猎场口径）：题材内**当前未封板**、可进入参与评估的
                   联动个股——这才是"可以买"的那一组。空列表要给出**原因**（没挖 / 挖空了
                   是两回事），否则用户无法判断"今天没机会"还是"系统没干活"。 */}
               <div>
                 <p className="mb-1.5 flex flex-wrap items-baseline gap-2 text-[11px] text-zinc-600 dark:text-zinc-400">
                   <span className="font-medium text-zinc-700 dark:text-zinc-300">可参与候选</span>
                   <span>
-                    {t.participants?.length ?? 0} 只 · 尚未涨停、报价可成交
+                    {t.participants?.length ?? 0} 只 · 当前未封板、可进入参与评估
                   </span>
                 </p>
                 {(t.participants?.length ?? 0) > 0 ? (
@@ -192,7 +192,7 @@ export function IntradayThemeRow({
                 )}
               </div>
 
-              {/* ② 涨停梯队（参考信息）：已封板/开盘即涨停 —— **当日买不进**，
+              {/* ② 涨停梯队（参考信息）：今日曾封板 —— **当前状态需按时点快照判定**，
                   只用来回答"资金集中在哪个方向"。刻意沉在下半区并加边注，
                   避免与上面的候选混为一谈（这正是本轮口径变更要修的病）。 */}
               {t.stocks.length > 0 && (
@@ -258,8 +258,8 @@ export function OpportunitySection({
       <p className="text-[10px] text-zinc-600 dark:text-zinc-400">
         板块权限：账户只开沪深主板（创业板/科创板/北交所/B 股不进候选与参考区）
         {boardBlocked > 0 ? `，本日已挡下 ${boardBlocked} 只容器成分` : ""}；
-        可参与候选＝题材内尚未涨停、报价可成交的联动个股（联动确定性＝题材基座×距封板跑道）；
-        涨停梯队仅作题材集中度的参考信息——已封板/开盘即涨停者当日买不进。
+        可参与候选＝题材内当前未封板、通过资格门的联动个股（不保证成交）（联动确定性＝题材基座×距封板跑道）；
+        涨停梯队仅作题材集中度与曾封板身份参考；当前封板/开板状态以带版本快照为准。
         辨识度＝人气×高度×角色，确定性＝题材阶段基座×封板质量修正，两者独立判定不合并打分；
         判定依据悬停可见、等级可回放。仅模拟跟踪，不构成买卖建议。
       </p>

@@ -33,8 +33,8 @@ from app.models.opportunity_learning import OpportunityDecisionSnapshot, Opportu
 from app.paper.engine import calc_fee
 from app.picks.kb_routing import snapshot_citations
 
-STRATEGY_VERSION = "stock-opportunity-funnel-v1"
-FEATURE_VERSION = "pit-evidence-v1"
+STRATEGY_VERSION = "stock-opportunity-funnel-v2"
+FEATURE_VERSION = "pit-evidence-v2"
 OUTCOME_HORIZON = "d0_close"
 STAGES = ("candidate", "hard_gate", "rank", "notification")
 
@@ -219,6 +219,7 @@ def build_intraday_records(
                         "board_tradable": (s.get("tradability") or {}).get("level") == "可参与",
                         "change_pct": s.get("change_pct"),
                         "amount": s.get("amount"),
+                        **(s.get("seal_state") or {}),
                     },
                 }
                 for s in participants
@@ -306,6 +307,7 @@ def build_intraday_records(
                 "linkage_level": linkage_level,
                 "linkage_basis": linkage.get("basis"),
                 "change_pct": stock.get("change_pct"),
+                "seal_state": stock.get("seal_state"),
                 "expected_rank": rank,
             }
             records.append({**common, "stage": "rank", "decision": rank_decision,
@@ -429,11 +431,31 @@ def archive_notification_pipeline(
 
 
 def replay_decision(stage: str, evidence: dict) -> str:
-    """Re-evaluate one archived stage using archived facts only."""
+    """Re-evaluate one archived stage using archived facts only.
+
+    Legacy v1 rows used ``sealed_pool`` as a permanent reject fact; keep that historical replay
+    semantics.  v2 rows instead carry ``ever_sealed/current_sealed/snapshot_state/version`` so an
+    ever-sealed stock can reopen without rewriting old evidence.
+    """
+    def seal_gate(facts: dict) -> str | None:
+        if facts.get("sealed_pool") is True:  # legacy v1 evidence
+            return "rejected"
+        if facts.get("current_sealed") is True:
+            return "rejected"
+        if facts.get("ever_sealed") is True:
+            if facts.get("current_sealed") is None:
+                return "unknown"
+            if facts.get("snapshot_state") != "ready" or not facts.get("version"):
+                return "unknown"
+        return None
+
     if stage == "candidate":
         facts = evidence.get("facts") or {}
-        if facts.get("sealed_pool") is True or facts.get("board_tradable") is False:
+        if facts.get("board_tradable") is False:
             return "rejected"
+        sealed = seal_gate(facts)
+        if sealed is not None:
+            return sealed
         if facts.get("quote_present") is False or (
             "change_pct" in facts and facts.get("change_pct") is None
         ):
@@ -449,8 +471,11 @@ def replay_decision(stage: str, evidence: dict) -> str:
         return "included"
     if stage == "hard_gate":
         facts = evidence.get("facts") or {}
-        if facts.get("sealed_pool") is True or facts.get("board_tradable") is False:
+        if facts.get("board_tradable") is False:
             return "rejected"
+        sealed = seal_gate(facts)
+        if sealed is not None:
+            return sealed
         if facts.get("quote_present") is False or (
             "change_pct" in facts and facts.get("change_pct") is None
         ):
