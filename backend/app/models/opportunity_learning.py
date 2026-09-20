@@ -35,6 +35,7 @@ class OpportunityDecisionSnapshot(Base):
     strategy_version: Mapped[str] = mapped_column(String(64))
     feature_version: Mapped[str] = mapped_column(String(64))
     data_state: Mapped[str] = mapped_column(String(16), default="ready")
+    # 历史列名：决策时点引用报价（通知/回放参考），**不是成交价**；真实模拟成交只认 PaperOrder.filled_price。
     entry_price: Mapped[float | None] = mapped_column(Float, default=None)
     evidence: Mapped[str] = mapped_column(Text, default="{}")
     # ── 场景化 KB 路由的记录项（蓝图 §5，`RSH-027` 切片 1）─────────────────────

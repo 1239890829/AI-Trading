@@ -32,23 +32,25 @@
 
 **统一执行快照与证据重放**
 
-- **状态**：部分完成
+- **状态**：待交付
 - **优先级**：P0
 - **阶段门**：G1
 - **门内序**：20
 - **门禁角色**：阻断
 - **依赖**：无
 - **效果前置**：无
-- **方案依据**：主方案 F01、§5、W03
-- **范围**：复用 decision ledger、执行 gate 和 RSH-026 快照；页面/提醒/模拟动作共用同一当时事实，生成态保持不可变。
-- **验收**：统一 snapshot/decision/version；年龄、参数与迟滞可解释；旧/新影子逐条对照，关键风险场景同口径。U47 额外要求同一 decision/version 内明确区分 `reference_entry`（首次观察/触发的反事实参考价）与 `executable_snapshot/fill`（动作前重检后的可成交事实），任何 UI、统计或复盘都不得把前者冒充成交价。
-- **证据**：已有生成、盘中重检和逐股快照；它们尚不等于全执行链统一。
-- **下一步**：先核时效/版本分叉和消费者；跨模块追溯比新建快照库优先。
-- **恢复**：保留旧生成态及影子记录；差异未经批准不切外推，缺数据显式降级。
-- **开工前置**：只需选定场景、现有快照与可重复载荷；不等待 BUG-020/IMP-044 全任务完成。
-- **发布前置**：相关数据字段通过 BUG-020；切外发时依赖 IMP-044 的持久化/过期重检；无外发影子对照可先行。
-- **实施步骤**：①核 backend/app/api/routes/picks.py 与 backend/app/picks/buy_point.py 的生成态/实时态；②复用 opportunity_learning/现有 gate 的 version+as_of；③按字段时效生成一致执行截面，拒旧序列；④页面/提醒/模拟动作同源关联；⑤保留原生成判断、差异原因和影子结果，不先改策略阈值。
-- **v9.3/v9.8契约**：统一opportunity/decision版本及first_seen/trigger/asof/失效；`first_seen` 不覆盖，盘中每次有意义的新事实形成可追溯 decision version，允许早盘等待/拒绝在午后条件变化后重新进入评估，但旧判定仍可重放。GET装配中的机会归档与登记迁至已有后台拥有者；可保留只读缓存/访问日志，但打开页面不能生成研究样本、收费推理或动作。视图计算与业务判定分开，不机械把CSS和图形坐标搬后端。
+- **方案依据**：主方案 F01、§5、W03；U47 / hunting-decision-design §4.1。
+- **范围**：复用 `OpportunityDecisionSnapshot`、现有 buy-point gate、AlertEvent 与 PaperTradingEngine；不新建第二事实库。页面/提醒/模拟动作引用同一当时事实，生成态和历史 decision 仍 append-only。
+- **验收**：统一 snapshot/decision/version；年龄、参数与迟滞可解释；`reference_entry`（组合生成/首见参考）与 `executable_snapshot`（动作时重检）及 `PaperOrder.filled_price`（真实模拟成交）永久分名。动作时行情非 `ready` 必须 fail-closed，只留参考/拒绝证据；页面 GET 不生成新样本。
+- **证据**：候选分支 `chatgpt/imp006-execution-snapshot` 引入 `execution-facts-v1`：同日同场景同股 `decision_id` 稳定，`decision_version` 只由会改变判定的物质事实生成，通知发送/去重不伪造新交易版本；动作时快照携 source/as_of/received_at/freshness，`stale/degraded/unavailable/unknown` 从命中降为明确拒绝。乱序晚到旧 notification snapshot 被拒，不允许页面“最新版本”倒退。
+- **消费者闭环**：完整事实唯一留在 `OpportunityDecisionSnapshot.evidence`；AlertEvent、watch ledger、position plan 只存 `decision_id/version` 与必要价格身份引用，避免复制第二事实源；自动模拟仓沿同一引用下单，真实成交仍只认 order/fill；`GET /api/picks/today` 只读挂最新执行版本，PickCard 同屏分开显示“参考价 / 执行快照”，并对陈旧/降级/不可用显式标注“不是成交”。
+- **验证**：定向后端执行链全绿；完整后端 `4015 passed, 80 skipped`，随后 `pyflakes app tests` 通过。前端 TypeScript、ESLint 通过；默认时区与 `TZ=UTC` 均为 `73 files / 695 tests` 全绿；Next.js 16.3.3 production build 通过；`PickCard` 定向 37/37；`git diff --check` 与 public-repo scan 通过。未改变选股阈值、仓位参数、真实券商/权限或策略收益口径。
+- **送审边界**：以上是作者实施与自检，**不是独立审核/发布放行**。准确候选仍须走 PR、required CI 与网页独立代码审核；审核前不得把本项标 `已完成`，也不得据此提前开工 IMP-044/IMP-049/IMP-053。
+- **下一步**：对准确 PR HEAD 独立复核 reference→snapshot→AlertEvent→paper order→UI 全链及非 ready 反例；若 APPROVED 且 required CI 全绿再合并并标 `已完成`。随后重算阶段门：若 BUG-020 真实交易时段条件仍未变为可行动，则 G1 下一阻断项为 **IMP-044**；若其条件已满足，G0 重新抢占。
+- **恢复**：回退本片可停止新 execution contract/read-view，同时保留旧 `OpportunityDecisionSnapshot`、AlertEvent、paper order/position plan 与历史 v1/v2 证据；不得回退为“参考价=成交价”、允许 stale 行情执行或用通知发送状态制造交易版本。
+- **开工前置**：已满足；本片不等待 BUG-020/IMP-044 全任务完成。
+- **发布前置**：相关 BUG-020 数据字段代码契约已复用；BUG-020 的真实交易时段生产会话仍按原任务 `待条件`，不被本片冒充完成。任何外发可靠性切换仍受 IMP-044 约束。
+- **v9.3/v9.8契约**：统一 opportunity/decision 版本及 first_seen/trigger/asof/失效；`first_seen` 不覆盖，盘中新物质事实形成可追溯 decision version，旧判定仍可重放。GET 只读、业务判定由后台拥有；页面打开不能生成研究样本、收费推理或动作。
 
 
 ## IMP-053

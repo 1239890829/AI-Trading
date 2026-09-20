@@ -43,6 +43,22 @@ def _db():
     return get_session_factory()()
 
 
+def _attach_latest_execution(items: list[dict], trade_date: str) -> list[dict]:
+    """给每日精选挂最新一版执行复核事实；纯读，不触发新判定/新样本（IMP-006）。"""
+    try:
+        from app.picks.opportunity_learning import latest_notification_execution
+
+        latest = latest_notification_execution(trade_date, get_session_factory())
+    except Exception as exc:  # noqa: BLE001 — 执行证据读失败不能拖垮每日精选
+        log.warning("picks latest execution read failed: %s", exc)
+        latest = {}
+    return [
+        {**it, "execution": latest.get(str(it.get("symbol") or ""))}
+        for it in (items or [])
+        if isinstance(it, dict)
+    ]
+
+
 @router.post("/generate")
 async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: None = Depends(require_write_token)) -> dict:
     """生成今日组合（T 日收盘后跑，产出 T+1 组合；重复生成覆盖当日行）。
@@ -215,7 +231,7 @@ async def today_picks(request: Request, hub: QuoteHub = Depends(get_hub)) -> dic
             return {
                 "data": {
                     "date": row.date,
-                    "items": json.loads(row.items),
+                    "items": _attach_latest_execution(json.loads(row.items), row.date),
                     "stale": row.date != today,
                     "meta": meta,
                 },
@@ -227,7 +243,7 @@ async def today_picks(request: Request, hub: QuoteHub = Depends(get_hub)) -> dic
         return {
             "data": {
                 "date": row.date,
-                "items": json.loads(row.items),
+                "items": _attach_latest_execution(json.loads(row.items), row.date),
                 "replaced": json.loads(row.replaced or "[]"),
                 "meta": meta,
             },

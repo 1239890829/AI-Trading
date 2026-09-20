@@ -920,6 +920,10 @@ def _alert_price(alert: dict, snap_price: float | None = None) -> float | None:
     跳过（不产生 verdict），`maybe_open` 会拒绝开仓——**宁可不判，不可判错**。
     """
     meta = alert.get("meta") or {}
+    execution_ref = meta.get("execution_ref") or {}
+    p = execution_ref.get("execution_snapshot_price")
+    if isinstance(p, (int, float)) and p > 0:
+        return float(p)
     p = meta.get("price")
     if isinstance(p, (int, float)) and p > 0:
         return float(p)
@@ -990,8 +994,13 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
                     layer="pre_limit" if alert.get("kind") == "pre_limit"
                     else ("today_strongest" if (rule_provider is not None) else "quiet_starting"),
                     source_theme=str(alert.get("direction") or ""),
-                    reason={"kind": alert.get("kind"), "text": (alert.get("text") or "")[:300],
-                            "direction": alert.get("direction") or ""},
+                    reason={
+                        "kind": alert.get("kind"),
+                        "text": (alert.get("text") or "")[:300],
+                        "direction": alert.get("direction") or "",
+                        "decision_id": ((alert.get("meta") or {}).get("execution_ref") or {}).get("decision_id"),
+                        "decision_version": ((alert.get("meta") or {}).get("execution_ref") or {}).get("decision_version"),
+                    },
                     entry_price=_alert_price(alert, snap_price),
                     entry_time=beijing_now().strftime("%H:%M:%S"),
                 )
@@ -1007,6 +1016,7 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
                 symbol=str(alert["symbol"]), name=str(alert.get("name") or ""),
                 trigger=str(alert["kind"]),
                 price=_alert_price(alert, _snapshot_price(app, alert.get("symbol"))),
+                decision_context=((alert.get("meta") or {}).get("execution_ref") or None),
             )
 
     state = app.state if hasattr(app, "state") else app
@@ -1026,6 +1036,10 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
     }
     if isinstance(alert.get("card"), dict):
         snapshot["card"] = alert["card"]
+    if isinstance(meta.get("execution_ref"), dict):
+        # IMP-006：AlertEvent 的 snapshot 只有 1024 字符容量；这里只存稳定引用和
+        # 必要价格身份，完整执行事实唯一保留在 OpportunityDecisionSnapshot。
+        snapshot["execution_ref"] = meta["execution_ref"]
     event = repo.record_trigger(
         rule.id,
         alert.get("symbol") or "000000",
