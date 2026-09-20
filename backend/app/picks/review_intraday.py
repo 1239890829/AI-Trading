@@ -192,6 +192,23 @@ def should_run_review(
     return brief_exists and not already_reviewed
 
 
+def d0_path_retry_slot(
+    now: datetime, *, run_hour: int, run_minute: int,
+    retry_every_minutes: int = 15, retry_window_minutes: int = 60,
+) -> int | None:
+    """Bounded same-evening retry slot for transient D0 minute-path gaps.
+
+    The first collection happens inside run_review at the scheduled review time.
+    Retries start one interval later and stop after a short window so a persistent
+    upstream outage cannot turn into all-evening per-symbol polling.
+    """
+    start = run_hour * 60 + run_minute
+    elapsed = now.hour * 60 + now.minute - start
+    if elapsed < retry_every_minutes or elapsed > retry_window_minutes:
+        return None
+    return elapsed // retry_every_minutes
+
+
 # ---------------------------------------------------------------- 纯函数：单方向复盘
 
 
@@ -398,6 +415,7 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
     ledger_settled = None
     opportunity_labels = None
     opportunity_horizons = None
+    opportunity_path = None
     horizon_prepared: list[dict] = []
     with contextlib.suppress(Exception):
         from app.picks.watch_ledger import get_day, settle_day, validate_previous_day
@@ -446,11 +464,12 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
             opportunity_horizons.append(
                 label_due_outcomes(target_date, target_closes, _gsf())
             )
+        opportunity_path = await collect_d0_path_outcomes(state, tdate, _gsf())
         # 次日持续性验证（闭环「验证」段）：T-1 行写回 T 收盘表现
         d1_n = validate_previous_day(closes, _gsf())
         log.info(
-            "watch ledger settle: %s | opportunity labels: %s | future horizons: %s | D+1 验证 %s 行",
-            ledger_settled, opportunity_labels, opportunity_horizons, d1_n,
+            "watch ledger settle: %s | opportunity labels: %s | future horizons: %s | D0 path: %s | D+1 验证 %s 行",
+            ledger_settled, opportunity_labels, opportunity_horizons, opportunity_path, d1_n,
         )
 
     log.info(
@@ -462,6 +481,7 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
     return {"ok": True, "brief_date": target, "directions": reviews, "alert_backfill": backfill,
             "ledger_settled": ledger_settled, "opportunity_labels": opportunity_labels,
             "opportunity_horizons": opportunity_horizons,
+            "opportunity_path": opportunity_path,
             "outcome_horizons_prepared": horizon_prepared}
 
 
@@ -475,6 +495,93 @@ def _tencent_provider(hub):
          if getattr(p, "name", "") == "tencent"),
         hub.provider,
     )
+
+
+def _strict_tencent_minute_provider(hub):
+    """Return Tencent only; D0 path timestamps must not cross provider time semantics."""
+    provider = getattr(hub, "provider", None)
+    candidates = list(getattr(provider, "providers", None) or [provider])
+    return next((p for p in candidates if getattr(p, "name", "") == "tencent"), None)
+
+
+async def collect_d0_path_outcomes(state, trade_date: str, session_factory=None) -> dict:
+    """Collect selected-only D0 path facts after close.
+
+    Minute bars are Tencent-only. Ever-hit-limit uses the union of final limit-up
+    and limit-break pools; absence becomes `not_hit` only when both universes are
+    known. Any unavailable minute series stays pending rather than falling back to
+    a provider with incompatible timestamp semantics.
+    """
+    from app.core.db import get_session_factory
+    from app.picks.opportunity_learning import label_d0_paths, pending_d0_path_symbols
+
+    sf = session_factory or get_session_factory()
+    symbols = pending_d0_path_symbols(trade_date, sf)
+    if not symbols:
+        return {"trade_date": trade_date, "symbols": 0, "labeled": 0, "pending": 0, "unknown": 0}
+
+    hub = state.hub
+    minute_provider = _strict_tencent_minute_provider(hub)
+    minute_by_symbol: dict[str, list] = {}
+    minute_failed: list[str] = []
+    if minute_provider is not None:
+        for symbol in sorted(symbols):
+            try:
+                minute_by_symbol[symbol] = await minute_provider.get_kline(symbol, "1m")
+            except Exception as exc:  # provider failure is evidence gap, not path=0
+                minute_failed.append(symbol)
+                log.warning("D0 path minute kline %s failed: %s", symbol, exc)
+    else:
+        minute_failed = sorted(symbols)
+
+    first_seal_by_symbol: dict[str, str | None] = {}
+    up_known = break_known = False
+
+    def absorb(rows):
+        for row in rows:
+            symbol = getattr(row, "symbol", None) if not isinstance(row, dict) else row.get("symbol")
+            if not symbol:
+                continue
+            first = (
+                getattr(row, "first_seal_time", None)
+                if not isinstance(row, dict) else row.get("first_seal_time")
+            )
+            key = str(symbol)
+            # Preserve a known timestamp if another pool view carries the same
+            # member but no first-seal timestamp.
+            if key not in first_seal_by_symbol or first:
+                first_seal_by_symbol[key] = first
+
+    try:
+        rows = await hub.provider.get_limit_up_pool(date.fromisoformat(trade_date))
+        if isinstance(rows, list):
+            up_known = True
+            absorb(rows)
+    except Exception as exc:
+        log.warning("D0 path limit-up pool failed: %s", exc)
+    try:
+        rows = await hub.provider.get_limit_break_pool(date.fromisoformat(trade_date))
+        if isinstance(rows, list):
+            break_known = True
+            absorb(rows)
+    except Exception as exc:
+        log.warning("D0 path limit-break pool failed: %s", exc)
+
+    # Absence means `not_hit` only when both final-limit and broken-limit universes
+    # are known. Membership in either pool is enough to prove an intraday hit.
+    limit_pool_known = up_known and break_known
+    result = label_d0_paths(
+        trade_date, minute_by_symbol, first_seal_by_symbol=first_seal_by_symbol,
+        limit_pool_known=limit_pool_known, session_factory=sf,
+    )
+    return {
+        **result, "symbols": len(symbols),
+        "minute_source": "tencent" if minute_provider is not None else None,
+        "minute_failed": minute_failed,
+        "limit_universe_complete": limit_pool_known,
+        "limit_up_known": up_known, "limit_break_known": break_known,
+        "ever_limit_members": len(first_seal_by_symbol),
+    }
 
 
 def _parse_brief_date(s: Any) -> date | None:
@@ -687,6 +794,7 @@ async def intraday_review_scheduler(
     非交易日自然跳过（无简报文件）。无简报不报警（盘前调度失败时这里安静，
     手动端点 /intraday-review/run 可补跑）。
     """
+    last_path_retry_key: tuple[str, int] | None = None
     while not stop.is_set():
         try:
             now = beijing_now()
@@ -700,6 +808,35 @@ async def intraday_review_scheduler(
                 already_reviewed=(payload or {}).get("review", {}).get("trigger") == "schedule",
             ):
                 await run_review(app, trigger="schedule")
+
+            # The review file is intentionally idempotent, but D0 minute evidence is
+            # a separate market-data fact. If the first 15:35 fetch was transiently
+            # unavailable/truncated, retry only still-pending selected symbols in a
+            # bounded one-hour window. This does not reopen the full review or expand
+            # requests to rejected/deferred funnel rows.
+            retry_slot = d0_path_retry_slot(
+                now, run_hour=run_hour, run_minute=run_minute
+            )
+            retry_key = (target, retry_slot) if retry_slot is not None else None
+            if (
+                payload is not None
+                and retry_key is not None
+                and retry_key != last_path_retry_key
+            ):
+                try:
+                    from app.picks.opportunity_learning import pending_d0_path_symbols
+
+                    trade_date = now.date().isoformat()
+                    if pending_d0_path_symbols(trade_date):
+                        path_retry = await collect_d0_path_outcomes(
+                            _normalize_state(app), trade_date
+                        )
+                        log.info("D0 path bounded retry slot=%s: %s", retry_slot, path_retry)
+                except Exception:
+                    log.warning("D0 path bounded retry failed", exc_info=True)
+                finally:
+                    last_path_retry_key = retry_key
+
             # 批次 D：题材热度时序前向落库（独立于复盘成败；自带磁盘幂等，
             # 已落库的 tick 不会再碰行情配额）。窗口与复盘一致：run_hour–23 点。
             # B1：飙升榜收盘快照同 tick 落库（独立文件、独立去重，失败互不影响）。

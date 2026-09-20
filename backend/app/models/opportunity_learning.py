@@ -87,6 +87,22 @@ class OpportunityOutcomeLabel(Base):
     net_return_pct: Mapped[float | None] = mapped_column(Float, default=None)
     reason: Mapped[str] = mapped_column(Text, default="")
     source: Mapped[str] = mapped_column(String(32), default="daily_close")
+    # RSH-026 path outcomes: separate future/result facts from the immutable decision snapshot.
+    # `path_state` is explicit because NULL/zero cannot distinguish "not collected" from "no excursion".
+    path_state: Mapped[str] = mapped_column(String(16), default="unknown", index=True)
+    path_high_price: Mapped[float | None] = mapped_column(Float, default=None)
+    path_low_price: Mapped[float | None] = mapped_column(Float, default=None)
+    mfe_pct: Mapped[float | None] = mapped_column(Float, default=None)
+    mae_pct: Mapped[float | None] = mapped_column(Float, default=None)
+    path_bar_count: Mapped[int | None] = mapped_column(Integer, default=None)
+    limit_state: Mapped[str] = mapped_column(String(24), default="unknown")
+    first_limit_time: Mapped[str | None] = mapped_column(String(8), default=None)
+    time_to_limit_minutes: Mapped[float | None] = mapped_column(Float, default=None)
+    path_source: Mapped[str] = mapped_column(String(64), default="")
+    path_version: Mapped[str] = mapped_column(String(32), default="")
+    path_reason: Mapped[str] = mapped_column(Text, default="")
+    # Terminal resolution time for either labeled or explicit terminal-unknown path facts.
+    path_resolved_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     labeled_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 

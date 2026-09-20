@@ -26,12 +26,13 @@ from typing import Any, Iterable
 
 from sqlalchemy import select
 
-from app.core.bjtime import beijing_now
+from app.core.bjtime import beijing_now, to_beijing_naive
 from app.core.db import get_session_factory, utcnow
 from app.market import price_rules
 from app.models.opportunity_learning import OpportunityDecisionSnapshot, OpportunityOutcomeLabel
 from app.paper.engine import calc_fee
 from app.picks.kb_routing import snapshot_citations
+from app.services.theme_service import parse_hhmmss
 
 STRATEGY_VERSION = "stock-opportunity-funnel-v2"
 FEATURE_VERSION = "pit-evidence-v2"
@@ -43,6 +44,7 @@ OUTCOME_HORIZONS = {
     "d5_close": 5,
 }
 FUTURE_OUTCOME_HORIZONS = tuple(h for h in OUTCOME_HORIZONS if h != OUTCOME_HORIZON)
+PATH_VERSION = "d0-path-v1.tencent1m.zt-zb"
 STAGES = ("candidate", "hard_gate", "rank", "notification")
 
 #: 成本口径版本。**变更费率假设或可成交判据时必须递增**——结果标签是 append-only 的，
@@ -493,6 +495,7 @@ def _new_horizon_outcome(
         state="pending" if selected else "deferred", label="unknown",
         reference_price=snapshot.entry_price,
         fill_state="pending" if selected else "not_actionable",
+        path_state="not_started", path_version="",
         reason=(
             f"等待 {horizon}@{target_date} 收盘价" if selected
             else (
@@ -554,6 +557,7 @@ def _new_outcome_label(snapshot_id: str, record: dict) -> OpportunityOutcomeLabe
         state="pending" if selected else "deferred", label="unknown",
         reference_price=record.get("entry_price"),
         fill_state="pending" if selected else "not_actionable",
+        path_state="pending" if selected else "deferred", path_version=PATH_VERSION,
         reason=(
             "等待收盘价" if selected
             else f"全漏斗分母已登记；{record['stage']}:{record['decision']} 非实时动作样本，等待离线结果回填"
@@ -779,6 +783,232 @@ def replay_run(run_id: str, session_factory=None) -> dict:
             "kb_refs": _load_json(row.kb_refs, {}),
         })
     return {"run_id": run_id, "records": len(items), "mismatches": mismatches, "items": items}
+
+
+def _continuous_trading_minutes(start: datetime, end: datetime) -> float:
+    """A-share continuous-session elapsed minutes, excluding the lunch break."""
+    if end <= start:
+        return 0.0
+    day = start.date()
+    sessions = (
+        (
+            datetime.combine(day, datetime.min.time()).replace(hour=9, minute=30),
+            datetime.combine(day, datetime.min.time()).replace(hour=11, minute=30),
+        ),
+        (
+            datetime.combine(day, datetime.min.time()).replace(hour=13),
+            datetime.combine(day, datetime.min.time()).replace(hour=15),
+        ),
+    )
+    seconds = 0.0
+    for session_start, session_end in sessions:
+        left = max(start, session_start)
+        right = min(end, session_end)
+        if right > left:
+            seconds += (right - left).total_seconds()
+    return round(seconds / 60.0, 2)
+
+
+def _limit_timing(
+    trade_date: str, decision_at: datetime, *, limit_member: bool | None,
+    first_seal_time: str | None,
+) -> dict[str, Any]:
+    if limit_member is None:
+        return {"limit_state": "unknown", "first_limit_time": None, "time_to_limit_minutes": None}
+    if not limit_member:
+        return {"limit_state": "not_hit", "first_limit_time": None, "time_to_limit_minutes": None}
+    parsed = parse_hhmmss(first_seal_time)
+    if parsed is None:
+        return {"limit_state": "hit_time_unknown", "first_limit_time": None, "time_to_limit_minutes": None}
+    hh, mm, ss = parsed // 10000, (parsed // 100) % 100, parsed % 100
+    if hh > 23 or mm > 59 or ss > 59:
+        return {"limit_state": "hit_time_unknown", "first_limit_time": None, "time_to_limit_minutes": None}
+    first_text = f"{hh:02d}:{mm:02d}:{ss:02d}"
+    seal_at = datetime.combine(date.fromisoformat(trade_date), datetime.min.time()).replace(
+        hour=hh, minute=mm, second=ss
+    )
+    delta = (seal_at - decision_at).total_seconds() / 60.0
+    if delta <= 0:
+        return {
+            "limit_state": "preexisting", "first_limit_time": first_text,
+            "time_to_limit_minutes": None,
+        }
+    return {
+        "limit_state": "hit", "first_limit_time": first_text,
+        # Continuous-session lead time is the actionable clock. Natural elapsed
+        # time would count the 11:30-13:00 lunch break and overstate opportunity.
+        "time_to_limit_minutes": _continuous_trading_minutes(decision_at, seal_at),
+    }
+
+
+def d0_path_metrics(
+    snapshot: OpportunityDecisionSnapshot, minute_bars: Iterable[Any], *,
+    limit_member: bool | None = None, first_seal_time: str | None = None,
+) -> dict[str, Any]:
+    """Decision-time-safe D0 path metrics from **Tencent 1m only**.
+
+    Complete minute bars must be strictly later than ``snapshot.as_of``.  This
+    deliberately drops the decision minute so a bar containing pre-decision ticks
+    cannot leak into MFE/MAE.  Cross-provider minute fallback is forbidden here:
+    current Eastmoney minute timestamps do not share Tencent's UTC normalization.
+    """
+    decision_at = to_beijing_naive(snapshot.as_of) if snapshot.as_of else None
+    timing = (
+        _limit_timing(
+            snapshot.trade_date, decision_at,
+            limit_member=limit_member, first_seal_time=first_seal_time,
+        )
+        if decision_at is not None
+        else {"limit_state": "unknown", "first_limit_time": None, "time_to_limit_minutes": None}
+    )
+    source = "tencent_1m+zt_zb_pools" if limit_member is not None else "tencent_1m"
+    base = {
+        **timing,
+        "path_version": PATH_VERSION,
+        "path_source": source,
+        "path_high_price": None,
+        "path_low_price": None,
+        "mfe_pct": None,
+        "mae_pct": None,
+        "path_bar_count": 0,
+    }
+    reference = snapshot.entry_price if _positive_finite(snapshot.entry_price) else None
+    if decision_at is None or decision_at.date().isoformat() != snapshot.trade_date:
+        return {**base, "path_state": "unknown", "path_reason": "决策 as_of 缺失或与 trade_date 不一致"}
+    if reference is None:
+        return {**base, "path_state": "unknown", "path_reason": "决策 reference 价格缺失，无法计算路径收益"}
+
+    valid: list[tuple[datetime, float, float]] = []
+    for bar in minute_bars or []:
+        if getattr(bar, "source", None) != "tencent":
+            continue
+        ts = getattr(bar, "ts", None)
+        if not isinstance(ts, datetime):
+            continue
+        local_ts = to_beijing_naive(ts)
+        # Strictly later than the decision timestamp: no partial decision-minute leakage.
+        if local_ts.date().isoformat() != snapshot.trade_date or local_ts <= decision_at:
+            continue
+        high, low = getattr(bar, "high", None), getattr(bar, "low", None)
+        if not (_positive_finite(high) and _positive_finite(low)) or float(high) < float(low):
+            continue
+        valid.append((local_ts, float(high), float(low)))
+    if not valid:
+        return {**base, "path_state": "pending", "path_reason": "腾讯1m尚无决策后完整分钟 bar；保留待补"}
+
+    # D0 MFE/MAE must cover the rest of the trading day, not merely a valid prefix.
+    # Tencent m1 is rolling/capped, so an early or truncated fetch can otherwise
+    # understate afternoon excursion while still looking syntactically valid.
+    last_bar_at = max(v[0] for v in valid)
+    if (last_bar_at.hour, last_bar_at.minute) < (15, 0):
+        return {
+            **base,
+            "path_state": "pending",
+            "path_bar_count": len(valid),
+            "path_reason": (
+                "腾讯1m决策后序列尚未覆盖收盘；"
+                f"last_bar={last_bar_at.strftime('%H:%M')}，不得把截断前缀冒充D0完整路径"
+            ),
+        }
+
+    high = max(v[1] for v in valid)
+    low = min(v[2] for v in valid)
+    mfe = round(max(0.0, (high / float(reference) - 1.0) * 100.0), 2)
+    mae = round(min(0.0, (low / float(reference) - 1.0) * 100.0), 2)
+    return {
+        **base,
+        "path_state": "labeled",
+        "path_reason": "严格使用决策时点之后的腾讯1m完整 bar；不含决策当分钟",
+        "path_high_price": high,
+        "path_low_price": low,
+        "mfe_pct": mfe,
+        "mae_pct": mae,
+        "path_bar_count": len(valid),
+    }
+
+
+def pending_d0_path_symbols(
+    trade_date: str, session_factory=None, *, include_deferred: bool = False,
+) -> set[str]:
+    """D0 symbols needing path evidence; realtime mode remains selected-only."""
+    sf = session_factory or get_session_factory()
+    with sf() as db:
+        rows = db.execute(
+            select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
+            .join(OpportunityDecisionSnapshot,
+                  OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
+            .where(
+                OpportunityDecisionSnapshot.trade_date == trade_date,
+                OpportunityOutcomeLabel.horizon == OUTCOME_HORIZON,
+                OpportunityOutcomeLabel.path_state.in_(("unknown", "pending", "deferred")),
+            )
+        ).all()
+    symbols = set()
+    for outcome, snapshot in rows:
+        selected = _selected_outcome_snapshot(snapshot.stage, snapshot.decision)
+        if not selected and not include_deferred:
+            continue
+        # Legacy rows are `unknown` with no path version and are eligible for self-heal.
+        # Current-version `unknown` is terminal (e.g. reference missing) and must not
+        # trigger the same minute request on every EOD run.
+        if outcome.path_state == "unknown" and outcome.path_version == PATH_VERSION:
+            continue
+        symbols.add(snapshot.symbol)
+    return symbols
+
+
+def label_d0_paths(
+    trade_date: str, minute_by_symbol: dict[str, list[Any]], *,
+    first_seal_by_symbol: dict[str, str | None] | None = None,
+    limit_pool_known: bool = False, session_factory=None, include_deferred: bool = False,
+) -> dict[str, Any]:
+    """Attach D0 post-decision path facts without changing close labels or snapshots."""
+    sf = session_factory or get_session_factory()
+    first_seal_by_symbol = first_seal_by_symbol or {}
+    labeled = pending = unknown = skipped_deferred = 0
+    with sf() as db:
+        rows = db.execute(
+            select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
+            .join(OpportunityDecisionSnapshot,
+                  OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
+            .where(
+                OpportunityDecisionSnapshot.trade_date == trade_date,
+                OpportunityOutcomeLabel.horizon == OUTCOME_HORIZON,
+                OpportunityOutcomeLabel.path_state.in_(("unknown", "pending", "deferred")),
+            )
+        ).all()
+        for outcome, snapshot in rows:
+            selected = _selected_outcome_snapshot(snapshot.stage, snapshot.decision)
+            if not selected and not include_deferred:
+                skipped_deferred += 1
+                continue
+            if outcome.path_state == "unknown" and outcome.path_version == PATH_VERSION:
+                continue
+            member = (
+                True if snapshot.symbol in first_seal_by_symbol
+                else False if limit_pool_known else None
+            )
+            metrics = d0_path_metrics(
+                snapshot, minute_by_symbol.get(snapshot.symbol) or [],
+                limit_member=member,
+                first_seal_time=first_seal_by_symbol.get(snapshot.symbol),
+            )
+            for key, value in metrics.items():
+                setattr(outcome, key, value)
+            if metrics["path_state"] == "labeled":
+                outcome.path_resolved_at = utcnow()
+                labeled += 1
+            elif metrics["path_state"] == "unknown":
+                outcome.path_resolved_at = utcnow()
+                unknown += 1
+            else:
+                pending += 1
+        db.commit()
+    return {
+        "trade_date": trade_date, "labeled": labeled, "pending": pending,
+        "unknown": unknown, "skipped_deferred": skipped_deferred,
+        "limit_pool_known": limit_pool_known,
+    }
 
 
 def pending_outcome_targets(
@@ -1011,6 +1241,27 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
         (snapshot.run_id, snapshot.symbol) for outcome, snapshot in outcomes
         if outcome.state == "labeled" and _finite_number(outcome.return_pct)
     }
+    # Path denominator comes from immutable selected snapshots, not the outcome
+    # join, so missing outcome attachment remains visible as missing coverage.
+    selected_path_opportunities = {
+        (snapshot.run_id, snapshot.symbol) for snapshot in snapshots
+        if _selected_outcome_snapshot(snapshot.stage, snapshot.decision)
+    }
+    labeled_path_opportunities = {
+        (snapshot.run_id, snapshot.symbol) for outcome, snapshot in outcomes
+        if _selected_outcome_snapshot(snapshot.stage, snapshot.decision)
+        and outcome.path_state == "labeled"
+        and outcome.path_version == PATH_VERSION
+    }
+    path_state_counts = Counter(outcome.path_state for outcome, _snapshot in outcomes)
+    current_path_state_counts = Counter(
+        outcome.path_state for outcome, _snapshot in outcomes
+        if outcome.path_version == PATH_VERSION
+    )
+    path_version_counts = Counter(
+        outcome.path_version or "legacy_unversioned" for outcome, _snapshot in outcomes
+    )
+    limit_state_counts = Counter(outcome.limit_state for outcome, _snapshot in outcomes)
     horizon_coverage: dict[str, dict] = {}
     for horizon in OUTCOME_HORIZONS:
         horizon_rows = [pair for pair in all_outcomes if pair[0].horizon == horizon]
@@ -1044,6 +1295,19 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
         # already have an outcome identity, not full-funnel denominator coverage.
         "label_coverage": round(labeled / eligible, 4) if eligible else None,
         "label_coverage_scope": "selected_outcome_rows_legacy",
+        "d0_path": {
+            "states": dict(sorted(path_state_counts.items())),
+            "current_version_states": dict(sorted(current_path_state_counts.items())),
+            "versions": dict(sorted(path_version_counts.items())),
+            "limit_states": dict(sorted(limit_state_counts.items())),
+            "selected_opportunities": len(selected_path_opportunities),
+            "labeled_selected_opportunities": len(labeled_path_opportunities),
+            "selected_path_coverage": (
+                round(len(labeled_path_opportunities) / len(selected_path_opportunities), 4)
+                if selected_path_opportunities else None
+            ),
+            "version": PATH_VERSION,
+        },
         "horizon_coverage": horizon_coverage,
         "funnel_denominator": {
             "snapshot_rows": len(snapshots),
@@ -1129,14 +1393,16 @@ def opportunity_scorecard(
 
     stage_order = {"rank": 0, "notification": 1, "hard_gate": 2, "candidate": 3}
 
-    def row_key(pair):
-        _outcome, snapshot = pair
+    def snapshot_key(snapshot):
         return (
             snapshot.as_of or datetime.max,
             stage_order.get(snapshot.stage, 99),
             snapshot.rank if snapshot.rank is not None else 10**9,
             snapshot.id or 0,
         )
+
+    def row_key(pair):
+        return snapshot_key(pair[1])
 
     def cost_proxy(pair) -> float | None:
         outcome, _snapshot = pair
@@ -1193,6 +1459,45 @@ def opportunity_scorecard(
         sample_by_symbol.setdefault(pair[1].symbol, pair)
     samples = list(sample_by_symbol.values())
 
+    # Path evidence has its own denominator. Define the sample from immutable
+    # selected snapshots *before* joining outcomes so a missing outcome row cannot
+    # disappear from coverage. The identity is the earliest selected decision for
+    # each symbol/trade_date; later refreshes must never substitute for a missing
+    # earliest outcome and make coverage look better.
+    path_snapshot_by_symbol: dict[str, OpportunityDecisionSnapshot] = {}
+    for snapshot in sorted(
+        [
+            snapshot for snapshot in funnel_snapshots
+            if _selected_outcome_snapshot(snapshot.stage, snapshot.decision)
+        ],
+        key=snapshot_key,
+    ):
+        path_snapshot_by_symbol.setdefault(snapshot.symbol, snapshot)
+    path_candidate_snapshots = list(path_snapshot_by_symbol.values())
+    path_outcome_by_snapshot_id = {
+        snapshot.snapshot_id: outcome for outcome, snapshot in rows
+    }
+    path_candidates = [
+        (path_outcome_by_snapshot_id[snapshot.snapshot_id], snapshot)
+        for snapshot in path_candidate_snapshots
+        if snapshot.snapshot_id in path_outcome_by_snapshot_id
+    ]
+    path_samples = [
+        outcome for outcome, _snapshot in path_candidates
+        if outcome.path_state == "labeled"
+        and outcome.path_version == PATH_VERSION
+        and _finite_number(outcome.mfe_pct) and _finite_number(outcome.mae_pct)
+    ]
+    path_limit_states = Counter(outcome.limit_state for outcome in path_samples)
+    limit_hits = [
+        outcome for outcome in path_samples
+        if outcome.limit_state == "hit" and _finite_number(outcome.time_to_limit_minutes)
+    ]
+    ever_limit_hits = sum(
+        path_limit_states.get(state, 0)
+        for state in ("hit", "preexisting", "hit_time_unknown")
+    )
+    limit_membership_evaluable = len(path_samples) - path_limit_states.get("unknown", 0)
     gross = [float(outcome.return_pct) for outcome, _snapshot in samples]
     proxy_pairs = [(pair, cost_proxy(pair)) for pair in samples]
     proxy_pairs = [(pair, value) for pair, value in proxy_pairs if value is not None]
@@ -1367,6 +1672,53 @@ def opportunity_scorecard(
             "fillable_labels": len(proxy),
             "net_pct_identity": "deprecated alias of cost_adjusted_d0_proxy_pct; not realizable",
         },
+        "path_metrics": (
+            {
+                "available": True,
+                "identity": (
+                    "D0 post-decision Tencent 1m through 15:00; decision minute excluded; "
+                    "independent of close-label availability; not shadow-fill P&L"
+                ),
+                "version": PATH_VERSION,
+                "sample_unit": "symbol_trade_date_earliest_selected_decision",
+                "denominator": len(path_candidate_snapshots),
+                "outcome_attached": len(path_candidates),
+                "evaluable": len(path_samples),
+                "coverage": (
+                    round(len(path_samples) / len(path_candidate_snapshots), 4)
+                    if path_candidate_snapshots else None
+                ),
+                "avg_mfe_pct": (
+                    round(sum(float(o.mfe_pct) for o in path_samples) / len(path_samples), 2)
+                    if path_samples else None
+                ),
+                "avg_mae_pct": (
+                    round(sum(float(o.mae_pct) for o in path_samples) / len(path_samples), 2)
+                    if path_samples else None
+                ),
+                "limit_states": dict(sorted(path_limit_states.items())),
+                "limit_membership_evaluable": limit_membership_evaluable,
+                "ever_limit_hits": ever_limit_hits,
+                # Compatibility name retained for this unreleased slice; this is
+                # specifically the subset with known post-decision first-seal time.
+                "limit_hits_after_decision": len(limit_hits),
+                "post_decision_timed_hits": len(limit_hits),
+                "avg_time_to_limit_minutes": (
+                    round(sum(float(o.time_to_limit_minutes) for o in limit_hits) / len(limit_hits), 2)
+                    if limit_hits else None
+                ),
+            }
+            if horizon == OUTCOME_HORIZON
+            else {
+                "available": False,
+                "identity": "D0-only path metrics; cross-day MFE/MAE accumulation not implemented",
+                "version": PATH_VERSION,
+                "evaluable": 0,
+                "coverage": None,
+                "avg_mfe_pct": None, "avg_mae_pct": None,
+                "limit_hits_after_decision": None, "avg_time_to_limit_minutes": None,
+            }
+        ),
         "precision_at_k": {
             "run_id": selected_run_id,
             "as_of": run_as_of.isoformat() if run_as_of else None,

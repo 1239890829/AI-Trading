@@ -1,6 +1,6 @@
-# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 全漏斗结果分母
+# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 D0 决策后路径结果
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** PR #67 / IMP-044 已合入 `master@6a711bd2a6c5280a8ca19263d314c38b4c0d695c`，post-merge master CI run `35516179312` 的 backend/frontend/docs 全部成功，功能分支已删除；旧 `workspace-retention-v9.8` 自动 purge 候选已在 PR #47 留退役说明并删除，远端当前只剩 `master`。账本机械计算后的最低可行动阻断门为 **G3 / RSH-026**。本轮网页端在降级模式下只实施 RSH-026 的“全漏斗 outcome 身份 + denominator gate + 跨版本自愈”纵切，不执行 IMP-020、不做策略晋级、不改生产权重或真实交易边界。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 已连续闭环两个子片：PR #69（全漏斗 outcome/denominator，merge `168368bb8981b14535c69d81100b4f578ac32ebd`，post-merge CI #503 全绿）与 PR #70（D1/D3/D5 交易日 horizon + selected-only 逾期恢复，merge `eed8214ffdf914dd06fbeba7d150e37dbcd140a1`，post-merge CI run `35519175943` backend/frontend/docs 全绿）；对应功能分支均已删除，远端只剩 `master`。当前仍在 **G3 / RSH-026**，本轮只实施“D0 决策后 MFE/MAE + ever-hit-limit / time_to_limit”纵切：结果写现有 `OpportunityOutcomeLabel`，不改决策 snapshot、不进入 IMP-020、不做策略晋级、不改生产权重或真实交易边界。
 
 
 ## 1. 固定入口与范围
@@ -89,12 +89,12 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **Degraded reason**：当前 Codex 额度不可用，正常双角色无法持续完成实施→独立审核→发布闭环；旧 exact-HEAD Review 门因此形成自锁。
 - **有效期**：持续到用户明确说 Codex 已恢复/退出降级；不是单 PR 临时口令。但每个 PR 的发布仍必须重新生成 exact-HEAD `DegradedRelease`，不能复用上一 PR 回执。
 - **不降低项**：G0–G5/GX 阶段门、U49 主动反证、branch protection、required CI、latest master、CHANGES_REQUESTED/thread、public-repo scan、workspace/doc-health、敏感信息/范围、post-merge CI、删除功能分支。
-- **当前动作**：U50、IMP-044 与 RSH-026/PR #69 全漏斗 denominator 子片均已闭环；当前仍在 G3/RSH-026，只执行 D1/D3/D5 交易日 horizon 子片。每个 PR 仍需新的 exact-HEAD `DegradedRelease`。
+- **当前动作**：U50、IMP-044、RSH-026/PR #69 denominator 与 PR #70 D1/D3/D5 horizon 子片均已闭环；当前仍在 G3/RSH-026，只执行 D0 决策后路径（MFE/MAE + ever-hit-limit/time_to_limit）子片。每个 PR 仍需新的 exact-HEAD `DegradedRelease`。
 
 ## 8.2 U49 主动审计回执（RSH-026 Preflight）
 
 - **阶段**：`Preflight`；对象是 G3/RSH-026 当前纵切。
-- **基点**：`master@6a711bd2a6c5280a8ca19263d314c38b4c0d695c`；U50 降级模式已生效。
+- **基点**：当前子片为 `master@eed8214ffdf914dd06fbeba7d150e37dbcd140a1`；本节同时保留 PR #69/#70 之前已发现并持续适用的 RSH-026 反例。U50 降级模式已生效。
 - **扫描范围**：`build_intraday_records/build_notification_records → archive_records → OpportunityDecisionSnapshot/OutcomeLabel → pending_symbols → review_intraday 收盘回填 → learning_summary/opportunity_scorecard → API/tests/migration`。
 - **已证实 P1-1 选择性分母**：旧 `archive_records` 只为 `ranked/eligible/notified/suppressed` 建 outcome；rejected/unknown 只留 snapshot，导致 `label_coverage=1.0` 仍可能漏掉全漏斗失败样本。
 - **已证实 P1-2 过早可成交主张**：pending outcome 未评估前默认 `fill_state=ok`，会把“尚未判定”静默写成“可成交”。
@@ -103,9 +103,22 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **本轮新增 P1-5 收益身份风险**：D1/D3/D5 虽满足 T+1 时间约束，但本表 reference_price 不是实际 shadow fill；跨日 `net_return_pct` 只能叫“成本调整 reference 代理”，`realizable_return=false`。
 - **本轮新增 P1-6 请求面风险**：为补全失败分母不能把 deferred/rejected 全量加入盘后实时 K 线请求；主链只用 `pending_outcome_targets(..., lookback_days=30)` 找 selected/actionable 的到期/逾期 horizon，并继续并入 D0 pending + watch ledger，失败分母留显式离线回填。
 - **本轮新增 P1-7 漏跑恢复风险**：只处理“今天到期”会让某日调度/数据源失败永久留下 pending。当前主链有界回看最近 30 个自然日内 selected future-horizon target，并为每个 symbol 只取一次日 K 后按目标交易日补标；超过窗口不自动扩大抓取面，保留 pending 供后续离线专项回补。
+- **本轮新增 P1-8 D0 前视风险**：不能用当日日线 high/low 算“决策后”MFE/MAE，因为日线包含决策前极值。当前只接受严格晚于 `snapshot.as_of` 的腾讯 1m 完整 bar，并保守排除决策当分钟。
+- **本轮新增 P1-9 分钟跨源时区风险**：腾讯 1m 会把北京时间转 UTC；东财当前分钟 normalizer 把北京时间字符串直接标 UTC，两者 timestamp 语义不一致。当前 D0 路径只认 `source=tencent`，拿不到就 pending，禁止静默 fallback。
+- **本轮新增 P1-10 炸板漏计风险**：只看最终涨停池会把“盘中封板后炸板”误标 `not_hit`。ever-hit-limit 使用最终涨停池 ∪ 炸板池；只有两池都成功且两边都缺席才可记 `not_hit`，任一池失败时缺席保持 `unknown`。
+- **本轮新增 P1-11 重复外呼风险**：`path_state=unknown` 既可能是旧版本未采，也可能是当前版本 terminal unknown。用 `path_version` 区分：旧 unknown 可自愈，当前版本因 reference 缺失等已判 unknown 后不再每天重复请求分钟线。
+- **本轮新增 P1-12 分钟序列截断风险**：腾讯 `m1` 是滚动上限窗口，拿到若干合法决策后 bar 不等于拿到完整 D0 路径；若目标交易日最后合法 bar 尚未覆盖 15:00，路径保持 `pending`，MFE/MAE 不落值，禁止把盘中/截断前缀冒充全天结果。真实活跃股探针 `600519`、`000001` 已确认完整交易日终端 bar 为 15:00；`600001` 空结果属于不合适的历史/非活跃探针样本，不作为源不可用证据。
+- **本轮新增 P1-13 路径分母串线风险**：`scorecard.path_metrics` 不得借用“D0 收盘标签已成功”的样本集；分钟路径与收盘价是独立结果事实。路径统计按 selected 的 `symbol×trade_date` 最早决策独立去重，即使 close label 仍 pending，只要完整 1m 路径已成熟就计入 path evaluable/coverage，反之亦然。
+- **本轮新增 P1-14 单次盘后回填风险**：`review.trigger=schedule` 会在 outcome/path IO 前持久化，15:35 首次分钟外呼若瞬时失败，整轮 review 的幂等会阻止再次进入；而 1m 为滚动窗口，跨日恢复不可靠。调度器现只对**仍 pending 的 selected D0 path**做同日晚盘有界重试：首轮后每 15 分钟一个 slot，最多 60 分钟（15:50/16:05/16:20/16:35），不重开整轮 review、不请求 deferred/rejected，terminal unknown 也不重试。
+- **本轮新增 P1-15 路径版本混算风险**：既然路径派生事实带 `path_version`，coverage/MFE/MAE/time_to_limit 消费侧必须只统计当前 `PATH_VERSION`；旧版 labeled 仍保留在审计状态/版本分布中，但不得静默混入当前均值。当前 schema 仍是一条 horizon outcome 上挂一组 path 字段，因此未来若需要“同 snapshot 多版路径同时在线重算”，应另立 append-only path outcome 子表，而不是覆写旧 labeled 证据。
+- **本轮新增 P1-16 午休提前量膨胀风险**：自然钟差会把 11:29→13:01 误报为 92 分钟“可行动提前量”。当前 `time_to_limit_minutes` 明确定义为 A 股 09:30–11:30、13:00–15:00 **连续交易分钟**，午休不计；反例测试固定 11:29→13:01 = 2.0 分钟。
+- **本轮新增 P1-17 首板时间可评估分母风险**：ever-hit 与“能计算 time_to_limit”不是同一件事，炸板源可能只证明触板但缺首封时间。scorecard 现同时给出 `limit_states`、`limit_membership_evaluable`、`ever_limit_hits` 与 `post_decision_timed_hits`；平均 `time_to_limit_minutes` 只在明确 post-decision 且首封时间可用的子集上计算，不能把 `hit_time_unknown` 静默丢掉后宣称全部命中都有提前量。
+- **本轮新增 P1-18 空池证据边界**：CompositeProvider 的通用 pool 路由把 `[]` 当失败并继续切源，所有源都空则抛错；因此当前 D0 路径不会把“某源静默空响应”误当成全市场真实 0 而制造假 `not_hit`，但真实 0 炸板/0 涨停日也会保守保持 `unknown`。本片不把全仓 pool 改为 allow-empty：东财 ZT/ZB 与 THS ZB 当前尚未像跌停池一样完整校验业务 `rc/tc/pool`，先接受空值会扩大假成功风险；若后续要提高零池覆盖，应先把各源完整响应契约补齐，再做“优先非空、全健康源确认空才接受空”的专用路由。
+- **本轮新增 P1-19 路径 coverage 丢分母风险**：若从 `OutcomeLabel JOIN Snapshot` 生成 path denominator，某个 selected snapshot 一旦 outcome 行根本没挂上，它会同时从分子和分母消失，覆盖率被系统性抬高；若同股后续刷新有 outcome，还可能用更晚决策替代最早决策。当前 scorecard 先从 immutable selected snapshots 按 `symbol×trade_date` 取**最早 selected 决策**定义分母，再按该 exact snapshot 找 outcome；新增 `outcome_attached` 显式暴露挂接缺口，缺 outcome 时 denominator 仍在、coverage=0，不允许“缺得越多看起来越完整”。learning summary 的 selected path denominator 同样改从 snapshots 构造。
 - **高风险反例已裁定**：不能简单把所有 rejected/unknown 加进 `pending_symbols`，否则盘后 `review_intraday` 会把实时逐股外部 close 请求从 selected 集合扩大到全漏斗。当前方案用 `deferred/not_actionable` 分流，实时消费者维持原请求面，离线显式回填再补市场结果。
 - **当前限制**：远程 Mac 没有可核的长期生产运行库，本轮不能给出真实历史覆盖百分比；该缺口继续保留，不能用夹具数字代替。
-- **非目标**：本片实现 D1/D3/D5 交易日 close horizon 与 selected-only 有界逾期恢复，但不实现 MFE/MAE/time_to_limit/实际 shadow fill 收益，不做 deferred 全量实时回补，不改策略阈值、生产权重、交易权限或真实交易。
+- **本地发布前证据（RSH-026 D0 path 子片）**：最终实现态 backend 全量 `4066 passed / 80 skipped`，`pyflakes app tests scripts` 通过；frontend `tsc`、Vitest `73 files / 695 tests`、ESLint、Next production build 通过；`public_repo_scan`、`workspace-hygiene`、`doc-health` 均通过。最终合并仍以 PR exact-HEAD GitHub CI + DegradedRelease receipt 为准，本地结果不替代远端门禁。
+- **非目标**：当前子片实现 D0 决策后 MFE/MAE 与首次封板/time_to_limit，但不把 reference 路径冒充实际 shadow fill P&L，不做跨日累计 MFE/MAE、不做 deferred 全量实时分钟回补、不改策略阈值、生产权重、交易权限或真实交易。
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
 
