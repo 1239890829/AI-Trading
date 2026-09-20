@@ -97,7 +97,7 @@
 - **方案依据**：U48；implementation-plan v9.9 §6.2；continuous-evolution §5.1/§10；factor-lifecycle-governance 与现有 strategy/KB/Jev owner 体系。
 - **范围**：不新建第二套机制总注册表；定义跨域最小生命周期契约，并把字段/审计落回原 owner：策略/战法、猎场情境、因子/过滤器/排序器、KB 结论与消费规则、Jev/LLM 语义能力、能力/模型路由、数据源优先级和关键治理自动化。至少覆盖用途/消费者、机制/版本、Champion/基线、证据与数据窗口、适用/不适用域、反例/falsifier、last_reviewed/review_due/revisit_trigger、衰退信号、成本/延迟/维护/隐私、challenger/shadow、退出/回滚/复活条件；专业指标继续归原领域，不造一个万能总分。
 - **验收**：① 能从原登记册/运行证据回答“为什么存在、服务谁、当前证据多强、何时重验、何时降级/退役/复活”；② 猎场/策略/因子使用 point-in-time 全分母、OOS/forward/shadow 与可成交成本证据，知识使用能区分独立增量/重复背景/反例，Jev/路由同时看 human gold/anchor recall、升级率、token/延迟/费用和最终任务质量；③ 发现衰退先区分市场/数据/实现/样本/消费者/机制，不允许 Agent/Jev 自动改生产阈值自救；④ 已完成任务仍可关闭，只有 review/revisit trigger 成立才生成新切片，active backlog 不因“持续迭代”无限增长；⑤ 无证据显示有增量时允许保持现状或退役机制，不以机制数量衡量系统能力。
-- **证据**：当前已有局部基础：factor-lifecycle-governance 已定义因子入库/使用/出库/衰减，strategy-registry/RSH-026/IMP-020 提供策略与效果证据，RSH-027 负责知识正文/引用增量，RSH-030 与 Jev usage/gold 负责语义能力质量和成本，IMP-049/053 负责猎场 opportunity/reference/shadow 真实性；这些仍是各自 owner，不因本项登记自动变为已实现的统一运行机制。
+- **证据**：当前已有局部基础：factor-lifecycle-governance 已定义因子入库/使用/出库/衰减，strategy-registry/RSH-026/IMP-020 提供策略与效果证据，RSH-027 负责知识正文/引用增量，RSH-030 与 Jev usage/gold 负责语义能力质量和成本，IMP-049/053 负责猎场 opportunity/reference/shadow 真实性；这些仍是各自 owner，不因本项登记自动变为已实现的统一运行机制。2026-09-20 又将多轮项目治理方法蒸馏为项目中性 `skills/living-system-governor/`：它只提供 Context Snapshot、KEEP/FIX/MERGE/EXPERIMENT/WATCH/RETIRE、反证/生命周期/成本审计等上层协议，不拥有 stage 状态、生产准入或自动晋级权，因此其入库不把 GOV-027 标成已完成。
 - **下一步**：本项作为 GX 伴随治理，不改变当前 G1 `IMP-006 → IMP-044`。未来被选为伴随切片时，先做“现有 owner/字段/消费者/证据”差距审计与最小 metadata/report 契约，只补无法从现有资产回答的问题；随后按领域把衰退/知识贡献/成本 A/B 接到既有报告，不一次性重构所有注册表。任何生产降权、阈值变化或策略晋级仍回对应 owner task 与原证据门。
 - **恢复**：若统一 metadata/report 增加复杂度却没有改变审核/退役/成本决策，删除跨域聚合层，保留原领域生命周期；历史证据和退役结论不因回滚被抹除。
 
