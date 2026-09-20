@@ -16,6 +16,8 @@ from app.schemas.market import Quote
 
 log = logging.getLogger(__name__)
 
+_BUY_POINT_SEND_SPACING_SECONDS = 0.5
+
 
 class AlertEngine:
     """后台轮询预警规则，生成 AlertEvent 并通过通知通道派发。"""
@@ -32,6 +34,7 @@ class AlertEngine:
         self._fresh_within = max(settings.poll_interval_seconds, settings.stale_after_seconds)
         self._registry = get_notifier_registry()
         self._quotes: dict[str, dict] = {}
+        self._last_buy_point_send_monotonic = 0.0
         # 盘外空转节奏（P2-9）：不得低于 interval，也不低于 5 分钟
         self._idle_interval = max(300.0, interval)
 
@@ -106,12 +109,21 @@ class AlertEngine:
 
         if event is None or rule is None or not rule.enabled:
             return "event_or_rule_removed_or_disabled"
-        if encode(rule_snapshot(rule)) != encode(json.loads(row.payload)["rule"]):
+        try:
+            payload = json.loads(row.payload)
+        except (TypeError, ValueError):
+            return "intent_payload_invalid"
+        if encode(rule_snapshot(rule)) != encode(payload.get("rule")):
             return "rule_or_channels_changed"
         if not row.target or notifier is None or notifier.delivery_target() != row.target:
             return "channel_unconfigured_or_target_changed"
         if not in_trading_window():
             return "outside_trading_window"
+
+        intent = payload.get("intent") or {}
+        if intent.get("kind") == "picks_buy_point":
+            return self._buy_point_delivery_block(event, intent)
+
         if event.symbol not in self._resolve_symbols(rule):
             return "symbol_no_longer_in_scope"
         quote = self._quotes.get(event.symbol)
@@ -131,6 +143,41 @@ class AlertEngine:
             return "condition_no_longer_met"
         return None
 
+    def _buy_point_delivery_block(self, event, intent: dict) -> str | None:
+        """Revalidate a queued buy-point against the archived decision fact, not price-rule syntax."""
+        try:
+            snap = json.loads(event.snapshot or "{}")
+        except (TypeError, ValueError):
+            return "buy_point_snapshot_invalid"
+        card = snap.get("card")
+        ref = snap.get("execution_ref") or {}
+        if not isinstance(card, dict) or not isinstance(ref, dict):
+            return "buy_point_payload_incomplete"
+
+        trade_date = str(intent.get("trade_date") or "")
+        decision_id = str(intent.get("decision_id") or "")
+        decision_version = str(intent.get("decision_version") or "")
+        if not trade_date or not decision_id or not decision_version:
+            return "buy_point_intent_identity_missing"
+        if ref.get("decision_id") != decision_id or ref.get("decision_version") != decision_version:
+            return "buy_point_event_identity_mismatch"
+        if ref.get("execution_snapshot_state") != "ready":
+            return "buy_point_event_execution_not_ready"
+
+        from app.picks.opportunity_learning import latest_notification_execution
+
+        latest = latest_notification_execution(trade_date, self._repo._session_factory).get(event.symbol)
+        if not latest:
+            return "buy_point_decision_missing"
+        if latest.get("decision_id") != decision_id or latest.get("decision_version") != decision_version:
+            return "buy_point_decision_superseded"
+        if latest.get("gate_decision") != "passed" or latest.get("archived_decision") != "eligible":
+            return "buy_point_decision_no_longer_eligible"
+        executable = latest.get("executable_snapshot") or {}
+        if executable.get("state") != "ready":
+            return "buy_point_execution_not_ready"
+        return None
+
     async def _deliver_pending(self) -> None:
         outbox = self._repo.outbox
         outbox.reconcile(self._now_ms())
@@ -145,17 +192,38 @@ class AlertEngine:
             if reason:
                 outbox.finish(row, "suppressed", reason, self._now_ms())
                 continue
+            try:
+                intent_kind = (json.loads(row.payload).get("intent") or {}).get("kind")
+            except (TypeError, ValueError):
+                intent_kind = None
+            if intent_kind == "picks_buy_point":
+                elapsed = time.monotonic() - self._last_buy_point_send_monotonic
+                if elapsed < _BUY_POINT_SEND_SPACING_SECONDS:
+                    await asyncio.sleep(_BUY_POINT_SEND_SPACING_SECONDS - elapsed)
+            # The pacing wait may cross expiry; begin_send is the authoritative
+            # last-moment boundary and must re-check lease/expiry after waiting.
             if not outbox.begin_send(row, self._now_ms()):
                 outbox.finish(row, "expired", "send_window_closed", self._now_ms())
                 continue
             try:
-                accepted = await asyncio.wait_for(notifier.send(event, rule), timeout=25.0)
+                result = await asyncio.wait_for(notifier.send_result(event, rule), timeout=25.0)
             except Exception:
-                accepted = False
+                result = None
+            if intent_kind == "picks_buy_point":
+                self._last_buy_point_send_monotonic = time.monotonic()
             # Cancellation/process loss leaves a started lease for conservative
-            # reconciliation. A bool False cannot prove the remote side rejected.
-            outbox.finish(row, "accepted" if accepted is True else "unknown",
-                          "platform_accepted" if accepted is True else "acceptance_unconfirmed", self._now_ms())
+            # reconciliation. Only an explicit platform rejection may become a
+            # permanent failure; timeout/network/malformed receipts stay unknown.
+            if result is None or result.outcome == "unknown":
+                state = "unknown"
+                reason = result.reason if result is not None else "acceptance_unconfirmed"
+            elif result.outcome == "explicit_rejected":
+                state = "permanent_failed"
+                reason = result.reason
+            else:
+                state = "accepted"
+                reason = result.reason
+            outbox.finish(row, state, reason, self._now_ms())
 
     def _resolve_symbols(self, rule) -> list[str]:
         if rule.scope == "all":

@@ -359,11 +359,12 @@ class Settings(BaseSettings):
     # 仅当当日精选标的满足全部判定（置信档≥可执行 + 无红线否决 + 闸门语义
     # 通过 + 现价入买入区间 + 未触涨停区）才推飞书 interactive 卡片
     # （版式与每日精选推送卡完全一致，app/picks/push_cards.py 同函数）。
-    # rule 通道刻意不含 feishu：多票同拍命中时合并**一张聚合卡**显式单发
-    # （buy_point.check_and_dispatch），不走逐票 registry 分发避免连发。
+    # IMP-044 起 channels 是买点外发的唯一权限事实源：默认继续保留历史实际
+    # 产品语义（in_app/log + Feishu），但 Feishu 只经 durable Outbox 异步发送。
+    # 显式移除 feishu 即真正关闭该外发，不再存在 send_interactive 旁路。
     picks_buy_point_enabled: bool = True
     picks_buy_point_interval_seconds: float = 60.0
-    picks_buy_point_channels: str = "in_app,log"
+    picks_buy_point_channels: str = "in_app,log,feishu"
 
     # ---- AI 大脑自主进化（docs/summary/ai-evolution.md v2）----
     # 盘后 15:45 自动汇总五路证据（复盘改进项/signal_health/告警判读统计/…）

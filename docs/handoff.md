@@ -1,6 +1,6 @@
-# 当前交接：U50 降级全权模式已授权，先收口机制再闭环 IMP-044
+# 当前交接：DEGRADED_FULL_CONTROL / IMP-044 发布候选
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户于 2026-09-20 明确授权，持续到用户明确退出/恢复 Codex）。** 当前 master 仍为 `aca43e408a9555da43de9e7f42bb10361c92b6e9`；先合入 v9.11/U50 降级发布机制，再把当前 G1/P0 IMP-044 PR #67 同步到新 master，并由网页端完成 exact-HEAD U49 作者反证、`DegradedRelease`、required CI、`release_check.py`、merge、post-merge CI 与分支删除。正常双角色并未废弃：Codex 恢复后用户可明确退出降级，届时重新要求独立网页 `Review`。降级模式只替代“独立 reviewer 必须存在”这一角色条件，不降低阶段门、安全红线、完整 CI、敏感信息/范围、latest master、post-merge 或分支清理要求。BUG-020 仍为 G0 `待条件`，所以当前最低可行动阻断门仍是 G1；在 IMP-044 闭环前不领取 IMP-032/BUG-016/IMP-049/053。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** v9.11/U50 已在 `master` 生效；PR #67 已同步最新主干，当前只做 IMP-044 的最终作者反证、完整门禁、exact-HEAD `DegradedRelease`、required CI、`release_check.py`、merge、post-merge CI 与分支删除。IMP-044 在本 PR 中已标“已完成”，因此按该候选合入后的账本状态，G0 的 BUG-020 与 G2 的 IMP-049 均为 `待条件`，最低可行动阻断门将计算为 **G3 / RSH-026**；这只是 post-merge 的下一候选，不授权在 #67 内抢跑。正常双角色未废弃；用户退出降级后恢复 Codex 实施 + 网页独立 `Review`。降级只替代“必须存在另一个 reviewer”的角色条件，不降低阶段门、安全红线、latest master、敏感信息/范围、完整 CI、CHANGES_REQUESTED/thread、post-merge 或分支清理要求。
 
 
 ## 1. 固定入口与范围
@@ -10,7 +10,7 @@
 
 ## 2. 累计规划要求去向（2026-09-18 基线 + 后续增量）
 
-下表以 2026-09-18 规划批为基线，并吸收后续 U41–U49 的新增长期取舍；它是累计规划验收索引，不是第二套任务进度表。各项“覆盖”表示设计与验收方法有实际落点，不表示已经实现或实证有效。
+下表以 2026-09-18 规划批为基线，并吸收后续 U41–U50 的新增长期取舍；它是累计规划验收索引，不是第二套任务进度表。各项“覆盖”表示设计与验收方法有实际落点，不表示已经实现或实证有效。
 
 | 用户要求 | 已核定的规划内容 | 唯一主要落点 |
 |---|---|---|
@@ -55,21 +55,21 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 本节只记录当前现场，不维护第二份 backlog；权威算法在总账 §5.9，任务元数据在所属 stage。
 
-- **当前主门**：G1
-- **主切片首选**：IMP-044
-- **当前现场**：IMP-006 已合并且 post-merge master CI 全绿，已退出当前候选计算；允许按本节范围领取 IMP-044 一个切片。
-- **门内阻断顺序**：IMP-044；IMP-006 已完成。
-- G0 的 BUG-028 / BUG-026 已完成；BUG-020 为 `待条件`。G1 的 BUG-029 与 IMP-006 均已完成并退出候选计算；当前按门序领取 IMP-044，不因 RSH-031、新 UI、Agent 或研究任务“更有价值”跳过。
+- **当前主门**：G3
+- **主切片首选**：RSH-026
+- **当前现场**：IMP-044 在本 PR 中随合并进入 `已完成`；该状态生效后 G1 无可行动阻断项。G2/IMP-049 仍为 `待条件`，故按总账 §5.9 跳过不可行动 blocker，最低可行动主门为 G3。
+- **门内阻断顺序**：RSH-026 → IMP-020；RSH-030 为同门非阻断，RSH-031 仍受效果前置限制。
+- G0 的 BUG-028 / BUG-026 已完成，BUG-020 为 `待条件`；G1 的 BUG-029 / IMP-006 / IMP-044 均在本候选合入后完成；G2 的 IMP-049 为 `待条件`。因此 post-merge 下一唯一首选为 G3/RSH-026，不因 RSH-031、新 UI、Agent 或其它研究任务“更有趣”跳序。
 - BUG-020 的 current-value 接纳门现区分 source event time / received time、缺失/拒绝/合法空集与身份歧义；旧可信值不会被晚到/非法观测覆盖。2026-09-20 周日已用本片代码显式加载主仓部署 `.env`，成功构建 `chain(ths→tencent→eastmoney→sina)` 并完成有界只读休市探针：最近交易日 2026-09-18、6/6 指数覆盖、拒绝数 0，600519 实际由腾讯返回且 source time 为 2026-09-18，Hub 明确标 `stale/market_closed`。尚未完成真实交易时段完整会话验收，故不得标已完成或宣称长期盘中 SLA。
 - BUG-029 现以 `ever_sealed/current_sealed/snapshot_state/version` 为唯一 current-state 契约；开板只恢复“进入评估”的资格，不自动获得成交/通知/模拟执行许可。2026-09-18 真实跨源样本已证明涨停池成员可多次开板/回封；旧 v1 归档保持原语义，v2 才使用新状态重放。
 - RSH-031 为 `G1/P1/非阻断/门内序70`，即使同处 G1 也排在阻断项之后；且 `效果前置=RSH-026, IMP-020, RSH-030` 未满足前不得宣称龙头战法有效或接生产权重。
-- U47 不制造跨门例外：IMP-006 已把 `reference_entry → executable_snapshot → PaperOrder fill` 三种价格身份和同一 decision/version 接到通知、模拟仓与页面；它的合并只证明工程事实契约收口，不证明买点效果。post-merge CI 通过后仍先做 G1/IMP-044，再进入 G2 的 IMP-049 → IMP-053；reference 与实际 shadow fill 永久分名、分母和收益口径。
+- U47 不制造跨门例外：IMP-006 已把 `reference_entry → executable_snapshot → PaperOrder fill` 三种价格身份和同一 decision/version 接到通知、模拟仓与页面；IMP-044 本 PR 只证明通知可靠性工程闭环，不证明买点效果。G2/IMP-049 当前仍 `待条件`，所以 post-merge 阶段门计算到 G3/RSH-026；未来 IMP-049 条件转可行动时仍需重新按最低门算法计算，reference 与实际 shadow fill 永久分名、分母和收益口径。
 - U48 同样不制造跨门例外：W08/GOV-027 为 `GX/P1/持续治理/门内序47`，只可作为不冲突的伴随切片；它先复用 factor/strategy/KB/Jev/opportunity 各自 owner 的既有证据，定义最小生命周期/衰退/成本反馈契约，不建第二总注册表。项目级上层治理入口新增 `skills/living-system-governor/SKILL.md`，用于跨模块方案、重大重构和机制生命周期复核；该 Skill 只提供证据/反证/KEEP-FIX-MERGE-EXPERIMENT-WATCH-RETIRE 决策协议，不拥有派工、生产晋级或阶段门修改权。 v1.2.0 在自我进化基础上进一步加入 U49 主动缺陷发现门；v9.11/U50 又补受控降级全权闭环，避免 Codex 不可用时角色门自锁：后续长期要求/重复纠偏先作为方法论候选，只有形成稳定可复用增量才版本化蒸馏；一次性要求不污染 Core，是否落实以 Git/PR 与后续行为核验，不靠聊天窗口记忆。任何生产降权、阈值变化、策略/Jev 晋级仍回原 owner task 与证据门。
 - U49 不改变阶段门算法，但改变每轮默认动作：继续选刀前、审核放行前、阻断项闭环/换门后、事故/用户纠偏后都要运行有界主动缺陷发现门并写回执；同根 P0/P1 新发现可改变当前验收，跨域发现回原 owner，不自动扩权施工。
 - U50 也不改变阶段门算法，只改变“谁可以完成当前切片”：正常模式仍是 Web Review + Codex；当前 `DEGRADED_FULL_CONTROL` 下网页端按同一阶段门全程操控，每个 PR 必须重新写 exact-HEAD `DegradedRelease`，不能复用一次用户授权跳过逐 PR 发布证据。
-- GX 治理只可作为不冲突的伴随切片。2026-09-20 `GOV-018` 已闭环：`.workbuddy` / `.workbuddy-ai` 已物理删除，有价值内容进入项目中性 `skills/scripts/docs/artifacts`，第三方 UZI/Serenity 本体不再复制；PR #48 已合入 `master`（merge `b6b5ba0`，最终 required CI run `35481812431` backend/frontend/docs 全绿）。`GOV-026` 已落地 `scripts/workspace-hygiene.py` 并接 CI/交接；本轮又把 docs 根从 36 份 Markdown 收口为 6 个控制面，领域正文进入 system/data/product/strategy/ai/review/research，`doc-health` O2 阻断根目录回堆与未知分类；最终一致性复核 PR #50 又把 09-17/09-18 四份复盘/进化时间序列补入主干，剩余 4 个 backend/data JSON 明确保留为本机运行证据。以上治理变更不改变阶段门算法；BUG-028 / BUG-026 已闭环，BUG-020 因生产盘中外部条件转 `待条件`，故 G0 当前无可行动阻断项，阶段门现计算到 G1；IMP-006 已完成，G1 当前阻断位已转到 IMP-044。
+- GX 治理只可作为不冲突的伴随切片。2026-09-20 `GOV-018` 已闭环：`.workbuddy` / `.workbuddy-ai` 已物理删除，有价值内容进入项目中性 `skills/scripts/docs/artifacts`，第三方 UZI/Serenity 本体不再复制；PR #48 已合入 `master`（merge `b6b5ba0`，最终 required CI run `35481812431` backend/frontend/docs 全绿）。`GOV-026` 已落地 `scripts/workspace-hygiene.py` 并接 CI/交接；docs 根已收口为 6 个控制面。以上治理不改变阶段门算法；IMP-044 随本 PR 完成后，BUG-020 与 IMP-049 都因 `待条件` 排除，阶段门按账本计算到 G3/RSH-026。
 
-当前处于 `READY_FOR_NEXT_PLANNED_SLICE`：下一主切片为 IMP-044，仅做 W02 已界定的“类型化回执 + 买点 Outbox”最小纵切；不得顺手迁移全部事件来源。没有网页登记的 `CROSS_GATE_EXCEPTION` 就不能跨门。
+当前处于 `DEGRADED_FULL_CONTROL`：#67 仍是本轮唯一发布对象；本 PR 合并即把 W02/IMP-044 `已完成` 状态带入主干。按该候选的账本事实，post-merge 下一主门已机械推导为 G3/RSH-026；只有 #67 merge + post-merge CI + 分支清理全部完成后，下一轮“继续”才可正式领取它。不得在本 PR 内抢跑 RSH-026 或其它任务，也不得借降级模式创建跨门例外。
 
 ## 8. Jev、工具链与协作流当前基线
 
@@ -102,5 +102,16 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **已证实 P0-4 Outbox 判据不兼容**：现有 `_delivery_block` 仅理解 price/change；`picks_buy_point` 会被 `_extract_value=None` 误判 `condition_no_longer_met`。必须用 `intent.kind=picks_buy_point` 专用 recheck，并绑定 latest decision_id/version、执行 snapshot freshness、渠道/target 与有效期。
 - **新增顺序裁定**：`决策归档 → AlertEvent + durable dedup + Feishu intent 同事务 → brief/watch-ledger/paper 派生消费者 → 异步发送`。每日去重权威迁到 DB；优先给 AlertEvent 增 nullable unique dedup_key，以 `trade_date+symbol+kind` 稳定哈希实现 create-once。brief 只做 best-effort 展示，不再拥有发送资格。
 - **非目标**：不在这一刀迁开板/风控/日报等其它来源；不解决 IMP-049/053 的盘中 gate/buy_range 动态重评；不改策略阈值、仓位或真实交易边界。
-- **允许下一动作**：当前 IMP-044 已有 PR #67；U50 机制合入后网页端在降级模式下同步 #67 到最新 master，对准确 HEAD 做 U49 作者反证并生成 `DegradedRelease`，required CI/release_check 全绿后直接合并、核 post-merge CI、删除分支。不得并行领取 IMP-032/BUG-016/IMP-049/053。
+- **允许下一动作**：PR #67 已同步 U50 主干；网页端在降级模式下对准确 HEAD 做 U49 作者反证并生成 `DegradedRelease`，required CI/release_check 全绿后直接合并、核 post-merge CI、删除分支。不得并行领取 IMP-032/BUG-016/IMP-049/053。
 
+
+## 10. IMP-044 实施候选（降级全权作者证据）
+
+- **作者/授权**：用户已明确激活 U50 `DEGRADED_FULL_CONTROL`；本网页会话同时承担实现与发布操作者，必须做 U49 作者反证并使用 distinct `DegradedRelease`，不得把它命名成独立 `Review`。
+- **实施基点**：`master@aca43e408a9555da43de9e7f42bb10361c92b6e9`；分支 `chatgpt/imp044-outbox`。
+- **工程事实**：AlertEvent 新增 nullable unique `dedup_key` 与 migration `f8c1d4e7a2b6`；buy-point 使用 `trade_date|kind|symbol` 稳定哈希并通过 `record_trigger_once` 与 Feishu Outbox intent 同事务 create-once。card 与 execution_ref 落同一 AlertEvent snapshot，Outbox 只保存最小 intent identity；brief/watch-ledger/paper 都后置为派生消费者。
+- **渠道/回执**：`DeliveryResult` 分 `accepted / explicit_rejected / unknown`；明确平台拒绝落 `permanent_failed`，网络/5xx/畸形/冲突回执落 `unknown` 且不自动重发。旧 `send()` / `send_interactive()` 只作 bool 兼容包装，买点主链不再 direct Feishu。配置 `picks_buy_point_channels` 为唯一外发权限，默认 `in_app,log,feishu` 保留历史实际产品行为。
+- **发前复核**：`intent.kind=picks_buy_point` 不走 price/change `_extract_value`；专用 recheck 要求 event card/execution_ref 完整、event 自身 execution snapshot 为 ready、最新归档同 symbol 的 exact decision_id/version 仍一致且 eligible/passed、最新 executable snapshot 仍 ready，同时复用 rule/channels/target/交易窗口与 Outbox expiry 门。
+- **作者级反证已抓并修复**：① 并发 create-once 的 unique 冲突可在 `enqueue_feishu()` 为取得 event.id 主动 `flush()` 时发生，已把 flush/outbox/commit 放进同一 `IntegrityError` 恢复边界，且只有同 dedup_key 确已存在才按重复收敛；② buy-point 从旧 direct-card 迁到 Outbox 后会丢掉原 0.5s 飞书频控间隔，已在 Outbox 买点发送侧恢复 pacing，并让 `begin_send()` 在等待后重新校验 lease/expiry；③ `send_interactive()` 仍被数据健康异常卡使用，类型化重构不能丢 P2P 拒绝后的 token cache invalidation，已恢复并补回归；④ event 自身 execution_ref 非 ready 即使最新归档仍 ready 也必须 suppressed；⑤ channels 移除 feishu 后断言零 Outbox/零 direct IO；⑥迁移测试使用 raw SQL 构造真实旧 schema 历史行，避免新 ORM 反向污染旧迁移场景。
+- **当前验证**：最终业务代码树已从零完成全量 backend：`4039 passed / 80 skipped`，随后全仓 `pyflakes app tests scripts` 通过；最新聚焦 Feishu/Outbox/buy-point/watcher/migration 回归亦全绿，并覆盖并发 create-once、事件+Outbox 原子回滚、brief 失败后 durable intent 保留、渠道关闭零 direct IO、event/decision stale、typed reject/unknown、Outbox pacing 与 direct-card token invalidation。`public_repo_scan.py`、`workspace-hygiene.py`、`doc-health.py`、`git diff --check` 已通过；本次文档证据校正后再重跑 docs 门。该证据只证明作者候选通过本地门，不替代独立 U49 Review / PR required CI。
+- **降级发布边界**：本段是作者执行事实与反证输入，不是独立 `Review`。PR #67 只有在 exact HEAD 的 `DegradedRelease`（`User authorization=EXPLICIT`、非空原因、同 HEAD verdict）+ required CI + latest master + 无阻塞 thread/status 全部满足时，`release_check.py` 才允许 `degraded_full_control` 放行；普通作者自检评论仍不能放行。

@@ -25,7 +25,10 @@ def encode(value) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
 
 
-def enqueue_feishu(db, event, rule, *, target: str, now_ms: int, expires_at_ms: int) -> None:
+def enqueue_feishu(
+    db, event, rule, *, target: str, now_ms: int, expires_at_ms: int,
+    intent: dict | None = None,
+) -> None:
     try:
         channels = json.loads(rule.channels or "[]")
     except (ValueError, TypeError):
@@ -33,13 +36,16 @@ def enqueue_feishu(db, event, rule, *, target: str, now_ms: int, expires_at_ms: 
     if not isinstance(channels, list) or "feishu" not in channels:
         return
     db.flush()  # event ID and timestamp, inside the caller's transaction
+    payload = {"rule": rule_snapshot(rule), "event": {
+        key: getattr(event, key) for key in (
+            "id", "rule_id", "symbol", "trigger_value", "threshold", "triggered_at", "snapshot",
+        )
+    }}
+    if intent:
+        payload["intent"] = intent
     db.add(NotificationOutbox(
         event_id=event.id, channel="feishu", idempotency_key=uuid4().hex,
-        target=target, payload=encode({"rule": rule_snapshot(rule), "event": {
-            key: getattr(event, key) for key in (
-                "id", "rule_id", "symbol", "trigger_value", "threshold", "triggered_at", "snapshot",
-            )
-        }}),
+        target=target, payload=encode(payload),
         created_at_ms=now_ms, expires_at_ms=expires_at_ms,
     ))
 

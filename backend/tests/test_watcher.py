@@ -957,7 +957,7 @@ def test_snapshot_price_only_accepts_positive_number():
 
 
 def test_dispatch_alert_price_comes_from_price_semantics(monkeypatch):
-    """端到端复刻 09-09 事故：`buy_point` 告警不带 `meta["price"]` 时，
+    """端到端复刻 09-09 事故：可开 paper 的 `confirm` 告警不带 `meta["price"]` 时，
     台账 entry_price 与开仓价都必须回退**快照现价**，绝不可取 trigger_value。
 
     覆盖两条独立调用链：`record_sighting(entry_price=...)`（用局部 snap_price）
@@ -982,8 +982,8 @@ def test_dispatch_alert_price_comes_from_price_semantics(monkeypatch):
 
     app = NS(state=NS(alert_repo=repo, snapshot_service=_Svc()))
     alert = {
-        "key": "buy-point-603330",
-        "kind": "buy_point",
+        "key": "confirm-603330",
+        "kind": "confirm",
         "symbol": "603330",
         "name": "奥士康",
         "text": "主力净流入 0.32 亿",
@@ -1000,7 +1000,7 @@ def test_dispatch_alert_price_comes_from_price_semantics(monkeypatch):
 
 
 def test_dispatch_alert_price_absent_stays_unknown(monkeypatch):
-    """meta 无 price、快照也无 price → 两条链都取 None（宁可判不出，不可判错）。
+    """confirm 的 meta 无 price、快照也无 price → 两条链都取 None（宁可判不出，不可判错）。
 
     旧代码此处会取到 trigger_value=0.32，把「净流入 0.32 亿」静默记成 0.32 元成本。
     """
@@ -1024,8 +1024,8 @@ def test_dispatch_alert_price_absent_stays_unknown(monkeypatch):
 
     app = NS(state=NS(alert_repo=repo, snapshot_service=_Svc()))
     alert = {
-        "key": "buy-point-603330",
-        "kind": "buy_point",
+        "key": "confirm-603330",
+        "kind": "confirm",
         "symbol": "603330",
         "name": "奥士康",
         "meta": {"trigger_value": 0.32, "threshold": 0.3},

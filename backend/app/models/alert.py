@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.watchlist import Base
@@ -41,6 +41,7 @@ class AlertEvent(Base):
     """预警触发记录。"""
 
     __tablename__ = "alert_event"
+    __table_args__ = (Index("ux_alert_event_dedup_key", "dedup_key", unique=True),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     rule_id: Mapped[int] = mapped_column(Integer, ForeignKey("alert_rule.id"), index=True)
@@ -51,6 +52,8 @@ class AlertEvent(Base):
     acknowledged: Mapped[bool] = mapped_column(Integer, default=0)
     # Legacy name: channel acceptance/persistence only, not confirmed delivery/read.
     delivered_channels: Mapped[str | None] = mapped_column(String(256), default=None)
+    # durable 去重权威；NULL 保持旧事件兼容，非 NULL 由唯一索引保证 create-once。
+    dedup_key: Mapped[str | None] = mapped_column(String(64), default=None)
     # 触发瞬间的报价快照（JSON）
     snapshot: Mapped[str | None] = mapped_column(String(1024), default=None)
 

@@ -4,8 +4,8 @@
 - evaluate_buy_points 多因素判定全分支（命中/置信不足/红线/闸门语义/无区间/
   区间外/涨停区/快照缺价）
 - ensure_buy_point_rule 新建 + channels 跟随配置默认
-- check_and_dispatch 服务层：聚合卡显式单发（多票命中只调一次 send_interactive）、
-  去重（当日已推的票不再进卡）、非交易日/盘外不发
+- check_and_dispatch 服务层：每票卡进入 AlertEvent + Outbox，零 direct Feishu IO；
+  DB durable dedup、brief 失败/DB 失败顺序、渠道关闭与非交易日/盘外不发
 """
 from __future__ import annotations
 
@@ -27,8 +27,11 @@ def _rule_factory(tmp_path):
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
+    from app.models.notification_outbox import NotificationOutbox
+    from app.models.opportunity_learning import OpportunityDecisionSnapshot
     from app.models.watchlist import Base
 
+    assert NotificationOutbox.__table__.name and OpportunityDecisionSnapshot.__table__.name
     engine = create_engine(f"sqlite:///{tmp_path / 'bp.db'}")
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine)
@@ -159,27 +162,36 @@ def test_ensure_buy_point_rule_follows_config(tmp_path, monkeypatch):
 # ---------------------------------------------------------------- 服务层
 
 
-def _patch_happy_path(monkeypatch, tmp_path, *, items=None, quotes=None, hits_override=None):
-    """check_and_dispatch 的全部外设 stub：日历/payload/快照/情绪/飞书。"""
+def _patch_happy_path(monkeypatch, tmp_path, *, items=None, quotes=None, channels="in_app,log,feishu", brief_raises=False):
+    """check_and_dispatch 外设 stub；真实通知事实落 tmp SQLite，网络 IO 必须为零。"""
     import app.picks.buy_point as bp
+    import app.picks.morning_brief as mb
+    import app.picks.position_engine as pe
+    import app.picks.watch_ledger as wl
+    import app.picks.watcher as w
     from app.core.config import settings
     from app.market import trade_calendar as tc
+    from app.repositories.alert_repo import AlertRepository
 
     items = items if items is not None else [_item(), _item("600001", tier="observe")]
     quotes = quotes if quotes is not None else {"600000": _quote(), "600001": _quote("600001", price=5.5)}
-
     d = datetime(2026, 9, 8, 10, 30, 0)
     monkeypatch.setattr(tc, "trading_days", async_ok([d.date()]))
     monkeypatch.setattr(tc, "last_trade_date", lambda days, asof: asof)
-    monkeypatch.setattr(tc, "in_trading_window", lambda now: True)
+    monkeypatch.setattr(tc, "in_trading_window", lambda now=None: True)
     monkeypatch.setattr(bp, "beijing_now", lambda: d)
     monkeypatch.setattr(bp, "_today_picks_payload", lambda: {
         "date": "2026-09-08",
         "items": items,
         "meta": {"gate": {"stand_aside": False, "level": "none"}},
     })
+
+    factory = _rule_factory(tmp_path)
+    counters = {"direct_io": 0, "brief": 0, "paper": 0, "ledger": 0}
+    seen: set[str] = set()
     state = NS(
         hub=NS(provider=NS()),
+        alert_repo=AlertRepository(factory),
         snapshot_service=NS(
             snapshot=list(quotes.values()),
             breadth={"up": 1, "down": 2},
@@ -189,74 +201,84 @@ def _patch_happy_path(monkeypatch, tmp_path, *, items=None, quotes=None, hits_ov
         ),
     )
     app = NS(state=state)
-
     async def fake_sent(hub, snap):
         return {"temperature": "warm", "phase": "发酵", "indicators": []}
 
-    monkeypatch.setattr("app.services.market_context.compute_market_sentiment", fake_sent)
-
-    cards = {"n": 0, "cards": []}
-
     class FakeFeishu:
+        def delivery_target(self):
+            return "f" * 64
+
         async def send_interactive(self, card):
-            cards["n"] += 1
-            cards["cards"].append(card)
+            counters["direct_io"] += 1
             return True
 
-    monkeypatch.setattr(bp, "get_notifier_registry", lambda: NS(get=lambda name: FakeFeishu()))
-    monkeypatch.setattr(settings, "picks_buy_point_channels", "in_app,log")
-    # 简报层 stub（append_alert 依赖当日简报文件；进程内 set 模拟 key 去重，
-    # 不触碰真实 BRIEF_DIR）
-    import app.picks.morning_brief as mb
+    class FakeRegistry:
+        def __init__(self):
+            self.feishu = FakeFeishu()
 
-    seen: set = set()
+        def get(self, name):
+            return self.feishu if name == "feishu" else None
+
+        async def dispatch(self, event, rule, *, exclude=()):
+            wanted = json.loads(rule.channels or "[]")
+            if "feishu" in wanted and "feishu" not in exclude:
+                counters["direct_io"] += 1
+            return [ch for ch in wanted if ch in {"in_app", "log"} and ch not in exclude]
+
+    registry = FakeRegistry()
+    monkeypatch.setattr("app.services.market_context.compute_market_sentiment", fake_sent)
+    monkeypatch.setattr(w, "get_notifier_registry", lambda: registry)
+    monkeypatch.setattr(settings, "picks_buy_point_channels", channels)
+    monkeypatch.setattr(w, "get_session_factory", lambda: factory)
+    monkeypatch.setattr("app.picks.opportunity_learning.get_session_factory", lambda: factory)
     monkeypatch.setattr(mb, "brief_for_today", lambda: ("20260908", {"brief_date": "20260908", "alerts": []}))
 
     def fake_append(target, alert):
+        counters["brief"] += 1
+        if brief_raises:
+            raise OSError("brief unavailable")
         key = alert.get("key")
         if key in seen:
             return False
         seen.add(key)
         return True
 
-    monkeypatch.setattr(mb, "append_alert", fake_append)
-    # 落库隔离：dispatch_alert/ensure_buy_point_rule 的 session_factory 注入 tmp 库
-    import app.picks.watcher as w
+    async def fake_open(*args, **kwargs):
+        counters["paper"] += 1
 
-    factory = _rule_factory(tmp_path)
-    monkeypatch.setattr(w, "get_session_factory", lambda: factory)
-    monkeypatch.setattr("app.picks.opportunity_learning.get_session_factory", lambda: factory)
+    def fake_sighting(**kwargs):
+        counters["ledger"] += 1
+
+    monkeypatch.setattr(mb, "append_alert", fake_append)
+    monkeypatch.setattr(pe, "maybe_open", fake_open)
+    monkeypatch.setattr(wl, "record_sighting", fake_sighting)
     app._test_factory = factory
-    return app, cards, seen
+    return app, counters, seen
 
 
 def async_ok(v):
     async def _f(*a, **k):
         return v
     return _f
-
-
-def test_check_and_dispatch_one_card_per_symbol(monkeypatch, tmp_path):
-    """用户要求：每只股票一张独立卡片（不汇总）；卡内只含该票，命中数为 1。"""
+def test_check_and_dispatch_persists_one_card_and_intent_per_symbol(monkeypatch, tmp_path):
+    """每票一张卡进入 AlertEvent/Outbox；本拍不得直接做 Feishu 网络 IO。"""
     import app.picks.buy_point as bp
+    from app.models.alert import AlertEvent
+    from app.models.notification_outbox import NotificationOutbox
 
     items = [_item("600000"), _item("600001", tier="strong")]
     quotes = {"600000": _quote("600000"), "600001": _quote("600001", price=10.6)}
-    app, cards, seen = _patch_happy_path(monkeypatch, tmp_path, items=items, quotes=quotes)
+    app, counters, _ = _patch_happy_path(monkeypatch, tmp_path, items=items, quotes=quotes)
     dispatched = asyncio.run(bp.check_and_dispatch(app))
     assert [h["item"]["symbol"] for h in dispatched] == ["600000", "600001"]
-    assert cards["n"] == 2  # 逐票单卡
-    assert cards["cards"][0] != cards["cards"][1]
-    for card in cards["cards"]:
-        body = json.dumps(card, ensure_ascii=False)
-        assert "盘中买点命中 1 只" in body
-        assert card["header"]["template"] == "orange"  # 与每日精选卡同 template
-
-    # IMP-006：提醒事件保存的执行身份必须和本拍命中对象完全一致。
-    from app.models.alert import AlertEvent
+    assert counters["direct_io"] == 0
+    assert counters["paper"] == 2 and counters["brief"] == 2
 
     with app._test_factory() as db:
         events = db.query(AlertEvent).order_by(AlertEvent.id).all()
+        outbox = db.query(NotificationOutbox).order_by(NotificationOutbox.id).all()
+    assert len(events) == len(outbox) == 2
+    assert len({e.dedup_key for e in events}) == 2
     by_symbol = {e.symbol: json.loads(e.snapshot or "{}") for e in events}
     for h in dispatched:
         sym = h["item"]["symbol"]
@@ -264,62 +286,95 @@ def test_check_and_dispatch_one_card_per_symbol(monkeypatch, tmp_path):
         live = h["execution_contract"]
         assert archived["decision_id"] == live["decision_id"]
         assert archived["decision_version"] == live["decision_version"]
-        assert archived["execution_snapshot_price"] == live["executable_snapshot"]["price"]
-        assert "executable_snapshot" not in archived, "提醒只存引用摘要，不复制权威快照正文"
-
-
+        assert "盘中买点命中 1 只" in json.dumps(by_symbol[sym]["card"], ensure_ascii=False)
+        row = next(o for o in outbox if o.event_id == next(e.id for e in events if e.symbol == sym))
+        intent = json.loads(row.payload)["intent"]
+        assert intent["kind"] == "picks_buy_point"
+        assert intent["decision_version"] == live["decision_version"]
 def test_check_and_dispatch_blocks_action_when_authoritative_archive_fails(monkeypatch, tmp_path):
-    """IMP-006：权威 decision 未落库时，提醒和自动模拟动作都不能产生孤儿引用。"""
     import app.picks.buy_point as bp
+    from app.models.alert import AlertEvent
+    from app.models.notification_outbox import NotificationOutbox
 
-    app, cards, _seen = _patch_happy_path(monkeypatch, tmp_path)
+    app, counters, _ = _patch_happy_path(monkeypatch, tmp_path)
 
     async def archive_failed(**_kwargs):
         return False
 
     monkeypatch.setattr(bp, "_archive_notification_decisions", archive_failed)
-    out = asyncio.run(bp.check_and_dispatch(app))
-    assert out == []
-    assert cards["n"] == 0
+    assert asyncio.run(bp.check_and_dispatch(app)) == []
+    assert counters["direct_io"] == counters["paper"] == counters["brief"] == 0
+    with app._test_factory() as db:
+        assert db.query(AlertEvent).count() == 0
+        assert db.query(NotificationOutbox).count() == 0
 
 
-def test_check_and_dispatch_dedup_per_day(monkeypatch, tmp_path):
-    """同票第二拍不再发卡（append_alert key 去重）。"""
+def test_check_and_dispatch_dedup_is_db_authoritative(monkeypatch, tmp_path):
+    import app.picks.buy_point as bp
+    from app.models.alert import AlertEvent
+    from app.models.notification_outbox import NotificationOutbox
+
+    app, counters, _ = _patch_happy_path(monkeypatch, tmp_path)
+    assert len(asyncio.run(bp.check_and_dispatch(app))) == 1
+    assert asyncio.run(bp.check_and_dispatch(app)) == []
+    with app._test_factory() as db:
+        assert db.query(AlertEvent).count() == 1
+        assert db.query(NotificationOutbox).count() == 1
+    assert counters["paper"] == 1
+    assert counters["brief"] == 1
+    assert counters["direct_io"] == 0
+
+
+def test_brief_failure_does_not_revoke_or_duplicate_durable_intent(monkeypatch, tmp_path):
+    import app.picks.buy_point as bp
+    from app.models.alert import AlertEvent
+    from app.models.notification_outbox import NotificationOutbox
+
+    app, counters, _ = _patch_happy_path(monkeypatch, tmp_path, brief_raises=True)
+    assert len(asyncio.run(bp.check_and_dispatch(app))) == 1
+    assert asyncio.run(bp.check_and_dispatch(app)) == []
+    with app._test_factory() as db:
+        assert db.query(AlertEvent).count() == 1
+        assert db.query(NotificationOutbox).count() == 1
+    assert counters["brief"] == 1 and counters["paper"] == 1
+
+
+def test_db_failure_happens_before_brief_and_paper(monkeypatch, tmp_path):
     import app.picks.buy_point as bp
 
-    app, cards, seen = _patch_happy_path(monkeypatch, tmp_path)
-    first = asyncio.run(bp.check_and_dispatch(app))
-    second = asyncio.run(bp.check_and_dispatch(app))
-    assert len(first) == 1 and not second and cards["n"] == 1
+    app, counters, _ = _patch_happy_path(monkeypatch, tmp_path)
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("db commit failed")
+
+    monkeypatch.setattr(app.state.alert_repo, "record_trigger_once", broken)
+    assert asyncio.run(bp.check_and_dispatch(app)) == []
+    assert counters["brief"] == counters["paper"] == counters["direct_io"] == 0
+def test_feishu_channel_off_means_no_outbox_and_no_direct_io(monkeypatch, tmp_path):
+    import app.picks.buy_point as bp
+    from app.models.alert import AlertEvent
+    from app.models.notification_outbox import NotificationOutbox
+
+    app, counters, _ = _patch_happy_path(monkeypatch, tmp_path, channels="in_app,log")
+    assert len(asyncio.run(bp.check_and_dispatch(app))) == 1
+    with app._test_factory() as db:
+        event = db.query(AlertEvent).one()
+        assert db.query(NotificationOutbox).count() == 0
+        assert json.loads(event.delivered_channels) == ["in_app", "log"]
+    assert counters["direct_io"] == 0
 
 
 def test_check_and_dispatch_silent_off_session(monkeypatch, tmp_path):
-    """非交易时段/非交易日：零分发零发送。"""
     import app.picks.buy_point as bp
     from app.market import trade_calendar as tc
+    from app.models.alert import AlertEvent
 
-    app, cards, seen = _patch_happy_path(monkeypatch, tmp_path)
-    monkeypatch.setattr(tc, "in_trading_window", lambda now: False)
-    assert not asyncio.run(bp.check_and_dispatch(app))
-    assert cards["n"] == 0
-
-
-def test_check_and_dispatch_feishu_failure_keeps_records(monkeypatch, tmp_path):
-    """飞书发送失败：事件已落库（去重生效），不重试不崩——下票命中仍有机会。"""
-    import app.picks.buy_point as bp
-
-    app, cards, seen = _patch_happy_path(monkeypatch, tmp_path)
-
-    class BrokenFeishu:
-        async def send_interactive(self, card):
-            return False
-
-    monkeypatch.setattr(bp, "get_notifier_registry", lambda: NS(get=lambda name: BrokenFeishu()))
-    dispatched = asyncio.run(bp.check_and_dispatch(app))
-    assert len(dispatched) == 1  # 落库成功
-    assert cards["n"] == 0
-    # 下一拍去重生效（不再重复推）
-    assert not asyncio.run(bp.check_and_dispatch(app))
+    app, counters, _ = _patch_happy_path(monkeypatch, tmp_path)
+    monkeypatch.setattr(tc, "in_trading_window", lambda now=None: False)
+    assert asyncio.run(bp.check_and_dispatch(app)) == []
+    with app._test_factory() as db:
+        assert db.query(AlertEvent).count() == 0
+    assert counters["brief"] == counters["paper"] == counters["direct_io"] == 0
 
 
 # ---------------------------------------------------------------- 条件化审计 A2（§6.25）
