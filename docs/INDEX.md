@@ -66,7 +66,7 @@
 | **WB-01** | `artifacts/logs/` | L1 | 日志 | 只存过程证据；稳定结论提炼进 docs，日志从不承担权威入口 |
 | **WB-02** | `artifacts/reports/` | L1 | 报告 | 本地报告；可复用结论提炼进现有 docs，私有快照不入 Git |
 | **WB-03** | `artifacts/` | L1 | 证据 | 调研快照、补丁、恢复副本均忽略；长期只留紧凑证据/必要恢复点，大型测试沙箱与过期恢复副本按 GOV-026 收口 |
-| **WB-04** | `skills/` | L3 | 技能 | 项目中性技能唯一目录；含接续/交接/复盘/创新雷达及迁出的数据源、CI、文档对账、策略实证、测试隔离、UI 验收等项目 Skill；禁止应用私有技能根 |
+| **WB-04** | `skills/` | L3 | 技能 | 项目中性技能唯一目录；含接续/交接/复盘/创新雷达、`living-system-governor` 跨模块长期治理，以及迁出的数据源、CI、文档对账、策略实证、测试隔离、UI 验收等项目 Skill；禁止应用私有技能根 |
 | **WB-05** | `artifacts/trash/` | L1 | 回收站 | `scripts/safe-trash.sh`，逐条恢复记录与哈希；拒绝项目外路径和恢复覆盖；不是永久仓库，退出条件由 GOV-026 管理 |
 
 ### 0.0.1 物理目录分类（2026-09-20）
@@ -143,6 +143,7 @@
 | **T7 外部工具与技能** | `ai/continuous-evolution.md` → `skills/ashare-innovation-radar/SKILL.md` | `ai/jev-integration.md` · 本表 **WB-04** · `system/llm-gateway-probe.md` | 外部热度只产候选；先许可/隐私/费用/权限硬门与证据梯度，未经 owner stage 不安装/准入 |
 | **T8 决策与"为什么当初这么定"** | `kb/04-decisions.md`（KB-DEC） | `archive/ledger-transition-20260917.md` · `implementation-plan.md` | 既有决定可依新证据和最新授权复核；保留取代关系与依据，不据历史标题锁死设计 |
 | **T9 提醒与通知链路** | `summary/pick-signal-chain.md`（**先读它**：定位/触发/流向/断点） | `services/alert_triage.py`（判读闸门）· `api/routes/notifications.py`（通知收口）· `picks/watcher.py::dispatch_alert`（唯一汇聚点）· `services/push_policy.py` | **收敛口径时必须回扫自称该口径的注释**（`IMP-028` 遗留 5 处过期断言，见该文 §G4）；**判读闸门现状只作用于悬浮球**（§G1）；改通知来源须同步 §3.1 规则清单 |
+| **T10 跨模块长期治理 / 重大重构** | `skills/living-system-governor/SKILL.md` → `implementation-plan.md` §6/§6.2 → `retro-and-gaps.md` §5.9 | `ai/continuous-evolution.md` · `plan-registry.md` · W08/GOV-027 · 对应领域登记册/专题 | 先恢复真实上下文并比较 KEEP/FIX/MERGE/EXPERIMENT/WATCH/RETIRE；Skill 只提供上层治理协议，不自创任务状态、不越阶段门、不替代领域 owner |
 
 ### 0.2 任务动线（**按序**读——顺序错会先读一堆无关的）
 
@@ -156,6 +157,7 @@
 | **登记或收口任务** | `retro-and-gaps.md` §6.0 → 所属阶段唯一任务条目 → 实测/证据与状态更新 → handoff 当前现场 → doc-health P/Q |
 | **验证策略/因子是否有效** | `strategy/strategy-registry.md`（是否已测过）→ `strategy/backtest-rules.md`（禁令）→ 实证 → 结论**必须带失效条件** |
 | **调研外部仓库/工具** | `skills/ashare-innovation-radar/SKILL.md` → `ai/continuous-evolution.md` → 原始来源核查 → 值得保留再进 `kb/05-repo-tracker.md`；真实实验回对应 stage |
+| **做跨模块方案、重大重构或机制生命周期复核** | `skills/living-system-governor/SKILL.md` → 当前总方案/总账 → 对应 owner 文档/登记册 → 形成 KEEP/FIX/MERGE/EXPERIMENT/WATCH/RETIRE 决策 → 只把真正需要实施的最小切片写回 stage |
 
 ### 0.3 症状反查（**踩过的坑** → 只记得"当时踩过一次"时用它）
 
