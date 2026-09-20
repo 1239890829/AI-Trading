@@ -1,6 +1,6 @@
-# 当前交接：v9.10/U49 主动发现门已启用；G1 下一阻断项 IMP-044
+# 当前交接：G1/IMP-044 U49 Preflight 已冻结
 
-**当前模式：READY_FOR_NEXT_PLANNED_SLICE。** v9.10/U49 已把“主动发现隐藏问题”设为继续/审核/收口的默认门；用户无需再问“还有没有问题”。G1/P0 **IMP-006** 已正式闭环：PR #60 的 reviewed HEAD `87b099540a4b6c3d54c56a9d57293dc1963ee450` 经独立网页审核回执（PR comment `5749077515`，`APPROVED / MERGE_IF_GATES_PASS`）、exact-head `release_check.py`、required CI run `35502888440` 三 job 全绿后合入 `master`，merge commit `fa0185412db5c0d3f47445081da822f121cceff1`；合并后 master CI run `35503775542` 的 backend/frontend/docs 亦全部成功。GitHub 原生 `APPROVE` 因连接身份同时为 PR 作者被平台拒绝；现已明确网页审核回执与 GitHub 原生 Review 分层，单账号场景不得把 self-approve 限制变成自锁，也不得通过小号、自批或放宽 CI 绕过门禁。IMP-006 只证明 reference / executable snapshot / paper fill 的工程事实契约闭环，不证明买点收益。BUG-020 的真实交易时段生产会话仍为 G0 `待条件`，因此当前最低可行动阻断门仍是 G1，下一主切片为 **IMP-044（Outbox、类型化回执与中断恢复）**；若 BUG-020 条件先转为可行动，G0 重新优先。
+**当前模式：READY_FOR_NEXT_PLANNED_SLICE。** v9.10/U49 已生效；PR #64 又把 exact-HEAD 网页 Review 回执纳入 `release_check.py` 机器门。该 companion 的 reviewed HEAD `dd75593e3daf6c2343b41f0e91160c4f7aadc167`、Review comment `5749537877`、PR CI `35507688071` 与合并后 `master@6cbe746750d02bd387ead71d5d85cec50445e8e5` / push CI `35508271019` 均已核全绿，因此治理 companion 退出候选计算。当前唯一主业务切片恢复为 **G1/P0 IMP-044**；本轮 U49 Preflight 已在最新 master 上重新核真实通知链并冻结验收，允许 Codex 只实施这一刀。G1/P0 **IMP-006** 已正式闭环：PR #60 的 reviewed HEAD `87b099540a4b6c3d54c56a9d57293dc1963ee450` 经独立网页审核回执（PR comment `5749077515`，`APPROVED / MERGE_IF_GATES_PASS`）、exact-head `release_check.py`、required CI run `35502888440` 三 job 全绿后合入 `master`，merge commit `fa0185412db5c0d3f47445081da822f121cceff1`；合并后 master CI run `35503775542` 的 backend/frontend/docs 亦全部成功。GitHub 原生 `APPROVE` 因连接身份同时为 PR 作者被平台拒绝；现已明确网页审核回执与 GitHub 原生 Review 分层，单账号场景不得把 self-approve 限制变成自锁，也不得通过小号、自批或放宽 CI 绕过门禁。IMP-006 只证明 reference / executable snapshot / paper fill 的工程事实契约闭环，不证明买点收益。BUG-020 的真实交易时段生产会话仍为 G0 `待条件`，因此当前最低可行动阻断门仍是 G1，下一主切片为 **IMP-044（Outbox、类型化回执与中断恢复）**；若 BUG-020 条件先转为可行动，G0 重新优先。
 
 
 ## 1. 固定入口与范围
@@ -81,15 +81,16 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - v9.6 已新增 RSH-031：历史涨停/强连板/空间板/弱市穿越/题材梯队与异常板块拉升采用全量事件+失败对照+point-in-time+旧→新盲测；Jev 只做 bounded MapReduce/rerank/verification，效果准入继续由 RSH-026/IMP-020，猎场证据接线只走 IMP-049。v9.8/U47 进一步规定可交易真实性由 IMP-053 hunting-shadow 验证，首见/reference 不冒充成交或净收益。
 - v9.9/U48 规定 Jev/策略/因子/KB/路由等已采用机制仍需持续证明增量：固定实验候选集不再冒充猎场全局 taxonomy，历史有效不等于永久有效；衰退、知识贡献和额度节省必须用对应领域真实反馈复核。RSH-030 human gold 仍未完成，因此本轮只是治理登记，不产生准确率/额度节省结论。
 
-## 9. U49 主动审计回执（Preflight）
+## 9. U49 主动审计回执（IMP-044 Preflight）
 
-- **阶段**：`Preflight`；这是网页在下一业务切片实施前的主动审计，不是对未来实现的 Review 批准。
-- **触发**：用户指出“为什么不说就不能主动发现”，属于治理盲区/用户纠偏触发。
-- **范围**：协作/发布治理 + 当前 G1/IMP-044 的直接通知链边界；另核十阶段硬依赖图与 master branch protection。
-- **已检查八类**：自锁/不可能门禁；双事实源/配置空转；顺序/部分失败；幂等/去重/unknown；权限/fail-open；动态状态冻结；测试固化坏行为；重大决策传播/陈旧指针。
-- **本轮已证实**：①单账号 GitHub self-approve 自锁已在 PR #62 前后修正；②此前审核规则变化没有完整传播到 plan-registry/W08/Skills，且 W08 残留 IMP-006 旧指针，本 U49 治理片正在统一修正；③IMP-044 当前直接边界还存在“brief 去重先于 AlertEvent/Outbox”“Feishu direct-card 绕过 channels”“bool 回执把明确拒绝与 unknown 混同”等问题；④ `release_check.py` 目前不验证网页审核回执本身，只验证 GitHub/CI/线程等可机器取得的门，属于仍需治理的发布一致性缺口；⑤ `/api/picks/today` 有 `gate_live`，但动作链仍主要消费生成时 gate/buy_range，动态执行缺口继续归 IMP-049/053；⑥部分注释仍写旧“聚合卡”语义。
-- **已排除结构死锁**：当前 46 个 stage 任务无缺失硬依赖、无硬依赖环、无低门任务依赖更高门任务的 gate inversion；`master` 当前仍显示 protected，required checks 为 backend/frontend/docs。
-- **U49 自反审计**：本机制先审了自己，并发现五类会让新规则再次失效的问题：①单阶段“审计回执”会诱导执行侧自产审核，已改为网页 `Preflight` + 网页 exact-HEAD/diff `Review` 两阶段；②v9.10 升级后总方案仍残留 v9.9 定位与“47条累计需求”旧计数，已修正；③PR #63 首轮 docs CI 的传播守卫实际判红 7 处仍自称“当前 v9.9”的现役指针，只修当前指针、不篡改历史 v9.9 证据；④随后 backend 全量 pytest 又抓出旧回归测试把 `U01–U48` 固化为“正确值”，导致新增 U49 后自锁，已改为用当前 U49 构造一轮落后 U48 的反例；⑤机器传播守卫初版又错误要求运行态 handoff 同时存在未来 `Review`，已改为永久政策面同时保留两阶段、运行态只要求当前阶段为 `Preflight` 或 `Review`，并补反例测试防止时序自锁。说明 U49 的目标不是增加一张清单，而是主动寻找“测试、CI、文档看似合理仍可能错”的边界。
-- **PR #63 闭环事实**：exact-HEAD `29fc69d5084f4aead29fdba78b0cade9cb03ea73` 的网页 `Review` 回执已于合并前写入 PR comment `5749429098`，required CI run `35506928380` 三项全绿；PR #63 合并为 `master@ff45f05f0a897d456b9b1e4b0992c66bd67debb4` 后，push CI run `35507212389` 亦 completed/success。故 U49 本身已进入主干并通过 post-merge 验证。
-- **当前治理 companion（Preflight）**：修 `release_check.py` 的流程一致性缺口——要求 PR Conversation 中必须存在绑定当前 PR/HEAD 的网页 `Review` + `APPROVED / MERGE_IF_GATES_PASS` 回执；缺回执、错 PR、旧 HEAD 一律 BLOCKED。该机制只保证项目流程记录存在，不宣称同 GitHub 账号具备密码学 reviewer 隔离。分支 `chatgpt/gov-review-receipt-gate`，完成后仍回 G1/IMP-044，不改变主门。
-- **处置**：主动发现机制本体已闭环；先收口上述发布门 companion，再按 owner 处理 IMP-044 的 P0 通知问题、IMP-049/053 的动态执行问题与旧注释，不因治理 companion 跨门。
+- **阶段**：`Preflight`；对象是下一主切片 IMP-044，不是成果 Review。
+- **基点**：`master@6cbe746750d02bd387ead71d5d85cec50445e8e5`；PR #63/U49 与 PR #64/release-receipt gate 均已合并且 post-merge CI 成功。
+- **扫描范围**：`buy_point.check_and_dispatch → watcher.dispatch_alert → morning_brief.append_alert → AlertEvent/AlertRule → NotificationOutbox/Attempt → AlertEngine._delivery_block/_deliver_pending → NotifierRegistry/FeishuNotifier → tests/config`，并回看 IMP-006 的 `latest_notification_execution` 决策事实。
+- **已证实 P0-1 顺序/去重窗口**：`dispatch_alert` 当前先写 brief JSON 去重，再做 watch ledger/paper，最后才创建 AlertEvent；brief 成功但 DB/event 失败会让下一拍永久 dedup，且派生消费者可能先于通知事实存在。
+- **已证实 P0-2 渠道双事实源**：`picks_buy_point_channels` 默认 `in_app,log`，但 `check_and_dispatch` 后续无条件直接 `send_interactive`；因此 channels 不能真正关闭/控制 Feishu。迁移后 channels/rule 必须成为唯一外发权限，保留既有实际产品语义时默认收敛为 `in_app,log,feishu`，不得保留 direct-card 旁路。
+- **已证实 P0-3 回执语义缺失**：Notifier/Feishu 仍只返回 bool；明确平台拒绝与网络/超时/畸形回执被压成同一 False。IMP-044 必须产出 accepted / explicit_rejected / unknown，旧 bool 只留兼容。
+- **已证实 P0-4 Outbox 判据不兼容**：现有 `_delivery_block` 仅理解 price/change；`picks_buy_point` 会被 `_extract_value=None` 误判 `condition_no_longer_met`。必须用 `intent.kind=picks_buy_point` 专用 recheck，并绑定 latest decision_id/version、执行 snapshot freshness、渠道/target 与有效期。
+- **新增顺序裁定**：`决策归档 → AlertEvent + durable dedup + Feishu intent 同事务 → brief/watch-ledger/paper 派生消费者 → 异步发送`。每日去重权威迁到 DB；优先给 AlertEvent 增 nullable unique dedup_key，以 `trade_date+symbol+kind` 稳定哈希实现 create-once。brief 只做 best-effort 展示，不再拥有发送资格。
+- **非目标**：不在这一刀迁开板/风控/日报等其它来源；不解决 IMP-049/053 的盘中 gate/buy_range 动态重评；不改策略阈值、仓位或真实交易边界。
+- **允许下一动作**：Codex 从此 master 开一个 IMP-044 功能分支，只实现 W02 最新“类型化回执 + durable dedup + buy-point Outbox + 专用 pre-send recheck”纵切；完成后提交准确 HEAD、完整测试与恢复证据，网页再做 U49 `Review`。不得自行领取 IMP-032/BUG-016/IMP-049/053。
+
