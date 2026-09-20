@@ -159,6 +159,66 @@ def test_decision_propagation_auto_discovers_new_stale_current_summary(tmp_path,
     assert any("future-summary.md" in error and "v9.3" in error for error in errors)
 
 
+def test_decision_propagation_detects_reverse_target_chain_version(tmp_path, monkeypatch):
+    mod = load()
+    root = tmp_path
+    docs = root / "docs"
+    (docs / "summary").mkdir(parents=True)
+    (root / "skills" / "ashare-ledger-continue").mkdir(parents=True)
+    (root / "skills" / "ashare-task-handoff").mkdir(parents=True)
+
+    (docs / "implementation-plan.md").write_text("# AShare AI Trader 实施校准方案 v9.7\nJev jev-integration.md\n")
+    (docs / "INDEX.md").write_text("v9.7 jev-integration.md\n")
+    (docs / "handoff.md").write_text("v9.7 jev-integration.md\n")
+    (docs / "plan-registry.md").write_text("重大决策传播契约（防遗漏） 已更新 不适用\n")
+    (docs / "collaboration-workflow.md").write_text("plan-registry.md\n")
+    (docs / "summary" / "pick-signal-chain.md").write_text("> v9.5目标链见 ../implementation-plan.md\n")
+    (root / "AGENTS.md").write_text("v9.7 jev-integration.md\n")
+    (root / "skills" / "ashare-ledger-continue" / "SKILL.md").write_text(
+        " ".join([
+            "jev-integration.md", "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
+            "docs/implementation-plan.md", "docs/ai/jev-integration.md", "docs/retro-and-gaps.md", "docs/stages/"
+        ])
+    )
+    (root / "skills" / "ashare-task-handoff" / "SKILL.md").write_text("plan-registry.md\n")
+    monkeypatch.setattr(mod, "ROOT", root)
+    monkeypatch.setattr(mod, "DOCS", docs)
+
+    errors = mod.check_decision_propagation()
+    assert any("pick-signal-chain.md" in error and "v9.5" in error for error in errors)
+
+
+def test_decision_propagation_detects_stale_current_layer_version(tmp_path, monkeypatch):
+    mod = load()
+    root = tmp_path
+    docs = root / "docs"
+    (docs / "summary").mkdir(parents=True)
+    (root / "skills" / "ashare-ledger-continue").mkdir(parents=True)
+    (root / "skills" / "ashare-task-handoff").mkdir(parents=True)
+
+    (docs / "implementation-plan.md").write_text("# AShare AI Trader 实施校准方案 v9.7\nJev jev-integration.md\n")
+    (docs / "INDEX.md").write_text("v9.7 jev-integration.md\n")
+    (docs / "handoff.md").write_text("v9.7 jev-integration.md\n")
+    (docs / "plan-registry.md").write_text("重大决策传播契约（防遗漏） 已更新 不适用\n")
+    (docs / "collaboration-workflow.md").write_text("plan-registry.md\n")
+    (docs / "summary" / "architecture-design.md").write_text(
+        "> 当前 AI/语义协处理层以 ../implementation-plan.md v9.5 为准\n"
+    )
+    (root / "AGENTS.md").write_text("v9.7 jev-integration.md\n")
+    (root / "skills" / "ashare-ledger-continue" / "SKILL.md").write_text(
+        " ".join([
+            "jev-integration.md", "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
+            "docs/implementation-plan.md", "docs/ai/jev-integration.md", "docs/retro-and-gaps.md", "docs/stages/"
+        ])
+    )
+    (root / "skills" / "ashare-task-handoff" / "SKILL.md").write_text("plan-registry.md\n")
+    monkeypatch.setattr(mod, "ROOT", root)
+    monkeypatch.setattr(mod, "DOCS", docs)
+
+    errors = mod.check_decision_propagation()
+    assert any("architecture-design.md" in error and "v9.5" in error for error in errors)
+
+
 def test_open_evolution_guard_rejects_star_hard_gate(tmp_path, monkeypatch):
     mod = load()
     root = tmp_path

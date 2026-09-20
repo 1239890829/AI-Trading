@@ -1,13 +1,13 @@
 # 数据源与行情汇总（Data & Market Summary）
 
-> **定位**：数据源相关的一次性验证/设计结论汇总。**现役口径不在此**——见 `data-sources.md`（接入策略）、`data-source-comparison.md`（四源实测对比）、`data-dictionary.md`（字段审计约定）。
+> **定位**：数据源相关的一次性验证/设计结论汇总。**现役口径不在此**——见 `../data/data-sources.md`（接入策略）、`../data/data-source-comparison.md`（四源实测对比）、`../system/data-dictionary.md`（字段审计约定）。
 > **整理**：2026-09-10。
 
 ---
 
 ## 1. 龙虎榜（Longhu）口径与功能设计
 
-**数据源**：东方财富 `RPT_DAILYBILLBOARD_DETAILSNEW`（已接入；接入链见 `data-sources.md`）。
+**数据源**：东方财富 `RPT_DAILYBILLBOARD_DETAILSNEW`（已接入；接入链见 `../data/data-sources.md`）。
 
 **上榜阈值必须配置化驱动**（**不得假设所有板块同一规则**）：
 ±7% 偏离 / 15% 振幅 / 20% 换手 / 三日 ±20% / 退市整理 / ST 异动 …
@@ -19,7 +19,7 @@
 - 每日总览——筛选（日期/上榜原因/交易所/板块/行业/概念/机构参与/知名游资/连续上榜/净买额区间/成交额区间）；排序（涨跌幅/净买额/成交额/机构净买额/游资净买额/买卖金额/席位集中度/成交额占比）
 - 个股详情——统计周期：历史 / 近 5 / 20 / 60 日 / 近 1 年；内容：上榜次数与原因变化、净买/买/卖趋势、席位数量趋势、机构与游资参与、首次上榜至今表现；表现：次日/3/5/10 日涨跌、成功率、平均与中位收益、最大收益、最大回撤、负收益比例
 
-> **归口说明**：本文为口径性内容，**已同步并入 `data-dictionary.md`**（数据字段约定的职责）；此处保留设计要点。
+> **归口说明**：本文为口径性内容，**已同步并入 `../system/data-dictionary.md`**（数据字段约定的职责）；此处保留设计要点。
 
 ---
 
@@ -53,6 +53,6 @@
 
 | 原始文档 | 处置 |
 |---|---|
-| summary/data-market.md | 内容并入 `data-dictionary.md` + 本文 §1；原件归档 |
+| summary/data-market.md | 内容并入 `../system/data-dictionary.md` + 本文 §1；原件归档 |
 | summary/data-market.md | 精华并入本文 §2；原件归档 |
 | halt-check-risk-analysis.md | 已归档（精华在 `summary/stock-strategy.md` §6） |

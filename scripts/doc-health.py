@@ -1568,8 +1568,13 @@ def check_decision_propagation() -> list[str]:
 
     # 自动发现“当前方案/当前治理/当前实施/目标链”版本指针。历史证据里单纯出现旧 v9.x 不判；
     # 只有一行明确声称它是**当前**入口/目标链时才要求与 implementation-plan 同版。
-    current_pointer_re = re.compile(
-        r"(?:当前方案|当前治理|当前实施|当前.*修订|目标链).*?\b(v\d+\.\d+)\b"
+    current_pointer_res = (
+        re.compile(
+            r"(?:当前方案|当前治理|当前实施|当前[^。\n]{0,60}层|"
+            r"当前[^。\n]{0,60}修订|目标链).*?\b(v\d+\.\d+)\b"
+        ),
+        # 反向写法也要钉住：版本写在“目标链”之前时，旧单向正则抓不到。
+        re.compile(r"\b(v\d+\.\d+)\s*(?:当前\s*)?目标链"),
     )
     seen_current_pointer_paths: set[Path] = set()
     for path in active_md_targets():
@@ -1581,11 +1586,13 @@ def check_decision_propagation() -> list[str]:
         if rel.as_posix() == "docs/implementation-plan.md":
             continue
         for lineno, line in enumerate(_read(path).splitlines(), 1):
-            match_pointer = current_pointer_re.search(line)
-            if match_pointer and match_pointer.group(1) != version:
-                errors.append(
-                    f"{rel}:{lineno}：当前方案指针仍为 {match_pointer.group(1)}，应为 {version}"
-                )
+            matches = [pattern.search(line) for pattern in current_pointer_res]
+            for match_pointer in (m for m in matches if m is not None):
+                if match_pointer.group(1) != version:
+                    errors.append(
+                        f"{rel}:{lineno}：当前方案指针仍为 {match_pointer.group(1)}，应为 {version}"
+                    )
+                    break
 
     jev_surfaces = (
         DOCS / "implementation-plan.md",

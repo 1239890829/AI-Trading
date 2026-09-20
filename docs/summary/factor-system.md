@@ -11,8 +11,8 @@
 ## 1. 三层结构（来源：factor-library-design）
 
 ```
-factor-candidates.md     候选登记册（来源/原始定义/数据可行性分级/状态）
-factor-lifecycle-governance.md  全生命周期制度（挖掘→评估→入库→使用→出库→衰减，六环）
+../strategy/factor-candidates.md     候选登记册（来源/原始定义/数据可行性分级/状态）
+../strategy/factor-lifecycle-governance.md  全生命周期制度（挖掘→评估→入库→使用→出库→衰减，六环）
 app/factors/library.py   注册表 = 唯一口径锚（运行时消费方）
 app/factors/evaluate.py  评估引擎（IC 计算）
 ```
@@ -145,7 +145,7 @@ IC/ICIR 报告，`data/factors/eval_report.json` 也在磁盘上，但**全站�
 
 | 原始文档 | 处置 |
 |---|---|
-| summary/factor-system.md | 精华并入本文 §1/§5 + `factor-lifecycle-governance.md`；原件归档 |
+| factor-library-design.md | 精华并入本文 §1/§5 + `../strategy/factor-lifecycle-governance.md`；原件已删除/可从 Git 追溯 |
 | factor-ic-review-20260908.md | 精华并入本文 §3/§4；原件归档 |
 | ../strategy/factor-lifecycle-governance.md | **现役分类目录**（治理入口） |
 | ../strategy/factor-candidates.md | **现役分类目录**（登记册数据） |
