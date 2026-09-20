@@ -933,55 +933,110 @@ def _alert_price(alert: dict, snap_price: float | None = None) -> float | None:
 
 
 async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
-    """去重（append_alert）→ record_trigger → NotifierRegistry 分发。
-
-    rule_provider：返回 AlertRule 的零参函数（如买点事件用 __picks_buy_point__
-    独立规则与通道）；默认 watcher 系统规则。alert["card"]（dict，可选）会进
-    snapshot，FeishuNotifier 见 card 即发 interactive 卡片形态。
-    返回 False = 当日重复（key 已存在），调用方无须重试。app 兼容实例或 .state。
-    """
+    """Persist/dedup first for buy points; legacy watcher alerts keep brief-first semantics."""
     from app.picks.morning_brief import append_alert, brief_for_today
 
-    target, _ = brief_for_today()
-    if not append_alert(target, alert):
-        return False
-    # 猎场批次 A（需求 7/8）：盘中确认个股**首见即入台账**（持久化保留，当日唯一）；
-    # 入选依据 = kind/text/direction（入选时刻的证据快照）。失败只记日志不阻断分发。
+    is_buy_point = alert.get("kind") == "buy_point" and rule_provider is not None
+    state = app.state if hasattr(app, "state") else app
+    session_factory = get_session_factory()
+    meta = alert.get("meta") or {}
+
+    if is_buy_point and alert.get("symbol") and not alert.get("name"):
+        snap_rows = getattr(state, "snapshot_service", None)
+        for sr in getattr(snap_rows, "snapshot", None) or []:
+            if sr.get("symbol") == alert["symbol"]:
+                alert["name"] = sr.get("name") or ""
+                break
+        if not alert.get("name"):
+            log.warning("buy-point %s missing name; fail closed before durable intent", alert["symbol"])
+            return False
+
+    snapshot: dict = {
+        "kind": alert.get("kind"),
+        "direction": alert.get("direction"),
+        "text": alert.get("text"),
+        "name": alert.get("name") or None,
+    }
+    if isinstance(alert.get("card"), dict):
+        snapshot["card"] = alert["card"]
+    if isinstance(meta.get("execution_ref"), dict):
+        snapshot["execution_ref"] = meta["execution_ref"]
+
+    rule = None
+    repo = None
+    event = None
+    registry = get_notifier_registry()
+    if is_buy_point:
+        rule = rule_provider(session_factory)
+        repo = getattr(state, "alert_repo", None) or AlertRepository(session_factory)
+        execution_ref = meta.get("execution_ref") or {}
+        dedup_key = str(alert.get("dedup_key") or "")
+        trade_date = str(meta.get("trade_date") or "")
+        if not dedup_key or not trade_date or not execution_ref.get("decision_version"):
+            log.error("buy-point durable identity missing; block downstream consumers")
+            return False
+        feishu = registry.get("feishu")
+        target = feishu.delivery_target() if feishu is not None and hasattr(feishu, "delivery_target") else ""
+        now_ms = int(time.time() * 1000)
+        lifetime = max(30.0, min(float(settings.picks_buy_point_interval_seconds), 120.0))
+        event, created = repo.record_trigger_once(
+            rule.id,
+            alert.get("symbol") or "000000",
+            float(meta.get("trigger_value") or 0.0),
+            float(meta.get("threshold") or 0.0),
+            dedup_key=dedup_key,
+            snapshot=snapshot,
+            outbox_target=target,
+            now_ms=now_ms,
+            expires_at_ms=now_ms + int(lifetime * 1000),
+            outbox_intent={
+                "kind": "picks_buy_point",
+                "trade_date": trade_date,
+                "decision_id": execution_ref.get("decision_id"),
+                "decision_version": execution_ref.get("decision_version"),
+            },
+        )
+        if not created:
+            return False
+        # Brief is now derived display only.  Its failure cannot revoke the
+        # already committed AlertEvent/Outbox or make the next beat send again.
+        target_date, _ = brief_for_today()
+        with contextlib.suppress(Exception):
+            append_alert(target_date, alert)
+    else:
+        target_date, _ = brief_for_today()
+        if not append_alert(target_date, alert):
+            return False
+
+    # Derived consumer 1: watch ledger. It must never run before durable buy-point facts.
     if alert.get("symbol"):
         with contextlib.suppress(Exception):
             from app.picks.pre_limit_radar import board_limit_pct, is_sealed
             from app.picks.watch_ledger import record_sighting
 
-            # 2026-09-09 用户指令：缺名称=无效提醒——name 空时从快照补，仍空则不登记
             snap_pct: float | None = None
             snap_price: float | None = None
             if not alert.get("name"):
-                try:
-                    snap_rows = getattr(app.state if hasattr(app, "state") else app, "snapshot_service", None)
-                    for sr in getattr(snap_rows, "snapshot", None) or []:
-                        if sr.get("symbol") == alert["symbol"]:
-                            alert["name"] = sr.get("name") or ""
-                            snap_pct = sr.get("change_pct")
-                            snap_price = sr.get("price")
-                            break
-                except Exception:  # noqa: BLE001
-                    pass
+                snap_rows = getattr(state, "snapshot_service", None)
+                for sr in getattr(snap_rows, "snapshot", None) or []:
+                    if sr.get("symbol") == alert["symbol"]:
+                        alert["name"] = sr.get("name") or ""
+                        snap_pct = sr.get("change_pct")
+                        snap_price = sr.get("price")
+                        break
             if not alert.get("name"):
                 log.warning("watcher alert %s 无名称且快照缺失——不入台账", alert["symbol"])
                 return False
-            # KB-DEC-011（2026-09-09 用户指令）：只有涨停前提醒过的才入台账——
-            # 提醒时刻已封板（或无行情佐证可证明未封板）→ 只提醒不入册
             if snap_pct is None:
-                try:
-                    snap_rows = getattr(app.state if hasattr(app, "state") else app, "snapshot_service", None)
-                    for sr in getattr(snap_rows, "snapshot", None) or []:
-                        if sr.get("symbol") == alert["symbol"]:
-                            snap_pct = sr.get("change_pct")
-                            snap_price = sr.get("price")
-                            break
-                except Exception:  # noqa: BLE001
-                    pass
-            if snap_pct is None or is_sealed(float(snap_pct), board_limit_pct(str(alert["symbol"]), str(alert["name"]))):
+                snap_rows = getattr(state, "snapshot_service", None)
+                for sr in getattr(snap_rows, "snapshot", None) or []:
+                    if sr.get("symbol") == alert["symbol"]:
+                        snap_pct = sr.get("change_pct")
+                        snap_price = sr.get("price")
+                        break
+            if snap_pct is None or is_sealed(
+                float(snap_pct), board_limit_pct(str(alert["symbol"]), str(alert["name"]))
+            ):
                 log.warning(
                     "watcher alert %s 提醒时已封板/无行情佐证（pct=%s）——KB-DEC-011 不入台账（提醒照发）",
                     alert["symbol"], snap_pct,
@@ -998,15 +1053,14 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
                         "kind": alert.get("kind"),
                         "text": (alert.get("text") or "")[:300],
                         "direction": alert.get("direction") or "",
-                        "decision_id": ((alert.get("meta") or {}).get("execution_ref") or {}).get("decision_id"),
-                        "decision_version": ((alert.get("meta") or {}).get("execution_ref") or {}).get("decision_version"),
+                        "decision_id": (meta.get("execution_ref") or {}).get("decision_id"),
+                        "decision_version": (meta.get("execution_ref") or {}).get("decision_version"),
                     },
                     entry_price=_alert_price(alert, snap_price),
                     entry_time=beijing_now().strftime("%H:%M:%S"),
                 )
-    # 仓位引擎（2026-09-09 闭环「持仓」段）：买点/确认触发 → 是否自动开模拟仓由
-    # 引擎按当日盘面裁定（阶段仓位上限/闸门/角色权重/确定性门槛）——嗅到≠买入，
-    # pre_limit 预警不在开仓白名单。
+
+    # Derived consumer 2: paper position. Durable buy-point event/outbox already exists here.
     if alert.get("kind") in ("buy_point", "confirm"):
         with contextlib.suppress(Exception):
             from app.picks.position_engine import maybe_open
@@ -1016,38 +1070,25 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
                 symbol=str(alert["symbol"]), name=str(alert.get("name") or ""),
                 trigger=str(alert["kind"]),
                 price=_alert_price(alert, _snapshot_price(app, alert.get("symbol"))),
-                decision_context=((alert.get("meta") or {}).get("execution_ref") or None),
+                decision_context=(meta.get("execution_ref") or None),
             )
 
-    state = app.state if hasattr(app, "state") else app
-    session_factory = get_session_factory()
-    rule = rule_provider(session_factory) if rule_provider is not None else ensure_system_rule(session_factory)
-    repo = getattr(state, "alert_repo", None) or AlertRepository(session_factory)
-    meta = alert.get("meta") or {}
-    snapshot: dict = {
-        "kind": alert.get("kind"),
-        "direction": alert.get("direction"),
-        "text": alert.get("text"),
-        # 名称必须随快照落库：悬浮球（alert_triage.pending_bubbles）要求
-        # symbol+name 齐备，缺 name 整条过滤（2026-09-09 用户指令）。
-        # 此前只落 kind/direction/text → 实测 14 条 notify 全部 name=None，
-        # 悬浮球一条 watcher 个股提醒都收不到（2026-09-10 修复）。
-        "name": alert.get("name") or None,
-    }
-    if isinstance(alert.get("card"), dict):
-        snapshot["card"] = alert["card"]
-    if isinstance(meta.get("execution_ref"), dict):
-        # IMP-006：AlertEvent 的 snapshot 只有 1024 字符容量；这里只存稳定引用和
-        # 必要价格身份，完整执行事实唯一保留在 OpportunityDecisionSnapshot。
-        snapshot["execution_ref"] = meta["execution_ref"]
-    event = repo.record_trigger(
-        rule.id,
-        alert.get("symbol") or "000000",
-        float(meta.get("trigger_value") or 0.0),
-        float(meta.get("threshold") or 0.0),
-        snapshot=snapshot,
-    )
-    channels = await get_notifier_registry().dispatch(event, rule)
+    if not is_buy_point:
+        rule = rule_provider(session_factory) if rule_provider is not None else ensure_system_rule(session_factory)
+        repo = getattr(state, "alert_repo", None) or AlertRepository(session_factory)
+        event = repo.record_trigger(
+            rule.id,
+            alert.get("symbol") or "000000",
+            float(meta.get("trigger_value") or 0.0),
+            float(meta.get("threshold") or 0.0),
+            snapshot=snapshot,
+        )
+
+    # Buy-point Feishu is exclusively delivered by Outbox; no direct-card side path.
+    if is_buy_point:
+        channels = await registry.dispatch(event, rule, exclude=("feishu",))
+    else:
+        channels = await registry.dispatch(event, rule)
     repo.update_event_channels(event.id, channels)
     first_line = (alert.get("text") or "").splitlines()[0] if alert.get("text") else alert.get("key")
     log.warning("[PICKS-WATCHER] %s", first_line)

@@ -27,6 +27,8 @@ from app.repositories.watchlist_repo import WatchlistRepository
 def rig(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "poll_interval_seconds", 5)
     monkeypatch.setattr(settings, "stale_after_seconds", 10)
+    from app.models.opportunity_learning import OpportunityDecisionSnapshot, OpportunityOutcomeLabel
+    assert OpportunityDecisionSnapshot.__table__.name and OpportunityOutcomeLabel.__table__.name
     engine = create_engine(f"sqlite:///{tmp_path / 'outbox.db'}")
     @sa_event.listens_for(engine, "connect")
     def foreign_keys(conn, _):
@@ -71,6 +73,56 @@ def queue(rig, *, lifetime=300_000):
     e = repo.record_trigger(rule.id, "600000", 11, 10, snapshot=quote,
                             outbox_target=notifier.delivery_target(), now_ms=now, expires_at_ms=now+lifetime)
     return e, repo.outbox.pending_ids()[0], now
+
+
+def queue_buy_point(rig, *, price=10.5, as_of=None):
+    from app.picks.opportunity_learning import archive_notification_pipeline, latest_notification_execution
+
+    repo, factory, _, service, notifier, *_ = rig
+    trade_date = "2026-09-21"
+    as_of = as_of or datetime(2026, 9, 21, 10, 30)
+    item = {
+        "symbol": "600000", "name": "甲", "price": 10.0,
+        "confidence": {"tier": "executable"}, "vetoes": [],
+        "buy_range": {"low": 10.2, "high": 10.8},
+    }
+    hit = {"item": item, "price": price, "chg": 5.0}
+    archive_notification_pipeline(
+        [item], trade_date=trade_date, as_of=as_of, hits=[hit], skips=[],
+        dispatch_by_symbol={}, pick_generated_at="2026-09-21T09:26:00+08:00",
+        execution_by_symbol={"600000": {
+            "state": "ready", "price": price, "change_pct": 5.0,
+            "prev_close": 10.0, "source": "isolated-test",
+        }},
+        session_factory=factory,
+    )
+    latest = latest_notification_execution(trade_date, factory)["600000"]
+    rule = repo.create_rule(
+        name="buy-point", condition_type="picks_buy_point", threshold=0,
+        scope="all", channels=["in_app", "feishu"], cooldown_seconds=0, enabled=True,
+    )
+    ref = {
+        "decision_id": latest["decision_id"],
+        "decision_version": latest["decision_version"],
+        "execution_snapshot_state": "ready",
+        "execution_snapshot_price": price,
+    }
+    now = service._now_ms()
+    event, created = repo.record_trigger_once(
+        rule.id, "600000", 0, 0,
+        dedup_key="b" * 64,
+        snapshot={"kind": "buy_point", "name": "甲", "card": {"header": {}}, "execution_ref": ref},
+        outbox_target=notifier.delivery_target(),
+        now_ms=now, expires_at_ms=now + 60_000,
+        outbox_intent={
+            "kind": "picks_buy_point",
+            "trade_date": trade_date,
+            "decision_id": latest["decision_id"],
+            "decision_version": latest["decision_version"],
+        },
+    )
+    assert created
+    return event, rule, item, hit, latest
 
 
 def test_rule_engine_acceptance_is_durable_and_not_delivery(rig):
@@ -121,15 +173,20 @@ def test_outbox_freshness_matches_quote_hub_poll_window(rig, monkeypatch):
     assert row.expires_at_ms - row.created_at_ms == 60_000
 
 
-@pytest.mark.parametrize("body", [{}, {"code": None}, {"code": 1}, {"code": False}])
-def test_unconfirmed_response_is_unknown_without_retry(rig, body):
+@pytest.mark.parametrize("body,state", [
+    ({}, "unknown"),
+    ({"code": None}, "unknown"),
+    ({"code": 1}, "permanent_failed"),
+    ({"code": False}, "unknown"),
+])
+def test_typed_response_terminal_state_does_not_retry(rig, body, state):
     _, factory, _, service, _, sent, response, _ = rig
     response["body"] = body
     asyncio.run(service._tick())
     asyncio.run(service._deliver_pending())
     assert len(sent) == 1
     row, = rows(factory)
-    assert row.state == "unknown" and row.accepted_at_ms is None
+    assert row.state == state and row.accepted_at_ms is None
 
 
 def test_crash_after_commit_before_dispatch_is_recoverable(rig):
@@ -141,6 +198,59 @@ def test_crash_after_commit_before_dispatch_is_recoverable(rig):
     restarted.update_quotes(service._quotes)
     asyncio.run(restarted._deliver_pending())
     assert len(sent) == 1 and rows(factory)[0].state == "accepted"
+
+
+def test_buy_point_intent_uses_dedicated_recheck_not_price_rule(rig):
+    _, factory, _, service, _, sent, *_ = rig
+    queue_buy_point(rig)
+    # A generic scope/quote recheck would fail with no live quote. The buy-point
+    # path must use the archived exact decision/version instead.
+    service.update_quotes({})
+    asyncio.run(service._deliver_pending())
+    row, = rows(factory)
+    assert row.state == "accepted" and len(sent) == 1
+
+
+def test_buy_point_intent_suppressed_when_event_execution_is_not_ready(rig):
+    from app.models.alert import AlertEvent
+
+    _repo, factory, _, service, _, sent, *_ = rig
+    event, *_ = queue_buy_point(rig)
+    with factory() as db:
+        row = db.get(AlertEvent, event.id)
+        snap = json.loads(row.snapshot)
+        snap["execution_ref"]["execution_snapshot_state"] = "stale"
+        row.snapshot = json.dumps(snap, ensure_ascii=False)
+        db.commit()
+
+    asyncio.run(service._deliver_pending())
+    outbox, = rows(factory)
+    assert outbox.state == "suppressed"
+    assert outbox.reason == "buy_point_event_execution_not_ready"
+    assert sent == []
+
+
+def test_buy_point_intent_suppressed_when_decision_version_is_superseded(rig):
+    from app.picks.opportunity_learning import archive_notification_pipeline
+
+    _, factory, _, service, _, sent, *_ = rig
+    _event, _rule, item, _hit, _old = queue_buy_point(rig)
+    newer_hit = {"item": item, "price": 10.6, "chg": 6.0}
+    archive_notification_pipeline(
+        [item], trade_date="2026-09-21", as_of=datetime(2026, 9, 21, 10, 31),
+        hits=[newer_hit], skips=[], dispatch_by_symbol={},
+        pick_generated_at="2026-09-21T09:26:00+08:00",
+        execution_by_symbol={"600000": {
+            "state": "ready", "price": 10.6, "change_pct": 6.0,
+            "prev_close": 10.0, "source": "isolated-test",
+        }},
+        session_factory=factory,
+    )
+    asyncio.run(service._deliver_pending())
+    row, = rows(factory)
+    assert row.state == "suppressed"
+    assert row.reason == "buy_point_decision_superseded"
+    assert sent == []
 
 
 def test_transaction_rolls_back_event_rule_and_outbox_together(rig):
@@ -155,6 +265,93 @@ def test_transaction_rolls_back_event_rule_and_outbox_together(rig):
         sa_event.remove(NotificationOutbox, "before_insert", fail_insert)
     assert repo.list_events() == [] and rows(factory) == [] and sent == []
     assert repo.get_rule(rule.id).last_triggered_at is None
+
+
+def test_two_connections_cannot_create_same_durable_buy_point(rig):
+    repo, factory, rule, service, notifier, *_ = rig
+    repo.update_rule(rule.id, condition_type="picks_buy_point", channels=["in_app", "feishu"])
+    now = service._now_ms()
+    barrier = Barrier(2)
+
+    def create_once():
+        barrier.wait()
+        return AlertRepository(factory).record_trigger_once(
+            rule.id, "600000", 0, 0,
+            dedup_key="c" * 64,
+            snapshot={"kind": "buy_point", "card": {"header": {}}, "execution_ref": {
+                "decision_id": "D", "decision_version": "V",
+            }},
+            outbox_target=notifier.delivery_target(),
+            now_ms=now, expires_at_ms=now + 60_000,
+            outbox_intent={
+                "kind": "picks_buy_point", "trade_date": "2026-09-21",
+                "decision_id": "D", "decision_version": "V",
+            },
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = [pool.submit(create_once), pool.submit(create_once)]
+        created = [future.result()[1] for future in results]
+    assert sum(created) == 1
+    assert len(repo.list_events()) == 1
+    assert len(rows(factory)) == 1
+
+
+def test_buy_point_event_and_outbox_rollback_together(rig):
+    repo, factory, rule, service, notifier, sent, *_ = rig
+    repo.update_rule(rule.id, condition_type="picks_buy_point", channels=["in_app", "feishu"])
+    now = service._now_ms()
+
+    def fail_insert(*args):
+        raise RuntimeError("injected buy-point outbox failure")
+
+    sa_event.listen(NotificationOutbox, "before_insert", fail_insert)
+    try:
+        with pytest.raises(RuntimeError, match="injected"):
+            repo.record_trigger_once(
+                rule.id, "600000", 0, 0,
+                dedup_key="d" * 64,
+                snapshot={"kind": "buy_point", "card": {"header": {}}},
+                outbox_target=notifier.delivery_target(),
+                now_ms=now, expires_at_ms=now + 60_000,
+                outbox_intent={"kind": "picks_buy_point"},
+            )
+    finally:
+        sa_event.remove(NotificationOutbox, "before_insert", fail_insert)
+    assert repo.list_events() == []
+    assert rows(factory) == []
+    assert sent == []
+
+
+def test_two_connections_create_one_durable_buy_point_intent(rig):
+    repo, factory, rule, service, notifier, *_ = rig
+    now = service._now_ms()
+    barrier = Barrier(2)
+
+    def create():
+        barrier.wait()
+        return AlertRepository(factory).record_trigger_once(
+            rule.id, "600000", 0, 0,
+            dedup_key="c" * 64,
+            snapshot={"kind": "buy_point", "card": {"header": {}}, "execution_ref": {
+                "decision_id": "OD-concurrent", "decision_version": "ODV-concurrent",
+            }},
+            outbox_target=notifier.delivery_target(),
+            now_ms=now, expires_at_ms=now + 60_000,
+            outbox_intent={
+                "kind": "picks_buy_point", "trade_date": "2026-09-21",
+                "decision_id": "OD-concurrent", "decision_version": "ODV-concurrent",
+            },
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        a, b = pool.submit(create), pool.submit(create)
+        ra, rb = a.result(), b.result()
+
+    assert sum(created for _event, created in (ra, rb)) == 1
+    assert ra[0].id == rb[0].id
+    assert len(repo.list_events()) == 1
+    assert len(rows(factory)) == 1
 
 
 def test_two_connections_cannot_claim_same_intent(rig):
@@ -331,6 +528,7 @@ def test_event_api_exposes_channel_state_without_claiming_delivered(client):
 def test_new_outbox_schema_matches_models_and_old_events_are_not_backfilled(tmp_path):
     from alembic import command
     from alembic.config import Config
+    from sqlalchemy import inspect
     from app.core.migrations import BACKEND_DIR, run_migrations
     from tests.test_db_migrations import _schema_drift
 
@@ -340,15 +538,34 @@ def test_new_outbox_schema_matches_models_and_old_events_are_not_backfilled(tmp_
     cfg.attributes["configure_logger"] = False
     with engine.begin() as conn:
         cfg.attributes["connection"] = conn
-        command.upgrade(cfg, "c5d2f8a3b7e1")
-    repo = AlertRepository(sessionmaker(bind=engine))
-    old_rule = repo.create_rule(name="old", channels=["feishu"])
-    old = repo.record_trigger(old_rule.id, "600000", 11, 10)
+        command.upgrade(cfg, "d2e4a6b8c0f1")
+        # Build a genuine pre-dedup historical event without importing the new
+        # ORM column into the old schema.
+        conn.execute(text("""
+            INSERT INTO alert_rule
+            (id,name,enabled,condition_type,threshold,symbols,scope,cooldown_seconds,channels,
+             last_triggered_at,created_at,updated_at)
+            VALUES (1,'old',1,'price_above',10,NULL,'symbols',300,'["feishu"]',
+                    NULL,'2026-09-20 09:00:00','2026-09-20 09:00:00')
+        """))
+        conn.execute(text("""
+            INSERT INTO alert_event
+            (id,rule_id,symbol,trigger_value,threshold,triggered_at,acknowledged,delivered_channels,snapshot)
+            VALUES (1,1,'600000',11,10,'2026-09-20 10:00:00',0,NULL,NULL)
+        """))
     assert run_migrations(engine) == "upgraded"
     assert run_migrations(engine) == "upgraded"
+
     for model in (NotificationOutbox, NotificationAttempt):
         assert not _schema_drift(engine, model)
         with engine.connect() as conn:
             assert conn.scalar(select(func.count()).select_from(model)) == 0
-    assert repo.get_event(old.id).trigger_value == 11
+
+    insp = inspect(engine)
+    cols = {c["name"]: c for c in insp.get_columns("alert_event")}
+    indexes = {i["name"]: i for i in insp.get_indexes("alert_event")}
+    assert cols["dedup_key"]["nullable"] is True
+    assert bool(indexes["ux_alert_event_dedup_key"]["unique"]) is True
+    with engine.connect() as conn:
+        assert conn.scalar(text("SELECT dedup_key FROM alert_event WHERE id=1")) is None
     engine.dispose()

@@ -131,6 +131,31 @@ def test_send_rejected_on_http_error():
     assert asyncio.run(n2.send(_event(), _rule())) is False
 
 
+@pytest.mark.parametrize("status,body,outcome", [
+    (200, {"code": 0}, "accepted"),
+    (200, {"code": 19021, "msg": "sign fail"}, "explicit_rejected"),
+    (400, {"code": 19021}, "explicit_rejected"),
+    (500, {"code": 0}, "unknown"),
+    (200, {}, "unknown"),
+    (200, {"code": 0, "StatusCode": 1}, "unknown"),
+])
+def test_typed_receipt_distinguishes_accept_reject_and_unknown(status, body, outcome):
+    from app.notifiers.feishu import _response_result
+
+    assert _response_result(httpx.Response(status, json=body), "test").outcome == outcome
+
+
+def test_send_result_network_error_is_unknown():
+    n = FeishuNotifier(
+        webhook="https://hook.test/abc",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda req: (_ for _ in ()).throw(httpx.ConnectError("boom"))
+        )),
+    )
+    result = asyncio.run(n.send_result(_event(), _rule()))
+    assert result.outcome == "unknown"
+
+
 def test_send_unconfigured_returns_false_without_request():
     calls: list = []
     # app 凭据也显式置空：本地 .env 可能已配，settings 默认值不可依赖（测试确定性）

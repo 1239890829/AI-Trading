@@ -16,10 +16,10 @@
   5. 未触涨停区（change_pct < 9.5%，10cm 保守口径；20cm 高弹性由区间上限约束）
 - 推送形态：飞书 interactive 卡片，**每只命中票一张独立卡片**（逐票单卡，
   不汇总多票在一条消息里），版式与每日精选推送卡完全一致
-  （app/picks/push_cards.py 同函数）；同拍多票按序发送并间隔 0.5s（频控）
-- 去重：每票每日至多一推（简报 append_alert 按 key 去重）；逐票落 AlertEvent
-  （in_app/log 通道）供复盘与 T+1 收益回填；卡片经 FeishuNotifier
-  .send_interactive 显式发送（不进逐票 NotifierRegistry 分发，避免 text 形态）
+  （app/picks/push_cards.py 同函数）；同拍多票各自形成独立 durable intent，由 Outbox 顺序领取发送
+- 去重：每票每天一个 durable AlertEvent.dedup_key；AlertEvent + Feishu Outbox
+  intent 同事务落库，晨报仅作派生展示。每票卡片先写入 snapshot.card，再由 Outbox
+  异步发送；不再存在 send_interactive 直发旁路。
 
 结构：evaluate_buy_points 纯函数（可回测可单测）；check_and_dispatch 服务层
 （取数+分发）；buy_point_loop lifespan 调度（与 watcher_loop 同模式）。
@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import time
@@ -37,13 +38,12 @@ from app.core.db import get_session_factory
 from app.market.price_rules import limit_pct as _rules_limit_pct
 from app.market import trade_calendar as tc
 from app.models.alert import AlertRule
-from app.notifiers import get_notifier_registry
 from app.picks.push_cards import build_buy_point_card
 from app.core.bjtime import beijing_now
 
 log = logging.getLogger(__name__)
 
-#: 买点专用系统规则名（落库与 in_app/log 分发；飞书卡片显式单发不走 rule 通道）
+#: 买点专用系统规则名；channels 同时拥有 in_app/log/feishu 的唯一外发权限。
 BUY_POINT_RULE_NAME = "__picks_buy_point__"
 
 #: 置信档白名单：meta_confidence 的 executable / strong（observe/stand_aside 不推）
@@ -282,6 +282,12 @@ def _execution_ref(contract: dict | None) -> dict | None:
     }
 
 
+def _buy_point_dedup_key(trade_date: str, symbol: str) -> str:
+    """Stable DB idempotency identity for one symbol's daily buy-point intent."""
+    raw = f"{trade_date}|buy_point|{symbol}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def build_buy_point_alert(hit: dict) -> dict:
     """单票买点事件；meta 只携带 IMP-006 的执行事实引用，不复制权威快照正文。"""
     it = hit["item"]
@@ -339,7 +345,7 @@ async def _archive_notification_decisions(
 
 
 async def check_and_dispatch(app) -> list[dict]:
-    """一拍检查：交易日+盘中 → 当日精选+快照 → 判定 → 聚合卡单发 + 逐票留痕。
+    """一拍检查：交易日+盘中 → 当日精选+快照 → 判定 → durable intent + 逐票留痕。
 
     返回实际分发（去重后）的 hits。任何一环失败不抛（loop 兜底日志）。
     """
@@ -400,44 +406,35 @@ async def check_and_dispatch(app) -> list[dict]:
         log.error("buy point decision not persisted; block notification and paper action for this beat")
         return []
 
-    # 逐票去重落库（append_alert key 去重；已推过的票当日不再进卡）
+    # IMP-044：先构建要发送的准确卡片，再交给 watcher 做 durable
+    # AlertEvent + dedup + Outbox。同拍不再直接做任何 Feishu 网络 IO。
     from app.picks.watcher import dispatch_alert
 
-    dispatched: list[dict] = []
-    for h in hits:
-        ok = await dispatch_alert(app, build_buy_point_alert(h), rule_provider=ensure_buy_point_rule)
-        if ok:
-            dispatched.append(h)
-        else:
-            log.info("buy point deduped: %s（当日已推）", h["item"].get("symbol"))
-    if not dispatched:
-        return []
-
-    # 逐票单卡（2026-09-08 用户要求：每只股票对应一张独立卡片，不汇总）：
-    # 先全部落库去重，再按顺序逐票发卡；同拍多票间隔 0.5s 防飞书频控
-    # （自定义机器人/应用消息 5 条/秒上限，真实场景命中票通常 1~3 只）。
     sent = await _sent_with_cache(state, settings.picks_watcher_env_refresh_seconds)
     snap = getattr(state, "snapshot_service", None)
     breadth = getattr(snap, "breadth", None) or {}
-    notifier = get_notifier_registry().get("feishu")
-    send_card = getattr(notifier, "send_interactive", None)
-    if send_card is None:
-        log.warning("feishu notifier 无 send_interactive（%d 票已落库留痕）", len(dispatched))
-        return dispatched
-    for n, h in enumerate(dispatched, 1):
-        if n > 1:
-            await asyncio.sleep(0.5)
-        card = build_buy_point_card([h], sent, breadth, gate or None, show=now)
-        sym = h["item"].get("symbol") or ""
-        if await send_card(card):
-            log.warning("[PICKS-BUY-POINT] 卡片已推送：%s", sym)
+    trade_date = now.date().isoformat()
+    dispatched: list[dict] = []
+    for h in hits:
+        sym = str((h.get("item") or {}).get("symbol") or "")
+        alert = build_buy_point_alert(h)
+        alert["card"] = build_buy_point_card([h], sent, breadth, gate or None, show=now)
+        alert["dedup_key"] = _buy_point_dedup_key(trade_date, sym)
+        alert["meta"]["trade_date"] = trade_date
+        try:
+            ok = await dispatch_alert(app, alert, rule_provider=ensure_buy_point_rule)
+        except Exception:
+            log.exception("buy point durable dispatch failed: %s（下一拍允许重试）", sym)
+            ok = False
+        if ok:
+            dispatched.append(h)
         else:
-            log.warning("buy point feishu card NOT delivered: %s（已落库留痕）", sym)
+            log.info("buy point durable dedup/failure: %s（已有事实则不重发，未落库则下一拍可重试）", sym)
     return dispatched
 
 
 async def buy_point_loop(app, stop: asyncio.Event) -> None:
-    """盘中调度（lifespan 任务）：交易时段内每拍判定，命中即推聚合卡。
+    """盘中调度（lifespan 任务）：交易时段内每拍判定，命中即创建 durable intent。
 
     单拍失败不终止循环；间隔下限 30s（买点判定读全市场快照内存，轻）。"""
     interval = max(30.0, settings.picks_buy_point_interval_seconds)

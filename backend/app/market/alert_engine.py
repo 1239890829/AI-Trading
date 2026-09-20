@@ -106,12 +106,21 @@ class AlertEngine:
 
         if event is None or rule is None or not rule.enabled:
             return "event_or_rule_removed_or_disabled"
-        if encode(rule_snapshot(rule)) != encode(json.loads(row.payload)["rule"]):
+        try:
+            payload = json.loads(row.payload)
+        except (TypeError, ValueError):
+            return "intent_payload_invalid"
+        if encode(rule_snapshot(rule)) != encode(payload.get("rule")):
             return "rule_or_channels_changed"
         if not row.target or notifier is None or notifier.delivery_target() != row.target:
             return "channel_unconfigured_or_target_changed"
         if not in_trading_window():
             return "outside_trading_window"
+
+        intent = payload.get("intent") or {}
+        if intent.get("kind") == "picks_buy_point":
+            return self._buy_point_delivery_block(event, intent)
+
         if event.symbol not in self._resolve_symbols(rule):
             return "symbol_no_longer_in_scope"
         quote = self._quotes.get(event.symbol)
@@ -129,6 +138,41 @@ class AlertEngine:
         value = self._extract_value(rule.condition_type, quote)
         if value is None or not self._condition_met(rule.condition_type, value, rule.threshold):
             return "condition_no_longer_met"
+        return None
+
+    def _buy_point_delivery_block(self, event, intent: dict) -> str | None:
+        """Revalidate a queued buy-point against the archived decision fact, not price-rule syntax."""
+        try:
+            snap = json.loads(event.snapshot or "{}")
+        except (TypeError, ValueError):
+            return "buy_point_snapshot_invalid"
+        card = snap.get("card")
+        ref = snap.get("execution_ref") or {}
+        if not isinstance(card, dict) or not isinstance(ref, dict):
+            return "buy_point_payload_incomplete"
+
+        trade_date = str(intent.get("trade_date") or "")
+        decision_id = str(intent.get("decision_id") or "")
+        decision_version = str(intent.get("decision_version") or "")
+        if not trade_date or not decision_id or not decision_version:
+            return "buy_point_intent_identity_missing"
+        if ref.get("decision_id") != decision_id or ref.get("decision_version") != decision_version:
+            return "buy_point_event_identity_mismatch"
+        if ref.get("execution_snapshot_state") != "ready":
+            return "buy_point_event_execution_not_ready"
+
+        from app.picks.opportunity_learning import latest_notification_execution
+
+        latest = latest_notification_execution(trade_date, self._repo._session_factory).get(event.symbol)
+        if not latest:
+            return "buy_point_decision_missing"
+        if latest.get("decision_id") != decision_id or latest.get("decision_version") != decision_version:
+            return "buy_point_decision_superseded"
+        if latest.get("gate_decision") != "passed" or latest.get("archived_decision") != "eligible":
+            return "buy_point_decision_no_longer_eligible"
+        executable = latest.get("executable_snapshot") or {}
+        if executable.get("state") != "ready":
+            return "buy_point_execution_not_ready"
         return None
 
     async def _deliver_pending(self) -> None:
@@ -149,13 +193,22 @@ class AlertEngine:
                 outbox.finish(row, "expired", "send_window_closed", self._now_ms())
                 continue
             try:
-                accepted = await asyncio.wait_for(notifier.send(event, rule), timeout=25.0)
+                result = await asyncio.wait_for(notifier.send_result(event, rule), timeout=25.0)
             except Exception:
-                accepted = False
+                result = None
             # Cancellation/process loss leaves a started lease for conservative
-            # reconciliation. A bool False cannot prove the remote side rejected.
-            outbox.finish(row, "accepted" if accepted is True else "unknown",
-                          "platform_accepted" if accepted is True else "acceptance_unconfirmed", self._now_ms())
+            # reconciliation. Only an explicit platform rejection may become a
+            # permanent failure; timeout/network/malformed receipts stay unknown.
+            if result is None or result.outcome == "unknown":
+                state = "unknown"
+                reason = result.reason if result is not None else "acceptance_unconfirmed"
+            elif result.outcome == "explicit_rejected":
+                state = "permanent_failed"
+                reason = result.reason
+            else:
+                state = "accepted"
+                reason = result.reason
+            outbox.finish(row, state, reason, self._now_ms())
 
     def _resolve_symbols(self, rule) -> list[str]:
         if rule.scope == "all":

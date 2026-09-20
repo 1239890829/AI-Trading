@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
+from sqlalchemy.exc import IntegrityError
+
 from app.models.alert import AlertEvent, AlertRule
 from app.core.bjtime import beijing_now_naive
 from app.models.notification_outbox import NotificationOutbox
@@ -95,6 +97,56 @@ class AlertRepository:
             db.commit()
             db.refresh(event)
             return event
+
+    def record_trigger_once(
+        self, rule_id: int, symbol: str, trigger_value: float, threshold: float,
+        *, dedup_key: str, snapshot: dict | None = None,
+        delivered_channels: list[str] | None = None,
+        outbox_target: str | None = None, now_ms: int = 0,
+        expires_at_ms: int = 0, outbox_intent: dict | None = None,
+    ) -> tuple[AlertEvent, bool]:
+        """Atomically create one durable event (+ optional outbox), or reuse it."""
+        with self._session_factory() as db:
+            existing = db.query(AlertEvent).filter(AlertEvent.dedup_key == dedup_key).one_or_none()
+            if existing is not None:
+                db.expunge(existing)
+                return existing, False
+
+            # Read the parent before adding the new event. Querying after db.add()
+            # would trigger an autoflush, letting the unique-key race escape the
+            # IntegrityError recovery boundary below.
+            rule = db.query(AlertRule).filter(AlertRule.id == rule_id).one()
+            event = AlertEvent(
+                rule_id=rule_id,
+                symbol=symbol,
+                trigger_value=trigger_value,
+                threshold=threshold,
+                dedup_key=dedup_key,
+                snapshot=json.dumps(snapshot, ensure_ascii=False, default=str) if snapshot else None,
+                delivered_channels=json.dumps(delivered_channels, ensure_ascii=False) if delivered_channels else None,
+            )
+            db.add(event)
+            rule.last_triggered_at = beijing_now_naive()
+            try:
+                # enqueue_feishu() flushes to obtain event.id, so the unique
+                # dedup collision may happen before commit. Keep flush + outbox
+                # insert + commit inside one recovery boundary.
+                if outbox_target is not None:
+                    enqueue_feishu(
+                        db, event, rule, target=outbox_target, now_ms=now_ms,
+                        expires_at_ms=expires_at_ms, intent=outbox_intent,
+                    )
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                existing = db.query(AlertEvent).filter(AlertEvent.dedup_key == dedup_key).one_or_none()
+                if existing is None:
+                    raise
+                db.expunge(existing)
+                return existing, False
+            db.refresh(event)
+            db.expunge(event)
+            return event, True
 
     def get_event(self, event_id: int | None) -> AlertEvent | None:
         with self._session_factory() as db:
