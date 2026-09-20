@@ -218,6 +218,27 @@ def test_scan_lurk_pool_asof_is_real_sql_upper_bound(tmp_path):
     assert res["items"][0]["confirm_ms"] == bars[41][1]
 
 
+def test_scan_lurk_pool_historical_asof_ignores_future_row_mutation(tmp_path):
+    t0 = int(datetime(2026, 6, 1, tzinfo=BJ_TZ).timestamp() * 1000)
+    bars = _valid_hit_bars(n=55, probe_i=40, t0=t0)
+    path = tmp_path / "future-mutation.duckdb"
+    _make_daily_db(path, bars)
+    asof = datetime.fromtimestamp(bars[41][1] / 1000, tz=BJ_TZ).date()
+
+    before = scan_lurk_pool(path, asof=asof)
+    con = duckdb.connect(str(path))
+    con.execute(
+        "UPDATE daily_k SET open_price = 99, high_price = 120, low_price = 1, "
+        "close_price = 100, volume = 1 WHERE date_ms > ?",
+        [bars[41][1]],
+    )
+    con.close()
+    after = scan_lurk_pool(path, asof=asof)
+
+    assert after == before
+    assert [it["symbol"] for it in after["items"]] == ["600000"]
+
+
 def test_scan_lurk_pool_existing_empty_table_degrades_explicitly(tmp_path):
     path = tmp_path / "empty.duckdb"
     con = duckdb.connect(str(path))
