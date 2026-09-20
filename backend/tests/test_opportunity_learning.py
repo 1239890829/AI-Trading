@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, delete, select
 from sqlalchemy.orm import sessionmaker
 
 from app.models.opportunity_learning import OpportunityDecisionSnapshot, OpportunityOutcomeLabel
@@ -121,8 +121,10 @@ def test_archive_is_append_only_idempotent_and_offline_replay_matches(tmp_path):
     first = archive_records(run_id, rows, sf)
     second = archive_records(run_id, rows, sf)
 
-    assert first["inserted"] == 6
-    assert second["inserted"] == 0
+    assert first["inserted"] == 6 and first["outcomes_inserted"] == 6
+    assert first["outcomes_repaired"] == 0
+    assert second["inserted"] == 0 and second["outcomes_inserted"] == 0
+    assert second["outcomes_repaired"] == 0
     replay = replay_run(run_id, sf)
     assert replay["records"] == 6 and replay["mismatches"] == 0
     assert all(item["matches"] for item in replay["items"])
@@ -140,6 +142,70 @@ def test_archive_is_append_only_idempotent_and_offline_replay_matches(tmp_path):
     assert evidence_after == evidence_before, "结果标签必须写独立表，不能改写当时证据"
 
 
+def test_rerun_repairs_missing_legacy_outcome_without_duplicating_snapshot(tmp_path):
+    sf = _factory(tmp_path)
+    run_id, rows = build_intraday_records(
+        _payload(), trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5)
+    )
+    archive_records(run_id, rows, sf)
+    with sf() as db:
+        rejected_snapshot = db.execute(
+            select(OpportunityDecisionSnapshot)
+            .where(OpportunityDecisionSnapshot.stage == "rank",
+                   OpportunityDecisionSnapshot.symbol == "600002")
+        ).scalar_one()
+        db.execute(
+            delete(OpportunityOutcomeLabel).where(
+                OpportunityOutcomeLabel.snapshot_id == rejected_snapshot.snapshot_id
+            )
+        )
+        db.commit()
+        before_snapshots = len(db.execute(select(OpportunityDecisionSnapshot)).scalars().all())
+
+    repaired = archive_records(run_id, rows, sf)
+    assert repaired["inserted"] == 0 and repaired["outcomes_inserted"] == 1
+    assert repaired["outcomes_repaired"] == 0
+    with sf() as db:
+        after_snapshots = len(db.execute(select(OpportunityDecisionSnapshot)).scalars().all())
+        outcome = db.execute(
+            select(OpportunityOutcomeLabel).where(
+                OpportunityOutcomeLabel.snapshot_id == rejected_snapshot.snapshot_id
+            )
+        ).scalar_one()
+    assert after_snapshots == before_snapshots == 6
+    assert outcome.state == "deferred" and outcome.fill_state == "not_actionable"
+
+
+def test_rerun_repairs_legacy_pending_fill_claim_without_touching_snapshot(tmp_path):
+    sf = _factory(tmp_path)
+    run_id, rows = build_intraday_records(
+        _payload(), trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5)
+    )
+    archive_records(run_id, rows, sf)
+    with sf() as db:
+        selected = db.execute(
+            select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
+            .join(OpportunityDecisionSnapshot,
+                  OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
+            .where(OpportunityDecisionSnapshot.stage == "rank",
+                   OpportunityDecisionSnapshot.symbol == "600001")
+        ).one()
+        outcome, snapshot = selected
+        outcome_id, snapshot_db_id = outcome.id, snapshot.id
+        evidence_before = snapshot.evidence
+        outcome.fill_state = "ok"  # simulate legacy pre-assessment ORM default
+        db.commit()
+
+    repaired = archive_records(run_id, rows, sf)
+    assert repaired["inserted"] == 0 and repaired["outcomes_inserted"] == 0
+    assert repaired["outcomes_repaired"] == 1
+    with sf() as db:
+        outcome = db.get(OpportunityOutcomeLabel, outcome_id)
+        snapshot = db.get(OpportunityDecisionSnapshot, snapshot_db_id)
+        assert outcome.fill_state == "pending" and outcome.state == "pending"
+        assert snapshot.evidence == evidence_before
+
+
 def test_outcome_label_is_retryable_and_coverage_is_mechanical(tmp_path):
     sf = _factory(tmp_path)
     run_id, rows = build_intraday_records(
@@ -148,6 +214,7 @@ def test_outcome_label_is_retryable_and_coverage_is_mechanical(tmp_path):
     archive_records(run_id, rows, sf)
 
     assert pending_symbols("2026-09-16", sf) == {"600001"}
+    assert pending_symbols("2026-09-16", sf, include_deferred=True) == {"600001", "600002"}
     missing = label_trade_date("2026-09-16", {}, sf)
     assert missing == {"trade_date": "2026-09-16", "labeled": 0, "unknown": 0, "pending": 1}
     done = label_trade_date("2026-09-16", {"600001": 10.5}, sf)
@@ -155,12 +222,55 @@ def test_outcome_label_is_retryable_and_coverage_is_mechanical(tmp_path):
     # 幂等：已标结果不重算，不允许未来一次价格覆盖原始 D0 标签。
     assert label_trade_date("2026-09-16", {"600001": 99.0}, sf)["labeled"] == 0
     with sf() as db:
-        label = db.execute(select(OpportunityOutcomeLabel)).scalar_one()
+        label = db.execute(
+            select(OpportunityOutcomeLabel)
+            .join(OpportunityDecisionSnapshot,
+                  OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
+            .where(OpportunityDecisionSnapshot.stage == "rank",
+                   OpportunityDecisionSnapshot.symbol == "600001")
+        ).scalar_one()
     assert label.state == "labeled" and label.label == "positive"
     assert label.return_pct == 5.0 and label.outcome_price == 10.5
     summary = learning_summary("2026-09-16", sf)
     assert summary["label_coverage"] == 1.0
+    assert summary["label_coverage_scope"] == "selected_outcome_rows_legacy"
+    assert summary["funnel_denominator"] == {
+        "snapshot_rows": 6, "symbols": 2, "outcome_rows": 6, "outcome_symbols": 2,
+        "labeled_symbols": 1, "outcome_attachment_coverage": 1.0, "label_coverage": 0.5,
+        "missing_outcome_symbols": [], "unlabeled_symbols": ["600002"],
+        "run_symbol_opportunities": 2, "outcome_opportunities": 2,
+        "labeled_opportunities": 1, "opportunity_label_coverage": 0.5,
+    }
     assert summary["stages"] == {"candidate": 2, "hard_gate": 2, "rank": 2, "notification": 0}
+
+
+def test_deferred_denominator_backfill_records_market_result_without_fill_claim(tmp_path):
+    sf = _factory(tmp_path)
+    run_id, rows = build_intraday_records(
+        _payload(), trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5)
+    )
+    archive_records(run_id, rows, sf)
+    # realtime lane only labels selected 600001; explicit offline lane later supplies both closes.
+    label_trade_date("2026-09-16", {"600001": 10.5}, sf)
+    result = label_trade_date(
+        "2026-09-16", {"600001": 10.5, "600002": 8.4}, sf, include_deferred=True
+    )
+    assert result["labeled"] == 5
+    with sf() as db:
+        rejected = db.execute(
+            select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
+            .join(OpportunityDecisionSnapshot,
+                  OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
+            .where(OpportunityDecisionSnapshot.stage == "rank",
+                   OpportunityDecisionSnapshot.symbol == "600002")
+        ).one()
+    outcome, snapshot = rejected
+    assert snapshot.decision == "rejected"
+    assert outcome.state == "labeled" and outcome.return_pct == 5.0
+    assert outcome.fill_state == "not_actionable"
+    assert outcome.net_return_pct is None and outcome.cost_pct is None
+    summary = learning_summary("2026-09-16", sf)
+    assert summary["funnel_denominator"]["label_coverage"] == 1.0
 
 
 def test_missing_entry_price_becomes_unknown_not_zero_return(tmp_path):
@@ -174,7 +284,13 @@ def test_missing_entry_price_becomes_unknown_not_zero_return(tmp_path):
     result = label_trade_date("2026-09-16", {"600001": 10.5}, sf)
     assert result["unknown"] == 1
     with sf() as db:
-        label = db.execute(select(OpportunityOutcomeLabel)).scalar_one()
+        label = db.execute(
+            select(OpportunityOutcomeLabel)
+            .join(OpportunityDecisionSnapshot,
+                  OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
+            .where(OpportunityDecisionSnapshot.stage == "rank",
+                   OpportunityDecisionSnapshot.symbol == "600001")
+        ).scalar_one()
     assert label.state == "unknown" and label.return_pct is None
     assert "价格缺失" in label.reason
 
@@ -294,6 +410,9 @@ def test_label_trade_date_actually_wires_net_return_into_the_row(tmp_path):
             ).join(
                 OpportunityDecisionSnapshot,
                 OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id,
+            ).where(
+                OpportunityDecisionSnapshot.stage == "rank",
+                OpportunityDecisionSnapshot.symbol == "600001",
             )
         ).one()
     gross, net, cost = float(row[0]), float(row[1]), float(row[2])
@@ -335,7 +454,7 @@ def test_sealed_board_keeps_net_return_none_and_never_zero(tmp_path):
             ).join(
                 OpportunityDecisionSnapshot,
                 OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id,
-            )
+            ).where(OpportunityDecisionSnapshot.stage == "rank")
         ).all()
     by_symbol = {symbol: (fill, net, cost, ret, reason) for symbol, fill, net, cost, ret, reason in rows}
     sealed, ok = by_symbol["600001"], by_symbol["600002"]
@@ -346,14 +465,12 @@ def test_sealed_board_keeps_net_return_none_and_never_zero(tmp_path):
     assert sealed[3] is not None and sealed[2] is None
     assert "封板买不到" in sealed[4]
     summary = learning_summary("2026-09-16", sf)
-    assert summary["fill_states"] == {"ok": 1, "sealed": 1}
+    assert summary["fill_states"] == {"not_actionable": 4, "ok": 1, "sealed": 1}
     assert summary["cost_model"] == COST_MODEL_VERSION
 
 
-def test_scorecard_refuses_verdict_until_min_labels_reached(tmp_path):
-    """样本不足时 `verdict` 恒为 `insufficient_sample`——把纪律落成**代码门禁**。"""
-    from app.picks.opportunity_learning import MIN_LABELS_FOR_VERDICT
-
+def test_scorecard_blocks_verdict_until_full_funnel_denominator_is_labeled(tmp_path):
+    """selected 样本全标不等于全漏斗完整；漏掉 rejected 时必须先报 incomplete_denominator。"""
     sf = _factory(tmp_path)
     run_id, rows = build_intraday_records(
         _payload(), trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5)
@@ -362,11 +479,66 @@ def test_scorecard_refuses_verdict_until_min_labels_reached(tmp_path):
     label_trade_date("2026-09-16", {"600001": 10.5, "600002": 8.2}, sf)
 
     card = opportunity_scorecard("2026-09-16", session_factory=sf)
+    assert card["verdict"] == "incomplete_denominator"
+    assert card["funnel_denominator"]["outcome_attachment_coverage"] == 1.0
+    assert card["funnel_denominator"]["label_coverage"] == 0.5
+    assert card["funnel_denominator"]["unlabeled_symbols"] == ["600002"]
+
+
+def test_scorecard_does_not_let_later_selected_run_cover_earlier_rejected_run(tmp_path):
+    sf = _factory(tmp_path)
+    when = datetime(2026, 9, 16, 10, 5)
+    # Later run has a selected/labeled observation for the same symbol.
+    _seed_scorecard_label(
+        sf, snapshot_id="later-selected", run_id="run-b", symbol="600001",
+        as_of=when, stage="rank", rank=1,
+    )
+    # Earlier run rejected the same symbol and still lacks an offline market label.
+    with sf() as db:
+        db.add(OpportunityDecisionSnapshot(
+            snapshot_id="earlier-rejected", run_id="run-a", trade_date="2026-09-16",
+            as_of=datetime(2026, 9, 16, 9, 45), scenario="intraday_opportunity",
+            stage="rank", symbol="600001", name="甲", source_theme="T", decision="rejected",
+            rank=None, strategy_version=STRATEGY_VERSION, feature_version=FEATURE_VERSION,
+            data_state="ready", entry_price=9.8, evidence=json.dumps({"change_pct": 1.0}),
+        ))
+        db.add(OpportunityOutcomeLabel(
+            snapshot_id="earlier-rejected", horizon=OUTCOME_HORIZON, target_date="2026-09-16",
+            state="deferred", label="unknown", reference_price=9.8, fill_state="not_actionable",
+            reason="denominator only",
+        ))
+        db.commit()
+
+    card = opportunity_scorecard("2026-09-16", session_factory=sf)
+    assert card["funnel_denominator"]["symbols"] == 1
+    assert card["funnel_denominator"]["label_coverage"] == 1.0
+    assert card["funnel_denominator"]["run_symbol_opportunities"] == 2
+    assert card["funnel_denominator"]["labeled_opportunities"] == 1
+    assert card["funnel_denominator"]["opportunity_label_coverage"] == 0.5
+    assert card["funnel_denominator"]["complete"] is False
+    assert card["verdict"] == "incomplete_denominator"
+
+
+def test_scorecard_refuses_verdict_until_min_labels_reached(tmp_path):
+    """全漏斗结果齐后，样本仍不足时才进入 insufficient_sample。"""
+    from app.picks.opportunity_learning import MIN_LABELS_FOR_VERDICT
+
+    sf = _factory(tmp_path)
+    run_id, rows = build_intraday_records(
+        _payload(), trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5)
+    )
+    archive_records(run_id, rows, sf)
+    label_trade_date(
+        "2026-09-16", {"600001": 10.5, "600002": 8.2}, sf, include_deferred=True
+    )
+
+    card = opportunity_scorecard("2026-09-16", session_factory=sf)
+    assert card["funnel_denominator"]["complete"] is True
     assert card["min_labels_for_verdict"] == MIN_LABELS_FOR_VERDICT
     assert card["fillable"] < MIN_LABELS_FOR_VERDICT
     assert card["verdict"] == "insufficient_sample"
     assert "不构成买卖建议" in card["note"]
-    assert "选择性偏差" in card["note"], "必须显式声明净期望只覆盖可成交样本"
+    assert "deferred/not_actionable" in card["note"]
 
 
 def test_scorecard_expectancy_fields_never_mix_denominators(tmp_path):
@@ -517,7 +689,13 @@ def test_nan_close_never_becomes_a_labeled_sample(tmp_path):
     result = label_trade_date("2026-09-16", {"600001": float("nan")}, sf)
     assert result["labeled"] == 0
     with sf() as db:
-        outcome = db.execute(select(OpportunityOutcomeLabel)).scalar_one()
+        outcome = db.execute(
+            select(OpportunityOutcomeLabel)
+            .join(OpportunityDecisionSnapshot,
+                  OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
+            .where(OpportunityDecisionSnapshot.stage == "rank",
+                   OpportunityDecisionSnapshot.symbol == "600001")
+        ).scalar_one()
     assert outcome.state == "pending"
     assert outcome.return_pct is None and outcome.net_return_pct is None
 

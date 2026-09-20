@@ -82,7 +82,7 @@ class OpportunityOutcomeLabel(Base):
     # `net_return_pct` 是兼容历史 schema 的列名。对当前 `d0_close` 标签，它是
     # 「决策价→同日收盘」扣双边成本后的**D0 成本调整代理**，不是 A 股 T+1 下可实现净收益。
     # 仅 `fill_state == "ok"` 时有值；不可成交/无现价留 `None`，严禁记 0。
-    fill_state: Mapped[str] = mapped_column(String(16), default="ok", index=True)
+    fill_state: Mapped[str] = mapped_column(String(16), default="unknown", index=True)
     cost_pct: Mapped[float | None] = mapped_column(Float, default=None)
     net_return_pct: Mapped[float | None] = mapped_column(Float, default=None)
     reason: Mapped[str] = mapped_column(Text, default="")

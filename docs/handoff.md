@@ -1,6 +1,6 @@
-# 当前交接：DEGRADED_FULL_CONTROL / IMP-044 发布候选
+# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 全漏斗结果分母
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** v9.11/U50 已在 `master` 生效；PR #67 已同步最新主干，当前只做 IMP-044 的最终作者反证、完整门禁、exact-HEAD `DegradedRelease`、required CI、`release_check.py`、merge、post-merge CI 与分支删除。IMP-044 在本 PR 中已标“已完成”，因此按该候选合入后的账本状态，G0 的 BUG-020 与 G2 的 IMP-049 均为 `待条件`，最低可行动阻断门将计算为 **G3 / RSH-026**；这只是 post-merge 的下一候选，不授权在 #67 内抢跑。正常双角色未废弃；用户退出降级后恢复 Codex 实施 + 网页独立 `Review`。降级只替代“必须存在另一个 reviewer”的角色条件，不降低阶段门、安全红线、latest master、敏感信息/范围、完整 CI、CHANGES_REQUESTED/thread、post-merge 或分支清理要求。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** PR #67 / IMP-044 已合入 `master@6a711bd2a6c5280a8ca19263d314c38b4c0d695c`，post-merge master CI run `35516179312` 的 backend/frontend/docs 全部成功，功能分支已删除；旧 `workspace-retention-v9.8` 自动 purge 候选已在 PR #47 留退役说明并删除，远端当前只剩 `master`。账本机械计算后的最低可行动阻断门为 **G3 / RSH-026**。本轮网页端在降级模式下只实施 RSH-026 的“全漏斗 outcome 身份 + denominator gate + 跨版本自愈”纵切，不执行 IMP-020、不做策略晋级、不改生产权重或真实交易边界。
 
 
 ## 1. 固定入口与范围
@@ -57,8 +57,8 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 - **当前主门**：G3
 - **主切片首选**：RSH-026
-- **当前现场**：IMP-044 在本 PR 中随合并进入 `已完成`；该状态生效后 G1 无可行动阻断项。G2/IMP-049 仍为 `待条件`，故按总账 §5.9 跳过不可行动 blocker，最低可行动主门为 G3。
-- **门内阻断顺序**：RSH-026 → IMP-020；RSH-030 为同门非阻断，RSH-031 仍受效果前置限制。
+- **当前现场**：IMP-044 已由 PR #67 合并且 post-merge CI 全绿；G1 无可行动阻断项。G2/IMP-049 仍为 `待条件`，故按总账 §5.9 跳过不可行动 blocker，当前主门为 G3/RSH-026。
+- **门内阻断顺序**：RSH-026 → IMP-020；本轮只领取 RSH-026 一个纵切。RSH-030 为同门非阻断，RSH-031 仍受效果前置限制。
 - G0 的 BUG-028 / BUG-026 已完成，BUG-020 为 `待条件`；G1 的 BUG-029 / IMP-006 / IMP-044 均在本候选合入后完成；G2 的 IMP-049 为 `待条件`。因此 post-merge 下一唯一首选为 G3/RSH-026，不因 RSH-031、新 UI、Agent 或其它研究任务“更有趣”跳序。
 - BUG-020 的 current-value 接纳门现区分 source event time / received time、缺失/拒绝/合法空集与身份歧义；旧可信值不会被晚到/非法观测覆盖。2026-09-20 周日已用本片代码显式加载主仓部署 `.env`，成功构建 `chain(ths→tencent→eastmoney→sina)` 并完成有界只读休市探针：最近交易日 2026-09-18、6/6 指数覆盖、拒绝数 0，600519 实际由腾讯返回且 source time 为 2026-09-18，Hub 明确标 `stale/market_closed`。尚未完成真实交易时段完整会话验收，故不得标已完成或宣称长期盘中 SLA。
 - BUG-029 现以 `ever_sealed/current_sealed/snapshot_state/version` 为唯一 current-state 契约；开板只恢复“进入评估”的资格，不自动获得成交/通知/模拟执行许可。2026-09-18 真实跨源样本已证明涨停池成员可多次开板/回封；旧 v1 归档保持原语义，v2 才使用新状态重放。
@@ -69,7 +69,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - U50 也不改变阶段门算法，只改变“谁可以完成当前切片”：正常模式仍是 Web Review + Codex；当前 `DEGRADED_FULL_CONTROL` 下网页端按同一阶段门全程操控，每个 PR 必须重新写 exact-HEAD `DegradedRelease`，不能复用一次用户授权跳过逐 PR 发布证据。
 - GX 治理只可作为不冲突的伴随切片。2026-09-20 `GOV-018` 已闭环：`.workbuddy` / `.workbuddy-ai` 已物理删除，有价值内容进入项目中性 `skills/scripts/docs/artifacts`，第三方 UZI/Serenity 本体不再复制；PR #48 已合入 `master`（merge `b6b5ba0`，最终 required CI run `35481812431` backend/frontend/docs 全绿）。`GOV-026` 已落地 `scripts/workspace-hygiene.py` 并接 CI/交接；docs 根已收口为 6 个控制面。以上治理不改变阶段门算法；IMP-044 随本 PR 完成后，BUG-020 与 IMP-049 都因 `待条件` 排除，阶段门按账本计算到 G3/RSH-026。
 
-当前处于 `DEGRADED_FULL_CONTROL`：#67 仍是本轮唯一发布对象；本 PR 合并即把 W02/IMP-044 `已完成` 状态带入主干。按该候选的账本事实，post-merge 下一主门已机械推导为 G3/RSH-026；只有 #67 merge + post-merge CI + 分支清理全部完成后，下一轮“继续”才可正式领取它。不得在本 PR 内抢跑 RSH-026 或其它任务，也不得借降级模式创建跨门例外。
+当前处于 `DEGRADED_FULL_CONTROL`：PR #67 已完成 merge + post-merge CI + 分支清理，本轮已正式领取 G3/RSH-026。只做当前 outcome/denominator 纵切；完成或阻塞后再重新计算，不能在同一 PR 内继续扫 IMP-020 或其它任务。
 
 ## 8. Jev、工具链与协作流当前基线
 
@@ -89,7 +89,19 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **Degraded reason**：当前 Codex 额度不可用，正常双角色无法持续完成实施→独立审核→发布闭环；旧 exact-HEAD Review 门因此形成自锁。
 - **有效期**：持续到用户明确说 Codex 已恢复/退出降级；不是单 PR 临时口令。但每个 PR 的发布仍必须重新生成 exact-HEAD `DegradedRelease`，不能复用上一 PR 回执。
 - **不降低项**：G0–G5/GX 阶段门、U49 主动反证、branch protection、required CI、latest master、CHANGES_REQUESTED/thread、public-repo scan、workspace/doc-health、敏感信息/范围、post-merge CI、删除功能分支。
-- **当前动作**：先合入 U50 机制本身；随后只闭环 PR #67/IMP-044，不并行领取下一业务切片。
+- **当前动作**：U50 与 IMP-044 均已闭环；当前降级模式下只执行 G3/RSH-026 的本轮 outcome/denominator 纵切。每个 PR 仍需新的 exact-HEAD `DegradedRelease`。
+
+## 8.2 U49 主动审计回执（RSH-026 Preflight）
+
+- **阶段**：`Preflight`；对象是 G3/RSH-026 当前纵切。
+- **基点**：`master@6a711bd2a6c5280a8ca19263d314c38b4c0d695c`；U50 降级模式已生效。
+- **扫描范围**：`build_intraday_records/build_notification_records → archive_records → OpportunityDecisionSnapshot/OutcomeLabel → pending_symbols → review_intraday 收盘回填 → learning_summary/opportunity_scorecard → API/tests/migration`。
+- **已证实 P1-1 选择性分母**：旧 `archive_records` 只为 `ranked/eligible/notified/suppressed` 建 outcome；rejected/unknown 只留 snapshot，导致 `label_coverage=1.0` 仍可能漏掉全漏斗失败样本。
+- **已证实 P1-2 过早可成交主张**：pending outcome 未评估前默认 `fill_state=ok`，会把“尚未判定”静默写成“可成交”。
+- **已证实 P1-3 跨版本不可自愈**：旧 snapshot 已存在但 outcome 缺失时，同 run 重放直接跳过，无法补齐历史分母。
+- **高风险反例已裁定**：不能简单把所有 rejected/unknown 加进 `pending_symbols`，否则盘后 `review_intraday` 会把实时逐股外部 close 请求从 selected 集合扩大到全漏斗。当前方案用 `deferred/not_actionable` 分流，实时消费者维持原请求面，离线显式回填再补市场结果。
+- **当前限制**：远程 Mac 没有可核的长期生产运行库，本轮不能给出真实历史覆盖百分比；该缺口继续保留，不能用夹具数字代替。
+- **非目标**：本片不实现 D1/D3/D5、MFE/MAE/time_to_limit，不改策略阈值、生产权重、交易权限或真实交易。
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
 
