@@ -51,6 +51,9 @@ handoff 若明确 DESIGN_ONLY / REVIEW / BLOCKED，则不得执行；计划存�
 ## 5. 版本与审阅记录
 
 阶段留本轮范围、依据/被审提交、实际读取内容、结论、限制及明确下一动作。作者自检不是独立代码审核；用户短提示不是审计签名，同账号权限也不是密码学角色隔离。
+
+**网页审核与 GitHub 原生 Review 分层处理。** 网页审核回执必须由未参与该实现轮的审核会话对准确 `base/head/diff` 与证据作出 `APPROVED / MERGE_IF_GATES_PASS` 或整改结论；GitHub 原生 `APPROVE` 只是平台可用时的附加证据，不是单账号仓库的必要条件。若审核连接使用的 GitHub 身份恰好也是 PR 作者，GitHub 会拒绝 self-approve；此时不得为了形式状态建立小号、绕过保护或把 `COMMENTED` 伪装成原生批准，而是保留网页审核回执，并继续要求 exact-head `release_check.py`、required CI 全绿、无有效 `CHANGES_REQUESTED` 与未解决阻断 thread。`release_check.py` 对原生 review decision 允许 `None / REVIEW_REQUIRED / APPROVED`，正是为了避免把平台身份限制变成自锁。
+
 被审实现提交与随后纯协调文档提交分开；新业务代码/基点变化必须重审。最终合并仍针对准确候选SHA和完整CI，不做递归自指提交。规划稿由网页编制/自查可以交付，不能据此声称同作者业务代码获独立批准。
 
 ## 6. 故障与缺证据
