@@ -16,6 +16,7 @@ import sys
 WORKFLOW = ".github/workflows/ci.yml"
 REQUIRED_JOBS = {"backend (pytest + pyflakes)", "frontend (tsc + lint)", "docs (doc-health)"}
 REVIEW_VERDICT = "APPROVED / MERGE_IF_GATES_PASS"
+DEGRADED_MODE = "DEGRADED_FULL_CONTROL"
 
 
 def require(condition: bool, reason: str) -> None:
@@ -70,6 +71,37 @@ def exact_web_review_receipt(comments: list[dict], pr_number: int, expected_head
     return max(valid, key=lambda item: (item.get("created_at") or "", item.get("id") or 0))
 
 
+def exact_degraded_release_receipt(comments: list[dict], pr_number: int, expected_head: str) -> dict | None:
+    """Return newest explicit user-authorized degraded release receipt for PR/HEAD.
+
+    This is a controlled fallback for periods where the normal planner/reviewer +
+    Codex implementer split is unavailable. It does not pretend the author is an
+    independent reviewer: the receipt uses a distinct Stage/Mode and keeps the
+    same exact-HEAD CI, thread, status and base-integration gates.
+    """
+    stage_re = re.compile(r"(?mi)^\s*-\s*Stage:\s*`DegradedRelease`\s*(?:\([^\n]*\))?\s*$")
+    mode_re = re.compile(rf"(?mi)^\s*-\s*Mode:\s*`{re.escape(DEGRADED_MODE)}`\s*$")
+    pr_re = re.compile(rf"(?mi)^\s*-\s*PR:\s*#{pr_number}\s*$")
+    head_re = re.compile(rf"(?mi)^\s*-\s*Release HEAD:\s*`{re.escape(expected_head)}`\s*$")
+    auth_re = re.compile(r"(?mi)^\s*-\s*User authorization:\s*`EXPLICIT`\s*$")
+    reason_re = re.compile(r"(?mi)^[ \t]*-[ \t]*Degraded reason:[ \t]*(?=\S)[^\r\n]*\S[ \t]*$")
+    verdict_re = re.compile(
+        rf"Degraded Release verdict:\s*`{re.escape(REVIEW_VERDICT)}`\s*"
+        rf"for HEAD\s*`{re.escape(expected_head)}`\s*only\.?",
+        re.IGNORECASE,
+    )
+    valid = []
+    for comment in comments:
+        body = comment.get("body") or ""
+        if (stage_re.search(body) and mode_re.search(body) and pr_re.search(body)
+                and head_re.search(body) and auth_re.search(body)
+                and reason_re.search(body) and verdict_re.search(body)):
+            valid.append(comment)
+    if not valid:
+        return None
+    return max(valid, key=lambda item: (item.get("created_at") or "", item.get("id") or 0))
+
+
 def validate(snapshot: dict, expected_head: str) -> dict:
     pr, base = snapshot["pr"], snapshot["base"]
     require(pr["state"] == "open" and pr["draft"] is False, "PR is not open and ready")
@@ -92,7 +124,12 @@ def validate(snapshot: dict, expected_head: str) -> dict:
     require("CHANGES_REQUESTED" not in reviews.values(), "Unresolved Request changes")
 
     receipt = exact_web_review_receipt(snapshot["review_comments"], pr["number"], expected_head)
-    require(receipt is not None, "Missing project-level web Review receipt for exact PR/HEAD")
+    degraded = exact_degraded_release_receipt(snapshot["review_comments"], pr["number"], expected_head)
+    require(
+        receipt is not None or degraded is not None,
+        "Missing exact-HEAD release receipt: independent Review or explicit DegradedRelease required",
+    )
+    release_mode = "independent_review" if receipt is not None else "degraded_full_control"
 
     runs = latest_runs(snapshot["runs"])
     ci = [run for run in runs if run["path"] == WORKFLOW and run["event"] == "pull_request"]
@@ -127,14 +164,25 @@ def validate(snapshot: dict, expected_head: str) -> dict:
         "run_id": run["id"], "attempt": run["run_attempt"],
         "jobs": [{"id": job["id"], "name": job["name"], "conclusion": job["conclusion"]} for job in jobs],
         "branch_protected": base["protected"],
-        "web_review_receipt": {
-            "id": receipt.get("id"),
-            "author": (receipt.get("user") or {}).get("login"),
-            "created_at": receipt.get("created_at"),
-        },
+        "release_mode": release_mode,
+        "web_review_receipt": (
+            {
+                "id": receipt.get("id"),
+                "author": (receipt.get("user") or {}).get("login"),
+                "created_at": receipt.get("created_at"),
+            } if receipt is not None else None
+        ),
+        "degraded_release_receipt": (
+            {
+                "id": degraded.get("id"),
+                "author": (degraded.get("user") or {}).get("login"),
+                "created_at": degraded.get("created_at"),
+            } if degraded is not None else None
+        ),
         "scope": (
-            "Actions, commit statuses and exact-HEAD project web Review receipt; "
-            "process-consistency check, not cryptographic reviewer identity proof"
+            "Actions, commit statuses and exact-HEAD release receipt; normal mode uses an independent "
+            "project web Review, while user-authorized degraded mode uses a distinct DegradedRelease "
+            "receipt and does not claim reviewer independence"
         ),
     }
 

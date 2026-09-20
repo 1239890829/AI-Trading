@@ -28,6 +28,24 @@ def review_comment(*, head=HEAD, pr=23):
     )
 
 
+def degraded_comment(*, head=HEAD, pr=23, authorization="EXPLICIT", reason="Codex unavailable"):
+    return dict(
+        id=92,
+        created_at="2026-09-20T00:00:01Z",
+        user=dict(login="web-author-account"),
+        body=(
+            "## Controlled degraded release receipt\n\n"
+            "- Stage: `DegradedRelease` (author-controlled fallback; not independent Review)\n"
+            f"- Mode: `{release.DEGRADED_MODE}`\n"
+            f"- PR: #{pr}\n"
+            f"- Release HEAD: `{head}`\n"
+            f"- User authorization: `{authorization}`\n"
+            f"- Degraded reason: {reason}\n"
+            f"**Degraded Release verdict: `{release.REVIEW_VERDICT}` for HEAD `{head}` only.**\n"
+        ),
+    )
+
+
 def snapshot():
     run = dict(id=31, workflow_id=7, run_number=4, run_attempt=2,
                path=release.WORKFLOW, event="pull_request", head_sha=HEAD, pull_requests=[dict(number=23)],
@@ -58,6 +76,42 @@ def test_required_jobs_match_the_actual_workflow():
     assert {job.get("name", key) for key, job in workflow["jobs"].items()} == release.REQUIRED_JOBS
 
 
+def test_degraded_release_receipt_is_distinct_and_exact_head_bound():
+    receipt = release.exact_degraded_release_receipt([degraded_comment()], 23, HEAD)
+    assert receipt and receipt["id"] == 92
+    assert release.exact_degraded_release_receipt([degraded_comment(head=BASE)], 23, HEAD) is None
+    assert release.exact_degraded_release_receipt([degraded_comment(pr=24)], 23, HEAD) is None
+    assert release.exact_degraded_release_receipt(
+        [degraded_comment(authorization="IMPLICIT")], 23, HEAD
+    ) is None
+    assert release.exact_degraded_release_receipt(
+        [degraded_comment(reason="")], 23, HEAD
+    ) is None
+
+
+def test_degraded_release_can_replace_independent_review_but_not_other_gates():
+    s = snapshot()
+    s["review_comments"] = [degraded_comment()]
+    proof = release.validate(s, HEAD)
+    assert proof["release_mode"] == "degraded_full_control"
+    assert proof["web_review_receipt"] is None
+    assert proof["degraded_release_receipt"]["id"] == 92
+
+
+def test_author_self_audit_comment_is_not_a_degraded_release_receipt():
+    s = snapshot()
+    s["review_comments"] = [dict(
+        id=93, created_at="2026-09-20T00:00:02Z", user=dict(login="author"),
+        body=(
+            "- PR: #23\n"
+            f"- Candidate HEAD: `{HEAD}`\n"
+            "Author checks all green; no known blockers.\n"
+        ),
+    )]
+    with pytest.raises(ValueError, match="release receipt"):
+        release.validate(s, HEAD)
+
+
 def test_web_review_receipt_is_bound_to_exact_pr_and_head():
     receipt = release.exact_web_review_receipt([review_comment()], 23, HEAD)
     assert receipt and receipt["id"] == 91
@@ -71,7 +125,8 @@ def test_web_review_receipt_is_bound_to_exact_pr_and_head():
     "job_skipped", "job_cancelled", "job_pending", "run_failure", "base_advanced", "head_changed",
     "mergeability_unknown", "conflict", "review_changes", "review_thread", "review_pagination",
     "review_rest_changes", "missing_web_review", "old_web_review_head", "wrong_web_review_pr",
-    "status_failure", "status_old_head", "draft", "closed", "foreign_repo",
+    "bad_degraded_auth", "old_degraded_head", "wrong_degraded_pr", "status_failure", "status_old_head",
+    "draft", "closed", "foreign_repo",
 ])
 def test_bad_or_incomplete_evidence_cannot_release(case):
     s = snapshot()
@@ -101,6 +156,9 @@ def test_bad_or_incomplete_evidence_cannot_release(case):
     elif case == "missing_web_review": s["review_comments"] = []
     elif case == "old_web_review_head": s["review_comments"] = [review_comment(head=BASE)]
     elif case == "wrong_web_review_pr": s["review_comments"] = [review_comment(pr=24)]
+    elif case == "bad_degraded_auth": s["review_comments"] = [degraded_comment(authorization="IMPLICIT")]
+    elif case == "old_degraded_head": s["review_comments"] = [degraded_comment(head=BASE)]
+    elif case == "wrong_degraded_pr": s["review_comments"] = [degraded_comment(pr=24)]
     elif case == "status_failure":
         s["commit_status"]["statuses"] = [dict(state="failure")]
         s["commit_status"]["total_count"] = 1

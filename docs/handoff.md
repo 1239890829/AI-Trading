@@ -1,6 +1,6 @@
-# 当前交接：G1/IMP-044 U49 Preflight 已冻结
+# 当前交接：U50 降级全权模式已授权，先收口机制再闭环 IMP-044
 
-**当前模式：READY_FOR_NEXT_PLANNED_SLICE。** v9.10/U49 已生效；PR #64 又把 exact-HEAD 网页 Review 回执纳入 `release_check.py` 机器门。该 companion 的 reviewed HEAD `dd75593e3daf6c2343b41f0e91160c4f7aadc167`、Review comment `5749537877`、PR CI `35507688071` 与合并后 `master@6cbe746750d02bd387ead71d5d85cec50445e8e5` / push CI `35508271019` 均已核全绿，因此治理 companion 退出候选计算。当前唯一主业务切片恢复为 **G1/P0 IMP-044**；本轮 U49 Preflight 已在最新 master 上重新核真实通知链并冻结验收，允许 Codex 只实施这一刀。G1/P0 **IMP-006** 已正式闭环：PR #60 的 reviewed HEAD `87b099540a4b6c3d54c56a9d57293dc1963ee450` 经独立网页审核回执（PR comment `5749077515`，`APPROVED / MERGE_IF_GATES_PASS`）、exact-head `release_check.py`、required CI run `35502888440` 三 job 全绿后合入 `master`，merge commit `fa0185412db5c0d3f47445081da822f121cceff1`；合并后 master CI run `35503775542` 的 backend/frontend/docs 亦全部成功。GitHub 原生 `APPROVE` 因连接身份同时为 PR 作者被平台拒绝；现已明确网页审核回执与 GitHub 原生 Review 分层，单账号场景不得把 self-approve 限制变成自锁，也不得通过小号、自批或放宽 CI 绕过门禁。IMP-006 只证明 reference / executable snapshot / paper fill 的工程事实契约闭环，不证明买点收益。BUG-020 的真实交易时段生产会话仍为 G0 `待条件`，因此当前最低可行动阻断门仍是 G1，下一主切片为 **IMP-044（Outbox、类型化回执与中断恢复）**；若 BUG-020 条件先转为可行动，G0 重新优先。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户于 2026-09-20 明确授权，持续到用户明确退出/恢复 Codex）。** 当前 master 仍为 `aca43e408a9555da43de9e7f42bb10361c92b6e9`；先合入 v9.11/U50 降级发布机制，再把当前 G1/P0 IMP-044 PR #67 同步到新 master，并由网页端完成 exact-HEAD U49 作者反证、`DegradedRelease`、required CI、`release_check.py`、merge、post-merge CI 与分支删除。正常双角色并未废弃：Codex 恢复后用户可明确退出降级，届时重新要求独立网页 `Review`。降级模式只替代“独立 reviewer 必须存在”这一角色条件，不降低阶段门、安全红线、完整 CI、敏感信息/范围、latest master、post-merge 或分支清理要求。BUG-020 仍为 G0 `待条件`，所以当前最低可行动阻断门仍是 G1；在 IMP-044 闭环前不领取 IMP-032/BUG-016/IMP-049/053。
 
 
 ## 1. 固定入口与范围
@@ -19,7 +19,7 @@
 | 选股提前发现、进入时机和成因 | 首次观察/触发/reference/actionable/实际 shadow fill 分开，盘中随新事实另版重评；先验事实/时间/竞争解释/失效并存；金健只作未定区间示例，不作抓涨或成交保证 | hunting-decision-design §1/§4/§4.1/§7/§8；W03/IMP-053 |
 | 不限少数战法/形态，充分用知识 | 驱动/结构/角色/环境/时点/执行域/成熟度开放组合；37条KB及候选登记有用途，未知情境不硬归类，负结果与准入区分 | hunting-decision-design §2/§3/§5；plan-registry §3/§4 |
 | 猎场重新设计但不偏离UI风格，其他板块同理 | 沿原组件/字号/亮暗/配色；猎场按机会/跟踪/影子/复盘职责分区，页面锁屏+内部滚动；Drawer/Modal/Popover 按上下文语义选择，动效有目的且后置；工作台、市场、图表、消息、记录和复盘均有独立目标 | product-closure-design §2/§4/§5；hunting-decision-design §6；W07/IMP-050/054 |
-| 历史要求叠加、同义去重、新要求保留 | U01–U49及21条原消息ordinal保持；冲突在语义处裁定，不以最新局部问句抹去主任务，历史成果不重做 | implementation-plan §8/§8.1；plan-registry §1–§3 |
+| 历史要求叠加、同义去重、新要求保留 | U01–U50及21条原消息ordinal保持；冲突在语义处裁定，不以最新局部问句抹去主任务，历史成果不重做 | implementation-plan §8/§8.1；plan-registry §1–§3 |
 | 全面论证后主动补缺、融合、调整 | 现状/最小修补/复用/替代比较，收益/成本/风险/恢复与反证齐备才增删重排；允许不改、拒绝或补证，不机械领下一行 | implementation-plan §6/§7；collaboration-workflow §4 |
 | 废弃旧协作自动化，改用账本短提示 | 互调/自动唤醒/自动回执/Bridge依赖退出，历史原型已退役；网页规划审核、Codex执行、用户只触发读取 | collaboration-workflow §1–§3/§7；W08/GOV-022 |
 | 更新关联文档、清理无用重复并可追溯 | 当前资料各有职责，旧矛盾集中裁定；清理的是旧施工承诺/重复日志，不删除独有知识、历史证据或业务调度 | plan-registry；W08；Git父版本 |
@@ -51,7 +51,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 本次合并后事实指针与账本关联收口由 PR #40 承载；不为记录 PR 自身再追加会改变被审版本的自指提交。
 
-## 7. v9.10 当前阶段门快照
+## 7. v9.11 当前阶段门快照
 
 本节只记录当前现场，不维护第二份 backlog；权威算法在总账 §5.9，任务元数据在所属 stage。
 
@@ -64,8 +64,9 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - BUG-029 现以 `ever_sealed/current_sealed/snapshot_state/version` 为唯一 current-state 契约；开板只恢复“进入评估”的资格，不自动获得成交/通知/模拟执行许可。2026-09-18 真实跨源样本已证明涨停池成员可多次开板/回封；旧 v1 归档保持原语义，v2 才使用新状态重放。
 - RSH-031 为 `G1/P1/非阻断/门内序70`，即使同处 G1 也排在阻断项之后；且 `效果前置=RSH-026, IMP-020, RSH-030` 未满足前不得宣称龙头战法有效或接生产权重。
 - U47 不制造跨门例外：IMP-006 已把 `reference_entry → executable_snapshot → PaperOrder fill` 三种价格身份和同一 decision/version 接到通知、模拟仓与页面；它的合并只证明工程事实契约收口，不证明买点效果。post-merge CI 通过后仍先做 G1/IMP-044，再进入 G2 的 IMP-049 → IMP-053；reference 与实际 shadow fill 永久分名、分母和收益口径。
-- U48 同样不制造跨门例外：W08/GOV-027 为 `GX/P1/持续治理/门内序47`，只可作为不冲突的伴随切片；它先复用 factor/strategy/KB/Jev/opportunity 各自 owner 的既有证据，定义最小生命周期/衰退/成本反馈契约，不建第二总注册表。项目级上层治理入口新增 `skills/living-system-governor/SKILL.md`，用于跨模块方案、重大重构和机制生命周期复核；该 Skill 只提供证据/反证/KEEP-FIX-MERGE-EXPERIMENT-WATCH-RETIRE 决策协议，不拥有派工、生产晋级或阶段门修改权。 v1.2.0 在自我进化基础上进一步加入 U49 主动缺陷发现门：后续长期要求/重复纠偏先作为方法论候选，只有形成稳定可复用增量才版本化蒸馏；一次性要求不污染 Core，是否落实以 Git/PR 与后续行为核验，不靠聊天窗口记忆。任何生产降权、阈值变化、策略/Jev 晋级仍回原 owner task 与证据门。
+- U48 同样不制造跨门例外：W08/GOV-027 为 `GX/P1/持续治理/门内序47`，只可作为不冲突的伴随切片；它先复用 factor/strategy/KB/Jev/opportunity 各自 owner 的既有证据，定义最小生命周期/衰退/成本反馈契约，不建第二总注册表。项目级上层治理入口新增 `skills/living-system-governor/SKILL.md`，用于跨模块方案、重大重构和机制生命周期复核；该 Skill 只提供证据/反证/KEEP-FIX-MERGE-EXPERIMENT-WATCH-RETIRE 决策协议，不拥有派工、生产晋级或阶段门修改权。 v1.2.0 在自我进化基础上进一步加入 U49 主动缺陷发现门；v9.11/U50 又补受控降级全权闭环，避免 Codex 不可用时角色门自锁：后续长期要求/重复纠偏先作为方法论候选，只有形成稳定可复用增量才版本化蒸馏；一次性要求不污染 Core，是否落实以 Git/PR 与后续行为核验，不靠聊天窗口记忆。任何生产降权、阈值变化、策略/Jev 晋级仍回原 owner task 与证据门。
 - U49 不改变阶段门算法，但改变每轮默认动作：继续选刀前、审核放行前、阻断项闭环/换门后、事故/用户纠偏后都要运行有界主动缺陷发现门并写回执；同根 P0/P1 新发现可改变当前验收，跨域发现回原 owner，不自动扩权施工。
+- U50 也不改变阶段门算法，只改变“谁可以完成当前切片”：正常模式仍是 Web Review + Codex；当前 `DEGRADED_FULL_CONTROL` 下网页端按同一阶段门全程操控，每个 PR 必须重新写 exact-HEAD `DegradedRelease`，不能复用一次用户授权跳过逐 PR 发布证据。
 - GX 治理只可作为不冲突的伴随切片。2026-09-20 `GOV-018` 已闭环：`.workbuddy` / `.workbuddy-ai` 已物理删除，有价值内容进入项目中性 `skills/scripts/docs/artifacts`，第三方 UZI/Serenity 本体不再复制；PR #48 已合入 `master`（merge `b6b5ba0`，最终 required CI run `35481812431` backend/frontend/docs 全绿）。`GOV-026` 已落地 `scripts/workspace-hygiene.py` 并接 CI/交接；本轮又把 docs 根从 36 份 Markdown 收口为 6 个控制面，领域正文进入 system/data/product/strategy/ai/review/research，`doc-health` O2 阻断根目录回堆与未知分类；最终一致性复核 PR #50 又把 09-17/09-18 四份复盘/进化时间序列补入主干，剩余 4 个 backend/data JSON 明确保留为本机运行证据。以上治理变更不改变阶段门算法；BUG-028 / BUG-026 已闭环，BUG-020 因生产盘中外部条件转 `待条件`，故 G0 当前无可行动阻断项，阶段门现计算到 G1；IMP-006 已完成，G1 当前阻断位已转到 IMP-044。
 
 当前处于 `READY_FOR_NEXT_PLANNED_SLICE`：下一主切片为 IMP-044，仅做 W02 已界定的“类型化回执 + 买点 Outbox”最小纵切；不得顺手迁移全部事件来源。没有网页登记的 `CROSS_GATE_EXCEPTION` 就不能跨门。
@@ -75,11 +76,20 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - Jev 只保留 bounded semantic verify、条件 capability routing、metadata-only usage 与研究/审核辅助；确定性金融规则、权限、撮合、风控和真实执行不得委托给 Jev。
 - BillionsBobby/JevRouter 只采用经过固定版本校验的内核与 privacy-safe wrapper；旧 `jev-route` 已退出活动链。OpenRouter 当前明确不接入，也不使用聊天中出现过的旧 Key。
 - Universal Verification 仍为 off/shadow；RSH-030 的 240 条固定队列已经 Jev 预标注，但 human gold 仍为 0/240。未完成人工独立标注前，不启用 cascade、不调生产阈值、不宣称准确率或额度节省。
-- 网页 ChatGPT / Codex 协作固定为“`master` 账本事实源 + 用户短提示”：网页负责规划/审核，Codex负责明确切片执行；Bridge、自动互调、自动审核回执均不是必需依赖。功能分支可以短暂存在，但不能成为长期固定入口。
+- 协作固定为“`master` 账本事实源 + 用户短提示”，但执行角色由模式决定：正常模式网页规划/独立审核、Codex执行；`DEGRADED_FULL_CONTROL` 网页全程操控。Bridge、自动互调均不是必需依赖。功能分支只作短期施工载体，合并确认后立即删除。
 - v9.4 引入 Jev 长期系统分层与 `plan-registry.md` §1.1 重大决策传播契约；后续版本继续继承该规则。新模型/工具链/架构/协作决定若只更新专题蓝图而漏总方案、INDEX、stage 或接手入口，视为治理缺陷。
 - v9.5 把“当前方案不是永久终局”制度化：`ai/continuous-evolution.md` + `ashare-innovation-radar` 主动发现外部新模型/工具/量化方法/数据与反证；只产生 WATCH/SHORTLISTED/LAB 建议，任何真实采用仍回原 stage、证据门、PR/审核/CI。
 - v9.6 已新增 RSH-031：历史涨停/强连板/空间板/弱市穿越/题材梯队与异常板块拉升采用全量事件+失败对照+point-in-time+旧→新盲测；Jev 只做 bounded MapReduce/rerank/verification，效果准入继续由 RSH-026/IMP-020，猎场证据接线只走 IMP-049。v9.8/U47 进一步规定可交易真实性由 IMP-053 hunting-shadow 验证，首见/reference 不冒充成交或净收益。
 - v9.9/U48 规定 Jev/策略/因子/KB/路由等已采用机制仍需持续证明增量：固定实验候选集不再冒充猎场全局 taxonomy，历史有效不等于永久有效；衰退、知识贡献和额度节省必须用对应领域真实反馈复核。RSH-030 human gold 仍未完成，因此本轮只是治理登记，不产生准确率/额度节省结论。
+
+## 8.1 U50 降级授权回执
+
+- **Mode**：`DEGRADED_FULL_CONTROL`。
+- **User authorization**：`EXPLICIT`；用户原意为“以后加上降级，降级之后由网页全程操控”。
+- **Degraded reason**：当前 Codex 额度不可用，正常双角色无法持续完成实施→独立审核→发布闭环；旧 exact-HEAD Review 门因此形成自锁。
+- **有效期**：持续到用户明确说 Codex 已恢复/退出降级；不是单 PR 临时口令。但每个 PR 的发布仍必须重新生成 exact-HEAD `DegradedRelease`，不能复用上一 PR 回执。
+- **不降低项**：G0–G5/GX 阶段门、U49 主动反证、branch protection、required CI、latest master、CHANGES_REQUESTED/thread、public-repo scan、workspace/doc-health、敏感信息/范围、post-merge CI、删除功能分支。
+- **当前动作**：先合入 U50 机制本身；随后只闭环 PR #67/IMP-044，不并行领取下一业务切片。
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
 
@@ -92,5 +102,5 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **已证实 P0-4 Outbox 判据不兼容**：现有 `_delivery_block` 仅理解 price/change；`picks_buy_point` 会被 `_extract_value=None` 误判 `condition_no_longer_met`。必须用 `intent.kind=picks_buy_point` 专用 recheck，并绑定 latest decision_id/version、执行 snapshot freshness、渠道/target 与有效期。
 - **新增顺序裁定**：`决策归档 → AlertEvent + durable dedup + Feishu intent 同事务 → brief/watch-ledger/paper 派生消费者 → 异步发送`。每日去重权威迁到 DB；优先给 AlertEvent 增 nullable unique dedup_key，以 `trade_date+symbol+kind` 稳定哈希实现 create-once。brief 只做 best-effort 展示，不再拥有发送资格。
 - **非目标**：不在这一刀迁开板/风控/日报等其它来源；不解决 IMP-049/053 的盘中 gate/buy_range 动态重评；不改策略阈值、仓位或真实交易边界。
-- **允许下一动作**：Codex 从此 master 开一个 IMP-044 功能分支，只实现 W02 最新“类型化回执 + durable dedup + buy-point Outbox + 专用 pre-send recheck”纵切；完成后提交准确 HEAD、完整测试与恢复证据，网页再做 U49 `Review`。不得自行领取 IMP-032/BUG-016/IMP-049/053。
+- **允许下一动作**：当前 IMP-044 已有 PR #67；U50 机制合入后网页端在降级模式下同步 #67 到最新 master，对准确 HEAD 做 U49 作者反证并生成 `DegradedRelease`，required CI/release_check 全绿后直接合并、核 post-merge CI、删除分支。不得并行领取 IMP-032/BUG-016/IMP-049/053。
 

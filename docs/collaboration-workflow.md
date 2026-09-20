@@ -1,10 +1,10 @@
-# 账本驱动协作：网页规划审核，Codex执行
+# 账本驱动协作：正常双角色 + 受控降级全权闭环
 
 > 现行方式是固定仓库记录+用户短提示；没有Bridge或自动互调依赖。协作任务归 [GOV-022](stages/w08-governance.md#gov-022)，当前允许动作看 [handoff](handoff.md)，理论/计划收口归 [GOV-020](stages/w00-foundation.md#gov-020)。
 
 ## 1. 职责与授权
 
-网页ChatGPT负责理论、目标/架构/产品设计、计划、阶段任务增删重排、验收设计与成果审核。Codex实施明确派工范围、测试并回填事实/偏差/建议，不自行批准或降低验收。用户决定目标与重大权限/费用/范围取舍，并触发两端读取。
+默认采用正常双角色：网页ChatGPT负责理论、目标/架构/产品设计、计划、阶段任务增删重排、验收设计与独立成果审核；Codex实施明确派工范围、测试并回填事实/偏差/建议，不自行批准或降低验收。用户决定目标与重大权限/费用/范围取舍。Codex 额度/连接不可用等原因导致正常分工不可持续时，只有用户明确授权才能切入 `DEGRADED_FULL_CONTROL`；授权后网页端全程操控，直到用户明确退出或恢复正常模式。
 2026-09-18 的 DESIGN_ONLY 规划批只做理论、方案及关联文档；该限制只约束那一轮，不是长期“当前模式”。当前允许动作必须从最新 `master` 的 handoff 与所属 stage 读取；更新计划/任务定义仍不等于实施那些任务，设计批准也不等于代码批准。
 
 ## 2. 固定入口与共享事实
@@ -32,12 +32,21 @@ Codex执行完必须记录实现/测试/偏差/剩余、提交推送，然后用
 每轮窄扫当前切片与直接上游/下游、事实存储、动作、配置/权限、测试和治理指针；换门或重大跨模块决定再做一次更宽边界扫描。至少检查：不可能门禁/自锁，双事实源或配置空转，顺序/事务/崩溃窗口，幂等/去重/retry/unknown，权限与 fail-open，动态状态/旧快照冻结，测试是否固化坏行为，重大决策传播/陈旧指针。
 
 强制反事实问题是：**即使现有测试、CI 和文档都绿，系统仍可能怎样静默失败？** 新发现按“已证实缺陷 / 高风险候选 / 正常限制 / 未知”分级。同根且影响安全/正确性的发现先改变当前验收或阻塞放行；无关发现回原 owner/stage，不借审计扩大本轮授权。handoff 的主动审计回执分两阶段：网页开工/继续前写 `Preflight`，网页对成果准备放行前再写绑定准确 HEAD/diff 的 `Review`；Codex 只能引用/补实现事实，作者自检不得冒充 Review。无新问题也要写清实际检查范围。
-### 3.3 换会话、重复通知与冲突
+
+### 3.3 U50 受控降级全权闭环
+
+`DEGRADED_FULL_CONTROL` 是正常双角色不可用时的正式降级模式，不是绕过发布门。**激活条件只有一个：用户明确授权**；额度不足、连接失败、等待时间长都不能由模型自行推断授权。激活后 handoff 写明模式、授权时间/原因与当前切片，网页端可连续承担规划、实现、U49 作者反证、提交/PR、CI、发布、合并、post-merge CI 和分支清理；在用户未明确退出前，后续“继续”可按同一阶段门算法由网页直接领取下一个唯一切片。
+
+降级模式不伪装独立审核。每个 PR 都必须在 PR Conversation 留一个 exact-PR/exact-HEAD `DegradedRelease` 回执，至少包含：`Stage: DegradedRelease`、`Mode: DEGRADED_FULL_CONTROL`、`User authorization: EXPLICIT`、非空 `Degraded reason`、`Release HEAD` 及 `Degraded Release verdict: APPROVED / MERGE_IF_GATES_PASS`。作者普通自检、测试摘要或“无已知问题”均不能替代该回执。HEAD/base/CI 变化后旧回执失效。
+
+`release_check.py` 同时支持两条**互斥语义**的有效路径：正常模式用独立 `Review`；降级模式用 `DegradedRelease`。两条路径都必须继续满足 latest master 已集成、三项 required CI completed/success、无有效 `CHANGES_REQUESTED` / 未解决 thread、commit status 不阻塞、敏感信息/范围/本地适用门禁已核。合并后必须核 master CI 并删活动功能分支。降级结束后恢复正常双角色，后续 PR 不得继续沿用旧降级回执。
+
+### 3.4 换会话、重复通知与冲突
 
 同项目新会话先读最新 `master`：AGENTS→handoff→协作→方案→对应 stage 与证据。第一次完全无项目上下文时先定位仓库一次，之后不依赖聊天记忆或前台窗口标题。不能从不带项目的一句提示猜任务。
 同轮已完成/已执行不因重复通知重做；先确认旧执行者停止，不并发写同工作区。不reset/clean、不覆盖未知改动；远端更新不代表本机已同步。目标/版本/任务不唯一时先核对，不能凭最新时间戳选择方便的一份。
 
-### 3.4 模式不能自行升级
+### 3.5 模式不能自行升级
 
 handoff 若明确 DESIGN_ONLY / REVIEW / BLOCKED，则不得执行；计划存在 P0、图已展示或用户说“完善方案”也不自动构成业务修复、回放、模型、采集、迁移或部署授权。handoff 可执行时，网页派工或用户“继续任务”都必须遵守同一顺序：G0–G5 阶段门 → 门禁角色 → P0/P1/P2 → 门内序 → 硬依赖；`效果前置` 未满足时不得升级效果主张。任何跨门只能使用网页已登记的 `CROSS_GATE_EXCEPTION`，该授权仍只覆盖这一刀。
 
@@ -57,9 +66,9 @@ handoff 若明确 DESIGN_ONLY / REVIEW / BLOCKED，则不得执行；计划存�
 
 ## 5. 版本与审阅记录
 
-阶段留本轮范围、依据/被审提交、实际读取内容、结论、限制及明确下一动作。作者自检不是独立代码审核；用户短提示不是审计签名，同账号权限也不是密码学角色隔离。
+阶段留本轮范围、依据/被审提交、实际读取内容、结论、限制及明确下一动作。正常模式下作者自检不是独立代码审核；降级模式下作者自检可以成为发布决策输入，但必须另外形成结构化 `DegradedRelease`，不得命名成 `Review`。用户普通短提示不是审计签名，只有明确“进入/启用降级全权模式”等授权才激活 U50。
 
-**网页审核与 GitHub 原生 Review 分层处理。** 网页审核回执必须由未参与该实现轮的审核会话对准确 `base/head/diff` 与证据作出 `APPROVED / MERGE_IF_GATES_PASS` 或整改结论；GitHub 原生 `APPROVE` 只是平台可用时的附加证据，不是单账号仓库的必要条件。若审核连接使用的 GitHub 身份恰好也是 PR 作者，GitHub 会拒绝 self-approve；此时不得为了形式状态建立小号、绕过保护或把 `COMMENTED` 伪装成原生批准，而是保留网页审核回执，并继续要求 exact-head `release_check.py`、required CI 全绿、无有效 `CHANGES_REQUESTED` 与未解决阻断 thread。`release_check.py` 对原生 review decision 允许 `None / REVIEW_REQUIRED / APPROVED`，并机械读取 PR Conversation，要求存在同时绑定当前 PR 编号、`Reviewed HEAD` 与 `APPROVED / MERGE_IF_GATES_PASS` 的项目级 `Review` 回执；HEAD 变化后旧回执自动失效。该检查只保证流程记录未漏，不把同账号评论冒充密码学独立身份。
+**项目 release receipt 与 GitHub 原生 Review 分层处理。** 正常模式由未参与实现轮的网页审核会话对准确 `base/head/diff` 与证据形成 `Review`；降级模式由获用户明确授权的同一网页实施会话形成 `DegradedRelease`，并明确作者与发布操作者相同、不是独立 Review。GitHub 原生 `APPROVE` 只是平台可用时附加证据。`release_check.py` 对原生 review decision 允许 `None / REVIEW_REQUIRED / APPROVED`，并机械读取 PR Conversation：正常路径要求 `Reviewed HEAD` + Review verdict，降级路径要求 `Release HEAD` + U50 授权/模式/原因 + Degraded Release verdict；HEAD 变化后旧回执自动失效。两条路径都继续要求 exact-head required CI、无有效 `CHANGES_REQUESTED` 与未解决阻断 thread，不为了形式状态建立小号、绕过保护或放宽 CI。
 
 被审实现提交与随后纯协调文档提交分开；新业务代码/基点变化必须重审。最终合并仍针对准确候选SHA和完整CI，不做递归自指提交。规划稿由网页编制/自查可以交付，不能据此声称同作者业务代码获独立批准。
 

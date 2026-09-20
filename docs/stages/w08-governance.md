@@ -18,17 +18,18 @@
 - **门禁角色**：持续治理
 - **依赖**：无
 - **效果前置**：无
-- **方案依据**：用户完全放弃双端自动化、采用账本短提示；U40 限定 2026-09-18 规划批只做理论/计划；U49 要求主动发现隐藏缺陷成为默认审核门。
-- **范围**：固定 handoff 与阶段唯一记录串联网页规划审核/Codex执行；`ashare-ledger-continue` 同时承担新会话接手/上下文恢复。U49 要求继续选刀前、审核放行前、阻断项闭环/阶段门切换后、事故/用户纠偏后运行有界 Proactive Discovery Gate，并由 handoff 留主动审计回执。重大模型、工具链、架构、产品语义、协作或治理决定按 plan-registry §1.1 传播到全部受影响权威面。旧 App Server 派工、浏览器唤醒、自动审核回执与 Bridge 控制不属于候选建设路线。
-- **验收**：已退役原型无活动消费者悬挂引用且可恢复；新会话能只凭最新 master 的固定读取链恢复方案/Jev/账本/下一动作；重大决策有“已更新/不适用+理由”的传播核对；每轮 `Preflight` / `Review` 两阶段主动审计回执能回答“谁在何时扫了什么、发现/未发现什么、是否改变门/验收/下一刀”，Codex/作者自检不能冒充 Review，且缺 U49 传播面的明显漂移能被 doc-health 判红。真实双端使用未发生不标整项完成。
+- **方案依据**：用户完全放弃双端自动化、采用账本短提示；U40 限定 2026-09-18 规划批只做理论/计划；U49 要求主动发现隐藏缺陷成为默认审核门；U50 要求 Codex 不可用时能在用户明确授权下进入受控降级全权闭环。
+- **范围**：固定 handoff 与阶段唯一记录串联网页规划审核/Codex执行；`ashare-ledger-continue` 同时承担新会话接手/上下文恢复。U49 要求继续选刀前、审核放行前、阻断项闭环/阶段门切换后、事故/用户纠偏后运行有界 Proactive Discovery Gate，并由 handoff 留主动审计回执。U50 新增 `DEGRADED_FULL_CONTROL`：只在用户明确授权时启用，网页端可全程操控，但每个 PR 必须 distinct exact-HEAD `DegradedRelease` + required CI + release_check + post-merge CI，不伪装独立 Review。重大模型、工具链、架构、产品语义、协作或治理决定按 plan-registry §1.1 传播到全部受影响权威面。旧 App Server 派工、浏览器唤醒、自动审核回执与 Bridge 控制不属于候选建设路线。
+- **验收**：已退役原型无活动消费者悬挂引用且可恢复；新会话能只凭最新 master 的固定读取链恢复方案/Jev/账本/下一动作；重大决策有“已更新/不适用+理由”的传播核对；每轮 `Preflight` + 当前模式 release receipt 能回答“谁在何时扫了什么、发现/未发现什么、是否改变门/验收/下一刀”：正常模式为独立 `Review`，降级模式为明确作者全权的 `DegradedRelease`；两者不得互相冒充，且缺 U49/U50 传播面的明显漂移能被 doc-health 判红。真实双端使用未发生不标整项完成。
 - **证据**：历史26a0c44到9d439c5批检查过跟踪源、原项目scripts/.github、LaunchAgents与进程命令；通过safe-trash成对移除旧脚本及44项专属测试、核SHA并做一次脚本恢复再退出。对应retirement.json及Git保留；不是本次新查，也不宣称整台机器不存在未知外部引用。
   - 2026-09-19 v9.4 治理切片 PR #41 新增传播契约与 doc-health R 守卫；首次主动扫当前版本指针即额外抓出 `summary/pick-signal-chain.md`、`summary/review-governance.md` 两处残留 v9.3，证明人工记忆不足以防漏，并已纳入同一守卫面。
   - 2026-09-20 用户追问“为什么不说就不能主动发现”触发治理复盘：确认原流程虽然写有反证/持续演进，但没有把隐藏缺陷扫描设成每轮强制触发，因此同日升级为 v9.10/U49，并同步 Governor v1.2.0、continue/handoff Skills、协作规范、AGENTS、plan-registry、INDEX、handoff 与 doc-health 传播守卫。
   - 同轮 U49 Preflight 又确认 `release_check.py` 只校验 GitHub reviews/threads/CI，不校验项目级网页 Review 回执本身。PR #63 exact-HEAD Review 已在合并前存在且 post-merge master CI 全绿，因此不是该 PR 的放行事故；但流程缺口真实存在。后续治理切片为 `release_check.py` 增加 PR Conversation exact-PR/exact-HEAD Review 回执校验与正反测试，并明确它只做流程一致性、不宣称 GitHub 身份隔离。
+  - 2026-09-20 用户进一步指出 Codex 无额度后网页临时代执行会被“作者不得自产 Review”永久自锁，并明确授权“降级后由网页全程操控”。据此升级 v9.11/U50：正常双角色保留；降级模式以 `DegradedRelease` 代替不存在的独立 Review，但 required CI、release_check、U49 作者反证、post-merge CI 与分支清理不降级。
 - **处置依据**：人工触发已代替自动发送需求；继续开发互调增加权限/状态/维护成本。退出不等于自动链成功，废弃子目标不得重新派工。
-- **下一步**：先收口本轮发布门 companion：exact-HEAD 网页 Review 回执进入 `release_check.py` 的机器判定并通过完整 CI；随后回 G1/IMP-044。长期继续用真实“继续→实施→审核→收口”验证 U49 的发现质量、误报与成本；GX 不借 U49 跨门。
+- **下一步**：先合入 U50 降级发布机制并用真实 PR 验证 normal Review / DegradedRelease 两条 release path；当前用户已明确激活 `DEGRADED_FULL_CONTROL`，机制合入后直接回 G1/IMP-044 #67，完成同步 master→降级回执→CI→merge→post-merge→删分支。长期继续验证 U49/U50 的发现质量、误报与成本；GX 不借治理跨门。
 - **恢复**：26a0c44和项目回收记录保存旧文件；恢复只作调查且不覆盖目标，不恢复旧自治目标或撤销金融/CI保护。
-- **分工**：网页方案/账本/审核与净收益复评，Codex回填执行事实，用户触发及重大取舍。Bridge个人App/扩展/对话未卸载删除，不影响本流程。
+- **分工**：正常模式网页方案/账本/独立审核，Codex执行；`DEGRADED_FULL_CONTROL` 激活时网页全权闭环，用户只需明确进入/退出降级或提出重大取舍。Bridge个人App/扩展/对话未卸载删除，不影响本流程。
 
 ## GOV-024
 
@@ -96,7 +97,7 @@
 - **门禁角色**：持续治理
 - **依赖**：无
 - **效果前置**：无
-- **方案依据**：U48；implementation-plan v9.10 §6.2；continuous-evolution §5.1/§10；factor-lifecycle-governance 与现有 strategy/KB/Jev owner 体系。
+- **方案依据**：U48；implementation-plan v9.11 §6.2；continuous-evolution §5.1/§10；factor-lifecycle-governance 与现有 strategy/KB/Jev owner 体系。
 - **范围**：不新建第二套机制总注册表；定义跨域最小生命周期契约，并把字段/审计落回原 owner：策略/战法、猎场情境、因子/过滤器/排序器、KB 结论与消费规则、Jev/LLM 语义能力、能力/模型路由、数据源优先级和关键治理自动化。至少覆盖用途/消费者、机制/版本、Champion/基线、证据与数据窗口、适用/不适用域、反例/falsifier、last_reviewed/review_due/revisit_trigger、衰退信号、成本/延迟/维护/隐私、challenger/shadow、退出/回滚/复活条件；专业指标继续归原领域，不造一个万能总分。
 - **验收**：① 能从原登记册/运行证据回答“为什么存在、服务谁、当前证据多强、何时重验、何时降级/退役/复活”；② 猎场/策略/因子使用 point-in-time 全分母、OOS/forward/shadow 与可成交成本证据，知识使用能区分独立增量/重复背景/反例，Jev/路由同时看 human gold/anchor recall、升级率、token/延迟/费用和最终任务质量；③ 发现衰退先区分市场/数据/实现/样本/消费者/机制，不允许 Agent/Jev 自动改生产阈值自救；④ 已完成任务仍可关闭，只有 review/revisit trigger 成立才生成新切片，active backlog 不因“持续迭代”无限增长；⑤ 无证据显示有增量时允许保持现状或退役机制，不以机制数量衡量系统能力。
 - **证据**：当前已有局部基础：factor-lifecycle-governance 已定义因子入库/使用/出库/衰减，strategy-registry/RSH-026/IMP-020 提供策略与效果证据，RSH-027 负责知识正文/引用增量，RSH-030 与 Jev usage/gold 负责语义能力质量和成本，IMP-049/053 负责猎场 opportunity/reference/shadow 真实性；这些仍是各自 owner，不因本项登记自动变为已实现的统一运行机制。2026-09-20 又将多轮项目治理方法蒸馏为项目中性 `skills/living-system-governor/`：它只提供 Context Snapshot、KEEP/FIX/MERGE/EXPERIMENT/WATCH/RETIRE、反证/生命周期/成本审计等上层协议，不拥有 stage 状态、生产准入或自动晋级权，因此其入库不把 GOV-027 标成已完成。 同日 v1.2.0 在既有自我进化基础上新增 U49 主动缺陷发现门；Skill 自身继续纳入生命周期：持续观察后续用户长期要求/重复纠偏，但只在稳定复现、明确长期授权或真实复盘证明缺口时蒸馏，并区分 Core/领域扩展/经验反例；一次性要求不固化，新增前先合并/删除重复，实质变化以版本 + Git/PR + 后续行为证据证明。
