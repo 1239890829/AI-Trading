@@ -1707,6 +1707,30 @@ def check_decision_propagation() -> list[str]:
         ):
             errors.append("docs/handoff.md：U49 主动审计回执缺当前阶段 Preflight/Review")
 
+
+    # U50：降级全权闭环不能只写在协作文档或聊天里。它改变 release receipt 与接手模式，
+    # 必须传播到发布门、接手/交接 Skill、W08、AGENTS 和当前 handoff。
+    if re.search(r"\bU50\b", plan) and "DEGRADED_FULL_CONTROL" in plan:
+        degraded_surfaces = {
+            ROOT / "AGENTS.md": ("DEGRADED_FULL_CONTROL", "DegradedRelease"),
+            DOCS / "INDEX.md": ("U50", "降级全权闭环"),
+            DOCS / "collaboration-workflow.md": ("U50", "DEGRADED_FULL_CONTROL", "DegradedRelease"),
+            DOCS / "plan-registry.md": ("DEGRADED_FULL_CONTROL", "DegradedRelease"),
+            DOCS / "handoff.md": ("U50 降级授权回执", "DEGRADED_FULL_CONTROL"),
+            DOCS / "stages" / "w08-governance.md": ("U50", "DEGRADED_FULL_CONTROL", "DegradedRelease"),
+            ROOT / "skills/ashare-ledger-continue/SKILL.md": ("DEGRADED_FULL_CONTROL", "DegradedRelease"),
+            ROOT / "skills/ashare-task-handoff/SKILL.md": ("DEGRADED_FULL_CONTROL", "DegradedRelease"),
+            ROOT / "skills/living-system-governor/SKILL.md": ("DEGRADED_FULL_CONTROL", "DegradedRelease"),
+            ROOT / "scripts/audit/release_check.py": ("DEGRADED_FULL_CONTROL", "DegradedRelease"),
+        }
+        for path, tokens in degraded_surfaces.items():
+            text = _read(path)
+            for token in tokens:
+                if token not in text:
+                    errors.append(
+                        f"{path.relative_to(ROOT)}：U50 降级全权闭环传播缺失（缺 {token}）"
+                    )
+
     # READY 模式的 handoff 头部必须描述已生效现场，不能遗留“待合并/合并后才生效”的候选态。
     handoff_text = _read(DOCS / "handoff.md")
     handoff_head = handoff_text.split("\n## 1.", 1)[0]

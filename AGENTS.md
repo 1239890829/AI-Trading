@@ -6,9 +6,9 @@
 ## 项目入口
 
 - 作业边界与发布流程：本文件 §0、§1、§6.5。
-- 固定分工：网页 ChatGPT 负责计划、阶段账本统筹和逐轮审核；Codex 只执行获准切片。协作协议与人工介入点见 `docs/collaboration-workflow.md`。
+- 协作采用双模式：正常模式由网页 ChatGPT 负责计划/阶段账本/独立审核、Codex 执行获准切片；用户明确授权 `DEGRADED_FULL_CONTROL` 时，网页端可临时承担规划、实现、自审、PR/CI、发布、合并与清理全链路，但必须走独立的 `DegradedRelease` 精确 HEAD 回执，不得伪装成独立 Review。协作协议与人工介入点见 `docs/collaboration-workflow.md`。
 - 唯一文档入口：`docs/INDEX.md`；执行治理：`docs/retro-and-gaps.md` §5.9（G0–G5/GX）；领域索引：§6.0（W00–W09）；任务状态与调度元数据在所属阶段页单点维护。
-- 施工取舍：最新用户要求与 docs/implementation-plan.md 的 v9.10 明确修订优先；原 v9 未修订部分保留，旧项按真实价值复核，登记不等于必须实施。
+- 施工取舍：最新用户要求与 docs/implementation-plan.md 的 v9.11 明确修订优先；原 v9 未修订部分保留，旧项按真实价值复核，登记不等于必须实施。
 - 当前现场与实测：`docs/handoff.md` §1；经验按 `docs/kb/00-INDEX.md` 定位。
 - 接续工作：`skills/ashare-ledger-continue/SKILL.md`；当轮交接：`skills/ashare-task-handoff/SKILL.md`。总账 `docs/retro-and-gaps.md` §5.9 的 G0–G5/GX 是唯一执行门序；用户“继续任务/继续”只授权 Skill 在**最低未闭环主门**按角色/P0-P2/门内序领取一个切片。硬依赖未完成不得跨门；`CROSS_GATE_EXCEPTION` 只能由网页在 handoff 明示。
 - 盘后复盘：`skills/ashare-daily-review/SKILL.md`，流程与逐项核验归既有 SOP / checklist。
@@ -80,7 +80,7 @@ python3 scripts/doc-health.py
 
 ## 2. 方案主导与评估纪律
 
-执行用户指定的最终融合方案 v9 及配套附件，并应用 docs/implementation-plan.md 的 v9.10 当前修订；该方案已累积吸收此前增量与 U49，最新用户指令优先。旧账本只提供问题证据，不自动产生施工义务；项目机制、流程、交接、设计及架构均可审视和调整。
+执行用户指定的最终融合方案 v9 及配套附件，并应用 docs/implementation-plan.md 的 v9.11 当前修订；该方案已累积吸收此前增量与 U49，最新用户指令优先。旧账本只提供问题证据，不自动产生施工义务；项目机制、流程、交接、设计及架构均可审视和调整。
 
 先核当前代码、已合并成果与真实消费者，再比较现状、最小修补和替代方案。只推进收益显著、可靠且风险可控的改动；清楚写用途、依据、影响面、成本、验收及恢复路径。允许有理据偏离方案，但性能不得劣化、关键机制不得削弱；优化用可比测量和行为证据证明，不宣称未证实的“全局最优”。无法证明的主张保留为待验证条件。
 
@@ -97,13 +97,13 @@ python3 scripts/doc-health.py
 
 最新协作方式以 docs/collaboration-workflow.md 为准：固定仓库入口、阶段任务单点记录，用户仅说“Codex执行完了”或“ChatGPT审核完了”。双方先读最新已共享记录；通知不代表批准，缺证据/版本不符则停。不要求用户传任务卡或每轮下载文档；自动链和Bridge退出必需依赖。
 
-2026-09-18 临时代执行属于历史授权：当时 Codex 额度不足，网页 ChatGPT 曾按明确范围临时代执行；该授权不自动延续到后续轮次。当前切片、施工分支与证据只看最新 `master` 的 `docs/handoff.md` 及所属阶段，不在本手册复制临时状态。作者自检不冒充独立审核；功能分支审阅与准确版本完整 CI 未齐不得合主干或上线，长期统筹/执行分工保留。
+U50 起临时代执行不再靠一次性聊天例外，而由正式降级模式管理。正常模式仍要求实施者与网页独立 Review 分离；当用户明确授权 `DEGRADED_FULL_CONTROL` 时，授权状态写入 handoff，网页可全程操控当前及后续切片，直到用户明确退出/恢复 Codex。降级作者自检仍不得冒充独立 Review，必须使用 `DegradedRelease` 精确 HEAD 回执；required CI、latest master、无 CHANGES_REQUESTED/未解决 thread、敏感信息/范围、本地门禁、post-merge CI 和分支删除均不降低。
 
 首次开工、审核整改与合并按协作规范 §3.1 分别校验；明确派工可授权首次实施，CHANGES_REQUESTED可授权限定整改，但两者都不代替成果审核或合并CI，避免“未开工就要求已审核”的循环。
 
 长期协作规则（自 2026-09-18 起）：方案、优先级、任务增删及验收标准由网页 ChatGPT 统筹；Codex 可回填执行事实、证据和阻塞，并提出改进建议，但不能自行改规划或批准自己。每轮完成先提交审核包，收到绑定当前版本的有效网页审核与明确下一步后才继续。必要独立复现属于审核，不把业务代码实现默认转交网页侧。
 
-- **U49 主动缺陷发现门**：用户无需再问“还有没有问题”。网页在继续选刀前、代码审核放行前、阻断项闭环/阶段门切换后及事故/用户纠偏后，必须对当前切片及直接上下游做一次有界反证扫描；至少核不可能门禁/自锁、双事实源/配置漂移、顺序与部分失败窗口、幂等/去重/unknown、权限/fail-open、动态状态冻结、测试固化坏行为、陈旧指针/重大决策传播。换门时扩大到跨模块边界；发现问题先分级并回原 owner/stage，不以“主动发现”为理由自动跨门或无限全仓扫描。主动审计回执分两阶段：网页开工/继续前写 `Preflight`，网页成果放行前写绑定准确 HEAD/diff 的 `Review`；Codex/作者自检不得自产 Review。缺 Review 不得把该轮称为完整审核/收口。
+- **U49 主动缺陷发现门**：用户无需再问“还有没有问题”。网页在继续选刀前、代码审核放行前、阻断项闭环/阶段门切换后及事故/用户纠偏后，必须对当前切片及直接上下游做一次有界反证扫描；至少核不可能门禁/自锁、双事实源/配置漂移、顺序与部分失败窗口、幂等/去重/unknown、权限/fail-open、动态状态冻结、测试固化坏行为、陈旧指针/重大决策传播。换门时扩大到跨模块边界；发现问题先分级并回原 owner/stage，不以“主动发现”为理由自动跨门或无限全仓扫描。主动审计回执分两阶段：网页开工/继续前写 `Preflight`，网页成果放行前写绑定准确 HEAD/diff 的 `Review`；正常模式下 Codex/作者自检不得自产 Review；`DEGRADED_FULL_CONTROL` 下由同一网页作者形成独立标识的 `DegradedRelease`，不得把它命名或表述成独立 Review。缺当前模式要求的 release receipt 不得把该轮称为完整审核/收口。
 
 - `docs/retro-and-gaps.md` §6.0 是 W00–W09 总入口；`docs/stages/` 每个任务一份状态、范围、证据和下一步。完成后只留必要结论与 PR/commit。
 - `docs/handoff.md` 只写当前现场和最近验收；已完成历史由 Git、阶段基线和 `docs/archive/ledger-transition-20260917.md` 追溯。退出任务不等于删除代码或业务资产。
@@ -156,8 +156,7 @@ Jev 的唯一现役项目蓝图是 `docs/ai/jev-integration.md`，状态归 W08/
 
 - `master` 是主分支；2026-09-19 已启用平台级 branch protection（GOV-012）：必须经 PR，required checks=backend/frontend/docs 且 strict，管理员同约束，force-push 与删除主干禁止。开发任何功能、修复或重构前，必须先同步远程最新的 `master`；
   禁止直接在 `master` 上修改、提交或推送代码。
-- 功能开发必须在从最新 `master` 创建的独立分支中完成；Codex 创建的分支统一命名为
-  `codex/<简短英文任务名>`，禁止直接在 `master` 上开发或提交。
+- 功能开发必须在从最新 `master` 创建的独立分支中完成；正常模式 Codex 分支统一 `codex/<简短英文任务名>`；`DEGRADED_FULL_CONTROL` 下网页临时代执行分支统一 `chatgpt/<简短英文任务名>`。两种模式都禁止直接在 `master` 上开发或提交。
 - 功能分支必须通过 Pull Request 合并到 `master`，不得通过直接推送绕过 Pull Request。
 - Public 仓库提交前必须通过 `python3 scripts/audit/public_repo_scan.py`；GitHub Secret Scanning + Push Protection 已启用。禁止提交 `.env`、API Key、Token、密码、私钥、个人 home 绝对路径、本地邮箱/机器名或私有数据。
 - npm/Dependabot 安全修复采用最小兼容补丁并以官方 registry `npm audit --registry=https://registry.npmjs.org` 复核；有 lock/shrinkwrap 必须同步并用 `npm ci` 验证，禁止 `npm audit fix --force`。
@@ -173,20 +172,20 @@ Jev 的唯一现役项目蓝图是 `docs/ai/jev-integration.md`，状态归 W08/
 - 如果任务需求存在会明显影响实现方案的歧义，应先询问用户；否则直接完成开发、测试、提交和推送。
 - 每次交付必须汇报：分支名称、主要改动、修改文件、测试结果、commit SHA、远程分支或 PR 链接，
   以及遗留问题或风险。
-- Codex 负责本地实现、验证、功能分支交付与获准后的合并；**每轮必须经过网页 ChatGPT 独立审核**。2026-09-18 用户最新分工取代旧无需网页审查条款。审核须绑定任务、计划、base/head和证据，来源可核；Codex/子代理不能自批。此分工不改变 §0 对应用内 LLM 的禁止落地边界。
-- **网页审核回执与 GitHub 原生 Review 是两层门禁，不得互相冒充。** 网页独立审核要求的是规划/审核角色与实施者分离、绑定准确 base/head/diff/证据；它不要求同一 GitHub 账号提交原生 `APPROVE`。若连接账号同时是 PR 作者，GitHub 会拒绝 self-approve，此时以准确 HEAD 的网页 `APPROVED / MERGE_IF_GATES_PASS` 回执 + `release_check.py` + required CI + 无 `CHANGES_REQUESTED`/未解决 thread 为发布门。`release_check.py` 必须机械确认 PR Conversation 中存在绑定当前 PR/HEAD 的项目级 `Review` 回执；这只是**流程一致性校验**，不是密码学 reviewer 身份证明，同 GitHub 账号场景仍由网页会话独立审核事实承担角色分离。不得新建小号、自批、伪造原生 APPROVED 或放宽 CI 来满足形式审批。
+- **正常模式**：Codex 负责本地实现、验证、功能分支交付与获准后的合并；每轮必须经过未参与该实现轮的网页 ChatGPT 独立审核，绑定任务、计划、base/head/diff 与证据。**降级模式**：只有用户明确授权 `DEGRADED_FULL_CONTROL` 后，网页 ChatGPT 才可同时承担实现与发布，不再要求不存在的独立审核会话，但必须执行 U49 作者反证、完整本地门禁/required CI，并对准确 PR/HEAD 写 `DegradedRelease`。两种模式都不改变 §0 对应用内 LLM 自主改码落地的禁止边界。
+- **发布回执与 GitHub 原生 Review 分层，且正常/降级回执不得互相冒充。** 正常模式要求 exact-PR/exact-HEAD 项目级 `Review` + `APPROVED / MERGE_IF_GATES_PASS`，体现实施者与网页审核会话分离；GitHub 原生 `APPROVE` 只是平台可用时附加证据。降级模式则要求 exact-PR/exact-HEAD 的 `DegradedRelease`，同时写 `Mode=DEGRADED_FULL_CONTROL`、`User authorization=EXPLICIT`、非空降级原因和同一 verdict，明确承认作者=发布操作者而非独立 reviewer。`release_check.py` 只接受这两种结构化回执之一，普通作者自检不能放行；两种模式都继续要求 required CI、无 `CHANGES_REQUESTED`/未解决 thread、latest master 等。不得建小号、伪造独立 Review 或放宽 CI。
 - 用户授予 Codex 长期授权：当以下条件全部满足时，Codex 可以直接合并
   功能分支的 Pull Request，无需再次征求用户确认：
-  1. 当前批准切片已经完整实现，网页 ChatGPT 有效审核回执为 APPROVED 且明确允许 MERGE_IF_GATES_PASS；详见 docs/collaboration-workflow.md §5，不能仅凭文字“通过”或Codex自述；
+  1. 当前批准切片已经完整实现；正常模式有有效网页独立 `Review` 回执，或已激活 `DEGRADED_FULL_CONTROL` 且有有效 `DegradedRelease` 回执；两者都必须 exact-HEAD 并明确 `APPROVED / MERGE_IF_GATES_PASS`，详见 docs/collaboration-workflow.md §5；
   2. 适用的本地测试、代码检查和构建均通过；
   3. 对准确 PR HEAD 运行 `python3 scripts/audit/release_check.py <PR编号> --expected-head <完整SHA>`：
      最新 master 必须已集成，当前 CI 最新 attempt 的三 job 必须全部存在且 completed/success；
      其它 Actions/commit status 阻塞同样阻止合并。空结果、读取失败、旧 SHA、skipped/cancelled 均不得放行；
-     本地门禁和准确 diff 审阅另行完成；脚本还必须找到 exact-PR/exact-HEAD 的网页 `Review` 回执，否则 BLOCKED；此校验只证明流程记录存在，不证明评论作者的密码学独立身份。此脚本是客户端约束，不能替代 `GOV-012` 平台保护；
+     本地门禁和准确 diff 审阅另行完成；脚本还必须找到 exact-PR/exact-HEAD 的独立 `Review` 或显式授权的 `DegradedRelease` 回执，否则 BLOCKED；此校验只证明流程记录存在，正常模式的身份独立性仍是流程事实，降级模式则明确不声称独立身份。此脚本是客户端约束，不能替代 `GOV-012` 平台保护；
   4. 最新 `master` 已集成并重验；新提交、base 漂移或重跑 CI 使旧验收失效；
   5. Pull Request 中不存在未解决的 `Request changes` 或阻塞性审查意见；
   6. diff 中不存在敏感信息、无关文件或未经说明的破坏性修改。
-- 全部条件与有效网页放行均满足后，Codex 可执行已获授权的合并；主机仍要求确认时不能绕过。任一条件不满足则停止，按审核意见整改并复审。合并完成不自动授权下一业务轮，须有网页明确派发的下一切片。
+- 全部条件与当前模式的有效 release receipt 均满足后执行合并：正常模式由 Codex 按授权合并；`DEGRADED_FULL_CONTROL` 由网页端直接合并、核 post-merge master CI 并删除功能分支。正常模式合并完成不自动授权下一业务轮；降级模式在用户未退出前可继续按账本阶段门领取下一唯一切片，但每个 PR 都必须重新形成 exact-HEAD `DegradedRelease`，不能复用上一 PR 的回执。
 - 自动合并授权不包含强制推送、绕过 CI、忽略已有阻塞性审查意见、改写 `master` 历史或执行其他破坏性 Git 操作。
 - 合并时使用 `gh pr merge <PR编号> --merge --match-head-commit <完整SHA>`；合并后复验 master CI 与实际运行版本，汇报 PR、合并 SHA、测试和遗留。
 - Pull Request 合并并确认分支提交已进入最新 `origin/master` 后，应立即删除对应本地与远程功能分支。
