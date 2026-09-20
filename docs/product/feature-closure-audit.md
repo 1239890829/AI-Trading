@@ -58,8 +58,8 @@ TypeScript AST交互清单生成调用被安全检查拒绝，未产生成功结
 
 | 细功能 | 源码/上下游 | 检查与设计裁定 | 任务 |
 |---|---|---|---|
-| 盘前/盘中名单、去重、空态、状态条件 | hunting/page全文、PickCard适配 | 已读主要契约；开放情境而非四类enum；不因整页正常掩盖局部失败 | IMP-049、IMP-050 |
-| 卡片价格/进入区间/止损/退出/持仓标记 | PickCard、风险字段、position labels | 已读契约；后端同版决定、价格身份/缺失/权限逐字段验 | IMP-006、IMP-007 |
+| 盘前/盘中名单、去重、空态、状态条件 | hunting/page全文、PickCard适配 | 已读主要契约；开放情境而非四类enum；盘中随新事实另版重评，开盘状态不冻结全天；不因整页正常掩盖局部失败 | IMP-049、IMP-050、IMP-053 |
+| 卡片价格/进入区间/止损/退出/持仓标记 | PickCard、风险字段、position labels | 已读契约；reference/actionable/fill 价格身份必须分开，后端同版决定、缺失/权限逐字段验；参考价不冒充模拟成交 | IMP-006、IMP-053、IMP-007 |
 | 筛选/主题深链/展开、盘后增强/潜伏 | hunting、PostMarketEnhance | 入口已读；小功能不靠放在折叠区获得有效性 | BUG-028、IMP-050 |
 | 生成/刷新组合、简报、单拍、对照/复盘 | hunting act与对应POST | 源已读；运营/重算动作后移，后台继续产出真实结果 | IMP-050、IMP-006 |
 | 铃铛/未读数、单条已读/全部已读 | NotificationBell → read-state | 源已读；本地/服务端水位、跨时区、多窗口并发单验 | BUG-016 |
@@ -69,7 +69,7 @@ TypeScript AST交互清单生成调用被安全检查拒绝，未产生成功结
 | 助手打开/发送/取消/重试/历史/链接 | floating-assistant与assistant API | 仅入口/结构定位；正文和运行行为待核，不宣称已审 | IMP-051、IMP-052 |
 | 复盘选择日、生成/读取、评价与改进 | ReviewTab与review API/service | 入口/既有流程已核；结果读取留前台、运营执行后移 | BUG-009、RSH-026、IMP-050 |
 | 进化/任务/参数/健康/仓库/KB浏览 | agent/page及各tab | 页面入口已读，内部并非全验；后台保留有效能力/鉴权，用户主导航退出调试 | IMP-052、IMP-050 |
-| 公共modal、键盘、焦点、返回/主题切换 | modal-shell、nav、routing、UI hooks | 导航已读，其余逐片核；无障碍/空态不是小功能可忽略项 | IMP-050、GOV-021 |
+| 公共 Modal/Drawer/Popover、键盘、焦点、返回/主题切换 | modal-shell、notification/board drawers、nav、routing、UI hooks | 导航与主要 overlay 已读；按上下文/阻断性/空间需求选择，不机械全改 Drawer；页面锁屏+内部滚动、焦点恢复、reduced-motion 与空态逐片核 | IMP-050、IMP-054、GOV-021 |
 
 ## 5. 无前台功能也逐项审
 
@@ -113,7 +113,7 @@ assistant-sessions全文确认：它是本地有限历史缓存，多标签页�
 | pre-limit-radar | 临板观察 | 资格、再开板/迟到与时点；BUG-029 |
 | llm-aux-judge | 事件辅助解释 | 输入来源/预算/失败降级；RSH-027/IMP-052 |
 | position-monitor | 持仓风险跟踪 | 持仓/观察分开、旧价不伪执行；IMP-007 |
-| paper-matcher | 模拟撮合 | T+1/权限/涨限/费用/幂等；IMP-007 |
+| paper-matcher | 模拟撮合 | T+1/权限/涨限/费用/幂等；手工 paper、daily-picks shadow、hunting-shadow scope 分离；IMP-053/007 |
 | alert-quotes-feeder | 告警行情输入 | 单位/身份、无效价拒绝；IMP-044 |
 | alert-engine | 条件告警 | 重复/撤回/过期、配置后台化；IMP-044/050 |
 | risk-refresher | 风险状态与约束 | 陈旧/缺状态失败关闭；IMP-007 |
@@ -127,7 +127,7 @@ assistant-sessions全文确认：它是本地有限历史缓存，多标签页�
 | picks-intraday-review | 盘中结果标签 | 机会/轮次/周期/未成交分母；BUG-026/RSH-026 |
 | ths-reason-sentinel | 涨停原因覆盖核查 | 覆盖不等正确，不重复计转引；IMP-048 |
 | sentiment-monitor | 环境状态变化 | 热度/接力/集中分开，迟到不倒填；IMP-049 |
-| picks-shadow | 影子反事实观察 | 影子与实际模拟分离，不自我批准；IMP-020 |
+| picks-shadow | 当前每日精选影子执行 | 现实现主要是定稿后次日晨窗 shadow，不得冒充猎场盘中每次 actionable 已成交；研究效果归 IMP-020，猎场独立自动 shadow 归 IMP-053 |
 | marketdb-sync | 历史行情入库 | 复权/日期/证券及一致恢复；BUG-020/GOV-013 |
 | factor-eval | 因子证据评估 | 隔离重研究、失败预算/样本外；RSH-003/IMP-019 |
 | news-flash | 快讯到事件 | 单条事实多源转引去重，无效来源不晋级；IMP-048 |
