@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from datetime import date, datetime, timezone
 
-from sqlalchemy import create_engine, delete, select
+from sqlalchemy import create_engine, delete, event, select
 from sqlalchemy.orm import sessionmaker
 
 from app.models.opportunity_learning import OpportunityDecisionSnapshot, OpportunityOutcomeLabel
@@ -536,6 +536,34 @@ def test_future_horizons_selected_only_scope_does_not_materialize_deferred_rows(
     assert got["inserted"] == 3
     assert due_outcome_symbols("2026-09-21", sf) == {"600001"}
     assert due_outcome_symbols("2026-09-21", sf, include_deferred=True) == {"600001"}
+
+
+def test_future_horizon_selected_scope_loads_only_selected_snapshots(tmp_path):
+    sf = _factory(tmp_path)
+    run_id, rows = build_intraday_records(
+        _payload(), trade_date="2026-09-18", as_of=datetime(2026, 9, 18, 10, 5)
+    )
+    archive_records(run_id, rows, sf)
+    days = [
+        date(2026, 9, 18), date(2026, 9, 21), date(2026, 9, 22),
+        date(2026, 9, 23), date(2026, 9, 24), date(2026, 9, 25),
+    ]
+    loaded = []
+
+    def _loaded(_target, _context):
+        loaded.append(1)
+
+    event.listen(OpportunityDecisionSnapshot, "load", _loaded)
+    try:
+        got = ensure_outcome_horizons(
+            "2026-09-18", days, sf, include_deferred=False
+        )
+    finally:
+        event.remove(OpportunityDecisionSnapshot, "load", _loaded)
+
+    assert got["source_snapshots"] == 6
+    assert got["snapshots"] == 1
+    assert len(loaded) == 1
 
 
 def test_pending_future_targets_are_selected_only_bounded_and_recover_overdue(tmp_path):

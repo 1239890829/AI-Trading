@@ -24,7 +24,7 @@ from collections import Counter
 from datetime import date, datetime, timedelta
 from typing import Any, Iterable
 
-from sqlalchemy import exists, select
+from sqlalchemy import and_, exists, func, or_, select
 
 from app.core.bjtime import beijing_now, to_beijing_naive
 from app.core.db import get_session_factory, utcnow
@@ -254,6 +254,20 @@ def _selected_outcome_snapshot(stage: str, decision: str) -> bool:
     return (
         (stage == "rank" and decision == "ranked")
         or (stage == "notification" and decision in {"eligible", "notified", "suppressed"})
+    )
+
+
+def _selected_outcome_sql():
+    """SQL equivalent of :func:`_selected_outcome_snapshot` for large-day queries."""
+    return or_(
+        and_(
+            OpportunityDecisionSnapshot.stage == "rank",
+            OpportunityDecisionSnapshot.decision == "ranked",
+        ),
+        and_(
+            OpportunityDecisionSnapshot.stage == "notification",
+            OpportunityDecisionSnapshot.decision.in_(("eligible", "notified", "suppressed")),
+        ),
     )
 
 
@@ -522,19 +536,21 @@ def ensure_outcome_horizons(
     inserted = 0
     total_snapshots = 0
     with sf() as db:
-        all_snapshots = db.execute(
-            select(OpportunityDecisionSnapshot).where(
-                OpportunityDecisionSnapshot.trade_date == trade_date
-            )
-        ).scalars().all()
-        total_snapshots = len(all_snapshots)
-        snapshots = (
-            all_snapshots if include_deferred
-            else [
-                snapshot for snapshot in all_snapshots
-                if _selected_outcome_snapshot(snapshot.stage, snapshot.decision)
-            ]
-        )
+        base_where = OpportunityDecisionSnapshot.trade_date == trade_date
+        if include_deferred:
+            snapshots = db.execute(
+                select(OpportunityDecisionSnapshot).where(base_where)
+            ).scalars().all()
+            total_snapshots = len(snapshots)
+        else:
+            total_snapshots = int(db.scalar(
+                select(func.count()).select_from(OpportunityDecisionSnapshot).where(base_where)
+            ) or 0)
+            snapshots = db.execute(
+                select(OpportunityDecisionSnapshot).where(
+                    base_where, _selected_outcome_sql()
+                )
+            ).scalars().all()
         if snapshots and future_targets:
             # Never expand tens of thousands of snapshot IDs into one SQLite IN (...).
             # Join through the decision date instead; this stays valid for large legacy days.
