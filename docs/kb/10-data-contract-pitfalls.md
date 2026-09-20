@@ -383,3 +383,29 @@ append-only 归档，这是正确的审计设计；但旧 `opportunity_scorecard
 **验收反例**：36 条审计行修后仍完整存在，但公开分母为 `runs=9 / run×symbol=9 / symbols=1 /
 symbol×trade_date=1`，`repeated_labeled_rows=35`、`fillable=1`、`verdict=insufficient_sample`。
 核心不是“多做 DISTINCT”，而是**不同问题用不同分母**：总体日级样本、阶段诊断、Top-K 各自分层去重。
+
+### KB-ENG-116 接收得更晚不等于数据更新；current cache 必须有源事件时间/身份接纳门
+
+**真实缺陷（2026-09-20，BUG-020）**：QuoteHub 虽先跑 `validate_quote()`，但随后仍无条件把新对象写入 current cache。
+因此校验只能“贴标签”，不能阻止坏观测改变事实：晚到旧包能覆盖更新报价，未来时间戳的 invalid 行也能覆盖正常值；
+`Freshness.from_age()` 又把负年龄夹成 0，使明显跑到未来的数据看起来“刚刚新鲜”。
+
+**四个时间身份不能混用**：source event time / `data_timestamp` 是源声称事件发生的时间；source available time 是源何时可取；
+`received_at` 是本机何时收到；current cache write time 是系统何时决定采纳。`received_at` 新只证明“包晚到了”，不能证明“行情更新了”。
+缺 source time 时只能 degraded/unknown；已有带源时间的可信值时，无源时间新包不得覆盖它。
+
+**接纳门**：
+1. source event time 明显超未来时钟容差（本仓 5 分钟）→ degraded/invalid，不推进 current；
+2. event time 相对 current 倒退 → 拒绝，且该规则不因盘前/休市而关闭；
+3. `price=None`、结构 invalid、重复 requested symbol、未请求 symbol → 不推进 current；
+4. 指数按固定 `(symbol, market)` 目录核 identity，错 market / duplicate / unexpected 均拒绝；
+5. 拒绝不是删证据：保留旧可信 value/source time，并把“本轮没有可信刷新”标 stale + 稳定原因；首次不可信观测保持缺席；
+6. freshness / coverage / source_rejections 三轴分开：分别回答“已有值多新 / 本轮接纳多少 / 返回但为何被拒”。合法空集、纯缺失和源拒绝不得同形。
+
+**消费者闭环**：最近已完成批次的拒绝数量/原因进入 REST meta、WS meta 与 `/health`；已有旧值时 QualityBadge 显示 stale 原因。
+恢复后的干净批次会清空拒绝摘要，不能让历史故障永久污染健康状态。
+
+**实源边界**：2026-09-20（周日）用本片代码显式加载主仓部署 `.env`，`build_provider(settings)` 成功构建 `chain(ths→tencent→eastmoney→sina)`。有界只读探针的交易日历最新日为 2026-09-18，指数 6/6 覆盖、拒绝数 0；600519 实际由腾讯返回，source timestamp 为 2026-09-18，而 received_at 为 2026-09-20。QuoteHub 保留源时间并统一标 `stale/market_closed`。这证明休市链与 source-time/received-time 分离，但不外推真实交易时段或长期盘中 SLA。
+
+**判据**：任何缓存、事件流、行情/公告/指标修订链在写 `current` 前，都先问“这是**更新的事实**，还是只是**更新到达的包**？”；
+真实源辅证与生产链验收必须分开记账，免 Key 单源验证不能冒充部署实际 provider 链。

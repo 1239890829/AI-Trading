@@ -58,6 +58,12 @@ describe("QualityBadge 可见性策略（唯一决策点）", () => {
     expect(invalid.container.textContent).toBe("非法");
   });
 
+  it("源时间被拒绝时 stale 徽标把降级原因翻译成人话", () => {
+    render(<QualityBadge quality="stale" reasons={["source_time_regress_ignored"]} />);
+    const badge = screen.getByText("过期");
+    expect(badge.getAttribute("title")).toContain("源返回晚到旧行情");
+  });
+
   it("reasons 同时含 market_closed 与其它原因时仍判「休市」（休市优先，不降级为故障红）", () => {
     const { container } = render(
       <QualityBadge quality="stale" reasons={["refresh_failed", "market_closed"]} />,

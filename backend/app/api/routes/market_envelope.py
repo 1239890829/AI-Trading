@@ -77,6 +77,7 @@ def meta_payload(hub: QuoteHub) -> dict:
         "freshness": hub_freshness(hub),
         "batch_coverage": getattr(hub, "last_batch_coverage", None),
         "index_batch": hub.index_batch() if hasattr(hub, "index_batch") else None,
+        "source_rejections": hub.source_rejections() if hasattr(hub, "source_rejections") else None,
         "push": hub.subscriber_stats() if hasattr(hub, "subscriber_stats") else None,
         "last_success_refresh": hub.last_success_refresh.isoformat() if hub.last_success_refresh else None,
         "generated_at": utcnow().isoformat(),

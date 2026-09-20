@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -251,6 +251,166 @@ def test_batch_gap_recovers_when_source_returns_again(isolate_calendar):
     assert hub.last_batch_coverage == 1.0
     assert hub.quotes["600105"].quality == Quality.high
     assert hub.quotes["600105"].quality_reasons != ["batch_missing"]
+
+
+def test_late_quote_cannot_overwrite_newer_cached_value(isolate_calendar, monkeypatch):
+    monkeypatch.setattr("app.market.trade_calendar.in_trading_window", lambda: True)
+    newer = make_q("600105", "甲", 10.0)
+    newer.data_timestamp = datetime.now(timezone.utc) - timedelta(seconds=1)
+    b = make_q("600519", "乙", 100.0)
+    hub, prov = _hub_with([newer, b])
+    asyncio.run(hub.refresh())
+
+    late = make_q("600105", "甲", 9.0)
+    late.data_timestamp = newer.data_timestamp - timedelta(seconds=5)
+    prov.quotes = [late, b]
+    asyncio.run(hub.refresh())
+
+    kept = hub.quotes["600105"]
+    assert kept.price == 10.0
+    assert kept.data_timestamp == newer.data_timestamp
+    assert kept.quality == Quality.stale
+    assert "source_time_regress_ignored" in kept.quality_reasons
+    assert kept.freshness(fresh_within=600).state == "stale"
+    assert hub.last_missing_symbols == ["600105"]
+    assert hub.last_batch_coverage == pytest.approx(0.5)
+
+
+def test_invalid_future_quote_cannot_replace_current_good_value(isolate_calendar, monkeypatch):
+    monkeypatch.setattr("app.market.trade_calendar.in_trading_window", lambda: True)
+    current = make_q("600105", "甲", 10.0)
+    b = make_q("600519", "乙", 100.0)
+    hub, prov = _hub_with([current, b])
+    asyncio.run(hub.refresh())
+
+    bad = make_q("600105", "甲", 999.0)
+    bad.data_timestamp = datetime.now(timezone.utc) + timedelta(hours=1)
+    prov.quotes = [bad, b]
+    asyncio.run(hub.refresh())
+
+    kept = hub.quotes["600105"]
+    assert kept.price == 10.0
+    assert kept.quality == Quality.stale
+    assert "source_invalid_ignored" in kept.quality_reasons
+    assert kept.freshness(fresh_within=600).state == "stale"
+    assert hub.last_missing_symbols == ["600105"]
+
+
+def test_off_session_missing_price_cannot_erase_last_good_value(isolate_calendar, monkeypatch):
+    monkeypatch.setattr("app.market.trade_calendar.in_trading_window", lambda: False)
+    current = make_q("600105", "甲", 10.0)
+    b = make_q("600519", "乙", 100.0)
+    hub, prov = _hub_with([current, b])
+    asyncio.run(hub.refresh())
+
+    empty = make_q("600105", "甲", 10.0).model_copy(update={"price": None})
+    prov.quotes = [empty, b]
+    asyncio.run(hub.refresh())
+
+    kept = hub.quotes["600105"]
+    assert kept.price == 10.0
+    assert kept.quality == Quality.stale
+    assert kept.quality_reasons == ["source_missing_price_ignored"]
+    assert hub.last_missing_symbols == ["600105"]
+
+
+def test_missing_source_timestamp_cannot_overwrite_timestamped_current_value(isolate_calendar):
+    current = make_q("600105", "甲", 10.0)
+    b = make_q("600519", "乙", 100.0)
+    hub, prov = _hub_with([current, b])
+    asyncio.run(hub.refresh())
+
+    unknown_time = make_q("600105", "甲", 11.0).model_copy(update={"data_timestamp": None})
+    prov.quotes = [unknown_time, b]
+    asyncio.run(hub.refresh())
+
+    kept = hub.quotes["600105"]
+    assert kept.price == 10.0
+    assert kept.data_timestamp == current.data_timestamp
+    assert kept.quality == Quality.stale
+    assert kept.quality_reasons == ["source_time_unknown_ignored"]
+    assert hub.source_rejections()["quotes"]["reasons"] == {"source_time_unknown_ignored": 1}
+
+
+def test_duplicate_requested_symbol_is_rejected_instead_of_last_write_wins(isolate_calendar):
+    current = make_q("600105", "甲", 10.0)
+    b = make_q("600519", "乙", 100.0)
+    hub, prov = _hub_with([current, b])
+    asyncio.run(hub.refresh())
+
+    prov.quotes = [
+        make_q("600105", "甲", 11.0),
+        make_q("600105", "甲", 12.0),
+        b,
+    ]
+    asyncio.run(hub.refresh())
+
+    kept = hub.quotes["600105"]
+    assert kept.price == 10.0
+    assert kept.quality == Quality.stale
+    assert kept.quality_reasons == ["source_identity_duplicate_ignored"]
+    assert hub.source_rejections()["quotes"]["reasons"] == {
+        "source_identity_duplicate_ignored": 1,
+    }
+
+
+def test_unrequested_source_symbol_is_reported_not_cached(isolate_calendar):
+    a = make_q("600105", "甲", 10.0)
+    b = make_q("600519", "乙", 100.0)
+    extra = make_q("000001", "不应返回", 9.0)
+    hub, prov = _hub_with([a, b])
+    prov.quotes = [a, b, extra]
+
+    async def violate_request_contract(_symbols):
+        return [q.model_copy(deep=True) for q in prov.quotes]
+
+    prov.get_quotes = violate_request_contract
+    asyncio.run(hub.refresh())
+
+    assert "000001" not in hub.quotes
+    assert hub.last_batch_coverage == 1.0
+    assert hub.source_rejections()["quotes"] == {
+        "count": 1, "reasons": {"source_identity_unrequested_ignored": 1},
+    }
+
+
+def test_first_invalid_quote_is_not_fabricated_as_current_value(isolate_calendar, monkeypatch):
+    monkeypatch.setattr("app.market.trade_calendar.in_trading_window", lambda: True)
+    bad = make_q("600105", "甲", 999.0)
+    bad.data_timestamp = datetime.now(timezone.utc) + timedelta(hours=1)
+    b = make_q("600519", "乙", 100.0)
+    hub, _prov = _hub_with([bad, b])
+    queue = hub.subscribe({"600105"})
+
+    asyncio.run(hub.refresh())
+
+    assert "600105" not in hub.quotes
+    assert hub.last_missing_symbols == ["600105"]
+    assert hub.last_batch_coverage == pytest.approx(0.5)
+    assert hub.source_rejections() == {
+        "quotes": {"count": 1, "reasons": {"source_invalid_ignored": 1}},
+        "indices": {"count": 0, "reasons": {}},
+    }
+    frame = queue.get_nowait()
+    assert frame["data"] == []
+    assert frame["meta"]["source_rejections"] == hub.source_rejections()
+
+
+def test_source_rejection_summary_clears_after_clean_recovery(isolate_calendar, monkeypatch):
+    monkeypatch.setattr("app.market.trade_calendar.in_trading_window", lambda: True)
+    bad = make_q("600105", "甲", 999.0)
+    bad.data_timestamp = datetime.now(timezone.utc) + timedelta(hours=1)
+    b = make_q("600519", "乙", 100.0)
+    hub, prov = _hub_with([bad, b])
+    asyncio.run(hub.refresh())
+    assert hub.source_rejections()["quotes"]["count"] == 1
+
+    prov.quotes = [make_q("600105", "甲", 10.0), b]
+    asyncio.run(hub.refresh())
+
+    assert hub.source_rejections()["quotes"] == {"count": 0, "reasons": {}}
+    assert hub.last_batch_coverage == 1.0
+    assert hub.quotes["600105"].quality == Quality.high
 
 
 def test_market_closed_reason_overrides_batch_missing(monkeypatch):

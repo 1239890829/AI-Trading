@@ -26,8 +26,12 @@ async def health(hub: QuoteHub = Depends(get_hub)) -> dict:
     stale = hub.is_stale()
     index_batch = hub.index_batch() if hasattr(hub, "index_batch") else None
     incomplete = bool(index_batch and index_batch["missing_symbols"])
+    source_rejections = hub.source_rejections() if hasattr(hub, "source_rejections") else None
+    rejected = bool(source_rejections and (
+        source_rejections["quotes"]["count"] or source_rejections["indices"]["count"]
+    ))
     return {
-        "status": "degraded" if stale or incomplete else "ok",
+        "status": "degraded" if stale or incomplete or rejected else "ok",
         "app": settings.app_name,
         "version": settings.version,
         "provider": hub.provider.name,
@@ -38,6 +42,7 @@ async def health(hub: QuoteHub = Depends(get_hub)) -> dict:
         "last_error": hub.last_error,
         "is_stale": stale,
         "index_batch": index_batch,
+        "source_rejections": source_rejections,
     }
 
 
