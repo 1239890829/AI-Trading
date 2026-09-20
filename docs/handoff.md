@@ -1,6 +1,6 @@
-# 当前交接：G1 下一阻断项 IMP-044
+# 当前交接：v9.10/U49 主动发现门已启用；G1 下一阻断项 IMP-044
 
-**当前模式：READY_FOR_NEXT_PLANNED_SLICE。** G1/P0 **IMP-006** 已正式闭环：PR #60 的 reviewed HEAD `87b099540a4b6c3d54c56a9d57293dc1963ee450` 经独立网页审核回执（PR comment `5749077515`，`APPROVED / MERGE_IF_GATES_PASS`）、exact-head `release_check.py`、required CI run `35502888440` 三 job 全绿后合入 `master`，merge commit `fa0185412db5c0d3f47445081da822f121cceff1`；合并后 master CI run `35503775542` 的 backend/frontend/docs 亦全部成功。GitHub 原生 `APPROVE` 因连接身份同时为 PR 作者被平台拒绝；现已明确网页审核回执与 GitHub 原生 Review 分层，单账号场景不得把 self-approve 限制变成自锁，也不得通过小号、自批或放宽 CI 绕过门禁。IMP-006 只证明 reference / executable snapshot / paper fill 的工程事实契约闭环，不证明买点收益。BUG-020 的真实交易时段生产会话仍为 G0 `待条件`，因此当前最低可行动阻断门仍是 G1，下一主切片为 **IMP-044（Outbox、类型化回执与中断恢复）**；若 BUG-020 条件先转为可行动，G0 重新优先。
+**当前模式：READY_FOR_NEXT_PLANNED_SLICE。** v9.10/U49 已把“主动发现隐藏问题”设为继续/审核/收口的默认门；用户无需再问“还有没有问题”。G1/P0 **IMP-006** 已正式闭环：PR #60 的 reviewed HEAD `87b099540a4b6c3d54c56a9d57293dc1963ee450` 经独立网页审核回执（PR comment `5749077515`，`APPROVED / MERGE_IF_GATES_PASS`）、exact-head `release_check.py`、required CI run `35502888440` 三 job 全绿后合入 `master`，merge commit `fa0185412db5c0d3f47445081da822f121cceff1`；合并后 master CI run `35503775542` 的 backend/frontend/docs 亦全部成功。GitHub 原生 `APPROVE` 因连接身份同时为 PR 作者被平台拒绝；现已明确网页审核回执与 GitHub 原生 Review 分层，单账号场景不得把 self-approve 限制变成自锁，也不得通过小号、自批或放宽 CI 绕过门禁。IMP-006 只证明 reference / executable snapshot / paper fill 的工程事实契约闭环，不证明买点收益。BUG-020 的真实交易时段生产会话仍为 G0 `待条件`，因此当前最低可行动阻断门仍是 G1，下一主切片为 **IMP-044（Outbox、类型化回执与中断恢复）**；若 BUG-020 条件先转为可行动，G0 重新优先。
 
 
 ## 1. 固定入口与范围
@@ -10,7 +10,7 @@
 
 ## 2. 累计规划要求去向（2026-09-18 基线 + 后续增量）
 
-下表以 2026-09-18 规划批为基线，并吸收后续 U41–U48 的新增长期取舍；它是累计规划验收索引，不是第二套任务进度表。各项“覆盖”表示设计与验收方法有实际落点，不表示已经实现或实证有效。
+下表以 2026-09-18 规划批为基线，并吸收后续 U41–U49 的新增长期取舍；它是累计规划验收索引，不是第二套任务进度表。各项“覆盖”表示设计与验收方法有实际落点，不表示已经实现或实证有效。
 
 | 用户要求 | 已核定的规划内容 | 唯一主要落点 |
 |---|---|---|
@@ -19,7 +19,7 @@
 | 选股提前发现、进入时机和成因 | 首次观察/触发/reference/actionable/实际 shadow fill 分开，盘中随新事实另版重评；先验事实/时间/竞争解释/失效并存；金健只作未定区间示例，不作抓涨或成交保证 | hunting-decision-design §1/§4/§4.1/§7/§8；W03/IMP-053 |
 | 不限少数战法/形态，充分用知识 | 驱动/结构/角色/环境/时点/执行域/成熟度开放组合；37条KB及候选登记有用途，未知情境不硬归类，负结果与准入区分 | hunting-decision-design §2/§3/§5；plan-registry §3/§4 |
 | 猎场重新设计但不偏离UI风格，其他板块同理 | 沿原组件/字号/亮暗/配色；猎场按机会/跟踪/影子/复盘职责分区，页面锁屏+内部滚动；Drawer/Modal/Popover 按上下文语义选择，动效有目的且后置；工作台、市场、图表、消息、记录和复盘均有独立目标 | product-closure-design §2/§4/§5；hunting-decision-design §6；W07/IMP-050/054 |
-| 历史要求叠加、同义去重、新要求保留 | U01–U48及21条原消息ordinal保持；冲突在语义处裁定，不以最新局部问句抹去主任务，历史成果不重做 | implementation-plan §8/§8.1；plan-registry §1–§3 |
+| 历史要求叠加、同义去重、新要求保留 | U01–U49及21条原消息ordinal保持；冲突在语义处裁定，不以最新局部问句抹去主任务，历史成果不重做 | implementation-plan §8/§8.1；plan-registry §1–§3 |
 | 全面论证后主动补缺、融合、调整 | 现状/最小修补/复用/替代比较，收益/成本/风险/恢复与反证齐备才增删重排；允许不改、拒绝或补证，不机械领下一行 | implementation-plan §6/§7；collaboration-workflow §4 |
 | 废弃旧协作自动化，改用账本短提示 | 互调/自动唤醒/自动回执/Bridge依赖退出，历史原型已退役；网页规划审核、Codex执行、用户只触发读取 | collaboration-workflow §1–§3/§7；W08/GOV-022 |
 | 更新关联文档、清理无用重复并可追溯 | 当前资料各有职责，旧矛盾集中裁定；清理的是旧施工承诺/重复日志，不删除独有知识、历史证据或业务调度 | plan-registry；W08；Git父版本 |
@@ -51,7 +51,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 本次合并后事实指针与账本关联收口由 PR #40 承载；不为记录 PR 自身再追加会改变被审版本的自指提交。
 
-## 7. v9.9 当前阶段门快照
+## 7. v9.10 当前阶段门快照
 
 本节只记录当前现场，不维护第二份 backlog；权威算法在总账 §5.9，任务元数据在所属 stage。
 
@@ -64,7 +64,8 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - BUG-029 现以 `ever_sealed/current_sealed/snapshot_state/version` 为唯一 current-state 契约；开板只恢复“进入评估”的资格，不自动获得成交/通知/模拟执行许可。2026-09-18 真实跨源样本已证明涨停池成员可多次开板/回封；旧 v1 归档保持原语义，v2 才使用新状态重放。
 - RSH-031 为 `G1/P1/非阻断/门内序70`，即使同处 G1 也排在阻断项之后；且 `效果前置=RSH-026, IMP-020, RSH-030` 未满足前不得宣称龙头战法有效或接生产权重。
 - U47 不制造跨门例外：IMP-006 已把 `reference_entry → executable_snapshot → PaperOrder fill` 三种价格身份和同一 decision/version 接到通知、模拟仓与页面；它的合并只证明工程事实契约收口，不证明买点效果。post-merge CI 通过后仍先做 G1/IMP-044，再进入 G2 的 IMP-049 → IMP-053；reference 与实际 shadow fill 永久分名、分母和收益口径。
-- U48 同样不制造跨门例外：W08/GOV-027 为 `GX/P1/持续治理/门内序47`，只可作为不冲突的伴随切片；它先复用 factor/strategy/KB/Jev/opportunity 各自 owner 的既有证据，定义最小生命周期/衰退/成本反馈契约，不建第二总注册表。项目级上层治理入口新增 `skills/living-system-governor/SKILL.md`，用于跨模块方案、重大重构和机制生命周期复核；该 Skill 只提供证据/反证/KEEP-FIX-MERGE-EXPERIMENT-WATCH-RETIRE 决策协议，不拥有派工、生产晋级或阶段门修改权。 v1.1.0 进一步明确 Skill 自我进化：后续长期要求/重复纠偏先作为方法论候选，只有形成稳定可复用增量才版本化蒸馏；一次性要求不污染 Core，是否落实以 Git/PR 与后续行为核验，不靠聊天窗口记忆。任何生产降权、阈值变化、策略/Jev 晋级仍回原 owner task 与证据门。
+- U48 同样不制造跨门例外：W08/GOV-027 为 `GX/P1/持续治理/门内序47`，只可作为不冲突的伴随切片；它先复用 factor/strategy/KB/Jev/opportunity 各自 owner 的既有证据，定义最小生命周期/衰退/成本反馈契约，不建第二总注册表。项目级上层治理入口新增 `skills/living-system-governor/SKILL.md`，用于跨模块方案、重大重构和机制生命周期复核；该 Skill 只提供证据/反证/KEEP-FIX-MERGE-EXPERIMENT-WATCH-RETIRE 决策协议，不拥有派工、生产晋级或阶段门修改权。 v1.2.0 在自我进化基础上进一步加入 U49 主动缺陷发现门：后续长期要求/重复纠偏先作为方法论候选，只有形成稳定可复用增量才版本化蒸馏；一次性要求不污染 Core，是否落实以 Git/PR 与后续行为核验，不靠聊天窗口记忆。任何生产降权、阈值变化、策略/Jev 晋级仍回原 owner task 与证据门。
+- U49 不改变阶段门算法，但改变每轮默认动作：继续选刀前、审核放行前、阻断项闭环/换门后、事故/用户纠偏后都要运行有界主动缺陷发现门并写回执；同根 P0/P1 新发现可改变当前验收，跨域发现回原 owner，不自动扩权施工。
 - GX 治理只可作为不冲突的伴随切片。2026-09-20 `GOV-018` 已闭环：`.workbuddy` / `.workbuddy-ai` 已物理删除，有价值内容进入项目中性 `skills/scripts/docs/artifacts`，第三方 UZI/Serenity 本体不再复制；PR #48 已合入 `master`（merge `b6b5ba0`，最终 required CI run `35481812431` backend/frontend/docs 全绿）。`GOV-026` 已落地 `scripts/workspace-hygiene.py` 并接 CI/交接；本轮又把 docs 根从 36 份 Markdown 收口为 6 个控制面，领域正文进入 system/data/product/strategy/ai/review/research，`doc-health` O2 阻断根目录回堆与未知分类；最终一致性复核 PR #50 又把 09-17/09-18 四份复盘/进化时间序列补入主干，剩余 4 个 backend/data JSON 明确保留为本机运行证据。以上治理变更不改变阶段门算法；BUG-028 / BUG-026 已闭环，BUG-020 因生产盘中外部条件转 `待条件`，故 G0 当前无可行动阻断项，阶段门现计算到 G1；IMP-006 已完成，G1 当前阻断位已转到 IMP-044。
 
 当前处于 `READY_FOR_NEXT_PLANNED_SLICE`：下一主切片为 IMP-044，仅做 W02 已界定的“类型化回执 + 买点 Outbox”最小纵切；不得顺手迁移全部事件来源。没有网页登记的 `CROSS_GATE_EXCEPTION` 就不能跨门。
@@ -79,3 +80,12 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - v9.5 把“当前方案不是永久终局”制度化：`ai/continuous-evolution.md` + `ashare-innovation-radar` 主动发现外部新模型/工具/量化方法/数据与反证；只产生 WATCH/SHORTLISTED/LAB 建议，任何真实采用仍回原 stage、证据门、PR/审核/CI。
 - v9.6 已新增 RSH-031：历史涨停/强连板/空间板/弱市穿越/题材梯队与异常板块拉升采用全量事件+失败对照+point-in-time+旧→新盲测；Jev 只做 bounded MapReduce/rerank/verification，效果准入继续由 RSH-026/IMP-020，猎场证据接线只走 IMP-049。v9.8/U47 进一步规定可交易真实性由 IMP-053 hunting-shadow 验证，首见/reference 不冒充成交或净收益。
 - v9.9/U48 规定 Jev/策略/因子/KB/路由等已采用机制仍需持续证明增量：固定实验候选集不再冒充猎场全局 taxonomy，历史有效不等于永久有效；衰退、知识贡献和额度节省必须用对应领域真实反馈复核。RSH-030 human gold 仍未完成，因此本轮只是治理登记，不产生准确率/额度节省结论。
+
+## 9. U49 主动审计回执
+
+- **触发**：用户指出“为什么不说就不能主动发现”，属于治理盲区/用户纠偏触发。
+- **范围**：协作/发布治理 + 当前 G1/IMP-044 的直接通知链边界；另核十阶段硬依赖图与 master branch protection。
+- **已检查八类**：自锁/不可能门禁；双事实源/配置空转；顺序/部分失败；幂等/去重/unknown；权限/fail-open；动态状态冻结；测试固化坏行为；重大决策传播/陈旧指针。
+- **本轮已证实**：①单账号 GitHub self-approve 自锁已在 PR #62 前后修正；②此前审核规则变化没有完整传播到 plan-registry/W08/Skills，且 W08 残留 IMP-006 旧指针，本 U49 治理片正在统一修正；③IMP-044 当前直接边界还存在“brief 去重先于 AlertEvent/Outbox”“Feishu direct-card 绕过 channels”“bool 回执把明确拒绝与 unknown 混同”等问题；④ `release_check.py` 目前不验证网页审核回执本身，只验证 GitHub/CI/线程等可机器取得的门，属于仍需治理的发布一致性缺口；⑤ `/api/picks/today` 有 `gate_live`，但动作链仍主要消费生成时 gate/buy_range，动态执行缺口继续归 IMP-049/053；⑥部分注释仍写旧“聚合卡”语义。
+- **已排除结构死锁**：当前 46 个 stage 任务无缺失硬依赖、无硬依赖环、无低门任务依赖更高门任务的 gate inversion；`master` 当前仍显示 protected，required checks 为 backend/frontend/docs。
+- **处置**：本治理片只先解决“为什么不能主动发现”的机制缺陷与传播守卫；上述业务/发布发现冻结在本回执，下一步再按 owner 分别并入 IMP-044、GOV-022/发布门、IMP-049/053，不在 U49 片里偷做业务代码。
