@@ -11,7 +11,10 @@ from app.models.opportunity_learning import OpportunityDecisionSnapshot, Opportu
 from app.models.watchlist import Base
 from app.picks.opportunity_learning import (
     COST_MODEL_VERSION,
+    FEATURE_VERSION,
     FILL_SEAL_GAP_PCT,
+    OUTCOME_HORIZON,
+    STRATEGY_VERSION,
     archive_records,
     assess_fill_state,
     build_intraday_records,
@@ -400,3 +403,167 @@ def test_scorecard_expectancy_fields_never_mix_denominators(tmp_path):
         "本用例的构造前提是「封板样本拉低全样本毛期望」；该前提消失时应更新用例而非删除判据"
     )
 
+
+def _seed_scorecard_label(
+    sf, *, snapshot_id: str, run_id: str, symbol: str, as_of: datetime,
+    stage: str = "rank", rank: int | None = 1, horizon: str = OUTCOME_HORIZON,
+    strategy_version: str = STRATEGY_VERSION, feature_version: str = FEATURE_VERSION,
+    gross: float = 1.0, proxy: float | None = 0.9, source_theme: str = "T",
+    reason: str | None = None,
+) -> None:
+    decision = "ranked" if stage == "rank" else "notified"
+    with sf() as db:
+        db.add(OpportunityDecisionSnapshot(
+            snapshot_id=snapshot_id, run_id=run_id, trade_date="2026-09-16", as_of=as_of,
+            scenario="intraday_opportunity", stage=stage, symbol=symbol, name=symbol,
+            source_theme=source_theme, decision=decision, rank=rank if stage == "rank" else None,
+            strategy_version=strategy_version, feature_version=feature_version,
+            data_state="ready", entry_price=10.0, evidence=json.dumps({"change_pct": 1.0}),
+        ))
+        db.add(OpportunityOutcomeLabel(
+            snapshot_id=snapshot_id, horizon=horizon, target_date="2026-09-16",
+            state="labeled", label="positive", reference_price=10.0, outcome_price=10.1,
+            return_pct=gross, fill_state="ok", cost_pct=0.1 if proxy is not None else None,
+            net_return_pct=proxy,
+            reason=reason or f"D0 cost proxy ({COST_MODEL_VERSION})",
+        ))
+        db.commit()
+
+def test_scorecard_36_audit_rows_are_one_symbol_day_sample(tmp_path):
+    sf = _factory(tmp_path)
+    stages = ("candidate", "hard_gate", "rank", "notification")
+    for run_no in range(9):
+        for stage_no, stage in enumerate(stages):
+            _seed_scorecard_label(
+                sf, snapshot_id=f"s-{run_no}-{stage}", run_id=f"run-{run_no}",
+                symbol="600001", as_of=datetime(2026, 9, 16, 9, 30 + run_no),
+                stage=stage, rank=1, source_theme=f"T{stage_no}",
+            )
+
+    card = opportunity_scorecard("2026-09-16", session_factory=sf)
+    assert card["audit"]["labeled_rows"] == 36
+    assert card["sample"]["unit"] == "symbol_trade_date"
+    assert card["sample"]["count"] == 1
+    assert card["denominators"] == {
+        "audit_rows": 36, "runs": 9, "run_symbol_opportunities": 9,
+        "symbols": 1, "symbol_trade_date_samples": 1,
+    }
+    assert card["fillable"] == 1
+    assert card["verdict"] == "insufficient_sample"
+
+
+def test_scorecard_top_k_is_single_run_and_unique_symbol(tmp_path):
+    sf = _factory(tmp_path)
+    when = datetime(2026, 9, 16, 10, 5)
+    _seed_scorecard_label(
+        sf, snapshot_id="a1", run_id="run-a", symbol="600001", as_of=when,
+        rank=1, source_theme="T1", proxy=1.0,
+    )
+    _seed_scorecard_label(
+        sf, snapshot_id="a2", run_id="run-a", symbol="600001", as_of=when,
+        rank=2, source_theme="T2", proxy=-1.0,
+    )
+    _seed_scorecard_label(
+        sf, snapshot_id="a3", run_id="run-a", symbol="600002", as_of=when,
+        rank=3, source_theme="T1", proxy=1.0,
+    )
+    _seed_scorecard_label(
+        sf, snapshot_id="b1", run_id="run-b", symbol="600003",
+        as_of=datetime(2026, 9, 16, 10, 6), rank=1, source_theme="T3", proxy=-1.0,
+    )
+
+    card = opportunity_scorecard("2026-09-16", top_k=2, run_id="run-a", session_factory=sf)
+    p = card["precision_at_k"]
+    assert p["run_id"] == "run-a" and p["k_requested"] == 2
+    assert p["symbols"] == ["600001", "600002"]
+    assert p["selected"] == 2 and p["evaluable"] == 2
+    assert p["observed"] == 1.0
+
+
+def test_scorecard_filters_horizon_and_versions_explicitly(tmp_path):
+    sf = _factory(tmp_path)
+    when = datetime(2026, 9, 16, 10, 5)
+    _seed_scorecard_label(
+        sf, snapshot_id="current-d0", run_id="run-current", symbol="600001",
+        as_of=when, horizon=OUTCOME_HORIZON,
+    )
+    _seed_scorecard_label(
+        sf, snapshot_id="current-d1", run_id="run-current-d1", symbol="600002",
+        as_of=when, horizon="d1_close",
+    )
+    _seed_scorecard_label(
+        sf, snapshot_id="legacy-d0", run_id="run-legacy", symbol="600003",
+        as_of=when, strategy_version="legacy-strategy", feature_version="legacy-features",
+    )
+
+    current = opportunity_scorecard("2026-09-16", session_factory=sf)
+    assert current["filters"] == {
+        "horizon": OUTCOME_HORIZON,
+        "strategy_version": STRATEGY_VERSION,
+        "feature_version": FEATURE_VERSION,
+    }
+    assert current["audit"]["labeled_rows"] == 1
+    d1 = opportunity_scorecard("2026-09-16", horizon="d1_close", session_factory=sf)
+    assert d1["audit"]["labeled_rows"] == 1
+
+
+def test_nan_close_never_becomes_a_labeled_sample(tmp_path):
+    sf = _factory(tmp_path)
+    run_id, rows = build_intraday_records(
+        _payload(), trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5)
+    )
+    archive_records(run_id, rows, sf)
+
+    result = label_trade_date("2026-09-16", {"600001": float("nan")}, sf)
+    assert result["labeled"] == 0
+    with sf() as db:
+        outcome = db.execute(select(OpportunityOutcomeLabel)).scalar_one()
+    assert outcome.state == "pending"
+    assert outcome.return_pct is None and outcome.net_return_pct is None
+
+    card = opportunity_scorecard("2026-09-16", session_factory=sf)
+    assert card["sample"]["count"] == 0
+    assert card["fillable"] == 0
+
+
+def test_d0_scorecard_names_cost_value_as_nonrealizable_proxy(tmp_path):
+    sf = _factory(tmp_path)
+    _seed_scorecard_label(
+        sf, snapshot_id="d0", run_id="run-d0", symbol="600001",
+        as_of=datetime(2026, 9, 16, 10, 5),
+    )
+    card = opportunity_scorecard("2026-09-16", session_factory=sf)
+    identity = card["metric_identity"]
+    assert identity["horizon"] == OUTCOME_HORIZON
+    assert identity["realizable_return"] is False
+    assert "T+1" in identity["note"]
+    assert "cost_adjusted_d0_proxy_pct" in card["expectancy"]
+
+
+def test_scorecard_excludes_unproven_cost_model_rows_from_proxy(tmp_path):
+    sf = _factory(tmp_path)
+    _seed_scorecard_label(
+        sf, snapshot_id="old-cost", run_id="run-old", symbol="600001",
+        as_of=datetime(2026, 9, 16, 10, 5), reason="legacy cost proxy without version",
+    )
+    card = opportunity_scorecard("2026-09-16", session_factory=sf)
+    assert card["audit"]["cost_version_excluded_samples"] == 1
+    assert card["sample"]["count"] == 1
+    assert card["fillable"] == 0
+    assert card["expectancy"]["cost_adjusted_d0_proxy_pct"] is None
+
+
+def test_scorecard_stage_diagnostics_dedupe_within_stage_not_globally(tmp_path):
+    sf = _factory(tmp_path)
+    when = datetime(2026, 9, 16, 10, 5)
+    for n, stage in enumerate(("rank", "notification")):
+        for dup in range(2):
+            _seed_scorecard_label(
+                sf, snapshot_id=f"{stage}-{dup}", run_id=f"run-{stage}-{dup}",
+                symbol="600001", as_of=when, stage=stage, proxy=1.0 + n,
+            )
+    card = opportunity_scorecard("2026-09-16", session_factory=sf)
+    assert card["sample"]["count"] == 1
+    assert card["by_stage"]["rank"]["labels"] == 1
+    assert card["by_stage"]["notification"]["labels"] == 1
+    assert card["audit"]["repeated_labeled_rows"] == 3

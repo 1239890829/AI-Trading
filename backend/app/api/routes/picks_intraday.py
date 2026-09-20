@@ -466,17 +466,28 @@ async def replay_opportunity_run(run_id: str) -> dict:
 async def opportunity_scorecard(
     date: str | None = Query(default=None, description="YYYY-MM-DD，缺省=北京今天"),
     top_k: int = Query(default=5, ge=1, le=50, description="精排队列前 K 名"),
+    run_id: str | None = Query(default=None, max_length=64, description="Top-K 指定单一决策 run；缺省选最新匹配 rank run"),
+    horizon: str | None = Query(default=None, max_length=16, description="结果标签 horizon；缺省用当前口径"),
+    strategy_version: str | None = Query(default=None, max_length=64, description="策略版本；缺省用当前版本"),
+    feature_version: str | None = Query(default=None, max_length=64, description="特征版本；缺省用当前版本"),
 ) -> dict:
-    """当日机会决策的**成本后**记分卡（只读，不输出买卖建议）。
+    """当日机会决策记分卡：审计行与独立样本分开，D0 只作成本调整代理。
 
-    与 `/opportunity-learning` 的分工：那个回答「归档了多少、覆盖率多少」，
-    这个回答「按成本后口径看，已发生的决策长什么样」。**样本低于下限时
-    `verdict` 恒为 `insufficient_sample`**，调用方不得据此晋级策略。
+    Top-K 必须绑定单一 run/as-of 并按 symbol 去重；日级判据按 symbol×trade_date
+    去重。`d0_close` 受 A 股 T+1 限制，不得解释为可实现净收益。
     """
-    from app.picks.opportunity_learning import opportunity_scorecard as _scorecard
+    from app.picks.opportunity_learning import (
+        FEATURE_VERSION, OUTCOME_HORIZON, STRATEGY_VERSION,
+        opportunity_scorecard as _scorecard,
+    )
 
     target = date or beijing_now().date().isoformat()
-    return {"data": _scorecard(target, top_k=top_k), "meta": {}}
+    return {"data": _scorecard(
+        target, top_k=top_k, run_id=run_id,
+        horizon=horizon or OUTCOME_HORIZON,
+        strategy_version=strategy_version or STRATEGY_VERSION,
+        feature_version=feature_version or FEATURE_VERSION,
+    ), "meta": {}}
 
 
 @router.get("/kb-routing")

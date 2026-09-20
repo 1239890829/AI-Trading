@@ -9,9 +9,9 @@ calling a market-data provider or consulting today's mutable configuration.
 - `return_pct` = **毛收益**：决策时点价 → D0 收盘，**不含成本**。它衡量的是
   「信号方向对不对」，**不是**可实现盈亏；且 A 股 T+1 ⇒ 当日买入当日不可卖，
   该收益在规则上**不可实现**。
-- `net_return_pct` = **成本后净收益**：扣双边佣金/印花税/过户费，
-  **仅在决策时点可成交（`fill_state == "ok"`）时给值**。不可成交一律记 `None`
-  —— 缺价/不可成交**不造 0**（把"买不到"记成"零收益"会系统性高估策略）。
+- `net_return_pct` 是历史列名；对当前 `d0_close` 标签，它实际表示**成本调整 D0 代理**：
+  决策时点价 → 同日收盘，再扣双边费用。A 股 T+1 禁止当日买入当日卖出，故它**不是可实现净收益**。
+  仅在决策时点可成交（`fill_state == "ok"`）时给值；不可成交一律记 `None`，缺价不造 0。
 - 成本费率**不在此另立**：取自 `app.paper.engine.calc_fee`（与 `paper/reconcile.py` 同源）；
   涨停幅度取自 `app.market.price_rules.limit_pct`（全仓单一实现）。
 """
@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections import Counter
 from datetime import datetime
 from typing import Any, Iterable
@@ -59,6 +60,18 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
 
 
+def _finite_number(value: Any) -> bool:
+    """Only finite numeric observations are eligible for return metrics."""
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _positive_finite(value: Any) -> bool:
+    return _finite_number(value) and float(value) > 0
+
+
 def _load_json(raw: str | None, default: Any) -> Any:
     """归档 JSON 列 → 对象；坏值/空值回落到 `default`（**读取侧不因单行坏值整批失败**）。"""
     try:
@@ -97,19 +110,22 @@ def _data_state(payload: dict) -> str:
 
 def _round_lots(price: float) -> int:
     """按名义本金折算整手股数；贵价股保底 1 手（见 `COST_NOTIONAL_CNY`）。"""
-    if price is None or float(price) <= 0:
+    if not _positive_finite(price):
         return COST_LOT
     lots = int(COST_NOTIONAL_CNY / float(price) / COST_LOT)
     return max(1, lots) * COST_LOT
 
 
 def round_trip_net_pct(reference: float, exit_price: float) -> tuple[float, float, int]:
-    """一次完整买卖的**净收益率 / 成本率 / 折算股数**（前两者为百分数）。
+    """一次假设完整买卖的净收益率 / 成本率 / 折算股数（算术工具）。
 
+    本函数本身不判断 horizon 是否可交易；调用 D0 时只能作为成本调整代理。
     净收益取**定义式**：`(卖出净得 − 买入实付) / 买入实付`，
     其中买入实付含费用、卖出净得已扣费用 ⇒ 它**恒严格小于**同口径毛收益，
     差额即 `calc_fee` 口径的双边成本。费率与最低佣金不在此另立。
     """
+    if not _positive_finite(reference) or not _positive_finite(exit_price):
+        raise ValueError("reference/exit_price 必须是有限正数")
     qty = _round_lots(reference)
     buy_fee = calc_fee("buy", float(reference), qty)
     sell_fee = calc_fee("sell", float(exit_price), qty)
@@ -135,8 +151,8 @@ def assess_fill_state(symbol: str, change_pct: float | None) -> tuple[str, str]:
     —— 与快照的 point-in-time 契约一致，否则重放会因行情变化而漂移。
     ⚠️ `price_rules.limit_pct` 只服务**个股** symbol；本函数不得接收板块/大盘指数。
     """
-    if change_pct is None:
-        return "no_quote", "决策时点无涨幅事实，可成交性未知"
+    if not _finite_number(change_pct):
+        return "no_quote", "决策时点涨幅缺失或非有限，可成交性未知"
     pct = float(change_pct)
     limit = price_rules.limit_pct(symbol)
     if pct >= limit - FILL_SEAL_GAP_PCT:
@@ -151,11 +167,11 @@ def _archived_change_pct(evidence: dict) -> float | None:
     """从归档证据里取决策时点涨幅（各阶段键位不同，事实同源）。"""
     for key in ("change_pct", "chg"):
         value = evidence.get(key)
-        if isinstance(value, (int, float)):
+        if _finite_number(value):
             return float(value)
     facts = evidence.get("facts") or {}
     value = facts.get("change_pct")
-    return float(value) if isinstance(value, (int, float)) else None
+    return float(value) if _finite_number(value) else None
 
 
 def build_intraday_records(
@@ -503,9 +519,9 @@ def pending_symbols(trade_date: str, session_factory=None) -> set[str]:
 def label_trade_date(trade_date: str, close_by_symbol: dict[str, float], session_factory=None) -> dict:
     """Attach D0 close labels; missing closes stay pending and can be retried.
 
-    `return_pct` 恒为**毛收益**（信号方向，不含成本）；`net_return_pct` 只在
-    决策时点**可成交**（`fill_state == "ok"`）时给值，封板/无现价一律留 `None`
-    —— **不造 0**。返回结构保持既有四键（分布见 `learning_summary`）。
+    `return_pct` 是 D0 信号方向毛变化；历史列 `net_return_pct` 是同一 D0 窗口的
+    成本调整代理，只在决策时点可成交（`fill_state == "ok"`）时给值。A 股 T+1 下
+    两者都不是可实现交易收益；封板/无现价留 `None`，不造 0。
     """
     sf = session_factory or get_session_factory()
     labeled = unknown = pending = 0
@@ -519,7 +535,11 @@ def label_trade_date(trade_date: str, close_by_symbol: dict[str, float], session
                    OpportunityOutcomeLabel.state == "pending")
         ).all()
         for outcome, snapshot in rows:
-            reference = outcome.reference_price or snapshot.entry_price
+            reference = (
+                outcome.reference_price if _positive_finite(outcome.reference_price)
+                else snapshot.entry_price if _positive_finite(snapshot.entry_price)
+                else None
+            )
             try:
                 evidence = json.loads(snapshot.evidence or "{}")
             except Exception:
@@ -528,7 +548,7 @@ def label_trade_date(trade_date: str, close_by_symbol: dict[str, float], session
                 snapshot.symbol, _archived_change_pct(evidence)
             )
             outcome.fill_state = fill_state
-            if reference is None or reference <= 0:
+            if not _positive_finite(reference):
                 outcome.state = "unknown"
                 outcome.label = "unknown"
                 outcome.reason = "决策时点价格缺失，不能计算收益"
@@ -536,9 +556,9 @@ def label_trade_date(trade_date: str, close_by_symbol: dict[str, float], session
                 unknown += 1
                 continue
             close = close_by_symbol.get(snapshot.symbol)
-            if close is None or close <= 0:
-                # 缺收盘价：可成交性已判定并可追溯，但结果仍未定 ⇒ 保持 pending 待重试
-                outcome.reason = f"{fill_basis}；等待收盘价"
+            if not _positive_finite(close):
+                # 缺失/NaN/Inf/非正收盘价都不是有效结果；保持 pending，允许后续用正确数据重试。
+                outcome.reason = f"{fill_basis}；等待有限且为正的收盘价"
                 pending += 1
                 continue
             ret = round((float(close) / float(reference) - 1) * 100, 2)
@@ -595,14 +615,14 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
         "stages": {stage: stage_counts.get(stage, 0) for stage in STAGES},
         "decisions": dict(sorted(decision_counts.items())),
         "outcomes": dict(sorted(state_counts.items())),
-        # 可成交性分布：`sealed`（封板买不到）与 `no_quote`（无现价）都**不进净期望**，
-        # 但必须在此可见——否则「净收益样本变少」会被误读成「机会变少」。
+        # 可成交性分布：`sealed` / `no_quote` 都不进 D0 成本调整代理样本；必须可见，
+        # 否则「代理样本变少」会被误读成「机会变少」。
         "fill_states": dict(sorted(fill_counts.items())),
         "kb_ref_states": dict(sorted(kb_ref_counts.items())),
         "cost_model": COST_MODEL_VERSION,
         "label_coverage": round(labeled / eligible, 4) if eligible else None,
         "note": (
-            "样本不足时仅报告覆盖率与事实分布，不据此晋级策略；净收益口径见 cost_model；"
+            "样本不足时仅报告覆盖率与事实分布，不据此晋级策略；D0 成本调整代理口径见 cost_model；"
             "kb_ref_states 记录本次决策的 KB 引用状态（not_consulted=未引用，现状如此；"
             "KB 进入个股收益打分须先过有/无 KB 消融，见蓝图 §5）"
         ),
@@ -614,88 +634,247 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
 MIN_LABELS_FOR_VERDICT = 30
 
 
-def opportunity_scorecard(trade_date: str, top_k: int = 5, session_factory=None) -> dict:
-    """当日机会决策的**成本后**记分卡（只描述已发生的事实，不构成买卖建议）。
+def opportunity_scorecard(
+    trade_date: str, top_k: int = 5, session_factory=None, *,
+    run_id: str | None = None, horizon: str = OUTCOME_HORIZON,
+    strategy_version: str = STRATEGY_VERSION, feature_version: str = FEATURE_VERSION,
+) -> dict:
+    """Return a denominator-safe scorecard for one declared metric identity.
 
-    - `precision_at_k`：精排队列前 K 名里净收益为正的占比
-    - `expectancy`：毛/净期望收益**并列报告**——差额即可见的交易成本
-    - `by_stage`：各阶段的净期望与样本数（用于定位漏斗哪一层在漏）
+    Raw outcome rows remain append-only audit evidence.  Statistical samples are
+    de-duplicated to one **symbol × trade_date** observation using the earliest
+    labeled observation (then best rank as a deterministic tie-break).  This
+    prevents refreshes/stages/themes from inflating independent sample counts.
 
-    ⚠️ **样本门禁**：可成交样本数 < `MIN_LABELS_FOR_VERDICT` 时 `verdict` 恒为
-    `insufficient_sample`，`expectancy` 仍报告但**不足以支撑任何比较或晋级**。
-    ⚠️ 净收益样本只含 `fill_state == "ok"` 的标签：封板/无现价的机会**天然缺席**，
-    故本卡存在**选择性偏差**——它衡量的是「能买到的那些机会」，不是「全部机会」。
+    Precision@K is a different denominator: one rank run/as-of only, de-duplicated
+    by symbol *before* K is cut.  If ``run_id`` is omitted, the latest eligible
+    rank run is selected and returned explicitly.
+
+    ``d0_close`` is signal-direction / cost-adjusted **proxy evidence**, not a
+    realizable A-share return: T+1 forbids same-day exit.
     """
     sf = session_factory or get_session_factory()
     with sf() as db:
-        rows = db.execute(
+        all_rows = db.execute(
             select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
-            .join(OpportunityDecisionSnapshot,
-                  OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
-            .where(OpportunityDecisionSnapshot.trade_date == trade_date,
-                   OpportunityOutcomeLabel.state == "labeled")
+            .join(
+                OpportunityDecisionSnapshot,
+                OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id,
+            )
+            .where(OpportunityDecisionSnapshot.trade_date == trade_date)
         ).all()
-    gross = [float(o.return_pct) for o, _s in rows if o.return_pct is not None]
-    net = [float(o.net_return_pct) for o, _s in rows if o.net_return_pct is not None]
-    # 与 `net` **同分母**的毛收益子集：只有它在减法上与净期望可比（差额 = 交易成本）。
-    gross_on_fillable = [
-        float(o.return_pct) for o, _s in rows
-        if o.net_return_pct is not None and o.return_pct is not None
+    rows = [
+        pair for pair in all_rows
+        if pair[0].horizon == horizon
+        and pair[1].strategy_version == strategy_version
+        and pair[1].feature_version == feature_version
     ]
-    not_fillable = sum(1 for o, _s in rows if o.fill_state != "ok")
-    ranked = sorted(
-        ((s.rank, float(o.net_return_pct))
-         for o, s in rows
-         if o.net_return_pct is not None and s.stage == "rank"
-         and s.decision == "ranked" and s.rank is not None),
-        key=lambda pair: pair[0],
-    )[:max(1, int(top_k))]
+
+    stage_order = {"rank": 0, "notification": 1, "hard_gate": 2, "candidate": 3}
+
+    def row_key(pair):
+        _outcome, snapshot = pair
+        return (
+            snapshot.as_of or datetime.max,
+            stage_order.get(snapshot.stage, 99),
+            snapshot.rank if snapshot.rank is not None else 10**9,
+            snapshot.id or 0,
+        )
+
+    def cost_proxy(pair) -> float | None:
+        outcome, _snapshot = pair
+        if outcome.state != "labeled" or not _finite_number(outcome.return_pct):
+            return None
+        if outcome.fill_state != "ok" or not _finite_number(outcome.net_return_pct):
+            return None
+        # The schema predates a dedicated row-level cost-version column.  New labels
+        # persist the version token in ``reason``; rows that cannot prove the current
+        # version are excluded rather than silently reinterpreted under today's fees.
+        if COST_MODEL_VERSION not in (outcome.reason or ""):
+            return None
+        return float(outcome.net_return_pct)
+
+    state_counts = Counter(outcome.state for outcome, _snapshot in rows)
+    raw_stage_counts = Counter(snapshot.stage for _outcome, snapshot in rows)
+    labeled_rows = [pair for pair in rows if pair[0].state == "labeled"]
+    invalid_metric_rows = sum(
+        1 for outcome, _snapshot in labeled_rows
+        if not _finite_number(outcome.return_pct)
+        or (outcome.net_return_pct is not None and not _finite_number(outcome.net_return_pct))
+    )
+    valid_signal_rows = [
+        pair for pair in labeled_rows if _finite_number(pair[0].return_pct)
+    ]
+
+    # Independent day-level sample: one stock cannot become N samples merely because
+    # it crossed stages/themes or the endpoint refreshed repeatedly.  Keep every raw
+    # row in ``audit``; only the metric denominator is de-duplicated.
+    sample_by_symbol: dict[str, tuple] = {}
+    for pair in sorted(valid_signal_rows, key=row_key):
+        sample_by_symbol.setdefault(pair[1].symbol, pair)
+    samples = list(sample_by_symbol.values())
+
+    gross = [float(outcome.return_pct) for outcome, _snapshot in samples]
+    proxy_pairs = [(pair, cost_proxy(pair)) for pair in samples]
+    proxy_pairs = [(pair, value) for pair, value in proxy_pairs if value is not None]
+    proxy = [value for _pair, value in proxy_pairs]
+    gross_on_proxy = [float(pair[0].return_pct) for pair, _value in proxy_pairs]
+    not_fillable = sum(1 for outcome, _snapshot in samples if outcome.fill_state != "ok")
+    cost_version_excluded = sum(
+        1 for outcome, _snapshot in samples
+        if outcome.fill_state == "ok" and _finite_number(outcome.net_return_pct)
+        and COST_MODEL_VERSION not in (outcome.reason or "")
+    )
+
+    # Stage diagnostics use a different, layered denominator: one symbol per stage/day.
+    # This preserves funnel-stage visibility while preventing refresh/theme duplicates inside a stage.
+    stage_sample_by_key: dict[tuple[str, str], tuple] = {}
+    for pair in sorted(valid_signal_rows, key=row_key):
+        snapshot = pair[1]
+        stage_sample_by_key.setdefault((snapshot.stage, snapshot.symbol), pair)
+
     by_stage: dict[str, dict] = {}
-    for outcome, snapshot in rows:
+    for pair in stage_sample_by_key.values():
+        outcome, snapshot = pair
+        value = cost_proxy(pair)
         bucket = by_stage.setdefault(
-            snapshot.stage, {"labels": 0, "fillable": 0, "net_sum": 0.0, "net_positive": 0}
+            snapshot.stage,
+            {"labels": 0, "fillable": 0, "net_sum": 0.0, "net_positive": 0},
         )
         bucket["labels"] += 1
-        if outcome.net_return_pct is not None:
+        if value is not None:
             bucket["fillable"] += 1
-            bucket["net_sum"] += float(outcome.net_return_pct)
-            bucket["net_positive"] += 1 if float(outcome.net_return_pct) > 0 else 0
+            bucket["net_sum"] += value
+            bucket["net_positive"] += 1 if value > 0 else 0
     for bucket in by_stage.values():
-        bucket["net_expectancy_pct"] = (
-            round(bucket.pop("net_sum") / bucket["fillable"], 2) if bucket["fillable"] else None
+        value = (
+            round(bucket.pop("net_sum") / bucket["fillable"], 2)
+            if bucket["fillable"] else None
         )
-    verdict = "insufficient_sample" if len(net) < MIN_LABELS_FOR_VERDICT else (
-        "net_positive_observed" if sum(net) / len(net) > 0 else "net_nonpositive_observed"
+        bucket["cost_adjusted_d0_proxy_expectancy_pct"] = value
+        bucket["net_expectancy_pct"] = value  # compatibility alias; see metric_identity
+
+    # Precision@K: first choose exactly one run, then unique symbols, then cut K.
+    rank_rows = [
+        pair for pair in rows
+        if pair[1].stage == "rank" and pair[1].decision == "ranked"
+        and pair[1].rank is not None
+    ]
+    selected_run_id = run_id
+    if selected_run_id is None and rank_rows:
+        selected_run_id = max(
+            rank_rows, key=lambda pair: (pair[1].as_of or datetime.min, pair[1].run_id)
+        )[1].run_id
+    selected_run_rows = [pair for pair in rank_rows if pair[1].run_id == selected_run_id]
+    unique_ranked: dict[str, tuple] = {}
+    for pair in sorted(
+        selected_run_rows,
+        key=lambda pair: (pair[1].rank, pair[1].symbol, pair[1].id or 0),
+    ):
+        unique_ranked.setdefault(pair[1].symbol, pair)
+    selected = list(unique_ranked.values())[:max(1, int(top_k))]
+    evaluable = [value for pair in selected if (value := cost_proxy(pair)) is not None]
+    run_as_of = max(
+        (snapshot.as_of for _outcome, snapshot in selected_run_rows if snapshot.as_of is not None),
+        default=None,
     )
+
+    verdict = "insufficient_sample" if len(proxy) < MIN_LABELS_FOR_VERDICT else (
+        "cost_proxy_positive_observed"
+        if sum(proxy) / len(proxy) > 0 else "cost_proxy_nonpositive_observed"
+    )
+    proxy_mean = round(sum(proxy) / len(proxy), 2) if proxy else None
+    gross_proxy_mean = round(sum(gross_on_proxy) / len(gross_on_proxy), 2) if gross_on_proxy else None
+    identity_note = (
+        "D0 收盘衡量信号方向；成本调整值仍是同日收盘代理。A 股 T+1 禁止当日买入当日卖出，"
+        "因此不是可实现净收益；合法 D1/D3/D5 等交易标签由 RSH-026 后续版本化补齐。"
+        if horizon == OUTCOME_HORIZON else
+        "该 horizon 仅按归档标签身份统计；BUG-026 不把它自动认定为可实现交易收益。"
+    )
+
     return {
         "trade_date": trade_date,
+        "filters": {
+            "horizon": horizon,
+            "strategy_version": strategy_version,
+            "feature_version": feature_version,
+        },
         "cost_model": COST_MODEL_VERSION,
+        "metric_identity": {
+            "horizon": horizon,
+            "sample_unit": "symbol_trade_date",
+            "gross_metric": "signal_direction_return_pct",
+            "cost_adjusted_metric": (
+                "cost_adjusted_d0_proxy_pct" if horizon == OUTCOME_HORIZON
+                else "cost_adjusted_proxy_pct"
+            ),
+            "realizable_return": False if horizon == OUTCOME_HORIZON else None,
+            "cost_model_version": COST_MODEL_VERSION,
+            "note": identity_note,
+        },
+        "audit": {
+            "date_outcome_rows": len(all_rows),
+            "outcome_rows": len(rows),
+            "filter_excluded_rows": len(all_rows) - len(rows),
+            "labeled_rows": len(labeled_rows),
+            "states": dict(sorted(state_counts.items())),
+            "runs": len({snapshot.run_id for _outcome, snapshot in rows}),
+            "opportunities": len({(snapshot.run_id, snapshot.symbol) for _outcome, snapshot in rows}),
+            "symbols": len({snapshot.symbol for _outcome, snapshot in rows}),
+            "by_stage_rows": dict(sorted(raw_stage_counts.items())),
+            "repeated_labeled_rows": max(0, len(valid_signal_rows) - len(samples)),
+            "invalid_metric_rows": invalid_metric_rows,
+            "cost_version_excluded_samples": cost_version_excluded,
+        },
+        "sample": {
+            "unit": "symbol_trade_date",
+            "policy": "earliest_labeled_observation_then_best_rank",
+            "count": len(samples),
+            "symbols": sorted(sample_by_symbol),
+        },
+        "denominators": {
+            "audit_rows": len(rows),
+            "runs": len({snapshot.run_id for _outcome, snapshot in rows}),
+            "run_symbol_opportunities": len({
+                (snapshot.run_id, snapshot.symbol) for _outcome, snapshot in rows
+            }),
+            "symbols": len({snapshot.symbol for _outcome, snapshot in rows}),
+            "symbol_trade_date_samples": len(samples),
+        },
         "min_labels_for_verdict": MIN_LABELS_FOR_VERDICT,
-        "labeled": len(rows),
-        "fillable": len(net),
+        "labeled": len(samples),
+        "fillable": len(proxy),
         "not_fillable": not_fillable,
         "expectancy": {
-            # ⚠️ 三个数**分母不同、不可互减**：`gross_pct` 的分母是全部已标样本，
-            # 后两者的分母是可成交子集 —— 只有 `gross_on_fillable_pct − net_pct` 才等于成本。
             "gross_pct": round(sum(gross) / len(gross), 2) if gross else None,
-            "gross_on_fillable_pct": (
-                round(sum(gross_on_fillable) / len(gross_on_fillable), 2)
-                if gross_on_fillable else None
-            ),
-            "net_pct": round(sum(net) / len(net), 2) if net else None,
+            "gross_on_fillable_pct": gross_proxy_mean,  # compatibility alias
+            "net_pct": proxy_mean,  # compatibility alias; explicitly non-realizable above
+            "gross_signal_pct": round(sum(gross) / len(gross), 2) if gross else None,
+            "gross_on_cost_proxy_sample_pct": gross_proxy_mean,
+            "cost_adjusted_d0_proxy_pct": proxy_mean,
             "gross_labels": len(gross),
-            "fillable_labels": len(net),
+            "fillable_labels": len(proxy),
+            "net_pct_identity": "deprecated alias of cost_adjusted_d0_proxy_pct; not realizable",
         },
         "precision_at_k": {
-            "k": len(ranked),
+            "run_id": selected_run_id,
+            "as_of": run_as_of.isoformat() if run_as_of else None,
+            "k_requested": max(1, int(top_k)),
+            "k": len(selected),
+            "selected": len(selected),
+            "evaluable": len(evaluable),
+            "symbols": [snapshot.symbol for _outcome, snapshot in selected],
+            "coverage": round(len(evaluable) / len(selected), 4) if selected else None,
             "observed": (
-                round(sum(1 for _r, v in ranked if v > 0) / len(ranked), 4) if ranked else None
+                round(sum(1 for value in evaluable if value > 0) / len(evaluable), 4)
+                if evaluable else None
             ),
         },
         "by_stage": dict(sorted(by_stage.items())),
         "verdict": verdict,
         "note": (
-            "只描述已归档事实，不构成买卖建议；样本低于下限时 verdict 恒为 insufficient_sample，"
-            "不得据此晋级策略。净期望仅覆盖可成交样本（封板买不到者天然缺席），存在选择性偏差。"
+            "只描述已归档事实，不构成买卖建议；独立样本按 symbol×trade_date 去重，原始行数保留在 audit。"
+            "样本低于下限时 verdict 恒为 insufficient_sample。D0 成本调整值仅为同日收盘代理，"
+            "不是 A 股 T+1 下可实现净收益；可成交代理仍存在选择性偏差。"
         ),
     }
