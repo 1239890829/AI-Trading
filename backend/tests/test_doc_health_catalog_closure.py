@@ -247,3 +247,26 @@ def test_docs_taxonomy_rejects_unknown_top_level_dir(probe: Probe) -> None:
     root_extras, unknown_dirs = probe.mod.check_docs_taxonomy()
     assert root_extras == []
     assert unknown_dirs == ["misc/"]
+
+
+# ------------------------------------------------------------------ Markdown 相对链接解析守卫
+
+def test_relative_markdown_link_resolves_from_source_directory(probe: Probe) -> None:
+    probe.write(f"{probe.d}/implementation-plan.md")
+    probe.write(
+        f"{probe.d}/product/design.md",
+        "[plan](../implementation-plan.md)\n",
+    )
+    assert probe.mod.check_relative_markdown_links() == []
+
+
+def test_relative_markdown_link_rejects_old_root_relative_after_move(probe: Probe) -> None:
+    probe.write(f"{probe.d}/implementation-plan.md")
+    probe.write(
+        f"{probe.d}/product/design.md",
+        "[plan](implementation-plan.md)\n",
+    )
+    errors = probe.mod.check_relative_markdown_links()
+    assert errors == [
+        (f"{probe.d}/product/design.md", 1, "implementation-plan.md")
+    ]

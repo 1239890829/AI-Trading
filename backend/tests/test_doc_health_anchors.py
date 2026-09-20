@@ -308,6 +308,7 @@ def test_untracked_local_copy_cannot_mask_dead_anchor(
 _NEUTRAL = {
     "check_unregistered": (),
     "check_dead_links": (),
+    "check_relative_markdown_links": (),
     "check_over_limit": (),
     "check_kb_entries": (),
     "kb_file_coverage_gap": (),

@@ -73,6 +73,7 @@ DOCS = ROOT / "docs"
 SCAN_FILES = ["AGENTS.md", "README.md", "docs/INDEX.md", "docs/plan-registry.md",
               "docs/retro-and-gaps.md"]
 REF_RE = re.compile(r"docs/([\w\-./]+\.md)")
+MD_REL_LINK_RE = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
 #: 代码注释里的 docs 引用：断言 `docs/` 不是更长路径（如 skills/hithink-finance/docs/）的尾巴
 CODE_REF_RE = re.compile(r"(?<![\w/.-])docs/([\w\-./]+\.md)")
 # 记录性引用标记（同句出现即视为"在案引述"，不算断链）
@@ -223,6 +224,53 @@ def check_dead_links(scan_all: bool = False) -> list[tuple[str, int, str]]:
             if any(k in seg for k in RECORD_MARKERS):
                 continue  # 记录性引用：在案引述，不算断链
             out.append((str(t.relative_to(ROOT)), ln + 1, rel))
+    return out
+
+
+def check_relative_markdown_links(scan_all: bool = False) -> list[tuple[str, int, str]]:
+    """B2：解析 Markdown 相对链接的真实位置，抓目录迁移后的层级断链。
+
+    B 项只认正文里显式 docs/... 字符串；文件移动后相对基准变化的断链不会命中。
+    B2 按引用文档自身目录解析，与 Markdown 渲染器一致。archive / L4 默认仍按
+    历史证据语义跳过。
+    """
+    targets = [ROOT / f for f in SCAN_FILES]
+    for p in sorted(DOCS.rglob("*.md")):
+        rel = p.relative_to(DOCS)
+        if not scan_all:
+            if "archive" in rel.parts:
+                continue
+            if rel.parts and rel.parts[0] in L4_DIRS:
+                continue
+        targets.append(p)
+    if scan_all:
+        targets += sorted((ROOT / "artifacts" / "logs").glob("*.md"))
+
+    out: list[tuple[str, int, str]] = []
+    protocol_re = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+    for t in targets:
+        if not t.exists():
+            continue
+        txt = _read(t)
+        lines = txt.splitlines()
+        for m in MD_REL_LINK_RE.finditer(txt):
+            raw = m.group(1).strip()
+            if not raw:
+                continue
+            token = raw[1:-1] if raw.startswith("<") and raw.endswith(">") else raw
+            if token.startswith("#") or token.startswith("/") or protocol_re.match(token):
+                continue
+            pathpart = token.split("#", 1)[0].split("?", 1)[0].strip()
+            if not pathpart or PLACEHOLDER_RE.search(pathpart):
+                continue
+            target = (t.parent / pathpart).resolve()
+            if target.exists():
+                continue
+            ln = txt[: m.start()].count("\n")
+            seg = lines[ln] if ln < len(lines) else ""
+            if any(k in seg for k in RECORD_MARKERS):
+                continue
+            out.append((str(t.relative_to(ROOT)), ln + 1, raw))
     return out
 
 
@@ -1568,8 +1616,13 @@ def check_decision_propagation() -> list[str]:
 
     # 自动发现“当前方案/当前治理/当前实施/目标链”版本指针。历史证据里单纯出现旧 v9.x 不判；
     # 只有一行明确声称它是**当前**入口/目标链时才要求与 implementation-plan 同版。
-    current_pointer_re = re.compile(
-        r"(?:当前方案|当前治理|当前实施|当前.*修订|目标链).*?\b(v\d+\.\d+)\b"
+    current_pointer_res = (
+        re.compile(
+            r"(?:当前方案|当前治理|当前实施|当前[^。\n]{0,60}层|"
+            r"当前[^。\n]{0,60}修订|目标链).*?\b(v\d+\.\d+)\b"
+        ),
+        # 反向写法也要钉住：版本写在“目标链”之前时，旧单向正则抓不到。
+        re.compile(r"\b(v\d+\.\d+)\s*(?:当前\s*)?目标链"),
     )
     seen_current_pointer_paths: set[Path] = set()
     for path in active_md_targets():
@@ -1581,11 +1634,13 @@ def check_decision_propagation() -> list[str]:
         if rel.as_posix() == "docs/implementation-plan.md":
             continue
         for lineno, line in enumerate(_read(path).splitlines(), 1):
-            match_pointer = current_pointer_re.search(line)
-            if match_pointer and match_pointer.group(1) != version:
-                errors.append(
-                    f"{rel}:{lineno}：当前方案指针仍为 {match_pointer.group(1)}，应为 {version}"
-                )
+            matches = [pattern.search(line) for pattern in current_pointer_res]
+            for match_pointer in (m for m in matches if m is not None):
+                if match_pointer.group(1) != version:
+                    errors.append(
+                        f"{rel}:{lineno}：当前方案指针仍为 {match_pointer.group(1)}，应为 {version}"
+                    )
+                    break
 
     jev_surfaces = (
         DOCS / "implementation-plan.md",
@@ -2084,6 +2139,7 @@ def main() -> int:
 
     unreg = check_unregistered()
     dead = check_dead_links(scan_all)
+    relative_dead = check_relative_markdown_links(scan_all)
     over = check_over_limit()
     kb_over = check_kb_entries()
     coverage = kb_file_coverage_gap()
@@ -2126,6 +2182,13 @@ def main() -> int:
     if dead and not quiet:
         for f, ln, rel in dead:
             print(f"       {f}:{ln} → docs/{rel}（不存在）")
+    line("B2 Markdown相对链接", not relative_dead,
+         f"{len(relative_dead)} 处（按引用文件自身目录解析）")
+    if relative_dead and not quiet:
+        for f, ln, rel in relative_dead[:15]:
+            print(f"       {f}:{ln} → {rel}（相对目标不存在）")
+        if len(relative_dead) > 15:
+            print(f"       …另有 {len(relative_dead) - 15} 处")
     line("C 超层配额", not over, f"{len(over)} 份" + (" → " + ", ".join(f"{p}({n}>{c})" for p, n, c in over) if over else ""))
     line("C-KB 条目超长", not kb_over, f"{len(kb_over)} 条"
          + (" → " + ", ".join(f"{f}:{i}({n})" for f, i, n in kb_over) if kb_over else "（≤60，§7 L0 硬门）"))

@@ -6,7 +6,7 @@
 > **定位**：AI 控制台 / 自主进化 / 策略进化 / 仓库整合 / LLM 微调 的**已落地结论与待办**汇总。
 > **Jev 当前边界不在本页维护**：TypeSafe/Jev 的 bounded semantic verify、条件 capability routing、human-gold/额度实证与回退统一见 [Jev 蓝图](../ai/jev-integration.md)；本页历史 LLM/进化记录不能覆盖该现役规则。
 > **长期外部创新不在本页维护**：新模型/Agent/量化方法/工具的主动发现、筛选和重开规则见 [开放世界持续演进蓝图](../ai/continuous-evolution.md)；本页“自主进化”历史实现不能被解释成自动采用外部候选。
-> **现役不在此**：`llm-gateway-probe.md`（网关探针）、`review-agent.md`（复盘模块说明）。
+> **现役不在此**：`../system/llm-gateway-probe.md`（网关探针）、`../review/review-agent.md`（复盘模块说明）。
 > **整理**：2026-09-10。
 
 ---

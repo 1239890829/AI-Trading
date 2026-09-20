@@ -1,6 +1,6 @@
 # 仓库追踪台账（开放进化的 repo 子集）
 
-> 用途：GitHub/repo 类外部候选的**用途 / 服务于哪个功能 / 使用轨迹 / 评估结论**。本文件是 `continuous-evolution.md` 的 repo 子集，不代表全部外部发现面；模型发布、论文、标准、监管/交易所与 benchmark 等由 `ashare-innovation-radar` 发现后按各自证据载体留痕。
+> 用途：GitHub/repo 类外部候选的**用途 / 服务于哪个功能 / 使用轨迹 / 评估结论**。本文件是 `../ai/continuous-evolution.md` 的 repo 子集，不代表全部外部发现面；模型发布、论文、标准、监管/交易所与 benchmark 等由 `ashare-innovation-radar` 发现后按各自证据载体留痕。
 > 本文件是仓库发现闭环的数据源：每周发现轮**先读本文件的「筛选经验」**改进检索与甄别 →
 > 发现新候选 → 评估 → 回填本文件 → 系统内实际使用后更新「使用轨迹」→ 结论反哺经验。
 > 面板消费：AI 控制台「仓库追踪」tab（Markdown 渲染）。
