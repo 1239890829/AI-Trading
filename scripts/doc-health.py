@@ -1670,6 +1670,27 @@ def check_decision_propagation() -> list[str]:
                 f"落后于 implementation-plan 的 U{max_u:02d}"
             )
 
+    # U49：主动缺陷发现不能只停在总方案。它属于协作/审核治理，
+    # 必须传播到实际触发 Skill、交接回执、W08 owner 与当前 handoff。
+    # 各面使用不同短语是有意的：守卫核“语义锚点存在”，不要求复制同一段文字。
+    if re.search(r"\bU49\b", plan) and "Proactive Discovery Gate" in plan:
+        proactive_surfaces = {
+            ROOT / "AGENTS.md": "U49 主动缺陷发现门",
+            DOCS / "INDEX.md": "U49 主动缺陷发现门",
+            DOCS / "collaboration-workflow.md": "U49 主动缺陷发现门",
+            DOCS / "plan-registry.md": "用户没问还有没有问题",
+            DOCS / "handoff.md": "U49 主动审计回执",
+            DOCS / "stages" / "w08-governance.md": "Proactive Discovery Gate",
+            ROOT / "skills/living-system-governor/SKILL.md": "主动缺陷发现门（Proactive Discovery Gate）",
+            ROOT / "skills/ashare-ledger-continue/SKILL.md": "U49 主动缺陷发现门",
+            ROOT / "skills/ashare-task-handoff/SKILL.md": "U49 主动审计回执",
+        }
+        for path, token in proactive_surfaces.items():
+            if token not in _read(path):
+                errors.append(
+                    f"{path.relative_to(ROOT)}：U49 主动缺陷发现传播缺失（缺 {token}）"
+                )
+
     # READY 模式的 handoff 头部必须描述已生效现场，不能遗留“待合并/合并后才生效”的候选态。
     handoff_text = _read(DOCS / "handoff.md")
     handoff_head = handoff_text.split("\n## 1.", 1)[0]
