@@ -25,11 +25,11 @@
 | **AG-07** | `handoff.md` | L2 | 交接 | 当前工作区、实际运行版本、最近门禁与交付；不另建任务记录 |
 | **AG-08** | `archive/platform-directory-migration-20260920.md` | L1 | 工程治理历史 | 旧平台目录迁移/恢复/最终退休证据；`GOV-018` 已完成，禁止恢复为现役入口 |
 | **AG-09** | `stages/` | L2 | 阶段任务 | W00–W09，各 ID 仅一份状态/验收/证据；P/Q 校验 |
-| **AG-10** | `implementation-plan.md` | L2 | 当前实施修订 | v9.8：living plan；继承 G0–G5/GX 阶段门治理，并新增猎场双轨验证/动态盘中决策/UI体验分层；状态仍归阶段 |
+| **AG-10** | `implementation-plan.md` | L2 | 当前实施修订 | v9.9：living plan；继承 G0–G5/GX 阶段门治理、猎场双轨验证，并新增 U48 全系统机制生命周期/衰退重验/知识与成本反馈；状态仍归阶段 |
 | **AG-11** | `collaboration-workflow.md` | L2 | 协作审核 | 账本驱动；网页统筹审核、Codex执行，用户一句话触发，`master` 共享入口与原型退出 |
 | **AG-12** | `product/product-closure-design.md` | L2 | 产品闭环 | 全模块用途、前后台分工、业务/研究/工程链和确认流程图；非已上线报告 |
 | **AG-13** | `product/feature-closure-audit.md` | L2 | 细功能审计 | 大小动作/接口/后台任务的覆盖、源码发现与未验边界；任务状态仍归阶段 |
-| **AG-14** | `ai/continuous-evolution.md` | L2 | 持续演进 | 外部模型/工具/量化方法/数据/工程创新的发现、证据梯度、筛选、重开与准入前治理；状态归 GOV-025/真实 owner stage |
+| **AG-14** | `ai/continuous-evolution.md` | L2 | 持续演进 | 外部模型/工具/量化方法/数据/工程创新的发现、证据梯度与准入前治理，并规定已采用内部机制的阶段性有效/衰退重验；状态归 GOV-025/GOV-027/真实 owner stage |
 | **MD-08** | `product/hunting-decision-design.md` | L2 | 选股与呈现 | 开放情境、KB37项映射、候选/时机/反证、猎场UI及分层验收 |
 | **MD-09** | `research/limit-up-dragon-research.md` | L2 | 选股研究 | 历史涨停/强连板/龙头形成：全样本+失败对照、点时证据、Jev语义MapReduce、旧→新盲测及向猎场回流 |
 | **KW-00..11** | `kb/00-INDEX.md` … `kb/11-doc-catalog.md` | L2/L3 | 知识 | 见下方「KB 知识库」分表 |
@@ -53,7 +53,7 @@
 | **FN-07** | `system/data-dictionary.md` | L2 | 数据 | 数据对象审计字段约定（source/quality） |
 | **FN-08** | `archive/picks-replay-baseline.md` | L1 | 快照 | 精选 60 日回放基线（08-31 评审指名保留）。**时点快照，只读** |
 | **FN-09** | `system/llm-gateway-probe.md` | L2 | 运维 | LLM 网关健康探针（`claude_cli` 别名监控） |
-| **FN-10** | `ai/jev-integration.md` | L2 | AI/Agent 架构 | Jev 现役蓝图：bounded semantic verify、条件 capability routing、gold-set/usage 证据与回退边界；任务状态归 GOV-024 / IMP-045 / IMP-046 / RSH-030 |
+| **FN-10** | `ai/jev-integration.md` | L2 | AI/Agent 架构 | Jev 现役蓝图：bounded semantic verify、条件 capability routing、gold-set/usage 证据与回退边界；shadow 的冻结候选集不是猎场全局 taxonomy；任务状态归 GOV-024 / IMP-045 / IMP-046 / RSH-030，长期生命周期受 GOV-027 审计 |
 | **EX-01** | `archive/live-trading-guosen-plan.md` | L1 | 搁置历史 | 国信 miniQMT 实盘蓝图。**用户已搁置**（不接受 Windows 依赖），恢复条件见文档头 |
 | **RV-01** | `review/review-agent.md` | L2 | 复盘 | 盘后复盘 Agent 架构 |
 | **RV-02** | `review/daily-review-sop.md` | L2 | 复盘 | 每日复盘 SOP（怎么判） |
