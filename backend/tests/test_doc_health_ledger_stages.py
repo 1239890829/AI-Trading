@@ -371,7 +371,10 @@ def test_decision_propagation_rejects_ready_handoff_with_pending_merge_text(monk
         text = original_read(path)
         if path == target:
             head, sep, tail = text.partition("\n## 1.")
-            assert "READY_FOR_NEXT_PLANNED_SLICE" in head
+            # 本测试验证的是“READY 头部不能夹带待合并语义”，不能依赖仓库此刻
+            # 恰好处于 READY；REVIEW/BLOCKED 都是合法当前状态。显式合成 READY 反例。
+            if "READY_FOR_NEXT_PLANNED_SLICE" not in head:
+                head += "\nREADY_FOR_NEXT_PLANNED_SLICE"
             head += "\n仅在 PR #999 通过后生效；未合并前不得执行。"
             return head + sep + tail
         return text
