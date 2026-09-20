@@ -182,6 +182,39 @@ def test_maybe_open_filled_path_still_records_open(tmp_path, monkeypatch):
     assert len(alerts) == 1 and alerts[0][0][1]["kind"] == "position_open"
 
 
+def test_maybe_open_persists_same_decision_identity_into_fill(tmp_path, monkeypatch):
+    """IMP-006：自动模拟成交必须引用上游同一 decision/version，成交价另记 order fill。"""
+    monkeypatch.setattr(pe, "_PLAN_DIR", tmp_path)
+    monkeypatch.setattr(pe, "_today_gate_and_phase", lambda: ({}, "发酵"))
+    alerts = _patch_alerts(monkeypatch, tmp_path)
+    engine, _ = _fake_engine([])
+    ctx = {
+        "decision_id": "OD-demo",
+        "decision_version": "ODV-demo-v2",
+        "reference_entry": {"price": 9.8, "semantics": "reference_only_not_fill"},
+        "executable_snapshot": {"price": 10.0, "state": "ready", "semantics": "action_time_quote_not_fill"},
+    }
+
+    out = asyncio.run(pe.maybe_open(
+        _app(engine), symbol="600001", name="甲", trigger="buy_point",
+        price=10.0, role="龙头", decision_context=ctx,
+    ))
+
+    assert out["opened"] is True
+    assert out["decision_id"] == "OD-demo" and out["decision_version"] == "ODV-demo-v2"
+    plan = json.loads(_plan_file(tmp_path).read_text(encoding="utf-8"))
+    row = plan["decisions"][0]
+    assert row["decision_id"] == "OD-demo" and row["decision_version"] == "ODV-demo-v2"
+    assert row["reference_price"] == 9.8
+    assert row["execution_snapshot_price"] == 10.0
+    assert "reference_entry" not in row and "executable_snapshot" not in row
+    assert row["price"] == 10.0 and row["order_id"] == 1
+    # position_open 提醒只引用同一决策身份；成交事实由 order_id/filled price 独立表达。
+    meta = alerts[0][0][1]["meta"]
+    assert meta["decision_id"] == "OD-demo" and meta["decision_version"] == "ODV-demo-v2"
+    assert meta["order_id"] == 1
+
+
 def test_maybe_open_skips_symbol_already_pending(tmp_path, monkeypatch):
     """同一标的已挂单未成交 ⇒ 不再重复挂单（旧实现可反复挂出多张单）。"""
     monkeypatch.setattr(pe, "_PLAN_DIR", tmp_path)

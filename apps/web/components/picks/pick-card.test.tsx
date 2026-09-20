@@ -121,6 +121,59 @@ describe("PickCard · 盘前名单（fromDailyPick）", () => {
     const { container } = render(<PickCard item={fromDailyPick(base)} />);
     expect(container.textContent).not.toContain("不含收盘六维评分");
   });
+
+  it("执行复核与参考价分开显示，明确不等于成交", () => {
+    const withExecution: DailyPickItem = {
+      ...base,
+      execution: {
+        contract_version: "execution-facts-v1",
+        decision_id: "OD-demo",
+        decision_version: "ODV-demo",
+        strategy_version: "s1",
+        feature_version: "f1",
+        reference_entry: {
+          price: 40.36, as_of: "2026-09-21T09:26:00+08:00",
+          source: "daily_pick_set", semantics: "reference_only_not_fill",
+        },
+        executable_snapshot: {
+          state: "ready", price: 40.88, change_pct: 3.1,
+          source: "sina_market", semantics: "action_time_quote_not_fill",
+        },
+        gate_decision: "passed",
+      },
+    };
+    render(<PickCard item={fromDailyPick(withExecution)} />);
+    expect(screen.getByText(/参考价 40.36/)).toBeTruthy();
+    expect(screen.getByText(/执行快照 40.88/)).toBeTruthy();
+    const chip = screen.getByText("执行复核·通过");
+    expect(chip.getAttribute("title")).toContain("不表示已成交");
+  });
+
+  it("执行行情陈旧时直接显示陈旧原因，不把旧价伪装成可执行", () => {
+    const stale: DailyPickItem = {
+      ...base,
+      execution: {
+        contract_version: "execution-facts-v1",
+        decision_id: "OD-stale",
+        decision_version: "ODV-stale",
+        strategy_version: "s1",
+        feature_version: "f1",
+        reference_entry: { price: 40.36, as_of: null, source: "daily_pick_set", semantics: "reference_only_not_fill" },
+        executable_snapshot: {
+          state: "stale", price: 40.50, change_pct: 2.0,
+          freshness_reason: "上游停更", semantics: "action_time_quote_not_fill",
+        },
+        gate_decision: "rejected",
+        gate_reason: "执行快照 stale（上游停更），只保留参考、不执行",
+      },
+    };
+    const normalized = fromDailyPick(stale);
+    expect(normalized.price).toBe(40.36);
+    render(<PickCard item={normalized} />);
+    expect(screen.getByTitle("执行快照非可用状态，主价格回退为组合生成/首见参考价（不是成交价）")).toBeTruthy();
+    const chip = screen.getByText("执行快照·陈旧");
+    expect(chip.getAttribute("title")).toContain("上游停更");
+  });
 });
 
 describe("PickCard · 盘中名单（fromIntradayStock）", () => {

@@ -42,6 +42,10 @@ STAGES = ("candidate", "hard_gate", "rank", "notification")
 #: 没有版本号就无法区分「策略变好」与「口径变松」。
 COST_MODEL_VERSION = "cost-v1.notional-100k"
 
+#: IMP-006：页面/提醒/模拟执行共享的决策事实契约版本。只改结构语义时递增；
+#: 策略阈值变化仍由 STRATEGY_VERSION / FEATURE_VERSION 单独版本化。
+EXECUTION_CONTRACT_VERSION = "execution-facts-v1"
+
 #: 净收益按**每笔 10 万元名义本金**折算整手股数（口径假设）。
 #: 取 10 万是为了让佣金脱离 `commission_min`(5 元) 的主导区、反映真实费率结构；
 #: 贵价股（>1000 元）按保底 1 手计 ⇒ 名义本金会高于 10 万，属**已知近似**。
@@ -97,6 +101,68 @@ def _kb_ref_state(raw: str | None) -> str:
 
 def _hash(value: Any, length: int = 32) -> str:
     return hashlib.sha256(_json(value).encode("utf-8")).hexdigest()[:length]
+
+
+def build_execution_contract(
+    *, trade_date: str, symbol: str, item: dict, executable_snapshot: dict | None,
+    gate_decision: str, gate_reason: str | None, pick_generated_at: str | None,
+) -> dict:
+    """统一一只股票的一版执行事实（IMP-006）。
+
+    reference_entry 是组合生成/首见时的反事实参考，只回答“当时若按参考价计会怎样”；
+    executable_snapshot 是动作时复核行情，只回答“这一拍拿什么事实做判定”。
+    二者都不是成交；真实成交只来自 paper order 的 filled_price。
+
+    decision_id 在同一交易日/场景/股票内稳定；decision_version 只由会改变动作判定
+    的事实生成，不含派发成功/去重结果，因此通知状态不会伪造一个新交易判断版本。
+    """
+    ref_price = item.get("price")
+    if not _positive_finite(ref_price):
+        ref_price = None
+    reference_entry = {
+        "price": float(ref_price) if ref_price is not None else None,
+        "as_of": pick_generated_at,
+        "source": "daily_pick_set",
+        "semantics": "reference_only_not_fill",
+    }
+    snap = dict(executable_snapshot or {})
+    snap.setdefault("state", "unknown")
+    snap.setdefault("price", None)
+    snap.setdefault("change_pct", None)
+    snap.setdefault("source", None)
+    snap["semantics"] = "action_time_quote_not_fill"
+
+    decision_id = "OD-" + _hash({
+        "scenario": "buy_point", "trade_date": trade_date, "symbol": symbol,
+    }, 24)
+    # decision_version 只吃会改变动作结论的物质事实。单纯刷新 received_at/ticktime/as_of
+    # 仍完整归档在 executable_snapshot，但不能让“价格没动、判据没动”的轮询每分钟造新版本。
+    material_snapshot = {
+        k: snap.get(k) for k in ("state", "price", "change_pct", "prev_close", "source")
+    }
+    material = {
+        "contract_version": EXECUTION_CONTRACT_VERSION,
+        "decision_id": decision_id,
+        "strategy_version": STRATEGY_VERSION,
+        "feature_version": FEATURE_VERSION,
+        "reference_entry": reference_entry,
+        "executable_snapshot": material_snapshot,
+        "gate_decision": gate_decision,
+        "gate_reason": gate_reason,
+        "gate_inputs": {
+            "confidence_tier": (item.get("confidence") or {}).get("tier"),
+            "vetoes": item.get("vetoes") or [],
+            "follow_state": item.get("follow_state"),
+            "observation_only": bool(item.get("observation_only")),
+            "buy_range": item.get("buy_range"),
+        },
+    }
+    return {
+        **material,
+        # 版本哈希只吃会改变判断的物质事实；对外证据保留完整 freshness/checked_at/语义。
+        "executable_snapshot": snap,
+        "decision_version": "ODV-" + _hash(material, 32),
+    }
 
 
 def _data_state(payload: dict) -> str:
@@ -318,7 +384,8 @@ def build_intraday_records(
 def build_notification_records(
     items: list[dict], *, trade_date: str, as_of: datetime,
     hits: list[dict], skips: list[dict], dispatch_by_symbol: dict[str, str],
-    kb_ids: Iterable[str] = (),
+    kb_ids: Iterable[str] = (), pick_generated_at: str | None = None,
+    execution_by_symbol: dict[str, dict] | None = None,
 ) -> tuple[str, list[dict]]:
     """Archive every notification-gate input, including negative decisions.
 
@@ -346,10 +413,19 @@ def build_notification_records(
         else:
             decision = "eligible"
         price = (hit or {}).get("price")
+        gate_decision = "passed" if hit is not None else "rejected"
+        gate_reason = skip_by.get(symbol)
+        execution_contract = build_execution_contract(
+            trade_date=trade_date, symbol=symbol, item=item,
+            executable_snapshot=(execution_by_symbol or {}).get(symbol),
+            gate_decision=gate_decision, gate_reason=gate_reason,
+            pick_generated_at=pick_generated_at,
+        )
         evidence = {
-            "gate_decision": "passed" if hit is not None else "rejected",
-            "gate_reason": skip_by.get(symbol),
+            "gate_decision": gate_decision,
+            "gate_reason": gate_reason,
             "dispatch": dispatch,
+            "execution_contract": execution_contract,
             "confidence_tier": (item.get("confidence") or {}).get("tier"),
             "vetoes": item.get("vetoes") or [],
             "follow_state": item.get("follow_state"),
@@ -363,7 +439,7 @@ def build_notification_records(
             "name": str(item.get("name") or ""), "source_theme": "",
             "decision": decision, "rank": None, "strategy_version": STRATEGY_VERSION,
             "feature_version": FEATURE_VERSION,
-            "data_state": "unknown" if "快照无现价" in skip_by.get(symbol, "") else "ready",
+            "data_state": str(execution_contract["executable_snapshot"].get("state") or "unknown"),
             "kb_ids": kb_ids_json, "kb_refs": kb_refs_json,
             "entry_price": float(price) if isinstance(price, (int, float)) and price > 0 else None,
             "evidence": evidence,
@@ -382,6 +458,8 @@ def archive_records(run_id: str, records: list[dict], session_factory=None) -> d
             )
         ).scalars().all())
         for record in records:
+            # 旧拍/补录仍须 append-only 保留；“当前最新”只在读侧按 as_of 决定，
+            # 不能为防倒退而删除历史证据，否则离线回放与晚到数据会失真。
             evidence = record.get("evidence") or {}
             snapshot_id = _hash({
                 "run_id": run_id, "stage": record["stage"], "symbol": record["symbol"],
@@ -397,7 +475,7 @@ def archive_records(run_id: str, records: list[dict], session_factory=None) -> d
             )
             db.add(row)
             if record["stage"] in ("rank", "notification") and record["decision"] in (
-                "ranked", "notified", "suppressed",
+                "ranked", "eligible", "notified", "suppressed",
             ):
                 db.add(OpportunityOutcomeLabel(
                     snapshot_id=snapshot_id, horizon=OUTCOME_HORIZON,
@@ -421,13 +499,42 @@ def archive_intraday_pipeline(payload: dict, *, trade_date: str, as_of: datetime
 def archive_notification_pipeline(
     items: list[dict], *, trade_date: str, hits: list[dict], skips: list[dict],
     dispatch_by_symbol: dict[str, str], kb_ids: Iterable[str] = (),
-    as_of: datetime | None = None, session_factory=None,
+    as_of: datetime | None = None, session_factory=None, pick_generated_at: str | None = None,
+    execution_by_symbol: dict[str, dict] | None = None,
 ) -> dict:
     run_id, records = build_notification_records(
         items, trade_date=trade_date, as_of=as_of or beijing_now(), hits=hits, skips=skips,
         dispatch_by_symbol=dispatch_by_symbol, kb_ids=kb_ids,
+        pick_generated_at=pick_generated_at, execution_by_symbol=execution_by_symbol,
     )
     return archive_records(run_id, records, session_factory)
+
+
+def latest_notification_execution(trade_date: str, session_factory=None) -> dict[str, dict]:
+    """读取每只股票最新一版买点执行事实；只读，不生成样本（IMP-006）。"""
+    sf = session_factory or get_session_factory()
+    with sf() as db:
+        rows = db.execute(
+            select(OpportunityDecisionSnapshot)
+            .where(
+                OpportunityDecisionSnapshot.trade_date == trade_date,
+                OpportunityDecisionSnapshot.stage == "notification",
+            )
+            .order_by(OpportunityDecisionSnapshot.as_of, OpportunityDecisionSnapshot.id)
+        ).scalars().all()
+    out: dict[str, dict] = {}
+    for row in rows:
+        evidence = _load_json(row.evidence, {})
+        contract = evidence.get("execution_contract") if isinstance(evidence, dict) else None
+        if isinstance(contract, dict) and contract.get("decision_version"):
+            out[row.symbol] = {
+                **contract,
+                "dispatch": evidence.get("dispatch"),
+                "archived_decision": row.decision,
+                "archived_as_of": row.as_of.isoformat() if row.as_of else None,
+                "snapshot_id": row.snapshot_id,
+            }
+    return out
 
 
 def replay_decision(stage: str, evidence: dict) -> str:

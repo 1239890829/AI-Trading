@@ -161,6 +161,7 @@ async def maybe_open(
     price: float | None,
     role: str | None = None,
     certainty_level: str | None = None,
+    decision_context: dict | None = None,
 ) -> dict:
     """触发后裁定是否自动开模拟仓。返回 {opened, reason, qty?, weight?}。全程只动模拟盘。"""
     state = app.state if hasattr(app, "state") else app
@@ -171,6 +172,30 @@ async def maybe_open(
         return {"opened": False, "reason": f"触发 {trigger} 不在开仓白名单（嗅到≠买入）"}
     if price is None or price <= 0:
         return {"opened": False, "reason": "无有效价格"}
+
+    # IMP-006：模拟动作只引用上游已冻结的 decision/version；完整快照正文不复制到
+    # position plan，避免形成第二事实库。价格身份仅保留必要摘要，真实成交仍只认 order fill。
+    decision_trace = {}
+    if isinstance(decision_context, dict):
+        reference = decision_context.get("reference_entry") or {}
+        executable = decision_context.get("executable_snapshot") or {}
+        decision_trace = {
+            "decision_id": decision_context.get("decision_id"),
+            "decision_version": decision_context.get("decision_version"),
+            "reference_price": decision_context.get("reference_price", reference.get("price")),
+            "execution_snapshot_price": decision_context.get(
+                "execution_snapshot_price", executable.get("price")
+            ),
+            "execution_snapshot_state": decision_context.get(
+                "execution_snapshot_state", executable.get("state")
+            ),
+            "execution_snapshot_as_of": decision_context.get(
+                "execution_snapshot_as_of", executable.get("as_of")
+            ),
+            "execution_snapshot_source": decision_context.get(
+                "execution_snapshot_source", executable.get("source")
+            ),
+        }
 
     held = _open_positions(engine)
     if held is None:
@@ -244,6 +269,7 @@ async def maybe_open(
                 "action": "open_pending", "qty": qty, "price": price,
                 "weight": weight, "total_cap": total_cap, "role": role,
                 "order_id": getattr(order, "id", None),
+                **decision_trace,
                 "reason": f"{cap_note}；限价 {price} 未达现价，挂单已受理、等待撮合",
             }
         )
@@ -255,6 +281,8 @@ async def maybe_open(
         return {
             "opened": False, "accepted": True, "pending": True,
             "qty": qty, "price": price, "order_id": getattr(order, "id", None),
+            "decision_id": decision_trace.get("decision_id"),
+            "decision_version": decision_trace.get("decision_version"),
             "reason": f"挂单受理未成交（限价 {price} 未达现价），等待撮合",
         }
 
@@ -266,6 +294,8 @@ async def maybe_open(
             "symbol": symbol, "name": name, "trigger": trigger,
             "action": "open", "qty": qty, "price": filled,
             "weight": weight, "total_cap": total_cap, "role": role,
+            "order_id": getattr(order, "id", None),
+            **decision_trace,
             "reason": f"{cap_note}；角色 {role or '默认'} 权重 {weight:.0%}；触发 {trigger}",
         }
     )
@@ -286,9 +316,20 @@ async def maybe_open(
                 "key": f"position-open-{symbol}",
                 "direction": "模拟持仓",
                 "text": f"自动开模拟仓 {qty} 股 @ {filled}（总仓位上限 {total_cap:.0%}·个股权重 {weight:.0%}·触发 {trigger}）",
-                "meta": {"trigger_value": filled},
+                "meta": {
+                    "trigger_value": filled,
+                    "decision_id": decision_trace.get("decision_id"),
+                    "decision_version": decision_trace.get("decision_version"),
+                    "order_id": getattr(order, "id", None),
+                },
             },
         )
     except Exception:  # noqa: BLE001
         log.exception("position_open 通知失败")
-    return {"opened": True, "qty": qty, "weight": weight, "price": filled, "reason": cap_note}
+    return {
+        "opened": True, "qty": qty, "weight": weight, "price": filled,
+        "order_id": getattr(order, "id", None),
+        "decision_id": decision_trace.get("decision_id"),
+        "decision_version": decision_trace.get("decision_version"),
+        "reason": cap_note,
+    }

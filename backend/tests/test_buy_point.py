@@ -123,6 +123,19 @@ def test_evaluate_change_pct_missing_self_computed():
     assert len(hits) == 1 and hits[0]["chg"] == pytest.approx(5.0)
 
 
+def test_unfresh_execution_snapshot_is_hard_reject():
+    """有价格但动作时快照非 ready，必须从命中降级为拒绝，不能自动模拟执行。"""
+    from app.picks.buy_point import _reject_unfresh_execution
+
+    hits = [{"item": _item(), "price": 10.5}]
+    kept, skips = _reject_unfresh_execution(
+        hits, [], {"600000": {"state": "stale", "freshness_reason": "上游停更"}}
+    )
+    assert kept == []
+    assert skips[0]["symbol"] == "600000"
+    assert "stale" in skips[0]["reason"] and "只保留参考" in skips[0]["reason"]
+
+
 # ---------------------------------------------------------------- 规则
 
 
@@ -165,8 +178,16 @@ def _patch_happy_path(monkeypatch, tmp_path, *, items=None, quotes=None, hits_ov
         "items": items,
         "meta": {"gate": {"stand_aside": False, "level": "none"}},
     })
-    state = NS(hub=NS(provider=NS()), snapshot_service=NS(snapshot=list(quotes.values()),
-                                                           breadth={"up": 1, "down": 2}))
+    state = NS(
+        hub=NS(provider=NS()),
+        snapshot_service=NS(
+            snapshot=list(quotes.values()),
+            breadth={"up": 1, "down": 2},
+            freshness=lambda: NS(
+                state="ready", as_of=d, age_seconds=0.0, reason=None, source="sina_market",
+            ),
+        ),
+    )
     app = NS(state=state)
 
     async def fake_sent(hub, snap):
@@ -204,6 +225,8 @@ def _patch_happy_path(monkeypatch, tmp_path, *, items=None, quotes=None, hits_ov
 
     factory = _rule_factory(tmp_path)
     monkeypatch.setattr(w, "get_session_factory", lambda: factory)
+    monkeypatch.setattr("app.picks.opportunity_learning.get_session_factory", lambda: factory)
+    app._test_factory = factory
     return app, cards, seen
 
 
@@ -228,6 +251,36 @@ def test_check_and_dispatch_one_card_per_symbol(monkeypatch, tmp_path):
         body = json.dumps(card, ensure_ascii=False)
         assert "盘中买点命中 1 只" in body
         assert card["header"]["template"] == "orange"  # 与每日精选卡同 template
+
+    # IMP-006：提醒事件保存的执行身份必须和本拍命中对象完全一致。
+    from app.models.alert import AlertEvent
+
+    with app._test_factory() as db:
+        events = db.query(AlertEvent).order_by(AlertEvent.id).all()
+    by_symbol = {e.symbol: json.loads(e.snapshot or "{}") for e in events}
+    for h in dispatched:
+        sym = h["item"]["symbol"]
+        archived = by_symbol[sym]["execution_ref"]
+        live = h["execution_contract"]
+        assert archived["decision_id"] == live["decision_id"]
+        assert archived["decision_version"] == live["decision_version"]
+        assert archived["execution_snapshot_price"] == live["executable_snapshot"]["price"]
+        assert "executable_snapshot" not in archived, "提醒只存引用摘要，不复制权威快照正文"
+
+
+def test_check_and_dispatch_blocks_action_when_authoritative_archive_fails(monkeypatch, tmp_path):
+    """IMP-006：权威 decision 未落库时，提醒和自动模拟动作都不能产生孤儿引用。"""
+    import app.picks.buy_point as bp
+
+    app, cards, _seen = _patch_happy_path(monkeypatch, tmp_path)
+
+    async def archive_failed(**_kwargs):
+        return False
+
+    monkeypatch.setattr(bp, "_archive_notification_decisions", archive_failed)
+    out = asyncio.run(bp.check_and_dispatch(app))
+    assert out == []
+    assert cards["n"] == 0
 
 
 def test_check_and_dispatch_dedup_per_day(monkeypatch, tmp_path):

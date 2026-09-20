@@ -10,6 +10,7 @@ import { clockOf, compareGates, gateActive, type GateComparison } from "@/lib/pi
 import { roleClass } from "@/lib/role-style";
 import type {
   DailyPickItem,
+  ExecutionDecisionContract,
   ExitDiscipline,
   IntradayTopStock,
   OpportunityStock,
@@ -88,6 +89,10 @@ export interface TradingCard {
   origin: "picks" | "intraday";
   price: number | null;
   change_pct: number | null;
+  /** 盘前生成/首见参考价；仅用于复盘基准，绝不冒充成交。 */
+  referencePrice: number | null;
+  /** 最新动作时执行复核；null = 尚未产生盘中买点判定。 */
+  execution: ExecutionDecisionContract | null;
   /* --- 估值与评分：目前仅盘前名单提供 --- */
   pe_ttm: number | null;
   pb: number | null;
@@ -161,6 +166,9 @@ function toJudgement(raw: { level: string; basis?: string } | null | undefined):
 /** 盘前名单（DailyPickItem）→ 统一模型。 */
 export function fromDailyPick(it: DailyPickItem): TradingCard {
   const basisRows: { label: string; value: string }[] = [];
+  const execution = it.execution ?? null;
+  const executable = execution?.executable_snapshot;
+  const executionReady = executable?.state === "ready";
   for (const [key, label] of SUB_LABELS) {
     const v = it.bases?.[key];
     if (v) basisRows.push({ label, value: v });
@@ -175,8 +183,11 @@ export function fromDailyPick(it: DailyPickItem): TradingCard {
     symbol: it.symbol,
     name: it.name,
     origin: "picks",
-    price: it.price ?? null,
-    change_pct: it.change_pct ?? null,
+    // 非 ready 的动作快照只能作为显式降级证据，不能顶掉卡片主价格冒充当前可执行价。
+    price: executionReady ? (executable?.price ?? it.price ?? null) : (it.price ?? null),
+    change_pct: executionReady ? (executable?.change_pct ?? it.change_pct ?? null) : (it.change_pct ?? null),
+    referencePrice: execution?.reference_entry.price ?? it.price ?? null,
+    execution,
     pe_ttm: it.pe_ttm ?? null,
     pb: it.pb ?? null,
     score: it.score ?? null,
@@ -236,6 +247,8 @@ export function fromIntradayStock(it: IntradayTopStock | OpportunityStock): Trad
     origin: "intraday",
     price: it.price ?? null,
     change_pct: it.change_pct ?? null,
+    referencePrice: null,
+    execution: null,
     pe_ttm: null,
     pb: null,
     score: null,
@@ -332,6 +345,20 @@ export function PickCard({
         ? `空仓闸门日红线压制（禁买）：${item.followReasons.join("；") || "命中否决/异动风险"}`
         : `空仓闸门已触发：本条不给买入范围，仅供复盘与观察。${item.followReasons.join("；")}`;
 
+  const executionState = item.execution?.executable_snapshot.state ?? null;
+  const executionStateText =
+    executionState === "ready"
+      ? "可判"
+      : executionState === "stale"
+        ? "陈旧"
+        : executionState === "degraded"
+          ? "降级"
+          : executionState === "unavailable"
+            ? "不可用"
+            : executionState
+              ? "未判定"
+              : null;
+
   return (
     <CardShell flow onClick={stockNav(item.symbol)}>
       {/* 头：名称代码（可点 → 工作台）+ 来源/持仓/T 档徽标 + 现价 + 涨跌幅 */}
@@ -378,7 +405,18 @@ export function PickCard({
               </span>
             )}
             <div className="mt-0.5 flex items-baseline justify-end gap-2">
-              <span className="font-mono text-base font-semibold tabular-nums" title="现价（全市场快照）">
+              <span
+                className="font-mono text-base font-semibold tabular-nums"
+                title={
+                  executionState === "ready"
+                    ? "最新执行复核快照价（不是成交价）"
+                    : item.origin === "picks"
+                      ? item.execution
+                        ? "执行快照非可用状态，主价格回退为组合生成/首见参考价（不是成交价）"
+                        : "组合生成/首见参考价（尚无盘中执行复核，不是成交价）"
+                      : "现价（全市场快照）"
+                }
+              >
                 {fmt(item.price)}
               </span>
               <span className={`font-mono text-[10px] tabular-nums ${pctColor(item.change_pct)}`}>
@@ -388,6 +426,48 @@ export function PickCard({
           </>
         }
       />
+
+      {/* IMP-006：参考价与动作时执行快照分开呈现；两者都不是成交。 */}
+      {item.origin === "picks" && (item.referencePrice != null || item.execution) && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-zinc-600 dark:text-zinc-400">
+          <span className="font-mono" title="组合生成/首见时参考价，仅用于复盘基准，不代表成交">
+            参考价 {fmt(item.referencePrice)}
+          </span>
+          {item.execution && (
+            <>
+              <span
+                className="font-mono"
+                title={"动作时复核行情 · " + (item.execution.executable_snapshot.source ?? "来源未知") + " · " + item.execution.executable_snapshot.state}
+              >
+                执行快照 {fmt(item.execution.executable_snapshot.price)}
+              </span>
+              <Chip
+                text={
+                  executionState !== "ready"
+                    ? `执行快照·${executionStateText}`
+                    : item.execution.gate_decision === "passed"
+                      ? "执行复核·通过"
+                      : "执行复核·未通过"
+                }
+                title={
+                  "行情状态 " + (executionStateText ?? "未知") +
+                  (item.execution.gate_reason ? "；" + item.execution.gate_reason : "") +
+                  "；decision " + item.execution.decision_id +
+                  " · version " + item.execution.decision_version +
+                  "；该标记只表示门控判定，不表示已成交"
+                }
+                className={
+                  executionState !== "ready"
+                    ? "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300"
+                    : item.execution.gate_decision === "passed"
+                      ? "border-sky-500/50 bg-sky-500/10 text-sky-700 dark:text-sky-300"
+                      : "border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
+                }
+              />
+            </>
+          )}
+        </div>
+      )}
 
       {/* 可参与性（2026-09-15 猎场口径）：加入猎场的个股必须是投资者**实际可以参与的**。
           这张 chip 把"能不能买"放在卡片第一屏，而不是让用户自己从"已封板"推导；
