@@ -315,11 +315,12 @@ async def _archive_notification_decisions(
     *, items: list[dict], trade_date: str, hits: list[dict], skips: list[dict],
     dispatch_by_symbol: dict[str, str], as_of, pick_generated_at: str | None,
     execution_by_symbol: dict[str, dict],
-) -> None:
-    """Best-effort evidence write with a loud log on failure.
+) -> bool:
+    """Persist the authoritative decision fact before any notification/paper action.
 
-    Notification delivery must not be blocked by the learning store, while the
-    failure must remain visible instead of pretending the decision was archived.
+    IMP-006 把 OpportunityDecisionSnapshot 升为唯一完整执行事实源后，这一步不再只是
+    learning evidence。若命中事实没落库，后续 AlertEvent / position plan 的
+    decision/version 就会成为孤儿引用，因此命中分支必须 fail-closed。
     """
     try:
         from app.picks.opportunity_learning import archive_notification_pipeline
@@ -331,8 +332,10 @@ async def _archive_notification_decisions(
                 pick_generated_at=pick_generated_at, execution_by_symbol=execution_by_symbol,
             )
         )
-    except Exception:  # noqa: BLE001 — learning evidence cannot block notifications
-        log.exception("buy point decision evidence archive failed")
+        return True
+    except Exception:  # noqa: BLE001 — 命中分支必须 fail-closed；loop 继续下一拍
+        log.exception("buy point authoritative decision archive failed")
+        return False
 
 
 async def check_and_dispatch(app) -> list[dict]:
@@ -365,8 +368,8 @@ async def check_and_dispatch(app) -> list[dict]:
     )
     hits, skips = evaluate_buy_points(payload["items"], gate_stand=gate_stand, quotes=quotes)
     hits, skips = _reject_unfresh_execution(hits, skips, execution_by_symbol)
-    # 派发前先按同一批输入计算 decision_id/version；最终只归档一次（带 notified/suppressed）。
-    # decision_version 不含 dispatch 状态，因此提醒、自动模拟仓、最终归档引用同一版判断。
+    # 派发前先按同一批输入计算 decision_id/version；dispatch 不是交易判断事实，
+    # 不进入该版本身份。完整 decision 必须先落库，AlertEvent/模拟仓随后只引用它。
     from app.picks.opportunity_learning import build_notification_records
 
     _preview_run, preview = build_notification_records(
@@ -383,33 +386,30 @@ async def check_and_dispatch(app) -> list[dict]:
         h["execution_contract"] = execution_contract_by_symbol.get(sym)
     for s in skips:
         log.info("buy point skip %s: %s", s["symbol"], s["reason"])
+
+    # 权威执行事实先于任何提醒/模拟动作落库。dispatch 结果属于通知可靠性事实，
+    # 不反写交易 decision；后者由 AlertEvent/通道回执独立记录（IMP-044 继续收口）。
+    archived = await _archive_notification_decisions(
+        items=payload["items"], trade_date=now.date().isoformat(), hits=hits, skips=skips,
+        dispatch_by_symbol={}, as_of=now, pick_generated_at=pick_generated_at,
+        execution_by_symbol=execution_by_symbol,
+    )
     if not hits:
-        await _archive_notification_decisions(
-            items=payload["items"], trade_date=now.date().isoformat(), hits=hits, skips=skips,
-            dispatch_by_symbol={}, as_of=now, pick_generated_at=pick_generated_at,
-            execution_by_symbol=execution_by_symbol,
-        )
+        return []
+    if not archived:
+        log.error("buy point decision not persisted; block notification and paper action for this beat")
         return []
 
     # 逐票去重落库（append_alert key 去重；已推过的票当日不再进卡）
     from app.picks.watcher import dispatch_alert
 
     dispatched: list[dict] = []
-    dispatch_by_symbol: dict[str, str] = {}
     for h in hits:
         ok = await dispatch_alert(app, build_buy_point_alert(h), rule_provider=ensure_buy_point_rule)
-        symbol = str(h["item"].get("symbol") or "")
         if ok:
             dispatched.append(h)
-            dispatch_by_symbol[symbol] = "notified"
         else:
-            dispatch_by_symbol[symbol] = "suppressed"
             log.info("buy point deduped: %s（当日已推）", h["item"].get("symbol"))
-    await _archive_notification_decisions(
-        items=payload["items"], trade_date=now.date().isoformat(), hits=hits, skips=skips,
-        dispatch_by_symbol=dispatch_by_symbol, as_of=now, pick_generated_at=pick_generated_at,
-        execution_by_symbol=execution_by_symbol,
-    )
     if not dispatched:
         return []
 

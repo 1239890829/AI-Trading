@@ -475,7 +475,7 @@ def archive_records(run_id: str, records: list[dict], session_factory=None) -> d
             )
             db.add(row)
             if record["stage"] in ("rank", "notification") and record["decision"] in (
-                "ranked", "notified", "suppressed",
+                "ranked", "eligible", "notified", "suppressed",
             ):
                 db.add(OpportunityOutcomeLabel(
                     snapshot_id=snapshot_id, horizon=OUTCOME_HORIZON,

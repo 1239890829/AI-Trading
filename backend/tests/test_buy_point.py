@@ -268,6 +268,21 @@ def test_check_and_dispatch_one_card_per_symbol(monkeypatch, tmp_path):
         assert "executable_snapshot" not in archived, "提醒只存引用摘要，不复制权威快照正文"
 
 
+def test_check_and_dispatch_blocks_action_when_authoritative_archive_fails(monkeypatch, tmp_path):
+    """IMP-006：权威 decision 未落库时，提醒和自动模拟动作都不能产生孤儿引用。"""
+    import app.picks.buy_point as bp
+
+    app, cards, _seen = _patch_happy_path(monkeypatch, tmp_path)
+
+    async def archive_failed(**_kwargs):
+        return False
+
+    monkeypatch.setattr(bp, "_archive_notification_decisions", archive_failed)
+    out = asyncio.run(bp.check_and_dispatch(app))
+    assert out == []
+    assert cards["n"] == 0
+
+
 def test_check_and_dispatch_dedup_per_day(monkeypatch, tmp_path):
     """同票第二拍不再发卡（append_alert key 去重）。"""
     import app.picks.buy_point as bp

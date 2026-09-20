@@ -687,6 +687,29 @@ def test_notification_contract_separates_reference_action_and_dispatch_version()
     assert c3["decision_version"] != c1["decision_version"]
 
 
+def test_eligible_notification_decision_creates_outcome_label(tmp_path):
+    """IMP-006：dispatch 与交易 decision 分离后，eligible 仍必须进入结果标签链。"""
+    sf = _factory(tmp_path)
+    item = {
+        "symbol": "600001", "name": "甲", "price": 10.0,
+        "confidence": {"tier": "executable"}, "vetoes": [],
+        "buy_range": {"low": 9.8, "high": 10.8},
+    }
+    hit = {"item": item, "price": 10.5, "chg": 5.0}
+    run_id, rows = build_notification_records(
+        [item], trade_date="2026-09-21", as_of=datetime(2026, 9, 21, 10, 30),
+        hits=[hit], skips=[], dispatch_by_symbol={},
+        pick_generated_at="2026-09-21T09:26:00+08:00",
+        execution_by_symbol={"600001": {"state": "ready", "price": 10.5}},
+    )
+    assert rows[0]["decision"] == "eligible"
+    archive_records(run_id, rows, sf)
+    with sf() as db:
+        outcomes = db.execute(select(OpportunityOutcomeLabel)).scalars().all()
+    assert len(outcomes) == 1
+    assert outcomes[0].reference_price == 10.5
+
+
 def test_notification_archive_keeps_late_older_snapshot_but_latest_read_stays_newer(tmp_path):
     """晚到旧拍必须保留作回放；当前视图只在读侧按 as_of 选择较新版本。"""
     from app.picks.opportunity_learning import latest_notification_execution
