@@ -32,7 +32,7 @@
 
 **统一执行快照与证据重放**
 
-- **状态**：待交付
+- **状态**：已完成
 - **优先级**：P0
 - **阶段门**：G1
 - **门内序**：20
@@ -42,11 +42,11 @@
 - **方案依据**：主方案 F01、§5、W03；U47 / hunting-decision-design §4.1。
 - **范围**：复用 `OpportunityDecisionSnapshot`、现有 buy-point gate、AlertEvent 与 PaperTradingEngine；不新建第二事实库。页面/提醒/模拟动作引用同一当时事实，生成态和历史 decision 仍 append-only。
 - **验收**：统一 snapshot/decision/version；年龄、参数与迟滞可解释；`reference_entry`（组合生成/首见参考）与 `executable_snapshot`（动作时重检）及 `PaperOrder.filled_price`（真实模拟成交）永久分名。动作时行情非 `ready` 必须 fail-closed，只留参考/拒绝证据；页面 GET 不生成新样本。
-- **证据**：候选分支 `chatgpt/imp006-execution-snapshot`；主体实现建立 `execution-facts-v1`：同日同场景同股 `decision_id` 稳定，`decision_version` 只由会改变判定的物质事实生成，通知发送/去重或单纯采样时间刷新不伪造新交易版本；动作时快照携 source/as_of/received_at/freshness，`stale/degraded/unavailable/unknown` 从命中降为明确拒绝；乱序晚到旧 notification snapshot 仍 append-only 保留供回放，当前读视图只按 `as_of` 选择较新版本。复核又发现“动作先发生、权威快照后落库”的孤儿引用窗口，限定整改 `d46d3ee` 已改为**完整 decision 先落库，归档失败则当拍提醒/自动模拟动作 fail-closed**；dispatch 状态继续由 AlertEvent/通道事实拥有，不反写交易 decision，`eligible` 仍进入结果标签链。
+- **证据**：PR #60 的准确被审 HEAD `87b099540a4b6c3d54c56a9d57293dc1963ee450` 已于 2026-09-20 合入 `master`，merge commit `fa0185412db5c0d3f47445081da822f121cceff1`；独立网页审核回执绑定同一 HEAD（PR comment `5749077515`），结论 `APPROVED / MERGE_IF_GATES_PASS`。GitHub 原生 self-approve 因连接账号同时为 PR 作者被平台拒绝，不作为单账号仓库的必要门禁；exact-head `release_check.py`、required CI run `35502888440` 三 job 全绿且无阻断 thread 后完成合并。主体实现建立 `execution-facts-v1`：同日同场景同股 `decision_id` 稳定，`decision_version` 只由会改变判定的物质事实生成，通知发送/去重或单纯采样时间刷新不伪造新交易版本；动作时快照携 source/as_of/received_at/freshness，`stale/degraded/unavailable/unknown` 从命中降为明确拒绝；乱序晚到旧 notification snapshot 仍 append-only 保留供回放，当前读视图只按 `as_of` 选择较新版本。复核又发现“动作先发生、权威快照后落库”的孤儿引用窗口，限定整改 `d46d3ee` 已改为**完整 decision 先落库，归档失败则当拍提醒/自动模拟动作 fail-closed**；dispatch 状态继续由 AlertEvent/通道事实拥有，不反写交易 decision，`eligible` 仍进入结果标签链。
 - **消费者闭环**：完整事实唯一留在 `OpportunityDecisionSnapshot.evidence`；AlertEvent、watch ledger、position plan 只存 `decision_id/version` 与必要价格身份引用，避免复制第二事实源；自动模拟仓沿同一引用下单，真实成交仍只认 order/fill；`GET /api/picks/today` 只读挂最新执行版本，PickCard 同屏分开显示“参考价 / 执行快照”，并对陈旧/降级/不可用显式标注“不是成交”。
 - **验证**：主体候选此前完成完整后端 `4015 passed, 80 skipped`、全量 `pyflakes app tests scripts`；前端 `PickCard` 37/37、TypeScript、ESLint、默认时区与 `TZ=UTC` 两轮 `73 files / 695 tests`、Next.js 16.3.3 production build 均全绿；`git diff --check`、`public_repo_scan.py`、`workspace-hygiene.py`、`doc-health.py` 通过。PR #60 曾暴露一处治理测试把“当前必须 READY”写成测试前提，`488594f` 已改为测试内自行构造 READY 反例；随后准确 HEAD `9840499` 的 required CI run `35502367565` 三 job 全绿。复核新增的 P0 顺序修正 `d46d3ee` 又通过 opportunity-learning / buy-point / watcher / position-loop 定向回归与相关 pyflakes；其合入 PR 后必须重新以**最新 HEAD** 跑 required CI，旧 `9840499` 绿灯不自动继承。未改变选股阈值、仓位参数、真实券商/权限或策略收益口径。
-- **送审边界**：以上是作者实施与自检，**不是独立审核/发布放行**。准确候选仍须走 PR、required CI 与网页独立代码审核；审核前不得把本项标 `已完成`，也不得据此提前开工 IMP-044/IMP-049/IMP-053。
-- **下一步**：对 PR #60 的准确 HEAD 独立复核 reference→snapshot→AlertEvent→paper order→UI 全链及非 ready 反例；若 APPROVED 且 required CI 全绿再合并并标 `已完成`。随后重算阶段门：若 BUG-020 真实交易时段条件仍未变为可行动，则 G1 下一阻断项为 **IMP-044**；若其条件已满足，G0 重新抢占。
+- **发布结论**：独立网页审核与合并前 exact-head 门禁已闭环；合并后 `master` CI run `35503775542` 的 backend/frontend/docs 也全部 `completed/success`。因此本项于 2026-09-20 正式闭环为 `已完成`。该结论只覆盖执行事实一致性，不证明买点策略收益。
+- **下一步**：已从合并后最新 `master` 重算阶段门。BUG-020 仍为真实交易时段 `待条件`，故当前 G1 下一可行动阻断项是 **IMP-044**；若 BUG-020 外部条件转为可行动，G0 重新抢占。
 - **恢复**：回退本片可停止新 execution contract/read-view，同时保留旧 `OpportunityDecisionSnapshot`、AlertEvent、paper order/position plan 与历史 v1/v2 证据；不得回退为“参考价=成交价”、允许 stale 行情执行或用通知发送状态制造交易版本。
 - **开工前置**：已满足；本片不等待 BUG-020/IMP-044 全任务完成。
 - **发布前置**：相关 BUG-020 数据字段代码契约已复用；BUG-020 的真实交易时段生产会话仍按原任务 `待条件`，不被本片冒充完成。任何外发可靠性切换仍受 IMP-044 约束。

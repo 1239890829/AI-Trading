@@ -172,6 +172,7 @@ Jev 的唯一现役项目蓝图是 `docs/ai/jev-integration.md`，状态归 W08/
 - 每次交付必须汇报：分支名称、主要改动、修改文件、测试结果、commit SHA、远程分支或 PR 链接，
   以及遗留问题或风险。
 - Codex 负责本地实现、验证、功能分支交付与获准后的合并；**每轮必须经过网页 ChatGPT 独立审核**。2026-09-18 用户最新分工取代旧无需网页审查条款。审核须绑定任务、计划、base/head和证据，来源可核；Codex/子代理不能自批。此分工不改变 §0 对应用内 LLM 的禁止落地边界。
+- **网页审核回执与 GitHub 原生 Review 是两层门禁，不得互相冒充。** 网页独立审核要求的是规划/审核角色与实施者分离、绑定准确 base/head/diff/证据；它不要求同一 GitHub 账号提交原生 `APPROVE`。若连接账号同时是 PR 作者，GitHub 会拒绝 self-approve，此时以准确 HEAD 的网页 `APPROVED / MERGE_IF_GATES_PASS` 回执 + `release_check.py` + required CI + 无 `CHANGES_REQUESTED`/未解决 thread 为发布门。不得新建小号、自批、伪造原生 APPROVED 或放宽 CI 来满足形式审批。
 - 用户授予 Codex 长期授权：当以下条件全部满足时，Codex 可以直接合并
   功能分支的 Pull Request，无需再次征求用户确认：
   1. 当前批准切片已经完整实现，网页 ChatGPT 有效审核回执为 APPROVED 且明确允许 MERGE_IF_GATES_PASS；详见 docs/collaboration-workflow.md §5，不能仅凭文字“通过”或Codex自述；

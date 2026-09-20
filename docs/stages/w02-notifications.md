@@ -21,10 +21,10 @@
 - **方案依据**：主方案 §5.6–§5.8、W02
 - **范围**：规则告警首片已持久化；补 bool 通道的拒绝/未知边界、消息标识及仍直发的机会卡路径。
 - **验收**：事件与意图同事务；竞争领取、发送前后崩溃、DB 失败、超期/取消均有终态；unknown 不盲目重发，受理不等送达。
-- **证据**：PR #29 修空回执真实性；PR #30 交付规则 Outbox/attempt/CAS 和恢复演练；其余入口仍开放。
-- **下一步**：核读 notifiers/base.py 与 picks/buy_point.py 的布尔回执/落库后直发，先确定最小接入范围。
-- **恢复**：停投递器保留记录；应用回滚保留迁移与尝试历史，不清空 Outbox。
-- **实施步骤**：①核 backend/app/notifiers/base.py 与 feishu.py，按真实渠道响应定义 accepted/rejected/unknown 等类型化结果并做旧bool兼容；②复用 backend/app/repositories/notification_outbox.py 与既有模型，不重建规则Outbox；③将 backend/app/picks/buy_point.py 的直发入口改为同事务事件/发送意图并关联决策，避免旧/新双发；④发前查有效期、目标/渠道偏好与当前硬风险；⑤发送前后崩溃、租约抢占、取消、DB失败/回执未知全测；⑥旧记录和attempt保留，不用补发过期机会掩盖断点。
+- **证据**：PR #29 修空回执真实性；PR #30 交付规则 Outbox/attempt/CAS 和恢复演练；其余入口仍开放。2026-09-20 接手核读又确认：`AlertEngine` 的规则告警已走同库 Outbox，并把 bool=False 保守落为 `unknown`；但 `Notifier.send` / `FeishuNotifier.send_interactive` 仍只返回 bool，无法区分平台明确拒绝与回执未知。买点链虽先落 `AlertEvent`，随后仍在 `buy_point.check_and_dispatch` 直接调用 `send_interactive()`，因此不具备 Outbox 的崩溃恢复/过期/取消事实；现有规则 Outbox 的 `_delivery_block` 又只理解 price/change 规则，不能直接拿来复核 `picks_buy_point`，所以本片必须复用存储与租约机制、扩展意图语义，而不是把买点硬塞进现有价格规则判定。
+- **下一步**：从最新 `master` 只做一个最小纵切：先引入向后兼容的类型化 Feishu 回执（accepted / explicit_rejected / unknown，旧 bool 消费者保持原行为），再让买点 interactive card 作为 `AlertEvent.snapshot.card` 的同一事实进入既有 Outbox；发送前按该 intent 绑定的 decision/version、目标/偏好、有效期与当前可执行事实复核，失效即 suppressed，不从旧 card 直接外发。不要在本片顺手迁其它事件来源。
+- **恢复**：停投递器保留记录；应用回滚保留迁移与尝试历史，不清空 Outbox。买点迁移采用“单一路径切换”，不得同时保留 direct-card 与 outbox 两条外发造成双发。
+- **实施步骤**：①在 `notifiers/base.py` 增加最小类型化回执契约，并由 `feishu.py` 对明确整数成功码、明确平台拒绝、网络/超时/畸形回执分别映射 accepted / explicit_rejected / unknown；提供 bool 兼容层，避免一次改全仓；②复用 `NotificationOutbox/Attempt`、CAS lease 与现有 event 关联，不新建第二张买点队列表；必要时只给 outbox payload 增加 intent kind / decision 引用等最小字段；③把 buy-point card 在落 `AlertEvent` 时一并写入 snapshot，并在同一 DB 事务创建 feishu intent，移除随后 `send_interactive()` 的直发；④规则告警继续走现有 price/change recheck，buy-point intent 则按已归档 `decision_id/version`、最新同股 decision 是否仍一致、执行快照 freshness/有效期、目标和渠道偏好做专用 pre-send recheck；不同 intent 不互相偷换判据；⑤覆盖 commit-before-send 崩溃、claim 竞争、send-start 后进程丢失、明确拒绝、回执未知、超期、偏好/目标变化、decision 失效与 DB 回滚；unknown 不自动重发，explicit_rejected 可终态化但不得被写成 delivered；⑥旧 outbox/attempt/AlertEvent append-only 保留，API 继续区分 accepted 与 delivered/read，不用补发过期机会掩盖断点。
 - **发布前置**：类型兼容/规则回归可先做；真实外发需现有用户授权范围，恢复与回放默认不外发。
 - **补充验收**：队列等待期间偏好撤销、决策失效和参数版本变化；发前检查必须绑定所发载荷版本，界定发送已开始后的不可撤销边界。渠道不支持幂等/查询时保留unknown，禁止用重试次数证明恰好一次。
 - **产品衔接**：接收同decision/version的状态变化而非重新选股；开板/失效/风险按用户价值和授权渠道处理。普通前台移出规则/通道调试，用户行动提示可见；LLM降噪不能拦确定性风险；同意图不得多渠道重复建事实。
