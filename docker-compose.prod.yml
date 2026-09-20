@@ -48,7 +48,7 @@ services:
       # 部署时把同一个值传给 compose（推荐从 backend/.env 派生，避免两处漂移）：
       #   export ASHARE_API_TOKEN="$(sed -n 's/^ASHARE_API_TOKEN=//p' backend/.env)"
       # 未设置 = 不附加请求头，与后端「local + 未配 token = 全放行」的姿态语义对称
-      # （本地零影响；但后端配了而这里没传 ⇒ **全部接口** 401，见 docs/deployment.md）。
+      # （本地零影响；但后端配了而这里没传 ⇒ **全部接口** 401，见 docs/system/deployment.md）。
       # WS 凭据由同源 GET /api/ws-credential 从同一变量派生，无需额外变量。
       ASHARE_API_TOKEN: ${ASHARE_API_TOKEN:-}
     ports:

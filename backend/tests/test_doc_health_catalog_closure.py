@@ -221,3 +221,29 @@ def test_empty_catalog_fails_loud(probe: Probe) -> None:
     """章节在、但解析不出任何条目 ⇒ 同样判红（多半是章节标题被改了）。"""
     probe.write(f"{probe.d}/INDEX.md", "# INDEX\n\n## 0.0 其它章节\n\n无表格\n")
     assert probe.unregistered() == ["docs/INDEX.md §0.0 编目表解析为空"]
+
+
+# ------------------------------------------------------------------ 物理分类守卫
+
+def test_docs_taxonomy_accepts_control_root_and_registered_dir(probe: Probe) -> None:
+    probe.write(f"{probe.d}/INDEX.md")
+    probe.write(f"{probe.d}/system/architecture.md")
+    root_extras, unknown_dirs = probe.mod.check_docs_taxonomy()
+    assert root_extras == []
+    assert unknown_dirs == []
+
+
+def test_docs_taxonomy_rejects_unclassified_root_markdown(probe: Probe) -> None:
+    probe.write(f"{probe.d}/INDEX.md")
+    probe.write(f"{probe.d}/random-notes.md")
+    root_extras, unknown_dirs = probe.mod.check_docs_taxonomy()
+    assert root_extras == ["random-notes.md"]
+    assert unknown_dirs == []
+
+
+def test_docs_taxonomy_rejects_unknown_top_level_dir(probe: Probe) -> None:
+    probe.write(f"{probe.d}/INDEX.md")
+    probe.write(f"{probe.d}/misc/topic.md")
+    root_extras, unknown_dirs = probe.mod.check_docs_taxonomy()
+    assert root_extras == []
+    assert unknown_dirs == ["misc/"]

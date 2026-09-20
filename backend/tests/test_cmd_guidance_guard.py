@@ -8,7 +8,7 @@
 
 1. `AGENTS.md` §1 启动命令（账本 §七 **#19**）—— 当时**只修了文档、未扫代码**；
 2. `apps/web/app/workbench/page.tsx` 后端断连时的 `setError(...)` 文案（**IMP-001**）——
-   加上 `README.md` / `docs/deployment.md` / `scripts/bootstrap.sh` 共 **4 处**。
+   加上 `README.md` / `docs/system/deployment.md` / `scripts/bootstrap.sh` 共 **4 处**。
 
 第 2 次与第 1 次**同形**：修单点 ⇒ 换个文件再犯。所以按本仓纪律
 （`retro-and-gaps.md`「累计 39 处偏差、十七类，**全部都要防**」）把判据固化成常驻测试，

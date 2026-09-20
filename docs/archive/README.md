@@ -5,12 +5,13 @@
 这里的文档记录当时的方案、评审结论与实测数据，**不再随代码演进更新**；
 现行权威口径一律以下列活文档为准：
 
-- 总览与阶段状态：`docs/PROJECT-MASTER.md`、`AGENTS.md`
-- API/WS 契约：`docs/api.md`、`docs/websocket.md`
-- 数据源口径：`docs/data-sources.md`
-- 架构决策：`docs/architecture.md`（架构盘点已归档：`archive/architecture-redesign.md`）
+- 总入口与当前现场：`docs/INDEX.md`、`docs/handoff.md`、`AGENTS.md`
+- API/WS 契约：`docs/system/api.md`、`docs/system/websocket.md`
+- 数据源口径：`docs/data/data-sources.md`
+- 架构决策：`docs/system/architecture.md`（架构盘点已归档：`archive/architecture-redesign.md`）
 - 联动设计：`summary/architecture-design.md`（原件 `linkage-design.md` 已删除，精华并入该汇总）
 - 待办池：`docs/retro-and-gaps.md`
+- 08-29 技术全貌仅作历史追溯：`docs/archive/PROJECT-MASTER.md`
 
 | 归档文档 | 性质 |
 |---|---|
@@ -32,7 +33,7 @@
 
 | 归档文档 | 性质 | 归档依据 |
 |---|---|---|
-| architecture-redesign.md | 08-31 模块盘点与重构方案 | **执行状态已清零**（文档头 09-01 标注），并入现役 architecture.md |
+| architecture-redesign.md | 08-31 模块盘点与重构方案 | **执行状态已清零**（文档头 09-01 标注），并入现役 docs/system/architecture.md |
 | plan-review.md | 08-31 全盘计划复盘与整合清单 | 已被 09-02/09-08/09-09 各轮审计取代 |
 | orderbook-source-evaluation.md | 五档盘口数据源评估 | 结论（ths 无五档）已进 INDEX §2 数据源口径 |
 | picks-stability-sweep.md | 参数敏感性快照（08-31 区间） | 一次性过程产物，参数已定案 |

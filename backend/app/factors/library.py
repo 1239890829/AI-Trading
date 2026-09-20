@@ -94,7 +94,7 @@ FACTORS: tuple[FactorDef, ...] = (
     ),
     # ---------------------------------------------------------------- 2026-09-07 扩展批次
     # 来源：qlib Alpha158（microsoft/qlib contrib/data/loader.py，Apache-2.0）+ TA-Lib。
-    # 挖掘过程见 docs/factor-lifecycle-governance.md §候选登记册。
+    # 挖掘过程见 docs/strategy/factor-lifecycle-governance.md §候选登记册。
     # kbar 族（qlib 原式，除权日单点污染由后续窗口稀释；一字板分母 0 → NULL 三态）：
     FactorDef(
         "kmid", "kbar", 1,
@@ -259,7 +259,7 @@ FACTORS: tuple[FactorDef, ...] = (
         "**实测 IC 相关 0.62**，低于 0.70 去重线 ⇒ 该判断成立。"
         "⚠️ **但族内真正的近邻是 `sump20`**（qlib 上行能量占比——同为「价格方向的 RSI 同构」）："
         "**实测 IC 相关 0.96** ⇒ **归入动量族、与 `sump20` 冗余、不重复计权**"
-        "（族纪律见 docs/factor-lifecycle-governance.md §4.3）。"
+        "（族纪律见 docs/strategy/factor-lifecycle-governance.md §4.3）。"
         "**方向不预设**——本仓纪律「方向必须由实测 IC 定，不取 note 的预期」"
         "（backend/tests/test_factor_report.py）：2026-09-14 真实库实测 IC 为**负**"
         "（−0.046），与 `mom20` 同号——A 股 20 日尺度上反转效应主导，"
@@ -275,7 +275,7 @@ FACTORS: tuple[FactorDef, ...] = (
         "（**实测 IC 相关 0.62**，低于 0.70 去重线 ⇒「同形不同判据」成立）。"
         "⚠️ **但族内真正的近邻是 `sump20`**（同为「价格方向的 RSI 同构」）：**实测 IC 相关 0.95**；"
         "且与同批的 `mfi20` 相关 **0.97** ⇒ **归入动量族、冗余、不重复计权**"
-        "（族纪律见 docs/factor-lifecycle-governance.md §4.3）。"
+        "（族纪律见 docs/strategy/factor-lifecycle-governance.md §4.3）。"
         "**方向不预设**（本仓纪律：方向由实测 IC 定，见 backend/tests/test_factor_report.py）："
         "2026-09-14 真实库实测 IC 为**负**（−0.042），与 `mom20` 同号。"
         "窗口有效样本 <20 或分母为 0 → NULL。",

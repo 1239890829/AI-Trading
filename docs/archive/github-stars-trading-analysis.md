@@ -168,7 +168,7 @@ AGPL 终端产品（企业版闭源收费，社区版月更）。功能与 workb
 
 | 仓库 | 用途一句话 | 状态 | 依据 |
 |---|---|---|---|
-| HiThink-Tech/Financial-API | ths 官方 fuyao API 文档与端点目录 | **持续使用** | 四源链第一优先级；59 端点选型依据（docs/data-source-comparison.md）；`skills/hithink-finance/` 镜像 |
+| HiThink-Tech/Financial-API | ths 官方 fuyao API 文档与端点目录 | **持续使用** | 四源链第一优先级；59 端点选型依据（docs/data/data-source-comparison.md）；`skills/hithink-finance/` 镜像 |
 | handsomejustin/easy_tdx | TDX 协议直连数据通道 | **持续使用** | 回测底座主源（m5 495 日/m1 94 日）+ `/api/minute-line` 分时降级备源（f88b0ed）；钉版本 >=1.20.12,<1.30 |
 | market-dumps | 官方日 K dump 仓库 | **持续使用** | marketdb DuckDB 仓（1025 万行/5544 只）唯一上游，`sync_marketdb.py --full` 24.3s |
 | freqtrade | 出场纪律/回测绩效方法论 | **保留参考** | risk.py 三档出场、performance.py 28 指标、walkforward 已落地；后续调参仍对照其 MaxDrawDown/p-value 设计。GPLv3 代码永不引入 |

@@ -48,7 +48,7 @@ cd backend && pytest
 ```
 
 - **数据源链（自动切换）**：腾讯（实时快照/五档/K线）→ 东财（search/K线/逐笔 + 涨停池/龙虎榜专项）→
-  全链失败标 stale。新浪为热备备源；同花顺的**分时**接口经评估**未接入**（当日分时由腾讯实现）。详见 `docs/data-sources.md`。
+  全链失败标 stale。新浪为热备备源；同花顺的**分时**接口经评估**未接入**（当日分时由腾讯实现）。详见 `docs/data/data-sources.md`。
 - 前端不直接访问第三方接口；后端批量轮询（默认 5s）+ WebSocket 推送。
 - 每条数据必带 `source / quality(high|medium|low|stale|invalid) / quality_reasons / received_at / data_timestamp`。
 - 数据源失败 → 停止伪造实时数据：缓存标记 `stale`、health 报 `degraded`、前端显示过期状态。
@@ -63,8 +63,9 @@ backend/app     FastAPI（api / core / models / repositories / services / data_p
                 data_quality / websocket / market / paper / review / predict / schemas / migrations）
 backend/tests   pytest 回归（防泄露回测/迁移/行情/选股/复盘/鉴权及治理守卫）
 data/           SQLite 业务库 + parquet 快照与分时 + trade_calendar.json 日历兜底
-docs/          文档：INDEX（总入口）/ kb（知识库）/ summary（主题汇总）/ 现役规范 + archive 归档
-                （已完成方案的精华进 summary 后原件即删，见 docs/kb/07-doc-curation.md）
+docs/          文档：根目录仅保留 6 个控制面入口；现役正文按 system / data / product /
+                strategy / ai / review / research 分类；kb / summary / stages 各司其职，
+                archive 仅存历史，时间序列另归 daily-review / evolution / repo-watch
 skills/         仓库随行技能：design-taste（**唯一权威视觉规范**，三源合成）/ hithink-finance
                 （API 契约查询）；其余（含残缺的 impeccable v4.1.2 副本）已归档 _archived/
 .github/workflows  CI（pytest/pyflakes + tsc/vitest/ESLint 四门禁）
@@ -72,12 +73,12 @@ skills/         仓库随行技能：design-taste（**唯一权威视觉规范**
 
 ## 文档索引
 
-- 总览与交接：[AGENTS.md](AGENTS.md) · [docs/PROJECT-MASTER.md](docs/PROJECT-MASTER.md)
-- 架构与数据流：[docs/architecture.md](docs/architecture.md)
-- 数据源实测口径（含限流与降级）：[docs/data-sources.md](docs/data-sources.md) · 四源对比 [docs/data-source-comparison.md](docs/data-source-comparison.md)
-- 回测强制禁令（代码级）：[docs/backtest-rules.md](docs/backtest-rules.md)
-- 复盘 Agent：[docs/review-agent.md](docs/review-agent.md) · 新题材预判：[docs/theme-prediction.md](docs/theme-prediction.md)
-- 情绪判定与误判复盘：[docs/sentiment.md](docs/sentiment.md)（含「历史误判案例库」）
+- 当前总入口与交接：[AGENTS.md](AGENTS.md) · [docs/INDEX.md](docs/INDEX.md) · [docs/handoff.md](docs/handoff.md)；08-29 历史技术基线：[docs/archive/PROJECT-MASTER.md](docs/archive/PROJECT-MASTER.md)
+- 架构与数据流：[docs/system/architecture.md](docs/system/architecture.md)
+- 数据源实测口径（含限流与降级）：[docs/data/data-sources.md](docs/data/data-sources.md) · 四源对比 [docs/data/data-source-comparison.md](docs/data/data-source-comparison.md)
+- 回测强制禁令（代码级）：[docs/strategy/backtest-rules.md](docs/strategy/backtest-rules.md)
+- 复盘 Agent：[docs/review/review-agent.md](docs/review/review-agent.md) · 新题材预判：[docs/strategy/theme-prediction.md](docs/strategy/theme-prediction.md)
+- 情绪判定与误判复盘：[docs/strategy/sentiment.md](docs/strategy/sentiment.md)（含「历史误判案例库」）
 - 阶段总账与任务入口：[docs/retro-and-gaps.md](docs/retro-and-gaps.md#60-阶段索引)
 - 文档总入口：[docs/INDEX.md](docs/INDEX.md) · 计划去向：[docs/plan-registry.md](docs/plan-registry.md)
-- 其余：api / websocket / data-dictionary / risk-management / mcp / deployment
+- 其余按目录归类：system（API/WS/MCP/部署/数据契约）· product（产品闭环/功能审计）· strategy（策略/因子/风控/回测）· ai（Jev/持续演进）· review（复盘）· research（专题研究）

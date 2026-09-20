@@ -6,8 +6,8 @@
 > **导航**：§读法 → 执行顺序 → 各阶段要点 → 与后端 Agent 的分工 → 常见误判。判断口径另见 `kb/06-review-framework.md`（七阶段框架，复盘任务先读）。
 >
 > 适用：A 股每交易日收盘后（15:30 之后）。项目入口：`skills/ashare-daily-review/SKILL.md`。
-> 配套：`docs/review-agent.md`（后端 Agent 机制）· `docs/sentiment.md`（情绪双轴判据）·
-> `docs/theme-prediction.md`（题材预判评分卡）· `docs/retro-and-gaps.md`（项目盘点账本）。
+> 配套：`docs/review/review-agent.md`（后端 Agent 机制）· `docs/strategy/sentiment.md`（情绪双轴判据）·
+> `docs/strategy/theme-prediction.md`（题材预判评分卡）· `docs/retro-and-gaps.md`（项目盘点账本）。
 >
 > **本文件定义「复盘该怎么做」；后端 `app/review/` 定义「自动能算出什么」。**
 > 两者是互补关系：Agent 产出可复现的事实与统计，本 SOP 负责 Agent 算不出的
@@ -55,7 +55,7 @@
 
 ### Step 1 · 大盘与环境定调
 
-**数据源**：`/api/market/*`（指数、宽度）、情绪双轴矩阵（`docs/sentiment.md`）。
+**数据源**：`/api/market/*`（指数、宽度）、情绪双轴矩阵（`docs/strategy/sentiment.md`）。
 
 **看什么**：指数涨跌与成交额 → 市场宽度（涨/跌/涨停/跌停/炸板率）→ 情绪阶段。
 

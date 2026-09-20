@@ -1,4 +1,4 @@
-"""日线回测引擎防泄露测试（docs/backtest-rules.md §4——先于引擎合入）。
+"""日线回测引擎防泄露测试（docs/strategy/backtest-rules.md §4——先于引擎合入）。
 
 §4 八条对照：
   1 未来 bar 不可访问 ✅ test_future_bar_raises / test_negative_index_is_within_visible_window

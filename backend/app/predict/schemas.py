@@ -1,4 +1,4 @@
-"""新题材预判的数据结构（docs/theme-prediction.md §数据结构）。
+"""新题材预判的数据结构（docs/strategy/theme-prediction.md §数据结构）。
 
 设计原则与复盘模块一致：
 - **证据先行**：每一条判断都必须挂着 EvidenceItem（来源+内容+得分贡献），

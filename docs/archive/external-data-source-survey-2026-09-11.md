@@ -1,10 +1,11 @@
 # 外部付费数据源调研：Tushare / FTShare / KlineShare / QuantDash
 
+> **归档状态（2026-09-20）**：时点性外部数据源调研；当前接入与选型口径以 `docs/data/data-sources.md` 与 `docs/data/data-source-comparison.md` 为准。本件只读留痕。
 > 调研日期：2026-09-11（周五，交易日，盘后）
 > **信息性质声明**：本文全部结论来自**各平台官方网站 / 官方文档 / 官方 SDK 仓库**的公开信息，
 > **未经本机实测**。凡属官方宣称（而非我实测验证）的，均标注 `【宣称】`；凡我无法核实到公开价目表的，
 > 标注 `【未公开】`，不臆造数字。
-> 与 `docs/data-source-comparison.md`（本机实测，四源链 ths→tencent→eastmoney→sina）互补：
+> 与 `docs/data/data-source-comparison.md`（本机实测，四源链 ths→tencent→eastmoney→sina）互补：
 > 那篇讲"我们手上有什么、实测什么水平"，这篇讲"外面卖的是什么、值不值得买"。
 
 ---
@@ -226,7 +227,7 @@ Tushare 有"每日筹码和胜率""筹码分布"这类**推算型**特色数据�
 **⚠️ 项目红线交叉**：PTrade 是**真实下单通道**。本项目 `AGENTS.md` 红线 1 为
 「禁止连接真实券商 / 自动真实下单」。因此它的**交易能力当前不可用**，
 L2 能力又因为"数据不出环境"**无法为本项目供数**。
-已有的实盘接入方案走的是 miniQMT 路线（`docs/live-trading-guosen-plan.md`，**09-07 已搁置**），
+已有的实盘接入方案走的是 miniQMT 路线（`docs/archive/live-trading-guosen-plan.md`，**09-07 已搁置**），
 该文 09-01 已判定：**PTrade 云端托管不适合本项目「本地策略引擎 + 外部执行」架构，仅作备选**。
 
 ---
@@ -286,7 +287,7 @@ L2 的门槛在**十档 + 逐笔 + 委托队列**这三样，一样都不可少�
 
 ## 3. 与本项目数据源的能力对比
 
-### 3.1 本项目现有能力（实测口径，来源 `docs/data-source-comparison.md`）
+### 3.1 本项目现有能力（实测口径，来源 `docs/data/data-source-comparison.md`）
 
 | 能力 | 我们的源 | 实测状态 |
 |---|---|---|
@@ -375,7 +376,7 @@ FTShare 的 227 个方法在**横向广度**上确实超过我们（宏观 23、
 
 ### 🔴 P0 —— 评估 KlineShare 旗舰版作 ths 打板数据备源（¥399/月）
 
-**理由**：`docs/data-source-comparison.md` §2.2 已记录一条明确的单点风险——
+**理由**：`docs/data/data-source-comparison.md` §2.2 已记录一条明确的单点风险——
 > "ths 涨停原因若挂了，题材看板会整体退化。目前无备源，需要监控告警。"
 
 KlineShare 的打板专题（涨停/炸板/跌停/昨日涨停/连板天梯）+ 龙虎榜 + 游资名录，
@@ -422,7 +423,7 @@ KlineShare 的打板专题（涨停/炸板/跌停/昨日涨停/连板天梯）+ 
 再叠加它触碰"禁止真实下单"红线，**当前不予考虑**。
 
 **按本项目定位（题材/情绪/打板，非订单流、非高频），L2 的边际收益远低于成本。**
-这条结论与 `docs/data-source-comparison.md` §9 此前的判断一致，本次调研**没有推翻它**。
+这条结论与 `docs/data/data-source-comparison.md` §9 此前的判断一致，本次调研**没有推翻它**。
 
 ---
 
@@ -446,8 +447,8 @@ KlineShare 的打板专题（涨停/炸板/跌停/昨日涨停/连板天梯）+ 
 - [ ] 检查响应是否含**涨停原因**字段 ← **决定性**
 - [ ] 检查连板天梯是否含**次日晋级（seal_nextday 等价字段）**
 - [ ] 检查龙虎榜席位能否关联**游资身份**
-- [ ] 盘中连续 3 轮调用，记录延迟与成功率（对齐 `docs/data-source-comparison.md §10` 的实测口径）
-- [ ] 结论回填本文，并更新 `docs/data-source-comparison.md §4`（缺口表）
+- [ ] 盘中连续 3 轮调用，记录延迟与成功率（对齐 `docs/data/data-source-comparison.md §10` 的实测口径）
+- [ ] 结论回填本文，并更新 `docs/data/data-source-comparison.md §4`（缺口表）
 
 ---
 
@@ -529,7 +530,7 @@ KlineShare 的打板专题（涨停/炸板/跌停/昨日涨停/连板天梯）+ 
 **交集 32/32，本仓无一只缺失**；本仓 32 只中 0 只落在其 `up_break` 池。
 口径差 = FTShare 的 `up` **含「涨停后打开」**，本仓 ths = **最终仍涨停**。
 
-⇒ **能备「池子」，不能备「原因」**——`docs/data-source-comparison.md §2.2` 记的单点风险**只被覆盖一半**。
+⇒ **能备「池子」，不能备「原因」**——`docs/data/data-source-comparison.md §2.2` 记的单点风险**只被覆盖一半**。
 
 另两项复核：**`volume` 单位 = 股**（`turnover/volume = 1276.67 ≈ close 1272.75`），
 本仓腾讯 K 线 = **手**，接入须 **÷100**；接口命名 `eastmoney_*`/`ths_*`/`sina_*`

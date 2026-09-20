@@ -1,7 +1,7 @@
 """日线回测端点（Phase 6 后半）。
 
 POST /backtest/run：同步计算（500 根日K秒级完成，无需缓存）。
-强制禁令见 docs/backtest-rules.md——引擎内为代码级校验，防泄露测试先行合入。
+强制禁令见 docs/strategy/backtest-rules.md——引擎内为代码级校验，防泄露测试先行合入。
 
 /walkforward 端点已删（2026-09-08 审查 P0-4：前端零调用、/scripts 零引用；
 walk-forward 门禁列为 P2 数据积累项，届时随 IC 跑批管线一起落地，
@@ -47,7 +47,7 @@ async def run_symbol_backtest(req: BacktestRunRequest) -> dict:
     参数解析分层：代码默认 < mandate 文件 < 请求显式字段；
     结果 meta.applied 逐字段说明来源（可解释，不做黑箱合并）。
     报告含基准对比/超额/最大回撤/夏普系/胜率/盈亏比与样本内外分离
-    （docs/backtest-rules.md §5）；结果为统计事实，不构成买卖建议。
+    （docs/strategy/backtest-rules.md §5）；结果为统计事实，不构成买卖建议。
     """
     from app.market.mandate import resolve_backtest_request
 

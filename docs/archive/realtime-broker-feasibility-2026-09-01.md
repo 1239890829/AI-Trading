@@ -1,7 +1,7 @@
 # 行情实时性与数据源答疑（2026-09-01）
 
 > 回答四个问题：①同花顺 skill 收费与实时级别；②各模块数据源与刷新频率总表；③实现同花顺级"每秒跳动"的技术方案；④券商 API 实盘交易可行性。
-> 项目内事实均来自代码与 `docs/data-source-comparison.md`（2026-08-29 实测）；外部事实（收费、券商门槛）来自 2026-09-01 网络检索。
+> 项目内事实均来自代码与 `docs/data/data-source-comparison.md`（2026-08-29 实测）；外部事实（收费、券商门槛）来自 2026-09-01 网络检索。
 
 ---
 
@@ -124,6 +124,6 @@
 
 ## 附：与本文相关的项目红线
 
-- ths API Key 只进 `backend/.env`；数据源改动前必读 `docs/data-source-comparison.md`。
+- ths API Key 只进 `backend/.env`；数据源改动前必读 `docs/data/data-source-comparison.md`。
 - 秒级链只走腾讯优先的 `realtime_rank`，ths 不进 1Hz 链。
 - 实盘对接前，"不真实下单"红线持续有效。

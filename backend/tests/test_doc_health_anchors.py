@@ -114,7 +114,7 @@ def test_bare_filename_resolves_by_basename(probe: Probe) -> None:
 def test_tree_line_inside_fence_is_checked(probe: Probe) -> None:
     """**J 项的首个真阳性形态**：架构树里列着已删模块。
 
-    实例：`docs/PROJECT-MASTER.md` 的 `services/` 段列 `screener_service.py`，
+    实例：`docs/archive/PROJECT-MASTER.md` 的 `services/` 段列 `screener_service.py`，
     而选股器 09-01 已彻底删除——那一行**没有反引号**，只靠行内锚点抓不到。
     """
     probe.write("a.md", "```text\n│   ├── services/\n│   │   ├── gone_service.py  # 已消失\n```\n")
@@ -174,7 +174,7 @@ def test_record_marker_line_is_skipped(probe: Probe) -> None:
 def test_struck_through_changelog_line_is_skipped(probe: Probe) -> None:
     """**行级口径**：`~~` 删除线 = 已完成的 changelog 条目，与账本同属"不对账"范畴。
 
-    真实实例：`docs/PROJECT-MASTER.md:371` 的
+    真实实例：`docs/archive/PROJECT-MASTER.md:371` 的
     `~~**Phase 5 选股器 + 评分系统**~~ ✅ 已完成（2026-08-30）：… + app/services/screener_service.py`
     ——该模块 09-01 已被彻底删除，但这行说的是"**那天**建了什么"，历史为真，
     不该让门禁变红（文件级排除覆盖不到 `PROJECT-MASTER.md`，它是混合体裁）。
@@ -330,6 +330,7 @@ _NEUTRAL = {
     "check_memory_index": ((), ()),
     "kb_file_advisories": (),
     "check_catalog_closure": ((), ()),
+    "check_docs_taxonomy": ((), ()),
     # 2026-09-16 `GOV-014`：P 项（交接索引）新增时**本守卫再次真命中**（第二次），
     # 报红并点名 `check_handoff_index` —— 正是 GOV-010 加这颗 AST 反查钉的用途。
     # ⚠️ 返回值形状按签名给：第 4 位是**保险丝说明**（`str | None`），中性值必须为 `None`；

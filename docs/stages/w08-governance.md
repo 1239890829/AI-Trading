@@ -39,7 +39,7 @@
 - **门禁角色**：持续治理
 - **依赖**：无
 - **效果前置**：无
-- **方案依据**：docs/jev-integration.md；2026-09-19 官方 Use Case Map 与本仓真实 smoke。
+- **方案依据**：docs/ai/jev-integration.md；2026-09-19 官方 Use Case Map 与本仓真实 smoke。
 - **范围**：Jev 只做 bounded 语义判断、验证与条件能力路由；确定性金融规则、权限、撮合、风控与真实执行仍由代码负责。统一 HTTP/key 入口为 backend/app/core/jev_client.py，测试默认禁真实触网。
 - **验收**：不新增第二套凭据/endpoint；隐私输入失败关闭；真实调用只在能改变下一步或减少更贵模型成本时保留；全局 model/effort 自动切换未证明价值前保持停用。
 - **证据**：PR #31–#34 已依次合入 Jev adapter/影子路由、价值审计与 capability routing 收敛、Universal Verification/gold-set、预标注与审核优先级；jev-1.13.0 smoke、JevRouter 权限过滤、metadata-only usage 均已有证据。旧 jev-route 因不能真正切宿主模型且固定增加一轮调用已退出。
@@ -57,7 +57,7 @@
 - **门禁角色**：持续治理
 - **依赖**：无
 - **效果前置**：无
-- **方案依据**：docs/continuous-evolution.md；implementation-plan v9.5 §6.1；用户要求系统不依赖人工喂入新技术，同时不得按热度盲目采用。
+- **方案依据**：docs/ai/continuous-evolution.md；implementation-plan v9.5 §6.1；用户要求系统不依赖人工喂入新技术，同时不得按热度盲目采用。
 - **范围**：持续发现 AI/模型/Agent、量化/选股方法、数据源、研究方法、工程/安全/产品与规则变化；按来源等级、硬门、E0–E5 证据梯度筛选。雷达只拥有发现/拒绝/观察/实验建议，不拥有安装、付费、权限扩大、生产阈值或策略准入权。
 - **验收**：新会话可调用 ashare-innovation-radar 从最新 master 恢复现有基线并产出候选卡；外部宣传与已核事实分开，外部内容按不可信数据处理；SHORTLISTED/LAB 有 falsifier、基线、成本/隐私/许可/恢复以及 `last_reviewed/review_due/experiment_budget/stop_rule`；真实实验归已有 stage；重大采用触发 plan-registry §1.1；雷达同时支持问题驱动、前沿驱动、反证驱动并把 missed-signal 反馈回查询/来源；雷达自身有有用候选率、漏发现、噪声和成本复评，不能只积压 WATCH。
 - **证据**：2026-09-19 首轮外部核查已覆盖 TypeSafe/Jev、Microsoft RD-Agent/Qlib、OpenHands、MCP Registry/A2A、QuantConnect LEAN/vectorbt、TSFM/金融 Agent benchmark 等方向；结论按候选/参考/观察分级，没有把外部项目自报收益写成本项目效果。PR #42 已把 v9.5 continuous-evolution 蓝图、ashare-innovation-radar Skill、反固化/不可信外部内容/证据过期与停止规则、传播守卫合入 `master`（merge `d51f3209`）；准确 head `b3b239ef` 的 backend/frontend/docs CI #381 与 release_check 全绿。 2026-09-19 已启用每周一次、仅高价值变化才通知的 ChatGPT 条件雷达作为低频真实试运行；它只做外部发现/反证提醒，不安装、不付费、不扩大权限、不创建施工或自动采用。
@@ -76,10 +76,10 @@
 - **依赖**：无
 - **效果前置**：无
 - **方案依据**：U46；用户要求已完成/过时方案在精华提炼后退出，本项目临时克隆、缓存、测试目录和完成轮次大产物不得长期占空间。
-- **范围**：统一治理五类资产：① EPHEMERAL 当轮临时克隆/worktree/pytest basetemp/一次性探针；② REGENERABLE_CACHE 如构建缓存与解释器缓存；③ COMPACT_EVIDENCE 日志/XML/JSON/manifest/delivery 等可长期追溯的小证据；④ RECOVERY 仅在相关变更未稳定前保留的恢复副本；⑤ LIVE_OR_EXTERNAL 业务数据、用户/跨项目仓库、运行中/脏工作树、插件管理器拥有或所有权不明资产。文档退休仍按 kb/07：精华和未做项已迁、活引用清零、无活动依赖、Git/PR 可恢复、删除后文档门禁通过。
-- **验收**：独立 `scripts/workspace-hygiene.py` 已落地并接入 CI/交接，扫描项目树及根/子项目 `.gitignore`；应用专属目录/隐藏规则判红，依赖环境剪枝，配正反测试。每轮 handoff 仍先把完整测试目录压缩成“紧凑证据 + 必要恢复入口”再清理可再生目录；未知/跨项目/运行中/脏工作树/业务数据默认 fail-safe 保留。tracked/独有内容走 safe-trash；白名单可再生项可直接清理。
-- **证据**：2026-09-20 网页侧只读盘点发现主仓约 10GiB，其中 artifacts/runs 约 3.2GiB；现役跟踪文档没有指向嵌套 pytest 沙箱，顶层任务目录另有日志/XML/JSON/manifest/delivery 等紧凑证据。确认主仓无活动进程后，同轮实际清理 62 个 artifacts/runs/*/pytest* 沙箱约 3.119GiB、可再生 apps/web/.next 约 1.1GiB，以及不进入 node_modules/backend venv 的项目解释器/测试小缓存约 13MiB；artifacts/runs 降至约 56MiB，主仓约 10GiB→5.8GiB。/private/tmp 中确认无活动进程引用的旧 v9.4/v9.5 验证克隆与项目专属 pytest/Jev 临时目录另清理约 1.47GiB。约 818MiB node_modules、约 691MiB 后端 venv 属昂贵依赖环境而保留；8 个既有未跟踪运行/复盘证据、跨项目仓库、活动开发仓、业务 data/parquet、平台退出恢复包、插件管理器目录均未动。
-- **下一步**：持续治理：每轮交接运行 workspace-hygiene、按五类资产收口保留期；若命中应用专属目录/隐藏规则或新的大型临时资产，当轮修复。它保持 GX 伴随角色，不改变 G0 主任务门序。
+- **范围**：统一治理五类资产：① EPHEMERAL 当轮临时克隆/worktree/pytest basetemp/一次性探针；② REGENERABLE_CACHE 如构建缓存与解释器缓存；③ COMPACT_EVIDENCE 日志/XML/JSON/manifest/delivery 等可长期追溯的小证据；④ RECOVERY 仅在相关变更未稳定前保留的恢复副本；⑤ LIVE_OR_EXTERNAL 业务数据、用户/跨项目仓库、运行中/脏工作树、插件管理器拥有或所有权不明资产。文档退休仍按 kb/07：精华和未做项已迁、活引用清零、无活动依赖、Git/PR 可恢复、删除后文档门禁通过。 文档物理落位同时纳入治理：`docs/` 根只保留 INDEX/handoff/总账/实施计划/计划注册/协作协议 6 个控制面；现役正文进入已登记领域目录，时点/搁置件进入 archive，禁止“已登记但仍平铺根目录”。
+- **验收**：独立 `scripts/workspace-hygiene.py` 已落地并接入 CI/交接，扫描项目树及根/子项目 `.gitignore`；应用专属目录/隐藏规则判红，依赖环境剪枝，配正反测试。每轮 handoff 仍先把完整测试目录压缩成“紧凑证据 + 必要恢复入口”再清理可再生目录；未知/跨项目/运行中/脏工作树/业务数据默认 fail-safe 保留。tracked/独有内容走 safe-trash；白名单可再生项可直接清理。 `doc-health` O2 另校验 docs 根目录白名单和顶层分类白名单，配“合法分类 / 根目录越界 / 未知目录”三类自证测试；INDEX 编目闭包仍由 O 项独立校验。
+- **证据**：2026-09-20 网页侧只读盘点发现主仓约 10GiB，其中 artifacts/runs 约 3.2GiB；现役跟踪文档没有指向嵌套 pytest 沙箱，顶层任务目录另有日志/XML/JSON/manifest/delivery 等紧凑证据。确认主仓无活动进程后，同轮实际清理 62 个 artifacts/runs/*/pytest* 沙箱约 3.119GiB、可再生 apps/web/.next 约 1.1GiB，以及不进入 node_modules/backend venv 的项目解释器/测试小缓存约 13MiB；artifacts/runs 降至约 56MiB，主仓约 10GiB→5.8GiB。/private/tmp 中确认无活动进程引用的旧 v9.4/v9.5 验证克隆与项目专属 pytest/Jev 临时目录另清理约 1.47GiB。约 818MiB node_modules、约 691MiB 后端 venv 属昂贵依赖环境而保留；8 个既有未跟踪运行/复盘证据、跨项目仓库、活动开发仓、业务 data/parquet、平台退出恢复包、插件管理器目录均未动。 同日文档结构治理将 docs 根 Markdown 从 36 份收口到 6 份控制面：26 份现役正文分别进入 system/data/product/strategy/ai/review/research，4 份时点/搁置件降入 archive；全仓显式旧路径清零，主仓相关回归 222 passed，嵌套 hithink-finance 文档契约 15 passed，并通过真实失败修正验证了嵌套项目不能按主仓字符串机械迁移。
+- **下一步**：持续治理：每轮交接运行 workspace-hygiene + doc-health；若命中应用专属目录/隐藏规则、大型临时资产、docs 根目录回堆或未知分类目录，当轮修复。它保持 GX 伴随角色，不改变 G0 主任务门序。
 - **恢复**：tracked 文档/规则从 Git/PR 恢复；恢复资产在相关变更合并并完成一次准确版本复核前不得清；本机业务数据与外部资产不进入自动删除面。门禁误报时先停自动清理，只保留 report/check 模式，不扩大删除白名单。
 - **分工**：网页负责保留/退出语义、账本与审计；执行侧维护/运行 hygiene gate 与清理证据；用户无需逐轮提醒“删缓存”，只有所有权/跨项目/唯一恢复证据不确定时才需要人工裁决。
 

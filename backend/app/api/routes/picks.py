@@ -433,7 +433,7 @@ async def picks_strategy_health() -> dict:
 async def picks_strategy_registry() -> dict:
     """策略登记册全量条目（含已否决者，便于追溯"有哪些策略、各自什么状态"）。
 
-    与 `docs/strategy-registry.md` §1 总表一致（由测试守卫）。
+    与 `docs/strategy/strategy-registry.md` §1 总表一致（由测试守卫）。
     """
     from app.picks.strategy_registry import list_strategy_keys
 

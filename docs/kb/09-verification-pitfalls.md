@@ -1978,7 +1978,7 @@ NULL 行拿到 `1.0`，`count(pr) = 4` 而 `count(x) = 3`）⇒ 过滤**从不�
   （Turbopack 构建可能拒绝跨根目录链接）⇒ **收尾一律用精确路径 `git add <file>...`，不要 `git add -A`**；
   或先 `git status --untracked-files=all` 逐条核对 `??` 项。
 - **影响面为什么这次很轻（但不能靠运气）**：本例丢失的**只是记账**（`AGENTS.md` 头行 + §1 门禁回填），
-  因为 `docs/data-source-comparison.md` 的 499 行压缩**在 `add` 之前**完成 ⇒ 已进提交，
+  因为 `docs/data/data-source-comparison.md` 的 499 行压缩**在 `add` 之前**完成 ⇒ 已进提交，
   故 `doc-health` 的 C 超层配额仍是绿的。**若丢失的恰是同一批次里的压缩或修复，
   表现会是「CI 红在一个你已经改过的项上」** —— 那时倒查成本高得多。
 

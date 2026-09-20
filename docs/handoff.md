@@ -46,7 +46,7 @@ Codex收到短提示后先从最新 `master` 重读 AGENTS、handoff、协作规
 PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2b89c0c`）。`codex/plan-led-backlog`、`codex/code-proposal-only`、`codex/research-admission-integrity`、`codex/shadow-review-required` 均由最终累计分支覆盖并在合并后删除；最终累计分支自身也已删除。任务 ID 冲突已按冻结规则收口：历史治理任务保留 GOV-019，Jev 治理使用 GOV-024，Jev IMP-045 / IMP-046 与 RSH-030 保留，累计分支原 provisional IMP 编号迁为 IMP-051 / IMP-052。
 旧 PR #4 / `develop` 已 closed/unmerged 并删除，不再作为待合并项；Dependabot PR #36 也已 closed/unmerged，其实际依赖安全修复由 PR #38 统一完成。当前工程接续不得从这些退役分支恢复“当前状态”。
 
-当前平台事实以 W00/GOV-012 为准：`master` branch protection、Secret Scanning、Push Protection、required public repo scan 已启用；依赖安全修复已由 PR #38 合并。Jev 现役设计与实证入口为 [jev-integration.md](jev-integration.md)，阶段状态只在对应 W04/W05/W08 任务页维护。
+当前平台事实以 W00/GOV-012 为准：`master` branch protection、Secret Scanning、Push Protection、required public repo scan 已启用；依赖安全修复已由 PR #38 合并。Jev 现役设计与实证入口为 [jev-integration.md](ai/jev-integration.md)，阶段状态只在对应 W04/W05/W08 任务页维护。
 
 本次合并后事实指针与账本关联收口由 PR #40 承载；不为记录 PR 自身再追加会改变被审版本的自指提交。
 
@@ -60,7 +60,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - 上述候选均为 G0 可行动阻断项；同门按门禁角色 → P0/P1/P2 → 门内序选择，已完成/退出/合并项不参与。
 - 只有 G0 可行动阻断项闭环/转为真实不可行动条件后，才计算 G1；不得因 RSH-031、新 UI、Agent 或性能任务“更有价值”直接跳门。
 - RSH-031 定位为 `G1/P1/非阻断/门内序70`：允许后续在 G0 闭环后进入历史研究资产建设；`效果前置=RSH-026, IMP-020, RSH-030` 未满足前不得宣称龙头战法有效或接生产权重。
-- GX 治理只可作为不冲突的伴随切片。2026-09-20 `GOV-018` 已闭环：`.workbuddy` / `.workbuddy-ai` 已物理删除，有价值内容进入项目中性 `skills/scripts/docs/artifacts`，第三方 UZI/Serenity 本体不再复制；PR #48 候选 `86cb841` 的 required CI run `35481601773` backend/frontend/docs 全绿。`GOV-026` 已落地 `scripts/workspace-hygiene.py` 并接 CI/交接，持续阻断应用专属目录与隐藏规则。以上**不改变 G0 主门或 BUG-028 首选**。
+- GX 治理只可作为不冲突的伴随切片。2026-09-20 `GOV-018` 已闭环：`.workbuddy` / `.workbuddy-ai` 已物理删除，有价值内容进入项目中性 `skills/scripts/docs/artifacts`，第三方 UZI/Serenity 本体不再复制；PR #48 已合入 `master`（merge `b6b5ba0`，最终 required CI run `35481812431` backend/frontend/docs 全绿）。`GOV-026` 已落地 `scripts/workspace-hygiene.py` 并接 CI/交接；本轮又把 docs 根从 36 份 Markdown 收口为 6 个控制面，领域正文进入 system/data/product/strategy/ai/review/research，`doc-health` O2 阻断根目录回堆与未知分类。以上**不改变 G0 主门或 BUG-028 首选**。
 
 当前已处于 `READY_FOR_NEXT_PLANNED_SLICE`：用户对 Codex 说“使用 ashare-ledger-continue，继续任务”即可按上述门序领取一个切片；没有网页登记的 `CROSS_GATE_EXCEPTION` 就不能跨门。
 
@@ -71,5 +71,5 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - Universal Verification 仍为 off/shadow；RSH-030 的 240 条固定队列已经 Jev 预标注，但 human gold 仍为 0/240。未完成人工独立标注前，不启用 cascade、不调生产阈值、不宣称准确率或额度节省。
 - 网页 ChatGPT / Codex 协作固定为“`master` 账本事实源 + 用户短提示”：网页负责规划/审核，Codex负责明确切片执行；Bridge、自动互调、自动审核回执均不是必需依赖。功能分支可以短暂存在，但不能成为长期固定入口。
 - v9.4 引入 Jev 长期系统分层与 `plan-registry.md` §1.1 重大决策传播契约；后续版本继续继承该规则。新模型/工具链/架构/协作决定若只更新专题蓝图而漏总方案、INDEX、stage 或接手入口，视为治理缺陷。
-- v9.5 把“当前方案不是永久终局”制度化：`continuous-evolution.md` + `ashare-innovation-radar` 主动发现外部新模型/工具/量化方法/数据与反证；只产生 WATCH/SHORTLISTED/LAB 建议，任何真实采用仍回原 stage、证据门、PR/审核/CI。
+- v9.5 把“当前方案不是永久终局”制度化：`ai/continuous-evolution.md` + `ashare-innovation-radar` 主动发现外部新模型/工具/量化方法/数据与反证；只产生 WATCH/SHORTLISTED/LAB 建议，任何真实采用仍回原 stage、证据门、PR/审核/CI。
 - v9.6 已新增 RSH-031：历史涨停/强连板/空间板/弱市穿越/题材梯队与异常板块拉升采用全量事件+失败对照+point-in-time+旧→新盲测；Jev 只做 bounded MapReduce/rerank/verification，效果准入继续由 RSH-026/IMP-020，猎场接线只走 IMP-049 challenger/shadow。

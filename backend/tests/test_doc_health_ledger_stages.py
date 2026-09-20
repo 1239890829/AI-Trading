@@ -119,7 +119,7 @@ def test_decision_propagation_detects_stale_current_pointer(tmp_path, monkeypatc
     (root / "skills" / "ashare-ledger-continue" / "SKILL.md").write_text(
         " ".join([
             "jev-integration.md", "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
-            "docs/implementation-plan.md", "docs/jev-integration.md", "docs/retro-and-gaps.md", "docs/stages/"
+            "docs/implementation-plan.md", "docs/ai/jev-integration.md", "docs/retro-and-gaps.md", "docs/stages/"
         ])
     )
     (root / "skills" / "ashare-task-handoff" / "SKILL.md").write_text("plan-registry.md\n")
@@ -148,7 +148,7 @@ def test_decision_propagation_auto_discovers_new_stale_current_summary(tmp_path,
     (root / "skills" / "ashare-ledger-continue" / "SKILL.md").write_text(
         " ".join([
             "jev-integration.md", "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
-            "docs/implementation-plan.md", "docs/jev-integration.md", "docs/retro-and-gaps.md", "docs/stages/"
+            "docs/implementation-plan.md", "docs/ai/jev-integration.md", "docs/retro-and-gaps.md", "docs/stages/"
         ])
     )
     (root / "skills" / "ashare-task-handoff" / "SKILL.md").write_text("plan-registry.md\n")
@@ -190,15 +190,15 @@ def test_open_evolution_guard_rejects_star_hard_gate(tmp_path, monkeypatch):
     (root / "skills" / "ashare-ledger-continue" / "SKILL.md").write_text(
         " ".join([
             "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
-            "docs/implementation-plan.md", "docs/continuous-evolution.md",
-            "docs/jev-integration.md", "docs/retro-and-gaps.md", "docs/stages/"
+            "docs/implementation-plan.md", "docs/ai/continuous-evolution.md",
+            "docs/ai/jev-integration.md", "docs/retro-and-gaps.md", "docs/stages/"
         ])
     )
     (root / "skills" / "ashare-task-handoff" / "SKILL.md").write_text("plan-registry.md\n")
     (root / "skills" / "ashare-innovation-radar" / "SKILL.md").write_text(
         " ".join([
-            "docs/continuous-evolution.md", "docs/plan-registry.md",
-            "docs/retro-and-gaps.md", "docs/stages/", "docs/jev-integration.md"
+            "docs/ai/continuous-evolution.md", "docs/plan-registry.md",
+            "docs/retro-and-gaps.md", "docs/stages/", "docs/ai/jev-integration.md"
         ])
     )
     monkeypatch.setattr(mod, "ROOT", root)
@@ -237,15 +237,15 @@ def test_open_evolution_guard_requires_governance_owner(tmp_path, monkeypatch):
     (root / "skills" / "ashare-ledger-continue" / "SKILL.md").write_text(
         " ".join([
             "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
-            "docs/implementation-plan.md", "docs/continuous-evolution.md",
-            "docs/jev-integration.md", "docs/retro-and-gaps.md", "docs/stages/"
+            "docs/implementation-plan.md", "docs/ai/continuous-evolution.md",
+            "docs/ai/jev-integration.md", "docs/retro-and-gaps.md", "docs/stages/"
         ])
     )
     (root / "skills" / "ashare-task-handoff" / "SKILL.md").write_text("plan-registry.md\n")
     (root / "skills" / "ashare-innovation-radar" / "SKILL.md").write_text(
         " ".join([
-            "docs/continuous-evolution.md", "docs/plan-registry.md",
-            "docs/retro-and-gaps.md", "docs/stages/", "docs/jev-integration.md"
+            "docs/ai/continuous-evolution.md", "docs/plan-registry.md",
+            "docs/retro-and-gaps.md", "docs/stages/", "docs/ai/jev-integration.md"
         ])
     )
     monkeypatch.setattr(mod, "ROOT", root)
@@ -263,8 +263,8 @@ def test_open_evolution_guard_requires_governance_owner(tmp_path, monkeypatch):
         ("skills/ashare-innovation-radar/SKILL.md", "问题驱动", "问题驱动扫描"),
         ("skills/ashare-innovation-radar/SKILL.md", "review_due", "候选复核到期"),
         ("skills/ashare-innovation-radar/SKILL.md", "stop_rule", "实验停止条件"),
-        ("docs/continuous-evolution.md", "外部内容信任边界", "外部内容信任边界"),
-        ("docs/continuous-evolution.md", "反证驱动（counter-evidence-driven）", "反证驱动发现"),
+        ("docs/ai/continuous-evolution.md", "外部内容信任边界", "外部内容信任边界"),
+        ("docs/ai/continuous-evolution.md", "反证驱动（counter-evidence-driven）", "反证驱动发现"),
     ],
 )
 def test_open_evolution_guard_catches_removed_core_invariant(monkeypatch, rel, needle, expected):

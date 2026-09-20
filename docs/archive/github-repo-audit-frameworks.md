@@ -58,7 +58,7 @@
 ### 3.2 真金：provider 能力注册表模式（证据 B）
 
 - 其 `ProviderInterface`：每个 provider 声明自己「能提供什么端点 + 需要什么凭据 + 数据的字段 schema」，运行时按能力查询路由请求。
-- 对本项目的映射：现有 4 个 provider（tencent/eastmoney/sina/ths）的可用能力散落在各 provider 方法里，没有「能力注册 + 按能力路由」的显式结构——这正是 `docs/data-source-comparison.md` 行动清单落地后会越来越痛的点（多源竞速 + 备源切换需要知道谁有什么）。
+- 对本项目的映射：现有 4 个 provider（tencent/eastmoney/sina/ths）的可用能力散落在各 provider 方法里，没有「能力注册 + 按能力路由」的显式结构——这正是 `docs/data/data-source-comparison.md` 行动清单落地后会越来越痛的点（多源竞速 + 备源切换需要知道谁有什么）。
 
 **判定：代码不引入；provider 能力注册表模式采纳为设计参考（低优先级，待 provider 健康可观测体系稳定后再评估）。**
 

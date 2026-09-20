@@ -1,6 +1,6 @@
 """扩展数据路由（star 仓库整合，2026-09-07）：akshare 可用性 + 涨跌停池交叉校验。
 
-交叉校验的价值（口径差异是已知特性而非 bug，见 docs/data-source-comparison.md）：
+交叉校验的价值（口径差异是已知特性而非 bug，见 docs/data/data-source-comparison.md）：
 - 涨停家数存在多口径（breadth 收盘价落限价口径 / ths 涨停池 / 东财 push2ex 池），
   差 2~4 家正常；akshare（东财 push2ex）作为**独立第二源**，与 composite 链
   （ths 主、东财备）互为校验，单源静默缺数据时差异立即可见。
@@ -76,7 +76,7 @@ async def akshare_pool_crosscheck(
                     "up_count": len(composite_up),
                     "down_count": len(composite_down),
                 },
-                "note": "akshare 侧不可用，本次仅 composite 单源；口径见 docs/data-source-comparison.md",
+                "note": "akshare 侧不可用，本次仅 composite 单源；口径见 docs/data/data-source-comparison.md",
             }
         }
 

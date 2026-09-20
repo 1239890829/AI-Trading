@@ -15,7 +15,7 @@
 ## 阈值来源与诚实边界
 
 阈值全部来自公开实战口径的**多源交叉**（雪球/淘股吧/东财/格隆汇，见
-`docs/theme-sentiment-methodology.md`）。必须说明三点：
+`docs/strategy/theme-sentiment-methodology.md`）。必须说明三点：
 
 1. **源间存在分歧**，已在该函数 docstring 中标注，取交集的保守值。
 2. **未经本项目历史数据回测校准**——当前全市场快照仅 2 天，样本不足以做统计验证。

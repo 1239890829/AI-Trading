@@ -80,7 +80,7 @@
 | **ths** | ✅ 已接入，16 只，45ms |
 | 东财 | ❌ **`EastmoneyProvider` 根本没有 `get_limit_break_pool` 方法** |
 
-`docs/data-sources.md` 记录了东财 `getTopicZBPool` "实测 2026-08-28：16 只"，
+`docs/data/data-sources.md` 记录了东财 `getTopicZBPool` "实测 2026-08-28：16 只"，
 但那次是手工 curl，**从未落地成 provider 方法**。炸板率属单点依赖 ths。
 
 ### 2.4 跌停池 —— ths 漏报，不能直接用
@@ -276,7 +276,7 @@ elif pct < -(limit + tol):                    限价口径存疑，单独计数�
 
 ## 6. 官方文档的一处更正：东财涨停池的日期字段
 
-`docs/data-sources.md` §3.1 写的是：
+`docs/data/data-sources.md` §3.1 写的是：
 > 响应字段仅 `c m n p zdp ...`，**没有日期字段，无法从响应侧判别**
 
 **这句话的结论对，但理由错了。** 实测响应信封里**有** `data.qdate`：
@@ -318,7 +318,7 @@ elif pct < -(limit + tol):                    限价口径存疑，单独计数�
   复核后确认：链序 `ths(抛错) → tencent(命中)`，东财排第 3 顺位且失败仅 0.10s，
   **既无每次开销也无慢速失败开销，不需要代码改动**（详见 §2.10）。
 - **A3** 修 `breadth.py` 的单边跌停判定 → 双边区间 + 存疑计数（§2.4）。
-- **A4** 更正 `docs/data-sources.md` §3.1 的 `qdate` 说明（§6）。
+- **A4** 更正 `docs/data/data-sources.md` §3.1 的 `qdate` 说明（§6）。
 
 ### B. 短期（补齐高价值缺口）
 

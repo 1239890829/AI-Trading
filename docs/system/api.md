@@ -44,7 +44,7 @@ curl -H "X-API-Token: $ASHARE_API_TOKEN" http://127.0.0.1:8000/api/market/overvi
   历史实现曾用 `NEXT_PUBLIC_API_TOKEN`，而 `NEXT_PUBLIC_*` 由 Next **构建期内联**为客户端
   bundle 里的字面量 ⇒ 任意访客查看源码即可取得唯一凭据。`?token=` 查询参数通道同样
   已刻意关闭（URL 会留在浏览器历史 / Referer / 反代访问日志）。
-  防回潮守卫：`apps/web/lib/env-secrecy.test.ts`；传递路径见 `docs/deployment.md`。
+  防回潮守卫：`apps/web/lib/env-secrecy.test.ts`；传递路径见 `docs/system/deployment.md`。
 - **WebSocket `/ws/quotes`**：浏览器 `WebSocket` 构造器**不允许设置自定义请求头**，
   故凭据走 **`Sec-WebSocket-Protocol` 子协议**：`ashare-token.<base64url(token)>`
   （base64url 去填充，因为子协议值必须是 HTTP token 字符集）。

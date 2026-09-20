@@ -1,9 +1,10 @@
 # 每日精选 · 跨日回放报告
 
+> **归档状态（2026-09-20）**：2026-08-31 一次性回放基线，保留作历史对照；不是当前完整六维策略效果口径。
 > **定位**：每日精选组合的跨日回放**基线快照**（60 个交易日）——验证稳定性约束（换股门槛 / 每日换股上限 / carryover）与梯队阶段系数的时变行为。
 > **生成**：2026-08-31 · 命令：`cd backend && .venv/bin/python scripts/replay_picks.py --days 60 --top 15`（快照，非每日更新）
 > **上游**：`app/picks/replay.py` + `scripts/replay_picks.py` ｜ **下游**：`AGENTS.md`（稳定性约束实证来源）、`docs/summary/stock-strategy.md`
-> **状态**：现役基线数据（2026-08-31 全项目评审指名保留）｜参数敏感性另见 `archive/picks-stability-sweep.md`
+> **状态**：历史基线快照（2026-08-31 全项目评审指名保留）｜参数敏感性另见 `archive/picks-stability-sweep.md`
 
 ## 速览（读结论不必看完全文）
 

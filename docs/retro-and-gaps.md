@@ -80,7 +80,7 @@ W00–W09 是**领域归属**，不能再拿编号大小直接当施工顺序；
 | W08 | P1；目录退出必做 | 阶段账本单点维护、重大决策传播、外部创新发现/准入治理、工作区卫生/证据保留期、持续节省 CI，并按 MIG-0～5 提炼退出平台目录。 | W00 范围；迁移/删除前恢复点 | [文档、Skills、门禁与目录退出](stages/w08-governance.md) |
 | W09 | 每批发布必需；效果验收 P1 | 分别验收工程、运行、研究和用户价值，保留恢复与发布证据。 | 对应切片完成；所需样本齐备 | [分层验收与运行复核](stages/w09-acceptance.md) |
 
-产品设计与细功能范围：[全产品闭环](product-closure-design.md)、[开放情境猎场](hunting-decision-design.md)、[历史涨停/龙头研究](limit-up-dragon-research.md)、[细功能覆盖](feature-closure-audit.md)。总账不复制它们的设计；当前任务仍由handoff唯一定位。新增BUG-028/029与IMP-049/050有独立依据，其他小功能问题并入原任务，不按每个按钮新增任务。
+产品设计与细功能范围：[全产品闭环](product/product-closure-design.md)、[开放情境猎场](product/hunting-decision-design.md)、[历史涨停/龙头研究](research/limit-up-dragon-research.md)、[细功能覆盖](product/feature-closure-audit.md)。总账不复制它们的设计；当前任务仍由handoff唯一定位。新增BUG-028/029与IMP-049/050有独立依据，其他小功能问题并入原任务，不按每个按钮新增任务。
 
 ## 日常使用
 

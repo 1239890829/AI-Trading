@@ -12,7 +12,7 @@
   `financials/cash-flow-statements`、估值 `valuations/snapshot`、搜索 `meta/tickers/search`
 - **已用但不在本 Provider**：全市场快照 `prices/snapshot` 由 `scripts/sync_marketdb.py`
   直连（绕过 Provider 链 ⇒ 不进熔断 / 请求预算 / health 视图，见 `IMP-037`）
-- 端点清单与接入评估见 `docs/data-sources.md` §8.3 / §8.6
+- 端点清单与接入评估见 `docs/data/data-sources.md` §8.3 / §8.6
 - 边界：不含 L2 十档/逐笔/分钟K（官方 capability-map 声明）
 
 ⚠️ 2026-09-16 `GOV-016`：本 docstring 此前把「跌停池、财务三表、估值、全市场导出」

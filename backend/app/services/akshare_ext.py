@@ -6,7 +6,7 @@ akshare 在本机网络的实测可用域（2026-09-07 电池测试）：
 - 稳定可用：push2ex 三池（涨停/炸板/跌停，~150-250ms）、datacenter-web（龙虎榜明细/
   宏观 CPI/两融账户统计/中美国债收益率）、sina（ETF/可转债日 K、**美股指数日线**、**外汇日线**）；
 - 本机被墙：push2/push2his 系（个股快照/日 K/板块）以及 **push2 域的 forex_hist_em**，
-  与本机既有结论一致（见 docs/data-source-comparison.md），这些面一律不接。
+  与本机既有结论一致（见 docs/data/data-source-comparison.md），这些面一律不接。
   ⇒ 离岸人民币改走**新浪外汇日线**（`usdcnh_daily`，本模块内唯一的非 akshare 源，
     与 `_calendar_rows` 同属「扩展面直连 HTTP」，共用缓存/三态/代理卫生基建）。
 

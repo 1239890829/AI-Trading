@@ -1,6 +1,8 @@
 # AShare AI Trader · 项目总整理（MASTER）
 
-> 生成于 2026-08-29。本文档是**全项目唯一总览**：事无巨细覆盖技术栈/架构/数据源/模块/API/前端/交易系统/质量/测试/配置/部署/安全/阶段状态/欠缺。细节文档在各节标注链接。
+> **归档状态（2026-09-20）**：本文是 2026-08-29 技术基线，仅用于历史追溯，不再承担当前总览。当前入口以 `docs/INDEX.md`、`docs/handoff.md`、`AGENTS.md` 与现役分类文档为准。
+
+> 生成于 2026-08-29。本文档是**当时的全项目总览**：事无巨细覆盖技术栈/架构/数据源/模块/API/前端/交易系统/质量/测试/配置/部署/安全/阶段状态/欠缺。细节文档在各节标注链接。
 > 当前快照：**后端 pytest 801 例全绿 + 前端 vitest 134 · 217 次提交 · 后端 5255 行 + 前端 2941 行（行数为 08-29 基线，代码此后大幅增长）**。
 
 ---
@@ -151,7 +153,7 @@ ashare-ai-trader/
 │   │   │   ├── methodology.py         # 元结论 + 历史效果统计（自我迭代）
 │   │   │   ├── storage.py             # 落库+落盘+检索+对比
 │   │   │   └── service.py             # 编排 + 调度器（含收盘后自动触发 + 预判验证钩子）
-│   │   ├── predict/                   # 新题材预判（周末/盘后，docs/theme-prediction.md）
+│   │   ├── predict/                   # 新题材预判（周末/盘后，docs/strategy/theme-prediction.md）
 │   │   │   ├── schemas.py             # 预判报告/证据/梯队/介入计划（fail_conditions 一等公民）
 │   │   │   ├── models.py              # 持久化两表（reports + themes 明细行）
 │   │   │   ├── collector.py           # 热榜+个股新闻+涨停史+龙虎榜+情绪交叉采集
@@ -199,7 +201,7 @@ ashare-ai-trader/
 | 4 | **sina** | 快照备源/五档/板块排行/资金流/全市场快照 | Referer | |
 | 尾 | **mock** | 确定性演示 | - | 只能单独用，永不混链 |
 - **逐方法 failover**：空结果/异常自动切下一源；切换写 `switch_log`；全链失败 → 全部标 `stale`、health=degraded
-- 详见 docs/data-sources.md（字段口径全部实测记录）
+- 详见 docs/data/data-sources.md（字段口径全部实测记录）
 
 ## 4.3 数据质量规则（data_quality/validator.py）
 - 结构非法 → **invalid**：代码非6位、价格≤0、负量/额、high<low、价出区间、时间戳在未来、盘口交叉/乱序
@@ -209,7 +211,7 @@ ashare-ai-trader/
 
 ---
 
-# 五、REST API 全表（82 端点，**完整清单与鉴权说明见 docs/api.md**，此处保留增量与要点）
+# 五、REST API 全表（82 端点，**完整清单与鉴权说明见 docs/system/api.md**，此处保留增量与要点）
 
 核心入口速查（🔒=B6 写鉴权）：
 | 方法 | 路径 | 说明 | 数据源 |
@@ -250,7 +252,7 @@ ashare-ai-trader/
 | GET | /api/predict/predictions[/{date}] · /stats | 预判检索与命中率分层 | SQLite |
 | WS | /ws/quotes | snapshot/quotes/stale/pong + subscribe | Hub |
 
-完整 63 端点逐条说明：**docs/api.md**（与代码同步维护）。
+完整 63 端点逐条说明：**docs/system/api.md**（与代码同步维护）。
 
 ---
 
@@ -367,9 +369,9 @@ ashare-ai-trader/
 1. ~~**交易前端打磨**：持仓成本线画上K线、成交记录列表页~~ ✅ 已完成（2026-08-29）
 2. ~~**重置账户入口**~~ ✅ 已完成（2026-08-29）
 3. ~~**概念题材 chips 过滤风格标签**（"大盘股/MSCI中国"混入"白酒"）~~ ✅ 已完成（2026-08-29）
-4. ~~**盘后复盘 Agent 模块**~~ ✅ 已完成（2026-08-29）：`app/review/`（自采/规则分析/模型路由降级/方法论版本化/元结论自我迭代/落库检索对比）+ 调度器（交易日 15:30 自动触发）+ 6 个 REST 端点。详见 docs/review-agent.md
+4. ~~**盘后复盘 Agent 模块**~~ ✅ 已完成（2026-08-29）：`app/review/`（自采/规则分析/模型路由降级/方法论版本化/元结论自我迭代/落库检索对比）+ 调度器（交易日 15:30 自动触发）+ 6 个 REST 端点。详见 docs/review/review-agent.md
 5. ~~**题材梯队模块重构**~~ ✅ 已完成（2026-08-29）：梯队联动归属 `assign_primary_themes`（连板密度多数票，唯一归属，8/28 实测拆散率 22%→0、创新药 3 板龙头回归本队）；强弱分级 `strength_tier`（领涨/强势/活跃/观察，溢价为负一票否决）；卡片重排（顶部分级+当日涨跌幅，底部梯队列表，重指标折叠）；滚动修复（页面根容器缺 h-full）；涨停池保留为证据下钻页。测试 204→216
-6. ~~**新题材预判模块**~~ ✅ 已完成（2026-08-30）：`app/predict/` 六维评分卡（热榜/消息级别/新闻联动/环境/新鲜度/资金，权重版本化）+ 梯队推演 + 介入计划（成功率校准区间）+ D1 四问自动验证（挂复盘 Agent）。周末房产政策实测：我爱我家 #5 热榜 → 龙头候选、0.635 可能成立。详见 docs/theme-prediction.md
+6. ~~**新题材预判模块**~~ ✅ 已完成（2026-08-30）：`app/predict/` 六维评分卡（热榜/消息级别/新闻联动/环境/新鲜度/资金，权重版本化）+ 梯队推演 + 介入计划（成功率校准区间）+ D1 四问自动验证（挂复盘 Agent）。周末房产政策实测：我爱我家 #5 热榜 → 龙头候选、0.635 可能成立。详见 docs/strategy/theme-prediction.md
 7. ~~**B1 统一错误契约 + B2 出参 schema 首批**~~ ✅ 已完成（2026-08-30）：`core/errors.py`（AppError/UpstreamError + 四层 handler，全部错误统一 `{detail, code}`）+ `schemas/envelope.py`（Envelope[T] 泛型信封），首批 9 端点挂 response_model（quotes/kline/order-book/trades/limit-up/limit-break/longhu/search，与既有模型 1:1 零丢字段）；themes/sentiment 等聚合形态第二批
 8. **新闻/公告 AI 摘要**（Phase 7 前哨）
 9. ~~**Phase 5 选股器 + 评分系统**~~ ✅ 已完成 v1（2026-08-30）：`app/market/tech_score.py`（六维评分卡：趋势0.25/MACD0.20/KDJ0.15/RSI0.10/量价0.15/流动性0.15，可解释依据+失效条件，SCORER_VERSION 版本化）+ `app/services/screener_service.py`（快照截面过滤→候选池 Top150→TDX 日K QFQ→评分，TTL 30min 缓存+single-flight）+ `/api/screener`（Envelope 严格建模）+ `/screener` 页（条件工具条+评分排行表+依据 chips，行点击跳个股）。**防飞刀三修正**（零轴下 MACD 不计 bull、空头排列超卖衰减×0.3、放量下杀≠温和放量——2 年回测 avg_dev 主因的针对性防御）。真实跑：5550→150→148 评分 0 失败 17.6s。测试 287→295

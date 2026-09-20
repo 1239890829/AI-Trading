@@ -69,7 +69,7 @@ agent_created: true
 本仓有明确纪律——**不为评估结论新建文档**。按四步走：
 
 1. **精华进已有分类文档**：结构性决策 → `docs/kb/04-decisions.md`（KB-DEC 追加，含
-   日期/决策/依据/代价/**重议条件**）；工程机理 → `docs/kb/03|09|10` 对应册；数据源对比 → `docs/data-source-comparison.md`
+   日期/决策/依据/代价/**重议条件**）；工程机理 → `docs/kb/03|09|10` 对应册；数据源对比 → `docs/data/data-source-comparison.md`
 2. **未做项/缓议项进** `docs/retro-and-gaps.md` §六（唯一待办账本）
 3. **登记索引**：`docs/kb/00-INDEX.md` 加一行摘要（含判据与状态列）
 4. **收尾跑** `python3 scripts/doc-health.py`（B 死链 / C-KB 条目 ≤60 行 / F3 指针错册）

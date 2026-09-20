@@ -1,4 +1,4 @@
-"""日线回测引擎 v1（Phase 6 后半）——docs/backtest-rules.md 强制禁令的代码级实现。
+"""日线回测引擎 v1（Phase 6 后半）——docs/strategy/backtest-rules.md 强制禁令的代码级实现。
 
 设计（对齐禁令逐条）：
 - §1 数据可用性：BarView 只暴露 `bars[:i+1]`；越界访问抛 FutureDataError（禁令 §4-1）。

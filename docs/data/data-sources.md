@@ -6,7 +6,7 @@
 > **导航**：§0 接入策略 → §1–§6 逐源能力与边界（腾讯 / 新浪 / 东财 / 同花顺 / Mock / 社区参考）→ §7 入库必带字段 → **§8 全量清单与使用度审计（2026-09-16）**。
 > ⚠️ **本节导航曾失真（2026-09-16 更正）**：原文写「§2 口径差异 → §3 降级与告警」，而正文 §2 = 新浪、§3 = 东方财富、§4 = 同花顺、§5 = Mock、§6 = 社区参考，**从未有过这两节** —— 属 `doc-health` 查不出的「章节指针失效」（与 `AGENTS.md` 红线 6 引 `architecture-design.md §0` 同族）。**引用章节前先确认锚点存在**。
 > 改数据源前**先读** `data-source-comparison.md`（实测对比），改完回填。
-> **同族文档（数据源族，2026-09-10 归口）**：选型依据 → `data-source-comparison.md`（四源实测对比）；专项评估 → `archive/orderbook-source-evaluation.md`（五档盘口，结论：ths 无五档）；**外部情报（⚠️ 零本机实测）** → `external-data-source-survey-2026-09-11.md`（付费源调研：四家均无 L2、两家与我们同源；未决建议见 `retro-and-gaps.md` §六 **P2-31**）。
+> **同族文档（数据源族，2026-09-10 归口）**：选型依据 → `data-source-comparison.md`（四源实测对比）；专项评估 → `archive/orderbook-source-evaluation.md`（五档盘口，结论：ths 无五档）；**外部情报（⚠️ 零本机实测）** → `../archive/external-data-source-survey-2026-09-11.md`（付费源调研：四家均无 L2、两家与我们同源；未决建议见 `retro-and-gaps.md` §六 **P2-31**）。
 
 ## 0. 接入策略（§2.2 主源→备源→降级）
 
@@ -85,7 +85,7 @@ GET ...date=20260827 → "tc":77, "qdate":20260828, 首条 002855 捷荣技术
 周六调用时两者都拿到周五数据；再用"昨日池"查"今日快照"（快照也是周五收盘）→
 涨停股查自己涨停那天的收盘价，**恒等于 +10%**，于是产出"昨涨停均值 10.38%、
 翻红率 100%、再涨停率 100%"的假指标，并把阶段误判为「高潮」且置信度"高"。
-详见 `docs/sentiment.md`「历史误判案例库」。
+详见 `docs/strategy/sentiment.md`「历史误判案例库」。
 
 **硬性要求（动这块之前必读）**：
 
@@ -158,7 +158,7 @@ provider 与 `main_board` 都经它。
 `d.10jqka.com.cn/v6/line/hs_600519/01/today.js`（JSONP）返回当日分时：开/高/低/现价/量/额/均价等。
 社区项目常用其分时与增量 K 线（`/v6/line/hs_600519/01/2026.js`）。
 ⚠️ **分时最终未采用本源**：当日分时由**腾讯**实现并在用（§1 `minute/query` → `/api/minute-line/{symbol}`）。
-本节保留为「可达但未接入」的记录，ths 未实现分时 Provider（接口契约见 docs/api.md）。
+本节保留为「可达但未接入」的记录，ths 未实现分时 Provider（接口契约见 docs/system/api.md）。
 
 ## 5. Mock（演示/测试专用）
 
@@ -191,7 +191,7 @@ provider 与 `main_board` 都经它。
   （**昨日涨停股今日表现**——正是本次手搓错的那一项）、`stock_zt_pool_zbgc_em`（炸板）。
   **待验证**：返回字段与东财 push2ex 是否同源。
 
-调研全文与阶段判据对照表见 `docs/sentiment.md`「历史误判案例库」。
+调研全文与阶段判据对照表见 `docs/strategy/sentiment.md`「历史误判案例库」。
 
 ## 7. 数据入库必带字段
 

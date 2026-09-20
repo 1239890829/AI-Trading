@@ -85,6 +85,20 @@ PLACEHOLDER_RE = re.compile(r"(YYYY|MM|DD|<|\{|\}|当天|xxx|X{3,})")
 ABSTRACT_MARKERS = ("速览", "摘要", "定位", "导览", "导航")
 # L4 时间序列目录（豁免摘要前置）
 L4_DIRS = ("daily-review", "evolution", "repo-watch", "push-templates")
+# docs/ 根只保留跨域控制面；领域正文必须进入已登记分类目录。
+DOCS_ROOT_CONTROL_FILES = frozenset({
+    "INDEX.md",
+    "handoff.md",
+    "retro-and-gaps.md",
+    "implementation-plan.md",
+    "plan-registry.md",
+    "collaboration-workflow.md",
+})
+DOCS_CLASSIFIED_DIRS = frozenset({
+    "ai", "archive", "daily-review", "data", "evolution", "kb", "product",
+    "push-templates", "repo-watch", "research", "review", "stages", "strategy",
+    "summary", "system",
+})
 # 层配额：框架/总纲文件名单 → 软上限 500；报告按命名 + 日期判定 → 600
 FRAMEWORK_FILES = ("theme-sentiment-methodology.md", "data-source-comparison.md",
                    "factor-lifecycle-governance.md", "factor-candidates.md",
@@ -114,6 +128,27 @@ def kb_file_coverage_gap() -> list[str]:
     covered = {p.name for p in kb_classified_files()}
     return [p.name for p in sorted((DOCS / "kb").glob("*.md"))
             if p.name not in covered and not p.name.startswith("00-")]
+
+
+def check_docs_taxonomy() -> tuple[list[str], list[str]]:
+    """文档物理分类守卫：返回 (根目录越界文档, 未登记顶层目录)。
+
+    INDEX 的编目闭包解决“有没有登记”；本检查解决“放得对不对”。
+    根目录只允许跨域控制面，领域正文必须进入固定分类目录。未知目录只在实际
+    含 Markdown 时判红，避免空目录或非文档资产制造噪声。
+    """
+    root_extras = sorted(
+        p.name for p in DOCS.glob("*.md")
+        if p.name not in DOCS_ROOT_CONTROL_FILES
+    )
+    unknown_dirs = sorted(
+        p.name + "/"
+        for p in DOCS.iterdir()
+        if p.is_dir()
+        and p.name not in DOCS_CLASSIFIED_DIRS
+        and any(p.rglob("*.md"))
+    )
+    return root_extras, unknown_dirs
 # 已判定的容忍项（显式登记，避免每跑一次就重新争论一次）
 TOLERATED = {
     "theme-sentiment-methodology.md":
@@ -251,7 +286,7 @@ LEGACY_DOC_SLUGS = {
     "factor-ic-review-20260908": "docs/summary/factor-system.md",
     "stock-picking-system-2026-09-02": "docs/summary/stock-strategy.md",
     "halt-check-risk-analysis": "docs/summary/stock-strategy.md",
-    "sentiment-phase-review": "docs/sentiment.md（历史误判案例库）",
+    "sentiment-phase-review": "docs/strategy/sentiment.md（历史误判案例库）",
     "nfp-ashare-validation": "docs/summary/data-market.md",
     "repo-deep-research": "docs/summary/data-market.md",
     "document-consolidation-plan": "docs/kb/07-doc-curation.md",
@@ -794,7 +829,7 @@ ANCHOR_RECORD_MARKERS = RECORD_MARKERS + (
     # （范本 `~~**Phase 5 选股器 + 评分系统**~~ ✅ 已完成（2026-08-30）：… `screener_service.py`…`）。
     # 这类行是 **changelog**：与 `ANCHOR_SKIP_FILES` 排除账本同属「对 changelog 做存在性
     # 对账属范畴错误」——写"那天建了 X"，X 后来被删，历史依然为真。
-    # ⚠️ **实测边界（2026-09-12）**：该标记**恰好且仅**移除 1 条命中（`docs/PROJECT-MASTER.md:371`
+    # ⚠️ **实测边界（2026-09-12）**：该标记**恰好且仅**移除 1 条命中（`docs/archive/PROJECT-MASTER.md:371`
     # 那条 08-30 路线，其中 `screener_service.py` 09-01 已彻底删除）；另测 `✅` 与 `已完成`
     # **无任何额外收益** ⇒ 按最小改动**只收 `~~`**。少收一个标记 = 少一处未来的假阴性。
     "~~")
@@ -1030,14 +1065,14 @@ def check_doc_anchors() -> tuple[list[tuple[str, int, str, str]], list[str]]:
 
     但 v3 找到一个**判据零歧义**的可判子集：**点名的代码路径是否还在**。
     实测 459 个行内锚点 / 3 处失败，扩到**围栏代码块里的目录树行**后共 **4 处真漂移**、
-    **0 误报**，且全部集中在权威架构文档 `docs/PROJECT-MASTER.md`：
+    **0 误报**，且当时全部集中在架构总览文档（现已归档）`docs/archive/PROJECT-MASTER.md`：
     `screener.py` / `screener_service.py`（09-01 选股器彻底删除）、`predict.py`（09-08 P0-4）、
     `minute_backtest.py`（09-08 P0-3 随唯一消费方删除）——**死于模块被删，树却没人改**。
 
     上线后修掉一处**自身缺陷**（占位名正则吞掉所有 `app/...` 锚点，见
     `ANCHOR_PLACEHOLDER_STEMS` 注释），行内覆盖**恢复真实**后又抓出 **3 处同类漂移**：
     `PROJECT-MASTER.md:371`（08-30 路线条目点名已删的 `screener_service.py`——属 changelog，
-    已由 `~~` 标记排除）、`docs/factor-lifecycle-governance.md:5`（把已迁出为纯文档的
+    已由 `~~` 标记排除）、`docs/strategy/factor-lifecycle-governance.md:5`（把已迁出为纯文档的
     `candidates.py` 仍列为代码资产）、同文件 `:175`（**把计划写成既成事实**：点名
     `app/factors/evaluate_event.py`，实测该文件**全仓零引用、从未存在**，且该待办
     **在账本里没有任何出口**——违反「待办必须有出口」[[KB-DEC-020]]，已在 §6.2 登记 P1-42）。
@@ -1053,7 +1088,7 @@ def check_doc_anchors() -> tuple[list[tuple[str, int, str, str]], list[str]]:
       （P1 行点名"计划中"的模块是合法写法），`docs/daily-review/` 是 L4 历史快照。
       对 changelog 做存在性对账属**范畴错误**（v1 的 47/66 条命中全部来自账本）。
       同名裸锚另有 F3/F4 覆盖。
-      **粒度修正（2026-09-12）**：该排除原先**按文件**实现，而 `docs/PROJECT-MASTER.md`
+      **粒度修正（2026-09-12）**：该排除原先**按文件**实现，而 `docs/archive/PROJECT-MASTER.md`
       是**混合体裁**文档——既有权威结构树（必须判），也有「近期路线」changelog 段
       （不该判）⇒ **文件级代理在它身上失效**，于是改为**行级**：含 `~~` 删除线的行
       视为 changelog 条目（适用边界见 `ANCHOR_RECORD_MARKERS` 的实测注释）。
@@ -1595,7 +1630,7 @@ def check_decision_propagation() -> list[str]:
         "docs/INDEX.md",
         "docs/plan-registry.md",
         "docs/implementation-plan.md",
-        "docs/jev-integration.md",
+        "docs/ai/jev-integration.md",
         "docs/retro-and-gaps.md",
         "docs/stages/",
     )
@@ -1638,11 +1673,11 @@ def check_decision_propagation() -> list[str]:
             errors.append("skills/ashare-innovation-radar/SKILL.md：创新雷达缺失/为空")
         else:
             for token in (
-                "docs/continuous-evolution.md",
+                "docs/ai/continuous-evolution.md",
                 "docs/plan-registry.md",
                 "docs/retro-and-gaps.md",
                 "docs/stages/",
-                "docs/jev-integration.md",
+                "docs/ai/jev-integration.md",
             ):
                 if token not in radar_text:
                     errors.append(f"skills/ashare-innovation-radar/SKILL.md：雷达读取链缺 {token}")
@@ -1660,7 +1695,7 @@ def check_decision_propagation() -> list[str]:
                 if token not in radar_text:
                     errors.append(f"skills/ashare-innovation-radar/SKILL.md：缺 {label}")
 
-        evolution_text = _read(DOCS / "continuous-evolution.md")
+        evolution_text = _read(DOCS / "ai" / "continuous-evolution.md")
         for token, label in (
             ("外部内容信任边界", "外部内容信任边界"),
             ("问题驱动（problem-driven）", "问题驱动发现"),
@@ -1671,7 +1706,7 @@ def check_decision_propagation() -> list[str]:
             ("stop_rule", "实验停止条件"),
         ):
             if token not in evolution_text:
-                errors.append(f"docs/continuous-evolution.md：缺 {label}")
+                errors.append(f"docs/ai/continuous-evolution.md：缺 {label}")
     return errors
 
 
@@ -2068,6 +2103,7 @@ def main() -> int:
     carriers = check_task_carrier_pointers()
     idx_over, idx_dead = check_memory_index()
     cat_unreg, cat_ghost = check_catalog_closure()
+    taxonomy_root, taxonomy_dirs = check_docs_taxonomy()
     phase_index_errors = check_phase_index()
     phase_task_errors = check_phase_tasks()
     stage_gate_errors = check_stage_gates()
@@ -2189,7 +2225,7 @@ def main() -> int:
         if len(carriers) > 12:
             print(f"       …另有 {len(carriers) - 12} 处")
     n_detail = (f"{len(idx_dead)} 处指针失效"
-                f"（B 只认 `docs/*.md`；本项扫项目短入口与文档索引的非 docs 路径）")
+                f"（B 扫 `docs/**/*.md`；本项扫项目短入口与文档索引的非 docs 路径）")
     if idx_over:
         n_detail += f"；⚠️ 体积超限 {len(idx_over)} 份"
     line("N 索引体积与指针", not idx_dead and not idx_over, n_detail)
@@ -2216,6 +2252,14 @@ def main() -> int:
     if cat_ghost and not quiet:
         for rel in cat_ghost[:12]:
             print(f"       - {rel}（编目表登记但全仓不存在）")
+    line("O2 文档分类结构", not taxonomy_root and not taxonomy_dirs,
+         f"根目录越界 {len(taxonomy_root)} 份 / 未登记分类目录 {len(taxonomy_dirs)} 个")
+    if taxonomy_root and not quiet:
+        for rel in taxonomy_root:
+            print(f"       docs/{rel}（领域文档必须移入分类目录）")
+    if taxonomy_dirs and not quiet:
+        for rel in taxonomy_dirs:
+            print(f"       docs/{rel}（顶层分类目录未登记）")
     line("P 阶段索引", not phase_index_errors, f"{len(phase_index_errors)} 处错误（总账 ⇄ 十阶段）")
     line("Q 任务完整性", not phase_task_errors, f"{len(phase_task_errors)} 处错误（唯一状态、依赖、证据及旧号去向）")
     line("R 重大决策传播", not propagation_errors, f"{len(propagation_errors)} 处错误（方案版本、Jev入口、Skill读取链）")

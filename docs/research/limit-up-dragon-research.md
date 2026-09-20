@@ -4,7 +4,7 @@
 >
 > **不是**：追涨停说明书、赢家故事库、固定龙头评分器、Jev 预测器，也不是第二套选股/策略登记册。
 >
-> **关联**：[猎场决策](hunting-decision-design.md)｜[题材与情绪方法论](theme-sentiment-methodology.md)｜[新题材预判](theme-prediction.md)｜[Jev 蓝图](jev-integration.md)｜[策略登记](strategy-registry.md)｜[因子治理](factor-lifecycle-governance.md)｜[W04 研究阶段](stages/w04-research.md)
+> **关联**：[猎场决策](../product/hunting-decision-design.md)｜[题材与情绪方法论](../strategy/theme-sentiment-methodology.md)｜[新题材预判](../strategy/theme-prediction.md)｜[Jev 蓝图](../ai/jev-integration.md)｜[策略登记](../strategy/strategy-registry.md)｜[因子治理](../strategy/factor-lifecycle-governance.md)｜[W04 研究阶段](../stages/w04-research.md)
 
 ## 1. 为什么值得单独研究
 
@@ -392,10 +392,10 @@ IMP-049 统一 Opportunity / scenario evidence
 ## 13. 与现有文档的边界
 
 - 本文拥有：**历史涨停/强连板/龙头研究的样本、问题、验证和 Jev 研究分工**。
-- `hunting-decision-design.md` 拥有：如何把已准入证据用于开放情境、机会状态与前台呈现。
-- `theme-sentiment-methodology.md` / `theme-prediction.md`：提供既有题材/梯队假设和历史规则基线；其中经验阈值不是本文结论。
-- `jev-integration.md`：拥有 Jev 全局调用规则、gold、预算与验证边界。
-- `factor-lifecycle-governance.md` / `strategy-registry.md`：拥有因子/完整策略生命周期。
+- `../product/hunting-decision-design.md` 拥有：如何把已准入证据用于开放情境、机会状态与前台呈现。
+- `../strategy/theme-sentiment-methodology.md` / `../strategy/theme-prediction.md`：提供既有题材/梯队假设和历史规则基线；其中经验阈值不是本文结论。
+- `../ai/jev-integration.md`：拥有 Jev 全局调用规则、gold、预算与验证边界。
+- `../strategy/factor-lifecycle-governance.md` / `../strategy/strategy-registry.md`：拥有因子/完整策略生命周期。
 - `stages/w04-research.md`：拥有 RSH-031 唯一状态、依赖、验收和执行证据。
 
 因此，新增这条研究链不是把所有旧知识复制一遍，而是把散落的题材、龙头、消息、技术、情绪、资金、弱市穿越和多波次知识放进一个可证伪的历史实验框架。
