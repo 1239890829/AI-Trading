@@ -89,7 +89,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **Degraded reason**：当前 Codex 额度不可用，正常双角色无法持续完成实施→独立审核→发布闭环；旧 exact-HEAD Review 门因此形成自锁。
 - **有效期**：持续到用户明确说 Codex 已恢复/退出降级；不是单 PR 临时口令。但每个 PR 的发布仍必须重新生成 exact-HEAD `DegradedRelease`，不能复用上一 PR 回执。
 - **不降低项**：G0–G5/GX 阶段门、U49 主动反证、branch protection、required CI、latest master、CHANGES_REQUESTED/thread、public-repo scan、workspace/doc-health、敏感信息/范围、post-merge CI、删除功能分支。
-- **当前动作**：U50 与 IMP-044 均已闭环；当前降级模式下只执行 G3/RSH-026 的本轮 outcome/denominator 纵切。每个 PR 仍需新的 exact-HEAD `DegradedRelease`。
+- **当前动作**：U50、IMP-044 与 RSH-026/PR #69 全漏斗 denominator 子片均已闭环；当前仍在 G3/RSH-026，只执行 D1/D3/D5 交易日 horizon 子片。每个 PR 仍需新的 exact-HEAD `DegradedRelease`。
 
 ## 8.2 U49 主动审计回执（RSH-026 Preflight）
 
@@ -99,9 +99,13 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **已证实 P1-1 选择性分母**：旧 `archive_records` 只为 `ranked/eligible/notified/suppressed` 建 outcome；rejected/unknown 只留 snapshot，导致 `label_coverage=1.0` 仍可能漏掉全漏斗失败样本。
 - **已证实 P1-2 过早可成交主张**：pending outcome 未评估前默认 `fill_state=ok`，会把“尚未判定”静默写成“可成交”。
 - **已证实 P1-3 跨版本不可自愈**：旧 snapshot 已存在但 outcome 缺失时，同 run 重放直接跳过，无法补齐历史分母。
+- **本轮新增 P1-4 交易日错位风险**：D1/D3/D5 若按自然日 `+1/+3/+5` 会跨周末/节假日错标；目标日必须来自 `trade_calendar`，日历未覆盖未来时 fail-closed，后续再补。
+- **本轮新增 P1-5 收益身份风险**：D1/D3/D5 虽满足 T+1 时间约束，但本表 reference_price 不是实际 shadow fill；跨日 `net_return_pct` 只能叫“成本调整 reference 代理”，`realizable_return=false`。
+- **本轮新增 P1-6 请求面风险**：为补全失败分母不能把 deferred/rejected 全量加入盘后实时 K 线请求；主链只用 `pending_outcome_targets(..., lookback_days=30)` 找 selected/actionable 的到期/逾期 horizon，并继续并入 D0 pending + watch ledger，失败分母留显式离线回填。
+- **本轮新增 P1-7 漏跑恢复风险**：只处理“今天到期”会让某日调度/数据源失败永久留下 pending。当前主链有界回看最近 30 个自然日内 selected future-horizon target，并为每个 symbol 只取一次日 K 后按目标交易日补标；超过窗口不自动扩大抓取面，保留 pending 供后续离线专项回补。
 - **高风险反例已裁定**：不能简单把所有 rejected/unknown 加进 `pending_symbols`，否则盘后 `review_intraday` 会把实时逐股外部 close 请求从 selected 集合扩大到全漏斗。当前方案用 `deferred/not_actionable` 分流，实时消费者维持原请求面，离线显式回填再补市场结果。
 - **当前限制**：远程 Mac 没有可核的长期生产运行库，本轮不能给出真实历史覆盖百分比；该缺口继续保留，不能用夹具数字代替。
-- **非目标**：本片不实现 D1/D3/D5、MFE/MAE/time_to_limit，不改策略阈值、生产权重、交易权限或真实交易。
+- **非目标**：本片实现 D1/D3/D5 交易日 close horizon 与 selected-only 有界逾期恢复，但不实现 MFE/MAE/time_to_limit/实际 shadow fill 收益，不做 deferred 全量实时回补，不改策略阈值、生产权重、交易权限或真实交易。
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
 
