@@ -174,7 +174,7 @@ Jev 的唯一现役项目蓝图是 `docs/ai/jev-integration.md`，状态归 W08/
 - 每次交付必须汇报：分支名称、主要改动、修改文件、测试结果、commit SHA、远程分支或 PR 链接，
   以及遗留问题或风险。
 - Codex 负责本地实现、验证、功能分支交付与获准后的合并；**每轮必须经过网页 ChatGPT 独立审核**。2026-09-18 用户最新分工取代旧无需网页审查条款。审核须绑定任务、计划、base/head和证据，来源可核；Codex/子代理不能自批。此分工不改变 §0 对应用内 LLM 的禁止落地边界。
-- **网页审核回执与 GitHub 原生 Review 是两层门禁，不得互相冒充。** 网页独立审核要求的是规划/审核角色与实施者分离、绑定准确 base/head/diff/证据；它不要求同一 GitHub 账号提交原生 `APPROVE`。若连接账号同时是 PR 作者，GitHub 会拒绝 self-approve，此时以准确 HEAD 的网页 `APPROVED / MERGE_IF_GATES_PASS` 回执 + `release_check.py` + required CI + 无 `CHANGES_REQUESTED`/未解决 thread 为发布门。不得新建小号、自批、伪造原生 APPROVED 或放宽 CI 来满足形式审批。
+- **网页审核回执与 GitHub 原生 Review 是两层门禁，不得互相冒充。** 网页独立审核要求的是规划/审核角色与实施者分离、绑定准确 base/head/diff/证据；它不要求同一 GitHub 账号提交原生 `APPROVE`。若连接账号同时是 PR 作者，GitHub 会拒绝 self-approve，此时以准确 HEAD 的网页 `APPROVED / MERGE_IF_GATES_PASS` 回执 + `release_check.py` + required CI + 无 `CHANGES_REQUESTED`/未解决 thread 为发布门。`release_check.py` 必须机械确认 PR Conversation 中存在绑定当前 PR/HEAD 的项目级 `Review` 回执；这只是**流程一致性校验**，不是密码学 reviewer 身份证明，同 GitHub 账号场景仍由网页会话独立审核事实承担角色分离。不得新建小号、自批、伪造原生 APPROVED 或放宽 CI 来满足形式审批。
 - 用户授予 Codex 长期授权：当以下条件全部满足时，Codex 可以直接合并
   功能分支的 Pull Request，无需再次征求用户确认：
   1. 当前批准切片已经完整实现，网页 ChatGPT 有效审核回执为 APPROVED 且明确允许 MERGE_IF_GATES_PASS；详见 docs/collaboration-workflow.md §5，不能仅凭文字“通过”或Codex自述；
@@ -182,7 +182,7 @@ Jev 的唯一现役项目蓝图是 `docs/ai/jev-integration.md`，状态归 W08/
   3. 对准确 PR HEAD 运行 `python3 scripts/audit/release_check.py <PR编号> --expected-head <完整SHA>`：
      最新 master 必须已集成，当前 CI 最新 attempt 的三 job 必须全部存在且 completed/success；
      其它 Actions/commit status 阻塞同样阻止合并。空结果、读取失败、旧 SHA、skipped/cancelled 均不得放行；
-     本地门禁和准确 diff 审阅另行完成；此脚本是客户端约束，不能替代 `GOV-012` 平台保护；
+     本地门禁和准确 diff 审阅另行完成；脚本还必须找到 exact-PR/exact-HEAD 的网页 `Review` 回执，否则 BLOCKED；此校验只证明流程记录存在，不证明评论作者的密码学独立身份。此脚本是客户端约束，不能替代 `GOV-012` 平台保护；
   4. 最新 `master` 已集成并重验；新提交、base 漂移或重跑 CI 使旧验收失效；
   5. Pull Request 中不存在未解决的 `Request changes` 或阻塞性审查意见；
   6. diff 中不存在敏感信息、无关文件或未经说明的破坏性修改。
