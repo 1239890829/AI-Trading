@@ -1,6 +1,6 @@
-# 当前交接：IMP-006 已合并，等待主干验证后切 IMP-044
+# 当前交接：G1 下一阻断项 IMP-044
 
-**当前模式：POST_MERGE_VERIFY。** G1/P0 阻断项 **IMP-006** 已完成独立网页审核并通过合并前 exact-head 门禁，PR #60 的 reviewed HEAD `87b099540a4b6c3d54c56a9d57293dc1963ee450` 已合入 `master`，merge commit `fa0185412db5c0d3f47445081da822f121cceff1`。网页审核回执在 PR comment `5749077515`，结论为 `APPROVED / MERGE_IF_GATES_PASS`；GitHub 原生 `APPROVE` 因连接身份同时是 PR 作者被平台拒绝，这一平台身份限制不再作为单账号仓库的必要发布门，仍必须依赖准确 HEAD 审核回执、`release_check.py`、required CI、无 `CHANGES_REQUESTED` 与无未解决阻断 thread。合并后 `master` CI run `35503775542` 已触发，当前 frontend/docs 已成功、backend 全量 pytest 仍在运行；在该 run 全绿前只做低风险账本/下一刀规划，不启动 IMP-044 业务实现。IMP-006 已把 reference、动作时 snapshot 与 paper fill 永久分名，非 `ready` fail-closed；未改变选股阈值、仓位参数、真实交易权限或策略收益口径。BUG-020 的真实交易时段生产会话仍为 G0 `待条件`；若它先转为可行动，G0 重新优先。
+**当前模式：READY_FOR_NEXT_PLANNED_SLICE。** G1/P0 **IMP-006** 已正式闭环：PR #60 的 reviewed HEAD `87b099540a4b6c3d54c56a9d57293dc1963ee450` 经独立网页审核回执（PR comment `5749077515`，`APPROVED / MERGE_IF_GATES_PASS`）、exact-head `release_check.py`、required CI run `35502888440` 三 job 全绿后合入 `master`，merge commit `fa0185412db5c0d3f47445081da822f121cceff1`；合并后 master CI run `35503775542` 的 backend/frontend/docs 亦全部成功。GitHub 原生 `APPROVE` 因连接身份同时为 PR 作者被平台拒绝；现已明确网页审核回执与 GitHub 原生 Review 分层，单账号场景不得把 self-approve 限制变成自锁，也不得通过小号、自批或放宽 CI 绕过门禁。IMP-006 只证明 reference / executable snapshot / paper fill 的工程事实契约闭环，不证明买点收益。BUG-020 的真实交易时段生产会话仍为 G0 `待条件`，因此当前最低可行动阻断门仍是 G1，下一主切片为 **IMP-044（Outbox、类型化回执与中断恢复）**；若 BUG-020 条件先转为可行动，G0 重新优先。
 
 
 ## 1. 固定入口与范围
@@ -56,18 +56,18 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 本节只记录当前现场，不维护第二份 backlog；权威算法在总账 §5.9，任务元数据在所属 stage。
 
 - **当前主门**：G1
-- **主切片首选**：IMP-044（仅在合并后 master CI 全绿后生效）
-- **当前收尾状态**：PR #60 已合并；正在等待 merge commit `fa018541` 的 master CI run `35503775542` 完成。验证前不启动下一业务实现。
-- **门内阻断顺序**：IMP-006 已合并待 master 验证 → IMP-044；验证全绿后 IMP-006 退出当前候选计算。
-- G0 的 BUG-028 / BUG-026 已完成；BUG-020 为 `待条件`。G1 的 BUG-029 已完成；IMP-006 已通过独立网页审核、合并前 CI/release gate 并进入 master，当前只剩 post-merge CI 复验。复验成功后按门序领取 IMP-044，不因 RSH-031、新 UI、Agent 或研究任务“更有价值”跳过。
+- **主切片首选**：IMP-044
+- **当前现场**：IMP-006 已合并且 post-merge master CI 全绿，已退出当前候选计算；允许按本节范围领取 IMP-044 一个切片。
+- **门内阻断顺序**：IMP-044；IMP-006 已完成。
+- G0 的 BUG-028 / BUG-026 已完成；BUG-020 为 `待条件`。G1 的 BUG-029 与 IMP-006 均已完成并退出候选计算；当前按门序领取 IMP-044，不因 RSH-031、新 UI、Agent 或研究任务“更有价值”跳过。
 - BUG-020 的 current-value 接纳门现区分 source event time / received time、缺失/拒绝/合法空集与身份歧义；旧可信值不会被晚到/非法观测覆盖。2026-09-20 周日已用本片代码显式加载主仓部署 `.env`，成功构建 `chain(ths→tencent→eastmoney→sina)` 并完成有界只读休市探针：最近交易日 2026-09-18、6/6 指数覆盖、拒绝数 0，600519 实际由腾讯返回且 source time 为 2026-09-18，Hub 明确标 `stale/market_closed`。尚未完成真实交易时段完整会话验收，故不得标已完成或宣称长期盘中 SLA。
 - BUG-029 现以 `ever_sealed/current_sealed/snapshot_state/version` 为唯一 current-state 契约；开板只恢复“进入评估”的资格，不自动获得成交/通知/模拟执行许可。2026-09-18 真实跨源样本已证明涨停池成员可多次开板/回封；旧 v1 归档保持原语义，v2 才使用新状态重放。
 - RSH-031 为 `G1/P1/非阻断/门内序70`，即使同处 G1 也排在阻断项之后；且 `效果前置=RSH-026, IMP-020, RSH-030` 未满足前不得宣称龙头战法有效或接生产权重。
 - U47 不制造跨门例外：IMP-006 已把 `reference_entry → executable_snapshot → PaperOrder fill` 三种价格身份和同一 decision/version 接到通知、模拟仓与页面；它的合并只证明工程事实契约收口，不证明买点效果。post-merge CI 通过后仍先做 G1/IMP-044，再进入 G2 的 IMP-049 → IMP-053；reference 与实际 shadow fill 永久分名、分母和收益口径。
 - U48 同样不制造跨门例外：W08/GOV-027 为 `GX/P1/持续治理/门内序47`，只可作为不冲突的伴随切片；它先复用 factor/strategy/KB/Jev/opportunity 各自 owner 的既有证据，定义最小生命周期/衰退/成本反馈契约，不建第二总注册表。项目级上层治理入口新增 `skills/living-system-governor/SKILL.md`，用于跨模块方案、重大重构和机制生命周期复核；该 Skill 只提供证据/反证/KEEP-FIX-MERGE-EXPERIMENT-WATCH-RETIRE 决策协议，不拥有派工、生产晋级或阶段门修改权。 v1.1.0 进一步明确 Skill 自我进化：后续长期要求/重复纠偏先作为方法论候选，只有形成稳定可复用增量才版本化蒸馏；一次性要求不污染 Core，是否落实以 Git/PR 与后续行为核验，不靠聊天窗口记忆。任何生产降权、阈值变化、策略/Jev 晋级仍回原 owner task 与证据门。
-- GX 治理只可作为不冲突的伴随切片。2026-09-20 `GOV-018` 已闭环：`.workbuddy` / `.workbuddy-ai` 已物理删除，有价值内容进入项目中性 `skills/scripts/docs/artifacts`，第三方 UZI/Serenity 本体不再复制；PR #48 已合入 `master`（merge `b6b5ba0`，最终 required CI run `35481812431` backend/frontend/docs 全绿）。`GOV-026` 已落地 `scripts/workspace-hygiene.py` 并接 CI/交接；本轮又把 docs 根从 36 份 Markdown 收口为 6 个控制面，领域正文进入 system/data/product/strategy/ai/review/research，`doc-health` O2 阻断根目录回堆与未知分类；最终一致性复核 PR #50 又把 09-17/09-18 四份复盘/进化时间序列补入主干，剩余 4 个 backend/data JSON 明确保留为本机运行证据。以上治理变更不改变阶段门算法；BUG-028 / BUG-026 已闭环，BUG-020 因生产盘中外部条件转 `待条件`，故 G0 当前无可行动阻断项，阶段门现计算到 G1；IMP-006 已合并并处于 post-merge CI 复验，成功后 G1 当前阻断位转到 IMP-044。
+- GX 治理只可作为不冲突的伴随切片。2026-09-20 `GOV-018` 已闭环：`.workbuddy` / `.workbuddy-ai` 已物理删除，有价值内容进入项目中性 `skills/scripts/docs/artifacts`，第三方 UZI/Serenity 本体不再复制；PR #48 已合入 `master`（merge `b6b5ba0`，最终 required CI run `35481812431` backend/frontend/docs 全绿）。`GOV-026` 已落地 `scripts/workspace-hygiene.py` 并接 CI/交接；本轮又把 docs 根从 36 份 Markdown 收口为 6 个控制面，领域正文进入 system/data/product/strategy/ai/review/research，`doc-health` O2 阻断根目录回堆与未知分类；最终一致性复核 PR #50 又把 09-17/09-18 四份复盘/进化时间序列补入主干，剩余 4 个 backend/data JSON 明确保留为本机运行证据。以上治理变更不改变阶段门算法；BUG-028 / BUG-026 已闭环，BUG-020 因生产盘中外部条件转 `待条件`，故 G0 当前无可行动阻断项，阶段门现计算到 G1；IMP-006 已完成，G1 当前阻断位已转到 IMP-044。
 
-当前处于 `POST_MERGE_VERIFY`：PR #60 已合并，先确认 master CI run `35503775542` 全绿；随后把 IMP-006 标 `已完成` 并切为 `READY_FOR_NEXT_PLANNED_SLICE`，下一主切片为 IMP-044。没有网页登记的 `CROSS_GATE_EXCEPTION` 就不能跨门。
+当前处于 `READY_FOR_NEXT_PLANNED_SLICE`：下一主切片为 IMP-044，仅做 W02 已界定的“类型化回执 + 买点 Outbox”最小纵切；不得顺手迁移全部事件来源。没有网页登记的 `CROSS_GATE_EXCEPTION` 就不能跨门。
 
 ## 8. Jev、工具链与协作流当前基线
 
