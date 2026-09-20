@@ -408,10 +408,12 @@ export function PickCard({
               <span
                 className="font-mono text-base font-semibold tabular-nums"
                 title={
-                  item.execution
+                  executionState === "ready"
                     ? "最新执行复核快照价（不是成交价）"
                     : item.origin === "picks"
-                      ? "组合生成时参考价（尚无盘中执行复核，不是成交价）"
+                      ? item.execution
+                        ? "执行快照非可用状态，主价格回退为组合生成/首见参考价（不是成交价）"
+                        : "组合生成/首见参考价（尚无盘中执行复核，不是成交价）"
                       : "现价（全市场快照）"
                 }
               >

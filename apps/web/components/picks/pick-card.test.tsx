@@ -170,6 +170,7 @@ describe("PickCard · 盘前名单（fromDailyPick）", () => {
     const normalized = fromDailyPick(stale);
     expect(normalized.price).toBe(40.36);
     render(<PickCard item={normalized} />);
+    expect(screen.getByTitle("执行快照非可用状态，主价格回退为组合生成/首见参考价（不是成交价）")).toBeTruthy();
     const chip = screen.getByText("执行快照·陈旧");
     expect(chip.getAttribute("title")).toContain("上游停更");
   });
