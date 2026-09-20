@@ -404,13 +404,15 @@ def test_decision_propagation_detects_stale_handoff_requirement_range(monkeypatc
     def patched_read(path):
         text = original_read(path)
         if path == target:
-            assert "U01–U48" in text
-            return text.replace("U01–U48", "U01–U47", 1)
+            # 以真实当前最大 U 编号为正样本，再只注入“一轮落后”的反例。
+            # 不把具体旧版本 U48 永久固化成正确值，否则下一次新增 U 会自锁。
+            assert "U01–U49" in text
+            return text.replace("U01–U49", "U01–U48", 1)
         return text
 
     monkeypatch.setattr(mod, "_read", patched_read)
     errors = mod.check_decision_propagation()
-    assert any("累计要求范围" in error and "U48" in error for error in errors)
+    assert any("累计要求范围 U01–U48" in error and "U49" in error for error in errors)
 
 
 def test_decision_propagation_rejects_ready_handoff_with_pending_merge_text(monkeypatch):
