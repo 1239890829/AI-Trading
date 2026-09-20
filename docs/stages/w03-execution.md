@@ -11,7 +11,7 @@
 
 **曾封板与当前开板的候选可达性一致**
 
-- **状态**：待执行
+- **状态**：已完成
 - **优先级**：P0
 - **阶段门**：G1
 - **门内序**：10
@@ -19,11 +19,14 @@
 - **依赖**：无
 - **效果前置**：无
 - **方案依据**：用户要求断板走趋势/再接力；KB-STOCK-21；v9.3机会状态契约。
-- **范围**：backend/app/picks/tradability.py、intraday_opportunity.py、pre_limit_radar.py、api/routes/picks_intraday.py及原测试；统一当时状态，不把全部涨停股变可成交。
-- **验收**：保留日内曾封板身份，同时按有效实时状态重评；真正开板可进入评估而非自动获准，仍封死/缺时点报价/权限不足拒绝或unknown；已开板→回封→再开板的版本和去重一致，主屏和参考区不自相矛盾。
-- **证据**：26a0c44的attach_tradability按当前报价给可参与，而linkage_candidates先以日内池成员拒绝；隔离用两段原函数，当前开放报价的原池成员候选0/参考1且reference_only=true。证明该输入下契约冲突，不声称全源实际池都滞留或已有真实损失。
-- **下一步**：先复现现有提供方含曾封板成员及滞后/乱序场景，明确当前sealed_at/asof/quality；修最小资格与呈现链，报价存在不保证成交。反例包含假开板/缺深度/迟到池更新。
-- **恢复**：保留观察记录和旧版本，未确认当前状态默认保守；只退本片适配，不放宽T+1、涨限或权限。
+- **范围**：backend/app/picks/tradability.py、intraday_opportunity.py、pre_limit_radar.py、api/routes/picks_intraday.py、services/picks_pipeline.py、opportunity_learning.py及实际前端/归档消费者；统一“曾封板身份”与“当前封板状态”，不把全部涨停股变可成交。
+- **验收**：保留日内曾封板身份，同时按有效实时状态重评；真正开板可进入评估而非自动获准，仍封死/缺时点报价/权限不足拒绝或 unknown；开板→回封→再开板的版本和去重一致，主屏/参考区/盘后组合/离线重放不自相矛盾。
+- **证据**：PR #55 / 代码提交 `be3ccd1`。修前 7 类定点反例真实判红：`linkage_candidates` 在读 current 快照前按涨停池成员永久拒绝；`sealed_no_entry → board_reopen` 因 registered filter 不可达；机会缓存不含快照版本/状态；主候选与 reference 可重复；无可信时点仍可形成冲突判断。修后统一 `ever_sealed + current_sealed + snapshot_state + version`：只有 `ready + as_of` 能证明曾封板股当前已开板；current 仍封拒绝，缺时点/陈旧为 unknown，权限/涨幅/成交额硬门保持；机会缓存键加入 snapshot state/version；`board_reopen` 按 `(trade_date,symbol)` 去重；完整涨停身份从未裁剪的 theme board ladder 提取，不从 UI 配额反推。
+- **真实源证据**：2026-09-18 东财涨停池 78 只中 49 只有 `break_count>0` / 开板再封证据。国芳集团 `601086`：`break_count=9`、首封 `09:53:17`、末封 `13:12:02`；腾讯 5 分钟线按前收 14.60、10% 涨停价 16.06 复核：09:55 到 16.06，10:00 低至 15.97/收 16.03（已开板），10:05–10:10 再到 16.06，午后亦出现低于封板价后再封。证明“在当日涨停池”只是 ever-sealed 身份，不能永久等同 current sealed。
+- **证据版本**：机会归档从 `stock-opportunity-funnel-v1 / pit-evidence-v1` 升到 `v2`；旧 v1 行 append-only 不改写，legacy `sealed_pool=True` 仍按旧语义 replay 为 rejected；v2 以 `ever_sealed/current_sealed/snapshot_state/version` 重放，开板、回封、unknown 均可复算。未改 `LINKAGE_MIN_PCT`、成交额、临板区或涨停阈值等策略数字。通用数据契约沉淀为 `KB-ENG-117`。
+- **验证**：相关后端套件与 `pyflakes app tests` 全绿；全后端 **4090 tests collected**、完整 pytest exit 0；前端全量 **693/693**、TypeScript、ESLint 全绿；干净 `npm ci` 后 Next.js 16.3.3 production build 通过；`PickCard` 最新文案定点 35/35 通过。
+- **下一步**：按阶段门重算，G1 下一可行动阻断项为 **IMP-006**，之后 IMP-044。BUG-020 仍为 G0 `待条件`；其交易会话条件一旦变为可行动，必须重新抢占 G1。
+- **恢复**：保留旧 v1 归档、ever-sealed 身份和 current-state 版本；若回退本片实现，不得恢复“涨停池成员=当前永久封板”“首封历史=全天不可买”或“开板=自动成交资格”。原始涨停池来源仍不直接授权，开板后必须重新通过 current 快照、权限、联动与流动性门。
 
 ## IMP-006
 

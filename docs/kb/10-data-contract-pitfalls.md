@@ -409,3 +409,31 @@ symbol×trade_date=1`，`repeated_labeled_rows=35`、`fillable=1`、`verdict=ins
 
 **判据**：任何缓存、事件流、行情/公告/指标修订链在写 `current` 前，都先问“这是**更新的事实**，还是只是**更新到达的包**？”；
 真实源辅证与生产链验收必须分开记账，免 Key 单源验证不能冒充部署实际 provider 链。
+
+### KB-ENG-117 集合身份不是当前状态：`ever_sealed` 与 `current_sealed` 必须版本化分离
+
+**真实缺陷（2026-09-20，BUG-029）**：同一系统里已经有两条相互冲突的真相：
+`attach_tradability()` 认为“涨停池 = 今日曾封板”，实时回落后可重新评估；
+`linkage_candidates()` 却在读取 current 快照之前先以“在涨停池”永久拒绝。结果是同一只股票可以
+在参考区显示“已开板、可参与”，却永远进不了候选；临板雷达里 `sealed_no_entry → board_reopen`
+也被 `registered_symbols` 提前过滤，代码分支存在但状态机不可达。
+
+**真实跨源证据**：2026-09-18 东财涨停池 78 只中 **49 只 `break_count>0`**。
+国芳集团 `601086`：`break_count=9`、首封 `09:53:17`、末次封板 `13:12:02`；腾讯 5 分钟线
+按前收 14.60 / 涨停价 16.06 复核：09:55 到 16.06，10:00 低至 15.97 / 收 16.03，
+10:05–10:10 再封，午后仍有低于封板价后再封的 bar。⇒ “属于当日涨停池”只能证明
+**ever-sealed 身份**，不能证明“当前仍封板”，更不能推出“全天没有参与窗口”。
+
+**可迁移判据**：
+1. 历史集合身份与 current 状态拆字段：`ever_sealed` / `current_sealed`，禁止一个布尔兼任两种语义；
+2. current 判定必须绑定 `snapshot_state + version/as_of`；曾封板股票只有 `ready + as_of` 才能证明已经开板；
+3. stale / degraded / 无时点报价 ⇒ `current_sealed=None` / unknown，保守是**不放行**，不是伪造“仍封板”；
+4. 开板只恢复“进入评估”的资格，仍须权限、联动、流动性和执行链复核；“当前未封板”不等于保证成交；
+5. 状态机每个合法转移必须可达并可去重：sealed → opened → resealed → reopened；去重键至少含交易日与标的；
+6. 缓存键必须含状态版本，否则 60 秒缓存会把旧 opened / sealed 事实延长到新快照；
+7. 主列表与参考区按身份去重：已开板并进入 participant 的股票不能同时保留 `reference_only` 重复展示；
+8. 证据归档升级版本而不覆写历史：v1 `sealed_pool=True` 保持旧 replay 语义，v2 才用
+   `ever_sealed/current_sealed/snapshot_state/version`，否则新规则会静默改写旧研究结论。
+
+**边界**：这不是放宽涨停股准入，也没有修改联动涨幅、成交额、临板区或涨停阈值。
+原始涨停池来源仍不能自动授权；开盘即封股票若后来真实开板，只能从 current-state 重评路径重新过门。
