@@ -102,7 +102,10 @@ async def quotes_ws(websocket: WebSocket):
             "seq": hub.next_seq(),
             "ts": _now_iso(),
             "data": [q.model_dump(mode="json") for q in hub.get_quotes(sorted(symbols) if symbols else None)],
-            "meta": {"index_batch": hub.index_batch() if hasattr(hub, "index_batch") else None},
+            "meta": {
+                "index_batch": hub.index_batch() if hasattr(hub, "index_batch") else None,
+                "source_rejections": hub.source_rejections() if hasattr(hub, "source_rejections") else None,
+            },
         }
 
     try:

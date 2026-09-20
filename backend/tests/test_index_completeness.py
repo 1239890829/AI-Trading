@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -105,6 +106,15 @@ def test_wrong_or_ambiguous_identity_cannot_fill_the_missing_index(hub, bad):
     assert "000001" not in hub.indices
     assert "999999" not in hub.indices
     assert overview(hub)["meta"]["index_batch"]["coverage"] == 5 / 6
+    expected_reason = {
+        "duplicate": "source_identity_duplicate_ignored",
+        "wrong_market": "source_identity_market_mismatch_ignored",
+        "unknown_symbol": "source_identity_unexpected_ignored",
+        "unknown_without_market": "source_identity_unexpected_ignored",
+    }[bad]
+    assert hub.source_rejections()["indices"] == {
+        "count": 1, "reasons": {expected_reason: 1},
+    }
 
 
 def test_first_gap_recovers_and_cached_gap_keeps_original_timestamp(hub):
@@ -140,6 +150,34 @@ def test_http_health_is_degraded_for_incomplete_batch_and_recovers(hub):
         hub.provider.rows = rows()
         refresh(hub)
         assert client.get("/api/health").json()["status"] == "ok"
+
+
+def test_rejected_index_is_visible_in_rest_health_and_ws_snapshot(hub):
+    refresh(hub)
+    bad = rows()
+    bad[0].data_timestamp = utcnow() + timedelta(hours=1)
+    hub.provider.rows = bad
+    refresh(hub)
+
+    expected = {
+        "quotes": {"count": 0, "reasons": {}},
+        "indices": {"count": 1, "reasons": {"source_invalid_ignored": 1}},
+    }
+    assert hub.source_rejections() == expected
+    assert overview(hub)["meta"]["source_rejections"] == expected
+
+    app = FastAPI()
+    app.state.hub = hub
+    app.include_router(liveness_router, prefix="/api")
+    app.include_router(ws_router)
+    app.dependency_overrides[get_hub] = lambda: hub
+    with TestClient(app) as client:
+        health = client.get("/api/health").json()
+        assert health["status"] == "degraded"
+        assert health["source_rejections"] == expected
+        with client.websocket_connect("/ws/quotes?symbols=sh000001") as ws:
+            frame = ws.receive_json()
+            assert frame["meta"]["source_rejections"] == expected
 
 
 @pytest.mark.parametrize("prefix", ["sh", "SH"])

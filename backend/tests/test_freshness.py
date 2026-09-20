@@ -56,14 +56,19 @@ def test_from_age_three_states():
     assert Freshness.from_age(as_of=now - timedelta(seconds=120), fresh_within=60).state == "stale"
 
 
-def test_future_timestamp_is_not_negative_age():
-    """时钟回拨/上游给未来时间 ⇒ 年龄必须夹到 0。
-
-    负数年龄会让所有 `age > 阈值` 比较**恒假**，静默变成"永远新鲜"——
-    正是本契约要消灭的那类失效。
-    """
+def test_future_timestamp_beyond_clock_skew_is_degraded_not_ready():
+    """上游时间明显跑到未来时，年龄可显示 0，但 freshness 不能冒充 ready。"""
     future = datetime.now(timezone.utc) + timedelta(hours=2)
     assert age_seconds_of(future) == 0.0
+    f = Freshness.from_age(as_of=future, fresh_within=60)
+    assert f.state == "degraded"
+    assert f.is_fresh() is False
+    assert "源时间" in (f.reason or "")
+
+
+def test_small_future_clock_skew_is_tolerated():
+    """分钟级源/宿主时钟微小偏差允许继续作为 fresh，避免正常 NTP 误差触发降级。"""
+    future = datetime.now(timezone.utc) + timedelta(minutes=2)
     assert Freshness.from_age(as_of=future, fresh_within=60).state == "ready"
 
 
@@ -90,6 +95,15 @@ def test_quote_freshness_uses_data_timestamp_first():
     assert q.freshness(fresh_within=60).state == "stale"
 
 
+def test_quote_missing_source_timestamp_uses_received_time_but_is_degraded():
+    q = Quote(symbol="600519", price=100.0, source="t", data_timestamp=None)
+    f = q.freshness(fresh_within=60)
+    assert f.state == "degraded"
+    assert f.as_of == q.received_at
+    assert f.is_fresh() is False
+    assert "data_timestamp" in (f.reason or "")
+
+
 def test_quote_invalid_quality_is_unavailable_even_if_just_received():
     q = Quote(symbol="600519", price=100.0, source="t", quality="invalid")
     assert q.freshness().state == "unavailable"
@@ -100,6 +114,17 @@ def test_quote_stale_quality_downgrades_ready():
     f = q.freshness(fresh_within=600)
     assert f.state == "stale"
     assert "自评质量 stale" in (f.reason or "")
+
+
+def test_quote_low_quality_is_degraded_even_when_timestamp_is_fresh():
+    q = Quote(
+        symbol="600519", price=100.0, source="t", quality="low",
+        quality_reasons=["time_regress"], data_timestamp=datetime.now(timezone.utc),
+    )
+    f = q.freshness(fresh_within=600)
+    assert f.state == "degraded"
+    assert f.is_fresh() is False
+    assert "low" in (f.reason or "")
 
 
 # ---------- 快照样板 ----------

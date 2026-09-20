@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import timedelta, timezone
 
+from app.core.freshness import MAX_FUTURE_SKEW_SECONDS
 from app.market import price_rules
 from app.schemas.market import OrderBook, Quote, Quality, utcnow
 
@@ -9,7 +10,7 @@ from app.schemas.market import OrderBook, Quote, Quality, utcnow
 # medium 预留给延迟数据源；stale 由 QuoteHub 在刷新失败/超时时统一标记。
 
 _INVALID_SYMBOL_DIGITS = 6
-_FUTURE_TOLERANCE = timedelta(minutes=5)
+_FUTURE_TOLERANCE = timedelta(seconds=MAX_FUTURE_SKEW_SECONDS)
 _PCT_MISMATCH_TOLERANCE = 1.0  # 涨跌幅与昨收反推值允许的百分点误差
 
 
@@ -64,6 +65,13 @@ def validate_quote(new: Quote, prev: Quote | None = None, *, live: bool | None =
         if new.data_timestamp > now + _FUTURE_TOLERANCE:
             _add(reasons, invalid, "timestamp_in_future", True)
 
+    if prev is not None and not invalid:
+        if prev.data_timestamp is not None and new.data_timestamp is not None:
+            prev_ts = prev.data_timestamp if prev.data_timestamp.tzinfo else prev.data_timestamp.replace(tzinfo=timezone.utc)
+            new_ts = new.data_timestamp if new.data_timestamp.tzinfo else new.data_timestamp.replace(tzinfo=timezone.utc)
+            if new_ts < prev_ts:  # 源时间倒退与交易时段无关；休市/盘前也不能让晚到旧包覆盖新值
+                _add(reasons, invalid, "time_regress", False)
+
     if live:
         if new.price is None:
             _add(reasons, invalid, "missing_price", False)
@@ -97,11 +105,6 @@ def validate_quote(new: Quote, prev: Quote | None = None, *, live: bool | None =
                 _add(reasons, invalid, "change_pct_mismatch", False)
 
         if prev is not None and not invalid:
-            if prev.data_timestamp is not None and new.data_timestamp is not None:
-                prev_ts = prev.data_timestamp if prev.data_timestamp.tzinfo else prev.data_timestamp.replace(tzinfo=timezone.utc)
-                new_ts = new.data_timestamp if new.data_timestamp.tzinfo else new.data_timestamp.replace(tzinfo=timezone.utc)
-                if new_ts < prev_ts:  # 严格早于才算倒退；同秒更新不判罚
-                    _add(reasons, invalid, "time_regress", False)
             if prev.price is not None and prev.price > 0 and new.price is not None:
                 drift = abs(new.price - prev.price) / prev.price
                 limit = board_limit_pct(new)

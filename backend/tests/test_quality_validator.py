@@ -153,6 +153,18 @@ def test_time_regress_is_low():
     assert "time_regress" in q.quality_reasons
 
 
+def test_time_regress_is_low_even_off_session():
+    """源时间倒退是结构性事实，不能因为休市就放行晚到旧包。"""
+    now = datetime.now(timezone.utc)
+    prev = make_quote(data_timestamp=now)
+    q = validate_quote(
+        make_quote(price=10.01, data_timestamp=now - timedelta(seconds=30)),
+        prev, live=False,
+    )
+    assert q.quality is Quality.low
+    assert q.quality_reasons == ["time_regress"]
+
+
 def test_invalid_symbol():
     q = validate_quote(make_quote(symbol="60051"))
     assert q.quality is Quality.invalid

@@ -97,21 +97,33 @@ class Quote(AuditFields):
             return Freshness.unavailable(
                 reason="数据源质量自评 invalid，报价不可用于结论", source=self.source
             )
+        source_time_missing = self.data_timestamp is None
         as_of = self.data_timestamp or self.received_at
         f = Freshness.from_age(
             as_of=as_of,
             fresh_within=fresh_within,
             source=self.source,
-            missing_reason=(
-                "报价无 data_timestamp 且无 received_at，无法判定新鲜度"
-                if self.received_at is None
-                else "无数据时间戳，按接收时间判定"
-            ),
+            missing_reason="报价无 data_timestamp 且无 received_at，无法判定新鲜度",
         )
-        if self.quality is Quality.stale and f.state == "ready":
+        if f.state in ("stale", "unavailable", "unknown"):
+            return f
+        if self.quality is Quality.stale:
             return Freshness.stale(
                 as_of=as_of, age_seconds=f.age_seconds, source=self.source,
-                reason="数据源自评质量 stale（年龄虽在窗口内）",
+                reason="数据源自评质量 stale（不因接收时间较新而升级）",
+            )
+        if f.state != "ready":
+            return f
+        if source_time_missing:
+            return Freshness.degraded(
+                as_of=as_of, age_seconds=f.age_seconds, source=self.source,
+                reason="报价缺 data_timestamp，仅按 received_at 判断年龄；源时间身份未知",
+            )
+        if self.quality in (Quality.low, Quality.medium):
+            reasons = ",".join(self.quality_reasons or []) or "未给出细分原因"
+            return Freshness.degraded(
+                as_of=as_of, age_seconds=f.age_seconds, source=self.source,
+                reason=f"数据源自评质量 {self.quality.value}（{reasons}）",
             )
         return f
 

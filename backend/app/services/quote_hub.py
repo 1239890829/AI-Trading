@@ -12,7 +12,7 @@ from app.core.freshness import Freshness
 from app.data_quality.validator import mark_stale, validate_quote
 from app.market import trade_calendar as tc
 from app.market.indices import INDEX_MARKETS, INDEX_SUBSCRIPTIONS
-from app.schemas.market import Quote, utcnow
+from app.schemas.market import Quality, Quote, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -77,6 +77,29 @@ async def _empty() -> list:
     return []
 
 
+def _rejected_source_observation(q: Quote, prev: Quote | None = None) -> str | None:
+    """返回“本条不能推进 current cache”的稳定原因；None 表示可接纳。
+
+    审计行/日志仍保留上游返回事实，但 current value 只允许由时间不倒退、结构不非法的
+    观测推进。`missing_price` 在 live 校验里虽只是 low，也不能用 None 覆盖已有正常价格。
+    """
+    reasons = set(q.quality_reasons or [])
+    if q.quality is Quality.invalid:
+        return "source_invalid_ignored"
+    if "time_regress" in reasons:
+        return "source_time_regress_ignored"
+    if prev is not None and prev.data_timestamp is not None and q.data_timestamp is None:
+        return "source_time_unknown_ignored"
+    if q.price is None or "missing_price" in reasons:
+        return "source_missing_price_ignored"
+    return None
+
+
+def _mark_retained_rejected(q: Quote, reason: str) -> None:
+    """保留最后可信值，但把“本轮没有可信刷新”作为 stale 暴露给消费者。"""
+    mark_stale(q, reason)
+
+
 class QuoteHub:
     """行情缓存与广播中心。
 
@@ -118,9 +141,11 @@ class QuoteHub:
         # 这两个字段是该轮的取证面（缺失清单 + 覆盖率），也是 freshness 降级的依据。
         self.last_missing_symbols: list[str] = []
         self.last_batch_coverage: float | None = None
+        self.last_quote_rejections: dict[str, str] = {}
         # 以共同请求目录为分母；首次缺席也计数，但不臆造报价。
         self.last_missing_indices: list[str] = []
         self.last_index_coverage: float | None = None
+        self.last_index_rejections: dict[str, str] = {}
         # 休市状态沿触发（红线 2：休市日数据不得冒充实时）
         self._closed_marked = False
 
@@ -156,26 +181,60 @@ class QuoteHub:
             else:
                 log.warning("quote refresh failed (%s): %s — keeping last good data", type(exc).__name__, exc)
             return
-        # 裸代码只有在市场也匹配且身份唯一时才能写入指数缓存。
+        # 裸代码只有在市场也匹配且身份唯一时才进入校验；校验通过“接纳门”后才推进 current cache。
+        # 上游晚到/非法观测不能覆盖最近可信值，否则 received-order 会反过来污染 source-time。
         counts = Counter((q.symbol, q.market) for q in new_indices)
-        new_indices = [q for q in new_indices
-                       if q.symbol in INDEX_MARKETS and INDEX_MARKETS[q.symbol] == q.market
-                       and counts[q.symbol, q.market] == 1]
-        self._mark_index_gaps(new_indices)
+        accepted_indices: list[Quote] = []
+        rejected_indices: dict[str, str] = {}
+        candidate_indices: list[Quote] = []
         for q in new_indices:
+            expected_market = INDEX_MARKETS.get(q.symbol)
+            if expected_market is None:
+                rejected_indices[f"{q.market or '?'}:{q.symbol}"] = "source_identity_unexpected_ignored"
+                continue
+            if q.market != expected_market:
+                rejected_indices[q.symbol] = "source_identity_market_mismatch_ignored"
+                continue
+            if counts[q.symbol, q.market] != 1:
+                rejected_indices[q.symbol] = "source_identity_duplicate_ignored"
+                continue
+            candidate_indices.append(q)
+        for q in candidate_indices:
             prev = self.indices.get(q.symbol)
             validate_quote(q, prev)
+            rejected = _rejected_source_observation(q, prev)
+            if rejected is not None:
+                rejected_indices[q.symbol] = rejected
+                continue
             self.indices[q.symbol] = q
-        by_symbol = {q.symbol: q for q in new_quotes}
+            accepted_indices.append(q)
+        self._mark_index_gaps(accepted_indices, rejected_indices)
+
+        quote_counts = Counter(q.symbol for q in new_quotes)
+        returned_by_symbol = {q.symbol: q for q in new_quotes}
+        accepted_by_symbol: dict[str, Quote] = {}
+        rejected_quotes: dict[str, str] = {
+            q.symbol: "source_identity_unrequested_ignored"
+            for q in new_quotes if q.symbol not in watchlist
+        }
         for symbol in watchlist:
-            if symbol in by_symbol:
-                q = by_symbol[symbol]
-                prev = self.quotes.get(symbol)
-                validate_quote(q, prev)
-                self.quotes[symbol] = q
-                if q.price is not None and q.data_timestamp is not None:
-                    self.quote_history.append((q.symbol, q.data_timestamp, q.price))
-        self._mark_batch_gaps(watchlist, by_symbol)
+            if quote_counts.get(symbol, 0) > 1:
+                rejected_quotes[symbol] = "source_identity_duplicate_ignored"
+                continue
+            q = returned_by_symbol.get(symbol)
+            if q is None:
+                continue
+            prev = self.quotes.get(symbol)
+            validate_quote(q, prev)
+            rejected = _rejected_source_observation(q, prev)
+            if rejected is not None:
+                rejected_quotes[symbol] = rejected
+                continue
+            self.quotes[symbol] = q
+            accepted_by_symbol[symbol] = q
+            if q.price is not None and q.data_timestamp is not None:
+                self.quote_history.append((q.symbol, q.data_timestamp, q.price))
+        self._mark_batch_gaps(watchlist, accepted_by_symbol, rejected_quotes)
         self.consecutive_failures = 0
         self.last_error = None
         self.last_success_refresh = utcnow()
@@ -228,12 +287,21 @@ class QuoteHub:
             # 且不广播（见 `refresh()` 的 `if not self._closed_marked`）。
             self._closed_marked = False
 
-    def _mark_index_gaps(self, returned: list[Quote]) -> None:
-        """核对完整请求集；缺席旧值保留原时间并标陈旧，首次缺席只记录缺失。"""
+    def _mark_index_gaps(
+        self, returned: list[Quote], rejected: dict[str, str] | None = None,
+    ) -> None:
+        """核对可接纳结果；拒绝观测也算本轮缺失，但保留旧值并标明拒绝原因。"""
+        rejected = rejected or {}
+        self.last_index_rejections = dict(sorted(rejected.items()))
         missing = sorted(INDEX_MARKETS.keys() - {q.symbol for q in returned})
         for symbol in missing:
-            if symbol in self.indices:
-                mark_stale(self.indices[symbol], "index_batch_missing")
+            cached = self.indices.get(symbol)
+            if cached is not None:
+                reason = rejected.get(symbol)
+                if reason:
+                    _mark_retained_rejected(cached, reason)
+                else:
+                    mark_stale(cached, "index_batch_missing")
         if missing != self.last_missing_indices:
             if missing:
                 log.warning("指数行情缺失（已有缓存标 stale，无缓存保持缺席）：%s", ", ".join(missing))
@@ -250,7 +318,28 @@ class QuoteHub:
             "missing_symbols": list(self.last_missing_indices),
         }
 
-    def _mark_batch_gaps(self, watchlist: list[str], by_symbol: dict[str, Quote]) -> None:
+    def source_rejections(self) -> dict:
+        """最近一个**已完成批次**中，源观测被接纳门拒绝的紧凑摘要。
+
+        不把完整股票清单塞进每个 API 信封；只暴露数量与稳定原因分布。指数的
+        缺失代码已有 `index_batch.missing_symbols`。Provider 整体请求失败时本摘要与
+        `index_batch` 一样保留上一已完成批次，另由 `last_error/freshness` 表达新失败。
+        """
+        def summary(rows: dict[str, str]) -> dict:
+            return {
+                "count": len(rows),
+                "reasons": dict(sorted(Counter(rows.values()).items())),
+            }
+
+        return {
+            "quotes": summary(self.last_quote_rejections),
+            "indices": summary(self.last_index_rejections),
+        }
+
+    def _mark_batch_gaps(
+        self, watchlist: list[str], by_symbol: dict[str, Quote],
+        rejected: dict[str, str] | None = None,
+    ) -> None:
         """批量**部分成功**时，未返回的标的必须降级——不能拿旧缓存冒充实时（红线 2）。
 
         缺陷（R18，2026-09-14）：原实现只对「返回了的符号」写缓存。缺失符号既没被
@@ -264,6 +353,8 @@ class QuoteHub:
         （调用方按 missing 处理，不臆造）。休市时 ``_refresh_closed_state`` 会用
         ``market_closed`` 覆盖（更贴近成因），故本方法必须先于它执行。
         """
+        rejected = rejected or {}
+        self.last_quote_rejections = dict(sorted(rejected.items()))
         missing = [s for s in watchlist if s not in by_symbol]
         coverage = (len(watchlist) - len(missing)) / len(watchlist) if watchlist else None
         prev_missing = self.last_missing_symbols
@@ -273,7 +364,11 @@ class QuoteHub:
         for symbol in missing:
             cached = self.quotes.get(symbol)
             if cached is not None:
-                mark_stale(cached, "batch_missing")
+                reason = rejected.get(symbol)
+                if reason:
+                    _mark_retained_rejected(cached, reason)
+                else:
+                    mark_stale(cached, "batch_missing")
 
         # 只在**缺失集变化**时留痕，避免 1Hz 轮询把日志刷成噪声
         if missing != prev_missing:
@@ -420,7 +515,8 @@ class QuoteHub:
             symbols = sub.symbols
             payload = self.get_quotes(sorted(symbols) if symbols is not None else None)
             index_subscribed = symbols is None or any(s.lower() in INDEX_SUBSCRIPTIONS for s in symbols)
-            if not payload and not (index_subscribed and self.last_missing_indices):
+            has_rejection = bool(self.last_quote_rejections or self.last_index_rejections)
+            if not payload and not (index_subscribed and self.last_missing_indices) and not has_rejection:
                 continue
             dropped = offer(
                 sub.queue,
@@ -429,7 +525,10 @@ class QuoteHub:
                     "seq": seq,
                     "ts": ts,
                     "data": [q.model_dump(mode="json") for q in payload],
-                    "meta": {"index_batch": self.index_batch()},
+                    "meta": {
+                        "index_batch": self.index_batch(),
+                        "source_rejections": self.source_rejections(),
+                    },
                 },
             )
             if dropped:

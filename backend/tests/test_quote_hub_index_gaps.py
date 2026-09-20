@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -84,6 +85,24 @@ def test_index_gap_recovers_when_provider_returns(hub):
     assert hub.last_missing_indices == ["000300", "000852", "399001", "399006"]
     assert hub.indices["000001"].quality == Quality.high
     assert hub.indices["000001"].price == 3001
+
+
+def test_late_index_observation_keeps_newer_value_and_marks_degraded(hub):
+    refresh(hub)
+    current = hub.indices["000001"].model_copy(deep=True)
+    late = quote("000001", 2999)
+    late.data_timestamp = current.data_timestamp - timedelta(seconds=5)
+    hub.provider.indices = [late, quote("000688", 1001)]
+
+    refresh(hub)
+
+    kept = hub.indices["000001"]
+    assert kept.price == current.price
+    assert kept.data_timestamp == current.data_timestamp
+    assert kept.quality == Quality.stale
+    assert kept.quality_reasons == ["source_time_regress_ignored"]
+    assert kept.freshness(fresh_within=600).state == "stale"
+    assert "000001" in hub.last_missing_indices
 
 
 def test_index_gap_logs_only_when_missing_set_changes(hub, caplog):

@@ -36,6 +36,9 @@ from pydantic import BaseModel
 #: 缺省新鲜窗口（秒）。调用方应优先传自己的轮询周期派生值，不要一律用这个。
 DEFAULT_FRESH_WITHIN_SECONDS = 60.0
 
+#: 上游源时间允许领先本机的最大时钟偏差。超过后不能把负年龄夹成 0 再冒充 ready。
+MAX_FUTURE_SKEW_SECONDS = 5 * 60.0
+
 #: **五态全集 —— 唯一来源**（2026-09-14 新增，`IMP-002`）。
 #:
 #: 为什么需要一个显式常量：状态集此前只存在于本模块的 docstring 表格里，
@@ -113,6 +116,13 @@ class Freshness(BaseModel):
         age = age_seconds_of(as_of)
         if age is None:
             return cls.unknown(reason=missing_reason, source=source)
+        ref = as_of if as_of.tzinfo is not None else as_of.replace(tzinfo=timezone.utc)
+        signed_age = (datetime.now(timezone.utc) - ref).total_seconds()
+        if signed_age < -MAX_FUTURE_SKEW_SECONDS:
+            return cls.degraded(
+                as_of=as_of, age_seconds=0.0, source=source,
+                reason="源时间超出允许的未来时钟偏差，时间身份不可信",
+            )
         if age > fresh_within:
             return cls.stale(
                 as_of=as_of, age_seconds=age, source=source,
