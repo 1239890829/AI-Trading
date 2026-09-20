@@ -62,12 +62,12 @@
 | **DR-02** | `repo-watch/` | L1 | 存档 | 仓库周期性跟踪周报 |
 | **DR-03** | `evolution/` | L1 | 存档 | 进化议程每日执行日志 |
 | **DR-04** | `push-templates/` | L2 | 模板 | 飞书推送卡片模板（v2 版式定稿） |
-| **AR-01** | `archive/` | L1 | 历史 | **只读**。结论已吸收进现役文档或代码，引用前先确认未过时 |
+| **AR-01** | `archive/` | L1 | 历史 | 保留期间**只读**；结论已吸收且无活引用/活动依赖、Git 可恢复时可按 kb/07 §6 整件退休，不把 archive 当永久仓库 |
 | **WB-01** | `artifacts/logs/` | L1 | 日志 | 新日志只存过程证据；旧平台日志待按迁移清单提炼，不再承担权威入口 |
 | **WB-02** | `artifacts/reports/` | L1 | 报告 | 本地报告；可复用结论提炼进现有 docs，私有快照不入 Git |
-| **WB-03** | `artifacts/` | L1 | 证据 | 调研快照、补丁、恢复副本均忽略；迁移清单见 AG-08 |
+| **WB-03** | `artifacts/` | L1 | 证据 | 调研快照、补丁、恢复副本均忽略；长期只留紧凑证据/必要恢复点，大型测试沙箱与过期恢复副本按 GOV-026 收口 |
 | **WB-04** | `skills/` | L3 | 技能 | 项目中性技能目录；账本接续、交接、盘后复盘与 `ashare-innovation-radar` 外部创新雷达入口；旧目录其它资产待逐项审阅 |
-| **WB-05** | `artifacts/trash/` | L1 | 回收站 | `scripts/safe-trash.sh`，逐条恢复记录与哈希；拒绝项目外路径和恢复覆盖 |
+| **WB-05** | `artifacts/trash/` | L1 | 回收站 | `scripts/safe-trash.sh`，逐条恢复记录与哈希；拒绝项目外路径和恢复覆盖；不是永久仓库，退出条件由 GOV-026 管理 |
 
 ### KB 知识库分表（`docs/kb/`，**全序列唯一登记处 = `00-INDEX.md`**）
 
@@ -299,5 +299,6 @@
 - 09-03 star 审计系列 ×6（github-repo-audit-*、github-llm-agent-audit、ths-repo-gap-analysis）→ 已被 `kb/05-repo-tracker.md` 台账取代
 - github-stars-trading-analysis.md（09-03 收敛表）→ 同上
 - realtime-broker-feasibility-2026-09-01.md → 已被 `live-trading-guosen-plan.md` 取代
-- architecture-linkage-plan / minute-chart-plan / assistant-optimization-plan / ui-redesign-plan → 计划已执行进代码
+- architecture-linkage-plan-2026-09-01.md → **已删除**（计划已执行/被现役产品与架构方案吸收；精确原文从 Git 恢复）
+- minute-chart-plan / assistant-optimization-plan / ui-redesign-plan → 计划已执行进代码，但仍有活引用，迁移引用后再按 kb/07 §6 退休
 - 更早：full-project-review / system-review / theme-audit（09-01 批次）
