@@ -15,12 +15,18 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from types import SimpleNamespace as NS
 
 import pytest
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
 
+from app.models.opportunity_learning import OpportunityDecisionSnapshot, OpportunityOutcomeLabel
+from app.models.watchlist import Base
 from app.picks import review_intraday as ri
+from app.picks.opportunity_learning import archive_records, build_notification_records
+from app.schemas.market import Kline
 
 
 # ---------------------------------------------------------------- 纯函数：分类
@@ -141,6 +147,16 @@ def test_should_run_review_persistent_dedup():
                                 brief_exists=True, already_reviewed=False) is False
 
 
+def test_d0_path_retry_slot_is_bounded_after_initial_review():
+    kw = {"run_hour": 15, "run_minute": 35}
+    assert ri.d0_path_retry_slot(datetime(2026, 9, 2, 15, 49), **kw) is None
+    assert ri.d0_path_retry_slot(datetime(2026, 9, 2, 15, 50), **kw) == 1
+    assert ri.d0_path_retry_slot(datetime(2026, 9, 2, 16, 4), **kw) == 1
+    assert ri.d0_path_retry_slot(datetime(2026, 9, 2, 16, 5), **kw) == 2
+    assert ri.d0_path_retry_slot(datetime(2026, 9, 2, 16, 35), **kw) == 4
+    assert ri.d0_path_retry_slot(datetime(2026, 9, 2, 16, 36), **kw) is None
+
+
 # ---------------------------------------------------------------- 单方向复盘
 
 
@@ -253,6 +269,100 @@ def _brief(date_str: str) -> dict:
         ],
         "alerts": [],
     }
+
+
+def test_collect_d0_path_outcomes_uses_tencent_only_and_selected_symbols(tmp_path):
+    import asyncio
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'path-collector.db'}")
+    Base.metadata.create_all(engine)
+    sf = sessionmaker(bind=engine)
+    items = [
+        {"symbol": "600001", "name": "甲", "confidence": {"tier": "executable"}},
+        {"symbol": "600002", "name": "乙", "confidence": {"tier": "observe"}},
+    ]
+    hit = {"item": items[0], "price": 10.0, "chg": 2.0}
+    run_id, rows = build_notification_records(
+        items, trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 30),
+        hits=[hit], skips=[{"symbol": "600002", "reason": "observe"}],
+        dispatch_by_symbol={},
+    )
+    archive_records(run_id, rows, sf)
+
+    class _Eastmoney:
+        name = "eastmoney"
+        calls = []
+
+        async def get_kline(self, symbol, timeframe, start=None, end=None):
+            self.calls.append((symbol, timeframe))
+            raise AssertionError("D0 path must never fall back to Eastmoney minute timestamps")
+
+    class _Tencent:
+        name = "tencent"
+        calls = []
+
+        async def get_kline(self, symbol, timeframe, start=None, end=None):
+            self.calls.append((symbol, timeframe))
+            return [
+                Kline(
+                    symbol=symbol, timeframe="1m",
+                    ts=datetime(2026, 9, 16, 2, 31, tzinfo=timezone.utc),
+                    open=10.0, close=10.1, high=10.3, low=9.9, volume=1000,
+                    source="tencent",
+                ),
+                Kline(
+                    symbol=symbol, timeframe="1m",
+                    ts=datetime(2026, 9, 16, 7, 0, tzinfo=timezone.utc),
+                    open=10.1, close=10.1, high=10.2, low=10.0, volume=1000,
+                    source="tencent",
+                ),
+            ]
+
+    east, tencent = _Eastmoney(), _Tencent()
+
+    class _Composite:
+        providers = [east, tencent]
+        up_calls = 0
+        break_calls = 0
+
+        async def get_limit_up_pool(self, trade_date):
+            self.up_calls += 1
+            assert trade_date == date(2026, 9, 16)
+            return []
+
+        async def get_limit_break_pool(self, trade_date):
+            self.break_calls += 1
+            assert trade_date == date(2026, 9, 16)
+            return [{"symbol": "600001", "first_seal_time": "10:45:00"}]
+
+    composite = _Composite()
+    state = NS(hub=NS(provider=composite))
+    result = asyncio.run(ri.collect_d0_path_outcomes(state, "2026-09-16", sf))
+
+    assert result["symbols"] == 1
+    assert result["labeled"] == 1 and result["skipped_deferred"] == 1
+    assert result["minute_source"] == "tencent"
+    assert tencent.calls == [("600001", "1m")]
+    assert east.calls == []
+    assert composite.up_calls == 1 and composite.break_calls == 1
+    assert result["limit_universe_complete"] is True
+    assert result["ever_limit_members"] == 1
+    with sf() as db:
+        selected = db.execute(
+            select(OpportunityOutcomeLabel)
+            .join(OpportunityDecisionSnapshot,
+                  OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
+            .where(OpportunityDecisionSnapshot.symbol == "600001")
+        ).scalar_one()
+        rejected = db.execute(
+            select(OpportunityOutcomeLabel)
+            .join(OpportunityDecisionSnapshot,
+                  OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
+            .where(OpportunityDecisionSnapshot.symbol == "600002")
+        ).scalar_one()
+    assert selected.path_state == "labeled" and selected.mfe_pct == 3.0 and selected.mae_pct == -1.0
+    assert selected.limit_state == "hit" and selected.time_to_limit_minutes == 15.0
+    assert rejected.path_state == "deferred" and rejected.mfe_pct is None
 
 
 def test_run_review_no_brief(brief_dir, monkeypatch):

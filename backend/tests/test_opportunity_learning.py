@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from sqlalchemy import create_engine, delete, select
 from sqlalchemy.orm import sessionmaker
 
 from app.models.opportunity_learning import OpportunityDecisionSnapshot, OpportunityOutcomeLabel
 from app.models.watchlist import Base
+from app.schemas.market import Kline
 from app.picks.opportunity_learning import (
     COST_MODEL_VERSION,
     FEATURE_VERSION,
@@ -19,6 +20,8 @@ from app.picks.opportunity_learning import (
     assess_fill_state,
     build_intraday_records,
     build_notification_records,
+    d0_path_metrics,
+    label_d0_paths,
     label_trade_date,
     due_outcome_symbols,
     ensure_outcome_horizons,
@@ -26,6 +29,7 @@ from app.picks.opportunity_learning import (
     learning_summary,
     opportunity_scorecard,
     outcome_target_dates,
+    pending_d0_path_symbols,
     pending_outcome_targets,
     pending_symbols,
     replay_run,
@@ -378,6 +382,265 @@ def test_d1_label_is_reference_proxy_not_shadow_fill_and_deferred_stays_nonactio
     card = opportunity_scorecard("2026-09-18", horizon="d1_close", session_factory=sf)
     assert card["metric_identity"]["realizable_return"] is False
     assert "cost_adjusted_reference_proxy_pct" in card["expectancy"]
+
+
+def _path_snapshot(*, as_of: datetime | None = None, entry_price: float | None = 10.0):
+    return OpportunityDecisionSnapshot(
+        snapshot_id="path-s1", run_id="path-r1", trade_date="2026-09-16",
+        as_of=as_of or datetime(2026, 9, 16, 10, 5, 30),
+        scenario="intraday_opportunity", stage="rank", symbol="600001", name="甲",
+        source_theme="算力", decision="ranked", rank=1,
+        strategy_version=STRATEGY_VERSION, feature_version=FEATURE_VERSION,
+        data_state="ready", entry_price=entry_price, evidence="{}",
+    )
+
+
+def _tencent_bar(hh: int, mm: int, *, high: float, low: float, source: str = "tencent"):
+    # Kline.ts is UTC aware.  10:xx Beijing = 02:xx UTC.
+    return Kline(
+        symbol="600001", timeframe="1m",
+        ts=datetime(2026, 9, 16, hh - 8, mm, tzinfo=timezone.utc),
+        open=10.0, close=10.0, high=high, low=low, volume=1000, source=source,
+    )
+
+
+def test_d0_path_excludes_predecision_and_decision_minute_and_computes_excursions():
+    snap = _path_snapshot()
+    bars = [
+        _tencent_bar(10, 4, high=99.0, low=1.0),   # before decision: must never leak
+        _tencent_bar(10, 5, high=50.0, low=2.0),   # decision minute: conservatively excluded
+        _tencent_bar(10, 6, high=11.0, low=9.5),
+        _tencent_bar(10, 7, high=10.8, low=9.8),
+        _tencent_bar(15, 0, high=10.2, low=10.0),
+    ]
+    got = d0_path_metrics(
+        snap, bars, limit_member=True, first_seal_time="10:20:00"
+    )
+    assert got["path_state"] == "labeled"
+    assert got["path_high_price"] == 11.0 and got["path_low_price"] == 9.5
+    assert got["mfe_pct"] == 10.0 and got["mae_pct"] == -5.0
+    assert got["path_bar_count"] == 3
+    assert got["limit_state"] == "hit" and got["first_limit_time"] == "10:20:00"
+    assert got["time_to_limit_minutes"] == 14.5
+
+
+def test_d0_path_never_turns_preexisting_limit_into_negative_time_to_limit():
+    got = d0_path_metrics(
+        _path_snapshot(), [
+            _tencent_bar(10, 6, high=10.2, low=9.9),
+            _tencent_bar(15, 0, high=10.1, low=10.0),
+        ],
+        limit_member=True, first_seal_time="09:55:00",
+    )
+    assert got["limit_state"] == "preexisting"
+    assert got["first_limit_time"] == "09:55:00"
+    assert got["time_to_limit_minutes"] is None
+
+
+def test_time_to_limit_excludes_lunch_break_from_actionable_lead_time():
+    got = d0_path_metrics(
+        _path_snapshot(as_of=datetime(2026, 9, 16, 11, 29)),
+        [_tencent_bar(15, 0, high=10.3, low=9.9)],
+        limit_member=True,
+        first_seal_time="13:01:00",
+    )
+    assert got["path_state"] == "labeled"
+    assert got["limit_state"] == "hit"
+    assert got["time_to_limit_minutes"] == 2.0
+
+
+def test_d0_path_waits_for_close_complete_minute_series():
+    snap = _path_snapshot()
+    partial = d0_path_metrics(
+        snap,
+        [
+            _tencent_bar(10, 6, high=11.0, low=9.5),
+            _tencent_bar(14, 59, high=10.8, low=9.8),
+        ],
+        limit_member=False,
+    )
+    assert partial["path_state"] == "pending"
+    assert partial["path_bar_count"] == 2
+    assert partial["mfe_pct"] is None and partial["mae_pct"] is None
+    assert "尚未覆盖收盘" in partial["path_reason"]
+
+    complete = d0_path_metrics(
+        snap,
+        [
+            _tencent_bar(10, 6, high=11.0, low=9.5),
+            _tencent_bar(15, 0, high=10.2, low=10.0),
+        ],
+        limit_member=False,
+    )
+    assert complete["path_state"] == "labeled"
+    assert complete["mfe_pct"] == 10.0 and complete["mae_pct"] == -5.0
+
+
+def test_d0_path_rejects_non_tencent_minute_timestamps_and_missing_reference():
+    wrong_source = d0_path_metrics(
+        _path_snapshot(), [_tencent_bar(10, 6, high=11.0, low=9.0, source="eastmoney")],
+        limit_member=False,
+    )
+    assert wrong_source["path_state"] == "pending"
+    assert wrong_source["path_bar_count"] == 0
+    assert wrong_source["limit_state"] == "not_hit"
+
+    no_ref = d0_path_metrics(
+        _path_snapshot(entry_price=None), [_tencent_bar(10, 6, high=11.0, low=9.0)],
+        limit_member=None,
+    )
+    assert no_ref["path_state"] == "unknown"
+    assert no_ref["mfe_pct"] is None and no_ref["mae_pct"] is None
+
+
+def test_current_version_terminal_unknown_does_not_retry_minute_fetch_forever(tmp_path):
+    sf = _factory(tmp_path)
+    item = {"symbol": "600009", "name": "缺价", "confidence": {"tier": "executable"}}
+    run_id, rows = build_notification_records(
+        [item], trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 30),
+        hits=[{"item": item, "price": None, "chg": 2.0}], skips=[], dispatch_by_symbol={},
+    )
+    archive_records(run_id, rows, sf)
+    assert pending_d0_path_symbols("2026-09-16", sf) == {"600009"}
+    result = label_d0_paths(
+        "2026-09-16", {"600009": [_tencent_bar(10, 31, high=10.2, low=9.8)]},
+        limit_pool_known=False, session_factory=sf,
+    )
+    assert result["unknown"] == 1
+    assert pending_d0_path_symbols("2026-09-16", sf) == set()
+
+
+def test_d0_path_realtime_labels_selected_only_and_scorecard_exposes_identity(tmp_path):
+    sf = _factory(tmp_path)
+    run_id, rows = build_intraday_records(
+        _payload(), trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5, 30)
+    )
+    archive_records(run_id, rows, sf)
+    assert pending_d0_path_symbols("2026-09-16", sf) == {"600001"}
+    assert pending_d0_path_symbols("2026-09-16", sf, include_deferred=True) == {"600001", "600002"}
+
+    bars = {
+        "600001": [
+            _tencent_bar(10, 5, high=99.0, low=1.0),
+            _tencent_bar(10, 6, high=10.8, low=9.7),
+            _tencent_bar(15, 0, high=10.2, low=10.0),
+        ],
+    }
+    result = label_d0_paths(
+        "2026-09-16", bars,
+        first_seal_by_symbol={"600001": "10:20:00"}, limit_pool_known=True,
+        session_factory=sf,
+    )
+    assert result["labeled"] == 1 and result["skipped_deferred"] == 5
+    label_trade_date("2026-09-16", {"600001": 10.5}, sf)
+
+    with sf() as db:
+        selected = db.execute(
+            select(OpportunityOutcomeLabel)
+            .join(OpportunityDecisionSnapshot,
+                  OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
+            .where(OpportunityDecisionSnapshot.stage == "rank",
+                   OpportunityDecisionSnapshot.symbol == "600001",
+                   OpportunityOutcomeLabel.horizon == OUTCOME_HORIZON)
+        ).scalar_one()
+        rejected = db.execute(
+            select(OpportunityOutcomeLabel)
+            .join(OpportunityDecisionSnapshot,
+                  OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
+            .where(OpportunityDecisionSnapshot.stage == "rank",
+                   OpportunityDecisionSnapshot.symbol == "600002",
+                   OpportunityOutcomeLabel.horizon == OUTCOME_HORIZON)
+        ).scalar_one()
+    assert selected.path_state == "labeled" and selected.mfe_pct == 8.0 and selected.mae_pct == -3.0
+    assert selected.limit_state == "hit" and selected.time_to_limit_minutes == 14.5
+    assert rejected.path_state == "deferred" and rejected.mfe_pct is None
+
+    summary = learning_summary("2026-09-16", sf)
+    assert summary["d0_path"]["selected_path_coverage"] == 1.0
+    card = opportunity_scorecard("2026-09-16", session_factory=sf)
+    path = card["path_metrics"]
+    assert path["evaluable"] == 1 and path["avg_mfe_pct"] == 8.0 and path["avg_mae_pct"] == -3.0
+    assert path["limit_hits_after_decision"] == 1 and path["post_decision_timed_hits"] == 1
+    assert path["ever_limit_hits"] == 1 and path["limit_membership_evaluable"] == 1
+    assert path["limit_states"] == {"hit": 1}
+    assert path["avg_time_to_limit_minutes"] == 14.5
+    assert path["available"] is True and "not shadow-fill" in path["identity"]
+    assert path["denominator"] == 1 and path["coverage"] == 1.0
+
+
+def test_path_scorecard_is_independent_of_close_label_availability(tmp_path):
+    sf = _factory(tmp_path)
+    run_id, rows = build_intraday_records(
+        _payload(), trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5, 30)
+    )
+    archive_records(run_id, rows, sf)
+    label_d0_paths(
+        "2026-09-16",
+        {"600001": [
+            _tencent_bar(10, 6, high=10.8, low=9.7),
+            _tencent_bar(15, 0, high=10.2, low=10.0),
+        ]},
+        first_seal_by_symbol={"600001": "10:20:00"},
+        limit_pool_known=True,
+        session_factory=sf,
+    )
+
+    card = opportunity_scorecard("2026-09-16", session_factory=sf)
+    assert card["labeled"] == 0, "close outcome intentionally remains pending"
+    path = card["path_metrics"]
+    assert path["denominator"] == 1
+    assert path["evaluable"] == 1 and path["coverage"] == 1.0
+    assert path["avg_mfe_pct"] == 8.0 and path["avg_mae_pct"] == -3.0
+
+    with sf() as db:
+        stored = db.execute(
+            select(OpportunityOutcomeLabel).where(
+                OpportunityOutcomeLabel.path_state == "labeled"
+            )
+        ).scalar_one()
+        stored.path_version = "legacy-path-v0"
+        db.commit()
+
+    old = opportunity_scorecard("2026-09-16", session_factory=sf)["path_metrics"]
+    assert old["denominator"] == 1 and old["evaluable"] == 0 and old["coverage"] == 0.0
+    summary = learning_summary("2026-09-16", sf)["d0_path"]
+    assert summary["labeled_selected_opportunities"] == 0
+    assert summary["versions"]["legacy-path-v0"] == 1
+
+
+def test_path_coverage_keeps_selected_snapshot_when_outcome_row_is_missing(tmp_path):
+    sf = _factory(tmp_path)
+    run_id, rows = build_intraday_records(
+        _payload(), trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5, 30)
+    )
+    archive_records(run_id, rows, sf)
+
+    with sf() as db:
+        selected = db.execute(
+            select(OpportunityDecisionSnapshot).where(
+                OpportunityDecisionSnapshot.symbol == "600001",
+                OpportunityDecisionSnapshot.stage == "rank",
+                OpportunityDecisionSnapshot.decision == "ranked",
+            )
+        ).scalars().first()
+        assert selected is not None
+        db.execute(
+            delete(OpportunityOutcomeLabel).where(
+                OpportunityOutcomeLabel.snapshot_id == selected.snapshot_id,
+                OpportunityOutcomeLabel.horizon == OUTCOME_HORIZON,
+            )
+        )
+        db.commit()
+
+    path = opportunity_scorecard("2026-09-16", session_factory=sf)["path_metrics"]
+    assert path["denominator"] == 1
+    assert path["outcome_attached"] == 0
+    assert path["evaluable"] == 0 and path["coverage"] == 0.0
+
+    summary = learning_summary("2026-09-16", sf)["d0_path"]
+    assert summary["selected_opportunities"] == 1
+    assert summary["labeled_selected_opportunities"] == 0
+    assert summary["selected_path_coverage"] == 0.0
 
 
 def test_missing_entry_price_becomes_unknown_not_zero_return(tmp_path):
@@ -784,6 +1047,8 @@ def test_scorecard_filters_horizon_and_versions_explicitly(tmp_path):
     assert current["audit"]["labeled_rows"] == 1
     d1 = opportunity_scorecard("2026-09-16", horizon="d1_close", session_factory=sf)
     assert d1["audit"]["labeled_rows"] == 1
+    assert d1["path_metrics"]["available"] is False
+    assert "cross-day MFE/MAE" in d1["path_metrics"]["identity"]
 
 
 def test_nan_close_never_becomes_a_labeled_sample(tmp_path):
