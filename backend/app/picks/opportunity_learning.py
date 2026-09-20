@@ -24,7 +24,7 @@ from collections import Counter
 from datetime import date, datetime, timedelta
 from typing import Any, Iterable
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 
 from app.core.bjtime import beijing_now, to_beijing_naive
 from app.core.db import get_session_factory, utcnow
@@ -507,27 +507,45 @@ def _new_horizon_outcome(
 
 
 def ensure_outcome_horizons(
-    trade_date: str, trading_days: list[date], session_factory=None,
+    trade_date: str, trading_days: list[date], session_factory=None, *,
+    include_deferred: bool = True,
 ) -> dict:
-    """Ensure D1/D3/D5 identities for one decision date without rewriting snapshots."""
+    """Ensure D1/D3/D5 identities without rewriting decision snapshots.
+
+    Production EOD uses ``include_deferred=False`` so rejected/unknown full-funnel
+    research rows cannot multiply the online database by three horizons per refresh.
+    Explicit offline research may still request the full funnel.
+    """
     targets = outcome_target_dates(trade_date, trading_days)
     future_targets = {h: d for h, d in targets.items() if h != OUTCOME_HORIZON}
     sf = session_factory or get_session_factory()
     inserted = 0
-    snapshots_count = 0
+    total_snapshots = 0
     with sf() as db:
-        snapshots = db.execute(
+        all_snapshots = db.execute(
             select(OpportunityDecisionSnapshot).where(
                 OpportunityDecisionSnapshot.trade_date == trade_date
             )
         ).scalars().all()
-        snapshots_count = len(snapshots)
+        total_snapshots = len(all_snapshots)
+        snapshots = (
+            all_snapshots if include_deferred
+            else [
+                snapshot for snapshot in all_snapshots
+                if _selected_outcome_snapshot(snapshot.stage, snapshot.decision)
+            ]
+        )
         if snapshots and future_targets:
-            snapshot_ids = [snapshot.snapshot_id for snapshot in snapshots]
+            # Never expand tens of thousands of snapshot IDs into one SQLite IN (...).
+            # Join through the decision date instead; this stays valid for large legacy days.
             existing = set(db.execute(
                 select(OpportunityOutcomeLabel.snapshot_id, OpportunityOutcomeLabel.horizon)
+                .join(
+                    OpportunityDecisionSnapshot,
+                    OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id,
+                )
                 .where(
-                    OpportunityOutcomeLabel.snapshot_id.in_(snapshot_ids),
+                    OpportunityDecisionSnapshot.trade_date == trade_date,
                     OpportunityOutcomeLabel.horizon.in_(tuple(future_targets)),
                 )
             ).all())
@@ -544,25 +562,125 @@ def ensure_outcome_horizons(
         "trade_date": trade_date,
         "targets": targets,
         "missing_horizons": sorted(set(FUTURE_OUTCOME_HORIZONS) - set(future_targets)),
-        "snapshots": snapshots_count,
+        "scope": "full_funnel" if include_deferred else "selected_only",
+        "source_snapshots": total_snapshots,
+        "snapshots": len(snapshots),
         "inserted": inserted,
     }
 
 
-def _new_outcome_label(snapshot_id: str, record: dict) -> OpportunityOutcomeLabel:
-    selected = _selected_outcome_snapshot(record["stage"], record["decision"])
+def _new_outcome_identity(
+    *, snapshot_id: str, trade_date: str, stage: str, decision: str,
+    reference_price: float | None,
+) -> OpportunityOutcomeLabel:
+    """Build one D0 outcome identity from immutable decision facts.
+
+    New online writes and legacy recovery must share this constructor; otherwise
+    historical rows can silently acquire different pending/deferred semantics.
+    """
+    selected = _selected_outcome_snapshot(stage, decision)
     return OpportunityOutcomeLabel(
-        snapshot_id=snapshot_id, horizon=OUTCOME_HORIZON,
-        target_date=record["trade_date"],
+        snapshot_id=snapshot_id, horizon=OUTCOME_HORIZON, target_date=trade_date,
         state="pending" if selected else "deferred", label="unknown",
-        reference_price=record.get("entry_price"),
+        reference_price=reference_price,
         fill_state="pending" if selected else "not_actionable",
         path_state="pending" if selected else "deferred", path_version=PATH_VERSION,
         reason=(
             "等待收盘价" if selected
-            else f"全漏斗分母已登记；{record['stage']}:{record['decision']} 非实时动作样本，等待离线结果回填"
+            else f"全漏斗分母已登记；{stage}:{decision} 非实时动作样本，等待离线结果回填"
         ),
     )
+
+
+def _new_outcome_label(snapshot_id: str, record: dict) -> OpportunityOutcomeLabel:
+    return _new_outcome_identity(
+        snapshot_id=snapshot_id, trade_date=record["trade_date"],
+        stage=record["stage"], decision=record["decision"],
+        reference_price=record.get("entry_price"),
+    )
+
+
+def backfill_missing_outcome_identities(
+    session_factory=None, *, trade_dates: Iterable[str] | None = None, batch_size: int = 2000,
+) -> dict[str, Any]:
+    """Recover missing legacy D0 identities without rewriting decision snapshots.
+
+    This is deliberately an explicit offline operation.  It only inserts rows whose
+    ``(snapshot_id, d0_close)`` identity is absent and repairs the pre-RSH-026 false
+    ``pending + fill_state=ok`` default.  Labeled outcomes are never rewritten.
+    """
+    if batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
+    sf = session_factory or get_session_factory()
+    dates = tuple(sorted({str(d) for d in (trade_dates or ()) if str(d)}))
+    inserted = selected_pending = deferred = repaired_pending_fill = 0
+    last_id = 0
+
+    while True:
+        with sf() as db:
+            missing = ~exists(
+                select(OpportunityOutcomeLabel.id).where(
+                    OpportunityOutcomeLabel.snapshot_id == OpportunityDecisionSnapshot.snapshot_id,
+                    OpportunityOutcomeLabel.horizon == OUTCOME_HORIZON,
+                )
+            )
+            stmt = (
+                select(OpportunityDecisionSnapshot)
+                .where(OpportunityDecisionSnapshot.id > last_id, missing)
+                .order_by(OpportunityDecisionSnapshot.id)
+                .limit(batch_size)
+            )
+            if dates:
+                stmt = stmt.where(OpportunityDecisionSnapshot.trade_date.in_(dates))
+            rows = db.execute(stmt).scalars().all()
+            if not rows:
+                break
+            for snapshot in rows:
+                selected = _selected_outcome_snapshot(snapshot.stage, snapshot.decision)
+                db.add(_new_outcome_identity(
+                    snapshot_id=snapshot.snapshot_id, trade_date=snapshot.trade_date,
+                    stage=snapshot.stage, decision=snapshot.decision,
+                    reference_price=snapshot.entry_price,
+                ))
+                inserted += 1
+                if selected:
+                    selected_pending += 1
+                else:
+                    deferred += 1
+            last_id = rows[-1].id
+            db.commit()
+
+    with sf() as db:
+        stmt = (
+            select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
+            .join(
+                OpportunityDecisionSnapshot,
+                OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id,
+            )
+            .where(
+                OpportunityOutcomeLabel.horizon == OUTCOME_HORIZON,
+                OpportunityOutcomeLabel.state == "pending",
+                OpportunityOutcomeLabel.labeled_at.is_(None),
+                OpportunityOutcomeLabel.fill_state == "ok",
+                OpportunityOutcomeLabel.reason == "等待收盘价",
+            )
+        )
+        if dates:
+            stmt = stmt.where(OpportunityDecisionSnapshot.trade_date.in_(dates))
+        for outcome, snapshot in db.execute(stmt).all():
+            if not _selected_outcome_snapshot(snapshot.stage, snapshot.decision):
+                continue
+            outcome.fill_state = "pending"
+            repaired_pending_fill += 1
+        db.commit()
+
+    return {
+        "inserted": inserted,
+        "selected_pending": selected_pending,
+        "deferred": deferred,
+        "repaired_pending_fill_state": repaired_pending_fill,
+        "trade_dates": list(dates),
+    }
 
 
 def archive_records(run_id: str, records: list[dict], session_factory=None) -> dict:
@@ -609,6 +727,7 @@ def archive_records(run_id: str, records: list[dict], session_factory=None) -> d
                     existing_outcome.state == "pending"
                     and existing_outcome.labeled_at is None
                     and existing_outcome.fill_state == "ok"
+                    and (existing_outcome.reason or "").strip() == "等待收盘价"
                 ):
                     # Legacy ORM default claimed fillability before assessment. Pending
                     # rows are mutable workflow state, so correct that false claim on
@@ -1175,28 +1294,56 @@ def pending_symbols(
 
 def label_trade_date(
     trade_date: str, close_by_symbol: dict[str, float], session_factory=None, *,
-    include_deferred: bool = False,
+    include_deferred: bool = False, batch_size: int | None = None,
 ) -> dict:
     """Attach D0 close labels; missing closes stay pending and can be retried.
 
     `return_pct` 是 D0 信号方向毛变化；历史列 `net_return_pct` 是同一 D0 窗口的
     成本调整代理，只在决策时点可成交（`fill_state == "ok"`）时给值。A 股 T+1 下
     两者都不是可实现交易收益；封板/无现价留 `None`，不造 0。
+
+    Online callers keep the original single-transaction path by leaving
+    `batch_size=None`.  Explicit offline recovery may set a positive batch size
+    so tens of thousands of legacy rows do not materialize in one ORM result set.
     """
+    if batch_size is not None and batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
     sf = session_factory or get_session_factory()
     states = ("pending", "deferred") if include_deferred else ("pending",)
-    with sf() as db:
-        rows = db.execute(
-            select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
-            .join(OpportunityDecisionSnapshot,
-                  OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
-            .where(OpportunityDecisionSnapshot.trade_date == trade_date,
-                   OpportunityOutcomeLabel.horizon == OUTCOME_HORIZON,
-                   OpportunityOutcomeLabel.state.in_(states))
-        ).all()
-        counts = _label_outcome_rows(rows, close_by_symbol)
-        db.commit()
-    return {"trade_date": trade_date, **counts}
+    totals = {"labeled": 0, "unknown": 0, "pending": 0}
+    last_id = 0
+    while True:
+        with sf() as db:
+            stmt = (
+                select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
+                .join(
+                    OpportunityDecisionSnapshot,
+                    OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id,
+                )
+                .where(
+                    OpportunityDecisionSnapshot.trade_date == trade_date,
+                    OpportunityOutcomeLabel.horizon == OUTCOME_HORIZON,
+                    OpportunityOutcomeLabel.state.in_(states),
+                )
+            )
+            if batch_size is not None:
+                stmt = (
+                    stmt.where(OpportunityOutcomeLabel.id > last_id)
+                    .order_by(OpportunityOutcomeLabel.id)
+                    .limit(batch_size)
+                )
+            rows = db.execute(stmt).all()
+            if not rows:
+                break
+            counts = _label_outcome_rows(rows, close_by_symbol)
+            for key in totals:
+                totals[key] += counts[key]
+            if batch_size is not None:
+                last_id = rows[-1][0].id
+            db.commit()
+        if batch_size is None:
+            break
+    return {"trade_date": trade_date, **totals}
 
 
 def learning_summary(trade_date: str, session_factory=None) -> dict:
@@ -1450,6 +1597,11 @@ def opportunity_scorecard(
         if outcome.state == "labeled" and _finite_number(outcome.return_pct)
     }
     denominator_complete = bool(funnel_opportunities) and not (funnel_opportunities - labeled_opportunities)
+    denominator_state = (
+        "empty" if not funnel_opportunities
+        else "complete" if denominator_complete
+        else "incomplete"
+    )
 
     # Independent day-level sample: one stock cannot become N samples merely because
     # it crossed stages/themes or the endpoint refreshed repeatedly.  Keep every raw
@@ -1568,7 +1720,8 @@ def opportunity_scorecard(
     )
 
     verdict = (
-        "incomplete_denominator" if funnel_symbols and not denominator_complete
+        "no_matching_denominator" if denominator_state == "empty"
+        else "incomplete_denominator" if denominator_state == "incomplete"
         else "insufficient_sample" if len(proxy) < MIN_LABELS_FOR_VERDICT
         else "cost_proxy_positive_observed"
         if sum(proxy) / len(proxy) > 0 else "cost_proxy_nonpositive_observed"
@@ -1644,6 +1797,7 @@ def opportunity_scorecard(
                 round(len(labeled_funnel_symbols) / len(funnel_symbols), 4) if funnel_symbols else None
             ),
             "complete": denominator_complete,
+            "state": denominator_state,
             "missing_outcome_symbols": missing_outcome_symbols,
             "unlabeled_symbols": unlabeled_funnel_symbols,
             "run_symbol_opportunities": len(funnel_opportunities),
@@ -1737,8 +1891,9 @@ def opportunity_scorecard(
         "verdict": verdict,
         "note": (
             "只描述已归档事实，不构成买卖建议；独立样本按 symbol×trade_date 去重，原始行数保留在 audit。"
-            "全漏斗 symbol 尚有未标结果时 verdict 恒为 incomplete_denominator；分母完整后若可执行样本低于下限，"
-            "verdict 才为 insufficient_sample。D0 成本调整值仅为同日收盘代理，不是 A 股 T+1 下可实现净收益；"
+            "指定版本没有任何漏斗样本时 verdict=no_matching_denominator；有分母但尚有未标结果时 "
+            "verdict=incomplete_denominator；分母完整后若可执行样本低于下限，verdict 才为 insufficient_sample。"
+            "D0 成本调整值仅为同日收盘代理，不是 A 股 T+1 下可实现净收益；"
             "deferred/not_actionable 只服务漏选/失败分母，不进入可执行净收益。"
         ),
     }

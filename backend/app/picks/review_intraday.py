@@ -438,7 +438,10 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
             # short scheduler/deployment outage can still create missing identities.
             recent = [d for d in days if d <= _bnow().date()][-10:]
             horizon_prepared = [
-                ensure_outcome_horizons(d.isoformat(), days, _gsf()) for d in recent
+                ensure_outcome_horizons(
+                    d.isoformat(), days, _gsf(), include_deferred=False
+                )
+                for d in recent
             ]
         due_targets = pending_outcome_targets(tdate, _gsf(), lookback_days=30)
         due_symbols = {symbol for symbols in due_targets.values() for symbol in symbols}

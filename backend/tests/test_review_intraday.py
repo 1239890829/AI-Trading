@@ -414,6 +414,16 @@ def test_run_review_end_to_end(brief_dir, monkeypatch):
         return {"phase": "发酵", "calibration": {"percentile": {"promo_1to2": {"percentile": 60.0}}}}
 
     monkeypatch.setattr(ri.tc, "trading_days", _days)
+    monkeypatch.setattr("app.picks.watch_ledger.get_day", lambda *_args, **_kwargs: [])
+    horizon_scopes: list[bool] = []
+
+    def _ensure_horizons(_trade_date, _days_arg, _sf, *, include_deferred=True):
+        horizon_scopes.append(include_deferred)
+        return {"trade_date": _trade_date, "scope": "selected_only", "inserted": 0}
+
+    monkeypatch.setattr(
+        "app.picks.opportunity_learning.ensure_outcome_horizons", _ensure_horizons
+    )
     monkeypatch.setattr("app.picks.watcher._board_pcts", _board_pcts)
     import app.services.market_context as mc
 
@@ -440,6 +450,7 @@ def test_run_review_end_to_end(brief_dir, monkeypatch):
     assert saved["review"]["outcomes"] == {"粮食": "发酵", "AI应用": "无波动"}
     assert saved["directions"][0]["review"]["actual_pct"] == 3.2
     assert saved["directions"][0]["review"]["source"] == "tracker"
+    assert horizon_scopes and all(scope is False for scope in horizon_scopes)
 
 
 def test_run_review_schedule_idempotent(brief_dir, monkeypatch):
