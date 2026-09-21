@@ -1,6 +1,8 @@
-# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 D0 决策后路径结果
+# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 历史 D0 全漏斗恢复
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 已连续闭环两个子片：PR #69（全漏斗 outcome/denominator，merge `168368bb8981b14535c69d81100b4f578ac32ebd`，post-merge CI #503 全绿）与 PR #70（D1/D3/D5 交易日 horizon + selected-only 逾期恢复，merge `eed8214ffdf914dd06fbeba7d150e37dbcd140a1`，post-merge CI run `35519175943` backend/frontend/docs 全绿）；对应功能分支均已删除，远端只剩 `master`。当前仍在 **G3 / RSH-026**，本轮只实施“D0 决策后 MFE/MAE + ever-hit-limit / time_to_limit”纵切：结果写现有 `OpportunityOutcomeLabel`，不改决策 snapshot、不进入 IMP-020、不做策略晋级、不改生产权重或真实交易边界。
+> 定位：当前运行模式、最新已合并证据、唯一在制纵切与安全边界；任务唯一状态仍以所属 stage 为准。
+
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 已连续闭环三个子片：PR #69（全漏斗 outcome/denominator）、PR #70（D1/D3/D5 交易日 horizon）与 PR #71（D0 决策后 MFE/MAE + ever-hit-limit/time_to_limit，merge `7df3f2867208a7515bbb9796688dbf1589b99434`，post-merge CI run `35544751429` backend/frontend/docs 全绿）；前三个功能分支均已清理。PR #71 后的主动审计发现远程 Mac 仍有一套长期运行工作区落后远端 `master` 51 个提交，其 173MB SQLite 仍停在 revision `d2e4a6b8c0f1`：共有 156,108 条 decision snapshot，但只有 63 条 D0 outcome；这 63 条恰好覆盖全部 selected/actionable snapshot，缺失的 156,045 条均属于 rejected/unknown 全漏斗失败对照。当前仍在 **G3 / RSH-026**，本轮只实施“历史 D0 outcome 身份 + 本地 marketdb 收盘结果离线恢复”纵切；真实运行库保持只读未修改，所有 apply 验证均在一致性副本上完成。
 
 
 ## 1. 固定入口与范围
@@ -89,7 +91,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **Degraded reason**：当前 Codex 额度不可用，正常双角色无法持续完成实施→独立审核→发布闭环；旧 exact-HEAD Review 门因此形成自锁。
 - **有效期**：持续到用户明确说 Codex 已恢复/退出降级；不是单 PR 临时口令。但每个 PR 的发布仍必须重新生成 exact-HEAD `DegradedRelease`，不能复用上一 PR 回执。
 - **不降低项**：G0–G5/GX 阶段门、U49 主动反证、branch protection、required CI、latest master、CHANGES_REQUESTED/thread、public-repo scan、workspace/doc-health、敏感信息/范围、post-merge CI、删除功能分支。
-- **当前动作**：U50、IMP-044、RSH-026/PR #69 denominator 与 PR #70 D1/D3/D5 horizon 子片均已闭环；当前仍在 G3/RSH-026，只执行 D0 决策后路径（MFE/MAE + ever-hit-limit/time_to_limit）子片。每个 PR 仍需新的 exact-HEAD `DegradedRelease`。
+- **当前动作**：U50、IMP-044 与 RSH-026/PR #69/#70/#71 均已闭环；当前仍在 G3/RSH-026，只执行历史 D0 全漏斗 outcome 离线恢复子片。真实运行库只读，先由当前分支提供 dry-run/备份/本地 marketdb/幂等恢复工具；每个 PR 仍需新的 exact-HEAD `DegradedRelease`。
 
 ## 8.2 U49 主动审计回执（RSH-026 Preflight）
 
@@ -116,9 +118,27 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **本轮新增 P1-18 空池证据边界**：CompositeProvider 的通用 pool 路由把 `[]` 当失败并继续切源，所有源都空则抛错；因此当前 D0 路径不会把“某源静默空响应”误当成全市场真实 0 而制造假 `not_hit`，但真实 0 炸板/0 涨停日也会保守保持 `unknown`。本片不把全仓 pool 改为 allow-empty：东财 ZT/ZB 与 THS ZB 当前尚未像跌停池一样完整校验业务 `rc/tc/pool`，先接受空值会扩大假成功风险；若后续要提高零池覆盖，应先把各源完整响应契约补齐，再做“优先非空、全健康源确认空才接受空”的专用路由。
 - **本轮新增 P1-19 路径 coverage 丢分母风险**：若从 `OutcomeLabel JOIN Snapshot` 生成 path denominator，某个 selected snapshot 一旦 outcome 行根本没挂上，它会同时从分子和分母消失，覆盖率被系统性抬高；若同股后续刷新有 outcome，还可能用更晚决策替代最早决策。当前 scorecard 先从 immutable selected snapshots 按 `symbol×trade_date` 取**最早 selected 决策**定义分母，再按该 exact snapshot 找 outcome；新增 `outcome_attached` 显式暴露挂接缺口，缺 outcome 时 denominator 仍在、coverage=0，不允许“缺得越多看起来越完整”。learning summary 的 selected path denominator 同样改从 snapshots 构造。
 - **高风险反例已裁定**：不能简单把所有 rejected/unknown 加进 `pending_symbols`，否则盘后 `review_intraday` 会把实时逐股外部 close 请求从 selected 集合扩大到全漏斗。当前方案用 `deferred/not_actionable` 分流，实时消费者维持原请求面，离线显式回填再补市场结果。
-- **当前限制**：远程 Mac 没有可核的长期生产运行库，本轮不能给出真实历史覆盖百分比；该缺口继续保留，不能用夹具数字代替。
+- **真实长期库已定位（2026-09-21）**：旧运行工作区的 `data/ashare.db` 为 173MB，运行工作区落后远端 master 51 个提交，故**禁止直接在原库上试新代码**。只读盘点得 156,108 snapshot / 63 D0 outcome；63 条恰好覆盖全部 selected/actionable 快照，156,045 条缺失均来自 rejected/unknown 全漏斗失败对照。其配套 marketdb 为 378MB、10,298,838 行、覆盖至 2026-09-18。
+- **历史恢复副本验证**：先用 SQLite backup 复制原库，再在副本从 Alembic `d2e4a6b8c0f1` 升到当前 head `a6e2c9f4b7d1`，`integrity_check=ok` 且原行数不变；恢复工具在副本插入 156,045 个缺失 D0 identity、修正 15 个 legacy 未评估 `pending+fill_state=ok`，并仅用本地 marketdb exact-date close 离线回填。最终 156,108 snapshot / 156,108 D0 outcome、缺 identity=0；9/16–9/18 marketdb symbol coverage 分别 99.7%/100%/100%，缺 reference 的失败样本显式变 `unknown`，缺 marketdb close 的少量样本保留 pending。副本 `integrity_check=ok`；二次 `--apply` 只读计划确认无可写 close 后直接 `noop=true / backup=null`，没有再次复制 173MB 备份。
+- **安全边界**：真实运行库尚未写入；正式执行必须先部署/迁移当前代码、停应用/调度、自动 SQLite backup，再运行显式 `--apply`。恢复只补不存在的 `(snapshot_id,d0_close)`，不改 decision snapshot、不覆盖既有 labeled outcome，不访问外部行情源。
 - **本地发布前证据（RSH-026 D0 path 子片）**：最终实现态 backend 全量 `4066 passed / 80 skipped`，`pyflakes app tests scripts` 通过；frontend `tsc`、Vitest `73 files / 695 tests`、ESLint、Next production build 通过；`public_repo_scan`、`workspace-hygiene`、`doc-health` 均通过。最终合并仍以 PR exact-HEAD GitHub CI + DegradedRelease receipt 为准，本地结果不替代远端门禁。
 - **非目标**：当前子片实现 D0 决策后 MFE/MAE 与首次封板/time_to_limit，但不把 reference 路径冒充实际 shadow fill P&L，不做跨日累计 MFE/MAE、不做 deferred 全量实时分钟回补、不改策略阈值、生产权重、交易权限或真实交易。
+
+## 8.3 U49 主动审计回执（RSH-026 Legacy D0 Backfill）
+
+- **阶段/基点**：`Preflight + production-copy validation`；基于 `master@7df3f2867208a7515bbb9796688dbf1589b99434`（PR #71 已合并且 post-merge CI #507 全绿）。
+- **真实库发现**：旧部署工作区仍落后远端 master 51 个提交；其 173MB SQLite revision=`d2e4a6b8c0f1`，共有 156,108 snapshot / 63 D0 outcome。63 条 outcome 与 63 条 selected/actionable snapshot 一一覆盖；缺失 156,045 条均是 rejected/unknown 失败对照，因此 selected 胜率分母没有再丢 156k，真正缺口是全漏斗漏选/误杀分母。
+- **P1-20 历史自愈不足**：PR #69 的 exact-run replay 只能在旧 run 再次被重放时补 identity，无法自动修复已经沉睡的 156,045 条历史 snapshot。当前新增显式离线 `backfill_missing_outcome_identities()` 与 CLI；默认 dry-run，写入必须 `--apply`。
+- **P1-21 版本/生产隔离**：真实库 schema 落后当前 head 两个 migration，禁止用最新 ORM 直接碰原库。只读 dry-run 可在旧 revision 盘点；写入前必须先升级 schema。已对 SQLite 一致性副本验证 `d2e4→f8c1→a6e2`，`integrity_check=ok`，156,108 snapshot / 63 outcome 原值均保留。
+- **P1-22 legacy `fill_state=ok` 歧义**：旧 ORM 默认曾把未评估 pending 写成 `ok`，但“已经评估可成交、只是收盘价缺失”也合法为 pending+ok。恢复只修 `state=pending + labeled_at=NULL + fill_state=ok + reason=等待收盘价` 的旧初始化态；已评估 reason 不得二次降回 pending。
+- **P1-23 备份放大**：173MB 库的无变化二次 apply 若仍强制备份会持续堆磁盘。CLI 现先做只读计划；只有缺 identity、需修 legacy fill，或本地 marketdb 确有可写收盘价时才创建一致性备份；no-op apply 输出 `backup=null`。
+- **P1-25 future-horizon 自动放大**：真实副本只补 D0 就从 173MB 增至 267MB；若盘后调度继续对 156,108 条历史 snapshot 自动建 D1/D3/D5 full-funnel identity，理论最多再新增 468,324 行，且会随日历成熟逐日触发。当前生产 EOD 改为 `ensure_outcome_horizons(..., include_deferred=False)`，在线只建 selected/actionable future identity；rejected/unknown 的跨日失败对照必须显式离线研究。真实副本 9/16–9/18 共 154,106 source snapshot 的规模验证中，selected-only 仅处理 61 snapshot，三个 horizon 合计新增 183 行。
+- **P1-26 巨型 `IN (...)` 崩溃风险**：旧 `ensure_outcome_horizons` 把同日全部 snapshot_id 展开进一个 SQL `IN`；真实 2026-09-18 有 81,672 条 snapshot，可能超过 SQLite bind-variable 上限。existing horizon 查询现改为按 `trade_date` join，不再展开 snapshot ID 列表；full-funnel 离线模式也沿用该安全查询。
+- **P1-27 selected-only ORM 放大**：初版虽不再写 deferred future identity、也不再使用巨型 `IN`，但仍先加载同日全部 snapshot 再在 Python 筛选；真实 2026-09-18 是 81,672→8，no-op 探针约 1.82s。当前改为 SQL `COUNT(*)` 保留 source denominator + SQL selected predicate，仅 materialize 8 条 actionable snapshot，同行为复测约 0.57s；回归测试锁定 selected-only 模式只加载 selected snapshot 对象。full-funnel 显式离线模式仍允许全量读取，但不会进入生产 EOD。
+- **真实只读 dry-run**：原库未修改即可报告 missing D0 identity=156,045、selected missing=0、legacy pending-fill default=15；marketdb 对 2026-09-16/17/18 的待恢复 symbol 覆盖分别为 1007/1010、256/256、162/162。
+- **一致性副本 apply**：插入 156,045 条 deferred/not_actionable identity，修正 15 条旧初始化 fill；随后用本地 exact-date marketdb 回填，最终 D0 identity=156,108/156,108、missing=0，状态为 `labeled=150,903 / unknown=5,192 / deferred=12 / pending=1`。`unknown` 主要是决策 reference 缺失；12 条 deferred 与 1 条 selected pending 均因本地 marketdb 无目标日收盘而保留未标，不造 0、不外呼。二次 apply `inserted=0 / repaired=0` 且 CLI 判定 `noop=true / backup=null`。
+- **P1-24 版本空分母语义**：这 156,108 条历史全为 `stock-opportunity-funnel-v1 / pit-evidence-v1`；默认 current-v2 scorecard 对它们应是“没有匹配版本样本”，不能把 `complete=false` 配成普通 `insufficient_sample`。scorecard 新增 `funnel_denominator.state=empty|incomplete|complete`，空版本返回 `no_matching_denominator`；按真实 v1/v1 重算，9/08、9/16、9/17、9/18 的 opportunity label coverage 分别为 50.00% / 95.20% / 98.44% / 95.06%，四日均保持 `incomplete_denominator`，没有把历史补数冒充成策略效果结论。
+- **运行边界**：真实运行库仍保持原样；其运行代码也落后当前 master，不能只迁 DB/灌新 denominator 而让旧消费者继续运行。实际部署恢复必须在应用/调度停止、代码与 schema 同步后执行，并保留工具生成的备份。
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
 

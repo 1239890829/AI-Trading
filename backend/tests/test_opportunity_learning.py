@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from datetime import date, datetime, timezone
 
-from sqlalchemy import create_engine, delete, select
+from sqlalchemy import create_engine, delete, event, select
 from sqlalchemy.orm import sessionmaker
 
 from app.models.opportunity_learning import OpportunityDecisionSnapshot, OpportunityOutcomeLabel
@@ -15,9 +15,11 @@ from app.picks.opportunity_learning import (
     FEATURE_VERSION,
     FILL_SEAL_GAP_PCT,
     OUTCOME_HORIZON,
+    PATH_VERSION,
     STRATEGY_VERSION,
     archive_records,
     assess_fill_state,
+    backfill_missing_outcome_identities,
     build_intraday_records,
     build_notification_records,
     d0_path_metrics,
@@ -215,6 +217,40 @@ def test_rerun_repairs_legacy_pending_fill_claim_without_touching_snapshot(tmp_p
         assert snapshot.evidence == evidence_before
 
 
+def test_assessed_pending_fill_ok_is_not_reclassified_as_legacy_default(tmp_path):
+    sf = _factory(tmp_path)
+    run_id, rows = build_intraday_records(
+        _payload(), trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5)
+    )
+    archive_records(run_id, rows, sf)
+    missing = label_trade_date("2026-09-16", {}, sf)
+    assert missing["pending"] == 1
+    with sf() as db:
+        outcome = db.execute(
+            select(OpportunityOutcomeLabel)
+            .join(OpportunityDecisionSnapshot,
+                  OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
+            .where(OpportunityDecisionSnapshot.stage == "rank",
+                   OpportunityDecisionSnapshot.decision == "ranked")
+        ).scalar_one()
+        assert outcome.fill_state == "ok"
+        assert outcome.reason != "等待收盘价"
+
+    replayed = archive_records(run_id, rows, sf)
+    assert replayed["outcomes_repaired"] == 0
+    recovered = backfill_missing_outcome_identities(sf)
+    assert recovered["repaired_pending_fill_state"] == 0
+    with sf() as db:
+        outcome = db.execute(
+            select(OpportunityOutcomeLabel)
+            .join(OpportunityDecisionSnapshot,
+                  OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
+            .where(OpportunityDecisionSnapshot.stage == "rank",
+                   OpportunityDecisionSnapshot.decision == "ranked")
+        ).scalar_one()
+        assert outcome.fill_state == "ok"
+
+
 def test_outcome_label_is_retryable_and_coverage_is_mechanical(tmp_path):
     sf = _factory(tmp_path)
     run_id, rows = build_intraday_records(
@@ -251,6 +287,172 @@ def test_outcome_label_is_retryable_and_coverage_is_mechanical(tmp_path):
         "labeled_opportunities": 1, "opportunity_label_coverage": 0.5,
     }
     assert summary["stages"] == {"candidate": 2, "hard_gate": 2, "rank": 2, "notification": 0}
+
+
+def test_legacy_full_funnel_identity_backfill_is_batched_idempotent_and_repairs_pending_fill(tmp_path):
+    sf = _factory(tmp_path)
+    run_id, rows = build_intraday_records(
+        _payload(), trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5)
+    )
+    archive_records(run_id, rows, sf)
+
+    with sf() as db:
+        snapshots = db.execute(select(OpportunityDecisionSnapshot)).scalars().all()
+        selected = next(s for s in snapshots if s.stage == "rank" and s.decision == "ranked")
+        selected_outcome = db.execute(
+            select(OpportunityOutcomeLabel).where(
+                OpportunityOutcomeLabel.snapshot_id == selected.snapshot_id,
+                OpportunityOutcomeLabel.horizon == OUTCOME_HORIZON,
+            )
+        ).scalar_one()
+        selected_outcome.fill_state = "ok"
+        db.execute(
+            delete(OpportunityOutcomeLabel).where(
+                OpportunityOutcomeLabel.horizon == OUTCOME_HORIZON,
+                OpportunityOutcomeLabel.snapshot_id != selected.snapshot_id,
+            )
+        )
+        db.commit()
+
+    got = backfill_missing_outcome_identities(
+        sf, trade_dates=["2026-09-16"], batch_size=1
+    )
+    assert got == {
+        "inserted": 5,
+        "selected_pending": 0,
+        "deferred": 5,
+        "repaired_pending_fill_state": 1,
+        "trade_dates": ["2026-09-16"],
+    }
+
+    with sf() as db:
+        stored = db.execute(
+            select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
+            .join(
+                OpportunityDecisionSnapshot,
+                OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id,
+            )
+            .where(OpportunityOutcomeLabel.horizon == OUTCOME_HORIZON)
+        ).all()
+    assert len(stored) == 6
+    selected_rows = [
+        (outcome, snapshot) for outcome, snapshot in stored
+        if snapshot.stage == "rank" and snapshot.decision == "ranked"
+    ]
+    assert len(selected_rows) == 1
+    assert selected_rows[0][0].fill_state == "pending"
+    deferred = [
+        (outcome, snapshot) for outcome, snapshot in stored
+        if not (snapshot.stage == "rank" and snapshot.decision == "ranked")
+    ]
+    assert len(deferred) == 5
+    assert all(
+        outcome.state == "deferred" and outcome.fill_state == "not_actionable"
+        for outcome, _snapshot in deferred
+    )
+    assert all(
+        outcome.path_state == "deferred" and outcome.path_version == PATH_VERSION
+        for outcome, _snapshot in deferred
+    )
+
+    again = backfill_missing_outcome_identities(
+        sf, trade_dates=["2026-09-16"], batch_size=2
+    )
+    assert again["inserted"] == 0
+    assert again["repaired_pending_fill_state"] == 0
+
+
+def test_legacy_pending_fill_repair_does_not_overwrite_assessed_pending_row(tmp_path):
+    sf = _factory(tmp_path)
+    run_id, rows = build_intraday_records(
+        _payload(), trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5)
+    )
+    archive_records(run_id, rows, sf)
+    with sf() as db:
+        selected = db.execute(
+            select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
+            .join(
+                OpportunityDecisionSnapshot,
+                OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id,
+            )
+            .where(
+                OpportunityDecisionSnapshot.stage == "rank",
+                OpportunityDecisionSnapshot.decision == "ranked",
+                OpportunityOutcomeLabel.horizon == OUTCOME_HORIZON,
+            )
+        ).one()
+        outcome, _snapshot = selected
+        outcome.fill_state = "ok"
+        outcome.reason = (
+            "决策时点涨幅 2.10%，距 10% 涨停有余量；"
+            "等待 d0_close@2026-09-16 有限且为正的收盘价"
+        )
+        db.commit()
+
+    got = backfill_missing_outcome_identities(
+        sf, trade_dates=["2026-09-16"]
+    )
+    assert got["repaired_pending_fill_state"] == 0
+    with sf() as db:
+        kept = db.execute(
+            select(OpportunityOutcomeLabel)
+            .join(
+                OpportunityDecisionSnapshot,
+                OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id,
+            )
+            .where(
+                OpportunityDecisionSnapshot.stage == "rank",
+                OpportunityDecisionSnapshot.decision == "ranked",
+                OpportunityOutcomeLabel.horizon == OUTCOME_HORIZON,
+            )
+        ).scalar_one()
+    assert kept.fill_state == "ok"
+    assert "决策时点涨幅" in kept.reason
+
+
+def test_legacy_identity_backfill_keeps_full_funnel_market_result_nonactionable(tmp_path):
+    sf = _factory(tmp_path)
+    run_id, rows = build_intraday_records(
+        _payload(), trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5)
+    )
+    archive_records(run_id, rows, sf)
+    with sf() as db:
+        db.execute(delete(OpportunityOutcomeLabel))
+        db.commit()
+
+    inserted = backfill_missing_outcome_identities(
+        sf, trade_dates=["2026-09-16"]
+    )
+    assert inserted["inserted"] == 6
+    assert inserted["selected_pending"] == 1
+    assert inserted["deferred"] == 5
+
+    result = label_trade_date(
+        "2026-09-16",
+        {"600001": 10.5, "600002": 8.4},
+        sf,
+        include_deferred=True,
+        batch_size=1,
+    )
+    assert result["labeled"] == 6
+
+    with sf() as db:
+        outcome, _snapshot = db.execute(
+            select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
+            .join(
+                OpportunityDecisionSnapshot,
+                OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id,
+            )
+            .where(
+                OpportunityDecisionSnapshot.stage == "rank",
+                OpportunityDecisionSnapshot.decision == "rejected",
+                OpportunityOutcomeLabel.horizon == OUTCOME_HORIZON,
+            )
+        ).one()
+    assert outcome.state == "labeled"
+    assert outcome.fill_state == "not_actionable"
+    assert outcome.return_pct is not None
+    assert outcome.net_return_pct is None
 
 
 def test_deferred_denominator_backfill_records_market_result_without_fill_claim(tmp_path):
@@ -314,6 +516,54 @@ def test_future_horizons_are_idempotent_and_do_not_expand_realtime_deferred_requ
     assert due_outcome_symbols("2026-09-21", sf, include_deferred=True) == {"600001", "600002"}
     # D0 compatibility helper must ignore future pending rows.
     assert pending_symbols("2026-09-18", sf) == {"600001"}
+
+
+def test_future_horizons_selected_only_scope_does_not_materialize_deferred_rows(tmp_path):
+    sf = _factory(tmp_path)
+    run_id, rows = build_intraday_records(
+        _payload(), trade_date="2026-09-18", as_of=datetime(2026, 9, 18, 10, 5)
+    )
+    archive_records(run_id, rows, sf)
+    days = [
+        date(2026, 9, 18), date(2026, 9, 21), date(2026, 9, 22),
+        date(2026, 9, 23), date(2026, 9, 24), date(2026, 9, 25),
+    ]
+    got = ensure_outcome_horizons(
+        "2026-09-18", days, sf, include_deferred=False
+    )
+    assert got["scope"] == "selected_only"
+    assert got["source_snapshots"] == 6 and got["snapshots"] == 1
+    assert got["inserted"] == 3
+    assert due_outcome_symbols("2026-09-21", sf) == {"600001"}
+    assert due_outcome_symbols("2026-09-21", sf, include_deferred=True) == {"600001"}
+
+
+def test_future_horizon_selected_scope_loads_only_selected_snapshots(tmp_path):
+    sf = _factory(tmp_path)
+    run_id, rows = build_intraday_records(
+        _payload(), trade_date="2026-09-18", as_of=datetime(2026, 9, 18, 10, 5)
+    )
+    archive_records(run_id, rows, sf)
+    days = [
+        date(2026, 9, 18), date(2026, 9, 21), date(2026, 9, 22),
+        date(2026, 9, 23), date(2026, 9, 24), date(2026, 9, 25),
+    ]
+    loaded = []
+
+    def _loaded(_target, _context):
+        loaded.append(1)
+
+    event.listen(OpportunityDecisionSnapshot, "load", _loaded)
+    try:
+        got = ensure_outcome_horizons(
+            "2026-09-18", days, sf, include_deferred=False
+        )
+    finally:
+        event.remove(OpportunityDecisionSnapshot, "load", _loaded)
+
+    assert got["source_snapshots"] == 6
+    assert got["snapshots"] == 1
+    assert len(loaded) == 1
 
 
 def test_pending_future_targets_are_selected_only_bounded_and_recover_overdue(tmp_path):
@@ -837,6 +1087,23 @@ def test_sealed_board_keeps_net_return_none_and_never_zero(tmp_path):
     summary = learning_summary("2026-09-16", sf)
     assert summary["fill_states"] == {"not_actionable": 4, "ok": 1, "sealed": 1}
     assert summary["cost_model"] == COST_MODEL_VERSION
+
+
+def test_scorecard_distinguishes_empty_version_from_incomplete_denominator(tmp_path):
+    sf = _factory(tmp_path)
+    run_id, rows = build_intraday_records(
+        _payload(), trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5)
+    )
+    archive_records(run_id, rows, sf)
+
+    card = opportunity_scorecard(
+        "2026-09-16", session_factory=sf,
+        strategy_version="missing-strategy", feature_version="missing-feature",
+    )
+    assert card["funnel_denominator"]["state"] == "empty"
+    assert card["funnel_denominator"]["complete"] is False
+    assert card["funnel_denominator"]["run_symbol_opportunities"] == 0
+    assert card["verdict"] == "no_matching_denominator"
 
 
 def test_scorecard_blocks_verdict_until_full_funnel_denominator_is_labeled(tmp_path):
