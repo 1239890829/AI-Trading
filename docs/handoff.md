@@ -316,9 +316,9 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **P1-84 Challenger 身份漂移**：旧 candidate producer 会把训练段重新选出的 grid 最优继续落到 `pullback_reversal` 键，存在 challenger 静默覆盖 incumbent predicate 的风险。当前固定 `pullback_reversal` 为原 `3~5% + 跌破MA5 + mchg>0`，训练最优只保存为具名 challenger。
 - **P1-85 消融必须同版同窗同成本**：新增 `strategy_compare.leave_one_out_ablation()`；完整规则与每个 leave-one-out 共用同一 table/window/horizon/cost/return identity，并带 dataset fingerprint。结果只表示该研究口径的边际，不冒充因果或生产贡献。
 - **P1-86 Champion/Challenger 不偷换生产身份**：新增 `champion_challenger_evidence()`；双方同窗同成本同 return identity，并记录事件 overlap。当前 incumbent 本身不是 production champion，`promotion_basis_eligible=false` 恒成立。
-- **真实 candidate B incumbent**：旧第三子片隔离探针显示 35bps purged T+5 中性均值约 `+0.0055%`、中性中位 `-0.9157%`、中性跑赢约 `42.0%`、年度正 4/5 ⇒ observe；本次适配后仍需 exact-head 隔离重跑确认，不把旧分支数字冒充新 HEAD 验收。
-- **已有消融线索**：旧探针中 `price_band / below_ma5 / market_positive` 的 leave-one-out 中性边际约 `+0.3341 / +0.3104 / +0.1593pp`；训练 grid challenger 较 incumbent 约 `+0.1838pp`。这些都是研究对照，不是 promotion basis。
-- **two-thirty-five 线索**：旧探针显示完整中性约 `-0.99%`，S1/S3 边际为负、S2/S4/S5 边际为正，但整体仍 reject；新 HEAD 同样必须隔离重跑后才登记为本片正式证据。
+- **真实 candidate B incumbent（exact HEAD 9ccfef2）**：35bps purged T+5 `n=35,725`，中性均值 `+0.0055%`、中性中位 `-0.915744%`、中性跑赢 `42.006998%`、年度正 4/5 ⇒ observe；协议仍因 test-informed hypothesis family 阻断。
+- **candidate B 消融/对照（exact HEAD）**：`price_band / below_ma5 / market_positive` 的 leave-one-out 中性边际分别 `+0.3341 / +0.3104 / +0.1593pp`；训练 grid challenger holdout 中性 `+0.1893%`，较 incumbent `+0.1838pp`；事件集合交集 0。两边均非 production identity，`promotion_basis_eligible=false`。
+- **two-thirty-five（exact HEAD）**：完整规则 35bps purged T+5 中性 `-0.9886%`、中性中位 `-2.420184%`、中性跑赢 `33.890508%` ⇒ reject。S1/S3 边际为负 `-0.2482/-0.2748pp`，S2/S4/S5 为正 `+0.0420/+0.2107/+0.0392pp`，但整体仍失败；协议另因 current-float-share `turn` 非 PIT 与 selected trial 未过 multiplicity 阻断。
 - **边界/下一步**：本子片只补研究比较与实验证据；最后子片收“晋级准备态 + actual shadow-fill 同版身份校验 + rollback/reopen 计划”。缺 actual fill 时必须 blocked，自动系统最多给 `ready_for_human_review`，绝不自动 promote。
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
