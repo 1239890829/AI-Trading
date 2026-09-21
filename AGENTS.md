@@ -10,7 +10,7 @@
 - 唯一文档入口：`docs/INDEX.md`；执行治理：`docs/retro-and-gaps.md` §5.9（G0–G5/GX）；领域索引：§6.0（W00–W09）；任务状态与调度元数据在所属阶段页单点维护。
 - 施工取舍：最新用户要求与 docs/implementation-plan.md 的 v9.11 明确修订优先；原 v9 未修订部分保留，旧项按真实价值复核，登记不等于必须实施。
 - 当前现场与实测：`docs/handoff.md` §1；经验按 `docs/kb/00-INDEX.md` 定位。
-- 接续工作：`skills/ashare-ledger-continue/SKILL.md`；当轮交接：`skills/ashare-task-handoff/SKILL.md`。总账 `docs/retro-and-gaps.md` §5.9 的 G0–G5/GX 是唯一执行门序；用户“继续任务/继续”只授权 Skill 在**最低未闭环主门**按角色/P0-P2/门内序领取一个切片。硬依赖未完成不得跨门；`CROSS_GATE_EXCEPTION` 只能由网页在 handoff 明示。
+- 接续工作：`skills/ashare-ledger-continue/SKILL.md`；当轮交接：`skills/ashare-task-handoff/SKILL.md`。总账 `docs/retro-and-gaps.md` §5.9 的 G0–G5/GX 是唯一执行门序；每次“继续”先运行 `scripts/ledger-runtime-selection.py` 重算 stage 明示的受支持 `运行条件`，再在**最低未闭环主门**按角色/P0-P2/门内序领取一个切片。运行条件只临时影响本轮选择，不改写 stage 静态状态；硬依赖未完成不得跨门；`CROSS_GATE_EXCEPTION` 只能由网页在 handoff 明示。
 - 盘后复盘：`skills/ashare-daily-review/SKILL.md`，流程与逐项核验归既有 SOP / checklist。
 - 外部创新雷达：`skills/ashare-innovation-radar/SKILL.md`；长期发现/筛选规则见 `docs/ai/continuous-evolution.md`。雷达只提出候选/验证，不自动安装或准入。
 - 跨模块长期治理与重大重构：`skills/living-system-governor/SKILL.md`。它把 U48/GOV-027 的目标优先、证据分层、机制生命周期、反证、Champion/Challenger、成本收益与重开纪律，以及 U49 的主动缺陷发现门变成上层思考协议；**不替代**总账阶段门、stage 单点状态、领域登记册、风险/权限或发布门。 后续用户长期要求、重复纠偏与真实复盘若形成稳定可复用的方法论，按该 Skill §19 的自我进化协议决定是否进入 Core / Domain Extension / Experience；一次性要求不自动固化，实质变化必须有版本与 Git/PR 证据。

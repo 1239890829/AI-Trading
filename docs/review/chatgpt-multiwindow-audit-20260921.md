@@ -38,9 +38,9 @@ PR #69 明确写过“remote Mac 没有可验证长期生产运行 DB”；后�
 
 ### P1 — 当前本机运行态与 Git master 脱节
 
-审计时远端 master=`6c895dd9`，主工作区/运行 backend 仍为 `f3556ad5`，落后 9 commits；uvicorn 自 17:10 启动且持有真实 DB。Next server 自 9/19 运行，版本为 **15.5.25**，而当前 package manifest 要求 **Next ^16.3.3**。`npm ls --depth=0` 报大量 unmet dependency；CI 因 fresh install 仍全绿。
+审计时远端 master=`6c895dd9`，主工作区/运行 backend 仍为 `f3556ad5`，落后 9 commits；uvicorn 自 17:10 启动且持有真实 DB。**晚间复核纠错**：审计时观察到的 Next 15.5.25 进程实际属于另一个 `vide-trading/apps/web` 仓库，并非 AI-Trading；AI-Trading 前端当时没有运行进程，其自身已安装 Next 16.3.3。故“AI-Trading 正运行旧 Next 15.5.25”属于跨仓进程身份误判，应撤销；真实漂移是 AI-Trading backend/master 未接收最新 Git，以及本机 Node 24.14.0 不满足 `jsdom@30.0.1` 声明的 `^24.15.0` 分支。
 
-判断：已完成/已合并不等于本机 runtime 已生效。需要“merge truth / deployed truth / runtime dependency truth”三分；受控停服务→同步 master→迁移/`npm ci`→重启→health/scheduler/DB 校验应成为运行态接收步骤。
+判断：已完成/已合并不等于本机 runtime 已生效，但运行态证据必须先绑定正确 repo/cwd/PID。晚间已执行受控 backend 停服→同步 master→`npm ci`→按原命令重启→health/scheduler/DB 校验；前端因原本未运行，没有为“验收”凭空启动服务。前端改在与 CI 同主版本的 Node 22.22.2 下完成 695/695 tests 与 Next 16.3.3 production build，并新增 `.nvmrc` 固定本地口径。
 
 ### P1 — IMP-020 最终 readiness 缺少部分同版执行身份验收
 
@@ -92,7 +92,7 @@ GOV-019 定义 handoff 只记录当前现场，但当前 handoff 仍保留大量
 
 - 当前 8GB Mac 的 `memory_pressure -Q` 显示约 **69% free**；没有证据证明此刻处于持续内存泄漏。
 - 单进程主要 RSS：Chrome renderer 约 **1.5GB**（当时最大）、uvicorn 约 **193MB**、ToDesk Session 约 **193MB**、Desktop Commander 两个 Node 约 **190MB 合计**。worktree 主要占磁盘，不是 1.5GB RSS 的来源。
-- `apps/web/node_modules` 约 **818MB**，但当前已失配，不能当“无用垃圾”直接删：Next server 正在用旧环境。应在停服同步时 `npm ci` 重建。
+- `apps/web/node_modules` 审计时约 **818MB**，不能当“无用垃圾”直接删；晚间已纠正“旧 Next 正在使用它”的跨仓误判，并在 AI-Trading 内执行 `npm ci` 重建。Node 22.22.2 下 tests/build 全绿，验收后的 `.next` 可再生构建缓存已清。
 - Python `pip check`：无 broken requirements。`npm audit` 因当前 npm registry mirror 不实现 audit endpoint 而无法得到有效安全结论，不能把空结果写成 0 漏洞。
 - `backend/tests/__pycache__` 约 11MB、`.pytest_cache` 约 360KB，属可再生缓存；可清但收益小。
 - 9/21 的 `backend/data/lhb`、`minute_decisions`、`position_plans` 是实时运行证据，保留；`docs/evolution/2026-09-21.md` 与既有 9/17/18 同类，本轮纳入 Git。
@@ -105,7 +105,7 @@ GOV-019 定义 handoff 只记录当前现场，但当前 handoff 仍保留大量
 | GOV-012 GitHub protection/security | 是 | 是（平台门禁可查） | KEEP |
 | GOV-019 账本单点 | 是 | 大体是；handoff 历史膨胀仍需治理 | KEEP + FIX |
 | GOV-026 workspace hygiene | 部分 | 9/20 清理有效；9/21 又积累 >2GB tmp/worktree，说明“每轮清理”未持续执行 | FIX 持续机制 |
-| Jev PR #31—34 / GOV-024 | 接线是 | shadow 有真实调用；human gold/assistant usage 未闭环 | KEEP + EXPERIMENT |
+| Jev PR #31—34 / GOV-024 | 接线是 | shadow 有真实调用；晚间真实 assistant 请求已产生 `assistant_tool_router` receipt；human gold 仍未闭环 | KEEP + EXPERIMENT |
 | RSH-026 | 是 | 数据/证据底座大量真实运行验证；不代表策略有效 | KEEP；执行碎片化需改 |
 | IMP-044 | 是 | durable delivery 工程证据充分；不证明买点效果 | KEEP |
 | IMP-020 | 工程机制是 | 当前 Candidate B readiness=blocked，正确反映“不足以晋级”；IMP-053 同版执行证据契约还要加强 | KEEP + FIX consumer contract |
@@ -126,12 +126,12 @@ GOV-019 定义 handoff 只记录当前现场，但当前 handoff 仍保留大量
 - **执行与通知**：reference/executable/fill 永久分名；buy-point durable outbox、typed delivery result、原子去重与 pre-send recheck 落地。
 - **安全与治理**：branch protection、secret/privacy scan、required CI、release_check、U49 proactive discovery、U50 controlled degraded full-control、master 单点账本与 Living System Governor 建立。
 - **Jev**：从无到统一 adapter + alert/event/assistant/verifier/research shadow；有真实 usage，但仍停在“可用/影子已用，价值未完全实证”。
-- **代价**：流程和证据面明显更强，同时出现 PR/worktree 过碎、handoff 膨胀、runtime 与 master/依赖不同步的运维债。下一阶段优化重点应是**减少中间态数量、加强运行态接收与条件自动激活**，而不是继续堆新机制。
+- **代价**：流程和证据面明显更强，同时出现 PR/worktree 过碎、handoff 膨胀、runtime 与 master/依赖不同步的运维债。晚间已完成一次真实运行态接收并把 BUG-020 条件激活机械化；后续重点是保持这些收口纪律持续执行，而不是继续堆新机制。
 
 ## 8. 结论
 
 总体方向没有发生根本偏离：这几天最主要的变化是把系统从“功能很多但部分事实/证据边界松”推向“事实身份、失败分母、研究/执行/发布边界可追溯”。RSH-026/IMP-020 的核心并非过度设计；它们修复了真实的 denominator、PIT、成本、重叠、身份和覆盖问题。
 
-真正需要纠正的是执行层：① `待条件` 没自动激活导致 BUG-020 错过 9/21 会话；② 曾错误判断无真实 SQLite；③ 同一切片多 worktree/多 PR 并发；④ 合并态与本机运行态脱节；⑤ Jev 的价值评估/assistant shadow 使用仍未闭环；⑥ IMP-053 需要承接更完整 actual-fill 同版身份契约。
+真正需要纠正的是执行层：① `待条件` 没自动激活导致 BUG-020 错过 9/21 会话，晚间已补 runtime selector，但完整会话验收仍待下一开工窗；② 曾错误判断无真实 SQLite；③ 同一切片多 worktree/多 PR 并发；④ 合并态与本机运行态脱节，晚间已完成一次受控接收；⑤ Jev assistant shadow 已有真实 receipt，但 human gold/价值评估仍未闭环；⑥ IMP-053 需要承接更完整 actual-fill 同版身份契约。
 
 这些问题都可在现有 owner 内修，不需要再建一套总架构。

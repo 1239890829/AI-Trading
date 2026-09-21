@@ -1186,4 +1186,12 @@ RSH-031 可提出按市场状态、事件类型、板高、题材阶段分层的
 - 把 Jev confidence 当策略胜率；
 - 让 Jev 调交易硬门、仓位、权限、证券规则或策略准入；
 - 因为 Jev 能把赢家故事解释得更顺，就宣称起爆前识别能力提升。
-\n\n## 31. 2026-09-21 多窗口审计：实际使用与 Web/Codex 边界\n\n- **可用性**：本机凭据有效；统一 `app.core.jev_client` bounded live smoke 成功返回 `jev-1.13.0`。官方 Jev 仍属 early access，因此“API 可用”与“目标域可靠”分开。\n- **真实使用**：审计时项目 `data/jev/usage.jsonl` 为 172 calls（169 success / 3 failed），主要 `alert_triage=168`、`event_llm_aux=4`；约 128,276 input / 7,653 output tokens，平均约 856ms。global ledger 另有 task-router 与 PR41 governance-review。该数据证明 Jev 已真实使用，但不证明 human accuracy 或业务增益。\n- **未证实使用**：配置虽为 `jev_assistant_tool_mode=shadow`，项目 ledger 尚无 assistant-tool purpose receipt；必须用真实 assistant 流量核消费者/telemetry，不能从配置值推导“已运行”。`jev_assistant_verify_mode=off` 属显式关闭，不是故障。\n- **网页端**：ChatGPT 产品当前没有原生 TypeSafe/Jev tool，因此网页模型不能像内置工具一样直接调用；但在本项目已授权 Remote Desktop/本机执行环境下，网页 ChatGPT 可调用统一 `jev_client`，本轮已实测。故“网页端绝对无法用 Jev”不成立。\n- **Codex**：Codex/其它 coding agent 更适合加载 TypeSafe Agent Skill 并把 Jev 作为代码工作流中的 bounded router/reviewer；这不意味着 Jev 替代 Codex。实现、测试、Git 修改仍交 coding agent/执行侧，Jev 只给 typed probabilistic judgment。\n- **RSH-026 等任务**：数据库身份、数值、时间、原子性、回测和交易硬门必须由确定性代码/数据证据判定；RSH-026 没让 Jev 做核心判断是正确设计。对高影响多轮 release 可选用一次 bounded semantic review 辅助发现语义遗漏，但 Jev 缺席本身不构成失败。\n
+
+## 31. 2026-09-21 多窗口审计：实际使用与 Web/Codex 边界
+
+- **可用性**：本机凭据有效；统一 `app.core.jev_client` bounded live smoke 成功返回 `jev-1.13.0`。官方 Jev 仍属 early access，因此“API 可用”与“目标域可靠”分开。
+- **真实使用**：审计时项目 `data/jev/usage.jsonl` 为 172 calls（169 success / 3 failed），主要 `alert_triage=168`、`event_llm_aux=4`；bounded live smoke 后 173 calls。2026-09-21 晚间再用真实 `/api/assistant/chat` 请求查询 600519 行情/新鲜度，usage 新增 `assistant_tool_router=1`，`jev-1.13.0`、status=ok、约 711ms；总计 174 calls（171 success / 3 failed）。这证明 assistant shadow 消费者已真实运行，但不证明 human accuracy、cascade 收益或业务增益。
+- **仍未证实**：RSH-030 的 240 条 human gold 仍为 0/240；该字段只能由独立人工完成，Jev/ChatGPT 预标不得回写。`jev_assistant_verify_mode=off` 属显式关闭，不是故障。
+- **网页端**：ChatGPT 产品当前没有原生 TypeSafe/Jev tool，因此网页模型不能像内置工具一样直接调用；但在本项目已授权 Remote Desktop/本机执行环境下，网页 ChatGPT 可调用统一 `jev_client`，本轮已实测。故“网页端绝对无法用 Jev”不成立。
+- **Codex**：Codex/其它 coding agent 更适合加载 TypeSafe Agent Skill 并把 Jev 作为代码工作流中的 bounded router/reviewer；这不意味着 Jev 替代 Codex。实现、测试、Git 修改仍交 coding agent/执行侧，Jev 只给 typed probabilistic judgment。
+- **RSH-026 等任务**：数据库身份、数值、时间、原子性、回测和交易硬门必须由确定性代码/数据证据判定；RSH-026 没让 Jev 做核心判断是正确设计。对高影响多轮 release 可选用一次 bounded semantic review 辅助发现语义遗漏，但 Jev 缺席本身不构成失败。

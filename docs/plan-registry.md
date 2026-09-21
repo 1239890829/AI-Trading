@@ -71,7 +71,7 @@
 |---|---|---|
 | ChatGPT/Codex自动派工、网页唤醒、自动审核回执与Bridge链 | 完全退出活动路线，不再安装、修补或保留未来建设承诺 | 用户选择仓库账本+人工短提示；协作规范 |
 | 旧免网页审核或执行端自己批准 | 失效；Codex提交执行事实，网页审核具体版本并规划下一项 | 用户角色分工；AGENTS发布规则仍保留 |
-| “继续任务”=无限扫账本/执行端随意挑活 | 不采纳；U44 只授权一个切片，U45 再要求该切片先通过 G0–G5 阶段门：最低可行动阻断门优先，硬依赖未完成绝不跨门，例外只由网页写入 handoff | retro-and-gaps §5.9；协作§3/§9/§10；GOV-022；不是恢复旧自动派工/Bridge |
+| “继续任务”=无限扫账本/执行端随意挑活 | 不采纳；U44 只授权一个切片，U45 再要求该切片先通过 G0–G5 阶段门：每轮先用 `scripts/ledger-runtime-selection.py` 重算 stage 明示的受支持运行条件，再取最低可行动阻断门；unknown 条件不激活、硬依赖未完成绝不跨门，例外只由网页写入 handoff | retro-and-gaps §5.9；协作§3/§9/§10；GOV-022；不是恢复旧自动派工/Bridge |
 | “用户没问还有没有问题，就只处理眼前任务” | 失效；U49 要求继续选刀、代码放行、阻断项闭环/换门和事故纠偏默认执行有界主动缺陷发现门，哪怕没有新发现也留审计回执 | implementation-plan v9.11/U49；living-system-governor §4.1；协作§3.2；GOV-022；continue/handoff Skills；doc-health 传播守卫 |
 | “Codex 不可用时网页可以实施，但仍必须等待另一独立网页会话 Review” | 被 U50 取代；用户明确授权 `DEGRADED_FULL_CONTROL` 后，网页端可全程操控并用独立的 `DegradedRelease` 精确 HEAD 回执放行；它明确不是独立 Review，仍强制完整 CI、release_check、post-merge 与分支清理 | implementation-plan v9.11/U50；协作§3.3/§5；AGENTS §6.5；GOV-022；release_check.py |
 | 本轮“继续”被解释为修业务、重跑探针、执行账本 | 本轮只完成规划包；文档通过不授予业务开工 | 最新范围澄清，实施方案§0/§9 |

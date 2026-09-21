@@ -43,12 +43,12 @@ Codex执行完必须记录实现/测试/偏差/剩余、提交推送，然后用
 
 ### 3.4 换会话、重复通知与冲突
 
-同项目新会话先读最新 `master`：AGENTS→handoff→协作→方案→对应 stage 与证据。第一次完全无项目上下文时先定位仓库一次，之后不依赖聊天记忆或前台窗口标题。不能从不带项目的一句提示猜任务。
+同项目新会话先读最新 `master`：AGENTS→handoff→协作→方案→对应 stage 与证据。第一次完全无项目上下文时先定位仓库一次，之后不依赖聊天记忆或前台窗口标题。不能从不带项目的一句提示猜任务。进入选刀前运行 `scripts/ledger-runtime-selection.py`；部署日历不在施工 worktree 时显式指向运行仓日历，不能把“隔离树没有运行数据”误判成条件永远不成立。
 同轮已完成/已执行不因重复通知重做；先确认旧执行者停止，不并发写同工作区。不reset/clean、不覆盖未知改动；远端更新不代表本机已同步。目标/版本/任务不唯一时先核对，不能凭最新时间戳选择方便的一份。
 
 ### 3.5 模式不能自行升级
 
-handoff 若明确 DESIGN_ONLY / REVIEW / BLOCKED，则不得执行；计划存在 P0、图已展示或用户说“完善方案”也不自动构成业务修复、回放、模型、采集、迁移或部署授权。handoff 可执行时，网页派工或用户“继续任务”都必须遵守同一顺序：G0–G5 阶段门 → 门禁角色 → P0/P1/P2 → 门内序 → 硬依赖；`效果前置` 未满足时不得升级效果主张。任何跨门只能使用网页已登记的 `CROSS_GATE_EXCEPTION`，该授权仍只覆盖这一刀。
+handoff 若明确 DESIGN_ONLY / REVIEW / BLOCKED，则不得执行；计划存在 P0、图已展示或用户说“完善方案”也不自动构成业务修复、回放、模型、采集、迁移或部署授权。handoff 可执行时，网页派工或用户“继续任务”先运行 `python3 scripts/ledger-runtime-selection.py --json` 重算 stage 明示的受支持 `运行条件`，再遵守同一顺序：G0–G5 阶段门 → 门禁角色 → P0/P1/P2 → 门内序 → 硬依赖。运行条件为 unknown/pending/expired 时不激活，且不得改写 stage 静态状态；`效果前置` 未满足时不得升级效果主张。任何跨门只能使用网页已登记的 `CROSS_GATE_EXCEPTION`，该授权仍只覆盖这一刀。
 
 ## 4. 每轮需要思考什么
 
@@ -91,7 +91,7 @@ handoff 若明确 DESIGN_ONLY / REVIEW / BLOCKED，则不得执行；计划存�
 
 “Codex执行完了”：网页读取当轮执行事实后审核。
 “ChatGPT审核完了”：Codex从最新 `master` 读取真实结论和当前模式；DESIGN_ONLY / REVIEW / BLOCKED 时不执行。
-“继续任务/继续”（明确调用 `ashare-ledger-continue`）：若 handoff 允许实施，先算最低未闭环主门，再按角色/P0-P2/门内序执行一个切片；存在未收口 PR/CI、硬依赖未满足、阶段门冲突或排序歧义时只报告候选/阻塞。
+“继续任务/继续”（明确调用 `ashare-ledger-continue`）：若 handoff 允许实施，先运行 runtime selector 重算显式运行条件，再算最低未闭环主门并按角色/P0-P2/门内序执行一个切片；存在未收口 PR/CI、运行条件 unknown、硬依赖未满足、阶段门冲突或排序歧义时只报告候选/阻塞。
 
 ## 10. 路线切换规则
 
