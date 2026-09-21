@@ -1,8 +1,8 @@
-# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 Evidence Quality Gate
+# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 Snapshot Atomicity
 
 > 定位：当前运行模式、最新已合并证据、唯一在制纵切与安全边界；任务唯一状态仍以所属 stage 为准。
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 的 PR #69/#70/#71/#72/#74/#75/#76/#78/#79 已合并；PR #79 merge=`9c4dfc14f9d9b990911699b41d571148354ce069`，PR exact-head release gate 与 post-merge CI #524 全绿，hotfix 分支已清理。真实长期工作区已同步到该 master，并按默认配置恢复 backend：30/30 scheduler 运行、`opportunity-evidence` 0 failure；11:43 的 durable snapshot 发生在午休窗口，按设计只消费 cursor 不归档，因此 candidate/hard_gate/rank 的最终真实验收仍要等第一份下午盘中 durable snapshot，RSH-026 暂不关闭。当前唯一在制项为评估质量门分支 `chatgpt/rsh026-evidence-quality-gate`（基于 `master@9c4dfc1`）：修复 degraded/unavailable/unknown 决策事实仍可能进入效果样本的问题；不改选股/风控/交易/通知行为。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 的 PR #69/#70/#71/#72/#74/#75/#76/#78/#79/#80 已合并；PR #80 merge=`bc102f565e418262a250a9b0138f84d0779f8cd5`，PR CI #525、exact-head release gate 与 post-merge CI #526 全绿，质量门分支已清理。真实长期工作区已同步到该 master并恢复默认 backend：30/30 scheduler 运行，`opportunity-evidence` 0 failure；新 `evidence_quality` 已在真实 DB 读侧生效。午休 durable snapshot 按设计只消费 cursor 不归档，candidate/hard_gate/rank 的最终真实验收仍待第一份下午盘中 durable snapshot，RSH-026 暂不关闭。当前唯一在制项为 `chatgpt/rsh026-snapshot-atomicity`（基于 `master@bc102f56`）：修复一次重型机会构建期间跨 market refresh 拼接 A/B 两个行情时点，以及 stale/无版本快照仍可能被 `_data_state` 标 ready 的问题；不改选股阈值、scheduler 周期、交易/通知/shadow-fill 语义。
 
 
 ## 1. 固定入口与范围
@@ -221,6 +221,20 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **Precision@K 可见但不可计**：指定 run 内 degraded ranked 股票仍保留在 selected/symbols，避免“把坏样本藏掉”；其 cost proxy 返回 None，因此 `evaluable` 与 coverage 会下降，同时输出 `data_state_counts`。
 - **真实只读复算**：新逻辑对 2026-09-16 仍保留 7,354 audit rows / 3,667 run-symbol 分母，效果样本 28 个 ready symbol-day；1,894 条 current-basis labeled row 因非 ready 被排除效果样本。当前 denominator 本来仍 incomplete，所以 verdict 仍是 `incomplete_denominator`，没有用新门“篡改”既有结论；今日 current-v2 同样因标签未成熟保持 incomplete。
 - **非目标**：不修改 `_data_state` 判据、不把 degraded 样本删除/重写、不改变 candidate/gate/rank/notification 决策、不改变 provider failover、scheduler 周期、交易/通知/shadow-fill 行为；本片只修“效果解释能否使用该样本”的质量门。
+
+## 8.10 U49 主动审计回执（RSH-026 Snapshot Atomicity）
+
+- **阶段/基点**：`Preflight + candidate implementation`；基于 `master@bc102f565e418262a250a9b0138f84d0779f8cd5`（PR #80 merge 后 post-merge CI #526 全绿，真实 backend 已同步并恢复 30/30 scheduler）。
+- **P1-56 单次 run 可拼接两个 market refresh**：旧 shared builder 先用 `load_snapshot_map` 的最新 Parquet 计算题材接力溢价，经过涨停池/板块/热股等重型 IO 后，又重新调用 `snapshot_context(app)` 做 linkage/tradability，归档末尾再调用 `snapshot_as_of(app)` 取 run 时点。MarketSnapshotService 若在中途完成 A→B refresh，同一决策 run 会混入 Parquet A、内存 B、甚至 as_of C，点时可回放契约失真。
+- **原子化方案**：`build_opportunities` 在 cache key 生成时一次复制 `snapshot_by + freshness state + snapshot_version`，并把同一 `snapshot_bundle` 传入 uncached builder。正常有内存行情时，`build_theme_board` 的 premium、linkage、tradability 与 archive 全部使用该冻结 A 版本；仅冷启动内存为空时允许 Parquet fallback。请求返回后的风险字段仍可叠加最新行情，但发生在归档之后且不反写 point-in-time evidence。
+- **P1-57 freshness 未进入 data_state**：旧 `_data_state` 只看 linkage_note / missing_quote / hot_available；即使 snapshot freshness 明确 stale/degraded，只要字段齐全也会落成 `ready`。当前要求 `linkage_stats.snapshot_state == ready` 且 `snapshot_as_of` 非空，否则统一归档 `data_state=degraded`。这不改旧历史行，只影响新产生证据。
+- **P1-58 durable trigger 与实际消费版本可错位**：仅用 `saved_files` 计数触发仍不够；A 快照刚成功写盘后、scheduler 真正执行前，内存可能已刷新成 B。若 builder 再读 current snapshot，就会出现“cursor=A / evidence=B”。`MarketSnapshotService` 现在把每次成功 refresh 的 rows+as_of 作为原子 version bundle 发布，并在 exact parquet 原子写成功后先记录 `last_saved_path + last_saved_as_of`、最后才递增 `saved_files`。scheduler 只从该 exact parquet 读回 A，并把同一 bundle 显式传给 builder，不再依赖当前内存 B。
+- **P1-59 消费者时钟会误判快照所属交易窗口**：旧 scheduler 用“此刻 now”判断盘中/盘外；例如 11:29 的有效 durable A 若 11:31 才被消费，会因消费者已进入午休而被错误丢弃。当前窗口判定改用 `last_saved_as_of` 的北京事实时点；回归固定 11:29 saved snapshot 即使稍后消费仍可归档，而 12:00 saved snapshot 即使 13:01 才消费也只消费 cursor、不补录成盘中决策。
+- **P1-60 exact Parquet 同步读阻塞事件循环**：`durable_snapshot_context` 读取 5k+ 行 parquet 属同步文件 IO，不能直接放在 scheduler coroutine 里。当前由 `archive_intraday_evidence_tick` 通过 `asyncio.to_thread(...)` 读取 exact durable bundle，保持既有 Parquet 读取的线程池纪律。
+- **A→B 反例**：测试在 builder 入口给 A（10:10，涨幅 1%），进入 fake theme-board IO 后把服务刷新成 B（10:11，涨幅 2%）；断言 board premium 输入、participant snapshot、linkage version 与 archive as_of 全部仍为 A，同时服务对象本身已是 B。cache-path 另行断言 key 对应的 snapshot version 会原样传给 uncached builder，禁止“key=A / body=B”。另有 durable 反例把 exact parquet 写成 A、内存改成 B，`durable_snapshot_context` 必须读回 A；`MarketSnapshotService.versioned_snapshot()` 也锁定对外兼容 list 被原地修改后冻结版本仍不变。
+- **冷启动边界**：无内存 snapshot 时仍可用 Parquet 支撑题材展示，但 linkage 没有可信 current snapshot 时会产生 missing/unknown，并由 snapshot freshness/version 质量门把整轮归档标 degraded；不得把 fallback 伪装成 ready 实时决策。
+- **当前验证**：cache singleflight/version/state、真实 uncached builder A→B refresh、exact durable parquet A→current memory B、11:29 fact-time 延迟消费、snapshot-service frozen bundle/atomic save metadata、opportunity replay/outcome/path、theme/catalog/index/import/scheduler 联合回归均已通过；最终 exact-head backend 全量、repo/docs 与 CI 仍是发布门。
+- **非目标**：不调整 snapshot poll/save 周期，不改变题材算法阈值、联动/硬门/精排规则，不改变 HTTP 展示层的 request-time 风险字段，不改 provider、notification、shadow fill 或真实交易行为。
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
 

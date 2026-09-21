@@ -9,8 +9,9 @@ import contextlib
 import logging
 from copy import deepcopy
 from datetime import datetime
+from pathlib import Path
 
-from app.core.bjtime import beijing_now, to_beijing_naive
+from app.core.bjtime import beijing_now, to_beijing, to_beijing_naive
 from app.core.ttl_cache import cache_on
 from app.services.market_snapshot import load_snapshot_map
 
@@ -31,13 +32,19 @@ def snapshot_context(app) -> tuple[dict[str, dict], str, str | None]:
     out: dict[str, dict] = {}
     try:
         svc = state.snapshot_service
-        for row in getattr(svc, "snapshot", None) or []:
+        version_fn = getattr(svc, "versioned_snapshot", None)
+        if callable(version_fn):
+            rows, version_as_of = version_fn()
+        else:
+            rows = [dict(row) for row in (getattr(svc, "snapshot", None) or [])]
+            version_as_of = getattr(svc, "last_success", None)
+        for row in rows:
             if row.get("symbol"):
-                out[row["symbol"]] = row
+                out[str(row["symbol"])] = dict(row)
         fn = getattr(svc, "freshness", None)
         fresh = fn() if callable(fn) else None
         state = getattr(fresh, "state", None) or "unknown"
-        as_of = getattr(fresh, "as_of", None) or getattr(svc, "last_success", None)
+        as_of = version_as_of or getattr(fresh, "as_of", None) or getattr(svc, "last_success", None)
         return out, state, as_of.isoformat() if hasattr(as_of, "isoformat") else (str(as_of) if as_of else None)
     except Exception:  # noqa: BLE001
         return out, "unknown", None
@@ -45,6 +52,30 @@ def snapshot_context(app) -> tuple[dict[str, dict], str, str | None]:
 
 def snapshot_by(app) -> dict[str, dict]:
     return snapshot_context(app)[0]
+
+
+def durable_snapshot_context(app) -> tuple[dict[str, dict], str, str] | None:
+    """Return the exact durable snapshot version that advanced ``saved_files``."""
+    state = _state(app)
+    svc = getattr(state, "snapshot_service", None)
+    path = getattr(svc, "last_saved_path", None) if svc is not None else None
+    raw_as_of = getattr(svc, "last_saved_as_of", None) if svc is not None else None
+    if not path or not isinstance(raw_as_of, datetime):
+        return None
+
+    from app.services.parquet_store import read_parquet_safe
+
+    df, error = read_parquet_safe(Path(path))
+    if df is None:
+        raise RuntimeError(f"durable market snapshot unreadable: {path} | {error}")
+    snap_by: dict[str, dict] = {}
+    for row in df.to_dicts():
+        symbol = row.get("symbol")
+        if symbol is not None:
+            snap_by[str(symbol).zfill(6)] = dict(row)
+    if not snap_by:
+        raise RuntimeError(f"durable market snapshot empty: {path}")
+    return snap_by, "ready", raw_as_of.isoformat()
 
 
 def snapshot_as_of(app) -> datetime | None:
@@ -95,7 +126,8 @@ def attach_risk_to_themes(data: dict, snap_by: dict[str, dict]) -> None:
 
 
 async def build_opportunities(
-    app, trade_date, top_themes: int, stocks_per_theme: int
+    app, trade_date, top_themes: int, stocks_per_theme: int, *,
+    snapshot_bundle: tuple[dict[str, dict], str, str | None] | None = None,
 ) -> dict:
     """opportunities payload 构建（两处端点共用：全量视图 + 盘中 top 筛选）。
 
@@ -104,12 +136,15 @@ async def build_opportunities(
     """
     state = _state(app)
     cache = cache_on(state, "picks.opportunities", 60, maxsize=4)
-    _snap, snapshot_state, snapshot_version = snapshot_context(app)
+    if snapshot_bundle is None:
+        snapshot_bundle = snapshot_context(app)
+    snap_by, snapshot_state, snapshot_version = snapshot_bundle
     key = (trade_date, top_themes, stocks_per_theme, snapshot_state, snapshot_version)
     _, cached = await cache.get_or_set(
         key,
         lambda: _build_opportunities_uncached(
-            app, trade_date, top_themes, stocks_per_theme
+            app, trade_date, top_themes, stocks_per_theme,
+            snapshot_bundle=snapshot_bundle,
         ),
     )
     # 缓存只保存不可变的装配基线。风险字段取请求时的实时快照，必须写在副本上：
@@ -120,9 +155,15 @@ async def build_opportunities(
 
 
 async def _build_opportunities_uncached(
-    app, trade_date, top_themes: int, stocks_per_theme: int
+    app, trade_date, top_themes: int, stocks_per_theme: int, *,
+    snapshot_bundle: tuple[dict[str, dict], str, str | None] | None = None,
 ) -> dict:
-    """构建一份可缓存的机会基线；同键并发由调用方 ``get_or_set`` 单飞。"""
+    """构建一份可缓存的机会基线；一整轮只能消费同一份行情事实。
+
+    ``snapshot_bundle`` 由 ``build_opportunities`` 在缓存 key 生成时一次捕获。
+    重型 provider/theme IO 期间即使 MarketSnapshotService 再刷新，也不能让
+    participant/tradability/archive 改吃更新后的 B 版本，否则一条 run 会拼接两个时点。
+    """
     import asyncio
 
     from app.picks.intraday_opportunity import assemble
@@ -130,8 +171,16 @@ async def _build_opportunities_uncached(
 
     state = _state(app)
     hub = state.hub
+    if snapshot_bundle is None:
+        snapshot_bundle = snapshot_context(app)
+    snap_by, snapshot_state, snapshot_as_of_text = snapshot_bundle
 
-    snapshot_map = await asyncio.to_thread(load_snapshot_map, state.snapshot_service, trade_date)
+    # Premium/theme-board only needs ``change_pct``. Prefer the exact frozen in-memory
+    # snapshot used by candidate linkage. Parquet remains cold-start fallback only;
+    # missing live facts stay visibly degraded rather than silently mixing versions.
+    snapshot_map = snap_by or await asyncio.to_thread(
+        load_snapshot_map, state.snapshot_service, trade_date
+    )
     board = await build_theme_board(hub.provider, trade_date, snapshot_map=snapshot_map)
 
     hot_rows: list[dict] = []
@@ -172,7 +221,6 @@ async def _build_opportunities_uncached(
         index, _names = await _asyncio.to_thread(get_index_cache(app).get)
         _sizes, members_by_code = await _asyncio.to_thread(index_views, index)
         themes = payload["data"].get("themes") or []
-        snap_by, snapshot_state, snapshot_as_of_text = snapshot_context(app)
         # 涨停梯队的 current 状态按**带版本快照**逐只判定；涨停池只提供“今日曾封板”身份。
         # 缺可信时点时保持 unknown，不用首封历史伪造当前仍封或已经开板。
         for th in themes:
@@ -223,7 +271,10 @@ async def _build_opportunities_uncached(
             lambda: archive_intraday_pipeline(
                 payload["data"],
                 trade_date=trade_date.isoformat() if hasattr(trade_date, "isoformat") else str(trade_date),
-                as_of=snapshot_as_of(app) or to_beijing_naive(beijing_now()),
+                as_of=(
+                    to_beijing_naive(datetime.fromisoformat(snapshot_as_of_text))
+                    if snapshot_as_of_text else to_beijing_naive(beijing_now())
+                ),
             )
         )
         payload["data"]["decision_evidence"] = {
@@ -330,28 +381,32 @@ async def archive_intraday_evidence_tick(app) -> dict:
     if saved_files <= last_seen:
         return {"state": "idle", "saved_files": saved_files, "reason": "no_new_snapshot"}
 
-    now = beijing_now()
-    if not in_trading_window(now):
-        # Do not replay a premarket/lunch/after-hours durable snapshot when the next
-        # trading window opens; wait for the next snapshot persisted in-session.
+    import asyncio
+
+    snapshot_bundle = await asyncio.to_thread(durable_snapshot_context, app)
+    if snapshot_bundle is None:
+        raise RuntimeError(
+            f"new durable snapshot {saved_files} has no exact saved path/as_of metadata"
+        )
+    _snap_by, _snapshot_state, snapshot_version = snapshot_bundle
+    if not snapshot_version:
+        raise RuntimeError(f"new durable snapshot {saved_files} has no fact time")
+    snapshot_at = to_beijing(datetime.fromisoformat(snapshot_version))
+    if not in_trading_window(snapshot_at):
+        # Decide from the saved snapshot fact time, not the later consumer clock.
         state.opportunity_evidence_saved_files = saved_files
         return {"state": "skipped", "saved_files": saved_files, "reason": "outside_trading_window"}
 
-    fresh_fn = getattr(svc, "freshness", None)
-    fresh = fresh_fn() if callable(fresh_fn) else None
-    if fresh is None or not fresh.is_usable():
-        raise RuntimeError(
-            f"new durable snapshot {saved_files} is not usable; evidence cursor retained"
-        )
-
     trade_date = await default_trade_date(state.hub)
-    if trade_date != now.date():
+    if trade_date != snapshot_at.date():
         raise RuntimeError(
-            f"new durable snapshot {saved_files} trade_date mismatch: {trade_date} != {now.date()}"
+            f"new durable snapshot {saved_files} trade_date mismatch: "
+            f"{trade_date} != {snapshot_at.date()}"
         )
 
     payload = await build_opportunities(
-        app, trade_date, EVIDENCE_TOP_THEMES, EVIDENCE_STOCKS_PER_THEME
+        app, trade_date, EVIDENCE_TOP_THEMES, EVIDENCE_STOCKS_PER_THEME,
+        snapshot_bundle=snapshot_bundle,
     )
     evidence = (payload.get("data") or {}).get("decision_evidence") or {}
     if evidence.get("state") != "ready":

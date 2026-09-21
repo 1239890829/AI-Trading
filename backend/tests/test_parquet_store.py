@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import polars as pl
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.services.parquet_store import read_latest_in_dir, read_latest_snapshot
@@ -80,6 +81,7 @@ def test_snapshot_write_is_atomic_and_leaves_no_temp(tmp_path: Path):
 
     svc = MarketSnapshotService(poll_interval=60, save_interval=0, parquet_dir=tmp_path)
     svc.snapshot = [{"symbol": "600519", "change_pct": 1.23}]
+    svc.last_success = datetime(2026, 9, 21, 2, 10, tzinfo=timezone.utc)
 
     for _ in range(3):
         svc._maybe_save()
@@ -90,6 +92,9 @@ def test_snapshot_write_is_atomic_and_leaves_no_temp(tmp_path: Path):
     files = sorted(day_dirs[0].glob("*.parquet"))
     assert files, "未产生快照文件"
     assert not list(day_dirs[0].glob("*.tmp")), "临时文件残留，原子写没生效"
+    assert svc.saved_files == 3
+    assert svc.last_saved_path in files
+    assert svc.last_saved_as_of == datetime(2026, 9, 21, 2, 10, tzinfo=timezone.utc)
 
     # 每一份都必须可读（不然后续读取方仍会踩到损坏文件）
     for f in files:

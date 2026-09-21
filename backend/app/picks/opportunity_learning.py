@@ -194,6 +194,10 @@ def _data_state(payload: dict) -> str:
     if payload.get("linkage_note"):
         return "degraded"
     stats = payload.get("linkage_stats") or {}
+    # Quote fields being present is not enough: a stale/degraded snapshot is known-bad
+    # point-in-time input and must never masquerade as ``ready`` evidence.
+    if stats.get("snapshot_state") != "ready" or not stats.get("snapshot_as_of"):
+        return "degraded"
     if int(stats.get("missing_quote") or 0) > 0 or payload.get("hot_available") is False:
         return "degraded"
     return "ready"
