@@ -58,6 +58,7 @@
 | **RV-01** | `review/review-agent.md` | L2 | 复盘 | 盘后复盘 Agent 架构 |
 | **RV-02** | `review/daily-review-sop.md` | L2 | 复盘 | 每日复盘 SOP（怎么判） |
 | **RV-03** | `review/daily-review-checklist.md` | L2 | 复盘 | 每日复盘执行清单（逐项勾） |
+| **RV-04** | `review/chatgpt-multiwindow-audit-20260921.md` | L2 | 审计 | 9/15–9/21 ChatGPT 多窗口执行、Jev、隔离、运行态与工作区审计（一次性证据，不是第二账本） |
 | **DR-01** | `daily-review/` | L1 | 存档 | 逐日复盘报告（YYYY-MM-DD.md） |
 | **DR-02** | `repo-watch/` | L1 | 存档 | 仓库周期性跟踪周报 |
 | **DR-03** | `evolution/` | L1 | 存档 | 进化议程每日执行日志 |

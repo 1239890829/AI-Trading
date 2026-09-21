@@ -81,8 +81,8 @@
 - **方案依据**：用户本轮选股核心要求；v9.3 基线 + v9.8/U47 增量；hunting-decision-design全文，产品闭环§3–6。
 - **范围**：复用picks的盘前、lurk/rps、intraday/relay/radar、gate/执行与events/KB接口；先明确统一读模型，再实现驱动/结构/角色/环境/时点/执行域的开放情境，不另建并行评分系统。
 - **验收**：观察、触发、可执行与实际 shadow fill 分离；本片各情境有成立/反例/缺失，多假设冲突及未知情境保留；旧盘前/盘中口径保留；无有效进入区间不伪造；同一机会和 decision version 可流至 UI/通知/IMP-053 shadow/复盘；盘中可随新事实生成后续版本，早盘未通过不等于全天永久拒绝；相同前缀不变，独立证据不重复加分。
-- **证据**：本轮已读候选与卡片接口：盘中以题材集中、临板与涨幅排序为主，潜伏及持仓波浪未形成统一候选解释。新机制为设计，未实施也未证明策略增益。
-- **下一步**：满足以下条件再实施：硬依赖已完成、v9.4 产品/猎场设计继续作为 U47 的现行规划方向、总账阶段门计算轮到 G2，并由既有“一次继续只领一个切片”流程授权本任务的具体纵切。条件满足后先复用已经可用的实现，按全部KB/因子/策略映射核缺口；依据价值和数据选纵切做无AI对照，不以四类或固定顺序遗漏其他方法。UI夹具可提前，但不能宣称真实数据已通。
+- **证据**：本轮已读候选与卡片接口：盘中以题材集中、临板与涨幅排序为主，潜伏及持仓波浪未形成统一候选解释。新机制为设计，未实施也未证明策略增益。2026-09-21 多窗口审计发现本机仍有唯一未合入 commit `54b7e0c`（旧名 `rsh026-zero-run-reasons`）：它为 `attach_participants()` 增加 `theme_gate_counts`，区分 not_concentrated / missing_catalog / mined_empty_unavailable / mined_empty_no_eligible，能直接解释“为什么 0 候选”。该能力更属于本项 opportunity 可解释性而非已关闭 RSH-026；当前作为 RECOVERY 保留，后续施工本项时先评估/移植，不把它当已落地主线。
+- **下一步**：满足以下条件再实施：硬依赖已完成、v9.4 产品/猎场设计继续作为 U47 的现行规划方向、总账阶段门计算轮到 G2，并由既有“一次继续只领一个切片”流程授权本任务的具体纵切。开工时先审 `54b7e0c` 的 zero-candidate gate counts 是否仍适配当前读模型；若适配则最小移植并补消费者测试，若已被更好实现覆盖则 RETIRE 该 RECOVERY。之后复用已经可用的实现，按全部KB/因子/策略映射核缺口；依据价值和数据选纵切做无AI对照，不以四类或固定顺序遗漏其他方法。UI夹具可提前，但不能宣称真实数据已通。
 - **实施步骤**：①登记指标/字段/时间/来源及候选分母；②抽共用数据快照和读模型，GET不执行研究/落业务记录；③复用召回并增加独立场景路径；④统一hard gate、有效窗口与反证；⑤真实消费者和失败/恢复对照；⑥仅研究验证通过的增量获准切换，模型不自动晋级。
 - **恢复**：先影子双读，同源逐条对账；可以回退到上个可靠读模型，但历史事实和拒绝/失效记录不得丢失；无关权限及参数不变。
 
@@ -147,8 +147,8 @@
 - **方案依据**：docs/ai/jev-integration.md §29。
 - **范围**：固定事件队列、独立人工标签、规则/Jev/现有 LLM/fallback 对照，以及 TypeSafe 与更贵模型 token/调用量、延迟和质量的同条件度量；不把 agreement 写成 accuracy。
 - **验收**：v1 240 条 human.category/certainty/actionable 独立完成且通过 strict human validation；verifier 另有独立 claim/evidence 人工集；生产阈值、额度节省或选股增益只允许由可复算 A/B / walk-forward 得出。
-- **证据**：PR #33 建立 verifier/gold-set 工具，PR #34 完成固定队列 Jev 预标注与审核优先级并均已合入 `master`。240 条固定队列当前 human 仍 0/240；规则/Jev agreement 为 category 55.42%、certainty 77.92%、actionable 57.50%，仅用于安排人工审核。当前极保守 actionable cascade 在该平衡队列上无节省证据。
-- **下一步**：独立完成 240 条人工标注和 verifier 人工样本，再比较规则、Jev、DeepSeek 与 fallback；同时为 RSH-031 按市场状态/事件类型/板高分层设计历史涨停域人工 anchor，Jev 只写独立 prediction。长期 token A/B、选股/做T及涨停语义特征 walk-forward/消融保持开放。
+- **证据**：PR #33 建立 verifier/gold-set 工具，PR #34 完成固定队列 Jev 预标注与审核优先级并均已合入 `master`。240 条固定队列当前 human 仍 0/240；规则/Jev agreement 为 category 55.42%、certainty 77.92%、actionable 57.50%，仅用于安排人工审核。2026-09-21 现场 usage ledger 另证实 Jev 并非“只装未用”：审计时项目累计 172 次调用（169 success / 3 failed），`alert_triage=168`、`event_llm_aux=4`，约 128,276 input / 7,653 output tokens、平均约 856ms；另有全局 task-router / PR41 governance-review 两次。当天 bounded live smoke 再次由 `jev-1.13.0` 成功返回。**但 assistant tool router 在项目 usage 中仍为 0 次、human gold 仍 0/240**，因此接线可用不等于 assistant/cascade/accuracy/额度节省已实证。
+- **下一步**：独立完成 240 条人工标注和 verifier 人工样本，再比较规则、Jev、DeepSeek 与 fallback；先补一项运行事实：用真实 assistant 请求确认 `jev_assistant_tool_mode=shadow` 是否产生 route receipt/coverage-miss telemetry，未触发则查消费者而不是用配置值冒充已使用。同时为 RSH-031 按市场状态/事件类型/板高分层设计历史涨停域人工 anchor，Jev 只写独立 prediction。高影响多轮任务可按需增加 bounded Jev semantic review 作为旁路反证，但确定性数值/数据库/交易门禁永远不交给 Jev。长期 token A/B、选股/做T及涨停语义特征 walk-forward/消融保持开放。
 - **恢复**：预标注永不回写 human；任何实验失败只停用对应 Jev 增量，不覆盖原始队列、规则结果或否证证据。
 
 ## RSH-031
