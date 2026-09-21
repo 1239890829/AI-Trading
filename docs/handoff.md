@@ -1,8 +1,8 @@
-# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 Snapshot Atomicity
+# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 Run Ledger
 
 > 定位：当前运行模式、最新已合并证据、唯一在制纵切与安全边界；任务唯一状态仍以所属 stage 为准。
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 的 PR #69/#70/#71/#72/#74/#75/#76/#78/#79/#80 已合并；PR #80 merge=`bc102f565e418262a250a9b0138f84d0779f8cd5`，PR CI #525、exact-head release gate 与 post-merge CI #526 全绿，质量门分支已清理。真实长期工作区已同步到该 master并恢复默认 backend：30/30 scheduler 运行，`opportunity-evidence` 0 failure；新 `evidence_quality` 已在真实 DB 读侧生效。午休 durable snapshot 按设计只消费 cursor 不归档，candidate/hard_gate/rank 的最终真实验收仍待第一份下午盘中 durable snapshot，RSH-026 暂不关闭。当前唯一在制项为 `chatgpt/rsh026-snapshot-atomicity`（基于 `master@bc102f56`）：修复一次重型机会构建期间跨 market refresh 拼接 A/B 两个行情时点，以及 stale/无版本快照仍可能被 `_data_state` 标 ready 的问题；不改选股阈值、scheduler 周期、交易/通知/shadow-fill 语义。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 的 PR #69/#70/#71/#72/#74/#75/#76/#78/#79/#80/#81 已合并；PR #81 merge=`e3750cd115a8ac2ab5e7dad65aeef48e4ad7ed93`，post-merge CI #529 全绿且真实工作区已同步运行。13:05/13:10 两次下午 durable snapshot 已由后台 `opportunity-evidence` 自动消费，scheduler 0 failure，并分别生成稳定 run_id，但均为 `records=0`；DB 因只有 symbol-level snapshot，无法区分“合法零候选”与“构建链空结果/降级”，因此 candidate/hard_gate/rank 仍无可追溯 run 事实，RSH-026 暂不关闭。当前唯一在制项为 `chatgpt/rsh026-run-ledger`（基于 `master@e3750cd`）：新增 append-only `OpportunityDecisionRun`，保证 0/N 条 symbol rows 都有 durable run evidence 且与 symbol/outcome 同事务，不改候选算法、scheduler 周期、策略权重、交易/通知/shadow-fill 语义。
 
 
 ## 1. 固定入口与范围
@@ -235,6 +235,20 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **冷启动边界**：无内存 snapshot 时仍可用 Parquet 支撑题材展示，但 linkage 没有可信 current snapshot 时会产生 missing/unknown，并由 snapshot freshness/version 质量门把整轮归档标 degraded；不得把 fallback 伪装成 ready 实时决策。
 - **当前验证**：cache singleflight/version/state、真实 uncached builder A→B refresh、exact durable parquet A→current memory B、11:29 fact-time 延迟消费、snapshot-service frozen bundle/atomic save metadata、opportunity replay/outcome/path、theme/catalog/index/import/scheduler 联合回归均已通过；最终 exact-head backend 全量、repo/docs 与 CI 仍是发布门。
 - **非目标**：不调整 snapshot poll/save 周期，不改变题材算法阈值、联动/硬门/精排规则，不改变 HTTP 展示层的 request-time 风险字段，不改 provider、notification、shadow fill 或真实交易行为。
+
+## 8.11 U49 主动审计回执（RSH-026 Run Ledger）
+
+- **阶段/基点**：`Production validation + candidate implementation`；基于 `master@e3750cd115a8ac2ab5e7dad65aeef48e4ad7ed93`（PR #81 merge 后 post-merge CI #529 全绿，真实 backend 已同步运行）。
+- **P1-61 zero-record run 不可追溯**：13:05 / 13:10 两个真实 durable snapshot 均由后台自动触发并日志记录 `records=0`，scheduler 0 failure、run_id 稳定；但旧 schema 只有 symbol-level `opportunity_decision_snapshot`，零记录 run 在 SQLite 完全没有事实。日志一旦轮转，无法区分“本轮合法零候选”“题材/容器映射全空”“linkage 降级为空”或归档断链。当前新增 append-only `OpportunityDecisionRun`，0/N symbol rows 都必须有 run row。
+- **P1-62 run 与 symbol/outcome 必须同事务**：run row 先写成功、symbol/outcome 后失败会制造“本轮已完整归档”的假事实。当前 `archive_records(..., run_meta=...)` 在同一个 SQLAlchemy transaction 中写 run + symbol + D0 identity；唯一约束冲突反例会整体 rollback，三张表均不得留下半状态。
+- **P1-63 同 run_id 两份事实不得静默合并**：run_id 由场景/交易日/as_of 决定；若 exact replay 的 run-level summary/linkage/stage counts 与旧值不同，说明同一时点身份对应了两份事实。run meta 计算 `evidence_digest`；已有 run 的 digest 不一致直接拒绝，禁止覆盖或“以最新为准”。
+- **P1-64 0-record degraded run 也必须参与质量门**：symbol rows 为空不能让 degraded run 从 effect denominator 消失。scorecard 与 learning_summary 都读取 run ledger；即使已有样本量和标签分母都满足，只要存在 non-ready intraday run，`evidence_quality.complete=false`，scorecard verdict 仍为 `degraded_input`。反之 ready 的合法 zero-record run 可显示输入质量完整，但因无 symbol denominator 仍是 `no_matching_denominator`，不会制造效果样本。
+- **run 元数据**：持久化 `trade_date/as_of/scenario/strategy/feature/data_state/snapshot_state/snapshot_as_of`，theme/participant/candidate-audit 数，stage/decision counts，linkage_stats、summary、caveats 与 digest。它描述“这一轮发生了什么”，symbol table 继续描述“这一轮对哪些股票做了什么”，不伪造 sentinel symbol。
+- **replay/summary**：`replay_run` 在零 symbol rows 时仍返回 `run_evidence`；`learning_summary.run_ledger` 显示 run 数、zero-record run 数、data_state 分布与最新 run identity，运营/复盘不再依赖日志猜测。
+- **历史边界**：不从 13:05 / 13:10 旧日志反向补造 run row；当时缺少完整 durable metadata，追写会把日志摘要冒充当时 DB 事实。新表只从迁移发布后向前积累。
+- **P1-65 显式模型注册不能靠 import 副作用**：`main.py::_REGISTERED_MODELS` 原先连既有 `OpportunityOutcomeRevision` 都未显式列出，实际靠导入整个模块的副作用进入 `Base.metadata`。本片新增 run 表后同时补齐 `OpportunityDecisionRun + OpportunityOutcomeRevision` 的显式 import/tuple 引用，避免冷启动/create_all 与注释所声明的真相源继续分叉。
+- **当前验证**：migration/model parity、零记录幂等回放、same-run digest mismatch、run+symbol 事务原子回滚、zero-record degraded scorecard 阻断、main/import-lint 及既有 opportunity/revision 回归均已通过。真实 292MB 运行库一致性副本从 `d9e4c2b7a1f6` 升到 `e1a7b4c2d9f0` 后 `integrity_check=ok`，156,593 snapshot / 156,593 base outcome / 48 revision 全保留，新 run 表为 0，证明迁移不反填历史猜测；随后在该副本注入一拍 `ready + themes=[] + records=0` 的真实结构，结果只新增 1 条 `OpportunityDecisionRun`、0 symbol/outcome，`replay_run.run_evidence` 与 `learning_summary.run_ledger` 均能明确读出合法零候选，DB 完整性仍 `ok`。最终 exact-head 全量 backend、repo/docs、CI 与发布后真实 0/N-run 验收仍是发布门。
+- **非目标**：本片不改变 theme/participant 生成规则，不把 zero-record 自动判为错误，不补通知 run-level 语义，不改 scheduler 周期、候选阈值、provider failover、通知、shadow-fill 或真实交易行为。
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
 

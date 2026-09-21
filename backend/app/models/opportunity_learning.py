@@ -61,6 +61,37 @@ class OpportunityDecisionSnapshot(Base):
     )
 
 
+class OpportunityDecisionRun(Base):
+    """Append-only run-level evidence, including legitimate zero-record runs."""
+
+    __tablename__ = "opportunity_decision_run"
+
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime, index=True)
+    scenario: Mapped[str] = mapped_column(String(32), index=True)
+    strategy_version: Mapped[str] = mapped_column(String(64))
+    feature_version: Mapped[str] = mapped_column(String(64))
+    data_state: Mapped[str] = mapped_column(String(16), default="unknown", index=True)
+    snapshot_state: Mapped[str] = mapped_column(String(16), default="unknown")
+    snapshot_as_of: Mapped[str] = mapped_column(String(40), default="")
+    theme_count: Mapped[int] = mapped_column(Integer, default=0)
+    participant_count: Mapped[int] = mapped_column(Integer, default=0)
+    candidate_audit_count: Mapped[int] = mapped_column(Integer, default=0)
+    records_total: Mapped[int] = mapped_column(Integer, default=0)
+    candidate_rows: Mapped[int] = mapped_column(Integer, default=0)
+    hard_gate_rows: Mapped[int] = mapped_column(Integer, default=0)
+    rank_rows: Mapped[int] = mapped_column(Integer, default=0)
+    notification_rows: Mapped[int] = mapped_column(Integer, default=0)
+    stage_counts: Mapped[str] = mapped_column(Text, default="{}")
+    decision_counts: Mapped[str] = mapped_column(Text, default="{}")
+    linkage_stats: Mapped[str] = mapped_column(Text, default="{}")
+    summary: Mapped[str] = mapped_column(Text, default="{}")
+    caveats: Mapped[str] = mapped_column(Text, default="[]")
+    evidence_digest: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class OpportunityOutcomeLabel(Base):
     """Outcome attached later without rewriting the point-in-time snapshot."""
 

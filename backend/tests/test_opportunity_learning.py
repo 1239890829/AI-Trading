@@ -7,10 +7,12 @@ import pytest
 from datetime import date, datetime, timezone
 
 from sqlalchemy import create_engine, delete, event, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from app.models.opportunity_learning import (
-    OpportunityDecisionSnapshot, OpportunityOutcomeLabel, OpportunityOutcomeRevision,
+    OpportunityDecisionRun, OpportunityDecisionSnapshot,
+    OpportunityOutcomeLabel, OpportunityOutcomeRevision,
 )
 from app.models.watchlist import Base
 from app.schemas.market import Kline
@@ -24,7 +26,9 @@ from app.picks.opportunity_learning import (
     PATH_VERSION,
     PRICE_BASIS_VERSION,
     STRATEGY_VERSION,
+    archive_intraday_pipeline,
     archive_records,
+    build_intraday_run_meta,
     assess_fill_state,
     backfill_missing_outcome_identities,
     backfill_outcome_revisions,
@@ -172,6 +176,104 @@ def test_filtered_symbol_is_archived_before_it_disappears_from_participants():
         ("candidate", "rejected"), ("hard_gate", "rejected")
     ]
     assert all(r["symbol"] != "300003" or r["stage"] != "rank" for r in rows)
+
+
+def test_zero_record_intraday_run_is_durable_idempotent_and_replayable(tmp_path):
+    sf = _factory(tmp_path)
+    payload = {
+        "trade_date": "2026-09-16",
+        "hot_available": True,
+        "linkage_stats": {
+            "snapshot_state": "ready",
+            "snapshot_as_of": "2026-09-16T02:05:00+00:00",
+            "missing_quote": 0,
+            "themes_mined": 0,
+            "candidates": 0,
+        },
+        "themes": [],
+        "summary": {"limit_up_total": 81, "top_theme": None},
+        "caveats": ["本轮无满足集中度/容器条件的候选"],
+    }
+    as_of = datetime(2026, 9, 16, 10, 5)
+    first = archive_intraday_pipeline(
+        payload, trade_date="2026-09-16", as_of=as_of, session_factory=sf
+    )
+    second = archive_intraday_pipeline(
+        payload, trade_date="2026-09-16", as_of=as_of, session_factory=sf
+    )
+    assert first["records"] == 0 and first["run_inserted"] == 1
+    assert second["records"] == 0 and second["run_inserted"] == 0
+
+    with sf() as db:
+        run = db.get(OpportunityDecisionRun, first["run_id"])
+        assert run is not None
+        assert run.records_total == 0
+        assert run.theme_count == 0
+        assert run.participant_count == 0
+        assert run.candidate_audit_count == 0
+        assert run.data_state == "ready"
+        assert len(db.execute(select(OpportunityDecisionSnapshot)).scalars().all()) == 0
+
+    replay = replay_run(first["run_id"], sf)
+    assert replay["records"] == 0 and replay["mismatches"] == 0
+    assert replay["run_evidence"]["records_total"] == 0
+    assert replay["run_evidence"]["theme_count"] == 0
+    assert replay["run_evidence"]["summary"]["limit_up_total"] == 81
+
+    summary = learning_summary("2026-09-16", sf)
+    assert summary["run_ledger"] == {
+        "runs": 1, "zero_record_runs": 1, "data_states": {"ready": 1},
+        "latest_as_of": "2026-09-16T10:05:00",
+        "latest_run_id": first["run_id"],
+    }
+    assert summary["evidence_quality"]["decision_runs"] == 1
+    assert summary["evidence_quality"]["zero_record_runs"] == 1
+    assert summary["evidence_quality"]["run_states"] == {"ready": 1}
+    assert summary["evidence_quality"]["complete"] is True
+
+
+def test_same_run_id_with_different_run_digest_is_rejected(tmp_path):
+    sf = _factory(tmp_path)
+    payload = _payload()
+    as_of = datetime(2026, 9, 16, 10, 5)
+    first = archive_intraday_pipeline(
+        payload, trade_date="2026-09-16", as_of=as_of, session_factory=sf
+    )
+    mutated = json.loads(json.dumps(payload))
+    mutated["summary"] = {"limit_up_total": 999}
+    with pytest.raises(RuntimeError, match="run digest mismatch"):
+        archive_intraday_pipeline(
+            mutated, trade_date="2026-09-16", as_of=as_of, session_factory=sf
+        )
+    with sf() as db:
+        run = db.get(OpportunityDecisionRun, first["run_id"])
+        assert run is not None
+        assert json.loads(run.summary).get("limit_up_total") != 999
+        assert len(db.execute(select(OpportunityDecisionSnapshot)).scalars().all()) == 6
+
+
+def test_run_and_symbol_rows_share_one_atomic_transaction(tmp_path):
+    sf = _factory(tmp_path)
+    payload = _payload()
+    as_of = datetime(2026, 9, 16, 10, 5)
+    run_id, rows = build_intraday_records(
+        payload, trade_date="2026-09-16", as_of=as_of
+    )
+    first = dict(rows[0])
+    collision = dict(first)
+    collision["decision"] = "rejected" if first["decision"] != "rejected" else "unknown"
+    collision["evidence"] = {**(first.get("evidence") or {}), "collision": True}
+    bad_rows = [first, collision]
+    meta = build_intraday_run_meta(
+        payload, run_id=run_id, trade_date="2026-09-16", as_of=as_of, records=bad_rows
+    )
+    with pytest.raises(IntegrityError):
+        archive_records(run_id, bad_rows, sf, run_meta=meta)
+
+    with sf() as db:
+        assert db.get(OpportunityDecisionRun, run_id) is None
+        assert db.execute(select(OpportunityDecisionSnapshot)).scalars().all() == []
+        assert db.execute(select(OpportunityOutcomeLabel)).scalars().all() == []
 
 
 def test_archive_is_append_only_idempotent_and_offline_replay_matches(tmp_path):
@@ -1609,6 +1711,42 @@ def _seed_scorecard_label(
             reason=reason or f"D0 cost proxy ({COST_MODEL_VERSION})",
         ))
         db.commit()
+
+def test_scorecard_blocks_effect_when_zero_record_run_is_degraded(tmp_path):
+    from app.picks.opportunity_learning import MIN_LABELS_FOR_VERDICT
+
+    sf = _factory(tmp_path)
+    when = datetime(2026, 9, 16, 10, 5)
+    for i in range(MIN_LABELS_FOR_VERDICT):
+        _seed_scorecard_label(
+            sf, snapshot_id=f"run-quality-ready-{i}", run_id=f"run-quality-{i}",
+            symbol=f"{601000 + i:06d}", as_of=when, proxy=1.0, data_state="ready",
+        )
+    with sf() as db:
+        db.add(OpportunityDecisionRun(
+            run_id="zero-degraded-run", trade_date="2026-09-16", as_of=when,
+            scenario="intraday_opportunity", strategy_version=STRATEGY_VERSION,
+            feature_version=FEATURE_VERSION, data_state="degraded",
+            snapshot_state="stale", snapshot_as_of="2026-09-16T02:05:00+00:00",
+            records_total=0, evidence_digest="d" * 64,
+        ))
+        db.commit()
+
+    card = opportunity_scorecard("2026-09-16", session_factory=sf)
+    assert card["funnel_denominator"]["complete"] is True
+    assert card["sample"]["count"] == MIN_LABELS_FOR_VERDICT
+    assert card["evidence_quality"]["decision_runs"] == 1
+    assert card["evidence_quality"]["zero_record_runs"] == 1
+    assert card["evidence_quality"]["run_states"] == {"degraded": 1}
+    assert card["evidence_quality"]["unready_runs"] == 1
+    assert card["evidence_quality"]["complete"] is False
+    assert card["verdict"] == "degraded_input"
+
+    summary = learning_summary("2026-09-16", sf)
+    assert summary["evidence_quality"]["run_states"] == {"degraded": 1}
+    assert summary["evidence_quality"]["unready_runs"] == 1
+    assert summary["evidence_quality"]["complete"] is False
+
 
 def test_scorecard_blocks_effect_verdict_when_funnel_contains_degraded_input(tmp_path):
     """标签全齐、ready 样本已达下限，也不能跨过 degraded 输入质量门。"""

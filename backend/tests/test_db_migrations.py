@@ -120,7 +120,7 @@ def test_versioned_database_upgrades_idempotently(tmp_path):
 # `paper_position` 的索引名与约束差异等，均属存量、非本轮引入）⇒ 全库清账是独立任务
 # （账本 `GOV-013`）。**在此处收窄范围是刻意的**：把已知存量偏差一并断红只会让门禁长期失效。
 # 新增表时把模型类追加进下面的元组即可获得同样的保护。
-_MODELS_UNDER_PARITY = ("OpportunityDecisionSnapshot", "OpportunityOutcomeLabel", "OpportunityOutcomeRevision")
+_MODELS_UNDER_PARITY = ("OpportunityDecisionSnapshot", "OpportunityDecisionRun", "OpportunityOutcomeLabel", "OpportunityOutcomeRevision")
 
 
 def _schema_drift(engine, model) -> list[str]:
@@ -158,12 +158,14 @@ def test_opportunity_learning_tables_match_their_models(tmp_path):
     """新增表在 alembic 与 create_all 两条路径下必须是**同一种结构**。"""
     from app.models.opportunity_learning import (
         OpportunityDecisionSnapshot,
+        OpportunityDecisionRun,
         OpportunityOutcomeLabel,
         OpportunityOutcomeRevision,
     )
 
     models = {
         "OpportunityDecisionSnapshot": OpportunityDecisionSnapshot,
+        "OpportunityDecisionRun": OpportunityDecisionRun,
         "OpportunityOutcomeLabel": OpportunityOutcomeLabel,
         "OpportunityOutcomeRevision": OpportunityOutcomeRevision,
     }
