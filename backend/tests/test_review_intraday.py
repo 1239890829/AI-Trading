@@ -365,6 +365,20 @@ def test_collect_d0_path_outcomes_uses_tencent_only_and_selected_symbols(tmp_pat
     assert rejected.path_state == "deferred" and rejected.mfe_pct is None
 
 
+def test_price_basis_rejects_cross_provider_ratio():
+    d = date(2026, 9, 16)
+    cross = ri._price_basis_from_daily(
+        "600001", {d: (10.0, "tencent")}, {d: (10.1, "eastmoney")}
+    )
+    assert cross == {}
+
+    same = ri._price_basis_from_daily(
+        "600001", {d: (10.0, "eastmoney")}, {d: (10.1, "eastmoney")}
+    )
+    assert same[("2026-09-16", "600001")][0] == pytest.approx(10.0 / 10.1)
+    assert same[("2026-09-16", "600001")][1] == "qfq:eastmoney|raw:eastmoney"
+
+
 def test_run_review_no_brief(brief_dir, monkeypatch):
     import asyncio
 

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+
+import pytest
 from datetime import date, datetime, timezone
 
 from sqlalchemy import create_engine, delete, event, select
@@ -16,6 +18,7 @@ from app.picks.opportunity_learning import (
     FILL_SEAL_GAP_PCT,
     OUTCOME_HORIZON,
     PATH_VERSION,
+    PRICE_BASIS_VERSION,
     STRATEGY_VERSION,
     archive_records,
     assess_fill_state,
@@ -43,6 +46,13 @@ def _factory(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'opportunity-learning.db'}")
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine)
+
+
+def _basis(trade_date: str, *symbols: str, factor: float = 1.0):
+    return {
+        (trade_date, symbol): (factor, "qfq:test|raw:test")
+        for symbol in symbols
+    }
 
 
 def _payload():
@@ -144,7 +154,7 @@ def test_archive_is_append_only_idempotent_and_offline_replay_matches(tmp_path):
             select(OpportunityDecisionSnapshot.snapshot_id, OpportunityDecisionSnapshot.evidence)
             .order_by(OpportunityDecisionSnapshot.id)
         ).all()
-    label_trade_date("2026-09-16", {"600001": 10.5}, sf)
+    label_trade_date("2026-09-16", {"600001": 10.5}, sf, price_basis_by_key=_basis("2026-09-16", "600001"))
     with sf() as db:
         evidence_after = db.execute(
             select(OpportunityDecisionSnapshot.snapshot_id, OpportunityDecisionSnapshot.evidence)
@@ -223,7 +233,7 @@ def test_assessed_pending_fill_ok_is_not_reclassified_as_legacy_default(tmp_path
         _payload(), trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5)
     )
     archive_records(run_id, rows, sf)
-    missing = label_trade_date("2026-09-16", {}, sf)
+    missing = label_trade_date("2026-09-16", {}, sf, price_basis_by_key=_basis("2026-09-16", "600001"))
     assert missing["pending"] == 1
     with sf() as db:
         outcome = db.execute(
@@ -260,12 +270,12 @@ def test_outcome_label_is_retryable_and_coverage_is_mechanical(tmp_path):
 
     assert pending_symbols("2026-09-16", sf) == {"600001"}
     assert pending_symbols("2026-09-16", sf, include_deferred=True) == {"600001", "600002"}
-    missing = label_trade_date("2026-09-16", {}, sf)
+    missing = label_trade_date("2026-09-16", {}, sf, price_basis_by_key=_basis("2026-09-16", "600001"))
     assert missing == {"trade_date": "2026-09-16", "labeled": 0, "unknown": 0, "pending": 1}
-    done = label_trade_date("2026-09-16", {"600001": 10.5}, sf)
+    done = label_trade_date("2026-09-16", {"600001": 10.5}, sf, price_basis_by_key=_basis("2026-09-16", "600001"))
     assert done["labeled"] == 1 and done["pending"] == 0
     # 幂等：已标结果不重算，不允许未来一次价格覆盖原始 D0 标签。
-    assert label_trade_date("2026-09-16", {"600001": 99.0}, sf)["labeled"] == 0
+    assert label_trade_date("2026-09-16", {"600001": 99.0}, sf, price_basis_by_key=_basis("2026-09-16", "600001"))["labeled"] == 0
     with sf() as db:
         label = db.execute(
             select(OpportunityOutcomeLabel)
@@ -284,7 +294,11 @@ def test_outcome_label_is_retryable_and_coverage_is_mechanical(tmp_path):
         "labeled_symbols": 1, "outcome_attachment_coverage": 1.0, "label_coverage": 0.5,
         "missing_outcome_symbols": [], "unlabeled_symbols": ["600002"],
         "run_symbol_opportunities": 2, "outcome_opportunities": 2,
-        "labeled_opportunities": 1, "opportunity_label_coverage": 0.5,
+        "labeled_opportunities": 1,
+        "current_basis_labeled_opportunities": 1,
+        "current_basis_version": PRICE_BASIS_VERSION,
+        "current_basis_opportunity_coverage": 0.5,
+        "opportunity_label_coverage": 0.5,
     }
     assert summary["stages"] == {"candidate": 2, "hard_gate": 2, "rank": 2, "notification": 0}
 
@@ -431,6 +445,7 @@ def test_legacy_identity_backfill_keeps_full_funnel_market_result_nonactionable(
         "2026-09-16",
         {"600001": 10.5, "600002": 8.4},
         sf,
+        price_basis_by_key=_basis("2026-09-16", "600001", "600002"),
         include_deferred=True,
         batch_size=1,
     )
@@ -462,9 +477,10 @@ def test_deferred_denominator_backfill_records_market_result_without_fill_claim(
     )
     archive_records(run_id, rows, sf)
     # realtime lane only labels selected 600001; explicit offline lane later supplies both closes.
-    label_trade_date("2026-09-16", {"600001": 10.5}, sf)
+    label_trade_date("2026-09-16", {"600001": 10.5}, sf, price_basis_by_key=_basis("2026-09-16", "600001"))
     result = label_trade_date(
-        "2026-09-16", {"600001": 10.5, "600002": 8.4}, sf, include_deferred=True
+        "2026-09-16", {"600001": 10.5, "600002": 8.4}, sf,
+        price_basis_by_key=_basis("2026-09-16", "600001", "600002"), include_deferred=True
     )
     assert result["labeled"] == 5
     with sf() as db:
@@ -583,7 +599,7 @@ def test_pending_future_targets_are_selected_only_bounded_and_recover_overdue(tm
     assert targets["2026-09-21"] == {"600001"}
     assert "600002" not in set().union(*targets.values()), "deferred denominator must not expand realtime fetches"
 
-    repaired = label_due_outcomes("2026-09-21", {"600001": 10.5}, sf)
+    repaired = label_due_outcomes("2026-09-21", {"600001": 10.5}, sf, price_basis_by_key=_basis("2026-09-18", "600001"))
     assert repaired["labeled"] == 1
     assert "2026-09-21" not in pending_outcome_targets("2026-09-22", sf, lookback_days=30)
 
@@ -602,10 +618,11 @@ def test_d1_label_is_reference_proxy_not_shadow_fill_and_deferred_stays_nonactio
         date(2026, 9, 23), date(2026, 9, 24), date(2026, 9, 25),
     ]
     ensure_outcome_horizons("2026-09-18", days, sf)
-    realtime = label_due_outcomes("2026-09-21", {"600001": 10.5, "600002": 8.4}, sf)
+    realtime = label_due_outcomes("2026-09-21", {"600001": 10.5, "600002": 8.4}, sf, price_basis_by_key=_basis("2026-09-18", "600001", "600002"))
     assert realtime["labeled"] == 1
     offline = label_due_outcomes(
-        "2026-09-21", {"600001": 10.5, "600002": 8.4}, sf, include_deferred=True
+        "2026-09-21", {"600001": 10.5, "600002": 8.4}, sf,
+        price_basis_by_key=_basis("2026-09-18", "600001", "600002"), include_deferred=True
     )
     assert offline["labeled"] == 5
     with sf() as db:
@@ -652,6 +669,82 @@ def _tencent_bar(hh: int, mm: int, *, high: float, low: float, source: str = "te
         ts=datetime(2026, 9, 16, hh - 8, mm, tzinfo=timezone.utc),
         open=10.0, close=10.0, high=high, low=low, volume=1000, source=source,
     )
+
+
+def test_corporate_action_qfq_basis_prevents_mechanical_dividend_loss(tmp_path):
+    sf = _factory(tmp_path)
+    snapshot = OpportunityDecisionSnapshot(
+        snapshot_id="ca-s1", run_id="ca-r1", trade_date="2026-09-16",
+        as_of=datetime(2026, 9, 16, 10, 5), scenario="intraday_opportunity",
+        stage="rank", symbol="603444", name="吉比特", source_theme="游戏",
+        decision="ranked", rank=1, strategy_version=STRATEGY_VERSION,
+        feature_version=FEATURE_VERSION, data_state="ready", entry_price=373.49,
+        evidence="{}",
+    )
+    outcome = OpportunityOutcomeLabel(
+        snapshot_id="ca-s1", horizon="d1_close", target_date="2026-09-17",
+        state="pending", label="unknown", reference_price=373.49,
+        fill_state="pending", price_basis_version=PRICE_BASIS_VERSION,
+    )
+    with sf() as db:
+        db.add(snapshot)
+        db.add(outcome)
+        db.commit()
+
+    factor = 363.49 / 373.49  # real 2026-09-16 raw/qfq anchor before 09-17 ex-dividend
+    result = label_due_outcomes(
+        "2026-09-17", {"603444": 352.06}, sf,
+        price_basis_by_key={
+            ("2026-09-16", "603444"): (factor, "qfq:marketdb|raw:marketdb")
+        },
+        horizons=("d1_close",),
+    )
+    assert result["labeled"] == 1
+    with sf() as db:
+        saved = db.execute(select(OpportunityOutcomeLabel)).scalar_one()
+    assert saved.reference_price == 373.49
+    assert saved.basis_reference_price == pytest.approx(363.49)
+    assert saved.reference_adjustment_factor == pytest.approx(factor)
+    assert saved.return_pct == pytest.approx(-3.14)
+    assert saved.return_pct != pytest.approx(round((352.06 / 373.49 - 1) * 100, 2))
+    assert saved.price_basis_version == PRICE_BASIS_VERSION
+
+
+def test_suspended_target_date_stays_pending_and_never_borrows_neighbor_close(tmp_path):
+    sf = _factory(tmp_path)
+    snapshot = OpportunityDecisionSnapshot(
+        snapshot_id="susp-s1", run_id="susp-r1", trade_date="2026-09-18",
+        as_of=datetime(2026, 9, 18, 10, 5), scenario="intraday_opportunity",
+        stage="rank", symbol="600001", name="甲", source_theme="算力",
+        decision="ranked", rank=1, strategy_version=STRATEGY_VERSION,
+        feature_version=FEATURE_VERSION, data_state="ready", entry_price=10.0,
+        evidence="{}",
+    )
+    outcome = OpportunityOutcomeLabel(
+        snapshot_id="susp-s1", horizon="d1_close", target_date="2026-09-21",
+        state="pending", label="unknown", reference_price=10.0,
+        fill_state="pending", price_basis_version=PRICE_BASIS_VERSION,
+    )
+    with sf() as db:
+        db.add_all([snapshot, outcome])
+        db.commit()
+
+    # The symbol may resume on 09-22, but this API accepts only the exact target
+    # day's close map.  An absent 09-21 bar must remain pending, never borrow 09-22.
+    got = label_due_outcomes(
+        "2026-09-21", {}, sf,
+        price_basis_by_key=_basis("2026-09-18", "600001"),
+        horizons=("d1_close",),
+    )
+    assert got == {
+        "target_date": "2026-09-21", "horizons": ["d1_close"],
+        "labeled": 0, "unknown": 0, "pending": 1,
+    }
+    with sf() as db:
+        saved = db.execute(select(OpportunityOutcomeLabel)).scalar_one()
+    assert saved.state == "pending"
+    assert saved.outcome_price is None and saved.return_pct is None
+    assert "d1_close@2026-09-21" in saved.reason
 
 
 def test_d0_path_excludes_predecision_and_decision_minute_and_computes_excursions():
@@ -782,7 +875,7 @@ def test_d0_path_realtime_labels_selected_only_and_scorecard_exposes_identity(tm
         session_factory=sf,
     )
     assert result["labeled"] == 1 and result["skipped_deferred"] == 5
-    label_trade_date("2026-09-16", {"600001": 10.5}, sf)
+    label_trade_date("2026-09-16", {"600001": 10.5}, sf, price_basis_by_key=_basis("2026-09-16", "600001"))
 
     with sf() as db:
         selected = db.execute(
@@ -901,7 +994,7 @@ def test_missing_entry_price_becomes_unknown_not_zero_return(tmp_path):
         payload, trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5)
     )
     archive_records(run_id, rows, sf)
-    result = label_trade_date("2026-09-16", {"600001": 10.5}, sf)
+    result = label_trade_date("2026-09-16", {"600001": 10.5}, sf, price_basis_by_key=_basis("2026-09-16", "600001"))
     assert result["unknown"] == 1
     with sf() as db:
         label = db.execute(
@@ -1018,7 +1111,7 @@ def test_label_trade_date_actually_wires_net_return_into_the_row(tmp_path):
         _payload(), trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5)
     )
     archive_records(run_id, rows, sf)
-    label_trade_date("2026-09-16", {"600001": 10.5}, sf)
+    label_trade_date("2026-09-16", {"600001": 10.5}, sf, price_basis_by_key=_basis("2026-09-16", "600001"))
 
     expected_net, expected_cost, _q = round_trip_net_pct(10.0, 10.5)
     with sf() as db:
@@ -1060,7 +1153,7 @@ def test_sealed_board_keeps_net_return_none_and_never_zero(tmp_path):
         payload, trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5)
     )
     archive_records(run_id, rows, sf)
-    label_trade_date("2026-09-16", {"600001": 10.1, "600002": 8.2}, sf)
+    label_trade_date("2026-09-16", {"600001": 10.1, "600002": 8.2}, sf, price_basis_by_key=_basis("2026-09-16", "600001", "600002"))
 
     with sf() as db:
         rows = db.execute(
@@ -1113,7 +1206,7 @@ def test_scorecard_blocks_verdict_until_full_funnel_denominator_is_labeled(tmp_p
         _payload(), trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5)
     )
     archive_records(run_id, rows, sf)
-    label_trade_date("2026-09-16", {"600001": 10.5, "600002": 8.2}, sf)
+    label_trade_date("2026-09-16", {"600001": 10.5, "600002": 8.2}, sf, price_basis_by_key=_basis("2026-09-16", "600001", "600002"))
 
     card = opportunity_scorecard("2026-09-16", session_factory=sf)
     assert card["verdict"] == "incomplete_denominator"
@@ -1166,7 +1259,9 @@ def test_scorecard_refuses_verdict_until_min_labels_reached(tmp_path):
     )
     archive_records(run_id, rows, sf)
     label_trade_date(
-        "2026-09-16", {"600001": 10.5, "600002": 8.2}, sf, include_deferred=True
+        "2026-09-16", {"600001": 10.5, "600002": 8.2}, sf,
+        price_basis_by_key=_basis("2026-09-16", "600001", "600002"),
+        include_deferred=True
     )
 
     card = opportunity_scorecard("2026-09-16", session_factory=sf)
@@ -1195,7 +1290,7 @@ def test_scorecard_expectancy_fields_never_mix_denominators(tmp_path):
         payload, trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5)
     )
     archive_records(run_id, rows, sf)
-    label_trade_date("2026-09-16", {"600001": 10.1, "600002": 8.4}, sf)
+    label_trade_date("2026-09-16", {"600001": 10.1, "600002": 8.4}, sf, price_basis_by_key=_basis("2026-09-16", "600001", "600002"))
 
     card = opportunity_scorecard("2026-09-16", session_factory=sf)
     exp = card["expectancy"]
@@ -1218,7 +1313,7 @@ def _seed_scorecard_label(
     stage: str = "rank", rank: int | None = 1, horizon: str = OUTCOME_HORIZON,
     strategy_version: str = STRATEGY_VERSION, feature_version: str = FEATURE_VERSION,
     gross: float = 1.0, proxy: float | None = 0.9, source_theme: str = "T",
-    reason: str | None = None,
+    reason: str | None = None, price_basis_version: str = PRICE_BASIS_VERSION,
 ) -> None:
     decision = "ranked" if stage == "rank" else "notified"
     with sf() as db:
@@ -1233,7 +1328,7 @@ def _seed_scorecard_label(
             snapshot_id=snapshot_id, horizon=horizon, target_date="2026-09-16",
             state="labeled", label="positive", reference_price=10.0, outcome_price=10.1,
             return_pct=gross, fill_state="ok", cost_pct=0.1 if proxy is not None else None,
-            net_return_pct=proxy,
+            net_return_pct=proxy, price_basis_version=price_basis_version,
             reason=reason or f"D0 cost proxy ({COST_MODEL_VERSION})",
         ))
         db.commit()
@@ -1325,7 +1420,7 @@ def test_nan_close_never_becomes_a_labeled_sample(tmp_path):
     )
     archive_records(run_id, rows, sf)
 
-    result = label_trade_date("2026-09-16", {"600001": float("nan")}, sf)
+    result = label_trade_date("2026-09-16", {"600001": float("nan")}, sf, price_basis_by_key=_basis("2026-09-16", "600001"))
     assert result["labeled"] == 0
     with sf() as db:
         outcome = db.execute(
@@ -1355,6 +1450,21 @@ def test_d0_scorecard_names_cost_value_as_nonrealizable_proxy(tmp_path):
     assert identity["realizable_return"] is False
     assert "T+1" in identity["note"]
     assert "cost_adjusted_d0_proxy_pct" in card["expectancy"]
+
+
+def test_scorecard_excludes_legacy_unversioned_price_basis_from_current_metrics(tmp_path):
+    sf = _factory(tmp_path)
+    _seed_scorecard_label(
+        sf, snapshot_id="legacy-basis", run_id="run-legacy", symbol="600001",
+        as_of=datetime(2026, 9, 16, 10, 5), price_basis_version="",
+    )
+    card = opportunity_scorecard("2026-09-16", session_factory=sf)
+    assert card["audit"]["price_basis_versions"] == {"legacy_unversioned": 1}
+    assert card["audit"]["price_basis_excluded_labeled_rows"] == 1
+    assert card["sample"]["count"] == 0
+    assert card["funnel_denominator"]["state"] == "incomplete"
+    assert card["funnel_denominator"]["label_coverage"] == 0.0
+    assert card["verdict"] == "incomplete_denominator"
 
 
 def test_scorecard_excludes_unproven_cost_model_rows_from_proxy(tmp_path):

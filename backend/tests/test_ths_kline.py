@@ -67,6 +67,27 @@ def test_kline_params_and_parsing(monkeypatch):
     assert bars[-1].ts.tzinfo is not None  # 上海时区 aware
 
 
+def test_raw_daily_kline_uses_none_adjust(monkeypatch):
+    captured: dict = {}
+
+    async def fake_get(path, params):
+        captured["path"] = path
+        captured["params"] = params
+        return {
+            "item": [{
+                "date_ms": 1756684800000, "open_price": 10.0, "high_price": 11.0,
+                "low_price": 9.5, "close_price": 10.5, "volume": 1000, "turnover": 10500.0,
+            }]
+        }
+
+    p = _provider()
+    monkeypatch.setattr(p, "_get", fake_get)
+    bars = asyncio.run(p.get_raw_daily_kline("600519"))
+    assert captured["path"] == "/api/a-share/prices/historical"
+    assert captured["params"]["adjust"] == "none"
+    assert bars[0].close == 10.5 and bars[0].source == "ths"
+
+
 def test_kline_empty_raises(monkeypatch):
     async def fake_get(path, params):
         return {"item": []}

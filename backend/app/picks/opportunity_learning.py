@@ -45,6 +45,7 @@ OUTCOME_HORIZONS = {
 }
 FUTURE_OUTCOME_HORIZONS = tuple(h for h in OUTCOME_HORIZONS if h != OUTCOME_HORIZON)
 PATH_VERSION = "d0-path-v1.tencent1m.zt-zb"
+PRICE_BASIS_VERSION = "qfq-ref-v1.raw-anchor"
 STAGES = ("candidate", "hard_gate", "rank", "notification")
 
 #: 成本口径版本。**变更费率假设或可成交判据时必须递增**——结果标签是 append-only 的，
@@ -509,6 +510,7 @@ def _new_horizon_outcome(
         state="pending" if selected else "deferred", label="unknown",
         reference_price=snapshot.entry_price,
         fill_state="pending" if selected else "not_actionable",
+        price_basis_version=PRICE_BASIS_VERSION,
         path_state="not_started", path_version="",
         reason=(
             f"等待 {horizon}@{target_date} 收盘价" if selected
@@ -600,6 +602,7 @@ def _new_outcome_identity(
         state="pending" if selected else "deferred", label="unknown",
         reference_price=reference_price,
         fill_state="pending" if selected else "not_actionable",
+        price_basis_version=PRICE_BASIS_VERSION,
         path_state="pending" if selected else "deferred", path_version=PATH_VERSION,
         reason=(
             "等待收盘价" if selected
@@ -1203,7 +1206,14 @@ def due_outcome_symbols(
 def _label_outcome_rows(
     rows: list[tuple[OpportunityOutcomeLabel, OpportunityDecisionSnapshot]],
     close_by_symbol: dict[str, float],
+    price_basis_by_key: dict[tuple[str, str], tuple[float, str]],
 ) -> dict[str, int]:
+    """Label rows on one explicit qfq price basis.
+
+    ``reference_price`` is immutable raw realtime evidence. ``close_by_symbol`` is
+    target-date qfq close. ``price_basis_by_key`` converts the raw reference onto
+    decision-date qfq basis via ``qfq_daily_close / raw_daily_close``.
+    """
     labeled = unknown = pending = 0
     for outcome, snapshot in rows:
         denominator_only = not _selected_outcome_snapshot(snapshot.stage, snapshot.decision)
@@ -1234,32 +1244,66 @@ def _label_outcome_rows(
             outcome.labeled_at = utcnow()
             unknown += 1
             continue
-        close = close_by_symbol.get(snapshot.symbol)
-        if not _positive_finite(close):
-            outcome.reason = f"{fill_basis}；等待 {outcome.horizon}@{outcome.target_date} 有限且为正的收盘价"
+
+        basis = price_basis_by_key.get((snapshot.trade_date, snapshot.symbol))
+        factor = basis[0] if basis else None
+        basis_source = str(basis[1] or "") if basis else ""
+        if not _positive_finite(factor):
+            outcome.reason = (
+                f"{fill_basis}；等待 {snapshot.trade_date}/{snapshot.symbol} "
+                f"{PRICE_BASIS_VERSION} 价格基准（qfq日收/raw日收）"
+            )
             pending += 1
             continue
-        ret = round((float(close) / float(reference) - 1) * 100, 2)
+        basis_reference = float(reference) * float(factor)
+        if not _positive_finite(basis_reference):
+            outcome.reason = f"{fill_basis}；价格基准换算后 reference 非有限正数"
+            pending += 1
+            continue
+
+        close = close_by_symbol.get(snapshot.symbol)
+        if not _positive_finite(close):
+            outcome.reason = (
+                f"{fill_basis}；等待 {outcome.horizon}@{outcome.target_date} "
+                "有限且为正的 qfq 收盘价"
+            )
+            pending += 1
+            continue
+
+        ratio = float(close) / basis_reference
+        ret = round((ratio - 1.0) * 100, 2)
         outcome.state = "labeled"
         outcome.reference_price = float(reference)
+        outcome.basis_reference_price = basis_reference
+        outcome.reference_adjustment_factor = float(factor)
+        outcome.price_basis_version = PRICE_BASIS_VERSION
+        outcome.price_basis_source = basis_source
         outcome.outcome_price = float(close)
+        outcome.source = "qfq_close"
         outcome.return_pct = ret
         outcome.label = "positive" if ret >= 0 else ("flat" if ret >= -2.0 else "negative")
         if fill_state == "ok":
-            net, cost, _qty = round_trip_net_pct(float(reference), float(close))
+            # Convert the qfq total-return ratio back to raw-reference price scale for
+            # fee/lot sizing; qfq nominal level itself must not change fee mechanics.
+            economic_exit = float(reference) * ratio
+            net, cost, _qty = round_trip_net_pct(float(reference), economic_exit)
             outcome.cost_pct = cost
             outcome.net_return_pct = net
             identity = "D0 同日成本调整代理" if outcome.horizon == OUTCOME_HORIZON else "跨日 reference 成本调整代理"
             outcome.reason = (
-                f"{outcome.horizon}@{outcome.target_date}：决策时点 reference 至收盘毛 {ret:+.2f}%，"
-                f"{identity} {net:+.2f}%（{cost:.4f}%，{COST_MODEL_VERSION}）；非 shadow fill"
+                f"{outcome.horizon}@{outcome.target_date}：raw reference {float(reference):.4f} "
+                f"× qfq因子 {float(factor):.8f} → basis {basis_reference:.4f}；"
+                f"qfq 收盘 {float(close):.4f}，毛 {ret:+.2f}%，{identity} {net:+.2f}%"
+                f"（{cost:.4f}%，{COST_MODEL_VERSION}；{PRICE_BASIS_VERSION}；非 shadow fill）"
             )
         else:
             outcome.cost_pct = None
             outcome.net_return_pct = None
             outcome.reason = (
-                f"{outcome.horizon}@{outcome.target_date}：决策时点 reference 至收盘毛 {ret:+.2f}%；"
-                f"{fill_basis}"
+                f"{outcome.horizon}@{outcome.target_date}：raw reference {float(reference):.4f} "
+                f"× qfq因子 {float(factor):.8f} → basis {basis_reference:.4f}；"
+                f"qfq 收盘 {float(close):.4f}，毛 {ret:+.2f}%；{fill_basis}；"
+                f"{PRICE_BASIS_VERSION}"
             )
         outcome.labeled_at = utcnow()
         labeled += 1
@@ -1268,6 +1312,7 @@ def _label_outcome_rows(
 
 def label_due_outcomes(
     target_date: str, close_by_symbol: dict[str, float], session_factory=None, *,
+    price_basis_by_key: dict[tuple[str, str], tuple[float, str]],
     include_deferred: bool = False, horizons: Iterable[str] = FUTURE_OUTCOME_HORIZONS,
 ) -> dict:
     """Label D1/D3/D5 rows due on an exact target trading date."""
@@ -1285,7 +1330,7 @@ def label_due_outcomes(
                 OpportunityOutcomeLabel.state.in_(states),
             )
         ).all()
-        counts = _label_outcome_rows(rows, close_by_symbol)
+        counts = _label_outcome_rows(rows, close_by_symbol, price_basis_by_key)
         db.commit()
     return {"target_date": target_date, "horizons": list(wanted), **counts}
 
@@ -1310,18 +1355,10 @@ def pending_symbols(
 
 def label_trade_date(
     trade_date: str, close_by_symbol: dict[str, float], session_factory=None, *,
+    price_basis_by_key: dict[tuple[str, str], tuple[float, str]],
     include_deferred: bool = False, batch_size: int | None = None,
 ) -> dict:
-    """Attach D0 close labels; missing closes stay pending and can be retried.
-
-    `return_pct` 是 D0 信号方向毛变化；历史列 `net_return_pct` 是同一 D0 窗口的
-    成本调整代理，只在决策时点可成交（`fill_state == "ok"`）时给值。A 股 T+1 下
-    两者都不是可实现交易收益；封板/无现价留 `None`，不造 0。
-
-    Online callers keep the original single-transaction path by leaving
-    `batch_size=None`.  Explicit offline recovery may set a positive batch size
-    so tens of thousands of legacy rows do not materialize in one ORM result set.
-    """
+    """Attach D0 qfq-basis labels; missing close/basis stays pending and retryable."""
     if batch_size is not None and batch_size < 1:
         raise ValueError("batch_size must be >= 1")
     sf = session_factory or get_session_factory()
@@ -1343,15 +1380,11 @@ def label_trade_date(
                 )
             )
             if batch_size is not None:
-                stmt = (
-                    stmt.where(OpportunityOutcomeLabel.id > last_id)
-                    .order_by(OpportunityOutcomeLabel.id)
-                    .limit(batch_size)
-                )
+                stmt = stmt.where(OpportunityOutcomeLabel.id > last_id).order_by(OpportunityOutcomeLabel.id).limit(batch_size)
             rows = db.execute(stmt).all()
             if not rows:
                 break
-            counts = _label_outcome_rows(rows, close_by_symbol)
+            counts = _label_outcome_rows(rows, close_by_symbol, price_basis_by_key)
             for key in totals:
                 totals[key] += counts[key]
             if batch_size is not None:
@@ -1381,6 +1414,9 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
     decision_counts = Counter(f"{s.stage}:{s.decision}" for s in snapshots)
     state_counts = Counter(o.state for o, _snapshot in outcomes)
     fill_counts = Counter(o.fill_state for o, _snapshot in outcomes)
+    price_basis_counts = Counter(
+        o.price_basis_version or "legacy_unversioned" for o, _snapshot in outcomes
+    )
     # KB 引用状态分布（蓝图 §5）：把「KB 尚未接入选股运行时」这件事**变成可读出的数**，
     # 而不是靠读代码推断——现状应全为 `not_consulted`（+ 迁移前的 `legacy`）。
     kb_ref_counts = Counter(_kb_ref_state(s.kb_refs) for s in snapshots)
@@ -1403,6 +1439,12 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
     labeled_opportunities = {
         (snapshot.run_id, snapshot.symbol) for outcome, snapshot in outcomes
         if outcome.state == "labeled" and _finite_number(outcome.return_pct)
+    }
+    current_basis_labeled_opportunities = {
+        (snapshot.run_id, snapshot.symbol) for outcome, snapshot in outcomes
+        if outcome.state == "labeled"
+        and outcome.price_basis_version == PRICE_BASIS_VERSION
+        and _finite_number(outcome.return_pct)
     }
     # Path denominator comes from immutable selected snapshots, not the outcome
     # join, so missing outcome attachment remains visible as missing coverage.
@@ -1432,11 +1474,22 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
             (snapshot.run_id, snapshot.symbol) for outcome, snapshot in horizon_rows
             if outcome.state == "labeled" and _finite_number(outcome.return_pct)
         }
+        horizon_current_basis = {
+            (snapshot.run_id, snapshot.symbol) for outcome, snapshot in horizon_rows
+            if outcome.state == "labeled"
+            and outcome.price_basis_version == PRICE_BASIS_VERSION
+            and _finite_number(outcome.return_pct)
+        }
         horizon_coverage[horizon] = {
             "rows": len(horizon_rows),
             "states": dict(sorted(Counter(outcome.state for outcome, _snapshot in horizon_rows).items())),
+            "price_basis_versions": dict(sorted(Counter(
+                outcome.price_basis_version or "legacy_unversioned"
+                for outcome, _snapshot in horizon_rows
+            ).items())),
             "target_dates": sorted({outcome.target_date for outcome, _snapshot in horizon_rows}),
             "labeled_opportunities": len(horizon_labeled),
+            "current_basis_labeled_opportunities": len(horizon_current_basis),
             "opportunity_label_coverage": (
                 round(len(horizon_labeled) / len(funnel_opportunities), 4)
                 if funnel_opportunities else None
@@ -1454,6 +1507,15 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
         "fill_states": dict(sorted(fill_counts.items())),
         "kb_ref_states": dict(sorted(kb_ref_counts.items())),
         "cost_model": COST_MODEL_VERSION,
+        "price_basis": {
+            "current_version": PRICE_BASIS_VERSION,
+            "versions": dict(sorted(price_basis_counts.items())),
+            "current_basis_labeled_opportunities": len(current_basis_labeled_opportunities),
+            "current_basis_opportunity_coverage": (
+                round(len(current_basis_labeled_opportunities) / len(funnel_opportunities), 4)
+                if funnel_opportunities else None
+            ),
+        },
         # compatibility: historical field is row-level coverage among rows that
         # already have an outcome identity, not full-funnel denominator coverage.
         "label_coverage": round(labeled / eligible, 4) if eligible else None,
@@ -1489,6 +1551,12 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
             "run_symbol_opportunities": len(funnel_opportunities),
             "outcome_opportunities": len(outcome_opportunities),
             "labeled_opportunities": len(labeled_opportunities),
+            "current_basis_labeled_opportunities": len(current_basis_labeled_opportunities),
+            "current_basis_version": PRICE_BASIS_VERSION,
+            "current_basis_opportunity_coverage": (
+                round(len(current_basis_labeled_opportunities) / len(funnel_opportunities), 4)
+                if funnel_opportunities else None
+            ),
             "opportunity_label_coverage": (
                 round(len(labeled_opportunities) / len(funnel_opportunities), 4)
                 if funnel_opportunities else None
@@ -1569,6 +1637,8 @@ def opportunity_scorecard(
 
     def cost_proxy(pair) -> float | None:
         outcome, _snapshot = pair
+        if outcome.price_basis_version != PRICE_BASIS_VERSION:
+            return None
         if outcome.state != "labeled" or not _finite_number(outcome.return_pct):
             return None
         if outcome.fill_state != "ok" or not _finite_number(outcome.net_return_pct):
@@ -1582,7 +1652,14 @@ def opportunity_scorecard(
 
     state_counts = Counter(outcome.state for outcome, _snapshot in rows)
     raw_stage_counts = Counter(snapshot.stage for _outcome, snapshot in rows)
+    price_basis_counts = Counter(
+        outcome.price_basis_version or "legacy_unversioned" for outcome, _snapshot in rows
+    )
     labeled_rows = [pair for pair in rows if pair[0].state == "labeled"]
+    current_basis_labeled_rows = [
+        pair for pair in labeled_rows
+        if pair[0].price_basis_version == PRICE_BASIS_VERSION
+    ]
     invalid_metric_rows = sum(
         1 for outcome, _snapshot in labeled_rows
         if not _finite_number(outcome.return_pct)
@@ -1591,7 +1668,7 @@ def opportunity_scorecard(
     # Performance metrics remain selection-conditioned; denominator-only rejected/unknown
     # rows are labeled for missed-opportunity analysis but never silently enter fill/net metrics.
     selected_labeled_rows = [
-        pair for pair in labeled_rows
+        pair for pair in current_basis_labeled_rows
         if _selected_outcome_snapshot(pair[1].stage, pair[1].decision)
     ]
     valid_signal_rows = [
@@ -1602,7 +1679,9 @@ def opportunity_scorecard(
     outcome_symbols = {snapshot.symbol for _outcome, snapshot in rows}
     labeled_funnel_symbols = {
         snapshot.symbol for outcome, snapshot in rows
-        if outcome.state == "labeled" and _finite_number(outcome.return_pct)
+        if outcome.state == "labeled"
+        and outcome.price_basis_version == PRICE_BASIS_VERSION
+        and _finite_number(outcome.return_pct)
     }
     missing_outcome_symbols = sorted(funnel_symbols - outcome_symbols)
     unlabeled_funnel_symbols = sorted(funnel_symbols - labeled_funnel_symbols)
@@ -1610,7 +1689,9 @@ def opportunity_scorecard(
     outcome_opportunities = {(snapshot.run_id, snapshot.symbol) for _outcome, snapshot in rows}
     labeled_opportunities = {
         (snapshot.run_id, snapshot.symbol) for outcome, snapshot in rows
-        if outcome.state == "labeled" and _finite_number(outcome.return_pct)
+        if outcome.state == "labeled"
+        and outcome.price_basis_version == PRICE_BASIS_VERSION
+        and _finite_number(outcome.return_pct)
     }
     denominator_complete = bool(funnel_opportunities) and not (funnel_opportunities - labeled_opportunities)
     denominator_state = (
@@ -1672,6 +1753,10 @@ def opportunity_scorecard(
     proxy = [value for _pair, value in proxy_pairs]
     gross_on_proxy = [float(pair[0].return_pct) for pair, _value in proxy_pairs]
     not_fillable = sum(1 for outcome, _snapshot in samples if outcome.fill_state != "ok")
+    price_basis_excluded_rows = sum(
+        1 for outcome, _snapshot in labeled_rows
+        if outcome.price_basis_version != PRICE_BASIS_VERSION
+    )
     cost_version_excluded = sum(
         1 for outcome, _snapshot in samples
         if outcome.fill_state == "ok" and _finite_number(outcome.net_return_pct)
@@ -1770,6 +1855,7 @@ def opportunity_scorecard(
             ),
             "realizable_return": False,
             "cost_model_version": COST_MODEL_VERSION,
+            "price_basis_version": PRICE_BASIS_VERSION,
             "note": identity_note,
         },
         "audit": {
@@ -1784,6 +1870,8 @@ def opportunity_scorecard(
             "by_stage_rows": dict(sorted(raw_stage_counts.items())),
             "repeated_labeled_rows": max(0, len(valid_signal_rows) - len(samples)),
             "invalid_metric_rows": invalid_metric_rows,
+            "price_basis_versions": dict(sorted(price_basis_counts.items())),
+            "price_basis_excluded_labeled_rows": price_basis_excluded_rows,
             "cost_version_excluded_samples": cost_version_excluded,
         },
         "sample": {
@@ -1814,6 +1902,7 @@ def opportunity_scorecard(
             ),
             "complete": denominator_complete,
             "state": denominator_state,
+            "price_basis_version": PRICE_BASIS_VERSION,
             "missing_outcome_symbols": missing_outcome_symbols,
             "unlabeled_symbols": unlabeled_funnel_symbols,
             "run_symbol_opportunities": len(funnel_opportunities),
@@ -1909,6 +1998,7 @@ def opportunity_scorecard(
             "只描述已归档事实，不构成买卖建议；独立样本按 symbol×trade_date 去重，原始行数保留在 audit。"
             "指定版本没有任何漏斗样本时 verdict=no_matching_denominator；有分母但尚有未标结果时 "
             "verdict=incomplete_denominator；分母完整后若可执行样本低于下限，verdict 才为 insufficient_sample。"
+            "legacy/unversioned 结果仅作审计，不进入当前 price-basis 指标；"
             "D0 成本调整值仅为同日收盘代理，不是 A 股 T+1 下可实现净收益；"
             "deferred/not_actionable 只服务漏选/失败分母，不进入可执行净收益。"
         ),

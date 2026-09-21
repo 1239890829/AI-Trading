@@ -34,6 +34,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -445,17 +446,31 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
             ]
         due_targets = pending_outcome_targets(tdate, _gsf(), lookback_days=30)
         due_symbols = {symbol for symbols in due_targets.values() for symbol in symbols}
-        symbols = ledger_symbols | pending_symbols(tdate, _gsf()) | due_symbols
+        d0_pending = pending_symbols(tdate, _gsf())
+        outcome_symbols = d0_pending | due_symbols
+        symbols = ledger_symbols | outcome_symbols
         daily_by_symbol: dict[str, dict[date, float]] = {}
+        price_basis_by_key: dict[tuple[str, str], tuple[float, str]] = {}
         for symbol in sorted(symbols):
             with contextlib.suppress(Exception):
-                dc = await _daily_closes(provider, symbol)
+                # Outcome labels need qfq and raw from the same provider family.
+                # Use the composite lane for both legs; `_price_basis_from_daily`
+                # rejects a failover split across vendors.  Non-outcome ledger rows
+                # retain the existing low-cost/Tencent preference.
+                qfq_provider = state.hub.provider if symbol in outcome_symbols else provider
+                qfq_facts = await _daily_close_facts(qfq_provider, symbol, raw=False)
+                dc = {d: value for d, (value, _source) in qfq_facts.items()}
                 daily_by_symbol[symbol] = dc
                 c = dc.get(_bnow().date())
                 if c is not None:
                     closes[symbol] = c
+                if symbol in outcome_symbols:
+                    raw_facts = await _daily_close_facts(state.hub.provider, symbol, raw=True)
+                    price_basis_by_key.update(
+                        _price_basis_from_daily(symbol, qfq_facts, raw_facts)
+                    )
         ledger_settled = settle_day(tdate, closes, _gsf())
-        opportunity_labels = label_trade_date(tdate, closes, _gsf())
+        opportunity_labels = label_trade_date(tdate, closes, _gsf(), price_basis_by_key=price_basis_by_key)
         opportunity_horizons = []
         for target_date, target_symbols in due_targets.items():
             target_day = date.fromisoformat(target_date)
@@ -465,7 +480,7 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
                 if symbol in daily_by_symbol and target_day in daily_by_symbol[symbol]
             }
             opportunity_horizons.append(
-                label_due_outcomes(target_date, target_closes, _gsf())
+                label_due_outcomes(target_date, target_closes, _gsf(), price_basis_by_key=price_basis_by_key)
             )
         opportunity_path = await collect_d0_path_outcomes(state, tdate, _gsf())
         # 次日持续性验证（闭环「验证」段）：T-1 行写回 T 收盘表现
@@ -594,28 +609,50 @@ def _parse_brief_date(s: Any) -> date | None:
         return None
 
 
-async def _daily_closes(provider, symbol: str) -> dict[date, float]:
-    """日 K → {交易日: 收盘价}。腾讯日 K 的 ts 是交易日 0 点（UTC），
-    ts.date() 即交易日；失败返回空表（调用方按 pending 处理，不臆造）。
-
-    2026-09-09 修复：日 K timeframe 全栈统一是 "1d"（tencent/eastmoney/mock/
-    ths 一致），此前硬编码 "day" → 任何 provider 承接都抛错被 suppress 吞掉
-    → settle 收盘价恒空 → 台账 verdict 全 None（胜率失真根因）。
-    """
+async def _daily_close_facts(provider, symbol: str, *, raw: bool = False) -> dict[date, tuple[float, str]]:
     try:
-        bars = await provider.get_kline(symbol, "1d")
+        if raw:
+            fetch = getattr(provider, "get_raw_daily_kline", None)
+            if fetch is None:
+                return {}
+            bars = await fetch(symbol)
+        else:
+            bars = await provider.get_kline(symbol, "1d")
     except Exception as exc:
-        log.warning("alert returns: kline %s failed: %s", symbol, exc)
+        log.warning("alert returns: %s kline %s failed: %s", "raw" if raw else "qfq", symbol, exc)
         return {}
-    closes: dict[date, float] = {}
+    closes: dict[date, tuple[float, str]] = {}
     for b in bars or []:
         try:
             d = b.ts.date()
-            if b.close is not None and d.year >= 2020:
-                closes[d] = float(b.close)
+            if b.close is not None and d.year >= 2020 and float(b.close) > 0:
+                closes[d] = (float(b.close), str(getattr(b, "source", "") or getattr(provider, "name", "")))
         except Exception:
             continue
     return closes
+
+
+async def _daily_closes(provider, symbol: str) -> dict[date, float]:
+    facts = await _daily_close_facts(provider, symbol, raw=False)
+    return {d: value for d, (value, _source) in facts.items()}
+
+
+def _price_basis_from_daily(symbol: str, qfq: dict[date, tuple[float, str]], raw: dict[date, tuple[float, str]]) -> dict[tuple[str, str], tuple[float, str]]:
+    out: dict[tuple[str, str], tuple[float, str]] = {}
+    for d in sorted(set(qfq) & set(raw)):
+        qfq_close, qfq_source = qfq[d]
+        raw_close, raw_source = raw[d]
+        # A ratio across two providers is not an adjustment factor: tiny vendor
+        # differences would become fake corporate-action evidence.  Require the
+        # exact same named source and fail closed otherwise.
+        if not qfq_source or qfq_source != raw_source:
+            continue
+        factor = qfq_close / raw_close if raw_close > 0 else 0.0
+        if math.isfinite(factor) and factor > 0:
+            out[(d.isoformat(), symbol)] = (
+                factor, f"qfq:{qfq_source}|raw:{raw_source}"
+            )
+    return out
 
 
 def list_brief_payloads(limit: int = 30) -> list[dict]:
