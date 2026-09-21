@@ -315,8 +315,12 @@ def test_stock_themes_api(client, monkeypatch: pytest.MonkeyPatch):
             return []
         return [{"symbol": "000019", "name": "深粮控股"}, {"symbol": "000505", "name": "京粮控股"}]
 
+    async def unavailable_board_bars(_code, calendar_days=35):
+        raise RuntimeError("test board kline unavailable")
+
     monkeypatch.setattr(svc, "fetch_catalog", fake_catalog)
     monkeypatch.setattr(svc, "fetch_members", fake_members)
+    monkeypatch.setattr(svc, "fetch_board_bars", unavailable_board_bars)
     client.app.state.theme_catalog = svc
 
     client.portal.call(svc.sync_catalog)

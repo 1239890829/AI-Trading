@@ -143,11 +143,17 @@ def test_endpoint_rejects_non_whitelisted_url(client):
     assert resp.status_code == 400
 
 
-def test_endpoint_degrades_on_fetch_failure(client):
-    """抓取失败 → 502 带原因（前端据此降级为摘要+原文链接）。"""
+def test_endpoint_degrades_on_fetch_failure(client, monkeypatch: pytest.MonkeyPatch):
+    """抓取失败 → 502；失败必须在外部边界注入，不能靠真实 DNS/公网制造。"""
+    from app.api.routes import market_stock
+
+    async def unavailable(_url: str):
+        raise ArticleFetchError("test source unavailable")
+
+    monkeypatch.setattr(market_stock, "fetch_article", unavailable)
     resp = client.get(
         "/api/news/content",
         params={"url": "https://finance.eastmoney.com/a/nonexistent000000000.html"},
     )
     assert resp.status_code == 502
-    assert resp.json()["detail"]
+    assert "test source unavailable" in resp.json()["detail"]
