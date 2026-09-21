@@ -123,6 +123,11 @@ class Settings(BaseSettings):
     picks_autogen_enabled: bool = True
     picks_autogen_hour: int = 9
     picks_autogen_minute: int = 26
+    # RSH-026：候选→硬门→精排点时证据必须由后台自行归档，不能依赖前端 GET。
+    # tick 仅检查 snapshot_service.saved_files；重型机会构建只在新持久快照出现时触发
+    # （默认 snapshot_save_interval=300s），故 30s 检查不会放大 provider 请求。
+    picks_opportunity_evidence_enabled: bool = True
+    picks_opportunity_evidence_interval_seconds: float = 30.0
     # 盘中跟踪：以当日简报为跟踪清单，交易时段内按 interval 取拍（ths 涨停池 +
     # 东财板块涨幅），确认/证伪判定走 intraday_rules（与回测同一份代码）
     picks_watcher_enabled: bool = True
