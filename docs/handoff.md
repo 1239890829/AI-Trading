@@ -60,8 +60,8 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 - **当前主门**：G3
 - **主切片首选**：IMP-020
-- **领取边界**：IMP-020 已持续领取；PR #86 完成第一子片。当前第二子片只施工 trial-family / multiple-testing / signal-overlap；合并后再进入消融 + Champion/Challenger，不在本 PR 混入生产晋级。
-- **当前现场**：PR #86 已把 purge/embargo、35bps、PIT 身份、return identity 与历史 current-snapshot 幸存偏差修复合入 `master@d04e728`；post-merge backend/frontend/docs 全绿并已部署。第二子片进一步发现 v3 里的 `multiple_testing_accounted/signal_overlap_checked` 仍可自报为 true，因此升级为 protocol v2 / gate v4：必须绑定当前版本 trial-family 与 overlap 证据，且多 trial 被选规则若校正后未存活会成为失败项。
+- **领取边界**：IMP-020 按四个主子片持续收口。PR #86 完成子片①，PR #87 已合并子片②的 trial-family / multiple-testing / signal-overlap 基线；当前候选只做子片② U49 证据完整性加固（PIT 派生、digest+机械复算、旧 gate/history 保留），不混入消融或生产晋级。该补片合入后进入子片③消融 + Champion/Challenger + experiment accounting，再做子片④晋级/回滚；四片全部完成后停止 IMP-020 并重算阶段门。
+- **当前现场**：PR #87 已于 2026-09-21 17:09 +08 合入 `master@f3556ad`，把第二子片推进到 protocol v2 / gate v4、48-trial Bonferroni 与 exact signal-day overlap。随后主动反证发现结构化对象仍不等于不可伪造证据：PIT 仍由 caller 自报，trial p 值可与 digest 一起重封，verify current 覆盖也没有历史链。当前候选把 PIT 改为从 `BuildConfig + gate_features` 派生，把 trial/overlap 变为 canonical digest 证据并对 trial 全量机械复算，同时将合法旧 v2/v3 gate 降为历史协议身份并保留 verify prior-current history；旧 pass 不恢复当前准入，reject 不被抬高。
 - **门内阻断顺序**：RSH-026（已完成）→ IMP-020（进行中）；RSH-030 为同门非阻断，RSH-031 仍受 `IMP-020 + RSH-030` 效果前置限制。
 - G0 的 BUG-028 / BUG-026 已完成，BUG-020 为 `待条件`；G1 的 BUG-029 / IMP-006 / IMP-044 已完成；G2 的 IMP-049 为 `待条件`；G3/RSH-026 本轮登记完成。因此账本合入后下一唯一首选为 G3/IMP-020，不因 RSH-031、新 UI、Agent 或其它研究任务“更有趣”跳序。
 - BUG-020 的 current-value 接纳门现区分 source event time / received time、缺失/拒绝/合法空集与身份歧义；旧可信值不会被晚到/非法观测覆盖。2026-09-20 周日已用本片代码显式加载主仓部署 `.env`，成功构建 `chain(ths→tencent→eastmoney→sina)` 并完成有界只读休市探针：最近交易日 2026-09-18、6/6 指数覆盖、拒绝数 0，600519 实际由腾讯返回且 source time 为 2026-09-18，Hub 明确标 `stale/market_closed`。尚未完成真实交易时段完整会话验收，故不得标已完成或宣称长期盘中 SLA。
@@ -73,7 +73,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - U50 也不改变阶段门算法，只改变“谁可以完成当前切片”：正常模式仍是 Web Review + Codex；当前 `DEGRADED_FULL_CONTROL` 下网页端按同一阶段门全程操控，每个 PR 必须重新写 exact-HEAD `DegradedRelease`，不能复用一次用户授权跳过逐 PR 发布证据。
 - GX 治理只可作为不冲突的伴随切片。2026-09-20 `GOV-018` 已闭环：`.workbuddy` / `.workbuddy-ai` 已物理删除，有价值内容进入项目中性 `skills/scripts/docs/artifacts`，第三方 UZI/Serenity 本体不再复制；PR #48 已合入 `master`（merge `b6b5ba0`，最终 required CI run `35481812431` backend/frontend/docs 全绿）。`GOV-026` 已落地 `scripts/workspace-hygiene.py` 并接 CI/交接；docs 根已收口为 6 个控制面。以上治理不改变阶段门算法；BUG-020 与 IMP-049 都因 `待条件` 排除，RSH-026 登记完成后阶段门下一阻断为 G3/IMP-020。
 
-当前处于 `DEGRADED_FULL_CONTROL`：IMP-020 第一子片已合并，第二子片正在收口 trial denominator / multiple-testing / signal overlap。所有正式 producer 实跑仍只写临时 worktree，生产历史 verify JSON 不覆盖；不启动真实交易或参数晋级。
+当前处于 `DEGRADED_FULL_CONTROL`：IMP-020 子片①和子片②基线已分别由 PR #86/#87 合并；当前仅收口子片②的 U49 证据完整性补片。真实 marketdb 重跑只作隔离验收，仓库现役 verify JSON 不覆盖；不启动真实交易、参数晋级或自动策略切换。该补片合入后下一唯一工作是 IMP-020 子片③。
 
 ## 8. Jev、工具链与协作流当前基线
 

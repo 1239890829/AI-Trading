@@ -27,14 +27,14 @@
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
 import duckdb
-
-from app.research.strategy_trials import EVIDENCE_VERSION as TRIAL_EVIDENCE_VERSION
 
 #: 默认 marketdb 路径（与 app/picks/rps.py 等一致：parents[2] = backend/）
 DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "marketdb" / "market.duckdb"
@@ -457,36 +457,180 @@ def split_sample(
     }
 
 
+def _canonical_digest(payload: dict) -> str:
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+_PIT_DAILY_FEATURES = frozenset({
+    "thscode", "date_ms", "rn", "volume", "close", "chg", "vr", "vol_step_up",
+    "ma_short", "ma_mid", "ma_long", "dev_short", "mchg", "at_limit",
+})
+_CURRENT_SNAPSHOT_PROXY_FEATURES = frozenset({"turn", "float_shares"})
+
+
+def build_validation_evidence(cfg: BuildConfig, gate_features: Sequence[str]) -> dict:
+    """Derive universe/feature provenance from the actual build configuration.
+
+    This deliberately does not accept caller-supplied ``*_point_in_time`` booleans.
+    Unknown joins/filters/features fail closed; current snapshot float shares are always
+    a non-PIT proxy even though the LEFT JOIN no longer changes the historical universe.
+    """
+    features = tuple(dict.fromkeys(str(v).strip() for v in gate_features if str(v).strip()))
+    if not features:
+        raise ValueError("gate_features 不能为空")
+    unknown = sorted(set(features) - _PIT_DAILY_FEATURES - _CURRENT_SNAPSHOT_PROXY_FEATURES)
+    non_pit = sorted(set(features) & _CURRENT_SNAPSHOT_PROXY_FEATURES)
+    source_ok = cfg.source_table == "daily_k"
+    joins_clean = not cfg.extra_joins.strip()
+    filter_clean = cfg.extra_filter.strip().upper() == "TRUE"
+    universe_pit = bool(source_ok and joins_clean and filter_clean)
+    feature_pit = bool(universe_pit and not unknown and not non_pit)
+    payload = {
+        "evidence_version": 1,
+        "universe": {
+            "source_table": cfg.source_table,
+            "semantics": "rows_present_in_daily_k_on_each_date",
+            "extra_joins": bool(cfg.extra_joins.strip()),
+            "extra_filter": cfg.extra_filter.strip(),
+            "current_snapshot_enrichment": bool(cfg.float_shares_sql),
+            "point_in_time": universe_pit,
+        },
+        "features": {
+            "requested": list(features),
+            "point_in_time": feature_pit,
+            "non_pit": non_pit,
+            "unknown": unknown,
+            "current_snapshot_proxy": bool(set(features) & _CURRENT_SNAPSHOT_PROXY_FEATURES),
+        },
+    }
+    return {**payload, "evidence_digest": _canonical_digest(payload)}
+
+
+def _evidence_digest_ok(evidence: dict) -> bool:
+    if not isinstance(evidence, dict):
+        return False
+    payload = {k: v for k, v in evidence.items() if k != "evidence_digest"}
+    try:
+        return evidence.get("evidence_digest") == _canonical_digest(payload)
+    except (TypeError, ValueError):
+        return False
+
+
+def _normalise_trial_evidence(evidence: dict) -> dict:
+    if not isinstance(evidence, dict) or not _evidence_digest_ok(evidence):
+        raise ValueError("trial_evidence 必须是带有效 digest 的对象")
+    trials = evidence.get("trials")
+    total = _sample_count(evidence.get("trials_total"))
+    valid = _sample_count(evidence.get("trials_valid"))
+    method = str(evidence.get("method") or "")
+    if not isinstance(trials, list) or total is None or total == 0 or total != len(trials):
+        raise ValueError("trial_evidence 分母与 manifest 不一致")
+    if valid is None or valid > total:
+        raise ValueError("trial_evidence valid count 无效")
+    if total == 1 and method != "single_preregistered_trial":
+        raise ValueError("单 trial 必须声明 single_preregistered_trial")
+    if total > 1 and method != "bonferroni_one_sided_normal_approx":
+        raise ValueError("多 trial 必须使用当前登记的 Bonferroni 方法")
+    selected_id = str(evidence.get("selected_trial_id") or "").strip()
+    selected = [row for row in trials if isinstance(row, dict) and row.get("trial_id") == selected_id]
+    if len(selected) != 1:
+        raise ValueError("trial_evidence selected_trial_id 不唯一")
+    if evidence.get("accounted") is not (valid == total):
+        raise ValueError("trial_evidence accounted 派生值不一致")
+    chosen = selected[0]
+    if evidence.get("selected_p_adjusted") != chosen.get("p_adjusted"):
+        raise ValueError("trial_evidence selected p 值不一致")
+    if evidence.get("selected_survives_alpha") is not bool(chosen.get("survives_alpha")):
+        raise ValueError("trial_evidence selected multiplicity 结论不一致")
+
+    # Do not trust precomputed p-values just because their digest is internally consistent.
+    # Rebuild the family from the embedded train measurements and compare byte-for-byte.
+    from app.research.strategy_trials import trial_family_evidence
+    recomputed = trial_family_evidence(
+        [{
+            "trial_id": row.get("trial_id"),
+            "label": row.get("label"),
+            "condition": row.get("condition"),
+            "train": row.get("train"),
+        } for row in trials if isinstance(row, dict)],
+        selected_trial_id=selected_id,
+        alpha=evidence.get("alpha", 0.05),
+    )
+    if recomputed != evidence:
+        raise ValueError("trial_evidence 与完整 manifest 机械复算结果不一致")
+    return json.loads(json.dumps(evidence, ensure_ascii=False, allow_nan=False))
+
+
+def _normalise_overlap_evidence(evidence: dict | None) -> dict:
+    if evidence is None:
+        payload = {
+            "evidence_version": 1, "method": "none", "checked": False,
+            "comparisons": [], "exact_duplicate": False,
+            "reason": "未提供信号重叠证据",
+        }
+        return {**payload, "evidence_digest": _canonical_digest(payload)}
+    if not isinstance(evidence, dict) or not _evidence_digest_ok(evidence):
+        raise ValueError("overlap_evidence 必须是带有效 digest 的对象")
+    if evidence.get("method") != "exact_signal_day" or evidence.get("checked") is not True:
+        raise ValueError("overlap_evidence 必须是已完成的 exact_signal_day 证据")
+    comparisons = evidence.get("comparisons")
+    if not isinstance(comparisons, list) or not comparisons:
+        raise ValueError("overlap_evidence 缺 comparator")
+    candidate_n = None
+    derived_dup = False
+    for row in comparisons:
+        if not isinstance(row, dict):
+            raise ValueError("overlap comparator 必须是对象")
+        target_n = _sample_count(row.get("target_n"))
+        incumbent_n = _sample_count(row.get("incumbent_n"))
+        intersection = _sample_count(row.get("intersection_n"))
+        union = _sample_count(row.get("union_n"))
+        if (not str(row.get("incumbent") or "").strip()
+                or not str(row.get("condition") or "").strip()
+                or target_n is None or target_n <= 0 or incumbent_n is None
+                or intersection is None or union is None or union == 0
+                or intersection > min(target_n, incumbent_n)
+                or union < max(target_n, incumbent_n)):
+            raise ValueError("overlap comparator 计数不合法")
+        if candidate_n is None:
+            candidate_n = target_n
+        elif target_n != candidate_n:
+            raise ValueError("overlap comparator 的 target_n 不一致")
+        exact = target_n == incumbent_n == intersection
+        if row.get("exact_duplicate") is not exact:
+            raise ValueError("overlap exact_duplicate 派生值不一致")
+        jaccard = round(intersection / union, 8)
+        containment = round(intersection / target_n, 8)
+        if row.get("jaccard") != jaccard or row.get("target_containment") != containment:
+            raise ValueError("overlap 比例与集合计数不一致")
+        derived_dup = derived_dup or exact
+    if evidence.get("exact_duplicate") is not derived_dup:
+        raise ValueError("overlap 顶层 exact_duplicate 派生值不一致")
+    return json.loads(json.dumps(evidence, ensure_ascii=False, allow_nan=False))
+
+
 def validation_protocol(
     *, horizon: int, cost_bps: float, split: dict, selection_scope: str,
-    universe_point_in_time: bool, feature_point_in_time: bool, trials: int,
-    multiple_testing_accounted: bool, signal_overlap_checked: bool,
-    multiple_testing_evidence: dict | None = None,
-    signal_overlap_evidence: dict | None = None,
+    build_config: BuildConfig, gate_features: Sequence[str],
+    trial_evidence: dict, overlap_evidence: dict | None = None,
     return_identity: str = RETURN_IDENTITY_REFERENCE_PROXY,
 ) -> dict:
-    """Freeze the evidence identity required for one IMP-020 research admission check.
+    """Freeze evidence-backed IMP-020 research-admission identity.
 
-    ``reference_close_to_close_proxy`` can support a research conclusion only.  A
-    production-promotion candidate additionally needs ``shadow_fill_net`` evidence;
-    both remain review-required and never auto-promote.
+    PIT, trial denominator, multiplicity and overlap are derived from concrete evidence
+    payloads. Callers cannot self-certify those gates with boolean arguments.
     """
     h = _sample_count(horizon)
-    trial_count = _sample_count(trials)
     cost = _finite_number(cost_bps)
-    if h is None or h == 0 or trial_count is None or trial_count == 0:
-        raise ValueError("horizon/trials 必须为正整数")
+    if h is None or h == 0:
+        raise ValueError("horizon 必须为正整数")
     if cost is None or cost < 0:
         raise ValueError("cost_bps 必须为有限非负数")
-    for label, value in (
-        ("universe_point_in_time", universe_point_in_time),
-        ("feature_point_in_time", feature_point_in_time),
-        ("multiple_testing_accounted", multiple_testing_accounted),
-        ("signal_overlap_checked", signal_overlap_checked),
-    ):
-        if not isinstance(value, bool):
-            raise ValueError(f"{label} 必须是 bool")
-    return {
+    build_evidence = build_validation_evidence(build_config, gate_features)
+    trials = _normalise_trial_evidence(trial_evidence)
+    overlap = _normalise_overlap_evidence(overlap_evidence)
+    payload = {
         "protocol_version": VALIDATION_PROTOCOL_VERSION,
         "split_kind": "purged_holdout",
         "horizon": h,
@@ -494,16 +638,20 @@ def validation_protocol(
         "embargo_sessions": split.get("embargo_sessions"),
         "split_date_ms": split.get("split_date_ms"),
         "selection_scope": str(selection_scope),
-        "universe_point_in_time": universe_point_in_time,
-        "feature_point_in_time": feature_point_in_time,
-        "trials": trial_count,
-        "multiple_testing_accounted": multiple_testing_accounted,
-        "multiple_testing_evidence": multiple_testing_evidence,
-        "signal_overlap_checked": signal_overlap_checked,
-        "signal_overlap_evidence": signal_overlap_evidence,
+        "build_evidence": build_evidence,
+        "universe_point_in_time": build_evidence["universe"]["point_in_time"],
+        "feature_point_in_time": build_evidence["features"]["point_in_time"],
+        "trial_evidence": trials,
+        "trials": trials["trials_total"],
+        "multiple_testing_accounted": bool(trials.get("accounted")),
+        "selected_survives_multiple_testing": bool(trials.get("selected_survives_alpha")),
+        "overlap_evidence": overlap,
+        "signal_overlap_checked": overlap["checked"],
+        "signal_exact_duplicate": bool(overlap.get("exact_duplicate")),
         "cost_bps": cost,
         "return_identity": str(return_identity),
     }
+    return {**payload, "protocol_digest": _canonical_digest(payload)}
 
 
 def limit_up_share(con, cond: str = "TRUE", *, cfg: VerifyConfig = VerifyConfig()) -> dict:
@@ -591,11 +739,18 @@ def summarize_row(r: dict, horizon: int = 5, *, cost_bps: float = 0.0) -> dict:
     }
 
 
-def _protocol_issues(metrics: dict, protocol: dict | None) -> list[str]:
-    """Return admission-protocol defects; any item makes the evidence research-only."""
+def validation_protocol_issues(metrics: dict, protocol: dict | None) -> list[str]:
+    """Recompute protocol defects from stored evidence; callers cannot override the result."""
     if not isinstance(protocol, dict):
         return ["验证协议未登记（缺 purged holdout / 成本 / 试验分母 / PIT 身份）"]
     issues: list[str] = []
+    payload = {k: v for k, v in protocol.items() if k != "protocol_digest"}
+    try:
+        expected_digest = _canonical_digest(payload)
+    except (TypeError, ValueError):
+        expected_digest = None
+    if not expected_digest or protocol.get("protocol_digest") != expected_digest:
+        issues.append("验证协议 digest 不匹配（证据被改写或不是 canonical payload）")
     if protocol.get("protocol_version") != VALIDATION_PROTOCOL_VERSION:
         issues.append("验证协议版本不是当前版本")
     if protocol.get("split_kind") != "purged_holdout":
@@ -617,33 +772,68 @@ def _protocol_issues(metrics: dict, protocol: dict | None) -> list[str]:
         issues.append("样本外切分时点缺失")
     if protocol.get("selection_scope") not in {"train_only", "external_preregistered"}:
         issues.append("规则/参数选择使用了测试段或未声明预注册")
+
+    build_evidence = protocol.get("build_evidence")
+    if not isinstance(build_evidence, dict):
+        issues.append("缺 build provenance 证据")
+    else:
+        be_payload = {k: v for k, v in build_evidence.items() if k != "evidence_digest"}
+        try:
+            be_digest = _canonical_digest(be_payload)
+        except (TypeError, ValueError):
+            be_digest = None
+        if build_evidence.get("evidence_digest") != be_digest:
+            issues.append("build provenance digest 不匹配")
+        universe = build_evidence.get("universe") or {}
+        features = build_evidence.get("features") or {}
+        if protocol.get("universe_point_in_time") is not universe.get("point_in_time"):
+            issues.append("universe PIT 派生值与 build evidence 不一致")
+        if protocol.get("feature_point_in_time") is not features.get("point_in_time"):
+            issues.append("feature PIT 派生值与 build evidence 不一致")
     if protocol.get("universe_point_in_time") is not True:
         issues.append("验证 universe 不是 point-in-time（存在当前身份/幸存信息倒灌）")
     if protocol.get("feature_point_in_time") is not True:
         issues.append("特征不是 point-in-time（存在当前信息倒灌历史）")
-    trials = _sample_count(protocol.get("trials"))
-    if trials is None or trials == 0:
+
+    trial = protocol.get("trial_evidence")
+    if not isinstance(trial, dict) or not _evidence_digest_ok(trial):
+        issues.append("缺完整或可校验的 trial family evidence")
+        trial_count = None
+    else:
+        trials = trial.get("trials")
+        trial_count = _sample_count(trial.get("trials_total"))
+        trial_valid = _sample_count(trial.get("trials_valid"))
+        if not isinstance(trials, list) or trial_count != len(trials):
+            issues.append("trial family 分母与条目数不一致")
+        if trial_valid != trial_count or trial.get("accounted") is not True:
+            issues.append("trial family 含未计入多重校正的无效/缺失尝试")
+        if protocol.get("trials") != trial_count:
+            issues.append("protocol trials 与 trial family 不一致")
+        if protocol.get("multiple_testing_accounted") is not bool(trial.get("accounted")):
+            issues.append("multiple-testing 派生值与 trial evidence 不一致")
+        if protocol.get("selected_survives_multiple_testing") is not bool(trial.get("selected_survives_alpha")):
+            issues.append("selected multiplicity 结论与 trial evidence 不一致")
+    if trial_count is None or trial_count == 0:
         issues.append("试验全集/尝试次数未登记")
-    elif trials > 1 and protocol.get("multiple_testing_accounted") is not True:
-        issues.append(f"多重比较未控制（本轮登记 trials={trials}）")
-    mt = protocol.get("multiple_testing_evidence")
-    if protocol.get("multiple_testing_accounted") is True:
-        if (not isinstance(mt, dict)
-                or mt.get("evidence_version") != TRIAL_EVIDENCE_VERSION
-                or mt.get("accounted") is not True
-                or not isinstance(mt.get("trials"), list)):
-            issues.append("多重比较仅自报为已控制，缺当前版本结构化 trial-family 证据")
-        elif _sample_count(mt.get("trials_total")) != trials or len(mt["trials"]) != trials:
-            issues.append("trial-family 分母与 protocol.trials 不一致")
-    overlap = protocol.get("signal_overlap_evidence")
+    elif protocol.get("multiple_testing_accounted") is not True:
+        issues.append(f"多重比较未完整计入（本轮登记 trials={trial_count}）")
+    elif protocol.get("selected_survives_multiple_testing") is not True:
+        issues.append("选中 trial 未通过当前预注册显著性/多重检验阈值")
+
+    overlap = protocol.get("overlap_evidence")
+    if not isinstance(overlap, dict) or not _evidence_digest_ok(overlap):
+        issues.append("缺完整或可校验的 signal-overlap evidence")
+    else:
+        if protocol.get("signal_overlap_checked") is not overlap.get("checked"):
+            issues.append("signal-overlap 派生值与 evidence 不一致")
+        derived_dup = bool(overlap.get("exact_duplicate"))
+        if protocol.get("signal_exact_duplicate") is not derived_dup:
+            issues.append("signal exact-duplicate 派生值与 evidence 不一致")
+        if derived_dup:
+            issues.append("候选信号与既有信号事件集合完全重复")
     if protocol.get("signal_overlap_checked") is not True:
         issues.append("与既有信号的重复计分/重叠未检查")
-    elif (not isinstance(overlap, dict)
-          or overlap.get("evidence_version") != TRIAL_EVIDENCE_VERSION
-          or overlap.get("checked") is not True
-          or not isinstance(overlap.get("comparisons"), list)
-          or not isinstance(overlap.get("exact_duplicate"), bool)):
-        issues.append("信号重叠仅自报为已检查，缺当前版本结构化 overlap 证据")
+
     cost = _finite_number(protocol.get("cost_bps"))
     metric_cost = _finite_number(metrics.get("cost_bps"))
     if cost is None or cost < ADMISSION_COST_BPS:
@@ -671,17 +861,7 @@ def gate_verdict(
 
     failed: list[str] = []
     machine_unchecked: list[str] = []
-    protocol_issues = _protocol_issues(metrics, protocol)
-    if isinstance(protocol, dict):
-        mt = protocol.get("multiple_testing_evidence")
-        trials = _sample_count(protocol.get("trials"))
-        if (trials is not None and trials > 1 and isinstance(mt, dict)
-                and mt.get("accounted") is True
-                and mt.get("selected_survives_alpha") is not True):
-            failed.append("被选规则未通过多重检验校正后的显著性门")
-        overlap = protocol.get("signal_overlap_evidence")
-        if isinstance(overlap, dict) and overlap.get("exact_duplicate") is True:
-            failed.append("与既有信号事件集合完全重复（不可重复计分）")
+    protocol_issues = validation_protocol_issues(metrics, protocol)
 
     if metrics.get("sample_basis") not in (None, "mature"):
         machine_unchecked.append("成熟度未验：旧总样本数不代表成熟样本")

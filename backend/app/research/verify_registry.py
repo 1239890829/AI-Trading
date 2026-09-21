@@ -48,6 +48,7 @@ __all__ = [
     "list_records",
     "load_record",
     "save_record",
+    "load_history",
     "verification_of",
 ]
 
@@ -57,6 +58,19 @@ def _path_for(key: str) -> Path:
     if not safe:
         raise ValueError("strategy key 不能为空")
     return VERIFY_DIR / f"{safe}.json"
+
+
+
+
+def _history_of(record: dict) -> list[dict]:
+    history = record.get("history", [])
+    if not isinstance(history, list) or not all(isinstance(item, dict) for item in history):
+        raise ValueError("verification history 损坏，拒绝覆盖证据")
+    return history
+
+
+def _current_without_history(record: dict) -> dict:
+    return {key: value for key, value in record.items() if key != "history"}
 
 
 def save_record(
@@ -70,18 +84,26 @@ def save_record(
     cost_bps: float | None = None,
     extra: dict[str, Any] | None = None,
 ) -> Path:
-    """写入一份核验结论（覆盖式：一个策略键只保留最新一次结论）。
+    """Atomically write the latest view while retaining every prior current record.
 
-    :param verdict: `pass` / `observe` / `reject`
-    :param headline: 一句话结论（给人和 LLM 读的，必须自带数字与口径）
-    :param metrics: 关键统计量，建议用 `strategy_verify.summarize_row()` 产出
-    :param sample: 样本边界（起止日期 / 交易日数 / 样本量），**没有边界的结论不可信**
-    :param source: 产出该结论的脚本或命令（可重跑性）
+    Historical negative results and superseded attempts remain audit evidence.  A bad
+    existing history fails closed rather than being silently discarded.
     """
     if verdict not in (VERDICT_PASS, VERDICT_OBSERVE, VERDICT_REJECT):
         raise ValueError(f"verdict 必须是 pass/observe/reject，收到 {verdict!r}")
     path = _path_for(key)
     path.parent.mkdir(parents=True, exist_ok=True)
+    history: list[dict] = []
+    if path.exists():
+        try:
+            previous = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError("existing verification record 损坏，拒绝覆盖") from exc
+        if not isinstance(previous, dict):
+            raise ValueError("existing verification record 不是对象，拒绝覆盖")
+        if previous.get("key") not in (None, key):
+            raise ValueError("existing verification key 不一致，拒绝覆盖")
+        history = [*_history_of(previous), _current_without_history(previous)]
     payload = {
         "key": key,
         "verdict": verdict,
@@ -89,15 +111,15 @@ def save_record(
         "metrics": metrics or {},
         "sample": sample or {},
         "source": source,
-        # 未显式传时回退到 metrics 里的值，避免顶层与 metrics 两个 cost_bps 打架
         "cost_bps": cost_bps if cost_bps is not None else (metrics or {}).get("cost_bps"),
         "recorded_at": beijing_now_naive().isoformat(timespec="seconds"),
     }
     if extra:
         payload.update(extra)
-    # 原子写：先写临时文件再 rename，避免读到写了一半的 JSON
+    if history:
+        payload["history"] = history
     tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
     tmp.replace(path)
     return path
 
@@ -113,6 +135,14 @@ def load_record(key: str) -> dict | None:
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def load_history(key: str) -> list[dict]:
+    """Return prior current-record snapshots in chronological order."""
+    record = load_record(key)
+    if record is None:
+        return []
+    return list(_history_of(record))
 
 
 def _age_days(recorded_at: str | None) -> int | None:
@@ -140,23 +170,57 @@ def _valid_legacy_gate_v2(record: dict, gate: dict) -> bool:
     )
 
 
-def _valid_legacy_gate_v3(record: dict, gate: dict) -> bool:
+def _valid_research_gate(record: dict, gate: dict, *, expected_version: int) -> bool:
+    """Validate the shared research-gate envelope for current or historical versions."""
     failed = gate.get("failed")
     machine_unchecked = gate.get("machine_unchecked")
     protocol_issues = gate.get("protocol_issues")
     unchecked = gate.get("unchecked")
+    protocol = gate.get("validation_protocol")
+    eligible = gate.get("research_admission_eligible_for_review")
+    machine_verdict = gate.get("machine_verdict")
+    expected_unchecked = None
+    if isinstance(machine_unchecked, list) and isinstance(protocol_issues, list):
+        expected_unchecked = [
+            *machine_unchecked,
+            *(f"协议：{item}" for item in protocol_issues),
+        ]
+    protocol_identity_ok = (
+        protocol is None
+        or (
+            isinstance(protocol, dict)
+            and protocol.get("return_identity") == gate.get("return_identity")
+        )
+    )
     return bool(
-        gate.get("gate_version") == 3
+        gate.get("gate_version") == expected_version
         and gate.get("scope") == "research_admission_machine_checks"
         and gate.get("review_required") is True
         and gate.get("verdict") == record.get("verdict")
         and gate.get("verdict") in {VERDICT_PASS, VERDICT_OBSERVE, VERDICT_REJECT}
+        and machine_verdict in {VERDICT_PASS, VERDICT_OBSERVE, VERDICT_REJECT}
         and isinstance(failed, list)
         and isinstance(machine_unchecked, list)
         and isinstance(protocol_issues, list)
         and isinstance(unchecked, list)
-        and unchecked == [*machine_unchecked, *(f"协议：{x}" for x in protocol_issues)]
+        and all(
+            isinstance(v, str)
+            for v in failed + machine_unchecked + protocol_issues + unchecked
+        )
+        and expected_unchecked == unchecked
+        and gate.get("machine_checks_complete") is (not machine_unchecked)
+        and gate.get("protocol_complete") is (not protocol_issues)
+        and protocol_identity_ok
+        and isinstance(eligible, bool)
+        and isinstance(gate.get("production_effect_evidence_complete"), bool)
         and gate.get("production_promotion_eligible") is False
+        and eligible is (
+            gate.get("verdict") == VERDICT_PASS
+            and gate.get("protocol_complete") is True
+            and gate.get("machine_checks_complete") is True
+            and not failed
+        )
+        and (gate.get("verdict") != VERDICT_PASS or eligible)
     )
 
 
@@ -167,63 +231,20 @@ def gate_evidence(record: dict) -> dict:
         state = "legacy_unverified"
     elif isinstance(gate, dict) and gate.get("gate_version") == 2:
         state = "legacy_protocol_unverified" if _valid_legacy_gate_v2(record, gate) else "invalid"
-    elif isinstance(gate, dict) and gate.get("gate_version") == 3:
-        state = "legacy_protocol_unverified" if _valid_legacy_gate_v3(record, gate) else "invalid"
     elif isinstance(gate, dict):
-        failed = gate.get("failed")
-        machine_unchecked = gate.get("machine_unchecked")
-        protocol_issues = gate.get("protocol_issues")
-        unchecked = gate.get("unchecked")
-        protocol = gate.get("validation_protocol")
-        eligible = gate.get("research_admission_eligible_for_review")
-        machine_verdict = gate.get("machine_verdict")
-        expected_unchecked = None
-        if isinstance(machine_unchecked, list) and isinstance(protocol_issues, list):
-            expected_unchecked = [
-                *machine_unchecked,
-                *(f"协议：{item}" for item in protocol_issues),
-            ]
-        protocol_identity_ok = (
-            protocol is None
-            or (
-                isinstance(protocol, dict)
-                and protocol.get("return_identity") == gate.get("return_identity")
+        version = gate.get("gate_version")
+        if isinstance(version, int) and not isinstance(version, bool) and 3 <= version < GATE_VERSION:
+            state = (
+                "legacy_protocol_unverified"
+                if _valid_research_gate(record, gate, expected_version=version)
+                else "invalid"
             )
-        )
-        structurally_valid = (
-            gate.get("gate_version") == GATE_VERSION
-            and gate.get("scope") == "research_admission_machine_checks"
-            and gate.get("review_required") is True
-            and gate.get("verdict") == record.get("verdict")
-            and gate.get("verdict") in {VERDICT_PASS, VERDICT_OBSERVE, VERDICT_REJECT}
-            and machine_verdict in {VERDICT_PASS, VERDICT_OBSERVE, VERDICT_REJECT}
-            and isinstance(failed, list)
-            and isinstance(machine_unchecked, list)
-            and isinstance(protocol_issues, list)
-            and isinstance(unchecked, list)
-            and all(
-                isinstance(v, str)
-                for v in failed + machine_unchecked + protocol_issues + unchecked
+        else:
+            state = (
+                "recorded"
+                if _valid_research_gate(record, gate, expected_version=GATE_VERSION)
+                else "invalid"
             )
-            and expected_unchecked == unchecked
-            and gate.get("machine_checks_complete") is (not machine_unchecked)
-            and gate.get("protocol_complete") is (not protocol_issues)
-            and protocol_identity_ok
-            and isinstance(eligible, bool)
-            and isinstance(gate.get("production_effect_evidence_complete"), bool)
-            and gate.get("production_promotion_eligible") is False
-            and eligible is (
-                gate.get("verdict") == VERDICT_PASS
-                and gate.get("protocol_complete") is True
-                and gate.get("machine_checks_complete") is True
-                and not failed
-            )
-            and (
-                gate.get("verdict") != VERDICT_PASS
-                or eligible
-            )
-        )
-        state = "recorded" if structurally_valid else "invalid"
     else:
         state = "invalid"
 

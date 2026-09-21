@@ -17,7 +17,7 @@ T+5 +1.60%（超额 +1.46%）、胜率 56.9%、11/11 年度正超额。
   只看其中一种都会得出偏颇结论，必须并列。
 
 ⚠️ 口径：买入=信号日收盘、卖出=T+N 收盘；不含滑点/停牌；流通股本由最新快照反推
-（前视偏差）；ST 按当期名称剔除。
+（前视偏差，仅作结构诊断）；历史 universe 不按当前名称/ST/退市状态过滤。
 ⚠️ **数据窥探声明**：候选B 是**用全样本（含测试段）**发现的，因此它在测试段的成绩
 **不构成干净的样本外证据**；真正干净的只有「网格在训练段选、测试段验」这一条路径。
 """
@@ -29,8 +29,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.research import strategy_verify as sv  # noqa: E402
 from app.research import strategy_trials as st  # noqa: E402
+from app.research import strategy_verify as sv  # noqa: E402
 from app.research import verify_registry as vr  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -89,10 +89,11 @@ def _pctl(vals: list[float], p: float) -> float:
 
 def main() -> int:
     con = sv.connect()
-    sv.build(con, sv.BuildConfig(
+    build_cfg = sv.BuildConfig(
         float_shares_sql=sv.snapshot_float_shares_sql(SNAPSHOT_DIR),
         extra_cols=", fs.float_shares AS float_shares",
-    ))
+    )
+    sv.build(con, build_cfg)
     split_ms = int(SPLIT.timestamp() * 1000)
     admission_cfg = sv.VerifyConfig(cost_bps=sv.ADMISSION_COST_BPS)
     split = sv.split_windows(con, split_ms, horizons=[H])
@@ -196,8 +197,11 @@ def main() -> int:
         print(f"{name:<34}{vals[0]:>12}{vals[1]:>12}{vals[2]:>12}")
 
     # ---------------- 可成交性 + 结构
-    main_cond = cand_x[0]["cond"] if cand_x else CANDIDATE_B
-    main_name = cand_x[0]["label"] if cand_x else "原候选B"
+    selected_grid = cand_x[0] if cand_x else next(
+        g for g in grid if g["label"] == "涨幅3~5% | 跌破MA5（任意） | 大盘涨 >0"
+    )
+    main_cond = selected_grid["cond"]
+    main_name = selected_grid["label"]
     print("\n" + "=" * 94)
     print(f"【5】结构稳定性（测试段）—— 主规则 = {main_name}")
     print("=" * 94)
@@ -275,35 +279,28 @@ def main() -> int:
         FROM sigv
         WHERE ({test_where}) AND fwd{H} IS NOT NULL AND mfwd{H} IS NOT NULL
     """).fetchone()
+    trial_rows = [
+        {
+            "trial_id": f"grid-{i + 1:02d}", "label": g["label"], "condition": g["cond"],
+            "train": {"n": g["tr"].get(f"n{H}"), "excess": g["tr"].get(f"x{H}"),
+                      "std": g["tr"].get(f"s{H}")},
+        }
+        for i, g in enumerate(grid)
+    ]
+    selected_trial_id = next(row["trial_id"] for row in trial_rows if row["label"] == main_name)
     trial_evidence = st.trial_family_evidence(
-        [
-            {"label": g["label"], "n": g["tr"].get(f"n{H}"),
-             "excess": g["tr"].get(f"x{H}"), "std": g["tr"].get(f"s{H}")}
-            for g in grid
-        ],
-        selected_label=main_name,
+        trial_rows, selected_trial_id=selected_trial_id,
     )
     overlap_evidence = st.signal_overlap_evidence(
-        con,
-        target_label=main_name,
-        target_cond=main_cond,
-        incumbents={
-            "two_thirty_five": FIVE_STEP,
-            "original_candidate_b_legacy": CANDIDATE_B,
-        },
-        where=holdout_where,
+        con, target_label=main_name, target_cond=main_cond,
+        incumbents={"two_thirty_five": FIVE_STEP}, where=holdout_where,
     )
     protocol = sv.validation_protocol(
         horizon=H, cost_bps=sv.ADMISSION_COST_BPS, split=split,
         # 候选族最初由全样本（含测试段）启发，不能因本次 train-only 选参就洗成 clean OOS。
         selection_scope="test_informed_hypothesis_family",
-        universe_point_in_time=False,
-        feature_point_in_time=True,
-        trials=len(combos),
-        multiple_testing_accounted=trial_evidence["accounted"],
-        signal_overlap_checked=overlap_evidence["checked"],
-        multiple_testing_evidence=trial_evidence,
-        signal_overlap_evidence=overlap_evidence,
+        build_config=build_cfg, gate_features=("chg", "dev_short", "mchg"),
+        trial_evidence=trial_evidence, overlap_evidence=overlap_evidence,
     )
     gate = sv.gate_verdict(
         m, yearly_pos=pos, yearly_tot=tot, limit_up_share=lu_main.get("limit_up_share"),
@@ -330,12 +327,11 @@ def main() -> int:
             "yearly_pos": pos,
             "yearly_tot": tot,
             "limit_up_share": lu_main.get("limit_up_share"),
-            "caveat": "候选B 假设族曾使用全样本（含测试段）发现；结构化 multiple-testing/overlap 已记录，但无法把已窥探历史洗成 clean OOS",
+            "caveat": "候选B 假设族曾使用全样本（含测试段）发现，不能追认 clean OOS；48-trial Bonferroni 与既有信号重叠已机械登记，但历史窥探仍阻断准入",
         },
         source="scripts/verify_candidate_b_oos.py",
         extra={"gate_failed": gate["failed"], "gate_unchecked": gate["unchecked"],
-               "gate": gate, "rule": main_name, "condition": main_cond,
-               "trial_family": trial_evidence, "signal_overlap": overlap_evidence},
+               "gate": gate, "rule": main_name, "condition": main_cond},
     )
     print(f"    {headline}")
     print(f"    判据命中：{gate['note']}")
