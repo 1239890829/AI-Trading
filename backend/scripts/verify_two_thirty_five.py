@@ -19,6 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.research import strategy_verify as sv  # noqa: E402
+from app.research import strategy_trials as st  # noqa: E402
 from app.research import verify_registry as vr  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -197,6 +198,19 @@ def main() -> int:
         FROM sigv
         WHERE ({gate_where}) AND fwd{H} IS NOT NULL AND mfwd{H} IS NOT NULL
     """).fetchone()
+    trial_evidence = st.trial_family_evidence(
+        [{"label": "two_thirty_five", "n": m5.get("n"),
+          "excess": m5.get("excess"), "std": m5.get("std")}],
+        selected_label="two_thirty_five",
+    )
+    candidate_b_cond = "(chg BETWEEN 3 AND 5) AND (dev_short < 0) AND (mchg > 0)"
+    overlap_evidence = st.signal_overlap_evidence(
+        con,
+        target_label="two_thirty_five",
+        target_cond=ALL,
+        incumbents={"pullback_reversal": candidate_b_cond},
+        where=holdout_where,
+    )
     protocol = sv.validation_protocol(
         horizon=H, cost_bps=sv.ADMISSION_COST_BPS, split=split,
         selection_scope="external_preregistered",
@@ -204,8 +218,10 @@ def main() -> int:
         # S3 仍依赖 2026-09-10 当前流通股本反推历史换手率，不能冒充 PIT。
         feature_point_in_time=False,
         trials=1,
-        multiple_testing_accounted=True,
-        signal_overlap_checked=False,
+        multiple_testing_accounted=trial_evidence["accounted"],
+        signal_overlap_checked=overlap_evidence["checked"],
+        multiple_testing_evidence=trial_evidence,
+        signal_overlap_evidence=overlap_evidence,
     )
     gate = sv.gate_verdict(
         m5, yearly_pos=ypos, yearly_tot=ytot, limit_up_share=lu.get("limit_up_share"),
@@ -235,7 +251,8 @@ def main() -> int:
         },
         source="scripts/verify_two_thirty_five.py",
         extra={"gate_failed": gate["failed"], "gate_unchecked": gate["unchecked"],
-               "gate": gate, "conditions": CONDS},
+               "gate": gate, "conditions": CONDS,
+               "trial_family": trial_evidence, "signal_overlap": overlap_evidence},
     )
     print(f"    {headline}")
     print(f"    判据命中：{gate['note']}")

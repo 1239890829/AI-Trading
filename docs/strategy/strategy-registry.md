@@ -159,7 +159,7 @@
 |---|---|---|
 | 产物 | `backend/data/research/verify/<key>.json` | 一次核验的结论（verdict / headline / metrics / sample / recorded_at） |
 | 落盘 | `app/research/verify_registry.py` | `save_record` / `load_record` / `verification_of`（三态）/ `list_records` |
-| 判据 | `app/research/strategy_verify.py::gate_verdict` | v3 同时记录收益机判与验证协议身份：purged holdout、成本、PIT universe/feature、试验全集/multiple-testing、signal overlap；协议缺口会阻断 research PASS，且 reference proxy 永不等于生产晋级 |
+| 判据 | `app/research/strategy_verify.py::gate_verdict` | v4 同时记录收益机判与 validation-protocol v2：purged holdout、成本、PIT universe/feature、完整 trial-family/Bonferroni、结构化 signal overlap；缺证或选中 trial 未通过校正会阻断 research PASS，且 reference proxy 永不等于生产晋级 |
 | 挂接 | `StrategySpec.verify_key` | 有值 ⇒ `list_strategy_keys()` 附 `verification` 三态 |
 | 消费 | 议程 `strategy_verification` 一路 | 含 `without_evidence`（标了却没产物）与 **`conflicts`（状态与实测结论打架）** |
 
@@ -170,7 +170,7 @@
 **⚠️ 判据与收益身份（2026-09-11 订正；2026-09-21 IMP-020 v3）**：`gate_verdict` 的中位/跑赢比例**只接受中性口径**
 （`excess_median` / `excess_win_rate`）。初版误用原始口径，会把候选B 判成 pass——
 原始胜率在上涨市天然 >50%，用它当判据形同虚设。拿不到中性口径时**跳过该条并记 `unchecked`**，
-绝不拿原始口径冒充。v3 研究准入默认按 35bps 压力成本，且要求 purge/embargo、PIT、试验分母与重叠检查都有结构化证据；即使这些全部通过，也只表示“可进入人工 research admission review”。`strategy_verify` 的收益身份仍是 `reference_close_to_close_proxy`，生产晋级必须等待 actual shadow fill 的同版成本/退出净收益与人工审阅。
+绝不拿原始口径冒充。当前研究准入默认按 35bps 压力成本，且要求 purge/embargo、PIT、试验分母与重叠检查都有结构化证据；即使这些全部通过，也只表示“可进入人工 research admission review”。`strategy_verify` 的收益身份仍是 `reference_close_to_close_proxy`，生产晋级必须等待 actual shadow fill 的同版成本/退出净收益与人工审阅。
 
 ---
 
