@@ -88,6 +88,8 @@ class MarketSnapshotService:
         self.last_snapshot_source: str | None = None
         self.last_degraded_reason: str | None = None
         self.last_fallback_coverage: float | None = None
+        self.last_save_error: str | None = None
+        self.consecutive_save_failures = 0
 
     async def refresh(self) -> None:
         rows = await sina_market.fetch_market_snapshot()
@@ -191,6 +193,16 @@ class MarketSnapshotService:
         found = await fetch_quotes_batched(
             self.quote_hub, symbols, prefer_cache=False, batch_size=FALLBACK_BATCH_SIZE
         )
+        # 盘中只把“当前可据此下结论”的报价计入覆盖率。HTTP 200 也可能
+        # 携带旧时点/invalid 行，不能把它们算成 100% 的假覆盖。
+        if in_trading_window():
+            fresh_within = max(self.poll_interval * 3, 60.0)
+            found = {
+                symbol: quote for symbol, quote in found.items()
+                if quote is not None
+                and quote.freshness(fresh_within=fresh_within).state == "ready"
+                and isinstance(quote.price, (int, float)) and quote.price > 0
+            }
         coverage = len(found) / len(symbols)
         if coverage < FALLBACK_MIN_COVERAGE:
             raise RuntimeError(
@@ -274,9 +286,13 @@ class MarketSnapshotService:
             self.last_saved_state = saved_freshness.state
             self.last_saved_source = saved_freshness.source
             self.last_saved_reason = saved_freshness.reason
+            self.last_save_error = None
+            self.consecutive_save_failures = 0
             self.saved_files += 1
             log.info("snapshot saved: %s (%s rows)", path.name, len(rows))
-        except Exception:
+        except Exception as exc:
+            self.consecutive_save_failures += 1
+            self.last_save_error = str(exc)
             log.exception("parquet save failed")
 
     async def run(self, *, first_delay: float = 0.0) -> None:
@@ -416,6 +432,11 @@ class MarketSnapshotService:
             "snapshot_age_seconds": age,
             "rows": len(self.snapshot),
             "saved_files": self.saved_files,
+            "last_saved_path": str(self.last_saved_path) if self.last_saved_path is not None else None,
+            "last_saved_as_of": self.last_saved_as_of.isoformat() if self.last_saved_as_of else None,
+            "last_saved_state": self.last_saved_state,
+            "consecutive_save_failures": self.consecutive_save_failures,
+            "last_save_error": self.last_save_error,
             "snapshot_source": self.last_snapshot_source,
             "fallback_coverage": self.last_fallback_coverage,
             "consecutive_failures": self.consecutive_failures,

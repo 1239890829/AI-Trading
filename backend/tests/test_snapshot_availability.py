@@ -27,7 +27,7 @@ import ast
 import asyncio
 import contextlib
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -571,6 +571,27 @@ def test_fallback_rejects_low_coverage_without_publishing(monkeypatch, tmp_path)
     assert svc.last_snapshot_source is None
 
 
+def test_fallback_rejects_stale_quotes_from_coverage_in_live_window(monkeypatch, tmp_path):
+    from app.services import quote_enrich
+
+    svc = MarketSnapshotService(60.0, 300.0, tmp_path, quote_hub=object())
+    original = _base_rows(10)
+    svc.snapshot = [dict(x) for x in original]
+    svc._snapshot_version = (datetime.now(timezone.utc), tuple(dict(x) for x in original))
+    monkeypatch.setattr(snapshot_service, "in_trading_window", lambda: True)
+
+    async def _fake(_hub, symbols, **_kwargs):
+        out = {symbol: _quote(symbol) for symbol in symbols}
+        for symbol in symbols[-2:]:
+            out[symbol].data_timestamp = datetime.now(timezone.utc) - timedelta(seconds=181)
+        return out
+
+    monkeypatch.setattr(quote_enrich, "fetch_quotes_batched", _fake)
+    with pytest.raises(RuntimeError, match="coverage"):
+        asyncio.run(svc.refresh_fallback())
+    assert svc.snapshot == original
+
+
 def test_fallback_missing_quote_clears_dynamic_fields():
     now = datetime.now(timezone.utc)
     row = MarketSnapshotService._fallback_row(_base_rows(1)[0], None, now=now)
@@ -644,6 +665,27 @@ def test_fallback_save_persists_degraded_durable_metadata(tmp_path):
     assert svc.last_saved_state == "degraded"
     assert svc.last_saved_source == "quote_fallback"
     assert svc.last_saved_reason == "fallback-test"
+
+
+def test_parquet_save_failure_is_structured_and_visible(monkeypatch, tmp_path):
+    from app.services import parquet_store
+
+    svc = MarketSnapshotService(60.0, 60.0, tmp_path)
+    now = datetime.now(timezone.utc)
+    svc.snapshot = _base_rows()
+    svc.breadth = compute_breadth(svc.snapshot)
+    svc.last_success = now
+    svc._snapshot_version = (now, tuple(dict(x) for x in svc.snapshot))
+
+    def _boom(*_args, **_kwargs):
+        raise OSError("disk-full-test")
+
+    monkeypatch.setattr(parquet_store, "write_parquet_atomic", _boom)
+    svc._maybe_save()
+    payload = svc.breadth_payload()
+    assert svc.saved_files == 0
+    assert payload["consecutive_save_failures"] == 1
+    assert payload["last_save_error"] == "disk-full-test"
 
 
 def test_fallback_staleness_is_not_masked_as_degraded():
