@@ -75,7 +75,8 @@ def durable_snapshot_context(app) -> tuple[dict[str, dict], str, str] | None:
             snap_by[str(symbol).zfill(6)] = dict(row)
     if not snap_by:
         raise RuntimeError(f"durable market snapshot empty: {path}")
-    return snap_by, "ready", raw_as_of.isoformat()
+    snapshot_state = getattr(svc, "last_saved_state", None) or "unknown"
+    return snap_by, snapshot_state, raw_as_of.isoformat()
 
 
 def snapshot_as_of(app) -> datetime | None:

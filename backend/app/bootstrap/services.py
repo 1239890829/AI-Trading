@@ -141,6 +141,7 @@ def build_services(app: FastAPI) -> AppServices:
         poll_interval=settings.snapshot_poll_interval_seconds,
         save_interval=settings.snapshot_save_interval_seconds,
         parquet_dir=Path(settings.parquet_dir),
+        quote_hub=hub,
     )
     app.state.snapshot_service = snapshot_service
 

@@ -1,8 +1,8 @@
-# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 Run Ledger
+# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 Snapshot Fallback
 
 > 定位：当前运行模式、最新已合并证据、唯一在制纵切与安全边界；任务唯一状态仍以所属 stage 为准。
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 的 PR #69/#70/#71/#72/#74/#75/#76/#78/#79/#80/#81 已合并；PR #81 merge=`e3750cd115a8ac2ab5e7dad65aeef48e4ad7ed93`，post-merge CI #529 全绿且真实工作区已同步运行。13:05/13:10 两次下午 durable snapshot 已由后台 `opportunity-evidence` 自动消费，scheduler 0 failure，并分别生成稳定 run_id，但均为 `records=0`；DB 因只有 symbol-level snapshot，无法区分“合法零候选”与“构建链空结果/降级”，因此 candidate/hard_gate/rank 仍无可追溯 run 事实，RSH-026 暂不关闭。当前唯一在制项为 `chatgpt/rsh026-run-ledger`（基于 `master@e3750cd`）：新增 append-only `OpportunityDecisionRun`，保证 0/N 条 symbol rows 都有 durable run evidence 且与 symbol/outcome 同事务，不改候选算法、scheduler 周期、策略权重、交易/通知/shadow-fill 语义。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 的 PR #69/#70/#71/#72/#74/#75/#76/#78/#79/#80/#81/#82 已合并；PR #82 merge=`b879b38947a91e1050321cb19535129021cabadc`，post-merge CI #531 backend/frontend/docs 全绿，真实工作区已同步并把 SQLite 从 `d9e4c2b7a1f6` 迁到 `e1a7b4c2d9f0`。迁移前 156,698 snapshot / 156,698 base outcome / 48 revision 逐表计数保持不变，新 run 表初始为 0；13:58:16 的第一份发布后 durable snapshot 已由后台无 GET 自动归档成 `ready + records=0` run，`learning_summary/scorecard` 能读出 zero-run 且 verdict 仍受 denominator/quality 门阻断。随后发现新的真实阻断：`MarketSnapshotService` 全市场快照仍绕过 Composite、只依赖新浪 Market Center；13:58:16 后虽成功刷新到 14:02:29，但 14:03:29 / 14:07:29 连续 WAF 456，下一份 durable snapshot 直到 14:15:31 才恢复，计划约 5 分钟的采样出现约 17 分 15 秒空洞，而 QuoteHub/health 同期仍正常。当前唯一在制项为 `chatgpt/rsh026-snapshot-fallback`（基于 `master@b879b389`）：保留新浪为主源与既有 240→480→900 冷却，限流时用既有/最新 durable 股票池 + 现有批量行情备源生成显式 `degraded` 全市场快照；不改候选算法、scheduler 周期、策略权重、交易/通知/shadow-fill 语义。
 
 
 ## 1. 固定入口与范围
@@ -249,6 +249,18 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **P1-65 显式模型注册不能靠 import 副作用**：`main.py::_REGISTERED_MODELS` 原先连既有 `OpportunityOutcomeRevision` 都未显式列出，实际靠导入整个模块的副作用进入 `Base.metadata`。本片新增 run 表后同时补齐 `OpportunityDecisionRun + OpportunityOutcomeRevision` 的显式 import/tuple 引用，避免冷启动/create_all 与注释所声明的真相源继续分叉。
 - **当前验证**：migration/model parity、零记录幂等回放、same-run digest mismatch、run+symbol 事务原子回滚、zero-record degraded scorecard 阻断、main/import-lint 及既有 opportunity/revision 回归均已通过。真实 292MB 运行库一致性副本从 `d9e4c2b7a1f6` 升到 `e1a7b4c2d9f0` 后 `integrity_check=ok`，156,593 snapshot / 156,593 base outcome / 48 revision 全保留，新 run 表为 0，证明迁移不反填历史猜测；随后在该副本注入一拍 `ready + themes=[] + records=0` 的真实结构，结果只新增 1 条 `OpportunityDecisionRun`、0 symbol/outcome，`replay_run.run_evidence` 与 `learning_summary.run_ledger` 均能明确读出合法零候选，DB 完整性仍 `ok`。最终 exact-head 全量 backend、repo/docs、CI 与发布后真实 0/N-run 验收仍是发布门。
 - **非目标**：本片不改变 theme/participant 生成规则，不把 zero-record 自动判为错误，不补通知 run-level 语义，不改 scheduler 周期、候选阈值、provider failover、通知、shadow-fill 或真实交易行为。
+
+## 8.12 U49 主动审计回执（RSH-026 Snapshot Fallback）
+
+- **阶段/基点**：`Production validation + candidate implementation`；基于 `master@b879b38947a91e1050321cb19535129021cabadc`（PR #82 merge 后 post-merge CI #531 全绿，真实 DB revision=`e1a7b4c2d9f0`）。
+- **P1-66 durable snapshot 仍是新浪单点**：QuoteHub 已是多源链，但 `MarketSnapshotService.refresh()` 直接调用 `app.market.sina_market.fetch_market_snapshot()`，绕过 provider failover。真实 2026-09-21：13:58:16 durable save 后，13:59/14:00/14:01/14:02 刷新成功；14:03:29 与 14:07:29 连续新浪 WAF 456，下一份 durable save 直到 14:15:31，形成约 17m15s 证据空洞；同期 `/api/health` 的 QuoteHub 连续成功且 opportunity scheduler 本身 0 failure。说明“总体 health 绿”不能证明全市场研究底座持续采样。
+- **P1-67 fallback 不另造股票全集**：优先使用进程内原子 `versioned_snapshot()` 的 symbol universe；冷启动内存为空时只读取仓库已有最新可读 durable Parquet。两者都没有才显式失败，不硬编码 5,000+ symbol、不新增第三方股票主数据源。
+- **P1-68 动态字段禁止沿用旧值**：备源 Quote 能拿到的 price/open/high/low/prev_close/change/change_pct/volume/amount/turnover_rate 全量更新；某 symbol 缺 quote 时这些动态字段统一置 None，只保留名称/市场等身份字段，避免把 13:58 价格伪装成 14:10。fallback 覆盖率低于 90% 直接拒绝发布，与新浪主源的完整性纪律一致。
+- **P1-69 degraded 不能在 durable 层被升回 ready**：PR #81 的 `durable_snapshot_context` 原先对任何已写盘快照硬返回 `state=ready`；新增 fallback 后这会绕过 PR #80 质量门。当前 `_maybe_save` 在 `saved_files++` 前原子记录 `last_saved_state/source/reason`，durable scheduler 原样消费；fallback 写盘为 `degraded`，因此 symbol/run 仍可留证据，但不会进入效果样本。
+- **P1-70 主源冷却与 fallback 解耦**：新浪 456 后仍按既有 240→480→900 秒冷却探测，fallback 不清 `rate_limited/consecutive_failures/last_error`。限流当轮立即尝试一次 fallback；冷却窗口长于 save interval 时，每约 300 秒只刷新备源、不额外探新浪，到冷却结束才重新探测主源，避免“为了兜底反而继续敲新浪”。
+- **P1-71 stale 不能被 degraded 掩盖**：旧 `freshness()` 用 `f.is_usable()` 判断失败降级，而该集合包含 stale，可能把已经过窗的数据重新标成 degraded。文档原义本就是“仍在新鲜窗口内时才 degraded”，当前只允许 `ready → degraded`；一旦年龄过窗仍保持 stale。
+- **真实只读探针**：使用真实最新 durable Parquet 的 5,564 symbol universe，直接走现有批量备源、不写 SQLite/Parquet：`5564/5564 = 100%` 覆盖，耗时约 `2.84s`，`missing_dynamic=0`，breadth total=5,564，freshness=`degraded/source=quote_fallback`。证明 fallback 请求面在当前环境可行，同时没有把备源冒充 ready。
+- **非目标**：不替换新浪主源、不改变 60s poll / 300s save / 240→480→900 冷却，不修改 QuoteHub provider 顺序，不把 fallback 结果用于策略效果晋级，不改 candidate/gate/rank/notification、shadow fill 或真实交易行为。
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
 
