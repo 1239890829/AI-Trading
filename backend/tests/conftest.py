@@ -78,7 +78,10 @@ os.environ["ASHARE_TRADES_TDX_FALLBACK_ENABLED"] = "false"
 import tempfile  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-_TMP_REPORT_DIR = Path(tempfile.mkdtemp(prefix="ashare-test-review-reports-"))
+# TemporaryDirectory owns deletion; keeping the owner global prevents premature
+# GC while tests run and avoids leaving one directory behind per pytest process.
+_TMP_REPORT_OWNER = tempfile.TemporaryDirectory(prefix="ashare-test-review-reports-")
+_TMP_REPORT_DIR = Path(_TMP_REPORT_OWNER.name)
 
 import app.review.storage as _review_storage  # noqa: E402
 
@@ -112,7 +115,8 @@ _TMP_REPORT_DIR.mkdir(parents=True, exist_ok=True)
 # 都是运行时读模块全局，import 后改属性即生效；测试自身的 `monkeypatch.setattr`
 # 仍可临时覆盖（test_cognition 已如此，互不干扰）。
 # 守卫：`tests/test_data_path_isolation.py`（新增 data 路径常量必须登记 + 注入校验 + 功能回归）。
-_DATA_SANDBOX = Path(tempfile.mkdtemp(prefix="ashare-test-data-"))
+_DATA_SANDBOX_OWNER = tempfile.TemporaryDirectory(prefix="ashare-test-data-")
+_DATA_SANDBOX = Path(_DATA_SANDBOX_OWNER.name)
 
 import app.assistant.cognition as _cognition_mod  # noqa: E402
 import app.services.leader_archive as _leader_archive_mod  # noqa: E402
@@ -207,6 +211,11 @@ def _block_real_network_for_test_session():
         yield
     finally:
         socket.getaddrinfo, socket.socket.connect, socket.socket.connect_ex, socket.create_connection = originals
+        # Normal pytest completion must not leave hundreds of import-time sandbox
+        # directories in /private/tmp. TemporaryDirectory also provides process-exit
+        # fallback if this finalizer is skipped by an abnormal shutdown.
+        _TMP_REPORT_OWNER.cleanup()
+        _DATA_SANDBOX_OWNER.cleanup()
         pending = _drain_network_attempts()
         if pending:
             pytest.fail(
