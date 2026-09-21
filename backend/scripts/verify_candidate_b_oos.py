@@ -89,10 +89,11 @@ def _pctl(vals: list[float], p: float) -> float:
 
 def main() -> int:
     con = sv.connect()
-    sv.build(con, sv.BuildConfig(
+    build_cfg = sv.BuildConfig(
         float_shares_sql=sv.snapshot_float_shares_sql(SNAPSHOT_DIR),
         extra_cols=", fs.float_shares AS float_shares",
-    ))
+    )
+    sv.build(con, build_cfg)
     split_ms = int(SPLIT.timestamp() * 1000)
     admission_cfg = sv.VerifyConfig(cost_bps=sv.ADMISSION_COST_BPS)
     split = sv.split_windows(con, split_ms, horizons=[H])
@@ -277,8 +278,9 @@ def main() -> int:
     """).fetchone()
     trial_evidence = st.trial_family_evidence(
         [
-            {"label": g["label"], "n": g["tr"].get(f"n{H}"),
-             "excess": g["tr"].get(f"x{H}"), "std": g["tr"].get(f"s{H}")}
+            {"label": g["label"], "condition": g["cond"],
+             "n": g["tr"].get(f"n{H}"), "excess": g["tr"].get(f"x{H}"),
+             "std": g["tr"].get(f"s{H}")}
             for g in grid
         ],
         selected_label=main_name,
@@ -297,11 +299,7 @@ def main() -> int:
         horizon=H, cost_bps=sv.ADMISSION_COST_BPS, split=split,
         # 候选族最初由全样本（含测试段）启发，不能因本次 train-only 选参就洗成 clean OOS。
         selection_scope="test_informed_hypothesis_family",
-        universe_point_in_time=False,
-        feature_point_in_time=True,
-        trials=len(combos),
-        multiple_testing_accounted=trial_evidence["accounted"],
-        signal_overlap_checked=overlap_evidence["checked"],
+        build_config=build_cfg, gate_features=("chg", "dev_short", "mchg"),
         multiple_testing_evidence=trial_evidence,
         signal_overlap_evidence=overlap_evidence,
     )

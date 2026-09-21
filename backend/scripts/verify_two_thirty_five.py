@@ -50,9 +50,10 @@ def _labeled(con, label: str, cond: str) -> dict:
 
 def main() -> int:
     con = sv.connect()
-    n = sv.build(con, sv.BuildConfig(
+    build_cfg = sv.BuildConfig(
         float_shares_sql=sv.snapshot_float_shares_sql(SNAPSHOT_DIR),
-        extra_cols=", fs.float_shares AS float_shares"))  # 审计 C5：市值分层所需（20260910 快照，前视近似）
+        extra_cols=", fs.float_shares AS float_shares")
+    n = sv.build(con, build_cfg)  # 审计 C5：市值分层所需（20260910 快照，前视近似）
     hz = sv.horizons_of(con)
     dates = [r[0] for r in con.execute("SELECT DISTINCT date_ms FROM sig ORDER BY date_ms").fetchall()]
     print(f"特征样本 {n:,} 行 | {len(dates)} 个交易日")
@@ -213,13 +214,9 @@ def main() -> int:
     )
     protocol = sv.validation_protocol(
         horizon=H, cost_bps=sv.ADMISSION_COST_BPS, split=split,
-        selection_scope="external_preregistered",
-        universe_point_in_time=False,
-        # S3 仍依赖 2026-09-10 当前流通股本反推历史换手率，不能冒充 PIT。
-        feature_point_in_time=False,
-        trials=1,
-        multiple_testing_accounted=trial_evidence["accounted"],
-        signal_overlap_checked=overlap_evidence["checked"],
+        selection_scope="external_preregistered", build_config=build_cfg,
+        gate_features=("chg", "vr", "turn", "vol_step_up", "ma_short", "ma_mid",
+                       "ma_long", "close", "dev_short"),
         multiple_testing_evidence=trial_evidence,
         signal_overlap_evidence=overlap_evidence,
     )

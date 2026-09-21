@@ -173,16 +173,16 @@ def test_bug027_verification_view_never_conflates_machine_pass_and_admission(mon
         [{"label": "fixture", "n": 500, "excess": 0.5, "std": 2.0}],
         selected_label="fixture",
     )
-    overlap_evidence = {
-        "evidence_version": st.EVIDENCE_VERSION, "checked": True,
-        "comparisons": [], "exact_duplicate": False,
-    }
+    overlap_evidence = st.overlap_evidence_from_counts(
+        target_label="fixture", target_n=10,
+        comparisons=[{"incumbent": "x", "incumbent_n": 12,
+                      "intersection_n": 2, "union_n": 20}],
+    )
     protocol = sv.validation_protocol(
         horizon=5, cost_bps=sv.ADMISSION_COST_BPS,
         split={"purge_sessions": 5, "embargo_sessions": 5, "split_date_ms": 1_700_000_000_000},
-        selection_scope="train_only", universe_point_in_time=True, feature_point_in_time=True,
-        trials=1, multiple_testing_accounted=True, signal_overlap_checked=True,
-        multiple_testing_evidence=trial_evidence,
+        selection_scope="train_only", build_config=sv.BuildConfig(),
+        gate_features=("chg",), multiple_testing_evidence=trial_evidence,
         signal_overlap_evidence=overlap_evidence,
     )
     metrics = {"n": 500, "excess": 0.5, "horizon": 5, "cost_bps": sv.ADMISSION_COST_BPS}
@@ -194,8 +194,8 @@ def test_bug027_verification_view_never_conflates_machine_pass_and_admission(mon
                               protocol=protocol)
     records = [
         {"key": "legacy", "verdict": "pass"},
-        {"key": "current", "verdict": "pass", "gate": good},
-        {"key": "missing", "verdict": "observe", "gate": missing},
+        {"key": "current", "verdict": "pass", "metrics": metrics, "gate": good},
+        {"key": "missing", "verdict": "observe", "metrics": metrics, "gate": missing},
     ]
     monkeypatch.setattr(vr, "list_records", lambda: records)
     rows = {row["subject"]: row for row in dl._from_verification()}

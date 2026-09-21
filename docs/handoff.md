@@ -1,6 +1,6 @@
-# 当前交接：DEGRADED_FULL_CONTROL / G3-IMP-020 Trials + Overlap
+# 当前交接：DEGRADED_FULL_CONTROL / G3-IMP-020 Evidence Hardening
 
-> **定位 / 摘要**：当前唯一在制为 G3/IMP-020 第二子片 `trials + overlap`；verification-protocol v1 已由 PR #86 合并，当前把试验全集、多重检验与既有信号重叠从布尔声明升级成可复算证据。RSH-026 已关闭；本片不改策略权重、不做自动晋级、不宣称实际成交净收益。
+> **定位 / 摘要**：G3/IMP-020 的 trials+overlap 已由 PR #87 合入；当前同根 hardening 只关闭四个真实性缺口：PIT 不再 caller 自证、evidence/protocol digest、旧核验 history 防抹除、读回 protocol 重验。完成后进入消融 + Champion/Challenger；不改策略权重、不做自动晋级、不宣称实际成交净收益。
 
 **当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 已由 PR #85 正式 closeout，生产/共享基点为 `master@1b40940c7256ddd0dbd1e41c2a8f1dfc1085a542`；PR #85 post-merge CI backend/frontend/docs 全绿，本机生产 SQLite revision=`e1a7b4c2d9f0`、`integrity_check=ok`，30/30 scheduler running。G3/IMP-020 第一纵切 `verification-protocol v1` 已由 PR #86 合并并部署；当前第二纵切只补 trial-family/multiple-testing/signal-overlap 的结构化证据与 gate，仍不改策略阈值/权重、不自动晋级、不写真实交易，也不把 reference close-to-close 代理冒充 actual shadow fill 净收益。
 
@@ -60,8 +60,8 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 - **当前主门**：G3
 - **主切片首选**：IMP-020
-- **领取边界**：IMP-020 已持续领取；PR #86 完成第一子片。当前第二子片只施工 trial-family / multiple-testing / signal-overlap；合并后再进入消融 + Champion/Challenger，不在本 PR 混入生产晋级。
-- **当前现场**：PR #86 已把 purge/embargo、35bps、PIT 身份、return identity 与历史 current-snapshot 幸存偏差修复合入 `master@d04e728`；post-merge backend/frontend/docs 全绿并已部署。第二子片进一步发现 v3 里的 `multiple_testing_accounted/signal_overlap_checked` 仍可自报为 true，因此升级为 protocol v2 / gate v4：必须绑定当前版本 trial-family 与 overlap 证据，且多 trial 被选规则若校正后未存活会成为失败项。
+- **领取边界**：IMP-020 已持续领取；PR #86 完成 verification protocol、PR #87 完成 trial-family/multiple-testing/signal-overlap。当前只做 #87 的证据真实性 hardening；收口后才进入消融 + Champion/Challenger，不混入生产晋级。
+- **当前现场**：PR #87 已合入 `master@f3556ad`，结构化 trial-family/overlap 已生效。U49 最新审计发现剩余四个同根缺口：PIT 仍由 producer 传 bool；trial/overlap 无 tamper digest；verify latest 覆盖旧否证；registry 读回只验字段形状不重算 protocol。当前 hardening 正逐项 fail-closed。
 - **门内阻断顺序**：RSH-026（已完成）→ IMP-020（进行中）；RSH-030 为同门非阻断，RSH-031 仍受 `IMP-020 + RSH-030` 效果前置限制。
 - G0 的 BUG-028 / BUG-026 已完成，BUG-020 为 `待条件`；G1 的 BUG-029 / IMP-006 / IMP-044 已完成；G2 的 IMP-049 为 `待条件`；G3/RSH-026 本轮登记完成。因此账本合入后下一唯一首选为 G3/IMP-020，不因 RSH-031、新 UI、Agent 或其它研究任务“更有趣”跳序。
 - BUG-020 的 current-value 接纳门现区分 source event time / received time、缺失/拒绝/合法空集与身份歧义；旧可信值不会被晚到/非法观测覆盖。2026-09-20 周日已用本片代码显式加载主仓部署 `.env`，成功构建 `chain(ths→tencent→eastmoney→sina)` 并完成有界只读休市探针：最近交易日 2026-09-18、6/6 指数覆盖、拒绝数 0，600519 实际由腾讯返回且 source time 为 2026-09-18，Hub 明确标 `stale/market_closed`。尚未完成真实交易时段完整会话验收，故不得标已完成或宣称长期盘中 SLA。
@@ -73,7 +73,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - U50 也不改变阶段门算法，只改变“谁可以完成当前切片”：正常模式仍是 Web Review + Codex；当前 `DEGRADED_FULL_CONTROL` 下网页端按同一阶段门全程操控，每个 PR 必须重新写 exact-HEAD `DegradedRelease`，不能复用一次用户授权跳过逐 PR 发布证据。
 - GX 治理只可作为不冲突的伴随切片。2026-09-20 `GOV-018` 已闭环：`.workbuddy` / `.workbuddy-ai` 已物理删除，有价值内容进入项目中性 `skills/scripts/docs/artifacts`，第三方 UZI/Serenity 本体不再复制；PR #48 已合入 `master`（merge `b6b5ba0`，最终 required CI run `35481812431` backend/frontend/docs 全绿）。`GOV-026` 已落地 `scripts/workspace-hygiene.py` 并接 CI/交接；docs 根已收口为 6 个控制面。以上治理不改变阶段门算法；BUG-020 与 IMP-049 都因 `待条件` 排除，RSH-026 登记完成后阶段门下一阻断为 G3/IMP-020。
 
-当前处于 `DEGRADED_FULL_CONTROL`：IMP-020 第一子片已合并，第二子片正在收口 trial denominator / multiple-testing / signal overlap。所有正式 producer 实跑仍只写临时 worktree，生产历史 verify JSON 不覆盖；不启动真实交易或参数晋级。
+当前处于 `DEGRADED_FULL_CONTROL`：IMP-020 PR #86/#87 已合并；当前只做 evidence hardening。真实 marketdb 结论沿用 #87 的隔离取证，不覆盖生产历史 verify JSON；不启动真实交易或参数晋级。
 
 ## 8. Jev、工具链与协作流当前基线
 
@@ -93,7 +93,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **Degraded reason**：当前 Codex 额度不可用，正常双角色无法持续完成实施→独立审核→发布闭环；旧 exact-HEAD Review 门因此形成自锁。
 - **有效期**：持续到用户明确说 Codex 已恢复/退出降级；不是单 PR 临时口令。但每个 PR 的发布仍必须重新生成 exact-HEAD `DegradedRelease`，不能复用上一 PR 回执。
 - **不降低项**：G0–G5/GX 阶段门、U49 主动反证、branch protection、required CI、latest master、CHANGES_REQUESTED/thread、public-repo scan、workspace/doc-health、敏感信息/范围、post-merge CI、删除功能分支。
-- **当前动作**：RSH-026 已由 PR #85 closeout；当前唯一在制为 G3/IMP-020 `verification-protocol v1`。每个后续 PR 仍需新的 exact-HEAD `DegradedRelease`；本轮只做研究准入协议，不把历史 raw verdict 改写成新结论。
+- **当前动作**：IMP-020 PR #86/#87 已合入；当前为同根 evidence-hardening slice。每个后续 PR 仍需新的 exact-HEAD `DegradedRelease`；本轮只强化证据真实性/历史留存，随后继续消融 + Champion/Challenger。
 
 ## 8.2 U49 主动审计回执（RSH-026 Preflight）
 
@@ -305,6 +305,16 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **真实 candidate B**：48/48 trial 全部有效并进入 Bonferroni 分母；训练选中规则 adjusted p=`0.531822444096`，**未通过校正**。holdout 与 `two_thirty_five` 及 legacy candidate B 的当前选中事件集合均 Jaccard=0，不是重复。35bps purged holdout T+5：中性均值约 `+0.19%`、中性中位 `-0.80%`、跑赢 `44.9%`、年度正 5/5 ⇒ `observe`；另保留 test-informed hypothesis family 与历史身份非 PIT，因此绝不洗成 clean OOS。
 - **真实 two-thirty-five**：单一预注册 trial 分母=1；与 candidate B holdout Jaccard=`0.00089824`、target containment=`0.00580862`，非重复。35bps purged T+5 中性 `-0.99%`、中性中位 `-2.42%`、跑赢 `33.9%`、年度正 1/5 ⇒ `reject`；历史身份/current-float-shares 非 PIT 仍显式阻断当前准入。
 - **边界/下一步**：正式脚本实跑只写临时 worktree，未覆盖生产历史 JSON。本子片合并后 IMP-020 仍为部分完成；下一子片进入 leave-one-component-out 消融 + 同版同窗同成本 Champion/Challenger 比较，且只产生研究比较证据，不触发生产晋级。
+
+## 8.17 U49 主动审计回执（IMP-020 Evidence Authenticity Hardening）
+
+- **基点**：`master@f3556ad5c02a9def22c159cded06865f036b8570`（PR #87 已合并）。本片是 #87 的同根缺陷收口，不重复 trial/overlap 研究，也不改策略参数。
+- **P1-81 PIT 仍可 caller 自证**：#87 的 `universe_point_in_time/feature_point_in_time` 仍由 producer 直接传 bool。当前 `validation_protocol` 改为只接受实际 `BuildConfig + gate_features`，由 build provenance 机械派生 PIT；current-float-share `turn` 自动标 non-PIT，caller 再传旧 PIT 布尔会直接 TypeError。
+- **P1-82 evidence/protocol 可被静默改写**：trial-family、signal-overlap、build provenance 和 protocol 均增加 canonical SHA-256 digest；gate 每次从 payload 重算 digest/分母/集合恒等式，tamper 或派生字段不一致即 fail-closed。
+- **P1-83 latest 覆盖会抹旧否证**：`verify_registry.save_record` 继续提供 latest current view，但覆盖前把 previous current 追加进同文件 `history`；history 损坏拒绝覆盖，负结果/旧尝试不再因下一次重跑消失。历史存量 JSON 不批量改写。
+- **P1-84 读回只验字段形状**：registry 对 gate v4 读回时重新运行 `validation_protocol_issues(record.metrics, protocol)`，必须与落盘 `protocol_issues` 完全一致；手工改 protocol/布尔字段不能靠同步改结构字段伪装成 recorded。
+- **边界**：#87 的真实 candidate/two-thirty-five 数值结论保持原样；本片只保证这些证据以后不能靠 caller 自报或 JSON 改写变成假 PASS。通过本片仍不等于策略有效，更不等于生产晋级。
+- **下一步**：hardening 合入后继续 IMP-020 的 leave-one-component-out 消融 + 同版同窗同成本 Champion/Challenger + experiment accounting；actual shadow-fill net 仍由 IMP-053 提供。
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
 
