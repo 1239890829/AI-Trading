@@ -210,6 +210,37 @@ def test_imp020_protocol_defects_block_pass(protocol):
     assert gate["research_admission_eligible_for_review"] is False
 
 
+def test_imp020_resealed_trial_conclusion_is_recomputed_not_trusted():
+    trial = st.trial_family_evidence(
+        [{
+            "trial_id": "t1", "label": "t1", "condition": "chg > 0",
+            "train": {"n": 500, "excess": 0.5, "std": 2.0},
+        }],
+        selected_trial_id="t1",
+    )
+    trial["trials"][0]["p_adjusted"] = 0.0
+    trial["trials"][0]["survives_alpha"] = True
+    trial["selected_p_adjusted"] = 0.0
+    trial["selected_survives_alpha"] = True
+    trial["evidence_digest"] = st._digest(
+        {k: v for k, v in trial.items() if k != "evidence_digest"}
+    )
+    overlap = st.overlap_evidence_from_counts(
+        target_label="candidate", target_condition="chg > 0", target_n=10,
+        comparisons=[{
+            "incumbent": "old", "condition": "chg > 1",
+            "incumbent_n": 8, "intersection_n": 2, "union_n": 16,
+        }],
+    )
+    with pytest.raises(ValueError, match="机械复算"):
+        sv.validation_protocol(
+            horizon=5, cost_bps=sv.ADMISSION_COST_BPS,
+            split={"purge_sessions": 5, "embargo_sessions": 5, "split_date_ms": 1},
+            selection_scope="train_only", build_config=sv.BuildConfig(),
+            gate_features=("chg",), trial_evidence=trial, overlap_evidence=overlap,
+        )
+
+
 def test_imp020_protocol_digest_tamper_fails_closed():
     protocol = _protocol()
     protocol["trials"] = 999

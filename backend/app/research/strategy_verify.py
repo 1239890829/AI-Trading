@@ -530,6 +530,25 @@ def _normalise_trial_evidence(evidence: dict) -> dict:
     selected = str(evidence.get("selected_trial_id") or "")
     if sum(str(row.get("trial_id") or "") == selected for row in trials if isinstance(row, dict)) != 1:
         raise ValueError("selected_trial_id 不唯一")
+
+    # A canonical digest proves internal consistency, not correctness. Rebuild every
+    # p-value/Bonferroni/survival field from the embedded manifest so a caller cannot
+    # alter the statistical conclusion and merely reseal the payload.
+    from app.research.strategy_trials import trial_family_evidence
+
+    recomputed = trial_family_evidence(
+        [{
+            "trial_id": row.get("trial_id"),
+            "label": row.get("label"),
+            "condition": row.get("condition"),
+            "train": row.get("train"),
+        } for row in trials if isinstance(row, dict)],
+        selected_trial_id=selected,
+        alpha=evidence.get("alpha", 0.05),
+        method=method,
+    )
+    if recomputed != evidence:
+        raise ValueError("trial_evidence 与完整 manifest 机械复算结果不一致")
     return json.loads(json.dumps(evidence, ensure_ascii=False, allow_nan=False))
 
 
