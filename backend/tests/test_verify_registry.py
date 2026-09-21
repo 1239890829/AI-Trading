@@ -57,27 +57,36 @@ def _ok_metrics(**over) -> dict:
     return m
 
 
+def _trial_evidence(*, trials=1, selected_excess=1.4, selected_std=6.0) -> dict:
+    rows = [
+        {
+            "trial_id": f"t{i + 1}", "label": f"trial-{i + 1}", "condition": f"chg > {i}",
+            "train": {"n": 5000, "excess": selected_excess if i == 0 else 0.1, "std": selected_std},
+        }
+        for i in range(trials)
+    ]
+    return st.trial_family_evidence(rows, selected_trial_id="t1")
+
+
+def _overlap_evidence(*, exact_duplicate=False) -> dict:
+    return st.overlap_evidence_from_counts(
+        target_label="candidate", target_condition="chg > 0", target_n=100,
+        comparisons=[{
+            "incumbent": "incumbent", "condition": "chg > 1",
+            "incumbent_n": 100 if exact_duplicate else 80,
+            "intersection_n": 100 if exact_duplicate else 20,
+            "union_n": 100 if exact_duplicate else 160,
+        }],
+    )
+
+
 def _protocol(**over) -> dict:
     split = {"purge_sessions": 5, "embargo_sessions": 5, "split_date_ms": 1_700_000_000_000}
-    trial_evidence = st.trial_family_evidence([
-        {"label": "a", "n": 500, "excess": 0.5, "std": 2.0},
-        {"label": "b", "n": 500, "excess": 0.2, "std": 2.0},
-        {"label": "c", "n": 500, "excess": 0.1, "std": 2.0},
-    ], selected_label="a")
-    overlap_evidence = {
-        "evidence_version": st.EVIDENCE_VERSION,
-        "target": "a", "table": "sigv", "where": "TRUE", "checked": True,
-        "comparisons": [{"incumbent": "x", "target_n": 10, "incumbent_n": 12,
-                         "intersection_n": 2, "union_n": 20, "jaccard": 0.1,
-                         "target_containment": 0.2, "exact_duplicate": False}],
-        "exact_duplicate": False,
-    }
     kwargs = dict(
         horizon=5, cost_bps=sv.ADMISSION_COST_BPS, split=split,
-        selection_scope="train_only", universe_point_in_time=True,
-        feature_point_in_time=True, trials=3, multiple_testing_accounted=True,
-        signal_overlap_checked=True, multiple_testing_evidence=trial_evidence,
-        signal_overlap_evidence=overlap_evidence,
+        selection_scope="train_only", build_config=sv.BuildConfig(),
+        gate_features=("chg", "dev_short", "mchg"),
+        trial_evidence=_trial_evidence(), overlap_evidence=_overlap_evidence(),
     )
     kwargs.update(over)
     return sv.validation_protocol(**kwargs)
@@ -181,13 +190,14 @@ def test_imp020_missing_protocol_blocks_statistical_pass():
 
 @pytest.mark.parametrize("protocol", [
     _protocol(cost_bps=25.0),
-    _protocol(universe_point_in_time=False),
-    _protocol(feature_point_in_time=False),
     _protocol(selection_scope="test_informed_hypothesis_family"),
-    _protocol(multiple_testing_accounted=False),
-    _protocol(signal_overlap_checked=False),
-    _protocol(multiple_testing_evidence=None),
-    _protocol(signal_overlap_evidence=None),
+    _protocol(
+        build_config=sv.BuildConfig(float_shares_sql="SELECT 1", extra_cols=", fs.float_shares AS float_shares"),
+        gate_features=("chg", "turn"),
+    ),
+    _protocol(trial_evidence=_trial_evidence(trials=2, selected_excess=0.01, selected_std=6.0)),
+    _protocol(overlap_evidence=None),
+    _protocol(overlap_evidence=_overlap_evidence(exact_duplicate=True)),
 ])
 def test_imp020_protocol_defects_block_pass(protocol):
     metrics = _ok_metrics(cost_bps=protocol["cost_bps"])
@@ -200,37 +210,35 @@ def test_imp020_protocol_defects_block_pass(protocol):
     assert gate["research_admission_eligible_for_review"] is False
 
 
+def test_imp020_protocol_digest_tamper_fails_closed():
+    protocol = _protocol()
+    protocol["trials"] = 999
+    gate = sv.gate_verdict(
+        _ok_metrics(), yearly_pos=9, yearly_tot=10, limit_up_share=0.05,
+        excess_median=0.2, excess_win_rate=0.57, protocol=protocol,
+    )
+    assert gate["verdict"] == sv.VERDICT_OBSERVE
+    assert any("digest" in item for item in gate["protocol_issues"])
 
 
 def test_imp020_selected_trial_must_survive_multiplicity_correction():
-    protocol = _protocol()
-    protocol["multiple_testing_evidence"] = {
-        **protocol["multiple_testing_evidence"],
-        "selected_survives_alpha": False,
-        "selected_p_adjusted": 0.6,
-    }
+    protocol = _protocol(trial_evidence=_trial_evidence(trials=2, selected_excess=0.01))
     gate = sv.gate_verdict(
         _ok_metrics(), yearly_pos=9, yearly_tot=10, limit_up_share=0.05,
         excess_median=0.2, excess_win_rate=0.57, protocol=protocol,
     )
     assert gate["verdict"] == sv.VERDICT_OBSERVE
-    assert any("多重检验" in item for item in gate["failed"])
+    assert any("多重检验" in item for item in gate["protocol_issues"])
 
 
 def test_imp020_exact_duplicate_overlap_blocks_research_pass():
-    protocol = _protocol()
-    protocol["signal_overlap_evidence"] = {
-        **protocol["signal_overlap_evidence"], "exact_duplicate": True,
-        "comparisons": [{"incumbent": "x", "target_n": 10, "incumbent_n": 10,
-                         "intersection_n": 10, "union_n": 10, "jaccard": 1.0,
-                         "target_containment": 1.0, "exact_duplicate": True}],
-    }
+    protocol = _protocol(overlap_evidence=_overlap_evidence(exact_duplicate=True))
     gate = sv.gate_verdict(
         _ok_metrics(), yearly_pos=9, yearly_tot=10, limit_up_share=0.05,
         excess_median=0.2, excess_win_rate=0.57, protocol=protocol,
     )
     assert gate["verdict"] == sv.VERDICT_OBSERVE
-    assert any("完全重复" in item for item in gate["failed"])
+    assert any("完全重复" in item for item in gate["protocol_issues"])
 
 
 def test_imp020_protocol_incomplete_does_not_upgrade_negative_effect():
@@ -286,6 +294,26 @@ def test_save_record_overwrites_keeps_latest(vdir):
     vr.save_record("k", verdict=vr.VERDICT_OBSERVE, headline="旧")
     vr.save_record("k", verdict=vr.VERDICT_REJECT, headline="新")
     assert vr.load_record("k")["headline"] == "新"
+
+
+def test_save_record_retains_prior_current_as_history(vdir):
+    vr.save_record("k", verdict=vr.VERDICT_OBSERVE, headline="旧", metrics={"n": 10})
+    vr.save_record("k", verdict=vr.VERDICT_REJECT, headline="新", metrics={"n": 20})
+    history = vr.load_history("k")
+    assert len(history) == 1
+    assert history[0]["headline"] == "旧" and history[0]["metrics"]["n"] == 10
+    assert "history" not in history[0]
+
+
+def test_save_record_refuses_to_erase_corrupt_existing_history(vdir):
+    vdir.mkdir(parents=True, exist_ok=True)
+    (vdir / "k.json").write_text(
+        json.dumps({"key": "k", "headline": "旧", "history": "broken"}), encoding="utf-8"
+    )
+    before = (vdir / "k.json").read_bytes()
+    with pytest.raises(ValueError):
+        vr.save_record("k", verdict=vr.VERDICT_REJECT, headline="新")
+    assert (vdir / "k.json").read_bytes() == before
 
 
 def test_load_record_missing_returns_none(vdir):
@@ -568,6 +596,7 @@ def test_bug027_registry_retains_legacy_record_without_silent_certification(vdir
 def test_bug027_registry_exposes_machine_evidence_and_unchecked(vdir):
     gate = _bug027_complete(excess_median=None)
     path = vr.save_record("current", verdict=gate["verdict"], headline="pending evidence",
+                          metrics=_ok_metrics(),
                           extra={"gate": gate, "gate_unchecked": gate["unchecked"]})
     before = path.read_bytes()
     view = vr.verification_of("current")
@@ -585,6 +614,23 @@ def test_bug027_raw_bad_but_complete_neutral_evidence_can_pass():
     assert gate["failed"] == [] and gate["unchecked"] == []
 
 
+
+
+def test_imp020_registry_recomputes_protocol_integrity_on_read(vdir):
+    gate = _gate(
+        _ok_metrics(), yearly_pos=9, yearly_tot=10, limit_up_share=0.05,
+        excess_median=0.2, excess_win_rate=0.57,
+    )
+    path = vr.save_record(
+        "tampered", verdict=gate["verdict"], headline="fixture",
+        metrics=_ok_metrics(), extra={"gate": gate},
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["gate"]["validation_protocol"]["trials"] = 999
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    view = vr.verification_of("tampered")
+    assert view["gate_evidence_state"] == "invalid"
+    assert view["admission_eligible_for_review"] is False
 
 
 def test_imp020_valid_v2_gate_is_history_not_current_admission(vdir):
@@ -630,7 +676,8 @@ def test_bug027_real_producer_metadata_survives_save_and_read(vdir, name):
         "overlap_evidence": {"checked": True, "exact_duplicate": False},
     })
     assert extra["gate"] == gate and extra["gate_unchecked"] == gate["unchecked"]
-    vr.save_record("producer", verdict=gate["verdict"], headline="fixture", extra=extra)
+    vr.save_record("producer", verdict=gate["verdict"], headline="fixture",
+                   metrics=_ok_metrics(), extra=extra)
     view = vr.verification_of("producer")
     assert view["gate_evidence_state"] == "recorded" and view["review_required"] is True
     assert view["gate"]["machine_checks_complete"] is False

@@ -77,3 +77,41 @@ def test_signal_overlap_requires_named_incumbent():
             )
     finally:
         con.close()
+
+
+def test_current_trial_manifest_is_explicit_and_digest_sealed():
+    out = st.trial_family_evidence(
+        [{"trial_id": "t1", "label": "a", "condition": "chg > 0",
+          "train": {"n": 400, "excess": 0.8, "std": 2.0}}],
+        selected_trial_id="t1",
+    )
+    assert out["manifest_complete"] is True
+    assert out["selected_trial_id"] == "t1"
+    assert len(out["evidence_digest"]) == 64
+
+
+def test_legacy_flat_trial_helper_remains_readable_but_not_current_manifest():
+    out = st.trial_family_evidence(
+        [{"label": "legacy", "n": 300, "excess": 0.5, "std": 1.0}],
+        selected_label="legacy",
+    )
+    assert out["manifest_complete"] is False
+    assert out["accounted"] is True
+
+
+def test_overlap_count_identity_is_validated():
+    with pytest.raises(ValueError):
+        st.overlap_evidence_from_counts(
+            target_label="candidate", target_condition="x=1", target_n=10,
+            comparisons=[{"incumbent": "old", "condition": "y=1",
+                          "incumbent_n": 5, "intersection_n": 6, "union_n": 10}],
+        )
+
+
+def test_overlap_evidence_is_digest_sealed():
+    out = st.overlap_evidence_from_counts(
+        target_label="candidate", target_condition="x=1", target_n=10,
+        comparisons=[{"incumbent": "old", "condition": "y=1",
+                      "incumbent_n": 5, "intersection_n": 2, "union_n": 13}],
+    )
+    assert out["checked"] is True and len(out["evidence_digest"]) == 64

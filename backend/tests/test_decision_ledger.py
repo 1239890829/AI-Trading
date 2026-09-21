@@ -170,20 +170,20 @@ def test_empty_everywhere_is_explicitly_empty(monkeypatch):
 def test_bug027_verification_view_never_conflates_machine_pass_and_admission(monkeypatch):
     from app.research import strategy_verify as sv, strategy_trials as st, verify_registry as vr
     trial_evidence = st.trial_family_evidence(
-        [{"label": "fixture", "n": 500, "excess": 0.5, "std": 2.0}],
-        selected_label="fixture",
+        [{"trial_id": "t1", "label": "fixture", "condition": "chg > 0",
+          "train": {"n": 500, "excess": 0.5, "std": 2.0}}],
+        selected_trial_id="t1",
     )
-    overlap_evidence = {
-        "evidence_version": st.EVIDENCE_VERSION, "checked": True,
-        "comparisons": [], "exact_duplicate": False,
-    }
+    overlap_evidence = st.overlap_evidence_from_counts(
+        target_label="candidate", target_condition="chg > 0", target_n=100,
+        comparisons=[{"incumbent": "incumbent", "condition": "chg > 1",
+                      "incumbent_n": 80, "intersection_n": 20, "union_n": 160}],
+    )
     protocol = sv.validation_protocol(
         horizon=5, cost_bps=sv.ADMISSION_COST_BPS,
         split={"purge_sessions": 5, "embargo_sessions": 5, "split_date_ms": 1_700_000_000_000},
-        selection_scope="train_only", universe_point_in_time=True, feature_point_in_time=True,
-        trials=1, multiple_testing_accounted=True, signal_overlap_checked=True,
-        multiple_testing_evidence=trial_evidence,
-        signal_overlap_evidence=overlap_evidence,
+        selection_scope="train_only", build_config=sv.BuildConfig(),
+        gate_features=("chg",), trial_evidence=trial_evidence, overlap_evidence=overlap_evidence,
     )
     metrics = {"n": 500, "excess": 0.5, "horizon": 5, "cost_bps": sv.ADMISSION_COST_BPS}
     good = sv.gate_verdict(metrics, yearly_pos=9, yearly_tot=10,
@@ -194,8 +194,8 @@ def test_bug027_verification_view_never_conflates_machine_pass_and_admission(mon
                               protocol=protocol)
     records = [
         {"key": "legacy", "verdict": "pass"},
-        {"key": "current", "verdict": "pass", "gate": good},
-        {"key": "missing", "verdict": "observe", "gate": missing},
+        {"key": "current", "verdict": "pass", "metrics": metrics, "gate": good},
+        {"key": "missing", "verdict": "observe", "metrics": metrics, "gate": missing},
     ]
     monkeypatch.setattr(vr, "list_records", lambda: records)
     rows = {row["subject"]: row for row in dl._from_verification()}
