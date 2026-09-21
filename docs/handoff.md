@@ -1,8 +1,9 @@
-# 当前交接：DEGRADED_FULL_CONTROL / G3-IMP-020 成本后验证与准入
+# 当前交接：DEGRADED_FULL_CONTROL / G3-IMP-020 Verification Protocol v1
 
-> 定位：当前运行模式、最新已合并证据、唯一在制纵切与安全边界；任务唯一状态仍以所属 stage 为准。
+> **定位 / 摘要**：当前唯一在制为 G3/IMP-020 `verification-protocol v1`；目标是把旧统计核验升级为可机器证明的 purged OOS + 成本 + PIT + 试验分母协议。RSH-026 已关闭；本片不改策略权重、不做自动晋级、不宣称实际成交净收益。
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 的实现纵切已由 PR #69/#70/#71/#72/#74/#75/#76/#78/#79/#80/#81/#82/#83/#84 与账本 PR #73 收口；最新生产 `master=2674cb155d71d0889d3090bd97f1082139ad887e`，SQLite revision=`e1a7b4c2d9f0`、`integrity_check=ok`、30/30 scheduler running。PR #83 把新浪 456 时的全市场采样改为既有 universe + 批量行情备源的显式 `degraded` fallback，并把 snapshot/durable-save 状态接入 health；PR #84 补齐 `buy_point` notification run header，使 intraday/notification 两条生产 snapshot 写入都经同一 `archive_records(..., run_meta=...)` 单事务。2026-09-21 受控真实数据 E2E 探针在临时目录完成 `refresh_fallback → Parquet save → durable_snapshot_context`：5,564/5,564、100% coverage、约 2.12s、0 missing dynamic，`saved_state=degraded/source=quote_fallback` 且 durable 读取仍为 `degraded`；生产重启后新浪正常路径为 5,564 rows、save failure=0。PR #84 发布前形成的 910 条 notification orphan run_id 保留为 legacy，不反填猜测；发布时已收盘，因此首个自然 `buy_point` run header 与下一次真实新浪 456 自动 fallback 作为运营 WATCH，失败即重开 RSH-026，不作为策略效果证据。RSH-026 已具备关闭条件；本账本切片只登记关闭并把下一阻断指向 IMP-020，不在同一切片施工 IMP-020。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 已由 PR #85 正式 closeout，生产/共享基点为 `master@1b40940c7256ddd0dbd1e41c2a8f1dfc1085a542`；PR #85 post-merge CI backend/frontend/docs 全绿，本机生产 SQLite revision=`e1a7b4c2d9f0`、`integrity_check=ok`，30/30 scheduler running。当前已按阶段门领取 G3/IMP-020 的**第一纵切 `verification-protocol v1`**：只修研究验证协议、OOS 切分、成本/PIT/试验分母与历史核验读取语义；不改策略阈值/权重、不自动晋级、不写真实交易，也不把 reference close-to-close 代理冒充 actual shadow fill 净收益。
+
 
 
 ## 1. 固定入口与范围
@@ -59,9 +60,9 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 - **当前主门**：G3
 - **主切片首选**：IMP-020
-- **领取边界**：RSH-026 本账本切片只登记关闭；账本合入后下一次“继续”才开工 IMP-020。
-- **当前现场**：IMP-044 已由 PR #67 合并；G1 无可行动阻断项，G2/IMP-049 仍为 `待条件`。G3/RSH-026 的工程与证据链已由 PR #69–#84 的相关纵切收口，本账本切片只登记关闭；按总账 §5.9 重算后，下一可行动阻断为 G3/IMP-020，但尚未领取施工。
-- **门内阻断顺序**：RSH-026（关闭）→ IMP-020（下一阻断）；本轮不跨切片施工 IMP-020。RSH-030 为同门非阻断，RSH-031 仍受 `IMP-020 + RSH-030` 效果前置限制。
+- **领取边界**：本轮已正式领取 IMP-020，但只施工 `verification-protocol v1`；该 PR 收口后重新计算，不在同一切片继续做 Champion/Challenger、参数晋级或其它业务任务。
+- **当前现场**：PR #85 已把 RSH-026 正式关闭并将机器主指针切到 IMP-020。Preflight 已确认旧 `strategy_verify` 有三类准入硬伤：① `split_sample` 仅日期二分，无 purge/embargo；② `snapshot_float_shares_sql` 用 2026 当前股本回推十年换手，并曾以 INNER JOIN + 当前名称过滤删除历史样本；③两份正式 verify 产物均为 0bps reference proxy，且 candidate B 明示全样本窥探。当前第一子片修协议，不改业务策略。
+- **门内阻断顺序**：RSH-026（已完成）→ IMP-020（进行中）；RSH-030 为同门非阻断，RSH-031 仍受 `IMP-020 + RSH-030` 效果前置限制。
 - G0 的 BUG-028 / BUG-026 已完成，BUG-020 为 `待条件`；G1 的 BUG-029 / IMP-006 / IMP-044 已完成；G2 的 IMP-049 为 `待条件`；G3/RSH-026 本轮登记完成。因此账本合入后下一唯一首选为 G3/IMP-020，不因 RSH-031、新 UI、Agent 或其它研究任务“更有趣”跳序。
 - BUG-020 的 current-value 接纳门现区分 source event time / received time、缺失/拒绝/合法空集与身份歧义；旧可信值不会被晚到/非法观测覆盖。2026-09-20 周日已用本片代码显式加载主仓部署 `.env`，成功构建 `chain(ths→tencent→eastmoney→sina)` 并完成有界只读休市探针：最近交易日 2026-09-18、6/6 指数覆盖、拒绝数 0，600519 实际由腾讯返回且 source time 为 2026-09-18，Hub 明确标 `stale/market_closed`。尚未完成真实交易时段完整会话验收，故不得标已完成或宣称长期盘中 SLA。
 - BUG-029 现以 `ever_sealed/current_sealed/snapshot_state/version` 为唯一 current-state 契约；开板只恢复“进入评估”的资格，不自动获得成交/通知/模拟执行许可。2026-09-18 真实跨源样本已证明涨停池成员可多次开板/回封；旧 v1 归档保持原语义，v2 才使用新状态重放。
@@ -72,7 +73,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - U50 也不改变阶段门算法，只改变“谁可以完成当前切片”：正常模式仍是 Web Review + Codex；当前 `DEGRADED_FULL_CONTROL` 下网页端按同一阶段门全程操控，每个 PR 必须重新写 exact-HEAD `DegradedRelease`，不能复用一次用户授权跳过逐 PR 发布证据。
 - GX 治理只可作为不冲突的伴随切片。2026-09-20 `GOV-018` 已闭环：`.workbuddy` / `.workbuddy-ai` 已物理删除，有价值内容进入项目中性 `skills/scripts/docs/artifacts`，第三方 UZI/Serenity 本体不再复制；PR #48 已合入 `master`（merge `b6b5ba0`，最终 required CI run `35481812431` backend/frontend/docs 全绿）。`GOV-026` 已落地 `scripts/workspace-hygiene.py` 并接 CI/交接；docs 根已收口为 6 个控制面。以上治理不改变阶段门算法；BUG-020 与 IMP-049 都因 `待条件` 排除，RSH-026 登记完成后阶段门下一阻断为 G3/IMP-020。
 
-当前处于 `DEGRADED_FULL_CONTROL`：RSH-026 的代码、生产部署、受控真实数据 E2E 与主动缺陷收口均已完成，本账本切片只负责准确登记关闭。不得在同一切片继续施工 IMP-020；账本合入后下一次“继续”再按最新 `master` 做 IMP-020 Preflight/U49 反证。
+当前处于 `DEGRADED_FULL_CONTROL`：本轮对 IMP-020 已完成 Preflight/U49 反证并开始 `verification-protocol v1` 实施。只解决验证身份与准入假绿；不在本 PR 内自动重跑并改写生产策略状态，不启动任何真实交易或参数晋级。
 
 ## 8. Jev、工具链与协作流当前基线
 
@@ -92,7 +93,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **Degraded reason**：当前 Codex 额度不可用，正常双角色无法持续完成实施→独立审核→发布闭环；旧 exact-HEAD Review 门因此形成自锁。
 - **有效期**：持续到用户明确说 Codex 已恢复/退出降级；不是单 PR 临时口令。但每个 PR 的发布仍必须重新生成 exact-HEAD `DegradedRelease`，不能复用上一 PR 回执。
 - **不降低项**：G0–G5/GX 阶段门、U49 主动反证、branch protection、required CI、latest master、CHANGES_REQUESTED/thread、public-repo scan、workspace/doc-health、敏感信息/范围、post-merge CI、删除功能分支。
-- **当前动作**：U50、IMP-044 与 RSH-026 的实现纵切（PR #69–#84 中的相关合并）均已完成；生产 `master@2674cb1` 已验证 DB integrity、30/30 schedulers、5,564-row snapshot 正常，fallback 全链临时目录 E2E 保持 `degraded`。本账本切片登记 RSH-026 关闭；下一次“继续”才领取 G3/IMP-020，每个后续 PR 仍需新的 exact-HEAD `DegradedRelease`。
+- **当前动作**：RSH-026 已由 PR #85 closeout；当前唯一在制为 G3/IMP-020 `verification-protocol v1`。每个后续 PR 仍需新的 exact-HEAD `DegradedRelease`；本轮只做研究准入协议，不把历史 raw verdict 改写成新结论。
 
 ## 8.2 U49 主动审计回执（RSH-026 Preflight）
 
@@ -280,6 +281,20 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **部署竞态复盘**：15:06–15:08 的 PID 变化不是 launchd/cron/watchdog，而是同一授权工作区存在重叠部署工具调用；`get_recent_tool_calls` 已定位到另一条精确 restart 命令。最终只保留一个后端实例，后续同一生产目录只允许一个执行侧接管部署，避免重复重启重置 60s snapshot cold-start。
 - **关闭裁定**：RSH-026 的点时身份、全漏斗分母、D0/D1/D3/D5、MFE/MAE、公司行动、append-only revision、后台采样、质量门、原子快照、run ledger、限流 fallback 与 notification run header 均已有工程/运行证据。actual shadow fill / entry-capture 属 `IMP-053`；策略净增益、消融、OOS/前向与晋级纪律属 `IMP-020`，均不得继续作为 RSH-026 的人为关闭条件。
 - **阶段门重算**：RSH-026 状态登记为 `已完成`；G3 下一可行动阻断项为 `IMP-020`。本 closeout 只更新账本/交接/稳定 summary，不在同一切片施工 IMP-020；下一次“继续”才做 IMP-020 Preflight + U49 反证。
+
+## 8.15 U49 主动审计回执（IMP-020 Verification Protocol v1）
+
+- **阶段/基点**：`Preflight + implementation`；基于 `master@1b40940c7256ddd0dbd1e41c2a8f1dfc1085a542`（PR #85 post-merge CI `35573023099` backend/frontend/docs 全绿），当前分支 `chatgpt/imp020-verification-protocol`。本片只做验证协议与读取语义，不做策略参数/权重晋级。
+- **扫描范围**：`research/strategy_verify.py → verify_candidate_b_oos.py / verify_two_thirty_five.py → verify_registry → strategy_registry/evolution/decision_ledger → KB-DEC-019 / W04`，并用真实 2016–2026 marketdb + 2026-09-10 snapshot 做只读量化。
+- **P1-73 时间切分假 OOS**：旧 `split_sample()` 仅 `date_ms < split / >= split`，T+N 标签让训练尾部消费测试段价格；旧测试还把 `train+test=total` 固化为正确。当前新增 trading-session-aware `split_windows/split_sample`，默认按最大 horizon 做同长度 purge + embargo，并显式返回 `train/purged/embargoed/test` 四段分母。
+- **P1-74 current identity 倒灌历史**：真实 marketdb 为 10,298,838 raw rows / 5,565 symbols / 2,438 交易日。旧 `float_shares_sql` 路径 INNER JOIN 到 2026-09-10 current snapshot，并按**当前名称**剔除 ST/退；实测 current-universe 本身只漏 5 symbols / 1,446 rows，但 current-name ST/退会删除 **204 symbols / 452,804 historical rows**。当前改为 LEFT JOIN 只补近似股本，取消 current-name 历史过滤；缺股本保留行并令 `turn=NULL`。
+- **P1-75 当前股本冒充历史换手**：`snapshot_float_shares_sql` 仍只是 2026 单日 current-float-shares 近似，不是 PIT 历史股本；它只能做诊断/探索。BUG-011 同族并列选择同时改为 `amount → received_at → price → nmc` 确定性 tie-break，但“确定”不等于“历史真实”。
+- **P1-76 0 成本与收益身份混淆**：旧两份正式 verify JSON 的 `cost_bps=0`，与 KB-DEC-019 要求 0.2–0.35% 不一致。v3 研究准入固定用区间上沿 **35bps** 压力，metrics 与 protocol 成本必须一致；收益身份固定为 `reference_close_to_close_proxy`，永远不冒充 `shadow_fill_net`。
+- **P1-77 OOS / multiple-testing / overlap 不能只写 caveat**：v3 protocol 强制登记 `selection_scope`、PIT universe/feature、`trials`、`multiple_testing_accounted`、`signal_overlap_checked`。任一协议项未满足时，统计 machine-pass 也只能进入 `observe`，不能获得 research-admission review eligibility。legacy raw verdict 不覆写；旧/无协议 `pass` 当前降为 effective `observe`，而明确负效应 `reject` 保留 reject，但同样 non-admission。
+- **真实结构探针**：当前代码在同一 10 年 marketdb 上，不带 current float-shares 与带 current snapshot feature 都得到 **10,187,702** 特征行；其中 10,176,957 行有近似 turn、10,745 行为 NULL。2022 holdout：`train=4,297,343 / purge=22,148 / embargo=22,198 / test=5,846,013`，四段和恰为 10,187,702，purge/embargo 各 5 个交易日。合成正效应 `machine_verdict=pass`，但 feature PIT=false + overlap unchecked 时 final=`observe`、research eligible=false、production promotion=false。
+- **正式 producer 隔离重跑**：只读生产 marketdb/snapshot，产物仅写临时 worktree。`pullback_reversal` 在 purged holdout + 35bps 下：T+5 中性均值 **+0.18%**、中性中位 **-0.81%**、中性跑赢 **44.8%**、年度正 5/5，统计本身 `observe`；协议另命中历史 ST/退市身份未 PIT、test-informed hypothesis family、48 trials 未做 multiple-testing、未查 overlap。`two_thirty_five`：T+5 中性 **-0.99%**、中性中位 **-2.42%**、跑赢 **33.9%**、年度正 1/5，保持 `reject`；协议另标历史 ST/退市身份未 PIT、current-float-shares 非 PIT、未查 overlap。生产历史 JSON 未被这次验收覆盖。
+- **收益/晋级边界**：`research_admission_eligible_for_review` 只是“可进入人工研究准入复核”，不是上线许可；`production_promotion_eligible=false` 恒成立。actual shadow fill + 同版成本/退出净收益仍由 IMP-053/执行证据链提供，IMP-020 后续只能消费，不能在研究器里伪造。
+- **本片边界/下一步**：不改策略阈值、权重、选股、通知、模拟/真实交易。合入后 IMP-020 仍为部分完成；下一纵切继续收 clean OOS / multiple-testing / signal-overlap、消融与 Champion/Challenger/试验全集账本，最终生产晋级仍需实际 fill 证据与人工审阅。
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
 

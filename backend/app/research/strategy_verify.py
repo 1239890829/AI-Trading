@@ -45,9 +45,16 @@ LIMIT_UP_PCT = 9.5
 
 #: 处置结论（KB-DEC-019 三级态）。`verify_registry` 从此处导入，保持单向依赖：
 #: 核验器是纯计算层，登记层依赖它，反之不成立。
-VERDICT_PASS = "pass"        # 过闸
-VERDICT_OBSERVE = "observe"  # 方向成立但有硬伤
-VERDICT_REJECT = "reject"    # 否决
+VERDICT_PASS = "pass"        # 研究机器条款通过；仍不等于自动生产晋级
+VERDICT_OBSERVE = "observe"  # 方向成立但有硬伤 / 协议证据不完整
+VERDICT_REJECT = "reject"    # 统计反证；协议完整性另决定其能否作为当前生命周期证据
+
+#: IMP-020 v1：KB-DEC-019 要求 0.2~0.35% 往返成本仍正；研究准入按上沿 35bps 压力。
+#: 这不是撮合成本真值，只是 reference close-to-close 研究代理的保守压力参数。
+ADMISSION_COST_BPS = 35.0
+VALIDATION_PROTOCOL_VERSION = 1
+GATE_VERSION = 3
+RETURN_IDENTITY_REFERENCE_PROXY = "reference_close_to_close_proxy"
 
 
 # ---------------------------------------------------------------- 配置 / 连接
@@ -62,7 +69,9 @@ class BuildConfig:
     ma_windows: tuple[int, int, int] = (5, 10, 20)
     horizons: tuple[int, ...] = DEFAULT_HORIZONS
     warmup: int = 20
-    #: 提供则生成 `turn`（换手率%）并按名称剔除 ST/退市；不提供则 `turn` 为 NULL 且不做名称过滤
+    #: 提供则生成 `turn`（换手率%）代理；不提供则 `turn` 为 NULL。
+    #: 该 join 只补特征，**不得**用当前快照名称/当前 universe 删除历史行；
+    #: 是否 ST/退市必须来自 point-in-time 身份源，否则属于未来信息倒灌。
     float_shares_sql: str | None = None
     #: 追加到 FROM 的裸 SQL（如 `JOIN mytab t ON t.thscode = f.thscode`）
     extra_joins: str = ""
@@ -93,19 +102,29 @@ def connect(db_path: Path | str = DEFAULT_DB_PATH, *, read_only: bool = True):
 
 
 def snapshot_float_shares_sql(snapshot_dir: Path | str) -> str:
-    """从**最新全市场快照**反推流通股本（股）的 SQL 片段。
+    """从**单日当前快照**反推流通股本（股）的近似 SQL 片段。
 
-    流通股本 = 流通市值(nmc，万元) × 1e4 ÷ 价格。同一天多份快照取 `amount` 最大的一行
-    （最接近收盘）。⚠️ 这是"用当期股本算历史"（前视偏差），对期间解禁/增发的个股有误差
-    —— **换手率相关结论只能当近似**，须与结论一起声明。
+    流通股本 = 流通市值(nmc，万元) × 1e4 ÷ 价格。该 helper 只提供研究近似：
+    它不是 point-in-time 历史股本，不能证明历史换手率或历史 ST/退市身份。
+
+    同日多份快照按 ``amount → received_at → price → nmc`` 确定性选一行；这只修复
+    BUG-011 的并列不确定性，不把“当前快照”升级成历史真值。
     """
     pat = str(Path(snapshot_dir) / "*.parquet")
     return f"""
-    (SELECT symbol || '.' || market AS thscode, any_value(name) AS name,
-            max(nmc * 10000.0 / nullif(price, 0)) AS float_shares
-     FROM (SELECT *, row_number() OVER (PARTITION BY symbol ORDER BY amount DESC) AS rk
-           FROM read_parquet('{pat}') WHERE price > 0 AND nmc > 0)
-     WHERE rk = 1 GROUP BY 1)
+    (SELECT symbol || '.' || market AS thscode, name,
+            nmc * 10000.0 / nullif(price, 0) AS float_shares
+     FROM (
+       SELECT symbol, market, name, price, nmc, amount, received_at,
+              row_number() OVER (
+                PARTITION BY symbol, market
+                ORDER BY amount DESC NULLS LAST, received_at DESC NULLS LAST,
+                         price DESC NULLS LAST, nmc DESC NULLS LAST
+              ) AS rk
+       FROM read_parquet('{pat}')
+       WHERE price > 0 AND nmc > 0
+     )
+     WHERE rk = 1)
     """
 
 
@@ -128,11 +147,13 @@ def build(con: duckdb.DuckDBPyConnection, cfg: BuildConfig = BuildConfig()) -> i
     fwd_cols = ", ".join(f"(f.c{h} / f.close_price - 1) * 100 AS fwd{h}" for h in hz)
 
     if cfg.float_shares_sql:
-        fs_join = f"JOIN {cfg.float_shares_sql} fs ON fs.thscode = f.thscode"
+        # 当前快照只允许补近似股本特征，绝不能作为历史 universe/ST 身份过滤器。
+        # INNER JOIN + 当前名称过滤会把“今天仍存在/今天不是 ST”倒灌到 10 年历史，
+        # 形成幸存偏差；缺股本的历史行保留，turn 显式 NULL。
+        fs_join = f"LEFT JOIN {cfg.float_shares_sql} fs ON fs.thscode = f.thscode"
         turn_expr = "f.volume / nullif(fs.float_shares, 0) * 100"
-        name_filter = "AND fs.name IS NOT NULL AND fs.name NOT LIKE '%ST%' AND fs.name NOT LIKE '%退%'"
     else:
-        fs_join, turn_expr, name_filter = "", "NULL::DOUBLE", ""
+        fs_join, turn_expr = "", "NULL::DOUBLE"
 
     con.execute(f"DROP TABLE IF EXISTS {tbl}")
     con.execute(f"""
@@ -183,7 +204,7 @@ def build(con: duckdb.DuckDBPyConnection, cfg: BuildConfig = BuildConfig()) -> i
         LEFT JOIN mktc mc ON mc.date_ms = f.date_ms
         {cfg.extra_joins}
         WHERE f.rn > {cfg.warmup} AND f.prev_close > 0 AND f.vol_ma_prev > 0
-          AND {cfg.extra_filter} {name_filter}
+          AND {cfg.extra_filter}
     """)
 
     hz_avg = ", ".join(f"avg(fwd{h}) AS mfwd{h}" for h in hz)
@@ -343,12 +364,129 @@ def yearly(con, cond: str = "TRUE", *, cfg: VerifyConfig = VerifyConfig(),
                  cfg=cfg, horizons=horizons)
 
 
-def split_sample(con, cond: str, split_ms: int, *, cfg: VerifyConfig = VerifyConfig(),
-                 horizons: Sequence[int] | None = None) -> dict:
-    """按时间切分（样本外复验用）：返回 {train, test} 两段统计。"""
+def split_windows(
+    con, split_ms: int, *, cfg: VerifyConfig = VerifyConfig(),
+    horizons: Sequence[int] | None = None, purge_sessions: int | None = None,
+    embargo_sessions: int | None = None,
+) -> dict:
+    """Build one trading-session-aware purged holdout boundary.
+
+    Signal labels use future closes, so a naïve ``date < split`` train set leaks test-period
+    prices through the last ``max(horizon)`` training labels. Sessions immediately before
+    the split are purged and, by default, the same number after it are embargoed.
+    """
+    hz = tuple(horizons) if horizons else horizons_of(con, cfg.table)
+    max_h = max(hz) if hz else 1
+    def _count(value: int | None, default: int, label: str) -> int:
+        if value is None:
+            return default
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{label} 必须是非负整数")
+        return value
+    purge = _count(purge_sessions, max_h, "purge_sessions")
+    embargo = _count(embargo_sessions, max_h, "embargo_sessions")
+    dates = [int(r[0]) for r in con.execute(
+        f"SELECT DISTINCT date_ms FROM {cfg.table} ORDER BY date_ms"
+    ).fetchall()]
+    if not dates:
+        return {
+            "train_where": "FALSE", "purge_where": "FALSE", "embargo_where": "FALSE",
+            "test_where": "FALSE", "split_ms": int(split_ms), "split_date_ms": None,
+            "train_last_ms": None, "test_first_ms": None, "purge_sessions": purge,
+            "embargo_sessions": embargo, "max_horizon": max_h, "trade_days": 0,
+            "train_days": 0, "purged_days": 0, "embargo_days": 0, "test_days": 0,
+        }
+    split_idx = next((i for i, value in enumerate(dates) if value >= int(split_ms)), len(dates))
+    purge_start = max(0, split_idx - purge)
+    test_start = min(len(dates), split_idx + embargo)
+    train_cut = dates[purge_start] if purge_start < len(dates) else None
+    test_cut = dates[test_start] if test_start < len(dates) else None
+    train_where = "FALSE" if purge_start == 0 else f"date_ms < {train_cut}"
+    split_date = dates[split_idx] if split_idx < len(dates) else None
+    purge_where = (
+        "FALSE" if split_date is None or purge_start == split_idx
+        else f"date_ms >= {dates[purge_start]} AND date_ms < {split_date}"
+    )
+    embargo_where = (
+        "FALSE" if split_date is None or test_start == split_idx
+        else f"date_ms >= {split_date} AND date_ms < {dates[test_start]}"
+        if test_start < len(dates) else f"date_ms >= {split_date}"
+    )
+    test_where = "FALSE" if test_start >= len(dates) else f"date_ms >= {test_cut}"
     return {
-        "train": baseline(con, where=f"({cond}) AND date_ms < {split_ms}", cfg=cfg, horizons=horizons),
-        "test": baseline(con, where=f"({cond}) AND date_ms >= {split_ms}", cfg=cfg, horizons=horizons),
+        "train_where": train_where, "purge_where": purge_where,
+        "embargo_where": embargo_where, "test_where": test_where,
+        "split_ms": int(split_ms), "split_date_ms": split_date,
+        "train_last_ms": dates[purge_start - 1] if purge_start > 0 else None,
+        "test_first_ms": test_cut, "purge_sessions": purge, "embargo_sessions": embargo,
+        "max_horizon": max_h, "trade_days": len(dates), "train_days": purge_start,
+        "purged_days": split_idx - purge_start, "embargo_days": test_start - split_idx,
+        "test_days": len(dates) - test_start,
+    }
+
+
+def split_sample(
+    con, cond: str, split_ms: int, *, cfg: VerifyConfig = VerifyConfig(),
+    horizons: Sequence[int] | None = None, purge_sessions: int | None = None,
+    embargo_sessions: int | None = None,
+) -> dict:
+    """Purged/embargoed chronological holdout; returns metrics plus boundary evidence."""
+    hz = tuple(horizons) if horizons else horizons_of(con, cfg.table)
+    window = split_windows(
+        con, split_ms, cfg=cfg, horizons=hz, purge_sessions=purge_sessions,
+        embargo_sessions=embargo_sessions,
+    )
+    return {
+        "train": baseline(con, where=f"({cond}) AND ({window['train_where']})", cfg=cfg, horizons=hz),
+        "purged": baseline(con, where=f"({cond}) AND ({window['purge_where']})", cfg=cfg, horizons=hz),
+        "embargoed": baseline(con, where=f"({cond}) AND ({window['embargo_where']})", cfg=cfg, horizons=hz),
+        "test": baseline(con, where=f"({cond}) AND ({window['test_where']})", cfg=cfg, horizons=hz),
+        "split": window,
+    }
+
+
+def validation_protocol(
+    *, horizon: int, cost_bps: float, split: dict, selection_scope: str,
+    universe_point_in_time: bool, feature_point_in_time: bool, trials: int,
+    multiple_testing_accounted: bool, signal_overlap_checked: bool,
+    return_identity: str = RETURN_IDENTITY_REFERENCE_PROXY,
+) -> dict:
+    """Freeze the evidence identity required for one IMP-020 research admission check.
+
+    ``reference_close_to_close_proxy`` can support a research conclusion only.  A
+    production-promotion candidate additionally needs ``shadow_fill_net`` evidence;
+    both remain review-required and never auto-promote.
+    """
+    h = _sample_count(horizon)
+    trial_count = _sample_count(trials)
+    cost = _finite_number(cost_bps)
+    if h is None or h == 0 or trial_count is None or trial_count == 0:
+        raise ValueError("horizon/trials 必须为正整数")
+    if cost is None or cost < 0:
+        raise ValueError("cost_bps 必须为有限非负数")
+    for label, value in (
+        ("universe_point_in_time", universe_point_in_time),
+        ("feature_point_in_time", feature_point_in_time),
+        ("multiple_testing_accounted", multiple_testing_accounted),
+        ("signal_overlap_checked", signal_overlap_checked),
+    ):
+        if not isinstance(value, bool):
+            raise ValueError(f"{label} 必须是 bool")
+    return {
+        "protocol_version": VALIDATION_PROTOCOL_VERSION,
+        "split_kind": "purged_holdout",
+        "horizon": h,
+        "purge_sessions": split.get("purge_sessions"),
+        "embargo_sessions": split.get("embargo_sessions"),
+        "split_date_ms": split.get("split_date_ms"),
+        "selection_scope": str(selection_scope),
+        "universe_point_in_time": universe_point_in_time,
+        "feature_point_in_time": feature_point_in_time,
+        "trials": trial_count,
+        "multiple_testing_accounted": multiple_testing_accounted,
+        "signal_overlap_checked": signal_overlap_checked,
+        "cost_bps": cost,
+        "return_identity": str(return_identity),
     }
 
 
@@ -437,84 +575,162 @@ def summarize_row(r: dict, horizon: int = 5, *, cost_bps: float = 0.0) -> dict:
     }
 
 
-def gate_verdict(
-    metrics: dict,
-    *,
-    yearly_pos: int | None = None,
-    yearly_tot: int | None = None,
-    limit_up_share: float | None = None,
-    excess_median: float | None = None,
-    excess_win_rate: float | None = None,
-    min_n: int = 200,
-    yearly_floor: float = 0.6,
-    limit_up_ceiling: float = 0.3,
-) -> dict:
-    """Machine-check recommendation, never autonomous promotion approval.
+def _protocol_issues(metrics: dict, protocol: dict | None) -> list[str]:
+    """Return admission-protocol defects; any item makes the evidence research-only."""
+    if not isinstance(protocol, dict):
+        return ["验证协议未登记（缺 purged holdout / 成本 / 试验分母 / PIT 身份）"]
+    issues: list[str] = []
+    if protocol.get("protocol_version") != VALIDATION_PROTOCOL_VERSION:
+        issues.append("验证协议版本不是当前版本")
+    if protocol.get("split_kind") != "purged_holdout":
+        issues.append("样本外切分未声明 purged_holdout")
+    h = _sample_count(protocol.get("horizon"))
+    metric_h = _sample_count(metrics.get("horizon"))
+    if h is None or h == 0:
+        issues.append("验证 horizon 缺失或无效")
+    elif metric_h is not None and metric_h != h:
+        issues.append(f"验证 horizon {h} 与指标 horizon {metric_h} 不一致")
+    purge = _sample_count(protocol.get("purge_sessions"))
+    embargo = _sample_count(protocol.get("embargo_sessions"))
+    if h is not None and h > 0:
+        if purge is None or purge < h:
+            issues.append(f"purge 不足（{purge!r} < horizon {h}）")
+        if embargo is None or embargo < h:
+            issues.append(f"embargo 不足（{embargo!r} < horizon {h}）")
+    if _sample_count(protocol.get("split_date_ms")) in (None, 0):
+        issues.append("样本外切分时点缺失")
+    if protocol.get("selection_scope") not in {"train_only", "external_preregistered"}:
+        issues.append("规则/参数选择使用了测试段或未声明预注册")
+    if protocol.get("universe_point_in_time") is not True:
+        issues.append("验证 universe 不是 point-in-time（存在当前身份/幸存信息倒灌）")
+    if protocol.get("feature_point_in_time") is not True:
+        issues.append("特征不是 point-in-time（存在当前信息倒灌历史）")
+    trials = _sample_count(protocol.get("trials"))
+    if trials is None or trials == 0:
+        issues.append("试验全集/尝试次数未登记")
+    elif trials > 1 and protocol.get("multiple_testing_accounted") is not True:
+        issues.append(f"多重比较未控制（本轮登记 trials={trials}）")
+    if protocol.get("signal_overlap_checked") is not True:
+        issues.append("与既有信号的重复计分/重叠未检查")
+    cost = _finite_number(protocol.get("cost_bps"))
+    metric_cost = _finite_number(metrics.get("cost_bps"))
+    if cost is None or cost < ADMISSION_COST_BPS:
+        issues.append(f"成本压力不足（需 ≥ {ADMISSION_COST_BPS:.0f}bps）")
+    elif metric_cost is None or abs(metric_cost - cost) > 1e-9:
+        issues.append("指标成本口径与验证协议不一致")
+    if protocol.get("return_identity") != RETURN_IDENTITY_REFERENCE_PROXY:
+        issues.append("收益身份未声明为 reference close-to-close proxy")
+    return issues
 
-    Missing, invalid or incomplete evidence observes. A measured non-positive
-    neutral excess rejects. Raw returns cannot substitute for neutral metrics.
-    OOS, leakage and overlapping signals still require independent final review.
-    """
+
+def gate_verdict(
+    metrics: dict, *, yearly_pos: int | None = None, yearly_tot: int | None = None,
+    limit_up_share: float | None = None, excess_median: float | None = None,
+    excess_win_rate: float | None = None, protocol: dict | None = None, min_n: int = 200,
+    yearly_floor: float = 0.6, limit_up_ceiling: float = 0.3,
+) -> dict:
+    """Machine-check one research result; never autonomously promote production logic."""
     minimum = _sample_count(min_n)
     year_floor = _finite_number(yearly_floor)
     limit_ceiling = _finite_number(limit_up_ceiling)
     if (minimum is None or minimum == 0 or year_floor is None or not 0 <= year_floor <= 1
             or limit_ceiling is None or not 0 <= limit_ceiling <= 1):
         raise ValueError("准入配置必须为有效正样本数及[0,1]内有限阈值")
+
     failed: list[str] = []
-    unchecked: list[str] = []
+    machine_unchecked: list[str] = []
+    protocol_issues = _protocol_issues(metrics, protocol)
+
     if metrics.get("sample_basis") not in (None, "mature"):
-        unchecked.append("成熟度未验：旧总样本数不代表成熟样本")
+        machine_unchecked.append("成熟度未验：旧总样本数不代表成熟样本")
     if metrics.get("validation_errors"):
-        unchecked.append(f"样本摘要校验未通过：{metrics['validation_errors']}")
+        machine_unchecked.append(f"样本摘要校验未通过：{metrics['validation_errors']}")
 
     n = _sample_count(metrics.get("n"))
     if n is None:
-        unchecked.append("样本数未验（缺失或不是有限非负整数）")
+        machine_unchecked.append("样本数未验（缺失或不是有限非负整数）")
     elif n < minimum:
         failed.append(f"样本不足（n={n} < {minimum}）")
+
     excess = _finite_number(metrics.get("excess"))
     if excess is None:
-        unchecked.append("市场中性超额未验（缺失或非有限）")
+        machine_unchecked.append("市场中性超额未验（缺失或非有限）")
     elif excess <= 0:
         failed.append(f"市场中性超额 {excess:+.2f}% ≤ 0")
+
     median = _finite_number(excess_median)
     if median is None:
-        unchecked.append("中性中位未验（缺 excess_median 或非有限）")
+        machine_unchecked.append("中性中位未验（缺 excess_median 或非有限）")
     elif median <= 0:
         failed.append(f"中性中位 {median:+.2f}% ≤ 0（收益右偏）")
+
     win = _finite_number(excess_win_rate)
     if win is None or not 0 <= win <= 1:
-        unchecked.append("中性跑赢比例未验（缺 excess_win_rate、非有限或超范围）")
+        machine_unchecked.append("中性跑赢比例未验（缺 excess_win_rate、非有限或超范围）")
     elif win < 0.5:
         failed.append(f"中性跑赢比例 {win * 100:.1f}% < 50%")
+
     positive_years, total_years = _sample_count(yearly_pos), _sample_count(yearly_tot)
-    if (positive_years is None or total_years is None or total_years == 0
-            or positive_years > total_years):
-        unchecked.append("年度稳定性未验（需合法已观测年数及正收益年数）")
+    if positive_years is None or total_years is None or total_years == 0 or positive_years > total_years:
+        machine_unchecked.append("年度稳定性未验（需合法已观测年数及正收益年数）")
     elif positive_years / total_years < year_floor:
         failed.append(f"年度为正 {positive_years}/{total_years} < {year_floor:.0%}（不稳定）")
+
     limit_share = _finite_number(limit_up_share)
     if limit_share is None or not 0 <= limit_share <= 1:
-        unchecked.append("涨停可成交代理未验（缺失、非有限或超范围）")
+        machine_unchecked.append("涨停可成交代理未验（缺失、非有限或超范围）")
     elif limit_share > limit_ceiling:
         failed.append(f"疑似涨停占比 {limit_share * 100:.1f}% > {limit_ceiling:.0%}（难成交）")
 
     if excess is not None and excess <= 0:
-        verdict = VERDICT_REJECT
-    elif failed or unchecked:
-        verdict = VERDICT_OBSERVE
+        machine_verdict = VERDICT_REJECT
+    elif failed or machine_unchecked:
+        machine_verdict = VERDICT_OBSERVE
     else:
-        verdict = VERDICT_PASS
+        machine_verdict = VERDICT_PASS
+
+    protocol_complete = not protocol_issues
+    # 协议缺陷不能制造 PASS；统计上明确为负的结果仍保留 machine_reject 作为反证，
+    # 但只有 protocol_complete 的结果才具备 research admission 身份。
+    verdict = machine_verdict if protocol_complete or machine_verdict == VERDICT_REJECT else VERDICT_OBSERVE
+    unchecked = [*machine_unchecked, *(f"协议：{item}" for item in protocol_issues)]
+
     note = "；".join(failed)
     if unchecked:
         note = (note + "；" if note else "") + "未验：" + "；".join(unchecked)
     elif not failed:
-        note = "机器条款通过（样本外、重复计分及完整准入仍需终审）"
+        note = "研究准入机器条款通过（仍需独立审阅；不得冒充真实成交净收益）"
+
+    return_identity = (
+        protocol.get("return_identity") if isinstance(protocol, dict) else RETURN_IDENTITY_REFERENCE_PROXY
+    )
+    machine_complete = not machine_unchecked
+    research_review_eligible = (
+        verdict == VERDICT_PASS and protocol_complete and machine_complete and not failed
+    )
+    # 本模块的统计身份恒为 reference proxy；actual shadow fill 由 IMP-053/执行证据链拥有。
+    production_evidence_complete = False
+
     return {
-        "verdict": verdict, "failed": failed, "unchecked": unchecked, "note": note,
-        "gate_version": 2, "scope": "machine_checks_only",
-        "machine_checks_complete": not unchecked, "review_required": True,
+        "verdict": verdict,
+        "machine_verdict": machine_verdict,
+        "failed": failed,
+        "machine_unchecked": machine_unchecked,
+        "protocol_issues": protocol_issues,
+        "unchecked": unchecked,
+        "note": note,
+        "gate_version": GATE_VERSION,
+        "scope": "research_admission_machine_checks",
+        "validation_protocol": protocol,
+        "protocol_complete": protocol_complete,
+        "machine_checks_complete": machine_complete,
+        "review_required": True,
+        "return_identity": return_identity,
+        "research_admission_eligible_for_review": research_review_eligible,
+        "production_effect_evidence_complete": production_evidence_complete,
+        # 即便 shadow-fill 证据完整，也只是“可进入人工晋级审查”，绝不自动上线。
+        "production_promotion_eligible": False,
+        "promotion_blocker": "始终需要独立审阅/人工晋级；reference proxy 不能冒充实际成交净收益",
     }
 
 

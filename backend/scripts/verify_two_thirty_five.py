@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -22,6 +23,8 @@ from app.research import verify_registry as vr  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SNAPSHOT_DIR = ROOT.parent / "data" / "parquet" / "snapshots" / "20260910"
+SPLIT = datetime(2022, 1, 1, tzinfo=timezone.utc)
+H = 5
 
 S1 = "chg BETWEEN 3 AND 5"
 S2 = "vr >= 1"
@@ -52,8 +55,13 @@ def main() -> int:
     hz = sv.horizons_of(con)
     dates = [r[0] for r in con.execute("SELECT DISTINCT date_ms FROM sig ORDER BY date_ms").fetchall()]
     print(f"特征样本 {n:,} 行 | {len(dates)} 个交易日")
-    print("口径：买入=信号日收盘；不含费用滑点；换手率为估算值（前视偏差）")
+    print("口径：买入=信号日收盘；换手率为 2026 当前股本近似（非 PIT）；全样本区仅作诊断")
     base_all = sv.baseline(con)
+    split_ms = int(SPLIT.timestamp() * 1000)
+    split = sv.split_windows(con, split_ms, horizons=[H])
+    holdout_where = split["test_where"]
+    admission_cfg = sv.VerifyConfig(cost_bps=sv.ADMISSION_COST_BPS)
+    cost_pct = sv.ADMISSION_COST_BPS / 100.0
 
     print("\n" + "=" * 118)
     print("① 累计漏斗（全样本）——「越筛越差」还是「越筛越好」")
@@ -177,16 +185,36 @@ def main() -> int:
     print("\n" + "=" * 118)
     print("⑧ 结论登记")
     print("=" * 118)
-    all_row = sv.baseline(con, where=f"({ALL})")
-    m5 = sv.summarize_row(all_row, horizon=5)
-    yrows = sv.yearly(con, f"({ALL})")
-    ypos, ytot = sv.year_counts(yrows, horizon=5)
-    lu = sv.limit_up_share(con, f"({ALL})")
-    gate = sv.gate_verdict(m5, yearly_pos=ypos, yearly_tot=ytot,
-                           limit_up_share=lu.get("limit_up_share"))
+    gate_where = f"({ALL}) AND ({holdout_where})"
+    all_row = sv.baseline(con, where=gate_where, cfg=admission_cfg, horizons=[H])
+    m5 = sv.summarize_row(all_row, horizon=H, cost_bps=sv.ADMISSION_COST_BPS)
+    yrows = sv.yearly(con, gate_where, cfg=admission_cfg, horizons=[H])
+    ypos, ytot = sv.year_counts(yrows, horizon=H)
+    lu = sv.limit_up_share(con, gate_where)
+    med_mkt, win_mkt = con.execute(f"""
+        SELECT median(fwd{H} - mfwd{H} - {cost_pct}),
+               avg(CASE WHEN fwd{H} - mfwd{H} - {cost_pct} > 0 THEN 1.0 ELSE 0.0 END)
+        FROM sigv
+        WHERE ({gate_where}) AND fwd{H} IS NOT NULL AND mfwd{H} IS NOT NULL
+    """).fetchone()
+    protocol = sv.validation_protocol(
+        horizon=H, cost_bps=sv.ADMISSION_COST_BPS, split=split,
+        selection_scope="external_preregistered",
+        universe_point_in_time=False,
+        # S3 仍依赖 2026-09-10 当前流通股本反推历史换手率，不能冒充 PIT。
+        feature_point_in_time=False,
+        trials=1,
+        multiple_testing_accounted=True,
+        signal_overlap_checked=False,
+    )
+    gate = sv.gate_verdict(
+        m5, yearly_pos=ypos, yearly_tot=ytot, limit_up_share=lu.get("limit_up_share"),
+        excess_median=med_mkt, excess_win_rate=win_mkt, protocol=protocol,
+    )
     headline = (
-        f"五步全通过 T+5：均值 {m5['mean']:+.2f}%（中性 {m5['excess']:+.2f}%）、"
-        f"中位 {m5['median']:+.2f}%、胜率 {(m5['win_rate'] or 0) * 100:.1f}%、"
+        f"五步法 purged 测试段 T+{H}（{sv.ADMISSION_COST_BPS:.0f}bps）："
+        f"均值 {m5['mean']:+.2f}%（中性 {m5['excess']:+.2f}%）、"
+        f"中性中位 {(med_mkt or 0):+.2f}%、中性跑赢 {(win_mkt or 0) * 100:.1f}%、"
         f"年度为正 {ypos}/{ytot}、疑似涨停 {(lu.get('limit_up_share') or 0) * 100:.1f}%"
         f" ⇒ {gate['verdict']}"
     )
@@ -194,10 +222,13 @@ def main() -> int:
         "two_thirty_five",
         verdict=gate["verdict"],
         headline=headline,
-        metrics=m5,
+        metrics={**m5, "excess_median": med_mkt, "excess_win_rate": win_mkt},
         sample={
             "n_signals": m5["n"],
             "trade_days": len(dates),
+            "split": "2022-01-01",
+            "segment": "purged/embargoed holdout",
+            "split_evidence": split,
             "yearly_pos": ypos,
             "yearly_tot": ytot,
             "limit_up_share": lu.get("limit_up_share"),

@@ -285,11 +285,14 @@ def _collect_strategy_verification() -> dict:
         if not v.get("available"):
             missing.append(spec.verify_key)
             continue
-        if v.get("verdict") and expected.get(spec.status) != v["verdict"]:
+        effective = v.get("effective_verdict") or v.get("verdict")
+        if effective and expected.get(spec.status) != effective:
             conflicts.append({
                 "key": spec.verify_key,
                 "status": spec.status,
-                "verdict": v["verdict"],
+                "verdict": v.get("verdict"),
+                "effective_verdict": effective,
+                "gate_evidence_state": v.get("gate_evidence_state"),
                 "headline": v.get("headline"),
             })
 

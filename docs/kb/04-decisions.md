@@ -263,12 +263,10 @@
 - **决策五 · 纳入路径（复盘新规律怎么进体系）**：
   `复盘提炼 → 量化为可证伪谓词 → 样本内五道检验 → 样本外盲测 → 登记 → 接入`。
   **未过闸不得接入**；复盘提出的新规律默认是**候选假设**，不是结论。
-- **决策六 · 准入判据的可机判部分（2026-09-11，S2-11）**：
-  上表「准入门槛五条」此前只写在文档里，判定时靠人读数字下结论 ⇒ 不可回查、无法复核。
-  现收敛为 `app/research/strategy_verify.py::gate_verdict()`，其中**四条可量化者**由代码判：
-  样本量下限 / 市场中性超额 > 0 / **中性**中位 > 0 且中性跑赢 ≥ 50% / 年度为正比例 ≥ 60% /
-  疑似涨停占比 ≤ 30%。余下两条（样本外盲测、与既有信号不重复计分）依赖人工 ⇒
-  函数只给建议，**终审仍是人**。
+- **决策六 · 准入判据机器化（2026-09-11 S2-11；2026-09-21 IMP-020 v3）**：
+  `app/research/strategy_verify.py::gate_verdict()` 继续机判样本量 / 市场中性超额 / **中性**中位与跑赢 / 年度稳定 / 疑似涨停可成交代理；IMP-020 v3 进一步把此前只靠文字声明的**验证协议身份**写成结构化证据：`purged_holdout`、按最大 horizon 的 purge+embargo、selection_scope、PIT universe/feature、试验全集与 multiple-testing、既有信号重叠、成本口径。任一协议项未验都不能产生当前 research-admission PASS。
+  研究准入默认用成本区间上沿 **35bps** 压力，且 metrics.cost_bps 必须与 protocol 一致；这是 reference close-to-close 的压力代理，不是撮合净收益。`strategy_verify` 永远 `production_promotion_eligible=false`，真实 shadow fill + 同版成本/退出仍需独立执行证据与人工晋级。
+  raw 历史 verdict 不覆写；`verify_registry` 将旧无协议/v2 产物标 `legacy_*`。旧 `pass` 因缺当前协议降为 effective `observe`；旧 `observe/reject` 保留其保守结论，但全部 `admission_eligible_for_review=false`。生命周期/进化比较读取 effective verdict，绝不把 legacy pass 当当前完整证据。函数仍只给建议，**终审永远是人**。
   - ⚠️ **口径铁律（2026-09-11 实测订正）**：中位与跑赢比例**必须取市场中性口径**
     （`excess_median` / `excess_win_rate`）。初版误用**原始**口径，把候选B 从 observe 判成了
     pass——原始中位 +3.33%、跑赢 68.1% 看着全达标，中性口径却是 −0.08% / 49.3%。
@@ -282,7 +280,7 @@
   | 环节 | 现状 | 缺口 |
   |---|---|---|
   | 登记 | ✅ 已有**策略/战法**级登记册 `docs/strategy/strategy-registry.md` + 代码守卫 `app/picks/strategy_registry.py`（P1-37，2026-09-10）；2026-09-11 起带 `verify_key` 与核验产物背书 | —（因子登记册另有 `docs/strategy/factor-candidates.md`） |
-  | 验证 | ✅ 强：`app/research/strategy_verify.py` 五道检验 + 样本外盲测模板（P1-41）；2026-09-11 起**判据可机判**（`gate_verdict`）+ **结论落盘可回查**（`verify_registry`） | 结论此前只流向 stdout，现可回查；**判据仍只覆盖五条中的四条** |
+  | 验证 | ✅ 强：`strategy_verify.py` 五道检验 + v3 验证协议 + `verify_registry` 可回查 | v3 已机器阻断无 purge/成本/PIT/试验分母/重叠证据的假 PASS；actual shadow fill 净收益与 Champion/Challenger 仍是 IMP-020 后续纵切 |
   | 监控 | ✅ 已泛化到**策略键级** `GET /api/picks/strategy-health`（`min_picks` + `thin` 档，P1-38，2026-09-10） | 精确度仍受样本量限制（`daily_picks` 常报 insufficient） |
   | 退役 | ✅ 策略级处置台账 = `docs/strategy/strategy-registry.md §3`（三行 D-1/D-2/D-3，附证据链与样本边界，P1-39，2026-09-10） | 参数级另有 30 日劣化自动回滚（`experiments.py`） |
 - **关联**：[[KB-DEC-018]] [[KB-DEC-020]] [[KB-STOCK-27]] [[KB-STOCK-28]] [[KB-STOCK-29]] [[KB-STOCK-30]] [[KB-ENG-39]] [[KB-ENG-40]] [[KB-ENG-41]]

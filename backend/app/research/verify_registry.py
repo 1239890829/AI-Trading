@@ -26,6 +26,7 @@ from typing import Any
 
 from app.core.bjtime import beijing_now_naive
 from app.research.strategy_verify import (
+    GATE_VERSION,
     VERDICT_OBSERVE,
     VERDICT_PASS,
     VERDICT_REJECT,
@@ -124,25 +125,107 @@ def _age_days(recorded_at: str | None) -> int | None:
     return max((beijing_now_naive() - then).days, 0)
 
 
+def _valid_legacy_gate_v2(record: dict, gate: dict) -> bool:
+    failed, unchecked = gate.get("failed"), gate.get("unchecked")
+    return bool(
+        gate.get("gate_version") == 2
+        and gate.get("scope") == "machine_checks_only"
+        and gate.get("review_required") is True
+        and gate.get("verdict") == record.get("verdict")
+        and gate.get("verdict") in {VERDICT_PASS, VERDICT_OBSERVE, VERDICT_REJECT}
+        and isinstance(failed, list) and isinstance(unchecked, list)
+        and all(isinstance(v, str) for v in failed + unchecked)
+        and gate.get("machine_checks_complete") is (not unchecked)
+        and (gate.get("verdict") != VERDICT_PASS or not (failed or unchecked))
+    )
+
+
 def gate_evidence(record: dict) -> dict:
-    """Expose recorded machine checks, never certify strategy adoption."""
+    """Expose current research-admission evidence without rewriting historical verdicts."""
     gate = record.get("gate")
     if gate is None:
         state = "legacy_unverified"
-    elif (isinstance(gate, dict) and gate.get("gate_version") == 2
-          and gate.get("scope") == "machine_checks_only"
-          and gate.get("review_required") is True
-          and gate.get("verdict") == record.get("verdict")
-          and gate.get("verdict") in {"pass", "observe", "reject"}
-          and isinstance(gate.get("failed"), list) and isinstance(gate.get("unchecked"), list)
-          and all(isinstance(v, str) for v in gate["failed"] + gate["unchecked"])
-          and gate.get("machine_checks_complete") is (not gate["unchecked"])
-          and (gate.get("verdict") != "pass" or not (gate["failed"] or gate["unchecked"]))):
-        state = "recorded"
+    elif isinstance(gate, dict) and gate.get("gate_version") == 2:
+        state = "legacy_protocol_unverified" if _valid_legacy_gate_v2(record, gate) else "invalid"
+    elif isinstance(gate, dict):
+        failed = gate.get("failed")
+        machine_unchecked = gate.get("machine_unchecked")
+        protocol_issues = gate.get("protocol_issues")
+        unchecked = gate.get("unchecked")
+        protocol = gate.get("validation_protocol")
+        eligible = gate.get("research_admission_eligible_for_review")
+        machine_verdict = gate.get("machine_verdict")
+        expected_unchecked = None
+        if isinstance(machine_unchecked, list) and isinstance(protocol_issues, list):
+            expected_unchecked = [
+                *machine_unchecked,
+                *(f"协议：{item}" for item in protocol_issues),
+            ]
+        protocol_identity_ok = (
+            protocol is None
+            or (
+                isinstance(protocol, dict)
+                and protocol.get("return_identity") == gate.get("return_identity")
+            )
+        )
+        structurally_valid = (
+            gate.get("gate_version") == GATE_VERSION
+            and gate.get("scope") == "research_admission_machine_checks"
+            and gate.get("review_required") is True
+            and gate.get("verdict") == record.get("verdict")
+            and gate.get("verdict") in {VERDICT_PASS, VERDICT_OBSERVE, VERDICT_REJECT}
+            and machine_verdict in {VERDICT_PASS, VERDICT_OBSERVE, VERDICT_REJECT}
+            and isinstance(failed, list)
+            and isinstance(machine_unchecked, list)
+            and isinstance(protocol_issues, list)
+            and isinstance(unchecked, list)
+            and all(
+                isinstance(v, str)
+                for v in failed + machine_unchecked + protocol_issues + unchecked
+            )
+            and expected_unchecked == unchecked
+            and gate.get("machine_checks_complete") is (not machine_unchecked)
+            and gate.get("protocol_complete") is (not protocol_issues)
+            and protocol_identity_ok
+            and isinstance(eligible, bool)
+            and isinstance(gate.get("production_effect_evidence_complete"), bool)
+            and gate.get("production_promotion_eligible") is False
+            and eligible is (
+                gate.get("verdict") == VERDICT_PASS
+                and gate.get("protocol_complete") is True
+                and gate.get("machine_checks_complete") is True
+                and not failed
+            )
+            and (
+                gate.get("verdict") != VERDICT_PASS
+                or eligible
+            )
+        )
+        state = "recorded" if structurally_valid else "invalid"
     else:
         state = "invalid"
-    return {"gate": gate if state == "recorded" else None,
-            "gate_evidence_state": state, "review_required": True}
+
+    current_gate = gate if state == "recorded" else None
+    research_eligible = bool(
+        current_gate and current_gate.get("research_admission_eligible_for_review") is True
+    )
+    raw_verdict = record.get("verdict")
+    # 协议缺失/旧协议只阻止“通过”升级为准入；明确负效应 reject 不能被抬成 observe。
+    if raw_verdict == VERDICT_PASS and not research_eligible:
+        effective_verdict = VERDICT_OBSERVE
+    else:
+        effective_verdict = raw_verdict
+    return {
+        "gate": current_gate,
+        "gate_evidence_state": state,
+        "admission_eligible_for_review": research_eligible,
+        "production_effect_evidence_complete": bool(
+            current_gate and current_gate.get("production_effect_evidence_complete") is True
+        ),
+        "production_promotion_eligible": False,
+        "effective_verdict": effective_verdict,
+        "review_required": True,
+    }
 
 
 def verification_of(key: str, *, max_age_days: int = DEFAULT_MAX_AGE_DAYS) -> dict:
@@ -155,7 +238,12 @@ def verification_of(key: str, *, max_age_days: int = DEFAULT_MAX_AGE_DAYS) -> di
     if rec is None:
         return {
             "available": False,
-            "gate": None, "gate_evidence_state": "absent", "review_required": True,
+            "gate": None, "gate_evidence_state": "absent",
+            "admission_eligible_for_review": False,
+            "production_effect_evidence_complete": False,
+            "production_promotion_eligible": False,
+            "effective_verdict": None,
+            "review_required": True,
             "stale": None,
             "age_days": None,
             "recorded_at": None,
