@@ -92,6 +92,14 @@ def _positive_finite(value: Any) -> bool:
     return _finite_number(value) and float(value) > 0
 
 
+def _has_current_cost_model(outcome: Any) -> bool:
+    """One identity rule for both metric admission and audit accounting."""
+    structured = str(getattr(outcome, "cost_model_version", "") or "")
+    if structured:
+        return structured == COST_MODEL_VERSION
+    return COST_MODEL_VERSION in str(getattr(outcome, "reason", "") or "")
+
+
 def _load_json(raw: str | None, default: Any) -> Any:
     """归档 JSON 列 → 对象；坏值/空值回落到 `default`（**读取侧不因单行坏值整批失败**）。"""
     try:
@@ -1654,7 +1662,9 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
         "price_basis": {
             "current_version": PRICE_BASIS_VERSION,
             "revision_version": OUTCOME_REVISION_VERSION,
-            "revisions_applied": len(applied_revisions),
+            "revisions_applied": sum(
+                1 for revision in applied_revisions if revision.horizon == OUTCOME_HORIZON
+            ),
             "versions": dict(sorted(price_basis_counts.items())),
             "base_versions": dict(sorted(Counter(
                 base.price_basis_version or "legacy_unversioned"
@@ -1790,11 +1800,7 @@ def opportunity_scorecard(
         # The schema predates a dedicated row-level cost-version column.  New labels
         # persist the version token in ``reason``; rows that cannot prove the current
         # version are excluded rather than silently reinterpreted under today's fees.
-        structured_cost_version = getattr(outcome, "cost_model_version", "")
-        if structured_cost_version:
-            if structured_cost_version != COST_MODEL_VERSION:
-                return None
-        elif COST_MODEL_VERSION not in (outcome.reason or ""):
+        if not _has_current_cost_model(outcome):
             return None
         return float(outcome.net_return_pct)
 
@@ -1908,7 +1914,7 @@ def opportunity_scorecard(
     cost_version_excluded = sum(
         1 for outcome, _snapshot in samples
         if outcome.fill_state == "ok" and _finite_number(outcome.net_return_pct)
-        and COST_MODEL_VERSION not in (outcome.reason or "")
+        and not _has_current_cost_model(outcome)
     )
 
     # Stage diagnostics use a different, layered denominator: one symbol per stage/day.
