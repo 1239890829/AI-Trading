@@ -172,13 +172,13 @@ async def _build_opportunities_uncached(
         index, _names = await _asyncio.to_thread(get_index_cache(app).get)
         _sizes, members_by_code = await _asyncio.to_thread(index_views, index)
         themes = payload["data"].get("themes") or []
-        snap_by, snapshot_state, snapshot_as_of = snapshot_context(app)
+        snap_by, snapshot_state, snapshot_as_of_text = snapshot_context(app)
         # 涨停梯队的 current 状态按**带版本快照**逐只判定；涨停池只提供“今日曾封板”身份。
         # 缺可信时点时保持 unknown，不用首封历史伪造当前仍封或已经开板。
         for th in themes:
             attach_tradability(
                 th.get("stocks") or [], snap_by,
-                snapshot_state=snapshot_state, snapshot_as_of=snapshot_as_of,
+                snapshot_state=snapshot_state, snapshot_as_of=snapshot_as_of_text,
             )
         # “曾封板”身份必须来自 build_theme_board 的**完整**当日涨停池梯队，而不是
         # `assemble(top_themes/stocks_per_theme)` 裁剪后的 UI 行；否则没进展示配额的涨停股
@@ -191,7 +191,7 @@ async def _build_opportunities_uncached(
             limit_up_total=(payload["data"].get("summary") or {}).get("limit_up_total"),
             members_by_code=members_by_code,
             snapshot_state=snapshot_state,
-            snapshot_as_of=snapshot_as_of,
+            snapshot_as_of=snapshot_as_of_text,
         )
 
         # 板块权限拆分（用户 2026-09-15：「创业板的不进，只有主板的权限现在」）：
