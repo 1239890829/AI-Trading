@@ -248,7 +248,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **历史边界**：不从 13:05 / 13:10 旧日志反向补造 run row；当时缺少完整 durable metadata，追写会把日志摘要冒充当时 DB 事实。新表只从迁移发布后向前积累。
 - **P1-65 显式模型注册不能靠 import 副作用**：`main.py::_REGISTERED_MODELS` 原先连既有 `OpportunityOutcomeRevision` 都未显式列出，实际靠导入整个模块的副作用进入 `Base.metadata`。本片新增 run 表后同时补齐 `OpportunityDecisionRun + OpportunityOutcomeRevision` 的显式 import/tuple 引用，避免冷启动/create_all 与注释所声明的真相源继续分叉。
 - **当前验证**：migration/model parity、零记录幂等回放、same-run digest mismatch、run+symbol 事务原子回滚、zero-record degraded scorecard 阻断、main/import-lint 及既有 opportunity/revision 回归均已通过。真实 292MB 运行库一致性副本从 `d9e4c2b7a1f6` 升到 `e1a7b4c2d9f0` 后 `integrity_check=ok`，156,593 snapshot / 156,593 base outcome / 48 revision 全保留，新 run 表为 0，证明迁移不反填历史猜测；随后在该副本注入一拍 `ready + themes=[] + records=0` 的真实结构，结果只新增 1 条 `OpportunityDecisionRun`、0 symbol/outcome，`replay_run.run_evidence` 与 `learning_summary.run_ledger` 均能明确读出合法零候选，DB 完整性仍 `ok`。最终 exact-head 全量 backend、repo/docs、CI 与发布后真实 0/N-run 验收仍是发布门。
-- **非目标**：本片不改变 theme/participant 生成规则，不把 zero-record 自动判为错误，不补通知 run-level 语义，不改 scheduler 周期、候选阈值、provider failover、通知、shadow-fill 或真实交易行为。
+- **非目标**：本片不改变 theme/participant 生成规则，不把 zero-record 自动判为错误，不改 scheduler 周期、候选阈值、provider failover、通知、shadow-fill 或真实交易行为。原“暂不补 notification run-level 语义”在 PR #83 发布后被生产账本审计证伪为闭环缺口，后续收口见 §8.13。
 
 ## 8.12 U49 主动审计回执（RSH-026 Snapshot Fallback）
 
@@ -261,6 +261,15 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **P1-71 stale 不能被 degraded 掩盖**：旧 `freshness()` 用 `f.is_usable()` 判断失败降级，而该集合包含 stale，可能把已经过窗的数据重新标成 degraded。文档原义本就是“仍在新鲜窗口内时才 degraded”，当前只允许 `ready → degraded`；一旦年龄过窗仍保持 stale。
 - **真实只读探针**：使用真实最新 durable Parquet 的 5,564 symbol universe，直接走现有批量备源、不写 SQLite/Parquet：`5564/5564 = 100%` 覆盖，耗时约 `2.84s`，`missing_dynamic=0`，breadth total=5,564，freshness=`degraded/source=quote_fallback`。证明 fallback 请求面在当前环境可行，同时没有把备源冒充 ready。
 - **非目标**：不替换新浪主源、不改变 60s poll / 300s save / 240→480→900 冷却，不修改 QuoteHub provider 顺序，不把 fallback 结果用于策略效果晋级，不改 candidate/gate/rank/notification、shadow fill 或真实交易行为。
+
+## 8.13 U49 主动审计回执（RSH-026 Notification Run Header）
+
+- **阶段/基点**：`Post-merge production audit`；基于 `master@203baa3714dc6c76884bae5c742cdbd4ceb27bd9`（PR #83 已合并、CI backend/frontend/docs 全绿，真实 backend 已运行新 snapshot fallback）。
+- **P1-72 notification snapshot 存在孤儿 run_id**：发布后真实库查询到 2026-09-21 已有 850 条 notification snapshot，但 `left join opportunity_decision_run` 全部无 header；根因是 `archive_notification_pipeline()` 仍调用 `archive_records(..., run_meta=None)`。这与 §8.11“0/N symbol rows 都必须有 run row”的总契约直接冲突。
+- **当前收口**：新增 notification run meta，scenario=`buy_point`；持久化 run/as_of、strategy/feature、聚合 execution snapshot state/as_of、records/stage/decision counts 与 digest，并与 symbol snapshot + D0 outcome identity 共用 `archive_records` 单事务。正常 N-row 与 0-row notification beat 都有 header，同 run exact replay 保持幂等。
+- **效果统计隔离**：learning/scorecard 的 run-ledger 查询仍显式限定 `scenario=intraday_opportunity`；新增 `buy_point` run 只补审计头，不进入机会漏斗效果分母，不改变晋级结论。
+- **历史边界**：不反填 PR #83 之前已存在的 notification 孤儿 run_id；旧 snapshot 本身保留且仍可逐行 replay，缺失的 run-level 元数据维持 legacy 状态，避免用当前代码猜历史拍的 run summary。
+- **非目标**：不改变 buy-point gate、dispatch/outbox、提醒去重、paper/shadow fill、候选/精排阈值或 provider；本片只补 run/snapshot 一致性。
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
 

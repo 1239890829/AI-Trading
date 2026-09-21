@@ -772,6 +772,52 @@ def build_intraday_run_meta(
     return {**base, "evidence_digest": _hash(digest_payload, 64)}
 
 
+def build_notification_run_meta(
+    *, run_id: str, trade_date: str, as_of: datetime, records: list[dict],
+) -> dict:
+    """Build the run header for one buy-point notification beat.
+
+    Notification rows already carry a ``run_id``; without the matching header those
+    rows become orphaned point-in-time evidence and zero-record beats disappear entirely.
+    This run type stays separate from ``intraday_opportunity`` so learning/scorecard
+    queries keep their existing denominator.
+    """
+    as_of = as_of.replace(tzinfo=None)
+    stage_counts = Counter(str(record.get("stage") or "unknown") for record in records)
+    decision_counts = Counter(
+        f"{record.get('stage') or 'unknown'}:{record.get('decision') or 'unknown'}"
+        for record in records
+    )
+    states = {str(record.get("data_state") or "unknown") for record in records}
+    snapshot_state = next(iter(states)) if len(states) == 1 else ("degraded" if states else "unknown")
+    snapshot_times = {
+        str((((record.get("evidence") or {}).get("execution_contract") or {})
+             .get("executable_snapshot") or {}).get("as_of") or "")
+        for record in records
+    }
+    snapshot_times.discard("")
+    snapshot_as_of = next(iter(snapshot_times)) if len(snapshot_times) == 1 else ""
+    caveats = ["notification execution snapshots have mixed as_of"] if len(snapshot_times) > 1 else []
+    base = {
+        "run_id": run_id, "trade_date": trade_date, "as_of": as_of,
+        "scenario": "buy_point", "strategy_version": STRATEGY_VERSION,
+        "feature_version": FEATURE_VERSION, "data_state": snapshot_state,
+        "snapshot_state": snapshot_state, "snapshot_as_of": snapshot_as_of,
+        "theme_count": 0, "participant_count": 0, "candidate_audit_count": 0,
+        "records_total": len(records), "candidate_rows": 0, "hard_gate_rows": 0,
+        "rank_rows": 0, "notification_rows": int(stage_counts.get("notification", 0)),
+        "stage_counts": _json(dict(sorted(stage_counts.items()))),
+        "decision_counts": _json(dict(sorted(decision_counts.items()))),
+        "linkage_stats": _json({}), "summary": _json({"notification_items": len(records)}),
+        "caveats": _json(caveats),
+    }
+    digest_payload = {
+        key: (value.isoformat() if isinstance(value, datetime) else value)
+        for key, value in base.items()
+    }
+    return {**base, "evidence_digest": _hash(digest_payload, 64)}
+
+
 def archive_records(
     run_id: str, records: list[dict], session_factory=None, *, run_meta: dict | None = None,
 ) -> dict:
@@ -882,12 +928,16 @@ def archive_notification_pipeline(
     as_of: datetime | None = None, session_factory=None, pick_generated_at: str | None = None,
     execution_by_symbol: dict[str, dict] | None = None,
 ) -> dict:
+    effective_as_of = as_of or beijing_now()
     run_id, records = build_notification_records(
-        items, trade_date=trade_date, as_of=as_of or beijing_now(), hits=hits, skips=skips,
+        items, trade_date=trade_date, as_of=effective_as_of, hits=hits, skips=skips,
         dispatch_by_symbol=dispatch_by_symbol, kb_ids=kb_ids,
         pick_generated_at=pick_generated_at, execution_by_symbol=execution_by_symbol,
     )
-    return archive_records(run_id, records, session_factory)
+    run_meta = build_notification_run_meta(
+        run_id=run_id, trade_date=trade_date, as_of=effective_as_of, records=records,
+    )
+    return archive_records(run_id, records, session_factory, run_meta=run_meta)
 
 
 def latest_notification_execution(trade_date: str, session_factory=None) -> dict[str, dict]:

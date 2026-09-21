@@ -27,6 +27,7 @@ from app.picks.opportunity_learning import (
     PRICE_BASIS_VERSION,
     STRATEGY_VERSION,
     archive_intraday_pipeline,
+    archive_notification_pipeline,
     archive_records,
     build_intraday_run_meta,
     assess_fill_state,
@@ -1405,6 +1406,57 @@ def test_notification_replay_keeps_rejections_and_dispatch_result(tmp_path):
     assert replay["mismatches"] == 0
     rejected = next(i for i in replay["items"] if i["symbol"] == "600002")
     assert "observe" in rejected["evidence"]["gate_reason"]
+
+
+def test_notification_pipeline_persists_run_header_and_is_idempotent(tmp_path):
+    sf = _factory(tmp_path)
+    item = {"symbol": "600001", "name": "甲", "confidence": {"tier": "strong"}}
+    hit = {"item": item, "price": 10.5, "chg": 5.0}
+    kwargs = dict(
+        items=[item], trade_date="2026-09-21", as_of=datetime(2026, 9, 21, 10, 30),
+        hits=[hit], skips=[], dispatch_by_symbol={}, session_factory=sf,
+        execution_by_symbol={"600001": {
+            "state": "ready", "as_of": "2026-09-21T10:29:59+08:00",
+            "price": 10.5, "change_pct": 5.0, "source": "isolated-test",
+        }},
+    )
+    first = archive_notification_pipeline(**kwargs)
+    second = archive_notification_pipeline(**kwargs)
+    assert first["run_inserted"] == 1 and second["run_inserted"] == 0
+    with sf() as db:
+        run = db.get(OpportunityDecisionRun, first["run_id"])
+    assert run is not None
+    assert run.scenario == "buy_point"
+    assert run.records_total == 1 and run.notification_rows == 1
+    assert run.data_state == "ready" and run.snapshot_state == "ready"
+    assert run.snapshot_as_of == "2026-09-21T10:29:59+08:00"
+    replay = replay_run(first["run_id"], sf)
+    assert replay["run_evidence"]["scenario"] == "buy_point"
+    assert len(replay["items"]) == 1
+    summary = learning_summary("2026-09-21", sf)
+    assert summary["run_ledger"] == {
+        "runs": 0, "zero_record_runs": 0, "data_states": {},
+        "latest_as_of": None, "latest_run_id": None,
+    }
+    assert summary["evidence_quality"]["decision_runs"] == 0
+
+
+def test_notification_zero_record_run_still_has_header(tmp_path):
+    sf = _factory(tmp_path)
+    result = archive_notification_pipeline(
+        [], trade_date="2026-09-21", as_of=datetime(2026, 9, 21, 10, 31),
+        hits=[], skips=[], dispatch_by_symbol={}, session_factory=sf,
+    )
+    assert result["records"] == 0 and result["run_inserted"] == 1
+    with sf() as db:
+        run = db.get(OpportunityDecisionRun, result["run_id"])
+    assert run is not None
+    assert run.scenario == "buy_point"
+    assert run.records_total == 0 and run.notification_rows == 0
+    assert run.data_state == "unknown" and run.snapshot_state == "unknown"
+    replay = replay_run(result["run_id"], sf)
+    assert replay["items"] == []
+    assert replay["run_evidence"]["records_total"] == 0
 
 
 def test_archived_evidence_is_valid_json_and_contains_versions(tmp_path):
