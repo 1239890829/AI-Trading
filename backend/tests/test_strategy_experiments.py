@@ -58,3 +58,17 @@ def test_experiment_save_is_idempotent_but_never_overwrites(tmp_path):
     path.write_text("{}\n", encoding="utf-8")
     with pytest.raises(ValueError, match="不同证据"):
         se.save_experiment(out, root=tmp_path)
+
+
+def test_resealed_nested_experiment_tamper_is_rejected():
+    out = se.build_research_experiment(
+        subject="s", hypothesis="h", ablation=_sealed("ablation"), comparison=_sealed("comparison")
+    )
+    out["comparison"]["challenger"]["condition"] = "tampered"
+    nested = {k: v for k, v in out["comparison"].items() if k != "evidence_digest"}
+    out["comparison"]["evidence_digest"] = se._digest(nested)
+    # Even resealing both nested and outer payload cannot preserve the old experiment_id.
+    raw = {k: v for k, v in out.items() if k != "evidence_digest"}
+    out["evidence_digest"] = se._digest(raw)
+    with pytest.raises(ValueError, match="机械复算"):
+        se.validate_experiment(out)
