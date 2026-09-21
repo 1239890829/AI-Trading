@@ -124,7 +124,7 @@
 > D-3 原记「中位 −0.08%、跑赢比例 49.3%」**未标口径**，与「原始中位 +3.33%、跑赢 68.1%」长期混淆
 > ——已确认那两个数均为**市场中性口径**（与原始口径差 3 个百分点以上），本表已补注。
 > 教训：结论只写数字不写口径，重跑时就会对不上。**判据一律取中性口径**（见下 §5「核验产物」）。
-> **⚠️ 2026-09-21 IMP-020 协议升级**：上述 D-2/D-3 数字与 raw verdict 作为历史证据保留，不回写。旧两份 verify JSON 都是 `cost_bps=0` 且没有 v3 purged/PIT/trials/overlap 协议；全部不可晋级。旧 `pass` 才会降为 effective observe；D-2 的 raw/effective `reject` 保持 reject，D-3 保持 observe，但两者 gate state 都不是当前完整准入。隔离 worktree 已用真实数据重跑 v3：D-3/candidate B 在 35bps + purged holdout 下中性 +0.18%、中位 -0.81%、跑赢 44.8% ⇒ observe，另有历史 ST/退市身份未 PIT、test-informed/48 trials 未控/overlap 未查；D-2/two-thirty-five 中性 -0.99%、中位 -2.42%、跑赢 33.9%、年度正 1/5 ⇒ reject，另有历史身份未 PIT、current-float-shares 非 PIT/overlap 未查。生产历史 JSON 未被覆盖。
+> **⚠️ 2026-09-21 IMP-020 协议升级**：上述 D-2/D-3 数字与 raw verdict 作为历史证据保留，不回写。旧两份 verify JSON 都是 `cost_bps=0` 且没有 v3 purged/PIT/trials/overlap 协议；全部不可晋级。旧 `pass` 才会降为 effective observe；D-2 的 raw/effective `reject` 保持 reject，D-3 保持 observe，但两者 gate state 都不是当前完整准入。隔离 worktree 已用真实数据重跑 v3：D-3/candidate B 在 35bps + purged holdout 下中性 +0.18%、中位 -0.81%、跑赢 44.8% ⇒ observe，第二子片最终真实重跑把 48/48 trials 与 overlap 实证补齐：D-3 selected Bonferroni p_adj=0.531822444114、与 D-2 交集 0，仍因 test-informed family + 校正未过保持 observe；D-2 单 trial p_adj=1.0，与 D-3 intersection=38/union=42,305/Jaccard=0.00089824，且 `turn` 的 current-float-share provenance 令 feature PIT=false，维持 reject。PIT、trial/overlap 与 protocol 现由 provenance/digest/读回重算约束，生产历史 JSON 未被覆盖。
 
 
 ---
@@ -159,7 +159,7 @@
 |---|---|---|
 | 产物 | `backend/data/research/verify/<key>.json` | 一次核验的结论（verdict / headline / metrics / sample / recorded_at） |
 | 落盘 | `app/research/verify_registry.py` | `save_record` / `load_record` / `verification_of`（三态）/ `list_records` |
-| 判据 | `app/research/strategy_verify.py::gate_verdict` | v4 同时记录收益机判与 validation-protocol v2：purged holdout、成本、PIT universe/feature、完整 trial-family/Bonferroni、结构化 signal overlap；缺证或选中 trial 未通过校正会阻断 research PASS，且 reference proxy 永不等于生产晋级 |
+| 判据 | `app/research/strategy_verify.py::gate_verdict` | v4 同时记录收益机判与 validation-protocol v2：purged holdout、成本、build-provenance 派生 PIT、完整 trial-family/Bonferroni、结构化 signal overlap，并用 digest + registry 写入/读回重算做自洽检查；缺证、改写证据或选中 trial 未通过校正会阻断 research PASS，且 reference proxy 永不等于生产晋级 |
 | 挂接 | `StrategySpec.verify_key` | 有值 ⇒ `list_strategy_keys()` 附 `verification` 三态 |
 | 消费 | 议程 `strategy_verification` 一路 | 含 `without_evidence`（标了却没产物）与 **`conflicts`（状态与实测结论打架）** |
 
