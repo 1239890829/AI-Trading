@@ -1,8 +1,8 @@
-# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 Cross-day Cumulative MFE/MAE
+# 当前交接：DEGRADED_FULL_CONTROL / G3-IMP-020 证据冻结与效果准入
 
 > 定位：当前运行模式、最新已合并证据、唯一在制纵切与安全边界；任务唯一状态仍以所属 stage 为准。
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 的 PR #69/#70/#71/#72/#74/#75 已闭环；PR #75 merge=`a96c3d0086872cf8f5bc71f5f19c8792007cbcf3`，post-merge CI run `35550792738`（#517）backend/frontend/docs 全绿，功能分支已删除。当前仍在 **G3 / RSH-026**，唯一在制纵切为 D1/D3/D5 **cross-day cumulative MFE/MAE**；施工分支 `chatgpt/rsh026-crossday-excursion` 基于 `master@a96c3d00`。本片只从已有完整 D0 决策后 Tencent 1m path 的新样本继续累积 future qfq 日线 high/low；历史旧部署没有 path 字段，禁止事后用日线伪造 D0 路径。不改策略阈值、生产权重、真实交易权限或 shadow fill 语义。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** G3/RSH-026 已完成工程协议闭环：PR #69/#70/#71/#72/#74/#75/#76 全部合并，#76 merge=`340f73384ca1651cb1136ee4b7bf78b3811a2401`，post-merge CI run `35552644141`（#519）backend/frontend/docs 全绿且功能分支已删除；真实长期工作区也已同步到同一 `master`，SQLite 从 `d2e4a6b8c0f1` 受控迁至 `d9e4c2b7a1f6` 并完成历史 D0 identity / current revision 恢复。RSH-026 完成只表示 point-in-time 全分母、版本化 close/path 标签、公司行动与失败关闭、append-only revision 和跨日 MFE/MAE 采集协议已具备；**不表示策略有效**。当前主阻断切到 **G3 / IMP-020**，先冻结现版样本/口径/成本/停止规则并审计可用性。真实 backend 本轮刻意未自动启动：部署 `.env` 已有飞书 App 凭据，而应用启动会拉起 alert-engine、paper-matcher、position-monitor 等常驻 scheduler；在未单独授权这些运行副作用前保持停机。
 
 
 ## 1. 固定入口与范围
@@ -58,20 +58,20 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 本节只记录当前现场，不维护第二份 backlog；权威算法在总账 §5.9，任务元数据在所属 stage。
 
 - **当前主门**：G3
-- **主切片首选**：RSH-026
-- **当前现场**：IMP-044 已由 PR #67 合并且 post-merge CI 全绿；G1 无可行动阻断项。G2/IMP-049 仍为 `待条件`，故按总账 §5.9 跳过不可行动 blocker，当前主门为 G3/RSH-026。
-- **门内阻断顺序**：RSH-026 → IMP-020；本轮只领取 RSH-026 一个纵切。RSH-030 为同门非阻断，RSH-031 仍受效果前置限制。
-- G0 的 BUG-028 / BUG-026 已完成，BUG-020 为 `待条件`；G1 的 BUG-029 / IMP-006 / IMP-044 均在本候选合入后完成；G2 的 IMP-049 为 `待条件`。因此 post-merge 下一唯一首选为 G3/RSH-026，不因 RSH-031、新 UI、Agent 或其它研究任务“更有趣”跳序。
+- **主切片首选**：IMP-020
+- **当前现场**：RSH-026 已由 PR #69–#76 完成工程协议闭环，并在真实长期工作区同步 `master@340f7338`、迁移 DB 至 `d9e4c2b7a1f6`、补齐 156,108/156,108 D0 identity 与 48 条 append-only revision；部署后全量 backend `4102 passed / 80 skipped`、repo/docs/DB integrity 全绿。G2/IMP-049 仍为 `待条件`，故当前最低可行动阻断为 G3/IMP-020。
+- **门内阻断顺序**：RSH-026 已完成 → **IMP-020 当前阻断**；本轮换门后只领取 IMP-020 的证据冻结/准入预检一个纵切。RSH-030 为同门非阻断，RSH-031 的效果主张仍受 IMP-020 / RSH-030 前置限制。
+- G0 的 BUG-028 / BUG-026 已完成，BUG-020 为 `待条件`；G1 的 BUG-029 / IMP-006 / IMP-044 已完成；G2 的 IMP-049 为 `待条件`；G3/RSH-026 现已完成。因此当前唯一阻断首选为 G3/IMP-020，不因 RSH-031、新 UI、Agent 或其它研究任务“更有趣”跳序。
 - BUG-020 的 current-value 接纳门现区分 source event time / received time、缺失/拒绝/合法空集与身份歧义；旧可信值不会被晚到/非法观测覆盖。2026-09-20 周日已用本片代码显式加载主仓部署 `.env`，成功构建 `chain(ths→tencent→eastmoney→sina)` 并完成有界只读休市探针：最近交易日 2026-09-18、6/6 指数覆盖、拒绝数 0，600519 实际由腾讯返回且 source time 为 2026-09-18，Hub 明确标 `stale/market_closed`。尚未完成真实交易时段完整会话验收，故不得标已完成或宣称长期盘中 SLA。
 - BUG-029 现以 `ever_sealed/current_sealed/snapshot_state/version` 为唯一 current-state 契约；开板只恢复“进入评估”的资格，不自动获得成交/通知/模拟执行许可。2026-09-18 真实跨源样本已证明涨停池成员可多次开板/回封；旧 v1 归档保持原语义，v2 才使用新状态重放。
 - RSH-031 为 `G1/P1/非阻断/门内序70`，即使同处 G1 也排在阻断项之后；且 `效果前置=RSH-026, IMP-020, RSH-030` 未满足前不得宣称龙头战法有效或接生产权重。
-- U47 不制造跨门例外：IMP-006 已把 `reference_entry → executable_snapshot → PaperOrder fill` 三种价格身份和同一 decision/version 接到通知、模拟仓与页面；IMP-044 本 PR 只证明通知可靠性工程闭环，不证明买点效果。G2/IMP-049 当前仍 `待条件`，所以 post-merge 阶段门计算到 G3/RSH-026；未来 IMP-049 条件转可行动时仍需重新按最低门算法计算，reference 与实际 shadow fill 永久分名、分母和收益口径。
+- U47 不制造跨门例外：IMP-006 已把 `reference_entry → executable_snapshot → PaperOrder fill` 三种价格身份和同一 decision/version 接到通知、模拟仓与页面；IMP-044 只证明通知可靠性工程闭环，不证明买点效果。G2/IMP-049 当前仍 `待条件`，RSH-026 已完成工程协议，因此当前阶段门计算到 G3/IMP-020；未来 IMP-049 条件转可行动时仍需重新按最低门算法计算，reference 与实际 shadow fill 永久分名、分母和收益口径。
 - U48 同样不制造跨门例外：W08/GOV-027 为 `GX/P1/持续治理/门内序47`，只可作为不冲突的伴随切片；它先复用 factor/strategy/KB/Jev/opportunity 各自 owner 的既有证据，定义最小生命周期/衰退/成本反馈契约，不建第二总注册表。项目级上层治理入口新增 `skills/living-system-governor/SKILL.md`，用于跨模块方案、重大重构和机制生命周期复核；该 Skill 只提供证据/反证/KEEP-FIX-MERGE-EXPERIMENT-WATCH-RETIRE 决策协议，不拥有派工、生产晋级或阶段门修改权。 v1.2.0 在自我进化基础上进一步加入 U49 主动缺陷发现门；v9.11/U50 又补受控降级全权闭环，避免 Codex 不可用时角色门自锁：后续长期要求/重复纠偏先作为方法论候选，只有形成稳定可复用增量才版本化蒸馏；一次性要求不污染 Core，是否落实以 Git/PR 与后续行为核验，不靠聊天窗口记忆。任何生产降权、阈值变化、策略/Jev 晋级仍回原 owner task 与证据门。
 - U49 不改变阶段门算法，但改变每轮默认动作：继续选刀前、审核放行前、阻断项闭环/换门后、事故/用户纠偏后都要运行有界主动缺陷发现门并写回执；同根 P0/P1 新发现可改变当前验收，跨域发现回原 owner，不自动扩权施工。
 - U50 也不改变阶段门算法，只改变“谁可以完成当前切片”：正常模式仍是 Web Review + Codex；当前 `DEGRADED_FULL_CONTROL` 下网页端按同一阶段门全程操控，每个 PR 必须重新写 exact-HEAD `DegradedRelease`，不能复用一次用户授权跳过逐 PR 发布证据。
-- GX 治理只可作为不冲突的伴随切片。2026-09-20 `GOV-018` 已闭环：`.workbuddy` / `.workbuddy-ai` 已物理删除，有价值内容进入项目中性 `skills/scripts/docs/artifacts`，第三方 UZI/Serenity 本体不再复制；PR #48 已合入 `master`（merge `b6b5ba0`，最终 required CI run `35481812431` backend/frontend/docs 全绿）。`GOV-026` 已落地 `scripts/workspace-hygiene.py` 并接 CI/交接；docs 根已收口为 6 个控制面。以上治理不改变阶段门算法；IMP-044 随本 PR 完成后，BUG-020 与 IMP-049 都因 `待条件` 排除，阶段门按账本计算到 G3/RSH-026。
+- GX 治理只可作为不冲突的伴随切片。2026-09-20 `GOV-018` 已闭环：`.workbuddy` / `.workbuddy-ai` 已物理删除，有价值内容进入项目中性 `skills/scripts/docs/artifacts`，第三方 UZI/Serenity 本体不再复制；PR #48 已合入 `master`（merge `b6b5ba0`，最终 required CI run `35481812431` backend/frontend/docs 全绿）。`GOV-026` 已落地 `scripts/workspace-hygiene.py` 并接 CI/交接；docs 根已收口为 6 个控制面。以上治理不改变阶段门算法；BUG-020 与 IMP-049 当前因 `待条件` 排除，RSH-026 已完成，阶段门按账本计算到 G3/IMP-020。
 
-当前处于 `DEGRADED_FULL_CONTROL`：PR #67 已完成 merge + post-merge CI + 分支清理，本轮已正式领取 G3/RSH-026。只做当前 outcome/denominator 纵切；完成或阻塞后再重新计算，不能在同一 PR 内继续扫 IMP-020 或其它任务。
+当前处于 `DEGRADED_FULL_CONTROL`：RSH-026 已在 PR #76 merge + post-merge CI + 分支清理 + 真实工作区受控部署后完成工程协议验收；阶段门已重新计算到 G3/IMP-020。下一轮只领取 IMP-020 的最小证据冻结/准入预检，不连续扫后续研究任务。
 
 ## 8. Jev、工具链与协作流当前基线
 
@@ -91,7 +91,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **Degraded reason**：当前 Codex 额度不可用，正常双角色无法持续完成实施→独立审核→发布闭环；旧 exact-HEAD Review 门因此形成自锁。
 - **有效期**：持续到用户明确说 Codex 已恢复/退出降级；不是单 PR 临时口令。但每个 PR 的发布仍必须重新生成 exact-HEAD `DegradedRelease`，不能复用上一 PR 回执。
 - **不降低项**：G0–G5/GX 阶段门、U49 主动反证、branch protection、required CI、latest master、CHANGES_REQUESTED/thread、public-repo scan、workspace/doc-health、敏感信息/范围、post-merge CI、删除功能分支。
-- **当前动作**：U50、IMP-044 与 RSH-026/PR #69/#70/#71/#72/#74/#75、账本 PR #73 均已闭环；#75 merge=`a96c3d00`、post-merge CI #517 全绿且分支已清理。当前在 G3/RSH-026 执行 D1/D3/D5 cross-day cumulative MFE/MAE 纵切，分支 `chatgpt/rsh026-crossday-excursion`。本轮只做该纵切；每个后续 PR 仍需新的 exact-HEAD `DegradedRelease`。
+- **当前动作**：U50、IMP-044 与 RSH-026/PR #69/#70/#71/#72/#74/#75/#76、账本 PR #73 均已闭环；#76 merge=`340f7338`、post-merge CI #519 全绿，功能分支已清理，真实长期工作区已受控升级并通过部署后全量回归。当前转到 G3/IMP-020，只做证据冻结/准入预检；每个后续 PR 仍需新的 exact-HEAD `DegradedRelease`。
 
 ## 8.2 U49 主动审计回执（RSH-026 Preflight）
 
@@ -184,8 +184,19 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **scorecard/summary**：D0 仍用 `PATH_VERSION`；D1/D3/D5 使用 `CROSS_DAY_PATH_VERSION`，报告 denominator / outcome_attached / evaluable / coverage / avg MFE / avg MAE；first-limit/time-to-limit 仍明确只属于 D0。learning summary 的每个 horizon 额外暴露 path version/state/selected coverage，不能把 close coverage 代替 path coverage。
 - **生产 EOD 接线**：`pending_cross_day_path_targets` 与 pending close 分开维护；同一 symbol 的一次 qfq daily fetch 通过 `_daily_bar_facts` 同时供 close 与 high/low，raw daily 只用于 basis。交易日历不可用时连 cross-day backlog 都不读取，也不把其 symbol 扩进额外 provider 请求面；daily bar 日期统一按北京时区解释。
 - **P1-46 future path coverage 丢分母风险**：初版 `learning_summary.horizon_coverage.path` 从 horizon outcome join 定义 selected denominator，若某 selected snapshot 连 D1/D3/D5 identity 都缺会同时从分子/分母消失。现改为 immutable selected snapshot 分母，并显式报告 `outcome_attached`；缺 future outcome 时仍显示 denominator=1 / attached=0 / coverage=0。
-- **当前验证**：纯函数、DB 写回、retry surface、scorecard 独立 denominator、公司行动、缺中间交易日、跨 provider、错误 horizon、目标日之后极值不泄漏、D0 terminal unknown、日 K 北京时区归属、EOD 编排与 cross-day 失败不阻断 D0 的回归均已通过。真实长期库及现有 RSH-026 副本的 current D0 path labeled 均为 0，无法形成可信真实历史 cross-day 样本；本地 marketdb 又无 qfq high/low。本轮对东财在线 qfq/raw 日 K 的实探还遇到 `RemoteProtocolError` 断连，因此只证明实现/契约和 fail-closed 边界，不声称真实线上 OHLC 覆盖已验证。最终 exact-head 全量 backend / repo gates / CI 仍是发布前门禁。
+- **当前验证**：纯函数、DB 写回、retry surface、scorecard 独立 denominator、公司行动、缺中间交易日、跨 provider、错误 horizon、目标日之后极值不泄漏、D0 terminal unknown、日 K 北京时区归属、EOD 编排与 cross-day 失败不阻断 D0 的回归均已通过。真实长期库及现有 RSH-026 副本的 current D0 path labeled 均为 0，无法形成可信真实历史 cross-day 样本；本地 marketdb 又无 qfq high/low。本轮对东财在线 qfq/raw 日 K 的实探还遇到 `RemoteProtocolError` 断连，因此只证明实现/契约和 fail-closed 边界，不声称真实线上 OHLC 覆盖已验证。最终 exact HEAD=`4465791dd4afda7f2840fa3a69f47839d839f0f8` 本地 backend `4102 passed / 80 skipped`、repo/docs 门全绿，PR #76 CI #518 与 release_check 通过；merge=`340f7338`、post-merge CI #519 全绿，发布链已闭环。
 - **非目标**：不伪造旧历史 path、不把停牌与数据缺口强行二分、不把 reference path 冒充 shadow-fill P&L、不实现 actual fill/entry-capture、不改策略/风控/仓位参数。
+
+## 8.7 U49 部署与换门回执（RSH-026 → IMP-020）
+
+- **发布闭环**：PR #76 exact HEAD `4465791dd4afda7f2840fa3a69f47839d839f0f8` 的本地 backend `4102 passed / 80 skipped`、pyflakes、repo/docs 门全绿；required CI #518 与 `release_check.py` 通过后合并为 `340f73384ca1651cb1136ee4b7bf78b3811a2401`，post-merge CI #519 backend/frontend/docs 全部 `success`，功能分支/worktree 已清理。
+- **受控真实部署**：长期工作区从旧 `cc7cf5a05d9a2a1595013221342fd3a4c41c25c3` 同步到 `master@340f7338`；迁移前 DB revision=`d2e4a6b8c0f1`、`integrity_check=ok`，迁移后 revision=`d9e4c2b7a1f6`、integrity 仍为 `ok`。
+- **回滚证据**：仓库外部署备份包 ID=`20260921-100521` 保存 pre-deploy SQLite、SHA-256、旧/目标 Git SHA、旧 revision 与 4 个运行 JSON；另保留迁移后/回填前 SQLite 备份。备份均未进入 Git。
+- **历史恢复结果**：真实库 D0 identity 从 63 条扩展到 156,108/156,108；缺失 identity=0；旧误写 `pending+fill_state=ok` 修正 15 条；current close revision=48；二次 apply=`noop=true / backup=null`。原 pre-deploy 48 条 terminal labeled base 与部署后同 id 原始列逐字段 `identical=True`。
+- **效果门仍关闭**：真实 v1/v1 scorecard：2026-09-16 sample=28 / coverage=0.9842，09-17 sample=5 / coverage=0.9844，09-18 sample=8 / coverage=0.9506；三日 verdict 均为 `incomplete_denominator`。当前 D0 path evaluable 仍为 0，因此不得把工程闭环写成策略有效性。
+- **部署后验证**：真实长期工作区全量 backend=`4102 passed / 80 skipped`，全仓 pyflakes、public-repo scan、workspace hygiene、doc-health、git diff-check 与 DB integrity 全部通过；依赖文件自旧 SHA 到当前 master 无变化，无需重装依赖。
+- **运行态边界**：本轮没有自动启动 backend。部署 `.env` 已配置 THS 与飞书 App 凭据，应用启动会同时拉起 alert-engine、paper-matcher、position-monitor 等 scheduler；在未单独授权这些外发/模拟副作用前保持停机。新 D0/cross-day path 样本只能在后续正常运行时前向积累，历史缺失不得伪造。
+- **换门结论**：RSH-026 的验收对象是 point-in-time 全分母、版本化标签/path、公司行动/停牌失败关闭、append-only 修订和可追溯重放；这些工程协议已完成。样本成熟、成本后效果、purged walk-forward/OOS、消融与晋级由 IMP-020 接管；actual shadow fill / entry-capture 继续归 IMP-053。RSH-026=`已完成` 不授予任何生产权重或策略晋级。
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
 
