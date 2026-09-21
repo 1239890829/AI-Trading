@@ -50,6 +50,7 @@ OUTCOME_HORIZONS = {
 }
 FUTURE_OUTCOME_HORIZONS = tuple(h for h in OUTCOME_HORIZONS if h != OUTCOME_HORIZON)
 PATH_VERSION = "d0-path-v1.tencent1m.zt-zb"
+CROSS_DAY_PATH_VERSION = "xday-v1.d0m1+qfq1d.raw-anchor"
 PRICE_BASIS_VERSION = "qfq-ref-v1.raw-anchor"
 STAGES = ("candidate", "hard_gate", "rank", "notification")
 
@@ -1163,6 +1164,247 @@ def label_d0_paths(
     }
 
 
+def _basis_qfq_source(source: str | None) -> str:
+    for part in str(source or "").split("|"):
+        if part.startswith("qfq:"):
+            return part[4:]
+    return ""
+
+
+def cross_day_path_metrics(
+    snapshot: OpportunityDecisionSnapshot,
+    d0_outcome: OpportunityOutcomeLabel | None,
+    future_outcome: OpportunityOutcomeLabel,
+    qfq_daily_path: dict[date, tuple[float, float, str]],
+    trading_days: list[date],
+    price_basis_by_key: dict[tuple[str, str], tuple[float, str]],
+) -> dict[str, Any]:
+    """Cumulative post-decision MFE/MAE through one future trading horizon.
+
+    D0 extrema come only from the already captured decision-safe Tencent 1m path.
+    Later sessions use qfq daily high/low.  Missing intermediate market sessions
+    fail closed because this layer cannot prove suspension vs data loss.
+    """
+    base = {
+        "path_version": CROSS_DAY_PATH_VERSION,
+        "path_source": "",
+        "path_high_price": None,
+        "path_low_price": None,
+        "mfe_pct": None,
+        "mae_pct": None,
+        "path_bar_count": 0,
+        "limit_state": "unknown",
+        "first_limit_time": None,
+        "time_to_limit_minutes": None,
+    }
+    horizon = future_outcome.horizon
+    offset = OUTCOME_HORIZONS.get(horizon)
+    if not offset:
+        return {**base, "path_state": "unknown", "path_reason": f"{horizon} 不是跨日路径 horizon"}
+    try:
+        anchor = date.fromisoformat(snapshot.trade_date)
+        target = date.fromisoformat(future_outcome.target_date)
+    except Exception:
+        return {**base, "path_state": "unknown", "path_reason": "trade_date/target_date 非法"}
+    calendar = sorted({d for d in trading_days if isinstance(d, date)})
+    if anchor not in calendar or target not in calendar:
+        return {**base, "path_state": "pending", "path_reason": "交易日历尚未覆盖决策日与目标日"}
+    anchor_index = calendar.index(anchor)
+    target_index = calendar.index(target)
+    if target_index != anchor_index + offset:
+        return {
+            **base, "path_state": "unknown",
+            "path_reason": (
+                f"{horizon} 目标交易日身份不一致：{snapshot.trade_date}->{future_outcome.target_date}，"
+                f"expected_offset={offset}, actual_offset={target_index-anchor_index}"
+            ),
+        }
+    expected_days = calendar[anchor_index + 1: target_index + 1]
+
+    reference = snapshot.entry_price if _positive_finite(snapshot.entry_price) else None
+    if reference is None:
+        return {**base, "path_state": "unknown", "path_reason": "决策 reference 价格缺失，无法计算跨日路径"}
+    basis = price_basis_by_key.get((snapshot.trade_date, snapshot.symbol))
+    factor = basis[0] if basis else None
+    basis_source = str(basis[1] or "") if basis else ""
+    qfq_source = _basis_qfq_source(basis_source)
+    if not _positive_finite(factor) or not qfq_source:
+        return {
+            **base, "path_state": "pending",
+            "path_reason": f"等待 {snapshot.trade_date}/{snapshot.symbol} {PRICE_BASIS_VERSION} 同源价格基准",
+        }
+    basis_reference = float(reference) * float(factor)
+    if not _positive_finite(basis_reference):
+        return {**base, "path_state": "pending", "path_reason": "价格基准换算后 reference 非有限正数"}
+
+    if d0_outcome is None:
+        return {**base, "path_state": "pending", "path_reason": "缺 D0 outcome，不能定义决策后起点路径"}
+    if d0_outcome.path_state == "unknown" and d0_outcome.path_version == PATH_VERSION:
+        return {
+            **base, "path_state": "unknown",
+            "path_reason": "D0 当前版本路径已终态 unknown，跨日路径无法无前视重建",
+        }
+    if not (
+        d0_outcome.path_state == "labeled"
+        and d0_outcome.path_version == PATH_VERSION
+        and _positive_finite(d0_outcome.path_high_price)
+        and _positive_finite(d0_outcome.path_low_price)
+        and float(d0_outcome.path_high_price) >= float(d0_outcome.path_low_price)
+    ):
+        return {
+            **base, "path_state": "pending",
+            "path_reason": f"等待当前 D0 路径 {PATH_VERSION}；不得用整日 D0 high/low 回填",
+        }
+
+    missing = [d for d in expected_days if d not in qfq_daily_path]
+    if missing:
+        return {
+            **base, "path_state": "pending",
+            "path_reason": (
+                "跨日路径缺完整市场交易日 bar；停牌与数据缺口不可在本层同形处理："
+                + ",".join(d.isoformat() for d in missing)
+            ),
+        }
+    future_highs: list[float] = []
+    future_lows: list[float] = []
+    for d in expected_days:
+        high, low, source = qfq_daily_path[d]
+        if source != qfq_source:
+            return {
+                **base, "path_state": "pending",
+                "path_reason": f"{d.isoformat()} qfq path source={source or 'unknown'} 与 basis source={qfq_source} 不一致",
+            }
+        if not (_positive_finite(high) and _positive_finite(low)) or float(high) < float(low):
+            return {**base, "path_state": "pending", "path_reason": f"{d.isoformat()} qfq high/low 非有限正数或 high<low"}
+        future_highs.append(float(high))
+        future_lows.append(float(low))
+
+    # Keep `path_high_price/path_low_price` on the same raw-reference-equivalent
+    # scale as D0.  Future qfq bars are divided by the decision-day qfq/raw factor;
+    # this preserves total-return economics across corporate actions without making
+    # one schema column change price scales by horizon.
+    factor_f = float(factor)
+    future_high_raw_equiv = [value / factor_f for value in future_highs]
+    future_low_raw_equiv = [value / factor_f for value in future_lows]
+    high = max([float(d0_outcome.path_high_price), *future_high_raw_equiv])
+    low = min([float(d0_outcome.path_low_price), *future_low_raw_equiv])
+    ref = float(reference)
+    mfe = round(max(0.0, (high / ref - 1.0) * 100.0), 2)
+    mae = round(min(0.0, (low / ref - 1.0) * 100.0), 2)
+    return {
+        **base,
+        "path_state": "labeled",
+        "path_source": f"d0:{d0_outcome.path_source or PATH_VERSION}|qfq_daily:{qfq_source}",
+        "path_reason": (
+            f"D0仅用决策后 {PATH_VERSION}；随后 {len(expected_days)} 个市场交易日用完整同源 qfq high/low；"
+            f"future qfq 以决策日因子 {factor_f:.8f} 映射回 raw-reference 等价尺度；"
+            "缺交易日不跳过，不把 reference 路径冒充 shadow fill P&L"
+        ),
+        "path_high_price": high,
+        "path_low_price": low,
+        "mfe_pct": mfe,
+        "mae_pct": mae,
+        "path_bar_count": int(d0_outcome.path_bar_count or 0) + len(expected_days),
+    }
+
+
+def pending_cross_day_path_targets(
+    as_of_date: str, session_factory=None, *, lookback_days: int = 30,
+    horizons: Iterable[str] = FUTURE_OUTCOME_HORIZONS,
+) -> dict[str, set[str]]:
+    """Selected future rows whose cross-day path is due and retryable."""
+    as_of = date.fromisoformat(as_of_date)
+    lower = (as_of - timedelta(days=max(1, int(lookback_days)))).isoformat()
+    wanted = tuple(horizons)
+    sf = session_factory or get_session_factory()
+    with sf() as db:
+        rows = db.execute(
+            select(
+                OpportunityOutcomeLabel.target_date, OpportunityDecisionSnapshot.symbol,
+                OpportunityOutcomeLabel.path_state, OpportunityOutcomeLabel.path_version,
+            )
+            .join(
+                OpportunityDecisionSnapshot,
+                OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id,
+            )
+            .where(
+                OpportunityOutcomeLabel.target_date >= lower,
+                OpportunityOutcomeLabel.target_date <= as_of_date,
+                OpportunityOutcomeLabel.horizon.in_(wanted),
+                _selected_outcome_sql(),
+                OpportunityOutcomeLabel.path_state.in_(("not_started", "unknown", "pending")),
+            )
+        ).all()
+    out: dict[str, set[str]] = {}
+    for target_date, symbol, state, version in rows:
+        if state == "unknown" and version == CROSS_DAY_PATH_VERSION:
+            continue
+        out.setdefault(target_date, set()).add(symbol)
+    return dict(sorted(out.items()))
+
+
+def label_cross_day_paths(
+    target_date: str,
+    qfq_daily_path_by_symbol: dict[str, dict[date, tuple[float, float, str]]],
+    trading_days: list[date],
+    price_basis_by_key: dict[tuple[str, str], tuple[float, str]],
+    session_factory=None, *,
+    horizons: Iterable[str] = FUTURE_OUTCOME_HORIZONS,
+) -> dict[str, Any]:
+    """Attach selected-only D1/D3/D5 cumulative path facts for one exact target date."""
+    sf = session_factory or get_session_factory()
+    wanted = tuple(horizons)
+    labeled = pending = unknown = 0
+    with sf() as db:
+        rows = db.execute(
+            select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
+            .join(
+                OpportunityDecisionSnapshot,
+                OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id,
+            )
+            .where(
+                OpportunityOutcomeLabel.target_date == target_date,
+                OpportunityOutcomeLabel.horizon.in_(wanted),
+                _selected_outcome_sql(),
+                OpportunityOutcomeLabel.path_state.in_(("not_started", "unknown", "pending")),
+            )
+        ).all()
+        snapshot_ids = [snapshot.snapshot_id for _outcome, snapshot in rows]
+        d0_by_snapshot: dict[str, OpportunityOutcomeLabel] = {}
+        if snapshot_ids:
+            d0_rows = db.execute(
+                select(OpportunityOutcomeLabel).where(
+                    OpportunityOutcomeLabel.snapshot_id.in_(snapshot_ids),
+                    OpportunityOutcomeLabel.horizon == OUTCOME_HORIZON,
+                )
+            ).scalars().all()
+            d0_by_snapshot = {outcome.snapshot_id: outcome for outcome in d0_rows}
+        for outcome, snapshot in rows:
+            if outcome.path_state == "unknown" and outcome.path_version == CROSS_DAY_PATH_VERSION:
+                continue
+            metrics = cross_day_path_metrics(
+                snapshot, d0_by_snapshot.get(snapshot.snapshot_id), outcome,
+                qfq_daily_path_by_symbol.get(snapshot.symbol) or {},
+                trading_days, price_basis_by_key,
+            )
+            for key, value in metrics.items():
+                setattr(outcome, key, value)
+            if metrics["path_state"] == "labeled":
+                outcome.path_resolved_at = utcnow()
+                labeled += 1
+            elif metrics["path_state"] == "unknown":
+                outcome.path_resolved_at = utcnow()
+                unknown += 1
+            else:
+                pending += 1
+        db.commit()
+    return {
+        "target_date": target_date, "horizons": list(wanted),
+        "labeled": labeled, "pending": pending, "unknown": unknown,
+        "path_version": CROSS_DAY_PATH_VERSION,
+    }
+
+
 def pending_outcome_targets(
     as_of_date: str, session_factory=None, *, lookback_days: int = 30,
     horizons: Iterable[str] = FUTURE_OUTCOME_HORIZONS,
@@ -1632,6 +1874,21 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
             and outcome.price_basis_version == PRICE_BASIS_VERSION
             and _finite_number(outcome.return_pct)
         }
+        horizon_path_version = (
+            PATH_VERSION if horizon == OUTCOME_HORIZON else CROSS_DAY_PATH_VERSION
+        )
+        horizon_selected = {
+            (snapshot.run_id, snapshot.symbol) for _outcome, snapshot in horizon_rows
+            if _selected_outcome_snapshot(snapshot.stage, snapshot.decision)
+        }
+        horizon_path_labeled = {
+            (snapshot.run_id, snapshot.symbol) for outcome, snapshot in horizon_rows
+            if _selected_outcome_snapshot(snapshot.stage, snapshot.decision)
+            and outcome.path_state == "labeled"
+            and outcome.path_version == horizon_path_version
+            and _finite_number(outcome.mfe_pct)
+            and _finite_number(outcome.mae_pct)
+        }
         horizon_coverage[horizon] = {
             "rows": len(horizon_rows),
             "states": dict(sorted(Counter(outcome.state for outcome, _snapshot in horizon_rows).items())),
@@ -1646,6 +1903,19 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
                 round(len(horizon_labeled) / len(funnel_opportunities), 4)
                 if funnel_opportunities else None
             ),
+            "path": {
+                "version": horizon_path_version,
+                "states": dict(sorted(Counter(
+                    outcome.path_state for outcome, snapshot in horizon_rows
+                    if _selected_outcome_snapshot(snapshot.stage, snapshot.decision)
+                ).items())),
+                "selected_opportunities": len(horizon_selected),
+                "labeled_selected_opportunities": len(horizon_path_labeled),
+                "coverage": (
+                    round(len(horizon_path_labeled) / len(horizon_selected), 4)
+                    if horizon_selected else None
+                ),
+            },
         }
     return {
         "trade_date": trade_date,
@@ -1885,10 +2155,11 @@ def opportunity_scorecard(
         for snapshot in path_candidate_snapshots
         if snapshot.snapshot_id in path_outcome_by_snapshot_id
     ]
+    path_version = PATH_VERSION if horizon == OUTCOME_HORIZON else CROSS_DAY_PATH_VERSION
     path_samples = [
         outcome for outcome, _snapshot in path_candidates
         if outcome.path_state == "labeled"
-        and outcome.path_version == PATH_VERSION
+        and outcome.path_version == path_version
         and _finite_number(outcome.mfe_pct) and _finite_number(outcome.mae_pct)
     ]
     path_limit_states = Counter(outcome.limit_state for outcome in path_samples)
@@ -2134,13 +2405,32 @@ def opportunity_scorecard(
             }
             if horizon == OUTCOME_HORIZON
             else {
-                "available": False,
-                "identity": "D0-only path metrics; cross-day MFE/MAE accumulation not implemented",
-                "version": PATH_VERSION,
-                "evaluable": 0,
-                "coverage": None,
-                "avg_mfe_pct": None, "avg_mae_pct": None,
-                "limit_hits_after_decision": None, "avg_time_to_limit_minutes": None,
+                "available": True,
+                "identity": (
+                    f"{horizon} cumulative reference path: decision-safe D0 Tencent 1m + "
+                    "complete same-source qfq daily high/low through exact target trading date; "
+                    "missing intermediate market sessions fail closed; not shadow-fill P&L"
+                ),
+                "version": CROSS_DAY_PATH_VERSION,
+                "sample_unit": "symbol_trade_date_earliest_selected_decision",
+                "denominator": len(path_candidate_snapshots),
+                "outcome_attached": len(path_candidates),
+                "evaluable": len(path_samples),
+                "coverage": (
+                    round(len(path_samples) / len(path_candidate_snapshots), 4)
+                    if path_candidate_snapshots else None
+                ),
+                "avg_mfe_pct": (
+                    round(sum(float(o.mfe_pct) for o in path_samples) / len(path_samples), 2)
+                    if path_samples else None
+                ),
+                "avg_mae_pct": (
+                    round(sum(float(o.mae_pct) for o in path_samples) / len(path_samples), 2)
+                    if path_samples else None
+                ),
+                "limit_metrics_available": False,
+                "limit_hits_after_decision": None,
+                "avg_time_to_limit_minutes": None,
             }
         ),
         "precision_at_k": {

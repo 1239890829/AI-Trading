@@ -1,8 +1,8 @@
-# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 Append-only Outcome Revisions
+# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 Cross-day Cumulative MFE/MAE
 
 > 定位：当前运行模式、最新已合并证据、唯一在制纵切与安全边界；任务唯一状态仍以所属 stage 为准。
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 的 PR #69/#70/#71/#72/#74 已闭环，PR #74 merge=`d8d5d35c418c518f3f67b00bf7a62faac4e34534`，post-merge CI run `35548844488`（#515）backend/frontend/docs 全绿，功能分支已删除。当前仍在 **G3 / RSH-026**，唯一在制纵切为 append-only close-outcome revision；施工分支 `chatgpt/rsh026-outcome-revisions` 基于 `master@d8d5d35c`。目标是让旧 `legacy_unversioned` terminal labeled 在不覆写 base outcome、不复制 path 证据的前提下追加当前 price-basis/cost-model revision，并让 scorecard/summary 读取 current effective view；不改策略阈值、生产权重、真实交易权限或 shadow fill 语义。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 的 PR #69/#70/#71/#72/#74/#75 已闭环；PR #75 merge=`a96c3d0086872cf8f5bc71f5f19c8792007cbcf3`，post-merge CI run `35550792738`（#517）backend/frontend/docs 全绿，功能分支已删除。当前仍在 **G3 / RSH-026**，唯一在制纵切为 D1/D3/D5 **cross-day cumulative MFE/MAE**；施工分支 `chatgpt/rsh026-crossday-excursion` 基于 `master@a96c3d00`。本片只从已有完整 D0 决策后 Tencent 1m path 的新样本继续累积 future qfq 日线 high/low；历史旧部署没有 path 字段，禁止事后用日线伪造 D0 路径。不改策略阈值、生产权重、真实交易权限或 shadow fill 语义。
 
 
 ## 1. 固定入口与范围
@@ -91,7 +91,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **Degraded reason**：当前 Codex 额度不可用，正常双角色无法持续完成实施→独立审核→发布闭环；旧 exact-HEAD Review 门因此形成自锁。
 - **有效期**：持续到用户明确说 Codex 已恢复/退出降级；不是单 PR 临时口令。但每个 PR 的发布仍必须重新生成 exact-HEAD `DegradedRelease`，不能复用上一 PR 回执。
 - **不降低项**：G0–G5/GX 阶段门、U49 主动反证、branch protection、required CI、latest master、CHANGES_REQUESTED/thread、public-repo scan、workspace/doc-health、敏感信息/范围、post-merge CI、删除功能分支。
-- **当前动作**：U50、IMP-044 与 RSH-026/PR #69/#70/#71/#72/#74、账本 PR #73 均已闭环；当前在 G3/RSH-026 执行 append-only outcome revision 纵切，分支 `chatgpt/rsh026-outcome-revisions`。本轮只做该纵切；每个后续 PR 仍需新的 exact-HEAD `DegradedRelease`。
+- **当前动作**：U50、IMP-044 与 RSH-026/PR #69/#70/#71/#72/#74/#75、账本 PR #73 均已闭环；#75 merge=`a96c3d00`、post-merge CI #517 全绿且分支已清理。当前在 G3/RSH-026 执行 D1/D3/D5 cross-day cumulative MFE/MAE 纵切，分支 `chatgpt/rsh026-crossday-excursion`。本轮只做该纵切；每个后续 PR 仍需新的 exact-HEAD `DegradedRelease`。
 
 ## 8.2 U49 主动审计回执（RSH-026 Preflight）
 
@@ -165,7 +165,36 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **base 不变机械证据**：从原始长期库只读取 48 条 terminal labeled 的全部原始 base 列，再按同一 48 个 id 与恢复后副本逐列比较，结果 `matched=48 / identical=True`；revision 只追加派生结果，不覆写旧 base。
 - **读侧恢复结果**：2026-09-16 v1/v1 scorecard 从 legacy exclusion 的 current sample=0 恢复到 28 个独立 selected symbol-day sample，应用 current revision=48；但全漏斗仍 `incomplete_denominator`，因此继续不产出策略效果结论。
 - **幂等**：第二次 apply 返回 `noop=true / backup=null`；缺 marketdb 的少量 pending 仍保留，不重复生成 revision。
+- **发布结论**：PR #75 exact HEAD `57e2e186b5f449e7f0f4625226f8ac89757cdf2e` 本地 JUnit `4170 tests / 0 failures / 0 errors / 80 skipped`（即 4090 passed），全仓 pyflakes 与 repo/docs 门全绿；required CI #516 与 `release_check` 通过，merge=`a96c3d0086872cf8f5bc71f5f19c8792007cbcf3`，post-merge CI #517 backend/frontend/docs 全绿，功能分支已清理。
 - **非目标**：不改旧 base labeled、不自动重算 D1/D3/D5、不复制 path 证据、不实现 actual shadow fill、不做跨日累计 MFE/MAE、不改策略/风控/仓位参数。
+
+## 8.6 U49 主动审计回执（RSH-026 Cross-day Cumulative MFE/MAE）
+
+- **阶段/基点**：`Preflight + candidate implementation`；基于 `master@a96c3d0086872cf8f5bc71f5f19c8792007cbcf3`（PR #75 merge 后 CI #517 全绿）。
+- **P1-37 D0 前视 + raw/qfq 尺度串线**：决策日整根 daily high/low 含决策前极值，不能拿来拼路径；D0 只接受已由当前 `PATH_VERSION` 证明完整的决策后 Tencent 1m extrema。future daily high/low 是 qfq，直接与 D0 raw 极值合并又会把公司行动制造成虚假 MFE/MAE；最终 `CROSS_DAY_PATH_VERSION=xday-v1.d0m1+qfq1d.raw-anchor` 将 future qfq extrema 按决策日同源 qfq/raw factor 映射回 raw-reference 等价尺度，再与 D0 raw extrema 合并，`path_high/low` 跨 horizon 始终保持同一价格尺度。
+- **P1-38 中间交易日缺 bar 不能静默跳过**：D3/D5 若少任一预期市场交易日，路径保持 `pending`，不按剩余日线硬算；本层不能证明是停牌还是数据缺口，故不猜、不借邻日。
+- **P1-39 horizon target 身份错位**：D1/D3/D5 的 `target_date` 必须分别是决策日后的第 1/3/5 个市场交易日；实际 offset 不一致时直接 terminal `unknown`，禁止把自然日或错误交易日结果写进正确 horizon。
+- **P1-40 close/path 成熟度独立**：future close label 与 cumulative path 是两类独立结果事实。即使 close 仍 pending，只要 D0 path + 预期 future qfq high/low 已完整，cross-day path 可以 labeled；反之 close 已 labeled 也不能替代缺失的 path bar。scorecard 为每个 horizon 使用独立 path denominator。
+- **P1-41 请求面放大风险**：跨日 path retry 只查询 selected/actionable future rows，30 天有界；与 pending close symbols 合并后复用同一次 qfq 日线请求，同时产 close/high/low，不把 rejected/deferred 全漏斗扩进实时 EOD 请求。
+- **P1-42 历史回填不可得**：真实长期库仍停在 `d2e4a6b8c0f1`，其 `opportunity_outcome_label` 根本没有任何 `path_*` / `mfe_pct` / `mae_pct` 列；配套 378MB marketdb 的 `daily_k_adj` 也只有 `close_adj`，没有复权 high/low。没有历史 D0 决策后分钟证据与可信 qfq high/low，就不能用今天的 raw 日线倒推历史 cross-day path；本片只从具备完整 current D0 path + 可验证同源 qfq OHLC 的新样本在线积累。
+- **同源与完整性**：future qfq daily source 必须与 price-basis 的 qfq source 相同；跨 provider 路径保持 pending。D0 path 必须是当前 `PATH_VERSION` 且完整覆盖收盘，否则 cross-day 不定稿；D0 terminal unknown 会传播为 cross-day terminal unknown。
+- **scorecard/summary**：D0 仍用 `PATH_VERSION`；D1/D3/D5 使用 `CROSS_DAY_PATH_VERSION`，报告 denominator / outcome_attached / evaluable / coverage / avg MFE / avg MAE；first-limit/time-to-limit 仍明确只属于 D0。learning summary 的每个 horizon 额外暴露 path version/state/selected coverage，不能把 close coverage 代替 path coverage。
+- **生产 EOD 接线**：`pending_cross_day_path_targets` 与 pending close 分开维护；同一 symbol 的一次 qfq daily fetch 通过 `_daily_bar_facts` 同时供 close 与 high/low，raw daily 只用于 basis。交易日历不可用时不执行 cross-day 写入。
+- **当前验证**：纯函数、DB 回填、retry surface、scorecard 独立 denominator、公司行动、缺中间交易日、跨 provider、错误 horizon、D0 terminal unknown 与 EOD 编排回归均已通过；最终 exact-head 全量 backend / repo gates / CI 仍是发布前门禁。
+- **非目标**：不伪造旧历史 path、不把停牌与数据缺口强行二分、不把 reference path 冒充 shadow-fill P&L、不实现 actual fill/entry-capture、不改策略/风控/仓位参数。
+
+## 8.6 U49 主动审计回执（RSH-026 Cross-day Cumulative MFE/MAE）
+
+- **阶段/基点**：`Preflight + candidate implementation`；基于 `master@a96c3d0086872cf8f5bc71f5f19c8792007cbcf3`（PR #75 merge 后 CI #517 全绿）。
+- **P1-37 D0 日 K 前视泄露**：决策日整根 daily high/low 含决策前极值，不能拿来拼跨日 MFE/MAE。当前跨日路径只接受已由 `PATH_VERSION` 证明完整的“决策后 Tencent 1m”D0 extrema，再接未来交易日 qfq daily high/low；D0 不完整则 pending，current D0 terminal unknown 则跨日 terminal unknown。
+- **P1-38 路径价格尺度跨 horizon 漂移**：D0 `path_high/low` 是 raw reference 尺度，future bar 是 qfq；若直接合并，同一列会因 horizon 改变价格含义。当前 future qfq extrema 用决策日同源 `qfq/raw` factor 映射回 raw-reference 等价尺度，再与 D0 raw extrema 合并；MFE/MAE 分母继续是 immutable raw decision reference。
+- **P1-39 跨源复权伪路径**：future qfq high/low 的 provider source 必须与 price-basis 的 qfq source 完全一致；Composite failover 导致来源不一致时保持 pending，不把 vendor 口径差异当真实 excursion。
+- **P1-40 中间交易日/停牌同形风险**：D1/D3/D5 必须逐个预期市场交易日有 high/low；缺任一日不跳过、不借邻日。现有证据不足以区分历史停牌与数据缺口，因此统一 fail-closed pending。
+- **P1-41 历史伪回填风险**：旧长期库本身停在 `d2e4a6b8c0f1`，没有 path/MFE/MAE 字段；其 378MB marketdb 的 `daily_k_adj` 只有 `close_adj`，没有复权 high/low。故本片明确**不做历史 bulk cross-day path 回填**，只从部署后具有完整 D0 path + 可验证同源 qfq OHLC 的样本在线积累。
+- **P1-42 请求面/日历降级**：跨日 path 只处理 selected/actionable future identity；交易日历不可用时不读取 cross-day backlog、不把这些 symbol 加入额外日 K 请求面。EOD 同一份 qfq 日 K fetch 同时复用 close/high/low/source，避免为 path 再打一遍 provider。
+- **P1-43 schema 宽度风险**：`path_version` 现有列宽为 32；初始描述性版本串超过 32，SQLite 不报错但其他数据库可能截断。最终固定 `CROSS_DAY_PATH_VERSION=xday-v1.d0m1+qfq1d.raw-anchor`，长度机械回归 `<=32`；常用 path_source 也锁在现有 64 宽度内。
+- **读侧分母**：D1/D3/D5 `scorecard.path_metrics` 与 close-label 分母独立；仍先从 immutable selected snapshots 取最早 `symbol×trade_date` 决策作为 denominator，再按 exact horizon outcome 判断 path attached/evaluable。close outcome pending 不会吞掉已成熟 path，反之亦然。
+- **非目标**：future 首封/time-to-limit 不在本片；跨日 path 的 limit 指标显式 unavailable。路径仍是 reference 轨，不是 actual shadow fill P&L；实际 fill/entry-capture 继续归 IMP-053。
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
 

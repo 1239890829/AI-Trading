@@ -16,6 +16,7 @@ from app.models.watchlist import Base
 from app.schemas.market import Kline
 from app.picks.opportunity_learning import (
     COST_MODEL_VERSION,
+    CROSS_DAY_PATH_VERSION,
     FEATURE_VERSION,
     FILL_SEAL_GAP_PCT,
     OUTCOME_HORIZON,
@@ -29,7 +30,9 @@ from app.picks.opportunity_learning import (
     backfill_outcome_revisions,
     build_intraday_records,
     build_notification_records,
+    cross_day_path_metrics,
     d0_path_metrics,
+    label_cross_day_paths,
     label_d0_paths,
     label_trade_date,
     due_outcome_symbols,
@@ -38,6 +41,7 @@ from app.picks.opportunity_learning import (
     learning_summary,
     opportunity_scorecard,
     outcome_target_dates,
+    pending_cross_day_path_targets,
     pending_d0_path_symbols,
     pending_outcome_targets,
     pending_symbols,
@@ -840,6 +844,189 @@ def test_d0_path_rejects_non_tencent_minute_timestamps_and_missing_reference():
     assert no_ref["mfe_pct"] is None and no_ref["mae_pct"] is None
 
 
+def test_cross_day_path_version_fits_persisted_schema_width():
+    assert len(CROSS_DAY_PATH_VERSION) <= 32
+    source = "d0:tencent_1m+zt_zb_pools|qfq_daily:eastmoney"
+    assert len(source) <= 64
+
+
+def _future_path_outcome(horizon: str, target_date: str):
+    return OpportunityOutcomeLabel(
+        snapshot_id="path-s1", horizon=horizon, target_date=target_date,
+        state="pending", label="unknown", reference_price=10.0,
+        fill_state="pending", price_basis_version=PRICE_BASIS_VERSION,
+        path_state="not_started", path_version="",
+    )
+
+
+def _d0_path_outcome(*, high: float = 11.0, low: float = 9.5, state: str = "labeled"):
+    return OpportunityOutcomeLabel(
+        snapshot_id="path-s1", horizon=OUTCOME_HORIZON, target_date="2026-09-16",
+        state="pending", label="unknown", reference_price=10.0, fill_state="pending",
+        price_basis_version=PRICE_BASIS_VERSION, path_state=state, path_version=PATH_VERSION,
+        path_high_price=high if state == "labeled" else None,
+        path_low_price=low if state == "labeled" else None,
+        mfe_pct=10.0 if state == "labeled" else None,
+        mae_pct=-5.0 if state == "labeled" else None,
+        path_bar_count=30 if state == "labeled" else 0, path_source="tencent_1m",
+    )
+
+
+def test_cross_day_path_is_corporate_action_safe_and_keeps_d0_postdecision_only():
+    snap = _path_snapshot(entry_price=373.49)
+    snap.symbol = "603444"
+    d0 = _d0_path_outcome(high=380.0, low=370.0)
+    d0.snapshot_id = "path-s1"
+    future = _future_path_outcome("d1_close", "2026-09-17")
+    factor = 363.49 / 373.49
+    got = cross_day_path_metrics(
+        snap, d0, future,
+        {date(2026, 9, 17): (360.0, 350.0, "marketdb.daily_k_adj")},
+        [date(2026, 9, 16), date(2026, 9, 17)],
+        {("2026-09-16", "603444"): (factor, "qfq:marketdb.daily_k_adj|raw:marketdb.daily_k")},
+    )
+    expected_high = max(380.0, 360.0 / factor)
+    expected_low = min(370.0, 350.0 / factor)
+    assert got["path_state"] == "labeled"
+    assert got["path_version"] == CROSS_DAY_PATH_VERSION
+    assert got["path_high_price"] == pytest.approx(expected_high)
+    assert got["path_low_price"] == pytest.approx(expected_low)
+    assert got["mfe_pct"] == pytest.approx(round(max(0.0, (expected_high / 373.49 - 1) * 100), 2))
+    assert got["mae_pct"] == pytest.approx(round(min(0.0, (expected_low / 373.49 - 1) * 100), 2))
+    assert got["path_bar_count"] == 31
+    assert "qfq_daily:marketdb.daily_k_adj" in got["path_source"]
+
+
+def test_cross_day_path_ignores_bars_after_exact_target_horizon():
+    snap = _path_snapshot()
+    future = _future_path_outcome("d1_close", "2026-09-17")
+    got = cross_day_path_metrics(
+        snap, _d0_path_outcome(high=10.4, low=9.8), future,
+        {
+            date(2026, 9, 17): (10.6, 9.7, "test"),
+            # Later extreme must not leak into the D1 horizon.
+            date(2026, 9, 18): (99.0, 1.0, "test"),
+        },
+        [date(2026, 9, 16), date(2026, 9, 17), date(2026, 9, 18)],
+        {("2026-09-16", "600001"): (1.0, "qfq:test|raw:test")},
+    )
+    assert got["path_state"] == "labeled"
+    assert got["path_high_price"] == 10.6
+    assert got["path_low_price"] == 9.7
+    assert got["mfe_pct"] == 6.0
+    assert got["mae_pct"] == -3.0
+
+
+def test_cross_day_path_missing_intermediate_market_session_fails_closed():
+    snap = _path_snapshot()
+    future = _future_path_outcome("d3_close", "2026-09-21")
+    got = cross_day_path_metrics(
+        snap, _d0_path_outcome(), future,
+        {
+            date(2026, 9, 17): (10.5, 9.8, "test"),
+            # 2026-09-18 deliberately absent: cannot guess suspension vs data gap.
+            date(2026, 9, 21): (11.0, 10.0, "test"),
+        },
+        [date(2026, 9, 16), date(2026, 9, 17), date(2026, 9, 18), date(2026, 9, 21)],
+        {("2026-09-16", "600001"): (1.0, "qfq:test|raw:test")},
+    )
+    assert got["path_state"] == "pending"
+    assert got["mfe_pct"] is None and got["mae_pct"] is None
+    assert "2026-09-18" in got["path_reason"]
+
+
+def test_cross_day_path_rejects_cross_provider_qfq_and_bad_horizon_identity():
+    snap = _path_snapshot()
+    cross_source = cross_day_path_metrics(
+        snap, _d0_path_outcome(), _future_path_outcome("d1_close", "2026-09-17"),
+        {date(2026, 9, 17): (10.5, 9.8, "other")},
+        [date(2026, 9, 16), date(2026, 9, 17)],
+        {("2026-09-16", "600001"): (1.0, "qfq:test|raw:test")},
+    )
+    assert cross_source["path_state"] == "pending" and "source=other" in cross_source["path_reason"]
+
+    bad_target = cross_day_path_metrics(
+        snap, _d0_path_outcome(), _future_path_outcome("d3_close", "2026-09-17"),
+        {date(2026, 9, 17): (10.5, 9.8, "test")},
+        [date(2026, 9, 16), date(2026, 9, 17), date(2026, 9, 18), date(2026, 9, 21)],
+        {("2026-09-16", "600001"): (1.0, "qfq:test|raw:test")},
+    )
+    assert bad_target["path_state"] == "unknown"
+    assert "目标交易日身份不一致" in bad_target["path_reason"]
+
+
+def test_cross_day_path_requires_current_d0_path_and_terminal_unknown_propagates():
+    snap = _path_snapshot()
+    future = _future_path_outcome("d1_close", "2026-09-17")
+    pending = cross_day_path_metrics(
+        snap, None, future,
+        {date(2026, 9, 17): (10.5, 9.8, "test")},
+        [date(2026, 9, 16), date(2026, 9, 17)],
+        {("2026-09-16", "600001"): (1.0, "qfq:test|raw:test")},
+    )
+    assert pending["path_state"] == "pending"
+    terminal = cross_day_path_metrics(
+        snap, _d0_path_outcome(state="unknown"), future,
+        {date(2026, 9, 17): (10.5, 9.8, "test")},
+        [date(2026, 9, 16), date(2026, 9, 17)],
+        {("2026-09-16", "600001"): (1.0, "qfq:test|raw:test")},
+    )
+    assert terminal["path_state"] == "unknown"
+    assert "终态 unknown" in terminal["path_reason"]
+
+
+def test_cross_day_path_retry_surface_survives_close_label_completion(tmp_path):
+    sf = _factory(tmp_path)
+    snap = _path_snapshot()
+    d0 = _d0_path_outcome()
+    d1 = _future_path_outcome("d1_close", "2026-09-17")
+    d1.state = "labeled"
+    d1.label = "positive"
+    d1.outcome_price = 10.4
+    d1.return_pct = 4.0
+    d1.path_state = "pending"
+    d1.path_version = CROSS_DAY_PATH_VERSION
+    with sf() as db:
+        db.add_all([snap, d0, d1])
+        db.commit()
+    assert pending_outcome_targets("2026-09-17", sf) == {}
+    assert pending_cross_day_path_targets("2026-09-17", sf) == {
+        "2026-09-17": {"600001"}
+    }
+
+
+def test_cross_day_path_labeling_is_retryable_and_scorecard_independent_of_close_label(tmp_path):
+    sf = _factory(tmp_path)
+    snap = _path_snapshot()
+    d0 = _d0_path_outcome()
+    d1 = _future_path_outcome("d1_close", "2026-09-17")
+    with sf() as db:
+        db.add_all([snap, d0, d1])
+        db.commit()
+
+    assert pending_cross_day_path_targets("2026-09-17", sf) == {"2026-09-17": {"600001"}}
+    first = label_cross_day_paths(
+        "2026-09-17",
+        {"600001": {date(2026, 9, 17): (10.8, 9.6, "test")}},
+        [date(2026, 9, 16), date(2026, 9, 17)],
+        {("2026-09-16", "600001"): (1.0, "qfq:test|raw:test")},
+        sf, horizons=("d1_close",),
+    )
+    assert first["labeled"] == 1 and first["pending"] == 0
+    assert pending_cross_day_path_targets("2026-09-17", sf) == {}
+
+    # Close outcome deliberately remains pending: path maturity has its own denominator.
+    card = opportunity_scorecard("2026-09-16", horizon="d1_close", session_factory=sf)
+    path = card["path_metrics"]
+    assert card["labeled"] == 0
+    assert path["available"] is True
+    assert path["version"] == CROSS_DAY_PATH_VERSION
+    assert path["denominator"] == 1 and path["outcome_attached"] == 1
+    assert path["evaluable"] == 1 and path["coverage"] == 1.0
+    assert path["avg_mfe_pct"] == 10.0 and path["avg_mae_pct"] == -5.0
+    assert path["limit_metrics_available"] is False
+
+
 def test_current_version_terminal_unknown_does_not_retry_minute_fetch_forever(tmp_path):
     sf = _factory(tmp_path)
     item = {"symbol": "600009", "name": "缺价", "confidence": {"tier": "executable"}}
@@ -1413,8 +1600,10 @@ def test_scorecard_filters_horizon_and_versions_explicitly(tmp_path):
     assert current["audit"]["labeled_rows"] == 1
     d1 = opportunity_scorecard("2026-09-16", horizon="d1_close", session_factory=sf)
     assert d1["audit"]["labeled_rows"] == 1
-    assert d1["path_metrics"]["available"] is False
-    assert "cross-day MFE/MAE" in d1["path_metrics"]["identity"]
+    assert d1["path_metrics"]["available"] is True
+    assert d1["path_metrics"]["evaluable"] == 0
+    assert d1["path_metrics"]["coverage"] == 0.0
+    assert "cumulative reference path" in d1["path_metrics"]["identity"]
 
 
 def test_nan_close_never_becomes_a_labeled_sample(tmp_path):
