@@ -39,7 +39,7 @@ def test_fresh_database_created_at_baseline(tmp_path):
         assert {
             "watchlist", "paper_account", "review_reports", "prediction_themes",
             "minute_decisions", "opportunity_decision_snapshot",
-            "opportunity_outcome_label", "alembic_version",
+            "opportunity_outcome_label", "opportunity_outcome_revision", "alembic_version",
         } <= tables
         with engine.connect() as conn:
             ver = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
@@ -120,7 +120,7 @@ def test_versioned_database_upgrades_idempotently(tmp_path):
 # `paper_position` 的索引名与约束差异等，均属存量、非本轮引入）⇒ 全库清账是独立任务
 # （账本 `GOV-013`）。**在此处收窄范围是刻意的**：把已知存量偏差一并断红只会让门禁长期失效。
 # 新增表时把模型类追加进下面的元组即可获得同样的保护。
-_MODELS_UNDER_PARITY = ("OpportunityDecisionSnapshot", "OpportunityOutcomeLabel")
+_MODELS_UNDER_PARITY = ("OpportunityDecisionSnapshot", "OpportunityOutcomeLabel", "OpportunityOutcomeRevision")
 
 
 def _schema_drift(engine, model) -> list[str]:
@@ -159,11 +159,13 @@ def test_opportunity_learning_tables_match_their_models(tmp_path):
     from app.models.opportunity_learning import (
         OpportunityDecisionSnapshot,
         OpportunityOutcomeLabel,
+        OpportunityOutcomeRevision,
     )
 
     models = {
         "OpportunityDecisionSnapshot": OpportunityDecisionSnapshot,
         "OpportunityOutcomeLabel": OpportunityOutcomeLabel,
+        "OpportunityOutcomeRevision": OpportunityOutcomeRevision,
     }
     engine, path = _fresh_engine(tmp_path, "parity")
     try:

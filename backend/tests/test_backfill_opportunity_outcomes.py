@@ -8,7 +8,11 @@ import duckdb
 import pytest
 
 from app.core.bjtime import BJ_TZ
-from scripts.backfill_opportunity_outcomes import _has_planned_writes, _marketdb_basis, _pending_symbols_ro
+from app.picks.opportunity_learning import OUTCOME_REVISION_VERSION
+from scripts.backfill_opportunity_outcomes import (
+    _has_planned_writes, _marketdb_basis, _pending_symbols_ro,
+    _recovery_symbols_ro, _revision_candidates_ro,
+)
 
 
 def _ms(day: str) -> int:
@@ -135,3 +139,73 @@ def test_noop_backup_gate_only_opens_for_real_writes():
     assert _has_planned_writes({**clean, "missing_d0_outcomes": 1}, []) is True
     assert _has_planned_writes({**clean, "legacy_pending_fill_ok": 1}, []) is True
     assert _has_planned_writes(clean, [{"marketdb_closes": 1}]) is True
+
+def test_recovery_surface_adds_legacy_labeled_until_current_revision_exists(tmp_path):
+    path = tmp_path / "legacy-revision.db"
+    con = sqlite3.connect(path)
+    try:
+        con.executescript(
+            """
+            create table opportunity_decision_snapshot(
+                snapshot_id text primary key, trade_date text, symbol text
+            );
+            create table opportunity_outcome_label(
+                id integer primary key, snapshot_id text, horizon text, state text,
+                price_basis_version text
+            );
+            create table opportunity_outcome_revision(
+                id integer primary key, base_outcome_id integer, revision_version text
+            );
+            insert into opportunity_decision_snapshot values
+                ('legacy','2026-09-16','600001'),
+                ('current','2026-09-16','600002'),
+                ('pending','2026-09-16','600003');
+            insert into opportunity_outcome_label values
+                (1,'legacy','d0_close','labeled',''),
+                (2,'current','d0_close','labeled','qfq-ref-v1.raw-anchor'),
+                (3,'pending','d0_close','pending','');
+            """
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    assert _revision_candidates_ro(path, "2026-09-16") == {"600001"}
+    assert _recovery_symbols_ro(path, "2026-09-16") == {"600001", "600003"}
+
+    con = sqlite3.connect(path)
+    try:
+        con.execute(
+            "insert into opportunity_outcome_revision(base_outcome_id,revision_version) values (?,?)",
+            (1, OUTCOME_REVISION_VERSION),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    assert _revision_candidates_ro(path, "2026-09-16") == set()
+    assert _recovery_symbols_ro(path, "2026-09-16") == {"600003"}
+
+
+def test_revision_candidate_detection_works_before_price_basis_migration(tmp_path):
+    path = tmp_path / "pre-basis.db"
+    con = sqlite3.connect(path)
+    try:
+        con.executescript(
+            """
+            create table opportunity_decision_snapshot(
+                snapshot_id text primary key, trade_date text, symbol text
+            );
+            create table opportunity_outcome_label(
+                id integer primary key, snapshot_id text, horizon text, state text
+            );
+            insert into opportunity_decision_snapshot values
+                ('s1','2026-09-16','600001');
+            insert into opportunity_outcome_label values
+                (1,'s1','d0_close','labeled');
+            """
+        )
+        con.commit()
+    finally:
+        con.close()
+    assert _revision_candidates_ro(path, "2026-09-16") == {"600001"}

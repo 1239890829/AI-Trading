@@ -9,7 +9,9 @@ from datetime import date, datetime, timezone
 from sqlalchemy import create_engine, delete, event, select
 from sqlalchemy.orm import sessionmaker
 
-from app.models.opportunity_learning import OpportunityDecisionSnapshot, OpportunityOutcomeLabel
+from app.models.opportunity_learning import (
+    OpportunityDecisionSnapshot, OpportunityOutcomeLabel, OpportunityOutcomeRevision,
+)
 from app.models.watchlist import Base
 from app.schemas.market import Kline
 from app.picks.opportunity_learning import (
@@ -17,12 +19,14 @@ from app.picks.opportunity_learning import (
     FEATURE_VERSION,
     FILL_SEAL_GAP_PCT,
     OUTCOME_HORIZON,
+    OUTCOME_REVISION_VERSION,
     PATH_VERSION,
     PRICE_BASIS_VERSION,
     STRATEGY_VERSION,
     archive_records,
     assess_fill_state,
     backfill_missing_outcome_identities,
+    backfill_outcome_revisions,
     build_intraday_records,
     build_notification_records,
     d0_path_metrics,
@@ -1465,6 +1469,131 @@ def test_scorecard_excludes_legacy_unversioned_price_basis_from_current_metrics(
     assert card["funnel_denominator"]["state"] == "incomplete"
     assert card["funnel_denominator"]["label_coverage"] == 0.0
     assert card["verdict"] == "incomplete_denominator"
+
+
+def test_current_revision_overlays_metrics_without_mutating_legacy_base(tmp_path):
+    sf = _factory(tmp_path)
+    _seed_scorecard_label(
+        sf, snapshot_id="legacy-revisable", run_id="run-legacy-revisable",
+        symbol="600001", as_of=datetime(2026, 9, 16, 10, 5),
+        gross=-7.0, proxy=-7.1, price_basis_version="",
+        reason="legacy unversioned result",
+    )
+
+    with sf() as db:
+        base = db.execute(select(OpportunityOutcomeLabel)).scalar_one()
+        base.path_state = "labeled"
+        base.path_version = PATH_VERSION
+        base.mfe_pct = 5.0
+        base.mae_pct = -2.0
+        base.limit_state = "not_hit"
+        db.commit()
+
+    first = backfill_outcome_revisions(
+        "2026-09-16", {"600001": 10.5},
+        _basis("2026-09-16", "600001", factor=0.9), sf,
+    )
+    assert first["inserted"] == 1 and first["labeled"] == 1 and first["pending"] == 0
+    second = backfill_outcome_revisions(
+        "2026-09-16", {"600001": 99.0},
+        _basis("2026-09-16", "600001", factor=0.9), sf,
+    )
+    assert second["inserted"] == 0
+
+    with sf() as db:
+        base = db.execute(select(OpportunityOutcomeLabel)).scalar_one()
+        revision = db.execute(select(OpportunityOutcomeRevision)).scalar_one()
+    assert base.price_basis_version == ""
+    assert base.return_pct == -7.0 and base.net_return_pct == -7.1
+    assert base.reason == "legacy unversioned result"
+    assert revision.base_outcome_id == base.id
+    assert revision.revision_version == OUTCOME_REVISION_VERSION
+    assert revision.price_basis_version == PRICE_BASIS_VERSION
+    assert revision.basis_reference_price == pytest.approx(9.0)
+    assert revision.return_pct == pytest.approx(16.67)
+
+    card = opportunity_scorecard("2026-09-16", session_factory=sf)
+    assert card["sample"]["count"] == 1
+    assert card["audit"]["price_basis_versions"] == {PRICE_BASIS_VERSION: 1}
+    assert card["audit"]["base_price_basis_versions"] == {"legacy_unversioned": 1}
+    assert card["audit"]["outcome_revisions_applied"] == 1
+    assert card["audit"]["price_basis_excluded_labeled_rows"] == 0
+    assert card["expectancy"]["gross_pct"] == pytest.approx(16.67)
+    assert card["path_metrics"]["evaluable"] == 1
+    assert card["path_metrics"]["avg_mfe_pct"] == 5.0
+    assert card["path_metrics"]["avg_mae_pct"] == -2.0
+
+    summary = learning_summary("2026-09-16", sf)
+    assert summary["price_basis"]["revisions_applied"] == 1
+    assert summary["price_basis"]["versions"] == {PRICE_BASIS_VERSION: 1}
+    assert summary["price_basis"]["base_versions"] == {"legacy_unversioned": 1}
+    assert summary["funnel_denominator"]["current_basis_labeled_opportunities"] == 1
+
+
+def test_noncurrent_revision_never_overlays_current_scorecard(tmp_path):
+    sf = _factory(tmp_path)
+    _seed_scorecard_label(
+        sf, snapshot_id="legacy-stale-revision", run_id="run-stale-revision",
+        symbol="600001", as_of=datetime(2026, 9, 16, 10, 5),
+        gross=-7.0, proxy=-7.1, price_basis_version="",
+        reason="legacy unversioned result",
+    )
+    with sf() as db:
+        base = db.execute(select(OpportunityOutcomeLabel)).scalar_one()
+        db.add(OpportunityOutcomeRevision(
+            base_outcome_id=base.id, snapshot_id=base.snapshot_id,
+            horizon=base.horizon, target_date=base.target_date,
+            revision_version="close-v0.old-basis.old-cost",
+            state="labeled", label="positive", reference_price=10.0,
+            outcome_price=11.0, return_pct=10.0, fill_state="ok",
+            net_return_pct=9.9, price_basis_version=PRICE_BASIS_VERSION,
+            price_basis_source="test", cost_model_version=COST_MODEL_VERSION,
+            reason="stale revision",
+        ))
+        db.commit()
+
+    card = opportunity_scorecard("2026-09-16", session_factory=sf)
+    assert card["sample"]["count"] == 0
+    assert card["audit"]["outcome_revisions_applied"] == 0
+    assert card["audit"]["price_basis_versions"] == {"legacy_unversioned": 1}
+    assert card["verdict"] == "incomplete_denominator"
+
+
+def test_revision_backfill_default_scope_never_relabels_cross_day_horizon(tmp_path):
+    sf = _factory(tmp_path)
+    _seed_scorecard_label(
+        sf, snapshot_id="legacy-d1-revision", run_id="run-legacy-d1-revision",
+        symbol="600001", as_of=datetime(2026, 9, 16, 10, 5),
+        horizon="d1_close", price_basis_version="",
+    )
+    got = backfill_outcome_revisions(
+        "2026-09-16", {"600001": 99.0},
+        _basis("2026-09-16", "600001"), sf,
+    )
+    assert got["inserted"] == 0
+    with sf() as db:
+        assert db.execute(select(OpportunityOutcomeRevision)).scalars().all() == []
+
+
+def test_revision_backfill_missing_basis_is_retryable_without_pending_row(tmp_path):
+    sf = _factory(tmp_path)
+    _seed_scorecard_label(
+        sf, snapshot_id="legacy-no-basis", run_id="run-legacy-no-basis",
+        symbol="600001", as_of=datetime(2026, 9, 16, 10, 5),
+        price_basis_version="",
+    )
+    got = backfill_outcome_revisions(
+        "2026-09-16", {"600001": 10.5}, {}, sf,
+    )
+    assert got["inserted"] == 0 and got["pending"] == 1
+    with sf() as db:
+        assert db.execute(select(OpportunityOutcomeRevision)).scalars().all() == []
+
+    retry = backfill_outcome_revisions(
+        "2026-09-16", {"600001": 10.5},
+        _basis("2026-09-16", "600001"), sf,
+    )
+    assert retry["inserted"] == 1 and retry["labeled"] == 1
 
 
 def test_scorecard_excludes_unproven_cost_model_rows_from_proxy(tmp_path):

@@ -1,8 +1,8 @@
-# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 公司行动/停牌价格基准
+# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 Append-only Outcome Revisions
 
 > 定位：当前运行模式、最新已合并证据、唯一在制纵切与安全边界；任务唯一状态仍以所属 stage 为准。
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 的 PR #69/#70/#71/#72 已闭环，账本收口 PR #73 也已合并（merge `4fbde4557bc5dbc0d9438343ed4640028be1fd3a`，post-merge CI run `35547214950` backend/frontend/docs 全绿）。当前仍在 **G3 / RSH-026**，已领取唯一纵切“公司行动/停牌价格基准”；施工分支 `chatgpt/rsh026-corporate-action-basis` 基于 `master@4fbde455`。本片只保证 D0/D1/D3/D5 收盘结果不把除权除息/拆并股的机械价格变化冒充策略收益，并让目标日缺 bar（停牌/数据缺口尚不可区分）fail-closed；不改策略阈值、生产权重、真实交易权限或 shadow fill 语义。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 的 PR #69/#70/#71/#72/#74 已闭环，PR #74 merge=`d8d5d35c418c518f3f67b00bf7a62faac4e34534`，post-merge CI run `35548844488`（#515）backend/frontend/docs 全绿，功能分支已删除。当前仍在 **G3 / RSH-026**，唯一在制纵切为 append-only close-outcome revision；施工分支 `chatgpt/rsh026-outcome-revisions` 基于 `master@d8d5d35c`。目标是让旧 `legacy_unversioned` terminal labeled 在不覆写 base outcome、不复制 path 证据的前提下追加当前 price-basis/cost-model revision，并让 scorecard/summary 读取 current effective view；不改策略阈值、生产权重、真实交易权限或 shadow fill 语义。
 
 
 ## 1. 固定入口与范围
@@ -91,7 +91,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **Degraded reason**：当前 Codex 额度不可用，正常双角色无法持续完成实施→独立审核→发布闭环；旧 exact-HEAD Review 门因此形成自锁。
 - **有效期**：持续到用户明确说 Codex 已恢复/退出降级；不是单 PR 临时口令。但每个 PR 的发布仍必须重新生成 exact-HEAD `DegradedRelease`，不能复用上一 PR 回执。
 - **不降低项**：G0–G5/GX 阶段门、U49 主动反证、branch protection、required CI、latest master、CHANGES_REQUESTED/thread、public-repo scan、workspace/doc-health、敏感信息/范围、post-merge CI、删除功能分支。
-- **当前动作**：U50、IMP-044 与 RSH-026/PR #69/#70/#71/#72、账本 PR #73 均已闭环；当前在 G3/RSH-026 执行公司行动/停牌价格基准纵切，分支 `chatgpt/rsh026-corporate-action-basis`。本轮只做该纵切；每个后续 PR 仍需新的 exact-HEAD `DegradedRelease`。
+- **当前动作**：U50、IMP-044 与 RSH-026/PR #69/#70/#71/#72/#74、账本 PR #73 均已闭环；当前在 G3/RSH-026 执行 append-only outcome revision 纵切，分支 `chatgpt/rsh026-outcome-revisions`。本轮只做该纵切；每个后续 PR 仍需新的 exact-HEAD `DegradedRelease`。
 
 ## 8.2 U49 主动审计回执（RSH-026 Preflight）
 
@@ -150,8 +150,22 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **P1-31 历史停牌与数据缺口不可同形**：仓库 `trading_status` 能判当前/最近状态，但不足以证明任意历史 horizon 缺 bar 的原因。当前只接受精确 `target_date` close；目标日无 bar 不借前后日期、不造 0，保持 pending 可重试。没有独立历史停复牌事件证据前不把“缺 bar”硬标成 suspended。
 - **迁移副本验证**：旧长期库一致性副本从 `d2e4a6b8c0f1` 直接升级到候选 head `c7f3e1a9b4d2`，`integrity_check=ok`，156,108 snapshot / 63 原 outcome 行数不变；63 条旧 outcome 的 `price_basis_version` 全为空，4 个新 basis 列齐全，证明迁移没有伪造历史版本。
 - **离线恢复口径**：legacy recovery 改用 marketdb 同日 `daily_k` raw 与 `daily_k_adj.close_adj` 成对计算 factor；缺任一腿即保持未标，不访问外部行情源。
-- **当前验证**：corporate-action、exact-date suspension、same-source、provider 参数、legacy exclusion、migration/provider/review/backfill 定向测试已通过；最终全量 backend / repo gates 与 exact-HEAD CI 仍是发布前门禁。
+- **当前验证**：corporate-action、exact-date suspension、same-source、provider 参数、legacy exclusion、migration/provider/review/backfill 定向测试已通过；最终 exact HEAD `925db24618c4443105d18bd522be5013dfc185d1` 本地 backend `4083 passed / 80 skipped`，PR #74 CI #514 全绿，`release_check` 通过；merge=`d8d5d35c418c518f3f67b00bf7a62faac4e34534`，post-merge CI #515 全绿，功能分支已删除。
 - **非目标**：本片不重写旧 labeled 历史、不把 pending 缺 bar 猜成停牌、不实现 actual shadow fill、不做跨日累计 MFE/MAE、不改选股/风控/仓位参数。
+
+## 8.5 U49 主动审计回执（RSH-026 Append-only Outcome Revisions）
+
+- **阶段/基点**：`Preflight + production-copy validation`；基于 `master@d8d5d35c418c518f3f67b00bf7a62faac4e34534`（PR #74 merge 后 CI #515 全绿）。
+- **P1-32 旧 terminal label 无法原位“升级”**：base 表唯一键为 `(snapshot_id,horizon)`；覆写会毁掉历史，硬塞第二条又违反唯一性。新增 `OpportunityOutcomeRevision`，以 `base_outcome_id + revision_version` 唯一，base outcome / snapshot / path 字段永久不改。
+- **P1-33 revision 覆盖误伤 path 风险**：current scorecard/summary 只在内存 effective view 覆盖 close-return 字段；MFE/MAE/limit/time-to-limit 仍从 base outcome 继承。回归测试锁定 revision 后 path evaluable/MFE/MAE 不丢。
+- **P1-34 dry-run/apply recovery surface 分叉**：初版 dry-run 能发现 legacy labeled，但 apply 只请求 pending symbols，会出现“预检看到、执行漏掉”。当前两段统一为 pending/deferred ∪ legacy revision candidates；真实副本因此成功追加 48 条 revision。
+- **P1-35 cost version 不能继续只藏在 reason 文本**：revision 新增结构化 `cost_model_version`，effective scorecard 优先读结构化字段，legacy base 才回退 reason 兼容；migration parity 覆盖该列。
+- **P1-36 跨日 revision 误用单日 close 风险**：`backfill_outcome_revisions` 默认只允许 D0；D1/D3/D5 必须显式传 horizons 与各自 target-date close map，离线 D0 工具不自动重算跨日结果。
+- **真实长期库最终副本**：从原库重新复制，`d2e4→f8c1→a6e2→c7f3→d9e4`，`integrity_check=ok`；156,108 snapshot / 63 原 base outcome 保留。apply 后 D0 identity=156,108/156,108，新增 revision=48，revision backlog=0。
+- **base 不变机械证据**：apply 前 48 条原 labeled 的 SHA-256=`cb6197bfbfc7255c0a95e66318399b3904b0417277b12d91c3d5af7516ab30c0`；apply 后按同一 48 个 base id 重算 SHA 完全一致。
+- **读侧恢复结果**：2026-09-16 v1/v1 scorecard 从 legacy exclusion 的 current sample=0 恢复到 28 个独立 selected symbol-day sample，应用 current revision=48；但全漏斗仍 `incomplete_denominator`，因此继续不产出策略效果结论。
+- **幂等**：第二次 apply 返回 `noop=true / backup=null`；缺 marketdb 的少量 pending 仍保留，不重复生成 revision。
+- **非目标**：不改旧 base labeled、不自动重算 D1/D3/D5、不复制 path 证据、不实现 actual shadow fill、不做跨日累计 MFE/MAE、不改策略/风控/仓位参数。
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
 

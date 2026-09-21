@@ -22,6 +22,7 @@ import json
 import math
 from collections import Counter
 from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, Iterable
 
 from sqlalchemy import and_, exists, func, or_, select
@@ -29,7 +30,11 @@ from sqlalchemy import and_, exists, func, or_, select
 from app.core.bjtime import beijing_now, to_beijing_naive
 from app.core.db import get_session_factory, utcnow
 from app.market import price_rules
-from app.models.opportunity_learning import OpportunityDecisionSnapshot, OpportunityOutcomeLabel
+from app.models.opportunity_learning import (
+    OpportunityDecisionSnapshot,
+    OpportunityOutcomeLabel,
+    OpportunityOutcomeRevision,
+)
 from app.paper.engine import calc_fee
 from app.picks.kb_routing import snapshot_citations
 from app.services.theme_service import parse_hhmmss
@@ -51,6 +56,7 @@ STAGES = ("candidate", "hard_gate", "rank", "notification")
 #: 成本口径版本。**变更费率假设或可成交判据时必须递增**——结果标签是 append-only 的，
 #: 没有版本号就无法区分「策略变好」与「口径变松」。
 COST_MODEL_VERSION = "cost-v1.notional-100k"
+OUTCOME_REVISION_VERSION = f"close-v1.{PRICE_BASIS_VERSION}.{COST_MODEL_VERSION}"
 
 #: IMP-006：页面/提醒/模拟执行共享的决策事实契约版本。只改结构语义时递增；
 #: 策略阈值变化仍由 STRATEGY_VERSION / FEATURE_VERSION 单独版本化。
@@ -1310,6 +1316,149 @@ def _label_outcome_rows(
     return {"labeled": labeled, "unknown": unknown, "pending": pending}
 
 
+_REVISION_CLOSE_FIELDS = (
+    "target_date", "state", "label", "reference_price", "outcome_price",
+    "return_pct", "fill_state", "cost_pct", "net_return_pct", "reason",
+    "source", "basis_reference_price", "reference_adjustment_factor",
+    "price_basis_version", "price_basis_source", "labeled_at",
+)
+
+
+def _effective_outcome(base: OpportunityOutcomeLabel, revision: OpportunityOutcomeRevision | None):
+    """Read-only base outcome with current close revision overlaid; path evidence stays base-owned."""
+    if revision is None:
+        return base
+    values = {column.name: getattr(base, column.name) for column in OpportunityOutcomeLabel.__table__.columns}
+    for field in _REVISION_CLOSE_FIELDS:
+        values[field] = getattr(revision, field)
+    values["cost_model_version"] = revision.cost_model_version
+    values["effective_revision_version"] = revision.revision_version
+    return SimpleNamespace(**values)
+
+
+def _effective_outcome_pairs(db, trade_date: str):
+    """Return effective close rows plus immutable base rows and applied current revisions."""
+    base_pairs = db.execute(
+        select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
+        .join(
+            OpportunityDecisionSnapshot,
+            OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id,
+        )
+        .where(OpportunityDecisionSnapshot.trade_date == trade_date)
+    ).all()
+    revisions = db.execute(
+        select(OpportunityOutcomeRevision)
+        .join(
+            OpportunityOutcomeLabel,
+            OpportunityOutcomeLabel.id == OpportunityOutcomeRevision.base_outcome_id,
+        )
+        .join(
+            OpportunityDecisionSnapshot,
+            OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id,
+        )
+        .where(
+            OpportunityDecisionSnapshot.trade_date == trade_date,
+            OpportunityOutcomeRevision.revision_version == OUTCOME_REVISION_VERSION,
+        )
+    ).scalars().all()
+    by_base = {revision.base_outcome_id: revision for revision in revisions}
+    effective = [
+        (_effective_outcome(base, by_base.get(base.id)), snapshot)
+        for base, snapshot in base_pairs
+    ]
+    return effective, base_pairs, revisions
+
+
+def backfill_outcome_revisions(
+    trade_date: str,
+    close_by_symbol: dict[str, float],
+    price_basis_by_key: dict[tuple[str, str], tuple[float, str]],
+    session_factory=None, *,
+    horizons: Iterable[str] = (OUTCOME_HORIZON,),
+    batch_size: int = 2000,
+) -> dict:
+    """Append current D0 close revisions without mutating base rows.
+
+    Cross-day horizons intentionally require an explicit ``horizons`` override and
+    a target-date-specific close map; callers must never reuse one day's closes
+    across D1/D3/D5.
+    """
+    if batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
+    sf = session_factory or get_session_factory()
+    wanted = tuple(horizons)
+    inserted = labeled = unknown = pending = 0
+    last_id = 0
+    while True:
+        with sf() as db:
+            already = exists(
+                select(1).where(
+                    OpportunityOutcomeRevision.base_outcome_id == OpportunityOutcomeLabel.id,
+                    OpportunityOutcomeRevision.revision_version == OUTCOME_REVISION_VERSION,
+                )
+            )
+            rows = db.execute(
+                select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
+                .join(
+                    OpportunityDecisionSnapshot,
+                    OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id,
+                )
+                .where(
+                    OpportunityOutcomeLabel.id > last_id,
+                    OpportunityDecisionSnapshot.trade_date == trade_date,
+                    OpportunityOutcomeLabel.horizon.in_(wanted),
+                    OpportunityOutcomeLabel.state == "labeled",
+                    or_(
+                        OpportunityOutcomeLabel.price_basis_version != PRICE_BASIS_VERSION,
+                        and_(
+                            OpportunityOutcomeLabel.fill_state == "ok",
+                            ~OpportunityOutcomeLabel.reason.contains(COST_MODEL_VERSION),
+                        ),
+                    ),
+                    ~already,
+                )
+                .order_by(OpportunityOutcomeLabel.id)
+                .limit(batch_size)
+            ).all()
+            if not rows:
+                break
+            last_id = rows[-1][0].id
+            for base, snapshot in rows:
+                revision = OpportunityOutcomeRevision(
+                    base_outcome_id=base.id,
+                    snapshot_id=base.snapshot_id,
+                    horizon=base.horizon,
+                    target_date=base.target_date,
+                    revision_version=OUTCOME_REVISION_VERSION,
+                    state="pending",
+                    label="unknown",
+                    reference_price=base.reference_price,
+                    fill_state="unknown",
+                    reason="",
+                    source="daily_close",
+                )
+                counts = _label_outcome_rows(
+                    [(revision, snapshot)], close_by_symbol, price_basis_by_key
+                )
+                if revision.state == "pending":
+                    pending += counts["pending"]
+                    continue
+                revision.cost_model_version = COST_MODEL_VERSION
+                db.add(revision)
+                inserted += 1
+                labeled += counts["labeled"]
+                unknown += counts["unknown"]
+            db.commit()
+    return {
+        "trade_date": trade_date,
+        "revision_version": OUTCOME_REVISION_VERSION,
+        "inserted": inserted,
+        "labeled": labeled,
+        "unknown": unknown,
+        "pending": pending,
+    }
+
+
 def label_due_outcomes(
     target_date: str, close_by_symbol: dict[str, float], session_factory=None, *,
     price_basis_by_key: dict[tuple[str, str], tuple[float, str]],
@@ -1403,12 +1552,7 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
                 OpportunityDecisionSnapshot.trade_date == trade_date
             )
         ).scalars().all()
-        all_outcomes = db.execute(
-            select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
-            .join(OpportunityDecisionSnapshot,
-                  OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id)
-            .where(OpportunityDecisionSnapshot.trade_date == trade_date)
-        ).all()
+        all_outcomes, base_outcomes, applied_revisions = _effective_outcome_pairs(db, trade_date)
     outcomes = [pair for pair in all_outcomes if pair[0].horizon == OUTCOME_HORIZON]
     stage_counts = Counter(s.stage for s in snapshots)
     decision_counts = Counter(f"{s.stage}:{s.decision}" for s in snapshots)
@@ -1509,7 +1653,14 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
         "cost_model": COST_MODEL_VERSION,
         "price_basis": {
             "current_version": PRICE_BASIS_VERSION,
+            "revision_version": OUTCOME_REVISION_VERSION,
+            "revisions_applied": len(applied_revisions),
             "versions": dict(sorted(price_basis_counts.items())),
+            "base_versions": dict(sorted(Counter(
+                base.price_basis_version or "legacy_unversioned"
+                for base, _snapshot in base_outcomes
+                if base.horizon == OUTCOME_HORIZON
+            ).items())),
             "current_basis_labeled_opportunities": len(current_basis_labeled_opportunities),
             "current_basis_opportunity_coverage": (
                 round(len(current_basis_labeled_opportunities) / len(funnel_opportunities), 4)
@@ -1602,14 +1753,7 @@ def opportunity_scorecard(
                 OpportunityDecisionSnapshot.trade_date == trade_date
             )
         ).scalars().all()
-        all_rows = db.execute(
-            select(OpportunityOutcomeLabel, OpportunityDecisionSnapshot)
-            .join(
-                OpportunityDecisionSnapshot,
-                OpportunityDecisionSnapshot.snapshot_id == OpportunityOutcomeLabel.snapshot_id,
-            )
-            .where(OpportunityDecisionSnapshot.trade_date == trade_date)
-        ).all()
+        all_rows, base_rows, applied_revisions = _effective_outcome_pairs(db, trade_date)
     funnel_snapshots = [
         snapshot for snapshot in all_snapshots
         if snapshot.strategy_version == strategy_version
@@ -1646,7 +1790,11 @@ def opportunity_scorecard(
         # The schema predates a dedicated row-level cost-version column.  New labels
         # persist the version token in ``reason``; rows that cannot prove the current
         # version are excluded rather than silently reinterpreted under today's fees.
-        if COST_MODEL_VERSION not in (outcome.reason or ""):
+        structured_cost_version = getattr(outcome, "cost_model_version", "")
+        if structured_cost_version:
+            if structured_cost_version != COST_MODEL_VERSION:
+                return None
+        elif COST_MODEL_VERSION not in (outcome.reason or ""):
             return None
         return float(outcome.net_return_pct)
 
@@ -1871,6 +2019,17 @@ def opportunity_scorecard(
             "repeated_labeled_rows": max(0, len(valid_signal_rows) - len(samples)),
             "invalid_metric_rows": invalid_metric_rows,
             "price_basis_versions": dict(sorted(price_basis_counts.items())),
+            "base_price_basis_versions": dict(sorted(Counter(
+                base.price_basis_version or "legacy_unversioned"
+                for base, snapshot in base_rows
+                if base.horizon == horizon
+                and snapshot.strategy_version == strategy_version
+                and snapshot.feature_version == feature_version
+            ).items())),
+            "outcome_revision_version": OUTCOME_REVISION_VERSION,
+            "outcome_revisions_applied": len([
+                revision for revision in applied_revisions if revision.horizon == horizon
+            ]),
             "price_basis_excluded_labeled_rows": price_basis_excluded_rows,
             "cost_version_excluded_samples": cost_version_excluded,
         },

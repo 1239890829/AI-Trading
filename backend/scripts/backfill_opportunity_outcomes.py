@@ -33,14 +33,23 @@ from sqlalchemy.orm import sessionmaker  # noqa: E402
 from app.core.bjtime import BJ_TZ  # noqa: E402
 from app.data_providers.ths import to_thscode  # noqa: E402
 from app.picks.opportunity_learning import (  # noqa: E402
+    COST_MODEL_VERSION,
+    OUTCOME_HORIZON,
+    OUTCOME_REVISION_VERSION,
+    PRICE_BASIS_VERSION,
     backfill_missing_outcome_identities,
+    backfill_outcome_revisions,
     label_trade_date,
-    pending_symbols,
 )
 
 REQUIRED_OUTCOME_COLUMNS = {
     "snapshot_id", "horizon", "state", "fill_state", "path_state", "path_version",
     "basis_reference_price", "reference_adjustment_factor", "price_basis_version", "price_basis_source",
+}
+REQUIRED_REVISION_COLUMNS = {
+    "base_outcome_id", "snapshot_id", "horizon", "target_date",
+    "revision_version", "state", "fill_state", "price_basis_version",
+    "cost_model_version",
 }
 SELECTED_SQL = """(
     (s.stage = 'rank' AND s.decision = 'ranked') OR
@@ -107,6 +116,13 @@ def _status(path: Path, dates: Iterable[str] = ()) -> dict:
             {"trade_date": d, "snapshots": n, "outcomes": o, "missing": n - o}
             for d, n, o in con.execute(by_date_sql, by_params)
         ]
+        has_revision = con.execute(
+            "select 1 from sqlite_master where type='table' and name='opportunity_outcome_revision'"
+        ).fetchone() is not None
+        revision_rows = (
+            int(con.execute("select count(*) from opportunity_outcome_revision").fetchone()[0])
+            if has_revision else 0
+        )
     return {
         "alembic_revision": rev[0] if rev else None,
         "snapshot_rows": snapshots,
@@ -114,6 +130,8 @@ def _status(path: Path, dates: Iterable[str] = ()) -> dict:
         "missing_d0_outcomes": missing,
         "selected_missing_d0_outcomes": selected_missing,
         "legacy_pending_fill_ok": pending_fill_ok,
+        "outcome_revision_rows": revision_rows,
+        "legacy_labeled_needing_revision": _revision_candidate_count_ro(path, wanted),
         "by_date": by_date,
     }
 
@@ -140,13 +158,108 @@ def _pending_symbols_ro(path: Path, trade_date: str) -> set[str]:
     return {str(row[0]) for row in rows if row and row[0]}
 
 
+def _revision_candidates_ro(path: Path, trade_date: str) -> set[str]:
+    """Legacy labeled D0 symbols that still need the current append-only revision."""
+    with _ro(path) as con:
+        outcome_cols = {row[1] for row in con.execute("pragma table_info(opportunity_outcome_label)")}
+        has_basis = "price_basis_version" in outcome_cols
+        has_cost_evidence = {"fill_state", "reason"} <= outcome_cols
+        has_revision = con.execute(
+            "select 1 from sqlite_master where type='table' and name='opportunity_outcome_revision'"
+        ).fetchone() is not None
+        if has_basis and has_cost_evidence:
+            where_basis = (
+                " and (o.price_basis_version != ? or "
+                "(o.fill_state='ok' and instr(o.reason, ?) = 0))"
+            )
+        elif has_basis:
+            where_basis = " and o.price_basis_version != ?"
+        else:
+            where_basis = ""
+        params: list[str] = [trade_date]
+        if has_basis:
+            params.append(PRICE_BASIS_VERSION)
+            if has_cost_evidence:
+                params.append(COST_MODEL_VERSION)
+        where_revision = ""
+        if has_revision:
+            where_revision = (
+                " and not exists (select 1 from opportunity_outcome_revision r "
+                "where r.base_outcome_id=o.id and r.revision_version=?)"
+            )
+            params.append(OUTCOME_REVISION_VERSION)
+        rows = con.execute(
+            "select distinct s.symbol "
+            "from opportunity_outcome_label o join opportunity_decision_snapshot s "
+            "on s.snapshot_id=o.snapshot_id "
+            "where s.trade_date=? and o.horizon='d0_close' and o.state='labeled'"
+            + where_basis + where_revision,
+            params,
+        ).fetchall()
+    return {str(row[0]) for row in rows if row and row[0]}
+
+
+def _recovery_symbols_ro(path: Path, trade_date: str) -> set[str]:
+    return _pending_symbols_ro(path, trade_date) | _revision_candidates_ro(path, trade_date)
+
+
+def _revision_candidate_count_ro(path: Path, dates: Iterable[str] = ()) -> int:
+    wanted = tuple(sorted(set(dates)))
+    with _ro(path) as con:
+        outcome_cols = {row[1] for row in con.execute("pragma table_info(opportunity_outcome_label)")}
+        has_basis = "price_basis_version" in outcome_cols
+        has_cost_evidence = {"fill_state", "reason"} <= outcome_cols
+        has_revision = con.execute(
+            "select 1 from sqlite_master where type='table' and name='opportunity_outcome_revision'"
+        ).fetchone() is not None
+        sql = (
+            "select count(*) from opportunity_outcome_label o "
+            "join opportunity_decision_snapshot s on s.snapshot_id=o.snapshot_id "
+            "where o.horizon='d0_close' and o.state='labeled'"
+        )
+        params: list[str] = []
+        if has_basis and has_cost_evidence:
+            sql += (
+                " and (o.price_basis_version != ? or "
+                "(o.fill_state='ok' and instr(o.reason, ?) = 0))"
+            )
+            params.extend([PRICE_BASIS_VERSION, COST_MODEL_VERSION])
+        elif has_basis:
+            sql += " and o.price_basis_version != ?"
+            params.append(PRICE_BASIS_VERSION)
+        if has_revision:
+            sql += (
+                " and not exists (select 1 from opportunity_outcome_revision r "
+                "where r.base_outcome_id=o.id and r.revision_version=?)"
+            )
+            params.append(OUTCOME_REVISION_VERSION)
+        if wanted:
+            sql += " and s.trade_date in (%s)" % ",".join("?" for _ in wanted)
+            params.extend(wanted)
+        return int(con.execute(sql, params).fetchone()[0])
+
+
 def _assert_schema_ready(path: Path) -> None:
     with _ro(path) as con:
         cols = {row[1] for row in con.execute("pragma table_info(opportunity_outcome_label)")}
+        has_revision = con.execute(
+            "select 1 from sqlite_master where type='table' and name='opportunity_outcome_revision'"
+        ).fetchone() is not None
+        revision_cols = (
+            {row[1] for row in con.execute("pragma table_info(opportunity_outcome_revision)")}
+            if has_revision else set()
+        )
     missing = sorted(REQUIRED_OUTCOME_COLUMNS - cols)
-    if missing:
+    missing_revision = sorted(REQUIRED_REVISION_COLUMNS - revision_cols)
+    if missing or not has_revision or missing_revision:
+        if missing:
+            detail = "缺列=" + ",".join(missing)
+        elif not has_revision:
+            detail = "缺表=opportunity_outcome_revision"
+        else:
+            detail = "revision缺列=" + ",".join(missing_revision)
         raise SystemExit(
-            "数据库 schema 尚未升级到当前 RSH-026 代码；缺列=" + ",".join(missing) +
+            "数据库 schema 尚未升级到当前 RSH-026 代码；" + detail +
             "。先对该数据库执行 alembic upgrade head，再运行恢复。"
         )
 
@@ -240,7 +353,7 @@ def main() -> int:
     marketdb_preflight = []
     if marketdb is not None:
         for d in dates:
-            symbols = _pending_symbols_ro(db, d)
+            symbols = _recovery_symbols_ro(db, d)
             _closes, _basis, coverage = _marketdb_basis(marketdb, d, symbols)
             marketdb_preflight.append(coverage)
     print(json.dumps({
@@ -269,13 +382,21 @@ def main() -> int:
         close_results = []
         if marketdb is not None:
             for d in dates:
-                symbols = pending_symbols(d, sf, include_deferred=True)
+                # Use the same recovery surface as dry-run: pending/deferred base
+                # outcomes plus legacy terminal labels still missing current revisions.
+                symbols = _recovery_symbols_ro(db, d)
                 closes, basis, coverage = _marketdb_basis(marketdb, d, symbols)
                 labeled = label_trade_date(
                     d, closes, sf, price_basis_by_key=basis,
                     include_deferred=True, batch_size=args.batch_size
                 )
-                close_results.append({**coverage, "label_result": labeled})
+                revised = backfill_outcome_revisions(
+                    d, closes, basis, sf, horizons=(OUTCOME_HORIZON,),
+                    batch_size=args.batch_size,
+                )
+                close_results.append({
+                    **coverage, "label_result": labeled, "revision_result": revised
+                })
         after = _status(db, args.date)
     finally:
         engine.dispose()
