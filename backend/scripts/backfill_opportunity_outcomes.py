@@ -40,6 +40,7 @@ from app.picks.opportunity_learning import (  # noqa: E402
 
 REQUIRED_OUTCOME_COLUMNS = {
     "snapshot_id", "horizon", "state", "fill_state", "path_state", "path_version",
+    "basis_reference_price", "reference_adjustment_factor", "price_basis_version", "price_basis_source",
 }
 SELECTED_SQL = """(
     (s.stage = 'rank' AND s.decision = 'ranked') OR
@@ -168,37 +169,40 @@ def _session_factory(path: Path):
     return sessionmaker(bind=engine, expire_on_commit=False), engine
 
 
-def _marketdb_closes(path: Path, trade_date: str, symbols: set[str]) -> tuple[dict[str, float], dict]:
+def _marketdb_basis(path: Path, trade_date: str, symbols: set[str]) -> tuple[dict[str, float], dict[tuple[str, str], tuple[float, str]], dict]:
     import duckdb
-
     d = date.fromisoformat(trade_date)
     target_ms = int(datetime.combine(d, time.min, tzinfo=BJ_TZ).timestamp() * 1000)
     con = duckdb.connect(str(path), read_only=True)
     try:
-        rows = con.execute(
-            "select thscode, close_price from daily_k where date_ms=?", [target_ms]
-        ).fetchall()
+        rows = con.execute("""
+            select k.thscode, k.close_price, a.close_adj
+            from daily_k k left join daily_k_adj a
+              on a.thscode=k.thscode and a.date_ms=k.date_ms
+            where k.date_ms=?
+        """, [target_ms]).fetchall()
     finally:
         con.close()
     requested = {to_thscode(symbol): symbol for symbol in symbols}
     closes: dict[str, float] = {}
-    for thscode, close in rows:
+    basis: dict[tuple[str, str], tuple[float, str]] = {}
+    for thscode, raw_close, qfq_close in rows:
         symbol = requested.get(str(thscode or ""))
-        if symbol is None or close is None:
+        if symbol is None or raw_close is None or qfq_close is None:
             continue
-        value = float(close)
-        if math.isfinite(value) and value > 0:
-            closes[symbol] = value
+        raw_value, qfq_value = float(raw_close), float(qfq_close)
+        factor = qfq_value / raw_value if raw_value > 0 else 0.0
+        if math.isfinite(raw_value) and raw_value > 0 and math.isfinite(qfq_value) and qfq_value > 0 and math.isfinite(factor) and factor > 0:
+            closes[symbol] = qfq_value
+            basis[(trade_date, symbol)] = (factor, "qfq:marketdb.daily_k_adj|raw:marketdb.daily_k")
     missing = sorted(symbols - set(closes))
-    return closes, {
-        "trade_date": trade_date,
-        "requested_symbols": len(symbols),
+    return closes, basis, {
+        "trade_date": trade_date, "requested_symbols": len(symbols),
         "marketdb_closes": len(closes),
         "coverage": round(len(closes) / len(symbols), 4) if symbols else None,
-        "missing_symbols": missing[:20],
-        "missing_count": len(missing),
+        "missing_symbols": missing[:20], "missing_count": len(missing),
+        "price_basis": "qfq-ref-v1.raw-anchor",
     }
-
 
 
 
@@ -237,7 +241,7 @@ def main() -> int:
     if marketdb is not None:
         for d in dates:
             symbols = _pending_symbols_ro(db, d)
-            _closes, coverage = _marketdb_closes(marketdb, d, symbols)
+            _closes, _basis, coverage = _marketdb_basis(marketdb, d, symbols)
             marketdb_preflight.append(coverage)
     print(json.dumps({
         "mode": "apply" if args.apply else "dry_run",
@@ -266,9 +270,10 @@ def main() -> int:
         if marketdb is not None:
             for d in dates:
                 symbols = pending_symbols(d, sf, include_deferred=True)
-                closes, coverage = _marketdb_closes(marketdb, d, symbols)
+                closes, basis, coverage = _marketdb_basis(marketdb, d, symbols)
                 labeled = label_trade_date(
-                    d, closes, sf, include_deferred=True, batch_size=args.batch_size
+                    d, closes, sf, price_basis_by_key=basis,
+                    include_deferred=True, batch_size=args.batch_size
                 )
                 close_results.append({**coverage, "label_result": labeled})
         after = _status(db, args.date)

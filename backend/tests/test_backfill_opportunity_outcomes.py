@@ -5,9 +5,10 @@ import sqlite3
 from datetime import datetime
 
 import duckdb
+import pytest
 
 from app.core.bjtime import BJ_TZ
-from scripts.backfill_opportunity_outcomes import _has_planned_writes, _marketdb_closes, _pending_symbols_ro
+from scripts.backfill_opportunity_outcomes import _has_planned_writes, _marketdb_basis, _pending_symbols_ro
 
 
 def _ms(day: str) -> int:
@@ -36,10 +37,26 @@ def test_marketdb_recovery_is_exact_date_and_market_suffix_agnostic(tmp_path):
     finally:
         con.close()
 
-    closes, meta = _marketdb_closes(
+    con = duckdb.connect(str(path))
+    try:
+        con.execute("create table daily_k_adj(thscode varchar, date_ms bigint, close_adj double)")
+        con.executemany(
+            "insert into daily_k_adj values (?, ?, ?)",
+            [
+                ("600001.SH", _ms("2026-09-16"), 10.0),
+                ("920001.BJ", _ms("2026-09-16"), 20.0),
+                ("600001.SH", _ms("2026-09-17"), 99.5),
+            ],
+        )
+    finally:
+        con.close()
+
+    closes, basis, meta = _marketdb_basis(
         path, "2026-09-16", {"600001", "920001", "000001"}
     )
-    assert closes == {"600001": 10.5, "920001": 20.5}
+    assert closes == {"600001": 10.0, "920001": 20.0}
+    assert basis[("2026-09-16", "600001")][0] == pytest.approx(10.0 / 10.5)
+    assert basis[("2026-09-16", "920001")][0] == pytest.approx(20.0 / 20.5)
     assert meta["requested_symbols"] == 3
     assert meta["marketdb_closes"] == 2
     assert meta["coverage"] == 0.6667
@@ -83,6 +100,7 @@ def test_marketdb_recovery_rejects_nonpositive_or_nonfinite_close(tmp_path):
     con = duckdb.connect(str(path))
     try:
         con.execute("create table daily_k(thscode varchar, date_ms bigint, close_price double)")
+        con.execute("create table daily_k_adj(thscode varchar, date_ms bigint, close_adj double)")
         con.executemany(
             "insert into daily_k values (?, ?, ?)",
             [
@@ -91,13 +109,22 @@ def test_marketdb_recovery_rejects_nonpositive_or_nonfinite_close(tmp_path):
                 ("600003.SH", _ms("2026-09-16"), 8.8),
             ],
         )
+        con.executemany(
+            "insert into daily_k_adj values (?, ?, ?)",
+            [
+                ("600001.SH", _ms("2026-09-16"), 1.0),
+                ("600002.SH", _ms("2026-09-16"), 2.0),
+                ("600003.SH", _ms("2026-09-16"), 8.0),
+            ],
+        )
     finally:
         con.close()
 
-    closes, meta = _marketdb_closes(
+    closes, basis, meta = _marketdb_basis(
         path, "2026-09-16", {"600001", "600002", "600003"}
     )
-    assert closes == {"600003": 8.8}
+    assert closes == {"600003": 8.0}
+    assert basis[("2026-09-16", "600003")][0] == pytest.approx(8.0 / 8.8)
     assert meta["missing_count"] == 2
 
 

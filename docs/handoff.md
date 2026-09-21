@@ -1,8 +1,8 @@
-# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 下一候选：公司行动/停牌版本化
+# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 公司行动/停牌价格基准
 
 > 定位：当前运行模式、最新已合并证据、唯一在制纵切与安全边界；任务唯一状态仍以所属 stage 为准。
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 已连续闭环四个子片：PR #69（全漏斗 outcome/denominator）、PR #70（D1/D3/D5 交易日 horizon）、PR #71（D0 决策后 MFE/MAE + ever-hit-limit/time_to_limit）与 PR #72（历史 D0 全漏斗恢复；merge `726fdeb0242cd4a42ffdc5599c8c4fc006972331`，post-merge CI run `35546496882` backend/frontend/docs 全绿）；对应功能分支均已删除，远端仅保留 `master`。当前仍在 **G3 / RSH-026**，下一唯一候选为“公司行动/停牌版本化”正确性纵切：先确保 D0/D1/D3/D5 与路径标签不会跨除权除息、拆并股、停牌/复牌等状态把价格机械变化误当策略收益。本 handoff 收口不启动该业务实现，也不改变策略阈值、权重或真实交易边界。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 的 PR #69/#70/#71/#72 已闭环，账本收口 PR #73 也已合并（merge `4fbde4557bc5dbc0d9438343ed4640028be1fd3a`，post-merge CI run `35547214950` backend/frontend/docs 全绿）。当前仍在 **G3 / RSH-026**，已领取唯一纵切“公司行动/停牌价格基准”；施工分支 `chatgpt/rsh026-corporate-action-basis` 基于 `master@4fbde455`。本片只保证 D0/D1/D3/D5 收盘结果不把除权除息/拆并股的机械价格变化冒充策略收益，并让目标日缺 bar（停牌/数据缺口尚不可区分）fail-closed；不改策略阈值、生产权重、真实交易权限或 shadow fill 语义。
 
 
 ## 1. 固定入口与范围
@@ -91,7 +91,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **Degraded reason**：当前 Codex 额度不可用，正常双角色无法持续完成实施→独立审核→发布闭环；旧 exact-HEAD Review 门因此形成自锁。
 - **有效期**：持续到用户明确说 Codex 已恢复/退出降级；不是单 PR 临时口令。但每个 PR 的发布仍必须重新生成 exact-HEAD `DegradedRelease`，不能复用上一 PR 回执。
 - **不降低项**：G0–G5/GX 阶段门、U49 主动反证、branch protection、required CI、latest master、CHANGES_REQUESTED/thread、public-repo scan、workspace/doc-health、敏感信息/范围、post-merge CI、删除功能分支。
-- **当前动作**：U50、IMP-044 与 RSH-026/PR #69/#70/#71/#72 均已闭环；#72 merge=`726fdeb0`、post-merge CI #511 全绿且功能分支已清理。当前仍在 G3/RSH-026；下一唯一候选是公司行动/停牌版本化正确性纵切，本 docs-only 收口不开始该实现。每个后续 PR 仍需新的 exact-HEAD `DegradedRelease`。
+- **当前动作**：U50、IMP-044 与 RSH-026/PR #69/#70/#71/#72、账本 PR #73 均已闭环；当前在 G3/RSH-026 执行公司行动/停牌价格基准纵切，分支 `chatgpt/rsh026-corporate-action-basis`。本轮只做该纵切；每个后续 PR 仍需新的 exact-HEAD `DegradedRelease`。
 
 ## 8.2 U49 主动审计回执（RSH-026 Preflight）
 
@@ -140,6 +140,18 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **P1-24 版本空分母语义**：这 156,108 条历史全为 `stock-opportunity-funnel-v1 / pit-evidence-v1`；默认 current-v2 scorecard 对它们应是“没有匹配版本样本”，不能把 `complete=false` 配成普通 `insufficient_sample`。scorecard 新增 `funnel_denominator.state=empty|incomplete|complete`，空版本返回 `no_matching_denominator`；按真实 v1/v1 重算，9/08、9/16、9/17、9/18 的 opportunity label coverage 分别为 50.00% / 95.20% / 98.44% / 95.06%，四日均保持 `incomplete_denominator`，没有把历史补数冒充成策略效果结论。
 - **运行边界**：真实运行库仍保持原样；其运行代码也落后当前 master，不能只迁 DB/灌新 denominator 而让旧消费者继续运行。实际部署恢复必须在应用/调度停止、代码与 schema 同步后执行，并保留工具生成的备份。
 - **发布结论**：PR #72 已以 exact HEAD `49d94e9c34675f3f47a019f0d8b9533b0830688f` 通过 `DegradedRelease` 与 `release_check.py`，merge=`726fdeb0242cd4a42ffdc5599c8c4fc006972331`；post-merge CI run `35546496882` 的 backend/frontend/docs 全部 `success`，功能分支已删除。
+
+## 8.4 U49 主动审计回执（RSH-026 Corporate-action / Suspension Basis）
+
+- **阶段/基点**：`Preflight + candidate implementation`；基于 `master@4fbde4557bc5dbc0d9438343ed4640028be1fd3a`（PR #73 已合并，post-merge CI #513 全绿）。
+- **P1-28 raw/qfq 尺度串线**：旧 outcome 用盘中 raw reference 直接除 qfq 日收；遇除权除息会把机械价格跳变写成收益。当前新增 `PRICE_BASIS_VERSION=qfq-ref-v1.raw-anchor`：以决策日 `qfq_close/raw_close` 把 raw reference 映射到 qfq 基准，再与目标日 qfq close 比较；原始 `reference_price` 永久保留。真实 marketdb 的 603444 在 2026-09-16 raw=373.49/qfq=363.49、09-17 qfq=352.06；新口径约 -3.14%，不会使用 raw→qfq 的错误跌幅。
+- **P1-29 跨源伪复权因子**：qfq 与 raw 若来自不同 vendor，微小口径差会被比值放大成“复权因子”。生产 EOD 对 outcome symbol 的两条腿都走同一 Composite 入口，并要求 bar `source` 完全一致；failover 后来源不一致则不生成 basis、标签保持 pending。THS `adjust=forward/none` 与东财 `fqt=1/0` 分开有参数级回归。
+- **P1-30 旧标签版本混算/覆写风险**：迁移前 labeled 行没有 price-basis 版本，不能把它们按新公式静默解释；同时 `(snapshot_id,horizon)` 唯一约束不允许在同表追加第二版。scorecard/current denominator 只统计当前 `PRICE_BASIS_VERSION`，旧 `legacy_unversioned` 仅保留审计。若后续确需把旧历史重算纳入当前指标，必须另建 append-only outcome revision 子表，禁止覆写旧 labeled 数值。
+- **P1-31 历史停牌与数据缺口不可同形**：仓库 `trading_status` 能判当前/最近状态，但不足以证明任意历史 horizon 缺 bar 的原因。当前只接受精确 `target_date` close；目标日无 bar 不借前后日期、不造 0，保持 pending 可重试。没有独立历史停复牌事件证据前不把“缺 bar”硬标成 suspended。
+- **迁移副本验证**：旧长期库一致性副本从 `d2e4a6b8c0f1` 直接升级到候选 head `c7f3e1a9b4d2`，`integrity_check=ok`，156,108 snapshot / 63 原 outcome 行数不变；63 条旧 outcome 的 `price_basis_version` 全为空，4 个新 basis 列齐全，证明迁移没有伪造历史版本。
+- **离线恢复口径**：legacy recovery 改用 marketdb 同日 `daily_k` raw 与 `daily_k_adj.close_adj` 成对计算 factor；缺任一腿即保持未标，不访问外部行情源。
+- **当前验证**：corporate-action、exact-date suspension、same-source、provider 参数、legacy exclusion、migration/provider/review/backfill 定向测试已通过；最终全量 backend / repo gates 与 exact-HEAD CI 仍是发布前门禁。
+- **非目标**：本片不重写旧 labeled 历史、不把 pending 缺 bar 猜成停牌、不实现 actual shadow fill、不做跨日累计 MFE/MAE、不改选股/风控/仓位参数。
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
 
