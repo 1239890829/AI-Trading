@@ -108,6 +108,8 @@ _DECLARED: dict[str, tuple[bool, str]] = {
     "research/verify_registry.py:VERIFY_DIR": (False, "由核验 CLI 写，测试传 tmp 出参"),
     "research/strategy_experiments.py:EXPERIMENT_DIR": (
         False, "仅离线研究 producer 显式写；测试传 tmp root，真实验收也重定向 /tmp"),
+    "research/strategy_readiness.py:READINESS_DIR": (
+        False, "仅离线 readiness evidence 显式写；测试传 tmp root，不接生产 mutation"),
     "sentiment/metric_history.py:_STORE_PATH": (False, "由调度写；用例注入内存/tmp"),
     "services/replay_gate.py:BASELINE_PATH": (False, "只读基线（写入走 CLI 出参）"),
 }

@@ -176,7 +176,7 @@
 
 ## 5. 维护规则
 
-1. **新策略入册的前置**：先有可计算规则 → 五道检验 → purged/embargoed OOS + v3 protocol → 才可登记为当前研究准入候选；协议缺口只能观察。线上接入还需 [[KB-DEC-019]]、actual shadow fill 净收益、Champion/Challenger 与人工晋级，reference proxy 不得直接转生产；训练选择出的 challenger 也不得覆盖登记册 incumbent strategy key。
+1. **新策略入册的前置**：先有可计算规则 → 五道检验 → purged/embargoed OOS + v4 evidence-backed protocol → 同版消融/Champion-Challenger/experiment → IMP-053 actual `shadow_fill_net` → `strategy_readiness`；协议或执行证据缺口一律 blocked。`ready_for_human_review` 也不是批准，仍需人工晋级；reference proxy 不得直接转生产，训练选择出的 challenger 不得覆盖登记册 incumbent strategy key。
 2. **登记册与代码同步**：`picks/strategy_registry.py` 的策略键与本文 §1 总表由**测试守卫**（键集合一致），改一处必须改另一处。
 3. **状态变更必须留痕**：任何 🟢→🟡 / 🟡→⛔ 的变更，须在 §3 处置台账追加一行（含证据链 + 样本边界）。
 4. **累计失效自动待评估**：监控状态连续 `drift` 达阈值 → 自动生成待评估项（走既有改进项通道），**不自动退役**（退役是人工决策）。

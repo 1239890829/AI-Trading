@@ -13,7 +13,7 @@ from typing import Any
 
 from app.research import strategy_verify as sv
 
-EXPERIMENT_VERSION = 1
+EXPERIMENT_VERSION = 2
 EXPERIMENT_DIR = Path(__file__).resolve().parents[2] / "data" / "research" / "experiments"
 
 
@@ -63,6 +63,10 @@ def build_research_experiment(
             "label": comparison["challenger"]["label"],
             "condition": comparison["challenger"]["condition"],
         },
+        # Bind the actual result evidence, not only the comparison basis/labels.
+        # Any result change must become a new experiment identity/versioned artifact.
+        "ablation_digest": ablation["evidence_digest"],
+        "comparison_digest": comparison["evidence_digest"],
     }
     experiment_id = _digest({"version": EXPERIMENT_VERSION, "identity": identity})
     payload = {
@@ -79,11 +83,27 @@ def build_research_experiment(
     return {**payload, "evidence_digest": _digest(payload)}
 
 
+def validate_experiment(evidence: dict) -> dict:
+    """Mechanically rebuild the whole envelope; a resealed altered conclusion fails closed."""
+    if not isinstance(evidence, dict):
+        raise ValueError("experiment evidence 必须是对象")
+    identity = evidence.get("identity")
+    if not isinstance(identity, dict):
+        raise ValueError("experiment identity 缺失")
+    rebuilt = build_research_experiment(
+        subject=str(identity.get("subject") or ""),
+        hypothesis=str(identity.get("hypothesis") or ""),
+        ablation=evidence.get("ablation") if isinstance(evidence.get("ablation"), dict) else {},
+        comparison=evidence.get("comparison") if isinstance(evidence.get("comparison"), dict) else {},
+    )
+    if rebuilt != evidence:
+        raise ValueError("experiment evidence 与冻结 identity/evidence 机械复算不一致")
+    return evidence
+
+
 def save_experiment(evidence: dict, *, root: Path | None = None) -> tuple[Path, bool]:
     """Append-only/idempotent save. Same identity + different evidence is a hard conflict."""
-    payload = {k: v for k, v in evidence.items() if k != "evidence_digest"}
-    if evidence.get("evidence_digest") != _digest(payload):
-        raise ValueError("experiment evidence digest 无效")
+    validate_experiment(evidence)
     experiment_id = str(evidence.get("experiment_id") or "")
     if len(experiment_id) != 64:
         raise ValueError("experiment_id 无效")
@@ -110,4 +130,9 @@ def load_experiment(experiment_id: str, *, root: Path | None = None) -> dict | N
         data: Any = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    return data if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        return None
+    try:
+        return validate_experiment(data)
+    except ValueError:
+        return None

@@ -114,7 +114,7 @@
 
 **成本后验证、消融与晋级纪律**
 
-- **状态**：部分完成
+- **状态**：已完成
 - **优先级**：P1
 - **阶段门**：G3
 - **门内序**：20
@@ -125,7 +125,8 @@
 - **范围**：统一成本/可成交、purged walk-forward、OOS/前向、试验全集、窗口稳健性、校准与 Champion/Challenger。
 - **验收**：无泄露与幸存偏差；保留负结果与多次尝试分母；规则分不冒充概率，样本不足保留研究态；reference-price 反事实、可执行触发与实际 shadow fill 分开比较，只有 fill 后按同版成本/退出得到的结果可称模拟交易净收益。
 - **证据**：旧 ntile 修复和多窗口扫描已完成；IMP-026 的旧版本结论需复核，不能盲目沿用旧 40 因子数字。第一子片（PR #86）建立 purge/embargo、35bps、return identity 与历史 current-snapshot 幸存偏差修复；第二子片初版（PR #87）建立 trial-family/Bonferroni 与 exact signal-overlap。当前 hardening 把 protocol 升为 evidence-backed v2 / gate v4：PIT 不再由 caller 传 bool，而由实际 `BuildConfig + gate_features` 派生；current trial 必须显式 `trial_id + condition + train`，失败尝试仍留分母；protocol/build/trial/overlap 都带 canonical digest，字段或派生统计不一致即 fail-closed；`verify_registry` 写 current gate 时重算 protocol，读回时再次重算，覆盖 latest 前把旧 current 追加进 history，避免重跑抹掉负结果。真实 10 年 marketdb 仍保持 10,187,702 特征行和 2022 holdout 四段分母守恒。
-- **下一步**：第三子片 exact HEAD 已隔离实证：registered candidate B 35bps purged T+5 中性 +0.0055%、中位 -0.915744%、跑赢 42.006998% ⇒ observe；训练 challenger 高 +0.1838pp 但 `promotion_basis_eligible=false`；candidate 三组件边际为 +0.3341/+0.3104/+0.1593pp。same-basis 对照已进入独立 append-only research experiment ledger，稳定 experiment id=`706a5f52…c133`，重复运行幂等且永不自动 promote。two-thirty-five 中性 -0.9886%，S1/S3 为负边际、整体仍 reject。最后纵切只收晋级准备态、actual shadow-fill 同版身份与 rollback/reopen；actual fill 缺失时必须 blocked，自动系统最多给 ready_for_human_review。
+- **关闭证据**：最终纵切新增只读 `strategy_readiness`：current verification + append-only research experiment + IMP-053 execution-owned `shadow_fill_net` 必须同一 strategy/experiment/candidate/cost/exit identity；任一缺失、陈旧、digest/owner/scope 不符即 `blocked`，完整时也只到 `ready_for_human_review`，`automatic_promotion=false` 且 `production_mutation_performed=false`。experiment v2 把 ablation/comparison 两个结果 digest 纳入 experiment identity，读/存/消费前再机械重建 nested evidence 与 identity，防“改结果后重封 digest 继续冒用旧实验 ID”。最终 Candidate B 隔离探针生成 v2 experiment `d04fb9e5…f917` 并输出 `blocked`，原因为 `verification_not_pass + research_admission_not_eligible + actual_shadow_fill_missing`；这不是未完成代码，而是当前策略证据不足的正确业务状态。rollback/reopen 仅生成不可变计划：人工拒绝/上线后衰退/证据失效可回退到 prior version 并保留失败证据；只有新 clean OOS、新 actual fill 或协议/数据修复才可 reopen。IMP-020 工程机制至此完成；未来实际 fill 仍由 IMP-053 产生，不因本任务完成而自动晋级任何策略。
+- **下一步**：无（IMP-020 已完成）。实际策略未来若要晋级，仍须由 IMP-053 提供 execution-owned actual fill 并重新得到 `ready_for_human_review` 后走人工审批；这属于后续运行证据，不重开 IMP-020。
 - **恢复**：不自动上线参数；版本化归档与 review_required 保留，研究错误不污染生产。
 - **实施步骤**：①按真实可用数据冻结基线、标签、成本、K、时间分组与停止规则；②核 strategy_verify 的当前股本回推历史和 split_sample，近似只用于探索；③purge/embargo 与预处理只用训练信息；④单规则族消融并登记所有尝试/否证；⑤同版本候选影子比较，禁止多参数变更污染；⑥晋级审批与安全回退分开，复用 experiments/agent_params 的可追溯记录。
 - **开工前置**：实验协议/离线夹具不等待样本齐备；数值结论须通过 RSH-026 的数据与成熟度条件。
