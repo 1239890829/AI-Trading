@@ -1,6 +1,6 @@
-# 当前交接：DEGRADED_FULL_CONTROL / G3-IMP-020 Evidence Integrity Hardening
+# 当前交接：DEGRADED_FULL_CONTROL / G3-IMP-020 Ablation + Challenger + Experiment Ledger
 
-> **定位 / 摘要**：G3/IMP-020 第二子片初版已由 PR #87 合入；当前只做该子片的 evidence-integrity hardening：PIT 从 build provenance 派生、trial/overlap/protocol digest 自洽、current gate 写入/读回重算、旧核验 append history。RSH-026 已关闭；不改策略权重、不做自动晋级、不宣称实际成交净收益。
+> **定位 / 摘要**：G3/IMP-020 前两子片与 evidence-integrity hardening 已形成当前研究底座；本片只做 incumbent/challenger 身份固定、同版 leave-one-component-out 消融、same-basis Champion/Challenger 与 append-only research experiment accounting。不改策略权重、不做自动晋级、不宣称实际成交净收益。
 
 **当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 已由 PR #85 正式 closeout，生产/共享基点已推进到 `master@f3556ad5c02a9def22c159cded06865f036b8570`（PR #87 merge）；第一子片 PR #86 与第二子片初版 PR #87 均已进入 master。当前只硬化 evidence authenticity / provenance / history，不改策略阈值/权重、不自动晋级、不写真实交易，也不把 reference close-to-close 代理冒充 actual shadow fill 净收益。
 
@@ -60,8 +60,8 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 - **当前主门**：G3
 - **主切片首选**：IMP-020
-- **领取边界**：IMP-020 已持续领取；PR #86 完成第一子片、PR #87 合入第二子片初版。当前仅收同根 evidence-integrity 缺口；本 hardening 合入后才进入消融 + Champion/Challenger，不在本 PR 混入生产晋级。
-- **当前现场**：PR #87 已把 trial-family/Bonferroni 与 exact overlap 合入 `master@f3556ad`。U49 复核继续发现：PIT 仍由 caller 自报、evidence 无 canonical digest、registry 只做结构校验会让手工改写 current gate 有机会被误认。当前 hardening 将 PIT 改为 `BuildConfig + gate_features` 派生，要求完整 current manifest，并在写入/读回两端重算协议自洽。
+- **领取边界**：IMP-020 已持续领取；第一/第二子片与 hardening 为本片前置。当前第三子片只施工 leave-one-component-out、same-basis Champion/Challenger 与独立 research experiment ledger；最后 promotion-readiness/rollback 子片不在本 PR 混入。
+- **当前现场**：第二子片 hardening 已在本分支前置链上提供 provenance/digest/manifest/读回重验。第三子片 U49 发现训练段最优 grid 曾可能继续写入 `pullback_reversal` 键，造成 challenger 静默替换 incumbent；本片固定原 Candidate-B 谓词为登记身份，训练最优只作 challenger，并把同窗同成本对照登记为独立 experiment artifact。
 - **门内阻断顺序**：RSH-026（已完成）→ IMP-020（进行中）；RSH-030 为同门非阻断，RSH-031 仍受 `IMP-020 + RSH-030` 效果前置限制。
 - G0 的 BUG-028 / BUG-026 已完成，BUG-020 为 `待条件`；G1 的 BUG-029 / IMP-006 / IMP-044 已完成；G2 的 IMP-049 为 `待条件`；G3/RSH-026 本轮登记完成。因此账本合入后下一唯一首选为 G3/IMP-020，不因 RSH-031、新 UI、Agent 或其它研究任务“更有趣”跳序。
 - BUG-020 的 current-value 接纳门现区分 source event time / received time、缺失/拒绝/合法空集与身份歧义；旧可信值不会被晚到/非法观测覆盖。2026-09-20 周日已用本片代码显式加载主仓部署 `.env`，成功构建 `chain(ths→tencent→eastmoney→sina)` 并完成有界只读休市探针：最近交易日 2026-09-18、6/6 指数覆盖、拒绝数 0，600519 实际由腾讯返回且 source time 为 2026-09-18，Hub 明确标 `stale/market_closed`。尚未完成真实交易时段完整会话验收，故不得标已完成或宣称长期盘中 SLA。
@@ -73,7 +73,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - U50 也不改变阶段门算法，只改变“谁可以完成当前切片”：正常模式仍是 Web Review + Codex；当前 `DEGRADED_FULL_CONTROL` 下网页端按同一阶段门全程操控，每个 PR 必须重新写 exact-HEAD `DegradedRelease`，不能复用一次用户授权跳过逐 PR 发布证据。
 - GX 治理只可作为不冲突的伴随切片。2026-09-20 `GOV-018` 已闭环：`.workbuddy` / `.workbuddy-ai` 已物理删除，有价值内容进入项目中性 `skills/scripts/docs/artifacts`，第三方 UZI/Serenity 本体不再复制；PR #48 已合入 `master`（merge `b6b5ba0`，最终 required CI run `35481812431` backend/frontend/docs 全绿）。`GOV-026` 已落地 `scripts/workspace-hygiene.py` 并接 CI/交接；docs 根已收口为 6 个控制面。以上治理不改变阶段门算法；BUG-020 与 IMP-049 都因 `待条件` 排除，RSH-026 登记完成后阶段门下一阻断为 G3/IMP-020。
 
-当前处于 `DEGRADED_FULL_CONTROL`：IMP-020 第二子片初版已合并，当前只做 evidence-integrity hardening。正式 producer 的最新真实重跑仍只写 `/tmp`，生产历史 verify JSON 不覆盖；不启动真实交易或参数晋级。
+当前处于 `DEGRADED_FULL_CONTROL`：IMP-020 第三子片只做研究消融/对照/实验账本。正式 producer 的验收仍只写 `/tmp`（verify + experiment），生产历史 JSON 不覆盖；不启动真实交易或参数晋级。
 
 ## 8. Jev、工具链与协作流当前基线
 
@@ -93,7 +93,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **Degraded reason**：当前 Codex 额度不可用，正常双角色无法持续完成实施→独立审核→发布闭环；旧 exact-HEAD Review 门因此形成自锁。
 - **有效期**：持续到用户明确说 Codex 已恢复/退出降级；不是单 PR 临时口令。但每个 PR 的发布仍必须重新生成 exact-HEAD `DegradedRelease`，不能复用上一 PR 回执。
 - **不降低项**：G0–G5/GX 阶段门、U49 主动反证、branch protection、required CI、latest master、CHANGES_REQUESTED/thread、public-repo scan、workspace/doc-health、敏感信息/范围、post-merge CI、删除功能分支。
-- **当前动作**：RSH-026 已 closeout；PR #86/#87 已进入 master，当前唯一在制为 IMP-020 evidence-integrity hardening。每个后续 PR 仍需新的 exact-HEAD `DegradedRelease`；本轮不把隔离重跑结果直接改写成生产策略结论。
+- **当前动作**：RSH-026 已 closeout；当前唯一主线仍为 IMP-020。第三子片完成后只剩 promotion-readiness / actual-shadow-fill identity / rollback-reopen 合同；每个 PR 仍需新的 exact-HEAD `DegradedRelease`，reference research artifact 不得直接改写生产策略。
 
 ## 8.2 U49 主动审计回执（RSH-026 Preflight）
 
@@ -309,6 +309,18 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **P1-83 重跑不得抹负结果**：latest 读取语义保留，但覆盖前 previous current 进入同文件 `history`；history 损坏时拒绝覆盖。历史已有 JSON 不批量迁移、不伪造旧 manifest。
 - **最终真实重跑**：candidate `p_adj=0.531822444114`、overlap intersection=0、build PIT=true；two-thirty-five `p_adj=1.0`、intersection=38/union=42,305/Jaccard=0.00089824，`turn` 令 feature PIT=false。两者结论仍分别 observe/reject，且 `/tmp` 验收不覆盖生产历史 JSON。
 - **边界/下一步**：正式脚本实跑只写临时 worktree，未覆盖生产历史 JSON。本子片合并后 IMP-020 仍为部分完成；下一子片进入 leave-one-component-out 消融 + 同版同窗同成本 Champion/Challenger 比较，且只产生研究比较证据，不触发生产晋级。
+
+## 8.17 U49 主动审计回执（IMP-020 Ablation + Challenger + Experiment Accounting）
+
+- **阶段/前置**：第三子片 `implementation + counterexample`，建立在第二子片 provenance/digest/manifest hardening 之上；发布时必须同步当时最新 `master`，不得复用旧 #89 的 HEAD/CI/DegradedRelease。
+- **P1-84 incumbent/challenger 身份漂移**：旧 producer 可把训练段选出的 grid 最优继续写入 `pullback_reversal` key。当前固定登记 incumbent 为原 `3~5% + below MA5 + mchg>0`；训练选择结果只以 `grid_challenger:*` 并列，不得覆盖策略登记身份。
+- **P1-85 消融必须同版同窗同成本**：`strategy_compare.leave_one_out_ablation()` 让 full rule 与每个 leave-one-out 共用同一 `sigv`、holdout、horizon、35bps、reference return identity，并保留 dataset fingerprint；输出是边际研究差值，不声明因果。
+- **P1-86 Champion/Challenger 只能是研究对照**：`champion_challenger_evidence()` 冻结同一 basis 并记录 exact event overlap；`champion_is_production` 显式，`promotion_basis_eligible=false` 恒成立。
+- **P1-87 comparison extra 不能冒充实验账本**：新增 `strategy_experiments` 独立 append-only artifact。`experiment_id` 由 subject/hypothesis/dataset/window/horizon/cost/return identity/champion/challenger 机械哈希；同一冻结实验重复运行幂等，不新增统计信心；同 ID 不同证据拒绝覆盖。该账本与 `AgentExperiment` 明确分工：前者是离线研究，后者只守护已经应用的生产参数变更。
+- **证据封装**：ablation / comparison / experiment 都有 canonical digest；experiment 构造会重验两份比较证据 digest 和 basis 一致性，并永远 `automatic_promotion=false / production_promotion_eligible=false`。
+- **真实研究边界**：沿用本子片隔离重跑：登记 Candidate-B 35bps purged T+5 中性均值约 `+0.0055%`、中性中位约 `-0.9157%`、中性跑赢约 `42.0%`、年度正 4/5 ⇒ observe；leave-one-out 对中性均值边际约 price-band `+0.3341pp` / below-MA5 `+0.3104pp` / market-positive `+0.1593pp`。训练 challenger holdout 中性约 `+0.1893%`、较 incumbent 约 `+0.1838pp`，但只是 reference research。two-thirty-five 整体仍 reject，组件消融不改变该结论。
+- **下一步**：第三子片完成后 IMP-020 仍为 `部分完成`，只剩最后 promotion-readiness/rollback-reopen 子片：actual `shadow_fill_net` 缺失或身份不一致必须 blocked；即使证据齐备系统最多 `ready_for_human_review`，永不自动 promote。
+
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
 

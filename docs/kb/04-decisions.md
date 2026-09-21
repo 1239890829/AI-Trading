@@ -280,7 +280,7 @@
   | 环节 | 现状 | 缺口 |
   |---|---|---|
   | 登记 | ✅ 已有**策略/战法**级登记册 `docs/strategy/strategy-registry.md` + 代码守卫 `app/picks/strategy_registry.py`（P1-37，2026-09-10）；2026-09-11 起带 `verify_key` 与核验产物背书 | —（因子登记册另有 `docs/strategy/factor-candidates.md`） |
-  | 验证 | ✅ 强：`strategy_verify.py` 五道检验 + v3 验证协议 + `verify_registry` 可回查 | v4 已机器阻断无 purge/成本/PIT/完整 trial-family/多重校正/结构化 overlap 证据的假 PASS，并通过 provenance/digest/读回重算拒绝自报或改写证据；多 trial 选中规则若校正后未存活同样不能 PASS；actual shadow fill 净收益与 Champion/Challenger 仍是 IMP-020 后续纵切 |
+  | 验证 | ✅ 强：`strategy_verify.py` 五道检验 + v3 验证协议 + `verify_registry` 可回查 | v4 已机器阻断无 purge/成本/PIT/完整 trial-family/多重校正/结构化 overlap 证据的假 PASS，并通过 provenance/digest/读回重算拒绝自报或改写证据；多 trial 选中规则若校正后未存活同样不能 PASS；同版消融/Champion-Challenger/append-only research experiment accounting 已补；actual shadow fill 净收益与最终 promotion-readiness/rollback 仍是 IMP-020 最后纵切 |
   | 监控 | ✅ 已泛化到**策略键级** `GET /api/picks/strategy-health`（`min_picks` + `thin` 档，P1-38，2026-09-10） | 精确度仍受样本量限制（`daily_picks` 常报 insufficient） |
   | 退役 | ✅ 策略级处置台账 = `docs/strategy/strategy-registry.md §3`（三行 D-1/D-2/D-3，附证据链与样本边界，P1-39，2026-09-10） | 参数级另有 30 日劣化自动回滚（`experiments.py`） |
 - **关联**：[[KB-DEC-018]] [[KB-DEC-020]] [[KB-STOCK-27]] [[KB-STOCK-28]] [[KB-STOCK-29]] [[KB-STOCK-30]] [[KB-ENG-39]] [[KB-ENG-40]] [[KB-ENG-41]]
