@@ -1,8 +1,8 @@
-# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 Backend Intraday Evidence
+# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 Evidence Quality Gate
 
 > 定位：当前运行模式、最新已合并证据、唯一在制纵切与安全边界；任务唯一状态仍以所属 stage 为准。
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 的 PR #69/#70/#71/#72/#74/#75/#76/#78 已合并；PR #78 merge=`2576b9cd6b5665798fd7a82425e003667b83617c`，PR CI #521 与 post-merge CI #522 backend/frontend/docs 全绿，功能分支已清理。真实长期工作区已同步到该 master，但首次运行新 `opportunity-evidence` scheduler 暴露同名局部变量遮蔽函数的真实 `TypeError`；cursor 未推进且 SchedulerRegistry 已记录失败。为阻止 30 秒重试继续放大 provider 请求，真实 backend 当前以 `ASHARE_PICKS_OPPORTUNITY_EVIDENCE_ENABLED=0` 临时降级运行（29/30 scheduler，其余链保持在线）。当前仍在 **G3 / RSH-026**，唯一在制项为 hotfix 分支 `chatgpt/rsh026-intraday-evidence-hotfix`；只修共享 builder 的时点变量碰撞并补真实路径回归，不改候选阈值、策略权重、真实交易权限或 shadow fill 语义。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 的 PR #69/#70/#71/#72/#74/#75/#76/#78/#79 已合并；PR #79 merge=`9c4dfc14f9d9b990911699b41d571148354ce069`，PR exact-head release gate 与 post-merge CI #524 全绿，hotfix 分支已清理。真实长期工作区已同步到该 master，并按默认配置恢复 backend：30/30 scheduler 运行、`opportunity-evidence` 0 failure；11:43 的 durable snapshot 发生在午休窗口，按设计只消费 cursor 不归档，因此 candidate/hard_gate/rank 的最终真实验收仍要等第一份下午盘中 durable snapshot，RSH-026 暂不关闭。当前唯一在制项为评估质量门分支 `chatgpt/rsh026-evidence-quality-gate`（基于 `master@9c4dfc1`）：修复 degraded/unavailable/unknown 决策事实仍可能进入效果样本的问题；不改选股/风控/交易/通知行为。
 
 
 ## 1. 固定入口与范围
@@ -208,6 +208,19 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **生产止损**：立即优雅重启 backend 并临时设置 `ASHARE_PICKS_OPPORTUNITY_EVIDENCE_ENABLED=0`；当前注册表为 30 total / 29 running / 1 disabled，只有新 evidence scheduler 被关闭，其余链保持运行。hotfix 真实验收通过后必须恢复默认开启，不能把降级状态当最终方案。
 - **新增真实路径回归**：不再只 fake `build_opportunities`；直接执行真实 `_build_opportunities_uncached`，提供非空 theme/participant，并让完整路径走到 `attach_participants` 与 `archive_intraday_pipeline`。断言 linkage 沿用源 UTC snapshot ISO，而 archive 获得北京 naive `2026-09-21 11:10`，同时机械防止同名函数/局部值再次混淆。
 - **非目标**：不调整 scheduler 周期、不改变 snapshot 时间展示口径、不把 UTC ISO 全局改成北京时间字符串、不改任何选股阈值/权重/交易或通知语义。
+
+## 8.9 U49 主动审计回执（RSH-026 Evidence Quality Gate）
+
+- **阶段/基点**：`Preflight + candidate implementation`；基于 `master@9c4dfc14f9d9b990911699b41d571148354ce069`（PR #79 merge 后 post-merge CI #524 全绿，真实 backend 已恢复 30/30 scheduler）。
+- **P1-54 degraded 输入可进入效果样本**：point-in-time 归档本来就会把上游缺失/限流写成 `data_state=degraded/unavailable/unknown`，但旧 `opportunity_scorecard` 的 sample / cost proxy / Precision@K 只检查 outcome/price-basis/cost-version，没有要求决策输入本身为 `ready`。这会让“已知输入不完整”的 run 在标签成熟后仍可能贡献策略效果结论。
+- **真实影响面**：真实运行库只读统计：2026-09-16 共 7,354 条决策快照，其中 `1,916 degraded / 5,433 ready / 5 unknown`；按 run-symbol 去重后只有 2,724/3,667（74.28%）机会的所有阶段均 ready。2026-09-21 当前为 `180 degraded / 110 ready / 20 unavailable`，仅 110/310（35.48%）run-symbol 机会全阶段 ready。历史 selected 行碰巧仍为 ready，不代表未来后台自动 rank 不会遇到 degraded。
+- **P1-55 任一阶段 degraded 不能被同 run 的 ready 阶段掩盖**：质量身份按 `run_id+symbol` 聚合时必须是“该机会的所有归档阶段都 ready 才算 ready”；不能用“至少一个 ready”集合覆盖 degraded candidate/hard_gate。新增混合阶段反例：同 run-symbol 的 rank=ready + candidate=degraded ⇒ `ready_run_symbol_opportunities=0 / unready=1`，即使标签全齐也阻断 verdict。
+- **统计/审计分层**：所有 degraded/unavailable/unknown 行继续保留在 raw audit、全漏斗标签分母与 outcome coverage，绝不删除或改写；主效果 `sample`、gross/cost proxy、by-stage 与 Precision@K evaluable 只认 `data_state=ready`。新增 `evidence_quality` 显式报告 states、ready/unready run-symbol 数、ready coverage 与 complete 状态。
+- **verdict 门**：顺序保持“空分母 → 标签不完整 → 输入质量不完整 → 样本量 → 正/负观察”。因此只有标签全齐但存在非 ready 输入时返回新状态 `degraded_input`；若标签本身尚不完整仍优先返回 `incomplete_denominator`，两种失败原因同时通过 `funnel_denominator + evidence_quality` 可见。
+- **路径指标同族质量门**：路径采集的 audit denominator 仍保留全部 selected；真正用于 MFE/MAE 与 limit timing 的 denominator 只包含 earliest selected 且 `data_state=ready` 的快照。已有回归机械锁定 degraded selected 只增加 `audit_denominator/data_state_excluded`，不得进入 `evaluable/avg_mfe/avg_mae`。
+- **Precision@K 可见但不可计**：指定 run 内 degraded ranked 股票仍保留在 selected/symbols，避免“把坏样本藏掉”；其 cost proxy 返回 None，因此 `evaluable` 与 coverage 会下降，同时输出 `data_state_counts`。
+- **真实只读复算**：新逻辑对 2026-09-16 仍保留 7,354 audit rows / 3,667 run-symbol 分母，效果样本 28 个 ready symbol-day；1,894 条 current-basis labeled row 因非 ready 被排除效果样本。当前 denominator 本来仍 incomplete，所以 verdict 仍是 `incomplete_denominator`，没有用新门“篡改”既有结论；今日 current-v2 同样因标签未成熟保持 incomplete。
+- **非目标**：不修改 `_data_state` 判据、不把 degraded 样本删除/重写、不改变 candidate/gate/rank/notification 决策、不改变 provider failover、scheduler 周期、交易/通知/shadow-fill 行为；本片只修“效果解释能否使用该样本”的质量门。
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
 

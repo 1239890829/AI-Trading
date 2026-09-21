@@ -1116,6 +1116,45 @@ def test_d0_path_realtime_labels_selected_only_and_scorecard_exposes_identity(tm
     assert path["denominator"] == 1 and path["coverage"] == 1.0
 
 
+def test_path_metrics_exclude_degraded_selected_decision_but_keep_audit_denominator(tmp_path):
+    sf = _factory(tmp_path)
+    run_id, rows = build_intraday_records(
+        _payload(), trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5, 30)
+    )
+    archive_records(run_id, rows, sf)
+    with sf() as db:
+        snapshot = db.execute(
+            select(OpportunityDecisionSnapshot).where(
+                OpportunityDecisionSnapshot.symbol == "600001",
+                OpportunityDecisionSnapshot.stage == "rank",
+                OpportunityDecisionSnapshot.decision == "ranked",
+            )
+        ).scalars().first()
+        assert snapshot is not None
+        snapshot.data_state = "degraded"
+        db.commit()
+
+    label_d0_paths(
+        "2026-09-16",
+        {"600001": [
+            _tencent_bar(10, 6, high=10.8, low=9.7),
+            _tencent_bar(15, 0, high=10.2, low=10.0),
+        ]},
+        first_seal_by_symbol={"600001": "10:20:00"},
+        limit_pool_known=True,
+        session_factory=sf,
+    )
+
+    path = opportunity_scorecard("2026-09-16", session_factory=sf)["path_metrics"]
+    assert path["audit_denominator"] == 1
+    assert path["data_state_required"] == "ready"
+    assert path["data_state_excluded"] == 1
+    assert path["denominator"] == 0
+    assert path["evaluable"] == 0
+    assert path["coverage"] is None
+    assert path["avg_mfe_pct"] is None and path["avg_mae_pct"] is None
+
+
 def test_path_scorecard_is_independent_of_close_label_availability(tmp_path):
     sf = _factory(tmp_path)
     run_id, rows = build_intraday_records(
@@ -1519,6 +1558,7 @@ def _seed_scorecard_label(
     strategy_version: str = STRATEGY_VERSION, feature_version: str = FEATURE_VERSION,
     gross: float = 1.0, proxy: float | None = 0.9, source_theme: str = "T",
     reason: str | None = None, price_basis_version: str = PRICE_BASIS_VERSION,
+    data_state: str = "ready",
 ) -> None:
     decision = "ranked" if stage == "rank" else "notified"
     with sf() as db:
@@ -1527,7 +1567,7 @@ def _seed_scorecard_label(
             scenario="intraday_opportunity", stage=stage, symbol=symbol, name=symbol,
             source_theme=source_theme, decision=decision, rank=rank if stage == "rank" else None,
             strategy_version=strategy_version, feature_version=feature_version,
-            data_state="ready", entry_price=10.0, evidence=json.dumps({"change_pct": 1.0}),
+            data_state=data_state, entry_price=10.0, evidence=json.dumps({"change_pct": 1.0}),
         ))
         db.add(OpportunityOutcomeLabel(
             snapshot_id=snapshot_id, horizon=horizon, target_date="2026-09-16",
@@ -1537,6 +1577,86 @@ def _seed_scorecard_label(
             reason=reason or f"D0 cost proxy ({COST_MODEL_VERSION})",
         ))
         db.commit()
+
+def test_scorecard_blocks_effect_verdict_when_funnel_contains_degraded_input(tmp_path):
+    """标签全齐、ready 样本已达下限，也不能跨过 degraded 输入质量门。"""
+    from app.picks.opportunity_learning import MIN_LABELS_FOR_VERDICT
+
+    sf = _factory(tmp_path)
+    when = datetime(2026, 9, 16, 10, 5)
+    for i in range(MIN_LABELS_FOR_VERDICT):
+        _seed_scorecard_label(
+            sf, snapshot_id=f"ready-{i}", run_id=f"run-ready-{i}",
+            symbol=f"{600100 + i:06d}", as_of=when, proxy=1.0, data_state="ready",
+        )
+    _seed_scorecard_label(
+        sf, snapshot_id="degraded-1", run_id="run-degraded", symbol="600999",
+        as_of=when, proxy=99.0, data_state="degraded",
+    )
+
+    card = opportunity_scorecard("2026-09-16", session_factory=sf)
+    assert card["funnel_denominator"]["complete"] is True
+    assert card["funnel_denominator"]["labeled_opportunities"] == MIN_LABELS_FOR_VERDICT + 1
+    assert card["evidence_quality"]["states"] == {"degraded": 1, "ready": MIN_LABELS_FOR_VERDICT}
+    assert card["evidence_quality"]["ready_run_symbol_opportunities"] == MIN_LABELS_FOR_VERDICT
+    assert card["evidence_quality"]["unready_run_symbol_opportunities"] == 1
+    assert card["evidence_quality"]["complete"] is False
+    assert card["audit"]["data_state_excluded_labeled_rows"] == 1
+    assert card["sample"]["count"] == MIN_LABELS_FOR_VERDICT
+    assert card["fillable"] == MIN_LABELS_FOR_VERDICT
+    assert card["verdict"] == "degraded_input"
+
+    summary = learning_summary("2026-09-16", sf)
+    assert summary["evidence_quality"]["states"] == {
+        "degraded": 1, "ready": MIN_LABELS_FOR_VERDICT
+    }
+    assert summary["evidence_quality"]["ready_run_symbol_opportunities"] == MIN_LABELS_FOR_VERDICT
+    assert summary["evidence_quality"]["unready_run_symbol_opportunities"] == 1
+    assert summary["evidence_quality"]["complete"] is False
+
+
+def test_evidence_quality_requires_all_stages_of_run_symbol_to_be_ready(tmp_path):
+    sf = _factory(tmp_path)
+    when = datetime(2026, 9, 16, 10, 5)
+    _seed_scorecard_label(
+        sf, snapshot_id="mixed-rank", run_id="run-mixed", symbol="600001",
+        as_of=when, stage="rank", rank=1, proxy=1.0, data_state="ready",
+    )
+    _seed_scorecard_label(
+        sf, snapshot_id="mixed-candidate", run_id="run-mixed", symbol="600001",
+        as_of=when, stage="candidate", rank=None, proxy=1.0, data_state="degraded",
+    )
+
+    card = opportunity_scorecard("2026-09-16", session_factory=sf)
+    assert card["funnel_denominator"]["run_symbol_opportunities"] == 1
+    assert card["funnel_denominator"]["complete"] is True
+    assert card["evidence_quality"]["ready_run_symbol_opportunities"] == 0
+    assert card["evidence_quality"]["unready_run_symbol_opportunities"] == 1
+    assert card["evidence_quality"]["complete"] is False
+    assert card["verdict"] == "degraded_input"
+
+
+def test_precision_at_k_keeps_degraded_rank_visible_but_not_evaluable(tmp_path):
+    sf = _factory(tmp_path)
+    when = datetime(2026, 9, 16, 10, 5)
+    _seed_scorecard_label(
+        sf, snapshot_id="pq-ready", run_id="run-q", symbol="600001",
+        as_of=when, rank=1, proxy=1.0, data_state="ready",
+    )
+    _seed_scorecard_label(
+        sf, snapshot_id="pq-degraded", run_id="run-q", symbol="600002",
+        as_of=when, rank=2, proxy=50.0, data_state="degraded",
+    )
+
+    card = opportunity_scorecard(
+        "2026-09-16", top_k=2, run_id="run-q", session_factory=sf
+    )
+    p = card["precision_at_k"]
+    assert p["symbols"] == ["600001", "600002"]
+    assert p["selected"] == 2 and p["evaluable"] == 1
+    assert p["coverage"] == 0.5 and p["observed"] == 1.0
+    assert p["data_state_counts"] == {"degraded": 1, "ready": 1}
+
 
 def test_scorecard_36_audit_rows_are_one_symbol_day_sample(tmp_path):
     sf = _factory(tmp_path)

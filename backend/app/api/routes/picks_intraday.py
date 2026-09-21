@@ -241,8 +241,9 @@ async def opportunity_scorecard(
 
     Top-K 必须绑定单一 run/as-of 并按 symbol 去重；日级 selected 判据按 symbol×trade_date
     去重。指定版本没有漏斗样本时 verdict 为 ``no_matching_denominator``；存在漏斗但 market
-    label 未齐时为 ``incomplete_denominator``，不能用 selected 样本先行宣称效果。`d0_close`
-    受 A 股 T+1 限制，不得解释为可实现净收益。
+    label 未齐时为 ``incomplete_denominator``；标签齐全但任一漏斗机会的决策事实非 ``ready``
+    时为 ``degraded_input``。degraded/unavailable/unknown 仍保留审计与分母，但不得进入效果样本。
+    `d0_close` 受 A 股 T+1 限制，不得解释为可实现净收益。
     """
     from app.picks.opportunity_learning import (
         FEATURE_VERSION, OUTCOME_HORIZON, STRATEGY_VERSION,

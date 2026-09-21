@@ -1806,6 +1806,7 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
     outcomes = [pair for pair in all_outcomes if pair[0].horizon == OUTCOME_HORIZON]
     stage_counts = Counter(s.stage for s in snapshots)
     decision_counts = Counter(f"{s.stage}:{s.decision}" for s in snapshots)
+    data_state_counts = Counter(s.data_state or "unknown" for s in snapshots)
     state_counts = Counter(o.state for o, _snapshot in outcomes)
     fill_counts = Counter(o.fill_state for o, _snapshot in outcomes)
     price_basis_counts = Counter(
@@ -1829,6 +1830,10 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
     missing_outcome_symbols = sorted(funnel_symbols - outcome_symbols)
     unlabeled_symbols = sorted(funnel_symbols - labeled_symbols)
     funnel_opportunities = {(row.run_id, row.symbol) for row in snapshots}
+    unready_funnel_opportunities = {
+        (row.run_id, row.symbol) for row in snapshots if row.data_state != "ready"
+    }
+    ready_funnel_opportunities = funnel_opportunities - unready_funnel_opportunities
     outcome_opportunities = {(snapshot.run_id, snapshot.symbol) for _outcome, snapshot in outcomes}
     labeled_opportunities = {
         (snapshot.run_id, snapshot.symbol) for outcome, snapshot in outcomes
@@ -1934,6 +1939,22 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
         "fill_states": dict(sorted(fill_counts.items())),
         "kb_ref_states": dict(sorted(kb_ref_counts.items())),
         "cost_model": COST_MODEL_VERSION,
+        "evidence_quality": {
+            "required_state_for_effect": "ready",
+            "states": dict(sorted(data_state_counts.items())),
+            "snapshot_rows": len(snapshots),
+            "run_symbol_opportunities": len(funnel_opportunities),
+            "ready_run_symbol_opportunities": len(ready_funnel_opportunities),
+            "unready_run_symbol_opportunities": (
+                len(funnel_opportunities) - len(ready_funnel_opportunities)
+            ),
+            "ready_opportunity_coverage": (
+                round(len(ready_funnel_opportunities) / len(funnel_opportunities), 4)
+                if funnel_opportunities else None
+            ),
+            "complete": bool(funnel_opportunities)
+            and len(ready_funnel_opportunities) == len(funnel_opportunities),
+        },
         "price_basis": {
             "current_version": PRICE_BASIS_VERSION,
             "revision_version": OUTCOME_REVISION_VERSION,
@@ -2000,7 +2021,8 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
         },
         "note": (
             "label_coverage 为兼容旧接口的 outcome-row 行级覆盖率；全漏斗必须看 funnel_denominator。"
-            "样本不足或全漏斗标签未完整时只报告覆盖率与事实分布，不据此晋级策略；D0 成本调整代理口径见 cost_model；"
+            "样本不足、全漏斗标签未完整或 evidence_quality 非完整时只报告覆盖率与事实分布，不据此晋级策略；"
+            "degraded/unavailable/unknown 决策事实保留审计但不进入效果样本；D0 成本调整代理口径见 cost_model；"
             "kb_ref_states 记录本次决策的 KB 引用状态（not_consulted=未引用，现状如此；"
             "KB 进入个股收益打分须先过有/无 KB 消融，见蓝图 §5）"
         ),
@@ -2065,7 +2087,9 @@ def opportunity_scorecard(
         return snapshot_key(pair[1])
 
     def cost_proxy(pair) -> float | None:
-        outcome, _snapshot = pair
+        outcome, snapshot = pair
+        if snapshot.data_state != "ready":
+            return None
         if outcome.price_basis_version != PRICE_BASIS_VERSION:
             return None
         if outcome.state != "labeled" or not _finite_number(outcome.return_pct):
@@ -2081,6 +2105,7 @@ def opportunity_scorecard(
 
     state_counts = Counter(outcome.state for outcome, _snapshot in rows)
     raw_stage_counts = Counter(snapshot.stage for _outcome, snapshot in rows)
+    data_state_counts = Counter(snapshot.data_state or "unknown" for snapshot in funnel_snapshots)
     price_basis_counts = Counter(
         outcome.price_basis_version or "legacy_unversioned" for outcome, _snapshot in rows
     )
@@ -2088,6 +2113,10 @@ def opportunity_scorecard(
     current_basis_labeled_rows = [
         pair for pair in labeled_rows
         if pair[0].price_basis_version == PRICE_BASIS_VERSION
+    ]
+    metric_eligible_labeled_rows = [
+        pair for pair in current_basis_labeled_rows
+        if pair[1].data_state == "ready"
     ]
     invalid_metric_rows = sum(
         1 for outcome, _snapshot in labeled_rows
@@ -2097,7 +2126,7 @@ def opportunity_scorecard(
     # Performance metrics remain selection-conditioned; denominator-only rejected/unknown
     # rows are labeled for missed-opportunity analysis but never silently enter fill/net metrics.
     selected_labeled_rows = [
-        pair for pair in current_basis_labeled_rows
+        pair for pair in metric_eligible_labeled_rows
         if _selected_outcome_snapshot(pair[1].stage, pair[1].decision)
     ]
     valid_signal_rows = [
@@ -2115,6 +2144,12 @@ def opportunity_scorecard(
     missing_outcome_symbols = sorted(funnel_symbols - outcome_symbols)
     unlabeled_funnel_symbols = sorted(funnel_symbols - labeled_funnel_symbols)
     funnel_opportunities = {(snapshot.run_id, snapshot.symbol) for snapshot in funnel_snapshots}
+    unready_funnel_opportunities = {
+        (snapshot.run_id, snapshot.symbol) for snapshot in funnel_snapshots
+        if snapshot.data_state != "ready"
+    }
+    ready_funnel_opportunities = funnel_opportunities - unready_funnel_opportunities
+    evidence_quality_complete = bool(funnel_opportunities) and not unready_funnel_opportunities
     outcome_opportunities = {(snapshot.run_id, snapshot.symbol) for _outcome, snapshot in rows}
     labeled_opportunities = {
         (snapshot.run_id, snapshot.symbol) for outcome, snapshot in rows
@@ -2151,7 +2186,11 @@ def opportunity_scorecard(
         key=snapshot_key,
     ):
         path_snapshot_by_symbol.setdefault(snapshot.symbol, snapshot)
-    path_candidate_snapshots = list(path_snapshot_by_symbol.values())
+    path_audit_candidate_snapshots = list(path_snapshot_by_symbol.values())
+    path_candidate_snapshots = [
+        snapshot for snapshot in path_audit_candidate_snapshots
+        if snapshot.data_state == "ready"
+    ]
     path_outcome_by_snapshot_id = {
         snapshot.snapshot_id: outcome for outcome, snapshot in rows
     }
@@ -2253,6 +2292,7 @@ def opportunity_scorecard(
     verdict = (
         "no_matching_denominator" if denominator_state == "empty"
         else "incomplete_denominator" if denominator_state == "incomplete"
+        else "degraded_input" if not evidence_quality_complete
         else "insufficient_sample" if len(proxy) < MIN_LABELS_FOR_VERDICT
         else "cost_proxy_positive_observed"
         if sum(proxy) / len(proxy) > 0 else "cost_proxy_nonpositive_observed"
@@ -2298,6 +2338,11 @@ def opportunity_scorecard(
             "opportunities": len({(snapshot.run_id, snapshot.symbol) for _outcome, snapshot in rows}),
             "symbols": len({snapshot.symbol for _outcome, snapshot in rows}),
             "by_stage_rows": dict(sorted(raw_stage_counts.items())),
+            "data_states": dict(sorted(data_state_counts.items())),
+            "metric_eligible_labeled_rows": len(metric_eligible_labeled_rows),
+            "data_state_excluded_labeled_rows": (
+                len(current_basis_labeled_rows) - len(metric_eligible_labeled_rows)
+            ),
             "repeated_labeled_rows": max(0, len(valid_signal_rows) - len(samples)),
             "invalid_metric_rows": invalid_metric_rows,
             "price_basis_versions": dict(sorted(price_basis_counts.items())),
@@ -2318,6 +2363,7 @@ def opportunity_scorecard(
         "sample": {
             "unit": "symbol_trade_date",
             "policy": "earliest_labeled_observation_then_best_rank",
+            "data_state_required": "ready",
             "count": len(samples),
             "symbols": sorted(sample_by_symbol),
         },
@@ -2329,6 +2375,19 @@ def opportunity_scorecard(
             }),
             "symbols": len({snapshot.symbol for _outcome, snapshot in rows}),
             "symbol_trade_date_samples": len(samples),
+        },
+        "evidence_quality": {
+            "required_state": "ready",
+            "states": dict(sorted(data_state_counts.items())),
+            "snapshot_rows": len(funnel_snapshots),
+            "run_symbol_opportunities": len(funnel_opportunities),
+            "ready_run_symbol_opportunities": len(ready_funnel_opportunities),
+            "unready_run_symbol_opportunities": len(unready_funnel_opportunities),
+            "ready_opportunity_coverage": (
+                round(len(ready_funnel_opportunities) / len(funnel_opportunities), 4)
+                if funnel_opportunities else None
+            ),
+            "complete": evidence_quality_complete,
         },
         "funnel_denominator": {
             "snapshot_rows": len(funnel_snapshots),
@@ -2344,6 +2403,11 @@ def opportunity_scorecard(
             "complete": denominator_complete,
             "state": denominator_state,
             "price_basis_version": PRICE_BASIS_VERSION,
+            "data_state_required_for_effect": "ready",
+            "data_state_counts": dict(sorted(data_state_counts.items())),
+            "ready_opportunities": len(ready_funnel_opportunities),
+            "unready_opportunities": len(unready_funnel_opportunities),
+            "evidence_quality_complete": evidence_quality_complete,
             "missing_outcome_symbols": missing_outcome_symbols,
             "unlabeled_symbols": unlabeled_funnel_symbols,
             "run_symbol_opportunities": len(funnel_opportunities),
@@ -2381,6 +2445,11 @@ def opportunity_scorecard(
                 ),
                 "version": PATH_VERSION,
                 "sample_unit": "symbol_trade_date_earliest_selected_decision",
+                "data_state_required": "ready",
+                "audit_denominator": len(path_audit_candidate_snapshots),
+                "data_state_excluded": (
+                    len(path_audit_candidate_snapshots) - len(path_candidate_snapshots)
+                ),
                 "denominator": len(path_candidate_snapshots),
                 "outcome_attached": len(path_candidates),
                 "evaluable": len(path_samples),
@@ -2418,6 +2487,11 @@ def opportunity_scorecard(
                 ),
                 "version": CROSS_DAY_PATH_VERSION,
                 "sample_unit": "symbol_trade_date_earliest_selected_decision",
+                "data_state_required": "ready",
+                "audit_denominator": len(path_audit_candidate_snapshots),
+                "data_state_excluded": (
+                    len(path_audit_candidate_snapshots) - len(path_candidate_snapshots)
+                ),
                 "denominator": len(path_candidate_snapshots),
                 "outcome_attached": len(path_candidates),
                 "evaluable": len(path_samples),
@@ -2445,6 +2519,9 @@ def opportunity_scorecard(
             "k": len(selected),
             "selected": len(selected),
             "evaluable": len(evaluable),
+            "data_state_counts": dict(sorted(Counter(
+                snapshot.data_state or "unknown" for _outcome, snapshot in selected
+            ).items())),
             "symbols": [snapshot.symbol for _outcome, snapshot in selected],
             "coverage": round(len(evaluable) / len(selected), 4) if selected else None,
             "observed": (
@@ -2457,7 +2534,9 @@ def opportunity_scorecard(
         "note": (
             "只描述已归档事实，不构成买卖建议；独立样本按 symbol×trade_date 去重，原始行数保留在 audit。"
             "指定版本没有任何漏斗样本时 verdict=no_matching_denominator；有分母但尚有未标结果时 "
-            "verdict=incomplete_denominator；分母完整后若可执行样本低于下限，verdict 才为 insufficient_sample。"
+            "verdict=incomplete_denominator；分母完整但存在非 ready 决策事实时 verdict=degraded_input；"
+            "只有输入质量完整后，可执行样本低于下限才为 insufficient_sample。"
+            "degraded/unavailable/unknown 决策事实保留在 audit/分母，但不进入效果样本；"
             "legacy/unversioned 结果仅作审计，不进入当前 price-basis 指标；"
             "D0 成本调整值仅为同日收盘代理，不是 A 股 T+1 下可实现净收益；"
             "deferred/not_actionable 只服务漏选/失败分母，不进入可执行净收益。"
