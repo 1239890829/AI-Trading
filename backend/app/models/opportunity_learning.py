@@ -113,3 +113,43 @@ class OpportunityOutcomeLabel(Base):
     __table_args__ = (
         UniqueConstraint("snapshot_id", "horizon", name="uq_opportunity_outcome_snapshot_horizon"),
     )
+
+class OpportunityOutcomeRevision(Base):
+    """Append-only derived close-outcome revision for one immutable base outcome."""
+
+    __tablename__ = "opportunity_outcome_revision"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    base_outcome_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("opportunity_outcome_label.id"), index=True
+    )
+    snapshot_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("opportunity_decision_snapshot.snapshot_id"), index=True
+    )
+    horizon: Mapped[str] = mapped_column(String(16), index=True)
+    target_date: Mapped[str] = mapped_column(String(10), index=True)
+    revision_version: Mapped[str] = mapped_column(String(96), index=True)
+    state: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    label: Mapped[str] = mapped_column(String(16), default="unknown")
+    reference_price: Mapped[float | None] = mapped_column(Float, default=None)
+    outcome_price: Mapped[float | None] = mapped_column(Float, default=None)
+    return_pct: Mapped[float | None] = mapped_column(Float, default=None)
+    fill_state: Mapped[str] = mapped_column(String(16), default="unknown", index=True)
+    cost_pct: Mapped[float | None] = mapped_column(Float, default=None)
+    net_return_pct: Mapped[float | None] = mapped_column(Float, default=None)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(String(32), default="daily_close")
+    basis_reference_price: Mapped[float | None] = mapped_column(Float, default=None)
+    reference_adjustment_factor: Mapped[float | None] = mapped_column(Float, default=None)
+    price_basis_version: Mapped[str] = mapped_column(String(48), default="")
+    price_basis_source: Mapped[str] = mapped_column(String(64), default="")
+    cost_model_version: Mapped[str] = mapped_column(String(64), default="")
+    labeled_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "base_outcome_id", "revision_version",
+            name="uq_opportunity_outcome_revision_base_version",
+        ),
+    )
