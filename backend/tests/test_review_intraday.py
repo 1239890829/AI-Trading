@@ -365,6 +365,31 @@ def test_collect_d0_path_outcomes_uses_tencent_only_and_selected_symbols(tmp_pat
     assert rejected.path_state == "deferred" and rejected.mfe_pct is None
 
 
+def test_daily_bar_facts_preserve_ohlc_source_in_one_fetch():
+    import asyncio
+
+    class _Provider:
+        name = "unit"
+        calls = 0
+
+        async def get_kline(self, symbol, timeframe):
+            self.calls += 1
+            assert symbol == "600001" and timeframe == "1d"
+            return [Kline(
+                symbol=symbol, timeframe="1d",
+                ts=datetime(2026, 9, 16, 23, 30, tzinfo=timezone.utc),
+                open=9.8, high=10.8, low=9.5, close=10.2, volume=1000,
+                source="unit",
+            )]
+
+    provider = _Provider()
+    facts = asyncio.run(ri._daily_bar_facts(provider, "600001"))
+    assert provider.calls == 1
+    assert facts[date(2026, 9, 17)] == {
+        "close": 10.2, "high": 10.8, "low": 9.5, "source": "unit"
+    }
+
+
 def test_price_basis_rejects_cross_provider_ratio():
     d = date(2026, 9, 16)
     cross = ri._price_basis_from_daily(
@@ -467,6 +492,61 @@ def test_run_review_end_to_end(brief_dir, monkeypatch):
     assert horizon_scopes and all(scope is False for scope in horizon_scopes)
 
 
+def test_crossday_failure_never_blocks_existing_d0_path_lane(brief_dir, monkeypatch):
+    import asyncio
+    import app.core.bjtime as bj
+    import app.core.db as dbmod
+    import app.picks.opportunity_learning as ol
+
+    _write_brief(brief_dir, {**_brief("20260917"), "directions": []})
+    now = datetime(2026, 9, 17, 15, 36)
+    monkeypatch.setattr(ri, "beijing_now", lambda: now)
+    monkeypatch.setattr(bj, "beijing_now", lambda: now)
+
+    async def _closing(_state):
+        return {"themes": {}, "env": {}, "missing": [], "pool_count": 0, "board_count": 0}
+
+    async def _alerts(_state):
+        return {"ok": True, "alerts_updated": 0}
+
+    async def _days(_provider):
+        return [date(2026, 9, 16), date(2026, 9, 17), date(2026, 9, 18)]
+
+    d0_called = []
+
+    async def _d0(_state, trade_date, _sf):
+        d0_called.append(trade_date)
+        return {"trade_date": trade_date, "labeled": 1}
+
+    sentinel_sf = object()
+    monkeypatch.setattr(ri, "collect_closing_facts", _closing)
+    monkeypatch.setattr(ri, "backfill_alert_returns", _alerts)
+    monkeypatch.setattr(ri, "collect_d0_path_outcomes", _d0)
+    monkeypatch.setattr(ri.tc, "trading_days", _days)
+    monkeypatch.setattr(dbmod, "get_session_factory", lambda: sentinel_sf)
+    monkeypatch.setattr("app.picks.watch_ledger.get_day", lambda *_a, **_k: [])
+    monkeypatch.setattr("app.picks.watch_ledger.settle_day", lambda *_a, **_k: {})
+    monkeypatch.setattr("app.picks.watch_ledger.validate_previous_day", lambda *_a, **_k: 0)
+    monkeypatch.setattr(ol, "ensure_outcome_horizons", lambda *_a, **_k: {"inserted": 0})
+    monkeypatch.setattr(ol, "pending_outcome_targets", lambda *_a, **_k: {})
+    monkeypatch.setattr(ol, "pending_cross_day_path_targets", lambda *_a, **_k: {"2026-09-17": set()})
+    monkeypatch.setattr(ol, "pending_symbols", lambda *_a, **_k: set())
+    monkeypatch.setattr(ol, "label_trade_date", lambda *_a, **_k: {"labeled": 0})
+    monkeypatch.setattr(ol, "label_due_outcomes", lambda *_a, **_k: {"labeled": 0})
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("synthetic cross-day failure")
+
+    monkeypatch.setattr(ol, "label_cross_day_paths", _boom)
+    state = NS(hub=NS(provider=NS()), snapshot_service=None, picks_watcher=None)
+    result = asyncio.run(ri.run_review(NS(state=state), trigger="manual"))
+
+    assert result["ok"] is True
+    assert d0_called == ["2026-09-17"]
+    assert result["opportunity_path"] == {"trade_date": "2026-09-17", "labeled": 1}
+    assert result["opportunity_crossday_path"] == []
+
+
 def test_run_review_schedule_idempotent(brief_dir, monkeypatch):
     """已 schedule 复盘过的简报，schedule 触发跳过（持久化幂等）。"""
     import asyncio
@@ -529,3 +609,92 @@ def test_backfill_alert_returns(brief_dir, monkeypatch):
     assert saved["alerts"][1]["meta"]["returns"]["t1_return"] == 1.0
     # 失败的提醒未落盘（下次续算），不冒充已回算
     assert "returns" not in saved["alerts"][2]["meta"]
+
+
+def test_run_review_wires_crossday_path_only_with_calendar(brief_dir, monkeypatch):
+    import asyncio
+    import app.picks.opportunity_learning as ol
+
+    _write_brief(brief_dir, _brief("20260902"))
+    monkeypatch.setattr(ri, "beijing_now", lambda: datetime(2026, 9, 2, 15, 36))
+
+    async def _closing(_state):
+        return {"themes": {}, "env": {}, "missing": [], "pool_date": "2026-09-02",
+                "pool_count": 0, "board_count": 0}
+
+    async def _alerts(_state):
+        return {"ok": True, "alerts_updated": 0}
+
+    async def _d0(_state, _trade_date, _sf=None):
+        return {"trade_date": _trade_date, "symbols": 0, "labeled": 0,
+                "pending": 0, "unknown": 0}
+
+    class _Prov:
+        name = "unit"
+
+        async def get_kline(self, symbol, timeframe):
+            assert (symbol, timeframe) == ("600001", "1d")
+            return [Kline(
+                symbol=symbol, timeframe="1d", ts=datetime(2026, 9, 1),
+                high=10.3, low=9.8, close=10.0, source="unit",
+            ), Kline(
+                symbol=symbol, timeframe="1d", ts=datetime(2026, 9, 2),
+                high=10.9, low=10.1, close=10.5, source="unit",
+            )]
+
+        async def get_raw_daily_kline(self, symbol):
+            return [Kline(
+                symbol=symbol, timeframe="1d", ts=datetime(2026, 9, 1),
+                close=10.0, source="unit",
+            ), Kline(
+                symbol=symbol, timeframe="1d", ts=datetime(2026, 9, 2),
+                close=10.5, source="unit",
+            )]
+
+    monkeypatch.setattr(ri, "collect_closing_facts", _closing)
+    monkeypatch.setattr(ri, "backfill_alert_returns", _alerts)
+    monkeypatch.setattr(ri, "collect_d0_path_outcomes", _d0)
+    monkeypatch.setattr("app.picks.watch_ledger.get_day", lambda *_a, **_k: [])
+    monkeypatch.setattr("app.picks.watch_ledger.settle_day", lambda *_a, **_k: {})
+    monkeypatch.setattr("app.picks.watch_ledger.validate_previous_day", lambda *_a, **_k: 0)
+    monkeypatch.setattr(ol, "ensure_outcome_horizons", lambda *_a, **_k: {"inserted": 0})
+    monkeypatch.setattr(ol, "pending_outcome_targets", lambda *_a, **_k: {})
+    monkeypatch.setattr(ol, "pending_symbols", lambda *_a, **_k: set())
+    monkeypatch.setattr(ol, "label_trade_date", lambda *_a, **_k: {"labeled": 0})
+
+    calls = []
+    monkeypatch.setattr(
+        ol, "pending_cross_day_path_targets",
+        lambda *_a, **_k: {"2026-09-02": {"600001"}},
+    )
+
+    def _label(target_date, paths, days, basis, _sf):
+        calls.append((target_date, paths, list(days), basis))
+        return {"target_date": target_date, "labeled": 1, "pending": 0, "unknown": 0}
+
+    monkeypatch.setattr(ol, "label_cross_day_paths", _label)
+
+    async def _days(_provider):
+        return [date(2026, 9, 1), date(2026, 9, 2)]
+
+    monkeypatch.setattr(ri.tc, "trading_days", _days)
+    state = NS(hub=NS(provider=_Prov()), snapshot_service=None, picks_watcher=None)
+    got = asyncio.run(ri.run_review(NS(state=state), trigger="manual"))
+    assert got["opportunity_crossday_path"] == [
+        {"target_date": "2026-09-02", "labeled": 1, "pending": 0, "unknown": 0}
+    ]
+    assert len(calls) == 1
+    assert calls[0][1]["600001"][date(2026, 9, 2)] == (10.9, 10.1, "unit")
+    assert calls[0][3][("2026-09-01", "600001")][0] == pytest.approx(1.0)
+
+    # Calendar failure must not expand the cross-day provider/request surface.
+    _write_brief(brief_dir, _brief("20260902"))
+    async def _no_days(_provider):
+        raise RuntimeError("calendar down")
+    monkeypatch.setattr(ri.tc, "trading_days", _no_days)
+    monkeypatch.setattr(
+        ol, "pending_cross_day_path_targets",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not query cross-day backlog without calendar")),
+    )
+    got2 = asyncio.run(ri.run_review(NS(state=state), trigger="manual"))
+    assert got2["opportunity_crossday_path"] == []

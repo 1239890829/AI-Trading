@@ -42,7 +42,7 @@ from typing import Any
 from app.market import trade_calendar as tc
 from app.picks.intraday_rules import CONFIRM_THEME_PCT_LATE, confirm_signal
 from app.picks.morning_brief import BRIEF_DIR, load_brief, save_brief
-from app.core.bjtime import beijing_now
+from app.core.bjtime import beijing_now, to_beijing_naive
 
 log = logging.getLogger(__name__)
 
@@ -417,12 +417,13 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
     opportunity_labels = None
     opportunity_horizons = None
     opportunity_path = None
+    opportunity_crossday_path = None
     horizon_prepared: list[dict] = []
     with contextlib.suppress(Exception):
         from app.picks.watch_ledger import get_day, settle_day, validate_previous_day
         from app.picks.opportunity_learning import (
-            ensure_outcome_horizons, label_due_outcomes, label_trade_date, pending_outcome_targets,
-            pending_symbols,
+            ensure_outcome_horizons, label_cross_day_paths, label_due_outcomes, label_trade_date,
+            pending_cross_day_path_targets, pending_outcome_targets, pending_symbols,
         )
         from app.core.bjtime import beijing_now as _bnow
         from app.core.db import get_session_factory as _gsf
@@ -433,6 +434,7 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
         ledger_symbols = {
             r["symbol"] for r in get_day(tdate, _gsf()) if r["status"] == "tracking"
         }
+        days: list[date] = []
         with contextlib.suppress(Exception):
             days = await tc.trading_days(state.hub.provider)
             # D5 is five sessions out. Revisit a bounded window larger than D5 so a
@@ -446,10 +448,16 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
             ]
         due_targets = pending_outcome_targets(tdate, _gsf(), lookback_days=30)
         due_symbols = {symbol for symbols in due_targets.values() for symbol in symbols}
+        crossday_targets = (
+            pending_cross_day_path_targets(tdate, _gsf(), lookback_days=30)
+            if days else {}
+        )
+        crossday_symbols = {symbol for symbols in crossday_targets.values() for symbol in symbols}
         d0_pending = pending_symbols(tdate, _gsf())
-        outcome_symbols = d0_pending | due_symbols
+        outcome_symbols = d0_pending | due_symbols | crossday_symbols
         symbols = ledger_symbols | outcome_symbols
         daily_by_symbol: dict[str, dict[date, float]] = {}
+        daily_path_by_symbol: dict[str, dict[date, tuple[float, float, str]]] = {}
         price_basis_by_key: dict[tuple[str, str], tuple[float, str]] = {}
         for symbol in sorted(symbols):
             with contextlib.suppress(Exception):
@@ -458,7 +466,20 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
                 # rejects a failover split across vendors.  Non-outcome ledger rows
                 # retain the existing low-cost/Tencent preference.
                 qfq_provider = state.hub.provider if symbol in outcome_symbols else provider
-                qfq_facts = await _daily_close_facts(qfq_provider, symbol, raw=False)
+                if symbol in outcome_symbols:
+                    qfq_bars = await _daily_bar_facts(qfq_provider, symbol, raw=False)
+                    qfq_facts = {
+                        d: (float(fact["close"]), str(fact["source"]))
+                        for d, fact in qfq_bars.items()
+                        if fact.get("close") is not None
+                    }
+                    daily_path_by_symbol[symbol] = {
+                        d: (float(fact["high"]), float(fact["low"]), str(fact["source"]))
+                        for d, fact in qfq_bars.items()
+                        if fact.get("high") is not None and fact.get("low") is not None
+                    }
+                else:
+                    qfq_facts = await _daily_close_facts(qfq_provider, symbol, raw=False)
                 dc = {d: value for d, (value, _source) in qfq_facts.items()}
                 daily_by_symbol[symbol] = dc
                 c = dc.get(_bnow().date())
@@ -482,12 +503,25 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
             opportunity_horizons.append(
                 label_due_outcomes(target_date, target_closes, _gsf(), price_basis_by_key=price_basis_by_key)
             )
+        # Preserve the already-closed D0 path lane even if the new cross-day
+        # accumulator fails. Cross-day evidence is additive and must never block D0.
         opportunity_path = await collect_d0_path_outcomes(state, tdate, _gsf())
+        opportunity_crossday_path = []
+        if days:
+            try:
+                for target_date in crossday_targets:
+                    opportunity_crossday_path.append(
+                        label_cross_day_paths(
+                            target_date, daily_path_by_symbol, days, price_basis_by_key, _gsf()
+                        )
+                    )
+            except Exception:
+                log.warning("cross-day opportunity path labeling failed", exc_info=True)
         # 次日持续性验证（闭环「验证」段）：T-1 行写回 T 收盘表现
         d1_n = validate_previous_day(closes, _gsf())
         log.info(
-            "watch ledger settle: %s | opportunity labels: %s | future horizons: %s | D0 path: %s | D+1 验证 %s 行",
-            ledger_settled, opportunity_labels, opportunity_horizons, opportunity_path, d1_n,
+            "watch ledger settle: %s | opportunity labels: %s | future horizons: %s | cross-day path: %s | D0 path: %s | D+1 验证 %s 行",
+            ledger_settled, opportunity_labels, opportunity_horizons, opportunity_crossday_path, opportunity_path, d1_n,
         )
 
     log.info(
@@ -499,6 +533,7 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
     return {"ok": True, "brief_date": target, "directions": reviews, "alert_backfill": backfill,
             "ledger_settled": ledger_settled, "opportunity_labels": opportunity_labels,
             "opportunity_horizons": opportunity_horizons,
+            "opportunity_crossday_path": opportunity_crossday_path,
             "opportunity_path": opportunity_path,
             "outcome_horizons_prepared": horizon_prepared}
 
@@ -609,7 +644,8 @@ def _parse_brief_date(s: Any) -> date | None:
         return None
 
 
-async def _daily_close_facts(provider, symbol: str, *, raw: bool = False) -> dict[date, tuple[float, str]]:
+async def _daily_bar_facts(provider, symbol: str, *, raw: bool = False) -> dict[date, dict[str, Any]]:
+    """Daily OHLC facts with provider identity; one fetch serves close and cross-day path lanes."""
     try:
         if raw:
             fetch = getattr(provider, "get_raw_daily_kline", None)
@@ -619,17 +655,37 @@ async def _daily_close_facts(provider, symbol: str, *, raw: bool = False) -> dic
         else:
             bars = await provider.get_kline(symbol, "1d")
     except Exception as exc:
-        log.warning("alert returns: %s kline %s failed: %s", "raw" if raw else "qfq", symbol, exc)
+        log.warning("daily %s kline %s failed: %s", "raw" if raw else "qfq", symbol, exc)
         return {}
-    closes: dict[date, tuple[float, str]] = {}
+    facts: dict[date, dict[str, Any]] = {}
     for b in bars or []:
         try:
-            d = b.ts.date()
-            if b.close is not None and d.year >= 2020 and float(b.close) > 0:
-                closes[d] = (float(b.close), str(getattr(b, "source", "") or getattr(provider, "name", "")))
+            d = to_beijing_naive(b.ts).date()
+            if d.year < 2020:
+                continue
+            source = str(getattr(b, "source", "") or getattr(provider, "name", ""))
+            def clean(value):
+                try:
+                    v = float(value)
+                except (TypeError, ValueError):
+                    return None
+                return v if math.isfinite(v) and v > 0 else None
+            close, high, low = clean(getattr(b, "close", None)), clean(getattr(b, "high", None)), clean(getattr(b, "low", None))
+            if close is None and high is None and low is None:
+                continue
+            facts[d] = {"close": close, "high": high, "low": low, "source": source}
         except Exception:
             continue
-    return closes
+    return facts
+
+
+async def _daily_close_facts(provider, symbol: str, *, raw: bool = False) -> dict[date, tuple[float, str]]:
+    facts = await _daily_bar_facts(provider, symbol, raw=raw)
+    return {
+        d: (float(fact["close"]), str(fact["source"]))
+        for d, fact in facts.items()
+        if fact.get("close") is not None
+    }
 
 
 async def _daily_closes(provider, symbol: str) -> dict[date, float]:
