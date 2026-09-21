@@ -1,11 +1,11 @@
 # 当前交接：多窗口执行审计 / 运行态与证据治理收口
 
 
-> **2026-09-21 多窗口审计**：详见 `docs/review/chatgpt-multiwindow-audit-20260921.md`。已确认方向总体未偏离，但新增四个当前事实：BUG-020 在 9/21 真实交易会话漏过条件激活；本机运行 backend/master 与 frontend dependency 环境落后 Git 事实；IMP-053 需承接更严格 actual-fill 同版身份契约；Jev 已真实 shadow 使用但 RSH-030 human gold/assistant route 使用仍未闭环。本轮已清理约 6.3GiB 过期临时资产并保留唯一 `54b7e0c` RECOVERY。任务状态仍以 stage 为准，不以本段建立第二账本。
+> **2026-09-21 多窗口审计及晚间收口**：详见 `docs/review/chatgpt-multiwindow-audit-20260921.md`。审计指出的三类执行缺口已进一步收口：① BUG-020 的条件激活不再只靠记忆，`scripts/ledger-runtime-selection.py` 可在下一交易日 08:30–09:15 开工窗把静态 G4 临时抢回 G0，错过窗口/日历未知均 fail-closed；② 本机 AI-Trading 后端已受控停服、同步 `master@c272d260`、重启并通过 SQLite/health/30 scheduler/snapshot 验收；③ 前端误判已纠正——Next 15.5.25 进程属于另一个 `vide-trading` 仓库，AI-Trading 当时没有前端进程，自身 `npm ci` 后在 Node 22.22.2 下 695/695 tests 与 Next 16.3.3 build 全绿。Jev 真实 assistant 请求也已新增 `assistant_tool_router` receipt；RSH-030 human gold 仍必须独立人工完成。IMP-053 actual-fill 契约与唯一 `54b7e0c` RECOVERY 仍按各自 owner 保留。任务状态仍以 stage 为准，不以本段建立第二账本。
 
-> **定位 / 摘要**：G3/IMP-020 前三子片已进入 `master@6997a44`；本最终纵切只补 promotion-readiness / actual-shadow-fill 身份校验 / rollback-reopen 计划。机制闭环完成不等于策略通过：当前 Candidate B 仍 observe 且没有 IMP-053 actual fill，因此 readiness 必须 blocked；不改策略权重、不自动晋级、不宣称实际成交净收益。
+> **定位 / 摘要**：IMP-020 已完成且 Candidate B 仍因缺 IMP-053 actual fill 而 blocked；本轮用户明确要求把前几轮总结中尚未真正完成的现场项一起收口，范围仅含运行态接收、条件激活机制、Jev assistant shadow 实证和工作区卫生，不领取 IMP-052 或其它新业务切片，不改策略权重、不自动晋级、不宣称实际成交净收益。
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** IMP-020 前三子片已推进到 `master@6997a44adb6594cd62617b18b5efd6addf7afd00`（PR #93 merge）；当前最终纵切只建立只读 readiness 证据与回退/重开契约，不改策略阈值/权重、不自动晋级、不写真实交易，也不允许 research 侧构造 actual fill。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** 本轮是审计遗留收口，不是新业务策略切片：运行服务/依赖与 Git 事实已重新接收，BUG-020 条件唤醒已机械化，Jev assistant shadow 已有真实 receipt；仍不改策略阈值/权重、不自动晋级、不写真实交易，也不允许 research 侧构造 actual fill。
 
 
 
@@ -45,7 +45,7 @@
 ## 5. 当前接续规则
 
 2026-09-18 规划批已完成理论/产品/大小功能/知识使用/文档治理层面的逐项去向；其 DESIGN_ONLY 边界只描述该历史规划批，不再作为全项目“当前模式”。计划中的实际开发、原始数据/候选实证和运行验收仍按各 stage 的真实状态继续。
-Codex收到短提示后先从最新 `master` 重读 AGENTS、handoff、协作规范、总账 §5.9 和对应 stage。网页派工与用户调用 `ashare-ledger-continue` 的“继续任务/继续”使用同一算法：**最低可行动阻断 G 门 → 门禁角色 → P0/P1/P2 → 门内序 → 硬依赖**；`效果前置` 只限制效果主张/晋级，不得被忽略。一次“继续”只授权一个主切片，Codex不得连续扫账本或自行跨门。
+Codex收到短提示后先从最新 `master` 重读 AGENTS、handoff、协作规范、总账 §5.9 和对应 stage。网页派工与用户调用 `ashare-ledger-continue` 的“继续任务/继续”使用同一算法：先运行 `scripts/ledger-runtime-selection.py` 重算 stage 明示运行条件，再按**最低可行动阻断 G 门 → 门禁角色 → P0/P1/P2 → 门内序 → 硬依赖**选一刀；`效果前置` 只限制效果主张/晋级，不得被忽略。一次“继续”只授权一个主切片，Codex不得连续扫账本或自行跨门。
 文字版完整图以product-closure-design §8为准；展示图片只是解释副本，不是状态源。图必须包含后续获准实施的方向，不得宣称已经自动执行或真实券商下单，不出现普通前台配置/调试中心或后台固定分类上限。
 
 ## 6. 2026-09-19 分支收敛结果
@@ -63,10 +63,10 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 - **当前主门**：G4
 - **主切片首选**：IMP-052
-- **领取边界**：IMP-020 已完成并把 verification → research experiment → execution-owned actual fill → readiness → rollback/reopen 接成 fail-closed 闭环。账本机械推导下一候选为 G4/IMP-052，但用户明确要求“完成 020 后停止”，因此这里只登记下一候选，不领取、不施工。
-- **当前现场**：PR #93 已把消融、Champion/Challenger 与 append-only experiment accounting 合入 master；最终纵切新增 `strategy_readiness` 并完成真实 blocked 探针。IMP-020 状态已关闭，阶段门重算为 G4/IMP-052；本轮不继续执行 IMP-052。
-- **阶段门重算**：RSH-026 与 IMP-020 均已完成；当前最低可行动主门机械推导为 G4，首选 IMP-052。RSH-030/RSH-031 等保留各自效果前置与非阻断语义；本轮因用户停止条件不领取下一项。
-- G0 的 BUG-028 / BUG-026 已完成，BUG-020 为 `待条件`；G1 的 BUG-029 / IMP-006 / IMP-044 已完成；G2 的 IMP-049 为 `待条件`；G3/RSH-026 已完成。IMP-020 本纵切关闭后必须重新按阶段门算法选下一项；但用户已要求“完成 020 后停止”，所以本轮不继续领取。
+- **领取边界**：IMP-020 已完成。用户本轮只追加授权“把前几轮总结尚未真正完成的现场项一起做完”，因此静态账本仍机械推导 G4/IMP-052，但本轮不领取 IMP-052；若 BUG-020 的显式运行条件进入开工窗，runtime selector 可临时把有效主门改为 G0。
+- **当前现场**：AI-Trading 后端已从旧本机 `f3556ad5` 受控同步并以 `c272d260` 应用代码重启；真实 SQLite `integrity_check=ok`/39 tables，30/30 scheduler running，冷启动后 snapshot=ready/sina/5,564 rows。AI-Trading 前端此前未运行；`npm ci` 已在 Node 22.22.2 下重建，695/695 tests 与 Next 16.3.3 production build 通过，`.next` 验收缓存已清。当前静态阶段门仍为 G4/IMP-052，本轮不继续执行 IMP-052。
+- **阶段门重算**：静态账本仍为 G4/IMP-052；每轮 continue 先运行 runtime selector。BUG-020 只在已覆盖交易日的 08:30–09:15 完整会话开工窗临时变为 G0 actionable，领取后进入进行中并覆盖到收盘；日历 unknown 或错过开工窗不抢占。RSH-030/RSH-031 等继续保留各自效果前置与非阻断语义。
+- G0 的 BUG-028 / BUG-026 已完成，BUG-020 静态为 `待条件` 且已登记 `A_SHARE_OBSERVABLE_SESSION`；G1 的 BUG-029 / IMP-006 / IMP-044 已完成；G2 的 IMP-049 仍为 `待条件` 且尚无可机械判定的运行条件；G3/RSH-026 与 IMP-020 已完成。本轮用户授权的是审计遗留收口，不等于领取静态下一业务候选 IMP-052。
 - BUG-020 的 current-value 接纳门现区分 source event time / received time、缺失/拒绝/合法空集与身份歧义；旧可信值不会被晚到/非法观测覆盖。2026-09-20 周日已用本片代码显式加载主仓部署 `.env`，成功构建 `chain(ths→tencent→eastmoney→sina)` 并完成有界只读休市探针：最近交易日 2026-09-18、6/6 指数覆盖、拒绝数 0，600519 实际由腾讯返回且 source time 为 2026-09-18，Hub 明确标 `stale/market_closed`。尚未完成真实交易时段完整会话验收，故不得标已完成或宣称长期盘中 SLA。
 - BUG-029 现以 `ever_sealed/current_sealed/snapshot_state/version` 为唯一 current-state 契约；开板只恢复“进入评估”的资格，不自动获得成交/通知/模拟执行许可。2026-09-18 真实跨源样本已证明涨停池成员可多次开板/回封；旧 v1 归档保持原语义，v2 才使用新状态重放。
 - RSH-031 为 `G1/P1/非阻断/门内序70`，即使同处 G1 也排在阻断项之后；且 `效果前置=RSH-026, IMP-020, RSH-030` 未满足前不得宣称龙头战法有效或接生产权重。
@@ -74,15 +74,15 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - U48 同样不制造跨门例外：W08/GOV-027 为 `GX/P1/持续治理/门内序47`，只可作为不冲突的伴随切片；它先复用 factor/strategy/KB/Jev/opportunity 各自 owner 的既有证据，定义最小生命周期/衰退/成本反馈契约，不建第二总注册表。项目级上层治理入口新增 `skills/living-system-governor/SKILL.md`，用于跨模块方案、重大重构和机制生命周期复核；该 Skill 只提供证据/反证/KEEP-FIX-MERGE-EXPERIMENT-WATCH-RETIRE 决策协议，不拥有派工、生产晋级或阶段门修改权。 v1.2.0 在自我进化基础上进一步加入 U49 主动缺陷发现门；v9.11/U50 又补受控降级全权闭环，避免 Codex 不可用时角色门自锁：后续长期要求/重复纠偏先作为方法论候选，只有形成稳定可复用增量才版本化蒸馏；一次性要求不污染 Core，是否落实以 Git/PR 与后续行为核验，不靠聊天窗口记忆。任何生产降权、阈值变化、策略/Jev 晋级仍回原 owner task 与证据门。
 - U49 不改变阶段门算法，但改变每轮默认动作：继续选刀前、审核放行前、阻断项闭环/换门后、事故/用户纠偏后都要运行有界主动缺陷发现门并写回执；同根 P0/P1 新发现可改变当前验收，跨域发现回原 owner，不自动扩权施工。
 - U50 也不改变阶段门算法，只改变“谁可以完成当前切片”：正常模式仍是 Web Review + Codex；当前 `DEGRADED_FULL_CONTROL` 下网页端按同一阶段门全程操控，每个 PR 必须重新写 exact-HEAD `DegradedRelease`，不能复用一次用户授权跳过逐 PR 发布证据。
-- GX 治理只可作为不冲突的伴随切片。2026-09-20 `GOV-018` 已闭环：`.workbuddy` / `.workbuddy-ai` 已物理删除，有价值内容进入项目中性 `skills/scripts/docs/artifacts`，第三方 UZI/Serenity 本体不再复制；PR #48 已合入 `master`（merge `b6b5ba0`，最终 required CI run `35481812431` backend/frontend/docs 全绿）。`GOV-026` 已落地 `scripts/workspace-hygiene.py` 并接 CI/交接；docs 根已收口为 6 个控制面。以上治理不改变阶段门算法；BUG-020 与 IMP-049 都因 `待条件` 排除，RSH-026 登记完成后阶段门下一阻断为 G3/IMP-020。
+- GX 治理只可作为不冲突的伴随切片。`GOV-026` 的 workspace hygiene 已接 CI/交接，本轮又完成宿主盘点与缓存收口；`GOV-022` 新增 runtime selector，只对 stage 明示且可确定的运行条件做临时选择覆盖，不改变静态账本。BUG-020 因具备显式条件可在完整会话开工窗抢回 G0；IMP-049 仍因条件不可机械证明而保持静态等待。
 
-当前处于 `DEGRADED_FULL_CONTROL`：IMP-020 最终纵切只做 readiness/rollback/reopen 证据。真实验收继续只写临时目录，不覆盖生产 verify/experiment/readiness；当前 Candidate B readiness=blocked，不启动真实交易或参数晋级。
+当前处于 `DEGRADED_FULL_CONTROL`：本轮只做审计遗留的运行/治理收口。Candidate B readiness 仍 blocked，不启动真实交易或参数晋级；BUG-020 真实整段交易会话验收仍必须等下一次完整开工窗，不能用 9/21 盘后收口替代。
 
 ## 8. Jev、工具链与协作流当前基线
 
 - Jev 只保留 bounded semantic verify、条件 capability routing、metadata-only usage 与研究/审核辅助；确定性金融规则、权限、撮合、风控和真实执行不得委托给 Jev。
 - BillionsBobby/JevRouter 只采用经过固定版本校验的内核与 privacy-safe wrapper；旧 `jev-route` 已退出活动链。OpenRouter 当前明确不接入，也不使用聊天中出现过的旧 Key。
-- Universal Verification 仍为 off/shadow；RSH-030 的 240 条固定队列已经 Jev 预标注，但 human gold 仍为 0/240。未完成人工独立标注前，不启用 cascade、不调生产阈值、不宣称准确率或额度节省。
+- Universal Verification 仍为 off/shadow；RSH-030 的 240 条固定队列已经 Jev 预标注，但 human gold 仍为 0/240。2026-09-21 晚间真实 `/api/assistant/chat` 已新增 `assistant_tool_router=1` 的 Jev usage receipt，证明 assistant shadow 消费者真实运行；未完成人工独立标注前仍不启用 cascade、不调生产阈值、不宣称准确率或额度节省。
 - 协作固定为“`master` 账本事实源 + 用户短提示”，但执行角色由模式决定：正常模式网页规划/独立审核、Codex执行；`DEGRADED_FULL_CONTROL` 网页全程操控。Bridge、自动互调均不是必需依赖。功能分支只作短期施工载体，合并确认后立即删除。
 - v9.4 引入 Jev 长期系统分层与 `plan-registry.md` §1.1 重大决策传播契约；后续版本继续继承该规则。新模型/工具链/架构/协作决定若只更新专题蓝图而漏总方案、INDEX、stage 或接手入口，视为治理缺陷。
 - v9.5 把“当前方案不是永久终局”制度化：`ai/continuous-evolution.md` + `ashare-innovation-radar` 主动发现外部新模型/工具/量化方法/数据与反证；只产生 WATCH/SHORTLISTED/LAB 建议，任何真实采用仍回原 stage、证据门、PR/审核/CI。
@@ -96,7 +96,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **Degraded reason**：当前 Codex 额度不可用，正常双角色无法持续完成实施→独立审核→发布闭环；旧 exact-HEAD Review 门因此形成自锁。
 - **有效期**：持续到用户明确说 Codex 已恢复/退出降级；不是单 PR 临时口令。但每个 PR 的发布仍必须重新生成 exact-HEAD `DegradedRelease`，不能复用上一 PR 回执。
 - **不降低项**：G0–G5/GX 阶段门、U49 主动反证、branch protection、required CI、latest master、CHANGES_REQUESTED/thread、public-repo scan、workspace/doc-health、敏感信息/范围、post-merge CI、删除功能分支。
-- **当前动作**：RSH-026 已 closeout；IMP-020 前三子片已进入 master，当前唯一在制为 IMP-020 final readiness closeout。最终 PR 仍需 exact-HEAD `DegradedRelease` + required CI；合并后按用户要求停止，不跨到下一任务。
+- **当前动作**：RSH-026/IMP-020 已 closeout；本轮仅收口多窗口审计遗留的运行态接收、条件激活、Jev assistant shadow 实证与卫生治理。该收口 PR 仍需 exact-HEAD `DegradedRelease` + required CI + post-merge CI；完成后重新计算阶段门，不把本轮授权扩成 IMP-052。
 
 ## 8.2 U49 主动审计回执（RSH-026 Preflight）
 

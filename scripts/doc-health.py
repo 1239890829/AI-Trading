@@ -1837,6 +1837,7 @@ GATE_ORDER = {f"G{i}": i for i in range(6)}
 GATE_IDS = set(GATE_ORDER) | {"GX"}
 GATE_ROLES = {"阻断", "非阻断", "持续治理", "验收"}
 TASK_STATES = {"待执行", "进行中", "部分完成", "待条件", "待交付", "已完成", "已退出", "已合并"}
+RUNTIME_CONDITIONS = {"A_SHARE_OBSERVABLE_SESSION"}
 LEGACY_LEDGER = "archive/ledger-transition-20260917.md"
 # 固定迁移来源 84434a4 的旧 A–F 首列 ID；浅检出也可验，不从目标表反推分母。
 # 这是历史身份集合，不是第二份任务状态；后续新任务仍只定义在阶段页。
@@ -1948,6 +1949,9 @@ def check_phase_tasks() -> list[str]:
             errors.append(f"{tid}：完成缺 PR/commit 证据")
         if fields.get("状态") == "待条件" and "条件" not in fields.get("下一步", ""):
             errors.append(f"{tid}：待条件未交代条件")
+        runtime_condition = fields.get("运行条件", "")
+        if runtime_condition and runtime_condition not in RUNTIME_CONDITIONS:
+            errors.append(f"{tid}：未知运行条件 {runtime_condition}")
     # Retired tasks retain IDs but do not count as completed deliveries.
     retired_states = {"已退出", "已合并"}
     for tid, (_, fields) in tasks.items():
