@@ -142,12 +142,14 @@ class EastmoneyProvider:
         quotes = await self.get_quotes([symbol])
         return quotes[0] if quotes else None
 
-    async def get_kline(
+    async def _get_kline_with_fqt(
         self,
         symbol: str,
         timeframe: str,
-        start: datetime | None = None,
-        end: datetime | None = None,
+        start: datetime | None,
+        end: datetime | None,
+        *,
+        fqt: str,
     ) -> list[Kline]:
         klt = TIMEFRAME_KLT.get(timeframe)
         if klt is None:
@@ -159,7 +161,7 @@ class EastmoneyProvider:
                 "fields1": "f1,f2,f3,f4,f5,f6",
                 "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
                 "klt": str(klt),
-                "fqt": "1",  # 前复权
+                "fqt": fqt,
                 "end": "20500101",
                 "lmt": "1000",
             },
@@ -172,6 +174,22 @@ class EastmoneyProvider:
         if end is not None:
             bars = [b for b in bars if b.ts <= end]
         return bars
+
+    async def get_kline(
+        self,
+        symbol: str,
+        timeframe: str,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> list[Kline]:
+        """Existing K-line contract: forward-adjusted (qfq) history."""
+        return await self._get_kline_with_fqt(symbol, timeframe, start, end, fqt="1")
+
+    async def get_raw_daily_kline(
+        self, symbol: str, start: datetime | None = None, end: datetime | None = None
+    ) -> list[Kline]:
+        """Unadjusted daily OHLC for price-basis anchoring only (fqt=0)."""
+        return await self._get_kline_with_fqt(symbol, "1d", start, end, fqt="0")
 
     async def get_order_book(self, symbol: str) -> OrderBook | None:
         payload = await self._get_json(

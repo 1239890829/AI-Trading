@@ -530,42 +530,23 @@ class ThsFuyaoProvider:
 
     # ---- 协议其余方法：链上由其他 Provider 负责 ----
 
-    async def get_kline(
-        self,
-        symbol: str,
-        timeframe: str,
-        start: datetime | None = None,
-        end: datetime | None = None,
+    async def _get_daily_kline(
+        self, symbol: str, start: datetime | None, end: datetime | None, *, adjust: str
     ) -> list[Kline]:
-        """A 股历史日 K（fuyao `/api/a-share/prices/historical`）。
-
-        为什么补它：K 线此前只有腾讯一条可用通路，2026-08-31 腾讯 WAF 封禁
-        后全链路中断（东财同时不可用），技术面评分与详情页 K 线图一起降级。
-        ths 是官方源且不受腾讯 WAF 影响，是天然的第三源。
-
-        官方限制（见 skills/hithink-finance/docs/api/endpoints-prices.md）：
-        - 每次请求**仅一个 thscode**，不接受逗号
-        - 仅支持 `interval=1d`（日线）→ 分钟/周线直接抛错交由链上下沉
-        - 时间窗口 ≤ 10 年，超出返回 code=1003
-        - `adjust` 默认 forward（前复权），与腾讯口径一致
-        """
-        if timeframe != "1d":
-            raise ProviderError(f"ths kline 仅支持日线 1d，收到 {timeframe}")
         end_dt = _as_shanghai(end) if end is not None else beijing_now()
         start_dt = _as_shanghai(start) if start is not None else end_dt - timedelta(days=730)
         if start_dt > end_dt:
             raise ProviderError(f"ths kline 时间区间非法：{start_dt} > {end_dt}")
         if (end_dt - start_dt).days > 3650:
             raise ProviderError("ths kline 时间窗口 ≤10 年（code=1003）")
-
+        if adjust not in {"none", "forward", "backward"}:
+            raise ProviderError(f"ths kline adjust 非法：{adjust}")
         data = await self._get(
             "/api/a-share/prices/historical",
             {
-                "thscode": to_thscode(symbol),
-                "interval": "1d",
+                "thscode": to_thscode(symbol), "interval": "1d",
                 "start": int(start_dt.timestamp() * 1000),
-                "end": int(end_dt.timestamp() * 1000),
-                "adjust": "forward",
+                "end": int(end_dt.timestamp() * 1000), "adjust": adjust,
             },
         )
         bars: list[Kline] = []
@@ -578,26 +559,33 @@ class ThsFuyaoProvider:
             change_pct = None
             if close is not None and prev_close:
                 change_pct = round((close - prev_close) / prev_close * 100, 2)
-            bars.append(
-                Kline(
-                    symbol=symbol,
-                    timeframe="1d",
-                    ts=datetime.fromtimestamp(ms / 1000, tz=BJ_TZ),
-                    open=it.get("open_price"),
-                    high=it.get("high_price"),
-                    low=it.get("low_price"),
-                    close=close,
-                    volume=it.get("volume"),
-                    amount=it.get("turnover"),
-                    change_pct=change_pct,
-                    source=SOURCE,
-                )
-            )
+            bars.append(Kline(
+                symbol=symbol, timeframe="1d",
+                ts=datetime.fromtimestamp(ms / 1000, tz=BJ_TZ),
+                open=it.get("open_price"), high=it.get("high_price"),
+                low=it.get("low_price"), close=close, volume=it.get("volume"),
+                amount=it.get("turnover"), change_pct=change_pct, source=SOURCE,
+            ))
             if close is not None:
                 prev_close = close
         if not bars:
-            raise ProviderError(f"ths kline empty for {symbol}")
+            raise ProviderError(f"ths kline empty for {symbol} adjust={adjust}")
         return bars
+
+    async def get_kline(
+        self, symbol: str, timeframe: str, start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> list[Kline]:
+        """A股历史日K；既有消费者保持 forward/qfq 语义。"""
+        if timeframe != "1d":
+            raise ProviderError(f"ths kline 仅支持日线 1d，收到 {timeframe}")
+        return await self._get_daily_kline(symbol, start, end, adjust="forward")
+
+    async def get_raw_daily_kline(
+        self, symbol: str, start: datetime | None = None, end: datetime | None = None
+    ) -> list[Kline]:
+        """不复权日K，仅供 outcome price-basis 对齐，不替换通用 qfq K线。"""
+        return await self._get_daily_kline(symbol, start, end, adjust="none")
 
     async def get_order_book(self, symbol: str):
         return None  # fuyao 无五档盘口，链上由腾讯提供

@@ -87,6 +87,10 @@ class OpportunityOutcomeLabel(Base):
     net_return_pct: Mapped[float | None] = mapped_column(Float, default=None)
     reason: Mapped[str] = mapped_column(Text, default="")
     source: Mapped[str] = mapped_column(String(32), default="daily_close")
+    basis_reference_price: Mapped[float | None] = mapped_column(Float, default=None)
+    reference_adjustment_factor: Mapped[float | None] = mapped_column(Float, default=None)
+    price_basis_version: Mapped[str] = mapped_column(String(48), default="")
+    price_basis_source: Mapped[str] = mapped_column(String(64), default="")
     # RSH-026 path outcomes: separate future/result facts from the immutable decision snapshot.
     # `path_state` is explicit because NULL/zero cannot distinguish "not collected" from "no excursion".
     path_state: Mapped[str] = mapped_column(String(16), default="unknown", index=True)
