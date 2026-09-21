@@ -67,3 +67,10 @@ def test_tdx_stops_at_external_fetch(monkeypatch):
     with pytest.raises(OSError, match="TDX unavailable"):
         tdx_kline._fetch_daily_bars("600519", 30)
     assert not unexpected
+
+
+def test_default_tdx_minute_source_is_offline():
+    from app.market import minute_backfill
+
+    with pytest.raises(OSError, match="TDX minute source unavailable"):
+        minute_backfill.fetch_tdx_minutes("600519")

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import os
+import socket
+import threading
+import traceback
 
 # 必须在导入 app 之前设置：保证测试环境确定性（mock provider + 不主动轮询）
 os.environ["ASHARE_DATA_PROVIDER"] = "mock"
@@ -146,10 +149,84 @@ import app.picks.position_engine as _position_engine  # noqa: E402
 _position_engine._PLAN_DIR = _DATA_SANDBOX / "position_plans"
 
 
-# ---------------------------------------------------------------- 共享 TestClient
+# TDX 分钟 K 是另一条独立 TCP 7709 外部边界（不受逐笔 fallback 开关控制）。
+# 默认测试必须在该边界失败；专项 minute-backfill 测试会显式 monkeypatch 自己的 fake。
+import app.market.minute_backfill as _minute_backfill_mod  # noqa: E402
+
+
+def _offline_tdx_minutes(*args, **kwargs):
+    raise OSError("test suite offline: TDX minute source unavailable")
+
+
+_minute_backfill_mod.fetch_tdx_minutes = _offline_tdx_minutes
+
+
+# ---------------------------------------------------------------- 全套测试真实网络硬门
 import pytest  # noqa: E402
 
 
+_NETWORK_ATTEMPTS: list[str] = []
+_NETWORK_ATTEMPTS_LOCK = threading.Lock()
+
+
+def _record_blocked_network(kind: str):
+    def blocked(*args, **kwargs):
+        detail = (
+            f"{kind} blocked in thread={threading.current_thread().name} "
+            f"args={args!r}\n"
+            + "".join(traceback.format_stack(limit=20))
+        )
+        with _NETWORK_ATTEMPTS_LOCK:
+            _NETWORK_ATTEMPTS.append(detail)
+        raise OSError(f"test suite offline: real network forbidden ({kind})")
+
+    return blocked
+
+
+def _drain_network_attempts() -> list[str]:
+    with _NETWORK_ATTEMPTS_LOCK:
+        pending = list(_NETWORK_ATTEMPTS)
+        _NETWORK_ATTEMPTS.clear()
+    return pending
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _block_real_network_for_test_session():
+    """当前 pytest Python 进程中的真实 socket 默认离线；专项测试显式接管自己的边界。"""
+    originals = (
+        socket.getaddrinfo,
+        socket.socket.connect,
+        socket.socket.connect_ex,
+        socket.create_connection,
+    )
+    socket.getaddrinfo = _record_blocked_network("dns")  # type: ignore[assignment]
+    socket.socket.connect = _record_blocked_network("connect")  # type: ignore[assignment]
+    socket.socket.connect_ex = _record_blocked_network("connect_ex")  # type: ignore[assignment]
+    socket.create_connection = _record_blocked_network("create_connection")  # type: ignore[assignment]
+    try:
+        yield
+    finally:
+        socket.getaddrinfo, socket.socket.connect, socket.socket.connect_ex, socket.create_connection = originals
+        pending = _drain_network_attempts()
+        if pending:
+            pytest.fail(
+                "测试会话结束后仍有未归属的真实网络尝试:\n" + "\n---\n".join(pending)
+            )
+
+
+@pytest.fixture(autouse=True)
+def _fail_test_that_attempts_real_network():
+    """把后台/跨模块网络泄漏归到实际发生时点，而不是让后续 endpoint smoke 背锅。"""
+    before = _drain_network_attempts()
+    if before:
+        pytest.fail("测试间隙发生真实网络尝试:\n" + "\n---\n".join(before))
+    yield
+    after = _drain_network_attempts()
+    if after:
+        pytest.fail("当前测试发生真实网络尝试:\n" + "\n---\n".join(after))
+
+
+# ---------------------------------------------------------------- 共享 TestClient
 @pytest.fixture(scope="module")
 def client():
     """模块级 TestClient：**一个测试模块只进一次 lifespan**（P1-25，2026-09-10）。

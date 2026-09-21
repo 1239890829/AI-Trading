@@ -11,7 +11,7 @@ import requests
 from app.market import board_flow, fund_flow, tdx_kline
 
 
-def isolate_sources(monkeypatch):
+def isolate_sources(monkeypatch, *, block_raw_sockets: bool = True):
     """Keep route/service/retry code real; fail at external transport boundaries.
 
     Return unexpected socket attempts so callers can fail even when application
@@ -47,7 +47,8 @@ def isolate_sources(monkeypatch):
         monkeypatch.setattr(module, "asyncio", SimpleNamespace(
             **{**vars(asyncio), "sleep": yield_without_delay},
         ))
-    monkeypatch.setattr(socket, "getaddrinfo", blocked_socket)
-    monkeypatch.setattr(socket.socket, "connect", blocked_socket)
-    monkeypatch.setattr(socket.socket, "connect_ex", blocked_socket)
+    if block_raw_sockets:
+        monkeypatch.setattr(socket, "getaddrinfo", blocked_socket)
+        monkeypatch.setattr(socket.socket, "connect", blocked_socket)
+        monkeypatch.setattr(socket.socket, "connect_ex", blocked_socket)
     return unexpected

@@ -3,7 +3,7 @@
 
 > **2026-09-21 多窗口审计及晚间收口**：详见 `docs/review/chatgpt-multiwindow-audit-20260921.md`。审计指出的三类执行缺口已进一步收口：① BUG-020 的条件激活不再只靠记忆，`scripts/ledger-runtime-selection.py` 可在下一交易日 08:30–09:15 开工窗把静态 G4 临时抢回 G0，错过窗口/日历未知均 fail-closed；② 本机 AI-Trading 后端已受控停服、同步 `master@c272d260`、重启并通过 SQLite/health/30 scheduler/snapshot 验收；③ 前端误判已纠正——Next 15.5.25 进程属于另一个 `vide-trading` 仓库，AI-Trading 当时没有前端进程，自身 `npm ci` 后在 Node 22.22.2 下 695/695 tests 与 Next 16.3.3 build 全绿。Jev 真实 assistant 请求也已新增 `assistant_tool_router` receipt；RSH-030 human gold 仍必须独立人工完成。IMP-053 actual-fill 契约与唯一 `54b7e0c` RECOVERY 仍按各自 owner 保留。任务状态仍以 stage 为准，不以本段建立第二账本。
 
-> **定位 / 摘要**：IMP-020 已完成且 Candidate B 仍因缺 IMP-053 actual fill 而 blocked；本轮用户明确要求把前几轮总结中尚未真正完成的现场项一起收口，范围仅含运行态接收、条件激活机制、Jev assistant shadow 实证和工作区卫生，不领取 IMP-052 或其它新业务切片，不改策略权重、不自动晋级、不宣称实际成交净收益。
+> **定位 / 摘要**：IMP-020 已完成且 Candidate B 仍因缺 IMP-053 actual fill 而 blocked；审计遗留收口已由 PR #96 合入 `master@de86c680`。#96 的 PR-CI 三项全绿，但 post-merge master CI `35607351247` 抓到 backend 全量 pytest 的真实测试隔离缺口：`test_endpoint_smoke` 最终 teardown 看到一次未归属 socket。提升为会话级网络硬门后，先定位到新闻正文降级测试与题材 API 测试实际尝试公网；#97 首轮 Linux CI 又定位到 `minute_decisions → TDX m1` 直连 7709。当前唯一未决只允许修这三条测试外部边界/显式失败桩，不领取 IMP-052 或其它新业务切片，不改生产策略、阈值或交易行为；若最新 master 已包含该修复且对应 post-merge CI 三项全绿，则本审计收口自动视为完成。
 
 **当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** 本轮是审计遗留收口，不是新业务策略切片：运行服务/依赖与 Git 事实已重新接收，BUG-020 条件唤醒已机械化，Jev assistant shadow 已有真实 receipt；仍不改策略阈值/权重、不自动晋级、不写真实交易，也不允许 research 侧构造 actual fill。
 
@@ -64,7 +64,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **当前主门**：G4
 - **主切片首选**：IMP-052
 - **领取边界**：IMP-020 已完成。用户本轮只追加授权“把前几轮总结尚未真正完成的现场项一起做完”，因此静态账本仍机械推导 G4/IMP-052，但本轮不领取 IMP-052；若 BUG-020 的显式运行条件进入开工窗，runtime selector 可临时把有效主门改为 G0。
-- **当前现场**：AI-Trading 后端已从旧本机 `f3556ad5` 受控同步并以 `c272d260` 应用代码重启；真实 SQLite `integrity_check=ok`/39 tables，30/30 scheduler running，冷启动后 snapshot=ready/sina/5,564 rows。AI-Trading 前端此前未运行；`npm ci` 已在 Node 22.22.2 下重建，695/695 tests 与 Next 16.3.3 production build 通过，`.next` 验收缓存已清。当前静态阶段门仍为 G4/IMP-052，本轮不继续执行 IMP-052。
+- **当前现场**：AI-Trading 主工作区已 fast-forward 到 #96 merge `de86c680`；真实 SQLite `integrity_check=ok`/39 tables，30/30 scheduler running，盘后 snapshot 为 `stale/sina/5,564 rows`（收盘后状态，不是重启失败）。前端此前未运行；`npm ci` 已在 Node 22.22.2 下重建，695/695 tests 与 Next 16.3.3 production build 通过，`.next` 验收缓存已清。#96 post-merge docs/frontend success、backend 失败；测试网络隔离修复候选在新增 TDX minute fail-closed 非空守卫后，本地全量 backend 已达 4,275 collected / 4,195 passed / 80 skipped / 0 errors。静态阶段门仍为 G4/IMP-052，本轮不继续执行 IMP-052。
 - **阶段门重算**：静态账本仍为 G4/IMP-052；每轮 continue 先运行 runtime selector。BUG-020 只在已覆盖交易日的 08:30–09:15 完整会话开工窗临时变为 G0 actionable，领取后进入进行中并覆盖到收盘；日历 unknown 或错过开工窗不抢占。RSH-030/RSH-031 等继续保留各自效果前置与非阻断语义。
 - G0 的 BUG-028 / BUG-026 已完成，BUG-020 静态为 `待条件` 且已登记 `A_SHARE_OBSERVABLE_SESSION`；G1 的 BUG-029 / IMP-006 / IMP-044 已完成；G2 的 IMP-049 仍为 `待条件` 且尚无可机械判定的运行条件；G3/RSH-026 与 IMP-020 已完成。本轮用户授权的是审计遗留收口，不等于领取静态下一业务候选 IMP-052。
 - BUG-020 的 current-value 接纳门现区分 source event time / received time、缺失/拒绝/合法空集与身份歧义；旧可信值不会被晚到/非法观测覆盖。2026-09-20 周日已用本片代码显式加载主仓部署 `.env`，成功构建 `chain(ths→tencent→eastmoney→sina)` 并完成有界只读休市探针：最近交易日 2026-09-18、6/6 指数覆盖、拒绝数 0，600519 实际由腾讯返回且 source time 为 2026-09-18，Hub 明确标 `stale/market_closed`。尚未完成真实交易时段完整会话验收，故不得标已完成或宣称长期盘中 SLA。
@@ -96,7 +96,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **Degraded reason**：当前 Codex 额度不可用，正常双角色无法持续完成实施→独立审核→发布闭环；旧 exact-HEAD Review 门因此形成自锁。
 - **有效期**：持续到用户明确说 Codex 已恢复/退出降级；不是单 PR 临时口令。但每个 PR 的发布仍必须重新生成 exact-HEAD `DegradedRelease`，不能复用上一 PR 回执。
 - **不降低项**：G0–G5/GX 阶段门、U49 主动反证、branch protection、required CI、latest master、CHANGES_REQUESTED/thread、public-repo scan、workspace/doc-health、敏感信息/范围、post-merge CI、删除功能分支。
-- **当前动作**：RSH-026/IMP-020 已 closeout；本轮仅收口多窗口审计遗留的运行态接收、条件激活、Jev assistant shadow 实证与卫生治理。该收口 PR 仍需 exact-HEAD `DegradedRelease` + required CI + post-merge CI；完成后重新计算阶段门，不把本轮授权扩成 IMP-052。
+- **当前动作**：RSH-026/IMP-020 已 closeout；PR #96 已合并，但 post-merge backend CI `35607351247` 因测试真实网络隔离缺口失败。若 latest master 尚未包含后续修复或其 post-merge CI 未三项全绿，则唯一允许动作是：会话级真实 socket fail-closed + 新闻正文/题材 API 显式失败桩 + TDX minute 外部边界 fail-closed + IMP-043 事实回填，并走 exact-HEAD `DegradedRelease` + required CI + post-merge CI；若该条件已满足，则删除功能分支并重新计算阶段门。两种情形都不把授权扩成 IMP-052。
 
 ## 8.2 U49 主动审计回执（RSH-026 Preflight）
 
