@@ -34,6 +34,8 @@ from typing import Sequence
 
 import duckdb
 
+from app.research.strategy_trials import EVIDENCE_VERSION as TRIAL_EVIDENCE_VERSION
+
 #: 默认 marketdb 路径（与 app/picks/rps.py 等一致：parents[2] = backend/）
 DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "marketdb" / "market.duckdb"
 
@@ -52,8 +54,8 @@ VERDICT_REJECT = "reject"    # 统计反证；协议完整性另决定其能否�
 #: IMP-020 v1：KB-DEC-019 要求 0.2~0.35% 往返成本仍正；研究准入按上沿 35bps 压力。
 #: 这不是撮合成本真值，只是 reference close-to-close 研究代理的保守压力参数。
 ADMISSION_COST_BPS = 35.0
-VALIDATION_PROTOCOL_VERSION = 1
-GATE_VERSION = 3
+VALIDATION_PROTOCOL_VERSION = 2
+GATE_VERSION = 4
 RETURN_IDENTITY_REFERENCE_PROXY = "reference_close_to_close_proxy"
 
 
@@ -459,6 +461,8 @@ def validation_protocol(
     *, horizon: int, cost_bps: float, split: dict, selection_scope: str,
     universe_point_in_time: bool, feature_point_in_time: bool, trials: int,
     multiple_testing_accounted: bool, signal_overlap_checked: bool,
+    multiple_testing_evidence: dict | None = None,
+    signal_overlap_evidence: dict | None = None,
     return_identity: str = RETURN_IDENTITY_REFERENCE_PROXY,
 ) -> dict:
     """Freeze the evidence identity required for one IMP-020 research admission check.
@@ -494,7 +498,9 @@ def validation_protocol(
         "feature_point_in_time": feature_point_in_time,
         "trials": trial_count,
         "multiple_testing_accounted": multiple_testing_accounted,
+        "multiple_testing_evidence": multiple_testing_evidence,
         "signal_overlap_checked": signal_overlap_checked,
+        "signal_overlap_evidence": signal_overlap_evidence,
         "cost_bps": cost,
         "return_identity": str(return_identity),
     }
@@ -620,8 +626,24 @@ def _protocol_issues(metrics: dict, protocol: dict | None) -> list[str]:
         issues.append("试验全集/尝试次数未登记")
     elif trials > 1 and protocol.get("multiple_testing_accounted") is not True:
         issues.append(f"多重比较未控制（本轮登记 trials={trials}）")
+    mt = protocol.get("multiple_testing_evidence")
+    if protocol.get("multiple_testing_accounted") is True:
+        if (not isinstance(mt, dict)
+                or mt.get("evidence_version") != TRIAL_EVIDENCE_VERSION
+                or mt.get("accounted") is not True
+                or not isinstance(mt.get("trials"), list)):
+            issues.append("多重比较仅自报为已控制，缺当前版本结构化 trial-family 证据")
+        elif _sample_count(mt.get("trials_total")) != trials or len(mt["trials"]) != trials:
+            issues.append("trial-family 分母与 protocol.trials 不一致")
+    overlap = protocol.get("signal_overlap_evidence")
     if protocol.get("signal_overlap_checked") is not True:
         issues.append("与既有信号的重复计分/重叠未检查")
+    elif (not isinstance(overlap, dict)
+          or overlap.get("evidence_version") != TRIAL_EVIDENCE_VERSION
+          or overlap.get("checked") is not True
+          or not isinstance(overlap.get("comparisons"), list)
+          or not isinstance(overlap.get("exact_duplicate"), bool)):
+        issues.append("信号重叠仅自报为已检查，缺当前版本结构化 overlap 证据")
     cost = _finite_number(protocol.get("cost_bps"))
     metric_cost = _finite_number(metrics.get("cost_bps"))
     if cost is None or cost < ADMISSION_COST_BPS:
@@ -650,6 +672,16 @@ def gate_verdict(
     failed: list[str] = []
     machine_unchecked: list[str] = []
     protocol_issues = _protocol_issues(metrics, protocol)
+    if isinstance(protocol, dict):
+        mt = protocol.get("multiple_testing_evidence")
+        trials = _sample_count(protocol.get("trials"))
+        if (trials is not None and trials > 1 and isinstance(mt, dict)
+                and mt.get("accounted") is True
+                and mt.get("selected_survives_alpha") is not True):
+            failed.append("被选规则未通过多重检验校正后的显著性门")
+        overlap = protocol.get("signal_overlap_evidence")
+        if isinstance(overlap, dict) and overlap.get("exact_duplicate") is True:
+            failed.append("与既有信号事件集合完全重复（不可重复计分）")
 
     if metrics.get("sample_basis") not in (None, "mature"):
         machine_unchecked.append("成熟度未验：旧总样本数不代表成熟样本")

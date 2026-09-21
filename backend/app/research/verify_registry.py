@@ -140,6 +140,26 @@ def _valid_legacy_gate_v2(record: dict, gate: dict) -> bool:
     )
 
 
+def _valid_legacy_gate_v3(record: dict, gate: dict) -> bool:
+    failed = gate.get("failed")
+    machine_unchecked = gate.get("machine_unchecked")
+    protocol_issues = gate.get("protocol_issues")
+    unchecked = gate.get("unchecked")
+    return bool(
+        gate.get("gate_version") == 3
+        and gate.get("scope") == "research_admission_machine_checks"
+        and gate.get("review_required") is True
+        and gate.get("verdict") == record.get("verdict")
+        and gate.get("verdict") in {VERDICT_PASS, VERDICT_OBSERVE, VERDICT_REJECT}
+        and isinstance(failed, list)
+        and isinstance(machine_unchecked, list)
+        and isinstance(protocol_issues, list)
+        and isinstance(unchecked, list)
+        and unchecked == [*machine_unchecked, *(f"协议：{x}" for x in protocol_issues)]
+        and gate.get("production_promotion_eligible") is False
+    )
+
+
 def gate_evidence(record: dict) -> dict:
     """Expose current research-admission evidence without rewriting historical verdicts."""
     gate = record.get("gate")
@@ -147,6 +167,8 @@ def gate_evidence(record: dict) -> dict:
         state = "legacy_unverified"
     elif isinstance(gate, dict) and gate.get("gate_version") == 2:
         state = "legacy_protocol_unverified" if _valid_legacy_gate_v2(record, gate) else "invalid"
+    elif isinstance(gate, dict) and gate.get("gate_version") == 3:
+        state = "legacy_protocol_unverified" if _valid_legacy_gate_v3(record, gate) else "invalid"
     elif isinstance(gate, dict):
         failed = gate.get("failed")
         machine_unchecked = gate.get("machine_unchecked")

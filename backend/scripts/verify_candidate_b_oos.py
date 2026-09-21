@@ -30,6 +30,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.research import strategy_verify as sv  # noqa: E402
+from app.research import strategy_trials as st  # noqa: E402
 from app.research import verify_registry as vr  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -274,6 +275,24 @@ def main() -> int:
         FROM sigv
         WHERE ({test_where}) AND fwd{H} IS NOT NULL AND mfwd{H} IS NOT NULL
     """).fetchone()
+    trial_evidence = st.trial_family_evidence(
+        [
+            {"label": g["label"], "n": g["tr"].get(f"n{H}"),
+             "excess": g["tr"].get(f"x{H}"), "std": g["tr"].get(f"s{H}")}
+            for g in grid
+        ],
+        selected_label=main_name,
+    )
+    overlap_evidence = st.signal_overlap_evidence(
+        con,
+        target_label=main_name,
+        target_cond=main_cond,
+        incumbents={
+            "two_thirty_five": FIVE_STEP,
+            "original_candidate_b_legacy": CANDIDATE_B,
+        },
+        where=holdout_where,
+    )
     protocol = sv.validation_protocol(
         horizon=H, cost_bps=sv.ADMISSION_COST_BPS, split=split,
         # 候选族最初由全样本（含测试段）启发，不能因本次 train-only 选参就洗成 clean OOS。
@@ -281,8 +300,10 @@ def main() -> int:
         universe_point_in_time=False,
         feature_point_in_time=True,
         trials=len(combos),
-        multiple_testing_accounted=False,
-        signal_overlap_checked=False,
+        multiple_testing_accounted=trial_evidence["accounted"],
+        signal_overlap_checked=overlap_evidence["checked"],
+        multiple_testing_evidence=trial_evidence,
+        signal_overlap_evidence=overlap_evidence,
     )
     gate = sv.gate_verdict(
         m, yearly_pos=pos, yearly_tot=tot, limit_up_share=lu_main.get("limit_up_share"),
@@ -309,11 +330,12 @@ def main() -> int:
             "yearly_pos": pos,
             "yearly_tot": tot,
             "limit_up_share": lu_main.get("limit_up_share"),
-            "caveat": "候选B 假设族曾使用全样本（含测试段）发现；且未完成既有信号重叠检查，故协议门保持 observe",
+            "caveat": "候选B 假设族曾使用全样本（含测试段）发现；结构化 multiple-testing/overlap 已记录，但无法把已窥探历史洗成 clean OOS",
         },
         source="scripts/verify_candidate_b_oos.py",
         extra={"gate_failed": gate["failed"], "gate_unchecked": gate["unchecked"],
-               "gate": gate, "rule": main_name, "condition": main_cond},
+               "gate": gate, "rule": main_name, "condition": main_cond,
+               "trial_family": trial_evidence, "signal_overlap": overlap_evidence},
     )
     print(f"    {headline}")
     print(f"    判据命中：{gate['note']}")
