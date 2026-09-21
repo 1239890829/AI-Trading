@@ -67,6 +67,11 @@ def _payload():
     return {
         "trade_date": "2026-09-16",
         "hot_available": True,
+        "linkage_stats": {
+            "snapshot_state": "ready",
+            "snapshot_as_of": "2026-09-16T02:05:00+00:00",
+            "missing_quote": 0,
+        },
         "themes": [{
             "theme": "算力", "stage": "发酵", "strength_tier": "强势",
             "participants": [
@@ -109,6 +114,33 @@ def test_intraday_snapshot_covers_candidate_gate_and_rank_with_unknown_safe():
     # unknown 不能塌缩成 passed/rejected，也不能靠排序补进名单。
     assert by[("600002", "hard_gate")]["decision"] == "unknown"
     assert by[("600002", "rank")]["decision"] == "unknown"
+
+
+def test_intraday_data_state_degrades_when_snapshot_freshness_is_not_ready():
+    payload = _payload()
+    payload["linkage_stats"] = {
+        "snapshot_state": "stale",
+        "snapshot_as_of": "2026-09-16T02:05:00+00:00",
+        "missing_quote": 0,
+    }
+    run_id, rows = build_intraday_records(
+        payload, trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5)
+    )
+    assert run_id
+    assert rows
+    assert {row["data_state"] for row in rows} == {"degraded"}
+
+
+def test_intraday_data_state_degrades_when_snapshot_version_is_missing():
+    payload = _payload()
+    payload["linkage_stats"] = {
+        "snapshot_state": "ready", "snapshot_as_of": None, "missing_quote": 0,
+    }
+    _run_id, rows = build_intraday_records(
+        payload, trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 5)
+    )
+    assert rows
+    assert {row["data_state"] for row in rows} == {"degraded"}
 
 
 def test_filtered_symbol_is_archived_before_it_disappears_from_participants():

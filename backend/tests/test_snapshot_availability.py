@@ -223,6 +223,30 @@ def test_run_handles_rate_limit_before_generic_exception():
     )
 
 
+def test_refresh_publishes_one_atomic_version_bundle(monkeypatch, tmp_path):
+    s = MarketSnapshotService(60.0, 60.0, tmp_path)
+    monkeypatch.setattr(s, "_maybe_save", lambda: None)
+
+    async def _fake_snapshot(**kwargs):
+        return [{
+            "symbol": "600001", "name": "甲", "price": 10.0,
+            "change_pct": 1.0, "amount": 1.0e8,
+        }]
+
+    monkeypatch.setattr(sina_market, "fetch_market_snapshot", _fake_snapshot)
+    asyncio.run(s.refresh())
+    rows, as_of = s.versioned_snapshot()
+    assert as_of == s.last_success and as_of is not None
+    assert rows[0]["change_pct"] == 1.0
+
+    # Even a later in-place mutation of the public compatibility list cannot mutate
+    # the frozen evidence version that pairs with ``as_of``.
+    s.snapshot[0]["change_pct"] = 9.9
+    frozen, frozen_as_of = s.versioned_snapshot()
+    assert frozen_as_of == as_of
+    assert frozen[0]["change_pct"] == 1.0
+
+
 def test_refresh_success_clears_rate_limited(monkeypatch, tmp_path):
     """一次限流不得**终生**压低抓取频率：成功时必须清标记。
 

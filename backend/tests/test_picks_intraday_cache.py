@@ -5,7 +5,6 @@ import asyncio
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 
-from app.core.bjtime import BJ_TZ
 
 
 def test_opportunity_endpoints_share_one_build_and_isolate_overlays(monkeypatch):
@@ -17,7 +16,7 @@ def test_opportunity_endpoints_share_one_build_and_isolate_overlays(monkeypatch)
     calls = 0
     release = asyncio.Event()
 
-    async def fake_uncached(_app, trade_date, top_themes, stocks_per_theme):
+    async def fake_uncached(_app, trade_date, top_themes, stocks_per_theme, *, snapshot_bundle=None):
         nonlocal calls
         calls += 1
         await release.wait()
@@ -69,9 +68,12 @@ def test_opportunity_cache_key_tracks_snapshot_version(monkeypatch):
     state=SimpleNamespace(snapshot_service=svc)
     app=SimpleNamespace(state=state)
     calls=0
-    async def fake_uncached(_request, trade_date, top_themes, stocks_per_theme):
+    bundles=[]
+    async def fake_uncached(_request, trade_date, top_themes, stocks_per_theme, *, snapshot_bundle=None):
         nonlocal calls
         calls += 1
+        assert snapshot_bundle is not None
+        bundles.append(snapshot_bundle)
         return {"data":{"trade_date":str(trade_date),"themes":[]},"meta":{}}
     monkeypatch.setattr(runtime,"_build_opportunities_uncached",fake_uncached)
     monkeypatch.setattr(runtime,"attach_risk_to_themes",lambda *_:None)
@@ -79,6 +81,9 @@ def test_opportunity_cache_key_tracks_snapshot_version(monkeypatch):
     svc.last_success += timedelta(seconds=60)
     asyncio.run(runtime.build_opportunities(app,"2026-09-21",5,8))
     assert calls == 2
+    assert [bundle[2] for bundle in bundles] == [
+        "2026-09-21T01:30:00+00:00", "2026-09-21T01:31:00+00:00"
+    ]
 
 
 def test_opportunity_cache_key_tracks_snapshot_freshness_state(monkeypatch):
@@ -92,7 +97,7 @@ def test_opportunity_cache_key_tracks_snapshot_freshness_state(monkeypatch):
     svc=Svc(); state=SimpleNamespace(snapshot_service=svc)
     app=SimpleNamespace(state=state)
     calls=0
-    async def fake_uncached(_request, trade_date, top_themes, stocks_per_theme):
+    async def fake_uncached(_request, trade_date, top_themes, stocks_per_theme, *, snapshot_bundle=None):
         nonlocal calls; calls += 1
         return {"data":{"trade_date":str(trade_date),"themes":[]},"meta":{}}
     monkeypatch.setattr(runtime,"_build_opportunities_uncached",fake_uncached)
@@ -123,34 +128,37 @@ def test_snapshot_as_of_uses_market_fact_time_not_consumer_clock():
     assert snapshot_as_of(app) == datetime(2026, 9, 21, 10, 5)
 
 
+def _durable_bundle_utc(hour: int = 2, minute: int = 10):
+    return (
+        {"600001": {"symbol": "600001", "price": 10.0, "change_pct": 1.0}},
+        "ready",
+        datetime(2026, 9, 21, hour, minute, tzinfo=timezone.utc).isoformat(),
+    )
+
+
 def test_evidence_tick_archives_each_durable_snapshot_once(monkeypatch):
     from app.picks import intraday_opportunity_runtime as runtime
     import app.market.trade_calendar as tc
     import app.services.market_snapshot as market_snapshot
 
-    class Fresh:
-        state = "ready"
-        as_of = datetime(2026, 9, 21, 2, 10, tzinfo=timezone.utc)
-        def is_usable(self):
-            return True
-
-    svc = SimpleNamespace(saved_files=2, freshness=lambda: Fresh(), snapshot=[])
+    svc = SimpleNamespace(saved_files=2, snapshot=[])
     state = SimpleNamespace(snapshot_service=svc, hub=object())
     app = SimpleNamespace(state=state)
     calls = 0
 
-    async def fake_build(_app, trade_date, top_themes, stocks_per_theme):
+    async def fake_build(_app, trade_date, top_themes, stocks_per_theme, *, snapshot_bundle=None):
         nonlocal calls
         calls += 1
         assert str(trade_date) == "2026-09-21"
         assert (top_themes, stocks_per_theme) == (5, 8)
+        assert snapshot_bundle == _durable_bundle_utc()
         return {"data": {"decision_evidence": {"state": "ready", "run_id": "r1", "records": 9}}}
 
     async def fake_trade_date(_hub):
         return datetime(2026, 9, 21).date()
 
     monkeypatch.setattr(runtime, "build_opportunities", fake_build)
-    monkeypatch.setattr(runtime, "beijing_now", lambda: datetime(2026, 9, 21, 10, 10, tzinfo=BJ_TZ))
+    monkeypatch.setattr(runtime, "durable_snapshot_context", lambda _app: _durable_bundle_utc())
     monkeypatch.setattr(tc, "in_trading_window", lambda _now=None: True)
     monkeypatch.setattr(market_snapshot, "default_trade_date", fake_trade_date)
 
@@ -167,18 +175,12 @@ def test_evidence_tick_failure_does_not_advance_cursor(monkeypatch):
     import app.market.trade_calendar as tc
     import app.services.market_snapshot as market_snapshot
 
-    class Fresh:
-        state = "ready"
-        as_of = datetime(2026, 9, 21, 2, 10, tzinfo=timezone.utc)
-        def is_usable(self):
-            return True
-
-    svc = SimpleNamespace(saved_files=3, freshness=lambda: Fresh(), snapshot=[])
+    svc = SimpleNamespace(saved_files=3, snapshot=[])
     state = SimpleNamespace(snapshot_service=svc, hub=object())
     app = SimpleNamespace(state=state)
     attempts = 0
 
-    async def fake_build(*_args):
+    async def fake_build(*_args, **_kwargs):
         nonlocal attempts
         attempts += 1
         if attempts == 1:
@@ -189,7 +191,7 @@ def test_evidence_tick_failure_does_not_advance_cursor(monkeypatch):
         return datetime(2026, 9, 21).date()
 
     monkeypatch.setattr(runtime, "build_opportunities", fake_build)
-    monkeypatch.setattr(runtime, "beijing_now", lambda: datetime(2026, 9, 21, 10, 10, tzinfo=BJ_TZ))
+    monkeypatch.setattr(runtime, "durable_snapshot_context", lambda _app: _durable_bundle_utc())
     monkeypatch.setattr(tc, "in_trading_window", lambda _now=None: True)
     monkeypatch.setattr(market_snapshot, "default_trade_date", fake_trade_date)
 
@@ -214,13 +216,35 @@ def test_evidence_tick_consumes_outside_session_snapshot_without_replay(monkeypa
     svc = SimpleNamespace(saved_files=4, snapshot=[])
     state = SimpleNamespace(snapshot_service=svc, hub=object())
     app = SimpleNamespace(state=state)
-    monkeypatch.setattr(runtime, "beijing_now", lambda: datetime(2026, 9, 21, 12, 0, tzinfo=BJ_TZ))
+    monkeypatch.setattr(runtime, "durable_snapshot_context", lambda _app: _durable_bundle_utc(4, 0))
     monkeypatch.setattr(tc, "in_trading_window", lambda _now=None: False)
 
     got = asyncio.run(runtime.archive_intraday_evidence_tick(app))
     assert got["state"] == "skipped"
     assert got["reason"] == "outside_trading_window"
     assert state.opportunity_evidence_saved_files == 4
+
+
+def test_durable_snapshot_context_reads_exact_saved_a_not_current_b(tmp_path):
+    import polars as pl
+    from app.picks import intraday_opportunity_runtime as runtime
+
+    path = tmp_path / "A.parquet"
+    pl.DataFrame([{
+        "symbol": "600001", "price": 10.0, "change_pct": 1.0, "amount": 1e8,
+    }]).write_parquet(path)
+    svc = SimpleNamespace(
+        last_saved_path=path,
+        last_saved_as_of=datetime(2026, 9, 21, 2, 10, tzinfo=timezone.utc),
+        snapshot=[{"symbol": "600001", "price": 10.2, "change_pct": 2.0}],
+        last_success=datetime(2026, 9, 21, 2, 11, tzinfo=timezone.utc),
+    )
+    app = SimpleNamespace(state=SimpleNamespace(snapshot_service=svc))
+    snap_by, state, version = runtime.durable_snapshot_context(app)
+    assert state == "ready"
+    assert version == "2026-09-21T02:10:00+00:00"
+    assert snap_by["600001"]["change_pct"] == 1.0
+    assert svc.snapshot[0]["change_pct"] == 2.0
 
 
 def test_runtime_normalizes_http_request_to_app_state():
@@ -263,32 +287,53 @@ def test_intraday_route_is_thin_wrapper_over_shared_runtime(monkeypatch):
     }
 
 
-def test_evidence_tick_unusable_snapshot_is_visible_failure_and_retryable(monkeypatch):
+def test_evidence_tick_missing_durable_metadata_is_visible_failure_and_retryable():
     from app.picks import intraday_opportunity_runtime as runtime
-    import app.market.trade_calendar as tc
 
-    class Fresh:
-        state = "stale"
-        as_of = datetime(2026, 9, 21, 2, 10, tzinfo=timezone.utc)
-        def is_usable(self):
-            return False
-
-    svc = SimpleNamespace(saved_files=5, freshness=lambda: Fresh(), snapshot=[])
+    svc = SimpleNamespace(saved_files=5, snapshot=[])
     state = SimpleNamespace(snapshot_service=svc, hub=object())
     app = SimpleNamespace(state=state)
-    monkeypatch.setattr(
-        runtime, "beijing_now",
-        lambda: datetime(2026, 9, 21, 10, 10, tzinfo=BJ_TZ),
-    )
-    monkeypatch.setattr(tc, "in_trading_window", lambda _now=None: True)
-
     try:
         asyncio.run(runtime.archive_intraday_evidence_tick(app))
     except RuntimeError as exc:
-        assert "not usable" in str(exc)
+        assert "no exact saved path/as_of metadata" in str(exc)
     else:
-        raise AssertionError("unusable new snapshot must be a visible scheduler tick failure")
+        raise AssertionError("missing durable identity must be a visible scheduler failure")
     assert not hasattr(state, "opportunity_evidence_saved_files")
+
+
+def test_evidence_tick_uses_saved_fact_time_not_late_consumer_clock(monkeypatch):
+    from app.picks import intraday_opportunity_runtime as runtime
+    import app.market.trade_calendar as tc
+    import app.services.market_snapshot as market_snapshot
+
+    svc = SimpleNamespace(saved_files=6, snapshot=[])
+    state = SimpleNamespace(snapshot_service=svc, hub=object())
+    app = SimpleNamespace(state=state)
+    bundle = _durable_bundle_utc(3, 29)  # 11:29 Beijing
+    seen = {}
+
+    async def fake_build(_app, trade_date, _top, _stocks, *, snapshot_bundle=None):
+        seen["bundle"] = snapshot_bundle
+        return {"data": {"decision_evidence": {"state": "ready", "run_id": "r1129", "records": 1}}}
+
+    async def fake_trade_date(_hub):
+        return datetime(2026, 9, 21).date()
+
+    def fake_window(at):
+        seen["window_time"] = at
+        return at.hour == 11 and at.minute == 29
+
+    monkeypatch.setattr(runtime, "durable_snapshot_context", lambda _app: bundle)
+    monkeypatch.setattr(runtime, "build_opportunities", fake_build)
+    monkeypatch.setattr(tc, "in_trading_window", fake_window)
+    monkeypatch.setattr(market_snapshot, "default_trade_date", fake_trade_date)
+
+    got = asyncio.run(runtime.archive_intraday_evidence_tick(app))
+    assert got["state"] == "archived"
+    assert seen["bundle"] == bundle
+    assert (seen["window_time"].hour, seen["window_time"].minute) == (11, 29)
+    assert state.opportunity_evidence_saved_files == 6
 
 
 def test_uncached_runtime_archives_with_snapshot_fact_time_without_name_shadow(monkeypatch):
@@ -300,21 +345,32 @@ def test_uncached_runtime_archives_with_snapshot_fact_time_without_name_shadow(m
     import app.picks.tradability as tradability
     import app.services.theme_service as theme_service
 
-    class Fresh:
-        state = "ready"
-        as_of = datetime(2026, 9, 21, 3, 10, tzinfo=timezone.utc)
-        def is_usable(self):
-            return True
+    class Svc:
+        def __init__(self):
+            self.snapshot = [{
+                "symbol": "600001", "name": "甲", "price": 10.0,
+                "change_pct": 1.0, "amount": 2e8,
+            }]
+            self.last_success = datetime(2026, 9, 21, 3, 10, tzinfo=timezone.utc)
+            self.parquet_dir = ""
 
-    svc = SimpleNamespace(
-        snapshot=[], last_success=Fresh.as_of, freshness=lambda: Fresh(), parquet_dir="",
-    )
+        def freshness(self):
+            return SimpleNamespace(state="ready", as_of=self.last_success)
+
+    svc = Svc()
     app = SimpleNamespace(state=SimpleNamespace(snapshot_service=svc, hub=SimpleNamespace(provider=object())))
     seen = {}
     linkage_seen = {}
 
     async def fake_board(_provider, _trade_date, snapshot_map=None):
-        assert snapshot_map == {}
+        # The board/premium lane must see the same A snapshot captured at builder entry.
+        assert snapshot_map["600001"]["change_pct"] == 1.0
+        # Simulate a real MarketSnapshotService refresh while expensive provider IO runs.
+        svc.snapshot = [{
+            "symbol": "600001", "name": "甲", "price": 10.2,
+            "change_pct": 2.0, "amount": 3e8,
+        }]
+        svc.last_success = datetime(2026, 9, 21, 3, 11, tzinfo=timezone.utc)
         return {"themes": [{"theme": "测试题材", "ladder": []}]}
 
     def fake_assemble(_board, _hot, _hot_available, **_kwargs):
@@ -334,7 +390,10 @@ def test_uncached_runtime_archives_with_snapshot_fact_time_without_name_shadow(m
         seen.update(payload=payload, trade_date=trade_date, as_of=as_of)
         return {"run_id": "real-builder-run", "records": 0}
 
-    monkeypatch.setattr(runtime, "load_snapshot_map", lambda *_args, **_kwargs: {})
+    def _unexpected_parquet(*_args, **_kwargs):
+        raise AssertionError("live frozen snapshot should prevent Parquet fallback")
+
+    monkeypatch.setattr(runtime, "load_snapshot_map", _unexpected_parquet)
     monkeypatch.setattr(theme_service, "build_theme_board", fake_board)
     monkeypatch.setattr(theme_service, "_pick_provider", lambda *_args: None)
     monkeypatch.setattr(opportunity, "assemble", fake_assemble)
@@ -344,7 +403,9 @@ def test_uncached_runtime_archives_with_snapshot_fact_time_without_name_shadow(m
 
     def fake_attach_participants(_themes, **kwargs):
         linkage_seen.update(kwargs)
-        return {}
+        assert kwargs["snapshot_by"]["600001"]["change_pct"] == 1.0
+        assert kwargs["snapshot_as_of"] == "2026-09-21T03:10:00+00:00"
+        return {"snapshot_state": "ready", "snapshot_as_of": kwargs["snapshot_as_of"], "missing_quote": 0}
 
     monkeypatch.setattr(opportunity, "attach_participants", fake_attach_participants)
     monkeypatch.setattr(learning, "archive_intraday_pipeline", fake_archive)
@@ -362,3 +423,5 @@ def test_uncached_runtime_archives_with_snapshot_fact_time_without_name_shadow(m
     assert seen["trade_date"] == "2026-09-21"
     assert seen["as_of"] == datetime(2026, 9, 21, 11, 10)
     assert linkage_seen["snapshot_as_of"] == "2026-09-21T03:10:00+00:00"
+    assert svc.last_success == datetime(2026, 9, 21, 3, 11, tzinfo=timezone.utc)
+    assert svc.snapshot[0]["change_pct"] == 2.0

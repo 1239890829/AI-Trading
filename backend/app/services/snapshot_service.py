@@ -63,12 +63,24 @@ class MarketSnapshotService:
         self.rate_limited = False
         self.saved_files = 0
         self._last_save: datetime | None = None
+        # One refresh worth of rows + fact time, swapped as one Python object so
+        # readers can never pair snapshot B with last_success A mid-refresh.
+        self._snapshot_version: tuple[datetime, tuple[dict, ...]] | None = None
+        # Exact durable version metadata. ``saved_files`` is incremented only after
+        # these two fields are set, making the counter a safe scheduler cursor.
+        self.last_saved_path: Path | None = None
+        self.last_saved_as_of: datetime | None = None
 
     async def refresh(self) -> None:
         rows = await sina_market.fetch_market_snapshot()
+        breadth = compute_breadth(rows)
+        success_at = datetime.now(timezone.utc)
+        # Publish public fields, then atomically swap the evidence tuple.  A reader
+        # racing this refresh sees either the complete previous version or this one.
         self.snapshot = rows
-        self.breadth = compute_breadth(rows)
-        self.last_success = datetime.now(timezone.utc)
+        self.breadth = breadth
+        self.last_success = success_at
+        self._snapshot_version = (success_at, tuple(dict(row) for row in rows))
         self.last_error = None
         self.consecutive_failures = 0
         # 成功即视为已脱离限流：冷却标记的语义是"当前是否处于限流退避中"，
@@ -80,6 +92,15 @@ class MarketSnapshotService:
         log.info("market snapshot refreshed: %s stocks, up=%s down=%s limit_up=%s",
                  self.breadth["total"], self.breadth["up"], self.breadth["down"], self.breadth["limit_up"])
 
+    def versioned_snapshot(self) -> tuple[list[dict], datetime | None]:
+        """Return one internally consistent in-memory snapshot version."""
+        version = self._snapshot_version
+        if version is None:
+            return [dict(row) for row in self.snapshot], self.last_success
+        as_of, rows = version
+        return [dict(row) for row in rows], as_of
+
+
     def _maybe_save(self) -> None:
         if self._last_save is not None:
             elapsed = (datetime.now(timezone.utc) - self._last_save).total_seconds()
@@ -90,17 +111,25 @@ class MarketSnapshotService:
 
             from app.services.parquet_store import write_parquet_atomic
 
-            day_dir = self.parquet_dir / "snapshots" / datetime.now(timezone.utc).strftime("%Y%m%d")
-            path = day_dir / f"{datetime.now(timezone.utc).strftime('%H%M%S')}.parquet"
+            version = self._snapshot_version
+            if version is None:
+                snapshot_as_of = self.last_success
+                rows = [dict(row) for row in self.snapshot]
+            else:
+                snapshot_as_of, frozen = version
+                rows = [dict(row) for row in frozen]
+            now = datetime.now(timezone.utc)
+            day_dir = self.parquet_dir / "snapshots" / now.strftime("%Y%m%d")
+            path = day_dir / f"{now.strftime('%H%M%S')}.parquet"
             # 原子写（临时文件 + rename）：直接写目标路径时，进程被 kill
-            # 会留下大小正常、内容却损坏的 parquet——实测 2026-08-30 就产生了 7 个，
-            # 只要最新那份落在其中，选股器与情绪端点就全线 502。
-            write_parquet_atomic(
-                pl.DataFrame(self.snapshot, infer_schema_length=None), path
-            )
-            self._last_save = datetime.now(timezone.utc)
+            # 会留下大小正常但内容损坏的 parquet。写成功后再发布 durable 元数据，
+            # 最后递增 cursor，scheduler 因而不会看到“计数已新、路径仍旧”的半状态。
+            write_parquet_atomic(pl.DataFrame(rows, infer_schema_length=None), path)
+            self._last_save = now
+            self.last_saved_path = path
+            self.last_saved_as_of = snapshot_as_of or now
             self.saved_files += 1
-            log.info("snapshot saved: %s (%s rows)", path.name, len(self.snapshot))
+            log.info("snapshot saved: %s (%s rows)", path.name, len(rows))
         except Exception:
             log.exception("parquet save failed")
 
