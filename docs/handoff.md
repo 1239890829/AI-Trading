@@ -1,4 +1,7 @@
-# 当前交接：DEGRADED_FULL_CONTROL / G3-IMP-020 Final Promotion Readiness Closeout
+# 当前交接：多窗口执行审计 / 运行态与证据治理收口
+
+
+> **2026-09-21 多窗口审计**：详见 `docs/review/chatgpt-multiwindow-audit-20260921.md`。已确认方向总体未偏离，但新增四个当前事实：BUG-020 在 9/21 真实交易会话漏过条件激活；本机运行 backend/master 与 frontend dependency 环境落后 Git 事实；IMP-053 需承接更严格 actual-fill 同版身份契约；Jev 已真实 shadow 使用但 RSH-030 human gold/assistant route 使用仍未闭环。本轮已清理约 6.3GiB 过期临时资产并保留唯一 `54b7e0c` RECOVERY。任务状态仍以 stage 为准，不以本段建立第二账本。
 
 > **定位 / 摘要**：G3/IMP-020 前三子片已进入 `master@6997a44`；本最终纵切只补 promotion-readiness / actual-shadow-fill 身份校验 / rollback-reopen 计划。机制闭环完成不等于策略通过：当前 Candidate B 仍 observe 且没有 IMP-053 actual fill，因此 readiness 必须 blocked；不改策略权重、不自动晋级、不宣称实际成交净收益。
 
