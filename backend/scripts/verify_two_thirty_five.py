@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.research import strategy_trials as st  # noqa: E402
 from app.research import strategy_verify as sv  # noqa: E402
 from app.research import verify_registry as vr  # noqa: E402
 
@@ -49,9 +50,10 @@ def _labeled(con, label: str, cond: str) -> dict:
 
 def main() -> int:
     con = sv.connect()
-    n = sv.build(con, sv.BuildConfig(
+    build_cfg = sv.BuildConfig(
         float_shares_sql=sv.snapshot_float_shares_sql(SNAPSHOT_DIR),
-        extra_cols=", fs.float_shares AS float_shares"))  # 审计 C5：市值分层所需（20260910 快照，前视近似）
+        extra_cols=", fs.float_shares AS float_shares")
+    n = sv.build(con, build_cfg)  # 审计 C5：市值分层所需（20260910 快照，前视近似）
     hz = sv.horizons_of(con)
     dates = [r[0] for r in con.execute("SELECT DISTINCT date_ms FROM sig ORDER BY date_ms").fetchall()]
     print(f"特征样本 {n:,} 行 | {len(dates)} 个交易日")
@@ -197,15 +199,28 @@ def main() -> int:
         FROM sigv
         WHERE ({gate_where}) AND fwd{H} IS NOT NULL AND mfwd{H} IS NOT NULL
     """).fetchone()
+    train_row = sv.baseline(
+        con, where=f"({ALL}) AND ({split['train_where']})", cfg=admission_cfg, horizons=[H]
+    )
+    trial_evidence = st.trial_family_evidence(
+        [{
+            "trial_id": "two-thirty-five-v1", "label": "two_thirty_five", "condition": ALL,
+            "train": {"n": train_row.get(f"n{H}"), "excess": train_row.get(f"x{H}"),
+                      "std": train_row.get(f"s{H}")},
+        }],
+        selected_trial_id="two-thirty-five-v1",
+    )
+    overlap_evidence = st.signal_overlap_evidence(
+        con, target_label="two_thirty_five", target_cond=ALL,
+        incumbents={"pullback_reversal": cand}, where=holdout_where,
+    )
     protocol = sv.validation_protocol(
         horizon=H, cost_bps=sv.ADMISSION_COST_BPS, split=split,
-        selection_scope="external_preregistered",
-        universe_point_in_time=False,
-        # S3 仍依赖 2026-09-10 当前流通股本反推历史换手率，不能冒充 PIT。
-        feature_point_in_time=False,
-        trials=1,
-        multiple_testing_accounted=True,
-        signal_overlap_checked=False,
+        selection_scope="external_preregistered", build_config=build_cfg,
+        # S3/turn 仍依赖 2026-09-10 当前流通股本，build evidence 会机械标成 non-PIT。
+        gate_features=("chg", "vr", "turn", "vol_step_up", "ma_short", "ma_mid",
+                       "ma_long", "close", "dev_short"),
+        trial_evidence=trial_evidence, overlap_evidence=overlap_evidence,
     )
     gate = sv.gate_verdict(
         m5, yearly_pos=ypos, yearly_tot=ytot, limit_up_share=lu.get("limit_up_share"),
