@@ -32,6 +32,7 @@ from app.core.db import get_session_factory, utcnow
 from app.market import price_rules
 from app.models.opportunity_learning import (
     OpportunityDecisionSnapshot,
+    OpportunityDecisionRun,
     OpportunityOutcomeLabel,
     OpportunityOutcomeRevision,
 )
@@ -721,12 +722,77 @@ def backfill_missing_outcome_identities(
     }
 
 
-def archive_records(run_id: str, records: list[dict], session_factory=None) -> dict:
+def build_intraday_run_meta(
+    payload: dict, *, run_id: str, trade_date: str, as_of: datetime, records: list[dict],
+) -> dict:
+    """Build immutable run-level evidence, including a legitimate zero-record run."""
+    as_of = to_beijing_naive(as_of)
+    themes = payload.get("themes") or []
+    stage_counts = Counter(str(record.get("stage") or "unknown") for record in records)
+    decision_counts = Counter(
+        f"{record.get('stage') or 'unknown'}:{record.get('decision') or 'unknown'}"
+        for record in records
+    )
+    linkage_stats = payload.get("linkage_stats") or {}
+    summary = {
+        **(payload.get("summary") or {}),
+        "hot_available": payload.get("hot_available"),
+        "linkage_note": payload.get("linkage_note"),
+        "board_excluded_reference": payload.get("board_excluded_reference"),
+        "tradable_boards": payload.get("tradable_boards"),
+    }
+    base = {
+        "run_id": run_id,
+        "trade_date": trade_date,
+        "as_of": as_of,
+        "scenario": "intraday_opportunity",
+        "strategy_version": STRATEGY_VERSION,
+        "feature_version": FEATURE_VERSION,
+        "data_state": _data_state(payload),
+        "snapshot_state": str(linkage_stats.get("snapshot_state") or "unknown"),
+        "snapshot_as_of": str(linkage_stats.get("snapshot_as_of") or ""),
+        "theme_count": len(themes),
+        "participant_count": sum(len(theme.get("participants") or []) for theme in themes),
+        "candidate_audit_count": sum(len(theme.get("_candidate_audit") or []) for theme in themes),
+        "records_total": len(records),
+        "candidate_rows": int(stage_counts.get("candidate", 0)),
+        "hard_gate_rows": int(stage_counts.get("hard_gate", 0)),
+        "rank_rows": int(stage_counts.get("rank", 0)),
+        "notification_rows": int(stage_counts.get("notification", 0)),
+        "stage_counts": _json(dict(sorted(stage_counts.items()))),
+        "decision_counts": _json(dict(sorted(decision_counts.items()))),
+        "linkage_stats": _json(linkage_stats),
+        "summary": _json(summary),
+        "caveats": _json(payload.get("caveats") or []),
+    }
+    digest_payload = {
+        key: (value.isoformat() if isinstance(value, datetime) else value)
+        for key, value in base.items()
+    }
+    return {**base, "evidence_digest": _hash(digest_payload, 64)}
+
+
+def archive_records(
+    run_id: str, records: list[dict], session_factory=None, *, run_meta: dict | None = None,
+) -> dict:
     """Persist a whole run atomically; rerunning the same run is idempotent."""
     sf = session_factory or get_session_factory()
     inserted = 0
     outcomes_inserted = 0
+    run_inserted = 0
     with sf() as db:
+        if run_meta is not None:
+            if str(run_meta.get("run_id") or "") != run_id:
+                raise ValueError("run_meta.run_id must match run_id")
+            existing_run = db.get(OpportunityDecisionRun, run_id)
+            if existing_run is None:
+                db.add(OpportunityDecisionRun(**run_meta))
+                run_inserted = 1
+            elif existing_run.evidence_digest != run_meta.get("evidence_digest"):
+                raise RuntimeError(
+                    "opportunity run digest mismatch for existing run_id; "
+                    "refusing to merge two point-in-time truths"
+                )
         existing = set(db.execute(
             select(OpportunityDecisionSnapshot.snapshot_id).where(
                 OpportunityDecisionSnapshot.run_id == run_id
@@ -790,17 +856,24 @@ def archive_records(run_id: str, records: list[dict], session_factory=None) -> d
             outcomes_inserted += 1
         db.commit()
     return {
-        "run_id": run_id, "inserted": inserted, "outcomes_inserted": outcomes_inserted,
+        "run_id": run_id, "run_inserted": run_inserted,
+        "inserted": inserted, "outcomes_inserted": outcomes_inserted,
         "outcomes_repaired": outcomes_repaired, "records": len(records),
     }
 
 
 def archive_intraday_pipeline(payload: dict, *, trade_date: str, as_of: datetime | None = None,
                               kb_ids: Iterable[str] = (), session_factory=None) -> dict:
+    effective_as_of = as_of or beijing_now()
     run_id, records = build_intraday_records(
-        payload, trade_date=trade_date, as_of=as_of or beijing_now(), kb_ids=kb_ids,
+        payload, trade_date=trade_date, as_of=effective_as_of, kb_ids=kb_ids,
     )
-    return archive_records(run_id, records, session_factory)
+    run_meta = build_intraday_run_meta(
+        payload, run_id=run_id, trade_date=trade_date, as_of=effective_as_of, records=records,
+    )
+    return archive_records(
+        run_id, records, session_factory, run_meta=run_meta
+    )
 
 
 def archive_notification_pipeline(
@@ -916,6 +989,7 @@ def replay_decision(stage: str, evidence: dict) -> str:
 def replay_run(run_id: str, session_factory=None) -> dict:
     sf = session_factory or get_session_factory()
     with sf() as db:
+        run = db.get(OpportunityDecisionRun, run_id)
         rows = db.execute(
             select(OpportunityDecisionSnapshot)
             .where(OpportunityDecisionSnapshot.run_id == run_id)
@@ -939,7 +1013,30 @@ def replay_run(run_id: str, session_factory=None) -> dict:
             "kb_ids": _load_json(row.kb_ids, []),
             "kb_refs": _load_json(row.kb_refs, {}),
         })
-    return {"run_id": run_id, "records": len(items), "mismatches": mismatches, "items": items}
+    run_evidence = None
+    if run is not None:
+        run_evidence = {
+            "trade_date": run.trade_date,
+            "as_of": run.as_of.isoformat() if run.as_of else None,
+            "scenario": run.scenario,
+            "data_state": run.data_state,
+            "snapshot_state": run.snapshot_state,
+            "snapshot_as_of": run.snapshot_as_of,
+            "theme_count": run.theme_count,
+            "participant_count": run.participant_count,
+            "candidate_audit_count": run.candidate_audit_count,
+            "records_total": run.records_total,
+            "stage_counts": _load_json(run.stage_counts, {}),
+            "decision_counts": _load_json(run.decision_counts, {}),
+            "linkage_stats": _load_json(run.linkage_stats, {}),
+            "summary": _load_json(run.summary, {}),
+            "caveats": _load_json(run.caveats, []),
+            "evidence_digest": run.evidence_digest,
+        }
+    return {
+        "run_id": run_id, "records": len(items), "mismatches": mismatches,
+        "run_evidence": run_evidence, "items": items,
+    }
 
 
 def _continuous_trading_minutes(start: datetime, end: datetime) -> float:
@@ -1807,10 +1904,18 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
             )
         ).scalars().all()
         all_outcomes, base_outcomes, applied_revisions = _effective_outcome_pairs(db, trade_date)
+        decision_runs = db.execute(
+            select(OpportunityDecisionRun).where(
+                OpportunityDecisionRun.trade_date == trade_date,
+                OpportunityDecisionRun.scenario == "intraday_opportunity",
+            ).order_by(OpportunityDecisionRun.as_of, OpportunityDecisionRun.run_id)
+        ).scalars().all()
     outcomes = [pair for pair in all_outcomes if pair[0].horizon == OUTCOME_HORIZON]
     stage_counts = Counter(s.stage for s in snapshots)
     decision_counts = Counter(f"{s.stage}:{s.decision}" for s in snapshots)
     data_state_counts = Counter(s.data_state or "unknown" for s in snapshots)
+    run_data_state_counts = Counter(run.data_state or "unknown" for run in decision_runs)
+    unready_runs = [run for run in decision_runs if run.data_state != "ready"]
     state_counts = Counter(o.state for o, _snapshot in outcomes)
     fill_counts = Counter(o.fill_state for o, _snapshot in outcomes)
     price_basis_counts = Counter(
@@ -1943,10 +2048,23 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
         "fill_states": dict(sorted(fill_counts.items())),
         "kb_ref_states": dict(sorted(kb_ref_counts.items())),
         "cost_model": COST_MODEL_VERSION,
+        "run_ledger": {
+            "runs": len(decision_runs),
+            "zero_record_runs": sum(1 for run in decision_runs if run.records_total == 0),
+            "data_states": dict(sorted(run_data_state_counts.items())),
+            "latest_as_of": (
+                decision_runs[-1].as_of.isoformat() if decision_runs and decision_runs[-1].as_of else None
+            ),
+            "latest_run_id": decision_runs[-1].run_id if decision_runs else None,
+        },
         "evidence_quality": {
             "required_state_for_effect": "ready",
             "states": dict(sorted(data_state_counts.items())),
             "snapshot_rows": len(snapshots),
+            "decision_runs": len(decision_runs),
+            "zero_record_runs": sum(1 for run in decision_runs if run.records_total == 0),
+            "run_states": dict(sorted(run_data_state_counts.items())),
+            "unready_runs": len(unready_runs),
             "run_symbol_opportunities": len(funnel_opportunities),
             "ready_run_symbol_opportunities": len(ready_funnel_opportunities),
             "unready_run_symbol_opportunities": (
@@ -1956,8 +2074,11 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
                 round(len(ready_funnel_opportunities) / len(funnel_opportunities), 4)
                 if funnel_opportunities else None
             ),
-            "complete": bool(funnel_opportunities)
-            and len(ready_funnel_opportunities) == len(funnel_opportunities),
+            "complete": (
+                bool(funnel_opportunities or decision_runs)
+                and len(ready_funnel_opportunities) == len(funnel_opportunities)
+                and not unready_runs
+            ),
         },
         "price_basis": {
             "current_version": PRICE_BASIS_VERSION,
@@ -2065,6 +2186,14 @@ def opportunity_scorecard(
             )
         ).scalars().all()
         all_rows, base_rows, applied_revisions = _effective_outcome_pairs(db, trade_date)
+        scorecard_runs = db.execute(
+            select(OpportunityDecisionRun).where(
+                OpportunityDecisionRun.trade_date == trade_date,
+                OpportunityDecisionRun.scenario == "intraday_opportunity",
+                OpportunityDecisionRun.strategy_version == strategy_version,
+                OpportunityDecisionRun.feature_version == feature_version,
+            ).order_by(OpportunityDecisionRun.as_of, OpportunityDecisionRun.run_id)
+        ).scalars().all()
     funnel_snapshots = [
         snapshot for snapshot in all_snapshots
         if snapshot.strategy_version == strategy_version
@@ -2153,7 +2282,13 @@ def opportunity_scorecard(
         if snapshot.data_state != "ready"
     }
     ready_funnel_opportunities = funnel_opportunities - unready_funnel_opportunities
-    evidence_quality_complete = bool(funnel_opportunities) and not unready_funnel_opportunities
+    run_data_state_counts = Counter(run.data_state or "unknown" for run in scorecard_runs)
+    unready_runs = [run for run in scorecard_runs if run.data_state != "ready"]
+    evidence_quality_complete = (
+        bool(funnel_opportunities or scorecard_runs)
+        and not unready_funnel_opportunities
+        and not unready_runs
+    )
     outcome_opportunities = {(snapshot.run_id, snapshot.symbol) for _outcome, snapshot in rows}
     labeled_opportunities = {
         (snapshot.run_id, snapshot.symbol) for outcome, snapshot in rows
@@ -2384,6 +2519,10 @@ def opportunity_scorecard(
             "required_state": "ready",
             "states": dict(sorted(data_state_counts.items())),
             "snapshot_rows": len(funnel_snapshots),
+            "decision_runs": len(scorecard_runs),
+            "zero_record_runs": sum(1 for run in scorecard_runs if run.records_total == 0),
+            "run_states": dict(sorted(run_data_state_counts.items())),
+            "unready_runs": len(unready_runs),
             "run_symbol_opportunities": len(funnel_opportunities),
             "ready_run_symbol_opportunities": len(ready_funnel_opportunities),
             "unready_run_symbol_opportunities": len(unready_funnel_opportunities),
@@ -2412,6 +2551,9 @@ def opportunity_scorecard(
             "ready_opportunities": len(ready_funnel_opportunities),
             "unready_opportunities": len(unready_funnel_opportunities),
             "evidence_quality_complete": evidence_quality_complete,
+            "decision_runs": len(scorecard_runs),
+            "zero_record_runs": sum(1 for run in scorecard_runs if run.records_total == 0),
+            "run_data_state_counts": dict(sorted(run_data_state_counts.items())),
             "missing_outcome_symbols": missing_outcome_symbols,
             "unlabeled_symbols": unlabeled_funnel_symbols,
             "run_symbol_opportunities": len(funnel_opportunities),
