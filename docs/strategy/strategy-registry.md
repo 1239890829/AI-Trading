@@ -124,6 +124,8 @@
 > D-3 原记「中位 −0.08%、跑赢比例 49.3%」**未标口径**，与「原始中位 +3.33%、跑赢 68.1%」长期混淆
 > ——已确认那两个数均为**市场中性口径**（与原始口径差 3 个百分点以上），本表已补注。
 > 教训：结论只写数字不写口径，重跑时就会对不上。**判据一律取中性口径**（见下 §5「核验产物」）。
+> **⚠️ 2026-09-21 IMP-020 协议升级**：上述 D-2/D-3 数字与 raw verdict 作为历史证据保留，不回写。旧两份 verify JSON 都是 `cost_bps=0` 且没有 v3 purged/PIT/trials/overlap 协议；全部不可晋级。旧 `pass` 才会降为 effective observe；D-2 的 raw/effective `reject` 保持 reject，D-3 保持 observe，但两者 gate state 都不是当前完整准入。隔离 worktree 已用真实数据重跑 v3：D-3/candidate B 在 35bps + purged holdout 下中性 +0.18%、中位 -0.81%、跑赢 44.8% ⇒ observe，另有历史 ST/退市身份未 PIT、test-informed/48 trials 未控/overlap 未查；D-2/two-thirty-five 中性 -0.99%、中位 -2.42%、跑赢 33.9%、年度正 1/5 ⇒ reject，另有历史身份未 PIT、current-float-shares 非 PIT/overlap 未查。生产历史 JSON 未被覆盖。
+
 
 ---
 
@@ -157,24 +159,24 @@
 |---|---|---|
 | 产物 | `backend/data/research/verify/<key>.json` | 一次核验的结论（verdict / headline / metrics / sample / recorded_at） |
 | 落盘 | `app/research/verify_registry.py` | `save_record` / `load_record` / `verification_of`（三态）/ `list_records` |
-| 判据 | `app/research/strategy_verify.py::gate_verdict` | **[[KB-DEC-019]] 准入五条里可机判的四条**（另两条需人工） |
+| 判据 | `app/research/strategy_verify.py::gate_verdict` | v3 同时记录收益机判与验证协议身份：purged holdout、成本、PIT universe/feature、试验全集/multiple-testing、signal overlap；协议缺口会阻断 research PASS，且 reference proxy 永不等于生产晋级 |
 | 挂接 | `StrategySpec.verify_key` | 有值 ⇒ `list_strategy_keys()` 附 `verification` 三态 |
 | 消费 | 议程 `strategy_verification` 一路 | 含 `without_evidence`（标了却没产物）与 **`conflicts`（状态与实测结论打架）** |
 
 **重跑**：`python scripts/verify_two_thirty_five.py`、`python scripts/verify_candidate_b_oos.py`
 （各约 12~30s），结尾会打印结论并落盘。**verdict 由 `gate_verdict` 依判据算出，不写死**——
-重跑后数据变了，结论自己会变。
+重跑后数据变了，结论自己会变。旧 v2/无协议产物只保留 raw verdict 作历史证据；读取侧标 `legacy_*`，旧 pass 降为 effective observe，旧 observe/reject 保留保守结论，但全部不可获得当前 research-admission 资格；只有 v3 完整协议才可能进入人工 research-admission review。
 
-**⚠️ 判据口径（2026-09-11 订正）**：`gate_verdict` 的中位/跑赢比例**只接受中性口径**
+**⚠️ 判据与收益身份（2026-09-11 订正；2026-09-21 IMP-020 v3）**：`gate_verdict` 的中位/跑赢比例**只接受中性口径**
 （`excess_median` / `excess_win_rate`）。初版误用原始口径，会把候选B 判成 pass——
 原始胜率在上涨市天然 >50%，用它当判据形同虚设。拿不到中性口径时**跳过该条并记 `unchecked`**，
-绝不拿原始口径冒充。
+绝不拿原始口径冒充。v3 研究准入默认按 35bps 压力成本，且要求 purge/embargo、PIT、试验分母与重叠检查都有结构化证据；即使这些全部通过，也只表示“可进入人工 research admission review”。`strategy_verify` 的收益身份仍是 `reference_close_to_close_proxy`，生产晋级必须等待 actual shadow fill 的同版成本/退出净收益与人工审阅。
 
 ---
 
 ## 5. 维护规则
 
-1. **新策略入册的前置**：先有可计算规则 → 走 `app/research/strategy_verify.py` 五道检验 → 样本外盲测 → 才可登记为 🟡 观察项；接入线上另需 [[KB-DEC-019]] 准入五条（含扣成本 0.2~0.35% 仍为正）。
+1. **新策略入册的前置**：先有可计算规则 → 五道检验 → purged/embargoed OOS + v3 protocol → 才可登记为当前研究准入候选；协议缺口只能观察。线上接入还需 [[KB-DEC-019]]、actual shadow fill 净收益、Champion/Challenger 与人工晋级，reference proxy 不得直接转生产。
 2. **登记册与代码同步**：`picks/strategy_registry.py` 的策略键与本文 §1 总表由**测试守卫**（键集合一致），改一处必须改另一处。
 3. **状态变更必须留痕**：任何 🟢→🟡 / 🟡→⛔ 的变更，须在 §3 处置台账追加一行（含证据链 + 样本边界）。
 4. **累计失效自动待评估**：监控状态连续 `drift` 达阈值 → 自动生成待评估项（走既有改进项通道），**不自动退役**（退役是人工决策）。

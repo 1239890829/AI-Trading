@@ -93,15 +93,23 @@ def main() -> int:
         extra_cols=", fs.float_shares AS float_shares",
     ))
     split_ms = int(SPLIT.timestamp() * 1000)
-    print(f"训练段 < {SPLIT.date()}｜测试段 ≥ 该日｜主指标 = 市场中性超额（扣同日全市场均值）")
+    admission_cfg = sv.VerifyConfig(cost_bps=sv.ADMISSION_COST_BPS)
+    split = sv.split_windows(con, split_ms, horizons=[H])
+    train_where, holdout_where = split["train_where"], split["test_where"]
+    holdout_where_s = holdout_where.replace("date_ms", "s.date_ms")
+    cost_pct = sv.ADMISSION_COST_BPS / 100.0
+    print(
+        f"训练段/测试段按交易日 purge+embargo（各 {H} 日）｜请求切分 {SPLIT.date()}｜"
+        f"研究准入成本={sv.ADMISSION_COST_BPS:.0f}bps"
+    )
 
     # ---------------- 网格
     grid = []
     combos = [(b, d, m) for b in BANDS for d in DEPTHS for m in MARKETS]
     for i, (b, d, m) in enumerate(combos):
         cond = f"({b[1]}) AND ({d[1]}) AND ({m[1]})"
-        tr = sv.baseline(con, where=f"({cond}) AND date_ms < {split_ms}")
-        te = sv.baseline(con, where=f"({cond}) AND date_ms >= {split_ms}")
+        tr = sv.baseline(con, where=f"({cond}) AND ({train_where})", cfg=admission_cfg)
+        te = sv.baseline(con, where=f"({cond}) AND ({holdout_where})", cfg=admission_cfg)
         grid.append({"label": f"{b[0]} | {d[0]} | {m[0]}", "cond": cond, "tr": tr, "te": te})
         if (i + 1) % 12 == 0:
             print(f"  …网格 {i + 1}/{len(combos)}", file=sys.stderr)
@@ -139,17 +147,17 @@ def main() -> int:
     if cand_x:
         picks.append(("B·max-效应量（n≥3000）", cand_x[0]["cond"], cand_x[0]["tr"], cand_x[0]["te"]))
     picks.append(("C·原候选B（含数据窥探）", CANDIDATE_B,
-                  sv.baseline(con, where=f"({CANDIDATE_B}) AND date_ms < {split_ms}"),
-                  sv.baseline(con, where=f"({CANDIDATE_B}) AND date_ms >= {split_ms}")))
+                  sv.baseline(con, where=f"({CANDIDATE_B}) AND ({train_where})", cfg=admission_cfg),
+                  sv.baseline(con, where=f"({CANDIDATE_B}) AND ({holdout_where})", cfg=admission_cfg)))
     print(HEADER)
     print("-" * len(HEADER))
     for name, _c, tr, te in picks:
         print(_line(f"  {name} · 训练", tr))
         print(_line(f"  {name} · **测试**", te))
-    print(_line("  原版五步法 · 训练", sv.baseline(con, where=f"({FIVE_STEP}) AND date_ms < {split_ms}")))
-    print(_line("  原版五步法 · **测试**", sv.baseline(con, where=f"({FIVE_STEP}) AND date_ms >= {split_ms}")))
-    print(_line("  全市场 · 训练", sv.baseline(con, where=f"date_ms < {split_ms}")))
-    print(_line("  全市场 · **测试**", sv.baseline(con, where=f"date_ms >= {split_ms}")))
+    print(_line("  原版五步法 · 训练", sv.baseline(con, where=f"({FIVE_STEP}) AND ({train_where})", cfg=admission_cfg)))
+    print(_line("  原版五步法 · **测试**", sv.baseline(con, where=f"({FIVE_STEP}) AND ({holdout_where})", cfg=admission_cfg)))
+    print(_line("  全市场 · 训练", sv.baseline(con, where=train_where, cfg=admission_cfg)))
+    print(_line("  全市场 · **测试**", sv.baseline(con, where=holdout_where, cfg=admission_cfg)))
 
     # ---------------- 方向一致性
     print("\n" + "=" * 94)
@@ -181,7 +189,7 @@ def main() -> int:
     for name, c, _tr, _te in picks:
         vals = []
         for bps in (0, 25, 35):
-            r = sv.baseline(con, where=f"({c}) AND date_ms >= {split_ms}",
+            r = sv.baseline(con, where=f"({c}) AND ({holdout_where})",
                             cfg=sv.VerifyConfig(cost_bps=bps))
             vals.append(f"{r['x5']:+.2f}%")
         print(f"{name:<34}{vals[0]:>12}{vals[1]:>12}{vals[2]:>12}")
@@ -192,11 +200,12 @@ def main() -> int:
     print("\n" + "=" * 94)
     print(f"【5】结构稳定性（测试段）—— 主规则 = {main_name}")
     print("=" * 94)
-    lu = sv.limit_up_share(con, f"({main_cond}) AND date_ms >= {split_ms}")
+    lu = sv.limit_up_share(con, f"({main_cond}) AND ({holdout_where})")
     print(f"信号日疑似涨停（收盘买不进）：{(lu['limit_up_share'] or 0) * 100:.1f}%"
           f"（当日平均涨幅 {lu['chg_mean']:.2f}%）")
-    test_where = f"({main_cond}) AND date_ms >= {split_ms}"
-    mv_band = ("CASE WHEN " + SMALL_CAP + " THEN 'a 流通<30亿' "
+    test_where = f"({main_cond}) AND ({holdout_where})"
+    mv_band = ("CASE WHEN float_shares IS NULL THEN 'z 股本未知' "
+               "WHEN " + SMALL_CAP + " THEN 'a 流通<30亿' "
                "WHEN close * float_shares < 1e10 THEN 'b 30~100亿' ELSE 'c >100亿' END")
     print("\n—— 按流通市值分档（原始 + 全市场中性）")
     print(sv.render(sv.sensitivity(con, mv_band, test_where), sv.horizons_of(con),
@@ -204,22 +213,26 @@ def main() -> int:
     print("\n—— **同市值段中性化**：扣掉「同一交易日 + 同一市值段」的均值，检验是否只是小市值 beta")
     seg_sql = f"""
         WITH seg AS (
-            SELECT date_ms, CASE WHEN {SMALL_CAP} THEN 'small' ELSE 'big' END AS seg,
+            SELECT date_ms, CASE WHEN float_shares IS NULL THEN 'unknown'
+                                  WHEN {SMALL_CAP} THEN 'small' ELSE 'big' END AS seg,
                    avg(fwd{H}) AS sfwd
             FROM sigv WHERE fwd{H} IS NOT NULL GROUP BY 1, 2
         ), mkt AS (
             SELECT date_ms, avg(fwd{H}) AS mfwd FROM sigv WHERE fwd{H} IS NOT NULL GROUP BY 1
         )
         SELECT count(*) AS n,
-            avg(s.fwd{H} - m.mfwd) AS ex_mkt, median(s.fwd{H} - m.mfwd) AS med_mkt,
-            avg(CASE WHEN s.fwd{H} - m.mfwd > 0 THEN 1.0 ELSE 0 END) AS win_mkt,
-            avg(s.fwd{H} - g.sfwd) AS ex_seg, median(s.fwd{H} - g.sfwd) AS med_seg,
-            avg(CASE WHEN s.fwd{H} - g.sfwd > 0 THEN 1.0 ELSE 0 END) AS win_seg
+            avg(s.fwd{H} - m.mfwd - {cost_pct}) AS ex_mkt,
+            median(s.fwd{H} - m.mfwd - {cost_pct}) AS med_mkt,
+            avg(CASE WHEN s.fwd{H} - m.mfwd - {cost_pct} > 0 THEN 1.0 ELSE 0 END) AS win_mkt,
+            avg(s.fwd{H} - g.sfwd - {cost_pct}) AS ex_seg,
+            median(s.fwd{H} - g.sfwd - {cost_pct}) AS med_seg,
+            avg(CASE WHEN s.fwd{H} - g.sfwd - {cost_pct} > 0 THEN 1.0 ELSE 0 END) AS win_seg
         FROM sigv s
         JOIN mkt m ON m.date_ms = s.date_ms
         JOIN seg g ON g.date_ms = s.date_ms
-                   AND g.seg = CASE WHEN {SMALL_CAP} THEN 'small' ELSE 'big' END
-        WHERE ({main_cond}) AND s.date_ms >= {split_ms} AND s.fwd{H} IS NOT NULL
+                   AND g.seg = CASE WHEN s.float_shares IS NULL THEN 'unknown'
+                                      WHEN {SMALL_CAP} THEN 'small' ELSE 'big' END
+        WHERE ({main_cond}) AND ({holdout_where_s}) AND s.fwd{H} IS NOT NULL
     """
     n, ex_mkt, med_mkt, win_mkt, ex_seg, med_seg, win_seg = con.execute(seg_sql).fetchone()
     if n:
@@ -236,7 +249,7 @@ def main() -> int:
     print(sv.render(sv.sensitivity(con, age_band, test_where), sv.horizons_of(con),
                     base=sv.baseline(con, where=test_where)))
     print("\n—— 测试段分年度")
-    yr = sv.yearly(con, test_where)
+    yr = sv.yearly(con, test_where, cfg=admission_cfg, horizons=[H])
     print(sv.render(yr, sv.horizons_of(con)))
     pos, tot = sv.year_counts(yr, horizon=H)
     print(f"   年度中性超额 > 0：{pos}/{tot}")
@@ -248,17 +261,37 @@ def main() -> int:
     print("\n" + "=" * 94)
     print("【6】结论登记")
     print("=" * 94)
-    m = sv.summarize_row(sv.baseline(con, where=test_where), horizon=H)
+    m = sv.summarize_row(
+        sv.baseline(con, where=test_where, cfg=admission_cfg, horizons=[H]),
+        horizon=H, cost_bps=sv.ADMISSION_COST_BPS,
+    )
     lu_main = lu or {}
-    # ⚠️ 中位/跑赢比例**必须传中性口径**（上面 `seg_sql` 算出的 med_mkt / win_mkt）。
-    # 用 `m` 里的原始中位（+3.33%）与原始跑赢（68.1%）会把判据变成恒真 —— 大盘上涨时
-    # 人人跑赢，原始胜率天然 >50%，这条闸门就形同虚设了。中性口径是 −0.08% / 49.3%。
-    gate = sv.gate_verdict(m, yearly_pos=pos, yearly_tot=tot,
-                           limit_up_share=lu_main.get("limit_up_share"),
-                           excess_median=med_mkt, excess_win_rate=win_mkt)
+    # 最终准入的中性中位/跑赢比例只吃主规则 + purged holdout；不能复用上面的
+    # 当前股本市值分层 join，否则会把结构诊断里的非 PIT 股本偷偷带回 gate。
+    gate_med_mkt, gate_win_mkt = con.execute(f"""
+        SELECT median(fwd{H} - mfwd{H} - {cost_pct}),
+               avg(CASE WHEN fwd{H} - mfwd{H} - {cost_pct} > 0 THEN 1.0 ELSE 0.0 END)
+        FROM sigv
+        WHERE ({test_where}) AND fwd{H} IS NOT NULL AND mfwd{H} IS NOT NULL
+    """).fetchone()
+    protocol = sv.validation_protocol(
+        horizon=H, cost_bps=sv.ADMISSION_COST_BPS, split=split,
+        # 候选族最初由全样本（含测试段）启发，不能因本次 train-only 选参就洗成 clean OOS。
+        selection_scope="test_informed_hypothesis_family",
+        universe_point_in_time=False,
+        feature_point_in_time=True,
+        trials=len(combos),
+        multiple_testing_accounted=False,
+        signal_overlap_checked=False,
+    )
+    gate = sv.gate_verdict(
+        m, yearly_pos=pos, yearly_tot=tot, limit_up_share=lu_main.get("limit_up_share"),
+        excess_median=gate_med_mkt, excess_win_rate=gate_win_mkt, protocol=protocol,
+    )
     headline = (
-        f"测试段（样本外）T+{H}：均值 {m['mean']:+.2f}%（中性 {m['excess']:+.2f}%）、"
-        f"中性中位 {med_mkt:+.2f}%、中性跑赢 {(win_mkt or 0) * 100:.1f}%、"
+        f"purged 测试段 T+{H}（{sv.ADMISSION_COST_BPS:.0f}bps）："
+        f"均值 {m['mean']:+.2f}%（中性 {m['excess']:+.2f}%）、"
+        f"中性中位 {gate_med_mkt:+.2f}%、中性跑赢 {(gate_win_mkt or 0) * 100:.1f}%、"
         f"年度为正 {pos}/{tot}、疑似涨停 {(lu_main.get('limit_up_share') or 0) * 100:.1f}%"
         f" ⇒ {gate['verdict']}"
     )
@@ -267,15 +300,16 @@ def main() -> int:
         verdict=gate["verdict"],
         headline=headline,
         # 中性中位/胜率一并入库：它们才是判据依据，落到产物里才能回查
-        metrics={**m, "excess_median": med_mkt, "excess_win_rate": win_mkt},
+        metrics={**m, "excess_median": gate_med_mkt, "excess_win_rate": gate_win_mkt},
         sample={
             "n_signals": m["n"],
             "split": "2022-01-01",
-            "segment": "测试段（样本外）",
+            "segment": "purged/embargoed holdout",
+            "split_evidence": split,
             "yearly_pos": pos,
             "yearly_tot": tot,
             "limit_up_share": lu_main.get("limit_up_share"),
-            "caveat": "候选B 系用全样本（含测试段）发现 ⇒ 本成绩不构成干净的样本外证据",
+            "caveat": "候选B 假设族曾使用全样本（含测试段）发现；且未完成既有信号重叠检查，故协议门保持 observe",
         },
         source="scripts/verify_candidate_b_oos.py",
         extra={"gate_failed": gate["failed"], "gate_unchecked": gate["unchecked"],

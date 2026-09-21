@@ -123,6 +123,43 @@ def test_at_limit_flags_limit_up_day(con):
     assert con.execute("SELECT count(DISTINCT thscode) FROM sig WHERE at_limit = 1").fetchone()[0] == 1
 
 
+
+
+def test_current_snapshot_float_shares_never_filters_historical_universe(tmp_path):
+    fs_sql = (
+        "(SELECT * FROM (VALUES ('A.SH', 'ST today', 1000000.0)) "
+        "AS t(thscode, name, float_shares))"
+    )
+    c = make_con(tmp_path / "fs.duckdb", float_shares_sql=fs_sql)
+    try:
+        assert c.execute("SELECT count(*) FROM sig").fetchone()[0] == 5 * KEPT
+        assert c.execute("SELECT count(*) FROM sig WHERE thscode='A.SH' AND turn IS NOT NULL").fetchone()[0] == KEPT
+        assert c.execute("SELECT count(*) FROM sig WHERE thscode='B.SH' AND turn IS NULL").fetchone()[0] == KEPT
+    finally:
+        c.close()
+
+
+def test_snapshot_float_shares_tie_break_is_deterministic(tmp_path):
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    c = duckdb.connect()
+    try:
+        out = snap / "a.parquet"
+        c.execute(f"""
+            COPY (
+              SELECT * FROM (VALUES
+                ('000001','SZ','older',10.0,100.0,1000.0,TIMESTAMP '2026-09-10 14:00:00'),
+                ('000001','SZ','newer',20.0,200.0,1000.0,TIMESTAMP '2026-09-10 14:30:00')
+              ) AS t(symbol,market,name,price,nmc,amount,received_at)
+            ) TO '{out}' (FORMAT PARQUET)
+        """)
+        sql = sv.snapshot_float_shares_sql(snap)
+        row = c.execute(f"SELECT name, float_shares FROM {sql}").fetchone()
+        assert row == ("newer", 100000.0)
+    finally:
+        c.close()
+
+
 # ---------------------------------------------------------------- 市场中性（核心口径）
 
 def test_market_neutral_excess_sums_to_zero_over_all_rows(con):
@@ -283,12 +320,36 @@ def test_yearly_groups_by_calendar_year(con):
     assert sv.year_counts(rows, horizon=5) == (2, 2)
 
 
-def test_split_sample_partitions_by_time(con):
+def test_split_sample_partitions_by_time_with_visible_purge_and_embargo(con):
     mid = int((START + timedelta(days=30)).timestamp() * 1000)
-    out = sv.split_sample(con, "chg >= 0", mid)
+    out = sv.split_sample(con, "chg >= 0", mid, horizons=[5])
     total = con.execute("SELECT count(*) FROM sig WHERE chg >= 0").fetchone()[0]
-    assert out["train"]["n"] + out["test"]["n"] == total
-    assert out["train"]["n"] > 0 and out["test"]["n"] > 0
+    parts = [out[k]["n"] for k in ("train", "purged", "embargoed", "test")]
+    assert sum(parts) == total
+    assert all(n > 0 for n in parts)
+    split = out["split"]
+    assert split["purge_sessions"] == split["embargo_sessions"] == 5
+    assert split["purged_days"] == split["embargo_days"] == 5
+    assert split["train_last_ms"] < split["split_date_ms"] < split["test_first_ms"]
+
+
+def test_split_windows_fail_closed_when_holdout_is_outside_or_consumed(con):
+    before = int((START + timedelta(days=1)).timestamp() * 1000)
+    after = int((START + timedelta(days=100)).timestamp() * 1000)
+    mid = int((START + timedelta(days=30)).timestamp() * 1000)
+    with pytest.raises(ValueError, match="样本内部"):
+        sv.split_windows(con, before, horizons=[5])
+    with pytest.raises(ValueError, match="样本内部"):
+        sv.split_windows(con, after, horizons=[5])
+    with pytest.raises(ValueError, match="train 或 test 为空"):
+        sv.split_windows(con, mid, horizons=[5], purge_sessions=100)
+
+
+@pytest.mark.parametrize("horizons", [[0], [-1], [True]])
+def test_split_windows_rejects_invalid_horizons(con, horizons):
+    mid = int((START + timedelta(days=30)).timestamp() * 1000)
+    with pytest.raises(ValueError, match="horizons"):
+        sv.split_windows(con, mid, horizons=horizons)
 
 
 def test_limit_up_share_reports_executability(con):

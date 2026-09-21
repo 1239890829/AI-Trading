@@ -47,13 +47,34 @@ def test_summarize_row_tolerates_missing_and_none():
 
 
 def _ok_metrics(**over) -> dict:
-    m = {"n": 5000, "mean": 1.6, "median": 0.9, "win_rate": 0.57, "std": 6.0, "excess": 1.4}
+    m = {
+        "n": 5000, "mean": 1.6, "median": 0.9, "win_rate": 0.57,
+        "std": 6.0, "excess": 1.4, "horizon": 5,
+        "cost_bps": sv.ADMISSION_COST_BPS,
+    }
     m.update(over)
     return m
 
 
+def _protocol(**over) -> dict:
+    split = {"purge_sessions": 5, "embargo_sessions": 5, "split_date_ms": 1_700_000_000_000}
+    kwargs = dict(
+        horizon=5, cost_bps=sv.ADMISSION_COST_BPS, split=split,
+        selection_scope="train_only", universe_point_in_time=True,
+        feature_point_in_time=True, trials=3, multiple_testing_accounted=True,
+        signal_overlap_checked=True,
+    )
+    kwargs.update(over)
+    return sv.validation_protocol(**kwargs)
+
+
+def _gate(metrics=None, **kwargs):
+    kwargs.setdefault("protocol", _protocol())
+    return sv.gate_verdict(metrics if metrics is not None else _ok_metrics(), **kwargs)
+
+
 def test_gate_verdict_passes_when_all_clauses_met():
-    g = sv.gate_verdict(_ok_metrics(), yearly_pos=10, yearly_tot=11, limit_up_share=0.05,
+    g = _gate(_ok_metrics(), yearly_pos=10, yearly_tot=11, limit_up_share=0.05,
                         excess_median=0.9, excess_win_rate=0.57)
     assert g["verdict"] == sv.VERDICT_PASS
     assert g["failed"] == []
@@ -62,7 +83,7 @@ def test_gate_verdict_passes_when_all_clauses_met():
 
 def test_gate_verdict_rejects_non_positive_excess():
     """市场中性超额 ≤ 0 是唯一直接否决项：连同日市场均值都跑不赢，无从谈 alpha。"""
-    g = sv.gate_verdict(_ok_metrics(excess=-0.2), yearly_pos=9, yearly_tot=11)
+    g = _gate(_ok_metrics(excess=-0.2), yearly_pos=9, yearly_tot=11)
     assert g["verdict"] == sv.VERDICT_REJECT
     assert any("≤ 0" in f for f in g["failed"])
 
@@ -72,7 +93,7 @@ def test_gate_verdict_observes_when_median_or_winrate_fails():
 
     这正是候选B 的真实情形（2026-09-11 实测：中性中位 −0.08%、跑赢 49.3%）。
     """
-    g = sv.gate_verdict(_ok_metrics(), yearly_pos=9, yearly_tot=11,
+    g = _gate(_ok_metrics(), yearly_pos=9, yearly_tot=11,
                         excess_median=-0.08, excess_win_rate=0.493)
     assert g["verdict"] == sv.VERDICT_OBSERVE
     assert any("右偏" in f for f in g["failed"])
@@ -85,7 +106,7 @@ def test_gate_verdict_ignores_raw_median_and_winrate():
     候选B 原始中位 +3.33%、跑赢 68.1%（看着全达标），中性口径却是 −0.08% / 49.3%
     （不达标）。若此处误用原始口径，判据在上涨市里恒真，闸门形同虚设。
     """
-    g = sv.gate_verdict(_ok_metrics(median=-0.08, win_rate=0.493), yearly_pos=9, yearly_tot=11)
+    g = _gate(_ok_metrics(median=-0.08, win_rate=0.493), yearly_pos=9, yearly_tot=11)
     assert g["verdict"] == sv.VERDICT_OBSERVE, "原始口径不影响判定，但缺中性证据不得放行"
     assert g["failed"] == []
     # 但必须显式声明"未验"，绝不能伪装成已验
@@ -96,38 +117,79 @@ def test_gate_verdict_ignores_raw_median_and_winrate():
 
 def test_gate_verdict_unchecked_needs_neutral_caliber():
     """拿不到中性口径时**跳过**判据并记 `unchecked`，不静默放行。"""
-    g = sv.gate_verdict(_ok_metrics(), yearly_pos=10, yearly_tot=11, limit_up_share=0.05)
+    g = _gate(_ok_metrics(), yearly_pos=10, yearly_tot=11, limit_up_share=0.05)
     assert g["verdict"] == sv.VERDICT_OBSERVE
     assert len(g["unchecked"]) == 2
     assert "未验" in g["note"]
 
 
 def test_gate_verdict_observes_unstable_years():
-    g = sv.gate_verdict(_ok_metrics(), yearly_pos=2, yearly_tot=11)
+    g = _gate(_ok_metrics(), yearly_pos=2, yearly_tot=11)
     assert g["verdict"] == sv.VERDICT_OBSERVE
     assert any("不稳定" in f for f in g["failed"])
 
 
 def test_gate_verdict_observes_untradable_limit_up_share():
-    g = sv.gate_verdict(_ok_metrics(), yearly_pos=10, yearly_tot=11, limit_up_share=0.42)
+    g = _gate(_ok_metrics(), yearly_pos=10, yearly_tot=11, limit_up_share=0.42)
     assert g["verdict"] == sv.VERDICT_OBSERVE
     assert any("难成交" in f for f in g["failed"])
 
 
 def test_gate_verdict_thin_sample_is_observe_not_reject():
     """样本少 ≠ 无效。样本不足必须落 observe，**绝不**因为样本少就否决。"""
-    g = sv.gate_verdict(_ok_metrics(n=12))
+    g = _gate(_ok_metrics(n=12))
     assert g["verdict"] == sv.VERDICT_OBSERVE
     assert any("样本不足" in f for f in g["failed"])
 
 
 def test_gate_verdict_reports_every_failed_clause():
     """`failed` 给全部命中项——「哪一项不达标」比「达不达标」更有诊断价值。"""
-    g = sv.gate_verdict(_ok_metrics(n=10, excess=-1.0),
+    g = _gate(_ok_metrics(n=10, excess=-1.0),
                         yearly_pos=1, yearly_tot=10, limit_up_share=0.9,
                         excess_median=-2.0, excess_win_rate=0.3)
     assert g["verdict"] == sv.VERDICT_REJECT
     assert len(g["failed"]) == 6
+
+
+
+
+def test_imp020_missing_protocol_blocks_statistical_pass():
+    gate = sv.gate_verdict(
+        _ok_metrics(), yearly_pos=9, yearly_tot=10, limit_up_share=0.05,
+        excess_median=0.2, excess_win_rate=0.57,
+    )
+    assert gate["verdict"] == sv.VERDICT_OBSERVE
+    assert gate["protocol_complete"] is False
+    assert gate["research_admission_eligible_for_review"] is False
+    assert gate["production_promotion_eligible"] is False
+
+
+@pytest.mark.parametrize("protocol", [
+    _protocol(cost_bps=25.0),
+    _protocol(universe_point_in_time=False),
+    _protocol(feature_point_in_time=False),
+    _protocol(selection_scope="test_informed_hypothesis_family"),
+    _protocol(multiple_testing_accounted=False),
+    _protocol(signal_overlap_checked=False),
+])
+def test_imp020_protocol_defects_block_pass(protocol):
+    metrics = _ok_metrics(cost_bps=protocol["cost_bps"])
+    gate = sv.gate_verdict(
+        metrics, yearly_pos=9, yearly_tot=10, limit_up_share=0.05,
+        excess_median=0.2, excess_win_rate=0.57, protocol=protocol,
+    )
+    assert gate["verdict"] == sv.VERDICT_OBSERVE
+    assert gate["protocol_complete"] is False and gate["unchecked"]
+    assert gate["research_admission_eligible_for_review"] is False
+
+
+def test_imp020_protocol_incomplete_does_not_upgrade_negative_effect():
+    gate = sv.gate_verdict(
+        _ok_metrics(excess=-0.2), yearly_pos=9, yearly_tot=10, limit_up_share=0.05,
+        excess_median=-0.1, excess_win_rate=0.4, protocol=None,
+    )
+    assert gate["verdict"] == sv.VERDICT_REJECT
+    assert gate["protocol_complete"] is False
 
 
 # ---------------------------------------------------------------- save / load
@@ -276,6 +338,30 @@ def test_registry_exposes_verification_for_keys_with_verify_key():
         assert ("verdict" in v) and ("reason" in v)
 
 
+def test_evolution_preserves_conservative_legacy_reject(monkeypatch):
+    """IMP-020：旧协议不能支撑 pass，但明确负效应 reject 仍保留为保守非准入结论。"""
+    from types import SimpleNamespace
+
+    import app.picks.strategy_registry as sr
+    import app.research.verify_registry as vrmod
+    import app.services.evolution as evo
+
+    spec = SimpleNamespace(
+        verify_key="legacy-reject", name="旧否决", status=sr.STATUS_REJECTED,
+    )
+    monkeypatch.setattr(sr, "SPECS", (spec,))
+    monkeypatch.setattr(vrmod, "verification_of", lambda _key: {
+        "available": True,
+        "verdict": "reject",
+        "effective_verdict": "reject",
+        "gate_evidence_state": "legacy_protocol_unverified",
+        "headline": "旧结论保留但协议未验",
+    })
+    out = evo._collect_strategy_verification()
+    assert out["conflicts"] == []
+    assert out["entries"][0]["gate_evidence_state"] == "legacy_protocol_unverified"
+
+
 def test_registry_survives_verify_registry_failure(monkeypatch):
     """核验产物读取炸了不能把整个登记册端点拖成 500——一项读失败，其余照出。"""
     import app.picks.strategy_registry as sr
@@ -329,7 +415,10 @@ def test_recorded_at_is_beijing_naive(vdir):
 
 # BUG-027: independent expected values, never a call to the implementation as oracle.
 def _bug027_complete(**changes):
-    metrics = {"n": 500, "excess": 0.5}
+    metrics = {
+        "n": 500, "excess": 0.5, "horizon": 5,
+        "cost_bps": sv.ADMISSION_COST_BPS,
+    }
     kwargs = dict(yearly_pos=9, yearly_tot=10, limit_up_share=0.05,
                   excess_median=0.2, excess_win_rate=0.57)
     for key, value in changes.items():
@@ -337,7 +426,7 @@ def _bug027_complete(**changes):
             metrics[key] = value
         else:
             kwargs[key] = value
-    return sv.gate_verdict(metrics, **kwargs)
+    return _gate(metrics, **kwargs)
 
 
 def test_bug027_zero_mature_does_not_fall_back_to_total():
@@ -349,7 +438,7 @@ def test_bug027_zero_mature_does_not_fall_back_to_total():
 def test_bug027_legacy_total_remains_readable_but_not_mature_evidence():
     summary = sv.summarize_row({"n": 500, "x5": 0.5})
     assert summary["n"] == 500 and summary["sample_basis"] == "legacy_total"
-    gate = sv.gate_verdict(summary, yearly_pos=9, yearly_tot=10,
+    gate = _gate(summary, yearly_pos=9, yearly_tot=10,
                           limit_up_share=0.05, excess_median=0.2, excess_win_rate=0.57)
     assert gate["verdict"] == sv.VERDICT_OBSERVE and gate["unchecked"]
 
@@ -371,7 +460,7 @@ def test_bug027_invalid_or_inconsistent_counts_do_not_pass(changes):
     row.update(changes)
     summary = sv.summarize_row(row)
     assert summary["validation_errors"]
-    result = sv.gate_verdict(summary, yearly_pos=9, yearly_tot=10,
+    result = _gate(summary, yearly_pos=9, yearly_tot=10,
                             limit_up_share=0.05, excess_median=0.2, excess_win_rate=0.57)
     assert result["verdict"] != sv.VERDICT_PASS
 
@@ -411,7 +500,9 @@ def test_bug027_complete_machine_pass_still_requires_final_review():
     gate = _bug027_complete()
     assert gate["verdict"] == sv.VERDICT_PASS
     assert gate["machine_checks_complete"] is True and gate["review_required"] is True
-    assert gate["scope"] == "machine_checks_only" and gate["gate_version"] == 2
+    assert gate["scope"] == "research_admission_machine_checks" and gate["gate_version"] == 3
+    assert gate["research_admission_eligible_for_review"] is True
+    assert gate["production_promotion_eligible"] is False
 
 
 def test_bug027_registry_retains_legacy_record_without_silent_certification(vdir):
@@ -437,12 +528,28 @@ def test_bug027_registry_exposes_machine_evidence_and_unchecked(vdir):
 
 
 def test_bug027_raw_bad_but_complete_neutral_evidence_can_pass():
-    gate = sv.gate_verdict(_ok_metrics(median=-5.0, win_rate=0.1),
+    gate = _gate(_ok_metrics(median=-5.0, win_rate=0.1),
                           yearly_pos=9, yearly_tot=10, limit_up_share=0.05,
                           excess_median=0.2, excess_win_rate=0.57)
     assert gate["verdict"] == sv.VERDICT_PASS
     assert gate["failed"] == [] and gate["unchecked"] == []
 
+
+
+
+def test_imp020_valid_v2_gate_is_history_not_current_admission(vdir):
+    gate = {
+        "gate_version": 2, "scope": "machine_checks_only", "review_required": True,
+        "verdict": "pass", "failed": [], "unchecked": [], "machine_checks_complete": True,
+    }
+    path = vr.save_record("legacy-v2", verdict="pass", headline="old pass", extra={"gate": gate})
+    before = path.read_bytes()
+    view = vr.verification_of("legacy-v2")
+    assert view["gate_evidence_state"] == "legacy_protocol_unverified"
+    assert view["effective_verdict"] == "observe"
+    assert view["admission_eligible_for_review"] is False
+    assert view["production_promotion_eligible"] is False
+    assert path.read_bytes() == before
 
 @pytest.mark.parametrize("gate", ["bad", {}, {"gate_version": 2},
                                   {"gate_version": 2, "review_required": False}])
