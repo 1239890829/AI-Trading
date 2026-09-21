@@ -10,6 +10,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from app.core.freshness import Freshness
 from app.market import sina_market
@@ -47,12 +48,23 @@ RATE_LIMIT_COOLDOWN_SECONDS = 240.0
 #: 限流冷却上限：显著高于 `BACKOFF_CAP_SECONDS`，体现"限流比普通失败更该退让"。
 RATE_LIMIT_COOLDOWN_CAP_SECONDS = 900.0
 
+#: 新浪主源限流时的降级快照完整度门。低于主源自身 90% 完整性纪律就拒绝发布，
+#: 不用一小撮报价冒充“全市场”。
+FALLBACK_MIN_COVERAGE = 0.90
+FALLBACK_BATCH_SIZE = 50
+FALLBACK_SOURCE = "quote_fallback"
+FALLBACK_REASON = "新浪全市场源限流，使用既有股票池 + 批量行情备源降级快照"
+
 
 class MarketSnapshotService:
-    def __init__(self, poll_interval: float, save_interval: float, parquet_dir: Path):
+    def __init__(
+        self, poll_interval: float, save_interval: float, parquet_dir: Path, *,
+        quote_hub: Any | None = None,
+    ):
         self.poll_interval = max(15.0, poll_interval)
         self.save_interval = max(self.poll_interval, save_interval)
         self.parquet_dir = parquet_dir
+        self.quote_hub = quote_hub
         self.snapshot: list[dict] = []
         self.breadth: dict | None = None
         self.last_success: datetime | None = None
@@ -70,6 +82,14 @@ class MarketSnapshotService:
         # these two fields are set, making the counter a safe scheduler cursor.
         self.last_saved_path: Path | None = None
         self.last_saved_as_of: datetime | None = None
+        self.last_saved_state: str | None = None
+        self.last_saved_source: str | None = None
+        self.last_saved_reason: str | None = None
+        self.last_snapshot_source: str | None = None
+        self.last_degraded_reason: str | None = None
+        self.last_fallback_coverage: float | None = None
+        self.last_save_error: str | None = None
+        self.consecutive_save_failures = 0
 
     async def refresh(self) -> None:
         rows = await sina_market.fetch_market_snapshot()
@@ -83,6 +103,9 @@ class MarketSnapshotService:
         self._snapshot_version = (success_at, tuple(dict(row) for row in rows))
         self.last_error = None
         self.consecutive_failures = 0
+        self.last_snapshot_source = "sina"
+        self.last_degraded_reason = None
+        self.last_fallback_coverage = None
         # 成功即视为已脱离限流：冷却标记的语义是"当前是否处于限流退避中"，
         # 不随成功一起清零会让一次限流终生压低抓取频率。
         self.rate_limited = False
@@ -91,6 +114,137 @@ class MarketSnapshotService:
         await asyncio.to_thread(self._maybe_save)
         log.info("market snapshot refreshed: %s stocks, up=%s down=%s limit_up=%s",
                  self.breadth["total"], self.breadth["up"], self.breadth["down"], self.breadth["limit_up"])
+
+    def _fallback_universe_rows(self) -> tuple[list[dict], str]:
+        """取 fallback 股票全集；优先当前冻结版本，冷启动退到最新可读 Parquet。"""
+        rows, _as_of = self.versioned_snapshot()
+        if rows:
+            return rows, "memory"
+
+        from app.services.parquet_store import read_latest_snapshot
+
+        read = read_latest_snapshot(self.parquet_dir)
+        if not read.ok or read.df is None:
+            raise RuntimeError(
+                "fallback 无可用股票池：内存快照为空，且没有可读的历史 durable snapshot"
+            )
+        rows = [dict(row) for row in read.df.to_dicts()]
+        if not rows:
+            raise RuntimeError("fallback 最新 durable snapshot 为空")
+        return rows, f"parquet:{read.path}"
+
+    @staticmethod
+    def _fallback_row(base: dict, quote, *, now: datetime) -> dict:
+        """把批量备源 Quote 映射回全市场 snapshot 行；动态字段绝不沿用旧值。"""
+        row = dict(base)
+        dynamic = (
+            "price", "open", "high", "low", "prev_close", "change",
+            "change_pct", "volume", "amount", "turnover_rate", "ticktime",
+        )
+        if quote is None:
+            for key in dynamic:
+                row[key] = None
+            row["source"] = f"{FALLBACK_SOURCE}:missing"
+            row["received_at"] = now.isoformat()
+            return row
+
+        row.update({
+            "symbol": str(quote.symbol).zfill(6),
+            "name": quote.name or row.get("name"),
+            "market": quote.market or row.get("market"),
+            "price": quote.price,
+            "open": quote.open,
+            "high": quote.high,
+            "low": quote.low,
+            "prev_close": quote.prev_close,
+            "change": quote.change,
+            "change_pct": quote.change_pct,
+            "volume": quote.volume,
+            "amount": quote.amount,
+            "turnover_rate": quote.turnover_rate,
+            "mktcap": (quote.total_mktcap_yi * 1e4
+                       if quote.total_mktcap_yi is not None else row.get("mktcap")),
+            "nmc": (quote.float_mktcap_yi * 1e4
+                    if quote.float_mktcap_yi is not None else row.get("nmc")),
+            "ticktime": (quote.data_timestamp.isoformat()
+                         if quote.data_timestamp is not None else None),
+            "source": f"{quote.source or 'unknown'}_fallback",
+            "received_at": now.isoformat(),
+        })
+        return row
+
+    async def refresh_fallback(self) -> float:
+        """新浪限流时用既有 universe + 批量行情备源生成**显式 degraded**快照。"""
+        if self.quote_hub is None:
+            raise RuntimeError("snapshot fallback 未注入 quote_hub")
+
+        from app.services.quote_enrich import fetch_quotes_batched
+
+        base_rows, universe_source = await asyncio.to_thread(self._fallback_universe_rows)
+        symbols = sorted({
+            str(row.get("symbol") or "").zfill(6)
+            for row in base_rows
+            if str(row.get("symbol") or "").isdigit()
+            and len(str(row.get("symbol") or "")) <= 6
+        })
+        if not symbols:
+            raise RuntimeError("snapshot fallback 股票池无有效 symbol")
+
+        found = await fetch_quotes_batched(
+            self.quote_hub, symbols, prefer_cache=False, batch_size=FALLBACK_BATCH_SIZE
+        )
+        # 盘中只把“当前可据此下结论”的报价计入覆盖率。HTTP 200 也可能
+        # 携带旧时点/invalid 行，不能把它们算成 100% 的假覆盖。
+        if in_trading_window():
+            fresh_within = max(self.poll_interval * 3, 60.0)
+            found = {
+                symbol: quote for symbol, quote in found.items()
+                if quote is not None
+                and quote.freshness(fresh_within=fresh_within).state == "ready"
+                and isinstance(quote.price, (int, float)) and quote.price > 0
+            }
+        coverage = len(found) / len(symbols)
+        if coverage < FALLBACK_MIN_COVERAGE:
+            raise RuntimeError(
+                f"snapshot fallback coverage {coverage:.1%} < {FALLBACK_MIN_COVERAGE:.0%}"
+            )
+
+        now = datetime.now(timezone.utc)
+        by_symbol = {str(row.get("symbol") or "").zfill(6): row for row in base_rows}
+        rows = [
+            self._fallback_row(by_symbol[symbol], found.get(symbol), now=now)
+            for symbol in symbols
+        ]
+        breadth = compute_breadth(rows)
+        self.snapshot = rows
+        self.breadth = breadth
+        self.last_success = now
+        self._snapshot_version = (now, tuple(dict(row) for row in rows))
+        self.last_snapshot_source = FALLBACK_SOURCE
+        self.last_degraded_reason = FALLBACK_REASON
+        self.last_fallback_coverage = round(coverage, 4)
+        # 主源仍处于限流；刻意不清 consecutive_failures / rate_limited / last_error。
+        await asyncio.to_thread(self._maybe_save)
+        log.warning(
+            "market snapshot fallback refreshed: %s/%s (%.1f%%), universe=%s",
+            len(found), len(symbols), coverage * 100, universe_source,
+        )
+        return coverage
+
+    async def _wait_rate_limit_with_fallback(self, delay: float) -> None:
+        """主源冷却期间按 save_interval 补 degraded snapshot，不额外探测新浪。"""
+        remaining = max(0.0, delay)
+        while remaining > 0:
+            step = min(remaining, self.save_interval)
+            await asyncio.sleep(step)
+            remaining -= step
+            if remaining <= 0:
+                break
+            try:
+                await self.refresh_fallback()
+            except Exception as exc:  # noqa: BLE001 -- fallback 失败不能打断主源恢复探测
+                log.warning("snapshot fallback during rate-limit cooldown failed: %s", exc)
+
 
     def versioned_snapshot(self) -> tuple[list[dict], datetime | None]:
         """Return one internally consistent in-memory snapshot version."""
@@ -128,9 +282,17 @@ class MarketSnapshotService:
             self._last_save = now
             self.last_saved_path = path
             self.last_saved_as_of = snapshot_as_of or now
+            saved_freshness = self.freshness()
+            self.last_saved_state = saved_freshness.state
+            self.last_saved_source = saved_freshness.source
+            self.last_saved_reason = saved_freshness.reason
+            self.last_save_error = None
+            self.consecutive_save_failures = 0
             self.saved_files += 1
             log.info("snapshot saved: %s (%s rows)", path.name, len(rows))
-        except Exception:
+        except Exception as exc:
+            self.consecutive_save_failures += 1
+            self.last_save_error = str(exc)
             log.exception("parquet save failed")
 
     async def run(self, *, first_delay: float = 0.0) -> None:
@@ -173,10 +335,17 @@ class MarketSnapshotService:
                 self.consecutive_failures += 1
                 self.last_error = str(exc)
                 self.rate_limited = True
+                delay = self._next_delay(live=live)
                 log.warning(
                     "snapshot refresh rate-limited（新浪 WAF 限流第 %s 次，冷却 %.0fs 再试）: %s",
-                    self.consecutive_failures, self._next_delay(live=live), exc,
+                    self.consecutive_failures, delay, exc,
                 )
+                try:
+                    await self.refresh_fallback()
+                except Exception as fallback_exc:  # noqa: BLE001
+                    log.warning("snapshot fallback after rate-limit failed: %s", fallback_exc)
+                await self._wait_rate_limit_with_fallback(delay)
+                continue
             except Exception as exc:
                 self.consecutive_failures += 1
                 self.last_error = str(exc)
@@ -234,13 +403,19 @@ class MarketSnapshotService:
             )
             return Freshness.unavailable(reason=reason, source="sina")
         fresh_within = self.poll_interval * 3
+        source = self.last_snapshot_source or "sina"
         f = Freshness.from_age(
-            as_of=self.last_success, fresh_within=fresh_within, source="sina",
+            as_of=self.last_success, fresh_within=fresh_within, source=source,
             missing_reason="从未成功刷新过全市场快照，无法判定新鲜度",
         )
-        if self.consecutive_failures and f.is_usable():
+        if self.last_degraded_reason and f.state == "ready":
             return Freshness.degraded(
-                as_of=f.as_of, age_seconds=f.age_seconds, source="sina",
+                as_of=f.as_of, age_seconds=f.age_seconds, source=source,
+                reason=self.last_degraded_reason,
+            )
+        if self.consecutive_failures and f.state == "ready":
+            return Freshness.degraded(
+                as_of=f.as_of, age_seconds=f.age_seconds, source=source,
                 reason=f"上游连续失败 {self.consecutive_failures} 次，当前用的是上一次成功数据",
             )
         return f
@@ -257,6 +432,13 @@ class MarketSnapshotService:
             "snapshot_age_seconds": age,
             "rows": len(self.snapshot),
             "saved_files": self.saved_files,
+            "last_saved_path": str(self.last_saved_path) if self.last_saved_path is not None else None,
+            "last_saved_as_of": self.last_saved_as_of.isoformat() if self.last_saved_as_of else None,
+            "last_saved_state": self.last_saved_state,
+            "consecutive_save_failures": self.consecutive_save_failures,
+            "last_save_error": self.last_save_error,
+            "snapshot_source": self.last_snapshot_source,
+            "fallback_coverage": self.last_fallback_coverage,
             "consecutive_failures": self.consecutive_failures,
             "last_error": self.last_error,
         }

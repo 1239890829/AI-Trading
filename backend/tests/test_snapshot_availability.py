@@ -27,7 +27,7 @@ import ast
 import asyncio
 import contextlib
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -37,6 +37,7 @@ from app.market import sina_market
 from app.market.breadth import compute_breadth
 from app.market.sina_market import RATE_LIMIT_STATUS, SinaRateLimited
 from app.services import snapshot_service
+from app.schemas.market import Quote
 from app.services.snapshot_service import (
     BACKOFF_CAP_SECONDS,
     IDLE_INTERVAL_SECONDS,
@@ -475,3 +476,238 @@ def test_overview_amount_matches_breadth_total(client):
 
     assert data["total_amount"] == round(sum(r["amount"] for r in rows), 2)
     assert data["total_amount"] == round(breadth["total_amount"], 2)
+
+# ---------------------------------------------------------------- ④ 新浪限流时腾讯降级快照
+
+
+def _base_rows(n: int = 2) -> list[dict]:
+    return [
+        {
+            "symbol": f"{600001 + i:06d}", "name": f"S{i}", "market": "SH",
+            "price": 9.0, "open": 8.8, "high": 9.2, "low": 8.7,
+            "prev_close": 8.9, "change": 0.1, "change_pct": 1.12,
+            "volume": 1000.0, "amount": 9000.0, "turnover_rate": 1.0,
+            "mktcap": 10000.0, "nmc": 8000.0, "ticktime": "old",
+            "source": "sina_market",
+        }
+        for i in range(n)
+    ]
+
+
+def _quote(symbol: str, pct: float = 2.0) -> Quote:
+    return Quote(
+        symbol=symbol, name="Q" + symbol[-2:], market="SH", price=10.0,
+        open=9.5, high=10.2, low=9.4, prev_close=9.8, change=0.2,
+        change_pct=pct, volume=2000.0, amount=20000.0, turnover_rate=2.0,
+        total_mktcap_yi=2.0, float_mktcap_yi=1.5,
+        data_timestamp=datetime.now(timezone.utc), source="tencent",
+    )
+
+
+def test_fallback_refresh_uses_memory_universe_and_stays_degraded(monkeypatch, tmp_path):
+    from app.services import quote_enrich
+
+    svc = MarketSnapshotService(60.0, 300.0, tmp_path, quote_hub=object())
+    svc.snapshot = _base_rows()
+    svc._snapshot_version = (datetime.now(timezone.utc), tuple(dict(x) for x in svc.snapshot))
+    svc.breadth = compute_breadth(svc.snapshot)
+    svc.rate_limited = True
+    svc.consecutive_failures = 1
+    svc.last_error = "sina 456"
+    monkeypatch.setattr(svc, "_maybe_save", lambda: None)
+
+    async def _fake(_hub, symbols, **_kwargs):
+        return {symbol: _quote(symbol) for symbol in symbols}
+
+    monkeypatch.setattr(quote_enrich, "fetch_quotes_batched", _fake)
+    coverage = asyncio.run(svc.refresh_fallback())
+    assert coverage == 1.0
+    assert svc.rate_limited is True and svc.consecutive_failures == 1
+    assert svc.last_snapshot_source == "quote_fallback"
+    assert svc.last_fallback_coverage == 1.0
+    assert svc.snapshot[0]["price"] == 10.0
+    assert svc.snapshot[0]["mktcap"] == 20000.0  # 2 亿元 -> 2 万万元
+    fresh = svc.freshness()
+    assert fresh.state == "degraded"
+    assert fresh.source == "quote_fallback"
+    assert "批量行情备源" in (fresh.reason or "")
+
+
+def test_fallback_can_bootstrap_universe_from_latest_parquet(monkeypatch, tmp_path):
+    import polars as pl
+    from app.services import quote_enrich
+
+    day = tmp_path / "snapshots" / "20260921"
+    day.mkdir(parents=True)
+    pl.DataFrame(_base_rows()).write_parquet(day / "120000.parquet")
+    svc = MarketSnapshotService(60.0, 300.0, tmp_path, quote_hub=object())
+    monkeypatch.setattr(svc, "_maybe_save", lambda: None)
+
+    async def _fake(_hub, symbols, **_kwargs):
+        assert symbols == ["600001", "600002"]
+        return {symbol: _quote(symbol) for symbol in symbols}
+
+    monkeypatch.setattr(quote_enrich, "fetch_quotes_batched", _fake)
+    assert asyncio.run(svc.refresh_fallback()) == 1.0
+    assert len(svc.snapshot) == 2
+    assert svc.breadth and svc.breadth["total"] == 2
+
+
+def test_fallback_rejects_low_coverage_without_publishing(monkeypatch, tmp_path):
+    from app.services import quote_enrich
+
+    svc = MarketSnapshotService(60.0, 300.0, tmp_path, quote_hub=object())
+    original = _base_rows(10)
+    svc.snapshot = [dict(x) for x in original]
+    svc._snapshot_version = (datetime.now(timezone.utc), tuple(dict(x) for x in original))
+
+    async def _fake(_hub, symbols, **_kwargs):
+        return {symbol: _quote(symbol) for symbol in symbols[:8]}  # 80% < 90%
+
+    monkeypatch.setattr(quote_enrich, "fetch_quotes_batched", _fake)
+    with pytest.raises(RuntimeError, match="coverage"):
+        asyncio.run(svc.refresh_fallback())
+    assert svc.snapshot == original
+    assert svc.last_snapshot_source is None
+
+
+def test_fallback_rejects_stale_quotes_from_coverage_in_live_window(monkeypatch, tmp_path):
+    from app.services import quote_enrich
+
+    svc = MarketSnapshotService(60.0, 300.0, tmp_path, quote_hub=object())
+    original = _base_rows(10)
+    svc.snapshot = [dict(x) for x in original]
+    svc._snapshot_version = (datetime.now(timezone.utc), tuple(dict(x) for x in original))
+    monkeypatch.setattr(snapshot_service, "in_trading_window", lambda: True)
+
+    async def _fake(_hub, symbols, **_kwargs):
+        out = {symbol: _quote(symbol) for symbol in symbols}
+        for symbol in symbols[-2:]:
+            out[symbol].data_timestamp = datetime.now(timezone.utc) - timedelta(seconds=181)
+        return out
+
+    monkeypatch.setattr(quote_enrich, "fetch_quotes_batched", _fake)
+    with pytest.raises(RuntimeError, match="coverage"):
+        asyncio.run(svc.refresh_fallback())
+    assert svc.snapshot == original
+
+
+def test_fallback_missing_quote_clears_dynamic_fields():
+    now = datetime.now(timezone.utc)
+    row = MarketSnapshotService._fallback_row(_base_rows(1)[0], None, now=now)
+    for key in ("price", "open", "high", "low", "prev_close", "change",
+                "change_pct", "volume", "amount", "turnover_rate", "ticktime"):
+        assert row[key] is None
+    assert row["name"] == "S0"
+    assert row["source"] == "quote_fallback:missing"
+
+
+def test_rate_limit_run_invokes_fallback_but_preserves_primary_cooldown(monkeypatch):
+    svc = _svc()
+    calls: list[object] = []
+
+    async def _primary():
+        raise SinaRateLimited("sina 456")
+
+    async def _fallback():
+        calls.append("fallback")
+        return 1.0
+
+    async def _wait(delay):
+        calls.append(delay)
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(svc, "refresh", _primary)
+    monkeypatch.setattr(svc, "refresh_fallback", _fallback)
+    monkeypatch.setattr(svc, "_wait_rate_limit_with_fallback", _wait)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(svc.run())
+    assert svc.rate_limited is True and svc.consecutive_failures == 1
+    assert calls == ["fallback", 240.0]
+
+
+def test_rate_limit_wait_runs_fallback_between_primary_probes(monkeypatch):
+    svc = _svc()
+    svc.save_interval = 300.0
+    sleeps: list[float] = []
+    fallbacks: list[int] = []
+
+    async def _sleep(delay):
+        sleeps.append(delay)
+
+    async def _fallback():
+        fallbacks.append(1)
+        return 1.0
+
+    monkeypatch.setattr(snapshot_service.asyncio, "sleep", _sleep)
+    monkeypatch.setattr(svc, "refresh_fallback", _fallback)
+    asyncio.run(svc._wait_rate_limit_with_fallback(900.0))
+    assert sleeps == [300.0, 300.0, 300.0]
+    assert len(fallbacks) == 2
+
+
+def test_fallback_save_persists_degraded_durable_metadata(tmp_path):
+    svc = MarketSnapshotService(60.0, 60.0, tmp_path)
+    now = datetime.now(timezone.utc)
+    svc.snapshot = _base_rows()
+    svc.breadth = compute_breadth(svc.snapshot)
+    svc.last_success = now
+    svc._snapshot_version = (now, tuple(dict(x) for x in svc.snapshot))
+    svc.rate_limited = True
+    svc.consecutive_failures = 1
+    svc.last_snapshot_source = "quote_fallback"
+    svc.last_degraded_reason = "fallback-test"
+    svc._maybe_save()
+
+    assert svc.saved_files == 1
+    assert svc.last_saved_path is not None and svc.last_saved_path.exists()
+    assert svc.last_saved_as_of == now
+    assert svc.last_saved_state == "degraded"
+    assert svc.last_saved_source == "quote_fallback"
+    assert svc.last_saved_reason == "fallback-test"
+
+
+def test_parquet_save_failure_is_structured_and_visible(monkeypatch, tmp_path):
+    from app.services import parquet_store
+
+    svc = MarketSnapshotService(60.0, 60.0, tmp_path)
+    now = datetime.now(timezone.utc)
+    svc.snapshot = _base_rows()
+    svc.breadth = compute_breadth(svc.snapshot)
+    svc.last_success = now
+    svc._snapshot_version = (now, tuple(dict(x) for x in svc.snapshot))
+
+    def _boom(*_args, **_kwargs):
+        raise OSError("disk-full-test")
+
+    monkeypatch.setattr(parquet_store, "write_parquet_atomic", _boom)
+    svc._maybe_save()
+    payload = svc.breadth_payload()
+    assert svc.saved_files == 0
+    assert payload["consecutive_save_failures"] == 1
+    assert payload["last_save_error"] == "disk-full-test"
+
+
+def test_fallback_staleness_is_not_masked_as_degraded():
+    svc = _svc()
+    svc.breadth = {"total": 1}
+    svc.last_success = datetime.now(timezone.utc) - __import__("datetime").timedelta(seconds=300)
+    svc.last_snapshot_source = "quote_fallback"
+    svc.last_degraded_reason = "fallback"
+    svc.consecutive_failures = 2
+    assert svc.freshness().state == "stale"
+
+
+def test_bootstrap_injects_quote_hub_into_snapshot_service():
+    import ast
+    from app.bootstrap import services
+
+    tree = ast.parse(Path(services.__file__).read_text(encoding="utf-8"))
+    calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", None) == "MarketSnapshotService"
+    ]
+    assert len(calls) == 1
+    kw = {item.arg: ast.unparse(item.value) for item in calls[0].keywords}
+    assert kw.get("quote_hub") == "hub"

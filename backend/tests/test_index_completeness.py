@@ -152,6 +152,26 @@ def test_http_health_is_degraded_for_incomplete_batch_and_recovers(hub):
         assert client.get("/api/health").json()["status"] == "ok"
 
 
+def test_http_health_includes_market_snapshot_and_degrades_on_durable_failure(hub):
+    app = FastAPI()
+    app.include_router(liveness_router, prefix="/api")
+    app.dependency_overrides[get_hub] = lambda: hub
+    snapshot = {
+        "freshness": {"state": "ready"},
+        "consecutive_save_failures": 1,
+        "last_save_error": "disk-full-test",
+    }
+    app.state.snapshot_service = SimpleNamespace(breadth_payload=lambda: snapshot)
+    with TestClient(app) as client:
+        refresh(hub)
+        body = client.get("/api/health").json()
+        assert body["status"] == "degraded"
+        assert body["market_snapshot"]["last_save_error"] == "disk-full-test"
+        snapshot["consecutive_save_failures"] = 0
+        snapshot["last_save_error"] = None
+        assert client.get("/api/health").json()["status"] == "ok"
+
+
 def test_rejected_index_is_visible_in_rest_health_and_ws_snapshot(hub):
     refresh(hub)
     bad = rows()

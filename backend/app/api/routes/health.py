@@ -22,7 +22,7 @@ liveness_router = APIRouter(tags=["system"])
 
 
 @liveness_router.get("/health")
-async def health(hub: QuoteHub = Depends(get_hub)) -> dict:
+async def health(request: Request, hub: QuoteHub = Depends(get_hub)) -> dict:
     stale = hub.is_stale()
     index_batch = hub.index_batch() if hasattr(hub, "index_batch") else None
     incomplete = bool(index_batch and index_batch["missing_symbols"])
@@ -30,8 +30,14 @@ async def health(hub: QuoteHub = Depends(get_hub)) -> dict:
     rejected = bool(source_rejections and (
         source_rejections["quotes"]["count"] or source_rejections["indices"]["count"]
     ))
+    snapshot_service = getattr(request.app.state, "snapshot_service", None)
+    snapshot_health = snapshot_service.breadth_payload() if snapshot_service is not None else None
+    snapshot_degraded = bool(snapshot_health and (
+        (snapshot_health.get("freshness") or {}).get("state") != "ready"
+        or int(snapshot_health.get("consecutive_save_failures") or 0) > 0
+    ))
     return {
-        "status": "degraded" if stale or incomplete or rejected else "ok",
+        "status": "degraded" if stale or incomplete or rejected or snapshot_degraded else "ok",
         "app": settings.app_name,
         "version": settings.version,
         "provider": hub.provider.name,
@@ -43,6 +49,7 @@ async def health(hub: QuoteHub = Depends(get_hub)) -> dict:
         "is_stale": stale,
         "index_batch": index_batch,
         "source_rejections": source_rejections,
+        "market_snapshot": snapshot_health,
     }
 
 

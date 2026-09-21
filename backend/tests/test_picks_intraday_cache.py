@@ -236,6 +236,7 @@ def test_durable_snapshot_context_reads_exact_saved_a_not_current_b(tmp_path):
     svc = SimpleNamespace(
         last_saved_path=path,
         last_saved_as_of=datetime(2026, 9, 21, 2, 10, tzinfo=timezone.utc),
+        last_saved_state="ready",
         snapshot=[{"symbol": "600001", "price": 10.2, "change_pct": 2.0}],
         last_success=datetime(2026, 9, 21, 2, 11, tzinfo=timezone.utc),
     )
@@ -245,6 +246,24 @@ def test_durable_snapshot_context_reads_exact_saved_a_not_current_b(tmp_path):
     assert version == "2026-09-21T02:10:00+00:00"
     assert snap_by["600001"]["change_pct"] == 1.0
     assert svc.snapshot[0]["change_pct"] == 2.0
+
+
+def test_durable_snapshot_context_preserves_saved_degraded_state(tmp_path):
+    import polars as pl
+    from app.picks import intraday_opportunity_runtime as runtime
+
+    path = tmp_path / "fallback.parquet"
+    pl.DataFrame([{
+        "symbol": "600001", "price": 10.0, "change_pct": 1.0, "amount": 1e8,
+    }]).write_parquet(path)
+    svc = SimpleNamespace(
+        last_saved_path=path,
+        last_saved_as_of=datetime(2026, 9, 21, 6, 0, tzinfo=timezone.utc),
+        last_saved_state="degraded",
+    )
+    app = SimpleNamespace(state=SimpleNamespace(snapshot_service=svc))
+    _snap, state, _version = runtime.durable_snapshot_context(app)
+    assert state == "degraded"
 
 
 def test_runtime_normalizes_http_request_to_app_state():
