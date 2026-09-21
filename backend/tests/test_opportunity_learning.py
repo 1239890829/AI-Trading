@@ -1530,6 +1530,38 @@ def test_current_revision_overlays_metrics_without_mutating_legacy_base(tmp_path
     assert summary["funnel_denominator"]["current_basis_labeled_opportunities"] == 1
 
 
+def test_current_revision_uses_structured_cost_version_not_reason_text(tmp_path):
+    sf = _factory(tmp_path)
+    _seed_scorecard_label(
+        sf, snapshot_id="legacy-structured-cost", run_id="run-structured-cost",
+        symbol="600001", as_of=datetime(2026, 9, 16, 10, 5),
+        price_basis_version="", reason="legacy base",
+    )
+    with sf() as db:
+        base = db.execute(select(OpportunityOutcomeLabel)).scalar_one()
+        db.add(OpportunityOutcomeRevision(
+            base_outcome_id=base.id, snapshot_id=base.snapshot_id,
+            horizon=base.horizon, target_date=base.target_date,
+            revision_version=OUTCOME_REVISION_VERSION,
+            state="labeled", label="positive", reference_price=10.0,
+            outcome_price=10.5, return_pct=5.0, fill_state="ok",
+            cost_pct=0.1, net_return_pct=4.9,
+            reason="human-readable explanation without embedded token",
+            source="qfq_close", basis_reference_price=10.0,
+            reference_adjustment_factor=1.0,
+            price_basis_version=PRICE_BASIS_VERSION,
+            price_basis_source="qfq:test|raw:test",
+            cost_model_version=COST_MODEL_VERSION,
+        ))
+        db.commit()
+
+    card = opportunity_scorecard("2026-09-16", session_factory=sf)
+    assert card["sample"]["count"] == 1
+    assert card["fillable"] == 1
+    assert card["expectancy"]["cost_adjusted_d0_proxy_pct"] == 4.9
+    assert card["audit"]["cost_version_excluded_samples"] == 0
+
+
 def test_noncurrent_revision_never_overlays_current_scorecard(tmp_path):
     sf = _factory(tmp_path)
     _seed_scorecard_label(

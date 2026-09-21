@@ -162,7 +162,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **P1-35 cost version 不能继续只藏在 reason 文本**：revision 新增结构化 `cost_model_version`，effective scorecard 优先读结构化字段，legacy base 才回退 reason 兼容；migration parity 覆盖该列。
 - **P1-36 跨日 revision 误用单日 close 风险**：`backfill_outcome_revisions` 默认只允许 D0；D1/D3/D5 必须显式传 horizons 与各自 target-date close map，离线 D0 工具不自动重算跨日结果。
 - **真实长期库最终副本**：从原库重新复制，`d2e4→f8c1→a6e2→c7f3→d9e4`，`integrity_check=ok`；156,108 snapshot / 63 原 base outcome 保留。apply 后 D0 identity=156,108/156,108，新增 revision=48，revision backlog=0。
-- **base 不变机械证据**：apply 前 48 条原 labeled 的 SHA-256=`cb6197bfbfc7255c0a95e66318399b3904b0417277b12d91c3d5af7516ab30c0`；apply 后按同一 48 个 base id 重算 SHA 完全一致。
+- **base 不变机械证据**：对 48 条原 labeled 的 base close-result 字段按 id 排序后做 canonical JSON SHA-256，apply 前后均为 `d54822f39d93563841396ce99c231de20547a05ac0e1e3fcccb3ec1ceba122c1`；revision 只追加派生结果，不覆写旧 base。
 - **读侧恢复结果**：2026-09-16 v1/v1 scorecard 从 legacy exclusion 的 current sample=0 恢复到 28 个独立 selected symbol-day sample，应用 current revision=48；但全漏斗仍 `incomplete_denominator`，因此继续不产出策略效果结论。
 - **幂等**：第二次 apply 返回 `noop=true / backup=null`；缺 marketdb 的少量 pending 仍保留，不重复生成 revision。
 - **非目标**：不改旧 base labeled、不自动重算 D1/D3/D5、不复制 path 证据、不实现 actual shadow fill、不做跨日累计 MFE/MAE、不改策略/风控/仓位参数。
