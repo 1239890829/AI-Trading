@@ -2,7 +2,7 @@
 
 > 定位：当前运行模式、最新已合并证据、唯一在制纵切与安全边界；任务唯一状态仍以所属 stage 为准。
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 的 PR #69/#70/#71/#72/#74/#75/#76 已闭环；PR #76 merge=`340f73384ca1651cb1136ee4b7bf78b3811a2401`，post-merge CI #519 backend/frontend/docs 全绿且功能分支已清理。真实长期工作区已受控同步到该 master，并完成 schema/recovery 验证；当前仍在 **G3 / RSH-026**，唯一在制纵切为**后台自主归档 candidate→hard_gate→rank 点时证据**，施工分支 `chatgpt/rsh026-intraday-evidence-scheduler` 基于 `master@340f7338`。本片只补业务闭环与归档触发，不改候选阈值、策略权重、真实交易权限或 shadow fill 语义。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 的 PR #69/#70/#71/#72/#74/#75/#76/#78 已合并；PR #78 merge=`2576b9cd6b5665798fd7a82425e003667b83617c`，PR CI #521 与 post-merge CI #522 backend/frontend/docs 全绿，功能分支已清理。真实长期工作区已同步到该 master，但首次运行新 `opportunity-evidence` scheduler 暴露同名局部变量遮蔽函数的真实 `TypeError`；cursor 未推进且 SchedulerRegistry 已记录失败。为阻止 30 秒重试继续放大 provider 请求，真实 backend 当前以 `ASHARE_PICKS_OPPORTUNITY_EVIDENCE_ENABLED=0` 临时降级运行（29/30 scheduler，其余链保持在线）。当前仍在 **G3 / RSH-026**，唯一在制项为 hotfix 分支 `chatgpt/rsh026-intraday-evidence-hotfix`；只修共享 builder 的时点变量碰撞并补真实路径回归，不改候选阈值、策略权重、真实交易权限或 shadow fill 语义。
 
 
 ## 1. 固定入口与范围
@@ -198,6 +198,16 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **依赖方向**：禁止 scheduler 反向 import API route 或伪造 Request；`official_match.attach_official` 同时接受 Request/app/state，规则本身不变。新开关 `picks_opportunity_evidence_enabled` 已登记进 `SCHEDULER_SWITCH_ATTRS`，测试环境自动关闭生产调度。
 - **当前验证**：cache 单飞/快照版本失效、Request→app/state 归一、snapshot fact-time、durable snapshot 单次归档、失败可重试、盘外不补录、scheduler switch 真相源、import-lint、theme/catalog、buy-point 与 RSH-026 outcome 回归均已通过；最终 exact-head 全量 backend / repo/docs / CI 仍是发布门。
 - **非目标**：不改题材构建、候选/硬门/精排阈值，不提高实时采样频率到每个内存 refresh，不改变 watch-ledger 准入、notification/outbox、shadow fill 或真实交易边界。
+
+## 8.8 U49 主动审计回执（RSH-026 Intraday Evidence Runtime Hotfix）
+
+- **阶段/基点**：`Production validation + hotfix candidate`；基于 `master@2576b9cd6b5665798fd7a82425e003667b83617c`（PR #78 已合并，post-merge CI #522 全绿）。
+- **P1-52 同名遮蔽只在真实 builder 路径触发**：`_build_opportunities_uncached` 里原有局部解包 `snap_by, snapshot_state, snapshot_as_of = snapshot_context(app)`，而本片又新增同名函数 `snapshot_as_of(app)`。focused 测试多数 monkeypatch 掉 uncached builder，因此没穿过该碰撞；真实 scheduler 首个 durable snapshot 后走完整 builder，归档处实际执行成字符串调用，报 `TypeError: 'str' object is not callable`。
+- **P1-53 下游还会误收函数对象**：若只修归档调用而不检索同名引用，`attach_participants(... snapshot_as_of=snapshot_as_of)` 会把函数对象当成快照时点传下去。hotfix 统一把局部值改名为 `snapshot_as_of_text`，`attach_tradability` / `attach_participants` 均显式传该文本值；归档仍调用函数 `snapshot_as_of(app)` 得到北京 naive fact-time。
+- **真实失败行为是 fail-visible 而不是 silent corruption**：部署后 `opportunity-evidence` 连续两拍失败，SchedulerRegistry 显示 `tick_failures=2 / consecutive_tick_failures=2`，cursor 未推进，candidate/hard_gate/rank 仍为 0；因此没有写入错误证据，但失败重试会重跑重型 builder，并已经观察到 THS 429。
+- **生产止损**：立即优雅重启 backend 并临时设置 `ASHARE_PICKS_OPPORTUNITY_EVIDENCE_ENABLED=0`；当前注册表为 30 total / 29 running / 1 disabled，只有新 evidence scheduler 被关闭，其余链保持运行。hotfix 真实验收通过后必须恢复默认开启，不能把降级状态当最终方案。
+- **新增真实路径回归**：不再只 fake `build_opportunities`；直接执行真实 `_build_opportunities_uncached`，提供非空 theme/participant，并让完整路径走到 `attach_participants` 与 `archive_intraday_pipeline`。断言 linkage 沿用源 UTC snapshot ISO，而 archive 获得北京 naive `2026-09-21 11:10`，同时机械防止同名函数/局部值再次混淆。
+- **非目标**：不调整 scheduler 周期、不改变 snapshot 时间展示口径、不把 UTC ISO 全局改成北京时间字符串、不改任何选股阈值/权重/交易或通知语义。
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
 

@@ -289,3 +289,76 @@ def test_evidence_tick_unusable_snapshot_is_visible_failure_and_retryable(monkey
     else:
         raise AssertionError("unusable new snapshot must be a visible scheduler tick failure")
     assert not hasattr(state, "opportunity_evidence_saved_files")
+
+
+def test_uncached_runtime_archives_with_snapshot_fact_time_without_name_shadow(monkeypatch):
+    """真实 shared builder 必须走到 archive；防局部 snapshot_as_of 遮蔽同名函数。"""
+    from app.picks import intraday_opportunity_runtime as runtime
+    import app.picks.board_surge as board_surge
+    import app.picks.intraday_opportunity as opportunity
+    import app.picks.opportunity_learning as learning
+    import app.picks.tradability as tradability
+    import app.services.theme_service as theme_service
+
+    class Fresh:
+        state = "ready"
+        as_of = datetime(2026, 9, 21, 3, 10, tzinfo=timezone.utc)
+        def is_usable(self):
+            return True
+
+    svc = SimpleNamespace(
+        snapshot=[], last_success=Fresh.as_of, freshness=lambda: Fresh(), parquet_dir="",
+    )
+    app = SimpleNamespace(state=SimpleNamespace(snapshot_service=svc, hub=SimpleNamespace(provider=object())))
+    seen = {}
+    linkage_seen = {}
+
+    async def fake_board(_provider, _trade_date, snapshot_map=None):
+        assert snapshot_map == {}
+        return {"themes": [{"theme": "测试题材", "ladder": []}]}
+
+    def fake_assemble(_board, _hot, _hot_available, **_kwargs):
+        return {
+            "themes": [{
+                "theme": "测试题材", "stocks": [],
+                "participants": [{"symbol": "600001", "name": "甲", "change_pct": 1.0}],
+            }],
+            "summary": {"limit_up_total": 0},
+        }
+
+    class FakeIndexCache:
+        def get(self):
+            return {}, {}
+
+    def fake_archive(payload, *, trade_date, as_of, **_kwargs):
+        seen.update(payload=payload, trade_date=trade_date, as_of=as_of)
+        return {"run_id": "real-builder-run", "records": 0}
+
+    monkeypatch.setattr(runtime, "load_snapshot_map", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(theme_service, "build_theme_board", fake_board)
+    monkeypatch.setattr(theme_service, "_pick_provider", lambda *_args: None)
+    monkeypatch.setattr(opportunity, "assemble", fake_assemble)
+    monkeypatch.setattr(board_surge, "get_index_cache", lambda _app: FakeIndexCache())
+    monkeypatch.setattr(tradability, "index_views", lambda _index: ({}, {}))
+    monkeypatch.setattr(tradability, "attach_tradability", lambda *_args, **_kwargs: None)
+
+    def fake_attach_participants(_themes, **kwargs):
+        linkage_seen.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(opportunity, "attach_participants", fake_attach_participants)
+    monkeypatch.setattr(learning, "archive_intraday_pipeline", fake_archive)
+    import app.market.trade_calendar as trade_calendar
+    monkeypatch.setattr(trade_calendar, "in_trading_window", lambda *_args, **_kwargs: False)
+
+    got = asyncio.run(
+        runtime._build_opportunities_uncached(
+            app, datetime(2026, 9, 21).date(), top_themes=5, stocks_per_theme=8
+        )
+    )
+    assert got["data"]["decision_evidence"] == {
+        "state": "ready", "run_id": "real-builder-run", "records": 0
+    }
+    assert seen["trade_date"] == "2026-09-21"
+    assert seen["as_of"] == datetime(2026, 9, 21, 11, 10)
+    assert linkage_seen["snapshot_as_of"] == "2026-09-21T03:10:00+00:00"
