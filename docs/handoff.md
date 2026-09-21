@@ -1,8 +1,8 @@
-# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 历史 D0 全漏斗恢复
+# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 下一候选：公司行动/停牌版本化
 
 > 定位：当前运行模式、最新已合并证据、唯一在制纵切与安全边界；任务唯一状态仍以所属 stage 为准。
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 已连续闭环三个子片：PR #69（全漏斗 outcome/denominator）、PR #70（D1/D3/D5 交易日 horizon）与 PR #71（D0 决策后 MFE/MAE + ever-hit-limit/time_to_limit，merge `7df3f2867208a7515bbb9796688dbf1589b99434`，post-merge CI run `35544751429` backend/frontend/docs 全绿）；前三个功能分支均已清理。PR #71 后的主动审计发现远程 Mac 仍有一套长期运行工作区落后远端 `master` 51 个提交，其 173MB SQLite 仍停在 revision `d2e4a6b8c0f1`：共有 156,108 条 decision snapshot，但只有 63 条 D0 outcome；这 63 条恰好覆盖全部 selected/actionable snapshot，缺失的 156,045 条均属于 rejected/unknown 全漏斗失败对照。当前仍在 **G3 / RSH-026**，本轮只实施“历史 D0 outcome 身份 + 本地 marketdb 收盘结果离线恢复”纵切；真实运行库保持只读未修改，所有 apply 验证均在一致性副本上完成。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 已连续闭环四个子片：PR #69（全漏斗 outcome/denominator）、PR #70（D1/D3/D5 交易日 horizon）、PR #71（D0 决策后 MFE/MAE + ever-hit-limit/time_to_limit）与 PR #72（历史 D0 全漏斗恢复；merge `726fdeb0242cd4a42ffdc5599c8c4fc006972331`，post-merge CI run `35546496882` backend/frontend/docs 全绿）；对应功能分支均已删除，远端仅保留 `master`。当前仍在 **G3 / RSH-026**，下一唯一候选为“公司行动/停牌版本化”正确性纵切：先确保 D0/D1/D3/D5 与路径标签不会跨除权除息、拆并股、停牌/复牌等状态把价格机械变化误当策略收益。本 handoff 收口不启动该业务实现，也不改变策略阈值、权重或真实交易边界。
 
 
 ## 1. 固定入口与范围
@@ -91,7 +91,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **Degraded reason**：当前 Codex 额度不可用，正常双角色无法持续完成实施→独立审核→发布闭环；旧 exact-HEAD Review 门因此形成自锁。
 - **有效期**：持续到用户明确说 Codex 已恢复/退出降级；不是单 PR 临时口令。但每个 PR 的发布仍必须重新生成 exact-HEAD `DegradedRelease`，不能复用上一 PR 回执。
 - **不降低项**：G0–G5/GX 阶段门、U49 主动反证、branch protection、required CI、latest master、CHANGES_REQUESTED/thread、public-repo scan、workspace/doc-health、敏感信息/范围、post-merge CI、删除功能分支。
-- **当前动作**：U50、IMP-044 与 RSH-026/PR #69/#70/#71 均已闭环；当前仍在 G3/RSH-026，只执行历史 D0 全漏斗 outcome 离线恢复子片。真实运行库只读，先由当前分支提供 dry-run/备份/本地 marketdb/幂等恢复工具；每个 PR 仍需新的 exact-HEAD `DegradedRelease`。
+- **当前动作**：U50、IMP-044 与 RSH-026/PR #69/#70/#71/#72 均已闭环；#72 merge=`726fdeb0`、post-merge CI #511 全绿且功能分支已清理。当前仍在 G3/RSH-026；下一唯一候选是公司行动/停牌版本化正确性纵切，本 docs-only 收口不开始该实现。每个后续 PR 仍需新的 exact-HEAD `DegradedRelease`。
 
 ## 8.2 U49 主动审计回执（RSH-026 Preflight）
 
@@ -139,6 +139,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **一致性副本 apply**：插入 156,045 条 deferred/not_actionable identity，修正 15 条旧初始化 fill；随后用本地 exact-date marketdb 回填，最终 D0 identity=156,108/156,108、missing=0，状态为 `labeled=150,903 / unknown=5,192 / deferred=12 / pending=1`。`unknown` 主要是决策 reference 缺失；12 条 deferred 与 1 条 selected pending 均因本地 marketdb 无目标日收盘而保留未标，不造 0、不外呼。二次 apply `inserted=0 / repaired=0` 且 CLI 判定 `noop=true / backup=null`。
 - **P1-24 版本空分母语义**：这 156,108 条历史全为 `stock-opportunity-funnel-v1 / pit-evidence-v1`；默认 current-v2 scorecard 对它们应是“没有匹配版本样本”，不能把 `complete=false` 配成普通 `insufficient_sample`。scorecard 新增 `funnel_denominator.state=empty|incomplete|complete`，空版本返回 `no_matching_denominator`；按真实 v1/v1 重算，9/08、9/16、9/17、9/18 的 opportunity label coverage 分别为 50.00% / 95.20% / 98.44% / 95.06%，四日均保持 `incomplete_denominator`，没有把历史补数冒充成策略效果结论。
 - **运行边界**：真实运行库仍保持原样；其运行代码也落后当前 master，不能只迁 DB/灌新 denominator 而让旧消费者继续运行。实际部署恢复必须在应用/调度停止、代码与 schema 同步后执行，并保留工具生成的备份。
+- **发布结论**：PR #72 已以 exact HEAD `49d94e9c34675f3f47a019f0d8b9533b0830688f` 通过 `DegradedRelease` 与 `release_check.py`，merge=`726fdeb0242cd4a42ffdc5599c8c4fc006972331`；post-merge CI run `35546496882` 的 backend/frontend/docs 全部 `success`，功能分支已删除。
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
 
