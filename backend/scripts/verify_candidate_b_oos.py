@@ -29,6 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.research import strategy_compare as sc  # noqa: E402
 from app.research import strategy_trials as st  # noqa: E402
 from app.research import strategy_verify as sv  # noqa: E402
 from app.research import verify_registry as vr  # noqa: E402
@@ -56,6 +57,12 @@ MARKETS = [
 ]
 
 CANDIDATE_B = "(chg BETWEEN 3 AND 5) AND (dev_short < 0) AND (mchg > 0)"
+CANDIDATE_B_LABEL = "涨幅3~5% | 跌破MA5（任意） | 大盘涨 >0"
+CANDIDATE_B_COMPONENTS = {
+    "price_band": "chg BETWEEN 3 AND 5",
+    "below_ma5": "dev_short < 0",
+    "market_positive": "mchg > 0",
+}
 FIVE_STEP = (
     "(chg BETWEEN 3 AND 5) AND (vr >= 1) AND (vol_step_up = 1) "
     "AND (ma_short > ma_mid AND ma_mid > ma_long AND close > ma_long AND dev_short <= 5)"
@@ -112,7 +119,10 @@ def main() -> int:
         cond = f"({b[1]}) AND ({d[1]}) AND ({m[1]})"
         tr = sv.baseline(con, where=f"({cond}) AND ({train_where})", cfg=admission_cfg)
         te = sv.baseline(con, where=f"({cond}) AND ({holdout_where})", cfg=admission_cfg)
-        grid.append({"label": f"{b[0]} | {d[0]} | {m[0]}", "cond": cond, "tr": tr, "te": te})
+        grid.append({
+            "label": f"{b[0]} | {d[0]} | {m[0]}", "cond": cond, "tr": tr, "te": te,
+            "components": {"price_band": b[1], "ma5_depth": d[1], "market_regime": m[1]},
+        })
         if (i + 1) % 12 == 0:
             print(f"  …网格 {i + 1}/{len(combos)}", file=sys.stderr)
 
@@ -197,14 +207,11 @@ def main() -> int:
         print(f"{name:<34}{vals[0]:>12}{vals[1]:>12}{vals[2]:>12}")
 
     # ---------------- 可成交性 + 结构
-    selected_grid = cand_x[0] if cand_x else next(
-        g for g in grid if g["label"] == "涨幅3~5% | 跌破MA5（任意） | 大盘涨 >0"
+    challenger = cand_x[0] if cand_x else next(
+        g for g in grid if g["label"] == CANDIDATE_B_LABEL
     )
-    main_cond = selected_grid["cond"]
-    main_name = selected_grid["label"]
-    selected_trial_id = next(
-        f"grid-{i + 1:02d}" for i, g in enumerate(grid) if g is selected_grid
-    )
+    main_cond = challenger["cond"]
+    main_name = challenger["label"]
     print("\n" + "=" * 94)
     print(f"【5】结构稳定性（测试段）—— 主规则 = {main_name}")
     print("=" * 94)
@@ -269,19 +276,23 @@ def main() -> int:
     print("\n" + "=" * 94)
     print("【6】结论登记")
     print("=" * 94)
+    registered_where = f"({CANDIDATE_B}) AND ({holdout_where})"
     m = sv.summarize_row(
-        sv.baseline(con, where=test_where, cfg=admission_cfg, horizons=[H]),
+        sv.baseline(con, where=registered_where, cfg=admission_cfg, horizons=[H]),
         horizon=H, cost_bps=sv.ADMISSION_COST_BPS,
     )
-    lu_main = lu or {}
-    # 最终准入的中性中位/跑赢比例只吃主规则 + purged holdout；不能复用上面的
-    # 当前股本市值分层 join，否则会把结构诊断里的非 PIT 股本偷偷带回 gate。
+    incumbent_yr = sv.yearly(con, registered_where, cfg=admission_cfg, horizons=[H])
+    incumbent_pos, incumbent_tot = sv.year_counts(incumbent_yr, horizon=H)
+    incumbent_lu = sv.limit_up_share(con, registered_where)
     gate_med_mkt, gate_win_mkt = con.execute(f"""
         SELECT median(fwd{H} - mfwd{H} - {cost_pct}),
                avg(CASE WHEN fwd{H} - mfwd{H} - {cost_pct} > 0 THEN 1.0 ELSE 0.0 END)
         FROM sigv
-        WHERE ({test_where}) AND fwd{H} IS NOT NULL AND mfwd{H} IS NOT NULL
+        WHERE ({registered_where}) AND fwd{H} IS NOT NULL AND mfwd{H} IS NOT NULL
     """).fetchone()
+    registered_trial_id = next(
+        f"grid-{i + 1:02d}" for i, g in enumerate(grid) if g["label"] == CANDIDATE_B_LABEL
+    )
     trial_evidence = st.trial_family_evidence(
         [
             {
@@ -293,11 +304,21 @@ def main() -> int:
             }
             for i, g in enumerate(grid)
         ],
-        selected_trial_id=selected_trial_id,
+        selected_trial_id=registered_trial_id,
     )
     overlap_evidence = st.signal_overlap_evidence(
-        con, target_label=main_name, target_cond=main_cond,
+        con, target_label="pullback_reversal_registered", target_cond=CANDIDATE_B,
         incumbents={"two_thirty_five": FIVE_STEP}, where=holdout_where,
+    )
+    ablation_evidence = sc.leave_one_out_ablation(
+        con, label="pullback_reversal_registered", components=CANDIDATE_B_COMPONENTS,
+        where=holdout_where, cfg=admission_cfg, horizon=H,
+    )
+    comparison_evidence = sc.champion_challenger_evidence(
+        con,
+        champion_label="pullback_reversal_registered", champion_cond=CANDIDATE_B,
+        challenger_label=f"grid_challenger:{main_name}", challenger_cond=main_cond,
+        where=holdout_where, cfg=admission_cfg, horizon=H, champion_is_production=False,
     )
     protocol = sv.validation_protocol(
         horizon=H, cost_bps=sv.ADMISSION_COST_BPS, split=split,
@@ -306,14 +327,15 @@ def main() -> int:
         trial_evidence=trial_evidence, overlap_evidence=overlap_evidence,
     )
     gate = sv.gate_verdict(
-        m, yearly_pos=pos, yearly_tot=tot, limit_up_share=lu_main.get("limit_up_share"),
+        m, yearly_pos=incumbent_pos, yearly_tot=incumbent_tot,
+        limit_up_share=incumbent_lu.get("limit_up_share"),
         excess_median=gate_med_mkt, excess_win_rate=gate_win_mkt, protocol=protocol,
     )
     headline = (
         f"purged 测试段 T+{H}（{sv.ADMISSION_COST_BPS:.0f}bps）："
         f"均值 {m['mean']:+.2f}%（中性 {m['excess']:+.2f}%）、"
         f"中性中位 {gate_med_mkt:+.2f}%、中性跑赢 {(gate_win_mkt or 0) * 100:.1f}%、"
-        f"年度为正 {pos}/{tot}、疑似涨停 {(lu_main.get('limit_up_share') or 0) * 100:.1f}%"
+        f"年度为正 {incumbent_pos}/{incumbent_tot}、疑似涨停 {(incumbent_lu.get('limit_up_share') or 0) * 100:.1f}%"
         f" ⇒ {gate['verdict']}"
     )
     path = vr.save_record(
@@ -327,14 +349,17 @@ def main() -> int:
             "split": "2022-01-01",
             "segment": "purged/embargoed holdout",
             "split_evidence": split,
-            "yearly_pos": pos,
-            "yearly_tot": tot,
-            "limit_up_share": lu_main.get("limit_up_share"),
-            "caveat": "候选B 假设族曾使用全样本（含测试段）发现；且未完成既有信号重叠检查，故协议门保持 observe",
+            "yearly_pos": incumbent_pos,
+            "yearly_tot": incumbent_tot,
+            "limit_up_share": incumbent_lu.get("limit_up_share"),
+            "caveat": "登记册原 candidate B 曾使用全样本（含测试段）发现；grid 最优规则只作为 challenger，不覆盖 incumbent identity",
         },
         source="scripts/verify_candidate_b_oos.py",
         extra={"gate_failed": gate["failed"], "gate_unchecked": gate["unchecked"],
-               "gate": gate, "rule": main_name, "condition": main_cond},
+               "gate": gate, "rule": CANDIDATE_B_LABEL, "condition": CANDIDATE_B,
+               "trial_family": trial_evidence, "signal_overlap": overlap_evidence,
+               "ablation": ablation_evidence, "champion_challenger": comparison_evidence,
+               "challenger": {"label": main_name, "condition": main_cond}},
     )
     print(f"    {headline}")
     print(f"    判据命中：{gate['note']}")
