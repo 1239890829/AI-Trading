@@ -30,6 +30,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.research import strategy_compare as sc  # noqa: E402
+from app.research import strategy_experiments as se  # noqa: E402
 from app.research import strategy_trials as st  # noqa: E402
 from app.research import strategy_verify as sv  # noqa: E402
 from app.research import verify_registry as vr  # noqa: E402
@@ -320,6 +321,12 @@ def main() -> int:
         challenger_label=f"grid_challenger:{main_name}", challenger_cond=main_cond,
         where=holdout_where, cfg=admission_cfg, horizon=H, champion_is_production=False,
     )
+    experiment_evidence = se.build_research_experiment(
+        subject="pullback_reversal",
+        hypothesis="training-selected grid challenger may improve neutral excess without changing the registered incumbent identity",
+        ablation=ablation_evidence, comparison=comparison_evidence,
+    )
+    experiment_path, experiment_created = se.save_experiment(experiment_evidence)
     protocol = sv.validation_protocol(
         horizon=H, cost_bps=sv.ADMISSION_COST_BPS, split=split,
         selection_scope="test_informed_hypothesis_family",
@@ -359,11 +366,16 @@ def main() -> int:
                "gate": gate, "rule": CANDIDATE_B_LABEL, "condition": CANDIDATE_B,
                "trial_family": trial_evidence, "signal_overlap": overlap_evidence,
                "ablation": ablation_evidence, "champion_challenger": comparison_evidence,
+               "research_experiment": {
+                   "experiment_id": experiment_evidence["experiment_id"],
+                   "evidence_digest": experiment_evidence["evidence_digest"],
+               },
                "challenger": {"label": main_name, "condition": main_cond}},
     )
     print(f"    {headline}")
     print(f"    判据命中：{gate['note']}")
     print(f"    已登记 → {path}")
+    print(f"    研究实验 → {experiment_path} ({'created' if experiment_created else 'idempotent'})")
 
     con.close()
     return 0

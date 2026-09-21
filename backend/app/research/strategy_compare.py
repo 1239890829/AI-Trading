@@ -6,12 +6,19 @@ results can never stand in for actual shadow-fill net returns.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Mapping
 
 from app.research import strategy_verify as sv
 from app.research.strategy_trials import signal_overlap_evidence
 
 EVIDENCE_VERSION = 1
+
+
+def _seal(payload: dict) -> dict:
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return {**payload, "evidence_digest": hashlib.sha256(raw.encode("utf-8")).hexdigest()}
 
 
 def _neutral_distribution(con, cond: str, where: str, *, cfg: sv.VerifyConfig, horizon: int) -> dict:
@@ -94,7 +101,7 @@ def leave_one_out_ablation(
             # positive => keeping the removed component improved neutral excess
             "marginal_excess_pp": marginal,
         })
-    return {
+    payload = {
         "evidence_version": EVIDENCE_VERSION,
         "kind": "leave_one_component_out",
         "label": label,
@@ -110,6 +117,7 @@ def leave_one_out_ablation(
         "review_required": True,
         "production_promotion_eligible": False,
     }
+    return _seal(payload)
 
 
 def champion_challenger_evidence(
@@ -139,7 +147,7 @@ def champion_challenger_evidence(
     )
     c_ex, h_ex = champion.get("excess"), challenger.get("excess")
     delta = None if c_ex is None or h_ex is None else round(float(h_ex) - float(c_ex), 6)
-    return {
+    payload = {
         "evidence_version": EVIDENCE_VERSION,
         "kind": "champion_challenger_same_basis",
         "champion": {"label": champion_label, "condition": champion_cond, "metrics": champion},
@@ -157,3 +165,4 @@ def champion_challenger_evidence(
         "promotion_basis_eligible": False,
         "review_required": True,
     }
+    return _seal(payload)

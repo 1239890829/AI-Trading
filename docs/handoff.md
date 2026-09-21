@@ -1,6 +1,6 @@
-# 当前交接：DEGRADED_FULL_CONTROL / G3-IMP-020 Ablation + Champion/Challenger
+# 当前交接：DEGRADED_FULL_CONTROL / G3-IMP-020 Ablation + Champion/Challenger + Experiment Accounting
 
-> **定位 / 摘要**：G3/IMP-020 前两子片与 evidence-integrity hardening 已进入 master；当前第三子片只做同版 leave-one-out 消融、incumbent/challenger 身份不漂移与 Champion/Challenger 研究对照。RSH-026 已关闭；不改策略权重、不做自动晋级、不宣称实际成交净收益。
+> **定位 / 摘要**：G3/IMP-020 前两子片与 evidence-integrity hardening 已进入 master；当前第三子片只做同版 leave-one-out 消融、incumbent/challenger 身份不漂移、Champion/Challenger 研究对照与 append-only research experiment accounting。RSH-026 已关闭；不改策略权重、不做自动晋级、不宣称实际成交净收益。
 
 **当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 已由 PR #85 正式 closeout，生产/共享基点已推进到 `master@f3556ad5c02a9def22c159cded06865f036b8570`（PR #87 merge）；第一子片 PR #86 与第二子片初版 PR #87 均已进入 master。当前只硬化 evidence authenticity / provenance / history，不改策略阈值/权重、不自动晋级、不写真实交易，也不把 reference close-to-close 代理冒充 actual shadow fill 净收益。
 
@@ -310,15 +310,17 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **最终真实重跑**：candidate `p_adj=0.531822444114`、overlap intersection=0、build PIT=true；two-thirty-five `p_adj=1.0`、intersection=38/union=42,305/Jaccard=0.00089824，`turn` 令 feature PIT=false。两者结论仍分别 observe/reject，且 `/tmp` 验收不覆盖生产历史 JSON。
 - **边界/下一步**：正式脚本实跑只写临时 worktree，未覆盖生产历史 JSON。本子片合并后 IMP-020 仍为部分完成；下一子片进入 leave-one-component-out 消融 + 同版同窗同成本 Champion/Challenger 比较，且只产生研究比较证据，不触发生产晋级。
 
-## 8.17 U49 主动审计回执（IMP-020 Ablation + Champion/Challenger）
+## 8.17 U49 主动审计回执（IMP-020 Ablation + Champion/Challenger + Experiment Accounting）
 
 - **基点**：`master@69479885035d57765af7a8e29319cb3510f485a9`（PR #91 hardening 已合并）。本片只生成研究对照证据，不改策略阈值/权重/生产行为。
 - **P1-84 Challenger 身份漂移**：旧 candidate producer 会把训练段重新选出的 grid 最优继续落到 `pullback_reversal` 键，存在 challenger 静默覆盖 incumbent predicate 的风险。当前固定 `pullback_reversal` 为原 `3~5% + 跌破MA5 + mchg>0`，训练最优只保存为具名 challenger。
 - **P1-85 消融必须同版同窗同成本**：新增 `strategy_compare.leave_one_out_ablation()`；完整规则与每个 leave-one-out 共用同一 table/window/horizon/cost/return identity，并带 dataset fingerprint。结果只表示该研究口径的边际，不冒充因果或生产贡献。
 - **P1-86 Champion/Challenger 不偷换生产身份**：新增 `champion_challenger_evidence()`；双方同窗同成本同 return identity，并记录事件 overlap。当前 incumbent 本身不是 production champion，`promotion_basis_eligible=false` 恒成立。
+- **P1-87 comparison extra 不能冒充实验账本**：新增 `strategy_experiments` append-only artifact。`experiment_id` 由 subject/hypothesis/dataset/window/horizon/cost/return identity/champion/challenger 机械哈希；同一冻结实验重复执行为幂等，不增加统计信心；同 ID 不同 evidence 拒绝覆盖。该离线研究账本与 `AgentExperiment`（生产参数应用后的 30 日守护/回滚）严格分工。ablation/comparison/experiment 各自 canonical digest，experiment 构造会重验两份 comparison evidence 与 basis 一致性，恒 `automatic_promotion=false / production_promotion_eligible=false`。
 - **真实 candidate B incumbent（exact HEAD 9ccfef2）**：35bps purged T+5 `n=35,725`，中性均值 `+0.0055%`、中性中位 `-0.915744%`、中性跑赢 `42.006998%`、年度正 4/5 ⇒ observe；协议仍因 test-informed hypothesis family 阻断。
 - **candidate B 消融/对照（exact HEAD）**：`price_band / below_ma5 / market_positive` 的 leave-one-out 中性边际分别 `+0.3341 / +0.3104 / +0.1593pp`；训练 grid challenger holdout 中性 `+0.1893%`，较 incumbent `+0.1838pp`；事件集合交集 0。两边均非 production identity，`promotion_basis_eligible=false`。
 - **two-thirty-five（exact HEAD）**：完整规则 35bps purged T+5 中性 `-0.9886%`、中性中位 `-2.420184%`、中性跑赢 `33.890508%` ⇒ reject。S1/S3 边际为负 `-0.2482/-0.2748pp`，S2/S4/S5 为正 `+0.0420/+0.2107/+0.0392pp`，但整体仍失败；协议另因 current-float-share `turn` 非 PIT 与 selected trial 未过 multiplicity 阻断。
+- **experiment 实证**：Candidate-B exact-branch 隔离运行生成 experiment id=`706a5f521f3196b4a80852cc897709df39b44dfcb386f6ccf5fe7ccbbe86c133`，state=`research_observed_reference_only`，`automatic_promotion=false / production_promotion_eligible=false`；verify 与 experiment 产物都只写 `/tmp`。
 - **边界/下一步**：本子片只补研究比较与实验证据；最后子片收“晋级准备态 + actual shadow-fill 同版身份校验 + rollback/reopen 计划”。缺 actual fill 时必须 blocked，自动系统最多给 `ready_for_human_review`，绝不自动 promote。
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）

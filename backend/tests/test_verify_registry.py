@@ -708,6 +708,7 @@ def test_bug027_real_producer_metadata_survives_save_and_read(vdir, name):
         "overlap_evidence": {"checked": True, "exact_duplicate": False},
         "ablation_evidence": {"kind": "fixture"},
         "comparison_evidence": {"kind": "fixture"},
+        "experiment_evidence": {"experiment_id": "e" * 64, "evidence_digest": "d" * 64},
     })
     assert extra["gate"] == gate and extra["gate_unchecked"] == gate["unchecked"]
     vr.save_record("producer", verdict=gate["verdict"], headline="fixture",

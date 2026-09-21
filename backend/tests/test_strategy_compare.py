@@ -45,6 +45,7 @@ def test_leave_one_out_ablation_freezes_basis_and_reports_marginal_effect():
     assert out["cost_bps"] == 35
     assert out["return_identity"] == sv.RETURN_IDENTITY_REFERENCE_PROXY
     assert out["production_promotion_eligible"] is False
+    assert len(out["evidence_digest"]) == 64
     assert all(row["metrics"]["cost_bps"] == 35 for row in out["leave_one_out"])
 
 
@@ -70,6 +71,7 @@ def test_champion_challenger_is_same_basis_but_never_auto_promotion():
     assert out["return_identity"] == sv.RETURN_IDENTITY_REFERENCE_PROXY
     assert out["signal_overlap"]["checked"] is True
     assert out["dataset"]["trade_days"] == 10
+    assert len(out["evidence_digest"]) == 64
 
 
 def test_champion_challenger_refuses_same_identity():
