@@ -844,6 +844,20 @@ def test_d0_path_rejects_non_tencent_minute_timestamps_and_missing_reference():
     assert no_ref["mfe_pct"] is None and no_ref["mae_pct"] is None
 
 
+def test_learning_summary_future_path_denominator_survives_missing_outcome_identity(tmp_path):
+    sf = _factory(tmp_path)
+    snap = _path_snapshot()
+    with sf() as db:
+        db.add(snap)
+        db.commit()
+    summary = learning_summary("2026-09-16", sf)
+    d1 = summary["horizon_coverage"]["d1_close"]["path"]
+    assert d1["selected_opportunities"] == 1
+    assert d1["outcome_attached"] == 0
+    assert d1["labeled_selected_opportunities"] == 0
+    assert d1["coverage"] == 0.0
+
+
 def test_cross_day_path_version_fits_persisted_schema_width():
     assert len(CROSS_DAY_PATH_VERSION) <= 32
     source = "d0:tencent_1m+zt_zb_pools|qfq_daily:eastmoney"

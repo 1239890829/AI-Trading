@@ -1877,7 +1877,11 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
         horizon_path_version = (
             PATH_VERSION if horizon == OUTCOME_HORIZON else CROSS_DAY_PATH_VERSION
         )
-        horizon_selected = {
+        # Path denominator must come from immutable selected snapshots, not the
+        # horizon outcome join; otherwise a missing D1/D3/D5 identity disappears
+        # from both numerator and denominator and inflates coverage.
+        horizon_selected = set(selected_path_opportunities)
+        horizon_path_attached = {
             (snapshot.run_id, snapshot.symbol) for _outcome, snapshot in horizon_rows
             if _selected_outcome_snapshot(snapshot.stage, snapshot.decision)
         }
@@ -1910,6 +1914,7 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
                     if _selected_outcome_snapshot(snapshot.stage, snapshot.decision)
                 ).items())),
                 "selected_opportunities": len(horizon_selected),
+                "outcome_attached": len(horizon_path_attached),
                 "labeled_selected_opportunities": len(horizon_path_labeled),
                 "coverage": (
                     round(len(horizon_path_labeled) / len(horizon_selected), 4)
