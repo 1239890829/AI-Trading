@@ -198,6 +198,20 @@ def register_schedulers(reg: SchedulerRegistry, app: FastAPI, services: AppServi
         switch="picks_autogen_enabled",
     )
 
+    # RSH-026：完整盘中漏斗证据由后台按 durable market snapshot 版本归档。
+    # 不自调 HTTP；route 与 scheduler 共用 picks/intraday_opportunity_runtime.py。
+    opportunity_evidence_stop = asyncio.Event()
+    from app.picks.intraday_opportunity_runtime import archive_intraday_evidence_tick
+
+    reg.add_periodic(
+        "opportunity-evidence",
+        lambda: archive_intraday_evidence_tick(app),
+        interval=settings.picks_opportunity_evidence_interval_seconds,
+        stop=opportunity_evidence_stop,
+        first_delay=COLD_START_SNAPSHOT_DELAY_SECONDS,
+        switch="picks_opportunity_evidence_enabled",
+    )
+
     data_health_stop = asyncio.Event()
     from app.services.data_health_loop import data_health_loop
 

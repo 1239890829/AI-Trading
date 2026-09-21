@@ -381,7 +381,10 @@ def test_schedulers_endpoint_exposes_state(client):
     assert body["available"] is True
     names = {s["name"] for s in body["schedulers"]}
     # 三态构造：常驻（无开关）/ 带开关 / 注册表驱动
-    assert {"quote-poller", "alert-engine", "data-health-sentinel", "risk-refresher"} <= names
+    assert {
+        "quote-poller", "alert-engine", "data-health-sentinel", "risk-refresher",
+        "opportunity-evidence",
+    } <= names
     assert body["counts"]["total"] == len(body["schedulers"])
     # 测试环境开关全关 → 必须至少有一个 disabled（证明派生表生效）
     assert body["counts"]["disabled"] >= 1

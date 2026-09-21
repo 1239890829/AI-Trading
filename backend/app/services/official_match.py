@@ -41,26 +41,35 @@ def _official_symbol_index(svc) -> tuple[dict[str, list[tuple[str, str]]], dict[
     return index, sizes
 
 
-def _get_index(request) -> tuple[dict[str, list[tuple[str, str]]], dict[str, int]]:
-    cache = cache_on(request.app.state, "themes.official.index", 300, maxsize=2)
+def _state(holder):
+    """Accept FastAPI Request, app, or app.state without making services HTTP-bound."""
+    if hasattr(holder, "app"):
+        holder = holder.app
+    return holder.state if hasattr(holder, "state") else holder
+
+
+def _get_index(holder) -> tuple[dict[str, list[tuple[str, str]]], dict[str, int]]:
+    state = _state(holder)
+    cache = cache_on(state, "themes.official.index", 300, maxsize=2)
     hit, cached = cache.get("index")
     if not hit:
-        svc = request.app.state.theme_catalog
+        svc = state.theme_catalog
         cached = _official_symbol_index(svc)
         cache.set("index", cached)
     return cached
 
 
-def attach_official(request, themes_list: list[dict]) -> None:
+def attach_official(holder, themes_list: list[dict]) -> None:
     """给簇（themes_list 的每项）挂 official_matches + 成员级 official 布尔。
 
     目录服务不可用/为空时静默跳过（无徽标 ≠ 非成分，前端不得当负面信号）。
     """
-    svc = getattr(request.app.state, "theme_catalog", None)
+    state = _state(holder)
+    svc = getattr(state, "theme_catalog", None)
     if svc is None or svc.catalog_size() == 0:
         return
     try:
-        symbol_index, concept_sizes = _get_index(request)
+        symbol_index, concept_sizes = _get_index(holder)
         name_to_code = {t.name: t.code for t in svc.get_catalog(limit=1000)}
         for card in themes_list:
             # 成员行：看板用 ladder，机会视图用 stocks（两结构 symbol 字段同名）

@@ -1,8 +1,8 @@
-# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 Cross-day Cumulative MFE/MAE
+# 当前交接：DEGRADED_FULL_CONTROL / G3-RSH-026 Backend Intraday Evidence
 
 > 定位：当前运行模式、最新已合并证据、唯一在制纵切与安全边界；任务唯一状态仍以所属 stage 为准。
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 的 PR #69/#70/#71/#72/#74/#75 已闭环；PR #75 merge=`a96c3d0086872cf8f5bc71f5f19c8792007cbcf3`，post-merge CI run `35550792738`（#517）backend/frontend/docs 全绿，功能分支已删除。当前仍在 **G3 / RSH-026**，唯一在制纵切为 D1/D3/D5 **cross-day cumulative MFE/MAE**；施工分支 `chatgpt/rsh026-crossday-excursion` 基于 `master@a96c3d00`。本片只从已有完整 D0 决策后 Tencent 1m path 的新样本继续累积 future qfq 日线 high/low；历史旧部署没有 path 字段，禁止事后用日线伪造 D0 路径。不改策略阈值、生产权重、真实交易权限或 shadow fill 语义。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** RSH-026 的 PR #69/#70/#71/#72/#74/#75/#76 已闭环；PR #76 merge=`340f73384ca1651cb1136ee4b7bf78b3811a2401`，post-merge CI #519 backend/frontend/docs 全绿且功能分支已清理。真实长期工作区已受控同步到该 master，并完成 schema/recovery 验证；当前仍在 **G3 / RSH-026**，唯一在制纵切为**后台自主归档 candidate→hard_gate→rank 点时证据**，施工分支 `chatgpt/rsh026-intraday-evidence-scheduler` 基于 `master@340f7338`。本片只补业务闭环与归档触发，不改候选阈值、策略权重、真实交易权限或 shadow fill 语义。
 
 
 ## 1. 固定入口与范围
@@ -176,7 +176,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **P1-39 horizon target 身份错位**：D1/D3/D5 的 `target_date` 必须分别是决策日后的第 1/3/5 个市场交易日；实际 offset 不一致时直接 terminal `unknown`，禁止把自然日或错误交易日结果写进正确 horizon。
 - **P1-40 close/path 成熟度独立**：future close label 与 cumulative path 是两类独立结果事实。即使 close 仍 pending，只要 D0 path + 预期 future qfq high/low 已完整，cross-day path 可以 labeled；反之 close 已 labeled 也不能替代缺失的 path bar。scorecard 为每个 horizon 使用独立 path denominator。
 - **P1-41 请求面放大风险**：跨日 path retry 只查询 selected/actionable future rows，30 天有界；与 pending close symbols 合并后复用同一次 qfq 日线请求，同时产 close/high/low，不把 rejected/deferred 全漏斗扩进实时 EOD 请求。
-- **P1-42 历史回填不可得**：真实长期库仍停在 `d2e4a6b8c0f1`，其 `opportunity_outcome_label` 根本没有任何 `path_*` / `mfe_pct` / `mae_pct` 列；配套 378MB marketdb 的 `daily_k_adj` 也只有 `close_adj`，没有复权 high/low。没有历史 D0 决策后分钟证据与可信 qfq high/low，就不能用今天的 raw 日线倒推历史 cross-day path；本片只从具备完整 current D0 path + 可验证同源 qfq OHLC 的新样本在线积累。
+- **P1-42 历史回填不可得**：部署前原始长期库基线为 `d2e4a6b8c0f1`，当时 `opportunity_outcome_label` 根本没有任何 `path_*` / `mfe_pct` / `mae_pct` 列；配套 378MB marketdb 的 `daily_k_adj` 也只有 `close_adj`，没有复权 high/low。该旧库已留独立一致性备份，当前运行库虽已迁到 `d9e4c2b7a1f6`，仍不能凭新增列倒造历史 D0 决策后分钟证据；cross-day path 只从具备完整 current D0 path + 可验证同源 qfq OHLC 的新样本在线积累。
 - **P1-43 schema 宽度风险**：现有 `path_version` 列宽只有 32；初始描述性版本串会在严格数据库上有截断风险。最终固定 `CROSS_DAY_PATH_VERSION=xday-v1.d0m1+qfq1d.raw-anchor`，并用测试机械锁定 `len(version) <= 32`，不依赖 SQLite 对 VARCHAR 长度的宽松行为。
 - **P1-44 新 lane 反向阻断旧 D0 风险**：cross-day 是附加结果事实，不能因其 provider/写回异常让 #71 已闭环的 D0 path 一并丢失。EOD 现在先完成 `collect_d0_path_outcomes`，再在独立 try/except 中处理 cross-day；回归测试让 cross-day 人工抛错并断言 D0 仍执行且返回。
 - **P1-45 日 K 日期时区错位**：provider 的日 K `ts` 可能是带时区时间；直接 `.date()` 会把 UTC 23:30 归到前一自然日。`_daily_bar_facts` 统一先 `to_beijing_naive(ts)` 再取交易日，回归锁定 UTC 23:30 → 北京次日。
@@ -184,8 +184,20 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **scorecard/summary**：D0 仍用 `PATH_VERSION`；D1/D3/D5 使用 `CROSS_DAY_PATH_VERSION`，报告 denominator / outcome_attached / evaluable / coverage / avg MFE / avg MAE；first-limit/time-to-limit 仍明确只属于 D0。learning summary 的每个 horizon 额外暴露 path version/state/selected coverage，不能把 close coverage 代替 path coverage。
 - **生产 EOD 接线**：`pending_cross_day_path_targets` 与 pending close 分开维护；同一 symbol 的一次 qfq daily fetch 通过 `_daily_bar_facts` 同时供 close 与 high/low，raw daily 只用于 basis。交易日历不可用时连 cross-day backlog 都不读取，也不把其 symbol 扩进额外 provider 请求面；daily bar 日期统一按北京时区解释。
 - **P1-46 future path coverage 丢分母风险**：初版 `learning_summary.horizon_coverage.path` 从 horizon outcome join 定义 selected denominator，若某 selected snapshot 连 D1/D3/D5 identity 都缺会同时从分子/分母消失。现改为 immutable selected snapshot 分母，并显式报告 `outcome_attached`；缺 future outcome 时仍显示 denominator=1 / attached=0 / coverage=0。
-- **当前验证**：纯函数、DB 写回、retry surface、scorecard 独立 denominator、公司行动、缺中间交易日、跨 provider、错误 horizon、目标日之后极值不泄漏、D0 terminal unknown、日 K 北京时区归属、EOD 编排与 cross-day 失败不阻断 D0 的回归均已通过。真实长期库及现有 RSH-026 副本的 current D0 path labeled 均为 0，无法形成可信真实历史 cross-day 样本；本地 marketdb 又无 qfq high/low。本轮对东财在线 qfq/raw 日 K 的实探还遇到 `RemoteProtocolError` 断连，因此只证明实现/契约和 fail-closed 边界，不声称真实线上 OHLC 覆盖已验证。最终 exact-head 全量 backend / repo gates / CI 仍是发布前门禁。
+- **发布/部署验证**：PR #76 exact HEAD `4465791dd4afda7f2840fa3a69f47839d839f0f8` 本地 backend `4102 passed / 80 skipped`、全仓 pyflakes 与 repo/docs 门全绿；CI #518 与 exact-head `release_check` 通过，merge=`340f73384ca1651cb1136ee4b7bf78b3811a2401`，post-merge CI #519 全绿且分支已清理。真实长期工作区随后受控同步到该 master，SQLite 从 `d2e4a6b8c0f1` 迁到 `d9e4c2b7a1f6`，完整性 `ok`；D0 identity 恢复为 156,108/156,108、追加 48 条 current revision、原 48 条 terminal labeled base 与部署前备份逐字段 `identical=True`，二次 apply `noop=true/backup=null`，部署后 backend 再次 `4102 passed / 80 skipped`。历史 current D0 path labeled 仍为 0，本地 marketdb 仍无 qfq high/low，因此不声称历史 cross-day 实证；此前东财在线 qfq/raw 探针也曾 `RemoteProtocolError` 断连，真实 path 只允许由部署后的新样本自然成熟。
 - **非目标**：不伪造旧历史 path、不把停牌与数据缺口强行二分、不把 reference path 冒充 shadow-fill P&L、不实现 actual fill/entry-capture、不改策略/风控/仓位参数。
+
+## 8.7 U49 主动审计回执（RSH-026 Backend Intraday Evidence）
+
+- **阶段/基点**：`Preflight + candidate implementation`；基于 `master@340f73384ca1651cb1136ee4b7bf78b3811a2401`（PR #76 merge 后 CI #519 全绿且真实工作区已受控部署）。
+- **P1-47 前台 GET 充当业务触发器**：candidate/hard_gate/rank 的 `archive_intraday_pipeline` 只存在于 `/api/picks/intraday-opportunities` / `intraday-top` 构建路径；不打开页面时后台仍会归档 notification，却缺前三层完整漏斗。2026-09-21 实测自动 DailyPickSet 与 buy-point 链已产生 10 条 `notification/rejected` + 10 条 D0 deferred，但 candidate/hard_gate/rank 为 0，证实不是理论风险。当前把机会装配/归档搬到 `picks/intraday_opportunity_runtime.py`，route 只做参数/展示包装，后台 scheduler 与 route 共用同一实现。
+- **P1-48 consumer clock 制造重复 run**：旧 route 用 `beijing_now()` 生成 intraday run identity，即使消费的是同一 market snapshot，缓存过期或另一个 GET 也会得到新 run。当前归档 `as_of` 绑定 `snapshot_service.freshness().as_of/last_success` 的北京时点；既有 append-only 幂等测试保证同 run 重放 `inserted=0`。
+- **P1-49 为补证据放大 provider 请求面**：不能简单每 30/60 秒重跑重型题材/热股构建。新 `opportunity-evidence` scheduler 每 30 秒只检查 `snapshot_service.saved_files`，仅当新的原子 Parquet 快照成功持久化后才调用共享 builder；默认持久化节奏约 300 秒。同一 `saved_files` 只消费一次，无新 snapshot 时不新增 provider 请求。
+- **P1-50 失败 cursor 吞证据**：归档失败若先推进 snapshot cursor，会让该版本永久丢失。当前只有 `decision_evidence.state=ready` 才推进 `opportunity_evidence_saved_files`；异常由 SchedulerRegistry 记 tick failure，下一拍仍重试同一 durable snapshot。
+- **P1-51 午休/盘外旧版本补录**：非连续竞价产生的 durable snapshot 不应在下一开盘窗口被追认成盘中决策。scheduler 在盘外只“消费 cursor、不归档”，等下一份盘中持久快照；交易日/快照 freshness 不可证时抛出可观测 tick failure 且不推进 cursor，由 SchedulerRegistry 连续失败门负责显性化。
+- **依赖方向**：禁止 scheduler 反向 import API route 或伪造 Request；`official_match.attach_official` 同时接受 Request/app/state，规则本身不变。新开关 `picks_opportunity_evidence_enabled` 已登记进 `SCHEDULER_SWITCH_ATTRS`，测试环境自动关闭生产调度。
+- **当前验证**：cache 单飞/快照版本失效、Request→app/state 归一、snapshot fact-time、durable snapshot 单次归档、失败可重试、盘外不补录、scheduler switch 真相源、import-lint、theme/catalog、buy-point 与 RSH-026 outcome 回归均已通过；最终 exact-head 全量 backend / repo/docs / CI 仍是发布门。
+- **非目标**：不改题材构建、候选/硬门/精排阈值，不提高实时采样频率到每个内存 refresh，不改变 watch-ledger 准入、notification/outbox、shadow fill 或真实交易边界。
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
 
