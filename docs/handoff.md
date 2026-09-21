@@ -76,7 +76,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - U50 也不改变阶段门算法，只改变“谁可以完成当前切片”：正常模式仍是 Web Review + Codex；当前 `DEGRADED_FULL_CONTROL` 下网页端按同一阶段门全程操控，每个 PR 必须重新写 exact-HEAD `DegradedRelease`，不能复用一次用户授权跳过逐 PR 发布证据。
 - GX 治理只可作为不冲突的伴随切片。`GOV-026` 的 workspace hygiene 已接 CI/交接，本轮又完成宿主盘点与缓存收口；`GOV-022` 新增 runtime selector，只对 stage 明示且可确定的运行条件做临时选择覆盖，不改变静态账本。BUG-020 因具备显式条件可在完整会话开工窗抢回 G0；IMP-049 仍因条件不可机械证明而保持静态等待。
 
-当前处于 `DEGRADED_FULL_CONTROL`：本轮只做审计遗留的运行/治理收口。Candidate B readiness 仍 blocked，不启动真实交易或参数晋级；BUG-020 真实整段交易会话验收仍必须等下一次完整开工窗，不能用 9/21 盘后收口替代。
+当前处于 `DEGRADED_FULL_CONTROL`：审计运行态/条件激活/测试离线门已由 latest master + post-merge CI 闭环；本轮最终卫生只允许收口 pytest 临时沙箱生命周期。若 latest master 已包含 `TemporaryDirectory` sandbox owner 且对应 post-merge CI 全绿，则该卫生项也自动闭环，不再为“写已完成”追加文档 PR。Candidate B readiness 仍 blocked，不启动真实交易或参数晋级；BUG-020 真实整段交易会话验收仍必须等下一次完整开工窗，不能用 9/21 盘后收口替代。
 
 ## 8. Jev、工具链与协作流当前基线
 
