@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.research import strategy_compare as sc  # noqa: E402
 from app.research import strategy_trials as st  # noqa: E402
 from app.research import strategy_verify as sv  # noqa: E402
 from app.research import verify_registry as vr  # noqa: E402
@@ -216,6 +217,10 @@ def main() -> int:
         con, target_label="two_thirty_five", target_cond=ALL,
         incumbents={"candidate_b_reference": cand}, where=holdout_where,
     )
+    ablation_evidence = sc.leave_one_out_ablation(
+        con, label="two_thirty_five", components=CONDS,
+        where=holdout_where, cfg=admission_cfg, horizon=H,
+    )
     protocol = sv.validation_protocol(
         horizon=H, cost_bps=sv.ADMISSION_COST_BPS, split=split,
         selection_scope="external_preregistered", build_config=build_cfg,
@@ -251,7 +256,9 @@ def main() -> int:
         },
         source="scripts/verify_two_thirty_five.py",
         extra={"gate_failed": gate["failed"], "gate_unchecked": gate["unchecked"],
-               "gate": gate, "conditions": CONDS},
+               "gate": gate, "conditions": CONDS,
+               "trial_family": trial_evidence, "signal_overlap": overlap_evidence,
+               "ablation": ablation_evidence},
     )
     print(f"    {headline}")
     print(f"    判据命中：{gate['note']}")

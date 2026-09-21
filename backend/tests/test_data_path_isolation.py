@@ -106,6 +106,8 @@ _DECLARED: dict[str, tuple[bool, str]] = {
     "market/trade_calendar.py:_PERSIST_PATH": (False, "写前有劣质备源守卫（<80% 不覆盖官方日历）"),
     "picks/position_engine.py:_PLAN_DIR": (True, "全量测试间接写出当日空计划；统一隔离，BUG-021"),
     "research/verify_registry.py:VERIFY_DIR": (False, "由核验 CLI 写，测试传 tmp 出参"),
+    "research/strategy_experiments.py:EXPERIMENT_DIR": (
+        False, "仅离线研究 producer 显式写；测试传 tmp root，真实验收也重定向 /tmp"),
     "sentiment/metric_history.py:_STORE_PATH": (False, "由调度写；用例注入内存/tmp"),
     "services/replay_gate.py:BASELINE_PATH": (False, "只读基线（写入走 CLI 出参）"),
 }
