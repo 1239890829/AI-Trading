@@ -333,6 +333,25 @@ def test_split_sample_partitions_by_time_with_visible_purge_and_embargo(con):
     assert split["train_last_ms"] < split["split_date_ms"] < split["test_first_ms"]
 
 
+def test_split_windows_fail_closed_when_holdout_is_outside_or_consumed(con):
+    before = int((START + timedelta(days=1)).timestamp() * 1000)
+    after = int((START + timedelta(days=100)).timestamp() * 1000)
+    mid = int((START + timedelta(days=30)).timestamp() * 1000)
+    with pytest.raises(ValueError, match="样本内部"):
+        sv.split_windows(con, before, horizons=[5])
+    with pytest.raises(ValueError, match="样本内部"):
+        sv.split_windows(con, after, horizons=[5])
+    with pytest.raises(ValueError, match="train 或 test 为空"):
+        sv.split_windows(con, mid, horizons=[5], purge_sessions=100)
+
+
+@pytest.mark.parametrize("horizons", [[0], [-1], [True]])
+def test_split_windows_rejects_invalid_horizons(con, horizons):
+    mid = int((START + timedelta(days=30)).timestamp() * 1000)
+    with pytest.raises(ValueError, match="horizons"):
+        sv.split_windows(con, mid, horizons=horizons)
+
+
 def test_limit_up_share_reports_executability(con):
     """可成交性：E 档 100% 落在疑似涨停 → 纸面收益再高也不可执行。"""
     out = sv.limit_up_share(con, "chg >= 5")

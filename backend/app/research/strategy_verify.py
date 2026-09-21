@@ -376,7 +376,13 @@ def split_windows(
     the split are purged and, by default, the same number after it are embargoed.
     """
     hz = tuple(horizons) if horizons else horizons_of(con, cfg.table)
-    max_h = max(hz) if hz else 1
+    if not hz or any(isinstance(h, bool) or not isinstance(h, int) or h <= 0 for h in hz):
+        raise ValueError("horizons 必须为非空正整数序列")
+    max_h = max(hz)
+    split_value = _sample_count(split_ms)
+    if split_value is None or split_value == 0:
+        raise ValueError("split_ms 必须为正整数时间戳")
+
     def _count(value: int | None, default: int, label: str) -> int:
         if value is None:
             return default
@@ -396,9 +402,13 @@ def split_windows(
             "embargo_sessions": embargo, "max_horizon": max_h, "trade_days": 0,
             "train_days": 0, "purged_days": 0, "embargo_days": 0, "test_days": 0,
         }
-    split_idx = next((i for i, value in enumerate(dates) if value >= int(split_ms)), len(dates))
+    split_idx = next((i for i, value in enumerate(dates) if value >= split_value), len(dates))
+    if split_idx == 0 or split_idx >= len(dates):
+        raise ValueError("split_ms 必须落在样本内部并同时保留 train/test")
     purge_start = max(0, split_idx - purge)
     test_start = min(len(dates), split_idx + embargo)
+    if purge_start == 0 or test_start >= len(dates):
+        raise ValueError("purge/embargo 使 train 或 test 为空；缩短隔离窗口或调整 split")
     train_cut = dates[purge_start] if purge_start < len(dates) else None
     test_cut = dates[test_start] if test_start < len(dates) else None
     train_where = "FALSE" if purge_start == 0 else f"date_ms < {train_cut}"
@@ -416,7 +426,7 @@ def split_windows(
     return {
         "train_where": train_where, "purge_where": purge_where,
         "embargo_where": embargo_where, "test_where": test_where,
-        "split_ms": int(split_ms), "split_date_ms": split_date,
+        "split_ms": split_value, "split_date_ms": split_date,
         "train_last_ms": dates[purge_start - 1] if purge_start > 0 else None,
         "test_first_ms": test_cut, "purge_sessions": purge, "embargo_sessions": embargo,
         "max_horizon": max_h, "trade_days": len(dates), "train_days": purge_start,
