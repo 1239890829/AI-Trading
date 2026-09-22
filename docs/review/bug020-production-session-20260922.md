@@ -106,6 +106,15 @@
 - 对自动执行实例留下的 5439ad8 与 d2d442a 已独立审阅：前者仅补真实 hotfix 运行证据；后者把 runtime-selector 测试从可变真实账本状态隔离为固定夹具，并补“进行中条件任务过窗口仍保持 G0”契约，均 KEEP。
 - doc-health、public-repo scan、workspace hygiene、git diff --check 全部通过。
 
+## 11:11–11:28 缺失/恢复与上午收尾
+
+- 11:11:43 发生一次真实宿主 DNS 短断：Sina / Tencent / Eastmoney / THS 的 quotes/indices 在同一秒内均失败，两轮 Hub refresh 明确记录 keeping last good data；因最后可信值年龄仍小于 stale_after，没有把 current 清空或用失败结果覆盖。网络恢复后 11:12 起正常推进。
+- Sina 严格完整性门连续捕获：11:12 少 100 行（5466/5566）、11:14 少 200 行（5366/5566），均拒绝发布；11:18 恢复 5566，11:19 再少 100 行后，11:21/11:22/11:23 连续恢复。11:23 独立直拉同样为 5566 rows / 5566 unique。
+- 取舍：**KEEP 严格 stock-count 分母 + 现有普通退避**。这类可识别缺页已在 2–4 分钟内自愈，且旧可信快照会由 ready→degraded/stale 诚实暴露；不把所有非限流失败都接入高成本全市场 fallback，避免一次异常就额外批量请求数千股票。
+- 60 秒真实 WS 观察共 61 帧，600519 / sh000001 / 600105 / 603118 / 603228 全部 event-time regression=0。600519 首帧因断订阅后的旧缓存为 quote_age_exceeded，后续 60 帧均 high；其余标的只在源真实晚到时出现 1–3 帧 source_time_regress_ignored，并在下一可信观测自动恢复。
+- 11:28 上午收尾：health=ok、Hub consecutive_failures=0 / last_error=null、index 6/6、source_rejections=0；snapshot=ready / 5566 rows / age≈13s；scheduler 30/30，hotfix PID=73633 持续运行，日志 ERROR=0、Traceback=0、board_surge_error_count=0。
+- 主动扫描中另见 THS 429、个别 watchlist 瞬时缺失、deepseek-v4-flash 兼容警告等；它们均有现有 owner/熔断或与 BUG-020 无直接因果，本片不借机扩权修改。
+
 ## 最终判定
 
-**进行中。** 盘前、开盘、上午、restart/recovery 与 hotfix 生产验证均已有真实证据；仍必须继续覆盖午间、下午与收盘，且严格 snapshot 与 row freshness 在后续检查点保持稳定后，才允许把 BUG-020 改为“已完成”。
+**进行中。** 盘前、开盘、上午、restart/recovery、真实缺失恢复与 hotfix 生产验证均已有证据；仍必须继续覆盖午间、下午与收盘，且严格 snapshot 与 row freshness 在后续检查点保持稳定后，才允许把 BUG-020 改为“已完成”。
