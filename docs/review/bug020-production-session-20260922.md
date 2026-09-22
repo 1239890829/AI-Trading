@@ -82,10 +82,19 @@
 
 - **缓存年龄未映射到行级 quality**：重启后 WS 订阅断开，600519 退出 1Hz 轮询池，但对象仍留在 Hub current cache。10:40 连续三次 REST 读取中，上证指数 event time 从 02:40:54 持续推进，而 600519 停在 02:37:09；后者仍返回 quality=high。根因是 Quote.freshness() 已能按 data_timestamp 判年龄，但 QuoteHub.get_quotes() 直接返回缓存对象，读取层没有应用年龄语义。修复新增只读 _visible_quote：超过 Hub stale_after 时返回 quality=stale / quote_age_exceeded 的深拷贝，**不修改共享 current、不增加网络请求**；下一条可信观测仍可正常推进缓存。
 - **board_surge 生产循环持续异常**：旧进程日志从 09:35 到 10:33 多次出现 board surge beat failed，堆栈固定为 seal_sequence() 对 provider 返回的 Pydantic LimitUpRecord 调 .get()。历史单测只覆盖 dict 夹具，漏掉真实 provider 类型。修复让字段读取同时兼容 dict 与对象属性，并新增真实 LimitUpRecord 回归。
+- **全市场快照缺页仍被标 ready**：10:39–10:43 生产新浪快照连续只有 5466 rows，10:44 又恢复 5566；恰少 100 行与单页 page_size 一致，但旧代码只要求 rows >= stock-count 的 90%，因此会把缺整页的市场宽度保存并标 ready。修复把 stock-count 作为硬分母：rows 与 market+symbol 唯一身份数都必须精确等于 count，否则整轮 ProviderError，沿用已有最近可信值/降级链，不发布部分市场。
 - **pytest 本机生产凭据渗透**：定向 test_api 初次运行时，全会话 socket 硬门抓到 open.feishu.cn 的真实 DNS 尝试。CI 环境通常无生产飞书凭据，本机 .env 却有，因此旧测试存在环境依赖。修复在 conftest 导入 app 前显式清空五个飞书目标/凭据环境变量；飞书专项测试继续自行构造桩，不改变生产配置。
 - 修复后相关后端组合回归（quote_hub / board_surge / board_surge_phase2 / quotes endpoint / notifier_feishu / notifications / notification_outbox）全部通过；pyflakes 通过；前端 QualityBadge 新增 quote_age_exceeded 人话提示回归后 8/8 通过；git diff --check 通过。
-- 当前运行 PID=53605 仍加载修复前代码；下一步必须以当前已提交 hotfix 做一次**修复部署重载**后，再用真实 REST/WS 验证上述两项生产缺口消失。由于 10:30 自动执行器此前已造成额外 restart，本次重载会明确记为“缺陷修复部署”，不再伪称整日只有一次进程切换。
+- 10:54 时 PID=53605 仍加载修复前代码，因此随后必须做一次**修复部署重载**并用真实 REST/WS 复验；该动作的结果见下一节。由于 10:30 自动执行器此前已造成额外 restart，修复重载单独记为缺陷部署，不伪称整日只有一次进程切换。
+
+## 11:00–11:02 hotfix 生产验收
+
+- hotfix 已以 HEAD=a43f330 启动到 PID=73633；启动后 30/30 scheduler running，SQLite integrity_check=ok / 39 tables。
+- 严格全市场分母门首次真实命中：11:00 Sina 再次只返回 5466/5566，系统不再把 98.2% 覆盖冒充 ready，而是 market_snapshot=unavailable、last_error=sina snapshot incomplete: rows=5466 unique=5466 expected=5566。11:02:35 上游恢复后自动回到 ready / 5566 rows / consecutive_failures=0，证明 fail-closed 与自愈同时成立。
+- 缓存年龄门做了真实订阅→断开→老化→重订阅闭环。600519 在 03:00:54 为 high；断开后超过 stale_after=10s，REST 保留同一 price/current 但正确变为 stale / quote_age_exceeded，而 sh000001 同时继续 high/实时推进。重新订阅首帧仍诚实显示旧 stale，下一帧 600519 恢复 high，event time 从 03:00:54 推进到 03:01:09，未倒退。
+- board_surge 用当日真实 limit-up pool 做只读验证：pool_len=23，provider 返回类型=LimitUpRecord；seal_sequence 可直接处理真实对象并生成“内蒙新华 09:34（5板）”。hotfix 日志当前 board_surge_error_count=0。
+- BUG-020 平台定时自动续跑已停用并复核为 disabled；后续本日检查只走人工单写，避免再次出现任务状态与本机动作不同步、重复 restart/commit 的竞态。
 
 ## 最终判定
 
-**进行中。** 只有完整覆盖盘前、盘中、午间、下午、收盘，且重启恢复与本轮发现的生产缺口修复均有真实运行证据后，才允许把 BUG-020 改为“已完成”。
+**进行中。** 只有完整覆盖盘前、上午后段、午间、下午、收盘，且本轮修复在后续检查点保持稳定后，才允许把 BUG-020 改为“已完成”。
