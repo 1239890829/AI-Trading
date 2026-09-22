@@ -570,8 +570,8 @@ class QuoteHub:
                 delay = min(self.poll_interval * (2 ** min(self.consecutive_failures, 4)), 60.0)
                 log.info("provider degraded, next refresh in %.0fs", delay)
             elif self._closed_marked:
-                # 休市数据静止：降频到 5s 保活（省 Provider 配额/流量），开盘
-                # 恢复检测延迟 ≤5s；交易时段（含竞价/午间）保持秒级节奏
+                # 休市/午休数据静止：降频到 5s 保活（省 Provider 配额/流量），
+                # 恢复检测延迟 ≤5s；竞价与连续竞价保持秒级节奏。
                 delay = max(delay, 5.0)
             # 固定节奏：扣除本轮刷新耗时，保证推送周期 = poll_interval 而非
             # poll_interval + 网络耗时（1s 档位下串行耗时的稀释不可忽略）

@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.core.bjtime import beijing_today
+from app.core.bjtime import BJ_TZ, beijing_today
 from app.schemas.market import Quality, Quote
 from app.services import quote_hub as qh
 from app.services.quote_hub import QuoteHub
@@ -443,6 +443,29 @@ def test_source_rejection_summary_clears_after_clean_recovery(isolate_calendar, 
     assert hub.source_rejections()["quotes"] == {"count": 0, "reasons": {}}
     assert hub.last_batch_coverage == 1.0
     assert hub.quotes["600105"].quality == Quality.high
+
+
+def test_lunch_break_marks_cached_quotes_market_closed(monkeypatch):
+    async def _today_days(_provider, lookback_days: int = 120):
+        return [beijing_today()]
+
+    lunch = datetime(
+        beijing_today().year, beijing_today().month, beijing_today().day,
+        12, 0, tzinfo=BJ_TZ,
+    )
+    monkeypatch.setattr(qh.tc, "trading_days", _today_days)
+    monkeypatch.setattr(qh.tc, "in_trading_window", lambda now=None: False)
+    monkeypatch.setattr(qh, "beijing_now", lambda: lunch)
+
+    a = make_q("600105", "平安银行", 10.0)
+    b = make_q("600519", "贵州茅台", 100.0)
+    hub, _prov = _hub_with([a, b])
+    asyncio.run(hub.refresh())
+
+    assert hub._closed_marked is True
+    assert hub.freshness().state == "stale"
+    assert {q.quality for q in hub.get_quotes()} == {Quality.stale}
+    assert all(q.quality_reasons == ["market_closed"] for q in hub.get_quotes())
 
 
 def test_market_closed_reason_overrides_batch_missing(monkeypatch):

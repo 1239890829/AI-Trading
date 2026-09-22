@@ -264,3 +264,18 @@ def test_in_trading_window_weekday_time_bounds():
     assert in_trading_window(datetime(2026, 9, 2, 13, 0, tzinfo=cst)) is True
     assert in_trading_window(datetime(2026, 9, 2, 15, 0, tzinfo=cst)) is True
     assert in_trading_window(datetime(2026, 9, 2, 15, 1, tzinfo=cst)) is False
+
+
+def test_wide_market_window_keeps_buffers_but_excludes_lunch():
+    from app.market.trade_calendar import in_wide_market_window
+
+    cst = BJ_TZ
+    for hour, minute in [(9, 15), (11, 35), (12, 55), (15, 5)]:
+        assert in_wide_market_window(
+            datetime(2026, 9, 2, hour, minute, tzinfo=cst)
+        ) is True
+
+    for hour, minute in [(9, 14), (11, 36), (12, 0), (12, 54), (15, 6)]:
+        assert in_wide_market_window(
+            datetime(2026, 9, 2, hour, minute, tzinfo=cst)
+        ) is False
