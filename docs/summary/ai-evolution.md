@@ -39,11 +39,11 @@
 | 文件与权限 | 只读明确的既有 backend/app Python 文件；原白名单、禁改、受保护目录、路径/符号链接校验保留；读上下文前就拒绝不合格路径 |
 | diff 核验 | 解析全部文件头，拒绝未声明文件、穿越、改名、复制及增删；git apply --check 只核适用性，不实际应用 |
 | 基点 | 提案绑定完整 HEAD 与文件摘要；生成期间变动则暂缓，不覆盖人工改动 |
-| 成本 | 每日尝试上限保留，失败尝试与历史 code.apply 都计入；该限制不等于跨进程原子预留或完整模型token计账 |
+| 成本 | 每日 C 提案 1 次 + 自主 LLM 8 次 + 自主改进 3 次均由 SQLite numbered slot 跨进程原子预留；失败/started unknown 不退款，部署日旧尝试 backfill；业务 LLM/Jev 进入统一 metadata usage 查询面但不偷占自治额度 |
 | 留痕 | 生成前建任务和审计，缺diff、异常、归档失败和基点漂移均回填结果；不把静态通过标成测试全绿 |
 | 实施 | 由获准开发者在 codex/* 分支实施并完整验证，经独立审阅和准确版本CI后交付；应用内提案不能自行升级为执行 |
 
-工作树仅隔离Git文件版本，并非操作系统安全隔离。即便禁止修改测试，测试导入修改后的 app 也会执行代码，因此本版移除整个应用内宿主执行路径，而不是再加一个开关。模型总预算、取消、跨进程额度预留及参数晋级的其它边界仍需独立验收。
+工作树仅隔离Git文件版本，并非操作系统安全隔离。即便禁止修改测试，测试导入修改后的 app 也会执行代码，因此本版移除整个应用内宿主执行路径，而不是再加一个开关。IMP-052 已把参数 promotion authority 与模型/任务预算、跨进程取消分别收进持久事实：started unknown 不按 0 退款，取消请求不等于取消完成，wall-time 超时也不冒充用户取消。
 
 - 运行默认：`ASHARE_AGENT_AUTONOMY_ENABLED=1`、`ASHARE_AGENT_CODE_CHANGE_ENABLED=0`。
   前者使A类影子评估、B类记录及既有实验回滚运行；不再自动转正；紧急停机时设为 `0`。C 类仍要求代码开关显式开启，
@@ -60,7 +60,13 @@
 
 权重漂移温和仅是结构检查，离线 `supports` 仍只是探索证据；调度只保存候选与 shadow evidence，不取得批准权。模型 evidence 内的 `approved/reviewer` 字段仍不构成批准，通用 `apply_change` 继续只允许合法人工 draft，不能应用 shadow、rejected 或 AI 来源草稿。
 
-2026-09-22 的 IMP-052 参数晋级纵切新增**独立于普通写权限的 promotion-operator 批准链**，不是 evaluator 自批平台：先读取候选/当前运行基线/影子证据的 exact digest review package；批准写入口必须同时经过普通写鉴权和专用 `ASHARE_AGENT_PROMOTION_TOKEN`，后者默认空即关闭、不得与普通 API token 共用。专用凭据判定由 `core/auth.py` 单点拥有，**service 创建/撤销批准时也必须显式提供并通过**，HTTP dependency 只是取 header 的适配层，不能成为唯一授权边界。批准还必须绑定仓库内真实 review/research/artifact 文件与当前 SHA-256，最长 24h、可撤销、一次性消费；消费时再次核候选/基线/影子证据/效果文件，任何漂移或本地 shadow 已为负面/不足即 fail-closed。candidate CAS、approval consume、live baseline CAS、参数写入和既有 30 日后置实验在同一事务落库；后置基线拿不到就整笔不生效。已有 owner-aware rollback 继续保留。A类入影子仍不回写复盘 `applied`；只有上述 promotion-operator 批准链真正消费后才形成 applied 事实。统一 usage/token、跨进程 quota 与 cancellation 仍未完成。
+2026-09-22 的 IMP-052 参数晋级纵切新增**独立于普通写权限的 promotion-operator 批准链**，不是 evaluator 自批平台：先读取候选/当前运行基线/影子证据的 exact digest review package；批准写入口必须同时经过普通写鉴权和专用 `ASHARE_AGENT_PROMOTION_TOKEN`，后者默认空即关闭、不得与普通 API token 共用。专用凭据判定由 `core/auth.py` 单点拥有，**service 创建/撤销批准时也必须显式提供并通过**，HTTP dependency 只是取 header 的适配层，不能成为唯一授权边界。批准还必须绑定仓库内真实 review/research/artifact 文件与当前 SHA-256，最长 24h、可撤销、一次性消费；消费时再次核候选/基线/影子证据/效果文件，任何漂移或本地 shadow 已为负面/不足即 fail-closed。candidate CAS、approval consume、live baseline CAS、参数写入和既有 30 日后置实验在同一事务落库；后置基线拿不到就整笔不生效。已有 owner-aware rollback 继续保留。A类入影子仍不回写复盘 `applied`；只有上述 promotion-operator 批准链真正消费后才形成 applied 事实。2026-09-22 最后一纵切又以 `agent_resource_usage` 收口统一 usage/token metadata、跨进程 quota 与 cancellation：自主模型/任务按北京日原子 slot，普通业务 LLM/Jev 只记 telemetry；provider 未返回 token 时 `usage_known=false`，自主 scope 遇 started unknown 当日停止继续消耗。
+
+### 2.2 模型预算与取消边界（2026-09-22）
+
+`agent_resource_usage` 是 Agent 资源预算/usage 的持久事实：自主 LLM 默认 8/day、自主改进 3/day、C提案 1/day；输入 250k chars、输出 150k chars、model timeout 180s、retry≤2、task wall-time 600s 为默认高水位。只有 never-started stale reservation 可回收，started 后未知用量保留占用。`GET /agent/resource-usage` 仅暴露 metadata，不含 prompt/messages/Jev state/questions/凭据。Jev 保留既有 metrics/JSONL，同时 production lifespan 镜像 metadata 到统一表。
+
+Task 取消先落 `cancel_requested_at`；跨 worker 时调用方保持 running/queued +「取消中」，owner 观察到 intent 并真正停止后才写 `canceled`。服务重启对账把“已有取消请求的残留”收成 canceled，其余残留收成 failed/Interrupted；timeout 单独为 failed/TaskTimeout。
 
 ## 3. 复盘闭环（含最后一公里）
 

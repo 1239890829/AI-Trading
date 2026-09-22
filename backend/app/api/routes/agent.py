@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import require_promotion_approval_token, require_write_token
 from app.services import agent_tasks as at
+from app.services import agent_budget
 from app.services import agent_params as params_svc
 from app.services import alert_triage as at_triage
 from app.services import evolution as evo
@@ -52,6 +53,19 @@ async def create_task(body: TaskCreateIn):
         raise HTTPException(status_code=422, detail=str(exc))
     except RuntimeError as exc:    # 同类型互斥
         raise HTTPException(status_code=409, detail=str(exc))
+
+
+
+
+@router.get("/agent/resource-usage")
+async def resource_usage(limit: int = Query(50, ge=1, le=500)):
+    """Read-only Agent budget/usage state; contains metadata only, never prompt/model text."""
+    return {
+        "data": {
+            "summary": agent_budget.budget_status(),
+            "receipts": agent_budget.recent_usage(limit=limit),
+        }
+    }
 
 
 @router.get("/agent/tasks")

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any, Callable
 
 from app.core.grounding import grounding_violations
 from app.news.rules import RulesSummarizer
@@ -57,6 +58,7 @@ class LLMSummarizer:
         client=None,  # httpx.Client，供测试注入 MockTransport
         provider: str = "openai",
         cli_path: str = "",
+        usage_reporter: Callable[[dict[str, Any]], None] | None = None,
     ):
         self.base_url = base_url
         self.api_key = api_key
@@ -64,6 +66,7 @@ class LLMSummarizer:
         self._client = client
         self._provider = provider
         self._cli_path = cli_path
+        self._usage_reporter = usage_reporter
 
     def is_available(self) -> bool:
         if self._provider == "claude_cli":
@@ -100,10 +103,30 @@ class LLMSummarizer:
                 "content": json.dumps({"items": items_in}, ensure_ascii=False),
             },
         ]
-        content = chat_completion(
-            self.base_url, self.api_key, self.model, messages, client=self._client,
-            provider=self._provider, cli_path=self._cli_path,
-        )
+        input_chars = sum(len(str(m.get("content") or "")) for m in messages)
+        from app.services.agent_budget import check_model_input
+        check_model_input(input_chars)
+        usage_box: dict[str, Any] = {"usage": None}
+        try:
+            content = chat_completion(
+                self.base_url, self.api_key, self.model, messages, client=self._client,
+                provider=self._provider, cli_path=self._cli_path,
+                usage_callback=lambda value: usage_box.__setitem__("usage", value),
+            )
+        except Exception as exc:
+            if self._usage_reporter is not None:
+                self._usage_reporter({
+                    "state": "failed", "usage": usage_box["usage"],
+                    "error_kind": type(exc).__name__, "input_chars": input_chars,
+                    "output_chars": 0, "timeout_seconds": 30.0, "attempts": 1,
+                })
+            raise
+        if self._usage_reporter is not None:
+            self._usage_reporter({
+                "state": "succeeded", "usage": usage_box["usage"], "error_kind": None,
+                "input_chars": input_chars, "output_chars": len(content),
+                "timeout_seconds": 30.0, "attempts": 1,
+            })
 
         # 3. 解析 + 逐条校验回填
         payload = extract_json_object(content)

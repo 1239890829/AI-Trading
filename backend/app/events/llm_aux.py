@@ -122,7 +122,7 @@ def _insert_directions(sf, event_id: int, hits: list[dict]) -> int:
         return n
 
 
-def _deepseek_items(cands: list[EventCard]) -> tuple[list[dict] | None, str | None]:
+def _deepseek_items(cands: list[EventCard], session_factory=None) -> tuple[list[dict] | None, str | None]:
     """让当前 DeepSeek 对指定事件做题材/方向判定；不写库。"""
     from app.core.config import settings
     from app.core.llm_client import LLMError, chat_completion, extract_json_object
@@ -138,20 +138,43 @@ def _deepseek_items(cands: list[EventCard]) -> tuple[list[dict] | None, str | No
         "注意：龙虎榜/成交量/资金流向/限售解禁数据类、公司常规澄清通常为 0；"
         "政策定调/产业事件/海外映射等明确方向才非 0。"
     )
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": __import__("json").dumps(titles, ensure_ascii=False)},
+    ]
+    input_chars = sum(len(str(m.get("content") or "")) for m in messages)
+    from app.services import agent_budget
+    try:
+        agent_budget.check_model_input(input_chars)
+    except agent_budget.BudgetError as exc:
+        return None, f"模型输入预算拦截：{exc}"
+    usage_box = {"value": None}
     try:
         raw = chat_completion(
             base_url=settings.review_llm_base_url,
             api_key=settings.review_llm_api_key,
             model=settings.review_llm_model,
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": __import__("json").dumps(titles, ensure_ascii=False)},
-            ],
+            messages=messages,
             provider=settings.llm_provider,
             cli_path=settings.llm_cli_path,
             timeout=180.0,
+            usage_callback=lambda value: usage_box.__setitem__("value", value),
+        )
+        agent_budget.record_unmetered(
+            purpose="event.llm_aux", provider=settings.llm_provider, model=settings.review_llm_model,
+            state="succeeded", usage=usage_box["value"], attempts=1, timeout_seconds=180.0,
+            input_chars=input_chars, output_chars=len(raw), session_factory=session_factory,
         )
     except LLMError as exc:
+        try:
+            agent_budget.record_unmetered(
+                purpose="event.llm_aux", provider=settings.llm_provider, model=settings.review_llm_model,
+                state="failed", usage=usage_box["value"], attempts=1, timeout_seconds=180.0,
+                input_chars=input_chars, output_chars=0, error_kind=exc.kind.value,
+                session_factory=session_factory,
+            )
+        except Exception:
+            pass
         return None, f"LLM 调用失败：{exc}"
     except Exception as exc:
         return None, f"异常：{exc}"
@@ -275,7 +298,7 @@ def judge_pending_batch(sf=None, *, theme_names: list[str] | None = None,
         for event_id in pre_neutral
     }
     if deepseek_cands:
-        deepseek_items, error = _deepseek_items(deepseek_cands)
+        deepseek_items, error = _deepseek_items(deepseek_cands, sf)
         if deepseek_items is None:
             # 保持原有整批语义：只要还有 DeepSeek 子集失败，本轮一个事件都不标记，
             # 包括已被 Jev 判中性的行，避免半批状态。

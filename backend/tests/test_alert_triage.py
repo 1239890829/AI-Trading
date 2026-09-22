@@ -53,7 +53,7 @@ def sf(tmp_path):
 def test_llm_verdict_saved(sf, monkeypatch):
     """LLM 判读结果落库（verdict/reason/model=llm）。"""
 
-    async def fake(ctx):
+    async def fake(ctx, *args, **kwargs):
         assert ctx["symbol"] == "600000" and ctx["condition"] == "price_above"
         return ("notify", "持仓相关，需关注")
 
@@ -68,7 +68,7 @@ def test_cooldown_dedup_ignores(sf, monkeypatch):
     """同规则冷却窗口内已有判读 → ignore（不消耗 LLM）。"""
     called = {"n": 0}
 
-    async def fake(ctx):
+    async def fake(ctx, *args, **kwargs):
         called["n"] += 1
         return ("notify", "x")
 
@@ -85,7 +85,7 @@ def test_cooldown_dedup_ignores(sf, monkeypatch):
 def test_llm_unavailable_falls_back_and_marks(sf, monkeypatch):
     """LLM 不可用 → 按规则提醒，但 model 标 llm_fallback（不伪装成 AI 判断）。"""
 
-    async def fake(ctx):
+    async def fake(ctx, *args, **kwargs):
         return None
 
     monkeypatch.setattr(tri, "_llm_verdict", fake)
@@ -99,7 +99,7 @@ def test_triage_is_idempotent(sf, monkeypatch):
     """同一事件只判读一次。"""
     calls = {"n": 0}
 
-    async def fake(ctx):
+    async def fake(ctx, *args, **kwargs):
         calls["n"] += 1
         return ("ignore", "噪音")
 
@@ -113,7 +113,7 @@ def test_triage_is_idempotent(sf, monkeypatch):
 def test_pending_bubbles_only_notify_unacked(sf, monkeypatch):
     """悬浮球只弹 notify 且未确认的。"""
 
-    async def fake(ctx):
+    async def fake(ctx, *args, **kwargs):
         return ("ignore", "噪音")
 
     monkeypatch.setattr(tri, "_llm_verdict", fake)
@@ -132,7 +132,7 @@ def test_pending_bubbles_only_notify_unacked(sf, monkeypatch):
 
 def test_triage_pending_scans_recent(sf, monkeypatch):
     """两条**不同规则**同时刻事件都应判读（同规则的重复会被冷却去重，另有用例）。"""
-    async def fake(ctx):
+    async def fake(ctx, *args, **kwargs):
         return ("escalate", "系统性异常")
 
     monkeypatch.setattr(tri, "_llm_verdict", fake)
@@ -150,7 +150,7 @@ def test_old_event_outside_cooldown_still_judged(sf, monkeypatch):
     """超出冷却窗口的事件不再被去重（避免永久静默）。"""
     calls = {"n": 0}
 
-    async def fake(ctx):
+    async def fake(ctx, *args, **kwargs):
         calls["n"] += 1
         return ("notify", "x")
 
@@ -166,7 +166,7 @@ def test_triage_auto_acknowledges_event(sf, monkeypatch):
     """2026-09-08 用户指令「触发记录状态不再需要确认」：判读落库时事件自动
     置 acknowledged=1——终态即判读态，无人工确认环节。"""
 
-    async def fake(ctx):
+    async def fake(ctx, *args, **kwargs):
         return ("notify", "测试判读")
 
     monkeypatch.setattr(tri, "_llm_verdict", fake)
@@ -191,7 +191,7 @@ def test_escalate_registers_task_center_todo(sf, monkeypatch):
     # 审计也落 tmp 库（不污染进程内全局工厂）
     monkeypatch.setattr(at, "get_session_factory", lambda: sf)
 
-    async def fake(ctx):
+    async def fake(ctx, *args, **kwargs):
         return ("escalate", "全市场级风险")
 
     monkeypatch.setattr(tri, "_llm_verdict", fake)
@@ -225,7 +225,7 @@ def test_non_escalate_registers_no_todo(sf, monkeypatch):
                          scope="all", threshold=0.4, channels='["in_app"]'))
         db.commit()
 
-    async def fake(ctx):
+    async def fake(ctx, *args, **kwargs):
         return ("ignore", "噪音")
 
     monkeypatch.setattr(tri, "_llm_verdict", fake)
@@ -244,7 +244,7 @@ def test_escalation_register_failure_does_not_break_triage(sf, monkeypatch):
 
     monkeypatch.setattr(at, "record_escalation", boom)
 
-    async def fake(ctx):
+    async def fake(ctx, *args, **kwargs):
         return ("escalate", "系统性异常")
 
     monkeypatch.setattr(tri, "_llm_verdict", fake)
@@ -288,7 +288,7 @@ def test_triage_pending_reaches_old_unjudged(sf, monkeypatch):
     """
     judged_ids: list[int] = []
 
-    async def fake_verdict(ctx):
+    async def fake_verdict(ctx, *args, **kwargs):
         return ("notify", "测试")
 
     monkeypatch.setattr(tri, "_llm_verdict", fake_verdict)
@@ -310,7 +310,7 @@ def test_triage_pending_reaches_old_unjudged(sf, monkeypatch):
 def test_triage_pending_skips_judged(sf, monkeypatch):
     """已判读事件不重复判读（幂等），且不占用单轮预算。"""
 
-    async def fake_verdict(ctx):
+    async def fake_verdict(ctx, *args, **kwargs):
         return ("ignore", "测试")
 
     monkeypatch.setattr(tri, "_llm_verdict", fake_verdict)
@@ -338,10 +338,10 @@ def test_jev_shadow_never_changes_deepseek_verdict(sf, monkeypatch):
     _enable_jev(monkeypatch, "shadow")
     jev_client._reset_metrics_for_tests()
 
-    async def fake_jev(_ctx):
+    async def fake_jev(_ctx, *args, **kwargs):
         return {"verdict": "ignore", "confidence": 0.98, "model": "jev-test", "latency_ms": 5}
 
-    async def fake_llm(_ctx):
+    async def fake_llm(_ctx, *args, **kwargs):
         return ("notify", "DeepSeek 保留提醒")
 
     monkeypatch.setattr(tri, "_jev_verdict", fake_jev)
@@ -357,10 +357,10 @@ def test_jev_cascade_high_confidence_skips_deepseek(sf, monkeypatch):
     """cascade 高置信直接消费 Jev，DeepSeek 不应再调用。"""
     _enable_jev(monkeypatch, "cascade", confidence=0.90)
 
-    async def fake_jev(_ctx):
+    async def fake_jev(_ctx, *args, **kwargs):
         return {"verdict": "ignore", "confidence": 0.96, "model": "jev-test", "latency_ms": 5}
 
-    async def no_llm(_ctx):
+    async def no_llm(_ctx, *args, **kwargs):
         pytest.fail("high-confidence Jev must skip DeepSeek")
 
     monkeypatch.setattr(tri, "_jev_verdict", fake_jev)
@@ -378,10 +378,10 @@ def test_jev_cascade_low_confidence_escalates_to_deepseek(sf, monkeypatch):
     _enable_jev(monkeypatch, "cascade", confidence=0.90)
     jev_client._reset_metrics_for_tests()
 
-    async def fake_jev(_ctx):
+    async def fake_jev(_ctx, *args, **kwargs):
         return {"verdict": "notify", "confidence": 0.61, "model": "jev-test", "latency_ms": 5}
 
-    async def fake_llm(_ctx):
+    async def fake_llm(_ctx, *args, **kwargs):
         return ("escalate", "DeepSeek 判断为系统性异常")
 
     monkeypatch.setattr(tri, "_jev_verdict", fake_jev)
@@ -395,10 +395,10 @@ def test_jev_cascade_low_confidence_escalates_to_deepseek(sf, monkeypatch):
 def test_jev_off_does_not_call_jev(sf, monkeypatch):
     _enable_jev(monkeypatch, "off")
 
-    async def no_jev(_ctx):
+    async def no_jev(_ctx, *args, **kwargs):
         pytest.fail("off mode must not call Jev")
 
-    async def fake_llm(_ctx):
+    async def fake_llm(_ctx, *args, **kwargs):
         return ("ignore", "DeepSeek")
 
     monkeypatch.setattr(tri, "_jev_verdict", no_jev)
@@ -410,10 +410,10 @@ def test_jev_off_does_not_call_jev(sf, monkeypatch):
 def test_jev_cascade_unavailable_falls_through_to_deepseek(sf, monkeypatch):
     _enable_jev(monkeypatch, "cascade")
 
-    async def fake_jev(_ctx):
+    async def fake_jev(_ctx, *args, **kwargs):
         return None
 
-    async def fake_llm(_ctx):
+    async def fake_llm(_ctx, *args, **kwargs):
         return ("notify", "DeepSeek fallback")
 
     monkeypatch.setattr(tri, "_jev_verdict", fake_jev)

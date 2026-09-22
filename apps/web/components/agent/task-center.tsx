@@ -284,10 +284,11 @@ export function TaskCenter() {
                 </div>
                 {!detail.read_only && (detail.status === "running" || detail.status === "queued") && (
                   <button
+                    disabled={Boolean(detail.cancel_requested_at)}
                     onClick={() => void cancel(detail.id)}
-                    className="rounded-md border border-zinc-300 px-2 py-0.5 text-[11px] text-zinc-600 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    className="rounded-md border border-zinc-300 px-2 py-0.5 text-[11px] text-zinc-600 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
                   >
-                    取消任务
+                    {detail.cancel_requested_at ? "取消中…" : "取消任务"}
                   </button>
                 )}
                 {actionable && (

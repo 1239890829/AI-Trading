@@ -27,6 +27,7 @@ from typing import Any, Awaitable, Callable
 from sqlalchemy import select
 
 from app.core.bjtime import beijing_now_naive
+from app.core.config import settings
 from app.core.db import get_session_factory
 from app.models.agent import TERMINAL_STATUSES, AgentAudit, AgentTask
 
@@ -318,6 +319,7 @@ def agenda_as_task(row) -> dict:
         "created_at": created,
         "started_at": created,
         "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+        "cancel_requested_at": None,
     }
 
 
@@ -365,6 +367,7 @@ def _load(row: AgentTask) -> dict:
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "started_at": row.started_at.isoformat() if row.started_at else None,
         "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+        "cancel_requested_at": (row.cancel_requested_at.isoformat() if row.cancel_requested_at else None),
     }
 
 
@@ -522,6 +525,43 @@ def creatable_task_types() -> list[dict]:
 # ---------------------------------------------------------------- 生命周期
 
 
+def _cancel_requested(task_id: str) -> bool:
+    with get_session_factory()() as db:
+        row = db.get(AgentTask, task_id)
+        return bool(row and row.cancel_requested_at is not None)
+
+
+async def _watch_cancel_request(task_id: str, owner: asyncio.Task) -> None:
+    """Poll durable cancel intent so a request from another process reaches the owner."""
+    while not owner.done():
+        await asyncio.sleep(0.2)
+        try:
+            requested = await asyncio.to_thread(_cancel_requested, task_id)
+        except Exception as exc:  # fail closed on state mutation: do not invent a cancellation
+            log.warning("cancel watcher read failed (%s): %s", task_id, exc)
+            continue
+        if requested and not owner.done():
+            owner.cancel()
+            return
+
+
+def _mark_cancel_requested(task_id: str) -> tuple[dict | None, bool]:
+    """Persist cancel intent; never claim terminal cancellation before the owner stops."""
+    now = beijing_now_naive()
+    with get_session_factory()() as db:
+        row = db.get(AgentTask, task_id)
+        if row is None:
+            return None, False
+        if row.status in TERMINAL_STATUSES:
+            return _load(row), False
+        changed = row.cancel_requested_at is None
+        if changed:
+            row.cancel_requested_at = now
+            db.commit()
+            db.refresh(row)
+        return _load(row), changed
+
+
 def _set_status(task_id: str, status: str, **fields: Any) -> None:
     with get_session_factory()() as db:
         row = db.get(AgentTask, task_id)
@@ -538,19 +578,45 @@ def _set_status(task_id: str, status: str, **fields: Any) -> None:
 
 async def _execute(task_id: str, type_: str, params: dict) -> None:
     rec = _StepRecorder(task_id)
+    if _cancel_requested(task_id):
+        _set_status(task_id, "canceled", finished_at=beijing_now_naive())
+        record_audit(actor="user", action="task.cancel", target=type_,
+                     after={"status": "canceled", "confirmed": True}, task_id=task_id)
+        _RUNNING.pop(type_, None)
+        _HANDLES.pop(task_id, None)
+        return
+
     _set_status(task_id, "running", started_at=beijing_now_naive())
+    owner = asyncio.current_task()
+    watcher = asyncio.create_task(
+        _watch_cancel_request(task_id, owner), name=f"agent-cancel-watch-{task_id}",
+    ) if owner is not None else None
     try:
         handler = _HANDLERS[type_]
-        result = await handler(rec, params, _APP)
+        timeout = max(0.1, float(settings.agent_task_timeout_seconds))
+        result = await asyncio.wait_for(handler(rec, params, _APP), timeout=timeout)
+        if _cancel_requested(task_id):
+            raise asyncio.CancelledError
         _set_status(task_id, "succeeded", result_ref=result, finished_at=beijing_now_naive())
         record_audit(actor="ai", action="task.finish", target=type_, after={"status": "succeeded"},
                      task_id=task_id)
         log.warning("[AGENT-TASK] %s %s 完成", type_, task_id)
     except asyncio.CancelledError:
         _set_status(task_id, "canceled", finished_at=beijing_now_naive())
-        record_audit(actor="user", action="task.cancel", target=type_, after={"status": "canceled"},
-                     task_id=task_id)
+        record_audit(actor="user", action="task.cancel", target=type_,
+                     after={"status": "canceled", "confirmed": True}, task_id=task_id)
         raise
+    except asyncio.TimeoutError:
+        _set_status(
+            task_id, "failed",
+            error={"code": "TaskTimeout",
+                   "message": f"任务超过 {float(settings.agent_task_timeout_seconds):g}s wall-time 上限",
+                   "retryable": True},
+            finished_at=beijing_now_naive(),
+        )
+        record_audit(actor="ai", action="task.fail", target=type_,
+                     after={"status": "failed", "error": "TaskTimeout"}, task_id=task_id)
+        log.warning("[AGENT-TASK] %s %s 超时", type_, task_id)
     except Exception as exc:
         _set_status(task_id, "failed", error={"code": type(exc).__name__, "message": str(exc),
                                               "retryable": True}, finished_at=beijing_now_naive())
@@ -558,6 +624,10 @@ async def _execute(task_id: str, type_: str, params: dict) -> None:
                      after={"status": "failed", "error": str(exc)}, task_id=task_id)
         log.warning("[AGENT-TASK] %s %s 失败：%s", type_, task_id, exc)
     finally:
+        if watcher is not None:
+            watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher
         _RUNNING.pop(type_, None)
         _HANDLES.pop(task_id, None)
 
@@ -619,23 +689,52 @@ def list_tasks(limit: int = 30, type_: str | None = None, *, include_agenda: boo
     return out[:limit]
 
 
+def _confirm_local_handle_cancel(task_id: str, type_: str, handle: asyncio.Task) -> None:
+    """Close the queued-before-start race only after this process's handle is truly done."""
+    if not handle.cancelled():
+        return
+    try:
+        row = get_task(task_id)
+        if row is None or row.get("status") in TERMINAL_STATUSES:
+            return
+        if not row.get("cancel_requested_at"):
+            return
+        _set_status(task_id, "canceled", finished_at=beijing_now_naive())
+        record_audit(
+            actor="user", action="task.cancel", target=type_,
+            after={"status": "canceled", "confirmed": True, "owner": "local_handle_done"},
+            task_id=task_id,
+        )
+    except Exception as exc:  # startup reconciliation remains the final safety net
+        log.warning("local cancel confirmation failed (%s): %s", task_id, exc)
+
+
 def cancel_task(task_id: str) -> dict | None:
-    """取消运行中任务（已终态的返回当前状态，不报错）。只读留痕条目不可取消。"""
+    """Request cancellation durably; only the owning process may confirm ``canceled``.
+
+    If the task is owned by another process, this function leaves it queued/running with
+    ``cancel_requested_at`` set.  The owner polls that field and cancels its coroutine.  This
+    prevents the old lie where one process wrote ``canceled`` while another kept executing.
+    """
     row = get_task(task_id)
     if row is None:
         return None
     if row.get("read_only"):
-        # 议程是已发生的事实记录，不存在"取消"语义（前端也不渲染该按钮）
         return row
     if row["status"] in TERMINAL_STATUSES:
         return row
+    persisted, changed = _mark_cancel_requested(task_id)
+    if persisted is None:
+        return None
+    if changed:
+        record_audit(actor="user", action="task.cancel.request", target=row["type"],
+                     after={"status": row["status"], "cancel_requested": True}, task_id=task_id)
     handle = _HANDLES.get(task_id)
     if handle is not None and not handle.done():
+        handle.add_done_callback(
+            lambda done, tid=task_id, t=row["type"]: _confirm_local_handle_cancel(tid, t, done)
+        )
         handle.cancel()
-    else:
-        _set_status(task_id, "canceled", finished_at=beijing_now_naive())
-        record_audit(actor="user", action="task.cancel", target=row["type"],
-                     after={"status": "canceled"}, task_id=task_id)
     return get_task(task_id)
 
 
@@ -673,9 +772,13 @@ def reconcile_on_startup() -> int:
         ).scalars().all()
         n = 0
         for r in rows:
-            r.status = "failed"
-            r.error = json.dumps({"code": "Interrupted", "message": "服务重启，任务中断",
-                                  "retryable": True}, ensure_ascii=False)
+            if r.cancel_requested_at is not None:
+                r.status = "canceled"
+                r.error = None
+            else:
+                r.status = "failed"
+                r.error = json.dumps({"code": "Interrupted", "message": "服务重启，任务中断",
+                                      "retryable": True}, ensure_ascii=False)
             r.finished_at = beijing_now_naive()
             n += 1
 
@@ -693,4 +796,8 @@ def reconcile_on_startup() -> int:
 
         if n:
             db.commit()
+    # Never refund a started external call. Only stale never-started reservations are recoverable.
+    with contextlib.suppress(Exception):
+        from app.services.agent_budget import recover_stale_reservations
+        recover_stale_reservations(get_session_factory())
     return n

@@ -1,11 +1,11 @@
-# 当前交接：G4 / IMP-052 Agent 权限、批准与预算收口
+# 当前交接：G4 / IMP-052 完成候选 · 预算/取消最终收口
 
 
 > **2026-09-21 多窗口审计及晚间收口**：详见 `docs/review/chatgpt-multiwindow-audit-20260921.md`。审计指出的三类执行缺口已进一步收口：① BUG-020 的条件激活不再只靠记忆，`scripts/ledger-runtime-selection.py` 可在下一交易日 08:30–09:15 开工窗把静态 G4 临时抢回 G0，错过窗口/日历未知均 fail-closed；② 本机 AI-Trading 后端已受控停服、同步 `master@c272d260`、重启并通过 SQLite/health/30 scheduler/snapshot 验收；③ 前端误判已纠正——Next 15.5.25 进程属于另一个 `vide-trading` 仓库，AI-Trading 当时没有前端进程，自身 `npm ci` 后在 Node 22.22.2 下 695/695 tests 与 Next 16.3.3 build 全绿。Jev 真实 assistant 请求也已新增 `assistant_tool_router` receipt；RSH-030 human gold 仍必须独立人工完成。IMP-053 actual-fill 契约与唯一 `54b7e0c` RECOVERY 仍按各自 owner 保留。任务状态仍以 stage 为准，不以本段建立第二账本。
 
-> **定位 / 摘要（2026-09-22 当前）**：BUG-020 与前序审计收口已完成，runtime selector 进入 `G4 / IMP-052`。参数晋级主体已由 PR #100 合入、路径卫生 PR #101 合入；当前 U49 follow-up 只修“promotion token 不能只挂 HTTP、service 直调用也必须校验”的权限边界，不改真实参数、策略阈值或生产开关。该 follow-up 收口后 IMP-052 仍为“部分完成”，下一纵切才是统一 usage/token、跨进程 quota 与 cancellation/timeout/retry 预算。Candidate B / IMP-053 与 RSH-030 human gold 继续按各自 owner/effect prerequisite，不被本片跨门。
+> **定位 / 摘要（2026-09-22 当前）**：BUG-020 与前序审计收口已完成；`G4 / IMP-052` 的前序 promotion authority 已由 PR #100/#101/#102 合入。本分支 `chatgpt/imp052-budget-cancel` 正在完成最后预算/取消纵切：统一 metadata usage/token、跨进程 quota slot、部署日 legacy backfill、unknown usage fail-closed、输入/输出/timeout/retry 高水位、跨 worker cancel intent 与真实终态。若本分支 exact-HEAD 发布门和 post-merge master CI 全绿，W05 将把 IMP-052 整项转为已完成；下一任务只能由合并后 runtime selector 重新机械选择。
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** 当前主切片为 G4/IMP-052；本轮只实现/审计参数晋级的独立批准 authority 与原子消费，不自动批准任何现实候选、不改参数值、不写真实交易。每个 follow-up PR 仍需 exact-HEAD `DegradedRelease`、required CI、release_check 与 post-merge CI，不能用 #100/#101 的回执替代新 HEAD。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** 本轮不改任何真实策略参数、权重、交易阈值或下单权限。C 类仍纯提案；参数晋级仍要求独立 promotion token。新预算表只管理资源/usage/终态，并提供后台只读查询，不向普通前台新增调试控制。当前分支必须重新获得自己的 exact-HEAD `DegradedRelease`、required CI、`release_check` 与 post-merge CI，不能复用 #100–#102 回执。
 
 
 
@@ -346,7 +346,19 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **P1-95 后置守护断链**：旧 `AgentExperiment` 后置裁决存在但当前没有真实 attach caller；若仅打开人工晋级会造成“能生效但不再自动监控劣化”。本片把 signal-health baseline 采集设为 promotion 硬前置，并把参数写、批准消费与 30 日 experiment 创建放在同事务；基线失败整笔不生效，experiment baseline 同时绑定 approval digest 与效果证据 SHA。
 - **P1-96 提交后部分失败不能撒谎**：数据库已提交后若进程内 runtime refresh 失败，不能回报“无副作用”。返回明确 `runtime_refreshed=false/restart_required=true`，mutation task 记“DB 已生效但 runtime 未刷新”；同一 consumed approval 重试幂等且只做 runtime reconciliation，不重复参数写/实验创建。
 - **迁移隔离**：Alembic `env.py` 强制读取 `settings.database_url`；首次临时 ini 探针因此没有使用 `/tmp` URL。实际落点经核验为 worktree 自己的 `data/ashare.db`，不是主运行库；已在该隔离库验证 `e1a7b4c2d9f0 → f4a2c8e1b6d3 → e1a7b4c2d9f0`，新表 17 列创建/删除正确，随后删除隔离 DB。
-- **边界/下一步**：这只关闭参数 promotion authority/evidence/atomicity；IMP-052 仍为部分完成。统一 usage/token、跨进程配额预留/恢复、模型/任务取消传播仍是下一纵切，须重新领取后再施工。
+- **后续承接**：promotion authority 结论继续有效；最后预算/取消纵切见 `docs/review/imp052-budget-cancel-20260922.md`。两片共同通过发布门后，IMP-052 不再保留“usage/quota/cancel 未完成”的 P0 阻断。
+
+
+## 8.20 U49 主动审计回执（IMP-052 Budget / Usage / Cancel）
+
+- **阶段/基点**：`Preflight + candidate implementation`；基于 `master@65b7922763057e12bc34a70a331d87ffa12d894a`，worktree=`chatgpt/imp052-budget-cancel`。
+- **跨进程 quota**：旧 audit/task 计数的 check-then-call 竞态改为 `agent_resource_usage` numbered slot 唯一约束；不同进程、task、purpose 仍竞争同一北京日 scope，不可借换任务重置额度。
+- **unknown usage**：provider 不回 token、timeout/crash 后 started 调用不按 0 退款；自主 LLM scope 当日遇 unknown 直接停止后续消费。普通业务 LLM/Jev 只进 metadata telemetry，不占自治 8 次额度。
+- **部署日连续性**：Alembic 首次建表从当天 `agenda.generate/triage.llm/code.propose` 与已执行 Agenda A/B/C backfill；真实生产 DB 的 `/tmp` 副本已验证 upgrade/downgrade/reupgrade 与 integrity。
+- **I/O/time/retry**：input/output char、model timeout/retry、task wall-time 均为 executable policy；Assistant 流式输出在 delta 发给用户前检查。Jev attempts 按真实重试次数回执。
+- **取消真实终态**：`cancel_requested_at` 是 intent；无本地 owner handle 只显示「取消中」，不得直接写 canceled。owner 确认停止或重启 reconcile 后才进入 canceled；TaskTimeout 单独为 failed。
+- **统一查询面**：LLM/Jev 只落 metadata receipt；Jev 原 metrics/JSONL 作为运维 telemetry 保留，production lifespan 额外镜像到统一表；prompt/messages/state/questions/凭据均不写入。
+- **当前完成候选**：确定性专项、迁移 parity、真实 DB 副本、backend/frontend 全量门均已在候选代码上通过；最终完成结论仍以本分支 exact-head release、required CI、release_check 与 post-merge master CI 为准。
 
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）

@@ -146,12 +146,38 @@ def resolve_cli_path(explicit: str = "") -> str | None:
     return str(candidates[-1]) if candidates else None
 
 
+def _normalized_usage(raw: Any) -> dict[str, int] | None:
+    """Normalize OpenAI/Claude-style token usage; missing/partial usage stays unknown."""
+    if not isinstance(raw, dict):
+        return None
+    inp = raw.get("input_tokens", raw.get("prompt_tokens"))
+    out = raw.get("output_tokens", raw.get("completion_tokens"))
+    try:
+        inp_i = int(inp) if inp is not None else None
+        out_i = int(out) if out is not None else None
+    except (TypeError, ValueError):
+        return None
+    if inp_i is None or out_i is None or inp_i < 0 or out_i < 0:
+        return None
+    return {"input_tokens": inp_i, "output_tokens": out_i}
+
+
+def _emit_usage(callback: Callable[[dict[str, int] | None], None] | None, raw: Any) -> None:
+    if callback is None:
+        return
+    try:
+        callback(_normalized_usage(raw))
+    except Exception as exc:  # telemetry callback must not change model success semantics
+        log.debug("LLM usage callback failed: %s", type(exc).__name__)
+
+
 def chat_completion_via_cli(
     model: str,
     messages: list[dict[str, str]],
     *,
     cli_path: str = "",
     timeout: float = 120.0,
+    usage_callback: Callable[[dict[str, int] | None], None] | None = None,
 ) -> str:
     """子进程调 `claude -p` 无头模式，返回最终回复文本。
 
@@ -216,6 +242,7 @@ def chat_completion_via_cli(
     if not isinstance(content, str) or not content.strip():
         raise LLMError("claude_cli 回复为空", LLMFailure.EMPTY)
     _warn_if_model_unrecognized(proc.stderr, model)
+    _emit_usage(usage_callback, body.get("usage"))
     return content
 
 
@@ -246,6 +273,7 @@ def chat_completion(
     client: httpx.Client | None = None,
     provider: str = "openai",
     cli_path: str = "",
+    usage_callback: Callable[[dict[str, int] | None], None] | None = None,
 ) -> str:
     """按 provider 分发调用，返回回复文本。
 
@@ -258,6 +286,7 @@ def chat_completion(
     if provider == "claude_cli":
         return chat_completion_via_cli(
             model, messages, cli_path=cli_path, timeout=max(timeout, 120.0),
+            usage_callback=usage_callback,
         )
     if not (base_url and api_key and model):
         raise LLMError("LLM 未配置 base_url/api_key/model", LLMFailure.NOT_CONFIGURED)
@@ -297,6 +326,7 @@ def chat_completion(
         ) from exc
     if not isinstance(content, str) or not content.strip():
         raise LLMError("LLM 回复为空", LLMFailure.EMPTY)
+    _emit_usage(usage_callback, body.get("usage"))
     return content
 
 

@@ -47,7 +47,7 @@
 
 **Agent 权限、预算与能力就绪**
 
-- **状态**：部分完成
+- **状态**：已完成
 - **优先级**：P0
 - **阶段门**：G4
 - **门内序**：10
@@ -57,12 +57,12 @@
 - **方案依据**：主方案 §6.7–§6.9；智能体附件 A/E
 - **范围**：先核本项目 C 类宿主执行、参数晋级与权限/预算，再比较外部候选。涉及 backend/app/services/code_executor.py、agent_params.py、experiments.py、evolution.py；不以候选 SDK 修复替代本项目止险。
 - **验收**：无批准/无完整证据不写线上策略覆盖；不运行应用内未隔离补丁；提示注入、缺policy、取消及未知用量失败关闭；现有合法低风险能力不退化；返回任务状态反映实际副作用。
-- **证据**：前轮C纯提案与影子止险已取证并保留。2026-09-22 本纵切继续关闭参数晋级权限缺口：新增独立 `agent_param_promotion_approval`，人工先读 exact review package，再用独立于普通 API token 的 `ASHARE_AGENT_PROMOTION_TOKEN` 创建最多 24h 的一次性批准；批准绑定候选/当前基线/影子证据三组 digest 与仓库内 `docs/review|docs/research|artifacts` 真实效果证据文件的 SHA-256。消费时再次重算全部身份，并把 candidate CAS、approval consume、live-baseline CAS、参数写入及 30 日后置实验创建放进同一事务；任何候选/证据/基线/文件漂移、批准撤销/过期/重复消费、负面或不足 shadow verdict、实验基线采集失败均不写运行值。提交后 runtime refresh 若失败不伪装“无副作用”，返回 `runtime_refreshed=false/restart_required=true`，同一批准幂等重试只做 reconciliation。#100 合并后的 U49 复核又发现首版专用 token 只挂在 HTTP dependency，内部代码可绕过路由直接调用 approval service；后续加固把同一 token 判定下沉为 `core/auth.py` 唯一判据，创建/撤销 service 也必须显式传入并通过，HTTP 只负责 transport。迁移已在隔离 worktree DB 验证 upgrade/downgrade；定向/全量与最终精确提交见 handoff/发布回执。
-- **下一步**：参数晋级的“独立批准来源 → exact evidence binding → 一次性原子消费 → 后置监控/回滚”工程门在本纵切收口后，不再恢复 evaluator 自批或 `approved=true` 布尔批准。IMP-052 **仍保持部分完成**：下一纵切只处理统一 usage/token 计账、跨进程配额预留/恢复与取消传播；这些未验收前不得宣称 Agent 权限/预算整项完成。
+- **证据**：前轮C纯提案与影子止险已取证并保留。2026-09-22 本纵切继续关闭参数晋级权限缺口：新增独立 `agent_param_promotion_approval`，人工先读 exact review package，再用独立于普通 API token 的 `ASHARE_AGENT_PROMOTION_TOKEN` 创建最多 24h 的一次性批准；批准绑定候选/当前基线/影子证据三组 digest 与仓库内 `docs/review|docs/research|artifacts` 真实效果证据文件的 SHA-256。消费时再次重算全部身份，并把 candidate CAS、approval consume、live-baseline CAS、参数写入及 30 日后置实验创建放进同一事务；任何候选/证据/基线/文件漂移、批准撤销/过期/重复消费、负面或不足 shadow verdict、实验基线采集失败均不写运行值。提交后 runtime refresh 若失败不伪装“无副作用”，返回 `runtime_refreshed=false/restart_required=true`，同一批准幂等重试只做 reconciliation。#100 合并后的 U49 复核又发现首版专用 token 只挂在 HTTP dependency，内部代码可绕过路由直接调用 approval service；后续加固把同一 token 判定下沉为 `core/auth.py` 唯一判据，创建/撤销 service 也必须显式传入并通过，HTTP 只负责 transport。迁移已在隔离 worktree DB 验证 upgrade/downgrade；定向/全量与最终精确提交见 handoff/发布回执。预算/取消终片另见 `docs/review/imp052-budget-cancel-20260922.md`：跨进程 slot 竞争、真实 DB 副本部署日 backfill、unknown token、I/O/time/retry 高水位、跨 worker cancel、Jev/LLM metadata sink、前后端完整门均有反例/验收。
+- **下一步**：2026-09-22 最后一纵切已补齐 `agent_resource_usage` 持久预算/usage ledger、北京日原子 slot、部署日 legacy backfill、unknown token fail-closed、输入/输出/timeout/retry 高水位、跨进程 `cancel_requested_at` 与 owner-confirmed 终态；结合前序 C 纯提案和 promotion authority，本任务工程验收闭环。后续仅按 U48/GOV-027 做机制生命周期复核；若预算策略、模型 provider 或进程拓扑变化再重开，不另建第二预算系统。
 - **恢复**：撤销有风险能力，保留只读服务与审计；worktree 不当 OS 沙箱。
 - **实施步骤**：①补贴合现状的权限矩阵；②C 类不因禁改 tests 就安全，测试导入 app 同样执行源码；③将结构有效/风险未剧变与效果达标/批准晋级分开，保留实验与CAS恢复；④覆盖取消、凭据最小化、输入/输出/时间/重试预算；⑤核源码默认与运行有效值差别，禁止修改真实配置来验收；⑥候选累计模型预检额度单独核实，不因换任务重置。
 - **开工前置**：不依赖全仓审计完成或模型付费评测；先验证本项目确定性权限与副作用边界。
-- **本轮边界**：继承既有 C 纯提案/影子止险。本纵切只打开“有独立 promotion-operator 批准时的参数晋级”这一条窄通道，不改任何参数数值或生产开关；普通写凭据不能创建/撤销批准，专用 promotion token 默认空即关闭且禁止与 API token 共用。批准不是自动平台：系统只验证人工已审对象与效果 artifact 的精确身份并一次性消费，不自行判断研究效果是否足够。应用内 evaluator/agenda 仍只能产候选与 shadow evidence，不能取得 promotion token、不能伪造 artifact、不能自批。
+- **本轮边界**：最终形态仍不改真实策略参数/交易权限：C 类只产待审 patch；A 类只产 shadow 候选，只有独立 promotion-operator 批准可晋级。预算层只约束资源与任务真实终态，不把 token/字符预算变成金融策略阈值；普通业务 LLM 只写统一 metadata telemetry，不偷占自主 8 次额度。部署日旧模型用量不可追溯时按 unknown fail-closed，不通过重启/换 task 重置额度。
 - **后台化**：进化/参数/任务/仓库追踪/诊断控制退出普通前台，但后台已有安全权限、暂停、审计和恢复保留。不能只隐藏按钮或把运营动作塞进用户聊天框；先核后台维护入口与鉴权。应用内代码仍纯提案，无证据不得晋级。
 
 

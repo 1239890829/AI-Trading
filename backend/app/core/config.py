@@ -387,8 +387,14 @@ class Settings(BaseSettings):
     agent_venv_python: str = ""             # 沙箱门禁用的 pytest 解释器（默认 backend/.venv/bin/python）
     agent_evolution_hour: int = 15
     agent_evolution_minute: int = 45
-    agent_daily_llm_budget: int = 8        # 每日进化相关 LLM 调用上限（防失控烧钱）
-    agent_daily_task_budget: int = 3       # 每日自动执行的改进任务数上限
+    agent_daily_llm_budget: int = 8        # 每日自主模型调用上限；DB slot 原子预留
+    agent_daily_task_budget: int = 3       # 每日自动执行改进任务上限；DB slot 原子预留
+    agent_model_max_timeout_seconds: float = 180.0  # Agent 模型单次 wall-time 上限
+    agent_model_max_retries: int = 2       # 单次模型调用最多额外重试次数（Jev 当前行为=2）
+    agent_model_max_input_chars: int = 250_000      # Agent 模型单次输入字符高水位（发送前 fail closed）
+    agent_model_max_output_chars: int = 150_000     # Agent 模型单次输出字符高水位（超限不得采用）
+    agent_task_timeout_seconds: float = 600.0       # 控制台任务 wall-time 上限
+    agent_budget_reservation_ttl_seconds: int = 300 # 未 start 的租约异常中断后可释放
 
     @model_validator(mode="before")
     @classmethod

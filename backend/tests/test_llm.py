@@ -448,3 +448,46 @@ def test_llm_summarizer_digest_grounding_allows_source_facts():
     n0 = out["news"][0]
     assert n0["digest_source"] == "LLM"
     assert n0["digest"] == "公司中标金额 12.5 亿元，占上年营收 8.3%"
+
+
+def test_llm_analyzer_reports_transport_usage_without_prompt_text():
+    seen = []
+    def handler(req):
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": '{"judgements": {}}'}}],
+            "usage": {"prompt_tokens": 44, "completion_tokens": 6},
+        })
+    client = _client_with(handler)
+    LLMAnalyzer(
+        base_url="https://x", api_key="k", model="m", client=client,
+        usage_reporter=seen.append,
+    ).analyze(_review_data(), _method())
+    assert len(seen) == 1
+    receipt = seen[0]
+    assert receipt["state"] == "succeeded"
+    assert receipt["usage"] == {"input_tokens": 44, "output_tokens": 6}
+    assert receipt["input_chars"] > 0 and receipt["output_chars"] > 0
+    assert "dimensions" not in str(receipt)
+
+
+def test_llm_summarizer_reports_transport_usage_without_prompt_text():
+    seen = []
+    def handler(req):
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": '{"items": [{"id": "news:0", "digest": "公司因涉嫌信息披露违规被立案调查"}]}'}}],
+            "usage": {"prompt_tokens": 21, "completion_tokens": 4},
+        })
+    client = _client_with(handler)
+    news, ann = _news_rows()
+    # Empty maps make the summarizer fall back to rules per item, but the transport itself succeeded
+    # and must still report its real token receipt exactly once.
+    LLMSummarizer(
+        base_url="https://x", api_key="k", model="m", client=client,
+        usage_reporter=seen.append,
+    ).summarize(news, ann)
+    assert len(seen) == 1
+    receipt = seen[0]
+    assert receipt["state"] == "succeeded"
+    assert receipt["usage"] == {"input_tokens": 21, "output_tokens": 4}
+    assert receipt["input_chars"] > 0 and receipt["output_chars"] > 0
+    assert "items" not in str(receipt)

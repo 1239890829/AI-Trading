@@ -16,6 +16,8 @@ def _reset(monkeypatch):
     monkeypatch.setattr(settings, "jev_model", "jev-test")
     monkeypatch.setattr(settings, "jev_timeout_seconds", 1.0)
     monkeypatch.setattr(settings, "jev_max_state_chars", 20_000)
+    monkeypatch.setattr(settings, "agent_model_max_timeout_seconds", 180.0)
+    monkeypatch.setattr(settings, "agent_model_max_retries", 2)
     monkeypatch.setattr(settings, "jev_usage_log_enabled", False)
     monkeypatch.delenv("JEV_API_KEY", raising=False)
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
@@ -111,7 +113,7 @@ def test_transient_status_retries_then_succeeds(monkeypatch):
     monkeypatch.setattr(jc.time, "sleep", lambda _s: None)
     out = jc.evaluate({"x": 1}, _questions(), purpose="retry")
     assert out["ok"] is True and out["answers"]["route"]["choice"] == "b"
-    assert count["n"] == 3
+    assert count["n"] == 3 and out["attempts"] == 3
 
 
 def test_answer_shape_mismatch_fails_without_response_body(monkeypatch):
@@ -212,3 +214,99 @@ def test_usage_receipt_failure_never_breaks_jev_result(monkeypatch, tmp_path):
     ))
     out = jc.evaluate({"x": 1}, _questions(), purpose="receipt-io-failure")
     assert out["ok"] is True and out["answers"]["route"]["choice"] == "b"
+
+
+def test_retry_budget_can_disable_jev_retries(monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-only-key")
+    monkeypatch.setattr(settings, "agent_model_max_retries", 0)
+    count = {"n": 0}
+    def fake(*_a, **_k):
+        count["n"] += 1
+        return _response(503, {"error": "busy"})
+    monkeypatch.setattr(jc, "_post", fake)
+    out = jc.evaluate({"x": 1}, _questions(), purpose="retry-budget")
+    assert out["ok"] is False and out["attempts"] == 1 and count["n"] == 1
+
+
+def test_jev_timeout_above_agent_policy_fails_before_network(monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-only-key")
+    monkeypatch.setattr(settings, "jev_timeout_seconds", 181.0)
+    monkeypatch.setattr(settings, "agent_model_max_timeout_seconds", 180.0)
+    monkeypatch.setattr(jc, "_post", lambda *a, **k: pytest.fail("network must not run"))
+    out = jc.evaluate({"x": 1}, _questions(), purpose="timeout-budget")
+    assert out["skipped"] is True and out["reason"].startswith("timeout_budget_exceeded:")
+
+
+def test_durable_usage_sink_receives_metadata_only(monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-only-key")
+    monkeypatch.setattr(jc, "_post", lambda *_a, **_k: _response(
+        200,
+        {
+            "model": "jev-sink",
+            "answers": {"route": {
+                "type": "choice", "choice": "a", "confidence": 0.9,
+                "probabilities": {"a": 0.9, "b": 0.1},
+            }},
+            "usage": {"input_tokens": 31, "output_tokens": 4},
+        },
+    ))
+    seen = []
+    jc.set_usage_sink(seen.append)
+    try:
+        secret_context = "SINK_MUST_NOT_CONTAIN_THIS_CONTEXT"
+        out = jc.evaluate({"text": secret_context}, _questions(), purpose="sink-test")
+        assert out["ok"] is True
+        assert len(seen) == 1
+        row = seen[0]
+        assert row["purpose"] == "sink-test"
+        assert row["status"] == "ok" and row["model"] == "jev-sink"
+        assert row["usage"] == {"input_tokens": 31, "output_tokens": 4}
+        assert row["attempts"] == 1 and row["input_chars"] > 0
+        body = str(row)
+        assert secret_context not in body and "Choose a route" not in body
+    finally:
+        jc.set_usage_sink(None)
+
+
+def test_global_usage_sink_receives_exactly_one_metadata_receipt(monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-only-key")
+    seen = []
+    jc.set_usage_sink(seen.append)
+    monkeypatch.setattr(jc, "_post", lambda *_a, **_k: _response(
+        200, {
+            "model": "jev-test-actual",
+            "answers": {"route": {
+                "type": "choice", "choice": "a", "confidence": 0.9,
+                "probabilities": {"a": 0.9, "b": 0.1},
+            }},
+            "usage": {"input_tokens": 12, "output_tokens": 3},
+        },
+    ))
+    out = jc.evaluate({"ticket": "hello"}, _questions(), purpose="sink-test")
+    assert out["ok"] is True
+    assert len(seen) == 1
+    receipt = seen[0]
+    assert receipt["purpose"] == "sink-test" and receipt["status"] == "ok"
+    assert receipt["usage"] == {"input_tokens": 12, "output_tokens": 3}
+    assert receipt["attempts"] == 1 and receipt["input_chars"] > 0
+    assert "ticket" not in str(receipt) and "hello" not in str(receipt)
+
+
+def test_global_usage_sink_failure_invalidates_successful_jev_result(monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-only-key")
+    def broken(_receipt):
+        raise RuntimeError("db unavailable")
+    jc.set_usage_sink(broken)
+    monkeypatch.setattr(jc, "_post", lambda *_a, **_k: _response(
+        200, {
+            "model": "jev-test",
+            "answers": {"route": {
+                "type": "choice", "choice": "b", "confidence": 0.8,
+                "probabilities": {"a": 0.2, "b": 0.8},
+            }},
+            "usage": {"input_tokens": 10, "output_tokens": 2},
+        },
+    ))
+    out = jc.evaluate({"x": 1}, _questions(), purpose="sink-fail")
+    assert out["ok"] is False
+    assert out["reason"] == "usage_accounting_failed"

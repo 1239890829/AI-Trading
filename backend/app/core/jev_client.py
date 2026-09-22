@@ -19,7 +19,7 @@ from pathlib import Path
 import re
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -49,6 +49,16 @@ _metrics: dict[str, Any] = {
         "coverage_checked": 0, "coverage_missed": 0,
     }),
 }
+
+_usage_sink: Callable[[dict[str, Any]], None] | None = None
+
+
+def set_usage_sink(sink: Callable[[dict[str, Any]], None] | None) -> None:
+    """Register process-lifetime metadata sink; payload never contains state/questions text."""
+    global _usage_sink
+    _usage_sink = sink
+
+
 class JevError(RuntimeError):
     """Jev 请求/响应不满足项目契约。"""
 
@@ -132,7 +142,8 @@ def _persist_usage(
 
 def _record(purpose: str, *, ok: bool = False, skipped: bool = False,
             usage: dict | None = None, latency_ms: float = 0.0,
-            model: str | None = None, reason: str | None = None) -> None:
+            model: str | None = None, reason: str | None = None,
+            attempts: int = 0, input_chars: int = 0) -> bool:
     usage = usage or {}
     inp = int(usage.get("input_tokens") or 0)
     out = int(usage.get("output_tokens") or 0)
@@ -154,14 +165,27 @@ def _record(purpose: str, *, ok: bool = False, skipped: bool = False,
         elif not skipped:
             row["failed"] += 1
         row["input_tokens"] += max(0, inp)
+    status = "skipped" if skipped else ("ok" if ok else "failed")
     _persist_usage(
-        purpose,
-        status="skipped" if skipped else ("ok" if ok else "failed"),
-        model=model,
-        usage=usage,
-        latency_ms=latency_ms,
-        reason=reason,
+        purpose, status=status, model=model, usage=usage,
+        latency_ms=latency_ms, reason=reason,
     )
+    sink = _usage_sink
+    if sink is not None and not skipped:
+        try:
+            sink({
+                "purpose": str(purpose or "unspecified")[:80],
+                "status": status, "model": str(model or "")[:80],
+                "usage": usage if isinstance(usage, dict) else None,
+                "attempts": max(1, int(attempts or 1)),
+                "input_chars": max(0, int(input_chars or 0)),
+                "latency_ms": max(0.0, float(latency_ms or 0.0)),
+                "reason": str(reason or "")[:120] or None,
+            })
+        except Exception as exc:  # native metrics/JSONL remain, but the durable unified ledger failed
+            log.warning("Jev durable usage sink failed: %s", type(exc).__name__)
+            return False
+    return True
 
 
 def metrics_snapshot() -> dict:
@@ -266,6 +290,7 @@ def status_snapshot() -> dict:
 
 
 def _reset_metrics_for_tests() -> None:
+    set_usage_sink(None)
     with _lock:
         _metrics.update(calls=0, ok=0, failed=0, skipped=0,
                         input_tokens=0, output_tokens=0, latency_ms=0.0)
@@ -365,6 +390,7 @@ def evaluate(
         _walk_sensitive(state)
         _walk_sensitive(questions, "questions")
         raw = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+        request_chars = len(raw) + len(json.dumps(questions, ensure_ascii=False, separators=(",", ":")))
         max_chars = int(getattr(cfg, "jev_max_state_chars", 20_000))
         if len(raw) > max_chars:
             raise JevError(f"state_too_large:{len(raw)}>{max_chars}")
@@ -375,13 +401,22 @@ def evaluate(
     chosen_model = requested_model
     base = str(getattr(cfg, "jev_base_url", "https://api.typesafe.ai")).rstrip("/")
     timeout = float(getattr(cfg, "jev_timeout_seconds", 8.0))
+    max_timeout = max(0.0, float(getattr(cfg, "agent_model_max_timeout_seconds", 180.0)))
+    if timeout > max_timeout:
+        reason = f"timeout_budget_exceeded:{timeout:g}>{max_timeout:g}"
+        _record(purpose, skipped=True, model=chosen_model, reason=reason)
+        return {"ok": False, "skipped": True, "reason": reason}
+    max_retries = max(0, min(2, int(getattr(cfg, "agent_model_max_retries", 2))))
+    max_attempts = 1 + max_retries
     payload = {"model": chosen_model, "state": state, "questions": questions}
     started = time.perf_counter()
     response: httpx.Response | None = None
+    attempts = 0
     try:
-        for attempt in range(3):
+        for attempt in range(max_attempts):
+            attempts = attempt + 1
             response = _post(f"{base}/v1/systemone", key, payload, timeout)
-            if response.status_code not in {429, 503, 529} or attempt == 2:
+            if response.status_code not in {429, 503, 529} or attempts >= max_attempts:
                 break
             time.sleep(0.25 * (2 ** attempt))
         latency_ms = round((time.perf_counter() - started) * 1000, 2)
@@ -389,30 +424,39 @@ def evaluate(
             status = response.status_code if response is not None else "none"
             reason = f"http_{status}"
             _record(
-                purpose, latency_ms=latency_ms, model=chosen_model, reason=reason
+                purpose, latency_ms=latency_ms, model=chosen_model, reason=reason,
+                attempts=attempts, input_chars=request_chars,
             )
-            return {"ok": False, "reason": reason, "latency_ms": latency_ms}
+            return {"ok": False, "reason": reason, "latency_ms": latency_ms, "attempts": attempts}
         data = response.json()
         answers = data.get("answers")
         if not isinstance(answers, dict) or set(answers) != set(questions):
             raise JevError("answer_shape_mismatch")
         usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
         actual_model = str(data.get("model") or chosen_model)
-        _record(
-            purpose, ok=True, usage=usage, latency_ms=latency_ms, model=actual_model
+        accounted = _record(
+            purpose, ok=True, usage=usage, latency_ms=latency_ms, model=actual_model,
+            attempts=attempts, input_chars=request_chars,
         )
+        if not accounted:
+            return {
+                "ok": False, "reason": "usage_accounting_failed",
+                "latency_ms": latency_ms, "attempts": attempts,
+            }
         return {
             "ok": True,
             "model": actual_model,
             "answers": answers,
             "usage": usage,
             "latency_ms": latency_ms,
+            "attempts": attempts,
         }
     except (httpx.HTTPError, ValueError, JevError) as exc:
         latency_ms = round((time.perf_counter() - started) * 1000, 2)
         reason = str(exc) if isinstance(exc, JevError) else type(exc).__name__
         _record(
-            purpose, latency_ms=latency_ms, model=chosen_model, reason=reason
+            purpose, latency_ms=latency_ms, model=chosen_model, reason=reason,
+            attempts=attempts, input_chars=request_chars,
         )
         log.info("Jev unavailable purpose=%s reason=%s", purpose, reason)
-        return {"ok": False, "reason": reason, "latency_ms": latency_ms}
+        return {"ok": False, "reason": reason, "latency_ms": latency_ms, "attempts": attempts}
