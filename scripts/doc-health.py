@@ -2029,10 +2029,22 @@ def _task_ref_list(raw: str) -> list[str]:
 
 
 def derive_current_stage_selection(tasks: dict[str, tuple[str, dict[str, str]]]) -> tuple[str | None, str | None, list[str]]:
-    """Derive the lowest actionable blocker gate and its ordered candidates."""
+    """Derive the unique ordinary main slice from G0–G4.
+
+    Safety rule: any actionable blocker anywhere in G0–G4 outranks every non-blocker.
+    The current gate is the *lowest gate containing an actionable blocker*.  Only after no
+    actionable blockers remain anywhere do we fall back to the lowest gate containing an
+    actionable non-blocker.  This closes the U44 dead-end where clearing the final blocker made
+    ``continue`` return ``None`` even though ordinary work was still actionable.
+
+    G5 remains explicit acceptance/release work and GX remains companion governance; neither is
+    auto-selected as an ordinary main development slice here.
+    """
     actionable_states = {"待执行", "进行中", "部分完成", "待交付"}
     done_states = {"已完成"}
     priority_rank = {"P0": 0, "P1": 1, "P2": 2}
+    role_rank = {"阻断": 0, "非阻断": 1}
+    ordinary_gates = [f"G{i}" for i in range(5)]
 
     def hard_deps_done(fields: dict[str, str]) -> bool:
         for dep in _task_ref_list(fields.get("依赖", "")):
@@ -2040,31 +2052,47 @@ def derive_current_stage_selection(tasks: dict[str, tuple[str, dict[str, str]]])
                 return False
         return True
 
-    blockers: dict[str, list[tuple[str, dict[str, str]]]] = {gate: [] for gate in GATE_ORDER}
+    actionable: dict[str, list[tuple[str, dict[str, str]]]] = {gate: [] for gate in ordinary_gates}
     for tid, (_, fields) in tasks.items():
         gate = fields.get("阶段门", "")
+        role = fields.get("门禁角色", "")
         if (
-            gate in GATE_ORDER
-            and fields.get("门禁角色") == "阻断"
+            gate in actionable
+            and role in role_rank
             and fields.get("状态") in actionable_states
             and hard_deps_done(fields)
         ):
-            blockers[gate].append((tid, fields))
+            actionable[gate].append((tid, fields))
 
-    for gate in sorted(GATE_ORDER, key=GATE_ORDER.get):
-        candidates = blockers[gate]
-        if not candidates:
-            continue
-        candidates.sort(
-            key=lambda item: (
-                priority_rank.get(item[1].get("优先级"), 99),
-                int(item[1].get("门内序", "999999")),
-                item[0],
-            )
+    current_gate: str | None = None
+    # Blockers dominate globally: do not spend time on a lower-gate non-blocker while any
+    # higher-gate blocker is actionable. This preserves U45's "阻断优先" contract.
+    for gate in ordinary_gates:
+        if any(fields.get("门禁角色") == "阻断" for _, fields in actionable[gate]):
+            current_gate = gate
+            break
+
+    # If every actionable blocker has closed/waited, U44 must still be able to continue.
+    if current_gate is None:
+        for gate in ordinary_gates:
+            if actionable[gate]:
+                current_gate = gate
+                break
+
+    if current_gate is None:
+        return None, None, []
+
+    candidates = actionable[current_gate]
+    candidates.sort(
+        key=lambda item: (
+            role_rank.get(item[1].get("门禁角色"), 99),
+            priority_rank.get(item[1].get("优先级"), 99),
+            int(item[1].get("门内序", "999999")),
+            item[0],
         )
-        ids = [tid for tid, _ in candidates]
-        return gate, ids[0], ids
-    return None, None, []
+    )
+    ids = [tid for tid, _ in candidates]
+    return current_gate, ids[0], ids
 
 
 def check_stage_gates() -> list[str]:

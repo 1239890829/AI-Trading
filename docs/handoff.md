@@ -1,11 +1,11 @@
-# 当前交接：G4 / IMP-052 · #103 post-merge U49 取消真实性收口
+# 当前交接：GOV-022 · blocker 清零后的 selector fallback 收口
 
 
 > **2026-09-21 多窗口审计及晚间收口**：详见 `docs/review/chatgpt-multiwindow-audit-20260921.md`。审计指出的三类执行缺口已进一步收口：① BUG-020 的条件激活不再只靠记忆，`scripts/ledger-runtime-selection.py` 可在下一交易日 08:30–09:15 开工窗把静态 G4 临时抢回 G0，错过窗口/日历未知均 fail-closed；② 本机 AI-Trading 后端已受控停服、同步 `master@c272d260`、重启并通过 SQLite/health/30 scheduler/snapshot 验收；③ 前端误判已纠正——Next 15.5.25 进程属于另一个 `vide-trading` 仓库，AI-Trading 当时没有前端进程，自身 `npm ci` 后在 Node 22.22.2 下 695/695 tests 与 Next 16.3.3 build 全绿。Jev 真实 assistant 请求也已新增 `assistant_tool_router` receipt；RSH-030 human gold 仍必须独立人工完成。IMP-053 actual-fill 契约与唯一 `54b7e0c` RECOVERY 仍按各自 owner 保留。任务状态仍以 stage 为准，不以本段建立第二账本。
 
-> **定位 / 摘要（2026-09-22 当前）**：BUG-020 与前序审计收口已完成；`G4 / IMP-052` promotion authority 已由 PR #100/#101/#102 合入，预算/统一 usage/跨进程 quota 主体 PR #103 已合入 `master@ab8ec441` 且 post-merge CI 全绿。#103 合并后的 U49 继续反证发现：`asyncio.Task.cancel()` 不能终止已经进入 `to_thread()` 的同步 worker，首版可能出现 DB 已 canceled/TaskTimeout、后台线程仍 drain 的假终态。当前唯一 IMP-052 residual 是该同 owner follow-up：running 改 cooperative checkpoint，in-flight bounded stage drain 后才确认 cancel/timeout，并补 Jev 全局 input/output 高水位与 durable sink fail-closed；不改策略参数、交易权限或既有预算值。该 follow-up 合并并 post-merge 全绿后再由 runtime selector 机械进入下一任务。
+> **定位 / 摘要（2026-09-22 当前）**：`IMP-052` 已经由 PR #100–#104 完整闭环；最新 `master@44b2bb590231523482529ec4c7ed1a553a2d7994` 的 post-merge backend/frontend/docs CI 全绿，真实后端已加载该版本，SQLite revision=`b5c9e7a2d4f1`、`integrity_check=ok`，scheduler 30/30。部署日 usage backfill 真实保留 `agenda.generate/autonomy_llm=unknown` 与 `agenda.B/autonomy_task=unknown`，未因重启清零。阻断项闭环后的 U49 重算随后暴露 GOV-022 selector 死端：旧算法只收 blocker，导致仍有 non-blocker 时返回 `gate=null/task=null`。当前唯一切片是修复该调度 fallback，并完成治理规则传播；不施工下一业务任务。修复版在同一 master 基线重算得到 **G1/BUG-022**，同门候选 `BUG-022 → IMP-048 → IMP-040 → RSH-031`。
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** 本轮不改任何真实策略参数、权重、交易阈值或下单权限。C 类仍纯提案；参数晋级仍要求独立 promotion token。预算/usage 表只管理资源与真实终态，不向普通前台新增调试控制。当前 follow-up 必须重新获得自己的 exact-HEAD `DegradedRelease`、required CI、`release_check` 与 post-merge CI，不能复用 #100–#103 回执。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** 当前治理切片只允许修改 selector/守卫及其权威规则传播，不改真实策略参数、交易阈值、数据源、模型路由或业务功能。该治理 PR 仍必须有自己的 exact-HEAD `DegradedRelease`、required CI、`release_check` 与 post-merge CI；合并后本轮停止，下一次“继续”才可领取 G1/BUG-022。
 
 
 
@@ -45,7 +45,7 @@
 ## 5. 当前接续规则
 
 2026-09-18 规划批已完成理论/产品/大小功能/知识使用/文档治理层面的逐项去向；其 DESIGN_ONLY 边界只描述该历史规划批，不再作为全项目“当前模式”。计划中的实际开发、原始数据/候选实证和运行验收仍按各 stage 的真实状态继续。
-Codex收到短提示后先从最新 `master` 重读 AGENTS、handoff、协作规范、总账 §5.9 和对应 stage。网页派工与用户调用 `ashare-ledger-continue` 的“继续任务/继续”使用同一算法：先运行 `scripts/ledger-runtime-selection.py` 重算 stage 明示运行条件，再按**最低可行动阻断 G 门 → 门禁角色 → P0/P1/P2 → 门内序 → 硬依赖**选一刀；`效果前置` 只限制效果主张/晋级，不得被忽略。一次“继续”只授权一个主切片，Codex不得连续扫账本或自行跨门。
+Codex收到短提示后先从最新 `master` 重读 AGENTS、handoff、协作规范、总账 §5.9 和对应 stage。网页派工与用户调用 `ashare-ledger-continue` 的“继续任务/继续”使用同一算法：先运行 `scripts/ledger-runtime-selection.py` 重算 stage 明示运行条件；G0–G4 若仍有 blocker，则取最低 blocker 门；**全部 blocker 清零后才回落到最低可行动 non-blocker 门**；随后按门禁角色 → P0/P1/P2 → 门内序 → 硬依赖选一刀。`效果前置` 只限制效果主张/晋级，不得被忽略。一次“继续”只授权一个主切片，Codex不得连续扫账本或自行跨门。
 文字版完整图以product-closure-design §8为准；展示图片只是解释副本，不是状态源。图必须包含后续获准实施的方向，不得宣称已经自动执行或真实券商下单，不出现普通前台配置/调试中心或后台固定分类上限。
 
 ## 6. 2026-09-19 分支收敛结果
@@ -61,22 +61,17 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 本节只记录当前现场，不维护第二份 backlog；权威算法在总账 §5.9，任务元数据在所属 stage。
 
-- **当前主门**：G4
-- **主切片首选**：IMP-052
-- **领取边界**：用户于 2026-09-22 在 BUG-020 完整闭环并清理旧 IMP-020 分支后明确“开始”，runtime selector 同时返回 static/effective=G4/IMP-052；本轮已正式领取 **IMP-052 参数晋级批准/原子消费第一纵切**，不跨到 usage/quota/cancellation 下一纵切。
-- **当前现场**：BUG-020 生产会话已在 `chatgpt/bug020-session-20260922` 完整验收到 15:30；后端 PID=9077 未再 restart，真实 SQLite `integrity_check=ok`/39 tables，30/30 scheduler running，收盘 REST/WS 均明确 `stale/market_closed`，index 6/6、source_rejections=0，Sina snapshot `ready/5566 rows` 且按 240s idle cadence 保持正确 freshness。完整 backend pytest+pyflakes、前端 696/696+tsc+eslint+build、doc-health/public-repo/workspace/diff-check 均通过；详见 `docs/review/bug020-production-session-20260922.md`。
-- **阶段门重算**：BUG-020 闭环后 runtime selector 于 2026-09-22 17:21 北京时间再次返回 static/effective 均为 **G4/IMP-052**、conditions=[]；用户随后明确开工，因此该任务已领取。RSH-030/RSH-031 等继续保留各自效果前置与非阻断语义。
-- G0 的 BUG-028 / BUG-026 / BUG-020 均已完成；G1 的 BUG-029 / IMP-006 / IMP-044 已完成；G2 的 IMP-049 仍为 `待条件` 且尚无可机械判定的运行条件；G3/RSH-026 与 IMP-020 已完成。当前唯一主切片为 G4/IMP-052，本次“开始”只授权其当前参数晋级纵切，不自动连续进入后续预算/取消子片。
-- BUG-020 的 current-value 接纳门区分 source event time / received time、缺失/拒绝/合法空集与身份歧义；旧可信值不会被晚到/非法观测覆盖。2026-09-22 已完成真实交易日整段生产会话：盘中真实 source-time regress、Sina 缺页/DNS 短断、缓存老化、午休与收盘 market_closed、受控 restart/recovery 均形成可追证据并通过。该结果关闭一次性验收，不宣称长期 provider SLA。
-- BUG-029 现以 `ever_sealed/current_sealed/snapshot_state/version` 为唯一 current-state 契约；开板只恢复“进入评估”的资格，不自动获得成交/通知/模拟执行许可。2026-09-18 真实跨源样本已证明涨停池成员可多次开板/回封；旧 v1 归档保持原语义，v2 才使用新状态重放。
-- RSH-031 为 `G1/P1/非阻断/门内序70`，即使同处 G1 也排在阻断项之后；且 `效果前置=RSH-026, IMP-020, RSH-030` 未满足前不得宣称龙头战法有效或接生产权重。
-- U47 不制造跨门例外：IMP-006 已把 `reference_entry → executable_snapshot → PaperOrder fill` 三种价格身份和同一 decision/version 接到通知、模拟仓与页面；IMP-044 只证明通知可靠性工程闭环，不证明买点效果。G2/IMP-049 当前仍 `待条件`，RSH-026 本轮关闭后阶段门顺延到 G3/IMP-020；未来 IMP-049 条件转可行动时仍需重新按最低门算法计算，reference 与实际 shadow fill 永久分名、分母和收益口径。
-- U48 同样不制造跨门例外：W08/GOV-027 为 `GX/P1/持续治理/门内序47`，只可作为不冲突的伴随切片；它先复用 factor/strategy/KB/Jev/opportunity 各自 owner 的既有证据，定义最小生命周期/衰退/成本反馈契约，不建第二总注册表。项目级上层治理入口新增 `skills/living-system-governor/SKILL.md`，用于跨模块方案、重大重构和机制生命周期复核；该 Skill 只提供证据/反证/KEEP-FIX-MERGE-EXPERIMENT-WATCH-RETIRE 决策协议，不拥有派工、生产晋级或阶段门修改权。 v1.2.0 在自我进化基础上进一步加入 U49 主动缺陷发现门；v9.11/U50 又补受控降级全权闭环，避免 Codex 不可用时角色门自锁：后续长期要求/重复纠偏先作为方法论候选，只有形成稳定可复用增量才版本化蒸馏；一次性要求不污染 Core，是否落实以 Git/PR 与后续行为核验，不靠聊天窗口记忆。任何生产降权、阈值变化、策略/Jev 晋级仍回原 owner task 与证据门。
-- U49 不改变阶段门算法，但改变每轮默认动作：继续选刀前、审核放行前、阻断项闭环/换门后、事故/用户纠偏后都要运行有界主动缺陷发现门并写回执；同根 P0/P1 新发现可改变当前验收，跨域发现回原 owner，不自动扩权施工。
-- U50 也不改变阶段门算法，只改变“谁可以完成当前切片”：正常模式仍是 Web Review + Codex；当前 `DEGRADED_FULL_CONTROL` 下网页端按同一阶段门全程操控，每个 PR 必须重新写 exact-HEAD `DegradedRelease`，不能复用一次用户授权跳过逐 PR 发布证据。
-- GX 治理只可作为不冲突的伴随切片。`GOV-026` 的 workspace hygiene 已接 CI/交接，本轮又完成宿主盘点与缓存收口；`GOV-022` 新增 runtime selector，只对 stage 明示且可确定的运行条件做临时选择覆盖，不改变静态账本。BUG-020 因具备显式条件可在完整会话开工窗抢回 G0；IMP-049 仍因条件不可机械证明而保持静态等待。
-
-当前处于 `DEGRADED_FULL_CONTROL`：审计运行态/条件激活/测试离线门已由 latest master + post-merge CI 闭环；本轮最终卫生只允许收口 pytest 临时沙箱生命周期。若 latest master 已包含 `TemporaryDirectory` sandbox owner 且对应 post-merge CI 全绿，则该卫生项也自动闭环，不再为“写已完成”追加文档 PR。Candidate B readiness 仍 blocked，不启动真实交易或参数晋级；BUG-020 已由 2026-09-22 从盘前到收盘的真实整段交易会话闭环，不再以此阻断后续阶段门。
+- **当前治理切片**：GOV-022 selector fallback。`IMP-052` 已完成且不再是活动阻断项。
+- **阻断状态**：当前 G0–G4 没有可行动 blocker；旧 selector 因只收 blocker 错误返回空主门。
+- **当前主门**：G1
+- **主切片首选**：BUG-022
+- **首选依据**：BUG-022 为 P0 / G1 / 非阻断 / 门内序50，硬依赖 BUG-020 已完成。
+- **同门候选顺序**：`BUG-022 → IMP-048 → IMP-040 → RSH-031`；排序依据仍是角色 → P0/P1/P2 → 门内序，不因“更有趣”改序。
+- **领取边界**：用户本轮“继续”已被 GOV-022 调度死端修复消耗；当前 PR 不施工 BUG-022。只有 selector fallback 合入、post-merge CI 全绿并重新计算后，下一次“继续”才授权一个新的普通主切片。
+- **条件任务**：G2/IMP-049 仍为 `待条件` 且没有可机械证明的 active 条件，不因 fallback 被猜测激活。
+- **效果前置**：RSH-031 虽可作为 G1 non-blocker 进入候选，但其 `RSH-030` 等效果前置仍限制效果/生产主张，不因可开工而自动获得策略晋级资格。
+- **运行态**：真实后端已加载 `master@44b2bb5`；SQLite revision=`b5c9e7a2d4f1` / integrity=ok，scheduler 30/30，Agent usage backfill 保留当日 unknown 消费。22:35 北京时间重启后的 market snapshot 为 `unavailable/rows=0`，index coverage=1.0、source rejection=0；这是收盘后冷启动现场，未在本治理切片把它冒充 BUG-022 或新的 provider SLA 结论。
+- **GX 边界**：GOV-022/GOV-024/GOV-025/GOV-027 仍只作治理/伴随能力，不因为 selector fallback 获得业务跨门权。
 
 ## 8. Jev、工具链与协作流当前基线
 
@@ -96,7 +91,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **Degraded reason**：当前 Codex 额度不可用，正常双角色无法持续完成实施→独立审核→发布闭环；旧 exact-HEAD Review 门因此形成自锁。
 - **有效期**：持续到用户明确说 Codex 已恢复/退出降级；不是单 PR 临时口令。但每个 PR 的发布仍必须重新生成 exact-HEAD `DegradedRelease`，不能复用上一 PR 回执。
 - **不降低项**：G0–G5/GX 阶段门、U49 主动反证、branch protection、required CI、latest master、CHANGES_REQUESTED/thread、public-repo scan、workspace/doc-health、敏感信息/范围、post-merge CI、删除功能分支。
-- **当前动作**：BUG-020 与前序审计/CI 已 closeout，阶段门已正式进入 G4/IMP-052。当前 degraded 子片只做参数晋级独立批准、真实效果 artifact SHA 绑定、24h/撤销/一次性消费、candidate/baseline CAS、原子后置实验和 runtime-refresh 真实状态；不得顺手进入 usage/quota/cancellation，也不改真实参数值或生产开关。
+- **当前动作**：IMP-052 已由 PR #100–#104 完成并通过 post-merge CI；当前 degraded 子片只修 GOV-022 的“blocker 清零后 selector 返回空任务”治理缺口并传播权威规则。该 PR 合并后停止；下一次“继续”才按新算法领取 G1/BUG-022。
 
 ## 8.2 U49 主动审计回执（RSH-026 Preflight）
 

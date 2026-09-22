@@ -782,6 +782,51 @@ def test_stage_gate_derives_lowest_actionable_blocker(probe):
     assert candidates == ["BUG-014"]
 
 
+
+
+def test_stage_gate_candidates_keep_same_gate_nonblockers_after_blocker(probe):
+    p = probe.DOCS / "stages/w00-phase.md"
+    p.write_text(p.read_text() + task("IMP-001", gate="G0", order=20, role="非阻断"))
+    entries, _ = probe.phase_tasks()
+    tasks = {tid: (rel, fields) for tid, rel, fields in entries}
+    gate, selected, candidates = probe.derive_current_stage_selection(tasks)
+    assert (gate, selected) == ("G0", "BUG-014")
+    assert candidates == ["BUG-014", "IMP-001"]
+
+
+def test_stage_gate_higher_blocker_outranks_lower_nonblocker(probe):
+    # Close the fixture blocker, leave a G0 non-blocker, and add a G1 blocker.
+    edit(probe, "stages/w00-phase.md", "- **状态**：待执行", "- **状态**：已完成")
+    edit(probe, "stages/w00-phase.md", "- **证据**：尚未实施", "- **证据**：PR #1")
+    p = probe.DOCS / "stages/w00-phase.md"
+    p.write_text(
+        p.read_text()
+        + task("IMP-001", gate="G0", order=20, role="非阻断")
+        + task("IMP-002", gate="G1", order=20, role="阻断")
+    )
+    entries, _ = probe.phase_tasks()
+    tasks = {tid: (rel, fields) for tid, rel, fields in entries}
+    gate, selected, candidates = probe.derive_current_stage_selection(tasks)
+    assert (gate, selected) == ("G1", "IMP-002")
+    assert candidates == ["IMP-002"]
+
+
+def test_stage_gate_falls_back_to_lowest_actionable_nonblocker_when_no_blockers(probe):
+    edit(probe, "stages/w00-phase.md", "- **状态**：待执行", "- **状态**：已完成")
+    edit(probe, "stages/w00-phase.md", "- **证据**：尚未实施", "- **证据**：PR #1")
+    p = probe.DOCS / "stages/w00-phase.md"
+    p.write_text(
+        p.read_text()
+        + task("IMP-001", gate="G2", order=50, role="非阻断")
+        + task("IMP-002", gate="G4", order=10, role="非阻断")
+    )
+    entries, _ = probe.phase_tasks()
+    tasks = {tid: (rel, fields) for tid, rel, fields in entries}
+    gate, selected, candidates = probe.derive_current_stage_selection(tasks)
+    assert (gate, selected) == ("G2", "IMP-001")
+    assert candidates == ["IMP-001"]
+
+
 def test_stage_gate_does_not_skip_lower_gate_for_higher_blocker(probe):
     p = probe.DOCS / "stages/w00-phase.md"
     p.write_text(p.read_text() + task("IMP-001", gate="G1", order=20, role="阻断"))
