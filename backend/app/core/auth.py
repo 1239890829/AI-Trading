@@ -79,6 +79,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hmac
 
 from fastapi import HTTPException
 
@@ -164,6 +165,43 @@ def check_api_token(provided: str | None) -> None:
     """HTTP 面的判定：`is_api_token_valid` 为假即 401（判定只有一份，见上）。"""
     if not is_api_token_valid(provided):
         raise HTTPException(status_code=401, detail=_UNAUTHORIZED_DETAIL)
+
+
+class AgentPromotionTokenError(ValueError):
+    """Domain-level promotion authority failure; HTTP is only one transport."""
+
+    def __init__(self, code: str, detail: str) -> None:
+        super().__init__(detail)
+        self.code = code
+        self.detail = detail
+
+
+def validate_agent_promotion_token(provided: str | None) -> str:
+    """Pure IMP-052 promotion credential validator shared by all call paths.
+
+    This is same-process privilege separation, not user/OS-principal authentication: trusted code
+    able to read server configuration remains inside the trust boundary.
+    """
+    expected = (settings.agent_promotion_token or "").strip()
+    ordinary = (settings.api_token or "").strip()
+    if not expected:
+        raise AgentPromotionTokenError("disabled", "参数晋级批准入口未启用：ASHARE_AGENT_PROMOTION_TOKEN 未配置")
+    if len(expected) < 32:
+        raise AgentPromotionTokenError("weak", "参数晋级批准凭据至少需要 32 字符")
+    if ordinary and hmac.compare_digest(expected, ordinary):
+        raise AgentPromotionTokenError("not_separate", "参数晋级批准凭据不得与普通 API token 共用")
+    supplied = provided or ""
+    if not hmac.compare_digest(supplied, expected):
+        raise AgentPromotionTokenError("invalid", "参数晋级批准凭据无效")
+    return expected
+
+
+def check_agent_promotion_token(provided: str | None) -> str:
+    """HTTP adapter for :func:`validate_agent_promotion_token`."""
+    try:
+        return validate_agent_promotion_token(provided)
+    except AgentPromotionTokenError as exc:
+        raise HTTPException(status_code=403 if exc.code == "invalid" else 503, detail=exc.detail) from exc
 
 
 def ws_encode_token(token: str) -> str:

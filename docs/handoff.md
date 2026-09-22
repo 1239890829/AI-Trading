@@ -1,11 +1,11 @@
-# 当前交接：多窗口执行审计 / 运行态与证据治理收口
+# 当前交接：G4 / IMP-052 Agent 权限、批准与预算收口
 
 
 > **2026-09-21 多窗口审计及晚间收口**：详见 `docs/review/chatgpt-multiwindow-audit-20260921.md`。审计指出的三类执行缺口已进一步收口：① BUG-020 的条件激活不再只靠记忆，`scripts/ledger-runtime-selection.py` 可在下一交易日 08:30–09:15 开工窗把静态 G4 临时抢回 G0，错过窗口/日历未知均 fail-closed；② 本机 AI-Trading 后端已受控停服、同步 `master@c272d260`、重启并通过 SQLite/health/30 scheduler/snapshot 验收；③ 前端误判已纠正——Next 15.5.25 进程属于另一个 `vide-trading` 仓库，AI-Trading 当时没有前端进程，自身 `npm ci` 后在 Node 22.22.2 下 695/695 tests 与 Next 16.3.3 build 全绿。Jev 真实 assistant 请求也已新增 `assistant_tool_router` receipt；RSH-030 human gold 仍必须独立人工完成。IMP-053 actual-fill 契约与唯一 `54b7e0c` RECOVERY 仍按各自 owner 保留。任务状态仍以 stage 为准，不以本段建立第二账本。
 
-> **定位 / 摘要**：IMP-020 已完成且 Candidate B 仍因缺 IMP-053 actual fill 而 blocked；审计遗留收口已由 PR #96 合入 `master@de86c680`。#96 的 PR-CI 三项全绿，但 post-merge master CI `35607351247` 抓到 backend 全量 pytest 的真实测试隔离缺口：`test_endpoint_smoke` 最终 teardown 看到一次未归属 socket。提升为会话级网络硬门后，先定位到新闻正文降级测试与题材 API 测试实际尝试公网；#97 首轮 Linux CI 又定位到 `minute_decisions → TDX m1` 直连 7709。当前唯一未决只允许修这三条测试外部边界/显式失败桩，不领取 IMP-052 或其它新业务切片，不改生产策略、阈值或交易行为；若最新 master 已包含该修复且对应 post-merge CI 三项全绿，则本审计收口自动视为完成。
+> **定位 / 摘要（2026-09-22 当前）**：BUG-020 与前序审计收口已完成，runtime selector 进入 `G4 / IMP-052`。参数晋级主体已由 PR #100 合入、路径卫生 PR #101 合入；当前 U49 follow-up 只修“promotion token 不能只挂 HTTP、service 直调用也必须校验”的权限边界，不改真实参数、策略阈值或生产开关。该 follow-up 收口后 IMP-052 仍为“部分完成”，下一纵切才是统一 usage/token、跨进程 quota 与 cancellation/timeout/retry 预算。Candidate B / IMP-053 与 RSH-030 human gold 继续按各自 owner/effect prerequisite，不被本片跨门。
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** 本轮是审计遗留收口，不是新业务策略切片：运行服务/依赖与 Git 事实已重新接收，BUG-020 条件唤醒已机械化，Jev assistant shadow 已有真实 receipt；仍不改策略阈值/权重、不自动晋级、不写真实交易，也不允许 research 侧构造 actual fill。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** 当前主切片为 G4/IMP-052；本轮只实现/审计参数晋级的独立批准 authority 与原子消费，不自动批准任何现实候选、不改参数值、不写真实交易。每个 follow-up PR 仍需 exact-HEAD `DegradedRelease`、required CI、release_check 与 post-merge CI，不能用 #100/#101 的回执替代新 HEAD。
 
 
 

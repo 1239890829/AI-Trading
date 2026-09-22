@@ -60,7 +60,7 @@
 
 权重漂移温和仅是结构检查，离线 `supports` 仍只是探索证据；调度只保存候选与 shadow evidence，不取得批准权。模型 evidence 内的 `approved/reviewer` 字段仍不构成批准，通用 `apply_change` 继续只允许合法人工 draft，不能应用 shadow、rejected 或 AI 来源草稿。
 
-2026-09-22 的 IMP-052 参数晋级纵切新增**独立人工批准链**，不是 evaluator 自批平台：先读取候选/当前运行基线/影子证据的 exact digest review package；批准写入口必须同时经过普通写鉴权和专用 `ASHARE_AGENT_PROMOTION_TOKEN`，后者默认空即关闭、不得与普通 API token 共用。批准还必须绑定仓库内真实 review/research/artifact 文件与当前 SHA-256，最长 24h、可撤销、一次性消费；消费时再次核候选/基线/影子证据/效果文件，任何漂移或本地 shadow 已为负面/不足即 fail-closed。candidate CAS、approval consume、live baseline CAS、参数写入和既有 30 日后置实验在同一事务落库；后置基线拿不到就整笔不生效。已有 owner-aware rollback 继续保留。A类入影子仍不回写复盘 `applied`；只有上述人工批准链真正消费后才形成 applied 事实。统一 usage/token、跨进程 quota 与 cancellation 仍未完成。
+2026-09-22 的 IMP-052 参数晋级纵切新增**独立于普通写权限的 promotion-operator 批准链**，不是 evaluator 自批平台：先读取候选/当前运行基线/影子证据的 exact digest review package；批准写入口必须同时经过普通写鉴权和专用 `ASHARE_AGENT_PROMOTION_TOKEN`，后者默认空即关闭、不得与普通 API token 共用。专用凭据判定由 `core/auth.py` 单点拥有，**service 创建/撤销批准时也必须显式提供并通过**，HTTP dependency 只是取 header 的适配层，不能成为唯一授权边界。批准还必须绑定仓库内真实 review/research/artifact 文件与当前 SHA-256，最长 24h、可撤销、一次性消费；消费时再次核候选/基线/影子证据/效果文件，任何漂移或本地 shadow 已为负面/不足即 fail-closed。candidate CAS、approval consume、live baseline CAS、参数写入和既有 30 日后置实验在同一事务落库；后置基线拿不到就整笔不生效。已有 owner-aware rollback 继续保留。A类入影子仍不回写复盘 `applied`；只有上述 promotion-operator 批准链真正消费后才形成 applied 事实。统一 usage/token、跨进程 quota 与 cancellation 仍未完成。
 
 ## 3. 复盘闭环（含最后一公里）
 
