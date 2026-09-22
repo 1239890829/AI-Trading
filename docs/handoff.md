@@ -63,10 +63,10 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 - **当前主门**：G4
 - **主切片首选**：IMP-052
-- **领取边界**：BUG-020 已完成 2026-09-22 盘前→收盘完整生产会话验收；本轮只收口该任务并发布，不领取下一业务切片。
+- **领取边界**：用户于 2026-09-22 在 BUG-020 完整闭环并清理旧 IMP-020 分支后明确“开始”，runtime selector 同时返回 static/effective=G4/IMP-052；本轮已正式领取 **IMP-052 参数晋级批准/原子消费第一纵切**，不跨到 usage/quota/cancellation 下一纵切。
 - **当前现场**：BUG-020 生产会话已在 `chatgpt/bug020-session-20260922` 完整验收到 15:30；后端 PID=9077 未再 restart，真实 SQLite `integrity_check=ok`/39 tables，30/30 scheduler running，收盘 REST/WS 均明确 `stale/market_closed`，index 6/6、source_rejections=0，Sina snapshot `ready/5566 rows` 且按 240s idle cadence 保持正确 freshness。完整 backend pytest+pyflakes、前端 696/696+tsc+eslint+build、doc-health/public-repo/workspace/diff-check 均通过；详见 `docs/review/bug020-production-session-20260922.md`。
-- **阶段门重算**：BUG-020 闭环后 `python3 scripts/ledger-runtime-selection.py --json` 于 2026-09-22 15:33 北京时间返回 static/effective 均为 **G4/IMP-052**、conditions=[]。本轮只记录该下一候选，不领取、不执行 IMP-052。RSH-030/RSH-031 等继续保留各自效果前置与非阻断语义。
-- G0 的 BUG-028 / BUG-026 / BUG-020 均已完成；G1 的 BUG-029 / IMP-006 / IMP-044 已完成；G2 的 IMP-049 仍为 `待条件` 且尚无可机械判定的运行条件；G3/RSH-026 与 IMP-020 已完成。本轮授权只覆盖 BUG-020 收口与发布，不等于领取重算后的下一业务候选。
+- **阶段门重算**：BUG-020 闭环后 runtime selector 于 2026-09-22 17:21 北京时间再次返回 static/effective 均为 **G4/IMP-052**、conditions=[]；用户随后明确开工，因此该任务已领取。RSH-030/RSH-031 等继续保留各自效果前置与非阻断语义。
+- G0 的 BUG-028 / BUG-026 / BUG-020 均已完成；G1 的 BUG-029 / IMP-006 / IMP-044 已完成；G2 的 IMP-049 仍为 `待条件` 且尚无可机械判定的运行条件；G3/RSH-026 与 IMP-020 已完成。当前唯一主切片为 G4/IMP-052，本次“开始”只授权其当前参数晋级纵切，不自动连续进入后续预算/取消子片。
 - BUG-020 的 current-value 接纳门区分 source event time / received time、缺失/拒绝/合法空集与身份歧义；旧可信值不会被晚到/非法观测覆盖。2026-09-22 已完成真实交易日整段生产会话：盘中真实 source-time regress、Sina 缺页/DNS 短断、缓存老化、午休与收盘 market_closed、受控 restart/recovery 均形成可追证据并通过。该结果关闭一次性验收，不宣称长期 provider SLA。
 - BUG-029 现以 `ever_sealed/current_sealed/snapshot_state/version` 为唯一 current-state 契约；开板只恢复“进入评估”的资格，不自动获得成交/通知/模拟执行许可。2026-09-18 真实跨源样本已证明涨停池成员可多次开板/回封；旧 v1 归档保持原语义，v2 才使用新状态重放。
 - RSH-031 为 `G1/P1/非阻断/门内序70`，即使同处 G1 也排在阻断项之后；且 `效果前置=RSH-026, IMP-020, RSH-030` 未满足前不得宣称龙头战法有效或接生产权重。
@@ -96,7 +96,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **Degraded reason**：当前 Codex 额度不可用，正常双角色无法持续完成实施→独立审核→发布闭环；旧 exact-HEAD Review 门因此形成自锁。
 - **有效期**：持续到用户明确说 Codex 已恢复/退出降级；不是单 PR 临时口令。但每个 PR 的发布仍必须重新生成 exact-HEAD `DegradedRelease`，不能复用上一 PR 回执。
 - **不降低项**：G0–G5/GX 阶段门、U49 主动反证、branch protection、required CI、latest master、CHANGES_REQUESTED/thread、public-repo scan、workspace/doc-health、敏感信息/范围、post-merge CI、删除功能分支。
-- **当前动作**：RSH-026/IMP-020 已 closeout；PR #96 已合并，但 post-merge backend CI `35607351247` 因测试真实网络隔离缺口失败。若 latest master 尚未包含后续修复或其 post-merge CI 未三项全绿，则唯一允许动作是：会话级真实 socket fail-closed + 新闻正文/题材 API 显式失败桩 + TDX minute 外部边界 fail-closed + IMP-043 事实回填，并走 exact-HEAD `DegradedRelease` + required CI + post-merge CI；若该条件已满足，则删除功能分支并重新计算阶段门。两种情形都不把授权扩成 IMP-052。
+- **当前动作**：BUG-020 与前序审计/CI 已 closeout，阶段门已正式进入 G4/IMP-052。当前 degraded 子片只做参数晋级独立批准、真实效果 artifact SHA 绑定、24h/撤销/一次性消费、candidate/baseline CAS、原子后置实验和 runtime-refresh 真实状态；不得顺手进入 usage/quota/cancellation，也不改真实参数值或生产开关。
 
 ## 8.2 U49 主动审计回执（RSH-026 Preflight）
 
@@ -336,6 +336,18 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **真实阻断探针**：在最终代码隔离目录重跑 Candidate B producer 后生成 v2 experiment id=`d04fb9e59eb6c09bf6188db6e656ee87efa32d71db1bdf8b5c88dfee6e08f917`，且 identity 的 ablation/comparison digest 均与 nested evidence 一致；readiness=`blocked`，blocking issues=`verification_not_pass`, `research_admission_not_eligible`, `actual_shadow_fill_missing`；`automatic_promotion=false`、`production_mutation_performed=false`。这证明当前策略没有被 IMP-020 closeout 偷偷晋级。
 - **rollback/reopen**：readiness 固化不可自动执行的计划：人工拒绝、上线后衰退或证据失效时要求 activation record、恢复 prior strategy version、保留失败证据；只有 new clean OOS / new actual shadow fill / protocol-or-data fix 才可 reopen，旧结果永不改写。
 - **关闭裁定**：IMP-020 的验证协议、试验全集/多重校正、PIT/overlap、evidence hardening、负结果/history、消融、Champion/Challenger、append-only experiment accounting、promotion readiness 与 rollback/reopen 工程链均已闭环。实际 hunting-shadow fill 仍属于 IMP-053 的未来运行证据条件，不是把 IMP-020 永久挂成“未完成”的理由。当前任何策略是否可晋级仍由证据事实决定。
+
+## 8.19 U49 主动审计回执（IMP-052 Promotion Approval / Atomic Consumption）
+
+- **阶段/基点**：`Preflight + candidate implementation`；基于 `master@30457a85bb8db3986a77964dcde9f326e99b567a`，隔离 worktree=`chatgpt/imp052-promotion-approval`，模式=`DEGRADED_FULL_CONTROL`。本片只关闭参数晋级批准链，不改真实参数值/生产开关。
+- **P1-92 evaluator 自批风险**：旧 `promote_shadow` 全封死虽然安全但不完整；不能用模型 evidence 中的 `approved/reviewer` 或普通 write token 恢复。新增 `agent_param_promotion_approval` 独立记录，批准入口额外要求 `ASHARE_AGENT_PROMOTION_TOKEN`；默认空即 503，且与普通 API token 相同也拒绝。普通执行者可以消费一个已经存在的有效批准，但不能创建/撤销批准。
+- **P1-93 TOCTOU / 重复消费**：review package 固定候选、当前 live baseline、完整 shadow evidence 三组 digest；批准最多 24h。消费前重新计算，candidate status+identity CAS、approval one-shot consume、live-baseline CAS、参数覆盖写入同事务；候选/证据/基线漂移、撤销/过期/重复批准均 fail-closed。
+- **P1-94 假效果证据**：只收字符串引用/自报 SHA 仍可伪造“完整效果证据”。当前只接受 `repo://docs/review|docs/research|artifacts/...`，拒绝路径穿越/符号链接越界/缺文件，并在批准与消费两个时点都现场 SHA-256；文件改动后旧批准自动失效。negative/insufficient/unsupported shadow verdict 不能靠人工 artifact 静默覆盖，只有 `supports` 或结构型 `shadow_review_required` 才能进入批准。
+- **P1-95 后置守护断链**：旧 `AgentExperiment` 后置裁决存在但当前没有真实 attach caller；若仅打开人工晋级会造成“能生效但不再自动监控劣化”。本片把 signal-health baseline 采集设为 promotion 硬前置，并把参数写、批准消费与 30 日 experiment 创建放在同事务；基线失败整笔不生效，experiment baseline 同时绑定 approval digest 与效果证据 SHA。
+- **P1-96 提交后部分失败不能撒谎**：数据库已提交后若进程内 runtime refresh 失败，不能回报“无副作用”。返回明确 `runtime_refreshed=false/restart_required=true`，mutation task 记“DB 已生效但 runtime 未刷新”；同一 consumed approval 重试幂等且只做 runtime reconciliation，不重复参数写/实验创建。
+- **迁移隔离**：Alembic `env.py` 强制读取 `settings.database_url`；首次临时 ini 探针因此没有使用 `/tmp` URL。实际落点经核验为 worktree 自己的 `data/ashare.db`，不是主运行库；已在该隔离库验证 `e1a7b4c2d9f0 → f4a2c8e1b6d3 → e1a7b4c2d9f0`，新表 17 列创建/删除正确，随后删除隔离 DB。
+- **边界/下一步**：这只关闭参数 promotion authority/evidence/atomicity；IMP-052 仍为部分完成。统一 usage/token、跨进程配额预留/恢复、模型/任务取消传播仍是下一纵切，须重新领取后再施工。
+
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
 

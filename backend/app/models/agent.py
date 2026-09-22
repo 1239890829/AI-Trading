@@ -116,6 +116,36 @@ class AgentParamChange(Base):
     rollback_reason: Mapped[str | None] = mapped_column(Text, default=None)
 
 
+class AgentParamPromotionApproval(Base):
+    """Shadow parameter promotion approval, separate from model-produced evidence.
+
+    The approval binds one reviewed candidate identity, the exact live baseline and
+    the shadow-evidence snapshot to an independently reviewed effect artifact.
+    ``consumed_at`` is written in the same transaction as activation so an approval
+    cannot authorize two different parameter writes.
+    """
+
+    __tablename__ = "agent_param_promotion_approval"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    change_id: Mapped[int] = mapped_column(Integer, index=True)
+    candidate_digest: Mapped[str] = mapped_column(String(64), index=True)
+    baseline_value: Mapped[str | None] = mapped_column(Text, default=None)
+    baseline_digest: Mapped[str] = mapped_column(String(64))
+    shadow_evidence_digest: Mapped[str] = mapped_column(String(64))
+    effect_evidence_ref: Mapped[str] = mapped_column(Text)
+    effect_evidence_sha256: Mapped[str] = mapped_column(String(64))
+    reviewer: Mapped[str] = mapped_column(String(32), default="operator")
+    approval_source: Mapped[str] = mapped_column(String(32), default="promotion_token")
+    note: Mapped[str] = mapped_column(Text, default="")
+    approval_digest: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=beijing_now_naive, index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, default=None, index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, default=None, index=True)
+    revocation_note: Mapped[str | None] = mapped_column(Text, default=None)
+
+
 class AgentAgenda(Base):
     """每日进化议程（AI 大脑 v2，docs/summary/ai-evolution.md）。
 

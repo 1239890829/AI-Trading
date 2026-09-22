@@ -448,6 +448,9 @@ class Settings(BaseSettings):
     # token 留空 = 见上；配好后所有写请求与敏感读请求必须带 X-API-Token 头
     # （由前端服务端反向代理注入，浏览器不持有）
     api_token: str = ""
+    # IMP-052：研究候选晋级批准使用独立凭据。默认空=批准写入口禁用（fail closed）；
+    # 不得与普通 API token 共用，否则普通写权限就会被误当成独立审批权。
+    agent_promotion_token: str = ""
 
     @property
     def review_dir(self) -> str:

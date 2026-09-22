@@ -23,15 +23,20 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import re
+from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
-from app.core.bjtime import beijing_now_naive
+from app.core.bjtime import beijing_now_naive, to_beijing_naive
+from app.core.config import REPO_ROOT
 from app.core.db import get_session_factory
-from app.models.agent import AgentParam, AgentParamChange
+from app.models.agent import AgentExperiment, AgentParam, AgentParamChange, AgentParamPromotionApproval
 
 log = __import__("logging").getLogger(__name__)
 
@@ -47,6 +52,9 @@ ROLLBACK_REASONS = {
 
 #: 存活率样本下限：低于此值不给"率"的可信度（样本=1 的存活率是巧合不是指标）
 MIN_SURVIVAL_SAMPLES = 3
+
+#: One-shot promotion authority must be short-lived; stale standing approvals are unsafe.
+PROMOTION_APPROVAL_MAX_TTL = timedelta(hours=24)
 
 #: 早于归因功能上线（2026-09-10）的回滚行没有 rollback_reason —— 归到 unspecified。
 #: 它**不是**一个可提交的 code（不在 ROLLBACK_REASONS 里），只是统计时的历史分桶，
@@ -273,6 +281,338 @@ def _manual_apply_reason(row: AgentParamChange) -> str | None:
     return None
 
 
+def _canonical_digest(payload: Any) -> str:
+    """Stable SHA-256 identity for approval-bound JSON-like evidence."""
+    raw = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"), allow_nan=False, default=str,
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _evidence_object(row: AgentParamChange) -> dict:
+    if not row.evidence:
+        return {}
+    try:
+        value = json.loads(row.evidence)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("影子证据无法解析；须重新评估后再申请晋级") from exc
+    if not isinstance(value, dict):
+        raise ValueError("影子证据不是对象；须重新评估后再申请晋级")
+    return value
+
+
+def _candidate_digest(row: AgentParamChange) -> str:
+    return _canonical_digest({
+        "version": 1,
+        "change_id": row.id,
+        "key": row.key,
+        "before": row.before,
+        "after": row.after,
+        "source_type": row.source_type,
+        "source_id": row.source_id,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    })
+
+
+def _baseline_digest(key: str, value: str) -> str:
+    return _canonical_digest({"version": 1, "key": key, "value": value})
+
+
+def _promotion_snapshot(row: AgentParamChange, db) -> dict:
+    """Freeze the candidate/baseline/shadow-evidence identity reviewed by a human."""
+    evidence = _evidence_object(row)
+    current = _effective_value(row.key, db)
+    shadow = evidence.get("shadow_verdict")
+    blockers: list[str] = []
+    if row.status != "shadow":
+        blockers.append(f"candidate_status_{row.status}")
+    try:
+        _validate(row.key, row.after)
+    except ValueError:
+        blockers.append("candidate_value_invalid")
+    if current != (row.before or ""):
+        blockers.append("baseline_changed")
+    if not isinstance(shadow, dict):
+        blockers.append("shadow_assessment_missing")
+    else:
+        verdict = str(shadow.get("verdict") or "")
+        # A human approval may bind independent full-effect evidence, but it may not silently
+        # override already-negative/insufficient local evidence. Scalar exploratory evidence must
+        # at least support the candidate; structured style offsets may reach human review after
+        # their structure-only guard returns shadow_review_required.
+        if verdict not in {"supports", "shadow_review_required"}:
+            blockers.append(f"shadow_verdict_not_supportive:{verdict or 'missing'}")
+        if shadow.get("review_required") is not True or shadow.get("runtime_changed") is not False:
+            blockers.append("shadow_contract_invalid")
+    return {
+        "change_id": row.id,
+        "key": row.key,
+        "status": row.status,
+        "before": row.before,
+        "after": row.after,
+        "current_baseline": current,
+        "candidate_digest": _candidate_digest(row),
+        "baseline_digest": _baseline_digest(row.key, current),
+        "shadow_evidence_digest": _canonical_digest(evidence),
+        "shadow_verdict": shadow if isinstance(shadow, dict) else None,
+        "blockers": blockers,
+        "approvable": not blockers,
+    }
+
+
+def promotion_review(change_id: int, session_factory=None) -> dict:
+    """Read-only human review package; the returned digests must be echoed on approval."""
+    sf = session_factory or get_session_factory()
+    with sf() as db:
+        row = db.get(AgentParamChange, change_id)
+        if row is None:
+            raise ValueError("变更单不存在")
+        return _promotion_snapshot(row, db)
+
+
+_EFFECT_EVIDENCE_PREFIXES = ("docs/review/", "docs/research/", "artifacts/")
+
+
+def _is_relative_to(path, root) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _validate_effect_evidence_identity(ref: str, digest: str) -> tuple[str, str]:
+    """Bind approval to a real repository evidence file and its exact bytes.
+
+    The reference format is ``repo://<relative-path>``. Only review/research/artifact
+    directories are accepted; path traversal, symlink escape, missing files and digest
+    drift fail closed. The same check is repeated when the approval is consumed.
+    """
+    clean_ref = str(ref or "").strip()
+    clean_digest = str(digest or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", clean_digest):
+        raise ValueError("效果证据必须提供 64 位 SHA-256 摘要")
+    if not clean_ref.startswith("repo://") or len(clean_ref) > 500 or any(ord(ch) < 32 for ch in clean_ref):
+        raise ValueError("效果证据引用必须使用 repo://<仓库相对路径>")
+    rel = clean_ref.removeprefix("repo://").lstrip("/")
+    if not rel or not rel.startswith(_EFFECT_EVIDENCE_PREFIXES):
+        raise ValueError("效果证据只能来自 docs/review、docs/research 或 artifacts 目录")
+    root = REPO_ROOT.resolve()
+    target = (root / rel).resolve()
+    allowed_roots = [
+        (root / "docs" / "review").resolve(),
+        (root / "docs" / "research").resolve(),
+        (root / "artifacts").resolve(),
+    ]
+    if not any(_is_relative_to(target, allowed_root) for allowed_root in allowed_roots):
+        raise ValueError("效果证据真实路径越出允许证据目录（含符号链接跳转）")
+    if not target.is_file():
+        raise ValueError("效果证据文件不存在；不得只提交一个引用字符串")
+    if target.stat().st_size > 10 * 1024 * 1024:
+        raise ValueError("效果证据文件超过 10 MiB 上限；请使用可审阅的摘要 artifact")
+    hasher = hashlib.sha256()
+    with target.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    actual = hasher.hexdigest()
+    if actual != clean_digest:
+        raise ValueError("效果证据 SHA-256 与当前文件不一致；须重新审阅证据版本")
+    return f"repo://{rel}", clean_digest
+
+
+def _approval_digest_values(*, change_id: int, candidate_digest: str, baseline_value: str,
+                            baseline_digest: str, shadow_evidence_digest: str,
+                            effect_evidence_ref: str, effect_evidence_sha256: str,
+                            reviewer: str, approval_source: str, note: str,
+                            expires_at: datetime) -> str:
+    return _canonical_digest({
+        "version": 1,
+        "change_id": change_id,
+        "candidate_digest": candidate_digest,
+        "baseline_value": baseline_value,
+        "baseline_digest": baseline_digest,
+        "shadow_evidence_digest": shadow_evidence_digest,
+        "effect_evidence_ref": effect_evidence_ref,
+        "effect_evidence_sha256": effect_evidence_sha256,
+        "reviewer": reviewer,
+        "approval_source": approval_source,
+        "note": note,
+        "expires_at": expires_at.isoformat(timespec="microseconds"),
+    })
+
+
+def _dump_promotion_approval(row: AgentParamPromotionApproval) -> dict:
+    now = beijing_now_naive()
+    if row.consumed_at is not None:
+        state = "consumed"
+    elif row.revoked_at is not None:
+        state = "revoked"
+    elif row.expires_at <= now:
+        state = "expired"
+    else:
+        state = "approved"
+    return {
+        "id": row.id,
+        "change_id": row.change_id,
+        "candidate_digest": row.candidate_digest,
+        "baseline_value": row.baseline_value,
+        "baseline_digest": row.baseline_digest,
+        "shadow_evidence_digest": row.shadow_evidence_digest,
+        "effect_evidence_ref": row.effect_evidence_ref,
+        "effect_evidence_sha256": row.effect_evidence_sha256,
+        "reviewer": row.reviewer,
+        "approval_source": row.approval_source,
+        "note": row.note,
+        "approval_digest": row.approval_digest,
+        "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "consumed_at": row.consumed_at.isoformat() if row.consumed_at else None,
+        "revoked_at": row.revoked_at.isoformat() if row.revoked_at else None,
+        "revocation_note": row.revocation_note,
+        "state": state,
+    }
+
+
+def list_promotion_approvals(change_id: int, session_factory=None) -> list[dict]:
+    sf = session_factory or get_session_factory()
+    with sf() as db:
+        rows = db.execute(
+            select(AgentParamPromotionApproval)
+            .where(AgentParamPromotionApproval.change_id == change_id)
+            .order_by(AgentParamPromotionApproval.id.desc())
+        ).scalars().all()
+        return [_dump_promotion_approval(row) for row in rows]
+
+
+def approve_shadow_promotion(
+    change_id: int, *,
+    expected_candidate_digest: str,
+    expected_baseline_digest: str,
+    expected_shadow_evidence_digest: str,
+    effect_evidence_ref: str,
+    effect_evidence_sha256: str,
+    expires_at: datetime,
+    note: str = "",
+    session_factory=None,
+) -> dict:
+    """Create a human approval bound to the exact reviewed candidate/baseline/evidence.
+
+    The approval source is server-fixed to ``human_api``. Candidate model evidence cannot
+    synthesize this row by setting ``approved=true``. The caller must first read
+    :func:`promotion_review` and echo all three exact digests, closing the review→approve
+    time-of-check/time-of-use gap.
+    """
+    sf = session_factory or get_session_factory()
+    ref, effect_sha = _validate_effect_evidence_identity(effect_evidence_ref, effect_evidence_sha256)
+    expiry = to_beijing_naive(expires_at)
+    now = beijing_now_naive()
+    if expiry <= now:
+        raise ValueError("批准到期时间必须晚于当前北京时间")
+    if expiry > now + PROMOTION_APPROVAL_MAX_TTL:
+        raise ValueError("批准有效期不得超过 24 小时；长期 standing approval 不允许")
+    note = str(note or "").strip()[:500]
+    reviewer, approval_source = "operator", "promotion_token"
+
+    with sf() as db:
+        row = db.get(AgentParamChange, change_id)
+        if row is None:
+            raise ValueError("变更单不存在")
+        snap = _promotion_snapshot(row, db)
+        if snap["blockers"]:
+            raise ValueError(f"当前候选不可批准：{','.join(snap['blockers'])}")
+        expected = {
+            "candidate_digest": str(expected_candidate_digest or "").lower(),
+            "baseline_digest": str(expected_baseline_digest or "").lower(),
+            "shadow_evidence_digest": str(expected_shadow_evidence_digest or "").lower(),
+        }
+        for key, value in expected.items():
+            if value != snap[key]:
+                raise ValueError(f"{key} 已变化；须重新读取 review package 后再批准")
+        approval_digest = _approval_digest_values(
+            change_id=change_id,
+            candidate_digest=snap["candidate_digest"], baseline_value=snap["current_baseline"],
+            baseline_digest=snap["baseline_digest"], shadow_evidence_digest=snap["shadow_evidence_digest"],
+            effect_evidence_ref=ref, effect_evidence_sha256=effect_sha,
+            reviewer=reviewer, approval_source=approval_source, note=note, expires_at=expiry,
+        )
+        existing = db.execute(
+            select(AgentParamPromotionApproval).where(
+                AgentParamPromotionApproval.approval_digest == approval_digest
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return _dump_promotion_approval(existing)
+        approval = AgentParamPromotionApproval(
+            change_id=change_id,
+            candidate_digest=snap["candidate_digest"],
+            baseline_value=snap["current_baseline"],
+            baseline_digest=snap["baseline_digest"],
+            shadow_evidence_digest=snap["shadow_evidence_digest"],
+            effect_evidence_ref=ref,
+            effect_evidence_sha256=effect_sha,
+            reviewer=reviewer,
+            approval_source=approval_source,
+            note=note,
+            approval_digest=approval_digest,
+            expires_at=expiry,
+            created_at=now,
+        )
+        db.add(approval)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            existing = db.execute(
+                select(AgentParamPromotionApproval).where(
+                    AgentParamPromotionApproval.approval_digest == approval_digest
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                raise ValueError("批准写入发生并发冲突；未创建批准，请重试") from None
+            return _dump_promotion_approval(existing)
+        db.refresh(approval)
+        out = _dump_promotion_approval(approval)
+        audit_key = row.key
+    record_audit("user", "param.promotion.approve", audit_key, after={
+        "approval_id": out["id"], "candidate_digest": out["candidate_digest"],
+        "effect_evidence_sha256": out["effect_evidence_sha256"], "expires_at": out["expires_at"],
+    })
+    return out
+
+
+def revoke_promotion_approval(approval_id: int, *, note: str = "", session_factory=None) -> dict:
+    """Revoke an unconsumed approval. Consumed approval must be handled by parameter rollback."""
+    sf = session_factory or get_session_factory()
+    now = beijing_now_naive()
+    note = str(note or "").strip()[:500]
+    with sf() as db:
+        approval = db.get(AgentParamPromotionApproval, approval_id)
+        if approval is None:
+            raise ValueError("晋级批准不存在")
+        if approval.consumed_at is not None:
+            raise ValueError("批准已消费；如需撤销已生效参数，请走参数回滚")
+        if approval.revoked_at is not None:
+            return _dump_promotion_approval(approval)
+        result = db.execute(
+            update(AgentParamPromotionApproval).where(
+                AgentParamPromotionApproval.id == approval_id,
+                AgentParamPromotionApproval.consumed_at.is_(None),
+                AgentParamPromotionApproval.revoked_at.is_(None),
+            ).values(revoked_at=now, revocation_note=note)
+        )
+        if result.rowcount != 1:
+            db.rollback()
+            raise ValueError("批准状态已变化；撤销未生效")
+        db.commit()
+        approval = db.get(AgentParamPromotionApproval, approval_id)
+        out = _dump_promotion_approval(approval)
+    record_audit("user", "param.promotion.revoke", f"change:{out['change_id']}", after={
+        "approval_id": approval_id, "note": note,
+    })
+    return out
+
+
 def _dump(row: AgentParamChange) -> dict:
     def _j(raw: str | None) -> Any:
         if not raw:
@@ -455,13 +795,215 @@ def shadow_change(change_id: int, session_factory=None) -> dict:
         return _dump(row)
 
 
-def promote_shadow(change_id: int, session_factory=None) -> dict:
-    """Legacy entry fails closed until independently verifiable review exists.
+def _verify_promotion_approval(row: AgentParamChange, approval: AgentParamPromotionApproval, db) -> dict:
+    snap = _promotion_snapshot(row, db)
+    if "baseline_changed" in snap["blockers"]:
+        raise ValueError("运行基线已变化；批准失效，须重新审阅当前候选")
+    if snap["blockers"]:
+        raise ValueError(f"候选不满足晋级前置：{','.join(snap['blockers'])}")
+    now = beijing_now_naive()
+    if approval.change_id != row.id:
+        raise ValueError("批准不属于当前变更单")
+    if approval.reviewer != "operator" or approval.approval_source != "promotion_token":
+        raise ValueError("批准来源不是独立 promotion token 操作者，拒绝消费")
+    if approval.consumed_at is not None:
+        raise ValueError("批准已被消费，不能再次用于晋级")
+    if approval.revoked_at is not None:
+        raise ValueError("批准已撤销，不能用于晋级")
+    if approval.expires_at <= now:
+        raise ValueError("批准已过期；须重新审阅当前候选")
+    if approval.candidate_digest != snap["candidate_digest"]:
+        raise ValueError("候选身份在批准后发生变化；批准失效")
+    if approval.baseline_value != snap["current_baseline"] or approval.baseline_digest != snap["baseline_digest"]:
+        raise ValueError("运行基线在批准后发生变化；批准失效")
+    if approval.shadow_evidence_digest != snap["shadow_evidence_digest"]:
+        raise ValueError("影子证据在批准后发生变化；批准失效")
+    _validate_effect_evidence_identity(approval.effect_evidence_ref, approval.effect_evidence_sha256)
+    expected_digest = _approval_digest_values(
+        change_id=approval.change_id,
+        candidate_digest=approval.candidate_digest, baseline_value=approval.baseline_value or "",
+        baseline_digest=approval.baseline_digest, shadow_evidence_digest=approval.shadow_evidence_digest,
+        effect_evidence_ref=approval.effect_evidence_ref,
+        effect_evidence_sha256=approval.effect_evidence_sha256,
+        reviewer=approval.reviewer, approval_source=approval.approval_source,
+        note=approval.note or "", expires_at=approval.expires_at,
+    )
+    if approval.approval_digest != expected_digest:
+        raise ValueError("批准记录摘要不一致；拒绝消费")
+    return snap
 
-    Do not add a boolean/string flag here: it would let the evaluator approve
-    itself. Evidence/authority binding and atomic activation need a later slice.
+
+def promote_shadow(
+    change_id: int, session_factory=None, *, approval_id: int | None = None,
+    mutation_source: str | None = None,
+) -> dict:
+    """Atomically consume a human approval and activate one exact shadow candidate.
+
+    Candidate status CAS, approval one-shot consumption and live-baseline CAS share one
+    transaction. Any concurrent candidate/evidence/baseline change rolls the whole transaction
+    back. Model-produced ``approved`` fields are never consulted.
     """
-    raise ValueError("影子转正需独立审查及完整效果证据；当前接口不支持批准，不得自动生效")
+    if approval_id is None:
+        raise ValueError("影子转正必须提供独立人工审查批准 approval_id")
+    sf = session_factory or get_session_factory()
+
+    # Read-only preflight before creating the mutation-trace task.
+    with sf() as check_db:
+        candidate = check_db.get(AgentParamChange, change_id)
+        approval = check_db.get(AgentParamPromotionApproval, approval_id)
+        if candidate is None:
+            raise ValueError("变更单不存在")
+        if approval is None:
+            raise ValueError("晋级批准不存在")
+        if candidate.status == "applied":
+            if approval.change_id == change_id and approval.consumed_at is not None:
+                out = _dump(candidate)
+                out["promotion_approval"] = _dump_promotion_approval(approval)
+                out["promotion_already_applied"] = True
+                try:
+                    refresh_runtime_overrides(sf)
+                    out["runtime_refreshed"] = True
+                    out["restart_required"] = False
+                except Exception as exc:  # Durable state is already authoritative; expose repair need.
+                    log.exception("promotion runtime refresh retry failed (change=%s)", change_id)
+                    out["runtime_refreshed"] = False
+                    out["restart_required"] = True
+                    out["runtime_refresh_error"] = type(exc).__name__
+                return out
+            raise ValueError("变更单已经由其它路径生效；当前批准未消费")
+        _verify_promotion_approval(candidate, approval, check_db)
+        summary_key, summary_after = candidate.key, candidate.after
+
+    mutation_id = None
+    if mutation_source is not None:
+        from app.services.agent_tasks import record_mutation
+        mutation_id = record_mutation(
+            source=mutation_source, kind="param_promotion",
+            summary=f"参数影子晋级 {summary_key}：{json.dumps(summary_after, ensure_ascii=False)}",
+            detail={"change_id": change_id, "approval_id": approval_id},
+        )
+
+    try:
+        # Existing post-activation degradation guard is mandatory for newly enabled promotion.
+        # Capture it before the write transaction; failure leaves approval and runtime untouched.
+        from app.services import experiments as experiment_svc
+        post_guard_baseline = experiment_svc.capture_experiment_baseline(sf)
+        with sf() as db:
+            row = db.get(AgentParamChange, change_id)
+            approval = db.get(AgentParamPromotionApproval, approval_id)
+            if row is None or approval is None:
+                raise ValueError("候选或批准在消费前消失；未生效")
+            snap = _verify_promotion_approval(row, approval, db)
+            now = beijing_now_naive()
+            identity = {
+                "key": row.key, "before": row.before, "after": row.after,
+                "source_type": row.source_type, "source_id": row.source_id,
+                "evidence": row.evidence, "created_at": row.created_at,
+            }
+
+            # 1) Exact candidate CAS: only this still-shadow identity may become applied.
+            stmt = update(AgentParamChange).where(
+                AgentParamChange.id == change_id,
+                AgentParamChange.status == "shadow",
+            )
+            for field, value in identity.items():
+                stmt = stmt.where(getattr(AgentParamChange, field) == value)
+            changed = db.execute(stmt.values(status="applied", applied_at=now))
+            if changed.rowcount != 1:
+                raise ValueError("候选状态或身份发生并发变化；批准未消费")
+
+            # 2) One-shot approval CAS in the same transaction.
+            consumed = db.execute(
+                update(AgentParamPromotionApproval).where(
+                    AgentParamPromotionApproval.id == approval_id,
+                    AgentParamPromotionApproval.change_id == change_id,
+                    AgentParamPromotionApproval.approval_digest == approval.approval_digest,
+                    AgentParamPromotionApproval.consumed_at.is_(None),
+                    AgentParamPromotionApproval.revoked_at.is_(None),
+                    AgentParamPromotionApproval.expires_at > now,
+                ).values(consumed_at=now)
+            )
+            if consumed.rowcount != 1:
+                raise ValueError("批准已被消费/撤销/过期或发生并发变化；未生效")
+
+            # 3) Live-baseline CAS. A concurrent manual/other promotion may not be overwritten.
+            param = db.get(AgentParam, row.key)
+            if param is None:
+                db.add(AgentParam(key=row.key, value=row.after, updated_at=now))
+                try:
+                    db.flush()
+                except IntegrityError as exc:
+                    raise ValueError("运行基线发生并发变化；批准未消费") from exc
+            else:
+                expected_stored = param.value
+                value_clause = (AgentParam.value.is_(None) if expected_stored is None
+                                else AgentParam.value == expected_stored)
+                written = db.execute(
+                    update(AgentParam).where(
+                        AgentParam.key == row.key, value_clause,
+                    ).values(value=row.after, updated_at=now)
+                )
+                if written.rowcount != 1:
+                    raise ValueError("运行基线发生并发变化；批准未消费")
+
+            # 4) Existing degradation monitor is attached atomically with activation. The
+            # approval/effect identity is copied into the immutable baseline envelope so a later
+            # rollback can be traced back to the exact human-reviewed artifact.
+            experiment_baseline = {
+                **post_guard_baseline,
+                "promotion_approval_id": approval_id,
+                "promotion_approval_digest": approval.approval_digest,
+                "effect_evidence_ref": approval.effect_evidence_ref,
+                "effect_evidence_sha256": approval.effect_evidence_sha256,
+            }
+            experiment = AgentExperiment(
+                change_id=change_id,
+                param_key=row.key,
+                hypothesis=(approval.note or f"approved evidence {approval.effect_evidence_ref}")[:300],
+                baseline=json.dumps(experiment_baseline, ensure_ascii=False, allow_nan=False),
+                verification_date=now + timedelta(days=experiment_svc.VERIFY_WINDOW_DAYS),
+                status="running",
+            )
+            db.add(experiment)
+            db.flush()
+            experiment_id = experiment.id
+
+            db.commit()
+            final = db.get(AgentParamChange, change_id)
+            final_approval = db.get(AgentParamPromotionApproval, approval_id)
+            out = _dump(final)
+            out["promotion_approval"] = _dump_promotion_approval(final_approval)
+            out["baseline_digest"] = snap["baseline_digest"]
+            out["post_guard_experiment_id"] = experiment_id
+    except Exception:
+        if mutation_id:
+            from app.services.agent_tasks import update_mutation_result
+            update_mutation_result(mutation_id, "failed", "影子晋级失败；批准与运行值未部分消费")
+        raise
+
+    try:
+        refresh_runtime_overrides(sf)
+        out["runtime_refreshed"] = True
+        out["restart_required"] = False
+        refresh_note = "运行时覆盖已刷新"
+    except Exception as exc:  # DB/approval/experiment already committed; never pretend no side effect.
+        log.exception("promotion committed but runtime refresh failed (change=%s)", change_id)
+        out["runtime_refreshed"] = False
+        out["restart_required"] = True
+        out["runtime_refresh_error"] = type(exc).__name__
+        refresh_note = f"DB 已生效但运行时刷新失败（{type(exc).__name__}），须重试刷新或重启"
+    record_audit("user", "param.promote", out["key"], before=out["before"], after={
+        "value": out["after"], "runtime_refreshed": out["runtime_refreshed"],
+        "post_guard_experiment_id": out["post_guard_experiment_id"],
+    }, rollback_ref=f"change:{change_id}")
+    if mutation_id:
+        from app.services.agent_tasks import update_mutation_result
+        mutation_status = "succeeded" if out["runtime_refreshed"] else "failed"
+        update_mutation_result(
+            mutation_id, mutation_status,
+            f"变更单 #{change_id} 已用批准 #{approval_id} 原子写入；{refresh_note}",
+        )
+    return out
 
 
 def list_shadow_changes(session_factory=None) -> list[dict]:

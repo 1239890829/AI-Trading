@@ -15,11 +15,12 @@ P1 参数配置模块接入后按同一套状态机/审计机制扩展。
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from app.api.deps import require_write_token
+from app.api.deps import require_promotion_approval_token, require_write_token
 from app.services import agent_tasks as at
 from app.services import agent_params as params_svc
 from app.services import alert_triage as at_triage
@@ -131,6 +132,26 @@ class RollbackIn(BaseModel):
     note: str = Field("", description="备注（code=other 时应当填写）")
 
 
+class PromotionApprovalIn(BaseModel):
+    """Human approval of one exact shadow candidate review package."""
+
+    candidate_digest: str = Field(..., min_length=64, max_length=64)
+    baseline_digest: str = Field(..., min_length=64, max_length=64)
+    shadow_evidence_digest: str = Field(..., min_length=64, max_length=64)
+    effect_evidence_ref: str = Field(..., min_length=1, max_length=500)
+    effect_evidence_sha256: str = Field(..., min_length=64, max_length=64)
+    expires_at: datetime = Field(..., description="批准到期时间；naive 按北京时间解释")
+    note: str = Field("", max_length=500)
+
+
+class PromotionIn(BaseModel):
+    approval_id: int = Field(..., ge=1)
+
+
+class PromotionRevokeIn(BaseModel):
+    note: str = Field("", max_length=500)
+
+
 @router.get("/agent/params")
 async def list_params():
     """参数白名单与当前生效值（覆盖层优先于静态配置）。"""
@@ -179,6 +200,59 @@ async def apply_param_change(change_id: int):
     """生效变更单：写运行时覆盖层（免重启）+ 审计 + 变更留痕任务（mutation_source=user）。"""
     try:
         return {"data": params_svc.apply_change(change_id, mutation_source="user")}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/agent/params/changes/{change_id}/promotion-review")
+async def promotion_review(change_id: int):
+    """Read-only exact candidate/baseline/evidence package for independent human review."""
+    try:
+        return {"data": params_svc.promotion_review(change_id)}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/agent/params/changes/{change_id}/promotion-approvals")
+async def promotion_approvals(change_id: int):
+    return {"data": params_svc.list_promotion_approvals(change_id)}
+
+
+@router.post("/agent/params/changes/{change_id}/promotion-approval", dependencies=[Depends(require_write_token), Depends(require_promotion_approval_token)])
+async def approve_promotion(change_id: int, body: PromotionApprovalIn):
+    """Create a separate human approval bound to the exact reviewed package and effect artifact."""
+    try:
+        return {"data": params_svc.approve_shadow_promotion(
+            change_id,
+            expected_candidate_digest=body.candidate_digest,
+            expected_baseline_digest=body.baseline_digest,
+            expected_shadow_evidence_digest=body.shadow_evidence_digest,
+            effect_evidence_ref=body.effect_evidence_ref,
+            effect_evidence_sha256=body.effect_evidence_sha256,
+            expires_at=body.expires_at,
+            note=body.note,
+        )}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.post("/agent/params/changes/{change_id}/promote", dependencies=[Depends(require_write_token)])
+async def promote_param_shadow(change_id: int, body: PromotionIn):
+    """Atomically consume one exact human approval and activate the shadow candidate."""
+    try:
+        return {"data": params_svc.promote_shadow(
+            change_id, approval_id=body.approval_id, mutation_source="user",
+        )}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.post("/agent/params/promotion-approvals/{approval_id}/revoke", dependencies=[Depends(require_write_token), Depends(require_promotion_approval_token)])
+async def revoke_promotion_approval(approval_id: int, body: PromotionRevokeIn | None = None):
+    """Revoke an unconsumed approval; consumed promotions must use the normal rollback path."""
+    body = body or PromotionRevokeIn()
+    try:
+        return {"data": params_svc.revoke_promotion_approval(approval_id, note=body.note)}
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
