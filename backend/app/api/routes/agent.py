@@ -218,9 +218,12 @@ async def promotion_approvals(change_id: int):
     return {"data": params_svc.list_promotion_approvals(change_id)}
 
 
-@router.post("/agent/params/changes/{change_id}/promotion-approval", dependencies=[Depends(require_write_token), Depends(require_promotion_approval_token)])
-async def approve_promotion(change_id: int, body: PromotionApprovalIn):
-    """Create a separate human approval bound to the exact reviewed package and effect artifact."""
+@router.post("/agent/params/changes/{change_id}/promotion-approval", dependencies=[Depends(require_write_token)])
+async def approve_promotion(
+    change_id: int, body: PromotionApprovalIn,
+    approval_token: str = Depends(require_promotion_approval_token),
+):
+    """Create a separate promotion-operator approval bound to the exact reviewed package and effect artifact."""
     try:
         return {"data": params_svc.approve_shadow_promotion(
             change_id,
@@ -230,6 +233,7 @@ async def approve_promotion(change_id: int, body: PromotionApprovalIn):
             effect_evidence_ref=body.effect_evidence_ref,
             effect_evidence_sha256=body.effect_evidence_sha256,
             expires_at=body.expires_at,
+            approval_token=approval_token,
             note=body.note,
         )}
     except ValueError as exc:
@@ -238,7 +242,7 @@ async def approve_promotion(change_id: int, body: PromotionApprovalIn):
 
 @router.post("/agent/params/changes/{change_id}/promote", dependencies=[Depends(require_write_token)])
 async def promote_param_shadow(change_id: int, body: PromotionIn):
-    """Atomically consume one exact human approval and activate the shadow candidate."""
+    """Atomically consume one exact promotion-operator approval and activate the shadow candidate."""
     try:
         return {"data": params_svc.promote_shadow(
             change_id, approval_id=body.approval_id, mutation_source="user",
@@ -247,12 +251,15 @@ async def promote_param_shadow(change_id: int, body: PromotionIn):
         raise HTTPException(status_code=422, detail=str(exc))
 
 
-@router.post("/agent/params/promotion-approvals/{approval_id}/revoke", dependencies=[Depends(require_write_token), Depends(require_promotion_approval_token)])
-async def revoke_promotion_approval(approval_id: int, body: PromotionRevokeIn | None = None):
+@router.post("/agent/params/promotion-approvals/{approval_id}/revoke", dependencies=[Depends(require_write_token)])
+async def revoke_promotion_approval(
+    approval_id: int, body: PromotionRevokeIn | None = None,
+    approval_token: str = Depends(require_promotion_approval_token),
+):
     """Revoke an unconsumed approval; consumed promotions must use the normal rollback path."""
     body = body or PromotionRevokeIn()
     try:
-        return {"data": params_svc.revoke_promotion_approval(approval_id, note=body.note)}
+        return {"data": params_svc.revoke_promotion_approval(approval_id, approval_token=approval_token, note=body.note)}
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 

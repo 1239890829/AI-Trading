@@ -33,6 +33,7 @@ from typing import Any
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
+from app.core.auth import validate_agent_promotion_token
 from app.core.bjtime import beijing_now_naive, to_beijing_naive
 from app.core.config import REPO_ROOT
 from app.core.db import get_session_factory
@@ -337,7 +338,7 @@ def _promotion_snapshot(row: AgentParamChange, db) -> dict:
         blockers.append("shadow_assessment_missing")
     else:
         verdict = str(shadow.get("verdict") or "")
-        # A human approval may bind independent full-effect evidence, but it may not silently
+        # A promotion-operator approval may bind independently reviewed full-effect evidence, but it may not silently
         # override already-negative/insufficient local evidence. Scalar exploratory evidence must
         # at least support the candidate; structured style offsets may reach human review after
         # their structure-only guard returns shadow_review_required.
@@ -493,16 +494,18 @@ def approve_shadow_promotion(
     effect_evidence_ref: str,
     effect_evidence_sha256: str,
     expires_at: datetime,
+    approval_token: str | None = None,
     note: str = "",
     session_factory=None,
 ) -> dict:
-    """Create a human approval bound to the exact reviewed candidate/baseline/evidence.
+    """Create a promotion-operator approval bound to the exact reviewed candidate/baseline/evidence.
 
-    The approval source is server-fixed to ``human_api``. Candidate model evidence cannot
+    The approval source is server-fixed to ``promotion_token``. Candidate model evidence cannot
     synthesize this row by setting ``approved=true``. The caller must first read
     :func:`promotion_review` and echo all three exact digests, closing the review→approve
     time-of-check/time-of-use gap.
     """
+    validate_agent_promotion_token(approval_token)
     sf = session_factory or get_session_factory()
     ref, effect_sha = _validate_effect_evidence_identity(effect_evidence_ref, effect_evidence_sha256)
     expiry = to_beijing_naive(expires_at)
@@ -581,8 +584,11 @@ def approve_shadow_promotion(
     return out
 
 
-def revoke_promotion_approval(approval_id: int, *, note: str = "", session_factory=None) -> dict:
+def revoke_promotion_approval(
+    approval_id: int, *, approval_token: str | None = None, note: str = "", session_factory=None,
+) -> dict:
     """Revoke an unconsumed approval. Consumed approval must be handled by parameter rollback."""
+    validate_agent_promotion_token(approval_token)
     sf = session_factory or get_session_factory()
     now = beijing_now_naive()
     note = str(note or "").strip()[:500]
@@ -837,14 +843,14 @@ def promote_shadow(
     change_id: int, session_factory=None, *, approval_id: int | None = None,
     mutation_source: str | None = None,
 ) -> dict:
-    """Atomically consume a human approval and activate one exact shadow candidate.
+    """Atomically consume a promotion-operator approval and activate one exact shadow candidate.
 
     Candidate status CAS, approval one-shot consumption and live-baseline CAS share one
     transaction. Any concurrent candidate/evidence/baseline change rolls the whole transaction
     back. Model-produced ``approved`` fields are never consulted.
     """
     if approval_id is None:
-        raise ValueError("影子转正必须提供独立人工审查批准 approval_id")
+        raise ValueError("影子转正必须提供独立 promotion-operator 审查批准 approval_id")
     sf = session_factory or get_session_factory()
 
     # Read-only preflight before creating the mutation-trace task.

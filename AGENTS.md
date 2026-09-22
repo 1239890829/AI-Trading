@@ -37,7 +37,7 @@
    旧分支/补丁保留历史身份；历史C类executed也不得回写复盘applied。真正实施由获准开发者走
    `codex/*` → PR → 完整CI与独立审阅，本条不禁止用户授权的正常工程开发和测试。
    测试导入修改后的app同样会执行代码，禁改tests或worktree均不等于OS隔离。
-   参数晋级现只允许 `IMP-052` 的独立人工批准链：候选/当前基线/影子证据 digest + 仓库内效果证据文件 SHA-256 绑定，批准凭据 `ASHARE_AGENT_PROMOTION_TOKEN` 必须独立于普通 API token，24h 内一次性消费；候选/证据/基线/证据文件漂移、撤销/过期或后置实验基线失败均 fail-closed。完整 usage/token、跨进程预算和取消仍归 IMP-052 后续，当前不得冒称整项完成。
+   参数晋级现只允许 `IMP-052` 的独立于普通写权限的 promotion-operator 批准链：候选/当前基线/影子证据 digest + 仓库内效果证据文件 SHA-256 绑定，批准凭据 `ASHARE_AGENT_PROMOTION_TOKEN` 必须独立于普通 API token，24h 内一次性消费；候选/证据/基线/证据文件漂移、撤销/过期或后置实验基线失败均 fail-closed。**专用凭据校验在 service 层同样强制执行**，HTTP 依赖只负责取 header；任何内部调用若不显式提供同一凭据也不能创建/撤销批准。完整 usage/token、跨进程预算和取消仍归 IMP-052 后续，当前不得冒称整项完成。
    ⚠️ 用户对「`codex/*` PR 自动合并」的授权**不构成**对「应用内 LLM 自主改码并落地」的授权
    —— 两者是**不同的授权主体与执行体**，不可互推。
 

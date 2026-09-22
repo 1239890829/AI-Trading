@@ -39,6 +39,15 @@
 - `pyflakes app tests scripts`：通过。
 - backend 全量 pytest：最终重跑 100% 通过，exit 0。
 
+
+## #100 合并后 U49 纠偏
+
+PR #100 主体合并后继续按 U49 重新问“如果绕过 HTTP 路由，批准权限还成立吗？”，发现首版 `require_promotion_approval_token` 只在 FastAPI dependency 上校验：正常 HTTP 请求安全，但同进程内部代码若直接调用 `approve_shadow_promotion()` / `revoke_promotion_approval()`，service 本身并不要求专用凭据。该形态不满足“批准来源必须独立于候选/evaluator”的边界，因此不把 #100 绿灯当作永久结论。
+
+后续修正把 promotion credential 判定收敛到 `core/auth.py::validate_agent_promotion_token`：默认空、少于 32 字符、与普通 API token 相同、凭据不匹配均 fail-closed；HTTP dependency 只读取 `X-Agent-Promotion-Token`，再由 `check_agent_promotion_token` 把同一 domain 判据映射为 HTTP 状态；service 创建/撤销批准也要求显式传入同一凭据并再次校验。新增 direct-service bypass 回归，证明绕过 HTTP 不能绕过批准 authority。此纠偏不改变 candidate/evidence/baseline/TTL/一次性消费/后置实验契约，也不修改任何真实参数值。
+
+权限边界必须准确表述：`ASHARE_AGENT_PROMOTION_TOKEN` 是**同一服务进程内、独立于普通 API 写权限的高权限共享凭据**，不是 OS principal、登录用户身份或密码学隔离。它能防普通 write token、模型 evidence 与“忘传批准凭据”的内部调用直接创建/撤销批准；但能读取服务器配置的受信任代码仍在同一 trust boundary 内。因此该 secret 不得下发浏览器、不得进入模型/agenda/evaluator 输入，也不得把 `operator/promotion_token` 回执描述成已认证的独立自然人身份。
+
 ## 未完成
 
 IMP-052 保持“部分完成”。下一纵切只处理：统一 usage/token 计账、跨进程累计 quota 与原子预留/恢复、取消传播、超时与重试预算、任务真实终态。不得因本片完成宣称完整 Agent 权限/预算系统已经交付。

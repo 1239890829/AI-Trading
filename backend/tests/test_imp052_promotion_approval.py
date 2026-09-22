@@ -26,7 +26,10 @@ def sf(tmp_path, monkeypatch):
     factory = _factory(tmp_path)
     import app.services.agent_tasks as at
     import app.services.experiments as ex
+    from app.core.config import settings
 
+    monkeypatch.setattr(settings, "api_token", "")
+    monkeypatch.setattr(settings, "agent_promotion_token", "p" * 32)
     monkeypatch.setattr(ap, "get_session_factory", lambda: factory)
     monkeypatch.setattr(at, "get_session_factory", lambda: factory)
     monkeypatch.setattr(ap, "REPO_ROOT", tmp_path)
@@ -84,6 +87,7 @@ def _approve(sf, review, *, suffix="a", expires=None):
         effect_evidence_sha256=digest,
         expires_at=expires or (beijing_now_naive() + timedelta(hours=1)),
         note=f"review {suffix}",
+        approval_token="p" * 32,
         session_factory=sf,
     )
 
@@ -111,6 +115,7 @@ def test_approval_requires_exact_review_package_digests(sf, monkeypatch):
             effect_evidence_ref=ref,
             effect_evidence_sha256=digest,
             expires_at=beijing_now_naive() + timedelta(hours=1),
+            approval_token="p" * 32,
             session_factory=sf,
         )
     assert ap.list_promotion_approvals(review["change_id"], sf) == []
@@ -142,6 +147,7 @@ def test_approval_requires_real_effect_artifact_identity_not_boolean(sf, monkeyp
             effect_evidence_ref="repo://docs/review/no-digest.json",
             effect_evidence_sha256="approved",
             expires_at=beijing_now_naive() + timedelta(hours=1),
+            approval_token="p" * 32,
             session_factory=sf,
         )
 
@@ -230,7 +236,7 @@ def test_expired_and_revoked_approvals_fail_closed(sf, monkeypatch):
         ap.promote_shadow(change["id"], sf, approval_id=expired["id"])
 
     fresh = _approve(sf, review, suffix="c")
-    revoked = ap.revoke_promotion_approval(fresh["id"], note="review withdrawn", session_factory=sf)
+    revoked = ap.revoke_promotion_approval(fresh["id"], approval_token="p" * 32, note="review withdrawn", session_factory=sf)
     assert revoked["state"] == "revoked"
     with pytest.raises(ValueError, match="撤销"):
         ap.promote_shadow(change["id"], sf, approval_id=fresh["id"])
@@ -546,6 +552,7 @@ def test_effect_evidence_path_traversal_and_missing_file_fail_closed(sf, monkeyp
                 expected_shadow_evidence_digest=review["shadow_evidence_digest"],
                 effect_evidence_ref=ref, effect_evidence_sha256="a" * 64,
                 expires_at=beijing_now_naive() + timedelta(hours=1),
+                approval_token="p" * 32,
                 session_factory=sf,
             )
 
@@ -595,5 +602,23 @@ def test_effect_evidence_symlink_cannot_escape_allowed_directory(sf, monkeypatch
             effect_evidence_ref="repo://docs/review/escape-link",
             effect_evidence_sha256=digest,
             expires_at=beijing_now_naive() + timedelta(hours=1),
+            approval_token="p" * 32,
             session_factory=sf,
         )
+
+
+def test_direct_service_approval_cannot_bypass_authority_argument(sf, monkeypatch):
+    _change, review = _shadow_candidate(sf, monkeypatch)
+    ref, digest = _write_effect_evidence("direct-no-authority")
+    with pytest.raises(ValueError, match="晋级批准凭据无效"):
+        ap.approve_shadow_promotion(
+            review["change_id"],
+            expected_candidate_digest=review["candidate_digest"],
+            expected_baseline_digest=review["baseline_digest"],
+            expected_shadow_evidence_digest=review["shadow_evidence_digest"],
+            effect_evidence_ref=ref, effect_evidence_sha256=digest,
+            expires_at=beijing_now_naive() + timedelta(hours=1),
+            session_factory=sf,
+        )
+    with pytest.raises(ValueError, match="晋级批准凭据无效"):
+        ap.revoke_promotion_approval(999999, session_factory=sf)
