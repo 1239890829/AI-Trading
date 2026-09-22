@@ -127,8 +127,12 @@ def generate_meta_review(session_factory=None) -> dict:
         {"role": "system", "content": _META_SYSTEM},
         {"role": "user", "content": json.dumps(data, ensure_ascii=False, default=str)},
     ]
+    usage_box = {"value": None}
+    input_chars = sum(len(str(m.get("content") or "")) for m in messages)
     try:
         from app.core.llm_client import chat_completion
+        from app.services import agent_budget
+        agent_budget.check_model_input(input_chars)
 
         raw = chat_completion(
             base_url=settings.review_llm_base_url,
@@ -138,8 +142,29 @@ def generate_meta_review(session_factory=None) -> dict:
             provider=settings.llm_provider,
             cli_path=settings.llm_cli_path,
             timeout=120.0,
+            usage_callback=lambda value: usage_box.__setitem__("value", value),
         )
-    except Exception as exc:  # noqa: BLE001  LLM 不可用：只落数据不做 AI 判断（不伪装）
+        agent_budget.record_unmetered(
+            purpose="meta_review.llm", provider=settings.llm_provider, model=settings.review_llm_model,
+            state="succeeded", usage=usage_box["value"], attempts=1, timeout_seconds=120.0,
+            input_chars=input_chars, output_chars=len(raw), session_factory=sf,
+        )
+    except Exception as exc:  # noqa: BLE001  LLM 不可用/计账失败：不伪装成可用 AI 判断
+        try:
+            from app.services import agent_budget
+            already_persisted = (
+                isinstance(exc, agent_budget.BudgetError)
+                and exc.code == "output_budget_exceeded"
+            )
+            if not already_persisted:
+                agent_budget.record_unmetered(
+                    purpose="meta_review.llm", provider=settings.llm_provider, model=settings.review_llm_model,
+                    state="failed", usage=usage_box["value"], attempts=1, timeout_seconds=120.0,
+                    input_chars=input_chars, output_chars=0, error_kind=type(exc).__name__,
+                    session_factory=sf,
+                )
+        except Exception:
+            pass
         return _write_fallback(data, str(exc)[:200])
 
     from app.core.llm_client import extract_json_object

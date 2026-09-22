@@ -353,3 +353,123 @@ def test_create_task_rejects_registry_only_types(monkeypatch, tmp_path):
     assert set(names) == set(at.CREATABLE_TASK_TYPES) == set(at._HANDLERS)
     # 登记类仍留在 TASK_TYPES 里（前端/审计需要统一标签来源）
     assert {"mutation", "escalation"} <= set(at.TASK_TYPES)
+
+
+# ---------------------------------------------------------------- IMP-052 durable cancel / timeout
+
+
+def test_cross_process_cancel_request_does_not_fake_terminal_without_owner(monkeypatch, tmp_path):
+    """No local handle != canceled: persist intent and keep the real running state visible."""
+    factory, _ = _patch(monkeypatch, tmp_path)
+    with factory() as db:
+        db.add(AgentTask(id="remote-running", type="review", status="running"))
+        db.commit()
+    at._HANDLES.pop("remote-running", None)
+    out = at.cancel_task("remote-running")
+    assert out["status"] == "running"
+    assert out["cancel_requested_at"] is not None
+    rows = at.list_audit(task_id="remote-running")
+    assert any(r["action"] == "task.cancel.request" for r in rows)
+    assert not any(r["action"] == "task.cancel" for r in rows)
+
+
+def test_owner_polls_cross_process_cancel_and_confirms_terminal(monkeypatch, tmp_path):
+    class Slow(FakeReviewService):
+        async def run(self, td, methodology_version=None):
+            await asyncio.sleep(5)
+            pytest.fail("canceled owner must not continue after its awaited work")
+
+    _patch(monkeypatch, tmp_path, review=Slow())
+
+    async def main():
+        created = at.create_task("review")
+        tid = created["id"]
+        for _ in range(30):
+            await asyncio.sleep(0.02)
+            if at.get_task(tid)["status"] == "running":
+                break
+        # Simulate the cancel request arriving in another worker/process: it cannot access
+        # the owner's in-memory handle, only the shared DB cancel intent.
+        handle = at._HANDLES.pop(tid)
+        requested = at.cancel_task(tid)
+        assert requested["status"] == "running"
+        assert requested["cancel_requested_at"] is not None
+        at._HANDLES[tid] = handle
+        for _ in range(80):
+            await asyncio.sleep(0.03)
+            cur = at.get_task(tid)
+            if cur["status"] == "canceled":
+                return cur
+        return at.get_task(tid)
+
+    done = asyncio.run(main())
+    assert done["status"] == "canceled"
+    rows = at.list_audit(task_id=done["id"])
+    actions = [r["action"] for r in rows]
+    assert "task.cancel.request" in actions and "task.cancel" in actions
+
+
+def test_task_wall_timeout_is_failed_not_canceled(monkeypatch, tmp_path):
+    class Slow(FakeReviewService):
+        async def run(self, td, methodology_version=None):
+            await asyncio.sleep(1)
+            return FakeReport()
+
+    _patch(monkeypatch, tmp_path, review=Slow())
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "agent_task_timeout_seconds", 0.05)
+
+    async def main():
+        created = at.create_task("review")
+        for _ in range(80):
+            await asyncio.sleep(0.02)
+            cur = at.get_task(created["id"])
+            if cur["status"] in ("failed", "canceled", "succeeded"):
+                return cur
+        return cur
+
+    done = asyncio.run(main())
+    assert done["status"] == "failed"
+    assert done["error"]["code"] == "TaskTimeout"
+    assert done["error"]["retryable"] is True
+    assert done["cancel_requested_at"] is None
+
+
+def test_reconcile_honors_persisted_cancel_request(monkeypatch, tmp_path):
+    factory, _ = _patch(monkeypatch, tmp_path)
+    from app.core.bjtime import beijing_now_naive
+    with factory() as db:
+        db.add(AgentTask(
+            id="cancel-on-restart", type="review", status="running",
+            cancel_requested_at=beijing_now_naive(),
+        ))
+        db.commit()
+    assert at.reconcile_on_startup() == 1
+    out = at.get_task("cancel-on-restart")
+    assert out["status"] == "canceled"
+    assert out["error"] is None
+    assert out["finished_at"] is not None
+
+
+def test_immediate_cancel_before_execute_enters_eventually_confirms_canceled(monkeypatch, tmp_path):
+    class ShouldNotRun(FakeReviewService):
+        async def run(self, td, methodology_version=None):
+            pytest.fail("immediately canceled queued task must not reach handler")
+
+    _patch(monkeypatch, tmp_path, review=ShouldNotRun())
+
+    async def main():
+        created = at.create_task("review")
+        requested = at.cancel_task(created["id"])
+        assert requested["cancel_requested_at"] is not None
+        for _ in range(40):
+            await asyncio.sleep(0.02)
+            cur = at.get_task(created["id"])
+            if cur["status"] == "canceled":
+                return cur
+        return at.get_task(created["id"])
+
+    done = asyncio.run(main())
+    assert done["status"] == "canceled"
+    rows = at.list_audit(task_id=done["id"])
+    assert any(r["action"] == "task.cancel" for r in rows)

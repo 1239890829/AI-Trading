@@ -130,6 +130,8 @@ async def _jev_verdict(ctx: dict) -> dict | None:
             asyncio.to_thread(_call),
             timeout=float(getattr(settings, "jev_timeout_seconds", 8.0)) + 2.0,
         )
+    except asyncio.CancelledError:
+        raise
     except Exception as exc:  # noqa: BLE001 — 增强层故障不得拖垮告警
         log.info("alert triage jev unavailable: %s", type(exc).__name__)
         return None
@@ -155,7 +157,7 @@ async def _jev_verdict(ctx: dict) -> dict | None:
     }
 
 
-async def _llm_verdict(ctx: dict) -> tuple[str, str] | None:
+async def _llm_verdict(ctx: dict, session_factory=None) -> tuple[str, str] | None:
     """LLM 判读；返回 (verdict, reason)，不可用/非法返回 None（调用方降级）。"""
     from app.core.config import settings
     from app.core.llm_client import chat_completion, extract_json_object
@@ -164,6 +166,30 @@ async def _llm_verdict(ctx: dict) -> tuple[str, str] | None:
         {"role": "system", "content": _SYSTEM_PROMPT},
         {"role": "user", "content": json.dumps(ctx, ensure_ascii=False)},
     ]
+
+    # Deterministically unavailable providers do not consume a budget slot.
+    if settings.llm_provider == "claude_cli":
+        from app.core.llm_client import resolve_cli_path
+        if resolve_cli_path(settings.llm_cli_path) is None:
+            return None
+    elif not (settings.review_llm_base_url and settings.review_llm_api_key and settings.review_llm_model):
+        return None
+
+    from app.services import agent_budget
+    sf = session_factory or get_session_factory()
+    try:
+        lease = agent_budget.reserve(
+            agent_budget.SCOPE_AUTONOMY_LLM, purpose="triage.llm", kind="model",
+            provider=settings.llm_provider, model=settings.review_llm_model,
+            timeout_seconds=30.0, max_retries=0,
+            input_chars=sum(len(str(m.get("content") or "")) for m in messages),
+            session_factory=sf,
+        )
+    except agent_budget.BudgetError as exc:
+        log.info("alert triage llm budget blocked: %s", exc)
+        return None
+    agent_budget.start(lease["id"], sf)
+    usage_box = {"value": None}
 
     def _call() -> str:
         return chat_completion(
@@ -174,11 +200,24 @@ async def _llm_verdict(ctx: dict) -> tuple[str, str] | None:
             provider=settings.llm_provider,
             cli_path=settings.llm_cli_path,
             timeout=30.0,
+            usage_callback=lambda value: usage_box.__setitem__("value", value),
         )
 
     try:
         raw = await asyncio.wait_for(asyncio.to_thread(_call), timeout=45.0)
+        agent_budget.finish(
+            lease["id"], state="succeeded", usage=usage_box["value"],
+            output_chars=len(raw), attempts=1, session_factory=sf,
+        )
+    except asyncio.CancelledError:
+        with contextlib.suppress(Exception):
+            agent_budget.finish(lease["id"], state="canceled", usage=usage_box["value"],
+                                error_kind="cancelled", session_factory=sf)
+        raise
     except Exception as exc:  # noqa: BLE001  LLM 是增强层，失败必须降级
+        with contextlib.suppress(Exception):
+            agent_budget.finish(lease["id"], state="failed", usage=usage_box["value"],
+                                error_kind=type(exc).__name__, session_factory=sf)
         log.info("alert triage llm unavailable: %s", exc)
         return None
 
@@ -284,7 +323,7 @@ async def triage_event(event: AlertEvent, session_factory=None) -> dict | None:
             return _save(event.id, verdict, reason, "jev", sf)
 
     # 3) DeepSeek 复杂判读：Jev 低置信/不可用，或 shadow 模式一律继续。
-    got = await _llm_verdict(ctx)
+    got = await _llm_verdict(ctx, sf)
     if got is None:
         return _save(event.id, "notify", "AI 判读不可用，按规则提醒（未做噪音过滤）",
                      "llm_fallback", sf)

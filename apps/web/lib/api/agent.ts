@@ -39,6 +39,7 @@ export interface AgentTask {
   created_at: string | null;
   started_at: string | null;
   finished_at: string | null;
+  cancel_requested_at?: string | null;
   /** 只读留痕条目（议程自动执行，P1-14 留痕合一）：不可取消、不可重跑 */
   read_only?: boolean;
 }

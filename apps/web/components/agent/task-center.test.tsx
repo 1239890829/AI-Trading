@@ -111,4 +111,25 @@ describe("任务中心 · 告警升级待办（P1-36）", () => {
       mocked.mockImplementation(original!);
     }
   });
+
+  it("跨进程取消请求已持久化时显示取消中且禁止重复提交", async () => {
+    const { getAgentTasks } = await import("@/lib/api");
+    const mocked = vi.mocked(getAgentTasks);
+    const original = mocked.getMockImplementation();
+    mocked.mockImplementation(async () => [
+      { ...ESCALATION_TODO, id: "run-cancel", type: "review", status: "running", cancel_requested_at: "2026-09-22T20:40:00" },
+    ]);
+    try {
+      render(<TaskCenter />);
+      const label = (await screen.findAllByText("生成复盘报告"))[0];
+      fireEvent.click(label);
+      const button = await screen.findByRole("button", { name: "取消中…" });
+      expect((button as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(button);
+      expect(cancelAgentTask).not.toHaveBeenCalledWith("run-cancel");
+    } finally {
+      mocked.mockImplementation(original!);
+    }
+  });
+
 });

@@ -11,6 +11,7 @@ proposed 不是 executed/applied；真正实施由获准开发者走 codex/* →
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import re
@@ -237,25 +238,40 @@ def _main_worktree_clean(root: Path) -> bool:
     return rc == 0 and out == ""
 
 
-def _c_executed_today(session_factory) -> int:
-    """今日提案尝试数：新 code.propose 与历史 code.apply 一起计入。
+def _legacy_c_attempts_today(session_factory) -> int:
+    """Same-day carryover for attempts made before durable quota slots were deployed.
 
-    在模型请求前记尝试，失败也占上限；不把未知请求当作没有消费。
-    这是现有每日限制，不等于全局模型预算或跨进程原子预留。
+    This is not the concurrency authority for new calls.  It only prevents an in-day deployment
+    from resetting the historical C daily cap; all new requests race on ``code_proposal`` slots.
     """
     from sqlalchemy import select
-
     from app.models.agent import AgentAudit
     from app.services.evolution import _bj_cutoff_today
 
     with session_factory() as db:
-        rows = db.execute(
-            select(AgentAudit).where(
+        return len(db.execute(
+            select(AgentAudit.id).where(
                 AgentAudit.action.in_(("code.apply", "code.propose")),
                 AgentAudit.at >= _bj_cutoff_today(),
             )
-        ).scalars().all()
-        return len(rows)
+        ).all())
+
+
+def _c_executed_today(session_factory) -> int:
+    """今日 C 类提案预算 slot 占用数（跨进程持久事实）。"""
+    from sqlalchemy import select
+    from app.core.bjtime import beijing_now
+    from app.models.agent import AgentResourceUsage
+    from app.services.agent_budget import SCOPE_CODE_PROPOSAL
+
+    day = beijing_now().date().isoformat()
+    with session_factory() as db:
+        return len(db.execute(
+            select(AgentResourceUsage.id).where(
+                AgentResourceUsage.budget_date == day,
+                AgentResourceUsage.scope == SCOPE_CODE_PROPOSAL,
+            )
+        ).all())
 
 
 # ---------------------------------------------------------------- LLM patch 生成
@@ -300,7 +316,7 @@ def _extract_diff(raw: str) -> str | None:
     return diff or None
 
 
-def _llm_patch(item: dict, context: str) -> str:
+def _llm_patch(item: dict, context: str, *, usage_callback=None) -> str:
     """读上下文 + 修改要求 → unified diff（同步：调用链整体在 to_thread 里，阻塞无碍）。"""
     from app.core.config import settings
     from app.core.llm_client import chat_completion
@@ -320,6 +336,7 @@ def _llm_patch(item: dict, context: str) -> str:
         provider=settings.llm_provider,
         cli_path=settings.llm_cli_path,
         timeout=180.0,
+        usage_callback=usage_callback,
     )
 
 
@@ -555,7 +572,7 @@ def execute_c_item(item: dict, session_factory, agenda_date: str,
             return result("rejected", f"{name}：{reason}")
         if not (root / name).is_file():
             return result("rejected", f"{name}：目标文件不存在或不是普通文件")
-    if _c_executed_today(session_factory) >= C_DAILY_MAX:
+    if _legacy_c_attempts_today(session_factory) >= C_DAILY_MAX:
         return result("deferred", f"今日 C 类提案尝试已达上限（{C_DAILY_MAX}）")
     if not _main_worktree_clean(root):
         return result("deferred", "主工作区有未提交改动；提案需干净且稳定的基点，避免误读人工改动")
@@ -565,7 +582,36 @@ def execute_c_item(item: dict, session_factory, agenda_date: str,
     safe.update(base_commit=base, proposed_files=files)
     tag = f"proposal-{uuid.uuid4().hex}"
     from app.models.agent import AgentAudit
+    from app.services import agent_budget
     from app.services.agent_tasks import record_mutation, update_mutation_result
+
+    llm_lease = None
+    code_lease = None
+    task_lease = None
+    try:
+        task_lease = agent_budget.reserve(
+            agent_budget.SCOPE_AUTONOMY_TASK, purpose="agenda.C", kind="task",
+            session_factory=session_factory,
+        )
+        llm_lease = agent_budget.reserve(
+            agent_budget.SCOPE_AUTONOMY_LLM, purpose="code.propose", kind="model",
+            provider=settings.llm_provider, model=settings.review_llm_model, timeout_seconds=180.0,
+            max_retries=0, input_chars=len(_read_context(root, files)), session_factory=session_factory,
+        )
+        code_lease = agent_budget.reserve(
+            agent_budget.SCOPE_CODE_PROPOSAL, purpose="code.propose", kind="task",
+            session_factory=session_factory,
+        )
+    except agent_budget.BudgetError as exc:
+        if llm_lease is not None:
+            agent_budget.release(llm_lease["id"], session_factory)
+        if code_lease is not None:
+            agent_budget.release(code_lease["id"], session_factory)
+        if task_lease is not None:
+            agent_budget.release(task_lease["id"], session_factory)
+        return result("deferred", str(exc))
+    agent_budget.start(task_lease["id"], session_factory)
+    agent_budget.start(code_lease["id"], session_factory)
 
     mutation_id = None
     audit_id = None
@@ -587,7 +633,25 @@ def execute_c_item(item: dict, session_factory, agenda_date: str,
             db.commit()
             db.refresh(audit)
             audit_id = audit.id
-        raw = _llm_patch(item, _read_context(root, files))
+        usage_box = {"usage": None}
+        agent_budget.start(llm_lease["id"], session_factory)
+        try:
+            raw = _llm_patch(
+                item, _read_context(root, files),
+                usage_callback=lambda value: usage_box.__setitem__("usage", value),
+            )
+            agent_budget.finish(
+                llm_lease["id"], state="succeeded", usage=usage_box["usage"],
+                output_chars=(len(raw) if isinstance(raw, str) else 0), attempts=1,
+                session_factory=session_factory,
+            )
+        except Exception as exc:
+            with contextlib.suppress(Exception):
+                agent_budget.finish(
+                    llm_lease["id"], state="failed", usage=usage_box["usage"],
+                    error_kind=type(exc).__name__, session_factory=session_factory,
+                )
+            raise
         if not isinstance(raw, str) or len(raw.encode("utf-8")) > MAX_PATCH_BYTES:
             out = result("rejected", "模型输出缺失或超过补丁文本上限")
             return out
@@ -623,6 +687,24 @@ def execute_c_item(item: dict, session_factory, agenda_date: str,
         out = result("failed", f"代码提案失败：{_redact(exc)}；未应用或执行代码")
         return out
     finally:
+        if llm_lease is not None:
+            # If an exception happened before the model request started, free only that untouched slot.
+            with contextlib.suppress(Exception):
+                agent_budget.release(llm_lease["id"], session_factory)
+        terminal_state = "succeeded" if out.get("status") == "proposed" else "failed"
+        terminal_error = None if terminal_state == "succeeded" else str(out.get("status") or "failed")
+        if code_lease is not None:
+            with contextlib.suppress(Exception):
+                agent_budget.finish(
+                    code_lease["id"], state=terminal_state, error_kind=terminal_error,
+                    session_factory=session_factory,
+                )
+        if task_lease is not None:
+            with contextlib.suppress(Exception):
+                agent_budget.finish(
+                    task_lease["id"], state=terminal_state, error_kind=terminal_error,
+                    session_factory=session_factory,
+                )
         if mutation_id is not None:
             try:
                 update_mutation_result(mutation_id, "succeeded" if out["status"] == "proposed" else "failed",

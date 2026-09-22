@@ -61,6 +61,7 @@
 | **RV-04** | `review/chatgpt-multiwindow-audit-20260921.md` | L2 | 审计 | 9/15–9/21 ChatGPT 多窗口执行、Jev、隔离、运行态与工作区审计（一次性证据，不是第二账本） |
 | **RV-05** | `review/bug020-production-session-20260922.md` | L2 | 审计 | BUG-020 2026-09-22 生产完整交易会话验收证据（一次性时点证据） |
 | **RV-06** | `review/imp052-promotion-approval-20260922.md` | L2 | 审计 | IMP-052 参数晋级独立批准、证据绑定、原子消费与 U49 反证证据 |
+| **RV-07** | `review/imp052-budget-cancel-20260922.md` | L2 | 审计 | IMP-052 统一 usage/token、跨进程配额、输入输出预算、取消传播与部署日回填证据 |
 | **DR-01** | `daily-review/` | L1 | 存档 | 逐日复盘报告（YYYY-MM-DD.md） |
 | **DR-02** | `repo-watch/` | L1 | 存档 | 仓库周期性跟踪周报 |
 | **DR-03** | `evolution/` | L1 | 存档 | 进化议程每日执行日志 |

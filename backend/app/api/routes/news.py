@@ -69,6 +69,19 @@ async def news_digest(
             detail=f"新闻与公告数据源均失败：news({news_error})；announcements({ann_error})",
         )
 
+    def _usage_reporter(receipt: dict) -> None:
+        from app.services import agent_budget
+        agent_budget.record_unmetered(
+            purpose="news.llm", provider=settings.llm_provider, model=settings.news_llm_model,
+            state=str(receipt.get("state") or "failed"),
+            usage=receipt.get("usage") if isinstance(receipt.get("usage"), dict) else None,
+            attempts=max(1, int(receipt.get("attempts") or 1)),
+            timeout_seconds=float(receipt.get("timeout_seconds") or 0.0),
+            input_chars=max(0, int(receipt.get("input_chars") or 0)),
+            output_chars=max(0, int(receipt.get("output_chars") or 0)),
+            error_kind=(str(receipt.get("error_kind")) if receipt.get("error_kind") else None),
+        )
+
     rt = SummaryRouter(
         requested=settings.news_model,
         llm=LLMSummarizer(
@@ -77,6 +90,7 @@ async def news_digest(
             model=settings.news_llm_model,
             provider=settings.llm_provider,
             cli_path=settings.llm_cli_path,
+            usage_reporter=_usage_reporter,
         ),
     )
     # LLM 接入后摘要是同步 HTTP，必须丢线程池，不阻塞事件循环

@@ -89,6 +89,9 @@ def test_generate_meta_review_idempotent(sf, monkeypatch, tmp_path):
     monkeypatch.setattr(mr, "_EVOLUTION_DIR", tmp_path / "evolution")
 
     def fake_chat(**kw):
+        callback = kw.get("usage_callback")
+        if callback:
+            callback({"input_tokens": 33, "output_tokens": 7})
         return json.dumps({"patterns": ["C 类被门禁拦是常态"], "bias": "均衡",
                            "focus": ["补 C 类样本"], "score": {"decision_quality": 3, "safety_discipline": 5}})
 

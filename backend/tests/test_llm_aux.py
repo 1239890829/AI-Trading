@@ -223,11 +223,11 @@ def test_jev_shadow_keeps_full_deepseek_batch_and_records_comparison(tmp_path, m
     a = _event(sf, "纯数据罗列", age_min=10)
     b = _event(sf, "芯片产业明确催化", age_min=11)
     jev_client._reset_metrics_for_tests()
-    monkeypatch.setattr(la, "_jev_actionability", lambda rows: {a.id: 0.03, b.id: 0.94})
+    monkeypatch.setattr(la, "_jev_actionability", lambda rows, *args, **kwargs: {a.id: 0.03, b.id: 0.94})
 
     seen = {}
 
-    def fake_deepseek(rows):
+    def fake_deepseek(rows, *args, **kwargs):
         seen["ids"] = [r.id for r in rows]
         return [
             {"direction": 0, "theme": None, "chain": "", "reason": "中性"},
@@ -254,10 +254,10 @@ def test_jev_cascade_prefilters_only_high_confidence_neutral(tmp_path, monkeypat
     actionable = _event(sf, "半导体明确政策催化", age_min=11)
     monkeypatch.setattr(
         la, "_jev_actionability",
-        lambda rows: {neutral.id: 0.02, actionable.id: 0.91},
+        lambda rows, *args, **kwargs: {neutral.id: 0.02, actionable.id: 0.91},
     )
 
-    def fake_deepseek(rows):
+    def fake_deepseek(rows, *args, **kwargs):
         assert [r.id for r in rows] == [actionable.id]
         return [
             {"direction": 1, "theme": "半导体概念", "chain": "政策支持", "reason": "明确"}
@@ -281,9 +281,9 @@ def test_jev_cascade_all_neutral_skips_deepseek_entirely(tmp_path, monkeypatch):
     _settings(monkeypatch, jev_enabled=True, jev_mode="cascade", neutral_max_noul=0.05)
     a = _event(sf, "纯行情数据A", age_min=10)
     b = _event(sf, "纯行情数据B", age_min=11)
-    monkeypatch.setattr(la, "_jev_actionability", lambda rows: {a.id: 0.01, b.id: 0.03})
+    monkeypatch.setattr(la, "_jev_actionability", lambda rows, *args, **kwargs: {a.id: 0.01, b.id: 0.03})
     monkeypatch.setattr(
-        la, "_deepseek_items", lambda rows: (_ for _ in ()).throw(
+        la, "_deepseek_items", lambda rows, *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("all-neutral cascade must not call DeepSeek")
         ),
     )
@@ -302,9 +302,9 @@ def test_jev_prefilter_does_not_allow_partial_mark_when_deepseek_fails(tmp_path,
     neutral = _event(sf, "例行数据", age_min=10)
     remaining = _event(sf, "待DeepSeek判题材", age_min=11)
     monkeypatch.setattr(
-        la, "_jev_actionability", lambda rows: {neutral.id: 0.01, remaining.id: 0.8}
+        la, "_jev_actionability", lambda rows, *args, **kwargs: {neutral.id: 0.01, remaining.id: 0.8}
     )
-    monkeypatch.setattr(la, "_deepseek_items", lambda rows: (None, "synthetic failure"))
+    monkeypatch.setattr(la, "_deepseek_items", lambda rows, *args, **kwargs: (None, "synthetic failure"))
 
     out = la.judge_pending_batch(sf, theme_names=["半导体概念"])
     assert out["skipped"] is True

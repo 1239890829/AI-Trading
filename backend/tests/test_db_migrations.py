@@ -122,7 +122,7 @@ def test_versioned_database_upgrades_idempotently(tmp_path):
 # 新增表时把模型类追加进下面的元组即可获得同样的保护。
 _MODELS_UNDER_PARITY = (
     "OpportunityDecisionSnapshot", "OpportunityDecisionRun", "OpportunityOutcomeLabel",
-    "OpportunityOutcomeRevision", "AgentParamPromotionApproval",
+    "OpportunityOutcomeRevision", "AgentParamPromotionApproval", "AgentResourceUsage",
 )
 
 
@@ -165,7 +165,7 @@ def test_opportunity_learning_tables_match_their_models(tmp_path):
         OpportunityOutcomeLabel,
         OpportunityOutcomeRevision,
     )
-    from app.models.agent import AgentParamPromotionApproval
+    from app.models.agent import AgentParamPromotionApproval, AgentResourceUsage
 
     models = {
         "OpportunityDecisionSnapshot": OpportunityDecisionSnapshot,
@@ -173,6 +173,7 @@ def test_opportunity_learning_tables_match_their_models(tmp_path):
         "OpportunityOutcomeLabel": OpportunityOutcomeLabel,
         "OpportunityOutcomeRevision": OpportunityOutcomeRevision,
         "AgentParamPromotionApproval": AgentParamPromotionApproval,
+        "AgentResourceUsage": AgentResourceUsage,
     }
     engine, path = _fresh_engine(tmp_path, "parity")
     try:
@@ -192,6 +193,11 @@ def test_opportunity_learning_tables_match_their_models(tmp_path):
         )
         uq = [tuple(sorted(u["column_names"])) for u in insp.get_unique_constraints("opportunity_decision_snapshot")]
         assert ("snapshot_id",) in uq, "snapshot_id 的唯一性必须真的存在，不能被悄悄丢掉"
+
+        task_cols = {c["name"]: c for c in insp.get_columns("agent_task")}
+        assert "cancel_requested_at" in task_cols and task_cols["cancel_requested_at"]["nullable"] is True
+        task_idx = {i["name"] for i in insp.get_indexes("agent_task")}
+        assert "ix_agent_task_cancel_requested_at" in task_idx
     finally:
         engine.dispose()
         path.unlink(missing_ok=True)
@@ -245,3 +251,72 @@ def test_migration_scripts_never_use_the_default_engine():
         "迁移脚本不得使用 get_engine()（会把表建到默认库而非迁移目标库）："
         f"{hits} ⇒ 改用 op.get_bind()（详见 app/core/migrations.py docstring）"
     )
+
+
+def test_imp052_rollout_backfills_same_day_legacy_agent_consumption(tmp_path):
+    """IMP-052 migration must not reset today's model/task quotas on deploy/restart."""
+    import json
+    from alembic import command
+    from alembic.config import Config
+    from app.core.migrations import BACKEND_DIR
+
+    engine, path = _fresh_engine(tmp_path, "imp052-rollout")
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "migrations"))
+    cfg.attributes["configure_logger"] = False
+    try:
+        with engine.begin() as conn:
+            cfg.attributes["connection"] = conn
+            command.upgrade(cfg, "f4a2c8e1b6d3")
+            day = conn.scalar(text("select date(datetime('now','+8 hours'))"))
+            stamp = f"{day} 10:00:00"
+            conn.execute(text("""
+                insert into agent_audit(actor,action,target,before,after,task_id,rollback_ref,at)
+                values
+                  ('ai','agenda.generate','evolution',null,null,'task-agenda',null,:at),
+                  ('ai','code.propose','proposal-x',null,null,'task-code',null,:at)
+            """), {"at": stamp})
+            items = json.dumps([
+                {"class": "A", "status": "executed", "finding": "a"},
+                {"class": "B", "status": "executed", "finding": "b"},
+                {"class": "B", "origin": "data_health", "status": "executed", "finding": "health"},
+                {"class": "C", "status": "rejected", "finding": "c"},
+            ], ensure_ascii=False)
+            conn.execute(text("""
+                insert into agent_agenda(date,status,inputs,items,budget,error,created_at,finished_at)
+                values (:day,'executed','{}',:items,'{}',null,:at,:at)
+            """), {"day": day, "items": items, "at": stamp})
+
+        with engine.begin() as conn:
+            cfg.attributes["connection"] = conn
+            command.upgrade(cfg, "b5c9e7a2d4f1")
+
+        with engine.connect() as conn:
+            rows = conn.execute(text("""
+                select scope,slot,kind,purpose,state,usage_known,task_id
+                from agent_resource_usage
+                order by scope,slot
+            """)).mappings().all()
+            by_scope: dict[str, list[dict]] = {}
+            for row in rows:
+                by_scope.setdefault(str(row["scope"]), []).append(dict(row))
+
+            assert len(by_scope["autonomy_llm"]) == 2
+            assert {r["purpose"] for r in by_scope["autonomy_llm"]} == {"agenda.generate", "code.propose"}
+            assert all(r["state"] == "unknown" and r["usage_known"] == 0 for r in by_scope["autonomy_llm"])
+            assert [r["slot"] for r in by_scope["autonomy_llm"]] == [1, 2]
+
+            assert len(by_scope["code_proposal"]) == 1
+            assert by_scope["code_proposal"][0]["purpose"] == "code.propose"
+            assert by_scope["code_proposal"][0]["slot"] == 1
+
+            assert len(by_scope["autonomy_task"]) == 2
+            assert {r["purpose"] for r in by_scope["autonomy_task"]} == {"agenda.A", "agenda.B"}
+            assert [r["slot"] for r in by_scope["autonomy_task"]] == [1, 2]
+            assert not any(r["purpose"] == "agenda.C" for r in by_scope["autonomy_task"])
+
+            assert conn.scalar(text("select version_num from alembic_version")) == "b5c9e7a2d4f1"
+            assert conn.scalar(text("pragma integrity_check")) == "ok"
+    finally:
+        engine.dispose()
+        path.unlink(missing_ok=True)

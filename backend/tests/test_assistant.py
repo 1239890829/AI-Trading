@@ -1271,3 +1271,43 @@ def test_chat_route_second_tool_round(client, monkeypatch):
     # 工具标记绝不外泄
     joined = "".join(e["text"] for e in evs if e.get("type") == "delta")
     assert "{{tool:" not in joined
+
+
+def test_chat_input_budget_blocks_before_opening_stream(client, monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "agent_model_max_input_chars", 1)
+    monkeypatch.setattr(
+        assistant_routes, "_open_stream",
+        lambda msgs: pytest.fail("input budget must reject before model stream opens"),
+    )
+    resp = client.post("/api/assistant/chat", json={
+        "messages": [{"role": "user", "content": "this is over one char"}],
+    })
+    events = _parse_sse(resp.text)
+    assert not [e for e in events if e.get("type") == "delta"]
+    err = [e for e in events if e.get("type") == "error"]
+    assert err and "输入" in err[0]["message"] and "上限" in err[0]["message"]
+    assert events[-1] == {"type": "done"}
+
+
+def test_chat_output_budget_blocks_delta_before_user_and_records_failed_receipt(client, monkeypatch):
+    from app.core.config import settings
+    from app.services import agent_budget
+
+    monkeypatch.setattr(settings, "agent_model_max_input_chars", 250_000)
+    monkeypatch.setattr(settings, "agent_model_max_output_chars", 3)
+    fake = _FakeStream(["ABCD"])
+    monkeypatch.setattr(assistant_routes, "_open_stream", lambda msgs: fake)
+    resp = client.post("/api/assistant/chat", json={
+        "messages": [{"role": "user", "content": "hi"}],
+    })
+    events = _parse_sse(resp.text)
+    assert not [e for e in events if e.get("type") == "delta" and e.get("text") == "ABCD"]
+    err = [e for e in events if e.get("type") == "error"]
+    assert err and "输出" in err[0]["message"] and "上限" in err[0]["message"]
+    assert fake.closed is True
+    rows = [r for r in agent_budget.recent_usage(limit=20) if r["purpose"] == "assistant.chat"]
+    assert rows and rows[0]["state"] == "failed"
+    assert rows[0]["error_kind"] == "output_budget_exceeded"
+    assert rows[0]["output_chars"] == 4

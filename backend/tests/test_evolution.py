@@ -75,10 +75,16 @@ LLM_OK = json.dumps({"items": [
 
 def _fake_llm(monkeypatch, payload):
     async def fake(fn):
+        return fn()
+
+    def completion(*args, **kwargs):
+        callback = kwargs.get("usage_callback")
+        if callback:
+            callback({"input_tokens": 10, "output_tokens": 2})
         return payload
 
     monkeypatch.setattr(evo, "_llm_call", fake)
-    monkeypatch.setattr("app.core.llm_client.chat_completion", lambda *a, **k: payload)
+    monkeypatch.setattr("app.core.llm_client.chat_completion", completion)
 
 
 def test_full_cycle_a_class_shadow_then_applied(sf, monkeypatch):
@@ -214,10 +220,16 @@ def _counting_llm(monkeypatch, payload):
 
     async def fake(fn):
         calls["n"] += 1
+        return fn()
+
+    def completion(*args, **kwargs):
+        callback = kwargs.get("usage_callback")
+        if callback:
+            callback({"input_tokens": 10, "output_tokens": 2})
         return payload
 
     monkeypatch.setattr(evo, "_llm_call", fake)
-    monkeypatch.setattr("app.core.llm_client.chat_completion", lambda *a, **k: payload)
+    monkeypatch.setattr("app.core.llm_client.chat_completion", completion)
     return calls
 
 

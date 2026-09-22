@@ -57,7 +57,12 @@ _DIFF = _mk_diff("backend/app/demo.py")
 
 
 def _stub_llm(monkeypatch, diff: str | None):
-    monkeypatch.setattr(ce, "_llm_patch", lambda item, ctx: diff or "no diff here")
+    def fake(item, ctx, **kwargs):
+        callback = kwargs.get("usage_callback")
+        if callback:
+            callback({"input_tokens": 10, "output_tokens": 2})
+        return diff or "no diff here"
+    monkeypatch.setattr(ce, "_llm_patch", fake)
 
 
 def _stub_gate(monkeypatch, fail: bool = False):
@@ -710,7 +715,10 @@ def test_imp046_failed_attempt_counts_toward_daily_limit(mini_repo, sf, monkeypa
 
 
 def test_imp046_source_drift_defers_without_archival(mini_repo, sf, monkeypatch):
-    def model(*args):
+    def model(*args, **kwargs):
+        callback = kwargs.get("usage_callback")
+        if callback:
+            callback({"input_tokens": 10, "output_tokens": 2})
         (mini_repo / "backend/app/demo.py").write_text("# concurrent user edit\n")
         return _DIFF
     monkeypatch.setattr(ce, "_llm_patch", model)
@@ -722,14 +730,17 @@ def test_imp046_source_drift_defers_without_archival(mini_repo, sf, monkeypatch)
 
 @pytest.mark.parametrize("raw", [123, "x" * (128 * 1024 + 1)], ids=["invalid-type", "oversized"])
 def test_imp046_bad_or_oversized_output_is_rejected(mini_repo, sf, monkeypatch, raw):
-    monkeypatch.setattr(ce, "_llm_patch", lambda *a: raw)
+    monkeypatch.setattr(ce, "_llm_patch", lambda *a, **k: raw)
     out = ce.execute_c_item(_item(), sf, "2026-09-18", repo_root=mini_repo)
     assert out["status"] == "rejected" and out["patch_path"] is None
 
 
 def test_imp046_short_paths_use_canonical_context(mini_repo, sf, monkeypatch):
     seen = []
-    def model(item, context):
+    def model(item, context, **kwargs):
+        callback = kwargs.get("usage_callback")
+        if callback:
+            callback({"input_tokens": 10, "output_tokens": 2})
         seen.append(context)
         return _DIFF
     monkeypatch.setattr(ce, "_llm_patch", model)

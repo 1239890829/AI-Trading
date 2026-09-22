@@ -54,11 +54,26 @@ class ReviewService:
         #: app.state 引用（可选）：运行时惰性取 ths_sentinel——哨兵实例在
         #: lifespan 后段才创建，构造时不存在，不能在 __init__ 里取。
         self.state = state
+        def _usage_reporter(receipt: dict) -> None:
+            from app.services import agent_budget
+            agent_budget.record_unmetered(
+                purpose="review.llm", provider=llm_provider, model=llm_model,
+                state=str(receipt.get("state") or "failed"),
+                usage=receipt.get("usage") if isinstance(receipt.get("usage"), dict) else None,
+                attempts=max(1, int(receipt.get("attempts") or 1)),
+                timeout_seconds=float(receipt.get("timeout_seconds") or 0.0),
+                input_chars=max(0, int(receipt.get("input_chars") or 0)),
+                output_chars=max(0, int(receipt.get("output_chars") or 0)),
+                error_kind=(str(receipt.get("error_kind")) if receipt.get("error_kind") else None),
+                session_factory=self.session_factory,
+            )
+
         self._router = ModelRouter(
             requested=model,
             llm=LLMAnalyzer(
                 base_url=llm_base_url, api_key=llm_api_key, model=llm_model,
                 provider=llm_provider, cli_path=llm_cli_path,
+                usage_reporter=_usage_reporter,
             ),
         )
         ensure_default_methodology_file()

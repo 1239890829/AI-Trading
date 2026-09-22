@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text
+from sqlalchemy import DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.bjtime import beijing_now_naive
@@ -49,6 +49,45 @@ class AgentTask(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=beijing_now_naive, index=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime, default=None, index=True)
+
+
+class AgentResourceUsage(Base):
+    """Durable Agent resource reservation + model usage receipt (IMP-052).
+
+    Budgeted scopes use a small integer ``slot`` with a DB uniqueness constraint, so two
+    processes cannot both consume the last daily slot. Unmetered telemetry leaves slot NULL.
+    Started rows are never silently released: if a process dies after external I/O began,
+    startup reconciliation marks the row ``unknown`` and token usage remains explicitly unknown.
+    """
+
+    __tablename__ = "agent_resource_usage"
+    __table_args__ = (
+        UniqueConstraint("budget_date", "scope", "slot", name="uq_agent_resource_usage_budget_slot"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    budget_date: Mapped[str] = mapped_column(String(10), index=True)
+    scope: Mapped[str] = mapped_column(String(32), index=True)
+    slot: Mapped[int | None] = mapped_column(Integer, default=None)
+    kind: Mapped[str] = mapped_column(String(16), index=True)
+    purpose: Mapped[str] = mapped_column(String(80), index=True)
+    task_id: Mapped[str | None] = mapped_column(String(36), default=None, index=True)
+    provider: Mapped[str] = mapped_column(String(32), default="")
+    model: Mapped[str] = mapped_column(String(80), default="")
+    state: Mapped[str] = mapped_column(String(16), default="reserved", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_retries: Mapped[int] = mapped_column(Integer, default=0)
+    timeout_ms: Mapped[int] = mapped_column(Integer, default=0)
+    input_chars: Mapped[int] = mapped_column(Integer, default=0)
+    output_chars: Mapped[int] = mapped_column(Integer, default=0)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, default=None)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, default=None)
+    usage_known: Mapped[int] = mapped_column(Integer, default=0)
+    error_kind: Mapped[str | None] = mapped_column(String(32), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=beijing_now_naive, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, default=None, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, default=None, index=True)
 
 
 class AgentTriage(Base):

@@ -65,10 +65,12 @@ class AppServices:
     review: ReviewService
 
     async def aclose(self) -> None:
-        """停机收尾：先关 provider，再关题材目录（两者的连接池都不是无限重试的）。"""
+        """停机收尾：关闭外部连接，并清除进程级 Jev usage sink。"""
         from app.core.scheduler import SHUTDOWN_GRACE_SECONDS
+        from app.core.jev_client import set_usage_sink
         import asyncio
 
+        set_usage_sink(None)
         with contextlib.suppress(Exception, TimeoutError):
             await asyncio.wait_for(self.provider.aclose(), timeout=SHUTDOWN_GRACE_SECONDS)
         if self.theme_catalog is not None:
@@ -203,6 +205,27 @@ def build_services(app: FastAPI) -> AppServices:
         state=app.state,
     )
     app.state.review = review_svc
+
+    # Unified model usage query surface: Jev keeps its native JSONL/metrics, and mirrors
+    # metadata-only receipts into the durable Agent usage table for this process lifetime.
+    from app.core.jev_client import set_usage_sink
+    from app.services.agent_budget import record_unmetered
+
+    def _jev_usage_sink(receipt: dict) -> None:
+        record_unmetered(
+            purpose=f"jev.{receipt.get('purpose') or 'unspecified'}", provider="jev",
+            model=str(receipt.get("model") or settings.jev_model),
+            state="succeeded" if receipt.get("status") == "ok" else "failed",
+            usage=receipt.get("usage") if isinstance(receipt.get("usage"), dict) else None,
+            attempts=max(1, int(receipt.get("attempts") or 1)),
+            timeout_seconds=float(getattr(settings, "jev_timeout_seconds", 8.0)),
+            input_chars=max(0, int(receipt.get("input_chars") or 0)),
+            output_chars=0,
+            error_kind=(str(receipt.get("reason")) if receipt.get("reason") else None),
+            session_factory=session_factory,
+        )
+
+    set_usage_sink(_jev_usage_sink)
 
     # AI 控制台运行时（任务执行器需要 state 上的服务）+ 启动对账：
     # 残留 running/queued 任务标为 failed（进程重启=任务已中断，不假装还在跑）

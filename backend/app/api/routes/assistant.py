@@ -99,9 +99,10 @@ def _run_assistant_semantic_verify(payload: dict) -> None:
     try:
         from app.core.semantic_verify import verify_claims
 
+        claims = payload.get("claims") or []
+        evidence = payload.get("evidence") or []
         result = verify_claims(
-            payload.get("claims") or [],
-            payload.get("evidence") or [],
+            claims, evidence,
             purpose="assistant_evidence_verify",
             max_evidence_chars=int(payload.get("max_evidence_chars") or 12_000),
         )
@@ -229,6 +230,11 @@ async def _tool_context(
 async def assistant_chat(req: ChatRequest, request: Request) -> StreamingResponse:
     provider = settings.llm_provider
     model = settings.review_llm_model or settings.news_llm_model or "default"
+    try:
+        from app.core.db import get_session_factory
+        usage_sf = get_session_factory()
+    except Exception:  # metadata accounting unavailable must not expose secrets or crash setup
+        usage_sf = None
 
     # 实体词典先取：既用于快照标的解析，也是工具参数的实体校验来源。
     known_symbols: set[str] = set()
@@ -274,18 +280,27 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
     semantic_verify_payload: dict = {}
 
     async def _stream_round(messages: list[dict[str, str]], collect: bool, sink: list[str] | None = None):
-        """跑一轮流式生成。collect=True 时剥离工具标记，并把原始增量写入 sink。"""
+        """Run one model round with executable I/O budgets and metadata-only usage accounting."""
+        from app.services import agent_budget
+
+        input_chars = sum(len(str(m.get("content") or "")) for m in messages)
+        agent_budget.check_model_input(input_chars)
         raw_parts: list[str] = []
-        loop = asyncio.get_running_loop()
-        stream = await asyncio.to_thread(_open_stream, messages)
+        output_chars = 0
+        stream: ChatStream | None = None
+        terminal = "failed"
+        error_kind: str | None = None
         try:
+            loop = asyncio.get_running_loop()
+            stream = await asyncio.to_thread(_open_stream, messages)
             queue: asyncio.Queue = asyncio.Queue()
 
             def _produce() -> None:
+                assert stream is not None
                 try:
                     for delta in stream:
                         loop.call_soon_threadsafe(queue.put_nowait, ("delta", delta))
-                except BaseException as exc:  # noqa: BLE001  异常也走队列传给消费侧
+                except BaseException as exc:  # noqa: BLE001  pass transport errors to consumer
                     loop.call_soon_threadsafe(queue.put_nowait, ("raise", exc))
                 finally:
                     loop.call_soon_threadsafe(queue.put_nowait, ("eof", None))
@@ -300,12 +315,13 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
                     raise payload
                 if not payload:
                     continue
+                output_chars += len(payload)
+                # Enforce while streaming: text above the high-water mark is never emitted.
+                agent_budget.check_model_output(output_chars)
                 raw_parts.append(payload)
                 if not collect:
                     yield _sse({"type": "delta", "text": payload})
                     continue
-                # 收集模式：攒住文本，遇到"像是没打完的 {{tool:" 先不吐给用户，
-                # 完整的 {{tool:...}} 直接剥离——标记行绝不能出现在界面上。
                 pending += payload
                 if has_partial_tool_call(pending) and len(pending) < 400:
                     continue
@@ -317,10 +333,30 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
                 out = strip_tool_calls(pending)
                 if out:
                     yield _sse({"type": "delta", "text": out})
+            terminal = "succeeded"
+        except asyncio.CancelledError:
+            terminal = "canceled"
+            error_kind = "cancelled"
+            raise
+        except Exception as exc:
+            terminal = "failed"
+            error_kind = getattr(exc, "code", None) or type(exc).__name__
+            raise
         finally:
-            await _close_stream(stream)
+            if stream is not None:
+                await _close_stream(stream)
             if sink is not None:
                 sink.append("".join(raw_parts))
+            if usage_sf is not None:
+                try:
+                    agent_budget.record_unmetered(
+                        purpose="assistant.chat", provider=provider, model=model,
+                        state=terminal, usage=None, attempts=1, timeout_seconds=30.0,
+                        input_chars=input_chars, output_chars=output_chars,
+                        error_kind=error_kind, session_factory=usage_sf,
+                    )
+                except Exception as exc:  # response may already be streamed; keep accounting failure visible in logs
+                    log.warning("assistant usage accounting failed: %s", type(exc).__name__)
 
     async def event_stream():
         # 先发 meta：即使 LLM 不可用，前端也能渲染"正在生成"的状态再收到显式错误。

@@ -46,7 +46,7 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.db import get_session_factory
 from app.market import trade_calendar as tc
-from app.models.agent import AgentAgenda, AgentAudit, AgentParamChange, AgentTask
+from app.models.agent import AgentAgenda, AgentAudit, AgentParamChange
 from app.core.bjtime import beijing_now, beijing_now_naive  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
@@ -85,26 +85,10 @@ def _bj_cutoff_today() -> datetime:
 
 
 def _budget_status(session_factory) -> dict:
-    """今日预算占用：LLM 调用数（审计计）与自动执行任务数。"""
-    cutoff = _bj_cutoff_today()
-    with session_factory() as db:
-        tasks = db.execute(
-            select(AgentTask).where(AgentTask.created_at >= cutoff)
-        ).scalars().all()
-        audits = db.execute(
-            select(AgentAudit).where(
-                AgentAudit.action.in_(("agenda.generate", "triage.llm")),
-                AgentAudit.at >= cutoff,
-            )
-        ).scalars().all()
-    used_tasks = len([t for t in tasks if t.created_by == "ai"])
-    used_llm = len(audits)
-    return {
-        "llm_used": used_llm, "llm_budget": settings.agent_daily_llm_budget,
-        "tasks_used": used_tasks, "task_budget": settings.agent_daily_task_budget,
-        "llm_exhausted": used_llm >= settings.agent_daily_llm_budget,
-        "tasks_exhausted": used_tasks >= settings.agent_daily_task_budget,
-    }
+    """今日持久预算/usage 状态；不再从审计行反推额度。"""
+    from app.services.agent_budget import budget_status
+
+    return budget_status(session_factory)
 
 
 def _within_budget(budget: dict, *, need_llm: bool, need_task: bool) -> str | None:
@@ -880,6 +864,22 @@ async def generate_agenda(session_factory=None, app=None) -> dict:
         _AGENDA_INFLIGHT.discard(today)
 
 
+def _message_chars(messages: list[dict[str, str]]) -> int:
+    return sum(len(str(m.get("content") or "")) for m in messages)
+
+
+def _mark_agenda_budget_block(sf, agenda_id: int, reason: str) -> dict:
+    with sf() as db:
+        row = db.get(AgentAgenda, agenda_id)
+        row.status = "skipped"
+        row.error = json.dumps({"code": "Budget", "message": reason}, ensure_ascii=False)
+        row.budget = json.dumps(_budget_status(sf), ensure_ascii=False)
+        row.finished_at = beijing_now_naive()
+        db.commit()
+        db.refresh(row)
+        return _agenda_dump(row)
+
+
 async def _generate_agenda(sf, today: str, app=None) -> dict:
     """`generate_agenda` 的持锁主体：认领今日议程行 → 预算 → 证据 → LLM → 落库。
 
@@ -907,13 +907,7 @@ async def _generate_agenda(sf, today: str, app=None) -> dict:
     reason = _within_budget(budget, need_llm=True, need_task=False)
 
     if reason:
-        with sf() as db:
-            row = db.get(AgentAgenda, agenda_id)
-            row.status = "skipped"
-            row.error = json.dumps({"code": "Budget", "message": reason}, ensure_ascii=False)
-            row.finished_at = beijing_now_naive()
-            db.commit()
-            return _agenda_dump(row)
+        return _mark_agenda_budget_block(sf, agenda_id, reason)
 
     # ⚠️ 必须 to_thread：collect_inputs 是同步函数，内部九路证据全是**阻塞 IO**——
     # 其中 _collect_data_health 会 `duckdb.connect(market.duckdb)` 跑 `MAX(date_ms)`
@@ -924,8 +918,27 @@ async def _generate_agenda(sf, today: str, app=None) -> dict:
         {"role": "system", "content": _SYSTEM_PROMPT},
         {"role": "user", "content": json.dumps(inputs, ensure_ascii=False, default=str)},
     ]
+    llm_usage: dict | None = None
+    llm_lease: dict | None = None
     try:
         from app.core.llm_client import chat_completion
+        from app.services import agent_budget
+
+        try:
+            llm_lease = agent_budget.reserve(
+                agent_budget.SCOPE_AUTONOMY_LLM,
+                purpose="agenda.generate", kind="model",
+                provider=settings.llm_provider, model=settings.review_llm_model,
+                timeout_seconds=150.0, max_retries=0, input_chars=_message_chars(messages),
+                session_factory=sf,
+            )
+        except agent_budget.BudgetError as exc:
+            return _mark_agenda_budget_block(sf, agenda_id, str(exc))
+        agent_budget.start(llm_lease["id"], sf)
+
+        def _capture_usage(value):
+            nonlocal llm_usage
+            llm_usage = value
 
         def _call() -> str:
             return chat_completion(
@@ -936,9 +949,14 @@ async def _generate_agenda(sf, today: str, app=None) -> dict:
                 provider=settings.llm_provider,
                 cli_path=settings.llm_cli_path,
                 timeout=120.0,
+                usage_callback=_capture_usage,
             )
 
         raw = await _llm_call(_call)
+        agent_budget.finish(
+            llm_lease["id"], state="succeeded", usage=llm_usage,
+            output_chars=len(raw), attempts=1, session_factory=sf,
+        )
         # 确定性追加：数据健康 NG 不依赖 LLM 是否注意到（见 _data_health_items）。
         # 放在 _parse_items 之后 ⇒ 不占 LLM 的 3 项上限；至多 1 条。
         items = _parse_items(raw) + _data_health_items(inputs.get("data_health") or {})
@@ -947,13 +965,30 @@ async def _generate_agenda(sf, today: str, app=None) -> dict:
             row.inputs = json.dumps(inputs, ensure_ascii=False, default=str)
             row.items = json.dumps(items, ensure_ascii=False, default=str)
             row.status = "ready"
+            row.budget = json.dumps(_budget_status(sf), ensure_ascii=False)
             # finished_at 同补：skipped / failed 两条路径都在写，唯独成功路径漏了，
             # 于是"跑完了"的议程反而没有完成时间（三态口径下 finished_at 恒为空的
             # 含义是"还没结束"，与 ready 自相矛盾）。
             row.finished_at = beijing_now_naive()
             db.commit()
             out = _agenda_dump(row)
+    except asyncio.CancelledError:
+        if llm_lease is not None:
+            with contextlib.suppress(Exception):
+                from app.services import agent_budget
+                agent_budget.finish(
+                    llm_lease["id"], state="canceled", usage=llm_usage,
+                    error_kind="cancelled", session_factory=sf,
+                )
+        raise
     except Exception as exc:
+        if llm_lease is not None:
+            with contextlib.suppress(Exception):
+                from app.services import agent_budget
+                agent_budget.finish(
+                    llm_lease["id"], state="failed", usage=llm_usage,
+                    error_kind=type(exc).__name__, session_factory=sf,
+                )
         with sf() as db:
             row = db.get(AgentAgenda, agenda_id)
             row.status = "failed"
@@ -1087,41 +1122,57 @@ def execute_agenda(agenda: dict, session_factory=None) -> dict:
                           "message": "自主执行已关闭（ASHARE_AGENT_AUTONOMY_ENABLED=0），议程仅作建议"}}
     budget = _budget_status(sf)
     items: list[dict] = []
-    executed = 0
+    from app.services import agent_budget
+
     for item in agenda.get("items") or []:
         cls = item.get("class")
         if item.get("origin") == DATA_HEALTH_ORIGIN:
-            # 系统异常留痕**不占自治任务预算**：它是"记账"不是"自治行动"。
-            # 若被预算挤掉（LLM 条目用满 3 项时必然发生），异常就又变回"没人知道"
-            # ——正是本项存在的理由。执行体复用 B 类（docs/evolution/ 白名单，零副作用）。
+            # 系统异常留痕**不占自治任务预算**：它是事实记账，不是自治改进动作。
             items.append(_execute_b(item, agenda.get("date") or ""))
+            continue
+        # Preserve the existing public outcome: once the daily task budget is already exhausted,
+        # ordinary agenda items are deferred before deeper validation.  The later reserve() is still
+        # the cross-process atomic authority and closes races after this cheap snapshot precheck.
+        if _budget_status(sf).get("tasks_exhausted"):
+            items.append({**item, "status": "deferred",
+                          "result": f"今日自动任务预算已用尽（{settings.agent_daily_task_budget}）"})
+            continue
+        if cls not in {"A", "B", "C"}:
+            items.append({**item, "status": "rejected", "result": f"未知类别 {cls!r}"})
+            continue
+        if cls == "A" and _param_change_in_24h(item.get("param", {}).get("key", ""), sf):
+            items.append({**item, "status": "deferred",
+                          "result": "同参数 24h 内已有自动变更（频率闸）"})
             continue
         if cls == "C":
             from app.services import code_executor
-
-            new = code_executor.execute_c_item(item, sf, agenda.get("date") or "")
-            items.append(new)
-            if new["status"] == "executed":
-                executed += 1
+            items.append(code_executor.execute_c_item(item, sf, agenda.get("date") or ""))
             continue
-        if executed >= settings.agent_daily_task_budget:
-            items.append({**item, "status": "deferred",
-                          "result": f"今日自动任务预算已用尽（{budget['task_budget']}）"})
+        try:
+            task_lease = agent_budget.reserve(
+                agent_budget.SCOPE_AUTONOMY_TASK,
+                purpose=f"agenda.{cls}", kind="task", session_factory=sf,
+            )
+        except agent_budget.BudgetError as exc:
+            items.append({**item, "status": "deferred", "result": str(exc)})
             continue
-        if cls == "A":
-            if _param_change_in_24h(item.get("param", {}).get("key", ""), sf):
-                items.append({**item, "status": "deferred",
-                              "result": "同参数 24h 内已有自动变更（频率闸）"})
-                continue
-            new = _execute_a(item, sf, agenda.get("date") or "")
-        elif cls == "B":
-            new = _execute_b(item, agenda.get("date") or "")
-        else:
-            items.append({**item, "status": "rejected", "result": f"未知类别 {cls!r}"})
-            continue
+        agent_budget.start(task_lease["id"], sf)
+        try:
+            new = (_execute_a(item, sf, agenda.get("date") or "")
+                   if cls == "A" else _execute_b(item, agenda.get("date") or ""))
+            terminal = "succeeded" if new.get("status") == "executed" else "failed"
+            agent_budget.finish(
+                task_lease["id"], state=terminal, error_kind=(None if terminal == "succeeded" else str(new.get("status") or "failed")),
+                session_factory=sf,
+            )
+        except Exception as exc:
+            with contextlib.suppress(Exception):
+                agent_budget.finish(
+                    task_lease["id"], state="failed", error_kind=type(exc).__name__, session_factory=sf,
+                )
+            raise
         items.append(new)
-        if new["status"] == "executed":
-            executed += 1
+    budget = _budget_status(sf)
 
     # 兜底：无对应议程行（或库不可用）时返回**本次执行结果**本身，
     # 否则 `row is None` 会让 out 未绑定（UnboundLocalError）而丢掉执行回执。
