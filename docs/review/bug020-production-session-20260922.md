@@ -49,6 +49,16 @@
 - 当前判定：**通过开盘检查点，但保留一个语义观察项继续跟踪**——批次/health freshness 可为 ready，而单个 requested row 在短暂恢复窗仍可能是 stale；行级 quality/reasons 正确暴露了这一点。现阶段不把它判成 BUG，因为 row-level contract 没有隐藏陈旧值，且 600519 在约 20 秒内自行恢复；后续上午/午间继续核消费者是否错误只看 batch freshness。
 - 后端 PID 仍为 55303；当前尚未到 10:00–14:00 重启窗口，本检查点**未执行重启**。
 
+
+## 09:34–09:35 独立复核
+
+- 为避免仅依赖 09:30 自动检查，本轮再次独立采样。SQLite 继续 integrity_check=ok、39 tables；health=ok、is_stale=false、provider 无连续失败，scheduler 30/30 running。
+- REST /api/quotes?symbols=600519,sh000001 返回两行 quality=high、batch coverage=1.0、quotes/indices rejection=0：
+  - 600519：price=1248.86，data_timestamp=2026-09-22T01:30:12Z，received_at=2026-09-22T01:30:16.169632Z。
+  - sh000001：price=3956.69，data_timestamp=2026-09-22T01:34:45Z，received_at=2026-09-22T01:34:48.344261Z。
+- 随后连续读取 8 个真实 WS 帧：600519 event time 从 01:30:12 → 01:34:45 → 01:34:48 → 01:34:51 → 01:34:54；sh000001 从 01:34:45 → 01:34:48 → 01:34:51。所有帧 regressed_vs_seen=false，未发现 source event time 倒退或低质量值覆盖当前可信值。
+- 本检查点继续支持 09:30 结论：真实源发生过 source_time_regress_ignored 后，系统保留旧可信 current 并自行恢复；恢复后 source event time 持续单调推进。
+
 ## 受控重启
 
 - 状态：尚未执行。
