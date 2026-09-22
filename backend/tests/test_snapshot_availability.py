@@ -713,7 +713,7 @@ def test_fallback_staleness_is_not_masked_as_degraded():
     svc.last_snapshot_source = "quote_fallback"
     svc.last_degraded_reason = "fallback"
     svc.consecutive_failures = 2
-    assert svc.freshness().state == "stale"
+    assert svc.freshness(live=True).state == "stale"
 
 
 def test_bootstrap_injects_quote_hub_into_snapshot_service():

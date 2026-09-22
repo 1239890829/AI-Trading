@@ -148,10 +148,10 @@ def test_snapshot_ready_within_three_polls():
     assert svc.freshness().state == "ready"
 
 
-def test_snapshot_stale_beyond_three_polls():
+def test_snapshot_stale_beyond_three_live_polls():
     svc = _svc(breadth={"total": 1},
                last_success=datetime.now(timezone.utc) - timedelta(seconds=300))
-    assert svc.freshness().state == "stale"
+    assert svc.freshness(live=True).state == "stale"
 
 
 def test_snapshot_degraded_when_upstream_failing_but_data_fresh():
@@ -162,11 +162,19 @@ def test_snapshot_degraded_when_upstream_failing_but_data_fresh():
     assert "连续失败 3 次" in (f.reason or "")
 
 
-def test_off_hours_window_scales_with_poll_interval():
-    """休市时轮询降到 240s，窗口必须是 poll_interval×3——写死常量会恒定误报 stale。"""
-    svc = _svc(poll_interval=240.0, breadth={"total": 1},
+def test_off_hours_window_uses_actual_idle_cadence():
+    """生产 poll_interval 仍是 60s；午休实际 sleep=240s，freshness 必须跟真实 cadence。"""
+    svc = _svc(poll_interval=60.0, breadth={"total": 1},
                last_success=datetime.now(timezone.utc) - timedelta(seconds=300))
-    assert svc.freshness().state == "ready"
+    assert svc._next_delay(live=False) == 240.0
+    assert svc.freshness(live=False).state == "ready"
+    assert svc.freshness(live=True).state == "stale"
+
+
+def test_off_hours_eventually_stales_after_three_idle_cycles():
+    svc = _svc(poll_interval=60.0, breadth={"total": 1},
+               last_success=datetime.now(timezone.utc) - timedelta(seconds=800))
+    assert svc.freshness(live=False).state == "stale"
 
 
 def test_breadth_payload_keeps_legacy_keys_and_adds_freshness():

@@ -115,6 +115,14 @@
 - 11:28 上午收尾：health=ok、Hub consecutive_failures=0 / last_error=null、index 6/6、source_rejections=0；snapshot=ready / 5566 rows / age≈13s；scheduler 30/30，hotfix PID=73633 持续运行，日志 ERROR=0、Traceback=0、board_surge_error_count=0。
 - 主动扫描中另见 THS 429、个别 watchlist 瞬时缺失、deepseek-v4-flash 兼容警告等；它们均有现有 owner/熔断或与 BUG-020 无直接因果，本片不借机扩权修改。
 
+## 11:39–11:45 午休 cadence 假 stale 修复
+
+- 11:39 午休现场出现 health=degraded，但 Hub 本身 consecutive_failures=0、last_error=null、index 6/6、rejections=0；唯一异常是 snapshot freshness=stale。11:40 下一轮刷新后立即回 ready，说明不是数据源持续故障。
+- 根因：MarketSnapshotService.run() 在非连续竞价时段明确用 IDLE_INTERVAL_SECONDS=240s 降频，但 freshness() 仍固定按 self.poll_interval×3 判定；生产 poll_interval=60s，所以午休每个周期的第 181–240 秒都会把“按设计尚未到下一拍”的正常快照误判 stale。现有 test_off_hours_window 通过把 svc.poll_interval 人工改成 240 来模拟休市，未覆盖生产真实路径。
+- 修复：新增 _nominal_interval(live) 作为调度与 freshness 共用的设计 cadence；交易中仍用 poll_interval，午休/盘后用 IDLE_INTERVAL_SECONDS。freshness 窗口继续保持“当前 cadence ×3”的原意，不放宽盘中 180s 规则。
+- 回归：午休生产形态 poll_interval=60s、age=300s 时 freshness(live=False)=ready 且 live=True=stale；age=800s 时 live=False 仍必须 stale。fallback 老化测试改为显式 live=True，避免宿主时钟决定结论。freshness + snapshot_availability 全组通过，pyflakes 与 diff-check 通过。
+- 该修复只纠正时间语义，不改变全市场取数频率、严格 stock-count 分母、fallback 阈值或交易/策略行为。
+
 ## 最终判定
 
-**进行中。** 盘前、开盘、上午、restart/recovery、真实缺失恢复与 hotfix 生产验证均已有证据；仍必须继续覆盖午间、下午与收盘，且严格 snapshot 与 row freshness 在后续检查点保持稳定后，才允许把 BUG-020 改为“已完成”。
+**进行中。** 盘前、开盘、上午、restart/recovery、真实缺失恢复与 hotfix 生产验证均已有证据；午休 cadence 假 stale 已定位并修复，仍需部署后在真实 180–240 秒区间复验，并继续覆盖下午与收盘，才允许把 BUG-020 改为“已完成”。
