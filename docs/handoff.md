@@ -61,9 +61,9 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 本节只记录当前现场，不维护第二份 backlog；权威算法在总账 §5.9，任务元数据在所属 stage。
 
-- **当前主门**：G4
-- **主切片首选**：IMP-052
-- **领取边界**：IMP-020 已完成。用户本轮只追加授权“把前几轮总结尚未真正完成的现场项一起做完”，因此静态账本仍机械推导 G4/IMP-052，但本轮不领取 IMP-052；若 BUG-020 的显式运行条件进入开工窗，runtime selector 可临时把有效主门改为 G0。
+- **当前主门**：G0
+- **主切片首选**：BUG-020
+- **领取边界**：2026-09-22 08:32 北京时间，BUG-020 的 A_SHARE_OBSERVABLE_SESSION 已进入开工窗，runtime selector 实际返回 G0/BUG-020；本项已正式领取并进入进行中。今天只做完整生产交易会话验收，不领取 IMP-052；待收盘终验后再重新计算阶段门。
 - **当前现场**：AI-Trading 主工作区已 fast-forward 到 #96 merge `de86c680`；真实 SQLite `integrity_check=ok`/39 tables，30/30 scheduler running，盘后 snapshot 为 `stale/sina/5,564 rows`（收盘后状态，不是重启失败）。前端此前未运行；`npm ci` 已在 Node 22.22.2 下重建，695/695 tests 与 Next 16.3.3 production build 通过，`.next` 验收缓存已清。#96 post-merge docs/frontend success、backend 失败；测试网络隔离修复候选在新增 TDX minute fail-closed 非空守卫后，本地全量 backend 已达 4,275 collected / 4,195 passed / 80 skipped / 0 errors。静态阶段门仍为 G4/IMP-052，本轮不继续执行 IMP-052。
 - **阶段门重算**：静态账本仍为 G4/IMP-052；每轮 continue 先运行 runtime selector。BUG-020 只在已覆盖交易日的 08:30–09:15 完整会话开工窗临时变为 G0 actionable，领取后进入进行中并覆盖到收盘；日历 unknown 或错过开工窗不抢占。RSH-030/RSH-031 等继续保留各自效果前置与非阻断语义。
 - G0 的 BUG-028 / BUG-026 已完成，BUG-020 静态为 `待条件` 且已登记 `A_SHARE_OBSERVABLE_SESSION`；G1 的 BUG-029 / IMP-006 / IMP-044 已完成；G2 的 IMP-049 仍为 `待条件` 且尚无可机械判定的运行条件；G3/RSH-026 与 IMP-020 已完成。本轮用户授权的是审计遗留收口，不等于领取静态下一业务候选 IMP-052。
