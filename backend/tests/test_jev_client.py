@@ -18,6 +18,8 @@ def _reset(monkeypatch):
     monkeypatch.setattr(settings, "jev_max_state_chars", 20_000)
     monkeypatch.setattr(settings, "agent_model_max_timeout_seconds", 180.0)
     monkeypatch.setattr(settings, "agent_model_max_retries", 2)
+    monkeypatch.setattr(settings, "agent_model_max_input_chars", 250_000)
+    monkeypatch.setattr(settings, "agent_model_max_output_chars", 150_000)
     monkeypatch.setattr(settings, "jev_usage_log_enabled", False)
     monkeypatch.delenv("JEV_API_KEY", raising=False)
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
@@ -310,3 +312,30 @@ def test_global_usage_sink_failure_invalidates_successful_jev_result(monkeypatch
     out = jc.evaluate({"x": 1}, _questions(), purpose="sink-fail")
     assert out["ok"] is False
     assert out["reason"] == "usage_accounting_failed"
+
+
+def test_jev_agent_input_budget_blocks_before_network(monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-only-key")
+    monkeypatch.setattr(settings, "jev_max_state_chars", 100_000)
+    monkeypatch.setattr(settings, "agent_model_max_input_chars", 20)
+    monkeypatch.setattr(jc, "_post", lambda *a, **k: pytest.fail("input budget must block before network"))
+    out = jc.evaluate({"text": "x" * 30}, _questions(), purpose="input-budget")
+    assert out["skipped"] is True and out["reason"].startswith("input_budget_exceeded:")
+
+
+def test_jev_agent_output_budget_rejects_response_before_adoption(monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-only-key")
+    monkeypatch.setattr(settings, "agent_model_max_output_chars", 10)
+    monkeypatch.setattr(jc, "_post", lambda *_a, **_k: _response(
+        200, {
+            "model": "jev-test",
+            "answers": {"route": {
+                "type": "choice", "choice": "a", "confidence": 0.9,
+                "probabilities": {"a": 0.9, "b": 0.1},
+            }},
+            "usage": {"input_tokens": 2, "output_tokens": 1},
+            "padding": "x" * 100,
+        },
+    ))
+    out = jc.evaluate({"x": 1}, _questions(), purpose="output-budget")
+    assert out["ok"] is False and out["reason"].startswith("output_budget_exceeded:")

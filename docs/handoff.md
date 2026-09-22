@@ -1,11 +1,11 @@
-# 当前交接：G4 / IMP-052 完成候选 · 预算/取消最终收口
+# 当前交接：G4 / IMP-052 · #103 post-merge U49 取消真实性收口
 
 
 > **2026-09-21 多窗口审计及晚间收口**：详见 `docs/review/chatgpt-multiwindow-audit-20260921.md`。审计指出的三类执行缺口已进一步收口：① BUG-020 的条件激活不再只靠记忆，`scripts/ledger-runtime-selection.py` 可在下一交易日 08:30–09:15 开工窗把静态 G4 临时抢回 G0，错过窗口/日历未知均 fail-closed；② 本机 AI-Trading 后端已受控停服、同步 `master@c272d260`、重启并通过 SQLite/health/30 scheduler/snapshot 验收；③ 前端误判已纠正——Next 15.5.25 进程属于另一个 `vide-trading` 仓库，AI-Trading 当时没有前端进程，自身 `npm ci` 后在 Node 22.22.2 下 695/695 tests 与 Next 16.3.3 build 全绿。Jev 真实 assistant 请求也已新增 `assistant_tool_router` receipt；RSH-030 human gold 仍必须独立人工完成。IMP-053 actual-fill 契约与唯一 `54b7e0c` RECOVERY 仍按各自 owner 保留。任务状态仍以 stage 为准，不以本段建立第二账本。
 
-> **定位 / 摘要（2026-09-22 当前）**：BUG-020 与前序审计收口已完成；`G4 / IMP-052` 的前序 promotion authority 已由 PR #100/#101/#102 合入。本分支 `chatgpt/imp052-budget-cancel` 正在完成最后预算/取消纵切：统一 metadata usage/token、跨进程 quota slot、部署日 legacy backfill、unknown usage fail-closed、输入/输出/timeout/retry 高水位、跨 worker cancel intent 与真实终态。若本分支 exact-HEAD 发布门和 post-merge master CI 全绿，W05 将把 IMP-052 整项转为已完成；下一任务只能由合并后 runtime selector 重新机械选择。
+> **定位 / 摘要（2026-09-22 当前）**：BUG-020 与前序审计收口已完成；`G4 / IMP-052` promotion authority 已由 PR #100/#101/#102 合入，预算/统一 usage/跨进程 quota 主体 PR #103 已合入 `master@ab8ec441` 且 post-merge CI 全绿。#103 合并后的 U49 继续反证发现：`asyncio.Task.cancel()` 不能终止已经进入 `to_thread()` 的同步 worker，首版可能出现 DB 已 canceled/TaskTimeout、后台线程仍 drain 的假终态。当前唯一 IMP-052 residual 是该同 owner follow-up：running 改 cooperative checkpoint，in-flight bounded stage drain 后才确认 cancel/timeout，并补 Jev 全局 input/output 高水位与 durable sink fail-closed；不改策略参数、交易权限或既有预算值。该 follow-up 合并并 post-merge 全绿后再由 runtime selector 机械进入下一任务。
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** 本轮不改任何真实策略参数、权重、交易阈值或下单权限。C 类仍纯提案；参数晋级仍要求独立 promotion token。新预算表只管理资源/usage/终态，并提供后台只读查询，不向普通前台新增调试控制。当前分支必须重新获得自己的 exact-HEAD `DegradedRelease`、required CI、`release_check` 与 post-merge CI，不能复用 #100–#102 回执。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** 本轮不改任何真实策略参数、权重、交易阈值或下单权限。C 类仍纯提案；参数晋级仍要求独立 promotion token。预算/usage 表只管理资源与真实终态，不向普通前台新增调试控制。当前 follow-up 必须重新获得自己的 exact-HEAD `DegradedRelease`、required CI、`release_check` 与 post-merge CI，不能复用 #100–#103 回执。
 
 
 

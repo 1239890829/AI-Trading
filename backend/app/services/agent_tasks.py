@@ -371,12 +371,29 @@ def _load(row: AgentTask) -> dict:
     }
 
 
+class TaskWallTimeout(TimeoutError):
+    """Raised only by the Agent task cooperative wall-time checkpoint."""
+
+
 class _StepRecorder:
     """步骤轨迹记录器：每步写库一次（任务量小，不做批量优化）。"""
 
-    def __init__(self, task_id: str):
+    def __init__(self, task_id: str, *, deadline_monotonic: float | None = None):
         self.task_id = task_id
         self.index = 0
+        self.deadline_monotonic = deadline_monotonic
+
+    def checkpoint(self) -> None:
+        """Cooperatively stop only between bounded stages.
+
+        Python cannot kill a thread already running under ``asyncio.to_thread``.  A checkpoint
+        therefore never claims ``canceled``/``TaskTimeout`` until that in-flight stage has
+        actually returned.
+        """
+        if _cancel_requested(self.task_id):
+            raise asyncio.CancelledError
+        if self.deadline_monotonic is not None and time.monotonic() >= self.deadline_monotonic:
+            raise TaskWallTimeout
 
     def add(self, *, name: str, input_summary: str, output_summary: str,
             duration_ms: int, ok: bool, llm: dict | None = None) -> None:
@@ -423,6 +440,7 @@ class _StepRecorder:
 
 async def _h_review(rec: _StepRecorder, params: dict, app: Any) -> dict:
     """复盘任务：调用既有 review service（rules/llm 由配置决定）。"""
+    rec.checkpoint()
     svc = getattr(app.state, "review", None) if app is not None else None
     if svc is None:
         raise RuntimeError("复盘服务未就绪")
@@ -435,7 +453,9 @@ async def _h_review(rec: _StepRecorder, params: dict, app: Any) -> dict:
             output_summary=f"trade_date={td or '上一交易日'} version={version or '默认'}",
             duration_ms=0, ok=True)
     t0 = time.perf_counter()
-    report = await svc.run(td, methodology_version=version)
+    rec.checkpoint()
+    report = await svc.run(td, methodology_version=version, cancel_check=rec.checkpoint)
+    rec.checkpoint()
     data = report.model_dump() if hasattr(report, "model_dump") else dict(report)
     date_str = str(data.get("brief_date") or data.get("trade_date") or "")
     rec.add(name="执行复盘", input_summary=f"trade_date={td}",
@@ -448,6 +468,7 @@ async def _h_review(rec: _StepRecorder, params: dict, app: Any) -> dict:
 
 async def _h_data_check(rec: _StepRecorder, params: dict, app: Any) -> dict:
     """数据体检（只读）：数据源能力 + 单点源清单 + 快照规模 + 近 12h 告警计数。"""
+    rec.checkpoint()
     from app.services.provider_capabilities import (
         CAPABILITIES,
         providers_supporting,
@@ -462,6 +483,7 @@ async def _h_data_check(rec: _StepRecorder, params: dict, app: Any) -> dict:
             output_summary=(f"数据源 {len(CAPABILITIES)} 个 / 方法 {len(methods)} 项，"
                             f"任一源可用 {len(supported_methods)} 项，单点源 {len(spm)} 项"),
             duration_ms=int((time.perf_counter() - t0) * 1000), ok=True)
+    rec.checkpoint()
 
     snap = getattr(getattr(app, "state", None), "snapshot_service", None) if app is not None else None
     rows = getattr(snap, "snapshot", None) or []
@@ -479,6 +501,7 @@ async def _h_data_check(rec: _StepRecorder, params: dict, app: Any) -> dict:
         age_text = "—"
     rec.add(name="全市场快照", input_summary="", output_summary=f"{len(rows)} 只，最近刷新 {age_text}",
             duration_ms=0, ok=bool(rows))
+    rec.checkpoint()
 
     today_events = 0
     try:
@@ -495,6 +518,7 @@ async def _h_data_check(rec: _StepRecorder, params: dict, app: Any) -> dict:
     except Exception as exc:  # noqa: BLE001  体检是增强层，失败只降级
         log.debug("data_check events failed: %s", exc)
     rec.add(name="近 12h 告警", input_summary="", output_summary=f"{today_events} 条", duration_ms=0, ok=True)
+    rec.checkpoint()
 
     return {"kind": "artifact", "id": f"data-check-{int(time.time())}"}
 
@@ -531,20 +555,6 @@ def _cancel_requested(task_id: str) -> bool:
         return bool(row and row.cancel_requested_at is not None)
 
 
-async def _watch_cancel_request(task_id: str, owner: asyncio.Task) -> None:
-    """Poll durable cancel intent so a request from another process reaches the owner."""
-    while not owner.done():
-        await asyncio.sleep(0.2)
-        try:
-            requested = await asyncio.to_thread(_cancel_requested, task_id)
-        except Exception as exc:  # fail closed on state mutation: do not invent a cancellation
-            log.warning("cancel watcher read failed (%s): %s", task_id, exc)
-            continue
-        if requested and not owner.done():
-            owner.cancel()
-            return
-
-
 def _mark_cancel_requested(task_id: str) -> tuple[dict | None, bool]:
     """Persist cancel intent; never claim terminal cancellation before the owner stops."""
     now = beijing_now_naive()
@@ -577,26 +587,23 @@ def _set_status(task_id: str, status: str, **fields: Any) -> None:
 
 
 async def _execute(task_id: str, type_: str, params: dict) -> None:
-    rec = _StepRecorder(task_id)
+    timeout = max(0.1, float(settings.agent_task_timeout_seconds))
+    rec = _StepRecorder(task_id, deadline_monotonic=time.monotonic() + timeout)
     if _cancel_requested(task_id):
         _set_status(task_id, "canceled", finished_at=beijing_now_naive())
         record_audit(actor="user", action="task.cancel", target=type_,
-                     after={"status": "canceled", "confirmed": True}, task_id=task_id)
+                     after={"status": "canceled", "confirmed": True, "owner": "before_start"},
+                     task_id=task_id)
         _RUNNING.pop(type_, None)
         _HANDLES.pop(task_id, None)
         return
 
     _set_status(task_id, "running", started_at=beijing_now_naive())
-    owner = asyncio.current_task()
-    watcher = asyncio.create_task(
-        _watch_cancel_request(task_id, owner), name=f"agent-cancel-watch-{task_id}",
-    ) if owner is not None else None
     try:
+        rec.checkpoint()
         handler = _HANDLERS[type_]
-        timeout = max(0.1, float(settings.agent_task_timeout_seconds))
-        result = await asyncio.wait_for(handler(rec, params, _APP), timeout=timeout)
-        if _cancel_requested(task_id):
-            raise asyncio.CancelledError
+        result = await handler(rec, params, _APP)
+        rec.checkpoint()
         _set_status(task_id, "succeeded", result_ref=result, finished_at=beijing_now_naive())
         record_audit(actor="ai", action="task.finish", target=type_, after={"status": "succeeded"},
                      task_id=task_id)
@@ -604,19 +611,19 @@ async def _execute(task_id: str, type_: str, params: dict) -> None:
     except asyncio.CancelledError:
         _set_status(task_id, "canceled", finished_at=beijing_now_naive())
         record_audit(actor="user", action="task.cancel", target=type_,
-                     after={"status": "canceled", "confirmed": True}, task_id=task_id)
-        raise
-    except asyncio.TimeoutError:
+                     after={"status": "canceled", "confirmed": True,
+                            "owner": "cooperative_checkpoint"}, task_id=task_id)
+    except TaskWallTimeout:
         _set_status(
             task_id, "failed",
             error={"code": "TaskTimeout",
-                   "message": f"任务超过 {float(settings.agent_task_timeout_seconds):g}s wall-time 上限",
+                   "message": f"任务超过 {float(settings.agent_task_timeout_seconds):g}s wall-time 上限；当前不可中断步骤已收尾",
                    "retryable": True},
             finished_at=beijing_now_naive(),
         )
         record_audit(actor="ai", action="task.fail", target=type_,
                      after={"status": "failed", "error": "TaskTimeout"}, task_id=task_id)
-        log.warning("[AGENT-TASK] %s %s 超时", type_, task_id)
+        log.warning("[AGENT-TASK] %s %s 超时（bounded stage drained）", type_, task_id)
     except Exception as exc:
         _set_status(task_id, "failed", error={"code": type(exc).__name__, "message": str(exc),
                                               "retryable": True}, finished_at=beijing_now_naive())
@@ -624,13 +631,8 @@ async def _execute(task_id: str, type_: str, params: dict) -> None:
                      after={"status": "failed", "error": str(exc)}, task_id=task_id)
         log.warning("[AGENT-TASK] %s %s 失败：%s", type_, task_id, exc)
     finally:
-        if watcher is not None:
-            watcher.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await watcher
         _RUNNING.pop(type_, None)
         _HANDLES.pop(task_id, None)
-
 
 def create_task(type_: str, params: dict | None = None, *, created_by: str = "user") -> dict:
     """创建并启动任务（同类型互斥）。返回任务 dict。
@@ -644,8 +646,12 @@ def create_task(type_: str, params: dict | None = None, *, created_by: str = "us
             f"未知任务类型：{type_}"
             f"（可用：{'、'.join(t['type'] for t in creatable_task_types())}）"
         )
-    if type_ in _RUNNING:
-        raise RuntimeError(f"「{TASK_TYPES[type_]['label']}」正在运行中，请等待完成")
+    existing = _RUNNING.get(type_)
+    if existing is not None:
+        if existing.done():
+            _RUNNING.pop(type_, None)
+        else:
+            raise RuntimeError(f"「{TASK_TYPES[type_]['label']}」正在运行中，请等待完成")
     params = params or {}
     task_id = uuid.uuid4().hex
     with get_session_factory()() as db:
@@ -730,11 +736,14 @@ def cancel_task(task_id: str) -> dict | None:
         record_audit(actor="user", action="task.cancel.request", target=row["type"],
                      after={"status": row["status"], "cancel_requested": True}, task_id=task_id)
     handle = _HANDLES.get(task_id)
-    if handle is not None and not handle.done():
+    if row["status"] == "queued" and handle is not None and not handle.done():
         handle.add_done_callback(
             lambda done, tid=task_id, t=row["type"]: _confirm_local_handle_cancel(tid, t, done)
         )
         handle.cancel()
+    # Running tasks use cooperative checkpoints.  ``Task.cancel()`` cannot stop a worker that is
+    # already inside asyncio.to_thread(), so force-canceling here would make DB state lie while
+    # the thread kept running.
     return get_task(task_id)
 
 

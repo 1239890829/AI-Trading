@@ -23,7 +23,7 @@
 | 自主改进动作 | `autonomy_task` numbered slot；默认 3/day | A/B/C 真正尝试才占；data-health 事实留痕不占自治改进额度 |
 | C 提案独立日上限 | `code_proposal` slot；默认 1/day | 失败尝试也占，避免重试刷模型；部署日旧 `code.propose` 不被重启清零 |
 | 普通业务 LLM | 不偷占 autonomy 8 次；写统一 metadata telemetry | usage 不可得则 `usage_known=false`，不估算、不填 0 |
-| Jev | 保留原 metrics/JSONL；生产 lifespan 注册 metadata-only unified sink 到同一表 | sink 故障留警告，原 Jev telemetry 仍保留；state/questions 不进入 receipt |
+| Jev | 保留原 metrics/JSONL；生产 lifespan 注册唯一 metadata-only unified sink 到同一表 | 成功结果若 durable sink 写失败则返回 `usage_accounting_failed`、不得采用；原 Jev telemetry 仍保留，state/questions 不进入 receipt |
 | Agent task 取消 | DB 持久 `cancel_requested_at`；owner 轮询/本地 handle 接收取消 | 请求方无 owner handle 时**不**写 canceled；owner 确认停止或重启对账后才进入 canceled |
 | Agent task 超时 | `agent_task_timeout_seconds` 默认 600s | `failed / TaskTimeout`，与用户取消分开 |
 
@@ -61,12 +61,13 @@ Jev 原有最多 3 次 attempt 被统一 policy 约束为 `1 + min(2, agent_mode
 当前契约：
 
 1. cancel API 先持久化 `cancel_requested_at`，写 `task.cancel.request`；
-2. 若当前进程拥有 handle，立即 `handle.cancel()`；否则状态仍保持 queued/running，前端显示「取消中…」且禁止重复提交；
-3. owner 有 200ms DB watcher，观察到 cancel intent 后取消自己的协程；只有 `_execute` 捕获 `CancelledError` 后才写 `canceled` + confirmed audit；
-4. 服务重启对账：残留 queued/running 且已有 cancel intent → `canceled`；无 intent → `failed / Interrupted`；
-5. wall-time 超时 → `failed / TaskTimeout`，不伪装成用户取消。
+2. **queued** 且本进程 handle 尚未启动时可直接 cancel，handle done callback 确认真正未执行后写 `canceled`；
+3. **running** 任务不再调用 `Task.cancel()` 强杀：Python 无法终止已经运行在 `asyncio.to_thread()` 的同步 worker，强杀只会让 asyncio owner 结束而线程继续，造成假 terminal；
+4. running owner 在 ReviewService/handler 的 bounded stage 之间执行 cooperative checkpoint。收到 cancel intent 后，不再启动下一 stage；当前已经开始、不可中断的同步/外部步骤先真实 drain，再由 checkpoint 写 `canceled`。期间 API/前端保持 `running + cancel_requested_at` /「取消中…」；
+5. wall-time 也使用同一 cooperative deadline：deadline 已过但 in-flight stage 未结束时仍保持 running；stage drain 后才写 `failed / TaskTimeout`。不会出现 DB 先 terminal、后台线程仍继续的窗口；
+6. 服务重启对账：残留 queued/running 且已有 cancel intent → `canceled`；无 intent → `failed / Interrupted`。
 
-这套语义保证「请求取消」「确认停止」「进程崩溃」「超时」四件事不混用一个终态。
+因此这里的“取消”是**可证明的 cooperative drain**，不是 OS 线程强杀。已经完成或已经开始的不可中断步骤及其真实用量不会回滚；一旦 checkpoint 观察到取消/超时，不再启动后续阶段。这样「请求取消」「确认停止」「进程崩溃」「超时」和“in-flight 尚在 drain”不会混用一个终态。
 
 ## 6. 部署日不重置旧额度
 
@@ -91,12 +92,12 @@ Jev 原有最多 3 次 attempt 被统一 policy 约束为 `1 + min(2, agent_mode
 本片主动抓出的关键问题：
 
 - check-then-call quota race → DB unique numbered slots；
-- remote cancel 无 handle 却写 canceled → durable intent + owner confirmation；
+- remote cancel 无 handle 却写 canceled → durable intent + owner confirmation；PR #103 合并后继续反证又发现 `Task.cancel()` 对 `to_thread()` 只取消 await、不杀线程 → running 改 cooperative checkpoints，新增 cancel/timeout 两组“线程未 drain 前状态必须仍 running”反例；
 - C 类开关关闭/路径非法也占 task slot → task reservation 下沉到稳定基点之后；
 - 部署/重启当天额度清零 → migration legacy backfill；
 - 模型返回非字符串时 usage 代码先 `len(raw)` 改变业务错误分类 → 类型安全计账；
 - Assistant 流结束后才检查 output 太晚 → delta 发送前实时高水位；
-- Jev JSONL/metrics 成为第二套成本查询面 → 保留原运维 telemetry，同时由 lifespan 注册统一 metadata sink；
+- Jev JSONL/metrics 成为第二套成本查询面 → 保留原运维 telemetry，同时由 lifespan 注册**唯一** metadata sink；去掉逐调用点重复计账，且成功 Jev 若 durable sink 失败则 fail-closed 不采用；Jev 也在网络前/采用前执行 Agent input/output 高水位；
 - task/purpose hopping 可能被误认为新额度 → 同北京日/scope 全局 slot，专项反例证明换 task/purpose 仍耗同一预算；
 - 测试间进程级 Jev sink 可能泄漏 → `_reset_metrics_for_tests()` 同时清 sink；
 - meta-review output-budget 失败已先持久 failed receipt 时，异常路径不得再写第二条 receipt。
@@ -109,4 +110,4 @@ Jev 原有最多 3 次 attempt 被统一 policy 约束为 `1 + min(2, agent_mode
 
 ## 10. 完成裁定
 
-在最终工程门与发布门全绿的前提下，本片补齐 IMP-052 剩余预算/取消验收：统一 metadata usage/token 查询面、跨进程 quota 原子预留/恢复、unknown usage fail-closed、输入/输出/时间/重试预算、跨进程 cancel propagation、真实终态、源码默认与运行值核对、跨任务累计预算。结合前序 C 纯提案与 promotion authority 两纵切，`IMP-052` 可转为**已完成**；后续只按 U48/GOV-027 做机制生命周期复核，不再以“预算/取消未实现”为由保留 P0 阻断项。
+在最终工程门与发布门全绿的前提下，本片补齐 IMP-052 剩余预算/取消验收：统一 metadata usage/token 查询面、跨进程 quota 原子预留/恢复、unknown usage fail-closed、输入/输出/时间/重试预算、跨进程 cancel propagation、真实终态、源码默认与运行值核对、跨任务累计预算。结合前序 C 纯提案与 promotion authority 两纵切，并在 PR #103 post-merge U49 的 cancel/to_thread 真实性 follow-up 通过 exact-HEAD 发布门后，`IMP-052` 维持**已完成**；后续只按 U48/GOV-027 做机制生命周期复核，不再以“预算/取消未实现”为由保留 P0 阻断项。
