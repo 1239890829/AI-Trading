@@ -20,7 +20,8 @@
 | 09:30 左右 | 开盘后 | PASS / 观察到真实拒绝→恢复（见下） |
 | 10:30 | 上午 / restart | PASS（服务恢复；并发执行污染另记） |
 | 11:19–11:21 | 上午后段 | PASS / 上游 Sina 缺页被 fail-closed（见下） |
-| 12:30 | 午间 | 待采样 |
+| 11:47–11:53 | 午休早段 | PASS / cadence 与 market_closed 语义通过（见下） |
+| 12:30 | 午间后段 | 待采样 |
 | 13:30/14:30 | 下午 | 待采样 |
 | 15:10–15:30 | 收盘后 | 待采样/终验 |
 
@@ -123,6 +124,16 @@
 - 回归：午休生产形态 poll_interval=60s、age=300s 时 freshness(live=False)=ready 且 live=True=stale；age=800s 时 live=False 仍必须 stale。fallback 老化测试改为显式 live=True，避免宿主时钟决定结论。freshness + snapshot_availability 全组通过，pyflakes 与 diff-check 通过。
 - 该修复只纠正时间语义，不改变全市场取数频率、严格 stock-count 分母、fallback 阈值或交易/策略行为。
 
+## 11:47–11:53 午休生产复验与完整回归
+
+- 最新 HEAD=28a2f7c 已部署到 PID=9077。启动后 SQLite integrity_check=ok / 39 tables、scheduler 30/30；QuoteHub 在午休明确进入 market_closed，REST/WS 均返回 stale / market_closed，WS 约 5s 保活，不再把午休当实时 1Hz。
+- snapshot 11:48:21 首轮成功保存 5566 行。11:51:19 age=178.4s 仍 ready；11:51:46 age=205.1s 仍 ready、rows=5566、failures=0，直接命中旧实现会在 180s 后误判 stale 的反例区间。11:52:27 按 240s idle cadence 正常刷新 5566 行；11:53 age=46.1s / ready。
+- /api/health 午休总体仍为 degraded，是因为 QuoteHub 的 market_closed 使 hub.is_stale=true；这是现有数据实时性语义，不是进程 liveness 失败。HTTP 200、Hub failures=0 / last_error=null，snapshot ready。KEEP 该语义，不把正常午休改成“实时 ok”。
+- 最新 HEAD 的完整 backend pytest 已再次跑到 100% exit 0，随后 pyflakes app/tests/scripts 通过；午休两层定向回归（trade_calendar/QuoteHub/freshness/snapshot）也全部通过。
+- 前端本片完整回归为 Vitest 73 files / 696 tests 全绿，TypeScript、CI 同款 npx eslint .、Next 16.3.3 production build 全绿。构建产生的 .next 约 60MB 已删除，next-env.d.ts 的自动生成差异已恢复；无构建副产物入账。
+- 清理一个由旧执行实例遗留、无仓库 open-file 的阻塞 Python REPL；平台 BUG-020 自动续跑保持 disabled，当前只剩人工 single-writer。
+- 对插入提交 bdf8eef 已独立审查并 KEEP：它把 QuoteHub 宽松窗口从连续 09:15–15:05 改为 09:15–11:35 / 12:55–15:05，补午休 market_closed 回归，与 snapshot idle cadence 修复互补而不重复。
+
 ## 最终判定
 
-**进行中。** 盘前、开盘、上午、restart/recovery、真实缺失恢复与 hotfix 生产验证均已有证据；午休 cadence 假 stale 已定位并修复，仍需部署后在真实 180–240 秒区间复验，并继续覆盖下午与收盘，才允许把 BUG-020 改为“已完成”。
+**进行中。** 盘前、开盘、上午、restart/recovery、真实缺失恢复、hotfix 与午休早段均已通过；仍需 12:30 午间后段、13:30/14:30 下午及收盘终验，随后才能把 BUG-020 改为“已完成”并进入 PR/CI/合并。
