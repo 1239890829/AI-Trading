@@ -358,18 +358,27 @@ def match_news_events(
     return [h for _, h in hits[:limit]]
 
 
+def _pool_value(row, key: str):
+    """涨停池兼容 provider 的 Pydantic 记录与历史 dict 夹具。"""
+    if isinstance(row, dict):
+        return row.get(key)
+    return getattr(row, key, None)
+
+
 def seal_sequence(
-    pool: list[dict],
+    pool: list,
     member_symbols: set[str],
     limit: int = 3,
 ) -> list[str]:
     """龙头结构归因：题材内涨停成员按 first_seal_time 升序（封板时序即带动次序）。"""
-    hit = [p for p in pool or [] if p.get("symbol") in member_symbols]
-    hit.sort(key=lambda p: (p.get("first_seal_time") or "99:99"))
+    hit = [p for p in pool or [] if _pool_value(p, "symbol") in member_symbols]
+    hit.sort(key=lambda p: (_pool_value(p, "first_seal_time") or "99:99"))
     out = []
     for p in hit[:limit]:
-        boards = p.get("consecutive_boards") or p.get("lbc") or 1
-        out.append(f"{p.get('name')} {p.get('first_seal_time') or '?'}（{boards}板）")
+        boards = _pool_value(p, "consecutive_boards") or _pool_value(p, "lbc") or 1
+        out.append(
+            f"{_pool_value(p, 'name')} {_pool_value(p, 'first_seal_time') or '?'}（{boards}板）"
+        )
     return out
 
 

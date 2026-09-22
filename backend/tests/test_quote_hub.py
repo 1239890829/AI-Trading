@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.core.bjtime import beijing_today
+from app.core.bjtime import BJ_TZ, beijing_today
 from app.schemas.market import Quality, Quote
 from app.services import quote_hub as qh
 from app.services.quote_hub import QuoteHub
@@ -31,6 +31,38 @@ def make_q(symbol: str, name: str, price: float) -> Quote:
         data_timestamp=datetime.now(timezone.utc),
         source="test",
     )
+
+
+def test_aged_cache_is_stale_on_read_without_mutating_current():
+    """退出轮询池后的旧 current 可保留，但 REST/WS 读出不得继续冒充 high。"""
+    hub = QuoteHub(provider=None, poll_interval=1, stale_after=10)
+    q = make_q("600519", "贵州茅台", 100.0)
+    q.data_timestamp = datetime.now(timezone.utc) - timedelta(seconds=30)
+    hub.quotes[q.symbol] = q
+
+    visible = hub.get_quotes([q.symbol])[0]
+
+    assert visible is not q
+    assert visible.price == q.price == 100.0
+    assert visible.quality == Quality.stale
+    assert visible.quality_reasons == ["quote_age_exceeded"]
+    assert visible.freshness(fresh_within=hub.stale_after).state == "stale"
+    assert hub.quotes[q.symbol].quality == Quality.high
+    assert hub.quotes[q.symbol].quality_reasons == []
+
+
+def test_aged_prefixed_index_is_stale_on_read_without_mutating_current():
+    hub = QuoteHub(provider=None, poll_interval=1, stale_after=10)
+    q = make_q("000001", "上证指数", 3979.88)
+    q.data_timestamp = datetime.now(timezone.utc) - timedelta(seconds=30)
+    hub.indices[q.symbol] = q
+
+    visible = hub.get_quotes(["sh000001"])[0]
+
+    assert visible.symbol == "sh000001"
+    assert visible.quality == Quality.stale
+    assert visible.quality_reasons == ["quote_age_exceeded"]
+    assert hub.indices[q.symbol].quality == Quality.high
 
 
 def test_bare_stock_symbol_never_falls_back_to_index():
@@ -411,6 +443,29 @@ def test_source_rejection_summary_clears_after_clean_recovery(isolate_calendar, 
     assert hub.source_rejections()["quotes"] == {"count": 0, "reasons": {}}
     assert hub.last_batch_coverage == 1.0
     assert hub.quotes["600105"].quality == Quality.high
+
+
+def test_lunch_break_marks_cached_quotes_market_closed(monkeypatch):
+    async def _today_days(_provider, lookback_days: int = 120):
+        return [beijing_today()]
+
+    lunch = datetime(
+        beijing_today().year, beijing_today().month, beijing_today().day,
+        12, 0, tzinfo=BJ_TZ,
+    )
+    monkeypatch.setattr(qh.tc, "trading_days", _today_days)
+    monkeypatch.setattr(qh.tc, "in_trading_window", lambda now=None: False)
+    monkeypatch.setattr(qh, "beijing_now", lambda: lunch)
+
+    a = make_q("600105", "平安银行", 10.0)
+    b = make_q("600519", "贵州茅台", 100.0)
+    hub, _prov = _hub_with([a, b])
+    asyncio.run(hub.refresh())
+
+    assert hub._closed_marked is True
+    assert hub.freshness().state == "stale"
+    assert {q.quality for q in hub.get_quotes()} == {Quality.stale}
+    assert all(q.quality_reasons == ["market_closed"] for q in hub.get_quotes())
 
 
 def test_market_closed_reason_overrides_batch_missing(monkeypatch):

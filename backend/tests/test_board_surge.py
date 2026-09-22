@@ -19,6 +19,7 @@ from sqlalchemy.orm import sessionmaker
 from app.models.watchlist import Base
 from app.models.event import EventCard, EventDirection
 from app.picks import board_surge as bs
+from app.schemas.market import LimitUpRecord
 
 
 # ---------------------------------------------------------------- 构造器
@@ -213,6 +214,23 @@ def test_seal_sequence_orders_by_first_seal():
     out = bs.seal_sequence(pool, {"s1", "s2", "s3"})
     assert out == ["早封 09:33（2板）", "中封 10:20（1板）", "晚封 13:37（1板）"]
     assert bs.seal_sequence(pool, set()) == []
+
+
+def test_seal_sequence_accepts_provider_limit_up_records():
+    pool = [
+        LimitUpRecord(
+            symbol="s2", name="中封", trade_date="2026-09-22", source="test",
+            first_seal_time="10:20", consecutive_boards=1,
+        ),
+        LimitUpRecord(
+            symbol="s1", name="早封", trade_date="2026-09-22", source="test",
+            first_seal_time="09:33", consecutive_boards=2,
+        ),
+    ]
+
+    assert bs.seal_sequence(pool, {"s1", "s2"}) == [
+        "早封 09:33（2板）", "中封 10:20（1板）",
+    ]
 
 
 def test_attach_attribution_appends_with_basis():

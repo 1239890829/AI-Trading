@@ -88,6 +88,8 @@ async def fetch_market_snapshot(page_size: int = 100, concurrency: int = 6, time
         if not resp.text.strip().strip('"').isdigit():
             raise ProviderError("sina stock count 响应不可解析（非数字）")
         total = int(resp.text.strip().strip('"'))
+        if total <= 0:
+            raise ProviderError(f"sina stock count 非正数: {total}")
         pages = (total + page_size - 1) // page_size
 
         async def page(p: int) -> list[dict]:
@@ -117,6 +119,9 @@ async def fetch_market_snapshot(page_size: int = 100, concurrency: int = 6, time
                     raise ProviderError(f"sina page fetch failed: {item}")
                 results.extend(item)
     rows = [r for r in (parse_row(x) for x in results) if r]
-    if len(rows) < total * 0.9:
-        raise ProviderError(f"sina snapshot incomplete: {len(rows)}/{total}")
+    identities = {(r.get("market"), r.get("symbol")) for r in rows}
+    if len(rows) != total or len(identities) != total:
+        raise ProviderError(
+            f"sina snapshot incomplete: rows={len(rows)} unique={len(identities)} expected={total}"
+        )
     return rows

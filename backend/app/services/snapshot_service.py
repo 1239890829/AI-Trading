@@ -353,6 +353,12 @@ class MarketSnapshotService:
                 log.warning("snapshot refresh failed (%s): %s", type(exc).__name__, exc)
             await asyncio.sleep(self._next_delay(live=live))
 
+    def _nominal_interval(self, *, live: bool | None = None) -> float:
+        """返回当前时段的设计轮询 cadence，供调度与 freshness 共用。"""
+        if live is None:
+            live = in_trading_window()
+        return self.poll_interval if live else IDLE_INTERVAL_SECONDS
+
     def _next_delay(self, *, live: bool) -> float:
         """下一轮抓取前的等待秒数（三重判据，优先级从高到低）。
 
@@ -374,23 +380,23 @@ class MarketSnapshotService:
                 RATE_LIMIT_COOLDOWN_CAP_SECONDS,
             )
         if not live:
-            return IDLE_INTERVAL_SECONDS
+            return self._nominal_interval(live=False)
         if self.consecutive_failures == 0:
-            return self.poll_interval
+            return self._nominal_interval(live=True)
         return min(
             self.poll_interval * (2 ** min(self.consecutive_failures, 4)),
             BACKOFF_CAP_SECONDS,
         )
 
-    def freshness(self) -> Freshness:
+    def freshness(self, *, live: bool | None = None) -> Freshness:
         """全市场快照的新鲜度（S2-1 契约的 **snapshot 样板**）。
 
         为什么不能只看 `breadth is None`（S1-3 实测缺陷）：`market_context` 过去
         只判"有没有"，于是**20 分钟前的宽度**配上当前涨停池照样算出「阶段」——
         数字全都合理、结论是错的，且界面上看不出任何异常。
 
-        新鲜窗口用 **`poll_interval × 3`** 而不是固定秒数：轮询周期本身就是这个
-        数据源的固有节奏（盘中 60s、休市 240s），写死一个常量会在休市时段
+        新鲜窗口用 **当前设计 cadence × 3** 而不是固定秒数：盘中取
+        poll_interval、休市/午休取 IDLE_INTERVAL_SECONDS；写死一个常量会在休市时段
         恒定误报 stale。连续失败次数 >0 但数据仍在窗口内时降级为 `degraded`
         ——"数据还新鲜，但上游正在出问题"是需要提前知道的信号。
         """
@@ -402,7 +408,7 @@ class MarketSnapshotService:
                 if self.rate_limited else "全市场快照尚未就绪"
             )
             return Freshness.unavailable(reason=reason, source="sina")
-        fresh_within = self.poll_interval * 3
+        fresh_within = self._nominal_interval(live=live) * 3
         source = self.last_snapshot_source or "sina"
         f = Freshness.from_age(
             as_of=self.last_success, fresh_within=fresh_within, source=source,

@@ -36,7 +36,7 @@
 
 **数据失败、身份与源时间真实性**
 
-- **状态**：待条件
+- **状态**：已完成
 - **优先级**：P0
 - **阶段门**：G0
 - **门内序**：30
@@ -46,12 +46,12 @@
 - **方案依据**：主方案 §3、§15；数据源附件 B/F
 - **范围**：保留身份/单位/完整性修复；收口源事件时间、参考交易日、失败/有效空集、缺数和真实消费者降级契约。
 - **验收**：Provider→Hub→REST/WS/界面失败和恢复一致；未知/陈旧/晚到/身份不可信观测不覆盖当前可信值；实源与隔离夹具分开报告。
-- **证据**：PR #21、#24–#26/#28 已完成前序身份、跌停失败、题材写保护及指数完整性；PR #54 / `92907c9` 补齐共享 source-time/current-value 接纳门。修前五类行为反例真实判红：明显未来时间戳被 `age=0` 冒充 ready、`quality=low` 可派生成 ready、晚到旧报价覆盖新值、非法未来报价覆盖当前值、首次非法报价被写入 current cache；后续又补缺源时间、盘外缺价格、重复/未请求 symbol、指数错 market/重复/未知身份与 REST/WS/health 可见性。修后：未来超 5 分钟时钟偏差为 degraded；缺 `data_timestamp` 只能按 `received_at` 降级判断；源时间倒退在盘内外都判；已有可信值遇晚到/非法/缺价/缺源时间/重复身份时值与源时间均保持不变并标 stale 原因；首次不可信观测不伪造 current；最近已完成批次的拒绝数量/原因通过 REST meta、WS meta 与 health 暴露，合法空集/纯缺失仍与源拒绝分开。BUG-020 相关契约集 259 项全绿；全后端 4075 tests collected、pytest 100% + `pyflakes app tests` exit 0；前端 693/693、tsc、eslint、production build 全绿。
+- **证据**：PR #21、#24–#26/#28 已完成前序身份、跌停失败、题材写保护及指数完整性；PR #54 / `92907c9` 补齐共享 source-time/current-value 接纳门。修前五类行为反例真实判红：明显未来时间戳被 `age=0` 冒充 ready、`quality=low` 可派生成 ready、晚到旧报价覆盖新值、非法未来报价覆盖当前值、首次非法报价被写入 current cache；后续又补缺源时间、盘外缺价格、重复/未请求 symbol、指数错 market/重复/未知身份与 REST/WS/health 可见性。修后：未来超 5 分钟时钟偏差为 degraded；缺 `data_timestamp` 只能按 `received_at` 降级判断；源时间倒退在盘内外都判；已有可信值遇晚到/非法/缺价/缺源时间/重复身份时值与源时间均保持不变并标 stale 原因；首次不可信观测不伪造 current；最近已完成批次的拒绝数量/原因通过 REST meta、WS meta 与 health 暴露，合法空集/纯缺失仍与源拒绝分开。BUG-020 相关契约集 259 项全绿；全后端 4075 tests collected、pytest 100% + `pyflakes app tests` exit 0；前端 693/693、tsc、eslint、production build 全绿。 2026-09-22 08:32 北京时间 runtime selector 实际返回 G0/BUG-020 active，并完成盘前→开盘→上午→受控 restart/recovery→午休→下午→收盘整段生产验收；真实晚到/缺页/缺失均按契约 fail-closed 后恢复，收盘仍明确 `market_closed` 且 current/source event time 无倒退。完整证据见 docs/review/bug020-production-session-20260922.md。
 - **实源证据**：2026-09-20（周日）从主仓生产配置上下文调用 `build_provider(settings)` 成功构建 `chain(ths→tencent→eastmoney→sina)`；交易日历最新有效日为 2026-09-18。只读指数探针返回 6/6，原始对象虽 `quality=high`，source timestamp 均落在 2026-09-18；使用本片代码的 QuoteHub 复验后 6/6 保留这些源时间并统一输出 `stale/market_closed`，明确“最近交易日数据，不冒充实时”。该休市实源探针不外推盘中长期可用率，也不能替代交易时段生产会话验收。**2026-09-21 多窗口审计补充**：当天本机已真实产生 205-symbol minute scan、833 recorded / 814 settled 与当日 LHB 归档，证明“真实 A 股交易会话”条件窗口已经出现；任务调度却继续 RSH-026/IMP-020，未切回本项完成盘前→盘中→收盘整段验收。该事实记为阶段门条件激活漏检，不把后续研究片内容本身判错。
 - **运行条件**：A_SHARE_OBSERVABLE_SESSION
-- **下一步**：**条件**＝下一次可实际观察的 A 股交易会话。届时必须在开盘前自动/机械重算 `待条件`，而不是等人记起；`python3 scripts/ledger-runtime-selection.py` 以北京时间与持久化交易日历零外呼判定，只在 08:30–09:15 的完整会话开工窗口临时把本项提升为可行动 G0；领取后应把任务进入进行中并持续采样到收盘，错过开工窗则本日 expired、等下一交易日。日历未覆盖时 fail-closed 为 unknown，不修改 stage 静态状态。用当前 production provider 配置连续覆盖盘前→上午→午间→下午→收盘，并含一次受控进程重启/恢复，核 REST/WS/health、source_rejections、source event time/received time、缺失/恢复和 current-value 单调接纳；通过后将本任务改为“已完成”。2026-09-21 已错过一次可执行窗口，故 GOV-022 同步加入“条件到点重新抢占阶段门”的治理要求。长期 SLA 作为持续监控，不无限期阻断阶段门。
+- **下一步**：本项闭环，不再等待下一交易日重做同一完整会话。`A_SHARE_OBSERVABLE_SESSION` 与 runtime selector 保留为条件任务治理证据；若未来出现同根真实性回归，以新的失败证据重新开项，不用长期 provider SLA 反向把本项永久维持“进行中”。2026-09-22 15:33 重算后 static/effective 下一门均为 G4/IMP-052；本轮只记录，不领取下一业务切片。
 - **恢复**：旧可信值、拒绝原因和批次证据必须保留；允许回退具体适配，不得恢复到失败清空、接收时间冒充源时间、晚到覆盖新值或伪造新鲜数据。
-- **实施步骤**：代码侧已完成：①event/source time 与 received time 分离，缺源时间显式 degraded；②未来时钟偏差与 validator 共用单一 5 分钟容差；③source event time 单调接纳，晚到/非法/缺价/身份歧义不推进 current；④请求/接纳/缺失/拒绝分别计数，coverage 与 freshness 保持不同维度；⑤指数固定身份目录校验 market/duplicate/unexpected，个股校验 requested/duplicate；⑥REST/WS/health 与 QualityBadge 可见化稳定拒绝原因；⑦休市三态、日期回退、provider fail/合法空集、通知前 freshness 等既有契约联合回归。仅剩上述生产盘中条件验收。
+- **实施步骤**：代码侧已完成：①event/source time 与 received time 分离，缺源时间显式 degraded；②未来时钟偏差与 validator 共用单一 5 分钟容差；③source event time 单调接纳，晚到/非法/缺价/身份歧义不推进 current；④请求/接纳/缺失/拒绝分别计数，coverage 与 freshness 保持不同维度；⑤指数固定身份目录校验 market/duplicate/unexpected，个股校验 requested/duplicate；⑥REST/WS/health 与 QualityBadge 可见化稳定拒绝原因；⑦休市三态、日期回退、provider fail/合法空集、通知前 freshness 等既有契约联合回归。2026-09-22 已完成整段生产会话条件验收。
 - **制度与点时**：price_rules 与 BUG-028 已分别处理规则时点/历史点时边界；BUG-020 不借当前行情修复反推历史证券身份，也不把周日 production-provider 休市探针当策略或长期盘中 SLA 证据。
 
 ## GOV-012

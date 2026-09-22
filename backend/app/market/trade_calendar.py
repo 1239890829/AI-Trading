@@ -408,17 +408,20 @@ def in_trading_window(now: datetime | None = None) -> bool:
 
 
 def in_wide_market_window(now: datetime | None = None) -> bool:
-    """含集合竞价与收盘定价的**宽松**交易窗口（09:15–15:05，仅时刻判定）。
+    """含集合竞价与边界缓冲的**宽松**交易窗口（仅时刻判定）。
+
+    两段分别为 09:15–11:35 / 12:55–15:05：保留集合竞价、上午收尾、
+    下午开盘前与收盘定价缓冲，但**明确排除午休**。旧实现把 09:15–15:05
+    写成一个连续区间，导致 11:30–13:00 仍被 QuoteHub 标成实时并维持 1Hz
+    外呼；前端宽松轮询早已是分段窗口，因此这是后端口径漂移。
 
     与 in_trading_window（连续竞价严窗）各司其职：本函数管「数据新鲜度/
     缓存节奏」类判定（QuoteHub stale 标记、board_flow 缓存 TTL），不判
-    交易日归属（历史上两处消费方都只判时刻，交易日由调用方自理）——
-    2026-09-07 R2 收口：QuoteHub._in_market_hours 与 board_flow._in_session
-    的同口径时刻判定合并到此处，时段窗口单点。
+    交易日归属；交易日由调用方自理。
     """
     now = now or beijing_now()
     hhmm = now.hour * 100 + now.minute
-    return 915 <= hhmm <= 1505
+    return (915 <= hhmm <= 1135) or (1255 <= hhmm <= 1505)
 
 
 def last_trade_date(days: list[date], asof: date | None = None) -> date | None:
