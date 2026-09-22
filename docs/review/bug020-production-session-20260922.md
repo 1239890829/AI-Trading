@@ -18,7 +18,8 @@
 |---|---|---|
 | 08:32 | 盘前开工 | PASS（见下） |
 | 09:30 左右 | 开盘后 | PASS / 观察到真实拒绝→恢复（见下） |
-| 10:30/11:30 | 上午 | 待采样 |
+| 10:30 | 上午 / restart | PASS（服务恢复；并发执行污染另记） |
+| 11:30 | 上午后段 | 待采样 |
 | 12:30 | 午间 | 待采样 |
 | 13:30/14:30 | 下午 | 待采样 |
 | 15:10–15:30 | 收盘后 | 待采样/终验 |
@@ -66,10 +67,16 @@
 - 前端真实消费者没有只靠 batch freshness 隐藏个体异常：market/index/detail 路径均直接渲染 QualityBadge(quality, quality_reasons)，use-quote-stream 在 stale/market_closed 帧也会覆盖现值并显示休市/过期状态。
 - 因此当前结论为 KEEP：Hub freshness 表示链路/批次可用性，row quality 表示单标的可信度；两者维度不同。后续全天继续观察是否存在绕过 row quality 的关键消费者，若出现才转为 BUG。
 
-## 受控重启
+## 10:32–10:37 上午检查与受控重启
 
-- 状态：尚未执行。
-- 原则：只执行一次，记录 restart 前最后可信 data_timestamp/price、PID、scheduler/health；重启后验证 DB integrity、30 scheduler、REST/WS 恢复、current 不倒退、不以空值覆盖旧可信值。
+- single-writer 代码现场仍为 chatgpt/bug020-session-20260922，0 个 open PR；本轮没有领取 IMP-052。
+- 10:32:39 重启前后端 PID=55303，cwd=backend，启动命令为 backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000。SQLite integrity_check=ok / 39 tables，scheduler 30/30 running。
+- 重启前 Hub 自身仍连续成功、index 6/6、quotes/indices rejection=0；但全市场 snapshot 正处于一次真实上游退化：5566 rows，freshness=degraded，Sina page 7 HTTP 502，consecutive_failures=1，旧成功快照仍被保留，没有伪造空市场。
+- 10:33:03 重启前真实 REST/WS：600519 最新推进到 price=1258.10 / data_timestamp=02:33:03Z；sh000001=3963.67 / 02:33:03Z，均 quality=high，source event time 与 received time 分离。
+- 本执行器只对原 PID=55303 发出一次 graceful TERM；原进程正常退出，随后按同一 cwd/uvicorn 方式启动 replacement PID=52785。该实例启动后立即恢复 30/30 scheduler 与 DB integrity，但冷启动阶段 market snapshot 短暂 unavailable；REST 首帧只返回 sh000001，没有用空 Quote 覆盖 600519。真实 WS 订阅后约 1 秒恢复 600519，并在 02:34:12→02:34:21 连续推进；期间真实出现 quotes source_time_regress_ignored=2，但所有已接纳 current 的 regressed_vs_seen=false。
+- **执行污染说明**：10:34:27 PID=52785 又发生一次 graceful shutdown，10:34:38 出现稳定 PID=53605，cwd/uvicorn 命令相同，stdout/stderr 指向 /private/tmp/ashare-bug020-20260922-uvicorn.log。与此同时 /private/tmp 下出现另一组同名 BUG-020 pre/post 取证文件，证明 10:30 时段存在一个并发执行器与本执行器重叠。当前没有第二个 Git writer、没有 open PR，但 process-level single-writer 被短暂破坏；因此今天**不再重复 restart**，避免把验收变成人为抖动。该并发属于协作/调度卫生异常，不掩盖也不改写生产数据结果。
+- 稳定实例 PID=53605 在 10:35:45 已恢复 market snapshot=ready / 5566 rows / saved_files=1；10:37 health=ok、Hub is_stale=false、source_rejections=0，scheduler 30/30。REST 恢复为 600519 price=1256.00 / data_timestamp=02:37:00Z，sh000001=3965.56 / 02:37:03Z；随后 6 个真实 WS 帧继续推进到 600519 02:37:09、sh000001 02:37:06，全部 regressed_vs_seen=false。
+- 判定：**应用层 restart/recovery 数据契约通过**——DB、scheduler、REST/WS、snapshot 均恢复，冷启动缺失以“缺席→恢复”表达，没有空值冒充 current，恢复后的 source event time 也未倒退。执行层“恰好一次”被并发执行器污染，作为治理异常单独保留，不再通过额外重启重做。后续 11:30/午间/下午继续验证稳定性。
 
 ## 最终判定
 
