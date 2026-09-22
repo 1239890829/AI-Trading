@@ -1,4 +1,4 @@
-# 当前交接：G1 / BUG-022 · blocker 清空后的 selector fallback 收口
+# 当前交接：GOV-022 · blocker 清零后的 selector fallback 收口
 
 
 > **2026-09-21 多窗口审计及晚间收口**：详见 `docs/review/chatgpt-multiwindow-audit-20260921.md`。审计指出的三类执行缺口已进一步收口：① BUG-020 的条件激活不再只靠记忆，`scripts/ledger-runtime-selection.py` 可在下一交易日 08:30–09:15 开工窗把静态 G4 临时抢回 G0，错过窗口/日历未知均 fail-closed；② 本机 AI-Trading 后端已受控停服、同步 `master@c272d260`、重启并通过 SQLite/health/30 scheduler/snapshot 验收；③ 前端误判已纠正——Next 15.5.25 进程属于另一个 `vide-trading` 仓库，AI-Trading 当时没有前端进程，自身 `npm ci` 后在 Node 22.22.2 下 695/695 tests 与 Next 16.3.3 build 全绿。Jev 真实 assistant 请求也已新增 `assistant_tool_router` receipt；RSH-030 human gold 仍必须独立人工完成。IMP-053 actual-fill 契约与唯一 `54b7e0c` RECOVERY 仍按各自 owner 保留。任务状态仍以 stage 为准，不以本段建立第二账本。
@@ -61,8 +61,11 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 本节只记录当前现场，不维护第二份 backlog；权威算法在总账 §5.9，任务元数据在所属 stage。
 
+- **当前治理切片**：GOV-022 selector fallback；它是 U49 发现的 GX 伴随纠偏，不替代普通主门。
+- **阻断状态**：当前 G0–G4 没有可行动 blocker；旧 selector 因只收 blocker 错误返回空主门。
 - **当前主门**：G1
 - **主切片首选**：BUG-022
+- **首选依据**：BUG-022 为 P0 / G1 / 非阻断 / 门内序50，硬依赖 BUG-020 已完成；同门其余候选按既定优先级/门内序排在其后。
 - **领取边界**：IMP-052 已由 #100–#104 全部闭环。本次用户“继续”首先命中的是阶段门重算后的**选择器空结果治理缺口**，因此当前只授权 GOV-022 的 selector fallback 伴随修正；BUG-022 只是修正后机械算出的下一主切片，尚未实施。该治理 PR 合并并 post-merge 全绿后，下一次“继续”才可按最新 master 授权 BUG-022 的一个切片。
 - **当前现场**：本机主工作区已同步 `master@44b2bb59`，backend PID=91586；真实 SQLite `alembic=b5c9e7a2d4f1 / integrity_check=ok`，30/30 scheduler running，收盘 health 顶层按 `stale` 语义为 degraded，但 index 6/6、source_rejections=0、Sina snapshot `ready/5566 rows`。IMP-052 的 budget/usage/cancel 运行态已真实加载，`GET /api/agent/resource-usage` 可见部署日 unknown backfill。#104 PR-CI、release_check、post-merge master CI 全绿。
 - **阶段门重算**：IMP-052 完成后的旧 selector 在 `master@44b2bb59` 返回 static/effective=`None/None`、candidates=[]；U49 对账却发现 G1–G4 仍有可行动 non-blocker，证明 blocker-only 算法在最后一个 blocker 清零时自锁。当前 GOV-022 修正后隔离重算 static/effective 均为 **G1/BUG-022**、conditions=[]，同门候选顺序 `BUG-022, IMP-048, IMP-040, RSH-031`。
