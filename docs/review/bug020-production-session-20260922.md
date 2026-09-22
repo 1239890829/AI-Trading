@@ -59,6 +59,13 @@
 - 随后连续读取 8 个真实 WS 帧：600519 event time 从 01:30:12 → 01:34:45 → 01:34:48 → 01:34:51 → 01:34:54；sh000001 从 01:34:45 → 01:34:48 → 01:34:51。所有帧 regressed_vs_seen=false，未发现 source event time 倒退或低质量值覆盖当前可信值。
 - 本检查点继续支持 09:30 结论：真实源发生过 source_time_regress_ignored 后，系统保留旧可信 current 并自行恢复；恢复后 source event time 持续单调推进。
 
+
+## 开盘 freshness 语义复核
+
+- 09:30 的“Hub/batch freshness=ready，但个别 requested row 短暂 stale”不是未登记语义：backend/tests/test_quote_hub.py 的 test_hub_freshness_is_not_degraded_by_partial_gap 明确锁定这一取舍，避免 200 只中漏 1 只就把整页判成非实时；逐标的 Quote.freshness / quality 才是个体权威。
+- 前端真实消费者没有只靠 batch freshness 隐藏个体异常：market/index/detail 路径均直接渲染 QualityBadge(quality, quality_reasons)，use-quote-stream 在 stale/market_closed 帧也会覆盖现值并显示休市/过期状态。
+- 因此当前结论为 KEEP：Hub freshness 表示链路/批次可用性，row quality 表示单标的可信度；两者维度不同。后续全天继续观察是否存在绕过 row quality 的关键消费者，若出现才转为 BUG。
+
 ## 受控重启
 
 - 状态：尚未执行。
