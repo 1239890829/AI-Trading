@@ -61,8 +61,50 @@ def test_a_share_session_fails_closed_when_calendar_is_stale(tmp_path):
     assert result == {"state": "unknown", "reason": "calendar_not_covered"}
 
 
-def test_real_ledger_runtime_condition_reclaims_g0_during_session(tmp_path):
+def isolated_doc(mod, *, bug_status: str = "待条件"):
+    real = mod._load_doc_health()
+    entries = [
+        (
+            "BUG-020",
+            "docs/stages/w00-foundation.md",
+            {
+                "状态": bug_status,
+                "运行条件": mod.A_SHARE_OBSERVABLE_SESSION,
+                "阶段门": "G0",
+                "门禁角色": "阻断",
+                "优先级": "P0",
+                "门内序": "30",
+                "依赖": "无",
+            },
+        ),
+        (
+            "IMP-052",
+            "docs/stages/w05-agents.md",
+            {
+                "状态": "部分完成",
+                "阶段门": "G4",
+                "门禁角色": "阻断",
+                "优先级": "P0",
+                "门内序": "10",
+                "依赖": "无",
+            },
+        ),
+    ]
+
+    class FakeDoc:
+        @staticmethod
+        def phase_tasks():
+            return entries, []
+
+        derive_current_stage_selection = staticmethod(real.derive_current_stage_selection)
+
+    return FakeDoc()
+
+
+def test_waiting_runtime_condition_reclaims_g0_during_session(tmp_path):
     mod = load()
+    doc = isolated_doc(mod)
+    mod._load_doc_health = lambda: doc
     cal = calendar(tmp_path, "2026-09-21")
     payload = mod.runtime_selection(
         now=datetime(2026, 9, 21, 9, 0, tzinfo=BJ),
@@ -74,8 +116,10 @@ def test_real_ledger_runtime_condition_reclaims_g0_during_session(tmp_path):
     assert payload["effective_selection"]["task"] == "BUG-020"
 
 
-def test_real_ledger_returns_to_static_after_session_close(tmp_path):
+def test_waiting_runtime_condition_returns_to_static_after_start_window(tmp_path):
     mod = load()
+    doc = isolated_doc(mod)
+    mod._load_doc_health = lambda: doc
     cal = calendar(tmp_path, "2026-09-21")
     payload = mod.runtime_selection(
         now=datetime(2026, 9, 21, 20, 0, tzinfo=BJ),
@@ -83,6 +127,21 @@ def test_real_ledger_returns_to_static_after_session_close(tmp_path):
     )
     assert payload["effective_selection"]["gate"] == "G4"
     assert payload["effective_selection"]["task"] == "IMP-052"
+
+
+def test_in_progress_conditional_task_stays_g0_after_start_window(tmp_path):
+    mod = load()
+    doc = isolated_doc(mod, bug_status="进行中")
+    mod._load_doc_health = lambda: doc
+    cal = calendar(tmp_path, "2026-09-21")
+    payload = mod.runtime_selection(
+        now=datetime(2026, 9, 21, 20, 0, tzinfo=BJ),
+        calendar_path=cal,
+    )
+    assert payload["static_selection"]["gate"] == "G0"
+    assert payload["effective_selection"]["gate"] == "G0"
+    assert payload["effective_selection"]["task"] == "BUG-020"
+    assert payload["conditions"] == []
 
 
 def test_runtime_selector_is_propagated_to_execution_surfaces():
