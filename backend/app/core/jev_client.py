@@ -394,6 +394,11 @@ def evaluate(
         max_chars = int(getattr(cfg, "jev_max_state_chars", 20_000))
         if len(raw) > max_chars:
             raise JevError(f"state_too_large:{len(raw)}>{max_chars}")
+        max_input = max(1, int(getattr(cfg, "agent_model_max_input_chars", 250_000)))
+        if request_chars > max_input:
+            reason = f"input_budget_exceeded:{request_chars}>{max_input}"
+            _record(purpose, skipped=True, model=requested_model, reason=reason)
+            return {"ok": False, "skipped": True, "reason": reason}
     except JevError as exc:
         _record(purpose, skipped=True, model=requested_model, reason=str(exc))
         return {"ok": False, "skipped": True, "reason": str(exc)}
@@ -423,6 +428,15 @@ def evaluate(
         if response is None or response.status_code >= 400:
             status = response.status_code if response is not None else "none"
             reason = f"http_{status}"
+            _record(
+                purpose, latency_ms=latency_ms, model=chosen_model, reason=reason,
+                attempts=attempts, input_chars=request_chars,
+            )
+            return {"ok": False, "reason": reason, "latency_ms": latency_ms, "attempts": attempts}
+        output_chars = len(response.content or b"")
+        max_output = max(1, int(getattr(cfg, "agent_model_max_output_chars", 150_000)))
+        if output_chars > max_output:
+            reason = f"output_budget_exceeded:{output_chars}>{max_output}"
             _record(
                 purpose, latency_ms=latency_ms, model=chosen_model, reason=reason,
                 attempts=attempts, input_chars=request_chars,

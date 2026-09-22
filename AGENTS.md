@@ -37,7 +37,7 @@
    旧分支/补丁保留历史身份；历史C类executed也不得回写复盘applied。真正实施由获准开发者走
    `codex/*` → PR → 完整CI与独立审阅，本条不禁止用户授权的正常工程开发和测试。
    测试导入修改后的app同样会执行代码，禁改tests或worktree均不等于OS隔离。
-   参数晋级只允许 `IMP-052` 的独立于普通写权限的 promotion-operator 批准链：候选/当前基线/影子证据 digest + 仓库内效果证据文件 SHA-256 绑定，批准凭据 `ASHARE_AGENT_PROMOTION_TOKEN` 必须独立于普通 API token，24h 内一次性消费；候选/证据/基线/证据文件漂移、撤销/过期或后置实验基线失败均 fail-closed。**专用凭据校验在 service 层同样强制执行**，HTTP 依赖只负责取 header；任何内部调用若不显式提供同一凭据也不能创建/撤销批准。Agent 预算统一由 `agent_resource_usage` 持久事实承载：自主模型/任务/C提案按北京日原子 slot 跨进程预留，started 后未知 token 不得按 0 退款；输入/输出/timeout/retry 高水位在模型调用边界执行。取消先持久 `cancel_requested_at`，只有真实 owner 停止或启动对账后才写 `canceled`，无本地 handle 不得伪造终态。
+   参数晋级只允许 `IMP-052` 的独立于普通写权限的 promotion-operator 批准链：候选/当前基线/影子证据 digest + 仓库内效果证据文件 SHA-256 绑定，批准凭据 `ASHARE_AGENT_PROMOTION_TOKEN` 必须独立于普通 API token，24h 内一次性消费；候选/证据/基线/证据文件漂移、撤销/过期或后置实验基线失败均 fail-closed。**专用凭据校验在 service 层同样强制执行**，HTTP 依赖只负责取 header；任何内部调用若不显式提供同一凭据也不能创建/撤销批准。Agent 预算统一由 `agent_resource_usage` 持久事实承载：自主模型/任务/C提案按北京日原子 slot 跨进程预留，started 后未知 token 不得按 0 退款；输入/输出/timeout/retry 高水位在模型调用边界执行。取消先持久 `cancel_requested_at`；queued 本地 handle 可在启动前终止，**running 任务不得用 `Task.cancel()` 冒充已经杀掉 `to_thread()` 工作**，而是在 bounded stage 间 cooperative checkpoint，当前不可中断步骤真实 drain 后才写 `canceled`/`TaskTimeout`；无本地 handle 不得伪造终态。
    ⚠️ 用户对「`codex/*` PR 自动合并」的授权**不构成**对「应用内 LLM 自主改码并落地」的授权
    —— 两者是**不同的授权主体与执行体**，不可互推。
 

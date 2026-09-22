@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import date
+from typing import Callable
 
 from app.market import trade_calendar as tc
 from app.review.analyzers import LLMAnalyzer
@@ -102,12 +103,20 @@ class ReviewService:
                 out[str(sym)] = float(price)
         return out
 
-    async def run(self, trade_date: date | None = None,
-                  methodology_version: str | None = None) -> ReviewReport:
+    async def run(
+        self, trade_date: date | None = None, methodology_version: str | None = None,
+        *, cancel_check: Callable[[], None] | None = None,
+    ) -> ReviewReport:
+        def checkpoint() -> None:
+            if cancel_check is not None:
+                cancel_check()
+
+        checkpoint()
         version = methodology_version or self.methodology_version
         method = load_methodology(version)
 
         anchor = await self.resolve_trade_date(trade_date)
+        checkpoint()
 
         # --- 前置步：每日精选逐股归因（2026-09-04 串联）---
         # 必须先于采集：picks 维度要消费它写入的 daily_pick_review 行。
@@ -120,6 +129,7 @@ class ReviewService:
             log.info("picks review skipped: %s", exc)
         except Exception:
             log.exception("picks daily review failed (picks dimension degrades)")
+        checkpoint()
 
         # --- 采集：市场（异步 IO）与交易、每日精选（DB 同步）并行 ---
         sentinel = getattr(self.state, "ths_sentinel", None) if self.state else None
@@ -135,6 +145,7 @@ class ReviewService:
         except Exception:
             log.exception("review collection failed")
             raise
+        checkpoint()
 
         data = ReviewData(
             trade_date=anchor.strftime("%Y%m%d"), market=market, trading=trading, picks=picks
@@ -143,7 +154,9 @@ class ReviewService:
         # --- 分析 ---
         # LLM 接入后这里是同步 HTTP（最长 30s），必须丢线程池，
         # 否则会卡住事件循环上所有的轮询与行情推送
+        checkpoint()
         dimensions, usage = await asyncio.to_thread(self._router.analyze, data, method)
+        checkpoint()
 
         # --- 策略健康维度（P1：信号健康度 + 相位对账进报告；同步 DB 丢线程池）---
         # 失败只记 log——复盘不因该维度中断（与 picks 前置步同一容错语义）。
@@ -157,6 +170,7 @@ class ReviewService:
             dimensions = [*dimensions, sh_dim]
         except Exception:
             log.exception("strategy health dimension failed (degraded)")
+        checkpoint()
 
         # --- 合成改进项与元结论 ---
         action_items = build_action_items(data, dimensions, method)
@@ -177,11 +191,13 @@ class ReviewService:
                 action_items = [*action_items, *key_items]
         except Exception:
             log.exception("strategy key action items failed (degraded)")
+        checkpoint()
         from app.review.methodology import build_meta_insights
 
         meta_insights = build_meta_insights(data, dimensions, method)
 
         # --- 预判验证钩子：存在针对本交易日的 pending 预判则自动回填四问 ---
+        checkpoint()
         predict_note = None
         try:
             from app.predict.service import maybe_auto_verify
@@ -191,6 +207,7 @@ class ReviewService:
             )
         except Exception:
             log.exception("prediction auto-verify failed")
+        checkpoint()
 
         summary = self._summarize(dimensions, action_items, data)
         if predict_note:
@@ -206,10 +223,18 @@ class ReviewService:
             meta_insights=meta_insights,
             summary=summary,
         )
-        return await self._finalize(report, health)
+        checkpoint()
+        return await self._finalize(report, health, cancel_check=cancel_check)
 
-    async def _finalize(self, report: ReviewReport, health: dict | None) -> ReviewReport:
+    async def _finalize(
+        self, report: ReviewReport, health: dict | None,
+        *, cancel_check: Callable[[], None] | None = None,
+    ) -> ReviewReport:
+        if cancel_check is not None:
+            cancel_check()
         saved = save_report(self.session_factory, report)
+        if cancel_check is not None:
+            cancel_check()
 
         # --- 信号健康度预警接线（P1）：warning/drift → 告警台账/飞书 ---
         # 落点不是消息通知中心（该中心只收 __picks_buy_point__ 买点，IMP-028）；
@@ -222,6 +247,8 @@ class ReviewService:
                 await maybe_alert_signal_health(self.state, health)
             except Exception:
                 log.exception("signal health alert dispatch failed")
+        if cancel_check is not None:
+            cancel_check()
         return saved
 
     @staticmethod

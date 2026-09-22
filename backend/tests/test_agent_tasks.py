@@ -26,7 +26,7 @@ class FakeReviewService:
     def __init__(self):
         self.calls = []
 
-    async def run(self, td, methodology_version=None):
+    async def run(self, td, methodology_version=None, cancel_check=None):
         self.calls.append((td, methodology_version))
         return FakeReport()
 
@@ -81,7 +81,7 @@ def test_same_type_mutex(monkeypatch, tmp_path):
     """同类型互斥：复盘会消耗数据源配额，不允许并行重复跑。"""
 
     class Slow(FakeReviewService):
-        async def run(self, td, methodology_version=None):
+        async def run(self, td, methodology_version=None, cancel_check=None):
             await asyncio.sleep(0.5)
             return FakeReport()
 
@@ -97,7 +97,7 @@ def test_same_type_mutex(monkeypatch, tmp_path):
 
 def test_failure_records_error_and_steps(monkeypatch, tmp_path):
     class Boom(FakeReviewService):
-        async def run(self, td, methodology_version=None):
+        async def run(self, td, methodology_version=None, cancel_check=None):
             raise RuntimeError("复盘服务炸了")
 
     _patch(monkeypatch, tmp_path, review=Boom())
@@ -373,11 +373,14 @@ def test_cross_process_cancel_request_does_not_fake_terminal_without_owner(monke
     assert not any(r["action"] == "task.cancel" for r in rows)
 
 
-def test_owner_polls_cross_process_cancel_and_confirms_terminal(monkeypatch, tmp_path):
+def test_owner_observes_cross_process_cancel_at_cooperative_checkpoint(monkeypatch, tmp_path):
     class Slow(FakeReviewService):
-        async def run(self, td, methodology_version=None):
-            await asyncio.sleep(5)
-            pytest.fail("canceled owner must not continue after its awaited work")
+        async def run(self, td, methodology_version=None, cancel_check=None):
+            for _ in range(200):
+                await asyncio.sleep(0.01)
+                if cancel_check is not None:
+                    cancel_check()
+            pytest.fail("cancel intent must be observed at a bounded-stage checkpoint")
 
     _patch(monkeypatch, tmp_path, review=Slow())
 
@@ -411,8 +414,11 @@ def test_owner_polls_cross_process_cancel_and_confirms_terminal(monkeypatch, tmp
 
 def test_task_wall_timeout_is_failed_not_canceled(monkeypatch, tmp_path):
     class Slow(FakeReviewService):
-        async def run(self, td, methodology_version=None):
-            await asyncio.sleep(1)
+        async def run(self, td, methodology_version=None, cancel_check=None):
+            for _ in range(20):
+                await asyncio.sleep(0.02)
+                if cancel_check is not None:
+                    cancel_check()
             return FakeReport()
 
     _patch(monkeypatch, tmp_path, review=Slow())
@@ -453,7 +459,7 @@ def test_reconcile_honors_persisted_cancel_request(monkeypatch, tmp_path):
 
 def test_immediate_cancel_before_execute_enters_eventually_confirms_canceled(monkeypatch, tmp_path):
     class ShouldNotRun(FakeReviewService):
-        async def run(self, td, methodology_version=None):
+        async def run(self, td, methodology_version=None, cancel_check=None):
             pytest.fail("immediately canceled queued task must not reach handler")
 
     _patch(monkeypatch, tmp_path, review=ShouldNotRun())
@@ -473,3 +479,107 @@ def test_immediate_cancel_before_execute_enters_eventually_confirms_canceled(mon
     assert done["status"] == "canceled"
     rows = at.list_audit(task_id=done["id"])
     assert any(r["action"] == "task.cancel" for r in rows)
+
+
+def test_running_cancel_waits_for_inflight_thread_to_drain_before_terminal(monkeypatch, tmp_path):
+    """Cancel intent must not claim terminal while an already-started to_thread worker still runs."""
+    import threading
+
+    entered = threading.Event()
+    release = threading.Event()
+    drained = threading.Event()
+
+    class Blocking(FakeReviewService):
+        async def run(self, td, methodology_version=None, cancel_check=None):
+            def blocking_stage():
+                entered.set()
+                assert release.wait(timeout=2), "test must release the synthetic blocking stage"
+                drained.set()
+
+            await asyncio.to_thread(blocking_stage)
+            if cancel_check is not None:
+                cancel_check()
+            pytest.fail("cancel checkpoint must stop before any later stage")
+
+    _patch(monkeypatch, tmp_path, review=Blocking())
+
+    async def main():
+        created = at.create_task("review")
+        for _ in range(100):
+            await asyncio.sleep(0.01)
+            if entered.is_set():
+                break
+        assert entered.is_set()
+        requested = at.cancel_task(created["id"])
+        assert requested["status"] == "running"
+        assert requested["cancel_requested_at"] is not None
+
+        # The synthetic worker is deliberately still blocked: terminal cancellation here would lie.
+        await asyncio.sleep(0.05)
+        mid = at.get_task(created["id"])
+        assert mid["status"] == "running" and not drained.is_set()
+
+        release.set()
+        for _ in range(100):
+            await asyncio.sleep(0.01)
+            cur = at.get_task(created["id"])
+            if cur["status"] == "canceled":
+                return cur
+        return at.get_task(created["id"])
+
+    done = asyncio.run(main())
+    assert drained.is_set() is True
+    assert done["status"] == "canceled"
+    rows = at.list_audit(task_id=done["id"])
+    assert any(r["action"] == "task.cancel.request" for r in rows)
+    assert any(r["action"] == "task.cancel" for r in rows)
+
+
+def test_task_timeout_waits_for_inflight_thread_to_drain_before_failed(monkeypatch, tmp_path):
+    """Wall timeout must not claim failed while an already-started sync worker still runs."""
+    import threading
+
+    entered = threading.Event()
+    release = threading.Event()
+    drained = threading.Event()
+
+    class Blocking(FakeReviewService):
+        async def run(self, td, methodology_version=None, cancel_check=None):
+            def blocking_stage():
+                entered.set()
+                assert release.wait(timeout=2), "test must release the synthetic blocking stage"
+                drained.set()
+
+            await asyncio.to_thread(blocking_stage)
+            if cancel_check is not None:
+                cancel_check()
+            return FakeReport()
+
+    _patch(monkeypatch, tmp_path, review=Blocking())
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "agent_task_timeout_seconds", 0.05)
+
+    async def main():
+        created = at.create_task("review")
+        for _ in range(100):
+            await asyncio.sleep(0.01)
+            if entered.is_set():
+                break
+        assert entered.is_set()
+        await asyncio.sleep(0.15)  # runtime clamps timeout to >=0.1s; deadline is now definitely past
+        mid = at.get_task(created["id"])
+        assert mid["status"] == "running" and not drained.is_set()
+
+        release.set()
+        for _ in range(100):
+            await asyncio.sleep(0.01)
+            cur = at.get_task(created["id"])
+            if cur["status"] == "failed":
+                return cur
+        return at.get_task(created["id"])
+
+    done = asyncio.run(main())
+    assert drained.is_set() is True
+    assert done["status"] == "failed"
+    assert done["error"]["code"] == "TaskTimeout"
+    assert "已收尾" in done["error"]["message"]
