@@ -17,6 +17,6 @@ description: 把本轮执行、审核、重大决策传播核对和下一步写�
 6. 详细日志只保留双方可读的必要脱敏**紧凑证据**；密钥、私人持仓、原始私人聊天不进入共享仓库。完整 pytest/worktree/clone 副本不得默认永久留在 artifacts。
 7. 交接前按 W08/GOV-026 做 workspace hygiene：记录保留项及原因，清理已结束且可再生的项目临时 clone/worktree、pytest basetemp、构建/解释器缓存和无必要的大型测试沙箱；跨项目/未知、运行中、脏工作树、业务数据、唯一恢复证据只报告不删。必须运行 `python3 scripts/workspace-hygiene.py` 并附结果；应用专属项目目录或对应隐藏规则存在时不得交接为完成。
 8. 审核代码提交与后续协调文档提交分开；最终合并仍要准确候选 SHA 的当前模式 release receipt + 完整 CI。正常模式作者自检不冒充独立审核；降级模式用 `DegradedRelease` 明示作者全权发布，不伪装独立身份。
-9. 编号不复用；退出/合并有依据和去向。下一轮始终先从最新 `master` 调用 `ashare-ledger-continue`，先运行 `scripts/ledger-runtime-selection.py` 重算已登记 `运行条件`，再算最低未闭环主门并按角色/P0-P2/门内序选一刀；运行条件只临时影响本轮选择，不改写 stage 静态状态。handoff 允许实施时，用户说“继续任务/继续”只授权该一刀；若要跨门，必须已有网页写入的 `CROSS_GATE_EXCEPTION`，Skill/Codex 不得自行创建。
+9. 编号不复用；退出/合并有依据和去向。下一轮始终先从最新 `master` 调用 `ashare-ledger-continue`，先运行 `scripts/ledger-runtime-selection.py` 重算已登记 `运行条件`：G0–G4 仍有 blocker 时取最低 blocker 门；**全部 blocker 清空后回落到最低 actionable non-blocker 普通门**，再按角色/P0-P2/门内序选一刀；G5/GX 不进入普通 fallback。运行条件只临时影响本轮选择，不改写 stage 静态状态。handoff 允许实施时，用户说“继续任务/继续”只授权该一刀；若要跨门，必须已有网页写入的 `CROSS_GATE_EXCEPTION`，Skill/Codex 不得自行创建。
 
 短提示只按阶段门规则授权一个切片，不是跳过硬依赖、效果前置、安全、费用、生产、发布或传播核对的授权。

@@ -16,7 +16,7 @@
 ## 3. 人工短提示循环
 
 网页在原阶段记录当前模式、轮次、范围/非目标、依据版本、验收和允许下一动作。Codex收到“ChatGPT审核完了”后只触发读取，按真实记录决定执行、整改、等待或只读；不能因为提示里有审核就默认通过。
-Codex执行完必须记录实现/测试/偏差/剩余、提交推送，然后用户在网页说“Codex执行完了”。网页读真实差异和必要证据，先审核成果再复评下一步，结论写回同一任务。没有明确下一任务时，Codex不得凭感觉跨轮；用户若在 Codex 端调用 `ashare-ledger-continue` 说“继续任务/继续”，也必须先按总账 §5.9 算出最低未闭环阶段门，再只领取**一个**门内合法切片。
+Codex执行完必须记录实现/测试/偏差/剩余、提交推送，然后用户在网页说“Codex执行完了”。网页读真实差异和必要证据，先审核成果再复评下一步，结论写回同一任务。没有明确下一任务时，Codex不得凭感觉跨轮；用户若在 Codex 端调用 `ashare-ledger-continue` 说“继续任务/继续”，也必须先按总账 §5.9 机械选门：有 blocker 时取最低 blocker 门，**无 blocker 时回落到最低仍有 actionable non-blocker 的 G0–G4**，再只领取**一个**门内合法切片；G5/GX 不因 fallback 自动成为普通主切片。
 用户不复制任务卡、提交号或整段历史，不承担技术审核；短提示是通知，不是已完成证据、批准或发布授权。模型额度不足影响执行，不妨碍获准的规划工作，不试探额度或切收费API。
 
 ### 3.1 三种不同的完成
@@ -91,7 +91,7 @@ handoff 若明确 DESIGN_ONLY / REVIEW / BLOCKED，则不得执行；计划存�
 
 “Codex执行完了”：网页读取当轮执行事实后审核。
 “ChatGPT审核完了”：Codex从最新 `master` 读取真实结论和当前模式；DESIGN_ONLY / REVIEW / BLOCKED 时不执行。
-“继续任务/继续”（明确调用 `ashare-ledger-continue`）：若 handoff 允许实施，先运行 runtime selector 重算显式运行条件，再算最低未闭环主门并按角色/P0-P2/门内序执行一个切片；存在未收口 PR/CI、运行条件 unknown、硬依赖未满足、阶段门冲突或排序歧义时只报告候选/阻塞。
+“继续任务/继续”（明确调用 `ashare-ledger-continue`）：若 handoff 允许实施，先运行 runtime selector 重算显式运行条件；有 blocker 时取最低 blocker 门，全部 blocker 清空后回落到最低 actionable non-blocker 的 G0–G4，再按角色/P0-P2/门内序执行一个切片；G5/GX 不进入 ordinary fallback。存在未收口 PR/CI、运行条件 unknown、硬依赖未满足、阶段门冲突或排序歧义时只报告候选/阻塞。
 
 ## 10. 路线切换规则
 

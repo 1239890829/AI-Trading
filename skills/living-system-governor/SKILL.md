@@ -597,7 +597,7 @@ GX 持续治理
 
 默认选刀：
 
-`最低可行动阻断门 → 阻断优先 → 优先级 → 门内序 → 硬依赖`
+`有 blocker：最低可行动 blocker 门；无 blocker：最低 actionable non-blocker 普通门 → 门内角色/优先级/门内序 → 硬依赖`
 
 原则：
 
