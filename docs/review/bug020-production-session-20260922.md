@@ -19,7 +19,7 @@
 | 08:32 | 盘前开工 | PASS（见下） |
 | 09:30 左右 | 开盘后 | PASS / 观察到真实拒绝→恢复（见下） |
 | 10:30 | 上午 / restart | PASS（服务恢复；并发执行污染另记） |
-| 11:30 | 上午后段 | 待采样 |
+| 11:19–11:21 | 上午后段 | PASS / 上游 Sina 缺页被 fail-closed（见下） |
 | 12:30 | 午间 | 待采样 |
 | 13:30/14:30 | 下午 | 待采样 |
 | 15:10–15:30 | 收盘后 | 待采样/终验 |
@@ -95,6 +95,17 @@
 - board_surge 用当日真实 limit-up pool 做只读验证：pool_len=23，provider 返回类型=LimitUpRecord；seal_sequence 可直接处理真实对象并生成“内蒙新华 09:34（5板）”。hotfix 日志当前 board_surge_error_count=0。
 - BUG-020 平台定时自动续跑已停用并复核为 disabled；后续本日检查只走人工单写，避免再次出现任务状态与本机动作不同步、重复 restart/commit 的竞态。
 
+## 11:19–11:21 上午后段复核
+
+- hotfix 进程稳定为 PID=73633，cwd=backend；SQLite integrity_check=ok / 39 tables，scheduler 30/30 running，Hub consecutive_failures=0 / last_error=null。
+- 600519 在未订阅状态下已超过 stale_after：连续三次 REST 都保留 price=1257.70 / data_timestamp=03:14:57Z，但正确返回 stale / quote_age_exceeded；同期 sh000001 持续推进。重新建立真实 WS 订阅后，首帧仍诚实显示旧 stale，下一帧即恢复 high，并从 03:14:57 推进到 03:19:48，随后继续到 03:19:51；6 帧均 regressed_vs_seen=false。
+- 严格 Sina 分母门再次真实命中：上游一轮返回 5466/5566，系统保留上一份 5566 行 snapshot，不写入部分市场；11:21 时 snapshot 因旧可信值已超过 180s 窗口明确变 stale，last_error=sina snapshot incomplete: rows=5466 unique=5466 expected=5566。该状态属于上游退化的诚实暴露，不回退旧 90% 假成功规则。
+- 新 hotfix 日志自启动以来 board_surge_error_count=0；未再出现 LimitUpRecord.get 异常。
+- runtime-selector 隔离回归 6/6 通过；11:20 当前真实账本 static/effective 均为 G0/BUG-020，conditions=[]，证明任务进入“进行中”后不会因过 09:15 错误退回 G4/IMP-052。
+- 自动续跑已再次停用并复核 is_enabled=false；此前已启动实例的回写已结束。后续只保留当前人工 single-writer。
+- 对自动执行实例留下的 5439ad8 与 d2d442a 已独立审阅：前者仅补真实 hotfix 运行证据；后者把 runtime-selector 测试从可变真实账本状态隔离为固定夹具，并补“进行中条件任务过窗口仍保持 G0”契约，均 KEEP。
+- doc-health、public-repo scan、workspace hygiene、git diff --check 全部通过。
+
 ## 最终判定
 
-**进行中。** 只有完整覆盖盘前、上午后段、午间、下午、收盘，且本轮修复在后续检查点保持稳定后，才允许把 BUG-020 改为“已完成”。
+**进行中。** 盘前、开盘、上午、restart/recovery 与 hotfix 生产验证均已有真实证据；仍必须继续覆盖午间、下午与收盘，且严格 snapshot 与 row freshness 在后续检查点保持稳定后，才允许把 BUG-020 改为“已完成”。
