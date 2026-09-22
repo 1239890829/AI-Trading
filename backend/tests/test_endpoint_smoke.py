@@ -69,7 +69,6 @@ PATH_VALUES = {
     "rule_id": "1",
     "change_id": "1",
     "task_id": "1",
-    "change_id": "1",
     "period": "day",
     "group": "",
     "ts": "2026-08-28",
