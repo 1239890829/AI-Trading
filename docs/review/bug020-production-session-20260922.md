@@ -2,6 +2,8 @@
 
 > 目标：用当前 production provider 配置覆盖盘前→上午→午间→下午→收盘，并包含一次受控后端重启/恢复；核验 REST/WS/health、source_rejections、source event time / received time、缺失/恢复和 current-value 单调接纳。生产会话只做观察与受控服务重启，不向真实 current cache 注入伪造晚到/非法报价；恶意/非法输入仍由既有隔离契约测试证明，真实生产以跨时点观测证明 current/source-time 不倒退。
 
+> **定位 / 摘要**：本文件是 BUG-020 的一次性生产完整会话证据，不承担第二账本。它按盘前、开盘、上午、午休、下午与收盘检查点记录真实 provider/REST/WS/SQLite/scheduler/snapshot 行为；任务状态仍以 `docs/stages/w00-foundation.md` 为唯一权威，最终放行以本页“最终判定”和 PR/CI 证据共同成立为准。
+
 ## 会话身份
 
 - 日期：2026-09-22（A 股交易日；backend/data/trade_calendar.json 已覆盖）
@@ -21,9 +23,10 @@
 | 10:30 | 上午 / restart | PASS（服务恢复；并发执行污染另记） |
 | 11:19–11:21 | 上午后段 | PASS / 上游 Sina 缺页被 fail-closed（见下） |
 | 11:47–11:53 | 午休早段 | PASS / cadence 与 market_closed 语义通过（见下） |
-| 12:30 | 午间后段 | 待采样 |
-| 13:30/14:30 | 下午 | 待采样 |
-| 15:10–15:30 | 收盘后 | 待采样/终验 |
+| 12:35–12:38 | 午间后段补采样 | PASS / market_closed + idle cadence 复验（见下） |
+| 13:30 | 下午首检 | PASS / 午休→下午恢复（见下） |
+| 14:30 | 下午后段 | PASS / 真实 source-time 拒绝→保留 current→自愈（见下） |
+| 15:10–15:30 | 收盘后 | PASS / market_closed + idle cadence + current 单调接纳（见下） |
 
 ## 08:32–08:35 盘前基线
 
@@ -134,6 +137,50 @@
 - 清理一个由旧执行实例遗留、无仓库 open-file 的阻塞 Python REPL；平台 BUG-020 自动续跑保持 disabled，当前只剩人工 single-writer。
 - 对插入提交 bdf8eef 已独立审查并 KEEP：它把 QuoteHub 宽松窗口从连续 09:15–15:05 改为 09:15–11:35 / 12:55–15:05，补午休 market_closed 回归，与 snapshot idle cadence 修复互补而不重复。
 
+## 12:35–12:38 午间后段补采样
+
+- single-writer 复核：活动分支仍为 `chatgpt/bug020-session-20260922`，HEAD=`ae91e68`；采样前无其它 BUG-020 终端执行会话/写执行器，后端仍为既有 PID=9077，本轮**未 restart**、未领取 IMP-052 或其它业务切片。
+- SQLite 使用生产库 `data/ashare.db` 复核：文件大小 320,843,776 bytes，`PRAGMA integrity_check=ok`，39 tables；scheduler 继续 30 total / 30 running / 0 dead。
+- 12:36 `/api/health`：Hub `consecutive_failures=0 / last_error=null`、index 6/6、quotes/indices source_rejections 均为 0。总体 `status=degraded / is_stale=true` 仍仅由午休 `market_closed` 实时性语义导致，不是进程或上游持续故障。
+- 午休 cadence 再次命中旧 bug 的反例：12:36 snapshot age=199.0s 时仍正确为 `ready`（旧实现会在 180s 后误判 stale）；12:37:17 自动刷新并保存新 5,566 行 Sina snapshot，12:38 health 显示 age=47.6s / `ready`、process-local saved_files=7、save failures=0。磁盘当日 snapshot 共 42 份，最近文件 `043717.parquet`。
+- REST 600519 + sh000001 均明确返回 `stale / market_closed`，没有把午休最近值冒充实时；12:36 时 600519 保留 price=1255.6 / event time=03:48:12Z，上证指数 price=3958.64 / event time=04:05:00Z。
+- 真实 WS 订阅连续采 5 帧（seq 607→611）：首帧后约 5 秒 cadence 保活，600519 event time 从 03:48:12Z 单调推进到 04:05:42Z 后保持，上证指数保持 04:05:00Z；所有帧 `regressed_vs_seen=false`，quality 始终 `stale / market_closed`，source_rejections 始终 0。received_at 持续推进，但 source event time 未被收到时间冒充。
+- 本检查点未观察到新的缺失→恢复事件；既有 current 值在午休被保留且以 stale/market_closed 诚实暴露，未出现空值覆盖、event-time 倒退或伪实时。判定：**午间后段 PASS**，BUG-020 继续保持“进行中”，等待 13:30/14:30 下午检查与 15:10 收盘终验。
+
+## 13:30–13:31 下午首检
+
+- single-writer 再复核：活动分支仍为 `chatgpt/bug020-session-20260922`；13:30:57 与写报告前 13:32:22 两次检查均未发现其它 BUG-020 执行器、Git 写操作、SQLite 写探针或 `.git/*.lock`。后端继续使用既有 PID=9077，本轮**未 restart**、未领取 IMP-052 或其它业务切片。
+- 13:31 `/api/health` 已完成午休→下午状态切换：`status=ok / is_stale=false`，Hub `consecutive_failures=0 / last_error=null`，index 6/6；quotes/indices `source_rejections=0`。scheduler 继续 30 total / 30 running / 0 dead。
+- SQLite 使用生产库 `data/ashare.db` 只读复核：320,905,216 bytes，`PRAGMA integrity_check=ok`，39 tables。
+- market snapshot 为 `ready / 5566 rows / source=sina`，age=51.3s、save failures=0、process-local `saved_files=15`；磁盘当日 snapshot 已从 12:38 的 42 份推进到 50 份，最近保存 `data/parquet/snapshots/20260922/052819.parquet`（北京时间 13:28:19）。全市场保存链持续前进。
+- 午休→下午恢复是**异步但诚实**的：13:31:22 REST/WS 首帧中 sh000001 已恢复 `high`（event time=05:31:18Z），而未持续订阅的 600519 仍保留午休可信 current：price=1255.6、event time=04:05:42Z、`stale / market_closed`；系统没有把旧值伪装成实时，也没有清空 current。
+- 建立真实 WS 订阅后的下一帧（seq 2989，约 1.07s 后）600519 自动恢复 `high`，price=1254.76、event time=05:31:21Z；随后 12 帧采样至 seq 2999，600519 event time 单调推进至 05:31:30Z，sh000001 从 05:31:18Z 单调推进至 05:31:30Z，`regressed_vs_seen=false` 全部成立。`received_at` 独立持续推进，没有被拿来替代 source event time。
+- 12 帧内两标的始终有行，未出现空值/缺行覆盖；本检查点可见的恢复形态是 600519 `stale/market_closed → high`，且 quotes/indices source_rejections 全程为 0。没有发现新的生产缺陷，不触发代码修复。
+- 判定：**13:30 下午首检 PASS**。午休旧 current 被保留并明确标 stale，下午真实数据到达后约 1 秒自愈为 high；current/source event time 无倒退，DB/scheduler/snapshot 全部健康。BUG-020 继续保持“进行中”，等待 14:30 下午后段与 15:10 收盘终验。
+
+
+## 14:30–14:32 下午后段复核
+
+- single-writer 复核：14:29:41 开始前活动分支为 `chatgpt/bug020-session-20260922`、HEAD=`ae91e68`；未发现其它 BUG-020 执行器、报告写进程、Git commit/merge/rebase/push、pytest 或 `.git` 写锁。后端仍是既有 PID=9077；14:32 再查 PID 未变。本轮**未 restart**、未领取 IMP-052 或其它业务切片。
+- 14:30:19 `/api/health` 捕获到一次真实、可解释的瞬时退化：Hub `consecutive_failures=0 / last_error=null / is_stale=false`，但 index batch 暂为 4/6，缺 `399001`、`399006`，`source_rejections.indices=2` 且原因均为 `source_time_regress_ignored`；quotes rejection=0。market snapshot 同时仍为 `ready / 5566 rows / source=sina`、age=58.4s，没有把指数源拒绝扩大成全市场快照失败。
+- 建立真实 WS `600519 + sh000001` 后，14:31:25 首帧中 index batch 已最迟恢复到 6/6、rejections=0。600519 因自 13:31 后未持续订阅，首帧诚实保持 `stale / quote_age_exceeded`：source=tencent、price=1254.76、`data_timestamp=05:31:30Z`、`received_at=05:31:33.254823Z`；sh000001 同帧为 `high`、`data_timestamp=06:31:21Z`。
+- 下一帧约 0.66s 后，600519 自动恢复 `high`，price=1253.45，source event time 从 `05:31:30Z` 单调推进到 `06:31:24Z`，`received_at=06:31:26.518300Z`；sh000001 同步为 `high / 06:31:24Z`。随后共采 30 个真实 WS 帧至 14:31:54，两条 requested row 全程存在，600519 最终推进到 `06:31:51Z`、sh000001 最终推进到 `06:31:51Z`，所有帧 `regressed_vs_seen=false`。
+- 观察窗口内又真实命中接纳门：14:31:52 一帧 `source_rejections.quotes=1 / source_time_regress_ignored`，已接纳的 600519 current 不倒退；14:31:53 index batch 瞬时降到 2/6（缺 `000001`、`000300`、`000688`、`000852`），`source_rejections.indices=4`，sh000001 仅把既有 `06:31:51Z` current 标为 `stale / source_time_regress_ignored`，没有接受更旧 event time。14:31:54 下一帧即恢复 6/6、rejections=0、sh000001 回到 `high`，仍保持 `06:31:51Z`，明确证明“拒绝旧源值→保留 current→恢复”而非 current 倒退。
+- 14:32:09 收尾复核 `/api/health` 已回 `status=ok / is_stale=false`、index 6/6、quotes/indices rejections=0；scheduler 30 total / 30 running / 0 dead。生产 SQLite `data/ashare.db` 为 `integrity_check=ok`、39 tables。
+- market snapshot 保存链继续前进：13:30 时磁盘当日 50 份，本次已到 61 份；最近已保存 `data/parquet/snapshots/20260922/062715.parquet`（北京时间 14:27:15），process-local `saved_files=26`、save failures=0；14:32 的内存快照仍 `ready / 5566 rows`，age=41.1s，说明采集与落盘都在持续推进。
+- 本检查点没有发现新的生产缺陷，不触发代码修复。判定：**14:30 下午后段 PASS**。真实 source-time 回退被拒绝且对外显式降质，可信 current/source event time 没有倒退；短暂 index 缺失与 600519 订阅老化都按既有契约自动恢复。BUG-020 保持“进行中”，继续等待 15:10 收盘终验。
+
+## 15:10–15:30 收盘终验
+
+- single-writer 终验：活动分支保持 `chatgpt/bug020-session-20260922`，后端全过程仍为既有 PID=9077；未发现第二 BUG-020 writer、Git 锁或并发发布动作。本阶段**未 restart**、未领取 IMP-052、未向 production current cache 注入任何伪造数据。
+- 15:10 后 `/api/health` 按收盘语义进入 `degraded / is_stale=true`，但 Hub `consecutive_failures=0 / last_error=null`，index 6/6、quotes/indices `source_rejections=0`。这是 `market_closed` 的实时性降级，不是 liveness 或 provider 持续故障。scheduler 全程 30 total / 30 running / 0 dead；生产 `data/ashare.db` 终验 `PRAGMA integrity_check=ok`、39 tables。
+- 15:12:46–15:13:20 真实 WS 连续 8 帧中，600519 与 sh000001 始终存在且均为 `stale / market_closed`；600519 source event time 从 `06:31:51Z` 单调推进到 `07:12:42Z`、再到 `07:13:12Z`，sh000001 从 `07:12:00Z` 推进到 `07:13:00Z`，所有帧 `regressed_vs_seen=false`。`received_at` 独立推进，没有替代 source event time。
+- 15:20 再验：snapshot 仍为 `ready / 5566 rows / source=sina`，save failures=0；REST 600519 与 sh000001 都明确 `stale / market_closed`，meta 说明“当前为最近交易日数据，不冒充实时”。磁盘当日 snapshot 已累计 69 份。
+- 15:30:04 终点采样继续满足：Hub failures=0、index 6/6、source_rejections=0；snapshot `ready / 5566 rows`、age=218.7s、save failures=0，恰好再次证明收盘后按 240s idle cadence 计算 freshness，不会回到旧 180s 假 stale；磁盘当日 snapshot 70 份，最新 `data/parquet/snapshots/20260922/072218.parquet`。REST 600519 保留 `data_timestamp=07:13:12Z`，sh000001 为 `07:29:00Z`，均 `stale / market_closed`。
+- 生产日志对当前 PID 的 `ERROR|Traceback|board surge beat failed` 计数为 0。14:39 的 Sina HTTP 502 与 14:41 的 5366/5566 缺页被严格完整性门拒绝，随后自行恢复；这进一步支持“失败不发布部分市场、旧可信值保留并自愈”的接纳契约。
+- 全天证据链已完整覆盖盘前→开盘→上午→受控 restart/recovery→真实缺失/恢复→午休→下午→收盘。10:30 时段曾发生的并发执行器额外进程切换继续作为执行治理污染保留，不改写成“恰好一次”；应用层 DB/scheduler/REST/WS/snapshot 恢复契约已由后续稳定运行和全天检查点反复验证。
+- 收口回归：完整 backend pytest 100% exit 0，随后 pyflakes exit 0；BUG-020 定向后端组 100% 通过；前端 Vitest 73 files / 696 tests 全绿，TypeScript、ESLint、Next 16.3.3 production build 全绿，QualityBadge 定向 8/8 通过。构建副产物已清理。`doc-health`、public-repo scan、workspace hygiene、`git diff --check` 均通过。
+
 ## 最终判定
 
-**进行中。** 盘前、开盘、上午、restart/recovery、真实缺失恢复、hotfix 与午休早段均已通过；仍需 12:30 午间后段、13:30/14:30 下午及收盘终验，随后才能把 BUG-020 改为“已完成”并进入 PR/CI/合并。
+**已完成。** 2026-09-22 的一次性生产完整交易会话验收满足 BUG-020 接纳条件：失败/缺失/晚到源值不覆盖可信 current，source event time 与 received time 分离，真实 source-time 回退被拒绝且可见，午休/收盘不冒充实时，缺失与上游退化均能 fail-closed 后恢复，受控重启后的数据链也稳定恢复。该结论只证明本日完整会话与既有隔离契约，不外推为长期 provider SLA；长期异常率与可用性仍由持续监控承担，不再无限期阻断阶段门。 完成状态写回后 runtime selector 于 15:33 重算为 static/effective **G4/IMP-052**；本轮只记录下一门，不执行下一业务切片。

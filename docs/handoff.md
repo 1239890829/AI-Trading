@@ -61,13 +61,13 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 本节只记录当前现场，不维护第二份 backlog；权威算法在总账 §5.9，任务元数据在所属 stage。
 
-- **当前主门**：G0
-- **主切片首选**：BUG-020
-- **领取边界**：2026-09-22 08:32 北京时间，BUG-020 的 A_SHARE_OBSERVABLE_SESSION 已进入开工窗，runtime selector 实际返回 G0/BUG-020；本项已正式领取并进入进行中。今天只做完整生产交易会话验收，不领取 IMP-052；待收盘终验后再重新计算阶段门。
-- **当前现场**：AI-Trading 主工作区已 fast-forward 到 #96 merge `de86c680`；真实 SQLite `integrity_check=ok`/39 tables，30/30 scheduler running，盘后 snapshot 为 `stale/sina/5,564 rows`（收盘后状态，不是重启失败）。前端此前未运行；`npm ci` 已在 Node 22.22.2 下重建，695/695 tests 与 Next 16.3.3 production build 通过，`.next` 验收缓存已清。#96 post-merge docs/frontend success、backend 失败；测试网络隔离修复候选在新增 TDX minute fail-closed 非空守卫后，本地全量 backend 已达 4,275 collected / 4,195 passed / 80 skipped / 0 errors。静态阶段门仍为 G4/IMP-052，本轮不继续执行 IMP-052。
-- **阶段门重算**：静态账本仍为 G4/IMP-052；每轮 continue 先运行 runtime selector。BUG-020 只在已覆盖交易日的 08:30–09:15 完整会话开工窗临时变为 G0 actionable，领取后进入进行中并覆盖到收盘；日历 unknown 或错过开工窗不抢占。RSH-030/RSH-031 等继续保留各自效果前置与非阻断语义。
-- G0 的 BUG-028 / BUG-026 已完成，BUG-020 静态为 `待条件` 且已登记 `A_SHARE_OBSERVABLE_SESSION`；G1 的 BUG-029 / IMP-006 / IMP-044 已完成；G2 的 IMP-049 仍为 `待条件` 且尚无可机械判定的运行条件；G3/RSH-026 与 IMP-020 已完成。本轮用户授权的是审计遗留收口，不等于领取静态下一业务候选 IMP-052。
-- BUG-020 的 current-value 接纳门现区分 source event time / received time、缺失/拒绝/合法空集与身份歧义；旧可信值不会被晚到/非法观测覆盖。2026-09-20 周日已用本片代码显式加载主仓部署 `.env`，成功构建 `chain(ths→tencent→eastmoney→sina)` 并完成有界只读休市探针：最近交易日 2026-09-18、6/6 指数覆盖、拒绝数 0，600519 实际由腾讯返回且 source time 为 2026-09-18，Hub 明确标 `stale/market_closed`。尚未完成真实交易时段完整会话验收，故不得标已完成或宣称长期盘中 SLA。
+- **当前主门**：G4
+- **主切片首选**：IMP-052
+- **领取边界**：BUG-020 已完成 2026-09-22 盘前→收盘完整生产会话验收；本轮只收口该任务并发布，不领取下一业务切片。
+- **当前现场**：BUG-020 生产会话已在 `chatgpt/bug020-session-20260922` 完整验收到 15:30；后端 PID=9077 未再 restart，真实 SQLite `integrity_check=ok`/39 tables，30/30 scheduler running，收盘 REST/WS 均明确 `stale/market_closed`，index 6/6、source_rejections=0，Sina snapshot `ready/5566 rows` 且按 240s idle cadence 保持正确 freshness。完整 backend pytest+pyflakes、前端 696/696+tsc+eslint+build、doc-health/public-repo/workspace/diff-check 均通过；详见 `docs/review/bug020-production-session-20260922.md`。
+- **阶段门重算**：BUG-020 闭环后 `python3 scripts/ledger-runtime-selection.py --json` 于 2026-09-22 15:33 北京时间返回 static/effective 均为 **G4/IMP-052**、conditions=[]。本轮只记录该下一候选，不领取、不执行 IMP-052。RSH-030/RSH-031 等继续保留各自效果前置与非阻断语义。
+- G0 的 BUG-028 / BUG-026 / BUG-020 均已完成；G1 的 BUG-029 / IMP-006 / IMP-044 已完成；G2 的 IMP-049 仍为 `待条件` 且尚无可机械判定的运行条件；G3/RSH-026 与 IMP-020 已完成。本轮授权只覆盖 BUG-020 收口与发布，不等于领取重算后的下一业务候选。
+- BUG-020 的 current-value 接纳门区分 source event time / received time、缺失/拒绝/合法空集与身份歧义；旧可信值不会被晚到/非法观测覆盖。2026-09-22 已完成真实交易日整段生产会话：盘中真实 source-time regress、Sina 缺页/DNS 短断、缓存老化、午休与收盘 market_closed、受控 restart/recovery 均形成可追证据并通过。该结果关闭一次性验收，不宣称长期 provider SLA。
 - BUG-029 现以 `ever_sealed/current_sealed/snapshot_state/version` 为唯一 current-state 契约；开板只恢复“进入评估”的资格，不自动获得成交/通知/模拟执行许可。2026-09-18 真实跨源样本已证明涨停池成员可多次开板/回封；旧 v1 归档保持原语义，v2 才使用新状态重放。
 - RSH-031 为 `G1/P1/非阻断/门内序70`，即使同处 G1 也排在阻断项之后；且 `效果前置=RSH-026, IMP-020, RSH-030` 未满足前不得宣称龙头战法有效或接生产权重。
 - U47 不制造跨门例外：IMP-006 已把 `reference_entry → executable_snapshot → PaperOrder fill` 三种价格身份和同一 decision/version 接到通知、模拟仓与页面；IMP-044 只证明通知可靠性工程闭环，不证明买点效果。G2/IMP-049 当前仍 `待条件`，RSH-026 本轮关闭后阶段门顺延到 G3/IMP-020；未来 IMP-049 条件转可行动时仍需重新按最低门算法计算，reference 与实际 shadow fill 永久分名、分母和收益口径。
@@ -76,7 +76,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - U50 也不改变阶段门算法，只改变“谁可以完成当前切片”：正常模式仍是 Web Review + Codex；当前 `DEGRADED_FULL_CONTROL` 下网页端按同一阶段门全程操控，每个 PR 必须重新写 exact-HEAD `DegradedRelease`，不能复用一次用户授权跳过逐 PR 发布证据。
 - GX 治理只可作为不冲突的伴随切片。`GOV-026` 的 workspace hygiene 已接 CI/交接，本轮又完成宿主盘点与缓存收口；`GOV-022` 新增 runtime selector，只对 stage 明示且可确定的运行条件做临时选择覆盖，不改变静态账本。BUG-020 因具备显式条件可在完整会话开工窗抢回 G0；IMP-049 仍因条件不可机械证明而保持静态等待。
 
-当前处于 `DEGRADED_FULL_CONTROL`：审计运行态/条件激活/测试离线门已由 latest master + post-merge CI 闭环；本轮最终卫生只允许收口 pytest 临时沙箱生命周期。若 latest master 已包含 `TemporaryDirectory` sandbox owner 且对应 post-merge CI 全绿，则该卫生项也自动闭环，不再为“写已完成”追加文档 PR。Candidate B readiness 仍 blocked，不启动真实交易或参数晋级；BUG-020 真实整段交易会话验收仍必须等下一次完整开工窗，不能用 9/21 盘后收口替代。
+当前处于 `DEGRADED_FULL_CONTROL`：审计运行态/条件激活/测试离线门已由 latest master + post-merge CI 闭环；本轮最终卫生只允许收口 pytest 临时沙箱生命周期。若 latest master 已包含 `TemporaryDirectory` sandbox owner 且对应 post-merge CI 全绿，则该卫生项也自动闭环，不再为“写已完成”追加文档 PR。Candidate B readiness 仍 blocked，不启动真实交易或参数晋级；BUG-020 已由 2026-09-22 从盘前到收盘的真实整段交易会话闭环，不再以此阻断后续阶段门。
 
 ## 8. Jev、工具链与协作流当前基线
 
