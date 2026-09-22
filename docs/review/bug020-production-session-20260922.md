@@ -17,7 +17,7 @@
 | 时点 | 阶段 | 结果 |
 |---|---|---|
 | 08:32 | 盘前开工 | PASS（见下） |
-| 09:30 左右 | 开盘后 | 待采样 |
+| 09:30 左右 | 开盘后 | PASS / 观察到真实拒绝→恢复（见下） |
 | 10:30/11:30 | 上午 | 待采样 |
 | 12:30 | 午间 | 待采样 |
 | 13:30/14:30 | 下午 | 待采样 |
@@ -36,6 +36,18 @@
   - 贵州茅台：source=tencent，quality=stale / market_closed，received_at=2026-09-22T00:34:55.846346Z，data_timestamp=2026-09-21T08:14:37Z。
   - WS meta 同步暴露 index coverage 6/6 与 quotes/indices rejection=0。
 - 解释：盘前真实帧清楚区分 **source event time (data_timestamp)** 与 **received time (received_at)**，没有把“今天收到的昨日行情”冒充为今天事件时间；旧值保持 stale/market_closed，符合 BUG-020 接纳边界。
+
+
+## 09:30–09:31 开盘检查点
+
+- single-writer：活动分支仍为 `chatgpt/bug020-session-20260922`，HEAD=`16d1d51b296232259fcc5d9c258d1c21d90d2d15`；0 个 open PR、1 个 worktree；BUG-020 仍为“进行中”，未领取 IMP-052 或其它业务切片。
+- 09:30:19 health 已从盘前 `degraded/is_stale=true` 恢复为 `status=ok / is_stale=false`；provider 仍为 `chain(ths→tencent→eastmoney→sina)`，`consecutive_failures=0`、`last_error=null`，指数覆盖 6/6。
+- SQLite 继续 `integrity_check=ok`、39 tables；scheduler 30/30 running；market snapshot 为 5,566 rows，`saved_files=95`，最新保存 `data/parquet/snapshots/20260922/012709.parquet`，snapshot freshness=`ready`，无保存失败。
+- REST + 真实 WS 在开盘初始阶段出现**可解释的异步恢复**：09:30:19 时上证指数已为当日高质量值（`data_timestamp=09:30:03`），但 600519 仍保留昨日 `16:14:37` 的 `stale/market_closed` 可信旧值；两条通道展示一致，没有用空值或未知值覆盖旧 current。
+- 09:30:39 复测，600519 已恢复为当日高质量值：price=1248.86，`data_timestamp=09:30:12`，`received_at=09:30:16.169632`；上证指数为 price=3959.61，`data_timestamp=09:30:36`。因此 600519 的 event time 从昨日值单调推进到今日值，未出现倒退。
+- 09:30:54 真实源又产生一次可见拒绝：REST meta `source_rejections.indices.count=4`，reason=`source_time_regress_ignored`；上证指数行同时以 `quality=stale` 暴露该拒绝背景。到 09:31:09 再采样，指数恢复 `quality=high`、`data_timestamp=09:31:06`，rejections 回到 0；09:31:24 继续推进到 `data_timestamp=09:31:21`。
+- 当前判定：**通过开盘检查点，但保留一个语义观察项继续跟踪**——批次/health freshness 可为 ready，而单个 requested row 在短暂恢复窗仍可能是 stale；行级 quality/reasons 正确暴露了这一点。现阶段不把它判成 BUG，因为 row-level contract 没有隐藏陈旧值，且 600519 在约 20 秒内自行恢复；后续上午/午间继续核消费者是否错误只看 batch freshness。
+- 后端 PID 仍为 55303；当前尚未到 10:00–14:00 重启窗口，本检查点**未执行重启**。
 
 ## 受控重启
 
