@@ -440,8 +440,23 @@ class QuoteHub:
 
     # ---------- 读取 ----------
 
+    def _visible_quote(self, quote: Quote) -> Quote:
+        """返回消费侧视图；缓存未被继续轮询时也不能无限保持 high。
+
+        current cache 保存最后被接纳的事实，不因为时间过去就原地篡改。
+        但 REST/WS 读取必须同时反映 source event time 的年龄；超过
+        stale_after 时返回 stale 副本，直到下一条可信观测推进 current。
+        """
+        if quote.quality in (Quality.stale, Quality.invalid):
+            return quote
+        if quote.freshness(fresh_within=self.stale_after).state != "stale":
+            return quote
+        visible = quote.model_copy(deep=True)
+        mark_stale(visible, "quote_age_exceeded")
+        return visible
+
     def get_indices(self) -> list[Quote]:
-        return list(self.indices.values())
+        return [self._visible_quote(q) for q in self.indices.values()]
 
     def get_quotes(self, symbols: list[str] | None = None) -> list[Quote]:
         # 指数兜底：带前缀查询（sh000001，指数详情链路的规范形态）归一化成裸代码查
@@ -459,9 +474,9 @@ class QuoteHub:
                     q = (q.model_copy(update={"symbol": s})
                          if q is not None and q.market == s[:2].upper() else None)
                 if q is not None:
-                    out.append(q)
+                    out.append(self._visible_quote(q))
             return out
-        return list(self.quotes.values())
+        return [self._visible_quote(q) for q in self.quotes.values()]
 
     def next_seq(self) -> int:
         self._seq += 1

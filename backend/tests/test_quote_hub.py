@@ -33,6 +33,38 @@ def make_q(symbol: str, name: str, price: float) -> Quote:
     )
 
 
+def test_aged_cache_is_stale_on_read_without_mutating_current():
+    """退出轮询池后的旧 current 可保留，但 REST/WS 读出不得继续冒充 high。"""
+    hub = QuoteHub(provider=None, poll_interval=1, stale_after=10)
+    q = make_q("600519", "贵州茅台", 100.0)
+    q.data_timestamp = datetime.now(timezone.utc) - timedelta(seconds=30)
+    hub.quotes[q.symbol] = q
+
+    visible = hub.get_quotes([q.symbol])[0]
+
+    assert visible is not q
+    assert visible.price == q.price == 100.0
+    assert visible.quality == Quality.stale
+    assert visible.quality_reasons == ["quote_age_exceeded"]
+    assert visible.freshness(fresh_within=hub.stale_after).state == "stale"
+    assert hub.quotes[q.symbol].quality == Quality.high
+    assert hub.quotes[q.symbol].quality_reasons == []
+
+
+def test_aged_prefixed_index_is_stale_on_read_without_mutating_current():
+    hub = QuoteHub(provider=None, poll_interval=1, stale_after=10)
+    q = make_q("000001", "上证指数", 3979.88)
+    q.data_timestamp = datetime.now(timezone.utc) - timedelta(seconds=30)
+    hub.indices[q.symbol] = q
+
+    visible = hub.get_quotes(["sh000001"])[0]
+
+    assert visible.symbol == "sh000001"
+    assert visible.quality == Quality.stale
+    assert visible.quality_reasons == ["quote_age_exceeded"]
+    assert hub.indices[q.symbol].quality == Quality.high
+
+
 def test_bare_stock_symbol_never_falls_back_to_index():
     hub = QuoteHub(provider=None, poll_interval=10)
     hub.indices["000001"] = make_q("000001", "上证指数", 3979.88)

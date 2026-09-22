@@ -78,6 +78,14 @@
 - 稳定实例 PID=53605 在 10:35:45 已恢复 market snapshot=ready / 5566 rows / saved_files=1；10:37 health=ok、Hub is_stale=false、source_rejections=0，scheduler 30/30。REST 恢复为 600519 price=1256.00 / data_timestamp=02:37:00Z，sh000001=3965.56 / 02:37:03Z；随后 6 个真实 WS 帧继续推进到 600519 02:37:09、sh000001 02:37:06，全部 regressed_vs_seen=false。
 - 判定：**应用层 restart/recovery 数据契约通过**——DB、scheduler、REST/WS、snapshot 均恢复，冷启动缺失以“缺席→恢复”表达，没有空值冒充 current，恢复后的 source event time 也未倒退。执行层“恰好一次”被并发执行器污染，作为治理异常单独保留，不再通过额外重启重做。后续 11:30/午间/下午继续验证稳定性。
 
+## 10:40–10:54 验收中发现的真实缺口与最小修复
+
+- **缓存年龄未映射到行级 quality**：重启后 WS 订阅断开，600519 退出 1Hz 轮询池，但对象仍留在 Hub current cache。10:40 连续三次 REST 读取中，上证指数 event time 从 02:40:54 持续推进，而 600519 停在 02:37:09；后者仍返回 quality=high。根因是 Quote.freshness() 已能按 data_timestamp 判年龄，但 QuoteHub.get_quotes() 直接返回缓存对象，读取层没有应用年龄语义。修复新增只读 _visible_quote：超过 Hub stale_after 时返回 quality=stale / quote_age_exceeded 的深拷贝，**不修改共享 current、不增加网络请求**；下一条可信观测仍可正常推进缓存。
+- **board_surge 生产循环持续异常**：旧进程日志从 09:35 到 10:33 多次出现 board surge beat failed，堆栈固定为 seal_sequence() 对 provider 返回的 Pydantic LimitUpRecord 调 .get()。历史单测只覆盖 dict 夹具，漏掉真实 provider 类型。修复让字段读取同时兼容 dict 与对象属性，并新增真实 LimitUpRecord 回归。
+- **pytest 本机生产凭据渗透**：定向 test_api 初次运行时，全会话 socket 硬门抓到 open.feishu.cn 的真实 DNS 尝试。CI 环境通常无生产飞书凭据，本机 .env 却有，因此旧测试存在环境依赖。修复在 conftest 导入 app 前显式清空五个飞书目标/凭据环境变量；飞书专项测试继续自行构造桩，不改变生产配置。
+- 修复后相关后端组合回归（quote_hub / board_surge / board_surge_phase2 / quotes endpoint / notifier_feishu / notifications / notification_outbox）全部通过；pyflakes 通过；前端 QualityBadge 新增 quote_age_exceeded 人话提示回归后 8/8 通过；git diff --check 通过。
+- 当前运行 PID=53605 仍加载修复前代码；下一步必须以当前已提交 hotfix 做一次**修复部署重载**后，再用真实 REST/WS 验证上述两项生产缺口消失。由于 10:30 自动执行器此前已造成额外 restart，本次重载会明确记为“缺陷修复部署”，不再伪称整日只有一次进程切换。
+
 ## 最终判定
 
-**进行中。** 只有完整覆盖盘前、盘中、午间、下午、收盘并完成一次受控 restart/recovery 后，才允许把 BUG-020 改为“已完成”。
+**进行中。** 只有完整覆盖盘前、盘中、午间、下午、收盘，且重启恢复与本轮发现的生产缺口修复均有真实运行证据后，才允许把 BUG-020 改为“已完成”。

@@ -138,6 +138,24 @@ def test_page_456_keeps_type_through_gather(monkeypatch):
         asyncio.run(sina_market.fetch_market_snapshot(page_size=100, concurrency=6))
 
 
+def test_snapshot_missing_one_page_is_not_published_as_complete(monkeypatch):
+    """stock-count 是硬分母；少一整页不能因仍超过 90% 就冒充 ready。"""
+    def handler(url, params):
+        if "getHQNodeStockCount" in url:
+            return _Resp(200, text='"101"')
+        if (params or {}).get("page") == 2:
+            return _Resp(200, payload=[])
+        rows = [
+            {"symbol": f"sh{600000 + i:06d}", "code": f"{600000 + i:06d}", "name": f"S{i}"}
+            for i in range(100)
+        ]
+        return _Resp(200, payload=rows)
+
+    _patch_http(monkeypatch, handler)
+    with pytest.raises(ProviderError, match="snapshot incomplete.*expected=101"):
+        asyncio.run(sina_market.fetch_market_snapshot(page_size=100, concurrency=6))
+
+
 # ---------------------------------------------------------------- ② 退避判据
 
 

@@ -54,6 +54,15 @@ os.environ["ASHARE_JEV_EVENT_AUX_MODE"] = "off"
 os.environ["ASHARE_JEV_ASSISTANT_TOOL_MODE"] = "off"
 os.environ["ASHARE_JEV_ASSISTANT_VERIFY_MODE"] = "off"
 
+# 本机 .env / Keychain 里的真实飞书目标也必须从测试进程剥离。CI 通常没有这些
+# 凭据，因此不显式清空会形成“CI 离线、本机却真发请求”的环境依赖；通知专项
+# 测试自行构造 notifier/凭据，不依赖生产秘密。
+os.environ["ASHARE_ALERT_FEISHU_WEBHOOK"] = ""
+os.environ["ASHARE_ALERT_FEISHU_SECRET"] = ""
+os.environ["ASHARE_FEISHU_APP_ID"] = ""
+os.environ["ASHARE_FEISHU_APP_SECRET"] = ""
+os.environ["ASHARE_FEISHU_NOTIFY_OPEN_ID"] = ""
+
 # 逐笔的 **TDX 直连降级备源**必须关掉（`IMP-038`，2026-09-16）。
 #
 # 为什么单靠 `ASHARE_DATA_PROVIDER=mock` 不够：TDX 走 **TCP 7709 真实网络**，
