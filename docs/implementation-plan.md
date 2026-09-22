@@ -79,7 +79,7 @@ BUG-025/027 已按原任务闭环；BUG-028/026/029 与 BUG-020 均已完成，�
 | **GX 持续治理** | 文档/Jev/雷达/CI成本等控制面 | GOV-022/024/025/027、IMP-043 等 | 可伴随，但不能成为跨门通行证 |
 
 详细算法、门禁角色、门内序、硬依赖/效果前置和 `CROSS_GATE_EXCEPTION` 只由 [阶段总账 §5.9](retro-and-gaps.md#59-阶段门优先级与跨阶段治理) 维护。W00–W09仍是领域归属；P0/P1/P2从本版开始只表示**门内优先级**，不再出现“P0–P5阶段”这种同名歧义。
-默认执行顺序是：最低可行动阻断门 → 阻断优先 → P0/P1/P2 → 门内序。高门任务只有在低门不存在可行动阻断项，或网页有据登记一次性跨门例外时才能成为主切片。每次正式开工仍只派一个主片，GX 最多伴随一个低风险治理片。
+默认执行顺序是：**仍有 blocker 时取最低可行动 blocker 门；全部 blocker 清空后取最低 actionable non-blocker 普通门** → 门内角色 → P0/P1/P2 → 门内序。高门 blocker 不被低门 non-blocker 绕开；G5/GX 不参与 ordinary fallback。每次正式开工仍只派一个主片，GX 最多伴随一个低风险治理片；跨门仍须网页有据登记一次性例外。
 
 ## 6. 持续推理与改进的闭环
 
@@ -168,7 +168,7 @@ BUG-025/027 已按原任务闭环；BUG-028/026/029 与 BUG-020 均已完成，�
 | U41 新决策/新功能加入后防文档漏更 | plan-registry §1.1；本文§1/§6；GOV-022；continue/handoff Skills 与 doc-health 根入口守卫 |
 | U42 不固步自封、主动发现并严格筛选外部创新 | continuous-evolution；本文§6.1；GOV-025；ashare-innovation-radar；外部候选不自动产生采用权 |
 | U43 历史涨停/强连板/龙头形成→题材分支/消息/技术/情绪/资金/指数多维归因→失败对照→从旧到新盲测→起爆前发现→猎场回流；Jev 参与窄语义批处理/筛选/验证 | limit-up-dragon-research；W04/RSH-031；RSH-026/030、IMP-020/049；不从赢家倒推、不建第二评分系统 |
-| U44 多任务窗口后的统一执行优先级；Codex `ashare-ledger-continue` 全盘恢复上下文并按 P0/P1/P2、依赖、解锁价值、证据成熟度动态选一刀；用户无需复制任务卡 | collaboration-workflow §3/§9/§10；ashare-ledger-continue §1–§4；retro-and-gaps §日常使用；handoff 当前候选快照；每次只授权一个主切片 |
+| U44 多任务窗口后的统一执行优先级；Codex `ashare-ledger-continue` 全盘恢复上下文并按阶段门/角色/P0-P2/依赖动态选一刀；有 blocker 时取最低 blocker 门，全部 blocker 清空后回落到最低 actionable non-blocker 普通门，避免“仍有可执行工作却返回 None”；用户无需复制任务卡 | collaboration-workflow §3/§9/§10；ashare-ledger-continue §1–§4；retro-and-gaps §5.9/日常使用；handoff 当前候选快照；每次只授权一个主切片 |
 | U45 阶段门与文档治理：不允许任意跨阶段；W归属/G门序/P优先级分离，任务有门内序/角色/硬依赖/效果前置；跨门须显式例外；计划/账本/专题/summary/Skill各守唯一职责 | retro-and-gaps §5.9；plan-registry §1/§1.1/§1.3；doc-health S门禁；continue/handoff Skills；GOV-022 |
 | U46 工作区卫生、文档物理分类与资产生命周期：已完成且精华已提炼的文档原件可退休；`docs/` 根只保留 6 个控制面，领域正文进入 system/data/product/strategy/ai/review/research 等已登记目录；项目拥有的临时克隆/worktree、测试沙箱、构建缓存与过期大产物必须按保留条件收口，未知/跨项目/业务数据/唯一证据不得自动删 | W08/GOV-026；AGENTS §3–§4；INDEX §0.0.1；kb/07 §6/§10.1、kb/11 §4–§5；doc-health O2 管文档物理落位，workspace hygiene gate 管应用专属目录与本机资产 |
 | U47 猎场推荐验证、盘中动态买点与 UI 体验：首见/触发参考价可用于反事实跟踪但不得冒充真实成交；达到可执行条件的机会要进入独立 shadow 账户并记录费用/滑点/拒单/未成交/退出；盘中按新快照重评而非开盘定死全天；低位后涨停只能作为无未来信息的研究标签；猎场合理分区/tab，详情按上下文选择 Drawer/Modal/Popover，全站保持页面锁屏+容器内部滚动并用 design-taste 约束有目的动效 | IMP-006 → IMP-049 → W03/IMP-053；W04/RSH-026、RSH-031、IMP-020；W07/IMP-050、IMP-054；hunting-decision-design §4/§6/§8；feature-closure-audit §4 |
