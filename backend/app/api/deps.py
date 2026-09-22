@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from fastapi import HTTPException, Request
+import hmac
+
+from fastapi import Header, HTTPException, Request
 
 from app.core.auth import TOKEN_HEADER, check_api_token
+from app.core.config import settings
 from app.repositories.watchlist_repo import WatchlistRepository
 from app.services.quote_hub import QuoteHub
 
@@ -66,3 +69,29 @@ async def require_write_token(request: Request) -> None:
     `require_api_token` 在 router 级统一盖住；本守卫保留为写作用域的显式标记。
     """
     check_api_token(request.headers.get(TOKEN_HEADER))
+
+
+PROMOTION_TOKEN_HEADER = "X-Agent-Promotion-Token"
+
+
+async def require_promotion_approval_token(
+    promotion_token: str | None = Header(default=None, alias=PROMOTION_TOKEN_HEADER),
+) -> None:
+    """Independent parameter-promotion approval credential (IMP-052).
+
+    Unlike ``require_write_token``, absence never means local-development allow.  Approval is
+    a higher-authority action than ordinary writes, so the dedicated token must be explicitly
+    configured, must differ from ``ASHARE_API_TOKEN``, and must match exactly.  This prevents
+    model/evaluator code or an ordinary API writer from manufacturing its own promotion approval.
+    """
+    expected = (settings.agent_promotion_token or "").strip()
+    ordinary = (settings.api_token or "").strip()
+    if not expected:
+        raise HTTPException(status_code=503, detail="参数晋级批准入口未启用：ASHARE_AGENT_PROMOTION_TOKEN 未配置")
+    if len(expected) < 32:
+        raise HTTPException(status_code=503, detail="参数晋级批准凭据至少需要 32 字符")
+    if ordinary and hmac.compare_digest(expected, ordinary):
+        raise HTTPException(status_code=503, detail="参数晋级批准凭据不得与普通 API token 共用")
+    provided = promotion_token or ""
+    if not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=403, detail="参数晋级批准凭据无效")

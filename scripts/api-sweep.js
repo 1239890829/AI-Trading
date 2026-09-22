@@ -42,6 +42,7 @@ const PATH_VALUES = {
   target_date: "20260828",
   id: "1",
   rule_id: "1",
+  change_id: "1",
   period: "day",
   group: "",
   ts: "2026-08-28",

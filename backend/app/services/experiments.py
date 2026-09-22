@@ -31,16 +31,26 @@ ROLLBACK_DROPPCT = 0.02
 VERIFY_WINDOW_DAYS = 30
 
 
+def capture_experiment_baseline(session_factory=None) -> dict:
+    """Capture the post-activation guard baseline or fail before any promotion write.
+
+    Unlike the legacy ``attach_experiment`` best-effort wrapper, the IMP-052 promotion path
+    treats inability to capture this snapshot as a hard precondition failure: a parameter must
+    not become active without its existing degradation/rollback guard being attached.
+    """
+    sf = session_factory or get_session_factory()
+    health = collect_signal_health(sf)
+    baseline = {k: health.get(k) for k in ("status", "win_rate", "mean_excess")}
+    baseline["taken_at"] = beijing_now_naive().isoformat(timespec="seconds")
+    return baseline
+
+
 def attach_experiment(change_id: int, param_key: str, hypothesis: str,
                       session_factory=None) -> dict | None:
     """A 类变更生效时自动建实验（基线=当时 signal_health 快照）。失败只记日志。"""
     sf = session_factory or get_session_factory()
     try:
-        from app.picks.signal_health import collect_signal_health
-
-        health = collect_signal_health(sf)
-        baseline = {k: health.get(k) for k in ("status", "win_rate", "mean_excess")}
-        baseline["taken_at"] = beijing_now_naive().isoformat(timespec="seconds")
+        baseline = capture_experiment_baseline(sf)
         with sf() as db:
             row = AgentExperiment(
                 change_id=change_id, param_key=param_key, hypothesis=hypothesis[:300],
