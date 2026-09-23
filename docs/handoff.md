@@ -25,7 +25,7 @@
 | 选股提前发现、进入时机和成因 | 首次观察/触发/reference/actionable/实际 shadow fill 分开，盘中随新事实另版重评；先验事实/时间/竞争解释/失效并存；金健只作未定区间示例，不作抓涨或成交保证 | hunting-decision-design §1/§4/§4.1/§7/§8；W03/IMP-053 |
 | 不限少数战法/形态，充分用知识 | 驱动/结构/角色/环境/时点/执行域/成熟度开放组合；37条KB及候选登记有用途，未知情境不硬归类，负结果与准入区分 | hunting-decision-design §2/§3/§5；plan-registry §3/§4 |
 | 猎场重新设计但不偏离UI风格，其他板块同理 | 沿原组件/字号/亮暗/配色；猎场按机会/跟踪/影子/复盘职责分区，页面锁屏+内部滚动；Drawer/Modal/Popover 按上下文语义选择，动效有目的且后置；工作台、市场、图表、消息、记录和复盘均有独立目标 | product-closure-design §2/§4/§5；hunting-decision-design §6；W07/IMP-050/054 |
-| 历史要求叠加、同义去重、新要求保留 | U01–U50及21条原消息ordinal保持；冲突在语义处裁定，不以最新局部问句抹去主任务，历史成果不重做 | implementation-plan §8/§8.1；plan-registry §1–§3 |
+| 历史要求叠加、同义去重、新要求保留 | U01–U51及21条原消息ordinal保持；冲突在语义处裁定，不以最新局部问句抹去主任务，历史成果不重做 | implementation-plan §8/§8.1；plan-registry §1–§3 |
 | 全面论证后主动补缺、融合、调整 | 现状/最小修补/复用/替代比较，收益/成本/风险/恢复与反证齐备才增删重排；允许不改、拒绝或补证，不机械领下一行 | implementation-plan §6/§7；collaboration-workflow §4 |
 | 废弃旧协作自动化，改用账本短提示 | 互调/自动唤醒/自动回执/Bridge依赖退出，历史原型已退役；网页规划审核、Codex执行、用户只触发读取 | collaboration-workflow §1–§3/§7；W08/GOV-022 |
 | 更新关联文档、清理无用重复并可追溯 | 当前资料各有职责，旧矛盾集中裁定；清理的是旧施工承诺/重复日志，不删除独有知识、历史证据或业务调度 | plan-registry；W08；Git父版本 |
@@ -63,7 +63,10 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 - **最新已合基线**：PR #107 已把 BUG-022 合入 `master@e345f6dbb9c6a8f3d9eafe2008f611ab43a5b571`；BUG-022 不再是活动切片。
 - **普通 selector**：在没有跨门例外时，BUG-022 完成后机械下一项仍是 G1/IMP-048；本轮不改其静态优先级/阶段门。
-- **当前主切片**：G4/IMP-055（JEV 可观测决策视图与同源降级），P0 / 非阻断 / 门内序15。
+- **当前主门**：G1
+- **主切片首选**：IMP-048
+- **同门候选顺序**：`IMP-048 → IMP-040 → RSH-031`。
+- **跨门执行切片**：G4/IMP-055（JEV 可观测决策视图与同源降级），P0 / 非阻断 / 门内序15；仅在本节 `CROSS_GATE_EXCEPTION` 范围内执行。
 - **领取依据**：用户 2026-09-23 在 JEV 专题中明确要求将该阶段优先完成，并连续“继续”；网页已完成仓库事实审计、外部生态复核、living-system-governor 二审与 U49 Preflight，确认该纵切不需改变金融/交易门。
 - **CROSS_GATE_EXCEPTION**：
   - **范围**：仅 IMP-055 的 JEV status/usage/runtime structured trace、只读 API、`/agent` JEV 页签、对应测试/文档；不得顺带执行 IMP-045/046 cascade、RSH-030 阈值、猎场生产评分或其它 G4 项。
@@ -94,7 +97,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **Degraded reason**：当前 Codex 额度不可用，正常双角色无法持续完成实施→独立审核→发布闭环；旧 exact-HEAD Review 门因此形成自锁。
 - **有效期**：持续到用户明确说 Codex 已恢复/退出降级；不是单 PR 临时口令。但每个 PR 的发布仍必须重新生成 exact-HEAD `DegradedRelease`，不能复用上一 PR 回执。
 - **不降低项**：G0–G5/GX 阶段门、U49 主动反证、branch protection、required CI、latest master、CHANGES_REQUESTED/thread、public-repo scan、workspace/doc-health、敏感信息/范围、post-merge CI、删除功能分支。
-- **当前动作**：GOV-022/#106 已完成；本轮 degraded 主切片是 G1/BUG-022。代码提交 `be2478e2e24b536b1da03d532cf25dda68299e3e` / `f259737f68334bcb9a51085b8b25cb79721edf18` 已通过本地 U49、双时区全前端、production build 与真实 Canvas；当前只允许完成 stage/handoff、PR exact-HEAD DegradedRelease、required CI、release_check、merge/post-merge CI 与分支清理。机械下一项 G1/IMP-048 不在本轮授权内。
+- **当前动作**：BUG-022/#107 已完成；用户当前明确优先的 JEV 专题由一次性 `CROSS_GATE_EXCEPTION` 承接为 G4/IMP-055。实现只允许补 JEV status/usage/runtime structured trace、同源只读 API、`/agent` JEV 页签及对应测试/文档；不改生产 cascade、金融硬门、猎场排序或 RSH-030 阈值。IMP-055 结束后立即撤销例外并回普通 selector 的 G1/IMP-048。
 
 ## 8.2 U49 主动审计回执（RSH-026 Preflight）
 

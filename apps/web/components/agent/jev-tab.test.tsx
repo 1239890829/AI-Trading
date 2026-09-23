@@ -48,7 +48,7 @@ describe("JevTab", () => {
     await waitFor(() => expect(screen.getByText("jev-1.13.0")).toBeTruthy());
     expect(screen.getByText(/notify · conf 91.0%/)).toBeTruthy();
     expect(screen.getByText(/ignore 6.0%/)).toBeTruthy();
-    expect(screen.getByText(/JEV不可用/低置信/)).toBeTruthy();
+    expect(screen.getByText(/JEV不可用\/低置信/)).toBeTruthy();
     expect(screen.getByText(/不展示输入正文，也不伪造“思维链”/)).toBeTruthy();
   });
 

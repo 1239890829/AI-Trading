@@ -394,3 +394,22 @@ def test_agent_jev_overview_is_read_only_and_path_redacted(client, tmp_path, mon
     assert "path" not in body["historical_usage"]
     assert "state、用户正文" in body["privacy"]
     assert "assistant_tools" in body["fallbacks"]
+
+
+def test_runtime_trace_drops_non_finite_numbers_and_sensitive_paths(monkeypatch):
+    # Sanitizer must stay JSON-safe even if a caller hands it malformed numeric output.
+    answer = jc._safe_answer_summary({
+        "route": {
+            "type": "choice", "choice": "a", "confidence": float("nan"),
+            "probabilities": {"a": float("inf"), "b": 0.1},
+        },
+    })["route"]
+    assert "confidence" not in answer
+    assert answer["probabilities"] == {"b": 0.1}
+
+    # Sensitive-input rejection remains fail-closed, while the observable reason is generic.
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-only-key")
+    jc.evaluate({"api_key": "never-log-path"}, _questions(), purpose="trace-sensitive")
+    trace = jc.recent_decision_traces(limit=1)[0]
+    assert trace["reason"] == "sensitive_input_blocked"
+    assert "api_key" not in str(trace)

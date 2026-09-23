@@ -14,6 +14,7 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -132,7 +133,9 @@ def _safe_answer_summary(answers: Any) -> dict[str, dict[str, Any]]:
         for key in scalar_keys:
             value = raw_answer.get(key)
             if isinstance(value, (int, float)) and not isinstance(value, bool):
-                item[key] = float(value)
+                number = float(value)
+                if math.isfinite(number):
+                    item[key] = number
         probs = raw_answer.get("probabilities")
         if isinstance(probs, dict):
             clean_probs: dict[str, float] = {}
@@ -142,11 +145,23 @@ def _safe_answer_summary(answers: Any) -> dict[str, dict[str, Any]]:
                     and isinstance(value, (int, float))
                     and not isinstance(value, bool)
                 ):
-                    clean_probs[label[:120]] = float(value)
+                    number = float(value)
+                    if math.isfinite(number):
+                        clean_probs[label[:120]] = number
             if clean_probs:
                 item["probabilities"] = clean_probs
         out[raw_qid[:80]] = item
     return out
+
+
+def _safe_trace_reason(reason: str | None) -> str | None:
+    """Collapse sensitive-validation details before exposing a trace."""
+    text = str(reason or "")
+    if not text:
+        return None
+    if text.startswith(("sensitive_key:", "secret_like_value:")):
+        return "sensitive_input_blocked"
+    return text[:120]
 
 
 def _append_decision_trace(
@@ -165,7 +180,7 @@ def _append_decision_trace(
         "model": str(model or "")[:80] or None,
         "answers": _safe_answer_summary(answers),
         "latency_ms": round(max(0.0, float(latency_ms or 0.0)), 2),
-        "reason": str(reason or "")[:120] or None,
+        "reason": _safe_trace_reason(reason),
     }
     with _lock:
         _decision_traces.appendleft(row)
