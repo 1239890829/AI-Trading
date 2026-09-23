@@ -12,7 +12,13 @@ import {
   Time,
 } from "lightweight-charts";
 import type { MinutePoint as P } from "@/lib/api";
-import { computeMinuteAxis, isPositivePrice } from "@/lib/minute-axis";
+import {
+  computeMinuteAxis,
+  formatMinutePercentTick,
+  isPositivePrice,
+  minuteLimitPriceState,
+} from "@/lib/minute-axis";
+import { bjDate } from "@/lib/format";
 import { tradingSeqFromHHMM } from "@/lib/market-hours";
 import { readChartTheme, useChartTheme, type ChartTheme } from "@/lib/chart-theme";
 import type { MinuteNewsEvent } from "@/lib/event-markers";
@@ -159,7 +165,10 @@ function tradingMinutesElapsed(bjIso: string): number {
 }
 
 function fmtPct(v: number | null): string {
-  return v === null ? "--" : `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
+  if (v === null || !Number.isFinite(v)) return "--";
+  const normalized = Math.abs(v) < 0.005 ? 0 : v;
+  const sign = normalized > 0 ? "+" : normalized < 0 ? "−" : "";
+  return `${sign}${Math.abs(normalized).toFixed(2)}%`;
 }
 
 /** 点 ts → 北京墙钟 HH:MM（槽位/游标通用）。 */
@@ -201,6 +210,7 @@ const emptyBundle = (): SeriesBundle => ({
 export function MinuteChart({
   points,
   prevClose,
+  referenceDate,
   yesterdayVol,
   index,
   auction,
@@ -213,8 +223,13 @@ export function MinuteChart({
 }: {
   points: P[];
   prevClose?: number | null;
+  /**
+   * prevClose 所属的北京交易日。生产调用方必须显式传：
+   * string=可证明日期；null=日期未知；undefined 仅保留给旧的独立复用/单测。
+   */
+  referenceDate?: string | null;
   yesterdayVol?: number | null;
-  index?: { points: P[]; prevClose: number } | null;
+  index?: { points: P[]; prevClose: number; referenceDate?: string | null } | null;
   auction?: { price: number; pct: number | null } | null;
   /** 精确量比基线（最近 5 个完整交易日逐 5min 槽同期累计量均值）。缺失回退近似口径。 */
   exactBaseline?: number[] | null;
@@ -235,18 +250,88 @@ export function MinuteChart({
   const tipRef = useRef<HTMLDivElement>(null);
   // 画布配色随主题走（P2-26）：theme 变化 → applyTheme 把新色套到既有 series 上，不重建图表。
   const theme = useChartTheme();
-  const pal = MINUTE_PALETTE[theme];
+
+  // 参考价必须与这批分钟点属于同一北京交易日。生产调用方显式传 referenceDate；
+  // 日期未知/混日/不一致时保留真实价格线，但关闭百分比轴、昨收基线和归一化叠加，
+  // 防止“数字看起来精确、其实基准跨日”的伪精确。
+  const sessionDateState = useMemo(() => {
+    const dates = new Set<string>();
+    let invalid = 0;
+    for (const point of points) {
+      const d = bjDate(point.ts);
+      if (d) dates.add(d);
+      else invalid += 1;
+    }
+    return { dates: [...dates], invalid };
+  }, [points]);
+  const sessionDate =
+    sessionDateState.invalid === 0 && sessionDateState.dates.length === 1
+      ? sessionDateState.dates[0]
+      : null;
+  const referenceIssue: "invalid-price" | "unknown-date" | "mixed-date" | "date-mismatch" | null =
+    !isPositivePrice(prevClose)
+      ? "invalid-price"
+      : points.length > 0 && !sessionDate
+        ? "mixed-date"
+        : referenceDate === undefined
+          ? null
+          : referenceDate === null || !/^\d{4}-\d{2}-\d{2}$/.test(referenceDate)
+            ? "unknown-date"
+            : sessionDate && referenceDate !== sessionDate
+              ? "date-mismatch"
+              : null;
+  const effectivePrevClose = referenceIssue === null && isPositivePrice(prevClose) ? prevClose : null;
+  const limitState = minuteLimitPriceState(upperPrice, lowerPrice);
+
+  // 叠加指数也必须自己证明“分钟点日期 = 自身昨收日期 = 主图交易日”。
+  // 这既拦截跨日旧 overlay，也避免主图切到新交易日后继续复用昨日指数归一线。
+  const indexDateState = useMemo(() => {
+    if (!index) return { dates: [] as string[], invalid: 0 };
+    const dates = new Set<string>();
+    let invalid = 0;
+    for (const point of index.points) {
+      const d = bjDate(point.ts);
+      if (d) dates.add(d);
+      else invalid += 1;
+    }
+    return { dates: [...dates], invalid };
+  }, [index]);
+  const indexSessionDate =
+    indexDateState.invalid === 0 && indexDateState.dates.length === 1
+      ? indexDateState.dates[0]
+      : null;
+  const indexIssue: "invalid-price" | "unknown-date" | "mixed-date" | "date-mismatch" | "session-mismatch" | null =
+    !index
+      ? null
+      : !isPositivePrice(index.prevClose)
+        ? "invalid-price"
+        : index.points.length > 0 && !indexSessionDate
+          ? "mixed-date"
+          : index.referenceDate === undefined
+            ? (sessionDate && indexSessionDate && sessionDate !== indexSessionDate ? "session-mismatch" : null)
+            : index.referenceDate === null || !/^\d{4}-\d{2}-\d{2}$/.test(index.referenceDate)
+              ? "unknown-date"
+              : indexSessionDate && index.referenceDate !== indexSessionDate
+                ? "date-mismatch"
+                : sessionDate && indexSessionDate && indexSessionDate !== sessionDate
+                  ? "session-mismatch"
+                  : null;
+  const usableIndex =
+    index && indexIssue === null && isPositivePrice(index.prevClose) && index.points.length > 0
+      ? index
+      : null;
+
   const axis = useMemo(() => {
-    if (!isPositivePrice(prevClose)) return null;
+    if (!isPositivePrice(effectivePrevClose)) return null;
     const prices = points.flatMap((p) => [p.price, p.avg]);
     prices.push(upperPrice, lowerPrice);
-    if (index && isPositivePrice(index.prevClose)) {
-      for (const p of index.points) {
-        if (isPositivePrice(p.price)) prices.push(prevClose * p.price / index.prevClose);
+    if (usableIndex) {
+      for (const p of usableIndex.points) {
+        if (isPositivePrice(p.price)) prices.push(effectivePrevClose * p.price / usableIndex.prevClose);
       }
     }
-    return computeMinuteAxis({ prevClose, limitPct: limitPct ?? null, prices, auctionPrice: auction?.price });
-  }, [points, prevClose, limitPct, upperPrice, lowerPrice, auction, index]);
+    return computeMinuteAxis({ prevClose: effectivePrevClose, limitPct: limitPct ?? null, prices, auctionPrice: auction?.price });
+  }, [points, effectivePrevClose, limitPct, upperPrice, lowerPrice, auction, usableIndex]);
   const invalidPrices = points.flatMap((p) => [p.price, p.avg]).concat(auction?.price, index?.points.map(p => p.price) ?? [])
     .filter((v) => v != null && !isPositivePrice(v)).length;
 
@@ -270,19 +355,19 @@ export function MinuteChart({
 
   // 角标数据：当前量比 + 上证涨跌幅（从最后一点派生，纯计算不走请求）
   const badges = useMemo(() => {
-    const last = points[points.length - 1];
+    const last = sessionDate ? points[points.length - 1] : undefined;
     let lb: number | null = null;
     if (last) {
       const bjIso = new Date(new Date(last.ts).getTime() + 8 * 3600 * 1000).toISOString();
       lb = computeLB(last.cum_volume, bjIso);
     }
     let idxPct: number | null = null;
-    if (index && isPositivePrice(index.prevClose) && index.points.length > 0) {
-      const lastIdx = index.points[index.points.length - 1];
-      if (isPositivePrice(lastIdx.price)) idxPct = ((lastIdx.price - index.prevClose) / index.prevClose) * 100;
+    if (usableIndex) {
+      const lastIdx = usableIndex.points[usableIndex.points.length - 1];
+      if (isPositivePrice(lastIdx.price)) idxPct = ((lastIdx.price - usableIndex.prevClose) / usableIndex.prevClose) * 100;
     }
     return { lb, idxPct };
-  }, [points, index, computeLB]);
+  }, [points, sessionDate, usableIndex, computeLB]);
 
   // points/computeLB 的实时引用（crosshair 回调闭包读 ref，不进依赖触发重建）
   const pointsRef = useRef(points);
@@ -364,13 +449,15 @@ export function MinuteChart({
     }
   }
 
-  const hasPoints = points.length > 0;
-  const pointDate = hasPoints ? new Date(new Date(points[0].ts).getTime() + BJ_OFFSET * 1000).toISOString().slice(0, 10) : "";
+  // 多交易日/非法时间戳输入直接 fail-closed：不把两天相同 HH:MM 压进同一槽位。
+  // 警示仍保留在组件上方，价格数据本身不丢弃/改写。
+  const hasPoints = points.length > 0 && sessionDate !== null;
+  const pointDate = hasPoints ? sessionDate : "";
   // 低频配置（晚到即整图重建一次，次数 ≤3）：昨收/大盘叠加/竞价/量比基线/事件点
   useEffect(() => {
     if (!ref.current || !hasPoints) return;
     const cur = pointsRef.current;
-    const hasBase = isPositivePrice(prevClose);
+    const hasBase = isPositivePrice(effectivePrevClose);
     // 首建配色同步读 DOM（不读 state）：主题是 documentElement 上的 class，它才是权威值。
     const p = MINUTE_PALETTE[readChartTheme()];
 
@@ -419,7 +506,7 @@ export function MinuteChart({
     // 昨收缺失时降级为单色面积线（无从判向，不臆造基准，浮层同步隐藏涨跌幅）。
     const series: ISeriesApi<"Area"> | ISeriesApi<"Baseline"> = hasBase
       ? chart.addBaselineSeries({
-          baseValue: { type: "price", price: prevClose! },
+          baseValue: { type: "price", price: effectivePrevClose! },
           topLineColor: p.up,
           topFillColor1: p.upFill1,
           topFillColor2: p.upFill2,
@@ -447,7 +534,7 @@ export function MinuteChart({
         lastValueVisible: false,
         priceLineVisible: false,
         crosshairMarkerVisible: false,
-        priceFormat: { type: "percent", precision: 2, minMove: 0.01 },
+        priceFormat: { type: "custom", formatter: formatMinutePercentTick, minMove: 0.01 },
       });
     }
 
@@ -469,7 +556,7 @@ export function MinuteChart({
     });
     chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
 
-    fillAll(s, cur, prevClose, p);
+    fillAll(s, cur, effectivePrevClose, p);
     cursorRef.current = bjHHMM(cur[cur.length - 1]);
     lastPointsRef.current = cur;
 
@@ -480,7 +567,7 @@ export function MinuteChart({
       chart.priceScale("left").applyOptions({ scaleMargins: margins });
       s.priceLines.push({
         pl: series.createPriceLine({
-          price: prevClose!,
+          price: effectivePrevClose!,
           color: p.prevClose,
           lineWidth: 1,
           lineStyle: 2, // dotted
@@ -490,11 +577,12 @@ export function MinuteChart({
         pick: (q) => q.prevClose,
       });
 
-      // 实际限价与显示范围分离：允许单侧缺失，不用名义比例冒充交易限价。
-      if (isPositivePrice(upperPrice)) {
+      // 实际限价与显示范围分离：四态（双侧/仅上/仅下/全缺）显式判定，
+      // 缺哪一侧就不画哪一侧，绝不用名义比例冒充交易限价。
+      if (limitState === "both" || limitState === "upper-only") {
         s.priceLines.push({
           pl: series.createPriceLine({
-            price: upperPrice,
+            price: upperPrice!,
             color: p.limitUp,
             lineWidth: 1,
             lineStyle: 1, // dashed
@@ -504,10 +592,10 @@ export function MinuteChart({
           pick: (q) => q.limitUp,
         });
       }
-      if (isPositivePrice(lowerPrice)) {
+      if (limitState === "both" || limitState === "lower-only") {
         s.priceLines.push({
           pl: series.createPriceLine({
-            price: lowerPrice,
+            price: lowerPrice!,
             color: p.limitDown,
             lineWidth: 1,
             lineStyle: 1, // dashed
@@ -519,7 +607,7 @@ export function MinuteChart({
       }
 
       // ---- 大盘叠加：上证归一化 % 曲线（可见，左轴同刻度）----
-      if (index && isPositivePrice(index.prevClose) && index.points.length > 0) {
+      if (usableIndex) {
         const idxSeries = chart.addLineSeries({
           priceScaleId: "left",
           color: p.index,
@@ -528,16 +616,16 @@ export function MinuteChart({
           priceLineVisible: false,
           lastValueVisible: false,
           crosshairMarkerVisible: false,
-          priceFormat: { type: "percent", precision: 2, minMove: 0.01 },
+          priceFormat: { type: "custom", formatter: formatMinutePercentTick, minMove: 0.01 },
         });
         const idxByHHMM = new Map<string, P>();
-        for (const q of index.points) idxByHHMM.set(bjHHMM(q), q);
+        for (const q of usableIndex.points) idxByHHMM.set(bjHHMM(q), q);
         const slotHHMM = (sec: number) => new Date(sec * 1000).toISOString().slice(11, 16);
         idxSeries.setData(
           slots.map((sec) => {
             const i = idxByHHMM.get(slotHHMM(sec));
             return i && isPositivePrice(i.price)
-              ? ({ time: sec as Time, value: ((i.price - index.prevClose) / index.prevClose) * 100 } as LineData)
+              ? ({ time: sec as Time, value: ((i.price - usableIndex.prevClose) / usableIndex.prevClose) * 100 } as LineData)
               : ({ time: sec as Time } as LineData);
           }) as never
         );
@@ -627,7 +715,7 @@ export function MinuteChart({
       const d = nearestPoint(time);
       if (!d) return;
       const bjIso = new Date(new Date(d.ts).getTime() + 8 * 3600 * 1000).toISOString();
-      const changePct = hasBase && isPositivePrice(d.price) ? ((d.price - prevClose!) / prevClose!) * 100 : null;
+      const changePct = hasBase && isPositivePrice(d.price) ? ((d.price - effectivePrevClose!) / effectivePrevClose!) * 100 : null;
       const avgDevPct = isPositivePrice(d.avg) && isPositivePrice(d.price) ? ((d.price - d.avg) / d.avg) * 100 : null;
       const lb = lbRef.current(d.cum_volume, bjIso);
       const pts = pointsRef.current;
@@ -775,7 +863,7 @@ export function MinuteChart({
       void unsub;
     };
     // 低频配置变化才重建；points 走增量 effect（下）。evByHHMM 供 crosshair 闭包。
-  }, [hasPoints, pointDate, prevClose, index, auction, exactBaseline, newsEvents, limitPct, upperPrice, lowerPrice]);
+  }, [hasPoints, pointDate, effectivePrevClose, usableIndex, auction, exactBaseline, newsEvents, limitPct, upperPrice, lowerPrice, limitState]);
 
   // 用最终价格域逐端派生左轴，均价/竞价/事件/指数不再各自撑大某一侧。
   // 更新 provider 会使库原位重算坐标；高频行情不重建 chart 或重置时间缩放。
@@ -806,14 +894,14 @@ export function MinuteChart({
     if (lastPointsRef.current === points) return; // 创建 effect 刚灌过同一份数据
     lastPointsRef.current = points;
     // 配色同步读 DOM（与创建 effect 同源）：量柱色是逐条写进数据的，必须带上当前档
-    fillAll(s, points, prevClose, MINUTE_PALETTE[readChartTheme()]);
+    fillAll(s, points, effectivePrevClose, MINUTE_PALETTE[readChartTheme()]);
     cursorRef.current = bjHHMM(points[points.length - 1]);
     // 悬停中数据被整体替换：主动刷新浮层数值（库的 updateCrosshair 重放通常
     // 也会触发 onMove，此处兜底保证刷新不依赖重放行为；手术式 patch 零开销）
     if (insideRef.current && lastParamRef.current) {
       renderTipRef.current?.(lastParamRef.current.time, lastParamRef.current.point);
     }
-  }, [points, prevClose]);
+  }, [points, effectivePrevClose]);
 
   /**
    * 主题切换：**只换色、不重建**（P2-26）——重建会丢用户的缩放/平移，也违背本文件
@@ -862,9 +950,9 @@ export function MinuteChart({
   // 仍是服务端快照 "dark" 而实际 class 已是 light，用 state 取值会闪一帧深色画布。
   useEffect(() => {
     const p = MINUTE_PALETTE[readChartTheme()];
-    applyTheme(p, isPositivePrice(prevClose));
-    fillAll(seriesRef.current, pointsRef.current, prevClose, p);
-  }, [theme, prevClose, applyTheme]);
+    applyTheme(p, isPositivePrice(effectivePrevClose));
+    fillAll(seriesRef.current, pointsRef.current, effectivePrevClose, p);
+  }, [theme, effectivePrevClose, applyTheme]);
 
   return (
     <div className="flex h-full w-full flex-col">
@@ -872,8 +960,24 @@ export function MinuteChart({
           浮层压在图表右上角价格标签/最新价区域），不占图表绘制空间、互不遮挡 */}
       <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 px-2 pb-0.5 pt-1 text-[11px]">
         {invalidPrices > 0 && <span className="text-amber-800 dark:text-amber-300">{invalidPrices} 个无效价格已留空</span>}
-        {!isPositivePrice(prevClose) && <span className="text-amber-800 dark:text-amber-300">涨跌幅基准无效，仅展示价格</span>}
-        {index && !isPositivePrice(index.prevClose) && <span className="text-amber-800 dark:text-amber-300">叠加指数基准无效</span>}
+        {referenceIssue === "invalid-price" && <span className="text-amber-800 dark:text-amber-300">涨跌幅基准无效，仅展示价格</span>}
+        {referenceIssue === "unknown-date" && <span className="text-amber-800 dark:text-amber-300">参考日未知，仅展示价格</span>}
+        {referenceIssue === "mixed-date" && <span className="text-amber-800 dark:text-amber-300">分时交易日混合/无效，仅展示价格</span>}
+        {referenceIssue === "date-mismatch" && (
+          <span className="text-amber-800 dark:text-amber-300" title={`分时日 ${sessionDate ?? "--"}；参考日 ${referenceDate ?? "--"}`}>
+            参考日不一致，仅展示价格
+          </span>
+        )}
+        {isPositivePrice(limitPct) && limitState !== "both" && (
+          <span className="text-amber-800 dark:text-amber-300">
+            {limitState === "upper-only" ? "跌停价缺失" : limitState === "lower-only" ? "涨停价缺失" : "涨跌停价缺失"}
+          </span>
+        )}
+        {indexIssue === "invalid-price" && <span className="text-amber-800 dark:text-amber-300">叠加指数基准无效</span>}
+        {indexIssue === "unknown-date" && <span className="text-amber-800 dark:text-amber-300">叠加指数参考日未知</span>}
+        {indexIssue === "mixed-date" && <span className="text-amber-800 dark:text-amber-300">叠加指数交易日混合/无效</span>}
+        {indexIssue === "date-mismatch" && <span className="text-amber-800 dark:text-amber-300">叠加指数参考日不一致</span>}
+        {indexIssue === "session-mismatch" && <span className="text-amber-800 dark:text-amber-300">叠加指数与主图非同一交易日</span>}
         {axis?.outOfBand && <span className="text-amber-800 dark:text-amber-300" title="已保留越界行情，请核对日期、参考价与来源">超出名义参考范围</span>}
         {auction?.pct != null && (
           <span

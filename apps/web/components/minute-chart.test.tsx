@@ -53,10 +53,17 @@ describe("MinuteChart 轴契约", () => {
     expect(range(c.series[1])?.maxValue).toBeCloseTo(15);
   });
 
-  it("百分比序列保留轴参与资格，仅隐藏线条", () => {
+  it("百分比序列保留轴参与资格，仅隐藏线条；formatter 固定两位且无负零", () => {
     render(<MinuteChart points={[point(10)]} prevClose={10} />);
-    expect(charts[0].series[1].opts.visible).not.toBe(false);
-    expect(charts[0].series[1].opts.lineVisible).toBe(false);
+    const pct = charts[0].series[1];
+    expect(pct.opts.visible).not.toBe(false);
+    expect(pct.opts.lineVisible).toBe(false);
+    expect(pct.opts.priceFormat).toMatchObject({ type: "custom", minMove: 0.01 });
+    const formatter = (pct.opts.priceFormat as { formatter: (value: number) => string }).formatter;
+    const labels = [-0.12, -0.08, -0.04, -0.0049, 0, 0.04, 0.08, 0.12].map(formatter);
+    expect(new Set(labels).size).toBe(labels.length - 1); // -0.0049 与 0 都应归一为同一个 0.00%
+    expect(labels).not.toContain("−0.00%");
+    expect(formatter(0.1)).toBe("0.10%");
     expect(charts[0].opts.handleScale).toEqual({ axisPressedMouseMove: { price: false, time: true } });
   });
 
@@ -87,12 +94,78 @@ describe("MinuteChart 轴契约", () => {
     expect(screen.getByText(/涨跌幅基准无效/)).toBeTruthy();
   });
 
-  it("跨日以新日期重建槽位，旧日图表得到清理", () => {
-    const view = render(<MinuteChart points={[point(10)]} prevClose={10} />);
-    view.rerender(<MinuteChart points={[point(10, "30", null, "18")]} prevClose={10} />);
+  it("跨日以新日期与新参考日重建槽位，旧日图表得到清理", () => {
+    const view = render(<MinuteChart points={[point(10)]} prevClose={10} referenceDate="2026-09-17" />);
+    view.rerender(<MinuteChart points={[point(10, "30", null, "18")]} prevClose={10} referenceDate="2026-09-18" />);
     expect(charts).toHaveLength(2);
     expect(charts[0].remove).toHaveBeenCalledOnce();
     expect(new Date(charts[1].series[0].values[0].time * 1000).toISOString()).toContain("2026-09-18");
+  });
+
+  it("参考日未知/不一致/分钟点混日时只展示真实价格，不伪造百分比轴", () => {
+    const view = render(<MinuteChart points={[point(10)]} prevClose={10} referenceDate={null} />);
+    expect(charts[0].series.some(x => x.opts.priceScaleId === "left")).toBe(false);
+    expect(screen.getByText(/参考日未知/)).toBeTruthy();
+
+    view.rerender(<MinuteChart points={[point(10)]} prevClose={10} referenceDate="2026-09-18" />);
+    expect(charts.at(-1)?.series.some(x => x.opts.priceScaleId === "left")).toBe(false);
+    expect(screen.getByText(/参考日不一致/)).toBeTruthy();
+
+    const beforeMixed = charts.at(-1)!;
+    view.rerender(<MinuteChart points={[point(10), point(10.1, "31", null, "18")]} prevClose={10} referenceDate="2026-09-17" />);
+    expect(beforeMixed.remove).toHaveBeenCalled();
+    expect(screen.getByText(/分时交易日混合/)).toBeTruthy();
+    expect(screen.queryByText(/量比/)).toBeNull();
+  });
+
+  it("叠加指数必须与自身参考日及主图交易日一致，否则不画归一线", () => {
+    const sameDay = { prevClose: 100, referenceDate: "2026-09-17", points: [point(101)] };
+    const view = render(
+      <MinuteChart points={[point(10)]} prevClose={10} referenceDate="2026-09-17" index={sameDay} />
+    );
+    expect(charts[0].series.filter(x => x.opts.priceScaleId === "left")).toHaveLength(2);
+
+    view.rerender(
+      <MinuteChart
+        points={[point(10)]}
+        prevClose={10}
+        referenceDate="2026-09-17"
+        index={{ prevClose: 100, referenceDate: "2026-09-18", points: [point(101, "30", null, "18")] }}
+      />
+    );
+    expect(screen.getByText("叠加指数与主图非同一交易日")).toBeTruthy();
+    const latest = charts.at(-1)!;
+    expect(latest.series.filter(x => x.opts.priceScaleId === "left")).toHaveLength(1);
+
+    view.rerender(
+      <MinuteChart
+        points={[point(10)]}
+        prevClose={10}
+        referenceDate="2026-09-17"
+        index={{ prevClose: 100, referenceDate: "2026-09-18", points: [point(101)] }}
+      />
+    );
+    expect(screen.getByText("叠加指数参考日不一致")).toBeTruthy();
+  });
+
+  it("同日换源只原位灌新数据，不销毁图表", () => {
+    const first = { ...point(10), source: "tencent" };
+    const view = render(<MinuteChart points={[first]} prevClose={10} referenceDate="2026-09-17" />);
+    const c = charts[0];
+    view.rerender(<MinuteChart points={[{ ...point(10.2), source: "tdx" }]} prevClose={10} referenceDate="2026-09-17" />);
+    expect(charts).toHaveLength(1);
+    expect(c.remove).not.toHaveBeenCalled();
+    expect(c.series[0].values.some(v => v.value === 10.2)).toBe(true);
+  });
+
+  it("切股 key 变化强制重挂载，上一标的轴与数据不会串到下一标的", () => {
+    const view = render(<MinuteChart key="600519" points={[point(10)]} prevClose={10} referenceDate="2026-09-17" />);
+    const first = charts[0];
+    view.rerender(<MinuteChart key="000001" points={[point(20)]} prevClose={20} referenceDate="2026-09-17" />);
+    expect(charts).toHaveLength(2);
+    expect(first.remove).toHaveBeenCalledOnce();
+    expect(charts[1].series[0].values.some(v => v.value === 20)).toBe(true);
+    expect(charts[1].series[1].values.filter(v => v.value !== undefined).map(v => v.value)).toEqual([0]);
   });
 
   it("低价股限价线使用传入实际值，缺失一侧不伪造", () => {
@@ -101,6 +174,13 @@ describe("MinuteChart 轴契约", () => {
       .toEqual([["昨收", 0.85], ["涨停", 0.94], ["跌停", 0.77]]);
     view.rerender(<MinuteChart points={[point(0.85)]} prevClose={0.85} limitPct={10} lowerPrice={0.77} />);
     expect(charts[1].series[0].createPriceLine.mock.calls.map(([opts]) => opts.title)).toEqual(["昨收", "跌停"]);
+    expect(screen.getByText("涨停价缺失")).toBeTruthy();
+
+    view.rerender(<MinuteChart points={[point(0.85)]} prevClose={0.85} limitPct={10} upperPrice={0.94} />);
+    expect(screen.getByText("跌停价缺失")).toBeTruthy();
+
+    view.rerender(<MinuteChart points={[point(0.85)]} prevClose={0.85} limitPct={10} upperPrice={-1} lowerPrice={0} />);
+    expect(screen.getByText("涨跌停价缺失")).toBeTruthy();
   });
 
   it("参考范围外的有效价格保留并披露，不当成脏点删除", () => {

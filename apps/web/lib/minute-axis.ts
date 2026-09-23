@@ -38,6 +38,32 @@ export function isPositivePrice(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v) && v > 0;
 }
 
+/**
+ * 左轴百分比标签：固定两位且把不足半个最小刻度的浮点噪声归零。
+ *
+ * lightweight-charts 4.2.x 的 `percent` formatter 把 `precision` 当作
+ * priceScale，而不是“小数位数”；传 precision=2 实际只显示 1 位小数，
+ * 低波动指数会把多个不同 tick 压成相同 0.1%/0.0%，并可产生 −0.0%。
+ */
+export function formatMinutePercentTick(value: number): string {
+  if (!Number.isFinite(value)) return "--";
+  const normalized = Math.abs(value) < 0.005 ? 0 : value;
+  const sign = normalized < 0 ? "−" : "";
+  return `${sign}${Math.abs(normalized).toFixed(2)}%`;
+}
+
+export type MinuteLimitPriceState = "both" | "upper-only" | "lower-only" | "none";
+
+/** 实际涨跌停价四态；0/-1/null/NaN 都是“未提供”，不得拿名义比例补造。 */
+export function minuteLimitPriceState(upperPrice: unknown, lowerPrice: unknown): MinuteLimitPriceState {
+  const upper = isPositivePrice(upperPrice);
+  const lower = isPositivePrice(lowerPrice);
+  if (upper && lower) return "both";
+  if (upper) return "upper-only";
+  if (lower) return "lower-only";
+  return "none";
+}
+
 export function computeMinuteAxis(opts: {
   prevClose: number;
   limitPct: number | null;

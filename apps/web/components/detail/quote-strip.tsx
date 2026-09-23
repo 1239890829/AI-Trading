@@ -4,6 +4,7 @@ import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
 import { SuspendedBadge } from "@/components/detail/suspended-badge";
 import { fmt, fmtAmount, fmtVolume, pctColor, pctText, sourceLabel, timeText } from "@/lib/format";
+import { isPositivePrice } from "@/lib/minute-axis";
 import type { Quote, TradingStatusInfo } from "@/types/market";
 
 export function QuoteStrip({
@@ -37,7 +38,11 @@ export function QuoteStrip({
     ["PE", quote.pe_ttm != null ? fmt(quote.pe_ttm) : "暂无", quote.pe_ttm != null ? undefined : peMissing],
     ["PB", quote.pb != null ? fmt(quote.pb) : "暂无", quote.pb != null ? undefined : "数据源未提供市净率"],
     ["市值", quote.total_mktcap_yi != null ? `${fmt(quote.total_mktcap_yi)}亿` : "--"],
-    ["涨停", quote.limit_up_price != null ? fmt(quote.limit_up_price) : "--"],
+    [
+      "涨停",
+      isPositivePrice(quote.limit_up_price) ? fmt(quote.limit_up_price) : "--",
+      isPositivePrice(quote.limit_up_price) ? undefined : "数据源未提供有效涨停价",
+    ],
   ];
 
   return (

@@ -90,9 +90,12 @@ export function mergeQuoteIntoMinutes<T extends { ts: string; price: number; cum
   const price = quote.price;
   if (price == null || price <= 0) return null;
   const last = points[points.length - 1];
-  const qHHMM = bjHHMM(quote.data_timestamp || quote.received_at);
+  const quoteTs = quote.data_timestamp || quote.received_at;
+  const qHHMM = bjHHMM(quoteTs);
   const lastHHMM = bjHHMM(last.ts);
-  if (!qHHMM || !lastHHMM) return null;
+  const qDate = bjDate(quoteTs);
+  const lastDate = bjDate(last.ts);
+  if (!qHHMM || !lastHHMM || !qDate || !lastDate || qDate !== lastDate) return null;
 
   if (qHHMM === lastHHMM) {
     const cumVolume = quote.volume ?? last.cum_volume;
@@ -104,9 +107,6 @@ export function mergeQuoteIntoMinutes<T extends { ts: string; price: number; cum
   // 跨分钟：同交易日 + 双方都落在连续交易时段内才追加。
   // （旧门槛「间隔 >2 分钟放弃」在官方分时源滞后时把合成通道整个冻死——
   // 2026-09-04 受控实验复现：WS quote 每 1s 正常推送，曲线静止 6 分钟不动。）
-  const qDate = bjDate(quote.data_timestamp || quote.received_at);
-  const lastDate = bjDate(last.ts);
-  if (!qDate || !lastDate || qDate !== lastDate) return null;
   const qMin = hhmmToMin(qHHMM);
   const lastMin = hhmmToMin(lastHHMM);
   if (qMin <= lastMin) return null;
