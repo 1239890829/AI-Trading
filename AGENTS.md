@@ -55,8 +55,11 @@ cd backend
 cd apps/web
 npm run dev
 # 后端完整门禁：pyproject 已有 -q，不叠加；临时目录每批独立
+# ⚠️ 前置 `PYTHONPATH=` 是必需的：在本机助手环境内，harness 会注入
+# `PYTHONPATH=…/cli/vendor/shim`，其 sitecustomize 把每次 open() 经 unix socket
+# 代理，被 conftest 的离线守卫判成"真实网络尝试"⇒ 大量假失败。详见下方取证纪律。
 cd backend
-.venv/bin/pytest --basetemp=/tmp/ashare-pytest --junitxml=/tmp/ashare-be.xml
+PYTHONPATH= .venv/bin/pytest --basetemp=/tmp/ashare-pytest --junitxml=/tmp/ashare-be.xml
 .venv/bin/python -m pyflakes app tests scripts
 # 前端完整门禁；与后端全量串行，单 worker 减少本机争用
 cd apps/web
@@ -75,6 +78,11 @@ python3 scripts/doc-health.py
 - 时间断言钉带 `+08:00` 的绝对时刻；生产北京口径用既有 bjtime 工具，不依赖宿主时区。
 - 路径守卫按 Git 跟踪面判定；新文件先精确暂存再验，迁移须在干净检出复验，不能用本机忽略目录使 CI 假绿。
 - 失败先取证：失败/超时/进程被杀不同；对照同树、隔离负载，不能放宽阈值、删断言或贴豁免求绿。
+- **助手环境假失败（2026-09-23 实测）**：在 WorkBuddy/CodeBuddy 内跑 pytest，error 栈若出现
+  `/Applications/…/cli/vendor/shim/sitecustomize.py` → `_broker_send_request` → `sock.connect`，
+  即为 harness 文件代理被 conftest 离线守卫误判，**不是回归**。判据：error 全在 teardown、栈含该 shim。
+  处置：`PYTHONPATH= ` 清空后重跑。实测同一批用例未清空 `6 passed, 2 errors`、清空后 `15 passed, 0 error`，
+  全量清空后 4279 passed。**不得据此改断言、放宽阈值或贴豁免**。
 - 不盲目重启生产。需要运行验收先判断真实外发/调度影响；默认隔离实例与测试库。改动未加载到生产就明确说明。
 - 管理已确认属于本任务的进程；按端口定位必须带 `lsof -ti tcp:<port> -sTCP:LISTEN`，优先正常终止并复查两侧服务，不能误杀客户端。
 
@@ -114,6 +122,7 @@ U50 起临时代执行不再靠一次性聊天例外，而由正式降级模式�
 ## 4. 项目目录中立性、卫生与恢复
 
 W08 `GOV-018` 已完成旧平台目录提炼与退出；历史迁移/恢复证据只从 `docs/archive/platform-directory-migration-20260920.md`、Git 与本机受控恢复包追溯，不恢复旧平台入口。项目源码树不得出现 `.workbuddy/.workbuddy-ai/.claude/.cursor/.codex/.opencode/.gemini/.vscode/.idea` 等应用专属状态或插件目录；`scripts/workspace-hygiene.py` 在本地收尾和 CI 双重阻断，根/子项目 `.gitignore` 也不得隐藏这些目录。
+它同时阻断**运行数据双重事实源**：数据根（`backend/data/`、`data/`）下凡"既被忽略型 `.gitignore` 规则命中、又被 git 跟踪"的路径一律 FAIL（有意的反向规则 `!pattern` 除外）。该判据 2026-09-23 随 `backend/data/{lhb,minute_decisions,position_plans}` 的规则补齐与 13 个文件 `git rm --cached` 一并加入，用于防止"忽略规则已声明、索引仍跟踪"再次静默累积成每日未跟踪噪声。
 
 tracked/独有内容的物理清理走 `scripts/safe-trash.sh` 可恢复；许可/所有权/保留期不清的内容先隔离。**工作区生命周期归 W08/GOV-026**：每轮收尾分类项目拥有的临时 clone/worktree、pytest basetemp、构建缓存、忽略 artifacts 与恢复副本；已确认可再生、无活动进程、无脏工作树、无活引用/唯一证据且命中批准白名单的临时/缓存项可直接清理以释放空间。业务数据、用户/跨项目仓库、包管理器依赖树、运行中或所有权不明内容不得自动删除。
 
