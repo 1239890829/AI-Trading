@@ -1,6 +1,36 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { computeMinuteAxis } from "./minute-axis";
+import { computeMinuteAxis, formatMinutePercentTick, minuteLimitPriceState } from "./minute-axis";
+
+describe("分时百分比标签", () => {
+  it("低波动刻度固定两位且逐点可区分", () => {
+    const values = [-0.12, -0.1, -0.08, -0.06, -0.04, -0.02, 0, 0.02, 0.04, 0.06, 0.08, 0.1, 0.12];
+    const labels = values.map(formatMinutePercentTick);
+    expect(new Set(labels).size).toBe(labels.length);
+    expect(labels).toEqual([
+      "−0.12%", "−0.10%", "−0.08%", "−0.06%", "−0.04%", "−0.02%", "0.00%",
+      "0.02%", "0.04%", "0.06%", "0.08%", "0.10%", "0.12%",
+    ]);
+  });
+
+  it("半个最小刻度以内归零，永不输出负零", () => {
+    expect(formatMinutePercentTick(-0)).toBe("0.00%");
+    expect(formatMinutePercentTick(-0.0049)).toBe("0.00%");
+    expect(formatMinutePercentTick(0.0049)).toBe("0.00%");
+    expect(formatMinutePercentTick(-0.0051)).toBe("−0.01%");
+  });
+});
+
+describe("实际限价四态", () => {
+  it.each([
+    [110, 90, "both"],
+    [110, null, "upper-only"],
+    [null, 90, "lower-only"],
+    [-1, 0, "none"],
+  ] as const)("%s / %s → %s", (upper, lower, state) => {
+    expect(minuteLimitPriceState(upper, lower)).toBe(state);
+  });
+});
 
 describe("computeMinuteAxis 分时图纵轴区间", () => {
   it.each([

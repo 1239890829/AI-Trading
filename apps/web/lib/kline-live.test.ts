@@ -184,6 +184,11 @@ describe("mergeQuoteIntoMinutes", () => {
     expect(mergeQuoteIntoMinutes(yesterdayTail, quoteAt("14:30", 105.3))).toBeNull();
   });
 
+  it("跨日但 HH:MM 相同也不得覆盖昨日尾点", () => {
+    const yesterdayTail = [{ ...point("14:29", 104.9, 900_000), ts: `${YESTERDAY}T06:29:00+00:00` }];
+    expect(mergeQuoteIntoMinutes(yesterdayTail, quoteAt("14:29", 105.3))).toBeNull();
+  });
+
   it("data_timestamp 缺失 → 回退 received_at 合成（无时间戳源不再冻结分时）", () => {
     const q = { ...quoteAt("14:29", 105.3), data_timestamp: null, received_at: `${TODAY}T06:29:59+00:00` };
     const out = mergeQuoteIntoMinutes(minutesFixture(), q);

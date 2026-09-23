@@ -49,7 +49,7 @@ import {
   type PaperFill,
   type StockThemes,
 } from "@/lib/api";
-import { fmt, pctColor, pctText } from "@/lib/format";
+import { bjDate, fmt, pctColor, pctText } from "@/lib/format";
 import type { Kline, OrderBook, Quote, Trade, TradingStatusInfo } from "@/types/market";
 import { QuoteStrip } from "@/components/detail/quote-strip";
 import { TradePanel, type PaperBundle } from "@/components/detail/trade-panel";
@@ -345,7 +345,11 @@ export const StockDetailPanel = memo(function StockDetailPanel({
 
   // 大盘叠加（分时图 P1）：上证分时 + 昨收。当日不变，随切股在次屏 idle 拉取
   // （评审 O1：不占首屏关键路径；指数详情页不叠加——自己叠自己纯噪音）。
-  const [indexOverlay, setIndexOverlay] = useState<{ points: MinutePoint[]; prevClose: number } | null>(null);
+  const [indexOverlay, setIndexOverlay] = useState<{
+    points: MinutePoint[];
+    prevClose: number;
+    referenceDate: string | null;
+  } | null>(null);
 
   // 题材归属（L4 联动）：官方成分 + 当日涨停归因，chip 点击跳题材看板聚焦。
   // 独立请求 + 静默失败：归属缺失只影响这一行，不拖垮详情页。
@@ -434,7 +438,11 @@ export const StockDetailPanel = memo(function StockDetailPanel({
             const overview = await getMarketOverview().catch(() => null);
             const sh = overview?.indices.find((i) => i.symbol === "000001");
             if (alive && idxPoints.length > 0 && sh?.prev_close) {
-              setIndexOverlay({ points: idxPoints, prevClose: sh.prev_close });
+              setIndexOverlay({
+                points: idxPoints,
+                prevClose: sh.prev_close,
+                referenceDate: sh.data_timestamp ? bjDate(sh.data_timestamp) || null : null,
+              });
             }
           });
         // 集合竞价（09:25 终态）：分时图竞价点 + 角标（当日不变）
@@ -479,6 +487,9 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   // ①' 分时右端点秒级合成：同 K 线思路，WS quote 跟进最后一根分钟点
   //    （价格+累计量），与列表/K线保持同一 1s 节奏，不再干等 60s REST 校准
   const displayMinutes = useMemo(() => mergeQuoteIntoMinutes(minutes, liveQuote) ?? minutes, [minutes, liveQuote]);
+  // prev_close 只有在能证明与分钟点同一北京交易日时才可作为百分比轴基准。
+  // data_timestamp 是源行情时刻；received_at 只是接收时刻，不能拿它替 stale 数据“补日期”。
+  const minuteReferenceDate = quote?.data_timestamp ? bjDate(quote.data_timestamp) || null : null;
   // ② 图表 60s REST 校准（评审 O2：绑定 chartTab——不在 K线/分时 tab 时不校准，
   //    切入 tab 时立即拉一次再启轮询）。2026-09-11（S2-5）：裸 setInterval → 统一入口，
   //    原「两个 if + timers 数组 + 手动清理」的样板由 enabled 表达。
@@ -783,6 +794,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                   key={symbol}
                   points={displayMinutes}
                   prevClose={quote?.prev_close ?? null}
+                  referenceDate={minuteReferenceDate}
                   yesterdayVol={displayBars.length >= 2 ? (displayBars[displayBars.length - 2]?.volume ?? null) : null}
                   index={indexOverlay}
                   auction={auctionProp}
