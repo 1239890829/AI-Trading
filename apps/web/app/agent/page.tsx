@@ -5,7 +5,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 import { EvolutionTab } from "@/components/agent/evolution-tab";
 import { KbBrowserTab } from "@/components/agent/kb-browser-tab";
-import { JevTab } from "@/components/agent/jev-tab";
 import { RepoTrackerTab } from "@/components/agent/repo-tracker-tab";
 import { ParamsTab } from "@/components/agent/params-tab";
 import { StrategyHealthTab } from "@/components/agent/strategy-health-tab";
@@ -30,7 +29,6 @@ const TABS = [
   { key: "tasks", label: "任务中心" },
   { key: "review", label: "复盘" },
   { key: "alerts", label: "提醒与告警" },
-  { key: "jev", label: "JEV" },
   { key: "params", label: "参数配置" },
   { key: "strategies", label: "策略健康" },
   { key: "repos", label: "仓库追踪" },
@@ -92,7 +90,6 @@ function AgentInner() {
         {tab === "tasks" && <TaskCenter />}
         {tab === "review" && <ReviewTab focusDate={reviewDate} />}
         {tab === "alerts" && <AlertsTab />}
-        {tab === "jev" && <JevTab />}
         {tab === "params" && <ParamsTab />}
         {tab === "repos" && <RepoTrackerTab />}
         {tab === "kb" && <KbBrowserTab />}
