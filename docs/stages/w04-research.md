@@ -79,6 +79,7 @@
 - **依赖**：BUG-028, BUG-029, BUG-026, IMP-006
 - **效果前置**：无
 - **方案依据**：用户本轮选股核心要求；v9.3 基线 + v9.8/U47 增量；hunting-decision-design全文，产品闭环§3–6。
+- **U51 Jev 承接子范围（2026-09-24 已批；沿本任务原状态/门序/优先级）**：P1/G2：在原开放多轴机会/版本契约中预留 optional 语义理由、引用/反证/unknown 与新事实待重评身份；先用确定性召回和候选基线核残余歧义。Jev 只做已获准有限判断，不能让 G2 契约等待 G4 接线或把研究分用于默认排序。 方案与反例见 [Jev 附录 A](../ai/jev-integration.md#附录-a-2026-09-24-已批准的全系统应用可视化与维护方案v04)。
 - **范围**：复用picks的盘前、lurk/rps、intraday/relay/radar、gate/执行与events/KB接口；先明确统一读模型，再实现驱动/结构/角色/环境/时点/执行域的开放情境，不另建并行评分系统。
 - **验收**：观察、触发、可执行与实际 shadow fill 分离；本片各情境有成立/反例/缺失，多假设冲突及未知情境保留；旧盘前/盘中口径保留；无有效进入区间不伪造；同一机会和 decision version 可流至 UI/通知/IMP-053 shadow/复盘；盘中可随新事实生成后续版本，早盘未通过不等于全天永久拒绝；相同前缀不变，独立证据不重复加分。
 - **证据**：本轮已读候选与卡片接口：盘中以题材集中、临板与涨幅排序为主，潜伏及持仓波浪未形成统一候选解释。新机制为设计，未实施也未证明策略增益。2026-09-21 多窗口审计发现本机仍有唯一未合入 commit `54b7e0c`（旧名 `rsh026-zero-run-reasons`）：它为 `attach_participants()` 增加 `theme_gate_counts`，区分 not_concentrated / missing_catalog / mined_empty_unavailable / mined_empty_no_eligible，能直接解释“为什么 0 候选”。该能力更属于本项 opportunity 可解释性而非已关闭 RSH-026；当前作为 RECOVERY 保留，后续施工本项时先评估/移植，不把它当已落地主线。
@@ -145,6 +146,7 @@
 - **依赖**：无
 - **效果前置**：无
 - **方案依据**：docs/ai/jev-integration.md §29。
+- **U51 Jev 承接子范围（2026-09-24 已批；沿本任务原状态/门序/优先级）**：P1/G3：保留既有 240 条事件 strict human gold；事件修订、引用支持、公司业务直接性另立题型与独立人工样本。规则/现有 LLM/Jev+fallback 同任务比较关键错漏、覆盖、弃权、延迟和完整成本；模型预测不得写 human，也不沿用旧阈值给新模型。 方案与反例见 [Jev 附录 A](../ai/jev-integration.md#附录-a-2026-09-24-已批准的全系统应用可视化与维护方案v04)。
 - **范围**：固定事件队列、独立人工标签、规则/Jev/现有 LLM/fallback 对照，以及 TypeSafe 与更贵模型 token/调用量、延迟和质量的同条件度量；不把 agreement 写成 accuracy。
 - **验收**：v1 240 条 human.category/certainty/actionable 独立完成且通过 strict human validation；verifier 另有独立 claim/evidence 人工集；生产阈值、额度节省或选股增益只允许由可复算 A/B / walk-forward 得出。
 - **证据**：PR #33 建立 verifier/gold-set 工具，PR #34 完成固定队列 Jev 预标注与审核优先级并均已合入 `master`。240 条固定队列当前 human 仍 0/240；规则/Jev agreement 为 category 55.42%、certainty 77.92%、actionable 57.50%，仅用于安排人工审核。2026-09-21 审计时项目累计 172 次调用（169 success / 3 failed），`alert_triage=168`、`event_llm_aux=4`；bounded live smoke 后为 173 次。晚间又用真实 `/api/assistant/chat` 请求“查询 600519 最新行情/新鲜度”验证 assistant 现役链，usage 新增 `assistant_tool_router=1`，`jev-1.13.0`、status=ok、约 711ms；总调用变为 174（171 success / 3 failed）。因此 assistant shadow 已有真实消费者 receipt，不再只是配置推断；**human gold 仍 0/240**，所以路由真实运行仍不等于 accuracy/cascade/额度节省已实证。
@@ -163,6 +165,7 @@
 - **依赖**：无
 - **效果前置**：RSH-026, IMP-020, RSH-030
 - **方案依据**：[历史涨停/龙头研究蓝图](../research/limit-up-dragon-research.md)；hunting-decision-design §2/4/7/8；Jev 蓝图 §21/26/30；用户 U43。
+- **U51 Jev 承接子范围（2026-09-24 已批；沿本任务原状态/门序/优先级）**：P1/G1 Phase 0：冻结全分母、历史可见语料与失败对照后，按已有 Jev MapReduce 边界增加修订/证据关系候选及漏检抽查；不得只按赢家倒推或把文本解释当作涨停预测。正式特征增益仍受原效果前置。 方案与反例见 [Jev 附录 A](../ai/jev-integration.md#附录-a-2026-09-24-已批准的全系统应用可视化与维护方案v04)。
 - **范围**：按历史交易制度建立全量涨停/炸板/临板与匹配对照；以市场→板块/概念→题材/分支→催化→个股→角色/演变的层级对象分析首板、强连板、空间板、弱市穿越、断板反包、趋势化、二/三浪与再启动。研究消息/公告、技术、相对强弱、资金代理、情绪、指数/双创、题材梯队及异常板块拉升的真假持续性；不只收集赢家。
 - **验收**：样本及题材成员 point-in-time，正负分母完整；探索段与最近 untouched holdout 分离，污染案例不计盲测胜利；候选机制预注册并做 matched baseline、purged walk-forward/embargo、ablation 与 multiple-testing 纪律；报告首板前/封板前/二板前 Recall、Precision@K/PR-AUC、first_seen/first_actionable 提前量、`time_to_limit`、龙头/最大板高排序、题材持续性、假启动、不可成交、fill rate、成本/MFE/MAE、假阳性与漏选，并比较早期可执行入场与简单相对强弱/突破基线。后续最低价/涨停价只作 outcome，不允许作为过去买点特征或把“理论最低可买”当可实现收益；按市场状态/板块制度/市值/事件类分层，负结果和窄域结论保留。
 - **Jev 分工**：历史新闻/公告/涨停原因做离线 bounded MapReduce，抽取事件类型、新颖度、确定性、公司/题材直接性、产业链分支、来源/冲突、叙事拥挤和相位一致性；确定性召回后可做 second-stage rerank；自动归因用 Universal Verification 核 claim↔evidence。Jev 不直接预测涨停、不使用未来收益造特征、不改交易硬门/策略权重、不以 confidence 冒充胜率。
@@ -184,6 +187,7 @@
 - **依赖**：RSH-026, IMP-020
 - **效果前置**：无
 - **方案依据**：主方案 §7.1、§9.4、§15
+- **U51 Jev 承接子范围（2026-09-24 已批；沿本任务原状态/门序/优先级）**：P2/G3 条件候选：业务暴露、催化成熟度、修订方向等窄语义特征与现有候选在同预算下竞争；预注册、时间外/消融/成本/实际 fill 口径全过才提出替换某个低价值实验或准入，单有解释价值就停在解释。 方案与反例见 [Jev 附录 A](../ai/jev-integration.md#附录-a-2026-09-24-已批准的全系统应用可视化与维护方案v04)。
 - **范围**：只研究有具体假设的召回/特征/排序/风控/退出增量；余 TA-Lib、HMM 等不按目录补齐。
 - **验收**：预注册插入点、基线、成本和退出条件；结构新颖不等于有效，OOS/前向增益不足则退出。
 - **证据**：已完成 novelty-first、EMA/Wilder 原语和部分候选实测；冗余结果保留，不能当准入证据。

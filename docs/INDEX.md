@@ -2,7 +2,7 @@
 
 > 定位：**docs 唯一入口**。查东西先来这里；写新文档必须在此登记。
 > 维护约定：状态在所属阶段单点更新，成果提炼与恢复按 `kb/07-doc-curation.md` §3.2；新建/迁移同步本表，未知资产不删除。
-> 当前入口（2026-09-20）：从最新 `master` 的 `AGENTS.md` → 本索引；`retro-and-gaps.md` §5.9 是执行门序治理、§6.0 是 W00–W09 领域索引，`stages/` 存任务唯一状态与调度元数据，`handoff.md` 仅存当前主门/现场。 `implementation-plan.md` 是 v9.11 规划修订，不单独定义当前执行模式；允许动作以最新 `handoff.md` + 所属 stage 为准。分工与逐轮审核见 `collaboration-workflow.md`；旧平台目录已退休，历史迁移证据归 `archive/platform-directory-migration-20260920.md`。
+> 当前入口（2026-09-24）：从最新 `master` 的 `AGENTS.md` → 本索引；`retro-and-gaps.md` §5.9 是执行门序治理、§6.0 是 W00–W09 领域索引，`stages/` 存任务唯一状态与调度元数据，`handoff.md` 仅存当前主门/现场。 `implementation-plan.md` 是 v9.12 规划修订，不单独定义当前执行模式；允许动作以最新 `handoff.md` + 所属 stage 为准。分工与逐轮审核见 `collaboration-workflow.md`；旧平台目录已退休，历史迁移证据归 `archive/platform-directory-migration-20260920.md`。
 
 ## 0.0 书库编目（编号 / 层 / 领域 / 用途）
 
@@ -25,7 +25,7 @@
 | **AG-07** | `handoff.md` | L2 | 交接 | 当前工作区、实际运行版本、最近门禁与交付；不另建任务记录 |
 | **AG-08** | `archive/platform-directory-migration-20260920.md` | L1 | 工程治理历史 | 旧平台目录迁移/恢复/最终退休证据；`GOV-018` 已完成，禁止恢复为现役入口 |
 | **AG-09** | `stages/` | L2 | 阶段任务 | W00–W09，各 ID 仅一份状态/验收/证据；P/Q 校验 |
-| **AG-10** | `implementation-plan.md` | L2 | 当前实施修订 | v9.11：living plan；继承 G0–G5/GX、U48 生命周期与 U49 主动缺陷发现门，并新增 U50 降级全权闭环；状态仍归阶段 |
+| **AG-10** | `implementation-plan.md` | L2 | 当前实施修订 | v9.12：living plan；继承 G0–G5/GX、U48 生命周期与 U49 主动缺陷发现门，并新增 U50 降级全权闭环、U51 Jev 应用与更新降级；状态仍归阶段 |
 | **AG-11** | `collaboration-workflow.md` | L2 | 协作审核 | 账本驱动；网页统筹审核、Codex执行，用户一句话触发，`master` 共享入口与原型退出 |
 | **AG-12** | `product/product-closure-design.md` | L2 | 产品闭环 | 全模块用途、前后台分工、业务/研究/工程链和确认流程图；非已上线报告 |
 | **AG-13** | `product/feature-closure-audit.md` | L2 | 细功能审计 | 大小动作/接口/后台任务的覆盖、源码发现与未验边界；任务状态仍归阶段 |
@@ -53,7 +53,7 @@
 | **FN-07** | `system/data-dictionary.md` | L2 | 数据 | 数据对象审计字段约定（source/quality） |
 | **FN-08** | `archive/picks-replay-baseline.md` | L1 | 快照 | 精选 60 日回放基线（08-31 评审指名保留）。**时点快照，只读** |
 | **FN-09** | `system/llm-gateway-probe.md` | L2 | 运维 | LLM 网关健康探针（`claude_cli` 别名监控） |
-| **FN-10** | `ai/jev-integration.md` | L2 | AI/Agent 架构 | Jev 现役蓝图：bounded semantic verify、条件 capability routing、gold-set/usage 证据与回退边界；shadow 的冻结候选集不是猎场全局 taxonomy；任务状态归 GOV-024 / IMP-045 / IMP-046 / RSH-030，长期生命周期受 GOV-027 审计 |
+| **FN-10** | `ai/jev-integration.md` | L2 | AI/Agent 架构 | Jev 唯一现役蓝图及已批附录 A：全系统应用裁定、事件→机会理由试点、真实决策可视化、模型/插件更新与各消费者降级；任务状态仍只归所属 stage |
 | **EX-01** | `archive/live-trading-guosen-plan.md` | L1 | 搁置历史 | 国信 miniQMT 实盘蓝图。**用户已搁置**（不接受 Windows 依赖），恢复条件见文档头 |
 | **RV-01** | `review/review-agent.md` | L2 | 复盘 | 盘后复盘 Agent 架构 |
 | **RV-02** | `review/daily-review-sop.md` | L2 | 复盘 | 每日复盘 SOP（怎么判） |
@@ -62,6 +62,7 @@
 | **RV-05** | `review/bug020-production-session-20260922.md` | L2 | 审计 | BUG-020 2026-09-22 生产完整交易会话验收证据（一次性时点证据） |
 | **RV-06** | `review/imp052-promotion-approval-20260922.md` | L2 | 审计 | IMP-052 参数晋级独立批准、证据绑定、原子消费与 U49 反证证据 |
 | **RV-07** | `review/imp052-budget-cancel-20260922.md` | L2 | 审计 | IMP-052 统一 usage/token、跨进程配额、输入输出预算、取消传播与部署日回填证据 |
+| **RV-08** | `review/jev-system-scan-20260924.md` | L2 | 审计 | U51 全系统扫描、31 项未完成任务逐项对照及 living-system-governor 同作者自审；时点证据，不维护任务状态 |
 | **DR-01** | `daily-review/` | L1 | 存档 | 逐日复盘报告（YYYY-MM-DD.md） |
 | **DR-02** | `repo-watch/` | L1 | 存档 | 仓库周期性跟踪周报 |
 | **DR-03** | `evolution/` | L1 | 存档 | 进化议程每日执行日志 |
