@@ -96,7 +96,7 @@ DOCS_ROOT_CONTROL_FILES = frozenset({
     "collaboration-workflow.md",
 })
 DOCS_CLASSIFIED_DIRS = frozenset({
-    "ai", "archive", "daily-review", "data", "evolution", "handoff", "kb", "plans", "product",
+    "ai", "archive", "daily-review", "data", "evolution", "kb", "product",
     "push-templates", "repo-watch", "research", "review", "stages", "strategy",
     "summary", "system",
 })
