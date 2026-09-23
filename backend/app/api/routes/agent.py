@@ -68,6 +68,35 @@ async def resource_usage(limit: int = Query(50, ge=1, le=500)):
     }
 
 
+@router.get("/agent/jev/overview")
+async def jev_overview(limit: int = Query(40, ge=1, le=100)):
+    """JEV 运行状态与无正文 Decision Trace；网页/Codex 共用同一只读事实源。"""
+    from app.core import jev_client
+
+    usage = jev_client.historical_usage_summary()
+    usage.pop("path", None)  # 不向前端暴露主机路径
+    return {
+        "data": {
+            "status": jev_client.status_snapshot(),
+            "historical_usage": usage,
+            "recent_decisions": jev_client.recent_decision_traces(limit=limit),
+            "trace_scope": "runtime_only",
+            "privacy": (
+                "只保留 purpose/status/model/typed answer/latency/reason；"
+                "不保存 state、用户正文、prompt、criteria 或 evidence 正文"
+            ),
+            "fallbacks": {
+                "alert_triage": "JEV不可用/低置信→DeepSeek；再失败按既有规则提醒",
+                "event_aux": "JEV不可用→现有DeepSeek/批次语义，不写半批结果",
+                "assistant_tools": "JEV不可用→完整既有只读工具集/原工具选择",
+                "assistant_verify": "JEV不可用→保留确定性grounding与原回答",
+                "research_shadow": "JEV不可用→unknown/unavailable，不阻断生产链",
+                "codex": "JEV不可用→tests/static analysis/既有Codex工作流",
+            },
+        }
+    }
+
+
 @router.get("/agent/tasks")
 async def list_tasks(type: str | None = None, limit: int = Query(30, ge=1, le=200)):
     return {"data": at.list_tasks(limit=limit, type_=type)}
