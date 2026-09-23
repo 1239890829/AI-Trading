@@ -100,6 +100,21 @@ data/boardflow/*
 data/theme_momentum/*
 backend/data/cache/
 
+# 运行时落盘：龙虎榜归档 / 分时扫描标记 / 持仓计划（2026-09-23 补齐）
+# 判据与 fundflow/boardflow 同族：三者均由 scheduler **按日落盘**（lhb 17:05 归档、
+# minute_decisions 当日幂等标记、position_engine 逐日决策/离场/峰值轨迹），
+# 每交易日各新增 1 个文件 ⇒ 入 git 只产未跟踪噪声，不带来源码价值。
+# 实测这三类**此前被误随功能提交带入跟踪**（加入点为 `ca3ee07` / `3150d60` 的顺带 diff，
+# 非显式决策），且 `.gitignore` 从未有对应规则 ⇒ 每天稳定新增 3 个未跟踪文件。
+# 与上方 theme_momentum「死规则」不同：这三个常量已**绝对锚定**在 backend/
+# （`lhb_archive.py:33` / `minute_decisions.py:43` / `position_engine.py:47` 均为
+# `Path(__file__).resolve().parents[2] / "data" / …`），故按 backend/data/ 写即可生效。
+# 已同步 `git rm --cached` 解除 13 个历史文件跟踪（磁盘文件保留）。
+# 若日后认定龙虎榜归档具历史证据价值，须显式反向决策并恢复跟踪。
+backend/data/lhb/
+backend/data/minute_decisions/
+backend/data/position_plans/
+
 # ⚠️ 上面两条 `data/…` 规则**当前从不匹配**（2026-09-14 实测 `git check-ignore` 判定为未忽略）：
 # 生产常量写的是**相对路径**（`app/market/board_flow.py` / `app/picks/board_surge.py` 里的
 # `Path("data/…")`），而服务按 AGENTS.md §1 从 `backend/` 启动 ⇒ 实际落盘在
