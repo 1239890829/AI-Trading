@@ -25,6 +25,25 @@
 - **下一步**：继续收集业务 route coverage、升级率和 token 数据；自动 model/effort 切换继续暂停，除非真实会话 A/B 证明净收益。
 - **恢复**：关闭 Jev routing 即回到现有确定性工具选择/LLM 路径，不改变权限或交易状态。
 
+## IMP-055
+
+**JEV 可观测决策视图与同源降级**
+
+- **状态**：待执行
+- **优先级**：P0
+- **阶段门**：G4
+- **门内序**：15
+- **门禁角色**：非阻断
+- **依赖**：无
+- **效果前置**：无
+- **方案依据**：implementation-plan v9.12/U51；docs/ai/jev-integration.md §32；用户 2026-09-23 明确要求 JEV 可视化、JEV-owned 命名、JEV/Codex 同源可见与不可用降级。
+- **范围**：复用现有 `app/core/jev_client.py`、JEV consumers、usage 与 `/agent` 控制台；第一纵切提供只读 JEV status/usage + 无正文运行期 Decision Trace，并在现有控制台增加 `JEV` 页签。猎场/复盘只在真实可关联 JEV trace 存在时轻量接入；不新建顶层 `/jev`、不迁移成熟 JEV 文件只为目录整齐、不新增通用 JEV 插件、不让 JEV 参与金融硬门/执行。
+- **验收**：① JEV-owned API/组件/字段明确用 JEV/jev 命名，混合 Agent/LLM 模块不被强改名；② 页面只显示真实 Choice/Noul/Score 结构化输出/概率、model/version、status/latency/fallback/consumer，不展示或伪造思维链；③ trace 不保存用户正文、持仓、prompt、evidence 正文或 secret，网页与 Codex 读取同一只读契约；④ JEV disabled/not_configured/timeout/invalid/low-confidence 均按 owner 现有路径降级，核心行情/选股/模拟/复盘不受阻；⑤ 当前未参与 JEV 的猎场结果不得出现“JEV选中/解释”假标记；⑥ 后端/前端专项与现有 JEV 测试通过，效果准确率/cascade 不因可视化被宣称。
+- **证据**：2026-09-23 Preflight 重读 master：已有统一 JEV adapter、assistant router、research shadow、gold/usage 工具和 GOV-024/IMP-045/046/RSH-030 owner；现有 historical usage 仅元数据、assistant routing 只聚合 coverage、alert/event shadow 多数不保存逐调用结构化输出，因此“可看每次 JEV 判断”仍有真实缺口。OpportunityDecisionSnapshot 已有点时业务事实，不能为 JEV 再造重复决策表。
+- **下一步**：先做最小纵切：`jev_client` 增加无正文 runtime trace ring buffer → 只读 JEV overview API → `/agent?tab=jev` 可视化 → Codex 同 API 读取；完成后再评估是否有任何业务 owner 真正需要跨重启 trace，未证明前不建万能持久表。猎场/复盘嵌入放在有稳定 trace 关联后，不以占位 UI 提前实施。
+- **恢复**：关闭/移除 JEV 可视化与 runtime trace 后，现有 JEV adapter、shadow/cascade 配置和所有消费者行为保持原样；JEV 本身不可用时按 §32.4 回原基线。
+- **U49 Preflight**：已检查重复系统、隐私、未来信息、真实消费者、fallback、版本/来源、前台占位与 Codex 双事实源。结论是不新增 JEV 大模块/第二数据库/通用插件；最小 trace 只存结构化输出元数据且运行期可丢。当前无证据支持把本片升级为生产选股/效果任务。
+
 ## IMP-045
 
 **Jev 语义决策中间层与 Universal Verification**
