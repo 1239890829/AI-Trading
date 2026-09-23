@@ -54,6 +54,11 @@
 | **FN-08** | `archive/picks-replay-baseline.md` | L1 | 快照 | 精选 60 日回放基线（08-31 评审指名保留）。**时点快照，只读** |
 | **FN-09** | `system/llm-gateway-probe.md` | L2 | 运维 | LLM 网关健康探针（`claude_cli` 别名监控） |
 | **FN-10** | `ai/jev-integration.md` | L2 | AI/Agent 架构 | Jev 现役蓝图：bounded semantic verify、条件 capability routing、gold-set/usage 证据与回退边界；shadow 的冻结候选集不是猎场全局 taxonomy；任务状态归 GOV-024 / IMP-045 / IMP-046 / RSH-030，长期生命周期受 GOV-027 审计 |
+| **JEV-01** | `plans/jev/INDEX.md` | L3 | AI/Agent实施 | JEV专项实施入口：架构、数据契约、路线与 Codex 执行交接；由 FN-10 统领，不创建第二任务状态源 |
+| **JEV-02** | `plans/jev/JEV-ARCHITECTURE.md` | L3 | AI/Agent实施 | JEV架构设计与边界说明 |
+| **JEV-03** | `plans/jev/JEV-DATA-CONTRACT.md` | L3 | AI/Agent实施 | JEV数据契约与接口约定 |
+| **JEV-04** | `plans/jev/JEV-ROADMAP.md` | L3 | AI/Agent实施 | JEV阶段路线与演进规划 |
+| **JEV-05** | `handoff/codex/JEV-CODEX-HANDOFF-001.md` | L3 | AI/Agent实施 | Codex执行接续说明与恢复入口 |
 | **EX-01** | `archive/live-trading-guosen-plan.md` | L1 | 搁置历史 | 国信 miniQMT 实盘蓝图。**用户已搁置**（不接受 Windows 依赖），恢复条件见文档头 |
 | **RV-01** | `review/review-agent.md` | L2 | 复盘 | 盘后复盘 Agent 架构 |
 | **RV-02** | `review/daily-review-sop.md` | L2 | 复盘 | 每日复盘 SOP（怎么判） |
