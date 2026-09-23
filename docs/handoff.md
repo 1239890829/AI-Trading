@@ -1,11 +1,11 @@
-# 当前交接：JEV IMP-055 发布收口 · 下轮回普通账本
+# 当前交接：JEV IMP-055 已收口 · 下轮普通账本 G1/IMP-048
 
 
 > **2026-09-21 多窗口审计及晚间收口**：详见 `docs/review/chatgpt-multiwindow-audit-20260921.md`。审计指出的三类执行缺口已进一步收口：① BUG-020 的条件激活不再只靠记忆，`scripts/ledger-runtime-selection.py` 可在下一交易日 08:30–09:15 开工窗把静态 G4 临时抢回 G0，错过窗口/日历未知均 fail-closed；② 本机 AI-Trading 后端已受控停服、同步 `master@c272d260`、重启并通过 SQLite/health/30 scheduler/snapshot 验收；③ 前端误判已纠正——Next 15.5.25 进程属于另一个 `vide-trading` 仓库，AI-Trading 当时没有前端进程，自身 `npm ci` 后在 Node 22.22.2 下 695/695 tests 与 Next 16.3.3 build 全绿。Jev 真实 assistant 请求也已新增 `assistant_tool_router` receipt；RSH-030 human gold 仍必须独立人工完成。IMP-053 actual-fill 契约与唯一 `54b7e0c` RECOVERY 仍按各自 owner 保留。任务状态仍以 stage 为准，不以本段建立第二账本。
 
-> **定位 / 摘要（2026-09-23 当前）**：BUG-022 已由 PR #107 合入 `master@e345f6dbb9c6a8f3d9eafe2008f611ab43a5b571`。JEV 专题已按 U49 + living-system-governor 二审收敛为 W05/IMP-055 的最小纵切：复用现有 adapter/usage/consumer 与 `/agent`，只补无正文 Decision Trace + JEV 页签 + 同源只读 API，不新建 JEV 大系统。实现 head `4e8700eddbdfa49a3a12802278df4783a5a0bb9e` 已完成 U49 Review，PR #108 的 backend/frontend/docs 三项 required CI 首轮全绿；当前只剩最终 stage/handoff 收口、final-head CI、DegradedRelease、`release_check`、merge/post-merge CI 与分支清理。普通 selector 仍为 G1/IMP-048，当前 JEV 例外不授权顺带开工。
+> **定位 / 摘要（2026-09-23 当前）**：BUG-022 已由 PR #107 合入 `master@e345f6dbb9c6a8f3d9eafe2008f611ab43a5b571`。JEV 专题已按 U49 + living-system-governor 二审收敛为 W05/IMP-055 的最小纵切：复用现有 adapter/usage/consumer 与 `/agent`，只补无正文 Decision Trace + JEV 页签 + 同源只读 API，不新建 JEV 大系统。实现 head `4e8700eddbdfa49a3a12802278df4783a5a0bb9e` 已完成 U49 Review。发布路径有一处需据实修正：**PR #108 已被 CLOSED（未合并），同一工作由 PR #110 "(reopen)" 合入 `master@094ccfe`** —— required CI run `35830103111`（backend / frontend / docs 三项 SUCCESS）、master push CI run `35830911094` SUCCESS、head 分支已随合并删除，**IMP-055 收口完成**，本节 `CROSS_GATE_EXCEPTION` 随之失效。普通 selector 实测仍为 G1/IMP-048（`scripts/ledger-runtime-selection.py` 2026-09-23 16:57 返回 `static=G1/IMP-048 effective=G1/IMP-048`），JEV 例外不授权顺带开工。
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** G4/IMP-055 的工程实现已完成，当前一次性 `CROSS_GATE_EXCEPTION` 只剩**发布收口权限**：不得再扩 JEV 功能，不改策略参数、交易阈值、生产 cascade、通知准入或真实交易权限。最终 PR HEAD 仍必须生成独立 `DegradedRelease`，通过 required CI、`release_check`、post-merge CI 并清理分支；PR #108 合并后该例外立即失效。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** G4/IMP-055 已收口，**原一次性 `CROSS_GATE_EXCEPTION` 已失效**（条件见 §7「例外结束」），当前无任何跨门授权：不得再扩 JEV 功能，不改策略参数、交易阈值、生产 cascade、通知准入或真实交易权限。后续切片一律按 §5.9 阶段门从最新 `master` 重新计算后领取。
 
 
 
@@ -61,12 +61,12 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 本节只记录当前现场，不维护第二份 backlog；权威算法在总账 §5.9，任务元数据在所属 stage。
 
-- **最新已合基线**：PR #107 已把 BUG-022 合入 `master@e345f6dbb9c6a8f3d9eafe2008f611ab43a5b571`；BUG-022 不再是活动切片。
+- **最新已合基线**：`master@5302f7e`（PR #111 merge commit）。此前 PR #107 把 BUG-022 合入 `master@e345f6dbb9c6a8f3d9eafe2008f611ab43a5b571`、PR #109 合入 JEV 文档与 doc-health 分类、PR #110 "(reopen)" 合入 IMP-055 收口；BUG-022 与 IMP-055 均不再是活动切片。
 - **普通 selector**：在没有跨门例外时，BUG-022 完成后机械下一项仍是 G1/IMP-048；本轮不改其静态优先级/阶段门。
 - **当前主门**：G1
 - **主切片首选**：IMP-048
 - **同门候选顺序**：`IMP-048 → IMP-040 → RSH-031`。
-- **跨门收口切片**：G4/IMP-055（JEV 可观测决策视图与同源降级）已完成实现与首轮 required CI；本节 `CROSS_GATE_EXCEPTION` 仅允许其 final-head 发布闭环，不再允许新增工程范围。
+- **跨门收口切片**：G4/IMP-055（JEV 可观测决策视图与同源降级）**已收口** —— 实现由 PR #110 "(reopen)" 合入 `master@094ccfe`，required CI run `35830103111` 三项 SUCCESS、master push CI run `35830911094` SUCCESS、head 分支随合并删除。该 `CROSS_GATE_EXCEPTION` 已无剩余权限。
 - **领取依据**：用户 2026-09-23 在 JEV 专题中明确要求将该阶段优先完成，并连续“继续”；网页已完成仓库事实审计、外部生态复核、living-system-governor 二审与 U49 Preflight，确认该纵切不需改变金融/交易门。
 - **CROSS_GATE_EXCEPTION**：
   - **范围**：仅 IMP-055 的 JEV status/usage/runtime structured trace、只读 API、`/agent` JEV 页签、对应测试/文档；不得顺带执行 IMP-045/046 cascade、RSH-030 阈值、猎场生产评分或其它 G4 项。
@@ -75,7 +75,8 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
   - **停止条件**：IMP-055 最小纵切通过定向测试、required CI、release_check、post-merge CI并完成分支清理，或发现必须依赖未完成低门事实契约时立即停止例外。
   - **恢复点**：关闭/回退 JEV 可视化/runtime trace 即恢复 `master@e345f6d...` 既有 JEV 行为；核心消费者继续各自原 fallback。
   - **禁止效果主张**：不得据可视化宣称 JEV accuracy、选股胜率、额度节省或 cascade 已达标；这些仍归 RSH-030 / 原效果 owner。
-- **例外结束**：PR #108 合并并通过 post-merge CI、清理分支后，本 `CROSS_GATE_EXCEPTION` 自动失效；下轮从最新 master 重跑 `scripts/ledger-runtime-selection.py`，不能把一次用户优先级要求变成永久跨门权。
+- **例外结束（已满足，记录据实修正）**：原条件写"PR #108 合并并通过 post-merge CI、清理分支后自动失效"。实测 **PR #108 = `CLOSED`（未合并）**，同一工作由 **PR #110 "(reopen)"** 合入并满足全部条件：required CI run `35830103111` 三项 SUCCESS、master push CI run `35830911094` SUCCESS、head 分支 `chatgpt/jev-observability-audit` 已随合并自动删除（`git ls-remote --heads origin` 无该分支）。→ **本 `CROSS_GATE_EXCEPTION` 已失效**，下轮从最新 master 重跑 `scripts/ledger-runtime-selection.py`，不能把一次用户优先级要求变成永久跨门权。
+  - **遗留（非例外条件）**：本机 `worktrees/jev-observability` 工作树与本地分支 `chatgpt/jev-observability-audit` 仍在（`03626f6`，内容为 PR #110 的 squash 前身，实测 `git diff master` 仅为落后差异、无独有内容）。属本机卫生项，不影响本节门状态，另行清理。
 - **条件/效果边界**：G2/IMP-049 仍按其运行条件；RSH-030 human gold 仍未完成，JEV 可视化不改变任何效果前置。
 
 ## 8. JEV、工具链与协作流当前基线
