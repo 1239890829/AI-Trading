@@ -1,11 +1,11 @@
-# 当前交接：JEV Phase 1 二审收口 · IMP-055 可观测性纵切待执行
+# 当前交接：JEV IMP-055 发布收口 · 下轮回普通账本
 
 
 > **2026-09-21 多窗口审计及晚间收口**：详见 `docs/review/chatgpt-multiwindow-audit-20260921.md`。审计指出的三类执行缺口已进一步收口：① BUG-020 的条件激活不再只靠记忆，`scripts/ledger-runtime-selection.py` 可在下一交易日 08:30–09:15 开工窗把静态 G4 临时抢回 G0，错过窗口/日历未知均 fail-closed；② 本机 AI-Trading 后端已受控停服、同步 `master@c272d260`、重启并通过 SQLite/health/30 scheduler/snapshot 验收；③ 前端误判已纠正——Next 15.5.25 进程属于另一个 `vide-trading` 仓库，AI-Trading 当时没有前端进程，自身 `npm ci` 后在 Node 22.22.2 下 695/695 tests 与 Next 16.3.3 build 全绿。Jev 真实 assistant 请求也已新增 `assistant_tool_router` receipt；RSH-030 human gold 仍必须独立人工完成。IMP-053 actual-fill 契约与唯一 `54b7e0c` RECOVERY 仍按各自 owner 保留。任务状态仍以 stage 为准，不以本段建立第二账本。
 
-> **定位 / 摘要（2026-09-23 当前）**：BUG-022 已由 PR #107 合入 `master@e345f6dbb9c6a8f3d9eafe2008f611ab43a5b571`。用户在随后 JEV 专题连续“继续”中明确要求：JEV 决策可视化、JEV 不可用降级、JEV-owned 命名、Codex 同样可观察，并要求该阶段优先完成；网页按 U49 + living-system-governor 二审后没有重建 JEV 系统，而是新增 W05/IMP-055 作为最小纵切：复用现有 adapter/usage/consumer 与 `/agent`，只补无正文 Decision Trace + JEV 页签 + 同源只读 API。普通 selector 在 BUG-022 完成后仍会机械得到 G1/IMP-048；本轮由网页登记一次性 `CROSS_GATE_EXCEPTION` 只覆盖 IMP-055，完成/停止后立即回最新 master 重跑 selector。
+> **定位 / 摘要（2026-09-23 当前）**：BUG-022 已由 PR #107 合入 `master@e345f6dbb9c6a8f3d9eafe2008f611ab43a5b571`。JEV 专题已按 U49 + living-system-governor 二审收敛为 W05/IMP-055 的最小纵切：复用现有 adapter/usage/consumer 与 `/agent`，只补无正文 Decision Trace + JEV 页签 + 同源只读 API，不新建 JEV 大系统。实现 head `4e8700eddbdfa49a3a12802278df4783a5a0bb9e` 已完成 U49 Review，PR #108 的 backend/frontend/docs 三项 required CI 首轮全绿；当前只剩最终 stage/handoff 收口、final-head CI、DegradedRelease、`release_check`、merge/post-merge CI 与分支清理。普通 selector 仍为 G1/IMP-048，当前 JEV 例外不授权顺带开工。
 
-**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** 当前唯一交付切片为 **G4/IMP-055**，由下述一次性 `CROSS_GATE_EXCEPTION` 授权；不改策略参数、交易阈值、生产 cascade、通知准入或真实交易权限。发布仍必须为最终 PR HEAD 生成独立 `DegradedRelease`，通过 required CI、`release_check`、post-merge CI 并清理分支。
+**当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** G4/IMP-055 的工程实现已完成，当前一次性 `CROSS_GATE_EXCEPTION` 只剩**发布收口权限**：不得再扩 JEV 功能，不改策略参数、交易阈值、生产 cascade、通知准入或真实交易权限。最终 PR HEAD 仍必须生成独立 `DegradedRelease`，通过 required CI、`release_check`、post-merge CI 并清理分支；PR #108 合并后该例外立即失效。
 
 
 
@@ -16,7 +16,7 @@
 
 ## 2. 累计规划要求去向（2026-09-18 基线 + 后续增量）
 
-下表以 2026-09-18 规划批为基线，并吸收后续 U41–U50 的新增长期取舍；它是累计规划验收索引，不是第二套任务进度表。各项“覆盖”表示设计与验收方法有实际落点，不表示已经实现或实证有效。
+下表以 2026-09-18 规划批为基线，并吸收后续 U41–U51 的新增长期取舍；它是累计规划验收索引，不是第二套任务进度表。各项“覆盖”表示设计与验收方法有实际落点，不表示已经实现或实证有效。
 
 | 用户要求 | 已核定的规划内容 | 唯一主要落点 |
 |---|---|---|
@@ -66,7 +66,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **当前主门**：G1
 - **主切片首选**：IMP-048
 - **同门候选顺序**：`IMP-048 → IMP-040 → RSH-031`。
-- **跨门执行切片**：G4/IMP-055（JEV 可观测决策视图与同源降级），P0 / 非阻断 / 门内序15；仅在本节 `CROSS_GATE_EXCEPTION` 范围内执行。
+- **跨门收口切片**：G4/IMP-055（JEV 可观测决策视图与同源降级）已完成实现与首轮 required CI；本节 `CROSS_GATE_EXCEPTION` 仅允许其 final-head 发布闭环，不再允许新增工程范围。
 - **领取依据**：用户 2026-09-23 在 JEV 专题中明确要求将该阶段优先完成，并连续“继续”；网页已完成仓库事实审计、外部生态复核、living-system-governor 二审与 U49 Preflight，确认该纵切不需改变金融/交易门。
 - **CROSS_GATE_EXCEPTION**：
   - **范围**：仅 IMP-055 的 JEV status/usage/runtime structured trace、只读 API、`/agent` JEV 页签、对应测试/文档；不得顺带执行 IMP-045/046 cascade、RSH-030 阈值、猎场生产评分或其它 G4 项。
@@ -75,7 +75,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
   - **停止条件**：IMP-055 最小纵切通过定向测试、required CI、release_check、post-merge CI并完成分支清理，或发现必须依赖未完成低门事实契约时立即停止例外。
   - **恢复点**：关闭/回退 JEV 可视化/runtime trace 即恢复 `master@e345f6d...` 既有 JEV 行为；核心消费者继续各自原 fallback。
   - **禁止效果主张**：不得据可视化宣称 JEV accuracy、选股胜率、额度节省或 cascade 已达标；这些仍归 RSH-030 / 原效果 owner。
-- **例外结束**：IMP-055 收口后删除该 CROSS_GATE_EXCEPTION，回最新 master 重跑 `scripts/ledger-runtime-selection.py`；不能把一次用户优先级要求变成永久跨门权。
+- **例外结束**：PR #108 合并并通过 post-merge CI、清理分支后，本 `CROSS_GATE_EXCEPTION` 自动失效；下轮从最新 master 重跑 `scripts/ledger-runtime-selection.py`，不能把一次用户优先级要求变成永久跨门权。
 - **条件/效果边界**：G2/IMP-049 仍按其运行条件；RSH-030 human gold 仍未完成，JEV 可视化不改变任何效果前置。
 
 ## 8. JEV、工具链与协作流当前基线
@@ -97,7 +97,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **Degraded reason**：当前 Codex 额度不可用，正常双角色无法持续完成实施→独立审核→发布闭环；旧 exact-HEAD Review 门因此形成自锁。
 - **有效期**：持续到用户明确说 Codex 已恢复/退出降级；不是单 PR 临时口令。但每个 PR 的发布仍必须重新生成 exact-HEAD `DegradedRelease`，不能复用上一 PR 回执。
 - **不降低项**：G0–G5/GX 阶段门、U49 主动反证、branch protection、required CI、latest master、CHANGES_REQUESTED/thread、public-repo scan、workspace/doc-health、敏感信息/范围、post-merge CI、删除功能分支。
-- **当前动作**：BUG-022/#107 已完成；用户当前明确优先的 JEV 专题由一次性 `CROSS_GATE_EXCEPTION` 承接为 G4/IMP-055。实现只允许补 JEV status/usage/runtime structured trace、同源只读 API、`/agent` JEV 页签及对应测试/文档；不改生产 cascade、金融硬门、猎场排序或 RSH-030 阈值。IMP-055 结束后立即撤销例外并回普通 selector 的 G1/IMP-048。
+- **当前动作**：IMP-055 实现与 U49 Review 已完成，PR #108 首轮 required CI 全绿；当前只允许做 final-head stage/handoff 收口 → required CI → exact-head `DegradedRelease` → `release_check` → merge/post-merge CI → 分支清理。不得继续扩 JEV 功能；PR #108 合并后例外立即失效并回普通 selector 的 G1/IMP-048。
 
 ## 8.2 U49 主动审计回执（RSH-026 Preflight）
 
@@ -361,6 +361,18 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **统一查询面**：LLM/Jev 只落 metadata receipt；Jev 原 metrics/JSONL 作为运维 telemetry 保留，production lifespan 额外镜像到统一表；prompt/messages/state/questions/凭据均不写入。
 - **当前完成候选**：确定性专项、迁移 parity、真实 DB 副本、backend/frontend 全量门均已在候选代码上通过；最终完成结论仍以本分支 exact-head release、required CI、release_check 与 post-merge master CI 为准。
 
+
+## 8.21 U49 主动审计回执（IMP-055 JEV Observability）
+
+- **阶段**：`Review`；对象是 G4/IMP-055 的最终实现与发布候选。
+- **实现基点**：`4e8700eddbdfa49a3a12802278df4783a5a0bb9e`；PR #108。首轮 CI run `35808746588` 的 backend (pytest + pyflakes)、frontend (全量 vitest + tsc + ESLint + production build)、docs (public scan + workspace hygiene + doc-health) 三项 required checks 全绿。
+- **扫描范围**：`jev_client.evaluate → _record → runtime Decision Trace → /api/agent/jev/overview → /agent?tab=jev`，并反查 alert triage、event llm_aux、assistant tool router、semantic verifier、research shadow 的既有 fallback。
+- **主动发现并修正 1**：结构化输出若含 NaN/Inf，不能进入 JSON trace；sanitizer 仅保留 finite numeric。
+- **主动发现并修正 2**：JEV 在外发前拒绝敏感字段时，内部 reason 原带字段路径；可视 trace 统一折叠为 `sensitive_input_blocked`，不暴露路径。
+- **主动发现并修正 3**：重大决策传播守卫本体已动态解析最大 U，但其回归测试仍硬编码 U50；已改为从 implementation-plan 动态读取最大 U，避免每次新增用户要求自锁。
+- **反证结论**：没有发现第二 JEV 事实源、金融决策副作用、猎场“JEV 未参与却显示参与”、必须新增持久 JEV 大表或通用插件的证据；runtime ring buffer + 同源只读 API 是当前足够小的实现。
+- **边界**：本 Review 不证明 JEV 准确率、选股胜率、额度节省或 cascade 可上线；RSH-030 human gold 仍为独立效果门。猎场/复盘/个股没有稳定业务 trace 关联前不增加占位 JEV 展示。
+- **角色说明**：这是 `DEGRADED_FULL_CONTROL` 下的 U49 作者反证，不冒充正常模式的独立 Reviewer；发布授权仍必须由 final-head `DegradedRelease` + required CI + `release_check` 单独完成。
 
 ## 9. U49 主动审计回执（IMP-044 Preflight）
 
