@@ -3,7 +3,7 @@
 
 > **2026-09-21 多窗口审计及晚间收口**：详见 `docs/review/chatgpt-multiwindow-audit-20260921.md`。审计指出的三类执行缺口已进一步收口：① BUG-020 的条件激活不再只靠记忆，`scripts/ledger-runtime-selection.py` 可在下一交易日 08:30–09:15 开工窗把静态 G4 临时抢回 G0，错过窗口/日历未知均 fail-closed；② 本机 AI-Trading 后端已受控停服、同步 `master@c272d260`、重启并通过 SQLite/health/30 scheduler/snapshot 验收；③ 前端误判已纠正——Next 15.5.25 进程属于另一个 `vide-trading` 仓库，AI-Trading 当时没有前端进程，自身 `npm ci` 后在 Node 22.22.2 下 695/695 tests 与 Next 16.3.3 build 全绿。Jev 真实 assistant 请求也已新增 `assistant_tool_router` receipt；RSH-030 human gold 仍必须独立人工完成。IMP-053 actual-fill 契约与唯一 `54b7e0c` RECOVERY 仍按各自 owner 保留。任务状态仍以 stage 为准，不以本段建立第二账本。
 
-> **定位 / 摘要（2026-09-23 当前）**：GOV-022 selector fallback 已由 PR #106 合入 `master@9e7c86d47ffea3ae76e00c7dfaedf86dc7521471` 并通过 post-merge CI；用户随后再次“继续”，selector 唯一领取 **G1/BUG-022**。当前实现代码已冻结为 `be2478e2e24b536b1da03d532cf25dda68299e3e`：真实上证指数 Canvas 同型复现了重复 `0.1%/0.0%` 与 `−0.0%`，确认 lightweight-charts 4.2.3 percent formatter 精度语义为根因；同时 U49 补出参考日错配、同 HH:MM 跨日覆盖、混日叠画、指数 overlay 跨日与无效限价占位五类同根边界并 fail-closed。Node 22.22.2 下定向 72/72、全前端双时区各 712/712、tsc、eslint、Next production build、最终真实 Canvas 均通过。候选 stage 完成态重算得到 **G1/IMP-048**，但它只是下一机械候选，尚未获得本轮授权。
+> **定位 / 摘要（2026-09-23 当前）**：GOV-022 selector fallback 已由 PR #106 合入 `master@9e7c86d47ffea3ae76e00c7dfaedf86dc7521471` 并通过 post-merge CI；用户随后再次“继续”，selector 唯一领取 **G1/BUG-022**。当前实现代码由 `be2478e2e24b536b1da03d532cf25dda68299e3e` + U49 显示收尾 `f259737f68334bcb9a51085b8b25cb79721edf18` 构成：真实上证指数 Canvas 同型复现了重复 `0.1%/0.0%` 与 `−0.0%`，确认 lightweight-charts 4.2.3 percent formatter 精度语义为根因；同时 U49 补出参考日错配、同 HH:MM 跨日覆盖、混日叠画、指数 overlay 跨日与无效限价占位五类同根边界并 fail-closed。Node 22.22.2 下定向 73/73、全前端双时区各 713/713、tsc、eslint、Next production build、最终真实 Canvas 均通过。候选 stage 完成态重算得到 **G1/IMP-048**，但它只是下一机械候选，尚未获得本轮授权。
 
 **当前模式：`DEGRADED_FULL_CONTROL`（用户明确授权，持续到用户明确退出/恢复 Codex）。** 当前唯一交付切片是 BUG-022；不改策略参数、交易阈值、模型路由、通知或真实交易权限。发布仍必须为最终 PR HEAD 生成独立 `DegradedRelease`，通过 required CI、`release_check`、post-merge CI 并清理分支。BUG-022 合并后本轮停止；只有下一次“继续”才可领取 G1/IMP-048。
 
@@ -61,7 +61,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 本节只记录当前现场，不维护第二份 backlog；权威算法在总账 §5.9，任务元数据在所属 stage。
 
-- **当前交付切片**：G1/BUG-022。代码实现提交固定为 `be2478e2e24b536b1da03d532cf25dda68299e3e`；stage 已在候选分支标记完成，最终 PR/CI/merge 尚待本轮发布闭环。
+- **当前交付切片**：G1/BUG-022。代码实现提交为 `be2478e2e24b536b1da03d532cf25dda68299e3e`，U49 百分比显示收尾为 `f259737f68334bcb9a51085b8b25cb79721edf18`；stage 已在候选分支标记完成，最终 PR/CI/merge 尚待本轮发布闭环。
 - **阻断状态**：G0–G4 当前没有可行动 blocker；BUG-022 完成态后 selector 使用 ordinary non-blocker fallback 继续排序。
 - **当前主门**：G1
 - **主切片首选**：IMP-048
@@ -92,7 +92,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **Degraded reason**：当前 Codex 额度不可用，正常双角色无法持续完成实施→独立审核→发布闭环；旧 exact-HEAD Review 门因此形成自锁。
 - **有效期**：持续到用户明确说 Codex 已恢复/退出降级；不是单 PR 临时口令。但每个 PR 的发布仍必须重新生成 exact-HEAD `DegradedRelease`，不能复用上一 PR 回执。
 - **不降低项**：G0–G5/GX 阶段门、U49 主动反证、branch protection、required CI、latest master、CHANGES_REQUESTED/thread、public-repo scan、workspace/doc-health、敏感信息/范围、post-merge CI、删除功能分支。
-- **当前动作**：GOV-022/#106 已完成；本轮 degraded 主切片是 G1/BUG-022。代码提交 `be2478e2e24b536b1da03d532cf25dda68299e3e` 已通过本地 U49、双时区全前端、production build 与真实 Canvas；当前只允许完成 stage/handoff、PR exact-HEAD DegradedRelease、required CI、release_check、merge/post-merge CI 与分支清理。机械下一项 G1/IMP-048 不在本轮授权内。
+- **当前动作**：GOV-022/#106 已完成；本轮 degraded 主切片是 G1/BUG-022。代码提交 `be2478e2e24b536b1da03d532cf25dda68299e3e` / `f259737f68334bcb9a51085b8b25cb79721edf18` 已通过本地 U49、双时区全前端、production build 与真实 Canvas；当前只允许完成 stage/handoff、PR exact-HEAD DegradedRelease、required CI、release_check、merge/post-merge CI 与分支清理。机械下一项 G1/IMP-048 不在本轮授权内。
 
 ## 8.2 U49 主动审计回执（RSH-026 Preflight）
 

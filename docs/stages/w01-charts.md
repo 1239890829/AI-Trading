@@ -22,8 +22,8 @@
 - **范围**：单一价格域、参考日/交易日、四态限价与原用户“指数分时刻度重复”子场景全部收口；复用既有图表和叠加能力，不重写轴系统。
 - **验收**：函数、组件、真实 Canvas、切股/换源/跨日矩阵均已通过；百分比刻度与价格同一价格域逐端映射、标签可区分且无负零；无效参考价/日期/限价不伪精确，真实价格不因降级被裁剪。
 - **证据**：PR #27 的轴映射基线继续保留。本轮从原消息归档恢复 ordinal 8214（“指数分时还是不对,有重复的刻度”）；原桌面 PNG 已不存在，因此**不冒充已重新目视原图**。随后用真实后端 + 当前上证指数 2026-09-22 数据（242 分钟点、Tencent、昨收 3949.91）在真实 Canvas 复现同型故障：修前左轴重复 `−0.1% / −0.0% / 0.0% / 0.1%`。根因确认是 lightweight-charts 4.2.3 的 percent formatter 将 `precision=2` 解释为 priceScale=2，实际只保留 1 位小数；现改为固定两位 custom formatter 并对半个最小刻度内的浮点噪声归零。修后真实 Canvas 左轴为 `−0.60% … 0.70%` 唯一刻度、无负零，右轴真实价格和昨收/现价标签仍保留；私有证据在 `artifacts/runs/bug022-minute-axis-20260923/{baseline,fixed}.png` 与 `evidence.md`。
-- **参考日/限价闭环**：生产 `StockDetailPanel` 只用 quote 的源 `data_timestamp` 推导 `referenceDate`；参考日未知/不一致时保留真实价格但关闭百分比/昨收归一；分钟点混日/非法时间戳则直接不创建 Canvas，避免两天相同 HH:MM 叠画。上证 overlay 只有“自身分钟日 = 自身参考日 = 主图交易日”才进入归一线。WS 分时合成新增“同 HH:MM 也必须同交易日”守卫。实际涨跌停价按 `both / upper-only / lower-only / none` 四态处理，0/-1/null/NaN 均不冒充真实限价，指数 `limit_up_price=-1` 的前台显示由 `-1.00` 降级为 `--`。
-- **机械验证**：实现提交 `be2478e2e24b536b1da03d532cf25dda68299e3e`；定向 4 files / 72 tests；切股 key 重挂载、同日换源原位灌数、跨日新参考日重建、未知/错日/混日 fail-closed、指数叠加参考日、四态限价、负零与低波动唯一标签均有回归。Node 22.22.2 下全前端 74 files / 712 tests 本地时区与 `TZ=UTC` 两遍全绿，`tsc --noEmit`、`eslint .`、Next 16.3.3 production build 全绿；最终 production bundle 真实 Canvas 再验通过。
+- **参考日/限价闭环**：生产 `StockDetailPanel` 只用 quote 的源 `data_timestamp` 推导 `referenceDate`；参考日未知/不一致、分钟点混日或时间戳非法时仍保留可用真实价格，但关闭百分比/昨收归一与跨日归一叠加，避免两天相同 HH:MM 被解释成同一百分比会话。上证 overlay 只有“自身分钟日 = 自身参考日 = 主图交易日”才进入归一线。WS 分时合成新增“同 HH:MM 也必须同交易日”守卫。实际涨跌停价按 `both / upper-only / lower-only / none` 四态处理，0/-1/null/NaN 均不冒充真实限价，指数 `limit_up_price=-1` 的前台显示由 `-1.00` 降级为 `--`。
+- **机械验证**：实现提交 `be2478e2e24b536b1da03d532cf25dda68299e3e` + U49 显示收尾 `f259737f68334bcb9a51085b8b25cb79721edf18`；定向 4 files / 73 tests；切股 key 重挂载、同日换源原位灌数、跨日新参考日重建、未知/错日/混日 fail-closed、指数叠加参考日、四态限价、负零与低波动唯一标签均有回归。Node 22.22.2 下全前端 74 files / 713 tests 本地时区与 `TZ=UTC` 两遍全绿，`tsc --noEmit`、`eslint .`、Next 16.3.3 production build 全绿；最终 production bundle 真实 Canvas 再验通过。
 - **下一步**：本项销账；合并后按 selector 重新领取下一主切片，不继续扩展旧 IMP-023 已交付的大盘叠加。
 - **恢复**：若需回退本轮显示实现，必须保留参考日 fail-closed、跨日合成守卫、无效限价不伪造与原始 Canvas 证据。
 - **实施步骤**：①原消息与同型真实 Canvas 复现完成；②沿用 `minute-axis.ts` / `minute-chart.tsx` 单一轴域；③参考价/日期/四态限价契约完成；④低波动重复标签、负零、跨日/换股/换源回归完成；⑤真实 Canvas 修前/修后双证据完成。
@@ -33,6 +33,6 @@
 
 ## 已交付基线
 
-- PR #27：轴映射与增量刷新历史基线；`be2478e2e24b536b1da03d532cf25dda68299e3e`：关闭其遗留的原用户重复刻度、参考日、跨日/换源与实际限价边界。
+- PR #27：轴映射与增量刷新历史基线；`be2478e2e24b536b1da03d532cf25dda68299e3e` + `f259737f68334bcb9a51085b8b25cb79721edf18`：关闭其遗留的原用户重复刻度、参考日、跨日/换源、叠加交易日、实际限价与百分比负零边界。
 
 旧编号、退出理由和原文恢复入口见 [历史处置表](../archive/ledger-transition-20260917.md)。本节只留仍支撑本阶段的成果，不保存逐轮长日志。
