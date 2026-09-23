@@ -986,8 +986,7 @@ export function MinuteChart({
             }`}
             title="集合竞价（09:25 终态）：图中金色点为竞价价格；放量上攻（≥2% 且量比≥1.5）为资金先手信号"
           >
-            竞价 {auction.pct > 0 ? "+" : ""}
-            {auction.pct.toFixed(2)}%
+            竞价 {fmtPct(auction.pct)}
           </span>
         )}
         {badges.lb != null && (

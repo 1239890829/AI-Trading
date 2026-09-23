@@ -67,6 +67,12 @@ describe("MinuteChart 轴契约", () => {
     expect(charts[0].opts.handleScale).toEqual({ axisPressedMouseMove: { price: false, time: true } });
   });
 
+  it("竞价百分比沿同一格式规则，近零值不显示负零", () => {
+    render(<MinuteChart points={[point(10)]} prevClose={10} auction={{ price: 10, pct: -0.0049 }} />);
+    expect(screen.getByText("竞价 0.00%")).toBeTruthy();
+    expect(screen.queryByText(/−0\.00%/)).toBeNull();
+  });
+
   it("均价、竞价和叠加共用同一价格域，叠加极值不会只撑大左轴", () => {
     render(<MinuteChart points={[point(10, "30", 12)]} prevClose={10} limitPct={10}
       auction={{ price: 8, pct: -20 }} index={{ prevClose: 100, points: [point(150)] }} />);
