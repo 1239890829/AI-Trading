@@ -8,7 +8,7 @@
 - 作业边界与发布流程：本文件 §0、§1、§6.5。
 - 协作采用双模式：正常模式由网页 ChatGPT 负责计划/阶段账本/独立审核、Codex 执行获准切片；用户明确授权 `DEGRADED_FULL_CONTROL` 时，网页端可临时承担规划、实现、自审、PR/CI、发布、合并与清理全链路，但必须走独立的 `DegradedRelease` 精确 HEAD 回执，不得伪装成独立 Review。协作协议与人工介入点见 `docs/collaboration-workflow.md`。
 - 唯一文档入口：`docs/INDEX.md`；执行治理：`docs/retro-and-gaps.md` §5.9（G0–G5/GX）；领域索引：§6.0（W00–W09）；任务状态与调度元数据在所属阶段页单点维护。
-- 施工取舍：最新用户要求与 docs/implementation-plan.md 的 v9.12 明确修订优先；原 v9 未修订部分保留，旧项按真实价值复核，登记不等于必须实施。
+- 施工取舍：最新用户要求与 docs/implementation-plan.md 的 v9.11 明确修订优先；原 v9 未修订部分保留，旧项按真实价值复核，登记不等于必须实施。
 - 当前现场与实测：`docs/handoff.md` §1；经验按 `docs/kb/00-INDEX.md` 定位。
 - 接续工作：`skills/ashare-ledger-continue/SKILL.md`；当轮交接：`skills/ashare-task-handoff/SKILL.md`。总账 `docs/retro-and-gaps.md` §5.9 的 G0–G5/GX 是唯一执行门序；每次“继续”先运行 `scripts/ledger-runtime-selection.py` 重算 stage 明示的受支持 `运行条件`。G0–G4 有 actionable blocker 时取最低 blocker 门；**全部 blocker 清空后回落到最低仍有 actionable non-blocker 的普通门**，再按角色/P0-P2/门内序领取一个切片；G5/GX 不进入普通 fallback。运行条件只临时影响本轮选择，不改写 stage 静态状态；硬依赖未完成不得跨门；`CROSS_GATE_EXCEPTION` 只能由网页在 handoff 明示。
 - 盘后复盘：`skills/ashare-daily-review/SKILL.md`，流程与逐项核验归既有 SOP / checklist。
