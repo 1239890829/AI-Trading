@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import re
 
 import pytest
 
@@ -440,20 +441,24 @@ def test_open_evolution_guard_catches_removed_core_invariant(monkeypatch, rel, n
 def test_decision_propagation_detects_stale_handoff_requirement_range(monkeypatch):
     mod = load()
     target = mod.DOCS / "handoff.md"
+    plan = mod.DOCS / "implementation-plan.md"
     original_read = mod._read
+    max_u = max(int(n) for n in re.findall(r"\bU(\d{2})\b", original_read(plan)))
+    current_range = f"U01–U{max_u:02d}"
+    stale_range = f"U01–U{max_u - 1:02d}"
 
     def patched_read(path):
         text = original_read(path)
         if path == target:
             # 以真实当前最大 U 编号为正样本，再只注入“一轮落后”的反例。
-            # 不把具体旧版本 U48 永久固化成正确值，否则下一次新增 U 会自锁。
-            assert "U01–U50" in text
-            return text.replace("U01–U50", "U01–U49", 1)
+            # 最大 U 动态来自 implementation-plan，新增 U 不应让守卫测试自身自锁。
+            assert current_range in text
+            return text.replace(current_range, stale_range, 1)
         return text
 
     monkeypatch.setattr(mod, "_read", patched_read)
     errors = mod.check_decision_propagation()
-    assert any("累计要求范围 U01–U49" in error and "U50" in error for error in errors)
+    assert any(stale_range in error and f"U{max_u:02d}" in error for error in errors)
 
 
 def test_decision_propagation_rejects_ready_handoff_with_pending_merge_text(monkeypatch):

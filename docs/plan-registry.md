@@ -69,6 +69,7 @@
 
 | 历史要求/表述 | 当前裁定 | 依据与落点 |
 |---|---|---|
+| “JEV 可视化”=新建独立 JEV 大页面/展示模型思维链；或把所有 AI/Agent 模块改名 JEV | 不采纳。JEV 专属资产明确命名 JEV；主观察入口复用 `/agent` 新增 JEV 页签，只展示真实结构化 decision trace/status/fallback，不伪造思维链；猎场/复盘只有真实 trace 才嵌入；Codex 读同一项目 trace | implementation-plan v9.12/U51；ai/jev-integration §32；W05/IMP-055；W08/GOV-024 |
 | ChatGPT/Codex自动派工、网页唤醒、自动审核回执与Bridge链 | 完全退出活动路线，不再安装、修补或保留未来建设承诺 | 用户选择仓库账本+人工短提示；协作规范 |
 | 旧免网页审核或执行端自己批准 | 失效；Codex提交执行事实，网页审核具体版本并规划下一项 | 用户角色分工；AGENTS发布规则仍保留 |
 | “继续任务”=无限扫账本/执行端随意挑活 | 不采纳；U44 只授权一个切片，U45 再要求该切片先通过 G0–G5 阶段门：每轮先用 `scripts/ledger-runtime-selection.py` 重算 stage 明示的受支持运行条件；G0–G4 有 blocker 时取最低 blocker 门，全部 blocker 清空后才回落到最低 actionable non-blocker 普通门；G5/GX 不进入 ordinary fallback，unknown 条件不激活、硬依赖未完成绝不跨门，例外只由网页写入 handoff | retro-and-gaps §5.9；协作§3/§9/§10；GOV-022；不是恢复旧自动派工/Bridge |

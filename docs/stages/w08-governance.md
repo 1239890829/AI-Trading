@@ -46,10 +46,10 @@
 - **依赖**：无
 - **效果前置**：无
 - **方案依据**：docs/ai/jev-integration.md；2026-09-19 官方 Use Case Map 与本仓真实 smoke。
-- **范围**：Jev 只做 bounded 语义判断、验证与条件能力路由；确定性金融规则、权限、撮合、风控与真实执行仍由代码负责。统一 HTTP/key 入口为 backend/app/core/jev_client.py，测试默认禁真实触网。
-- **验收**：不新增第二套凭据/endpoint；隐私输入失败关闭；真实调用只在能改变下一步或减少更贵模型成本时保留；全局 model/effort 自动切换未证明价值前保持停用。
+- **范围**：JEV 只做 bounded 语义判断、验证与条件能力路由；确定性金融规则、权限、撮合、风控与真实执行仍由代码负责。统一 HTTP/key 入口为 backend/app/core/jev_client.py，测试默认禁真实触网。JEV-owned 能力统一使用 JEV/jev 命名；可观测性与 Codex 同源 trace 由 IMP-055 承接，不为展示复制第二套 adapter/凭据/项目账本。
+- **验收**：不新增第二套凭据/外呼入口；隐私输入失败关闭；真实调用只在能改变下一步或减少更贵模型成本时保留；全局 model/effort 自动切换未证明价值前保持停用。JEV 不可用时各 consumer 回到自身 rules/LLM/完整工具集/unknown 基线；用户可见来源不得把 fallback 冒充 JEV；Decision Trace 不保存用户/持仓/prompt/evidence 正文。
 - **证据**：PR #31–#34 已依次合入 Jev adapter/影子路由、价值审计与 capability routing 收敛、Universal Verification/gold-set、预标注与审核优先级；jev-1.13.0 smoke、JevRouter 权限过滤、metadata-only usage 均已有证据。旧 jev-route 因不能真正切宿主模型且固定增加一轮调用已退出。2026-09-21 审计时项目 ledger 为 172 calls / 169 success / 3 failed，主用途 alert_triage 与 event_llm_aux；bounded live smoke 再次成功。网页 ChatGPT 当前**没有原生 TypeSafe tool**，但在用户授权的本机连接下可通过统一 `jev_client` 调用，本轮已实证；Codex 更适合作为代码实施 owner 并可加载 TypeSafe Agent Skill，但 Jev 仍只承担 bounded decision/review，不替代 Codex 或确定性测试。
-- **下一步**：以 RSH-030 人工金标准和长期 token A/B 决定 shadow/cascade 与组件去留，不以 demo 或单次 confidence 调生产阈值；额外验证 assistant tool-router 的真实 shadow 调用/telemetry。对 RSH-026/IMP-044/IMP-020 这类高影响多轮任务，允许在 release 前按价值选择一次 Jev semantic review，但只作旁路反证，不把“没调用 Jev”本身判为缺陷。
+- **下一步**：以 RSH-030 人工金标准和长期 token A/B 决定 shadow/cascade 与组件去留，不以 demo 或单次 confidence 调生产阈值；assistant tool-router 已有真实 shadow receipt，后续按实际 telemetry 复核。工程侧由 IMP-055 把 status/usage/runtime Decision Trace 与 fallback 状态做成同源可见，不把可视化当准确率证据。对 RSH-026/IMP-044/IMP-020 这类高影响多轮任务，允许在 release 前按价值选择一次 JEV semantic review，但只作旁路反证，不把“没调用 JEV”本身判为缺陷。
 - **恢复**：任一 Jev 组件失效时回退确定性规则/现有 LLM 路径；不扩大权限、不修改真实交易硬门。
 
 ## GOV-025

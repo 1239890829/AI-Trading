@@ -10,10 +10,11 @@ Jev 是语义判断层，不得替代价格计算、撮合、风控硬门或事�
 """
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -49,6 +50,11 @@ _metrics: dict[str, Any] = {
         "coverage_checked": 0, "coverage_missed": 0,
     }),
 }
+
+# Runtime-only JEV decision trace: structured outputs only, no state/questions/evidence text.
+# This deliberately resets on process restart. Persistent business linkage belongs to each
+# consumer only after a real cross-restart replay need is demonstrated.
+_decision_traces: deque[dict[str, Any]] = deque(maxlen=100)
 
 _usage_sink: Callable[[dict[str, Any]], None] | None = None
 
@@ -103,6 +109,91 @@ def _validate_questions(questions: dict[str, dict]) -> None:
             raise JevError(f"question_type_invalid:{qid}")
         if not question.get("instructions"):
             raise JevError(f"question_instructions_missing:{qid}")
+
+
+def _safe_answer_summary(answers: Any) -> dict[str, dict[str, Any]]:
+    """Keep only bounded typed JEV outputs for runtime observability.
+
+    Never copy state, instructions, criteria text, evidence or free-form model text.
+    """
+    if not isinstance(answers, dict):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    scalar_keys = ("confidence", "score", "noul", "probability")
+    for raw_qid, raw_answer in answers.items():
+        if not isinstance(raw_qid, str) or not isinstance(raw_answer, dict):
+            continue
+        item: dict[str, Any] = {}
+        answer_type = raw_answer.get("type")
+        if isinstance(answer_type, str) and answer_type in _ALLOWED_TYPES:
+            item["type"] = answer_type
+        choice = raw_answer.get("choice")
+        if isinstance(choice, str):
+            item["choice"] = choice[:120]
+        for key in scalar_keys:
+            value = raw_answer.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                number = float(value)
+                if math.isfinite(number):
+                    item[key] = number
+        probs = raw_answer.get("probabilities")
+        if isinstance(probs, dict):
+            clean_probs: dict[str, float] = {}
+            for label, value in probs.items():
+                if (
+                    isinstance(label, str)
+                    and isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                ):
+                    number = float(value)
+                    if math.isfinite(number):
+                        clean_probs[label[:120]] = number
+            if clean_probs:
+                item["probabilities"] = clean_probs
+        out[raw_qid[:80]] = item
+    return out
+
+
+def _safe_trace_reason(reason: str | None) -> str | None:
+    """Collapse sensitive-validation details before exposing a trace."""
+    text = str(reason or "")
+    if not text:
+        return None
+    if text.startswith(("sensitive_key:", "secret_like_value:")):
+        return "sensitive_input_blocked"
+    return text[:120]
+
+
+def _append_decision_trace(
+    purpose: str,
+    *,
+    status: str,
+    model: str | None = None,
+    answers: Any = None,
+    latency_ms: float = 0.0,
+    reason: str | None = None,
+) -> None:
+    row = {
+        "at_utc": datetime.now(timezone.utc).isoformat(),
+        "purpose": str(purpose or "unspecified")[:80],
+        "status": str(status)[:24],
+        "model": str(model or "")[:80] or None,
+        "answers": _safe_answer_summary(answers),
+        "latency_ms": round(max(0.0, float(latency_ms or 0.0)), 2),
+        "reason": _safe_trace_reason(reason),
+    }
+    with _lock:
+        _decision_traces.appendleft(row)
+
+
+def recent_decision_traces(limit: int = 40) -> list[dict[str, Any]]:
+    """Return recent runtime-only structured JEV traces, newest first."""
+    n = max(1, min(100, int(limit)))
+    with _lock:
+        # JSON roundtrip provides a detached copy and is safe because trace fields are JSON scalars.
+        return json.loads(json.dumps(list(_decision_traces)[:n], ensure_ascii=False))
+
+
 def _persist_usage(
     purpose: str,
     *,
@@ -143,7 +234,8 @@ def _persist_usage(
 def _record(purpose: str, *, ok: bool = False, skipped: bool = False,
             usage: dict | None = None, latency_ms: float = 0.0,
             model: str | None = None, reason: str | None = None,
-            attempts: int = 0, input_chars: int = 0) -> bool:
+            attempts: int = 0, input_chars: int = 0,
+            trace_answers: Any = None) -> bool:
     usage = usage or {}
     inp = int(usage.get("input_tokens") or 0)
     out = int(usage.get("output_tokens") or 0)
@@ -184,7 +276,15 @@ def _record(purpose: str, *, ok: bool = False, skipped: bool = False,
             })
         except Exception as exc:  # native metrics/JSONL remain, but the durable unified ledger failed
             log.warning("Jev durable usage sink failed: %s", type(exc).__name__)
+            _append_decision_trace(
+                purpose, status="failed", model=model, latency_ms=latency_ms,
+                reason="usage_accounting_failed",
+            )
             return False
+    _append_decision_trace(
+        purpose, status=status, model=model, answers=trace_answers,
+        latency_ms=latency_ms, reason=reason,
+    )
     return True
 
 
@@ -309,6 +409,7 @@ def _reset_metrics_for_tests() -> None:
                 "coverage_checked": 0, "coverage_missed": 0,
             }
         )
+        _decision_traces.clear()
 
 
 def record_comparison(
@@ -450,7 +551,7 @@ def evaluate(
         actual_model = str(data.get("model") or chosen_model)
         accounted = _record(
             purpose, ok=True, usage=usage, latency_ms=latency_ms, model=actual_model,
-            attempts=attempts, input_chars=request_chars,
+            attempts=attempts, input_chars=request_chars, trace_answers=answers,
         )
         if not accounted:
             return {
