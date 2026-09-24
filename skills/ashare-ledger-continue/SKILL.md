@@ -5,6 +5,8 @@ description: AI-Trading 新会话接手、上下文恢复与账本继续的唯�
 
 # 账本接续 / 项目接手
 
+**临时执行者覆盖（2026-09-24）**：用户已明确授权 Codex 在 `DEGRADED_FULL_CONTROL` 下免网页审核，直到用户要求“改回来”；活动状态与撤销规则见 `docs/handoff.md`、`docs/collaboration-workflow.md` §3.3a。此期间本 Skill 中要求网页 `Preflight` / 独立 `Review` / 网页降级作者的句子改由 Codex 记录 U49 作者反证并形成准确 HEAD 的 `DegradedRelease`，不得冒充独立审核。选刀、依赖、本地/CI/发布门和每轮一个主切片保持不变。
+
 本 Skill 同时承担三件事：**新会话快速接手、恢复当前项目上下文、继续已获准任务**。不得再建立第二个“项目接手 Skill”或靠聊天长提示维护上下文。
 
 全项目范围仍按 `docs/product/product-closure-design.md`、`docs/product/hunting-decision-design.md`、`docs/research/limit-up-dragon-research.md`（存在且相关时）、`docs/product/feature-closure-audit.md` 核大小功能及消费者。后台开放情境，普通前台简洁；局部切片不能缩小整项目目标。

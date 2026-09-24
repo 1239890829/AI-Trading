@@ -34,6 +34,7 @@
 - **下一步**：U50 已有真实 PR 验证；持续验证 U49/U50 的发现质量、误报与成本。runtime selector 除受支持运行条件外，必须持续验证“blocker 全清后 ordinary non-blocker fallback”不会再次返回空主门；当时机械下一刀为 `G1/BUG-022`；该任务后续已通过 PR #113 合入主干。2026-09-24 从 `master@52971cfc` 重算，当前机械候选为 `G1/IMP-048`；本 GOV-022 只维护选择器与账本辅助，不替代 IMP-048 的单独派工/验收。其它 `待条件` 仍保持 fail-closed，只有出现稳定、可确定判据才新增条件类型，避免把自然语言条件猜成自动授权。继续保持 single-writer，并在 merge 后把 branch/worktree/runtime status 分开核对。GX 不借治理跨门。
 - **恢复**：26a0c44和项目回收记录保存旧文件；恢复只作调查且不覆盖目标，不恢复旧自治目标或撤销金融/CI保护。
 - **分工**：正常模式网页方案/账本/独立审核，Codex执行；`DEGRADED_FULL_CONTROL` 激活时网页全权闭环，用户只需明确进入/退出降级或提出重大取舍。Bridge个人App/扩展/对话未卸载删除，不影响本流程。
+- **2026-09-24 临时执行者例外**：用户明确授权 Codex 在 `DEGRADED_FULL_CONTROL` 下免网页审核推进，直到要求“改回来”；Codex 的 U49 作者反证和 `DegradedRelease` 不冒充独立 Review。required CI、发布检查及主干复验不降级。活动状态见 handoff，撤销后恢复上行默认分工；此记录不改变 GOV-022 原状态/门序。
 
 ## GOV-024
 
