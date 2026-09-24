@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import utcnow
@@ -44,11 +44,41 @@ class EventCard(Base):
     # LLM 辅助判定已做时间（P2-3 层1）：null=未试过，非空=已判过（含判中性），
     # 防重复调用烧钱。北京时间 naive，与 published_at 同口径。
     llm_judged_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    # 新观察与当前解释冲突时暂停机会消费；人工复核前不改写旧方向。
+    revision_pending_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     directions: Mapped[list["EventDirection"]] = relationship(
         "EventDirection", back_populates="event", cascade="all, delete-orphan"
     )
+    observations: Mapped[list["EventObservation"]] = relationship(
+        "EventObservation", back_populates="event", cascade="all, delete-orphan"
+    )
+
+
+class EventObservation(Base):
+    """来源原始观察。重复轮询幂等，原文修订追加，时间均为北京时间 naive。"""
+
+    __tablename__ = "event_observation"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("event_card.id"), index=True)
+    observation_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    source: Mapped[str] = mapped_column(String(64))
+    source_item_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    title: Mapped[str] = mapped_column(String(512))
+    summary: Mapped[str | None] = mapped_column(Text)
+    url: Mapped[str | None] = mapped_column(String(512))
+    source_published_at: Mapped[datetime | None] = mapped_column(DateTime)
+    received_at: Mapped[datetime] = mapped_column(DateTime)
+    # 本系统首次可用于决策的时点；目前采集链等于收到并成功入库的时点。
+    available_at: Mapped[datetime] = mapped_column(DateTime)
+    source_symbols_json: Mapped[str] = mapped_column(Text, default="[]")
+    board_codes_json: Mapped[str] = mapped_column(Text, default="[]")
+    change_kind: Mapped[str] = mapped_column(String(24))  # initial | corroboration | revision | variant
+
+    event: Mapped[EventCard] = relationship("EventCard", back_populates="observations")
 
 
 class EventDirection(Base):
@@ -74,5 +104,7 @@ class EventDirection(Base):
     # 判定依据（命中词/规则名），可解释要求
     basis: Mapped[str] = mapped_column(String(256), default="")
     matched_by: Mapped[str] = mapped_column(String(16), default="name")  # name | alias
+    # null 表示迁移前的解释，无法恢复其原始观察身份，不能伪造绑定。
+    observation_id: Mapped[int | None] = mapped_column(ForeignKey("event_observation.id"), default=None)
 
     event: Mapped[EventCard] = relationship("EventCard", back_populates="directions")

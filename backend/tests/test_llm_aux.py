@@ -106,6 +106,10 @@ def test_pending_candidates_filters(tmp_path):
     with sf() as db:
         db.get(EventCard, ev4.id).llm_judged_at = beijing_now_naive()
         db.commit()
+    ev5 = _event(sf, "来源修订待复核", age_min=10)
+    with sf() as db:
+        db.get(EventCard, ev5.id).revision_pending_at = beijing_now_naive()
+        db.commit()
 
     cands = la._pending_candidates(sf, theme_names=["半导体概念"], max_batch=12, age_max_h=5.0)
     ids = {c.id for c in cands}
@@ -113,6 +117,7 @@ def test_pending_candidates_filters(tmp_path):
     assert ev2.id not in ids
     assert ev3.id not in ids
     assert ev4.id not in ids
+    assert ev5.id not in ids
 
 
 def test_theme_match(monkeypatch):

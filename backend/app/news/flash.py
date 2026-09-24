@@ -291,7 +291,7 @@ def _to_event(p: dict, theme_names: list[str] | None = None,
         # 统一为北京 naive（app.core.db.beijing_now_naive docstring）。
         published = published.astimezone(BJ_TZ).replace(tzinfo=None)
     symbols = p.get("symbols") or []
-    return build_event(
+    event = build_event(
         p["title"],
         source="东财快讯",
         url=p.get("url"),
@@ -301,6 +301,13 @@ def _to_event(p: dict, theme_names: list[str] | None = None,
         theme_names=theme_names or [],
         board_themes=board_themes or [],
     )
+    event.update(
+        source_item_id=p.get("code"),
+        source_published_at=published,
+        source_symbols=symbols,
+        board_codes=p.get("board_codes") or [],
+    )
+    return event
 
 
 async def _board_theme_map(state, theme_names: list[str] | None = None) -> dict[str, dict]:

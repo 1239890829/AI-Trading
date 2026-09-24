@@ -30,6 +30,17 @@ def _store() -> EventStore:
     return EventStore(get_session_factory())
 
 
+def _isolated_store(tmp_path) -> EventStore:
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.models.watchlist import Base
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'event-lineage.db'}")
+    Base.metadata.create_all(engine)
+    return EventStore(sessionmaker(bind=engine, autoflush=False, expire_on_commit=False))
+
+
 # ---------------------------------------------------------------- 抽取规则
 
 
@@ -185,6 +196,63 @@ def test_store_dedupes_by_fingerprint():
     assert r1.id == r2.id
 
 
+def test_source_revision_keeps_original_interpretation_and_pauses_consumers(tmp_path):
+    store = _isolated_store(tmp_path)
+    first = build_event("液冷服务器订单落地", source="东财快讯", summary="订单已签署",
+                        source_symbol="301468", theme_names=["液冷服务器"])
+    first.update(source_item_id="flash-42", source_symbols=["301468"])
+    row, created = store.add_event(first)
+    assert created and store.is_active(row)
+    original_directions = [(d.target, d.direction, d.observation_id) for d in store.directions_of(row.id)]
+    assert original_directions and original_directions[0][2] is not None
+
+    corrected = build_event("液冷服务器订单落地", source="东财快讯", summary="订单尚未签署",
+                            source_symbol="301468", theme_names=["液冷服务器"])
+    corrected.update(source_item_id="flash-42", source_symbols=["301468"])
+    same_row, created = store.add_event(corrected)
+    assert not created and same_row.id == row.id
+    assert same_row.summary == "订单已签署"
+    assert same_row.revision_pending_at is not None
+    assert [(d.target, d.direction, d.observation_id) for d in store.directions_of(row.id)] == original_directions
+    assert row.id not in {active.id for active in store.list_events(active_only=True, limit=100)}
+    observations = store.observations_of(row.id)
+    assert [o.change_kind for o in observations] == ["initial", "revision"]
+    assert [o.summary for o in observations] == ["订单已签署", "订单尚未签署"]
+    assert observations[0].available_at <= observations[1].available_at
+    assert observations[1].source_item_id == "flash-42"
+    store.add_event(corrected)
+    assert len(store.observations_of(row.id)) == 2, "重拉相同修订应幂等"
+
+
+def test_same_source_id_changed_title_and_late_publication_stay_linked(tmp_path):
+    from datetime import datetime
+
+    store = _isolated_store(tmp_path)
+    original = build_event("某公司宣布完成收购", source="东财快讯")
+    original.update(source_item_id="flash-99", source_published_at=datetime(2026, 9, 1, 9, 0))
+    row, _ = store.add_event(original)
+    revised = build_event("某公司否认完成收购", source="东财快讯")
+    revised.update(source_item_id="flash-99", source_published_at=datetime(2026, 9, 1, 9, 0))
+    linked, created = store.add_event(revised)
+    assert not created and linked.id == row.id and linked.revision_pending_at is not None
+    observations = store.observations_of(row.id)
+    assert len(observations) == 2
+    assert observations[0].source_published_at < observations[0].received_at
+    assert observations[0].available_at == observations[0].received_at
+
+
+def test_same_title_multiple_sources_preserves_both_observations(tmp_path):
+    store = _isolated_store(tmp_path)
+    event = build_event("某公司公告中标项目", source="东财快讯", summary="已中标")
+    event.update(source_item_id="east-1")
+    row, _ = store.add_event(event)
+    other = build_event("某公司公告中标项目", source="财联社", summary="已中标")
+    other.update(source_item_id="cls-1")
+    again, created = store.add_event(other)
+    assert not created and again.id == row.id and again.revision_pending_at is None
+    assert {o.source for o in store.observations_of(row.id)} == {"东财快讯", "财联社"}
+
+
 def test_store_survives_duplicate_direction_rows():
     """回归（2026-09-10 事故）：事件 dict 内方向行 (target_type,target) 重复时，
     入库必须**成功**而不是把整条事件丢掉（旧行为：撞 UNIQUE → 兜底查不到 fingerprint
@@ -254,6 +322,9 @@ def test_events_api_lifecycle(client, monkeypatch: pytest.MonkeyPatch):
     assert data["directions"][0]["target"] == "存储芯片"
     assert data["directions"][0]["direction"] == 1
     eid = data["id"]
+    detail = client.get(f"/api/events/{eid}").json()["data"]
+    assert len(detail["observations"]) == 1
+    assert detail["directions"][0]["observation_id"] == detail["observations"][0]["id"]
 
     # 重复注册 → created=False
     r2 = client.post("/api/events", json={"title": "长鑫 LPDDR6 全球首发量产"})
@@ -288,6 +359,36 @@ def test_events_api_lifecycle(client, monkeypatch: pytest.MonkeyPatch):
 
     with _pytest.raises(ValueError):
         store.set_status(eid, "whatever")
+
+
+def test_revision_detail_is_visible_while_opportunity_pool_is_paused(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.routes import events as events_route
+
+    store = _isolated_store(tmp_path)
+    app = FastAPI()
+    app.include_router(events_route.router, prefix="/api")
+    app.dependency_overrides[events_route.get_store] = lambda: store
+    original = build_event("某云厂商液冷机柜订单落地", source="东财快讯", summary="订单已签署",
+                           source_symbol="301468")
+    original.update(source_item_id="detail-1", source_symbols=["301468"])
+    row, _ = store.add_event(original)
+    corrected = build_event("某云厂商液冷机柜订单落地", source="东财快讯", summary="订单尚未签署",
+                            source_symbol="301468")
+    corrected.update(source_item_id="detail-1", source_symbols=["301468", "688496"])
+    store.add_event(corrected)
+
+    with TestClient(app) as api:
+        detail = api.get(f"/api/events/{row.id}").json()["data"]
+        assert detail["revision_pending_at"] and not detail["is_active"]
+        assert detail["judge_status"] == "unknown"
+        assert [o["summary"] for o in detail["observations"]] == ["订单已签署", "订单尚未签署"]
+        assert detail["observations"][1]["source_symbols"] == ["301468", "688496"]
+        pool = api.get(f"/api/events/{row.id}/stocks").json()
+        assert pool["data"]["pools"] == []
+        assert "未复核" in pool["meta"]["note"]
 
 
 def test_events_for_symbol_api(client, monkeypatch: pytest.MonkeyPatch):

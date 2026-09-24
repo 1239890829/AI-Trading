@@ -152,6 +152,8 @@ def test_to_event_passes_first_symbol_as_source_symbol():
         "symbols": ["301468", "688496"],
     })
     assert ev["source_symbol"] == "301468"
+    assert ev["source_symbols"] == ["301468", "688496"]
+    assert ev["source_item_id"] == "C9"
     # 无关联标的 → None（显式空，不猜）
     ev2 = flash._to_event({
         "title": "某宏观消息", "summary": None, "code": "C10",

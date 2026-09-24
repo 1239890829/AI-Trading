@@ -21,7 +21,7 @@ import re
 from sqlalchemy import select
 
 from app.core.db import get_session_factory
-from app.models.event import EventCard, EventDirection
+from app.models.event import EventCard, EventDirection, EventObservation
 from app.core.bjtime import beijing_now_naive
 
 log = logging.getLogger(__name__)
@@ -64,6 +64,7 @@ def _pending_candidates(sf, *, theme_names: list[str], max_batch: int,
         stmt = (
             select(EventCard)
             .where(EventCard.status == "active")
+            .where(EventCard.revision_pending_at.is_(None))
             .where(EventCard.llm_judged_at.is_(None))
             .order_by(EventCard.published_at.desc())
             .limit(max_batch * 4)  # 放大取数：下面还要过滤有方向行/超龄
@@ -89,7 +90,7 @@ def _mark_judged(sf, rows: list[EventCard]) -> None:
     with sf() as db:
         for r in rows:
             row = db.get(EventCard, r.id)
-            if row is not None:
+            if row is not None and row.revision_pending_at is None:
                 row.llm_judged_at = now
         db.commit()
 
@@ -98,8 +99,11 @@ def _insert_directions(sf, event_id: int, hits: list[dict]) -> int:
     """命中结果 → EventDirection 行（matched_by=llm_aux）。返回写入行数。"""
     with sf() as db:
         row = db.get(EventCard, event_id)
-        if row is None:
+        if row is None or row.revision_pending_at is not None:
             return 0
+        observation_id = db.execute(select(EventObservation.id).where(
+            EventObservation.event_id == event_id
+        ).order_by(EventObservation.id).limit(1)).scalar_one_or_none()
         existing = {(d.target_type, d.target) for d in row.directions}
         n = 0
         for h in hits:
@@ -108,6 +112,7 @@ def _insert_directions(sf, event_id: int, hits: list[dict]) -> int:
                 continue
             db.add(EventDirection(
                 event_id=event_id,
+                observation_id=observation_id,
                 target_type="theme",
                 target=h["target"],
                 direction=int(h["direction"]),

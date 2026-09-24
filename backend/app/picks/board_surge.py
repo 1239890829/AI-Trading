@@ -331,6 +331,8 @@ def match_news_events(
             .join(EventDirection, EventDirection.event_id == EventCard.id)
             .where(
                 EventCard.published_at >= since,
+                EventCard.status == "active",
+                EventCard.revision_pending_at.is_(None),
                 EventDirection.direction != 0,
                 EventDirection.target_type == "theme",
             )
