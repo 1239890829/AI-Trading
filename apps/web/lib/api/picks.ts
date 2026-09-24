@@ -346,6 +346,14 @@ export interface BriefDirection {
   score: number;
   basis: string;
   logic: string;
+  // 盘前生成时的事件解释版本；旧简报可能没有此字段。
+  event_refs?: {
+    event_id: number;
+    version_id: number | null;
+    observation_id?: number | null;
+    available_at?: string | null;
+    state: string;
+  }[];
   defensive: boolean;
   stage: string | null;
   entry_mode: string;
