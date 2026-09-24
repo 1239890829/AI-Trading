@@ -533,6 +533,43 @@ def test_active_events_fetched_once_per_pipeline(deps, store, monkeypatch):
     )
 
 
+def test_event_read_failure_is_not_persisted_as_no_events(deps, store, monkeypatch):
+    """事件源失败应在持久化结果中保留 unknown，不能写成已核实的无事件。"""
+    monkeypatch.setattr(pl, "evaluate_stand_aside", _benign_gate)
+
+    def fail_events(**_kwargs):
+        raise RuntimeError("event store unavailable")
+
+    monkeypatch.setattr(store, "list_events", fail_events)
+    data = _run(deps, _Hub())["data"]
+
+    assert data["items"]
+    assert data["meta"]["event_evidence"] == {"state": "unavailable", "active_count": None}
+    for card in data["items"]:
+        assert card["sub_scores"]["news"] == 50.0
+        assert "事件读取失败" in card["bases"]["news"]
+        assert "无活跃事件" not in card["bases"]["news"]
+
+    with pl._db() as db:
+        from sqlalchemy import select
+
+        row = db.execute(select(DailyPickSet)).scalar_one()
+    assert json.loads(row.meta)["event_evidence"] == data["meta"]["event_evidence"]
+    assert "事件读取失败" in json.loads(row.items)[0]["bases"]["news"]
+
+
+def test_empty_event_read_remains_verified_empty(deps, store, monkeypatch):
+    """查询成功的空集仍是已核实的无事件，不能误标为读取失败。"""
+    monkeypatch.setattr(pl, "evaluate_stand_aside", _benign_gate)
+    monkeypatch.setattr(store, "list_events", lambda **_kwargs: [])
+
+    data = _run(deps, _Hub())["data"]
+
+    assert data["items"]
+    assert data["meta"]["event_evidence"] == {"state": "available", "active_count": 0}
+    assert "无活跃事件命中" in data["items"][0]["bases"]["news"]
+
+
 def test_theme_benchmark_is_pure_and_prefers_strongest_theme():
     """`_theme_benchmark` 抽成纯函数的直测：题材归属由参数传入，且取**最强**题材。
 
