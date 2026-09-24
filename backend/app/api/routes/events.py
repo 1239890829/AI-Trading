@@ -8,6 +8,7 @@
 - GET  /api/events/symbol/{symbol}           个股相关活跃事件（详情页事件标签）
 - POST /api/events                           手动注册单条事件（写鉴权）
 - POST /api/events/{id}/review-revision      精确观察版本的人工修订复核
+- POST /api/events/{id}/link-withdrawal      人工确认新来源 ID 撤回旧观察
 
 已删（2026-09-08 审查 P0-4，零消费方）：/events/extract、/events/collect（调度器直调
 collect_news_events 函数）、旧版 /events/{id}/review。
@@ -144,6 +145,19 @@ def _serialize_interpretation(version) -> dict:
     }
 
 
+def _serialize_withdrawal_link(link, notice) -> dict:
+    return {
+        "id": link.id, "target_observation_id": link.target_observation_id,
+        "notice_observation_id": notice.id, "notice_event_id": notice.event_id,
+        "notice_source": notice.source, "notice_source_item_id": notice.source_item_id,
+        "notice_title": notice.title, "notice_url": notice.url,
+        "notice_available_at": notice.available_at.isoformat(sep=" "),
+        "prior_interpretation_id": link.prior_interpretation_id,
+        "withdrawn_interpretation_id": link.withdrawn_interpretation_id,
+        "note": link.note, "linked_at": link.linked_at.isoformat(sep=" "),
+    }
+
+
 class ReviewedDirectionIn(BaseModel):
     target_type: Literal["theme", "symbol", "macro"]
     target: str = Field(min_length=1, max_length=64)
@@ -168,6 +182,13 @@ class RevisionReviewIn(BaseModel):
     action: Literal["adopt", "retain", "withdraw"]
     note: str = Field(min_length=1, max_length=2048)
     interpretation: ReviewedInterpretationIn | None = None
+
+
+class WithdrawalLinkIn(BaseModel):
+    target_observation_id: int = Field(gt=0)
+    notice_observation_id: int = Field(gt=0)
+    expected_interpretation_id: int = Field(gt=0)
+    note: str = Field(min_length=1, max_length=2048)
 
 
 @router.get("/events")
@@ -362,8 +383,11 @@ async def get_event(event_id: int, store: EventStore = Depends(get_store)) -> di
     ]
     versions = [_serialize_interpretation(v) for v in store.interpretations_of(event_id)]
     review_target = store.pending_observation_of(event_id)
+    links = [_serialize_withdrawal_link(link, notice)
+             for link, notice in store.withdrawal_links_of(event_id)]
     return {"data": {**_serialize(row, store.directions_of(event_id)),
                      "observations": observations, "interpretations": versions,
+                     "withdrawal_links": links,
                      "pending_review_observation_id": review_target.id if review_target else None}, "meta": {}}
 
 
@@ -395,6 +419,24 @@ async def review_event_revision(event_id: int, body: RevisionReviewIn,
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"data": _serialize_interpretation(version), "meta": {}}
+
+
+@router.post("/events/{event_id}/link-withdrawal", dependencies=[Depends(require_write_token)])
+async def link_event_withdrawal(event_id: int, body: WithdrawalLinkIn,
+                                store: EventStore = Depends(get_store)) -> dict:
+    try:
+        link, notice = await asyncio.to_thread(
+            store.link_withdrawal, event_id,
+            target_observation_id=body.target_observation_id,
+            notice_observation_id=body.notice_observation_id,
+            expected_interpretation_id=body.expected_interpretation_id,
+            note=body.note,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"data": _serialize_withdrawal_link(link, notice), "meta": {}}
 
 
 @router.get("/events/{event_id}/stocks")

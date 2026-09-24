@@ -301,6 +301,117 @@ def test_review_can_retain_or_withdraw_without_rewriting_prior_version(tmp_path)
     assert store.interpretation_at(row.id, result.effective_at).state == "withdrawn"
 
 
+def test_new_source_id_requires_explicit_withdrawal_link_and_preserves_history(tmp_path):
+    store = _isolated_store(tmp_path)
+    original = build_event("某公司订单已签署", source="东财快讯", summary="订单已签署")
+    original["source_item_id"] = "old-1"
+    old, _ = store.add_event(original)
+    prior = store.interpretations_of(old.id)[-1]
+    target = store.observations_of(old.id)[-1]
+
+    notice = build_event("更正：某公司订单并未签署", source="东财快讯", summary="原消息撤回")
+    notice["source_item_id"] = "new-2"
+    new, _ = store.add_event(notice)
+    evidence = store.observations_of(new.id)[-1]
+    assert old.id != new.id and store.is_active(store.get_event(old.id))
+    assert store.withdrawal_links_of(old.id) == [], "新 ID 本身没有稳定上游关联"
+
+    kwargs = dict(target_observation_id=target.id, notice_observation_id=evidence.id,
+                  expected_interpretation_id=prior.id, note="人工核对新旧来源原文：新 ID 明确撤回旧消息")
+    link, linked_notice = store.link_withdrawal(old.id, **kwargs)
+    versions = store.interpretations_of(old.id)
+    assert len(versions) == 2 and versions[-1].state == "withdrawn"
+    assert link.prior_interpretation_id == prior.id
+    assert link.withdrawn_interpretation_id == versions[-1].id
+    assert linked_notice.id == evidence.id
+    assert store.interpretation_at(old.id, prior.effective_at).state == "active"
+    assert not store.is_active(store.get_event(old.id))
+    assert store.get_event(new.id).status == "active", "通知本身保留独立来源身份"
+    assert store.withdrawal_links_of(old.id)[0][1].source_item_id == "new-2"
+    assert store.link_withdrawal(old.id, **kwargs)[0].id == link.id
+    assert len(store.interpretations_of(old.id)) == 2, "超时重试不得重复撤回版本"
+
+
+def test_withdrawal_link_rejects_wrong_source_stale_version_and_pending_revision(tmp_path):
+    store = _isolated_store(tmp_path)
+    old_data = build_event("某公司订单已签署", source="东财快讯", summary="订单已签署")
+    old_data["source_item_id"] = "old-1"
+    old, _ = store.add_event(old_data)
+    target = store.observations_of(old.id)[-1]
+    prior = store.interpretations_of(old.id)[-1]
+
+    foreign_data = build_event("更正：订单并未签署", source="财联社", summary="来源撤回")
+    foreign_data["source_item_id"] = "new-2"
+    foreign, _ = store.add_event(foreign_data)
+    foreign_obs = store.observations_of(foreign.id)[-1]
+    args = dict(target_observation_id=target.id, notice_observation_id=foreign_obs.id,
+                expected_interpretation_id=prior.id, note="人工核对")
+    with pytest.raises(ValueError, match="同来源"):
+        store.link_withdrawal(old.id, **args)
+    assert store.get_event(old.id).status == "active"
+
+    notice_data = build_event("更正：某公司订单并未签署", source="东财快讯", summary="原消息撤回")
+    notice_data["source_item_id"] = "new-3"
+    notice, _ = store.add_event(notice_data)
+    args["notice_observation_id"] = store.observations_of(notice.id)[-1].id
+    with pytest.raises(ValueError, match="已变化"):
+        store.link_withdrawal(old.id, **{**args, "expected_interpretation_id": prior.id + 999})
+    changed = build_event(old_data["title"], source="东财快讯", summary="原文又有修订")
+    changed["source_item_id"] = "old-1"
+    store.add_event(changed)
+    with pytest.raises(ValueError, match="待复核"):
+        store.link_withdrawal(old.id, **args)
+    assert store.withdrawal_links_of(old.id) == []
+    assert store.get_event(old.id).status == "active"
+
+
+def test_withdrawal_link_api_exposes_exact_notice_and_rejects_conflicting_retry(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.routes import events as events_route
+    from app.core.config import settings
+
+    store = _isolated_store(tmp_path)
+    old_data = build_event("某公司订单已签署", source="东财快讯")
+    old_data["source_item_id"] = "api-old"
+    old, _ = store.add_event(old_data)
+    notice_data = build_event("更正：某公司订单未签署", source="东财快讯")
+    notice_data.update(source_item_id="api-new", url="https://example.test/notice")
+    notice, _ = store.add_event(notice_data)
+    target = store.observations_of(old.id)[-1]
+    evidence = store.observations_of(notice.id)[-1]
+    prior = store.interpretations_of(old.id)[-1]
+    body = {
+        "target_observation_id": target.id,
+        "notice_observation_id": evidence.id,
+        "expected_interpretation_id": prior.id,
+        "note": "人工核对两条来源原文，确认新 ID 撤回旧消息",
+    }
+    app = FastAPI()
+    app.include_router(events_route.router, prefix="/api")
+    app.dependency_overrides[events_route.get_store] = lambda: store
+    monkeypatch.setattr(settings, "api_token", "withdrawal-test-token")
+    with TestClient(app) as api:
+        path = f"/api/events/{old.id}/link-withdrawal"
+        assert api.post(path, json=body).status_code == 401
+        assert store.get_event(old.id).status == "active"
+        headers = {"X-API-Token": "withdrawal-test-token"}
+        result = api.post(path, json=body, headers=headers)
+        assert result.status_code == 200, result.text
+        link = result.json()["data"]
+        assert link["notice_event_id"] == notice.id
+        assert link["notice_source_item_id"] == "api-new"
+        assert link["notice_url"] == "https://example.test/notice"
+        detail = api.get(f"/api/events/{old.id}").json()["data"]
+        assert detail["withdrawal_links"] == [link]
+        assert detail["interpretations"][-1]["state"] == "withdrawn"
+        assert api.post(path, json=body, headers=headers).json()["data"]["id"] == link["id"]
+        conflict = api.post(path, json={**body, "note": "另一段依据"}, headers=headers)
+        assert conflict.status_code == 409
+        assert len(store.interpretations_of(old.id)) == 2
+
+
 def test_later_corroboration_does_not_displace_pending_review_target(tmp_path):
     store = _isolated_store(tmp_path)
     first = build_event("某公司公告订单已签署", source="东财快讯", summary="订单已签署")

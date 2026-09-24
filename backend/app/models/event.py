@@ -110,6 +110,28 @@ class EventObservation(Base):
     event: Mapped[EventCard] = relationship("EventCard", back_populates="observations")
 
 
+class EventWithdrawalLink(Base):
+    """Human-confirmed relation from a new source ID to the old claim it withdraws."""
+
+    __tablename__ = "event_withdrawal_link"
+    __table_args__ = (
+        UniqueConstraint("target_observation_id", "notice_observation_id",
+                         name="uq_event_withdrawal_observations"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    target_observation_id: Mapped[int] = mapped_column(ForeignKey("event_observation.id"), index=True)
+    notice_observation_id: Mapped[int] = mapped_column(ForeignKey("event_observation.id"), index=True)
+    prior_interpretation_id: Mapped[int] = mapped_column(
+        ForeignKey("event_interpretation.id"), unique=True
+    )
+    withdrawn_interpretation_id: Mapped[int] = mapped_column(
+        ForeignKey("event_interpretation.id"), unique=True
+    )
+    note: Mapped[str] = mapped_column(Text)
+    linked_at: Mapped[datetime] = mapped_column(DateTime)
+
+
 class EventDirection(Base):
     """事件 → 题材/个股 的方向映射行（architecture-design §1 direction_map）。
 
