@@ -224,6 +224,144 @@ def test_source_revision_keeps_original_interpretation_and_pauses_consumers(tmp_
     assert len(store.observations_of(row.id)) == 2, "重拉相同修订应幂等"
 
 
+def test_reviewed_revision_replays_exact_visible_versions(tmp_path):
+    import json
+    from datetime import timedelta
+
+    store = _isolated_store(tmp_path)
+    original = build_event("液冷服务器订单落地", source="东财快讯", summary="订单已签署",
+                           theme_names=["液冷服务器"])
+    original["source_item_id"] = "revision-1"
+    row, _ = store.add_event(original)
+    first = store.interpretations_of(row.id)[0]
+    assert first.state == "active"
+    assert store.interpretation_at(row.id, first.effective_at - timedelta(microseconds=1)) is None
+
+    correction = build_event("液冷服务器订单尚未落地", source="东财快讯", summary="合同尚未签署",
+                             theme_names=["液冷服务器"])
+    correction["source_item_id"] = "revision-1"
+    store.add_event(correction)
+    pending = store.interpretations_of(row.id)[1]
+    assert pending.state == "pending"
+    assert json.loads(pending.payload_json)["directions"] == []
+    assert store.interpretation_at(row.id, pending.effective_at).id == pending.id
+    assert store.interpretation_at(row.id, first.effective_at).id == first.id
+
+    latest = store.observations_of(row.id)[-1]
+    with pytest.raises(ValueError, match="观察版本已变化"):
+        store.review_revision(row.id, expected_observation_id=latest.id - 1,
+                              action="retain", note="错误版本")
+    reviewed = store.review_revision(
+        row.id, expected_observation_id=latest.id, action="adopt", note="核对原文与合同公告",
+        interpretation={
+            "source_tier": 3, "category": "corporate", "fact_kind": "fact",
+            "certainty": "done", "half_life_hours": 48,
+            "directions": [{"target_type": "theme", "target": "液冷服务器", "direction": -1,
+                            "strength": 1, "chain": "未签合同，原订单催化失效", "basis": "人工核对更正",
+                            "matched_by": "manual"}],
+        },
+    )
+    assert reviewed.state == "active"
+    assert json.loads(reviewed.payload_json)["directions"][0]["direction"] == -1
+    assert json.loads(first.payload_json)["directions"][0]["direction"] == 1
+    assert store.interpretation_at(row.id, pending.effective_at).state == "pending"
+    assert store.get_event(row.id).revision_pending_at is None
+    assert store.get_event(row.id).summary == "合同尚未签署"
+    assert store.directions_of(row.id)[0].observation_id == latest.id
+    assert next(r for r in store.list_events(active_only=True) if r.id == row.id).interpretation_ref["version_id"] == reviewed.id
+    with pytest.raises(ValueError, match="无需复核"):
+        store.review_revision(row.id, expected_observation_id=latest.id,
+                              action="retain", note="重复提交")
+
+
+def test_review_can_retain_or_withdraw_without_rewriting_prior_version(tmp_path):
+    store = _isolated_store(tmp_path)
+    event = build_event("某公司公告订单已签署", source="东财快讯", summary="订单已签署")
+    event["source_item_id"] = "review-2"
+    row, _ = store.add_event(event)
+    original = store.interpretations_of(row.id)[0]
+    changed = build_event(event["title"], source="东财快讯", summary="合同原文补充说明")
+    changed["source_item_id"] = "review-2"
+    store.add_event(changed)
+    obs = store.observations_of(row.id)[-1]
+    retained = store.review_revision(row.id, expected_observation_id=obs.id,
+                                     action="retain", note="原判断仍成立")
+    assert retained.state == "active" and retained.review_note == "原判断仍成立"
+    assert store.get_event(row.id).summary == "订单已签署"
+    assert store.interpretations_of(row.id)[0].payload_json == original.payload_json
+
+    withdrawn = build_event(event["title"], source="东财快讯", summary="来源撤回订单消息")
+    withdrawn["source_item_id"] = "review-2"
+    store.add_event(withdrawn)
+    obs = store.observations_of(row.id)[-1]
+    result = store.review_revision(row.id, expected_observation_id=obs.id,
+                                   action="withdraw", note="来源原文已撤回")
+    assert result.state == "withdrawn"
+    assert not store.is_active(store.get_event(row.id))
+    assert store.interpretation_at(row.id, result.effective_at).state == "withdrawn"
+
+
+def test_later_corroboration_does_not_displace_pending_review_target(tmp_path):
+    store = _isolated_store(tmp_path)
+    first = build_event("某公司公告订单已签署", source="东财快讯", summary="订单已签署")
+    first["source_item_id"] = "late-1"
+    row, _ = store.add_event(first)
+    correction = build_event(first["title"], source="东财快讯", summary="订单尚未签署")
+    correction["source_item_id"] = "late-1"
+    store.add_event(correction)
+    correction_id = store.observations_of(row.id)[-1].id
+    corroboration = build_event(first["title"], source="财联社", summary="订单已签署")
+    corroboration["source_item_id"] = "late-2"
+    store.add_event(corroboration)
+    assert store.observations_of(row.id)[-1].change_kind == "corroboration"
+    assert store.pending_observation_of(row.id).id == correction_id
+    version = store.review_revision(row.id, expected_observation_id=correction_id,
+                                    action="withdraw", note="更正经原来源核对成立")
+    assert version.observation_id == correction_id and version.state == "withdrawn"
+
+
+def test_backfill_and_status_changes_keep_point_in_time_history(tmp_path):
+    import json
+
+    store = _isolated_store(tmp_path)
+    row, _ = store.add_event(build_event("某板块午后异动", source="东财快讯"))
+    initial = store.interpretations_of(row.id)[0]
+    assert json.loads(initial.payload_json)["category"] == "other"
+    store.backfill_event(row.id, category="corporate", half_life_hours=36)
+    updated = store.interpretations_of(row.id)[-1]
+    assert json.loads(updated.payload_json)["category"] == "corporate"
+    assert json.loads(initial.payload_json)["category"] == "other"
+    store.set_status(row.id, "resolved")
+    withdrawn = store.interpretations_of(row.id)[-1]
+    assert withdrawn.state == "withdrawn"
+    assert store.interpretation_at(row.id, withdrawn.effective_at).state == "withdrawn"
+
+
+def test_active_event_hit_carries_the_visible_interpretation_id(tmp_path):
+    from app.services.picks_pipeline import _build_event_hits_index
+
+    store = _isolated_store(tmp_path)
+    event = build_event("某公司订单落地", source="东财快讯", source_symbol="600001")
+    event.update(source_item_id="hit-1", source_symbols=["600001"])
+    row, _ = store.add_event(event)
+    version = store.interpretations_of(row.id)[0]
+    hit = _build_event_hits_index(store.list_events(active_only=True))["600001"]
+    assert hit[5][0]["event_id"] == row.id
+    assert hit[5][0]["version_id"] == version.id
+    assert hit[5][0]["observation_id"] == version.observation_id
+    second = build_event("某公司获得新订单", source="财联社", source_symbol="600001")
+    second.update(source_item_id="hit-2", source_symbols=["600001"])
+    row2, _ = store.add_event(second)
+    all_hits = _build_event_hits_index(store.list_events(active_only=True))["600001"]
+    assert {ref["event_id"] for ref in all_hits[5]} == {row.id, row2.id}, "所有计分事件都须留下版本引用"
+    changed = build_event(event["title"], source="东财快讯", summary="订单内容更正",
+                          source_symbol="600001")
+    changed.update(source_item_id="hit-1", source_symbols=["600001"])
+    store.add_event(changed)
+    remaining = _build_event_hits_index(store.list_events(active_only=True))["600001"]
+    assert {ref["event_id"] for ref in remaining[5]} == {row2.id}
+
+
 def test_same_source_id_changed_title_and_late_publication_stay_linked(tmp_path):
     from datetime import datetime
 
@@ -366,11 +504,13 @@ def test_revision_detail_is_visible_while_opportunity_pool_is_paused(tmp_path):
     from fastapi.testclient import TestClient
 
     from app.api.routes import events as events_route
+    from app.api.deps import require_write_token
 
     store = _isolated_store(tmp_path)
     app = FastAPI()
     app.include_router(events_route.router, prefix="/api")
     app.dependency_overrides[events_route.get_store] = lambda: store
+    app.dependency_overrides[require_write_token] = lambda: None
     original = build_event("某云厂商液冷机柜订单落地", source="东财快讯", summary="订单已签署",
                            source_symbol="301468")
     original.update(source_item_id="detail-1", source_symbols=["301468"])
@@ -386,9 +526,26 @@ def test_revision_detail_is_visible_while_opportunity_pool_is_paused(tmp_path):
         assert detail["judge_status"] == "unknown"
         assert [o["summary"] for o in detail["observations"]] == ["订单已签署", "订单尚未签署"]
         assert detail["observations"][1]["source_symbols"] == ["301468", "688496"]
+        assert detail["pending_review_observation_id"] == detail["observations"][-1]["id"]
+        assert [v["state"] for v in detail["interpretations"]] == ["active", "pending"]
+        pending_at = detail["interpretations"][-1]["effective_at"]
+        replay = api.get(f"/api/events/{row.id}/interpretation", params={"as_of": pending_at})
+        assert replay.status_code == 200 and replay.json()["data"]["state"] == "pending"
         pool = api.get(f"/api/events/{row.id}/stocks").json()
         assert pool["data"]["pools"] == []
         assert "未复核" in pool["meta"]["note"]
+        review = api.post(f"/api/events/{row.id}/review-revision", json={
+            "expected_observation_id": detail["observations"][-1]["id"],
+            "action": "retain", "note": "核对后原结论仍成立",
+        })
+        assert review.status_code == 200 and review.json()["data"]["state"] == "active"
+        replay = api.get(f"/api/events/{row.id}/interpretation", params={"as_of": pending_at})
+        assert replay.json()["data"]["state"] == "pending", "复核不能改写过去的待审窗口"
+        repeated = api.post(f"/api/events/{row.id}/review-revision", json={
+            "expected_observation_id": detail["observations"][-1]["id"],
+            "action": "retain", "note": "重复",
+        })
+        assert repeated.status_code == 409
 
 
 def test_events_for_symbol_api(client, monkeypatch: pytest.MonkeyPatch):

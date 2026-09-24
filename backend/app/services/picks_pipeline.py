@@ -571,10 +571,10 @@ def parse_pick_meta(raw: str | None) -> dict:
 
 def _build_event_hits_index(
     rows: list,
-) -> dict[str, tuple[float, float, str | None, str | None, int]]:
+) -> dict[str, tuple[float, float, str | None, str | None, int, list[dict]]]:
     """一次遍历活跃事件 → 按 symbol 索引消息命中（评审 B1）。
 
-    返回 {symbol: (利好强度和, 利空强度和, 主事件标题, 主方向文案, 关联数)}。
+    返回 {symbol: (利好强度和, 利空强度和, 主事件标题, 主方向文案, 关联数, 全部解释版本引用)}。
     强度和已乘 `event_weight(source_tier, certainty)`（选股 2.0 §3）：
     tier1 官方落地政策 ≈ 25 条 tier5 自媒体传闻的权重，消息面不再被
     同质化的条数淹没。list_events 已 selectinload 预加载方向行（detached
@@ -597,9 +597,14 @@ def _build_event_hits_index(
                     continue  # 题材方向的个股传导第一版不计入单股消息分（防过度外推）
                 agg = index.setdefault(
                     d.target,
-                    {"bull": 0, "bear": 0, "linked": 0, "top_title": None, "top_dir": None, "pending_title": None},
+                    {"bull": 0, "bear": 0, "linked": 0, "top_title": None, "top_dir": None,
+                     "pending_title": None, "refs": [], "ref_ids": set()},
                 )
                 agg["linked"] += 1
+                if row.id not in agg["ref_ids"]:
+                    agg["ref_ids"].add(row.id)
+                    agg["refs"].append(getattr(row, "interpretation_ref", None) or {
+                        "event_id": row.id, "version_id": None, "state": "unknown"})
                 if d.direction == 1:
                     agg["bull"] += d.strength * w
                 elif d.direction == -1:
@@ -612,10 +617,11 @@ def _build_event_hits_index(
     except Exception as exc:
         log.warning("picks event index failed: %s", exc)
         return {}
-    out: dict[str, tuple[int, int, str | None, str | None, int]] = {}
+    out: dict[str, tuple[float, float, str | None, str | None, int, list[dict]]] = {}
     for sym, agg in index.items():
         # 无方向词时给出关联标题（证据可见）
-        out[sym] = (agg["bull"], agg["bear"], agg["top_title"] or agg["pending_title"], agg["top_dir"], agg["linked"])
+        out[sym] = (agg["bull"], agg["bear"], agg["top_title"] or agg["pending_title"],
+                    agg["top_dir"], agg["linked"], agg["refs"])
     return out
 
 
@@ -653,7 +659,7 @@ async def deep_score_candidates(
     market_phase: str | None,
     quotes: dict,
     weights: dict,
-    event_hits_index: dict[str, tuple[float, float, str | None, str | None, int]],
+    event_hits_index: dict[str, tuple],
     concurrency: int,
     promo_percentile: float | None = None,
     index_bars: dict[str, list[dict]] | None = None,
@@ -732,7 +738,9 @@ async def deep_score_candidates(
             ma10 = _ma_value(dicts, 10)
             sub["tech"], bases["tech"] = s_tech, b_tech
             # 消息（B1：查预构建索引，O(1)——不再逐候选扫事件表）
-            bull, bear, top_title, top_dir, linked = event_hits_index.get(sym, (0, 0, None, None, 0))
+            event_hit = event_hits_index.get(sym, (0, 0, None, None, 0))
+            bull, bear, top_title, top_dir, linked = event_hit[:5]
+            event_refs = event_hit[5] if len(event_hit) > 5 else []
             sub["news"], bases["news"] = score_news(bull, bear, top_title, top_dir)
             if bull == bear == 0 and linked:
                 # 有关联但无方向词：诚实说"命中了但待判"，而不是"无命中"
@@ -884,6 +892,7 @@ async def deep_score_candidates(
                 "pb": getattr(q_snap, "pb", None) if q_snap is not None else None,
                 "score": score, "sub_scores": sub, "bases": bases, "vetoes": vetoes,
                 "related_events": [top_title] if top_title else [],
+                "related_event_refs": event_refs,
                 "echelon_role": role,
                 "echelon_basis": bases["echelon"],
                 "theme": theme_name,
@@ -942,6 +951,7 @@ def assemble_card(k: dict) -> dict:
         ),
         "themes": [k["theme"]] if k.get("theme") else [],
         "related_events": k["related_events"],
+        "related_event_refs": k.get("related_event_refs") or [],
         # 停牌核查 / 异动风险（第一批：R1/R2 红线 + Y1/Y2/Y3 黄线 + P1/P2 仓位约束）
         "halt_risk": k.get("halt_risk"),
         "halt_risk_labels": k.get("halt_risk_labels") or [],

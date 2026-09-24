@@ -12,15 +12,51 @@ import json
 import logging
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.db import get_session_factory
 from app.events.extract import build_event, dedupe_directions
-from app.models.event import EventCard, EventDirection, EventObservation
+from app.models.event import EventCard, EventDirection, EventObservation, EventInterpretation
 from app.core.bjtime import beijing_now_naive
 
 log = logging.getLogger(__name__)
+
+
+def record_interpretation(db, row: EventCard, observation_id: int, *,
+                          state: str, effective_at: datetime, note: str | None = None) -> EventInterpretation:
+    """Append the state consumers could see from this time; never rewrite prior evidence."""
+    directions = [] if state != "active" else [
+        {"target_type": d.target_type, "target": d.target, "direction": d.direction,
+         "strength": d.strength, "chain": d.chain, "basis": d.basis,
+         "matched_by": d.matched_by, "observation_id": d.observation_id}
+        for d in sorted(row.directions, key=lambda item: (item.target_type, item.target))
+    ]
+    payload = {
+        "title": row.title, "summary": row.summary, "url": row.url, "source": row.source,
+        "source_tier": row.source_tier, "published_at": row.published_at.isoformat() if row.published_at else None,
+        "fact_kind": row.fact_kind, "certainty": row.certainty, "category": row.category,
+        "half_life_hours": row.half_life_hours, "source_symbol": row.source_symbol,
+        "directions": directions,
+    }
+    version = EventInterpretation(
+        event_id=row.id, observation_id=observation_id, effective_at=effective_at,
+        state=state, payload_json=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+        review_note=note,
+    )
+    db.add(version)
+    db.flush()
+    return version
+
+
+def _latest_pending_observation(db, row: EventCard) -> EventObservation | None:
+    if row.revision_pending_at is None:
+        return None
+    return db.execute(select(EventObservation).where(
+        EventObservation.event_id == row.id,
+        EventObservation.change_kind.in_(("revision", "variant")),
+        EventObservation.received_at >= row.revision_pending_at,
+    ).order_by(EventObservation.id.desc()).limit(1)).scalar_one_or_none()
 
 
 class EventStore:
@@ -148,6 +184,11 @@ class EventStore:
                                 chain=d.get("chain", ""), basis=d.get("basis", ""),
                                 matched_by=d.get("matched_by", "name"),
                             ))
+                    if created or changed:
+                        db.flush()
+                        record_interpretation(db, row, observation.id,
+                                              state="active" if created else "pending",
+                                              effective_at=received)
                     db.commit()
                     db.refresh(row)
                     return row, created
@@ -169,10 +210,72 @@ class EventStore:
             row = db.get(EventCard, event_id)
             if row is None:
                 return None
+            changed = row.status != status
             row.status = status
+            if changed:
+                latest = db.execute(select(EventObservation.id).where(
+                    EventObservation.event_id == event_id
+                ).order_by(EventObservation.id.desc()).limit(1)).scalar_one_or_none()
+                if latest is not None:
+                    record_interpretation(db, row, latest,
+                                          state="pending" if row.revision_pending_at else
+                                                "active" if status == "active" else "withdrawn",
+                                          effective_at=beijing_now_naive(), note=f"状态裁决：{status}")
             db.commit()
             db.refresh(row)
             return row
+
+    def review_revision(self, event_id: int, *, expected_observation_id: int,
+                        action: str, note: str, interpretation: dict | None = None) -> EventInterpretation:
+        """Resolve a pending revision against the latest exact observation under one transaction."""
+        if action not in {"adopt", "retain", "withdraw"}:
+            raise ValueError("非法复核动作")
+        if not note.strip():
+            raise ValueError("复核依据不能为空")
+        with self._sf() as db:
+            row = db.get(EventCard, event_id)
+            if row is None:
+                raise LookupError("事件不存在")
+            # Corroboration can arrive after a correction. It must not displace the
+            # observation being reviewed or silently clear the pending correction.
+            latest = _latest_pending_observation(db, row)
+            if latest is None or latest.id != expected_observation_id:
+                raise ValueError("观察版本已变化或事件无需复核")
+            if action != "withdraw" and row.status != "active":
+                raise ValueError("非活跃事件不得恢复为可消费状态")
+            if action == "adopt":
+                if interpretation is None:
+                    raise ValueError("采纳修订需要完整人工解释")
+                dirs = interpretation["directions"]
+                keys = [(d["target_type"], d["target"]) for d in dirs]
+                if len(keys) != len(set(keys)):
+                    raise ValueError("方向目标重复")
+                row.title, row.summary, row.url = latest.title, latest.summary, latest.url
+                row.source, row.source_symbol = latest.source, (
+                    json.loads(latest.source_symbols_json)[0]
+                    if len(json.loads(latest.source_symbols_json)) == 1 else None
+                )
+                for field in ("source_tier", "category", "fact_kind", "certainty", "half_life_hours"):
+                    setattr(row, field, interpretation[field])
+                for direction in list(row.directions):
+                    db.delete(direction)
+                db.flush()
+                for d in dirs:
+                    db.add(EventDirection(event_id=event_id, observation_id=latest.id, **d))
+            elif interpretation is not None:
+                raise ValueError("保留或撤回无需新解释")
+            if action == "withdraw":
+                row.status = "rejected"
+            row.revision_pending_at = None
+            db.flush()
+            db.expire(row, ["directions"])
+            # The review may race a new observation; a write transaction serializes SQLite writers.
+            version = record_interpretation(
+                db, row, latest.id, state="withdrawn" if action == "withdraw" else "active",
+                effective_at=beijing_now_naive(), note=note.strip(),
+            )
+            db.commit()
+            return version
 
     # -- read ---------------------------------------------------------------
 
@@ -209,6 +312,29 @@ class EventStore:
             rows = db.execute(
                 stmt.order_by(EventCard.published_at.desc()).limit(limit * 3)
             ).scalars().all()
+            if rows:
+                latest_ids = select(
+                    EventInterpretation.event_id,
+                    func.max(EventInterpretation.id).label("version_id"),
+                ).where(EventInterpretation.event_id.in_([r.id for r in rows])).group_by(
+                    EventInterpretation.event_id
+                ).subquery()
+                versions = {
+                    v.event_id: v for v in db.execute(
+                        select(EventInterpretation).join(
+                            latest_ids, EventInterpretation.id == latest_ids.c.version_id
+                        )
+                    ).scalars()
+                }
+                for row in rows:
+                    version = versions.get(row.id)
+                    row.interpretation_ref = {
+                        "event_id": row.id,
+                        "version_id": version.id if version else None,
+                        "observation_id": version.observation_id if version else None,
+                        "available_at": version.effective_at.isoformat(sep=" ") if version else None,
+                        "state": version.state if version else "unknown",
+                    }
         out = [r for r in rows if self.is_active(r)] if active_only else list(rows)
         return out[:limit]
 
@@ -235,11 +361,20 @@ class EventStore:
             has_dirs = db.execute(
                 select(EventDirection).where(EventDirection.event_id == event_id)
             ).scalars().first() is not None
+            metadata_changed = False
             if category and (row.category or "other") == "other" and category != "other":
                 row.category = category
+                metadata_changed = True
                 if half_life_hours:
                     row.half_life_hours = half_life_hours
             if has_dirs or not directions:
+                if metadata_changed:
+                    basis = db.execute(select(EventObservation.id).where(
+                        EventObservation.event_id == event_id
+                    ).order_by(EventObservation.id).limit(1)).scalar_one_or_none()
+                    if basis is not None:
+                        record_interpretation(db, row, basis, state="active",
+                                              effective_at=beijing_now_naive(), note="事件类别补全")
                 db.commit()
                 return 0
             basis = db.execute(select(EventObservation.id).where(
@@ -257,6 +392,11 @@ class EventStore:
                     basis=d.get("basis") or "",
                     matched_by=d.get("matched_by") or "",
                 ))
+            if basis is not None:
+                db.flush()
+                db.expire(row, ["directions"])
+                record_interpretation(db, row, basis, state="active",
+                                      effective_at=beijing_now_naive(), note="方向补全")
             db.commit()
             return len(directions)
 
@@ -273,3 +413,23 @@ class EventStore:
             return list(db.execute(select(EventObservation).where(
                 EventObservation.event_id == event_id
             ).order_by(EventObservation.id)).scalars())
+
+    def interpretations_of(self, event_id: int) -> list[EventInterpretation]:
+        with self._sf() as db:
+            return list(db.execute(select(EventInterpretation).where(
+                EventInterpretation.event_id == event_id
+            ).order_by(EventInterpretation.id)).scalars())
+
+    def pending_observation_of(self, event_id: int) -> EventObservation | None:
+        with self._sf() as db:
+            row = db.get(EventCard, event_id)
+            return _latest_pending_observation(db, row) if row else None
+
+    def interpretation_at(self, event_id: int, as_of: datetime) -> EventInterpretation | None:
+        """Only return a version recorded by as_of; legacy unversioned rows stay unknown."""
+        with self._sf() as db:
+            return db.execute(select(EventInterpretation).where(
+                EventInterpretation.event_id == event_id,
+                EventInterpretation.effective_at <= as_of,
+            ).order_by(EventInterpretation.effective_at.desc(),
+                       EventInterpretation.id.desc()).limit(1)).scalar_one_or_none()

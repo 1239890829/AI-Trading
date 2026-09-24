@@ -56,6 +56,20 @@ class EventCard(Base):
     )
 
 
+class EventInterpretation(Base):
+    """Immutable decision-visible event state. Legacy cards have no invented history."""
+
+    __tablename__ = "event_interpretation"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("event_card.id"), index=True)
+    observation_id: Mapped[int] = mapped_column(ForeignKey("event_observation.id"))
+    effective_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    state: Mapped[str] = mapped_column(String(16))  # active | pending | withdrawn
+    payload_json: Mapped[str] = mapped_column(Text)
+    review_note: Mapped[str | None] = mapped_column(Text)
+
+
 class EventObservation(Base):
     """来源原始观察。重复轮询幂等，原文修订追加，时间均为北京时间 naive。"""
 

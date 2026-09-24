@@ -484,6 +484,9 @@ def build_notification_records(
             "observation_only": bool(item.get("observation_only")),
             "buy_range": item.get("buy_range"),
             "change_pct": (hit or {}).get("chg"),
+            # Daily picks bind the event interpretation visible when they were generated.
+            # Legacy cards carry explicit unknown rather than a reconstructed version.
+            "event_refs": item.get("related_event_refs") or [],
         }
         records.append({
             "run_id": run_id, "trade_date": trade_date, "as_of": as_of,

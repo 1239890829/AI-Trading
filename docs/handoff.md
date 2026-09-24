@@ -3,13 +3,13 @@
 
 > **2026-09-21 多窗口审计及晚间收口**：详见 `docs/review/chatgpt-multiwindow-audit-20260921.md`。审计指出的三类执行缺口已进一步收口：① BUG-020 的条件激活不再只靠记忆，`scripts/ledger-runtime-selection.py` 可在下一交易日 08:30–09:15 开工窗把静态 G4 临时抢回 G0，错过窗口/日历未知均 fail-closed；② 本机 AI-Trading 后端已受控停服、同步 `master@c272d260`、重启并通过 SQLite/health/30 scheduler/snapshot 验收；③ 前端误判已纠正——Next 15.5.25 进程属于另一个 `vide-trading` 仓库，AI-Trading 当时没有前端进程，自身 `npm ci` 后在 Node 22.22.2 下 695/695 tests 与 Next 16.3.3 build 全绿。Jev 真实 assistant 请求也已新增 `assistant_tool_router` receipt；RSH-030 human gold 仍必须独立人工完成。IMP-053 actual-fill 契约与唯一 `54b7e0c` RECOVERY 仍按各自 owner 保留。任务状态仍以 stage 为准，不以本段建立第二账本。
 
-> **定位 / 摘要（2026-09-24 当前）**：PR #114 已合并到 `master@e60b83ed0da5b5377d37d33422bbbf92bd3a035d`，post-merge CI `35942132972` 三项通过，原功能分支已删除。运行选择器返回 **G1/IMP-048**；用户已要求开始工作，并进一步明确临时免网页审核、由 Codex 自动推进，直到用户要求“改回来”。本轮仅领取 IMP-048，仍按原阶段门与发布门工作。
+> **定位 / 摘要（2026-09-24 当前）**：PR #114 和临时协作治理 PR #115 已合并；IMP-048 来源观察首片 PR #116 已合并到 `master@cb1860ff4c358a39b054e175c97f8e53609a3ef5`，合并后 CI `35947702375` 三项通过，分支已删除。运行选择器继续返回 **G1/IMP-048**，当前第二片为显式修订复核与解释版本。用户临时授权 Codex 免网页审核自动推进，直到要求“改回来”；阶段门、完整门禁与准确 HEAD 发布回执仍适用。
 
 **现行授权记录**：2026-09-24 用户在本 Codex 会话明确授权临时由 Codex 在 `DEGRADED_FULL_CONTROL` 下承担规划接续、实施、U49 作者反证、自审、PR/CI、发布、合并与清理，免网页 `Preflight` / 独立 `Review`，直到用户明确要求“改回来”或撤销。本授权不扩大业务、资金、模型、费用、部署或跨门权限；每个 PR 仍需准确 HEAD 的 `DegradedRelease`、完整本地门禁与 required CI、`release_check.py`、post-merge CI 和分支清理。作者回执必须标明非独立审核。具体临时规则见 [协作规范 §3.3a](collaboration-workflow.md#33a-2026-09-24-临时-codex-执行者授权)。
 
 **IMP-048 Codex 开工反证（作者 Preflight，非独立网页审核）**：基于 `master@e60b83e` 和隔离 SQLite 复现：同标题更正摘要入库后 `EventStore.add_event` 返回旧行，旧摘要与旧 `published_at` 不变；另一来源的同标题材料被标题指纹归并且来源/链接丢失；改标题的更正成为无关系的新 `EventCard`。这是已证实的来源身份与修订缺口。直接下游的事件详情、候选池和发酵验证读取旧行/方向，存在旧利好继续被当作当前依据的高风险；是否已有其他路径绑定旧事件版本尚未穷尽，列为待核。U49 已检查阶段门自锁、双事实源、顺序/部分失败、去重/unknown、权限/fail-open、动态旧状态、测试盲区与指针：当前 G1 首选无硬依赖，现有测试锁定标题去重但未覆盖更正、多源与回放；没有证据授权自动变更机会分数。首片先保存来源原文、接收与可见时点及修订关系，历史判断不倒填；真实通知、策略权重和 G4 Jev 晋级仍走各自原门。
 
-**IMP-048 当前开发现场（2026-09-24）**：`codex/imp048-event-lineage` 从 `master@de178894` 开工，新增来源观察追加与修订待复核暂停逻辑，阶段页状态为 `进行中`。首片全后端隔离负载测试 **4284 passed / 80 skipped / 0 failed**；事件、快讯、迁移及相关消费者定向回归、`pyflakes app tests scripts`、文档体检、工作区卫生和公开仓扫描通过。PR/CI 尚未完成，不能据此宣称 IMP-048 完成或代码已运行生效。`jev-review` 调用因本机未配置 `JEV_API_KEY` 返回错误，未取得评分，不能写成通过。未完成范围及继续条件以 [W03/IMP-048](stages/w03-execution.md#imp-048) 为准。
+**IMP-048 当前开发现场（2026-09-24）**：首片 `codex/imp048-event-lineage` 已经 PR #116 发布，准确 HEAD `d68615234ca8ef1e2f24a8635686d044d79c2572`、合并提交 `cb1860ff4c358a39b054e175c97f8e53609a3ef5`；本地全后端 **4284 passed / 80 skipped / 0 failed**，PR CI `35947195580`、合并后 CI `35947702375` 均三项成功。当前 `codex/imp048-revision-history` 从该 master 继续第二片，最终代码的定向事件/迁移/机会归档测试 **152 passed**、全后端 **4291 passed / 80 skipped / 0 failed**，PR/CI 发布尚未完成。`jev-review` 两片调用均因本机未配置 `JEV_API_KEY` 失败，没有评分；不得写成通过。IMP-048 仍为 `进行中`，未完成范围见 [W03/IMP-048](stages/w03-execution.md#imp-048)。
 
 
 
@@ -83,7 +83,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - Jev 只保留 bounded semantic verify、条件 capability routing、metadata-only usage 与研究/审核辅助；确定性金融规则、权限、撮合、风控和真实执行不得委托给 Jev。
 - BillionsBobby/JevRouter 只采用经过固定版本校验的内核与 privacy-safe wrapper；旧 `jev-route` 已退出活动链。OpenRouter 当前明确不接入，也不使用聊天中出现过的旧 Key。
 - Universal Verification 仍为 off/shadow；RSH-030 的 240 条固定队列已经 Jev 预标注，但 human gold 仍为 0/240。2026-09-21 晚间真实 `/api/assistant/chat` 已新增 `assistant_tool_router=1` 的 Jev usage receipt，证明 assistant shadow 消费者真实运行；未完成人工独立标注前仍不启用 cascade、不调生产阈值、不宣称准确率或额度节省。
-- 协作固定为“`master` 账本事实源 + 用户短提示”，但执行角色由模式决定：正常模式网页规划/独立审核、Codex执行；`DEGRADED_FULL_CONTROL` 网页全程操控。Bridge、自动互调均不是必需依赖。功能分支只作短期施工载体，合并确认后立即删除。
+- 协作固定为“`master` 账本事实源 + 用户短提示”，但执行角色由模式决定：正常模式网页规划/独立审核、Codex执行；当前用户临时授权 Codex 在 `DEGRADED_FULL_CONTROL` 下全权执行，准确 HEAD 用自审性质的 `DegradedRelease`，直至用户要求恢复。Bridge、自动互调均不是必需依赖。功能分支只作短期施工载体，合并确认后立即删除。
 - v9.4 引入 Jev 长期系统分层与 `plan-registry.md` §1.1 重大决策传播契约；后续版本继续继承该规则。新模型/工具链/架构/协作决定若只更新专题蓝图而漏总方案、INDEX、stage 或接手入口，视为治理缺陷。
 - v9.5 把“当前方案不是永久终局”制度化：`ai/continuous-evolution.md` + `ashare-innovation-radar` 主动发现外部新模型/工具/量化方法/数据与反证；只产生 WATCH/SHORTLISTED/LAB 建议，任何真实采用仍回原 stage、证据门、PR/审核/CI。
 - v9.6 已新增 RSH-031：历史涨停/强连板/空间板/弱市穿越/题材梯队与异常板块拉升采用全量事件+失败对照+point-in-time+旧→新盲测；Jev 只做 bounded MapReduce/rerank/verification，效果准入继续由 RSH-026/IMP-020，猎场证据接线只走 IMP-049。v9.8/U47 进一步规定可交易真实性由 IMP-053 hunting-shadow 验证，首见/reference 不冒充成交或净收益。
@@ -96,7 +96,7 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 - **Degraded reason**：当前 Codex 额度不可用，正常双角色无法持续完成实施→独立审核→发布闭环；旧 exact-HEAD Review 门因此形成自锁。
 - **有效期**：持续到用户明确说 Codex 已恢复/退出降级；不是单 PR 临时口令。但每个 PR 的发布仍必须重新生成 exact-HEAD `DegradedRelease`，不能复用上一 PR 回执。
 - **不降低项**：G0–G5/GX 阶段门、U49 主动反证、branch protection、required CI、latest master、CHANGES_REQUESTED/thread、public-repo scan、workspace/doc-health、敏感信息/范围、post-merge CI、删除功能分支。
-- **当前动作**：GOV-022/#106 与 BUG-022/#113 已在主干完成；U51 本轮只发布获批方案与原任务承接，Codex 文档 PR 需准确版本的网页独立审核回执后才能合并。机械下一项 G1/IMP-048 不在本轮授权内。
+- **当前动作**：本条保留 U50 网页代执行的历史授权记录；2026-09-24 用户又明确临时改为 Codex 全权执行，现行模式以本文件顶部授权记录与协作规范 §3.3a 为准。当前执行 G1/IMP-048；每个 PR 仍重新形成准确 HEAD 的 `DegradedRelease`。
 
 ## 8.2 U49 主动审计回执（RSH-026 Preflight）
 
