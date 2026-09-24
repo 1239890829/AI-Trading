@@ -55,7 +55,9 @@
 - **龙虎榜** `datacenter-web.eastmoney.com/api/data/v1/get` (RPT_DAILYBILLBOARD_DETAILSNEW)：SECURITY_CODE / BILLBOARD_* / **EXPLAIN**(上榜原因)。
 - 行情族 `push2/push2his`：本机直连与经代理均被 WAF 拦（空回复，疑似共享出口 IP 风控），保留为链上 search/K线/逐笔的备源；家庭宽带通常可用。
 - `ulist` 与 `stock/get` 字段编号**不一致**，不可混用映射表。
-- **7x24 快讯** `np-weblist/np-listapi` 的 `comm/web/getFastNewsList` 是独立专项源，不走行情 `CompositeProvider`。`code` 是来源条目身份，`showTime` 是来源发布时间，系统收到/可见时间另由 `EventObservation` 记录；`stockList` 的全部 A 股和板块代码均保留。2026-09-24 本机只读实抓：首页 50/50 有 code 与可解析 `showTime`，两页 100 条可用 `sortEnd` 翻页，带上一条 code 的二页补采能找到重叠。此为当次可用性/字段观察，不保证接口永久稳定或任意历史可回溯。`flash_watermark` 按频道保存完成水位、首次基线、断档时间与原因；只有翻页覆盖到旧水位且所有条目入库成功才前移。`GET /api/events/flash-coverage` 暴露持久状态。首次基线前的历史不宣称完整；超过补采页上限、来源删除旧 ID、翻页中断或启动前失败会保留 `gap_at`，不能把当轮抓到部分内容写成“无断档”。
+- **7x24 快讯** `np-weblist/np-listapi` 的 `comm/web/getFastNewsList` 是独立专项源，不走行情 `CompositeProvider`。`code` 是来源条目身份，`showTime` 是来源发布时间，系统收到/可见时间另由 `EventObservation` 记录；`stockList` 的全部 A 股和板块代码均保留。2026-09-24 本机只读实抓：首页 50/50 有 code 与可解析 `showTime`，两页 100 条可用 `sortEnd` 翻页，带上一条 code 的二页补采能找到重叠；同日另一次只读抓取连续到第 21 页，每页 50 条，`sortEnd` 未循环，时间从当日 14:09 延伸至前一日 08:38。此为当次可用性/字段观察，不保证接口永久稳定或任意历史可回溯。`flash_watermark` 按频道保存完成水位、首次基线、断档时间与原因；只有翻页覆盖到旧水位且所有条目入库成功才前移。`GET /api/events/flash-coverage` 暴露持久状态。首次基线前的历史不宣称完整；超过补采页上限、来源删除旧 ID、翻页中断或启动前失败会保留 `gap_at`，不能把当轮抓到部分内容写成“无断档”。
+
+  超过正常轮询 20 页上限的缺口可用 `backend/scripts/recover_flash_gap.py` 单频道补采。先停止应用及调度器，在 `backend/` 下运行 `.venv/bin/python scripts/recover_flash_gap.py --db ../data/ashare.db --channel 100 --expected-last-code OLD_CODE --max-pages 21` 做默认只读预检，其中 `OLD_CODE` 换成覆盖接口显示的旧 code；确认后添加 `--apply`。实际运行前在忽略的 `artifacts/recovery/` 做 SQLite 一致备份，单次最多 100 页。只有旧 code 在补采结果中重叠、全部条目入库且持久水位写入成功，才关闭缺口；来源已删除旧 ID、仍超页数、页面错误或入库错误时保留原水位与缺口。此操作不是首次基线前历史的证明，也不应在应用运行时与常规轮询并发。
 
 ### 3.1 ⚠️ 涨停池/炸板池：非交易日会**静默回退**到最近交易日（2026-08-29 实测）
 

@@ -6,6 +6,9 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -409,6 +412,85 @@ def test_poll_watermark_survives_restart_and_gap_only_closes_on_overlap(tmp_path
     assert _run(flash.poll_once(app)) == 0
     closed = checkpoint.load([100])[100]
     assert closed.last_code == "E" and closed.gap_at is None
+
+
+def test_operator_recovery_beyond_normal_page_cap_requires_exact_frontier(tmp_path, monkeypatch):
+    store = _isolated_store(tmp_path)
+    checkpoint = FlashCheckpointStore(store._sf)
+    checkpoint.record([100], {100: {"complete": True, "newest_code": "OLD"}}, ingest_ok=True)
+    requested_pages = []
+
+    async def fake_fetch(**kwargs):
+        requested_pages.append(kwargs["pages"])
+        codes = ["NEW", "OLD"] if kwargs["pages"] >= 21 else ["NEW"]
+        return [{"code": code, "title": f"测试快讯{code}订单落地", "summary": None,
+                 "show_time": None, "symbols": []} for code in codes]
+
+    monkeypatch.setattr(flash, "fetch_fast_news", fake_fetch)
+    app = _app(store)
+    assert _run(flash.poll_once(app)) == 1
+    gap = checkpoint.load([100])[100]
+    assert len(requested_pages) == 1 and requested_pages[0] <= 20
+    assert gap.last_code == "OLD" and gap.gap_reason == "watermark_not_found"
+
+    with pytest.raises(ValueError, match="preflight"):
+        _run(flash.poll_once(app, recovery=flash.FlashRecovery(100, "WRONG", 21)))
+    assert len(requested_pages) == 1, "错误旧水位不得发起恢复抓取"
+
+    assert _run(flash.poll_once(app, recovery=flash.FlashRecovery(100, "OLD", 21))) == 1
+    recovered = checkpoint.load([100])[100]
+    assert requested_pages[-1] == 21
+    assert recovered.last_code == "NEW" and recovered.gap_at is None
+    assert recovered.last_complete_at is not None
+
+
+def test_operator_recovery_without_overlap_keeps_gap_open(tmp_path, monkeypatch):
+    store = _isolated_store(tmp_path)
+    checkpoint = FlashCheckpointStore(store._sf)
+    checkpoint.record([100], {100: {"complete": True, "newest_code": "OLD"}}, ingest_ok=True)
+    checkpoint.record([100], {100: {"complete": False, "reason": "watermark_not_found"}}, ingest_ok=True)
+
+    async def fake_fetch(**kwargs):
+        return [{"code": "NEW", "title": "测试快讯NEW订单落地", "summary": None,
+                 "show_time": None, "symbols": []}]
+
+    monkeypatch.setattr(flash, "fetch_fast_news", fake_fetch)
+    assert _run(flash.poll_once(_app(store), recovery=flash.FlashRecovery(100, "OLD", 21))) == 1
+    gap = checkpoint.load([100])[100]
+    assert gap.last_code == "OLD" and gap.gap_reason == "watermark_not_found"
+    with pytest.raises(ValueError, match="21..100"):
+        _run(flash.poll_once(_app(store), recovery=flash.FlashRecovery(100, "OLD", 101)))
+
+
+def test_recovery_ingest_failure_and_cli_dry_run_leave_frontier_open(tmp_path, monkeypatch):
+    store = _isolated_store(tmp_path)
+    checkpoint = FlashCheckpointStore(store._sf)
+    checkpoint.record([100], {100: {"complete": True, "newest_code": "OLD"}}, ingest_ok=True)
+    checkpoint.record([100], {100: {"complete": False, "reason": "watermark_not_found"}}, ingest_ok=True)
+    db = tmp_path / "flash-gap.db"
+    script = Path(__file__).resolve().parents[1] / "scripts" / "recover_flash_gap.py"
+    dry = subprocess.run(
+        [sys.executable, str(script), "--db", str(db), "--channel", "100",
+         "--expected-last-code", "OLD", "--max-pages", "21"],
+        capture_output=True, text=True, check=False,
+    )
+    assert dry.returncode == 0 and "DRY RUN" in dry.stdout
+    assert checkpoint.load([100])[100].last_code == "OLD"
+
+    async def fake_fetch(**kwargs):
+        return [{"code": code, "title": f"测试快讯{code}订单落地", "summary": None,
+                 "show_time": None, "symbols": []} for code in ("NEW", "OLD")]
+
+    monkeypatch.setattr(flash, "fetch_fast_news", fake_fetch)
+    original = store.add_event
+    def fail_new(event):
+        if event.get("source_item_id") == "NEW":
+            raise RuntimeError("simulated ingest failure")
+        return original(event)
+    monkeypatch.setattr(store, "add_event", fail_new)
+    _run(flash.poll_once(_app(store), recovery=flash.FlashRecovery(100, "OLD", 21)))
+    row = checkpoint.load([100])[100]
+    assert row.last_code == "OLD" and row.gap_reason == "ingest_error"
 
 
 def test_ingest_failure_keeps_durable_frontier_for_retry(tmp_path, monkeypatch):

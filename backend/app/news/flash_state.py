@@ -67,11 +67,16 @@ class FlashCheckpointStore:
             "gap_reason": rows[channel].gap_reason if channel in rows else "never_polled",
         } for channel in channels]
 
-    def record(self, channels: list[int], coverage: dict[int, dict], *, ingest_ok: bool) -> None:
+    def record(self, channels: list[int], coverage: dict[int, dict], *, ingest_ok: bool,
+               expected_last_codes: dict[int, str] | None = None) -> None:
         now = beijing_now_naive()
         with self._sf() as db:
             for channel in channels:
                 row = db.get(FlashWatermark, channel)
+                if expected_last_codes is not None and (
+                    row is None or row.last_code != expected_last_codes.get(channel)
+                ):
+                    raise ValueError("flash recovery frontier changed before checkpoint write")
                 if row is None:
                     row = FlashWatermark(channel=channel)
                     db.add(row)
