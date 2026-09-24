@@ -65,6 +65,7 @@
 - **依赖**：IMP-006, IMP-049
 - **效果前置**：RSH-026, IMP-020
 - **方案依据**：U47；hunting-decision-design §4/§6/§8；product-closure-design；现有 `watch_ledger.py`、`shadow.py` 与 `PaperTradingEngine`。
+- **U51 Jev 承接子范围（2026-09-24 已批；沿本任务原状态/门序/优先级）**：P1/G2：若上游以后采用获准 Jev 理由特征，影子执行仍只消费同版可执行事实，独立记录 fill/no-fill/reject/exit、费用与完整分母；reference 与实际成交永久分开，语义结果不得越过撮合、风控或预算硬门。 方案与反例见 [Jev 附录 A](../ai/jev-integration.md#附录-a-2026-09-24-已批准的全系统应用可视化与维护方案v04)。
 - **范围**：复用现有撮合、T+1、整手、费用、涨跌停、停牌与资金约束，为“猎场已达到可执行条件”的 decision/version 建独立 hunting-shadow scope；不污染用户手工模拟账户，也不把现有“每日精选→次日开盘” shadow 偷换语义。观察/等待/被拒绝对象只进参考轨，不因出现于猎场就自动占用模拟资金。
 - **验收**：①参考轨保留 first_seen/trigger/reference_price，执行轨另记 submit/fill/reject/no_fill/expired/exit、成交价、费用、滑点与持有规则；两轨统计和 UI 名称不可混用；②动作前以 IMP-006 同版 snapshot 重检，早盘等待/拒绝可在后续新 decision version 条件成立后首次提交，开盘状态不冻结全天；③同一 decision/version 幂等，重复轮询不增仓/增样本，新一轮独立机会必须有新版本/episode；④资金/仓位采用可复算、版本化的标准化协议，不连接真实券商；⑤拒单/未成交/过期也进入分母，成交收益只能按真实 shadow fill 与合法退出计算；⑥回放时只用当时可见信息，未来低点、后续涨停和盘后原因不得倒填；⑦ **IMP-020 readiness 的 execution-owned 证据契约必须机械绑定** `strategy_version / feature_version / execution_version / cost_model_version / exit_rule_version`、`PaperOrder.filled_price` 身份、费用/滑点已计入、`opportunities = filled+rejected+no_fill+expired+pending`、`pending=0`、`exited=filled` 及净均值/中位/胜率；研究侧不得提供构造 actual fill 的 helper，只消费本项产物。
 - **证据**：当前 `watch_ledger` 以首见价对照收盘，能验证“当时发现后价格怎样”，但不是成交；当前 `picks-shadow` 主要在每日精选定稿后的下一交易日晨窗按开盘价进入。两者均不能代表“猎场每个盘中可执行买点已自动模拟成交”，因此本项是明确缺口，不据此声称策略已有增益。2026-09-21 多窗口审计又对照了 IMP-020 最终 `strategy_readiness` 与被淘汰的 promotion-v2 草案：最终版正确禁止 research 自造 fill，但消费侧还未机械核完上述五类 version identity、paper filled-price、成本/滑点与完整分母成熟度；这些事实应由本项补齐，不复活旧 research promotion 模块。
@@ -105,6 +106,7 @@
 - **依赖**：无
 - **效果前置**：无
 - **方案依据**：主方案 §5.3/§5.7/§7.3；数据源附件快讯断档与多标的关联；实施校准 v9.1 §7
+- **U51 Jev 承接子范围（2026-09-24 已批；沿本任务原状态/门序/优先级）**：P1/G1：先落实来源谱系、可见时点和修订事实；仅对规则/别名无法解决的否认、转述和关键更正做冻结样本 Jev 候选判读。关键更正召回与误失效用独立人工对照；失败保留原文及 pending，不自动改机会版本或扩大 G1 到 G4。 方案与反例见 [Jev 附录 A](../ai/jev-integration.md#附录-a-2026-09-24-已批准的全系统应用可视化与维护方案v04)。
 - **范围**：backend/app/models/event.py、backend/app/events/store.py、extract.py、impact.py、chains.py、verify.py、ranking.py 与 backend/app/news/ 下实际采集/水位消费者；复用现有事件模型和查询入口。
 - **验收**：同题多源、正文更正、晚到/撤回、一事多股均可追溯；首发/当时可见/接收时间不同字段；历史决策绑定当时版本，不被后来解释污染；LLM 归因标为待验证假设，不直接改变股票分数。
 - **证据**：4e7bfcb E1：EventStore.add_event 对同指纹只补缺 url/summary；EventCard/EventDirection 有来源与方向但未展示修订关系。需核其它消费者，不能将局部缺字段等同全仓完全无版本机制。

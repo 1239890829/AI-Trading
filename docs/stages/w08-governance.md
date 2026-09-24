@@ -19,6 +19,7 @@
 - **依赖**：无
 - **效果前置**：无
 - **方案依据**：用户完全放弃双端自动化、采用账本短提示；U40 限定 2026-09-18 规划批只做理论/计划；U49 要求主动发现隐藏缺陷成为默认审核门；U50 要求 Codex 不可用时能在用户明确授权下进入受控降级全权闭环。
+- **U51 Jev 承接子范围（2026-09-24 已批；沿本任务原状态/门序/优先级）**：P1/GX：继续选刀前可对确有歧义的大候选集旁路提示重复任务、漏验收或旧前提；精确编号/状态/阶段/依赖继续由 selector、Git、doc-health 和原 owner 核定。没有查证节时或发现质量证据就退出该辅助，不自动改账本。 方案与反例见 [Jev 附录 A](../ai/jev-integration.md#附录-a-2026-09-24-已批准的全系统应用可视化与维护方案v04)。
 - **范围**：固定 handoff 与阶段唯一记录串联网页规划审核/Codex执行；`ashare-ledger-continue` 同时承担新会话接手/上下文恢复。U49 要求继续选刀前、审核放行前、阻断项闭环/阶段门切换后、事故/用户纠偏后运行有界 Proactive Discovery Gate，并由 handoff 留主动审计回执。U50 新增 `DEGRADED_FULL_CONTROL`：只在用户明确授权时启用，网页端可全程操控，但每个 PR 必须 distinct exact-HEAD `DegradedRelease` + required CI + release_check + post-merge CI，不伪装独立 Review。重大模型、工具链、架构、产品语义、协作或治理决定按 plan-registry §1.1 传播到全部受影响权威面。旧 App Server 派工、浏览器唤醒、自动审核回执与 Bridge 控制不属于候选建设路线。
 - **验收**：已退役原型无活动消费者悬挂引用且可恢复；新会话能只凭最新 master 的固定读取链恢复方案/Jev/账本/下一动作；重大决策有“已更新/不适用+理由”的传播核对；每轮 `Preflight` + 当前模式 release receipt 能回答“谁在何时扫了什么、发现/未发现什么、是否改变门/验收/下一刀”：正常模式为独立 `Review`，降级模式为明确作者全权的 `DegradedRelease`；两者不得互相冒充，且缺 U49/U50 传播面的明显漂移能被 doc-health 判红。真实双端使用未发生不标整项完成。
 - **证据**：历史26a0c44到9d439c5批检查过跟踪源、原项目scripts/.github、LaunchAgents与进程命令；通过safe-trash成对移除旧脚本及44项专属测试、核SHA并做一次脚本恢复再退出。对应retirement.json及Git保留；不是本次新查，也不宣称整台机器不存在未知外部引用。
@@ -30,7 +31,7 @@
   - 2026-09-22 BUG-020 真实会话又抓到**调度回执与本机副作用不一致**：上午开放式自动续跑曾与人工接管重叠并造成额外进程切换，因此立即停用。当天用户随后明确恢复了 12:35/13:30/14:30/15:10 的**有界单次检查点**；每次都先做 single-writer 预检，午后观察阶段禁止 restart，未再发生并发服务切换。治理结论因此收敛为：不得把开放式长验收交给不可观测的并发调度器；只有用户显式授权、边界固定、可做 single-writer 前置检查的一次性运行才可执行写入/发布动作，且不构成后续业务切片的自动授权。
   - 2026-09-22 IMP-052 全部 blocker 闭环后，`ledger-runtime-selection.py --json` 实测返回 `gate/task/candidates=null/null/[]`，但阶段页仍有多项 G1–G4 `待执行/部分完成` 非阻断任务；根因是 §5.9/机器选择器只定义“存在 blocker 时如何选”，没有定义“blocker 全清后的 ordinary fallback”。U49 将其归回 GOV-022：选择器保持 blocker 全局优先；仅当 G0–G4 已无 actionable blocker 时，回落到最低仍有 actionable non-blocker 的普通门，G5/GX 不参与 fallback。隔离补丁机械重算得到 `G1/BUG-022`，同门候选 `BUG-022 → IMP-048 → IMP-040 → RSH-031`；正反测试覆盖同门 blocker/non-blocker、较高门 blocker 压过较低门 non-blocker、无 blocker fallback。
 - **处置依据**：人工触发已代替自动发送需求；继续开发互调增加权限/状态/维护成本。退出不等于自动链成功，废弃子目标不得重新派工。
-- **下一步**：U50 已有真实 PR 验证；持续验证 U49/U50 的发现质量、误报与成本。runtime selector 除受支持运行条件外，必须持续验证“blocker 全清后 ordinary non-blocker fallback”不会再次返回空主门；当前机械下一刀为 `G1/BUG-022`，但本 GOV-022 只修选择器，不替代 BUG-022 的单独授权/验收。其它 `待条件` 仍保持 fail-closed，只有出现稳定、可确定判据才新增条件类型，避免把自然语言条件猜成自动授权。继续保持 single-writer，并在 merge 后把 branch/worktree/runtime status 分开核对。GX 不借治理跨门。
+- **下一步**：U50 已有真实 PR 验证；持续验证 U49/U50 的发现质量、误报与成本。runtime selector 除受支持运行条件外，必须持续验证“blocker 全清后 ordinary non-blocker fallback”不会再次返回空主门；当时机械下一刀为 `G1/BUG-022`；该任务后续已通过 PR #113 合入主干。2026-09-24 从 `master@52971cfc` 重算，当前机械候选为 `G1/IMP-048`；本 GOV-022 只维护选择器与账本辅助，不替代 IMP-048 的单独派工/验收。其它 `待条件` 仍保持 fail-closed，只有出现稳定、可确定判据才新增条件类型，避免把自然语言条件猜成自动授权。继续保持 single-writer，并在 merge 后把 branch/worktree/runtime status 分开核对。GX 不借治理跨门。
 - **恢复**：26a0c44和项目回收记录保存旧文件；恢复只作调查且不覆盖目标，不恢复旧自治目标或撤销金融/CI保护。
 - **分工**：正常模式网页方案/账本/独立审核，Codex执行；`DEGRADED_FULL_CONTROL` 激活时网页全权闭环，用户只需明确进入/退出降级或提出重大取舍。Bridge个人App/扩展/对话未卸载删除，不影响本流程。
 
@@ -46,6 +47,7 @@
 - **依赖**：无
 - **效果前置**：无
 - **方案依据**：docs/ai/jev-integration.md；2026-09-19 官方 Use Case Map 与本仓真实 smoke。
+- **U51 Jev 承接子范围（2026-09-24 已批；沿本任务原状态/门序/优先级）**：P1/GX：统一本方案各消费者 off/配置/预算/401/429/5xx/schema/低置信/迟到/basis 漂移的失败语义、总时限与恢复条件；区分 requested/resolved model 和安装/加载/实用版本。各宿主回原获准路径，不绕隐私、预算或权限；记录实际调用/采纳/回退，拟议熔断数值须经实验。 方案与反例见 [Jev 附录 A](../ai/jev-integration.md#附录-a-2026-09-24-已批准的全系统应用可视化与维护方案v04)。
 - **范围**：Jev 只做 bounded 语义判断、验证与条件能力路由；确定性金融规则、权限、撮合、风控与真实执行仍由代码负责。统一 HTTP/key 入口为 backend/app/core/jev_client.py，测试默认禁真实触网。
 - **验收**：不新增第二套凭据/endpoint；隐私输入失败关闭；真实调用只在能改变下一步或减少更贵模型成本时保留；全局 model/effort 自动切换未证明价值前保持停用。
 - **证据**：PR #31–#34 已依次合入 Jev adapter/影子路由、价值审计与 capability routing 收敛、Universal Verification/gold-set、预标注与审核优先级；jev-1.13.0 smoke、JevRouter 权限过滤、metadata-only usage 均已有证据。旧 jev-route 因不能真正切宿主模型且固定增加一轮调用已退出。2026-09-21 审计时项目 ledger 为 172 calls / 169 success / 3 failed，主用途 alert_triage 与 event_llm_aux；bounded live smoke 再次成功。网页 ChatGPT 当前**没有原生 TypeSafe tool**，但在用户授权的本机连接下可通过统一 `jev_client` 调用，本轮已实证；Codex 更适合作为代码实施 owner 并可加载 TypeSafe Agent Skill，但 Jev 仍只承担 bounded decision/review，不替代 Codex 或确定性测试。
@@ -64,6 +66,7 @@
 - **依赖**：无
 - **效果前置**：无
 - **方案依据**：docs/ai/continuous-evolution.md；implementation-plan v9.5 §6.1；用户要求系统不依赖人工喂入新技术，同时不得按热度盲目采用。
+- **U51 Jev 承接子范围（2026-09-24 已批；沿本任务原状态/门序/优先级）**：P1/GX：先核既有每周雷达和 repo-watch 实际运行，再把 awesome-Jev 全目录增量、原仓库与官方模型/插件变更纳入同一来源管理。差异抓取、ETag/watermark、分页不完整和失败不推进水位；按真实消费者/许可/权限/基线/成本/反例精选，自动只到候选卡，不自动安装。频率与预算沿既有雷达授权。 方案与反例见 [Jev 附录 A](../ai/jev-integration.md#附录-a-2026-09-24-已批准的全系统应用可视化与维护方案v04)。
 - **范围**：持续发现 AI/模型/Agent、量化/选股方法、数据源、研究方法、工程/安全/产品与规则变化；按来源等级、硬门、E0–E5 证据梯度筛选。雷达只拥有发现/拒绝/观察/实验建议，不拥有安装、付费、权限扩大、生产阈值或策略准入权。
 - **验收**：新会话可调用 ashare-innovation-radar 从最新 master 恢复现有基线并产出候选卡；外部宣传与已核事实分开，外部内容按不可信数据处理；SHORTLISTED/LAB 有 falsifier、基线、成本/隐私/许可/恢复以及 `last_reviewed/review_due/experiment_budget/stop_rule`；真实实验归已有 stage；重大采用触发 plan-registry §1.1；雷达同时支持问题驱动、前沿驱动、反证驱动并把 missed-signal 反馈回查询/来源；雷达自身有有用候选率、漏发现、噪声和成本复评，不能只积压 WATCH。
 - **证据**：2026-09-19 首轮外部核查已覆盖 TypeSafe/Jev、Microsoft RD-Agent/Qlib、OpenHands、MCP Registry/A2A、QuantConnect LEAN/vectorbt、TSFM/金融 Agent benchmark 等方向；结论按候选/参考/观察分级，没有把外部项目自报收益写成本项目效果。PR #42 已把 v9.5 continuous-evolution 蓝图、ashare-innovation-radar Skill、反固化/不可信外部内容/证据过期与停止规则、传播守卫合入 `master`（merge `d51f3209`）；准确 head `b3b239ef` 的 backend/frontend/docs CI #381 与 release_check 全绿。 2026-09-19 已启用每周一次、仅高价值变化才通知的 ChatGPT 条件雷达作为低频真实试运行；它只做外部发现/反证提醒，不安装、不付费、不扩大权限、不创建施工或自动采用。
@@ -101,6 +104,7 @@
 - **依赖**：无
 - **效果前置**：无
 - **方案依据**：U48；implementation-plan v9.11 §6.2；continuous-evolution §5.1/§10；factor-lifecycle-governance 与现有 strategy/KB/Jev owner 体系。
+- **U51 Jev 承接子范围（2026-09-24 已批；沿本任务原状态/门序/优先级）**：P1/GX：Jev 判断、模型版本、插件和其消费规则沿原 owner 记录用途/基线/适用域/反证/衰退/Challenger/退出重开；不要另建总注册表。观测不全写 unknown，稳定无新证据可保持，实际质量/成本退化则原 owner 复核降级或退出。 方案与反例见 [Jev 附录 A](../ai/jev-integration.md#附录-a-2026-09-24-已批准的全系统应用可视化与维护方案v04)。
 - **范围**：不新建第二套机制总注册表；定义跨域最小生命周期契约，并把字段/审计落回原 owner：策略/战法、猎场情境、因子/过滤器/排序器、KB 结论与消费规则、Jev/LLM 语义能力、能力/模型路由、数据源优先级和关键治理自动化。至少覆盖用途/消费者、机制/版本、Champion/基线、证据与数据窗口、适用/不适用域、反例/falsifier、last_reviewed/review_due/revisit_trigger、衰退信号、成本/延迟/维护/隐私、challenger/shadow、退出/回滚/复活条件；专业指标继续归原领域，不造一个万能总分。
 - **验收**：① 能从原登记册/运行证据回答“为什么存在、服务谁、当前证据多强、何时重验、何时降级/退役/复活”；② 猎场/策略/因子使用 point-in-time 全分母、OOS/forward/shadow 与可成交成本证据，知识使用能区分独立增量/重复背景/反例，Jev/路由同时看 human gold/anchor recall、升级率、token/延迟/费用和最终任务质量；③ 发现衰退先区分市场/数据/实现/样本/消费者/机制，不允许 Agent/Jev 自动改生产阈值自救；④ 已完成任务仍可关闭，只有 review/revisit trigger 成立才生成新切片，active backlog 不因“持续迭代”无限增长；⑤ 无证据显示有增量时允许保持现状或退役机制，不以机制数量衡量系统能力。
 - **证据**：当前已有局部基础：factor-lifecycle-governance 已定义因子入库/使用/出库/衰减，strategy-registry/RSH-026/IMP-020 提供策略与效果证据，RSH-027 负责知识正文/引用增量，RSH-030 与 Jev usage/gold 负责语义能力质量和成本，IMP-049/053 负责猎场 opportunity/reference/shadow 真实性；这些仍是各自 owner，不因本项登记自动变为已实现的统一运行机制。2026-09-20 又将多轮项目治理方法蒸馏为项目中性 `skills/living-system-governor/`：它只提供 Context Snapshot、KEEP/FIX/MERGE/EXPERIMENT/WATCH/RETIRE、反证/生命周期/成本审计等上层协议，不拥有 stage 状态、生产准入或自动晋级权，因此其入库不把 GOV-027 标成已完成。 同日 v1.2.0 在既有自我进化基础上新增 U49 主动缺陷发现门；Skill 自身继续纳入生命周期：持续观察后续用户长期要求/重复纠偏，但只在稳定复现、明确长期授权或真实复盘证明缺口时蒸馏，并区分 Core/领域扩展/经验反例；一次性要求不固化，新增前先合并/删除重复，实质变化以版本 + Git/PR + 后续行为证据证明。
