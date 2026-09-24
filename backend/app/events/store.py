@@ -10,9 +10,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from calendar import timegm
 from datetime import datetime
 
-from sqlalchemy import func, select, update
+from sqlalchemy import Integer, cast, func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.db import get_session_factory
@@ -449,6 +450,7 @@ class EventStore:
         # 版本查询之间提交，使旧方向错误地绑定到新的 pending/active 版本。
         from sqlalchemy.orm import joinedload
 
+        now = beijing_now_naive() if active_only else None
         with self._sf() as db:
             latest_id = select(func.max(EventInterpretation.id)).where(
                 EventInterpretation.event_id == EventCard.id
@@ -457,7 +459,20 @@ class EventStore:
                 EventInterpretation, EventInterpretation.id == latest_id
             ).options(joinedload(EventCard.directions))
             if active_only:
-                stmt = stmt.where(EventCard.status == "active", EventCard.revision_pending_at.is_(None))
+                # 先在 SQL 排除过期卡，再做 LIMIT；否则近期短寿命卡可占满窗口，
+                # 把较早但仍有效的政策卡从精选、简报等消费者的结果中挤掉。
+                # SQLite julianday 只保留毫秒，边界前 100μs 的活跃卡会误删；
+                # DateTime 在本库按 YYYY-MM-DD HH:MM:SS.ffffff 保存，整型微秒
+                # 比较与 is_active 的严格 < 判据一致，不依赖宿主时区。
+                now_us = timegm(now.timetuple()) * 1_000_000 + now.microsecond
+                published_us = (
+                    cast(func.strftime("%s", EventCard.published_at), Integer) * 1_000_000
+                    + cast(func.substr(EventCard.published_at, 21, 6), Integer)
+                )
+                stmt = stmt.where(
+                    EventCard.status == "active", EventCard.revision_pending_at.is_(None),
+                    published_us + EventCard.half_life_hours * 7_200_000_000 > now_us,
+                )
             pairs = db.execute(
                 stmt.order_by(EventCard.published_at.desc()).limit(limit * 3)
             ).unique().all()
@@ -465,7 +480,7 @@ class EventStore:
             for row, version in pairs:
                 row.interpretation_ref = _interpretation_ref(row, version)
                 rows.append(row)
-        out = [r for r in rows if self.is_active(r)] if active_only else list(rows)
+        out = [r for r in rows if self.is_active(r, now=now)] if active_only else list(rows)
         return out[:limit]
 
     def get_event(self, event_id: int) -> EventCard | None:

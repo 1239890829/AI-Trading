@@ -835,6 +835,57 @@ def test_store_list_active_respects_half_life():
     assert store.is_active(store.get_event(fresh.id)) is False
 
 
+def test_active_event_window_does_not_hide_older_long_lived_evidence(tmp_path):
+    from datetime import timedelta
+
+    from app.core.bjtime import beijing_now_naive
+    from app.models.event import EventCard, EventDirection
+
+    store = _isolated_store(tmp_path)
+    now = beijing_now_naive()
+    with store._sf() as db:
+        policy = EventCard(fingerprint="older-active-policy", title="产业政策已落地",
+                           source="official", published_at=now - timedelta(hours=10),
+                           half_life_hours=336)
+        db.add(policy)
+        db.flush()
+        db.add(EventDirection(event_id=policy.id, target_type="theme", target="液冷",
+                              direction=1, basis="政策原文"))
+        for index in range(90):
+            db.add(EventCard(fingerprint=f"expired-rumor-{index}", title=f"旧传闻 {index}",
+                             source="rumor", published_at=now - timedelta(hours=5),
+                             half_life_hours=2))
+        db.commit()
+        policy_id = policy.id
+
+    selected = store.list_events(active_only=True, limit=30)
+    assert [row.id for row in selected] == [policy_id]
+    assert selected[0].directions[0].target == "液冷"
+    assert selected[0].interpretation_ref["state"] == "unknown"
+
+
+def test_active_event_window_keeps_subsecond_boundary(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+
+    import app.events.store as store_module
+    from app.models.event import EventCard
+
+    store = _isolated_store(tmp_path)
+    now = datetime(2026, 9, 24, 10, 0, 0, 100000)
+    monkeypatch.setattr(store_module, "beijing_now_naive", lambda: now)
+    with store._sf() as db:
+        db.add(EventCard(fingerprint="still-active-by-100us", title="边界前仍有效",
+                         source="test", published_at=now - timedelta(hours=4) + timedelta(microseconds=100),
+                         half_life_hours=2))
+        db.add(EventCard(fingerprint="just-expired-by-100us", title="边界后已过期",
+                         source="test", published_at=now - timedelta(hours=4) - timedelta(microseconds=100),
+                         half_life_hours=2))
+        db.commit()
+    assert [row.fingerprint for row in store.list_events(active_only=True, limit=2)] == [
+        "still-active-by-100us"
+    ]
+
+
 # ---------------------------------------------------------------- API
 
 
