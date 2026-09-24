@@ -311,6 +311,49 @@ def test_active_event_read_cannot_pair_old_directions_with_new_pending_version(t
     assert statements == 1
 
 
+def test_event_detail_keeps_directions_with_the_selected_interpretation(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.routes import events as events_route
+
+    store = _isolated_store(tmp_path)
+    original = build_event("液冷订单落地", source="东财快讯", summary="合同已签署",
+                           theme_names=["液冷"])
+    original["source_item_id"] = "detail-snapshot-1"
+    row, _ = store.add_event(original)
+    first_version = store.interpretations_of(row.id)[0]
+    correction = build_event("液冷订单落地", source="东财快讯", summary="合同尚未签署",
+                             theme_names=["液冷"])
+    correction["source_item_id"] = "detail-snapshot-1"
+    read_observations = store.observations_of
+
+    def concurrent_review(event_id):
+        store.add_event(correction)
+        pending = store.pending_observation_of(event_id)
+        store.review_revision(
+            event_id, expected_observation_id=pending.id, action="adopt",
+            note="来源更正已核对", interpretation={
+                "source_tier": 3, "category": "corporate", "fact_kind": "fact",
+                "certainty": "done", "half_life_hours": 48,
+                "directions": [{"target_type": "theme", "target": "液冷", "direction": -1,
+                                "strength": 1, "chain": "订单取消", "basis": "人工核对更正",
+                                "matched_by": "manual"}],
+            },
+        )
+        return read_observations(event_id)
+
+    monkeypatch.setattr(store, "observations_of", concurrent_review)
+    app = FastAPI()
+    app.include_router(events_route.router, prefix="/api")
+    app.dependency_overrides[events_route.get_store] = lambda: store
+    with TestClient(app) as api:
+        detail = api.get(f"/api/events/{row.id}").json()["data"]
+    assert detail["interpretation_ref"]["version_id"] == first_version.id
+    assert detail["directions"][0]["direction"] == 1
+    assert store.directions_of(row.id)[0].direction == -1
+
+
 def test_event_list_limit_keeps_all_directions_of_selected_card(tmp_path):
     from datetime import timedelta
 
