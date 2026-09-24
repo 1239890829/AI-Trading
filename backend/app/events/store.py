@@ -469,13 +469,19 @@ class EventStore:
         return out[:limit]
 
     def get_event(self, event_id: int) -> EventCard | None:
+        # Detail and stock-pool callers serialize directions with this version ref.
+        # Keep both in the same SELECT so a concurrent review cannot mix versions.
+        from sqlalchemy.orm import joinedload
+
         with self._sf() as db:
             latest_id = select(func.max(EventInterpretation.id)).where(
                 EventInterpretation.event_id == EventCard.id
             ).correlate(EventCard).scalar_subquery()
-            pair = db.execute(select(EventCard, EventInterpretation).outerjoin(
-                EventInterpretation, EventInterpretation.id == latest_id
-            ).where(EventCard.id == event_id)).one_or_none()
+            stmt = (select(EventCard, EventInterpretation)
+                    .outerjoin(EventInterpretation, EventInterpretation.id == latest_id)
+                    .options(joinedload(EventCard.directions))
+                    .where(EventCard.id == event_id))
+            pair = db.execute(stmt).unique().one_or_none()
             if pair is None:
                 return None
             row, version = pair

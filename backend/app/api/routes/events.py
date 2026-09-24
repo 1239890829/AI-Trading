@@ -412,7 +412,7 @@ async def get_event(event_id: int, store: EventStore = Depends(get_store)) -> di
     review_target = store.pending_observation_of(event_id)
     links = [_serialize_withdrawal_link(link, notice)
              for link, notice in store.withdrawal_links_of(event_id)]
-    return {"data": {**_serialize(row, store.directions_of(event_id)),
+    return {"data": {**_serialize(row),
                      "observations": observations, "interpretations": versions,
                      "withdrawal_links": links,
                      "pending_review_observation_id": review_target.id if review_target else None}, "meta": {}}
@@ -492,14 +492,14 @@ async def event_stocks(event_id: int, request: Request, store: EventStore = Depe
     if row is None:
         raise HTTPException(status_code=404, detail="事件不存在")
     if row.revision_pending_at is not None:
-        return {"data": {"event": _serialize(row, store.directions_of(event_id)), "pools": []},
+        return {"data": {"event": _serialize(row), "pools": []},
                 "meta": {"note": "来源内容有未复核修订，标的池暂停",
                          "disclaimer": "标的池仅为事件关联成分，不构成买卖建议"}}
     svc = getattr(request.app.state, "theme_catalog", None)
     pools = []
     if svc is not None:
         name_to_code = {t.name: t.code for t in svc.get_catalog(limit=1000)}
-        for d in store.directions_of(event_id):
+        for d in row.directions:
             if d.target_type != "theme":
                 continue
             code = name_to_code.get(d.target)
@@ -532,7 +532,7 @@ async def event_stocks(event_id: int, request: Request, store: EventStore = Depe
     else:
         pools.append({"note": "题材目录服务未初始化，无法反查成分"})
     return {
-        "data": {"event": _serialize(row, store.directions_of(event_id)), "pools": pools},
+        "data": {"event": _serialize(row), "pools": pools},
         "meta": {"disclaimer": "标的池仅为事件关联成分，不构成买卖建议"},
     }
 
@@ -751,7 +751,7 @@ async def register_event(body: EventItemIn, request: Request, store: EventStore 
         theme_names=_theme_names(request.app.state),
     )
     current = store.get_event(row.id)
-    return {"data": {**_serialize(current, store.directions_of(row.id)), "created": created}, "meta": {}}
+    return {"data": {**_serialize(current), "created": created}, "meta": {}}
 
 
 # POST /events/extract 与旧 /events/{id}/review 已删（2026-09-08 审查 P0-4：
