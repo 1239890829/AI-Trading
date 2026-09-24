@@ -660,6 +660,7 @@ async def deep_score_candidates(
     quotes: dict,
     weights: dict,
     event_hits_index: dict[str, tuple],
+    events_available: bool,
     concurrency: int,
     promo_percentile: float | None = None,
     index_bars: dict[str, list[dict]] | None = None,
@@ -742,7 +743,9 @@ async def deep_score_candidates(
             bull, bear, top_title, top_dir, linked = event_hit[:5]
             event_refs = event_hit[5] if len(event_hit) > 5 else []
             sub["news"], bases["news"] = score_news(bull, bear, top_title, top_dir)
-            if bull == bear == 0 and linked:
+            if not events_available:
+                bases["news"] = "事件读取失败，消息面不可用；50 分仅为计算占位"
+            elif bull == bear == 0 and linked:
                 # 有关联但无方向词：诚实说"命中了但待判"，而不是"无命中"
                 bases["news"] = (
                     f"命中 {linked} 条关联事件（标题无方向词，方向待判），消息面中性；"
@@ -1053,12 +1056,15 @@ async def generate_picks_pipeline(
     # ①c 候选池
     # G-2 / 取数单点（P2-4 同型）：活跃事件**取一次**（同步 SQLite + selectinload →
     # 线程池），下游三处复用（候选池题材反查 / regime 的 ev_texts / 消息命中索引）。
-    # 此前同一条查询在本管线里跑了**三遍**。失败 → 空表，下游各自诚实降级（不臆造）。
+    # 此前同一条查询在本管线里跑了**三遍**。失败时保留不可用状态，
+    # 避免空表占位被持久化为「无活跃事件」。
     try:
         active_events = await asyncio.to_thread(store.list_events, active_only=True, limit=30)
+        events_available = True
     except Exception as exc:
         log.warning("picks active events failed: %s", exc)
         active_events = []
+        events_available = False
 
     candidates = await candidate_pool(
         hub, store, svc,
@@ -1240,6 +1246,7 @@ async def generate_picks_pipeline(
         quotes=quotes,
         weights=weights,
         event_hits_index=event_hits_index,
+        events_available=events_available,
         concurrency=CONCURRENCY,
         promo_percentile=promo_pct,
         index_bars=index_bars,
@@ -1291,6 +1298,10 @@ async def generate_picks_pipeline(
     items = [assemble_card(k) for k in kept]
     items = apply_gate_to_picks(items, gate)
     meta = {
+        "event_evidence": {
+            "state": "available" if events_available else "unavailable",
+            "active_count": len(active_events) if events_available else None,
+        },
         "weights": weights,
         "regime": regime,
         "style_routing": style,
