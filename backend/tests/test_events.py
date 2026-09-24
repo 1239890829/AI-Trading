@@ -274,6 +274,68 @@ def test_reviewed_revision_replays_exact_visible_versions(tmp_path):
                               action="retain", note="重复提交")
 
 
+def test_active_event_read_cannot_pair_old_directions_with_new_pending_version(tmp_path):
+    """A revision between separate reads must not give decisions a false version reference."""
+    from sqlalchemy import event as sqlalchemy_event
+
+    writer = _isolated_store(tmp_path)
+    original = build_event("液冷订单落地", source="东财快讯", summary="合同已签署",
+                           theme_names=["液冷"])
+    original["source_item_id"] = "atomic-read-1"
+    row, _ = writer.add_event(original)
+    correction = build_event("液冷订单落地", source="东财快讯", summary="合同尚未签署",
+                             theme_names=["液冷"])
+    correction["source_item_id"] = "atomic-read-1"
+
+    statements = 0
+
+    def reader_session():
+        db = writer._sf()
+
+        @sqlalchemy_event.listens_for(db, "do_orm_execute")
+        def before_read(state):
+            nonlocal statements
+            if state.is_select:
+                statements += 1
+                if statements == 2:
+                    writer.add_event(correction)
+
+        return db
+
+    visible = EventStore(reader_session).list_events(active_only=True)
+    # The list and its direction/version evidence are one database observation.
+    assert len(visible) == 1 and visible[0].id == row.id
+    assert visible[0].directions[0].direction == 1
+    assert visible[0].interpretation_ref["state"] == "active"
+    assert visible[0].interpretation_ref["version_id"] == writer.interpretations_of(row.id)[0].id
+    assert statements == 1
+
+
+def test_event_list_limit_keeps_all_directions_of_selected_card(tmp_path):
+    from datetime import timedelta
+
+    from app.core.bjtime import beijing_now_naive
+
+    store = _isolated_store(tmp_path)
+    now = beijing_now_naive()
+    for index, published_at, direction_count in ((1, now - timedelta(minutes=1), 1),
+                                                  (2, now, 3)):
+        store.add_event({
+            "fingerprint": f"atomic-limit-{index}", "title": f"事件 {index}",
+            "source": "test", "published_at": published_at,
+            "directions": [
+                {"target_type": "symbol", "target": f"60000{n}", "direction": 1,
+                 "basis": "测试", "strength": 1}
+                for n in range(direction_count)
+            ],
+        })
+
+    selected = store.list_events(active_only=True, limit=1)
+    assert len(selected) == 1 and selected[0].fingerprint == "atomic-limit-2"
+    assert {d.target for d in selected[0].directions} == {"600000", "600001", "600002"}
+    assert selected[0].interpretation_ref["state"] == "active"
+
+
 def test_review_can_retain_or_withdraw_without_rewriting_prior_version(tmp_path):
     store = _isolated_store(tmp_path)
     event = build_event("某公司公告订单已签署", source="东财快讯", summary="订单已签署")
