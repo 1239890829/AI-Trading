@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime
 
 from app.core.ttl_cache import TTLCache
@@ -53,6 +54,13 @@ _BOARD_THEME_CACHE = TTLCache("flash-board-theme", ttl=300.0, maxsize=1)
 
 _HTTP = None
 _FLASH_CURSOR = FlashCursor()
+
+
+@dataclass(frozen=True)
+class FlashRecovery:
+    channel: int
+    expected_last_code: str
+    max_pages: int
 
 
 class FlashBatch(list):
@@ -432,7 +440,7 @@ async def _board_theme_map(state, theme_names: list[str] | None = None) -> dict[
     return mapping
 
 
-async def poll_once(app) -> int:
+async def poll_once(app, *, recovery: FlashRecovery | None = None) -> int:
     """拉一轮并按持久水位补采；只有覆盖旧水位且入库成功才推进。
 
     app 可以是 FastAPI 实例（走 app.state）或任何带 event_store 属性的对象
@@ -446,20 +454,40 @@ async def poll_once(app) -> int:
         store = EventStore()
     from app.core.config import settings
 
-    channels = configured_columns()
+    if recovery is not None and (
+        recovery.channel < 1 or not recovery.expected_last_code.strip()
+        or not 21 <= recovery.max_pages <= 100
+    ):
+        raise ValueError("flash recovery requires a channel, old code and 21..100 pages")
+    channels = [recovery.channel] if recovery is not None else configured_columns()
     checkpoints = FlashCheckpointStore(getattr(store, "_sf", None))
     prior = await asyncio.to_thread(checkpoints.load, channels)
+    expected_codes = None
+    if recovery is not None:
+        row = prior.get(recovery.channel)
+        if (row is None or row.last_code != recovery.expected_last_code
+                or row.gap_at is None or row.gap_reason == "prebaseline_unverifiable"):
+            raise ValueError("flash recovery preflight changed or gap cannot close by overlap")
+        expected_codes = {recovery.channel: recovery.expected_last_code}
     stop_at_codes = {c: r.last_code for c, r in prior.items() if r.last_code}
     catchup_pages = min(20, max(settings.flash_news_pages, settings.flash_news_catchup_pages))
+    if recovery is not None:
+        catchup_pages = recovery.max_pages
     pages_by_channel = {c: catchup_pages for c in stop_at_codes}
     items = await fetch_fast_news_multi(
         columns=channels, pages=settings.flash_news_pages,
         stop_at_codes=stop_at_codes, pages_by_channel=pages_by_channel,
         min_pages=settings.flash_news_pages)
     coverage = getattr(items, "coverage", {}) if items is not None else {}
+    if recovery is not None:
+        current = await asyncio.to_thread(checkpoints.load, channels)
+        if (recovery.channel not in current
+                or current[recovery.channel].last_code != recovery.expected_last_code):
+            raise ValueError("flash recovery frontier changed during fetch")
     if not items:
         try:
-            await asyncio.to_thread(checkpoints.record, channels, coverage, ingest_ok=True)
+            await asyncio.to_thread(checkpoints.record, channels, coverage, ingest_ok=True,
+                                    expected_last_codes=expected_codes)
         except Exception:  # noqa: BLE001 —— 水位写入失败下轮继续重拉，不伪造 OK
             log.exception("flash news: failed to persist fetch gap")
         _FLASH_CURSOR.record_fetch(False, 0)
@@ -485,7 +513,8 @@ async def poll_once(app) -> int:
             log.exception("flash news: add_event failed: %s", p.get("title", "")[:50])
     durable_ok = True
     try:
-        await asyncio.to_thread(checkpoints.record, channels, coverage, ingest_ok=ingest_ok)
+        await asyncio.to_thread(checkpoints.record, channels, coverage, ingest_ok=ingest_ok,
+                                expected_last_codes=expected_codes)
     except Exception:  # noqa: BLE001 —— 入库已成功但水位写失败，重试靠观察键幂等
         durable_ok = False
         log.exception("flash news: failed to persist coverage checkpoint")
