@@ -90,6 +90,11 @@ def _judge_fields(row) -> dict:
 
 
 def _serialize(row, directions=None) -> dict:
+    revision_pending_at = getattr(row, "revision_pending_at", None)
+    judgement = (_judge_fields(row) if revision_pending_at is None else {
+        "judge_status": "unknown", "judge_status_label": "来源修订待复核",
+        "judged_at": None, "judge_reason": "新观察与当前解释不一致，机会判断已暂停",
+    })
     out = {
         "id": row.id,
         "title": row.title,
@@ -105,10 +110,11 @@ def _serialize(row, directions=None) -> dict:
         "source_symbol": row.source_symbol,
         "status": row.status,
         "is_active": EventStore.is_active(row),
+        "revision_pending_at": revision_pending_at.isoformat(sep=" ") if revision_pending_at else None,
         # 判定结果（2026-09-09 需求 2）：利好/利空/中性由 directions 承载，
         # 这里补「判定时间 + 判定状态」——状态是读时派生（judge_state 纯函数），
         # 不落库免迁移；待判超时自动收敛中性，避免事件长期挂在「待判」。
-        **_judge_fields(row),
+        **judgement,
         "directions": [
             {
                 "target_type": d.target_type,
@@ -117,6 +123,7 @@ def _serialize(row, directions=None) -> dict:
                 "strength": d.strength,
                 "chain": d.chain,
                 "basis": d.basis,
+                "observation_id": getattr(d, "observation_id", None),
             }
             for d in (directions if directions is not None else row.directions)
         ],
@@ -290,7 +297,20 @@ async def get_event(event_id: int, store: EventStore = Depends(get_store)) -> di
     row = store.get_event(event_id)
     if row is None:
         raise HTTPException(status_code=404, detail="事件不存在")
-    return {"data": _serialize(row, store.directions_of(event_id)), "meta": {}}
+    observations = [
+        {
+            "id": o.id, "source": o.source, "source_item_id": o.source_item_id,
+            "title": o.title, "summary": o.summary, "url": o.url,
+            "source_published_at": o.source_published_at.isoformat(sep=" ") if o.source_published_at else None,
+            "received_at": o.received_at.isoformat(sep=" "),
+            "available_at": o.available_at.isoformat(sep=" "),
+            "source_symbols": json.loads(o.source_symbols_json),
+            "board_codes": json.loads(o.board_codes_json),
+            "content_hash": o.content_hash, "change_kind": o.change_kind,
+        }
+        for o in store.observations_of(event_id)
+    ]
+    return {"data": {**_serialize(row, store.directions_of(event_id)), "observations": observations}, "meta": {}}
 
 
 @router.get("/events/{event_id}/stocks")
@@ -303,6 +323,10 @@ async def event_stocks(event_id: int, request: Request, store: EventStore = Depe
     row = store.get_event(event_id)
     if row is None:
         raise HTTPException(status_code=404, detail="事件不存在")
+    if row.revision_pending_at is not None:
+        return {"data": {"event": _serialize(row, store.directions_of(event_id)), "pools": []},
+                "meta": {"note": "来源内容有未复核修订，标的池暂停",
+                         "disclaimer": "标的池仅为事件关联成分，不构成买卖建议"}}
     svc = getattr(request.app.state, "theme_catalog", None)
     pools = []
     if svc is not None:
@@ -424,6 +448,8 @@ async def backfill_directions(
     rows = await asyncio.to_thread(store.list_events, active_only=False, limit=2000)
     scanned = filled = 0
     for r in rows:
+        if r.revision_pending_at is not None:
+            continue
         pub = getattr(r, "published_at", None)
         if pub is None or pub < cutoff:
             continue
@@ -494,6 +520,8 @@ async def theme_focus(
     rows = await asyncio.to_thread(store.list_events, active_only=False, limit=2000)
     buckets: dict[str, dict] = {}
     for r in rows:
+        if r.revision_pending_at is not None:
+            continue
         pub = getattr(r, "published_at", None)
         if pub is None or pub < cutoff:
             continue

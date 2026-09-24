@@ -187,6 +187,11 @@ def test_match_news_events_direction_and_containment():
         db.add(EventCard(id=3, fingerprint="f3", title="无关题材利好",
                          source="y", source_tier=1, published_at=now - timedelta(minutes=30)))
         db.add(EventDirection(event_id=3, target_type="theme", target="粮食安全", direction=1))
+        db.add(EventCard(id=4, fingerprint="f4", title="MLCC订单待更正",
+                         source="东财快讯", source_tier=3,
+                         published_at=now - timedelta(minutes=15),
+                         revision_pending_at=now - timedelta(minutes=5)))
+        db.add(EventDirection(event_id=4, target_type="theme", target="MLCC", direction=1))
         db.commit()
     hits = bs.match_news_events("PCB概念", since=now - timedelta(hours=6), session_factory=sf)
     # 「MLCC」与「PCB概念」不互含 → 本查询用 MLCC 名验证匹配；direction=0 与无关题材被排除

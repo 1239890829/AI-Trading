@@ -7,6 +7,8 @@ app/api/routes/events.py）。
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from datetime import datetime
 
@@ -15,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.db import get_session_factory
 from app.events.extract import build_event, dedupe_directions
-from app.models.event import EventCard, EventDirection
+from app.models.event import EventCard, EventDirection, EventObservation
 from app.core.bjtime import beijing_now_naive
 
 log = logging.getLogger(__name__)
@@ -28,82 +30,132 @@ class EventStore:
     # -- write -------------------------------------------------------------
 
     def add_event(self, event: dict) -> tuple[EventCard, bool]:
-        """按指纹去重入库。返回 (row, created)；重复事件返回已有行 + False。
+        """按来源 ID / 标题归并事件，逐次保留来源观察；返回 (row, created)。
 
-        IntegrityError（并发插入/历史脏数据）优雅降级为「重复」而不是 500。
+        内容修订只追加观察并暂停旧解释，不覆盖曾经用于决策的字段/方向。
+        并发唯一键冲突重新读一次，确保冲突方观察不会被丢弃。
         """
-        with self._sf() as db:
-            existing = db.execute(
-                select(EventCard).where(EventCard.fingerprint == event["fingerprint"])
-            ).scalar_one_or_none()
-            if existing is not None:
-                # 增量回填：url/summary 修复前入库的旧行这两列为 None；重拉同一
-                # 快讯时补上（幂等——仅补缺失，绝不覆盖已有值）。这让「快讯源
-                # 带链接/摘要」的修复对存量事件立即生效，而非等自然过期。
-                updated = False
-                if not existing.url and event.get("url"):
-                    existing.url = event["url"]
-                    updated = True
-                if not existing.summary and event.get("summary"):
-                    existing.summary = event["summary"]
-                    updated = True
-                if updated:
+        source = event.get("source") or ""
+        source_item_id = str(event.get("source_item_id") or "").strip() or None
+        symbols = list(dict.fromkeys(event.get("source_symbols") or
+                                     ([event["source_symbol"]] if event.get("source_symbol") else [])))
+        boards = list(dict.fromkeys(event.get("board_codes") or []))
+        source_published = event.get("source_published_at")
+        content = {
+            "title": event["title"].strip(), "summary": (event.get("summary") or "").strip() or None,
+            "url": event.get("url"), "source_published_at": source_published.isoformat() if source_published else None,
+            "source_symbols": symbols, "board_codes": boards,
+        }
+        content_hash = hashlib.sha256(json.dumps(content, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        identity = {"source": source, "source_item_id": source_item_id, "content_hash": content_hash}
+        observation_key = hashlib.sha256(json.dumps(identity, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+        for attempt in range(2):
+            with self._sf() as db:
+                try:
+                    prior = db.execute(select(EventObservation).where(
+                        EventObservation.observation_key == observation_key
+                    )).scalar_one_or_none()
+                    if prior is not None:
+                        return db.get(EventCard, prior.event_id), False
+
+                    # 来源条目 ID 比标题稳定：更正标题仍属于同一来源观察链。
+                    row = None
+                    if source_item_id:
+                        linked = db.execute(select(EventObservation).where(
+                            EventObservation.source == source,
+                            EventObservation.source_item_id == source_item_id,
+                        ).order_by(EventObservation.id.desc()).limit(1)).scalar_one_or_none()
+                        if linked is not None:
+                            row = db.get(EventCard, linked.event_id)
+                    if row is None:
+                        row = db.execute(select(EventCard).where(
+                            EventCard.fingerprint == event["fingerprint"]
+                        )).scalar_one_or_none()
+                    created = row is None
+                    if created:
+                        row = EventCard(
+                            fingerprint=event["fingerprint"], title=event["title"],
+                            url=event.get("url"), summary=event.get("summary"), source=source,
+                            source_tier=event.get("source_tier", 3),
+                            published_at=event.get("published_at") or beijing_now_naive(),
+                            fact_kind=event.get("fact_kind", "fact"),
+                            certainty=event.get("certainty", "done"),
+                            category=event.get("category", "other"),
+                            half_life_hours=event.get("half_life_hours", 48),
+                            source_symbol=event.get("source_symbol"), status="active",
+                        )
+                        db.add(row)
+                        db.flush()
+
+                    source_query = select(EventObservation).where(
+                        EventObservation.event_id == row.id,
+                        EventObservation.source == source,
+                    )
+                    source_query = source_query.where(
+                        EventObservation.source_item_id == source_item_id
+                    ) if source_item_id else source_query.where(EventObservation.source_item_id.is_(None))
+                    prior_observation = db.execute(
+                        source_query.order_by(EventObservation.id.desc()).limit(1)
+                    ).scalar_one_or_none()
+                    previous = {
+                        "title": prior_observation.title if prior_observation else row.title,
+                        "summary": prior_observation.summary if prior_observation else row.summary,
+                        "source_published_at": (prior_observation.source_published_at
+                                                if prior_observation else None),
+                        "symbols": json.loads(prior_observation.source_symbols_json) if prior_observation else
+                                   ([row.source_symbol] if row.source_symbol else []),
+                    }
+                    changed = not created and (
+                        content["title"] != previous["title"] or
+                        content["summary"] != previous["summary"] or
+                        symbols != previous["symbols"] or
+                        (prior_observation is not None and
+                         source_published != previous["source_published_at"])
+                    )
+                    received = beijing_now_naive()
+                    observation = EventObservation(
+                        event_id=row.id, observation_key=observation_key,
+                        content_hash=content_hash, source=source, source_item_id=source_item_id,
+                        title=content["title"], summary=content["summary"], url=content["url"],
+                        source_published_at=source_published, received_at=received,
+                        available_at=received, source_symbols_json=json.dumps(symbols, ensure_ascii=False),
+                        board_codes_json=json.dumps(boards, ensure_ascii=False),
+                        change_kind=("initial" if created else
+                                     "revision" if changed and (prior_observation or
+                                                               (row.source == source and not source_item_id)) else
+                                     "variant" if changed else "corroboration"),
+                    )
+                    db.add(observation)
+                    db.flush()
+                    if changed:
+                        row.revision_pending_at = row.revision_pending_at or received
+                    elif not created and not row.url and event.get("url"):
+                        # URL 缺失可补；解释字段保持首次决策时的内容。
+                        row.url = event["url"]
+
+                    if created:
+                        raw_dirs = event.get("directions") or []
+                        dirs = dedupe_directions(raw_dirs)
+                        if len(dirs) != len(raw_dirs):
+                            log.warning("add_event: 方向行重复，已去重 %d 行（title=%s）",
+                                        len(raw_dirs) - len(dirs), event.get("title"))
+                        for d in dirs:
+                            db.add(EventDirection(
+                                event_id=row.id, observation_id=observation.id,
+                                target_type=d.get("target_type", "theme"), target=d["target"],
+                                direction=d.get("direction", 0), strength=d.get("strength", 1),
+                                chain=d.get("chain", ""), basis=d.get("basis", ""),
+                                matched_by=d.get("matched_by", "name"),
+                            ))
                     db.commit()
-                return existing, False
-            row = EventCard(
-                fingerprint=event["fingerprint"],
-                title=event["title"],
-                url=event.get("url"),
-                summary=event.get("summary"),
-                source=event.get("source") or "",
-                source_tier=event.get("source_tier", 3),
-                published_at=event.get("published_at") or beijing_now_naive(),
-                fact_kind=event.get("fact_kind", "fact"),
-                certainty=event.get("certainty", "done"),
-                category=event.get("category", "other"),
-                half_life_hours=event.get("half_life_hours", 48),
-                source_symbol=event.get("source_symbol"),
-                status="active",
-            )
-            db.add(row)
-            db.flush()
-            raw_dirs = event.get("directions") or []
-            dirs = dedupe_directions(raw_dirs)
-            if len(dirs) != len(raw_dirs):
-                # 产生层（build_event）本应已去重。走到这里说明有别的生产者直接
-                # 构造了 event dict —— **保住数据、但把问题留在日志里**，不静默吞掉
-                # （静默就会变成"某个来源的方向行永远少一行"这种查不出来的偏差）。
-                log.warning(
-                    "add_event: 方向行存在 (target_type,target) 重复，已去重 %d 行（title=%s）",
-                    len(raw_dirs) - len(dirs), event.get("title"),
-                )
-            for d in dirs:
-                db.add(EventDirection(
-                    event_id=row.id,
-                    target_type=d.get("target_type", "theme"),
-                    target=d["target"],
-                    direction=d.get("direction", 0),
-                    strength=d.get("strength", 1),
-                    chain=d.get("chain", ""),
-                    basis=d.get("basis", ""),
-                    matched_by=d.get("matched_by", "name"),
-                ))
-            try:
-                db.commit()
-            except IntegrityError:
-                # 并发/脏数据触发的唯一约束冲突：按重复处理。
-                # 注：**同一事件内方向行重复**这一路已在上面按 (target_type,target)
-                # 去重消化（2026-09-10），所以走到这里通常只有"并发插入同一指纹"；
-                # 只有 fingerprint 也查不到才 re-raise（真异常，如实抛不吞）。
-                db.rollback()
-                existing = db.execute(
-                    select(EventCard).where(EventCard.fingerprint == event["fingerprint"])
-                ).scalar_one_or_none()
-                if existing is None:
-                    raise
-                return existing, False
-            db.refresh(row)
-            return row, True
+                    db.refresh(row)
+                    return row, created
+                except IntegrityError:
+                    db.rollback()
+                    if attempt:
+                        raise
+        raise AssertionError("unreachable")
 
     def register(self, title: str, **kwargs) -> tuple[EventCard, bool]:
         """规则抽取 + 入库一步到位（route 手动注册/批量抽取共用）。"""
@@ -131,7 +183,7 @@ class EventStore:
         2026-09-09 时区口径：published_at 统一北京 naive，now 也取北京 naive
         （此前把北京 naive 当 UTC 解释，age 虚增 8h，事件提前"过期"）。
         """
-        if row.status != "active":
+        if row.status != "active" or getattr(row, "revision_pending_at", None) is not None:
             return False
 
         from app.core.bjtime import BJ_TZ, beijing_now_naive as _bj
@@ -151,11 +203,11 @@ class EventStore:
         from sqlalchemy.orm import selectinload
 
         with self._sf() as db:
+            stmt = select(EventCard).options(selectinload(EventCard.directions))
+            if active_only:
+                stmt = stmt.where(EventCard.status == "active", EventCard.revision_pending_at.is_(None))
             rows = db.execute(
-                select(EventCard)
-                .options(selectinload(EventCard.directions))
-                .order_by(EventCard.published_at.desc())
-                .limit(limit * 3)
+                stmt.order_by(EventCard.published_at.desc()).limit(limit * 3)
             ).scalars().all()
         out = [r for r in rows if self.is_active(r)] if active_only else list(rows)
         return out[:limit]
@@ -178,6 +230,8 @@ class EventStore:
             row = db.get(EventCard, event_id)
             if row is None:
                 return 0
+            if row.revision_pending_at is not None:
+                return 0
             has_dirs = db.execute(
                 select(EventDirection).where(EventDirection.event_id == event_id)
             ).scalars().first() is not None
@@ -188,9 +242,13 @@ class EventStore:
             if has_dirs or not directions:
                 db.commit()
                 return 0
+            basis = db.execute(select(EventObservation.id).where(
+                EventObservation.event_id == event_id
+            ).order_by(EventObservation.id).limit(1)).scalar_one_or_none()
             for d in directions:
                 db.add(EventDirection(
                     event_id=event_id,
+                    observation_id=basis,
                     target_type=d.get("target_type") or "theme",
                     target=d.get("target") or "",
                     direction=int(d.get("direction") or 0),
@@ -209,3 +267,9 @@ class EventStore:
                     select(EventDirection).where(EventDirection.event_id == event_id)
                 ).scalars()
             )
+
+    def observations_of(self, event_id: int) -> list[EventObservation]:
+        with self._sf() as db:
+            return list(db.execute(select(EventObservation).where(
+                EventObservation.event_id == event_id
+            ).order_by(EventObservation.id)).scalars())
