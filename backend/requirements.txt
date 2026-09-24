@@ -31,3 +31,4 @@ akquant==0.3.58
 # pytest 仅供单测：CI 正常路径装 requirements.lock（已含 pytest），lock 缺失回退
 # 装本文件时也必须能跑 pytest —— 因此保留在此分组，勿删；本地 venv 按 lock 安装。
 pytest>=8.0
+pytest-xdist>=3.8,<4
