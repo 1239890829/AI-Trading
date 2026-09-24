@@ -26,7 +26,7 @@ from datetime import datetime
 
 from app.core.ttl_cache import TTLCache
 from app.market.trade_calendar import in_trading_window
-from app.news.flash_state import FlashCursor
+from app.news.flash_state import FlashCheckpointStore, FlashCursor
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +53,14 @@ _BOARD_THEME_CACHE = TTLCache("flash-board-theme", ttl=300.0, maxsize=1)
 
 _HTTP = None
 _FLASH_CURSOR = FlashCursor()
+
+
+class FlashBatch(list):
+    """List-compatible fetched rows with per-channel coverage evidence."""
+
+    def __init__(self, rows=(), *, coverage: dict[int, dict] | None = None):
+        super().__init__(rows)
+        self.coverage = coverage or {}
 
 
 def _http():
@@ -145,57 +153,96 @@ def _parse_item(item: dict) -> dict | None:
     }
 
 
-async def fetch_fast_news(*, limit: int = _PAGE_SIZE, column: int = 100, pages: int = 1) -> list[dict] | None:
+async def fetch_fast_news(*, limit: int = _PAGE_SIZE, column: int = 100, pages: int = 1,
+                          stop_at_code: str | None = None, min_pages: int = 1) -> list[dict] | None:
     """拉取快讯（双域 failover + sortEnd 游标翻页）。全败返回 None（显式失败，绝不静默当空列表）。
 
-    - 逐域尝试：任一域翻页拿到非空结果即返回；
+    - 逐域尝试：覆盖完整才立即返回；不完整时再试备域，保留较长部分结果；
     - 翻页：用上一页 `data.sortEnd` 作下一页 `sortEnd` 游标，最多 `pages` 页；
       页返回空 / sortEnd 空 / 无新增 → 提前停（不再空转）；
-    - 跨页按 code 去重（游标边界可能重复）；
+    - 跨页相同内容去重，同 code 的内容修订保留；
     - 2026-09-10 实测：pageSize=50 翻页边界无缝衔接（次页首条 = 上页末条前一分钟）。
     """
     last_err: Exception | None = None
+    partial: FlashBatch | None = None
+    min_pages = min(max(1, min_pages), max(1, pages))
     for host in _HOSTS:
-        try:
-            out: list[dict] = []
-            seen: set[str] = set()
-            sort_end = ""
-            for _ in range(max(1, pages)):
+        out: list[dict] = []
+        seen: set[tuple] = set()
+        sort_end = ""
+        overlap = False
+        page_error = False
+        missing_code = False
+        unparseable_item = False
+        newest_code = None
+        newest_show_time = None
+        for page_number in range(max(1, pages)):
+            try:
+                resp = await _http().get(host + _PATH, params={
+                    "client": "web", "biz": "web_724", "fastColumn": str(column),
+                    "sortEnd": sort_end, "pageSize": str(limit), "req_trace": _req_trace(),
+                })
+                resp.raise_for_status()
+                data = resp.json().get("data") or {}
+                if not isinstance(data, dict):
+                    raise ValueError("fastNews data is not an object")
+            except Exception as exc:  # noqa: BLE001 —— 尝试备域，不丢已取得的部分数据
+                last_err = exc
+                page_error = True
+                break
+            items = data.get("fastNewsList") or []
+            if not isinstance(items, list):
+                last_err = ValueError("fastNewsList is not an array")
+                page_error = True
+                break
+            added = 0
+            for raw_item in items:
                 try:
-                    resp = await _http().get(host + _PATH, params={
-                        "client": "web",
-                        "biz": "web_724",
-                        "fastColumn": str(column),
-                        "sortEnd": sort_end,
-                        "pageSize": str(limit),
-                        "req_trace": _req_trace(),
-                    })
-                    resp.raise_for_status()
-                    data = resp.json().get("data") or {}
-                except Exception:
-                    # 翻页中途失败：已有数据返回部分结果（部分成功即可用）；否则换域
-                    if out:
-                        return out
-                    raise
-                items = data.get("fastNewsList") or []
-                added = 0
-                for p in (_parse_item(i) for i in items):
-                    if p is None:
-                        continue
-                    key = p.get("code") or p.get("title") or ""
-                    if key and key not in seen:
-                        seen.add(key)
-                        out.append(p)
-                        added += 1
-                nxt = (data.get("sortEnd") or "").strip()
-                if not items or not nxt or added == 0:
-                    break
-                sort_end = nxt
-            if out:
-                return out
+                    p = _parse_item(raw_item)
+                except (AttributeError, TypeError, ValueError):
+                    p = None
+                if p is None:
+                    unparseable_item = True
+                    continue
+                if raw_item.get("showTime") and p["show_time"] is None:
+                    unparseable_item = True
+                    continue  # 来源时间无效，不得以本机接收时刻冒充发布时间
+                if not p.get("code"):
+                    missing_code = True
+                key = (p.get("code"), p.get("title"), p.get("summary"), p.get("url"),
+                       p.get("show_time"), tuple(p.get("symbols") or ()),
+                       tuple(p.get("board_codes") or ()))
+                if newest_code is None and p.get("code"):
+                    newest_code, newest_show_time = p["code"], p.get("show_time")
+                if key not in seen:
+                    seen.add(key)
+                    out.append(p)
+                    added += 1
+                if stop_at_code and p.get("code") == stop_at_code:
+                    overlap = True
+            nxt = (data.get("sortEnd") or "").strip()
+            if (overlap and page_number + 1 >= min_pages) or not items or not nxt or added == 0:
+                break
+            sort_end = nxt
+        if out:
+            result = FlashBatch(out, coverage={column: {
+                "complete": not (page_error or missing_code or unparseable_item)
+                            and (stop_at_code is None or overlap),
+                "overlap": overlap, "newest_code": newest_code,
+                "newest_show_time": newest_show_time,
+                "reason": ("page_error" if page_error else
+                           "unparseable_item" if unparseable_item else
+                           "missing_source_id" if missing_code else
+                           "watermark_not_found" if stop_at_code and not overlap else None),
+            }})
+            if result.coverage[column]["complete"]:
+                return result
+            if partial is None or len(result) > len(partial):
+                partial = result
+        elif not page_error:
             last_err = ValueError(f"{host} 返回 200 但 fastNewsList 为空")
-        except Exception as exc:  # noqa: BLE001 —— 逐域尝试，最后一个错误显式带出
-            last_err = exc
+    if partial is not None:
+        return partial
     log.warning("flash news: all hosts failed: %s", last_err)
     return None
 
@@ -215,8 +262,11 @@ def configured_columns() -> list[int]:
     return out or [100]
 
 
-async def fetch_fast_news_multi(columns: list[int] | None = None, pages: int | None = None) -> list[dict] | None:
-    """多频道并发拉取 + 跨频道按 ``code`` 去重。
+async def fetch_fast_news_multi(columns: list[int] | None = None, pages: int | None = None,
+                                stop_at_codes: dict[int, str] | None = None,
+                                pages_by_channel: dict[int, int] | None = None,
+                                min_pages: int = 1) -> list[dict] | None:
+    """多频道并发拉取；同 code 同内容去重，跨频道修订保留。
 
     单频道失败不影响其他（部分成功即可用）；**全败才返回 None**——与单频道
     的「显式失败」语义一致，游标据此记 ``last_ok=False``（不静默当空列表）。
@@ -228,20 +278,49 @@ async def fetch_fast_news_multi(columns: list[int] | None = None, pages: int | N
 
         pages = settings.flash_news_pages
     cols = columns or configured_columns()
+    stop_at_codes = stop_at_codes or {}
+    pages_by_channel = pages_by_channel or {}
+    def page_limit(channel: int) -> int:
+        return pages_by_channel.get(channel, pages)
+
+    def tagged(channel: int, result: list[dict] | None) -> FlashBatch | None:
+        if result is None:
+            return None
+        if isinstance(result, FlashBatch):
+            return result
+        # Plain-list test adapters and older providers retain the same contract.
+        code = stop_at_codes.get(channel)
+        newest = next((p for p in result if p.get("code")), None)
+        overlap = code is None or any(p.get("code") == code for p in result)
+        return FlashBatch(result, coverage={channel: {
+            "complete": overlap, "overlap": overlap,
+            "newest_code": newest.get("code") if newest else None,
+            "newest_show_time": newest.get("show_time") if newest else None,
+            "reason": None if overlap else "watermark_not_found",
+        }})
     if len(cols) == 1:
-        return await fetch_fast_news(column=cols[0], pages=pages)
+        return tagged(cols[0], await fetch_fast_news(
+            column=cols[0], pages=page_limit(cols[0]),
+            stop_at_code=stop_at_codes.get(cols[0]), min_pages=min_pages))
     results = await asyncio.gather(
-        *(fetch_fast_news(column=c, pages=pages) for c in cols), return_exceptions=True
+        *(fetch_fast_news(column=c, pages=page_limit(c),
+                          stop_at_code=stop_at_codes.get(c), min_pages=min_pages)
+          for c in cols), return_exceptions=True
     )
     merged: list[dict] = []
-    seen: set[str] = set()
+    seen: set[tuple] = set()
     ok_any = False
-    for r in results:
+    coverage: dict[int, dict] = {}
+    for channel, r in zip(cols, results):
         if isinstance(r, BaseException) or r is None:
             continue
+        r = tagged(channel, r)
         ok_any = True
+        coverage.update(r.coverage)
         for p in r:
-            key = p.get("code") or p.get("title") or ""
+            key = (p.get("code"), p.get("title"), p.get("summary"), p.get("url"),
+                   p.get("show_time"), tuple(p.get("symbols") or ()),
+                   tuple(p.get("board_codes") or ()))
             if key in seen:
                 continue
             seen.add(key)
@@ -249,7 +328,7 @@ async def fetch_fast_news_multi(columns: list[int] | None = None, pages: int | N
     if not ok_any:
         log.warning("flash news: all columns failed (cols=%s)", cols)
         return None
-    return merged
+    return FlashBatch(merged, coverage=coverage)
 
 
 def _theme_names(state) -> list[str]:
@@ -298,6 +377,7 @@ def _to_event(p: dict, theme_names: list[str] | None = None,
         summary=p.get("summary"),
         published_at=published,
         source_symbol=symbols[0] if symbols else None,
+        source_symbols=symbols,
         theme_names=theme_names or [],
         board_themes=board_themes or [],
     )
@@ -353,21 +433,38 @@ async def _board_theme_map(state, theme_names: list[str] | None = None) -> dict[
 
 
 async def poll_once(app) -> int:
-    """拉一轮 → 逐条 build_event → EventStore 指纹去重入库。返回新增条数。
+    """拉一轮并按持久水位补采；只有覆盖旧水位且入库成功才推进。
 
     app 可以是 FastAPI 实例（走 app.state）或任何带 event_store 属性的对象
     （测试直接传 SimpleNamespace）。
     """
-    items = await fetch_fast_news_multi()
-    _FLASH_CURSOR.record_fetch(items is not None, len(items or []))
-    if not items:
-        return 0
     state = getattr(app, "state", app)
     store = getattr(state, "event_store", None)
     if store is None:
         from app.events.store import EventStore
 
         store = EventStore()
+    from app.core.config import settings
+
+    channels = configured_columns()
+    checkpoints = FlashCheckpointStore(getattr(store, "_sf", None))
+    prior = await asyncio.to_thread(checkpoints.load, channels)
+    stop_at_codes = {c: r.last_code for c, r in prior.items() if r.last_code}
+    catchup_pages = min(20, max(settings.flash_news_pages, settings.flash_news_catchup_pages))
+    pages_by_channel = {c: catchup_pages for c in stop_at_codes}
+    items = await fetch_fast_news_multi(
+        columns=channels, pages=settings.flash_news_pages,
+        stop_at_codes=stop_at_codes, pages_by_channel=pages_by_channel,
+        min_pages=settings.flash_news_pages)
+    coverage = getattr(items, "coverage", {}) if items is not None else {}
+    if not items:
+        try:
+            await asyncio.to_thread(checkpoints.record, channels, coverage, ingest_ok=True)
+        except Exception:  # noqa: BLE001 —— 水位写入失败下轮继续重拉，不伪造 OK
+            log.exception("flash news: failed to persist fetch gap")
+        _FLASH_CURSOR.record_fetch(False, 0)
+        _FLASH_CURSOR.record_ingest(0)
+        return 0
     # 题材目录每轮取一次（不是每条取一次）：目录是千级名称，逐条重取没必要。
     # 目录未同步时为空 → 方向行缺失但不臆造（与 events 路由同口径）。
     theme_names = _theme_names(state)
@@ -377,13 +474,25 @@ async def poll_once(app) -> int:
         board_map = await _board_theme_map(state, theme_names)
         _BOARD_THEME_CACHE.set("map", board_map)
     created = 0
+    ingest_ok = True
     for p in items:
         try:
             board_themes = [board_map[c] for c in (p.get("board_codes") or []) if c in board_map]
             _, is_new = store.add_event(_to_event(p, theme_names, board_themes))
             created += 1 if is_new else 0
         except Exception:  # noqa: BLE001 —— 单条入库失败不拖死整轮
+            ingest_ok = False
             log.exception("flash news: add_event failed: %s", p.get("title", "")[:50])
+    durable_ok = True
+    try:
+        await asyncio.to_thread(checkpoints.record, channels, coverage, ingest_ok=ingest_ok)
+    except Exception:  # noqa: BLE001 —— 入库已成功但水位写失败，重试靠观察键幂等
+        durable_ok = False
+        log.exception("flash news: failed to persist coverage checkpoint")
+    complete = durable_ok and ingest_ok and all(
+        bool((coverage.get(c) or {}).get("complete")) for c in channels
+    )
+    _FLASH_CURSOR.record_fetch(complete, len(items))
     _FLASH_CURSOR.record_ingest(created)
     return created
 

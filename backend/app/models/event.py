@@ -70,6 +70,21 @@ class EventInterpretation(Base):
     review_note: Mapped[str | None] = mapped_column(Text)
 
 
+class FlashWatermark(Base):
+    """Durable per-channel 7x24 coverage frontier, independent of process heartbeat."""
+
+    __tablename__ = "flash_watermark"
+
+    channel: Mapped[int] = mapped_column(Integer, primary_key=True)
+    last_code: Mapped[str | None] = mapped_column(String(128))
+    last_show_time: Mapped[datetime | None] = mapped_column(DateTime)
+    baseline_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_fetch_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_complete_at: Mapped[datetime | None] = mapped_column(DateTime)
+    gap_at: Mapped[datetime | None] = mapped_column(DateTime)
+    gap_reason: Mapped[str | None] = mapped_column(String(128))
+
+
 class EventObservation(Base):
     """来源原始观察。重复轮询幂等，原文修订追加，时间均为北京时间 naive。"""
 

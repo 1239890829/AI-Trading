@@ -246,14 +246,22 @@ class EventStore:
             if action == "adopt":
                 if interpretation is None:
                     raise ValueError("采纳修订需要完整人工解释")
-                dirs = interpretation["directions"]
+                dirs = [dict(d) for d in interpretation["directions"]]
                 keys = [(d["target_type"], d["target"]) for d in dirs]
                 if len(keys) != len(set(keys)):
                     raise ValueError("方向目标重复")
+                source_symbols = json.loads(latest.source_symbols_json)
+                for symbol in source_symbols:
+                    if symbol.isdigit() and len(symbol) == 6 and ("symbol", symbol) not in keys:
+                        dirs.append({
+                            "target_type": "symbol", "target": symbol, "direction": 0,
+                            "strength": 1, "chain": "来源标的关联，逐股方向待核",
+                            "basis": f"修订来源列出 {symbol}；未核定个股影响方向",
+                            "matched_by": "source",
+                        })
                 row.title, row.summary, row.url = latest.title, latest.summary, latest.url
                 row.source, row.source_symbol = latest.source, (
-                    json.loads(latest.source_symbols_json)[0]
-                    if len(json.loads(latest.source_symbols_json)) == 1 else None
+                    source_symbols[0] if len(source_symbols) == 1 else None
                 )
                 for field in ("source_tier", "category", "fact_kind", "certainty", "half_life_hours"):
                     setattr(row, field, interpretation[field])

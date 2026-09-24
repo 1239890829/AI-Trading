@@ -3,6 +3,7 @@
 - GET  /api/events?active=&limit=            活跃事件列表（时效=半衰期×2 实时计算）
 - GET  /api/events/impact                    影响力视图：四级分类 + L1/L2/L3 分级（§六.4 拍板）
 - GET  /api/events/{id}                      事件详情（含方向映射行）
+- GET  /api/events/flash-coverage           快讯各频道持久水位与断档状态
 - GET  /api/events/{id}/stocks               标的池：方向题材 → 官方成分反查 + override
 - GET  /api/events/symbol/{symbol}           个股相关活跃事件（详情页事件标签）
 - POST /api/events                           手动注册单条事件（写鉴权）
@@ -181,6 +182,17 @@ async def list_events(
     # 符合「同步 IO 搬线程」的前提（[[KB-ENG-67]]）。
     rows = await asyncio.to_thread(store.list_events, active_only=active, limit=limit)
     return {"data": {"count": len(rows), "items": [_serialize(r) for r in rows]}, "meta": {}}
+
+
+@router.get("/events/flash-coverage")
+async def flash_coverage() -> dict:
+    from app.news.flash import configured_columns
+    from app.news.flash_state import FlashCheckpointStore
+
+    channels = configured_columns()
+    rows = await asyncio.to_thread(FlashCheckpointStore().snapshot, channels)
+    return {"data": {"items": rows},
+            "meta": {"note": "baseline_at 之前的历史未核全；gap_at 非空表示覆盖尚未闭环"}}
 
 
 @router.get("/events/verify")
@@ -452,7 +464,7 @@ async def events_for_symbol(
 
     命中两条路径之一：
     - 方向题材 ∈ 该股官方归属题材（architecture-design §1 L3 归属反查）
-    - 事件抽取自该股的新闻（source_symbol）
+    - 来源列出该股（source_symbol 或 symbol 方向行；多标的可为方向待判）
     """
     sym = normalize_symbol(symbol)
     svc = getattr(request.app.state, "theme_catalog", None)
@@ -468,7 +480,9 @@ async def events_for_symbol(
     _rows = await asyncio.to_thread(store.list_events, active_only=True, limit=300)
     for row in _rows:
         dirs = row.directions
-        if row.source_symbol == sym:
+        if row.source_symbol == sym or any(
+            d.target_type == "symbol" and d.target == sym for d in dirs
+        ):
             matched.append({"event": row, "directions": dirs, "match_reason": "source"})
         else:
             hit = [d for d in dirs if d.target_type == "theme" and d.target in theme_names]

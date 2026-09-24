@@ -362,6 +362,48 @@ def test_active_event_hit_carries_the_visible_interpretation_id(tmp_path):
     assert {ref["event_id"] for ref in remaining[5]} == {row2.id}
 
 
+def test_multi_symbol_source_is_visible_for_every_stock_without_imputed_score(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.routes import events as events_route
+    from app.services.picks_pipeline import _build_event_hits_index
+
+    store = _isolated_store(tmp_path)
+    event = build_event("甲乙两家公司签约合作", source="东财快讯",
+                        source_symbols=["600001", "000002"])
+    event["source_item_id"] = "multi-1"
+    row, _ = store.add_event(event)
+    assert {d.target for d in store.directions_of(row.id) if d.target_type == "symbol"} == {
+        "600001", "000002"}
+    hits = _build_event_hits_index(store.list_events(active_only=True))
+    assert hits["600001"][:2] == (0, 0)
+    assert hits["000002"][:2] == (0, 0)
+    assert hits["000002"][4] == 1
+
+    app = FastAPI()
+    app.include_router(events_route.router, prefix="/api")
+    app.dependency_overrides[events_route.get_store] = lambda: store
+    with TestClient(app) as api:
+        detail = api.get(f"/api/events/{row.id}").json()["data"]
+        assert detail["observations"][0]["source_symbols"] == ["600001", "000002"]
+        second = api.get("/api/events/symbol/000002").json()["data"]
+        assert any(it["id"] == row.id and it["match_reason"] == "source"
+                   for it in second["items"])
+    correction = build_event(event["title"], source="东财快讯", summary="合作条款更正",
+                             source_symbols=["600001", "000002"])
+    correction["source_item_id"] = "multi-1"
+    store.add_event(correction)
+    target_id = store.pending_observation_of(row.id).id
+    store.review_revision(row.id, expected_observation_id=target_id, action="adopt",
+                          note="核对更正后逐股方向仍未知", interpretation={
+                              "source_tier": 3, "category": "corporate", "fact_kind": "fact",
+                              "certainty": "done", "half_life_hours": 48, "directions": [],
+                          })
+    assert {(d.target, d.direction) for d in store.directions_of(row.id) if d.target_type == "symbol"} == {
+        ("600001", 0), ("000002", 0)}
+
+
 def test_same_source_id_changed_title_and_late_publication_stay_linked(tmp_path):
     from datetime import datetime
 

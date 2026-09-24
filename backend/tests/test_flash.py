@@ -13,7 +13,7 @@ import pytest
 from app.core.db import get_engine, get_session_factory
 from app.events.store import EventStore
 from app.news import flash
-from app.news.flash_state import FlashCursor
+from app.news.flash_state import FlashCheckpointStore, FlashCursor
 
 
 def _run(coro):
@@ -79,6 +79,16 @@ def _payload(n: int = 2) -> dict:
 
 def _store() -> EventStore:
     return EventStore(get_session_factory())
+
+
+def _isolated_store(tmp_path) -> EventStore:
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from app.models.watchlist import Base
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'flash-gap.db'}")
+    Base.metadata.create_all(engine)
+    return EventStore(sessionmaker(bind=engine, autoflush=False, expire_on_commit=False))
 
 
 def _app(store: EventStore) -> SimpleNamespace:
@@ -154,6 +164,9 @@ def test_to_event_passes_first_symbol_as_source_symbol():
     assert ev["source_symbol"] == "301468"
     assert ev["source_symbols"] == ["301468", "688496"]
     assert ev["source_item_id"] == "C9"
+    symbol_directions = [d for d in ev["directions"] if d["target_type"] == "symbol"]
+    assert {d["target"] for d in symbol_directions} == {"301468", "688496"}
+    assert all(d["direction"] == 0 for d in symbol_directions), "多股同题不得共享首股的词典利好/利空"
     # 无关联标的 → None（显式空，不猜）
     ev2 = flash._to_event({
         "title": "某宏观消息", "summary": None, "code": "C10",
@@ -176,7 +189,7 @@ def test_configured_columns_parsing(monkeypatch):
 
 
 def test_fetch_multi_merges_and_dedupes(monkeypatch):
-    """多频道并发：按 code 去重；单频道失败不拖累其他。"""
+    """多频道并发：同 code 同内容去重；单频道失败不拖累其他。"""
     calls: list[int] = []
 
     async def fake(**kwargs):
@@ -192,6 +205,34 @@ def test_fetch_multi_merges_and_dedupes(monkeypatch):
     out = _run(flash.fetch_fast_news_multi([100, 101]))
     assert sorted(calls) == [100, 101]
     assert [p["code"] for p in out] == ["B", "A"]
+
+
+def test_fetch_multi_keeps_same_code_content_revision(monkeypatch):
+    async def fake(**kwargs):
+        return [{"title": "公司订单", "summary": "已签署" if kwargs["column"] == 100 else "尚未签署",
+                 "code": "A", "symbols": ["600001"]}]
+
+    monkeypatch.setattr(flash, "fetch_fast_news", fake)
+    out = _run(flash.fetch_fast_news_multi([100, 101]))
+    assert [p["summary"] for p in out] == ["已签署", "尚未签署"]
+
+
+def test_cross_channel_revision_becomes_pending_observation(tmp_path, monkeypatch):
+    from app.core import config as cfg
+
+    monkeypatch.setattr(cfg.settings, "flash_news_columns", "100,101")
+    store = _isolated_store(tmp_path)
+    async def fake(**kwargs):
+        return [{"title": "某公司公告订单已签署", "summary": (
+            "订单已签署" if kwargs["column"] == 100 else "订单尚未签署"),
+            "code": "C-REV", "show_time": None, "symbols": []}]
+
+    monkeypatch.setattr(flash, "fetch_fast_news", fake)
+    _run(flash.poll_once(_app(store)))
+    rows = store.list_events(active_only=False)
+    assert len(rows) == 1
+    assert [o.summary for o in store.observations_of(rows[0].id)] == ["订单已签署", "订单尚未签署"]
+    assert rows[0].revision_pending_at is not None
 
 
 def test_fetch_multi_all_fail_returns_none(monkeypatch):
@@ -258,6 +299,203 @@ def test_fetch_pagination_passes_cursor_and_stops(monkeypatch):
     items = _run(flash.fetch_fast_news(pages=5))
     assert [p["code"] for p in items] == ["A", "B", "C"], "翻页应并入并去重"
     assert sort_ends == ["", "c2", "c3"], f"游标应逐页传递，实际 {sort_ends}"
+
+
+def test_fetch_watermark_overlap_and_partial_page_failure(monkeypatch):
+    pages = [
+        {"code": "1", "data": {"fastNewsList": [
+            {"code": "NEW", "title": "新快讯"}, {"code": "MID", "title": "中间快讯"},
+        ], "sortEnd": "older"}},
+        {"code": "1", "data": {"fastNewsList": [
+            {"code": "OLD", "title": "旧水位快讯"},
+        ], "sortEnd": ""}},
+    ]
+    monkeypatch.setattr(flash, "_HTTP", FakeClient(pages))
+    fetched = _run(flash.fetch_fast_news(pages=5, stop_at_code="OLD"))
+    assert [p["code"] for p in fetched] == ["NEW", "MID", "OLD"]
+    assert fetched.coverage[100]["complete"] and fetched.coverage[100]["overlap"]
+    assert fetched.coverage[100]["newest_code"] == "NEW"
+
+    monkeypatch.setattr(flash, "_HTTP", FakeClient([
+        pages[0], RuntimeError("primary page 2 failed"),
+        pages[0], RuntimeError("backup page 2 failed"),
+    ]))
+    partial = _run(flash.fetch_fast_news(pages=5, stop_at_code="OLD"))
+    assert [p["code"] for p in partial] == ["NEW", "MID"]
+    assert partial.coverage[100]["complete"] is False
+    assert partial.coverage[100]["reason"] == "page_error"
+
+    backup_overlap = {"code": "1", "data": {"fastNewsList": [
+        {"code": "NEW", "title": "新快讯"}, {"code": "OLD", "title": "旧水位快讯"},
+    ], "sortEnd": ""}}
+    monkeypatch.setattr(flash, "_HTTP", FakeClient([pages[0], backup_overlap]))
+    recovered = _run(flash.fetch_fast_news(pages=1, stop_at_code="OLD"))
+    assert recovered.coverage[100]["complete"] is True, "主域漏水位时应尝试备域"
+
+
+def test_fetch_keeps_revision_lookback_after_watermark_overlap(monkeypatch):
+    first = {"code": "1", "data": {"fastNewsList": [
+        {"code": "NEW", "title": "新快讯"}, {"code": "OLD", "title": "旧水位"},
+    ], "sortEnd": "older"}}
+    second = {"code": "1", "data": {"fastNewsList": [
+        {"code": "EARLIER", "title": "更早快讯", "summary": "更正正文"},
+    ], "sortEnd": ""}}
+    monkeypatch.setattr(flash, "_HTTP", FakeClient([first, second]))
+    rows = _run(flash.fetch_fast_news(pages=10, min_pages=2, stop_at_code="OLD"))
+    assert [p["code"] for p in rows] == ["NEW", "OLD", "EARLIER"]
+    assert rows.coverage[100]["complete"] is True
+
+    monkeypatch.setattr(flash, "_HTTP", FakeClient([
+        first, RuntimeError("primary lookback failed"),
+        first, RuntimeError("backup lookback failed"),
+    ]))
+    partial = _run(flash.fetch_fast_news(pages=10, min_pages=2, stop_at_code="OLD"))
+    assert partial.coverage[100]["complete"] is False
+    assert partial.coverage[100]["reason"] == "page_error"
+
+
+def test_malformed_source_row_cannot_advance_coverage(monkeypatch):
+    malformed = {"code": "1", "data": {"fastNewsList": [
+        {"code": "GOOD", "title": "正常快讯"},
+        {"code": "BROKEN", "summary": "缺标题"},
+    ], "sortEnd": ""}}
+    monkeypatch.setattr(flash, "_HTTP", FakeClient([malformed, malformed]))
+    rows = _run(flash.fetch_fast_news(pages=1))
+    assert [p["code"] for p in rows] == ["GOOD"]
+    assert rows.coverage[100]["complete"] is False
+    assert rows.coverage[100]["reason"] == "unparseable_item"
+
+    malformed["data"]["fastNewsList"] = [
+        {"code": "GOOD", "title": "正常快讯"}, "invalid row",
+    ]
+    monkeypatch.setattr(flash, "_HTTP", FakeClient([malformed, malformed]))
+    rows = _run(flash.fetch_fast_news(pages=1))
+    assert rows.coverage[100]["complete"] is False
+    assert rows.coverage[100]["reason"] == "unparseable_item"
+
+    malformed["data"]["fastNewsList"] = [
+        {"code": "GOOD", "title": "正常快讯"},
+        {"code": "BAD-TIME", "title": "错误来源时间", "showTime": "not a timestamp"},
+    ]
+    monkeypatch.setattr(flash, "_HTTP", FakeClient([malformed, malformed]))
+    rows = _run(flash.fetch_fast_news(pages=1))
+    assert [p["code"] for p in rows] == ["GOOD"]
+    assert rows.coverage[100]["reason"] == "unparseable_item"
+
+
+def test_poll_watermark_survives_restart_and_gap_only_closes_on_overlap(tmp_path, monkeypatch):
+    store = _isolated_store(tmp_path)
+    checkpoint = FlashCheckpointStore(store._sf)
+    batches = [
+        ["A", "B"], ["C", "B", "A"], ["E", "D"], ["E", "D", "C"],
+    ]
+    def item(code):
+        return {"code": code, "title": f"测试快讯{code}订单落地", "show_time": None,
+                "summary": None, "symbols": []}
+
+    async def fake_fetch(**kwargs):
+        return [item(code) for code in batches.pop(0)]
+
+    monkeypatch.setattr(flash, "fetch_fast_news", fake_fetch)
+    app = _app(store)
+    assert _run(flash.poll_once(app)) == 2
+    first = checkpoint.load([100])[100]
+    assert first.last_code == "A" and first.baseline_at is not None
+    assert _run(flash.poll_once(app)) == 1
+    assert FlashCheckpointStore(store._sf).load([100])[100].last_code == "C", "新实例应读到持久水位"
+    assert _run(flash.poll_once(app)) == 2
+    gap = checkpoint.load([100])[100]
+    assert gap.last_code == "C" and gap.gap_reason == "watermark_not_found"
+    assert _run(flash.poll_once(app)) == 0
+    closed = checkpoint.load([100])[100]
+    assert closed.last_code == "E" and closed.gap_at is None
+
+
+def test_ingest_failure_keeps_durable_frontier_for_retry(tmp_path, monkeypatch):
+    store = _isolated_store(tmp_path)
+    checkpoint = FlashCheckpointStore(store._sf)
+    batches = [["A"], ["B", "A"], ["B", "A"]]
+    async def fake_fetch(**kwargs):
+        return [{"code": code, "title": f"测试快讯{code}订单落地",
+                 "summary": None, "show_time": None, "symbols": []}
+                for code in batches.pop(0)]
+
+    monkeypatch.setattr(flash, "fetch_fast_news", fake_fetch)
+    _run(flash.poll_once(_app(store)))
+    original = store.add_event
+    def failing(event):
+        if event.get("source_item_id") == "B":
+            raise RuntimeError("test ingest failure")
+        return original(event)
+    monkeypatch.setattr(store, "add_event", failing)
+    assert _run(flash.poll_once(_app(store))) == 0
+    failed = checkpoint.load([100])[100]
+    assert failed.last_code == "A" and failed.gap_reason == "ingest_error"
+    monkeypatch.setattr(store, "add_event", original)
+    assert _run(flash.poll_once(_app(store))) == 1
+    recovered = checkpoint.load([100])[100]
+    assert recovered.last_code == "B" and recovered.gap_at is None
+
+
+def test_channel_failure_only_advances_other_covered_channel(tmp_path, monkeypatch):
+    from app.core import config as cfg
+
+    monkeypatch.setattr(cfg.settings, "flash_news_columns", "100,101")
+    store = _isolated_store(tmp_path)
+    checkpoint = FlashCheckpointStore(store._sf)
+    round_no = 0
+    async def fake_fetch(**kwargs):
+        channel = kwargs["column"]
+        if round_no == 1 and channel == 100:
+            return None
+        codes = (["A100"] if channel == 100 else ["A101"]) if round_no == 0 else ["B101", "A101"]
+        return [{"code": code, "title": f"测试快讯{code}订单落地",
+                 "summary": None, "show_time": None, "symbols": []} for code in codes]
+
+    monkeypatch.setattr(flash, "fetch_fast_news", fake_fetch)
+    _run(flash.poll_once(_app(store)))
+    round_no = 1
+    _run(flash.poll_once(_app(store)))
+    rows = checkpoint.load([100, 101])
+    assert rows[100].last_code == "A100" and rows[100].gap_reason == "fetch_failed"
+    assert rows[101].last_code == "B101" and rows[101].gap_at is None
+
+
+def test_prebaseline_failure_remains_visible_after_first_success(tmp_path, monkeypatch):
+    store = _isolated_store(tmp_path)
+    async def failed(**kwargs):
+        return None
+    monkeypatch.setattr(flash, "fetch_fast_news", failed)
+    _run(flash.poll_once(_app(store)))
+    assert FlashCheckpointStore(store._sf).load([100])[100].gap_reason == "fetch_failed"
+
+    async def success(**kwargs):
+        return [{"code": "A", "title": "测试快讯A订单落地", "show_time": None,
+                 "summary": None, "symbols": []}]
+    monkeypatch.setattr(flash, "fetch_fast_news", success)
+    _run(flash.poll_once(_app(store)))
+    row = FlashCheckpointStore(store._sf).load([100])[100]
+    assert row.last_code == "A" and row.baseline_at is not None
+    assert row.gap_reason == "prebaseline_unverifiable", "首次成功前的失败窗口不可冒充已补齐"
+
+
+def test_flash_coverage_route_exposes_durable_gap(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.routes import events as events_route
+    from app.news import flash_state
+
+    checkpoint = FlashCheckpointStore(_isolated_store(tmp_path)._sf)
+    checkpoint.record([100], {}, ingest_ok=True)
+    monkeypatch.setattr(flash_state, "FlashCheckpointStore", lambda: checkpoint)
+    app = FastAPI()
+    app.include_router(events_route.router, prefix="/api")
+    with TestClient(app) as api:
+        data = api.get("/api/events/flash-coverage").json()["data"]["items"]
+    assert data[0]["channel"] == 100
+    assert data[0]["last_code"] is None
+    assert data[0]["gap_reason"] == "fetch_failed"
 
 
 # --------------------------------------------------------------- 入库：指纹去重 + 心跳

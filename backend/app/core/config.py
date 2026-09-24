@@ -191,12 +191,14 @@ class Settings(BaseSettings):
     # 频道（东财 fastColumn，2026-09-10 实测）：100=**全部**（含公司/资金/政策/
     # 市场，已覆盖 101 内容）｜101=要闻｜102/103=公司｜104/110=市场｜105=社会
     # ｜107/111/112/113=国际。默认 100 修正"只拉宏观→盘后公司消息无法关联"的
-    # 覆盖缺口（retro-and-gaps P0-2）。多频道用逗号分隔，跨频道按 code 去重。
+    # 覆盖缺口（retro-and-gaps P0-2）。多频道用逗号分隔；同 code 内容修订保留。
     flash_news_columns: str = "100"
     # 每频道翻页数（retro P0-2 多页拉取）：东财 getFastNewsList 用 data.sortEnd
     # 游标翻页（实测边界无缝衔接）。默认 2 页 = 100 条/频道，追平冷启动历史；
     # 每轮仍靠 EventStore 指纹去重，翻页只增加覆盖不产生重复。
     flash_news_pages: int = 2
+    # 有持久水位后最多向前追溯的页数；超出上限明确留下 gap，不假装已补齐。
+    flash_news_catchup_pages: int = 10
 
     # ---- 盘中情绪监控（sentiment P2 #14，参考 daben-review）----
     # 交易时段周期探测三类纯规则 P0 事件：高度板(≥4板)炸板 / 炸板率连续破
