@@ -25,7 +25,7 @@ from collections import deque
 from datetime import timedelta
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.core.bjtime import beijing_now, beijing_now_naive
 from app.core.config import settings
@@ -38,6 +38,9 @@ from app.notifiers import get_notifier_registry
 from app.picks import distinctiveness
 
 log = logging.getLogger(__name__)
+
+# SQLite trim 默认只去空格；与下方 Python str.strip 保持同一题材名口径。
+_SQL_STRIP_CHARS = "".join(chr(code) for code in range(0x3001) if chr(code).isspace())
 
 # ---------------------------------------------------------------- 初始参数（未经实证）
 
@@ -329,12 +332,13 @@ def match_news_events(
     """
     sf = session_factory or get_session_factory()
     name = (theme_name or "").strip()
-    if not name:
+    if len(name) < 2:
         return []
     with sf() as db:
         latest_version_id = select(func.max(EventInterpretation.id)).where(
             EventInterpretation.event_id == EventCard.id
         ).correlate(EventCard).scalar_subquery()
+        target_name = func.trim(EventDirection.target, _SQL_STRIP_CHARS)
         rows = db.execute(
             select(
                 EventCard.id, EventCard.published_at, EventCard.title, EventCard.source,
@@ -350,6 +354,11 @@ def match_news_events(
                 EventCard.revision_pending_at.is_(None),
                 EventDirection.direction != 0,
                 EventDirection.target_type == "theme",
+                # 先按目标题材筛掉无关方向，再截有界近期窗口；否则 300 条
+                # 无关快讯可把窗口内较早的真实归因依据挤掉。
+                func.length(target_name) >= 2,
+                or_(func.instr(name, target_name) > 0,
+                    func.instr(target_name, name) > 0),
             )
             .order_by(EventCard.published_at.desc())
             .limit(300)

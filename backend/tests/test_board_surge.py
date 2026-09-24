@@ -214,6 +214,30 @@ def test_match_news_events_direction_and_containment():
     assert bs.match_news_events("MLCC概念", since=now - timedelta(hours=6), session_factory=old_sf) == []
 
 
+def test_match_news_events_filters_theme_before_bounded_window():
+    sf = _sf()
+    now = datetime(2026, 9, 24, 14, 0)
+    with sf() as db:
+        relevant = EventCard(fingerprint="older-mlcc", title="MLCC订单公告",
+                             source="公告", published_at=now - timedelta(hours=5))
+        db.add(relevant)
+        db.flush()
+        db.add(EventDirection(event_id=relevant.id, target_type="theme",
+                              target="\t MLCC \t", direction=1))
+        relevant_id = relevant.id
+        for index in range(301):
+            unrelated = EventCard(fingerprint=f"other-{index}", title=f"无关消息 {index}",
+                                  source="快讯", published_at=now - timedelta(hours=1))
+            db.add(unrelated)
+            db.flush()
+            db.add(EventDirection(event_id=unrelated.id, target_type="theme",
+                                  target="算力", direction=1))
+        db.commit()
+
+    news = bs.match_news_events("MLCC概念", now - timedelta(hours=6), sf)
+    assert [hit["event_ref"]["event_id"] for hit in news] == [relevant_id]
+
+
 def test_board_surge_alert_snapshot_keeps_event_versions_after_revision():
     sf = _sf()
     store = EventStore(sf)
