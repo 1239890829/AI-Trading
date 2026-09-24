@@ -27,6 +27,7 @@ export interface NewsModalItem {
   source?: string | null;
   kindLabel?: string;
   digest?: string | null;
+  evidence?: string;
 }
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -291,6 +292,7 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
             {item.kindLabel && <span className="rounded bg-zinc-100 px-1 py-px dark:bg-zinc-800">{item.kindLabel}</span>}
             {shownSource && <span>{shownSource}</span>}
             {shownTime && <span>{shownTime}</span>}
+            {item.evidence && <span>{item.evidence}</span>}
             {content?.cached && <span className="text-zinc-600 dark:text-zinc-400">缓存</span>}
             {content?.truncated && <span className="text-amber-800 dark:text-amber-500">长文已截断，完整内容见原文</span>}
           </div>

@@ -19,6 +19,14 @@ export interface EventDirectionRow {
   memory_leaders?: { symbol: string; name: string; max_boards: number; hit_days: number }[];
 }
 
+export interface EventInterpretationRef {
+  event_id: number;
+  version_id: number | null;
+  observation_id: number | null;
+  available_at: string | null;
+  state: "active" | "pending" | "withdrawn" | "unknown";
+}
+
 export interface EventSummary {
   id: number;
   title: string;
@@ -35,6 +43,8 @@ export interface EventSummary {
   source_symbol: string | null;
   is_active: boolean;
   directions: EventDirectionRow[];
+  /** 列表读取时的解释版本；旧事件没有版本时保持 unknown。 */
+  interpretation_ref?: EventInterpretationRef | null;
   /** 判定状态机（2026-09-09）：judged 已判定 / pending 待判 / neutral 待判超时收敛 / expired 过期 */
   judge_status?: "judged" | "pending" | "neutral" | "expired" | "unknown";
   judge_status_label?: string;

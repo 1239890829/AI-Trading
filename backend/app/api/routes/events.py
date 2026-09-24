@@ -126,6 +126,10 @@ def _serialize(row, directions=None) -> dict:
         "status": row.status,
         "is_active": EventStore.is_active(row),
         "revision_pending_at": revision_pending_at.isoformat(sep=" ") if revision_pending_at else None,
+        "interpretation_ref": getattr(row, "interpretation_ref", None) or {
+            "event_id": row.id, "version_id": None, "observation_id": None,
+            "available_at": None, "state": "unknown",
+        },
         # 判定结果（2026-09-09 需求 2）：利好/利空/中性由 directions 承载，
         # 这里补「判定时间 + 判定状态」——状态是读时派生（judge_state 纯函数），
         # 不落库免迁移；待判超时自动收敛中性，避免事件长期挂在「待判」。
@@ -746,7 +750,8 @@ async def register_event(body: EventItemIn, request: Request, store: EventStore 
         is_announcement=body.is_announcement,
         theme_names=_theme_names(request.app.state),
     )
-    return {"data": {**_serialize(row, store.directions_of(row.id)), "created": created}, "meta": {}}
+    current = store.get_event(row.id)
+    return {"data": {**_serialize(current, store.directions_of(row.id)), "created": created}, "meta": {}}
 
 
 # POST /events/extract 与旧 /events/{id}/review 已删（2026-09-08 审查 P0-4：
