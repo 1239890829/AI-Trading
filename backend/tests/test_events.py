@@ -753,6 +753,8 @@ def test_events_api_lifecycle(client, monkeypatch: pytest.MonkeyPatch):
     assert r.status_code == 201
     data = r.json()["data"]
     assert data["created"] is True
+    assert data["interpretation_ref"]["version_id"] is not None
+    assert data["interpretation_ref"]["state"] == "active"
     assert data["category"] == "corporate"
     assert data["directions"][0]["target"] == "存储芯片"
     assert data["directions"][0]["direction"] == 1
@@ -767,7 +769,9 @@ def test_events_api_lifecycle(client, monkeypatch: pytest.MonkeyPatch):
 
     # 列表
     r = client.get("/api/events")
-    assert any(i["id"] == eid for i in r.json()["data"]["items"])
+    listed = next(i for i in r.json()["data"]["items"] if i["id"] == eid)
+    assert listed["interpretation_ref"]["version_id"] == detail["interpretations"][-1]["id"]
+    assert listed["interpretation_ref"]["state"] == "active"
 
     # 标的池：成分未同步 → 懒同步（mock fetch_members）→ 池返回
     async def fake_members(code):
@@ -825,6 +829,10 @@ def test_revision_detail_is_visible_while_opportunity_pool_is_paused(tmp_path):
         assert detail["observations"][1]["source_symbols"] == ["301468", "688496"]
         assert detail["pending_review_observation_id"] == detail["observations"][-1]["id"]
         assert [v["state"] for v in detail["interpretations"]] == ["active", "pending"]
+        assert detail["interpretation_ref"]["version_id"] == detail["interpretations"][-1]["id"]
+        assert detail["interpretation_ref"]["state"] == "pending"
+        inactive = api.get("/api/events?active=false").json()["data"]["items"]
+        assert next(i for i in inactive if i["id"] == row.id)["interpretation_ref"]["state"] == "pending"
         pending_at = detail["interpretations"][-1]["effective_at"]
         replay = api.get(f"/api/events/{row.id}/interpretation", params={"as_of": pending_at})
         assert replay.status_code == 200 and replay.json()["data"]["state"] == "pending"
@@ -843,6 +851,30 @@ def test_revision_detail_is_visible_while_opportunity_pool_is_paused(tmp_path):
             "action": "retain", "note": "重复",
         })
         assert repeated.status_code == 409
+
+
+def test_legacy_event_api_does_not_invent_interpretation_version(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.routes import events as events_route
+    from app.models.event import EventCard
+
+    store = _isolated_store(tmp_path)
+    with store._sf() as db:
+        row = EventCard(fingerprint="legacy-ref", title="历史事件无观察版本", source="legacy")
+        db.add(row)
+        db.commit()
+        event_id = row.id
+    app = FastAPI()
+    app.include_router(events_route.router, prefix="/api")
+    app.dependency_overrides[events_route.get_store] = lambda: store
+    with TestClient(app) as api:
+        detail = api.get(f"/api/events/{event_id}").json()["data"]
+        listed = api.get("/api/events?active=false").json()["data"]["items"]
+    expected = {"event_id": event_id, "version_id": None, "observation_id": None,
+                "available_at": None, "state": "unknown"}
+    assert detail["interpretation_ref"] == expected
+    assert next(i for i in listed if i["id"] == event_id)["interpretation_ref"] == expected
 
 
 def test_events_for_symbol_api(client, monkeypatch: pytest.MonkeyPatch):
@@ -882,6 +914,7 @@ def test_events_for_symbol_api(client, monkeypatch: pytest.MonkeyPatch):
     assert len(ids) == 2, "题材命中 + source_symbol 两条路径各命中一个"
     reasons = {i["match_reason"] for i in data["items"]}
     assert reasons == {"theme", "source"}
+    assert all(i["interpretation_ref"]["version_id"] is not None for i in data["items"])
 
     # 非法代码
     assert client.get("/api/events/symbol/xyz").status_code == 400

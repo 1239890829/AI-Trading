@@ -28,6 +28,10 @@ const event: EventSummary = {
   half_life_hours: 48,
   source_symbol: null,
   is_active: true,
+  interpretation_ref: {
+    event_id: 7, version_id: 12, observation_id: 9,
+    available_at: "2026-08-31 09:02:00", state: "active",
+  },
   directions: [
     { target_type: "theme", target: "黄金概念", direction: -1, strength: 2, chain: "", basis: "" },
   ],
@@ -62,6 +66,7 @@ describe("StockEventsRow", () => {
     fireEvent.click(screen.getByRole("button", { name: /沃什鹰派/ }));
     const modal = await screen.findByRole("dialog");
     expect(modal).toBeTruthy();
+    expect(modal.textContent).toContain("#12 · 生效 · 2026-08-31 09:02:00");
     await screen.findByText("正文第一段。");
     const link = screen.getByText("打开原文 ↗").closest("a");
     expect(link?.getAttribute("href")).toBe("https://example.com/news/7");
@@ -92,6 +97,14 @@ describe("StockEventsRow", () => {
     fireEvent.click(screen.getByRole("button", { name: /沃什鹰派/ }));
     const modal = await screen.findByRole("dialog");
     expect(modal.textContent).toContain("原文链接缺失");
+  });
+
+  it("旧事件缺解释版本时明确显示未知", async () => {
+    mockedGet.mockResolvedValue({ symbol: "600519", themes: [], count: 1,
+      items: [{ ...event, interpretation_ref: null }] });
+    renderWithProvider(<StockEventsRow symbol="600519" />);
+    fireEvent.click(await screen.findByRole("button", { name: /沃什鹰派/ }));
+    expect((await screen.findByRole("dialog")).textContent).toContain("历史解释版本未知");
   });
 
   it("指数（isIndex）：整行不渲染，且**不发请求**（后端对指数代码必拒 400）", async () => {

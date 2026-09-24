@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { getEventsForSymbol, type EventSummary } from "@/lib/api";
 import { useDetailModal } from "@/components/detail/detail-modal";
+import { eventInterpretationText } from "@/lib/event-view";
 
 const DIRECTION_LABEL: Record<number, { text: string; cls: string }> = {
   1: { text: "利好", cls: "text-up-ink dark:text-up" },
@@ -140,6 +141,7 @@ export function StockEventsRow({ symbol, isIndex = false }: { symbol: string; is
                 date: e.published_at ?? null,
                 body: e.summary ?? null,
                 meta: [
+                  { label: "列表解释版本", value: eventInterpretationText(e) },
                   ...(dir ? [{ label: "判定", value: `${dir.text}${e.judge_status_label ? `（${e.judge_status_label}）` : ""}` }] : []),
                   ...(e.directions[0]?.target ? [{ label: "关联板块", value: e.directions[0].target }] : []),
                   ...(e.directions[0]?.basis ? [{ label: "依据", value: e.directions[0].basis }] : []),

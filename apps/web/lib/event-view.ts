@@ -17,7 +17,7 @@
  * ⚠️ 抽屉里是**窄栏**（max-w-sm），因此点击落点的构造与盘面页**必须一致**，
  * 但版式由各自决定 —— 本模块刻意不提供 JSX。
  */
-import type { ImpactEvent } from "@/lib/api";
+import type { EventSummary, ImpactEvent } from "@/lib/api";
 import type { NewsModalItem } from "@/components/news-modal";
 import type { DetailPayload } from "@/components/detail/detail-modal";
 
@@ -55,6 +55,14 @@ export function levelTitle(level: string): string {
   return "L3 不上：日常经营/人事变动";
 }
 
+/** 列表读取时的解释身份；旧数据不能猜测其历史版本。 */
+export function eventInterpretationText(e: EventSummary): string {
+  const ref = e.interpretation_ref;
+  if (!ref?.version_id) return "历史解释版本未知";
+  const state = { active: "生效", pending: "待复核", withdrawn: "已撤回", unknown: "未知" }[ref.state];
+  return `#${ref.version_id} · ${state} · ${ref.available_at ?? "时间未知"}`;
+}
+
 /**
  * 有原文链接 ⇒ 全文弹窗载荷。
  *
@@ -69,6 +77,7 @@ export function eventNewsItem(e: ImpactEvent): NewsModalItem {
     source: e.source ?? null,
     kindLabel: "快讯",
     digest: e.summary ?? null,
+    evidence: `列表解释版本 ${eventInterpretationText(e)}`,
   };
 }
 
@@ -90,6 +99,7 @@ export function eventDetailPayload(e: ImpactEvent): DetailPayload {
     source: e.source ?? null,
     date: e.published_at ?? null,
     meta: [
+      { label: "列表解释版本", value: eventInterpretationText(e) },
       ...(e.judge_status_label ? [{ label: "判定", value: e.judge_status_label }] : []),
       ...(d
         ? [{ label: "方向", value: d.direction > 0 ? "利好" : d.direction < 0 ? "利空" : "待判" }]

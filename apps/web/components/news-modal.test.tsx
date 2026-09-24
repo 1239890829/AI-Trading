@@ -32,6 +32,13 @@ function contentFixture(overrides: Partial<ArticleContent> = {}): ArticleContent
 }
 
 describe("NewsModal 正文块渲染（2026-09-04 排版升级）", () => {
+  it("事件来源弹窗保留列表读取时的解释版本", async () => {
+    mockedContent.mockResolvedValue(contentFixture());
+    render(<NewsModal item={{ ...item, kindLabel: "快讯",
+      evidence: "列表解释版本 #19 · 生效 · 2026-09-24 10:02:00" }} onClose={() => {}} />);
+    expect(await screen.findByText("列表解释版本 #19 · 生效 · 2026-09-24 10:02:00")).toBeTruthy();
+  });
+
   it("table 块渲染为真表格：表头 + 数据行按原文顺序", async () => {
     mockedContent.mockResolvedValue(
       contentFixture({

@@ -51,6 +51,17 @@ def record_interpretation(db, row: EventCard, observation_id: int, *,
     return version
 
 
+def _interpretation_ref(row: EventCard, version: EventInterpretation | None) -> dict:
+    """Identify the current interpretation without inventing legacy history."""
+    return {
+        "event_id": row.id,
+        "version_id": version.id if version else None,
+        "observation_id": version.observation_id if version else None,
+        "available_at": version.effective_at.isoformat(sep=" ") if version else None,
+        "state": version.state if version else "unknown",
+    }
+
+
 def _latest_pending_observation(db, row: EventCard) -> EventObservation | None:
     if row.revision_pending_at is None:
         return None
@@ -460,20 +471,23 @@ class EventStore:
                     ).scalars()
                 }
                 for row in rows:
-                    version = versions.get(row.id)
-                    row.interpretation_ref = {
-                        "event_id": row.id,
-                        "version_id": version.id if version else None,
-                        "observation_id": version.observation_id if version else None,
-                        "available_at": version.effective_at.isoformat(sep=" ") if version else None,
-                        "state": version.state if version else "unknown",
-                    }
+                    row.interpretation_ref = _interpretation_ref(row, versions.get(row.id))
         out = [r for r in rows if self.is_active(r)] if active_only else list(rows)
         return out[:limit]
 
     def get_event(self, event_id: int) -> EventCard | None:
         with self._sf() as db:
-            return db.get(EventCard, event_id)
+            latest_id = select(func.max(EventInterpretation.id)).where(
+                EventInterpretation.event_id == EventCard.id
+            ).correlate(EventCard).scalar_subquery()
+            pair = db.execute(select(EventCard, EventInterpretation).outerjoin(
+                EventInterpretation, EventInterpretation.id == latest_id
+            ).where(EventCard.id == event_id)).one_or_none()
+            if pair is None:
+                return None
+            row, version = pair
+            row.interpretation_ref = _interpretation_ref(row, version)
+            return row
 
     def backfill_event(
         self, event_id: int, *, category: str | None = None,
