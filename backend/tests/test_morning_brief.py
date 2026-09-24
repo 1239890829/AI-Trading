@@ -483,3 +483,48 @@ def test_evidence_is_trading_day_false_only_when_calendar_confirms_closed(hermet
     assert ev["is_trading_day"] is False
     assert any("非交易日" in m for m in ev["missing"]), \
         "确认休市却不再提示 ⇒ 用户以为简报漏生成"
+
+
+def test_brief_archives_event_version_used_for_direction(hermetic, brief_dir):
+    """归档绑定生成时的解释版本；后续事件更正不重写旧方向的证据。"""
+    import asyncio
+
+    hermetic.setattr(mb, "beijing_today", lambda: date(2026, 9, 14))
+    async def _days(_p):
+        return _cover(["2026-09-11", "2026-09-14"])
+    hermetic.setattr(mb.tc, "trading_days", _days)
+
+    ref = {"event_id": 7, "version_id": 11, "observation_id": 19,
+           "available_at": "2026-09-14 08:20:00", "state": "active"}
+    other_ref = {"event_id": 9, "version_id": 21, "observation_id": 25,
+                 "available_at": "2026-09-14 08:30:00", "state": "active"}
+    row = NS(id=7, source_tier=3, certainty="done", interpretation_ref=ref,
+             directions=[NS(target_type="theme", target="粮食", direction=1, strength=2)])
+    other = NS(id=9, source_tier=3, certainty="done", interpretation_ref=other_ref,
+               directions=[NS(target_type="theme", target="粮食", direction=-1, strength=1)])
+    state = _hermetic_state()
+    state.event_store = NS(list_events=lambda **_kwargs: [row, other])
+
+    payload = mb.assemble_brief(asyncio.run(mb.collect_evidence(state)))
+    assert payload["directions"][0]["event_refs"] == [ref, other_ref]
+    mb.save_brief(payload)
+    ref["version_id"] = 12  # 事件后续更正、人工复核形成新解释
+    assert mb.load_brief("20260914")["directions"][0]["event_refs"][0]["version_id"] == 11
+
+
+def test_brief_legacy_event_reference_remains_unknown(hermetic):
+    """旧事件没有解释版本时不可事后推定一个版本。"""
+    import asyncio
+
+    hermetic.setattr(mb, "beijing_today", lambda: date(2026, 9, 14))
+    async def _days(_p):
+        return _cover(["2026-09-11", "2026-09-14"])
+    hermetic.setattr(mb.tc, "trading_days", _days)
+    row = NS(id=8, source_tier=3, certainty="done",
+             directions=[NS(target_type="theme", target="粮食", direction=1, strength=1)])
+    state = _hermetic_state()
+    state.event_store = NS(list_events=lambda **_kwargs: [row])
+
+    payload = mb.assemble_brief(asyncio.run(mb.collect_evidence(state)))
+    assert payload["directions"][0]["event_refs"] == [
+        {"event_id": 8, "version_id": None, "state": "unknown"}]

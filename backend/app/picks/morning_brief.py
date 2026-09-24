@@ -20,6 +20,8 @@ predict 的 save_report 按 target_date 单键 upsert——同表共存时周末
 按日期读取会把简报误当成预判返回。改用 data/picks/briefs/YYYYMMDD.json
 （与 predict 的 REPORT_DIR 落盘同模式），零迁移、零串表；批次 C 复盘对照
 若需 SQL 检索再加镜像表。
+每个入选方向保存当轮关联事件的解释版本引用；旧卡无版本时标 unknown，
+复盘只读取简报归档，不回查当前事件解释来冒充当时依据。
 
 诚实边界（纪律沿用）：
 - 盘前（09:25 集合竞价出价前）当日涨停池是空的，证据池取**上一交易日**；
@@ -233,6 +235,7 @@ def assemble_brief(evidence: dict) -> dict:
     ev_strength: dict[str, float] = evidence.get("event_strength") or {}
     ev_counts: dict[str, dict] = evidence.get("event_counts") or {}
     ev_symbols: dict[str, list[str]] = evidence.get("event_symbols") or {}
+    ev_refs: dict[str, list[dict]] = evidence.get("event_refs") or {}
     names: dict[str, str] = evidence.get("event_symbol_names") or {}
 
     evidences = []
@@ -280,6 +283,7 @@ def assemble_brief(evidence: dict) -> dict:
             "score": d["score"],
             "basis": d["basis"],
             "logic": d["logic"],
+            "event_refs": ev_refs.get(d["direction"]) or [],
             "defensive": d["defensive"],
             "stage": (stat or {}).get("stage"),
             "stage_basis": (stat or {}).get("stage_basis") or [],
@@ -465,6 +469,7 @@ async def collect_evidence(app_state) -> dict:
     event_strength: dict[str, float] = {}
     event_counts: dict[str, dict] = {}
     event_symbols: dict[str, list[str]] = {}
+    event_refs: dict[str, list[dict]] = {}
     store = getattr(state, "event_store", None)
     if store is not None:
         try:
@@ -489,6 +494,10 @@ async def collect_evidence(app_state) -> dict:
                     elif d.target_type == "symbol" and d.target:
                         row_syms.append(d.target)
                 for tag in row_themes:
+                    event_refs.setdefault(tag, []).append(dict(
+                        getattr(row, "interpretation_ref", None) or
+                        {"event_id": row.id, "version_id": None, "state": "unknown"}
+                    ))
                     bucket = event_symbols.setdefault(tag, [])
                     for s in row_syms:
                         if s not in bucket:
@@ -575,6 +584,7 @@ async def collect_evidence(app_state) -> dict:
         "event_strength": event_strength,
         "event_counts": event_counts,
         "event_symbols": event_symbols,
+        "event_refs": event_refs,
         "event_symbol_names": names,
         "missing": missing,
         "macro_note": macro_note,
