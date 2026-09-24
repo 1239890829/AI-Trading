@@ -25,14 +25,14 @@ from collections import deque
 from datetime import timedelta
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.bjtime import beijing_now, beijing_now_naive
 from app.core.config import settings
 from app.core.db import get_session_factory
 from app.market import trade_calendar as tc
 from app.models.alert import AlertRule
-from app.models.event import EventCard, EventDirection
+from app.models.event import EventCard, EventDirection, EventInterpretation
 from app.models.theme_catalog import Theme, ThemeMember
 from app.notifiers import get_notifier_registry
 from app.picks import distinctiveness
@@ -290,6 +290,13 @@ class BoardSurgeDetector:
         """把归因两路结果追加进告警 text（保持 basis：每条带来源与时间）。"""
         extra: list[str] = []
         news = attribution.get("news") or []
+        news_available = attribution.get("news_available", True)
+        alert.setdefault("meta", {})["event_refs"] = [
+            hit["event_ref"] for hit in news if hit.get("event_ref")
+        ]
+        alert["meta"]["news_attribution_status"] = (
+            "unavailable" if not news_available else "matched" if news else "no_match"
+        )
         if news:
             n0 = news[0]
             extra.append(f"可能诱因（消息面）：{n0['time']} 「{n0['title']}」（{n0['source']}）")
@@ -298,6 +305,8 @@ class BoardSurgeDetector:
         seals = attribution.get("seals") or []
         if seals:
             extra.append("封板时序：" + " → ".join(seals))
+        if not news_available:
+            extra.append("消息归因不可用（查询失败）")
         if not extra:
             extra.append("归因：时间窗内无匹配事件方向行、无封板成员")
         alert["text"] = (alert.get("text") or "") + "\n" + "\n".join(extra)
@@ -323,12 +332,18 @@ def match_news_events(
     if not name:
         return []
     with sf() as db:
+        latest_version_id = select(func.max(EventInterpretation.id)).where(
+            EventInterpretation.event_id == EventCard.id
+        ).correlate(EventCard).scalar_subquery()
         rows = db.execute(
             select(
-                EventCard.published_at, EventCard.title, EventCard.source,
+                EventCard.id, EventCard.published_at, EventCard.title, EventCard.source,
                 EventCard.source_tier, EventDirection.target,
+                EventInterpretation.id, EventInterpretation.observation_id,
+                EventInterpretation.effective_at, EventInterpretation.state,
             )
             .join(EventDirection, EventDirection.event_id == EventCard.id)
+            .outerjoin(EventInterpretation, EventInterpretation.id == latest_version_id)
             .where(
                 EventCard.published_at >= since,
                 EventCard.status == "active",
@@ -340,12 +355,16 @@ def match_news_events(
             .limit(300)
         ).all()
     hits: list[tuple[float, dict]] = []
-    for published_at, title, source, tier, target in rows:
+    seen_events: set[int] = set()
+    for event_id, published_at, title, source, tier, target, version_id, observation_id, available_at, state in rows:
         tgt = (target or "").strip()
         if len(tgt) < 2 or len(name) < 2:
             continue
         if tgt not in name and name not in tgt:
             continue
+        if event_id in seen_events:
+            continue
+        seen_events.add(event_id)
         recency = 1.0
         tier_f = float(tier) if isinstance(tier, (int, float)) else 3.0
         score = recency * (6.0 - min(tier_f, 5.0))
@@ -355,6 +374,12 @@ def match_news_events(
             "source": source or "",
             "tier": tier,
             "target": tgt,
+            "event_ref": {
+                "event_id": event_id, "version_id": version_id,
+                "observation_id": observation_id,
+                "available_at": available_at.isoformat(sep=" ") if available_at else None,
+                "state": state if version_id is not None else "unknown",
+            },
         }))
     hits.sort(key=lambda x: -x[0])
     return [h for _, h in hits[:limit]]
@@ -484,17 +509,21 @@ async def _beat(app, detector: BoardSurgeDetector, index_cache: ThemeIndexCache)
         except Exception:  # noqa: BLE001
             pool = []
     since = beijing_now_naive() - timedelta(hours=6)
-    sf = get_session_factory()
     for a in alerts:
         code = a["key"].split(":")[1]
+        news_available = True
         try:
             news = await asyncio.to_thread(
-                match_news_events, a.get("direction") or "", since, sf
+                match_news_events, a.get("direction") or "", since,
+                get_session_factory(),
             )
         except Exception:  # noqa: BLE001
+            log.warning("board surge 消息归因查询失败（%s）", code, exc_info=True)
             news = []
+            news_available = False
         seals = seal_sequence(pool, member_sets.get(code, set())) if pool else []
-        detector.attach_attribution(a, {"news": news, "seals": seals})
+        detector.attach_attribution(a, {"news": news, "seals": seals,
+                                        "news_available": news_available})
         # 资金面行（B 路）：净额合计口径显式标注；取不到 → 不输出该行（三态）
         fl = flows.get(code)
         if fl and fl.get("net_sum") is not None:
@@ -595,6 +624,17 @@ def ensure_board_surge_rule(session_factory=None) -> AlertRule:
         return row
 
 
+def _alert_snapshot(alert: dict) -> dict:
+    """Keep the exact event explanations behind archived alert attribution."""
+    meta = alert.get("meta") or {}
+    return {
+        "kind": alert.get("kind"), "direction": alert.get("direction"),
+        "text": alert.get("text"), "name": alert.get("direction") or None,
+        "event_refs": meta.get("event_refs") or [],
+        "news_attribution_status": meta.get("news_attribution_status") or "unknown",
+    }
+
+
 async def board_surge_loop(app, stop: asyncio.Event) -> None:
     """盘中调度（lifespan 任务）：与 watcher 同节奏（60s），独立数据口径。"""
     interval = max(15.0, settings.board_surge_interval_seconds)
@@ -624,10 +664,7 @@ async def board_surge_loop(app, stop: asyncio.Event) -> None:
                         event = repo.record_trigger(
                             rule.id, "000000", float(meta.get("trigger_value") or 0.0),
                             float(meta.get("threshold") or 0.0),
-                            snapshot={
-                                "kind": a.get("kind"), "direction": a.get("direction"),
-                                "text": a.get("text"), "name": a.get("direction") or None,
-                            },
+                            snapshot=_alert_snapshot(a),
                         )
                         channels = await get_notifier_registry().dispatch(event, rule)
                         repo.update_event_channels(event.id, channels)

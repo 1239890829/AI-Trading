@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace as NS
@@ -17,8 +19,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.models.watchlist import Base
+from app.events.store import EventStore
+from app.models.alert import AlertEvent
 from app.models.event import EventCard, EventDirection
 from app.picks import board_surge as bs
+from app.repositories.alert_repo import AlertRepository
 from app.schemas.market import LimitUpRecord
 
 
@@ -209,6 +214,55 @@ def test_match_news_events_direction_and_containment():
     assert bs.match_news_events("MLCC概念", since=now - timedelta(hours=6), session_factory=old_sf) == []
 
 
+def test_board_surge_alert_snapshot_keeps_event_versions_after_revision():
+    sf = _sf()
+    store = EventStore(sf)
+    now = datetime(2026, 9, 24, 10, 0)
+    event = {
+        "fingerprint": "versioned-mlcc", "title": "MLCC订单落地", "source": "东财快讯",
+        "source_item_id": "mlcc-1", "published_at": now - timedelta(hours=2),
+        "directions": [
+            {"target_type": "theme", "target": "MLCC", "direction": 1},
+            {"target_type": "theme", "target": "MLCC概念", "direction": 1},
+        ],
+    }
+    row, _ = store.add_event(event)
+    version = store.interpretations_of(row.id)[0]
+    with sf() as db:
+        legacy = EventCard(fingerprint="legacy-mlcc", title="MLCC旧消息", source="旧来源",
+                           published_at=now - timedelta(hours=1))
+        db.add(legacy)
+        db.flush()
+        legacy_id = legacy.id
+        db.add(EventDirection(event_id=legacy_id, target_type="theme",
+                              target="MLCC", direction=-1))
+        db.commit()
+
+    news = bs.match_news_events("MLCC概念", now - timedelta(hours=6), sf)
+    assert len(news) == 2  # 同一事件两个题材方向不能挤掉另一条消息
+    refs = {hit["event_ref"]["event_id"]: hit["event_ref"] for hit in news}
+    assert refs[row.id]["version_id"] == version.id
+    assert refs[row.id]["observation_id"] == version.observation_id
+    assert refs[legacy_id]["version_id"] is None
+    assert refs[legacy_id]["state"] == "unknown"
+
+    alert = {"kind": "board_surge", "direction": "MLCC概念", "text": "触发", "meta": {}}
+    bs.BoardSurgeDetector().attach_attribution(alert, {"news": news, "seals": []})
+    assert alert["meta"]["news_attribution_status"] == "matched"
+    rule = bs.ensure_board_surge_rule(sf)
+    archived = AlertRepository(sf).record_trigger(
+        rule.id, "000000", 2.0, 1.2, snapshot=bs._alert_snapshot(alert))
+    store.add_event(event | {"summary": "订单尚未签署"})
+    with sf() as db:
+        saved = json.loads(db.get(AlertEvent, archived.id).snapshot)
+    assert {ref["event_id"]: ref["version_id"] for ref in saved["event_refs"]} == {
+        row.id: version.id, legacy_id: None}
+    assert saved["news_attribution_status"] == "matched"
+    assert row.id not in {item.id for item in store.list_events(active_only=True)}
+    assert [hit["event_ref"]["event_id"] for hit in bs.match_news_events(
+        "MLCC概念", now - timedelta(hours=6), sf)] == [legacy_id]
+
+
 def test_seal_sequence_orders_by_first_seal():
     pool = [
         {"symbol": "s3", "name": "晚封", "first_seal_time": "13:37", "consecutive_boards": 1},
@@ -257,6 +311,39 @@ def test_attach_attribution_appends_with_basis():
     empty = {"key": "k", "kind": "board_surge", "direction": "x", "text": "基线", "meta": {}}
     d.attach_attribution(empty, {"news": [], "seals": []})
     assert "归因：时间窗内无匹配" in empty["text"]
+    assert empty["meta"]["news_attribution_status"] == "no_match"
+    failed = {"kind": "board_surge", "direction": "x", "text": "基线", "meta": {}}
+    d.attach_attribution(failed, {"news": [], "seals": [], "news_available": False})
+    assert "消息归因不可用（查询失败）" in failed["text"]
+    assert "无匹配事件方向行" not in failed["text"]
+    assert bs._alert_snapshot(failed)["news_attribution_status"] == "unavailable"
+
+
+def test_beat_archives_news_query_setup_failure_as_unavailable(monkeypatch):
+    alert = {"key": "board_surge:T1:10:00", "kind": "board_surge",
+             "direction": "测试题材", "text": "触发", "meta": {}}
+    detector = bs.BoardSurgeDetector()
+    monkeypatch.setattr(detector, "evaluate", lambda *_: [alert])
+    monkeypatch.setattr(bs, "compute_theme_momentum", lambda *_: ({"T1": {"n": 10, "rel": 3}}, -1.0))
+
+    async def no_flows(*_):
+        return {}
+
+    async def no_persist(*_):
+        return None
+
+    monkeypatch.setattr(bs, "_collect_flows", no_flows)
+    monkeypatch.setattr(bs, "persist_beat", no_persist)
+    monkeypatch.setattr(bs, "get_session_factory", lambda: (_ for _ in ()).throw(RuntimeError("db down")))
+    monkeypatch.setattr(bs.distinctiveness, "score_candidates", lambda *_: {})
+    monkeypatch.setattr(bs.distinctiveness, "format_candidates", lambda *_: "")
+    app = NS(snapshot_service=NS(snapshot=[{"symbol": "t00"}]), hub=None)
+    index_cache = NS(get=lambda: ({}, {"T1": "测试题材"}))
+
+    alerts = asyncio.run(bs._beat(app, detector, index_cache))
+    assert alerts == [alert]
+    assert "消息归因不可用（查询失败）" in alert["text"]
+    assert bs._alert_snapshot(alert)["news_attribution_status"] == "unavailable"
 
 
 # ---------------------------------------------------------------- 落库与 API 出口
