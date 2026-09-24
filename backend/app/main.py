@@ -30,7 +30,10 @@ from app.core.auth import validate_auth_posture
 from app.core.config import settings
 from app.core.scheduler import SchedulerRegistry
 from app.models.alert import AlertEvent, AlertRule
-from app.models.event import EventCard, EventDirection, EventObservation, EventInterpretation, FlashWatermark
+from app.models.event import (
+    EventCard, EventDirection, EventObservation, EventInterpretation,
+    EventWithdrawalLink, FlashWatermark,
+)
 from app.models.paper import PaperAccount, PaperOrder, PaperPosition
 from app.models.theme_catalog import Theme, ThemeMember, ThemeOverride
 from app.predict.models import (  # noqa: F401  注册预判两张表
@@ -62,7 +65,8 @@ _REGISTERED_MODELS = (
     SentimentHistoryRow,
     AlertRule, AlertEvent,
     Theme, ThemeMember, ThemeOverride,
-    EventCard, EventDirection, EventObservation, EventInterpretation, FlashWatermark,
+    EventCard, EventDirection, EventObservation, EventInterpretation,
+    EventWithdrawalLink, FlashWatermark,
     WatchLedger,
     NotificationReadState,
     NotificationOutbox, NotificationAttempt,

@@ -17,7 +17,9 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.db import get_session_factory
 from app.events.extract import build_event, dedupe_directions
-from app.models.event import EventCard, EventDirection, EventObservation, EventInterpretation
+from app.models.event import (
+    EventCard, EventDirection, EventObservation, EventInterpretation, EventWithdrawalLink,
+)
 from app.core.bjtime import beijing_now_naive
 
 log = logging.getLogger(__name__)
@@ -285,6 +287,68 @@ class EventStore:
             db.commit()
             return version
 
+    def link_withdrawal(self, event_id: int, *, target_observation_id: int,
+                        notice_observation_id: int, expected_interpretation_id: int,
+                        note: str) -> tuple[EventWithdrawalLink, EventObservation]:
+        """Confirm a distinct same-source notice and withdraw the old claim atomically.
+
+        Source IDs alone do not express this relation. The caller supplies two exact
+        observations and a human evidence note; no title similarity is inferred.
+        """
+        basis = note.strip()
+        if not basis:
+            raise ValueError("撤回关联依据不能为空")
+        for attempt in range(2):
+            with self._sf() as db:
+                try:
+                    target = db.get(EventObservation, target_observation_id)
+                    notice = db.get(EventObservation, notice_observation_id)
+                    if target is None or notice is None:
+                        raise LookupError("来源观察不存在")
+                    if target.event_id != event_id or notice.event_id == event_id:
+                        raise ValueError("撤回通知须来自另一事件并指向本事件观察")
+                    if (target.source != notice.source or not target.source_item_id
+                            or not notice.source_item_id
+                            or target.source_item_id == notice.source_item_id):
+                        raise ValueError("撤回关联需要同来源、不同且非空的条目 ID")
+                    existing = db.execute(select(EventWithdrawalLink).where(
+                        EventWithdrawalLink.target_observation_id == target.id,
+                        EventWithdrawalLink.notice_observation_id == notice.id,
+                    )).scalar_one_or_none()
+                    if existing is not None:
+                        if (existing.prior_interpretation_id != expected_interpretation_id
+                                or existing.note != basis):
+                            raise ValueError("撤回关联已存在但复核版本或依据不同")
+                        return existing, notice
+
+                    row = db.get(EventCard, event_id)
+                    latest = db.execute(select(EventInterpretation).where(
+                        EventInterpretation.event_id == event_id
+                    ).order_by(EventInterpretation.id.desc()).limit(1)).scalar_one_or_none()
+                    if (row is None or row.status != "active" or row.revision_pending_at is not None
+                            or latest is None or latest.id != expected_interpretation_id
+                            or latest.state != "active" or latest.observation_id != target.id):
+                        raise ValueError("旧事件已变化、待复核或观察并非当前解释依据")
+                    now = beijing_now_naive()
+                    row.status = "rejected"
+                    version = record_interpretation(
+                        db, row, target.id, state="withdrawn", effective_at=now, note=basis,
+                    )
+                    db.flush()
+                    link = EventWithdrawalLink(
+                        target_observation_id=target.id, notice_observation_id=notice.id,
+                        prior_interpretation_id=latest.id, withdrawn_interpretation_id=version.id,
+                        note=basis, linked_at=now,
+                    )
+                    db.add(link)
+                    db.commit()
+                    return link, notice
+                except IntegrityError:
+                    db.rollback()
+                    if attempt:
+                        raise
+        raise AssertionError("unreachable")
+
     # -- read ---------------------------------------------------------------
 
     @staticmethod
@@ -421,6 +485,15 @@ class EventStore:
             return list(db.execute(select(EventObservation).where(
                 EventObservation.event_id == event_id
             ).order_by(EventObservation.id)).scalars())
+
+    def withdrawal_links_of(self, event_id: int) -> list[tuple[EventWithdrawalLink, EventObservation]]:
+        """Return confirmed links with the immutable notice observation they cite."""
+        targets = select(EventObservation.id).where(EventObservation.event_id == event_id)
+        with self._sf() as db:
+            return list(db.execute(select(EventWithdrawalLink, EventObservation).join(
+                EventObservation, EventWithdrawalLink.notice_observation_id == EventObservation.id
+            ).where(EventWithdrawalLink.target_observation_id.in_(targets))
+              .order_by(EventWithdrawalLink.id)).all())
 
     def interpretations_of(self, event_id: int) -> list[EventInterpretation]:
         with self._sf() as db:
