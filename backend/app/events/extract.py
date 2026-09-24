@@ -432,6 +432,7 @@ def _demote_if_proposed(directions: list[dict], certainty: str) -> None:
 def build_event(title: str, *, source: str | None = None, url: str | None = None,
                 summary: str | None = None, published_at: datetime | None = None,
                 source_symbol: str | None = None, is_announcement: bool = False,
+                source_symbols: list[str] | None = None,
                 theme_names: list[str] | None = None,
                 board_themes: list[dict] | None = None) -> dict:
     """新闻行 → EventCard + directions 组合 dict（纯函数入口）。
@@ -444,8 +445,21 @@ def build_event(title: str, *, source: str | None = None, url: str | None = None
     category = classify_category(title, summary)
     base_rows = extract_directions(title, theme_names or [], summary)
     directions = _dedupe_chain_rows(base_rows, match_chains(title, summary))
-    if source_symbol:
-        symbol_row = extract_symbol_direction(title, source_symbol, summary)
+    symbols = list(dict.fromkeys(source_symbols or ([source_symbol] if source_symbol else [])))
+    primary_symbol = source_symbol or (symbols[0] if symbols else None)
+    if len(symbols) > 1:
+        # A shared headline can help one company and hurt another. Source linkage
+        # is factual; applying one lexical polarity to every listed stock is not.
+        for symbol in symbols:
+            if symbol.isdigit() and len(symbol) == 6:
+                directions.append({
+                    "target_type": "symbol", "target": symbol, "direction": 0,
+                    "strength": 1, "chain": "多标的来源关联，逐股方向待核",
+                    "basis": f"来源同时列出 {len(symbols)} 只 A 股；{symbol} 仅确认关联，未核定个股影响方向",
+                    "matched_by": "source",
+                })
+    elif primary_symbol:
+        symbol_row = extract_symbol_direction(title, primary_symbol, summary)
         if symbol_row is not None:
             directions.append(symbol_row)
     for bt in board_themes or []:
@@ -469,7 +483,8 @@ def build_event(title: str, *, source: str | None = None, url: str | None = None
         "certainty": certainty,
         "category": category,
         "half_life_hours": HALF_LIFE.get(category, HALF_LIFE["other"]),
-        "source_symbol": source_symbol,
+        "source_symbol": primary_symbol,
+        "source_symbols": symbols,
         "status": "active",
         "directions": directions,
     }
