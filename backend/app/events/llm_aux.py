@@ -18,7 +18,8 @@ import asyncio
 import logging
 import re
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
+from sqlalchemy.orm import aliased
 
 from app.core.db import get_session_factory
 from app.models.event import EventCard, EventDirection, EventObservation, EventInterpretation
@@ -55,7 +56,7 @@ def _match_theme(theme: str | None, theme_names: list[str]) -> str | None:
 
 def _pending_candidates(sf, *, theme_names: list[str], max_batch: int,
                         age_max_h: float) -> list[EventCard]:
-    """候选：active、无 direction≠0 行、llm_judged_at IS NULL、近 age_max_h 小时发布。
+    """候选：无复核记录的 active 解释、无非零方向、未调用过 LLM、近时发布。
     仅收「官方目录里找得到题材名」的事件——LLM 连题材归属都判不出的事件
     （纯数据罗列/无题材驱动）不值得花钱判，直接在扫描层排除。
     """
@@ -65,11 +66,18 @@ def _pending_candidates(sf, *, theme_names: list[str], max_batch: int,
         latest_id = (select(EventInterpretation.id)
                      .where(EventInterpretation.event_id == EventCard.id)
                      .order_by(EventInterpretation.id.desc()).limit(1).scalar_subquery())
+        current = aliased(EventInterpretation)
         stmt = (
-            select(EventCard, latest_id)
+            select(EventCard, current.id)
+            .outerjoin(current, current.id == latest_id)
             .where(EventCard.status == "active")
             .where(EventCard.revision_pending_at.is_(None))
             .where(EventCard.llm_judged_at.is_(None))
+            # Filter before LIMIT so reviewed neutral cards cannot crowd out
+            # older unreviewed candidates. Legacy cards have no version.
+            .where(or_(current.id.is_(None), and_(
+                current.state == "active", current.review_note.is_(None),
+            )))
             .order_by(EventCard.published_at.desc())
             .limit(max_batch * 4)  # 放大取数：下面还要过滤有方向行/超龄
         )
@@ -116,6 +124,9 @@ def _apply_result(sf, cand: EventCard, hits: list[dict]) -> int:
             db.rollback()
             return 0
         version = db.get(EventInterpretation, expected) if expected is not None else None
+        if version is not None and (version.state != "active" or version.review_note is not None):
+            db.rollback()
+            return 0
         observation_id = version.observation_id if version is not None else db.execute(
             select(EventObservation.id).where(EventObservation.event_id == cand.id)
             .order_by(EventObservation.id).limit(1)

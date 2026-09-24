@@ -279,6 +279,87 @@ def test_current_version_result_uses_its_observation(tmp_path, monkeypatch):
         assert versions[-1].observation_id == observation_id
 
 
+@pytest.mark.parametrize("judged_before_review", [False, True])
+@pytest.mark.parametrize("review_action", ["adopt", "retain"])
+def test_human_neutral_revision_is_not_rejudged_by_llm(
+    tmp_path, monkeypatch, judged_before_review, review_action,
+):
+    """A reviewed neutral interpretation must remain human-owned and cost no new call."""
+    from app.events.store import EventStore
+
+    sf = _factory(tmp_path)
+    _settings(monkeypatch, min_batch=1)
+    store = EventStore(sf)
+    first = {
+        "fingerprint": "manual-neutral-1", "title": "某产业政策信息待确认",
+        "summary": "政策口径尚不明确", "source": "东财快讯",
+        "source_item_id": "manual-neutral-1",
+        "published_at": beijing_now_naive() - timedelta(minutes=10),
+        "directions": [],
+    }
+    event, _ = store.add_event(first)
+    prior_judged_at = None
+    if judged_before_review:
+        monkeypatch.setattr(la, "_deepseek_items", lambda *_a, **_k: ([
+            {"direction": 0, "theme": None, "reason": "证据不足"}
+        ], None))
+        assert la.judge_pending_batch(sf, theme_names=["半导体概念"])["skipped"] is False
+        with sf() as db:
+            prior_judged_at = db.get(EventCard, event.id).llm_judged_at
+        assert prior_judged_at is not None
+
+    store.add_event({**first, "summary": "更正：原政策传言未经证实"})
+    pending_observation = store.observations_of(event.id)[-1]
+    store.review_revision(
+        event.id, expected_observation_id=pending_observation.id,
+        action=review_action, note="核对来源后确认无可采信方向",
+        interpretation={
+            "source_tier": 3, "category": "policy", "fact_kind": "fact",
+            "certainty": "done", "half_life_hours": 48, "directions": [],
+        } if review_action == "adopt" else None,
+    )
+    with sf() as db:
+        reviewed = db.query(EventInterpretation).filter_by(event_id=event.id).order_by(
+            EventInterpretation.id.desc()
+        ).first()
+        assert reviewed.state == "active" and reviewed.review_note
+        assert db.get(EventCard, event.id).llm_judged_at == prior_judged_at
+    monkeypatch.setattr(la, "_deepseek_items", lambda *_a, **_k: pytest.fail(
+        "human-reviewed neutral must not trigger an LLM call"
+    ))
+    assert la._pending_candidates(
+        sf, theme_names=["半导体概念"], max_batch=12, age_max_h=5.0,
+    ) == []
+    assert la.judge_pending_batch(sf, theme_names=["半导体概念"])["skipped"] is True
+
+
+def test_reviewed_events_do_not_fill_candidate_window(tmp_path):
+    sf = _factory(tmp_path)
+    for minute in range(1, 5):
+        reviewed = _event(sf, f"已人工复核事件{minute}", age_min=minute)
+        with sf() as db:
+            obs = EventObservation(
+                event_id=reviewed.id, observation_key=f"reviewed-{minute}",
+                content_hash=f"content-{minute}", source="东财快讯",
+                title=reviewed.title, received_at=beijing_now_naive(),
+                available_at=beijing_now_naive(), change_kind="initial",
+            )
+            db.add(obs)
+            db.flush()
+            db.add(EventInterpretation(
+                event_id=reviewed.id, observation_id=obs.id,
+                effective_at=beijing_now_naive(), state="active",
+                payload_json="{}", review_note="人工确认中性",
+            ))
+            db.commit()
+    eligible = _event(sf, "较早但仍有效的待判事件", age_min=10)
+
+    candidates = la._pending_candidates(
+        sf, theme_names=["半导体概念"], max_batch=1, age_max_h=5.0,
+    )
+    assert [row.id for row in candidates] == [eligible.id]
+
+
 def test_disabled_skips(tmp_path, monkeypatch):
     sf = _factory(tmp_path)
     _settings(monkeypatch, enabled=False)
