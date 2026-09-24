@@ -445,33 +445,26 @@ class EventStore:
         return age_hours < row.half_life_hours * 2
 
     def list_events(self, *, active_only: bool = True, limit: int = 30) -> list[EventCard]:
-        # selectinload 预加载 directions：session 关闭后 row 是 detached，
-        # 懒加载会抛 DetachedInstanceError
-        from sqlalchemy.orm import selectinload
+        # 卡片、方向与最新解释须来自同一条 SELECT。分次读取时，修订可在方向与
+        # 版本查询之间提交，使旧方向错误地绑定到新的 pending/active 版本。
+        from sqlalchemy.orm import joinedload
 
         with self._sf() as db:
-            stmt = select(EventCard).options(selectinload(EventCard.directions))
+            latest_id = select(func.max(EventInterpretation.id)).where(
+                EventInterpretation.event_id == EventCard.id
+            ).correlate(EventCard).scalar_subquery()
+            stmt = select(EventCard, EventInterpretation).outerjoin(
+                EventInterpretation, EventInterpretation.id == latest_id
+            ).options(joinedload(EventCard.directions))
             if active_only:
                 stmt = stmt.where(EventCard.status == "active", EventCard.revision_pending_at.is_(None))
-            rows = db.execute(
+            pairs = db.execute(
                 stmt.order_by(EventCard.published_at.desc()).limit(limit * 3)
-            ).scalars().all()
-            if rows:
-                latest_ids = select(
-                    EventInterpretation.event_id,
-                    func.max(EventInterpretation.id).label("version_id"),
-                ).where(EventInterpretation.event_id.in_([r.id for r in rows])).group_by(
-                    EventInterpretation.event_id
-                ).subquery()
-                versions = {
-                    v.event_id: v for v in db.execute(
-                        select(EventInterpretation).join(
-                            latest_ids, EventInterpretation.id == latest_ids.c.version_id
-                        )
-                    ).scalars()
-                }
-                for row in rows:
-                    row.interpretation_ref = _interpretation_ref(row, versions.get(row.id))
+            ).unique().all()
+            rows = []
+            for row, version in pairs:
+                row.interpretation_ref = _interpretation_ref(row, version)
+                rows.append(row)
         out = [r for r in rows if self.is_active(r)] if active_only else list(rows)
         return out[:limit]
 
