@@ -9,7 +9,8 @@ from datetime import timedelta
 
 import pytest
 
-from app.models.event import EventCard, EventDirection
+from app.models.event import EventCard, EventDirection, EventObservation, EventInterpretation
+from app.models.agent import AgentResourceUsage  # register budget table before create_all
 from app.models.watchlist import Base
 
 import app.events.llm_aux as la
@@ -21,6 +22,7 @@ def _factory(tmp_path, name="llm_aux.db"):
     from sqlalchemy.orm import sessionmaker
 
     engine = create_engine(f"sqlite:///{tmp_path / name}")
+    assert AgentResourceUsage.__table__.name in Base.metadata.tables
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine)
 
@@ -196,6 +198,85 @@ def test_llm_failure_no_mark_retryable(tmp_path, monkeypatch):
     with sf() as db:
         # 失败 → 不标记 → 下轮可重试
         assert all(r.llm_judged_at is None for r in db.query(EventCard).all())
+
+
+@pytest.mark.parametrize("changed_state,direction", [
+    ("pending", 1), ("active", 1), ("active", 0),
+])
+def test_stale_model_result_cannot_write_after_revision(
+    tmp_path, monkeypatch, changed_state, direction,
+):
+    """Model response for an older interpretation must not change a corrected event."""
+    sf = _factory(tmp_path)
+    _settings(monkeypatch, min_batch=1)
+    ev = _event(sf, "原报道：半导体产能扩张", age_min=10)
+
+    def fake_deepseek(rows, *args, **kwargs):
+        assert [row.id for row in rows] == [ev.id]
+        with sf() as db:
+            current = db.get(EventCard, ev.id)
+            obs = EventObservation(
+                event_id=ev.id, observation_key=f"revision-{changed_state}",
+                content_hash="new-content", source=current.source,
+                title="更正：产能扩张消息不实", received_at=beijing_now_naive(),
+                available_at=beijing_now_naive(), change_kind="revision",
+            )
+            db.add(obs)
+            db.flush()
+            if changed_state == "pending":
+                current.revision_pending_at = beijing_now_naive()
+            else:
+                # Retaining the old title still creates a new interpretation.
+                # Only the version CAS can distinguish this from the model input.
+                obs.title = current.title
+            db.add(EventInterpretation(
+                event_id=ev.id, observation_id=obs.id,
+                effective_at=beijing_now_naive(), state=changed_state,
+                payload_json="{}",
+            ))
+            db.commit()
+        return [{"direction": direction, "theme": "半导体概念", "reason": "旧判断"}], None
+
+    monkeypatch.setattr(la, "_deepseek_items", fake_deepseek)
+    out = la.judge_pending_batch(sf, theme_names=["半导体概念"])
+    assert out["directions_written"] == 0
+    with sf() as db:
+        assert db.query(EventDirection).filter_by(event_id=ev.id).count() == 0
+        assert db.get(EventCard, ev.id).llm_judged_at is None
+
+
+def test_current_version_result_uses_its_observation(tmp_path, monkeypatch):
+    sf = _factory(tmp_path)
+    _settings(monkeypatch, min_batch=1)
+    ev = _event(sf, "半导体产业政策发布", age_min=10)
+    with sf() as db:
+        obs = EventObservation(
+            event_id=ev.id, observation_key="current-observation",
+            content_hash="current-content", source="东财快讯",
+            title=ev.title, received_at=beijing_now_naive(),
+            available_at=beijing_now_naive(), change_kind="initial",
+        )
+        db.add(obs)
+        db.flush()
+        db.add(EventInterpretation(
+            event_id=ev.id, observation_id=obs.id,
+            effective_at=beijing_now_naive(), state="active", payload_json="{}",
+        ))
+        db.commit()
+        observation_id = obs.id
+    monkeypatch.setattr(la, "_deepseek_items", lambda *_a, **_k: ([
+        {"direction": 1, "theme": "半导体概念", "reason": "政策传导"}
+    ], None))
+
+    out = la.judge_pending_batch(sf, theme_names=["半导体概念"])
+    assert out["directions_written"] == 1
+    with sf() as db:
+        direction = db.query(EventDirection).filter_by(event_id=ev.id).one()
+        assert direction.observation_id == observation_id
+        assert db.get(EventCard, ev.id).llm_judged_at is not None
+        versions = db.query(EventInterpretation).filter_by(event_id=ev.id).all()
+        assert len(versions) == 2
+        assert versions[-1].observation_id == observation_id
 
 
 def test_disabled_skips(tmp_path, monkeypatch):
