@@ -18,10 +18,10 @@ import asyncio
 import logging
 import re
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.core.db import get_session_factory
-from app.models.event import EventCard, EventDirection, EventObservation
+from app.models.event import EventCard, EventDirection, EventObservation, EventInterpretation
 from app.core.bjtime import beijing_now_naive
 from app.events.store import record_interpretation
 
@@ -62,15 +62,18 @@ def _pending_candidates(sf, *, theme_names: list[str], max_batch: int,
     now = beijing_now_naive()
     rows = []
     with sf() as db:
+        latest_id = (select(EventInterpretation.id)
+                     .where(EventInterpretation.event_id == EventCard.id)
+                     .order_by(EventInterpretation.id.desc()).limit(1).scalar_subquery())
         stmt = (
-            select(EventCard)
+            select(EventCard, latest_id)
             .where(EventCard.status == "active")
             .where(EventCard.revision_pending_at.is_(None))
             .where(EventCard.llm_judged_at.is_(None))
             .order_by(EventCard.published_at.desc())
             .limit(max_batch * 4)  # 放大取数：下面还要过滤有方向行/超龄
         )
-        for row in db.execute(stmt).scalars():
+        for row, version_id in db.execute(stmt):
             if row.published_at is None:
                 continue
             age_h = (now - row.published_at).total_seconds() / 3600
@@ -79,32 +82,44 @@ def _pending_candidates(sf, *, theme_names: list[str], max_batch: int,
             has_dir = any(d.direction != 0 for d in row.directions)
             if has_dir:
                 continue
+            row._llm_candidate_version_id = version_id
             rows.append(row)
             if len(rows) >= max_batch:
                 break
     return rows
 
 
-def _mark_judged(sf, rows: list[EventCard]) -> None:
-    """整批记 llm_judged_at（无论命中与否）。"""
-    now = beijing_now_naive()
+def _apply_result(sf, cand: EventCard, hits: list[dict]) -> int:
+    """Atomically mark and write only against the model's source interpretation."""
     with sf() as db:
-        for r in rows:
-            row = db.get(EventCard, r.id)
-            if row is not None and row.revision_pending_at is None:
-                row.llm_judged_at = now
-        db.commit()
-
-
-def _insert_directions(sf, event_id: int, hits: list[dict]) -> int:
-    """命中结果 → EventDirection 行（matched_by=llm_aux）。返回写入行数。"""
-    with sf() as db:
-        row = db.get(EventCard, event_id)
-        if row is None or row.revision_pending_at is not None:
+        latest_id = (select(EventInterpretation.id)
+                     .where(EventInterpretation.event_id == EventCard.id)
+                     .order_by(EventInterpretation.id.desc()).limit(1).scalar_subquery())
+        expected = cand._llm_candidate_version_id
+        version_matches = latest_id.is_(None) if expected is None else latest_id == expected
+        # Claim the card with one conditional write. Concurrent corrections either
+        # commit first and fail this CAS, or wait for this transaction to finish.
+        claimed = db.execute(update(EventCard).where(
+            EventCard.id == cand.id,
+            EventCard.status == "active",
+            EventCard.revision_pending_at.is_(None),
+            EventCard.llm_judged_at.is_(None),
+            EventCard.title == cand.title,
+            EventCard.summary == cand.summary if cand.summary is not None else EventCard.summary.is_(None),
+            version_matches,
+        ).values(llm_judged_at=beijing_now_naive()))
+        if claimed.rowcount != 1:
+            db.rollback()
             return 0
-        observation_id = db.execute(select(EventObservation.id).where(
-            EventObservation.event_id == event_id
-        ).order_by(EventObservation.id).limit(1)).scalar_one_or_none()
+        row = db.get(EventCard, cand.id)
+        if any(d.direction != 0 for d in row.directions):
+            db.rollback()
+            return 0
+        version = db.get(EventInterpretation, expected) if expected is not None else None
+        observation_id = version.observation_id if version is not None else db.execute(
+            select(EventObservation.id).where(EventObservation.event_id == cand.id)
+            .order_by(EventObservation.id).limit(1)
+        ).scalar_one_or_none()
         existing = {(d.target_type, d.target) for d in row.directions}
         n = 0
         for h in hits:
@@ -112,7 +127,7 @@ def _insert_directions(sf, event_id: int, hits: list[dict]) -> int:
             if key in existing:
                 continue
             db.add(EventDirection(
-                event_id=event_id,
+                event_id=cand.id,
                 observation_id=observation_id,
                 target_type="theme",
                 target=h["target"],
@@ -341,19 +356,18 @@ def judge_pending_batch(sf=None, *, theme_names: list[str] | None = None,
                 confidence=None,
             )
 
-        if not actionable:
-            continue  # 中性/题材对不上 → 不落行（但该事件已试过，下面统一标记）
-        n = _insert_directions(sf, cand.id, [{
+        hits = [{
             "target": theme,
             "direction": direction,
             "chain": str(item.get("chain") or "")[:256],
             "basis": f"LLM 辅助判定：{str(item.get('reason') or '')[:120]}"[:256],
-        }])
+        }] if actionable else []
+        n = _apply_result(sf, cand, hits)
         hit_count += n
-        mark_count += 1
+        mark_count += int(n > 0)
 
-    # 无论命中与否，整批都标记「已判过」——防每轮重复烧钱
-    _mark_judged(sf, cands)
+    # Current candidates, including neutral results, are marked by _apply_result.
+    # Superseded model inputs stay unmarked so a fresh batch can judge them.
     return {
         "skipped": False,
         "candidates": len(cands),
