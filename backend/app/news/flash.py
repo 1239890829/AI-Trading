@@ -184,6 +184,8 @@ async def fetch_fast_news(*, limit: int = _PAGE_SIZE, column: int = 100, pages: 
         unparseable_item = False
         newest_code = None
         newest_show_time = None
+        pages_fetched = 0
+        terminal = "page_limit"
         for page_number in range(max(1, pages)):
             try:
                 resp = await _http().get(host + _PATH, params={
@@ -197,12 +199,15 @@ async def fetch_fast_news(*, limit: int = _PAGE_SIZE, column: int = 100, pages: 
             except Exception as exc:  # noqa: BLE001 —— 尝试备域，不丢已取得的部分数据
                 last_err = exc
                 page_error = True
+                terminal = "page_error"
                 break
             items = data.get("fastNewsList") or []
             if not isinstance(items, list):
                 last_err = ValueError("fastNewsList is not an array")
                 page_error = True
+                terminal = "page_error"
                 break
+            pages_fetched += 1
             added = 0
             for raw_item in items:
                 try:
@@ -230,6 +235,9 @@ async def fetch_fast_news(*, limit: int = _PAGE_SIZE, column: int = 100, pages: 
                     overlap = True
             nxt = (data.get("sortEnd") or "").strip()
             if (overlap and page_number + 1 >= min_pages) or not items or not nxt or added == 0:
+                terminal = ("overlap" if overlap and page_number + 1 >= min_pages else
+                            "empty_page" if not items else
+                            "cursor_missing" if not nxt else "no_new_items")
                 break
             sort_end = nxt
         if out:
@@ -238,6 +246,8 @@ async def fetch_fast_news(*, limit: int = _PAGE_SIZE, column: int = 100, pages: 
                             and (stop_at_code is None or overlap),
                 "overlap": overlap, "newest_code": newest_code,
                 "newest_show_time": newest_show_time,
+                "pages_fetched": pages_fetched, "terminal": terminal,
+                "source_host": host,
                 "reason": ("page_error" if page_error else
                            "unparseable_item" if unparseable_item else
                            "missing_source_id" if missing_code else
