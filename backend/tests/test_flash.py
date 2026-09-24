@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -336,6 +337,25 @@ def test_fetch_watermark_overlap_and_partial_page_failure(monkeypatch):
     assert recovered.coverage[100]["complete"] is True, "主域漏水位时应尝试备域"
 
 
+def test_unresolved_flash_probe_distinguishes_page_limit_from_empty_page(monkeypatch):
+    first = {"data": {"fastNewsList": [{"code": "NEW", "title": "新快讯"}],
+                      "sortEnd": "older"}}
+    second = {"data": {"fastNewsList": [{"code": "MID", "title": "中间快讯"}],
+                       "sortEnd": "oldest"}}
+    monkeypatch.setattr(flash, "_HTTP", FakeClient([first, second, first, second]))
+    capped = _run(flash.fetch_fast_news(pages=2, stop_at_code="OLD"))
+    assert capped.coverage[100]["terminal"] == "page_limit"
+    assert capped.coverage[100]["pages_fetched"] == 2
+    assert not capped.coverage[100]["overlap"]
+
+    empty = {"data": {"fastNewsList": [], "sortEnd": ""}}
+    monkeypatch.setattr(flash, "_HTTP", FakeClient([first, empty, first, empty]))
+    ended = _run(flash.fetch_fast_news(pages=2, stop_at_code="OLD"))
+    assert ended.coverage[100]["terminal"] == "empty_page"
+    assert ended.coverage[100]["pages_fetched"] == 2
+    assert not ended.coverage[100]["overlap"]
+
+
 def test_fetch_keeps_revision_lookback_after_watermark_overlap(monkeypatch):
     first = {"code": "1", "data": {"fastNewsList": [
         {"code": "NEW", "title": "新快讯"}, {"code": "OLD", "title": "旧水位"},
@@ -460,6 +480,60 @@ def test_operator_recovery_without_overlap_keeps_gap_open(tmp_path, monkeypatch)
     assert gap.last_code == "OLD" and gap.gap_reason == "watermark_not_found"
     with pytest.raises(ValueError, match="21..100"):
         _run(flash.poll_once(_app(store), recovery=flash.FlashRecovery(100, "OLD", 101)))
+
+
+def test_operator_probe_saves_coverage_evidence_without_advancing_frontier(tmp_path, monkeypatch, capsys):
+    from scripts import recover_flash_gap as recovery
+
+    store = _isolated_store(tmp_path)
+    checkpoint = FlashCheckpointStore(store._sf)
+    checkpoint.record([100], {100: {"complete": True, "newest_code": "OLD"}}, ingest_ok=True)
+    checkpoint.record([100], {100: {"complete": False, "reason": "watermark_not_found"}}, ingest_ok=True)
+    before = checkpoint.load([100])[100]
+    saved_state = (before.last_code, before.last_fetch_at, before.gap_at, before.gap_reason)
+
+    async def fake_fetch(**kwargs):
+        assert kwargs["stop_at_code"] == "OLD" and kwargs["pages"] == 100
+        return flash.FlashBatch([{"code": "NEW"}], coverage={100: {
+            "complete": False, "overlap": False, "newest_code": "NEW",
+            "pages_fetched": 100, "terminal": "page_limit", "source_host": "source-a",
+        }})
+
+    monkeypatch.setattr(recovery, "fetch_fast_news", fake_fetch)
+    monkeypatch.setattr(recovery, "ARTIFACTS", tmp_path / "receipts")
+    monkeypatch.setattr(sys, "argv", ["recover_flash_gap.py", "--db", str(tmp_path / "flash-gap.db"),
+                                   "--channel", "100", "--expected-last-code", "OLD",
+                                   "--max-pages", "100", "--probe"])
+    assert recovery.main() == 0
+    receipt_path, = (tmp_path / "receipts").glob("flash-probe-*.json")
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["terminal"] == "page_limit" and receipt["pages_fetched"] == 100
+    assert receipt["old_code_found"] is False and receipt["frontier_unchanged"] is True
+    assert "probe made no database write" in capsys.readouterr().out
+    after = checkpoint.load([100])[100]
+    assert (after.last_code, after.last_fetch_at, after.gap_at, after.gap_reason) == saved_state
+
+    async def source_failure(**kwargs):
+        return None
+
+    monkeypatch.setattr(recovery, "fetch_fast_news", source_failure)
+    assert recovery.main() == 2
+    receipts = list((tmp_path / "receipts").glob("flash-probe-*.json"))
+    assert len(receipts) == 2
+    failure = json.loads(next(p for p in receipts if p != receipt_path).read_text(encoding="utf-8"))
+    assert failure["terminal"] == "source_failure" and failure["old_code_found"] is False
+    assert checkpoint.load([100])[100].last_code == "OLD"
+
+    async def crashed_fetch(**kwargs):
+        raise RuntimeError("source client unavailable")
+
+    monkeypatch.setattr(recovery, "fetch_fast_news", crashed_fetch)
+    assert recovery.main() == 2
+    receipts_after = set((tmp_path / "receipts").glob("flash-probe-*.json"))
+    assert len(receipts_after) == 3
+    crashed = json.loads(next(iter(receipts_after - set(receipts))).read_text(encoding="utf-8"))
+    assert crashed["terminal"] == "source_failure" and crashed["failure_type"] == "RuntimeError"
+    assert checkpoint.load([100])[100].last_code == "OLD"
 
 
 def test_recovery_ingest_failure_and_cli_dry_run_leave_frontier_open(tmp_path, monkeypatch):
