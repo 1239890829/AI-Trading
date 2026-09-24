@@ -8,6 +8,7 @@
 - GET  /api/events/symbol/{symbol}           个股相关活跃事件（详情页事件标签）
 - POST /api/events                           手动注册单条事件（写鉴权）
 - POST /api/events/{id}/review-revision      精确观察版本的人工修订复核
+- POST /api/events/{id}/review-symbol-direction  多标的来源关联的逐股人工审定
 - POST /api/events/{id}/link-withdrawal      人工确认新来源 ID 撤回旧观察
 
 已删（2026-09-08 审查 P0-4，零消费方）：/events/extract、/events/collect（调度器直调
@@ -74,14 +75,23 @@ def _parse_dt(value: str | None) -> datetime | None:
     return None
 
 
-def _judge_fields(row) -> dict:
+def _judge_fields(row, directions=None) -> dict:
     """判定状态字段（单点收口：所有事件端点共用）。失败退化为 unknown，不臆造。"""
     from app.events.extract import JUDGE_STATUS_LABEL, judge_state
 
     try:
         pub = getattr(row, "published_at", None)
-        dirs = [{"direction": d.direction, "chain": getattr(d, "chain", "")} for d in (row.directions or [])]
+        selected = directions if directions is not None else (row.directions or [])
+        dirs = [{"direction": d.direction, "chain": getattr(d, "chain", "")}
+                for d in selected]
         st = judge_state(pub, dirs, half_life_hours=getattr(row, "half_life_hours", None))
+        if st["status"] == "judged" and any(
+            d.direction != 0 and getattr(d, "matched_by", None) == "manual" for d in selected
+        ):
+            # The interpretation version has the actual review time. Publication
+            # time is not when a human adjudicated this symbol.
+            st["judged_at"] = None
+            st["reason"] = "含人工逐股审定；方向依据与审定时间见解释版本"
         return {
             "judge_status": st["status"],
             "judge_status_label": JUDGE_STATUS_LABEL.get(st["status"], st["status"]),
@@ -95,7 +105,8 @@ def _judge_fields(row) -> dict:
 
 def _serialize(row, directions=None) -> dict:
     revision_pending_at = getattr(row, "revision_pending_at", None)
-    judgement = (_judge_fields(row) if revision_pending_at is None else {
+    selected = directions if directions is not None else row.directions
+    judgement = (_judge_fields(row, selected) if revision_pending_at is None else {
         "judge_status": "unknown", "judge_status_label": "来源修订待复核",
         "judged_at": None, "judge_reason": "新观察与当前解释不一致，机会判断已暂停",
     })
@@ -127,9 +138,10 @@ def _serialize(row, directions=None) -> dict:
                 "strength": d.strength,
                 "chain": d.chain,
                 "basis": d.basis,
+                "matched_by": d.matched_by,
                 "observation_id": getattr(d, "observation_id", None),
             }
-            for d in (directions if directions is not None else row.directions)
+            for d in selected
         ],
     }
     return out
@@ -188,6 +200,17 @@ class WithdrawalLinkIn(BaseModel):
     target_observation_id: int = Field(gt=0)
     notice_observation_id: int = Field(gt=0)
     expected_interpretation_id: int = Field(gt=0)
+    note: str = Field(min_length=1, max_length=2048)
+
+
+class SymbolDirectionReviewIn(BaseModel):
+    expected_observation_id: int = Field(gt=0)
+    expected_interpretation_id: int = Field(gt=0)
+    symbol: str = Field(pattern=r"^\d{6}$")
+    direction: Literal[-1, 1]
+    strength: int = Field(ge=1, le=5)
+    chain: str = Field(min_length=1, max_length=256)
+    basis: str = Field(min_length=1, max_length=256)
     note: str = Field(min_length=1, max_length=2048)
 
 
@@ -437,6 +460,21 @@ async def link_event_withdrawal(event_id: int, body: WithdrawalLinkIn,
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"data": _serialize_withdrawal_link(link, notice), "meta": {}}
+
+
+@router.post("/events/{event_id}/review-symbol-direction",
+             dependencies=[Depends(require_write_token)])
+async def review_event_symbol_direction(event_id: int, body: SymbolDirectionReviewIn,
+                                        store: EventStore = Depends(get_store)) -> dict:
+    try:
+        version = await asyncio.to_thread(
+            store.review_symbol_direction, event_id, **body.model_dump(),
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"data": _serialize_interpretation(version), "meta": {}}
 
 
 @router.get("/events/{event_id}/stocks")
