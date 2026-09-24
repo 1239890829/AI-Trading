@@ -1408,6 +1408,20 @@ def test_notification_replay_keeps_rejections_and_dispatch_result(tmp_path):
     assert "observe" in rejected["evidence"]["gate_reason"]
 
 
+def test_notification_snapshot_preserves_event_version_reference(tmp_path):
+    sf = _factory(tmp_path)
+    event_ref = {"event_id": 9, "version_id": 23, "observation_id": 31,
+                 "available_at": "2026-09-16 10:01:00", "state": "active"}
+    item = {"symbol": "600001", "name": "甲", "related_event_refs": [event_ref]}
+    run_id, rows = build_notification_records(
+        [item], trade_date="2026-09-16", as_of=datetime(2026, 9, 16, 10, 30),
+        hits=[{"item": item, "price": 10.0, "chg": 2.0}], skips=[], dispatch_by_symbol={},
+    )
+    assert rows[0]["evidence"]["event_refs"] == [event_ref]
+    archive_records(run_id, rows, sf)
+    assert replay_run(run_id, sf)["items"][0]["evidence"]["event_refs"] == [event_ref]
+
+
 def test_notification_pipeline_persists_run_header_and_is_idempotent(tmp_path):
     sf = _factory(tmp_path)
     item = {"symbol": "600001", "name": "甲", "confidence": {"tier": "strong"}}

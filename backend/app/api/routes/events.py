@@ -6,9 +6,10 @@
 - GET  /api/events/{id}/stocks               标的池：方向题材 → 官方成分反查 + override
 - GET  /api/events/symbol/{symbol}           个股相关活跃事件（详情页事件标签）
 - POST /api/events                           手动注册单条事件（写鉴权）
+- POST /api/events/{id}/review-revision      精确观察版本的人工修订复核
 
 已删（2026-09-08 审查 P0-4，零消费方）：/events/extract、/events/collect（调度器直调
-collect_news_events 函数）、/events/{id}/review。
+collect_news_events 函数）、旧版 /events/{id}/review。
 红线：标的池只给「关联 + 依据 + 失效条件」，不构成买卖建议。
 """
 
@@ -18,6 +19,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
@@ -129,6 +131,42 @@ def _serialize(row, directions=None) -> dict:
         ],
     }
     return out
+
+
+def _serialize_interpretation(version) -> dict:
+    return {
+        "id": version.id, "event_id": version.event_id,
+        "observation_id": version.observation_id,
+        "effective_at": version.effective_at.isoformat(sep=" "),
+        "state": version.state, "review_note": version.review_note,
+        "payload": json.loads(version.payload_json),
+    }
+
+
+class ReviewedDirectionIn(BaseModel):
+    target_type: Literal["theme", "symbol", "macro"]
+    target: str = Field(min_length=1, max_length=64)
+    direction: Literal[-1, 0, 1]
+    strength: int = Field(ge=1, le=5)
+    chain: str = Field(max_length=256)
+    basis: str = Field(min_length=1, max_length=256)
+    matched_by: Literal["manual"] = "manual"
+
+
+class ReviewedInterpretationIn(BaseModel):
+    source_tier: int = Field(ge=1, le=5)
+    category: Literal["policy", "statement", "data", "rumor", "corporate", "other"]
+    fact_kind: Literal["fact", "opinion", "rumor"]
+    certainty: Literal["done", "proposed", "rumor"]
+    half_life_hours: int = Field(ge=1, le=720)
+    directions: list[ReviewedDirectionIn]
+
+
+class RevisionReviewIn(BaseModel):
+    expected_observation_id: int = Field(gt=0)
+    action: Literal["adopt", "retain", "withdraw"]
+    note: str = Field(min_length=1, max_length=2048)
+    interpretation: ReviewedInterpretationIn | None = None
 
 
 @router.get("/events")
@@ -310,7 +348,41 @@ async def get_event(event_id: int, store: EventStore = Depends(get_store)) -> di
         }
         for o in store.observations_of(event_id)
     ]
-    return {"data": {**_serialize(row, store.directions_of(event_id)), "observations": observations}, "meta": {}}
+    versions = [_serialize_interpretation(v) for v in store.interpretations_of(event_id)]
+    review_target = store.pending_observation_of(event_id)
+    return {"data": {**_serialize(row, store.directions_of(event_id)),
+                     "observations": observations, "interpretations": versions,
+                     "pending_review_observation_id": review_target.id if review_target else None}, "meta": {}}
+
+
+@router.get("/events/{event_id}/interpretation")
+async def event_interpretation_at(event_id: int, as_of: datetime,
+                                  store: EventStore = Depends(get_store)) -> dict:
+    """Replay the state that existed by a Beijing local wall-clock time."""
+    if as_of.tzinfo is not None:
+        from app.core.bjtime import BJ_TZ
+        as_of = as_of.astimezone(BJ_TZ).replace(tzinfo=None)
+    version = store.interpretation_at(event_id, as_of)
+    return {"data": _serialize_interpretation(version) if version else None,
+            "meta": {"state": "known" if version else "unknown",
+                     "note": None if version else "该时点无已记录解释；旧事件不推断历史版本"}}
+
+
+@router.post("/events/{event_id}/review-revision", dependencies=[Depends(require_write_token)])
+async def review_event_revision(event_id: int, body: RevisionReviewIn,
+                                store: EventStore = Depends(get_store)) -> dict:
+    try:
+        version = await asyncio.to_thread(
+            store.review_revision, event_id,
+            expected_observation_id=body.expected_observation_id,
+            action=body.action, note=body.note,
+            interpretation=body.interpretation.model_dump() if body.interpretation else None,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"data": _serialize_interpretation(version), "meta": {}}
 
 
 @router.get("/events/{event_id}/stocks")
@@ -583,7 +655,7 @@ async def register_event(body: EventItemIn, request: Request, store: EventStore 
     return {"data": {**_serialize(row, store.directions_of(row.id)), "created": created}, "meta": {}}
 
 
-# POST /events/extract 与 /events/{id}/review 已删（2026-09-08 审查 P0-4：
+# POST /events/extract 与旧 /events/{id}/review 已删（2026-09-08 审查 P0-4：
 # 前端与 scripts 零调用；批量抽取走 collect_news_events，人工裁决无消费方）。
 
 

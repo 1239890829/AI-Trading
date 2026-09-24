@@ -23,6 +23,7 @@ from sqlalchemy import select
 from app.core.db import get_session_factory
 from app.models.event import EventCard, EventDirection, EventObservation
 from app.core.bjtime import beijing_now_naive
+from app.events.store import record_interpretation
 
 log = logging.getLogger(__name__)
 
@@ -123,6 +124,11 @@ def _insert_directions(sf, event_id: int, hits: list[dict]) -> int:
             ))
             existing.add(key)
             n += 1
+        if n and observation_id is not None:
+            db.flush()
+            db.expire(row, ["directions"])
+            record_interpretation(db, row, observation_id, state="active",
+                                  effective_at=beijing_now_naive(), note="LLM 辅助方向，待验证假设")
         db.commit()
         return n
 

@@ -208,7 +208,7 @@ def test_event_observation_upgrade_preserves_legacy_rows_and_matches_model(tmp_p
     from alembic import command
     from alembic.config import Config
     from app.core.migrations import BACKEND_DIR
-    from app.models.event import EventObservation
+    from app.models.event import EventObservation, EventInterpretation
 
     engine, path = _fresh_engine(tmp_path, "event-observation")
     cfg = Config(str(BACKEND_DIR / "alembic.ini"))
@@ -229,11 +229,13 @@ def test_event_observation_upgrade_preserves_legacy_rows_and_matches_model(tmp_p
             """))
         assert run_migrations(engine) == "upgraded"
         with engine.connect() as conn:
-            assert conn.scalar(text("select version_num from alembic_version")) == "c7e1a8f3b4d2"
+            assert conn.scalar(text("select version_num from alembic_version")) == "d8f2b7c4e1a9"
             assert conn.scalar(text("select count(*) from event_card where fingerprint='legacy-event'")) == 1
             assert conn.scalar(text("select count(*) from event_observation")) == 0
+            assert conn.scalar(text("select count(*) from event_interpretation")) == 0
             assert conn.scalar(text("select revision_pending_at from event_card where fingerprint='legacy-event'")) is None
         assert not _schema_drift(engine, EventObservation)
+        assert not _schema_drift(engine, EventInterpretation)
     finally:
         engine.dispose()
         path.unlink(missing_ok=True)
