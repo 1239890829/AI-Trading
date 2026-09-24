@@ -7,6 +7,8 @@ agent_created: true
 
 # Living System Governor
 
+本项目 2026-09-24 的用户临时授权改变 U49/U50 的执行者：Codex 在 `DEGRADED_FULL_CONTROL` 下可自行记录作者反证与 `DegradedRelease`，直到用户要求恢复；不得声称独立网页审核。具体活动状态、撤销与未降低的发布门见项目 `docs/handoff.md`、`docs/collaboration-workflow.md` §3.3a。下文描述的网页角色在该临时模式期间按此覆盖，其余治理原则不变。
+
 ## 0. 定位
 
 本 Skill 不是“多做功能”的方法，而是**长期治理复杂系统**的方法。

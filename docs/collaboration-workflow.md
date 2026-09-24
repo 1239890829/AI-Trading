@@ -41,6 +41,12 @@ Codex执行完必须记录实现/测试/偏差/剩余、提交推送，然后用
 
 `release_check.py` 同时支持两条**互斥语义**的有效路径：正常模式用独立 `Review`；降级模式用 `DegradedRelease`。两条路径都必须继续满足 latest master 已集成、三项 required CI completed/success、无有效 `CHANGES_REQUESTED` / 未解决 thread、commit status 不阻塞、敏感信息/范围/本地适用门禁已核。合并后必须核 master CI 并删活动功能分支。降级结束后恢复正常双角色，后续 PR 不得继续沿用旧降级回执。
 
+### 3.3a 2026-09-24 临时 Codex 执行者授权
+
+用户在 Codex 会话明确要求“先临时改一下，无需 ChatGPT 网页审核可自动走下去，我叫改回来再改回来”。因此从本轮起，`DEGRADED_FULL_CONTROL` 的执行者临时改为 Codex，直到用户明确撤销或要求“改回来”。本例外只替换网页侧的规划、`Preflight`、实施和独立 `Review` 角色；Codex 功能分支仍用 `codex/*`。Codex 自行记录 U49 开工反证与准确差异的作者复核，不把自审写成独立 Review；每个 PR 仍以 `DegradedRelease` 明示 `Mode=DEGRADED_FULL_CONTROL`、`User authorization=EXPLICIT`、非空原因、准确 PR/HEAD、作者身份与同一 verdict。`release_check.py` 现有结构化降级回执路径继续使用，不修改或绕过脚本。
+
+可继续工作的含义是：按 §3.5 与总账 §5.9 每次重算并只领取一个合法主切片，在当前切片内完成本地门禁、PR、required CI、精确 HEAD 发布检查、合并后 master CI 与分支清理；不启动无人监督的并发调度，也不自动越过 G 门、硬依赖、效果/生产准入、资金和权限边界。若发生 HEAD/base 漂移、阻塞审查或 CI 失败，先修复并重验，不能凭本授权放行。用户撤销时立即停止用 Codex 作者回执放行未合 PR，恢复正常网页 `Preflight` 与独立 `Review`；本节和 handoff 的活动授权随下一次治理提交撤回，历史回执保留。
+
 ### 3.4 换会话、重复通知与冲突
 
 同项目新会话先读最新 `master`：AGENTS→handoff→协作→方案→对应 stage 与证据。第一次完全无项目上下文时先定位仓库一次，之后不依赖聊天记忆或前台窗口标题。不能从不带项目的一句提示猜任务。进入选刀前运行 `scripts/ledger-runtime-selection.py`；部署日历不在施工 worktree 时显式指向运行仓日历，不能把“隔离树没有运行数据”误判成条件永远不成立。

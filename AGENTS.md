@@ -7,6 +7,7 @@
 
 - 作业边界与发布流程：本文件 §0、§1、§6.5。
 - 协作采用双模式：正常模式由网页 ChatGPT 负责计划/阶段账本/独立审核、Codex 执行获准切片；用户明确授权 `DEGRADED_FULL_CONTROL` 时，网页端可临时承担规划、实现、自审、PR/CI、发布、合并与清理全链路，但必须走独立的 `DegradedRelease` 精确 HEAD 回执，不得伪装成独立 Review。协作协议与人工介入点见 `docs/collaboration-workflow.md`。
+- **2026-09-24 临时用户授权**：本机 Codex 可在 `DEGRADED_FULL_CONTROL` 下担任全权执行者，直到用户明确说“改回来”或撤销。此期间不等待网页 `Preflight` / 独立 `Review`；Codex 自行做 U49 反证并以 `DegradedRelease` 明示作者自审。每个 PR 仍须准确 HEAD、完整本地门禁、required CI、`release_check.py`、合并后 CI 与分支清理。仅覆盖协作角色，不扩大业务、资金、模型或跨门权限；细则见 `docs/collaboration-workflow.md` §3.3a 与 `docs/handoff.md`。
 - 唯一文档入口：`docs/INDEX.md`；执行治理：`docs/retro-and-gaps.md` §5.9（G0–G5/GX）；领域索引：§6.0（W00–W09）；任务状态与调度元数据在所属阶段页单点维护。
 - 施工取舍：最新用户要求与 docs/implementation-plan.md 的 v9.12 明确修订优先；原 v9 未修订部分保留，旧项按真实价值复核，登记不等于必须实施。
 - 当前现场与实测：`docs/handoff.md` §1；经验按 `docs/kb/00-INDEX.md` 定位。
@@ -106,6 +107,8 @@ python3 scripts/doc-health.py
 最新协作方式以 docs/collaboration-workflow.md 为准：固定仓库入口、阶段任务单点记录，用户仅说“Codex执行完了”或“ChatGPT审核完了”。双方先读最新已共享记录；通知不代表批准，缺证据/版本不符则停。不要求用户传任务卡或每轮下载文档；自动链和Bridge退出必需依赖。
 
 U50 起临时代执行不再靠一次性聊天例外，而由正式降级模式管理。正常模式仍要求实施者与网页独立 Review 分离；当用户明确授权 `DEGRADED_FULL_CONTROL` 时，授权状态写入 handoff，网页可全程操控当前及后续切片，直到用户明确退出/恢复 Codex。降级作者自检仍不得冒充独立 Review，必须使用 `DegradedRelease` 精确 HEAD 回执；required CI、latest master、无 CHANGES_REQUESTED/未解决 thread、敏感信息/范围、本地门禁、post-merge CI 和分支删除均不降低。
+
+本文件中要求网页规划、`Preflight`、审核、放行和降级执行的角色规定，在 2026-09-24 临时用户授权期间按项目入口与 `docs/collaboration-workflow.md` §3.3a 由 Codex 承担；Codex 分支仍用 `codex/*`。作者自审仍只可使用 `DegradedRelease`，不得声称独立审核。用户撤销后恢复默认分工。
 
 首次开工、审核整改与合并按协作规范 §3.1 分别校验；明确派工可授权首次实施，CHANGES_REQUESTED可授权限定整改，但两者都不代替成果审核或合并CI，避免“未开工就要求已审核”的循环。
 

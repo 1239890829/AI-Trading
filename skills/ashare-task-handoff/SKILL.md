@@ -5,6 +5,8 @@ description: 把本轮执行、审核、重大决策传播核对和下一步写�
 
 # 原位交接
 
+**临时执行者覆盖（2026-09-24）**：用户明确授权 Codex 在 `DEGRADED_FULL_CONTROL` 下免网页审核，直到要求“改回来”。活动状态与撤销规则归 `docs/handoff.md` 和 `docs/collaboration-workflow.md` §3.3a；以下网页 `Preflight` / 独立 `Review` / 网页降级作者要求在此期间由 Codex 的 U49 作者反证和准确 HEAD `DegradedRelease` 承接，不声称独立审核。发布、CI、阶段门与业务权限不变。
+
 全项目范围按 `docs/product/product-closure-design.md`、`docs/product/hunting-decision-design.md`、`docs/product/feature-closure-audit.md` 核大小功能及消费者。任务唯一状态和阶段门元数据只写所属 stage；handoff 只定位当前模式、当前主门/切片、现场和最近关键基线。
 
 1. Codex 回填本轮编号、阶段门/门内序/门禁角色、硬依赖与效果前置核验、真实实现/偏差、修改文件、准确代码提交、测试命令/结果/环境、未验证项及证据。新问题和建议写本条，不代写网页审核通过。
