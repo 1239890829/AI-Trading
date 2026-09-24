@@ -76,7 +76,8 @@ def test_impact_route_filters_l3(monkeypatch=None):
             fact_kind="fact", certainty="done", category="corporate",
             half_life_hours=72, source_symbol=None, status="active",
             directions=[SimpleNamespace(target_type="theme", target="光伏",
-                                        direction=1, strength=2, chain="", basis="")],
+                                        direction=1, strength=2, chain="", basis="",
+                                        matched_by="name")],
         ),
         SimpleNamespace(
             id=2, title="某公司董事辞职", url=None, summary=None, source="x", source_tier=2,
@@ -133,7 +134,8 @@ def test_impact_route_returns_tags_and_tag_counts():
             fact_kind="fact", certainty="done", category="corporate",
             half_life_hours=72, source_symbol=None, status="active",
             directions=[SimpleNamespace(target_type="theme", target="光伏",
-                                        direction=1, strength=2, chain="", basis="")],
+                                        direction=1, strength=2, chain="", basis="",
+                                        matched_by="name")],
         ),
         SimpleNamespace(
             id=2, title="某公司董事辞职", url=None, summary=None, source="x", source_tier=2,

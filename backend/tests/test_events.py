@@ -515,6 +515,150 @@ def test_multi_symbol_source_is_visible_for_every_stock_without_imputed_score(tm
         ("600001", 0), ("000002", 0)}
 
 
+def test_multi_symbol_manual_review_versions_only_one_stock(tmp_path):
+    import json
+
+    from app.services.picks_pipeline import _build_event_hits_index
+
+    store = _isolated_store(tmp_path)
+    event = build_event("甲乙公司合作公告", source="东财快讯",
+                        source_symbols=["600001", "000002"])
+    event["source_item_id"] = "joint-1"
+    row, _ = store.add_event(event)
+    original = store.interpretations_of(row.id)[0]
+    observation = store.observations_of(row.id)[0]
+    version = store.review_symbol_direction(
+        row.id, expected_observation_id=observation.id,
+        expected_interpretation_id=original.id, symbol="600001",
+        direction=1, strength=2, chain="已签订单仅对应甲公司收入",
+        basis="人工核对来源原文：甲公司承担供货，乙公司仅为框架合作方",
+        note="核对甲乙双方公告，乙公司影响仍未知",
+    )
+    before = json.loads(original.payload_json)["directions"]
+    after = json.loads(version.payload_json)["directions"]
+    assert {(d["target"], d["direction"]) for d in before if d["target_type"] == "symbol"} == {
+        ("600001", 0), ("000002", 0)}
+    assert {(d["target"], d["direction"]) for d in after if d["target_type"] == "symbol"} == {
+        ("600001", 1), ("000002", 0)}
+    assert next(d for d in after if d["target"] == "600001")["matched_by"] == "manual"
+    assert version.observation_id == observation.id
+    assert store.interpretation_at(row.id, original.effective_at).id == original.id
+    hits = _build_event_hits_index(store.list_events(active_only=True))
+    assert hits["600001"][0] > 0 and hits["000002"][:2] == (0, 0)
+    assert hits["000002"][4] == 1
+    with pytest.raises(ValueError, match="版本不匹配"):
+        store.review_symbol_direction(
+            row.id, expected_observation_id=observation.id,
+            expected_interpretation_id=original.id, symbol="000002",
+            direction=-1, strength=1, chain="待核", basis="旧版本", note="旧版本",
+        )
+    assert len(store.interpretations_of(row.id)) == 2
+    second = store.review_symbol_direction(
+        row.id, expected_observation_id=observation.id,
+        expected_interpretation_id=version.id, symbol="000002",
+        direction=-1, strength=1, chain="乙公司承担新增成本",
+        basis="人工核对乙公司公告的费用条款", note="逐股核对乙公司",
+    )
+    assert {(d["target"], d["direction"]) for d in json.loads(second.payload_json)["directions"]
+            if d["target_type"] == "symbol"} == {("600001", 1), ("000002", -1)}
+    assert json.loads(version.payload_json)["directions"] == after
+    correction = build_event(event["title"], source="东财快讯", summary="合作范围更正",
+                             source_symbols=["600001", "000002"])
+    correction["source_item_id"] = "joint-1"
+    store.add_event(correction)
+    assert not any(r.id == row.id for r in store.list_events(active_only=True))
+    assert store.interpretation_at(row.id, second.effective_at).id == second.id
+    assert store.interpretations_of(row.id)[-1].state == "pending"
+
+
+def test_multi_symbol_manual_review_requires_exact_current_source_and_no_pending(tmp_path):
+    store = _isolated_store(tmp_path)
+    event = build_event("甲乙公司合作公告", source="东财快讯",
+                        source_symbols=["600001", "000002"])
+    event["source_item_id"] = "joint-2"
+    row, _ = store.add_event(event)
+    original = store.interpretations_of(row.id)[0]
+    observation = store.observations_of(row.id)[0]
+    kwargs = dict(expected_observation_id=observation.id,
+                  expected_interpretation_id=original.id, symbol="600001",
+                  direction=1, strength=2, chain="甲公司获益", basis="核对原公告",
+                  note="人工核验")
+    with pytest.raises(ValueError, match="未列于"):
+        store.review_symbol_direction(row.id, **{**kwargs, "symbol": "300003"})
+    other, _ = store.add_event(build_event("另一事件", source="财联社",
+                                           source_symbols=["300003", "300004"]))
+    with pytest.raises(ValueError, match="不属于"):
+        store.review_symbol_direction(row.id, **{**kwargs,
+                                                  "expected_observation_id": store.observations_of(other.id)[0].id})
+    correction = build_event(event["title"], source="东财快讯", summary="合作范围更正",
+                             source_symbols=["600001", "000002"])
+    correction["source_item_id"] = "joint-2"
+    store.add_event(correction)
+    with pytest.raises(ValueError, match="待复核"):
+        store.review_symbol_direction(row.id, **kwargs)
+    assert len(store.interpretations_of(row.id)) == 2  # initial + pending, no review
+
+
+def test_multi_symbol_manual_review_preserves_proposed_strength_cap(tmp_path):
+    store = _isolated_store(tmp_path)
+    event = build_event("甲乙公司拟签约合作", source="东财快讯",
+                        source_symbols=["600001", "000002"])
+    row, _ = store.add_event(event)
+    assert row.certainty == "proposed"
+    kwargs = dict(expected_observation_id=store.observations_of(row.id)[0].id,
+                  expected_interpretation_id=store.interpretations_of(row.id)[0].id,
+                  symbol="600001", direction=1, strength=2,
+                  chain="拟议合作可能增收", basis="核对拟议公告", note="只确认拟议性质")
+    with pytest.raises(ValueError, match="强度不得超过 1"):
+        store.review_symbol_direction(row.id, **kwargs)
+    assert len(store.interpretations_of(row.id)) == 1
+    version = store.review_symbol_direction(row.id, **{**kwargs, "strength": 1})
+    assert version.state == "active"
+
+
+def test_multi_symbol_manual_review_api_requires_write_token(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.routes import events as events_route
+    from app.core.config import settings
+
+    store = _isolated_store(tmp_path)
+    event = build_event("甲乙公司合作公告", source="东财快讯",
+                        source_symbols=["600001", "000002"])
+    row, _ = store.add_event(event)
+    body = {
+        "expected_observation_id": store.observations_of(row.id)[0].id,
+        "expected_interpretation_id": store.interpretations_of(row.id)[0].id,
+        "symbol": "000002", "direction": -1, "strength": 2,
+        "chain": "乙公司承担额外成本", "basis": "核对乙公司公告成本条款",
+        "note": "人工确认乙公司单独受损",
+    }
+    app = FastAPI()
+    app.include_router(events_route.router, prefix="/api")
+    app.dependency_overrides[events_route.get_store] = lambda: store
+    monkeypatch.setattr(settings, "api_token", "symbol-review-test-token")
+    with TestClient(app) as api:
+        path = f"/api/events/{row.id}/review-symbol-direction"
+        assert api.post(path, json=body).status_code == 401
+        headers = {"X-API-Token": "symbol-review-test-token"}
+        assert api.post("/api/events/999999/review-symbol-direction",
+                        json=body, headers=headers).status_code == 404
+        response = api.post(path, json=body, headers=headers)
+        assert response.status_code == 200, response.text
+        version = response.json()["data"]
+        assert any(d["target"] == "000002" and d["direction"] == -1
+                   for d in version["payload"]["directions"])
+        detail = api.get(f"/api/events/{row.id}").json()["data"]
+        assert {(d["target"], d["direction"]) for d in detail["directions"] if d["target_type"] == "symbol"} == {
+            ("600001", 0), ("000002", -1)}
+        assert next(d for d in detail["directions"] if d["target"] == "000002")["matched_by"] == "manual"
+        assert detail["judge_status"] == "judged"
+        assert detail["judged_at"] is None and "人工逐股审定" in detail["judge_reason"]
+        assert api.post(path, json=body, headers=headers).status_code == 409
+        assert len(store.interpretations_of(row.id)) == 2
+
+
 def test_same_source_id_changed_title_and_late_publication_stay_linked(tmp_path):
     from datetime import datetime
 

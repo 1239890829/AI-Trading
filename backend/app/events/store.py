@@ -12,7 +12,7 @@ import json
 import logging
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.db import get_session_factory
@@ -283,6 +283,67 @@ class EventStore:
             version = record_interpretation(
                 db, row, latest.id, state="withdrawn" if action == "withdraw" else "active",
                 effective_at=beijing_now_naive(), note=note.strip(),
+            )
+            db.commit()
+            return version
+
+    def review_symbol_direction(self, event_id: int, *, expected_observation_id: int,
+                                expected_interpretation_id: int, symbol: str,
+                                direction: int, strength: int, chain: str,
+                                basis: str, note: str) -> EventInterpretation:
+        """Adjudicate one multi-symbol source link without changing other symbols."""
+        if direction not in (-1, 1) or not 1 <= strength <= 5:
+            raise ValueError("逐股审定需要有效方向和强度")
+        if not all((chain.strip(), basis.strip(), note.strip())):
+            raise ValueError("逐股审定需要传导链、来源依据和人工复核记录")
+        with self._sf() as db:
+            row = db.get(EventCard, event_id)
+            if row is None:
+                raise LookupError("事件不存在")
+            observation = db.get(EventObservation, expected_observation_id)
+            if observation is None or observation.event_id != event_id:
+                raise ValueError("来源观察不属于当前事件")
+            source_symbols = json.loads(observation.source_symbols_json)
+            if len(source_symbols) < 2 or symbol not in source_symbols:
+                raise ValueError("标的未列于多标的来源观察")
+
+            latest_id = select(func.max(EventInterpretation.id)).where(
+                EventInterpretation.event_id == event_id
+            ).scalar_subquery()
+            # The no-op update obtains the writer lock and checks the version in
+            # the same statement. A concurrent review cannot reuse the old head.
+            claimed = db.execute(update(EventCard).where(
+                EventCard.id == event_id,
+                EventCard.status == "active",
+                EventCard.revision_pending_at.is_(None),
+                latest_id == expected_interpretation_id,
+            ).values(status=EventCard.status))
+            if claimed.rowcount != 1:
+                raise ValueError("事件已变化、待复核或当前解释版本不匹配")
+            db.refresh(row)
+            latest = db.get(EventInterpretation, expected_interpretation_id)
+            if latest.state != "active" or latest.observation_id != expected_observation_id:
+                raise ValueError("来源观察并非当前解释依据")
+            if row.certainty == "proposed" and strength > 1:
+                raise ValueError("拟议事件的方向强度不得超过 1")
+            target = db.execute(select(EventDirection).where(
+                EventDirection.event_id == event_id,
+                EventDirection.target_type == "symbol",
+                EventDirection.target == symbol,
+            )).scalar_one_or_none()
+            if target is None or target.direction != 0 or target.matched_by != "source":
+                raise ValueError("标的不是待判的多标的来源关联")
+            target.direction = direction
+            target.strength = strength
+            target.chain = chain.strip()
+            target.basis = basis.strip()
+            target.matched_by = "manual"
+            target.observation_id = observation.id
+            db.flush()
+            db.expire(row, ["directions"])
+            version = record_interpretation(
+                db, row, observation.id, state="active",
+                effective_at=beijing_now_naive(), note=f"逐股人工审定 {symbol}：{note.strip()}",
             )
             db.commit()
             return version
