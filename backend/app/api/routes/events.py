@@ -103,13 +103,19 @@ def _judge_fields(row, directions=None) -> dict:
                 "judged_at": None, "judge_reason": "判定状态计算失败"}
 
 
-def _serialize(row, directions=None) -> dict:
+def _serialize(row, directions=None, *, now: datetime | None = None) -> dict:
     revision_pending_at = getattr(row, "revision_pending_at", None)
-    selected = directions if directions is not None else row.directions
-    judgement = (_judge_fields(row, selected) if revision_pending_at is None else {
-        "judge_status": "unknown", "judge_status_label": "来源修订待复核",
-        "judged_at": None, "judge_reason": "新观察与当前解释不一致，机会判断已暂停",
-    })
+    now = now or beijing_now_naive()
+    evidence_visible = EventStore.evidence_visible(row, now=now)
+    selected = (directions if directions is not None else row.directions) if evidence_visible else []
+    if not evidence_visible:
+        judgement = {"judge_status": "unknown", "judge_status_label": "证据尚未可见",
+                     "judged_at": None, "judge_reason": "发布时间或解释可见时点尚未到达；原版本仍可审计"}
+    elif revision_pending_at is not None:
+        judgement = {"judge_status": "unknown", "judge_status_label": "来源修订待复核",
+                     "judged_at": None, "judge_reason": "新观察与当前解释不一致，机会判断已暂停"}
+    else:
+        judgement = _judge_fields(row, selected)
     out = {
         "id": row.id,
         "title": row.title,
@@ -124,7 +130,7 @@ def _serialize(row, directions=None) -> dict:
         "half_life_hours": row.half_life_hours,
         "source_symbol": row.source_symbol,
         "status": row.status,
-        "is_active": EventStore.is_active(row),
+        "is_active": EventStore.is_active(row, now=now),
         "revision_pending_at": revision_pending_at.isoformat(sep=" ") if revision_pending_at else None,
         "interpretation_ref": getattr(row, "interpretation_ref", None) or {
             "event_id": row.id, "version_id": None, "observation_id": None,
@@ -491,6 +497,11 @@ async def event_stocks(event_id: int, request: Request, store: EventStore = Depe
     row = store.get_event(event_id)
     if row is None:
         raise HTTPException(status_code=404, detail="事件不存在")
+    now = beijing_now_naive()
+    if not EventStore.evidence_visible(row, now=now):
+        return {"data": {"event": _serialize(row, now=now), "pools": []},
+                "meta": {"note": "事件发布时间或解释版本尚未可见，标的池暂停",
+                         "disclaimer": "标的池仅为事件关联成分，不构成买卖建议"}}
     if row.revision_pending_at is not None:
         return {"data": {"event": _serialize(row), "pools": []},
                 "meta": {"note": "来源内容有未复核修订，标的池暂停",

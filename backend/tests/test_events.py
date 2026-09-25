@@ -919,6 +919,60 @@ def test_active_events_exclude_future_publication_and_interpretation(tmp_path, m
     }
 
 
+def test_future_event_evidence_is_not_current_in_detail_or_stock_pool(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import app.core.bjtime as bjtime_module
+    import app.events.store as store_module
+    from app.api.routes import events as events_route
+    from app.models.event import EventInterpretation
+
+    now = datetime(2026, 9, 24, 10, 0)
+    monkeypatch.setattr(bjtime_module, "beijing_now_naive", lambda: now)
+    monkeypatch.setattr(store_module, "beijing_now_naive", lambda: now)
+    monkeypatch.setattr(events_route, "beijing_now_naive", lambda: now)
+    store = _isolated_store(tmp_path)
+
+    def add_event(key, published_at):
+        row, _ = store.add_event({
+            "fingerprint": key, "title": key, "source": "test", "source_item_id": key,
+            "published_at": published_at,
+            "directions": [{"target_type": "theme", "target": "液冷", "direction": 1}],
+        })
+        return row
+
+    visible = add_event("detail-visible", now - timedelta(minutes=10))
+    future_publication = add_event("detail-future-publication", now + timedelta(minutes=1))
+    future_version = add_event("detail-future-version", now - timedelta(minutes=5))
+    version_id = store.interpretations_of(future_version.id)[0].id
+    with store._sf() as db:
+        db.get(EventInterpretation, version_id).effective_at = now + timedelta(minutes=1)
+        db.commit()
+
+    app = FastAPI()
+    app.include_router(events_route.router, prefix="/api")
+    app.dependency_overrides[events_route.get_store] = lambda: store
+    with TestClient(app) as api:
+        current = api.get(f"/api/events/{visible.id}").json()["data"]
+        assert current["is_active"] and current["directions"]
+        for event_id in (future_publication.id, future_version.id):
+            detail = api.get(f"/api/events/{event_id}").json()["data"]
+            assert not detail["is_active"]
+            assert detail["judge_status"] == "unknown"
+            assert detail["directions"] == []
+            assert detail["interpretations"], "原始解释版本仍可审计"
+            pool = api.get(f"/api/events/{event_id}/stocks").json()
+            assert pool["data"]["pools"] == []
+            assert "尚未可见" in pool["meta"]["note"]
+        now += timedelta(minutes=1)
+        for event_id in (future_publication.id, future_version.id):
+            detail = api.get(f"/api/events/{event_id}").json()["data"]
+            assert detail["is_active"] and detail["directions"]
+
+
 # ---------------------------------------------------------------- API
 
 

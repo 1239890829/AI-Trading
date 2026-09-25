@@ -425,8 +425,34 @@ class EventStore:
     # -- read ---------------------------------------------------------------
 
     @staticmethod
+    def evidence_visible(row: EventCard, now: datetime | None = None) -> bool:
+        """Current publication and latest interpretation must both be visible."""
+        from app.core.bjtime import BJ_TZ, beijing_now_naive as _bj
+
+        now = now or _bj()
+        if now.tzinfo is not None:
+            now = now.astimezone(BJ_TZ).replace(tzinfo=None)
+        published = row.published_at
+        if published is None:
+            return False
+        if published.tzinfo is not None:
+            published = published.astimezone(BJ_TZ).replace(tzinfo=None)
+        if published > now:
+            return False
+        ref = getattr(row, "interpretation_ref", None)
+        if not isinstance(ref, dict) or ref.get("version_id") is None:
+            return True  # No attached version: do not invent a clock for legacy rows.
+        try:
+            effective = datetime.fromisoformat(ref["available_at"])
+            if effective.tzinfo is not None:
+                effective = effective.astimezone(BJ_TZ).replace(tzinfo=None)
+            return effective <= now
+        except (KeyError, TypeError, ValueError):
+            return False
+
+    @staticmethod
     def is_active(row: EventCard, now: datetime | None = None) -> bool:
-        """active = 未被人工裁决 且 现在距发布 < 半衰期 × 2（过期置灰不删，可回溯）。
+        """active = 未被裁决、证据已可见且距发布 < 半衰期 × 2。
 
         2026-09-09 时区口径：published_at 统一北京 naive，now 也取北京 naive
         （此前把北京 naive 当 UTC 解释，age 虚增 8h，事件提前"过期"）。
@@ -442,6 +468,8 @@ class EventStore:
         published = row.published_at
         if published is not None and published.tzinfo is not None:
             published = published.astimezone(BJ_TZ).replace(tzinfo=None)
+        if not EventStore.evidence_visible(row, now=now):
+            return False
         age_hours = (now - published).total_seconds() / 3600
         return 0 <= age_hours < row.half_life_hours * 2
 
