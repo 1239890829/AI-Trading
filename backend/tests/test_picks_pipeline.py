@@ -615,6 +615,32 @@ def test_event_index_failure_is_not_persisted_as_no_events(deps, store, monkeypa
     assert "事件索引失败" in json.loads(row.items)[0]["bases"]["news"]
 
 
+def test_event_index_failure_does_not_supply_candidates_or_regime(deps, store, monkeypatch):
+    """同批索引失败时，事件不得先改变候选池或炒作阶段。"""
+    monkeypatch.setattr(pl, "evaluate_stand_aside", _benign_gate)
+    events = [_Event(i, f"公司{i}业绩预增", target=f"60000{i}") for i in range(1, 6)]
+    events[0].source_tier = "invalid legacy tier"
+    monkeypatch.setattr(store, "list_events", lambda **_kwargs: events)
+    hub = _Hub()
+
+    async def limit_up_only(_value):
+        return [_PoolRec("600010", 1, "独立涨停来源")]
+
+    async def empty_hot(_value):
+        return []
+
+    monkeypatch.setattr(hub.provider, "get_limit_up_pool", limit_up_only)
+    monkeypatch.setattr(hub.provider, "get_hot_stock_list", empty_hot)
+    data = _run(deps, hub)["data"]
+
+    assert data["meta"]["event_evidence"] == {
+        "state": "unavailable", "active_count": 5, "failure_stage": "index",
+    }
+    assert data["meta"]["candidate_count"] == 1
+    assert data["meta"]["tradability_policy"]["candidate_sources"] == {"limit_up": 1}
+    assert data["meta"]["regime"]["earnings_ratio"] is None
+
+
 def test_theme_benchmark_is_pure_and_prefers_strongest_theme():
     """`_theme_benchmark` 抽成纯函数的直测：题材归属由参数传入，且取**最强**题材。
 
