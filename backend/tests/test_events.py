@@ -886,6 +886,39 @@ def test_active_event_window_keeps_subsecond_boundary(tmp_path, monkeypatch):
     ]
 
 
+def test_active_events_exclude_future_publication_and_interpretation(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+
+    import app.events.store as store_module
+    from app.models.event import EventInterpretation
+
+    store = _isolated_store(tmp_path)
+    now = datetime(2026, 9, 24, 10, 0)
+    monkeypatch.setattr(store_module, "beijing_now_naive", lambda: now)
+
+    def add_event(key, published_at):
+        row, _ = store.add_event({
+            "fingerprint": key, "title": key, "source": "test", "source_item_id": key,
+            "published_at": published_at,
+            "directions": [{"target_type": "theme", "target": "液冷", "direction": 1}],
+        })
+        return row
+
+    visible = add_event("visible-event", now - timedelta(minutes=10))
+    future_publication = add_event("future-publication", now + timedelta(minutes=1))
+    future_version = add_event("future-version", now - timedelta(minutes=5))
+    version_id = store.interpretations_of(future_version.id)[0].id
+    with store._sf() as db:
+        db.get(EventInterpretation, version_id).effective_at = now + timedelta(minutes=1)
+        db.commit()
+
+    assert [row.id for row in store.list_events(active_only=True, limit=10)] == [visible.id]
+    assert not store.is_active(future_publication, now=now)
+    assert {row.id for row in store.list_events(active_only=False, limit=10)} == {
+        visible.id, future_publication.id, future_version.id,
+    }
+
+
 # ---------------------------------------------------------------- API
 
 
