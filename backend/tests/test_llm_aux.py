@@ -122,6 +122,39 @@ def test_pending_candidates_filters(tmp_path):
     assert ev5.id not in ids
 
 
+def test_future_interpretation_is_not_sent_to_llm(tmp_path, monkeypatch):
+    """尚未可见的当前解释不能提前进入付费模型批次。"""
+    sf = _factory(tmp_path)
+    _settings(monkeypatch, min_batch=1)
+    ev = _event(sf, "半导体扩产消息待判", age_min=10)
+    now = beijing_now_naive()
+    with sf() as db:
+        obs = EventObservation(
+            event_id=ev.id, observation_key="future-version",
+            content_hash="future-content", source="东财快讯", title=ev.title,
+            received_at=now, available_at=now, change_kind="initial",
+        )
+        db.add(obs)
+        db.flush()
+        db.add(EventInterpretation(
+            event_id=ev.id, observation_id=obs.id,
+            effective_at=now + timedelta(minutes=10), state="active", payload_json="{}",
+        ))
+        db.commit()
+
+    assert la._pending_candidates(
+        sf, theme_names=["半导体概念"], max_batch=12, age_max_h=5.0,
+    ) == []
+    monkeypatch.setattr(la, "_deepseek_items", lambda *_a, **_k: pytest.fail(
+        "future interpretation must not trigger an LLM call"
+    ))
+    assert la.judge_pending_batch(sf, theme_names=["半导体概念"])["skipped"] is True
+    monkeypatch.setattr(la, "beijing_now_naive", lambda: now + timedelta(minutes=11))
+    assert [row.id for row in la._pending_candidates(
+        sf, theme_names=["半导体概念"], max_batch=12, age_max_h=5.0,
+    )] == [ev.id]
+
+
 def test_theme_match(monkeypatch):
     names = ["半导体概念", "AI应用", "存储芯片", "商业航天"]
     assert la._match_theme("半导体概念", names) == "半导体概念"   # 整名
