@@ -274,6 +274,24 @@ def test_reviewed_revision_replays_exact_visible_versions(tmp_path):
                               action="retain", note="重复提交")
 
 
+def test_interpretation_replay_waits_for_source_publication(tmp_path, monkeypatch):
+    """版本已写入也不能在来源发布时间之前作为可见解释返回。"""
+    from datetime import datetime, timedelta
+    from app.events import store as event_store_module
+
+    at = datetime(2026, 9, 10, 10, 0)
+    monkeypatch.setattr(event_store_module, "beijing_now_naive", lambda: at)
+    store = _isolated_store(tmp_path)
+    event = build_event("某公司订单公告", source="东财快讯")
+    event["published_at"] = at + timedelta(hours=1)
+    row, _ = store.add_event(event)
+    version = store.interpretations_of(row.id)[0]
+    assert version.effective_at == at
+
+    assert store.interpretation_at(row.id, at + timedelta(minutes=30)) is None
+    assert store.interpretation_at(row.id, event["published_at"]).id == version.id
+
+
 def test_active_event_read_cannot_pair_old_directions_with_new_pending_version(tmp_path):
     """A revision between separate reads must not give decisions a false version reference."""
     from sqlalchemy import event as sqlalchemy_event
