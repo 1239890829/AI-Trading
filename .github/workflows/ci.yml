@@ -39,9 +39,9 @@ jobs:
           fi
 
       - name: pytest（全量单测，设计为离线运行）
-        # 固定三个 worker，按文件分配以保留模块级夹具/共享 TestClient；仍收集全量用例。
+        # 固定四个 worker，按文件分配以保留模块级夹具/共享 TestClient；仍收集全量用例。
         # pyproject 已含 -q；重复添加会隐藏汇总。保留慢项记录供分钟治理。
-        run: python -m pytest -n 3 --dist loadfile --basetemp=/tmp/pytest-ci --durations=20 --junitxml=/tmp/backend-junit.xml
+        run: python -m pytest -n 4 --dist loadfile --basetemp=/tmp/pytest-ci --durations=20 --junitxml=/tmp/backend-junit.xml
 
       - name: pyflakes（静态检查）
         run: python -m pyflakes app tests scripts
