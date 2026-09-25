@@ -477,6 +477,11 @@ async def collect_evidence(app_state) -> dict:
             _ev_rows = await asyncio.to_thread(
                 store.list_events, active_only=True, limit=EVENT_LIMIT
             )
+            # 一批事件作为一个证据单元；后续坏行不能把前面已累加的分数留下。
+            batch_strength: dict[str, float] = {}
+            batch_counts: dict[str, dict] = {}
+            batch_symbols: dict[str, list[str]] = {}
+            batch_refs: dict[str, list[dict]] = {}
             for row in _ev_rows:
                 w = event_weight(row.source_tier, row.certainty)
                 row_themes: list[str] = []
@@ -488,20 +493,22 @@ async def collect_evidence(app_state) -> dict:
                             row_themes.append(tag)
                         if d.direction:
                             sign = 1 if d.direction == 1 else -1
-                            event_strength[tag] = event_strength.get(tag, 0.0) + sign * d.strength * w
-                            c = event_counts.setdefault(tag, {"bull": 0, "bear": 0})
+                            batch_strength[tag] = batch_strength.get(tag, 0.0) + sign * d.strength * w
+                            c = batch_counts.setdefault(tag, {"bull": 0, "bear": 0})
                             c["bull" if d.direction == 1 else "bear"] += 1
                     elif d.target_type == "symbol" and d.target:
                         row_syms.append(d.target)
                 for tag in row_themes:
-                    event_refs.setdefault(tag, []).append(dict(
+                    batch_refs.setdefault(tag, []).append(dict(
                         getattr(row, "interpretation_ref", None) or
                         {"event_id": row.id, "version_id": None, "state": "unknown"}
                     ))
-                    bucket = event_symbols.setdefault(tag, [])
+                    bucket = batch_symbols.setdefault(tag, [])
                     for s in row_syms:
                         if s not in bucket:
                             bucket.append(s)
+            event_strength, event_counts = batch_strength, batch_counts
+            event_symbols, event_refs = batch_symbols, batch_refs
         except Exception as exc:
             log.warning("brief evidence: events failed: %s", exc)
             missing.append(f"事件读取失败（{exc}）")
