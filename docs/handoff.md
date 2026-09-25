@@ -13,6 +13,8 @@
 
 **IMP-043 后端 CI 并行现场（2026-09-24）**：PR #124 HEAD `df9295d170d86df69d4d0e2b8a2c049da457fc8e` 已合并为 `5a0ab083de0da469cad78ae9859509d69165dac1`；准确 HEAD 的作者 `DegradedRelease` 回执 `5810193236` 与临合并两次 `release_check.py exit 0` 均已核。PR CI `35972114896` 三项通过，backend job 174s / pytest 137.63s；合并后 master CI `35972636974` 三项通过，backend job 186s / pytest 145.75s；两次均为 4309 passed / 80 skipped。本机同树串行 128.06s、3 worker 78.50s，均为 4309 passed / 80 skipped；全量 pyflakes、前端 tsc/eslint、常规与 UTC 各 713 tests、Next build、doc-health、workspace-hygiene、公开仓扫描通过。本地与远端代码功能分支已清理。Linux 新耗时只有 PR 与 master 各一轮，持续复核 runner 波动与成本；未测得实际账单节省。
 
+**IMP-043 后端 CI 四 worker 复核（2026-09-25）**：PR #152 已合并为 `5bdbee799e76899a3c697e3f16a49168a66ad35c`，准确 HEAD 作者 `DegradedRelease` 回执 `5832060298` 和临合并两次 `release_check.py exit 0` 已核。PR CI `36132578762` 与合并后 master CI `36132953572` 三项均成功、各有 4338 passed / 80 skipped；后端 pytest/job 分别为 94.43s/126s 和 134.05s/177s。后者处于改动前 130–162s 的 pytest 波动区间，因此尚未证实稳定的 Linux/账单收益；本机同树四 worker 比三 worker 快 68.68s vs 77.16s。按文件分配、pyflakes、前端和文档门禁未删减；进一步拆分重测试文件和改安装器的实验未改善整体收益，均未落地。详见 [W08/IMP-043](stages/w08-governance.md#imp-043)。
+
 **IMP-043 传播核对**：此片只更改 CI 测试执行方式和依赖，完整断言、三 job、发布权限与协作规则未变。所属 W08 stage 与本 handoff 已更新；`implementation-plan.md`、`plan-registry.md`、`collaboration-workflow.md`、`AGENTS.md`、Skills 与 `INDEX.md` 不适用，因为没有改变长期目标、权威路由、权限或发布契约。
 
 **IMP-048 传播核对**：本片修正 W03 已登记的持久精选消费端索引失败语义，不新增判断事实源、业务目标或发布权限。所属阶段状态与剩余范围已更新 W03，本 handoff 记录最近发布与运行边界；代码契约在 `backend/app/services/picks_pipeline.py`。总方案、领域蓝图、Jev 蓝图、plan-registry、INDEX、AGENTS 和 Skills 均无规则变化，故不适用；没有新增文档或第二任务账本。
