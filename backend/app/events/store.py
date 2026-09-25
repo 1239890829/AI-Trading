@@ -629,10 +629,13 @@ class EventStore:
             return _latest_pending_observation(db, row) if row else None
 
     def interpretation_at(self, event_id: int, as_of: datetime) -> EventInterpretation | None:
-        """Only return a version recorded by as_of; legacy unversioned rows stay unknown."""
+        """Return a version only after both source publication and version recording."""
         with self._sf() as db:
-            return db.execute(select(EventInterpretation).where(
+            return db.execute(select(EventInterpretation).join(
+                EventCard, EventCard.id == EventInterpretation.event_id,
+            ).where(
                 EventInterpretation.event_id == event_id,
                 EventInterpretation.effective_at <= as_of,
+                EventCard.published_at <= as_of,
             ).order_by(EventInterpretation.effective_at.desc(),
                        EventInterpretation.id.desc()).limit(1)).scalar_one_or_none()
