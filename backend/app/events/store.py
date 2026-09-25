@@ -13,7 +13,7 @@ import logging
 from calendar import timegm
 from datetime import datetime
 
-from sqlalchemy import Integer, cast, func, select, update
+from sqlalchemy import Integer, cast, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.db import get_session_factory
@@ -443,7 +443,7 @@ class EventStore:
         if published is not None and published.tzinfo is not None:
             published = published.astimezone(BJ_TZ).replace(tzinfo=None)
         age_hours = (now - published).total_seconds() / 3600
-        return age_hours < row.half_life_hours * 2
+        return 0 <= age_hours < row.half_life_hours * 2
 
     def list_events(self, *, active_only: bool = True, limit: int = 30) -> list[EventCard]:
         # 卡片、方向与最新解释须来自同一条 SELECT。分次读取时，修订可在方向与
@@ -471,7 +471,12 @@ class EventStore:
                 )
                 stmt = stmt.where(
                     EventCard.status == "active", EventCard.revision_pending_at.is_(None),
+                    published_us <= now_us,
                     published_us + EventCard.half_life_hours * 7_200_000_000 > now_us,
+                    # 最新解释尚未可见时不能绑定其当前方向；保守留待下一拍，
+                    # 旧卡无版本仍以 unknown 保留，不倒填历史身份。
+                    or_(EventInterpretation.id.is_(None),
+                        EventInterpretation.effective_at <= now),
                 )
             pairs = db.execute(
                 stmt.order_by(EventCard.published_at.desc()).limit(limit * 3)
