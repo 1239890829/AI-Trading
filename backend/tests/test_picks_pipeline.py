@@ -444,6 +444,25 @@ def test_candidate_pool_reads_directions_from_loaded_relation(deps, monkeypatch)
     )
 
 
+def test_candidate_pool_drops_whole_event_batch_after_late_bad_row(monkeypatch):
+    """后一条事件损坏时，前一条不能以部分事件事实进入持久候选。"""
+    warnings: list[str] = []
+    monkeypatch.setattr(pl.log, "warning", lambda msg, *a: warnings.append(msg % a if a else msg))
+    bad = _Event(2, "损坏的旧事件", target="600002")
+    bad.directions = None
+    audit: dict = {}
+
+    pool = asyncio.run(pl.candidate_pool(
+        _BareHub(), _Store(), None,
+        active_events=[_Event(1, "先处理的事件", target="600519"), bad],
+        limit_up_pool=[_PoolRec("600000", 1, "涨停池")], audit=audit,
+    ))
+
+    assert [item["symbol"] for item in pool] == ["600000"]
+    assert audit["sources"] == {"limit_up": 1}
+    assert any(w.startswith("picks candidate: events failed") for w in warnings)
+
+
 def test_candidate_pool_theme_members_go_through_bulk_only(monkeypatch):
     """**P-3① 回归位**：题材方向的成分股只许走**一次批量查询**，不得逐题材单查。
 
