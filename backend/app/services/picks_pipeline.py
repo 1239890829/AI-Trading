@@ -616,7 +616,7 @@ def _build_event_hits_index(
                     agg["pending_title"] = row.title
     except Exception as exc:
         log.warning("picks event index failed: %s", exc)
-        return {}
+        raise
     out: dict[str, tuple[float, float, str | None, str | None, int, list[dict]]] = {}
     for sym, agg in index.items():
         # 无方向词时给出关联标题（证据可见）
@@ -661,6 +661,7 @@ async def deep_score_candidates(
     weights: dict,
     event_hits_index: dict[str, tuple],
     events_available: bool,
+    event_index_available: bool,
     concurrency: int,
     promo_percentile: float | None = None,
     index_bars: dict[str, list[dict]] | None = None,
@@ -745,6 +746,8 @@ async def deep_score_candidates(
             sub["news"], bases["news"] = score_news(bull, bear, top_title, top_dir)
             if not events_available:
                 bases["news"] = "事件读取失败，消息面不可用；50 分仅为计算占位"
+            elif not event_index_available:
+                bases["news"] = "事件索引失败，消息面不可用；50 分仅为计算占位"
             elif bull == bear == 0 and linked:
                 # 有关联但无方向词：诚实说"命中了但待判"，而不是"无命中"
                 bases["news"] = (
@@ -1229,7 +1232,13 @@ async def generate_picks_pipeline(
     # 24 只候选各拉一次会触发腾讯熔断，必须在这里取完。
     index_bars = await _prefetch_index_bars(hub)
     # 纯内存（行已预取，见管线开头）——不再需要 to_thread，也不再重复查库
-    event_hits_index = _build_event_hits_index(active_events)
+    try:
+        event_hits_index = _build_event_hits_index(active_events)
+        event_index_available = True
+    except Exception:
+        # 索引失败不能冒充「无事件命中」；日志由索引函数记录。
+        event_hits_index = {}
+        event_index_available = False
 
     # 晋级率历史分位（选股 2.0 §3）：**当日值**在历史样本中的位置（见上方 ③c 说明）。
     # 库样本不足时为空 → 情绪面修正项自动缺席，basis 如实呈现。
@@ -1247,6 +1256,7 @@ async def generate_picks_pipeline(
         weights=weights,
         event_hits_index=event_hits_index,
         events_available=events_available,
+        event_index_available=event_index_available,
         concurrency=CONCURRENCY,
         promo_percentile=promo_pct,
         index_bars=index_bars,
@@ -1297,11 +1307,14 @@ async def generate_picks_pipeline(
     # ⑥ 卡片组装（含风险档位与出场纪律参考）+ 空仓闸门处理 + 持久化
     items = [assemble_card(k) for k in kept]
     items = apply_gate_to_picks(items, gate)
+    event_evidence = {
+        "state": "available" if events_available and event_index_available else "unavailable",
+        "active_count": len(active_events) if events_available else None,
+    }
+    if events_available and not event_index_available:
+        event_evidence["failure_stage"] = "index"
     meta = {
-        "event_evidence": {
-            "state": "available" if events_available else "unavailable",
-            "active_count": len(active_events) if events_available else None,
-        },
+        "event_evidence": event_evidence,
         "weights": weights,
         "regime": regime,
         "style_routing": style,
