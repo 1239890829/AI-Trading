@@ -77,6 +77,7 @@ def _pending_candidates(sf, *, theme_names: list[str], max_batch: int,
             # older unreviewed candidates. Legacy cards have no version.
             .where(or_(current.id.is_(None), and_(
                 current.state == "active", current.review_note.is_(None),
+                current.effective_at <= now,
             )))
             .order_by(EventCard.published_at.desc())
             .limit(max_batch * 4)  # 放大取数：下面还要过滤有方向行/超龄
