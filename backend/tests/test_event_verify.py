@@ -3,7 +3,7 @@
 核心契约：
 - 四态互斥、判定可解释（basis 必给）
 - 三态纪律：窗口未到/无题材/缺数据 → unknown（显式「未判定」），绝不臆造
-- 「事件后新涨停」= 封板时间 ≥ 事件发布时间（跨日事件 → 今日全算）
+- 「可见后新涨停」= 封板时间 ≥ 来源发布与当前解释可见的较晚时点
 - 板块资金（f62）与涨停是两套口径，分开采、分开说
 """
 from __future__ import annotations
@@ -33,7 +33,7 @@ def _fund(net):
 def test_window_not_reached_is_unknown():
     now = datetime(2026, 9, 10, 10, 0, 0)
     pub = now - timedelta(minutes=10)  # 仅 10 分钟前
-    v = verify_event(published_at=pub, theme_targets=["低空经济"],
+    v = verify_event(published_at=pub, visible_at=pub, theme_targets=["低空经济"],
                      limit_up_pool=_pool(), board_fund=_fund(5.0), trade_date=TODAY, now=now)
     assert v["status"] == "unknown"
     assert "窗口未到" in v["basis"]
@@ -42,18 +42,18 @@ def test_window_not_reached_is_unknown():
 def test_confirmed_new_limit_up_plus_inflow():
     now = datetime(2026, 9, 10, 11, 0, 0)
     pub = datetime(2026, 9, 10, 10, 0, 0)
-    pool = _pool(("10:30:00", "低空经济+飞行汽车"), ("09:00:00", "低空经济"))  # 前者是事件后
-    v = verify_event(published_at=pub, theme_targets=["低空经济"],
+    pool = _pool(("10:30:00", "低空经济+飞行汽车"), ("09:00:00", "低空经济"))  # 前者在消息可见后
+    v = verify_event(published_at=pub, visible_at=pub, theme_targets=["低空经济"],
                      limit_up_pool=pool, board_fund=_fund(3.2), trade_date=TODAY, now=now)
     assert v["status"] == "confirmed"
-    assert v["new_limit_ups"] == 1  # 只有 10:30 那只算事件后
+    assert v["new_limit_ups"] == 1  # 只有 10:30 那只算消息可见后
     assert v["net_inflow_yi"] == 3.2
 
 
 def test_fermenting_new_limit_up_but_no_inflow():
     now = datetime(2026, 9, 10, 11, 0, 0)
     pub = datetime(2026, 9, 10, 10, 0, 0)
-    v = verify_event(published_at=pub, theme_targets=["低空经济"],
+    v = verify_event(published_at=pub, visible_at=pub, theme_targets=["低空经济"],
                      limit_up_pool=_pool(("10:30:00", "低空经济")),
                      board_fund=_fund(-1.0), trade_date=TODAY, now=now)
     assert v["status"] == "fermenting"
@@ -63,16 +63,16 @@ def test_fermenting_new_limit_up_but_no_inflow():
 def test_fermenting_inflow_but_no_limit_up():
     now = datetime(2026, 9, 10, 11, 0, 0)
     pub = datetime(2026, 9, 10, 10, 0, 0)
-    v = verify_event(published_at=pub, theme_targets=["低空经济"],
+    v = verify_event(published_at=pub, visible_at=pub, theme_targets=["低空经济"],
                      limit_up_pool=_pool(), board_fund=_fund(5.0), trade_date=TODAY, now=now)
     assert v["status"] == "fermenting"
-    assert "尚无事件后新涨停" in v["basis"]
+    assert "尚无消息可见后新涨停" in v["basis"]
 
 
 def test_faded_no_limit_up_and_outflow():
     now = datetime(2026, 9, 10, 11, 0, 0)
     pub = datetime(2026, 9, 10, 10, 0, 0)
-    v = verify_event(published_at=pub, theme_targets=["低空经济"],
+    v = verify_event(published_at=pub, visible_at=pub, theme_targets=["低空经济"],
                      limit_up_pool=_pool(), board_fund=_fund(-2.5), trade_date=TODAY, now=now)
     assert v["status"] == "faded"
     assert "净流出" in v["basis"]
@@ -82,7 +82,7 @@ def test_faded_zero_net_is_not_confirmed():
     """净额为 0（既非流入也非流出）= 未被资金认可 → faded，不判 fermenting。"""
     now = datetime(2026, 9, 10, 11, 0, 0)
     pub = datetime(2026, 9, 10, 10, 0, 0)
-    v = verify_event(published_at=pub, theme_targets=["低空经济"],
+    v = verify_event(published_at=pub, visible_at=pub, theme_targets=["低空经济"],
                      limit_up_pool=_pool(), board_fund=_fund(0.0), trade_date=TODAY, now=now)
     assert v["status"] == "faded"
 
@@ -91,27 +91,53 @@ def test_unknown_when_board_fund_missing():
     """板块映射不到 + 无新涨停 → unknown（数据不足，不臆造 confirmed/faded）。"""
     now = datetime(2026, 9, 10, 11, 0, 0)
     pub = datetime(2026, 9, 10, 10, 0, 0)
-    v = verify_event(published_at=pub, theme_targets=["低空经济"],
+    v = verify_event(published_at=pub, visible_at=pub, theme_targets=["低空经济"],
                      limit_up_pool=_pool(), board_fund=None, trade_date=TODAY, now=now)
     assert v["status"] == "unknown"
 
 
 def test_unknown_without_themes_or_published():
     now = datetime(2026, 9, 10, 11, 0, 0)
-    assert verify_event(published_at=now, theme_targets=[],
+    assert verify_event(published_at=now, visible_at=now, theme_targets=[],
                         limit_up_pool=_pool(), board_fund=_fund(1.0),
                         trade_date=TODAY, now=now)["status"] == "unknown"
-    assert verify_event(published_at=None, theme_targets=["低空经济"],
+    assert verify_event(published_at=None, visible_at=None, theme_targets=["低空经济"],
                         limit_up_pool=_pool(), board_fund=_fund(1.0),
                         trade_date=TODAY, now=now)["status"] == "unknown"
+
+
+def test_unknown_when_legacy_visibility_is_missing():
+    now = datetime(2026, 9, 10, 11, 0)
+    v = verify_event(
+        published_at=datetime(2026, 9, 10, 9, 0), visible_at=None,
+        theme_targets=["低空经济"],
+        limit_up_pool=_pool(("10:30:00", "低空经济")),
+        board_fund=_fund(5.0), trade_date=TODAY, now=now,
+    )
+    assert v["status"] == "unknown"
+    assert v["new_limit_ups"] == 0
+    assert v["age_minutes"] is None
+    assert "可见时点未知" in v["basis"]
+
+
+def test_window_starts_at_later_visibility_time():
+    now = datetime(2026, 9, 10, 10, 20)
+    v = verify_event(
+        published_at=datetime(2026, 9, 10, 9, 0),
+        visible_at=datetime(2026, 9, 10, 10, 10),
+        theme_targets=["低空经济"], limit_up_pool=_pool(("10:15:00", "低空经济")),
+        board_fund=_fund(5.0), trade_date=TODAY, now=now,
+    )
+    assert v["status"] == "unknown"
+    assert v["age_minutes"] == 10.0
 
 
 def test_cross_day_event_counts_todays_all_as_after():
-    """昨日事件 → 今日该题材所有涨停都算「事件后」（封板时间恒晚于昨日）。"""
+    """昨日已可见的事件 → 今日该题材所有封板都晚于该时点。"""
     now = datetime(2026, 9, 10, 11, 0, 0)
     pub = datetime(2026, 9, 9, 20, 0, 0)  # 昨日
     pool = _pool(("09:31:00", "低空经济"), ("10:00:00", "低空经济"))
-    v = verify_event(published_at=pub, theme_targets=["低空经济"],
+    v = verify_event(published_at=pub, visible_at=pub, theme_targets=["低空经济"],
                      limit_up_pool=pool, board_fund=_fund(2.0), trade_date=TODAY, now=now)
     assert v["new_limit_ups"] == 2
     assert v["status"] == "confirmed"
@@ -138,6 +164,8 @@ def test_seal_after_boundary():
     assert _seal_after(None, "10:00:00", TODAY) is False
     # 昨日事件跨日
     assert _seal_after(datetime(2026, 9, 9, 20, 0, 0), "09:31:00", TODAY) is True
+    # 当前可见版本晚于池的交易日，池里的封板绝不可能算在版本之后。
+    assert _seal_after(datetime(2026, 9, 11, 9, 0, 0), "10:30:00", TODAY) is False
 
 
 # ---------------------------------------------------------------- 编排层
@@ -155,6 +183,7 @@ def test_verify_active_events_orchestration(monkeypatch):
         def list_events(self, active_only=True, limit=30):
             return [
                 SimpleNamespace(id=1, title="低空经济政策", published_at=datetime(2026, 9, 10, 10, 0, 0),
+                                interpretation_ref={"version_id": 1, "available_at": "2026-09-10 10:00:00"},
                                 directions=[SimpleNamespace(target_type="theme", target="低空经济")]),
                 SimpleNamespace(id=2, title="个股异动", published_at=datetime(2026, 9, 10, 10, 0, 0),
                                 directions=[SimpleNamespace(target_type="symbol", target="600519")]),
@@ -173,6 +202,38 @@ def test_verify_active_events_orchestration(monkeypatch):
     assert by_id[1]["board_name"] == "低空经济"
     assert by_id[2]["status"] == "unknown"          # 只有 symbol direction，无 theme → 不臆造
     assert by_id[2]["board_name"] is None
+
+
+def test_late_visible_interpretation_excludes_earlier_seal(monkeypatch):
+    """晚到解释不能把系统可见前的封板算作消息后发酵。"""
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.events import verify as ev
+    from app.services import theme_service as ts
+
+    class _Store:
+        def list_events(self, active_only=True, limit=30):
+            return [SimpleNamespace(
+                id=1, title="晚到的低空经济消息",
+                published_at=datetime(2026, 9, 10, 9, 0),
+                interpretation_ref={
+                    "version_id": 8, "available_at": "2026-09-10 10:10:00",
+                },
+                directions=[SimpleNamespace(target_type="theme", target="低空经济")],
+            )]
+
+    async def no_fund(_names):
+        return {}
+
+    monkeypatch.setattr(ts, "board_rows_for_names", no_fund)
+    monkeypatch.setattr(ev, "beijing_now_naive", lambda: datetime(2026, 9, 10, 11, 0))
+    pool = _pool(("09:45:00", "低空经济"), ("10:30:00", "低空经济"))
+
+    item = asyncio.run(ev.verify_active_events(_Store(), None, pool, TODAY))[0]
+
+    assert item["new_limit_ups"] == 1
+    assert item["age_minutes"] == 50.0
 
 
 def test_verify_active_events_empty_events_short_circuit(monkeypatch):
@@ -228,6 +289,7 @@ def test_verify_events_endpoint_produces_confirmed(monkeypatch):
         def list_events(self, active_only=True, limit=30):
             return [SimpleNamespace(id=1, title="低空经济政策",
                                     published_at=datetime(2026, 9, 10, 10, 0, 0),
+                                    interpretation_ref={"version_id": 1, "available_at": "2026-09-10 10:00:00"},
                                     directions=[SimpleNamespace(target_type="theme", target="低空经济")])]
 
     async def fake_trading_days(provider):

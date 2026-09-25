@@ -8,8 +8,8 @@
 设计取舍（2026-09-10）：
 - **不落库、实时计算**：验证本质是时点快照（30/60min/收盘三次采样），
   落库反而要处理「同一事件多次采样」的历史与迁移；实时现算更准、零 schema 变更。
-- **「事件后新涨停」不建基线快照表**：涨停池自带 `first_seal_time`，直接用
-  「封板时间 ≥ 事件发布时间」判定，无需在事件入库时额外记录板块状态。
+- **「可见后新涨停」不建基线快照表**：涨停池自带 `first_seal_time`，仅在
+  「封板时间 ≥ 发布时间与解释可见时间中较晚者」时计数；旧卡缺可见时间保留未知。
 - **板块资金复用 L3 映射**：`theme_service.board_rows_for_names` 把 ths 题材名
   映射到东财板块（f62 口径），命中 board_flow 30s 缓存，零额外上游调用。
 
@@ -21,14 +21,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import date, datetime
-from app.core.bjtime import beijing_now_naive  # S2-8 时区收敛
+from app.core.bjtime import beijing_now_naive, to_beijing_naive  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 
-#: 采样窗口：事件发布 < 30 分钟判「窗口未到」（unknown），避免过早下结论
+#: 采样窗口：来源与当前解释均可见 < 30 分钟判「窗口未到」
 MIN_AGE_MINUTES = 30
 
-#: 事件后新涨停判定的封板时间解析（容忍 "09:35:00" / "09:35" / "935" 三种）
+#: 可见后新涨停判定的封板时间解析（容忍 "09:35:00" / "09:35" / "935" 三种）
 def _parse_hhmmss(s: str) -> tuple[int, int, int] | None:
     s = str(s or "").strip()
     if not s:
@@ -47,16 +47,30 @@ def _parse_hhmmss(s: str) -> tuple[int, int, int] | None:
     return None
 
 
-def _seal_after(published: datetime | None, seal: str | None, trade_date: date) -> bool:
-    """封板时间是否晚于事件发布（即「事件后新涨停」）。"""
-    if published is None or not seal:
+def _seal_after(visible_start: datetime | None, seal: str | None, trade_date: date) -> bool:
+    """封板时间是否晚于事件与解释均可见的时点。"""
+    if visible_start is None or not seal:
         return False
-    if published.date() < trade_date:
-        return True  # 昨日事件，今日该题材所有涨停都算「事件后」
+    if visible_start.date() < trade_date:
+        return True  # 昨日已可见，今日封板都晚于该时点
+    if visible_start.date() > trade_date:
+        return False  # 池的交易日早于当前版本可见日
     t = _parse_hhmmss(seal)
     if t is None:
         return False
-    return t >= (published.hour, published.minute, published.second)
+    return t >= (visible_start.hour, visible_start.minute, visible_start.second)
+
+
+def _interpretation_visible_at(row) -> datetime | None:
+    """从当前解释引用取可见时点；旧卡或坏引用不倒填发布时间。"""
+    ref = getattr(row, "interpretation_ref", None)
+    if not isinstance(ref, dict) or ref.get("version_id") is None:
+        return None
+    try:
+        value = datetime.fromisoformat(ref["available_at"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return to_beijing_naive(value)
 
 
 def _theme_in_reason(theme: str, reason: str | None) -> bool:
@@ -69,6 +83,7 @@ def _theme_in_reason(theme: str, reason: str | None) -> bool:
 def verify_event(
     *,
     published_at: datetime | None,
+    visible_at: datetime | None,
     theme_targets: list[str],
     limit_up_pool: list[dict],
     board_fund: dict | None,
@@ -79,7 +94,8 @@ def verify_event(
 
     参数
     ----
-    published_at: 事件发布时间（北京 naive）；None → 无法判窗口，按 unknown。
+    published_at: 来源发布时间（北京 naive）。
+    visible_at: 当前解释可见时间（北京 naive）；旧卡未知时为 None。
     theme_targets: 事件关联题材（EventDirection target，非空才可判）。
     limit_up_pool: 当日涨停池（每项含 `reason` 与 `first_seal_time`）。
     board_fund: 关联板块资金行（`board_rows_for_names` 的 value，含 `main_net_yi`）；
@@ -92,25 +108,29 @@ def verify_event(
     {status, basis, new_limit_ups, net_inflow_yi, age_minutes}
     status ∈ fermenting / confirmed / faded / unknown；basis 说明判定依据。
     """
-    now = now or beijing_now_naive()
-    age_min = None
-    if published_at is not None:
-        age_min = round((now - published_at).total_seconds() / 60, 1)
+    now = to_beijing_naive(now or beijing_now_naive())
+    published_at = to_beijing_naive(published_at) if published_at is not None else None
+    visible_at = to_beijing_naive(visible_at) if visible_at is not None else None
+    visible_start = max(published_at, visible_at) if published_at and visible_at else None
+    age_min = round((now - visible_start).total_seconds() / 60, 1) if visible_start else None
 
-    # ① 窗口未到 / 无题材 / 无发布时间 → unknown（显式「未判定」，不臆造）
+    # ① 窗口未到 / 无题材 / 缺可见时点 → unknown（显式「未判定」，不臆造）
     if not theme_targets:
         return {"status": "unknown", "basis": "事件无关联题材", "new_limit_ups": 0,
                 "net_inflow_yi": None, "age_minutes": age_min}
-    if published_at is None or age_min is None or age_min < MIN_AGE_MINUTES:
-        return {"status": "unknown", "basis": "采样窗口未到（事件发布 <30 分钟）",
+    if visible_start is None:
+        return {"status": "unknown", "basis": "解释版本可见时点未知，无法判消息后发酵",
+                "new_limit_ups": 0, "net_inflow_yi": None, "age_minutes": None}
+    if age_min < MIN_AGE_MINUTES:
+        return {"status": "unknown", "basis": "采样窗口未到（事件与解释均可见 <30 分钟）",
                 "new_limit_ups": 0, "net_inflow_yi": None, "age_minutes": age_min}
 
-    # ② 事件后新涨停：reason 含关联题材 且 封板 ≥ 事件发布
+    # ② 可见后新涨停：reason 含关联题材 且 封板 ≥ 发布时间和解释可见时间
     new_limit_ups = 0
     for r in limit_up_pool:
         reason = str(r.get("reason") or "")
         seal = r.get("first_seal_time")
-        if any(_theme_in_reason(t, reason) for t in theme_targets) and _seal_after(published_at, seal, trade_date):
+        if any(_theme_in_reason(t, reason) for t in theme_targets) and _seal_after(visible_start, seal, trade_date):
             new_limit_ups += 1
 
     # ③ 关联板块主力净流入（f62，亿；None=映射不到）
@@ -122,17 +142,17 @@ def verify_event(
     outflow = net is not None and net < 0
 
     if has_new and inflow:
-        status, basis = "confirmed", f"事件后新涨停 {new_limit_ups} 家 且 关联板块主力净流入 {net:+.2f} 亿"
+        status, basis = "confirmed", f"消息可见后新涨停 {new_limit_ups} 家 且 关联板块主力净流入 {net:+.2f} 亿"
     elif has_new:
-        status, basis = "fermenting", f"事件后新涨停 {new_limit_ups} 家，但板块资金未净流入"
+        status, basis = "fermenting", f"消息可见后新涨停 {new_limit_ups} 家，但板块资金未净流入"
     elif inflow:
-        status, basis = "fermenting", f"关联板块主力净流入 {net:+.2f} 亿，但尚无事件后新涨停"
+        status, basis = "fermenting", f"关联板块主力净流入 {net:+.2f} 亿，但尚无消息可见后新涨停"
     elif outflow:
-        status, basis = "faded", f"事件后无新涨停 且 关联板块主力净流出 {net:+.2f} 亿"
+        status, basis = "faded", f"消息可见后无新涨停 且 关联板块主力净流出 {net:+.2f} 亿"
     elif net == 0:
-        status, basis = "faded", "事件后无新涨停 且 关联板块主力净额为 0（未获资金认可）"
+        status, basis = "faded", "消息可见后无新涨停 且 关联板块主力净额为 0（未获资金认可）"
     else:
-        status, basis = "unknown", "事件后无新涨停，板块资金映射不到（数据不足，不臆造）"
+        status, basis = "unknown", "消息可见后无新涨停，板块资金映射不到（数据不足，不臆造）"
 
     return {
         "status": status,
@@ -187,6 +207,7 @@ async def verify_active_events(
             )
         verdict = verify_event(
             published_at=e.published_at,
+            visible_at=_interpretation_visible_at(e),
             theme_targets=themes,
             limit_up_pool=limit_up_pool,
             board_fund=fund,
