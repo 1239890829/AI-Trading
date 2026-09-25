@@ -570,6 +570,32 @@ def test_empty_event_read_remains_verified_empty(deps, store, monkeypatch):
     assert "无活跃事件命中" in data["items"][0]["bases"]["news"]
 
 
+def test_event_index_failure_is_not_persisted_as_no_events(deps, store, monkeypatch):
+    """已读取事件无法建索引时，卡片不得声称已核实没有事件命中。"""
+    monkeypatch.setattr(pl, "evaluate_stand_aside", _benign_gate)
+    broken = _Event(1, "白酒消费刺激政策落地")
+    broken.source_tier = "invalid legacy tier"
+    monkeypatch.setattr(store, "list_events", lambda **_kwargs: [broken])
+
+    data = _run(deps, _Hub())["data"]
+
+    assert data["items"]
+    assert data["meta"]["event_evidence"] == {
+        "state": "unavailable", "active_count": 1, "failure_stage": "index",
+    }
+    for card in data["items"]:
+        assert card["sub_scores"]["news"] == 50.0
+        assert "事件索引失败" in card["bases"]["news"]
+        assert "无活跃事件" not in card["bases"]["news"]
+
+    with pl._db() as db:
+        from sqlalchemy import select
+
+        row = db.execute(select(DailyPickSet)).scalar_one()
+    assert json.loads(row.meta)["event_evidence"] == data["meta"]["event_evidence"]
+    assert "事件索引失败" in json.loads(row.items)[0]["bases"]["news"]
+
+
 def test_theme_benchmark_is_pure_and_prefers_strongest_theme():
     """`_theme_benchmark` 抽成纯函数的直测：题材归属由参数传入，且取**最强**题材。
 
