@@ -233,6 +233,7 @@ async def candidate_pool(
             if (svc is not None and wanted)
             else {}
         )
+        event_symbols: dict[str, dict] = {}
         for row in rows:
             # 直接读关系属性，**不要再调 `store.directions_of(row.id)`**：`list_events` 内部
             # 已 `selectinload(EventCard.directions)`（store.py:156），行虽 detached 但方向
@@ -243,13 +244,15 @@ async def candidate_pool(
             # 与行序无关（uq_event_direction 保证同一事件内 target 不重复）。
             for d in row.directions:
                 if d.target_type == "symbol" and d.target.isdigit() and len(d.target) == 6:
-                    symbols.setdefault(d.target, {"from": "event", "prio": 1})
+                    event_symbols.setdefault(d.target, {"from": "event", "prio": 1})
                 elif d.target_type == "theme" and svc is not None:
                     code = name_to_code.get(d.target)
                     if not code:
                         continue
                     for sym in (members_by_code.get(code) or [])[:30]:
-                        symbols.setdefault(sym, {"from": "event_theme", "prio": 1})
+                        event_symbols.setdefault(sym, {"from": "event_theme", "prio": 1})
+        # 全批读取/展开成功后才提交，避免后一条坏行留下前面的部分事件候选。
+        symbols.update(event_symbols)
     except Exception as exc:
         log.warning("picks candidate: events failed: %s", exc)
 
