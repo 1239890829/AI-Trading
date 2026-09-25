@@ -528,3 +528,23 @@ def test_brief_legacy_event_reference_remains_unknown(hermetic):
     payload = mb.assemble_brief(asyncio.run(mb.collect_evidence(state)))
     assert payload["directions"][0]["event_refs"] == [
         {"event_id": 8, "version_id": None, "state": "unknown"}]
+
+
+def test_event_processing_failure_discards_partial_brief_evidence(hermetic):
+    """A malformed later card cannot leave earlier event scores in a failed batch."""
+    import asyncio
+
+    good = NS(id=7, source_tier=3, certainty="done",
+              interpretation_ref={"event_id": 7, "version_id": 11, "state": "active"},
+              directions=[NS(target_type="theme", target="粮食", direction=1, strength=2)])
+    bad = NS(id=8, source_tier="invalid", certainty="done", directions=[])
+    state = _hermetic_state()
+    state.event_store = NS(list_events=lambda **_kwargs: [good, bad])
+
+    evidence = asyncio.run(mb.collect_evidence(state))
+    assert any("事件读取失败" in message for message in evidence["missing"])
+    assert evidence["event_strength"] == {}
+    assert evidence["event_counts"] == {}
+    assert evidence["event_symbols"] == {}
+    assert evidence["event_refs"] == {}
+    assert mb.assemble_brief(evidence)["directions"] == []
