@@ -3,13 +3,13 @@
 
 > **2026-09-21 多窗口审计及晚间收口**：详见 `docs/review/chatgpt-multiwindow-audit-20260921.md`。审计指出的三类执行缺口已进一步收口：① BUG-020 的条件激活不再只靠记忆，`scripts/ledger-runtime-selection.py` 可在下一交易日 08:30–09:15 开工窗把静态 G4 临时抢回 G0，错过窗口/日历未知均 fail-closed；② 本机 AI-Trading 后端已受控停服、同步 `master@c272d260`、重启并通过 SQLite/health/30 scheduler/snapshot 验收；③ 前端误判已纠正——Next 15.5.25 进程属于另一个 `vide-trading` 仓库，AI-Trading 当时没有前端进程，自身 `npm ci` 后在 Node 22.22.2 下 695/695 tests 与 Next 16.3.3 build 全绿。Jev 真实 assistant 请求也已新增 `assistant_tool_router` receipt；RSH-030 human gold 仍必须独立人工完成。IMP-053 actual-fill 契约与唯一 `54b7e0c` RECOVERY 仍按各自 owner 保留。任务状态仍以 stage 为准，不以本段建立第二账本。
 
-> **定位 / 摘要（2026-09-26 当前）**：IMP-048 第二十四片 PR #159 已合并为 `02e8a5b4fbd959e0f44320071d074a7c66ffdf52`，合并后 master CI #36164808697 三项通过；第二十五片在 PR #160，准确发布状态以该 PR 的最终 HEAD 回执、发布检查和合并后 master CI 为准。阶段页记录本轮修复与剩余范围。用户已要求持续推进 IMP-048 直到任务完成；临时授权 Codex 免网页审核自动执行，直到要求“改回来”，阶段门、完整门禁与准确 HEAD 发布回执仍适用。
+> **定位 / 摘要（2026-09-26 当前）**：IMP-048 第二十五片 PR #160 已合并为 `abf32029e1fd3e4259bed6dc79f28bc6ddf471f8`，合并后 master CI #36166839791 三项通过；第二十六片修正事件发酵核验的可见时间边界，代码提交 `4ff999c9d689d09c9321e0eeb7bcbaf2454d878a`，发布仍以准确 HEAD 回执、CI 与合并后核验为准。阶段页记录本轮修复与剩余范围。用户已要求持续推进 IMP-048 直到任务完成；临时授权 Codex 免网页审核自动执行，直到要求“改回来”，阶段门、完整门禁与准确 HEAD 发布回执仍适用。
 
 **现行授权记录**：2026-09-24 用户在本 Codex 会话明确授权临时由 Codex 在 `DEGRADED_FULL_CONTROL` 下承担规划接续、实施、U49 作者反证、自审、PR/CI、发布、合并与清理，免网页 `Preflight` / 独立 `Review`，直到用户明确要求“改回来”或撤销。本授权不扩大业务、资金、模型、费用、部署或跨门权限；每个 PR 仍需准确 HEAD 的 `DegradedRelease`、完整本地门禁与 required CI、`release_check.py`、post-merge CI 和分支清理。作者回执必须标明非独立审核。具体临时规则见 [协作规范 §3.3a](collaboration-workflow.md#33a-2026-09-24-临时-codex-执行者授权)。
 
 **IMP-048 Codex 开工反证（作者 Preflight，非独立网页审核）**：基于 `master@e60b83e` 和隔离 SQLite 复现：同标题更正摘要入库后 `EventStore.add_event` 返回旧行，旧摘要与旧 `published_at` 不变；另一来源的同标题材料被标题指纹归并且来源/链接丢失；改标题的更正成为无关系的新 `EventCard`。这是已证实的来源身份与修订缺口。直接下游的事件详情、候选池和发酵验证读取旧行/方向，存在旧利好继续被当作当前依据的高风险；是否已有其他路径绑定旧事件版本尚未穷尽，列为待核。U49 已检查阶段门自锁、双事实源、顺序/部分失败、去重/unknown、权限/fail-open、动态旧状态、测试盲区与指针：当前 G1 首选无硬依赖，现有测试锁定标题去重但未覆盖更正、多源与回放；没有证据授权自动变更机会分数。首片先保存来源原文、接收与可见时点及修订关系，历史判断不倒填；真实通知、策略权重和 G4 Jev 晋级仍走各自原门。
 
-**IMP-048 当前开发现场（2026-09-26）**：第二十五片 PR #160 修正精选事件索引失败后仍将同批事件投入候选与炒作阶段的漏口。隔离测试先判红：5 条事件中旧来源等级无效，虽标 `unavailable`，5 只事件标的仍入候选且业绩标题影响权重；现索引验证移到候选前，候选、阶段和消息分数只消费同批可用事件。真实读取数与失败阶段保留，独立涨停候选不受影响。作者 U49 核了顺序、失败边界、来源审计、历史版本未知和无新增权限/交易动作。定向精选 **27 passed**；全量首次被人为中断导致两条 DuckDB `Query interrupted`，不计验收，最终固定代码重跑 **4346 passed / 80 skipped / 0 failed**；前端常规/UTC 各 **717 passed**，全量 pyflakes、tsc、eslint、Next build、文档体检、卫生及公开仓扫描通过。Jev Review 仅为作者反馈，没有据评分扩大改动。最终合并证据以 PR #160 的准确 HEAD `DegradedRelease`、发布检查和 master CI 为准；本片未加载生产实例，IMP-048 仍为 `进行中`，剩余范围见 [W03/IMP-048](stages/w03-execution.md#imp-048)。
+**IMP-048 当前开发现场（2026-09-26）**：第二十六片隔离反例先判红：来源 09:00 发布、当前解释 10:10 才可见，09:45 封板被旧核验错算成“事件后新涨停”；下一交易日才可见的解释还可把前一日封板算在版本之后。现以发布时间和当前解释可见时间的较晚者计算 30 分钟窗口与封板先后；旧卡缺版本/可见时间则为 `unknown`，不倒填历史。API 说明明确同题时序不能证明因果。定向事件 **61 passed**、本机全后端 **4349 passed / 80 skipped / 0 failed**，前端常规/UTC 各 **717 passed**，全量 pyflakes、tsc、eslint、Next build、文档体检、卫生和公开仓扫描通过。Jev Review 仅为作者反馈；发布以本轮准确 HEAD 回执、CI 与合并后核验为准。未迁移旧运行库或加载生产实例，IMP-048 仍为 `进行中`，剩余范围见 [W03/IMP-048](stages/w03-execution.md#imp-048)。
 
 **IMP-043 后端 CI 并行现场（2026-09-24）**：PR #124 HEAD `df9295d170d86df69d4d0e2b8a2c049da457fc8e` 已合并为 `5a0ab083de0da469cad78ae9859509d69165dac1`；准确 HEAD 的作者 `DegradedRelease` 回执 `5810193236` 与临合并两次 `release_check.py exit 0` 均已核。PR CI `35972114896` 三项通过，backend job 174s / pytest 137.63s；合并后 master CI `35972636974` 三项通过，backend job 186s / pytest 145.75s；两次均为 4309 passed / 80 skipped。本机同树串行 128.06s、3 worker 78.50s，均为 4309 passed / 80 skipped；全量 pyflakes、前端 tsc/eslint、常规与 UTC 各 713 tests、Next build、doc-health、workspace-hygiene、公开仓扫描通过。本地与远端代码功能分支已清理。Linux 新耗时只有 PR 与 master 各一轮，持续复核 runner 波动与成本；未测得实际账单节省。
 
@@ -17,7 +17,7 @@
 
 **IMP-043 传播核对**：此片只更改 CI 测试执行方式和依赖，完整断言、三 job、发布权限与协作规则未变。所属 W08 stage 与本 handoff 已更新；`implementation-plan.md`、`plan-registry.md`、`collaboration-workflow.md`、`AGENTS.md`、Skills 与 `INDEX.md` 不适用，因为没有改变长期目标、权威路由、权限或发布契约。
 
-**IMP-048 传播核对**：本片修正 W03 已登记的精选事件证据整批失败语义，不新增权重、判断事实源、业务目标或发布权限。所属阶段状态与剩余范围已更新 W03，本 handoff 记录当前 PR 与运行边界；代码契约在 `backend/app/services/picks_pipeline.py`。总方案、领域蓝图、Jev 蓝图、plan-registry、INDEX、AGENTS 和 Skills 均无长期规则变化，故不适用；没有新增文档或第二任务账本。
+**IMP-048 传播核对**：本片修正 W03 已登记的消息可见时间与事后核验边界，不新增权重、判断事实源、业务目标或发布权限。所属阶段状态与剩余范围已更新 W03，本 handoff 记录当前发布与运行边界；代码契约在 `backend/app/events/verify.py`。总方案、领域蓝图、Jev 蓝图、plan-registry、INDEX、AGENTS 和 Skills 均无长期规则变化，故不适用；没有新增文档或第二任务账本。
 
 
 
