@@ -257,7 +257,7 @@ async def verify_events(
 ) -> dict:
     """热点验证环（P1-6）：当日活跃事件的发酵四态（实时计算，不落库）。
 
-    采样关联题材的「事件后新涨停」（封板时间 ≥ 事件发布）+ 板块主力资金（f62），
+    采样关联题材的「消息可见后新涨停」（封板时间 ≥ 来源发布与解释可见的较晚时点）+ 板块主力资金（f62），
     判定 `confirmed`（新涨停且净流入）/ `fermenting`（单一信号）/ `faded`
     （无新涨停且净流出或净额 0）/ `unknown`（窗口未到 <30min 或缺数据）。
     验证是时点快照，故实时现算、不落库（多次调用 = 多次采样，天然支持
@@ -280,7 +280,7 @@ async def verify_events(
     items = await verify_active_events(store, hub, pool_dicts, td, limit=limit)
     return {
         "data": {"trade_date": td.isoformat(), "count": len(items), "items": items},
-        "meta": {"basis": "发酵四态：confirmed/fermenting/faded/unknown；新涨停=封板≥事件发布，资金=东财 f62"},
+        "meta": {"basis": "发酵四态：confirmed/fermenting/faded/unknown；新涨停=封板≥来源发布与解释可见较晚时点，资金=东财 f62；仅为同题时序，不证明事件因果"},
     }
 
 
