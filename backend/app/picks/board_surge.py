@@ -22,12 +22,12 @@ import asyncio
 import json
 import logging
 from collections import deque
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import func, or_, select
 
-from app.core.bjtime import beijing_now, beijing_now_naive
+from app.core.bjtime import beijing_now
 from app.core.config import settings
 from app.core.db import get_session_factory
 from app.market import trade_calendar as tc
@@ -302,7 +302,7 @@ class BoardSurgeDetector:
         )
         if news:
             n0 = news[0]
-            extra.append(f"可能诱因（消息面）：{n0['time']} 「{n0['title']}」（{n0['source']}）")
+            extra.append(f"相关消息（未核走势启动先后）：{n0['time']} 「{n0['title']}」（{n0['source']}）")
             if len(news) > 1:
                 extra.append(f"相关消息：{news[1]['time']} 「{news[1]['title']}」")
         seals = attribution.get("seals") or []
@@ -320,14 +320,17 @@ class BoardSurgeDetector:
 
 def match_news_events(
     theme_name: str,
-    since: object,
+    since: datetime,
     session_factory=None,
     limit: int = 2,
+    as_of: datetime | None = None,
 ) -> list[dict]:
     """消息面归因：``since``（北京时间 naive datetime）之后、direction≠0 的题材
     方向行，target 与题材名互含即命中。
 
     打分 = 时间近因（越新越高）× 来源层级（source_tier 1 最好）；只取 Top ``limit``。
+    传入 ``as_of`` 时仅纳入告警拍之前已发布、且解释版本已可见的消息。
+    旧卡无版本时保留 unknown；不据此宣称消息先于走势启动。
     纯查询函数（可测）：不触碰行情、不写库。
     """
     sf = session_factory or get_session_factory()
@@ -339,7 +342,7 @@ def match_news_events(
             EventInterpretation.event_id == EventCard.id
         ).correlate(EventCard).scalar_subquery()
         target_name = func.trim(EventDirection.target, _SQL_STRIP_CHARS)
-        rows = db.execute(
+        query = (
             select(
                 EventCard.id, EventCard.published_at, EventCard.title, EventCard.source,
                 EventCard.source_tier, EventDirection.target,
@@ -362,7 +365,14 @@ def match_news_events(
             )
             .order_by(EventCard.published_at.desc())
             .limit(300)
-        ).all()
+        )
+        if as_of is not None:
+            query = query.where(
+                EventCard.published_at <= as_of,
+                or_(EventInterpretation.id.is_(None),
+                    EventInterpretation.effective_at <= as_of),
+            )
+        rows = db.execute(query).all()
     hits: list[tuple[float, dict]] = []
     seen_events: set[int] = set()
     for event_id, published_at, title, source, tier, target, version_id, observation_id, available_at, state in rows:
@@ -517,14 +527,15 @@ async def _beat(app, detector: BoardSurgeDetector, index_cache: ThemeIndexCache)
             pool = await provider.get_limit_up_pool(td) or []
         except Exception:  # noqa: BLE001
             pool = []
-    since = beijing_now_naive() - timedelta(hours=6)
+    alert_at = now.replace(tzinfo=None)
+    since = alert_at - timedelta(hours=6)
     for a in alerts:
         code = a["key"].split(":")[1]
         news_available = True
         try:
             news = await asyncio.to_thread(
                 match_news_events, a.get("direction") or "", since,
-                get_session_factory(),
+                get_session_factory(), as_of=alert_at,
             )
         except Exception:  # noqa: BLE001
             log.warning("board surge 消息归因查询失败（%s）", code, exc_info=True)

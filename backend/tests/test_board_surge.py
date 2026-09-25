@@ -18,10 +18,11 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.core.bjtime import BJ_TZ
 from app.models.watchlist import Base
 from app.events.store import EventStore
 from app.models.alert import AlertEvent
-from app.models.event import EventCard, EventDirection
+from app.models.event import EventCard, EventDirection, EventInterpretation
 from app.picks import board_surge as bs
 from app.repositories.alert_repo import AlertRepository
 from app.schemas.market import LimitUpRecord
@@ -238,6 +239,34 @@ def test_match_news_events_filters_theme_before_bounded_window():
     assert [hit["event_ref"]["event_id"] for hit in news] == [relevant_id]
 
 
+def test_match_news_events_excludes_evidence_unavailable_at_alert_time():
+    sf = _sf()
+    alert_at = datetime(2026, 9, 24, 10, 0)
+    with sf() as db:
+        for event_id, published_at, visible_at in (
+            (1, alert_at - timedelta(hours=1), alert_at - timedelta(minutes=5)),
+            (2, alert_at - timedelta(hours=2), alert_at + timedelta(minutes=1)),
+            (3, alert_at + timedelta(minutes=1), alert_at - timedelta(minutes=5)),
+        ):
+            db.add(EventCard(id=event_id, fingerprint=f"attribution-{event_id}",
+                             title=f"MLCC 消息 {event_id}", source="快讯",
+                             published_at=published_at))
+            db.add(EventDirection(event_id=event_id, target_type="theme",
+                                  target="MLCC", direction=1))
+            db.add(EventInterpretation(event_id=event_id, observation_id=event_id,
+                                       effective_at=visible_at, state="active",
+                                       payload_json="{}"))
+        db.add(EventCard(id=4, fingerprint="legacy-attribution", title="MLCC 旧消息",
+                         source="旧来源", published_at=alert_at - timedelta(hours=3)))
+        db.add(EventDirection(event_id=4, target_type="theme", target="MLCC", direction=1))
+        db.commit()
+
+    news = bs.match_news_events("MLCC概念", alert_at - timedelta(hours=6), sf,
+                                as_of=alert_at)
+    assert {hit["event_ref"]["event_id"] for hit in news} == {1, 4}
+    assert next(hit for hit in news if hit["event_ref"]["event_id"] == 4)["event_ref"]["state"] == "unknown"
+
+
 def test_board_surge_alert_snapshot_keeps_event_versions_after_revision():
     sf = _sf()
     store = EventStore(sf)
@@ -330,7 +359,7 @@ def test_attach_attribution_appends_with_basis():
         "seals": ["双星新材 09:33（1板）"],
     })
     t = alerts[0]["text"]
-    assert "可能诱因（消息面）：09-11 08:45「村田停产" in t.replace("「", "「") or "村田停产" in t
+    assert "相关消息（未核走势启动先后）：09-11 08:45 「村田停产" in t
     assert "封板时序：双星新材 09:33（1板）" in t
     empty = {"key": "k", "kind": "board_surge", "direction": "x", "text": "基线", "meta": {}}
     d.attach_attribution(empty, {"news": [], "seals": []})
@@ -368,6 +397,38 @@ def test_beat_archives_news_query_setup_failure_as_unavailable(monkeypatch):
     assert alerts == [alert]
     assert "消息归因不可用（查询失败）" in alert["text"]
     assert bs._alert_snapshot(alert)["news_attribution_status"] == "unavailable"
+
+
+def test_beat_uses_detection_time_for_news_window(monkeypatch):
+    alert_at = datetime(2026, 9, 24, 10, 0, tzinfo=BJ_TZ)
+    alert = {"key": "board_surge:T1:2026-09-24", "kind": "board_surge",
+             "direction": "测试题材", "text": "触发", "meta": {}}
+    detector = bs.BoardSurgeDetector()
+    monkeypatch.setattr(detector, "evaluate", lambda *_: [alert])
+    monkeypatch.setattr(bs, "beijing_now", lambda: alert_at)
+    monkeypatch.setattr(bs, "compute_theme_momentum", lambda *_: ({"T1": {"n": 10, "rel": 3}}, -1.0))
+
+    async def no_op(*_):
+        return {}
+
+    monkeypatch.setattr(bs, "_collect_flows", no_op)
+    monkeypatch.setattr(bs, "persist_beat", no_op)
+    monkeypatch.setattr(bs, "get_session_factory", lambda: object())
+    monkeypatch.setattr(bs.distinctiveness, "score_candidates", lambda *_: {})
+    monkeypatch.setattr(bs.distinctiveness, "format_candidates", lambda *_: "")
+    captured = {}
+
+    def news_query(_theme, since, _sf, *, as_of):
+        captured.update(since=since, as_of=as_of)
+        return []
+
+    monkeypatch.setattr(bs, "match_news_events", news_query)
+    app = NS(snapshot_service=NS(snapshot=[{"symbol": "t00"}]), hub=None)
+    index_cache = NS(get=lambda: ({}, {"T1": "测试题材"}))
+
+    assert asyncio.run(bs._beat(app, detector, index_cache)) == [alert]
+    assert captured == {"since": datetime(2026, 9, 24, 4, 0),
+                        "as_of": datetime(2026, 9, 24, 10, 0)}
 
 
 # ---------------------------------------------------------------- 落库与 API 出口
