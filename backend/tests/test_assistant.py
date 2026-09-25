@@ -1176,7 +1176,29 @@ def test_news_tool_lists_active_events_with_basis():
     assert "北京：加快发展商业航天产业" in out
     assert "商业航天" in out and "利好" in out
     assert "依据：政策表述首次出现" in out
+    assert "解释版本：未知" in out
     assert "不构成买卖建议" in out
+
+    current = _Ev()
+    current.interpretation_ref = {
+        "event_id": 1, "version_id": 7, "observation_id": 12,
+        "available_at": "2026-09-11 10:35:00", "state": "accepted",
+    }
+
+    class _VersionStore:
+        def list_events(self, *, active_only=True, limit=30):
+            return [current][:limit]
+
+    versioned = _call_tool(_ctx(provider=object(), event_store=_VersionStore()), "news")
+    assert "解释版本：7｜可见：2026-09-11 10:35:00｜状态：accepted" in versioned
+    assert "解释版本：未知" not in versioned
+
+    class _CrowdedStore:
+        def list_events(self, *, active_only=True, limit=30):
+            return [_Ev() for _ in range(limit)]
+
+    crowded = _call_tool(_ctx(provider=object(), event_store=_CrowdedStore()), "news", limit="30")
+    assert "不构成买卖建议" in crowded
 
     # 事件库缺失时如实说明，不编造
     missing = _call_tool(_ctx(provider=object()), "news")

@@ -165,13 +165,25 @@ async def _t_news(ctx: ToolContext, **kw) -> str:
     if not rows:
         return "当前无活跃资讯事件（非交易时段/快讯采集未产出，属正常空态）"
 
-    lines = [f"【活跃资讯事件 {len(rows)} 条（来源：系统快讯事件流，与市场页事件面板同源）】"]
+    lines = [
+        f"【活跃资讯事件 {len(rows)} 条（来源：系统快讯事件流，与市场页事件面板同源）】",
+        "- 口径：事件与方向映射由系统规则/LLM 从公开快讯抽取，"
+        "**方向是推断不是官方结论**，只作线索；不构成买卖建议。",
+    ]
     for r in rows:
         rec = _rec(r)
         when = str(rec.get("published_at") or "")[:16]
         lines.append(
             f"- [{rec.get('source') or '—'}｜{when}] {str(rec.get('title') or '')[:60]}"
         )
+        ref = rec.get("interpretation_ref")
+        if isinstance(ref, dict) and ref.get("version_id") is not None and ref.get("available_at"):
+            lines.append(
+                f"  · 解释版本：{ref['version_id']}｜可见：{ref['available_at']}"
+                f"｜状态：{ref.get('state') or 'unknown'}"
+            )
+        else:
+            lines.append("  · 解释版本：未知（旧卡无可追溯版本；方向仅供线索）")
         summary = rec.get("summary")
         if summary:
             lines.append(f"  · 摘要：{str(summary)[:80]}")
@@ -183,10 +195,6 @@ async def _t_news(ctx: ToolContext, **kw) -> str:
                 f"（{dd.get('direction') or '—'}，强度 {dd.get('strength') or '—'}）"
                 f"｜依据：{str(dd.get('basis') or '—')[:50]}"
             )
-    lines.append(
-        "- 口径：事件与方向映射由系统规则/LLM 从公开快讯抽取，"
-        "**方向是推断不是官方结论**，只作线索；不构成买卖建议。"
-    )
     return _clip("\n".join(lines))
 
 
