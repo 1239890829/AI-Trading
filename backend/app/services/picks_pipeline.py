@@ -1072,10 +1072,20 @@ async def generate_picks_pipeline(
         active_events = []
         events_available = False
 
+    # 候选池、阶段判断和消息分数须消费同一批已成功建索引的事件。
+    # 索引失败仍保留真实读取条数供审计，但不让这批事件先进入持久决策。
+    try:
+        event_hits_index = _build_event_hits_index(active_events)
+        event_index_available = True
+    except Exception:
+        event_hits_index = {}
+        event_index_available = False
+    usable_events = active_events if events_available and event_index_available else []
+
     candidates = await candidate_pool(
         hub, store, svc,
         limit_up_pool=limit_up_pool,
-        active_events=active_events,
+        active_events=usable_events,
         linkages=linkage.get("items") or [],
         audit=audit,
     )
@@ -1166,7 +1176,7 @@ async def generate_picks_pipeline(
     # ③b 炒作阶段（Regime）：财报日历 + 业绩事件密度 → 六维权重表。
     # 业绩空窗期必须把基本面权重让给情绪与题材梯队，否则系统性错过妖股。
     # 复用管线开头的预取结果（此前这里是第三次同查询）；失败在预取处已降级为空表
-    ev_texts = [e.title for e in active_events]
+    ev_texts = [e.title for e in usable_events]
     regime = detect_regime(
         today=date.fromisoformat(today),
         earnings_ratio=earnings_event_ratio(ev_texts) if ev_texts else None,
@@ -1229,20 +1239,11 @@ async def generate_picks_pipeline(
     if gate["stand_aside"]:
         log.warning("picks gate triggered (%s): %s", gate["level"], "；".join(gate["reasons"]))
 
-    # ③d 消息命中索引（B1）：一次遍历活跃事件按 symbol 建索引——
-    # 原实现每候选股在并发任务里重复全量扫事件表（24×~31 次同步查询）
+    # ③d 消息命中索引（B1）已在候选池前从同批事件构建并验证，
+    # 避免索引失败后候选池/阶段判断已消费部分或无效事件。
     # ③e 基准指数日 K（停牌核查/异动的偏离值分母）：一次性预取，供全部候选复用。
     # 24 只候选各拉一次会触发腾讯熔断，必须在这里取完。
     index_bars = await _prefetch_index_bars(hub)
-    # 纯内存（行已预取，见管线开头）——不再需要 to_thread，也不再重复查库
-    try:
-        event_hits_index = _build_event_hits_index(active_events)
-        event_index_available = True
-    except Exception:
-        # 索引失败不能冒充「无事件命中」；日志由索引函数记录。
-        event_hits_index = {}
-        event_index_available = False
-
     # 晋级率历史分位（选股 2.0 §3）：**当日值**在历史样本中的位置（见上方 ③c 说明）。
     # 库样本不足时为空 → 情绪面修正项自动缺席，basis 如实呈现。
     promo_pct = promo_pctl
