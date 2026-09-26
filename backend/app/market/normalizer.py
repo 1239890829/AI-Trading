@@ -463,8 +463,9 @@ def normalize_news(raw: dict, symbol: str) -> dict | None:
     return {
         "symbol": symbol,
         "title": title,
+        "source_item_id": code,
         "date": str(raw.get("date") or "")[:16],
-        "summary": (raw.get("content") or "")[:120] or None,
+        "summary": (raw.get("content") or "")[:2048] or None,
         "url": f"https://finance.eastmoney.com/a/{code}.html",
         "source": EASTMONEY_SOURCE,
     }

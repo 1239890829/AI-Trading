@@ -54,7 +54,8 @@ def _theme_names(app_state) -> list[str]:
 def _parse_published(value: str | None) -> datetime | None:
     if not value:
         return None
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S",
+                "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
         try:
             return datetime.strptime(value, fmt)
         except ValueError:
@@ -891,23 +892,29 @@ async def collect_news_events(app_state, include_limit_up: bool = False) -> dict
                 published = _parse_published(row.get("date"))
             except HTTPException:
                 published = None
-            # Eastmoney searches article text by code. A hit may only mention the
-            # queried stock in an incidental market list; the query is not proof
-            # that the article's company claim concerns that stock. Keep the raw
-            # event, but link the stock only when its code or known name appears
-            # in the headline. An unavailable name stays unknown.
-            name = "".join(symbol_names.get(symbol, "").split())
+            # A search hit is not proof of a company claim. Derive linkage from
+            # the headline across this batch, independent of which stock query
+            # returned the article; otherwise the same article returned for two
+            # stocks looks like a source revision and suspends its interpretation.
             headline = "".join(title.split())
-            direct_symbol = symbol if (symbol in headline or
-                                       len(name) >= 3 and name in headline) else None
-            if direct_symbol is None:
+            direct_symbols = []
+            for candidate in symbols:
+                name = "".join(symbol_names.get(candidate, "").split())
+                if candidate in headline or (len(name) >= 3 and name in headline):
+                    direct_symbols.append(candidate)
+            direct_symbols.sort()
+            if symbol not in direct_symbols:
                 unverified_links += 1
             _, is_new = store.register(
                 title,
                 source=row.get("source") or "东财",
                 url=row.get("url"),
+                summary=row.get("summary"),
                 published_at=published,
-                source_symbol=direct_symbol,
+                source_item_id=row.get("source_item_id"),
+                source_published_at=published,
+                source_symbol=direct_symbols[0] if len(direct_symbols) == 1 else None,
+                source_symbols=direct_symbols,
                 theme_names=theme_names,
             )
             created += 1 if is_new else 0

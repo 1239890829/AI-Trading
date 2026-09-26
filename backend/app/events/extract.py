@@ -431,6 +431,8 @@ def _demote_if_proposed(directions: list[dict], certainty: str) -> None:
 
 def build_event(title: str, *, source: str | None = None, url: str | None = None,
                 summary: str | None = None, published_at: datetime | None = None,
+                source_item_id: str | None = None,
+                source_published_at: datetime | None = None,
                 source_symbol: str | None = None, is_announcement: bool = False,
                 source_symbols: list[str] | None = None,
                 theme_names: list[str] | None = None,
@@ -477,6 +479,8 @@ def build_event(title: str, *, source: str | None = None, url: str | None = None
         "url": url,
         "summary": (summary or "").strip() or None,
         "source": source or "",
+        "source_item_id": source_item_id,
+        "source_published_at": source_published_at,
         "source_tier": classify_source_tier(source, is_announcement=is_announcement),
         "published_at": published_at or beijing_now_naive(),
         "fact_kind": fact_kind,

@@ -539,3 +539,21 @@ def test_get_news_zero_articles_is_legitimate_empty():
         assert asyncio.run(p.get_news("600519")) == []
     finally:
         asyncio.run(p._client.aclose())
+
+
+def test_get_news_preserves_article_identity():
+    import json as _json
+    import httpx
+
+    article = {"code": "202609263882436867", "title": "三峡新材发布生产计划",
+               "content": "原计划年内投产" + "背景" * 80 + "更正：投产时间未定",
+               "date": "2026-09-26 09:00"}
+    payload = {"result": {"cmsArticleWebOld": [article]}}
+    p = _news_provider_with(lambda request: httpx.Response(200, text="cb(" + _json.dumps(payload) + ")"))
+    try:
+        rows = asyncio.run(p.get_news("600293"))
+        assert rows[0]["source_item_id"] == article["code"]
+        assert rows[0]["summary"] == article["content"]
+        assert rows[0]["date"] == "2026-09-26 09:00"
+    finally:
+        asyncio.run(p._client.aclose())
