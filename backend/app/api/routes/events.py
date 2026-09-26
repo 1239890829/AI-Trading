@@ -86,6 +86,12 @@ def _judge_fields(row, directions=None) -> dict:
         dirs = [{"direction": d.direction, "chain": getattr(d, "chain", "")}
                 for d in selected]
         st = judge_state(pub, dirs, half_life_hours=getattr(row, "half_life_hours", None))
+        nonzero = [d for d in selected if d.direction != 0]
+        if st["status"] == "judged" and nonzero and all(
+            getattr(d, "matched_by", None) == "llm_aux" for d in nonzero
+        ):
+            return {"judge_status": "pending", "judge_status_label": "待验证假设",
+                    "judged_at": None, "judge_reason": "仅有 LLM 辅助方向，尚未经人工验证"}
         if st["status"] == "judged" and any(
             d.direction != 0 and getattr(d, "matched_by", None) == "manual" for d in selected
         ):
@@ -318,7 +324,8 @@ async def impact_events(
         four = classify_four(r.title, r.category)
         level = impact_level(
             r.title, four=four, certainty=r.certainty, fact_kind=r.fact_kind,
-            source_tier=r.source_tier, n_directions=len(r.directions or []),
+            source_tier=r.source_tier,
+            n_directions=sum(d.matched_by != "llm_aux" for d in (r.directions or [])),
         )
         counts[level] += 1
         four_counts[four] = four_counts.get(four, 0) + 1
@@ -335,9 +342,11 @@ async def impact_events(
 
         svc = getattr(request.app.state, "theme_catalog", None) if request else None
         theme_names = sorted({
-            d["target"] for e in enriched for d in e["directions"] if d["target_type"] == "theme"
+            d["target"] for e in enriched for d in e["directions"]
+            if d["target_type"] == "theme" and d.get("matched_by") != "llm_aux"
         })
-        symbols = [d["target"] for e in enriched for d in e["directions"] if d["target_type"] == "symbol"]
+        symbols = [d["target"] for e in enriched for d in e["directions"]
+                   if d["target_type"] == "symbol" and d.get("matched_by") != "llm_aux"]
         name_to_code = {}
         if svc is not None:
             try:
@@ -348,8 +357,10 @@ async def impact_events(
             request.app.state, [n for n in theme_names if n in name_to_code], symbols,
         )
         for e in enriched:
-            theme_dirs = [d["target"] for d in e["directions"] if d["target_type"] == "theme"]
-            symbol_vals = [ctx.stock_chg.get(d["target"]) for d in e["directions"] if d["target_type"] == "symbol"]
+            theme_dirs = [d["target"] for d in e["directions"]
+                          if d["target_type"] == "theme" and d.get("matched_by") != "llm_aux"]
+            symbol_vals = [ctx.stock_chg.get(d["target"]) for d in e["directions"]
+                           if d["target_type"] == "symbol" and d.get("matched_by") != "llm_aux"]
             rank = score_event(
                 impact_level=e["impact_level"],
                 four=e["four_category"],
@@ -382,7 +393,8 @@ async def impact_events(
             archive = await get_archive(hub.provider)
             for e in enriched:
                 for d in e["directions"]:
-                    if d["target_type"] == "theme" and d.get("target"):
+                    if (d["target_type"] == "theme" and d.get("target")
+                            and d.get("matched_by") != "llm_aux"):
                         mem = await leaders_for_theme(hub.provider, d["target"], archive=archive)
                         if mem:
                             d["memory_leaders"] = [
@@ -513,6 +525,10 @@ async def event_stocks(event_id: int, request: Request, store: EventStore = Depe
         name_to_code = {t.name: t.code for t in svc.get_catalog(limit=1000)}
         for d in row.directions:
             if d.target_type != "theme":
+                continue
+            if d.matched_by == "llm_aux":
+                pools.append({"target": d.target, "direction": d.direction, "stocks": [],
+                              "note": "LLM 辅助方向待验证，暂不扩展标的池"})
                 continue
             code = name_to_code.get(d.target)
             if not code:

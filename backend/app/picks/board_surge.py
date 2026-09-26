@@ -358,6 +358,7 @@ def match_news_events(
                 EventCard.revision_pending_at.is_(None),
                 EventDirection.direction != 0,
                 EventDirection.target_type == "theme",
+                EventDirection.matched_by != "llm_aux",
                 # 先按目标题材筛掉无关方向，再截有界近期窗口；否则 300 条
                 # 无关快讯可把窗口内较早的真实归因依据挤掉。
                 func.length(target_name) >= 2,

@@ -231,6 +231,22 @@ def test_match_news_events_prefers_reliable_source_at_same_time():
     assert [hit["tier"] for hit in hits] == [5, 3]
 
 
+def test_match_news_events_excludes_unreviewed_llm_hypothesis():
+    sf = _sf()
+    published = datetime(2026, 9, 26, 10, 0)
+    with sf() as db:
+        for event_id, matched_by in ((1, "llm_aux"), (2, "name")):
+            db.add(EventCard(id=event_id, fingerprint=f"source-{event_id}",
+                             title=f"MLCC 消息 {event_id}", source="东财快讯",
+                             published_at=published))
+            db.add(EventDirection(event_id=event_id, target_type="theme",
+                                  target="MLCC", direction=1, matched_by=matched_by))
+        db.commit()
+
+    hits = bs.match_news_events("MLCC概念", published - timedelta(hours=1), sf)
+    assert [hit["event_ref"]["event_id"] for hit in hits] == [2]
+
+
 def test_match_news_events_filters_theme_before_bounded_window():
     sf = _sf()
     now = datetime(2026, 9, 24, 14, 0)

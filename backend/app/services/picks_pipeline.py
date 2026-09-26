@@ -222,7 +222,7 @@ async def candidate_pool(
             seen_codes: set[str] = set()
             for row in rows:
                 for d in row.directions:
-                    if d.target_type != "theme":
+                    if d.target_type != "theme" or getattr(d, "matched_by", None) == "llm_aux":
                         continue
                     code = name_to_code.get(d.target)
                     if code and code not in seen_codes:
@@ -243,6 +243,8 @@ async def candidate_pool(
             # 模型（EventDirection），且本处只用 target_type/target 做 setdefault，
             # 与行序无关（uq_event_direction 保证同一事件内 target 不重复）。
             for d in row.directions:
+                if getattr(d, "matched_by", None) == "llm_aux":
+                    continue  # Unreviewed model hypothesis is not a candidate source.
                 if d.target_type == "symbol" and d.target.isdigit() and len(d.target) == 6:
                     event_symbols.setdefault(d.target, {"from": "event", "prio": 1})
                 elif d.target_type == "theme" and svc is not None:
