@@ -145,7 +145,7 @@ Discouraged by default in code, markup, and visible text. Replace symbols with i
 ### 3.E Responsiveness & Layout Mechanics
 * Standardize breakpoints (`sm 640`, `md 768`, `lg 1024`, `xl 1280`, `2xl 1536`).
 * Contain page layouts using `max-w-[1400px] mx-auto` or `max-w-7xl`.
-* **Viewport Stability:** NEVER use `h-screen` for full-height Hero sections. ALWAYS use `min-h-[100dvh]` to prevent layout jumping on mobile (iOS Safari address bar).
+* **Viewport Stability:** choose viewport units and scroll behavior per task. Test mobile browser chrome, zoom and long content; full-height layouts must not clip or lock every screen by default.
 * **Grid over Flex-Math:** NEVER use complex flexbox percentage math (`w-[calc(33%-1rem)]`). ALWAYS use CSS Grid (`grid grid-cols-1 md:grid-cols-3 gap-6`).
 
 ### 3.F Dependency Verification (mandatory)

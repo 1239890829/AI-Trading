@@ -38,7 +38,7 @@ When reviewing UI code, check for:
 | `scale(0)` entry animation                 | Start from `scale(0.95)` with `opacity: 0`                       |
 | `ease-in` on UI element                    | Switch to `ease-out` or custom curve                             |
 | `transform-origin: center` on popover      | Set to trigger location or use Radix/Base UI CSS variable (modals are exempt — keep centered) |
-| Animation on keyboard action               | Remove animation entirely                                        |
+| Animation on keyboard action               | Keep action/focus immediate; test any brief cue for interruption and reduced motion. |
 | Duration > 300ms on UI element             | Reduce to 150-250ms                                              |
 | Hover animation without media query        | Add `@media (hover: hover) and (pointer: fine)`                  |
 | Keyframes on rapidly-triggered element     | Use CSS transitions for interruptibility                         |
@@ -104,17 +104,17 @@ Run this matrix before outputting code. This is the last filter.
 - [ ] **Motion claimed = motion shown**: if `MOTION_INTENSITY > 4`, page actually animates, not just claimed?
 - [ ] **GSAP sticky-stack / horizontal-pan** implemented per Section 5.A / 5.B canonical skeleton (`start: "top top"`, `pin: true`, correct scrub)?
 - [ ] **No `window.addEventListener('scroll')`** - using Motion `useScroll()` / ScrollTrigger / IntersectionObserver / CSS scroll-driven animations only?
-- [ ] **Reduced motion** wrapped for everything `MOTION_INTENSITY > 3`?
+- [ ] **Reduced motion** covered in both CSS and JavaScript for every meaningful motion path?
 - [ ] **Dark mode** tokens defined and tested in both modes?
 - [ ] **Mobile collapse** explicit (`w-full`, `px-4`, `max-w-7xl mx-auto`) for high-variance layouts?
-- [ ] **Viewport stability**: `min-h-[100dvh]`, never `h-screen`?
+- [ ] **Viewport stability**: small screens and zoom can scroll without clipped content; choose height constraints from the actual layout?
 - [ ] **`useEffect` animations** have strict cleanup functions?
 - [ ] **Empty / loading / error** states provided?
 - [ ] **Cards omitted** in favor of spacing where possible?
 - [ ] **Icons** from an allowed library only (Phosphor / HugeIcons / Radix / Tabler), no hand-rolled SVG paths?
 - [ ] **Motion** isolated in client-leaf components with `'use client'` at the top, memoized?
 - [ ] **No AI Tells** from Section 9 (Inter as default, AI-purple, three-equal cards, Jane Doe, Acme, "Quietly in use at")?
-- [ ] **Core Web Vitals** plausibly hit (LCP < 2.5s, INP < 200ms, CLS < 0.1)?
+- [ ] **Performance evidence**: loading, interaction latency, frame time and layout shift measured on comparable target devices; richer motion not counted as a speed gain?
 - [ ] **One design system** per project (no Material + shadcn mixed)?
 
 If a single checkbox cannot be honestly ticked, the page is not done. Fix it before delivering.

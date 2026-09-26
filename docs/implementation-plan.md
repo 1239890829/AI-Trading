@@ -175,9 +175,9 @@ BUG-025/027 已按原任务闭环；BUG-028/026/029 与 BUG-020 均已完成，�
 | U44 多任务窗口后的统一执行优先级；Codex `ashare-ledger-continue` 全盘恢复上下文并按阶段门/角色/P0-P2/依赖动态选一刀；有 blocker 时取最低 blocker 门，全部 blocker 清空后回落到最低 actionable non-blocker 普通门，避免“仍有可执行工作却返回 None”；用户无需复制任务卡 | collaboration-workflow §3/§9/§10；ashare-ledger-continue §1–§4；retro-and-gaps §5.9/日常使用；handoff 当前候选快照；每次只授权一个主切片 |
 | U45 阶段门与文档治理：不允许任意跨阶段；W归属/G门序/P优先级分离，任务有门内序/角色/硬依赖/效果前置；跨门须显式例外；计划/账本/专题/summary/Skill各守唯一职责 | retro-and-gaps §5.9；plan-registry §1/§1.1/§1.3；doc-health S门禁；continue/handoff Skills；GOV-022 |
 | U46 工作区卫生、文档物理分类与资产生命周期：已完成且精华已提炼的文档原件可退休；`docs/` 根只保留 6 个控制面，领域正文进入 system/data/product/strategy/ai/review/research 等已登记目录；项目拥有的临时克隆/worktree、测试沙箱、构建缓存与过期大产物必须按保留条件收口，未知/跨项目/业务数据/唯一证据不得自动删 | W08/GOV-026；AGENTS §3–§4；INDEX §0.0.1；kb/07 §6/§10.1、kb/11 §4–§5；doc-health O2 管文档物理落位，workspace hygiene gate 管应用专属目录与本机资产 |
-| U47 猎场推荐验证、盘中动态买点与 UI 体验：首见/触发参考价可用于反事实跟踪但不得冒充真实成交；达到可执行条件的机会要进入独立 shadow 账户并记录费用/滑点/拒单/未成交/退出；盘中按新快照重评而非开盘定死全天；低位后涨停只能作为无未来信息的研究标签；猎场合理分区/tab，详情按上下文选择 Drawer/Modal/Popover，全站保持页面锁屏+容器内部滚动并用 design-taste 约束有目的动效 | IMP-006 → IMP-049 → W03/IMP-053；W04/RSH-026、RSH-031、IMP-020；W07/IMP-050、IMP-054；hunting-decision-design §4/§6/§8；feature-closure-audit §4 |
+| U47 猎场推荐验证、盘中动态买点与 UI 体验：首见/触发参考价可用于反事实跟踪但不得冒充真实成交；达到可执行条件的机会要进入独立 shadow 账户并记录费用/滑点/拒单/未成交/退出；盘中按新快照重评而非开盘定死全天；低位后涨停只能作为无未来信息的研究标签；猎场合理分区/tab，详情按上下文选择 Drawer/Modal/Popover；桌面按任务选择内部滚动，手机和大幅缩放可自然阅读，动效须有目的、可减弱并以真实性能验证 | IMP-006 → IMP-049 → W03/IMP-053；W04/RSH-026、RSH-031、IMP-020；W07/IMP-050、IMP-054；hunting-decision-design §4/§6/§8；feature-closure-audit §4 |
 | U48 全系统机制生命周期与持续有效性：策略/战法/因子/猎场情境/KB知识/Jev与LLM语义能力/路由/数据源及关键治理机制都没有永久有效资格；在原 owner/登记册中保留用途、基线、证据版本、适用域/反例、复核触发、衰退信号、成本收益、Champion/Challenger、降级/退役/复活/回滚；系统可自主发现和提出实验，但不得自行把未验证变化晋级生产 | W08/GOV-027；continuous-evolution；factor-lifecycle-governance/strategy-registry；W04/RSH-026、IMP-020、RSH-030；W05/RSH-027；G2/IMP-049、IMP-053；具体效果与状态仍归各 owner task |
-| U49 主动发现隐藏缺陷：不等用户追问；继续选刀、代码放行、阻断项闭环/阶段门切换、事故纠偏都必须先做有界 Proactive Discovery Gate；扫描自锁/双事实源/顺序与崩溃窗口/幂等去重/unknown/fail-open/动态冻结/坏测试/传播漂移，交接留主动审计回执；发现问题回原 owner，不自动扩权施工 | living-system-governor §4.1；collaboration-workflow §3.2；ashare-ledger-continue / ashare-task-handoff；W08/GOV-022；plan-registry §1.1；doc-health 传播守卫 |
+| U49 主动发现隐藏缺陷：不等用户追问；继续选刀、代码放行、阻断项闭环/阶段门切换、事故纠偏都必须先做有界 Proactive Discovery Gate；扫描自锁/双事实源/顺序与崩溃窗口/幂等去重/unknown/fail-open/动态冻结/坏测试/传播漂移，交接留主动审计回执；发现问题回原 owner，不自动扩权施工 | living-system-governor 按需手册 §4.1；collaboration-workflow §3.2；ashare-ledger-continue / ashare-task-handoff；W08/GOV-022；plan-registry §1.1；doc-health 传播守卫 |
 | U50 Codex 不可用时的受控降级全权闭环：仅用户明确授权可进入 `DEGRADED_FULL_CONTROL`；网页承担规划→实现→作者反证→PR/CI→发布→合并→post-merge→删分支，但不得伪装独立 Review；每个 PR 以 exact-HEAD `DegradedRelease` + required CI + release_check 为发布门，用户明确退出后恢复正常双角色 | collaboration-workflow §3.3/§5；AGENTS §3/§6.5；W08/GOV-022；continue/handoff Skills；release_check.py；doc-health U50 传播守卫 |
 | U51 Jev 全系统有价值应用、决策可视化、候选更新与降级；猎场理由/个股选择先解释与 shadow，UI/账本仅在真实歧义且有增益时辅助；31 项未完成任务只局部挑战、不整项取代 | Jev 蓝图附录 A；review/jev-system-scan-20260924；IMP-048/049/050/045/046/051、RSH-030/031/027/003、GOV-022/024/025/027；原 G/P/依赖不变 |
 
@@ -205,9 +205,9 @@ BUG-025/027 已按原任务闭环；BUG-028/026/029 与 BUG-020 均已完成，�
 ## 9. 本轮规划的完成标准与交付边界
 
 当前规划完成条件：U01–U55 累计需求各有落点；大模块及已识别小动作有目标契约；知识/假设/策略准入有清晰边界；历史冲突有裁定；计划依赖不互锁；协作与交接明确当前模式、允许动作与主动审计责任；文本图与正文一致；重大决策完成传播核对且根入口机器守卫可判明显漂移；治理变化可从 Git/PR 回溯。
-不把下列项目列成本轮必须执行的工作：业务BUG修复、React/Canvas与API实测、策略回测/参数调优、数据源接入、迁移/部署、真实通知、双端试跑。它们的验收输入/步骤/通过判据已设计；PR #44 本身仍须完整 CI。合并后进入执行阶段时，切片可由网页明确派发，也可由用户显式调用 `ashare-ledger-continue` 按 U44 动态规则授权一刀。
+不把下列项目列成本轮必须执行的工作：业务BUG修复、React/Canvas与API实测、策略回测/参数调优、数据源接入、迁移/部署、真实通知、双端试跑。它们的验收输入/步骤/通过判据已设计；本轮PR #172仍须准确HEAD的完整CI与发布门。规划合并后本轮停下，等用户另说“继续任务”才从最新master按 U44/账本规则授权一刀。
 规划完成不是承诺完美无缺或永久不改；v9.13 继续明确是 living plan，只表示当前已知要求的设计与治理缺口已收口，并已经建立主动寻找外部替代/反证的机制。新证据、需求/权限变化或实现证实不可行才局部重开；不能以“系统尚未实现”反复宣布规划未完成，也不能因文档完成将既有工程任务清零。
-本轮只做文档内容、引用/编号、任务状态保留、对象/角色/依赖和Git差异检查；不借用历史3851/151结果宣称本次通过整仓门禁。原发布仍需准确候选SHA、独立审核及完整CI，规划签收不授予MERGE_IF_GATES_PASS。
+本轮补齐必要的项目 Skills、按需引用与文档传播，并执行适用本地门禁、内容/引用/任务元数据/diff核验；历史测试结果不冒充当前。现行 Codex 临时降级模式以明确非独立的 exact-HEAD DegradedRelease 发布，required CI、release_check 和合并后复验不降低；设计批准本身不授予 MERGE_IF_GATES_PASS。
 
 ## 10. 依据与采用范围
 

@@ -16,7 +16,7 @@ This skill is a synthesis of three design skills — Emil Kowalski's *design-eng
 - **Source lineage** — Emil Kowalski *design-engineering* (motion/component craft → `reference/motion.md`, `reference/interaction-states.md`) · *impeccable* (design rules + anti-slop bans → core rules + `reference/anti-slop.md` Part 1) · *taste-skill* (brief reading, intensity dials, design systems → `reference/design-systems.md`, `reference/pre-flight.md` matrix).
 - **Project-local `skills/impeccable/` was an incomplete v4.1.2 copy** — it referenced 20+ `reference/*.md` files and a `scripts/` directory that were never checked in, so it could not actually run. Its only unique file (`reference-animate.md`) carried two things the synthesis lacked: the **motion thesis** method and the **300–800ms focal-entrance exception**. Those are now merged into `reference/motion.md` (§0 and §4), and the directory is archived to `skills/_archived/impeccable-v4.1.2-incomplete/`.
 - This project is self-contained: do not depend on a globally installed design-agent directory. Use **this** skill for repository work because it carries the project's tokens, contrast discipline, and A-share conventions (red = up, green = down). Generic external design skills are optional references, never project dependencies.
-- **Conflict resolution**: for this repository, this file wins. Where the two disagree, the project's own evidence (measured contrast ratios, the token layer in `apps/web/app/globals.css`) settles it.
+- **Conflict resolution**: project AGENTS, the current product blueprint and measured behavior govern product choices. This skill supplies design craft; older palette, density, menu count, layout and Overlay examples are comparison baselines, not permanent constraints. Use the current token layer and contrast evidence when changing colours.
 
 
 ## Philosophy (internalize this)
@@ -61,9 +61,9 @@ Then set three intensity dials (full definitions in `reference/design-systems.md
 
 ### Color
 - **Verify contrast.** Body ≥4.5:1; large text ≥3:1, where *large* means **≥24px, or ≥18.66px when bold** (WCAG 18pt / 14pt-bold — do not read those as pixels, it makes the rule far too permissive). Placeholder text needs 4.5:1 too. Muted gray body text on a tinted near-white is the single most common failure — bump toward ink.
-- One accent color, locked across the whole page. Saturation < ~80% by default. Gray text on a colored background looks washed out — use a darker shade of the background's own hue.
+- Use a coherent semantic palette and test contrast on actual surfaces; accent count and saturation follow the task rather than a fixed style quota.
 - Prefer OKLCH. Tint neutrals slightly toward the brand hue (0.005–0.015 chroma), not reflexively warm.
-- No pure `#000` / `#fff` — use off-black and off-white for depth. Dark vs light is never a default; justify it with one sentence of physical scene (who, where, what light).
+- Choose light/dark surfaces for the task and verify readability; the old zinc palette is a measured baseline, not a colour lock.
 
 #### This project's colour scale — measured in **both** modes (2026-09-11, P2-19 + P2-24)
 
@@ -108,17 +108,18 @@ scanner and per-mode baseline in `reference/contrast-audit.md`.
 
 ### Layout & spacing
 - Consistent spacing scale (4px/8px base). Vary spacing for rhythm; generous whitespace.
-- Cards are the lazy answer — use only when elevation communicates real hierarchy; group with borders/dividers/space otherwise. **Nested cards are always wrong.**
+- Use cards, dividers, whitespace or nested grouping when each expresses a real information boundary; verify scanning and space cost.
 - Flexbox for 1D, Grid for 2D. Responsive grids without breakpoints: `repeat(auto-fit, minmax(280px, 1fr))`.
 - One corner-radius system per page; cards top out at 12–16px. Semantic z-index scale (dropdown→sticky→modal→toast→tooltip), never `999`/`9999`.
 - Hero fits the viewport: headline ≤2 lines, subtext ≤20 words, CTA visible without scroll. Nav on one line at desktop, ≤80px tall.
 
 ### Motion (summary — full craft in `reference/motion.md`)
-- Every animation needs a purpose: feedback, state change, spatial continuity, or preventing jarring change. "It looks cool" + seen-often = don't animate. **Never animate keyboard-initiated actions.**
-- UI animations stay under 300ms. Use **ease-out** for enter/exit (responsive); never `ease-in` on UI. Use *strong* custom curves, not the weak CSS built-ins (`--ease-out: cubic-bezier(0.23, 1, 0.32, 1)`).
-- Animate **only `transform` and `opacity`** (GPU). Never animate `width/height/top/left/margin/padding`.
+- Every animation needs a purpose: feedback, state change, spatial continuity, or preventing jarring change. Repeated keyboard actions must respond immediately; a brief, interruptible state cue may remain when it helps comprehension and does not delay input or focus.
+- Routine UI animations should usually stay under 300ms; a measured focal transition can take longer. Choose easing to fit the motion and test interruption, reversal and focus recovery.
+- Prefer `transform` and `opacity` on hot paths. Other properties require a concrete layout/paint cost check on target devices rather than a universal ban.
 - Never animate from `scale(0)` — start at `scale(0.95)` + opacity. Buttons get `:active { transform: scale(0.97) }`. Popovers scale from their trigger origin (modals stay centered).
 - Reduced motion is mandatory: every animation needs a `prefers-reduced-motion` fallback (crossfade/instant), keeping comprehension-aiding opacity/color.
+- CSS and JavaScript motion paths both honor reduced motion. A richer transition is never evidence that loading, interaction or rendering became faster; measure those separately.
 
 ### Interaction & components (full detail in `reference/interaction-states.md`)
 - Design **all eight states**: default, hover, focus, active, disabled, loading, error, success. Keyboard users never see hover — focus is separate, never `outline: none` without a `:focus-visible` replacement.

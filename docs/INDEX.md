@@ -145,7 +145,7 @@
 | **T3 数据源与行情口径** | `data/data-source-comparison.md` → `data/data-sources.md` | `system/data-dictionary.md` · `system/websocket.md` | 时效按数据类型、交易日历与来源可见时间判定；盘前/休市可用上一有效交易日，盘中旧数据不能冒充当前；不以一律“今天”或固定TTL替代业务语义 |
 | **T4 选股与策略** | `product/hunting-decision-design.md` → `kb/00-INDEX.md` 选股表 | 历史涨停/龙头研究 `research/limit-up-dragon-research.md` · `summary/stock-strategy.md` · `strategy/strategy-registry.md` · `strategy/factor-lifecycle-governance.md` + `strategy/factor-candidates.md` | **示例 ≠ 规范**；赢家复盘≠预测能力；策略/因子落地**必须先过点时全分母、OOS/前向和成本实证**；回测禁令见 `strategy/backtest-rules.md` |
 | **T5 复盘与治理** | 复盘 `kb/06-review-framework.md`；执行治理 `retro-and-gaps.md` §5.9/§6.0 | `plan-registry.md` §1.1/§1.3 · `collaboration-workflow.md` · `handoff.md` · `kb/07` · `kb/11` | W只管归属、G0–G5管门序、P0–P2管门内重要性；硬依赖未完成不得跨门；任务只在 stage 单点维护 |
-| **T6 前端与 UI** | `summary/architecture-design.md`（§1 跨页面联动设计） | `system/architecture.md` · `kb/03-engineering.md` | **验收以实际渲染为准**（agent-browser 文本通道）；**新增页面/板块需先论证**；U54/U55按任务比较inline/Drawer/Modal与大画布；旧KB-ENG-92为历史，不固定所有详情形态 |
+| **T6 前端与 UI** | `summary/architecture-design.md`（§1 跨页面联动设计） | `system/architecture.md` · `kb/03-engineering.md` · `skills/ui-state-verify/SKILL.md` · `skills/canvas-chart-verify/SKILL.md` | **验收以实际渲染为准**，截图、DOM、Canvas、数值与源码各证其范围；**新增页面/板块需先论证**；U54/U55按任务比较inline/Drawer/Modal与大画布；旧KB-ENG-92为历史，不固定所有详情形态 |
 | **T7 外部工具与技能** | `ai/continuous-evolution.md` → `skills/ashare-innovation-radar/SKILL.md` | `ai/jev-integration.md` · 本表 **WB-04** · `system/llm-gateway-probe.md` | 外部热度只产候选；先许可/隐私/费用/权限硬门与证据梯度，未经 owner stage 不安装/准入 |
 | **T8 决策与"为什么当初这么定"** | `kb/04-decisions.md`（KB-DEC） | `archive/ledger-transition-20260917.md` · `implementation-plan.md` | 既有决定可依新证据和最新授权复核；保留取代关系与依据，不据历史标题锁死设计 |
 | **T9 提醒与通知链路** | `summary/pick-signal-chain.md`（**先读它**：定位/触发/流向/断点） | `services/alert_triage.py`（判读闸门）· `api/routes/notifications.py`（通知收口）· `picks/watcher.py::dispatch_alert`（唯一汇聚点）· `services/push_policy.py` | **收敛口径时必须回扫自称该口径的注释**（`IMP-028` 遗留 5 处过期断言，见该文 §G4）；**判读闸门现状只作用于悬浮球**（§G1）；改通知来源须同步 §3.1 规则清单 |
@@ -332,5 +332,5 @@
 
 ## 7. U52–U55确认后的产品入口
 
-总方案v9.13记录批准取舍；product/product-closure-design.md定义B/C任务导航、前后台、组件与六闭环；product/feature-closure-audit.md保存50项/18域/73源/30后台声明去向；ai/jev-integration.md附录B区分研发共审/业务凭证。确认与未完成传播见RV-09。
-Governor的decision-protocol参考卡已保存，但主入口、README及其他受影响Skills未完成；具体事实见RV-09。不要将部分参考更新或本索引传播当作宿主加载或全链完工。阶段状态与顺位均在所属stage，不以下载报告/导航命名替代。
+总方案v9.13记录批准取舍；product/product-closure-design.md定义B/C任务导航、前后台、组件与六闭环；product/feature-closure-audit.md保存50项/18域/73源/30后台声明去向；ai/jev-integration.md附录B区分研发共审/业务凭证。批准来源、Skill传播及未验边界见RV-09。
+Governor短入口连接按需手册、决策卡与历史示例；设计/状态/Canvas/选型/雷达/对账/接续/健康Skills随PR #172同步。技能文本与引用检查的实际结果见RV-09及PR回执；宿主加载、真实UI/Canvas和业务效果仍按原stage验收。阶段状态与顺位不由下载报告或导航命名替代。

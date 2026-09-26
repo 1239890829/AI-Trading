@@ -6,6 +6,7 @@ description: AI-Trading 的外部创新发现与准入前筛选 Skill；从最�
 # 外部创新雷达
 
 本 Skill 解决“系统不能只等用户告诉我们外界发生了什么”。它负责**发现、核实、筛选和设计验证**，不拥有生产采用权，也不建立第二套 backlog。
+外部组件候选先从真实任务和既有组件契约出发；导航、业务事实、组件和阶段账本是不同边界。详尽采用比较读 `skills/external-tool-adoption-review/SKILL.md`，本雷达只给候选、来源和最小验证路径。
 
 ## 1. 启动前读取
 
@@ -105,6 +106,7 @@ description: AI-Trading 的外部创新发现与准入前筛选 Skill；从最�
 - **increment**：候选相对基线的新能力是什么，不是换名重复；
 - **claims_vs_verified**：外部声称什么；本轮实际核实了什么；
 - **fit**：A股/当前架构/数据/权限是否适配；
+- **component_contract**：若是UI/工具候选，记录对象/时间/版本/scope、消费者、空错陈旧、键盘/焦点/IME、Canvas、减弱动效和恢复要求；
 - **license_security_privacy**：许可、供应链、secret、遥测、权限；
 - **cost**：费用、token、延迟、CPU/内存、维护、CI；
 - **failure_and_fallback**：失败模式、降级、锁定版本与恢复；
@@ -153,6 +155,7 @@ Jev 可以在候选很多时做 bounded：
 - 证据→主张支持关系的旁路验证。
 
 Jev 不决定“是否采用某技术”，不把 confidence 当技术正确率或投资收益。确定性许可/版本/依赖/数值比较先由代码或原始事实处理；复杂技术取舍升级给 DeepSeek/Codex/ChatGPT，最后靠实验。
+保留有据弃权与分歧；研发共审回执、真实采用和业务效果分开。复用既有回执，不为证明模型参与而重复付费调用。
 
 ## 8. 量化/选股候选附加门
 

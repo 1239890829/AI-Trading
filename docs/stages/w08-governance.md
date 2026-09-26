@@ -31,11 +31,12 @@
   - 2026-09-22 BUG-020 真实会话又抓到**调度回执与本机副作用不一致**：上午开放式自动续跑曾与人工接管重叠并造成额外进程切换，因此立即停用。当天用户随后明确恢复了 12:35/13:30/14:30/15:10 的**有界单次检查点**；每次都先做 single-writer 预检，午后观察阶段禁止 restart，未再发生并发服务切换。治理结论因此收敛为：不得把开放式长验收交给不可观测的并发调度器；只有用户显式授权、边界固定、可做 single-writer 前置检查的一次性运行才可执行写入/发布动作，且不构成后续业务切片的自动授权。
   - 2026-09-22 IMP-052 全部 blocker 闭环后，`ledger-runtime-selection.py --json` 实测返回 `gate/task/candidates=null/null/[]`，但阶段页仍有多项 G1–G4 `待执行/部分完成` 非阻断任务；根因是 §5.9/机器选择器只定义“存在 blocker 时如何选”，没有定义“blocker 全清后的 ordinary fallback”。U49 将其归回 GOV-022：选择器保持 blocker 全局优先；仅当 G0–G4 已无 actionable blocker 时，回落到最低仍有 actionable non-blocker 的普通门，G5/GX 不参与 fallback。隔离补丁机械重算得到 `G1/BUG-022`，同门候选 `BUG-022 → IMP-048 → IMP-040 → RSH-031`；正反测试覆盖同门 blocker/non-blocker、较高门 blocker 压过较低门 non-blocker、无 blocker fallback。
 - **处置依据**：人工触发已代替自动发送需求；继续开发互调增加权限/状态/维护成本。退出不等于自动链成功，废弃子目标不得重新派工。
-- **下一步**：U50 已有真实 PR 验证；持续验证 U49/U50 的发现质量、误报与成本。runtime selector 除受支持运行条件外，必须持续验证“blocker 全清后 ordinary non-blocker fallback”不会再次返回空主门；当时机械下一刀为 `G1/BUG-022`；该任务后续已通过 PR #113 合入主干。2026-09-24 从 `master@52971cfc` 重算，当前机械候选为 `G1/IMP-048`；本 GOV-022 只维护选择器与账本辅助，不替代 IMP-048 的单独派工/验收。其它 `待条件` 仍保持 fail-closed，只有出现稳定、可确定判据才新增条件类型，避免把自然语言条件猜成自动授权。继续保持 single-writer，并在 merge 后把 branch/worktree/runtime status 分开核对。GX 不借治理跨门。
+- **下一步**：U50 已有真实 PR 验证；持续验证 U49/U50 的发现质量、误报与成本。runtime selector 除受支持运行条件外，必须持续验证“blocker 全清后 ordinary non-blocker fallback”不会再次返回空主门；`G1/BUG-022` 与 2026-09-24 的 `G1/IMP-048` 均为历史重算快照，前者已由 PR #113、后者已由 PR #170/#171 工程收口。现行候选只从最新master/handoff重算；本 GOV-022 只维护选择器与账本辅助，不替代业务派工/验收。其它 `待条件` 仍保持 fail-closed，只有出现稳定、可确定判据才新增条件类型，避免把自然语言条件猜成自动授权。继续保持 single-writer，并在 merge 后把 branch/worktree/runtime status 分开核对。GX 不借治理跨门。
 - **恢复**：26a0c44和项目回收记录保存旧文件；恢复只作调查且不覆盖目标，不恢复旧自治目标或撤销金融/CI保护。
 - **分工**：正常模式网页方案/账本/独立审核，Codex执行；`DEGRADED_FULL_CONTROL` 激活时网页全权闭环，用户只需明确进入/退出降级或提出重大取舍。Bridge个人App/扩展/对话未卸载删除，不影响本流程。
 - **2026-09-24 临时执行者例外**：用户明确授权 Codex 在 `DEGRADED_FULL_CONTROL` 下免网页审核推进，直到要求“改回来”；Codex 的 U49 作者反证和 `DegradedRelease` 不冒充独立 Review。required CI、发布检查及主干复验不降级。活动状态见 handoff，撤销后恢复上行默认分工；此记录不改变 GOV-022 原状态/门序。
 - **U52/U55规划协调（P01/P02/P03，2026-09-26已批）**：本次只实现文档/Skill传播；U01–U55落点、需求集合/引用职责/旧当前指针核对；保护原用户diff，修Governor格式，真实宿主加载另留未验。区别dependency_ready、evidence_ready、authorization、runtime_condition：只有原selector支持的条件可激活，Jev不改任务状态。菜单/业务/组件/账本四边界独立，新模块不映射为新G门；原任务装不下的独立范围允许有据新任务，不受32提案数量限制。B/C与子功能定义归产品，旧新覆盖归细功能，业务写者按原owner，不能全部交给IMP-050。
+- **PR #172规划前置传播**：Governor短入口/README/按需手册和受影响设计、状态/Canvas、选型、雷达、对账、接续/交接、健康Skills已按批准规范补齐；旧拒绝留历史，宿主实际加载另列未验。此处只记录传播事实，不改 GOV-022 状态/门序，不批准 B 导航施工或模型/业务效果。
 
 ## GOV-024
 

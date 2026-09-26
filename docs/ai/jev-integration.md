@@ -1594,7 +1594,7 @@ Jev 可帮助批量相关性与重复语义候选，但**不做一个总分自�
 
 契约可先支持optional/未评估，后续语义增强到其合法阶段再接；G2不能整门等待G4模型字段而自锁。每个接线片包含自己的降级；当前已有消费者若发现正确性缺陷，按原缺陷owner走正常规矩，不把所有修复拖到新系列最后。
 
-本次批准的正式传播已进入 implementation-plan、Jev 专题、INDEX、plan-registry、所属 stages 与 handoff；项目 AGENTS 只更新版本入口，Skills 的执行规则未变。审查附件是时点证据，不是并行账本。
+本次批准的正式传播已进入 implementation-plan、Jev 专题、INDEX、plan-registry、所属 stages 与 handoff；项目 AGENTS 保持权限和版本入口，PR #172 将有界第二意见、弃权/分歧及研发共审与业务效果分账同步到受影响的Governor、选型和雷达Skills。审查附件是时点证据，不是并行账本；未新增Jev调用或生产准入。
 
 ### 15. Governor 审查聚焦的反例与退出
 

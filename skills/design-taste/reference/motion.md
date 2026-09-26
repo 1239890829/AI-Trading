@@ -79,12 +79,12 @@ Sibling stagger is appropriate **when a list appears as a list**. Cap the total 
 
 | Frequency                                                   | Decision                     |
 | ----------------------------------------------------------- | ---------------------------- |
-| 100+ times/day (keyboard shortcuts, command palette toggle) | No animation. Ever.          |
+| 100+ times/day (keyboard shortcuts, command palette toggle) | Immediate response; retain only a brief useful cue that never gates input or focus. |
 | Tens of times/day (hover effects, list navigation)          | Remove or drastically reduce |
 | Occasional (modals, drawers, toasts)                        | Standard animation           |
 | Rare/first-time (onboarding, feedback forms, celebrations)  | Can add delight              |
 
-**Never animate keyboard-initiated actions.** These actions are repeated hundreds of times daily. Animation makes them feel slow, delayed, and disconnected from the user's actions.
+Keyboard-initiated actions must respond immediately. Judge any state or spatial cue by interruption, focus recovery, reduced-motion behavior and measured latency; remove it when it slows frequent work.
 
 Raycast has no open/close animation. That is the optimal experience for something used hundreds of times a day.
 
@@ -142,7 +142,7 @@ Is the element entering or exiting?
 | Modals, drawers          | 200-500ms     |
 | Marketing/explanatory    | Can be longer |
 
-**Rule: routine UI animations should stay under 300ms.** A 180ms dropdown feels more responsive than a 400ms one. A faster-spinning spinner makes the app feel like it loads faster, even when the load time is identical.
+**Rule: routine UI animations should usually stay under 300ms.** A 180ms dropdown may feel more responsive than a 400ms one; measure interaction latency separately. A faster spinner changes perception, not load time.
 
 **The one legitimate exception — the focal entrance** (impeccable animate, 2026-09-11 归并): a *deliberately authored* focal sequence may run 300–500ms (layout, overlay, view transition) or 500–800ms (focal entrance). The distinction is authorship, not size: the exception applies to the **single** focal moment from the motion thesis, never to routine state changes dressed up as spectacle. If more than one thing on the surface exceeds 300ms, you have not found a focal moment — you have found animation debt.
 
@@ -156,7 +156,7 @@ Speed in animation is not just about feeling snappy — it directly affects how 
 - A **180ms select** animation feels more responsive than a **400ms** one
 - **Instant tooltips** after the first one is open (skip delay + skip animation) make the whole toolbar feel faster
 
-The perception of speed matters as much as actual speed. Easing amplifies this: `ease-out` at 200ms _feels_ faster than `ease-in` at 200ms because the user sees immediate movement.
+Perceived speed is a separate observation from actual latency, frame time, CPU and memory. Easing can change perception; do not report a performance improvement without comparable measurements.
 
 ## Spring Animations
 
@@ -684,7 +684,7 @@ When reviewing UI code, check for:
 | `scale(0)` entry animation                 | Start from `scale(0.95)` with `opacity: 0`                       |
 | `ease-in` on UI element                    | Switch to `ease-out` or custom curve                             |
 | `transform-origin: center` on popover      | Set to trigger location or use Radix/Base UI CSS variable (modals are exempt — keep centered) |
-| Animation on keyboard action               | Remove animation entirely                                        |
+| Animation on keyboard action               | Keep action/focus immediate; remove any cue that delays repeated input. |
 | Duration > 300ms on a routine UI element             | Reduce to 150-250ms (only the single focal moment from the motion thesis may exceed it) |
 | Hover animation without media query        | Add `@media (hover: hover) and (pointer: fine)`                  |
 | Keyframes on rapidly-triggered element     | Use CSS transitions for interruptibility                         |
