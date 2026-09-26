@@ -328,7 +328,8 @@ def match_news_events(
     """消息面归因：``since``（北京时间 naive datetime）之后、direction≠0 的题材
     方向行，target 与题材名互含即命中。
 
-    打分 = 时间近因（越新越高）× 来源层级（source_tier 1 最好）；只取 Top ``limit``。
+    优先级 = 来源层级（source_tier 5 最可靠），同级按发布时间取较新者；
+    只取 Top ``limit``。
     传入 ``as_of`` 时仅纳入告警拍之前已发布、且解释版本已可见的消息。
     旧卡无版本时保留 unknown；不据此宣称消息先于走势启动。
     纯查询函数（可测）：不触碰行情、不写库。
@@ -384,9 +385,8 @@ def match_news_events(
         if event_id in seen_events:
             continue
         seen_events.add(event_id)
-        recency = 1.0
         tier_f = float(tier) if isinstance(tier, (int, float)) else 3.0
-        score = recency * (6.0 - min(tier_f, 5.0))
+        score = min(max(tier_f, 1.0), 5.0)
         hits.append((score, {
             "time": str(published_at)[5:16],
             "title": (title or "")[:60],
