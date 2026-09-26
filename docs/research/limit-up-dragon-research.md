@@ -543,3 +543,31 @@ ST 全身份、市场多状态、purged walk-forward、可成交 fill／成本�
 龙头／题材持续性和独立人工 Jev anchor。RSH-031 的完整阶段验收仍未达到；
 原任务在 W04 转为`待条件`，不重开平行任务。取得有许可且可核时间／修订的缺失数据，
 再启动剩余机制、语义与交易实证；本次负结果和版本化资产继续保留。
+
+## 17. 免费历史来源的定向实测（2026-09-27）
+
+用户要求继续寻找无需付费的缺失证据。本轮只对公开入口做少量只读探针，
+不注册收费服务、不抓取全市场文本或逐笔数据，也不把检索到的接口文档当作已取得的数据。
+原 §15 的固定评分与保留段均未重算。原始巨潮响应仅留在忽略的
+`artifacts/runs/rsh031-free-source-audit-20260927/`；以下为可公开的脱敏元数据。
+
+| 候选 | 本轮证据 | 可用边界／结论 |
+| --- | --- | --- |
+| [巨潮资讯公告列表](https://www.cninfo.com.cn/new/commonUrl?url=disclosure%2Flist%2Fnotice) | 公开 `hisAnnouncement/query` 在 2020-08-24、2025-10-09、2026-08-31 的单页请求均 HTTP 200；分别报告 700、995、1,528 条，单页 30 条。2025-10-09 的 `300689` 公告 ID `1224703702` 返回 `announcementTime=1760015788000`（北京 21:16:28），[对应 PDF](https://static.cninfo.com.cn/finalpage/2025-10-09/1224703702.PDF) 的范围请求返回 206 且以 `%PDF` 起始。随后用 `backend/scripts/rsh031_cninfo_notices.py` 完整采集该日：34 页、995 个唯一 ID，原始页 SHA-256 `8b710809f62cb51d8fc9f2f1b1b9e37082e96d8f0fb6ba0ae8daf79f0d84c26b`；同日显式 `plate=sz/sh/bj` 的源计数分别 760／183／52，合计 995。 | 第 33 页仍 `hasMore=true`，第 34 页剩 5 条，而响应 `totalpages=33`；不能按该字段停页。995 条中 590 条时间为北京 00:00，明显不适合作精确盘前时刻。与当天两池 126 个代码相交的 19 条公告中，16 条标早于 09:25、3 条晚于 09:25；前 16 条包含日期占位风险，不能据此宣称盘前可见。已证实**源声称的披露日期／部分时刻和附件身份**可查，未证实首次可见、修订链或全期新闻覆盖。对单股定向查询返回 2 条但 `totalpages=0`；只改 `column=sse` 也得到与深市相同响应，须核 `plate` 与返回代码。 |
+| [聚宽历史概念成员](https://www.joinquant.com/help/data/stock) | 官方文档提供 `get_concept_stocks(concept_code, date)`，可按历史日期查询；本机未发现已授权账户或本地 JQData，未能调用、核实际覆盖／修订／免费额度。 | 保留为需实际账户权限和点时验证的候选，未导入当前题材成员。 |
+| [CNEquity 申万行业回填](https://github.com/rootSunc/CNEquity) | 开源实现指向申万 `StockClassifyUse_stock.xls`，含股票纳入日期；本机对申万原址 HEAD 得 HTTP 502。 | 即使恢复，也只供行业匹配基线；申万行业不等于动态题材成员，且须核分类发布时间、变更与使用权。 |
+| [国证指数历史样本](https://www.cnindex.com.cn/zh_indices/sese/index.html?act_menu=1&index_type=-1) | 国证公开目录返回 1,479 个指数，含机器人50（399283）、新能源车（399417）。对这两只主题指数及中小板指（399005）的官方 `sample-detail/download-history` 实际下载均为 HTTP 200 XLSX，但每份只含 2026-08-31 一个截面，分别 50／50／100 行；官方 `download-adjustment` 对三者均返回 45 字节非 XLSX 文本。 | 当前入口不足以重建 2025-10 至 2026-08 的历史题材成员。指数样本本身也不是全市场动态题材全集；AKShare 文档中展示多日期历史的示例不能替代本次原址响应。 |
+| [QuantMind 公共数据集](https://www.modelscope.cn/datasets/qusong0627/LightGBM_Alpha300) | ModelScope 官方 API 标记该数据集公开、无登录要求；实际下载 `2_base_sector/sector_concept/sector_members.parquet` 为 175,071 字节，SHA-256 `1b0c81fd28f95907aed55e3eb0f25313d7fa4fcb61f6e3f9bf03b2681b9e22e9`，79,447 行，但仅有 `SectorCode/SectorName/SectorType/Symbol` 四列，**没有日期、纳入／移出时间或版本**。 | 可作当前板块目录参考，不能按宣传页“全历史”字样把这份快照回填到旧日。数据包中的 L2 因子也不等于逐笔委托队列或反事实 fill。原始文件只留本机忽略的研究资产，不向公共仓库再分发。 |
+| [BigQuant 免费基础因子](https://bigquant.com/data/datasources/cn_stock_factors_base) | 官方页面标“免费”，列 `st_status`、`list_date/list_days`、`suspended`、涨跌停价和申万行业代码，日期始于 2005；本机无已授权账号／实际查询结果。 | 是补历史身份和行业匹配的优先可核候选，但页面字段与免费标记不等于已取得全期同口径数据；需实际登录后抽旧／近期日期，交叉核已知 ST 反例、缺失率与导出许可。不能替代动态题材或委托队列。 |
+| [BaoStock 历史证券身份](https://www.baostock.com/) | 免费匿名接口 `query_history_k_data_plus` 逐股采集 2025-10-09 至 2026-08-31 的 `isST/tradestatus`，`query_stock_basic` 给上市日期。对本机 5,214 只沪深证券完整取得 1,138,688 行状态；原 1,122,700 证券日分母 **0 缺失 ST、0 未知 ST**，其中 35,445 ST 日、481 停牌日；17,393 条涨停池与该源 **0 缺失、0 ST 冲突**。源查询断点与校验由 `backend/scripts/rsh031_baostock_status.py`、`rsh031_identity_audit.py` 复现；原始状态 SHA-256 `a975551c2805ede9863e6e427430de4ab945c8b0b2118cd1ca95854c7334f4eb`。窗口内新上市证券的前五交易日与涨停池相交 0 条；20 条分层池样本的独立手核为 20／20 一致。 | **近期窗口的历史身份覆盖缺口已补**，但源未给逐日标志何时发布或修订，不能据此认证开盘前可见；也不覆盖 2016–2023 探索段的完整旧证券宇宙。原冻结分母含 1,098 条 ST 首板（探索 542、验证 192、保留 364），须以独立诊断而非改写旧保留段处理。停牌／新股规则仍需和各板当期交易制度交叉核验。原始数据仅在本机忽略资产，不提交仓库。 |
+| [开盘红历史成员封装](https://github.com/fleetinglife/levistock)／[涨停客历史题材页](https://zhangtingke.com/ticai_stocks?date=20251017&ticainame=%E7%85%A4%E7%82%AD) | 前者源码有历史日期参数，但 MIT 仅约束封装代码，未证明上游数据许可或免费长期可用；本轮未调用其移动端接口。后者网页实际要求微信登录并开通 VIP 才可看成分。 | 均不能作为已取得的免费点时题材全集；没有以另一条路径绕开会员限制。 |
+| [Tushare 开盘啦题材成员](https://tushare.pro/document/2?doc_id=351)／[东财每日成员](https://tushare.pro/document/2?doc_id=363)／[ST 列表](https://tushare.pro/document/2?doc_id=397) | 官方文档分别要求 5,000／6,000／3,000 积分，东财每日成员从 2024-12-20 起。 | 本机无已授权凭据及积分证明，未调用或付费；文档样例不能当本任务已取得样本。 |
+| [StockApi 历史逐笔](https://www.stockapi.com.cn/menu/18)／[开放 Level-2 样本](https://huggingface.co/datasets/alphat04/Tick-by-Tick-Orders-China/blob/main/README.md) | 前者自述每日免费 1,000 次，但只保留近 10 个交易日；本机对 2026-09-23 单股请求 HTTP 200、响应体 0 字节，未取得逐笔。后者为人工审核的学术非商业授权数据，2026 年页列 99 天约 480 GiB，并有缺股日。 | 都未提供本次固定 2025-10 至 2026-08 窗口内可用、许可明确的全市场委托／成交序列。成交打印或日线成交量本身不能证明涨停价委托在队列中可成交。 |
+| [Hugging Face 历史 Level-2 归档](https://huggingface.co/datasets/venvoo/china-a-share-l2-level2-limit-order-book-tick-data) | 数据卡列 2017–2026 年逐日十档、逐笔委托与成交，至 2026-08-31 的清单有 2,346 日，仓库总量 6.27 TB；同时明确“三文件存在”不保证当日完整。访问须登录、点赞、关注、申请并接受 `research-use-only` 条款；本机无该数据集的已批准访问凭据，未下载或核对任一市场文件。 | 是队列／fill 验证的具体候选，但目前只有来源自述，不能当已取得数据；即使获准，仍要固定 revision、逐日核覆盖和许可，并做有界抽样，不能以磁盘不足为由略过全分母验收。 |
+
+因此免费来源**新增了可复核的部分公告披露时间，并补齐近期证券日的 ST／停牌和上市日期覆盖**；仍未取得完整新闻首次可见／修订、
+历史动态题材、临板前分母、逐日身份发布时间和涨停队列 fill。尚不能以“存在
+历史接口”宣称 RSH-031 完成或将旧保留段升级为无污染盲测。若后续只用公告文本，
+逐条存源 ID、附件摘要、源披露时间、实际采集时间与更正链；任何交易时点晚于
+信号的公告必须排除。新的前向免费逐笔与日常成员快照需要**另冻结新的观察窗口**，
+不得回写 §15–16 的既定保留段或把后采快照冒充旧日点时事实。
