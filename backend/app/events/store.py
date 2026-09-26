@@ -473,7 +473,11 @@ class EventStore:
         age_hours = (now - published).total_seconds() / 3600
         return 0 <= age_hours < row.half_life_hours * 2
 
-    def list_events(self, *, active_only: bool = True, limit: int = 30) -> list[EventCard]:
+    def list_events(self, *, active_only: bool = True, limit: int = 30,
+                    published_since: datetime | None = None,
+                    visible_at: datetime | None = None,
+                    status: str | None = None,
+                    exclude_pending: bool = False) -> list[EventCard]:
         # 卡片、方向与最新解释须来自同一条 SELECT。分次读取时，修订可在方向与
         # 版本查询之间提交，使旧方向错误地绑定到新的 pending/active 版本。
         from sqlalchemy.orm import joinedload
@@ -486,6 +490,21 @@ class EventStore:
             stmt = select(EventCard, EventInterpretation).outerjoin(
                 EventInterpretation, EventInterpretation.id == latest_id
             ).options(joinedload(EventCard.directions))
+            # Non-active consumers can request an evidence window without
+            # half-life filtering. Apply it before LIMIT so future/withdrawn
+            # cards cannot crowd out older visible evidence.
+            if published_since is not None:
+                stmt = stmt.where(EventCard.published_at >= published_since)
+            if visible_at is not None:
+                stmt = stmt.where(
+                    EventCard.published_at <= visible_at,
+                    or_(EventInterpretation.id.is_(None),
+                        EventInterpretation.effective_at <= visible_at),
+                )
+            if status is not None:
+                stmt = stmt.where(EventCard.status == status)
+            if exclude_pending:
+                stmt = stmt.where(EventCard.revision_pending_at.is_(None))
             if active_only:
                 # 先在 SQL 排除过期卡，再做 LIMIT；否则近期短寿命卡可占满窗口，
                 # 把较早但仍有效的政策卡从精选、简报等消费者的结果中挤掉。
