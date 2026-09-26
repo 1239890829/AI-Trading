@@ -9,7 +9,7 @@
 - 协作采用双模式：正常模式由网页 ChatGPT 负责计划/阶段账本/独立审核、Codex 执行获准切片；用户明确授权 `DEGRADED_FULL_CONTROL` 时，网页端可临时承担规划、实现、自审、PR/CI、发布、合并与清理全链路，但必须走独立的 `DegradedRelease` 精确 HEAD 回执，不得伪装成独立 Review。协作协议与人工介入点见 `docs/collaboration-workflow.md`。
 - **2026-09-24 临时用户授权**：本机 Codex 可在 `DEGRADED_FULL_CONTROL` 下担任全权执行者，直到用户明确说“改回来”或撤销。此期间不等待网页 `Preflight` / 独立 `Review`；Codex 自行做 U49 反证并以 `DegradedRelease` 明示作者自审。每个 PR 仍须准确 HEAD、完整本地门禁、required CI、`release_check.py`、合并后 CI 与分支清理。仅覆盖协作角色，不扩大业务、资金、模型或跨门权限；细则见 `docs/collaboration-workflow.md` §3.3a 与 `docs/handoff.md`。
 - 唯一文档入口：`docs/INDEX.md`；执行治理：`docs/retro-and-gaps.md` §5.9（G0–G5/GX）；领域索引：§6.0（W00–W09）；任务状态与调度元数据在所属阶段页单点维护。
-- 施工取舍：最新用户要求与 docs/implementation-plan.md 的 v9.12 明确修订优先；原 v9 未修订部分保留，旧项按真实价值复核，登记不等于必须实施。
+- 施工取舍：最新用户要求与 docs/implementation-plan.md 的 v9.13 明确修订优先；U52–U55 已确认；原 v9 未修订部分保留，旧项按真实价值复核，登记不等于必须实施。
 - 当前现场与实测：`docs/handoff.md` §1；经验按 `docs/kb/00-INDEX.md` 定位。
 - 接续工作：`skills/ashare-ledger-continue/SKILL.md`；当轮交接：`skills/ashare-task-handoff/SKILL.md`。总账 `docs/retro-and-gaps.md` §5.9 的 G0–G5/GX 是唯一执行门序；每次“继续”先运行 `scripts/ledger-runtime-selection.py` 重算 stage 明示的受支持 `运行条件`。G0–G4 有 actionable blocker 时取最低 blocker 门；**全部 blocker 清空后回落到最低仍有 actionable non-blocker 的普通门**，再按角色/P0-P2/门内序领取一个切片；G5/GX 不进入普通 fallback。运行条件只临时影响本轮选择，不改写 stage 静态状态；硬依赖未完成不得跨门；`CROSS_GATE_EXCEPTION` 只能由网页在 handoff 明示。
 - 盘后复盘：`skills/ashare-daily-review/SKILL.md`，流程与逐项核验归既有 SOP / checklist。
@@ -89,7 +89,7 @@ python3 scripts/doc-health.py
 
 ## 2. 方案主导与评估纪律
 
-执行用户指定的最终融合方案 v9 及配套附件，并应用 docs/implementation-plan.md 的 v9.12 当前修订；该方案已累积吸收此前增量与 U49，最新用户指令优先。旧账本只提供问题证据，不自动产生施工义务；项目机制、流程、交接、设计及架构均可审视和调整。
+执行用户指定的最终融合方案 v9 及配套附件，并应用 docs/implementation-plan.md 的 v9.13 当前修订；该方案已累积吸收此前增量与 U49，最新用户指令优先。旧账本只提供问题证据，不自动产生施工义务；项目机制、流程、交接、设计及架构均可审视和调整。
 
 先核当前代码、已合并成果与真实消费者，再比较现状、最小修补和替代方案。只推进收益显著、可靠且风险可控的改动；清楚写用途、依据、影响面、成本、验收及恢复路径。允许有理据偏离方案，但性能不得劣化、关键机制不得削弱；优化用可比测量和行为证据证明，不宣称未证实的“全局最优”。无法证明的主张保留为待验证条件。
 
@@ -212,3 +212,10 @@ Jev 的唯一现役项目蓝图是 `docs/ai/jev-integration.md`，状态归 W08/
   本环境 `github.com` 需走本地代理 `127.0.0.1:7897`（沙箱代理 51931 到不了），`api.github.com` 可直连。
 
 ---
+
+## 7. 已批准产品与模块治理（U52–U55）
+
+用户已确认全域方案v1.3，现行总方案v9.13。导航/业务能力/组件视图/账本阶段分别拥有边界；名称、数量、合并拆分、子功能归属与风格可按证据改变。B/C是获准比较路线而非已验赢家，具体定义读产品闭环，覆盖读细功能审计。
+业务判定/规则/费用/风险/标签与受控运营在后端；正常用户命令仍可前台发起，表现和私有草稿不机械后台化。迁出按钮前验证后台触发、单写者、幂等、持久结果、失败/取消/恢复、权限与维护入口；GET不制造业务样本/计费/外发。
+组件/JEV先核真实需求与来源，保留现状/最小修补/弃权；研发共审不冒充股票业务贡献，不展示隐藏思维链。UI正确性不等待事件gold或G4工具化。按同任务/同输入检验查找、键盘、焦点、scope、前后版本与性能。
+确认方案只授权规划与文档传播，不改变当前执行者、发布回执或部署边界；后续重跑selector，不重做已完成IMP-048。

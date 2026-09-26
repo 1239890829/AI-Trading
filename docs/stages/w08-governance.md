@@ -35,6 +35,7 @@
 - **恢复**：26a0c44和项目回收记录保存旧文件；恢复只作调查且不覆盖目标，不恢复旧自治目标或撤销金融/CI保护。
 - **分工**：正常模式网页方案/账本/独立审核，Codex执行；`DEGRADED_FULL_CONTROL` 激活时网页全权闭环，用户只需明确进入/退出降级或提出重大取舍。Bridge个人App/扩展/对话未卸载删除，不影响本流程。
 - **2026-09-24 临时执行者例外**：用户明确授权 Codex 在 `DEGRADED_FULL_CONTROL` 下免网页审核推进，直到要求“改回来”；Codex 的 U49 作者反证和 `DegradedRelease` 不冒充独立 Review。required CI、发布检查及主干复验不降级。活动状态见 handoff，撤销后恢复上行默认分工；此记录不改变 GOV-022 原状态/门序。
+- **U52/U55规划协调（P01/P02/P03，2026-09-26已批）**：本次只实现文档/Skill传播；U01–U55落点、需求集合/引用职责/旧当前指针核对；保护原用户diff，修Governor格式，真实宿主加载另留未验。区别dependency_ready、evidence_ready、authorization、runtime_condition：只有原selector支持的条件可激活，Jev不改任务状态。菜单/业务/组件/账本四边界独立，新模块不映射为新G门；原任务装不下的独立范围允许有据新任务，不受32提案数量限制。B/C与子功能定义归产品，旧新覆盖归细功能，业务写者按原owner，不能全部交给IMP-050。
 
 ## GOV-024
 
@@ -54,6 +55,7 @@
 - **证据**：PR #31–#34 已依次合入 Jev adapter/影子路由、价值审计与 capability routing 收敛、Universal Verification/gold-set、预标注与审核优先级；jev-1.13.0 smoke、JevRouter 权限过滤、metadata-only usage 均已有证据。旧 jev-route 因不能真正切宿主模型且固定增加一轮调用已退出。2026-09-21 审计时项目 ledger 为 172 calls / 169 success / 3 failed，主用途 alert_triage 与 event_llm_aux；bounded live smoke 再次成功。网页 ChatGPT 当前**没有原生 TypeSafe tool**，但在用户授权的本机连接下可通过统一 `jev_client` 调用，本轮已实证；Codex 更适合作为代码实施 owner 并可加载 TypeSafe Agent Skill，但 Jev 仍只承担 bounded decision/review，不替代 Codex 或确定性测试。
 - **下一步**：以 RSH-030 人工金标准和长期 token A/B 决定 shadow/cascade 与组件去留，不以 demo 或单次 confidence 调生产阈值；额外验证 assistant tool-router 的真实 shadow 调用/telemetry。对 RSH-026/IMP-044/IMP-020 这类高影响多轮任务，允许在 release 前按价值选择一次 Jev semantic review，但只作旁路反证，不把“没调用 Jev”本身判为缺陷。
 - **恢复**：任一 Jev 组件失效时回退确定性规则/现有 LLM 路径；不扩大权限、不修改真实交易硬门。
+- **U53–U55调用范围（P29）**：JEV开发共审、组件选型、模块划分与业务凭证严格分开；复用统一客户端和原预算/权限，材料最小化、版本固定、unknown/timeout/schema/basis失败显式。confidence不是真值、不代表采用批准；不新增每任务必调、不扩大费用/生产权限。
 
 ## GOV-025
 
@@ -73,6 +75,7 @@
 - **证据**：2026-09-19 首轮外部核查已覆盖 TypeSafe/Jev、Microsoft RD-Agent/Qlib、OpenHands、MCP Registry/A2A、QuantConnect LEAN/vectorbt、TSFM/金融 Agent benchmark 等方向；结论按候选/参考/观察分级，没有把外部项目自报收益写成本项目效果。PR #42 已把 v9.5 continuous-evolution 蓝图、ashare-innovation-radar Skill、反固化/不可信外部内容/证据过期与停止规则、传播守卫合入 `master`（merge `d51f3209`）；准确 head `b3b239ef` 的 backend/frontend/docs CI #381 与 release_check 全绿。 2026-09-19 已启用每周一次、仅高价值变化才通知的 ChatGPT 条件雷达作为低频真实试运行；它只做外部发现/反证提醒，不安装、不付费、不扩大权限、不创建施工或自动采用。
 - **下一步**：从 `master` 用真实雷达轮验证发现质量、漏发现与噪声；优先挑能挑战当前真实瓶颈且成本低的少量 SHORTLISTED 做 E2/E3，不为填清单实施。先以低频、只通知高价值变化的外部监测积累证据；多轮证明净收益后再决定是否提高频率或增加自动实验。
 - **恢复**：停用雷达或降低频率不影响生产；原始扫描留忽略 artifacts，未准入候选不得改变运行配置、策略、权限或真实外发。
+- **U53–U55雷达范围（P29）**：将候选模块/组件/布局纳入有任务驱动的既有雷达；官方资料/固定版本、许可/安全/兼容/成本、真实消费者与基线先核。外部热度只产线索，不常驻扫组件市场、不自动安装/采用；无独立任务的事件/研究/风险一级入口WATCH并写重开条件。
 
 ## GOV-026
 
@@ -92,6 +95,7 @@
 - **下一步**：持续治理：每轮交接运行 workspace-hygiene + doc-health；若命中应用专属目录/隐藏规则、大型临时资产、docs 根目录回堆或未知分类目录，当轮修复。2026-09-21 审计已清约 **2.0GiB** 已合并/替代 worktree/临时克隆 + **4.3GiB** 过期 RSH-026 SQLite 副本；同日晚间宿主盘点又发现 WorkBuddy 两套 sandbox 日志一度约 10.5GiB 并随后自动收缩，人工清其余日志/qmd/Homebrew/node-gyp/TypeScript/Prisma 等纯缓存，Data 卷可用空间由约 71GiB 回升到约 87GiB。最终卫生复核又确认 pytest 的两个 import-time `mkdtemp()` 从 9/19 起累计留下 485 个 `ashare-test-data-*` + 486 个 `ashare-test-review-reports-*`；它们合计仅约 4.8MiB，不是本轮磁盘主因，但生命周期确实未闭环。无 open handle 后已清零，同时清理已完成 IMP-006 测试沙箱约 835MiB、RSH-026 `legacy-test` SQLite 测试副本约 442MiB及少量旧文档沙箱，Data 卷可用空间约 88GiB。测试隔离目录改由 `TemporaryDirectory` owner 持有并在 pytest session 收尾显式 cleanup，进程正常退出另有标准库 finalizer 兜底；不新增第二清理脚本、不触碰业务数据。真实 `data/ashare.db`、`data/parquet`、marketdb、运行 JSON、依赖环境和唯一未合入 `54b7e0c` RECOVERY 均保留。长期要求 merge/post-merge 后有机械 cleanup check，而不是等用户再次提醒；外部/宿主工具目录继续按所有权 fail-safe，不纳入无差别自动删除。它保持 GX 伴随角色，不改变 G0 主任务门序。
 - **恢复**：tracked 文档/规则从 Git/PR 恢复；恢复资产在相关变更合并并完成一次准确版本复核前不得清；本机业务数据与外部资产不进入自动删除面。门禁误报时先停自动清理，只保留 report/check 模式，不扩大删除白名单。
 - **分工**：网页负责保留/退出语义、账本与审计；执行侧维护/运行 hygiene gate 与清理证据；用户无需逐轮提醒“删缓存”，只有所有权/跨项目/唯一恢复证据不确定时才需要人工裁决。
+- **U52资产范围（P28）**：批准传播的隔离worktree、原用户diff恢复包、紧凑验证记录有owner与保留/退出条件。活动未合分支和唯一证据不得清理，原dirty tree不覆盖；批准记录公开只留脱敏指纹和Git引用，不提交主机绝对路径或密钥。
 
 ## GOV-027
 
@@ -111,6 +115,7 @@
 - **证据**：当前已有局部基础：factor-lifecycle-governance 已定义因子入库/使用/出库/衰减，strategy-registry/RSH-026/IMP-020 提供策略与效果证据，RSH-027 负责知识正文/引用增量，RSH-030 与 Jev usage/gold 负责语义能力质量和成本，IMP-049/053 负责猎场 opportunity/reference/shadow 真实性；这些仍是各自 owner，不因本项登记自动变为已实现的统一运行机制。2026-09-20 又将多轮项目治理方法蒸馏为项目中性 `skills/living-system-governor/`：它只提供 Context Snapshot、KEEP/FIX/MERGE/EXPERIMENT/WATCH/RETIRE、反证/生命周期/成本审计等上层协议，不拥有 stage 状态、生产准入或自动晋级权，因此其入库不把 GOV-027 标成已完成。 同日 v1.2.0 在既有自我进化基础上新增 U49 主动缺陷发现门；Skill 自身继续纳入生命周期：持续观察后续用户长期要求/重复纠偏，但只在稳定复现、明确长期授权或真实复盘证明缺口时蒸馏，并区分 Core/领域扩展/经验反例；一次性要求不固化，新增前先合并/删除重复，实质变化以版本 + Git/PR + 后续行为证据证明。
 - **下一步**：本项作为 GX 伴随治理，不改变当前主门。2026-09-21 本轮已用 Governor 做第一次跨域真实审计并产出 `docs/review/chatgpt-multiwindow-audit-20260921.md`：结论是现有 owner 足够，不建总注册表；优先把 condition activation、runtime/master drift、Jev human-gold/assistant usage、IMP-053 fill identity 与 worktree lifecycle 回写原 owner。后续按领域把衰退/知识贡献/成本 A/B 接到既有报告；任何生产降权、阈值变化或策略晋级仍回对应 owner task 与原证据门。
 - **恢复**：若统一 metadata/report 增加复杂度却没有改变审核/退役/成本决策，删除跨域聚合层，保留原领域生命周期；历史证据和退役结论不因回滚被抹除。
+- **U53–U55生命周期子范围（P01/P29）**：扩展治理对象到模块边界、组件/布局选型与JEV共审；KEEP/FIX/MERGE/EXPERIMENT/WATCH/RETIRE必须带用途、消费者、版本、基线、反证、成本、恢复与重开。模块名称/数目可变，但稳定导航不能由模型每次重排；低频安全不因使用率删除。核心Skill与领域扩展分层，修格式/文本不等宿主加载已验证。
 
 ## GOV-019
 
@@ -171,6 +176,7 @@
 - **恢复**：回退优化时保留有效检查，费用/仓库可见性/权限不变。
 - **退出与覆盖**：9d439c5减少的44项只属于已退役互调原型，业务测试未删除；安全性移除应用内宿主测试不等于云端测试削减。不宣传退役专属测试为业务覆盖或CI速度提升。
 - **历史教训去向**：61bb122的测试注册顺序问题、57a8bd2及前基点的本地日历依赖曾由干净检出暴露；保留原准确SHA/日志和修复证据，今后继续查运行环境/顺序依赖，不把这些长日志复制进每轮交接。
+- **U52成本范围（P28）**：持续比较相同断言/版本下完整CI安装/测试/job和重复触发成本；保留最新四worker实测边界，不拿本机加速宣称Linux长期账单节省；不为测价格额外重复触发Actions，不削弱required checks。
 
 ## 已交付基线与持续规则
 

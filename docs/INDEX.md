@@ -2,7 +2,7 @@
 
 > 定位：**docs 唯一入口**。查东西先来这里；写新文档必须在此登记。
 > 维护约定：状态在所属阶段单点更新，成果提炼与恢复按 `kb/07-doc-curation.md` §3.2；新建/迁移同步本表，未知资产不删除。
-> 当前入口（2026-09-24）：从最新 `master` 的 `AGENTS.md` → 本索引；`retro-and-gaps.md` §5.9 是执行门序治理、§6.0 是 W00–W09 领域索引，`stages/` 存任务唯一状态与调度元数据，`handoff.md` 仅存当前主门/现场。 `implementation-plan.md` 是 v9.12 规划修订，不单独定义当前执行模式；允许动作以最新 `handoff.md` + 所属 stage 为准。分工与逐轮审核见 `collaboration-workflow.md`；旧平台目录已退休，历史迁移证据归 `archive/platform-directory-migration-20260920.md`。
+> 当前入口（2026-09-26）：从最新 `master` 的 `AGENTS.md` → 本索引；`retro-and-gaps.md` §5.9 是执行门序治理、§6.0 是 W00–W09 领域索引，`stages/` 存任务唯一状态与调度元数据，`handoff.md` 仅存当前主门/现场。 `implementation-plan.md` 是 v9.13 规划修订，不单独定义当前执行模式；允许动作以最新 `handoff.md` + 所属 stage 为准。分工与逐轮审核见 `collaboration-workflow.md`；旧平台目录已退休，历史迁移证据归 `archive/platform-directory-migration-20260920.md`。
 
 ## 0.0 书库编目（编号 / 层 / 领域 / 用途）
 
@@ -25,7 +25,7 @@
 | **AG-07** | `handoff.md` | L2 | 交接 | 当前工作区、实际运行版本、最近门禁与交付；不另建任务记录 |
 | **AG-08** | `archive/platform-directory-migration-20260920.md` | L1 | 工程治理历史 | 旧平台目录迁移/恢复/最终退休证据；`GOV-018` 已完成，禁止恢复为现役入口 |
 | **AG-09** | `stages/` | L2 | 阶段任务 | W00–W09，各 ID 仅一份状态/验收/证据；P/Q 校验 |
-| **AG-10** | `implementation-plan.md` | L2 | 当前实施修订 | v9.12：living plan；继承 G0–G5/GX、U48 生命周期与 U49 主动缺陷发现门，并新增 U50 降级全权闭环、U51 Jev 应用与更新降级；状态仍归阶段 |
+| **AG-10** | `implementation-plan.md` | L2 | 当前实施修订 | v9.13：living plan；继承 G0–G5/GX、U48 生命周期与 U49 主动缺陷发现门，并新增 U50 降级全权闭环、U51 Jev 应用与更新降级；状态仍归阶段 |
 | **AG-11** | `collaboration-workflow.md` | L2 | 协作审核 | 账本驱动；网页统筹审核、Codex执行，用户一句话触发，`master` 共享入口与原型退出 |
 | **AG-12** | `product/product-closure-design.md` | L2 | 产品闭环 | 全模块用途、前后台分工、业务/研究/工程链和确认流程图；非已上线报告 |
 | **AG-13** | `product/feature-closure-audit.md` | L2 | 细功能审计 | 大小动作/接口/后台任务的覆盖、源码发现与未验边界；任务状态仍归阶段 |
@@ -63,6 +63,7 @@
 | **RV-06** | `review/imp052-promotion-approval-20260922.md` | L2 | 审计 | IMP-052 参数晋级独立批准、证据绑定、原子消费与 U49 反证证据 |
 | **RV-07** | `review/imp052-budget-cancel-20260922.md` | L2 | 审计 | IMP-052 统一 usage/token、跨进程配额、输入输出预算、取消传播与部署日回填证据 |
 | **RV-08** | `review/jev-system-scan-20260924.md` | L2 | 审计 | U51 全系统扫描、31 项未完成任务逐项对照及 living-system-governor 同作者自审；时点证据，不维护任务状态 |
+| **RV-09** | `review/system-plan-v13-approval-20260926.md` | L2 | 规划确认 | 用户确认v1.3的来源指纹、U52–U55边界与原位传播；不是新任务账本 |
 | **DR-01** | `daily-review/` | L1 | 存档 | 逐日复盘报告（YYYY-MM-DD.md） |
 | **DR-02** | `repo-watch/` | L1 | 存档 | 仓库周期性跟踪周报 |
 | **DR-03** | `evolution/` | L1 | 存档 | 进化议程每日执行日志 |
@@ -144,7 +145,7 @@
 | **T3 数据源与行情口径** | `data/data-source-comparison.md` → `data/data-sources.md` | `system/data-dictionary.md` · `system/websocket.md` | 时效按数据类型、交易日历与来源可见时间判定；盘前/休市可用上一有效交易日，盘中旧数据不能冒充当前；不以一律“今天”或固定TTL替代业务语义 |
 | **T4 选股与策略** | `product/hunting-decision-design.md` → `kb/00-INDEX.md` 选股表 | 历史涨停/龙头研究 `research/limit-up-dragon-research.md` · `summary/stock-strategy.md` · `strategy/strategy-registry.md` · `strategy/factor-lifecycle-governance.md` + `strategy/factor-candidates.md` | **示例 ≠ 规范**；赢家复盘≠预测能力；策略/因子落地**必须先过点时全分母、OOS/前向和成本实证**；回测禁令见 `strategy/backtest-rules.md` |
 | **T5 复盘与治理** | 复盘 `kb/06-review-framework.md`；执行治理 `retro-and-gaps.md` §5.9/§6.0 | `plan-registry.md` §1.1/§1.3 · `collaboration-workflow.md` · `handoff.md` · `kb/07` · `kb/11` | W只管归属、G0–G5管门序、P0–P2管门内重要性；硬依赖未完成不得跨门；任务只在 stage 单点维护 |
-| **T6 前端与 UI** | `summary/architecture-design.md`（§1 跨页面联动设计） | `system/architecture.md` · `kb/03-engineering.md` | **验收以实际渲染为准**（agent-browser 文本通道）；**新增页面/板块需先论证**；**详情弹窗化**（个股/指数在任何页面就地弹窗，不跳工作台）见 [[KB-ENG-92]] |
+| **T6 前端与 UI** | `summary/architecture-design.md`（§1 跨页面联动设计） | `system/architecture.md` · `kb/03-engineering.md` | **验收以实际渲染为准**（agent-browser 文本通道）；**新增页面/板块需先论证**；U54/U55按任务比较inline/Drawer/Modal与大画布；旧KB-ENG-92为历史，不固定所有详情形态 |
 | **T7 外部工具与技能** | `ai/continuous-evolution.md` → `skills/ashare-innovation-radar/SKILL.md` | `ai/jev-integration.md` · 本表 **WB-04** · `system/llm-gateway-probe.md` | 外部热度只产候选；先许可/隐私/费用/权限硬门与证据梯度，未经 owner stage 不安装/准入 |
 | **T8 决策与"为什么当初这么定"** | `kb/04-decisions.md`（KB-DEC） | `archive/ledger-transition-20260917.md` · `implementation-plan.md` | 既有决定可依新证据和最新授权复核；保留取代关系与依据，不据历史标题锁死设计 |
 | **T9 提醒与通知链路** | `summary/pick-signal-chain.md`（**先读它**：定位/触发/流向/断点） | `services/alert_triage.py`（判读闸门）· `api/routes/notifications.py`（通知收口）· `picks/watcher.py::dispatch_alert`（唯一汇聚点）· `services/push_policy.py` | **收敛口径时必须回扫自称该口径的注释**（`IMP-028` 遗留 5 处过期断言，见该文 §G4）；**判读闸门现状只作用于悬浮球**（§G1）；改通知来源须同步 §3.1 规则清单 |
@@ -328,3 +329,8 @@
 - architecture-linkage-plan-2026-09-01.md → **已删除**（计划已执行/被现役产品与架构方案吸收；精确原文从 Git 恢复）
 - minute-chart-plan / assistant-optimization-plan / ui-redesign-plan → 计划已执行进代码，但仍有活引用，迁移引用后再按 kb/07 §6 退休
 - 更早：full-project-review / system-review / theme-audit（09-01 批次）
+
+## 7. U52–U55确认后的产品入口
+
+总方案v9.13记录批准取舍；product/product-closure-design.md定义B/C任务导航、前后台、组件与六闭环；product/feature-closure-audit.md保存50项/18域/73源/30后台声明去向；ai/jev-integration.md附录B区分研发共审/业务凭证。确认与未完成传播见RV-09。
+Skills写入批次被平台安全拦截，本候选未完成相关Skill更新；不要将本索引的规范传播当作宿主加载或全链完工。阶段状态与顺位均在所属stage，不以下载报告/导航命名替代。
