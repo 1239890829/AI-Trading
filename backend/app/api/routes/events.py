@@ -624,9 +624,12 @@ async def backfill_directions(
         return {"data": {"scanned": 0, "filled": 0, "note": "题材目录未同步，跳过（不臆造方向）"}, "meta": {}}
 
     # 2026-09-09 时区口径：published_at 统一北京 naive，cutoff 也用北京 naive
-    cutoff = beijing_now_naive() - timedelta(days=days)
+    now = beijing_now_naive()
+    cutoff = now - timedelta(days=days)
     # 同步 SQLite 读搬线程池（2026-09-12）：limit=2000 实测约 83ms——本文件最重的同步阻塞。
-    rows = await asyncio.to_thread(store.list_events, active_only=False, limit=2000)
+    rows = await asyncio.to_thread(store.list_events, active_only=False, limit=2000,
+                                   published_since=cutoff, visible_at=now,
+                                   status="active", exclude_pending=True)
     scanned = filled = 0
     for r in rows:
         if r.revision_pending_at is not None:

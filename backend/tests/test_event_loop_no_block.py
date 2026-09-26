@@ -380,13 +380,13 @@ GUARDED_ROUTES: list[tuple[str, str, str, str]] = [
     ),
     (
         "app/api/routes/events.py",
-        "asyncio.to_thread(store.list_events, active_only=False, limit=2000)",
+        "asyncio.to_thread(store.list_events, active_only=False, limit=2000,",
         "store.list_events",
         "方向回填扫描（limit 2000）——实测 83ms，本文件最重的同步阻塞",
     ),
     (
         "app/api/routes/events.py",
-        "asyncio.to_thread(store.list_events, active_only=False, limit=2000)",
+        "asyncio.to_thread(store.list_events, active_only=False, limit=2000,",
         "store.list_events",
         "题材焦点聚合（limit 2000）——实测 85ms",
     ),
@@ -442,6 +442,8 @@ def test_route_sync_io_calls_are_offloaded(rel: str, needle: str, fn: str, why: 
         f"{rel} 找不到 `{needle}` ⇒ 该调用点未走 to_thread，"
         f"同步调用会阻塞事件循环。阻塞源：{why}"
     )
+    if needle == "asyncio.to_thread(store.list_events, active_only=False, limit=2000,":
+        assert text.count(needle) == 2, "方向回填与题材焦点两处批量读取都必须搬线程"
     bare = _bare_calls(text, fn, async_only=True)
     assert not bare, (
         f"{rel} 的 async 上下文里存在未被 to_thread 包裹的 `{fn}(` 调用：\n  "
