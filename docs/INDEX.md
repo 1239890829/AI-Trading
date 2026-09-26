@@ -257,8 +257,8 @@
 
 | 文档 | 摘要 |
 |---|---|
-| data/data-source-comparison.md | 四源实测对比与选型（改数据源前必读；改完回填） |
-| data/data-sources.md | 接入策略：主源→备源→降级链；**§8 全量清单与使用度审计（2026-09-16）**：fuyao 59 端点 × 已接 23 · TDX 20 数据类方法 × 已用 3 · 零调用/仅测试/单点清单 · **可替代 5 处（首推逐笔改走 TDX）** · 推翻 3 条既有结论 |
+| data/data-source-comparison.md | 四源历史实测对比与选型；现役 IMP-040 消费者结论见 §13（改数据源前必读；改完回填） |
+| data/data-sources.md | 接入策略：主源→备源→降级链；§8 的 2026-09-16 目录快照为 fuyao 23/59、TDX 4/20，§8.10 按消费者处置现役能力、许可未知和重议条件 |
 | archive/external-data-source-survey-2026-09-11.md | **外部付费源调研**（Tushare / FTShare / KlineShare / QuantDash + PTrade）：价格档位 + 能力矩阵 + 与本项目对比。§0–§7 ⚠️ **均为官方公开信息，零实测**；核心结论：**四家均无 L2（最高五档），且两家与我们同源（东财/新浪/ths 二次聚合）**。**§8 = 2026-09-16 复评（本机实测）**：FTShare 免费档实测（v1 通 / v2v3v4 全 403）、**涨停池为本仓 ths 的严格超集（交集 32/32）但无涨停原因**、1000 次/天预算精算（≈191/日，余量 5×）、**四家横向对比 ⇒ 无任何付费源可覆盖免费档 161 项，且 FTShare 免费档本身 ¥0**；**决策 = 不升级付费档**；**§8.10 = 付费档横向排序**（KlineShare 权限矩阵从 `public/v1/catalog` 实测解出；**FTShare 付费档真实价格 19:33 到手** ⇒ **最优单档 = FTShare 基础版 ¥159/月（¥1,908/年）**，**单项最省 = Tushare 研报库 ¥500/年**，**最差 = FTShare 专业版 ¥799/月（零增量且最贵）**）。🔶 未决建议见总账 `retro-and-gaps.md` P2-31 |
 | orderbook-source-evaluation.md | 五档盘口数据源评估（08-29/30，ths 无五档结论）· **已归档** → `archive/orderbook-source-evaluation.md` |
 

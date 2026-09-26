@@ -18,9 +18,10 @@ from app.schemas.envelope import (
 )
 from app.services.quote_hub import QuoteHub
 from app.services.market_snapshot import (
+    PoolDateError,
     default_trade_date,
+    verify_limit_down_date,
 )
-from app.market.trade_calendar import is_trade_day_on, trading_days
 
 router = APIRouter(tags=["market"])
 
@@ -53,18 +54,14 @@ async def limit_down(
     hub: QuoteHub = Depends(get_hub),
 ) -> dict:
     """跌停池。先核交易日身份，避免上游把休市请求回退成前一交易日。"""
-    trade_date = date.fromisoformat(date_str) if date_str else await default_trade_date(hub)
     try:
-        days = await trading_days(hub.provider)
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"交易日历不可用，无法核实跌停池日期：{exc}") from exc
-    if not days or trade_date < days[0]:
-        raise HTTPException(status_code=503, detail="交易日历未覆盖所查跌停池日期")
-    trade_day_state = is_trade_day_on(trade_date, days)
-    if trade_day_state is None:
-        raise HTTPException(status_code=503, detail="交易日历尚未覆盖所查跌停池日期")
-    if not trade_day_state:
-        raise HTTPException(status_code=422, detail="所查日期不是交易日，跌停池不回退到其他日期")
+        trade_date = date.fromisoformat(date_str) if date_str else await default_trade_date(hub)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="跌停池日期格式非法，需 YYYY-MM-DD") from exc
+    try:
+        await verify_limit_down_date(hub.provider, trade_date)
+    except PoolDateError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     try:
         records = await hub.provider.get_limit_down_pool(trade_date)
     except Exception as exc:

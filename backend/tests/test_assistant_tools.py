@@ -27,6 +27,7 @@ from app.assistant.tools import (
     strip_tool_calls,
     tool_manifest,
 )
+from app.market import trade_calendar
 
 
 def _run(coro):
@@ -201,6 +202,26 @@ def test_run_tool_renders_rows():
     out = _run(run_tool(ToolCall("limit_up", {"date": "2026-09-04"}), _ctx(), cache=None))
     assert "涨停池 2026-09-04" in out
     assert "贵州茅台" in out and "白酒" in out
+
+
+def test_limit_down_tool_checks_calendar_and_uses_actual_consecutive_field(monkeypatch):
+    from app.assistant.tools.market import _t_limit_down
+
+    calls = []
+    async def pool(day):
+        calls.append(day)
+        return [{"symbol": "301010", "name": "晶雪节能", "consecutive_days": 2,
+                 "change_pct": -10.0}]
+    async def calendar(_provider):
+        return [date(2026, 9, 24), date(2026, 9, 28)]
+
+    provider = type("Provider", (), {"get_limit_down_pool": staticmethod(pool)})()
+    ctx = ToolContext(provider=provider)
+    monkeypatch.setattr(trade_calendar, "trading_days", calendar)
+    blocked = _run(_t_limit_down(ctx, date="2026-09-25"))
+    assert "不是交易日" in blocked and calls == []
+    allowed = _run(_t_limit_down(ctx, date="2026-09-24"))
+    assert "连跌天" in allowed and "2" in allowed and calls == [date(2026, 9, 24)]
 
 
 def test_run_tool_rejects_bad_symbol():

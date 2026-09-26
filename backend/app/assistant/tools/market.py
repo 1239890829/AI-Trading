@@ -10,6 +10,7 @@ from datetime import date
 from pathlib import Path
 
 from app.market.tdx_tick import fetch_trades_with_tdx_fallback, trades_failure_detail
+from app.services.market_snapshot import PoolDateError, verify_limit_down_date
 
 from .core import (
     TIMEFRAMES,
@@ -52,10 +53,14 @@ async def _t_limit_down(ctx: ToolContext, **kw) -> str:
     d, e = _resolve_date(ctx, kw.get("date"))
     if e:
         return f"参数不合法：{e}"
+    try:
+        await verify_limit_down_date(ctx.provider, d)
+    except PoolDateError as exc:
+        return f"跌停池日期不可用：{exc}"
     rows = list((await ctx.provider.get_limit_down_pool(d)) or [])
     return _fmt_rows(f"跌停池 {d}", rows, [
         ("name", ""), ("symbol", ""), ("change_pct", "跌幅"),
-        ("consecutive_limit_down_days", "连跌天"),
+        ("consecutive_days", "连跌天"),
     ], total=len(rows))
 
 
@@ -479,7 +484,8 @@ async def _t_basics(ctx: ToolContext, **kw) -> str:
         fin = [_rec(f) for f in (await ctx.provider.get_financials(code, 4)) or []]
         for f in fin[:4]:
             lines.append(
-                f"- 财报 {f.get('report_date')}：营收 {_fmt_yi(f.get('revenue'))}"
+                f"- 财报报告期 {f.get('report_date')}（公告日 {f.get('notice_date') or '未知'}）："
+                f"营收（东财口径） {_fmt_yi(f.get('revenue'))}"
                 f"（同比 {f.get('revenue_yoy')}%）｜净利 {_fmt_yi(f.get('net_profit'))}"
                 f"（同比 {f.get('profit_yoy')}%）｜毛利率 {f.get('gross_margin')}%"
                 f"｜ROE {f.get('roe')}%｜EPS {f.get('eps')}"

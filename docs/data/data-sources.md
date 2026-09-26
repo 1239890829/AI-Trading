@@ -214,6 +214,8 @@ quality ∈ high/medium/low/stale/invalid，低质量数据 AI 禁用、回测�
 > 不经 HTTP、不受 WAF 影响 —— ✅ **已于 2026-09-16 落地为降级备源（`IMP-038`，§8.6①）**。
 > **不建议接入**：ths 基金 28 端点（与短线题材定位无关）、`ExTdxClient` 扩展市场（港股/美股/期货）。
 > ⚠️ **本节不另立任务清单**：未完成项一律登记在账本 §6.0（`kb/07 §3.3`）。
+> 以上是 2026-09-16 的目录快照，不是永久的端点总数或接入目标；2026-09-26 对消费者的结论见 §8.10。
+> akshare 是适配层，其东财池与直接调用东财属于同根；不能将表中入口数相加为独立上游数。
 
 ### 8.1 取数方法（可复现，禁凭印象）
 
@@ -240,7 +242,7 @@ quality ∈ high/medium/low/stale/invalid，低质量数据 AI 禁用、回测�
 | 2 | **腾讯** | `app/data_providers/tencent.py` | 无 | 实时快照·五档·日/周K·分钟K·当日分时·搜索 | 6 端点，**实时热链主源** |
 | 3 | **新浪** | `app/data_providers/sina.py` | 无（需 `Referer`） | 快照·五档·个股资金流 | 3 端点，备源 |
 | 4 | **东方财富** | `app/data_providers/eastmoney.py` · `app/market/board_flow.py` · `app/news/flash.py` · `app/market/article.py` | 无 | 涨停/炸板/跌停池·板块·龙虎榜·财务·公告·快讯 | 8 域，**专项主源** |
-| 5 | **通达信 TDX** | `app/market/tdx_kline.py` · `app/market/minute_backfill.py` · `app/services/heatmap_service.py` | 无（TCP 7709） | 日K·分钟K·行业板块·板块成分 | **3 / 20** 数据类方法 |
+| 5 | **通达信 TDX** | `app/market/tdx_kline.py` · `app/market/minute_backfill.py` · `app/services/heatmap_service.py` · `app/market/tdx_tick.py` | 无（TCP 7709） | 日K·分钟K·行业板块·板块成分·逐笔降级 | **4 / 20** 数据类方法 |
 | 6 | **akshare**（聚合层） | `app/services/akshare_ext.py` | 无 | 涨停三池·龙虎榜·宏观CPI·两融·ETF/可转债·美股·外汇·商品·宏观日历 | **9 / 11**（2 项零调用） |
 | 7 | **百度股市通** | `app/services/akshare_ext.py` | 无（cookie） | 财经日历 | 1 端点 |
 | 8 | **NOAA CPC** | `app/market/climate.py` | 无 | ENSO ONI 气候指数 | 1 端点 |
@@ -398,20 +400,24 @@ quality ∈ high/medium/low/stale/invalid，低质量数据 AI 禁用、回测�
 - **2026-09-24 同日复测**：ths 与东财各 13 只，但仅共同 11 只；ths 独有两只 ST（002650、002856），东财独有两只北交所（920025、920229）。共同项价格/涨跌幅对齐，覆盖却不能互替。ths 端点仍未封装，**当前不改现役链路**；补缺须先定义交易所/ST 的范围、缺字段与部分覆盖反馈。
 - **日期真实性**：2026-09-25 休市，ths 返回 0，东财对该日请求回退到 09-24 的 13 条；东财 `qdate` 是最新更新日而非历史请求日的证明。`/api/limit-down` 已在 Provider 调用前用交易日历拒绝已知休市、对未覆盖/不可用日期返回 503；不能把回退行标成请求日。2026-08-28 的原始 1 对 4 样本保留于比较文档 §2.4，不再泛化成“ths 永远漏报”。
 
-**③ 财务 / 估值 —— 可替代东财爬虫（ths 是官方 REST）**
+**③ 财务 / 估值 —— 官方 REST 候选，暂不替代现役字段**
 
 - 现役：`app/data_providers/eastmoney.py` 的 `get_financials`（3 个消费方）。
 - 候选：ths `financials/{indicators,income-statements,balance-sheets,cash-flow-statements}`
   + `valuations/snapshot` —— **本轮实测全通**（§8.3），且是官方 REST 而非页面接口。
-- 价值：东财侧受 `push2` 系 WAF 与**字段序推断**影响（本文 §3.2 已记录
-  「字段序推断确实不可信」），ths 侧是**显式字段名**。
+- 价值：ths 侧是有业务码与显式字段名的官方 REST；但 HTTP 成功不等于字段可互换。
+  2026-09-26 同期实源复核见 §8.10：茅台 2026 中报 THS `operating_income` 与东财
+  `TOTAL_OPERATE_INCOME` 不同口径；估值也未完成同刻、同股与有效时点验证。
+  现役东财财务保留，已修正返回报告期上限并公开公告日期。
 
-**④ 全市场快照 —— 可作盘后「定稿口径」权威源**
+**④ 全市场快照 —— 盘后候选，不预先指定权威源**
 
 - 现役：腾讯 1Hz 轮询（实时）+ 东财。
 - 候选：ths `prices/snapshot` 全市场分页（**实测 5,573 只，0.09s/页，`limit=1000` 可用**）。
-- 用途：**不替换实时链路**（ths 配额 + 8s 超时不进秒级链），
-  而是给盘后落盘/快照留痕一个**非爬虫、带 `timestamp` 的权威口径**。
+- 用途：**不替换实时链路**（ths 配额 + 8s 超时不进秒级链）。现有
+  `snapshot_service → sina_market` 已消费全市场宽度、并落 Parquet；
+  `sync_marketdb.py` 又以 THS dump 建本地日线库。增加 THS 全市场快照前，须比较
+  同日完整代码集、源时间、配额与现役消费者需求，避免第三套无主定稿事实。
 
 **⑤ 分钟 K / 分时 —— 无更优源（诚实边界）**
 
@@ -424,9 +430,9 @@ quality ∈ high/medium/low/stale/invalid，低质量数据 AI 禁用、回测�
 | 序 | 对象 | 为什么值得 | 现状 |
 |---|---|---|---|
 | 1 | ~~TDX `get_transactions` 逐笔~~ | 填补「现役源本机不可用」的真空 | ✅ **已接入**（`IMP-038`，见 §8.6①） |
-| 2 | ths `financials/*` + `valuations/snapshot` | 官方 REST 替东财爬虫；实测全通 | 见 §8.6③ |
-| 3 | ths `limit-down-pool` | 跌停池第二源，消除单点 | 见 §8.6② |
-| 4 | ths `prices/snapshot` 全市场 | 盘后定稿口径 | 见 §8.6④ |
+| 2 | ths `financials/*` + `valuations/snapshot` | 官方 REST 可供核对；营收定义有差异 | 暂不切流，见 §8.10 |
+| 3 | ths `limit-down-pool` | 局部覆盖候选，不能消除北交所缺口 | 暂不切流，见 §8.6②/§8.10 |
+| 4 | ths `prices/snapshot` 全市场 | 与现役宽度快照/marketdb 对照 | 暂不增第三事实，见 §8.6④/§8.10 |
 | 5 | TDX `get_stock_quotes_list` | 内含 **50+ 排序键**，现役排行全靠东财 clist | 未用 |
 | 6 | TDX `get_capital_flow` | 现役新浪资金流为**爬虫**，且当日行分类可能为 0 | 未用 |
 | 7 | TDX `get_auction` 竞价 | 现役 ths 竞价**无备源** | 未用 |
@@ -473,3 +479,35 @@ quality ∈ high/medium/low/stale/invalid，低质量数据 AI 禁用、回测�
 `AGENTS.md` 自身即写明「数字必须实测回填，勿凭记忆」，故此处**只标差异、不擅改**——
 差异成因（口径不同 / 已过时 / 含 `get_trading_days(` 子串）**需当轮复核后回填**。
 「全仓最热」这一**结论**仍成立（第二名 `get_limit_up_pool` 生产 27）。
+
+### 8.10 IMP-040 整项能力处置（2026-09-26，只读实源 + 代码消费者）
+
+本节按**能力与消费者**定主备，不按 2026-09-16 的 59 端点目录决定开发量。
+本机已配置 THS Key 的只读调用证明以下 capability 对**该账户当次**可访问；
+官方以 `code=0` 为业务成功、`2001` 为无效 Key、`2003` 为无权访问，HTTP 200 不代表权限成功。
+Key 对应的再分发/商用许可、额度与长期 SLA 未取得条款证据，均记**未知**；
+不提交原始响应、凭据，也不为候选能力开通付费权限。
+
+| 能力、实际消费者 | 现役主源 / 备源或缺口 | 实测分母、身份与字段 | 本轮处置与重议条件 |
+|---|---|---|---|
+| 跌停池：市场 API、助手、扩展对照 | 东财 push2ex；THS 候选仅局部覆盖，akshare 跌停包装同根东财 | 09-16 两源 4/4 同集；09-24 两源各 13、共同 11，THS 独有 2 ST、东财独有 2 北交所；共同项价/涨幅逐只相符。09-25 休市东财回退 09-24 行 | **保留东财**；三入口同用交易日历日期闸，未知 503/明确休市 422，助手不读假池；扩展对照按实际返回行公开 `*_sources`，空源保持未知。若后续增加 THS 备源，须按 SH/SZ/BJ、ST 与字段逐只列失配并显式报告部分覆盖 |
+| 涨停原因：题材/助手 | THS 主、东财池备（原因缺失） | 09-24 THS 51/51 行有原因；东财 0/52，共同 51，东财独有 `920748`；`reason` 是标签/归因而非公告事实 | 维持主备；无原因时保持未知，不把东财空原因补成推断。若 THS 异常，按当日代码集与原因缺失率反馈降级 |
+| 财务：详情/助手/选股基础面 | 东财 `RPT_LICO_FN_CPD`；THS 四端点仅候选，无可互换备源 | 09-26 对茅台/平安银行 2026 中报，THS indicators **2/2**、东财 **2/2** 业务成功；茅台 THS 营业收入 907.03 亿元/同比 1.469869%，东财 `TOTAL_OPERATE_INCOME` 922.78 亿元/同比 1.300099%。净利同比 THS -1.951595% 对东财 -1.95%，ROE 同为 16.75%。平安银行同比两侧约 1.7756%、ROE 同为 5.22%，毛利率两侧缺失 | **不切流/不混列**；东财 `periods=8` 实抓 103/122 行，现由 Provider 去重后截到所请求期数。`report_date` 明确为报告期末，`notice_date` 取东财 `NOTICE_DATE`，详情和助手展示。要换 THS，先定 `OPERATE_INCOME` 与 `TOTAL_OPERATE_INCOME`、单位 CNY/百分数、公告可见时刻、缺失字段与评分阈值，做同期多股多期影子验证 |
+| 估值：行情快照填充/基础面 | 腾讯 `fill_valuation`；THS `valuations/snapshot` 候选 | THS 两股 2/2 成功，茅台 PE TTM 18.989012、PB MRQ 6.154543；平安银行 5.045833/0.468348。响应 `timestamp` 为源给出的毫秒时间，非公司财报报告期 | **保留腾讯**；无同一时刻、同标的、同 PE/PB 定义与缺失率对照，不能用可达性切流；异常时保留 unknown 而非填 0 |
+| 全市场宽度/盘后快照 | `snapshot_service → sina_market` 与 Parquet；marketdb 由 THS dump 构建 | 既有 THS `prices/snapshot` 分页探针 5573 只、0.09s/页是历史样本；尚无与当期全市场主链同刻、全集、源时点的受控对照 | **不建第三套定稿事实**；遇现役完整性/时效不达标，再以同刻代码集、字段、请求数/配额、版本及落盘恢复比较后决定 |
+| 搜索/排行/竞价/异动与分钟级补数 | 腾讯 smartbox/东财 suggest；东财排行；THS 竞价/异动；腾讯/TDX 分钟线 | THS `meta/tickers/search`、TDX `get_stock_quotes_list` 等只是候选方法；当前无同范围失败分母与具体失效消费者，THS 官方能力图不覆盖分钟 K/tick | **暂不增加入口**；现役消费者实际失败或缺关键字段时，按当前源、许可、延迟、预算和跨交易所覆盖重做对照。TDX 另协议族需单列连接与运维成本 |
+
+THS 的三个接入面仍有不同运行边界：Provider 的已接方法通过 Composite 的
+方法级预算/熔断/health；`theme_catalog_service.py` 的板块成员直连由本服务校验业务码、
+成员完整性与持久写保护，但不进入 Composite 视图；`sync_marketdb.py` 的导出直连是
+离线批处理，其成功以脚本校验/持久库状态为准，不表示在线行情 healthy。
+这两个直连面不是本任务的“多两个独立源”，也不能因未进 Composite 就机械迁移：
+其调用频率、失败反馈和恢复路径分别由原消费者维护。若要统一，先核具体消费者
+和预算，不能把离线导出放到在线请求熔断链。
+
+公开资料与实源证据边界：[THS 快速开始](https://fuyao.aicubes.cn/docs/quickstart/)
+说明业务码/权限；[财务指标契约](https://fuyao.aicubes.cn/docs/api-reference/financial-indicators/)
+说明 `report=YYYY-[1-4]`、百分比数值与 `null`；
+[茅台 2026 半年报](https://static.cninfo.com.cn/finalpage/2026-08-15/1225475868.PDF)
+提供报告口径核查。这里只证明 2026-09-26 的只读样本与当前消费者契约；
+许可、长期可用率、盘中时效、跨全市场完整性与业务效果不由此样本证明。

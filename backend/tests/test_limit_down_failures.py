@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.deps import get_hub
-from app.api.routes import market_pools
+from app.market import trade_calendar
 from app.api.routes.market_pools import router
 from app.data_providers import CompositeProvider, EastmoneyProvider, SinaProvider, TencentProvider
 from app.data_providers.eastmoney import ProviderError
@@ -102,7 +102,7 @@ def test_pool_failure_reaches_http_as_502(chain, monkeypatch):
     reply["payload"] = {"rc": 102, "data": None}
     async def calendar(_provider):
         return [DAY]
-    monkeypatch.setattr(market_pools, "trading_days", calendar)
+    monkeypatch.setattr(trade_calendar, "trading_days", calendar)
     app = FastAPI()
     app.include_router(router, prefix="/api")
     app.dependency_overrides[get_hub] = lambda: SimpleNamespace(provider=provider)
@@ -123,7 +123,7 @@ def test_nontrading_or_uncovered_date_never_queries_pool(monkeypatch, days, stat
     async def pool(day):
         calls.append(day)
         return []
-    monkeypatch.setattr(market_pools, "trading_days", calendar)
+    monkeypatch.setattr(trade_calendar, "trading_days", calendar)
     app = FastAPI()
     app.include_router(router, prefix="/api")
     app.dependency_overrides[get_hub] = lambda: SimpleNamespace(
@@ -142,7 +142,7 @@ def test_calendar_failure_does_not_query_or_label_upstream_pool(monkeypatch):
     async def pool(day):
         calls.append(day)
         return []
-    monkeypatch.setattr(market_pools, "trading_days", calendar)
+    monkeypatch.setattr(trade_calendar, "trading_days", calendar)
     app = FastAPI()
     app.include_router(router, prefix="/api")
     app.dependency_overrides[get_hub] = lambda: SimpleNamespace(
@@ -153,6 +153,22 @@ def test_calendar_failure_does_not_query_or_label_upstream_pool(monkeypatch):
     assert response.status_code == 503
     assert "交易日历不可用" in response.json()["detail"]
     assert calls == []
+
+
+def test_invalid_date_returns_422_before_calendar_or_pool(monkeypatch):
+    async def calendar(_provider):
+        raise AssertionError("invalid date must not query calendar")
+    async def pool(_day):
+        raise AssertionError("invalid date must not query pool")
+    monkeypatch.setattr(trade_calendar, "trading_days", calendar)
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.dependency_overrides[get_hub] = lambda: SimpleNamespace(
+        provider=SimpleNamespace(get_limit_down_pool=pool)
+    )
+    with TestClient(app) as client:
+        response = client.get("/api/limit-down?date=2026-09-xx")
+    assert response.status_code == 422
 
 
 @pytest.mark.parametrize("empty_first", [False, True])
