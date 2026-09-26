@@ -116,6 +116,9 @@ export function StockEventsRow({ symbol, isIndex = false }: { symbol: string; is
           <>
             <span className="text-zinc-700 dark:text-zinc-200">{e.title.slice(0, 30)}</span>
             {dir && <span className={`ml-1 font-medium ${dir.cls}`}>{dir.text}</span>}
+            {e.directions[0]?.matched_by === "llm_aux" && (
+              <span className="ml-1 text-amber-700 dark:text-amber-300">待验证假设</span>
+            )}
           </>
         );
         const tip = [

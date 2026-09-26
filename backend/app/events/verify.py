@@ -186,7 +186,8 @@ async def verify_active_events(
     all_targets: list[str] = []
     for e in events:
         for d in e.directions:
-            if d.target_type == "theme" and d.target not in all_targets:
+            if (d.target_type == "theme" and getattr(d, "matched_by", None) != "llm_aux"
+                    and d.target not in all_targets):
                 all_targets.append(d.target)
 
     from app.services.theme_service import board_rows_for_names
@@ -195,7 +196,10 @@ async def verify_active_events(
 
     out: list[dict] = []
     for e in events:
-        themes = [d.target for d in e.directions if d.target_type == "theme"]
+        themes = [d.target for d in e.directions
+                  if d.target_type == "theme" and getattr(d, "matched_by", None) != "llm_aux"]
+        has_model_theme = any(d.target_type == "theme" and getattr(d, "matched_by", None) == "llm_aux"
+                              for d in e.directions)
         # 关联板块资金：取匹配到的板块里净额绝对值最大的（「资金最想说的那个板块」）
         matched = [board_rows[t] for t in themes if t in board_rows]
         fund = None
@@ -213,6 +217,8 @@ async def verify_active_events(
             board_fund=fund,
             trade_date=trade_date,
         )
+        if has_model_theme and not themes:
+            verdict["basis"] = "仅有待验证模型假设，尚无可核验的关联题材"
         out.append({
             "event_id": e.id,
             "title": e.title,

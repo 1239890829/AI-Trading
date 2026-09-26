@@ -732,6 +732,8 @@ async def theme_focus(
         for d in getattr(r, "directions", None) or []:
             if getattr(d, "target_type", "theme") != "theme" or not getattr(d, "target", None):
                 continue
+            if getattr(d, "matched_by", None) == "llm_aux":
+                continue  # Unvalidated model hypothesis cannot affect next-day net direction.
             b = buckets.setdefault(d.target, {
                 "theme": d.target, "events": 0, "positive": 0, "negative": 0,
                 "neutral": 0, "judged": 0, "pending": 0, "samples": [], "latest": None,

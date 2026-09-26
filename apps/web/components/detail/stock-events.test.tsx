@@ -78,6 +78,16 @@ describe("StockEventsRow", () => {
     await screen.findByText(/暂无与该股题材匹配的活跃事件/);
   });
 
+  it("模型方向在个股关联事件列表中显式标为待验证假设", async () => {
+    mockedGet.mockResolvedValue({ symbol: "600519", themes: [], count: 1,
+      items: [{ ...event, judge_status_label: "待验证假设", directions: [
+        { ...event.directions[0], matched_by: "llm_aux" },
+      ] }] });
+    renderWithProvider(<StockEventsRow symbol="600519" />);
+    await screen.findByText(/沃什鹰派/);
+    expect(screen.getByText("待验证假设")).toBeTruthy();
+  });
+
   it("加载失败显示失败态与重试（不再是静默消失）", async () => {
     mockedGet.mockRejectedValue(new Error("boom"));
     renderWithProvider(<StockEventsRow symbol="600519" />);

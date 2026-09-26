@@ -194,6 +194,7 @@ async def _t_news(ctx: ToolContext, **kw) -> str:
                 f"  · 方向推断：{dd.get('target') or '—'}"
                 f"（{dd.get('direction') or '—'}，强度 {dd.get('strength') or '—'}）"
                 f"｜依据：{str(dd.get('basis') or '—')[:50]}"
+                + ("｜状态：待验证假设" if dd.get("matched_by") == "llm_aux" else "")
             )
     return _clip("\n".join(lines))
 
