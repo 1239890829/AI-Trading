@@ -804,9 +804,12 @@ async def collect_news_events(app_state, include_limit_up: bool = False) -> dict
     # 只采自选的话，精选成员/持仓标的的新闻永远不入库 → 消息面评分对它们
     # 永远空转（2026-08-31 实测：事件 23 条但组合成员零命中）。
     symbols: list[str] = []
-    for s in repo.list_symbols()[:20]:
-        if s not in symbols:
-            symbols.append(s)
+    symbol_names: dict[str, str] = {}
+    for item in repo.list_items()[:20]:
+        if item.symbol not in symbols:
+            symbols.append(item.symbol)
+        if item.name:
+            symbol_names[item.symbol] = item.name.strip()
     try:
         from app.models.daily_pick import DailyPickSet
 
@@ -819,6 +822,8 @@ async def collect_news_events(app_state, include_limit_up: bool = False) -> dict
             for item in json.loads(row.items):
                 if item.get("symbol") and item["symbol"] not in symbols:
                     symbols.append(item["symbol"])
+                if item.get("symbol") and item.get("name"):
+                    symbol_names[item["symbol"]] = str(item["name"]).strip()
     except Exception as exc:  # noqa: BLE001
         log.warning("events collect: 昨日组合读取失败 %s", exc)
     try:
@@ -827,6 +832,8 @@ async def collect_news_events(app_state, include_limit_up: bool = False) -> dict
         for pos in load_positions(get_session_factory()):
             if pos.symbol not in symbols:
                 symbols.append(pos.symbol)
+            if pos.name:
+                symbol_names[pos.symbol] = pos.name.strip()
     except Exception as exc:  # noqa: BLE001
         log.warning("events collect: 持仓读取失败 %s", exc)
     if include_limit_up:
@@ -845,12 +852,24 @@ async def collect_news_events(app_state, include_limit_up: bool = False) -> dict
                     if r.symbol not in symbols:
                         symbols.append(r.symbol)
                         added += 1
+                    if r.name:
+                        symbol_names[r.symbol] = r.name.strip()
                 if added:
                     log.info("events collect: 盘后轮次纳入涨停股 %d 只（%s）", added, td)
         except Exception as exc:  # noqa: BLE001
             log.warning("events collect: 涨停股范围扩展失败 %s", exc)
     symbols = symbols[:60]  # 有界
-    created = duplicated = fetched = 0
+    missing_names = [symbol for symbol in symbols if not symbol_names.get(symbol)]
+    if missing_names:
+        # 自选常只有代码；复用既有批量快照补名称，不逐篇额外请求。
+        # 失败时只允许标题中明确出现代码的关联，不能把搜索命中当身份。
+        from app.services.quote_enrich import fetch_quotes_batched
+
+        quotes = await fetch_quotes_batched(hub, missing_names, prefer_cache=True)
+        for symbol, quote in quotes.items():
+            if quote.name:
+                symbol_names[symbol] = quote.name.strip()
+    created = duplicated = fetched = unverified_links = 0
     for symbol in symbols:
         try:
             news = await hub.provider.get_news(symbol, 5)
@@ -866,17 +885,29 @@ async def collect_news_events(app_state, include_limit_up: bool = False) -> dict
                 published = _parse_published(row.get("date"))
             except HTTPException:
                 published = None
+            # Eastmoney searches article text by code. A hit may only mention the
+            # queried stock in an incidental market list; the query is not proof
+            # that the article's company claim concerns that stock. Keep the raw
+            # event, but link the stock only when its code or known name appears
+            # in the headline. An unavailable name stays unknown.
+            name = "".join(symbol_names.get(symbol, "").split())
+            headline = "".join(title.split())
+            direct_symbol = symbol if (symbol in headline or
+                                       len(name) >= 3 and name in headline) else None
+            if direct_symbol is None:
+                unverified_links += 1
             _, is_new = store.register(
                 title,
                 source=row.get("source") or "东财",
                 url=row.get("url"),
                 published_at=published,
-                source_symbol=symbol,
+                source_symbol=direct_symbol,
                 theme_names=theme_names,
             )
             created += 1 if is_new else 0
             duplicated += 0 if is_new else 1
-    return {"symbols": len(symbols), "fetched": fetched, "created": created, "duplicated": duplicated}
+    return {"symbols": len(symbols), "fetched": fetched, "created": created,
+            "duplicated": duplicated, "unverified_stock_links": unverified_links}
 
 
 # POST /events/collect 路由壳已删（2026-09-08 审查 P0-4）：collect_news_events
