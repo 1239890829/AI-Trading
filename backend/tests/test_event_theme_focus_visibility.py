@@ -65,3 +65,26 @@ def test_theme_focus_filters_invisible_and_withdrawn_before_limit(monkeypatch, t
     rows = store.list_events(active_only=False, limit=1, published_since=now - timedelta(days=1),
                              visible_at=now, status="active", exclude_pending=True)
     assert [row.id for row in rows] == [future_version.id]
+
+
+def test_theme_focus_does_not_count_llm_hypothesis_as_judged_direction(monkeypatch, tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'hypothesis-focus.db'}")
+    Base.metadata.create_all(engine)
+    store = EventStore(sessionmaker(bind=engine, autoflush=False, expire_on_commit=False))
+    now = datetime(2026, 9, 26, 10, 0)
+    monkeypatch.setattr(routes, "beijing_now_naive", lambda: now)
+    monkeypatch.setattr("app.events.store.beijing_now_naive", lambda: now)
+    for event_id, matched_by in (("rule", "name"), ("model", "llm_aux")):
+        store.add_event({
+            "fingerprint": event_id, "title": f"算力消息 {event_id}",
+            "source": "东财快讯", "source_item_id": event_id,
+            "published_at": now - timedelta(minutes=10),
+            "directions": [{"target_type": "theme", "target": "算力", "direction": 1,
+                            "matched_by": matched_by}],
+        })
+
+    result = asyncio.run(routes.theme_focus(None, store=store, days=1, limit=8))["data"]
+    assert result["count"] == 1
+    assert result["items"][0]["events"] == 1
+    assert result["items"][0]["net"] == 1
+    assert result["items"][0]["judged"] == 1

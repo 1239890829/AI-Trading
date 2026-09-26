@@ -1193,6 +1193,10 @@ def test_news_tool_lists_active_events_with_basis():
     assert "解释版本：7｜可见：2026-09-11 10:35:00｜状态：accepted" in versioned
     assert "解释版本：未知" not in versioned
 
+    current.directions[0].matched_by = "llm_aux"
+    hypothesis = _call_tool(_ctx(provider=object(), event_store=_VersionStore()), "news")
+    assert "待验证假设" in hypothesis
+
     class _CrowdedStore:
         def list_events(self, *, active_only=True, limit=30):
             return [_Ev() for _ in range(limit)]

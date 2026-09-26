@@ -204,6 +204,40 @@ def test_verify_active_events_orchestration(monkeypatch):
     assert by_id[2]["board_name"] is None
 
 
+def test_verify_active_events_does_not_confirm_llm_hypothesis(monkeypatch):
+    """模型猜测的题材即使碰巧与涨停和资金同向，也不能判为消息发酵。"""
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.events import verify as ev
+    from app.services import theme_service as ts
+
+    class _Store:
+        def list_events(self, active_only=True, limit=30):
+            return [SimpleNamespace(
+                id=1, title="模型猜测关联低空经济",
+                published_at=datetime(2026, 9, 10, 10, 0),
+                interpretation_ref={"version_id": 1, "available_at": "2026-09-10 10:00:00"},
+                directions=[SimpleNamespace(target_type="theme", target="低空经济", matched_by="llm_aux")],
+            )]
+
+    async def fake_rows(names):
+        assert names == []
+        return {}
+
+    monkeypatch.setattr(ts, "board_rows_for_names", fake_rows)
+    monkeypatch.setattr(ev, "beijing_now_naive", lambda: datetime(2026, 9, 10, 11, 0))
+    pool = _pool(("10:30:00", "低空经济"))
+
+    item = asyncio.run(ev.verify_active_events(_Store(), None, pool, TODAY))[0]
+
+    assert item["status"] == "unknown"
+    assert item["themes"] == []
+    assert item["board_name"] is None
+    assert item["new_limit_ups"] == 0
+    assert "待验证" in item["basis"]
+
+
 def test_late_visible_interpretation_excludes_earlier_seal(monkeypatch):
     """晚到解释不能把系统可见前的封板算作消息后发酵。"""
     import asyncio
