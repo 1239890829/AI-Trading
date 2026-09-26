@@ -20,6 +20,7 @@ def test_theme_focus_filters_invisible_and_withdrawn_before_limit(monkeypatch, t
     store = EventStore(sf)
     now = datetime(2026, 9, 26, 10, 0)
     monkeypatch.setattr(routes, "beijing_now_naive", lambda: now)
+    monkeypatch.setattr("app.events.store.beijing_now_naive", lambda: now)
 
     def add(title, published):
         event = build_event(title, source="东财快讯", published_at=published)
