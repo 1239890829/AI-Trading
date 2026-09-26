@@ -91,6 +91,20 @@ describe("EventPanel（盘面相关性 Top4 摘要，2026-09-04 任务④）", (
     expect(screen.queryByText("事件6")).toBeNull();
   });
 
+  it("模型方向在事件摘要上显示待验证假设", async () => {
+    mockedGetImpactEvents.mockResolvedValue({
+      count: 1, countsAll: {}, fourCounts: {}, tagCounts: {},
+      items: [evt({ directions: [{
+        target_type: "theme", target: "存储芯片", direction: 1, strength: 1,
+        chain: "", basis: "LLM 辅助判定", matched_by: "llm_aux",
+      }] })],
+    });
+
+    render(<EventPanel />);
+    await screen.findByText("长鑫 LPDDR6 全球首发量产");
+    expect(screen.getByText("待验证假设")).toBeTruthy();
+  });
+
   it("无活跃事件空态；加载失败显示错误", async () => {
     mockedGetImpactEvents.mockResolvedValueOnce({
       count: 0, countsAll: {}, fourCounts: {}, tagCounts: {}, items: [],

@@ -15,6 +15,7 @@ export interface EventDirectionRow {
   strength: number;
   chain: string;
   basis: string;
+  matched_by?: string;
   /** 题材辨识度记忆（KB-STOCK-25 / P1-1）：该题材近 30 日历史龙头 top3，仅题材方向附带 */
   memory_leaders?: { symbol: string; name: string; max_boards: number; hit_days: number }[];
 }

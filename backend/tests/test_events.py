@@ -41,6 +41,79 @@ def _isolated_store(tmp_path) -> EventStore:
     return EventStore(sessionmaker(bind=engine, autoflush=False, expire_on_commit=False))
 
 
+def test_llm_direction_is_visible_as_hypothesis_without_stock_pool(tmp_path):
+    import asyncio
+    from types import SimpleNamespace as NS
+
+    from app.api.routes import events as events_route
+    from app.core.bjtime import beijing_now_naive
+
+    store = _isolated_store(tmp_path)
+    row, _ = store.add_event({
+        "fingerprint": "llm-only-theme", "title": "模型待验证的题材关系",
+        "source": "东财快讯", "source_item_id": "llm-1",
+        "published_at": beijing_now_naive(),
+        "directions": [{"target_type": "theme", "target": "存储芯片",
+                        "direction": 1, "matched_by": "llm_aux"}],
+    })
+
+    class Catalog:
+        def get_catalog(self, *, limit):
+            return [NS(name="存储芯片", code="BK001")]
+
+        def get_members(self, code):
+            return [NS(symbol="600001", name="某股")]
+
+        def get_overrides(self, code):
+            return []
+
+    request = NS(app=NS(state=NS(theme_catalog=Catalog())))
+    result = asyncio.run(events_route.event_stocks(row.id, request, store))
+    event = result["data"]["event"]
+    assert event["judge_status_label"] == "待验证假设"
+    assert event["judge_status"] == "pending"
+    assert event["directions"][0]["matched_by"] == "llm_aux"
+    assert result["data"]["pools"] == [{
+        "target": "存储芯片", "direction": 1, "stocks": [],
+        "note": "LLM 辅助方向待验证，暂不扩展标的池",
+    }]
+
+
+def test_llm_hypothesis_does_not_upgrade_impact_or_market_resonance(tmp_path, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace as NS
+
+    from app.api.routes import events as events_route
+    from app.core.bjtime import beijing_now_naive
+    from app.events import ranking
+
+    store = _isolated_store(tmp_path)
+    store.add_event({
+        "fingerprint": "llm-only-impact", "title": "模型待验证的行业新闻",
+        "source": "东财快讯", "source_item_id": "llm-impact-1",
+        "published_at": beijing_now_naive(), "fact_kind": "fact",
+        "directions": [{"target_type": "theme", "target": "存储芯片",
+                        "direction": 1, "matched_by": "llm_aux"}],
+    })
+    requested = []
+
+    async def rank_context(_state, themes, symbols):
+        requested.extend(themes)
+        return ranking.RankContext(theme_perf={"存储芯片": 4.0})
+
+    monkeypatch.setattr(ranking, "collect_rank_context", rank_context)
+    catalog = NS(get_catalog=lambda **_kwargs: [NS(name="存储芯片", code="BK001")])
+    request = NS(app=NS(state=NS(theme_catalog=catalog, hub=None)))
+    result = asyncio.run(events_route.impact_events(
+        include_l3=True, limit=100, sort="relevance", request=request, store=store,
+    ))
+    item = result["data"]["items"][0]
+    assert item["impact_level"] == "L3"
+    assert item["judge_status_label"] == "待验证假设"
+    assert "theme_best" not in item["rank_factors"]
+    assert requested == []
+
+
 # ---------------------------------------------------------------- 抽取规则
 
 

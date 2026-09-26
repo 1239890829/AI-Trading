@@ -487,6 +487,26 @@ def test_candidate_pool_theme_members_go_through_bulk_only(monkeypatch):
     assert cat.member_single_calls == 0, "不得逐题材调 get_members（N 次独立 session）"
 
 
+def test_candidate_pool_does_not_expand_llm_theme_hypothesis():
+    """A model-only theme cannot supply stock candidates before review."""
+    cat = _Catalog()
+    hypothesis = _Event(1, "白酒模型方向", target="白酒概念", target_type="theme")
+    hypothesis.directions[0].matched_by = "llm_aux"
+    rule = _Event(2, "白酒规则方向", target="白酒概念", target_type="theme")
+    rule.directions[0].matched_by = "name"
+
+    only_hypothesis = asyncio.run(pl.candidate_pool(
+        _BareHub(), _Store(), cat, active_events=[hypothesis], limit_up_pool=[],
+    ))
+    assert only_hypothesis == []
+    assert cat.member_bulk_calls == 0
+
+    with_rule = asyncio.run(pl.candidate_pool(
+        _BareHub(), _Store(), cat, active_events=[hypothesis, rule], limit_up_pool=[],
+    ))
+    assert [item["symbol"] for item in with_rule] == ["000858", "600519"]
+
+
 def test_candidate_pool_unknown_theme_name_triggers_no_query(monkeypatch):
     """目录里查不到的题材名：整条分支跳过（不臆造归属），且**不触发任何成分查询**。"""
     monkeypatch.setattr(pl.log, "warning", lambda msg, *a: None)

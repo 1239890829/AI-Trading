@@ -487,6 +487,11 @@ async def collect_evidence(app_state) -> dict:
                 row_themes: list[str] = []
                 row_syms: list[str] = []
                 for d in row.directions:
+                    # LLM auxiliary directions are unvalidated hypotheses. They
+                    # remain in the event record but cannot rank a brief direction
+                    # or attach its symbols to a persisted tracking pool.
+                    if getattr(d, "matched_by", None) == "llm_aux":
+                        continue
                     if d.target_type == "theme" and d.target:
                         tag = normalize_theme(d.target)
                         if tag not in row_themes:

@@ -530,6 +530,29 @@ def test_brief_legacy_event_reference_remains_unknown(hermetic):
         {"event_id": 8, "version_id": None, "state": "unknown"}]
 
 
+def test_llm_hypothesis_does_not_rank_or_supply_brief_pool(hermetic):
+    """An unreviewed model direction cannot become a persisted tracking decision."""
+    import asyncio
+
+    rule = NS(id=7, source_tier=3, certainty="done",
+              interpretation_ref={"event_id": 7, "version_id": 11, "state": "active"},
+              directions=[NS(target_type="theme", target="粮食", direction=1,
+                             strength=1, matched_by="name")])
+    hypothesis = NS(id=8, source_tier=5, certainty="done",
+                    interpretation_ref={"event_id": 8, "version_id": 12, "state": "active"},
+                    directions=[NS(target_type="theme", target="芯片", direction=1,
+                                   strength=3, matched_by="llm_aux"),
+                                NS(target_type="symbol", target="600001", direction=0,
+                                   strength=1, matched_by="source")])
+    state = _hermetic_state()
+    state.event_store = NS(list_events=lambda **_kwargs: [rule, hypothesis])
+
+    evidence = asyncio.run(mb.collect_evidence(state))
+    assert set(evidence["event_strength"]) == {"粮食"}
+    assert set(evidence["event_refs"]) == {"粮食"}
+    assert "芯片" not in evidence["event_symbols"]
+
+
 def test_event_processing_failure_discards_partial_brief_evidence(hermetic):
     """A malformed later card cannot leave earlier event scores in a failed batch."""
     import asyncio

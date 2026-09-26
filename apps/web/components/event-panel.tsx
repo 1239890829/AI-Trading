@@ -188,6 +188,7 @@ export function EventPanel() {
                       meta: [
                         { label: "四分类", value: e.four_label },
                         ...(e.directions?.[0]?.target ? [{ label: "关联板块", value: e.directions[0].target }] : []),
+                        ...(e.directions?.[0]?.matched_by === "llm_aux" ? [{ label: "方向状态", value: "待验证假设" }] : []),
                         ...(e.directions?.[0]?.basis ? [{ label: "依据", value: e.directions[0].basis }] : []),
                       ],
                     })
@@ -226,6 +227,9 @@ export function EventPanel() {
                       <span className="text-zinc-600 dark:text-zinc-400">{d.target_type === "symbol" ? "个股" : "题材"}</span>
                       <span>{d.target}</span>
                       <span className={`font-medium ${cls}`}>{text}</span>
+                      {d.matched_by === "llm_aux" && (
+                        <span className="text-amber-700 dark:text-amber-300">待验证假设</span>
+                      )}
                     </Link>
                   );
                 })}
