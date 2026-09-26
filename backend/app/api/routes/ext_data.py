@@ -1,9 +1,8 @@
 """扩展数据路由（star 仓库整合，2026-09-07）：akshare 可用性 + 涨跌停池交叉校验。
 
-交叉校验的价值（口径差异是已知特性而非 bug，见 docs/data/data-source-comparison.md）：
-- 涨停家数存在多口径（breadth 收盘价落限价口径 / ths 涨停池 / 东财 push2ex 池），
-  差 2~4 家正常；akshare（东财 push2ex）作为**独立第二源**，与 composite 链
-  （ths 主、东财备）互为校验，单源静默缺数据时差异立即可见。
+交叉校验的价值（口径差异见 docs/data/data-source-comparison.md）：
+- composite 的 ths 主源与 akshare 东财包装路径可比较代码集；composite 若回退东财，
+  两侧同根，不能把一致视作独立交叉验证。差异没有固定的正常家数阈值。
 - 输出必须标注口径（用户定稿纪律），diff 集合给出具体代码而非只有计数。
 """
 from __future__ import annotations
@@ -15,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.api.deps import get_hub
 from app.services.akshare_ext import AkshareExtError, AkshareExtService, get_akshare_ext
 from app.services.quote_hub import QuoteHub
+from app.services.market_snapshot import PoolDateError, verify_limit_down_date
 
 router = APIRouter(tags=["ext-data"])
 
@@ -28,6 +28,16 @@ def _symbols(records: list) -> dict[str, dict]:
         if sym:
             out[sym] = {"name": dump.get("name"), "reason": dump.get("reason")}
     return out
+
+
+def _sources(records: list) -> list[str]:
+    """仅从实际返回行提取上游；空池或无标记时保持未知。"""
+    sources = set()
+    for record in records:
+        source = record.get("source") if isinstance(record, dict) else getattr(record, "source", None)
+        if source:
+            sources.add(str(source))
+    return sorted(sources)
 
 
 def _diff(composite_syms: dict, ak_syms: dict) -> dict:
@@ -58,6 +68,11 @@ async def akshare_pool_crosscheck(
         raise HTTPException(status_code=422, detail=f"日期格式非法：{date_str}（需 YYYY-MM-DD）") from exc
 
     try:
+        await verify_limit_down_date(hub.provider, trade_date)
+    except PoolDateError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    try:
         composite_up = await hub.provider.get_limit_up_pool(trade_date)
         composite_down = await hub.provider.get_limit_down_pool(trade_date)
     except Exception as exc:
@@ -75,8 +90,10 @@ async def akshare_pool_crosscheck(
                 "composite": {
                     "up_count": len(composite_up),
                     "down_count": len(composite_down),
+                    "up_sources": _sources(composite_up),
+                    "down_sources": _sources(composite_down),
                 },
-                "note": "akshare 侧不可用，本次仅 composite 单源；口径见 docs/data/data-source-comparison.md",
+                "note": "akshare 侧不可用，本次仅 composite 路径；来源见 *_sources，空列表=未知。口径见 docs/data/data-source-comparison.md",
             }
         }
 
@@ -89,11 +106,12 @@ async def akshare_pool_crosscheck(
         "data": {
             "trade_date": trade_date.isoformat(),
             "akshare": {"available": True},
-            "composite": {"up_count": len(composite_up), "down_count": len(composite_down)},
+            "composite": {"up_count": len(composite_up), "down_count": len(composite_down),
+                          "up_sources": _sources(composite_up), "down_sources": _sources(composite_down)},
             "akshare_counts": {"up_count": len(ak_up), "down_count": len(ak_down)},
             "up_diff": _diff(c_up_syms, a_up_syms),
             "down_diff": _diff(c_dn_syms, a_dn_syms),
-            "note": "composite=ths 主源/东财备源；akshare=东财 push2ex 独立第二源。两口径差 2~4 家属正常（收录口径差异），持续偏离才需排查。",
+            "note": "composite 实际来源见 *_sources（空列表=未知）；akshare=东财 push2ex 包装路径。仅当对应池来源为 ths 时可作跨上游对照；来源为东财则同根，未知不能认定独立。差异须按交易所、ST 与字段逐只核验，无固定正常家数阈值。",
         }
     }
 

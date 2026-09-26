@@ -316,6 +316,7 @@ def normalize_financial(raw: dict) -> dict | None:
     return {
         "symbol": code,
         "report_date": rd,
+        "notice_date": str(raw.get("NOTICE_DATE") or "")[:10] or None,
         "revenue": num(raw.get("TOTAL_OPERATE_INCOME")),
         "revenue_yoy": num(raw.get("YSTZ")),
         "net_profit": num(raw.get("PARENT_NETPROFIT")),

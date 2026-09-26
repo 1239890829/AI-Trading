@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import get_hub
 from app.api.routes import ext_data as ext_data_route
+from app.market import trade_calendar
 from app.services.akshare_ext import AkshareExtError, AkshareExtService, get_akshare_ext
 
 
@@ -72,6 +73,13 @@ def blocked_ak(monkeypatch):
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+@pytest.fixture(autouse=True)
+def fixed_pool_calendar(monkeypatch):
+    async def calendar(_provider):
+        return [date(2026, 9, 4)]
+    monkeypatch.setattr(trade_calendar, "trading_days", calendar)
 
 
 # ---------- 服务层 ----------
@@ -206,6 +214,25 @@ def test_route_crosscheck_counts_and_diff(fake_ak):
     assert only_c == ["000001"]
     assert only_a == ["002539"]
     assert data["down_diff"]["only_in_composite"] == []
+    assert "同根" in data["note"]
+    assert data["composite"]["up_sources"] == []
+    assert data["composite"]["down_sources"] == []
+
+
+def test_crosscheck_source_identity_uses_returned_rows():
+    assert ext_data_route._sources([{"source": "ths"}, {"source": "ths"}]) == ["ths"]
+    assert ext_data_route._sources([{"source": "eastmoney"}]) == ["eastmoney"]
+    assert ext_data_route._sources([]) == []
+
+
+def test_route_crosscheck_nontrading_date_never_calls_sources(fake_ak, monkeypatch):
+    async def calendar(_provider):
+        return [date(2026, 9, 24), date(2026, 9, 28)]
+    monkeypatch.setattr(trade_calendar, "trading_days", calendar)
+    client = _make_client(fake_ak)
+    resp = client.get("/ext/akshare/pool-crosscheck", params={"date": "2026-09-25"})
+    assert resp.status_code == 422
+    assert fake_ak._calls == {"zt": 0, "dt": 0}
 
 
 def test_route_crosscheck_akshare_down_is_explicit(blocked_ak):

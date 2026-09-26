@@ -20,6 +20,7 @@ export interface CompanyProfile {
 
 export interface FinRow {
   report_date: string;
+  notice_date?: string | null;
   revenue?: number | null;
   revenue_yoy?: number | null;
   net_profit?: number | null;
@@ -82,12 +83,13 @@ export function ProfilePanel({
           {(fins ?? []).slice(0, 2).map((r) => (
             <div key={r.report_date} className="mb-1.5 rounded-lg border border-zinc-100 px-2 py-1.5 dark:border-zinc-800/60">
               <div className="flex justify-between">
-                <span className="font-mono text-zinc-600 dark:text-zinc-400">{r.report_date}</span>
+                <span className="font-mono text-zinc-600 dark:text-zinc-400">报告期 {r.report_date}</span>
                 <span className={`font-mono ${pctColor(r.profit_yoy)}`}>净利同比 {pctText(r.profit_yoy)}</span>
               </div>
+              <div className="mt-0.5 text-zinc-500 dark:text-zinc-400">公告日 {r.notice_date || "未知"} · 东财报告口径</div>
               <div className="mt-0.5 flex justify-between text-zinc-600 dark:text-zinc-400">
                 <span>
-                  营收 <span className="font-mono text-zinc-800 dark:text-zinc-200">{r.revenue != null ? fmt(r.revenue / 1e8) : "--"}</span> 亿
+                  营收（东财口径） <span className="font-mono text-zinc-800 dark:text-zinc-200">{r.revenue != null ? fmt(r.revenue / 1e8) : "--"}</span> 亿
                 </span>
                 <span>
                   归母净利 <span className="font-mono text-zinc-800 dark:text-zinc-200">{r.net_profit != null ? fmt(r.net_profit / 1e8) : "--"}</span> 亿

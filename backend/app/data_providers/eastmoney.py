@@ -443,7 +443,7 @@ class EastmoneyProvider:
         dedup: dict = {}
         for r in out:  # 同一报告期可能有预告/正式两行，保留 API 顺序中的首行
             dedup.setdefault(r["report_date"], r)
-        return sorted(dedup.values(), key=lambda r: r["report_date"], reverse=True)
+        return sorted(dedup.values(), key=lambda r: r["report_date"], reverse=True)[:periods]
 
     async def get_company_profile(self, symbol: str) -> dict:
         secucode = f"{symbol}.SH" if symbol.startswith(("6", "9", "5")) else f"{symbol}.SZ"
