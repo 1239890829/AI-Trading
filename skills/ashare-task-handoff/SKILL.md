@@ -10,9 +10,9 @@ description: 把本轮执行、审核、重大决策传播核对和下一步写�
 全项目范围按 `docs/product/product-closure-design.md`、`docs/product/hunting-decision-design.md`、`docs/product/feature-closure-audit.md` 核大小功能及消费者。任务唯一状态和阶段门元数据只写所属 stage；handoff 只定位当前模式、当前主门/切片、现场和最近关键基线。
 
 1. Codex 回填本轮编号、阶段门/门内序/门禁角色、硬依赖与效果前置核验、真实实现/偏差、修改文件、准确代码提交、测试命令/结果/环境、未验证项及证据。新问题和建议写本条，不代写网页审核通过。
-2. 网页收到“Codex执行完了”后，从最新 `master` 的固定入口读取 handoff / stage，并核真实分支、代码与证据；给通过/需修改/阻塞后重新评估下一步。
+2. 接续方从最新 `master` 的固定入口读取 handoff / stage，并核真实分支、代码与证据；正常模式依独立网页审核，已授权 Codex 降级模式依准确 HEAD 的作者 `DegradedRelease`。规划前置收尾完成后只报告 selector 候选，等用户另说“继续任务”。
 
-**U49 主动审计回执 / U50 降级回执采用两阶段且区分模式**：网页在开工/继续前写 `Preflight`，记录触发点、范围、八类检查面、发现分级、owner 及是否改变验收/门序。正常模式下 Codex 只回填实现事实，成果放行前由未参与实现的网页会话写 exact-HEAD `Review`；`DEGRADED_FULL_CONTROL` 下同一网页作者可全程实施，但成果放行必须写 distinct exact-HEAD `DegradedRelease`，包含 `Mode=DEGRADED_FULL_CONTROL`、`User authorization=EXPLICIT`、非空原因和 verdict，绝不能把作者自审命名成独立 Review。没有发现也必须写实际检查范围。主动审计/降级都不创建第二业务切片、不允许跨阶段门。
+**U49 主动审计回执 / U50 降级回执区分模式**：正常模式由独立网页会话形成 `Preflight` 和 exact-HEAD `Review`；当前 handoff 若仍激活 Codex `DEGRADED_FULL_CONTROL`，Codex 记录有界作者反证并形成 distinct exact-HEAD `DegradedRelease`，包含 `Mode=DEGRADED_FULL_CONTROL`、`User authorization=EXPLICIT`、非空原因和 verdict，绝不能命名为独立 Review。无发现也写实际检查范围。模式与执行者随用户撤销而变；主动审计不创建第二业务切片、不跨阶段门。
 3. 若本轮引入或改变模型、工具链、架构、产品语义、协作、权限或治理规则，交接前必须按 `docs/plan-registry.md` §1.1 附**传播核对**：受影响权威面分别标“已更新”或“不适用+理由”。专题文档更新但总方案/索引/账本/Skill 等应更新面遗漏时，本轮不得标文档闭环。
 4. 方案确需变化才改原 `implementation-plan.md`；任务状态只在 stage；handoff 不复制整套方案。历史基线不因新方案被批量重写，取代关系写 plan-registry。
 5. 先核原位更新、提交/推送和远端可读，再报告本轮已交付。用户不复制任务卡、提交号或下载新 handoff；回写失败时另一端不能只按聊天结论执行。

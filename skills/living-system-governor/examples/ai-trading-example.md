@@ -1,6 +1,6 @@
 # Example: AI-Trading 中如何应用本 Skill
 
-这只是示例，不把本 Skill 绑定到某个仓库。
+这是历史方法示例，不代表当前任务状态、策略效果或发布授权；现状以项目 AGENTS、handoff 和 stage 为准。
 
 ## 情境
 

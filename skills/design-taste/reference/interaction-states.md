@@ -46,7 +46,7 @@ button:focus-visible {
 
 ## Loading States
 
-**Optimistic updates**: Show success immediately, rollback on failure. Use for low-stakes actions (likes, follows), not payments or destructive actions. **Skeleton screens > spinners**: they preview content shape and feel faster than generic spinners.
+**Optimistic updates**: use only when identity, rollback and unknown-result handling are reliable. In this project, adding/removing a watchlist item or changing a persistent decision must not display confirmed success before the server response. Skeletons can clarify layout, but choose them by actual wait behavior and accessibility rather than a universal speed claim.
 
 ## Modals: The Inert Approach
 

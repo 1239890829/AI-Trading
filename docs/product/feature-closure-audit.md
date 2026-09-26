@@ -1,5 +1,7 @@
 # 大小功能闭环审计与覆盖边界
 
+**U52–U55 已批准（2026-09-26）**：v1.3旧新归属与本次基点2adaaee映射见§11–§14，产品定义只由product-closure-design拥有，任务状态只归stage。前文26a0c44/182路由/29调度是历史扫描，不是当前运行证明；IMP-048工程已经完成，不由旧疑点重开。
+
 定位：按可观察功能审查用途、输入、动作、反馈和退出，不是新账本。上游：[产品闭环](product-closure-design.md)、[实施方案](../implementation-plan.md)；状态/排期唯一归 [总账 §6.0](../retro-and-gaps.md#60-阶段索引) 下GOV-020及对应任务。
 基点26a0c44。本批成功的结构盘点含267个backend/app Python文件、2429个函数/类定义、182个路由装饰器、29处调度注册；前端跟踪源清单133个TS/TSX文件。数量是静态覆盖分母，不是已读懂或已验收数量；单个装饰器也不等于部署后唯一有效路由。
 TypeScript AST交互清单生成调用被安全检查拒绝，未产生成功结果，不能据此声称全部按钮已穷举。下表来自实际已读组件及调用点；未读细分、动态注册/运行状态仍须逐片补足，不用这些表代替测试。
@@ -138,3 +140,202 @@ assistant-sessions全文确认：它是本地有限历史缓存，多标签页�
 26份带路由声明的源文件全部归入：market_quotes/stock/board/pools/longhu/themes/sentiment/flow、theme_catalog、news/events/ext_data、picks/picks_intraday、paper/real_position/risk/watchlist、notifications/alert、assistant/agent/review/backtest、health及websocket。182个装饰器要核实际挂载、参数、鉴权、读写副作用和消费者，不能把同文件某一路通过推及所有端点。
 后台267个文件/2429个定义是结构快照，嵌套/私有函数不是2429个业务功能；以可观察动作/输出/保护作用划分验收项，辅助函数随真正消费者覆盖，不制造形式化任务数量。前端133份TS/TSX清单同理，测试配置/声明文件不算用户功能。
 后续新增入口、动作、模型工具或后台注册必须补此覆盖映射和原任务验收；旧模型/缓存/迁移/认证等低频保护不能因未出现在主导航而被省略。全景覆盖负责不漏，具体反例负责验证深度，两者缺一不可。
+
+## 11. 已批准50行子功能归属（U55）
+
+X编号仅用于批准来源与设计覆盖，不是任务编号；历史证据在原稿，具体状态在stage。名称为B候选，C可以通过对照取代，不把本表当已部署菜单。
+
+| 来源 | 子功能 | 旧入口 | 目标归属 | 处置 | 原责任 | 闭环/退出条件 |
+|---|---|---|---|---|---|---|
+| X01|指数/市场广度|市场/工作台|H01/共享摘要|MERGE呈现，KEEP事实|IMP-040/IMP-050|同源只读，不另算广度 |
+| X02|市场总览|市场|H01概览|MOVE/重设计|IMP-050|环境不是第二机会榜 |
+| X03|题材/梯队/成员|盘面/详情|H01题材|MOVE/规则KEEP|IMP-049/050；RSH-031|日期角色分开，跳转不授权 |
+| X04|涨停/跌停/断板|盘面|H01涨跌停|MOVE|IMP-040/050|曾封板/当前状态不混 |
+| X05|龙虎榜/席位|盘面/详情|H01/共享详情|MOVE/待定位|IMP-040/050|日榜/多日榜/披露时点独立 |
+| X06|资金/同刻成交额|市场/详情|H01/共享详情|MERGE重复读视图|IMP-040/050|估算/终值/单位/分母分名 |
+| X07|云图/热力图|市场|H01子视图|KEEP/重设计|IMP-050|筛选/返回/键盘可达 |
+| X08|快讯/公告/事件|市场/消息/详情|H01事件/共享投影|MERGE呈现|IMP-048成果；IMP-050|未推荐仍可读，转引不重复计证 |
+| X09|原文修订/撤回/差异|事件弹层|H01/共享证据|EXTEND呈现|IMP-048成果；IMP-050|保旧版本，不倒填 |
+| X10|宏观/隔夜/气候|简报/市场|H01上下文|MOVE/按需|IMP-040/050|低频不挤主屏，不证因果 |
+| X11|盘前精选|猎场|H02|MOVE/保节奏|IMP-049/050|日期/参考不混盘中 |
+| X12|盘中联动机会|猎场|H02|重设计|IMP-049/050|同版条件，空错陈旧分开 |
+| X13|潜伏/接力/趋势/再启动|猎场/知识|H02情境|KEEP开放，准入后扩展|IMP-049；RSH-003/031|无分类上限，不由菜单准入 |
+| X14|未归类/缺证线索|既有规划|H02线索|EXTEND候选|IMP-049|有事实，无假买点 |
+| X15|等待/触发/失效|卡片/详情|H02/共享详情|EXTEND|IMP-049/050|新事实另版，不自动发单 |
+| X16|为何未选/未提醒|分散记录|H02/消息|EXTEND只读|IMP-049；BUG-016/IMP-032|无记录写未知 |
+| X17|参考轨/首见|猎场|H02，H05评价|KEEP/分名|IMP-049|观察不是fill，刷新不扩分母 |
+| X18|加/取消自选|搜索/工作台/详情|H03/共享命令|KEEP/统一回执|IMP-050|明确用户操作，取消不平仓 |
+| X19|自选排序/分组|工作台|H03|KEEP/按需EXTEND|IMP-050|并发恢复，不擅自重排 |
+| X20|保存筛选/观察理由|部分既有/候选|H03|WATCH|IMP-050；持久字段另评|频繁复用任务成立才扩展 |
+| X21|最近标的/连续看股|工作台/详情|H03/共享详情|KEEP/联动|IMP-050|选中不等收藏，不串时点 |
+| X22|K线/分时/盘口/财报|多种详情|共享证券工作区|MERGE装配|IMP-050；BUG-022成果|真实Canvas，指数个股分离 |
+| X23|手工记录/修订|个股详情|H04手工记录|MOVE|IMP-050；GOV-013|非券商验证，不覆盖旧事实 |
+| X24|持仓/风险|工作台/详情|H04，H03摘要|MOVE/共享|IMP-007/050|不合本金/收益口径 |
+| X25|手工模拟/预检/撤单|详情表单|H04/同命令快捷入口|KEEP/统一|IMP-007|后端费率风险，草稿隔离 |
+| X26|每日精选shadow|后台/研究|H04独立scope|KEEP|IMP-020消费|保留次日晨窗语义 |
+| X27|hunting-shadow|待条件方案|H04机会影子|EXTEND按原前置|IMP-053；IMP-049|真实fill/no_fill/reject/退出 |
+| X28|订单/未成交原因|分散结果|H04|EXTEND证据|IMP-007/053|unknown先核，不补历史fill |
+| X29|模拟重置/危险维护|普通界面|系统维护|BACKEND/MOVE|IMP-007/050|先鉴权备份恢复再迁出按钮 |
+| X30|日度复盘/对照|Agent/猎场|H05，局部摘要|MERGE完整呈现|BUG-009/IMP-050|日期对象不串，合法空可辨 |
+| X31|失败/漏选/弃权/未成交|分散统计|H05|EXTEND聚合|RSH-026/IMP-020；IMP-050|全分母/成熟度/scope分开 |
+| X32|次日条件计划|复盘/简报|H05，H03投影|FIX/MOVE|BUG-009|一份计划版本，不双写 |
+| X33|验证/否决方法成果|研究/策略/Agent|H05|KEEP/只读组织|RSH-003/031|否决不因换名复活 |
+| X34|知识正文/搜索/反证|Agent/助手|H05/上下文|KEEP/验证正文|RSH-027；IMP-050|索引合法不等支持 |
+| X35|批量实验/标注管理|Agent/脚本|受控研究操作|BACKEND/MOVE|RSH-030/003/031；IMP-052边界|先预算授权，human不由模型填 |
+| X36|参数/晋级/回滚|Agent|系统维护|MOVE，安全KEEP|IMP-052成果；GOV-027|独立批准与证据绑定不变 |
+| X37|议程/任务/取消|Agent|系统维护/就地影响|MOVE|IMP-025/052|提案不是部署，取消真终态 |
+| X38|仓库/依赖/模型更新|Agent/治理|系统维护|MOVE/有限雷达|GOV-024/025/027|不自动安装升级跨门 |
+| X39|消息/风险/已读清除|铃铛/通知|共享消息|KEEP/同事实投影|BUG-016/IMP-032|清除不删审计，故障不藏后台 |
+| X40|助手/停止/引用/历史|浮动助手|共享上下文助手|KEEP/有据重设计|IMP-046/051/052|私聊草稿不默默上传 |
+| X41|JEV参与/判断/采纳/结果|U51/v1.2|对象凭证/H05/维护|EXTEND实际记录|原owner；IMP-045/050|设计共审不是股票贡献 |
+| X42|搜索/别名/旧深链|导航/路由|共享搜索导航|EXTEND兼容|IMP-050|名称变，身份权限不变 |
+| X43|主题/密度/布局/焦点|前端偏好|共享用户偏好|KEEP/设计对照|IMP-050/054|不机械后台化，稳定导航 |
+| X44|源时间/缺口/能力可用|分散提示|就地状态/维护|EXTEND|IMP-040/050|空池/错误/未启用分开 |
+| X45|采集/快照/WS/调度|后台|后台/用户事实影响|KEEP/业务水位验证|IMP-040/019|声明数不是健康数 |
+| X46|生成组合/简报/单拍/复盘|五个运营按钮|后台/受控兜底|BACKEND/条件迁出|IMP-049/BUG-009/050协调|先验承接，刷新只读结果 |
+| X47|备份/迁移/恢复/审计|运维|系统维护|KEEP|GOV-013/026；OPS-003|先核外发与水位，不抹数据 |
+| X48|重复完整详情/统计/榜单|多页|权威服务/只读投影|MERGE→条件RETIRE|IMP-005/050|不同语义不强合并 |
+| X49|独立事件主模块|候选|暂H01子域|WATCH|IMP-050/048|持续高频任务/查找收益才升级 |
+| X50|独立风险/研究主模块|候选|H04/H05/受控域|WATCH|原owner；GOV-022协调|不先造空页，权限/维护可解释 |
+
+## 12. 十八审计域的产品归属
+
+业务事实owner不随产品聚合改变；M不是固定菜单。
+
+| 审计域 | 已批准比较归属 |
+|---|---|
+| M01 | 共享导航/对象工作区 |
+| M02 | H03自选；H04账户动作（B/C待验） |
+| M03 | H01市场 |
+| M04 | H01题材盘面 |
+| M05 | H01事件/共享证据 |
+| M06 | H02机会；H04订单；H05跨日评价 |
+| M07 | 共享证券详情 |
+| M08 | 共享消息/后台投递 |
+| M09 | H04模拟（scope独立） |
+| M10 | H04手工记录（非券商验证） |
+| M11 | H05复盘/计划；H03只读投影 |
+| M12 | H05知识/共享片段；受控编辑 |
+| M13 | 共享上下文助手 |
+| M14 | H05研究结果；受控实验 |
+| M15 | 系统维护/影响就地 |
+| M16 | 后台数据/调度；就地质量 |
+| M17 | 维护/存储恢复 |
+| M18 | 原治理/账本/Skills |
+
+## 13. 当前组件源覆盖
+
+基点 `2adaaee2a5586f25dd1faeb4a3111f616c92104c`；对批准的73份组件覆盖按当前跟踪路径重新映射。结构归属不等每个回调/Canvas已实际验证；每个新入口仍按原小动作契约补覆盖。全站C01–C16定义只读产品文档§10。
+
+| 相对组件路径 | 审计域 | 组件族 | 目标职责 |
+|---|---|---|---|
+| `agent/evolution-tab.tsx` | M15/M12/M14 | C03/C06/C08/C16 | 受控维护；知识/研究结果按H05只读投影 |
+| `agent/kb-browser-tab.tsx` | M15/M12/M14 | C03/C06/C08/C16 | 受控维护；知识/研究结果按H05只读投影 |
+| `agent/markdown-view.tsx` | M15/M12/M14 | C03/C06/C08/C16 | 受控维护；知识/研究结果按H05只读投影 |
+| `agent/params-tab.tsx` | M15/M12/M14 | C03/C06/C08/C16 | 受控维护；知识/研究结果按H05只读投影 |
+| `agent/repo-tracker-tab.tsx` | M15/M12/M14 | C03/C06/C08/C16 | 受控维护；知识/研究结果按H05只读投影 |
+| `agent/strategy-health-tab.tsx` | M15/M12/M14 | C03/C06/C08/C16 | 受控维护；知识/研究结果按H05只读投影 |
+| `agent/task-center.tsx` | M15/M12/M14 | C03/C06/C08/C16 | 受控维护；知识/研究结果按H05只读投影 |
+| `assistant/assistant-mark.tsx` | M13 | C02/C03/C08/C09/C15 | 共享助手，明确对象/引用/取消/隐私 |
+| `assistant/floating-assistant.tsx` | M13 | C02/C03/C08/C09/C15 | 共享助手，明确对象/引用/取消/隐私 |
+| `assistant/rich-text.tsx` | M13 | C02/C03/C08/C09/C15 | 共享助手，明确对象/引用/取消/隐私 |
+| `concept-detail-modal.tsx` | M04 | C04/C08 | 题材关系原文 |
+| `detail/board-rank-panel.tsx` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `detail/book-trades-view.tsx` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `detail/capital-flow-panel.tsx` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `detail/detail-modal.tsx` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `detail/flow-chart.tsx` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `detail/info-panel.tsx` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `detail/minute-decision-panel.tsx` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `detail/profile-panel.tsx` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `detail/quote-strip.tsx` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `detail/real-position-panel.tsx` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `detail/speed-panel.tsx` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `detail/stock-events.tsx` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `detail/suspended-badge.tsx` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `detail/symbol-detail-context.ts` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `detail/symbol-detail-modal.tsx` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `detail/theme-chips.tsx` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `detail/trade-panel.tsx` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `entry-checklist.tsx` | M06/M09 | C07/C11 | 条件/动作权限独立 |
+| `event-panel.tsx` | M05 | C03/C08/C09 | H01事件证据 |
+| `hunting/intraday-sections.tsx` | M06/M11 | C03/C07/C08/C09 | H02主机会，H05评价；H04动作引用 |
+| `hunting/pick-sections.tsx` | M06/M11 | C03/C07/C08/C09 | H02主机会，H05评价；H04动作引用 |
+| `hunting/post-market-enhance.tsx` | M06/M11 | C03/C07/C08/C09 | H02主机会，H05评价；H04动作引用 |
+| `hunting/stats-bar.tsx` | M06/M11 | C03/C07/C08/C09 | H02主机会，H05评价；H04动作引用 |
+| `hunting/watch-ledger-panel.tsx` | M06/M11 | C03/C07/C08/C09 | H02主机会，H05评价；H04动作引用 |
+| `index-cards.tsx` | M03 | C03/C07/C10 | 指数身份/参考日 |
+| `kline-chart-pro.tsx` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `market/board-flow.tsx` | M03 | C02/C03/C06/C08/C10 | H01合浏览不合口径 |
+| `market/events-tab.tsx` | M05 | C02/C03/C06/C08/C10 | H01合浏览不合口径 |
+| `market/flow-intraday-chart.tsx` | M03 | C02/C03/C06/C08/C10 | H01合浏览不合口径 |
+| `market/fund-tab.tsx` | M03 | C02/C03/C06/C08/C10 | H01合浏览不合口径 |
+| `market/heatmap-tab.tsx` | M03 | C02/C03/C06/C08/C10 | H01合浏览不合口径 |
+| `masonry-columns.tsx` | M01/M06 | C13 | 不锁死瀑布流 |
+| `minute-chart.tsx` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `nav-bar.tsx` | M01 | C01/C02 | B/C导航与旧链接 |
+| `news-modal.tsx` | M05 | C04/C08/C15 | 原文版本/链接/更正 |
+| `notifications/event-feed.tsx` | M08 | C03/C04/C08/C12 | 消息同对象，水位/外发/unknown分开 |
+| `notifications/notification-drawer.tsx` | M08 | C03/C04/C08/C12 | 消息同对象，水位/外发/unknown分开 |
+| `panel.tsx` | M01/全域 | C03/C13 | 布局原语按任务 |
+| `picks/card-entries.tsx` | M06/M11 | C03/C07/C08/C09 | H02主机会，H05评价；H04动作引用 |
+| `picks/card-shell.tsx` | M06/M11 | C03/C07/C08/C09 | H02主机会，H05评价；H04动作引用 |
+| `picks/pick-card.tsx` | M06/M11 | C03/C07/C08/C09 | H02主机会，H05评价；H04动作引用 |
+| `picks/pick-detail-modal.tsx` | M06/M11 | C03/C07/C08/C09 | H02主机会，H05评价；H04动作引用 |
+| `price-flash.tsx` | M16/全域 | C12/C14 | 数据意义不依赖动效 |
+| `quality-badge.tsx` | M16/全域 | C03/C12 | 源时间/质量，不等健康 |
+| `replay-chart.tsx` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `research/alerts-tab.tsx` | M08/M15 | C03/C06/C08 | H05阅读与受控维护分权 |
+| `research/review-tab.tsx` | M11 | C03/C06/C08 | H05阅读与受控维护分权 |
+| `search-box.tsx` | M02/全域 | C05 | 实体/IME/失败回执 |
+| `sparkline.tsx` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `stock-detail.tsx` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `stock-link.tsx` | M07/M09/M10 | C02/C04/C08/C10/C11 | 共享证券工作区，账务命令主H04 |
+| `tape/limit-down-tab.tsx` | M04 | C02/C03/C06/C08 | H01题材/涨跌停/披露；日期与分母独立 |
+| `tape/limit-up-tab.tsx` | M04 | C02/C03/C06/C08 | H01题材/涨跌停/披露；日期与分母独立 |
+| `tape/longhu-tab.tsx` | M04 | C02/C03/C06/C08 | H01题材/涨跌停/披露；日期与分母独立 |
+| `tape/themes-tab.tsx` | M04 | C02/C03/C06/C08 | H01题材/涨跌停/披露；日期与分母独立 |
+| `theme-card.tsx` | M04/M06 | C04/C07/C08 | 多角色/来源与H01→H02 |
+| `trade-form.tsx` | M09 | C11 | H04后端预检/费用/草稿 |
+| `ui/incremental-sentinel.tsx` | M01/全域 | C03/C04/C12/C14 | 公共原语逐消费者验；非统一样式即完成 |
+| `ui/jump-link.tsx` | M01/全域 | C03/C04/C12/C14 | 公共原语逐消费者验；非统一样式即完成 |
+| `ui/loading.tsx` | M01/全域 | C03/C04/C12/C14 | 公共原语逐消费者验；非统一样式即完成 |
+| `ui/modal-shell.tsx` | M01/全域 | C03/C04/C12/C14 | 公共原语逐消费者验；非统一样式即完成 |
+| `ui/panel-boundary.tsx` | M01/全域 | C03/C04/C12/C14 | 公共原语逐消费者验；非统一样式即完成 |
+
+## 14. 后台声明的目标消费者
+
+当前 `backend/app/bootstrap/schedulers.py` AST共30条声明；这是注册与设计映射，不是开启/存活/业务进展证明。每条均验原开关、单拥有者、触发/输入、版本/水位、失败/取消/恢复、预算与消费者。后台接管先于退出按钮；无页面进展与GET无副作用另验。
+
+| 声明 | 源行 | 目标消费者 |
+|---|---|---|
+| `alert-triage` | 143 | 共享消息解释 |
+| `evolution-agenda` | 150 | 受控议程，H05结果 |
+| `review-scheduler` | 163 | H05复盘 |
+| `quote-poller` | 176 | H01/H03/详情 |
+| `market-snapshot` | 179 | 市场事实消费者 |
+| `picks-autogen` | 190 | H02盘前结果 |
+| `opportunity-evidence` | 206 | H02决定/H05证据 |
+| `data-health-sentinel` | 218 | 就地影响/维护 |
+| `pre-limit-radar` | 228 | H02观察/已授权消息 |
+| `llm-aux-judge` | 235 | 事件辅助解释；仅实际Jev参与才有Jev凭证 |
+| `position-monitor` | 241 | H04风险 |
+| `paper-matcher` | 248 | H04订单/成交 |
+| `alert-quotes-feeder` | 255 | 提醒输入 |
+| `alert-engine` | 259 | 共享消息/风险 |
+| `risk-refresher` | 266 | H04/H02约束 |
+| `event-collector` | 291 | H01事件/H02证据 |
+| `metric-history-backfill` | 298 | H01历史/研究 |
+| `premarket-brief` | 312 | H02计划/H01上下文 |
+| `picks-watcher` | 328 | H02条件/参考/消息 |
+| `picks-buy-point` | 339 | H02决定/动作重检 |
+| `board-surge` | 353 | H01变化/H02线索 |
+| `lhb-archive` | 364 | H01龙虎榜/H05历史 |
+| `picks-intraday-review` | 375 | H05结果标签 |
+| `ths-reason-sentinel` | 392 | 事件覆盖/维护 |
+| `sentiment-monitor` | 403 | H01环境 |
+| `picks-shadow` | 414 | H04每日精选影子，非hunting-shadow |
+| `marketdb-sync` | 428 | 历史/H05研究 |
+| `factor-eval` | 446 | 受控研究/H05结果 |
+| `news-flash` | 463 | H01事件 |
+| `llm-gateway-probe` | 474 | 维护健康，不证明业务效果 |

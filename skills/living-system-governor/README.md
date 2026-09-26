@@ -1,10 +1,11 @@
-# Living System Governor Skill v1.1.0
+# Living System Governor Skill v1.3.0
 
 这是从长期复杂项目协作中蒸馏出的通用治理 Skill。
 
 ## 文件
 
-- `SKILL.md`：主 Skill，可直接放入支持 Skill 的环境。
+- `SKILL.md`：短主入口；按任务只读取相关参考，不把长期正文每轮加载。
+- `references/governance-handbook.md`：原 §0–§19 的完整治理方法、领域展开及演进协议，按需阅读。
 - `references/decision-protocol.md`：KEEP/FIX/MERGE/EXPERIMENT/WATCH/RETIRE/ESCALATE 决策协议。
 - `references/audit-checklist.md`：重要改动前后的治理审计清单。
 - `references/anti-patterns.md`：常见系统性误区与纠偏规则。
@@ -30,11 +31,11 @@
 
 ## 自我进化
 
-本 Skill 自 v1.1.0 起明确管理自己的演进：后续真实协作中持续观察用户稳定的判断方式、长期要求、重复纠偏和反例，但**不会把每一次临时要求都写进核心规则**。
+本 Skill 持续管理自己的演进：后续真实协作中观察稳定的判断方式、长期要求、重复纠偏和反例，但**不会把每一次临时要求都写进核心规则**。
 
 进入 Skill 的方法必须先区分 Core / Domain Extension / Experience，并通过“是否稳定复现、是否改变真实判断、是否与现有原则重复或冲突、是否增加不必要上下文成本”的检查。每次实质变化保留版本、Git/PR 原因与可恢复历史；Skill 自身也允许 FIX / MERGE / RETIRE。
 
-可核证明标准见 `SKILL.md` §19：不是靠聊天承诺，而是看候选是否被识别、为什么进入/不进入、是否形成版本差异和 Git 证据、后续是否真的改变判断。
+可核证明标准见 `references/governance-handbook.md` §19：看候选为何进入或不进入、版本差异和 Git 证据，以及后续是否真的改变判断。当前项目授权与任务状态仍以 AGENTS、handoff 和所属 stage 为准。
 
 ## 一句话
 

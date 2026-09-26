@@ -5,7 +5,7 @@ description: AI-Trading 新会话接手、上下文恢复与账本继续的唯�
 
 # 账本接续 / 项目接手
 
-**临时执行者覆盖（2026-09-24）**：用户已明确授权 Codex 在 `DEGRADED_FULL_CONTROL` 下免网页审核，直到用户要求“改回来”；活动状态与撤销规则见 `docs/handoff.md`、`docs/collaboration-workflow.md` §3.3a。此期间本 Skill 中要求网页 `Preflight` / 独立 `Review` / 网页降级作者的句子改由 Codex 记录 U49 作者反证并形成准确 HEAD 的 `DegradedRelease`，不得冒充独立审核。选刀、依赖、本地/CI/发布门和每轮一个主切片保持不变。
+**临时执行者覆盖（2026-09-24）**：以最新 handoff 与 collaboration-workflow §3.3a 核用户尚未撤销的 Codex `DEGRADED_FULL_CONTROL`。有效期间由 Codex 记录 U49 作者反证并形成准确 HEAD 的 `DegradedRelease`，不得冒充独立审核；门序、依赖、本地/CI/发布门不降低。
 
 本 Skill 同时承担三件事：**新会话快速接手、恢复当前项目上下文、继续已获准任务**。不得再建立第二个“项目接手 Skill”或靠聊天长提示维护上下文。
 
@@ -49,6 +49,7 @@ description: AI-Trading 新会话接手、上下文恢复与账本继续的唯�
 本 Skill 不维护第二张 backlog，也不凭聊天印象重排任务；唯一算法来自 `docs/retro-and-gaps.md` §5.9。每次“继续”从最新 `master` 重新计算。
 
 1. **先收口共享候选**：handoff 若有会改变方案/账本/Skill 的待审 PR、CI 或待合并候选，先完成该闭环；不从旧 master 抢跑业务。
+   v9.13/U52–U55 的规划前置未发布时只处理该共享候选；发布后须等用户下一句“继续任务”，本轮不得直接领取 IMP-040。已工程完成的 IMP-048 继承成果与运行/研究边界，不按旧报告重开。
 2. **先过 U49 主动缺陷发现门**：在形成可行动集前，对当前候选及直接上游/下游、持久化、配置/权限、测试和当前治理指针做一次有界反证扫描。至少核自锁/不可能条件、双事实源/配置空转、顺序/部分失败、幂等/去重/unknown、fail-open、动态状态冻结、测试固化坏行为、传播/陈旧指针。用户无需另问“还有没有问题”。同根 P0/P1 发现必须先改验收或阻塞当前切片；无关发现回原 owner/stage，不借此跨门。
 3. **先重算运行条件，再形成可行动集**：执行 `python3 scripts/ledger-runtime-selection.py --json`；部署日历不在当前工作树时显式传 `--calendar-path <部署仓>/backend/data/trade_calendar.json`。只有 stage 明示的受支持 `运行条件` 可把 `待条件` 临时提升为当前轮可行动；`unknown/unsupported/pending/expired` 都保持等待，且选择器不得改写 stage 静态状态。随后排除 `已完成/已退出/已合并`、未激活 `待条件`；`依赖` 中任一硬开工 ID 未完成则排除。`效果前置` 不阻止采样/工程开工，但阻止效果主张、策略/参数晋级和生产权重切换。
 4. **确定当前主门**：在 G0–G4 中找最低的、仍存在可行动 `阻断` 任务的门；只要任一普通门还有 blocker，就不以 non-blocker 绕开它。**若 G0–G4 已没有任何可行动 blocker，则回落到最低仍有可行动 `非阻断` 的普通门；只有 G0–G4 的 ordinary actionable 全为空时才返回无主门。** G5/GX 不参与该 fallback。
@@ -58,13 +59,13 @@ description: AI-Trading 新会话接手、上下文恢复与账本继续的唯�
 8. **跨门例外**：只有 handoff 明确存在 `CROSS_GATE_EXCEPTION`，且写明范围、证据、无共享依赖/污染、停止条件、恢复点和禁止效果主张时才执行。Codex 不得自己创建或扩展例外；例外结束立即回到最低未闭环主门。
 9. 每轮只执行**一个主切片**；完成、阻塞或证据变化后回填并重新计算，不连续扫账本。
 
-接手摘要必须给出：`当前主门`、该门阻断任务、首选任务、同门竞争项、硬依赖是否满足、效果前置是否仅限制主张，以及为何没有跨到更高门。若无法唯一判定，停止在选择阶段并交网页规划审核。
+接手摘要必须给出：`当前主门`、该门阻断任务、首选任务、同门竞争项、硬依赖是否满足、效果前置是否仅限制主张，以及为何没有跨到更高门。若无法唯一判定，停在选择阶段并报告具体歧义；正常模式交网页规划审核，已授权的 Codex 降级模式由当前执行者按现有证据核实，只有真实外部输入缺口才请用户介入。
 
 用户明确调用本 Skill 并说“继续任务/继续”时，仅当 handoff 允许实施、没有未收口共享候选、当前主门和首选任务唯一时，这句话才授权该**单一切片**。DESIGN_ONLY / REVIEW / BLOCKED 或门序冲突时只报告，不执行；`DEGRADED_FULL_CONTROL` 是可执行模式，但只有 handoff 已记录用户明确授权时成立。
 ## 4. 执行与防漏
 
 1. 收到“ChatGPT审核完了”只代表开始重读；先核 master、当前任务轮次、实际工作区/分支/HEAD、计划和证据。
-2. 实施收口前必须确认当轮已有网页 `Preflight` 主动审计回执，并对准确实现差异再次执行 U49：正常模式形成独立 `Review`；handoff 已激活 `DEGRADED_FULL_CONTROL` 时由同一网页作者形成独立标识的 `DegradedRelease`，同时记录用户明确授权、降级原因、exact HEAD 与作者反证范围。普通作者自检不能冒充这两种 release receipt；缺当前模式要求的回执或新发现改变安全/正确性时不得放行。
+2. 实施收口前按当前模式完成 U49：正常模式核独立 `Preflight`/`Review`；已激活 Codex `DEGRADED_FULL_CONTROL` 时由 Codex 记录作者反证并提交明确非独立身份的 exact-HEAD `DegradedRelease`，含用户授权、原因和检查范围。普通作者自检不能冒充 release receipt；新发现改变安全/正确性时不得放行。
 3. 初次明确派工可实施；需修改只做限定整改；阻塞就停止。重复通知不重做，同一工作区不并行写。
 4. 新提交、未推送回填、归属不明改动或版本不一致先核实；不 reset/clean，不覆盖前任成果，不丢未合分支。
 5. 发现新的模型、工具链、架构、产品语义、协作或治理决策时，必须按 `docs/plan-registry.md` §1.1 做**传播核对**：列出受影响权威面已更新项和不适用项/理由。只更新专题蓝图不算完成。跨模块长期取舍可用 `living-system-governor` 的 Context Snapshot、竞争方案、falsifier 与 KEEP/FIX/MERGE/EXPERIMENT/WATCH/RETIRE 协议辅助审计，但最终调度与状态仍只认总账/stage。
