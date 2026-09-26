@@ -569,7 +569,10 @@ class EventStore:
             row = db.get(EventCard, event_id)
             if row is None:
                 return 0
-            if row.revision_pending_at is not None:
+            # The route filters candidates, but the status can change before
+            # this write transaction begins. Never append an active version to
+            # a resolved/rejected card.
+            if row.status != "active" or row.revision_pending_at is not None:
                 return 0
             has_dirs = db.execute(
                 select(EventDirection).where(EventDirection.event_id == event_id)
