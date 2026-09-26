@@ -87,7 +87,13 @@ def test_limit_up_and_longhu(client):
     assert len(lh.json()["data"]["records"]) == 5
 
 
-def test_limit_down_endpoint(client):
+def test_limit_down_endpoint(client, monkeypatch):
+    from datetime import date
+    from app.api.routes import market_pools
+
+    async def calendar(_provider):
+        return [date(2026, 8, 28)]
+    monkeypatch.setattr(market_pools, "trading_days", calendar)
     resp = client.get("/api/limit-down?date=2026-08-28")
     assert resp.status_code == 200
     body = resp.json()["data"]

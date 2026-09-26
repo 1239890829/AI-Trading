@@ -34,6 +34,7 @@ export function LimitDownTab() {
     } catch (e) {
       setError((e as Error).message);
       setRecords([]);
+      setTradeDate(date ?? "");
     } finally {
       setLoading(false);
     }
@@ -78,7 +79,7 @@ export function LimitDownTab() {
 
       {error && (
         <div className="mb-4 shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
-          跌停池加载失败：{error}（数据源为东方财富 push2ex 免费接口）
+          跌停池加载失败：{error}
         </div>
       )}
 
@@ -99,7 +100,7 @@ export function LimitDownTab() {
               ))}
             </div>
           ) : (
-            <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">当日暂无跌停（或非交易日）</p>
+            <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">当日暂无跌停</p>
           )
         ) : (
           <table className="w-full text-sm">

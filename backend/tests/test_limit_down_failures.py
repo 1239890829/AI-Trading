@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.deps import get_hub
+from app.api.routes import market_pools
 from app.api.routes.market_pools import router
 from app.data_providers import CompositeProvider, EastmoneyProvider, SinaProvider, TencentProvider
 from app.data_providers.eastmoney import ProviderError
@@ -96,9 +97,12 @@ def test_valid_empty_recovers_health_after_failure(chain):
     assert "get_limit_down_pool" in eastmoney["methods"]
 
 
-def test_pool_failure_reaches_http_as_502(chain):
+def test_pool_failure_reaches_http_as_502(chain, monkeypatch):
     provider, _, reply = chain
     reply["payload"] = {"rc": 102, "data": None}
+    async def calendar(_provider):
+        return [DAY]
+    monkeypatch.setattr(market_pools, "trading_days", calendar)
     app = FastAPI()
     app.include_router(router, prefix="/api")
     app.dependency_overrides[get_hub] = lambda: SimpleNamespace(provider=provider)
@@ -106,6 +110,49 @@ def test_pool_failure_reaches_http_as_502(chain):
         response = client.get("/api/limit-down?date=2026-09-17")
     assert response.status_code == 502
     assert "跌停池数据源失败" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(("days", "status"), [
+    ([date(2026, 9, 24), date(2026, 9, 28)], 422),
+    ([date(2026, 9, 24)], 503),
+])
+def test_nontrading_or_uncovered_date_never_queries_pool(monkeypatch, days, status):
+    calls = []
+    async def calendar(_provider):
+        return days
+    async def pool(day):
+        calls.append(day)
+        return []
+    monkeypatch.setattr(market_pools, "trading_days", calendar)
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.dependency_overrides[get_hub] = lambda: SimpleNamespace(
+        provider=SimpleNamespace(get_limit_down_pool=pool)
+    )
+    with TestClient(app) as client:
+        response = client.get("/api/limit-down?date=2026-09-25")
+    assert response.status_code == status
+    assert calls == []
+
+
+def test_calendar_failure_does_not_query_or_label_upstream_pool(monkeypatch):
+    calls = []
+    async def calendar(_provider):
+        raise RuntimeError("calendar unavailable")
+    async def pool(day):
+        calls.append(day)
+        return []
+    monkeypatch.setattr(market_pools, "trading_days", calendar)
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.dependency_overrides[get_hub] = lambda: SimpleNamespace(
+        provider=SimpleNamespace(get_limit_down_pool=pool)
+    )
+    with TestClient(app) as client:
+        response = client.get("/api/limit-down?date=2026-09-25")
+    assert response.status_code == 503
+    assert "交易日历不可用" in response.json()["detail"]
+    assert calls == []
 
 
 @pytest.mark.parametrize("empty_first", [False, True])
