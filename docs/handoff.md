@@ -1,15 +1,13 @@
-# 当前交接：G1 / IMP-048；临时 Codex 全权执行
+# 当前交接：IMP-048 工程收口；下一候选 G1 / IMP-040
 
 
 > **2026-09-21 多窗口审计及晚间收口**：详见 `docs/review/chatgpt-multiwindow-audit-20260921.md`。审计指出的三类执行缺口已进一步收口：① BUG-020 的条件激活不再只靠记忆，`scripts/ledger-runtime-selection.py` 可在下一交易日 08:30–09:15 开工窗把静态 G4 临时抢回 G0，错过窗口/日历未知均 fail-closed；② 本机 AI-Trading 后端已受控停服、同步 `master@c272d260`、重启并通过 SQLite/health/30 scheduler/snapshot 验收；③ 前端误判已纠正——Next 15.5.25 进程属于另一个 `vide-trading` 仓库，AI-Trading 当时没有前端进程，自身 `npm ci` 后在 Node 22.22.2 下 695/695 tests 与 Next 16.3.3 build 全绿。Jev 真实 assistant 请求也已新增 `assistant_tool_router` receipt；RSH-030 human gold 仍必须独立人工完成。IMP-053 actual-fill 契约与唯一 `54b7e0c` RECOVERY 仍按各自 owner 保留。任务状态仍以 stage 为准，不以本段建立第二账本。
 
-> **定位 / 摘要（2026-09-26 当前）**：IMP-048 第三十四片 PR #169 已合并为 `90b981b7c71dcae269b6e8175e31897db1a44b93`，合并后 master CI #36213521221 三项通过且分支已清理。本机默认 SQLite 已经一致性备份、迁至当前 schema 并核事件数量与完整性。第三十五片正核实模型假设在题材关注、助手资讯、个股关联事件及实时发酵核验的消费边界。阶段页是任务状态单点；临时 Codex 全权授权持续到用户要求“改回来”，准确 HEAD 发布门不降低。
+> **定位 / 摘要（2026-09-26 当前）**：IMP-048 最后一片 PR #170 已合并为 `9e231cf1d0f003fccd9539ded1a9941f604db9ed`，合并后 master CI #36214720375 三项通过且分支已清理；本机默认 SQLite 已一致性备份并迁至当前 schema。所属阶段页按原验收逐项记录工程完成，同时明示真实关系样本、独立人工效果和正式运行尚无证据。按本次状态调整运行选择器为 G1/IMP-040；临时 Codex 全权授权持续到用户要求“改回来”，准确 HEAD 发布门不降低。
 
 **现行授权记录**：2026-09-24 用户在本 Codex 会话明确授权临时由 Codex 在 `DEGRADED_FULL_CONTROL` 下承担规划接续、实施、U49 作者反证、自审、PR/CI、发布、合并与清理，免网页 `Preflight` / 独立 `Review`，直到用户明确要求“改回来”或撤销。本授权不扩大业务、资金、模型、费用、部署或跨门权限；每个 PR 仍需准确 HEAD 的 `DegradedRelease`、完整本地门禁与 required CI、`release_check.py`、post-merge CI 和分支清理。作者回执必须标明非独立审核。具体临时规则见 [协作规范 §3.3a](collaboration-workflow.md#33a-2026-09-24-临时-codex-执行者授权)。
 
-**IMP-048 Codex 开工反证（作者 Preflight，非独立网页审核）**：基于 `master@e60b83e` 和隔离 SQLite 复现：同标题更正摘要入库后 `EventStore.add_event` 返回旧行，旧摘要与旧 `published_at` 不变；另一来源的同标题材料被标题指纹归并且来源/链接丢失；改标题的更正成为无关系的新 `EventCard`。这是已证实的来源身份与修订缺口。直接下游的事件详情、候选池和发酵验证读取旧行/方向，存在旧利好继续被当作当前依据的高风险；是否已有其他路径绑定旧事件版本尚未穷尽，列为待核。U49 已检查阶段门自锁、双事实源、顺序/部分失败、去重/unknown、权限/fail-open、动态旧状态、测试盲区与指针：当前 G1 首选无硬依赖，现有测试锁定标题去重但未覆盖更正、多源与回放；没有证据授权自动变更机会分数。首片先保存来源原文、接收与可见时点及修订关系，历史判断不倒填；真实通知、策略权重和 G4 Jev 晋级仍走各自原门。
-
-**IMP-048 当前开发现场（2026-09-26）**：第三十四片 PR #169 的准确 HEAD `277bb53d90421ddf3a185314aadd10c380800c64` 已取得作者 `DegradedRelease` 回执 `5842589664`，临合并两次发布检查 exit 0；PR CI #36213270603 与合并后 master CI #36213521221 三项通过，合并为 `90b981b7c71dcae269b6e8175e31897db1a44b93`，分支已清理。本机全后端 **4368 passed / 80 skipped / 0 failed**，前端常规/UTC 各 **718 passed**。第三十五片发现题材关注、助手、个股关联摘要和实时发酵核验仍消费/显示模型假设，定向反例修前判红；最终代码本机全后端 **4370 passed / 80 skipped / 0 failed**、前端常规与 UTC 各 **719 passed**，pyflakes、tsc、eslint、Next production build、文档体检、卫生和公开仓扫描通过；PR 发布待核。本机默认 SQLite 迁移有一致性备份，迁后 `quick_check=ok`、11101 张原事件卡可读；未生成历史观察或启动服务。独立人工关系标签与正式实例加载验收尚无证据，不据作者预标宣称语义准确率。IMP-048 的唯一状态与余项仍见 [W03/IMP-048](stages/w03-execution.md#imp-048)。
+**IMP-048 收口现场（2026-09-26）**：最后一片 PR #170 的准确 HEAD `c2a8a9615ace532c064563276dc953d69fc16783` 取得作者 `DegradedRelease` 回执 `5842741531`；临合并两次 `release_check.py exit 0`，PR CI #36214485744 与合并后 master CI #36214720375 三项通过，合并为 `9e231cf1d0f003fccd9539ded1a9941f604db9ed`，分支已清理。最终代码本机全后端 **4370 passed / 80 skipped / 0 failed**、前端常规与 UTC 各 **719 passed**，pyflakes、tsc、eslint、Next production build、文档体检、卫生及公开仓扫描通过。本机 SQLite 迁后再次只读核对 `a4e8c2d9f6b1`、`quick_check=ok`、11101 张旧卡可读，观察/解释/快讯水位均为 0；旧史不倒填。IMP-048 原工程验收逐项收口见 [W03/IMP-048](stages/w03-execution.md#imp-048)；独立人工关系与模型效果研究仍归 RSH-030，正式实例未启动，不据作者预标宣称语义准确率或运行成功。
 
 **IMP-043 后端 CI 并行现场（2026-09-24）**：PR #124 HEAD `df9295d170d86df69d4d0e2b8a2c049da457fc8e` 已合并为 `5a0ab083de0da469cad78ae9859509d69165dac1`；准确 HEAD 的作者 `DegradedRelease` 回执 `5810193236` 与临合并两次 `release_check.py exit 0` 均已核。PR CI `35972114896` 三项通过，backend job 174s / pytest 137.63s；合并后 master CI `35972636974` 三项通过，backend job 186s / pytest 145.75s；两次均为 4309 passed / 80 skipped。本机同树串行 128.06s、3 worker 78.50s，均为 4309 passed / 80 skipped；全量 pyflakes、前端 tsc/eslint、常规与 UTC 各 713 tests、Next build、doc-health、workspace-hygiene、公开仓扫描通过。本地与远端代码功能分支已清理。Linux 新耗时只有 PR 与 master 各一轮，持续复核 runner 波动与成本；未测得实际账单节省。
 
@@ -17,7 +15,7 @@
 
 **IMP-043 传播核对**：此片只更改 CI 测试执行方式和依赖，完整断言、三 job、发布权限与协作规则未变。所属 W08 stage 与本 handoff 已更新；`implementation-plan.md`、`plan-registry.md`、`collaboration-workflow.md`、`AGENTS.md`、Skills 与 `INDEX.md` 不适用，因为没有改变长期目标、权威路由、权限或发布契约。
 
-**IMP-048 传播核对**：本片继续把现有“LLM 辅助方向仅为待验证假设”的约束落实到次日题材关注、助手资讯、个股关联事件摘要和实时发酵核验；没有新增评分权重、交易动作、模型调用或发布权限。所属 W03 stage 与本 handoff 记录反例、验收和运行边界；代码契约在既有事件 API、核验模块、助手工具和个股详情组件中。总方案、领域蓝图、Jev 蓝图、plan-registry、INDEX、AGENTS 和 Skills 的长期规则未变，故不适用；没有新增第二任务账本。
+**IMP-048 传播核对**：本片只按已批准验收关闭 W03/IMP-048 的工程状态，并在既有 W04/RSH-030 保留独立人工关系与模型效果研究；没有把欠缺的研究证据改写为通过，也没有新增评分权重、交易动作、模型调用或发布权限。所属两份 stage 与本 handoff 同步状态、证据和运行边界；总方案、领域蓝图、Jev 蓝图、plan-registry、INDEX、AGENTS 和 Skills 的长期规则未变，故不适用；没有新增第二任务账本。
 
 
 
@@ -73,17 +71,17 @@ PR #39 已把累计协作功能栈合入 `master`（审计起点 merge commit `2
 
 本节只记录当前现场，不维护第二份 backlog；权威算法在总账 §5.9，任务元数据在所属 stage。
 
-- **当前交付切片**：G1/IMP-048；BUG-022 已由 PR #113 合并，U51 方案登记由 PR #114 合并，两者不再是待发布候选。
+- **当前交付切片**：G1/IMP-048 工程收口；状态发布后，下一机械候选为 G1/IMP-040。BUG-022 已由 PR #113 合并，U51 方案登记由 PR #114 合并。
 - **阻断状态**：G0–G4 当前没有可行动 blocker；BUG-022 完成态后 selector 使用 ordinary non-blocker fallback 继续排序。
 - **当前主门**：G1
-- **主切片首选**：IMP-048
-- **首选依据**：IMP-048 为 P1 / G1 / 非阻断 / 门内序40、无硬依赖；这是 BUG-022 完成态后的机械下一候选。
-- **同门候选顺序**：`IMP-048 → IMP-040 → RSH-031`。BUG-022 已从活动候选移除。
-- **领取边界**：用户本轮已明确要求开始 IMP-048，并临时授权 Codex 免网页审核自动完成当前切片的实施与发布；仍只领取这一主切片，下一刀须重算阶段门。
+- **主切片首选**：IMP-040
+- **首选依据**：选择器在本分支对已完成 IMP-048 重算，返回 `static=G1/IMP-040`、`effective=G1/IMP-040`；IMP-040 为 P1 / G1 / 非阻断 / 门内序60，硬依赖 BUG-020 已完成。它只是下一候选，尚未开工。
+- **同门候选顺序**：`IMP-040 → RSH-031`。IMP-048 与 BUG-022 已从活动候选移除。
+- **领取边界**：用户本轮明确要求完成 IMP-048；本轮只收口该任务，不自动开始 IMP-040。后续“继续”仍需重算阶段门和可行动条件。
 - **BUG-022 U49**：真实 Canvas 修前复现重复低波动标签与负零；除 formatter 根因外，主动反证新增参考日错配、同 HH:MM 跨日覆盖、混日叠画、指数 overlay 跨日及无效限价占位。当前均 fail-closed，并由切股/换源/跨日/叠加/四态限价回归锁定。
 - **条件任务**：G2/IMP-049 仍为 `待条件`，无受支持条件被激活；不因 G1 候选变化猜测开工。
 - **效果前置**：RSH-031 仍受其 `RSH-030` 等效果前置限制，当前排序不构成效果/生产晋级。
-- **运行态边界**：本轮没有重启或部署 AI-Trading 正式前端/后端。真实 Canvas 只使用现有 8000 后端 + 隔离 worktree 的最终 production bundle（临时 3001，验收后已停止）；不得把该验收写成生产部署完成。
+- **运行态边界**：本轮没有重启或部署 AI-Trading 正式前端/后端；本机 SQLite 结构迁移和隔离测试不等于正式实例加载或真实来源效果验收。
 - **GX 边界**：GOV-022/GOV-024/GOV-025/GOV-027 继续只作治理/伴随能力；U51 子范围登记不借文档发布跨门。
 
 ## 8. Jev、工具链与协作流当前基线
