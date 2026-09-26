@@ -282,8 +282,9 @@ def register_schedulers(reg: SchedulerRegistry, app: FastAPI, services: AppServi
         now = _dt.now().time()
         after_hours = now >= _time(15, 5) or now < _time(9, 15)
         stats = await collect_news_events(app.state, include_limit_up=after_hours)
-        if stats.get("created"):
-            log.info("event collector: +%s 新事件（duplicated %s）", stats["created"], stats["duplicated"])
+        if stats.get("created") or stats.get("unverified_stock_links"):
+            log.info("event collector: +%s 新事件（duplicated %s，待核标的关联 %s）",
+                     stats["created"], stats["duplicated"], stats.get("unverified_stock_links", 0))
 
     # 停机开关（2026-09-10 补）：此前它是唯一无开关的调度器，测试里会真的跑起来
     # 打网络并重复写 event_direction（撞 UNIQUE 约束）。测试一律关（见 conftest）。
