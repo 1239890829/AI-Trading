@@ -333,4 +333,4 @@
 ## 7. U52–U55确认后的产品入口
 
 总方案v9.13记录批准取舍；product/product-closure-design.md定义B/C任务导航、前后台、组件与六闭环；product/feature-closure-audit.md保存50项/18域/73源/30后台声明去向；ai/jev-integration.md附录B区分研发共审/业务凭证。确认与未完成传播见RV-09。
-Skills写入批次被平台安全拦截，本候选未完成相关Skill更新；不要将本索引的规范传播当作宿主加载或全链完工。阶段状态与顺位均在所属stage，不以下载报告/导航命名替代。
+Governor的decision-protocol参考卡已保存，但主入口、README及其他受影响Skills未完成；具体事实见RV-09。不要将部分参考更新或本索引传播当作宿主加载或全链完工。阶段状态与顺位均在所属stage，不以下载报告/导航命名替代。
