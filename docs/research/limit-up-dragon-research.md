@@ -632,8 +632,9 @@ ST 全身份、市场多状态、purged walk-forward、可成交 fill／成本�
 `4f8a3284823cd129da51a83e127ab82b2a1c12ee4202f6fb66ffad8454ad1981`。
 JSON 结构核验为 21 个代码单元、20 个已执行单元及 20 组输出，包含上述 220 日
 聚合结果和两日新闻分片；仅含探针代码、样本和汇总输出，**不含** 1,209,977 条
-概念分类原始行或新闻／盘口全量。下载原件保留在用户下载目录，同哈希副本留于
-忽略的 `artifacts/runs/rsh031-free-source-audit-20260927/supermind/`；不提交公共仓库。
+概念分类原始行或新闻／盘口全量。Markdown 与首份 `.ipynb` 原件经哈希核对后
+已移入项目忽略的 `artifacts/runs/rsh031-free-source-audit-20260927/supermind/`；
+下载目录不再留这两份 RSH-031 文件，不提交公共仓库。
 因此 Notebook 研究过程已可在本机检查，原始全量数据的可导出性、来源时点和
 使用权限仍须单独验证，不能以 FAQ 或菜单图标代替实测。后续应固定代码、
 查询窗口、日期和输出摘要后复验，
@@ -641,3 +642,54 @@ JSON 结构核验为 21 个代码单元、20 个已执行单元及 20 组输出�
 `available_at`、公告／新闻版本、完整临板分母和委托队列 fill 仍需分别证实。
 [Fuyao 现役成分接口](https://fuyao.aicubes.cn/docs/api-reference/a-share-index/)
 官方仅支持查询当前成员，不能把已有 API Key 当作历史权限。
+
+## 19. SuperMind 分钟／证券宇宙复验与开放 L2 候选（2026-09-27）
+
+在同一免费 SuperMind Notebook 内，按[官方 `get_price`／`get_all_securities` API](https://quant.10jqka.com.cn/view/help/4?from=ifind)
+增加有界探针，并从界面再次下载原生 `.ipynb`。新导出为
+`RSH031_supermind_source_probe_20260927-minute-universe.ipynb`，SHA-256
+`7e19802c0dda11f668bbac52b27feac8e3d75248c55fb208682d42c4ecdf160b`；
+24 个代码单元、23 组输出。原件与前两份下载物均在上节的项目忽略目录，
+目录内 README 记录来源、哈希和限制。整个本轮研究资产目录已从 PR 工作树
+同步到主项目同名 `artifacts/runs/` 目录，逐文件比较无差异；即使日后归档
+PR 工作树，主项目仍保留 144 MB 左右的本机恢复证据。不把平台原始行情表
+提交公共仓库。
+
+- `get_price(..., '1m', ...)` 对 2016-08-01 `000001.SZ`、2025-10-09 和
+  2026-08-31 `002916.SZ` 各取 09:30–09:40，三窗均返回 10 根，标签为
+  09:31–09:40。2025-10-09 一批 100 只沪深证券的全天查询返回 100 个
+  DataFrame、合计 24,000 根，每只 240 根、无空帧，平台内耗时约 1.33 秒。
+  这证实原保留段最后一天的**分钟行情可查**，可在平台内研究临板／触板
+  分母；一批 100 只不能推断 5,000 多只 × 220 日完整、无错且可本地落地。
+  分钟收盘标签也不等同首次触价、首次封板或委托可成交时刻。
+- 日期化 `get_all_securities('stock', d)` 对 2016-08-01、2023-03-31、
+  2025-10-09、2026-08-31 分别返回 2,886／5,316／5,684／5,799 只；
+  其中沪深后缀分别为 2,886／4,948／5,159／5,212。与同日
+  `concept_classification` 证券集合比较，分类表分别有 14／15／15／15
+  只不在日期化证券目录。官方还明确 `get_all_securities` 的简称不能用作
+  历史 ST 判断。因此这个接口能补**旧证券宇宙候选**，但需解释集合差异、
+  证券身份和首次发布／修订，不得把日期参数本身当点时认证。
+- [官方 `asharenews` 表](https://quant.10jqka.com.cn/view/dataplatform/detail/393)
+  将 `rtime` 明确定义为**审核评级时间**，并只列标题而无正文或修订链。
+  `ctime` 是源称新闻发布时间；两个字段都没有证明本系统在彼时首次可见。
+  [概念分类表](https://quant.10jqka.com.cn/view/dataplatform/detail/73)仅列
+  `symbol/date/concept`，没有成员首次发布或修订版本列。
+
+另核了免费 L2 候选的发布方页面。开放的
+[AShareTickData](https://huggingface.co/datasets/cooronxon/AShareTickData)自述
+含逐笔委托、成交与五档快照，但仅覆盖 2026-05-06 至 05-29 的 18 个交易日、
+6 只证券，仓库约 709 MB；它最多支持**窄域队列方法校验**，不能补全 RSH-031
+的全市场、全窗 fill 分母。固定版本
+`cf50faff46a1118524c83b386f32e47d710441f4` 的公开目录可读，
+尝试访问其中的 `SZOrder.parquet` 文件头在 20 秒内超时，未取得原始 L2 行；
+数据卡标 MIT，但未独立核清底层交易所数据权益，故尚未接入。
+[phields trades](https://huggingface.co/datasets/phields/a-share-l2-trades)只列
+成交数据且许可为 `other`，不能补逐笔委托；此前发现的
+[venvoo L2 全期候选](https://huggingface.co/datasets/venvoo/china-a-share-l2-level2-limit-order-book-tick-data)
+仍需申请访问、接受研究用途条款，文件存在也不保证日内消息完整。
+这些来源均不能据页面覆盖声明就认作已获授权、可成交验收通过。
+
+结论：SuperMind 已实测可补历史分钟价格与日期化证券目录的**候选数据**，
+Notebook 下载和项目归档已闭环。正式 RSH-031 仍缺全窗临板正负分母、
+成员及新闻／公告的点时可见与修订证据、逐笔队列／真实 shadow fill、
+以及独立样本外和成本效果验证；原固定评分不因本轮探针重算或晋级。
