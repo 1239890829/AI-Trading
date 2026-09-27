@@ -725,7 +725,7 @@ Notebook 中对 `get_concept_relate(date)` 增加一组有界查询。`ChatGPT�
 
 | 候选 | 核实结果 | 对 RSH-031 的边界 |
 | --- | --- | --- |
-| [phields 公开 L2 委托／快照](https://huggingface.co/datasets/phields/a-share-l2-market-depth) | 匿名元数据 API 返回公开、非 gated、revision `558381a6b22c9012ffcfa5c4f972eaa1633e2dcd`，许可标 `other`。实际下载并核对公开 `l2_orders` manifest，SHA-256 `4ce2eb7cef5e34c7982b01f3f4469dbcedf677a6d46ef55f834e237559536c96`：目前只列 2026-07-24 一日、249,705,486 行委托事件、10 个 Parquet 文件；元数据与 receipt 存项目忽略的 `artifacts/runs/rsh031-free-source-audit-20260927/l2-candidate-audit/`。发布页另列 20,279,887 行十档快照；原始成交在另一数据集。 | 单日可以成为方法核对候选，但不是 220 日全窗；发布方明示缺交易所通道序号、档位订单数和买一前 50 队列，且要求使用者自行核供应商、交易所与再分发条款。未据页面总行数误判为多日覆盖，也未把这批数据当可证明真实 fill 的授权来源。 |
+| [phields 公开 L2 委托／快照](https://huggingface.co/datasets/phields/a-share-l2-market-depth) | 匿名元数据 API 返回公开、非 gated、revision `558381a6b22c9012ffcfa5c4f972eaa1633e2dcd`，许可标 `other`。实际下载的 `l2_orders` manifest（SHA-256 `4ce2eb7cef5e34c7982b01f3f4469dbcedf677a6d46ef55f834e237559536c96`）及数据卡**只列** 2026-07-24 一日、249,705,486 行委托事件、10 个 Parquet 文件；同一 revision 的完整仓库文件树另列 2026-04 的 8 日、07 的 22 日，共 **30 个不同日期**的委托和快照文件。文件树 receipt SHA-256 `922330b72ff15d1e79d99ed2eb4e58be47aad66b9764f99b12d882799ff07db0`；两份元数据存项目忽略的 `artifacts/runs/rsh031-free-source-audit-20260927/l2-candidate-audit/`。原始成交在另一数据集。 | 数据卡／manifest 与仓库文件树存在覆盖冲突，尚未核 30 日实文件的行数与完整度；即使按文件树也远少于 220 日。发布方明示缺交易所通道序号、档位订单数和买一前 50 队列，且要求使用者自行核供应商、交易所与再分发条款。未把公开行数或文件名当作可证明真实 fill 的授权来源。 |
 | [submato 免费 L2 共享](https://github.com/submato/ashare-l2) | README 列出 2026-05 至 06 的免费网盘链接，并称 2017 年以来另有历史数据；同时明确 MIT 只适用于代码与文档，行情数据仍可能受交易所／数据商授权约束。 | 免费共享的列示窗口不覆盖原 2025-10 起全窗；数据许可与每日完整度均未核实。未访问网盘或申请收费历史包。 |
 | [BigQuant 概念进出表](https://bigquant.com/data/datasources/cn_stock_index_concept_change) | 官方目录列 `date/member_code/inout_flag/instrument`，表上架时间从 2024-06-27 起。当前浏览器未登录，页面没有可执行的免费查询与成员公布／修订时刻证据。 | 字段值得后续在免费权限内实抓并与 SuperMind 交叉核，但目录日期不等于数据记录起始日，表结构也不证明免费额度、历史覆盖或点时可见。当前不能接入。 |
 | [公开 2015–2026 市场复盘表](https://github.com/bulletforyou/AShareMarketReview) | 源仓列逐日 22 列工作簿，包含涨停家数与封板率等**市场聚合**字段；未核原始行情再利用许可。 | 可作市场级交叉参照候选，不含个股首次触板、封板／开板或订单队列，不能替代全分母。未下载原始工作簿。 |
@@ -736,7 +736,7 @@ Notebook 中对 `get_concept_relate(date)` 增加一组有界查询。`ChatGPT�
 的“免费可见”不能独立证明底层交易所数据权益。全窗分钟数据仍可在
 SuperMind 研究环境继续分批验证，但即使完成分钟分母，概念成员修订、
 新闻／公告首次可见和真实排队成交仍是独立缺口；本轮不改冻结评分、
-不把单日 L2 或概念建立日期填入原研究真值。
+不把未核完整度的 L2 文件或概念建立日期填入原研究真值。
 
 ## 21. 开放仓与学术样本的覆盖／许可复核（2026-09-27）
 
@@ -746,6 +746,8 @@ SuperMind 研究环境继续分批验证，但即使完成分钟分母，概念�
 （SHA-256 `309cbf4d161ccef8230d92b7b1a757db42ca9fa419e4de5f887a7f89bfe61c63`）。
 这是**元数据清单**，没有下载或验证这些仓库的行情行；文件名、数据卡和公开预览
 均不能单独证明逐日完整度、交易所授权或实盘可成交。
+另对 phields 委托仓固定同一 revision 的完整文件树；其 30 日与数据卡／manifest
+的一日冲突见 §20，未以任一摘要代替实文件验收。
 
 | 来源 | 本轮核得的范围 | 当前判定 |
 | --- | --- | --- |
