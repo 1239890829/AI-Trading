@@ -595,7 +595,10 @@ ST 全身份、市场多状态、purged walk-forward、可成交 fill／成本�
 计数作为来源否证；不通过去重／删除坏行“修好”新版后宣称历史已补齐。
 
 [同花顺 SuperMind 官方说明](https://quant.10jqka.com.cn/view/help/16)称研究回测免费，
-但也明确其平台数据目前**不支持下载**。在用户已登录的免费研究 Notebook 中，
+并写有平台数据“暂不支持下载”；但当前 Notebook 界面的“文件→下载为”确实
+可导出 Markdown 和原生 `.ipynb`。不能把 FAQ 的概括误写为 Notebook 不可下载，
+也不能由 Notebook 可导出反推全量数据表的批量导出或再分发权限。
+在用户已登录的免费研究 Notebook 中，
 实际通过 `mindgo_api` 查询了[历史概念成员](https://quant.10jqka.com.cn/view/dataplatform/detail/70)、
 [个股概念分类](https://quant.10jqka.com.cn/view/dataplatform/detail/73)、
 [历史行情快照](https://quant.10jqka.com.cn/view/help/4?from=ifind)和
@@ -624,10 +627,16 @@ ST 全身份、市场多状态、purged walk-forward、可成交 fill／成本�
   返回 61 条，含当时的买一／卖一价量。快照能做封板前价格和报价代理，
   没有完整逐笔新增／撤单队列，不能推出反事实 fill。
 
-Notebook `RSH031_supermind_source_probe_20260927.ipynb` 的代码和输出保存在用户的
-SuperMind 研究环境，未公开分享；本仓库仅记录
-脱敏的聚合检查。官方的“不支持下载”使本机 RSH-031 分析脚本无法直接消费这份
-原始数据；若在平台内继续研究，应把代码、查询窗口、日期和输出摘要固定后复验，
+用户先下载了 Markdown；随后从当前界面实取原生
+`RSH031_supermind_source_probe_20260927.ipynb`，SHA-256 为
+`4f8a3284823cd129da51a83e127ab82b2a1c12ee4202f6fb66ffad8454ad1981`。
+JSON 结构核验为 21 个代码单元、20 个已执行单元及 20 组输出，包含上述 220 日
+聚合结果和两日新闻分片；仅含探针代码、样本和汇总输出，**不含** 1,209,977 条
+概念分类原始行或新闻／盘口全量。下载原件保留在用户下载目录，同哈希副本留于
+忽略的 `artifacts/runs/rsh031-free-source-audit-20260927/supermind/`；不提交公共仓库。
+因此 Notebook 研究过程已可在本机检查，原始全量数据的可导出性、来源时点和
+使用权限仍须单独验证，不能以 FAQ 或菜单图标代替实测。后续应固定代码、
+查询窗口、日期和输出摘要后复验，
 并在新闻高于 10,000 行的日期按时间分片；两日分片探针已通过。即使平台内完成全窗查询，成员
 `available_at`、公告／新闻版本、完整临板分母和委托队列 fill 仍需分别证实。
 [Fuyao 现役成分接口](https://fuyao.aicubes.cn/docs/api-reference/a-share-index/)
