@@ -747,7 +747,7 @@ async def theme_focus(
             else:
                 b["neutral"] += 1
             st = judge_state(pub, [{"direction": dir_v, "chain": getattr(d, "chain", "")}],
-                             half_life_hours=getattr(r, "half_life_hours", None))["status"]
+                             now=now, half_life_hours=getattr(r, "half_life_hours", None))["status"]
             if st == "judged":
                 b["judged"] += 1
             elif st == "pending":
