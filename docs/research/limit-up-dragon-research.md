@@ -564,7 +564,7 @@ ST 全身份、市场多状态、purged walk-forward、可成交 fill／成本�
 | [开盘红历史成员封装](https://github.com/fleetinglife/levistock)／[涨停客历史题材页](https://zhangtingke.com/ticai_stocks?date=20251017&ticainame=%E7%85%A4%E7%82%AD) | 前者源码有历史日期参数，但 MIT 仅约束封装代码，未证明上游数据许可或免费长期可用；本轮未调用其移动端接口。后者网页实际要求微信登录并开通 VIP 才可看成分。 | 均不能作为已取得的免费点时题材全集；没有以另一条路径绕开会员限制。 |
 | [Tushare 开盘啦题材成员](https://tushare.pro/document/2?doc_id=351)／[东财每日成员](https://tushare.pro/document/2?doc_id=363)／[ST 列表](https://tushare.pro/document/2?doc_id=397) | 官方文档分别要求 5,000／6,000／3,000 积分，东财每日成员从 2024-12-20 起。 | 本机无已授权凭据及积分证明，未调用或付费；文档样例不能当本任务已取得样本。 |
 | [StockApi 历史逐笔](https://www.stockapi.com.cn/menu/18)／[开放 Level-2 样本](https://huggingface.co/datasets/alphat04/Tick-by-Tick-Orders-China/blob/main/README.md) | 前者自述每日免费 1,000 次，但只保留近 10 个交易日；本机对 2026-09-23 单股请求 HTTP 200、响应体 0 字节，未取得逐笔。后者为人工审核的学术非商业授权数据，2026 年页列 99 天约 480 GiB，并有缺股日。 | 都未提供本次固定 2025-10 至 2026-08 窗口内可用、许可明确的全市场委托／成交序列。成交打印或日线成交量本身不能证明涨停价委托在队列中可成交。 |
-| [Hugging Face 历史 Level-2 归档](https://huggingface.co/datasets/venvoo/china-a-share-l2-level2-limit-order-book-tick-data) | 数据卡列 2017–2026 年逐日十档、逐笔委托与成交，至 2026-08-31 的清单有 2,346 日，仓库总量 6.27 TB；同时明确“三文件存在”不保证当日完整。访问须登录、点赞、关注、申请并接受 `research-use-only` 条款；本机无该数据集的已批准访问凭据，未下载或核对任一市场文件。 | 是队列／fill 验证的具体候选，但目前只有来源自述，不能当已取得数据；即使获准，仍要固定 revision、逐日核覆盖和许可，并做有界抽样，不能以磁盘不足为由略过全分母验收。 |
+| [Hugging Face 历史 Level-2 归档](https://huggingface.co/datasets/venvoo/china-a-share-l2-level2-limit-order-book-tick-data) | 2026-09-27 数据卡列 2017–2026 年逐日十档、逐笔委托与成交，至 2026-08-31 的清单有 2,346 日，仓库总量约 6.27 TB；同时明确“三文件存在”不保证当日完整。访问须登录、点赞、关注、申请并接受研究用途条款；当时本机无该数据集的已批准访问凭据，未下载或核对任一市场文件。**2026-09-28 的新版目录覆盖复核见 §22**。 | 是队列／fill 验证的具体候选；只有来源声明与文件目录，不能当已取得或完成验证的数据。获准后仍须固定 revision、核授权及逐日原始行质量，不能以磁盘不足为由略过全分母验收。 |
 | [公开部分近期逐笔成交](https://huggingface.co/datasets/phields/a-share-l2-trades) | 数据卡目前列 2026-04-01 至 09-24 的 119 日、约 149.49 GiB 本地压缩体积，按日及证券前缀分文件；未下载原始逐笔。许可标 `other`，作者要求使用者自行确认原供应商／交易所与再分发条款。 | 只有成交打印及相关订单 ID，不含完整提交／撤销和盘口队列；即使许可可用，也不足以对原 2025-10 起全窗证实假设买单排队 fill。不能替代 gated 三流数据。 |
 
 因此免费来源**新增了可复核的部分公告披露时间，并补齐近期证券日的 ST／停牌和上市日期覆盖**；仍未取得完整新闻首次可见／修订、
@@ -768,3 +768,28 @@ SuperMind 研究环境继续分批验证，但即使完成分钟分母，概念�
 因此继续保持 RSH-031 `待条件`，不靠放宽历史验收使负结果转正。
 实际 hunting shadow 成交由 W03／IMP-053 在运行时持久采集，历史行情或回测
 只能给反事实估计，不能倒填为 `shadow_fill_net`。
+
+## 22. venvoo 原保留窗文件目录复核（2026-09-28）
+
+用户登录 Hugging Face 后，仍需就该数据集单独申请访问。
+[发布方页面](https://huggingface.co/datasets/venvoo/china-a-share-l2-level2-limit-order-book-tick-data)
+称可下载 2017-01-03 至 2026-09-24 的十档行情、逐笔委托和逐笔成交，
+并要求申请者点赞、关注发布者及确认学术或非商业研究用途；底层行情权利
+仍归原权利人。其页面把“当日三文件存在”和“交易时段及证券消息完整”明确分开，
+且承认供应商历史导出不能保证无损订单簿重建或完整队列位置。
+
+本轮匿名读取公开仓库文件树，固定 revision
+`1c939ee2dae5aab9f0a4facbca7db7d1d74d0613`，与本机已冻结的
+2025-10-09 至 2026-08-31 **220 个交易日**逐日对照：220/220 均列有
+`行情.parquet`、`逐笔委托.parquet`、`逐笔成交.parquet`，目录级缺文件日为 0。
+核对范围、220 日列表和 revision 保存在项目忽略的
+`artifacts/runs/rsh031-free-source-audit-20260927/l2-candidate-audit/venvoo-repo-tree-coverage.json`
+（SHA-256 `6008cfac170ef4c86cd58157fca2293cc3a63f508cdcb0eee73ae58e2c59ec29`），
+与主工作区副本一致。公开 API 返回 `gated=manual`、许可元数据为 `other`，
+页面正文使用 `research-use-only`；具体 LICENSE 因未获数据集访问而返回 HTTP 401。
+
+**目录覆盖已补，数据准入仍未补。** 尚未获批准的访问、底层行情使用权、
+任一原始文件的字段／行数／时段／证券完整度及与既有涨停池的逐日交叉核验
+均不能用文件名代替。即使 L2 准入，点时题材成员、新闻／公告首次可见版本、
+真实 IMP-053 shadow fill 和冻结方案的完整效果检验仍是独立验收项。
+因此 RSH-031 继续 `待条件`；不把本轮 220/220 文件目录写成研究或交易效果通过。
