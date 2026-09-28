@@ -1097,3 +1097,22 @@ K 线的**条标签**，不是逐笔首次触价时刻；不能据此推出盘�
 对齐、交易所委托队列的可成交估计，以及 IMP-053 的实际 shadow fill。
 九月窄域组合的 AP 和日期重抽样仍未支持稳定增益；本次源覆盖
 不能改变原候选不晋级、RSH-031 `待条件` 和 PR 草稿状态。
+
+## 27. GDELT 新闻归档的首见边界抽查（2026-09-29）
+
+[GDELT 2.0](https://gdeltproject.org/data.html)公开每 15 分钟的新闻元数据归档。
+对原窗 2025-10-09 09:30 北京时间对应的单个 UTC 批次，实际读取英文及
+Translingual 两份 GKG 压缩文件，分别为 **1,277**／**1,314** 行，均为
+27 列。Translingual 批次中可见 `eastmoney.com` 4 行、`sina.com.cn`
+25 行、`nbd.com.cn` 15 行；这是域名计数，不能把这些行全算 A 股新闻。
+两份文件 SHA-256、字节数、行数和来源文档保存在主项目忽略的
+`artifacts/runs/rsh031-free-source-audit-20260927/gdelt/gdelt-probe-20260929.json`
+（SHA-256 `0d8d119b15548b7a4cdaa0ad1be5c7136e3b09d383ab660f1eaa61d31a010aad`）。
+可再生的两份压缩文件核验后已删除，不留重复原料，也不将文章内容入库。
+
+[官方字段说明](https://data.gdeltproject.org/documentation/GDELT-Global_Knowledge_Graph_Codebook-V2.1.pdf)
+将记录 ID 前缀解释为批次、`V2.1DATE` 解释为文档发布时间，但同一文件的
+该值相同。故此归档最多证明**GDELT 在该批次观察到部分来源 URL 和抽取元数据**；
+单个批次无法证明原站首次可见、正文原始版本／修订链、全窗 A 股新闻召回率，
+更不能代替逐股题材成员。它可作为将来有界新闻交叉核对的候选，不改变
+§26 的缺口、RSH-031 `待条件` 或当前候选不晋级结论。
