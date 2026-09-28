@@ -1044,3 +1044,16 @@ BigQuant 的日状态也是当前回查的历史表，**未给逐行原始发布
 5 分钟区间上界，不能解释为下单后排队成交。候选只保留研究观察，
 不接入生产选股或策略权重。后续仍须 RSH-026／IMP-020 的统一效果验证、
 RSH-030 的独立人工语义样本与 IMP-053 的真实 shadow 成交证据。
+
+同一免费 D0 研究环境另对 BigQuant 的
+[概念成分变更](https://bigquant.com/data/datasources/cn_stock_index_concept_change)、
+[概念成分日表](https://bigquant.com/data/datasources/cn_stock_index_concept_component)
+及[新闻快讯测试表](https://bigquant.com/data/datasources/cn_stock_flashnews_gst_raw)
+做只读覆盖探针：九月保留段分别返回 **1,094 条变更**、
+**1,223,860 条成分日记录**；两张概念表仅有历史 `date`，没有逐行
+`available_at`、原始发布或修订版本，不能凭回查结果证明 09:55 时可见。
+新闻测试表虽有 `publish_time` 和 `scraped_at`，2025-10-09 至
+11-12 返回 16,177 条／35 个日期，最晚抓取于 2025-11-12；
+11-13 至 2026-08-31 及九月保留段均返回 **0 条**。因此这三张表
+不能补齐全窗点时题材与新闻首见链；本轮没有下载其原始表或把
+回填日期当作可交易信号，SQL 与聚合输出留在本机忽略的来源探针回执。
