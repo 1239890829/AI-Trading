@@ -754,7 +754,7 @@ SuperMind 研究环境继续分批验证，但即使完成分钟分母，概念�
 | [phields 逐笔成交](https://huggingface.co/datasets/phields/a-share-l2-trades) | 数据卡声明 2026-04-01 至 09-24 共 119 个交易日，只有成交事实表；许可元数据为 `other`，发布者要求使用者另核供应商、交易所和再分发条款。 | 成交记录可用于有界方法核对，不能重建全窗逐笔委托、撤单与涨停价排队；覆盖亦缺 2025-10 至 2026-03。未接入。 |
 | [wind17 年度压缩包](https://huggingface.co/datasets/wind17/china-a-share-zip)、[suncong 分钟表](https://huggingface.co/datasets/suncong/ashare_1min)、[suncong 事件包](https://huggingface.co/datasets/suncong/Ashare-events) | 匿名 API 见 2010–2026 年压缩包、六张分钟 OHLCV 表，以及仅列 2026-09-22／23／24 的事件包；三者均无可核数据许可。年度包的文件名不说明内部粒度；分钟表不含委托队列，事件包在原保留窗之后。 | 未取得可核原始字段或授权；不能作为原窗 L2、点时语料或首次可见时间的替代。未接入。 |
 | [jck3114 早期分钟基准](https://huggingface.co/datasets/jck3114/ashare-book-benchmark-train)、[neigezhu 分钟 OHLCV](https://huggingface.co/datasets/neigezhu/china-a-share-1min-ohlcv) | 前者文件清单为 2012–2017 年分钟 bar/label，无许可元数据；后者的 Apache-2.0 数据卡与分钟实文件已在 §17 核过，快照止于 2026-08-07 盘中。 | 可作早期分钟方法候选，不提供原窗完整委托队列或 08-31 盘中分母；底层行情使用权仍须单核。 |
-| [alphat03 2025 逐笔委托／成交](https://huggingface.co/datasets/alphat03/Tick-by-Tick-Orders-China) | 数据卡声称 242 日、每日订单／成交／十档快照，约 1005.7 GiB；访问为人工审核的非商业学术许可，要求申请者提供真实联系信息并接受不再分发条款。2026 年另仓，2016–2022 年未列。 | 是具体的研究申请候选，尚无本机获准访问或任一日实文件核验；即使获准也不能仅凭目录宣称全窗、首次可见语料或真实 shadow fill 完成。未申请、未下载。 |
+| [alphat03 2025 逐笔委托／成交](https://huggingface.co/datasets/alphat03/Tick-by-Tick-Orders-China) | 数据卡声称 242 日、每日订单／成交／十档快照，约 1005.7 GiB；访问为人工审核的非商业学术许可，表单还要求真实机构邮箱、联系信息和不再分发承诺。2026 年另仓，2016–2022 年未列。 | 2026-09-28 登录页仍显示申请表，没有待审或获准回执；当前申请条件不匹配，退出本轮可用来源候选，不要求虚构机构或邮箱。未下载实文件。后续只有真实资格及来源授权改变时才重开。 |
 | [GSAS 开放基准](https://www.gsas.edu.hk/china-stock-market-open-benchmark-datasets/) | 发布方欢迎研究下载；订单与成交表仅列 2013-02 至 2014-02、2020-04，且为 300 多只活跃证券。 | 可作旧制度的窄域订单重建方法对照，不覆盖 2025–2026 保留窗或全市场正负分母；不扩充主验收。 |
 
 [上交所官方历史数据产品](https://english.sse.com.cn/markets/dataservice/products/)
@@ -763,7 +763,7 @@ SuperMind 研究环境继续分批验证，但即使完成分钟分母，概念�
 数据权利、来源、固定版本与逐日覆盖检查。SuperMind 的策略订单接口查询的是
 策略自己的订单，不是交易所全市场委托队列。
 
-本轮未找到**已获准、可验证且覆盖原窗**的免费订单／成交／撤单组合，也未找到
+2026-09-27 本轮未找到**已获准、可验证且覆盖原窗**的免费订单／成交／撤单组合，也未找到
 成员修订与新闻／公告首次可见的全窗版本。原候选在保留段不优于简单相对强弱，
 因此继续保持 RSH-031 `待条件`，不靠放宽历史验收使负结果转正。
 实际 hunting shadow 成交由 W03／IMP-053 在运行时持久采集，历史行情或回测
