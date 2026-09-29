@@ -512,8 +512,10 @@ class EventStore:
                 # DateTime 在本库按 YYYY-MM-DD HH:MM:SS.ffffff 保存，整型微秒
                 # 比较与 is_active 的严格 < 判据一致，不依赖宿主时区。
                 now_us = timegm(now.timetuple()) * 1_000_000 + now.microsecond
+                # Older SQLite rounds .9995+ into the next second in %s.
+                # Parse whole seconds separately before adding stored microseconds.
                 published_us = (
-                    cast(func.strftime("%s", EventCard.published_at), Integer) * 1_000_000
+                    cast(func.strftime("%s", func.substr(EventCard.published_at, 1, 19)), Integer) * 1_000_000
                     + cast(func.substr(EventCard.published_at, 21, 6), Integer)
                 )
                 stmt = stmt.where(

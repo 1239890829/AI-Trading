@@ -16,7 +16,7 @@
 ## 3. 人工短提示循环
 
 网页在原阶段记录当前模式、轮次、范围/非目标、依据版本、验收和允许下一动作。Codex收到“ChatGPT审核完了”后只触发读取，按真实记录决定执行、整改、等待或只读；不能因为提示里有审核就默认通过。
-Codex执行完必须记录实现/测试/偏差/剩余、提交推送，然后用户在网页说“Codex执行完了”。网页读真实差异和必要证据，先审核成果再复评下一步，结论写回同一任务。没有明确下一任务时，Codex不得凭感觉跨轮；用户若在 Codex 端调用 `ashare-ledger-continue` 说“继续任务/继续”，也必须先按总账 §5.9 机械选门：有 blocker 时取最低 blocker 门，**无 blocker 时回落到最低仍有 actionable non-blocker 的 G0–G4**，再只领取**一个**门内合法切片；G5/GX 不因 fallback 自动成为普通主切片。
+Codex执行完必须记录实现/测试/偏差/剩余、提交推送，然后用户在网页说“Codex执行完了”。网页读真实差异和必要证据，先审核成果再复评下一步，结论写回同一任务。没有明确下一任务时，Codex不得凭感觉跨轮；用户若在 Codex 端调用 `ashare-ledger-continue` 说“继续任务/继续”，也必须先按总账 §5.9 机械选门：有 blocker 时取最低 blocker 门，**无 blocker 时回落到最低仍有 actionable non-blocker 的 G0–G4**，再只领取**一个**门内合法主任务并连续完成其内部切片；G5/GX 不因 fallback 自动成为普通主切片。
 用户不复制任务卡、提交号或整段历史，不承担技术审核；短提示是通知，不是已完成证据、批准或发布授权。模型额度不足影响执行，不妨碍获准的规划工作，不试探额度或切收费API。
 
 ### 3.1 三种不同的完成
@@ -35,7 +35,7 @@ Codex执行完必须记录实现/测试/偏差/剩余、提交推送，然后用
 
 ### 3.3 U50 受控降级全权闭环
 
-`DEGRADED_FULL_CONTROL` 是正常双角色不可用时的正式降级模式，不是绕过发布门。**激活条件只有一个：用户明确授权**；额度不足、连接失败、等待时间长都不能由模型自行推断授权。激活后 handoff 写明模式、授权时间/原因与当前切片，网页端可连续承担规划、实现、U49 作者反证、提交/PR、CI、发布、合并、post-merge CI 和分支清理；在用户未明确退出前，后续“继续”可按同一阶段门算法由网页直接领取下一个唯一切片。
+`DEGRADED_FULL_CONTROL` 是正常双角色不可用时的正式降级模式，不是绕过发布门。**激活条件只有一个：用户明确授权**；额度不足、连接失败、等待时间长都不能由模型自行推断授权。激活后 handoff 写明模式、授权时间/原因与当前切片，网页端可连续承担规划、实现、U49 作者反证、提交/PR、CI、发布、合并、post-merge CI 和分支清理；在用户未明确退出前，后续“继续”可按同一阶段门算法由网页直接领取下一个唯一主任务。
 
 降级模式不伪装独立审核。每个 PR 都必须在 PR Conversation 留一个 exact-PR/exact-HEAD `DegradedRelease` 回执，至少包含：`Stage: DegradedRelease`、`Mode: DEGRADED_FULL_CONTROL`、`User authorization: EXPLICIT`、非空 `Degraded reason`、`Release HEAD` 及 `Degraded Release verdict: APPROVED / MERGE_IF_GATES_PASS`。作者普通自检、测试摘要或“无已知问题”均不能替代该回执。HEAD/base/CI 变化后旧回执失效。
 
@@ -45,7 +45,7 @@ Codex执行完必须记录实现/测试/偏差/剩余、提交推送，然后用
 
 用户在 Codex 会话明确要求“先临时改一下，无需 ChatGPT 网页审核可自动走下去，我叫改回来再改回来”。因此从本轮起，`DEGRADED_FULL_CONTROL` 的执行者临时改为 Codex，直到用户明确撤销或要求“改回来”。本例外只替换网页侧的规划、`Preflight`、实施和独立 `Review` 角色；Codex 功能分支仍用 `codex/*`。Codex 自行记录 U49 开工反证与准确差异的作者复核，不把自审写成独立 Review；每个 PR 仍以 `DegradedRelease` 明示 `Mode=DEGRADED_FULL_CONTROL`、`User authorization=EXPLICIT`、非空原因、准确 PR/HEAD、作者身份与同一 verdict。`release_check.py` 现有结构化降级回执路径继续使用，不修改或绕过脚本。
 
-可继续工作的含义是：按 §3.5 与总账 §5.9 每次重算并只领取一个合法主切片，在当前切片内完成本地门禁、PR、required CI、精确 HEAD 发布检查、合并后 master CI 与分支清理；不启动无人监督的并发调度，也不自动越过 G 门、硬依赖、效果/生产准入、资金和权限边界。若发生 HEAD/base 漂移、阻塞审查或 CI 失败，先修复并重验，不能凭本授权放行。用户撤销时立即停止用 Codex 作者回执放行未合 PR，恢复正常网页 `Preflight` 与独立 `Review`；本节和 handoff 的活动授权随下一次治理提交撤回，历史回执保留。
+可继续工作的含义是：按 §3.5 与总账 §5.9 每次重算并只领取一个合法主任务，在任务内连续完成各切片及本地门禁、PR、required CI、精确 HEAD 发布检查、合并后 master CI 与分支清理；不启动无人监督的并发调度，也不自动越过 G 门、硬依赖、效果/生产准入、资金和权限边界。若发生 HEAD/base 漂移、阻塞审查或 CI 失败，先修复并重验，不能凭本授权放行。用户撤销时立即停止用 Codex 作者回执放行未合 PR，恢复正常网页 `Preflight` 与独立 `Review`；本节和 handoff 的活动授权随下一次治理提交撤回，历史回执保留。
 
 ### 3.4 换会话、重复通知与冲突
 
@@ -57,6 +57,8 @@ Codex执行完必须记录实现/测试/偏差/剩余、提交推送，然后用
 handoff 若明确 DESIGN_ONLY / REVIEW / BLOCKED，则不得执行；计划存在 P0、图已展示或用户说“完善方案”也不自动构成业务修复、回放、模型、采集、迁移或部署授权。handoff 可执行时，网页派工或用户“继续任务”先运行 `python3 scripts/ledger-runtime-selection.py --json` 重算 stage 明示的受支持 `运行条件`，再遵守同一顺序：G0–G5 阶段门 → 门禁角色 → P0/P1/P2 → 门内序 → 硬依赖。运行条件为 unknown/pending/expired 时不激活，且不得改写 stage 静态状态；`效果前置` 未满足时不得升级效果主张。任何跨门只能使用网页已登记的 `CROSS_GATE_EXCEPTION`，该授权仍只覆盖这一刀。
 
 ## 4. 每轮需要思考什么
+
+2026-09-26/29 用户要求整任务连续完成，取代旧“一轮一个切片”约定；内部切片不自动结束用户轮次。用户指定范围优先，真实外部阻塞必须写明缺失输入及哪项验收受阻；在同一任务内推进其他独立可做项。数据调查先核关键前提和可取得的验收证据，历史估计与未来运行记录各归原 owner；负结果可以关闭被否证的候选，不能代替整项未完成验收。研究记录在可审批次内先本地收敛再推送，不靠重复 CI 或同一草稿发布失败表示业务进展。
 
 规划轮审要求去重、概念是否混用、用途/消费者是否完整、替代方案、隐私/权限、前后台和验证边界。实施审核轮另读实际代码与证据，沿真实影响链核所有大小消费者，不能只看报告或大模块标题。
 对新发现记录证据等级、原因/竞争解释、用户净收益、开发/维护/迁移/运行/模型/CI成本、风险和恢复；比较保持现状、最小修补、复用与替代。可整改、并入原任务、重排、补证、观察、否决或不改，不要求每轮添加功能。
@@ -97,7 +99,7 @@ handoff 若明确 DESIGN_ONLY / REVIEW / BLOCKED，则不得执行；计划存�
 
 “Codex执行完了”：网页读取当轮执行事实后审核。
 “ChatGPT审核完了”：Codex从最新 `master` 读取真实结论和当前模式；DESIGN_ONLY / REVIEW / BLOCKED 时不执行。
-“继续任务/继续”（明确调用 `ashare-ledger-continue`）：若 handoff 允许实施，先运行 runtime selector 重算显式运行条件；有 blocker 时取最低 blocker 门，全部 blocker 清空后回落到最低 actionable non-blocker 的 G0–G4，再按角色/P0-P2/门内序执行一个切片；G5/GX 不进入 ordinary fallback。存在未收口 PR/CI、运行条件 unknown、硬依赖未满足、阶段门冲突或排序歧义时只报告候选/阻塞。
+“继续任务/继续”（明确调用 `ashare-ledger-continue`）：若 handoff 允许实施，先运行 runtime selector 重算显式运行条件；有 blocker 时取最低 blocker 门，全部 blocker 清空后回落到最低 actionable non-blocker 的 G0–G4，再按角色/P0-P2/门内序执行一个主任务并连续完成其内部切片；G5/GX 不进入 ordinary fallback。已有本任务 PR/CI 时先按已有授权收口，不将其误作重新开工的禁止条件；运行条件 unknown、硬依赖未满足、阶段门冲突或排序歧义时，不启动依赖该条件的动作并报告具体阻塞。
 
 ## 10. 路线切换规则
 

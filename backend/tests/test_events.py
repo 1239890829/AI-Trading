@@ -955,14 +955,15 @@ def test_active_event_window_does_not_hide_older_long_lived_evidence(tmp_path):
     assert selected[0].interpretation_ref["state"] == "unknown"
 
 
-def test_active_event_window_keeps_subsecond_boundary(tmp_path, monkeypatch):
+@pytest.mark.parametrize("microsecond", [100000, 999499, 999500, 999900, 999999])
+def test_active_event_window_keeps_subsecond_boundary(tmp_path, monkeypatch, microsecond):
     from datetime import datetime, timedelta
 
     import app.events.store as store_module
     from app.models.event import EventCard
 
     store = _isolated_store(tmp_path)
-    now = datetime(2026, 9, 24, 10, 0, 0, 100000)
+    now = datetime(2026, 9, 24, 10, 0, 0, microsecond)
     monkeypatch.setattr(store_module, "beijing_now_naive", lambda: now)
     with store._sf() as db:
         db.add(EventCard(fingerprint="still-active-by-100us", title="边界前仍有效",
@@ -974,6 +975,26 @@ def test_active_event_window_keeps_subsecond_boundary(tmp_path, monkeypatch):
         db.commit()
     assert [row.fingerprint for row in store.list_events(active_only=True, limit=2)] == [
         "still-active-by-100us"
+    ]
+
+
+def test_active_window_keeps_new_event_at_end_of_second(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+
+    import app.events.store as store_module
+    from app.models.event import EventCard
+
+    store = _isolated_store(tmp_path)
+    now = datetime(2026, 9, 29, 10, 0, 0, 999700)
+    monkeypatch.setattr(store_module, "beijing_now_naive", lambda: now)
+    with store._sf() as db:
+        for name, offset in [("recent", -100), ("equal", 0), ("future", 100)]:
+            db.add(EventCard(fingerprint=name, title=name, source="test",
+                             published_at=now + timedelta(microseconds=offset),
+                             half_life_hours=2))
+        db.commit()
+    assert [r.fingerprint for r in store.list_events(active_only=True, limit=3)] == [
+        "equal", "recent",
     ]
 
 

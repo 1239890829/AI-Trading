@@ -15,7 +15,7 @@
 
 | 编号 | 文档 | 层 | 领域 | 用途 / 维护触发 |
 |---|---|---|---|---|
-| **AG-01** | `AGENTS.md`（根） | L3 | 工程治理 | 作业边界、门禁命令与发布纪律；测试实测只在 handoff |
+| **AG-01** | `AGENTS.md`（根） | L3 | 工程治理 | 作业边界、整任务连续交付、证据可行性与发布纪律；测试实测只在 handoff |
 | **AG-02** | `README.md`（根） | L3 | 对外 | 项目简介 + 指针式入口。维护：结构性变化 |
 | **KW-00** | `CONTEXT.md`（根） | L2 | 术语 | **领域词汇表（Ubiquitous Language）唯一权威**；只放术语、不放实现。维护：grilling 会话即时更新 |
 | **AG-03** | `INDEX.md` | L3 | 编目 | **文档总入口**（本表即编目）。维护：新增/删除文档时 |
@@ -26,7 +26,7 @@
 | **AG-08** | `archive/platform-directory-migration-20260920.md` | L1 | 工程治理历史 | 旧平台目录迁移/恢复/最终退休证据；`GOV-018` 已完成，禁止恢复为现役入口 |
 | **AG-09** | `stages/` | L2 | 阶段任务 | W00–W09，各 ID 仅一份状态/验收/证据；P/Q 校验 |
 | **AG-10** | `implementation-plan.md` | L2 | 当前实施修订 | v9.13：living plan；继承 G0–G5/GX、U48 生命周期与 U49 主动缺陷发现门，并新增 U50 降级全权闭环、U51 Jev 应用与更新降级；状态仍归阶段 |
-| **AG-11** | `collaboration-workflow.md` | L2 | 协作审核 | 账本驱动；网页统筹审核、Codex执行，用户一句话触发，`master` 共享入口与原型退出 |
+| **AG-11** | `collaboration-workflow.md` | L2 | 协作审核 | 账本驱动；网页统筹审核、Codex执行，按授权整任务连续完成，`master` 共享入口与原型退出 |
 | **AG-12** | `product/product-closure-design.md` | L2 | 产品闭环 | 全模块用途、前后台分工、业务/研究/工程链和确认流程图；非已上线报告 |
 | **AG-13** | `product/feature-closure-audit.md` | L2 | 细功能审计 | 大小动作/接口/后台任务的覆盖、源码发现与未验边界；任务状态仍归阶段 |
 | **AG-14** | `ai/continuous-evolution.md` | L2 | 持续演进 | 外部模型/工具/量化方法/数据/工程创新的发现、证据梯度与准入前治理，并规定已采用内部机制的阶段性有效/衰退重验；状态归 GOV-025/GOV-027/真实 owner stage |
