@@ -146,6 +146,7 @@ def build_services(app: FastAPI) -> AppServices:
         quote_hub=hub,
     )
     app.state.snapshot_service = snapshot_service
+    alert_engine.update_snapshot_service(snapshot_service)
 
     # --- 风险引擎（Phase 5）：市场状态 + 仓位参数 + 订单预检 ---
     # 先于 paper 构造：§6.5b #2（2026-09-13）起 check_order 接入模拟撮合硬拦截，

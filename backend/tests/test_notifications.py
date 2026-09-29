@@ -1,4 +1,4 @@
-"""站内通知中心：只输出多维门控后的有效个股机会。
+"""站内通知中心：具名个股机会及真实持仓风险。
 
 `IMP-034`（2026-09-16）删除了本文件里守着**已删除生产者**的用例与夹具：
 `_daily_pick_item` 的 F-9 时间戳回归位、以及只为新闻路径存在的
@@ -105,6 +105,26 @@ def test_alert_items_filters_by_event_shape_not_rule_name():
     assert seen["buy_point"] == 1
     assert seen["pre_limit"] == 1
     assert seen["board_flow_surge"] == 1
+
+
+def test_source_events_separate_open_board_and_real_holding_risk():
+    from app.api.routes.notifications import _alert_items
+
+    repo = _FakeRepo(
+        rules=[_Rule(1, "__source_board_reopen__"),
+               _Rule(2, "__source_real_exit_alert__"),
+               _Rule(3, "__source_position_open__")],
+        events=[
+            _Event(21, 1, "600001", {"kind": "board_reopen", "name": "甲", "text": "开板"}, 1),
+            _Event(22, 2, "600002", {"kind": "real_exit_alert", "name": "", "text": "止损线"}, 1),
+            _Event(23, 3, "600003", {"kind": "position_open", "name": "丙", "text": "模拟成交"}, 1),
+        ],
+    )
+    items, seen = _alert_items(repo, limit=50)
+    assert {item["symbol"] for item in items} == {"600001", "600002"}
+    assert {item["symbol"]: item["category"] for item in items} == {
+        "600001": "opportunity", "600002": "risk"}
+    assert "position_open" not in seen  # Audit event, not a bell notification.
 
 
 def test_alert_items_ignores_placeholder_symbol():

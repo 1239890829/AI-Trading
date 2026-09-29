@@ -83,6 +83,64 @@ def save_plan(plan: dict) -> None:
     os.replace(tmp, target)
 
 
+def _publish_open_decision(plan: dict, decision: dict) -> tuple[int, bool] | None:
+    """Project a filled simulated order to one event and the existing brief."""
+    order_id = decision.get("order_id")
+    if order_id is None:
+        log.error("position_open %s lacks durable order ID; event remains unknown", decision.get("symbol"))
+        return None
+    from app.picks.source_events import record_source_event
+
+    symbol = str(decision["symbol"])
+    text = (
+        f"自动开模拟仓 {decision['qty']} 股 @ {decision['price']}"
+        f"（总仓位上限 {decision['total_cap']:.0%}·个股权重 {decision['weight']:.0%}"
+        f"·触发 {decision['trigger']}）"
+    )
+    source_as_of = f"{plan['date']}T{decision['ts']}+08:00"
+    alert = {
+        "kind": "position_open", "symbol": symbol, "name": decision.get("name") or "",
+        "key": f"position-open-{order_id}", "direction": "模拟持仓", "text": text,
+        "meta": {"trigger_value": decision["price"],
+                 "decision_id": decision.get("decision_id"),
+                 "decision_version": decision.get("decision_version"),
+                 "order_id": order_id},
+    }
+    event_id, _, projected = record_source_event(
+        "position_open", f"paper_order:{order_id}", symbol=symbol,
+        name=decision.get("name") or "", text=text,
+        source_id=str(order_id), source_version=str(decision.get("decision_version") or "filled"),
+        source_as_of=source_as_of, trade_date=plan["date"], direction="模拟持仓",
+        brief_alert=alert,
+    )
+    decision["event_id"] = event_id
+    decision["event_projected"] = projected
+    return event_id, projected
+
+
+def reconcile_position_open_events() -> int:
+    """Retry missing same-day event/brief projections without repeating orders."""
+    plan = load_plan()
+    repaired = 0
+    dirty = False
+    for decision in plan.get("decisions", []):
+        if decision.get("action") != "open" or (
+            decision.get("event_id") and decision.get("event_projected")
+        ):
+            continue
+        try:
+            result = _publish_open_decision(plan, decision)
+        except Exception:
+            log.exception("position_open event reconciliation failed for order %s", decision.get("order_id"))
+            continue
+        if result is not None:
+            repaired += 1
+            dirty = True
+    if dirty:
+        save_plan(plan)
+    return repaired
+
+
 def phase_caps(market_phase: str | None, gate: dict | None) -> tuple[float, int, str]:
     """市场阶段 × 空仓闸门 → (总仓位上限, 最大只数, 说明)。"""
     cap, max_pos = PHASE_CAPS.get(market_phase or "", DEFAULT_CAP)
@@ -288,47 +346,41 @@ async def maybe_open(
 
     filled = getattr(order, "filled_price", None) or price
     plan = load_plan()
-    plan["decisions"].append(
-        {
-            "ts": beijing_now().strftime("%H:%M:%S"),
-            "symbol": symbol, "name": name, "trigger": trigger,
-            "action": "open", "qty": qty, "price": filled,
-            "weight": weight, "total_cap": total_cap, "role": role,
-            "order_id": getattr(order, "id", None),
-            **decision_trace,
-            "reason": f"{cap_note}；角色 {role or '默认'} 权重 {weight:.0%}；触发 {trigger}",
-        }
-    )
-    save_plan(plan)
+    decision = {
+        "ts": beijing_now().strftime("%H:%M:%S"),
+        "symbol": symbol, "name": name, "trigger": trigger,
+        "action": "open", "qty": qty, "price": filled,
+        "weight": weight, "total_cap": total_cap, "role": role,
+        "order_id": getattr(order, "id", None),
+        **decision_trace,
+        "reason": f"{cap_note}；角色 {role or '默认'} 权重 {weight:.0%}；触发 {trigger}",
+    }
+    plan["decisions"].append(decision)
+    try:
+        save_plan(plan)
+    except Exception:
+        # A filled order must still reach the durable event even when the
+        # secondary JSON plan is temporarily unwritable.
+        log.exception("position_open plan save failed after filled order %s", decision["order_id"])
     log.info("[仓位引擎] 开模拟仓 %s %s %d 股 @ %s（%s）", symbol, name, qty, filled, cap_note)
 
-    # 当日简报 alerts[] 留痕（猎场页「盘中提醒」；飞书矩阵不动——开仓不是 CRITICAL，
-    # 收盘清算见分晓）。⚠️ 不写通知中心：该中心只收 __picks_buy_point__ 买点
-    # （IMP-028；2026-09-16 IMP-034 订正原「通知中心留痕」措辞）。
+    # 成交单是权威事实；事件及晨报是可恢复投影。失败不得重复下单。
+    event_id = None
+    event_projected = False
     try:
-        from app.picks.morning_brief import append_alert, brief_for_today
-
-        target, _ = brief_for_today()
-        append_alert(
-            target,
-            {
-                "kind": "position_open", "symbol": symbol, "name": name,
-                "key": f"position-open-{symbol}",
-                "direction": "模拟持仓",
-                "text": f"自动开模拟仓 {qty} 股 @ {filled}（总仓位上限 {total_cap:.0%}·个股权重 {weight:.0%}·触发 {trigger}）",
-                "meta": {
-                    "trigger_value": filled,
-                    "decision_id": decision_trace.get("decision_id"),
-                    "decision_version": decision_trace.get("decision_version"),
-                    "order_id": getattr(order, "id", None),
-                },
-            },
-        )
-    except Exception:  # noqa: BLE001
-        log.exception("position_open 通知失败")
+        result = _publish_open_decision(plan, decision)
+        if result is not None:
+            event_id, event_projected = result
+    except Exception:
+        log.exception("position_open 事件投影失败；成交单保留，后续按 plan 补建")
+    try:
+        save_plan(plan)
+    except Exception:
+        log.exception("position_open plan save failed after event attempt %s", decision["order_id"])
     return {
         "opened": True, "qty": qty, "weight": weight, "price": filled,
         "order_id": getattr(order, "id", None),
+        "event_id": event_id, "event_projected": event_projected,
         "decision_id": decision_trace.get("decision_id"),
         "decision_version": decision_trace.get("decision_version"),
         "reason": cap_note,

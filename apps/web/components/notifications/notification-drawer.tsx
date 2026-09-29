@@ -36,7 +36,7 @@ import { EventFeed } from "@/components/notifications/event-feed";
 /**
  * 站内通知中心（2026-09-07 用户需求③）：导航栏铃铛 → 右侧抽屉。
  *
- * 内容只保留具名个股买点和临板预警。板块异动、题材方向、每日精选与新闻留在各自分析页面，
+ * 内容保留具名买点、临板/开板与真实持仓风险。板块异动、题材方向、每日精选与新闻留在各自分析页面，
  * 不再作为会打断用户的通知。
  * 抽屉内一层 tab 按 盘前/盘中/盘后 分类（后端判定：交易日历优先，非交易日归盘前）。
  * 新闻不逐条推送；旧 news_min_score 参数只为客户端兼容保留。
@@ -79,7 +79,7 @@ import { EventFeed } from "@/components/notifications/event-feed";
 type DrawerMode = "opportunity" | "events";
 
 const MODE_TABS: { key: DrawerMode; label: string; title: string }[] = [
-  { key: "opportunity", label: "个股机会", title: "经多维门控的个股买点提醒（会打断你，按盘前/盘中/盘后分页）" },
+  { key: "opportunity", label: "个股提醒", title: "个股机会与真实持仓风险提醒（按盘前/盘中/盘后分页）" },
   { key: "events", label: "资讯 / 事件", title: "事件影响力视图（浏览面，不计入未读；与盘面页事件标签同源）" },
 ];
 
@@ -633,7 +633,7 @@ export function NotificationBell() {
       <button
         onClick={() => setOpen(true)}
         aria-label={pollError ? `打开通知中心（上次读取的未读数 ${unread}）` : unread > 0 ? `打开通知中心（${unread} 条未读）` : "打开通知中心"}
-        title={pollError ? "通知刷新失败：未读数依据上次读取结果" : "通知中心：个股机会通知与资讯浏览；未读仅指站内浏览状态"}
+        title={pollError ? "通知刷新失败：未读数依据上次读取结果" : "通知中心：个股机会、持仓风险与资讯浏览；未读仅指站内浏览状态"}
         className="relative rounded-md border border-zinc-200 p-2 text-sm text-zinc-600 transition-colors hover:text-zinc-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -833,7 +833,7 @@ export function NotificationBell() {
                     <p data-testid="notification-sync-status" className={syncStatus === "local_only" ? "text-amber-700 dark:text-amber-300" : ""}>
                       已读与清除：{syncStatus === "synced" ? "本页变更已获服务端确认" : syncStatus === "syncing" ? "正在同步服务端" : "服务端未确认；当前页暂存"}。
                     </p>
-                    个股机会提醒来自触发时点；板块与资讯事件在浏览页。已读只表示站内点开，
+                    个股机会与持仓风险提醒来自触发时点；板块与资讯事件在浏览页。已读只表示站内点开，
                     外部渠道受理不等于送达。条件变化后须重新核验，不构成买卖建议。
                   </>
                 ) : (

@@ -117,6 +117,21 @@ class NotificationOutboxRepository:
             db.commit()
             return changed.rowcount == 1
 
+    def defer(self, row: NotificationOutbox, reason: str, now_ms: int) -> bool:
+        """Retry an unavailable pre-send recheck without claiming a send result."""
+        with self._session_factory() as db:
+            changed = db.execute(update(NotificationOutbox).where(
+                NotificationOutbox.id == row.id, NotificationOutbox.state == "leased",
+                NotificationOutbox.lease_token == row.lease_token,
+                NotificationOutbox.send_started_at_ms.is_(None),
+            ).values(reason=reason, lease_until_ms=min(now_ms + 30_000, row.expires_at_ms)))
+            if changed.rowcount:
+                db.execute(update(NotificationAttempt).where(
+                    NotificationAttempt.lease_token == row.lease_token,
+                ).values(reason=reason))
+            db.commit()
+            return changed.rowcount == 1
+
     def finish(self, row: NotificationOutbox, state: str, reason: str, now_ms: int) -> bool:
         if state not in {"accepted", "unknown", "expired", "suppressed", "permanent_failed"}:
             raise ValueError("invalid outbox terminal state")

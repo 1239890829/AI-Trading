@@ -34,6 +34,7 @@ class AlertEngine:
         self._fresh_within = max(settings.poll_interval_seconds, settings.stale_after_seconds)
         self._registry = get_notifier_registry()
         self._quotes: dict[str, dict] = {}
+        self._snapshot_service = None
         self._last_buy_point_send_monotonic = 0.0
         # 盘外空转节奏（P2-9）：不得低于 interval，也不低于 5 分钟
         self._idle_interval = max(300.0, interval)
@@ -41,6 +42,10 @@ class AlertEngine:
     def update_quotes(self, quotes: dict[str, dict]) -> None:
         """由 QuoteHub 或外部定时推送最新行情。"""
         self._quotes = quotes
+
+    def update_snapshot_service(self, snapshot_service) -> None:
+        """Provide the existing all-market snapshot for held symbols outside the watchlist."""
+        self._snapshot_service = snapshot_service
 
     async def run(self) -> None:
         """常驻入口：由 SchedulerRegistry 托管（S2-2 起不再自行 create_task）。
@@ -58,7 +63,9 @@ class AlertEngine:
                 if in_window:
                     await self._tick()
                 else:
-                    self._repo.outbox.reconcile(self._now_ms())
+                    # A completed daily review is a REPORT intent after close.
+                    # Price rules still do not evaluate outside trading hours.
+                    await self._deliver_pending()
             except Exception:
                 log.exception("alert engine tick failed")
             await asyncio.sleep(self._interval if in_window else self._idle_interval)
@@ -113,14 +120,19 @@ class AlertEngine:
             payload = json.loads(row.payload)
         except (TypeError, ValueError):
             return "intent_payload_invalid"
+        if not isinstance(payload, dict):
+            return "intent_payload_invalid"
         if encode(rule_snapshot(rule)) != encode(payload.get("rule")):
             return "rule_or_channels_changed"
         if not row.target or notifier is None or notifier.delivery_target() != row.target:
             return "channel_unconfigured_or_target_changed"
+        intent = payload.get("intent") or {}
+        if not isinstance(intent, dict):
+            return "intent_payload_invalid"
+        if intent.get("kind") == "source_event":
+            return self._source_event_delivery_block(event, rule, intent)
         if not in_trading_window():
             return "outside_trading_window"
-
-        intent = payload.get("intent") or {}
         if intent.get("kind") == "picks_buy_point":
             return self._buy_point_delivery_block(event, intent)
 
@@ -141,6 +153,100 @@ class AlertEngine:
         value = self._extract_value(rule.condition_type, quote)
         if value is None or not self._condition_met(rule.condition_type, value, rule.threshold):
             return "condition_no_longer_met"
+        return None
+
+    def _source_event_delivery_block(self, event, rule, intent: dict) -> str | None:
+        """Recheck the source fact and current policy before external delivery."""
+        from app.market.trade_calendar import in_trading_window
+        from app.picks.source_events import SOURCE_POLICIES
+        from app.services.push_policy import feishu_allowed
+
+        kind = intent.get("source_kind")
+        policy = SOURCE_POLICIES.get(kind)
+        if policy is None or not feishu_allowed(policy) or intent.get("policy") != policy.value:
+            return "source_policy_revoked"
+        if rule.name != f"__source_{kind}__" or rule.condition_type != "source_event":
+            return "source_rule_mismatch"
+        try:
+            snap = json.loads(event.snapshot or "{}")
+        except (TypeError, ValueError):
+            return "source_snapshot_invalid"
+        if not isinstance(snap, dict):
+            return "source_snapshot_invalid"
+        if any(snap.get(key) != intent.get(key) for key in ("source_id", "source_version")):
+            return "source_identity_changed"
+        if snap.get("kind") != kind or snap.get("trade_date") != intent.get("trade_date"):
+            return "source_identity_changed"
+        if rule.scope == "symbols":
+            try:
+                symbols = json.loads(rule.symbols or "[]")
+            except (TypeError, ValueError):
+                symbols = []
+            if not isinstance(symbols, list) or event.symbol not in symbols:
+                return "symbol_no_longer_in_scope"
+        elif rule.scope != "all":
+            return "symbol_no_longer_in_scope"
+        if kind == "review_report":
+            from sqlalchemy import select
+            from app.review.models import ReviewReportRow
+            from app.core.bjtime import beijing_now
+
+            if intent.get("trade_date") != beijing_now().strftime("%Y%m%d"):
+                return "report_no_longer_current"
+            try:
+                with self._repo._session_factory() as db:
+                    current_id = db.scalar(select(ReviewReportRow.review_id).where(
+                        ReviewReportRow.trade_date == intent["trade_date"]
+                    ))
+            except Exception:
+                return "source_recheck_unavailable"
+            return None if current_id == intent.get("source_id") else "report_superseded_or_missing"
+        if kind != "real_exit_alert":
+            return "source_policy_revoked"  # SILENT sources never send externally.
+        if not in_trading_window():
+            return "outside_trading_window"
+        try:
+            from app.services.real_position_service import load_positions
+
+            held = next((p for p in load_positions(self._repo._session_factory)
+                         if p.symbol == event.symbol and p.quantity > 0), None)
+            if held is None:
+                return "source_no_longer_held"
+            cost = held.avg_cost
+        except Exception:
+            return "source_recheck_unavailable"
+        if cost is None or cost <= 0:
+            return "source_recheck_unavailable"
+        quote = self._quotes.get(event.symbol)
+        fresh_within = self._fresh_within
+        if not quote:
+            snapshot_service = self._snapshot_service
+            if snapshot_service is not None:
+                try:
+                    if snapshot_service.freshness(live=True).state == "ready":
+                        rows, as_of = snapshot_service.versioned_snapshot()
+                        if as_of is not None and as_of.tzinfo is not None:
+                            row = next((item for item in rows if item.get("symbol") == event.symbol), None)
+                            if row is not None:
+                                quote = {**row, "quality": "high", "data_timestamp": as_of}
+                                fresh_within = snapshot_service.poll_interval * 3
+                except Exception:
+                    return "source_recheck_unavailable"
+        if not quote or not (quote.get("data_timestamp") or quote.get("received_at")):
+            return "source_recheck_unavailable"
+        try:
+            q = Quote.model_validate(quote)
+            ts = q.data_timestamp or q.received_at
+            if ts.tzinfo is None or int(ts.timestamp() * 1000) > self._now_ms():
+                return "source_recheck_unavailable"
+            if q.freshness(fresh_within=fresh_within).state != "ready":
+                return "source_recheck_unavailable"
+            from app.picks.exit_engine import _stop_pct
+
+            if q.price is None or q.price > cost * (1 - _stop_pct(None)):
+                return "source_condition_no_longer_met"
+        except (TypeError, ValueError):
+            return "source_recheck_unavailable"
         return None
 
     def _buy_point_delivery_block(self, event, intent: dict) -> str | None:
@@ -190,7 +296,10 @@ class AlertEngine:
             notifier = self._registry.get(row.channel)
             reason = self._delivery_block(row, event, rule, notifier)
             if reason:
-                outbox.finish(row, "suppressed", reason, self._now_ms())
+                if reason == "source_recheck_unavailable":
+                    outbox.defer(row, reason, self._now_ms())
+                else:
+                    outbox.finish(row, "suppressed", reason, self._now_ms())
                 continue
             try:
                 intent_kind = (json.loads(row.payload).get("intent") or {}).get("kind")

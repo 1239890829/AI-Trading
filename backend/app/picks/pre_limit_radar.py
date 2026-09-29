@@ -36,7 +36,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from datetime import datetime, timezone
 
@@ -51,7 +50,7 @@ SNAPSHOT_FRESH_SECONDS = 120
 SWEEP_INTERVAL = 6.0
 #: 非活跃窗口的休眠间隔（秒）
 IDLE_INTERVAL = 30.0
-#: 开板重评已通知（进程内去重；重启重复一次可接受）
+#: 开板重评已落事件的本进程快取；持久去重以 AlertEvent.dedup_key 为准。
 _REOPEN: set[tuple[str, str]] = set()
 
 # 交易时段（含集合竞价尾段）："HH:MM" 区间
@@ -201,12 +200,7 @@ async def pre_limit_sweep(app) -> int:
         row0 = day_rows.get(c["symbol"]) or {}
         reopen_key = (tdate, c["symbol"])
         if ((row0.get("reason") or {}).get("gate")) == "sealed_no_entry" and reopen_key not in _REOPEN:
-            _REOPEN.add(reopen_key)
-            with contextlib.suppress(Exception):
-                from app.picks.morning_brief import append_alert, brief_for_today
-
-                target, _ = brief_for_today()
-                append_alert(target, {
+            alert = {
                     "kind": "board_reopen", "symbol": c["symbol"], "name": c["name"],
                     "key": f"board-reopen-{c['symbol']}",
                     "direction": "开板重评",
@@ -215,8 +209,25 @@ async def pre_limit_sweep(app) -> int:
                     "seal_state": {"ever_sealed": True, "current_sealed": False,
                                    "snapshot_state": "ready", "version": snapshot_as_of},
                     "meta": {"trigger_value": c.get("price"), "snapshot_as_of": snapshot_as_of},
-                })
-            log.info("[临板雷达] 开板重评 %s %s", c["symbol"], c["name"])
+            }
+            try:
+                from app.picks.source_events import record_source_event
+
+                event_id, _, projected = record_source_event(
+                    "board_reopen", f"{tdate}:{c['symbol']}",
+                    symbol=c["symbol"], name=c["name"], text=alert["text"],
+                    source_id=f"watch_no_entry:{tdate}:{c['symbol']}",
+                    source_version=snapshot_as_of, source_as_of=snapshot_as_of,
+                    trade_date=tdate, direction="开板重评", brief_alert=alert,
+                )
+            except Exception:
+                # Do not mark the process cache on failure. The next sweep can
+                # recover the durable event or its derived brief projection.
+                log.exception("[临板雷达] 开板重评事件持久化失败 %s", c["symbol"])
+            else:
+                if projected:
+                    _REOPEN.add(reopen_key)
+                log.info("[临板雷达] 开板重评 %s %s event=%s", c["symbol"], c["name"], event_id)
 
     if not candidates and not n_watch:
         return 0

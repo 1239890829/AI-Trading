@@ -139,7 +139,7 @@ def test_sweep_reaches_board_reopen_once_for_registered_no_entry(monkeypatch):
 
     from app.picks import pre_limit_radar as radar
     import app.picks.watch_ledger as ledger
-    import app.picks.morning_brief as brief
+    import app.picks.source_events as source_events
     import app.picks.watcher as watcher
 
     radar._REOPEN.clear()
@@ -151,9 +151,15 @@ def test_sweep_reaches_board_reopen_once_for_registered_no_entry(monkeypatch):
     }
     monkeypatch.setattr(ledger, "get_day", lambda _td: [existing])
     monkeypatch.setattr(ledger, "record_sighting", lambda **_kw: None)
-    monkeypatch.setattr(brief, "brief_for_today", lambda: ("brief.json", {}))
     alerts = []
-    monkeypatch.setattr(brief, "append_alert", lambda _target, row: alerts.append(row))
+    attempts = []
+    def fake_record(kind, source_key, **kwargs):
+        attempts.append((kind, source_key))
+        if len(attempts) == 1:
+            raise OSError("temporary event store failure")
+        alerts.append(kwargs["brief_alert"])
+        return 31, True, True
+    monkeypatch.setattr(source_events, "record_source_event", fake_record)
     async def fake_dispatch(_app, _alert):
         return True
     monkeypatch.setattr(watcher, "dispatch_alert", fake_dispatch)
@@ -166,6 +172,9 @@ def test_sweep_reaches_board_reopen_once_for_registered_no_entry(monkeypatch):
     app = SimpleNamespace(state=SimpleNamespace(snapshot_service=svc))
 
     assert asyncio.run(radar.pre_limit_sweep(app)) == 0  # 已登记，不重复写 sighting
+    assert alerts == [] and (td, "600006") not in radar._REOPEN
+    assert asyncio.run(radar.pre_limit_sweep(app)) == 0  # 持久化失败后下一拍重试
+    assert attempts == [("board_reopen", f"{td}:600006")] * 2
     assert [a["kind"] for a in alerts] == ["board_reopen"]
     assert alerts[0]["symbol"] == "600006"
     assert alerts[0]["seal_state"]["ever_sealed"] is True

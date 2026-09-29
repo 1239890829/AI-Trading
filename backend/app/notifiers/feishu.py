@@ -73,14 +73,13 @@ def format_alert_text(event: AlertEvent, rule: AlertRule) -> str:
     if event.triggered_at is not None:
         bj = event.triggered_at
         lines.append(f"触发时间：{bj.strftime('%Y-%m-%d %H:%M:%S')}（北京时间）")
-    if event.symbol:
+    if event.symbol and event.symbol != "000000":
         lines.append(f"标的：{event.symbol}")
     body = (snap.get("text") or "").strip()
     if body:
         lines.append(body)
-    lines.append(
-        f"触发值 {event.trigger_value} / 阈值 {event.threshold}"
-    )
+    if rule.condition_type != "source_event":
+        lines.append(f"触发值 {event.trigger_value} / 阈值 {event.threshold}")
     return "\n".join(lines)
 
 
