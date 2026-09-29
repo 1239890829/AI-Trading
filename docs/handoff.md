@@ -1,4 +1,4 @@
-# 当前交接：IMP-032 其余来源事件与投递
+# 当前交接：IMP-032 其余来源事件与投递发布
 
 > 唯一状态在 [W02/IMP-032](stages/w02-notifications.md#imp-032)，当前行为合同见[信号链 §12](summary/pick-signal-chain.md#12-其余来源事件与投递合同2026-09-29imp-032)。RSH-031 第一版已由 PR #182 合并，持续效果验证仍按 W04 条件等待。
 
@@ -8,7 +8,7 @@
 
 **U50 降级授权回执仍有效**：用户 2026-09-24 允许本机 Codex 在 `DEGRADED_FULL_CONTROL` 承担规划、U49 作者反证、实施、自审、PR/CI、发布、合并及清理，直到明确撤销。准确 HEAD 的 `DegradedRelease` 必须明示作者自审，不能冒充独立 Review；完整本地门禁、三项 required CI、release_check、合并后 CI 和分支清理不降低。授权不覆盖付费源/模型、真实通知、券商、部署或生产库。
 
-本轮在 `master@f91d2990aa45a659e9f3db65a4af35aaa91877e7` 运行 selector，领取 G2/IMP-032 唯一主任务，实施分支 `codex/imp032-event-delivery`。BUG-009 是本任务发布收口后的下一轮候选，不代表本轮领取第二项。
+本轮在 `master@f91d2990aa45a659e9f3db65a4af35aaa91877e7` 运行 selector，领取 G2/IMP-032 唯一主任务，实施分支 `codex/imp032-event-delivery`，PR #185，实施提交 `4fb8f600e85dfff89debc63bc895daf3f71baf3f`。阶段页完成状态重算后返回 G2/BUG-009；它是下一轮候选，不代表本轮领取第二项。
 
 ## 2. 本轮实现与 U49 作者反证
 
@@ -22,8 +22,8 @@
 
 ## 3. 发布与后续
 
-本轮仍须准确 PR/HEAD 的 `DegradedRelease`、required CI、release_check、合并后 master CI 与分支清理。合并后前向通知样本按源 ID/版本、投影状态与 Outbox 终态复盘；新反例回 W02 owner，不自动改机会阈值或渠道策略。下一轮正式开工须重跑 selector。
+PR #185 仍须准确 HEAD 的 `DegradedRelease`、required CI、release_check、合并后 master CI 与分支清理。合并后前向通知样本按源 ID/版本、投影状态与 Outbox 终态复盘；新反例回 W02 owner，不自动改机会阈值或渠道策略。下一轮正式开工须重跑 selector。
 
 - **当前主门**：G2
-- **主切片首选**：IMP-032
-- **当前门候选顺位**：IMP-032 → BUG-009
+- **主切片首选**：BUG-009
+- **当前门候选顺位**：BUG-009
