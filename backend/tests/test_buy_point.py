@@ -175,11 +175,13 @@ def _patch_happy_path(monkeypatch, tmp_path, *, items=None, quotes=None, channel
 
     items = items if items is not None else [_item(), _item("600001", tier="observe")]
     quotes = quotes if quotes is not None else {"600000": _quote(), "600001": _quote("600001", price=5.5)}
-    d = datetime(2026, 9, 8, 10, 30, 0)
+    from app.core.bjtime import BJ_TZ
+    d = datetime(2026, 9, 8, 10, 30, 0, tzinfo=BJ_TZ)
     monkeypatch.setattr(tc, "trading_days", async_ok([d.date()]))
     monkeypatch.setattr(tc, "last_trade_date", lambda days, asof: asof)
     monkeypatch.setattr(tc, "in_trading_window", lambda now=None: True)
     monkeypatch.setattr(bp, "beijing_now", lambda: d)
+    monkeypatch.setattr("app.picks.buy_point_consumers.beijing_now", lambda: d)
     monkeypatch.setattr(bp, "_today_picks_payload", lambda: {
         "date": "2026-09-08",
         "items": items,
@@ -245,6 +247,7 @@ def _patch_happy_path(monkeypatch, tmp_path, *, items=None, quotes=None, channel
 
     async def fake_open(*args, **kwargs):
         counters["paper"] += 1
+        return {"opened": True, "reason": "fixture"}
 
     def fake_sighting(**kwargs):
         counters["ledger"] += 1
@@ -391,3 +394,47 @@ def test_evaluate_20cm_halfway_gap_not_limit_zone():
     assert [h["item"]["symbol"] for h in hits] == ["300001"]
     assert [s["symbol"] for s in skips] == ["600004"]
     assert "涨停区" in skips[0]["reason"]
+
+
+def test_local_consumer_failure_retries_without_resending(monkeypatch, tmp_path):
+    import app.picks.buy_point as bp
+    from app.models.notification_outbox import BuyPointConsumption
+    app, counters, _ = _patch_happy_path(monkeypatch, tmp_path)
+    calls = []
+
+    def flaky_sighting(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise OSError("temporary local write error")
+
+    monkeypatch.setattr("app.picks.watch_ledger.record_sighting", flaky_sighting)
+    asyncio.run(bp.check_and_dispatch(app))
+    with app._test_factory() as db:
+        progress = {r.consumer: r.state for r in db.query(BuyPointConsumption)}
+    assert progress == {"watch": "pending", "position": "done"}
+    asyncio.run(bp.check_and_dispatch(app))
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    assert calls[1]["entry_time"] == "10:30:00"
+    assert counters["paper"] == 1 and counters["brief"] == 1
+    assert counters["direct_io"] == 0
+    with app._test_factory() as db:
+        assert all(r.state == "done" for r in db.query(BuyPointConsumption))
+
+
+def test_unknown_paper_consumer_is_not_automatically_repeated(monkeypatch, tmp_path):
+    import app.picks.buy_point as bp
+    from app.models.notification_outbox import BuyPointConsumption
+    app, counters, _ = _patch_happy_path(monkeypatch, tmp_path)
+
+    async def uncertain(*args, **kwargs):
+        counters["paper"] += 1
+        raise OSError("lost result after potential execution")
+
+    monkeypatch.setattr("app.picks.position_engine.maybe_open", uncertain)
+    asyncio.run(bp.check_and_dispatch(app))
+    asyncio.run(bp.check_and_dispatch(app))
+    assert counters["paper"] == 1 and counters["direct_io"] == 0
+    with app._test_factory() as db:
+        row = db.query(BuyPointConsumption).filter_by(consumer="position").one()
+        assert row.state == "unknown" and row.attempts == 1

@@ -123,7 +123,7 @@ def test_versioned_database_upgrades_idempotently(tmp_path):
 _MODELS_UNDER_PARITY = (
     "OpportunityDecisionSnapshot", "OpportunityDecisionRun", "OpportunityOutcomeLabel",
     "OpportunityOutcomeRevision", "AgentParamPromotionApproval", "AgentResourceUsage",
-    "LeaderResearchObservation", "LeaderResearchSession",
+    "LeaderResearchObservation", "LeaderResearchSession", "PaperActionReceipt", "BuyPointConsumption", "PaperResetBackup",
 )
 
 
@@ -169,6 +169,9 @@ def test_opportunity_learning_tables_match_their_models(tmp_path):
     from app.models.agent import AgentParamPromotionApproval, AgentResourceUsage
     from app.models.leader_research import LeaderResearchObservation, LeaderResearchSession
 
+    from app.models.paper import PaperActionReceipt, PaperResetBackup
+    from app.models.notification_outbox import BuyPointConsumption
+
     models = {
         "OpportunityDecisionSnapshot": OpportunityDecisionSnapshot,
         "OpportunityDecisionRun": OpportunityDecisionRun,
@@ -178,6 +181,9 @@ def test_opportunity_learning_tables_match_their_models(tmp_path):
         "AgentResourceUsage": AgentResourceUsage,
         "LeaderResearchObservation": LeaderResearchObservation,
         "LeaderResearchSession": LeaderResearchSession,
+        "PaperActionReceipt": PaperActionReceipt,
+        "PaperResetBackup": PaperResetBackup,
+        "BuyPointConsumption": BuyPointConsumption,
     }
     engine, path = _fresh_engine(tmp_path, "parity")
     try:
@@ -235,7 +241,7 @@ def test_event_observation_upgrade_preserves_legacy_rows_and_matches_model(tmp_p
             """))
         assert run_migrations(engine) == "upgraded"
         with engine.connect() as conn:
-            assert conn.scalar(text("select version_num from alembic_version")) == "c8a6e4d2f091"
+            assert conn.scalar(text("select version_num from alembic_version")) == "d7b3e6a209f4"
             assert conn.scalar(text("select count(*) from event_card where fingerprint='legacy-event'")) == 1
             assert conn.scalar(text("select count(*) from event_observation")) == 0
             assert conn.scalar(text("select count(*) from event_interpretation")) == 0

@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import logging
 from datetime import timezone
+from uuid import UUID
 
 from fastapi import Depends, APIRouter, HTTPException, Request
 
 from app.api.deps import require_write_token
 from app.core.bjtime import BJ_TZ
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field
 
 from app.paper.engine import PaperTradingEngine
 
@@ -22,6 +23,8 @@ def _engine(request) -> PaperTradingEngine:
 
 
 class OrderIn(BaseModel):
+    request_id: UUID
+    expires_at: AwareDatetime
     symbol: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
     side: str = Field(pattern=r"^(buy|sell)$")
     # `allow_inf_nan=False`（R05）：`gt=0` 单独用**挡不住 Infinity**
@@ -102,12 +105,13 @@ async def paper_orders(request: Request, status: str | None = None):
 
 @router.post("/paper/orders", dependencies=[Depends(require_write_token)])
 async def place_order(body: OrderIn, request: Request):
+    from app.paper.actions import submit_action
+
     engine = _engine(request)
-    order = await engine.place_order(body.symbol, body.side, body.price, body.quantity)
-    if order.status == "rejected":
-        raise HTTPException(status_code=422, detail=order.reason)
-    return {"data": {"id": order.id, "symbol": order.symbol, "side": order.side, "status": order.status,
-                     "filled_price": order.filled_price, "fee": order.fee, "reason": order.reason}}
+    result = await submit_action(engine, body)
+    if result["status"] == "rejected":
+        raise HTTPException(status_code=422, detail=result["reason"])
+    return {"data": result}
 
 
 @router.get("/paper/fills")
@@ -155,9 +159,36 @@ async def reset_account(body: ResetIn, request: Request):
     """
     engine = _engine(request)
     acc = engine.reset(body.initial_cash, source="api")
-    return {"data": {"cash": round(acc.cash, 2), "initial_cash": round(acc.initial_cash, 2),
+    return {"data": {"backup_id": acc.reset_backup_id,
+                     "cash": round(acc.cash, 2), "initial_cash": round(acc.initial_cash, 2),
                      "total": round(acc.cash, 2), "total_pnl": 0.0, "total_pnl_pct": 0.0,
                      "market_value": 0.0}}
+
+
+@router.get("/paper/recovery")
+async def recovery_status(request: Request):
+    """Read-only maintenance evidence; no financial data payload or external sends."""
+    from app.models.notification_outbox import BuyPointConsumption
+    from app.models.paper import PaperResetBackup
+    engine = _engine(request)
+    with engine._sf() as db:
+        backups = db.query(PaperResetBackup).filter(PaperResetBackup.scope == engine.scope).order_by(
+            PaperResetBackup.created_at.desc()).limit(20).all()
+        consumers = db.query(BuyPointConsumption).order_by(BuyPointConsumption.updated_at_ms.desc()).limit(50).all() if engine.scope == "main" else []
+        return {"data": {
+            "reset_backups": [{"id": r.id, "restored": bool(r.restored), "created_at": r.created_at.isoformat() + "Z"} for r in backups],
+            "consumers": [{"event_id": r.event_id, "consumer": r.consumer, "state": r.state,
+                           "reason": r.reason, "attempts": r.attempts} for r in consumers],
+        }}
+
+
+@router.post("/paper/reset-backups/{backup_id}/restore", dependencies=[Depends(require_write_token)])
+async def restore_account(backup_id: UUID, request: Request):
+    from app.paper.reset_recovery import restore
+    try:
+        return {"data": restore(_engine(request), str(backup_id))}
+    except ValueError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
 
 
 @router.get("/paper/reconcile")

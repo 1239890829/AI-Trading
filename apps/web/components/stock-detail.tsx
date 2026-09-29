@@ -42,8 +42,6 @@ import {
   getStockThemes,
   getTrades,
   getWatchlist,
-  placePaperOrder,
-  resetPaperAccount,
   type AuctionData,
   type MinutePoint,
   type PaperFill,
@@ -199,7 +197,6 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   const [newsError, setNewsError] = useState<string | null>(null);
   const [company, setCompany] = useState<CompanyProfile | null>(null);
   const [fills, setFills] = useState<PaperFill[]>([]);
-  const [resetBusy, setResetBusy] = useState(false);
   const [paper, setPaper] = useState<PaperBundle | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [inWatchlist, setInWatchlist] = useState(false);
@@ -599,18 +596,6 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       ? [["板块", company.boards, "text-zinc-600 dark:text-zinc-300"]] // 无分组数据（旧缓存）时回退扁平全量
       : [];
 
-  async function handleResetAccount() {
-    if (!window.confirm("重置模拟账户？当前全部持仓、挂单与成交记录将清空，资金回到初始额度。此操作不可撤销。")) return;
-    setResetBusy(true);
-    try {
-      await resetPaperAccount();
-      loadPaperRef.current();
-    } catch (e) {
-      window.alert(`重置失败：${(e as Error).message}`);
-    } finally {
-      setResetBusy(false);
-    }
-  }
 
   return (
     <div className="flex min-h-0 min-w-0 flex-col gap-2">
@@ -942,8 +927,6 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                 paper={paper}
                 fills={fills}
                 quote={quote ?? null}
-                resetBusy={resetBusy}
-                onResetAccount={() => void handleResetAccount()}
                 onPaperChanged={() => loadPaperRef.current()}
               />
             ) : (

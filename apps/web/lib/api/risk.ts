@@ -24,6 +24,8 @@ export interface RiskState {
 }
 
 export interface OrderCheckResult {
+  estimated_fee: number;
+  checked_at: string;
   allowed: boolean;
   max_qty: number;
   reasons: string[];

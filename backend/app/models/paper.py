@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String, UniqueConstraint
+from sqlalchemy import DateTime, Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import utcnow
@@ -12,6 +12,27 @@ from app.models.watchlist import Base
 #:（picks-intraday-fusion-assessment.md §4，验证空仓闸门与执行闸门的对照账户）。
 SCOPE_MAIN = "main"
 SCOPE_SHADOW = "shadow"
+
+
+class PaperActionReceipt(Base):
+    """Committed user action, retained across account resets for safe retries."""
+
+    __tablename__ = "paper_action_receipt"
+    scope: Mapped[str] = mapped_column(String(12), primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    draft: Mapped[str] = mapped_column(Text)
+    result: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class PaperResetBackup(Base):
+    __tablename__ = "paper_reset_backup"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    scope: Mapped[str] = mapped_column(String(12))
+    payload: Mapped[str] = mapped_column(Text)
+    after_digest: Mapped[str] = mapped_column(String(64))
+    restored: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class PaperAccount(Base):

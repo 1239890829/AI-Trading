@@ -6,11 +6,13 @@ from pydantic import BaseModel, Field
 class OrderCheckRequest(BaseModel):
     symbol: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
     side: str = Field(pattern=r"^(buy|sell)$")
-    price: float = Field(gt=0)
+    price: float = Field(gt=0, allow_inf_nan=False)
     quantity: int = Field(gt=0)
 
 
 class OrderCheckResponse(BaseModel):
+    estimated_fee: float
+    checked_at: str
     allowed: bool
     max_qty: int
     reasons: list[str]

@@ -10,9 +10,10 @@
 from __future__ import annotations
 
 from typing import Any
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.api.deps import get_hub, require_write_token
 from app.core.bjtime import beijing_today
@@ -33,17 +34,25 @@ class TradeIn(BaseModel):
     symbol: str = Field(min_length=1, max_length=12)
     name: str | None = None
     side: str = Field(pattern="^(buy|sell)$")
-    fill_price: float = Field(gt=0)
+    fill_price: float = Field(gt=0, allow_inf_nan=False)
     quantity: int = Field(gt=0)
-    fee: float = Field(default=0.0, ge=0)
+    fee: float = Field(default=0.0, ge=0, allow_inf_nan=False)
     traded_at: str = Field(default="", max_length=10)
     note: str | None = Field(default=None, max_length=256)
 
 
+    @field_validator("traded_at")
+    @classmethod
+    def valid_trade_date(cls, value):
+        if value and (date.fromisoformat(value).isoformat() != value or date.fromisoformat(value) > beijing_today()):
+            raise ValueError("成交日期须为已发生的 YYYY-MM-DD 日期")
+        return value
+
+
 class OverrideIn(BaseModel):
     quantity: int = Field(gt=0)
-    total_cost: float = Field(gt=0)
-    realized_pnl: float = Field(default=0.0)
+    total_cost: float = Field(gt=0, allow_inf_nan=False)
+    realized_pnl: float = Field(default=0.0, allow_inf_nan=False)
 
 
 async def _quotes_for(hub: QuoteHub, symbols: list[str]) -> dict[str, Any]:

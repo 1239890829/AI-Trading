@@ -350,6 +350,10 @@ async def check_and_dispatch(app) -> list[dict]:
     返回实际分发（去重后）的 hits。任何一环失败不抛（loop 兜底日志）。
     """
     state = app.state if hasattr(app, "state") else app
+    from app.picks.buy_point_consumers import consume_pending
+    repo = getattr(state, "alert_repo", None)
+    if repo is not None:
+        await consume_pending(app, repo._session_factory)
     now = beijing_now()
     # 交易日 + 盘中窗口（与 watcher 同口径；盘前/盘后/午休不推）
     try:
