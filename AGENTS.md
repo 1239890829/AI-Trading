@@ -11,7 +11,7 @@
 - 唯一文档入口：`docs/INDEX.md`；执行治理：`docs/retro-and-gaps.md` §5.9（G0–G5/GX）；领域索引：§6.0（W00–W09）；任务状态与调度元数据在所属阶段页单点维护。
 - 施工取舍：最新用户要求与 docs/implementation-plan.md 的 v9.13 明确修订优先；U52–U55 已确认；原 v9 未修订部分保留，旧项按真实价值复核，登记不等于必须实施。
 - 当前现场与实测：`docs/handoff.md` §1；经验按 `docs/kb/00-INDEX.md` 定位。
-- 接续工作：`skills/ashare-ledger-continue/SKILL.md`；当轮交接：`skills/ashare-task-handoff/SKILL.md`。总账 `docs/retro-and-gaps.md` §5.9 的 G0–G5/GX 是唯一执行门序；每次“继续”先运行 `scripts/ledger-runtime-selection.py` 重算 stage 明示的受支持 `运行条件`。G0–G4 有 actionable blocker 时取最低 blocker 门；**全部 blocker 清空后回落到最低仍有 actionable non-blocker 的普通门**，再按角色/P0-P2/门内序领取一个切片；G5/GX 不进入普通 fallback。运行条件只临时影响本轮选择，不改写 stage 静态状态；硬依赖未完成不得跨门；`CROSS_GATE_EXCEPTION` 只能由网页在 handoff 明示。
+- 接续工作：`skills/ashare-ledger-continue/SKILL.md`；当轮交接：`skills/ashare-task-handoff/SKILL.md`。总账 `docs/retro-and-gaps.md` §5.9 的 G0–G5/GX 是唯一执行门序；每次“继续”先运行 `scripts/ledger-runtime-selection.py` 重算 stage 明示的受支持 `运行条件`。G0–G4 有 actionable blocker 时取最低 blocker 门；**全部 blocker 清空后回落到最低仍有 actionable non-blocker 的普通门**，再按角色/P0-P2/门内序领取一个主任务；G5/GX 不进入普通 fallback。运行条件只临时影响本轮选择，不改写 stage 静态状态；硬依赖未完成不得跨门；`CROSS_GATE_EXCEPTION` 只能由网页在 handoff 明示。
 - 盘后复盘：`skills/ashare-daily-review/SKILL.md`，流程与逐项核验归既有 SOP / checklist。
 - 外部创新雷达：`skills/ashare-innovation-radar/SKILL.md`；长期发现/筛选规则见 `docs/ai/continuous-evolution.md`。雷达只提出候选/验证，不自动安装或准入。
 - 跨模块长期治理与重大重构：`skills/living-system-governor/SKILL.md`。它把 U48/GOV-027 的目标优先、证据分层、机制生命周期、反证、Champion/Challenger、成本收益与重开纪律，以及 U49 的主动缺陷发现门变成上层思考协议；**不替代**总账阶段门、stage 单点状态、领域登记册、风险/权限或发布门。后续用户长期要求、重复纠偏与真实复盘若形成稳定可复用的方法论，按其按需手册 `references/governance-handbook.md` §19 的自我进化协议决定是否进入 Core / Domain Extension / Experience；一次性要求不自动固化，实质变化必须有版本与 Git/PR 证据。
@@ -93,6 +93,8 @@ python3 scripts/doc-health.py
 
 先核当前代码、已合并成果与真实消费者，再比较现状、最小修补和替代方案。只推进收益显著、可靠且风险可控的改动；清楚写用途、依据、影响面、成本、验收及恢复路径。允许有理据偏离方案，但性能不得劣化、关键机制不得削弱；优化用可比测量和行为证据证明，不宣称未证实的“全局最优”。无法证明的主张保留为待验证条件。
 
+开工先把关键验收映射到所需证据、获取方式与责任任务，区分本轮可取得、需外部输入及需未来观察。历史估计、工程通过、前向运行和效果准入分别验收；发现不可观测条件或错误前提应直接纠正，不追加不可能的证明要求，也不把缺证据写成已完成。批量取证前说明它能关闭哪项缺口；连续两批没有新增可用证据时复审来源或方法，凭明确差异继续，不能仅换查询措辞重复扫描。
+
 完整任务范围包含所有模块及小功能。按 docs/product/product-closure-design.md、docs/product/hunting-decision-design.md 和 docs/product/feature-closure-audit.md 明确用途、输入、消费者、失败反馈和证据；不得用模块级完成替代子功能检查。用户中途增加要求是叠加，除非明确取代，不能视为主任务终止。后台情境不以示例或固定四类封版；前台简洁不削弱后台识别。
 
 优先正确性、可靠通知、追溯闭环和真实用户价值，再研究、智能体、性能与精简。安全止险可前移；不为研究样本不足阻塞独立正确性切片。持续寻找不合理设计和新风险，经论证可合并、调整或退出任务，不追求任务数量或文档数量。
@@ -139,6 +141,8 @@ tracked/独有内容的物理清理走 `scripts/safe-trash.sh` 可恢复；许�
 
 ### 6.1 实施和运行验收
 
+用户已于 2026-09-26 要求按整项任务连续交付，2026-09-29 再次确认。默认“继续”领取一个合法主任务，其内部切片连续完成到任务验收与发布收尾；仅遇真实外部阻塞、用户暂停或新的授权边界才停。若用户明确限定切片，则按限定执行；不自动领取第二个业务任务，阶段门与每个 PR 的发布条件继续适用。
+
 - 先复现、按小切片修改、立即运行覆盖判据；代码/文档同文件编辑串行。新增守卫用真实缺陷注入确认能判红，再按哈希恢复。
 - 测试同时隔离数据库、文件、网络和后台任务；内存库不是文件隔离，worktree 不是操作系统沙箱。不得改写真实报告或调用有费用/外发副作用的端点求验收。
 - UI 验收分 DOM、行为与真实 Canvas；文本快照不能证明画面正确。按可用工具目视/交互验证，夹具与实源证据分开报告。
@@ -147,7 +151,7 @@ tracked/独有内容的物理清理走 `scripts/safe-trash.sh` 可恢复；许�
 
 ### 6.2 持续控制 CI 成本
 
-功能分支 push 不触发 Actions；先本地收敛，再合批一次 PR 与合并后 master CI。保留全部必要断言和三 job 门禁，不因余额少跳过。每批记录安装/测试/job 耗时、重复次数和账户余额，优先后端慢项与隔离，区分受控对照、runner 波动和实际账单。优化后续批次仍复核，不为测量多跑 Actions。不得启用付费，余额不足时保留可交付提交并明确缺口。
+功能分支 push 不触发 push 事件的 Actions，但已有 PR 的同步会触发 pull_request CI；先本地完成同一证据批的反证、文档传播与适用验证，再合批推送。内部切片用于降低实施风险，不要求每片单独推送或结束用户轮次；可保留本地提交恢复点。保留全部必要断言和三 job 门禁，不因余额少跳过。每批记录安装/测试/job 耗时、重复次数和账户余额，优先后端慢项与隔离，区分受控对照、runner 波动和实际账单。优化后续批次仍复核，不为测量多跑 Actions。不得启用付费，余额不足时保留可交付提交并明确缺口。
 
 ### 6.3 既有决定
 
@@ -197,7 +201,7 @@ Jev 的唯一现役项目蓝图是 `docs/ai/jev-integration.md`，状态归 W08/
   4. 最新 `master` 已集成并重验；新提交、base 漂移或重跑 CI 使旧验收失效；
   5. Pull Request 中不存在未解决的 `Request changes` 或阻塞性审查意见；
   6. diff 中不存在敏感信息、无关文件或未经说明的破坏性修改。
-- 全部条件与当前模式的有效 release receipt 均满足后执行合并：正常模式由 Codex 按授权合并；`DEGRADED_FULL_CONTROL` 由网页端直接合并、核 post-merge master CI 并删除功能分支。正常模式合并完成不自动授权下一业务轮；降级模式在用户未退出前可继续按账本阶段门领取下一唯一切片，但每个 PR 都必须重新形成 exact-HEAD `DegradedRelease`，不能复用上一 PR 的回执。
+- 全部条件与当前模式的有效 release receipt 均满足后执行合并：正常模式由 Codex 按授权合并；`DEGRADED_FULL_CONTROL` 由网页端直接合并、核 post-merge master CI 并删除功能分支。正常模式合并完成不自动授权下一业务轮；降级模式在用户未退出前按后续用户授权与账本阶段门领取下一唯一主任务，但每个 PR 都必须重新形成 exact-HEAD `DegradedRelease`，不能复用上一 PR 的回执。
 - 自动合并授权不包含强制推送、绕过 CI、忽略已有阻塞性审查意见、改写 `master` 历史或执行其他破坏性 Git 操作。
 - 合并时使用 `gh pr merge <PR编号> --merge --match-head-commit <完整SHA>`；合并后复验 master CI 与实际运行版本，汇报 PR、合并 SHA、测试和遗留。
 - Pull Request 合并并确认分支提交已进入最新 `origin/master` 后，应立即删除对应本地与远程功能分支。
