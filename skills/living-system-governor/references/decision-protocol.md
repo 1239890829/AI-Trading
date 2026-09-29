@@ -8,6 +8,7 @@
 Proposal:
 Goal:
 Observed facts:
+Critical assumptions / verification:
 Unknowns:
 Consumers:
 Current baseline:
@@ -28,9 +29,13 @@ Rollback:
 Owner:
 Decision:
 Next smallest slice:
-Acceptance evidence:
+Acceptance evidence / feasibility / owner:
+Next evidence collection / decision it can change:
+Method review / stop trigger:
 Review / revisit trigger:
 ```
+
+按风险使用必要字段，不为简单修改填写整卡。取证先用小样核字段、身份、时间/版本与许可，再批量；连续两批没有减少同一验收缺口时复审方法，只有新来源/字段/可检验假设才继续同路扩量。历史反事实估计必须写假设和误差边界，未来真实运行由原 owner 验证，不能要求历史数据证明从未发生的动作。
 
 ## 二、动作选择矩阵
 
