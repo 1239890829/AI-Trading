@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import json
 from threading import Barrier
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -13,6 +14,7 @@ from sqlalchemy import create_engine, event as sa_event, func, select, text
 from sqlalchemy.orm import sessionmaker
 
 from app.market.alert_engine import AlertEngine
+from app.market import alert_engine
 from app.core.bjtime import BJ_TZ
 from app.core.config import settings
 from app.models.notification_outbox import NotificationAttempt, NotificationOutbox
@@ -220,6 +222,10 @@ def test_buy_point_outbox_preserves_card_send_pacing(rig, monkeypatch):
     async def fake_sleep(seconds):
         sleeps.append(seconds)
 
+    # Keep the pacing clock fixed; slow SQLite work may otherwise take longer
+    # than the interval and correctly avoid an explicit sleep.
+    monkeypatch.setattr(alert_engine, "time", SimpleNamespace(
+        time=alert_engine.time.time, monotonic=lambda: 100.0))
     monkeypatch.setattr("app.market.alert_engine.asyncio.sleep", fake_sleep)
     asyncio.run(service._deliver_pending())
     assert len(sent) == 2
