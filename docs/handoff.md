@@ -4,7 +4,7 @@
 
 ## 1. 权威入口与现行授权
 
-读取链：AGENTS → INDEX → 本 handoff → 总方案/相关蓝图 → 总账 §5.9/§6.0 → stage。用户已确认全域方案 v1.3、实施方案 v9.13/U52–U55；Jev 现役蓝图在 docs/ai/jev-integration.md，长期治理在 docs/ai/continuous-evolution.md。
+读取链：AGENTS → INDEX → 本 handoff → 总方案/相关蓝图 → 总账 §5.9/§6.0 → stage。用户已确认全域方案 v1.3、实施方案 v9.13/U52–U55，累计用户要求范围 U01–U55；Jev 现役蓝图在 docs/ai/jev-integration.md，长期治理在 docs/ai/continuous-evolution.md。
 
 **U50 降级授权回执**：用户 2026-09-24 明确允许本机 Codex 在 `DEGRADED_FULL_CONTROL` 承担规划、U49 作者反证、实施、自审、PR/CI、发布、合并及清理，直到明确撤销。准确 HEAD 的 `DegradedRelease` 必须明示作者自审，不能冒充独立 Review；完整本地门禁、三项 required CI、release_check、合并后 CI 和分支清理不降低。授权不覆盖付费源/模型、真实通知、券商、部署或生产库。
 
