@@ -24,6 +24,7 @@ CRITICAL 提醒**（推送矩阵修订：真实持仓离场提醒与买点卡同
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -155,50 +156,75 @@ def trailing_rule(cost: float, price: float, peak: float, role: str | None) -> d
 
 
 def _notify(app, symbol: str, name: str, kind: str, text: str, *, critical: bool = False,
-            key: str | None = None) -> None:
-    """当日简报 alerts[] + （critical 时）飞书。失败只记日志。
+            key: str | None = None, source_id: str | None = None,
+            source_version: str | None = None, source_as_of: str | None = None) -> bool:
+    """Record one source event before the brief; policy controls the outbox.
 
-    落点不是通知中心（`IMP-028` 后该中心只收 `__picks_buy_point__` 买点）：
-    持仓监护提醒进猎场页「盘中提醒」，`AlertEvent` 可在控制台「提醒与告警」追查
-    （2026-09-16 `IMP-034` 订正原「通知中心 +」措辞）。
-
-    key 传入时作为落盘去重键（跨重启生效）；不传则由 append_alert 兜底生成。
+    ``critical`` remains a compatibility hint only.  It cannot upgrade a
+    SILENT kind into a Feishu send.  Failure leaves the caller free to retry.
     """
+    today = beijing_now().date().isoformat()
+    source_key = key or f"{kind}:{symbol}:{hashlib.sha256(text.encode()).hexdigest()[:16]}"
+    source_id = source_id or source_key
+    source_as_of = source_as_of or beijing_now().isoformat()
+    alert = {"kind": kind, "symbol": symbol, "name": name,
+             "key": source_key, "direction": "持仓监护", "text": text, "meta": {}}
     try:
-        from app.picks.morning_brief import append_alert, brief_for_today
+        from app.picks.source_events import record_source_event
 
-        target, _ = brief_for_today()
-        alert = {"kind": kind, "symbol": symbol, "name": name,
-                 "direction": "持仓监护", "text": text, "meta": {}}
-        if key:
-            alert["key"] = key
-        append_alert(target, alert)
-    except Exception:  # noqa: BLE001
-        log.exception("持仓通知 append 失败")
-    if not critical:
-        return
-    try:
-        import threading
+        _, _, projected = record_source_event(
+            kind, f"{today}:{source_key}",
+            symbol=symbol if symbol != "-" else "000000", name=name, text=text,
+            source_id=source_id, source_version=source_version,
+            source_as_of=source_as_of, trade_date=today,
+            direction="真实持仓风险" if kind == "real_exit_alert" else "持仓监护",
+            brief_alert=alert,
+        )
+        return projected
+    except Exception:
+        log.exception("持仓通知事件持久化失败（kind=%s, symbol=%s）", kind, symbol)
+        return False
 
-        from app.notifiers import get_notifier_registry
-        from app.services.push_policy import PolicyKind, feishu_allowed
 
-        if not feishu_allowed(PolicyKind.CRITICAL):
-            return
-        notifier = get_notifier_registry().get("feishu")
-        send = getattr(notifier, "send_interactive", None) or getattr(notifier, "send_text", None)
-        if send is None:
-            return
-        card = {
-            "config": {"wide_screen_mode": True},
-            "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": f"**{symbol} {name}**\n{text}"}}],
-        }
-        threading.Thread(
-            target=lambda: asyncio.run(send(card)),
-            name="real-exit-feishu", daemon=True,
-        ).start()
-    except Exception:  # noqa: BLE001
-        log.exception("真实持仓离场飞书提醒失败")
+def _publish_paper_exit(plan: dict, exit_row: dict) -> tuple[int, bool] | None:
+    """Link a filled sell order to one event; brief failure remains retryable."""
+    order_id = exit_row.get("order_id")
+    if order_id is None:
+        return None  # Historical plans without identity cannot be safely backfilled.
+    from app.picks.source_events import record_source_event
+
+    symbol = exit_row["symbol"]
+    text = f"自动离场：{exit_row['reason']}"
+    event_id, _, projected = record_source_event(
+        "position_exit", f"{plan['date']}:paper_sell:{order_id}",
+        symbol=symbol, name=exit_row.get("name") or "", text=text,
+        source_id=str(order_id), source_version="filled",
+        source_as_of=f"{plan['date']}T{exit_row['ts']}+08:00",
+        trade_date=plan["date"], direction="模拟持仓离场",
+        brief_alert={"kind": "position_exit", "symbol": symbol,
+                     "name": exit_row.get("name") or "", "key": f"paper_sell:{order_id}",
+                     "direction": "持仓监护", "text": text, "meta": {"order_id": order_id}},
+    )
+    exit_row["event_id"] = event_id
+    exit_row["event_projected"] = projected
+    return event_id, projected
+
+
+def reconcile_paper_exit_events() -> int:
+    """Retry same-day filled-exit projections; never resubmit the sell order."""
+    plan = load_plan()
+    repaired = 0
+    for row in plan.get("exits", []):
+        if row.get("order_id") is None or (row.get("event_id") and row.get("event_projected")):
+            continue
+        try:
+            if _publish_paper_exit(plan, row) is not None:
+                repaired += 1
+        except Exception:
+            log.exception("position_exit event reconciliation failed for order %s", row.get("order_id"))
+    if repaired:
+        save_plan(plan)
+    return repaired
 
 
 #: 真实持仓读取状态（S1-2，2026-09-11）。**三态**，键形状对齐规划中的 Freshness 契约
@@ -381,11 +407,10 @@ async def evaluate_once(app) -> list[dict]:
                       _PAPER_READ["failures"])
         key = f"position-monitor-degraded:paper:{today}"
         if key not in _NOTIFIED:
-            _NOTIFIED.add(key)
-            _notify(app, "-", "", "position_monitor_degraded",
-                    f"模拟持仓读取失败（连续 {_PAPER_READ['failures']} 轮），"
-                    f"**本轮自动离场与硬止损已跳过**：{_PAPER_READ['reason']}",
-                    key=key)
+            if _notify(app, "-", "", "position_monitor_degraded",
+                       f"模拟持仓读取失败（连续 {_PAPER_READ['failures']} 轮），"
+                       f"**本轮自动离场与硬止损已跳过**：{_PAPER_READ['reason']}", key=key):
+                _NOTIFIED.add(key)
         fired.append({
             "symbol": "-", "action": "degraded",
             "reason": f"模拟持仓读取失败，自动离场与硬止损已跳过：{_PAPER_READ['reason']}",
@@ -415,12 +440,12 @@ async def evaluate_once(app) -> list[dict]:
         if rule is None:
             continue
         action, reason = rule["action"], rule["reason"]
-        key = f"{sym}:{action}:{reason[:12]}"
+        key = f"{today}:{sym}:{action}:{reason[:12]}"
         if action == "wave":
             if key in _NOTIFIED:
                 continue
-            _NOTIFIED.add(key)
-            _notify(app, sym, name, "position_wave", f"{reason}（持仓监护·持有）")
+            if _notify(app, sym, name, "position_wave", f"{reason}（持仓监护·持有）", key=key):
+                _NOTIFIED.add(key)
             fired.append({"symbol": sym, "action": "wave", "reason": reason})
             continue
         if action != "exit":
@@ -430,8 +455,8 @@ async def evaluate_once(app) -> list[dict]:
             reason += "（T+1 当日买入不可卖——下一交易日自动执行）"
             if key in _NOTIFIED:
                 continue
-            _NOTIFIED.add(key)
-            _notify(app, sym, name, "position_exit", reason)
+            if _notify(app, sym, name, "position_exit", reason, key=key):
+                _NOTIFIED.add(key)
             fired.append({"symbol": sym, "action": "exit_deferred", "reason": reason})
             continue
         try:
@@ -449,18 +474,30 @@ async def evaluate_once(app) -> list[dict]:
             # 与峰值轨迹全部对不上。此处只留痕「挂单受理」，离场判定留给下一轮
             # （持仓仍在持仓表里，下一轮仍会被检查到）。
             if key not in _NOTIFIED:
-                _NOTIFIED.add(key)
-                _notify(app, sym, name, "position_exit_pending",
-                        f"离场挂单受理未成交：{reason}（限价 {price} 未达现价，等待撮合）")
+                if _notify(app, sym, name, "position_exit_pending",
+                           f"离场挂单受理未成交：{reason}（限价 {price} 未达现价，等待撮合）",
+                           key=f"paper_sell_pending:{getattr(order, 'id', key)}",
+                           source_id=str(getattr(order, "id", key))):
+                    _NOTIFIED.add(key)
             fired.append({"symbol": sym, "action": "exit_pending", "reason": reason})
             log.warning("[离场引擎] 离场挂单受理未成交 %s %d 股 @ 限价 %s（%s）",
                         sym, pos["available"], price, reason)
             continue
-        plan["exits"].append({"ts": beijing_now().strftime("%H:%M:%S"), "symbol": sym,
-                              "reason": reason, "qty": pos["available"], "price": price})
+        exit_row = {"ts": beijing_now().strftime("%H:%M:%S"), "symbol": sym,
+                    "name": name, "reason": reason, "qty": pos["available"],
+                    "price": price, "order_id": getattr(order, "id", None)}
+        plan["exits"].append(exit_row)
         peaks.pop(sym, None)
-        save_plan(plan)
-        _notify(app, sym, name, "position_exit", f"自动离场：{reason}")
+        try:
+            _publish_paper_exit(plan, exit_row)
+        except Exception:
+            log.exception("filled paper sell event failed for order %s; reconciliation will retry",
+                          exit_row["order_id"])
+        try:
+            save_plan(plan)
+        except Exception:
+            log.exception("filled paper sell plan save failed for order %s; event retained if created",
+                          exit_row["order_id"])
         fired.append({"symbol": sym, "action": "exit", "reason": reason})
         log.warning("[离场引擎] 模拟仓自动卖出 %s %d 股 @ %s（%s）", sym, pos["available"], price, reason)
 
@@ -468,15 +505,14 @@ async def evaluate_once(app) -> list[dict]:
     real_pos = _real_positions()
     if _REAL_READ["state"] == "failed":
         # S1-2：读失败必须与「确实无持仓」可区分——当日一次在告警台账留痕（kind 独立，
-        # 前端可按系统级渲染），并进 fired 供健康哨兵观测。**降级不推送飞书**（盘中飞书
-        # 只保留买点卡），但绝不能再静默当作"没有真实持仓"。
+        # 前端可按系统级渲染），并进 fired 供健康哨兵观测。降级按 SILENT
+        # 留审计，不推飞书；不能静默当作"没有真实持仓"。
         key = f"position-monitor-degraded:{today}"
         if key not in _NOTIFIED:
-            _NOTIFIED.add(key)
-            _notify(app, "-", "", "position_monitor_degraded",
-                    f"真实持仓读取失败（连续 {_REAL_READ['failures']} 轮），"
-                    f"**本轮真实持仓止损检查已跳过**：{_REAL_READ['reason']}",
-                    key=key)
+            if _notify(app, "-", "", "position_monitor_degraded",
+                       f"真实持仓读取失败（连续 {_REAL_READ['failures']} 轮），"
+                       f"**本轮真实持仓止损检查已跳过**：{_REAL_READ['reason']}", key=key):
+                _NOTIFIED.add(key)
         fired.append({
             "symbol": "-", "action": "degraded",
             "reason": f"真实持仓读取失败，真实持仓止损检查已跳过：{_REAL_READ['reason']}",
@@ -502,13 +538,15 @@ async def evaluate_once(app) -> list[dict]:
         if price <= cost * (1 - stop):
             key = f"real:{sym}:stop"
             if key not in _NOTIFIED:
-                _NOTIFIED.add(key)
                 text = (
                     f"真实持仓止损提醒：现价 {price} 已低于成本 {cost:.2f}（{cost_src}）"
                     f"的 -{stop:.0%} 线——请确认是否卖出；"
                     "若已实际卖出，**登记卖出流水**即可（不必删除历史流水）"
                 )
-                _notify(app, sym, rp.get("name") or "", "real_exit_alert", text, critical=True)
+                if _notify(app, sym, rp.get("name") or "", "real_exit_alert", text,
+                           critical=True, key=key,
+                           source_as_of=str(q.get("data_timestamp") or q.get("received_at") or beijing_now().isoformat())):
+                    _NOTIFIED.add(key)
                 fired.append({"symbol": sym, "action": "real_alert", "reason": text})
         elif pct is not None and is_sealed(pct, board_limit_pct(sym)):
             peaks[sym] = max(float(peaks.get(sym) or price), price)
@@ -541,8 +579,8 @@ async def evaluate_once(app) -> list[dict]:
         key = f"take-profit:{today}:{sym}"
         if key in _NOTIFIED:
             continue
-        _NOTIFIED.add(key)
-        _notify(app, sym, nm or str(q.get("name") or ""), "take_profit", rule["reason"], key=key)
+        if _notify(app, sym, nm or str(q.get("name") or ""), "take_profit", rule["reason"], key=key):
+            _NOTIFIED.add(key)
         fired.append({"symbol": sym, "action": "take_profit",
                       "reason": rule["reason"], "pct": rule["pct"], "held": held})
 
@@ -563,6 +601,10 @@ async def position_loop(app, stop: asyncio.Event) -> None:
     while not stop.is_set():
         try:
             if radar_active_now():
+                from app.picks.position_engine import reconcile_position_open_events
+
+                reconcile_position_open_events()
+                reconcile_paper_exit_events()
                 await evaluate_once(app)
                 if await wait_or_stop(stop, 15):
                     return

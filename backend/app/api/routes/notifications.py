@@ -1,4 +1,4 @@
-"""站内个股机会通知端点（2026-09-15 收敛；2026-09-16 `IMP-034` 清理死代码）。
+"""站内个股机会与持仓风险通知端点。
 
 GET /api/notifications?alert_limit=50&news_limit=15&news_min_score=<settings 默认>
 
@@ -80,17 +80,21 @@ WATCHER_RULE = "__picks_watcher__"
 #: **一条都没进通知中心**；而 `__picks_buy_point__` 当日**一次都没触发**
 #: （`alert_rule` 表里根本没有该行——规则是懒创建的），于是通知中心整天为 0 条。
 #:
-#: 口径不变的部分：**仍然只收「个股级」且「值得打断用户」的机会**——
+#: 当前只收具名个股且有用户决策价值的事件——
 #:   - `buy_point`：多维门控后的买点（原有）；
 #:   - `pre_limit`：**涨停前**的临板预警（"距封板 1.4pct，10cm"），语义即"介入机会"。
+#:   - `board_reopen`：曾封板后开板的重评；
+#:   - `real_exit_alert`：真实持仓止损风险（风险提示，不是买点）。
 #:
 #: 刻意**不含** `flow_surge`（大单异动）：它虽有代码，但语义是"资金异动 / 题材成员跟踪"，
 #: 不是买点——纳入与否属交易信号口径，留待用户拍板（候选，非默认开启）。
-_NOTIF_KINDS = ("buy_point", "pre_limit")
-_NOTIF_RULE_NAMES = (BUY_POINT_RULE, WATCHER_RULE)
+_NOTIF_KINDS = ("buy_point", "pre_limit", "board_reopen", "real_exit_alert")
+_NOTIF_RULE_NAMES = (BUY_POINT_RULE, WATCHER_RULE,
+                     "__source_board_reopen__", "__source_real_exit_alert__")
 
 #: 各形状在通知中心的外显标签（缺省回退"个股机会"，不静默显示成空字符串）
-_KIND_LABEL = {"buy_point": "个股机会", "pre_limit": "临板预警"}
+_KIND_LABEL = {"buy_point": "个股机会", "pre_limit": "临板预警",
+               "board_reopen": "开板重评", "real_exit_alert": "真实持仓风险"}
 
 #: **读取窗口**（与 `alert_limit` 是两件事）。
 #:
@@ -132,7 +136,7 @@ def get_alert_repo(request: Request) -> AlertRepository:
 def _alert_items(
     repo: AlertRepository, limit: int, trading_dates: set | None = None
 ) -> tuple[list[dict], dict[str, int]]:
-    """多维门控后的买点事件 → 个股机会通知。triggered_at 为北京时间 naive。
+    """具名个股机会与真实持仓风险的站内投影。triggered_at 为北京时间 naive。
 
     `limit` 是**返回条数上限**；底层读取用 `_NOTIF_FETCH_LIMIT`（更宽，且已在
     DB 侧限定"带真实标的"），理由见该常量的注释——否则「刚放开的形状」会被
@@ -185,9 +189,11 @@ def _alert_items(
         log.exception("notifications: triage merge failed")
 
     items: list[dict] = []
-    # 白名单两键**恒在**（0 也返回）：空态要能一眼看出"临板预警 0 条"，
+    # 原机会形状两键**恒在**（0 也返回）：空态要能一眼看出"临板预警 0 条"，
     # 缺键与 0 条在渲染侧是两回事（缺键 = 没统计，0 = 统计了确实没有）。
-    seen: dict[str, int] = {k: 0 for k in _NOTIF_KINDS}
+    # Only the original two opportunity-shape counters are required even at 0;
+    # additional source kinds appear once actually observed.
+    seen: dict[str, int] = {"buy_point": 0, "pre_limit": 0}
     for e in events:
         snap = e.snapshot if isinstance(e.snapshot, dict) else {}
         if isinstance(e.snapshot, str):
@@ -204,7 +210,9 @@ def _alert_items(
         # 机会形状内，且必须带真实标的与名称。历史脏行、占位代码（`000000` 是
         # 板块/方向/健康类事件的占位）都不冒充「真正机会」。上游缺证据时宁缺毋滥。
         stock_name = (snap.get("name") or "").strip() if isinstance(snap.get("name"), str) else ""
-        if kind not in _NOTIF_KINDS or not e.symbol or e.symbol == "000000" or not stock_name:
+        if kind not in _NOTIF_KINDS or not e.symbol or e.symbol == "000000" or (
+            not stock_name and kind != "real_exit_alert"
+        ):
             continue
         direction = snap.get("direction") or ""
         text = (snap.get("text") or "").strip()
@@ -218,7 +226,7 @@ def _alert_items(
         items.append(
             {
                 "id": f"alert-{e.id}",
-                "category": "opportunity",
+                "category": "risk" if kind == "real_exit_alert" else "opportunity",
                 "label": _KIND_LABEL.get(kind, "个股机会"),
                 "session": _session_of(bj, trading_dates) if bj else "intraday",
                 "ts": bj.isoformat(sep=" ") if bj else None,
@@ -227,12 +235,14 @@ def _alert_items(
                 "symbol": e.symbol,
                 "url": None,
                 "score": None,
-                "source": "盘中买点判定" if kind == "buy_point" else "临板扫描",
-                "validity": (
-                    "仅触发时点满足买入区间；现价越界或硬门变化后失效"
-                    if kind == "buy_point" else
-                    "仅触发时点的临板状态；涨幅、封板状态或价格变化后失效"
-                ),
+                "source": {"buy_point": "盘中买点判定", "pre_limit": "临板扫描",
+                           "board_reopen": "开板重评", "real_exit_alert": "真实持仓监护"}[kind],
+                "validity": {
+                    "buy_point": "仅触发时点满足买入区间；现价越界或硬门变化后失效",
+                    "pre_limit": "仅触发时点的临板状态；涨幅、封板状态或价格变化后失效",
+                    "board_reopen": "仅当前快照确认开板；能否参与须重新核验",
+                    "real_exit_alert": "需核对当前持仓、成本与价格；原风险信号可随条件变化失效",
+                }[kind],
             }
         )
     return items, seen
@@ -246,7 +256,7 @@ async def notifications(
     news_min_score: float | None = Query(default=None, ge=0, le=100),
     repo: AlertRepository = Depends(get_alert_repo),
 ) -> dict:
-    """返回具名买点与临板个股事件；旧查询参数保留兼容。"""
+    """返回具名个股机会与真实持仓风险；旧查询参数保留兼容。"""
     min_score = news_min_score if news_min_score is not None else settings.notifications_news_min_score
     now = beijing_now().replace(tzinfo=None)  # 事件 published_at 是北京 naive，同语义相减
 

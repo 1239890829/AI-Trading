@@ -127,7 +127,7 @@ def _plan_file(tmp_path):
 
 
 def _patch_alerts(monkeypatch, tmp_path):
-    """拦截开仓通知出口——`maybe_open` 是**函数内 import**，patch 模块属性即生效。
+    """拦截开仓事件与 brief 出口，隔离本用例的持久存储。
 
     不拦的后果有两条：①「不得发通知」这条断言无法成立；② `append_alert` 会写到
     真实 `data/` 目录（测试污染，R21 同源）。故这里同时钉住出口与目标路径。
@@ -137,6 +137,14 @@ def _patch_alerts(monkeypatch, tmp_path):
     alerts: list[tuple] = []
     monkeypatch.setattr(mb, "append_alert", lambda *a, **k: alerts.append((a, k)))
     monkeypatch.setattr(mb, "brief_for_today", lambda: (tmp_path / "brief.json", None))
+    import app.picks.source_events as source_events
+
+    def record(kind, source_key, *, brief_alert=None, **kwargs):
+        if brief_alert is not None:
+            mb.append_alert(kwargs["trade_date"].replace("-", ""), brief_alert)
+        return 1, True, True
+
+    monkeypatch.setattr(source_events, "record_source_event", record)
     return alerts
 
 
@@ -565,7 +573,8 @@ def test_exit_filled_order_still_records_exit(tmp_path, monkeypatch):
     app = type("A", (), {"state": type("S", (), {"paper": _Engine(),
                                                 "snapshot_service": ss})()})()
 
-    plan = {"peaks": {"600001": 12.0}, "decisions": [], "exits": []}
+    plan = {"date": pe.beijing_now().date().isoformat(),
+            "peaks": {"600001": 12.0}, "decisions": [], "exits": []}
     monkeypatch.setattr(ee, "load_plan", lambda: plan)
     monkeypatch.setattr(ee, "save_plan", lambda p: None)
     monkeypatch.setattr(ee, "_picks_combos", lambda: {})
@@ -573,14 +582,21 @@ def test_exit_filled_order_still_records_exit(tmp_path, monkeypatch):
     ee._NOTIFIED.clear()
     ee._PAPER_READ.update(state="unknown", failures=0)
     ee._REAL_READ.update(state="empty", failures=0)
-    notified: list[tuple] = []
-    monkeypatch.setattr(ee, "_notify", lambda *a, **k: notified.append((a, k)))
+    published: list[tuple] = []
+
+    def publish(plan_arg, row):
+        published.append((plan_arg, dict(row)))
+        row.update(event_id=17, event_projected=True)
+        return 17, True
+
+    monkeypatch.setattr(ee, "_publish_paper_exit", publish)
 
     fired = asyncio.run(ee.evaluate_once(app))
 
     assert len(plan["exits"]) == 1 and plan["exits"][0]["symbol"] == "600001"
     assert plan["peaks"].get("600001") is None, "成交后峰值轨迹应清除"
-    assert [c[0][3] for c in notified] == ["position_exit"]
+    assert len(published) == 1 and published[0][1]["order_id"] == 1
+    assert plan["exits"][0]["event_id"] == 17
     assert any(f["action"] == "exit" for f in fired)
 
 

@@ -30,7 +30,10 @@ def rig(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "poll_interval_seconds", 5)
     monkeypatch.setattr(settings, "stale_after_seconds", 10)
     from app.models.opportunity_learning import OpportunityDecisionSnapshot, OpportunityOutcomeLabel
+    from app.models.real_position import RealTrade, RealPositionOverride
+    from app.review.models import ReviewReportRow
     assert OpportunityDecisionSnapshot.__table__.name and OpportunityOutcomeLabel.__table__.name
+    assert RealTrade.__table__.name and RealPositionOverride.__table__.name and ReviewReportRow.__table__.name
     engine = create_engine(f"sqlite:///{tmp_path / 'outbox.db'}")
     @sa_event.listens_for(engine, "connect")
     def foreign_keys(conn, _):
@@ -125,6 +128,181 @@ def queue_buy_point(rig, *, price=10.5, as_of=None, symbol="600000", dedup_key=N
     )
     assert created
     return event, rule, item, hit, latest
+
+
+def test_source_event_is_durable_deduplicated_and_silent(rig, monkeypatch):
+    from app.picks import source_events
+
+    monkeypatch.setattr(source_events, "get_notifier_registry", lambda: rig[3]._registry)
+    _, factory, _, _, _, sent, *_ = rig
+    kwargs = dict(symbol="600000", name="甲", text="回封再观察", source_id="watch-1",
+                  source_version="seal-2", source_as_of="2026-09-29T10:00:00+08:00",
+                  trade_date="2026-09-29", direction="板块观察", session_factory=factory)
+    first = source_events.record_source_event("board_reopen", "watch-1:seal-2", **kwargs)
+    again = source_events.record_source_event("board_reopen", "watch-1:seal-2", **kwargs)
+    assert first[1:] == (True, True) and again[1:] == (False, True)
+    assert first[0] == again[0] and rows(factory) == [] and sent == []
+    event = AlertRepository(factory).get_event(first[0])
+    snap = json.loads(event.snapshot)
+    assert snap["source_as_of"] == kwargs["source_as_of"]
+    assert snap["source_id"] == "watch-1" and snap["recorded_at"] != snap["source_as_of"]
+
+
+def test_source_brief_projection_retries_without_new_event(rig, monkeypatch):
+    from app.picks import morning_brief, source_events
+
+    _, factory, _, _, _, sent, *_ = rig
+    calls = []
+
+    def append(_date, alert):
+        calls.append(alert)
+        return len(calls) > 1
+
+    monkeypatch.setattr(morning_brief, "append_alert", append)
+    monkeypatch.setattr(morning_brief, "load_brief", lambda _date: None)
+    kwargs = dict(symbol="600000", name="甲", text="模拟成交", source_id="paper-order-1",
+                  source_version="filled", source_as_of="2026-09-29T10:00:00+08:00",
+                  trade_date="2026-09-29", direction="模拟持仓", session_factory=factory,
+                  brief_alert={"kind": "position_open", "symbol": "600000",
+                               "key": "position-open-1", "meta": {}})
+    first = source_events.record_source_event("position_open", "paper-order-1", **kwargs)
+    assert json.loads(AlertRepository(factory).get_event(first[0]).snapshot)["brief_projection"] == "pending"
+    second = source_events.record_source_event("position_open", "paper-order-1", **kwargs)
+    assert first[1:] == (True, False) and second[1:] == (False, True)
+    assert first[0] == second[0] and len(calls) == 2
+    assert calls[1]["meta"]["event_id"] == first[0]
+    assert json.loads(AlertRepository(factory).get_event(first[0]).snapshot)["brief_projection"] == "completed"
+    assert rows(factory) == [] and sent == []
+
+
+def test_real_exit_intent_rechecks_unwatched_holding_and_defers_missing_quote(rig, monkeypatch):
+    from app.models.real_position import RealTrade
+    from app.picks import source_events
+
+    repo, factory, _, service, _, sent, _, _ = rig
+    monkeypatch.setattr(source_events, "get_notifier_registry", lambda: service._registry)
+    with factory() as db:
+        db.add(RealTrade(symbol="600999", name="乙", side="buy", fill_price=10.0,
+                         quantity=100, traded_at="2026-09-29"))
+        db.commit()
+    event_id, created, _ = source_events.record_source_event(
+        "real_exit_alert", "2026-09-29:real:600999:stop", symbol="600999", name="乙",
+        text="真实持仓止损提醒", source_id="real:600999:stop", source_version="v1",
+        source_as_of="2026-09-29T10:00:00+08:00", trade_date="2026-09-29",
+        direction="真实持仓风险", session_factory=factory)
+    assert created and repo.get_event(event_id) is not None
+    assert service._quotes.get("600999") is None
+
+    asyncio.run(service._deliver_pending())
+    row, = rows(factory)
+    assert row.state == "leased" and row.reason == "source_recheck_unavailable" and sent == []
+    # A later all-market snapshot supplies the held symbol without altering the
+    # watchlist or forcing another provider call. Reconcile the pre-send lease.
+    as_of = datetime.now(timezone.utc)
+    service.update_snapshot_service(SimpleNamespace(
+        freshness=lambda **_: SimpleNamespace(state="ready"), poll_interval=60,
+        versioned_snapshot=lambda: ([{"symbol": "600999", "price": 9.0,
+                                      "source": "isolated-test"}], as_of),
+    ))
+    repo.outbox.reconcile(row.lease_until_ms)
+    asyncio.run(service._deliver_pending())
+    row, = rows(factory)
+    assert row.state == "accepted" and len(sent) == 1
+
+
+def test_source_rule_revocation_suppresses_queued_real_exit(rig, monkeypatch):
+    from app.picks import source_events
+
+    repo, factory, _, service, _, sent, *_ = rig
+    monkeypatch.setattr(source_events, "get_notifier_registry", lambda: service._registry)
+    source_events.record_source_event(
+        "real_exit_alert", "stop-revoke", symbol="600000", name="甲", text="风险提醒",
+        source_id="stop-revoke", source_version="v1", source_as_of="2026-09-29T10:00:00+08:00",
+        trade_date="2026-09-29", direction="真实持仓风险", session_factory=factory)
+    rule = next(r for r in repo.list_rules() if r.name == "__source_real_exit_alert__")
+    repo.update_rule(rule.id, enabled=False)
+    asyncio.run(service._deliver_pending())
+    row, = rows(factory)
+    assert row.state == "suppressed" and row.reason == "event_or_rule_removed_or_disabled"
+    assert sent == []
+
+
+def test_review_report_intent_delivers_after_hours_but_history_stays_reference_only(rig, monkeypatch):
+    from app.core import bjtime
+    from app.picks import source_events
+    from app.review.models import ReviewReportRow
+
+    _, factory, _, service, _, sent, *_ = rig
+    now = datetime(2026, 9, 29, 16, 0, tzinfo=BJ_TZ)
+    monkeypatch.setattr(source_events, "beijing_now", lambda: now)
+    monkeypatch.setattr(bjtime, "beijing_now", lambda: now)
+    monkeypatch.setattr(source_events, "get_notifier_registry", lambda: service._registry)
+    monkeypatch.setattr("app.market.trade_calendar.in_trading_window", lambda: False)
+    with factory() as db:
+        db.add_all([
+            ReviewReportRow(review_id="today-report", trade_date="20260929",
+                            generated_at=datetime(2026, 9, 29, 7, 35)),
+            ReviewReportRow(review_id="old-report", trade_date="20260928",
+                            generated_at=datetime(2026, 9, 28, 7, 35)),
+        ])
+        db.commit()
+    assert source_events.record_review_report(factory, "20260929")[1] is True
+    assert source_events.record_review_report(factory, "20260928")[1] is True
+    queued, = rows(factory)
+    assert json.loads(queued.payload)["intent"]["source_id"] == "today-report"
+    asyncio.run(service._deliver_pending())
+    queued, = rows(factory)
+    assert queued.state == "accepted" and len(sent) == 1
+
+
+def test_early_same_day_report_is_not_rebranded_as_after_close(rig, monkeypatch):
+    from app.picks import source_events
+    from app.review.models import ReviewReportRow
+
+    _, factory, _, service, _, sent, *_ = rig
+    now = datetime(2026, 9, 29, 16, 0, tzinfo=BJ_TZ)
+    monkeypatch.setattr(source_events, "beijing_now", lambda: now)
+    monkeypatch.setattr(source_events, "get_notifier_registry", lambda: service._registry)
+    with factory() as db:
+        db.add(ReviewReportRow(review_id="early-report", trade_date="20260929",
+                               generated_at=datetime(2026, 9, 29, 5, 0)))  # 13:00 Beijing
+        db.commit()
+    assert source_events.record_review_report(factory, "20260929")[1] is True
+    assert rows(factory) == [] and sent == []
+
+
+def test_report_revision_and_unknown_send_have_distinct_terminal_states(rig, monkeypatch):
+    from app.core import bjtime
+    from app.picks import source_events
+    from app.review.models import ReviewReportRow
+
+    _, factory, _, service, _, sent, response, _ = rig
+    now = datetime(2026, 9, 29, 16, 0, tzinfo=BJ_TZ)
+    monkeypatch.setattr(source_events, "beijing_now", lambda: now)
+    monkeypatch.setattr(bjtime, "beijing_now", lambda: now)
+    monkeypatch.setattr(source_events, "get_notifier_registry", lambda: service._registry)
+    with factory() as db:
+        db.add(ReviewReportRow(review_id="v1", trade_date="20260929",
+                               generated_at=datetime(2026, 9, 29, 7, 35)))
+        db.commit()
+    source_events.record_review_report(factory, "20260929")
+    with factory() as db:
+        report = db.scalar(select(ReviewReportRow).where(ReviewReportRow.trade_date == "20260929"))
+        report.review_id = "v2"
+        db.commit()
+    asyncio.run(service._deliver_pending())
+    old, = rows(factory)
+    assert old.state == "suppressed" and old.reason == "report_superseded_or_missing"
+    assert sent == []
+
+    # A new report version has a new source identity; platform uncertainty after
+    # send starts remains terminal unknown and cannot create an automatic retry.
+    source_events.record_review_report(factory, "20260929")
+    response["body"] = {}
+    asyncio.run(service._deliver_pending())
+    assert [row.state for row in rows(factory)] == ["suppressed", "unknown"]
+    asyncio.run(service._deliver_pending())
+    assert len(sent) == 1
 
 
 def test_rule_engine_acceptance_is_durable_and_not_delivery(rig):

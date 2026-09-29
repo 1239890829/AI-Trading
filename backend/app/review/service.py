@@ -252,8 +252,17 @@ class ReviewService:
         if cancel_check is not None:
             cancel_check()
 
+        # The report row is authoritative; a failed projection is retried by
+        # the scheduler without regenerating the report or sending directly.
+        try:
+            from app.picks.source_events import record_review_report
+
+            await asyncio.to_thread(record_review_report, self.session_factory, report.trade_date)
+        except Exception:
+            log.exception("review report event projection failed; saved report retained")
+
         # --- 信号健康度预警接线（P1）：warning/drift → 告警台账/飞书 ---
-        # 落点不是消息通知中心（该中心只收 __picks_buy_point__ 买点，IMP-028）；
+        # 策略级健康告警不进入个股铃铛；
         # 告警事件可在 AI 控制台「提醒与告警」页追查。
         # 当日同状态去重在 maybe_alert 内部；失败只记 log（告警不阻断复盘收尾）。
         if health is not None:
@@ -321,6 +330,7 @@ async def review_scheduler(
 
     from app.review.storage import report_exists
     stop = stop or asyncio.Event()
+    reconciled_date: str | None = None
 
     log.info("review scheduler started: daily %02d:%02d CST", run_hour, run_minute)
     while not stop.is_set():
@@ -347,6 +357,14 @@ async def review_scheduler(
                         await service.run(today)
                     except Exception:
                         log.exception("scheduled review failed: %s", today)
+                elif day_state and reconciled_date != ymd:
+                    try:
+                        from app.picks.source_events import record_review_report
+
+                        await asyncio.to_thread(record_review_report, service.session_factory, ymd)
+                        reconciled_date = ymd
+                    except Exception:
+                        log.exception("saved review event reconciliation failed: %s", today)
         except asyncio.CancelledError:
             raise
         except Exception:
