@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 
 import {
   getNotifications,
+  getNotificationDiagnostics,
   type NotificationDiagnostics,
   type NotificationItem,
   type NotificationsPayload,
@@ -12,11 +13,14 @@ import {
 import {
   countUnread,
   getPrefsSnapshot,
+  getPrefsSyncSnapshot,
   getServerPrefsSnapshot,
+  getServerPrefsSyncSnapshot,
   isCleared,
   isUnread,
   setPrefs,
   subscribePrefs,
+  subscribePrefsSync,
   withAllRead,
   withRead,
 } from "@/lib/notification-read";
@@ -32,11 +36,10 @@ import { EventFeed } from "@/components/notifications/event-feed";
 /**
  * 站内通知中心（2026-09-07 用户需求③）：导航栏铃铛 → 右侧抽屉。
  *
- * 内容只保留经过置信档、多维评分、红线、闸门、买入区间、涨停区与实时行情
- * 共同门控后的个股机会。板块异动、题材方向、每日精选与新闻留在各自分析页面，
+ * 内容只保留具名个股买点和临板预警。板块异动、题材方向、每日精选与新闻留在各自分析页面，
  * 不再作为会打断用户的通知。
  * 抽屉内一层 tab 按 盘前/盘中/盘后 分类（后端判定：交易日历优先，非交易日归盘前）。
- * 新闻不逐条推送：score ≥ 阈值才出现（默认 60，后端 settings 配置）。
+ * 新闻不逐条推送；旧 news_min_score 参数只为客户端兼容保留。
  *
  * ⚠️ 2026-09-16（用户需求①）**收口不变，但补回可见性**：
  * `IMP-028` 的收口让「资讯 / 事件」在通知中心**彻底不可见**（实测生产库当日
@@ -120,7 +123,7 @@ function judgmentPayload(item: NotificationItem): DetailPayload {
     title: item.title,
     body: item.body,
     symbol: item.symbol,
-    source: null,
+    source: item.source ?? null,
     date: item.ts,
     meta: [
       { label: "分类", value: item.label },
@@ -141,10 +144,11 @@ function judgmentPayload(item: NotificationItem): DetailPayload {
  * 因此「本时段空、别的时段有」不要展示诊断（那不是"空态"，只是切到了没内容的 tab）。
  */
 const NOTIF_STATE_HEADLINE: Record<NotificationDiagnostics["state"], string> = {
-  no_pick_set: "盘前没选出候选",
-  no_run: "今日判定链还没跑到通知阶段",
-  ran_rejected: "候选全部被否决",
-  ran_eligible: "有候选通过却通知为空（需排查）",
+  no_pick_set: "当日精选记录缺失或无候选",
+  no_run: "未找到今日买点判定归档",
+  ran_rejected: "已归档候选均被否决",
+  ran_eligible: "有候选通过或被去重，需核对原事件",
+  ran_unknown: "判定状态未能确认",
   unavailable: "诊断不可用",
 };
 
@@ -200,9 +204,7 @@ function ShapeCounts({ shapes }: { shapes: Record<string, number> }) {
         data-stock-level={0}
         className="border-t border-zinc-200 pt-2 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
       >
-        两个来源规则都<strong className="font-medium">没有行</strong>（规则是懒创建的）
-        ⇒ 不是&ldquo;今天没机会&rdquo;，而是
-        <strong className="font-medium">规则从未触发过</strong>，查规则注册与调度。
+        当前没有两个来源规则的记录，无法从通知列表判断是否出现机会；请核对规则注册与调度。
       </p>
     );
   }
@@ -225,15 +227,14 @@ function ShapeCounts({ shapes }: { shapes: Record<string, number> }) {
       </p>
       {stockLevel === 0 ? (
         <p className="text-zinc-600 dark:text-zinc-400">
-          两种个股级形状一条都没触发 ⇒ 空列表
-          <strong className="font-medium">不是被筛选挡掉</strong>，是上游根本没扫到
-          （查临板扫描与买点规则的调度）。
+          读取窗口内两种个股级形状均为 0；本次空列表
+          <strong className="font-medium">不是被形状筛选挡掉</strong>，请核对临板扫描与买点规则。
         </p>
       ) : (
         <p className="text-zinc-600 dark:text-zinc-400">
-          个股级共 {stockLevel} 条却未进列表 ⇒ 有代码但
+          个股级共 {stockLevel} 条却未进列表；可能因
           <strong className="font-medium">缺股票名称</strong>
-          （标签门挡下），属数据问题而非行情问题。
+          等字段校验未通过，须核对原事件。
         </p>
       )}
       {restTotal > 0 && (
@@ -250,24 +251,14 @@ function ShapeCounts({ shapes }: { shapes: Record<string, number> }) {
   );
 }
 
-function NotificationEmptyState({
-  payload,
-  tab,
-}: {
-  payload: NotificationsPayload;
-  tab: NotificationItem["session"];
-}) {
-  const diag = payload.count === 0 ? (payload.diagnostics ?? null) : null;
-  if (!diag) {
-    return (
-      <p className="px-2 py-8 text-center text-xs text-zinc-600 dark:text-zinc-400">
-        {tab === "intraday" ? "盘中暂无通过多维筛选的个股机会" : "该时段暂无个股机会"}
-      </p>
-    );
-  }
+function NotificationDiagnosis({ diag }: { diag: NotificationDiagnostics }) {
   const d = diag.decisions;
   const ps = diag.pick_set;
   const reasons = d.reasons ?? [];
+  const decisionLabels: Record<string, string> = {
+    rejected: "硬门拒绝", eligible: "通过判定，派发待核对",
+    notified: "已登记提醒事件", suppressed: "当日去重",
+  };
   return (
     <div
       data-testid="notification-empty-diagnosis"
@@ -275,17 +266,20 @@ function NotificationEmptyState({
       className="space-y-2 rounded-lg border border-zinc-200 bg-zinc-50/70 px-3 py-3 text-xs dark:border-zinc-700 dark:bg-zinc-800/40"
     >
       <p className="font-medium text-zinc-800 dark:text-zinc-100">
-        本时段无通知：{NOTIF_STATE_HEADLINE[diag.state] ?? diag.state}
+        今日买点链：{NOTIF_STATE_HEADLINE[diag.state] ?? diag.state}
       </p>
       <p className="text-zinc-600 dark:text-zinc-400">{plainNote(diag.note)}</p>
-      <p className="text-[11px] text-zinc-500 dark:text-zinc-500">
+      {diag.state !== "unavailable" && <p className="text-[11px] text-zinc-500 dark:text-zinc-500">
         候选 {ps.count} 只 · 最高档 {d.top_tier ?? "无"} · 判定 {d.polls} 拍
         {diag.trade_date ? ` · ${diag.trade_date}` : ""}
         {diag.as_of ? ` · 诊断于 ${diag.as_of.slice(11, 16)}` : ""}
-      </p>
+      </p>}
       {/* 形状计数：`state`/`decisions` 只看买点链，答不了"临板预警有没有触发"
           ⇒ 必须并列报出（当日 121 条临板全未进列表就是靠这一对照才定位到的）。 */}
-      {diag.shapes && <ShapeCounts shapes={diag.shapes} />}
+      {diag.shapes && <details className="border-t border-zinc-200 pt-2 text-[11px] dark:border-zinc-700">
+        <summary className="cursor-pointer text-zinc-600 dark:text-zinc-400">查看来源核对信息</summary>
+        <div className="mt-1"><ShapeCounts shapes={diag.shapes} /></div>
+      </details>}
       {reasons.length > 0 && (
         <ul className="space-y-1 border-t border-zinc-200 pt-2 dark:border-zinc-700">
           {reasons.map((r) => (
@@ -299,8 +293,81 @@ function NotificationEmptyState({
           ))}
         </ul>
       )}
+      {(d.latest?.length ?? 0) > 0 && (
+        <details className="border-t border-zinc-200 pt-2 dark:border-zinc-700">
+          <summary className="cursor-pointer text-zinc-600 dark:text-zinc-400">查看逐股原决定与版本</summary>
+          <ul className="mt-1 space-y-1">
+            {d.latest?.map((row) => <li key={row.snapshot_id} className="text-zinc-700 dark:text-zinc-300">
+              <StockLink symbol={row.symbol} className="text-sky-700 dark:text-sky-400">{row.name || row.symbol} {row.symbol}</StockLink>
+              {` · ${decisionLabels[row.decision] ?? "状态未知"} · ${row.as_of} · ${row.reason || "原因未记录"}`}
+              <span className="block break-all text-[10px] text-zinc-500 dark:text-zinc-500">
+                记录 {row.snapshot_id} · 决定 {row.decision_id || "未记录"} · 版本 {row.decision_version || "未记录"} · 数据 {row.data_state || "未知"}
+              </span>
+            </li>)}
+          </ul>
+        </details>
+      )}
     </div>
   );
+}
+
+function NotificationEmptyState({ payload, tab, clearBefore }: {
+  payload: NotificationsPayload;
+  tab: NotificationItem["session"];
+  clearBefore: number;
+}) {
+  if (payload.errors?.alerts) {
+    return <p className="px-2 py-8 text-center text-xs text-amber-700 dark:text-amber-300">通知来源读取失败，当前条目不可确认；请刷新后重试。</p>;
+  }
+  const cleared = payload.items.some((item) => isCleared(item, clearBefore));
+  if (cleared && payload.items.every((item) => isCleared(item, clearBefore))) {
+    return <p className="px-2 py-8 text-center text-xs text-zinc-600 dark:text-zinc-400">当前读取范围的通知已被一键清除隐藏；原事件记录仍保留。</p>;
+  }
+  if (payload.count > 0) {
+    return <p className="px-2 py-8 text-center text-xs text-zinc-600 dark:text-zinc-400">该时段暂无可见通知，请查看其他时段。</p>;
+  }
+  if (payload.diagnostics) return <NotificationDiagnosis diag={payload.diagnostics} />;
+  return <p className="px-2 py-8 text-center text-xs text-zinc-600 dark:text-zinc-400">
+    {tab === "intraday" ? "盘中通知状态未知，请查看未提醒原因" : "该时段通知状态未知，请查看未提醒原因"}
+  </p>;
+}
+
+function ChannelStatus({ item }: { item: NotificationItem }) {
+  const channels = item.channels;
+  if (channels === undefined || channels === null) return <span>外部渠道状态未知</span>;
+  if (channels.length === 0) return <span>无外部渠道意图记录</span>;
+  const labels: Record<string, string> = {
+    pending: "待处理", leased: "处理中", accepted: "渠道已受理（未确认送达）",
+    unknown: "受理结果未知", expired: "已过期", suppressed: "已静默",
+    permanent_failed: "发送失败",
+  };
+  const reasonLabels: Record<string, string> = {
+    intent_expired: "等待超时", send_window_closed: "发送时效已过",
+    outside_trading_window: "不在交易时段", symbol_no_longer_in_scope: "标的已不在关注范围",
+    condition_no_longer_met: "触发条件已变化", quote_not_fresh: "行情已过期",
+    quote_time_unknown: "行情时间未知", quote_time_untrusted: "行情时间不可信",
+    event_or_rule_removed_or_disabled: "规则已停用或原事件失效",
+    rule_or_channels_changed: "规则或渠道设置已变化",
+    channel_unconfigured_or_target_changed: "渠道未配置或目标已变化",
+    buy_point_decision_superseded: "买点决定已有新版本",
+    buy_point_decision_no_longer_eligible: "原买点决定不再满足条件",
+    buy_point_execution_not_ready: "执行快照未就绪",
+    buy_point_event_execution_not_ready: "原事件执行快照未就绪",
+    acceptance_unconfirmed: "平台受理回执未确认",
+    lease_lost_after_send_started: "发送已开始但回执丢失",
+  };
+  const bjTime = (ms: number) => new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).format(new Date(ms));
+  return <span>{channels.map((c) => {
+    const reason = ["unknown", "expired", "suppressed", "permanent_failed"].includes(c.state)
+      ? `；原因：${reasonLabels[c.reason] ?? "未归类，请核对原记录"}` : "";
+    const time = c.state === "accepted" && c.accepted_at_ms
+      ? `，受理于 ${bjTime(c.accepted_at_ms)}`
+      : c.expires_at_ms ? `，意图截止 ${bjTime(c.expires_at_ms)}` : "";
+    return `${c.channel === "feishu" ? "飞书" : c.channel}：${labels[c.state] ?? "状态未知"}${reason}${time}`;
+  }).join("；")}</span>;
 }
 
 function NotificationRow({
@@ -374,6 +441,10 @@ function NotificationRow({
         </div>
         <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">{item.body}</p>
       </button>
+      <p className="mt-1 text-[10px] leading-relaxed text-zinc-500 dark:text-zinc-400" data-testid="notification-facts">
+        来源：{item.source ?? "历史事件，来源未标注"} · 触发：{item.ts ?? "时间未知"} · {item.validity ?? "条件与时效未记录，须重新核验"}
+        <br />站内记录可见；<ChannelStatus item={item} />。未读仅表示站内尚未点开。
+      </p>
       {/* 标签行：左侧仍是分类/评分；右侧 = **一体化的操作组**（行情 + 判读） */}
       <div className="mt-1 flex items-center gap-2 text-[10px] text-zinc-600 dark:text-zinc-400">
         <span className="rounded bg-zinc-100 px-1 py-px dark:bg-zinc-800">{CATEGORY_LABEL[item.category]}</span>
@@ -401,7 +472,7 @@ function NotificationRow({
             <button
               type="button"
               data-testid="notification-judgment"
-              title="在弹窗中查看该条 AI 判读全文（分类 / 评分 / 理由）"
+              title="查看提醒依据与判读；未生成 AI 判读时仅显示原事件内容"
               className="px-1.5 py-0.5 text-zinc-600 transition-colors hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
               onClick={() => {
                 onRead();
@@ -422,6 +493,10 @@ export function NotificationBell() {
   const [payload, setPayload] = useState<NotificationsPayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pollError, setPollError] = useState(false);
+  const [diagnosis, setDiagnosis] = useState<NotificationDiagnostics | null>(null);
+  const [diagnosisLoading, setDiagnosisLoading] = useState(false);
+  const [diagnosisError, setDiagnosisError] = useState(false);
   const [tab, setTab] = useState<NotificationItem["session"]>("intraday");
   // 顶层模式（2026-09-16 需求①）：默认停在**推送面**——铃铛点开要看的是机会，
   // 不是资讯流。资讯 tab 只在用户显式切过去时才拉数据（`EventFeed` 的 `enabled`）。
@@ -434,6 +509,7 @@ export function NotificationBell() {
   // 已读偏好（水位 + 逐条 id + 清除水位）：**外部存储订阅**，见 lib/notification-read.ts。
   // 首帧（含 hydration）给服务端空快照，hydration 后自动切到 localStorage 真实值。
   const prefs = useSyncExternalStore(subscribePrefs, getPrefsSnapshot, getServerPrefsSnapshot);
+  const syncStatus = useSyncExternalStore(subscribePrefsSync, getPrefsSyncSnapshot, getServerPrefsSyncSnapshot);
   const { read: readState, clearBefore } = prefs;
 
   /** 一键已读：水位推进到「现在」——覆盖所有更早条目（含拉取窗口外的历史）。 */
@@ -461,10 +537,24 @@ export function NotificationBell() {
     try {
       const p = await getNotifications();
       setPayload(p);
+      setPollError(false);
     } catch (e) {
       setError((e as Error).message || "通知加载失败");
+      setPollError(true);
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  const loadDiagnosis = useCallback(async () => {
+    setDiagnosisLoading(true);
+    setDiagnosisError(false);
+    try {
+      setDiagnosis(await getNotificationDiagnostics());
+    } catch {
+      setDiagnosisError(true);
+    } finally {
+      setDiagnosisLoading(false);
     }
   }, []);
 
@@ -490,8 +580,10 @@ export function NotificationBell() {
       try {
         const p = await getNotifications();
         setPayload(p);
+        setPollError(false);
       } catch {
-        /* 轮询失败静默：下次再试，不清空已有内容 */
+        // 保留旧列表，同时明确它已不能代表当前状态。
+        setPollError(true);
       }
     },
     60_000,
@@ -540,8 +632,8 @@ export function NotificationBell() {
     <>
       <button
         onClick={() => setOpen(true)}
-        aria-label={unread > 0 ? `打开通知中心（${unread} 条未读）` : "打开通知中心"}
-        title="通知中心：仅多维筛选后的个股机会（盘前·盘中·盘后）"
+        aria-label={pollError ? `打开通知中心（上次读取的未读数 ${unread}）` : unread > 0 ? `打开通知中心（${unread} 条未读）` : "打开通知中心"}
+        title={pollError ? "通知刷新失败：未读数依据上次读取结果" : "通知中心：个股机会通知与资讯浏览；未读仅指站内浏览状态"}
         className="relative rounded-md border border-zinc-200 p-2 text-sm text-zinc-600 transition-colors hover:text-zinc-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -593,7 +685,7 @@ export function NotificationBell() {
                       <button
                         onClick={clearAll}
                         className="rounded px-1.5 py-0.5 text-[11px] text-zinc-600 dark:text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-                        title="隐藏当前全部条目（本地清除，随时可清 storage 恢复）"
+                        title="按时间水位隐藏当前及更早的站内条目；服务端确认后清浏览器缓存不会恢复，原事件审计仍保留"
                       >
                         一键清除
                       </button>
@@ -652,6 +744,15 @@ export function NotificationBell() {
                 <EventFeed active={mode === "events"} refreshToken={eventsRefresh} />
               ) : (
                 <>
+              <div className="border-b border-zinc-100 px-4 py-2 text-[11px] dark:border-zinc-800/80">
+                <button type="button" onClick={() => diagnosis ? setDiagnosis(null) : void loadDiagnosis()} disabled={diagnosisLoading}
+                  className="text-sky-700 hover:underline disabled:opacity-50 dark:text-sky-400"
+                  data-testid="notification-explain">
+                  {diagnosisLoading ? "正在核对原因…" : diagnosis ? "收起今日未提醒原因" : "查看今日未提醒原因"}
+                </button>
+                {diagnosisError && <p className="mt-1 text-amber-700 dark:text-amber-300">原因记录读取失败，当前状态未知；请重试。</p>}
+                {diagnosis && <div className="mt-2 max-h-52 overflow-y-auto"><NotificationDiagnosis diag={diagnosis} /></div>}
+              </div>
               {/* tab：盘前 / 盘中 / 盘后（红点 = 该时段有未读） */}
               <div className="flex gap-1 border-b border-zinc-100 px-4 py-2 dark:border-zinc-800/80">
                 {SESSION_TABS.map((t) => (
@@ -688,11 +789,12 @@ export function NotificationBell() {
                 )}
                 {error && (
                   <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
-                    {error}（可点右上刷新重试）
+                    {error}（下方为上次读取结果；可点右上刷新重试）
                   </p>
                 )}
+                {pollError && !error && <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">自动刷新失败；下方是上次读取结果，不能代表当前通知状态。</p>}
                 {payload && bySession[tab].length === 0 && (
-                  <NotificationEmptyState payload={payload} tab={tab} />
+                  <NotificationEmptyState payload={payload} tab={tab} clearBefore={clearBefore} />
                 )}
                 {/* 单一渲染路径（2026-09-16 用户要求「行情与判读一体化」后简化）：
                     此前按有无 symbol 分成两支，个股条目在卡片**外面**并排挂
@@ -728,8 +830,11 @@ export function NotificationBell() {
               <div className="border-t border-zinc-100 px-4 py-2 text-[10px] leading-relaxed text-zinc-600 dark:text-zinc-400 dark:border-zinc-800/80">
                 {mode === "opportunity" ? (
                   <>
-                    仅推送通过有效筛选、逻辑校验与多维评估的个股机会；板块机会不通知。
-                    所有提醒均附可解释依据与失效条件，不构成买卖建议。
+                    <p data-testid="notification-sync-status" className={syncStatus === "local_only" ? "text-amber-700 dark:text-amber-300" : ""}>
+                      已读与清除：{syncStatus === "synced" ? "本页变更已获服务端确认" : syncStatus === "syncing" ? "正在同步服务端" : "服务端未确认；当前页暂存"}。
+                    </p>
+                    个股机会提醒来自触发时点；板块与资讯事件在浏览页。已读只表示站内点开，
+                    外部渠道受理不等于送达。条件变化后须重新核验，不构成买卖建议。
                   </>
                 ) : (
                   <>

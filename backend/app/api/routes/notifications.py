@@ -2,9 +2,9 @@
 
 GET /api/notifications?alert_limit=50&news_limit=15&news_min_score=<settings 默认>
 
-通知中心只消费 ``__picks_buy_point__`` 规则产生的有效个股事件。该规则的上游是
-``picks.buy_point.evaluate_buy_points``：每日精选候选须同时通过置信档、多维评分、
-红线否决、空仓闸门、买入区间、涨停区和实时行情检查后才会落事件。
+通知中心只消费两类具名个股事件：多维门控的 ``buy_point`` 与临板扫描的
+``pre_limit``。买点上游是 ``picks.buy_point.evaluate_buy_points``；临板是
+``__picks_watcher__`` 规则中的个股形状，不能把规则名等同于最终通知口径。
 
 板块资金异动、题材方向确认/证伪、信号健康、每日精选摘要和新闻仍保留在各自页面与
 审计表中，但不再进入消息通知。这样「可研究的信息」与「值得打断用户的个股机会」
@@ -213,8 +213,8 @@ def _alert_items(
         # P0-2：AI 盘中分析合入 body（判读结论 + 响应建议）
         tri = triage_by_event.get(e.id)
         if tri:
-            verdict_label = {"notify": "提醒", "ignore": "已降噪", "escalate": "需关注"}.get(tri[0], tri[0])
-            body = f"{body}\nAI 判读（{verdict_label}）：{tri[1]}"
+            verdict_label = {"notify": "建议提醒", "ignore": "建议降噪", "escalate": "建议重点关注"}.get(tri[0], "结论未知")
+            body = f"{body}\nAI 判读意见（{verdict_label}）：{tri[1]}。站内事件记录与该意见分开保留。"
         items.append(
             {
                 "id": f"alert-{e.id}",
@@ -227,6 +227,12 @@ def _alert_items(
                 "symbol": e.symbol,
                 "url": None,
                 "score": None,
+                "source": "盘中买点判定" if kind == "buy_point" else "临板扫描",
+                "validity": (
+                    "仅触发时点满足买入区间；现价越界或硬门变化后失效"
+                    if kind == "buy_point" else
+                    "仅触发时点的临板状态；涨幅、封板状态或价格变化后失效"
+                ),
             }
         )
     return items, seen
@@ -240,7 +246,7 @@ async def notifications(
     news_min_score: float | None = Query(default=None, ge=0, le=100),
     repo: AlertRepository = Depends(get_alert_repo),
 ) -> dict:
-    """只返回经过买点多维门控的有效个股机会；旧查询参数保留兼容。"""
+    """返回具名买点与临板个股事件；旧查询参数保留兼容。"""
     min_score = news_min_score if news_min_score is not None else settings.notifications_news_min_score
     now = beijing_now().replace(tzinfo=None)  # 事件 published_at 是北京 naive，同语义相减
 
@@ -263,20 +269,33 @@ async def notifications(
         alert_items, shapes_seen = _alert_items(repo, alert_limit, trading_dates)
     except Exception as exc:  # noqa: BLE001
         log.exception("notifications: alert source failed")
-        errors["alerts"] = str(exc)
+        errors["alerts"] = type(exc).__name__
 
     items = alert_items
     items.sort(key=lambda x: x["ts"] or "", reverse=True)
     # 截断在**筛选之后**（读取窗口见 `_NOTIF_FETCH_LIMIT`）：先按形状挑出个股机会，
     # 再按时间倒序取前 `alert_limit` 条——而不是"先取最近 N 条再看有没有个股机会"。
     items = items[:alert_limit]
+    # 渠道回执与站内可见、浏览已读是三个事实。无 Outbox 行只能说没有记录，
+    # 不能推出飞书已送达或用户已读；读取失败也不能隐藏已有站内事件。
+    if items:
+        try:
+            outbox = getattr(repo, "outbox", None)
+            states = outbox.states_for_events([int(i["id"][6:]) for i in items]) if outbox else {}
+            for item in items:
+                item["channels"] = states.get(int(item["id"][6:]), [])
+        except Exception as exc:  # noqa: BLE001
+            log.exception("notifications: channel status read failed")
+            errors["channels"] = type(exc).__name__
+            for item in items:
+                item["channels"] = None
     # 空态诊断（`BUG-016` 子项③，2026-09-16）：**只在空态附加**。
     # 空响应体本身不含任何能区分「真无机会 / 链路未跑 / 上游空」的信息 ——
     # 三者都是 `{"items": [], "count": 0}`，这正是「不可解释」的根因。
     # ⚠️ 非空态**刻意不附加**：那是本子项的判据边界之外，且本端点是 30s 轮询热路径，
     #    不该为"用户不会问的场景"每拍多读两次库。
     diagnostics: dict | None = None
-    if not items:
+    if not items and not errors:
         try:
             from app.picks.notification_diagnostics import notification_diagnostics
 
@@ -316,6 +335,14 @@ async def notifications(
         },
         "meta": {},
     }
+
+
+@router.get("/notifications/diagnostics")
+async def get_notification_diagnostics() -> dict:
+    """按需查看北京当日的判定事实；列表非空时也可解释其他候选为何未提醒。"""
+    from app.picks.notification_diagnostics import notification_diagnostics
+
+    return {"data": await asyncio.to_thread(notification_diagnostics), "meta": {}}
 
 
 # ---------------------------------------------------------------- 已读状态（2026-09-12）

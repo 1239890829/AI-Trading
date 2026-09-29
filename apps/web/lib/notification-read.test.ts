@@ -4,6 +4,7 @@ import {
   __resetPrefsCache,
   countUnread,
   getPrefsSnapshot,
+  getPrefsSyncSnapshot,
   hydratePrefsFromServer,
   isCleared,
   isUnread,
@@ -297,5 +298,21 @@ describe("服务端持久化：hydration", () => {
     await Promise.all([hydratePrefsFromServer(), hydratePrefsFromServer()]);
     await hydratePrefsFromServer();
     expect(getNotificationReadState).toHaveBeenCalledTimes(1);
+  });
+
+  it("已读/清除只在服务端回执后显示确认；失败保留当前页并标未确认", async () => {
+    vi.mocked(getNotificationReadState).mockResolvedValue(remote(0));
+    vi.mocked(saveNotificationReadState).mockImplementation(async (s) => ({ ...s, updated_at: "2026-09-12 10:01:00" }));
+    await hydratePrefsFromServer();
+    expect(getPrefsSyncSnapshot()).toBe("synced");
+
+    setPrefs({ read: { seenBefore: 100, readIds: [] }, clearBefore: 100 });
+    expect(getPrefsSyncSnapshot()).toBe("syncing");
+    await vi.waitFor(() => expect(getPrefsSyncSnapshot()).toBe("synced"));
+
+    vi.mocked(saveNotificationReadState).mockRejectedValue(new Error("offline"));
+    setPrefs({ read: { seenBefore: 200, readIds: [] }, clearBefore: 200 });
+    await vi.waitFor(() => expect(getPrefsSyncSnapshot()).toBe("local_only"));
+    expect(getPrefsSnapshot().clearBefore).toBe(200);
   });
 });

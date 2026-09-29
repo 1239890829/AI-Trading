@@ -297,6 +297,52 @@ def test_route_degrades_explicitly():
         body = r.json()["data"]
         assert body["errors"] and "alerts" in body["errors"]  # 降级显式可见
         assert body["items"] == []  # 规则源不可用 → 无买点事件可展示
+        assert body["diagnostics"] is None  # 不能以独立诊断的零候选掩盖来源失败
+    finally:
+        app.dependency_overrides.pop(notif.get_alert_repo, None)
+
+
+def test_channel_receipt_is_separate_from_in_app_event():
+    import app.api.routes.notifications as notif
+    from app.main import app
+
+    class _Outbox:
+        def states_for_events(self, event_ids):
+            assert event_ids == [11]
+            return {11: [{"channel": "feishu", "state": "unknown", "reason": "send_result_lost",
+                          "created_at_ms": 1, "expires_at_ms": 2, "accepted_at_ms": None}]}
+
+    repo = _FakeRepo([_Rule(1, "__picks_buy_point__")],
+                     [_Event(11, 1, "600001", {"kind": "buy_point", "name": "甲公司", "text": "买点依据"}, 1)])
+    repo.outbox = _Outbox()
+    app.dependency_overrides[notif.get_alert_repo] = lambda: repo
+    try:
+        body = TestClient(app).get("/api/notifications").json()["data"]
+        row = body["items"][0]
+        assert row["source"] == "盘中买点判定"
+        assert row["validity"]
+        assert row["channels"][0]["state"] == "unknown"
+        assert body["errors"] is None
+    finally:
+        app.dependency_overrides.pop(notif.get_alert_repo, None)
+
+
+def test_channel_status_failure_keeps_event_but_marks_unknown():
+    import app.api.routes.notifications as notif
+    from app.main import app
+
+    class _Outbox:
+        def states_for_events(self, event_ids):
+            raise RuntimeError("db unavailable")
+
+    repo = _FakeRepo([_Rule(1, "__picks_buy_point__")],
+                     [_Event(11, 1, "600001", {"kind": "buy_point", "name": "甲公司"}, 1)])
+    repo.outbox = _Outbox()
+    app.dependency_overrides[notif.get_alert_repo] = lambda: repo
+    try:
+        body = TestClient(app).get("/api/notifications").json()["data"]
+        assert body["items"][0]["channels"] is None
+        assert "channels" in body["errors"]
     finally:
         app.dependency_overrides.pop(notif.get_alert_repo, None)
 
@@ -396,6 +442,16 @@ def test_empty_notifications_do_call_diagnostics_and_attach_it(monkeypatch):
         assert sentinel == {"state": "ran_rejected", "polls": 16, "marker": "wired"}
     finally:
         app.dependency_overrides.pop(notif.get_alert_repo, None)
+
+
+def test_diagnostics_can_be_opened_when_another_stock_was_notified(monkeypatch):
+    from app.main import app
+
+    calls = []
+    _patch_diagnostics(monkeypatch, lambda: calls.append(1) or {"state": "ran_rejected", "note": "另一只未过硬门"})
+    body = TestClient(app).get("/api/notifications/diagnostics").json()["data"]
+    assert body == {"state": "ran_rejected", "note": "另一只未过硬门"}
+    assert calls == [1]
 
 
 def test_diagnostics_non_dict_is_coerced_not_returned_as_none(monkeypatch):
