@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-import type { NotificationItem, NotificationsPayload } from "@/lib/api";
+import { getNotificationDiagnostics, getNotifications, type NotificationItem, type NotificationsPayload } from "@/lib/api";
 
 /**
  * 通知中心未读口径与外显（用户 2026-09-11 反馈）：
@@ -17,6 +17,7 @@ vi.mock("@/lib/api", async () => {
   return {
     ...actual,
     getNotifications: vi.fn(async () => payload),
+    getNotificationDiagnostics: vi.fn(async () => payload.diagnostics ?? ranRejectedDiag),
     // 已读状态的服务端同步（2026-09-12）：组件挂载即触发 hydration。
     // 本文件只验「渲染结果」，把服务端桩成不可达 ⇒ 快照退回纯 localStorage 语义，
     // 与这些用例的断言口径一致（跨源持久化另有 notification-read.test.ts 覆盖）。
@@ -239,7 +240,7 @@ describe("通知中心：空态诊断（BUG-016 子项③）", () => {
 
     const box = await screen.findByTestId("notification-empty-diagnosis");
     expect(box.dataset.state).toBe("ran_rejected");
-    expect(box.textContent).toContain("候选全部被否决");
+    expect(box.textContent).toContain("已归档候选均被否决");
     expect(box.textContent).toContain("置信档 observe 不足（需 executable/strong）");
     expect(box.textContent).toContain("603162");
     // 计数口径：按 symbol 去重 ⇒ 16 拍不显示成 16 只
@@ -258,7 +259,7 @@ describe("通知中心：空态诊断（BUG-016 子项③）", () => {
     await openDrawer();
 
     expect(screen.queryByTestId("notification-empty-diagnosis")).toBeNull();
-    expect(screen.getByText("盘中暂无通过多维筛选的个股机会")).toBeTruthy();
+    expect(screen.getByText("盘中通知状态未知，请查看未提醒原因")).toBeTruthy();
   });
 
   it("非空态 → 不展示诊断块（即使该字段被误带上）", async () => {
@@ -282,7 +283,7 @@ describe("通知中心：空态诊断（BUG-016 子项③）", () => {
     await openDrawer(); // 默认 tab = 盘中
 
     expect(screen.queryByTestId("notification-empty-diagnosis")).toBeNull();
-    expect(screen.getByText("盘中暂无通过多维筛选的个股机会")).toBeTruthy();
+    expect(screen.getByText("该时段暂无可见通知，请查看其他时段。")).toBeTruthy();
 
     fireEvent.click(screen.getByText("盘前"));
     expect(await screen.findByText("盘前那条")).toBeTruthy();
@@ -334,7 +335,7 @@ describe("通知中心：空态形状计数（2026-09-16）", () => {
     expect(shapes.dataset.stockLevel).toBe("0");
     expect(shapes.textContent).toContain("买点 0");
     expect(shapes.textContent).toContain("临板预警 0");
-    expect(shapes.textContent).toContain("不是被筛选挡掉");
+    expect(shapes.textContent).toContain("不是被形状筛选挡掉");
     // 对照物：没有它，"没扫到"与"扫到的都不是个股级"仍然同形
     expect(shapes.textContent).toContain("板块低吸 293");
     // 同样是纯文本渲染面 ⇒ 标记不得漏到界面上（同 plainNote 的教训）
@@ -356,7 +357,7 @@ describe("通知中心：空态形状计数（2026-09-16）", () => {
     const shapes = await screen.findByTestId("notification-empty-shapes");
     expect(shapes.dataset.stockLevel).toBe("121");
     expect(shapes.textContent).toContain("缺股票名称");
-    expect(shapes.textContent).not.toContain("不是被筛选挡掉");
+    expect(shapes.textContent).not.toContain("不是被形状筛选挡掉");
   });
 
   it("shapes 为空对象 → 说「规则从未触发过」，与「统计过是 0」区分开", async () => {
@@ -367,7 +368,7 @@ describe("通知中心：空态形状计数（2026-09-16）", () => {
 
     const shapes = await screen.findByTestId("notification-empty-shapes");
     expect(shapes.dataset.stockLevel).toBe("0");
-    expect(shapes.textContent).toContain("规则从未触发过");
+    expect(shapes.textContent).toContain("无法从通知列表判断是否出现机会");
   });
 
   it("旧后端不返回 shapes → 不渲染该块（不得臆造形状计数）", async () => {
@@ -377,5 +378,65 @@ describe("通知中心：空态形状计数（2026-09-16）", () => {
 
     await screen.findByTestId("notification-empty-diagnosis");
     expect(screen.queryByTestId("notification-empty-shapes")).toBeNull();
+  });
+});
+
+describe("通知事实与浏览状态分离（BUG-016）", () => {
+  it("手动刷新失败保留上次内容，并标明徽标不是当前事实", async () => {
+    payload = makePayload([item({ title: "上次提醒" })]);
+    render(<NotificationBell />);
+    await openDrawer();
+    vi.mocked(getNotifications).mockRejectedValueOnce(new Error("source offline"));
+    fireEvent.click(screen.getByLabelText("刷新通知"));
+    await waitFor(() => expect(screen.getByText(/下方为上次读取结果/)).toBeTruthy());
+    expect(screen.getByText("上次提醒")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /打开通知中心/ }).getAttribute("title")).toContain("上次读取结果");
+    expect(screen.getByRole("button", { name: /打开通知中心/ }).getAttribute("aria-label")).toContain("上次读取的未读数");
+  });
+
+  it("来源失败时不把空列表解释成没有机会", async () => {
+    payload = { ...diagPayload(ranRejectedDiag), errors: { alerts: "read failed" } };
+    render(<NotificationBell />);
+    await openDrawer();
+    expect(screen.getByText(/通知来源读取失败，当前条目不可确认/)).toBeTruthy();
+    expect(screen.queryByTestId("notification-empty-diagnosis")).toBeNull();
+  });
+
+  it("清除后解释为隐藏，且说明服务端未确认时仅本机有效", async () => {
+    payload = makePayload([item({ ts: bjNow(-60_000), title: "已存在的提醒" })]);
+    render(<NotificationBell />);
+    await openDrawer();
+    fireEvent.click(screen.getByText("一键清除"));
+    await waitFor(() => expect(screen.getByText(/当前读取范围的通知已被一键清除隐藏/)).toBeTruthy());
+    expect(screen.getByTestId("notification-sync-status").textContent).toContain("服务端未确认；当前页暂存");
+    expect(screen.getByText("一键清除").getAttribute("title")).toContain("服务端确认后");
+  });
+
+  it("站内已读和渠道受理分别呈现，非空列表也能查看其他候选的未提醒原因", async () => {
+    payload = makePayload([item({
+      source: "盘中买点判定", validity: "条件变化后须重新核验",
+      channels: [{ channel: "feishu", state: "accepted", reason: "ok",
+        created_at_ms: 1, expires_at_ms: 2, accepted_at_ms: 1 }],
+    })]);
+    render(<NotificationBell />);
+    await openDrawer();
+    const facts = screen.getByTestId("notification-facts");
+    expect(facts.textContent).toContain("盘中买点判定");
+    expect(facts.textContent).toContain("渠道已受理（未确认送达）");
+    expect(facts.textContent).toContain("未读仅表示站内尚未点开");
+    payload.diagnostics = {
+      ...ranRejectedDiag,
+      decisions: { ...ranRejectedDiag.decisions, latest: [{
+        symbol: "603162", name: "测试股", decision: "rejected", as_of: "2026-09-16 13:15:00",
+        snapshot_id: "snap-1", decision_id: null, decision_version: null,
+        reason: "置信档不足", data_state: "ready",
+      }] },
+    };
+    fireEvent.click(screen.getByTestId("notification-explain"));
+    await waitFor(() => expect(vi.mocked(getNotificationDiagnostics)).toHaveBeenCalled());
+    const diagnosis = await screen.findByTestId("notification-empty-diagnosis");
+    expect(diagnosis.textContent).toContain("置信档不足");
+    expect(diagnosis.textContent).toContain("记录 snap-1");
+    expect(diagnosis.textContent).toContain("版本 未记录");
   });
 });

@@ -119,7 +119,8 @@ def test_pipeline_not_run_and_ran_rejected_are_distinguishable(tmp_path):
     assert ran_rejected["state"] == "ran_rejected"
     assert not_run["state"] != ran_rejected["state"], "两态被合并 ⇒ 用户又回到「无法区分」"
     # 两条 note 必须指向**不同的下一步动作**（否则区分没有实用价值）
-    assert "未跑到" in not_run["note"] and "已跑" in ran_rejected["note"]
+    assert "未找到买点判定归档" in not_run["note"] and "已跑" in ran_rejected["note"]
+    assert "无法仅凭缺记录确认调度未运行" in not_run["note"]
 
 
 def test_ran_rejected_note_declares_reasons_are_latest_poll_only(tmp_path):
@@ -173,7 +174,30 @@ def test_ran_eligible_means_the_gap_is_elsewhere(tmp_path):
     _seed_snapshots(sf, symbol="603162", decision="notified", tier="executable", reason=None)
     got = notification_diagnostics(DAY, session_factory=sf)
     assert got["state"] == "ran_eligible"
-    assert "落条目" in got["note"]
+    assert "核对原事件" in got["note"]
+    assert "不等于外部通道受理" in got["note"]
+
+
+def test_unknown_decision_cannot_be_reported_as_eligible(tmp_path):
+    sf = _factory(tmp_path)
+    _seed_pick_set(sf, items=[_cand(tier="executable")])
+    _seed_snapshots(sf, symbol="603162", decision="unknown", tier="executable", reason="执行状态未知")
+    got = notification_diagnostics(DAY, session_factory=sf)
+    assert got["state"] == "ran_unknown"
+    assert "不能把未知状态解释为没有机会" in got["note"]
+    latest = got["decisions"]["latest"]
+    assert latest[0]["snapshot_id"]
+    assert latest[0]["decision"] == "unknown"
+    assert latest[0]["decision_version"] is None  # 无归档版本不能补造
+
+
+def test_existing_decision_outweighs_missing_pick_set_row(tmp_path):
+    sf = _factory(tmp_path)
+    _seed_snapshots(sf, symbol="603162", decision="rejected", tier="observe", reason="硬门拒绝")
+    got = notification_diagnostics(DAY, session_factory=sf)
+    assert got["pick_set"]["present"] is False
+    assert got["decisions"]["present"] is True
+    assert got["state"] == "ran_rejected"
 
 
 @pytest.mark.parametrize("decision", ["notified", "suppressed", "eligible"])
@@ -199,7 +223,8 @@ def test_read_failure_degrades_to_unavailable_not_empty(tmp_path):
     got = notification_diagnostics(DAY, session_factory=boom)
     assert got["state"] == "unavailable"
     assert got["state"] not in ("no_run", "ran_rejected", "no_pick_set")
-    assert "db is gone" in got["note"] and "不等于没有机会" in got["note"]
+    assert "RuntimeError" in got["note"] and "不等于没有机会" in got["note"]
+    assert "db is gone" not in got["note"]  # 原始异常留日志，不泄露给普通用户
 
 
 # ---------------------------------------------------------------- 3. 计数口径（易错点）

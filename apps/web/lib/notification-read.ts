@@ -271,6 +271,8 @@ export function subscribePrefs(cb: () => void): () => void {
     const relevant = !e.key || e.key === READ_KEY || e.key === CLEAR_KEY;
     if (relevant) {
       cache = null;
+      // 另一窗口的本地变更未由本窗口取得服务端回执，不能沿用旧的“已确认”。
+      setSyncStatus("local_only");
       cb();
     }
   };
@@ -298,7 +300,24 @@ export function setPrefs(next: PrefsSnapshot): void {
   // 服务端回写（fire-and-forget）：hydration 未完成或正在采纳服务端值时跳过，
   // 见模块尾部「服务端持久化」一节的闸门说明。
   if (remoteEnabled && !suppressPush) void pushRemote(next);
+  else if (!remoteEnabled && !suppressPush) setSyncStatus("local_only");
 }
+
+export type PrefsSyncStatus = "local_only" | "syncing" | "synced";
+let syncStatus: PrefsSyncStatus = "local_only";
+let syncRevision = 0;
+const syncListeners = new Set<() => void>();
+function setSyncStatus(next: PrefsSyncStatus): void {
+  if (syncStatus === next) return;
+  syncStatus = next;
+  for (const listener of syncListeners) listener();
+}
+export function subscribePrefsSync(listener: () => void): () => void {
+  syncListeners.add(listener);
+  return () => syncListeners.delete(listener);
+}
+export function getPrefsSyncSnapshot(): PrefsSyncStatus { return syncStatus; }
+export function getServerPrefsSyncSnapshot(): PrefsSyncStatus { return "local_only"; }
 
 /** 只测试用：清掉模块级缓存（避免跨用例串状态）。 */
 export function __resetPrefsCache(): void {
@@ -306,6 +325,9 @@ export function __resetPrefsCache(): void {
   listeners.clear();
   remoteEnabled = false;
   hydrating = false;
+  syncStatus = "local_only";
+  syncRevision = 0;
+  syncListeners.clear();
 }
 
 /* ------------------------------------------------------------------ 服务端持久化（2026-09-12 缺陷修复）
@@ -408,6 +430,8 @@ function applyState(next: RemoteReadState): void {
 }
 
 async function pushRemote(snapshot: PrefsSnapshot): Promise<void> {
+  const revision = ++syncRevision;
+  setSyncStatus("syncing");
   try {
     const sent = localState(snapshot);
     // 线上载荷是 snake_case（与本文件其余通知接口一致）→ 在边界显式转换
@@ -427,8 +451,10 @@ async function pushRemote(snapshot: PrefsSnapshot): Promise<void> {
       const merged = mergeReadState(localState(cur), back);
       if (!sameState(merged, localState(cur))) applyState(merged);
     }
+    if (revision === syncRevision) setSyncStatus("synced");
   } catch {
-    /* 服务端不可达：本地缓存继续工作，下次变更再同步（不弹错、不阻塞 UI） */
+    // 保留本机状态，但必须明确它没有获得服务端确认。
+    if (revision === syncRevision) setSyncStatus("local_only");
   }
 }
 
@@ -448,8 +474,9 @@ export async function hydratePrefsFromServer(): Promise<void> {
     const merged = mergeReadState(localState(cur), back);
     if (!sameState(merged, localState(cur))) applyState(merged);
     if (!sameState(merged, back)) void pushRemote(getPrefsSnapshot());
+    else setSyncStatus("synced");
   } catch {
-    /* 保持 remoteEnabled = false：本地照常可用，下次订阅再试 */
+    setSyncStatus("local_only");
   } finally {
     hydrating = false;
   }

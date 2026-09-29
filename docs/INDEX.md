@@ -33,7 +33,7 @@
 | **MD-08** | `product/hunting-decision-design.md` | L2 | 选股与呈现 | 开放情境、KB37项映射、候选/时机/反证、猎场UI及分层验收 |
 | **MD-09** | `research/limit-up-dragon-research.md` | L2 | 选股研究 | 历史涨停/强连板/龙头研究协议与证据；§30 纠正未来筛选，§32 为已纠错的旧裁决，§33 为价格基线，§34–35 为近期多路径案例与样本纠错，§36–38 为首板后候选状态、共同机制及 2016–2025 跨年份反证；§39 为持续观察、猎场消费和复盘实施契约；状态归 W04/RSH-031 |
 | **KW-00..11** | `kb/00-INDEX.md` … `kb/11-doc-catalog.md` | L2/L3 | 知识 | 见下方「KB 知识库」分表 |
-| **SM-01..08** | `summary/stock-strategy` · `factor-system` · `data-market` · `architecture-design` · `ai-evolution` · `review-governance` · `system-final-blueprint` · `pick-signal-chain` | L2 | 主题汇总 | **查主题先看这里**；`system-final-blueprint` 是任务四后目标架构与验收总纲；**`pick-signal-chain` = 选股提醒链路（`dispatch_alert` 扇出 / 双家族分裂 / 断点清单 G1–G5）**。维护：主题结论更新 |
+| **SM-01..08** | `summary/stock-strategy` · `factor-system` · `data-market` · `architecture-design` · `ai-evolution` · `review-governance` · `system-final-blueprint` · `pick-signal-chain` | L2 | 主题汇总 | **查主题先看这里**；`system-final-blueprint` 是任务四后目标架构与验收总纲；**`pick-signal-chain` = 选股提醒链路（`dispatch_alert` 扇出 / 双家族断点 / §11 通知解释与状态合同）**。维护：主题结论更新 |
 | **DT-01** | `data/data-source-comparison.md` | L2 | 数据源 | 四源实测对比与选型。**改数据源前必读，改完回填** |
 | **DT-02** | `data/data-sources.md` | L2 | 数据源 | 接入策略：主源 → 备源 → 降级链 |
 | **DT-03** | `archive/external-data-source-survey-2026-09-11.md` | L1 | 调研 | 外部付费源调研。§0–§7 = 官方公开信息（零实测，📎）；**§8 = 2026-09-16 复评（本机实测）**：FTShare 免费档实测 + 1000 次/天预算精算 + 四家价格/覆盖横向对比 + **升级决策 = 不升级**。**已拍板不接入付费档** ⇒ 只读留痕 |

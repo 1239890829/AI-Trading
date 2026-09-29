@@ -106,6 +106,11 @@ export interface NotificationItem {
   url: string | null;
   /** 新闻评分为 0-100（与时事新闻板块 events ranking 同源）；其余为 null */
   score: number | null;
+  /** 触发事件的来源与复核边界；旧后端可能缺失。 */
+  source?: string;
+  validity?: string;
+  /** 外部渠道的受理状态；null 表示状态读取失败，[] 表示没有通道意图记录。 */
+  channels?: { channel: string; state: string; reason: string; created_at_ms: number; expires_at_ms: number; accepted_at_ms: number | null }[] | null;
 }
 
 /** 空态诊断（`BUG-016` 子项③，2026-09-16）。
@@ -118,7 +123,7 @@ export interface NotificationItem {
  */
 export interface NotificationDiagnostics {
   /** 四态 + 一降级：上游空 / 链路未跑 / 全被否 / 有通过却空 / 诊断不可用 */
-  state: "no_pick_set" | "no_run" | "ran_rejected" | "ran_eligible" | "unavailable";
+  state: "no_pick_set" | "no_run" | "ran_rejected" | "ran_eligible" | "ran_unknown" | "unavailable";
   trade_date: string;
   as_of: string;
   /** 读取窗口内**各事件形状的原始条数**（2026-09-16 新增）。
@@ -161,6 +166,10 @@ export interface NotificationDiagnostics {
     unknown_tiers?: string[];
     /** 逐股否决原因；`count` 按 symbol 去重（不是记录数） */
     reasons?: { reason: string; count: number; symbols: string[] }[];
+    /** 每只股票最新一版归档决定；没有版本字段时保留 null，不追填。 */
+    latest?: { symbol: string; name: string; decision: string; as_of: string;
+      snapshot_id: string; decision_id: string | null; decision_version: string | null;
+      reason: string | null; data_state: string }[];
     last_as_of?: string | null;
   };
   note: string;
@@ -181,6 +190,10 @@ export interface NotificationsPayload {
 
 export async function getNotifications(): Promise<NotificationsPayload> {
   return (await getJson<NotificationsPayload>("/api/notifications")).data;
+}
+
+export async function getNotificationDiagnostics(): Promise<NotificationDiagnostics> {
+  return (await getJson<NotificationDiagnostics>("/api/notifications/diagnostics")).data;
 }
 
 export interface NotificationReadStatePayload {

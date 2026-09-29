@@ -10,6 +10,8 @@
 > **取证方式**：全部结论均以 `Grep`/`Read` 在当轮代码上取行号，**无推理代替观察**（用户长期纪律）。
 > **维护触发**：`dispatch_alert` 扇出步骤变化 / 新增告警规则 / 通知中心收口口径变化 / 下方断点被修复时。
 
+> **2026-09-29 现状订正**：本文 §0–§7 保留 09-16 链路审计的历史断点，不能把其中“通知中心仅收买点”的旧描述当现行规则。当前按具名个股事件形状收 `buy_point` 与 `pre_limit`；通知解释、外部受理与站内已读的当前合同见 §11，任务状态归 W02/BUG-016。
+
 ---
 
 ## §0 一页结论
@@ -32,7 +34,7 @@
 |---|---|---|---|---|
 | 1 | **提醒 / 告警** | 底层**事件流**：系统规则命中即落一条 `AlertEvent`，是全部提醒的**共同上游** | 控制台告警页（`/agent?tab=alerts`）· 任务中心（`escalate` 时） | `AlertEvent` 表 + `GET /api/alerts/events` |
 | 2 | **AI 判读提醒（悬浮球气泡）** | 事件流的**降噪闸门 + 二次解读**：LLM 对事件给 `verdict ∈ notify/ignore/escalate` + `reason`，只有 `notify` 且未确认才弹 | 右下悬浮球气泡（30s 轮询） | `GET /api/agent/triage/pending`（`routes/agent.py:100`）→ `alert_triage.pending_bubbles` |
-| 3 | **消息通知中的个股提醒** | **精选收口后的机会出口**：`IMP-028` 后只保留「经多维筛选的个股买点」，板块/新闻/日选摘要**已移出** | 导航栏铃铛 → 右侧抽屉 | `GET /api/notifications`（`routes/notifications.py`） |
+| 3 | **消息通知中的个股提醒** | 收具名个股 `buy_point` 与 `pre_limit`；板块/新闻/日选摘要仍不作为主动提醒 | 导航栏铃铛 → 右侧抽屉 | `GET /api/notifications`（`routes/notifications.py`） |
 | 4 | **猎场** | **聚合分析页**（不是提醒通道）：盘前 / 盘中提醒 / 复盘 / Watcher / 统计 | `/hunting` | 多源聚合，其中「盘中提醒」读当日晨报 `payload.alerts`（`hunting/page.tsx:238`） |
 
 ---
@@ -55,7 +57,7 @@
 | 规则名 | 定义位置 | 覆盖信号 |
 |---|---|---|
 | `__picks_watcher__` | `picks/watcher.py:71`（`ensure_system_rule`，`:863`） | 盘中个股扫描（`condition_type="picks_intraday"`）——**默认规则**，临板预警与手动重放也走它 |
-| `__picks_buy_point__` | `picks/buy_point.py:47` | 买点确认——**唯一进通知中心**的规则 |
+| `__picks_buy_point__` | `picks/buy_point.py:47` | 买点确认；另有 watcher 规则中的具名 `pre_limit` 形状进通知中心 |
 | `__signal_health__` | `picks/signal_health.py:200` | 信号健康度异常 |
 | `__sentiment_monitor__` | `sentiment/intraday_monitor.py:43` | 盘中情绪监控 |
 | `__ths_reason_sentinel__` | `services/ths_sentinel.py:37` | 涨停原因数据新鲜度哨兵 |
@@ -68,7 +70,7 @@
 
 | 家族 | 调用位置 | 是否产生 `AlertEvent` | 可达面 |
 |---|---|---|---|
-| **A｜经 `dispatch_alert`** | `watcher.py:1084`（盘中扫描）· `pre_limit_radar.py:252`（临板预警）· `buy_point.py:296`（买点，独立规则）· `picks_intraday.py:121`（手动重放） | ✅ 是 | 猎场 + 通知中心（限买点）+ 悬浮球 + 告警页 + 台账 |
+| **A｜经 `dispatch_alert`** | `watcher.py:1084`（盘中扫描）· `pre_limit_radar.py:252`（临板预警）· `buy_point.py:296`（买点，独立规则）· `picks_intraday.py:121`（手动重放） | ✅ 是 | 猎场 + 通知中心（限具名买点/临板形状）+ 悬浮球 + 告警页 + 台账 |
 | **B｜引擎直写晨报** | `pre_limit_radar.py:195`（`board_reopen` 开板重评）· `position_engine.py:280`（`position_open` 自动开模拟仓）· `exit_engine.py:171`（持仓监护：止损/止盈/出场） | ❌ **否** | **仅**猎场「盘中提醒」 |
 
 **⇒ 家族 B 的三类提醒没有事件主键、不进判读、不进通知中心、不出现在告警页。**
@@ -237,3 +239,11 @@
 ### 边界与退出
 
 新买点的本地消费失败可查、可有限恢复；未知模拟动作需先按原 event/decision/version 和委托对账，不能重新推送消息或补造历史成交。旧事件不补执行，已超期 position 不下单；watch 可按原证据补记。停原 buy-point 调度即可停自动消费，手工读回执/恢复接口不自动触发新订单。没有新增真实券商、付费数据、生产重启或真实通知授权。迁移与运行生效、隔离测试、金融效果分别验收。
+
+## §11 通知解释与浏览状态合同（2026-09-29，BUG-016）
+
+`GET /api/notifications` 只读取得具名 `buy_point`/`pre_limit` 个股事件；每条含原触发时间、来源、条件失效说明和对应外部渠道 Outbox 状态。`accepted` 仅是渠道受理，不是送达或阅读回执；`unknown` 不自动重发。无 Outbox 行报无意图记录，读失败报未知且保留站内事件。AI triage 的 `ignore` 在当前规则下只是“建议降噪”，站内原事件仍保留；是否改变推送口径须另立决策。
+
+空列表诊断只在来源读取成功时附加；按需 `GET /api/notifications/diagnostics` 在列表非空时也能读北京当日的最新逐股判定、归档记录 ID、决定 ID/版本、原因与时间。缺记录只表示未找到归档，不能断言调度未运行；原决定缺版本就报未记录。判断使用最新归档，历史结果不冒充当前有效状态。技术形状计数置于折叠核对区；用户主视图显示必要状态与逐股原因。
+
+站内未读、单条/全部已读和清除水位仍由 `/api/notifications/read-state` 单调合并，资讯浏览不计未读。清除隐藏列表，不删除原事件审计；服务端确认后清浏览器缓存也不会恢复。服务端同步失败时只报当前页暂存。来源读取或轮询失败显示未知/上次结果，不用空数组或旧列表推断“没有机会”。这些均为呈现与读侧解释，不改变机会门槛、真实发送或模拟撮合。
