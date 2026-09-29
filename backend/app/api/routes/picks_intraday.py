@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -424,4 +425,29 @@ async def intraday_top(
     snap_by = _snapshot_by(request)
     attach_risk_fields(data.get("items") or [], snap_by)
     attach_risk_fields(data.get("reference_items") or [], snap_by)
+    return {"data": data, "meta": {}}
+
+
+@router.get("/leader-research")
+def leader_research(
+    request: Request,
+    date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+) -> dict:
+    """Research observations and missed-signal audit; GET never collects or writes."""
+    from app.research.leader_followthrough import summary
+
+    try:
+        data = summary(date or beijing_now().date().isoformat())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="日期必须有效") from exc
+    health = getattr(request.app.state, "leader_research_health", {"state": "not_started"})
+    data["collector"] = {k: v for k, v in health.items() if k != "observed_symbols"}
+    checked = health.get("checked_at")
+    fresh = bool(checked and 0 <= (beijing_now() - datetime.fromisoformat(checked)).total_seconds() <= 180)
+    if checked and not fresh:
+        data["collector"].update(state="stale", reason="采集回执已过期，旧状态不代表仍在采集")
+    if data["trade_date"] == beijing_now().date().isoformat():
+        observed = set(health.get("observed_symbols", []))
+        for card in data["cards"]:
+            card["stale"] = card["stale"] or not fresh or card["symbol"] not in observed
     return {"data": data, "meta": {}}

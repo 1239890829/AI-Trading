@@ -55,6 +55,7 @@ from app.models.opportunity_learning import (  # noqa: F401  point-in-time 机�
     OpportunityOutcomeLabel,
     OpportunityOutcomeRevision,
 )
+from app.models.leader_research import LeaderResearchObservation, LeaderResearchSession
 from app.websocket.routes import router as ws_router
 
 # 显式持有引用：确保各模块的表注册进 Base.metadata，否则 create_all 不会建表
@@ -72,6 +73,7 @@ _REGISTERED_MODELS = (
     NotificationOutbox, NotificationAttempt,
     OpportunityDecisionSnapshot, OpportunityDecisionRun,
     OpportunityOutcomeLabel, OpportunityOutcomeRevision,
+    LeaderResearchObservation, LeaderResearchSession,
 )
 
 logging.basicConfig(level=settings.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")

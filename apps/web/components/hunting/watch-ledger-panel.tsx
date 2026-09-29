@@ -9,6 +9,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 
+import { LeaderResearchPanel } from "./leader-research-panel";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { getWatchLedger, placePaperOrder, type WatchLedgerPayload } from "@/lib/api";
 import { fmt, pctColor, pctText, winRateColor } from "@/lib/format";
@@ -198,6 +199,7 @@ export function WatchLedgerPanel() {
       <p className="mt-2 text-[10px] leading-relaxed text-zinc-600 dark:text-zinc-400">
         台账说明：入选即登记（当日唯一，盘中不移除）→ 收盘清算（入选价 vs 收盘价）→ 逐股判定与统计；判定口径 收盘 ≥ 入选 = 成功、亏 ≤2% = 持平、否则失败。历史记录收盘后可查。
       </p>
+      <LeaderResearchPanel />
     </section>
   );
 }

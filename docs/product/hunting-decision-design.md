@@ -192,3 +192,5 @@ U47 已确认“由网页结合现有系统判断并按阶段纳入账本”的�
 源基点26a0c44。原函数隔离反例已保存：lurk_pool未来成交量改变早期确认；当前开板的日内池成员被候选排除但参考标为可参与；观察到build_buy_range空交集回退和GET业务写入。2026-09-20 后续 BUG-028 已修复 lurk_pool 的 point-in-time 正确性；其余反例仍按各自任务处理，不能以一项修复替代其他实现或样本验证。
 外部原则仅辅助实现：scikit-learn Common pitfalls用于训练/测试隔离，Feast point-in-time joins用于当时可用语义；不引新框架、不证明本项目收益。https://scikit-learn.org/stable/common_pitfalls.html ；https://docs.feast.dev/getting-started/concepts/point-in-time-joins 。
 历史研究中的强结论、收益数字与主观概率必须回核原样本/脚本/费用/可成交条件。未核者保持原资料身份，不因本次全文阅读自动取得当前有效性。
+
+2026-09-29 用户批准上述研究路径落地：[研究 §39](../research/limit-up-dragon-research.md#39-持续观察第一版与原设计对齐2026-09-29)在既有猎场跟踪台账内增加可展开的研究观察，包含公共事件/公司事件/趋势、依据与未知、来源时点、参与限制和跨日结果；日期查询只读、过期显式。新增研究采集与收盘普查不写原交易决策或买点，不改变 Opportunity 分数。生产效果准入仍按上文，研究能运行与策略有效分别验收。

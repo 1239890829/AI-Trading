@@ -123,6 +123,7 @@ def test_versioned_database_upgrades_idempotently(tmp_path):
 _MODELS_UNDER_PARITY = (
     "OpportunityDecisionSnapshot", "OpportunityDecisionRun", "OpportunityOutcomeLabel",
     "OpportunityOutcomeRevision", "AgentParamPromotionApproval", "AgentResourceUsage",
+    "LeaderResearchObservation", "LeaderResearchSession",
 )
 
 
@@ -166,6 +167,7 @@ def test_opportunity_learning_tables_match_their_models(tmp_path):
         OpportunityOutcomeRevision,
     )
     from app.models.agent import AgentParamPromotionApproval, AgentResourceUsage
+    from app.models.leader_research import LeaderResearchObservation, LeaderResearchSession
 
     models = {
         "OpportunityDecisionSnapshot": OpportunityDecisionSnapshot,
@@ -174,6 +176,8 @@ def test_opportunity_learning_tables_match_their_models(tmp_path):
         "OpportunityOutcomeRevision": OpportunityOutcomeRevision,
         "AgentParamPromotionApproval": AgentParamPromotionApproval,
         "AgentResourceUsage": AgentResourceUsage,
+        "LeaderResearchObservation": LeaderResearchObservation,
+        "LeaderResearchSession": LeaderResearchSession,
     }
     engine, path = _fresh_engine(tmp_path, "parity")
     try:
@@ -231,7 +235,7 @@ def test_event_observation_upgrade_preserves_legacy_rows_and_matches_model(tmp_p
             """))
         assert run_migrations(engine) == "upgraded"
         with engine.connect() as conn:
-            assert conn.scalar(text("select version_num from alembic_version")) == "a4e8c2d9f6b1"
+            assert conn.scalar(text("select version_num from alembic_version")) == "c8a6e4d2f091"
             assert conn.scalar(text("select count(*) from event_card where fingerprint='legacy-event'")) == 1
             assert conn.scalar(text("select count(*) from event_observation")) == 0
             assert conn.scalar(text("select count(*) from event_interpretation")) == 0
