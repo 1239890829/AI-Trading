@@ -12,7 +12,8 @@ def _write(path, value):
     return path
 
 
-def test_cross_source_status_and_missing_checkpoint(tmp_path):
+@pytest.mark.parametrize("empty_pool", [False, True])
+def test_cross_source_status_and_missing_checkpoint(tmp_path, empty_pool):
     codes = _write(tmp_path / "codes.json", ["000001.SZ", "600001.SH"])
     basic = _write(tmp_path / "basic.json", {
         "fields": ["code", "code_name", "ipoDate", "outDate", "type", "status"],
@@ -27,7 +28,8 @@ def test_cross_source_status_and_missing_checkpoint(tmp_path):
     ]), encoding="utf-8")
     pools = tmp_path / "pools.jsonl"
     pools.write_text(json.dumps({"trade_date": "2025-10-09", "pool": "limit-up-pool",
-                                  "items": [{"thscode": "600001.SH", "is_st": True}]}) + "\n")
+                                  "items": [] if empty_pool else [
+                                      {"thscode": "600001.SH", "is_st": True}]}) + "\n")
     samples = tmp_path / "samples.parquet"
     con = duckdb.connect(":memory:")
     con.execute(f"COPY (SELECT DATE '2025-10-09' AS trade_date, '000001.SZ' AS thscode "
@@ -38,6 +40,7 @@ def test_cross_source_status_and_missing_checkpoint(tmp_path):
     assert result["sample"] == {"stock_days": 2, "missing_status": 0,
                                  "unknown_st": 0, "st_days": 1, "suspended_days": 1}
     assert result["limit_up_pool"]["conflicting_st"] == 0
+    assert result["limit_up_pool"]["source_up_rows"] == (0 if empty_pool else 1)
 
     status.write_text(status.read_text().splitlines()[0] + "\n")
     with pytest.raises(ValueError, match="covers 1/2"):

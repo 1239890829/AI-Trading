@@ -85,7 +85,8 @@ def audit(codes_path: Path, status_path: Path, basic_path: Path,
                            'is_st':'VARCHAR','trade_status':'VARCHAR'}})
         """)
         con.execute("CREATE TEMP TABLE events(trade_date DATE, thscode VARCHAR, source_st BOOLEAN)")
-        con.executemany("INSERT INTO events VALUES (?, ?, ?)", events)
+        if events:
+            con.executemany("INSERT INTO events VALUES (?, ?, ?)", events)
         sample = con.execute(f"""
             SELECT count(*) AS stock_days,
                    count(*) FILTER (WHERE s.thscode IS NULL) AS missing_status,

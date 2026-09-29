@@ -23,9 +23,12 @@ def collect_status(api, codes: list[str], output: Path, start: date, end: date,
     if codes != sorted(set(codes)) or any(not CODE.fullmatch(code) for code in codes):
         raise ValueError("codes must be unique, sorted SH/SZ ticker identifiers")
     finished: set[str] = set()
+    requested_range = {"start": start.isoformat(), "end": end.isoformat()}
     if output.exists():
         for line in output.read_text(encoding="utf-8").splitlines():
             row = json.loads(line)
+            if row.get("requested_range") != requested_range:
+                raise ValueError("checkpoint range mismatch or unbound legacy checkpoint; use a new output")
             if row.get("complete") is not True or row.get("thscode") in finished:
                 raise ValueError("partial or duplicate checkpoint row")
             finished.add(row["thscode"])
@@ -62,7 +65,8 @@ def collect_status(api, codes: list[str], output: Path, start: date, end: date,
                 if result.error_code != "0":
                     raise RuntimeError(f"BaoStock rows {code}: {result.error_code}")
                 stream.write(json.dumps({"thscode": code, "rows": rows,
-                                         "complete": True}, sort_keys=True) + "\n")
+                                         "complete": True, "requested_range": requested_range},
+                                        sort_keys=True) + "\n")
                 stream.flush()
                 completed += 1
                 if limit is not None and completed >= limit:

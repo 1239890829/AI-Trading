@@ -59,3 +59,20 @@ def test_bad_source_row_does_not_create_completed_checkpoint(tmp_path):
         collect_status(api, ["000001.SZ"], output,
                        date(2025, 10, 9), date(2025, 10, 9), delay=0)
     assert output.read_text() == ""
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_changed_or_unbound_range_cannot_silently_reuse_completed_symbol(tmp_path, legacy):
+    output = tmp_path / "status.jsonl"
+    api = Api({"sz.000001": [["2025-10-09", "sz.000001", "0", "1"]]})
+    collect_status(api, ["000001.SZ"], output, date(2025, 10, 9), date(2025, 10, 9), delay=0)
+    if legacy:
+        row = json.loads(output.read_text())
+        row.pop("requested_range")
+        output.write_text(json.dumps(row) + "\n")
+    before = output.read_bytes()
+    api.queried.clear()
+    with pytest.raises(ValueError, match="checkpoint range"):
+        collect_status(api, ["000001.SZ"], output, date(2025, 10, 9), date(2025, 10, 10), delay=0)
+    assert output.read_bytes() == before
+    assert api.queried == []
