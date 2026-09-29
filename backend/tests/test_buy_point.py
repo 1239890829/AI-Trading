@@ -438,3 +438,27 @@ def test_unknown_paper_consumer_is_not_automatically_repeated(monkeypatch, tmp_p
     with app._test_factory() as db:
         row = db.query(BuyPointConsumption).filter_by(consumer="position").one()
         assert row.state == "unknown" and row.attempts == 1
+
+
+def test_consumer_identity_survives_event_numeric_id_reuse(monkeypatch, tmp_path):
+    import app.picks.buy_point as bp
+    from app.models.alert import AlertEvent
+    from app.models.notification_outbox import BuyPointConsumption
+    from app.repositories.alert_repo import AlertRepository
+    app, _, _ = _patch_happy_path(monkeypatch, tmp_path)
+    asyncio.run(bp.check_and_dispatch(app))
+    sf = app._test_factory
+    with sf() as db:
+        original = db.query(AlertEvent).one()
+        event_id, rule_id = original.id, original.rule_id
+        db.query(AlertEvent).delete()
+        db.commit()
+    row, created = AlertRepository(sf).record_trigger_once(
+        rule_id, "600002", 1, 1, dedup_key="f" * 64,
+        consumer_payload={"alert": {}, "snapshot": {}},
+        now_ms=1, expires_at_ms=2,
+    )
+    assert created and row.id == event_id
+    with sf() as db:
+        assert db.query(BuyPointConsumption).count() == 4
+        assert len({r.event_key for r in db.query(BuyPointConsumption)}) == 2

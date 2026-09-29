@@ -177,7 +177,7 @@ async def recovery_status(request: Request):
         consumers = db.query(BuyPointConsumption).order_by(BuyPointConsumption.updated_at_ms.desc()).limit(50).all() if engine.scope == "main" else []
         return {"data": {
             "reset_backups": [{"id": r.id, "restored": bool(r.restored), "created_at": r.created_at.isoformat() + "Z"} for r in backups],
-            "consumers": [{"event_id": r.event_id, "consumer": r.consumer, "state": r.state,
+            "consumers": [{"event_key": r.event_key, "event_id": r.event_id, "consumer": r.consumer, "state": r.state,
                            "reason": r.reason, "attempts": r.attempts} for r in consumers],
         }}
 

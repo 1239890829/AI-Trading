@@ -42,7 +42,8 @@ class NotificationAttempt(Base):
 class BuyPointConsumption(Base):
     """Independent progress for local derived consumers; never sends notifications."""
     __tablename__ = "buy_point_consumption"
-    event_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_id: Mapped[int] = mapped_column(Integer)
     consumer: Mapped[str] = mapped_column(String(16), primary_key=True)
     payload: Mapped[str] = mapped_column(Text)
     state: Mapped[str] = mapped_column(String(16), default="pending")

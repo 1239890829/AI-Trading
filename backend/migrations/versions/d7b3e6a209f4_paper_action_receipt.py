@@ -20,7 +20,8 @@ def upgrade():
 
     op.create_table(
         "buy_point_consumption",
-        sa.Column("event_id", sa.Integer(), primary_key=True),
+        sa.Column("event_key", sa.String(64), primary_key=True),
+        sa.Column("event_id", sa.Integer(), nullable=False),
         sa.Column("consumer", sa.String(16), primary_key=True),
         sa.Column("payload", sa.Text(), nullable=False),
         sa.Column("state", sa.String(16), nullable=False),

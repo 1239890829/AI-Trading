@@ -141,8 +141,10 @@ class AlertRepository:
                     from app.models.notification_outbox import BuyPointConsumption
                     db.flush()
                     for consumer in ("watch", "position"):
+                        if db.get(BuyPointConsumption, (dedup_key, consumer)) is not None:
+                            continue
                         db.add(BuyPointConsumption(
-                            event_id=event.id, consumer=consumer,
+                            event_key=dedup_key, event_id=event.id, consumer=consumer,
                             payload=json.dumps(consumer_payload, ensure_ascii=False),
                             expires_at_ms=expires_at_ms, updated_at_ms=now_ms,
                         ))

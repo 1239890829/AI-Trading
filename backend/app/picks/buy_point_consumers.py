@@ -31,12 +31,12 @@ async def consume_pending(app, sf, *, event_id=None):
         query = select(Progress).where(Progress.state == "pending")
         if event_id is not None:
             query = query.where(Progress.event_id == event_id)
-        keys = [(r.event_id, r.consumer) for r in db.scalars(query.limit(20))]
+        keys = [(r.event_key, r.consumer) for r in db.scalars(query.limit(20))]
         db.commit()
     for key in keys:
         with sf() as db:
             claimed = db.execute(update(Progress).where(
-                Progress.event_id == key[0], Progress.consumer == key[1], Progress.state == "pending",
+                Progress.event_key == key[0], Progress.consumer == key[1], Progress.state == "pending",
             ).values(state="running", updated_at_ms=now_ms, attempts=Progress.attempts + 1))
             db.commit()
             if not claimed.rowcount:
@@ -101,7 +101,7 @@ async def consume_pending(app, sf, *, event_id=None):
             log.warning("buy-point consumer %s/%s: %s", *key, reason, exc_info=True)
         with sf() as db:
             db.execute(update(Progress).where(
-                Progress.event_id == key[0], Progress.consumer == key[1], Progress.state == "running",
+                Progress.event_key == key[0], Progress.consumer == key[1], Progress.state == "running",
                 Progress.updated_at_ms == now_ms,
             ).values(state=state, reason=reason, updated_at_ms=int(time.time() * 1000)))
             db.commit()
