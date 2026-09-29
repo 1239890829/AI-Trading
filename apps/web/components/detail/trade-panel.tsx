@@ -2,6 +2,7 @@
  * 交易页签：账户摘要 + 下单表单 + 持仓 + 挂单撤单 + 成交记录 + 重置账户。
  * 数据加载（paper 轮询）在壳内；本组件只做展示与直接交互（撤单/重置）。
  */
+import { useState } from "react";
 import { cancelPaperOrder } from "@/lib/api";
 import type { PaperFill, PaperOrderInfo, PaperPositionInfo, PaperAccountInfo } from "@/lib/api";
 import type { Quote } from "@/types/market";
@@ -19,19 +20,17 @@ export function TradePanel({
   paper,
   fills,
   quote,
-  resetBusy,
-  onResetAccount,
   onPaperChanged,
 }: {
   symbol: string;
   paper: PaperBundle;
   fills: PaperFill[];
   quote: Quote | null;
-  resetBusy: boolean;
-  onResetAccount: () => void;
   /** 下单/撤单/重置后刷新模拟账户数据（壳内 loadPaper，2026-09-01 替代全局事件）。 */
   onPaperChanged: () => void;
 }) {
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState<number | null>(null);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="grid shrink-0 grid-cols-2 gap-1 border-b border-zinc-100 px-3 py-2 text-xs dark:border-zinc-800/60">
@@ -78,7 +77,13 @@ export function TradePanel({
                 <span className={o.side === "buy" ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}>{o.side === "buy" ? "买" : "卖"} {o.symbol}</span>
                 <span className="font-mono text-zinc-600 dark:text-zinc-400">{fmt(o.price)} × {o.quantity}</span>
                 <button
-                  onClick={async () => { await cancelPaperOrder(o.id).catch(() => {}); onPaperChanged(); }}
+                  disabled={cancelling !== null}
+                  onClick={async () => {
+                    setCancelling(o.id); setCancelError(null);
+                    try { await cancelPaperOrder(o.id); onPaperChanged(); }
+                    catch (e) { setCancelError((e as Error).message); }
+                    finally { setCancelling(null); }
+                  }}
                   className="rounded border border-zinc-300 px-1.5 text-zinc-600 dark:text-zinc-400 hover:text-red-400 dark:border-zinc-600"
                 >
                   撤
@@ -115,16 +120,7 @@ export function TradePanel({
           </tbody>
         </table>
 
-        <div className="shrink-0 px-3 py-2">
-          <button
-            onClick={onResetAccount}
-            disabled={resetBusy}
-            className="w-full rounded border border-zinc-300 py-1 text-xs text-zinc-600 dark:text-zinc-400 hover:border-red-400 hover:text-red-400 disabled:opacity-40 dark:border-zinc-600"
-          >
-            {resetBusy ? "重置中…" : "重置模拟账户"}
-          </button>
-          <p className="mt-1 text-[10px] leading-relaxed text-zinc-600 dark:text-zinc-400">清空全部持仓、挂单与成交记录，资金回到初始额度</p>
-        </div>
+        {cancelError && <p role="alert" className="px-3 py-2 text-xs text-red-700 dark:text-red-400">撤单失败：{cancelError}</p>}
       </div>
     </div>
   );

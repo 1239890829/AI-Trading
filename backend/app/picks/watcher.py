@@ -979,6 +979,9 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
         target = feishu.delivery_target() if feishu is not None and hasattr(feishu, "delivery_target") else ""
         now_ms = int(time.time() * 1000)
         lifetime = max(30.0, min(float(settings.picks_buy_point_interval_seconds), 120.0))
+        consumer_snapshot = next((r for r in
+            (getattr(getattr(state, "snapshot_service", None), "snapshot", None) or [])
+            if r.get("symbol") == alert.get("symbol")), {})
         event, created = repo.record_trigger_once(
             rule.id,
             alert.get("symbol") or "000000",
@@ -989,6 +992,8 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
             outbox_target=target,
             now_ms=now_ms,
             expires_at_ms=now_ms + int(lifetime * 1000),
+            consumer_payload={"alert": alert, "snapshot": {
+                key: consumer_snapshot.get(key) for key in ("price", "change_pct")}},
             outbox_intent={
                 "kind": "picks_buy_point",
                 "trade_date": trade_date,
@@ -996,6 +1001,8 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
                 "decision_version": execution_ref.get("decision_version"),
             },
         )
+        from app.picks.buy_point_consumers import consume_pending
+        await consume_pending(app, session_factory, event_id=event.id)
         if not created:
             return False
         # Brief is now derived display only.  Its failure cannot revoke the
@@ -1009,7 +1016,7 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
             return False
 
     # Derived consumer 1: watch ledger. It must never run before durable buy-point facts.
-    if alert.get("symbol"):
+    if not is_buy_point and alert.get("symbol"):
         with contextlib.suppress(Exception):
             from app.picks.pre_limit_radar import board_limit_pct, is_sealed
             from app.picks.watch_ledger import record_sighting
@@ -1061,7 +1068,7 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
                 )
 
     # Derived consumer 2: paper position. Durable buy-point event/outbox already exists here.
-    if alert.get("kind") in ("buy_point", "confirm"):
+    if not is_buy_point and alert.get("kind") in ("buy_point", "confirm"):
         with contextlib.suppress(Exception):
             from app.picks.position_engine import maybe_open
 

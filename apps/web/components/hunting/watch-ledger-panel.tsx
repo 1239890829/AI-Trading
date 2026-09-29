@@ -36,7 +36,7 @@ export function WatchLedgerPanel() {
   const quickBuy = async (symbol: string, price: number) => {
     try {
       const res = await placePaperOrder(symbol, "buy", price, 100);
-      setOrderNote(`${symbol} 模拟买单已提交（100 股 @ ${price}）——状态见工作台交易页签`);
+      setOrderNote(res.replayed ? `${symbol} 此前已处理（原委托 #${res.id}），未重复下单；请核对工作台` : `${symbol} 模拟买单已提交（100 股 @ ${price}）——状态见工作台交易页签`);
       void load();
       return res;
     } catch (e) {

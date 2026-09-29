@@ -37,3 +37,17 @@ class NotificationAttempt(Base):
     finished_at_ms: Mapped[int | None] = mapped_column(BigInteger)
     state: Mapped[str] = mapped_column(String(24), default="leased")
     reason: Mapped[str] = mapped_column(String(128), default="claimed")
+
+
+class BuyPointConsumption(Base):
+    """Independent progress for local derived consumers; never sends notifications."""
+    __tablename__ = "buy_point_consumption"
+    event_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_id: Mapped[int] = mapped_column(Integer)
+    consumer: Mapped[str] = mapped_column(String(16), primary_key=True)
+    payload: Mapped[str] = mapped_column(Text)
+    state: Mapped[str] = mapped_column(String(16), default="pending")
+    reason: Mapped[str] = mapped_column(String(256), default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    expires_at_ms: Mapped[int] = mapped_column(BigInteger)
+    updated_at_ms: Mapped[int] = mapped_column(BigInteger)

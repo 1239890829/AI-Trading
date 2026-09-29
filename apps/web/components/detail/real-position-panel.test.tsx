@@ -92,3 +92,12 @@ describe("RealPositionPanel 真实持仓", () => {
     expect(mockedCreate).not.toHaveBeenCalled();
   });
 });
+
+it("an edited manual record keeps its symbol and actual price when detail selection changes", () => {
+  mockedGet.mockResolvedValue(payload([]));
+  const view = render(<RealPositionPanel symbol="600127" currentPrice={10} />);
+  fireEvent.change(screen.getByLabelText("实际成交价"), { target: { value: "9.8" } });
+  view.rerender(<RealPositionPanel symbol="000001" currentPrice={15} />);
+  expect((screen.getByLabelText("代码") as HTMLInputElement).value).toBe("600127");
+  expect((screen.getByLabelText("实际成交价") as HTMLInputElement).value).toBe("9.8");
+});

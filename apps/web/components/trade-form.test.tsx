@@ -16,6 +16,8 @@ vi.mock("@/lib/api", () => ({
 }));
 
 const OK: OrderCheckResult = {
+  estimated_fee: 33.73,
+  checked_at: new Date().toISOString(),
   allowed: true,
   max_qty: 21_700,
   reasons: ["通过预检"],
@@ -24,6 +26,8 @@ const OK: OrderCheckResult = {
 };
 
 const BLOCKED: OrderCheckResult = {
+  estimated_fee: 33.73,
+  checked_at: new Date().toISOString(),
   allowed: false,
   max_qty: 0,
   reasons: ["单票仓位上限 25%：600519 买入后约占 39%（现持仓 259,480），本次最多可再买 0 股"],
@@ -37,6 +41,8 @@ afterEach(cleanup);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  OK.checked_at = new Date().toISOString();
+  BLOCKED.checked_at = new Date().toISOString();
   vi.mocked(checkOrderRisk).mockResolvedValue(OK);
   vi.mocked(placePaperOrder).mockResolvedValue({
     id: 1,
@@ -263,4 +269,24 @@ describe("TradeForm · R19 预检结果绑定订单签名", () => {
     expect(screen.getByText("21,700 股")).toBeTruthy();
     expect((screen.getByRole("button", { name: "买入 600519" }) as HTMLButtonElement).disabled).toBe(false);
   });
+});
+
+it("keeps edited prices per symbol and never borrows a price for a stock without a quote", async () => {
+  const view = render(<TradeForm symbol="600127" price={10} />);
+  fireEvent.change(screen.getByLabelText("价格"), { target: { value: "9.50" } });
+  fireEvent.change(screen.getByLabelText("数量"), { target: { value: "300" } });
+  view.rerender(<TradeForm symbol="000001" price={null} />);
+  expect((screen.getByLabelText("价格") as HTMLInputElement).value).toBe("");
+  expect((screen.getByRole("button", { name: "买入 000001" }) as HTMLButtonElement).disabled).toBe(true);
+  view.rerender(<TradeForm symbol="600127" price={10.2} />);
+  expect((screen.getByLabelText("价格") as HTMLInputElement).value).toBe("9.50");
+  expect((screen.getByLabelText("数量") as HTMLInputElement).value).toBe("300");
+});
+
+it("shows server fee and disables an expired approval", async () => {
+  vi.mocked(checkOrderRisk).mockResolvedValue({ ...OK, estimated_fee: 7.89, checked_at: "2020-01-01T00:00:00Z" });
+  render(<TradeForm symbol="600127" price={10} />);
+  await waitRiskReady();
+  expect(screen.getByText(/费 7.89/)).toBeTruthy();
+  expect((screen.getByRole("button", { name: "买入 600127" }) as HTMLButtonElement).disabled).toBe(true);
 });

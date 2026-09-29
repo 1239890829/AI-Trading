@@ -6,6 +6,7 @@
  * 因此引用方（`@/lib/api`）**零改动**。
  */
 
+import { ApiError } from "./client";
 import { getJson, getJsonArray, sendJson } from "./internal";
 
 export interface PaperAccountInfo {
@@ -58,12 +59,37 @@ export const getPaperOrders = (status?: string) =>
 export const getPaperFills = (symbol: string) =>
   getJsonArray<PaperFill>(`/api/paper/fills?symbol=${symbol}`);
 
-export async function placePaperOrder(symbol: string, side: string, price: number, quantity: number) {
-  return (
-    await sendJson<{ id: number; status: string; filled_price?: number | null; fee?: number | null }>(
-      "/api/paper/orders", "POST", { symbol, side, price, quantity }, 15_000
-    )
-  ).data;
+type PaperResult = { replayed?: boolean; id: number; status: string; filled_price?: number | null; fee?: number | null };
+const submitting = new Map<string, Promise<PaperResult>>();
+
+/** Same unresolved draft retains its identity across network errors and tab reloads. */
+export function placePaperOrder(symbol: string, side: string, price: number, quantity: number): Promise<PaperResult> {
+  const draft = { symbol, side, price, quantity };
+  const key = `paper-action:main:${JSON.stringify(draft)}`;
+  const pending = submitting.get(key);
+  if (pending) return pending;
+  const run = async () => {
+    // Storage failure must stop the action: otherwise a reload could lose its identity.
+    const stored = sessionStorage.getItem(key);
+    const identity: { request_id: string; expires_at: string } = stored
+      ? JSON.parse(stored)
+      : { request_id: crypto.randomUUID(), expires_at: new Date(Date.now() + 30_000).toISOString() };
+    sessionStorage.setItem(key, JSON.stringify(identity));
+    try {
+      const result = (await sendJson<PaperResult>(
+        "/api/paper/orders", "POST", { ...draft, ...identity }, 15_000,
+      )).data;
+      sessionStorage.removeItem(key);
+      return result;
+    } catch (e) {
+      // A definitive rejection is safe to retry as a new, explicitly confirmed action.
+      if (e instanceof ApiError && [401, 403, 422].includes(e.status)) sessionStorage.removeItem(key);
+      throw e;
+    }
+  };
+  const promise = run().finally(() => submitting.delete(key));
+  submitting.set(key, promise);
+  return promise;
 }
 
 export async function cancelPaperOrder(id: number) {

@@ -104,6 +104,7 @@ class AlertRepository:
         delivered_channels: list[str] | None = None,
         outbox_target: str | None = None, now_ms: int = 0,
         expires_at_ms: int = 0, outbox_intent: dict | None = None,
+        consumer_payload: dict | None = None,
     ) -> tuple[AlertEvent, bool]:
         """Atomically create one durable event (+ optional outbox), or reuse it."""
         with self._session_factory() as db:
@@ -136,6 +137,17 @@ class AlertRepository:
                         db, event, rule, target=outbox_target, now_ms=now_ms,
                         expires_at_ms=expires_at_ms, intent=outbox_intent,
                     )
+                if consumer_payload is not None:
+                    from app.models.notification_outbox import BuyPointConsumption
+                    db.flush()
+                    for consumer in ("watch", "position"):
+                        if db.get(BuyPointConsumption, (dedup_key, consumer)) is not None:
+                            continue
+                        db.add(BuyPointConsumption(
+                            event_key=dedup_key, event_id=event.id, consumer=consumer,
+                            payload=json.dumps(consumer_payload, ensure_ascii=False),
+                            expires_at_ms=expires_at_ms, updated_at_ms=now_ms,
+                        ))
                 db.commit()
             except IntegrityError:
                 db.rollback()

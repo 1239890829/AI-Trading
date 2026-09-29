@@ -1,4 +1,5 @@
 from __future__ import annotations
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request
 
@@ -48,4 +49,9 @@ async def check_order(
         positions=positions,
         quote=quote_dict,
     )
-    return Envelope(data=OrderCheckResponse(**result))
+    from app.paper.engine import calc_fee
+
+    return Envelope(data=OrderCheckResponse(
+        **result, estimated_fee=calc_fee(body.side, body.price, body.quantity),
+        checked_at=datetime.now(timezone.utc).isoformat(),
+    ))

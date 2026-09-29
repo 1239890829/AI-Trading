@@ -18,6 +18,7 @@ import logging
 import math
 from datetime import date, datetime
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.bjtime import beijing_today
@@ -206,7 +207,14 @@ class PaperTradingEngine:
         因此必须单行记录 **重置前状态**（持仓数/委托数/资金）+ 触发来源，
         而不是只记结果——事后定位全靠这条。
         """
+        from uuid import uuid4
+        from app.models.paper import PaperResetBackup
+        from app.paper.reset_recovery import snapshot, encode, digest
+
         with self._sf() as db:
+            db.execute(text("BEGIN IMMEDIATE"))
+            before_snapshot = snapshot(db, self.scope)
+            backup_id = str(uuid4())
             pos_before = db.query(PaperPosition).filter(PaperPosition.scope == self.scope).count()
             ord_before = db.query(PaperOrder).filter(PaperOrder.scope == self.scope).count()
             old = db.query(PaperAccount).filter(PaperAccount.scope == self.scope).first()
@@ -223,8 +231,13 @@ class PaperTradingEngine:
             acc.cash = acc.initial_cash
             acc.updated_at = utcnow()
             db.add(acc)
+            db.flush()
+            db.add(PaperResetBackup(id=backup_id, scope=self.scope,
+                                   payload=encode(before_snapshot),
+                                   after_digest=digest(snapshot(db, self.scope))))
             db.commit()
             db.refresh(acc)
+            acc.reset_backup_id = backup_id
             log.info(
                 "paper account RESET audit: source=%s custom_initial=%s | "
                 "before: positions=%d orders=%d cash=%s initial=%s | after: cash=%s initial=%s",

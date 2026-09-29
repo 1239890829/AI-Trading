@@ -8,6 +8,7 @@ import {
   overrideRealPosition,
   type RealPositionRow,
 } from "@/lib/api";
+import { bjToday } from "@/lib/market-hours";
 import { fmt, pctColor, pctText } from "@/lib/format";
 import { useRealPositions } from "@/hooks/use-real-positions";
 
@@ -29,13 +30,14 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const [draftEdited, setDraftEdited] = useState(false);
   // 表单态
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [formSymbol, setFormSymbol] = useState(symbol ?? "");
   const [price, setPrice] = useState("");
   const [qty, setQty] = useState("");
   const [fee, setFee] = useState("");
-  const [tradedAt, setTradedAt] = useState(() => new Date().toISOString().slice(0, 10));
+  const [tradedAt, setTradedAt] = useState(() => bjToday());
   // 手动修正态（对哪只持仓改数量/总成本）
   const [editSymbol, setEditSymbol] = useState<string | null>(null);
   const [editQty, setEditQty] = useState("");
@@ -46,9 +48,10 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
   const [prevFormSymbol, setPrevFormSymbol] = useState<string | null | undefined>(undefined);
   if (symbol !== prevFormSymbol) {
     setPrevFormSymbol(symbol);
-    if (symbol) {
+    if (symbol && !draftEdited) {
       setFormSymbol(symbol);
       setSide("buy");
+      setPrice(currentPrice != null ? String(+currentPrice.toFixed(3)) : "");
     }
   }
   // 成交价默认现价（录入默认值，可改——改过的才是实际成交价）
@@ -72,6 +75,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
       await createRealTrade({ symbol: formSymbol.trim(), name: formSymbol === symbol ? currentName ?? null : null, side, fill_price: pv, quantity: qv, fee: fv, traded_at: tradedAt });
       setQty("");
       setFee("");
+      setDraftEdited(false);
       await reload();
     } catch (e) {
       setError((e as Error).message);
@@ -123,7 +127,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
           ).map(([k, label]) => (
             <button
               key={k}
-              onClick={() => setSide(k)}
+              onClick={() => { setDraftEdited(true); setSide(k); }}
               className={`rounded px-2 py-0.5 text-xs ${side === k ? (k === "buy" ? "bg-up/15 font-medium text-up-ink dark:text-up" : "bg-down/15 font-medium text-down-ink dark:text-down") : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
             >
               {label}
@@ -134,14 +138,14 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
           <input
             value={formSymbol}
-            onChange={(e) => setFormSymbol(e.target.value)}
+            onChange={(e) => { setDraftEdited(true); setFormSymbol(e.target.value); }}
             placeholder="代码"
             className="w-20 rounded border border-zinc-200 bg-transparent px-1.5 py-0.5 font-mono dark:border-zinc-700"
             aria-label="代码"
           />
           <input
             value={price}
-            onChange={(e) => setPrice(e.target.value)}
+            onChange={(e) => { setDraftEdited(true); setPrice(e.target.value); }}
             placeholder="成交价"
             inputMode="decimal"
             className="w-24 rounded border border-zinc-200 bg-transparent px-1.5 py-0.5 font-mono tabular-nums dark:border-zinc-700"
@@ -150,7 +154,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
           />
           <input
             value={qty}
-            onChange={(e) => setQty(e.target.value)}
+            onChange={(e) => { setDraftEdited(true); setQty(e.target.value); }}
             placeholder="数量(股)"
             inputMode="numeric"
             className="w-20 rounded border border-zinc-200 bg-transparent px-1.5 py-0.5 font-mono tabular-nums dark:border-zinc-700"
@@ -158,7 +162,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
           />
           <input
             value={fee}
-            onChange={(e) => setFee(e.target.value)}
+            onChange={(e) => { setDraftEdited(true); setFee(e.target.value); }}
             placeholder="费用(可选)"
             inputMode="decimal"
             className="w-20 rounded border border-zinc-200 bg-transparent px-1.5 py-0.5 font-mono tabular-nums dark:border-zinc-700"
@@ -167,7 +171,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
           <input
             type="date"
             value={tradedAt}
-            onChange={(e) => setTradedAt(e.target.value)}
+            onChange={(e) => { setDraftEdited(true); setTradedAt(e.target.value); }}
             className="rounded border border-zinc-200 bg-transparent px-1.5 py-0.5 dark:border-zinc-700"
             aria-label="成交日期"
           />

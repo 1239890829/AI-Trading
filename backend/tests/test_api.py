@@ -143,7 +143,12 @@ def test_paper_fills_and_reset(client):
 
     quote = client.get("/api/quotes/600519").json()["data"]
     price = quote["price"]
+    from uuid import uuid4
+    from datetime import datetime, timedelta, timezone
+
     placed = client.post("/api/paper/orders", json={
+        "request_id": str(uuid4()),
+        "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(),
         "symbol": "600519", "side": "buy", "price": price + 1, "quantity": 100,
     })
     assert placed.status_code == 200, placed.text

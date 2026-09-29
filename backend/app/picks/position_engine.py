@@ -251,7 +251,7 @@ async def maybe_open(
     try:
         order = await engine.place_order(symbol, "buy", price, qty)
     except Exception as exc:  # noqa: BLE001
-        return {"opened": False, "reason": f"下单异常: {exc}"}
+        return {"opened": False, "execution_unknown": True, "reason": f"下单异常: {exc}"}
     if getattr(order, "status", "") == "rejected":
         reason = getattr(order, "reason", "rejected")
         return {"opened": False, "reason": f"撮合拒绝：{reason}"}

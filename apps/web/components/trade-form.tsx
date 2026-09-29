@@ -26,6 +26,7 @@ export function TradeForm({
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
 
   /** 风控预检结果 + 它的订单签名（R19）。
    *
@@ -50,12 +51,20 @@ export function TradeForm({
    * 下一拍 tick 照样冲掉，缺陷原样复现。"进入该输入框"才是可靠的用户意图信号。 */
   const [priceEdited, setPriceEdited] = useState(false);
   const [draftSymbol, setDraftSymbol] = useState(symbol);
+  const [drafts, setDrafts] = useState<Record<string, { p: string; qty: string; side: "buy" | "sell"; edited: boolean }>>({});
 
   if (draftSymbol !== symbol) {
-    // 换标的：草稿作废，重新以新标的现价起手
+    // Keep each symbol's edited draft separate; a missing quote cannot reuse another stock's price.
+    const previous = drafts[symbol];
+    const retained = Object.fromEntries(Object.entries(drafts).slice(-19));
+    setDrafts({ ...retained, [draftSymbol]: { p, qty, side, edited: priceEdited } });
     setDraftSymbol(symbol);
-    setPriceEdited(false);
-    if (price != null) setP(fmt(price));
+    setPriceEdited(previous?.edited ?? false);
+    setP(previous?.edited ? previous.p : price == null ? "" : fmt(price));
+    setQty(previous?.qty ?? "100");
+    setSide(previous?.side ?? "buy");
+    setRiskCheck(null);
+    setMsg(null);
   } else if (!priceEdited && price != null) {
     // 未编辑过：跟随现价刷新（首帧回填也走这条路）
     const next = fmt(price);
@@ -65,55 +74,47 @@ export function TradeForm({
   const pv = parseNum(p);
   const qv = Math.trunc(parseNum(qty));
   const est = pv * qv;
-  const fee = Math.max(est * 0.00025, 5) + (side === "sell" ? est * 0.0005 : 0);
+
 
   /** 当前草稿的订单签名。任何一项变化即失效（含价格、方向、数量、标的）。 */
   const orderSig = `${symbol}|${side}|${pv}|${qv}`;
   /** 与当前草稿签名一致的预检结果；失配一律视为"尚无有效预检"。 */
   const active = riskCheck && riskCheck.sig === orderSig ? riskCheck.result : null;
 
-  /** 最近一次**已发出**的预检请求的签名。
-   *
-   * 为什么需要它：**回包在接受时就要按"是否仍是当前订单"过滤**，只在渲染期比对
-   * 是不够的——若让过期回包写进 state，它会把更新的结论**冲成"无结论"**：
-   * 实测路径为「1000 股判拒（按钮禁用）→ 100 股旧'允许'回包到达 → 结果被覆盖成
-   * 签名失配 → active=null → 按钮重新点亮」。故过期回包**直接丢弃，不入 state**。
-   * 两道防线各司其职：ref 拦"过期写入"，渲染期 sig 比对拦"草稿又变了"。
-   *
-   * ⚠️ 写入位置在 **effect 体内首行**，不在渲染期（R19 修复）：渲染期写
-   * `ref.current` 会被 `react-hooks/refs` 判为 error（React 官方规则：渲染必须是纯的）。
-   * 语义不受影响——本 effect 的依赖含 `orderSig`，草稿一改就会重跑；而它发出的
-   * 请求最少也要等 300ms 去抖 + 一个往返，**任何回包都晚于本次 effect 的同步段**
-   * ⇒ 不存在"ref 尚未更新"的窗口。 */
-  const sigRef = useRef(orderSig);
+  // Refresh unchanged drafts too; identical A→B→A drafts still have distinct requests.
+  const [checkEpoch, setCheckEpoch] = useState(0);
+  const submitLock = useRef(false);
+  useEffect(() => {
+    const timer = setInterval(() => { setNow(Date.now()); setCheckEpoch((v) => v + 1); }, 15_000);
+    return () => clearInterval(timer);
+  }, []);
 
   // 输入无效 → 渲染期同步清掉旧检查结果（adjust-state 模式）
   if (pv <= 0 || qv <= 0) {
     if (riskCheck !== null) setRiskCheck(null);
   }
   useEffect(() => {
-    // 首行同步登记"当前订单"——它即最新发出的那张（见 sigRef 注释）
-    sigRef.current = orderSig;
+    let cancelled = false;
     if (pv <= 0 || qv <= 0) return;
     const sig = orderSig;
     const t = setTimeout(() => {
       setChecking(true);
       void checkOrderRisk({ symbol, side, price: pv, quantity: qv })
         .then((r) => {
-          if (sigRef.current !== sig) return; // 过期回包：丢弃，绝不写 state
+          if (cancelled) return; // 过期回包：丢弃，绝不写 state
           setRiskCheck({ sig, result: r });
         })
         .catch(() => {
           // 失败即"无有效预检"（fail-closed）；同样只在仍是当前订单时才清，
           // 旧请求的失败不得把新签名的成功结论清掉。
-          if (sigRef.current === sig) setRiskCheck(null);
+          if (!cancelled) setRiskCheck(null);
         })
-        .finally(() => setChecking(false));
+        .finally(() => { if (!cancelled) setChecking(false); });
     }, 300);
-    return () => clearTimeout(t);
+    return () => { cancelled = true; clearTimeout(t); };
     // orderSig 是这轮请求的身份；effect 体内实际读取 symbol/side/pv/qv，
     // 一并列出以满足 exhaustive-deps（四者恰好构成 orderSig）。
-  }, [orderSig, pv, qv, symbol, side]);
+  }, [orderSig, pv, qv, symbol, side, checkEpoch]);
 
   /** 回到当前现价（显式动作，不会被 tick 自动触发）。 */
   function useCurrentPrice() {
@@ -122,11 +123,13 @@ export function TradeForm({
   }
 
   async function submit() {
+    if (submitLock.current) return;
+    submitLock.current = true;
     setSubmitting(true);
     setMsg(null);
     try {
       // 风控预检：未通过或结果与当前草稿不符（过期）则阻止下单
-      if (!active || !active.allowed) {
+      if (!active || !active.allowed || !(Date.now() - Date.parse(active.checked_at) <= 30_000)) {
         setMsg({
           ok: false,
           text: active
@@ -139,12 +142,13 @@ export function TradeForm({
       const r = await placePaperOrder(symbol, side, pv, qv);
       setMsg({
         ok: true,
-        text: r.status === "filled" ? `已成交 @ ${fmt(r.filled_price)}（费 ${fmt(r.fee)}）` : "已挂单，等待撮合",
+        text: r.replayed ? `此提交此前已处理（原委托 #${r.id}），请核对委托列表；未重复下单` : r.status === "filled" ? `已成交 @ ${fmt(r.filled_price)}（费 ${fmt(r.fee)}）` : "已挂单，等待撮合",
       });
       onTraded?.();
     } catch (e) {
       setMsg({ ok: false, text: (e as Error).message });
     } finally {
+      submitLock.current = false;
       setSubmitting(false);
     }
   }
@@ -155,7 +159,7 @@ export function TradeForm({
     (side === "buy" && qv % 100 !== 0) ||
     (limitUp != null && side === "buy" && pv >= limitUp) ||
     (limitDown != null && side === "sell" && pv <= limitDown) ||
-    (active?.allowed === false);
+    !active || !active.allowed || !(now - Date.parse(active.checked_at) <= 30_000);
 
   return (
     <div className="shrink-0 border-b border-zinc-100 px-3 py-2 dark:border-zinc-800/60">
@@ -214,7 +218,7 @@ export function TradeForm({
         </label>
         <div className="flex justify-between text-zinc-600 dark:text-zinc-400">
           <span>预估金额</span>
-          <span className="font-mono">{fmt(est)} + 费 {fmt(fee)}</span>
+          <span className="font-mono">{fmt(est)} + 费 {active ? fmt(active.estimated_fee) : "待预检"}</span>
         </div>
         {active && (
           <div className="flex justify-between text-zinc-600 dark:text-zinc-400">
@@ -243,6 +247,7 @@ export function TradeForm({
         {submitting ? "提交中…" : `${side === "buy" ? "买入" : "卖出"} ${symbol}`}
       </button>
       {msg && <p className={`mt-1.5 text-xs ${msg.ok ? "text-emerald-700 dark:text-emerald-400" : "text-red-700 dark:text-red-400"}`}>{msg.text}</p>}
+      {!active && <p className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-400">预检结果与当前订单不一致或尚未取得，请等待重新预检</p>}
       {checking && !active && <p className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-400">风控预检中…</p>}
       {active && active.warnings.length > 0 && (
         <p className="mt-1 text-[11px] text-amber-800 dark:text-amber-400">⚠ {active.warnings.join("；")}</p>

@@ -148,7 +148,7 @@
 | **T6 前端与 UI** | `summary/architecture-design.md`（§1 跨页面联动设计） | `system/architecture.md` · `kb/03-engineering.md` · `skills/ui-state-verify/SKILL.md` · `skills/canvas-chart-verify/SKILL.md` | **验收以实际渲染为准**，截图、DOM、Canvas、数值与源码各证其范围；**新增页面/板块需先论证**；U54/U55按任务比较inline/Drawer/Modal与大画布；旧KB-ENG-92为历史，不固定所有详情形态 |
 | **T7 外部工具与技能** | `ai/continuous-evolution.md` → `skills/ashare-innovation-radar/SKILL.md` | `ai/jev-integration.md` · 本表 **WB-04** · `system/llm-gateway-probe.md` | 外部热度只产候选；先许可/隐私/费用/权限硬门与证据梯度，未经 owner stage 不安装/准入 |
 | **T8 决策与"为什么当初这么定"** | `kb/04-decisions.md`（KB-DEC） | `archive/ledger-transition-20260917.md` · `implementation-plan.md` | 既有决定可依新证据和最新授权复核；保留取代关系与依据，不据历史标题锁死设计 |
-| **T9 提醒与通知链路** | `summary/pick-signal-chain.md`（**先读它**：定位/触发/流向/断点） | `services/alert_triage.py`（判读闸门）· `api/routes/notifications.py`（通知收口）· `picks/watcher.py::dispatch_alert`（唯一汇聚点）· `services/push_policy.py` | **收敛口径时必须回扫自称该口径的注释**（`IMP-028` 遗留 5 处过期断言，见该文 §G4）；**判读闸门现状只作用于悬浮球**（§G1）；改通知来源须同步 §3.1 规则清单 |
+| **T9 提醒与通知链路** | `summary/pick-signal-chain.md`（**先读它**：定位/触发/流向/断点；§10 模拟动作、消费进度与重置恢复接口） | `services/alert_triage.py`（判读闸门）· `api/routes/notifications.py`（通知收口）· `picks/watcher.py::dispatch_alert`（唯一汇聚点）· `services/push_policy.py` | **收敛口径时必须回扫自称该口径的注释**（`IMP-028` 遗留 5 处过期断言，见该文 §G4）；**判读闸门现状只作用于悬浮球**（§G1）；改通知来源须同步 §3.1 规则清单 |
 | **T10 跨模块长期治理 / 重大重构** | `skills/living-system-governor/SKILL.md` → `implementation-plan.md` §6/§6.2 → `retro-and-gaps.md` §5.9 | `ai/continuous-evolution.md` · `plan-registry.md` · W08/GOV-027 · 对应领域登记册/专题 | 先恢复真实上下文，运行主动缺陷发现门，再比较 KEEP/FIX/MERGE/EXPERIMENT/WATCH/RETIRE；Skill 只提供上层治理协议，不自创任务状态、不越阶段门、不替代领域 owner |
 
 ### 0.2 任务动线（**按序**读——顺序错会先读一堆无关的）
