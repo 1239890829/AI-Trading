@@ -94,6 +94,7 @@ SCHEDULER_SWITCH_ATTRS: tuple[str, ...] = (
     "review_scheduler_enabled",
     "picks_autogen_enabled",
     "picks_opportunity_evidence_enabled",
+    "leader_research_enabled",
     "event_collector_enabled",
     "sentiment_history_backfill_enabled",
     "premarket_brief_enabled",

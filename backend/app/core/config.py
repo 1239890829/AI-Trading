@@ -128,6 +128,8 @@ class Settings(BaseSettings):
     # （默认 snapshot_save_interval=300s），故 30s 检查不会放大 provider 请求。
     picks_opportunity_evidence_enabled: bool = True
     picks_opportunity_evidence_interval_seconds: float = 30.0
+    # RSH-031 research-only observations; reuse snapshots, never place orders.
+    leader_research_enabled: bool = True
     # 盘中跟踪：以当日简报为跟踪清单，交易时段内按 interval 取拍（ths 涨停池 +
     # 东财板块涨幅），确认/证伪判定走 intraday_rules（与回测同一份代码）
     picks_watcher_enabled: bool = True

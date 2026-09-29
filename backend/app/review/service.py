@@ -209,6 +209,22 @@ class ReviewService:
             log.exception("prediction auto-verify failed")
         checkpoint()
 
+        # Reuse the research ledger; a past-date review never captures today's quotes.
+        from app.research.leader_collector import review_contribution
+        from app.review.schemas import DimensionResult
+        try:
+            research_dimension, research_actions = await asyncio.to_thread(
+                review_contribution, anchor.isoformat(), self.session_factory
+            )
+            dimensions.append(research_dimension)
+            action_items.extend(research_actions)
+        except Exception as exc:
+            log.exception("leader research review failed")
+            dimensions.append(DimensionResult(
+                key="leader_research", title="强势候选持续研究", status="degraded",
+                findings=[f"研究记录读取失败：{type(exc).__name__}，不能判断无漏选"],
+            ))
+
         summary = self._summarize(dimensions, action_items, data)
         if predict_note:
             summary = f"{summary}；{predict_note}"

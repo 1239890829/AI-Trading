@@ -227,6 +227,11 @@ def register_schedulers(reg: SchedulerRegistry, app: FastAPI, services: AppServi
 
     reg.add("pre-limit-radar", lambda: pre_limit_loop(app, stop=radar_stop), stop=radar_stop)
 
+    from app.research.leader_collector import research_loop
+
+    research_stop = asyncio.Event()
+    reg.add("leader-research", lambda: research_loop(app, research_stop), stop=research_stop, switch="leader_research_enabled")
+
     # pending 事件 LLM 辅助判定（P2-3 层1）：交易时段低频攒批，默认关
     # 注：开关在**循环内部**逐拍读取（运行时可切），故不在此处做启动期门控。
     llm_aux_stop = asyncio.Event()

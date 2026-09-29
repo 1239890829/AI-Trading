@@ -15,6 +15,7 @@ from app.models.paper import PaperAccount, PaperOrder, PaperPosition  # noqa: F4
 from app.models.theme_catalog import Theme, ThemeMember, ThemeOverride  # noqa: F401
 from app.models.event import EventCard, EventDirection, EventObservation, EventWithdrawalLink  # noqa: F401
 from app.models.real_position import RealPositionOverride, RealTrade  # noqa: F401
+from app.models.leader_research import LeaderResearchObservation, LeaderResearchSession  # noqa: F401
 from app.models.watchlist import Base
 from app.predict.models import PredictionReportRow, PredictionThemeRow  # noqa: F401
 from app.review.models import (  # noqa: F401

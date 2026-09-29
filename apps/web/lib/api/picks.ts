@@ -909,3 +909,45 @@ export async function getStrategyRegistry(): Promise<StrategyRegistryItem[]> {
   return (await getJson<{ strategies: StrategyRegistryItem[] }>("/api/picks/strategy-registry"))
     .data.strategies ?? [];
 }
+
+export interface LeaderResearchCard {
+  symbol: string;
+  name: string;
+  state: string;
+  routes: string[];
+  first_seen: string;
+  source_as_of: string;
+  source: string;
+  pct: number;
+  stale: boolean;
+  expired: boolean;
+  reasons: string[];
+  unknowns: string[];
+  entry_state: string;
+  invalidation: string;
+  next_check: string;
+  event_refs: { title: string; source: string; published_at: string; available_at: string; basis: string; link_kind: string }[];
+  outcomes: Record<string, { state: string; target_date: string | null; reference_change_pct: number | null }>;
+}
+
+export interface LeaderResearchPayload {
+  trade_date: string;
+  version: string;
+  state: string;
+  cards: LeaderResearchCard[];
+  collector: { state: string; checked_at?: string; source_as_of?: string; reason?: string };
+  review: {
+    state: string;
+    universe_count: number | null;
+    strong_count: number | null;
+    trend_audit_count: number | null;
+    missed: { symbol: string; name: string; pct: number }[];
+    cooled_symbols: string[];
+  };
+  disclaimer: string;
+  outcome_basis: string;
+}
+
+export async function getLeaderResearch(date?: string): Promise<LeaderResearchPayload> {
+  return (await getJson<LeaderResearchPayload>(`/api/picks/leader-research${date ? `?date=${encodeURIComponent(date)}` : ""}`)).data;
+}
