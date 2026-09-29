@@ -22,7 +22,7 @@
 
 ## 3. 发布与后续
 
-PR #185 仍须准确 HEAD 的 `DegradedRelease`、required CI、release_check、合并后 master CI 与分支清理。合并后前向通知样本按源 ID/版本、投影状态与 Outbox 终态复盘；新反例回 W02 owner，不自动改机会阈值或渠道策略。下一轮正式开工须重跑 selector。
+PR #185 已按准确 HEAD `5b08db00cbaca7f2b1200d0a7e7c1b66fde1ad30` 的 `DegradedRelease`、三项 required CI 和 `release_check.py` 合并，master 合并提交 `ac884b7b29e4be247d5cfb2db1deb222e25b596f`，合并后 CI [run 36583856071](https://github.com/1239890829/AI-Trading/actions/runs/36583856071) 的 backend/frontend/docs 均成功，功能分支本地和远端已删除。前向通知样本仍须按源 ID/版本、投影状态与 Outbox 终态复盘；未加载生产，不能宣称真实送达。新反例回 W02 owner，不自动改机会阈值或渠道策略。下一轮正式开工须重跑 selector。
 
 - **当前主门**：G2
 - **主切片首选**：BUG-009
