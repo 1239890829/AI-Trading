@@ -160,6 +160,61 @@ def read_jsonl(path: Path) -> list[dict]:
     return out
 
 
+BLIND_FIELDS = (
+    "event_id", "published_at", "title", "summary", "source", "source_symbol",
+)
+
+
+def blind_rows(queue: list[dict]) -> list[dict]:
+    """Give an annotator source text without rule or model answers."""
+    validation = validate_rows(queue)
+    if not validation["ok"]:
+        raise ValueError(f"queue validation failed: {validation['errors'][:5]}")
+    rows = [
+        {
+            **{field: row.get(field) for field in BLIND_FIELDS},
+            "human": {"category": None, "certainty": None,
+                      "actionable": None, "notes": ""},
+        }
+        for row in queue
+    ]
+    # The original queue is grouped by reference category. Shuffle that order,
+    # too, so the annotation order cannot disclose the rule answer.
+    rows.sort(key=lambda row: _stable_key("rsh030-blind-v1", row["event_id"]))
+    return rows
+
+
+def import_human(queue: list[dict], annotated: list[dict], *,
+                 allow_partial: bool = False) -> list[dict]:
+    """Attach independent labels only after exact source-content matching."""
+    expected = {row["event_id"]: row for row in blind_rows(queue)}
+    received: dict[int, dict] = {}
+    for row in annotated:
+        event_id = row.get("event_id")
+        if not isinstance(event_id, int) or isinstance(event_id, bool) or event_id in received:
+            raise ValueError("annotation has invalid/duplicate event_id")
+        if event_id not in expected or set(row) != set(expected[event_id]):
+            raise ValueError(f"annotation row shape/identity mismatch: {event_id}")
+        if any(row[field] != expected[event_id][field] for field in BLIND_FIELDS):
+            raise ValueError(f"annotation source content changed: {event_id}")
+        human = row["human"]
+        if not isinstance(human, dict) or set(human) != set(expected[event_id]["human"]):
+            raise ValueError(f"annotation human fields invalid: {event_id}")
+        values = (human["category"], human["certainty"], human["actionable"])
+        complete = (human["category"] in CATEGORIES
+                    and human["certainty"] in CERTAINTIES
+                    and isinstance(human["actionable"], bool))
+        empty = values == (None, None, None)
+        if not complete and not (allow_partial and empty):
+            raise ValueError(f"annotation labels incomplete/invalid: {event_id}")
+        if not isinstance(human["notes"], str):
+            raise ValueError(f"annotation notes invalid: {event_id}")
+        received[event_id] = human
+    if set(received) != set(expected):
+        raise ValueError("annotation event_id coverage differs from frozen queue")
+    return [{**row, "human": received[row["event_id"]]} for row in queue]
+
+
 def validate_rows(rows: list[dict], *, require_human: bool = False) -> dict:
     errors: list[str] = []
     ids: set[int] = set()
@@ -557,7 +612,17 @@ def compare_reference(queue: list[dict], predictions: list[dict]) -> dict:
     }
 
 
-def score(labeled: list[dict], predictions: list[dict]) -> dict:
+def score(labeled: list[dict], predictions: list[dict], *,
+          allow_partial: bool = False) -> dict:
+    validation = validate_rows(labeled, require_human=not allow_partial)
+    if not validation["ok"]:
+        raise ValueError(f"human labels incomplete/invalid: {validation['errors'][:5]}")
+    if allow_partial:
+        labeled = [row for row in labeled if (
+            row["human"].get("category") in CATEGORIES
+            and row["human"].get("certainty") in CERTAINTIES
+            and isinstance(row["human"].get("actionable"), bool)
+        )]
     by_id = {int(r["event_id"]): r for r in predictions if isinstance(r.get("event_id"), int)}
     if len(by_id) != len(predictions):
         raise ValueError("prediction event_id values must be unique integers")
@@ -593,6 +658,18 @@ def main(argv: list[str] | None = None) -> int:
     val = sub.add_parser("validate")
     val.add_argument("path", type=Path)
     val.add_argument("--require-human", action="store_true")
+
+    blind = sub.add_parser("export-blind")
+    blind.add_argument("queue", type=Path)
+    blind.add_argument("--out", type=Path, required=True)
+    blind.add_argument("--meta-out", type=Path, required=True)
+
+    imp = sub.add_parser("import-human")
+    imp.add_argument("queue", type=Path)
+    imp.add_argument("annotated", type=Path)
+    imp.add_argument("--blind-meta", type=Path, required=True)
+    imp.add_argument("--out", type=Path, required=True)
+    imp.add_argument("--allow-partial", action="store_true")
 
     pred = sub.add_parser("predict-jev")
     pred.add_argument("queue", type=Path)
@@ -636,6 +713,47 @@ def main(argv: list[str] | None = None) -> int:
         summary = validate_rows(read_jsonl(args.path), require_human=args.require_human)
         print(json.dumps(summary, ensure_ascii=False, indent=2))
         return 0 if summary["ok"] else 2
+    if args.cmd == "export-blind":
+        if len({args.queue.resolve(), args.out.resolve(), args.meta_out.resolve()}) != 3:
+            raise ValueError("queue, blind output and metadata must be distinct files")
+        queue = read_jsonl(args.queue)
+        rows = blind_rows(queue)
+        atomic_write_jsonl(args.out, rows)
+        meta = {
+            "queue_sha256": file_sha256(args.queue),
+            "blind_sha256": file_sha256(args.out),
+            "rows": len(rows),
+            "instructions": "Annotate blind rows before viewing rule/Jev predictions.",
+        }
+        atomic_write_json(args.meta_out, meta)
+        print(json.dumps(meta, ensure_ascii=False, indent=2))
+        return 0
+    if args.cmd == "import-human":
+        paths = {args.queue.resolve(), args.annotated.resolve(),
+                 args.blind_meta.resolve(), args.out.resolve()}
+        if len(paths) != 4:
+            raise ValueError("queue, annotations, metadata and output must be distinct files")
+        meta = json.loads(args.blind_meta.read_text(encoding="utf-8"))
+        if meta.get("queue_sha256") != file_sha256(args.queue):
+            raise ValueError("frozen queue SHA-256 mismatch")
+        queue = read_jsonl(args.queue)
+        expected_blind = blind_rows(queue)
+        expected_bytes = "".join(
+            json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n"
+            for row in expected_blind
+        ).encode("utf-8")
+        if meta.get("blind_sha256") != hashlib.sha256(expected_bytes).hexdigest():
+            raise ValueError("blind export SHA-256 mismatch")
+        labeled = import_human(
+            queue, read_jsonl(args.annotated), allow_partial=args.allow_partial
+        )
+        atomic_write_jsonl(args.out, labeled)
+        result = validate_rows(labeled, require_human=not args.allow_partial)
+        result["partial"] = result["human_complete"] < result["rows"]
+        result["queue_sha256"] = meta["queue_sha256"]
+        result["labeled_sha256"] = file_sha256(args.out)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
     if args.cmd == "predict-jev":
         queue = read_jsonl(args.queue)
         validation = validate_rows(queue)
@@ -696,7 +814,8 @@ def main(argv: list[str] | None = None) -> int:
                 "human labels incomplete/invalid; run validate --require-human "
                 "or pass --allow-partial for progress-only scoring"
             )
-        out = score(labeled, read_jsonl(args.predictions))
+        out = score(labeled, read_jsonl(args.predictions),
+                    allow_partial=args.allow_partial)
         out["human_complete"] = validation["human_complete"]
         out["human_total"] = validation["rows"]
         out["partial"] = validation["human_complete"] < validation["rows"]

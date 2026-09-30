@@ -139,7 +139,7 @@
 
 **Jev 语义特征、人工金标准与额度节省实证**
 
-- **状态**：部分完成
+- **状态**：待条件
 - **优先级**：P1
 - **阶段门**：G3
 - **门内序**：30
@@ -150,8 +150,8 @@
 - **U51 Jev 承接子范围（2026-09-24 已批；沿本任务原状态/门序/优先级）**：P1/G3：保留既有 240 条事件 strict human gold；事件修订、引用支持、公司业务直接性另立题型与独立人工样本。规则/现有 LLM/Jev+fallback 同任务比较关键错漏、覆盖、弃权、延迟和完整成本；模型预测不得写 human，也不沿用旧阈值给新模型。 方案与反例见 [Jev 附录 A](../ai/jev-integration.md#附录-a-2026-09-24-已批准的全系统应用可视化与维护方案v04)。
 - **范围**：固定事件队列、独立人工标签、规则/Jev/现有 LLM/fallback 对照，以及 TypeSafe 与更贵模型 token/调用量、延迟和质量的同条件度量；不把 agreement 写成 accuracy。
 - **验收**：v1 240 条 human.category/certainty/actionable 独立完成且通过 strict human validation；verifier 另有独立 claim/evidence 人工集；生产阈值、额度节省或选股增益只允许由可复算 A/B / walk-forward 得出。
-- **证据**：PR #33 建立 verifier/gold-set 工具，PR #34 完成固定队列 Jev 预标注与审核优先级并均已合入 `master`。240 条固定队列当前 human 仍 0/240；规则/Jev agreement 为 category 55.42%、certainty 77.92%、actionable 57.50%，仅用于安排人工审核。2026-09-21 审计时项目累计 172 次调用（169 success / 3 failed），`alert_triage=168`、`event_llm_aux=4`；bounded live smoke 后为 173 次。晚间又用真实 `/api/assistant/chat` 请求“查询 600519 最新行情/新鲜度”验证 assistant 现役链，usage 新增 `assistant_tool_router=1`，`jev-1.13.0`、status=ok、约 711ms；总调用变为 174（171 success / 3 failed）。因此 assistant shadow 已有真实消费者 receipt，不再只是配置推断；**human gold 仍 0/240**，所以路由真实运行仍不等于 accuracy/cascade/额度节省已实证。
-- **下一步**：assistant tool-router 的真实 shadow receipt 已完成；不再重复为证明“跑过”烧调用。剩余核心仍是由独立人工完成 240 条 human gold 与 verifier 人工样本，再比较规则、Jev、DeepSeek 与 fallback；人工字段不得由 Jev/ChatGPT 自填。IMP-048 已收口确定性来源与版本实现，但本机新版库尚无真实同源更正观察对；原 36 条来源关联作者预标不是修订关系的独立 gold。本任务沿既有 U51 关系题型采集、冻结并独立标注真实样本，形成关键更正召回/误失效对照后才决定 Jev 候选是否值得试验或晋级；不把 IMP-048 工程完成写成语义效果通过。随后才做 threshold/Precision/Recall/成本联合校准和长期 token A/B。RSH-031 可按市场状态/事件类型/板高分层设计历史涨停域人工 anchor，Jev 只写独立 prediction。高影响多轮任务可按需增加 bounded Jev semantic review 作为旁路反证，但确定性数值/数据库/交易门禁永远不交给 Jev。
+- **证据**：PR #33 建立 verifier/gold-set 工具，PR #34 完成固定队列 Jev 预标注与审核优先级并均已合入 `master`。240 条固定队列当前 human 仍 0/240；规则/Jev agreement 为 category 55.42%、certainty 77.92%、actionable 57.50%，仅用于安排人工审核。2026-09-21 审计时项目累计 172 次调用（169 success / 3 failed），`alert_triage=168`、`event_llm_aux=4`；bounded live smoke 后为 173 次。晚间又用真实 `/api/assistant/chat` 请求“查询 600519 最新行情/新鲜度”验证 assistant 现役链，usage 新增 `assistant_tool_router=1`，`jev-1.13.0`、status=ok、约 711ms；总调用变为 174（171 success / 3 failed）。因此 assistant shadow 已有真实消费者 receipt，不再只是配置推断；**human gold 仍 0/240**，所以路由真实运行仍不等于 accuracy/cascade/额度节省已实证。2026-09-30 新增不泄露规则/模型答案的独立盲标导出、指纹和原文完整性核对导入，并修复 partial scorer 把未标行计入分母的问题；本机冻结 240 行盲标文件 SHA-256 `bbbf3c5389737b8e9904a4e9ddd6c6db65b53c1bb3ca4f95698aeaa1070ee785`，原队列 SHA-256 未变。当前库有 134 条 event observation，其中 revision 3、已确认 withdrawal link 0；不足以评价真实更正关系召回。以上只是材料/工程证据，人工独立性仍待外部完成。
+- **下一步**：恢复条件：本轮可独立完成的盲标工具和固定材料已交付，静态改为 `待条件`，后续普通“继续”不再重复运行同一 Jev 预标或扫描旧样本。需要一名未见规则/Jev 结果的独立人工按 §29.6 完成 240 行并留下过程说明；有合格真实 claim/evidence 与同源更正/撤回观察对时再冻结 verifier/关系题独立样本。任一条件新增时按相应题型恢复局部评价；三者不互锁无关 G2 修复或 RSH-031 价格研究。人工字段不得由 Jev/ChatGPT 自填，原 36 条作者预标不算 gold。严格校验后才比较规则、Jev、现有 LLM 与 fallback 的关键错漏、覆盖、弃权、延迟和成本；生产阈值、额度节省或选股增益另须同条件 A/B / walk-forward。未取得上述输入时维持 shadow/弃权和原规则，不重做旧调用。RSH-031 若提出有独立价值的语义候选，再按市场状态/事件类型/板高分层建历史 anchor；Jev 只能写 prediction。
 - **恢复**：预标注永不回写 human；任何实验失败只停用对应 Jev 增量，不覆盖原始队列、规则结果或否证证据。
 - **U53–U55独立评价（P18）**：原240条事件human gold与关系题的责任不变；组件/全域设计/导航边界另建对应题型，允许多个合理答案和有效弃权。人工先独立判断再看模型，对照相同资料无JEV/加JEV的关键漏项、违规、纠错耗时、集成/维护成本；保留N03自选/持仓一级拆分证据不足。事件gold不替代组件/导航真值，也不成为普通G2 UI修复前置；候选内质量与端到端发现质量分别评。
 
