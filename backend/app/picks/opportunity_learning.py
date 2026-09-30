@@ -490,6 +490,7 @@ def build_notification_records(
             # Legacy cards carry explicit unknown rather than a reconstructed version.
             "event_refs": item.get("related_event_refs") or [],
             "event_rationale": {
+                "as_of": pick_generated_at,
                 "basis": str((item.get("bases") or {}).get("news") or ""),
                 "titles": item.get("related_events") or [],
             },

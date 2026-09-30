@@ -28,7 +28,7 @@ def _db(tmp_path):
         """)
         db.execute("INSERT INTO opportunity_decision_snapshot VALUES(1,'snap','2026-09-29 10:00:00',?)", (
             json.dumps({"event_refs": [{"event_id": 7, "version_id": 1, "observation_id": 11}],
-                        "event_rationale": {"basis": "签约带来订单需求"}}),))
+                        "event_rationale": {"as_of": "2026-09-29T10:00:00+08:00", "basis": "签约带来订单需求"}}),))
     return path
 
 
@@ -44,6 +44,15 @@ def test_freezes_real_reason_and_never_writes_source_or_gold(tmp_path):
     assert packet["adopted"] is False and before == path.read_bytes()
     early = audit.freeze(path, as_of="2026-09-29T02:30:00+00:00")
     assert early["ready_pairs"] == 0  # new version is not visible yet
+
+
+def test_notification_time_is_not_the_original_reason_time(tmp_path):
+    path = _db(tmp_path)
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE opportunity_decision_snapshot SET as_of='2026-09-29 11:30:00'")
+    out = audit.freeze(path, as_of="2026-09-29T12:00:00+08:00")
+    assert out["ready_pairs"] == 1
+    assert out["packets"][0]["rationale_as_of"] == "2026-09-29T10:00:00+08:00"
 
 
 @pytest.mark.parametrize("damage", ["missing_reason", "wrong_version", "wrong_observation", "future_source"])

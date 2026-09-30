@@ -54,9 +54,14 @@ def freeze(db_path: Path, *, as_of: str, limit: int = 20) -> dict:
             identity = {"snapshot_id": row["snapshot_id"], "event_ref": ref}
             event_id, version_id = ref.get("event_id"), ref.get("version_id")
             basis = (evidence.get("event_rationale") or {}).get("basis")
+            reason_as_of = (evidence.get("event_rationale") or {}).get("as_of")
             if (type(event_id) is not int or type(version_id) is not int
-                    or event_id <= 0 or version_id <= 0 or not isinstance(basis, str) or not basis.strip()):
+                    or event_id <= 0 or version_id <= 0 or not isinstance(basis, str) or not basis.strip()
+                    or not isinstance(reason_as_of, str)):
                 rejected.append({**identity, "reason": "missing_frozen_identity_or_rationale"})
+                continue
+            if _time(reason_as_of) > _time(row["as_of"]):
+                rejected.append({**identity, "reason": "rationale_after_snapshot"})
                 continue
             versions = db.execute(
                 "SELECT i.*,o.title,o.summary,o.content_hash,o.available_at,o.source "
@@ -65,7 +70,7 @@ def freeze(db_path: Path, *, as_of: str, limit: int = 20) -> dict:
                 "ORDER BY i.effective_at,i.id",
                 (event_id, cutoff.isoformat(sep=" ")),
             ).fetchall()
-            visible = [v for v in versions if _time(v["effective_at"]) <= _time(row["as_of"])]
+            visible = [v for v in versions if _time(v["effective_at"]) <= _time(reason_as_of)]
             old = visible[-1] if visible else None
             new = versions[-1] if versions else None
             if (old is None or new is None or old["state"] != "active"
@@ -79,6 +84,7 @@ def freeze(db_path: Path, *, as_of: str, limit: int = 20) -> dict:
                 return {k: v[k] for k in ("id", "observation_id", "effective_at", "state",
                                           "available_at", "source", "title", "summary", "content_hash")}
             packets.append({**identity, "decision_as_of": row["as_of"],
+                            "rationale_as_of": reason_as_of,
                             "rationale": basis, "before": source(old), "after": source(new),
                             "human": {"reason_changed": None, "support": None, "notes": ""},
                             "recommendation": None, "adopted": False,

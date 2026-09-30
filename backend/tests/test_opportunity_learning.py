@@ -2305,7 +2305,7 @@ def test_notification_contract_separates_reference_action_and_dispatch_version()
     _, eligible = build_notification_records(dispatch_by_symbol={}, **kw)
     _, notified = build_notification_records(dispatch_by_symbol={"600001": "notified"}, **kw)
     assert eligible[0]["evidence"]["event_rationale"] == {
-        "basis": "公开签约带来需求", "titles": ["合同生效"]}
+        "as_of": "2026-09-21T09:26:00+08:00", "basis": "公开签约带来需求", "titles": ["合同生效"]}
     item["bases"]["news"] = "来源已修订"
     assert eligible[0]["evidence"]["event_rationale"]["basis"] == "公开签约带来需求"
     c1 = eligible[0]["evidence"]["execution_contract"]
