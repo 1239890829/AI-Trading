@@ -91,17 +91,19 @@ async def boards(
 ) -> dict:
     """板块排行：涨跌幅/成交额/领涨股（新浪闪电排行，一次请求全量）。结果缓存 60s。"""
     cache = cache_on(request.app.state, "market.boards", 60, maxsize=4)
-    hit, payload = cache.get(type)
-    if hit:
-        return payload
-    try:
-        rows = await hub.provider.get_board_rankings(type)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"板块数据源失败：{exc}")
-    rows.sort(key=lambda r: (r.get("change_pct") or 0), reverse=True)
-    payload = {"data": {"type": type, "boards": rows}, "meta": meta_payload(hub)}
-    cache.set(type, payload)
-    return payload
+
+    async def load() -> dict:
+        try:
+            rows = await hub.provider.get_board_rankings(type)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"板块数据源失败：{exc}")
+        rows = sorted(rows, key=lambda r: (r.get("change_pct") or 0), reverse=True)
+        return {"data": {"type": type, "boards": rows}, "meta": meta_payload(hub)}
+
+    hit, shared = await cache.get_or_set(type, load)
+    # JSON serialization does not mutate data. Copy only the metadata we mark:
+    # copying all 300+ rows on every warm read doubled measured hot-path latency.
+    return {**shared, "meta": {**shared["meta"], "cached": hit}}
 
 
 def _speed_sampler(request: Request) -> SpeedSampler:

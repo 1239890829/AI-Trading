@@ -55,3 +55,43 @@ def test_duck_timing_records_on_exception_too():
 
 def test_read_sync_history_missing_file(tmp_path):
     assert read_sync_history(tmp_path / "market.duckdb") == []
+
+
+def test_failed_and_unknown_requests_remain_in_latency_denominator():
+    route = "/test/failure-denominator"
+    for ms, status in [(1, 200), (2, 403), (900, 502), (1000, None)]:
+        record_api(route, ms, now=20000, status_code=status)
+    row = next(r for r in api_metrics(now=20000) if r["route"] == route)
+    assert row["count"] == 4
+    assert row["max_ms"] == 1000
+    assert row["error_count"] == 2
+    assert row["error_rate"] == .6667
+    assert row["status_unknown_count"] == 1
+    assert row["status_counts"] == {"200": 1, "403": 1, "502": 1}
+
+
+def test_middleware_records_errors_and_cancellation_as_distinct_outcomes():
+    import asyncio
+    from starlette.requests import Request
+    from starlette.responses import Response
+    from app.main import _perf_middleware
+
+    async def run():
+        for name, outcome in [("handled", 503), ("raised", ValueError), ("canceled", asyncio.CancelledError)]:
+            request = Request({"type": "http", "path": f"/perf-test-{name}"})
+
+            async def next_response(request):
+                if isinstance(outcome, int):
+                    return Response(status_code=outcome)
+                raise outcome()
+
+            try:
+                await _perf_middleware(request, next_response)
+            except (ValueError, asyncio.CancelledError):
+                pass
+        rows = {r["route"]: r for r in api_metrics()}
+        assert rows["/perf-test-handled"]["status_counts"] == {"503": 1}
+        assert rows["/perf-test-raised"]["status_counts"] == {"500": 1}
+        assert rows["/perf-test-canceled"]["status_unknown_count"] == 1
+        assert rows["/perf-test-canceled"]["error_rate"] is None
+    asyncio.run(run())

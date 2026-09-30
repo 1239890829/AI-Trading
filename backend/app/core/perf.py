@@ -28,7 +28,7 @@ _API_CAP = 20000
 _DUCK_CAP = 500
 DUCK_SLOW_MS = 300.0
 
-_api: deque[tuple[float, str, float]] = deque(maxlen=_API_CAP)
+_api: deque[tuple[float, str, float, int | None]] = deque(maxlen=_API_CAP)
 _duck: deque[tuple[float, str, float]] = deque(maxlen=_DUCK_CAP)
 _lock = Lock()
 
@@ -40,9 +40,9 @@ def collapse_path(path: str) -> str:
     return _NUM_SEG.sub("/{id}", path or "/unknown")
 
 
-def record_api(route: str, ms: float, *, now: float | None = None) -> None:
+def record_api(route: str, ms: float, *, now: float | None = None, status_code: int | None = None) -> None:
     with _lock:
-        _api.append((now if now is not None else time.monotonic(), route, float(ms)))
+        _api.append((now if now is not None else time.monotonic(), route, float(ms), status_code))
 
 
 def record_duck(label: str, ms: float, *, slow_ms: float = DUCK_SLOW_MS) -> bool:
@@ -75,15 +75,18 @@ def api_metrics(window_s: float = 3600.0, *, now: float | None = None) -> list[d
     """按路由聚合窗口内延迟分位，p95 降序。"""
     t_now = now if now is not None else time.monotonic()
     cutoff = t_now - window_s
-    buckets: dict[str, list[float]] = {}
+    buckets: dict[str, list[tuple[float, int | None]]] = {}
     with _lock:
         rows = list(_api)
-    for ts, route, ms in rows:
+    for ts, route, ms, status in rows:
         if ts < cutoff:
             continue
-        buckets.setdefault(route, []).append(ms)
+        buckets.setdefault(route, []).append((ms, status))
     out = []
-    for route, vals in buckets.items():
+    for route, observations in buckets.items():
+        vals = [ms for ms, _ in observations]
+        statuses = [status for _, status in observations if status is not None]
+        errors = sum(status >= 400 for status in statuses)
         vals.sort()
         out.append({
             "route": route,
@@ -92,6 +95,10 @@ def api_metrics(window_s: float = 3600.0, *, now: float | None = None) -> list[d
             "p95_ms": _quantile(vals, 0.95),
             "p99_ms": _quantile(vals, 0.99),
             "max_ms": round(vals[-1], 1),
+            "error_count": errors,
+            "error_rate": round(errors / len(statuses), 4) if statuses else None,
+            "status_unknown_count": len(vals) - len(statuses),
+            "status_counts": {str(status): statuses.count(status) for status in sorted(set(statuses))},
         })
     out.sort(key=lambda r: (r["p95_ms"] or 0.0), reverse=True)
     return out
