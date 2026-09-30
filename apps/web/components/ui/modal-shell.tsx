@@ -54,6 +54,8 @@ const subscribeNoop = () => () => {};
 
 export interface ModalShellProps {
   onClose: () => void;
+  /** False only while an inert reading surface finishes its visual exit. */
+  open?: boolean;
   /** 无障碍名称。**必填**——它是屏幕阅读器与自动化测试识别"这是哪个弹窗"的依据。 */
   label: string;
   /** 面板的 `data-testid`（挂在 `role="dialog"` 的元素上）。 */
@@ -78,6 +80,7 @@ export interface ModalShellProps {
 
 export function ModalShell({
   onClose,
+  open = true,
   label,
   testid,
   size = "md",
@@ -94,22 +97,25 @@ export function ModalShell({
   const mounted = useSyncExternalStore(subscribeNoop, () => true, () => false);
 
   const panelRef = useRef<HTMLDivElement>(null);
-  useOverlayFocus(panelRef, onClose, mounted, zIndex);
+  useOverlayFocus(panelRef, onClose, mounted && open, zIndex);
 
   // 只有点在遮罩**本身**才关闭；点面板内部（含拖拽选中）不关。
   // 用 `onMouseDown` 而非 `onClick`：正文里拖选文本后在弹窗外松开不会误关。
   const handleBackdrop = useCallback(
     (e: React.MouseEvent) => {
-      if (e.target === e.currentTarget) onClose();
+      if (open && e.target === e.currentTarget) onClose();
     },
-    [onClose],
+    [onClose, open],
   );
 
   if (!mounted) return null;
 
   return createPortal(
     <div
-      className={`anim-backdrop-in fixed inset-0 flex overscroll-contain bg-black/50 p-2 backdrop-blur-sm sm:p-4 ${presentation === "drawer" ? "items-stretch justify-end" : "items-center justify-center"}`}
+      data-motion-state={open ? "open" : "closed"}
+      aria-hidden={!open || undefined}
+      inert={!open}
+      className={`motion-overlay fixed inset-0 flex overscroll-contain bg-black/50 p-2 backdrop-blur-sm sm:p-4 ${presentation === "drawer" ? "items-stretch justify-end" : "items-center justify-center"}`}
       style={{ zIndex }}
       onMouseDown={handleBackdrop}
       role="presentation"
@@ -121,7 +127,7 @@ export function ModalShell({
         aria-modal="true"
         aria-label={label}
         data-testid={testid}
-        className={`${presentation === "drawer" ? "anim-slide-in-right" : "anim-scale-in"} flex flex-col overflow-hidden border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900 ${
+        className={`${presentation === "drawer" ? "motion-drawer" : "motion-modal"} flex flex-col overflow-hidden border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900 ${
           radius === "2xl" ? "rounded-2xl" : "rounded-xl"
         } ${presentation === "drawer" ? "h-full w-full max-w-2xl" : SIZE_CLASS[size]}`}
       >

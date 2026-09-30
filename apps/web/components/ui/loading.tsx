@@ -4,13 +4,11 @@
  * 统一加载态基建（2026-09-04 用户要求：骨架屏 + fade 切换动画全局统一）：
  * - Skeleton 系：数据未就绪时的占位块，animate-pulse，配色对齐 zinc 体系，
  *   各变体与真实内容块同构（高度对齐防布局跳动）。
- * - FadeSwap：子模块/tab 切换过渡——旧内容 fade-out 120ms → 换内容 → fade-in 180ms。
- *   动画时长收紧（120/180ms）避免"等动画"的迟滞感；prefers-reduced-motion 下关闭。
+ * - FadeSwap：任务立即切换，只对新面板做短淡入；无旧操作残留或定时换页。
+ *   同对象刷新不重播；减弱动效使用即时呈现。
  */
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
-
-const FADE_OUT_MS = 120;
+import { type ReactNode } from "react";
 
 /** 基础骨架块：aria-hidden（纯装饰，读屏不需要知道占位存在）。 */
 export function Skeleton({ className = "" }: { className?: string }) {
@@ -92,52 +90,11 @@ export function StatsSkeleton({ className = "" }: { className?: string }) {
   );
 }
 
-/**
- * fade 切换容器：swapKey 变化时旧内容淡出 → 换新内容淡入。
- * out 相冻结旧节点（避免"淡出的已是新内容"），in 相内容实时跟随渲染。
- * 子模块高度可能不同——外层容器自行决定是否锁高（tab 页通常锁）。
- */
-export function FadeSwap({
-  swapKey,
-  children,
-  className = "",
-}: {
-  swapKey: string;
-  children: ReactNode;
-  className?: string;
+/** Switch the task immediately; animate only its surface, never freeze old controls. */
+export function FadeSwap({ swapKey, children, className = "" }: {
+  swapKey: string; children: ReactNode; className?: string;
 }) {
-  const [display, setDisplay] = useState<{ key: string; node: ReactNode }>({ key: swapKey, node: children });
-  const [phase, setPhase] = useState<"in" | "out">("in");
-  // 每次 commit 后同步最新 children（ref 写入须在 effect 中，渲染期写 ref 被 react-hooks/refs 禁止）：
-  // out 相结束时换入的就是最新已提交内容。
-  const childrenRef = useRef<ReactNode>(children);
-  useEffect(() => {
-    childrenRef.current = children;
-  });
-
-  // 状态与 props 的同步用「渲染期调整」（React 官方推荐模式，react-hooks/set-state-in-effect
-  // 禁止在 effect 内直接 setState）：key 变化 → 进入 out 相；快速切回 → 回到 in 相。
-  if (phase === "out" && swapKey === display.key) {
-    setPhase("in");
-  } else if (phase === "in" && swapKey !== display.key) {
-    setPhase("out");
-  }
-
-  // out 相计时：120ms 后冻结旧节点并换入新内容（定时器回调里 setState 不受限）
-  useEffect(() => {
-    if (phase !== "out" || swapKey === display.key) return;
-    const t = setTimeout(() => {
-      setDisplay({ key: swapKey, node: childrenRef.current });
-      setPhase("in");
-    }, FADE_OUT_MS);
-    return () => clearTimeout(t);
-  }, [phase, swapKey, display.key]);
-
-  return (
-    <div className={`${phase === "out" ? "anim-fade-out" : "anim-fade-in"} ${className}`}>
-      {phase === "out" ? display.node : children}
-    </div>
-  );
+  return <div key={swapKey} className={`motion-task ${className}`}>{children}</div>;
 }
 
 /** 内容首次就绪时的淡入（骨架 → 真实内容替换用；重挂载即触发）。 */

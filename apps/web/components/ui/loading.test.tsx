@@ -1,65 +1,29 @@
-import { act } from "react";
-import { render } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FadeSwap } from "./loading";
 
-describe("FadeSwap（tab 切换 fade 过渡）", () => {
-  beforeEach(() => vi.useFakeTimers());
-  afterEach(() => vi.useRealTimers());
+afterEach(() => { cleanup(); vi.useRealTimers(); });
 
-  it("初始渲染：in 相直接显示内容，无冻结节点", () => {
-    const { container } = render(
-      <FadeSwap swapKey="a">
-        <div>内容A</div>
-      </FadeSwap>,
-    );
-    expect(container.textContent).toContain("内容A");
-    expect(container.querySelector(".anim-fade-in")).not.toBeNull();
+describe("FadeSwap task identity", () => {
+  it("replaces old controls immediately rather than leaving the previous task actionable", () => {
+    vi.useFakeTimers();
+    const oldAction = vi.fn(), newAction = vi.fn();
+    const {rerender} = render(<FadeSwap swapKey="a"><button onClick={oldAction}>操作A</button></FadeSwap>);
+    rerender(<FadeSwap swapKey="b"><button onClick={newAction}>操作B</button></FadeSwap>);
+    expect(screen.queryByText("操作A")).toBeNull();
+    fireEvent.click(screen.getByText("操作B"));
+    expect(newAction).toHaveBeenCalledTimes(1);
+    expect(oldAction).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
   });
-
-  it("swapKey 变化：先 out 相冻结旧内容，120ms 后换入新内容并回到 in 相", () => {
-    const { container, rerender } = render(
-      <FadeSwap swapKey="a">
-        <div>内容A</div>
-      </FadeSwap>,
-    );
-    rerender(
-      <FadeSwap swapKey="b">
-        <div>内容B</div>
-      </FadeSwap>,
-    );
-    // out 相：旧内容仍在（淡出中），新内容未换入
-    expect(container.textContent).toContain("内容A");
-    expect(container.textContent).not.toContain("内容B");
-    expect(container.querySelector(".anim-fade-out")).not.toBeNull();
-
-    act(() => vi.advanceTimersByTime(120));
-    // in 相：新内容出现，旧内容卸载
-    expect(container.textContent).toContain("内容B");
-    expect(container.textContent).not.toContain("内容A");
-    expect(container.querySelector(".anim-fade-in")).not.toBeNull();
-  });
-
-  it("out 相期间快速切回原 key：恢复 in 相且内容不变", () => {
-    const { container, rerender } = render(
-      <FadeSwap swapKey="a">
-        <div>内容A</div>
-      </FadeSwap>,
-    );
-    rerender(
-      <FadeSwap swapKey="b">
-        <div>内容B</div>
-      </FadeSwap>,
-    );
-    rerender(
-      <FadeSwap swapKey="a">
-        <div>内容A</div>
-      </FadeSwap>,
-    );
-    expect(container.querySelector(".anim-fade-in")).not.toBeNull();
-    // 已取消的定时器不得再触发换内容
-    act(() => vi.advanceTimersByTime(300));
-    expect(container.textContent).toContain("内容A");
-    expect(container.textContent).not.toContain("内容B");
+  it("rapid switches keep the latest task and same-key updates retain the input node/focus", () => {
+    const {rerender} = render(<FadeSwap swapKey="a"><input aria-label="输入A" /></FadeSwap>);
+    rerender(<FadeSwap swapKey="b"><input aria-label="输入B" /></FadeSwap>);
+    rerender(<FadeSwap swapKey="a"><input aria-label="输入A" /></FadeSwap>);
+    const input = screen.getByLabelText("输入A"); input.focus();
+    rerender(<FadeSwap swapKey="a"><input aria-label="输入A" /><p>本轮更新</p></FadeSwap>);
+    expect(screen.getByLabelText("输入A")).toBe(input);
+    expect(document.activeElement).toBe(input);
+    expect(screen.queryByLabelText("输入B")).toBeNull();
   });
 });
