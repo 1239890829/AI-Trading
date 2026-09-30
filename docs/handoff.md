@@ -1,27 +1,27 @@
-# 当前交接：BUG-009 晨报今日计划真实消费链
+# 当前交接：RSH-030 独立盲标入口与外部样本条件
 
-> 唯一状态在 [W05/BUG-009](stages/w05-agents.md#bug-009)。上一轮 IMP-032 已由 PR #185/#186 发布，RSH-031 第一版由 PR #182 合并；两者的前向效果仍归原 owner，不因本轮改写。
+> 唯一任务状态在 [W04/RSH-030](stages/w04-research.md#rsh-030)。上一轮 BUG-009 由 PR #187 发布，合并与 post-merge CI 以 GitHub 为准；本轮不重复其实现。
 
-## 1. 权威入口与授权
+权威入口：现役 Jev 蓝图 [docs/ai/jev-integration.md](ai/jev-integration.md)，开放世界长期发现 [docs/ai/continuous-evolution.md](ai/continuous-evolution.md)，总方案 v9.13 在 [docs/implementation-plan.md](implementation-plan.md)。当前累计要求 U01–U55。
 
-读取链：AGENTS → INDEX → 本 handoff → 总方案/相关蓝图 → 总账 §5.9/§6.0 → stage。用户已确认全域方案 v1.3、实施方案 v9.13/U52–U55，累计要求 U01–U55。Jev 现役蓝图在 docs/ai/jev-integration.md，长期治理在 docs/ai/continuous-evolution.md。
+## 1. 现场、模式与门序
 
-**U50 降级授权回执仍有效**：用户 2026-09-24 允许本机 Codex 在 `DEGRADED_FULL_CONTROL` 承担规划、U49 作者反证、实施、自审、PR/CI、发布、合并及清理，直到明确撤销。准确 HEAD 的 `DegradedRelease` 必须明示作者自审，不能冒充独立 Review；完整本地门禁、三项 required CI、release_check、合并后 CI 和分支清理不降低。授权不覆盖付费源/模型、真实通知、券商、部署或生产库。
+本轮从干净的 `master@a37624e2c68e4ab0c915112c9bde63a52cef8fbb` 读取 AGENTS、INDEX、总方案 v9.13、Jev 蓝图、总账和 stage，运行 `scripts/ledger-runtime-selection.py --json`：G0–G4 无 actionable blocker，普通 fallback 选择 G3/RSH-030；同门候选其次 RSH-027。RSH-030 无硬依赖/效果前置，RSH-031 的语义效果前置仍由本任务承接，不因此跨门实施 RSH-031。
 
-本轮在 `master@f8e103d614a78cb1a20217eb04e7f7891247c485` 运行 selector，G0–G4 无 actionable blocker，按最低普通非阻断门领取 G2/BUG-009 唯一主任务；无硬依赖或效果前置。同门无其它竞争项。实施分支 `codex/bug009-morning-plan`，PR #187，代码提交 `1972d2bb34254255f650f5c47e461b5ce0bc5495`。
+**U50 降级授权回执**：用户 2026-09-24 授予本机 Codex 的 `DEGRADED_FULL_CONTROL` 仍有效，直到明确撤销。作者负责 U49 反证和 exact-HEAD `DegradedRelease`，不得声称独立 Review；完整本地门禁、三项 required CI、`release_check.py`、post-merge CI 与分支清理不降低。授权不覆盖付费数据/模型、真实通知、真实券商、部署或生产库。
 
-## 2. 本轮实现与 U49 作者反证
+## 2. 本轮证据与边界
 
-原 `_daily_plan` 两路导入不存在的模块且被 `suppress(Exception)` 吞没，晨报仍输出看似正常的空计划；页面从未消费 `daily_plan`。现在从现行复盘/改进项/议程存储按上一交易日读取，三路分别标 `available/empty/error`。行动项只取仍关联当前报告的未完成行，排除未来，按最终结果最多 3 条；晨报保持无 LLM 规则拼装与来源日期，页面展示同一只读投影。旧版简报缺来源状态时提示不可用；晨报 HTTP 404 与读取失败分开提示。
+RSH-030 的原始 240 条队列已有规则答案和 Jev 预测，但 `human` 为 0/240。直接交原队列会泄露答案；用模型/作者代填则不满足独立人工金标准。本轮在 `codex/rsh030-blind-gold` 给现有 `jev_goldset.py` 增加盲标导出和原文/ID/指纹核对导入，打乱原先按规则类别排列的顺序，修复 `score --allow-partial` 将未标行计入指标分母的缺陷。工具只在离线研究侧工作，不改事件/猎场生产逻辑。固定队列 SHA-256 `fc8776d15f563b10b694b8108be84f24ad331c85b536045c9689018f194c3ef7`；本机忽略目录 `artifacts/runs/rsh030-blind-20260930/events_blind.jsonl` 有 240 行，SHA-256 `bbbf3c5389737b8e9904a4e9ddd6c6db65b53c1bb3ca4f95698aeaa1070ee785`。使用方式在 Jev 蓝图 §29.6。
 
-**U49 主动审计回执 / 作者反证**：核了死导入、孤儿改进项、跨日污染、损坏 JSON、缺报告、部分来源失败、旧版简报、API 404/非 404 与页面消费者；没有新增计划写入、业务动作或模型调用。仍需按准确 HEAD 与 CI 对最终差异自审，不能称独立审核。传播核对：W05 与本 handoff 已更新；细功能审计 X30/X32 已指向 BUG-009，无需改对象归属；总方案、INDEX、AGENTS/Skills 与 Jev 蓝图没有新增长期规则或入口，不适用。
+**U49 主动审计回执 / 作者反证**：正常模式需要独立 Preflight/Review；本轮降级模式由作者核了规则/模型答案泄露、原队列分组暴露、篡改原文、漏行/重复 ID、半行标签和 partial score 假准确率。还以只读方式查本机 `data/ashare.db`：134 条 event observation、3 条 revision、0 条确认 withdrawal link；不能用这些稀少观察声称真实更正召回。原 36 条作者预标不作为独立 gold。尚未获得外部人工标注与 verifier/更正真实正负样本，所以不报 accuracy、省额或语义选股增益，也不调生产阈值。
 
-本机现有 `data/ashare.db` 以只读连接核 2026-09-23：复盘、未完成项、议程均可读，行动项最终返回 3 条。该观察不等于生产版本已加载或前向效果验收。最终本地门禁：干净检出后端 **4469 passed / 81 skipped / 1 既有 Starlette 警告**，全量 pyflakes；前端 tsc/eslint、**78 文件 / 736 tests**（默认与 UTC 各一轮）及 Next 生产构建；doc-health、workspace hygiene、公开仓扫描均通过。首次本机全量 pytest 的 5 项无关失败来自忽略的 `backend/data/trade_calendar.json` 停在 2026-09-24，使合成 marketdb 被当前日期新鲜度闸门判陈旧；另 1 项是本任务修掉死导入后旧测试豁免应撤销，已修。保持闸门不变，在不携带运行数据的干净检出全量复验通过。
+**传播核对**：RSH-030 状态与恢复条件写 W04；盲标协议写 Jev 蓝图 §29.6；当前现场写本页。研究/生产语义和任务选择算法未变，实施方案、INDEX、AGENTS、Skills、产品/猎场与细功能审计不适用。代码完整本地门禁、准确 PR/HEAD、CI 与发布结果以本轮最终回执为准，不能用这份预提交现场代替发布证据。
 
-## 3. 发布与后续
+## 3. 恢复点
 
-PR #187 的合并状态、准确 HEAD 的 `DegradedRelease`、三项 required CI、`release_check.py` 与合并后 master CI 以 GitHub 和脚本回执为准；本分支文档在合并前只是候选，不能据此宣称已发布。未获部署授权，不加载生产服务。新前向反例回 W05/BUG-009 原 owner。阶段页在 BUG-009 完成后重算返回 G3/RSH-030；它是下一轮候选，本轮不领取第二个业务任务。
+RSH-030 静态改为 `待条件`：独立人工完成冻结 240 行且留下未看预测的过程说明后，才跑 strict validation 与同条件对照；真实 claim/evidence 和更正/撤回观察对出现后，另按题型冻结独立样本。缺条件时不再重复 Jev 预标或旧库扫描。RSH-031 价格与路径研究可在自身运行条件满足时独立继续，但新的语义特征不能以本轮工程结果冒充通过 RSH-030。合并后重新运行 selector 取下一唯一主任务，不在本轮自动开工。
 
 - **当前主门**：G3
-- **主切片首选**：RSH-030
-- **当前门候选顺位**：RSH-030 → RSH-027
+- **主切片首选**：RSH-027
+- **当前门候选顺位**：RSH-027

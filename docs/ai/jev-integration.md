@@ -1141,6 +1141,32 @@ v1 导出已机械验证：240 行、6 类各 40、`human_complete=0`；使用�
 
 `score` 默认要求所有 row 的 `human.category / human.certainty / human.actionable` 都合法且完成；未完成时直接拒绝，防止部分样本被误写成“完整准确率”。只有人工明确需要查看标注进度时，才可显式传 `--allow-partial`；输出会带 `human_complete / human_total / partial=true`，不能作为生产阈值依据。prediction event_id 也必须唯一，重复 ID 直接 fail-closed。
 
+### 29.6 独立盲标交接（2026-09-30）
+
+原始队列含 `reference_rule`，不能直接交标注者。现用同一脚本导出按独立固定种子打乱顺序的盲标文件，仅含事件 ID、原文摘要、来源、时点、来源个股与空 `human`；不含规则标签、Jev 预测、优先级或后续收益。完整 240 条的盲标包位于本机忽略目录 `artifacts/runs/rsh030-blind-20260930/`，`events_blind.jsonl` 的 SHA-256 为 `bbbf3c5389737b8e9904a4e9ddd6c6db65b53c1bb3ca4f95698aeaa1070ee785`；对应冻结队列指纹仍为 §29.2 所列值。标注者先只读此文件和以下定义，**独立作答之后**才允许查看规则/Jev 结果：
+
+- `category`：在 `policy / statement / data / rumor / corporate / other` 中选主要事件类型；多个事件混合或摘要不足时在 `notes` 写明歧义，不从规则标签倒推。
+- `certainty`：`done` 指主要事实已经发生或正式发布，`proposed` 指拟议/预计/尚未完成，`rumor` 指核心事实未经证实；一条消息同时含已发布的计划时，区分“计划已公告”和“计划已完成”。
+- `actionable`：布尔值只表示当前文本能否支持**直接、可解释、值得进一步研究**的 A 股事件传导；它不是涨跌预测或买卖建议。纯行情、弱关联、无法从当前材料说明传导的消息标 `false`；无法判断的原因写入 `notes`，不得查看未来价格补判。
+
+```bash
+cd backend
+PYTHONPATH= .venv/bin/python scripts/jev_goldset.py export-blind \
+  ../data/labels/jev_goldset_events_v1.jsonl \
+  --out ../artifacts/runs/rsh030-blind-20260930/events_blind.jsonl \
+  --meta-out ../artifacts/runs/rsh030-blind-20260930/events_blind.meta.json
+# 标注者在盲标文件副本中填写 human；保留其余字段和全部 240 条。
+PYTHONPATH= .venv/bin/python scripts/jev_goldset.py import-human \
+  ../data/labels/jev_goldset_events_v1.jsonl \
+  ../artifacts/runs/rsh030-blind-20260930/events_annotated.jsonl \
+  --blind-meta ../artifacts/runs/rsh030-blind-20260930/events_blind.meta.json \
+  --out ../artifacts/runs/rsh030-blind-20260930/events_labeled.jsonl
+PYTHONPATH= .venv/bin/python scripts/jev_goldset.py validate \
+  ../artifacts/runs/rsh030-blind-20260930/events_labeled.jsonl --require-human
+```
+
+导入会核冻结队列和盲标基稿指纹、240 条 ID 覆盖、原文未改及三项标签合法；不改写原始队列。`--allow-partial` 只供进度检查，`score --allow-partial` 现仅以已完整标注的行计分并显式标部分结果。机械校验无法证明标注者的独立性，需由交付者留存“未看预测/规则先标”的人工过程说明。此平衡队列按**规则类别**抽样，不代表生产自然分布；完成后也要分层/重加权评价，不能直接把总体比例外推到生产。
+
 
 ## 30. RSH-031：历史涨停/强连板/龙头研究中的 Jev 边界
 

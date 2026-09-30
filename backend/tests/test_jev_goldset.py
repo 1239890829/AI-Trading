@@ -131,6 +131,25 @@ def test_score_uses_human_truth_not_reference_rule():
     assert out["metrics"]["actionable"]["accuracy"] == 1.0
 
 
+def test_partial_score_uses_only_completed_human_rows():
+    rows = [
+        {"event_id": 1, "human": {"category": "policy", "certainty": "done",
+                                   "actionable": True}},
+        {"event_id": 2, "human": {"category": None, "certainty": None,
+                                   "actionable": None}},
+    ]
+    predictions = [
+        {"event_id": 1, "category": "policy", "certainty": "done", "actionable": True},
+        {"event_id": 2, "category": "other", "certainty": "rumor", "actionable": False},
+    ]
+    with pytest.raises(ValueError, match="incomplete/invalid"):
+        gs.score(rows, predictions)
+    result = gs.score(rows, predictions, allow_partial=True)
+    assert result["labeled_rows"] == 1
+    assert all(item["n"] == 1 for item in result["metrics"].values())
+    assert all(item["accuracy"] == 1.0 for item in result["metrics"].values())
+
+
 def test_cli_export_and_validate(tmp_path, capsys):
     db = tmp_path / "x.db"
     out = tmp_path / "gold.jsonl"
@@ -142,6 +161,59 @@ def test_cli_export_and_validate(tmp_path, capsys):
     assert gs.main(["validate", str(out)]) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["rows"] == 12 and result["human_complete"] == 0
+
+
+def test_blind_annotation_round_trip_hides_reference_and_preserves_queue(tmp_path, capsys):
+    db = tmp_path / "x.db"
+    _db(db)
+    queue = tmp_path / "queue.jsonl"
+    blind = tmp_path / "blind.jsonl"
+    meta = tmp_path / "blind.meta.json"
+    annotated = tmp_path / "annotated.jsonl"
+    labeled = tmp_path / "labeled.jsonl"
+    assert gs.main(["export-events", "--db", str(db), "--out", str(queue),
+                    "--count", "18"]) == 0
+    capsys.readouterr()
+    assert gs.main(["export-blind", str(queue), "--out", str(blind),
+                    "--meta-out", str(meta)]) == 0
+    capsys.readouterr()
+    rows = gs.read_jsonl(blind)
+    assert len(rows) == 18
+    assert all("reference_rule" not in row and "prediction" not in row for row in rows)
+    assert [row["event_id"] for row in rows] != [
+        row["event_id"] for row in gs.read_jsonl(queue)
+    ]
+    for row in rows:
+        row["human"] = {"category": "policy", "certainty": "done",
+                        "actionable": False, "notes": "read source"}
+    gs.write_jsonl(annotated, rows)
+    assert gs.main(["import-human", str(queue), str(annotated),
+                    "--blind-meta", str(meta), "--out", str(labeled)]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["human_complete"] == result["rows"] == 18
+    original = gs.read_jsonl(queue)
+    merged = gs.read_jsonl(labeled)
+    assert [row["event_id"] for row in merged] == [row["event_id"] for row in original]
+    assert all(row["reference_rule"] == old["reference_rule"]
+               for row, old in zip(merged, original))
+
+
+def test_blind_import_rejects_changed_text_missing_and_partial_labels(tmp_path):
+    db = tmp_path / "x.db"
+    _db(db)
+    queue = gs._load_events(db)[:2]
+    blind = gs.blind_rows(queue)
+    blind[0]["title"] = "changed after export"
+    with pytest.raises(ValueError, match="source content changed"):
+        gs.import_human(queue, blind)
+    blind = gs.blind_rows(queue)
+    with pytest.raises(ValueError, match="coverage differs"):
+        gs.import_human(queue, blind[:1], allow_partial=True)
+    blind[0]["human"]["category"] = "policy"
+    with pytest.raises(ValueError, match="incomplete/invalid"):
+        gs.import_human(queue, blind, allow_partial=True)
+    blind[0]["human"]["category"] = None
+    assert gs.import_human(queue, blind, allow_partial=True)[0]["human"]["category"] is None
 
 
 
