@@ -240,7 +240,7 @@ Jev Choice：notify / ignore / escalate
 - `TOOL_SPECS` 仍是唯一执行白名单；
 - Jev 只能缩短**提示词展示清单**，不能给系统增加工具；
 - 路由失败 / shape 非法 / 没有组过阈值 → fail-open 到完整工具清单；
-- shadow 路由与 DeepSeek 首轮**并行**，若用户回答已经完成而 shadow 尚未结束则取消，不为统计拖慢 `done`；
+- shadow 路由与 DeepSeek 首轮**并行**，先发 `done` 再真实 drain 已启动的同步线程；不把协程取消冒充 HTTP worker 结束。每进程仅一个路由 worker，忙时直接回原集合；连接收尾可能仍等待 adapter，详见 §23.5；
 - telemetry 记录候选工具数、选中数、实际 DeepSeek 使用工具是否被 Jev shortlist 覆盖，不保存用户问题正文。
 
 未来是否 cascade 的硬条件：shadow 的真实 `coverage_miss_rate` 足够低，且 prompt/token 节省有实测价值。
@@ -904,6 +904,23 @@ selected / needs_confirmation / no_decision / safe fallback
 5. 高风险动作最终仍由宿主/人类确认。
 
 单一候选会由 wrapper 在**网络请求前直接拒绝**，避免浪费 Jev。
+
+### 23.5 助手条件路由与执行回执（2026-09-30 / IMP-046）
+
+本次补齐已批 U51/P22 的工程边界，不更换模型、不修改 Noul 阈值、不授权自动 model/effort 切换或交易操作。全局 capability wrapper/固定 JevRouter 仍独立拥有其 manifest、actor permission、risk、confirmation、schema 和版本 pin；调用者先确认至少两个真实获准能力及残余歧义，不把包装器候选数量检查当作宿主可用性证明。当前固定内核 clean/pin 一致；此前真实权限过滤 smoke 属历史证据，本轮没有为重复证明再调用业务模型。
+
+助手数据链如下：
+
+1. `TOOL_SPECS` 是唯一执行白名单；`ToolContext` 的实际数据库、事件库、题材目录、模拟引擎和市场服务依赖先过滤。这里只确认依赖存在，Provider 上游健康、缓存时效与资料是否齐全仍由真实返回说明。
+2. 明确的大盘/涨停池/龙虎榜等请求先留结构化工具需求线索并回原获准集合；私人账户/持仓请求及私人页面跳过 Jev。多轮追问不外发历史，回原集合。公共页面只发送允许的 path 与六位 symbol，title、query 和自由文本 context 不发送。词项线索可能误报/漏报，不是独立 gold 或完整意图识别器。
+3. 只有至少两个可用工具组且仍有语义歧义时，沿原 Noul 问题与阈值给出建议。只在当前可用集合中选；响应畸形、错类型、非法概率、调用失败、无组过阈值或占用时回原集合。shadow 不缩减提示词；cascade 的原配置行为保留，执行仍可使用完整获准集合，推荐不是授权。
+4. 分发器在 cache/handler 前核注册身份、当前请求依赖与 handler 签名；既有各工具的参数/日期/标的校验继续有效。旁路回执区分 unregistered、unavailable、invalid_args、returned、cache_hit、failed；returned 仅代表 handler 返回，不证明数据有效或任务回答正确。原 SSE used 列表是调用回填列表，不能作为成功取数 gold。
+5. 先发送 SSE `done`，再进行取消屏蔽下的真实 worker drain 与回执；单个无队列 worker 的槽在同步函数退出时释放。异常不覆盖原答案；审计/telemetry 故障记录类型，不使已完成回答失败。HTTP 连接清理可能等待 adapter，不宣称整个请求耗时为零。
+6. “做 T 决策”助手工具改为只读既有记录，移除读时结算；结算仍归既有 minute-decisions 维护流程。未结算的 open 不当失败。
+
+沿现有 `AgentAudit` 保存 `action=assistant.route`，现有受鉴权 `GET /api/agent/audit` 消费。before 只含版本契约 `assistant-route-v1`、request hash、registry hash、mode、获准可用候选和未就绪工具。after 含模型/usage/latency、建议/概率、实际提示清单、是否采纳、回原集合原因、分发结果、实际执行与 shortlist 外调用、必要需求缺失/不可用、误否认线索、终态；不保存请求/历史、工具参数、工具正文或私人账户数据。`human_coverage=null` 保持独立评价未知；实际执行集合不是答案必要工具全集。
+
+**工程验收与效果条件分离**：定向/全量反例可验证过滤、纯读取、回执、取消和 SSE 顺序。只读检查现有本地库的 `assistant.route` 回执为 0，因为新写者尚未运行；这不证明线上收益或失效。配置读取当前为 Jev enabled / assistant shadow，但不是运行进程加载版本证明。本轮不重启、不写生产库、不从聚合 usage 倒填旧请求。后续由原维护 owner 在新版本真实会话中收集：独立人工必要工具/允许弃权标签、错漏/误否认案例、同条件完整清单基线的回答质量、升级率、实际 I/O tokens、端到端等待/清理延迟与费用；未满足质量非劣化和净收益，不因清单缩减率晋级 cascade。新反例、schema/registry/模型版本漂移、隐私或等待风险触发停用/复核；关路由回到原获准工具/生成路径。持续维护不要求无新证据时重复当前空回执扫描或重跑同一 smoke。
 
 ## 24. OpenRouter：当前明确不接入
 
