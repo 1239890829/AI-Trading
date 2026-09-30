@@ -110,3 +110,21 @@ def test_verify_claims_rejects_probability_range_or_sum(monkeypatch):
     out = sv.verify_claims(["合同已生效"], ["合同已生效"])
     assert out["ok"] is False
     assert out["reason"] == "invalid_probabilities"
+
+
+def test_probability_display_rounding_is_not_normalized_or_over_relaxed(monkeypatch):
+    probabilities = {"supported": .91, "contradicted": .04, "insufficient": .04}
+    monkeypatch.setattr(sv, "evaluate", lambda *_a, **_k: {
+        "ok": True, "answers": {"claim_0": {"choice": "supported", "confidence": .9,
+                                               "probabilities": probabilities}}})
+    out = sv.verify_claims(["合同已生效"], ["合同已生效"])
+    assert out["ok"] is True and out["items"][0]["probabilities"] == probabilities
+    probabilities["supported"] = .90  # sum=.98 exceeds explainable rounding
+    assert sv.verify_claims(["合同已生效"], ["合同已生效"])["ok"] is False
+
+
+def test_boolean_confidence_is_not_a_numeric_probability(monkeypatch):
+    monkeypatch.setattr(sv, "evaluate", lambda *_a, **_k: {
+        "ok": True, "answers": {"claim_0": {"choice": "supported", "confidence": True,
+                "probabilities": {"supported": 1, "contradicted": 0, "insufficient": 0}}}})
+    assert sv.verify_claims(["合同已生效"], ["合同已生效"])["reason"] == "invalid_answer_value"

@@ -2286,6 +2286,9 @@ def test_notification_contract_separates_reference_action_and_dispatch_version()
         "symbol": "600001", "name": "甲", "price": 10.0,
         "confidence": {"tier": "executable"}, "vetoes": [],
         "buy_range": {"low": 10.2, "high": 10.8},
+        "bases": {"news": "公开签约带来需求"},
+        "related_events": ["合同生效"],
+        "related_event_refs": [{"event_id": 7, "version_id": 1, "observation_id": 11}],
     }
     hit = {"item": item, "price": 10.5, "chg": 5.0}
     snap = {
@@ -2301,6 +2304,10 @@ def test_notification_contract_separates_reference_action_and_dispatch_version()
     )
     _, eligible = build_notification_records(dispatch_by_symbol={}, **kw)
     _, notified = build_notification_records(dispatch_by_symbol={"600001": "notified"}, **kw)
+    assert eligible[0]["evidence"]["event_rationale"] == {
+        "as_of": "2026-09-21T09:26:00+08:00", "basis": "公开签约带来需求", "titles": ["合同生效"]}
+    item["bases"]["news"] = "来源已修订"
+    assert eligible[0]["evidence"]["event_rationale"]["basis"] == "公开签约带来需求"
     c1 = eligible[0]["evidence"]["execution_contract"]
     c2 = notified[0]["evidence"]["execution_contract"]
     assert c1["reference_entry"]["price"] == 10.0
