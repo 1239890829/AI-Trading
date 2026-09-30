@@ -346,7 +346,12 @@ def test_jev_shadow_never_changes_deepseek_verdict(sf, monkeypatch):
 
     monkeypatch.setattr(tri, "_jev_verdict", fake_jev)
     monkeypatch.setattr(tri, "_llm_verdict", fake_llm)
-    out = asyncio.run(tri.triage_event(_event(sf), sf))
+    async def run():
+        out = await tri.triage_event(_event(sf), sf)
+        await tri.drain_shadow()
+        return out
+
+    out = asyncio.run(run())
     assert out["verdict"] == "notify" and out["model"] == "llm"
     cmp = jev_client.metrics_snapshot()["comparisons"]["alert_triage"]
     assert cmp["total"] == 1 and cmp["disagree"] == 1
@@ -420,3 +425,111 @@ def test_jev_cascade_unavailable_falls_through_to_deepseek(sf, monkeypatch):
     monkeypatch.setattr(tri, "_llm_verdict", fake_llm)
     out = asyncio.run(tri.triage_event(_event(sf), sf))
     assert out["model"] == "llm" and out["verdict"] == "notify"
+
+
+def test_shadow_blocked_worker_does_not_block_two_baselines(sf, monkeypatch):
+    import json
+    from sqlalchemy import select
+    from app.models.agent import AgentAudit
+
+    _enable_jev(monkeypatch, "shadow")
+
+    async def run():
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = []
+
+        async def slow(ctx):
+            calls.append(ctx)
+            entered.set()
+            await release.wait()
+            return {"verdict": "ignore", "confidence": .9, "model": "test", "latency_ms": 1}
+
+        async def baseline(ctx, *_):
+            return "notify", "原判读"
+
+        monkeypatch.setattr(tri, "_jev_verdict", slow)
+        monkeypatch.setattr(tri, "_llm_verdict", baseline)
+        first = await asyncio.wait_for(tri.triage_event(_event(sf, symbol="600001"), sf), 1)
+        await entered.wait()
+        second = await asyncio.wait_for(tri.triage_event(_event(sf, symbol="600002"), sf), 1)
+        assert first["model"] == second["model"] == "llm"
+        with sf() as db:
+            assert db.query(AgentTriage).count() == 2  # before slow Jev is released
+            receipt = db.scalars(select(AgentAudit)).one()
+            assert json.loads(receipt.after)["state"] == "skipped_busy"
+        assert len(calls) == 1  # no queued or second worker
+        release.set()
+        await tri.drain_shadow()
+
+    asyncio.run(run())
+    with sf() as db:
+        receipts = list(db.scalars(select(AgentAudit)))
+        assert len(receipts) == 2
+        assert all(json.loads(r.after)["adopted"] is False for r in receipts)
+        assert all("text" not in json.loads(r.before) for r in receipts)
+
+
+def test_shadow_failure_cannot_undo_rule_fallback(sf, monkeypatch):
+    import json
+    from sqlalchemy import select
+    from app.models.agent import AgentAudit
+
+    _enable_jev(monkeypatch, "shadow")
+
+    async def failed(ctx):
+        raise RuntimeError("shadow unavailable")
+
+    async def baseline(ctx, *_):
+        return None
+
+    monkeypatch.setattr(tri, "_jev_verdict", failed)
+    monkeypatch.setattr(tri, "_llm_verdict", baseline)
+
+    async def run():
+        result = await tri.triage_event(_event(sf), sf)
+        assert result["verdict"] == "notify" and result["model"] == "llm_fallback"
+        await tri.drain_shadow()
+
+    asyncio.run(run())
+    with sf() as db:
+        assert db.query(AgentTriage).one().model == "llm_fallback"
+        assert json.loads(db.scalars(select(AgentAudit)).one().after)["state"] == "unavailable"
+
+
+def test_canceled_shadow_keeps_slot_until_thread_really_finishes(sf, monkeypatch):
+    from threading import Event
+    from app.core import jev_client
+
+    _enable_jev(monkeypatch, "shadow")
+    entered, release = Event(), Event()
+    calls = []
+
+    def evaluate(*args, **kwargs):
+        calls.append(1)
+        entered.set()
+        assert release.wait(5)
+        return {"ok": False, "reason": "test_failure"}
+
+    async def baseline(ctx, *_):
+        return "notify", "原判读"
+
+    monkeypatch.setattr(jev_client, "evaluate", evaluate)
+    monkeypatch.setattr(tri, "_llm_verdict", baseline)
+
+    async def run():
+        await tri.triage_event(_event(sf, symbol="600001"), sf)
+        assert await asyncio.to_thread(entered.wait, 1)
+        task = tri._shadow_task
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()  # canceled coroutine has not killed its thread
+        result = await tri.triage_event(_event(sf, symbol="600002"), sf)
+        assert result["model"] == "llm" and len(calls) == 1
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    try:
+        asyncio.run(run())
+    finally:
+        release.set()

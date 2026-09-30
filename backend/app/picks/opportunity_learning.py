@@ -489,6 +489,10 @@ def build_notification_records(
             # Daily picks bind the event interpretation visible when they were generated.
             # Legacy cards carry explicit unknown rather than a reconstructed version.
             "event_refs": item.get("related_event_refs") or [],
+            "event_rationale": {
+                "basis": str((item.get("bases") or {}).get("news") or ""),
+                "titles": item.get("related_events") or [],
+            },
         }
         records.append({
             "run_id": run_id, "trade_date": trade_date, "as_of": as_of,

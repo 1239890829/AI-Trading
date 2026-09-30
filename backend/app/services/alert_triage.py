@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 from typing import Any
@@ -30,7 +31,7 @@ from datetime import timedelta
 from sqlalchemy import func, select
 
 from app.core.db import get_session_factory
-from app.models.agent import AgentTriage
+from app.models.agent import AgentAudit, AgentTriage
 from app.models.alert import AlertEvent, AlertRule
 from app.core.bjtime import beijing_now_naive
 
@@ -125,12 +126,15 @@ async def _jev_verdict(ctx: dict) -> dict | None:
     def _call() -> dict:
         return evaluate(ctx, questions, purpose="alert_triage")
 
+    worker = asyncio.create_task(asyncio.to_thread(_call))
     try:
-        result = await asyncio.wait_for(
-            asyncio.to_thread(_call),
-            timeout=float(getattr(settings, "jev_timeout_seconds", 8.0)) + 2.0,
-        )
+        # The adapter owns the HTTP deadline. Do not release a shadow slot while
+        # a timed-out to_thread worker is still running in the executor.
+        result = await asyncio.shield(worker)
     except asyncio.CancelledError:
+        # Cancellation is cooperative: keep the slot occupied until synchronous
+        # HTTP work really drains. Otherwise a restart can spawn another worker.
+        await asyncio.shield(worker)
         raise
     except Exception as exc:  # noqa: BLE001 — 增强层故障不得拖垮告警
         log.info("alert triage jev unavailable: %s", type(exc).__name__)
@@ -288,6 +292,62 @@ def _already_recent(event: AlertEvent, session_factory) -> bool:
         return bool(judged)
 
 
+# One in-flight comparison, no queue: a slow shadow call cannot accumulate
+# workers or hold up the baseline triage loop. Only metadata is persisted.
+_shadow_task: asyncio.Task | None = None
+
+
+def _shadow_receipt(event_id, ctx, baseline, recommendation, state, sf):
+    try:
+        with sf() as db:
+            db.add(AgentAudit(
+                actor="scheduler", action="triage.shadow", target=str(event_id),
+                before=json.dumps({
+                    "contract": "triage-shadow-v1", "input_sha256": hashlib.sha256(
+                        json.dumps(ctx, sort_keys=True, ensure_ascii=False).encode()
+                    ).hexdigest(),
+                    "baseline": {k: baseline[k] for k in ("verdict", "model")},
+                }, ensure_ascii=False),
+                after=json.dumps({"state": state, "recommendation": recommendation,
+                                  "adopted": False, "reason": "shadow_only"}, ensure_ascii=False),
+            ))
+            db.commit()
+    except Exception:  # audit enhancement must not invalidate a saved reminder
+        log.exception("triage shadow receipt failed for event %s", event_id)
+
+
+def _schedule_shadow(event_id, ctx, baseline, sf):
+    global _shadow_task
+    if _shadow_task is not None and not _shadow_task.done():
+        _shadow_receipt(event_id, ctx, baseline, None, "skipped_busy", sf)
+        return
+
+    async def compare():
+        from app.core.jev_client import record_comparison
+        recommendation = None
+        try:
+            recommendation = await _jev_verdict(ctx)
+            if recommendation is not None:
+                record_comparison("alert_triage", recommendation["verdict"],
+                                  baseline["verdict"], confidence=recommendation["confidence"])
+        except asyncio.CancelledError:
+            _shadow_receipt(event_id, ctx, baseline, None, "canceled", sf)
+            raise
+        except Exception:
+            log.exception("triage shadow failed for event %s", event_id)
+        _shadow_receipt(event_id, ctx, baseline, recommendation,
+                        "compared" if recommendation is not None else "unavailable", sf)
+
+    _shadow_task = asyncio.create_task(compare(), name="triage-shadow")
+
+
+async def drain_shadow():
+    """Shutdown waits for the adapter-bounded worker; cancellation is not a kill."""
+    task = _shadow_task
+    if task is not None:
+        await asyncio.shield(task)
+
+
 async def triage_event(event: AlertEvent, session_factory=None) -> dict | None:
     """判读单条事件并落库。已有判读则返回既有结论（幂等）。"""
     sf = session_factory or get_session_factory()
@@ -309,7 +369,7 @@ async def triage_event(event: AlertEvent, session_factory=None) -> dict | None:
     from app.core.jev_client import record_comparison
 
     mode = str(getattr(settings, "jev_alert_triage_mode", "off") or "off").strip().lower()
-    jev = await _jev_verdict(ctx) if mode in {"shadow", "cascade"} else None
+    jev = await _jev_verdict(ctx) if mode == "cascade" else None
     if mode == "cascade" and jev is not None:
         min_conf = float(getattr(settings, "jev_alert_triage_accept_confidence", 0.90))
         if float(jev["confidence"]) >= min_conf:
@@ -325,8 +385,11 @@ async def triage_event(event: AlertEvent, session_factory=None) -> dict | None:
     # 3) DeepSeek 复杂判读：Jev 低置信/不可用，或 shadow 模式一律继续。
     got = await _llm_verdict(ctx, sf)
     if got is None:
-        return _save(event.id, "notify", "AI 判读不可用，按规则提醒（未做噪音过滤）",
-                     "llm_fallback", sf)
+        result = _save(event.id, "notify", "AI 判读不可用，按规则提醒（未做噪音过滤）",
+                       "llm_fallback", sf)
+        if mode == "shadow":
+            _schedule_shadow(event.id, ctx, result, sf)
+        return result
     verdict, reason = got
     if jev is not None:
         record_comparison(
@@ -345,7 +408,10 @@ async def triage_event(event: AlertEvent, session_factory=None) -> dict | None:
             note = _response_note(event, sf)
             if note:
                 reason = f"{reason}｜{note}"
-    return _save(event.id, verdict, reason, "llm", sf)
+    result = _save(event.id, verdict, reason, "llm", sf)
+    if mode == "shadow":
+        _schedule_shadow(event.id, ctx, result, sf)
+    return result
 
 
 def _response_note(event: AlertEvent, sf) -> str | None:
@@ -545,10 +611,13 @@ def ack_triage(triage_id: int, session_factory=None) -> bool:
 
 async def triage_loop(stop: asyncio.Event, interval: float = 30.0) -> None:
     """后台判读 worker：每 interval 扫一次未判读事件（延迟 ≤30s，够用且不刷屏）。"""
-    while not stop.is_set():
-        try:
-            await triage_pending()
-        except Exception:
-            log.exception("alert triage loop failed")
-        with contextlib.suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(stop.wait(), timeout=interval)
+    try:
+        while not stop.is_set():
+            try:
+                await triage_pending()
+            except Exception:
+                log.exception("alert triage loop failed")
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(stop.wait(), timeout=interval)
+    finally:
+        await drain_shadow()

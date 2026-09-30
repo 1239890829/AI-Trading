@@ -528,3 +528,26 @@ def test_jev_actionability_rejects_ambiguous_event_identity_before_network(monke
     b = EventCard(fingerprint="b", title="B")
     assert a.id is None and b.id is None
     assert la._jev_actionability([a, b]) is None
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_shadow_reads_only_after_baseline_is_committed(tmp_path, monkeypatch, fail):
+    from sqlalchemy import select
+
+    sf = _factory(tmp_path)
+    _settings(monkeypatch, jev_enabled=True, jev_mode="shadow", min_batch=1)
+    event = _event(sf, "国产芯片政策发布")
+    _mock_llm(monkeypatch, [{"direction": 1, "theme": "芯片", "chain": "需求增加", "reason": "政策"}])
+
+    def shadow(rows):
+        # A different session already sees the original result while Jev starts.
+        with sf() as db:
+            assert db.get(EventCard, event.id).llm_judged_at is not None
+            assert db.scalars(select(EventDirection)).one().target == "芯片"
+        if fail:
+            raise RuntimeError("Jev failed")
+        return {event.id: .01}
+
+    monkeypatch.setattr(la, "_jev_actionability", shadow)
+    out = la.judge_pending_batch(sf, theme_names=["芯片"])
+    assert out["directions_written"] == 1 and out["skipped"] is False

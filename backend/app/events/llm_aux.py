@@ -317,7 +317,7 @@ def judge_pending_batch(sf=None, *, theme_names: list[str] | None = None,
     from app.core.jev_client import record_comparison
 
     mode = str(getattr(settings, "jev_event_aux_mode", "off") or "off").strip().lower()
-    jev_probs = _jev_actionability(cands) if mode in {"shadow", "cascade"} else None
+    jev_probs = _jev_actionability(cands) if mode == "cascade" else None
 
     # cascade 只允许“极高把握为中性/弱关联”的事件跳过 DeepSeek。
     # 正向/利空事件仍交 DeepSeek 产出官方题材归属；Jev 不自由生成题材。
@@ -347,6 +347,7 @@ def judge_pending_batch(sf=None, *, theme_names: list[str] | None = None,
         })
 
     hit_count = mark_count = 0
+    reference: dict[int, bool] = {}
     for cand in cands:
         item = items_by_id.get(cand.id)
         if not isinstance(item, dict):
@@ -358,15 +359,7 @@ def judge_pending_batch(sf=None, *, theme_names: list[str] | None = None,
         theme = _match_theme(item.get("theme"), theme_names)
         actionable = direction != 0 and theme is not None
 
-        # shadow/cascade 中仍进 DeepSeek 的事件都有参考结论；Noul 没有独立
-        # confidence，因此只记一致/分歧，不伪造 avg_confidence。
-        if jev_probs is not None and cand.id not in pre_neutral:
-            record_comparison(
-                "event_llm_aux",
-                "actionable" if float(jev_probs[cand.id]) >= 0.5 else "neutral",
-                "actionable" if actionable else "neutral",
-                confidence=None,
-            )
+        reference[cand.id] = actionable
 
         hits = [{
             "target": theme,
@@ -377,6 +370,22 @@ def judge_pending_batch(sf=None, *, theme_names: list[str] | None = None,
         n = _apply_result(sf, cand, hits)
         hit_count += n
         mark_count += int(n > 0)
+
+    # All baseline writes precede optional shadow I/O. A slow/failing Jev
+    # cannot postpone publication of the DeepSeek directions or undo them.
+    if mode == "shadow":
+        try:
+            jev_probs = _jev_actionability(cands)
+        except Exception:
+            log.exception("llm_aux shadow comparison failed after baseline publication")
+            jev_probs = None
+    for event_id, actionable in reference.items():
+        if jev_probs is not None and event_id in jev_probs and event_id not in pre_neutral:
+            record_comparison(
+                "event_llm_aux",
+                "actionable" if float(jev_probs[event_id]) >= 0.5 else "neutral",
+                "actionable" if actionable else "neutral", confidence=None,
+            )
 
     # Current candidates, including neutral results, are marked by _apply_result.
     # Superseded model inputs stay unmarked so a fresh batch can judge them.
