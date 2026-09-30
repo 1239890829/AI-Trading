@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+from app.models.agent import AgentTask, AgentParamChange
+
 import asyncio
 
 from app.assistant.tools import ToolCall, ToolContext, run_tool
@@ -118,7 +120,7 @@ def test_param_changes_without_source_is_explicit():
 
 
 def test_param_changes_renders_rows():
-    rows = [_Row(id=3, key="picks_min_pick_score", before="50", after="55",
+    rows = [AgentParamChange(id=3, key="picks_min_pick_score", before="50", after="55",
                  status="draft", created_at=None)]
     out = _run("param_changes", ToolContext(provider=object(), session_factory=_sf(rows)))
     assert "picks_min_pick_score" in out
@@ -136,7 +138,7 @@ def test_agent_tasks_without_source_is_explicit():
 
 
 def test_agent_tasks_renders_rows():
-    rows = [_Row(id=1, type="review", status="succeeded", risk_level="L1",
+    rows = [AgentTask(id="1", type="review", status="succeeded", risk_level="L1",
                  created_at=None)]
     out = _run("agent_tasks", ToolContext(provider=object(), session_factory=_sf(rows)))
     assert "review" in out and "succeeded" in out and "L1" in out
@@ -285,3 +287,12 @@ def test_alert_events_registered():
     specs = getattr(T, "TOOLS", None) or getattr(T, "TOOL_SPECS", {})
     assert "alert_events" in specs
     assert T.tool_label("alert_events") == "预警记录"
+
+
+def test_imp025_console_results_use_persistent_truth():
+    rows = [AgentParamChange(id=3, key="picks_min_pick_score", status="rolled_back", before="50", after="55")]
+    out = _run("param_changes", ToolContext(provider=object(), session_factory=_sf(rows)))
+    assert "历史回滚结果待核实" in out
+    task = AgentTask(id="code", type="mutation", status="succeeded", params='{"kind":"code_proposal"}')
+    out = _run("agent_tasks", ToolContext(provider=object(), session_factory=_sf([task])))
+    assert "待审提案" in out and "尚未确认" in out
