@@ -14,6 +14,12 @@ const GATES: Record<string, string> = {
   mined_with_candidates: "有联动候选", mined_empty_unavailable: "缺行情，无法判定",
   mined_empty_no_eligible: "本轮无符合条件的成分",
 };
+const SCENARIOS: Record<string, string> = {
+  intraday_opportunity: "题材联动", buy_point: "盘中触发", leader_research: "研究观察",
+};
+const ROUTES: Record<string, string> = {
+  public_event: "公共事件", company_event: "公司独立事件", trend: "趋势强势",
+};
 
 /** One read-only consumer for versioned decisions, without new rankings or actions. */
 export function OpportunityEvidencePanel() {
@@ -41,7 +47,8 @@ export function OpportunityEvidencePanel() {
             {card.name} {card.symbol} · {card.hypotheses.length} 条独立假设
           </summary>
           {card.hypotheses.map(h => <div key={h.opportunity_id} className="max-w-prose space-y-1 py-2 leading-relaxed">
-            <p className="font-medium">{STATES[h.state] ?? h.state} · {h.source_theme || h.scenario}</p>
+            <p className="font-medium">{STATES[h.state] ?? h.state} · {h.source_theme || SCENARIOS[h.scenario] || h.scenario}</p>
+            {!!h.routes?.length && <p>观察路径：{h.routes.map(route => ROUTES[route] ?? route).join(" / ")}</p>}
             <p>依据：{h.reasons.join("；") || "尚无已记录依据"}</p>
             <p>还缺什么：{h.unknowns.join("；") || "请核对原始证据及动作前条件"}</p>
             <p className="text-amber-800 dark:text-amber-300">{h.execution_blocker}</p>

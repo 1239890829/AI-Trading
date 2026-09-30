@@ -39,7 +39,7 @@ describe("同版机会依据", () => {
     const data = payload();
     data.cards = [{ symbol: "600127", name: "金健米业", hypotheses: ["农业", "独立事件"].map((theme, i) => ({
       opportunity_id: `op-${i}`, decision_id: "od", decision_version: `v${i}`, scenario: "new_path",
-      source_theme: theme, state: "unknown", data_state: "unknown", source: "test-fixture",
+      source_theme: theme, routes: ["company_event", "trend"], state: "unknown", data_state: "unknown", source: "test-fixture",
       first_seen: "2026-09-30T10:00:00", as_of: "2026-09-30T10:01:00",
       reasons: [theme], unknowns: ["公司受益待核"], reference: { price: null, semantics: "reference_only_not_fill" },
       actionable: false, execution_blocker: "封板，参与条件待核", snapshot_refs: ["snapshot"],
@@ -48,6 +48,7 @@ describe("同版机会依据", () => {
     render(<OpportunityEvidencePanel />);
     expect(await screen.findByText(/2 条独立假设/)).toBeTruthy();
     expect(screen.getAllByText(/公司受益待核/)).toHaveLength(2);
+    expect(screen.getAllByText(/观察路径：公司独立事件 \/ 趋势强势/)).toHaveLength(2);
     expect(screen.getAllByText(/参考价 缺失，不是成交价/)).toHaveLength(2);
     expect(screen.queryByRole("button", { name: /建仓|买入/ })).toBeNull();
   });

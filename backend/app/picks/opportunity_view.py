@@ -161,17 +161,25 @@ def read_opportunities(trade_date: str, session_factory=None) -> dict:
             "execution_blocker": observed["entry_state"],
             "expires_at": None, "snapshot_refs": [observed["observation_id"]],
         })
+    run_views = []
+    for run in runs:
+        counts = _object(run.linkage_stats).get("theme_gate_counts")
+        run_views.append({"run_id": run.run_id, "scenario": run.scenario,
+                          "as_of": run.as_of.isoformat(), "data_state": run.data_state,
+                          "records": run.records_total,
+                          "gate_counts": counts if isinstance(counts, dict) else None,
+                          "summary": _object(run.summary)})
+    unavailable = any(r["data_state"] != "ready" or any(
+        (r["gate_counts"] or {}).get(key) for key in ("missing_catalog", "mined_empty_unavailable")
+    ) for r in run_views)
     return {
         "trade_date": trade_date, "contract_version": VERSION,
-        "state": ("ready" if cards else "unavailable" if any(r.data_state != "ready" for r in runs)
+        "state": ("ready" if cards else "unavailable" if unavailable
                   else "collected_empty" if latest or research["state"] == "collected_empty" else "not_collected"),
         "time_basis": "Asia/Shanghai",
         "research_state": research["state"],
         "cards": list(cards.values()), "disclaimer": DISCLAIMER,
-        "runs": [{"run_id": r.run_id, "scenario": r.scenario, "as_of": r.as_of.isoformat(),
-                  "data_state": r.data_state, "records": r.records_total,
-                  "gate_counts": _object(r.linkage_stats).get("theme_gate_counts"),
-                  "summary": _object(r.summary)} for r in latest.values()],
+        "runs": run_views,
         "coverage": "仅已有运行头对应的持久决定；未采集路径不等于没有机会；不重新扫描潜伏/接力/RPS",
         "ordering": "证券身份稳定排序，不是新增推荐排名",
     }

@@ -5,17 +5,16 @@ import pytest
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import sessionmaker
 
-from app.models.watchlist import Base
 from app.models.opportunity_learning import OpportunityDecisionSnapshot as Snapshot
 from app.picks.opportunity_learning import archive_intraday_pipeline
 from app.picks.opportunity_view import read_opportunities
-from app.models import leader_research  # noqa: F401 - register both research tables before fixture creation
+from app.models.leader_research import LeaderResearchObservation as Observation
 
 
 @pytest.fixture
 def sf(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'isolated.db'}")
-    Base.metadata.create_all(engine)
+    Observation.metadata.create_all(engine)
     yield sessionmaker(bind=engine)
     engine.dispose()
 
@@ -218,6 +217,13 @@ def test_zero_run_with_failed_source_is_not_a_valid_empty_pool(sf):
     assert result['state'] == 'unavailable'
     assert result['cards'] == []
     assert result['runs'][0]['data_state'] == 'degraded'
+    # Fresh market quotes do not compensate for an unavailable theme constituent list.
+    data = payload(participant=False)
+    data['linkage_stats']['theme_gate_counts'] = {'mined_empty_unavailable': 1}
+    archive(sf, data, 1)
+    result = read_opportunities('2026-09-30', sf)
+    assert result['state'] == 'unavailable'
+    assert result['runs'][0]['data_state'] == 'ready'
 
 
 def test_notification_consumer_preserves_execution_owner_identity_and_gate(sf):
