@@ -17,6 +17,7 @@ import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { createEntityMatcher, type EntityDict, type EntityMatch, type EntityMatcher } from "@/lib/entity-links";
 import { isAllowedNav } from "@/lib/nav-targets";
 import { RichText } from "@/components/assistant/rich-text";
+import { useExitPresence } from "@/hooks/use-exit-presence";
 import { ModalShell } from "@/components/ui/modal-shell";
 import { eventTimeText } from "@/lib/format";
 
@@ -192,6 +193,7 @@ function ArticleBlocks({
 }
 
 export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClose: () => void }) {
+  const presence = useExitPresence(item);
   const router = useRouter();
   // 正文里的个股实体 → **就地弹窗**看详情（2026-09-15 详情弹窗化）
   const { open: openSymbolDetail } = useSymbolDetail();
@@ -270,17 +272,18 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
     // eslint-disable-next-line react-hooks/exhaustive-deps -- loading 作触发闸门，item.url 由渲染期守卫保证一致
   }, [item?.url, loading]);
 
-  if (!item) return null;
+  const shownItem = presence.value;
+  if (!shownItem) return null;
 
-  const shownTitle = content?.title ?? item.title;
-  const shownSource = content?.source_label ?? sourceText(item.source);
+  const shownTitle = content?.title ?? shownItem.title;
+  const shownSource = content?.source_label ?? sourceText(shownItem.source);
   // 2026-09-09：此前优先取 content.published（抓正文接口的源站时间，与列表的
   // EventStore.published_at 不同源 → 时间对不上）。改为**优先列表同字段**
-  // item.date，两者都经 eventTimeText 统一格式。
-  const shownTime = eventTimeText(item.date ?? content?.published ?? null);
+  // shownItem.date，两者都经 eventTimeText 统一格式。
+  const shownTime = eventTimeText(shownItem.date ?? content?.published ?? null);
 
   return (
-    <ModalShell presentation="drawer"
+    <ModalShell open={presence.active} presentation="drawer"
       onClose={onClose}
       label={shownTitle}
       testid="news-modal"
@@ -289,10 +292,10 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
         <>
           <h2 className="text-[15px] font-semibold leading-snug text-zinc-900 dark:text-zinc-100">{shownTitle}</h2>
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-zinc-600 dark:text-zinc-400">
-            {item.kindLabel && <span className="rounded bg-zinc-100 px-1 py-px dark:bg-zinc-800">{item.kindLabel}</span>}
+            {shownItem.kindLabel && <span className="rounded bg-zinc-100 px-1 py-px dark:bg-zinc-800">{shownItem.kindLabel}</span>}
             {shownSource && <span>{shownSource}</span>}
             {shownTime && <span>{shownTime}</span>}
-            {item.evidence && <span>{item.evidence}</span>}
+            {shownItem.evidence && <span>{shownItem.evidence}</span>}
             {content?.cached && <span className="text-zinc-600 dark:text-zinc-400">缓存</span>}
             {content?.truncated && <span className="text-amber-800 dark:text-amber-500">长文已截断，完整内容见原文</span>}
           </div>
@@ -302,7 +305,7 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
         <>
           <span className="text-zinc-600 dark:text-zinc-400">内容归原作者/来源媒体所有，本站仅作研究参考</span>
           <a
-            href={item.url}
+            href={shownItem.url}
             target="_blank"
             rel="noreferrer"
             className="font-medium text-blue-700 transition-colors hover:text-blue-500 dark:text-blue-400"
@@ -360,8 +363,8 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
                   重试
                 </button>
               </p>
-              {item.digest ? (
-                <p className="mt-3 text-[13px] leading-relaxed text-zinc-700 dark:text-zinc-300">{item.digest}</p>
+              {shownItem.digest ? (
+                <p className="mt-3 text-[13px] leading-relaxed text-zinc-700 dark:text-zinc-300">{shownItem.digest}</p>
               ) : (
                 <p className="mt-3 text-[13px] text-zinc-600 dark:text-zinc-400">暂无摘要。</p>
               )}

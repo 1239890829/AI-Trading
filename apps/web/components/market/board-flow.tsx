@@ -1,5 +1,6 @@
 "use client";
 
+import { useExitPresence } from "@/hooks/use-exit-presence";
 import { ModalShell } from "@/components/ui/modal-shell";
 import { useResource } from "@/hooks/use-polling-fetch";
 import { Panel } from "@/components/panel";
@@ -92,10 +93,10 @@ function BoardDailyBars({ bars }: { bars: { date: string; main_yi: number | null
 }
 
 /** 板块下钻抽屉：分钟五档累计（延迟口径）+ 日度主力净额柱 + 成员个股资金排行 Top20。 */
-function BoardFlowDrawer({ row, onClose }: { row: BoardFlowRow; onClose: () => void }) {
+function BoardFlowDrawer({ row, onClose, open }: { row: BoardFlowRow; onClose: () => void; open: boolean }) {
   const stockNav = useStockRowNav();
-  const minuteResult = useResource(() => getBoardFlowMinute(row.board_code), { key: row.board_code, intervalMs: 60_000 });
-  const memberResult = useResource(() => getBoardFlowMembers(row.board_code), { key: row.board_code, intervalMs: 60_000 });
+  const minuteResult = useResource(() => getBoardFlowMinute(row.board_code), { key: row.board_code, intervalMs: 60_000, enabled: open });
+  const memberResult = useResource(() => getBoardFlowMembers(row.board_code), { key: row.board_code, intervalMs: 60_000, enabled: open });
   const minute = minuteResult.data;
   const members = memberResult.data;
   const pending = minuteResult.pending || memberResult.pending;
@@ -105,7 +106,7 @@ function BoardFlowDrawer({ row, onClose }: { row: BoardFlowRow; onClose: () => v
   const memRows = members?.rows ?? [];
 
   return (
-    <ModalShell presentation="drawer" onClose={onClose} label={`板块资金 ${row.name}`} testid="board-flow-drawer"
+    <ModalShell open={open} presentation="drawer" onClose={onClose} label={`板块资金 ${row.name}`} testid="board-flow-drawer"
       header={<div><p className="text-sm font-semibold">{row.name}</p><p className="text-xs text-zinc-600 dark:text-zinc-400">{row.board_code} · 榜位 #{row.rank} · 东财 f62口径，非成分股相加</p></div>}>
         {!!(minuteResult.error || memberResult.error) && <p role="alert" className="text-xs text-amber-800 dark:text-amber-300">部分资金来源读取失败；保留值仅作上次结果参考。<button onClick={() => { minuteResult.refresh(); memberResult.refresh(); }}>重试</button></p>}
         <div className="space-y-4 px-4 py-3">
@@ -263,6 +264,7 @@ export function BoardFlowPanel() {
   const [sortKey, setSortKey] = useState<SortKey>("main");
   const [filters, setFilters] = useState<Set<string>>(new Set());
   const [drawer, setDrawer] = useState<BoardFlowRow | null>(null);
+  const drawerPresence = useExitPresence(drawer);
   const resource = useResource(() => getBoardFundFlow(kind, range), {key: `${kind}/${range}`, intervalMs: 30_000});
   const payload = resource.data;
   const pending = resource.pending;
@@ -395,7 +397,7 @@ export function BoardFlowPanel() {
         )}
       </div>
 
-      {drawer && <BoardFlowDrawer row={drawer} onClose={() => setDrawer(null)} />}
+      {drawerPresence.value && <BoardFlowDrawer row={drawerPresence.value} open={drawerPresence.active} onClose={() => setDrawer(null)} />}
     </Panel>
   );
 }

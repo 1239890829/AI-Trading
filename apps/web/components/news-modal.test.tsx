@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { NewsModal } from "./news-modal";
 import type { ArticleContent } from "@/lib/api";
 
@@ -32,6 +32,23 @@ function contentFixture(overrides: Partial<ArticleContent> = {}): ArticleContent
 }
 
 describe("NewsModal 正文块渲染（2026-09-04 排版升级）", () => {
+  it("关闭旧资讯后快速打开另一条，旧请求迟到不能覆盖新正文", async () => {
+    let resolveOld!: (value: ArticleContent) => void;
+    const old = new Promise<ArticleContent>(resolve => { resolveOld = resolve; });
+    mockedContent.mockReturnValueOnce(old).mockResolvedValueOnce(contentFixture({
+      title: "新事件", paragraphs: ["新事件正文"], blocks: [{ type: "p", text: "新事件正文" }],
+    }));
+    const view = render(<NewsModal item={item} onClose={() => {}} />);
+    view.rerender(<NewsModal item={null} onClose={() => {}} />);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.querySelector('[data-motion-state="closed"]')?.hasAttribute("inert")).toBe(true);
+    view.rerender(<NewsModal item={{ ...item, title: "新事件", url: "https://example.com/new-event" }} onClose={() => {}} />);
+    expect(await screen.findByText("新事件正文")).toBeTruthy();
+    await act(async () => { resolveOld(contentFixture({ paragraphs: ["旧请求迟到"], blocks: [{ type: "p", text: "旧请求迟到" }] })); await old; });
+    expect(screen.queryByText("旧请求迟到")).toBeNull();
+    expect(screen.getByText("新事件正文")).toBeTruthy();
+  });
+
   it("事件来源弹窗保留列表读取时的解释版本", async () => {
     mockedContent.mockResolvedValue(contentFixture());
     render(<NewsModal item={{ ...item, kindLabel: "快讯",

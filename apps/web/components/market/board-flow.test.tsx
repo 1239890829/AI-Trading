@@ -151,7 +151,8 @@ describe("BoardFlowPanel", () => {
     expect(screen.getByText(/延迟口径/)).toBeTruthy();
   });
 
-  it("点行开下钻抽屉：分钟累计 + 成员排行，关闭按钮可关", async () => {
+  it("点行开下钻抽屉：分钟累计 + 成员排行，关闭即停轮询，视觉退出不可交互", async () => {
+    vi.useFakeTimers();
     vi.mocked(getBoardFundFlow).mockResolvedValue(payload([row({ board_code: "BK1650", name: "通信技术" })]));
     vi.mocked(getBoardFlowMinute).mockResolvedValue({
       available: true,
@@ -193,6 +194,12 @@ describe("BoardFlowPanel", () => {
     expect(link).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", {name: "关闭"}));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByTestId("board-flow-drawer").closest("[inert]")).toBeTruthy();
+    await act(async () => { vi.advanceTimersByTime(160); });
     expect(screen.queryByTestId("board-flow-drawer")).toBeNull();
+    await act(async () => { vi.advanceTimersByTime(60_000); });
+    expect(getBoardFlowMinute).toHaveBeenCalledTimes(1);
+    expect(getBoardFlowMembers).toHaveBeenCalledTimes(1);
   });
 });

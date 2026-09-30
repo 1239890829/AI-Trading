@@ -123,7 +123,7 @@ button, a, tr, input, select, textarea {
    仅限可悬停设备——触屏上 :active 会粘滞到滚动结束，反而像卡住。
    scale 用 0.97 而非 0，且只动 transform（GPU 合成，不触发布局、不影响相邻元素）。
    关闭方式：给按钮加 `data-nopress`（如画布上的悬浮控件，位移会干扰拖拽手感）。 */
-@media (hover: hover) {
+@media (hover: hover) and (pointer: fine) {
   button:not(:disabled):not([data-nopress]),
   [role="button"]:not([aria-disabled="true"]):not([data-nopress]) {
     transition:
@@ -184,7 +184,7 @@ button, a, tr, input, select, textarea {
    30s 轮询刷新不会重播（否则每个轮询周期整页抖一次 = 用户反馈的"闪烁"）。
    · anim-rise  内容整体出现（tab 面板、卡片）
    · anim-scale-in 弹层（模态/气泡），从 0.97 起而非 0——现实中不存在从无到有
-   · anim-stagger 列表错峰（首屏 ≤12 项，超过不再延迟，避免"等动画") */
+   · anim-stagger 保留兼容类，密集金融列表不再错峰延迟 */
 @keyframes ui-rise-in {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: none; }
@@ -195,16 +195,8 @@ button, a, tr, input, select, textarea {
 }
 .anim-rise     { animation: ui-rise-in var(--dur-base) var(--ease-out) both; }
 .anim-scale-in { animation: ui-scale-in var(--dur-base) var(--ease-out) both; }
-.anim-stagger > * { animation: ui-rise-in var(--dur-base) var(--ease-out) both; }
-.anim-stagger > *:nth-child(1) { animation-delay: 0ms; }
-.anim-stagger > *:nth-child(2) { animation-delay: 24ms; }
-.anim-stagger > *:nth-child(3) { animation-delay: 48ms; }
-.anim-stagger > *:nth-child(4) { animation-delay: 72ms; }
-.anim-stagger > *:nth-child(5) { animation-delay: 96ms; }
-.anim-stagger > *:nth-child(6) { animation-delay: 120ms; }
-.anim-stagger > *:nth-child(7) { animation-delay: 144ms; }
-.anim-stagger > *:nth-child(8) { animation-delay: 168ms; }
-.anim-stagger > *:nth-child(n+9) { animation-delay: 192ms; }
+/* Dense financial lists keep stable rows; no delayed entry or price-driven reordering motion. */
+.anim-stagger > * { animation: none; }
 
 /* 弹层入场（2026-09-11）：此前六个模态/抽屉都是「啪」地出现，是"整体观感生硬"的主因。
    · 模态居中 → 从 0.97 放大（居中缩放；从触发点缩放只适用于 popover，不适用于模态）
@@ -221,12 +213,55 @@ button, a, tr, input, select, textarea {
 .anim-slide-in-right { animation: ui-slide-in-right var(--dur-slow) var(--ease-drawer) both; }
 .anim-backdrop-in    { animation: ui-backdrop-in var(--dur-base) var(--ease-out) both; }
 
+/* IMP-054: read surfaces reverse in place; task identity changes without waiting. */
+.motion-overlay {
+  opacity: 1;
+  transition: opacity var(--dur-base) var(--ease-out);
+}
+.motion-drawer, .motion-modal {
+  opacity: 1;
+  transform: none;
+  transition: transform var(--dur-base) var(--ease-drawer), opacity var(--dur-base) var(--ease-out);
+}
+.motion-overlay[data-motion-state="closed"] {
+  opacity: 0;
+  pointer-events: none;
+  transition-duration: var(--dur-fast);
+}
+.motion-overlay[data-motion-state="closed"] .motion-drawer {
+  opacity: 0;
+  transform: translateX(24px);
+  transition-duration: var(--dur-fast);
+}
+.motion-overlay[data-motion-state="closed"] .motion-modal {
+  opacity: 0;
+  transform: scale(.98);
+  transition-duration: var(--dur-fast);
+}
+.motion-task { opacity: 1; transition: opacity var(--dur-press) var(--ease-out); }
+@starting-style {
+  .motion-overlay { opacity: 0; }
+  .motion-drawer { opacity: 0; transform: translateX(24px); }
+  .motion-modal { opacity: 0; transform: scale(.98); }
+  .motion-task { opacity: .85; }
+}
+
+/* State changes keep the same row and version; acknowledgement does not imply execution. */
+.opportunity-state { display: inline-block; padding: .125rem .375rem; border-radius: .25rem; background: #f4f4f5; transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
+.dark .opportunity-state { background: #27272a; }
+.opportunity-state:is([data-state="priority"], [data-state="triggered"]) { background: #e0f2fe; color: #075985; }
+.dark .opportunity-state:is([data-state="priority"], [data-state="triggered"]) { background: #082f49; color: #bae6fd; }
+.opportunity-state:is([data-state="weakened"], [data-state="expired"], [data-state="unknown"], [data-state="stale"]) { background: #fef3c7; color: #92400e; }
+.dark .opportunity-state:is([data-state="weakened"], [data-state="expired"], [data-state="unknown"], [data-state="stale"]) { background: #451a03; color: #fde68a; }
+
 /* 无障碍：偏好减弱动效时全部关闭（保留 comprehension-aiding 的颜色/状态变化） */
 @media (prefers-reduced-motion: reduce) {
   .tick-up, .tick-down, .pulse-dot,
   .anim-fade-in, .anim-fade-out,
   .anim-rise, .anim-scale-in, .anim-stagger > *,
-  .anim-slide-in-right, .anim-backdrop-in { animation: none; }
+  .anim-slide-in-right, .anim-backdrop-in, .animate-pulse, .animate-spin { animation: none; }
+  .motion-overlay, .motion-drawer, .motion-modal, .motion-task, .opportunity-state { transition: none !important; }
+  .motion-drawer, .motion-modal { transform: none !important; }
   button, a, tr, input, select, textarea,
   button:not(:disabled):not([data-nopress]),
   [role="button"]:not([aria-disabled="true"]):not([data-nopress]) {

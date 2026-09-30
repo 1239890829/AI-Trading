@@ -339,3 +339,6 @@ Governor短入口连接按需手册、决策卡与历史示例；设计/状态/C
 
 
 IMP-050当前实现、B/C同任务比较及实屏边界见[产品闭环§11](product/product-closure-design.md#11-imp-050-全站视图落地与设计对照2026-09-30)，逐50项/18域和后台承接见[细功能审计§18](product/feature-closure-audit.md#18-imp-050-ui工程逐项验收与继承边界2026-09-30)。工程状态与准确发布仍归[W07](stages/w07-simplification.md#imp-050)，不从方案确认或截图推定生产加载。
+
+
+IMP-054动效用途/静态弃权、反向退出、焦点/IO即时性、CSS+JS减弱和有限性能对照见[产品闭环§12](product/product-closure-design.md#12-imp-054-状态动效与空间连续性2026-09-30)，逐消费者见[细功能审计§19](product/feature-closure-audit.md#19-imp-054-动效消费者逐项验收2026-09-30)。状态与发布归[W07/IMP-054](stages/w07-simplification.md#imp-054)。

@@ -25,7 +25,7 @@ function focusFirst(layer: Layer) {
   (targets.find(el => el.hasAttribute("data-overlay-autofocus")) ?? targets[0] ?? layer.root).focus();
 }
 function isolateTop() {
-  for (const [node, inert] of originalInert) node.inert = inert;
+  for (const [node, inert] of originalInert) node.inert = inert || node.dataset.motionState === "closed";
   originalInert.clear();
   let branch: HTMLElement | undefined = topLayer()?.root;
   // Isolate siblings on the full ancestor path, including inline drawers and nested portals.
@@ -75,6 +75,10 @@ export function useOverlayFocus(ref: RefObject<HTMLElement | null>, onClose: () 
       const wasTop = topLayer() === layer;
       window.removeEventListener("keydown", key, true);
       document.removeEventListener("focusin", focus);
+      // A parent may close before its nested layer: preserve the original page return target.
+      for (const nested of layers) {
+        if (nested !== layer && nested.previous && layer.root.contains(nested.previous)) nested.previous = layer.previous;
+      }
       layers.splice(layers.indexOf(layer), 1);
       isolateTop();
       if (wasTop) {
