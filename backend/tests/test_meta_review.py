@@ -81,6 +81,8 @@ def test_collect_week_shape(sf):
     assert data["agenda_count"] == 1
     assert data["agenda_item_stats"] == {"A:executed": 1, "B:executed": 1, "C:rejected": 1}
     assert data["experiments"][0]["status"] == "rolled_back"
+    assert data["experiments"][0]["outcome"]["label"] == "历史回滚结果待核实"
+    assert data["agenda_outcome_stats"] == {"历史参数记录（待复核）": 1, "已执行": 1, "已拒绝": 1}
     assert data["audit_stats"].get("code.apply") == 1
 
 

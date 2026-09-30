@@ -231,6 +231,7 @@ AGENDA_ID_PREFIX = "agenda:"
 #: 原始状态保留在 `params.agenda_status`，不丢信息。
 _AGENDA_STATUS_MAP = {
     "generating": "running",
+    "ready": "needs_confirm",
     "executed": "succeeded",
     "failed": "failed",
     "skipped": "canceled",
@@ -260,7 +261,9 @@ def agenda_as_task(row) -> dict:
         except Exception:  # noqa: BLE001
             return default
 
-    items = _j(row.items, [])
+    from app.services.evolution import agenda_item_outcome
+
+    items = [it for it in _j(row.items, []) if isinstance(it, dict)]
     budget = _j(row.budget, {})
     steps: list[dict] = [{
         "index": 1, "name": "证据采集与预算", "input_summary": "",
@@ -273,17 +276,19 @@ def agenda_as_task(row) -> dict:
     }]
     for i, it in enumerate(items, start=2):
         status = it.get("status") or "pending"
+        outcome = agenda_item_outcome(it)
         steps.append({
             "index": i,
             "name": f"{it.get('class') or '?'} 类 · {it.get('priority') or '—'}",
             "input_summary": (it.get("evidence") or {}).get("source") or "",
             # 标题优先用 finding（人读得懂的结论），执行结果用 result 附后
-            "output_summary": f"[{status}] {it.get('finding') or it.get('summary') or ''}"
-                              + (f" → {it['result']}" if it.get("result") else ""),
+            "output_summary": f"[{outcome['label']}] {it.get('finding') or it.get('summary') or ''}"
+                              + (f" → {it['result']}" if it.get("result") else "")
+                              + (f" · {outcome['note']}" if outcome["note"] else ""),
             "duration_ms": 0,
             # deferred/failed/rejected 都不算「做成」——deferred 是"延后（附原因）"，
             # 界面标 ✗ 才对得起审计语义（成功假象是留痕最不该犯的错）
-            "ok": status not in ("failed", "rejected", "deferred"),
+            "ok": status == "executed" and it.get("class") == "B",
         })
 
     # error 单独处理：不能用 `_j(row.error, None)` —— 裸字符串会 JSON 解析失败
@@ -303,7 +308,9 @@ def agenda_as_task(row) -> dict:
     return {
         "id": f"{AGENDA_ID_PREFIX}{row.date}",
         "type": "agenda",
-        "status": _AGENDA_STATUS_MAP.get(row.status, "succeeded"),
+        "outcome": {"label": {"executed": "已处理", "ready": "待处理"}.get(row.status, "议程状态待核实"),
+                    "note": "处理状态不证明代码已合并、加载或参数效果；逐项查看结果。"},
+        "status": _AGENDA_STATUS_MAP.get(row.status, "needs_confirm"),
         "params": {
             "agenda_date": row.date,
             "agenda_status": row.status,
@@ -354,11 +361,24 @@ def _load(row: AgentTask) -> dict:
         except Exception:  # noqa: BLE001
             return default
 
+    params = _j(row.params, {})
+    if not isinstance(params, dict):
+        params = {}
+    outcome = None
+    if row.type == "mutation":
+        outcome = {"label": "处理完成" if row.status == "succeeded" else "处理未完成",
+                   "note": "流程结果与实际生效、加载及效果分别核验。"}
+    if row.type == "mutation" and params.get("kind") in ("code_proposal", "code_change"):
+        outcome = {"label": "待审提案" if params["kind"] == "code_proposal" and row.status == "succeeded"
+                   else "历史代码记录（待复核）" if params["kind"] == "code_change" and row.status == "succeeded"
+                   else "代码提案未完成",
+                   "note": "任务状态只记录产物处理；合并、加载与效果尚未确认。"}
     return {
         "id": row.id,
+        "outcome": outcome,
         "type": row.type,
         "status": row.status,
-        "params": _j(row.params, {}),
+        "params": params,
         "steps": _j(row.steps, []),
         "result_ref": _j(row.result_ref, None),
         "error": _j(row.error, None),

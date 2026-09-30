@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-import type { AgentTask } from "@/lib/api";
+import { getAgentTasks, type AgentTask } from "@/lib/api";
 import { TaskCenter } from "./task-center";
 
 /**
@@ -132,4 +132,16 @@ describe("任务中心 · 告警升级待办（P1-36）", () => {
     }
   });
 
+});
+
+
+it("IMP-025 · 代码产物成功只显示待审提案，正文保留核验边界", async () => {
+  vi.mocked(getAgentTasks).mockResolvedValue([{ ...ESCALATION_TODO, id: "proposal", type: "mutation",
+    status: "succeeded", params: { kind: "code_proposal", summary: "代码提案" },
+    outcome: { label: "待审提案", note: "合并、加载与效果尚未确认。" } }]);
+  render(<TaskCenter />);
+  fireEvent.click(await screen.findByText("系统变更留痕"));
+  expect(screen.getAllByText("待审提案")).toHaveLength(2);
+  expect(screen.getByText("合并、加载与效果尚未确认。")).toBeTruthy();
+  expect(screen.queryByText("成功")).toBeNull();
 });

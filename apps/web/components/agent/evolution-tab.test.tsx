@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { EvolutionTab } from "./evolution-tab";
-import { getAgentAgenda, type AgentAgenda, type AgentAgendaItem } from "@/lib/api";
+import { getAgentExperiments, getAgentAgenda, type AgentAgenda, type AgentAgendaItem } from "@/lib/api";
 
 vi.mock("@/lib/api", () => ({
   getAgentAgenda: vi.fn(),
@@ -62,4 +62,16 @@ describe("IMP-046 · 参数入影子不冒充生效", () => {
     expect(screen.queryByText("已执行")).toBeNull();
     expect(screen.queryByText("已入影子（未生效）")).toBeNull();
   });
+});
+
+
+it("IMP-025 · 实验只归档未恢复的结果不冒充回滚或验证通过", async () => {
+  vi.mocked(getAgentExperiments).mockResolvedValue([{ id: 1, change_id: 1, param_key: "demo",
+    hypothesis: "test", baseline: {}, status: "rolled_back", result: { conclusion: "只归档" },
+    outcome: { label: "已归档，未恢复参数", note: "因果效果未验证" },
+    verification_date: null, extensions: 0, created_at: null, concluded_at: null }]);
+  render(<EvolutionTab />);
+  expect(await screen.findByText("已归档，未恢复参数")).toBeTruthy();
+  expect(screen.queryByText("已自动回滚")).toBeNull();
+  expect(screen.queryByText("验证通过")).toBeNull();
 });

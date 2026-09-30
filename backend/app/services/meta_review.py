@@ -22,7 +22,9 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.db import get_session_factory
 from app.models.agent import AgentAgenda, AgentAudit, AgentExperiment, AgentParamChange
-from app.services.evolution import PROJECT_ROOT
+from app.services.evolution import PROJECT_ROOT, agenda_item_outcome
+from app.services.agent_params import _dump as dump_param
+from app.services.experiments import _dump as dump_experiment
 from app.core.bjtime import beijing_now  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
@@ -62,11 +64,14 @@ def _collect_week(sf) -> dict:
         ).scalars().all()
 
     item_stats: dict[str, int] = {}
+    outcome_stats: dict[str, int] = {}
     for a in agendas:
         for it in json.loads(a.items) if a.items else []:
             if isinstance(it, dict):
                 key = f"{it.get('class')}:{it.get('status')}"
                 item_stats[key] = item_stats.get(key, 0) + 1
+                label = agenda_item_outcome(it)["label"]
+                outcome_stats[label] = outcome_stats.get(label, 0) + 1
 
     audit_stats: dict[str, int] = {}
     for r in audits:
@@ -75,13 +80,15 @@ def _collect_week(sf) -> dict:
     return {
         "agenda_count": len(agendas),
         "agenda_item_stats": item_stats,
+        "agenda_outcome_stats": outcome_stats,
         "experiments": [
             {"id": e.id, "status": e.status, "key": e.param_key,
-             "conclusion": _conclusion_of(e.result)}
+             "conclusion": _conclusion_of(dump_experiment(e).get("result")),
+             "outcome": dump_experiment(e)["outcome"]}
             for e in experiments
         ],
         "param_changes": [
-            {"id": c.id, "key": c.key, "status": c.status, "source": c.source_type}
+            {"id": c.id, "key": c.key, "status": c.status, "source": c.source_type, "outcome": dump_param(c)["outcome"]}
             for c in changes
         ],
         "audit_stats": audit_stats,
@@ -89,12 +96,12 @@ def _collect_week(sf) -> dict:
     }
 
 
-def _conclusion_of(result_raw: str | None) -> str:
+def _conclusion_of(result_raw: str | dict | None) -> str:
     """实验结论提取（result 是 JSON 字符串；解析失败不阻断汇总）。"""
     if not result_raw:
         return ""
     try:
-        data = json.loads(result_raw)
+        data = json.loads(result_raw) if isinstance(result_raw, str) else result_raw
         return str(data.get("conclusion", ""))[:80] if isinstance(data, dict) else ""
     except Exception:  # noqa: BLE001
         return ""
@@ -199,7 +206,7 @@ def _write_markdown(data: dict, verdict: dict, now: datetime, *, degraded: bool 
         f"# 元评估周报 · {_week_key(now)}（{now:%m-%d}）\n",
         f"> {'⚠️ 降级：LLM 不可用，本周仅存数据不做 AI 判断' if degraded else 'AI 自审：本周自主改动质量剖析'}\n",
         "## 本周数据\n",
-        f"- 议程 {data['agenda_count']} 份；执行分布：{json.dumps(data['agenda_item_stats'], ensure_ascii=False)}\n",
+        f"- 议程 {data['agenda_count']} 份；处理结果：{json.dumps(data['agenda_outcome_stats'], ensure_ascii=False)}（原流程分布：{json.dumps(data['agenda_item_stats'], ensure_ascii=False)}）\n",
         f"- 实验：{len(data['experiments'])} 个（{json.dumps(data['experiments'], ensure_ascii=False)}）\n",
         f"- 变更单：{len(data['param_changes'])} 张（{json.dumps(data['param_changes'], ensure_ascii=False)}）\n",
         f"- 审计：{data['n_audits']} 条（{json.dumps(data['audit_stats'], ensure_ascii=False)}）\n",

@@ -26,7 +26,10 @@ export interface AgentTaskStep {
   llm?: { model: string; prompt_hash: string; enhanced: boolean };
 }
 
+export interface AgentOutcome { label: string; note: string }
+
 export interface AgentTask {
+  outcome?: AgentOutcome | null;
   id: string;
   type: string;
   status: AgentTaskStatus;
@@ -114,6 +117,8 @@ export interface AgentParamInfo {
 }
 
 export interface AgentParamChange {
+  outcome?: AgentOutcome | null;
+  rollback_receipt?: { runtime_value_restored: boolean; skipped_reason: string | null; runtime_refreshed: boolean | null } | null;
   id: number;
   key: string;
   before: unknown;
@@ -200,6 +205,7 @@ export async function rollbackAgentParamChange(
 }
 
 export interface AgentAgendaItem {
+  outcome?: AgentOutcome;
   execution_scope?: "shadow_only";
   runtime_applied?: boolean;
   review_required?: boolean;
@@ -242,6 +248,7 @@ export async function runAgentAgenda(): Promise<AgentAgenda> {
 }
 
 export interface AgentExperiment {
+  outcome?: AgentOutcome;
   id: number;
   change_id: number;
   param_key: string;

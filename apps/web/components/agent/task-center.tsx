@@ -202,7 +202,7 @@ export function TaskCenter() {
                     {taskLabel(t.type, types)}
                   </span>
                   <span className={`shrink-0 rounded px-1 py-0.5 text-[10px] ${STATUS_META[t.status].cls}`}>
-                    {STATUS_META[t.status].label}
+                    {t.outcome?.label ?? STATUS_META[t.status].label}
                   </span>
                 </div>
                 <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-zinc-600 dark:text-zinc-400">
@@ -274,7 +274,7 @@ export function TaskCenter() {
                     {taskLabel(detail.type, types)}
                   </span>
                   <span className={`rounded px-1.5 py-0.5 text-[10px] ${STATUS_META[detail.status].cls}`}>
-                    {STATUS_META[detail.status].label}
+                    {detail.outcome?.label ?? STATUS_META[detail.status].label}
                   </span>
                   {detail.read_only && (
                     <span className="rounded bg-zinc-500/10 px-1.5 py-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
@@ -341,6 +341,7 @@ export function TaskCenter() {
                   已处理点「已处置」，判定无需处理点「忽略」，结论留痕在审计里。
                 </p>
               )}
+              {detail.outcome?.note && <p className="mb-2 text-[11px] text-zinc-600 dark:text-zinc-400">{detail.outcome.note}</p>}
               {paramRows.length > 0 && (
                 <dl className="mb-3 rounded-lg border border-zinc-100 px-2 py-1.5 text-[11px] dark:border-zinc-800">
                   {paramRows.map(([k, v]) => (
