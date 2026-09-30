@@ -8,7 +8,7 @@
 
 **U50 降级授权回执仍有效**：用户 2026-09-24 允许本机 Codex 在 `DEGRADED_FULL_CONTROL` 承担规划、U49 作者反证、实施、自审、PR/CI、发布、合并及清理，直到明确撤销。准确 HEAD 的 `DegradedRelease` 必须明示作者自审，不能冒充独立 Review；完整本地门禁、三项 required CI、release_check、合并后 CI 和分支清理不降低。授权不覆盖付费源/模型、真实通知、券商、部署或生产库。
 
-本轮在 `master@f8e103d614a78cb1a20217eb04e7f7891247c485` 运行 selector，G0–G4 无 actionable blocker，按最低普通非阻断门领取 G2/BUG-009 唯一主任务；无硬依赖或效果前置。同门无其它竞争项。实施分支 `codex/bug009-morning-plan`。
+本轮在 `master@f8e103d614a78cb1a20217eb04e7f7891247c485` 运行 selector，G0–G4 无 actionable blocker，按最低普通非阻断门领取 G2/BUG-009 唯一主任务；无硬依赖或效果前置。同门无其它竞争项。实施分支 `codex/bug009-morning-plan`，PR #187，代码提交 `1972d2bb34254255f650f5c47e461b5ce0bc5495`。
 
 ## 2. 本轮实现与 U49 作者反证
 
@@ -16,12 +16,12 @@
 
 **U49 主动审计回执 / 作者反证**：核了死导入、孤儿改进项、跨日污染、损坏 JSON、缺报告、部分来源失败、旧版简报、API 404/非 404 与页面消费者；没有新增计划写入、业务动作或模型调用。仍需按准确 HEAD 与 CI 对最终差异自审，不能称独立审核。传播核对：W05 与本 handoff 已更新；细功能审计 X30/X32 已指向 BUG-009，无需改对象归属；总方案、INDEX、AGENTS/Skills 与 Jev 蓝图没有新增长期规则或入口，不适用。
 
-本机现有 `data/ashare.db` 以只读连接核 2026-09-23：复盘、未完成项、议程均可读，行动项最终返回 3 条。该观察不等于生产版本已加载或前向效果验收。隔离专项后端与前端通过；完整门禁、PR 与发布回执以本轮最终结果补记。首次本机全量 pytest 的 5 项无关失败来自忽略的 `backend/data/trade_calendar.json` 停在 2026-09-24，使合成 marketdb 被当前日期新鲜度闸门判陈旧；另 1 项是本任务修掉死导入后旧测试豁免应撤销，已修。保持闸门不变，改在不携带运行数据的干净检出全量复验。
+本机现有 `data/ashare.db` 以只读连接核 2026-09-23：复盘、未完成项、议程均可读，行动项最终返回 3 条。该观察不等于生产版本已加载或前向效果验收。最终本地门禁：干净检出后端 **4469 passed / 81 skipped / 1 既有 Starlette 警告**，全量 pyflakes；前端 tsc/eslint、**78 文件 / 736 tests**（默认与 UTC 各一轮）及 Next 生产构建；doc-health、workspace hygiene、公开仓扫描均通过。首次本机全量 pytest 的 5 项无关失败来自忽略的 `backend/data/trade_calendar.json` 停在 2026-09-24，使合成 marketdb 被当前日期新鲜度闸门判陈旧；另 1 项是本任务修掉死导入后旧测试豁免应撤销，已修。保持闸门不变，在不携带运行数据的干净检出全量复验通过。
 
 ## 3. 发布与后续
 
-本轮尚在发布收口，完成准确 PR/HEAD `DegradedRelease`、三项 required CI、`release_check.py`、合并后 master CI 和分支清理后才可称任务完成。未获部署授权，不加载生产服务。新前向反例回 W05/BUG-009 原 owner；下一轮必须重新运行 selector，只领取一个主任务。
+PR #187 的合并状态、准确 HEAD 的 `DegradedRelease`、三项 required CI、`release_check.py` 与合并后 master CI 以 GitHub 和脚本回执为准；本分支文档在合并前只是候选，不能据此宣称已发布。未获部署授权，不加载生产服务。新前向反例回 W05/BUG-009 原 owner。阶段页在 BUG-009 完成后重算返回 G3/RSH-030；它是下一轮候选，本轮不领取第二个业务任务。
 
-- **当前主门**：G2
-- **主切片首选**：BUG-009
-- **同门竞争项**：无
+- **当前主门**：G3
+- **主切片首选**：RSH-030
+- **当前门候选顺位**：RSH-030 → RSH-027
