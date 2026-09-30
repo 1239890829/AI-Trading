@@ -201,7 +201,7 @@ export function TaskCenter() {
                   <span className="truncate text-xs font-medium text-zinc-800 dark:text-zinc-100">
                     {taskLabel(t.type, types)}
                   </span>
-                  <span className={`shrink-0 rounded px-1 py-0.5 text-[10px] ${STATUS_META[t.status].cls}`}>
+                  <span className={`shrink-0 rounded px-1 py-0.5 text-[10px] ${t.outcome ? STATUS_META.needs_confirm.cls : STATUS_META[t.status].cls}`}>
                     {t.outcome?.label ?? STATUS_META[t.status].label}
                   </span>
                 </div>
@@ -273,7 +273,7 @@ export function TaskCenter() {
                   <span className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
                     {taskLabel(detail.type, types)}
                   </span>
-                  <span className={`rounded px-1.5 py-0.5 text-[10px] ${STATUS_META[detail.status].cls}`}>
+                  <span className={`rounded px-1.5 py-0.5 text-[10px] ${detail.outcome ? STATUS_META.needs_confirm.cls : STATUS_META[detail.status].cls}`}>
                     {detail.outcome?.label ?? STATUS_META[detail.status].label}
                   </span>
                   {detail.read_only && (
