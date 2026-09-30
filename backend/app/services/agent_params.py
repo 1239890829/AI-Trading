@@ -619,6 +619,19 @@ def revoke_promotion_approval(
     return out
 
 
+def rollback_outcome(receipt: dict | None) -> dict:
+    """Interpret a recorded rollback attempt, never infer current ownership/effect."""
+    known = receipt if isinstance(receipt, dict) else {}
+    restored = known.get("runtime_value_restored")
+    if restored is False:
+        label = "已归档，未恢复参数"
+    elif restored is True:
+        label = "已恢复参数" if known.get("runtime_refreshed") is True else "覆盖值已恢复，加载待核实"
+    else:
+        label = "历史回滚结果待核实"
+    return {"label": label, "note": "回执记录当次操作；不代表当前值仍由该变更拥有，也不证明实际效果。"}
+
+
 def _dump(row: AgentParamChange) -> dict:
     def _j(raw: str | None) -> Any:
         if not raw:
@@ -637,6 +650,14 @@ def _dump(row: AgentParamChange) -> dict:
             "code": "other", "note": str(parsed_reason),
         }
 
+    receipt = reason.get("receipt") if isinstance(reason, dict) else None
+    if reason and "receipt" in reason:
+        reason = {k: v for k, v in reason.items() if k != "receipt"}
+    outcome = None
+    if row.status == "rolled_back":
+        outcome = rollback_outcome(receipt)
+    elif row.status == "applied":
+        outcome = {"label": "已登记生效", "note": "当前值与进程加载另行核实，登记不证明实际效果。"}
     apply_reason = _manual_apply_reason(row) if row.status != "applied" else None
     return {
         "id": row.id, "key": row.key,
@@ -650,6 +671,8 @@ def _dump(row: AgentParamChange) -> dict:
         "applied_at": row.applied_at.isoformat() if row.applied_at else None,
         "rolled_back_at": row.rolled_back_at.isoformat() if row.rolled_back_at else None,
         "rollback_reason": reason,
+        "rollback_receipt": receipt if isinstance(receipt, dict) else None,
+        "outcome": outcome,
         "task_id": row.task_id,
     }
 
@@ -1057,7 +1080,9 @@ def rollback_change(
         if row is None:
             raise ValueError("变更单不存在")
         if row.status == "rolled_back":
-            return _dump(row)
+            out = _dump(row)
+            out.update(out.get("rollback_receipt") or {})
+            return out
         owner = _active_change_id(row.key, db)
         if row.status != "applied":
             skipped: str | None = "never_applied"
@@ -1077,7 +1102,10 @@ def rollback_change(
         row.status = "rolled_back"
         row.rolled_back_at = beijing_now_naive()
         row.rollback_reason = json.dumps(
-            {"code": reason_code, "note": note[:500]}, ensure_ascii=False
+            {"code": reason_code, "note": note[:500], "receipt": {
+                "runtime_value_restored": skipped is None, "skipped_reason": skipped,
+                "active_change_id": owner, "runtime_refreshed": None,
+            }}, ensure_ascii=False
         )
         db.commit()
         db.refresh(row)
@@ -1085,7 +1113,20 @@ def rollback_change(
         out["runtime_value_restored"] = skipped is None
         out["skipped_reason"] = skipped
         out["active_change_id"] = owner
-    refresh_runtime_overrides(sf)
+    try:
+        refresh_runtime_overrides(sf)
+        refreshed = True
+    except Exception as exc:
+        log.warning("rollback runtime refresh failed (%s): %s", change_id, type(exc).__name__)
+        refreshed = False
+    with sf() as db:
+        stored = db.get(AgentParamChange, change_id)
+        reason = json.loads(stored.rollback_reason)
+        reason["receipt"]["runtime_refreshed"] = refreshed
+        stored.rollback_reason = json.dumps(reason, ensure_ascii=False)
+        db.commit()
+        out = _dump(stored)
+        out.update(out["rollback_receipt"])
     if skipped is None:
         record_audit("user", "param.rollback", row.key, before=row.after, after=row.before,
                      rollback_ref=f"change:{change_id}")

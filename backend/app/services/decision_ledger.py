@@ -179,6 +179,7 @@ def _from_param_changes(session_factory, *, limit: int) -> list[dict]:
     from sqlalchemy import select
 
     from app.models.agent import AgentParamChange
+    from app.services.agent_params import _dump as dump_param
 
     with session_factory() as db:
         rows = db.execute(
@@ -193,7 +194,7 @@ def _from_param_changes(session_factory, *, limit: int) -> list[dict]:
                 subject=c.key or "?",
                 decision=f"{c.before or '—'} → {c.after or '—'}",
                 basis=((c.evidence or {}) if isinstance(c.evidence, dict) else {}) and str(c.evidence)[:160],
-                outcome={"applied": "已应用", "rolled_back": "已回滚"}.get(c.status, c.status),
+                outcome=(dump_param(c).get("outcome") or {}).get("label") or c.status,
                 at=(c.created_at.isoformat() if c.created_at else "") or "",
             ))
         return out

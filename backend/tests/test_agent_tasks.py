@@ -583,3 +583,38 @@ def test_task_timeout_waits_for_inflight_thread_to_drain_before_failed(monkeypat
     assert done["status"] == "failed"
     assert done["error"]["code"] == "TaskTimeout"
     assert "已收尾" in done["error"]["message"]
+
+
+@pytest.mark.parametrize("kind, expected", [("code_proposal", "待审提案"), ("code_change", "历史代码记录（待复核）")])
+def test_imp025_task_result_never_claims_deployed(monkeypatch, tmp_path, kind, expected):
+    factory, _ = _patch(monkeypatch, tmp_path)
+    tid = at.record_mutation(source="agenda", kind=kind, summary="代码",
+                             detail={"merged": True, "code_applied": True})
+    at.update_mutation_result(tid, "succeeded", "旧文字声称已合并")
+    out = at.get_task(tid)
+    assert out["status"] == "succeeded"  # preserve original workflow fact
+    assert out["outcome"]["label"] == expected
+    assert "尚未确认" in out["outcome"]["note"]
+    assert at.list_tasks(include_agenda=False)[0]["outcome"] == out["outcome"]
+
+
+def test_imp025_agenda_task_and_detail_use_same_interpretation(monkeypatch, tmp_path):
+    from app.services.evolution import get_agenda
+    factory, _ = _patch(monkeypatch, tmp_path)
+    _seed_agenda(factory, items=[{"class": "C", "status": "executed", "finding": "历史执行",
+                                "merged": True, "code_applied": True},
+                               {"class": "A", "status": "pending", "finding": "尚未执行"}])
+    out = at.get_task("agenda:2026-09-10")
+    agenda = get_agenda("2026-09-10", factory)
+    assert agenda["items"][0]["outcome"]["label"] in out["steps"][1]["output_summary"]
+    assert out["outcome"]["label"] == "已处理"
+    assert out["steps"][1]["ok"] is False
+    assert out["steps"][2]["ok"] is False
+
+
+def test_imp025_ready_agenda_is_not_successful_execution(monkeypatch, tmp_path):
+    factory, _ = _patch(monkeypatch, tmp_path)
+    _seed_agenda(factory, status="ready")
+    out = at.get_task("agenda:2026-09-10")
+    assert out["status"] == "needs_confirm"
+    assert out["outcome"]["label"] == "待处理"

@@ -100,3 +100,16 @@ describe("IMP-046 · 参数候选与批准身份", () => {
     expect(screen.queryByRole("button", { name: "确认生效" })).toBeNull();
   });
 });
+
+
+it("IMP-025 · 历史回滚缺回执时保留未知，真实归档使用后端结果", async () => {
+  const base: AgentParamChange = { id: 1, key: "demo", before: 1, after: 2, source_type: "manual",
+    source_id: "", evidence: null, status: "rolled_back", created_at: null, applied_at: null,
+    rolled_back_at: null, rollback_reason: null, task_id: null };
+  vi.mocked(getAgentParamChanges).mockResolvedValue([base, { ...base, id: 2,
+    outcome: { label: "已归档，未恢复参数", note: "当前值由新变更拥有。" } }]);
+  render(<ParamsTab />);
+  expect(await screen.findByText("历史回滚结果待核实")).toBeTruthy();
+  expect(screen.getByText("已归档，未恢复参数")).toBeTruthy();
+  expect(screen.queryByText("已回滚")).toBeNull();
+});

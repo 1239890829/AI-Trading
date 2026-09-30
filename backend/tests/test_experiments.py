@@ -132,6 +132,10 @@ def test_auto_rollback_of_superseded_change_keeps_newer_value(sf, monkeypatch):
     rb = out["result"]["rollback"]
     assert rb["runtime_value_restored"] is False
     assert rb["skipped_reason"] == "superseded"
+    assert "未恢复参数" in out["result"]["conclusion"]
+    assert "已自动回滚" not in out["result"]["conclusion"]
+    assert out["outcome"]["label"] == "已归档，未恢复参数"
+    assert ex.list_experiments(session_factory=sf)[0]["outcome"] == out["outcome"]
     assert rb["active_change_id"] == b["id"], "当前值的拥有者是 B"
     assert current_value("picks_replace_threshold", session_factory=sf) == "58.0", (
         "自动回滚陈旧变更不得把 B 的 58 退回 A 的 before"

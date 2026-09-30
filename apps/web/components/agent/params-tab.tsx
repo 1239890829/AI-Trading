@@ -273,7 +273,7 @@ export function ParamsTab() {
                     <span className="text-[11px] text-zinc-600 dark:text-zinc-300">
                       #{c.id} {c.key} <span className="text-zinc-600 dark:text-zinc-400">· 来源 {c.source_type}{c.source_id ? `/${c.source_id}` : ""} · {fmtTime(c.created_at)}</span>
                     </span>
-                    <span className={`shrink-0 rounded px-1 py-0.5 text-[10px] ${meta.cls}`}>{meta.label}</span>
+                    <span className={`shrink-0 rounded px-1 py-0.5 text-[10px] ${meta.cls}`}>{c.outcome?.label ?? (c.status === "rolled_back" ? "历史回滚结果待核实" : c.status === "applied" ? "已登记生效" : meta.label)}</span>
                   </div>
                   {c.evidence && Object.keys(c.evidence).length > 0 && (
                     <p className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">依据：{pretty(c.evidence)}</p>
@@ -281,6 +281,7 @@ export function ParamsTab() {
                   {c.apply_block_reason && c.status !== "applied" && c.status !== "rolled_back" && (
                     <p className="mt-0.5 text-[10px] text-amber-800 dark:text-amber-300">{c.apply_block_reason}</p>
                   )}
+                  {c.outcome?.note && <p className="mt-1 text-[10px] text-zinc-600 dark:text-zinc-400">{c.outcome.note}</p>}
                   {c.rollback_reason && (
                     <p className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
                       回滚归因：{survival?.reason_labels?.[c.rollback_reason.code] ?? c.rollback_reason.code}

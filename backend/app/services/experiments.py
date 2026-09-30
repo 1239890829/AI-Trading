@@ -68,13 +68,27 @@ def attach_experiment(change_id: int, param_key: str, hypothesis: str,
 
 
 def _dump(row: AgentExperiment) -> dict:
-    return {
+    result = _j(row.result, None)
+    rollback = result.get("rollback") if isinstance(result, dict) else None
+    receipt = rollback if isinstance(rollback, dict) else {}
+    if row.status == "rolled_back":
+        from app.services.agent_params import rollback_outcome
+        label = rollback_outcome(receipt)["label"]
+        if isinstance(result, dict):
+            result = {**result, "original_conclusion": result.get("conclusion"),
+                      "conclusion": ("已自动回滚；" if receipt.get("runtime_value_restored") is True
+                                     and receipt.get("runtime_refreshed") is True else "")
+                                    + label + "；后置观察不证明因果改善。"}
+    else:
+        label = {"concluded": "未触发回滚阈值", "concluded_insufficient": "样本不足",
+                 "running": "验证中"}.get(row.status, "结果待核实")
+    return {"outcome": {"label": label, "note": "后置观察不证明策略盈利或因果改善。"},
         "id": row.id, "change_id": row.change_id, "param_key": row.param_key,
         "hypothesis": row.hypothesis,
         "baseline": _j(row.baseline, {}),
         "verification_date": row.verification_date.isoformat() if row.verification_date else None,
         "status": row.status,
-        "result": _j(row.result, None),
+        "result": result,
         "extensions": row.extensions,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "concluded_at": row.concluded_at.isoformat() if row.concluded_at else None,
@@ -161,7 +175,10 @@ def _conclude_one(exp_id: int, sf) -> dict:
             row.status = "rolled_back"
             verdict["rollback"] = rollback_info
             row.result = json.dumps({
-                "conclusion": f"胜率劣化 {delta:+.3f}，超阈值，已自动回滚",
+                "conclusion": (f"胜率劣化 {delta:+.3f}，超阈值；"
+                               + ("已自动回滚，覆盖值已恢复" if rollback_info.get("runtime_value_restored") is True
+                                  else "仅归档，未恢复参数")
+                               + ("；运行加载待核实" if rollback_info.get("runtime_refreshed") is not True else "")),
                 **verdict,
             }, ensure_ascii=False)
         else:

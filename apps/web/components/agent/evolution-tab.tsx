@@ -168,7 +168,7 @@ export function EvolutionTab() {
                     <span className="text-[11px] font-medium text-zinc-800 dark:text-zinc-100">
                       {it.finding}
                     </span>
-                    <span className={`ml-auto rounded px-1.5 py-0.5 text-[10px] ${sm.cls}`}>{sm.label}</span>
+                    <span className={`ml-auto rounded px-1.5 py-0.5 text-[10px] ${sm.cls}`}>{it.outcome?.label ?? sm.label}</span>
                   </div>
                   {it.evidence && Object.keys(it.evidence).length > 0 && (
                     <p className="mt-1 text-[10px] text-zinc-600 dark:text-zinc-400">
@@ -181,6 +181,7 @@ export function EvolutionTab() {
                   {it.expected_effect && (
                     <p className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">预期：{it.expected_effect} · 验证：{it.verification || "—"}</p>
                   )}
+                  {it.outcome?.note && <p className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-400">{it.outcome.note}</p>}
                   {it.result && (
                     <p className={`mt-1 rounded px-1.5 py-1 text-[10px] ${
                       it.status === "executed" && it.class === "B"
@@ -215,7 +216,7 @@ export function EvolutionTab() {
                 e.status === "rolled_back"
                   ? { label: "已自动回滚", cls: "bg-red-500/10 text-red-700 dark:text-red-300" }
                   : e.status === "concluded"
-                    ? { label: "验证通过", cls: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" }
+                    ? { label: "未触发回滚阈值", cls: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" }
                     : e.status === "concluded_insufficient"
                       ? { label: "样本不足", cls: "bg-amber-500/10 text-amber-800 dark:text-amber-300" }
                       : { label: `验证中（${e.verification_date?.slice(5, 10) ?? "--"} 到期）`, cls: "bg-sky-500/10 text-sky-700 dark:text-sky-300" };
@@ -224,7 +225,7 @@ export function EvolutionTab() {
                   <span className="truncate text-zinc-600 dark:text-zinc-300">
                     #{e.change_id} {e.param_key} · {e.hypothesis.slice(0, 40) || "—"}
                   </span>
-                  <span className={`shrink-0 rounded px-1 py-0.5 text-[10px] ${meta.cls}`}>{meta.label}</span>
+                  <span className={`shrink-0 rounded px-1 py-0.5 text-[10px] ${meta.cls}`}>{e.outcome?.label ?? (e.status === "rolled_back" ? "历史回滚结果待核实" : meta.label)}</span>
                 </div>
               );
             })}

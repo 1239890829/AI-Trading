@@ -49,13 +49,14 @@ async def _t_param_changes(ctx: ToolContext, **kw) -> str:
         from sqlalchemy import select
 
         from app.models.agent import AgentParamChange
+        from app.services.agent_params import _dump
 
         with ctx.session_factory() as db:
             rows = db.execute(
                 select(AgentParamChange).order_by(AgentParamChange.id.desc()).limit(20)
             ).scalars().all()
             recs = [{"id": r.id, "key": r.key, "before": r.before, "after": r.after,
-                     "status": r.status,
+                     "status": r.status, "outcome": _dump(r).get("outcome"),
                      "at": r.created_at.isoformat() if r.created_at else ""} for r in rows]
     except Exception as exc:  # noqa: BLE001
         return f"参数变更：读取失败（{exc}）"
@@ -63,7 +64,7 @@ async def _t_param_changes(ctx: ToolContext, **kw) -> str:
         return "参数变更：暂无变更记录"
     return _fmt_rows("参数变更（最近 20 条）", recs, [
         ("id", ""), ("key", "参数"), ("before", "原值"), ("after", "新值"),
-        ("status", "状态"), ("at", "时间"),
+        ("status", "流程状态"), ("outcome", "实际结果"), ("at", "时间"),
     ], total=len(recs))
 
 
@@ -75,20 +76,21 @@ async def _t_agent_tasks(ctx: ToolContext, **kw) -> str:
         from sqlalchemy import select
 
         from app.models.agent import AgentTask
+        from app.services.agent_tasks import _load
 
         with ctx.session_factory() as db:
             rows = db.execute(
-                select(AgentTask).order_by(AgentTask.id.desc()).limit(20)
+                select(AgentTask).order_by(AgentTask.created_at.desc()).limit(20)
             ).scalars().all()
             recs = [{"id": r.id, "type": r.type, "status": r.status,
-                     "risk_level": r.risk_level or "",
+                     "risk_level": r.risk_level or "", "outcome": _load(r).get("outcome"),
                      "at": r.created_at.isoformat() if r.created_at else ""} for r in rows]
     except Exception as exc:  # noqa: BLE001
         return f"任务中心：读取失败（{exc}）"
     if not recs:
         return "任务中心：暂无任务"
     return _fmt_rows("任务中心（最近 20 条）", recs, [
-        ("id", ""), ("type", "类型"), ("status", "状态"), ("risk_level", "风险"), ("at", "时间"),
+        ("id", ""), ("type", "类型"), ("status", "流程状态"), ("outcome", "实际结果"), ("risk_level", "风险"), ("at", "时间"),
     ], total=len(recs))
 
 

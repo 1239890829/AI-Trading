@@ -531,3 +531,44 @@ def test_imp046_candidate_changed_after_manual_precheck_is_not_applied(sf, monke
         assert db.query(AgentParam).count() == 0
         assert db.query(AgentTask).one().status == "failed"
         assert getattr(db.get(AgentParamChange, c["id"]), field) == value
+
+
+@pytest.mark.parametrize("superseded", [False, True])
+def test_imp025_rollback_receipt_survives_list_and_retry(sf, superseded):
+    c = ap.propose("picks_replace_threshold", "52", session_factory=sf)
+    ap.apply_change(c["id"], sf)
+    if superseded:
+        newer = ap.propose("picks_replace_threshold", "58", session_factory=sf)
+        ap.apply_change(newer["id"], sf)
+    first = ap.rollback_change(c["id"], sf)
+    reread = next(r for r in ap.list_changes(session_factory=sf) if r["id"] == c["id"])
+    repeated = ap.rollback_change(c["id"], sf)
+    assert first["rollback_receipt"] == reread["rollback_receipt"] == repeated["rollback_receipt"]
+    assert repeated["runtime_value_restored"] is (not superseded)
+    assert repeated["runtime_refreshed"] is True
+    assert "未恢复" in reread["outcome"]["label"] if superseded else reread["outcome"]["label"] == "已恢复参数"
+
+
+def test_imp025_refresh_failure_does_not_claim_loaded(sf, monkeypatch):
+    c = ap.propose("picks_replace_threshold", "52", session_factory=sf)
+    ap.apply_change(c["id"], sf)
+    def fail(*args):
+        raise RuntimeError("refresh failed")
+    monkeypatch.setattr(ap, "refresh_runtime_overrides", fail)
+    out = ap.rollback_change(c["id"], sf)
+    assert out["runtime_value_restored"] is True
+    assert out["runtime_refreshed"] is False
+    assert out["outcome"]["label"] == "覆盖值已恢复，加载待核实"
+    reread = next(r for r in ap.list_changes(session_factory=sf) if r["id"] == c["id"])
+    assert reread["rollback_receipt"]["runtime_refreshed"] is False
+
+
+def test_imp025_decision_ledger_preserves_unknown_legacy_rollback(sf):
+    from app.models.agent import AgentParamChange
+    from app.services.decision_ledger import _from_param_changes
+    with sf() as db:
+        row = AgentParamChange(key="picks_replace_threshold", before="52", after="58",
+                               status="rolled_back", rollback_reason='{"code":"manual","note":"old"}')
+        db.add(row)
+        db.commit()
+    assert _from_param_changes(sf, limit=10)[0]["outcome"] == "历史回滚结果待核实"

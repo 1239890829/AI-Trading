@@ -1,40 +1,38 @@
-# 当前交接：IMP-046 条件路由与真实执行证据
+# 当前交接：IMP-025 产物、处理状态与实际效果一致
 
-> 唯一状态在 [W05/IMP-046](stages/w05-agents.md#imp-046)。上轮 IMP-045 由 PR #190 合并至 `98669c7013d9ba6bee9c17286a8de94f4cf8d340`，其新理由配对与独立标签条件仍由原任务维护，不重复空集扫描。
+> 唯一状态在 [W05/IMP-025](stages/w05-agents.md#imp-025)。上轮 IMP-046 已由 PR #192 合并至 `300962fbf77ae9a6ba8c3e6a4606e5194b4fbd8d`，其未来独立质量/费用对照条件留在原 owner，不重复空回执扫描。
 
-权威入口：现役 [Jev 蓝图](ai/jev-integration.md)，[持续演进](ai/continuous-evolution.md)，总方案 v9.13 在 [实施方案](implementation-plan.md)。当前累计 U01–U55。
+权威入口：[实施方案](implementation-plan.md) v9.13、[产品闭环](product/product-closure-design.md)、[细功能覆盖](product/feature-closure-audit.md)、[Jev 蓝图](ai/jev-integration.md)与[持续演进](ai/continuous-evolution.md)。当前累计 U01–U55。
 
 ## 1. 现场、模式与门序
 
-本轮从干净 `master@98669c7013d9ba6bee9c17286a8de94f4cf8d340` 同步远端并重算 selector：G0–G4 无 actionable blocker，普通 fallback 选 G4/IMP-046（P1/门内序30/非阻断），硬依赖与效果前置无。只领取本任务；RSH-031 的历史研究与后续主任务未在本轮另行开工。
+本轮从干净 `master@300962fbf77ae9a6ba8c3e6a4606e5194b4fbd8d` 同步远端并重算 selector：G0–G4 无 actionable blocker，普通 fallback 选 G4/IMP-025（P1/门内序50/非阻断），硬依赖与效果前置无。仅领取本任务，RSH-031 和下一候选未在本轮另开工。
 
 **U50 降级授权回执**：用户 2026-09-24 的本机 Codex `DEGRADED_FULL_CONTROL` 仍有效，直到明确撤销。作者负责 U49 反证和 exact-HEAD `DegradedRelease`，不声称独立 Review；完整本地门禁、三项 required CI、release_check、post-merge CI 与分支清理继续强制。授权不扩大真实通知、券商、部署、生产库写入、付费或新模型/阈值准入。
 
 ## 2. 本轮交付与实测
 
-分支 `codex/imp046-route-receipts`；工程提交 `d964c05fb4940602423f89cadac6a58b83fa3e92`。协调文档另提交；准确发布 HEAD/PR 归 `DegradedRelease`。
+分支 `codex/imp025-result-truth`；工程提交 `d3ebc155190c2926a09b7e0b9fea604a3e2ccfdd`，真实ORM夹具与助手查询反例补验提交 `20b7755c2f9bae1294d2a02e76ad577af40d4411`。最终展示提交 `abb46c4f01b101f0a5cea20a3e27aa7ed494167f` 将待核验徽标改为提示色。协调文档另提交；准确发布 HEAD/PR 归 DegradedRelease。
 
-- 助手先按当前只读依赖过滤候选；明确数据请求、私人请求/页面、多轮历史回原集合。公共页面不外发 title/query/context；仅真实多组残余歧义进入原 Jev Noul，非法响应回原授权集合，不修改阈值或执行白名单。
-- 分发器在缓存/handler 前核注册身份、请求依赖与签名，保留原各工具参数校验；回执区分拒绝、参数错误、返回、缓存和失败。建议可缩提示词，不能授予工具；returned 不代表源数据有效或回答正确。
-- 每进程单路由 worker，无队列；忙时弃权。SSE `done` 先发送，取消屏蔽下真实 drain 再收连接与 metadata-only 审计；不把取消协程当成杀线程，不宣称 HTTP 清理零耗时。审计/telemetry 失败不破坏原答案。
-- 复用 AgentAudit 与受鉴权 agent/audit：记录请求/registry 指纹、可用/未就绪候选、建议、实际提示采纳、分发与执行、回退、必要工具缺口/误否认线索及模型用量；不保存问题/历史/参数/工具正文/私有账户。human coverage 保持 null。做 T 助手查询只读既有记录，结算归原维护流程。
+- 议程与任务中心共享 A/B/C 结果解释；处理结束不推定生效，新代码产物只显示待审，历史 code_change/executed 不凭 merged/code_applied 自声明升级。ready 不再映射为成功；A/C 和 pending 步骤不展示已落地勾选。原始状态/结果文字保留并标明核验边界，未添加合并或部署能力。
+- 回滚复用既有 rollback_reason JSON，持久保存是否恢复覆盖值、跳过原因、原 owner 和当次进程刷新状态。原 code/note API 保持兼容；首次、列表及幂等重试一致；刷新失败/未确认不说加载成功。没有历史回执的旧行保留未知，不反向编造迁移。
+- 实验 rolled_back 是原流程归档状态；同源解释区分真实恢复、仅归档未恢复、加载待核实与历史未知。历史摘要只做读取投影并保留 original_conclusion，原库记录不改写；未触发回滚阈值不再称验证通过或盈利证明。
+- 参数页、助手只读工具、决策账本与元评估周报同步消费结果解释；周报保留原流程分布，增加真实结果分布，避免旧误解回流。复盘 A/C 不回写 applied 的既有硬边界未改变。
 
-**真实条件与边界**：现有本地库只读查询新 action `assistant.route` 回执 0；配置读取 Jev enabled / assistant shadow，但不证明运行进程已加载新代码。本轮没有新增业务模型调用、重启服务或写生产库。全局 capability wrapper 与固定 JevRouter 的 pin/clean 一致；已有权限过滤 smoke 保留历史身份，未重复收费。复杂浏览器退回既有正常浏览器能力的规则未改。工程结果不证明独立必要工具覆盖、股票收益或净费用节省；同条件人工质量/费用对照仍是未来 cascade 效果采用条件。
+**U49 主动审计回执 / 作者 Preflight 与反证**：扫描任务/议程/参数/实验/助手/决策账本/元评估上下游，发现并修复 ready 默认成功、处理结束绿标、新旧代码记录混用、回滚结果刷新丢失、CAS 只归档冒充恢复、刷新失败与历史摘要自证、周报旧状态回流。保持提案、授权、处理、实际恢复、加载、效果各自的凭据边界；没有跨门扩大资金、代码应用或模型权限。作者自审与发布同人，最终仅以 DegradedRelease 放行。
 
-**U49 主动审计回执 / 作者 Preflight 与反证**：核必要工具漏用、旧 used 把拒绝当实际执行、未就绪/未注册/签名、缓存先于拦截、私人标题/查询/历史外发、非法响应、无竞争/明确请求浪费调用、取消不杀同步线程、忙时积压、done/HTTP清理差异、审计失效及名义只读查询写库。上述真实边界均有定向行为反例；未借 Jev 扩交易或模型权限。作者自审与发布同人，最终仅按授权模式形成 DegradedRelease。
+**本地门禁**：最终定向后端296 passed（17.83s）；前端相关3文件20测试通过（2.31s），tsc与全量pyflakes通过。最终后端全量4542 passed/81 skipped（226.93s），全量pyflakes通过；后端树与最终工程HEAD一致，最终额外提交仅改前端提示色。前端tsc/eslint、78文件739测试默认/UTC分别通过（84.20s/72.51s），Next16.3.3生产构建通过；已确认3000无监听，构建生成next-env已按已知diff恢复。文档/selector/卫生/公开仓行为守卫148 passed（9.51s），doc-health/workspace-hygiene/public scan通过。初次全量因助手旧fake行缺ORM字段出现2项失败，换真实模型并新增助手结果反例后134项定向及全量原样重验；不降低断言。前端首次全量与后端重验短暂重叠，其后最终前端门串行完成，耗时非受控性能/费用对照。Jev baseline→最终duplication 6.8→7.8（工具判improved）；correctness 7.9→8.0/reliability 7.7→8.1归unchanged，无regression。共享解释和真实消费者已修；兼容提示已核原状态、归因code/note及新增可选字段测试，不凭通用分数提示无依据扩改。最终复评对应abb46c4，辅助作者判断、不冒充独立Review；模型版本/费用未知。完整后端在干净无部署缓存检出运行，避免部署日历旧缓存干扰；所有测试使用隔离库/文件、离线守卫，无业务模型调用或真实通知。原正向回滚摘要断言曾暴露措辞回归，已保留真实回滚用语并重验，未放宽断言；新增前端测试缺import已修正。账本完成后selector变化造成hand-off暂时漂移，已一并回填，未改守卫。
 
-**本地门禁**：定向195 passed（3.34s），其后新增多轮历史弃权用例随全量验证；后端干净无部署缓存检出4533 passed/81 skipped（150.29s），全量 pyflakes通过。前端tsc/eslint通过，78文件736测试默认/UTC各通过（46.16s/47.75s），Next16.3.3生产构建通过，构建生成的next-env路径已按已知diff恢复。文档/selector/公共与卫生守卫最终121 passed（5.04s）；doc-health/workspace hygiene/public scan通过。曾因新hand-off标题缺机器约定“U49 主动审计回执”导致2项文档守卫失败，已修标题并原样重验，未改守卫。Jev Review baseline→最终对应工程提交：correctness 7.6→7.9、reliability 7.7→8.2，工具小幅变化归 unchanged；只是辅助作者判断，不冒充独立审核。已修畸形响应、telemetry失败、实际提示采纳与AnyIO取消窗口，没有继续为追分改动的依据。模型版本/费用未知，回执与JUnit只进忽略artifacts。
+**传播核对**：W05单点状态、细功能X37、INDEX和本页已更新。当前是已批准P27状态真实性的实现修补；未改变导航、架构、模型、权限、准入标准或协作制度，总方案、plan-registry、产品闭环/猎场、Jev蓝图、AGENTS/Skills/登记册不适用变更，原规范继续有效。无新增文档或第二状态源。
 
-**传播核对**：Jev蓝图§6/§23.5、INDEX、W05单点状态、细功能X40与本页已更新。本次落实已批U51/P22，没有新模型/依赖、工具链、权限、策略或产品导航取舍；总方案/plan-registry/产品闭环/猎场/AGENTS/Skills/登记册无需变更，原只读和独立效果准入原则继续有效。文档只更新本轮事实，不重写旧smoke或RSH结论。
-
-本轮仅在本地实现和隔离验证，生产服务未重启/部署。发布按准确HEAD的DegradedRelease、三项required CI与release_check，合并后核master CI及分支清理；临时检出/测试沙箱按GOV-026收口，只留紧凑回执，不删除业务数据。
+本轮未重启生产服务、未部署或写生产库；源码合并不表示运行已加载。发布继续要求准确 HEAD 的 DegradedRelease、三项 required CI 和 release_check；合并后核 master CI 与分支清理。临时检出已干净退出；约1.4GB本轮测试沙箱压缩成44MB可恢复ZIP，JUnit与两次Jev紧凑回执进忽略artifacts/runs，既有worktree和业务数据未清理。
 
 ## 3. 条件与下一候选
 
-IMP-046 工程收口；持续维护仅在新版本真实会话、独立人工标签或新反例形成后收集质量、升级、tokens、总等待和费用，未满足效果条件不晋级cascade或恢复model/effort自动切换。新工程缺口由原owner按阶段门登记，不无限复跑空回执或历史smoke。
+IMP-025 工程收口；持续复核仅在新消费者、真实加载/结果样本或新反例出现时进行。历史合并/部署缺证据与未来策略效果继续是原 owner 的条件，不反复更换标签或把未知补成完成。
 
-重算selector首选G4/IMP-025，其后IMP-019。本轮仅报告，不自动领取第二业务任务。
+重算selector下一首选G4/IMP-019。本轮仅报告，不自动领取第二业务任务。
 
 - **当前主门**：G4
-- **主切片首选**：IMP-025
-- **当前门候选顺位**：IMP-025 → IMP-019
+- **主切片首选**：IMP-019
+- **当前门候选顺位**：IMP-019

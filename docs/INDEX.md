@@ -220,6 +220,7 @@
 | AI 助手怎么升级成"大脑+执行层" | `summary/ai-evolution.md`（09-08：权限分级 L0-L3/四道拦截/任务中心+复盘+告警+参数+日志模块设计/研究页下线方案） |
 | AI 助手更名论证（已定稿「交易智能体」） | `summary/ai-evolution.md`（09-09 P2-1：已是"进化体"的能力盘点+命名三选项+拍板记录「交易智能体·自主进化体」） |
 | LLM 微调/训练资料与结合方式 | `summary/ai-evolution.md` §7（09-09：FinGPT/FinGLM/RD-Agent 资料清单+A 股实证基准+三层结合路径，近期零新增付费依赖；层 2 待算力 → 总账 P2-8） |
+| 控制台结果语义（任务/参数/实验） | `stages/w05-agents.md` IMP-025、`product/feature-closure-audit.md` X37；原始状态与实际恢复/加载回执分开，历史无回执不推定落地 |
 | 控制台三模块梳理（任务中心/参数/告警） | `summary/review-governance.md`（09-10：三模块定位+实证数据+告警运作逻辑白话版+规则评估与优化建议） |
 | 板块资金页核对 + 瀑布流改造 | `summary/review-governance.md`（09-10：东财 vs 同花顺板块体系差异实证（非 bug）+ 列表→卡片瀑布流+滚动分页改造记录） |
 | 自主迭代与参数晋级的当前边界 | `implementation-plan.md` §6；W05/IMP-052 与 W04/IMP-020；`summary/ai-evolution.md` 仅提供历史设计与已有实现背景 |

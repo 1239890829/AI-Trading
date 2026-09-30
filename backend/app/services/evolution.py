@@ -1011,6 +1011,21 @@ async def _llm_call(fn) -> str:
     return await asyncio.wait_for(asyncio.to_thread(fn), timeout=150.0)
 
 
+def agenda_item_outcome(item: dict) -> dict:
+    """Read-only interpretation; historical status/LLM flags never prove deployment."""
+    kind, status = item.get("class"), item.get("status")
+    if kind == "C" and status in ("proposed", "executed"):
+        return {"label": "待审提案" if status == "proposed" else "历史代码记录（待复核）",
+                "note": "未确认合并、加载或实际效果；原始记录保留，不作为落地凭证。"}
+    if kind == "A" and status == "executed":
+        return {"label": "已入影子（未生效）" if item.get("execution_scope") == "shadow_only" else "历史参数记录（待复核）",
+                "note": "议程结果不证明参数当前生效；实际变更与加载须查独立回执。"}
+    if kind == "B" and status == "executed":
+        return {"label": "已执行", "note": "知识产物已记录，策略效果未验证。"}
+    labels = {"pending": "待处理", "deferred": "已延后", "rejected": "已拒绝", "failed": "失败"}
+    return {"label": labels.get(status, "结果待核实"), "note": ""}
+
+
 def _agenda_dump(row: AgentAgenda) -> dict:
     def _j(raw: str | None, default: Any) -> Any:
         if not raw:
@@ -1022,7 +1037,9 @@ def _agenda_dump(row: AgentAgenda) -> dict:
 
     return {
         "id": row.id, "date": row.date, "status": row.status,
-        "inputs": _j(row.inputs, {}), "items": _j(row.items, []),
+        "inputs": _j(row.inputs, {}), "items": [
+            {**it, "outcome": agenda_item_outcome(it)} for it in _j(row.items, []) if isinstance(it, dict)
+        ],
         "budget": _j(row.budget, {}),
         "error": _j(row.error, None),
         "created_at": row.created_at.isoformat() if row.created_at else None,
