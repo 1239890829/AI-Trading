@@ -65,7 +65,7 @@ export function Panel({ title, children, source, dataTimestamp, quality, quality
   // 保留纯属重复占位 —— 无标题且无右侧徽标时整行不渲染（2026-09-02）。
   const showHeader = Boolean(title || extra || quality || source || dataTimestamp);
   return (
-    <section className={`flex min-w-0 flex-col overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800 ${className ?? ""}`}>
+    <section className={`task-panel flex min-w-0 flex-col overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800 ${className ?? ""}`}>
       {showHeader && (
         <div className="flex items-center justify-between border-b border-zinc-200 bg-zinc-900/[0.03] px-4 py-2.5 dark:border-zinc-800 dark:bg-zinc-900/40">
           {/* min-w-0+truncate：长标题截断省略，不挤压右侧按钮/来源徽标（右侧 shrink-0 保完整） */}
@@ -81,7 +81,7 @@ export function Panel({ title, children, source, dataTimestamp, quality, quality
           </div>
         </div>
       )}
-      <div className={"flex-1 " + (bodyClassName ?? "overflow-auto")}>
+      <div className={"task-panel-body min-h-0 flex-1 " + (bodyClassName ?? "overflow-auto")}>
         <PanelBoundary label={typeof title === "string" ? title : undefined} resetKey={resetKey}>{children}</PanelBoundary>
       </div>
     </section>

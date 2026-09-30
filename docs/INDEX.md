@@ -336,3 +336,6 @@
 
 总方案v9.13记录批准取舍；product/product-closure-design.md定义B/C任务导航、前后台、组件与六闭环；product/feature-closure-audit.md保存50项/18域/73源/30后台声明去向；ai/jev-integration.md附录B区分研发共审/业务凭证。批准来源、Skill传播及未验边界见RV-09。
 Governor短入口连接按需手册、决策卡与历史示例；设计/状态/Canvas/选型/雷达/对账/接续/健康Skills随PR #172同步。技能文本与引用检查的实际结果见RV-09及PR回执；宿主加载、真实UI/Canvas和业务效果仍按原stage验收。阶段状态与顺位不由下载报告或导航命名替代。
+
+
+IMP-050当前实现、B/C同任务比较及实屏边界见[产品闭环§11](product/product-closure-design.md#11-imp-050-全站视图落地与设计对照2026-09-30)，逐50项/18域和后台承接见[细功能审计§18](product/feature-closure-audit.md#18-imp-050-ui工程逐项验收与继承边界2026-09-30)。工程状态与准确发布仍归[W07](stages/w07-simplification.md#imp-050)，不从方案确认或截图推定生产加载。

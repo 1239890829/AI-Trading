@@ -391,7 +391,7 @@ export function PickCard({
                 }`}
                 title="点击打开工作台查看持仓；卖出/删流水后标签自动消失"
               >
-                {positionLabel === "real" ? "已真实持仓" : "已模拟持仓"}
+                {positionLabel === "real" ? "有手工持仓记录" : "已模拟持仓"}
               </span>
             )}
             {item.tier != null && (

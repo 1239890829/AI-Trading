@@ -122,7 +122,7 @@ const STOCK_RIGHT_TABS: readonly (readonly [DetailRightTab, string])[] = [
   ["trades", "逐笔"],
   ["trade", "模拟交易"],
   // 真实持仓：券商实际成交的手工账本，与模拟交易完全独立
-  ["real", "真实持仓"],
+  ["real", "手工记账"],
   ["profile", "资料"],
   ["dt", "做T"],
   ["info", "资讯"],

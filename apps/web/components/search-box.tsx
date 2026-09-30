@@ -19,6 +19,10 @@ export function SearchBox() {
   // 工作台页内则由 Provider 回落为「切换右栏」（见 symbol-detail-modal 的 open）。
   const { open: openSymbolDetail } = useSymbolDetail();
   const [q, setQ] = useState("");
+  const [resultQuery, setResultQuery] = useState("");
+  const [adding, setAdding] = useState<string | null>(null);
+  const [addNote, setAddNote] = useState<string | null>(null);
+  const addLock = useRef(false);
   const [items, setItems] = useState<SymbolSearchItem[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -38,6 +42,8 @@ export function SearchBox() {
 
   const runSearch = useCallback((kw: string) => {
     const seq = ++seqRef.current;
+    setItems([]);
+    setResultQuery(kw);
     setLoading(true);
     setError(null);
     setOpen(true); // 请求飞行中立即打开面板显示「搜索中…」，不等响应
@@ -87,14 +93,14 @@ export function SearchBox() {
   }, [q, runSearch]);
 
   // 少于 2 字时直接派生空列表（旧写法在 effect 里同步 setItems([])，会触发级联渲染）
-  const results = q.trim().length >= MIN_QUERY_LEN ? items : [];
+  const results = q.trim().length >= MIN_QUERY_LEN && resultQuery === q.trim() ? items : [];
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
       if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
     }
     document.addEventListener("mousedown", onClick);
-    return () => document.removeEventListener("mousedown", onClick);
+    return () => { document.removeEventListener("mousedown", onClick); seqRef.current += 1; };
   }, []);
 
   function go(item: SymbolSearchItem) {
@@ -114,18 +120,28 @@ export function SearchBox() {
 
   async function quickAdd(e: React.MouseEvent, item: SymbolSearchItem) {
     e.stopPropagation();
+    if (addLock.current) return;
+    addLock.current = true;
+    setAdding(item.symbol);
+    setAddNote(null);
+    const seq = seqRef.current;
     try {
       await addToWatchlist(item.symbol, item.name ?? undefined);
-      setItems((prev) => prev.map((i) => (i.symbol === item.symbol ? { ...i, is_realtime: true } : i)));
+      if (seq === seqRef.current) {
+        setItems((prev) => prev.map((i) => (i.symbol === item.symbol ? { ...i, is_realtime: true } : i)));
+        setAddNote(`${item.name ?? item.symbol} 已加入自选`);
+      }
       notifyWatchlistChanged();
     } catch (exc) {
-      // 失败不再完全静默：留 console 痕迹便于排查（主链路错误在下拉面板内提示）
-      console.warn("quickAdd failed:", exc);
+      if (seq === seqRef.current) setAddNote(`加入自选失败：${exc instanceof Error ? exc.message : "请重试"}`);
+    } finally {
+      addLock.current = false;
+      setAdding(null);
     }
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (composingRef.current) return; // IME 组合中：Enter=选字上屏、Escape=取消组合，不是搜索指令
+    if (composingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) return; // IME 组合中：Enter=选字上屏、Escape=取消组合，不是搜索指令
     if (e.key === "Enter") {
       if (results.length > 0) {
         go(results[0]);
@@ -142,7 +158,7 @@ export function SearchBox() {
         runSearch(kw);
       }
     }
-    if (e.key === "Escape") setOpen(false);
+    if (e.key === "Escape") { setOpen(false); resetTransient(); }
   }
 
   const kw = q.trim();
@@ -152,17 +168,24 @@ export function SearchBox() {
     (results.length > 0 || loading || error !== null || searched);
 
   return (
-    <div ref={boxRef} className="relative w-32 min-w-0 sm:w-44 md:w-64">
+    <div ref={boxRef} className="relative w-32 min-w-0 sm:w-44 md:w-52">
       <input
         value={q}
         onChange={(e) => {
           const v = e.target.value;
+          seqRef.current += 1;
+          setResultQuery("");
+          setSearched(false);
+          setError(null);
+          setAddNote(null);
           setQ(v);
           // 删短到阈值以下：立即作废飞行中请求并清理搜索状态
           if (v.trim().length < MIN_QUERY_LEN) resetTransient();
         }}
         onCompositionStart={() => {
           composingRef.current = true;
+          seqRef.current += 1;
+          setResultQuery("");
         }}
         onCompositionEnd={(e) => {
           if (!composingRef.current) return;
@@ -180,9 +203,10 @@ export function SearchBox() {
         }}
         onFocus={() => results.length > 0 && setOpen(true)}
         onKeyDown={onKeyDown}
+        aria-label="搜索证券代码或名称"
         placeholder="搜索代码 / 名称"
         aria-busy={loading}
-        className="w-full rounded-md border border-zinc-200 bg-transparent px-3 py-1.5 pr-8 text-sm outline-none placeholder:text-zinc-400 focus:border-up/60 dark:border-zinc-700"
+        className="w-full rounded-md border border-zinc-200 bg-transparent px-3 py-1.5 pr-8 text-sm outline-none placeholder:text-zinc-600 dark:placeholder:text-zinc-400 focus:border-up/60 dark:border-zinc-700"
       />
       {loading && (
         <span
@@ -191,7 +215,8 @@ export function SearchBox() {
         />
       )}
       {showPanel && (
-        <ul className="absolute left-0 right-0 top-10 z-50 overflow-hidden rounded-md border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+        <ul className="absolute right-0 top-12 z-50 max-h-[65vh] w-[min(22rem,90vw)] overflow-auto rounded-md border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+          {addNote && <li role="status" className="px-3 py-2 text-xs">{addNote}</li>}
           {error !== null && (
             <li className="px-3 py-2 text-xs text-red-700 dark:text-red-400" role="alert">
               {error}
@@ -209,20 +234,16 @@ export function SearchBox() {
           )}
           {results.map((it) => (
             <li key={`${it.source}-${it.symbol}`}>
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => go(it)}
-                onKeyDown={(e) => e.key === "Enter" && go(it)}
-                className="flex w-full cursor-pointer items-center justify-between px-3 py-2 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"
-              >
+              <div className="flex w-full items-center gap-1 px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                <button type="button" onClick={() => go(it)} className="flex min-w-0 flex-1 items-center text-left">
                 <span className="font-mono text-xs text-zinc-600 dark:text-zinc-400">{it.symbol}</span>
                 <span className="flex-1 px-2">{it.name}</span>
+                </button>
                 {it.is_realtime ? (
                   <span className="text-xs text-zinc-600 dark:text-zinc-400">已加自选 ✓</span>
                 ) : (
-                  <button onClick={(e) => void quickAdd(e, it)} className="mr-2 rounded border border-up/50 px-1.5 text-xs text-up-ink dark:text-up hover:bg-up/10" title="加入自选">
-                    ＋
+                  <button disabled={adding !== null} aria-label={`加入自选 ${it.name ?? it.symbol}`} onClick={(e) => void quickAdd(e, it)} className="mr-2 rounded border border-up/50 px-1.5 text-xs text-up-ink dark:text-up hover:bg-up/10" title="加入自选">
+                    {adding === it.symbol ? "保存中" : "＋"}
                   </button>
                 )}
                 <span className="text-xs text-zinc-600 dark:text-zinc-400">{it.market}</span>

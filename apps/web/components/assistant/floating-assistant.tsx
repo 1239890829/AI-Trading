@@ -166,6 +166,11 @@ export function FloatingAssistant() {
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
 
+  const ballRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => { if (open) inputRef.current?.focus(); }, [open]);
+  function minimize() { setOpen(false); ballRef.current?.focus(); }
+
   const abortRef = useRef<AbortController | null>(null);
   const idRef = useRef(0);
   const msgsRef = useRef<ChatMsg[]>([]);
@@ -703,6 +708,11 @@ export function FloatingAssistant() {
           原本就达标，未动。 */}
       <div
         data-testid="assistant-ball"
+        ref={ballRef}
+        tabIndex={0}
+        aria-expanded={open}
+        aria-controls="assistant-panel"
+        onKeyDown={event => { if (!event.nativeEvent.isComposing && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); setOpen(value => !value); } }}
         role="button"
         aria-label="AI 助手"
         className={`fixed z-50 flex cursor-grab select-none items-center justify-center bg-zinc-900 text-zinc-400 shadow-[0_2px_8px_rgba(0,0,0,0.18),0_10px_28px_rgba(0,0,0,0.22)] transition-[left,width,height,border-radius,box-shadow] duration-200 ease-out hover:shadow-[0_4px_12px_rgba(0,0,0,0.22),0_14px_36px_rgba(0,0,0,0.28)] active:cursor-grabbing dark:bg-zinc-100 dark:text-zinc-950 dark:shadow-[0_2px_8px_rgba(0,0,0,0.4),0_10px_28px_rgba(0,0,0,0.35)] ${
@@ -829,6 +839,10 @@ export function FloatingAssistant() {
       {open && (
         <div
           data-testid="assistant-panel"
+          id="assistant-panel"
+          role="region"
+          aria-label="AI 助手面板"
+          onKeyDown={event => { if (event.key === "Escape" && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); minimize(); } }}
           className="fixed z-50 flex flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white/95 shadow-2xl shadow-zinc-900/10 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95 dark:shadow-black/50"
           style={panelStyle}
         >
@@ -882,7 +896,7 @@ export function FloatingAssistant() {
               type="button"
               aria-label="最小化"
               title="最小化"
-              onClick={() => setOpen(false)}
+              onClick={minimize}
               className="rounded-md p-1.5 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
@@ -1066,6 +1080,7 @@ export function FloatingAssistant() {
           <div className="border-t border-zinc-200 px-3 py-2.5 dark:border-zinc-800">
             <div className="flex items-end gap-2">
               <textarea
+                ref={inputRef}
                 data-testid="assistant-input"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}

@@ -25,7 +25,7 @@ export function PickDetailModal({ target, onClose }: { target: PickDetailTarget;
   const title = target.kind === "pick" ? "每日精选 · 选股详情" : "盘中跟踪 · 入选详情";
 
   return (
-    <ModalShell
+    <ModalShell presentation="drawer"
       onClose={onClose}
       label={title}
       testid="pick-detail-modal"

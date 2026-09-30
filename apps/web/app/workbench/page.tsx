@@ -1,5 +1,8 @@
 "use client";
 
+import Link from "next/link";
+import { AccountScopePanel } from "@/components/detail/account-scope-panel";
+import { patchWorkspaceUrl } from "@/lib/task-navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Panel } from "@/components/panel";
@@ -45,7 +48,7 @@ import {
 import { fmt, pctColor, pctText, signedYi, triAmount, triText } from "@/lib/format";
 import { isTradingSession } from "@/lib/market-hours";
 import { subscribeWatchlist, notifyWatchlistChanged } from "@/lib/watchlist-sync";
-import { LAST_SYMBOL_KEY, originLabel, workbenchUrl } from "@/lib/routing";
+import { LAST_SYMBOL_KEY, originLabel } from "@/lib/routing";
 import type { Quote } from "@/types/market";
 
 const STATUS_LABEL = STREAM_STATUS_LABEL;
@@ -58,15 +61,19 @@ function WorkbenchInner() {
   const router = useRouter();
   const sp = useSearchParams();
   const paramSymbol = sp.get("symbol");
+  const mode = sp.get("mode") === "positions" ? "positions" : "watch";
+  const account = ["manual", "paper", "daily", "hunting"].includes(sp.get("account") ?? "") ? sp.get("account")! : "manual";
   // 深链 tab（助手一键跳转 / 分享链接）：?ct= 图表区、?rt= 右栏，非法值忽略回落到默认
   const chartTab = parseChartTab(sp.get("ct"));
-  const rightTab = parseRightTab(sp.get("rt"));
+  const rightTab = parseRightTab(sp.get("rt")) ?? (mode === "positions" ? account === "manual" ? "real" : account === "paper" ? "trade" : "info" : undefined);
   const [symbols, setSymbols] = useState<string[]>([]);
+  const [positions, setPositions] = useState<PaperPositionInfo[]>([]);
+  const paperSymbols = useMemo(() => positions.map(p => p.symbol), [positions]);
   // 左栏列表 pending 哨兵（审查 F2/R2）：loadBase/dyn 首拉完成前渲染行骨架
   const [baseLoaded, setBaseLoaded] = useState(false);
   // 真实持仓（CONTEXT.md: Holdings Group）：共用 hook 一份轮询（评审 M3），
   // 标的列表派生进 WS 订阅，「持仓」分类共用
-  const { data: realData } = useRealPositions();
+  const { data: realData, error: realError } = useRealPositions();
   const realSymbols = useMemo(() => realData?.items.map((i) => i.symbol) ?? [], [realData]);
   const [indices, setIndices] = useState<Quote[]>([]);
   const [totalAmount, setTotalAmount] = useState<number | null>(null);
@@ -80,7 +87,8 @@ function WorkbenchInner() {
   const [groupMap, setGroupMap] = useState<Record<string, string>>({});
   // 分组清单（持久表 ∪ 成员派生，后端并集）：空分组也可见（评审 A1 分组管理）
   const [allGroupNames, setAllGroupNames] = useState<string[]>(["默认"]);
-  const [activeGroup, setActiveGroup] = useState<string>("全部");
+  const [watchGroup, setActiveGroup] = useState<string>("全部");
+  const activeGroup = mode === "positions" ? "持仓" : watchGroup;
   const [updatedAt, setUpdatedAt] = useState<string>("");
   // ── 动态分组（2026-09-04）：每日精选（/picks/today）+ 盘中跟踪（/picks/intraday-top）──
   // 数据源是系统推荐口径，不是用户自选——只读展示，不走 watchlist 表；
@@ -102,7 +110,7 @@ function WorkbenchInner() {
     if (paramSymbol) {
       setSelected(paramSymbol);
     } else {
-      const last = typeof window !== "undefined" ? window.sessionStorage.getItem(LAST_SYMBOL_KEY) : null;
+      const last = typeof window !== "undefined" ? (() => { try { return window.sessionStorage.getItem(LAST_SYMBOL_KEY); } catch { return null; } })() : null;
       if (last) setSelected(last);
     }
   }
@@ -120,20 +128,20 @@ function WorkbenchInner() {
   // activeSymbol 可能是深链/搜索进来的、不在任何分组里的标的——必须显式加入，
   // 否则详情面板会拿不到行情。切股只发 subscribe 消息，不重连（见 useQuoteStream 头注）。
   const streamSymbols = useMemo(
-    () => [...new Set([...symbols, ...realSymbols, ...picksSymbols, ...topSymbols, activeSymbol])],
-    [symbols, realSymbols, picksSymbols, topSymbols, activeSymbol],
+    () => [...new Set([...symbols, ...realSymbols, ...paperSymbols, ...picksSymbols, ...topSymbols, activeSymbol])],
+    [symbols, realSymbols, paperSymbols, picksSymbols, topSymbols, activeSymbol],
   );
   const { quotes, status } = useQuoteStream(streamSymbols, { throttleMs: 3000 });
   const [extra, setExtra] = useState<Record<string, Quote>>({});
   // WS 每 5s tick 全量替换 quotes：merged/列表/spark 查找都必须 memo 化，
   // 否则每次 tick 触发整列表 O(n²) 重算（评审 F2）
   const merged: Record<string, Quote> = useMemo(() => ({ ...extra, ...quotes }), [extra, quotes]);
-  const [positions, setPositions] = useState<PaperPositionInfo[]>([]);
+
   const [risk, setRisk] = useState<RiskState | null>(null);
 
   // 记住最近查看的标的（会话内有效；路由规范见 lib/routing.ts）
   useEffect(() => {
-    if (selected) window.sessionStorage.setItem(LAST_SYMBOL_KEY, selected);
+    if (selected) { try { window.sessionStorage.setItem(LAST_SYMBOL_KEY, selected); } catch {} }
   }, [selected]);
 
   // 页内切股：URL 是唯一真相源；from 参数（来源页，见 lib/routing.workbenchUrlWithBack）
@@ -141,12 +149,20 @@ function WorkbenchInner() {
   const switchSymbol = useCallback(
     (s: string) => {
       setSelected(s);
-      const back = sp.get("from");
-      const url = back ? `${workbenchUrl(s)}&from=${encodeURIComponent(back)}` : workbenchUrl(s);
+      const url = patchWorkspaceUrl("/workbench", sp.toString(), { symbol: s });
       router.replace(url, { scroll: false });
     },
     [router, sp],
   );
+
+  const switchRightTab = useCallback((tab: RightTab) => {
+    const patch: Record<string, string | null> = { rt: tab };
+    if (tab === "trade" || tab === "real") {
+      patch.mode = "positions";
+      patch.account = tab === "trade" ? "paper" : "manual";
+    }
+    router.replace(patchWorkspaceUrl("/workbench", sp.toString(), patch), {scroll: false});
+  }, [router, sp]);
 
   // 返回来源页：from 只接受站内绝对路径（防注入），返回即恢复跳转前的 URL（含状态）。
   // 状态保留原理：各功能页的 tab/选中态本来就以 URL query 为真相源，整串带回即可。
@@ -156,26 +172,28 @@ function WorkbenchInner() {
   const loadBase = useCallback(async () => {
     try {
       // 原 groups 裸 fetch 从未被消费（gs 解构后无人用）——随收口一并删除
-      const [wl, overview, positions, groupNames] = await Promise.all([
-        getWatchlist(),
-        getMarketOverview(),
-        getPaperPositions().catch(() => []),
-        getWatchlistGroups().catch(() => [] as string[]),
+      const [wl, overview, paperPositions, groupNames] = await Promise.allSettled([
+        getWatchlist(), getMarketOverview(), getPaperPositions(), getWatchlistGroups(),
       ]);
-      setGroupMap(Object.fromEntries(wl.map((i) => [i.symbol, i.group_name ?? "默认"])));
-      setSymbols(wl.map((i) => i.symbol));
-      // 分组清单 = 持久分组表 ∪ 成员派生（后端并集；空分组也可存在，评审 A1）
-      setAllGroupNames(["默认", ...groupNames]);
-      setIndices(overview.indices);
-      setTotalAmount(overview.total_amount);
-      setAmountFreshness(overview.total_amount_freshness);
-      setPositions(positions);
-      setError(null);
-      setUpdatedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
+      const failures: string[] = [];
+      if (wl.status === "fulfilled") {
+        setGroupMap(Object.fromEntries(wl.value.map(i => [i.symbol, i.group_name ?? "默认"])));
+        setSymbols(wl.value.map(i => i.symbol));
+      } else failures.push("自选读取失败");
+      if (groupNames.status === "fulfilled") setAllGroupNames(["默认", ...groupNames.value]);
+      else failures.push("分组读取失败");
+      if (overview.status === "fulfilled") {
+        setIndices(overview.value.indices); setTotalAmount(overview.value.total_amount);
+        setAmountFreshness(overview.value.total_amount_freshness);
+        setUpdatedAt(new Date().toLocaleTimeString("zh-CN", {hour12: false}));
+      } else failures.push("行情概览读取失败");
+      if (paperPositions.status === "fulfilled") setPositions(paperPositions.value);
+      else failures.push("main 模拟持仓读取失败");
+      setError(failures.length ? `${failures.join("；")}。保留值仅为上次结果，不能判断当前为空。` : null);
     } catch {
       // ⚠️ 文案里禁止出现 `--reload`（AGENTS.md §6.1）：它与 SQLite 锁组合会反复挂死，
       // 教用户照抄 = 复现已知事故。此前本行就是反例（IMP-001）。
-      setError("无法连接后端行情服务。请先启动：cd backend && .venv/bin/uvicorn app.main:app --port 8000（勿加 --reload）");
+      setError("自选或行情读取失败，请稍后重试；保留数据只作上次结果参考。服务状态可在系统维护核对。");
     } finally {
       // pending 三态哨兵（审查 F2/R2）：首次拉取完成前左栏渲染行骨架，
       // 不再抢跑「自选为空或行情未就绪」文案（加载中≠确认空）
@@ -222,8 +240,8 @@ function WorkbenchInner() {
 
   // 首帧行情兜底：WS 订阅切换窗口期里，动态分组标的与自选一起走 REST 补拉
   const feedSymbols = useMemo(
-    () => [...new Set([...symbols, ...picksSymbols, ...topSymbols])],
-    [symbols, picksSymbols, topSymbols],
+    () => [...new Set([...symbols, ...realSymbols, ...paperSymbols, ...picksSymbols, ...topSymbols, activeSymbol])],
+    [symbols, realSymbols, paperSymbols, picksSymbols, topSymbols, activeSymbol],
   );
   useEffect(() => {
     if (feedSymbols.length === 0) return;
@@ -330,7 +348,7 @@ function WorkbenchInner() {
   const topInfoBySymbol = useMemo(() => new Map(topItems.map((i) => [i.symbol, i])), [topItems]);
   // 当前激活视图的行数据（三个特殊视图各走各的数据源）
   const activeRows: Quote[] =
-    activeGroup === "持仓" ? holdingQuotes
+    activeGroup === "持仓" ? account === "manual" ? holdingQuotes : account === "paper" ? positions.map(p => merged[p.symbol]).filter(Boolean) : []
     : activeGroup === "猎场" ? huntingQuotes
     : watchQuotes;
   const isDynamicGroup = activeGroup === "猎场";
@@ -348,7 +366,8 @@ function WorkbenchInner() {
     try {
       await removeFromWatchlist(symbol);
       setSymbols((prev) => prev.filter((s) => s !== symbol));
-    } catch {}
+      notifyWatchlistChanged();
+    } catch (error) { setError(`移出自选失败：${error instanceof Error ? error.message : "请重试"}`); }
   }
 
   // ── 自选管理模式（2026-09-01 自选页并入工作台）──────────────
@@ -379,7 +398,8 @@ function WorkbenchInner() {
     try {
       await updateWatchlistGroup(symbol, group);
       setGroupMap((prev) => ({ ...prev, [symbol]: group }));
-    } catch {}
+      notifyWatchlistChanged();
+    } catch (error) { setAddError(`修改分组失败：${error instanceof Error ? error.message : "请重试"}`); }
   }
 
   // ── 分组管理（评审 A1：新建 / 重命名 / 删除）────────────────
@@ -420,7 +440,12 @@ function WorkbenchInner() {
   }
 
   return (
-    <main className="mx-auto flex h-full w-full max-w-[1600px] flex-col gap-3 px-4 py-3">
+    <main className="task-page mx-auto flex h-full w-full max-w-[1600px] flex-col gap-3 px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h1 className="font-semibold">{mode === "positions" ? "持仓与模拟" : "自选跟踪"}</h1>
+        <nav aria-label="个人对象" className="task-subnav text-sm"><Link href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "watch", rt: null})} aria-current={mode === "watch" ? "page" : undefined}>自选</Link><Link href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "positions", account: "manual", rt: null})} aria-current={mode === "positions" ? "page" : undefined}>持仓与模拟</Link></nav>
+      </div>
+      {mode === "positions" && <nav aria-label="账户范围" className="task-subnav text-xs">{[["manual", "手工记录"], ["paper", "手工模拟"], ["daily", "每日精选影子"], ["hunting", "机会影子"]].map(([key, label]) => <Link key={key} href={patchWorkspaceUrl("/workbench", sp.toString(), {account: key, rt: null})} aria-current={account === key ? "page" : undefined}>{label}</Link>)}</nav>}
       {error && (
         <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-800 dark:text-amber-300">{error}</div>
       )}
@@ -477,15 +502,17 @@ function WorkbenchInner() {
         </span>
       </div>
 
-      <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[340px,minmax(0,1fr)]">
+      <div className="task-scroll grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[340px,minmax(0,1fr)]">
         <div className="flex min-h-0 min-w-0 flex-col gap-1.5">
+        {mode === "positions" && <AccountScopePanel account={account} />}
+        {mode === "positions" && account === "manual" && realError && <p role="alert" className="text-xs text-amber-800 dark:text-amber-300">手工记录读取失败，保留结果仅供参考：{realError}</p>}
         <IndexCards
           indices={indices}
           selected={activeSymbol}
           onSelect={switchSymbol}
         />
         {/* 持仓组（retro #3 遗留）：仅有持仓时渲染，空仓零占用；行点击选中该股 */}
-        {positions.length > 0 && (
+        {mode === "positions" && account === "paper" && positions.length > 0 && (
           <Panel title={`模拟持仓 (${positions.length})`} className="max-h-36 shrink-0 overflow-hidden">
             <table className="w-full text-xs">
               <tbody>
@@ -514,7 +541,7 @@ function WorkbenchInner() {
         )}
         <Panel
           title={
-            activeGroup === "持仓" ? `真实持仓 (${holdingQuotes.length})`
+            activeGroup === "持仓" ? account === "manual" ? `手工记录持仓 (${holdingQuotes.length})` : "选中证券"
             : activeGroup === "猎场" ? `猎场 · ${picksDate ?? "未生成"} (${huntingQuotes.length})`
             : "自选股"
           }
@@ -561,7 +588,7 @@ function WorkbenchInner() {
               竖线区隔（持仓不是分组，是真实持仓账本视角）；管理模式下
               提供 新建 / 重命名 / 删除 分组（保护规则在后端）。────── */}
           <div className="sticky top-0 z-10 flex flex-wrap items-center gap-1 border-b border-zinc-100 bg-white/95 px-3 py-1.5 dark:border-zinc-800/60 dark:bg-zinc-950/95">
-            {["全部", "持仓", "默认", ...groups, "猎场"].map((g) => (
+            {(mode === "positions" ? ["持仓"] : ["全部", "默认", ...groups]).map((g) => (
               <span key={g} className="flex items-center gap-1">
                 {(g === "持仓" || g === "默认" || g === "猎场") && (
                   <span className="mx-0.5 h-4 w-px bg-zinc-200 dark:bg-zinc-800" aria-hidden />
@@ -616,17 +643,17 @@ function WorkbenchInner() {
             </div>
           ) : activeRows.length === 0 ? (
             <p className="px-4 py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">
-              {activeGroup === "持仓" ? (
+              {error ? "当前列表读取有缺项，不能判断为空；请重试读取。" : activeGroup === "持仓" ? (
                 <>
-                  暂无真实持仓。在个股详情页「真实持仓」tab 记一笔买入
+                  {account === "paper" ? "main 模拟账户暂无持仓。" : account === "manual" ? "暂无手工记录，可在右侧手工记账中记录成交。" : "此范围没有可展示的持仓列表。"}
                   <br />
-                  （按你在券商的实际成交价）。
+                  （手工记录未经券商验证；不合并其它账户）。
                 </>
               ) : activeGroup === "猎场" ? (
                 <>
                   猎场暂无标的——盘中跟踪随盘面实时重算（候选成形自动出现，宁缺毋滥）；
                   <br />
-                  盘前选择在收盘后生成次日名单（右上「生成/刷新组合」也可手动跑）。
+                  盘前选择在收盘后生成次日名单（持久生产结果与维护状态见系统维护）。
                 </>
               ) : (
                 <>
@@ -821,11 +848,11 @@ function WorkbenchInner() {
             刻意**不传 className**：边界健康时 `render()` 直接返回 children，不产生
             额外 DOM 节点 ⇒ 网格项仍是 StockDetailPanel 自己的 <section>，高度链
             与改动前逐字一致（全高契约见 components/panel.tsx 头注）。 */}
-        <PanelBoundary key={activeSymbol} label="个股详情">
+        <PanelBoundary key={`${activeSymbol}:${mode}:${account}`} label="个股详情">
           <StockDetailPanel
             symbol={activeSymbol}
             chartTab={chartTab}
-            rightTab={rightTab}
+            rightTab={rightTab} onRightTabChange={switchRightTab}
             liveQuote={merged[activeSymbol]}
             streamStatus={status}
           />

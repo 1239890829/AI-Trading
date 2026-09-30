@@ -117,3 +117,36 @@ describe("ModalShell · 内容槽", () => {
     expect(screen.getByTestId("body-x")).toBeTruthy();
   });
 });
+
+describe("ModalShell 焦点与层级", () => {
+  it("isolates the background, traps Tab and restores the originating focus", () => {
+    const origin = document.createElement("button"); origin.textContent = "来源"; document.body.append(origin); origin.focus();
+    const {unmount} = render(<ModalShell label="焦点测试" onClose={() => {}} header="标题"><button>首按钮</button><button>末按钮</button></ModalShell>);
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(origin.inert).toBe(true);
+    const last = screen.getByText("末按钮"); last.focus(); fireEvent.keyDown(window, {key: "Tab"});
+    expect(document.activeElement).toBe(screen.getByLabelText("关闭"));
+    unmount(); expect(origin.inert).not.toBe(true); expect(document.activeElement).toBe(origin); origin.remove();
+  });
+  it("Escape only closes the top nested overlay", () => {
+    const closeLower = vi.fn(), closeTop = vi.fn();
+    const lower = render(<ModalShell label="底层" onClose={closeLower} header="底层"><button>底层按钮</button></ModalShell>);
+    const upper = render(<ModalShell label="上层" onClose={closeTop} zIndex={60} header="上层"><button>上层按钮</button></ModalShell>);
+    fireEvent.keyDown(window, {key: "Escape"});
+    expect(closeTop).toHaveBeenCalledTimes(1); expect(closeLower).not.toHaveBeenCalled();
+    upper.unmount();
+    expect(screen.getByRole("dialog", {name: "底层"}).contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(window, {key: "Escape"}); expect(closeLower).toHaveBeenCalledTimes(1); lower.unmount();
+  });
+});
+
+
+it("restores a keyboard SVG origin instead of dropping focus to the page", () => {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  const cell = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  cell.setAttribute("tabindex", "0"); svg.append(cell); document.body.append(svg); cell.focus();
+  const {unmount} = render(<ModalShell label="SVG来源" onClose={() => {}} header="详情">内容</ModalShell>);
+  expect(screen.getByRole("dialog").contains(document.activeElement)).toBe(true);
+  unmount(); expect(document.activeElement).toBe(cell); svg.remove();
+});

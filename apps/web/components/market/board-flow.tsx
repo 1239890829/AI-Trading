@@ -1,25 +1,23 @@
 "use client";
 
+import { ModalShell } from "@/components/ui/modal-shell";
+import { useResource } from "@/hooks/use-polling-fetch";
 import { Panel } from "@/components/panel";
 import { StockLink, useStockRowNav } from "@/components/stock-link";
 import { Skeleton } from "@/components/ui/loading";
 import { IncrementalSentinel } from "@/components/ui/incremental-sentinel";
 import { useIncremental } from "@/hooks/use-incremental";
-import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { pctColor, pctText } from "@/lib/format";
 import { CardHead, CardShell } from "@/components/picks/card-shell";
 import { MasonryColumns } from "@/components/masonry-columns";
-import { useEffect, useCallback, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   getBoardFlowMembers,
   getBoardFlowMinute,
   getBoardFundFlow,
   type BoardFlowKind,
-  type BoardFlowMembersPayload,
-  type BoardFlowMinutePayload,
   type BoardFlowRange,
   type BoardFlowRow,
-  type BoardFundFlowPayload,
 } from "@/lib/api";
 import { FlowIntradayChart, signedFmt } from "@/components/market/flow-intraday-chart";
 
@@ -96,46 +94,20 @@ function BoardDailyBars({ bars }: { bars: { date: string; main_yi: number | null
 /** 板块下钻抽屉：分钟五档累计（延迟口径）+ 日度主力净额柱 + 成员个股资金排行 Top20。 */
 function BoardFlowDrawer({ row, onClose }: { row: BoardFlowRow; onClose: () => void }) {
   const stockNav = useStockRowNav();
-  const [minute, setMinute] = useState<BoardFlowMinutePayload | null>(null);
-  const [members, setMembers] = useState<BoardFlowMembersPayload | null>(null);
-  const [pending, setPending] = useState(true);
-
-  // 关闭即卸载 → usePollingFetch 清理定时器，轮询随停
-  usePollingFetch(async () => {
-    try {
-      const [m, mem] = await Promise.all([
-        getBoardFlowMinute(row.board_code).catch(() => null),
-        getBoardFlowMembers(row.board_code).catch(() => null),
-      ]);
-      if (m) setMinute(m);
-      if (mem) setMembers(mem);
-    } finally {
-      setPending(false);
-    }
-  }, 60_000);
+  const minuteResult = useResource(() => getBoardFlowMinute(row.board_code), { key: row.board_code, intervalMs: 60_000 });
+  const memberResult = useResource(() => getBoardFlowMembers(row.board_code), { key: row.board_code, intervalMs: 60_000 });
+  const minute = minuteResult.data;
+  const members = memberResult.data;
+  const pending = minuteResult.pending || memberResult.pending;
 
   const items = minute?.items ?? [];
   const bars = minute?.daily_bars ?? [];
   const memRows = members?.rows ?? [];
 
   return (
-    <div className="fixed inset-0 z-50" data-testid="board-flow-drawer">
-      <div className="anim-backdrop-in absolute inset-0 bg-zinc-950/40" onClick={onClose} />
-      <div className="anim-slide-in-right absolute inset-y-0 right-0 flex w-[460px] max-w-[94vw] flex-col overflow-y-auto border-l border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="sticky top-0 z-10 flex items-start justify-between gap-2 border-b border-zinc-100 bg-white/95 px-4 py-3 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95">
-          <div>
-            <p className="text-sm font-semibold">{row.name}</p>
-            <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[10px] text-zinc-600 dark:text-zinc-400">
-              <span className="font-mono">{row.board_code}</span>
-              <span>榜位 #{row.rank}</span>
-              {row.streak != null && row.streak > 0 && <span className="text-up-ink dark:text-up">连续流入 {row.streak} 天</span>}
-              <span>板块口径：东财 f62（非成分股相加）</span>
-            </p>
-          </div>
-          <button onClick={onClose} className="rounded p-1 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800"
-            aria-label="关闭" data-testid="drawer-close">✕</button>
-        </div>
-
+    <ModalShell presentation="drawer" onClose={onClose} label={`板块资金 ${row.name}`} testid="board-flow-drawer"
+      header={<div><p className="text-sm font-semibold">{row.name}</p><p className="text-xs text-zinc-600 dark:text-zinc-400">{row.board_code} · 榜位 #{row.rank} · 东财 f62口径，非成分股相加</p></div>}>
+        {!!(minuteResult.error || memberResult.error) && <p role="alert" className="text-xs text-amber-800 dark:text-amber-300">部分资金来源读取失败；保留值仅作上次结果参考。<button onClick={() => { minuteResult.refresh(); memberResult.refresh(); }}>重试</button></p>}
         <div className="space-y-4 px-4 py-3">
           {/* ① 板块分钟五档累计（延迟 ~15min 口径） */}
           <section>
@@ -206,8 +178,7 @@ function BoardFlowDrawer({ row, onClose }: { row: BoardFlowRow; onClose: () => v
             )}
           </section>
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 }
 
@@ -224,7 +195,7 @@ function BoardCard({
   const v = rangeVal(row, range);
   const rangeLabel = range === "intraday" ? "净流入" : `${range}净流入`;
   return (
-    <div onClick={onClick}>
+    <div role="button" tabIndex={0} aria-label={`查看 ${row.name} 资金详情`} onClick={onClick} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onClick(); } }}>
       <CardShell flow className="cursor-pointer transition-colors hover:border-zinc-300 dark:hover:border-zinc-700">
       <div className="flex items-baseline justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
@@ -291,32 +262,10 @@ export function BoardFlowPanel() {
   const [range, setRange] = useState<BoardFlowRange>("intraday");
   const [sortKey, setSortKey] = useState<SortKey>("main");
   const [filters, setFilters] = useState<Set<string>>(new Set());
-  const [payload, setPayload] = useState<BoardFundFlowPayload | null>(null);
-  const [pending, setPending] = useState(true);
   const [drawer, setDrawer] = useState<BoardFlowRow | null>(null);
-
-  const load = useCallback(async () => {
-    setPayload(await getBoardFundFlow(kind, range));
-  }, [kind, range]);
-
-  usePollingFetch(async () => {
-    try {
-      await load();
-    } catch {
-      /* 失败保持上一次数据 + 降级提示 */
-    } finally {
-      setPending(false);
-    }
-  }, 30_000);
-
-  // 维度/区间切换立即补拉（usePollingFetch 只在挂载与周期触发）
-  const prevKey = useRef("concept/intraday");
-  useEffect(() => {
-    const key = `${kind}/${range}`;
-    if (prevKey.current === key) return;
-    prevKey.current = key;
-    void load();
-  }, [kind, range, load]);
+  const resource = useResource(() => getBoardFundFlow(kind, range), {key: `${kind}/${range}`, intervalMs: 30_000});
+  const payload = resource.data;
+  const pending = resource.pending;
 
   const rows = useMemo(() => {
     const src = payload?.rows ?? [];
@@ -375,6 +324,7 @@ export function BoardFlowPanel() {
       }
     >
       <div className="flex h-full min-h-0 flex-col px-4 py-2.5">
+        {!!resource.error && <p role="alert" className="text-xs text-amber-800 dark:text-amber-300">板块资金读取失败。{payload ? "以下为同范围上次结果。" : ""}<button onClick={resource.refresh}>重试读取</button></p>}
         {/* 控制行：维度 / 区间 / 排序 / 筛选 */}
         <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5">
           <div className="flex items-center gap-1">

@@ -71,6 +71,8 @@ function MarketInner() {
   // 成交额的三态判据（S2-1 契约）。**必须与数值分开存**：`null` 有「上游尚未就绪」
   // 与「真的没有数据」两种成因，只凭数值无法区分（2026-09-14 报障根因）。
   const [amountFreshness, setAmountFreshness] = useState<Freshness | null>(null);
+  const [poolError, setPoolError] = useState(false);
+  const [contextError, setContextError] = useState(false);
   const [pool, setPool] = useState<LimitUpRecord[]>([]);
   const [breadth, setBreadth] = useState<Breadth | null>(null);
   const [sent, setSent] = useState<Sentiment | null>(null);
@@ -86,18 +88,18 @@ function MarketInner() {
   // 情绪历史序列本来就是日频 → 60s。
   const loadFast = useCallback(async () => {
     try {
-      const [overview, zt] = await Promise.all([
-        getMarketOverview(),
-        getLimitUpPool().catch(() => [] as LimitUpRecord[]),
-      ]);
-      setIndices(overview.indices);
-      setTotalAmount(overview.total_amount);
-      setAmountFreshness(overview.total_amount_freshness);
-      setPool(zt.slice(0, 10));
-      setError(null);
-      setUpdatedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
+      const [overview, zt] = await Promise.allSettled([getMarketOverview(), getLimitUpPool()]);
+      if (overview.status === "fulfilled") {
+        setIndices(overview.value.indices);
+        setTotalAmount(overview.value.total_amount);
+        setAmountFreshness(overview.value.total_amount_freshness);
+        setError(null);
+        setUpdatedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
+      } else setError("市场概览读取失败，保留值仅作上次结果参考。请重试或核对系统维护状态。");
+      setPoolError(zt.status === "rejected");
+      if (zt.status === "fulfilled") setPool(zt.value.slice(0, 10));
     } catch {
-      setError("无法连接后端行情服务（启动方式见工作台页提示）。");
+      setError("市场概览读取失败，请重试或核对系统维护状态。");
     } finally {
       setPending(false);
     }
@@ -109,6 +111,7 @@ function MarketInner() {
         getBreadth().catch(() => null),
         getSentiment().catch(() => null),
       ]);
+      setContextError(breadthRes === null || sentRes === null);
       setBreadth(breadthRes);
       setSent(sentRes);
     } catch {}
@@ -132,10 +135,11 @@ function MarketInner() {
   }
 
   return (
-    <main className="mx-auto flex h-full w-full max-w-[1600px] flex-col gap-2 overflow-hidden px-4 py-3">
+    <main className="task-page mx-auto flex h-full w-full max-w-[1600px] flex-col gap-2 overflow-hidden px-4 py-3">
+      <nav aria-label="市场任务" className="task-subnav mb-2 text-sm"><Link href="/market" aria-current="page">概览与环境</Link><Link href="/tape">题材与涨跌停</Link></nav>
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-4">
-          <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">市场</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">市场全景</h1>
           <nav className="flex items-center gap-1" aria-label="市场视图">
             {VIEWS.map((v) => (
               <button
@@ -153,11 +157,11 @@ function MarketInner() {
             ))}
           </nav>
         </div>
-        {view === "overview" && <span className="text-xs text-zinc-600 dark:text-zinc-400">更新 {updatedAt || "--"}</span>}
+        {view === "overview" && <span className="text-xs text-zinc-600 dark:text-zinc-400">最近读取 {updatedAt || "--"}</span>}
       </div>
 
       {/* 视图切换统一 fade 过渡（2026-09-04）：h-full 保持各视图内部布局 */}
-      <FadeSwap swapKey={view} className="min-h-0 flex-1">
+      <FadeSwap swapKey={view} className="task-scroll min-h-0 flex-1">
         {view === "heatmap" ? (
           <div className="h-full">
             <HeatmapTab />
@@ -178,6 +182,7 @@ function MarketInner() {
             </div>
           )}
 
+          {contextError && <p role="status" className="text-xs text-amber-800 dark:text-amber-300">宽度或情绪来源未就绪，缺项不能解读为零或健康。</p>}
           {/* 指数带：紧凑 2 行（名称+质量+涨跌幅 / 价格+成交额）。
               联动切片 F（L 指数入口）：点击 → **就地弹出指数详情**（带前缀规范形态，
               与个股同一入口 `useSymbolDetail`，不裸拼 URL）。
@@ -341,6 +346,7 @@ function MarketInner() {
                 </Link>
               }
             >
+              {poolError && <p role="alert" className="p-3 text-xs text-amber-800 dark:text-amber-300">涨停速览读取失败。{pool.length ? "下面是上次读取结果。" : "不能据此判断没有涨停。"}</p>}
               {pool.length > 0 ? (
                 <table className="w-full text-sm">
                   <tbody>
@@ -370,8 +376,8 @@ function MarketInner() {
                     </div>
                   ))}
                 </div>
-              ) : (
-                <p className="px-4 py-6 text-center text-sm text-zinc-600 dark:text-zinc-400">今日暂无涨停数据（或非交易日）</p>
+              ) : poolError ? null : (
+                <p className="px-4 py-6 text-center text-sm text-zinc-600 dark:text-zinc-400">已读取，当前涨停池为空（日期与覆盖以来源为准）</p>
               )}
             </Panel>
           </div>

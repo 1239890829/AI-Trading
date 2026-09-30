@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ThemesTab } from "@/components/tape/themes-tab";
@@ -44,10 +45,11 @@ function TapeInner() {
   }
 
   return (
-    <main className="mx-auto flex h-full w-full max-w-[1600px] flex-col px-4 py-3">
+    <main className="task-page mx-auto flex h-full w-full max-w-[1600px] flex-col px-4 py-3">
+      <nav aria-label="市场任务" className="task-subnav mb-2 text-sm"><Link href="/market" >概览与环境</Link><Link href="/tape" aria-current="page">题材与涨跌停</Link></nav>
       <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-4">
-          <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">盘面</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">市场全景</h1>
           <nav className="flex items-center gap-1" aria-label="盘面子页签">
             {TABS.map((t) => (
               <button
@@ -69,7 +71,7 @@ function TapeInner() {
       </div>
 
       {/* tab 切换统一 fade 过渡（2026-09-04）：h-full 保持子 tab 内部 flex 布局 */}
-      <FadeSwap swapKey={tab} className="min-h-0 flex-1">
+      <FadeSwap swapKey={tab} className="task-scroll min-h-0 flex-1">
         {tab === "themes" && <ThemesTab />}
         {tab === "limitup" && <LimitUpTab />}
         {tab === "limitdown" && <LimitDownTab />}

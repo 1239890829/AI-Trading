@@ -11,6 +11,7 @@ import {
 } from "@/lib/api";
 import { fmtAmount, pctText } from "@/lib/format";
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
+import { subscribeWatchlist } from "@/lib/watchlist-sync";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 
 /**
@@ -142,6 +143,12 @@ const HeatmapCell = memo(function HeatmapCell({
     <g
       onMouseEnter={() => onEnter(stock)}
       onMouseLeave={() => onLeave(stock)}
+      role={clickable ? "button" : undefined}
+      aria-label={clickable ? `查看 ${stock.name} ${stock.symbol}` : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onFocus={() => onEnter(stock)}
+      onBlur={() => onLeave(stock)}
+      onKeyDown={event => { if (clickable && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onOpen(stock.symbol); } }}
       onClick={clickable ? () => onOpen(stock.symbol) : undefined}
       className={clickable ? "cursor-pointer" : undefined}
     >
@@ -167,7 +174,8 @@ export function HeatmapTab() {
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState("");
   const [scope, setScope] = useState<"all" | "watch">("all");
-  const [focusGroup, setFocusGroup] = useState<HeatmapGroup | null>(null);
+  const [focusIndustry, setFocusIndustry] = useState<string | null>(null);
+  const focusGroup = data?.groups.find(group => group.industry === focusIndustry) ?? null;
   const [hover, setHover] = useState<HeatmapStock | null>(null);
 
   const load = useCallback(async () => {
@@ -182,19 +190,23 @@ export function HeatmapTab() {
 
   usePollingFetch(load, 30_000);
 
-  const watchSymbols = useMemo(() => new Set<string>(), []);
-  const [watchLoaded, setWatchLoaded] = useState(false);
+  const [watchSymbols, setWatchSymbols] = useState<Set<string>>(new Set());
+  const [watchError, setWatchError] = useState<string | null>(null);
   useEffect(() => {
-    if (scope !== "watch" || watchLoaded) return;
-    getWatchlist()
-      .then((list) => {
-        for (const i of list) watchSymbols.add(i.symbol);
-        setWatchLoaded(true);
-        // 触发重渲染
-        setData((prev) => (prev ? { ...prev } : prev));
-      })
-      .catch(() => {});
-  }, [scope, watchLoaded, watchSymbols]);
+    if (scope !== "watch") return;
+    let alive = true;
+    let generation = 0;
+    const reload = async () => {
+      const current = ++generation;
+      try {
+        const list = await getWatchlist();
+        if (alive && current === generation) { setWatchSymbols(new Set(list.map(item => item.symbol))); setWatchError(null); }
+      } catch { if (alive && current === generation) setWatchError("自选列表同步失败，保留集合可能已过期。"); }
+    };
+    void reload();
+    const unsubscribe = subscribeWatchlist(() => void reload());
+    return () => { alive = false; unsubscribe(); };
+  }, [scope]);
 
   const visible = useMemo(() => {
     if (!data) return [];
@@ -258,25 +270,26 @@ export function HeatmapTab() {
         extra={
           <div className="flex items-center gap-2 text-xs">
             <button
-              onClick={() => { setScope("all"); setFocusGroup(null); }}
+              onClick={() => { setScope("all"); setFocusIndustry(null); }}
               className={`rounded px-2 py-0.5 ${scope === "all" ? "bg-zinc-100 font-medium dark:bg-zinc-800" : "text-zinc-600 dark:text-zinc-400"}`}
             >
               全市场
             </button>
             <button
-              onClick={() => { setScope("watch"); setFocusGroup(null); }}
+              onClick={() => { setScope("watch"); setFocusIndustry(null); }}
               className={`rounded px-2 py-0.5 ${scope === "watch" ? "bg-zinc-100 font-medium dark:bg-zinc-800" : "text-zinc-600 dark:text-zinc-400"}`}
             >
               自选
             </button>
             {focusGroup && (
-              <button onClick={() => setFocusGroup(null)} className="rounded border border-zinc-300 px-2 py-0.5 text-zinc-600 dark:text-zinc-400 dark:border-zinc-600">
+              <button onClick={() => setFocusIndustry(null)} className="rounded border border-zinc-300 px-2 py-0.5 text-zinc-600 dark:text-zinc-400 dark:border-zinc-600">
                 返回全部
               </button>
             )}
           </div>
         }
       >
+        {watchError && scope === "watch" && <p role="alert" className="p-2 text-xs text-amber-800 dark:text-amber-300">{watchError}</p>}
         {!data ? (
           /* 首次加载（含行业映射构建约需数秒）：同构骨架占位，避免整块突然出现 */
           <div className="h-full w-full p-4" aria-hidden>
@@ -300,7 +313,11 @@ export function HeatmapTab() {
                       fill="rgba(120,120,130,0.06)"
                       stroke="rgba(120,120,130,0.45)" strokeWidth={1.5}
                       className={focusGroup ? "" : "cursor-pointer"}
-                      onClick={() => !focusGroup && setFocusGroup(g)}
+                      role={!focusGroup ? "button" : undefined}
+                      tabIndex={!focusGroup ? 0 : undefined}
+                      aria-label={`聚焦行业 ${g.industry}`}
+                      onKeyDown={event => { if (!focusGroup && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); setFocusIndustry(g.industry); } }}
+                      onClick={() => !focusGroup && setFocusIndustry(g.industry)}
                     />
                     {showHeader && (
                       <text x={gr.x + 6} y={gr.y + 14} fontSize={12} className="select-none" fill="#a1a1aa">

@@ -161,7 +161,7 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
   }, [payload.url, payload.kind, isFeed, attempt]);
 
   return (
-    <ModalShell
+    <ModalShell presentation="drawer"
       onClose={onClose}
       label={payload.title}
       size="md"

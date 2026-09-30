@@ -1,29 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
+import { Suspense } from "react";
+import { activeTask, TASK_LINKS } from "@/lib/task-navigation";
 import { SearchBox } from "@/components/search-box";
 import { NotificationBell } from "@/components/notifications/notification-drawer";
 
-const LINKS = [
-  { href: "/workbench", label: "工作台" },
-  { href: "/tape", label: "盘面" },
-  { href: "/market", label: "市场" },
-  { href: "/hunting", label: "猎场" },
-  // 2026-09-08：研究页下线，回测取消、复盘与预警并入 AI 控制台（/agent）
-  { href: "/agent", label: "交易智能体" },
-  // 2026-09-01 系统重构（docs/archive/architecture-redesign.md），13 页 → 5 导航：
-  // /themes /limit-up /boards /longhu → 盘面页四 tab（/tape?tab=…）
-  // /heatmap → 市场页云图 tab；/watchlist → 工作台管理模式
-  // /backtest /alerts → 研究页（/research?tab=…）→ 2026-09-08 改指 AI 控制台
-  // （回测取消；预警并入 /agent?tab=alerts），旧路由经 next.config 302
-  // /screener 已彻底删除（2026-09-01 用户拍板）：页面/端点/服务全清，tech_score 评分内核被每日精选复用保留
-  // 2026-09-08 板块融合（docs/summary/review-governance.md §三）：/picks（每日精选）+
-  // /intraday（盘中跟踪）→ /hunting 猎场（tag 切换 + 双口径统计 + 手风琴增强），旧路由 302
-];
-
-export function NavBar() {
+function NavBarInner() {
   const pathname = usePathname();
+  const params = useSearchParams();
+  const activeId = activeTask(pathname, new URLSearchParams(params.toString()));
 
   // 主题只影响图标，交给 CSS（dark: 变体）切换：无需 state，也就不存在水合不一致
   function toggleTheme() {
@@ -36,18 +23,19 @@ export function NavBar() {
 
   return (
     <header className="sticky top-0 z-40 border-b border-zinc-200 bg-white/90 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/90">
-      <div className="mx-auto flex h-14 max-w-7xl items-center gap-2 overflow-hidden px-2 sm:gap-4 sm:px-4 lg:gap-6">
-        <Link href="/workbench" className="shrink-0 whitespace-nowrap font-semibold tracking-tight">
+      <div className="task-header mx-auto flex min-h-14 max-w-[1600px] flex-wrap items-center gap-2 px-3 py-2 sm:gap-3 sm:px-4">
+        <Link href="/market" className="shrink-0 whitespace-nowrap font-semibold tracking-tight">
           AShare <span className="text-up-ink dark:text-up">AI</span> Trader
         </Link>
-        <nav className="hidden shrink-0 items-center gap-0.5 md:flex lg:gap-1">
-          {LINKS.map((l) => {
-            const active = pathname.startsWith(l.href);
+        <nav aria-label="主要任务" className="task-navigation order-last flex w-full items-center gap-1 overflow-x-auto lg:order-none lg:w-auto">
+          {TASK_LINKS.map((l) => {
+            const active = activeId === l.id;
             return (
               <Link
                 key={l.href}
                 href={l.href}
-                className={`rounded-md px-3 py-1.5 text-sm transition-colors ${
+                aria-current={active ? "page" : undefined}
+                className={`shrink-0 whitespace-nowrap rounded-md px-3 py-2 text-sm transition-colors ${
                   active
                     ? "bg-zinc-100 font-medium text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
                     : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
@@ -61,6 +49,7 @@ export function NavBar() {
         <div className="flex-1" />
         <SearchBox />
         <NotificationBell />
+        <Link href="/agent?area=maintenance&tab=operations" aria-current={activeId === "maintenance" ? "page" : undefined} className="rounded-md px-2 py-2 text-xs text-zinc-600 dark:text-zinc-400">系统维护</Link>
         <button
           onClick={toggleTheme}
           aria-label="切换主题"
@@ -103,4 +92,8 @@ export function NavBar() {
       </div>
     </header>
   );
+}
+
+export function NavBar() {
+  return <Suspense fallback={<header className="h-14 border-b border-zinc-200 dark:border-zinc-800" />}><NavBarInner /></Suspense>;
 }

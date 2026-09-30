@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ReviewTab } from "./review-tab";
 import type { ReviewReportDetail, ReviewReportSummary } from "@/lib/api";
 
 // vitest 未开 globals 时 RTL 自动 cleanup 不注册，必须手动（见 alerts-tab.test.tsx 注释）
 afterEach(cleanup);
+beforeEach(() => vi.clearAllMocks());
 
 vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
@@ -87,7 +88,7 @@ function setup(itemId = "42", status = "pending") {
 describe("ReviewTab 改进项处置闭环", () => {
   it("改进项带处置入口，点击「确认」即提交并刷新", async () => {
     setup();
-    render(<ReviewTab />);
+    render(<ReviewTab allowDispose />);
 
     const btn = await screen.findByRole("button", { name: "确认" });
     fireEvent.click(btn);
@@ -114,7 +115,7 @@ describe("ReviewTab 改进项处置闭环", () => {
 
   it("驳回必须填理由——未填时提交按钮不可用", async () => {
     setup();
-    render(<ReviewTab />);
+    render(<ReviewTab allowDispose />);
 
     fireEvent.click(await screen.findByRole("button", { name: "驳回" }));
 
@@ -143,7 +144,7 @@ describe("ReviewTab 改进项处置闭环", () => {
 
   it("旧版报告的临时编号不可寻址，不暴露处置按钮", async () => {
     setup("AI-3f2a9c11");
-    render(<ReviewTab />);
+    render(<ReviewTab allowDispose />);
 
     expect(
       await screen.findByText(/来自旧版报告，无数据库主键/),
@@ -153,11 +154,51 @@ describe("ReviewTab 改进项处置闭环", () => {
 
   it("已处置的改进项显示状态与撤销入口", async () => {
     setup("42", "applied");
-    render(<ReviewTab />);
+    render(<ReviewTab allowDispose />);
 
     expect(await screen.findByText("已实施")).toBeTruthy();
     // 已实施就不再重复提供「已实施」按钮，但可撤销
     expect(screen.queryByRole("button", { name: "已实施" })).toBeNull();
     expect(screen.getByRole("button", { name: "撤销处置" })).toBeTruthy();
+  });
+});
+
+describe("ReviewTab 只读与请求身份", () => {
+  it("ordinary research is read-only, adoption is not presented as trading performance", async () => {
+    setup(); vi.mocked(mocked.updateActionItemStatus).mockClear();
+    render(<ReviewTab />);
+    expect(await screen.findByText(/管理处置在系统维护/)).toBeTruthy();
+    expect(screen.queryByRole("button", {name: "确认"})).toBeNull();
+    expect(screen.getByText("改进项处置统计（非交易效果）")).toBeTruthy();
+    expect(mocked.updateActionItemStatus).not.toHaveBeenCalled();
+  });
+  it("late success and failure for A cannot replace B", async () => {
+    setup();
+    const second = {...SUMMARY, review_id: "RV-B", trade_date: "20260902", summary: "B报告"};
+    vi.mocked(mocked.getReviewReports).mockResolvedValue([SUMMARY, second]);
+    let rejectA!: (error: Error) => void;
+    vi.mocked(mocked.getReviewReport).mockImplementation(date => date === SUMMARY.trade_date ? new Promise((_, reject) => {rejectA = reject;}) : Promise.resolve({...detailWith("43"), trade_date: second.trade_date, review_id: "RV-B", summary: "B正文"}));
+    render(<ReviewTab />);
+    await waitFor(() => expect(mocked.getReviewReport).toHaveBeenCalledWith(SUMMARY.trade_date));
+    fireEvent.click(screen.getByRole("button", {name: /B报告/}));
+    expect(await screen.findByText("RV-B")).toBeTruthy();
+    rejectA(new Error("迟到A错误"));
+    await waitFor(() => expect(screen.queryByText(/迟到A错误/)).toBeNull());
+    expect(screen.getByText("RV-B")).toBeTruthy();
+  });
+  it("a missing requested date never silently falls back to a different report", async () => {
+    setup(); vi.mocked(mocked.getReviewReport).mockRejectedValue(new mocked.ApiError(404, "无报告", "not_found"));
+    render(<ReviewTab focusDate="2026-09-28" />);
+    expect(await screen.findByText("指定日期尚无报告")).toBeTruthy();
+    expect(mocked.getReviewReport).toHaveBeenCalledWith("20260928");
+    expect(mocked.getReviewReport).not.toHaveBeenCalledWith(SUMMARY.trade_date);
+  });
+  it("free-text amounts and dates do not become unverified stock links", async () => {
+    setup(); const report = detailWith("42"); report.summary = "金额 600127 日期 202609";
+    report.meta_insights = [{dimension: "其他", observation: "金额 600127 日期 202609", effectiveness: "未知", evidence: "原文", suggestion: "待核"}];
+    vi.mocked(mocked.getReviewReport).mockResolvedValue(report);
+    render(<ReviewTab />);
+    await screen.findAllByText("金额 600127 日期 202609");
+    expect(document.querySelector('a[href*="symbol=600127"]')).toBeNull();
   });
 });

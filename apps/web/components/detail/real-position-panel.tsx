@@ -133,7 +133,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
               {label}
             </button>
           ))}
-          <span className="ml-auto text-[10px] text-zinc-600 dark:text-zinc-400">记账按你在券商的实际成交价，与模拟账户无关</span>
+          <span className="ml-auto text-[10px] text-zinc-600 dark:text-zinc-400">按实际成交价手工记录；未经券商核验，与模拟账户独立</span>
         </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
           <input
@@ -273,7 +273,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
         ))}
         {(data?.items.length ?? 0) === 0 && (
           <p className="px-4 py-8 text-center text-xs text-zinc-600 dark:text-zinc-400">
-            {data ? "暂无真实持仓。在上方记一笔买入（按你在券商的实际成交价）。" : "加载中…"}
+            {data ? "暂无手工持仓记录。在上方按实际成交价录入；本系统未向券商核验。" : "加载中…"}
           </p>
         )}
         {(data?.cleared.length ?? 0) > 0 && (
