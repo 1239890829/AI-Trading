@@ -1,38 +1,36 @@
-# 当前交接：IMP-019 有界测量与重复回源修补
+# 当前交接：IMP-049 统一机会契约与 UI 前置
 
-> 唯一状态在 [W06/IMP-019](stages/w06-performance.md#imp-019)，测量、反例及剩余条件归 [运行性能报告](system/runtime-performance.md)。上轮 IMP-025 已由 PR #193 合并至 `a2676c72d6890d16456b56e54b3d730cb831b411`，不重复状态标签施工。
+> 唯一任务状态在 [W04/IMP-049](stages/w04-research.md#imp-049)，契约与消费者边界见 [猎场 §4.2](product/hunting-decision-design.md#42-统一机会证据读模型-v1imp-0492026-09-30)。全站改版归 [W07/IMP-050](stages/w07-simplification.md#imp-050)，不能用本片替代。
 
-权威入口：[实施方案](implementation-plan.md) v9.13、[产品闭环](product/product-closure-design.md)、[细功能覆盖](product/feature-closure-audit.md)、[Jev 蓝图](ai/jev-integration.md)与[持续演进](ai/continuous-evolution.md)。当前累计 U01–U55。
+权威入口：[实施方案](implementation-plan.md) v9.13、[产品闭环](product/product-closure-design.md)、[细功能覆盖](product/feature-closure-audit.md)、[Jev 蓝图](ai/jev-integration.md)与[持续演进](ai/continuous-evolution.md)。累计 U01–U55。
 
 ## 1. 现场、模式与门序
 
-本轮从干净 `master@a2676c72d6890d16456b56e54b3d730cb831b411` 同步远端、重算 selector，普通 fallback 首选 G4/IMP-019（P1/门内序60/非阻断，依赖和效果前置无）。仅领取本任务；RSH-031 与 IMP-047 未另开工。
+2026-09-30 从干净 master@0eb141a28194ba169b5b5595b8b92c62584ce4ad 同步远端；用户核对已批 UI 全域方案后明确“继续任务”。四项硬依赖均完成，IMP-049/050 原“等门序轮到”构成候选自锁，已回原 stage 修正。本轮只领取 G2/IMP-049（阻断/P1/门内序10）；IMP-049 工程完成后静态 selector 首选为 IMP-050；本轮先完成 IMP-049 准确版本发布，不开第二任务。selector 算法未改，不把自然语言条件变成自动授权。
 
-**U50 降级授权回执**：用户 2026-09-24 的本机 Codex `DEGRADED_FULL_CONTROL` 仍有效，直到明确撤销。作者负责 U49 反证和 exact-HEAD `DegradedRelease`，不声称独立 Review；完整本地门禁、三项 required CI、release_check、post-merge CI 与分支清理强制。授权不扩大真实通知、券商、部署、生产库写入、付费或模型/阈值准入。
+**U50 降级授权回执**：用户 2026-09-24 的本机 Codex DEGRADED_FULL_CONTROL 仍有效，直到明确撤销。作者做 U49 反证及准确 HEAD 的 DegradedRelease，不声称独立 Review。完整本地门禁、三项 required CI、release_check、post-merge CI 和分支清理仍强制；不扩大部署、生产库写入、真实通知、券商、付费或模型/阈值准入。
 
-## 2. 本轮交付与实测
+## 2. 实施与验证
 
-分支 `codex/imp019-runtime-measure`；工程提交 `6d9c674`。协调文档另提交；准确发布 HEAD/PR/CI 归 DegradedRelease 与合并后回执。
+分支 codex/imp049-opportunity-contract；工程提交 5655f18，最终补正 fec9ea3。协调文档另提交；准确发布版本以 PR/DegradedRelease 回执为准。
 
-- 复用已有单飞修补板块排行冷缓存并发回源：两轮受控场景均402→22；60秒TTL、缓存容量、300行、排序及源字段摘要不变。初版整包深拷贝的暖读退化已实测后撤去，仅复制要标记的元数据。缓存命中副本标记，不变异共享对象。
-- API窗口观测增加错误与unknown分母；异常、取消不冒充成功。预算不允许快速403/404/500通过，原阈值未放宽。
-- 可复现离线脚本保留全尝试/摘要/版本/负载、研究真实重叠、事件循环、慢行情队列和SQLite机制；两轮无研究全尝试P95约61.8→48.4ms。研究并行暖读P99变差的反例没有删除，不将全尝试尾延迟改善推及所有子路径。
-- 真实app离线冷启动5进程、真实React/Canvas/WS与连续动作取得第一轮证据；受控/现场、机制/产品全链分别披露。浏览器179次请求中的144个外层夹具503、开发StrictMode重复初挂请求、帧窗口分母未知和焦点/真实可见性缺口都保留。
+- GET /api/picks/opportunities 复用原决定运行头/快照和 RSH-031 观察，保留同股多假设、未知 scenario、通知 owner 决策版本、进入条件、KB/原文/反证/缺项及回放引用。研究观察无交易 decision/version，历史只读卡片不取得当前动作资格；参考价不是 fill。
+- 最新零行运行清除旧已入选行；not_collected / collected_empty / unavailable 分开。零候选原因按题材计数，不改变召回门槛或股票分母。54b7e0c 当前 Git 不可解析，未盲恢复旧提交。
+- GET 冷热装配不归档样本/台账，原后台 tick 唯一写者；冻结同版价格/风险字段，intraday-top 不重拿更新报价覆盖。归档成功而台账失败仍不推进 cursor，重试不增样本；来源日/时刻不换成晚消费时刻。
+- 真实消费者在既有台账折叠入口，打开才挂载；日期读取/迟到旧回包/错误隐藏旧成功/零参考价缺失/原始依据展开。不实现全站布局或新策略，不提供买入按钮。
 
-**U49 主动审计回执 / 作者 Preflight 与反证**：核缓存冷读放大、共享对象、失败恢复、API异常/取消、预算快速失败假绿、样本分母/分位口径、源码与HEAD/差异、测量负载漂移、研究重叠差异、慢队列降级/断开、前台分页/详情/WS与Canvas。修正无pytest-asyncio环境下的用例入口，沿既有asyncio.run，不安装插件；修正广播测量签名及旧预算“同口径”误注。第二批真正同条件对照在关闭开发服务后完成，不拿受开发负载干扰的初测求收益。8000无监听，部署搁置；未完成现场和部分前台全链判据，明确待条件而非伪造完成。未改变撮合、风控、鉴权、模型准入或刷新频率。
+**U49 主动审计回执 / 作者 Preflight 与反证**：核调度自锁、GET 单写者、缓存冷暖与共享对象、A/B 快照拼接、真实归档与部分写入恢复、零候选/缺数/未知、材料变化与仅时间刷新版本、同股多路径、晚到回包、空/坏 JSON/非有限参考价、引用和原执行 owner、已有鉴权/影子与准入边界。已纠正旧测试期望 GET 写样本及路由风险二次读；自检不是独立审核。
 
-**本地门禁**：定向32 passed（1.41s）；最终干净检出后端4549 passed/81 skipped（137.79s），完整pyflakes通过。前端tsc/eslint、78文件739项测试默认及UTC均通过（43.41s/43.02s），Next16.3.3生产构建通过（4.25s）；已核3000无监听，构建生成next-env按已知diff恢复。后端全量与前端全量串行，工具耗时不是产品收益证据。Jev初评→最终正确性7.3→8.2、性能6.5→8.5（improved）、无评分regression；取消unknown和副本标记由作者行为验证，评分不代替统计或独立审核，模型版本/费用未知。文档/阶段selector/卫生/公开仓行为守卫204 passed（4.45s），doc-health、workspace-hygiene与public scan通过；发布门证据在准确候选回执回填。本次测试均使用隔离库/文件和离线守卫，无业务LLM或真实通知调用。
+**已验证**：定向原机会/缓存/学习及新契约134 passed，追加非有限旧事实后新契约13 passed；tsc及新组件3项定向通过。真实 React 组件在隔离合成服务验证正常/合法空/失败、日期真实键盘变更、Return 展开与可见焦点；截图/request log 只在忽略 artifacts。外层通知/助手 fixture 503 保留，不称完整实源猎场验收。临时8007/3007和tab已关闭，生成文件/临时路由恢复性移出。最终干净检出后端4564 passed/81 skipped（132.75s）、pyflakes通过；初次回执名称缺失和未用模型导入已修正，不改门禁。最终前端79文件742测试默认/UTC通过（45.90s/46.22s），tsc/eslint/Next16.3.3构建通过（编译1.41s/类型1.40s）。完整后端三批（初次失败+两次修复复验）、前端两批成功及一次JSX闭合遗漏的快速tsc失败均保留日志，针对具体缺口重验；本地耗时不是产品收益。文档/selector/卫生/公开仓行为守卫109 passed（3.57s），doc-health/public scan/hygiene通过。准确发布结果归PR回执。
 
-**传播核对**：W06单点状态、运行测量专题、INDEX和本页已更新；细功能审计P24链接回测量边界。修补既有缓存/观测/预算与已批准测量任务，未改变架构、导航、语义模型、权限、准入或协作制度；总方案、plan-registry、Jev蓝图、AGENTS/Skills/机制登记册不适用规则变更，原规范继续有效。未新增产品页面；测试临时路由与Next生成文件已恢复性移出。原始测量/JUnit/辅助评分及恢复包只进忽略artifacts，不建立第二任务事实源。
+Jev三次有效辅助调用（baseline→复评→交付版），正确性6.4→8.2、可靠性6.5→8.3，最终微小分值变化均判unchanged；不为追分改结构；辅助评分不代表正确率或独立审阅，模型版本/tokens/费用未知。原始辅助结果/model元数据只存忽略artifacts，Jev结果不冒充效果或独立审核。GitHub Actions billing读取403，余额未知，不启用付费；当前CI触发仍为master/main/develop push与PR，门禁未削弱。
 
-本轮未重启生产或恢复部署；合并不表示运行已加载。临时浏览器服务8006/3006及tab已关闭，未管理其它进程。验收检出和本轮pytest沙箱在门禁完成后退出；既有其它worktree、业务数据不清理。
+## 3. 传播与边界
 
-## 3. 条件与下一候选
+W04/W07单点状态、总方案、猎场专题§4.2、细功能P07/P08、INDEX、plan-registry及本页已同步。只是已批准契约的纵切与原写者修补，不变更总体导航、Jev模型/调用/效果准入、撮合、协作或权限；AGENTS/Skills/其它机制登记册不适用新规则，原规范继续有效。新代码不另建研究/交易库。尚未采集的 lurk/relay/RPS 路径不被 GET 重扫或冒充覆盖；持续研究和后续新准入情境由原 owner 扩展。
 
-IMP-019工程测量及已证实修补交付；**任务整体待条件**：用户恢复部署或提供已有现场后，补生产冷暖/开盘/真实SQL锁与近期代表研究竞争；前台补真实隐藏/恢复、飞行中切换、焦点锚点和Canvas交互全链。没有新运行条件不重复夹具。IMP-047仍未获准隔离，RSH-031仍保留原研究/前向证据条件。
+上一轮 IMP-019 PR #194 已合并0eb141a并完成 PR/master CI 和分支清理；真实运行条件仍待补。部署继续搁置，合并不表示生产加载；未重启生产或接真实行情/费用/通知求测试绿色。RSH-031 前向效果、RSH-030 人工gold和 IMP-053 真实影子成交各自验收。
 
-重算selector：G0–G4无actionable任务，static/effective均None；不是全部业务、效果或阶段验收已完成。仅报告，不自动领取第二任务，不用日期变化虚构新观测。
-
-- **当前主门**：无（G0–G4无actionable任务）
-- **主切片首选**：无
-- **当前门候选顺位**：无
+- **当前主门**：G2
+- **主切片首选**：IMP-050
+- **当前门候选顺位**：IMP-050

@@ -337,6 +337,11 @@ def attach_participants(
     """
     ever_sealed_symbols = set(ever_sealed_symbols or set())
     members_by_code = members_by_code or {}
+    gate_counts: dict[str, int] = {}
+
+    def count_gate(reason: str) -> None:
+        gate_counts[reason] = gate_counts.get(reason, 0) + 1
+
     mined = 0
     total = 0
     blocked = 0
@@ -349,6 +354,7 @@ def attach_participants(
         count = int(t.get("limit_up_count") or 0)
         code = t.get("catalog_code")
         if not is_concentrated(count, limit_up_total):
+            count_gate("not_concentrated")
             t["participants"] = []
             t["participants_note"] = (
                 f"题材涨停 {count} 家，未达集中阈值"
@@ -356,6 +362,7 @@ def attach_participants(
             )
             continue
         if not code:
+            count_gate("missing_catalog")
             t["participants"] = []
             t["participants_note"] = "该题材未挂靠到官方概念容器——无成分可挖"
             continue
@@ -376,7 +383,7 @@ def attach_participants(
             audit_rows=audit_rows,
         )
         t["participants"] = cands
-        # 只在归档前短暂携带，路由完成 point-in-time 写入后会移除，避免扩大公开响应。
+        # Shared cache retains these for the background writer; HTTP copies remove them.
         t["_candidate_audit"] = audit_rows
         total += len(cands)
         missing_quote += stats.get("missing_quote") or 0
@@ -389,20 +396,26 @@ def attach_participants(
         for label, n in (stats.get("excluded_board_labels") or {}).items():
             blocked_labels[label] = blocked_labels.get(label, 0) + n
         if cands:
+            count_gate("mined_with_candidates")
             t["participants_note"] = None
-        elif stats.get("members") and stats["missing_quote"] >= stats["members"]:
+        elif code not in members_by_code or (stats.get("members") and (
+            stats["missing_quote"] >= stats["members"] or stats.get("current_unknown")
+        )):
+            count_gate("mined_empty_unavailable")
             # 全市场快照未覆盖该容器**任何**成分 ⇒ 判不了，不是"没有候选"。
             # 冷启动（后端刚起，首次抓取未完成）与数据源停更都会走到这里；
             # 不区分的话页面上两者同形，且会被 60s 装配缓存放大（2026-09-15 实测）。
             t["participants_note"] = (
-                "全市场快照未覆盖本容器任何成分（冷启动抓取中 / 数据源停更）"
+                "成分名单缺失、快照未覆盖或当前状态未就绪（冷启动抓取中 / 数据源停更）"
                 "——本轮**不可判定**，不是「没有可参与标的」"
             )
         else:
+            count_gate("mined_empty_no_eligible")
             t["participants_note"] = (
                 "容器内无可参与成分（未涨停 + 板块权限 + 涨幅/成交额/快照达标者均为 0）"
             )
     return {
+        "theme_gate_counts": gate_counts,
         "themes_mined": mined,
         "candidates": total,
         # 账户权限（主板）挡下的只数：解释"候选为什么这么少"的第一手证据
@@ -484,6 +497,9 @@ def top_watch_stocks(payload: dict, *, limit: int | None = None) -> dict:
                     "seal_state": s.get("seal_state"),
                     "board": s.get("board"),
                     "tier": tier,
+                    "price": s.get("price"),
+                    "stop_ref": s.get("stop_ref"),
+                    "exit_plan": s.get("exit_plan"),
                     "pick_basis": f"{basis}；{s.get('basis') or ''}".rstrip("；"),
                 }
             )
@@ -511,6 +527,9 @@ def top_watch_stocks(payload: dict, *, limit: int | None = None) -> dict:
                     "tradability": s.get("tradability"),
                     "seal_state": s.get("seal_state"),
                     "reference_only": True,
+                    "price": s.get("price"),
+                    "stop_ref": s.get("stop_ref"),
+                    "exit_plan": s.get("exit_plan"),
                 }
             )
     board_excluded = int(payload.get("board_excluded_reference") or 0)

@@ -9,6 +9,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 
+import { OpportunityEvidencePanel } from "./opportunity-evidence-panel";
 import { LeaderResearchPanel } from "./leader-research-panel";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { getWatchLedger, placePaperOrder, type WatchLedgerPayload } from "@/lib/api";
@@ -18,6 +19,7 @@ export function WatchLedgerPanel() {
   const [data, setData] = useState<WatchLedgerPayload | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
   const [orderNote, setOrderNote] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -199,6 +201,10 @@ export function WatchLedgerPanel() {
       <p className="mt-2 text-[10px] leading-relaxed text-zinc-600 dark:text-zinc-400">
         台账说明：入选即登记（当日唯一，盘中不移除）→ 收盘清算（入选价 vs 收盘价）→ 逐股判定与统计；判定口径 收盘 ≥ 入选 = 成功、亏 ≤2% = 持平、否则失败。历史记录收盘后可查。
       </p>
+      <details className="mt-3" onToggle={e => setEvidenceOpen(e.currentTarget.open)}>
+        <summary className="min-h-11 cursor-pointer py-2 text-xs focus-visible:outline-2 focus-visible:outline-sky-500">查看同版机会依据</summary>
+        {evidenceOpen && <OpportunityEvidencePanel />}
+      </details>
       <LeaderResearchPanel />
     </section>
   );

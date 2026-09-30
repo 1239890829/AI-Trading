@@ -965,3 +965,42 @@ export interface LeaderResearchPayload {
 export async function getLeaderResearch(date?: string): Promise<LeaderResearchPayload> {
   return (await getJson<LeaderResearchPayload>(`/api/picks/leader-research${date ? `?date=${encodeURIComponent(date)}` : ""}`)).data;
 }
+
+export interface OpportunityHypothesis {
+  opportunity_id: string;
+  decision_id: string | null;
+  decision_version: string | null;
+  observation_id?: string;
+  scenario: string;
+  source_theme: string;
+  routes?: string[];
+  state: string;
+  data_state: string;
+  source: string;
+  first_seen: string;
+  as_of: string;
+  reasons: string[];
+  unknowns: string[];
+  reference: { price: number | null; semantics: string };
+  actionable: boolean;
+  execution_blocker: string;
+  snapshot_refs: string[];
+  event_refs?: unknown[];
+  kb_refs?: Record<string, unknown>;
+  counterevidence?: unknown[];
+  evidence?: Record<string, unknown>;
+  entry_conditions?: Record<string, unknown>;
+}
+export interface OpportunityView {
+  trade_date: string;
+  contract_version: string;
+  state: string;
+  cards: { symbol: string; name: string; hypotheses: OpportunityHypothesis[] }[];
+  runs: { run_id: string; scenario: string; as_of: string; data_state: string;
+    records: number; gate_counts: Record<string, number> | null }[];
+  disclaimer: string;
+  coverage: string;
+}
+export async function getOpportunities(date: string): Promise<OpportunityView> {
+  return (await getJson<OpportunityView>(`/api/picks/opportunities?date=${encodeURIComponent(date)}`)).data;
+}
