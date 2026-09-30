@@ -11,7 +11,7 @@
 
 **Jev Agent Router：受限工具组与条件能力路由**
 
-- **状态**：部分完成
+- **状态**：已完成
 - **优先级**：P1
 - **阶段门**：G4
 - **门内序**：30
@@ -22,8 +22,8 @@
 - **U51 Jev 承接子范围（2026-09-24 已批；沿本任务原状态/门序/优先级）**：P1/G4：只在多个真实获准工具竞争且选择不明显时保留 Jev 路由；记录建议、权限/schema 过滤、实际工具执行和退回原授权集合。核助手必要工具漏用/误否认时先用结构化事实，再比较 Jev 对残余歧义的增量；不恢复宿主 model/effort 自动切换。 方案与反例见 [Jev 附录 A](../ai/jev-integration.md#附录-a-2026-09-24-已批准的全系统应用可视化与维护方案v04)。
 - **范围**：AShare 助手按只读工具组做 bounded routing；全局仅在至少两个真实可用能力竞争且选择不明显时调用 capability router。执行授权仍由 TOOL_SPECS、actor permissions、risk、confirmation 和 input schema 控制。
 - **验收**：Jev decision 不直接执行能力；无权限候选必须过滤；浏览器复杂场景可回退既有 browser/computer-use；真实券商、资金和风控修改永不进入 Jev 动作空间。
-- **证据**：PR #31 已合入项目 Jev adapter/助手工具路由底座，PR #32 完成价值审计并收敛为条件 capability routing；真实 TypeSafe 选择 edit_code 后，Router 因 caller 缺 write_repo 正确过滤并安全回退；业务助手 6 个只读工具组 shadow 已接线；jev-browser 已完成 CLICK/TYPE_TEXT 真实链路 smoke。
-- **下一步**：继续收集业务 route coverage、升级率和 token 数据；自动 model/effort 切换继续暂停，除非真实会话 A/B 证明净收益。
+- **证据**：PR #31/#32 的 adapter、受限六组与固定 JevRouter 安全过滤底座保留；本轮核全局内核 clean/pin 一致，不重复已有业务 smoke。2026-09-30 补齐助手实际依赖过滤、明确请求/私人/历史上下文弃权、真实多组竞争、畸形响应回原集合、单 worker 无队列与 done 后真实 drain。分发前核白名单/依赖/签名，AgentAudit 保存 metadata-only 建议/实际提示采纳/分发状态/执行/回退/必要工具缺口与版本指纹，既有 agent/audit 消费；做 T 助手读取不再触发结算。工程反例与完整本地/发布门禁归 handoff/PR，协议与效果边界归 Jev 蓝图 §23.5。已有本地库新 action 回执 0，配置 shadow 不代表新代码已加载；没有独立覆盖率、准确率、费用净收益或 cascade 效果准入结论。
+- **下一步**：本工程任务收口，持续证据维护归原 Jev/路由 owner：仅当新版本运行形成真实会话及独立必要工具/弃权标签，比较同条件原清单的质量、升级率、tokens、总等待/清理时间与费用；新 schema/版本/隐私/失败反例触发复核或关闭。自动 model/effort 切换继续暂停；未获质量非劣化与净收益证据，不晋级 cascade，不重扫同一空集、不重复同一 smoke。新的工程缺口按原 owner 与阶段门登记，维护不是默认再开本任务。
 - **恢复**：关闭 Jev routing 即回到现有确定性工具选择/LLM 路径，不改变权限或交易状态。
 - **U53/U54子范围（P22）**：只读真实能力竞争才使用JEV，工具schema/权限/实际可用性先确定；模型失效或无增益则回现有路由。新上下文助手明确对象/时间/版本/scope，不带隐私草稿。组件/导航共审不得借工具路由扩大执行权限。
 
