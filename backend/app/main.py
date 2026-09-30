@@ -144,14 +144,19 @@ async def _perf_middleware(request, call_next):
     from app.core import perf as _perf
 
     t0 = _time.perf_counter()
+    status_code = None
     try:
         response = await call_next(request)
+        status_code = response.status_code
+    except Exception:
+        status_code = 500
+        raise
     finally:
         route = request.scope.get("route")
         route_path = getattr(route, "path", None) or _perf.collapse_path(
             request.scope.get("path", "")
         )
-        _perf.record_api(route_path, (_time.perf_counter() - t0) * 1000)
+        _perf.record_api(route_path, (_time.perf_counter() - t0) * 1000, status_code=status_code)
     return response
 
 app.add_middleware(

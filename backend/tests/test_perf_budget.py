@@ -37,7 +37,7 @@ SAMPLES = 5
 
 
 def _p95(values: list[float]) -> float:
-    """样本 p95（与 `app.core.perf._quantile` 同口径：线性插值）。"""
+    """样本 p95（线性插值；观测 API 使用最近秩样本分位，二者不混作同一统计）。"""
     s = sorted(values)
     if not s:
         return 0.0
@@ -51,17 +51,16 @@ def _p95(values: list[float]) -> float:
 
 @pytest.mark.parametrize("path,budget_ms", sorted(BUDGETS.items()))
 def test_core_endpoint_p95_within_budget(client, path, budget_ms):
-    """核心只读端点的 p95 不得超预算。
-
-    注意这里**只断言性能**，不断言状态码——状态码归冒烟测试管。
-    端点若因环境报 4xx/5xx，耗时往往更短，不会因为"失败得快"而误判为通过预算。
-    """
+    """成功完成全部请求后才能判断预算；快失败不能冒充性能通过。"""
     samples: list[float] = []
+    statuses: list[int] = []
     for _ in range(SAMPLES):
         t0 = time.perf_counter()
-        client.get(path)
+        response = client.get(path)
         samples.append((time.perf_counter() - t0) * 1000)
+        statuses.append(response.status_code)
 
+    assert all(status == 200 for status in statuses), f"{path} 状态码：{statuses}；全部耗时：{samples}"
     p95 = _p95(samples)
     assert p95 < budget_ms, (
         f"{path} p95 = {p95:.1f}ms 超出预算 {budget_ms}ms\n"
@@ -86,3 +85,21 @@ def test_budget_endpoints_still_exist():
         f"这些端点已不在 openapi（改名或删除）：{missing}。"
         f"请同步更新 BUDGETS，否则预算用例会对着 404 空转。"
     )
+
+
+@pytest.mark.parametrize("status", [403, 404, 500])
+def test_fast_error_cannot_pass_performance_budget(status):
+    from types import SimpleNamespace
+
+    class FailedClient:
+        def __init__(self):
+            self.calls = 0
+
+        def get(self, path):
+            self.calls += 1
+            return SimpleNamespace(status_code=status)
+
+    client = FailedClient()
+    with pytest.raises(AssertionError, match="状态码"):
+        test_core_endpoint_p95_within_budget(client, "/api/health", 2000)
+    assert client.calls == SAMPLES

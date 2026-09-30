@@ -54,6 +54,7 @@
 | **FN-08** | `archive/picks-replay-baseline.md` | L1 | 快照 | 精选 60 日回放基线（08-31 评审指名保留）。**时点快照，只读** |
 | **FN-09** | `system/llm-gateway-probe.md` | L2 | 运维 | LLM 网关健康探针（`claude_cli` 别名监控） |
 | **FN-10** | `ai/jev-integration.md` | L2 | AI/Agent 架构 | Jev 唯一现役蓝图及已批附录 A：全系统应用裁定、事件→机会理由试点、真实决策可视化、模型/插件更新与各消费者降级；§23.5给条件路由/执行回执与效果边界，§29.7给shadow发布顺序与原理由冻结命令/缺证边界；任务状态仍只归所属 stage |
+| **FN-11** | `system/runtime-performance.md` | L2 | 性能测量 | IMP-019 可复现入口、全尝试对照及冷启动/DB/WS/Canvas覆盖；受控与现场证据分开，条件变化才重验 |
 | **EX-01** | `archive/live-trading-guosen-plan.md` | L1 | 搁置历史 | 国信 miniQMT 实盘蓝图。**用户已搁置**（不接受 Windows 依赖），恢复条件见文档头 |
 | **RV-01** | `review/review-agent.md` | L2 | 复盘 | 盘后复盘 Agent 架构 |
 | **RV-02** | `review/daily-review-sop.md` | L2 | 复盘 | 每日复盘 SOP（怎么判） |
