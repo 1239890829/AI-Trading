@@ -341,12 +341,18 @@ def _daily_plan(prev_pool_date, session_factory=None) -> dict | None:
     from app.review.models import ReviewActionItemRow, ReviewReportRow
     from app.review.storage import get_report
 
-    sf = session_factory or get_session_factory()
     ymd = prev.strftime("%Y%m%d")
     plan: dict = {
         "based_on": prev.isoformat(), "review": None, "open_items": [], "agenda": None,
         "sources": {"review": "empty", "open_items": "empty", "agenda": "empty"},
+        "note": "今日计划=上一交易日复盘结论+截至该日未完成改进项+该日议程结果的规则拼装；不构成买卖建议",
     }
+    try:
+        sf = session_factory or get_session_factory()
+    except Exception:
+        log.exception("morning plan: database unavailable for %s", ymd)
+        plan["sources"] = {key: "error" for key in plan["sources"]}
+        return plan
 
     try:
         report = get_report(sf, ymd)
@@ -392,14 +398,14 @@ def _daily_plan(prev_pool_date, session_factory=None) -> dict | None:
             ).scalars().first()
             if row is not None:
                 items = json.loads(row.items)
-                if not isinstance(items, list):
-                    raise ValueError("agenda.items is not a list")
+                if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+                    raise ValueError("agenda.items is not a list of objects")
                 plan["agenda"] = {
                     "date": row.date, "status": row.status,
                     "items": [
                         {"finding": str(item.get("finding") or "")[:50],
                          "class": item.get("class"), "status": item.get("status")}
-                        for item in items[:5] if isinstance(item, dict)
+                        for item in items[:5]
                     ],
                 }
                 plan["sources"]["agenda"] = "available"
@@ -407,7 +413,6 @@ def _daily_plan(prev_pool_date, session_factory=None) -> dict | None:
         log.exception("morning plan: agenda read failed for %s", prev)
         plan["sources"]["agenda"] = "error"
 
-    plan["note"] = "今日计划=上一交易日复盘结论+截至该日未完成改进项+该日议程结果的规则拼装；不构成买卖建议"
     return plan
 
 

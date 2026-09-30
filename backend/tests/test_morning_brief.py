@@ -273,6 +273,10 @@ def test_daily_plan_empty_is_distinct_from_broken_sources(plan_db):
     broken = mb._daily_plan("2026-09-02", plan_db)
     assert broken["sources"] == {"review": "error", "open_items": "available", "agenda": "error"}
     assert [item["title"] for item in broken["open_items"]] == ["仍可读取的事项"]
+    with plan_db() as db:
+        db.query(AgentAgenda).filter_by(date="2026-09-02").one().items = "[1]"
+        db.commit()
+    assert mb._daily_plan("2026-09-02", plan_db)["sources"]["agenda"] == "error"
 
 
 def test_daily_plan_invalid_date_and_pure_assembly(plan_db):
@@ -280,6 +284,16 @@ def test_daily_plan_invalid_date_and_pure_assembly(plan_db):
     assert mb._daily_plan("bad-date", plan_db) is None
     payload = mb.assemble_brief(_evidence(daily_plan={"based_on": "2026-09-02"}))
     assert payload["daily_plan"] == {"based_on": "2026-09-02"}
+
+
+def test_daily_plan_database_initialization_failure_is_visible(monkeypatch):
+    def broken_factory():
+        raise OSError("database unavailable")
+
+    monkeypatch.setattr("app.core.db.get_session_factory", broken_factory)
+    plan = mb._daily_plan("2026-09-02")
+    assert plan["sources"] == {"review": "error", "open_items": "error", "agenda": "error"}
+    assert plan["review"] is None and plan["open_items"] == [] and plan["agenda"] is None
 
 
 def test_build_and_save_surfaces_plan_read_failure(monkeypatch):
