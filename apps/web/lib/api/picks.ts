@@ -479,6 +479,20 @@ export interface MorningBrief {
   overnight_bias?: OvernightBias | null;
   /** 气候一阶相位（ENSO/ONI，P1-32）；null = 源不可得 → 整块不渲染 */
   climate?: Climate | null;
+  /** 上一交易日复盘等来源的只读条件计划；旧版简报可能没有该字段。 */
+  daily_plan?: {
+    based_on: string;
+    review: { trade_date: string; review_id: string; summary: string; findings: string[] } | null;
+    open_items: { id: number; trade_date: string; title: string; category: string; status: string }[];
+    agenda: {
+      date: string;
+      status: string;
+      items: { finding: string; class: string | null; status: string | null }[];
+    } | null;
+    /** 旧版归档计划不含 sources，页面必须显式提示而非冒充空结果。 */
+    sources?: { review: "available" | "empty" | "error"; open_items: "available" | "empty" | "error"; agenda: "available" | "empty" | "error" };
+    note: string;
+  } | null;
   directions: BriefDirection[];
   alerts: BriefAlert[];
   review?: {

@@ -11,12 +11,20 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from datetime import date, datetime
 from types import SimpleNamespace as NS
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
+from app.models.agent import AgentAgenda
+from app.models.watchlist import Base
 from app.picks import morning_brief as mb
+from app.review.models import ReviewActionItemRow, ReviewReportRow
+from app.review.schemas import MarketSnapshot, ModelUsage, ReviewData, ReviewReport, TradingSnapshot
 
 
 def _rec(symbol: str, name: str, boards: int, pct: float | None, reason: str) -> NS:
@@ -184,6 +192,111 @@ def test_assemble_brief_macro_fields_passthrough():
     # 缺字段时给 None（不是 [] —— 空列表是「确无事件」的真信息，两者不可混）
     bare = mb.assemble_brief(_evidence())
     assert bare["macro_note"] is None and bare["macro_events"] is None
+
+
+# ---------------------------------------------------------------- 今日计划：真实复盘/议程存储，只用隔离内存库
+
+
+@pytest.fixture()
+def plan_db():
+    engine = create_engine(
+        "sqlite:///:memory:", poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(engine)
+    sf = sessionmaker(bind=engine)
+    yield sf
+    engine.dispose()
+
+
+def _stored_report(trade_date: str, summary: str = "昨日选股偏弱") -> ReviewReportRow:
+    report = ReviewReport(
+        review_id=f"RV-{trade_date}-test", trade_date=trade_date,
+        summary=summary, model=ModelUsage(requested="rules", actual="rules"),
+        data=ReviewData(
+            trade_date=trade_date,
+            market=MarketSnapshot(trade_date=trade_date),
+            trading=TradingSnapshot(trade_date=trade_date),
+        ),
+    )
+    return ReviewReportRow(
+        review_id=report.review_id, trade_date=trade_date,
+        payload=report.model_dump_json(), summary=summary,
+    )
+
+
+def _open_item(trade_date: str, title: str, status: str = "pending") -> ReviewActionItemRow:
+    return ReviewActionItemRow(
+        review_id=f"RV-{trade_date}-test", trade_date=trade_date,
+        title=title, category="process", priority="P1", status=status,
+    )
+
+
+def test_daily_plan_reads_real_sources_caps_final_items_and_excludes_future(plan_db):
+    with plan_db() as db:
+        db.add(_stored_report("20260902"))
+        db.add(_stored_report("20260901"))
+        db.add(_stored_report("20260903"))
+        db.add_all([
+            _open_item("20260901", "旧未完成1"),
+            _open_item("20260901", "旧未完成2"),
+            _open_item("20260902", "新未完成1"),
+            _open_item("20260902", "新未完成2"),
+            _open_item("20260902", "已确认", "confirmed"),
+            _open_item("20260903", "未来事项"),
+        ])
+        db.add(AgentAgenda(
+            date="2026-09-02", status="executed",
+            items=json.dumps([{"finding": "验证晨窗", "class": "B", "status": "executed"}]),
+        ))
+        db.commit()
+
+    plan = mb._daily_plan(date(2026, 9, 2), plan_db)
+    assert plan["sources"] == {"review": "available", "open_items": "available", "agenda": "available"}
+    assert plan["review"]["summary"] == "昨日选股偏弱"
+    assert len(plan["open_items"]) == 3
+    assert {item["title"] for item in plan["open_items"]} == {"新未完成1", "新未完成2", "旧未完成2"}
+    assert plan["agenda"]["items"][0]["finding"] == "验证晨窗"
+
+
+def test_daily_plan_empty_is_distinct_from_broken_sources(plan_db):
+    empty = mb._daily_plan("2026-09-02", plan_db)
+    assert empty["sources"] == {"review": "empty", "open_items": "empty", "agenda": "empty"}
+    assert empty["review"] is None and empty["open_items"] == [] and empty["agenda"] is None
+
+    with plan_db() as db:
+        db.add(ReviewReportRow(review_id="broken", trade_date="20260902", payload="{broken"))
+        db.add(_stored_report("20260901"))
+        db.add(AgentAgenda(date="2026-09-02", items="{broken"))
+        db.add(_open_item("20260901", "仍可读取的事项"))
+        db.commit()
+    broken = mb._daily_plan("2026-09-02", plan_db)
+    assert broken["sources"] == {"review": "error", "open_items": "available", "agenda": "error"}
+    assert [item["title"] for item in broken["open_items"]] == ["仍可读取的事项"]
+
+
+def test_daily_plan_invalid_date_and_pure_assembly(plan_db):
+    assert mb._daily_plan(None, plan_db) is None
+    assert mb._daily_plan("bad-date", plan_db) is None
+    payload = mb.assemble_brief(_evidence(daily_plan={"based_on": "2026-09-02"}))
+    assert payload["daily_plan"] == {"based_on": "2026-09-02"}
+
+
+def test_build_and_save_surfaces_plan_read_failure(monkeypatch):
+    async def collect(_app):
+        return _evidence()
+
+    plan = {"based_on": "2026-09-01", "sources": {
+        "review": "error", "open_items": "empty", "agenda": "available",
+    }}
+    saved = []
+    monkeypatch.setattr(mb, "collect_evidence", collect)
+    monkeypatch.setattr(mb, "_daily_plan", lambda _date: plan)
+    monkeypatch.setattr(mb, "save_brief", lambda payload: saved.append(payload))
+    payload = asyncio.run(mb.build_and_save(None, trigger="manual"))
+    assert payload["daily_plan"] is plan
+    assert "今日计划：review 读取失败" in payload["missing"]
+    assert saved == [payload]
 
 
 # ---------------------------------------------------------------- 落盘与去重
