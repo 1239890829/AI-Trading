@@ -644,7 +644,8 @@ def retrieve_kb(
     entry = kb_index.entries[kb_id]
     fragment = {
         "kb_id": kb_id, "scenario": route(scenario).key,
-        "title": entry.title, "status": entry.status, "status_note": entry.status_note,
+        "title": entry.title[:160], "title_truncated": len(entry.title) > 160,
+        "status": entry.status, "status_note": entry.status_note,
         "path": f"docs/kb/{name}", "start_line": first, "end_line": last,
         "entry_start_line": begin, "entry_end_line": end,
         "text": "".join(selected), "max_chars": max_chars,

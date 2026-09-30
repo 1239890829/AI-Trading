@@ -40,7 +40,7 @@ def test_exact_fragment_keeps_subheading_and_stops_at_peer(corpus):
 @pytest.mark.parametrize("field,value", [
     ("text", "改写正文"), ("start_line", 3), ("end_line", 9),
     ("fragment_sha256", "invented"), ("file_sha256", "invented"),
-    ("scenario", "pre_open_event"), ("path", "docs/private.md"),
+    ("scenario", "pre_open_event"), ("path", "docs/kb/00-INDEX.md"),
     ("complete", False), ("max_chars", None),
 ])
 def test_modified_receipt_is_rejected(corpus, field, value):
@@ -100,6 +100,18 @@ def test_assistant_receives_actual_body_and_receipt(corpus):
     receipt = json.loads(output.split("\n知识仅", 1)[0])
     assert "不能直接买入" in receipt["fragment"]["text"]
     assert "语义支持" in output and "不构成买卖建议" in output
+
+
+def test_long_index_title_and_json_escaping_respect_tool_budget(corpus):
+    from app.assistant.tools import MAX_CHARS
+    index, body = corpus
+    index.write_text("| KB-STOCK-07 | " + "标题" * 1000 + " | ✅ | 2026-09-30 |\n")
+    body.write_text("### KB-STOCK-07 标题\n" + ('"\\' * 180) + "\n")
+    fragment = kr.retrieve_kb("intraday_pick", "KB-STOCK-07")["fragment"]
+    assert fragment["title_truncated"] and len(fragment["title"]) == 160
+    output = asyncio.run(run_tool(ToolCall("kb", {"id": "KB-STOCK-07", "scenario": "intraday_pick"}), ToolContext(provider=None), cache=None))
+    assert len(output) <= MAX_CHARS
+    assert "未提供可引用正文" in output
 
 
 def test_kb_tool_does_not_reuse_stale_generic_cache(corpus):
