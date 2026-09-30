@@ -16,7 +16,7 @@ def test_opportunity_endpoints_share_one_build_and_isolate_overlays(monkeypatch)
     calls = 0
     release = asyncio.Event()
 
-    async def fake_uncached(_app, trade_date, top_themes, stocks_per_theme, *, snapshot_bundle=None):
+    async def fake_uncached(_app, trade_date, top_themes, stocks_per_theme, *, snapshot_bundle=None, include_audit=False):
         nonlocal calls
         calls += 1
         await release.wait()
@@ -69,7 +69,7 @@ def test_opportunity_cache_key_tracks_snapshot_version(monkeypatch):
     app=SimpleNamespace(state=state)
     calls=0
     bundles=[]
-    async def fake_uncached(_request, trade_date, top_themes, stocks_per_theme, *, snapshot_bundle=None):
+    async def fake_uncached(_request, trade_date, top_themes, stocks_per_theme, *, snapshot_bundle=None, include_audit=False):
         nonlocal calls
         calls += 1
         assert snapshot_bundle is not None
@@ -97,7 +97,7 @@ def test_opportunity_cache_key_tracks_snapshot_freshness_state(monkeypatch):
     svc=Svc(); state=SimpleNamespace(snapshot_service=svc)
     app=SimpleNamespace(state=state)
     calls=0
-    async def fake_uncached(_request, trade_date, top_themes, stocks_per_theme, *, snapshot_bundle=None):
+    async def fake_uncached(_request, trade_date, top_themes, stocks_per_theme, *, snapshot_bundle=None, include_audit=False):
         nonlocal calls; calls += 1
         return {"data":{"trade_date":str(trade_date),"themes":[]},"meta":{}}
     monkeypatch.setattr(runtime,"_build_opportunities_uncached",fake_uncached)
@@ -146,7 +146,7 @@ def test_evidence_tick_archives_each_durable_snapshot_once(monkeypatch):
     app = SimpleNamespace(state=state)
     calls = 0
 
-    async def fake_build(_app, trade_date, top_themes, stocks_per_theme, *, snapshot_bundle=None):
+    async def fake_build(_app, trade_date, top_themes, stocks_per_theme, *, snapshot_bundle=None, include_audit=False):
         nonlocal calls
         calls += 1
         assert str(trade_date) == "2026-09-21"
@@ -158,6 +158,9 @@ def test_evidence_tick_archives_each_durable_snapshot_once(monkeypatch):
         return datetime(2026, 9, 21).date()
 
     monkeypatch.setattr(runtime, "build_opportunities", fake_build)
+    async def fake_persist(_app, payload, *_args):
+        return payload["data"]["decision_evidence"]
+    monkeypatch.setattr(runtime, "_archive_payload", fake_persist)
     monkeypatch.setattr(runtime, "durable_snapshot_context", lambda _app: _durable_bundle_utc())
     monkeypatch.setattr(tc, "in_trading_window", lambda _now=None: True)
     monkeypatch.setattr(market_snapshot, "default_trade_date", fake_trade_date)
@@ -191,6 +194,9 @@ def test_evidence_tick_failure_does_not_advance_cursor(monkeypatch):
         return datetime(2026, 9, 21).date()
 
     monkeypatch.setattr(runtime, "build_opportunities", fake_build)
+    async def fake_persist(_app, payload, *_args):
+        return payload["data"]["decision_evidence"]
+    monkeypatch.setattr(runtime, "_archive_payload", fake_persist)
     monkeypatch.setattr(runtime, "durable_snapshot_context", lambda _app: _durable_bundle_utc())
     monkeypatch.setattr(tc, "in_trading_window", lambda _now=None: True)
     monkeypatch.setattr(market_snapshot, "default_trade_date", fake_trade_date)
@@ -332,7 +338,7 @@ def test_evidence_tick_uses_saved_fact_time_not_late_consumer_clock(monkeypatch)
     bundle = _durable_bundle_utc(3, 29)  # 11:29 Beijing
     seen = {}
 
-    async def fake_build(_app, trade_date, _top, _stocks, *, snapshot_bundle=None):
+    async def fake_build(_app, trade_date, _top, _stocks, *, snapshot_bundle=None, include_audit=False):
         seen["bundle"] = snapshot_bundle
         return {"data": {"decision_evidence": {"state": "ready", "run_id": "r1129", "records": 1}}}
 
@@ -345,6 +351,9 @@ def test_evidence_tick_uses_saved_fact_time_not_late_consumer_clock(monkeypatch)
 
     monkeypatch.setattr(runtime, "durable_snapshot_context", lambda _app: bundle)
     monkeypatch.setattr(runtime, "build_opportunities", fake_build)
+    async def fake_persist(_app, payload, *_args):
+        return payload["data"]["decision_evidence"]
+    monkeypatch.setattr(runtime, "_archive_payload", fake_persist)
     monkeypatch.setattr(tc, "in_trading_window", fake_window)
     monkeypatch.setattr(market_snapshot, "default_trade_date", fake_trade_date)
 
@@ -436,11 +445,8 @@ def test_uncached_runtime_archives_with_snapshot_fact_time_without_name_shadow(m
             app, datetime(2026, 9, 21).date(), top_themes=5, stocks_per_theme=8
         )
     )
-    assert got["data"]["decision_evidence"] == {
-        "state": "ready", "run_id": "real-builder-run", "records": 0
-    }
-    assert seen["trade_date"] == "2026-09-21"
-    assert seen["as_of"] == datetime(2026, 9, 21, 11, 10)
+    assert got["data"]["decision_evidence"]["state"] == "read_only"
+    assert seen == {}, "cold reads must not archive research samples"
     assert linkage_seen["snapshot_as_of"] == "2026-09-21T03:10:00+00:00"
     assert svc.last_success == datetime(2026, 9, 21, 3, 11, tzinfo=timezone.utc)
     assert svc.snapshot[0]["change_pct"] == 2.0

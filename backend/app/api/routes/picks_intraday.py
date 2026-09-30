@@ -178,7 +178,6 @@ async def run_intraday_review(
 
 from app.picks.intraday_opportunity_runtime import (
     build_opportunities as _build_opportunities,
-    snapshot_by as _snapshot_by,
 )
 
 
@@ -410,22 +409,29 @@ async def intraday_top(
     筛选规则与 tier 语义见 app.picks.intraday_opportunity.top_watch_stocks；
     与复盘（picks 维度）共用同一份口径，保证「分组里看到的」和「复盘对照的」是同一批标的。
     """
-    from app.picks.intraday_opportunity import attach_risk_fields, top_watch_stocks
+    from app.picks.intraday_opportunity import top_watch_stocks
 
     hub = request.app.state.hub
     trade_date = await default_trade_date(hub)
     payload = await _build_opportunities(request, trade_date, 5, 8)
     data = top_watch_stocks(payload["data"], limit=limit)
 
-    # 2026-09-09 用户需求「盘中跟踪卡片与每日精选一致」：补现价/止损参考/出场纪律
-    # （与 PickCard 分节同构；现价来自全市场快照，缺失显式 null 不臆造）。
-    # 2026-09-10：改为与题材手风琴共用同一实现。
-    # 2026-09-15：参考区（涨停梯队）**同样**补全——它也是要给人看的卡片，
-    # 不能因为是"参考"就少字段（此前只有 items 走这一步，正是当年反馈的同类问题）。
-    snap_by = _snapshot_by(request)
-    attach_risk_fields(data.get("items") or [], snap_by)
-    attach_risk_fields(data.get("reference_items") or [], snap_by)
+    # The shared assembly already froze price/risk fields with its evidence snapshot.
+    # A later quote must not overwrite one half of this decision.
     return {"data": data, "meta": {}}
+
+
+@router.get("/opportunities")
+def opportunities(
+    date: str = Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),
+) -> dict:
+    """Existing frozen decisions, with open scenarios and no write/selection side effects."""
+    from app.picks.opportunity_view import read_opportunities
+
+    try:
+        return {"data": read_opportunities(date), "meta": {"read_only": True}}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="日期必须有效") from exc
 
 
 @router.get("/leader-research")

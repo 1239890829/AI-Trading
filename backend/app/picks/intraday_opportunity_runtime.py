@@ -5,7 +5,6 @@ same implementation.  No scheduler calls an API route or fabricates a Request ob
 """
 from __future__ import annotations
 
-import contextlib
 import logging
 from copy import deepcopy
 from datetime import datetime
@@ -129,6 +128,7 @@ def attach_risk_to_themes(data: dict, snap_by: dict[str, dict]) -> None:
 async def build_opportunities(
     app, trade_date, top_themes: int, stocks_per_theme: int, *,
     snapshot_bundle: tuple[dict[str, dict], str, str | None] | None = None,
+    include_audit: bool = False,
 ) -> dict:
     """opportunities payload 构建（两处端点共用：全量视图 + 盘中 top 筛选）。
 
@@ -148,10 +148,13 @@ async def build_opportunities(
             snapshot_bundle=snapshot_bundle,
         ),
     )
-    # 缓存只保存不可变的装配基线。风险字段取请求时的实时快照，必须写在副本上：
+    # 缓存只保存不可变的装配基线。风险字段取同一份已捕获快照，必须写在副本上：
     # 旧实现把缓存对象原地修改，两条并发端点会共享/覆盖同一棵 dict，放大数量与字段抖动。
     payload = deepcopy(cached)
-    attach_risk_to_themes(payload["data"], snapshot_by(app))
+    attach_risk_to_themes(payload["data"], snap_by)
+    if not include_audit:
+        for theme in payload["data"].get("themes") or []:
+            theme.pop("_candidate_audit", None)
     return payload
 
 
@@ -263,8 +266,15 @@ async def _build_opportunities_uncached(
             f"题材联动挖掘失败（{type(exc).__name__}）——本轮无可参与联动候选"
         )
 
-    # RSH-026 S1：在叠加请求级字段前归档 point-in-time 决策链。归档失败不把
-    # 行情接口拖死，但必须把 degraded 状态写进响应，不能静默声称“可回放”。
+    payload["data"]["decision_evidence"] = {"state": "read_only", "run_id": None,
+                                            "reason": "证据由后台归档，读取不生成样本"}
+    return payload
+
+
+async def _archive_payload(app, payload: dict, trade_date, snapshot_as_of_text: str) -> dict:
+    """Only the background evidence tick owns persistent evidence and sightings."""
+    import asyncio
+
     try:
         from app.picks.opportunity_learning import archive_intraday_pipeline
 
@@ -287,13 +297,15 @@ async def _build_opportunities_uncached(
             "state": "degraded", "run_id": None,
             "reason": f"证据归档失败（{type(exc).__name__}）",
         }
-    finally:
-        for theme in payload["data"].get("themes") or []:
-            theme.pop("_candidate_audit", None)
+    if payload["data"]["decision_evidence"]["state"] == "ready":
+        await asyncio.to_thread(_record_sightings, payload, snapshot_as_of_text)
+    return payload["data"]["decision_evidence"]
 
+
+def _record_sightings(payload: dict, snapshot_as_of_text: str) -> None:
     # 猎场批次 A（需求 7）+ 2026-09-09 收紧（用户：跟踪过多且缺乏依据）+ 2026-09-15 口径：
     # 机会候选登记加**量化硬门槛**，避免盲目大面积跟踪——
-    #   ① 只在交易时段登记（非交易时段端点被调用不产生台账数据）
+    #   ① 只在来源快照所属交易时段登记
     #   ② 候选须满足任一：进入临板区（板性×0.65 起）/ 联动判定=高
     #
     # ⚠️ 2026-09-15 两处**看起来是改动、实际不改准入集合**的替换（留痕，防误读成放宽）：
@@ -305,61 +317,59 @@ async def _build_opportunities_uncached(
     #      ⇒ guard 的第二分支恒不改变判定结果。替换只是让"为什么算高"可读、可追溯。
     #   ⇒ **准入集合 = 「未封板且进入临板区」**，与 KB-DEC-011 逐字一致，未放宽。
     # watcher 确认与买点触发（dispatch_alert 路径）不受此门槛限制（本就是强信号）。
-    with contextlib.suppress(Exception):
-        # ⚠️ 导入路径修正（2026-09-15，被新增的「函数内导入可解析」守卫抓出）：
-        # 原写 `app.market.trading_status`，但该模块只有**个股停牌判定**；
-        # `in_trading_window` 在 `app.market.trade_calendar`（P1-3 收口后的单点，
-        # 2026-09-11 的 `9ef498c` 移走了它，此处调用点没跟着改）。
-        # 后果：`contextlib.suppress(Exception)` 把 ImportError 吞成静默
-        # ⇒ **本段台账登记自写入以来从未执行过**（题材候选一只都没入过册）。
-        # 这正是「宽泛 except 让守卫失效」的教科书案例——修的是路径，留住的是教训。
-        from app.market.trade_calendar import in_trading_window
-        from app.picks.watch_ledger import record_sighting
+    # ⚠️ 导入路径修正（2026-09-15，被新增的「函数内导入可解析」守卫抓出）：
+    # 原写 `app.market.trading_status`，但该模块只有**个股停牌判定**；
+    # `in_trading_window` 在 `app.market.trade_calendar`（P1-3 收口后的单点，
+    # 2026-09-11 的 `9ef498c` 移走了它，此处调用点没跟着改）。
+    # 历史后果：宽泛 suppress 把 ImportError 吞成静默
+    # ⇒ **本段台账登记自写入以来从未执行过**（题材候选一只都没入过册）。
+    # 当前失败向后台 owner 传播，不推进游标；原归档/首见幂等允许恢复重试。
+    from app.market.trade_calendar import in_trading_window
+    from app.picks.watch_ledger import record_sighting
 
-        now = beijing_now()
-        if in_trading_window(now):
-            tdate = now.date().isoformat()
-            tstamp = now.strftime("%H:%M:%S")
-            registered = 0
-            for th in payload["data"].get("themes") or []:
-                layer = "today_strongest" if th.get("strength_tier") in ("领涨", "强势") else "quiet_starting"
-                for s in th.get("participants") or []:
-                    if not s.get("symbol"):
-                        continue
-                    pct = s.get("change_pct")
-                    linkage_high = (s.get("linkage") or {}).get("level") == "高"
-                    # KB-DEC-011（2026-09-09 用户指令，修订 KB-DEC-008）：涨停前识别才准入——
-                    # ① 已封板的候选一律不入册（封板后发现的=迟到；boards≥1 不再是准入条件）；
-                    # ② 未封板但未达临板区（板性×0.65）且判定不足——不跟踪
-                    from app.picks.pre_limit_radar import board_limit_pct, is_sealed, pre_limit_floor
+    now = to_beijing(datetime.fromisoformat(snapshot_as_of_text))
+    if in_trading_window(now):
+        tdate = now.date().isoformat()
+        tstamp = now.strftime("%H:%M:%S")
+        registered = 0
+        for th in payload["data"].get("themes") or []:
+            layer = "today_strongest" if th.get("strength_tier") in ("领涨", "强势") else "quiet_starting"
+            for s in th.get("participants") or []:
+                if not s.get("symbol"):
+                    continue
+                pct = s.get("change_pct")
+                linkage_high = (s.get("linkage") or {}).get("level") == "高"
+                # KB-DEC-011（2026-09-09 用户指令，修订 KB-DEC-008）：涨停前识别才准入——
+                # ① 已封板的候选一律不入册（封板后发现的=迟到；boards≥1 不再是准入条件）；
+                # ② 未封板但未达临板区（板性×0.65）且判定不足——不跟踪
+                from app.picks.pre_limit_radar import board_limit_pct, is_sealed, pre_limit_floor
 
-                    limit_pct = board_limit_pct(str(s["symbol"]), str(s.get("name") or ""))
-                    if pct is None or is_sealed(float(pct), limit_pct):
-                        continue
-                    if float(pct) < pre_limit_floor(limit_pct) and not linkage_high:
-                        continue  # 未进临板区且判定不足——不跟踪
-                    record_sighting(
-                        trade_date=tdate, symbol=str(s["symbol"]),
-                        name=str(s.get("name") or ""), layer=layer,
-                        source_theme=str(th.get("theme") or ""),
-                        reason={
-                            "kind": "theme",  # KB-TRADE-13：候选链是题材驱动，登记时点即固化归因
-                            "theme": th.get("theme"), "stage": th.get("stage"),
-                            "tier": th.get("strength_tier"), "role": s.get("role"),
-                            "linkage": s.get("linkage"),
-                            "tradability": s.get("tradability"),
-                            "gate": f"pre_limit pct={pct} floor={pre_limit_floor(limit_pct)} limit={limit_pct:.0f}cm linkage_high={linkage_high}",
-                            "basis": (s.get("basis") or "")[:200],
-                        },
-                        is_leader=False,  # 未涨停 ⇒ 无梯队角色，不冒充龙头
-                        boards=0,
-                        entry_price=None,  # 登记时以告警触发价优先；此处无价格由清算兜底
-                        entry_time=tstamp,
-                    )
-                    registered += 1
-            if registered:
-                log.info("watch ledger: %d candidates registered (gate: 临板区, 未封板——KB-DEC-011)", registered)
-    return payload
+                limit_pct = board_limit_pct(str(s["symbol"]), str(s.get("name") or ""))
+                if pct is None or is_sealed(float(pct), limit_pct):
+                    continue
+                if float(pct) < pre_limit_floor(limit_pct) and not linkage_high:
+                    continue  # 未进临板区且判定不足——不跟踪
+                record_sighting(
+                    trade_date=tdate, symbol=str(s["symbol"]),
+                    name=str(s.get("name") or ""), layer=layer,
+                    source_theme=str(th.get("theme") or ""),
+                    reason={
+                        "kind": "theme",  # KB-TRADE-13：候选链是题材驱动，登记时点即固化归因
+                        "theme": th.get("theme"), "stage": th.get("stage"),
+                        "tier": th.get("strength_tier"), "role": s.get("role"),
+                        "linkage": s.get("linkage"),
+                        "tradability": s.get("tradability"),
+                        "gate": f"pre_limit pct={pct} floor={pre_limit_floor(limit_pct)} limit={limit_pct:.0f}cm linkage_high={linkage_high}",
+                        "basis": (s.get("basis") or "")[:200],
+                    },
+                    is_leader=False,  # 未涨停 ⇒ 无梯队角色，不冒充龙头
+                    boards=0,
+                    entry_price=None,  # 登记时以告警触发价优先；此处无价格由清算兜底
+                    entry_time=tstamp,
+                )
+                registered += 1
+        if registered:
+            log.info("watch ledger: %d candidates registered (gate: 临板区, 未封板——KB-DEC-011)", registered)
 
 EVIDENCE_TOP_THEMES = 5
 EVIDENCE_STOCKS_PER_THEME = 8
@@ -407,9 +417,9 @@ async def archive_intraday_evidence_tick(app) -> dict:
 
     payload = await build_opportunities(
         app, trade_date, EVIDENCE_TOP_THEMES, EVIDENCE_STOCKS_PER_THEME,
-        snapshot_bundle=snapshot_bundle,
+        snapshot_bundle=snapshot_bundle, include_audit=True,
     )
-    evidence = (payload.get("data") or {}).get("decision_evidence") or {}
+    evidence = await _archive_payload(app, payload, trade_date, snapshot_bundle[2])
     if evidence.get("state") != "ready":
         raise RuntimeError(
             "intraday opportunity evidence archive not ready: "
