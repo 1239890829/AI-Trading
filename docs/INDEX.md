@@ -334,7 +334,7 @@
 
 ## 7. U52–U55确认后的产品入口
 
-总方案v9.13记录批准取舍；product/product-closure-design.md定义B/C任务导航、前后台、组件与六闭环；product/feature-closure-audit.md保存50项/18域/73源/30后台声明去向；ai/jev-integration.md附录B区分研发共审/业务凭证。批准来源、Skill传播及未验边界见RV-09。
+总方案v9.13记录批准取舍；product/product-closure-design.md定义B/C任务导航、前后台、组件与六闭环；product/feature-closure-audit.md保存50项/18域去向，原批准73源/30声明为历史基线；§13–14现行机械盘点76份生产TSX/31条调度声明；ai/jev-integration.md附录B区分研发共审/业务凭证。批准来源、Skill传播及未验边界见RV-09。
 Governor短入口连接按需手册、决策卡与历史示例；设计/状态/Canvas/选型/雷达/对账/接续/健康Skills随PR #172同步。技能文本与引用检查的实际结果见RV-09及PR回执；宿主加载、真实UI/Canvas和业务效果仍按原stage验收。阶段状态与顺位不由下载报告或导航命名替代。
 
 
