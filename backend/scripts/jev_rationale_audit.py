@@ -9,14 +9,18 @@ import argparse
 import hashlib
 import json
 import sqlite3
-from datetime import datetime, timedelta, timezone
+import sys
+from datetime import datetime
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from app.core.bjtime import BJ_TZ  # noqa: E402
 
 
 def _time(value: str) -> datetime:
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(timezone(timedelta(hours=8))).replace(tzinfo=None)
+        parsed = parsed.astimezone(BJ_TZ).replace(tzinfo=None)
     return parsed
 
 

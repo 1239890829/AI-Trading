@@ -152,7 +152,9 @@ def verify_claims(
         if (
             not 0.0 <= float(confidence) <= 1.0
             or any(not 0.0 <= value <= 1.0 for value in probs.values())
-            or abs(sum(probs.values()) - 1.0) > 0.001
+            # Observed API results may round displayed probabilities to two decimals.
+            # Keep raw values and allow only the same rounding bound as RSH-030.
+            or abs(sum(probs.values()) - 1.0) > max(0.001, 0.0051 * len(VERDICTS))
         ):
             return {"ok": False, "reason": "invalid_probabilities", "items": []}
         items.append(
