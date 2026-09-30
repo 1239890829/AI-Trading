@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from typing import Any
 
 from .core import (
@@ -58,8 +57,7 @@ async def _t_factor_profile(ctx: ToolContext, **kw) -> str:
 async def _t_minute_decisions(ctx: ToolContext, **kw) -> str:
     """做 T 决策库（记录 → 结算 → 错误归因），P2-28① 最后一项。
 
-    与 `/api/market/minute-decisions` 同口径：读时**惰性结算**到期的 open 记录
-    （12:00 后才结算，盘中到期的那部分也能算）。
+    只读取既有记录；结算归既有 minute-decisions 维护流程，助手查询不写库。
 
     纪律：**outcome=open 表示"还没到结算窗口"，不是失败**——
     展示时必须给出各 outcome 的计数，避免模型把一堆 open 读成"决策全错"。
@@ -74,14 +72,8 @@ async def _t_minute_decisions(ctx: ToolContext, **kw) -> str:
     limit = max(1, min(limit, 50))
 
     try:
-        from app.core.bjtime import beijing_now
         from app.market import minute_decisions as md
 
-        # 结算是同步阻塞（查 K 线）⇒ 丢到线程，别卡住事件循环
-        if beijing_now().hour >= 12:
-            with contextlib.suppress(Exception):
-                await asyncio.to_thread(md.settle_due, ctx.session_factory,
-                                       md.tdx_points, symbol)
         items = await asyncio.to_thread(md.list_decisions, ctx.session_factory,
                                        symbol, limit)
     except Exception as exc:  # noqa: BLE001

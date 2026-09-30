@@ -187,8 +187,8 @@ def test_chat_route_sse_success(client, monkeypatch):
     captured: list = []
     orig = assistant_routes._build_messages
 
-    def spy(req, market_block="", tools_enabled=False):
-        msgs = orig(req, market_block, tools_enabled=tools_enabled)
+    def spy(req, market_block="", tools_enabled=False, tool_names=None):
+        msgs = orig(req, market_block, tools_enabled=tools_enabled, tool_names=tool_names)
         captured.append(msgs)
         return msgs
 
@@ -585,8 +585,8 @@ def test_chat_route_includes_market_block(client, monkeypatch):
     captured: list = []
     orig = assistant_routes._build_messages
 
-    def spy(req, market_block="", tools_enabled=False):
-        msgs = orig(req, market_block, tools_enabled=tools_enabled)
+    def spy(req, market_block="", tools_enabled=False, tool_names=None):
+        msgs = orig(req, market_block, tools_enabled=tools_enabled, tool_names=tool_names)
         captured.append(msgs[0]["content"])
         return msgs
 
@@ -1337,3 +1337,103 @@ def test_chat_output_budget_blocks_delta_before_user_and_records_failed_receipt(
     assert rows and rows[0]["state"] == "failed"
     assert rows[0]["error_kind"] == "output_budget_exceeded"
     assert rows[0]["output_chars"] == 4
+
+
+
+def test_shadow_done_is_yielded_before_slow_worker_drains(monkeypatch):
+    import asyncio
+    import threading
+    from types import SimpleNamespace
+    from app.assistant import jev_tool_router as jr
+    from app.assistant.tools import ToolContext
+    started, release = threading.Event(), threading.Event()
+    captured = []
+    def slow_route(*a):
+        started.set()
+        assert release.wait(3)
+        return {"ok": False, "reason": "test", "tools": ["quotes"]}
+    async def context(*a):
+        return ToolContext(provider=object())
+    monkeypatch.setattr(settings, "assistant_tools_enabled", True)
+    monkeypatch.setattr(settings, "jev_assistant_tool_mode", "shadow")
+    monkeypatch.setattr(settings, "jev_assistant_verify_mode", "off")
+    monkeypatch.setattr(assistant_routes, "_tool_context", context)
+    monkeypatch.setattr(assistant_routes, "_entity_payload", lambda *a: {"stocks": []})
+    monkeypatch.setattr(assistant_routes, "_build_extra_context", lambda *a: "")
+    monkeypatch.setattr(assistant_routes, "_open_stream", lambda *a: _FakeStream(["依据不足。 "]))
+    monkeypatch.setattr(jr, "route_tool_groups", slow_route)
+    monkeypatch.setattr(jr.RouteTrace, "save", lambda trace: captured.append(trace.terminal))
+    async def scenario():
+        req = assistant_routes.ChatRequest(messages=[{"role": "user", "content": "看看现在"}])
+        response = await assistant_routes.assistant_chat(req, SimpleNamespace())
+        stream = response.body_iterator
+        async for chunk in stream:
+            if '"type": "done"' in chunk:
+                break
+        assert await asyncio.to_thread(started.wait, 1)
+        assert not release.is_set() and captured == []
+        close = asyncio.create_task(stream.aclose())
+        await asyncio.sleep(0)
+        assert not close.done()
+        release.set()
+        await close
+        assert captured == ["completed"]
+        assert not jr._ROUTE_SLOT.locked()
+    try:
+        asyncio.run(scenario())
+    finally:
+        release.set()
+
+
+def test_cascade_shortlist_does_not_grant_unavailable_execution(client, monkeypatch):
+    from app.assistant import jev_tool_router as jr
+    from app.assistant.tools import ToolContext, TOOL_SPECS, ToolSpec
+    captured, messages = [], []
+    async def context(*a):
+        return ToolContext(provider=object())
+    async def forbidden(*a, **k):
+        pytest.fail("unavailable account dependency must be rejected before dispatch")
+    monkeypatch.setattr(settings, "assistant_tools_enabled", True)
+    monkeypatch.setattr(settings, "jev_assistant_tool_mode", "cascade")
+    monkeypatch.setattr(settings, "jev_assistant_verify_mode", "off")
+    monkeypatch.setattr(assistant_routes, "_tool_context", context)
+    monkeypatch.setattr(assistant_routes, "_build_extra_context", lambda *a: "")
+    monkeypatch.setitem(TOOL_SPECS, "paper", ToolSpec("paper", "", "", forbidden))
+    monkeypatch.setattr(jr, "route_tool_groups", lambda text, page, allowed: {
+        "ok": True, "narrowed": True, "tools": ["quotes"], "baseline": sorted(allowed), "reason": "test"})
+    monkeypatch.setattr(jr.RouteTrace, "save", lambda trace: captured.append(trace))
+    def stream(msgs):
+        messages.append(msgs)
+        return _FakeStream(["{{tool:paper}}"] if len(messages) == 1 else ["账户工具不可用。 "])
+    monkeypatch.setattr(assistant_routes, "_open_stream", stream)
+    resp = client.post("/api/assistant/chat", json={"messages": [{"role": "user", "content": "看看目前情况"}]})
+    assert _parse_sse(resp.text)[-1] == {"type": "done"}
+    assert "{{tool:quotes|" in messages[0][0]["content"]
+    assert "{{tool:paper|" not in messages[0][0]["content"]
+    assert captured[0].calls == [{"tool": "paper", "state": "unavailable"}]
+    assert captured[0].terminal == "completed"
+
+
+
+def test_followup_uses_original_manifest_without_exporting_private_history(client, monkeypatch):
+    from app.assistant import jev_tool_router as jr
+    from app.assistant.tools import ToolContext
+    captured = []
+    async def context(*a):
+        return ToolContext(provider=object())
+    monkeypatch.setattr(settings, "assistant_tools_enabled", True)
+    monkeypatch.setattr(settings, "jev_assistant_tool_mode", "cascade")
+    monkeypatch.setattr(settings, "jev_assistant_verify_mode", "off")
+    monkeypatch.setattr(assistant_routes, "_tool_context", context)
+    monkeypatch.setattr(assistant_routes, "_build_extra_context", lambda *a: "")
+    monkeypatch.setattr(assistant_routes, "_open_stream", lambda *a: _FakeStream(["需要补充数据。 "]))
+    monkeypatch.setattr(jr, "evaluate", lambda *a, **k: pytest.fail("followup must not export chat history"))
+    monkeypatch.setattr(jr.RouteTrace, "save", lambda trace: captured.append(trace))
+    resp = client.post("/api/assistant/chat", json={"messages": [
+        {"role": "user", "content": "PRIVATE_POSITION_HISTORY"},
+        {"role": "assistant", "content": "已了解。"},
+        {"role": "user", "content": "再分析一下"},
+    ]})
+    assert _parse_sse(resp.text)[-1] == {"type": "done"}
+    assert captured[0].route["reason"] == "history_not_exported"
+    assert captured[0].presented == captured[0].baseline

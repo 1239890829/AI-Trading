@@ -42,6 +42,8 @@ import logging
 import re
 import threading
 import time
+
+import anyio
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
@@ -368,49 +370,33 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
             "model": model,
             "sources": market_sources,
         })
-        tool_route = None
+        from app.assistant.jev_tool_router import RouteTrace, available_tools
+
         route_task: asyncio.Task | None = None
-        prompt_tool_names: set[str] | None = None
+        trace = None
+        names_available = available_tools(tool_ctx) if tools_enabled else set()
         route_mode = str(
             getattr(settings, "jev_assistant_tool_mode", "off") or "off"
         ).strip().lower()
-        if tools_enabled and route_mode in {"shadow", "cascade"}:
-            from app.assistant.jev_tool_router import route_tool_groups
-
-            if route_mode == "shadow":
-                # 与首轮 DeepSeek 并行，不增加首 token 等待；只做覆盖率/缩减率统计。
-                route_task = asyncio.create_task(
-                    asyncio.to_thread(
-                        route_tool_groups,
-                        req.messages[-1].content,
-                        req.page,
-                    )
-                )
-            else:
-                try:
-                    tool_route = await asyncio.to_thread(
-                        route_tool_groups,
-                        req.messages[-1].content,
-                        req.page,
-                    )
-                    if tool_route.get("narrowed"):
-                        prompt_tool_names = set(tool_route.get("tools") or [])
-                except Exception as exc:  # noqa: BLE001 — 路由增强失败必须 fail-open
-                    log.info("assistant Jev tool route failed open: %s", type(exc).__name__)
-                    tool_route = None
-
-        if prompt_tool_names is None:
-            # 保留既有调用契约：shadow/off 与 Jev 接入前逐字同形，现有测试桩/调用方不受影响。
-            messages = _build_messages(req, combined_block, tools_enabled=tools_enabled)
-        else:
-            messages = _build_messages(
-                req,
-                combined_block,
-                tools_enabled=tools_enabled,
-                tool_names=prompt_tool_names,
-            )
-        tool_block: str | None = None  # 工具真实返回——grounding 证据池的第二部分
+        # Dependency readiness is deterministic; Jev cannot add execution authority.
+        prompt_tool_names = names_available if tools_enabled else None
+        tool_block: str | None = None
+        used_tools: list[str] = []
         try:
+            if tools_enabled and route_mode in {"shadow", "cascade"}:
+                trace = RouteTrace(route_mode, names_available, req.messages[-1].content, usage_sf)
+                if len(req.messages) == 1:
+                    route_task = trace.start(req.messages[-1].content, req.page)
+                else:
+                    trace.route["reason"] = "history_not_exported"
+                if route_mode == "cascade" and route_task is not None:
+                    trace.route = await asyncio.shield(route_task)
+                    if trace.route.get("narrowed"):
+                        prompt_tool_names = set(trace.route["tools"]) & names_available
+                        trace.presented = set(prompt_tool_names)
+            messages = _build_messages(
+                req, combined_block, tools_enabled=tools_enabled, tool_names=prompt_tool_names,
+            )
             sink: list[str] = []
             # 首事件即进度：前端据此亮「思考中」，不必等到第一个 delta 才有反馈
             # （用户实测反馈：取数与思考期间界面完全静止，像卡死）。
@@ -423,7 +409,6 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
             # 真实提问常是多跳的（先看异动 → 再查公告 → 再看资金），一轮两把工具不够，
             # 模型只能拿第一批数据硬答。每轮都重新解析**本轮**输出里的工具标记。
             rounds = 0
-            used_tools: list[str] = []   # 跨轮累计：认知缺口检测要判"本轮有没有取过数"
             while tools_enabled and tool_ctx is not None and rounds < MAX_TOOL_ROUNDS:
                 raw = sink[-1] if sink else ""
                 calls = parse_tool_calls(raw)
@@ -437,7 +422,10 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
                     "used": names,
                     "label": "、".join(tool_label(n) for n in names),
                 })
-                block, used = await run_tool_calls(calls, tool_ctx)
+                block, used = await run_tool_calls(
+                    calls, tool_ctx, allowed_tools=names_available,
+                    receipts=trace.calls if trace is not None else None,
+                )
                 tool_block = f"{tool_block}\n\n{block}" if tool_block else block
                 used_tools.extend(used)
                 log.info("assistant tools round=%s used=%s", rounds, used)
@@ -539,24 +527,13 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
                 # 注：这里**刻意不发 SSE 事件**——新增事件类型属协议变更，
                 # 可能影响前端解析。可见化走议程证据（已有展示位），不改协议。
 
-            # Jev tool-router shadow/cascade 的覆盖度只写聚合 telemetry，不改变 SSE 协议。
-            # shadow 任务若到这里仍没完成就取消，绝不为了统计拖慢用户的 done。
-            if tools_enabled and route_mode in {"shadow", "cascade"}:
-                from app.assistant.jev_tool_router import observe_route
-
-                if route_task is not None:
-                    if route_task.done():
-                        try:
-                            tool_route = route_task.result()
-                        except Exception as exc:  # noqa: BLE001
-                            log.info("assistant Jev shadow route unavailable: %s", type(exc).__name__)
-                            tool_route = None
-                    else:
-                        route_task.cancel()
-                if tool_route is not None:
-                    observe_route(tool_route, used_tools)
+            if trace is not None:
+                trace.terminal = "completed"
+                trace.false_denial = looks_like_false_denial(answer_text)
             yield _sse({"type": "done"})
         except asyncio.CancelledError:
+            if trace is not None:
+                trace.terminal = "disconnected"
             # 客户端断开（点了停止/关窗/跳页）：底层传输由 _stream_round 的 finally 关闭
             raise
         except LLMError as exc:
@@ -576,6 +553,12 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
             log.exception("assistant chat failed")
             yield _sse({"type": "error", "message": f"助手内部错误：{exc}"})
             yield _sse({"type": "done"})
+        finally:
+            # done was already yielded. Cleanup owns the actual HTTP worker until it exits;
+            # no cancellation pretends a synchronous thread has been killed.
+            if trace is not None:
+                with anyio.CancelScope(shield=True):
+                    await trace.finish(route_task)
 
     return StreamingResponse(
         event_stream(),
