@@ -533,3 +533,24 @@ def test_canceled_shadow_keeps_slot_until_thread_really_finishes(sf, monkeypatch
         asyncio.run(run())
     finally:
         release.set()
+
+
+@pytest.mark.parametrize("damage", ["bool_confidence", "bool_probability", "nan", "range", "sum"])
+def test_jev_malformed_numbers_cannot_be_adopted(monkeypatch, damage):
+    from app.core import jev_client
+
+    _enable_jev(monkeypatch, "cascade")
+    answer = {"choice": "ignore", "confidence": .99,
+              "probabilities": {"notify": .01, "ignore": .99, "escalate": 0}}
+    if damage == "bool_confidence":
+        answer["confidence"] = True
+    elif damage == "bool_probability":
+        answer["probabilities"]["ignore"] = True
+    elif damage == "nan":
+        answer["probabilities"]["ignore"] = float("nan")
+    elif damage == "range":
+        answer["probabilities"]["ignore"] = 1.01
+    else:
+        answer["probabilities"]["ignore"] = .9
+    monkeypatch.setattr(jev_client, "evaluate", lambda *_a, **_k: {"ok": True, "answers": {"verdict": answer}})
+    assert asyncio.run(tri._jev_verdict({})) is None

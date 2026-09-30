@@ -147,11 +147,14 @@ async def _jev_verdict(ctx: dict) -> dict | None:
     verdict = str(answer.get("choice") or "").strip().lower()
     confidence = answer.get("confidence")
     probabilities = answer.get("probabilities")
-    if verdict not in _VERDICTS or not isinstance(confidence, (int, float)):
+    if verdict not in _VERDICTS or type(confidence) not in (int, float):
         return None
     if not 0.0 <= float(confidence) <= 1.0 or not isinstance(probabilities, dict):
         return None
     if set(probabilities) != set(_VERDICTS):
+        return None
+    if (any(type(p) not in (int, float) or not 0.0 <= p <= 1.0 for p in probabilities.values())
+            or abs(sum(probabilities.values()) - 1.0) > max(0.001, .0051 * len(_VERDICTS))):
         return None
     return {
         "verdict": verdict,

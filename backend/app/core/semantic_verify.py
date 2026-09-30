@@ -141,9 +141,11 @@ def verify_claims(
         verdict = str(answer.get("choice") or "")
         confidence = answer.get("confidence")
         probabilities = answer.get("probabilities")
-        if verdict not in VERDICTS or not isinstance(confidence, (int, float)):
+        if verdict not in VERDICTS or type(confidence) not in (int, float):
             return {"ok": False, "reason": "invalid_answer_value", "items": []}
         if not isinstance(probabilities, dict) or set(probabilities) != set(VERDICTS):
+            return {"ok": False, "reason": "invalid_probabilities", "items": []}
+        if any(isinstance(value, bool) for value in probabilities.values()):
             return {"ok": False, "reason": "invalid_probabilities", "items": []}
         try:
             probs = {k: float(probabilities[k]) for k in VERDICTS}
