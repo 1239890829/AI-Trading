@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import {
+  ApiError,
   generateMorningBrief,
   generatePickReview,
   generatePicks,
@@ -35,6 +36,7 @@ import { PickCard, StandAsideBanner, fromDailyPick, fromIntradayStock } from "@/
 import {
   AlertItem,
   DirectionCard,
+  DailyPlanBlock,
   EnvStrip,
   MacroCalendar,
   MarketOverviewStrip,
@@ -105,6 +107,7 @@ function HuntingInner() {
 
   // —— 跟踪组数据 ——
   const [brief, setBrief] = useState<MorningBrief | null>(null);
+  const [briefReadFailed, setBriefReadFailed] = useState(false);
   const [watcher, setWatcher] = useState<WatcherState | null>(null);
   const [stats, setStats] = useState<IntradayReviewStats | null>(null);
   const [opps, setOpps] = useState<IntradayOpportunities | null>(null);
@@ -183,18 +186,21 @@ function HuntingInner() {
     // 跟踪组（原 /intraday 四端点 + intraday-top）
     {
       const [b, w, s, o, tp] = await Promise.all([
-        getMorningBriefToday().catch(() => null),
+        getMorningBriefToday()
+          .then((data) => ({ data, failed: false }))
+          .catch((e: unknown) => ({ data: null, failed: !(e instanceof ApiError && e.status === 404) })),
         getWatcherState().catch(() => null),
         getIntradayReview().catch(() => null),
         getIntradayOpportunities().catch(() => null),
         getIntradayTop().catch(() => null),
       ]);
-      setBrief(b);
+      setBrief(b.data);
+      setBriefReadFailed(b.failed);
       setWatcher(w);
       setStats(s);
       setOpps(o);
       setTop(tp);
-      setIntradayFailed(b === null && w === null && s === null && o === null && tp === null);
+      setIntradayFailed(b.failed || (b.data === null && w === null && s === null && o === null && tp === null));
       setIntradayLoaded(true);
     }
   }, []);
@@ -243,7 +249,8 @@ function HuntingInner() {
   const reviewed = (brief?.directions ?? []).filter((d) => d.review);
   const topItems = top?.items ?? [];
   const topRefItems = top?.reference_items ?? [];
-  const briefMissing = picksLoaded && intradayLoaded && brief === null;
+  const briefMissing = picksLoaded && intradayLoaded && brief === null && !briefReadFailed;
+  const briefUnavailable = briefMissing || briefReadFailed;
   const pending = !picksLoaded || !intradayLoaded;
 
   // 猎场两条瀑布流（2026-09-10 用户要求分区，取代 09-09 的单容器混排）：
@@ -333,7 +340,7 @@ function HuntingInner() {
           </button>
           <button
             onClick={() => void act("beat")}
-            disabled={busy !== null || briefMissing}
+            disabled={busy !== null || briefUnavailable}
             className="rounded border border-zinc-300 px-2 py-0.5 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100 disabled:opacity-50"
             title="手动推进一拍：取数 → 全部方向 confirm/falsify 判定（与盘中 watcher 同代码路径）"
           >
@@ -341,7 +348,7 @@ function HuntingInner() {
           </button>
           <button
             onClick={() => void act("review")}
-            disabled={busy !== null || briefMissing}
+            disabled={busy !== null || briefUnavailable}
             className="rounded border border-zinc-300 px-2 py-0.5 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100 disabled:opacity-50"
             title="对照当日盘前方向 vs 实际盘面（四分类+误判分类）并回填提醒收益"
           >
@@ -580,7 +587,11 @@ function HuntingInner() {
             盘中节拍（盘前简报 · watcher · 提醒{alerts.length > 0 ? ` · 今日 ${alerts.length} 条` : ""}）
           </summary>
           <div className="mt-3 space-y-4">
-            {briefMissing ? (
+            {briefReadFailed ? (
+              <div className="rounded-xl border border-amber-500/40 p-6 text-center text-sm text-amber-800 dark:text-amber-300">
+                盘前简报读取失败，当前无法确认是否已生成。请刷新重试；不要把读取失败视为今日无简报。
+              </div>
+            ) : briefMissing ? (
               <div className="rounded-xl border border-zinc-200 p-6 text-center text-sm text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
                 今日尚无盘前简报：点右上「生成/刷新简报」，或等交易日 08:40 自动生成。
                 <br />
@@ -604,6 +615,9 @@ function HuntingInner() {
                       </div>
                       <div className="mt-2">
                         <ClimateBlock climate={brief.climate} />
+                      </div>
+                      <div className="mt-2">
+                        <DailyPlanBlock plan={brief.daily_plan} />
                       </div>
                       <div className="mt-2 grid grid-cols-1 gap-3 lg:grid-cols-3">
                         {brief.directions.map((d) => (

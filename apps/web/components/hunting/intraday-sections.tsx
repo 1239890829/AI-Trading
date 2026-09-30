@@ -328,6 +328,42 @@ export function EnvStrip({ brief }: { brief: MorningBrief }) {
   );
 }
 
+export function DailyPlanBlock({ plan }: { plan: MorningBrief["daily_plan"] }) {
+  if (!plan?.sources) {
+    return (
+      <div className="rounded-lg border border-amber-500/30 px-2.5 py-2 text-[11px] text-amber-800 dark:text-amber-300">
+        今日条件计划不可用：上一交易日未确定，或此简报由旧版本生成。
+      </div>
+    );
+  }
+  const sources = plan.sources;
+  const status = (source: keyof typeof sources, empty: string) =>
+    sources[source] === "error" ? "读取失败" : sources[source] === "empty" ? empty : null;
+  return (
+    <section className="space-y-1.5 rounded-lg border border-zinc-200 bg-zinc-50/60 px-2.5 py-2 text-[11px] leading-5 dark:border-zinc-800 dark:bg-zinc-900/40">
+      <div className="font-medium text-zinc-700 dark:text-zinc-200">今日条件计划 · 依据 {plan.based_on}</div>
+      <div>
+        <span className="text-zinc-600 dark:text-zinc-400">复盘：</span>
+        {status("review", "该日无复盘报告") ?? plan.review?.summary ?? "报告无摘要"}
+      </div>
+      {sources.review === "available" && plan.review?.findings.length ? (
+        <ul className="list-inside list-disc text-zinc-600 dark:text-zinc-400">
+          {plan.review.findings.map((finding, index) => <li key={index}>{finding}</li>)}
+        </ul>
+      ) : null}
+      <div>
+        <span className="text-zinc-600 dark:text-zinc-400">未完成改进项：</span>
+        {status("open_items", "截至该日无未完成项") ?? plan.open_items.map((item) => item.title).join("；")}
+      </div>
+      <div>
+        <span className="text-zinc-600 dark:text-zinc-400">议程：</span>
+        {status("agenda", "该日无议程") ?? `${plan.agenda?.status ?? "未知状态"}${plan.agenda?.items.length ? ` · ${plan.agenda.items.map((item) => `${item.finding}（${item.status ?? "状态未知"}）`).join("；")}` : " · 无议程项"}`}
+      </div>
+      <div className="text-[10px] text-zinc-600 dark:text-zinc-400">{plan.note}</div>
+    </section>
+  );
+}
+
 export function MacroCalendar({ brief }: { brief: MorningBrief }) {
   const note = brief.macro_note;
   const events = brief.macro_events;

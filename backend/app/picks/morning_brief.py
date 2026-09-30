@@ -314,19 +314,18 @@ def assemble_brief(evidence: dict) -> dict:
         "climate": evidence.get("climate"),
         "performance_skipped": perf_skipped,
         "directions": directions,
-        "daily_plan": _daily_plan(evidence.get("pool_date")),
+        "daily_plan": evidence.get("daily_plan"),
         "alerts": [],  # 盘中 watcher 追加（append_alert，当日去重）
     }
 
 
-def _daily_plan(prev_pool_date) -> dict | None:
+def _daily_plan(prev_pool_date, session_factory=None) -> dict | None:
     """P1-6（2026-09-08 用户指令）：复盘 → 次日计划显式链路。
 
-    三段上下文拼装（规则层，无 LLM）：昨日复盘结论 / 未完成 action_items /
-    昨日进化议程执行结果。任一来源缺失显式标注（三态），不臆造。
+    三段上下文拼装（规则层，无 LLM）：上一交易日复盘结论 / 截至该日
+    未完成的改进项 / 该日进化议程。每路区分 available、empty、error；
+    读取失败只降级这一段，不能把错误冒充合法空集。
     """
-    import contextlib
-
     from datetime import date as _date
 
     if not prev_pool_date:
@@ -335,63 +334,85 @@ def _daily_plan(prev_pool_date) -> dict | None:
         prev = prev_pool_date if isinstance(prev_pool_date, _date) else _date.fromisoformat(str(prev_pool_date))
     except ValueError:
         return None
-    plan: dict = {"based_on": str(prev), "review": None, "open_items": [], "agenda": None}
+    from sqlalchemy import select
 
-    # ① 昨日复盘结论（买点质量/失误数）
-    with contextlib.suppress(Exception):
-        from app.picks.review_store import get_report
+    from app.core.db import get_session_factory
+    from app.models.agent import AgentAgenda
+    from app.review.models import ReviewActionItemRow, ReviewReportRow
+    from app.review.storage import get_report
 
-        rep = get_report(prev)
-        if rep is not None and rep.report:
-            summary = (rep.report.get("summary") or {}) if isinstance(rep.report, dict) else {}
+    ymd = prev.strftime("%Y%m%d")
+    plan: dict = {
+        "based_on": prev.isoformat(), "review": None, "open_items": [], "agenda": None,
+        "sources": {"review": "empty", "open_items": "empty", "agenda": "empty"},
+        "note": "今日计划=上一交易日复盘结论+截至该日未完成改进项+该日议程结果的规则拼装；不构成买卖建议",
+    }
+    try:
+        sf = session_factory or get_session_factory()
+    except Exception:
+        log.exception("morning plan: database unavailable for %s", ymd)
+        plan["sources"] = {key: "error" for key in plan["sources"]}
+        return plan
+
+    try:
+        report = get_report(sf, ymd)
+        if report is not None:
+            findings = [finding for dim in report.dimensions for finding in dim.findings]
             plan["review"] = {
-                "trade_date": str(prev),
-                "picks_count": summary.get("picks_count"),
-                "findings": (rep.report.get("findings") or [])[:3] if isinstance(rep.report, dict) else [],
+                "trade_date": prev.isoformat(), "review_id": report.review_id,
+                "summary": report.summary, "findings": findings[:3],
             }
+            plan["sources"]["review"] = "available"
+    except Exception:
+        log.exception("morning plan: review read failed for %s", ymd)
+        plan["sources"]["review"] = "error"
 
-    # ② 未完成 action_items（pending/deferred，最多 3 条）
-    with contextlib.suppress(Exception):
-        from app.models.review import ReviewReport
-        from sqlalchemy import select
-
-        from app.core.db import get_session_factory
-
-        with get_session_factory()() as db:
+    try:
+        with sf() as db:
             rows = db.execute(
-                select(ReviewReport).order_by(ReviewReport.id.desc()).limit(5)
+                select(ReviewActionItemRow)
+                .join(ReviewReportRow, (
+                    (ReviewReportRow.review_id == ReviewActionItemRow.review_id)
+                    & (ReviewReportRow.trade_date == ReviewActionItemRow.trade_date)
+                ))
+                .where(ReviewActionItemRow.trade_date <= ymd)
+                .where(ReviewActionItemRow.status.in_(("pending", "deferred")))
+                .order_by(ReviewActionItemRow.trade_date.desc(), ReviewActionItemRow.id.desc())
+                .limit(3)
             ).scalars().all()
-            for r in rows:
-                report = r.report or {}
-                for ai in (report.get("action_items") or []):
-                    if ai.get("status") in ("pending", "deferred"):
-                        plan["open_items"].append({
-                            "title": ai.get("title", "")[:60], "category": ai.get("category"),
-                        })
-                if len(plan["open_items"]) >= 3:
-                    break
+            plan["open_items"] = [
+                {"id": row.id, "trade_date": row.trade_date, "title": row.title[:60],
+                 "category": row.category, "status": row.status}
+                for row in rows
+            ]
+            if rows:
+                plan["sources"]["open_items"] = "available"
+    except Exception:
+        log.exception("morning plan: action item read failed through %s", ymd)
+        plan["sources"]["open_items"] = "error"
 
-    # ③ 昨日进化议程执行结果
-    with contextlib.suppress(Exception):
-        from app.models.agent import AgentAgenda
-        from sqlalchemy import select as _sel
-
-        from app.core.db import get_session_factory
-
-        with get_session_factory()() as db:
+    try:
+        with sf() as db:
             row = db.execute(
-                _sel(AgentAgenda).where(AgentAgenda.date == str(prev))
+                select(AgentAgenda).where(AgentAgenda.date == prev.isoformat())
             ).scalars().first()
-        if row is not None:
-            items = row.items if isinstance(row.items, list) else []
-            plan["agenda"] = {
-                "date": row.date,
-                "status": row.status,
-                "items": [{"finding": i.get("finding", "")[:50], "class": i.get("class"),
-                           "status": i.get("status")} for i in items[:5]],
-            }
+            if row is not None:
+                items = json.loads(row.items)
+                if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+                    raise ValueError("agenda.items is not a list of objects")
+                plan["agenda"] = {
+                    "date": row.date, "status": row.status,
+                    "items": [
+                        {"finding": str(item.get("finding") or "")[:50],
+                         "class": item.get("class"), "status": item.get("status")}
+                        for item in items[:5]
+                    ],
+                }
+                plan["sources"]["agenda"] = "available"
+    except Exception:
+        log.exception("morning plan: agenda read failed for %s", prev)
+        plan["sources"]["agenda"] = "error"
 
-    plan["note"] = "今日计划=昨日复盘结论+未完成改进项+昨日议程执行结果的规则拼装；不构成买卖建议"
     return plan
 
 
@@ -672,6 +693,13 @@ def append_alert(target_date: str, alert: dict) -> bool:
 async def build_and_save(app_state, *, trigger: str = "manual") -> dict:
     evidence = await collect_evidence(app_state)
     evidence["trigger"] = trigger
+    evidence["daily_plan"] = _daily_plan(evidence.get("pool_date"))
+    if evidence["daily_plan"] is None:
+        evidence.setdefault("missing", []).append("今日计划：上一交易日未确定")
+    else:
+        for source, status in evidence["daily_plan"]["sources"].items():
+            if status == "error":
+                evidence.setdefault("missing", []).append(f"今日计划：{source} 读取失败")
     payload = assemble_brief(evidence)
     save_brief(payload)
     log.info(

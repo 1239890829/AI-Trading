@@ -1,6 +1,6 @@
-# 当前交接：IMP-032 其余来源事件与投递发布
+# 当前交接：BUG-009 晨报今日计划真实消费链
 
-> 唯一状态在 [W02/IMP-032](stages/w02-notifications.md#imp-032)，当前行为合同见[信号链 §12](summary/pick-signal-chain.md#12-其余来源事件与投递合同2026-09-29imp-032)。RSH-031 第一版已由 PR #182 合并，持续效果验证仍按 W04 条件等待。
+> 唯一状态在 [W05/BUG-009](stages/w05-agents.md#bug-009)。上一轮 IMP-032 已由 PR #185/#186 发布，RSH-031 第一版由 PR #182 合并；两者的前向效果仍归原 owner，不因本轮改写。
 
 ## 1. 权威入口与授权
 
@@ -8,22 +8,20 @@
 
 **U50 降级授权回执仍有效**：用户 2026-09-24 允许本机 Codex 在 `DEGRADED_FULL_CONTROL` 承担规划、U49 作者反证、实施、自审、PR/CI、发布、合并及清理，直到明确撤销。准确 HEAD 的 `DegradedRelease` 必须明示作者自审，不能冒充独立 Review；完整本地门禁、三项 required CI、release_check、合并后 CI 和分支清理不降低。授权不覆盖付费源/模型、真实通知、券商、部署或生产库。
 
-本轮在 `master@f91d2990aa45a659e9f3db65a4af35aaa91877e7` 运行 selector，领取 G2/IMP-032 唯一主任务，实施分支 `codex/imp032-event-delivery`，PR #185，实施提交 `4fb8f600e85dfff89debc63bc895daf3f71baf3f`。阶段页完成状态重算后返回 G2/BUG-009；它是下一轮候选，不代表本轮领取第二项。
+本轮在 `master@f8e103d614a78cb1a20217eb04e7f7891247c485` 运行 selector，G0–G4 无 actionable blocker，按最低普通非阻断门领取 G2/BUG-009 唯一主任务；无硬依赖或效果前置。同门无其它竞争项。实施分支 `codex/bug009-morning-plan`，PR #187，代码提交 `1972d2bb34254255f650f5c47e461b5ce0bc5495`。
 
 ## 2. 本轮实现与 U49 作者反证
 
-家族 B 的开板、模拟开/卖和持仓监护过去直接写晨报；真实持仓止损从离场引擎直开 Feishu 线程；报告有 REPORT 策略却无持久事件/意图。现在来源先写带 ID/版本/原 asof/记录时点的 `AlertEvent`，晨报为派生投影并留 `pending/completed` 回执；模拟成交按订单 ID 补建，不重复下单。真实止损为 CRITICAL，发送前重核规则、渠道、持仓和新鲜价格，非自选持仓可用现有全市场快照；报告为 REPORT，盘后投递，更正版本压制旧待发，历史补建不追发。其它状态按 SILENT 留痕。站内铃铛只纳入具名开板与真实持仓风险，资讯浏览和模拟动作不变成外推。
+原 `_daily_plan` 两路导入不存在的模块且被 `suppress(Exception)` 吞没，晨报仍输出看似正常的空计划；页面从未消费 `daily_plan`。现在从现行复盘/改进项/议程存储按上一交易日读取，三路分别标 `available/empty/error`。行动项只取仍关联当前报告的未完成行，排除未来，按最终结果最多 3 条；晨报保持无 LLM 规则拼装与来源日期，页面展示同一只读投影。旧版简报缺来源状态时提示不可用；晨报 HTTP 404 与读取失败分开提示。
 
-**U49 主动审计回执 / 作者反证**：补了未持仓/已恢复、规则撤销、非自选无报价、报告更正、投影失败、成交后 plan 写失败及发送结果未知窗口。来源重核不可用时只在过期前待重试，不标送达；发送已开始而结果未知不自动重发。仍须以生产前向样本核实际受理，不能用隔离测试证明送达。
+**U49 主动审计回执 / 作者反证**：核了死导入、孤儿改进项、跨日污染、损坏 JSON、缺报告、部分来源失败、旧版简报、API 404/非 404 与页面消费者；没有新增计划写入、业务动作或模型调用。仍需按准确 HEAD 与 CI 对最终差异自审，不能称独立审核。传播核对：W05 与本 handoff 已更新；细功能审计 X30/X32 已指向 BUG-009，无需改对象归属；总方案、INDEX、AGENTS/Skills 与 Jev 蓝图没有新增长期规则或入口，不适用。
 
-本地实测（Python 3.11.12 / Node 24.14.0，后端/前端全量串行）：后端最终 **4465 passed / 81 skipped / 1 既有 Starlette 警告**（197.52 秒），全量 pyflakes 通过。中间一次全量因本 handoff 漏写累计要求范围 `U01–U55` 触发文档守卫红，补回后最终全量通过；没有放宽断言。前端 tsc/eslint、**77 文件 / 733 tests**（默认与 UTC 各一轮）及 Next 生产构建通过。文档、工作区卫生、公开仓扫描通过。Jev 作者辅助复评 correctness 7.1→7.9、reliability 7.6→8.2；分数不是独立审核或金融效果证据。
-
-传播核对：W02、信号链、细功能审计、INDEX 与本 handoff 同步。总方案、Jev 蓝图、AGENTS/Skills 没有长期权限或方法变更，不适用。后端和前端需同版本运行；本轮未加载生产、未迁移生产库、未外发真实提醒。
+本机现有 `data/ashare.db` 以只读连接核 2026-09-23：复盘、未完成项、议程均可读，行动项最终返回 3 条。该观察不等于生产版本已加载或前向效果验收。最终本地门禁：干净检出后端 **4469 passed / 81 skipped / 1 既有 Starlette 警告**，全量 pyflakes；前端 tsc/eslint、**78 文件 / 736 tests**（默认与 UTC 各一轮）及 Next 生产构建；doc-health、workspace hygiene、公开仓扫描均通过。首次本机全量 pytest 的 5 项无关失败来自忽略的 `backend/data/trade_calendar.json` 停在 2026-09-24，使合成 marketdb 被当前日期新鲜度闸门判陈旧；另 1 项是本任务修掉死导入后旧测试豁免应撤销，已修。保持闸门不变，在不携带运行数据的干净检出全量复验通过。
 
 ## 3. 发布与后续
 
-PR #185 已按准确 HEAD `5b08db00cbaca7f2b1200d0a7e7c1b66fde1ad30` 的 `DegradedRelease`、三项 required CI 和 `release_check.py` 合并，master 合并提交 `ac884b7b29e4be247d5cfb2db1deb222e25b596f`，合并后 CI [run 36583856071](https://github.com/1239890829/AI-Trading/actions/runs/36583856071) 的 backend/frontend/docs 均成功，功能分支本地和远端已删除。前向通知样本仍须按源 ID/版本、投影状态与 Outbox 终态复盘；未加载生产，不能宣称真实送达。新反例回 W02 owner，不自动改机会阈值或渠道策略。下一轮正式开工须重跑 selector。
+PR #187 的合并状态、准确 HEAD 的 `DegradedRelease`、三项 required CI、`release_check.py` 与合并后 master CI 以 GitHub 和脚本回执为准；本分支文档在合并前只是候选，不能据此宣称已发布。未获部署授权，不加载生产服务。新前向反例回 W05/BUG-009 原 owner。阶段页在 BUG-009 完成后重算返回 G3/RSH-030；它是下一轮候选，本轮不领取第二个业务任务。
 
-- **当前主门**：G2
-- **主切片首选**：BUG-009
-- **当前门候选顺位**：BUG-009
+- **当前主门**：G3
+- **主切片首选**：RSH-030
+- **当前门候选顺位**：RSH-030 → RSH-027
