@@ -88,6 +88,7 @@ from .picks import (
 )
 
 from .agent import (
+    _t_kb,
     _t_agent_tasks,
     _t_brief,
     _t_climate,
@@ -136,6 +137,7 @@ __all__ = [
     "_rec",
     "_resolve_date",
     "_snapshot_map_sync",
+    "_t_kb",
     "_t_agent_tasks",
     "_t_alert_events",
     "_t_anomaly",

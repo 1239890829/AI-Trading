@@ -13,6 +13,7 @@ from .account import (
     _t_watchlist,
 )
 from .agent import (
+    _t_kb,
     _t_agent_tasks,
     _t_brief,
     _t_climate,
@@ -62,6 +63,8 @@ from .themes import (
     _t_themes,
 )
 TOOL_SPECS: dict[str, ToolSpec] = {
+    "kb": ToolSpec("kb", "只读 KB 正文与版本；用于解释，语义支持未验证",
+                   "id=KB条目编号｜scenario=pre_open_event/intraday_pick/post_close_review/system_evolution（默认post_close_review）｜start_line=续读起始行（可选）", _t_kb),
     # P2-5（2026-09-12）：事件→板块传导链的**反向检索**（关键词 → 链）。
     # 与 events 工具的分工：events 给「发生了什么」，本工具给「它可能传到哪些板块」。
     "chain": ToolSpec(
@@ -196,6 +199,7 @@ TOOL_SPECS: dict[str, ToolSpec] = {
 
 
 TOOL_LABELS: dict[str, str] = {
+    "kb": "知识正文",
     "chain": "传导链",
     "quotes": "实时行情",
     "limit_up": "涨停池",
