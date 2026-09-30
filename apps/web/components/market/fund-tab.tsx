@@ -3,8 +3,9 @@
 import { useCallback, useMemo, useState } from "react";
 import { Panel } from "@/components/panel";
 import { Skeleton } from "@/components/ui/loading";
+import { useResource } from "@/hooks/use-polling-fetch";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
-import { fmtAmount, pctColor, pctText } from "@/lib/format";
+import { bjDate, fmtAmount, pctColor, pctText } from "@/lib/format";
 import {
   getFundFlowHistory,
   getFundFlowIntraday,
@@ -292,13 +293,17 @@ export function FundTab() {
   const [flowHistDegraded, setFlowHistDegraded] = useState<string[]>([]);
   const [turnHist, setTurnHist] = useState<TurnoverHistoryDay[]>([]);
   const [turnHistDegraded, setTurnHistDegraded] = useState<string[]>([]);
+  const [readErrors, setReadErrors] = useState<Record<string, boolean>>({});
+  const markRead = (resource: string, failed: boolean) => setReadErrors(current => ({...current, [resource]: failed}));
   const [selDay, setSelDay] = useState<string | null>(null);
-  const [dayCompare, setDayCompare] = useState<TurnoverDayCompare | null>(null);
+  const dayResource = useResource(() => getTurnoverDay(selDay!), {key: selDay, enabled: !!selDay, intervalMs: null});
+  const dayCompare: TurnoverDayCompare | null = dayResource.error ? null : dayResource.data ?? null;
 
   usePollingFetch(async () => {
     try {
       setTurnover(await getTurnoverToday());
-    } catch {}
+      markRead("成交额", false);
+    } catch { markRead("成交额", true); }
     finally {
       setTurnoverPending(false);
     }
@@ -307,7 +312,8 @@ export function FundTab() {
   usePollingFetch(async () => {
     try {
       setFlowRt(await getFundFlowRealtime());
-    } catch {}
+      markRead("实时资金", false);
+    } catch { markRead("实时资金", true); }
     finally {
       setFlowRtPending(false);
     }
@@ -318,7 +324,8 @@ export function FundTab() {
       const d = await getFundFlowIntraday();
       setIntraday(d.items);
       setIntradayDegraded(d.degraded);
-    } catch {}
+      markRead("分钟资金", false);
+    } catch { markRead("分钟资金", true); }
     finally {
       setIntradayPending(false);
     }
@@ -330,6 +337,8 @@ export function FundTab() {
         getFundFlowHistory(20).catch(() => null),
         getTurnoverHistory(10).catch(() => null),
       ]);
+      markRead("资金历史", fh === null);
+      markRead("成交额历史", th === null);
       if (fh) {
         setFlowHist(fh.items);
         setFlowHistDegraded(fh.degraded);
@@ -341,21 +350,7 @@ export function FundTab() {
     } catch {}
   }, 300_000);
 
-  const loadDayCompare = useCallback(async (day: string) => {
-    try {
-      setDayCompare(await getTurnoverDay(day));
-    } catch {
-      setDayCompare(null);
-    }
-  }, []);
-
-  function pickDay(d: string) {
-    setSelDay((cur) => {
-      const next = cur === d ? null : d;
-      if (next) void loadDayCompare(next); // 选中即拉取对比，无需 effect（规避 set-state-in-effect）
-      return next;
-    });
-  }
+  function pickDay(day: string) { setSelDay(current => current === day ? null : day); }
 
   const rtMaxAbs = useMemo(() => {
     const t = flowRt?.items?.total;
@@ -382,8 +377,7 @@ export function FundTab() {
   const turnoverDiff = turnover?.diff_yi ?? null;
 
   // 龙虎榜回退池：成交额历史中早于今日的交易日（当日榜 ~17:00 披露前的兜底数据源）
-  const now = new Date();
-  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const todayStr = bjDate(new Date().toISOString());
   const lhbFallbackDates = useMemo(
     () => turnHist.map((d) => d.date).filter((d) => d < todayStr),
     [turnHist, todayStr],
@@ -401,6 +395,7 @@ export function FundTab() {
     // 滚动兜底（2026-09-04）：内容天然超一屏，根节点必须可滚——
     // 上层 main 是 overflow-hidden，这里再丢滚动就会静默裁剪。
     <div className="flex h-full min-h-0 flex-col gap-2 overflow-y-auto">
+      {Object.entries(readErrors).filter(([,failed]) => failed).map(([name]) => <p key={name} role="alert" className="text-xs text-amber-800 dark:text-amber-300">{name}读取失败，保留值仅作上次结果；不能判断当前为空或为零。</p>)}
       {/* 第一行：成交额对比 + 实时五档净额 */}
       <div className="grid shrink-0 gap-2 lg:grid-cols-2">
         <Panel
@@ -544,6 +539,8 @@ export function FundTab() {
                     </button>
                   ))}
                 </div>
+                {selDay && !!dayResource.error && <p role="alert">{selDay} 成交额读取失败。<button onClick={dayResource.refresh}>重试</button></p>}
+                {selDay && dayResource.pending && <p role="status">正在读取 {selDay}…</p>}
                 {selDay && dayCompare ? (
                   dayCompare.available ? (
                     <div className="mt-2 text-xs">

@@ -225,7 +225,7 @@ X编号仅用于批准来源与设计覆盖，不是任务编号；历史证据�
 
 ## 13. 当前组件源覆盖
 
-基点 `2adaaee2a5586f25dd1faeb4a3111f616c92104c`；对批准的73份组件覆盖按当前跟踪路径重新映射。结构归属不等每个回调/Canvas已实际验证；每个新入口仍按原小动作契约补覆盖。全站C01–C16定义只读产品文档§10。
+批准基点 `2adaaee2a5586f25dd1faeb4a3111f616c92104c` 原声明73份；该数字为历史规划口径。2026-09-30按当前生产TSX（排除测试）机械盘点为76份，以下两表路径与源码集合完全一致；另保留共享上下文TS支持源。结构归属不等每个回调/Canvas已实际验证；每个新入口仍按原小动作契约补覆盖。全站C01–C16定义只读产品文档§10。
 
 | 相对组件路径 | 审计域 | 组件族 | 目标职责 |
 |---|---|---|---|
@@ -303,9 +303,20 @@ X编号仅用于批准来源与设计覆盖，不是任务编号；历史证据�
 | `ui/modal-shell.tsx` | M01/全域 | C03/C04/C12/C14 | 公共原语逐消费者验；非统一样式即完成 |
 | `ui/panel-boundary.tsx` | M01/全域 | C03/C04/C12/C14 | 公共原语逐消费者验；非统一样式即完成 |
 
+当前覆盖补表：前两项为本次新增消费者；后两项为已有消费者补录，不冒充本次新增实现：
+
+| 补表源（相对components/） | 域 | 族 | 验证 |
+|---|---|---|---|
+| `agent/production-operations.tsx` | M15 | C03/C11/C16 | 读取无POST、取消不执行、单飞、错误不自动重试 |
+| `detail/account-scope-panel.tsx` | M09/M10 | C02/C03/C06 | main/daily隔离，manual/hunting不读取资本，订单可全部展开 |
+| `hunting/leader-research-panel.tsx` | M06/M14 | C03/C07/C08/C09 | RSH-031已有研究观察消费者；只读观察与交易准入分开，继承原组件回归 |
+| `hunting/opportunity-evidence-panel.tsx` | M06/M14 | C02/C03/C07/C08/C09 | IMP-049已有证据消费者；本次补固定/比较、切日迟到隔离与焦点恢复回归 |
+
+公共支持位于hooks/use-overlay-focus、lib/task-navigation，各有真实消费者与测试；临时原型/观测器不进入生产源清单。
+
 ## 14. 后台声明的目标消费者
 
-当前 `backend/app/bootstrap/schedulers.py` AST共30条声明；这是注册与设计映射，不是开启/存活/业务进展证明。每条均验原开关、单拥有者、触发/输入、版本/水位、失败/取消/恢复、预算与消费者。后台接管先于退出按钮；无页面进展与GET无副作用另验。
+当前 `backend/app/bootstrap/schedulers.py` AST共31条声明（当前静态注册调用；原批准30条为历史口径）；这是注册与设计映射，不是开启/存活/业务进展证明。每条均验原开关、单拥有者、触发/输入、版本/水位、失败/取消/恢复、预算与消费者。后台接管先于退出按钮；无页面进展与GET无副作用另验。
 
 | 声明 | 源行 | 目标消费者 |
 |---|---|---|
@@ -318,27 +329,28 @@ X编号仅用于批准来源与设计覆盖，不是任务编号；历史证据�
 | `opportunity-evidence` | 206 | H02决定/H05证据 |
 | `data-health-sentinel` | 218 | 就地影响/维护 |
 | `pre-limit-radar` | 228 | H02观察/已授权消息 |
-| `llm-aux-judge` | 235 | 事件辅助解释；仅实际Jev参与才有Jev凭证 |
-| `position-monitor` | 241 | H04风险 |
-| `paper-matcher` | 248 | H04订单/成交 |
-| `alert-quotes-feeder` | 255 | 提醒输入 |
-| `alert-engine` | 259 | 共享消息/风险 |
-| `risk-refresher` | 266 | H04/H02约束 |
-| `event-collector` | 291 | H01事件/H02证据 |
-| `metric-history-backfill` | 298 | H01历史/研究 |
-| `premarket-brief` | 312 | H02计划/H01上下文 |
-| `picks-watcher` | 328 | H02条件/参考/消息 |
-| `picks-buy-point` | 339 | H02决定/动作重检 |
-| `board-surge` | 353 | H01变化/H02线索 |
-| `lhb-archive` | 364 | H01龙虎榜/H05历史 |
-| `picks-intraday-review` | 375 | H05结果标签 |
-| `ths-reason-sentinel` | 392 | 事件覆盖/维护 |
-| `sentiment-monitor` | 403 | H01环境 |
-| `picks-shadow` | 414 | H04每日精选影子，非hunting-shadow |
-| `marketdb-sync` | 428 | 历史/H05研究 |
-| `factor-eval` | 446 | 受控研究/H05结果 |
-| `news-flash` | 463 | H01事件 |
-| `llm-gateway-probe` | 474 | 维护健康，不证明业务效果 |
+| `leader-research` | 233 | H05持续研究观察，RSH-031拥有；不晋级交易 |
+| `llm-aux-judge` | 240 | 事件辅助解释；仅实际Jev参与才有Jev凭证 |
+| `position-monitor` | 246 | H04风险 |
+| `paper-matcher` | 253 | H04订单/成交 |
+| `alert-quotes-feeder` | 260 | 提醒输入 |
+| `alert-engine` | 264 | 共享消息/风险 |
+| `risk-refresher` | 271 | H04/H02约束 |
+| `event-collector` | 296 | H01事件/H02证据 |
+| `metric-history-backfill` | 303 | H01历史/研究 |
+| `premarket-brief` | 317 | H02计划/H01上下文 |
+| `picks-watcher` | 333 | H02条件/参考/消息 |
+| `picks-buy-point` | 344 | H02决定/动作重检 |
+| `board-surge` | 358 | H01变化/H02线索 |
+| `lhb-archive` | 369 | H01龙虎榜/H05历史 |
+| `picks-intraday-review` | 380 | H05结果标签 |
+| `ths-reason-sentinel` | 397 | 事件覆盖/维护 |
+| `sentiment-monitor` | 408 | H01环境 |
+| `picks-shadow` | 419 | H04每日精选影子，非hunting-shadow |
+| `marketdb-sync` | 433 | 历史/H05研究 |
+| `factor-eval` | 451 | 受控研究/H05结果 |
+| `news-flash` | 468 | H01事件 |
+| `llm-gateway-probe` | 479 | 维护健康，不证明业务效果 |
 
 ## 15. RSH-031 持续研究细功能（2026-09-29）
 
@@ -361,3 +373,100 @@ P10/P17、X25/X28/X29 的本轮工程证据：预检/费用由后端给出、异
 IMP-019 已取得受控请求/冷启动/事件循环、SQLite锁机制、慢队列、实际React/Canvas/WS、分页与连续动作证据，及板块冷缓存重复回源修补。全尝试分母、暖读尾延迟反例、外层夹具错误和未验的真实可见性/焦点/飞行中切换边界见 [运行测量报告](../system/runtime-performance.md#4-关键子范围覆盖与边界)。这不替代对应表行的现场、正确性或产品全链验收；任务状态仍归W06，未批准IMP-047隔离。
 
 2026-09-30 P07/P08 的同版证据纵切见 [猎场 §4.2](hunting-decision-design.md#42-统一机会证据读模型-v1imp-0492026-09-30)：原持久决定与研究观察分域、开放多假设、拒绝/未知与零候选分层、引用回放、原执行 owner 版本及进入条件原样保留；GET 不产生样本，原后台写者可重试。前台消费者仅在原台账展开挂载，正常/空/失败/切日迟到/键盘分别验收，浏览器为明确合成夹具。全站布局、follow/pin/compare 与运营迁出仍归 IMP-050，shadow 真成交归 IMP-053；不以一片闭环替代其它细功能。
+
+
+## 18. IMP-050 UI工程逐项验收与继承边界（2026-09-30）
+
+本次逐项定位去向。FIX/MOVE表示本轮行为修改及验证，KEEP表示复用已存在能力并纳入全量回归，不声称逐行审阅或实源全功能测试；WATCH表示原批准候选/准入仍未实施。每行金融/运行效果继续归§11原owner，本轮只验UI装配、状态、交互和原命令边界。
+
+| 子项 | 本轮裁定与具体落点/证据 |
+|---|---|
+| X01 | KEEP市场/工作台同源指数摘要；合成指数价格与百分比实屏核对 |
+| X02 | MOVE市场全景H01，market/page部分失败保持健康资源 |
+| X03 | FIX题材URL日期/排序/连板/家数/focus派生；Themes单key读取，不双发筛选请求 |
+| X04 | FIX涨停空池保请求日、八位日期回显；跌停/断板KEEP原分态与回归 |
+| X05 | KEEP龙虎榜日榜/多日口径，H01原tab及详情，不相加或伪造披露 |
+| X06 | FIX资金历史日期请求身份和失败提示；BoardFlow种类/区间及下钻独立资源 |
+| X07 | FIX云图自选订阅、聚焦行业按新payload解析；SVG键盘与焦点恢复实屏 |
+| X08 | KEEP事件浏览及股票/新闻详情；MOVE共用Drawer，不按菜单变更事件事实 |
+| X09 | KEEP IMP-048原文修订/撤回/版本证据，原详情原字段，不倒填 |
+| X10 | KEEP简报/市场原上下文；宏观不另造机会榜，不重写气候因果 |
+| X11 | MOVE盘前结果至H02发现，原生成调度保留；阅读不调用generate |
+| X12 | FIX机会同股多假设读模型独立依据与等待视图；不挂载隐藏的旧猎场取数 |
+| X13 | KEEP开放后台路线和原消费者，不能因独立走强/无梯队在导航中被排除 |
+| X14 | KEEP未知情境/缺官方容器/缺行情原读模型与gate counts，未准入不造买点 |
+| X15 | FIX同版侧栏follow/pin/compare、失效与未知原字段；切版不发订单 |
+| X16 | KEEP原通知诊断与机会运行gate原因；不存在逐股记录时不推定未选因果 |
+| X17 | KEEP首见/参考轨，FIX固定快照保留日期/版本；参考价不计fill或收益 |
+| X18 | FIX搜索快速加自选单飞/失败回执，workbench分组写失败可见/跨窗事件；保留原用户命令 |
+| X19 | KEEP原分组/排序持久接口，FIX异步load局部失败不抹健康资源与存储拒绝容错 |
+| X20 | WATCH保存筛选/新观察理由字段，本轮未造无消费者持久服务 |
+| X21 | KEEP最近标的/连续看股，FIX证券详情进入工作台保date/scope/from等上下文 |
+| X22 | KEEP同StockDetail装配和真实Canvas；FIX工作区响应式/键盘拖宽，不换坐标算法 |
+| X23 | MOVE手工记录H04，FIX“非券商核验”标题；原修订/日期/费用与草稿回归 |
+| X24 | MOVE持仓H04，手工/main分列表，daily/hunting没有持仓时不填其它账户 |
+| X25 | KEEP IMP-007同版后端预检/费用/拒单/撤单；URL切手工/模拟时账户身份同步 |
+| X26 | KEEP每日精选独立scope读回执，未启用可见；不并入main资产 |
+| X27 | WATCH机会shadow准入归IMP-053；H04明确未准入，不造虚构账户/成交 |
+| X28 | FIX main委托完整展开和原因，unknown先核；无委托与读取失败分开 |
+| X29 | KEEP既有备份/鉴权重置维护入口；普通表单不恢复重置 |
+| X30 | FIX H05冻结复盘，日期key/404/迟到成功失败，研究默认无处置按钮 |
+| X31 | KEEP各原研究漏选/转弱/缺样本及分母；H05只读结果，后验不晋级规则 |
+| X32 | KEEP复盘summary/meta/行动计划原报告version，FIX漏呈现的已存正文 |
+| X33 | MOVE方法只读研究，与维护策略健康共享原只读登记册/健康结果；研究否决/效果仍原owner |
+| X34 | KEEP知识搜索/正文/原ID导航，FIX手机树/长文上下排列；实际正文hash证据仍RSH-027 |
+| X35 | MOVE批量实验/管理保受控维护，原预算/人工gold不变，无普通页自动实验 |
+| X36 | MOVE参数/晋级/回滚归维护，KEEP原独立批准与证据绑定，不以area授权 |
+| X37 | MOVE任务中心/议程归维护，KEEP原持久取消/unknown/outcome；本轮不改任务引擎 |
+| X38 | MOVE仓库追踪归维护，KEEP既有雷达/审批，不自动安装或升级 |
+| X39 | KEEP消息水位/外发unknown；FIX抽屉初始关闭焦点、顶层Esc/inert，未发真实通知 |
+| X40 | KEEP助手私有本地历史、SSE停止/drain，FIX球键盘打开/输入焦点/Esc回球，无自动chat POST |
+| X41 | KEEP实际对象原始凭证与原维护报告；字段缺失仍未知，研发复评分不当股票贡献 |
+| X42 | FIX B导航/兼容旧agent tab/中文单次编码/deep link/from，导航辅助测试 |
+| X43 | KEEP亮暗/密度/原宽度偏好，FIX手机自然滚动/跳到内容/分屏键盘；不上传偏好 |
+| X44 | FIX市场/资金/板块/日期资源部分失败反馈；原质量/source/asof不替换成本机读取时间 |
+| X45 | KEEP后台31声明与原开关/服务；WS断线REST降级实屏，声明数不当健康数 |
+| X46 | MOVE五命令至ProductionOperations；GET读结果、取消/单飞/失败unknown组件验；后台承接见下 |
+| X47 | KEEP原备份/迁移/恢复/审计，不删流水/数据/安全消费者；临时证据恢复性移出 |
+| X48 | MERGE呈现共享证券详情、焦点外壳和账户读投影；原服务/不同scope不合并，不删除低频机制 |
+| X49 | WATCH独立事件主导航，当前H01事件/共享详情足够，无新空页 |
+| X50 | WATCH独立风险/研究主模块，当前H04/H05与受控维护满足工程落点，未来按真实任务复评 |
+
+### 18.1 十八域与源码对照
+
+| 域 | 本次消费者/行为证据与未验边界 |
+|---|---|
+| M01 | NavBar/task-navigation、共享Overlay；中文深链、Tab/IME/嵌套/恢复/inert回归；无新外部库 |
+| M02 | B五入口与C四入口同12任务比较；workbench四scope，原分组命令；真实用户盲测未做 |
+| M03 | Market概览独立资源，BoardFlow/Fund日期与失败；夹具非行情 |
+| M04 | Tape旧四tab、Themes筛选和LimitUp空日；旧龙虎/跌停原回归，不声称所有数据源实抓 |
+| M05 | Events/News/Stock事件原事实和安全引用；Drawer公共行为，本次不改归因模型 |
+| M06 | H02发现/依据/跟踪，开放hypotheses、固定/对比版本；RSH-031前向收益仍未由UI证明 |
+| M07 | StockDetail共享Canvas，桌面/手机亮暗与键盘宽度；原事件/成交点单测，不造历史fill |
+| M08 | Notification源时间、渠道unknown与水位原测试；焦点实屏，无真实外发 |
+| M09 | main读summary/orders，Trade预检/草稿/拒单回归；daily/hunting分域，未做真实模拟资金动作 |
+| M10 | RealPosition手工录入、默认北京日期原测试；非券商核验及记录独立；无人为删流水验收 |
+| M11 | Review只读/maintenance处置分离，404/迟到错误、报告身份/自由文本数字测试 |
+| M12 | KbBrowser原正文/ID/历史搜索测试，手机358px长文夹具；不新增知识写权限 |
+| M13 | 助手打开/焦点/关闭实屏，原多会话/SSE/停止全量回归；本地聊天未外发 |
+| M14 | 龙头研究、方法状态只读；原研究卡/收盘对照测试，本次不生成市场效果定论 |
+| M15 | Maintenance原task/evolution/params/repos/alerts以及新增生产兜底；auth不靠菜单隐藏 |
+| M16 | 原scheduler registry/start/stop/failure/auth及机会GET无写测试；不声称31任务生产健康 |
+| M17 | 原备份/恢复/卫生完整后端门禁；只整理本任务临时资产，不清业务数据 |
+| M18 | 原stage单点、INDEX/方案/专题/传播与发布回执，恢复不改独立Review语义 |
+
+§13当前76份生产TSX组件逐项保留域/族归属，路径集合已经机械核对无漏列/旧路径；另有共享上下文TS支持源。真正修改的消费者见本次Git diff，未改者走KEEP及相关原测试。全映射不推导逐行重审或实源全部行为验证。新两个组件有本表及独立回归，不另造业务能力。
+
+### 18.2 五项生产命令迁出前的后台承接证据
+
+| 命令 | 已有无页面owner/触发 | 持久/恢复/边界证据 |
+|---|---|---|
+| 组合生成 | bootstrap `picks-autogen` → picks_autogen_scheduler，09:26及原开关 | DailyPickSet按日幂等；原pipeline、scheduler/auth测试，禁自动新增模型预算 |
+| 精选复盘 | review-scheduler / ReviewService 15:30；POST与其复用daily_review | 已有报告/复盘表，失败不伪成功，阅读与生成分开；原daily review测试 |
+| 简报生成 | `premarket-brief`原循环/北京日开关 → morning_brief | 原简报存储、模型budget及写鉴权；重生成清提醒后果先呈现，不自动重试 |
+| 手动单拍 | `picks-watcher` / `picks-buy-point`原循环与统一runtime | IMP-049 durable归档/台账失败重试及cursor/版本单写者，原dedup与notification授权 |
+| 盘后对照 | `picks-intraday-review`原循环 → review逻辑 | 原简报/对照持久、交易日/水位/停止测试，页面关闭不终止后台owner |
+
+本次没有新增或更换后台写者；完整后端门禁在干净检出隔离库/网络运行，覆盖已有scheduler注册、停止、autogen、归档恢复、GET无写、鉴权及预算消费者。生产是否开启/有进展继续由开关、服务与业务水位判断，未运行生产窗口不标健康。GET不是产生样本的入口；订单risk/check-order虽为POST，是原只读预检，不宣称所有POST都为业务写入。
+
+实际隔离浏览器两批日志共1899请求，其中173个risk/check-order只读预检（夹具403）；其余GET。没有生成、成交、通知或chat命令POST。维护原生confirm工具超时未取得实屏取消回执，单测取消/错误路径通过；没有把超时当业务完成。完整日志/截图/临时原型与观测原始值只存忽略artifacts，不入共享个人数据。

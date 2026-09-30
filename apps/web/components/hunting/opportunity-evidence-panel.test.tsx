@@ -53,3 +53,29 @@ describe("同版机会依据", () => {
     expect(screen.queryByRole("button", { name: /建仓|买入/ })).toBeNull();
   });
 });
+
+it("pin and compare retain the original date/version while following reads the selected current object", async () => {
+  const first = payload("2026-09-30");
+  const hypothesis = {opportunity_id: "o", decision_id: "d", decision_version: "v1", scenario: "trend", source_theme: "趋势", state: "waiting", data_state: "unknown", source: "test", first_seen: "10:00", as_of: "10:01", reasons: ["依据1"], unknowns: ["等待1"], reference: {price: 10, semantics: "reference_only"}, actionable: false, execution_blocker: "不能执行", snapshot_refs: []};
+  first.cards = [{symbol: "600127", name: "对象A", hypotheses: [hypothesis]}];
+  const second = {...payload("2026-09-29"), cards: [{symbol: "600825", name: "对象B", hypotheses: [{...hypothesis, decision_version: "v2", reasons: ["依据2"]}]}]};
+  vi.mocked(getOpportunities).mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+  render(<OpportunityEvidencePanel />);
+  const origin = await screen.findByRole("button", {name: "查看 600127 依据"});
+  origin.closest("details")!.open = true;
+  fireEvent.click(origin);
+  fireEvent.click(screen.getByRole("button", {name: "固定版本"}));
+  fireEvent.change(screen.getByLabelText("机会决定日期"), {target: {value: "2026-09-29"}});
+  await screen.findByRole("button", {name: "查看 600825 依据"});
+  const side = screen.getByLabelText("当前证据侧栏");
+  expect(side.textContent).toContain("2026-09-30（固定快照）");
+  expect(side.textContent).toContain("v1");
+  fireEvent.click(screen.getByRole("button", {name: "对比"}));
+  fireEvent.click(screen.getByRole("button", {name: "查看 600825 依据"}));
+  expect(side.textContent).toContain("v1"); expect(side.textContent).toContain("v2");
+  fireEvent.click(screen.getByRole("button", {name: "跟随"}));
+  expect(screen.getByLabelText("当前证据侧栏").textContent).toContain("对象B");
+  expect(screen.getByLabelText("当前证据侧栏").textContent).not.toContain("v1");
+  fireEvent.click(screen.getByRole("button", {name: "关闭侧栏"}));
+  expect(document.activeElement).toBe(screen.getByLabelText("机会决定日期"));
+});

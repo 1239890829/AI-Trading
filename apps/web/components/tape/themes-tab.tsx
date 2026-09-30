@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { RankDelta, ThemeCardView } from "@/components/theme-card";
@@ -9,7 +9,7 @@ import { fmtHeat, pctColor, pctText, timeText } from "@/lib/format";
 import { workbenchUrlWithBack } from "@/lib/routing";
 import { symbolDetailClick, useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { sortAuctionBenchmark } from "@/lib/auction";
-import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import { useResource } from "@/hooks/use-polling-fetch";
 import type { AuctionBenchmarkItem, SkyrocketRow, ThemeStrengthRow, ThemesHotPayload } from "@/lib/api";
 import type { ThemeBoardPayload } from "@/types/market";
 
@@ -53,24 +53,17 @@ export function ThemesTab() {
   // 竞价标杆/人气榜/飙升榜的个股链接：点击**就地弹窗**（2026-09-15 详情弹窗化），
   // href 保留（右键新窗口/复制链接仍走工作台深链）
   const { open } = useSymbolDetail();
-  const [data, setData] = useState<ThemeBoardPayload | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  // `date` 直接**派生自 URL**，不再另存一份 state（2026-09-12 评审 R-7）。
-  // 原先「state 副本 + URL」两份持有：state 只在挂载时读一次 URL，此后 URL 再变
-  // 它也不动 ⇒ 取数参数有两个真相源（`useResource` 的 effect 依赖里没有 `searchParams`）。
-  // 派生后 URL 是唯一真相源，配合下面的 `key` 即为单一触发路径。
-  // 诚实边界（潜在契约违反，非当前可观测缺陷）见 limit-up-tab 同处说明。
   const date = searchParams.get("date") ?? "";
-  const [sort, setSort] = useState<SortKey>((searchParams.get("sort") as SortKey) || "strength");
-  const [minBoards, setMinBoards] = useState(() => {
-    const v = searchParams.get("min_boards");
-    return v ? Number(v) : 0;
+  const rawSort = searchParams.get("sort");
+  const sort: SortKey = rawSort === "boards" || rawSort === "count" ? rawSort : "strength";
+  const minBoards = Number(searchParams.get("min_boards")) || 0;
+  const minCount = Number(searchParams.get("min_count")) || 2;
+  const resource = useResource(() => getThemes({date: date || undefined, sort, minBoards: minBoards || undefined, minCount, limit: 60}), {
+    key: `${date}:${sort}:${minBoards}:${minCount}`, intervalMs: null,
   });
-  const [minCount, setMinCount] = useState(() => {
-    const v = searchParams.get("min_count");
-    return v ? Number(v) : 2;
-  });
+  const data: ThemeBoardPayload | null = resource.error ? null : resource.data ?? null;
+  const loading = resource.pending;
+  const error = resource.error instanceof Error ? resource.error.message : resource.error ? "读取失败" : null;
   const [showCaveats, setShowCaveats] = useState(false);
   // 题材人气（B1 热股榜）：best-effort 增强，拉取失败静默降级（看板主体不依赖它）
   const [hot, setHot] = useState<ThemesHotPayload | null>(null);
@@ -78,7 +71,7 @@ export function ThemesTab() {
   const [sky, setSky] = useState<SkyrocketRow[] | null>(null);
   const [strength, setStrength] = useState<Map<string, ThemeStrengthRow> | null>(null);
   // 聚焦题材（L4 联动：详情页题材 chip → /tape?tab=themes&focus=名称）
-  const [focus, setFocus] = useState(searchParams.get("focus") ?? "");
+  const focus = searchParams.get("focus") ?? "";
   // 竞价标杆（ths 短线风向标）：best-effort，非交易日/无数据后端返回 502 → 静默不显示。
   // 把 date 一并存进 state：切日期时新数据到达前，靠 date 比对拒绝渲染上一日的榜单
   // （不同步 setBenchmark(null) 清空，避免 effect 内同步 setState 触发级联渲染）。
@@ -86,36 +79,6 @@ export function ThemesTab() {
     date: string;
     rows: AuctionBenchmarkItem[];
   } | null>(null);
-
-  const load = useCallback(
-    async (d?: string, s: SortKey = sort, mb = minBoards, mc = minCount) => {
-      setLoading(true);
-      try {
-        const r = await getThemes({
-          date: d || undefined,
-          sort: s,
-          minBoards: mb || undefined,
-          minCount: mc || undefined,
-          limit: 60,
-        });
-        setData(r);
-        setError(null);
-      } catch (e) {
-        setError((e as Error).message);
-        setData(null);
-      } finally {
-        setLoading(false);
-      }
-    },
-    [sort, minBoards, minCount]
-  );
-
-  // 首屏必须带上 URL 里的 date——此前裸 load() 只用默认日期，
-  // ?date=2026-08-28 打开时实际取的是"今天"（盘前为降级数据）。
-  // 仅挂载时拉一次（latest-ref 拿到当前 date）；后续筛选由各自的 onChange 触发。
-  // `key={date}` 兜住「URL 被外部改写」这条路（见 date 派生处的说明）；
-  // ⚠️ 它必须与 onDate 里删掉的那次显式 load 成对——`useResource` 依赖 key 且无去重。
-  usePollingFetch(() => load(date || undefined), null, date);
 
   useEffect(() => {
     // 人气榜独立拉取（实时口径，不看 date 参数——历史日期没有人气数据）
@@ -174,19 +137,13 @@ export function ThemesTab() {
   }
 
   const onSort = (s: SortKey) => {
-    setSort(s);
     updateUrl(date || undefined, s, minBoards, minCount);
-    void load(date || undefined, s);
   };
   const onBoards = (v: number) => {
-    setMinBoards(v);
     updateUrl(date || undefined, sort, v, minCount);
-    void load(date || undefined, sort, v);
   };
   const onCount = (v: number) => {
-    setMinCount(v);
     updateUrl(date || undefined, sort, minBoards, v);
-    void load(date || undefined, sort, minBoards, v);
   };
   const onDate = (v: string) => {
     // 只改 URL——date 是派生值，URL 一变 key 就变，取数由 usePollingFetch 触发
@@ -223,7 +180,6 @@ export function ThemesTab() {
   }, [data, focus]);
 
   function clearFocus() {
-    setFocus("");
     // 从 URL 移除 focus（保留 tab 等其余参数）
     const params = new URLSearchParams(window.location.search);
     params.delete("focus");

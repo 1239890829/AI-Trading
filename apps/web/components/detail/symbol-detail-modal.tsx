@@ -49,7 +49,7 @@ import {
   type SymbolDetailRequest,
 } from "@/components/detail/symbol-detail-context";
 import { isIndexSymbol } from "@/lib/api/client";
-import { workbenchTabUrl } from "@/lib/routing";
+import { patchWorkspaceUrl } from "@/lib/task-navigation";
 
 // context / 点击判定在零依赖的 symbol-detail-context.ts（断环，见该文件头注）；
 // 这里 re-export，调用方只认一个 import 源。
@@ -76,7 +76,7 @@ export function SymbolDetailProvider({ children }: { children: React.ReactNode }
         const from =
           typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("from");
         router.replace(
-          workbenchTabUrl(r.symbol, { chartTab: r.chartTab, rightTab: r.rightTab, from }),
+          patchWorkspaceUrl("/workbench", window.location.search, {symbol: r.symbol, ...(r.chartTab ? {ct: r.chartTab} : {}), ...(r.rightTab ? {rt: r.rightTab} : {}), from}),
           { scroll: false },
         );
         return;

@@ -192,7 +192,7 @@ describe("BoardFlowPanel", () => {
     const link = drawer.querySelector('a[href^="/workbench?symbol=300308"]');
     expect(link).toBeTruthy();
 
-    fireEvent.click(screen.getByTestId("drawer-close"));
+    fireEvent.click(screen.getByRole("button", {name: "关闭"}));
     expect(screen.queryByTestId("board-flow-drawer")).toBeNull();
   });
 });

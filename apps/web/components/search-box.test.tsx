@@ -235,3 +235,47 @@ describe("SearchBox 搜索体验（防抖/竞态/loading/失败/空结果）", (
     }
   });
 });
+
+describe("SearchBox 当前查询与写回执", () => {
+  it("a new query cannot submit the old first result on Enter", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(searchSymbols).mockResolvedValueOnce([item("600519", "贵州茅台")]).mockResolvedValueOnce([]);
+      render(<SearchBox />);
+      typeQuery("600519");
+      await act(async () => { vi.advanceTimersByTime(250); });
+      expect(screen.getByText("贵州茅台")).toBeTruthy();
+      const input = typeQuery("600127");
+      fireEvent.keyDown(input, {key: "Enter"});
+      expect(searchSymbols).toHaveBeenLastCalledWith("600127");
+      expect((input as HTMLInputElement).value).toBe("600127");
+      expect(screen.queryByText("贵州茅台")).toBeNull();
+      await act(async () => {});
+    } finally { vi.useRealTimers(); }
+  });
+  it("shows failed save and does not mark a stock as watched before server confirmation", async () => {
+    vi.useFakeTimers();
+    try {
+      const {addToWatchlist} = await import("@/lib/api");
+      vi.mocked(addToWatchlist).mockRejectedValueOnce(new Error("写权限不足"));
+      vi.mocked(searchSymbols).mockResolvedValue([item("600127", "金健米业")]);
+      render(<SearchBox />); typeQuery("600127");
+      await act(async () => { vi.advanceTimersByTime(250); });
+      await act(async () => { fireEvent.click(screen.getByRole("button", {name: "加入自选 金健米业"})); });
+      expect(screen.getByText("加入自选失败：写权限不足")).toBeTruthy();
+      expect(screen.queryByText("已加自选 ✓")).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+  it("closing search invalidates the outstanding response", async () => {
+    vi.useFakeTimers();
+    try {
+      let finish!: (items: SymbolSearchItem[]) => void;
+      vi.mocked(searchSymbols).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      render(<SearchBox />); const input = typeQuery("600127");
+      await act(async () => { vi.advanceTimersByTime(250); });
+      fireEvent.keyDown(input, {key: "Escape"});
+      await act(async () => { finish([item("600127", "金健米业")]); });
+      expect(screen.queryByText("金健米业")).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+});

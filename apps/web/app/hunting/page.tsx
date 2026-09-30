@@ -1,14 +1,12 @@
 "use client";
 
+import { patchWorkspaceUrl } from "@/lib/task-navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import {
   ApiError,
-  generateMorningBrief,
-  generatePickReview,
-  generatePicks,
   getIntradayOpportunities,
   getIntradayReview,
   getIntradayTop,
@@ -19,8 +17,6 @@ import {
   getSignalHealth,
   getTodayPicks,
   getWatcherState,
-  runIntradayReview,
-  runWatcherBeat,
   type DailyPicksPayload,
   type IntradayOpportunities,
   type IntradayReviewStats,
@@ -65,6 +61,8 @@ import {
   TableSkeleton,
 } from "@/components/ui/loading";
 import { timeText } from "@/lib/format";
+import { OpportunityEvidencePanel } from "@/components/hunting/opportunity-evidence-panel";
+import { WatchLedgerPanel } from "@/components/hunting/watch-ledger-panel";
 import { MasonryColumns } from "@/components/masonry-columns";
 
 /**
@@ -92,6 +90,7 @@ import { MasonryColumns } from "@/components/masonry-columns";
 function HuntingInner() {
   const router = useRouter();
   const sp = useSearchParams();
+  const isDiscovery = !["evidence", "tracking"].includes(sp.get("view") ?? "");
 
   // —— 精选组数据 ——
   const [data, setData] = useState<DailyPicksPayload | null>(null);
@@ -115,13 +114,10 @@ function HuntingInner() {
   const [intradayLoaded, setIntradayLoaded] = useState(false);
   const [intradayFailed, setIntradayFailed] = useState(false);
 
-  const [error, setError] = useState<string | null>(null);
-  const [hint, setHint] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
 
   // —— URL 状态（深链为真相源）——
   // ?tag= 深链仍可解析（nav-targets 兼容）但不再分流视图——单一瀑布流（2026-09-09）
-  const [expandedTheme, setExpandedTheme] = useState<string | null>(() => sp.get("theme"));
+  const expandedTheme = sp.get("theme");
   const sec = sp.get("sec");
   const secValid = /^(overview|opportunity|brief|watcher|reminders|review)$/.test(sec ?? "");
   // 折叠区开合：?sec= 深链自动展开对应组；?review=1 / 生成复盘成功展开复盘组
@@ -145,7 +141,7 @@ function HuntingInner() {
   useEffect(() => {
     if (!secValid) return;
     const scroll = () => {
-      document.getElementById(`sec-${sec}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      document.getElementById(`sec-${sec}`)?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" });
     };
     scroll();
     const t = window.setTimeout(scroll, 400);
@@ -155,9 +151,8 @@ function HuntingInner() {
   const toggleTheme = useCallback(
     (t: string) => {
       const next = expandedTheme === t ? null : t;
-      setExpandedTheme(next);
       const params = new URLSearchParams(sp.toString());
-      if (next) params.set("theme", encodeURIComponent(next));
+      if (next) params.set("theme", next);
       else params.delete("theme");
       const qs = params.toString();
       router.replace(`/hunting${qs ? `?${qs}` : ""}`, { scroll: false });
@@ -208,49 +203,13 @@ function HuntingInner() {
   // 挂载即拉 + 60s 轮询（对齐后端 watcher 节拍）。
   // 2026-09-11（S2-5）：可见性暂停 + 回可见补拉已内建在 usePollingFetch/useResource 里，
   // 原先手写的那套 visibilitychange 守卫是重复实现，已删除（两个 effect 合一）。
-  usePollingFetch(load, 60_000);
-
-  async function act(kind: "picks" | "pickReview" | "brief" | "beat" | "review") {
-    setBusy(kind);
-    setError(null);
-    setHint(null);
-    try {
-      if (kind === "picks") {
-        const d = await generatePicks();
-        setData(d);
-        setHint("组合已生成/刷新");
-      } else if (kind === "pickReview") {
-        const res = await generatePickReview();
-        setReviewOpen(true); // 生成成功后展开复盘组，否则用户看不到任何变化
-        setHint(`已生成 ${res.reviews.length} 条复盘（${res.date}）`);
-      } else if (kind === "brief") {
-        const b = await generateMorningBrief();
-        setBeatsOpen(true);
-        setHint(`简报已生成：${b.directions.length} 个方向（覆盖当日文件，盘中提醒已清空）`);
-      } else if (kind === "beat") {
-        const r = await runWatcherBeat();
-        const n = r.alerts.length;
-        setBeatsOpen(true);
-        setHint(n > 0 ? `单拍完成：${n} 条提醒（去重后实际分发见日志）` : "单拍完成：本拍无新增提醒");
-      } else {
-        const r = await runIntradayReview();
-        setReviewOpen(true);
-        setHint(`对照完成：${r.directions.map((x) => `${x.direction} ${x.outcome}`).join(" · ")}`);
-      }
-      await load();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(null);
-    }
-  }
+  usePollingFetch(load, 60_000, undefined, {enabled: isDiscovery});
 
   const alerts = brief?.alerts ?? [];
   const reviewed = (brief?.directions ?? []).filter((d) => d.review);
   const topItems = top?.items ?? [];
   const topRefItems = top?.reference_items ?? [];
   const briefMissing = picksLoaded && intradayLoaded && brief === null && !briefReadFailed;
-  const briefUnavailable = briefMissing || briefReadFailed;
   const pending = !picksLoaded || !intradayLoaded;
 
   // 猎场两条瀑布流（2026-09-10 用户要求分区，取代 09-09 的单容器混排）：
@@ -261,7 +220,7 @@ function HuntingInner() {
   usePollingFetch(async () => {
     const m = await getPositionLabels().catch(() => null);
     if (m) setPosLabels(m);
-  }, 60_000);
+  }, 60_000, undefined, {enabled: isDiscovery});
 
   // 依赖取**状态对象** data/top（引用稳定），不取派生的 items/topItems：
   // `?? []` 每次渲染都会新建数组引用，放进依赖会让 memo 每轮失效
@@ -286,14 +245,14 @@ function HuntingInner() {
   const feedEmpty = topItems.length === 0 && topRefItems.length === 0 && pickTotal === 0;
 
   return (
-    <main className="mx-auto flex h-full w-full max-w-[1400px] flex-col gap-3 overflow-hidden px-4 py-3">
+    <main className="task-page mx-auto flex h-full w-full max-w-[1400px] flex-col gap-3 overflow-hidden px-4 py-3">
       {/* 头部：标题 + 口径说明 + 刷新状态 + 操作 */}
       <div className="flex shrink-0 flex-wrap items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
-        <h1 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">猎场</h1>
+        <h1 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">机会发现</h1>
         <span title="精选=盘后布下的猎物（date+symbol 持久组合）；跟踪=盘中正在追的猎物（当日实时动态名单）；题材异动=猎群">
           精选 · 跟踪 · 猎群
         </span>
-        {picksFailed || intradayFailed ? (
+        {isDiscovery && (picksFailed || intradayFailed) ? (
           <span
             className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-800 dark:text-amber-300"
             title="部分数据端点失败（后端不可达或网络中断）。每 60s 自动重试，也可点「刷新数据」。"
@@ -306,75 +265,33 @@ function HuntingInner() {
           </span>
         )}
         <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
-          <button
+          {isDiscovery && <button
             onClick={() => void load()}
-            disabled={busy !== null}
             className="rounded border border-zinc-300 px-2 py-0.5 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100 disabled:opacity-50"
             title="立即重新拉取全部数据（通常无需手动点——页面已自动刷新）"
           >
             刷新数据
-          </button>
-          <button
-            onClick={() => void act("picks")}
-            disabled={busy !== null}
-            className="rounded border border-sky-500/50 px-2 py-0.5 text-sky-700 dark:text-sky-400 hover:bg-sky-500/10 disabled:opacity-50"
-            title="重跑五维评分管线（收盘后执行；覆盖当日组合）"
-          >
-            {busy === "picks" ? "计算中…" : "生成/刷新组合"}
-          </button>
-          <button
-            onClick={() => void act("pickReview")}
-            disabled={busy !== null}
-            className="rounded border border-zinc-300 px-2 py-0.5 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100 disabled:opacity-50"
-            title="对最近组合逐只回顾：实际走势 vs 入选理由，走坏原因归类（生成后展开复盘区）"
-          >
-            {busy === "pickReview" ? "生成中…" : "生成复盘"}
-          </button>
-          <button
-            onClick={() => void act("brief")}
-            disabled={busy !== null}
-            className="rounded border border-sky-500/50 px-2 py-0.5 text-sky-700 dark:text-sky-400 hover:bg-sky-500/10 disabled:opacity-50"
-            title="重新采集证据生成/刷新今日简报（覆盖当日文件）"
-          >
-            {busy === "brief" ? "生成中…" : "生成/刷新简报"}
-          </button>
-          <button
-            onClick={() => void act("beat")}
-            disabled={busy !== null || briefUnavailable}
-            className="rounded border border-zinc-300 px-2 py-0.5 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100 disabled:opacity-50"
-            title="手动推进一拍：取数 → 全部方向 confirm/falsify 判定（与盘中 watcher 同代码路径）"
-          >
-            {busy === "beat" ? "取拍中…" : "手动单拍"}
-          </button>
-          <button
-            onClick={() => void act("review")}
-            disabled={busy !== null || briefUnavailable}
-            className="rounded border border-zinc-300 px-2 py-0.5 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100 disabled:opacity-50"
-            title="对照当日盘前方向 vs 实际盘面（四分类+误判分类）并回填提醒收益"
-          >
-            {busy === "review" ? "对照中…" : "运行对照"}
-          </button>
+          </button>}
+          <Link href="/agent?area=maintenance&tab=operations" className="px-2 py-1">生产状态与维护</Link>
         </div>
       </div>
 
-      {hint && (
-        <div className="shrink-0 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-700 dark:text-emerald-300">
-          ✓ {hint}
-        </div>
-      )}
-      {error && (
-        <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-300">
-          {error}
-        </div>
-      )}
       {data?.stale && (
         <div className="shrink-0 rounded-lg border border-zinc-300 px-3 py-1.5 text-xs text-zinc-600 dark:text-zinc-400 dark:border-zinc-700">
-          当前展示 {data.date} 生成的组合——今日组合交易日 09:26 自动生成（急用可点右上「生成/刷新组合」立即重算）
+          当前展示 {data.date} 生成的组合——今日组合交易日 09:26 自动生成（这里只读取已保存组合，生产状态见系统维护）
         </div>
       )}
       {data?.note && <div className="shrink-0 text-xs text-zinc-600 dark:text-zinc-400">{data.note}</div>}
 
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+      <nav aria-label="机会工作流" className="task-subnav text-sm">
+        <Link href={patchWorkspaceUrl("/hunting", sp.toString(), {view: "discover"})} aria-current={!sp.get("view") || sp.get("view") === "discover" ? "page" : undefined}>当前机会</Link>
+        <Link href={patchWorkspaceUrl("/hunting", sp.toString(), {view: "evidence"})} aria-current={sp.get("view") === "evidence" ? "page" : undefined}>依据与等待</Link>
+        <Link href={patchWorkspaceUrl("/hunting", sp.toString(), {view: "tracking"})} aria-current={sp.get("view") === "tracking" ? "page" : undefined}>参考跟踪</Link>
+        <Link href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "positions", account: "paper", view: null, from: `/hunting?${sp.toString()}`})}>持仓与模拟</Link>
+        <Link href={patchWorkspaceUrl("/agent", sp.toString(), {area: "research", tab: "review", view: null, from: `/hunting?${sp.toString()}`})}>跨日复盘</Link>
+      </nav>
+      <div className="task-scroll min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+        {sp.get("view") === "evidence" ? <OpportunityEvidencePanel date={sp.get("date") ?? undefined} onDateChange={date => { const p = new URLSearchParams(sp.toString()); p.set("date", date); router.replace(`/hunting?${p.toString()}`, {scroll:false}); }} /> : sp.get("view") === "tracking" ? <WatchLedgerPanel /> : <>
         {/* ── 空仓闸门横幅（风险提示置顶）──
             2026-09-16 动态化：以**读取时刻复核**（meta.gate_live）为准展示，
             生成时刻落库值（meta.gate）作对照。此前只显示落库值 ⇒ 开盘 3 分钟的
@@ -434,7 +351,7 @@ function HuntingInner() {
             <CardListSkeleton count={3} />
           ) : feedEmpty ? (
             <p className="py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">
-              暂无跟踪标的与精选组合——盘中候选成形后自动出现；也可点右上「生成/刷新组合」跑一次五维评分管线
+              暂无跟踪标的与精选组合——盘中候选成形后自动出现；生产状态与受控兜底见系统维护
               <br />
               （候选池 = 题材联动可参与股 ∪ 活跃事件标的池 ∪ 当日涨停池 ∪ 热股榜——开盘即涨停的个股不进候选，
               只作题材集中度的参考信息；六维评分达到入选门槛者入选，最多 5
@@ -545,7 +462,7 @@ function HuntingInner() {
                     </div>
                     <p className="rounded-lg border border-zinc-200 px-3 py-2 text-[11px] text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
                       {data?.date == null
-                        ? "尚未生成组合——点右上「生成/刷新组合」跑一次评分管线（或等收盘后的自动管线）。"
+                        ? "尚未生成组合——这里只读取持久结果；请在系统维护核调度或执行受控生成。"
                         : `${data.date}${data.stale ? "（非今日，最近一次生成）" : ""} 无标的达到入选门槛` +
                           `${minPickScore != null ? `（综合分 ≥${minPickScore}）` : ""}` +
                           "——弱市里名单本就该短，硬凑满名额才是风险；这是筛选结论，不是数据缺失。"}
@@ -593,7 +510,7 @@ function HuntingInner() {
               </div>
             ) : briefMissing ? (
               <div className="rounded-xl border border-zinc-200 p-6 text-center text-sm text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
-                今日尚无盘前简报：点右上「生成/刷新简报」，或等交易日 08:40 自动生成。
+                今日尚无盘前简报：可在系统维护核调度与受控生成；自动生产取决于服务和开关。
                 <br />
                 简报是盘中跟踪与盘后对照的唯一事实源，没有它 watcher 会空转。
               </div>
@@ -680,7 +597,7 @@ function HuntingInner() {
                 <TableSkeleton rows={3} />
               ) : reviewed.length === 0 ? (
                 <div className="rounded-xl border border-zinc-200 p-4 text-xs text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
-                  今日尚未对照。点右上「运行对照」或等 15:35 调度（收盘后才有意义）。
+                  今日尚未对照。请在系统维护核对盘后调度（收盘后才有意义）。
                 </div>
               ) : (
                 <FadeIn>
@@ -718,12 +635,13 @@ function HuntingInner() {
               {history.length > 0 && <HistoryList history={history} />}
               {reviews.length === 0 && history.length === 0 && (
                 <div className="rounded-xl border border-zinc-200 p-4 text-xs text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
-                  暂无复盘记录。点右上「生成复盘」对最近组合逐只归因。
+                  暂无复盘记录。可在系统维护对已有组合生成归因。
                 </div>
               )}
             </section>
           </div>
         </details>
+        </>}
       </div>
 
       <div className="shrink-0 text-[10px] text-zinc-600 dark:text-zinc-400">

@@ -1,15 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Panel } from "@/components/panel";
 import { getLimitUpPool } from "@/lib/api";
-import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
+import { bjDate, fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
 import { themesUrl } from "@/lib/routing";
 import { StockLink, useStockRowNav } from "@/components/stock-link";
-import { usePollingFetch } from "@/hooks/use-polling-fetch";
-import type { LimitUpRecord } from "@/types/market";
+import { useResource } from "@/hooks/use-polling-fetch";
 
 /**
  * 盘面页 · 涨停生态 tab（原 /limit-up 页迁移，2026-09-01 系统重构）。
@@ -27,51 +26,16 @@ import type { LimitUpRecord } from "@/types/market";
 export function LimitUpTab() {
   const stockNav = useStockRowNav();
   const searchParams = useSearchParams();
-  const [records, setRecords] = useState<LimitUpRecord[]>([]);
-  const [tradeDate, setTradeDate] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  // 首次拉取在途：区分「加载中」与「今日真无涨停」，避免空态文案抢跑（2026-09-04）
-  const [loading, setLoading] = useState(true);
-  // 题材联动状态：本地持有，URL 仅做初始注入与可分享快照
-  const [theme, setTheme] = useState(() => searchParams.get("theme") ?? "");
-  const [memberSymbols, setMemberSymbols] = useState<Set<string>>(
-    () => new Set((searchParams.get("symbols") ?? "").split(",").filter(Boolean))
-  );
-  const [onlyMembers, setOnlyMembers] = useState(false);
-
-  const load = useCallback(async (date?: string) => {
-    try {
-      const pool = await getLimitUpPool(date);
-      setRecords(pool);
-      setTradeDate(pool[0]?.trade_date ?? "");
-      setError(null);
-    } catch (e) {
-      setError((e as Error).message);
-      setRecords([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // URL 的 ?date= 是**取数唯一触发源**（2026-09-12 评审 R-7）。`key` 是**契约要求**：
-  // `usePollingFetch` / `useResource` 的文档明写「参数会变的取数必须传 key」，而
-  // `useResource` 的 effect 依赖数组是 `[enabled, intervalMs, key, marketHours, nonce]`
-  // （`use-resource.ts:151`）——**不含 `searchParams`**。旧写法（无 key + handler 显式
-  // `load`）把日期参数存在两处（`searchParams` + 调用点闭包），URL 变了却无人监听。
-  //
-  // ⚠️ **诚实边界（复核后修正，勿照抄旧结论）**：当前仓内**没有**会触发该漏刷新的路径——
-  // 助手正文链接渲染为**裸 `<a href>`**（`assistant/rich-text.tsx:202`）⇒ 整页重载；
-  // 仓内 `router.push` 目标不含 `/tape`（只跳 workbench/themesUrl/market/hunting/agent）；
-  // 同页 `JumpLink` 跳涨停池必**同时改 tab** ⇒ `FadeSwap` 换节点重挂载。
-  // 所以这是**潜在契约违反**（latent），不是此刻可观测的缺陷：一旦有人加一条
-  // "在涨停池 tab 内跳到昨日涨停池"之类的同 tab 链接，旧写法就会静默显示旧日数据。
-  // 按契约补齐即为消除该陷阱，不宣称修复了某个正在发生的 bug。
-  //
-  // ⚠️ `key` **必须**配套删掉 `onDate` 里那次显式 `load()`，否则改日期会**发两次请求**：
-  // `useResource` 的 effect 依赖含 `key` 且**没有去重**，于是「handler 主动拉一次」+
-  // 「key 变化再拉一次」= 重复。实测：改日期恰好 1 次请求（2026-09-12）。
   const urlDate = searchParams.get("date") || undefined;
-  usePollingFetch(() => load(urlDate), null, urlDate);
+  const requestedDate = urlDate ?? bjDate(new Date().toISOString());
+  const resource = useResource(() => getLimitUpPool(requestedDate), { key: requestedDate, intervalMs: null });
+  const records = useMemo(() => resource.error ? [] : resource.data ?? [], [resource.error, resource.data]);
+  const tradeDate = requestedDate;
+  const error = resource.error instanceof Error ? resource.error.message : resource.error ? "读取失败" : null;
+  const loading = resource.pending || (resource.data === undefined && !resource.error);
+  const theme = searchParams.get("theme") ?? "";
+  const memberSymbols = useMemo(() => new Set((searchParams.get("symbols") ?? "").split(",").filter(Boolean)), [searchParams]);
+  const [onlyMembers, setOnlyMembers] = useState(false);
 
   function syncUrl(next: { date?: string; theme?: string; symbols?: string }) {
     // 在现有 URL 上增删参数（保留 tab= 等盘面页参数）
@@ -92,8 +56,6 @@ export function LimitUpTab() {
   };
 
   function clearTheme() {
-    setTheme("");
-    setMemberSymbols(new Set());
     setOnlyMembers(false);
     // 原样回写 URL 里已有的 date（而非归一成 tradeDate）：本函数只清题材联动，
     // 日期视图不该被改写。写回同值 ⇒ `urlDate` 不变 ⇒ 不触发多余重拉。
@@ -116,7 +78,7 @@ export function LimitUpTab() {
           <input
             id="zt-date"
             type="date"
-            value={tradeDate}
+            value={tradeDate.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3")}
             onChange={(e) => onDate(e.target.value)}
             className="rounded-md border border-zinc-200 bg-transparent px-2 py-1 text-sm dark:border-zinc-700"
           />

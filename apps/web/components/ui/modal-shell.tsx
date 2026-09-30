@@ -20,17 +20,18 @@
  * ## 统一后的约定（新弹窗一律走这里）
  * - 遮罩 `role="presentation"` + `onMouseDown`（**面板无需 stopPropagation**）；
  * - 面板 `role="dialog"` + `aria-modal` + `aria-label`（label 必填）+ 可选 `testid`；
- * - Esc 关闭、`overscroll-contain`（防滚动链穿透）；
+ * - 顶层 Esc、初始/圈定/恢复焦点与背景 inert；`overscroll-contain`（防滚动链穿透）；
  * - 三个尺寸档 `sm|md|lg`、`zIndex` 可调（内容详情弹窗需要压在其他弹窗之上）；
  * - 头部（标题区 + 统一关闭按钮）、正文（滚动槽）、底部（口径行）三段式，
  *   样式只在这里定义一次。
  *
  * ## 刻意的边界
- * **不锁 body 滚动**：`app/layout.tsx` 的 body 恒为 `h-screen overflow-hidden`，
+ * **不锁 body 滚动**：`app/layout.tsx` 的 body 恒为 `h-dvh overflow-hidden`，
  * 各页面滚动容器都不是 portal 的 DOM 祖先 ⇒ 滚动链不会穿透到背景页，
  * 加锁只会是 no-op 死代码（同 `symbol-detail-modal` 的判断）。
  */
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { useCallback, useRef, useSyncExternalStore } from "react";
+import { useOverlayFocus } from "@/hooks/use-overlay-focus";
 import { createPortal } from "react-dom";
 
 /** 弹窗尺寸档：sm 窄卡 / md 常规正文 / lg 全功能面板。 */
@@ -58,6 +59,8 @@ export interface ModalShellProps {
   /** 面板的 `data-testid`（挂在 `role="dialog"` 的元素上）。 */
   testid?: string;
   size?: ModalSize;
+  /** Context reading retains the originating list alongside the panel. */
+  presentation?: "modal" | "drawer";
   /** 层级：默认 50。内容详情弹窗（可从其他弹窗内打开）用 60。 */
   zIndex?: number;
   /** 头部内容（标题/元信息）。省略则不渲染头部，也不渲染关闭按钮。 */
@@ -78,6 +81,7 @@ export function ModalShell({
   label,
   testid,
   size = "md",
+  presentation = "modal",
   zIndex = 50,
   header,
   footer,
@@ -89,14 +93,8 @@ export function ModalShell({
   // 客户端挂载标志：服务端快照 false、客户端 true（与 detail-modal 同款惯用法）。
   const mounted = useSyncExternalStore(subscribeNoop, () => true, () => false);
 
-  // Esc 关闭（全站一致）
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  const panelRef = useRef<HTMLDivElement>(null);
+  useOverlayFocus(panelRef, onClose, mounted, zIndex);
 
   // 只有点在遮罩**本身**才关闭；点面板内部（含拖拽选中）不关。
   // 用 `onMouseDown` 而非 `onClick`：正文里拖选文本后在弹窗外松开不会误关。
@@ -111,19 +109,21 @@ export function ModalShell({
 
   return createPortal(
     <div
-      className="anim-backdrop-in fixed inset-0 flex items-center justify-center overscroll-contain bg-black/50 p-2 backdrop-blur-sm sm:p-4"
+      className={`anim-backdrop-in fixed inset-0 flex overscroll-contain bg-black/50 p-2 backdrop-blur-sm sm:p-4 ${presentation === "drawer" ? "items-stretch justify-end" : "items-center justify-center"}`}
       style={{ zIndex }}
       onMouseDown={handleBackdrop}
       role="presentation"
     >
       <div
+        ref={panelRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={label}
         data-testid={testid}
-        className={`anim-scale-in flex flex-col overflow-hidden border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900 ${
+        className={`${presentation === "drawer" ? "anim-slide-in-right" : "anim-scale-in"} flex flex-col overflow-hidden border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900 ${
           radius === "2xl" ? "rounded-2xl" : "rounded-xl"
-        } ${SIZE_CLASS[size]}`}
+        } ${presentation === "drawer" ? "h-full w-full max-w-2xl" : SIZE_CLASS[size]}`}
       >
         {header !== undefined && (
           <div className="flex shrink-0 items-start justify-between gap-3 border-b border-zinc-100 px-5 py-3.5 dark:border-zinc-800/80">
@@ -154,6 +154,7 @@ function CloseButton({ onClose }: { onClose: () => void }) {
     <button
       type="button"
       onClick={onClose}
+      data-overlay-autofocus
       aria-label="关闭"
       title="关闭（Esc）"
       className="shrink-0 rounded p-1 text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"

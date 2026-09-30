@@ -235,3 +235,28 @@ button, a, tr, input, select, textarea {
   button:not(:disabled):not([data-nopress]):active,
   [role="button"]:not([aria-disabled="true"]):not([data-nopress]):active { transform: none !important; }
 }
+
+/* Task workspace: paper white / graphite, existing semantic price tokens retained. */
+:root { --workspace-surface: #ffffff; --workspace-canvas: #f4f4f5; }
+.dark { --workspace-surface: #18181b; --workspace-canvas: #09090b; }
+.workspace-content { background: var(--workspace-canvas); }
+.task-panel { background: var(--workspace-surface); }
+.task-navigation a[aria-current="page"] { box-shadow: inset 0 -2px 0 currentColor; }
+.task-page h1 { font-size: 1.25rem; line-height: 1.4; }
+.task-subnav { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.task-subnav a { padding: .4rem .7rem; border-radius: .375rem; }
+.task-subnav a[aria-current="page"] { background: var(--workspace-surface); font-weight: 600; }
+.skip-link { position: fixed; left: .75rem; top: .75rem; z-index: var(--z-tooltip); transform: translateY(-200%); background: var(--workspace-surface); padding: .75rem; }
+.skip-link:focus { transform: translateY(0); }
+@media (max-width: 1023px), (max-height: 540px) {
+  .workspace-content { overflow-y: auto; overscroll-behavior: contain; }
+  .task-page { height: auto; min-height: 100%; overflow: visible; }
+  .task-page > .task-scroll { flex: none; overflow: visible; }
+  .task-page .task-panel { min-height: 14rem; max-height: none; }
+  .task-page .task-panel-body { overflow: auto; max-height: 65vh; }
+  .task-page .stock-workspace { min-height: 44rem; }
+  .task-page nav { flex-wrap: wrap; }
+}
+@media (pointer: coarse) {
+  button, input, select, summary, .task-navigation a { min-height: 44px; }
+}

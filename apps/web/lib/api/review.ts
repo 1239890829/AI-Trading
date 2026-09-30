@@ -56,7 +56,7 @@ export async function getReviewReports(): Promise<ReviewReportSummary[]> {
 }
 
 export async function getReviewReport(tradeDate: string): Promise<ReviewReportDetail> {
-  return (await getJson<ReviewReportDetail>(`/api/review/reports/${tradeDate}`)).data;
+  return (await getJson<ReviewReportDetail>(`/api/review/reports/${encodeURIComponent(tradeDate.replaceAll("-", ""))}`)).data;
 }
 
 export async function getReviewEffectiveness(): Promise<ReviewEffectiveness> {

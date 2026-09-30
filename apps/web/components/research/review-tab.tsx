@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Panel } from "@/components/panel";
-import { StockLink } from "@/components/stock-link";
+import { useResource } from "@/hooks/use-polling-fetch";
 import {
+  ApiError,
   getReviewEffectiveness,
   getReviewReport,
   getReviewReports,
@@ -21,7 +22,7 @@ import {
  *
  * 口径说明：复盘报告由后端每日盘后生成（/review/run），记录当日操作评估、
  * 数据缺口与改进项；effectiveness 统计各类别改进项的采纳/回退率——
- * 采纳率是方法论自我校准的度量。
+ * 采纳率仅是管理处置事实，不代表交易效果。
  */
 
 const PRIORITY_CLS: Record<string, string> = {
@@ -75,24 +76,11 @@ function gapText(g: unknown): string {
 /**
  * 报告文本内嵌 6 位代码 → 详情链接（联动切片 F P2）。
  * 复盘判据/缺口文本里提到的标的（如「600519 冲高回落」）此前无法跳转查看；
- * 独立 6 位数字在本系统语境下几乎恒为股票代码，误链风险可接受。
+ * 自由文本不具备证券实体身份，金额/日期片段保持原文，不猜测链接。
  */
-function LinkedSymbols({ text }: { text: string }) {
-  const parts = text.split(/(\b\d{6}\b)/g);
-  if (parts.length === 1) return <>{text}</>;
-  return (
-    <>
-      {parts.map((p, i) =>
-        /^\d{6}$/.test(p) ? (
-          <StockLink key={i} symbol={p} title="查看标的详情" className="font-mono text-sky-700 dark:text-sky-400">
-            {p}
-          </StockLink>
-        ) : (
-          <span key={i}>{p}</span>
-        ),
-      )}
-    </>
-  );
+function ReviewText({ text }: { text: string }) {
+  // A free-text number has no verified entity identity. Explicit stock links live in source records.
+  return <>{text}</>;
 }
 
 /**
@@ -239,7 +227,9 @@ function ActionItemDispose({
 function ReportDetail({
   report,
   onDisposed,
+  allowDispose,
 }: {
+  allowDispose: boolean;
   report: ReviewReportDetail;
   onDisposed: () => void;
 }) {
@@ -254,6 +244,15 @@ function ReportDetail({
         </span>
       </div>
 
+      <p><ReviewText text={report.summary} /></p>
+      {report.meta_insights.length > 0 && <section aria-label="复盘观察与建议" className="space-y-2">
+        {report.meta_insights.map((insight, i) => <div key={i} className="border-l-2 border-zinc-300 pl-3 dark:border-zinc-600">
+          <p>{insight.dimension} · <ReviewText text={insight.observation} /></p>
+          <p className="text-xs text-zinc-600 dark:text-zinc-400">依据：{insight.evidence} · 有效性：{insight.effectiveness}</p>
+          <p className="text-xs">待核建议：{insight.suggestion}</p>
+        </div>)}
+      </section>}
+
       {report.dimensions.map((d) => (
         <div key={d.key} className="rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-800">
           <div className="text-xs font-medium text-zinc-900 dark:text-zinc-100">
@@ -265,7 +264,7 @@ function ReportDetail({
             <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-zinc-600 dark:text-zinc-300">
               {d.findings.map((f, i) => (
                 <li key={i}>
-                  <LinkedSymbols text={f} />
+                  <ReviewText text={f} />
                 </li>
               ))}
             </ul>
@@ -274,7 +273,7 @@ function ReportDetail({
             <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-zinc-600 dark:text-zinc-400">
               {d.judgements.map((j, i) => (
                 <li key={i}>
-                  <LinkedSymbols text={j} />
+                  <ReviewText text={j} />
                 </li>
               ))}
             </ul>
@@ -285,7 +284,7 @@ function ReportDetail({
               <ul className="list-disc pl-4">
                 {d.gaps.map((g, i) => (
                   <li key={i}>
-                    <LinkedSymbols text={gapText(g)} />
+                    <ReviewText text={gapText(g)} />
                   </li>
                 ))}
               </ul>
@@ -298,7 +297,7 @@ function ReportDetail({
         <div>
           <div className="mb-1 text-xs font-medium text-zinc-900 dark:text-zinc-100">
             改进项
-            <span className="ml-2 font-normal text-zinc-600 dark:text-zinc-400">处置后计入采纳率统计</span>
+            <span className="ml-2 font-normal text-zinc-600 dark:text-zinc-400">管理处置记录，不代表策略效果</span>
           </div>
           <div className="space-y-1.5">
             {report.action_items.map((a) => (
@@ -315,11 +314,11 @@ function ReportDetail({
                     {a.target && <span className="ml-1 text-zinc-600 dark:text-zinc-400">（{a.target}）</span>}
                   </div>
                 )}
-                <ActionItemDispose
+                {allowDispose ? <ActionItemDispose
                   item={{ id: a.id, trade_date: report.trade_date, category: a.category, title: a.title }}
                   status={a.status ?? "pending"}
                   onDisposed={onDisposed}
-                />
+                /> : <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">{STATUS_LABEL[a.status ?? "pending"] ?? a.status} · 管理处置在系统维护中进行</p>}
               </div>
             ))}
           </div>
@@ -332,76 +331,36 @@ function ReportDetail({
 /**
  * @param focusDate 深链日期（/research?tab=review&date=YYYY-MM-DD，助手一键跳转用）。
  *   命中报告列表则展开它；列表里没有也照样尝试拉一次（可能未生成 → detail 为 null，
- *   此时回落到最新一份，绝不停在空白态）。
+ *   此时明确显示未生成，不回退其它日期）。
  */
-export function ReviewTab({ focusDate }: { focusDate?: string } = {}) {
-  const [reports, setReports] = useState<ReviewReportSummary[] | null>(null);
-  const [effect, setEffect] = useState<Awaited<ReturnType<typeof getReviewEffectiveness>> | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [openDate, setOpenDate] = useState<string | null>(null);
-  const [detail, setDetail] = useState<ReviewReportDetail | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    Promise.all([getReviewReports(), getReviewEffectiveness().catch(() => null)])
-      .then(async ([r, e]) => {
-        if (!alive) return;
-        setReports(r);
-        setEffect(e);
-        if (focusDate) {
-          const d = await getReviewReport(focusDate).catch(() => null);
-          if (!alive) return;
-          if (d) {
-            setOpenDate(focusDate);
-            setDetail(d);
-            return;
-          }
-        }
-        // 默认展开最新一份报告并立即拉详情（否则一直停在"加载中"直到手点）
-        if (r.length > 0) {
-          setOpenDate(r[0].trade_date);
-          setDetail(await getReviewReport(r[0].trade_date).catch(() => null));
-        }
-      })
-      .catch((e: Error) => alive && setError(e.message));
-    return () => {
-      alive = false;
-    };
-  }, [focusDate]);
-
-  const toggle = useCallback(
-    (date: string) => {
-      const next = openDate === date ? null : date;
-      setOpenDate(next);
-      setDetail(null);
-      if (next) {
-        getReviewReport(next)
-          .then((d) => setDetail(d))
-          .catch(() => setDetail(null));
-      }
-    },
-    [openDate],
-  );
-
-  /** 处置改进项后刷新三处：报告列表（计数不变但要同步）、当前详情、有效性统计。
-   *  只刷新详情会让右侧"采纳率"停留在旧值，看不出处置效果。 */
-  const reloadAfterDispose = useCallback(async () => {
-    const [r, e] = await Promise.all([
-      getReviewReports().catch(() => null),
-      getReviewEffectiveness().catch(() => null),
-    ]);
-    if (r) setReports(r);
-    if (e) setEffect(e);
-    if (openDate) {
-      const d = await getReviewReport(openDate).catch(() => null);
-      if (d) setDetail(d);
+export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: string; allowDispose?: boolean } = {}) {
+  const requestedDate = focusDate?.replaceAll("-", "");
+  const list = useResource(getReviewReports, { key: requestedDate, intervalMs: null, marketHours: false });
+  const effectiveness = useResource(getReviewEffectiveness, { intervalMs: null, marketHours: false });
+  const reports = list.data ?? null;
+  const effect = effectiveness.data ?? null;
+  const error = list.error instanceof Error ? list.error.message : list.error ? "读取失败" : null;
+  // undefined follows the requested date/latest report; null explicitly closes the detail.
+  const [selectedDate, setSelectedDate] = useState<string | null | undefined>();
+  const openDate = selectedDate === undefined ? requestedDate ?? reports?.[0]?.trade_date ?? null : selectedDate;
+  const detailResource = useResource(async () => {
+    try { return await getReviewReport(openDate!); } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return null;
+      throw error;
     }
-  }, [openDate]);
+  }, {
+    key: openDate, enabled: !!openDate, intervalMs: null, marketHours: false,
+  });
+  const detail = detailResource.error ? null : detailResource.data ?? null;
+  const toggle = useCallback((date: string) => setSelectedDate(openDate === date ? null : date), [openDate]);
+  const reloadAfterDispose = useCallback(() => {
+    list.refresh(); effectiveness.refresh(); detailResource.refresh();
+  }, [list, effectiveness, detailResource]);
 
   if (error) {
     return (
       <Panel title="复盘报告">
-        <p className="px-4 py-8 text-center text-sm text-amber-800 dark:text-amber-500">复盘报告加载失败：{error}</p>
+        <p className="px-4 py-8 text-center text-sm text-amber-800 dark:text-amber-500">复盘报告加载失败：{error}</p><button onClick={list.refresh} className="px-4 py-2">重试读取</button>
       </Panel>
     );
   }
@@ -417,10 +376,11 @@ export function ReviewTab({ focusDate }: { focusDate?: string } = {}) {
     // minmax(0,…) 而非 auto/1fr：grid 行的 auto 会被长内容无限撑开，把同行面板压扁
     // 并把滚动推到最外层（窄屏下表现为整页滚动、面板内无滚动条）。
     <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,auto)_minmax(0,1fr)] gap-3 overflow-auto lg:grid-cols-2 lg:grid-rows-1">
-      <Panel title="复盘报告（盘后自动生成）" className="min-h-[240px]">
+      <Panel title="复盘报告（冻结版本）" className="min-h-[240px]">
+        {requestedDate && !reports.some(r => r.trade_date === requestedDate) && <div className="px-4 py-3 text-sm"><button onClick={() => setSelectedDate(requestedDate)}>{requestedDate} 指定报告</button>{openDate === requestedDate && (detail ? <ReportDetail report={detail} allowDispose={allowDispose} onDisposed={reloadAfterDispose} /> : <p role={detailResource.error ? "alert" : "status"}>{detailResource.error ? "指定日期读取失败" : detailResource.pending ? "详情加载中…" : "指定日期尚无报告"}</p>)}</div>}
         {reports.length === 0 ? (
           <p className="px-4 py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">
-            暂无复盘报告。后端每日盘后自动生成（POST /api/review/run）。
+            暂无复盘报告。后端每日盘后自动生成（未生成或调度未运行，可在系统维护核对）。
           </p>
         ) : (
           <div className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
@@ -445,10 +405,10 @@ export function ReviewTab({ focusDate }: { focusDate?: string } = {}) {
                     // 滚动，避免把外层 grid 行撑高、滚动条跑到页面最底部看不见。
                     // overscroll-contain：滚到边界时不把滚动传导给父容器。
                     <div className="max-h-[55vh] overflow-y-auto overscroll-contain">
-                      <ReportDetail report={detail} onDisposed={() => void reloadAfterDispose()} />
+                      <ReportDetail report={detail} allowDispose={allowDispose} onDisposed={reloadAfterDispose} />
                     </div>
                   ) : (
-                    <p className="px-4 py-3 text-xs text-zinc-600 dark:text-zinc-400">详情加载中…</p>
+                    <div className="px-4 py-3 text-xs text-zinc-600 dark:text-zinc-400">{detailResource.error ? <><p role="alert">{openDate} 报告读取失败。</p><button onClick={detailResource.refresh}>重试读取</button></> : detailResource.pending ? "详情加载中…" : `${openDate} 尚无报告，不回退成其它日期。`}</div>
                   ))}
               </div>
             ))}
@@ -456,9 +416,9 @@ export function ReviewTab({ focusDate }: { focusDate?: string } = {}) {
         )}
       </Panel>
 
-      <Panel title="改进项有效性（方法论自校准）" className="min-h-[240px]">
+      <Panel title="改进项处置统计（非交易效果）" className="min-h-[240px]">
         {effect === null ? (
-          <p className="px-4 py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">有效性统计加载失败或暂无数据</p>
+          <p className="px-4 py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">{effectiveness.error ? "处置统计读取失败，不能判断当前状态。" : effectiveness.pending ? "读取处置统计…" : "暂无处置统计。"}</p>
         ) : (
           <table className="w-full text-sm">
             <thead>

@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useOverlayFocus } from "@/hooks/use-overlay-focus";
+
+import { useCallback, useEffect, useRef, useMemo, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 
 import {
@@ -490,6 +492,8 @@ function NotificationRow({
 
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
+  const drawerRef = useRef<HTMLDivElement>(null);
+  useOverlayFocus(drawerRef, () => setOpen(false), open);
   const [payload, setPayload] = useState<NotificationsPayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -653,7 +657,7 @@ export function NotificationBell() {
 
       {open &&
         createPortal(
-          <div className="anim-backdrop-in fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-sm" onMouseDown={(e) => { if (e.target === e.currentTarget) setOpen(false); }} role="dialog" aria-modal="true" aria-label="通知中心" data-testid="notification-drawer">
+          <div ref={drawerRef} tabIndex={-1} className="anim-backdrop-in fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-sm" onMouseDown={(e) => { if (e.target === e.currentTarget) setOpen(false); }} role="dialog" aria-modal="true" aria-label="通知中心" data-testid="notification-drawer">
             <div className="anim-slide-in-right flex h-full w-full max-w-sm flex-col border-l border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-950">
               {/* 头：标题 + 未读数 + 操作 */}
               <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3 dark:border-zinc-800/80">
@@ -704,7 +708,7 @@ export function NotificationBell() {
                   <button
                     onClick={() => setOpen(false)}
                     className="rounded p-1 text-zinc-600 dark:text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-                    aria-label="关闭"
+                    data-overlay-autofocus aria-label="关闭"
                   >
                     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                       <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />

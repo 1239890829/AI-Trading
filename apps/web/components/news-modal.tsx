@@ -280,7 +280,7 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
   const shownTime = eventTimeText(item.date ?? content?.published ?? null);
 
   return (
-    <ModalShell
+    <ModalShell presentation="drawer"
       onClose={onClose}
       label={shownTitle}
       testid="news-modal"

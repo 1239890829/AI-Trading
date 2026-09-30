@@ -96,6 +96,7 @@ export type RightTab = DetailRightTab;
 export interface StockDetailTabs {
   chartTab?: ChartTab;
   rightTab?: RightTab;
+  onRightTabChange?: (tab: RightTab) => void;
 }
 
 /** P1-5（2026-09-11）：上游已订阅当前标的时，把行情与连接态传下来。
@@ -127,6 +128,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   symbol,
   chartTab: chartTabInit,
   rightTab: rightTabInit,
+  onRightTabChange,
   liveQuote: liveQuoteProp,
   streamStatus: streamStatusProp,
 }: { symbol: string } & StockDetailTabs & StockDetailStreamProps) {
@@ -155,7 +157,8 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   useEffect(() => {
     // localStorage 恢复必须在 effect 里：渲染期读会把值带进首次 commit，
     // 与 SSR 输出产生 hydration mismatch（宽度类 inline style 必比对）。
-    const saved = Number(localStorage.getItem("ashare-right-w"));
+    let saved = 0;
+    try { saved = Number(localStorage.getItem("ashare-right-w")); } catch {}
     // ⚠️ 本行原有一条 `eslint-disable-next-line react-hooks/set-state-in-effect`。
     // 2026-09-11（P1-1）本组件包上 `memo()` 后，React Compiler 的该规则**不再下探
     // 组件体**——实测同一文件、同一行：不包 memo 时规则照常报（指令被使用），
@@ -164,11 +167,11 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     // 后续改本组件时必须人工守住「不在 effect 体内同步 setState」。
     if (saved >= 260 && saved <= 480) setRightW(saved);
     // 右列收起状态同样持久化（字符串比较，避免 hydration 差异）
-    if (localStorage.getItem("ashare-right-collapsed") === "1") setRightCollapsed(true);
+    try { if (localStorage.getItem("ashare-right-collapsed") === "1") setRightCollapsed(true); } catch {}
   }, []);
   const toggleRightCollapsed = () => {
     setRightCollapsed((v) => {
-      localStorage.setItem("ashare-right-collapsed", v ? "0" : "1");
+      try { localStorage.setItem("ashare-right-collapsed", v ? "0" : "1"); } catch {}
       return !v;
     });
   };
@@ -548,7 +551,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       await addToWatchlist(symbol);
       setInWatchlist(true);
       notifyWatchlistChanged(); // 工作台左栏立即出现新自选（此前详情面板加自选不通知）
-    } catch {}
+    } catch (error) { setError(`加入自选失败：${error instanceof Error ? error.message : "请重试"}`); }
   }
 
   // 技术评估：displayBars 随 WS 秒级 tick 变化，必须 memo——否则每 tick
@@ -598,7 +601,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
 
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-col gap-2">
+    <div className="stock-workspace flex min-h-0 min-w-0 flex-col gap-2">
       {error && (
         <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-300">{error}</div>
       )}
@@ -828,6 +831,19 @@ export const StockDetailPanel = memo(function StockDetailPanel({
         ) : (
         <div ref={rightColRef} className="relative flex min-h-0 flex-col gap-2">
           <div
+            role="separator"
+            tabIndex={0}
+            aria-orientation="vertical"
+            aria-valuemin={260}
+            aria-valuemax={480}
+            aria-valuenow={rightW}
+            onKeyDown={(event) => {
+              if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+              event.preventDefault();
+              const width = event.key === "Home" ? 260 : event.key === "End" ? 480 : Math.min(480, Math.max(260, rightW + (event.key === "ArrowLeft" ? 20 : -20)));
+              setRightW(width);
+              try { localStorage.setItem("ashare-right-w", String(width)); } catch {}
+            }}
             onMouseDown={(e) => {
               e.preventDefault();
               const rect = rightColRef.current?.getBoundingClientRect();
@@ -843,7 +859,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                 window.removeEventListener("mousemove", move);
                 window.removeEventListener("mouseup", up);
                 setRightW((w) => {
-                  localStorage.setItem("ashare-right-w", String(w));
+                  try { localStorage.setItem("ashare-right-w", String(w)); } catch {}
                   return w;
                 });
               };
@@ -864,7 +880,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                 : rightTab === "trade"
                   ? "模拟交易"
                   : rightTab === "real"
-                    ? "真实持仓（券商实际成交记账）"
+                    ? "手工记录（用户录入，非券商核验）"
                     : rightTab === "profile"
                       ? "公司资料"
                       : rightTab === "speed"
@@ -901,7 +917,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
             {rightTabsFor(isIndex).map(([k, label]) => (
               <button
                 key={k}
-                onClick={() => setRightTab(k)}
+                onClick={() => { if (onRightTabChange) onRightTabChange(k); else setRightTab(k); }}
                 className={`rounded px-2 py-0.5 text-xs ${rightTab === k ? "bg-zinc-100 font-medium dark:bg-zinc-800" : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
               >
                 {label}

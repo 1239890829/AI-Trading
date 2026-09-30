@@ -474,3 +474,19 @@ describe("FloatingAssistant 会话历史", () => {
     expect(screen.queryByTestId("assistant-history-toggle")).toBeNull();
   });
 });
+
+
+describe("assistant keyboard context", () => {
+  it("opens from keyboard, focuses input, and returns focus on Escape without posting", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL) => new Response(JSON.stringify({data: [], meta: {}}), {headers: {"content-type":"application/json"}}));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<FloatingAssistant />);
+    const ball = await screen.findByTestId("assistant-ball"); ball.focus();
+    fireEvent.keyDown(ball, {key:"Enter"});
+    expect(document.activeElement).toBe(await screen.findByTestId("assistant-input"));
+    fireEvent.keyDown(document.activeElement!, {key:"Escape"});
+    expect(screen.queryByTestId("assistant-panel")).toBeNull();
+    expect(document.activeElement).toBe(ball);
+    expect(fetchMock.mock.calls.some(call => String(call[0]).includes("/assistant/chat"))).toBe(false);
+  });
+});
