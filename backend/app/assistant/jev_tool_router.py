@@ -35,8 +35,8 @@ TOOL_GROUPS: dict[str, dict[str, Any]] = {
         "tools": ("events", "news", "chain", "alert_events", "basics"),
     },
     "selection_research": {
-        "description": "仅当用户明确询问每日精选、因子档案、策略回测、盘前简报、盘后复盘或做T决策记录时使用；一般的持仓、新闻、公告或行情查询不属于本组。",
-        "tools": ("picks", "factor_profile", "backtest", "brief", "review", "minute_decisions"),
+        "description": "仅当用户明确询问每日精选、因子档案、策略回测、盘前简报、盘后复盘、做T决策记录或KB知识正文/反例时使用；一般的持仓、新闻、公告或行情查询不属于本组。",
+        "tools": ("picks", "factor_profile", "backtest", "brief", "review", "minute_decisions", "kb"),
     },
     "account_positions": {
         "description": "仅当问题需要当前持仓、自选股身份/清单或模拟交易账户数据时使用；询问某只非持仓股票不自动属于本组。",

@@ -300,13 +300,13 @@ def test_snapshot_citations_distinguishes_not_consulted_from_rejected():
     assert refs["conflict"] == {}
 
     # ② 引用成功：state=cited，并带上状态与支持依据
-    ids_json, refs_json = kr.snapshot_citations("intraday_pick", ["KB-STOCK-07"])
+    ids_json, refs_json = kr.snapshot_citations("intraday_pick", ["KB-STOCK-07"], fragments=[kr.retrieve_kb("intraday_pick", "KB-STOCK-07")["fragment"]])
     assert json.loads(ids_json) == ["KB-STOCK-07"]
     refs = json.loads(refs_json)
     assert refs["state"] == kr.REF_STATE_CITED
     assert refs["status"] == {"KB-STOCK-07": kr.STATUS_LANDED}
-    assert refs["support"][0]["kb_id"] == "KB-STOCK-07"
-    assert refs["support"][0]["title"], "支持依据应带索引里的一句话（可回溯到条目）"
+    assert refs["retrieved"][0]["kb_id"] == "KB-STOCK-07"
+    assert refs["retrieved"][0]["title"], "支持依据应带索引里的一句话（可回溯到条目）"
 
     # ③ 引了但全被驳回：**必须**与 ① 区分开（前者是异常，后者是现状）
     ids_json, refs_json = kr.snapshot_citations("intraday_pick", ["KB-STOCK-01"])
@@ -360,6 +360,7 @@ def test_snapshots_persist_kb_citations(tmp_path):
     run_id2, rows2 = build_intraday_records(
         _payload(), trade_date="2026-09-17", as_of=datetime(2026, 9, 17, 10, 5),
         kb_ids=["KB-STOCK-07", "KB-STOCK-01"],
+        kb_fragments=[kr.retrieve_kb("intraday_pick", "KB-STOCK-07")["fragment"]],
     )
     for row in rows2:
         assert json.loads(row["kb_ids"]) == ["KB-STOCK-07"]
@@ -404,6 +405,7 @@ def test_notification_pipeline_records_kb_state(tmp_path):
         hits=[{"item": {"symbol": "600001"}, "price": 10.0, "chg": 3.0}],
         skips=[], dispatch_by_symbol={"600001": "notified"},
         kb_ids=["KB-TRADE-11"],
+        kb_fragments=[kr.retrieve_kb("buy_point", "KB-TRADE-11")["fragment"]],
     )
     assert json.loads(rows2[0]["kb_ids"]) == ["KB-TRADE-11"]
 
@@ -480,11 +482,11 @@ def test_bug025_requests_are_separate_ordered_and_generator_safe(tmp_path):
     requested = (x for x in [" KB-STOCK-07 ", "", "KB-STOCK-999", "KB-STOCK-07"])
     ids, raw = kr.snapshot_citations("intraday_pick", requested, index)
     refs = json.loads(raw)
-    assert json.loads(ids) == ["KB-STOCK-07"]
+    assert json.loads(ids) == []
     assert refs["requested"] == ["KB-STOCK-07", "KB-STOCK-999"]
-    assert refs["state"] == kr.REF_STATE_CITED
-    assert set(refs["conflict"]) == {"KB-STOCK-999"}
-    assert refs["support"] == [{"kb_id": "KB-STOCK-07", "status": "✅", "title": "verified discipline"}]
+    assert refs["state"] == kr.REF_STATE_REJECTED
+    assert set(refs["conflict"]) == {"KB-STOCK-07", "KB-STOCK-999"}
+    assert refs["support"] == []
 
 
 def test_bug025_no_request_is_not_consulted_even_if_index_is_missing():
@@ -519,8 +521,9 @@ def test_bug025_disk_failure_recovers_with_one_index_read(tmp_path, monkeypatch,
     path.write_text("| KB-STOCK-07 | restored discipline | ✅ | 2026-09-16 |\n")
     ids, refs = kr.snapshot_citations("intraday_pick", ["KB-STOCK-07"])
     assert len(reads) == 2
-    assert json.loads(ids) == ["KB-STOCK-07"]
-    assert json.loads(refs)["state"] == kr.REF_STATE_CITED
+    assert json.loads(ids) == []
+    assert json.loads(refs)["state"] == kr.REF_STATE_REJECTED
+    assert "正文" in json.loads(refs)["conflict"]["KB-STOCK-07"]
 
 
 def test_bug025_unavailable_index_cannot_certify_retained_entries(tmp_path):
@@ -548,8 +551,11 @@ def test_bug025_archive_replay_and_summary_preserve_evidence(tmp_path, monkeypat
         kb_ids=["KB-STOCK-07"],
     )
     assert old_rows
-    archive_records(old_run, old_rows, sf)
+    # Historical v1 evidence stays readable; new ID-only requests are rejected.
+    for row in old_rows:
+        row["kb_refs"] = json.dumps({"state": "cited", "requested": ["KB-STOCK-07"]})
     old_refs = old_rows[0]["kb_refs"]
+    archive_records(old_run, old_rows, sf)
     # An index failure must affect new evidence only, not prior decisions.
     path.write_text("broken index")
     new_run, new_rows = build_intraday_records(

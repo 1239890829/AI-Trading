@@ -25,7 +25,10 @@ async def run_tool(call: ToolCall, ctx: ToolContext, cache: TTLCache | None = TO
         return f"【{call.name}】工具失败：未登记的工具名（可用：{'、'.join(TOOL_SPECS)}）"
 
     key = (call.name, tuple(sorted(call.args.items())))
-    if cache is not None:
+    # Repository content can change inside the generic TTL; KB hashes must name
+    # current bytes. The KB tool therefore rereads, rather than certifying cache.
+    use_cache = cache is not None and call.name != "kb"
+    if use_cache:
         hit, val = cache.get(key)
         if hit:
             return f"{val}\n（命中缓存，可能非最新）"
@@ -38,7 +41,7 @@ async def run_tool(call: ToolCall, ctx: ToolContext, cache: TTLCache | None = TO
         log.warning("assistant tool %s failed: %s", call.name, exc)
         return f"【{call.name}】工具失败：{type(exc).__name__}: {exc}"
 
-    if cache is not None:
+    if use_cache:
         cache.set(key, text)
     return text
 

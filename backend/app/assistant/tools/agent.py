@@ -9,12 +9,35 @@ from __future__ import annotations
 
 from .core import (
     ToolContext,
+    MAX_CHARS,
     _clip,
     _fmt_rows,
     _rec,
     _resolve_date,
     log,
 )
+
+
+async def _t_kb(ctx: ToolContext, **kw) -> str:
+    """Read exact canonical KB lines. Never upgrade retrieval to claim support."""
+    import json
+    from app.picks.kb_routing import retrieve_kb
+
+    raw_line = kw.get("start_line")
+    result = retrieve_kb(
+        kw.get("scenario", "post_close_review"), kw.get("id", ""),
+        start_line=int(raw_line) if raw_line is not None else None, max_chars=400,
+    )
+    # Receipt and text travel together; _clip would invalidate the exact-text hash.
+    output = json.dumps(result, ensure_ascii=False, separators=(",", ":")) + (
+        "\n知识仅用于解释；retrieved≠语义支持，状态≠实证有效。"
+        "complete=false 时须继续取正文尾部，不得忽略反例；不构成买卖建议。"
+    )
+    if len(output) > MAX_CHARS:
+        return "知识正文：回执超过工具预算，未提供可引用正文；请从既有知识阅读器读取全文。语义支持未验证。"
+    return output
+
+
 async def _t_param_changes(ctx: ToolContext, **kw) -> str:
     """参数变更单（审计留痕，P2-28① 批量）。
 

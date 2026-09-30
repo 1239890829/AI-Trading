@@ -9,10 +9,9 @@ r"""场景化知识库路由（蓝图 §5，`RSH-027` 切片 1）。
 蓝图同一节也**自述了现状**：「当前选股运行时**没有**……完整闭环。因此它**有用但尚未证明
 能提高选股结果**」。本模块据此划定切片边界：
 
-- 本切片交付**路由契约 + 引用记录 + 引用校验 + 覆盖度自证**。它**不做检索本身**
-  （检索 = 按册取正文，由调用方做），也**不做消融**——有/无 KB 的影子消融属切片 2，
-  与 `RSH-026` 剩余部分同因（**须等样本积累**，当前可成交样本远低于
-  `opportunity_learning.MIN_LABELS_FOR_VERDICT`，硬跑 verdict 就是「用不足样本装判据」）。
+- 正文检索由 `retrieve_kb()` 返回来源行、文件/条目/片段 SHA-256 与场景状态；
+  助手 `kb` 工具消费同一回执。`snapshot_citations()` 拒绝只有编号或版本失效的请求。
+  正文取回与语义支持分开；有/无 KB 的固定小任务只检验字面信息，不证明选股收益。
 - 故本切片**不把 KB 接进任何决策**：`enters_scoring` 全部为 `False`，且由
   `assert_scoring_admission_is_evidence_gated()` 机制化——**没有消融证据就不许改真**
   （蓝图：「没有稳定增益时，KB 只保留解释/治理作用，不强行入模」）。
@@ -81,6 +80,7 @@ candidate_rows == entries(total) + book_level_rows + unparsed_rows
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -559,14 +559,116 @@ def assert_hard_rule_allowed(kb_id: str, kb_status: str) -> None:
         )
 
 
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _headings(lines: list[str]) -> list[tuple[int, int, str]]:
+    """Only Markdown headings outside fenced code can define an entry."""
+    headings = []
+    fence = ""
+    for number, line in enumerate(lines, 1):
+        marker = re.match(r"^\s{0,3}(`{3,}|~{3,})", line)
+        if marker:
+            token = marker[1]
+            if not fence:
+                fence = token
+            elif token[0] == fence[0] and len(token) >= len(fence):
+                fence = ""
+            continue
+        if not fence and (heading := re.match(r"^(#{1,6})\s+(.+?)\s*#*\s*$", line)):
+            headings.append((number, len(heading[1]), heading[2]))
+    return headings
+
+
+def _read_kb_sources() -> list[tuple[str, str, list[str], list[tuple[int, int, str]]]]:
+    root = KB_INDEX_PATH.parent.resolve()
+    sources = []
+    for path in sorted(root.glob("*.md")):
+        if not path.resolve().is_relative_to(root):
+            raise KbRoutingError("知识库正文路径越界")
+        text = path.read_text(encoding="utf-8")
+        lines = text.splitlines(keepends=True)
+        sources.append((path.name, text, lines, _headings(lines)))
+    return sources
+
+
+def retrieve_kb(
+    scenario: str, kb_id: str, *, start_line: int | None = None, max_chars: int = 6000,
+    index: KbIndex | None = None,
+    _sources: list | None = None,
+) -> dict[str, Any]:
+    """Resolve one permitted ID to exact source lines; no claim-support judgment.
+
+    The canonical corpus lives beside the sole index. Missing/duplicate headings,
+    unreadable files and escaped symlinks fail visibly. Pages keep whole lines and
+    explicitly disclose incomplete context; hashes identify file, entry and page.
+    """
+    kb_index = index if index is not None else load_kb_index()
+    accepted, rejected = validate_kb_citations(scenario, [kb_id], kb_index)
+    if not accepted:
+        return {"state": "rejected", "conflict": rejected, "fragment": None}
+    kb_id = accepted[0]
+    if type(max_chars) is not int or not 100 <= max_chars <= 12000:
+        raise KbRoutingError("max_chars 必须为 100~12000 的整数")
+    if start_line is not None and (type(start_line) is not int or start_line < 1):
+        raise KbRoutingError("start_line 必须为正整数")
+    definitions = []
+    try:
+        sources = _read_kb_sources() if _sources is None else _sources
+        for name, text, lines, headings in sources:
+            for pos, (number, level, title) in enumerate(headings):
+                if not re.match(rf"^{re.escape(kb_id)}(?:\s|$)", title):
+                    continue
+                end = next((n - 1 for n, depth, _ in headings[pos + 1:] if depth <= level), len(lines))
+                definitions.append((name, text, lines, number, end))
+    except (OSError, UnicodeError, KbRoutingError) as exc:
+        return {"state": "rejected", "conflict": {kb_id: f"正文不可读：{exc}"}, "fragment": None}
+    if len(definitions) != 1:
+        reason = "正文未命中" if not definitions else "正文存在重复定义"
+        return {"state": "rejected", "conflict": {kb_id: reason}, "fragment": None}
+    name, text, lines, begin, end = definitions[0]
+    first = begin if start_line is None else start_line
+    if not begin <= first <= end:
+        return {"state": "rejected", "conflict": {kb_id: "起始行不属于该条目"}, "fragment": None}
+    selected: list[str] = []
+    size = 0
+    for line in lines[first - 1:end]:
+        if size + len(line) > max_chars:
+            break
+        selected.append(line)
+        size += len(line)
+    if not selected:
+        return {"state": "rejected", "conflict": {kb_id: "单行超过正文预算"}, "fragment": None}
+    last = first + len(selected) - 1
+    entry = kb_index.entries[kb_id]
+    fragment = {
+        "kb_id": kb_id, "scenario": route(scenario).key,
+        "title": entry.title[:160], "title_truncated": len(entry.title) > 160,
+        "status": entry.status, "status_note": entry.status_note,
+        "path": f"docs/kb/{name}", "start_line": first, "end_line": last,
+        "entry_start_line": begin, "entry_end_line": end,
+        "text": "".join(selected), "max_chars": max_chars,
+        "file_sha256": _sha256(text), "entry_sha256": _sha256("".join(lines[begin - 1:end])),
+        "fragment_sha256": _sha256("".join(selected)),
+        "index_identity_sha256": _sha256(_json(vars(entry))),
+        "complete": first == begin and last == end,
+        "next_line": last + 1 if last < end else None,
+        "relation": "unverified", "enters_scoring": False,
+    }
+    return {"state": "retrieved", "fragment": fragment, "conflict": {}}
+
+
 def snapshot_citations(
     scenario: str, kb_ids: Iterable[str] = (), index: KbIndex | None = None,
+    *, fragments: Iterable[dict[str, Any]] = (),
 ) -> tuple[str, str]:
     """决策快照的 KB 引用字段 → `(kb_ids_json, kb_refs_json)`（蓝图 §5 的记录项）。
 
     `requested` 单独保存实际请求，不代表检索正文已读取；旧快照不回写。
-    `kb_ids_json` = 被采纳的条目（保序去重）；`kb_refs_json` = 引用状态 + 支持/冲突依据，
-    形如 `{"state": ..., "status": {id: "✅"}, "support": [...], "conflict": {id: 理由}}`。
+    `kb_ids_json` = 正文回执一致的请求（保序去重）；`kb_refs_json` = 回执 + 拒绝原因，
+    `schema_version=2` 的 `retrieved` 保存实际正文；`support=[]` 与 `relation=unverified`
+    明示未验证语义支持，不能以 cited 声称模型确实采用。旧快照保留原始含义。
 
     **三态显式**（`not_consulted` / `cited` / `rejected`）：未引用与"引用了但被驳回"
     必须在读取侧可区分——`kb_ids == []` 本身区分不了这两者，而前者是现状、后者是异常。
@@ -574,7 +676,37 @@ def snapshot_citations(
     kb_index = index if index is not None else load_kb_index()
     # Materialize once: callers may supply a one-shot generator.
     requested = list(dict.fromkeys(value for raw in kb_ids if (value := str(raw).strip())))
-    accepted, rejected = validate_kb_citations(scenario, requested, kb_index)
+    eligible, rejected = validate_kb_citations(scenario, requested, kb_index)
+    receipts: dict[str, list[dict]] = {}
+    for fragment in fragments:
+        if isinstance(fragment, dict) and isinstance(fragment.get("kb_id"), str):
+            receipts.setdefault(fragment["kb_id"], []).append(fragment)
+    accepted = []
+    retrieved = []
+    sources = None
+    for kb_id in eligible:
+        provided = receipts.get(kb_id, [])
+        if not provided:
+            rejected[kb_id] = "只有索引编号，未提供实际取回的正文"
+            continue
+        verified = []
+        for fragment in provided:
+            try:
+                if sources is None:
+                    sources = _read_kb_sources()
+                current = retrieve_kb(
+                    scenario, kb_id, start_line=fragment.get("start_line"),
+                    max_chars=fragment.get("max_chars"), index=kb_index, _sources=sources,
+                )
+            except (OSError, UnicodeError, KbRoutingError):
+                current = {}
+            if current.get("fragment") != fragment:
+                rejected[kb_id] = "正文、位置、场景或版本失效/不一致"
+                break
+            verified.append(fragment)
+        else:
+            accepted.append(kb_id)
+            retrieved.extend(verified)
     if accepted:
         state = REF_STATE_CITED
     elif rejected:
@@ -582,15 +714,14 @@ def snapshot_citations(
     else:
         state = REF_STATE_NOT_CONSULTED
     payload: dict[str, Any] = {
+        "schema_version": 2,
         "state": state,
         "requested": requested,  # Requests are not evidence of verified citations.
         "status": {kb_id: kb_index.status_of(kb_id) for kb_id in accepted},
-        # 「支持依据」= 被采纳条目的状态档 + 索引里的一句话（可回溯到具体条目）
-        "support": [
-            {"kb_id": kb_id, "status": kb_index.status_of(kb_id),
-             "title": (kb_index.entries[kb_id].title if kb_id in kb_index.entries else "")}
-            for kb_id in accepted
-        ],
+        # Body access is observable; semantic support is a separate, unvalidated claim.
+        "retrieved": retrieved,
+        "support": [],
+        "relation": "unverified",
         # 「冲突依据」= 被驳回的条目 + 理由（驳回一定要有理由，见 validate_kb_citations）
         "conflict": rejected,
     }

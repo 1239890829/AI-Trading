@@ -422,7 +422,7 @@ async def kb_file(path: str = Query(..., description="docs/ 相对路径，仅 .
     """读单篇 Markdown。路径白名单：resolve 后必须仍在 docs/ 内（防目录穿越）。"""
     root = _docs_root().resolve()
     target = (root / path).resolve()
-    if not str(target).startswith(str(root)) or target.suffix != ".md" or not target.is_file():
+    if not target.is_relative_to(root) or target.suffix != ".md" or not target.is_file():
         raise HTTPException(status_code=404, detail="文档不存在或路径非法")
     try:
         return {"data": {"path": path, "content": target.read_text(encoding="utf-8")}, "meta": {}}

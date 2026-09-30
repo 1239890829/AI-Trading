@@ -294,10 +294,12 @@ def _selected_outcome_sql():
 
 def build_intraday_records(
     payload: dict, *, trade_date: str, as_of: datetime, kb_ids: Iterable[str] = (),
+    kb_fragments: Iterable[dict] = (),
 ) -> tuple[str, list[dict]]:
     """Turn one opportunity tree into candidate → hard-gate → rank evidence.
 
-    `kb_ids` = 本阶段决策**实际引用**的 KB 条目（蓝图 §5）。缺省空 ⇒ 快照记
+    `kb_ids` 是请求；`kb_fragments` 是调用方实际获得的正文回执（蓝图 §5）。
+    只有与现行正文一致的回执才记 cited；cited 不证明模型采用或语义支持。缺省空 ⇒ 快照记
     `state="not_consulted"`（这是现状，不是异常——蓝图 §5 自述选股运行时尚未接 KB）。
     引用一律经 `kb_routing.snapshot_citations()` 校验后落 `kb_ids` / `kb_refs` 两列，
     **本函数不自行拼这两个字段**（避免出现第二份引用口径）。
@@ -306,7 +308,7 @@ def build_intraday_records(
 
     as_of = as_of.replace(tzinfo=None)
     run_id = _hash({"scenario": "intraday", "trade_date": trade_date, "as_of": as_of.isoformat()})
-    kb_ids_json, kb_refs_json = snapshot_citations("intraday_opportunity", kb_ids)
+    kb_ids_json, kb_refs_json = snapshot_citations("intraday_opportunity", kb_ids, fragments=kb_fragments)
     ranked = top_watch_stocks(payload, limit=10_000).get("items") or []
     rank_by_key = {
         (str(row.get("symbol") or ""), str(row.get("theme") or "")): n
@@ -436,17 +438,17 @@ def build_intraday_records(
 def build_notification_records(
     items: list[dict], *, trade_date: str, as_of: datetime,
     hits: list[dict], skips: list[dict], dispatch_by_symbol: dict[str, str],
-    kb_ids: Iterable[str] = (), pick_generated_at: str | None = None,
+    kb_ids: Iterable[str] = (), kb_fragments: Iterable[dict] = (), pick_generated_at: str | None = None,
     execution_by_symbol: dict[str, dict] | None = None,
 ) -> tuple[str, list[dict]]:
     """Archive every notification-gate input, including negative decisions.
 
-    `kb_ids` 语义同 `build_intraday_records`：仅记录**实际引用**的 KB 条目；
+    `kb_ids`/`kb_fragments` 语义同 `build_intraday_records`：请求编号须有正文回执；
     本阶段属 `intraday_pick` 场景（别名 `buy_point`）。
     """
     as_of = as_of.replace(tzinfo=None)
     run_id = _hash({"scenario": "notification", "trade_date": trade_date, "as_of": as_of.isoformat()})
-    kb_ids_json, kb_refs_json = snapshot_citations("buy_point", kb_ids)
+    kb_ids_json, kb_refs_json = snapshot_citations("buy_point", kb_ids, fragments=kb_fragments)
     hit_by = {str(h.get("item", {}).get("symbol") or ""): h for h in hits}
     skip_by = {str(s.get("symbol") or ""): str(s.get("reason") or "") for s in skips}
     records: list[dict] = []
@@ -912,10 +914,10 @@ def archive_records(
 
 
 def archive_intraday_pipeline(payload: dict, *, trade_date: str, as_of: datetime | None = None,
-                              kb_ids: Iterable[str] = (), session_factory=None) -> dict:
+                              kb_ids: Iterable[str] = (), kb_fragments: Iterable[dict] = (), session_factory=None) -> dict:
     effective_as_of = as_of or beijing_now()
     run_id, records = build_intraday_records(
-        payload, trade_date=trade_date, as_of=effective_as_of, kb_ids=kb_ids,
+        payload, trade_date=trade_date, as_of=effective_as_of, kb_ids=kb_ids, kb_fragments=kb_fragments,
     )
     run_meta = build_intraday_run_meta(
         payload, run_id=run_id, trade_date=trade_date, as_of=effective_as_of, records=records,
@@ -927,14 +929,14 @@ def archive_intraday_pipeline(payload: dict, *, trade_date: str, as_of: datetime
 
 def archive_notification_pipeline(
     items: list[dict], *, trade_date: str, hits: list[dict], skips: list[dict],
-    dispatch_by_symbol: dict[str, str], kb_ids: Iterable[str] = (),
+    dispatch_by_symbol: dict[str, str], kb_ids: Iterable[str] = (), kb_fragments: Iterable[dict] = (),
     as_of: datetime | None = None, session_factory=None, pick_generated_at: str | None = None,
     execution_by_symbol: dict[str, dict] | None = None,
 ) -> dict:
     effective_as_of = as_of or beijing_now()
     run_id, records = build_notification_records(
         items, trade_date=trade_date, as_of=effective_as_of, hits=hits, skips=skips,
-        dispatch_by_symbol=dispatch_by_symbol, kb_ids=kb_ids,
+        dispatch_by_symbol=dispatch_by_symbol, kb_ids=kb_ids, kb_fragments=kb_fragments,
         pick_generated_at=pick_generated_at, execution_by_symbol=execution_by_symbol,
     )
     run_meta = build_notification_run_meta(
@@ -2202,6 +2204,7 @@ def learning_summary(trade_date: str, session_factory=None) -> dict:
             "样本不足、全漏斗标签未完整或 evidence_quality 非完整时只报告覆盖率与事实分布，不据此晋级策略；"
             "degraded/unavailable/unknown 决策事实保留审计但不进入效果样本；D0 成本调整代理口径见 cost_model；"
             "kb_ref_states 记录本次决策的 KB 引用状态（not_consulted=未引用，现状如此；"
+            "v2 cited 仅证明正文回执一致，语义支持未验证；旧 cited 仅有索引证据。"
             "KB 进入个股收益打分须先过有/无 KB 消融，见蓝图 §5）"
         ),
     }
