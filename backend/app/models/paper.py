@@ -12,13 +12,14 @@ from app.models.watchlist import Base
 #:（picks-intraday-fusion-assessment.md §4，验证空仓闸门与执行闸门的对照账户）。
 SCOPE_MAIN = "main"
 SCOPE_SHADOW = "shadow"
+SCOPE_HUNTING_SHADOW = "hunting_shadow"
 
 
 class PaperActionReceipt(Base):
     """Committed user action, retained across account resets for safe retries."""
 
     __tablename__ = "paper_action_receipt"
-    scope: Mapped[str] = mapped_column(String(12), primary_key=True)
+    scope: Mapped[str] = mapped_column(String(32), primary_key=True)
     request_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     draft: Mapped[str] = mapped_column(Text)
     result: Mapped[str] = mapped_column(Text)
@@ -28,7 +29,7 @@ class PaperActionReceipt(Base):
 class PaperResetBackup(Base):
     __tablename__ = "paper_reset_backup"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    scope: Mapped[str] = mapped_column(String(12))
+    scope: Mapped[str] = mapped_column(String(32))
     payload: Mapped[str] = mapped_column(Text)
     after_digest: Mapped[str] = mapped_column(String(64))
     restored: Mapped[int] = mapped_column(Integer, default=0)
@@ -41,7 +42,7 @@ class PaperAccount(Base):
     __tablename__ = "paper_account"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    scope: Mapped[str] = mapped_column(String(12), default=SCOPE_MAIN, index=True)
+    scope: Mapped[str] = mapped_column(String(32), default=SCOPE_MAIN, index=True)
     cash: Mapped[float] = mapped_column(Float, default=1_000_000.0)
     initial_cash: Mapped[float] = mapped_column(Float, default=1_000_000.0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -53,7 +54,7 @@ class PaperPosition(Base):
     __table_args__ = (UniqueConstraint("scope", "symbol", name="uq_paper_position_scope_symbol"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    scope: Mapped[str] = mapped_column(String(12), default=SCOPE_MAIN, index=True)
+    scope: Mapped[str] = mapped_column(String(32), default=SCOPE_MAIN, index=True)
     symbol: Mapped[str] = mapped_column(String(12), index=True)
     quantity: Mapped[int] = mapped_column(Integer, default=0)  # 总持仓
     frozen_today: Mapped[int] = mapped_column(Integer, default=0)  # 当日买入（T+1 不可卖）
@@ -72,7 +73,7 @@ class PaperOrder(Base):
     __tablename__ = "paper_order"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    scope: Mapped[str] = mapped_column(String(12), default=SCOPE_MAIN, index=True)
+    scope: Mapped[str] = mapped_column(String(32), default=SCOPE_MAIN, index=True)
     symbol: Mapped[str] = mapped_column(String(12), index=True)
     side: Mapped[str] = mapped_column(String(4))  # buy / sell
     price: Mapped[float] = mapped_column(Float)  # 委托价

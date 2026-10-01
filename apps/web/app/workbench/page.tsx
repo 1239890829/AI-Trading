@@ -504,7 +504,7 @@ function WorkbenchInner() {
 
       <div className="task-scroll grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[340px,minmax(0,1fr)]">
         <div className="flex min-h-0 min-w-0 flex-col gap-1.5">
-        {mode === "positions" && <AccountScopePanel account={account} />}
+        {mode === "positions" && <AccountScopePanel account={account} date={sp.get("date") ?? undefined} />}
         {mode === "positions" && account === "manual" && realError && <p role="alert" className="text-xs text-amber-800 dark:text-amber-300">手工记录读取失败，保留结果仅供参考：{realError}</p>}
         <IndexCards
           indices={indices}
@@ -647,7 +647,7 @@ function WorkbenchInner() {
                 <>
                   {account === "paper" ? "main 模拟账户暂无持仓。" : account === "manual" ? "暂无手工记录，可在右侧手工记账中记录成交。" : "此范围没有可展示的持仓列表。"}
                   <br />
-                  （手工记录未经券商验证；不合并其它账户）。
+                  {account === "manual" ? "（手工记录未经券商验证；不合并其它账户）。" : account === "paper" ? "只计 main 模拟账户，不合并其它账户。" : "成交与退出见上方独立影子回执，不合并其它账户。"}
                 </>
               ) : activeGroup === "猎场" ? (
                 <>

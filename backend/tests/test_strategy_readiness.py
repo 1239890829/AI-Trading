@@ -88,7 +88,7 @@ def test_observe_research_never_becomes_ready_from_good_fill():
     assert "verification_not_pass" in out["blocking_issues"]
 
 
-def test_complete_same_identity_evidence_only_reaches_human_review():
+def test_self_sealed_research_fill_cannot_reach_human_review():
     exp = _experiment()
     out = sr.build_readiness(
         strategy_key="s",
@@ -96,8 +96,9 @@ def test_complete_same_identity_evidence_only_reaches_human_review():
         experiment=exp,
         actual_fill=_fill(exp),
     )
-    assert out["state"] == sr.STATE_READY_FOR_HUMAN_REVIEW
-    assert out["blocking_issues"] == []
+    assert out["state"] == sr.STATE_BLOCKED
+    assert "actual_shadow_fill_not_execution_owned" in out["blocking_issues"]
+    assert "actual_shadow_fill_denominator_not_mature" in out["blocking_issues"]
     assert out["review_required"] is True
     assert out["automatic_promotion"] is False
     assert out["rollback_reopen_plan"]["rollback"]["automatic"] is False

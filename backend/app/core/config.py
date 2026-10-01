@@ -165,6 +165,7 @@ class Settings(BaseSettings):
     picks_gate_anomaly_gap: float = -5.0
     # 影子持仓：每交易日晨窗（09:26）把最新组合进 scope=shadow 独立账户模拟执行
     # （先卖昨日持仓，再按执行闸门允许的桶开盘买入）——空仓闸门的 A/B 对照组
+    hunting_shadow_enabled: bool = False  # IMP-053: explicit runtime activation, never enabled by GET
     picks_shadow_enabled: bool = True
     picks_shadow_start_minute: int = 9 * 60 + 26   # 竞价结束（9:25）后一分钟
     picks_shadow_end_minute: int = 9 * 60 + 45     # 晨窗截止（错过顺延次日，不追价）

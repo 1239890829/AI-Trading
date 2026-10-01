@@ -206,3 +206,20 @@ async def paper_reconcile(request: Request):
 
     engine = _engine(request)
     return {"data": reconcile(engine._sf)}
+
+
+@router.get("/paper/hunting-shadow")
+async def hunting_shadow_summary(request: Request, trade_date: str | None = None):
+    """Read committed execution facts without starting the runner/account."""
+    from datetime import date
+    from app.core.config import settings
+    from app.picks.hunting_shadow import read_summary
+    if trade_date:
+        try:
+            date.fromisoformat(trade_date)
+        except ValueError:
+            raise HTTPException(422, "日期须为YYYY-MM-DD") from None
+    data = read_summary(_engine(request)._sf, trade_date)
+    return {"data": {**data, "enabled": settings.hunting_shadow_enabled,
+                     "runtime": getattr(getattr(request.app.state, "hunting_shadow", None), "health", {"state": "not_loaded", "as_of": None}),
+                     "note": "猎场影子未启用；已存事实保留，参考价不是成交。" if not settings.hunting_shadow_enabled else "只消费现有获准买点规则，未加载新版不代表正在运行。"}}

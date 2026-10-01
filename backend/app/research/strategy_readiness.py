@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 
 from app.research import strategy_experiments as se
@@ -86,6 +87,22 @@ def _fill_issues(strategy_key: str, experiment: dict | None,
         fill_digest_ok = False
     if not fill_digest_ok:
         issues.append("actual_shadow_fill_digest_invalid")
+    from app.picks.hunting_shadow import VERSIONS, validate_execution_evidence
+    if not validate_execution_evidence(actual_fill):
+        issues.append("actual_shadow_fill_not_execution_owned")
+    for field in VERSIONS:
+        if not str(actual_fill.get(field) or "").strip():
+            issues.append(f"actual_shadow_fill_{field}_missing")
+    if actual_fill.get("filled_price_identity") != "PaperOrder.filled_price" or actual_fill.get("costs_included") is not True:
+        issues.append("actual_shadow_fill_price_or_cost_identity_invalid")
+    counts = actual_fill.get("counts") or {}
+    keys = ("filled", "rejected", "no_fill", "expired", "pending")
+    if (not isinstance(counts, dict) or any(type(counts.get(k)) is not int or counts[k] < 0 for k in keys)
+            or actual_fill.get("opportunities") != sum(counts.get(k, 0) for k in keys)
+            or counts.get("pending") != 0 or actual_fill.get("exited") != counts.get("filled")):
+        issues.append("actual_shadow_fill_denominator_not_mature")
+    if actual_fill.get("issues"):
+        issues.append("actual_shadow_fill_has_integrity_issues")
     if actual_fill.get("return_identity") != SHADOW_FILL_RETURN_IDENTITY:
         issues.append("actual_shadow_fill_identity_invalid")
     if actual_fill.get("source_owner") != "IMP-053":
@@ -99,6 +116,11 @@ def _fill_issues(strategy_key: str, experiment: dict | None,
         issues.append("actual_shadow_fill_experiment_mismatch")
     identity = (experiment.get("identity") if isinstance(experiment, dict)
                 and isinstance(experiment.get("identity"), dict) else {})
+    expected_versions = identity.get("execution_versions")
+    if (not isinstance(expected_versions, dict) or any(
+            not expected_versions.get(field) or expected_versions[field] != actual_fill.get(field)
+            for field in VERSIONS)):
+        issues.append("actual_shadow_fill_experiment_versions_unbound")
     challenger = identity.get("challenger") if isinstance(identity.get("challenger"), dict) else None
     if actual_fill.get("candidate") != challenger:
         issues.append("actual_shadow_fill_candidate_mismatch")
@@ -114,10 +136,12 @@ def _fill_issues(strategy_key: str, experiment: dict | None,
         issues.append("actual_shadow_fill_not_fully_closed")
     if actual_fill.get("status") != "complete":
         issues.append("actual_shadow_fill_incomplete")
-    for field in ("net_return_pct", "win_rate"):
+    for field in ("net_return_pct", "net_median_pct", "win_rate"):
         value = actual_fill.get(field)
-        if not isinstance(value, (int, float)) or isinstance(value, bool):
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
             issues.append(f"actual_shadow_fill_{field}_missing")
+    if isinstance(actual_fill.get("win_rate"), (int, float)) and not 0 <= actual_fill["win_rate"] <= 1:
+        issues.append("actual_shadow_fill_win_rate_invalid")
     return issues
 
 

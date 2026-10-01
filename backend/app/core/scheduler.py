@@ -109,6 +109,7 @@ SCHEDULER_SWITCH_ATTRS: tuple[str, ...] = (
     # 龙虎榜归档（2026-09-13 二期）：盘后打东财 datacenter 落盘——同理必须登记。
     "lhb_archive_enabled",
     "picks_shadow_enabled",
+    "hunting_shadow_enabled",
     "marketdb_sync_enabled",
     "flash_news_enabled",
     "llm_probe_enabled",

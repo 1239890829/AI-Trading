@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { OpportunityEvidencePanel } from "./opportunity-evidence-panel";
 import { getOpportunities, type OpportunityView } from "@/lib/api/picks";
 vi.mock("@/lib/api/picks", () => ({ getOpportunities: vi.fn() }));
-afterEach(() => { cleanup(); vi.resetAllMocks(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.resetAllMocks(); });
 const payload = (date = "2026-09-30"): OpportunityView => ({
   trade_date: date, contract_version: "test", state: "not_collected", cards: [], runs: [],
   disclaimer: "不构成买卖建议", coverage: "读取已有决定，未采集不等于没有机会",
@@ -55,6 +55,9 @@ describe("同版机会依据", () => {
 });
 
 it("pin and compare retain the original date/version while following reads the selected current object", async () => {
+  // Fixture dates must not depend on the day or timezone the suite runs.
+  vi.useFakeTimers({toFake: ["Date"]});
+  vi.setSystemTime(new Date("2026-09-30T10:00:00+08:00"));
   const first = payload("2026-09-30");
   const hypothesis = {opportunity_id: "o", decision_id: "d", decision_version: "v1", scenario: "trend", source_theme: "趋势", state: "waiting", data_state: "unknown", source: "test", first_seen: "10:00", as_of: "10:01", reasons: ["依据1"], unknowns: ["等待1"], reference: {price: 10, semantics: "reference_only"}, actionable: false, execution_blocker: "不能执行", snapshot_refs: []};
   first.cards = [{symbol: "600127", name: "对象A", hypotheses: [hypothesis]}];

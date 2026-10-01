@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.core.bjtime import beijing_today
 from app.core.db import utcnow
-from app.models.paper import PaperAccount, PaperOrder, PaperPosition
+from app.models.paper import PaperAccount, PaperOrder, PaperPosition, SCOPE_HUNTING_SHADOW
 
 log = logging.getLogger(__name__)
 
@@ -156,7 +156,7 @@ class PaperTradingEngine:
         #: 账户域：main=交易页签；shadow=每日精选影子持仓（数据隔离，互不可见）
         self.scope = scope
         #: 风控硬拦截（retro §6.5b #2，2026-09-13 拍板：check_order 从「仅 UI 预检」
-        #: 升级为撮合层拦截）。边界刻意收窄为 **仅 main 账户 + 仅买入方向**：
+        #: 升级为撮合层拦截）。边界刻意收窄为 **main/hunting_shadow 账户 + 仅买入方向**：
         #: - **shadow 豁免**：影子账户是研究仪器，测的是每日精选策略本身，
         #:   风控否决会污染 A/B 口径（其上游闸门 gate.py 已各自把关）；
         #: - **卖出永不拦截**：卖出是减风险动作，风控的目的是阻止加风险——
@@ -390,17 +390,21 @@ class PaperTradingEngine:
     async def _risk_block_reason(self, symbol: str, side: str, price: float, qty: int, quote) -> str | None:
         """风控硬拦截判据。返回 None = 放行，否则返回中文拒单原因。
 
-        边界（见构造函数注释）：仅 main 账户 + 仅买入；挂单撮合期不复查。
+        边界（见构造函数注释）：main/hunting_shadow 账户 + 仅买入；挂单撮合期不复查。
         市场状态用的是 risk_engine 的**缓存态**（调度器每 60s 刷新，
         与 UI 预检看到的同一个值）；预检自身异常按**保守拒单**处理——
         不知道订单是否安全时，模拟盘宁可拒并说明原因（红线 2 的精神：
         失败必须可见，不静默放行）。
         """
         re_ = self._risk_engine
-        # 豁免判据**写在代码里**而非只靠装配约定：scope != main 一律不闸——
+        # 每日精选 shadow 保留原实验豁免；hunting_shadow 与 main 必须过闸。
         # 即使将来有人给 shadow 注入 risk_engine，研究仪器口径也不会被污染
         #（test_shadow_scope_not_gated 钉住这条结构性保证）。
-        if re_ is None or side != "buy" or self.scope != "main":
+        if side != "buy" or self.scope not in {"main", SCOPE_HUNTING_SHADOW}:
+            return None
+        if self.scope == SCOPE_HUNTING_SHADOW and re_ is None:
+            return "猎场影子风控未装配，保守拒单"
+        if re_ is None:
             return None
         try:
             account, positions = self.risk_check_context(re_.hub)
@@ -467,7 +471,7 @@ class PaperTradingEngine:
             # 而它是 `quantity - frozen_today` 的派生值——不先解冻就会把昨日买入
             # 误判成"当日买入不可卖"。
             await self._unfreeze(db)
-            # 风控硬拦截（§6.5b #2）：仅 main 买入。放在账户级资金校验之前——
+            # 风控硬拦截（§6.5b #2）：main/hunting_shadow 买入。放在账户级资金校验之前——
             # 与涨跌停拦截同理：「该不该买」不应因「买不买得起」不满足而不被求值。
             risk_blocked = await self._risk_block_reason(symbol, side, price, qty, quote)
             if risk_blocked:
