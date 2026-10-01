@@ -21,4 +21,4 @@
 
 ## 3. 传播与恢复
 
-实施方案、猎场、产品、细功能（32声明）、INDEX、plan-registry、W03与本页同步；AGENTS/Skills/Jev/开放世界沿原边界，无新模型/权限/策略准入规则。原影子和用户main数据保留。回退停本scope新动作、保留PaperOrder/失败尝试及历史；不以Git回退撤销已成事实，schema降级须审查保留方案；全库灾备归GOV-013。本轮唯一IMP-053，不自动领取第二主任务，完成后重算selector。
+实施方案、猎场、产品、细功能（32声明）、INDEX、plan-registry、W03与本页同步；AGENTS/Skills/Jev/开放世界沿原边界，无新模型/权限/策略准入规则。原影子和用户main数据保留。回退停整个本scope执行（保留挂单/未退出成交，恢复后重核期限）、保留PaperOrder/失败尝试及历史；不以Git回退撤销已成事实，schema降级须审查保留方案；全库灾备归GOV-013。本轮唯一IMP-053，不自动领取第二主任务，完成后重算selector。
