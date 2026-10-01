@@ -57,7 +57,7 @@
 
 **猎场动态机会自动影子执行与双轨验证**
 
-- **状态**：待条件
+- **状态**：待执行
 - **优先级**：P1
 - **阶段门**：G2
 - **门内序**：15
@@ -70,6 +70,8 @@
 - **验收**：①参考轨保留 first_seen/trigger/reference_price，执行轨另记 submit/fill/reject/no_fill/expired/exit、成交价、费用、滑点与持有规则；两轨统计和 UI 名称不可混用；②动作前以 IMP-006 同版 snapshot 重检，早盘等待/拒绝可在后续新 decision version 条件成立后首次提交，开盘状态不冻结全天；③同一 decision/version 幂等，重复轮询不增仓/增样本，新一轮独立机会必须有新版本/episode；④资金/仓位采用可复算、版本化的标准化协议，不连接真实券商；⑤拒单/未成交/过期也进入分母，成交收益只能按真实 shadow fill 与合法退出计算；⑥回放时只用当时可见信息，未来低点、后续涨停和盘后原因不得倒填；⑦ **IMP-020 readiness 的 execution-owned 证据契约必须机械绑定** `strategy_version / feature_version / execution_version / cost_model_version / exit_rule_version`、`PaperOrder.filled_price` 身份、费用/滑点已计入、`opportunities = filled+rejected+no_fill+expired+pending`、`pending=0`、`exited=filled` 及净均值/中位/胜率；研究侧不得提供构造 actual fill 的 helper，只消费本项产物。
 - **证据**：当前 `watch_ledger` 以首见价对照收盘，能验证“当时发现后价格怎样”，但不是成交；当前 `picks-shadow` 主要在每日精选定稿后的下一交易日晨窗按开盘价进入。两者均不能代表“猎场每个盘中可执行买点已自动模拟成交”，因此本项是明确缺口，不据此声称策略已有增益。2026-09-21 多窗口审计又对照了 IMP-020 最终 `strategy_readiness` 与被淘汰的 promotion-v2 草案：最终版正确禁止 research 自造 fill，但消费侧还未机械核完上述五类 version identity、paper filled-price、成本/滑点与完整分母成熟度；这些事实应由本项补齐，不复活旧 research promotion 模块。
 - **下一步**：满足以下条件再实施：IMP-006 与 IMP-049 已完成，并能用同一 opportunity/decision version 区分 reference、actionable 与动作前重检事实。条件满足后只选一个已准入、可动作的猎场场景做最小纵切，对照 reference→recheck→shadow order→fill/no-fill→exit→review 全链，再扩到其它情境。UI 只消费同版事实，不先造漂亮胜率。
+- **2026-10-01 开工核验**：IMP-006/049 均已发布；现役 `daily_picks` 登记为 active，`buy_point.evaluate_buy_points` 是用户已定稿且已被 main 模拟执行消费的盘中买点路径。首片只复用该路径，不把 intraday_watch 的 active 参考监控身份或 RSH-031 观察误当新策略准入。原工程条件已满足，待条件状态不再冻结；重算后本项为唯一 G2 阻断主任务。效果前置仍限制收益/晋级，不能用缺未来 fill 阻止建设 fill 采集链。作者 Preflight 核 archive→action 顺序、通知按日去重与交易版本分离、同股重复仓、订单/回执原子性、scope、恢复后的过期和风险旁路。
+- **本片冻结协议**：独立 hunting_shadow scope；沿既有买点 gate/行情 ready/同版决定及 RiskEngine，100万元标准账户、单票10%初始资金、最多2个占用名额（含挂单）、佣金/印花税/过户费沿原 paper-v1、滑点0显式记录。60秒动作窗口；未成交限价不追价、过期取消。同日同 decision_id 最多一次实际开仓，拒绝后只在新 version 重评；逐 version 尝试分母与独立 decision_id 分母分开。次个已确认交易日连续竞价窗退出，T+1/跌停/停牌拒绝保留，未知日历不得提前退出或开仓。工程用隔离真撮合+正反例；未来真实运行、成熟效果与生产启用分别验收。
 - **研究边界**：工程链路完成不等于买点有效；胜率、净收益、早发现与“更低位置后涨停”的效果主张必须等待 RSH-026/IMP-020 的点时全分母、成本与 OOS/前向证据。
 - **恢复**：停 hunting-shadow 新动作即可；保留 reference 记录、订单/拒单/成交审计和旧 daily-picks shadow。回退不得把参考价重命名为成交价，也不得删除失败/未成交分母。
 - **U54/U55子范围（P09）**：H04仅提供统一阅读入口，hunting-shadow、每日精选shadow、用户paper和手工记录仍是独立scope。动作前重检同版actionable；submit/fill/no_fill/reject/expired/exit、成本、成交/退出版本均持久。参考轨不占资金，不把已封板报价当成交；晚恢复只按当前资格重评或记过期，不补造历史fill。H02/H05读取真实未执行/未成交与结果未成熟原因，不由JEV补故事。

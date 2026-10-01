@@ -34,14 +34,14 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.models.paper import SCOPE_MAIN, SCOPE_SHADOW, PaperAccount, PaperOrder, PaperPosition
+from app.models.paper import SCOPE_MAIN, SCOPE_SHADOW, SCOPE_HUNTING_SHADOW, PaperAccount, PaperOrder, PaperPosition
 from app.paper.engine import buy_freeze_amount, calc_fee
 
 #: 判据容差（分）：SQLite 存 float，逐笔 round(…, 2) 求和后有厘级浮点噪声。
 TOL = 0.011
 
 #: 账户域闭集（新增域必须同时改这里与 `models/paper.py` 的常量）。
-KNOWN_SCOPES = (SCOPE_MAIN, SCOPE_SHADOW)
+KNOWN_SCOPES = (SCOPE_MAIN, SCOPE_SHADOW, SCOPE_HUNTING_SHADOW)
 
 
 def _finding(check: str, severity: str, message: str, *, symbol: str | None = None,

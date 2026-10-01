@@ -426,6 +426,13 @@ def register_schedulers(reg: SchedulerRegistry, app: FastAPI, services: AppServi
         reason="picks_shadow_enabled 但 paper_shadow 未装配",
     )
 
+    from app.picks.hunting_shadow import hunting_shadow_loop
+    hunting_stop = asyncio.Event()
+    reg.add("hunting-shadow", lambda: hunting_shadow_loop(app, hunting_stop),
+            stop=hunting_stop, switch="hunting_shadow_enabled",
+            enabled=getattr(app.state, "hunting_shadow", None) is not None,
+            reason="hunting shadow runner not configured")
+
     # --- marketdb 盘后增量同步（RPS/tech_score 数据地基；子进程隔离 + 磁盘幂等）---
     marketdb_stop = asyncio.Event()
     from app.market.marketdb_sync import marketdb_sync_scheduler

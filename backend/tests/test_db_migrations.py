@@ -123,7 +123,7 @@ def test_versioned_database_upgrades_idempotently(tmp_path):
 _MODELS_UNDER_PARITY = (
     "OpportunityDecisionSnapshot", "OpportunityDecisionRun", "OpportunityOutcomeLabel",
     "OpportunityOutcomeRevision", "AgentParamPromotionApproval", "AgentResourceUsage",
-    "LeaderResearchObservation", "LeaderResearchSession", "PaperActionReceipt", "BuyPointConsumption", "PaperResetBackup",
+    "LeaderResearchObservation", "LeaderResearchSession", "PaperActionReceipt", "BuyPointConsumption", "PaperResetBackup", "HuntingShadowAttempt",
 )
 
 
@@ -169,6 +169,7 @@ def test_opportunity_learning_tables_match_their_models(tmp_path):
     from app.models.agent import AgentParamPromotionApproval, AgentResourceUsage
     from app.models.leader_research import LeaderResearchObservation, LeaderResearchSession
 
+    from app.models.hunting_shadow import HuntingShadowAttempt
     from app.models.paper import PaperActionReceipt, PaperResetBackup
     from app.models.notification_outbox import BuyPointConsumption
 
@@ -181,6 +182,7 @@ def test_opportunity_learning_tables_match_their_models(tmp_path):
         "AgentResourceUsage": AgentResourceUsage,
         "LeaderResearchObservation": LeaderResearchObservation,
         "LeaderResearchSession": LeaderResearchSession,
+        "HuntingShadowAttempt": HuntingShadowAttempt,
         "PaperActionReceipt": PaperActionReceipt,
         "PaperResetBackup": PaperResetBackup,
         "BuyPointConsumption": BuyPointConsumption,
@@ -241,7 +243,7 @@ def test_event_observation_upgrade_preserves_legacy_rows_and_matches_model(tmp_p
             """))
         assert run_migrations(engine) == "upgraded"
         with engine.connect() as conn:
-            assert conn.scalar(text("select version_num from alembic_version")) == "d7b3e6a209f4"
+            assert conn.scalar(text("select version_num from alembic_version")) == "e2c6a8f4b9d1"
             assert conn.scalar(text("select count(*) from event_card where fingerprint='legacy-event'")) == 1
             assert conn.scalar(text("select count(*) from event_observation")) == 0
             assert conn.scalar(text("select count(*) from event_interpretation")) == 0
@@ -371,6 +373,31 @@ def test_imp052_rollout_backfills_same_day_legacy_agent_consumption(tmp_path):
 
             assert conn.scalar(text("select version_num from alembic_version")) == "b5c9e7a2d4f1"
             assert conn.scalar(text("pragma integrity_check")) == "ok"
+    finally:
+        engine.dispose()
+        path.unlink(missing_ok=True)
+
+
+def test_hunting_upgrade_preserves_earlier_paper_facts_and_target_db(tmp_path):
+    from alembic import command
+    from alembic.config import Config
+    from app.core.migrations import BACKEND_DIR
+    engine, path = _fresh_engine(tmp_path, "hunting-upgrade")
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "migrations"))
+    cfg.attributes["configure_logger"] = False
+    try:
+        with engine.begin() as conn:
+            cfg.attributes["connection"] = conn
+            command.upgrade(cfg, "d7b3e6a209f4")
+            conn.execute(text("INSERT INTO paper_account(scope,cash,initial_cash,created_at,updated_at) VALUES('main',999900,1000000,'2026-09-29','2026-09-29')"))
+            conn.execute(text("INSERT INTO paper_action_receipt(scope,request_id,draft,result,created_at) VALUES('main','fixture-request','{}','{}','2026-09-29')"))
+        assert run_migrations(engine) == "upgraded"
+        with engine.connect() as conn:
+            assert conn.scalar(text("SELECT cash FROM paper_account WHERE scope='main'")) == 999900
+            assert conn.scalar(text("SELECT request_id FROM paper_action_receipt WHERE scope='main'")) == "fixture-request"
+            assert conn.scalar(text("SELECT count(*) FROM hunting_shadow_attempt")) == 0
+        assert str(engine.url).endswith(str(path))
     finally:
         engine.dispose()
         path.unlink(missing_ok=True)

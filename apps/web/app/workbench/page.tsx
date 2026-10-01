@@ -504,7 +504,7 @@ function WorkbenchInner() {
 
       <div className="task-scroll grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[340px,minmax(0,1fr)]">
         <div className="flex min-h-0 min-w-0 flex-col gap-1.5">
-        {mode === "positions" && <AccountScopePanel account={account} />}
+        {mode === "positions" && <AccountScopePanel account={account} date={sp.get("date") ?? undefined} />}
         {mode === "positions" && account === "manual" && realError && <p role="alert" className="text-xs text-amber-800 dark:text-amber-300">手工记录读取失败，保留结果仅供参考：{realError}</p>}
         <IndexCards
           indices={indices}

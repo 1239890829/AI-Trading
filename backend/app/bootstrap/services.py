@@ -178,6 +178,14 @@ def build_services(app: FastAPI) -> AppServices:
 
         app.state.paper_shadow = ShadowRunner(paper_shadow, session_factory)
 
+    # IMP-053: independent existing-buy-point instrumentation, explicitly off by default.
+    app.state.hunting_shadow = None
+    if settings.hunting_shadow_enabled:
+        from app.picks.hunting_shadow import HuntingShadowRunner, SCOPE
+        hunting_engine = PaperTradingEngine(session_factory, live_quote, hub_trading_days,
+                                            scope=SCOPE, risk_engine=risk_engine)
+        app.state.hunting_shadow = HuntingShadowRunner(hunting_engine, session_factory)
+
     # --- 题材字典/官方成分（architecture-design §1 T1）：fuyao 官方目录与成分同步 ---
     try:
         theme_catalog = ThemeCatalogService(session_factory)

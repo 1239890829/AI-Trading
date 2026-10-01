@@ -1,31 +1,24 @@
-# 当前交接：IMP-054 状态动效与空间连续性
+# 当前交接：IMP-053 猎场动态机会影子执行
 
-> 唯一任务状态在[W07/IMP-054](stages/w07-simplification.md#imp-054)；设计/对照/运行边界见[产品闭环§12](product/product-closure-design.md#12-imp-054-状态动效与空间连续性2026-09-30)，逐消费者见[细功能审计§19](product/feature-closure-audit.md#19-imp-054-动效消费者逐项验收2026-09-30)。权威总方案v9.13，累计U01–U55，Jev入口为ai/jev-integration.md，开放世界持续演进入口为ai/continuous-evolution.md。
+> 唯一任务状态在[W03/IMP-053](stages/w03-execution.md#imp-053)；合同在[猎场§9](product/hunting-decision-design.md#9-imp-053-首个执行场景与效果证据2026-10-01)，逐动作在[细功能§20](product/feature-closure-audit.md#20-imp-053-逐动作与失败分母2026-10-01)。现役总方案v9.13/U01–U55；Jev入口ai/jev-integration.md；开放世界入口ai/continuous-evolution.md。
 
 ## 1. 现场、模式与门序
 
-2026-09-30用户“继续”；干净master6292654657fe3b641c280017cf0d78ba85212f80，IMP-050/PR #196已合并，master CI36707863844三job success，前任务分支已清理。本次runtime selector唯一G4/IMP-054，非阻断/P2/门内序85、依赖IMP-050完成、运行条件无解析错误。分支codex/imp054-motion-continuity，工程提交855773b；完整发布事实以本任务准确HEAD DegradedRelease和PR回执为准，不冒称已部署。
+- **当前主门**：G2
+- **主切片首选**：IMP-053
 
-**U50 降级授权回执**：用户2026-09-24本机Codex DEGRADED_FULL_CONTROL继续有效，直到撤销。作者=发布操作者，U49作者自审不声称独立Review；完整本地门禁、required CI、release_check、post-merge CI及分支清理不降低。部署搁置；无真实券商、生产库写入、实际通知、付费或模型/阈值准入。
+2026-10-01用户“继续”，干净master728391d492a2f36228bf6ebc0d0d50486104123d，IMP-054/PR #197及master CI36728691328已核success，原分支已清理。初始selector普通门为空；核IMP-006/049已完成、daily_picks active与用户定稿buy_point现役main自动消费者，原工程条件满足，W03待条件冻结已修正，重算唯一G2/IMP-053（P1、阻断、门内序15）。不是新策略准入，不把intraday_watch参考active或RSH-031观察当买点。
 
-## 2. 实施与证据
+**U50 降级授权回执**：用户2026-09-24本机Codex DEGRADED_FULL_CONTROL授权继续有效；作者=发布操作者，作者U49自审不冒充独立Review，准确HEAD DegradedRelease/完整本地门禁/required CI/release_check/post-merge/清理不降低。部署搁置；无生产重启/迁移/真实通知/券商/付费或模型权重准入。
 
-FadeSwap立即换任务与同key不重播；三个阅读表面200ms进入/160ms退出，逻辑关闭即时焦点/IO撤离，inert/aria-hidden无指针/读屏身份，重开取消旧计时器。共享inert旧快照覆盖关闭身份、子层回焦落入关闭父层的反例已先红后绿；迟到旧资讯不能覆盖新事件。机会两处同版文字保留、颜色160ms变化；金融列表静态、命令/大画布即时卸载。未改业务事实、得分、数据时点、scope或预算/权限。
+## 2. 实施与验收边界
 
-前端完整本地：84文件766测试默认/UTC（46.66s/46.46s），tsc/eslint通过，Next16.3.3生产构建通过（编译3.5s、类型4.6s）；dev先停止、临时路由恢复性移出、开发类型缓存清理，生成next-env恢复原样。干净检出855773b后端4564 passed/81 skipped（133.24s）与pyflakes通过。首轮原树6失败（135.10s）：一项交接漏continuous-evolution入口已补；五项RPS/筹码夹具误读本机忽略日历尾2026-09-24，触发陈旧硬门。隔离检出无本机运行数据、阈值/断言/时钟未改，完整复跑通过；失败日志保留。doc-health、卫生与公开扫描通过，最终协调记录文档守卫173 passed（2.47s）；首次任务完成证据因中文紧邻SHA未匹配word-boundary，改为明确code span后通过，不改守卫。
+独立hunting_shadow后台默认关闭；归档同版和当前行情/区间/会话/日历/风控重检，订单/资金/尝试原子提交；通知按日去重不冻结交易版本。参考与first_seen/trigger、重检与PaperOrder.filled_price分开。标准100万元/10%含费用/2名额含挂单，60秒限价有效期，过期取消退款；已确认后续交易日合法退出，跌停/停牌/未知日历保留未退出。重复版本、已开同日episode均不增仓。
 
-真实浏览器均为隔离合成夹具，非行情。三次关闭50ms后保留inert表面，焦点不在关闭区域；三次强制CSS+JS减少动态均立即消失；通知Esc回入口、机会未知/合法空/加载/失败与亮暗真实渲染。viewport工具未生效不算小屏证据，替代iframe外框390/实际388px CSS视口，面板/scrollWidth均388px，无横溢，键盘回焦通过；非真实移动设备。OS减少动态未切换，强制分支与OS验收分开。
+纯读GET/H04账户入口展示真实失败/未成熟/历史，关闭开关仍可读；readiness机械复算执行DB、五版本、订单/费用、完整成熟分母。首片existing规则无Challenger/实验/压力成本绑定，仍blocked，不制造RSH-031收益。工程和真实运行/成熟效果分别验收。
 
-性能同6292654基线/同输入/同夹具/1280×720开发模式，各131帧，P50均16.7ms、P95=17.5/18.2ms、CLS/long task均0；当前强制减弱P95=18.0ms。初始时延探针重复回调数据剔除，不拿无效时延证明提速；行为测试证明无JS输入等待。CPU/内存/生产负载未验，不宣称永久非退化或投资效果。
-
-**U49 主动审计回执 / 作者 Preflight 与反证**：换G4核不可观测门禁/自锁、scope/时点、双事实源、部分失败/退出顺序、重开幂等、unknown、权限、动态偏好、陈旧指针和测试固化120ms旧控件。所得实缺陷已修复；CSS fallback即时呈现，指令与风险不被动效拖延；Jev辅助评分不当金融概率或独立Review。正常/减少动态、快速反向、迟到/取消/资源清理、嵌套焦点与默认/UTC纳入回归。
-
-Jev baseline/最终复评共两次，previousEvaluation原样传递；正确性7.2→8.5、可靠性7.3→8.3、测试质量7.7→8.5，辅助comparison判improved，无reported regression。兼容等维度适用性变化不当兼容证明；现有跨portal焦点层共享状态的低置信coupling提示不驱动无需求重构。模型版本/tokens/费用未知，研发分数不填股票业务贡献。CI仅PR/合并批触发，账户余额读取403/未知，未启用付费；安装/三job耗时在准确发布回执记录。
+**U49 主动审计回执 / 作者 Preflight**：反证覆盖自锁、scope风险旁路、引用与动作顺序、原子回执/资金、pending与期限、同股去重、未知、失效版本、T+1和恢复；两侧账户/对账闭集已同步。分批本地结果与准确发布事实在本任务回执回填，未完成门禁不称交付。
 
 ## 3. 传播与恢复
 
-总方案、产品闭环、猎场、细功能审计、INDEX、plan-registry、W07与本页同步，无新长期机制/库/调度/模型规则；AGENTS/Skills/Jev蓝图沿原协议无需改。生产TSX76/调度声明31不变。静态列表/不加手势是有据弃权，不以批准范围强造动效；前任务确认框工具限制与研究金融效果不由本项销账。
-
-临时3017/3018/8017服务停止，验收页面/观测器/Next生成文件恢复性移出；所有截图/合成日志和辅助评价仅忽略artifacts。可按本任务提交回退动效层，不回退金融、鉴权与撮合硬门。合并不等生产加载。本轮只完成IMP-054，不自动领取第二业务任务；下次继续重算selector。
-
-本任务销账后2026-09-30 22:14运行selector：static/effective gate/task=null、candidates=[]、conditions=[]、parse_errors=[]；无合法普通门候选。持续/验收及待外部条件仍归原stage，不强造第二业务任务。
+实施方案、猎场、产品、细功能（32声明）、INDEX、plan-registry、W03与本页同步；AGENTS/Skills/Jev/开放世界沿原边界，无新模型/权限/策略准入规则。原影子和用户main数据保留。回退停本scope新动作、保留PaperOrder/失败尝试及历史；不以Git回退撤销已成事实，schema降级须审查保留方案；全库灾备归GOV-013。本轮唯一IMP-053，不自动领取第二主任务，完成后重算selector。

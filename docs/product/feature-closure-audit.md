@@ -316,7 +316,7 @@ X编号仅用于批准来源与设计覆盖，不是任务编号；历史证据�
 
 ## 14. 后台声明的目标消费者
 
-当前 `backend/app/bootstrap/schedulers.py` AST共31条声明（当前静态注册调用；原批准30条为历史口径）；这是注册与设计映射，不是开启/存活/业务进展证明。每条均验原开关、单拥有者、触发/输入、版本/水位、失败/取消/恢复、预算与消费者。后台接管先于退出按钮；无页面进展与GET无副作用另验。
+当前 `backend/app/bootstrap/schedulers.py` AST共32条声明（2026-10-01静态注册调用；原批准30条及09-30的31条为历史口径）；这是注册与设计映射，不是开启/存活/业务进展证明。每条均验原开关、单拥有者、触发/输入、版本/水位、失败/取消/恢复、预算与消费者。后台接管先于退出按钮；无页面进展与GET无副作用另验。
 
 | 声明 | 源行 | 目标消费者 |
 |---|---|---|
@@ -326,17 +326,17 @@ X编号仅用于批准来源与设计覆盖，不是任务编号；历史证据�
 | `quote-poller` | 176 | H01/H03/详情 |
 | `market-snapshot` | 179 | 市场事实消费者 |
 | `picks-autogen` | 190 | H02盘前结果 |
-| `opportunity-evidence` | 206 | H02决定/H05证据 |
+| `opportunity-evidence` | 0 | H02决定/H05证据 |
 | `data-health-sentinel` | 218 | 就地影响/维护 |
 | `pre-limit-radar` | 228 | H02观察/已授权消息 |
 | `leader-research` | 233 | H05持续研究观察，RSH-031拥有；不晋级交易 |
 | `llm-aux-judge` | 240 | 事件辅助解释；仅实际Jev参与才有Jev凭证 |
 | `position-monitor` | 246 | H04风险 |
-| `paper-matcher` | 253 | H04订单/成交 |
-| `alert-quotes-feeder` | 260 | 提醒输入 |
+| `paper-matcher` | 0 | H04订单/成交 |
+| `alert-quotes-feeder` | 0 | 提醒输入 |
 | `alert-engine` | 264 | 共享消息/风险 |
-| `risk-refresher` | 271 | H04/H02约束 |
-| `event-collector` | 296 | H01事件/H02证据 |
+| `risk-refresher` | 0 | H04/H02约束 |
+| `event-collector` | 0 | H01事件/H02证据 |
 | `metric-history-backfill` | 303 | H01历史/研究 |
 | `premarket-brief` | 317 | H02计划/H01上下文 |
 | `picks-watcher` | 333 | H02条件/参考/消息 |
@@ -347,10 +347,11 @@ X编号仅用于批准来源与设计覆盖，不是任务编号；历史证据�
 | `ths-reason-sentinel` | 397 | 事件覆盖/维护 |
 | `sentiment-monitor` | 408 | H01环境 |
 | `picks-shadow` | 419 | H04每日精选影子，非hunting-shadow |
-| `marketdb-sync` | 433 | 历史/H05研究 |
-| `factor-eval` | 451 | 受控研究/H05结果 |
-| `news-flash` | 468 | H01事件 |
-| `llm-gateway-probe` | 479 | 维护健康，不证明业务效果 |
+| `hunting-shadow` | 431 | H04独立猎场成交/H05复盘；默认关闭，IMP-053 |
+| `marketdb-sync` | 440 | 历史/H05研究 |
+| `factor-eval` | 458 | 受控研究/H05结果 |
+| `news-flash` | 475 | H01事件 |
+| `llm-gateway-probe` | 486 | 维护健康，不证明业务效果 |
 
 ## 15. RSH-031 持续研究细功能（2026-09-29）
 
@@ -486,3 +487,17 @@ IMP-019 已取得受控请求/冷启动/事件循环、SQLite锁机制、慢队�
 | 全站加载/空/错/陈旧 | 原状态反馈及减少动态分支 | 本次浏览器读到机会加载/合法空/失败/未知、通知unknown；陈旧及局部失败沿原组件回归，不冒称所有实源分支重抓 |
 
 生产TSX仍76份、调度声明仍31条；新增TS hook有三个消费者，不增加页面/组件族/调度或业务能力。详细比较、帧耗时、强制减弱与窄视口证据界限见产品闭环§12；工程状态仅归W07/IMP-054。IMP-050原确认工具限制与长期研究/金融效果不由本任务销账。
+
+## 20. IMP-053 逐动作与失败分母（2026-10-01）
+
+| 细动作/消费者 | 事实与失败边界 |
+|---|---|
+| 已归档买点→后台领取 | existing daily_picks/buy_point，等待/拒绝/研究对象只保留参考；最新同版、日历会话/ready/区间与风控重检；不依赖通知是否已发送 |
+| 同版下单/并发/崩溃 | SQLite外层事务绑定PaperOrder、资金与hunting_shadow_attempt；重复版本不重下，同日已开仓decision不因价格轮询造新独立机会 |
+| 挂单/超期/退款 | 60秒内同版重检后当前报价撮合；超期取消退款记no_fill，不倒填已封板或历史低点成交 |
+| T+1退出/失败重试 | 已确认后续交易日/会话、原paper硬门；跌停、停牌、未知日历保留未退出；每笔退出回执留痕 |
+| H04机会影子读取 | 原AccountScopePanel；只读GET、独立scope、未启用仍保留历史、加载/失败/空/未成熟/完整结果分层；不展示虚构资本或未成熟胜率 |
+| H05/IMP-020效果证据 | PaperOrder实填价+两侧费用，五版本、attempt/decision分母、完整成熟度；自行重封哈希不等执行事实，existing规则未绑定新实验仍blocked |
+| 迁移/恢复 | 新表及scope长度迁移只作用目标连接；旧main/shadow回执保留，回退代码不删成交事实；全库灾备仍归GOV-013 |
+
+生产TSX仍76份，后台静态声明32条；不是32条正在运行。隔离真撮合与合成UI仅证明工程；生产启用、长期收益、human gold不由本项销账。首片版本、账户/出场协议及未来扩展条件见[猎场§9](hunting-decision-design.md#9-imp-053-首个执行场景与效果证据2026-10-01)。
