@@ -321,3 +321,13 @@ def test_pending_never_fills_mismatched_quote_symbol(setup):
     run(runner)
     assert hs.read_summary(sf)["counts"]["pending"] == 1
     assert hs.read_summary(sf)["fills_total"] == 0
+
+
+def test_unknown_attempt_state_blocks_aggregate_effect_claim(setup):
+    sf, clock, _, runner, _ = setup
+    archive(sf, clock); run(runner)
+    with sf() as db:
+        row = db.scalar(select(Attempt)); row.state = "unknown"; db.commit()
+    out = hs.read_summary(sf)
+    assert out["status"] == "incomplete" and out["net_return_pct"] is None
+    assert any("execution_state_unknown" in issue for issue in out["issues"])

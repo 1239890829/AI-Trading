@@ -324,6 +324,8 @@ def read_summary(sf, day=None):
             fill = entry if entry and entry.scope == SCOPE and entry.symbol == row.symbol and entry.side == "buy" and entry.status == "filled" and _number(entry.filled_price) else None
             closed = exit_order if fill and exit_order and exit_order.scope == SCOPE and exit_order.symbol == row.symbol and exit_order.side == "sell" and exit_order.status == "filled" and exit_order.quantity == fill.quantity and _number(exit_order.filled_price) else None
             net = None
+            if row.state not in {"pending", "filled", "exited", "rejected", "no_fill", "expired"}:
+                issues.append(f"{row.id}:execution_state_unknown")
             if fill and row.state not in {"filled", "exited"}:
                 issues.append(f"{row.id}:fill_state_disagrees_with_order")
             if closed and row.state != "exited":
