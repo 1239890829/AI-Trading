@@ -289,3 +289,37 @@ node scripts/api-sweep.js http://127.0.0.1:8000
 - **LLM 后端（claude_cli）在容器内不可用**（无 claude 二进制与用户凭据）：复盘/摘要自动降级
   rules 规则层（显式标注 degraded），`/api/assistant/chat` 会返回显式错误而非静默失败；
 - `data/parquet/snapshots/` 属本地数据不入库；发现损坏 parquet 手工清理即可（读取侧会自动跳过）。
+
+## 离线备份与隔离恢复
+
+GOV-013 使用 `backend/scripts/recovery_bundle.py`，只在运维命令中运行，不从 GET、网页按钮或调度启动。它不加载应用、凭据或通知渠道。SQLite 使用只读连接和 backup API；清单保留 schema、逐表行数/内容哈希、迁移版本和外键检查。其余文件按字节哈希核对；副本相同不代表行情质量或策略有效。
+
+### 范围与前置
+
+- 停止**所选源的全部写者**，包含后端/调度、DuckDB 同步、文件报告及研究写者；`--quiescent` 是操作者确认，不是程序自动证明。SQLite 单库事务一致性不等于多文件全局事务。文件身份及复制前后哈希检查用于发现变化，不能替代停写。
+- 默认包含源根下 `data/`、`backend/data/` 的当前文件：用户自选/手工流水、各模拟scope、通知状态/意图/尝试、Agent审计/参数/预算/任务、点时研究/报告/标签、水位、DuckDB与Parquet。表级细分以本次manifest和对应ORM/服务为准，不另建事实注册表。
+- 旧 `.bak-` 副本、OS杂物、`.gitkeep/.gitignore`、空的历史 `backend/data/ashare.db` 占位不属于本次当前事实；SQLite WAL/SHM由backup API归并。DuckDB有未checkpoint的WAL时拒绝。应用代码版本单独记录；`.env`、密钥与浏览器私人历史不复制。自定义数据库/数据目录不在这两棵树内时，**该包不覆盖它们**，必须另行制定范围；活动的隔离RSH-031目录不在本次生产数据范围。
+- 8GiB/100000文件上限，SQLite复制120秒上限；软链、源/目标重叠、已存在目标、源变化或清单损坏拒绝。仅失败时清理本命令新建的目标；不修改或删除源。
+
+### 执行与对账
+
+从仓库根运行，目标均为不存在的目录。示例仅表示命令，不自动授予停服务/生产恢复权限：
+
+```bash
+PYTHONPATH=backend backend/.venv/bin/python backend/scripts/recovery_bundle.py backup --source-root . --destination artifacts/backups/recovery-YYYYMMDD --quiescent --code-head FULL_COMMIT_SHA
+PYTHONPATH=backend backend/.venv/bin/python backend/scripts/recovery_bundle.py verify --bundle artifacts/backups/recovery-YYYYMMDD
+PYTHONPATH=backend backend/.venv/bin/python backend/scripts/recovery_bundle.py restore --bundle artifacts/backups/recovery-YYYYMMDD --destination artifacts/restores/recovery-YYYYMMDD
+```
+
+备份manifest出现并通过verify后才接受；被中断的残留目录不是有效备份。清单只保留统计/哈希，但payload可能含私人记录，整个包保持本机私有、不入Git、不外发。操作者只保存必要恢复点；新恢复点验证及保留义务核清后才退出旧副本，不按缓存删除业务备份。
+
+恢复先写 `data/RESTORE_HOLD.json` 和每个SQLite父目录的同名标记，再复制事实。`get_engine()` 在迁移/服务/调度前拒绝带hold的配置库及软链别名，缓存engine也复查；不靠改旧pending/sending为“已发”或“待重试”制造结论。标记不是OS沙箱，显式离线迁移/只读对账可在指定目标连接执行；直接自行构造连接不属于应用启动放行。
+
+1. 在恢复副本核逐表事实、ID/sequence、scope、水位、未处理意图和版本，再按目标连接迁移。新增空表与必要类型演进单独列出，旧事实行数/哈希不丢；复用paper reconcile核资金/订单/持仓，不自动修余额。
+2. 关注/取消关注、已读/清除单调水位、手工修正/删除、分scope撤单、参数生效/回滚用独立文件夹具验证再操作；不得用真实恢复副本制造订单或外发求测试。
+3. 回滚先考虑**旧版本代码配套的完整备份恢复到新目录并继续hold**。禁止强行downgrade以删成交证据；hunting-shadow迁移已有保留计划硬门。Git回退不撤销外部副作用，也不能保留升级后新事实却声称回到旧时点。
+4. 真正恢复运行前，另行获得运行授权，核配置/认证/版本/数据目录、租约代次、任务预算和渠道已受理记录；未知渠道结果保持unknown且停外发，防止旧意图再执行。仅在该对账完成后由操作者明确移除hold，不能把本次“继续”推成生产恢复授权。
+
+本次实测：2026-10-02冻结代码`cc7391009658d64f8046f55be5564776a91a1ec5`，停写检查及本机只读源，11300文件/4649342884字节；backup27.99秒，完整verify后的restore复制/核对14.01秒。45表原事实哈希相同；隔离迁移a4e8c2d9f6b1→e2c6a8f4b9d1后51表，原业务事实不变、外键违规0，paper reconcile异常0。11173份Parquet元数据可读，DuckDB三表可读。watchlist旧group_name可空/默认值、sentiment_history旧server default与新库DDL不同：现有值无NULL、写入消费者显式提供或默认处理，保留兼容差异，不为DDL文本一致盲改生产。原库/日历及独立研究进程未改。
+
+以上时间是**本机该体量离线演练**，restore时间不含之前verify、审批和业务复核；生产RPO/RTO、外部渠道对账与实际重启仍由OPS-003的授权窗口取得，不写成0或保证值。完整私有manifest/恢复/质量证据只存忽略的artifacts，公开材料不含持仓/消息正文。

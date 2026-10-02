@@ -276,3 +276,37 @@ def test_restored_business_consumers_can_continue_without_scope_or_watermark_los
         engine.dispose()
         from app.picks import style_router
         style_router.set_override_provider(None)
+
+
+def test_preupgrade_bundle_rolls_back_version_without_losing_old_facts(tmp_path):
+    from app.core.migrations import run_migrations, BACKEND_DIR
+    from alembic.config import Config
+    from alembic import command
+    from sqlalchemy.orm import sessionmaker
+    from app.repositories.watchlist_repo import WatchlistRepository
+    source = tmp_path / 'source'
+    (source / 'data').mkdir(parents=True)
+    engine = create_engine('sqlite:///' + str(source / 'data/ashare.db'))
+    cfg = Config(str(BACKEND_DIR / 'alembic.ini'))
+    cfg.set_main_option('script_location', str(BACKEND_DIR / 'migrations'))
+    cfg.attributes['configure_logger'] = False
+    with engine.begin() as connection:
+        cfg.attributes['connection'] = connection
+        command.upgrade(cfg, 'a4e8c2d9f6b1')
+    WatchlistRepository(sessionmaker(bind=engine)).add('600127')
+    old = sqlite_inventory(source / 'data/ashare.db')
+    engine.dispose()
+    backup(source, tmp_path / 'before-upgrade', quiescent=True, code_head='old')
+    engine = create_engine('sqlite:///' + str(source / 'data/ashare.db'))
+    assert run_migrations(engine) == 'upgraded'
+    with engine.begin() as connection:
+        cfg.attributes['connection'] = connection
+        with pytest.raises(RuntimeError, match='preservation plan'):
+            command.downgrade(cfg, 'a4e8c2d9f6b1')
+    engine.dispose()
+    upgraded = sqlite_inventory(source / 'data/ashare.db')
+    assert upgraded['revision'] != old['revision']
+    assert upgraded['tables']['watchlist']['sha256'] == old['tables']['watchlist']['sha256']
+    restore(tmp_path / 'before-upgrade', tmp_path / 'rollback')
+    assert sqlite_inventory(tmp_path / 'rollback/data/ashare.db') == old
+    assert (tmp_path / 'rollback/data' / HOLD).exists()
