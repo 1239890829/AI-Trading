@@ -310,3 +310,45 @@ def test_preupgrade_bundle_rolls_back_version_without_losing_old_facts(tmp_path)
     restore(tmp_path / 'before-upgrade', tmp_path / 'rollback')
     assert sqlite_inventory(tmp_path / 'rollback/data/ashare.db') == old
     assert (tmp_path / 'rollback/data' / HOLD).exists()
+
+
+def test_restored_t1_freeze_waits_through_holiday_then_settles_once(tmp_path, monkeypatch):
+    import asyncio
+    import app.paper.engine as pe
+    from sqlalchemy.orm import sessionmaker
+    from app.core.migrations import run_migrations
+    from app.models.paper import PaperPosition
+    source = tmp_path / 'source'
+    (source / 'data').mkdir(parents=True)
+    engine = create_engine('sqlite:///' + str(source / 'data/ashare.db'))
+    run_migrations(engine)
+    sf = sessionmaker(bind=engine)
+    with sf() as s:
+        for scope in ('main', 'shadow'):
+            s.add(PaperPosition(scope=scope, symbol='600127', quantity=100, frozen_today=100,
+                                buy_date='20260930', cost_price=10))
+        s.commit()
+    engine.dispose()
+    backup(source, tmp_path / 'bundle', quiescent=True, code_head='x')
+    restore(tmp_path / 'bundle', tmp_path / 'restored')
+    engine = create_engine('sqlite:///' + str(tmp_path / 'restored/data/ashare.db'))
+    sf = sessionmaker(bind=engine)
+    async def days():
+        return ['20260930', '20261008']
+    async def no_quote(_):
+        raise AssertionError('settlement must not request market data')
+    paper = pe.PaperTradingEngine(sf, no_quote, days, scope='main')
+    try:
+        monkeypatch.setattr(pe, '_today', lambda: '20261001')
+        assert asyncio.run(paper.settle_t1()) == 0
+        with sf() as s:
+            assert s.query(PaperPosition).filter_by(scope='main').one().available == 0
+        monkeypatch.setattr(pe, '_today', lambda: '20261008')
+        assert asyncio.run(paper.settle_t1()) == 1
+        assert asyncio.run(paper.settle_t1()) == 0
+        with sf() as s:
+            assert s.query(PaperPosition).filter_by(scope='main').one().available == 100
+            assert s.query(PaperPosition).filter_by(scope='shadow').one().available == 0
+        assert (tmp_path / 'restored/data' / HOLD).exists()
+    finally:
+        engine.dispose()
