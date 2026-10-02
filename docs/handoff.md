@@ -1,29 +1,31 @@
-# 当前交接：GOV-013离线恢复验收
+# 当前交接：GOV-021四层验收首轮
 
-> 唯一状态在[W09/GOV-013](stages/w09-acceptance.md#gov-013)；命令、范围及hold合同见[离线恢复](system/deployment.md#离线备份与隔离恢复)，细功能见feature-closure-audit §16。总方案v9.13/U01–U55；Jev入口ai/jev-integration.md；开放世界入口ai/continuous-evolution.md。前轮RSH-031/PR #199已合并为`800106157955a0a36b91494f5f5394e2c5cf1aa4`，活动隔离副本固定`2038ff8e28d00599b44022c03da266812ef812cf`，不重复开发或清掉运行资产。
+> 唯一状态在[W09/GOV-021](stages/w09-acceptance.md#gov-021)；本轮55项要求/六业务闭环证据与最短继续路径见[细功能§22](product/feature-closure-audit.md#22-gov-021四层验收首轮2026-10-02)。总方案v9.13/U01–U55；Jev入口ai/jev-integration.md；开放世界入口ai/continuous-evolution.md。上一轮GOV-013/PR #200合并为`19b5487e4c025693ea48e03ed63c0d8aa9104fde`；恢复合同见system/deployment.md，恢复细功能已纠正为§21，原IMP-007仍§16。
 
 ## 1. 现场、模式与范围
 
-2026-10-02用户询问剩余任务后，在明确建议GOV-013隔离备份/恢复/对账后要求继续。起点干净master`800106157955a0a36b91494f5f5394e2c5cf1aa4`，fetch后相同；selector普通门仍为空。本轮只针对已交付存储/迁移/业务消费者做G5验收及必要恢复安全修补，不自动跳到GX或第二业务任务。
+2026-10-02用户继续，起点干净master`19b5487e4c025693ea48e03ed63c0d8aa9104fde`，fetch一致。runtime selector普通G0–G4可行动集为空，无共享PR未收口；OPS-003真实运行授权/窗口/输入尚未就绪。本轮只进入G5，对已实现/已发布成果做GOV-021分层验收及同根文档传播纠错，不把G5/GX放入普通fallback，不新建跨门例外或工程主任务。
 
-**U50 降级授权回执**：2026-09-24本机Codex DEGRADED_FULL_CONTROL持续有效，直到撤销。作者自审不冒充独立Review；准确HEAD DegradedRelease、完整本地门禁/required CI/release_check/post-merge/清理不降低。部署仍搁置，无生产升级/恢复启动/通知外发、真实券商、策略权重或付费准入。
+**U50 降级授权回执**：2026-09-24本机Codex DEGRADED_FULL_CONTROL持续有效，直到撤销。作者自审不冒充独立Review；准确HEAD DegradedRelease、本地适用门禁/required CI/release_check/post-merge/清理不降低。部署仍搁置，无生产启服/升级/通知、真实券商、付费数据、模型阈值或策略权重晋级。
 
-分支`codex/gov013-recovery-audit`；核心恢复代码`cc7391009658d64f8046f55be5564776a91a1ec5`，最终代码/测试`32b85d615cebce93b14773d5e9c8b228c8aede6e`补原版本恢复、downgrade拒绝及节假日T+1反例，最终发布以PR准确HEAD为准。生产数据只读；真实恢复资产与私有manifest/逐表hash/对账留忽略的artifacts/runs/gov013-recovery-20261002，不向Jev/GitHub外发。RSH-031仍是独立有限采样进程，deadline 2026-10-22 16:00+08:00；本轮不改变它的待条件状态或补造交易样本。
+分支`codex/gov021-layered-acceptance`，纯文档7文件；未更改应用/测试/运行配置。冻结55要求、50子项、18域、16族、76生产TSX与32声明，用Git源码集合和AST两种真实注册调用核对；前次狭窄抽取27遗漏5个add_periodic，已纠正，不把抽取工具漏项当生产缺陷。结构归属无遗漏不表示每按钮/API/后台任务实源全通过。
 
-## 2. 实施与证据
+## 2. 首轮裁决与运行边界
 
-离线CLI只处理明示两棵数据树，SQLite backup归并WAL，其余文件hash；停写确认、源变化、8GiB/100000文件/SQLite120秒限额、软链/路径逃逸、目标覆盖/重叠、损坏/缺项/重复项拒绝。恢复hold先于复制，get_engine在迁移/服务/调度前拒绝标记、缓存engine及DB软链别名；显式离线目标迁移不是应用放行。保留旧sending/pending及lease，不假定渠道已受理，不自动重放旧任务。
+细功能§22逐项保留工程/运行/研究/用户价值的证据身份和未知；六闭环各有真实对象/owner/失败与恢复证据。继承#196–#200准确版本证据，不重复构建、旧价格扫描或作者预标来制造进展。WATCH的保存筛选/独立导航未冒充已实现；机会影子已由#198工程承接但运行未启用，参考观察不算fill/收益。
 
-真实11300文件/4649342884字节，backup27.99秒，verify后的restore复制/核对14.01秒。恢复前45表schema/事实一致，隔离升级a4e8c2d9f6b1→e2c6a8f4b9d1后51表；原业务行hash不变、外键违规0、paper异常0，11173份Parquet元数据及DuckDB三表可读。watchlist旧nullable/default和sentiment_history旧server default为兼容DDL差异，当前无NULL/范围违规，消费者显式赋值/默认处理；不为DDL相同改生产。原库/日历未写，副本未启动服务。生产RPO/RTO与渠道恢复归OPS-003，不以14.01秒替代端到端恢复时间。
+发现并修正：GOV-013恢复验收误用重复§16→§21；总方案U43三处及Jev§8.2与用户9月29日首板后及时跟随目标不一致，统一传播；当前声明仍32，历史73/30及旧31保留时点身份，现役总方案当前指针改32；五个周期任务源行0修为实际行。没有改变研究阈值、模型能力、业务身份、准入或发布规则。
 
-新增持久文件测试覆盖真实消费者：自选增删、通知水位不回退、手工流水修正/删除、main/shadow/hunting_shadow隔离撤单及账本对账、参数生效/回滚、原版本备份恢复、保留计划downgrade硬拒。首次新增测试调用save_state入参顺序错误；后续误用被硬门禁止的downgrade造旧库，再因原始SQL漏ORM默认quality失败，均按真实接口/由旧revision正向建夹具修正，未放宽断言或迁移保护。
+最近工程完整实测来自#200代码`32b85d615cebce93b14773d5e9c8b228c8aede6e`：后端4619 passed/83 skipped、前端767默认/UTC及类型/lint/build通过，准确PR HEAD `8973e37895cfd6d4a90bc4865194ca38714ac5d5`/合并后master三job通过。本轮不把它写成重新实测；本轮文档/账本/发布/selector/卫生守卫240 passed（2.69秒），doc-health/public scan/workspace hygiene及精确补丁检查通过。首次守卫238通过/2失败，原因是handoff缺现役要求的“U49 主动审计回执”明确标识；补正后原断言全通过，未改测试。本轮无非简单代码切片，不触发Jev代码复评分；新的PR/master仍验三job，结果见准确发布回执。
 
-最终干净Git检出32b85d6后端4619 passed/83 skipped（130.71s），pyflakes通过；新增19项针对性通过。83比前轮82多一项core/recovery装配/其它层import-lint参数跳过，不算覆盖增强。前端84文件767项默认/UTC通过（45.69/45.74s）、tsc/eslint及Next16.3.3生产构建通过，next-env已恢复；最终协调/发布/selector/卫生文档守卫233项通过，doc-health/public scan/workspace hygiene通过。前两次完整代码批4617/4618通过用于新增回滚/T+1真实缺口，最终结果不复用旧计数。Jev baseline及两次携带previousEvaluation的复评：正确性7.5→8.0→8.2、测试7.8→8.6→8.7、可靠性7.5→8.3→8.4，未reported regression；模型版本/tokens/费用未知，分数不替代作者反证、独立审核或金融效果。CI余额API403、未知，不启用付费，仅合批一次PR及必要master验证。
+RSH-031固定活动副本`2038ff8e28d00599b44022c03da266812ef812cf`、PID81481，2026-10-02 22:00:55+08健康为closed_or_outside_session/inserted=0，无有效前向观察。deadline 10月22日16:00+08/512MiB先到即停，活动目录`artifacts/runs/rsh031-isolated-20261002/runtime-checkout/artifacts/forward/`保留。10月1–7日休市，首个交易日10月8日；D1/D3/D5按实际获得的来源与日历成熟，未到期pending、缺失unknown不算零收益。无需再启动副本或重复实现。公司Top20新闻范围、公共主题/完整首板池/同刻猎场基线缺口仍研究页§39.4，不宣称三路径全域验证。
 
-## 3. 作者反证、传播与收尾
+## 3. 作者反证、传播与下一步
 
-**U49 主动审计回执 / 作者Preflight与反证**：核旧schema真实版本而非假设损坏、全表/文件分母、单库事务与全局停写差异、WAL/DuckDB、未知外部结果与租约、恢复先hold、缓存/别名/路径、部分失败/覆盖、各scope/水位/操作恢复、保留计划回滚、原源无写和私人记录边界。现有get_engine guard不替代OS隔离；手工直接构造连接仅用于获准离线验收。自审不是独立Review。
+**U49 主动审计回执 / 作者Preflight与反证**：核不可能目标、需求遗漏/重复、结构抽取边界、重复节号/来源行、静态声明与运行存活、point-in-time/参考/成交身份、版本加载与历史CI、未知/弃权/失败分母、WATCH与工程继承、独立gold与作者自评、scope/GET/预算/恢复hold及部署权限。自审不声称全仓无缺陷或独立Review；本轮不开展新的真实外发/计费/生产场景。
 
-按ashare-task-handoff原位回填W09、部署合同、细功能§16、INDEX和本页；总方案/plan-registry/AGENTS/协作/Skills/产品导航/猎场/Jev/开放世界不适用长期设计变更：本项落实既有备份/恢复/停外发合同，不改模型、业务语义、角色、调度或交易准入。发布前本地门禁、准确diff和三job CI以本轮回执记录；无付费启用。
+传播核对：已更新实施方案、Jev§8.2、plan-registry、INDEX、细功能§21–22、W09、本页；研究/W04/猎场/产品已符合9月29日目标，AGENTS/协作/Skills/开放世界规则未变，故无需修改；历史研究/旧审核不改写。没有第二账本、机制注册表或自动化。
 
-收尾保留紧凑日志/XML/manifest/hash和一份已验证私有备份；恢复测试副本、干净Git检出、pytest basetemp/构建缓存核无活动/唯一事实后清理。备份不按缓存删除，旧生产数据和依赖不动；活动RSH-031副本保留。后续继续先重算selector；本轮不自动领取OPS-003或新研究任务。
+工程映射首轮可收口，四层整体仍须真实输入：OPS-003明示运行环境/窗口/输入；RSH-031近期真实样本和成熟短窗；RSH-030/027独立盲标签/真实问题；已有12用户任务补耗时/误扰/漏检/注意力成本对照。仅有新证据才重核对应行，稳定/休市不重复研究或夹具。后续继续先重算selector；不把普通队列为空误写全系统价值已验证，也不自行恢复搁置部署。
+
+收尾只保留本轮结构摘要、守卫/CI/发布紧凑证据；已结束pytest临时目录可清理。原生产资产、GOV-013唯一验证备份、依赖及活动RSH-031副本不动。
