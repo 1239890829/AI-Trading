@@ -46,7 +46,7 @@
 | **MD-07** | `strategy/risk-management.md` | L2 | 风控 | 风险拦截位置与规则。⚠️ 旧稿曾把「预检」写成「强制拦截」（**文档高估**），已更正 |
 | **FN-01** | `strategy/strategy-registry.md` | L2 | 登记册 | **策略级**生命周期（核心辨析：**因子 ≠ 策略**） |
 | **FN-02** | `system/architecture.md` | L2 | 架构 | 数据流与分层设计 |
-| **FN-03** | `system/deployment.md` | L2 | 部署 | 部署与运维（3000/8000纪律、离线备份/恢复hold） |
+| **FN-03** | `system/deployment.md` | L2 | 部署 | 部署与运维（3000/8000纪律、离线备份/恢复hold、OPS-003实源隔离窗口与未验边界） |
 | **FN-04** | `system/api.md` | L2 | API | API 契约（⚠️ 端点计数滞后，**以 `/openapi.json` 为权威**） |
 | **FN-05** | `system/websocket.md` | L2 | WS | WS 协议（**必须直连后端，不走 Next 代理**） |
 | **FN-06** | `system/mcp.md` | L2 | MCP | MCP 工具体系清单 |
