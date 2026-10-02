@@ -8,7 +8,7 @@
 
 **U50 降级授权回执**：2026-09-24本机Codex DEGRADED_FULL_CONTROL持续有效，直到撤销。作者自审不冒充独立Review；准确HEAD DegradedRelease、完整本地门禁/required CI/release_check/post-merge/清理不降低。部署仍搁置，无生产升级/恢复启动/通知外发、真实券商、策略权重或付费准入。
 
-分支`codex/gov013-recovery-audit`；核心恢复代码`cc7391009658d64f8046f55be5564776a91a1ec5`，后续补原版本恢复与downgrade拒绝反例，最终发布以PR准确HEAD为准。生产数据只读；真实恢复资产与私有manifest/逐表hash/对账留忽略的artifacts/runs/gov013-recovery-20261002，不向Jev/GitHub外发。RSH-031仍是独立有限采样进程，deadline 2026-10-22 16:00+08:00；本轮不改变它的待条件状态或补造交易样本。
+分支`codex/gov013-recovery-audit`；核心恢复代码`cc7391009658d64f8046f55be5564776a91a1ec5`，最终代码/测试`32b85d615cebce93b14773d5e9c8b228c8aede6e`补原版本恢复、downgrade拒绝及节假日T+1反例，最终发布以PR准确HEAD为准。生产数据只读；真实恢复资产与私有manifest/逐表hash/对账留忽略的artifacts/runs/gov013-recovery-20261002，不向Jev/GitHub外发。RSH-031仍是独立有限采样进程，deadline 2026-10-22 16:00+08:00；本轮不改变它的待条件状态或补造交易样本。
 
 ## 2. 实施与证据
 
@@ -17,6 +17,8 @@
 真实11300文件/4649342884字节，backup27.99秒，verify后的restore复制/核对14.01秒。恢复前45表schema/事实一致，隔离升级a4e8c2d9f6b1→e2c6a8f4b9d1后51表；原业务行hash不变、外键违规0、paper异常0，11173份Parquet元数据及DuckDB三表可读。watchlist旧nullable/default和sentiment_history旧server default为兼容DDL差异，当前无NULL/范围违规，消费者显式赋值/默认处理；不为DDL相同改生产。原库/日历未写，副本未启动服务。生产RPO/RTO与渠道恢复归OPS-003，不以14.01秒替代端到端恢复时间。
 
 新增持久文件测试覆盖真实消费者：自选增删、通知水位不回退、手工流水修正/删除、main/shadow/hunting_shadow隔离撤单及账本对账、参数生效/回滚、原版本备份恢复、保留计划downgrade硬拒。首次新增测试调用save_state入参顺序错误；后续误用被硬门禁止的downgrade造旧库，再因原始SQL漏ORM默认quality失败，均按真实接口/由旧revision正向建夹具修正，未放宽断言或迁移保护。
+
+最终干净Git检出32b85d6后端4619 passed/83 skipped（130.71s），pyflakes通过；新增19项针对性通过。83比前轮82多一项core/recovery装配/其它层import-lint参数跳过，不算覆盖增强。前端84文件767项默认/UTC通过（45.69/45.74s）、tsc/eslint及Next16.3.3生产构建通过，next-env已恢复；最终协调/发布/selector/卫生文档守卫233项通过，doc-health/public scan/workspace hygiene通过。前两次完整代码批4617/4618通过用于新增回滚/T+1真实缺口，最终结果不复用旧计数。Jev baseline及两次携带previousEvaluation的复评：正确性7.5→8.0→8.2、测试7.8→8.6→8.7、可靠性7.5→8.3→8.4，未reported regression；模型版本/tokens/费用未知，分数不替代作者反证、独立审核或金融效果。CI余额API403、未知，不启用付费，仅合批一次PR及必要master验证。
 
 ## 3. 作者反证、传播与收尾
 
