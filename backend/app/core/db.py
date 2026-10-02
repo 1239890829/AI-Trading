@@ -6,6 +6,7 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+from sqlalchemy.engine import make_url
 
 from app.core.config import settings
 
@@ -41,6 +42,16 @@ def _migrate(engine):
 
 def get_engine():
     global _engine
+    # Restored audit/notification/task history cannot safely resume automatically.
+    # Check the effective database even when the engine has already been cached.
+    url = _engine.url if _engine is not None else make_url(settings.database_url)
+    if url.get_backend_name() == "sqlite" and url.database not in {None, ":memory:"}:
+        from app.core.recovery import HOLD
+
+        path = Path(url.database).absolute()
+        markers = {path.parent / HOLD, path.resolve().parent / HOLD}
+        if any(marker.exists() or marker.is_symlink() for marker in markers):
+            raise RuntimeError("restored database is on hold pending operator reconciliation")
     if _engine is None:
         url = settings.database_url
         kwargs: dict = {}
