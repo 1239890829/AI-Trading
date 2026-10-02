@@ -74,6 +74,7 @@ async def company_news(rows: list[dict], provider, store) -> dict:
                       key=lambda r: (-r["change_pct"], r["symbol"]))[:20]
     fetched = created = 0
     errors = []
+    undated = []
     for row in selected:
         try:
             items = await provider.get_news(row["symbol"], 5)
@@ -89,6 +90,11 @@ async def company_news(rows: list[dict], provider, store) -> dict:
                     published = datetime.fromisoformat(str(item.get("date")))
                 except (ValueError, TypeError):
                     published = None
+                if published is None:
+                    undated.append({"symbol": row["symbol"], "title": title,
+                                    "source": item.get("source"), "url": item.get("url"),
+                                    "source_date": item.get("date"), "reason": "publication_time_unknown"})
+                    continue  # never use receipt time as a fresh publication
                 if published and published.tzinfo:
                     published = published.astimezone(BJ_TZ).replace(tzinfo=None)
                 _, is_new = store.register(
@@ -103,7 +109,7 @@ async def company_news(rows: list[dict], provider, store) -> dict:
         except Exception as exc:
             errors.append({"symbol": row["symbol"], "error": type(exc).__name__})
     return {"symbols": len(selected), "fetched": fetched, "created": created,
-            "errors": errors, "scope": "price_top20_company_headlines",
+            "errors": errors, "undated_news": undated, "scope": "price_top20_company_headlines",
             "public_theme_linkage": "unknown"}
 
 

@@ -99,12 +99,14 @@ def test_search_hit_not_issuer_evidence_and_news_failure_is_visible(tmp_path):
     Base.metadata.create_all(engine)
     sf = sessionmaker(engine, expire_on_commit=False)
     provider = NS(get_news=AsyncMock(side_effect=[
-        [{"title": "另一家公司公布重大资产收购事项", "date": "2026-10-08 09:00:00"}],
+        [{"title": "另一家公司公布重大资产收购事项", "date": "2026-10-08 09:00:00"},
+         {"title": "金健米业公布重大资产收购事项", "date": "unknown"}],
         RuntimeError("source unavailable")]))
     result = asyncio.run(runtime.company_news([
         {"symbol": "600127", "name": "金健米业", "change_pct": 6},
         {"symbol": "600825", "name": "新华传媒", "change_pct": 5}], provider, EventStore(sf)))
     assert result["created"] == 1 and len(result["errors"]) == 1
+    assert result["undated_news"][0]["reason"] == "publication_time_unknown"
     assert result["public_theme_linkage"] == "unknown"
     with sf() as db:
         row = db.scalar(select(EventCard))
