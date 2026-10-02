@@ -143,3 +143,21 @@ def test_health_atomic_write_rejects_symlink(tmp_path):
     with pytest.raises(ValueError):
         runtime.write_json(link, {"state": "ready"})
     assert target.read_text() == "original"
+
+
+def test_same_joint_headline_is_not_a_source_revision_for_each_search(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'events.db'}")
+    Base.metadata.create_all(engine)
+    sf = sessionmaker(engine, expire_on_commit=False)
+    item = {"title": "金健米业与新华传媒签订合作协议", "date": "2026-10-08 09:00:00",
+            "source_item_id": "joint-event"}
+    provider = NS(get_news=AsyncMock(return_value=[item]))
+    result = asyncio.run(runtime.company_news([
+        {"symbol": "600127", "name": "金健米业", "change_pct": 6},
+        {"symbol": "600825", "name": "新华传媒", "change_pct": 5}], provider, EventStore(sf)))
+    assert result["created"] == 1 and not result["errors"]
+    with sf() as db:
+        row = db.scalar(select(EventCard))
+        assert row.revision_pending_at is None
+        assert row.source_symbol is None
+    engine.dispose()

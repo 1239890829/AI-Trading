@@ -9,6 +9,7 @@ import argparse
 import asyncio
 import fcntl
 import json
+import re
 import signal
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -83,6 +84,8 @@ async def company_news(rows: list[dict], provider, store) -> dict:
     errors = []
     undated = []
     limiter = asyncio.Semaphore(4)
+    issuers = [(r["symbol"], re.compile(r"(?<!\d)" + re.escape(r["symbol"]) + r"(?!\d)"),
+                "".join(str(r.get("name") or "").split())) for r in rows]
 
     async def fetch(row):
         async with limiter:
@@ -98,8 +101,11 @@ async def company_news(rows: list[dict], provider, store) -> dict:
                 if len(title) < 8:
                     continue
                 fetched += 1
-                name = str(row.get("name") or "").strip()
-                direct = row["symbol"] in title or (len(name) >= 3 and name in title)
+                headline = "".join(title.split())
+                # Derive the same issuer set from the full public quote universe,
+                # not from the search query: joint headlines are not revisions.
+                direct_symbols = sorted({symbol for symbol, pattern, name in issuers
+                                         if pattern.search(headline) or (len(name) >= 3 and name in headline)})
                 # Search hits alone never establish an issuer relationship.
                 try:
                     published = datetime.fromisoformat(str(item.get("date")))
@@ -117,8 +123,8 @@ async def company_news(rows: list[dict], provider, store) -> dict:
                     url=item.get("url"), summary=item.get("summary"),
                     published_at=published, source_published_at=published,
                     source_item_id=item.get("source_item_id"),
-                    source_symbol=row["symbol"] if direct else None,
-                    source_symbols=[row["symbol"]] if direct else [], theme_names=[],
+                    source_symbol=direct_symbols[0] if len(direct_symbols) == 1 else None,
+                    source_symbols=direct_symbols, theme_names=[],
                 )
                 created += int(is_new)
         except Exception as exc:
