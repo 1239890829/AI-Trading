@@ -13,7 +13,7 @@ from app.core.bjtime import BJ_TZ
 from app.models.watchlist import Base
 from app.models.leader_research import LeaderResearchObservation as Observation
 from app.events.store import EventStore
-from app.models.event import EventCard
+from app.models.event import EventCard, EventObservation
 from scripts import rsh031_isolated_runtime as runtime
 
 
@@ -159,5 +159,7 @@ def test_same_joint_headline_is_not_a_source_revision_for_each_search(tmp_path):
     with sf() as db:
         row = db.scalar(select(EventCard))
         assert row.revision_pending_at is None
-        assert row.source_symbol is None
+        observation = db.scalar(select(EventObservation))
+        assert json.loads(observation.source_symbols_json) == ["600127", "600825"]
+        assert db.scalar(select(func.count()).select_from(EventObservation)) == 1
     engine.dispose()
