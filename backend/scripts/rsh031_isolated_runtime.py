@@ -20,8 +20,6 @@ from app.core.bjtime import BJ_TZ, beijing_now
 from app.data_providers.eastmoney import EastmoneyProvider
 from app.events.store import EventStore
 from app.models.watchlist import Base
-from app.models.leader_research import LeaderResearchObservation, LeaderResearchSession  # noqa: F401 table registration
-from app.models.theme_catalog import Theme, ThemeMember, ThemeOverride  # noqa: F401 table registration
 from app.research.leader_collector import load_evidence
 from app.research.leader_followthrough import capture, summary
 from app.services.snapshot_service import MarketSnapshotService
