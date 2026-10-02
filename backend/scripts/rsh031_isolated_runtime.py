@@ -66,6 +66,13 @@ def write_json(path: Path, value: dict) -> None:
     temporary.replace(path)
 
 
+def idle_delay(now: datetime, days: list[date]) -> float:
+    now = now.astimezone(BJ_TZ)
+    openings = (datetime.combine(d, t, BJ_TZ) for d in days if d >= now.date()
+                for t in (time(9, 30), time(13), time(15, 5)))
+    return min([600.0] + [(d - now).total_seconds() for d in openings if d > now])
+
+
 async def company_news(rows: list[dict], provider, store) -> dict:
     # Price-led bounded coverage, explicitly not all-market news discovery.
     selected = sorted((r for r in rows if r.get("change_pct") is not None
@@ -75,9 +82,17 @@ async def company_news(rows: list[dict], provider, store) -> dict:
     fetched = created = 0
     errors = []
     undated = []
-    for row in selected:
+    limiter = asyncio.Semaphore(4)
+
+    async def fetch(row):
+        async with limiter:
+            return await provider.get_news(row["symbol"], 5)
+
+    responses = await asyncio.gather(*(fetch(row) for row in selected), return_exceptions=True)
+    for row, items in zip(selected, responses):
         try:
-            items = await provider.get_news(row["symbol"], 5)
+            if isinstance(items, BaseException):
+                raise items
             for item in items[:5]:
                 title = str(item.get("title") or "").strip()
                 if len(title) < 8:
@@ -180,8 +195,9 @@ async def run(output: Path, calendar_path: Path, until: datetime, once: bool):
                 if once:
                     break
                 # No market requests during closed sessions. Bounded disk heartbeat.
-                await wait_or_stop(stop, 600 if receipt["state"] == "closed_or_outside_session" else
-                                   900 if receipt["state"] == "error" else 60)
+                elapsed = asyncio.get_running_loop().time() - started
+                await wait_or_stop(stop, idle_delay(beijing_now(), days) if receipt["state"] == "closed_or_outside_session" else
+                                   900 if receipt["state"] == "error" else max(1, 60 - elapsed))
             if not once:
                 reason = "operator_stop" if stop.is_set() or (output / "STOP").exists() else reason
                 write_json(output / "health.json", {"state": "stopped", "reason": reason,

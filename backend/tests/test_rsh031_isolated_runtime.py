@@ -61,6 +61,13 @@ def test_closed_tick_never_fetches_or_writes(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
+def test_closed_heartbeat_wakes_at_open_instead_of_ten_minutes_late():
+    days = [date(2026, 10, 8)]
+    assert runtime.idle_delay(datetime(2026, 10, 8, 9, 29, 50, tzinfo=BJ_TZ), days) == 10
+    assert runtime.idle_delay(datetime(2026, 10, 8, 12, 59, 45, tzinfo=BJ_TZ), days) == 15
+    assert runtime.idle_delay(datetime(2026, 10, 2, 10, tzinfo=BJ_TZ), days) == 600
+
+
 def test_live_tick_records_real_consumer_without_news_required(tmp_path, monkeypatch):
     now = datetime(2026, 10, 8, 10, tzinfo=BJ_TZ)
     monkeypatch.setattr(runtime, "beijing_now", lambda: now)
