@@ -141,7 +141,7 @@ export function ParamsTab() {
 
       {/* 变更存活率（P1-15）：数字 + **样本是否够用**一起展示。
           只给一个"存活率 100%"会把"只有 1 条变更"读成"策略很稳"。 */}
-      <section className="shrink-0 rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+      <section className="ui-card shrink-0 rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
           <span className="font-medium text-zinc-700 dark:text-zinc-200">变更存活率</span>
           {survival === undefined ? (
@@ -179,7 +179,7 @@ export function ParamsTab() {
       </section>
 
       {/* 参数清单 */}
-      <section className="shrink-0 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+      <section className="ui-card shrink-0 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-xs font-medium text-zinc-700 dark:text-zinc-200">参数白名单（生效值：运行时覆盖 &gt; 静态配置）</h3>
           <span className="text-[10px] text-zinc-600 dark:text-zinc-400">改参数免重启 · 全程审计留痕</span>
@@ -255,7 +255,7 @@ export function ParamsTab() {
 
       {/* 变更单历史：整页已由根容器滚动，这里按内容高排布（原 flex-1 会在
           前两段撑高时被压到只剩边框高度——实测 26px vs 内容 154px）。 */}
-      <section className="shrink-0 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+      <section className="ui-card shrink-0 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
         <h3 className="mb-2 text-xs font-medium text-zinc-700 dark:text-zinc-200">变更单历史（应用/回滚均留审计）</h3>
         {changes === undefined ? (
           <div className="h-10 w-full animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />

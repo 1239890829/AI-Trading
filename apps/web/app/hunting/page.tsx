@@ -509,7 +509,7 @@ function HuntingInner() {
                 盘前简报读取失败，当前无法确认是否已生成。请刷新重试；不要把读取失败视为今日无简报。
               </div>
             ) : briefMissing ? (
-              <div className="rounded-xl border border-zinc-200 p-6 text-center text-sm text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
+              <div className="ui-card rounded-xl border border-zinc-200 p-6 text-center text-sm text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
                 今日尚无盘前简报：可在系统维护核调度与受控生成；自动生产取决于服务和开关。
                 <br />
                 简报是盘中跟踪与盘后对照的唯一事实源，没有它 watcher 会空转。
@@ -559,7 +559,7 @@ function HuntingInner() {
                   {pending && alerts.length === 0 ? (
                     <CardListSkeleton count={1} />
                   ) : alerts.length === 0 ? (
-                    <div className="rounded-xl border border-zinc-200 p-4 text-xs text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
+                    <div className="ui-card rounded-xl border border-zinc-200 p-4 text-xs text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
                       暂无提醒。确认条件五项全过才触发（量比数据源缺 → 会压档）；
                       证伪任一触发即推送并当日静默。
                     </div>
@@ -596,7 +596,7 @@ function HuntingInner() {
               {pending && reviewed.length === 0 ? (
                 <TableSkeleton rows={3} />
               ) : reviewed.length === 0 ? (
-                <div className="rounded-xl border border-zinc-200 p-4 text-xs text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
+                <div className="ui-card rounded-xl border border-zinc-200 p-4 text-xs text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
                   今日尚未对照。请在系统维护核对盘后调度（收盘后才有意义）。
                 </div>
               ) : (
@@ -634,7 +634,7 @@ function HuntingInner() {
               {reviews.length > 0 && <DailyReviews reviews={reviews} />}
               {history.length > 0 && <HistoryList history={history} />}
               {reviews.length === 0 && history.length === 0 && (
-                <div className="rounded-xl border border-zinc-200 p-4 text-xs text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
+                <div className="ui-card rounded-xl border border-zinc-200 p-4 text-xs text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
                   暂无复盘记录。可在系统维护对已有组合生成归因。
                 </div>
               )}

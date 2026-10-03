@@ -14,11 +14,11 @@ export default function GlobalError({
 }) {
   return (
     <html lang="zh-CN">
-      <body style={{ background: "#09090b", color: "#e4e4e7", fontFamily: "system-ui, sans-serif" }}>
-        <main style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center" }}>
-          <div style={{ maxWidth: 420, textAlign: "center", padding: 24 }}>
+      <body style={{ background: "#0b121b", color: "#edf4fc", fontFamily: "system-ui, sans-serif" }}>
+        <main style={{ display: "flex", minHeight: "100dvh", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ maxWidth: "min(420px, 90vw)", textAlign: "center", padding: 24, border: "1px solid #435a70", borderRadius: 16, background: "#121d2b" }}>
             <h2 style={{ fontSize: 16, fontWeight: 600, color: "#f59e0b" }}>应用发生严重错误</h2>
-            <p style={{ marginTop: 8, fontSize: 12, color: "#a1a1aa", wordBreak: "break-all" }}>
+            <p style={{ marginTop: 8, fontSize: 12, color: "#c7d6e6", wordBreak: "break-all" }}>
               {error.message}
             </p>
             <button
@@ -28,9 +28,9 @@ export default function GlobalError({
                 padding: "6px 14px",
                 fontSize: 13,
                 borderRadius: 6,
-                border: "1px solid #3f3f46",
+                border: "1px solid #435a70",
                 background: "transparent",
-                color: "#e4e4e7",
+                color: "#edf4fc",
                 cursor: "pointer",
               }}
             >

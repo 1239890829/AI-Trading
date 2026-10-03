@@ -145,7 +145,7 @@ export function StrategyHealthTab() {
               <div className="flex items-center justify-between gap-2">
                 <span className="text-[11px] text-zinc-800 dark:text-zinc-200">
                   {it.name || it.strategy_key}
-                  <span className="ml-1 font-mono text-[10px] text-zinc-500">{it.strategy_key}</span>
+                  <span className="ml-1 font-mono text-[10px] text-zinc-600 dark:text-zinc-400">{it.strategy_key}</span>
                 </span>
                 <StatusBadge status={it.status} />
               </div>
@@ -186,7 +186,7 @@ export function StrategyHealthTab() {
         })}
       </ul>
 
-      <p className="mt-1 text-[10px] text-zinc-500">
+      <p className="mt-1 text-[10px] text-zinc-600 dark:text-zinc-400">
         状态为「判不出」时既不代表健康也不代表失效；核验结论来自离线重算（duckdb 全历史），
         随重跑更新。
       </p>

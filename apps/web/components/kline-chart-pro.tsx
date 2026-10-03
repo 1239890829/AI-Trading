@@ -42,7 +42,7 @@ type Indicators = { ma5: boolean; ma10: boolean; ma20: boolean; ma60: boolean; v
 const MA_DEFS: [keyof Indicators, number, string][] = [
   ["ma5", 5, "text-yellow-800 dark:text-yellow-400"],
   ["ma10", 10, "text-sky-700 dark:text-sky-400"],
-  ["ma20", 20, "text-purple-700 dark:text-purple-400"],
+  ["ma20", 20, "text-purple-700 dark:text-purple-300"],
   ["ma60", 60, "text-orange-800 dark:text-orange-400"],
 ];
 const MA_LEGEND_CLS = new Map(MA_DEFS.map(([k, , ink]) => [k as string, ink]));
@@ -83,7 +83,7 @@ type KlinePalette = {
 
 const KLINE_PALETTE: Record<ChartTheme, KlinePalette> = {
   dark: {
-    axis: "#a1a1aa",
+    axis: "#c7d6e6",
     grid: "rgba(120,120,130,0.10)",
     up: "#f43f5e",
     down: "#10b981",
@@ -617,7 +617,7 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
         </div>
       </div>
       <div className={`relative min-h-0 w-full flex-1 ${className ?? ""}`}>
-        <div ref={containerRef} className="h-full w-full" />
+        <div ref={containerRef} data-chart-surface="true" className="h-full w-full" />
         {/* 副图高度拖拽条：贴在副图区顶缘（mouseup 挂 window——释放时鼠标已离开拖拽条） */}
         <div
           onMouseDown={(e) => {

@@ -215,7 +215,7 @@ export function SearchBox() {
         />
       )}
       {showPanel && (
-        <ul className="absolute right-0 top-12 z-50 max-h-[65vh] w-[min(22rem,90vw)] overflow-auto rounded-md border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+        <ul className="ui-glass-overlay absolute right-0 top-12 z-50 max-h-[65vh] w-[min(22rem,90vw)] overflow-auto rounded-md border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
           {addNote && <li role="status" className="px-3 py-2 text-xs">{addNote}</li>}
           {error !== null && (
             <li className="px-3 py-2 text-xs text-red-700 dark:text-red-400" role="alert">

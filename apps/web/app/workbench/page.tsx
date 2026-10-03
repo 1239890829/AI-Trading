@@ -477,7 +477,7 @@ function WorkbenchInner() {
             <span aria-hidden className="text-zinc-600 dark:text-zinc-400">↗</span>
           </button>
         </span>
-        <span className="flex items-center gap-3">
+        <span className="workspace-status flex flex-wrap items-center gap-x-3 gap-y-1">
           <span>
             行情状态：
             {status === "live" && <span className="pulse-dot mx-1 align-middle" />}

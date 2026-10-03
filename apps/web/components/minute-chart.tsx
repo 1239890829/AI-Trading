@@ -98,7 +98,7 @@ type MinutePalette = {
 
 const MINUTE_PALETTE: Record<ChartTheme, MinutePalette> = {
   dark: {
-    axis: "#a1a1aa",
+    axis: "#c7d6e6",
     grid: "rgba(120,120,130,0.12)",
     up: "#ef4444",
     down: "#10b981",
@@ -1018,7 +1018,7 @@ export function MinuteChart({
         )}
       </div>
       <div className="relative min-h-0 w-full flex-1">
-        <div ref={ref} className={`h-full w-full ${className ?? ""}`} />
+        <div ref={ref} data-chart-surface="true" className={`h-full w-full ${className ?? ""}`} />
         <div
           ref={tipRef}
           className="pointer-events-none absolute left-0 top-0 z-10 min-w-[150px] rounded-lg border border-zinc-200 bg-white/95 px-2.5 py-1.5 opacity-0 shadow-sm transition-opacity dark:border-zinc-700 dark:bg-zinc-900/95"

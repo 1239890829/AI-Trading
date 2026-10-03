@@ -144,14 +144,14 @@ export function KbBrowserTab() {
       title={`${f.path}${f.kb_ids.length ? ` · ${f.kb_ids.length} 条 KB` : ""}`}
     >
       {f.name}
-      {f.kb_ids.length > 0 && <span className="ml-1 text-[10px] text-sky-700 dark:text-sky-500">KB{f.kb_ids.length}</span>}
+      {f.kb_ids.length > 0 && <span className={`ml-1 text-[10px] ${selected === f.path ? "text-sky-300 dark:text-sky-700" : "text-sky-700 dark:text-sky-300"}`}>KB{f.kb_ids.length}</span>}
     </button>
   );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 md:flex-row">
       {/* 树形目录 */}
-      <aside className="flex min-h-48 max-h-60 w-full shrink-0 flex-col overflow-hidden md:max-h-none md:w-60 rounded-xl border border-zinc-200 dark:border-zinc-800">
+      <aside className="ui-card flex min-h-48 max-h-60 w-full shrink-0 flex-col overflow-hidden md:max-h-none md:w-60 rounded-xl border border-zinc-200 dark:border-zinc-800">
         <div className="border-b border-zinc-100 p-2 dark:border-zinc-800">
           <input
             value={query}
@@ -240,7 +240,7 @@ export function KbBrowserTab() {
       </aside>
 
       {/* 渲染阅读区 */}
-      <section ref={reader} className="min-h-56 min-w-0 flex-1 overflow-y-auto rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+      <section ref={reader} className="ui-card min-h-56 min-w-0 flex-1 overflow-y-auto rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
         {!selected ? (
           <p className="py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">左侧选择一篇文档</p>
         ) : (

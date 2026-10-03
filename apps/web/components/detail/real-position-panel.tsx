@@ -178,7 +178,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
           <button
             onClick={() => void submitTrade()}
             disabled={busy}
-            className="rounded bg-sky-500/90 px-2.5 py-0.5 text-xs font-medium text-white hover:bg-sky-500 disabled:opacity-50"
+            className="rounded bg-sky-700 px-2.5 py-0.5 text-xs font-medium text-white hover:bg-sky-800 disabled:opacity-50"
           >
             记账
           </button>
@@ -264,7 +264,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
                 <span className="text-[10px] text-zinc-600 dark:text-zinc-400">修正</span>
                 <input value={editQty} onChange={(e) => setEditQty(e.target.value)} className="w-14 rounded border border-zinc-200 bg-transparent px-1 py-0.5 font-mono dark:border-zinc-700" aria-label="修正数量" />
                 <input value={editCost} onChange={(e) => setEditCost(e.target.value)} className="w-20 rounded border border-zinc-200 bg-transparent px-1 py-0.5 font-mono dark:border-zinc-700" aria-label="修正总成本" />
-                <button onClick={() => void submitOverride(r)} disabled={busy} className="rounded bg-sky-500/90 px-1.5 text-white disabled:opacity-50">
+                <button onClick={() => void submitOverride(r)} disabled={busy} className="rounded bg-sky-700 px-1.5 text-white disabled:opacity-50">
                   保存
                 </button>
               </div>
