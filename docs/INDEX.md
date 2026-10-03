@@ -46,7 +46,7 @@
 | **MD-07** | `strategy/risk-management.md` | L2 | 风控 | 风险拦截位置与规则。⚠️ 旧稿曾把「预检」写成「强制拦截」（**文档高估**），已更正 |
 | **FN-01** | `strategy/strategy-registry.md` | L2 | 登记册 | **策略级**生命周期（核心辨析：**因子 ≠ 策略**） |
 | **FN-02** | `system/architecture.md` | L2 | 架构 | 数据流与分层设计 |
-| **FN-03** | `system/deployment.md` | L2 | 部署 | 部署与运维（3000/8000纪律、离线备份/恢复hold、OPS-003实源隔离窗口与未验边界） |
+| **FN-03** | `system/deployment.md` | L2 | 部署 | 部署与运维（3000/8000纪律、离线备份/恢复hold、OPS-003实源隔离窗口、HTTP鉴权/WS补验与未验边界） |
 | **FN-04** | `system/api.md` | L2 | API | API 契约（⚠️ 端点计数滞后，**以 `/openapi.json` 为权威**） |
 | **FN-05** | `system/websocket.md` | L2 | WS | WS 协议（**必须直连后端，不走 Next 代理**） |
 | **FN-06** | `system/mcp.md` | L2 | MCP | MCP 工具体系清单 |
@@ -249,7 +249,7 @@
 | archive/PROJECT-MASTER.md | 08-29 历史技术基线（只读；当前入口见 INDEX / handoff） |
 | system/architecture.md | 数据流与分层设计 |
 | architecture-redesign.md | 08-31 模块盘点与重构方案（实测驱动）· **已归档**（优先级清单已全部清零）→ `archive/architecture-redesign.md` |
-| system/deployment.md | 部署与运维（本地开发8000/3000纪律、GOV-013恢复对账） |
+| system/deployment.md | 部署与运维（本地开发8000/3000纪律、GOV-013恢复对账、OPS-003隔离运行及鉴权/WS补验） |
 | system/api.md | REST API 按域检索手册（端点/路径计数以 /openapi.json 为权威） |
 | system/websocket.md | WS 协议（必须直连后端，不走 Next 代理） |
 | system/mcp.md | MCP 工具体系清单 |
