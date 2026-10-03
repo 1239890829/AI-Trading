@@ -168,7 +168,7 @@ export function SearchBox() {
     (results.length > 0 || loading || error !== null || searched);
 
   return (
-    <div ref={boxRef} className="relative w-32 min-w-0 sm:w-44 md:w-52">
+    <div ref={boxRef} className="search-field relative w-32 min-w-0 sm:w-44 md:w-52">
       <input
         value={q}
         onChange={(e) => {

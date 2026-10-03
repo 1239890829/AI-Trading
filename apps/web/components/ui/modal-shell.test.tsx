@@ -1,4 +1,5 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ModalShell } from "@/components/ui/modal-shell";
@@ -149,4 +150,43 @@ it("restores a keyboard SVG origin instead of dropping focus to the page", () =>
   const {unmount} = render(<ModalShell label="SVG来源" onClose={() => {}} header="详情">内容</ModalShell>);
   expect(screen.getByRole("dialog").contains(document.activeElement)).toBe(true);
   unmount(); expect(document.activeElement).toBe(cell); svg.remove();
+});
+
+describe("ModalShell 可变阅读形态", () => {
+  it("keeps a form and its input when switching between focus and peek", () => {
+    const close = vi.fn();
+    const background = document.createElement("button"); background.textContent = "背景动作"; document.body.append(background);
+    const {unmount} = render(<ModalShell label="可变工具" presentation="drawer" size="lg" expandable onClose={close} header="工具"><label>草稿<input aria-label="草稿" defaultValue="初始" /></label></ModalShell>);
+    expect(background.inert).toBe(true);
+    const field = screen.getByLabelText("草稿");
+    fireEvent.change(field, {target: {value: "尚未提交"}});
+    fireEvent.click(screen.getByRole("button", {name: "并排旁览"}));
+    expect(background.inert).toBe(false);
+    expect(screen.getByRole("dialog").getAttribute("aria-modal")).toBeNull();
+    background.focus();
+    expect(document.activeElement).toBe(background);
+    expect((screen.getByLabelText("草稿") as HTMLInputElement).value).toBe("尚未提交");
+    fireEvent.click(screen.getByRole("button", {name: "展开工作区"}));
+    expect(background.inert).toBe(true);
+    expect(screen.getByLabelText("草稿")).toBe(field);
+    expect(close).not.toHaveBeenCalled();
+    unmount(); background.remove();
+  });
+});
+
+
+describe("旁览与嵌套详情", () => {
+  it("returns a nested modal to its actual background trigger", () => {
+    function Example() {
+      const [nested, setNested] = useState(false);
+      return <><button onClick={() => setNested(true)}>原列表详情</button><ModalShell label="旁览工具" presentation="drawer" size="lg" expandable onClose={() => {}} header="工具">核对内容</ModalShell>{nested && <ModalShell label="证券详情" zIndex={60} onClose={() => setNested(false)} header="证券">详情内容</ModalShell>}</>;
+    }
+    render(<Example />);
+    fireEvent.click(screen.getByRole("button", {name: "并排旁览"}));
+    const trigger = screen.getByRole("button", {name: "原列表详情"});
+    trigger.focus(); fireEvent.click(trigger);
+    const nested = screen.getByRole("dialog", {name: "证券详情"});
+    fireEvent.click(within(nested).getByRole("button", {name: "关闭"}));
+    expect(document.activeElement).toBe(trigger);
+  });
 });

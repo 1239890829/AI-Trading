@@ -30,7 +30,7 @@
  * 各页面滚动容器都不是 portal 的 DOM 祖先 ⇒ 滚动链不会穿透到背景页，
  * 加锁只会是 no-op 死代码（同 `symbol-detail-modal` 的判断）。
  */
-import { useCallback, useRef, useSyncExternalStore } from "react";
+import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { useOverlayFocus } from "@/hooks/use-overlay-focus";
 import { createPortal } from "react-dom";
 
@@ -63,6 +63,8 @@ export interface ModalShellProps {
   size?: ModalSize;
   /** Context reading retains the originating list alongside the panel. */
   presentation?: "modal" | "drawer";
+  /** Opt-in reading drawer modes keep the same mounted content and form state. */
+  expandable?: boolean;
   /** 层级：默认 50。内容详情弹窗（可从其他弹窗内打开）用 60。 */
   zIndex?: number;
   /** 头部内容（标题/元信息）。省略则不渲染头部，也不渲染关闭按钮。 */
@@ -85,6 +87,7 @@ export function ModalShell({
   testid,
   size = "md",
   presentation = "modal",
+  expandable = false,
   zIndex = 50,
   header,
   footer,
@@ -97,15 +100,17 @@ export function ModalShell({
   const mounted = useSyncExternalStore(subscribeNoop, () => true, () => false);
 
   const panelRef = useRef<HTMLDivElement>(null);
-  useOverlayFocus(panelRef, onClose, mounted && open, zIndex);
+  const [expanded, setExpanded] = useState(true);
+  const isModal = presentation !== "drawer" || !expandable || expanded;
+  useOverlayFocus(panelRef, onClose, mounted && open, zIndex, isModal);
 
   // 只有点在遮罩**本身**才关闭；点面板内部（含拖拽选中）不关。
   // 用 `onMouseDown` 而非 `onClick`：正文里拖选文本后在弹窗外松开不会误关。
   const handleBackdrop = useCallback(
     (e: React.MouseEvent) => {
-      if (open && e.target === e.currentTarget) onClose();
+      if (open && isModal && e.target === e.currentTarget) onClose();
     },
-    [onClose, open],
+    [onClose, open, isModal],
   );
 
   if (!mounted) return null;
@@ -115,7 +120,7 @@ export function ModalShell({
       data-motion-state={open ? "open" : "closed"}
       aria-hidden={!open || undefined}
       inert={!open}
-      className={`motion-overlay fixed inset-0 flex overscroll-contain bg-black/50 p-2 backdrop-blur-sm sm:p-4 ${presentation === "drawer" ? "items-stretch justify-end" : "items-center justify-center"}`}
+      className={`motion-overlay fixed inset-0 flex overscroll-contain p-2 sm:p-4 ${isModal ? "bg-black/50 backdrop-blur-sm" : "pointer-events-none"} ${presentation === "drawer" ? "items-stretch justify-end" : "items-center justify-center"}`}
       style={{ zIndex }}
       onMouseDown={handleBackdrop}
       role="presentation"
@@ -124,16 +129,17 @@ export function ModalShell({
         ref={panelRef}
         tabIndex={-1}
         role="dialog"
-        aria-modal="true"
+        aria-modal={isModal || undefined}
         aria-label={label}
         data-testid={testid}
-        className={`ui-glass-overlay ${presentation === "drawer" ? "motion-drawer" : "motion-modal"} flex flex-col overflow-hidden border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900 ${
+        className={`pointer-events-auto ui-glass-overlay ${presentation === "drawer" ? "motion-drawer" : "motion-modal"} flex flex-col overflow-hidden border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900 ${
           radius === "2xl" ? "rounded-2xl" : "rounded-xl"
-        } ${presentation === "drawer" ? "h-full w-full max-w-2xl" : SIZE_CLASS[size]}`}
+        } ${presentation === "drawer" ? (size === "lg" && (!expandable || expanded) ? "h-full w-[min(1200px,96vw)]" : "h-full w-full max-w-2xl") : SIZE_CLASS[size]}`}
       >
         {header !== undefined && (
           <div className="flex shrink-0 items-start justify-between gap-3 border-b border-zinc-100 px-5 py-3.5 dark:border-zinc-800/80">
             <div className="min-w-0 flex-1">{header}</div>
+            {expandable && presentation === "drawer" && size === "lg" && <button type="button" className="drawer-mode hidden shrink-0 rounded-lg border border-zinc-300 px-3 py-2 text-xs sm:inline-flex dark:border-zinc-600" aria-pressed={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? "并排旁览" : "展开工作区"}</button>}
             <CloseButton onClose={onClose} />
           </div>
         )}

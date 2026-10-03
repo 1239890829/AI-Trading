@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, type RefObject } from "react";
 
-type Layer = { root: HTMLElement; z: number; order: number; previous: HTMLElement | SVGElement | null; close: () => void };
+type Layer = { root: HTMLElement; z: number; order: number; previous: HTMLElement | SVGElement | null; close: () => void; modal: () => boolean };
 const layers: Layer[] = [];
 const originalInert = new Map<HTMLElement, boolean>();
 let order = 0;
@@ -27,7 +27,7 @@ function focusFirst(layer: Layer) {
 function isolateTop() {
   for (const [node, inert] of originalInert) node.inert = inert || node.dataset.motionState === "closed";
   originalInert.clear();
-  let branch: HTMLElement | undefined = topLayer()?.root;
+  let branch: HTMLElement | undefined = [...layers].filter(layer => layer.modal()).sort((a, b) => a.z - b.z || a.order - b.order).at(-1)?.root;
   // Isolate siblings on the full ancestor path, including inline drawers and nested portals.
   while (branch?.parentElement) {
     for (const sibling of branch.parentElement.children) {
@@ -42,22 +42,24 @@ function isolateTop() {
 }
 
 /** Shared modal/drawer focus, top-only Escape, background isolation and return focus. */
-export function useOverlayFocus(ref: RefObject<HTMLElement | null>, onClose: () => void, enabled = true, zIndex = 50) {
+export function useOverlayFocus(ref: RefObject<HTMLElement | null>, onClose: () => void, enabled = true, zIndex = 50, modal = true) {
   const closeRef = useRef(onClose);
+  const modalRef = useRef(modal);
+  useEffect(() => { modalRef.current = modal; isolateTop(); }, [modal]);
   useEffect(() => { closeRef.current = onClose; }, [onClose]);
   useEffect(() => {
     if (!enabled || !ref.current) return;
     const layer: Layer = { root: ref.current, z: zIndex, order: ++order,
       previous: document.activeElement instanceof HTMLElement || document.activeElement instanceof SVGElement ? document.activeElement : null,
-      close: () => closeRef.current() };
+      close: () => closeRef.current(), modal: () => modalRef.current };
     layers.push(layer);
     isolateTop();
     if (topLayer() === layer) focusFirst(layer);
     function key(event: KeyboardEvent) {
-      if (topLayer() !== layer || event.isComposing) return;
+      if (topLayer() !== layer || event.isComposing || (!layer.modal() && !layer.root.contains(document.activeElement))) return;
       if (event.key === "Escape") {
         event.preventDefault(); event.stopImmediatePropagation(); layer.close();
-      } else if (event.key === "Tab") {
+      } else if (event.key === "Tab" && layer.modal()) {
         const targets = controls(layer.root);
         const first = targets[0] ?? layer.root;
         const last = targets.at(-1) ?? layer.root;
@@ -67,12 +69,13 @@ export function useOverlayFocus(ref: RefObject<HTMLElement | null>, onClose: () 
       }
     }
     function focus(event: FocusEvent) {
-      if (topLayer() === layer && event.target instanceof Node && !layer.root.contains(event.target)) focusFirst(layer);
+      if (layer.modal() && topLayer() === layer && event.target instanceof Node && !layer.root.contains(event.target)) focusFirst(layer);
     }
     window.addEventListener("keydown", key, true);
     document.addEventListener("focusin", focus);
     return () => {
       const wasTop = topLayer() === layer;
+      const returnFocus = layer.modal() || layer.root.contains(document.activeElement);
       window.removeEventListener("keydown", key, true);
       document.removeEventListener("focusin", focus);
       // A parent may close before its nested layer: preserve the original page return target.
@@ -81,10 +84,10 @@ export function useOverlayFocus(ref: RefObject<HTMLElement | null>, onClose: () 
       }
       layers.splice(layers.indexOf(layer), 1);
       isolateTop();
-      if (wasTop) {
+      if (wasTop && returnFocus) {
         const top = topLayer();
         const previous = layer.previous;
-        if (previous?.isConnected && !previous.closest('[inert]') && (!top || top.root.contains(previous))) previous.focus();
+        if (previous?.isConnected && !previous.closest('[inert]') && (!top || !top.modal() || top.root.contains(previous))) previous.focus();
         else if (top) focusFirst(top);
       }
     };

@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { Suspense, useCallback, useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { MarketLensPicker } from "@/components/ui/workspace-deck";
+import { useSearchParams } from "next/navigation";
 import { Panel } from "@/components/panel";
 import { QualityBadge } from "@/components/quality-badge";
 import { EventPanel } from "@/components/event-panel";
@@ -48,17 +49,9 @@ const PHASE_STYLE: Record<string, string> = {
   退潮: "bg-down/20 text-down-ink dark:text-down border-down/50",
 };
 
-const VIEWS = [
-  { key: "overview", label: "总览" },
-  { key: "fund", label: "资金" },
-  { key: "heatmap", label: "云图" },
-  { key: "events", label: "事件" },
-] as const;
-
-type ViewKey = (typeof VIEWS)[number]["key"];
+type ViewKey = "overview" | "fund" | "heatmap" | "events";
 
 function MarketInner() {
-  const router = useRouter();
   // 个股/指数详情**就地弹窗**（2026-09-15）：指数卡与标的池行不再跳工作台
   const { open: openSymbolDetail } = useSymbolDetail();
   const sp = useSearchParams();
@@ -128,34 +121,13 @@ function MarketInner() {
 
   const sh = indices.find((q) => q.market === "SH" && q.symbol === "000001");
 
-  function switchView(k: ViewKey) {
-    const p = new URLSearchParams(sp.toString());
-    p.set("tab", k);
-    router.replace(`/market?${p.toString()}`, { scroll: false });
-  }
 
   return (
     <main className="task-page mx-auto flex h-full w-full max-w-[1600px] flex-col gap-2 overflow-hidden px-4 py-3">
-      <nav aria-label="市场任务" className="task-subnav mb-2 text-sm"><Link href="/market" aria-current="page">概览与环境</Link><Link href="/tape">题材与涨跌停</Link></nav>
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-4">
           <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">市场全景</h1>
-          <nav className="flex items-center gap-1" aria-label="市场视图">
-            {VIEWS.map((v) => (
-              <button
-                key={v.key}
-                onClick={() => switchView(v.key)}
-                aria-current={view === v.key ? "page" : undefined}
-                className={`rounded-md px-3 py-1.5 text-sm transition-colors ${
-                  view === v.key
-                    ? "bg-zinc-900 font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
-                    : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-                }`}
-              >
-                {v.label}
-              </button>
-            ))}
-          </nav>
+          <MarketLensPicker selected={view} search={sp.toString()} />
         </div>
         {view === "overview" && <span className="text-xs text-zinc-600 dark:text-zinc-400">最近读取 {updatedAt || "--"}</span>}
       </div>
