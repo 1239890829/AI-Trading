@@ -62,6 +62,8 @@ import {
 } from "@/components/ui/loading";
 import { timeText } from "@/lib/format";
 import { OpportunityEvidencePanel } from "@/components/hunting/opportunity-evidence-panel";
+import { useExitPresence } from "@/hooks/use-exit-presence";
+import { ModalShell } from "@/components/ui/modal-shell";
 import { WatchLedgerPanel } from "@/components/hunting/watch-ledger-panel";
 import { MasonryColumns } from "@/components/masonry-columns";
 
@@ -91,6 +93,8 @@ function HuntingInner() {
   const router = useRouter();
   const sp = useSearchParams();
   const isDiscovery = !["evidence", "tracking"].includes(sp.get("view") ?? "");
+
+  const accessory = useExitPresence(sp.get("panel") === "evidence" || sp.get("panel") === "tracking" ? sp.get("panel") : null);
 
   // —— 精选组数据 ——
   const [data, setData] = useState<DailyPicksPayload | null>(null);
@@ -283,13 +287,19 @@ function HuntingInner() {
       )}
       {data?.note && <div className="shrink-0 text-xs text-zinc-600 dark:text-zinc-400">{data.note}</div>}
 
-      <nav aria-label="机会工作流" className="task-subnav text-sm">
-        <Link href={patchWorkspaceUrl("/hunting", sp.toString(), {view: "discover"})} aria-current={!sp.get("view") || sp.get("view") === "discover" ? "page" : undefined}>当前机会</Link>
-        <Link href={patchWorkspaceUrl("/hunting", sp.toString(), {view: "evidence"})} aria-current={sp.get("view") === "evidence" ? "page" : undefined}>依据与等待</Link>
-        <Link href={patchWorkspaceUrl("/hunting", sp.toString(), {view: "tracking"})} aria-current={sp.get("view") === "tracking" ? "page" : undefined}>参考跟踪</Link>
-        <Link href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "positions", account: "paper", view: null, from: `/hunting?${sp.toString()}`})}>持仓与模拟</Link>
-        <Link href={patchWorkspaceUrl("/agent", sp.toString(), {area: "research", tab: "review", view: null, from: `/hunting?${sp.toString()}`})}>跨日复盘</Link>
-      </nav>
+      <div className="opportunity-workrail" aria-label="机会工作流">
+        <div><span className="rail-indicator" aria-hidden="true"/><strong>发现 → 核对 → 跟踪</strong><span className="rail-hint">先看机会，按需展开依据</span></div>
+        <div className="flex flex-wrap items-center gap-1">
+          {!isDiscovery && <Link className="quiet-action" href={patchWorkspaceUrl("/hunting", sp.toString(), {view: "discover", panel: null})}>返回当前机会</Link>}
+          <button className="accessory-trigger" aria-haspopup="dialog" onClick={() => router.push(patchWorkspaceUrl("/hunting", sp.toString(), {panel: "evidence", view: "discover"}), {scroll: false})}>展开证据台</button>
+          <button className="accessory-trigger" aria-haspopup="dialog" onClick={() => router.push(patchWorkspaceUrl("/hunting", sp.toString(), {panel: "tracking", view: "discover"}), {scroll: false})}>参考跟踪</button>
+          <Link className="quiet-action" href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "positions", account: "paper", view: null, panel: null, from: `/hunting?${sp.toString()}`})}>持仓与模拟</Link>
+          <Link className="quiet-action" href={patchWorkspaceUrl("/agent", sp.toString(), {area: "research", tab: "review", view: null, panel: null, from: `/hunting?${sp.toString()}`})}>跨日复盘</Link>
+        </div>
+      </div>
+      {accessory.value && <ModalShell open={accessory.active} label={accessory.value === "evidence" ? "机会证据台" : "参考跟踪"} size="lg" presentation="drawer" expandable onClose={() => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {panel: null}), {scroll: false})} header={<div><p className="workspace-kicker">机会工作流</p><h2 className="text-lg font-semibold">{accessory.value === "evidence" ? "机会证据台" : "参考跟踪"}</h2></div>} footer="保留当前机会位置；参考价与观察记录不是成交，不构成买卖建议。">
+        {accessory.active && (accessory.value === "evidence" ? <OpportunityEvidencePanel date={sp.get("date") ?? undefined} onDateChange={date => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {date}), {scroll: false})} /> : <WatchLedgerPanel />)}
+      </ModalShell>}
       <div className="task-scroll min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
         {sp.get("view") === "evidence" ? <OpportunityEvidencePanel date={sp.get("date") ?? undefined} onDateChange={date => { const p = new URLSearchParams(sp.toString()); p.set("date", date); router.replace(`/hunting?${p.toString()}`, {scroll:false}); }} /> : sp.get("view") === "tracking" ? <WatchLedgerPanel /> : <>
         {/* ── 空仓闸门横幅（风险提示置顶）──

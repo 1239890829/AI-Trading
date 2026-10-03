@@ -913,16 +913,15 @@ export const StockDetailPanel = memo(function StockDetailPanel({
             </button>
           }
         >
-          <div className="detail-tabs flex shrink-0 gap-1 border-b border-zinc-100 px-2 py-1 dark:border-zinc-800/60">
-            {rightTabsFor(isIndex).map(([k, label]) => (
-              <button
-                key={k}
-                onClick={() => { if (onRightTabChange) onRightTabChange(k); else setRightTab(k); }}
-                className={`shrink-0 whitespace-nowrap rounded px-2 py-0.5 text-xs ${rightTab === k ? "bg-zinc-100 font-medium dark:bg-zinc-800" : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
-              >
-                {label}
-              </button>
-            ))}
+          <div className="detail-tabs detail-lens flex shrink-0 items-center justify-between gap-2 border-b border-zinc-100 px-3 py-2 dark:border-zinc-800/60">
+            <label className="flex min-w-0 items-center gap-2 text-xs">核对视角
+              <select aria-label="个股核对视角" value={rightTab} onChange={event => { const next = event.target.value as DetailRightTab; if (onRightTabChange) onRightTabChange(next); else setRightTab(next); }}>
+                {isIndex ? rightTabsFor(true).map(([key, label]) => <option key={key} value={key}>{label}</option>) : <>
+                  <optgroup label="行情与依据">{rightTabsFor(false).filter(([key]) => ["book", "trades", "profile", "info"].includes(key)).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</optgroup>
+                  <optgroup label="账户与记录">{rightTabsFor(false).filter(([key]) => ["trade", "real", "dt"].includes(key)).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</optgroup>
+                </>}
+              </select>
+            </label>
           </div>
           {rightTab === "speed" && <SpeedPanel className="h-full" />}
           {rightTab === "boards" && <BoardRankPanel className="h-full" />}

@@ -169,7 +169,8 @@ describe("ReviewTab 只读与请求身份", () => {
     render(<ReviewTab />);
     expect(await screen.findByText(/管理处置在系统维护/)).toBeTruthy();
     expect(screen.queryByRole("button", {name: "确认"})).toBeNull();
-    expect(screen.getByText("改进项处置统计（非交易效果）")).toBeTruthy();
+    expect(screen.queryByText("改进项处置统计（非交易效果）")).toBeNull();
+    expect(mocked.getReviewEffectiveness).not.toHaveBeenCalled();
     expect(mocked.updateActionItemStatus).not.toHaveBeenCalled();
   });
   it("late success and failure for A cannot replace B", async () => {

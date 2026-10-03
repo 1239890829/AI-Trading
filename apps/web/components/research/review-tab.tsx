@@ -336,7 +336,7 @@ function ReportDetail({
 export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: string; allowDispose?: boolean } = {}) {
   const requestedDate = focusDate?.replaceAll("-", "");
   const list = useResource(getReviewReports, { key: requestedDate, intervalMs: null, marketHours: false });
-  const effectiveness = useResource(getReviewEffectiveness, { intervalMs: null, marketHours: false });
+  const effectiveness = useResource(getReviewEffectiveness, { enabled: allowDispose, intervalMs: null, marketHours: false });
   const reports = list.data ?? null;
   const effect = effectiveness.data ?? null;
   const error = list.error instanceof Error ? list.error.message : list.error ? "读取失败" : null;
@@ -375,7 +375,7 @@ export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: str
   return (
     // minmax(0,…) 而非 auto/1fr：grid 行的 auto 会被长内容无限撑开，把同行面板压扁
     // 并把滚动推到最外层（窄屏下表现为整页滚动、面板内无滚动条）。
-    <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,auto)_minmax(0,1fr)] gap-3 overflow-auto lg:grid-cols-2 lg:grid-rows-1">
+    <div className={`grid min-h-0 flex-1 gap-3 overflow-auto ${allowDispose ? "grid-rows-[minmax(0,auto)_minmax(0,1fr)] lg:grid-cols-2 lg:grid-rows-1" : "grid-rows-1"}`}>
       <Panel title="复盘报告（冻结版本）" className="min-h-[240px]">
         {requestedDate && !reports.some(r => r.trade_date === requestedDate) && <div className="px-4 py-3 text-sm"><button onClick={() => setSelectedDate(requestedDate)}>{requestedDate} 指定报告</button>{openDate === requestedDate && (detail ? <ReportDetail report={detail} allowDispose={allowDispose} onDisposed={reloadAfterDispose} /> : <p role={detailResource.error ? "alert" : "status"}>{detailResource.error ? "指定日期读取失败" : detailResource.pending ? "详情加载中…" : "指定日期尚无报告"}</p>)}</div>}
         {reports.length === 0 ? (
@@ -416,7 +416,7 @@ export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: str
         )}
       </Panel>
 
-      <Panel title="改进项处置统计（非交易效果）" className="min-h-[240px]">
+      {allowDispose && <Panel title="改进项处置统计（非交易效果）" className="min-h-[240px]">
         {effect === null ? (
           <p className="px-4 py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">{effectiveness.error ? "处置统计读取失败，不能判断当前状态。" : effectiveness.pending ? "读取处置统计…" : "暂无处置统计。"}</p>
         ) : (
@@ -445,7 +445,7 @@ export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: str
             </tbody>
           </table>
         )}
-      </Panel>
+      </Panel>}
     </div>
   );
 }

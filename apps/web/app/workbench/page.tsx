@@ -441,11 +441,13 @@ function WorkbenchInner() {
 
   return (
     <main className="task-page mx-auto flex h-full w-full max-w-[1600px] flex-col gap-3 px-4 py-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="font-semibold">{mode === "positions" ? "持仓与模拟" : "自选跟踪"}</h1>
-        <nav aria-label="个人对象" className="task-subnav text-sm"><Link href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "watch", rt: null})} aria-current={mode === "watch" ? "page" : undefined}>自选</Link><Link href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "positions", account: "manual", rt: null})} aria-current={mode === "positions" ? "page" : undefined}>持仓与模拟</Link></nav>
+      <div className="workspace-masthead">
+        <div><p className="workspace-kicker">同一标的，连续核对</p><h1>工作台</h1></div>
+        <div className="workspace-context">
+          <nav aria-label="个人对象" className="compact-segments"><Link href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "watch", rt: null})} aria-current={mode === "watch" ? "page" : undefined}>自选跟踪</Link><Link href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "positions", account: "manual", rt: null})} aria-current={mode === "positions" ? "page" : undefined}>持仓与模拟</Link></nav>
+          {mode === "positions" && <label className="scope-selector">账户范围<select aria-label="账户范围" value={account} onChange={event => router.push(patchWorkspaceUrl("/workbench", sp.toString(), {account: event.target.value, rt: null}), {scroll: false})}>{[["manual", "手工记录"], ["paper", "手工模拟"], ["daily", "每日精选影子"], ["hunting", "机会影子"]].map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>}
+        </div>
       </div>
-      {mode === "positions" && <nav aria-label="账户范围" className="task-subnav text-xs">{[["manual", "手工记录"], ["paper", "手工模拟"], ["daily", "每日精选影子"], ["hunting", "机会影子"]].map(([key, label]) => <Link key={key} href={patchWorkspaceUrl("/workbench", sp.toString(), {account: key, rt: null})} aria-current={account === key ? "page" : undefined}>{label}</Link>)}</nav>}
       {error && (
         <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-800 dark:text-amber-300">{error}</div>
       )}
