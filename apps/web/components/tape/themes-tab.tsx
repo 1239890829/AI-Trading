@@ -373,7 +373,7 @@ export function ThemesTab() {
         /* 首次加载：题材卡同构骨架占位（2026-09-04 统一加载体验） */
         <div className="space-y-3 py-2" aria-hidden>
           {Array.from({ length: 4 }, (_, i) => (
-            <div key={i} className="animate-pulse rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+            <div key={i} className="ui-card animate-pulse rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
               <div className="flex items-center gap-2">
                 <div className="h-4 w-24 rounded bg-zinc-200/80 dark:bg-zinc-800/70" />
                 <div className="h-3.5 w-12 rounded bg-zinc-200/80 dark:bg-zinc-800/70" />
@@ -414,7 +414,7 @@ export function ThemesTab() {
 
         {/* ── 断板股 ─────────────────────────────────────────── */}
         {broken.length > 0 && (
-          <section className="mt-4 overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
+          <section className="ui-card mt-4 overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
             <header className="border-b border-zinc-200 bg-zinc-50 px-4 py-2.5 dark:border-zinc-800 dark:bg-zinc-900/40">
               <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
                 断板股

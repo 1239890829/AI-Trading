@@ -190,7 +190,7 @@ function MarketInner() {
           <div className="grid shrink-0 grid-cols-3 gap-2 md:grid-cols-6">
             {indices.length === 0 && pending
               ? Array.from({ length: 6 }, (_, i) => (
-                  <div key={i} className="rounded-lg border border-zinc-200 px-2.5 py-1.5 dark:border-zinc-800">
+                  <div key={i} className="ui-card rounded-lg border border-zinc-200 px-2.5 py-1.5 dark:border-zinc-800">
                     <Skeleton className="h-3 w-16" />
                     <Skeleton className="mt-1.5 h-5 w-20" />
                   </div>
@@ -200,7 +200,7 @@ function MarketInner() {
                 key={q.symbol}
                 onClick={() => openSymbolDetail({ symbol: indexDetailSymbol(q.symbol, q.market) })}
                 title={`查看 ${q.name ?? q.symbol} 指数详情${q.quality_reasons?.length ? "｜" + q.quality_reasons.join("；") : ""}`}
-                className="cursor-pointer rounded-lg border border-zinc-200 px-2.5 py-1.5 text-left transition-colors hover:bg-zinc-100/60 dark:border-zinc-800 dark:hover:bg-zinc-800/40"
+                className="ui-card cursor-pointer rounded-lg border border-zinc-200 px-2.5 py-1.5 text-left transition-colors hover:bg-zinc-100/60 dark:border-zinc-800 dark:hover:bg-zinc-800/40"
               >
                 <div className="flex items-center justify-between gap-1">
                   <span className="truncate text-xs text-zinc-600 dark:text-zinc-400">{q.name ?? q.symbol}</span>
@@ -235,7 +235,7 @@ function MarketInner() {
                   key={String(label)}
                   href={href}
                   title={`查看${label}池明细（盘面页 · ${label === "涨停" ? "涨停生态" : "跌停"} tab）`}
-                  className="cursor-pointer rounded-lg border border-zinc-200 px-2.5 py-1 transition-colors hover:bg-zinc-100/60 dark:border-zinc-800 dark:hover:bg-zinc-800/40"
+                  className="ui-card cursor-pointer rounded-lg border border-zinc-200 px-2.5 py-1 transition-colors hover:bg-zinc-100/60 dark:border-zinc-800 dark:hover:bg-zinc-800/40"
                 >
                   <span className="text-[11px] text-zinc-600 dark:text-zinc-400">{label}</span>
                   {value == null && pending ? (
@@ -248,7 +248,7 @@ function MarketInner() {
                   )}
                 </Link>
               ) : (
-                <div key={String(label)} className="rounded-lg border border-zinc-200 px-2.5 py-1 dark:border-zinc-800">
+                <div key={String(label)} className="ui-card rounded-lg border border-zinc-200 px-2.5 py-1 dark:border-zinc-800">
                   <span className="text-[11px] text-zinc-600 dark:text-zinc-400">{label}</span>
                   {value == null && pending ? (
                     <Skeleton className="mt-0.5 h-4 w-14" />
@@ -262,7 +262,7 @@ function MarketInner() {
 
           {/* 情绪合并卡：左相位/温度/指标，右近 10 日序列柱状（紧凑高度）；未就绪时单行骨架 */}
           {sent ? (
-            <div className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-1.5 rounded-lg border border-zinc-200 px-3.5 py-1.5 dark:border-zinc-800">
+            <div className="ui-card flex shrink-0 flex-wrap items-center gap-x-5 gap-y-1.5 rounded-lg border border-zinc-200 px-3.5 py-1.5 dark:border-zinc-800">
               <div className="flex min-w-0 flex-wrap items-center gap-x-3.5 gap-y-1">
                 <span className={`rounded-md border px-2 py-0.5 text-xs font-semibold ${PHASE_STYLE[sent.phase] ?? ""}`}>
                   {sent.phase}

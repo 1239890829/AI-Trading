@@ -46,7 +46,7 @@ export function QuoteStrip({
   ];
 
   return (
-    <div className="shrink-0 rounded-xl border border-zinc-200 px-4 py-1.5 dark:border-zinc-800">
+    <div className="ui-card shrink-0 rounded-xl border border-zinc-200 px-4 py-1.5 dark:border-zinc-800">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4">
         <div className="flex items-baseline gap-2">
           <span className="text-base font-semibold">{quote.name ?? "--"}</span>

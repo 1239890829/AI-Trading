@@ -226,7 +226,7 @@ export function TaskCenter() {
       {/* 右：新建 + 详情 */}
       <div className="flex min-h-0 flex-1 flex-col gap-3">
         {/* 新建任务 */}
-        <section className="shrink-0 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+        <section className="ui-card shrink-0 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
           <div className="mb-2 flex items-center justify-between">
             <h3 className="text-xs font-medium text-zinc-700 dark:text-zinc-200">新建任务</h3>
             <span className="text-[10px] text-zinc-600 dark:text-zinc-400">首批仅 L0 只读/生成类；写类任务在参数配置模块（P1）开放</span>
@@ -260,7 +260,7 @@ export function TaskCenter() {
         </section>
 
         {/* 任务详情 */}
-        <section className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+        <section className="ui-card min-h-0 flex-1 overflow-y-auto rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
           {error && (
             <p className="mb-2 rounded-md bg-red-500/5 px-2 py-1.5 text-[11px] text-red-700 dark:text-red-300">{error}</p>
           )}

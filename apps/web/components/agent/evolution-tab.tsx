@@ -92,7 +92,7 @@ export function EvolutionTab() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
-      <section className="shrink-0 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+      <section className="ui-card shrink-0 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h3 className="text-xs font-medium text-zinc-700 dark:text-zinc-200">
@@ -134,7 +134,7 @@ export function EvolutionTab() {
       </section>
 
       {/* 议程项 */}
-      <section className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+      <section className="ui-card min-h-0 flex-1 overflow-y-auto rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
         {agenda === undefined ? (
           <div className="space-y-2">
             {[0, 1].map((i) => (
@@ -201,7 +201,7 @@ export function EvolutionTab() {
       </section>
 
       {/* 实验记录本：A 类自动变更的后置验证（劣化自动回滚） */}
-      <section className="shrink-0 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+      <section className="ui-card shrink-0 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
         <h3 className="mb-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-200">
           实验记录本 <span className="text-[10px] text-zinc-600 dark:text-zinc-400">· 30 日后置验证，劣化自动回滚</span>
         </h3>
@@ -234,7 +234,7 @@ export function EvolutionTab() {
       </section>
 
       {/* 历史 */}
-      <section className="shrink-0 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+      <section className="ui-card shrink-0 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
         <h3 className="mb-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-200">历史议程</h3>
         {history === undefined ? (
           <div className="h-6 w-full animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />

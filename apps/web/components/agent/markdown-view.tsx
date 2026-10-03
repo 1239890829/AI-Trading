@@ -124,7 +124,7 @@ export function MarkdownView({ content, onNavigate }: Props) {
               <thead>
                 <tr className="border-b border-zinc-200 dark:border-zinc-800">
                   {header.map((h, hi) => (
-                    <th key={hi} className="px-2 py-1 text-left font-medium text-zinc-500 dark:text-zinc-400">
+                    <th key={hi} className="px-2 py-1 text-left font-medium text-zinc-600 dark:text-zinc-400">
                       {inline(h, onNavigate, `th${hi}`)}
                     </th>
                   ))}
@@ -196,7 +196,7 @@ export function MarkdownView({ content, onNavigate }: Props) {
         out.push(
           <blockquote
             key={kb()}
-            className="my-2 border-l-2 border-zinc-300 pl-2 text-[11px] text-zinc-500 dark:border-zinc-700 dark:text-zinc-400"
+            className="my-2 border-l-2 border-zinc-300 pl-2 text-[11px] text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
           >
             {inline(buf.join(" "), onNavigate, `q${k}`)}
           </blockquote>,

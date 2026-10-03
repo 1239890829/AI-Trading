@@ -127,7 +127,7 @@ export function ModalShell({
         aria-modal="true"
         aria-label={label}
         data-testid={testid}
-        className={`${presentation === "drawer" ? "motion-drawer" : "motion-modal"} flex flex-col overflow-hidden border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900 ${
+        className={`ui-glass-overlay ${presentation === "drawer" ? "motion-drawer" : "motion-modal"} flex flex-col overflow-hidden border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900 ${
           radius === "2xl" ? "rounded-2xl" : "rounded-xl"
         } ${presentation === "drawer" ? "h-full w-full max-w-2xl" : SIZE_CLASS[size]}`}
       >
@@ -163,7 +163,7 @@ function CloseButton({ onClose }: { onClose: () => void }) {
       data-overlay-autofocus
       aria-label="关闭"
       title="关闭（Esc）"
-      className="shrink-0 rounded p-1 text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+      className="ui-close shrink-0 rounded p-1 text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
     >
       <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
         <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />

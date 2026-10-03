@@ -141,7 +141,7 @@ export function AlertsTab() {
         <span className="text-xs text-zinc-600 dark:text-zinc-400">判读即终态 · 自动 10 秒刷新</span>
       </div>
 
-      {error && <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-800 dark:text-amber-600">{error}</div>}
+      {error && <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-800 dark:text-amber-300">{error}</div>}
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[360px,minmax(0,1fr)]">
         <Panel title="新建规则" className="flex flex-col gap-3 overflow-auto">

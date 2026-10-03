@@ -28,7 +28,7 @@ export type RolePerformance = { role: string; count: number; win_rate: number; a
 /** 梯队角色胜率表：回答「能不能按题材抓妖」的直接证据；样本随交易日积累。 */
 export function RolePerformanceTable({ rows }: { rows: RolePerformance[] }) {
   return (
-    <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+    <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
       <div className="mb-1 font-medium">
         梯队角色胜率（回答「能不能按题材抓妖」的直接证据；样本随交易日积累）
       </div>
@@ -63,7 +63,7 @@ export function RolePerformanceTable({ rows }: { rows: RolePerformance[] }) {
 /** 复盘元结论：走坏原因分布 chips。 */
 export function ReasonDistribution({ dist }: { dist: Record<string, number> }) {
   return (
-    <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+    <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
       <div className="mb-1 font-medium">复盘元结论：走坏原因分布（周末权重微调建议的输入；权重变更需人工确认）</div>
       <div className="flex flex-wrap gap-2">
         {Object.entries(dist).map(([k, v]) => (
@@ -79,7 +79,7 @@ export function ReasonDistribution({ dist }: { dist: Record<string, number> }) {
 /** 当日复盘逐只归因：对在哪、错在哪。 */
 export function DailyReviews({ reviews }: { reviews: PickReviewRow[] }) {
   return (
-    <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+    <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
       <div className="mb-1 font-medium">
         当日复盘（逐只归因：对在哪、错在哪）
         <span className="ml-1.5 font-normal text-zinc-600 dark:text-zinc-400">
@@ -122,7 +122,7 @@ export function HistoryList({
   history: { date: string; symbols: (string | null)[]; score_avg: number }[];
 }) {
   return (
-    <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+    <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
       <div className="mb-1 font-medium">历史组合（一致性可回溯）</div>
       {history.map((h) => (
         <div key={h.date} className="flex gap-2 border-b border-zinc-100 py-1 last:border-0 dark:border-zinc-800/60">

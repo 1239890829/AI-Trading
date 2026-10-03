@@ -609,7 +609,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       {/* ① 紧凑行情条（指数隐藏加自选：sh000001 不是合法自选股代码）
           三态：undefined=WS/REST 均未到（同构骨架条）；null=确认拉不到；有值=QuoteStrip */}
       {quote === undefined ? (
-        <div aria-hidden className="shrink-0 rounded-xl border border-zinc-200 px-4 py-1.5 dark:border-zinc-800">
+        <div aria-hidden className="ui-card shrink-0 rounded-xl border border-zinc-200 px-4 py-1.5 dark:border-zinc-800">
           <div className="flex items-center gap-3">
             <Skeleton className="h-5 w-24" />
             <Skeleton className="h-4 w-20" />
@@ -913,12 +913,12 @@ export const StockDetailPanel = memo(function StockDetailPanel({
             </button>
           }
         >
-          <div className="flex shrink-0 gap-1 border-b border-zinc-100 px-2 py-1 dark:border-zinc-800/60">
+          <div className="detail-tabs flex shrink-0 gap-1 border-b border-zinc-100 px-2 py-1 dark:border-zinc-800/60">
             {rightTabsFor(isIndex).map(([k, label]) => (
               <button
                 key={k}
                 onClick={() => { if (onRightTabChange) onRightTabChange(k); else setRightTab(k); }}
-                className={`rounded px-2 py-0.5 text-xs ${rightTab === k ? "bg-zinc-100 font-medium dark:bg-zinc-800" : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
+                className={`shrink-0 whitespace-nowrap rounded px-2 py-0.5 text-xs ${rightTab === k ? "bg-zinc-100 font-medium dark:bg-zinc-800" : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
               >
                 {label}
               </button>

@@ -271,18 +271,11 @@ button, a, tr, input, select, textarea {
   [role="button"]:not([aria-disabled="true"]):not([data-nopress]):active { transform: none !important; }
 }
 
-/* Task workspace: paper white / graphite, existing semantic price tokens retained. */
-:root { --workspace-surface: #ffffff; --workspace-canvas: #f4f4f5; }
-.dark { --workspace-surface: #18181b; --workspace-canvas: #09090b; }
-.workspace-content { background: var(--workspace-canvas); }
-.task-panel { background: var(--workspace-surface); }
-.task-navigation a[aria-current="page"] { box-shadow: inset 0 -2px 0 currentColor; }
+/* Task workspace behavior. Material tokens are defined below. */
 .task-page h1 { font-size: 1.25rem; line-height: 1.4; }
 .task-subnav { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
 .task-subnav a { padding: .4rem .7rem; border-radius: .375rem; }
 .task-subnav a[aria-current="page"] { background: var(--workspace-surface); font-weight: 600; }
-.skip-link { position: fixed; left: .75rem; top: .75rem; z-index: var(--z-tooltip); transform: translateY(-200%); background: var(--workspace-surface); padding: .75rem; }
-.skip-link:focus { transform: translateY(0); }
 @media (max-width: 1023px), (max-height: 540px) {
   .workspace-content { overflow-y: auto; overscroll-behavior: contain; }
   .task-page { height: auto; min-height: 100%; overflow: visible; }
@@ -295,3 +288,139 @@ button, a, tr, input, select, textarea {
 @media (pointer: coarse) {
   button, input, select, summary, .task-navigation a { min-height: 44px; }
 }
+
+/* Approved dark glass material system. Financial canvases remain flat surfaces. */
+:root {
+  --workspace-canvas: #f3f6f8;
+  --workspace-surface: rgba(255, 255, 255, .82);
+  --glass-border: rgba(82, 97, 112, .26);
+  --glass-highlight: rgba(255, 255, 255, .96);
+  --glass-shadow: 0 8px 24px rgba(28, 47, 67, .06);
+  --glass-card: rgba(255, 255, 255, .64);
+  --glass-overlay: rgba(246, 250, 253, .94);
+  --chart-surface: #f3f6f8;
+  --control-surface: rgba(255, 255, 255, .7);
+  --ui-accent: #075985;
+}
+.dark {
+  --workspace-canvas: #0b121b;
+  --workspace-surface: rgba(18, 29, 43, .76);
+  --glass-border: rgba(130, 164, 194, .3);
+  --glass-highlight: rgba(219, 237, 255, .12);
+  --glass-shadow: 0 8px 24px rgba(0, 6, 16, .18);
+  --glass-card: rgba(23, 38, 55, .64);
+  --glass-overlay: rgba(18, 29, 43, .94);
+  --chart-surface: #0b121b;
+  --control-surface: rgba(18, 29, 43, .8);
+  --ui-accent: #9be3ff;
+}
+.app-shell {
+  background: radial-gradient(ellipse at 8% 0%, rgba(82, 155, 190, .1), transparent 52%),
+    radial-gradient(ellipse at 95% 35%, rgba(102, 128, 167, .08), transparent 48%), var(--workspace-canvas);
+}
+.dark .app-shell {
+  background: radial-gradient(ellipse at 6% 0%, rgba(76, 148, 186, .19), transparent 52%),
+    radial-gradient(ellipse at 95% 45%, rgba(78, 105, 155, .13), transparent 48%), var(--workspace-canvas);
+}
+.workspace-content { background: transparent; }
+.workspace-header, .task-panel {
+  background: linear-gradient(135deg, var(--glass-highlight), transparent 42%), var(--workspace-surface);
+  border: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-shadow);
+  backdrop-filter: blur(24px) saturate(135%);
+  -webkit-backdrop-filter: blur(24px) saturate(135%);
+}
+.workspace-header {
+  position: relative;
+  flex: none;
+  margin: 12px 16px 0;
+  border-radius: 16px;
+}
+.task-header { min-height: 56px; padding: 8px 16px; }
+.task-panel { border-radius: 14px; }
+.task-panel-header { min-height: 44px; background: rgba(130, 164, 194, .04); border-color: var(--glass-border); }
+/* Material backgrounds outrank legacy dark solid utilities on themes/portals. */
+.ui-card, :root .ui-theme-card, :root.dark .ui-theme-card {
+  background: linear-gradient(135deg, var(--glass-highlight), transparent 60%), var(--glass-card);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+  border-radius: 14px;
+}
+.ui-card { border-color: var(--glass-border); }
+:root .ui-glass-overlay, :root.dark .ui-glass-overlay {
+  background: linear-gradient(135deg, var(--glass-highlight), transparent 40%), var(--glass-overlay);
+  border-color: var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), 0 24px 72px rgba(0, 6, 16, .32);
+  backdrop-filter: blur(28px) saturate(135%);
+  -webkit-backdrop-filter: blur(28px) saturate(135%);
+}
+.task-navigation a[aria-current="page"] {
+  background: var(--glass-card);
+  color: var(--ui-accent);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), inset 0 -2px 0 var(--ui-accent);
+}
+.task-subnav, .task-page > div:first-child nav {
+  max-width: 100%;
+  padding: 4px;
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  background: var(--glass-card);
+}
+.detail-tabs { overflow-x: auto; min-width: 0; scrollbar-width: thin; }
+.task-page { padding-top: 16px; gap: 12px; }
+.task-page h1 { font-weight: 650; letter-spacing: -.025em; }
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea {
+  max-width: 100%;
+  border-radius: 8px;
+  background-color: var(--control-surface);
+}
+/* ChevronDown path: Radix Icons (MIT), Copyright 2020 Modulz.
+   Source: https://github.com/radix-ui/icons/blob/master/packages/radix-icons/src/ChevronDownIcon.tsx
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+   copies of the Software, and to permit persons to whom the Software is
+   furnished to do so, subject to the following conditions:
+   The above copyright notice and this permission notice shall be included in
+   all copies or substantial portions of the Software.
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+   THE SOFTWARE. */
+select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='15' height='15' viewBox='0 0 15 15'%3E%3Cpath d='M3.135 6.158a.5.5 0 0 1 .707-.023L7.5 9.565l3.658-3.43a.5.5 0 0 1 .684.73l-4 3.75a.5.5 0 0 1-.684 0l-4-3.75a.5.5 0 0 1-.023-.707Z' fill='%23526170'/%3E%3C/svg%3E");
+  background-position: right 12px center;
+  background-repeat: no-repeat;
+  background-size: 15px;
+  padding-right: 36px;
+  padding-left: 12px;
+}
+.dark select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='15' height='15' viewBox='0 0 15 15'%3E%3Cpath d='M3.135 6.158a.5.5 0 0 1 .707-.023L7.5 9.565l3.658-3.43a.5.5 0 0 1 .684.73l-4 3.75a.5.5 0 0 1-.684 0l-4-3.75a.5.5 0 0 1-.023-.707Z' fill='%23c7d6e6'/%3E%3C/svg%3E"); }
+.ui-close { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; min-height: 32px; }
+.skip-link { z-index: var(--z-tooltip); background: var(--workspace-surface); position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); padding: 0; transform: none; }
+.skip-link:focus { position: static; display: block; width: auto; height: auto; clip-path: none; margin: 8px 12px 0; padding: 8px 12px; border-radius: 8px; }
+@supports not (backdrop-filter: blur(1px)) {
+  .workspace-header, .task-panel, .ui-glass-overlay { background: var(--glass-overlay); }
+}
+@media (max-width: 1023px) {
+  .workspace-header { margin: 8px 12px 0; border-radius: 14px; }
+  .task-header { padding: 8px 12px; }
+  .task-page { padding: 12px; }
+  .task-panel-header { flex-wrap: wrap; gap: 6px 12px; }
+  .task-panel-header > div { flex-wrap: wrap; }
+}
+@media (max-width: 480px) {
+  .task-header > div.flex-1 { display: none; }
+  .task-header { gap: 8px; }
+  .task-navigation { gap: 2px; }
+  .task-navigation a { padding: 10px 12px; }
+  .ui-close { min-width: 44px; min-height: 44px; }
+}
+
+[data-chart-surface="true"] { background: var(--chart-surface); }
+/* Header separators stay in flow; opaque plot interiors do not stack blur layers. */
+.workspace-status > span { white-space: nowrap; }

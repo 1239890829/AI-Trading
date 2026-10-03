@@ -213,7 +213,7 @@ export function ThemeCardView({
   })();
 
   return (
-    <section className={`overflow-hidden rounded-xl border bg-white dark:bg-zinc-950 ${CARD_BORDER[tier] ?? CARD_BORDER["观察"]}`}>
+    <section className={`ui-theme-card overflow-hidden rounded-xl border bg-white dark:bg-zinc-950 ${CARD_BORDER[tier] ?? CARD_BORDER["观察"]}`}>
       {/* ── 顶部：分级 + 名称 + 当日涨跌幅 + 阶段 + 强度 ─────────── */}
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
         <span className="font-mono text-xs text-zinc-600 dark:text-zinc-400">#{rank}</span>

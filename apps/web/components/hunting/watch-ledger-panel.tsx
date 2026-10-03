@@ -50,7 +50,7 @@ export function WatchLedgerPanel() {
   const st = data?.stats;
 
   return (
-    <section className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+    <section className="ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
           跟踪台账

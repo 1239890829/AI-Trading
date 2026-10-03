@@ -31,7 +31,7 @@
 | **AG-13** | `product/feature-closure-audit.md` | L2 | 细功能审计 | 大小动作/接口/后台任务的覆盖、源码发现与未验边界；§21离线恢复、§22四层验收55要求/六闭环；任务状态仍归阶段 |
 | **AG-14** | `ai/continuous-evolution.md` | L2 | 持续演进 | 外部模型/工具/量化方法/数据/工程创新的发现、证据梯度与准入前治理，并规定已采用内部机制的阶段性有效/衰退重验；状态归 GOV-025/GOV-027/真实 owner stage |
 | **MD-08** | `product/hunting-decision-design.md` | L2 | 选股与呈现 | 开放情境、KB37项映射、候选/时机/反证、§4.2同版只读证据契约、猎场UI及分层验收 |
-| **MD-10** | `product/ui-audit-20261003.md` | L2 | UI审查与设计 | 79张有效界面截图、50子项逐项设计、87 TSX结构索引；创意联动/组件材料/动效取舍与明确未验边界，原型非生产实施 |
+| **MD-10** | `product/ui-audit-20261003.md` | L2 | UI审查与设计 | 初次79图设计审查；IMP-055正式暗色玻璃全域实施另79张新图/50子项/87来源，实源、夹具、空错状态和未验分支明确分层 |
 | **MD-09** | `research/limit-up-dragon-research.md` | L2 | 选股研究 | 历史涨停/强连板/龙头研究协议与证据；§30 纠正未来筛选，§32 为已纠错的旧裁决，§33 为价格基线，§34–35 为近期多路径案例与样本纠错，§36–38 为首板后候选状态、共同机制及 2016–2025 跨年份反证；§39 为持续观察、猎场消费和复盘契约，§39.4为隔离前向运行入口与覆盖限制；状态归 W04/RSH-031 |
 | **KW-00..11** | `kb/00-INDEX.md` … `kb/11-doc-catalog.md` | L2/L3 | 知识 | 见下方「KB 知识库」分表 |
 | **SM-01..08** | `summary/stock-strategy` · `factor-system` · `data-market` · `architecture-design` · `ai-evolution` · `review-governance` · `system-final-blueprint` · `pick-signal-chain` | L2 | 主题汇总 | **查主题先看这里**；`system-final-blueprint` 是任务四后目标架构与验收总纲，§5.1给KB正文回执与有限对照协议；**`pick-signal-chain` = 选股提醒链路（`dispatch_alert` 扇出 / 双家族断点 / §11 通知读侧 / §12 来源事件与投递合同）**。维护：主题结论更新 |

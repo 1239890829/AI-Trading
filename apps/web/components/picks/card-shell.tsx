@@ -35,7 +35,7 @@ export function CardShell({
   return (
     <div
       onClick={onClick}
-      className={`rounded-xl border border-zinc-200 p-3 dark:border-zinc-800 ${flow ? "mb-3 break-inside-avoid" : ""} ${onClick ? "cursor-pointer transition-colors hover:border-zinc-300 dark:hover:border-zinc-700" : ""} ${className}`}
+      className={`ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800 ${flow ? "mb-3 break-inside-avoid" : ""} ${onClick ? "cursor-pointer transition-colors hover:border-zinc-300 dark:hover:border-zinc-700" : ""} ${className}`}
     >
       {children}
     </div>

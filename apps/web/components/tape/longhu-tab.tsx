@@ -225,7 +225,7 @@ export function LonghuTab() {
       {/* ── 题材迁徙（B3）：概念等分守恒口径，回答「资金近 N 日在题材间怎么轮动」── */}
       {trail && trail.trail.length > 0 && (
         <details
-          className="mt-4 shrink-0 rounded-xl border border-zinc-200 dark:border-zinc-800"
+          className="ui-card mt-4 shrink-0 rounded-xl border border-zinc-200 dark:border-zinc-800"
           open={trailOpen}
           onToggle={(e) => setTrailOpen((e.target as HTMLDetailsElement).open)}
         >

@@ -773,7 +773,7 @@ export function FloatingAssistant() {
       {bubbles.length > 0 && !open && (
         <div
           data-testid="assistant-alert-bubble"
-          className="fixed z-50 w-[280px] rounded-xl border border-zinc-200 bg-white/95 p-3 shadow-xl backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95"
+          className="ui-card ui-glass-overlay fixed z-50 w-[280px] rounded-xl border border-zinc-200 bg-white/95 p-3 shadow-xl backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95"
           style={{
             left: pos.x - 292 > 8 ? pos.x - 292 : pos.x + BALL + 12,
             top: Math.max(8, pos.y - 8),
@@ -843,7 +843,7 @@ export function FloatingAssistant() {
           role="region"
           aria-label="AI 助手面板"
           onKeyDown={event => { if (event.key === "Escape" && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); minimize(); } }}
-          className="fixed z-50 flex flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white/95 shadow-2xl shadow-zinc-900/10 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95 dark:shadow-black/50"
+          className="ui-glass-overlay fixed z-50 flex flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white/95 shadow-2xl shadow-zinc-900/10 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95 dark:shadow-black/50"
           style={panelStyle}
         >
           {/* 头部：墨玉徽标 + 名称 + 模型（mono 弱化），按钮族统一次要级 */}

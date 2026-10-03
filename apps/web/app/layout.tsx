@@ -35,10 +35,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             否则拿到默认 noop context——点无 url 通知没反应（2026-09-09 踩坑） */}
         <SymbolDetailProvider>
           <DetailModalProvider>
-            <a className="skip-link" href="#workspace-content">跳到任务内容</a>
             <NavBar />
             {/* 内容区是唯一滚动域：单页布局锁定在可视区内，溢出交给容器内部滚动 */}
-            <div id="workspace-content" className="workspace-content flex-1 min-h-0">{children}</div>
+            <div id="workspace-content" tabIndex={-1} className="workspace-content flex-1 min-h-0">{children}</div>
             <FloatingAssistant />
             {/* 标的详情弹窗的渲染宿主，**必须留在 DetailModalProvider 内层**：
                 弹窗里的详情面板会调 useDetailModal（相关事件行），反过来

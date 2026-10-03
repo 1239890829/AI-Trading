@@ -149,7 +149,7 @@ export function RepoTrackerTab() {
             </span>
           )}
           {lang && (
-            <span className={`rounded border px-1 text-[10px] ${active ? "border-zinc-500 text-zinc-700 dark:border-zinc-600 dark:text-zinc-400" : "border-zinc-200 text-zinc-600 dark:border-zinc-700"}`}>
+            <span className={`rounded border px-1 text-[10px] ${active ? "border-zinc-500 text-zinc-700 dark:border-zinc-600 dark:text-zinc-400" : "border-zinc-200 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"}`}>
               {lang}
             </span>
           )}
@@ -172,7 +172,7 @@ export function RepoTrackerTab() {
       </div>
 
       {(!loaded || missing) ? (
-        <section className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto rounded-xl border border-zinc-200 dark:border-zinc-800">
+        <section className="ui-card flex min-h-0 flex-1 items-center justify-center overflow-y-auto rounded-xl border border-zinc-200 dark:border-zinc-800">
           <p className="py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">
             {loaded ? "台账尚未生成——完成一轮 agent 分组评估后写入 docs/kb/05-repo-tracker.md" : "加载中…"}
           </p>
@@ -180,7 +180,7 @@ export function RepoTrackerTab() {
       ) : (
         <div className="flex min-h-0 flex-1 gap-3">
           {/* 左：条目列表（上下结构：名称+星数 / 分类标签） */}
-          <aside className="flex w-64 shrink-0 flex-col overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
+          <aside className="ui-card flex w-64 shrink-0 flex-col overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
             <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
               <p className="px-2 pb-1 pt-0.5 text-[10px] font-medium text-zinc-600 dark:text-zinc-400">仓库（agent 分组）</p>
               {repos.map((s) => (
@@ -198,7 +198,7 @@ export function RepoTrackerTab() {
           </aside>
 
           {/* 右：所选仓库详情（用途/评估/可借鉴/轨迹/结论） */}
-          <section className="min-w-0 flex-1 overflow-y-auto rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+          <section className="ui-card min-w-0 flex-1 overflow-y-auto rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
             {selectedSection ? (
               <MarkdownView content={selectedSection.body} />
             ) : (

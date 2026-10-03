@@ -43,7 +43,7 @@ export function OpportunityEvidencePanel({date: requestedDate, onDateChange}: {d
       if (!pinned) setPinned({date, card}); else setCompared({date, card});
     }
   }
-  return <section className="mt-3 border-t border-zinc-200 pt-3 text-xs text-zinc-700 dark:border-zinc-800 dark:text-zinc-300">
+  return <section className="ui-card mt-3 border border-zinc-200 p-4 text-xs text-zinc-700 dark:border-zinc-800 dark:text-zinc-300">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <h4 className="text-sm font-semibold">机会依据与等待条件</h4>
       <label className="flex items-center gap-2">决定日期

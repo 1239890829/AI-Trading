@@ -36,7 +36,7 @@ export function CardListSkeleton({ count = 3, className = "" }: { count?: number
   return (
     <div className={`space-y-2 ${className}`}>
       {Array.from({ length: count }, (_, i) => (
-        <div key={i} className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+        <div key={i} className="ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
           <div className="flex items-center gap-2">
             <Skeleton className="h-4 w-28" />
             <Skeleton className="h-3.5 w-12 rounded" />
@@ -75,14 +75,14 @@ export function StatsSkeleton({ className = "" }: { className?: string }) {
     <div className={`space-y-3 ${className}`}>
       <div className="grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
         {Array.from({ length: 4 }, (_, i) => (
-          <div key={i} className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+          <div key={i} className="ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
             <Skeleton className="h-3 w-20" />
             <Skeleton className="mt-2 h-6 w-14" />
             <Skeleton className="mt-1.5 h-2.5 w-24" />
           </div>
         ))}
       </div>
-      <div className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+      <div className="ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
         <Skeleton className="h-3 w-32" />
         <Skeleton className="mt-3 h-16 w-full" />
       </div>

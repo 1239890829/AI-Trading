@@ -660,7 +660,7 @@ export function NotificationBell() {
       {presence.value &&
         createPortal(
           <div ref={drawerRef} tabIndex={-1} data-motion-state={open ? "open" : "closed"} aria-hidden={!open || undefined} inert={!open} className="motion-overlay fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-sm" onMouseDown={(e) => { if (e.target === e.currentTarget) setOpen(false); }} role="dialog" aria-modal="true" aria-label="通知中心" data-testid="notification-drawer">
-            <div className="motion-drawer flex h-full w-full max-w-sm flex-col border-l border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-950">
+            <div className="ui-glass-overlay motion-drawer flex h-full w-full max-w-sm flex-col border-l border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-950">
               {/* 头：标题 + 未读数 + 操作 */}
               <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3 dark:border-zinc-800/80">
                 <h2 className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900 dark:text-zinc-50">

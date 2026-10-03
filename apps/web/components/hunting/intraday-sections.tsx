@@ -82,7 +82,7 @@ export function IntradayThemeRow({
   const stage = t.stage ?? "未知";
   const [detailOpen, setDetailOpen] = useState(false);
   return (
-    <div className="rounded-xl border border-zinc-200 p-3 text-xs transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900/50">
+    <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900/50">
       {/* L10（切片 E）：题材页 ↗ 与展开按钮同级（button 内不能嵌 a），点题材名仍是展开/收起 */}
       <div className="flex w-full items-center gap-2">
         <button onClick={onToggle} className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-left">
@@ -242,7 +242,7 @@ export function OpportunitySection({
         {/* 涨停家数/最高板/人气榜警示已上移至「今日行情」概览带（2026-09-04） */}
       </div>
       {opps.themes.length === 0 ? (
-        <div className="rounded-xl border border-zinc-200 p-4 text-xs text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
+        <div className="ui-card rounded-xl border border-zinc-200 p-4 text-xs text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
           暂无题材机会（当日无涨停数据或题材未成形）。
         </div>
       ) : (
@@ -592,7 +592,7 @@ export function ClimateBlock({ climate }: { climate?: Climate | null }) {
 export function DirectionCard({ d }: { d: BriefDirection }) {
   const rv = d.review;
   return (
-    <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+    <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">{d.direction}</span>
         {d.defensive && (
@@ -712,7 +712,7 @@ export function AlertItem({ a }: { a: BriefAlert }) {
 
 export function ReviewOutcomeTable({ reviewed }: { reviewed: BriefDirection[] }) {
   return (
-    <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+    <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
       <table className="w-full">
         <thead>
           <tr className="text-zinc-600 dark:text-zinc-400">
@@ -800,14 +800,14 @@ export function StatsPanel({ stats }: { stats: IntradayReviewStats }) {
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
-        <div className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+        <div className="ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
           <div className="text-zinc-600 dark:text-zinc-400">已复盘方向</div>
           <div className="mt-1 font-mono text-lg tabular-nums text-zinc-900 dark:text-zinc-50">{d.total}</div>
           <div className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
             发酵 {d.outcomes["发酵"] ?? 0} · 半发酵 {d.outcomes["半发酵"] ?? 0} · 证伪 {d.outcomes["证伪"] ?? 0} · 无波动 {d.outcomes["无波动"] ?? 0}
           </div>
         </div>
-        <div className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+        <div className="ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
           <div className="text-zinc-600 dark:text-zinc-400">确认提醒 T+1 胜率</div>
           <div className={`mt-1 font-mono text-lg tabular-nums ${winRateColor(t1.win_rate, "pct")}`}>
             {t1.win_rate != null ? `${t1.win_rate}%` : "—"}
@@ -816,7 +816,7 @@ export function StatsPanel({ stats }: { stats: IntradayReviewStats }) {
             样本 {t1.n} · 均值 {t1.avg_return != null ? pctText(t1.avg_return) : "—"}
           </div>
         </div>
-        <div className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+        <div className="ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
           <div className="text-zinc-600 dark:text-zinc-400">盈亏比（T+1）</div>
           <div className="mt-1 font-mono text-lg tabular-nums text-zinc-900 dark:text-zinc-50">
             {t1.profit_loss_ratio != null ? t1.profit_loss_ratio : "—"}
@@ -825,7 +825,7 @@ export function StatsPanel({ stats }: { stats: IntradayReviewStats }) {
             均盈 {t1.avg_win != null ? pctText(t1.avg_win) : "—"} / 均亏 {t1.avg_loss != null ? pctText(t1.avg_loss) : "—"}
           </div>
         </div>
-        <div className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+        <div className="ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
           <div className="text-zinc-600 dark:text-zinc-400">T+3 胜率</div>
           <div className={`mt-1 font-mono text-lg tabular-nums ${winRateColor(t3.win_rate, "pct")}`}>
             {t3.win_rate != null ? `${t3.win_rate}%` : "—"}
@@ -835,14 +835,14 @@ export function StatsPanel({ stats }: { stats: IntradayReviewStats }) {
       </div>
 
       {reviewedDays.length >= 2 && (
-        <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+        <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
           <div className="mb-2 font-medium text-zinc-900 dark:text-zinc-50">近 30 日方向对照走势</div>
           <DailyCurve daily={reviewedDays} />
         </div>
       )}
 
       {reviewedDays.length > 0 && (
-        <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+        <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
           <div className="mb-1 font-medium text-zinc-900 dark:text-zinc-50">逐日对照</div>
           <table className="w-full">
             <thead>
@@ -874,7 +874,7 @@ export function StatsPanel({ stats }: { stats: IntradayReviewStats }) {
       )}
 
       {stats.alerts.length > 0 && (
-        <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+        <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
           <div className="mb-1 font-medium text-zinc-900 dark:text-zinc-50">确认提醒收益明细（T+1 / T+3，参考价=提醒日收盘）</div>
           {stats.alerts.map((a) => (
             <div key={a.date + a.symbol} className="flex flex-wrap gap-2 border-b border-zinc-100 py-1 last:border-0 dark:border-zinc-800/60">
@@ -899,7 +899,7 @@ export function StatsPanel({ stats }: { stats: IntradayReviewStats }) {
 /** watcher 状态表（原 /intraday sec-watcher 内容体）。 */
 export function WatcherPanel({ watcher, pending }: { watcher: WatcherState | null; pending: boolean }) {
   return (
-    <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+    <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
       {pending && watcher === null ? (
         <div className="text-zinc-600 dark:text-zinc-400">加载中…</div>
       ) : watcher?.active ? (
