@@ -63,6 +63,7 @@ import {
 import { timeText } from "@/lib/format";
 import { OpportunityEvidencePanel } from "@/components/hunting/opportunity-evidence-panel";
 import { useExitPresence } from "@/hooks/use-exit-presence";
+import { motionOrigin, type MotionOrigin } from "@/lib/surface-motion";
 import { ModalShell } from "@/components/ui/modal-shell";
 import { WatchLedgerPanel } from "@/components/hunting/watch-ledger-panel";
 import { MasonryColumns } from "@/components/masonry-columns";
@@ -91,6 +92,7 @@ import { MasonryColumns } from "@/components/masonry-columns";
 
 function HuntingInner() {
   const router = useRouter();
+  const [origin, setOrigin] = useState<MotionOrigin | null>(null);
   const sp = useSearchParams();
   const isDiscovery = !["evidence", "tracking"].includes(sp.get("view") ?? "");
 
@@ -291,13 +293,13 @@ function HuntingInner() {
         <div><span className="rail-indicator" aria-hidden="true"/><strong>发现 → 核对 → 跟踪</strong><span className="rail-hint">先看机会，按需展开依据</span></div>
         <div className="flex flex-wrap items-center gap-1">
           {!isDiscovery && <Link className="quiet-action" href={patchWorkspaceUrl("/hunting", sp.toString(), {view: "discover", panel: null})}>返回当前机会</Link>}
-          <button className="accessory-trigger" aria-haspopup="dialog" onClick={() => router.push(patchWorkspaceUrl("/hunting", sp.toString(), {panel: "evidence", view: "discover"}), {scroll: false})}>展开证据台</button>
-          <button className="accessory-trigger" aria-haspopup="dialog" onClick={() => router.push(patchWorkspaceUrl("/hunting", sp.toString(), {panel: "tracking", view: "discover"}), {scroll: false})}>参考跟踪</button>
+          <button className="accessory-trigger" aria-haspopup="dialog" onClick={event => { setOrigin(motionOrigin(event, "capsule")); router.push(patchWorkspaceUrl("/hunting", sp.toString(), {panel: "evidence", view: "discover"}), {scroll: false}); }}>展开证据台</button>
+          <button className="accessory-trigger" aria-haspopup="dialog" onClick={event => { setOrigin(motionOrigin(event, "capsule")); router.push(patchWorkspaceUrl("/hunting", sp.toString(), {panel: "tracking", view: "discover"}), {scroll: false}); }}>参考跟踪</button>
           <Link className="quiet-action" href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "positions", account: "paper", view: null, panel: null, from: `/hunting?${sp.toString()}`})}>持仓与模拟</Link>
           <Link className="quiet-action" href={patchWorkspaceUrl("/agent", sp.toString(), {area: "research", tab: "review", view: null, panel: null, from: `/hunting?${sp.toString()}`})}>跨日复盘</Link>
         </div>
       </div>
-      {accessory.value && <ModalShell open={accessory.active} label={accessory.value === "evidence" ? "机会证据台" : "参考跟踪"} size="lg" presentation="drawer" expandable onClose={() => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {panel: null}), {scroll: false})} header={<div><p className="workspace-kicker">机会工作流</p><h2 className="text-lg font-semibold">{accessory.value === "evidence" ? "机会证据台" : "参考跟踪"}</h2></div>} footer="保留当前机会位置；参考价与观察记录不是成交，不构成买卖建议。">
+      {accessory.value && <ModalShell motionOrigin={origin} open={accessory.active} label={accessory.value === "evidence" ? "机会证据台" : "参考跟踪"} size="lg" presentation="drawer" expandable onClose={() => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {panel: null}), {scroll: false})} header={<div><p className="workspace-kicker">机会工作流</p><h2 className="text-lg font-semibold">{accessory.value === "evidence" ? "机会证据台" : "参考跟踪"}</h2></div>} footer="保留当前机会位置；参考价与观察记录不是成交，不构成买卖建议。">
         {accessory.active && (accessory.value === "evidence" ? <OpportunityEvidencePanel date={sp.get("date") ?? undefined} onDateChange={date => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {date}), {scroll: false})} /> : <WatchLedgerPanel />)}
       </ModalShell>}
       <div className="task-scroll min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">

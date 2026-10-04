@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MinuteChart } from "./minute-chart";
 import type { MinutePoint } from "@/lib/api";
 
@@ -24,14 +24,14 @@ function makeChart(opts: Options) {
     addAreaSeries: (opts: Options) => add("price", opts),
     addLineSeries: (opts: Options) => add("line", opts),
     addHistogramSeries: (opts: Options) => add("volume", opts),
-    priceScale: () => ({ applyOptions: vi.fn() }),
+    priceScale: () => ({ applyOptions: vi.fn(), width: () => 68 }),
     timeScale: () => ({ fitContent: vi.fn(), setVisibleLogicalRange: vi.fn() }),
     subscribeCrosshairMove: vi.fn(), unsubscribeCrosshairMove: vi.fn(),
     clearCrosshairPosition: vi.fn(), setCrosshairPosition: vi.fn(),
   };
 }
 vi.mock("lightweight-charts", () => ({
-  CrosshairMode: { Normal: 0 },
+  CrosshairMode: { Normal: 0, Magnet: 1 },
   createChart: (_container: unknown, opts: Options) => { const c = makeChart(opts); charts.push(c); return c; },
 }));
 beforeEach(() => { charts.length = 0; });
@@ -40,6 +40,25 @@ const point = (price: number, minute = "30", avg: number | null = null, day = "1
   ts: `2026-09-${day}T09:${minute}:00+08:00`, price, avg, source: "test_fixture",
 });
 const range = (s: ReturnType<typeof makeSeries>) => s.opts.autoscaleInfoProvider?.().priceRange;
+
+it("magnetic focus shows the exact selected minute price and hides on leaving", () => {
+  const view = render(<MinuteChart points={[point(10), point(10.257, "31")]} prevClose={10} />);
+  expect(charts[0].opts.crosshair).toEqual({mode:1});
+  const surface = view.container.querySelector('[data-chart-surface]')!;
+  fireEvent.pointerEnter(surface);
+  const callback = charts[0].subscribeCrosshairMove.mock.calls[0][0] as (p: {time:number; point:{x:number;y:number}}) => void;
+  act(() => callback({time:Date.UTC(2026,8,17,9,31)/1000,point:{x:100,y:100}}));
+  const focus = screen.getByLabelText("图表当前焦点");
+  expect(focus.hidden).toBe(false);
+  expect(focus.textContent).toContain("09:31");
+  expect(focus.textContent).toContain("10.26");
+  expect(focus.textContent).not.toContain("10.25");
+  act(() => callback({time:Date.UTC(2026,8,17,12)/1000,point:{x:240,y:100}}));
+  expect(focus.textContent).toContain("09:31");
+  expect(charts[0].setCrosshairPosition).toHaveBeenLastCalledWith(10.257, Date.UTC(2026,8,17,9,31)/1000, charts[0].series[0]);
+  fireEvent.pointerLeave(surface);
+  expect(focus.hidden).toBe(true);
+});
 
 describe("MinuteChart 轴契约", () => {
   it("新极值原位更新两轴，不销毁图表", () => {
