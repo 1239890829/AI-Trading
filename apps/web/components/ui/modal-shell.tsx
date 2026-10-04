@@ -33,6 +33,9 @@
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { useOverlayFocus } from "@/hooks/use-overlay-focus";
 import { createPortal } from "react-dom";
+import { useSurfaceMotion } from "@/hooks/use-surface-motion";
+import { useDrawerGesture } from "@/hooks/use-drawer-gesture";
+import type { MotionOrigin } from "@/lib/surface-motion";
 
 /** 弹窗尺寸档：sm 窄卡 / md 常规正文 / lg 全功能面板。 */
 export type ModalSize = "sm" | "md" | "lg";
@@ -65,6 +68,8 @@ export interface ModalShellProps {
   presentation?: "modal" | "drawer";
   /** Opt-in reading drawer modes keep the same mounted content and form state. */
   expandable?: boolean;
+  /** Actual pointer source, or null for immediate keyboard/deep-link presentation. */
+  motionOrigin?: MotionOrigin | null;
   /** 层级：默认 50。内容详情弹窗（可从其他弹窗内打开）用 60。 */
   zIndex?: number;
   /** 头部内容（标题/元信息）。省略则不渲染头部，也不渲染关闭按钮。 */
@@ -88,6 +93,7 @@ export function ModalShell({
   size = "md",
   presentation = "modal",
   expandable = false,
+  motionOrigin,
   zIndex = 50,
   header,
   footer,
@@ -101,7 +107,10 @@ export function ModalShell({
 
   const panelRef = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(true);
+  const [compact, setCompact] = useState(false);
   const isModal = presentation !== "drawer" || !expandable || expanded;
+  const motion = useSurfaceMotion(panelRef, open, motionOrigin, `${mounted}:${expanded}:${compact}`);
+  const gesture = useDrawerGesture(panelRef, open, compact, setCompact, motion.prepare, motion.reduced);
   useOverlayFocus(panelRef, onClose, mounted && open, zIndex, isModal);
 
   // 只有点在遮罩**本身**才关闭；点面板内部（含拖拽选中）不关。
@@ -132,14 +141,19 @@ export function ModalShell({
         aria-modal={isModal || undefined}
         aria-label={label}
         data-testid={testid}
-        className={`pointer-events-auto ui-glass-overlay ${presentation === "drawer" ? "motion-drawer" : "motion-modal"} flex flex-col overflow-hidden border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900 ${
+        data-motion-immediate={motionOrigin === null || motion.reduced || undefined}
+        data-shared-surface={motionOrigin ? motionOrigin.kind : undefined}
+        data-mobile-snap={gesture.compact ? "compact" : "full"}
+        style={motionOrigin !== undefined ? {transformOrigin: "top left"} : undefined}
+        className={`pointer-events-auto ui-glass-overlay ${presentation === "drawer" ? "motion-drawer mobile-drawer" : "motion-modal"} flex flex-col overflow-hidden border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900 ${
           radius === "2xl" ? "rounded-2xl" : "rounded-xl"
         } ${presentation === "drawer" ? (size === "lg" && (!expandable || expanded) ? "h-full w-[min(1200px,96vw)]" : "h-full w-full max-w-2xl") : SIZE_CLASS[size]}`}
       >
+        {presentation === "drawer" && header !== undefined && <button type="button" data-nopress className="drawer-grip" aria-label={gesture.compact ? "展开至全屏" : "收起至半屏"} aria-expanded={!gesture.compact} {...gesture.handlers} onClick={event => gesture.toggle(event.detail > 0)}><span aria-hidden="true" /></button>}
         {header !== undefined && (
           <div className="flex shrink-0 items-start justify-between gap-3 border-b border-zinc-100 px-5 py-3.5 dark:border-zinc-800/80">
             <div className="min-w-0 flex-1">{header}</div>
-            {expandable && presentation === "drawer" && size === "lg" && <button type="button" className="drawer-mode hidden shrink-0 rounded-lg border border-zinc-300 px-3 py-2 text-xs sm:inline-flex dark:border-zinc-600" aria-pressed={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? "并排旁览" : "展开工作区"}</button>}
+            {expandable && presentation === "drawer" && size === "lg" && <button type="button" className="drawer-mode hidden shrink-0 rounded-lg border border-zinc-300 px-3 py-2 text-xs sm:inline-flex dark:border-zinc-600" aria-pressed={expanded} onClick={event => { motion.prepare(event.detail > 0); setExpanded(value => !value); }}>{expanded ? "并排旁览" : "展开工作区"}</button>}
             <CloseButton onClose={onClose} />
           </div>
         )}

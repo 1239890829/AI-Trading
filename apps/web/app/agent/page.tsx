@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { EvolutionTab } from "@/components/agent/evolution-tab";
@@ -14,6 +14,7 @@ import { ProductionOperations } from "@/components/agent/production-operations";
 import { agentArea, patchWorkspaceUrl } from "@/lib/task-navigation";
 import { useExitPresence } from "@/hooks/use-exit-presence";
 import Link from "next/link";
+import { type MotionOrigin } from "@/lib/surface-motion";
 import { WorkspaceDeck } from "@/components/ui/workspace-deck";
 import { ModalShell } from "@/components/ui/modal-shell";
 import { RESEARCH_TOOLS, MAINTENANCE_TOOLS } from "@/lib/workspace-tools";
@@ -34,6 +35,7 @@ import { PageSkeletonFallback } from "@/components/ui/loading";
 
 function AgentInner() {
   const router = useRouter();
+  const [origin, setOrigin] = useState<MotionOrigin | null>(null);
   const sp = useSearchParams();
   const raw = sp.get("tab");
   const area = agentArea(sp.get("area"), raw);
@@ -43,7 +45,8 @@ function AgentInner() {
   const selected = presence.value;
   const rawDate = sp.get("date");
   const reviewDate = rawDate && /^(?:\d{4}-\d{2}-\d{2}|\d{8})$/.test(rawDate) ? rawDate : undefined;
-  function openTool(key: string) {
+  function openTool(key: string, origin: MotionOrigin | null) {
+    setOrigin(origin);
     router.push(patchWorkspaceUrl("/agent", sp.toString(), {area, tab: key}), {scroll: false});
   }
   function closeTool() {
@@ -54,12 +57,12 @@ function AgentInner() {
       <div><p className="workspace-kicker">{maintenance ? "运行与维护" : "判断的下一轮"}</p><h1>{maintenance ? "系统维护" : "复盘研究"}</h1></div>
       <div className="workspace-context"><span>{maintenance ? "受控处置 · 后端鉴权与预算" : "冻结判断 · 失败与反证"}</span>{maintenance && <Link href="/agent?area=research&tab=review" className="quiet-action">返回研究</Link>}</div>
     </div>
-    <WorkspaceDeck tools={tools} onOpen={openTool} compact />
+    <WorkspaceDeck activeTool={raw} tools={tools} onOpen={openTool} compact />
     <section className="workspace-stage min-h-0 flex-1 flex flex-col" aria-label={maintenance ? "运行状态" : "日度复盘主工作区"}>
       <div className="stage-heading"><span className="stage-indicator" aria-hidden="true"/><h2>{maintenance ? "运行状态与生产兜底" : "日度复盘"}</h2><span>{maintenance ? "已有结果与受控命令" : "不构成买卖建议"}</span></div>
       <div className="min-h-0 flex-1 flex flex-col overflow-hidden p-3">{maintenance ? <ProductionOperations /> : <ReviewTab key={reviewDate ?? "latest"} focusDate={reviewDate} allowDispose={false} />}</div>
     </section>
-    {selected && <ModalShell open={presence.active} label={selected.label} size={["params", "alerts", "repos"].includes(selected.key) ? "md" : "lg"} presentation="drawer" expandable onClose={closeTool} header={<div><p className="workspace-kicker">{selected.group}</p><h2 className="text-lg font-semibold">{selected.label}</h2><p className="text-xs text-zinc-600 dark:text-zinc-400">{selected.description}</p></div>} bodyClassName="overflow-hidden p-3" footer={maintenance ? "维护视图不授予权限；命令继续由后端鉴权、预算和批准链约束。" : "只读研究；样本不足与缺失产物不代表已经验证。"}>
+    {selected && <ModalShell motionOrigin={origin} open={presence.active} label={selected.label} size={["params", "alerts", "repos"].includes(selected.key) ? "md" : "lg"} presentation="drawer" expandable onClose={closeTool} header={<div><p className="workspace-kicker">{selected.group}</p><h2 className="text-lg font-semibold">{selected.label}</h2><p className="text-xs text-zinc-600 dark:text-zinc-400">{selected.description}</p></div>} bodyClassName="overflow-hidden p-3" footer={maintenance ? "维护视图不授予权限；命令继续由后端鉴权、预算和批准链约束。" : "只读研究；样本不足与缺失产物不代表已经验证。"}>
       {presence.active && selected.key === "evolution" && <EvolutionTab />}
       {presence.active && selected.key === "tasks" && <TaskCenter />}
       {presence.active && selected.key === "review" && <ReviewTab key={`maintenance:${reviewDate ?? "latest"}`} focusDate={reviewDate} allowDispose />}

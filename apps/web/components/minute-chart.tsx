@@ -389,6 +389,7 @@ export function MinuteChart({
   // 瞬态事件不得隐藏浮层；浮层 DOM 走手术式 patch（见创建 effect 内 renderTip）。
   const insideRef = useRef(false);
   const lastParamRef = useRef<{ time: Time; point: { x: number; y: number } } | null>(null);
+  const focusRef = useRef<HTMLSpanElement>(null);
   const tipPatchRef = useRef<{ key: string; x: number; y: number }>({ key: "", x: -1, y: -1 });
   const renderTipRef = useRef<((time: Time, point: { x: number; y: number }) => void) | null>(null);
 
@@ -482,7 +483,7 @@ export function MinuteChart({
       leftPriceScale: hasBase ? { visible: true, borderVisible: false } : { visible: false },
       // 库的左右轴可独立拖伸，会破坏价↔百分比映射。纵轴统一自动缩放；时间缩放保留。
       handleScale: { axisPressedMouseMove: { price: false, time: true } },
-      crosshair: { mode: CrosshairMode.Normal },
+      crosshair: { mode: CrosshairMode.Magnet },
     });
     const s = seriesRef.current;
     s.chart = chart;
@@ -514,6 +515,9 @@ export function MinuteChart({
           bottomFillColor1: p.downFill1,
           bottomFillColor2: p.downFill2,
           lineWidth: 2,
+          crosshairMarkerRadius: 5,
+          crosshairMarkerBorderWidth: 5,
+          crosshairMarkerBorderColor: "rgba(153,185,210,.25)",
           priceLineVisible: false,
         })
       : chart.addAreaSeries({
@@ -521,6 +525,9 @@ export function MinuteChart({
           topColor: p.upFill1,
           bottomColor: p.upFill2,
           lineWidth: 2,
+          crosshairMarkerRadius: 5,
+          crosshairMarkerBorderWidth: 5,
+          crosshairMarkerBorderColor: "rgba(153,185,210,.25)",
           priceLineVisible: false,
         });
     s.price = series;
@@ -710,12 +717,33 @@ export function MinuteChart({
       return best;
     };
 
+    let focusTime = "";
+    let focusAnimation: Animation | null = null;
+    const focus = focusRef.current;
+    const motionQuery = typeof window.matchMedia === "function" ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+    const stopFocusMotion = () => { if (motionQuery?.matches) focusAnimation?.cancel(); };
+    motionQuery?.addEventListener("change", stopFocusMotion);
     const renderTip = (time: Time, point: { x: number; y: number }) => {
       if (!tooltip) return;
       const d = nearestPoint(time);
       if (!d) return;
       const bjIso = new Date(new Date(d.ts).getTime() + 8 * 3600 * 1000).toISOString();
       const changePct = hasBase && isPositivePrice(d.price) ? ((d.price - effectivePrevClose!) / effectivePrevClose!) * 100 : null;
+      if (focus) {
+        focus.hidden = false;
+        const timeEl = focus.querySelector<HTMLElement>("[data-focus-time]");
+        const valueEl = focus.querySelector<HTMLElement>("[data-focus-price]");
+        if (timeEl) timeEl.textContent = bjIso.slice(11, 16);
+        if (valueEl) {
+          const exact = isPositivePrice(d.price) ? d.price.toFixed(2) : "--";
+          if (valueEl.textContent !== exact) valueEl.textContent = exact;
+          if (focusTime !== d.ts && insideRef.current && !motionQuery?.matches && typeof valueEl.animate === "function") {
+            focusAnimation?.cancel();
+            focusAnimation = valueEl.animate([{ transform:"translateY(4px)" }, { transform:"translateY(-.5px)", offset:.8 }, { transform:"none" }], { duration:140, easing:"cubic-bezier(.22,1,.36,1)" });
+          }
+        }
+        focusTime = d.ts;
+      }
       const avgDevPct = isPositivePrice(d.avg) && isPositivePrice(d.price) ? ((d.price - d.avg) / d.avg) * 100 : null;
       const lb = lbRef.current(d.cum_volume, bjIso);
       const pts = pointsRef.current;
@@ -781,7 +809,9 @@ export function MinuteChart({
       // 位置只在变化时写（悬停中重放事件坐标不变 → 零样式写入）
       const box = ref.current!;
       const w = tooltip.offsetWidth || 150;
-      const x = point.x + 14 + w > box.clientWidth ? Math.max(4, point.x - 14 - w) : point.x + 14;
+      // Library pointer coordinates start at the plot, not the left price axis.
+      const pointerX = point.x + chart.priceScale("left").width();
+      const x = pointerX + 14 + w > box.clientWidth ? Math.max(4, pointerX - 14 - w) : pointerX + 14;
       const y = Math.min(Math.max(4, point.y - 10), Math.max(4, box.clientHeight - tooltip.offsetHeight - 4));
       if (tipPatchRef.current.x !== x) {
         tooltip.style.left = `${x}px`;
@@ -794,7 +824,9 @@ export function MinuteChart({
     };
     renderTipRef.current = renderTip;
 
+    let snapping = false;
     const onMove = (param: { time?: Time; point?: { x: number; y: number } }) => {
+      if (snapping) return;
       if (!tooltip) return;
       if (!param.time || !param.point) {
         // 空 param：真实离开（库 mouseleave）或数据更新瞬态。悬停中一律忽略，
@@ -802,8 +834,15 @@ export function MinuteChart({
         if (!insideRef.current && tooltip.style.opacity !== "0") tooltip.style.opacity = "0";
         return;
       }
-      lastParamRef.current = { time: param.time, point: param.point };
-      renderTip(param.time, param.point);
+      const best = nearestPoint(param.time);
+      const time = best ? (new Date(best.ts).getTime() / 1000 + BJ_OFFSET) as Time : param.time;
+      if (best && isPositivePrice(best.price)) {
+        snapping = true;
+        try { chart.setCrosshairPosition(best.price, time, series as never); }
+        finally { snapping = false; }
+      }
+      lastParamRef.current = { time, point: param.point };
+      renderTip(time, param.point);
     };
 
     // 容器原生指针跟踪：区分"离开"与"数据更新瞬态"的判据；真实离开时同步
@@ -814,6 +853,8 @@ export function MinuteChart({
     const markOutside = () => {
       insideRef.current = false;
       lastParamRef.current = null;
+      focusAnimation?.cancel();
+      if (focus) focus.hidden = true;
       if (tooltip && tooltip.style.opacity !== "0") tooltip.style.opacity = "0";
       try {
         chart.clearCrosshairPosition();
@@ -852,6 +893,9 @@ export function MinuteChart({
       boxEl.removeEventListener("pointermove", markInside);
       boxEl.removeEventListener("pointerleave", markOutside);
       boxEl.removeEventListener("pointercancel", markOutside);
+      focusAnimation?.cancel();
+      motionQuery?.removeEventListener("change", stopFocusMotion);
+      if (focus) focus.hidden = true;
       renderTipRef.current = null;
       delete dbg.__minuteChart;
       delete dbg.__minuteRange;
@@ -959,6 +1003,7 @@ export function MinuteChart({
       {/* 角标行：量比 + 竞价 + 上证叠加图例——独立文档流行（原 absolute right-2 top-1.5
           浮层压在图表右上角价格标签/最新价区域），不占图表绘制空间、互不遮挡 */}
       <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 px-2 pb-0.5 pt-1 text-[11px]">
+        <span ref={focusRef} hidden className="chart-focus" aria-label="图表当前焦点"><span data-focus-time /> <span data-focus-price className="chart-focus-price" /></span>
         {invalidPrices > 0 && <span className="text-amber-800 dark:text-amber-300">{invalidPrices} 个无效价格已留空</span>}
         {referenceIssue === "invalid-price" && <span className="text-amber-800 dark:text-amber-300">涨跌幅基准无效，仅展示价格</span>}
         {referenceIssue === "unknown-date" && <span className="text-amber-800 dark:text-amber-300">参考日未知，仅展示价格</span>}
