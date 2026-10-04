@@ -1,37 +1,42 @@
 "use client";
 
 import { useExitPresence } from "@/hooks/use-exit-presence";
-import { useState } from "react";
+import { useId, useState } from "react";
 import Link from "next/link";
-import { useMaterialTilt } from "@/hooks/use-material-tilt";
 import { motionOrigin, type MotionOrigin } from "@/lib/surface-motion";
 import { ModalShell } from "@/components/ui/modal-shell";
 import { MARKET_LENSES, marketLensUrl, type WorkspaceTool } from "@/lib/workspace-tools";
 
-/** Grouped tools stay dormant until opened; counts represent tools, never market health. */
-function ToolStack({group, tools, onOpen, activeTool}: {group: string; tools: readonly WorkspaceTool[]; onOpen: (key: string, origin: MotionOrigin | null) => void; activeTool?: string | null}) {
-  const tilt = useMaterialTilt();
-  return <details className="tool-stack material-panel" {...tilt}>
-    <span className="material-light" aria-hidden="true" />
-    <summary className="tool-stack-summary" onKeyDown={() => tilt.onPointerCancel()} onClick={event => { event.currentTarget.parentElement!.dataset.motionInput = event.detail > 0 ? "pointer" : "keyboard"; }}>
-      <span className="tool-stack-heading"><span>{group}</span><span aria-label={`${tools.length} 项工具`}>{tools.length.toString().padStart(2, "0")}</span></span>
-      <span className="tool-stack-caption">{tools.map(tool => tool.label).join(" / ")}</span>
-      <svg className="tray-toggle" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m8 10 4 4 4-4"/></svg>
-    </summary>
-    <div className="tool-tray">
-      {tools.map(tool => <button key={tool.key} className="tool-launcher" data-selected={activeTool === tool.key || undefined} onClick={event => onOpen(tool.key, motionOrigin(event))} aria-haspopup="dialog">
-        <span className="tool-mark" aria-hidden="true">{tool.mark}</span>
-        <span className="min-w-0"><span className="tool-title">{tool.label}</span><span className="tool-description">{tool.description}</span></span>
-        <svg className="tool-open" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10" /></svg>
-      </button>)}
-    </div>
-  </details>;
-}
-
+/** One shared tray keeps every folder aligned. Back plates occupy reserved space. */
 export function WorkspaceDeck({tools, onOpen, compact = false, activeTool}: {tools: readonly WorkspaceTool[]; onOpen: (key: string, origin: MotionOrigin | null) => void; compact?: boolean; activeTool?: string | null}) {
+  const id = useId();
+  const [expanded, setExpanded] = useState<string | null>(null);
   const groups = [...new Set(tools.map(tool => tool.group))];
+  const visibleGroup = groups.includes(expanded ?? "") ? expanded : null;
   return <div className={`workspace-deck ${compact ? "workspace-deck-compact" : ""}`}>
-    {groups.map(group => <ToolStack key={group} group={group} tools={tools.filter(tool => tool.group === group)} onOpen={onOpen} activeTool={activeTool} />)}
+    <div className="tool-folders">
+      {groups.map((group, index) => {
+        const items = tools.filter(tool => tool.group === group);
+        const open = visibleGroup === group;
+        return <div className="tool-folder" data-open={open} key={group}>
+          <span className="folder-layer folder-layer-back" aria-hidden="true" />
+          <span className="folder-layer folder-layer-front" aria-hidden="true" />
+          <button id={`${id}-group-${index}`} className="tool-stack" aria-label={group} aria-expanded={open} aria-controls={`${id}-tray-${index}`} onClick={() => setExpanded(open ? null : group)}>
+            <span className="tool-stack-heading"><span>{group}</span><span className="folder-count" aria-label={`${items.length} 项工具`}>{items.length.toString().padStart(2, "0")}</span></span>
+            <span className="tool-stack-caption">{items.map(tool => tool.label).join(" · ")}</span>
+            <span className="folder-affordance" aria-hidden="true">{open ? "收起工具" : "展开工具"}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d={open ? "m6 14 6-6 6 6" : "m6 10 6 6 6-6"}/></svg></span>
+          </button>
+        </div>;
+      })}
+    </div>
+    {groups.map((group, index) => <div key={group} id={`${id}-tray-${index}`} hidden={visibleGroup !== group} role="region" aria-labelledby={`${id}-group-${index}`} className="tool-tray" onKeyDown={event => {
+      if (event.key === "Escape") { event.preventDefault(); setExpanded(null); document.getElementById(`${id}-group-${index}`)?.focus(); }
+    }}>
+      {visibleGroup === group && tools.filter(tool => tool.group === group).map(tool => <button key={tool.key} className="tool-launcher" data-selected={activeTool === tool.key || undefined} onClick={event => onOpen(tool.key, motionOrigin(event))} aria-haspopup="dialog">
+        <span className="min-w-0"><span className="tool-title">{tool.label}</span><span className="tool-description">{tool.description}</span></span>
+        <svg className="tool-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10" /></svg>
+      </button>)}
+    </div>)}
   </div>;
 }
 

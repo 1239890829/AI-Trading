@@ -46,9 +46,9 @@ export function QuoteStrip({
   ];
 
   return (
-    <div className="ui-card shrink-0 rounded-xl border border-zinc-200 px-4 py-1.5 dark:border-zinc-800">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-4">
-        <div className="flex items-baseline gap-2">
+    <div className="ui-card quote-sheet shrink-0 rounded-xl border border-zinc-200 px-4 py-1.5 dark:border-zinc-800">
+      <div className="quote-sheet-head flex flex-wrap items-baseline justify-between gap-x-4">
+        <div className="flex flex-wrap items-baseline gap-2">
           <span className="text-base font-semibold">{quote.name ?? "--"}</span>
           <span className="font-mono text-xs text-zinc-600 dark:text-zinc-400">{quote.market}.{quote.symbol}</span>
           {/* 可见性策略单点在 QualityBadge 内部（shouldShowQualityBadge）：正常出静音灰「正常」，
@@ -74,13 +74,13 @@ export function QuoteStrip({
           </span>
         </div>
       </div>
-      <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[11px] text-zinc-600 dark:text-zinc-400">
+      <div className="quote-sheet-metrics text-[11px] text-zinc-600 dark:text-zinc-400">
         {strip.map(([k, v, title]) => (
-          <span key={k} title={title}>
-            {k} <span className="font-mono tabular-nums text-zinc-800 dark:text-zinc-200">{v}</span>
+          <span className="quote-metric" key={k} title={title}>
+            <span>{k}</span> <span className="font-mono tabular-nums text-zinc-800 dark:text-zinc-200">{v}</span>
           </span>
         ))}
-        <span className="ml-auto text-zinc-600 dark:text-zinc-400">
+        <span className="quote-source text-zinc-600 dark:text-zinc-400">
           {timeText(quote.data_timestamp)} · {sourceLabel(quote.source)}
         </span>
       </div>

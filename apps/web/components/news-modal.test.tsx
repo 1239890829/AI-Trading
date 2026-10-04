@@ -32,6 +32,13 @@ function contentFixture(overrides: Partial<ArticleContent> = {}): ArticleContent
 }
 
 describe("NewsModal 正文块渲染（2026-09-04 排版升级）", () => {
+  it("shows a missing source explicitly instead of linking to the current page", async () => {
+    mockedContent.mockRejectedValue(new Error("原文不可用"));
+    render(<NewsModal item={{...item, url: "", digest: "已保存的摘要"}} onClose={() => {}} />);
+    expect(await screen.findByText("已保存的摘要")).toBeTruthy();
+    expect(screen.getByText("原文链接缺失")).toBeTruthy();
+    expect(screen.queryByRole("link", {name: /查看原文/})).toBeNull();
+  });
   it("关闭旧资讯后快速打开另一条，旧请求迟到不能覆盖新正文", async () => {
     let resolveOld!: (value: ArticleContent) => void;
     const old = new Promise<ArticleContent>(resolve => { resolveOld = resolve; });

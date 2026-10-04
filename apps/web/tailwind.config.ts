@@ -6,8 +6,8 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // Shared neutral ramp: blue graphite in dark mode, quiet cool whites in light mode.
-        zinc: { 50: "#f3f6f8", 100: "#edf2f6", 200: "#dce5ed", 300: "#c9d6e1", 400: "#c7d6e6", 500: "#73879b", 600: "#526170", 700: "#435a70", 800: "#26394c", 900: "#142131", 950: "#0b121b" },
+        // Neutral graphite surfaces keep material separate from financial direction colours.
+        zinc: { 50: "#fafafa", 100: "#f1f1f3", 200: "#e3e3e7", 300: "#d2d3d9", 400: "#b0b2bc", 500: "#81848e", 600: "#595d67", 700: "#454852", 800: "#2d3037", 900: "#1c1e23", 950: "#101113" },
         // A 股惯例：红涨绿跌。三档各有**专属角色**，不可互相替代（2026-09-11，P2-19 + P2-24）：
         //
         //   DEFAULT  深色底上的文字 / 图形色（亮，暗底可读）          默认档

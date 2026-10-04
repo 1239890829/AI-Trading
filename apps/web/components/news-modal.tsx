@@ -304,14 +304,14 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
       footer={
         <>
           <span className="text-zinc-600 dark:text-zinc-400">内容归原作者/来源媒体所有，本站仅作研究参考</span>
-          <a
+          {shownItem.url.trim() ? <a
             href={shownItem.url}
             target="_blank"
             rel="noreferrer"
             className="font-medium text-blue-700 transition-colors hover:text-blue-500 dark:text-blue-400"
           >
             查看原文 ↗
-          </a>
+          </a> : <span>原文链接缺失</span>}
         </>
       }
       bodyClassName="overflow-y-auto px-5 py-4"
@@ -353,7 +353,7 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
           {!loading && !content && (
             <div data-testid="news-modal-degraded">
               <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-400">
-                正文获取失败{error ? `（${error}）` : ""}，以下为摘要，可在原文页查看完整内容。{" "}
+                正文获取失败{error ? `（${error}）` : ""}，以下为摘要。{shownItem.url.trim() ? "可在原文页查看完整内容。" : "原文链接缺失，无法跳转核对。"}{" "}
                 {/* 渲染守卫会跳过同 URL 重取，瞬态失败必须显式重试入口自愈 */}
                 <button
                   onClick={() => setFetchedUrl(null)}
