@@ -37,7 +37,7 @@ function TapeInner() {
 
 
   return (
-    <main className="task-page mx-auto flex h-full w-full max-w-[1600px] flex-col px-4 py-3">
+    <main data-workspace="market" className="task-page mx-auto flex h-full w-full max-w-[1600px] flex-col px-4 py-3">
       <div className="workspace-masthead">
         <div><h1>市场全景</h1><p className="workspace-kicker">梯队结构、涨停证据与资金关注</p></div>
         <MarketLensPicker selected={tab} search={sp.toString()} />

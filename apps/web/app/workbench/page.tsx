@@ -440,7 +440,7 @@ function WorkbenchInner() {
   }
 
   return (
-    <main className="task-page mx-auto flex h-full w-full max-w-[1600px] flex-col gap-3 px-4 py-3">
+    <main data-workspace="workbench" className="task-page mx-auto flex h-full w-full max-w-[1600px] flex-col gap-3 px-4 py-3">
       <div className="workspace-masthead">
         <div><h1>工作台</h1><p className="workspace-kicker">从自选到持仓，围绕同一标的持续核对</p></div>
         <div className="workspace-context">

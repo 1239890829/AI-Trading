@@ -151,7 +151,7 @@ export function ModalShell({
       >
         {presentation === "drawer" && header !== undefined && <button type="button" data-nopress className="drawer-grip" aria-label={gesture.compact ? "展开至全屏" : "收起至半屏"} aria-expanded={!gesture.compact} {...gesture.handlers} onClick={event => gesture.toggle(event.detail > 0)}><span aria-hidden="true" /></button>}
         {header !== undefined && (
-          <div className="flex shrink-0 items-start justify-between gap-3 border-b border-zinc-100 px-5 py-3.5 dark:border-zinc-800/80">
+          <div className="overlay-heading flex shrink-0 items-start justify-between gap-3 border-b border-zinc-100 px-5 py-3.5 dark:border-zinc-800/80">
             <div className="min-w-0 flex-1">{header}</div>
             {expandable && presentation === "drawer" && size === "lg" && <button type="button" className="drawer-mode hidden shrink-0 rounded-lg border border-zinc-300 px-3 py-2 text-xs sm:inline-flex dark:border-zinc-600" aria-pressed={expanded} onClick={event => { motion.prepare(event.detail > 0); setExpanded(value => !value); }}>{expanded ? "并排旁览" : "展开工作区"}</button>}
             <CloseButton onClose={onClose} />

@@ -52,16 +52,17 @@ function AgentInner() {
   function closeTool() {
     router.replace(patchWorkspaceUrl("/agent", sp.toString(), {area, tab: maintenance ? "operations" : "review"}), {scroll: false});
   }
-  return <main className="task-page adaptive-page mx-auto flex h-full w-full max-w-[1600px] flex-col gap-3 px-4 py-3">
+  const toolShelf = <WorkspaceDeck key={area} activeTool={raw} tools={tools} onOpen={openTool} compact />;
+  return <main data-workspace={maintenance ? "maintenance" : "research"} className="task-page adaptive-page mx-auto flex h-full w-full max-w-[1600px] flex-col gap-3 px-4 py-3">
     <div className="workspace-masthead">
       <div><h1>{maintenance ? "系统维护" : "复盘研究"}</h1><p className="workspace-kicker">{maintenance ? "任务、生产与运行记录" : "回看判断，找到下一次改进的依据"}</p></div>
-      <div className="workspace-context">{maintenance ? <Link href="/agent?area=research&tab=review" className="quiet-action">返回复盘研究 ↗</Link> : <span>日度复盘 / 样本 / 方法核验</span>}</div>
+      <div className="workspace-context">{maintenance ? <Link href="/agent?area=research&tab=review" className="quiet-action">返回复盘研究 ↗</Link> : <span>研究参考 · 不构成买卖建议</span>}</div>
     </div>
-    <WorkspaceDeck activeTool={raw} tools={tools} onOpen={openTool} compact />
+    {maintenance && toolShelf}
     <section className="workspace-stage min-h-0 flex-1 flex flex-col" aria-label={maintenance ? "运行状态" : "日度复盘主工作区"}>
-      {!maintenance && <div className="stage-heading"><h2>日度复盘</h2><span>不构成买卖建议</span></div>}
       <div className={`min-h-0 flex-1 flex flex-col overflow-hidden ${maintenance ? "" : "p-3"}`}>{maintenance ? <ProductionOperations /> : <ReviewTab key={reviewDate ?? "latest"} focusDate={reviewDate} allowDispose={false} />}</div>
     </section>
+    {!maintenance && toolShelf}
     {selected && <ModalShell motionOrigin={origin} open={presence.active} label={selected.label} size={["params", "alerts", "repos"].includes(selected.key) ? "md" : "lg"} presentation="drawer" expandable onClose={closeTool} header={<div><p className="workspace-kicker">{selected.group}</p><h2 className="text-lg font-semibold">{selected.label}</h2><p className="text-xs text-zinc-600 dark:text-zinc-400">{selected.description}</p></div>} bodyClassName="overflow-hidden p-3" footer={maintenance ? "维护视图不授予权限；命令继续由后端鉴权、预算和批准链约束。" : "只读研究；样本不足与缺失产物不代表已经验证。"}>
       {presence.active && selected.key === "evolution" && <EvolutionTab />}
       {presence.active && selected.key === "tasks" && <TaskCenter />}

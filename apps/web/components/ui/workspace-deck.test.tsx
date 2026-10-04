@@ -29,3 +29,34 @@ describe("shared workspace tray", () => {
     expect(folder.getAttribute("aria-expanded")).toBe("false");
   });
 });
+
+it("opens keyboard tool choices immediately and keeps focus recovery available", () => {
+  const {container} = render(<WorkspaceDeck tools={MAINTENANCE_TOOLS} onOpen={vi.fn()} />);
+  const folder = screen.getByRole("button", {name: "设置与追踪"});
+  fireEvent.click(folder, {detail: 0});
+  expect(container.querySelector('[data-motion-keyboard="true"]')).toBeTruthy();
+  const tool = screen.getByRole("button", {name: /参数配置/});
+  tool.focus();
+  fireEvent.keyDown(tool, {key: "Escape"});
+  expect(document.activeElement).toBe(folder);
+  fireEvent.click(folder, {detail: 1});
+  expect(container.querySelector('[data-motion-keyboard="true"]')).toBeNull();
+});
+
+
+it("finds tools across closed folders without invoking commands and clears back to the shelf", () => {
+  const onOpen = vi.fn();
+  render(<WorkspaceDeck tools={MAINTENANCE_TOOLS} onOpen={onOpen} />);
+  const search = screen.getByRole("searchbox", {name: "查找工具"});
+  fireEvent.change(search, {target: {value: "生效参数"}});
+  expect(screen.queryByRole("button", {name: "设置与追踪"})).toBeNull();
+  const result = screen.getByRole("button", {name: /参数配置/});
+  expect(onOpen).not.toHaveBeenCalled();
+  fireEvent.click(result);
+  expect(onOpen.mock.calls[0][0]).toBe("params");
+  fireEvent.change(search, {target: {value: "不存在的工具"}});
+  expect(screen.getByRole("status").textContent).toContain("没有匹配");
+  fireEvent.click(screen.getByRole("button", {name: "返回工具收纳"}));
+  expect(document.activeElement).toBe(search);
+  expect(screen.getByRole("button", {name: "设置与追踪"})).toBeTruthy();
+});
