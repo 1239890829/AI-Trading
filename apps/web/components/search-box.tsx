@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { ApiError, addToWatchlist, searchSymbols } from "@/lib/api";
 import { notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
@@ -14,7 +14,9 @@ const MIN_QUERY_LEN = 2;
 // 搜不到结果还消耗上游配额；选字 Enter 属于 IME 操作不是搜索指令。
 // compositionEnd 后用最终上屏词立即搜索（跳过防抖）。
 
-export function SearchBox() {
+export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
+  const [expanded,setExpanded] = useState(!collapsible);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   // 选中搜索结果 → **就地弹窗**看详情（2026-09-15 详情弹窗化）。
   // 工作台页内则由 Provider 回落为「切换右栏」（见 symbol-detail-modal 的 open）。
   const { open: openSymbolDetail } = useSymbolDetail();
@@ -32,6 +34,7 @@ export function SearchBox() {
   const boxRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const panelId = useId();
+  useLayoutEffect(() => {if(expanded && collapsible)inputRef.current?.focus();},[expanded,collapsible]);
   /**
    * 竞态守卫：每次发起请求自增，响应返回时 seq 不匹配即丢弃。
    * 旧实现只有 clearTimeout（只能取消尚未发出的请求），已发出的慢响应会
@@ -187,13 +190,17 @@ export function SearchBox() {
     (results.length > 0 || loading || error !== null || searched);
 
   return (
-    <div ref={boxRef} className="search-field relative w-32 min-w-0 sm:w-44 md:w-52" onKeyDown={event => {
+    <div ref={boxRef} data-search-expanded={expanded || undefined} data-collapsible={collapsible || undefined} className="search-field relative w-32 min-w-0 sm:w-44 md:w-52" onKeyDown={event => {
       if (event.key === "Escape" && !composingRef.current && !event.nativeEvent.isComposing && event.keyCode !== 229) {
         event.stopPropagation();
         closeAndFocus();
       }
     }}>
-      <div className="relative">
+      {collapsible && <button ref={triggerRef} type="button" className="search-expand" aria-label={expanded ? "收起证券搜索" : "展开证券搜索"} aria-expanded={expanded} onClick={() => {
+        if(expanded){dismiss();setExpanded(false);triggerRef.current?.focus();}
+        else setExpanded(true);
+      }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">{expanded ? <path d="m7 7 10 10M17 7 7 17"/> : <><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></>}</svg><span>{expanded ? "收起" : "搜索证券"}</span></button>}
+      <div className="search-input-wrap relative" hidden={!expanded}>
       <input
         ref={inputRef}
         aria-controls={showPanel ? panelId : undefined}

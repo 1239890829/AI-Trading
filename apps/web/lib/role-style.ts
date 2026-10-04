@@ -39,7 +39,7 @@
  * 而永远查不出来。未知就该**看着像未知**（三态纪律：未知不伪装成已知）。
  */
 export const ROLE_FALLBACK_STYLE =
-  "border-dashed border-zinc-400 bg-transparent text-zinc-500 dark:border-zinc-600 dark:text-zinc-400";
+  "border-dashed border-zinc-400 bg-transparent text-zinc-600 dark:border-zinc-600 dark:text-zinc-400";
 
 /** 梯队角色 → 徽标样式类。键集 = 后端 `echelon.ROLE_BASE_SCORE`（11 键，全等）。 */
 export const ROLE_STYLE: Record<string, string> = {

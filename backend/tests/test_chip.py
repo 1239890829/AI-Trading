@@ -11,6 +11,15 @@ from app.market import trade_calendar as tc
 from app.market.chip import ChipService, simulate_chip_distribution
 from app.core.bjtime import BJ_TZ, beijing_today  # S2-8 时区收敛
 
+@pytest.fixture(autouse=True)
+def isolated_freshness_clock(monkeypatch):
+    """Freshness examples have their own date and never read a local calendar."""
+    anchor = date(2026, 9, 30)
+    monkeypatch.setitem(globals(), "beijing_today", lambda: anchor)
+    monkeypatch.setattr(tc, "_load_persisted", lambda: [anchor])
+    monkeypatch.setattr("app.market.marketdb_freshness.beijing_now", lambda: datetime(2026, 9, 30, 15, 0, tzinfo=BJ_TZ))
+
+
 _MS_DAY = 86_400_000
 
 

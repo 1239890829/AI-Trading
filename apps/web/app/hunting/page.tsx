@@ -66,7 +66,7 @@ import { useExitPresence } from "@/hooks/use-exit-presence";
 import { motionOrigin, type MotionOrigin } from "@/lib/surface-motion";
 import { ModalShell } from "@/components/ui/modal-shell";
 import { WatchLedgerPanel } from "@/components/hunting/watch-ledger-panel";
-import { MasonryColumns } from "@/components/masonry-columns";
+import { CandidateCollection } from "@/components/ui/candidate-collection";
 
 /**
  * 猎场（/hunting，2026-09-08 板块融合 docs/summary/review-governance.md §三）：
@@ -392,7 +392,7 @@ function HuntingInner() {
                       </span>
                     </div>
                     {topItems.length > 0 ? (
-                      <MasonryColumns>
+                      <CandidateCollection>
                         {topItems.map((it) => (
                           <PickCard
                             key={it.symbol}
@@ -400,7 +400,7 @@ function HuntingInner() {
                             positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null}
                           />
                         ))}
-                      </MasonryColumns>
+                      </CandidateCollection>
                     ) : (
                       <p className="text-[11px] text-zinc-600 dark:text-zinc-400">
                         当前无可参与候选（题材未形成集中、或候选涨幅/成交额未达联动门槛）——
@@ -419,7 +419,7 @@ function HuntingInner() {
                             "这些个股记录的是今日曾封板身份；当前仍封、已开板或状态未判以卡片的时点判定为准。它们首先用于揭示资金集中方向。"}
                         </p>
                         <div className="mt-2">
-                          <MasonryColumns>
+                          <CandidateCollection>
                             {topRefItems.map((it) => (
                               <PickCard
                                 key={it.symbol}
@@ -427,7 +427,7 @@ function HuntingInner() {
                                 positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null}
                               />
                             ))}
-                          </MasonryColumns>
+                          </CandidateCollection>
                         </div>
                       </details>
                     )}
@@ -450,7 +450,7 @@ function HuntingInner() {
                       </span>
                     </div>
                     {pickItems.length > 0 ? (
-                      <MasonryColumns>
+                      <CandidateCollection>
                         {pickItems.map((it) => (
                           <PickCard
                             key={it.symbol}
@@ -458,7 +458,7 @@ function HuntingInner() {
                             positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null}
                           />
                         ))}
-                      </MasonryColumns>
+                      </CandidateCollection>
                     ) : (
                       <p className="text-[10px] text-zinc-600 dark:text-zinc-400">
                         {pickTotal} 只均已在盘中跟踪区展示（同一标的只出现一次，避免同一页重复卡片）。

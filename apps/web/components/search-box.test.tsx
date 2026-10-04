@@ -342,3 +342,24 @@ it("中文组合输入的Escape不冒泡关闭搜索结果", async () => {
     expect(searchSymbols).toHaveBeenCalledTimes(1);
   } finally { vi.useRealTimers(); }
 });
+
+
+it("折叠搜索就地展开并聚焦；收回后不接受迟到响应", async () => {
+  vi.useFakeTimers();
+  try {
+    let finish!: (items: SymbolSearchItem[]) => void;
+    vi.mocked(searchSymbols).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    render(<SearchBox collapsible />);
+    const trigger = screen.getByRole("button", {name:"展开证券搜索"});
+    expect(screen.queryByRole("textbox")).toBeNull();
+    fireEvent.click(trigger);
+    const input = typeQuery("600127");
+    expect(document.activeElement).toBe(input);
+    await act(async () => { vi.advanceTimersByTime(250); });
+    fireEvent.click(screen.getByRole("button", {name:"收起证券搜索"}));
+    expect(document.activeElement).toBe(trigger);
+    await act(async () => { finish([item("600127", "金健米业")]); });
+    expect(screen.queryByText("金健米业")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+  } finally { vi.useRealTimers(); }
+});
