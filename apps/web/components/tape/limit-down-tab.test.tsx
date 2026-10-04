@@ -68,5 +68,7 @@ describe("LimitDownTab", () => {
     await mount();
     expect(screen.getByText(/跌停池加载失败/)).toBeTruthy();
     expect(screen.getByText(/all providers failed/)).toBeTruthy();
+    expect(screen.getByRole("heading", {name: "数量待核对"})).toBeTruthy();
+    expect(screen.queryByRole("heading", {name: /共 0/})).toBeNull();
   });
 });

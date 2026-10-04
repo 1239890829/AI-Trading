@@ -274,12 +274,12 @@ function HuntingInner() {
         <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
           {isDiscovery && <button
             onClick={() => void load()}
-            className="rounded border border-zinc-300 px-2 py-0.5 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100 disabled:opacity-50"
+            className="quiet-action rounded border border-zinc-300 px-2 py-0.5 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100 disabled:opacity-50"
             title="立即重新拉取全部数据（通常无需手动点——页面已自动刷新）"
           >
             刷新数据
           </button>}
-          <Link href="/agent?area=maintenance&tab=operations" className="px-2 py-1">生产状态与维护</Link>
+          <Link href="/agent?area=maintenance&tab=operations" className="quiet-action">生产状态与维护</Link>
         </div></div>
       </div>
 
@@ -511,10 +511,12 @@ function HuntingInner() {
         <details
           open={beatsOpen}
           onToggle={(e) => setBeatsOpen((e.target as HTMLDetailsElement).open)}
-          className="rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800"
+          className="opportunity-fold"
         >
-          <summary className="cursor-pointer select-none text-xs font-medium text-zinc-600 dark:text-zinc-400">
-            盘中节拍（盘前简报 · watcher · 提醒{alerts.length > 0 ? ` · 今日 ${alerts.length} 条` : ""}）
+          <summary>
+            <span><strong>盘中节拍</strong><span className="fold-caption">盘前简报 · 监测状态 · 提醒</span></span>
+            {alerts.length > 0 && <span className="fold-meta">今日 {alerts.length} 条</span>}
+            <span className="fold-chevron" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m7 10 5 5 5-5" /></svg></span>
           </summary>
           <div className="mt-3 space-y-4">
             {briefReadFailed ? (
@@ -595,10 +597,12 @@ function HuntingInner() {
         <details
           open={reviewOpen}
           onToggle={(e) => setReviewOpen((e.target as HTMLDetailsElement).open)}
-          className="rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800"
+          className="opportunity-fold"
         >
-          <summary className="cursor-pointer select-none text-xs font-medium text-zinc-600 dark:text-zinc-400">
-            对照与复盘（盘前 vs 实际 · 胜率统计 · 逐日归因{brief?.review ? ` · ${timeText(brief.review.reviewed_at)} 复盘` : ""}）
+          <summary>
+            <span><strong>对照与复盘</strong><span className="fold-caption">盘前与实际 · 胜率统计 · 逐日归因</span></span>
+            {brief?.review && <span className="fold-meta">{timeText(brief.review.reviewed_at)} 复盘</span>}
+            <span className="fold-chevron" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m7 10 5 5 5-5" /></svg></span>
           </summary>
           <div className="mt-3 space-y-4">
             <section id="sec-review" className="space-y-2 scroll-mt-2">

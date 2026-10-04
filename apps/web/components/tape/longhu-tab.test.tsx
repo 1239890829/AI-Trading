@@ -89,6 +89,8 @@ describe("LonghuTab 披露语义（P1-C）", () => {
     });
     await act(async () => {});
     expect(screen.getByText(/加载失败：boom/)).toBeTruthy();
+    expect(screen.getByRole("heading", {name: "数量待核对"})).toBeTruthy();
+    expect(screen.queryByRole("heading", {name: /共 0/})).toBeNull();
     expect(screen.queryByText(/尚未披露/)).toBeNull();
   });
 

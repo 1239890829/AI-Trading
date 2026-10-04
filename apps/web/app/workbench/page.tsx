@@ -548,7 +548,7 @@ function WorkbenchInner() {
             : "自选股"
           }
           extra={
-            <div className="flex items-center gap-1.5">
+            <div className="watch-actions flex flex-wrap items-center gap-1.5">
               {managing && activeGroup !== "持仓" && (
                 <>
                   <input
@@ -573,6 +573,7 @@ function WorkbenchInner() {
                   setManaging((v) => !v);
                   setAddError(null);
                 }}
+                aria-pressed={managing}
                 className="text-sky-700 dark:text-sky-400 transition-opacity hover:opacity-75"
               >
                 {managing ? "完成" : "管理"}
@@ -589,7 +590,7 @@ function WorkbenchInner() {
               「全部」是自选股的默认视图而非页面级筛选；持仓与自选分组用
               竖线区隔（持仓不是分组，是真实持仓账本视角）；管理模式下
               提供 新建 / 重命名 / 删除 分组（保护规则在后端）。────── */}
-          <div className="sticky top-0 z-10 flex flex-wrap items-center gap-1 border-b border-zinc-100 bg-white/95 px-3 py-1.5 dark:border-zinc-800/60 dark:bg-zinc-950/95">
+          <div className="watch-groups sticky top-0 z-10 flex flex-wrap items-center gap-1 border-b border-zinc-100 bg-white/95 px-3 py-1.5 dark:border-zinc-800/60 dark:bg-zinc-950/95">
             {(mode === "positions" ? ["持仓"] : ["全部", "默认", ...groups]).map((g) => (
               <span key={g} className="flex items-center gap-1">
                 {(g === "持仓" || g === "默认" || g === "猎场") && (
@@ -597,9 +598,8 @@ function WorkbenchInner() {
                 )}
                 <button
                   onClick={() => setActiveGroup(g)}
-                  className={`rounded-full border px-2.5 py-0.5 text-xs ${
-                    activeGroup === g ? "border-up/60 bg-up/10 text-up-ink dark:text-up" : "border-zinc-200 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100"
-                  }`}
+                  aria-pressed={activeGroup === g}
+                  className="border text-xs"
                 >
                   {g}
                   {g === "持仓" && realSymbols.length > 0 && <span className="ml-1 text-[10px] text-zinc-600 dark:text-zinc-400">{realSymbols.length}</span>}
