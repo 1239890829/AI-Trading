@@ -14,6 +14,11 @@ export function WorkspaceDeck({tools, onOpen, compact = false, activeTool}: {too
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
+  function clearSearch() {
+    setQuery("");
+    setKeyboardOpen(true);
+    searchRef.current?.focus();
+  }
   const term = query.trim().toLocaleLowerCase();
   const matches = term ? tools.filter(tool => `${tool.label} ${tool.description} ${tool.group}`.toLocaleLowerCase().includes(term)) : [];
   const groups = [...new Set(tools.map(tool => tool.group))];
@@ -29,17 +34,22 @@ export function WorkspaceDeck({tools, onOpen, compact = false, activeTool}: {too
           <button id={`${id}-group-${index}`} className="tool-stack" aria-label={group} aria-expanded={open} aria-controls={`${id}-tray-${index}`} aria-describedby={`${id}-description-${index}`} onClick={event => { setKeyboardOpen(event.detail === 0); setExpanded(open ? null : group); }}>
             <span className="tool-stack-heading"><span>{group}</span><span className="folder-count">{items.length}</span></span>
             <span id={`${id}-description-${index}`} className="tool-stack-caption">{items.map(tool => tool.label).join(" · ")}</span>
-            <span className="folder-affordance" aria-hidden="true">{open ? "收起" : "展开"}<span>{open ? "−" : "+"}</span></span>
+            <svg className="folder-affordance" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
           </button>
         </div>;
       })}
     </div>
-      <label className="tool-shelf-search"><span className="sr-only">查找工具</span><input ref={searchRef} type="search" value={query} placeholder="查找工具" onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); setQuery(""); } }} /></label>
+      <div className="tool-shelf-search">
+        <label className="sr-only" htmlFor={`${id}-search`}>查找工具</label>
+        <svg className="tool-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4 4" /></svg>
+        <input id={`${id}-search`} ref={searchRef} type="search" value={query} placeholder="查找工具" onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === "Escape" && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); clearSearch(); } }} />
+        {query && <button type="button" className="tool-search-clear" aria-label="清空工具搜索" onClick={clearSearch}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg></button>}
+      </div>
     </div>
-    {term && <div className="tool-search-results" onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); setQuery(""); searchRef.current?.focus(); } }}>
+    {term && <div className="tool-search-results" onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); clearSearch(); } }}>
       <p role="status" className="tool-result-count">{matches.length ? `找到 ${matches.length} 项工具` : "没有匹配的工具。请换个关键词，或清空后按用途浏览。"}</p>
       <div className="tool-search-grid">{matches.map(tool => <button key={tool.key} className="tool-launcher" aria-haspopup="dialog" onClick={event => onOpen(tool.key, motionOrigin(event))}><span className="min-w-0"><span className="tool-title">{tool.label}</span><span className="tool-description">{tool.group} · {tool.description}</span></span><span className="tool-open" aria-hidden="true">↗</span></button>)}</div>
-      <button className="quiet-action" onClick={() => { setQuery(""); searchRef.current?.focus(); }}>返回工具收纳</button>
+      <button className="quiet-action" onClick={clearSearch}>返回工具收纳</button>
     </div>}
     {groups.map((group, index) => <div key={group} id={`${id}-tray-${index}`} hidden={Boolean(term) || visibleGroup !== group} role="region" aria-labelledby={`${id}-group-${index}`} className="tool-tray" onKeyDown={event => {
       if (event.key === "Escape") { event.preventDefault(); setExpanded(null); document.getElementById(`${id}-group-${index}`)?.focus(); }
