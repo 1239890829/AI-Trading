@@ -60,3 +60,32 @@ it("finds tools across closed folders without invoking commands and clears back 
   expect(document.activeElement).toBe(search);
   expect(screen.getByRole("button", {name: "设置与追踪"})).toBeTruthy();
 });
+
+it("clears inline search back to the open group and input without invoking a tool", () => {
+  const onOpen = vi.fn();
+  render(<WorkspaceDeck tools={MAINTENANCE_TOOLS} onOpen={onOpen} />);
+  fireEvent.click(screen.getByRole("button", {name: "设置与追踪"}));
+  const search = screen.getByRole("searchbox", {name: "查找工具"});
+  fireEvent.change(search, {target: {value: "不存在"}});
+  fireEvent.click(screen.getByRole("button", {name: "清空工具搜索"}));
+  expect(document.activeElement).toBe(search);
+  expect((search as HTMLInputElement).value).toBe("");
+  expect(screen.getByRole("region", {name: "设置与追踪"})).toBeTruthy();
+  expect(screen.queryByRole("button", {name: "清空工具搜索"})).toBeNull();
+  expect(onOpen).not.toHaveBeenCalled();
+});
+
+it("leaves Escape to the input method during composition and can clear whitespace", () => {
+  render(<WorkspaceDeck tools={MAINTENANCE_TOOLS} onOpen={vi.fn()} />);
+  const search = screen.getByRole("searchbox", {name: "查找工具"}) as HTMLInputElement;
+  fireEvent.change(search, {target: {value: "can"}});
+  fireEvent.keyDown(search, {key: "Escape", isComposing: true});
+  expect(search.value).toBe("can");
+  fireEvent.keyDown(search, {key: "Escape", keyCode: 229});
+  expect(search.value).toBe("can");
+  fireEvent.keyDown(search, {key: "Escape"});
+  expect(search.value).toBe("");
+  fireEvent.change(search, {target: {value: "  "}});
+  fireEvent.click(screen.getByRole("button", {name: "清空工具搜索"}));
+  expect(search.value).toBe("");
+});
