@@ -1,7 +1,8 @@
 "use client";
 
 import { useExitPresence } from "@/hooks/use-exit-presence";
-import { useId, useState } from "react";
+import { useId, useState, type CSSProperties } from "react";
+import { SpatialSurface } from "@/components/ui/spatial-surface";
 import Link from "next/link";
 import { motionOrigin, type MotionOrigin } from "@/lib/surface-motion";
 import { ModalShell } from "@/components/ui/modal-shell";
@@ -18,7 +19,7 @@ export function WorkspaceDeck({tools, onOpen, compact = false, activeTool}: {too
       {groups.map((group, index) => {
         const items = tools.filter(tool => tool.group === group);
         const open = visibleGroup === group;
-        return <div className="tool-folder" data-open={open} key={group}>
+        return <SpatialSurface className="tool-folder" faceClassName="folder-plane" data-open={open} key={group}>
           <span className="folder-layer folder-layer-back" aria-hidden="true" />
           <span className="folder-layer folder-layer-front" aria-hidden="true" />
           <button id={`${id}-group-${index}`} className="tool-stack" aria-label={group} aria-expanded={open} aria-controls={`${id}-tray-${index}`} onClick={() => setExpanded(open ? null : group)}>
@@ -26,13 +27,13 @@ export function WorkspaceDeck({tools, onOpen, compact = false, activeTool}: {too
             <span className="tool-stack-caption">{items.map(tool => tool.label).join(" · ")}</span>
             <span className="folder-affordance" aria-hidden="true">{open ? "收起工具" : "展开工具"}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d={open ? "m6 14 6-6 6 6" : "m6 10 6 6 6-6"}/></svg></span>
           </button>
-        </div>;
+        </SpatialSurface>;
       })}
     </div>
     {groups.map((group, index) => <div key={group} id={`${id}-tray-${index}`} hidden={visibleGroup !== group} role="region" aria-labelledby={`${id}-group-${index}`} className="tool-tray" onKeyDown={event => {
       if (event.key === "Escape") { event.preventDefault(); setExpanded(null); document.getElementById(`${id}-group-${index}`)?.focus(); }
     }}>
-      {visibleGroup === group && tools.filter(tool => tool.group === group).map(tool => <button key={tool.key} className="tool-launcher" data-selected={activeTool === tool.key || undefined} onClick={event => onOpen(tool.key, motionOrigin(event))} aria-haspopup="dialog">
+      {visibleGroup === group && tools.filter(tool => tool.group === group).map((tool, toolIndex) => <button key={tool.key} style={{"--tool-order": toolIndex} as CSSProperties} className="tool-launcher" data-selected={activeTool === tool.key || undefined} onClick={event => onOpen(tool.key, motionOrigin(event))} aria-haspopup="dialog">
         <span className="min-w-0"><span className="tool-title">{tool.label}</span><span className="tool-description">{tool.description}</span></span>
         <svg className="tool-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10" /></svg>
       </button>)}

@@ -1,22 +1,27 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback } from "react";
-import { workbenchUrlWithBack } from "@/lib/routing";
+import { useCallback, useSyncExternalStore, type MouseEvent } from "react";
+import { motionOrigin } from "@/lib/surface-motion";
+import { workbenchUrl, workbenchUrlWithBack } from "@/lib/routing";
 import { symbolDetailClick, useSymbolDetail } from "@/components/detail/symbol-detail-context";
 
 /**
  * 行级整行打开详情。
  * 用法：`<tr onClick={stockNav(r.symbol)} className="cursor-pointer ...">`。
- * 行内名字的 StockLink 保留（同一个弹窗，重复触发无害——payload 相同则
- * 只是再次 setState；行内其他可点击元素自行 stopPropagation）。
+ * 行内名字的 StockLink 保留；其已处理的点击不再被整行重复打开。
+ * 行内其他可点击元素自行 stopPropagation。
  *
  * 2026-09-15 详情弹窗化：此前是 `router.push(workbenchUrlWithBack(symbol))`，
  * 整行点击会**离开当前页**跳到工作台；现改为就地弹窗。
  */
 export function useStockRowNav() {
   const { open } = useSymbolDetail();
-  return useCallback((symbol: string) => () => open({ symbol }), [open]);
+  return useCallback((symbol: string) => (event?: MouseEvent<HTMLElement>) => {
+    if ((event && event.button !== 0) || event?.defaultPrevented || event?.metaKey || event?.ctrlKey || event?.shiftKey || event?.altKey) return;
+    const origin = event ? motionOrigin(event) : null;
+    open({ symbol, ...(origin ? { motionOrigin: origin } : {}) });
+  }, [open]);
 }
 
 /**
@@ -35,6 +40,8 @@ export function useStockRowNav() {
  *   且 `a[href^="/workbench?symbol="]` 这类既有断言不受影响；
  * - 路由规范见 lib/routing.ts：不手拼字符串（2026-08-31 跨页联动 bug 教训）。
  */
+const subscribeMounted = () => () => {};
+
 export function StockLink({
   symbol,
   className = "",
@@ -47,9 +54,10 @@ export function StockLink({
   children: React.ReactNode;
 }) {
   const { open } = useSymbolDetail();
+  const mounted = useSyncExternalStore(subscribeMounted, () => true, () => false);
   return (
     <Link
-      href={workbenchUrlWithBack(symbol)}
+      href={mounted ? workbenchUrlWithBack(symbol) : workbenchUrl(symbol)}
       title={title}
       onClick={symbolDetailClick(open, { symbol })}
       className={`cursor-pointer rounded transition-colors hover:bg-sky-500/10 hover:text-sky-700 dark:hover:text-sky-300 ${className}`}

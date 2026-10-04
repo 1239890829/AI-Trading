@@ -601,7 +601,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
 
 
   return (
-    <div className="stock-workspace flex min-h-0 min-w-0 flex-col gap-2">
+    <div className="stock-workspace flex min-h-0 min-w-0 flex-col gap-4">
       {error && (
         <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-300">{error}</div>
       )}
@@ -650,7 +650,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       {/* ② 中部：左图表区 + 右盘口/逐笔（右列宽度可拖拽，--right-w 由 state 注入；
           方案 B：右列可整体收起为细条，收起后图表获得全宽） */}
       <div
-        className={`grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-2 ${
+        className={`grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-4 ${
           rightCollapsed ? "lg:grid-cols-[minmax(0,1fr),28px]" : "lg:grid-cols-[minmax(0,1fr),var(--right-w)]"
         }`}
         style={{ "--right-w": `${rightW}px` } as React.CSSProperties}

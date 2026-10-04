@@ -16,8 +16,10 @@
  * 该入口只依赖本文件，环即消失。
  */
 import { createContext, useContext } from "react";
+import { motionOrigin, type MotionOrigin } from "@/lib/surface-motion";
 
 export interface SymbolDetailRequest {
+  motionOrigin?: MotionOrigin;
   /** 标的代码：6 位个股（`600519`）或带市场前缀的指数（`sh000001`）。 */
   symbol: string;
   /** 图表区初始 tab（来自深链 `ct=`，见 lib/detail-tabs.ts）。 */
@@ -86,6 +88,7 @@ export function symbolDetailClick(
       return;
     }
     e.preventDefault();
-    open(req);
+    const origin = motionOrigin(e as React.MouseEvent<HTMLElement>);
+    open(origin ? { ...req, motionOrigin: origin } : req);
   };
 }
