@@ -145,3 +145,27 @@ it("IMP-025 · 代码产物成功只显示待审提案，正文保留核验边�
   expect(screen.getByText("合并、加载与效果尚未确认。")).toBeTruthy();
   expect(screen.queryByText("成功")).toBeNull();
 });
+
+describe("任务入口读取状态", () => {
+  it("读取失败结束骨架并给出重试路径，刷新后恢复入口", async () => {
+    const {getAgentTaskTypes} = await import("@/lib/api");
+    vi.mocked(getAgentTaskTypes).mockRejectedValueOnce(new Error("入口读取失败"));
+    render(<TaskCenter />);
+    expect(screen.getByRole("status", {name:"正在读取任务入口"})).toBeTruthy();
+    expect(await screen.findByText(/任务入口读取失败，暂时无法创建/)).toBeTruthy();
+    expect(screen.queryByRole("status", {name:"正在读取任务入口"})).toBeNull();
+    expect(screen.queryByLabelText("可选任务参数（JSON）")).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name:"刷新"}));
+    expect(await screen.findByRole("button", {name:/生成复盘报告/})).toBeTruthy();
+    expect(screen.queryByText(/任务入口读取失败，暂时无法创建/)).toBeNull();
+  });
+
+  it("有效空入口有明确空态，不留下无消费者参数输入", async () => {
+    const {getAgentTaskTypes} = await import("@/lib/api");
+    vi.mocked(getAgentTaskTypes).mockResolvedValueOnce([]);
+    render(<TaskCenter />);
+    expect(await screen.findByText("暂无可创建的任务。")).toBeTruthy();
+    expect(screen.queryByRole("status", {name:"正在读取任务入口"})).toBeNull();
+    expect(screen.queryByLabelText("可选任务参数（JSON）")).toBeNull();
+  });
+});

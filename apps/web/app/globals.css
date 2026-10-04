@@ -344,6 +344,26 @@ input::placeholder,textarea::placeholder { color:var(--ui-muted); opacity:1; }
 .skip-link:focus { position:static; display:block; width:auto; height:auto; clip-path:none; margin:8px 12px; padding:8px 12px; border-radius:8px; }
 [data-chart-surface=true] { background:var(--chart-surface); }.workspace-status > span { white-space:nowrap; }
 
+/* Search results anchor to the whole header on narrow screens. */
+.task-header { position:relative; }
+:root .search-popover.ui-glass-overlay { position:absolute; z-index:var(--z-tooltip); top:calc(100% + 10px); right:0; width:min(360px,90vw); max-height:min(65dvh,480px); display:flex; flex-direction:column; overflow:hidden; border-radius:16px; background:linear-gradient(145deg,var(--glass-highlight),transparent 48%),color-mix(in srgb,var(--workspace-surface) 98%,transparent); }
+.search-popover-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; flex:none; padding:12px 14px; border-bottom:1px solid var(--ui-line); }
+.search-popover-heading strong { display:block; font-size:13px; font-weight:600; }
+.search-popover-heading span { display:block; margin-top:3px; font-size:11px; color:var(--ui-muted); }
+.search-result-list { min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:6px; }
+.search-result-list > li { overflow-wrap:anywhere; }
+.search-result-row { display:flex; align-items:center; gap:12px; padding:4px 8px; border-radius:10px; }
+.search-result-open { display:flex; flex:1; min-width:0; flex-direction:column; align-items:flex-start; gap:3px; padding:7px 0; text-align:left; }
+.search-result-name { font-size:13px; font-weight:600; color:var(--ui-ink); }
+.search-result-code { display:flex; gap:10px; font-size:11px; font-variant-numeric:tabular-nums; color:var(--ui-muted); }
+.search-watch-state { flex:none; font-size:11px; color:var(--ui-muted); }
+.search-watch-action { flex:none; display:grid; place-items:center; min-width:32px; min-height:32px; border:1px solid var(--glass-border); border-radius:9px; color:var(--ui-accent); background:var(--ui-hover); font-size:13px; }
+.search-watch-action:disabled { opacity:.5; cursor:wait; }
+.search-retry { margin-top:8px; background:var(--ui-hover); }
+@media(hover:hover) and (pointer:fine) { .search-result-row:hover { background:var(--ui-hover); } }
+@media(max-width:1023px) { .task-header .search-field { position:static; }:root .task-header .search-popover { left:0; right:0; width:auto; top:calc(100% + 8px); } }
+@media(max-width:767px), (pointer:coarse) { .search-popover button { min-height:44px; }.search-watch-action { min-width:44px; } }
+
 /* A compact control dock unfolds into a shared tray. No decorative layer escapes it. */
 .workspace-deck { position:relative; isolation:isolate; min-width:0; flex-shrink:0; padding:16px; border:1px solid var(--glass-border); border-radius:18px; background:linear-gradient(115deg,var(--glass-highlight),transparent 40%),var(--glass-card); box-shadow:inset 0 1px 0 var(--glass-highlight),var(--glass-shadow); backdrop-filter:blur(24px); -webkit-backdrop-filter:blur(24px); }
 .tool-dock { display:flex; align-items:center; gap:20px; min-width:0; }
@@ -486,6 +506,8 @@ input::placeholder,textarea::placeholder { color:var(--ui-muted); opacity:1; }
 .replay-controls select { min-height:30px; }
 .chart-legend { flex:none; font-size:11px; color:var(--ui-muted); }
 .chart-legend summary { display:flex; align-items:center; min-height:30px; padding:4px 8px; cursor:pointer; border-radius:7px; background:var(--ui-hover); }
+.chart-legend summary::after { content:"＋"; margin-left:8px; color:var(--ui-accent); }
+.chart-legend[open] summary::after { content:"−"; }
 .chart-legend[open] { flex-basis:100%; }
 .chart-legend[open] summary { width:max-content; margin-bottom:8px; }
 .chart-legend p { max-width:70ch; line-height:1.7; }

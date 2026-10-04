@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ApiError, addToWatchlist, searchSymbols } from "@/lib/api";
 import { notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
@@ -30,6 +30,8 @@ export function SearchBox() {
   /** 是否已对当前关键词发起过搜索：空结果提示只在「确实搜过且没搜到」时出现。 */
   const [searched, setSearched] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const panelId = useId();
   /**
    * 竞态守卫：每次发起请求自增，响应返回时 seq 不匹配即丢弃。
    * 旧实现只有 clearTimeout（只能取消尚未发出的请求），已发出的慢响应会
@@ -95,13 +97,30 @@ export function SearchBox() {
   // 少于 2 字时直接派生空列表（旧写法在 effect 里同步 setItems([])，会触发级联渲染）
   const results = q.trim().length >= MIN_QUERY_LEN && resultQuery === q.trim() ? items : [];
 
+  const dismiss = useCallback(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    seqRef.current += 1;
+    setOpen(false);
+    setLoading(false);
+    setError(null);
+    setSearched(false);
+  }, []);
+
+  function closeAndFocus() {
+    inputRef.current?.focus();
+    dismiss();
+  }
+
   useEffect(() => {
     function onClick(e: MouseEvent) {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) dismiss();
     }
     document.addEventListener("mousedown", onClick);
     return () => { document.removeEventListener("mousedown", onClick); seqRef.current += 1; };
-  }, []);
+  }, [dismiss]);
 
   function go(item: SymbolSearchItem) {
     setOpen(false);
@@ -158,7 +177,7 @@ export function SearchBox() {
         runSearch(kw);
       }
     }
-    if (e.key === "Escape") { setOpen(false); resetTransient(); }
+    if (e.key === "Escape") { e.stopPropagation(); dismiss(); }
   }
 
   const kw = q.trim();
@@ -168,8 +187,16 @@ export function SearchBox() {
     (results.length > 0 || loading || error !== null || searched);
 
   return (
-    <div ref={boxRef} className="search-field relative w-32 min-w-0 sm:w-44 md:w-52">
+    <div ref={boxRef} className="search-field relative w-32 min-w-0 sm:w-44 md:w-52" onKeyDown={event => {
+      if (event.key === "Escape" && !composingRef.current && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+        event.stopPropagation();
+        closeAndFocus();
+      }
+    }}>
+      <div className="relative">
       <input
+        ref={inputRef}
+        aria-controls={showPanel ? panelId : undefined}
         value={q}
         onChange={(e) => {
           const v = e.target.value;
@@ -214,12 +241,19 @@ export function SearchBox() {
           className="absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 animate-spin rounded-full border-2 border-zinc-300 border-t-zinc-500 dark:border-zinc-600 dark:border-t-zinc-300"
         />
       )}
+      </div>
       {showPanel && (
-        <ul className="ui-glass-overlay absolute right-0 top-12 z-50 max-h-[65vh] w-[min(22rem,90vw)] overflow-auto rounded-md border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+        <section id={panelId} className="ui-glass-overlay search-popover" aria-label="证券搜索结果">
+          <header className="search-popover-heading">
+            <div><strong>证券搜索</strong><span>匹配代码或名称</span></div>
+            <button type="button" className="quiet-action" onClick={closeAndFocus} aria-label="关闭搜索结果">关闭</button>
+          </header>
+        <ul className="search-result-list">
           {addNote && <li role="status" className="px-3 py-2 text-xs">{addNote}</li>}
           {error !== null && (
             <li className="px-3 py-2 text-xs text-red-700 dark:text-red-400" role="alert">
-              {error}
+              <p>{error}</p>
+              <button type="button" className="quiet-action search-retry" onClick={() => runSearch(kw)}>重新搜索</button>
             </li>
           )}
           {loading && results.length === 0 && error === null && (
@@ -234,23 +268,23 @@ export function SearchBox() {
           )}
           {results.map((it) => (
             <li key={`${it.source}-${it.symbol}`}>
-              <div className="flex w-full items-center gap-1 px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800">
-                <button type="button" onClick={() => go(it)} className="flex min-w-0 flex-1 items-center text-left">
-                <span className="font-mono text-xs text-zinc-600 dark:text-zinc-400">{it.symbol}</span>
-                <span className="flex-1 px-2">{it.name}</span>
+              <div className="search-result-row">
+                <button type="button" onClick={() => go(it)} className="search-result-open">
+                  <span className="search-result-name">{it.name ?? it.symbol}</span>
+                  <span className="search-result-code">{it.symbol}<span>{it.market}</span></span>
                 </button>
                 {it.is_realtime ? (
-                  <span className="text-xs text-zinc-600 dark:text-zinc-400">已加自选 ✓</span>
+                  <span className="search-watch-state">已自选 ✓</span>
                 ) : (
-                  <button disabled={adding !== null} aria-label={`加入自选 ${it.name ?? it.symbol}`} onClick={(e) => void quickAdd(e, it)} className="mr-2 rounded border border-up/50 px-1.5 text-xs text-up-ink dark:text-up hover:bg-up/10" title="加入自选">
+                  <button type="button" disabled={adding !== null} aria-label={`加入自选 ${it.name ?? it.symbol}`} onClick={(e) => void quickAdd(e, it)} className="search-watch-action" title="加入自选">
                     {adding === it.symbol ? "保存中" : "＋"}
                   </button>
                 )}
-                <span className="text-xs text-zinc-600 dark:text-zinc-400">{it.market}</span>
               </div>
             </li>
           ))}
         </ul>
+        </section>
       )}
     </div>
   );

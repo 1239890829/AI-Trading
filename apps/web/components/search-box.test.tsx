@@ -279,3 +279,66 @@ describe("SearchBox 当前查询与写回执", () => {
     } finally { vi.useRealTimers(); }
   });
 });
+
+describe("搜索浮层关闭与焦点", () => {
+  it("点击外部后迟到响应不会重新打开浮层", async () => {
+    vi.useFakeTimers();
+    try {
+      let finish!: (items: SymbolSearchItem[]) => void;
+      vi.mocked(searchSymbols).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      render(<><SearchBox /><button>其他操作</button></>);
+      typeQuery("600127");
+      await act(async () => { vi.advanceTimersByTime(250); });
+      fireEvent.mouseDown(screen.getByRole("button", {name:"其他操作"}));
+      await act(async () => { finish([item("600127", "金健米业")]); });
+      expect(screen.queryByText("金健米业")).toBeNull();
+      expect(screen.getByRole("textbox").getAttribute("aria-busy")).toBe("false");
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(["close", "escape"])("%s 从结果区关闭后回焦输入且不重开", async mode => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(searchSymbols).mockResolvedValue([item("600127", "金健米业")]);
+      render(<SearchBox />);
+      const input = typeQuery("600127");
+      await act(async () => { vi.advanceTimersByTime(250); });
+      const control = mode === "close" ? screen.getByRole("button", {name:"关闭搜索结果"}) : screen.getByRole("button", {name:"加入自选 金健米业"});
+      control.focus();
+      if (mode === "close") fireEvent.click(control);
+      else fireEvent.keyDown(control, {key:"Escape"});
+      expect(document.activeElement).toBe(input);
+      expect(screen.queryByRole("region", {name:"证券搜索结果"})).toBeNull();
+      expect((input as HTMLInputElement).value).toBe("600127");
+    } finally { vi.useRealTimers(); }
+  });
+});
+
+
+it("离开输入框后取消尚未发出的防抖搜索", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.mocked(searchSymbols).mockResolvedValue([item("600127", "金健米业")]);
+    render(<><SearchBox /><button>其他操作</button></>);
+    typeQuery("600127");
+    fireEvent.mouseDown(screen.getByRole("button", {name:"其他操作"}));
+    await act(async () => { vi.advanceTimersByTime(300); });
+    expect(searchSymbols).not.toHaveBeenCalled();
+    expect(screen.queryByRole("region", {name:"证券搜索结果"})).toBeNull();
+  } finally { vi.useRealTimers(); }
+});
+
+
+it("中文组合输入的Escape不冒泡关闭搜索结果", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.mocked(searchSymbols).mockResolvedValue([item("600127", "金健米业")]);
+    render(<SearchBox />);
+    const input = typeQuery("600127");
+    await act(async () => { vi.advanceTimersByTime(250); });
+    fireEvent.compositionStart(input);
+    fireEvent.keyDown(input, {key:"Escape"});
+    expect(screen.getByRole("region", {name:"证券搜索结果"})).toBeTruthy();
+    expect(searchSymbols).toHaveBeenCalledTimes(1);
+  } finally { vi.useRealTimers(); }
+});
