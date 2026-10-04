@@ -251,7 +251,7 @@ function HuntingInner() {
   const feedEmpty = topItems.length === 0 && topRefItems.length === 0 && pickTotal === 0;
 
   return (
-    <main className="task-page mx-auto flex h-full w-full max-w-[1400px] flex-col gap-3 overflow-hidden px-4 py-3">
+    <main data-workspace="hunting" className="task-page mx-auto flex h-full w-full max-w-[1400px] flex-col gap-3 overflow-hidden px-4 py-3">
       {/* 头部：标题 + 口径说明 + 刷新状态 + 操作 */}
       <div className="workspace-masthead hunting-masthead">
         <div><h1 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">机会发现</h1>

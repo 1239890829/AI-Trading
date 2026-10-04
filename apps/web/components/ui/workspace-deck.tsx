@@ -1,7 +1,7 @@
 "use client";
 
 import { useExitPresence } from "@/hooks/use-exit-presence";
-import { useId, useState, type CSSProperties } from "react";
+import { useId, useRef, useState, type CSSProperties } from "react";
 import { SpatialSurface } from "@/components/ui/spatial-surface";
 import Link from "next/link";
 import { motionOrigin, type MotionOrigin } from "@/lib/surface-motion";
@@ -12,29 +12,44 @@ import { MARKET_LENSES, marketLensUrl, type WorkspaceTool } from "@/lib/workspac
 export function WorkspaceDeck({tools, onOpen, compact = false, activeTool}: {tools: readonly WorkspaceTool[]; onOpen: (key: string, origin: MotionOrigin | null) => void; compact?: boolean; activeTool?: string | null}) {
   const id = useId();
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  const term = query.trim().toLocaleLowerCase();
+  const matches = term ? tools.filter(tool => `${tool.label} ${tool.description} ${tool.group}`.toLocaleLowerCase().includes(term)) : [];
   const groups = [...new Set(tools.map(tool => tool.group))];
   const visibleGroup = groups.includes(expanded ?? "") ? expanded : null;
-  return <div className={`workspace-deck ${compact ? "workspace-deck-compact" : ""}`}>
-    <div className="tool-folders">
+  return <div className={`workspace-deck ${compact ? "workspace-deck-compact" : ""}`} data-motion-keyboard={keyboardOpen || undefined}>
+    <div className="tool-shelf-heading">
+      <span>工具收纳 <span className="shelf-total">{tools.length} 项</span></span>
+      <label className="tool-shelf-search"><span className="sr-only">查找工具</span><input ref={searchRef} type="search" value={query} placeholder="查找工具" onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); setQuery(""); } }} /></label>
+    </div>
+    {term && <div className="tool-search-results" onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); setQuery(""); searchRef.current?.focus(); } }}>
+      <p role="status" className="tool-result-count">{matches.length ? `找到 ${matches.length} 项工具` : "没有匹配的工具。请换个关键词，或清空后按用途浏览。"}</p>
+      <div className="tool-search-grid">{matches.map(tool => <button key={tool.key} className="tool-launcher" aria-haspopup="dialog" onClick={event => onOpen(tool.key, motionOrigin(event))}><span className="min-w-0"><span className="tool-title">{tool.label}</span><span className="tool-description">{tool.group} · {tool.description}</span></span><span className="tool-open" aria-hidden="true">↗</span></button>)}</div>
+      <button className="quiet-action" onClick={() => { setQuery(""); searchRef.current?.focus(); }}>返回工具收纳</button>
+    </div>}
+    <div className="tool-folders" hidden={Boolean(term)}>
       {groups.map((group, index) => {
         const items = tools.filter(tool => tool.group === group);
         const open = visibleGroup === group;
-        return <SpatialSurface className="tool-folder" faceClassName="folder-plane" data-open={open} key={group}>
+        return <SpatialSurface className="tool-folder" faceClassName="folder-plane" data-tone={index % 3} data-open={open} key={group}>
           <span className="folder-layer folder-layer-back" aria-hidden="true" />
           <span className="folder-layer folder-layer-front" aria-hidden="true" />
-          <button id={`${id}-group-${index}`} className="tool-stack" aria-label={group} aria-expanded={open} aria-controls={`${id}-tray-${index}`} onClick={() => setExpanded(open ? null : group)}>
-            <span className="tool-stack-heading"><span>{group}</span><span className="folder-count" aria-label={`${items.length} 项工具`}>{items.length.toString().padStart(2, "0")}</span></span>
+          <button id={`${id}-group-${index}`} className="tool-stack" aria-label={group} aria-expanded={open} aria-controls={`${id}-tray-${index}`} onClick={event => { setKeyboardOpen(event.detail === 0); setExpanded(open ? null : group); }}>
+            <span className="folder-object" aria-hidden="true"><span/><span/><span/></span>
+            <span className="tool-stack-heading"><span>{group}</span><span className="folder-count" aria-label={`${items.length} 项工具`}>{items.length} 项</span></span>
             <span className="tool-stack-caption">{items.map(tool => tool.label).join(" · ")}</span>
             <span className="folder-affordance" aria-hidden="true">{open ? "收起工具" : "展开工具"}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d={open ? "m6 14 6-6 6 6" : "m6 10 6 6 6-6"}/></svg></span>
           </button>
         </SpatialSurface>;
       })}
     </div>
-    {groups.map((group, index) => <div key={group} id={`${id}-tray-${index}`} hidden={visibleGroup !== group} role="region" aria-labelledby={`${id}-group-${index}`} className="tool-tray" onKeyDown={event => {
+    {groups.map((group, index) => <div key={group} id={`${id}-tray-${index}`} hidden={Boolean(term) || visibleGroup !== group} role="region" aria-labelledby={`${id}-group-${index}`} className="tool-tray" onKeyDown={event => {
       if (event.key === "Escape") { event.preventDefault(); setExpanded(null); document.getElementById(`${id}-group-${index}`)?.focus(); }
     }}>
       {visibleGroup === group && tools.filter(tool => tool.group === group).map((tool, toolIndex) => <button key={tool.key} style={{"--tool-order": toolIndex} as CSSProperties} className="tool-launcher" data-selected={activeTool === tool.key || undefined} onClick={event => onOpen(tool.key, motionOrigin(event))} aria-haspopup="dialog">
-        <span className="min-w-0"><span className="tool-title">{tool.label}</span><span className="tool-description">{tool.description}</span></span>
+        <span className="tool-launcher-mark" aria-hidden="true">↗</span><span className="min-w-0"><span className="tool-title">{tool.label}</span><span className="tool-description">{tool.description}</span></span>
         <svg className="tool-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10" /></svg>
       </button>)}
     </div>)}

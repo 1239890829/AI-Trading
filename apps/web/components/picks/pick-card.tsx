@@ -360,7 +360,7 @@ export function PickCard({
               : null;
 
   return (
-    <CardShell flow onClick={stockNav(item.symbol)}>
+    <CardShell flow className={`stock-card-${item.origin}`} onClick={stockNav(item.symbol)}>
       {/* 头：名称代码（可点 → 工作台）+ 来源/持仓/T 档徽标 + 现价 + 涨跌幅 */}
       <CardHead
         name={item.name}
@@ -645,11 +645,11 @@ export function PickCard({
       {(item.basisRows.length > 0 || item.vetoes.length > 0) && (
         <div className="stock-card-basis text-[11px] leading-relaxed">
           <div className="text-[10px] font-medium text-zinc-600 dark:text-zinc-400">入选原因</div>
-          {item.basisRows.map((r) => (
-            <Row key={r.label} k={r.label} v={r.value} />
-          ))}
+          <dl className="basis-ledger">{item.basisRows.map((r) => (
+            <div key={r.label}><dt>{r.label}</dt><dd>{r.value}</dd></div>
+          ))}</dl>
           {item.vetoes.map((v) => (
-            <div key={v} className="text-red-700 dark:text-red-500">
+            <div key={v} className="text-red-700 dark:text-red-300">
               ⚠ {v}
             </div>
           ))}
@@ -686,7 +686,7 @@ export function PickCard({
           {item.stopLoss && (
             <div className="flex flex-wrap gap-1.5" title={item.stopLoss.basis}>
               <span className="shrink-0 text-zinc-600 dark:text-zinc-400">止损参考</span>
-              <span className="font-mono tabular-nums text-red-700 dark:text-red-500">
+              <span className="font-mono tabular-nums text-red-700 dark:text-red-300">
                 {fmt(item.stopLoss.price)}（-{item.stopLoss.pct}%）
               </span>
             </div>

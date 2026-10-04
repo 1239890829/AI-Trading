@@ -123,7 +123,7 @@ function MarketInner() {
 
 
   return (
-    <main className="task-page mx-auto flex h-full w-full max-w-[1600px] flex-col gap-2 overflow-hidden px-4 py-3">
+    <main data-workspace="market" className="task-page mx-auto flex h-full w-full max-w-[1600px] flex-col gap-2 overflow-hidden px-4 py-3">
       <div className="workspace-masthead">
         <div><h1>市场全景</h1><p className="workspace-kicker">市场环境、资金与驱动线索</p></div>
         <div className="workspace-context">
@@ -159,7 +159,7 @@ function MarketInner() {
               联动切片 F（L 指数入口）：点击 → **就地弹出指数详情**（带前缀规范形态，
               与个股同一入口 `useSymbolDetail`，不裸拼 URL）。
               2026-09-15 详情弹窗化：原先跳工作台，用户会丢掉当前 tab 与页面上下文。 */}
-          <div className="grid shrink-0 grid-cols-3 gap-2 md:grid-cols-6">
+          <div className="market-index-ribbon grid shrink-0 grid-cols-3 md:grid-cols-6">
             {indices.length === 0 && pending
               ? Array.from({ length: 6 }, (_, i) => (
                   <div key={i} className="ui-card rounded-lg border border-zinc-200 px-2.5 py-1.5 dark:border-zinc-800">
@@ -193,7 +193,7 @@ function MarketInner() {
 
           {/* 宽度带：未就绪时同构骨架占位（label 已知，只对数值位骨架）。
               涨停/跌停两格可点击 → 盘面页对应 tab（2026-09-04 联动，tapeUrl 统一构造） */}
-          <div className="grid shrink-0 grid-cols-3 gap-2 lg:grid-cols-6">
+          <div className="market-breadth-ribbon grid shrink-0 grid-cols-3 lg:grid-cols-6">
             {([
               ["上涨", breadth?.up, "text-up-ink dark:text-up", null],
               ["下跌", breadth?.down, "text-down-ink dark:text-down", null],
@@ -292,7 +292,7 @@ function MarketInner() {
           ) : null}
 
           {/* 中部：成交额 1/3 + 涨停速览 2/3（flex-[5] 优先撑高；表格超高时面板内滚动） */}
-          <div className="grid min-h-[168px] flex-[5] gap-2 lg:grid-cols-[minmax(250px,1fr)_2fr]">
+          <div className="market-reading-grid grid min-h-[168px] flex-[5] gap-4 lg:grid-cols-[minmax(250px,1fr)_2fr]">
             <Panel title="两市成交额" className="min-h-0 overflow-hidden" source={sh?.source} dataTimestamp={sh?.data_timestamp}
               extra={<Link href="/market?tab=fund" className="text-zinc-600 dark:text-zinc-400 transition-colors hover:text-zinc-900 dark:hover:text-zinc-100">资金详情 ↗</Link>}>
               <div className="flex h-full flex-col justify-center px-4 py-3">
