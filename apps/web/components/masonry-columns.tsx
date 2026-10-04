@@ -36,18 +36,18 @@ import { ReactNode } from "react";
 
 export function MasonryColumns({
   children,
-  gap = "gap-3",
+  gap = "gap-6",
 }: {
   children: ReactNode;
   gap?: string;
 }) {
   const kids = Array.isArray(children) ? children : [children];
   // 间距：与旧 API 保持兼容（调用方传的是 Tailwind 类名，这里只取间距像素值）
-  const gapPx = gap === "gap-2" ? 8 : 12;
+  const gapPx = gap === "gap-2" ? 8 : gap === "gap-3" ? 12 : 24;
 
   return (
     <div
-      className="columns-1 md:columns-2 xl:columns-3"
+      className="card-gallery columns-1 md:columns-2 xl:columns-3"
       style={{ columnGap: gapPx }}
       data-testid="masonry"
     >

@@ -20,7 +20,7 @@ import { useDetailModal } from "@/components/detail/detail-modal";
 import { themesUrl } from "@/lib/routing";
 
 const BTN =
-  "rounded border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-600 hover:border-zinc-400 hover:text-zinc-700 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200";
+  "card-entry-action";
 
 /** 预检缓存：同一 symbol 页面内只探一次（卡片多，避免请求放大；刷新即失效）。 */
 const hasFeedCache = new Map<string, boolean>();
@@ -79,7 +79,7 @@ export function CardEntryRow({
   }
 
   return (
-    <div className="mt-1.5 flex flex-wrap items-center gap-1">
+    <div className="card-entry-dock" aria-label="关联研究入口">
       {hasFeed && (
         <button
           type="button"

@@ -57,7 +57,12 @@ export function useSurfaceMotion(ref: RefObject<HTMLDivElement | null>, open: bo
         { duration: closing ? 150 : 260, easing: SURFACE_EASE, fill: "none" },
       );
     }
-    return () => { animation.current?.cancel(); animation.current = null; };
+    return () => {
+      animation.current?.cancel();
+      animation.current = null;
+      // StrictMode replays setup after cleanup: restore the entry state as well.
+      started.current = wasStarted;
+    };
   }, [open, origin, layout, reduced, ref]);
 
   return { prepare, reduced };

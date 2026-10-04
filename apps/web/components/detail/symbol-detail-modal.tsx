@@ -41,6 +41,7 @@ import { usePathname, useRouter } from "next/navigation";
 
 import { StockDetailPanel } from "@/components/stock-detail";
 import { PanelBoundary } from "@/components/ui/panel-boundary";
+import { useExitPresence } from "@/hooks/use-exit-presence";
 import { ModalShell } from "@/components/ui/modal-shell";
 import {
   SymbolDetailCtx,
@@ -103,15 +104,18 @@ export function SymbolDetailProvider({ children }: { children: React.ReactNode }
 export function SymbolDetailModalHost() {
   const req = useContext(SymbolDetailStateCtx);
   const { close } = useSymbolDetail();
-  return req ? <SymbolDetailModalBody req={req} onClose={close} /> : null;
+  const presence = useExitPresence(req);
+  return presence.value ? <SymbolDetailModalBody req={presence.value} active={presence.active} onClose={close} /> : null;
 }
 
-function SymbolDetailModalBody({ req, onClose }: { req: SymbolDetailRequest; onClose: () => void }) {
+function SymbolDetailModalBody({ req, active, onClose }: { req: SymbolDetailRequest; active: boolean; onClose: () => void }) {
   const isIndex = isIndexSymbol(req.symbol);
   const kindLabel = isIndex ? "指数详情" : "个股详情";
 
   return (
     <ModalShell
+      open={active}
+      motionOrigin={req.motionOrigin}
       onClose={onClose}
       label={`${kindLabel} ${req.symbol}`}
       testid="symbol-detail-modal"
@@ -122,13 +126,13 @@ function SymbolDetailModalBody({ req, onClose }: { req: SymbolDetailRequest; onC
           <span className="font-mono text-[11px] text-zinc-500 dark:text-zinc-400">{req.symbol}</span>
         </div>
       }
-      bodyClassName="overflow-hidden p-2"
+      bodyClassName="overflow-hidden p-4"
     >
       {/* grid + min-h-0 flex-1：让面板高度 = 内容区高度（全高契约，见文件头注）。
           PanelBoundary 健康时不产生额外 DOM 节点 ⇒ 网格项仍是面板自身。 */}
       <div className="grid min-h-0 flex-1">
         <PanelBoundary key={req.symbol} label={kindLabel}>
-          <StockDetailPanel symbol={req.symbol} chartTab={req.chartTab} rightTab={req.rightTab} />
+          {active && <StockDetailPanel symbol={req.symbol} chartTab={req.chartTab} rightTab={req.rightTab} />}
         </PanelBoundary>
       </div>
     </ModalShell>

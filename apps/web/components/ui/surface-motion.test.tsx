@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { StrictMode, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ModalShell } from "./modal-shell";
@@ -31,6 +31,13 @@ function pointer(el: HTMLElement, type: string, y: number, time: number, id = 1)
 }
 
 describe("actual surface lifecycle", () => {
+  it("StrictMode effect replay leaves a live entry animation rather than a canceled one", () => {
+    render(<StrictMode><Host /></StrictMode>);
+    fireEvent.click(screen.getByText("打开工具"), {detail:1});
+    expect(animations.length).toBeGreaterThan(0);
+    expect(animations.at(-1)!.cancel).not.toHaveBeenCalled();
+  });
+
   it("opens at the pointer source, but Escape closes immediately without a reverse animation", () => {
     render(<Host />);
     fireEvent.click(screen.getByText("打开工具"), {detail:1});

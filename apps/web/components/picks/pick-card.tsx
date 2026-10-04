@@ -716,7 +716,7 @@ export function PickCard({
 
       {/* 关联消息（仅盘前名单有） */}
       {item.relatedEvents.length > 0 && (
-        <div className="mt-2 border-t border-zinc-100 pt-1.5 text-[11px] dark:border-zinc-800/60">
+        <div className="stock-card-events text-[11px]">
           <span className="text-zinc-600 dark:text-zinc-400">关联消息：</span>
           {item.relatedEvents.map((e) => (
             <div key={e} className="text-zinc-600 dark:text-zinc-300">
@@ -728,7 +728,7 @@ export function PickCard({
 
       {/* 口径注记：解释「本卡为什么缺某几节」（仅盘中路径需要——缺的维度属收盘口径） */}
       {item.caliberNote && (
-        <p className="mt-2 border-t border-zinc-100 pt-1.5 text-[10px] leading-relaxed text-zinc-600 dark:text-zinc-400 dark:border-zinc-800/60">
+        <p className="stock-card-note text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">
           {item.caliberNote}
         </p>
       )}

@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 
+import { SpatialSurface } from "@/components/ui/spatial-surface";
 import { StockLink } from "@/components/stock-link";
 
 /**
@@ -33,12 +34,13 @@ export function CardShell({
   children: ReactNode;
 }) {
   return (
-    <div
+    <SpatialSurface
       onClick={onClick}
-      className={`ui-card stock-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800 ${flow ? "mb-3 break-inside-avoid" : ""} ${onClick ? "cursor-pointer transition-colors hover:border-zinc-300 dark:hover:border-zinc-700" : ""} ${className}`}
+      className={`stock-card-slot ${flow ? "break-inside-avoid" : ""} ${onClick ? "cursor-pointer" : ""} ${className}`}
+      faceClassName="ui-card stock-card"
     >
       {children}
-    </div>
+    </SpatialSurface>
   );
 }
 

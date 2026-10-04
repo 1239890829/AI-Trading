@@ -129,20 +129,22 @@ describe("标的详情弹窗 · 开关与容器", () => {
     expect(screen.getByTestId("detail-panel").getAttribute("data-symbol")).toBe("sh000001");
   });
 
-  it("关闭按钮 / Esc 都能关（Esc 与全站弹窗一致）", () => {
+  it("关闭按钮 / Esc 停止数据面板，并在退场后移除外壳", async () => {
     renderHost();
     fireEvent.click(screen.getByTestId("open-stock"));
     // 2026-09-15 弹窗外壳统一后，关闭按钮是 × 图标（`aria-label="关闭"`），
     // 不再是文字按钮——按无障碍名查，而不是按可见文案查。
     fireEvent.click(screen.getByLabelText("关闭"));
-    expect(screen.queryByTestId("symbol-detail-modal")).toBeNull();
+    expect(screen.queryByTestId("detail-panel")).toBeNull();
+    await waitFor(() => expect(screen.queryByTestId("symbol-detail-modal")).toBeNull());
 
     fireEvent.click(screen.getByTestId("open-stock"));
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.queryByTestId("symbol-detail-modal")).toBeNull();
+    expect(screen.queryByTestId("detail-panel")).toBeNull();
+    await waitFor(() => expect(screen.queryByTestId("symbol-detail-modal")).toBeNull());
   });
 
-  it("点遮罩关闭，点面板内部不关（拖动/选中不误关）", () => {
+  it("点遮罩关闭，点面板内部不关（拖动/选中不误关）", async () => {
     renderHost();
     fireEvent.click(screen.getByTestId("open-stock"));
     // 面板内部：不应关闭
@@ -150,7 +152,8 @@ describe("标的详情弹窗 · 开关与容器", () => {
     expect(screen.queryByTestId("symbol-detail-modal")).not.toBeNull();
     // 遮罩本身：关闭
     fireEvent.mouseDown(screen.getByRole("presentation"));
-    expect(screen.queryByTestId("symbol-detail-modal")).toBeNull();
+    expect(screen.queryByTestId("detail-panel")).toBeNull();
+    await waitFor(() => expect(screen.queryByTestId("symbol-detail-modal")).toBeNull());
   });
 });
 
