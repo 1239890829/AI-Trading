@@ -47,7 +47,7 @@ function StatCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-lg border border-zinc-200 px-2.5 py-1.5 dark:border-zinc-800" title={tip}>
+    <div className="hunting-stat rounded-lg border border-zinc-200 px-2.5 py-1.5 dark:border-zinc-800" title={tip}>
       <div className="flex items-center gap-1.5">
         <span className="text-[11px] text-zinc-600 dark:text-zinc-400">{label}</span>
         {badge && (
@@ -77,7 +77,7 @@ export function HuntingStatsBar({
   const t3 = stats?.alert_t3;
 
   return (
-    <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+    <div className="hunting-stat-strip grid grid-cols-2 gap-2 md:grid-cols-4">
       {/* 精选口径 ①：信号健康度（滚动组合日胜率 + CUSUM 下漂） */}
       <StatCard
         label="精选 · 信号健康"

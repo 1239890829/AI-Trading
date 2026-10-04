@@ -22,11 +22,11 @@ function NavBarInner() {
   }
 
   return (
-    <header className="workspace-header sticky top-0 z-40 border-b border-zinc-200 bg-white/90 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/90">
+    <header className="workspace-header sticky top-0 z-40">
       <a className="skip-link" href="#workspace-content">跳到工作区</a>
-      <div className="task-header mx-auto flex min-h-14 max-w-[1600px] flex-wrap items-center gap-2 px-3 py-2 sm:gap-3 sm:px-4">
+      <div className="task-header mx-auto flex max-w-[1600px] flex-wrap items-center">
         <Link href="/market" aria-label="AShare AI Trader" className="brand-wordmark shrink-0 whitespace-nowrap font-semibold">
-          <span className="brand-mark" aria-hidden="true"><i/><i/><i/></span><span>AShare<span className="hidden sm:inline font-normal text-zinc-600 dark:text-zinc-400"> / Trader</span></span>
+          <span className="brand-mark" aria-hidden="true"><i/><i/><i/></span><span>AShare<span className="hidden sm:inline font-normal text-zinc-600 dark:text-zinc-400"> 研判工作台</span></span>
         </Link>
         <nav aria-label="主要任务" className="task-navigation order-last flex w-full items-center gap-1 overflow-x-auto lg:order-none lg:w-auto">
           {TASK_LINKS.map((l) => {
@@ -54,7 +54,7 @@ function NavBarInner() {
         <button
           onClick={toggleTheme}
           aria-label="切换主题"
-          className="rounded-md border border-zinc-200 px-2 py-1.5 text-sm text-zinc-600 hover:text-zinc-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
+          className="theme-switch rounded-md border border-zinc-200 px-2 py-1.5 text-sm text-zinc-600 hover:text-zinc-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
         >
           <>
             {/* 深色态（显示太阳=可切浅色） */}

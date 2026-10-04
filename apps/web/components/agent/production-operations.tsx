@@ -38,6 +38,11 @@ export function ProductionOperations() {
     }
   }
   return <div className="operations-layout">
+    <section className="operations-status" aria-labelledby="watcher-heading">
+      <h2 id="watcher-heading">节拍持久状态</h2>
+      <p>自动调度取决于服务和各项开关。机器关闭或服务未启动时不会继续生产。</p>
+      {watcher.error ? <div role="alert" className="status-feedback"><p>状态读取失败，不能据此判断调度正常。</p><button className="command-action" onClick={watcher.refresh}>重新读取</button></div> : watcher.pending ? <p role="status" className="status-feedback">正在读取持久状态…</p> : <pre>{JSON.stringify(watcher.data, null, 2)}</pre>}
+    </section>
     <section className="operations-desk" aria-labelledby="production-heading">
       <header className="operations-intro">
         <h2 id="production-heading">后台生产与维护</h2>
@@ -52,10 +57,6 @@ export function ProductionOperations() {
         </div>
         {receipt && <details open className="command-receipt"><summary>本次命令回执</summary><pre role="status">{receipt}</pre></details>}
     </section>
-    <section className="operations-status" aria-labelledby="watcher-heading">
-      <h2 id="watcher-heading">节拍持久状态</h2>
-      <p>自动调度取决于服务和各项开关。机器关闭或服务未启动时不会继续生产。</p>
-      {watcher.error ? <div role="alert" className="status-feedback"><p>状态读取失败，不能据此判断调度正常。</p><button className="command-action" onClick={watcher.refresh}>重新读取</button></div> : watcher.pending ? <p role="status" className="status-feedback">正在读取持久状态…</p> : <pre>{JSON.stringify(watcher.data, null, 2)}</pre>}
-    </section>
+
   </div>;
 }
