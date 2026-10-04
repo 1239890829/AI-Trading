@@ -21,7 +21,7 @@ import { dateTimeTextBJ } from "@/lib/format";
  * 首批只暴露 L0 只读/生成类任务；每个任务可展开看**步骤轨迹**（可追溯三件套
  * 第一件：做过什么、依据什么、花了多久、是否经 LLM 增强）。
  *
- * 三态纪律：`types === undefined` 骨架 / `null` 显式空态 / 有值渲染；
+ * 三态纪律：`types === undefined` 骨架 / `null` 显式错误态 / 有值渲染；
  * 状态徽标只有终态与异常态上色，running 用中性色（避免每秒闪色）。
  */
 
@@ -85,6 +85,7 @@ export function TaskCenter() {
       setTasks(list);
       setError(null);
     } catch (e) {
+      setTypes(null);
       setTasks(null);
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -233,9 +234,11 @@ export function TaskCenter() {
             <span className="text-[10px] text-zinc-600 dark:text-zinc-400">首批仅 L0 只读/生成类；写类任务在参数配置模块（P1）开放</span>
           </div>
           {types === undefined ? (
-            <div className="h-8 w-full animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
+            <div role="status" aria-label="正在读取任务入口" className="h-8 w-full animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
           ) : types === null ? (
-            <p className="text-[11px] text-zinc-600 dark:text-zinc-400">任务类型加载失败，无法创建任务。</p>
+            <p className="text-[11px] text-zinc-600 dark:text-zinc-400">任务入口读取失败，暂时无法创建。请点击任务列表的“刷新”重试。</p>
+          ) : types.length === 0 ? (
+            <p className="text-[11px] text-zinc-600 dark:text-zinc-400">暂无可创建的任务。</p>
           ) : (
             <div className="flex flex-wrap items-center gap-1.5">
               {types.map((t) => (
@@ -252,14 +255,14 @@ export function TaskCenter() {
               ))}
             </div>
           )}
-          <label className="mt-3 block text-[11px] text-zinc-600 dark:text-zinc-400">可选任务参数（JSON）
+          {Boolean(types?.length) && <label className="mt-3 block text-[11px] text-zinc-600 dark:text-zinc-400">可选任务参数（JSON）
           <input
             value={paramsText}
             onChange={(e) => setParamsText(e.target.value)}
             placeholder='可选参数（JSON），如 {"trade_date": "20260908"}；留空用默认'
             className="mt-2 w-full rounded-md border border-zinc-200 bg-transparent px-2 py-1 font-mono text-[11px] text-zinc-700 outline-none placeholder:text-zinc-400 dark:border-zinc-700 dark:text-zinc-200"
           />
-          </label>
+          </label>}
         </section>
 
         {/* 任务详情 */}
