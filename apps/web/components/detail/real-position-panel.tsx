@@ -115,10 +115,10 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
   }
 
   return (
-    <div className={`flex min-h-0 flex-col ${className ?? ""}`}>
+    <div className={`manual-position-panel flex min-h-0 flex-col ${className ?? ""}`}>
       {/* 记一笔 */}
       <div className="shrink-0 border-b border-zinc-100 px-2 py-2 dark:border-zinc-800/60">
-        <div className="flex items-center gap-1.5">
+        <div className="manual-entry-heading flex flex-wrap items-center gap-1.5">
           {(
             [
               ["buy", "记买入"],
@@ -128,14 +128,16 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
             <button
               key={k}
               onClick={() => { setDraftEdited(true); setSide(k); }}
-              className={`rounded px-2 py-0.5 text-xs ${side === k ? (k === "buy" ? "bg-up/15 font-medium text-up-ink dark:text-up" : "bg-down/15 font-medium text-down-ink dark:text-down") : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
+              aria-pressed={side === k}
+              className={`control-label shrink-0 rounded px-2 py-0.5 text-xs ${side === k ? (k === "buy" ? "bg-up/15 font-medium text-up-ink dark:text-up" : "bg-down/15 font-medium text-down-ink dark:text-down") : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
             >
               {label}
             </button>
           ))}
-          <span className="ml-auto text-[10px] text-zinc-600 dark:text-zinc-400">按实际成交价手工记录；未经券商核验，与模拟账户独立</span>
+          <span className="manual-entry-note text-[11px] text-zinc-600 dark:text-zinc-400">按实际成交价手工记录；未经券商核验，与模拟账户独立</span>
         </div>
-        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
+        <div className="manual-entry-fields mt-3 grid grid-cols-2 gap-2 text-xs">
+          <label className="manual-entry-field"><span>代码</span>
           <input
             value={formSymbol}
             onChange={(e) => { setDraftEdited(true); setFormSymbol(e.target.value); }}
@@ -143,6 +145,8 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
             className="w-20 rounded border border-zinc-200 bg-transparent px-1.5 py-0.5 font-mono dark:border-zinc-700"
             aria-label="代码"
           />
+          </label>
+          <label className="manual-entry-field"><span>成交价</span>
           <input
             value={price}
             onChange={(e) => { setDraftEdited(true); setPrice(e.target.value); }}
@@ -152,6 +156,8 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
             aria-label="实际成交价"
             title="你在券商的真实成交价（默认带当前现价，请改成实际值）"
           />
+          </label>
+          <label className="manual-entry-field"><span>数量（股）</span>
           <input
             value={qty}
             onChange={(e) => { setDraftEdited(true); setQty(e.target.value); }}
@@ -160,6 +166,8 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
             className="w-20 rounded border border-zinc-200 bg-transparent px-1.5 py-0.5 font-mono tabular-nums dark:border-zinc-700"
             aria-label="数量"
           />
+          </label>
+          <label className="manual-entry-field"><span>费用（可选）</span>
           <input
             value={fee}
             onChange={(e) => { setDraftEdited(true); setFee(e.target.value); }}
@@ -168,6 +176,8 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
             className="w-20 rounded border border-zinc-200 bg-transparent px-1.5 py-0.5 font-mono tabular-nums dark:border-zinc-700"
             aria-label="费用"
           />
+          </label>
+          <label className="manual-entry-field"><span>成交日期</span>
           <input
             type="date"
             value={tradedAt}
@@ -175,6 +185,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
             className="rounded border border-zinc-200 bg-transparent px-1.5 py-0.5 dark:border-zinc-700"
             aria-label="成交日期"
           />
+          </label>
           <button
             onClick={() => void submitTrade()}
             disabled={busy}

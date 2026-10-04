@@ -447,6 +447,51 @@ input::placeholder,textarea::placeholder { color:var(--ui-muted); opacity:1; }
 @media(max-width:767px), (pointer:coarse) { .chart-modes > button,.chart-tools button,.watch-actions > button,.watch-actions > input,.watch-groups button { min-height:44px; min-width:44px; }.watch-actions { gap:6px; }.panel-meta { gap:8px; }.opportunity-fold > summary { padding:15px; }.opportunity-fold > div { padding:15px; } }
 @media(prefers-reduced-motion:reduce) { .fold-chevron,.lens-choice { transition:none; } }
 .opportunity-fold > summary:focus-visible .fold-chevron { transition:none; }
+/* Compact actions keep words together; explanatory cards retain multiline text. */
+.control-label,.quiet-action,.accessory-trigger,.card-entry-action,.drawer-mode,
+.chart-tools button,.watch-actions button,.watch-groups button,.panel-meta button,
+.trade-entry-form button,.manual-position-panel button { white-space:nowrap; overflow-wrap:normal; flex-shrink:0; }
+.panel-meta { overflow-wrap:normal; }
+.panel-meta > span { overflow-wrap:anywhere; }
+.task-panel-header > h2 { white-space:normal; overflow:visible; text-overflow:clip; overflow-wrap:anywhere; }
+.task-center-layout { container-type:inline-size; }
+.task-center-list { width:260px; }
+.task-center-detail > section { min-width:0; }
+.task-center-detail button,.settings-form button { min-height:32px; padding:6px 10px; white-space:nowrap; }
+.task-center-detail input,.settings-form input,.settings-form textarea,.settings-form select { min-width:0; min-height:34px; }
+.settings-heading h3 { flex-basis:100%; line-height:1.6; }
+.settings-form textarea { padding:8px 10px; }
+.manual-entry-heading > button { min-height:32px; padding-inline:12px; }
+.manual-entry-note { flex-basis:100%; margin-top:4px; line-height:1.7; color:var(--ui-muted); }
+.manual-entry-field { display:flex; min-width:0; flex-direction:column; gap:6px; color:var(--ui-muted); }
+.manual-entry-fields input { width:100%; min-width:0; min-height:34px; padding:6px 8px; color:var(--ui-ink); }
+.manual-entry-fields > button { align-self:end; min-height:34px; }
+.trade-entry-form button,.trade-entry-form input { min-height:32px; }
+.trade-price-row > label > span { flex:none; }
+@container (max-width:600px) {
+  .task-center-columns { flex-direction:column; overflow-y:auto; }
+  .task-center-list { width:100%; max-height:210px; flex:none; }
+  .task-center-detail { flex:none; overflow:visible; }
+  .task-center-detail > section { flex:none; }
+}
+@media(max-width:767px), (pointer:coarse) {
+  .task-center-detail button,.task-center-detail input,.task-center-list > div > button,
+  .settings-form button,.settings-form input,.settings-form select,.settings-form textarea,
+  .manual-entry-heading > button,.manual-entry-fields input,.manual-entry-fields > button,
+  .trade-entry-form button,.trade-entry-form input { min-height:44px; }
+}
+/* Indicator controls scroll as a strip, reserving height for the actual chart. */
+.chart-indicator-options { display:flex; flex:1 1 240px; min-width:0; max-width:100%; gap:4px; overflow-x:auto; padding:2px; scrollbar-width:thin; }
+.kline-controls button,.replay-controls button { min-height:30px; min-width:30px; padding-inline:8px; white-space:nowrap; flex-shrink:0; }
+.replay-controls select { min-height:30px; }
+.chart-legend { flex:none; font-size:11px; color:var(--ui-muted); }
+.chart-legend summary { display:flex; align-items:center; min-height:30px; padding:4px 8px; cursor:pointer; border-radius:7px; background:var(--ui-hover); }
+.chart-legend[open] { flex-basis:100%; }
+.chart-legend[open] summary { width:max-content; margin-bottom:8px; }
+.chart-legend p { max-width:70ch; line-height:1.7; }
+.replay-control-group { display:inline-flex; align-items:center; gap:6px; max-width:100%; }
+@media(max-width:1023px) { .task-panel.detail-chart-panel { min-height:480px; flex:none; }.task-panel.detail-chart-panel:has(.replay-controls) { min-height:740px; }.replay-chart-stage { min-height:460px; } }
+@media(max-width:767px), (pointer:coarse) { .kline-controls button,.chart-legend summary,.replay-controls button,.replay-controls select { min-height:44px; min-width:44px; }.chart-indicator-options { flex-basis:100%; }.kline-controls > span:first-child { display:none; } }
 /* State accents stay on controls; reading surfaces retain the accepted palette. */
 .tool-launcher:focus-visible,.tool-stack:focus-visible,.tool-search-clear:focus-visible { outline:2px solid var(--ui-accent); outline-offset:3px; }
 @media(hover:hover) and (pointer:fine) { .tool-launcher:hover { border-color:var(--edge-light); }.tool-stack:hover .folder-affordance { color:var(--ui-accent); }.tool-search-clear:hover { background:var(--ui-selected); color:var(--ui-ink); }.task-navigation a:hover:not([aria-current=page]) { background:var(--ui-hover); } }
