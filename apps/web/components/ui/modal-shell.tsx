@@ -164,7 +164,7 @@ export function ModalShell({
           {children}
         </div>
         {footer !== undefined && (
-          <div className="flex shrink-0 items-center justify-between gap-3 border-t border-zinc-100 px-5 py-2.5 text-[11px] leading-relaxed text-zinc-600 dark:border-zinc-800/80 dark:text-zinc-400">
+          <div className="overlay-footer flex shrink-0 items-center justify-between gap-3 border-t border-zinc-100 px-5 py-2.5 text-[11px] leading-relaxed text-zinc-600 dark:border-zinc-800/80 dark:text-zinc-400">
             {footer}
           </div>
         )}

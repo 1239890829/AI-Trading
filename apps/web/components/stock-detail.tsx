@@ -656,7 +656,8 @@ export const StockDetailPanel = memo(function StockDetailPanel({
         style={{ "--right-w": `${rightW}px` } as React.CSSProperties}
       >
         <div className="flex min-h-0 min-w-0 flex-col gap-1.5">
-          <div className="flex shrink-0 gap-1">
+          <div className="chart-toolbar flex shrink-0 flex-wrap items-center gap-2">
+            <div className="chart-modes" role="group" aria-label="图表视角">
             {(
               (
                 [
@@ -670,17 +671,19 @@ export const StockDetailPanel = memo(function StockDetailPanel({
               <button
                 key={key}
                 onClick={() => setChartTab(key)}
-                className={`rounded-md px-2.5 py-1 text-xs ${chartTab === key ? "bg-zinc-100 font-medium dark:bg-zinc-800" : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
+                aria-pressed={chartTab === key}
+                className="text-xs"
               >
                 {label}
               </button>
             ))}
 
+            </div>
             {/* 右侧工具组：技术评估 + 历史回放同行（2026-09-04 用户反馈：技术评估
                 浮层遮挡 K 线，改为工具栏内联，不再覆盖图表） */}
-            <div className="ml-auto flex items-center gap-1">
+            <div className="chart-tools ml-auto flex flex-wrap items-center gap-2">
               {chartTab === "kline" && !replayMode && tech && (
-                <div className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white/85 px-2 py-1 text-[11px] shadow-sm dark:border-zinc-700 dark:bg-zinc-900/85">
+                <div className="chart-assessment flex flex-wrap items-center gap-1.5 rounded-lg border border-zinc-200 bg-white/85 px-2 py-1 text-[11px] shadow-sm dark:border-zinc-700 dark:bg-zinc-900/85">
                   <span
                     className={`rounded px-1.5 py-0.5 font-medium ${
                       tech.bias === "bull"

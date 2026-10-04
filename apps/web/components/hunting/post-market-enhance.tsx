@@ -142,10 +142,11 @@ export function PostMarketEnhance() {
     <details
       open={open}
       onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
-      className="rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800"
+      className="opportunity-fold"
     >
-      <summary className="cursor-pointer select-none text-xs font-medium text-zinc-600 dark:text-zinc-400">
-        盘后增强（次日接力参考 · 潜伏观察池 —— P1 实证因子）
+      <summary>
+        <span><strong>盘后增强</strong><span className="fold-caption">次日接力参考 · 潜伏观察池</span></span>
+        <span className="fold-chevron" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m7 10 5 5 5-5" /></svg></span>
       </summary>
       <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <section>

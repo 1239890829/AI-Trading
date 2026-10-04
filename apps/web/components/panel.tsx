@@ -68,9 +68,9 @@ export function Panel({ title, children, source, dataTimestamp, quality, quality
     <section className={`task-panel flex min-w-0 flex-col overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800 ${className ?? ""}`}>
       {showHeader && (
         <div className="task-panel-header flex items-center justify-between gap-3 border-b border-zinc-200 bg-zinc-900/[0.03] px-4 py-2.5 dark:border-zinc-800 dark:bg-zinc-900/40">
-          {/* min-w-0+truncate：长标题截断省略，不挤压右侧按钮/来源徽标（右侧 shrink-0 保完整） */}
+          {/* 标题与元信息分别收缩；窄面板允许元信息换行，保持来源可读。 */}
           <h2 className="min-w-0 truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">{title}</h2>
-          <div className="flex shrink-0 items-center gap-3 text-xs text-zinc-600 dark:text-zinc-400">
+          <div className="panel-meta flex min-w-0 flex-wrap items-center gap-3 text-xs text-zinc-600 dark:text-zinc-400">
             {extra}
             {/* 直接渲染，不加门控——可见性策略单点在 QualityBadge 内部
                 （2026-09-14 口径统一；此前 `{quality && …}` 这类门控散在各调用点，

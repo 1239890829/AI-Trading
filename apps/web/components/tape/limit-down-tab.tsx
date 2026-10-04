@@ -85,7 +85,7 @@ export function LimitDownTab() {
 
       <Panel
         className="min-h-0 flex-1 overflow-hidden"
-        title={`共 ${records.length} 只（按连续跌停天数排序）`}
+        title={error ? "数量待核对" : `共 ${records.length} 只（按连续跌停天数排序）`}
         source={records[0]?.source}
       >
         {records.length === 0 && !error ? (

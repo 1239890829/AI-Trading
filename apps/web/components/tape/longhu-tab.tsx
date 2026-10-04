@@ -150,7 +150,7 @@ export function LonghuTab() {
       <Panel
         className="min-h-0 flex-1 overflow-hidden"
         title={
-          records.length > 0
+          error && !isPreRelease ? "数量待核对" : records.length > 0
             ? `共 ${records.length} 条 / ${stockCount} 只股票（日榜优先·按净买额降序）`
             : "共 0 条"
         }

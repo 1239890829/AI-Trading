@@ -125,10 +125,12 @@ export function LimitUpTab() {
 
       <Panel
         className="min-h-0 flex-1 overflow-hidden"
-        title={`共 ${shown.length} 只（按连板数排序${theme && !onlyMembers ? "，成员高亮" : ""}）`}
+        title={error ? "数量待核对" : `共 ${shown.length} 只（按连板数排序${theme && !onlyMembers ? "，成员高亮" : ""}）`}
         source={records[0]?.source}
       >
-        {records.length === 0 && !error ? (
+        {error ? (
+          <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">读取失败，无法确认涨停数量或题材成员。请稍后重试。</p>
+        ) : records.length === 0 ? (
           loading ? (
             <div className="space-y-2.5 px-3 py-4" aria-hidden>
               {Array.from({ length: 8 }, (_, i) => (
