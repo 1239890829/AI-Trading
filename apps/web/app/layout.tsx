@@ -30,7 +30,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInit }} />
       </head>
-      <body className="app-shell h-dvh overflow-hidden flex flex-col bg-zinc-50 text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100">
+      <body className="app-shell h-dvh overflow-hidden flex flex-col antialiased">
         {/* Provider 必须包住 NavBar（通知抽屉在里面用 useDetailModal），
             否则拿到默认 noop context——点无 url 通知没反应（2026-09-09 踩坑） */}
         <SymbolDetailProvider>
