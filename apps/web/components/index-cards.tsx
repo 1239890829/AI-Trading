@@ -45,8 +45,8 @@ export const IndexCards = memo(function IndexCards({ indices, selected, onSelect
                     : "bg-zinc-100/60 hover:bg-zinc-200/60 dark:bg-zinc-900/60 dark:hover:bg-zinc-800/60"
                 } ${onSelect ? "cursor-pointer" : "cursor-default"}`}
               >
-                <div className="flex items-center justify-between">
-                  <span className="truncate text-[10px] text-zinc-600 dark:text-zinc-400">{q.name ?? q.symbol}</span>
+                <div className="flex min-w-0 items-center justify-between gap-1">
+                  <span className="min-w-0 truncate text-[10px] text-zinc-600 dark:text-zinc-400">{q.name ?? q.symbol}</span>
                   {/* 可见性策略单点在 QualityBadge 内部（shouldShowQualityBadge）：正常出静音灰「正常」，
                       low/medium 瞬态不出（2026-09-02 闪烁修复），stale/invalid 常显。调用点不再自行判断。 */}
                   <QualityBadge quality={q.quality} reasons={q.quality_reasons} />

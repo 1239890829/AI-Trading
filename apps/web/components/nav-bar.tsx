@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { Suspense } from "react";
+import { Suspense, useLayoutEffect, useRef } from "react";
+import { CommandPalette } from "@/components/ui/command-palette";
+import { TaskBrowser } from "@/components/ui/task-browser";
 import { activeTask, TASK_LINKS } from "@/lib/task-navigation";
 import { SearchBox } from "@/components/search-box";
 import { NotificationBell } from "@/components/notifications/notification-drawer";
@@ -11,6 +13,25 @@ function NavBarInner() {
   const pathname = usePathname();
   const params = useSearchParams();
   const activeId = activeTask(pathname, new URLSearchParams(params.toString()));
+
+  const nav = useRef<HTMLElement>(null);
+  const marker = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    function measure() {
+      const selected = nav.current?.querySelector<HTMLElement>('[aria-current="page"]');
+      if (!marker.current) return;
+      marker.current.style.opacity = selected ? "1" : "0";
+      if (selected) {
+        marker.current.style.width = `${selected.offsetWidth}px`;
+        marker.current.style.transform = `translateX(${selected.offsetLeft}px)`;
+      }
+    }
+    measure();
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    if(nav.current) observer?.observe(nav.current);
+    window.addEventListener("resize",measure);
+    return () => {observer?.disconnect();window.removeEventListener("resize",measure);};
+  },[activeId]);
 
   // 主题只影响图标，交给 CSS（dark: 变体）切换：无需 state，也就不存在水合不一致
   function toggleTheme() {
@@ -28,7 +49,8 @@ function NavBarInner() {
         <Link href="/market" aria-label="AShare AI Trader" className="brand-wordmark shrink-0 whitespace-nowrap font-semibold">
           <span className="brand-mark" aria-hidden="true"><i/><i/><i/></span><span>AShare<span className="hidden sm:inline font-normal text-zinc-600 dark:text-zinc-400"> 研判工作台</span></span>
         </Link>
-        <nav aria-label="主要任务" className="task-navigation order-last flex w-full items-center gap-1 overflow-x-auto lg:order-none lg:w-auto">
+        <nav ref={nav} aria-label="主要任务" className="task-navigation order-last flex w-full items-center gap-1 overflow-x-auto lg:order-none lg:w-auto">
+          <span ref={marker} className="navigation-marker" aria-hidden="true" />
           {TASK_LINKS.map((l) => {
             const active = activeId === l.id;
             return (
@@ -48,9 +70,10 @@ function NavBarInner() {
           })}
         </nav>
         <div className="flex-1" />
-        <SearchBox />
+        <SearchBox collapsible />
+        <CommandPalette />
         <NotificationBell />
-        <Link href="/agent?area=maintenance&tab=operations" aria-current={activeId === "maintenance" ? "page" : undefined} aria-label="系统维护" title="系统维护" className="header-action flex items-center gap-1 rounded-md px-2 py-2 text-xs text-zinc-600 dark:text-zinc-400"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/><circle cx="8" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></svg><span className="hidden sm:inline">系统维护</span></Link>
+        <TaskBrowser />
         <button
           onClick={toggleTheme}
           aria-label="切换主题"

@@ -22,7 +22,7 @@ function controls(root: HTMLElement) {
 }
 function focusFirst(layer: Layer) {
   const targets = controls(layer.root);
-  (targets.find(el => el.hasAttribute("data-overlay-autofocus")) ?? targets[0] ?? layer.root).focus();
+  (targets.find(el => el.getAttribute("data-overlay-autofocus") === "primary") ?? targets.find(el => el.hasAttribute("data-overlay-autofocus")) ?? targets[0] ?? layer.root).focus();
 }
 function isolateTop() {
   for (const [node, inert] of originalInert) node.inert = inert || node.dataset.motionState === "closed";

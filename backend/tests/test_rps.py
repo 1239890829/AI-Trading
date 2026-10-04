@@ -8,16 +8,26 @@
 需要"历史截面"语义的用例显式传 `t0=`（如边界截断用例）。
 """
 import sys
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 
 import duckdb
+import pytest
 
 sys.path.insert(0, ".")
 
-from app.core.bjtime import beijing_today
+from app.core.bjtime import BJ_TZ, beijing_today
 from app.market import trade_calendar as tc
 from app.picks.rps import RpsService, _pct_rank_dedup, _trade_date_ms
 from scripts.sync_marketdb import rebuild_adj  # noqa: E402
+
+@pytest.fixture(autouse=True)
+def isolated_freshness_clock(monkeypatch):
+    """Do not consume a developer's persisted calendar as a synthetic test anchor."""
+    anchor = date(2026, 9, 30)
+    monkeypatch.setitem(globals(), "beijing_today", lambda: anchor)
+    monkeypatch.setattr(tc, "_load_persisted", lambda: [anchor])
+    monkeypatch.setattr("app.market.marketdb_freshness.beijing_now", lambda: datetime(2026, 9, 30, 15, 0, tzinfo=BJ_TZ))
+
 
 _MS_DAY = 86_400_000
 _T0 = _trade_date_ms("20260101")  # 上海零点，与仓内口径一致（历史夹具用）

@@ -60,7 +60,7 @@ export function QualityBadge({ quality, reasons }: { quality?: Quality | null; r
   return (
     <span
       title={title}
-      className={`rounded px-1.5 py-0.5 text-xs ${flag ? "bg-amber-500/10" : ""} ${STYLES[quality]}`}
+      className={`shrink-0 whitespace-nowrap rounded px-1.5 py-0.5 text-xs ${flag ? "bg-amber-500/10" : ""} ${STYLES[quality]}`}
     >
       {qualityLabel(quality)}
     </span>
