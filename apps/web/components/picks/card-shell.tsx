@@ -35,7 +35,7 @@ export function CardShell({
   return (
     <div
       onClick={onClick}
-      className={`ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800 ${flow ? "mb-3 break-inside-avoid" : ""} ${onClick ? "cursor-pointer transition-colors hover:border-zinc-300 dark:hover:border-zinc-700" : ""} ${className}`}
+      className={`ui-card stock-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800 ${flow ? "mb-3 break-inside-avoid" : ""} ${onClick ? "cursor-pointer transition-colors hover:border-zinc-300 dark:hover:border-zinc-700" : ""} ${className}`}
     >
       {children}
     </div>
@@ -56,14 +56,14 @@ export function CardHead({
 }) {
   const label = (
     <>
-      <span className="text-sm font-semibold">{name ?? "--"}</span>
-      <span className="ml-1.5 font-mono text-[10px] text-zinc-600 dark:text-zinc-400">{symbol}</span>
+      <span className="stock-card-name text-sm font-semibold">{name ?? "--"}</span>
+      <span className="stock-card-symbol font-mono text-[10px] text-zinc-600 dark:text-zinc-400">{symbol}</span>
     </>
   );
   return (
-    <div className="flex items-baseline justify-between gap-2">
-      <div>{link ? <StockLink symbol={symbol}>{label}</StockLink> : label}</div>
-      <div className="text-right">{right}</div>
+    <div className="stock-card-heading flex items-start justify-between gap-2">
+      <div className="stock-card-identity">{link ? <StockLink symbol={symbol}>{label}</StockLink> : label}</div>
+      <div className="stock-card-quote text-right">{right}</div>
     </div>
   );
 }

@@ -708,6 +708,7 @@ export function FloatingAssistant() {
           原本就达标，未动。 */}
       <div
         data-testid="assistant-ball"
+        data-docked={docked && !orbHovered ? docked : undefined}
         ref={ballRef}
         tabIndex={0}
         aria-expanded={open}
@@ -715,11 +716,7 @@ export function FloatingAssistant() {
         onKeyDown={event => { if (!event.nativeEvent.isComposing && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); setOpen(value => !value); } }}
         role="button"
         aria-label="AI 助手"
-        className={`fixed z-50 flex cursor-grab select-none items-center justify-center bg-zinc-900 text-zinc-400 shadow-[0_2px_8px_rgba(0,0,0,0.18),0_10px_28px_rgba(0,0,0,0.22)] transition-[left,width,height,border-radius,box-shadow] duration-200 ease-out hover:shadow-[0_4px_12px_rgba(0,0,0,0.22),0_14px_36px_rgba(0,0,0,0.28)] active:cursor-grabbing dark:bg-zinc-100 dark:text-zinc-950 dark:shadow-[0_2px_8px_rgba(0,0,0,0.4),0_10px_28px_rgba(0,0,0,0.35)] ${
-          docked && !orbHovered
-            ? "ring-0"
-            : "ring-1 ring-rose-500/45 dark:ring-rose-500/55"
-        }`}
+        className="assistant-launcher fixed z-50 flex cursor-grab select-none items-center justify-center transition-[left,width,height,border-radius] duration-200 ease-out active:cursor-grabbing"
         style={
           docked && !orbHovered
             ? {
@@ -730,7 +727,9 @@ export function FloatingAssistant() {
                 borderRadius: docked === "left" ? "0 22px 22px 0" : "22px 0 0 22px",
               }
             : {
-                left: pos.x, top: pos.y, width: BALL, height: BALL,
+                // Keep the expanded hit area under the pointer at either dock edge.
+                left: docked === "left" ? 0 : docked === "right" ? viewport.w - BALL : pos.x,
+                top: pos.y, width: BALL, height: BALL,
                 borderRadius: "50%",
               }
         }
@@ -747,7 +746,7 @@ export function FloatingAssistant() {
               {bubbles.length}
             </span>
           ) : (
-            <span className="h-4 w-[3px] rounded-full bg-rose-400/80" aria-hidden />
+            <span className="h-4 w-[3px] rounded-full bg-zinc-500 dark:bg-zinc-400" aria-hidden />
           )
         ) : (
           <>

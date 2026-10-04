@@ -38,12 +38,9 @@ function TapeInner() {
 
   return (
     <main className="task-page mx-auto flex h-full w-full max-w-[1600px] flex-col px-4 py-3">
-      <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-4">
-          <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">市场全景</h1>
-          <MarketLensPicker selected={tab} search={sp.toString()} />
-        </div>
-        <span className="hidden text-xs text-zinc-600 dark:text-zinc-400 lg:inline">梯队结构 · 涨停证据 · 资金关注</span>
+      <div className="workspace-masthead">
+        <div><h1>市场全景</h1><p className="workspace-kicker">梯队结构、涨停证据与资金关注</p></div>
+        <MarketLensPicker selected={tab} search={sp.toString()} />
       </div>
 
       {/* tab 切换统一 fade 过渡（2026-09-04）：h-full 保持子 tab 内部 flex 布局 */}

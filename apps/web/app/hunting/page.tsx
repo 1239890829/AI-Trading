@@ -253,11 +253,12 @@ function HuntingInner() {
   return (
     <main className="task-page mx-auto flex h-full w-full max-w-[1400px] flex-col gap-3 overflow-hidden px-4 py-3">
       {/* 头部：标题 + 口径说明 + 刷新状态 + 操作 */}
-      <div className="flex shrink-0 flex-wrap items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
-        <h1 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">机会发现</h1>
+      <div className="workspace-masthead hunting-masthead">
+        <div><h1 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">机会发现</h1>
         <span title="精选=盘后布下的猎物（date+symbol 持久组合）；跟踪=盘中正在追的猎物（当日实时动态名单）；题材异动=猎群">
           精选 · 跟踪 · 猎群
-        </span>
+        </span></div>
+        <div className="workspace-context">
         {isDiscovery && (picksFailed || intradayFailed) ? (
           <span
             className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-800 dark:text-amber-300"
@@ -279,7 +280,7 @@ function HuntingInner() {
             刷新数据
           </button>}
           <Link href="/agent?area=maintenance&tab=operations" className="px-2 py-1">生产状态与维护</Link>
-        </div>
+        </div></div>
       </div>
 
       {data?.stale && (

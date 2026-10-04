@@ -84,6 +84,12 @@ const accordionPath: OpportunityStock = {
 };
 
 describe("PickCard · 盘前名单（fromDailyPick）", () => {
+  it("distinguishes a missing dimension from a real zero score", () => {
+    render(<PickCard item={fromDailyPick({...base, sub_scores: {news: 0}})} />);
+    expect(screen.getByLabelText("情绪评分缺失")).toBeTruthy();
+    expect(screen.queryByRole("meter", {name: "情绪评分"})).toBeNull();
+    expect(screen.getByRole("meter", {name: "消息评分"}).getAttribute("aria-valuenow")).toBe("0");
+  });
   it("展示六维评分条（含梯队第六维）", () => {
     render(<PickCard item={fromDailyPick(base)} />);
     // 维度名既出现在评分条也出现在依据行里，用 getAllByText

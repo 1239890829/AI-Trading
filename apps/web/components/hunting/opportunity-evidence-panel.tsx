@@ -43,15 +43,15 @@ export function OpportunityEvidencePanel({date: requestedDate, onDateChange}: {d
       if (!pinned) setPinned({date, card}); else setCompared({date, card});
     }
   }
-  return <section className="ui-card mt-3 border border-zinc-200 p-4 text-xs text-zinc-700 dark:border-zinc-800 dark:text-zinc-300">
-    <div className="flex flex-wrap items-center justify-between gap-2">
+  return <section className="ui-card evidence-sheet border border-zinc-200 p-4 text-xs text-zinc-700 dark:border-zinc-800 dark:text-zinc-300">
+    <div className="evidence-heading flex flex-wrap items-center justify-between gap-2">
       <h4 className="text-sm font-semibold">机会依据与等待条件</h4>
       <label className="flex items-center gap-2">决定日期
         <input ref={dateInput} aria-label="机会决定日期" type="date" value={date} onChange={e => { if (e.target.value) { if (onDateChange) onDateChange(e.target.value); else setDate(e.target.value); setLimit(10); } }}
-          className="min-h-11 rounded border border-zinc-300 bg-transparent px-2 dark:border-zinc-600 focus-visible:outline-2 focus-visible:outline-sky-500" />
+          className="evidence-date rounded border border-zinc-300 bg-transparent px-2 dark:border-zinc-600 focus-visible:outline-2 focus-visible:outline-sky-500" />
       </label>
     </div>
-    <div className="evidence-toolbar mt-3 flex flex-wrap items-center gap-2" aria-label="证据联动模式">{([["follow", "跟随"], ["pin", "固定版本"], ["compare", "对比"]] as const).map(([mode, label]) => <button key={mode} aria-pressed={inspectionMode === mode} onClick={() => { if (mode !== "follow" && selected) setPinned({date, card: selected}); setCompared(null); setInspectionMode(mode); }} className="evidence-mode">{label}</button>)}<span>选择列表中的“查看依据”，只读核对；固定后不会随刷新换版。</span></div>
+    <div className="evidence-toolbar mt-3 flex flex-wrap items-center gap-2" aria-label="证据联动模式">{([["follow", "跟随"], ["pin", "固定版本"], ["compare", "对比"]] as const).map(([mode, label]) => <button key={mode} aria-pressed={inspectionMode === mode} onClick={() => { if (mode !== "follow" && selected) setPinned({date, card: selected}); setCompared(null); setInspectionMode(mode); }} className="evidence-mode">{label}</button>)}<span className="evidence-help">选择“查看依据”核对；固定后保留当前版本。</span></div>
     {inspected && <aside aria-label="当前证据侧栏" className="mt-3 grid gap-3 rounded-lg border border-zinc-300 p-3 lg:grid-cols-2 dark:border-zinc-600">{[inspected, ...(inspectionMode === "compare" && compared ? [compared] : [])].map((item, index) => <div key={index}><h5 className="font-semibold">{item.card.name} {item.card.symbol} · {item.date}{inspectionMode !== "follow" && index === 0 ? "（固定快照）" : ""}</h5>{item.card.hypotheses.map(h => <div key={h.opportunity_id} className="mt-2 space-y-1 break-words"><p><span className="opportunity-state" data-state={h.state}>{STATES[h.state] ?? h.state}</span> · {h.decision_version ?? `研究观察 ${h.observation_id ?? "身份待核"}`}</p><p>来源 {h.source} · {h.as_of}</p><p>依据 {h.reasons.join("；") || "未记录"}</p><p>等待 {h.unknowns.join("；") || "须核动作前条件"}</p><p>{h.execution_blocker}</p><p>参考 {h.reference.price ?? "缺失"}，非成交。</p></div>)}</div>)}{inspectionMode === "compare" && !compared && <p>请选择第二个对象／日期／版本。不同 scope 不合并收益。</p>}<button onClick={() => { setSelectedSymbol(null); setPinned(null); setCompared(null); const origin = inspectOrigin.current; if (origin?.isConnected && !origin.closest("details:not([open])")) origin.focus(); else dateInput.current?.focus(); }}>关闭侧栏</button></aside>}
     {!!result.error && <p role="alert" className="mt-2 text-amber-800 dark:text-amber-300">机会依据读取失败，请稍后重试。<button onClick={result.refresh}>重试读取</button></p>}
     {!data && !result.error && <p role="status" className="py-3">正在读取已有决定…</p>}

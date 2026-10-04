@@ -25,8 +25,8 @@ function NavBarInner() {
     <header className="workspace-header sticky top-0 z-40 border-b border-zinc-200 bg-white/90 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/90">
       <a className="skip-link" href="#workspace-content">跳到工作区</a>
       <div className="task-header mx-auto flex min-h-14 max-w-[1600px] flex-wrap items-center gap-2 px-3 py-2 sm:gap-3 sm:px-4">
-        <Link href="/market" aria-label="AShare AI Trader" className="shrink-0 whitespace-nowrap font-semibold tracking-tight">
-          AShare <span className="text-up-ink dark:text-up">AI</span><span className="hidden sm:inline"> Trader</span>
+        <Link href="/market" aria-label="AShare AI Trader" className="brand-wordmark shrink-0 whitespace-nowrap font-semibold">
+          <span className="brand-mark" aria-hidden="true"><i/><i/><i/></span><span>AShare<span className="hidden sm:inline font-normal text-zinc-600 dark:text-zinc-400"> / Trader</span></span>
         </Link>
         <nav aria-label="主要任务" className="task-navigation order-last flex w-full items-center gap-1 overflow-x-auto lg:order-none lg:w-auto">
           {TASK_LINKS.map((l) => {

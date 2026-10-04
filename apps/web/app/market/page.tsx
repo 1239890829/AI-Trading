@@ -124,12 +124,12 @@ function MarketInner() {
 
   return (
     <main className="task-page mx-auto flex h-full w-full max-w-[1600px] flex-col gap-2 overflow-hidden px-4 py-3">
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-4">
-          <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">市场全景</h1>
+      <div className="workspace-masthead">
+        <div><h1>市场全景</h1><p className="workspace-kicker">市场环境、资金与驱动线索</p></div>
+        <div className="workspace-context">
+          {view === "overview" && <span>最近读取 {updatedAt || "--"}</span>}
           <MarketLensPicker selected={view} search={sp.toString()} />
         </div>
-        {view === "overview" && <span className="text-xs text-zinc-600 dark:text-zinc-400">最近读取 {updatedAt || "--"}</span>}
       </div>
 
       {/* 视图切换统一 fade 过渡（2026-09-04）：h-full 保持各视图内部布局 */}
@@ -303,7 +303,7 @@ function MarketInner() {
                   {triAmount(totalAmount, amountFreshness?.state)}
                 </p>
                 <p className="mt-2 text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">
-                  沪深京两市合计（含北交所）。实时对比/全日估算/分钟资金流见「资金」Tab。
+                  沪深京两市合计（含北交所）。实时对比/全日估算/分钟资金流见「资金视角」。
                 </p>
               </div>
             </Panel>

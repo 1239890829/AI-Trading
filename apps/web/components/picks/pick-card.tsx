@@ -546,9 +546,9 @@ export function PickCard({
               const v = item.sub_scores?.[key];
               return (
                 <div key={key} className="flex-1" title={`${label}：${item.basisRows.find((r) => r.label === label)?.value ?? "--"}`}>
-                  <div className="h-1 w-full overflow-hidden rounded bg-zinc-100 dark:bg-zinc-800">
-                    <div className="h-full rounded bg-sky-500/80" style={{ width: `${v ?? 50}%` }} />
-                  </div>
+                  {v == null ? <span className="block text-center text-[9px] text-zinc-600 dark:text-zinc-400" aria-label={`${label}评分缺失`}>暂无</span> : <div role="meter" aria-label={`${label}评分`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={v} className="score-track h-1 w-full overflow-hidden rounded bg-zinc-100 dark:bg-zinc-800">
+                    <div className="h-full rounded bg-zinc-500 dark:bg-zinc-400" style={{ width: `${Math.max(0, Math.min(100, v))}%` }} />
+                  </div>}
                   <div className="mt-0.5 text-center text-[9px] text-zinc-600 dark:text-zinc-400">{label}</div>
                 </div>
               );
@@ -643,7 +643,7 @@ export function PickCard({
           丢的是口径。标题两侧统一，用户才能一眼对上「入选」这件事。
           两者皆无时**整节不渲染**——不拿「入选 —」把「本就没有这个维度」伪装成「没取到」。 */}
       {(item.basisRows.length > 0 || item.vetoes.length > 0) && (
-        <div className="mt-2 space-y-0.5 rounded-lg border border-zinc-100 p-2 text-[11px] leading-relaxed dark:border-zinc-800">
+        <div className="stock-card-basis text-[11px] leading-relaxed">
           <div className="text-[10px] font-medium text-zinc-600 dark:text-zinc-400">入选原因</div>
           {item.basisRows.map((r) => (
             <Row key={r.label} k={r.label} v={r.value} />
@@ -682,7 +682,7 @@ export function PickCard({
 
       {/* 止损参考位 + 出场纪律 + 失效条件（freqtrade 的止损/跟踪止盈/ROI 分档 的 A 股映射） */}
       {(item.stopLoss || item.exit || item.invalidations.length > 0) && (
-        <div className="mt-2 space-y-1 rounded-lg border border-zinc-100 p-2 text-[11px] dark:border-zinc-800">
+        <div className="stock-card-risk text-[11px]">
           {item.stopLoss && (
             <div className="flex flex-wrap gap-1.5" title={item.stopLoss.basis}>
               <span className="shrink-0 text-zinc-600 dark:text-zinc-400">止损参考</span>
@@ -702,7 +702,7 @@ export function PickCard({
           )}
           {item.exit?.note && <Row k="纪律" v={item.exit.note} />}
           {item.invalidations.length > 0 && (
-            <div>
+            <div className="stock-card-invalidations">
               <span className="text-zinc-600 dark:text-zinc-400">失效条件</span>
               {item.invalidations.slice(0, 3).map((v) => (
                 <div key={v} className="text-zinc-600 dark:text-zinc-400">
