@@ -647,97 +647,99 @@ export const StockDetailPanel = memo(function StockDetailPanel({
           （sh000001 等）会返回 400，此前表现为常驻「加载失败 [重试]」（2026-09-11）。 */}
       <StockEventsRow symbol={symbol} isIndex={isIndex} />
 
+      {/* 共用工具行位于内容网格上方，图表与右侧核对面板保持同一顶线。 */}
+      <div className="chart-toolbar flex shrink-0 flex-wrap items-center gap-2">
+        <div className="chart-modes" role="group" aria-label="图表视角">
+        {(
+          (
+            [
+              ["kline", "K线"],
+              ["minute", "分时"],
+              // 指数无个股资金流数据：隐藏资金图 tab，避免常空误导
+              ["flow", "资金图"],
+            ] as const
+          ).filter(([key]) => !(isIndex && key === "flow")) as [ChartTab, string][]
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setChartTab(key)}
+            aria-pressed={chartTab === key}
+            className="text-xs"
+          >
+            {label}
+          </button>
+        ))}
+
+        </div>
+        {/* 右侧工具组：技术评估 + 历史回放同行（2026-09-04 用户反馈：技术评估
+            浮层遮挡 K 线，改为工具栏内联，不再覆盖图表） */}
+        <div className="chart-tools ml-auto flex flex-wrap items-center gap-2">
+          {chartTab === "kline" && !replayMode && tech && (
+            <div className="chart-assessment flex flex-wrap items-center gap-1.5 rounded-lg border border-zinc-200 bg-white/85 px-2 py-1 text-[11px] shadow-sm dark:border-zinc-700 dark:bg-zinc-900/85">
+              <span
+                className={`rounded px-1.5 py-0.5 font-medium ${
+                  tech.bias === "bull"
+                    ? "bg-up/15 text-up-ink dark:text-up"
+                    : tech.bias === "bear"
+                      ? "bg-down/15 text-down-ink dark:text-down"
+                      : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+                }`}
+              >
+                技术评估：{tech.bias === "bull" ? "偏多" : tech.bias === "bear" ? "偏空" : "中性"}（{tech.bullCount}多/{tech.bearCount}空）
+              </span>
+              <button
+                onClick={() => setTechOpen(!techOpen)}
+                className="shrink-0 text-zinc-600 dark:text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                title={tech.signals.map((sg) => sg.name + "：" + sg.detail).join("\n")}
+              >
+                {techOpen ? "收起 ▴" : "依据 ▸"}
+              </button>
+            </div>
+          )}
+          {chartTab === "kline" && !replayMode && displayBars.length >= 60 && (
+            <button
+              onClick={() => setReplayMode(true)}
+              className="rounded border border-sky-500/50 px-2 py-0.5 text-xs text-sky-700 dark:text-sky-400 hover:bg-sky-500/10"
+              title="按日逐根推进 K 线，回放历史买卖点与成交（需要 ≥60 根日 K）"
+            >
+              ▶ 历史回放
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* 依据明细：正常文档流展开（打开时图表下移让位，不遮挡任何元素） */}
+      {chartTab === "kline" && !replayMode && techOpen && tech && (
+        <div className="shrink-0 rounded-lg border border-zinc-200 bg-white/90 p-2 text-[11px] leading-relaxed shadow-sm dark:border-zinc-700 dark:bg-zinc-900/90">
+          <ul className="space-y-0.5">
+            {tech.signals.map((sg) => (
+              <li key={sg.name} className="flex items-start gap-1.5">
+                <span
+                  className={`mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
+                    sg.bias === "bull" ? "bg-up" : sg.bias === "bear" ? "bg-down" : "bg-zinc-400"
+                  }`}
+                />
+                <span>
+                  <span className="font-medium text-zinc-700 dark:text-zinc-200">{sg.name}</span>
+                  <span className="ml-1 text-zinc-600 dark:text-zinc-400">{sg.detail}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1.5 text-[10px] text-zinc-600 dark:text-zinc-400">多因子技术信号汇总，不构成买卖建议</p>
+        </div>
+      )}
+
+
       {/* ② 中部：左图表区 + 右盘口/逐笔（右列宽度可拖拽，--right-w 由 state 注入；
           方案 B：右列可整体收起为细条，收起后图表获得全宽） */}
       <div
-        className={`grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-4 ${
+        className={`detail-content-grid grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-4 ${
           rightCollapsed ? "lg:grid-cols-[minmax(0,1fr),28px]" : "lg:grid-cols-[minmax(0,1fr),var(--right-w)]"
         }`}
         style={{ "--right-w": `${rightW}px` } as React.CSSProperties}
       >
         <div className="flex min-h-0 min-w-0 flex-col gap-1.5">
-          <div className="chart-toolbar flex shrink-0 flex-wrap items-center gap-2">
-            <div className="chart-modes" role="group" aria-label="图表视角">
-            {(
-              (
-                [
-                  ["kline", "K线"],
-                  ["minute", "分时"],
-                  // 指数无个股资金流数据：隐藏资金图 tab，避免常空误导
-                  ["flow", "资金图"],
-                ] as const
-              ).filter(([key]) => !(isIndex && key === "flow")) as [ChartTab, string][]
-            ).map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => setChartTab(key)}
-                aria-pressed={chartTab === key}
-                className="text-xs"
-              >
-                {label}
-              </button>
-            ))}
-
-            </div>
-            {/* 右侧工具组：技术评估 + 历史回放同行（2026-09-04 用户反馈：技术评估
-                浮层遮挡 K 线，改为工具栏内联，不再覆盖图表） */}
-            <div className="chart-tools ml-auto flex flex-wrap items-center gap-2">
-              {chartTab === "kline" && !replayMode && tech && (
-                <div className="chart-assessment flex flex-wrap items-center gap-1.5 rounded-lg border border-zinc-200 bg-white/85 px-2 py-1 text-[11px] shadow-sm dark:border-zinc-700 dark:bg-zinc-900/85">
-                  <span
-                    className={`rounded px-1.5 py-0.5 font-medium ${
-                      tech.bias === "bull"
-                        ? "bg-up/15 text-up-ink dark:text-up"
-                        : tech.bias === "bear"
-                          ? "bg-down/15 text-down-ink dark:text-down"
-                          : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
-                    }`}
-                  >
-                    技术评估：{tech.bias === "bull" ? "偏多" : tech.bias === "bear" ? "偏空" : "中性"}（{tech.bullCount}多/{tech.bearCount}空）
-                  </span>
-                  <button
-                    onClick={() => setTechOpen(!techOpen)}
-                    className="shrink-0 text-zinc-600 dark:text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
-                    title={tech.signals.map((sg) => sg.name + "：" + sg.detail).join("\n")}
-                  >
-                    {techOpen ? "收起 ▴" : "依据 ▸"}
-                  </button>
-                </div>
-              )}
-              {chartTab === "kline" && !replayMode && displayBars.length >= 60 && (
-                <button
-                  onClick={() => setReplayMode(true)}
-                  className="rounded border border-sky-500/50 px-2 py-0.5 text-xs text-sky-700 dark:text-sky-400 hover:bg-sky-500/10"
-                  title="按日逐根推进 K 线，回放历史买卖点与成交（需要 ≥60 根日 K）"
-                >
-                  ▶ 历史回放
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* 依据明细：正常文档流展开（打开时图表下移让位，不遮挡任何元素） */}
-          {chartTab === "kline" && !replayMode && techOpen && tech && (
-            <div className="shrink-0 rounded-lg border border-zinc-200 bg-white/90 p-2 text-[11px] leading-relaxed shadow-sm dark:border-zinc-700 dark:bg-zinc-900/90">
-              <ul className="space-y-0.5">
-                {tech.signals.map((sg) => (
-                  <li key={sg.name} className="flex items-start gap-1.5">
-                    <span
-                      className={`mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
-                        sg.bias === "bull" ? "bg-up" : sg.bias === "bear" ? "bg-down" : "bg-zinc-400"
-                      }`}
-                    />
-                    <span>
-                      <span className="font-medium text-zinc-700 dark:text-zinc-200">{sg.name}</span>
-                      <span className="ml-1 text-zinc-600 dark:text-zinc-400">{sg.detail}</span>
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-1.5 text-[10px] text-zinc-600 dark:text-zinc-400">多因子技术信号汇总，不构成买卖建议</p>
-            </div>
-          )}
-
           {chartTab === "kline" && (
             /* 头部标题行（股票名 · 日 K 线（前复权）+ 来源）已移除：股票名在页面
                其它位置已展示，这行纯属重复占位，去掉后纵向多出约 41px 给 K 线
@@ -825,14 +827,14 @@ export const StockDetailPanel = memo(function StockDetailPanel({
         {rightCollapsed ? (
           <button
             onClick={toggleRightCollapsed}
-            className="flex min-h-0 w-7 items-center justify-center rounded-lg border border-zinc-200 text-zinc-600 dark:text-zinc-400 transition-colors hover:text-zinc-900 dark:border-zinc-800 dark:hover:text-zinc-100"
+            className="detail-side-expand flex min-h-0 w-7 items-center justify-center rounded-lg border border-zinc-200 text-zinc-600 dark:text-zinc-400 transition-colors hover:text-zinc-900 dark:border-zinc-800 dark:hover:text-zinc-100"
             title="展开右列（盘口/逐笔/资料/资讯）"
             aria-label="展开右列"
           >
             <span className="text-xs [writing-mode:vertical-lr] tracking-widest">◀ 展开右列</span>
           </button>
         ) : (
-        <div ref={rightColRef} className="relative flex min-h-0 flex-col gap-2">
+        <div ref={rightColRef} className="detail-side-column relative flex min-h-0 min-w-0 flex-col gap-2">
           <div
             role="separator"
             tabIndex={0}
@@ -869,7 +871,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
               window.addEventListener("mousemove", move);
               window.addEventListener("mouseup", up);
             }}
-            className="absolute -left-2 top-0 z-10 h-full w-2 cursor-col-resize hover:bg-sky-500/25"
+            className="detail-column-resizer absolute -left-2 top-0 z-10 h-full w-2 cursor-col-resize hover:bg-sky-500/25"
             title="拖拽调整右列宽度"
             aria-label="拖拽调整右列宽度"
           />
