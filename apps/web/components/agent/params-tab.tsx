@@ -134,7 +134,7 @@ export function ParamsTab() {
     // 表现为「向下滚不动、下半截看不见」（2026-09-10 用户报）。
     // 故按 FadeSwap 契约（各 tab 根 h-full min-h-0 + **自管滚动**）让根整体滚动，
     // 子区块一律 shrink-0 按内容高排布，不再互相挤压（变更历史原为 flex-1 被压到 26px）。
-    <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto">
+    <div className="settings-form flex h-full min-h-0 flex-col gap-4 overflow-y-auto">
       {error && (
         <p className="shrink-0 rounded-md bg-red-500/5 px-2 py-1.5 text-[11px] text-red-700 dark:text-red-300">{error}</p>
       )}
@@ -180,7 +180,7 @@ export function ParamsTab() {
 
       {/* 参数清单 */}
       <section className="ui-card shrink-0 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
-        <div className="mb-2 flex items-center justify-between">
+        <div className="settings-heading mb-3 flex flex-wrap items-baseline justify-between gap-2">
           <h3 className="text-xs font-medium text-zinc-700 dark:text-zinc-200">参数白名单（生效值：运行时覆盖 &gt; 静态配置）</h3>
           <span className="text-[10px] text-zinc-600 dark:text-zinc-400">改参数免重启 · 全程审计留痕</span>
         </div>
@@ -192,7 +192,7 @@ export function ParamsTab() {
           <div className="space-y-2">
             {params.map((p) => (
               <div key={p.key} className="rounded-lg border border-zinc-100 p-2 dark:border-zinc-800">
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-[11px] font-medium text-zinc-800 dark:text-zinc-100">{p.label}</span>
                   <span className="flex shrink-0 items-center gap-1">
                     {p.range && (
@@ -210,6 +210,7 @@ export function ParamsTab() {
                 {editingKey === p.key ? (
                   <div className="mt-1.5 space-y-1">
                     <textarea
+                      aria-label={`${p.label}的新值`}
                       value={draftText}
                       onChange={(e) => setDraftText(e.target.value)}
                       rows={p.kind === "json" ? 3 : 1}
@@ -269,7 +270,7 @@ export function ParamsTab() {
               const meta = STATUS_META[c.status] ?? { ...STATUS_META.rolled_back, label: "状态未知（待核实）" };
               return (
                 <div key={c.id} className="rounded-lg border border-zinc-100 px-2 py-1.5 dark:border-zinc-800">
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-[11px] text-zinc-600 dark:text-zinc-300">
                       #{c.id} {c.key} <span className="text-zinc-600 dark:text-zinc-400">· 来源 {c.source_type}{c.source_id ? `/${c.source_id}` : ""} · {fmtTime(c.created_at)}</span>
                     </span>

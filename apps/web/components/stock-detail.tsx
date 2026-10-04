@@ -742,7 +742,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
             /* 头部标题行（股票名 · 日 K 线（前复权）+ 来源）已移除：股票名在页面
                其它位置已展示，这行纯属重复占位，去掉后纵向多出约 41px 给 K 线
                （2026-09-02 用户要求） */
-            <Panel bodyClassName="overflow-hidden" className="min-h-0 flex-1">
+            <Panel bodyClassName="overflow-hidden" className="detail-chart-panel min-h-0 flex-1">
               {displayBars.length > 0 ? (
                 replayMode ? (
                   <ReplayChart bars={bars} fills={fills} onExit={() => setReplayMode(false)} />
@@ -768,7 +768,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                股票名在页面其它位置已展示，这行纯属重复占位，去掉后纵向多出约
                41px 给分时图；两个图表 tab 也不再有「一个有头一个无头」的高度跳动
                （2026-09-02 用户要求） */
-            <Panel bodyClassName="overflow-hidden" className="min-h-0 flex-1">
+            <Panel bodyClassName="overflow-hidden" className="detail-chart-panel min-h-0 flex-1">
               {minutes.length > 0 ? (
                 <div className="relative h-full">
                   {/* 停牌遮罩：分时是当日数据，停牌股当日无成交，
@@ -810,7 +810,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
           {chartTab === "flow" && (
             /* 头部标题行已移除（图名 + 近 N 日口径改为图内灰标签，见 flow-chart.tsx），
                与 K 线/分时两个 tab 统一，纵向多出约 41px 给资金图（2026-09-02） */
-            <Panel bodyClassName="overflow-hidden" className="min-h-0 flex-1">
+            <Panel bodyClassName="overflow-hidden" className="detail-chart-panel min-h-0 flex-1">
               {!flow || flow.flow.length === 0 ? (
                 <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">暂无资金流数据</p>
               ) : (

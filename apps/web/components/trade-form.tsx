@@ -162,12 +162,13 @@ export function TradeForm({
     !active || !active.allowed || !(now - Date.parse(active.checked_at) <= 30_000);
 
   return (
-    <div className="shrink-0 border-b border-zinc-100 px-3 py-2 dark:border-zinc-800/60">
+    <div className="trade-entry-form shrink-0 border-b border-zinc-100 px-3 py-2 dark:border-zinc-800/60">
       <div className="mb-2 flex gap-1">
         {(["buy", "sell"] as const).map((sd) => (
           <button
             key={sd}
             onClick={() => setSide(sd)}
+            aria-pressed={side === sd}
             className={`flex-1 rounded py-1 text-sm font-medium ${
               side === sd ? (sd === "buy" ? "bg-up-deep text-white" : "bg-down-deep text-white") : "bg-zinc-100 text-zinc-600 dark:text-zinc-400 dark:bg-zinc-800"
             }`}
@@ -177,8 +178,8 @@ export function TradeForm({
         ))}
       </div>
       <div className="space-y-1.5 text-xs">
-        <div className="flex items-center justify-between gap-2">
-          <label className="flex flex-1 items-center gap-2">
+        <div className="trade-price-row flex flex-wrap items-end justify-between gap-2">
+          <label className="flex min-w-0 flex-1 items-center gap-2">
             <span className="text-zinc-600 dark:text-zinc-400">价格</span>
             <input
               value={p}
@@ -188,7 +189,7 @@ export function TradeForm({
                 setP(e.target.value);
               }}
               inputMode="decimal"
-              className="ml-auto w-28 rounded border border-zinc-200 bg-transparent px-2 py-1 text-right font-mono text-zinc-900 outline-none focus:border-up/60 dark:border-zinc-700 dark:text-zinc-100"
+              className="ml-auto min-w-0 w-28 rounded border border-zinc-200 bg-transparent px-2 py-1 text-right font-mono text-zinc-900 outline-none focus:border-up/60 dark:border-zinc-700 dark:text-zinc-100"
             />
           </label>
           <button

@@ -582,12 +582,14 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
           )}
         </div>
       )}
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-zinc-100 px-3 py-1 text-[11px] dark:border-zinc-800/60">
+      <div className="kline-controls flex shrink-0 flex-wrap items-center gap-2 border-b border-zinc-100 px-3 py-2 text-[11px] dark:border-zinc-800/60">
         <span className="text-zinc-600 dark:text-zinc-400">指标：</span>
+        <div className="chart-indicator-options" role="group" aria-label="技术指标，横向滚动查看更多" tabIndex={0}>
         {toggles.map(([key, label]) => (
           <button
             key={key}
             onClick={() => setInd((p) => ({ ...p, [key]: !p[key] }))}
+            aria-pressed={ind[key]}
             className={`rounded px-1.5 py-0.5 font-mono transition-colors ${
               ind[key]
                 ? `bg-zinc-100 font-medium dark:bg-zinc-800 ${MA_LEGEND_CLS.get(key) ?? ""}`
@@ -597,9 +599,11 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
             {label}
           </button>
         ))}
-        <span className="ml-auto hidden text-[10px] text-zinc-600 dark:text-zinc-400 xl:inline" title="B/S=模拟交易成交；紫[榜]=龙虎榜日；琥珀●=公告 蓝●=新闻（!=重要度高）——消息面与价格走势对照；hover 信息条显示当日事件标题">
-          金叉/死叉为 MA5×MA10 技术信号 · 紫[榜]=龙虎榜日 · B/S=模拟交易成交 · 黄虚线=持仓成本 · 琥珀●=公告 蓝●=新闻(!=重要度高)
-        </span>
+        </div>
+        <details className="chart-legend">
+          <summary>标记说明</summary>
+          <p>金叉/死叉：MA5与MA10交叉；紫色“榜”：龙虎榜日；B/S：模拟交易成交；黄虚线：持仓成本；琥珀色圆点：公告；蓝色圆点：新闻；感叹号：高重要度。移动到对应日期查看标题。</p>
+        </details>
         {/* 缩放控件：入文档流（原 absolute right-2 top-2 会压住 OHLC 信息条右端的 MA 数值） */}
         <div className="ml-auto flex shrink-0 items-center gap-1 xl:ml-2">
           <button onClick={() => zoomTime(0.7)} className="h-6 w-6 rounded border border-zinc-300 bg-white/80 text-xs text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900/80 dark:text-zinc-300 dark:hover:bg-zinc-800" aria-label="放大">＋</button>

@@ -159,9 +159,10 @@ export function TaskCenter() {
   const actionable = detail !== null && !detail.read_only && detail.status === "needs_confirm";
 
   return (
-    <div className="flex h-full min-h-0 gap-3">
+    <div className="task-center-layout h-full min-h-0">
+      <div className="task-center-columns flex h-full min-h-0 gap-4">
       {/* 左：任务列表 */}
-      <div className="flex w-[300px] shrink-0 flex-col gap-2">
+      <div className="task-center-list flex min-h-0 min-w-0 shrink-0 flex-col gap-2">
         <div className="flex items-center justify-between">
           <span className="text-xs text-zinc-600 dark:text-zinc-400">任务列表</span>
           <button
@@ -184,7 +185,7 @@ export function TaskCenter() {
             </p>
           ) : tasks.length === 0 ? (
             <p className="rounded-lg border border-dashed border-zinc-200 p-3 text-[11px] text-zinc-600 dark:text-zinc-400 dark:border-zinc-700">
-              暂无任务。选择右侧任务类型创建（首批为 L0 只读/生成类）。
+              暂无任务。选择新建区的任务类型创建（首批为 L0 只读/生成类）。
             </p>
           ) : (
             tasks.map((t) => (
@@ -224,10 +225,10 @@ export function TaskCenter() {
       </div>
 
       {/* 右：新建 + 详情 */}
-      <div className="flex min-h-0 flex-1 flex-col gap-3">
+      <div className="task-center-detail flex min-h-0 min-w-0 flex-1 flex-col gap-4">
         {/* 新建任务 */}
         <section className="ui-card shrink-0 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
-          <div className="mb-2 flex items-center justify-between">
+          <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
             <h3 className="text-xs font-medium text-zinc-700 dark:text-zinc-200">新建任务</h3>
             <span className="text-[10px] text-zinc-600 dark:text-zinc-400">首批仅 L0 只读/生成类；写类任务在参数配置模块（P1）开放</span>
           </div>
@@ -251,12 +252,14 @@ export function TaskCenter() {
               ))}
             </div>
           )}
+          <label className="mt-3 block text-[11px] text-zinc-600 dark:text-zinc-400">可选任务参数（JSON）
           <input
             value={paramsText}
             onChange={(e) => setParamsText(e.target.value)}
             placeholder='可选参数（JSON），如 {"trade_date": "20260908"}；留空用默认'
             className="mt-2 w-full rounded-md border border-zinc-200 bg-transparent px-2 py-1 font-mono text-[11px] text-zinc-700 outline-none placeholder:text-zinc-400 dark:border-zinc-700 dark:text-zinc-200"
           />
+          </label>
         </section>
 
         {/* 任务详情 */}
@@ -265,11 +268,11 @@ export function TaskCenter() {
             <p className="mb-2 rounded-md bg-red-500/5 px-2 py-1.5 text-[11px] text-red-700 dark:text-red-300">{error}</p>
           )}
           {detail === null ? (
-            <p className="text-[11px] text-zinc-600 dark:text-zinc-400">选择左侧任务查看执行轨迹；或先创建一个任务。</p>
+            <p className="text-[11px] text-zinc-600 dark:text-zinc-400">选择任务列表中的条目查看执行轨迹；或先创建一个任务。</p>
           ) : (
             <>
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <span className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
                     {taskLabel(detail.type, types)}
                   </span>
@@ -399,6 +402,7 @@ export function TaskCenter() {
             </>
           )}
         </section>
+      </div>
       </div>
     </div>
   );

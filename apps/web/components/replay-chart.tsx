@@ -71,8 +71,9 @@ export function ReplayChart({ bars, fills = [], onExit }: Props) {
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col gap-1.5">
       {/* 回放控制条 */}
-      <div className="flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-sky-500/40 bg-sky-500/5 px-3 py-1.5 text-xs">
+      <div className="replay-controls flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-sky-500/40 bg-sky-500/5 px-3 py-1.5 text-xs">
         <span className="font-medium text-sky-700 dark:text-sky-400">回放中</span>
+        <div className="replay-control-group" role="group" aria-label="播放控制">
         <button onClick={() => setPlaying((p) => !p)} disabled={idx >= bars.length - 1} className={btn}>
           {playing ? "⏸ 暂停" : "▶ 播放"}
         </button>
@@ -80,14 +81,19 @@ export function ReplayChart({ bars, fills = [], onExit }: Props) {
           ◀ 单步
         </button>
         <button onClick={() => { setPlaying(false); setIdx(startIdx); }} className={btn}>↺ 重置</button>
+        </div>
+        <div className="replay-control-group" role="group" aria-label="回放速度">
         <span className="text-zinc-600 dark:text-zinc-400">速度</span>
         {SPEEDS.map(([label, ms]) => (
-          <button key={label} onClick={() => setSpeed(ms)} className={`rounded px-1.5 py-0.5 ${speed === ms ? "bg-sky-500/20 font-medium text-sky-700 dark:text-sky-400" : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}>
+          <button key={label} onClick={() => setSpeed(ms)} aria-pressed={speed === ms} className={`rounded px-1.5 py-0.5 ${speed === ms ? "bg-sky-500/20 font-medium text-sky-700 dark:text-sky-400" : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}>
             {label}
           </button>
         ))}
+        </div>
+        <label className="replay-control-group">
         <span className="text-zinc-600 dark:text-zinc-400">起点</span>
         <select
+          aria-label="回放起点"
           value={startOffset}
           onChange={(e) => setStartOffset(Number(e.target.value))}
           className="rounded border border-zinc-300 bg-transparent px-1 py-0.5 dark:border-zinc-700"
@@ -96,6 +102,7 @@ export function ReplayChart({ bars, fills = [], onExit }: Props) {
           <option value={90}>90 根前</option>
           <option value={60}>60 根前</option>
         </select>
+        </label>
         <span className="font-mono tabular-nums text-zinc-600 dark:text-zinc-300">
           {curDate} <span className="text-zinc-600 dark:text-zinc-400">（{idx - startIdx + 1}/{bars.length - startIdx}）</span>
         </span>
@@ -112,7 +119,7 @@ export function ReplayChart({ bars, fills = [], onExit }: Props) {
 
       {/* 图表：传切片 bars——B/S 点由 KlineChartPro 内部按可见 bars 过滤，天然随回放出现。
           followLatest：回放逐 bar 前进时重聚焦最近 20 根（跟随进度；详情页不重置用户视口） */}
-      <div className="min-h-0 flex-1">
+      <div className="replay-chart-stage min-h-0 flex-1">
         <KlineChartPro bars={visible} tradeMarks={fills} followLatest className="h-full" />
       </div>
     </div>
