@@ -688,3 +688,7 @@ IMP-058按X01–X50原功能身份逐消费者复核：市场八视角、机会/
 ## 30. IMP-061：独立呈现系统覆盖
 
 沿§29消费者分母逐项覆盖：NavBar/RootLayout为全路由入口；globals与共享中性色覆盖Panel、CardShell、QuoteStrip、ModalShell、通知/助手与各数据子面；WorkspaceDeck仍映射研究3工具和维护7工具，名称、搜索、URL、Esc与返回位置保留；ProductionOperations改变DOM顺序但沿原确认、锁与后端接口；HuntingStatsBar只变统计呈现。新截图归ui-nocturne-20261004，正式入口与隔离样本分别标明。没有通过生产命令取截图，也不把空错页等同全数据链验收。
+
+## 31. IMP-062：连续工具控制条与材料覆盖
+
+沿§30真实消费者分母；RootLayout/NavBar通过共享材质消费新主题；WorkspaceDeck保留组身份、搜索、URL、来源展开、Esc与焦点，Agent将工具置于主稿前；维护和市场/卡片/浮层/原生控件使用同一中性色。手机抽屉验证实际高度与草稿，桌面不显示手机手柄。正式41入口与隔离内容分别取证，不把接口失败当全业务链通过。

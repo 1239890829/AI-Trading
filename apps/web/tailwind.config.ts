@@ -6,8 +6,8 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // Nocturne neutrals propagate through existing consumers; financial colours stay independent.
-        zinc: { 50: "#fcf9fb", 100: "#f3eef2", 200: "#e4dce3", 300: "#d5c8d2", 400: "#c4b5c1", 500: "#95828f", 600: "#665661", 700: "#50404c", 800: "#392c37", 900: "#251e27", 950: "#18141b" },
+        // Neutral reading surfaces; financial direction colours remain independent.
+        zinc: { 50: "#f8fafc", 100: "#edf1f5", 200: "#dce2ea", 300: "#c8d1dd", 400: "#afbac9", 500: "#7f8d9e", 600: "#536273", 700: "#3b4757", 800: "#29313d", 900: "#191e26", 950: "#0d0f12" },
         // A 股惯例：红涨绿跌。三档各有**专属角色**，不可互相替代（2026-09-11，P2-19 + P2-24）：
         //
         //   DEFAULT  深色底上的文字 / 图形色（亮，暗底可读）          默认档

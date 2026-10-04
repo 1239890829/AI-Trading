@@ -7,7 +7,7 @@ import { motionOrigin, type MotionOrigin } from "@/lib/surface-motion";
 import { ModalShell } from "@/components/ui/modal-shell";
 import { MARKET_LENSES, marketLensUrl, type WorkspaceTool } from "@/lib/workspace-tools";
 
-/** A single glass tool case. Every moving leaf stays inside its reserved slot. */
+/** A glass control dock reveals one bounded tray without changing tool identities. */
 export function WorkspaceDeck({tools, onOpen, compact = false, activeTool}: {tools: readonly WorkspaceTool[]; onOpen: (key: string, origin: MotionOrigin | null) => void; compact?: boolean; activeTool?: string | null}) {
   const id = useId();
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -19,8 +19,21 @@ export function WorkspaceDeck({tools, onOpen, compact = false, activeTool}: {too
   const groups = [...new Set(tools.map(tool => tool.group))];
   const visibleGroup = groups.includes(expanded ?? "") ? expanded : null;
   return <div className={`workspace-deck ${compact ? "workspace-deck-compact" : ""}`} data-motion-keyboard={keyboardOpen || undefined}>
-    <div className="tool-shelf-heading">
+    <div className="tool-dock">
       <span className="tool-shelf-title">工具收纳 <span className="shelf-total">{tools.length} 项</span></span>
+    <div className="tool-folders" hidden={Boolean(term)}>
+      {groups.map((group, index) => {
+        const items = tools.filter(tool => tool.group === group);
+        const open = visibleGroup === group;
+        return <div className="tool-index-slot" data-open={open} key={group}>
+          <button id={`${id}-group-${index}`} className="tool-stack" aria-label={group} aria-expanded={open} aria-controls={`${id}-tray-${index}`} aria-describedby={`${id}-description-${index}`} onClick={event => { setKeyboardOpen(event.detail === 0); setExpanded(open ? null : group); }}>
+            <span className="tool-stack-heading"><span>{group}</span><span className="folder-count">{items.length}</span></span>
+            <span id={`${id}-description-${index}`} className="tool-stack-caption">{items.map(tool => tool.label).join(" · ")}</span>
+            <span className="folder-affordance" aria-hidden="true">{open ? "收起" : "展开"}<span>{open ? "−" : "+"}</span></span>
+          </button>
+        </div>;
+      })}
+    </div>
       <label className="tool-shelf-search"><span className="sr-only">查找工具</span><input ref={searchRef} type="search" value={query} placeholder="查找工具" onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); setQuery(""); } }} /></label>
     </div>
     {term && <div className="tool-search-results" onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); setQuery(""); searchRef.current?.focus(); } }}>
@@ -28,20 +41,6 @@ export function WorkspaceDeck({tools, onOpen, compact = false, activeTool}: {too
       <div className="tool-search-grid">{matches.map(tool => <button key={tool.key} className="tool-launcher" aria-haspopup="dialog" onClick={event => onOpen(tool.key, motionOrigin(event))}><span className="min-w-0"><span className="tool-title">{tool.label}</span><span className="tool-description">{tool.group} · {tool.description}</span></span><span className="tool-open" aria-hidden="true">↗</span></button>)}</div>
       <button className="quiet-action" onClick={() => { setQuery(""); searchRef.current?.focus(); }}>返回工具收纳</button>
     </div>}
-    <div className="tool-folders" hidden={Boolean(term)}>
-      {groups.map((group, index) => {
-        const items = tools.filter(tool => tool.group === group);
-        const open = visibleGroup === group;
-        return <div className="tool-index-slot" data-open={open} key={group}>
-          <button id={`${id}-group-${index}`} className="tool-stack" aria-label={group} aria-expanded={open} aria-controls={`${id}-tray-${index}`} aria-describedby={`${id}-description-${index}`} onClick={event => { setKeyboardOpen(event.detail === 0); setExpanded(open ? null : group); }}>
-            <span className="tool-spine" aria-hidden="true"><i/><i/><i/></span>
-            <span className="tool-stack-heading"><span>{group}</span><span className="folder-count">{items.length} 项</span></span>
-            <span id={`${id}-description-${index}`} className="tool-stack-caption">{items.map(tool => tool.label).join(" · ")}</span>
-            <span className="folder-affordance" aria-hidden="true">{open ? "收起" : "展开"}<span>{open ? "−" : "+"}</span></span>
-          </button>
-        </div>;
-      })}
-    </div>
     {groups.map((group, index) => <div key={group} id={`${id}-tray-${index}`} hidden={Boolean(term) || visibleGroup !== group} role="region" aria-labelledby={`${id}-group-${index}`} className="tool-tray" onKeyDown={event => {
       if (event.key === "Escape") { event.preventDefault(); setExpanded(null); document.getElementById(`${id}-group-${index}`)?.focus(); }
     }}>
