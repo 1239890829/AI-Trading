@@ -34,7 +34,7 @@ export function WorkspaceDeck({tools, onOpen, compact = false, activeTool}: {too
     const tray = deck.current?.querySelector<HTMLElement>(".tool-tray:not([hidden])");
     if (!tray) return;
     const timeline = gsap.timeline({defaults: {ease: "power3.out"}})
-      .fromTo(tray, {y: 5, opacity: 0.65}, {y: 0, opacity: 1, duration: 0.2})
+      .fromTo(tray, {y: 5, rotationX: -5, transformPerspective: 700, transformOrigin: "50% 0%", opacity: 0.65}, {y: 0, rotationX: 0, opacity: 1, duration: 0.2, clearProps: "transform,transformOrigin,opacity"})
       .fromTo(tray.querySelectorAll(".tool-launcher"), {y: 8, opacity: 0}, {y: 0, opacity: 1, duration: 0.22, stagger: {amount: 0.06}}, 0.04);
     const cancel = () => timeline.revert();
     deck.current?.addEventListener("keydown", cancel);
@@ -49,8 +49,8 @@ export function WorkspaceDeck({tools, onOpen, compact = false, activeTool}: {too
       {groups.map((group, index) => {
         const items = tools.filter(tool => tool.group === group);
         const open = visibleGroup === group;
-        return <div className="tool-index-slot" data-open={open} key={group}>
-          <button id={`${id}-group-${index}`} className="tool-stack" aria-label={group} aria-expanded={open} aria-controls={`${id}-tray-${index}`} aria-describedby={`${id}-description-${index}`} onClick={event => { setKeyboardOpen(event.detail === 0); setExpanded(open ? null : group); }}>
+        return <div className="tool-index-slot" data-open={open} data-tool-count={items.length} key={group}>
+          <button id={`${id}-group-${index}`} className="tool-stack" aria-label={group} aria-expanded={open} aria-controls={`${id}-tray-${index}`} aria-describedby={`${id}-description-${index}`} onKeyDown={event => { if (event.key === "Escape" && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); setExpanded(null); } }} onClick={event => { setKeyboardOpen(event.detail === 0); setExpanded(open ? null : group); }}>
             <span className="tool-stack-heading"><span>{group}</span><span className="folder-count">{items.length}</span></span>
             <span id={`${id}-description-${index}`} className="tool-stack-caption">{items.map(tool => tool.label).join(" · ")}</span>
             <svg className="folder-affordance" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
