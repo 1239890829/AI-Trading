@@ -647,7 +647,12 @@ select {
 }
 
 /* Radix handles placement, collision and keyboard dismissal; the material stays local. */
-.control-hint { z-index:var(--z-tooltip,80); max-width:min(280px,calc(100vw - 24px)); padding:8px 11px; border:1px solid var(--glass-border); border-radius:9px; background:var(--glass-overlay); color:var(--ui-ink); box-shadow:0 8px 24px rgb(0 0 0 / .18); backdrop-filter:blur(14px); font-size:12px; line-height:1.5; animation:hint-enter 120ms ease-out; pointer-events:none; }
+.control-hint { z-index:var(--z-tooltip,80); max-width:min(280px,calc(100vw - 24px)); padding:8px 11px; border:1px solid var(--glass-border); border-radius:9px; background:var(--glass-overlay); color:var(--ui-ink); box-shadow:0 8px 24px rgb(0 0 0 / .18); backdrop-filter:blur(14px); font-size:12px; line-height:1.5; animation:hint-enter 120ms ease-out; pointer-events:auto; }
 .control-hint-arrow { fill:var(--glass-overlay); }
 @keyframes hint-enter { from { opacity:0; transform:translateY(-2px); } to { opacity:1; transform:none; } }
 @media(prefers-reduced-motion:reduce) { .control-hint { animation:none; } }
+
+/* Only genuine unread changes replay this cue; the count is accurate immediately. */
+.notification-count { display:block; font-variant-numeric:tabular-nums; animation:count-arrive 160ms var(--ease-out); }
+@keyframes count-arrive { from { transform:translateY(35%); opacity:.6; } to { transform:none; opacity:1; } }
+@media(prefers-reduced-motion:reduce) { .notification-count { animation:none; } }

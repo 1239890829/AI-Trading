@@ -223,7 +223,7 @@ function ShapeCounts({ shapes }: { shapes: Record<string, number> }) {
       className="space-y-1 border-t border-zinc-200 pt-2 dark:border-zinc-700"
     >
       <p className="text-zinc-700 dark:text-zinc-300">
-        <span className="text-zinc-500 dark:text-zinc-500">
+        <span className="text-zinc-600 dark:text-zinc-400">
           <strong className="font-medium">个股级</strong>事件（读取窗口内）：
         </span>
         {NOTIF_KINDS.map((k) => `${SHAPE_LABEL[k]} ${shapes[k] ?? 0}`).join(" · ")}
@@ -241,7 +241,7 @@ function ShapeCounts({ shapes }: { shapes: Record<string, number> }) {
         </p>
       )}
       {restTotal > 0 && (
-        <p className="text-zinc-500 dark:text-zinc-500">
+        <p className="text-zinc-600 dark:text-zinc-400">
           其余 {restTotal} 条为本就不进通知中心的形状（词义不是买点，如大单异动）：
           {rest
             .slice(0, 4)
@@ -272,7 +272,7 @@ function NotificationDiagnosis({ diag }: { diag: NotificationDiagnostics }) {
         今日买点链：{NOTIF_STATE_HEADLINE[diag.state] ?? diag.state}
       </p>
       <p className="text-zinc-600 dark:text-zinc-400">{plainNote(diag.note)}</p>
-      {diag.state !== "unavailable" && <p className="text-[11px] text-zinc-500 dark:text-zinc-500">
+      {diag.state !== "unavailable" && <p className="text-[11px] text-zinc-600 dark:text-zinc-400">
         候选 {ps.count} 只 · 最高档 {d.top_tier ?? "无"} · 判定 {d.polls} 拍
         {diag.trade_date ? ` · ${diag.trade_date}` : ""}
         {diag.as_of ? ` · 诊断于 ${diag.as_of.slice(11, 16)}` : ""}
@@ -287,10 +287,10 @@ function NotificationDiagnosis({ diag }: { diag: NotificationDiagnostics }) {
         <ul className="space-y-1 border-t border-zinc-200 pt-2 dark:border-zinc-700">
           {reasons.map((r) => (
             <li key={r.reason} className="text-zinc-700 dark:text-zinc-300">
-              <span className="text-zinc-500 dark:text-zinc-500">{r.count} 只：</span>
+              <span className="text-zinc-600 dark:text-zinc-400">{r.count} 只：</span>
               {r.reason}
               {r.symbols.length > 0 && (
-                <span className="text-zinc-500 dark:text-zinc-500">（{r.symbols.join("、")}）</span>
+                <span className="text-zinc-600 dark:text-zinc-400">（{r.symbols.join("、")}）</span>
               )}
             </li>
           ))}
@@ -303,7 +303,7 @@ function NotificationDiagnosis({ diag }: { diag: NotificationDiagnostics }) {
             {d.latest?.map((row) => <li key={row.snapshot_id} className="text-zinc-700 dark:text-zinc-300">
               <StockLink symbol={row.symbol} className="text-sky-700 dark:text-sky-400">{row.name || row.symbol} {row.symbol}</StockLink>
               {` · ${decisionLabels[row.decision] ?? "状态未知"} · ${row.as_of} · ${row.reason || "原因未记录"}`}
-              <span className="block break-all text-[10px] text-zinc-500 dark:text-zinc-500">
+              <span className="block break-all text-[10px] text-zinc-600 dark:text-zinc-400">
                 记录 {row.snapshot_id} · 决定 {row.decision_id || "未记录"} · 版本 {row.decision_version || "未记录"} · 数据 {row.data_state || "未知"}
               </span>
             </li>)}
@@ -649,10 +649,10 @@ export function NotificationBell() {
         {unread > 0 && (
           <span
             data-testid="notification-badge"
-            className="absolute -right-1.5 -top-1.5 min-w-[16px] rounded-full bg-up-deep px-1 text-center text-[10px] font-semibold leading-4 text-white"
+            className="absolute -right-1.5 -top-1.5 min-w-[16px] overflow-hidden rounded-full bg-up-deep px-1 text-center text-[10px] font-semibold leading-4 text-white"
             aria-label={`${unread} 条未读通知`}
           >
-            {unread > 99 ? "99+" : unread}
+            <span key={Math.min(unread, 100)} className="notification-count" aria-hidden="true">{unread > 99 ? "99+" : unread}</span>
           </span>
         )}
       </button>

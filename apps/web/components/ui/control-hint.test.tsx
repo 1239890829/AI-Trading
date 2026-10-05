@@ -24,3 +24,17 @@ it("opening a dialog removes existing help and does not resurrect it when the di
   result.rerender(<ControlHint content="浏览入口"><button>浏览工作区</button></ControlHint>);
   expect(screen.queryByRole("tooltip")).toBeNull();
 });
+it("help remains visible while the pointer travels from its trigger into the content", async () => {
+  render(<ControlHint content="可移入阅读的说明"><button>查看说明</button></ControlHint>);
+  const trigger = screen.getByRole("button", {name: "查看说明"});
+  trigger.focus(); fireEvent.focus(trigger);
+  await screen.findByRole("tooltip");
+  fireEvent.pointerLeave(trigger, {pointerType: "mouse", clientX: 0, clientY: 0});
+  const tooltip = screen.getByRole("tooltip");
+  const content = tooltip.closest<HTMLElement>(".control-hint")!;
+  fireEvent.pointerMove(content, {pointerType: "mouse", clientX: 0, clientY: 0});
+  expect(screen.getByRole("tooltip")).toBeTruthy();
+  fireEvent.keyDown(trigger, {key: "Escape"});
+  await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+  expect(document.activeElement).toBe(trigger);
+});

@@ -112,7 +112,7 @@ function EventRow({
       {/* 排序依据（最相关模式）：首条内联，全部悬浮可追溯 */}
       {showRank && e.rank_reasons && e.rank_reasons.length > 0 && (
         <p
-          className="mt-0.5 truncate text-[10px] text-zinc-500 dark:text-zinc-500"
+          className="mt-0.5 truncate text-[10px] text-zinc-600 dark:text-zinc-400"
           title={e.rank_reasons.join("；")}
         >
           排序依据：{e.rank_reasons[0]}

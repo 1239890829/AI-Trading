@@ -79,7 +79,7 @@ export function WatchLedgerPanel() {
         </div>
       </div>
 
-      {error && <p className="mb-2 rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-800 dark:text-amber-600">台账加载失败：{error}</p>}
+      {error && <p className="mb-2 rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-800 dark:text-amber-300">台账加载失败：{error}</p>}
       {orderNote && <p className="mb-2 rounded bg-sky-500/10 px-2 py-1 text-[11px] text-sky-700 dark:text-sky-300">{orderNote}</p>}
 
       {data && (data.rows?.length ?? 0) === 0 && (
