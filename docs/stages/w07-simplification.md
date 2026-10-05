@@ -482,7 +482,7 @@
 - **效果前置**：无
 - **方案依据**：用户要求当前版唯一恢复基线、全部既有技能/来源有序评估、PC/手机tab与按钮尺寸、配色、布局和真实微交互重设计。
 - **范围**：顶部导航保留；紧凑可见键面与独立手机触点；主导航/模式/筛选区分；工具索引与研究区重新编排；全站共享材质与有界状态审查。
-- **验收**：当前版恢复校验、全部来源/技能/要求对账、真实手机与PC前后、入口与尺寸、Canvas及快速/键盘/减弱动态，完整门禁、Jev复评、准确HEAD发布。
+- **验收**：当前版恢复校验、全部来源/技能/要求对账、真实渲染的手机宽度与PC前后、入口与尺寸、Canvas及快速/键盘/减弱动态，完整门禁、Jev复评、准确HEAD发布。
 - **恢复**：ui-current-saved-20261005（PR #229）；旧版活动恢复包与标签退出；不回滚业务数据。
-- **证据**：基线c8b51e8c2a40f8b0944bdb3bf613ee1c3526eba9；忽略批次ui-compact-motion-20261005；123入口图、25尺寸检查、真实Canvas/焦点/通知键盘/证据日期/候选重排；后端4619 passed/83 skipped，默认/UTC前端94文件各821，tsc/eslint/pyflakes/正式构建，Jev携baseline复评。详product/ui-audit-20261003§32与handoff；准确HEAD发布由PR回执/CI绑定。
+- **证据**：基线c8b51e8c2a40f8b0944bdb3bf613ee1c3526eba9；忽略批次ui-compact-motion-20261005；123入口图、25尺寸检查、真实Canvas/焦点/通知键盘/证据日期/候选重排；后端4619 passed/83 skipped，默认/UTC前端95文件各823，tsc/eslint/pyflakes/正式构建，Jev携baseline复评。详product/ui-audit-20261003§32与handoff；准确HEAD发布由PR回执/CI绑定。
 - **下一步**：实现与本地验收完成；按准确HEAD DegradedRelease、required CI与release_check发布并核合并后CI及分支清理。不领取第二业务任务；部署仍搁置。
