@@ -141,3 +141,12 @@ describe("知识库面板 · 搜索穿透折叠", () => {
     expect(docRows()).toHaveLength(0);
   });
 });
+
+it("打开文档后保留所选条目焦点，不因详情刷新移走", async () => {
+  await mount();
+  const row = screen.getByRole("button", { name: /03-engineering.md/ });
+  row.focus();
+  fireEvent.click(row);
+  await waitFor(() => expect(screen.getByRole("button", { name: /03-engineering.md/ }).getAttribute("aria-pressed")).toBe("true"));
+  expect(document.activeElement).toBe(row);
+});

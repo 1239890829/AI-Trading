@@ -109,3 +109,19 @@ it("keyboard input interrupts a pointer entrance so focused tools stay fully vis
  }
  unmount(); fireEvent(window,new Event("resize"));
 });
+
+it("keeps IME Escape in the tray and results, and makes a closing tray inert immediately", () => {
+ const {container}=render(<WorkspaceDeck tools={MAINTENANCE_TOOLS} onOpen={vi.fn()}/>);
+ fireEvent.click(screen.getByRole("button",{name:"设置与追踪"}));
+ const tool=screen.getByRole("button",{name:/参数配置/});tool.focus();
+ fireEvent.keyDown(tool,{key:"Escape",isComposing:true});
+ expect(screen.getByRole("region")).toBeTruthy();
+ fireEvent.keyDown(tool,{key:"Escape"});
+ expect(screen.queryByRole("region")).toBeNull();
+ const tray=container.querySelector('.tool-tray');
+ if(tray) { expect(tray.getAttribute('aria-hidden')).toBe('true');expect(tray.hasAttribute('inert')).toBe(true); }
+ const input=screen.getByRole("searchbox",{name:"查找工具"});
+ fireEvent.change(input,{target:{value:"参数"}});
+ fireEvent.keyDown(screen.getByRole("button",{name:/参数配置/}),{key:"Escape",keyCode:229});
+ expect((input as HTMLInputElement).value).toBe("参数");
+});

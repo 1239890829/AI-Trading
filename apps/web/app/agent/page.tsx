@@ -59,11 +59,10 @@ function AgentInner() {
       <div className="workspace-context">{maintenance ? <Link href="/agent?area=research&tab=review" className="quiet-action">返回复盘研究 ↗</Link> : <span>研究参考 · 不构成买卖建议</span>}</div>
     </div>
     <div className="agent-composition">
-    {maintenance && toolShelf}
+    {toolShelf}
     <section className="workspace-stage min-h-0 flex-1 flex flex-col" aria-label={maintenance ? "运行状态" : "日度复盘主工作区"}>
-      <div className={`min-h-0 flex-1 flex flex-col overflow-hidden ${maintenance ? "" : "p-3"}`}>{maintenance ? <ProductionOperations /> : <ReviewTab key={reviewDate ?? "latest"} focusDate={reviewDate} allowDispose={false} />}</div>
+      <div className={`min-h-0 flex-1 flex flex-col ${maintenance ? "overflow-auto" : "overflow-hidden p-3"}`}>{maintenance ? <ProductionOperations /> : <ReviewTab key={reviewDate ?? "latest"} focusDate={reviewDate} allowDispose={false} />}</div>
     </section>
-    {!maintenance && toolShelf}
     </div>
     {selected && <ModalShell motionOrigin={origin} open={presence.active} label={selected.label} size={["params", "alerts", "repos"].includes(selected.key) ? "md" : "lg"} presentation="drawer" expandable onClose={closeTool} header={<div><p className="workspace-kicker">{selected.group}</p><h2 className="text-lg font-semibold">{selected.label}</h2><p className="text-xs text-zinc-600 dark:text-zinc-400">{selected.description}</p></div>} bodyClassName="overflow-hidden p-3" footer={maintenance ? "维护视图不授予权限；命令继续由后端鉴权、预算和批准链约束。" : "只读研究；样本不足与缺失产物不代表已经验证。"}>
       {presence.active && selected.key === "evolution" && <EvolutionTab />}

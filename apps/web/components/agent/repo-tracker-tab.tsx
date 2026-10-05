@@ -110,11 +110,12 @@ export function RepoTrackerTab() {
 
   const selectedSection = sections.find((s) => s.title === selected) ?? null;
 
-  const Item = ({ s }: { s: Section }) => {
+  const renderItem = (s: Section) => {
     const active = selected === s.title;
     if (!s.isRepo) {
       return (
         <button
+          key={s.title} data-ui-choice aria-pressed={active}
           onClick={() => setSelected(s.title)}
           className={`block w-full rounded-lg px-2 py-1.5 text-left text-xs transition-colors ${
             active ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900" : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900"
@@ -127,6 +128,7 @@ export function RepoTrackerTab() {
     const { name, stars, lang } = parseTitle(s.title);
     return (
       <button
+        key={s.title} data-ui-choice aria-pressed={active}
         onClick={() => setSelected(s.title)}
         className={`block w-full rounded-lg px-2 py-1.5 text-left transition-colors ${
           active ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900" : "hover:bg-zinc-100 dark:hover:bg-zinc-900"
@@ -178,27 +180,23 @@ export function RepoTrackerTab() {
           </p>
         </section>
       ) : (
-        <div className="flex min-h-0 flex-1 gap-3">
+        <div className="flex min-h-0 flex-1 flex-col gap-3 md:flex-row">
           {/* 左：条目列表（上下结构：名称+星数 / 分类标签） */}
-          <aside className="ui-card flex w-64 shrink-0 flex-col overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
+          <aside className="ui-card flex min-h-40 max-h-48 w-full shrink-0 flex-col md:max-h-none md:w-48 overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
             <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
               <p className="px-2 pb-1 pt-0.5 text-[10px] font-medium text-zinc-600 dark:text-zinc-400">仓库（agent 分组）</p>
-              {repos.map((s) => (
-                <Item key={s.title} s={s} />
-              ))}
+              {repos.map(renderItem)}
               {metas.length > 0 && (
                 <>
                   <p className="px-2 pb-1 pt-2 text-[10px] font-medium text-zinc-600 dark:text-zinc-400">闭环机制</p>
-                  {metas.map((s) => (
-                    <Item key={s.title} s={s} />
-                  ))}
+                  {metas.map(renderItem)}
                 </>
               )}
             </div>
           </aside>
 
           {/* 右：所选仓库详情（用途/评估/可借鉴/轨迹/结论） */}
-          <section className="ui-card min-w-0 flex-1 overflow-y-auto rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+          <section className="ui-card min-h-0 min-w-0 flex-1 overflow-y-auto rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
             {selectedSection ? (
               <MarkdownView content={selectedSection.body} />
             ) : (

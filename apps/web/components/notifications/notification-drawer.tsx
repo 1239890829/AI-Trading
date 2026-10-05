@@ -1,5 +1,7 @@
 "use client";
 
+import { SelectionRail } from "@/components/ui/selection-rail";
+
 import { useExitPresence } from "@/hooks/use-exit-presence";
 import { useOverlayFocus } from "@/hooks/use-overlay-focus";
 
@@ -721,16 +723,24 @@ export function NotificationBell() {
 
               {/* 顶层 tab：个股机会（推送面）/ 资讯·事件（浏览面）。
                   与下方时段 tab 是**两条正交的轴**，故单独一层，不与之合并。 */}
-              <div
-                className="flex gap-1 border-b border-zinc-100 px-4 py-2 dark:border-zinc-800/80"
-                data-testid="notification-mode-tabs"
-                role="tablist"
-                aria-label="通知中心内容类型"
+              <SelectionRail activeKey={mode} role="tablist" label="通知中心内容类型" className="notification-mode-tabs"
               >
                 {MODE_TABS.map((m) => (
                   <button
                     key={m.key}
                     role="tab"
+                    tabIndex={mode === m.key ? 0 : -1}
+                    onKeyDown={event => {
+                      if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+                      const offset = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+                      if (!offset && event.key !== "Home" && event.key !== "End") return;
+                      event.preventDefault();
+                      const index = MODE_TABS.findIndex(item => item.key === m.key);
+                      const next = event.key === "Home" ? 0 : event.key === "End" ? MODE_TABS.length - 1 : (index + offset + MODE_TABS.length) % MODE_TABS.length;
+                      const key = MODE_TABS[next].key;
+                      setMode(key);
+                      event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`[data-testid="notification-mode-${key}"]`)?.focus();
+                    }}
                     aria-selected={mode === m.key}
                     data-testid={`notification-mode-${m.key}`}
                     onClick={() => setMode(m.key)}
@@ -744,7 +754,7 @@ export function NotificationBell() {
                     {m.label}
                   </button>
                 ))}
-              </div>
+              </SelectionRail>
 
               {mode === "events" ? (
                 <EventFeed active={open && mode === "events"} refreshToken={eventsRefresh} />
@@ -760,10 +770,11 @@ export function NotificationBell() {
                 {diagnosis && <div className="mt-2 max-h-52 overflow-y-auto"><NotificationDiagnosis diag={diagnosis} /></div>}
               </div>
               {/* tab：盘前 / 盘中 / 盘后（红点 = 该时段有未读） */}
-              <div className="flex gap-1 border-b border-zinc-100 px-4 py-2 dark:border-zinc-800/80">
+              <SelectionRail activeKey={tab} label="通知时段" className="notification-session-tabs">
                 {SESSION_TABS.map((t) => (
                   <button
                     key={t.key}
+                    aria-pressed={tab === t.key}
                     onClick={() => setTab(t.key)}
                     className={`flex items-center gap-1 rounded-full px-3 py-1 text-xs transition-colors ${
                       tab === t.key
@@ -782,7 +793,7 @@ export function NotificationBell() {
                     <span className="text-[10px] opacity-70">{bySession[t.key].length}</span>
                   </button>
                 ))}
-              </div>
+              </SelectionRail>
 
               {/* 列表 */}
               <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-3" data-testid="notification-list">

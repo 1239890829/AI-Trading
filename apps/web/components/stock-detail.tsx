@@ -1,5 +1,7 @@
 "use client";
 
+import { SelectionRail } from "@/components/ui/selection-rail";
+
 import { useCallback, useEffect, memo, useMemo, useRef, useState } from "react";
 import { MinuteChart } from "@/components/minute-chart";
 import { KlineChartPro } from "@/components/kline-chart-pro";
@@ -649,7 +651,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
 
       {/* 共用工具行位于内容网格上方，图表与右侧核对面板保持同一顶线。 */}
       <div className="chart-toolbar flex shrink-0 flex-wrap items-center gap-2">
-        <div className="chart-modes" role="group" aria-label="图表视角">
+        <SelectionRail className="chart-modes" activeKey={chartTab} label="图表视角">
         {(
           (
             [
@@ -670,7 +672,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
           </button>
         ))}
 
-        </div>
+        </SelectionRail>
         {/* 右侧工具组：技术评估 + 历史回放同行（2026-09-04 用户反馈：技术评估
             浮层遮挡 K 线，改为工具栏内联，不再覆盖图表） */}
         <div className="chart-tools ml-auto flex flex-wrap items-center gap-2">

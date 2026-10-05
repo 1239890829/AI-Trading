@@ -133,8 +133,9 @@ export function KbBrowserTab() {
     };
   }, [files, query]);
 
-  const FileRow = ({ f }: { f: KbFileMeta }) => (
+  const renderFileRow = (f: KbFileMeta) => (
     <button
+      key={f.path} data-ui-choice aria-pressed={selected === f.path}
       onClick={() => void openFile(f.path)}
       className={`block w-full truncate rounded px-2 py-1 text-left text-xs transition-colors ${
         selected === f.path
@@ -144,7 +145,7 @@ export function KbBrowserTab() {
       title={`${f.path}${f.kb_ids.length ? ` · ${f.kb_ids.length} 条 KB` : ""}`}
     >
       {f.name}
-      {f.kb_ids.length > 0 && <span className={`ml-1 text-[10px] ${selected === f.path ? "text-sky-300 dark:text-sky-700" : "text-sky-700 dark:text-sky-300"}`}>KB{f.kb_ids.length}</span>}
+      {f.kb_ids.length > 0 && <span className="ml-1 text-[10px] text-sky-700 dark:text-sky-300">KB{f.kb_ids.length}</span>}
     </button>
   );
 
@@ -174,9 +175,7 @@ export function KbBrowserTab() {
                   <p className="px-2 pt-1 text-[10px] font-medium text-zinc-600 dark:text-zinc-400">
                     知识库（唯一权威）· {groups.canonical.length}
                   </p>
-                  {groups.canonical.map((f) => (
-                    <FileRow key={f.path} f={f} />
-                  ))}
+                  {groups.canonical.map(renderFileRow)}
                 </>
               )}
               {groups.currentByDir.map(([dir, fs]) => (
@@ -184,9 +183,7 @@ export function KbBrowserTab() {
                   <p className="px-2 pt-2 text-[10px] font-medium text-zinc-600 dark:text-zinc-400">
                     现役 · {dir} · {fs.length}
                   </p>
-                  {fs.map((f) => (
-                    <FileRow key={f.path} f={f} />
-                  ))}
+                  {fs.map(renderFileRow)}
                 </div>
               ))}
               {groups.historyCount > 0 && (
@@ -225,9 +222,7 @@ export function KbBrowserTab() {
                           <p className="px-2 pt-2 text-[10px] font-medium text-zinc-600 dark:text-zinc-400">
                             {dir} · {fs.length}
                           </p>
-                          {fs.map((f) => (
-                            <FileRow key={f.path} f={f} />
-                          ))}
+                          {fs.map(renderFileRow)}
                         </div>
                       ))}
                     </div>

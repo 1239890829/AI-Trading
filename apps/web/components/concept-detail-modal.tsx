@@ -174,10 +174,11 @@ export function ConceptDetailModal({
 function TabBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
+      aria-pressed={active}
       onClick={onClick}
-      className={`shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] transition-colors ${
+      className={`ui-filter shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] transition-colors ${
         active
-          ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+          ? "ui-filter-selected"
           : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
       }`}
     >

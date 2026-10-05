@@ -216,10 +216,11 @@ export function ThemesTab() {
             {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
               <button
                 key={k}
+                aria-pressed={sort === k}
                 onClick={() => onSort(k)}
-                className={`rounded-md px-2 py-1 transition-colors ${
+                className={`ui-filter rounded-md px-2 py-1 transition-colors ${
                   sort === k
-                    ? "bg-zinc-900 font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    ? "ui-filter-selected"
                     : "border border-zinc-200 text-zinc-600 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-100"
                 }`}
               >
@@ -233,10 +234,11 @@ export function ThemesTab() {
             {BOARD_FILTERS.map((v) => (
               <button
                 key={v}
+                aria-pressed={minBoards === v}
                 onClick={() => onBoards(v)}
-                className={`rounded-md px-2 py-1 transition-colors ${
+                className={`ui-filter rounded-md px-2 py-1 transition-colors ${
                   minBoards === v
-                    ? "bg-zinc-900 font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    ? "ui-filter-selected"
                     : "border border-zinc-200 text-zinc-600 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-100"
                 }`}
               >
@@ -250,10 +252,11 @@ export function ThemesTab() {
             {COUNT_FILTERS.map((f) => (
               <button
                 key={f.v}
+                aria-pressed={minCount === f.v}
                 onClick={() => onCount(f.v)}
-                className={`rounded-md px-2 py-1 transition-colors ${
+                className={`ui-filter rounded-md px-2 py-1 transition-colors ${
                   minCount === f.v
-                    ? "bg-zinc-900 font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    ? "ui-filter-selected"
                     : "border border-zinc-200 text-zinc-600 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-100"
                 }`}
               >

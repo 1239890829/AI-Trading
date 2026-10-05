@@ -1,95 +1,159 @@
-/* Silver reading actions, etched commands and recessed selection tracks.
-   Only explicit short actions opt in; list rows and chart gestures stay local. */
+/* Product register: graphite reading planes, compact visible faces, continuous selection.
+   The 44px mobile hit area is independent of the 32px button face. */
 :root {
-  --key-face:linear-gradient(180deg,#fdfefe,#e7edef); --key-ink:#243439;
-  --key-border:#8b9da1; --key-shadow:inset 0 1px 0 #fff,inset 0 -1px 0 #b9c7cb,0 2px 3px #102c3210;
-  --key-subtle:linear-gradient(180deg,#f4f7f7,#e9eeee); --command-border:#6c858b;
-  --danger-ink:#ab253e; --danger-face:#fff0f2;
+  --key-face:#dbe5f0; --key-ink:#25384e; --key-border:#9baec3;
+  --key-subtle:#edf1f6; --command-border:#8a9daf;
+  --danger-ink:#a3213b; --danger-face:#fff0f3;
+  --action-inset:0px; --control-height:32px;
 }
 .dark {
-  --key-face:linear-gradient(180deg,#e4eeef,#becdd0); --key-ink:#172b30;
-  --key-border:#d8e8eb; --key-shadow:inset 0 1px 0 #ffffffb3,inset 0 -1px 0 #728d93,0 2px 5px #0004;
-  --key-subtle:linear-gradient(180deg,#343d40,#293033); --command-border:#829b9f;
-  --danger-ink:#ffb3bf; --danger-face:#3f252c;
+  --key-face:#36485b; --key-ink:#edf3fa; --key-border:#6c849e;
+  --key-subtle:#27313b; --command-border:#738497;
+  --danger-ink:#ffb4c2; --danger-face:#39242c;
 }
 :root [data-action],:root .card-entry-action,:root .accessory-trigger,:root .search-expand,:root .drawer-mode {
-  display:inline-flex;align-items:center;justify-content:center;gap:7px;flex-shrink:0;max-width:100%;
-  min-height:36px;padding:7px 12px;border:1px solid var(--glass-border);border-radius:9px;
-  background:var(--key-subtle);color:var(--ui-ink);box-shadow:inset 0 1px 0 var(--glass-highlight),0 1px 2px #00000012;
-  font-size:12px;font-weight:500;line-height:18px;white-space:nowrap;text-decoration:none;touch-action:manipulation;
+  position:relative;isolation:isolate;display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  flex-shrink:0;max-width:100%;min-height:var(--control-height);padding:5px 10px;
+  border:1px solid transparent;border-radius:7px;background:transparent;color:var(--ui-ink);box-shadow:none;
+  font-size:12px;font-weight:500;line-height:20px;white-space:nowrap;text-decoration:none;touch-action:manipulation;
+  --action-face:var(--key-subtle);--action-edge:var(--glass-border);
+  transition:transform 160ms var(--ease-out),color 160ms ease-out;
 }
-:root [data-action=primary] {background:var(--key-face);border-color:var(--key-border);color:var(--key-ink);box-shadow:var(--key-shadow);font-weight:600;}
-:root [data-action=command] {background:var(--workspace-surface);border-color:var(--command-border);color:var(--ui-ink);box-shadow:inset 0 1px 0 var(--glass-highlight);}
-:root .command-row [data-action=command] {min-width:108px;}
-:root [data-action=quiet] {background:transparent;border-color:transparent;box-shadow:none;color:var(--ui-muted);}
-:root [data-action=danger] {background:var(--danger-face);border-color:currentColor;color:var(--danger-ink);box-shadow:none;}
-:root [data-action=trade] {color:#fff;box-shadow:inset 0 1px 0 #ffffff26,0 2px 4px #00000018;}
-:root [data-action=trade].bg-up-deep {background:#be123c;}
-:root [data-action=trade].bg-down-deep {background:#047857;}
-:root .command-glyph {display:grid;place-items:center;width:20px;height:20px;border:1px solid var(--glass-border);border-radius:5px;font-size:12px;}
-:root [data-action]:disabled {opacity:.62;cursor:not-allowed;transform:none;box-shadow:none;}
+:root [data-action]::after,:root .card-entry-action::after,:root .accessory-trigger::after,:root .search-expand::after,:root .drawer-mode::after {
+  content:"";position:absolute;inset:var(--action-inset) 0;z-index:-1;pointer-events:none;
+  border:1px solid var(--action-edge);border-radius:7px;background:var(--action-face);
+  background-image:linear-gradient(110deg,transparent 35%,var(--glass-highlight) 49%,transparent 62%);background-size:250% 100%;background-position:100% 0;
+  box-shadow:inset 0 1px 0 var(--glass-highlight);transition:background-color 160ms ease-out,border-color 160ms ease-out,background-position 240ms ease-out;
+}
+:root [data-action=primary] {--action-face:var(--key-face);--action-edge:var(--key-border);color:var(--key-ink);font-weight:600;}
+:root [data-action=command] {--action-face:transparent;--action-edge:var(--command-border);color:var(--ui-ink);}
+:root [data-action=quiet] {--action-face:transparent;--action-edge:transparent;color:var(--ui-muted);}
+:root [data-action=quiet]::after {box-shadow:none;}
+:root [data-action=danger] {--action-face:var(--danger-face);--action-edge:currentColor;color:var(--danger-ink);}
+:root [data-action=trade] {color:#fff;}
+:root [data-action=trade].bg-up-deep {--action-face:#be123c;--action-edge:#be123c;}
+:root [data-action=trade].bg-down-deep {--action-face:#047857;--action-edge:#047857;}
+:root .command-glyph {display:grid;place-items:center;width:18px;height:18px;border:1px solid var(--glass-border);border-radius:4px;font-size:11px;}
+:root [data-action]:disabled {opacity:.62;cursor:not-allowed;transform:none;}
 :root [data-action][aria-busy=true] {opacity:1;cursor:wait;color:var(--ui-muted);}
 :root [data-action][aria-busy=true]::before {content:"";width:12px;height:12px;flex:none;border:1.5px solid var(--ui-line);border-top-color:currentColor;border-radius:50%;animation:key-pending 800ms linear infinite;}
 :root [data-action=trade][aria-busy=true] {color:#fff;}
-:root [data-icon=true] {width:36px;min-width:36px;padding:8px;}
+:root [data-icon=true] {width:32px;min-width:32px;padding:7px;}
 :root [data-action][aria-busy=true] .command-glyph {display:none;}
 @keyframes key-pending {to {transform:rotate(1turn);}}
 
-/* Recessed tracks and raised selected keys make mode changes distinguishable. */
-:root .chart-modes,:root .compact-segments,:root .collection-toolbar > div,:root .task-subnav {padding:4px;gap:4px;border:1px solid var(--glass-border);border-radius:11px;background:var(--workspace-canvas);box-shadow:inset 0 1px 3px #00000012;}
-:root .chart-modes > button,:root .compact-segments > a,:root .collection-toolbar button,:root .task-subnav a,:root .evidence-mode {min-height:30px;padding:5px 10px;border-radius:7px;line-height:18px;}
-:root .chart-modes > button[aria-pressed=true],:root .compact-segments > a[aria-current=page],:root .collection-toolbar button[aria-pressed=true],:root .task-subnav a[aria-current=page],:root .evidence-mode[aria-pressed=true] {background:var(--key-subtle);color:var(--ui-ink);box-shadow:inset 0 1px 0 var(--glass-highlight),inset 0 -2px 0 var(--ui-accent),0 1px 3px #0000001a;}
-:root .navigation-marker {background:var(--key-subtle);border-color:var(--edge-light);box-shadow:inset 0 1px 0 var(--glass-highlight),inset 0 -2px 0 var(--ui-accent),0 2px 8px #00000012;}
-:root .task-navigation a {min-height:40px;}
-:root .header-action,:root .theme-switch,:root .command-launch,:root .ui-close {border:1px solid transparent;border-radius:10px;}
-:root .ui-close {background:var(--key-subtle);border-color:var(--glass-border);box-shadow:inset 0 1px 0 var(--glass-highlight);}
-:root .card-entry-dock {gap:8px;padding-top:18px;margin-top:22px;}
-:root .card-entry-action {gap:8px;padding-inline:14px;}
+/* A line tracks selection. There is no contrasting tile behind a selected tab. */
+:root .selection-rail {position:relative;isolation:isolate;display:inline-flex;align-items:center;gap:2px;max-width:100%;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;}
+.selection-line {position:absolute;left:0;bottom:2px;width:1px;height:2px;opacity:0;transform-origin:left center;background:var(--ui-accent);pointer-events:none;transition:transform 240ms cubic-bezier(.2,.85,.25,1),opacity 120ms ease-out;}
+.selection-rail[data-motion-immediate=true]>.selection-line {transition:none;}
+:root .selection-rail>button,:root .chart-modes>button,:root .collection-toolbar button,:root .evidence-mode {min-height:32px;padding:5px 10px;border:0;border-radius:6px;background:transparent;box-shadow:none;color:var(--ui-muted);font-size:12px;line-height:20px;font-weight:600;white-space:nowrap;}
+:root .selection-rail [aria-pressed=true],:root .evidence-mode[aria-pressed=true] {background:transparent;box-shadow:none;color:var(--ui-ink);}
+:root .browser-groups {display:flex;gap:16px;padding:12px 20px;background:transparent}
+:root .browser-groups>button {flex:1;padding:8px 0;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;box-shadow:none}
+:root .browser-groups>button[aria-pressed=true] {border-bottom-color:var(--ui-accent);background:transparent;color:var(--ui-ink)}
+:root .watch-groups {gap:8px;padding:6px 12px;background:var(--workspace-surface)}
+:root .watch-groups button[aria-pressed] {min-height:32px;padding:5px 2px;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:var(--ui-muted);box-shadow:none}
+:root .watch-groups button[aria-pressed=true] {border-bottom-color:var(--ui-accent);background:transparent;color:var(--ui-ink)}
+/* Notice axes remain distinct: content type above, session below. */
+:root .notification-mode-tabs,:root .notification-session-tabs {display:flex;width:100%;padding:0 16px;gap:12px;border-bottom:1px solid var(--ui-line);}
+:root .notification-mode-tabs>button {flex:1;}
+:root .selection-rail [aria-selected=true] {color:var(--ui-ink);background:transparent;box-shadow:none;}
+:root [data-ui-choice] {background:transparent;color:var(--ui-muted);border:1px solid transparent;box-shadow:none;}
+:root [data-ui-choice][aria-pressed=true] {background:var(--key-subtle);color:var(--ui-ink);border-color:var(--glass-border);}
+:root [data-ui-choice]>div:first-child>span:first-child {color:var(--ui-ink);}
+:root .chart-indicator-options>button[aria-pressed=true] {background:transparent;box-shadow:inset 0 -1px 0 currentColor;}
+:root .replay-controls {border-color:var(--glass-border);background:var(--workspace-surface);}
+:root .replay-control-group>button[aria-pressed=true] {color:var(--ui-ink);background:transparent;box-shadow:inset 0 -2px 0 var(--ui-accent);}
+:root .compact-segments,:root .task-subnav {padding:0;gap:12px;border:0;border-radius:0;background:transparent;box-shadow:none;}
+:root .compact-segments>a,:root .task-subnav a {min-height:32px;padding:5px 0;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;box-shadow:none;color:var(--ui-muted);line-height:20px;}
+:root .compact-segments>a[aria-current=page],:root .task-subnav a[aria-current=page] {background:transparent;box-shadow:none;border-bottom-color:var(--ui-accent);color:var(--ui-ink);}
+:root .navigation-marker {top:auto;bottom:0;height:2px;border:0;border-radius:0;background:var(--ui-accent);box-shadow:none;}
+:root .task-navigation a {min-height:38px;padding:7px 13px;border-radius:0;}
+:root .header-action,:root .theme-switch,:root .command-launch,:root .ui-close {border:0;border-radius:7px;}
+:root .ui-close {background:transparent;box-shadow:none;}
+:root .card-entry-dock {gap:6px;padding-top:14px;margin-top:20px;}
+:root .card-entry-action {gap:8px;padding-inline:10px;}
+:root .card-entry-action>svg {transition:transform 180ms var(--ease-out);}
 :root .stock-card-name {text-wrap:balance;}
-:root .tool-stack {background:var(--glass-sheen),var(--key-subtle);border-color:var(--edge-light);border-radius:10px;box-shadow:inset 0 1px 0 var(--glass-highlight),0 2px 4px #00000010;}
-:root .tool-stack[aria-expanded=true] {border-color:var(--ui-accent);}
-:root .tool-index-slot::before,:root .tool-index-slot::after {border-radius:10px;}
-:root .folder-count {min-width:20px;padding:2px 5px;text-align:center;font-variant-numeric:tabular-nums;border:1px solid var(--glass-border);border-radius:6px;background:var(--workspace-canvas);color:var(--ui-muted);}
-:root .tool-stack-caption {line-height:1.6;}
-:root .tool-tray {padding-bottom:8px;}
-:root .tool-launcher-mark {border:1px solid var(--glass-border);background:var(--key-subtle);box-shadow:inset 0 1px 0 var(--glass-highlight);}
+
+/* Indexed disclosure: one horizontal control plane and a connected reading tray. */
+:root .workspace-deck {padding:12px 16px;background:var(--workspace-surface);box-shadow:inset 0 1px 0 var(--glass-highlight);border-radius:12px;}
+:root .tool-dock {gap:18px;}
+.tool-folder-container {flex:1;min-width:0;}
+.tool-folder-container[hidden] {display:none;}
+:root .tool-folders {display:flex;width:100%;gap:4px;}
+:root .tool-index-slot {flex:0 1 auto;padding:0;}
+:root .tool-index-slot::before,:root .tool-index-slot::after {content:none;}
+:root .tool-stack {display:flex;align-items:center;gap:8px;min-height:36px;padding:6px 10px;border:0;border-radius:6px;background:transparent;box-shadow:none;transform:none;white-space:nowrap;}
+:root .tool-stack-heading {display:flex;align-items:center;gap:6px;white-space:nowrap;}
+:root .tool-stack[aria-expanded=true] {color:var(--ui-ink);background:transparent;}
+:root .folder-count {min-width:16px;padding:0;font-size:10px;line-height:16px;text-align:center;font-variant-numeric:tabular-nums;border:0;border-radius:0;background:transparent;color:var(--ui-muted);}
+:root .folder-affordance {display:block;position:static;width:12px;height:12px;transition:transform 180ms var(--ease-out);}
+:root .tool-stack[aria-expanded=true] .folder-affordance {transform:rotate(180deg);}
+:root .tool-tray {margin-top:10px;padding-top:12px;padding-bottom:4px;gap:0 24px;border-top:1px solid var(--ui-line);}
+.tool-tray[data-exiting=true] {pointer-events:none;animation:tray-recede 160ms ease-out forwards;}
+@keyframes tray-recede {to {opacity:0;transform:translateY(-4px);}}
+:root .tool-launcher {padding:12px 2px;min-height:64px;gap:10px;}
+:root .tool-launcher-mark {width:24px;height:24px;border:0;border-radius:5px;background:var(--key-subtle);box-shadow:none;}
+:root .tool-open {transition:transform 180ms var(--ease-out),opacity 180ms ease-out;opacity:.6;}
+:root .tool-shelf-search input {min-height:32px;width:180px;border:0;background:var(--control-surface);}
 :root .operations-status pre {padding:16px;border:1px solid var(--ui-line);border-radius:10px;background:var(--workspace-canvas);}
-:root .command-row {gap:16px;padding-block:20px;}
-:root .operations-note {padding:12px 14px;border-inline-start:2px solid var(--edge-light);background:var(--workspace-canvas);border-radius:0 8px 8px 0;line-height:1.7;}
-:root .quote-sheet {border-color:var(--edge-light);}
-:root .task-panel-header {box-shadow:inset 0 1px 0 var(--glass-highlight);}
+:root .command-row {gap:16px;padding-block:18px;}
+:root .operations-note {padding:12px 14px;background:var(--workspace-canvas);border-radius:8px;line-height:1.7;}
+:root .quote-sheet {border-color:var(--glass-border);}
 :root .overlay-heading {gap:12px;align-items:center;}
 :root .overlay-footer {padding-block:12px;}
-:root .chart-tools button,:root .kline-controls button:not([aria-pressed]),:root .replay-controls button {border-radius:8px;box-shadow:inset 0 1px 0 var(--glass-highlight);}
-:root .tool-shelf-search input {min-height:36px;}
-
-/* Keep focus explicit at the control layer, including utility-level resets. */
+:root .chart-tools button,:root .kline-controls button:not([aria-pressed]),:root .replay-controls button {border-radius:6px;box-shadow:none;}
 :root :is(button,a,input,select,textarea,summary,[tabindex]):focus-visible {outline:2px solid var(--ui-accent);outline-offset:3px;}
-:root :is(input,select,textarea):not([type=checkbox]):not([type=radio]):not([type=range]) {box-shadow:inset 0 1px 2px #00000010;border-color:var(--glass-border);}
+:root :is(input,select,textarea):not([type=checkbox]):not([type=radio]):not([type=range]) {box-shadow:none;border-color:var(--glass-border);}
 :root :is(input,select,textarea):focus-visible {border-color:var(--ui-accent);}
 @media(hover:hover) and (pointer:fine) {
-  :root [data-action]:not(:disabled):hover,:root .card-entry-action:hover,:root .accessory-trigger:hover,:root .search-expand:hover,:root .drawer-mode:hover {border-color:var(--edge-light);background:var(--ui-hover);color:var(--ui-ink);}
-  :root [data-action=primary]:not(:disabled):hover {background:var(--key-face);color:var(--key-ink);border-color:var(--ui-accent);}
-  :root [data-action=danger]:not(:disabled):hover {background:var(--danger-face);color:var(--danger-ink);border-color:currentColor;}
-  :root [data-action=trade]:not(:disabled):hover {color:#fff;filter:brightness(1.08);}
-  :root [data-action=trade].bg-up-deep:not(:disabled):hover {background:#be123c;}
-  :root [data-action=trade].bg-down-deep:not(:disabled):hover {background:#047857;}
-  :root .header-action:hover,:root .theme-switch:hover,:root .command-launch:hover {background:var(--key-subtle);border-color:var(--glass-border);}
-  :root [data-action]:not(:disabled):active {box-shadow:inset 0 2px 4px #00000026;transform:scale(.98);}
+ :root [data-action]:not(:disabled):hover,:root .card-entry-action:hover,:root .accessory-trigger:hover,:root .search-expand:hover,:root .drawer-mode:hover {--action-edge:var(--edge-light);--action-face:var(--ui-hover);color:var(--ui-ink);}
+ :root [data-action]:not(:disabled):hover::after,:root .card-entry-action:hover::after,:root .accessory-trigger:hover::after,:root .search-expand:hover::after,:root .drawer-mode:hover::after {background-position:0 0;}
+ :root [data-action=primary]:not(:disabled):hover {--action-face:var(--key-face);--action-edge:var(--ui-accent);color:var(--key-ink);}
+ :root [data-action=danger]:not(:disabled):hover {--action-face:var(--danger-face);color:var(--danger-ink);}
+ :root [data-action=trade].bg-up-deep:not(:disabled):hover {--action-face:#be123c;color:#fff;}
+ :root [data-action=trade].bg-down-deep:not(:disabled):hover {--action-face:#047857;color:#fff;}
+ :root [data-action]:not(:disabled):active {transform:scale(.97);}
+ :root .card-entry-action:hover>svg {transform:translateX(2px);}
+ :root .tool-launcher:hover .tool-open {transform:translate(2px,-2px);opacity:1;}
+ :root .selection-rail button:hover {background:transparent;color:var(--ui-accent);}
+ :root .tool-stack:hover {background:transparent;color:var(--ui-accent);}
+ :root .header-action:hover,:root .theme-switch:hover,:root .command-launch:hover {background:var(--ui-hover);}
+}
+@media(max-width:1023px) {
+ :root .tool-dock {gap:10px;flex-wrap:wrap;}
+ .tool-folder-container {flex-basis:100%;order:3;}
+ :root .tool-shelf-search {margin-left:auto;}
 }
 @media(max-width:767px),(pointer:coarse) {
-  :root [data-action],:root .card-entry-action,:root .accessory-trigger,:root .search-expand,:root .drawer-mode,:root .quiet-action,:root .lens-trigger,:root .evidence-mode,:root .chart-modes > button,:root .compact-segments > a,:root .collection-toolbar button,:root .task-subnav a,:root .header-action,:root .theme-switch,:root .command-launch {min-height:44px;}
-  :root .header-action,:root .theme-switch,:root .command-launch {min-width:44px;}
-  :root [data-icon=true] {width:44px;min-width:44px;}
-  :root .command-row {gap:12px;padding-block:18px;}
-  :root .command-row [data-action=command] {min-width:108px;padding-inline:10px;}
-  :root .command-copy p {line-height:1.8;}
-  :root .tool-stack {padding:10px 12px;}
-  :root .tool-shelf-search input,:root .search-field input {min-height:44px;height:44px;}
-  :root .chart-tools button,:root .kline-controls button,:root .replay-controls button {min-height:44px;min-width:44px;}
-  :root .task-navigation a {min-height:44px;}
+ :root {--control-height:44px;--action-inset:5px;}
+ :root .watch-groups button[aria-pressed],:root .quiet-action,:root .lens-trigger,:root .evidence-mode,:root .selection-rail>button,:root .chart-modes>button,:root .compact-segments>a,:root .collection-toolbar button,:root .task-subnav a,:root .header-action,:root .theme-switch,:root .command-launch {min-height:44px;}
+ :root [data-icon=true],:root .header-action,:root .theme-switch,:root .command-launch {min-width:44px;width:44px;}
+ :root .command-row {gap:10px;padding-block:16px;}
+ :root .command-row [data-action=command] {min-width:0;padding-inline:10px;}
+ :root .tool-folders {flex-direction:row;justify-content:space-between;gap:2px;}
+ :root .tool-stack {min-height:44px;padding:6px 5px;gap:5px;font-size:11px;}
+ :root .tool-stack-heading {gap:4px;}
+ :root .folder-affordance {width:10px;height:10px;}
+ :root .tool-shelf-search input,:root .search-field input {min-height:44px;height:44px;}
+ :root .chart-tools button,:root .kline-controls button,:root .replay-controls button {min-height:44px;min-width:44px;}
+ :root .task-navigation a {min-height:44px;padding-inline:8px;}
+ :root .workspace-deck {padding:10px 12px;}
+ :root .tool-tray {margin-top:4px;}
+ :root .collection-toolbar {padding-inline:0;}
+ :root .collection-toolbar>span {font-size:11px;}
 }
+@media(max-width:359px) {.tool-folders .folder-count {position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);} :root .tool-shelf-search input{width:150px;} }
 @media(prefers-reduced-motion:reduce) {
-  :root [data-action][aria-busy=true]::before {animation:none;border-color:currentColor;}
-  :root [data-action]:not(:disabled):active {transform:none;}
+ .tool-tray[data-exiting=true] {animation:none;}
+ .selection-line,:root .card-entry-action>svg,:root .tool-open,:root .folder-affordance {transition:none;}
+ :root [data-action]::after,:root .card-entry-action::after,:root .accessory-trigger::after,:root .search-expand::after,:root .drawer-mode::after {transition:none;background-image:none;}
+ :root [data-action][aria-busy=true]::before {animation:none;border-color:currentColor;}
+ :root [data-action]:not(:disabled):active {transform:none;}
 }
+
+/* Filters describe a scope; they do not compete with primary commands. */
+:root .ui-filter {min-height:28px;padding:4px 8px;border:1px solid transparent;border-radius:5px;line-height:18px;white-space:nowrap;background:transparent;color:var(--ui-muted);box-shadow:none;transition:background-color 160ms ease-out,color 160ms ease-out,box-shadow 160ms ease-out;}
+:root .ui-filter-selected {background:var(--key-subtle);color:var(--ui-ink);border-color:transparent;box-shadow:inset 0 -1px 0 var(--ui-accent);}
+@media (max-width:767px),(pointer:coarse) { :root .ui-filter {min-height:44px;padding-block:10px;} }

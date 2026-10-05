@@ -54,8 +54,8 @@ const SORT_CHIPS: { key: SortKey; label: string; title: string }[] = [
   { key: "streak", label: "连续流入", title: "按连续净流入天数降序（仅沉淀板块可判）" },
 ];
 
-const CHIP = "flow-chip rounded px-1.5 py-0.5 text-[10px] transition-colors";
-const CHIP_ON = "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900";
+const CHIP = "ui-filter flow-chip rounded px-1.5 py-0.5 text-[10px] transition-colors";
+const CHIP_ON = "ui-filter-selected";
 const CHIP_OFF = "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400";
 
 /** 瀑布流分页尺寸（滚动增量逻辑统一在 hooks/use-incremental，此处只留规格）。 */
@@ -331,24 +331,24 @@ export function BoardFlowPanel() {
         <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5">
           <div className="flow-control-group">
             {KIND_CHIPS.map((c) => (
-              <button key={c.key} onClick={() => setKind(c.key)} className={`${CHIP} ${kind === c.key ? CHIP_ON : CHIP_OFF}`}>{c.label}</button>
+              <button key={c.key} aria-pressed={kind === c.key} onClick={() => setKind(c.key)} className={`${CHIP} ${kind === c.key ? CHIP_ON : CHIP_OFF}`}>{c.label}</button>
             ))}
           </div>
           <div className="flow-control-group">
             {RANGE_CHIPS.map((c) => (
-              <button key={c.key} onClick={() => setRange(c.key)} className={`${CHIP} ${range === c.key ? CHIP_ON : CHIP_OFF}`}>{c.label}</button>
+              <button key={c.key} aria-pressed={range === c.key} onClick={() => setRange(c.key)} className={`${CHIP} ${range === c.key ? CHIP_ON : CHIP_OFF}`}>{c.label}</button>
             ))}
           </div>
           <div className="flow-control-group" title="点击切换排序维度（均为降序，判不出殿后）">
             {SORT_CHIPS.map((c) => (
-              <button key={c.key} onClick={() => setSortKey(c.key)} title={c.title} className={`${CHIP} ${sortKey === c.key ? CHIP_ON : CHIP_OFF}`}>{c.label}</button>
+              <button key={c.key} aria-pressed={sortKey === c.key} onClick={() => setSortKey(c.key)} title={c.title} className={`${CHIP} ${sortKey === c.key ? CHIP_ON : CHIP_OFF}`}>{c.label}</button>
             ))}
           </div>
           <div className="flow-control-group" title="多选叠加筛选">
-            <button onClick={() => toggleFilter("inflow")} className={`${CHIP} ${filters.has("inflow") ? CHIP_ON : CHIP_OFF}`}>净流入&gt;0</button>
-            <button onClick={() => toggleFilter("ratio5")} className={`${CHIP} ${filters.has("ratio5") ? CHIP_ON : CHIP_OFF}`}>主力占比&gt;5%</button>
-            <button onClick={() => toggleFilter("streak3")} className={`${CHIP} ${filters.has("streak3") ? CHIP_ON : CHIP_OFF}`}>连续流入≥3</button>
-            <button onClick={() => toggleFilter("rising")} className={`${CHIP} ${filters.has("rising") ? CHIP_ON : CHIP_OFF}`}>排名上升</button>
+            <button aria-pressed={filters.has("inflow")} onClick={() => toggleFilter("inflow")} className={`${CHIP} ${filters.has("inflow") ? CHIP_ON : CHIP_OFF}`}>净流入&gt;0</button>
+            <button aria-pressed={filters.has("ratio5")} onClick={() => toggleFilter("ratio5")} className={`${CHIP} ${filters.has("ratio5") ? CHIP_ON : CHIP_OFF}`}>主力占比&gt;5%</button>
+            <button aria-pressed={filters.has("streak3")} onClick={() => toggleFilter("streak3")} className={`${CHIP} ${filters.has("streak3") ? CHIP_ON : CHIP_OFF}`}>连续流入≥3</button>
+            <button aria-pressed={filters.has("rising")} onClick={() => toggleFilter("rising")} className={`${CHIP} ${filters.has("rising") ? CHIP_ON : CHIP_OFF}`}>排名上升</button>
           </div>
         </div>
 
