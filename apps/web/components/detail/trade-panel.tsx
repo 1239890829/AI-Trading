@@ -76,7 +76,7 @@ export function TradePanel({
               <div key={o.id} className="flex items-center justify-between border-b border-zinc-100 px-3 py-1 text-xs dark:border-zinc-800/60">
                 <span className={o.side === "buy" ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}>{o.side === "buy" ? "买" : "卖"} {o.symbol}</span>
                 <span className="font-mono text-zinc-600 dark:text-zinc-400">{fmt(o.price)} × {o.quantity}</span>
-                <button
+                <button data-action="danger"
                   disabled={cancelling !== null}
                   onClick={async () => {
                     setCancelling(o.id); setCancelError(null);
@@ -84,7 +84,6 @@ export function TradePanel({
                     catch (e) { setCancelError((e as Error).message); }
                     finally { setCancelling(null); }
                   }}
-                  className="rounded border border-zinc-300 px-1.5 text-zinc-600 dark:text-zinc-400 hover:text-red-400 dark:border-zinc-600"
                 >
                   撤
                 </button>

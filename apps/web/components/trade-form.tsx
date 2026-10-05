@@ -242,6 +242,8 @@ export function TradeForm({
       </div>
       <button
         onClick={() => void submit()}
+        data-action="trade"
+        aria-busy={submitting}
         disabled={submitting || bad}
         className={`mt-2 w-full rounded py-1.5 text-sm font-medium text-white disabled:opacity-40 ${side === "buy" ? "bg-up-deep" : "bg-down-deep"}`}
       >

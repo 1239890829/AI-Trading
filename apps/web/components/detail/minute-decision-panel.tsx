@@ -96,12 +96,12 @@ export function MinuteDecisionPanel({
             观测 {sig.observed} 次 · 本次新记录 {sig.recorded} 条
           </span>
         )}
-        <button
+        <button data-action="secondary"
           onClick={() => {
             setLoading(true);
             setNonce((n) => n + 1);
           }}
-          className="ml-auto rounded border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-600 dark:text-zinc-400 transition-colors hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100"
+          className="ml-auto"
           aria-label="刷新做 T 信号"
         >
           {loading ? "刷新中…" : "刷新"}

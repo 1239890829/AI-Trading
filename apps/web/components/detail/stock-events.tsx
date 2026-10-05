@@ -78,10 +78,9 @@ export function StockEventsRow({ symbol, isIndex = false }: { symbol: string; is
       <div className="flex shrink-0 items-center gap-1 text-xs">
         <span className="text-zinc-600 dark:text-zinc-400">相关事件</span>
         <span className="text-amber-800 dark:text-amber-400">加载失败</span>
-        <button
+        <button data-action="secondary"
           type="button"
           onClick={() => setAttempt((n) => n + 1)}
-          className="rounded border border-zinc-200 px-1 text-[11px] text-zinc-600 dark:text-zinc-400 hover:border-zinc-400 dark:border-zinc-700"
         >
           重试
         </button>

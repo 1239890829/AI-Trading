@@ -270,10 +270,10 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
           {state.status === "error" && (
             <div className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
               <p>正文加载失败：{state.msg ?? "未知错误"}</p>
-              <button
+              <button data-action="secondary"
                 type="button"
                 onClick={() => setAttempt((n) => n + 1)}
-                className="mt-1 rounded border border-amber-300 px-2 py-0.5 text-[11px] hover:bg-amber-100 dark:border-amber-800"
+                className="mt-1"
               >
                 重试
               </button>
@@ -318,7 +318,7 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
         {/* 跨模块跳转（唯一真相源：lib/routing） */}
         <div className="mt-3 flex flex-wrap gap-2">
           {payload.symbol && (
-            <button
+            <button data-action="secondary"
               type="button"
               onClick={() => {
                 // 先关内容详情再开标的详情：两层同为 z-50 弹窗，叠加会让用户
@@ -326,19 +326,17 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
                 onClose();
                 openSymbolDetail({ symbol: payload.symbol as string });
               }}
-              className="rounded border border-zinc-200 px-2 py-1 text-[11px] text-zinc-600 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-300"
             >
               查看个股详情 {payload.symbol}
             </button>
           )}
           {payload.theme && (
-            <button
+            <button data-action="secondary"
               type="button"
               onClick={() => {
                 onClose();
                 router.push(themesUrl(payload.theme as string));
               }}
-              className="rounded border border-zinc-200 px-2 py-1 text-[11px] text-zinc-600 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-300"
             >
               去题材页 {payload.theme}
             </button>

@@ -89,7 +89,7 @@ export function CardEntryRow({
           )}
           title="关联事件 + 资讯公告（合并视图）"
         >
-          消息
+          <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M5 5h14v14H5zM8 9h8M8 13h6" /></svg>消息
         </button>
       )}
       <button
@@ -100,7 +100,7 @@ export function CardEntryRow({
         )}
         title="资金图：近 30 日主力净额（复用工作台组件，弹窗内展示）"
       >
-        资金
+        <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M4 19h16M7 15V9m5 6V5m5 10v-7" /></svg>资金
       </button>
       {theme && (
         <button
@@ -109,7 +109,7 @@ export function CardEntryRow({
           onClick={stopAnd(() => router.push(themesUrl(theme)))}
           title={`打开题材页：${theme} 梯队`}
         >
-          梯队
+          <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M4 19h5v-5H4zM9 14h5V9H9zM14 9h5V4h-5z" /></svg>梯队
         </button>
       )}
     </div>

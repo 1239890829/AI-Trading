@@ -1,0 +1,95 @@
+/* Silver reading actions, etched commands and recessed selection tracks.
+   Only explicit short actions opt in; list rows and chart gestures stay local. */
+:root {
+  --key-face:linear-gradient(180deg,#fdfefe,#e7edef); --key-ink:#243439;
+  --key-border:#8b9da1; --key-shadow:inset 0 1px 0 #fff,inset 0 -1px 0 #b9c7cb,0 2px 3px #102c3210;
+  --key-subtle:linear-gradient(180deg,#f4f7f7,#e9eeee); --command-border:#6c858b;
+  --danger-ink:#ab253e; --danger-face:#fff0f2;
+}
+.dark {
+  --key-face:linear-gradient(180deg,#e4eeef,#becdd0); --key-ink:#172b30;
+  --key-border:#d8e8eb; --key-shadow:inset 0 1px 0 #ffffffb3,inset 0 -1px 0 #728d93,0 2px 5px #0004;
+  --key-subtle:linear-gradient(180deg,#343d40,#293033); --command-border:#829b9f;
+  --danger-ink:#ffb3bf; --danger-face:#3f252c;
+}
+:root [data-action],:root .card-entry-action,:root .accessory-trigger,:root .search-expand,:root .drawer-mode {
+  display:inline-flex;align-items:center;justify-content:center;gap:7px;flex-shrink:0;max-width:100%;
+  min-height:36px;padding:7px 12px;border:1px solid var(--glass-border);border-radius:9px;
+  background:var(--key-subtle);color:var(--ui-ink);box-shadow:inset 0 1px 0 var(--glass-highlight),0 1px 2px #00000012;
+  font-size:12px;font-weight:500;line-height:18px;white-space:nowrap;text-decoration:none;touch-action:manipulation;
+}
+:root [data-action=primary] {background:var(--key-face);border-color:var(--key-border);color:var(--key-ink);box-shadow:var(--key-shadow);font-weight:600;}
+:root [data-action=command] {background:var(--workspace-surface);border-color:var(--command-border);color:var(--ui-ink);box-shadow:inset 0 1px 0 var(--glass-highlight);}
+:root .command-row [data-action=command] {min-width:108px;}
+:root [data-action=quiet] {background:transparent;border-color:transparent;box-shadow:none;color:var(--ui-muted);}
+:root [data-action=danger] {background:var(--danger-face);border-color:currentColor;color:var(--danger-ink);box-shadow:none;}
+:root [data-action=trade] {color:#fff;box-shadow:inset 0 1px 0 #ffffff26,0 2px 4px #00000018;}
+:root [data-action=trade].bg-up-deep {background:#be123c;}
+:root [data-action=trade].bg-down-deep {background:#047857;}
+:root .command-glyph {display:grid;place-items:center;width:20px;height:20px;border:1px solid var(--glass-border);border-radius:5px;font-size:12px;}
+:root [data-action]:disabled {opacity:.62;cursor:not-allowed;transform:none;box-shadow:none;}
+:root [data-action][aria-busy=true] {opacity:1;cursor:wait;color:var(--ui-muted);}
+:root [data-action][aria-busy=true]::before {content:"";width:12px;height:12px;flex:none;border:1.5px solid var(--ui-line);border-top-color:currentColor;border-radius:50%;animation:key-pending 800ms linear infinite;}
+:root [data-action=trade][aria-busy=true] {color:#fff;}
+:root [data-icon=true] {width:36px;min-width:36px;padding:8px;}
+:root [data-action][aria-busy=true] .command-glyph {display:none;}
+@keyframes key-pending {to {transform:rotate(1turn);}}
+
+/* Recessed tracks and raised selected keys make mode changes distinguishable. */
+:root .chart-modes,:root .compact-segments,:root .collection-toolbar > div,:root .task-subnav {padding:4px;gap:4px;border:1px solid var(--glass-border);border-radius:11px;background:var(--workspace-canvas);box-shadow:inset 0 1px 3px #00000012;}
+:root .chart-modes > button,:root .compact-segments > a,:root .collection-toolbar button,:root .task-subnav a,:root .evidence-mode {min-height:30px;padding:5px 10px;border-radius:7px;line-height:18px;}
+:root .chart-modes > button[aria-pressed=true],:root .compact-segments > a[aria-current=page],:root .collection-toolbar button[aria-pressed=true],:root .task-subnav a[aria-current=page],:root .evidence-mode[aria-pressed=true] {background:var(--key-subtle);color:var(--ui-ink);box-shadow:inset 0 1px 0 var(--glass-highlight),inset 0 -2px 0 var(--ui-accent),0 1px 3px #0000001a;}
+:root .navigation-marker {background:var(--key-subtle);border-color:var(--edge-light);box-shadow:inset 0 1px 0 var(--glass-highlight),inset 0 -2px 0 var(--ui-accent),0 2px 8px #00000012;}
+:root .task-navigation a {min-height:40px;}
+:root .header-action,:root .theme-switch,:root .command-launch,:root .ui-close {border:1px solid transparent;border-radius:10px;}
+:root .ui-close {background:var(--key-subtle);border-color:var(--glass-border);box-shadow:inset 0 1px 0 var(--glass-highlight);}
+:root .card-entry-dock {gap:8px;padding-top:18px;margin-top:22px;}
+:root .card-entry-action {gap:8px;padding-inline:14px;}
+:root .stock-card-name {text-wrap:balance;}
+:root .tool-stack {background:var(--glass-sheen),var(--key-subtle);border-color:var(--edge-light);border-radius:10px;box-shadow:inset 0 1px 0 var(--glass-highlight),0 2px 4px #00000010;}
+:root .tool-stack[aria-expanded=true] {border-color:var(--ui-accent);}
+:root .tool-index-slot::before,:root .tool-index-slot::after {border-radius:10px;}
+:root .folder-count {min-width:20px;padding:2px 5px;text-align:center;font-variant-numeric:tabular-nums;border:1px solid var(--glass-border);border-radius:6px;background:var(--workspace-canvas);color:var(--ui-muted);}
+:root .tool-stack-caption {line-height:1.6;}
+:root .tool-tray {padding-bottom:8px;}
+:root .tool-launcher-mark {border:1px solid var(--glass-border);background:var(--key-subtle);box-shadow:inset 0 1px 0 var(--glass-highlight);}
+:root .operations-status pre {padding:16px;border:1px solid var(--ui-line);border-radius:10px;background:var(--workspace-canvas);}
+:root .command-row {gap:16px;padding-block:20px;}
+:root .operations-note {padding:12px 14px;border-inline-start:2px solid var(--edge-light);background:var(--workspace-canvas);border-radius:0 8px 8px 0;line-height:1.7;}
+:root .quote-sheet {border-color:var(--edge-light);}
+:root .task-panel-header {box-shadow:inset 0 1px 0 var(--glass-highlight);}
+:root .overlay-heading {gap:12px;align-items:center;}
+:root .overlay-footer {padding-block:12px;}
+:root .chart-tools button,:root .kline-controls button:not([aria-pressed]),:root .replay-controls button {border-radius:8px;box-shadow:inset 0 1px 0 var(--glass-highlight);}
+:root .tool-shelf-search input {min-height:36px;}
+
+/* Keep focus explicit at the control layer, including utility-level resets. */
+:root :is(button,a,input,select,textarea,summary,[tabindex]):focus-visible {outline:2px solid var(--ui-accent);outline-offset:3px;}
+:root :is(input,select,textarea):not([type=checkbox]):not([type=radio]):not([type=range]) {box-shadow:inset 0 1px 2px #00000010;border-color:var(--glass-border);}
+:root :is(input,select,textarea):focus-visible {border-color:var(--ui-accent);}
+@media(hover:hover) and (pointer:fine) {
+  :root [data-action]:not(:disabled):hover,:root .card-entry-action:hover,:root .accessory-trigger:hover,:root .search-expand:hover,:root .drawer-mode:hover {border-color:var(--edge-light);background:var(--ui-hover);color:var(--ui-ink);}
+  :root [data-action=primary]:not(:disabled):hover {background:var(--key-face);color:var(--key-ink);border-color:var(--ui-accent);}
+  :root [data-action=danger]:not(:disabled):hover {background:var(--danger-face);color:var(--danger-ink);border-color:currentColor;}
+  :root [data-action=trade]:not(:disabled):hover {color:#fff;filter:brightness(1.08);}
+  :root [data-action=trade].bg-up-deep:not(:disabled):hover {background:#be123c;}
+  :root [data-action=trade].bg-down-deep:not(:disabled):hover {background:#047857;}
+  :root .header-action:hover,:root .theme-switch:hover,:root .command-launch:hover {background:var(--key-subtle);border-color:var(--glass-border);}
+  :root [data-action]:not(:disabled):active {box-shadow:inset 0 2px 4px #00000026;transform:scale(.98);}
+}
+@media(max-width:767px),(pointer:coarse) {
+  :root [data-action],:root .card-entry-action,:root .accessory-trigger,:root .search-expand,:root .drawer-mode,:root .quiet-action,:root .lens-trigger,:root .evidence-mode,:root .chart-modes > button,:root .compact-segments > a,:root .collection-toolbar button,:root .task-subnav a,:root .header-action,:root .theme-switch,:root .command-launch {min-height:44px;}
+  :root .header-action,:root .theme-switch,:root .command-launch {min-width:44px;}
+  :root [data-icon=true] {width:44px;min-width:44px;}
+  :root .command-row {gap:12px;padding-block:18px;}
+  :root .command-row [data-action=command] {min-width:108px;padding-inline:10px;}
+  :root .command-copy p {line-height:1.8;}
+  :root .tool-stack {padding:10px 12px;}
+  :root .tool-shelf-search input,:root .search-field input {min-height:44px;height:44px;}
+  :root .chart-tools button,:root .kline-controls button,:root .replay-controls button {min-height:44px;min-width:44px;}
+  :root .task-navigation a {min-height:44px;}
+}
+@media(prefers-reduced-motion:reduce) {
+  :root [data-action][aria-busy=true]::before {animation:none;border-color:currentColor;}
+  :root [data-action]:not(:disabled):active {transform:none;}
+}

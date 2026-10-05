@@ -60,7 +60,7 @@ export function QuoteStrip({
             (inWatchlist ? (
               <span className="text-xs text-zinc-600 dark:text-zinc-400">已在自选</span>
             ) : (
-              <button onClick={onAdd} className="rounded border border-up/50 px-1.5 py-0.5 text-[11px] text-up-ink dark:text-up hover:bg-up/10">＋ 自选</button>
+              <button data-action="secondary" onClick={onAdd}>＋ 自选</button>
             ))}
         </div>
         <div className="flex items-baseline gap-2">

@@ -41,7 +41,7 @@ export function ProductionOperations() {
     <section className="operations-status" aria-labelledby="watcher-heading">
       <h2 id="watcher-heading">节拍持久状态</h2>
       <p>自动调度取决于服务和各项开关。机器关闭或服务未启动时不会继续生产。</p>
-      {watcher.error ? <div role="alert" className="status-feedback"><p>状态读取失败，不能据此判断调度正常。</p><button className="command-action" onClick={watcher.refresh}>重新读取</button></div> : watcher.pending ? <p role="status" className="status-feedback">正在读取持久状态…</p> : <pre>{JSON.stringify(watcher.data, null, 2)}</pre>}
+      {watcher.error ? <div role="alert" className="status-feedback"><p>状态读取失败，不能据此判断调度正常。</p><button data-action="secondary" className="command-action" onClick={watcher.refresh}>重新读取</button></div> : watcher.pending ? <p role="status" className="status-feedback">正在读取持久状态…</p> : <pre>{JSON.stringify(watcher.data, null, 2)}</pre>}
     </section>
     <section className="operations-desk" aria-labelledby="production-heading">
       <header className="operations-intro">
@@ -52,7 +52,7 @@ export function ProductionOperations() {
         <div className="command-list">
           {COMMANDS.map((command) => <div key={command.label} className="command-row">
               <div className="command-copy"><strong>{command.label}</strong><p>{command.note}</p></div>
-            <button aria-label={command.label} disabled={busy !== null} onClick={() => void execute(command)} className="command-action">{busy === command.label ? "等待回执…" : "执行任务"}<span aria-hidden="true" className="ml-2">↗</span></button>
+            <button data-action="command" aria-label={command.label} aria-busy={busy === command.label} title={busy !== null ? "已有命令等待回执，请先核对结果" : command.note} disabled={busy !== null} onClick={() => void execute(command)} className="command-action">{busy === command.label ? "等待回执…" : "执行任务"}<span aria-hidden="true" className="command-glyph"><svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="m5 3 7 5-7 5z" /></svg></span></button>
           </div>)}
         </div>
         {receipt && <details open className="command-receipt"><summary>本次命令回执</summary><pre role="status">{receipt}</pre></details>}
