@@ -1,5 +1,6 @@
 "use client";
 
+import { ControlHint } from "@/components/ui/control-hint";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { Suspense, useLayoutEffect, useRef } from "react";
@@ -74,7 +75,7 @@ function NavBarInner() {
         <CommandPalette />
         <NotificationBell />
         <TaskBrowser />
-        <button
+        <ControlHint content="切换浅色或深色主题"><button
           onClick={toggleTheme}
           aria-label="切换主题"
           className="theme-switch rounded-md border border-zinc-200 px-2 py-1.5 text-sm text-zinc-600 hover:text-zinc-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
@@ -112,7 +113,7 @@ function NavBarInner() {
               <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
             </svg>
           </>
-        </button>
+        </button></ControlHint>
       </div>
     </header>
   );

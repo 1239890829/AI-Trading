@@ -14,3 +14,12 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
   usePathname: () => "/",
 }));
+
+// jsdom has no layout observer; Radix reads its real browser counterpart for placement.
+if (typeof ResizeObserver === "undefined") {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+}
