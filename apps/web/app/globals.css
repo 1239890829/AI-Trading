@@ -50,16 +50,10 @@
   --z-tooltip: 80;
 }
 
-/* ===== 浏览器原生面主题化（craft-floor：built vs assembled 的分水岭） =====
-   两个模式都要成立：亮色下用深墨字 + 淡玫底（白字压在 35% 玫底上只有 ~1.7:1，是隐形）；
-   深色下维持原来的浅字。 */
-::selection {
-  background: rgba(244, 63, 94, 0.28);
-  color: #18181b; /* zinc-900 ~11:1 */
-}
-.dark ::selection {
-  background: rgba(244, 63, 94, 0.35);
-  color: #fafafa;
+/* Native text selection uses the interaction palette in both themes. */
+::selection, .dark ::selection {
+  background: var(--ui-selected);
+  color: var(--ui-ink);
 }
 
 /* 焦点环是**非文本**对比（WCAG 1.4.11 要 3:1）：sky-400/70 在亮色底上约 1.75:1，等于没有焦点环。 */
@@ -289,29 +283,31 @@ button, a, tr, input, select, textarea {
   button, input:not([type=checkbox]):not([type=radio]):not([type=range]), select, summary, .task-navigation a { min-height: 36px; }
 }
 
-/* Graphite / ice: neutral reading planes with local optical edges. */
+/* Black silver / cyan: neutral reading planes, cool interaction, warm ambient light. */
 :root {
-  --workspace-canvas:#edf0f5; --workspace-surface:#fcfdff; --chart-surface:#fcfdff;
-  --glass-card:rgba(247,249,253,.96); --glass-overlay:rgba(250,252,255,.98);
-  --glass-border:rgba(47,65,91,.18); --glass-highlight:rgba(255,255,255,.92);
-  --glass-shadow:0 12px 32px #18263c10; --control-surface:#e8edf4;
-  --ui-accent:#215b8f; --ui-muted:#526174; --ui-ink:#202a38;
-  --ui-hover:#dce7f3; --ui-selected:#d5e7f7; --ui-line:#d5dde8;
-  --ui-radius:14px; --edge-light:rgba(50,83,118,.3); --glass-wash:#9fbce62b; --active-control:#fff;
-  --glass-rim:rgba(89,159,224,.4);
+  --workspace-canvas:#eff1f1; --workspace-surface:#fcfdfd; --chart-surface:#fcfdfd;
+  --glass-card:rgba(248,250,250,.96); --glass-overlay:rgba(251,253,253,.98);
+  --glass-border:rgba(46,66,69,.2); --glass-highlight:rgba(255,255,255,.92);
+  --glass-shadow:0 12px 32px #1c303610; --control-surface:#e8eeee;
+  --ui-accent:#086b77; --ui-muted:#526266; --ui-ink:#20292b;
+  --ui-hover:#dcebed; --ui-selected:#cee8eb; --ui-line:#d3ddde;
+  --ui-radius:14px; --edge-light:rgba(38,107,119,.32); --glass-wash:#4db9c41a;
+  --glass-warm:rgba(162,125,83,.06); --active-control:#fff;
+  --glass-rim:rgba(15,128,144,.5);
 }
 .dark {
-  --workspace-canvas:#111318; --workspace-surface:#1a1e26; --chart-surface:#161a21;
-  --glass-card:rgba(31,36,45,.96); --glass-overlay:rgba(33,39,49,.98);
-  --glass-border:rgba(183,201,227,.18); --glass-highlight:rgba(232,241,255,.12);
-  --glass-shadow:0 16px 40px #05080f59; --control-surface:#282f3a;
-  --ui-accent:#a9d5ff; --ui-muted:#b6c2d3; --ui-ink:#eff3f9;
-  --ui-hover:#303d4e; --ui-selected:#2b4259; --ui-line:#343c48;
-  --edge-light:rgba(196,216,241,.32); --glass-wash:#5c8abf20; --active-control:#3a485c;
-  --glass-rim:rgba(174,218,255,.6);
+  --workspace-canvas:#111313; --workspace-surface:#1b1e1f; --chart-surface:#171a1b;
+  --glass-card:rgba(32,36,37,.96); --glass-overlay:rgba(35,40,41,.98);
+  --glass-border:rgba(209,224,223,.2); --glass-highlight:rgba(241,247,245,.14);
+  --glass-shadow:0 16px 40px #06090959; --control-surface:#2b3031;
+  --ui-accent:#83e1eb; --ui-muted:#b9c5c5; --ui-ink:#f0f4f3;
+  --ui-hover:#2c4145; --ui-selected:#26464b; --ui-line:#394142;
+  --edge-light:rgba(189,227,228,.34); --glass-wash:rgba(73,192,205,.1);
+  --glass-warm:rgba(194,154,109,.07); --active-control:#36535a;
+  --glass-rim:rgba(155,237,242,.64);
 }
 :root .app-shell {color:var(--ui-ink);background:var(--workspace-canvas);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}
-.workspace-content {background:radial-gradient(ellipse at 90% 0%,var(--glass-wash),transparent 55%);}
+.workspace-content {background:radial-gradient(ellipse at 100% 0%,var(--glass-wash),transparent 55%),radial-gradient(ellipse at 0% 100%,var(--glass-warm),transparent 65%);}
 :root .workspace-header {flex:none;padding:0 28px;border:0;border-bottom:1px solid var(--glass-border);background:linear-gradient(110deg,var(--glass-highlight),transparent 42%),var(--glass-card);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);box-shadow:inset 0 -1px 0 var(--glass-highlight);}
 .task-header {position:relative;min-height:72px;padding:12px 0;gap:10px;border:0;border-radius:0;background:transparent;box-shadow:none;}
 .brand-wordmark {display:flex;align-items:center;gap:10px;margin-right:22px;font-size:18px;letter-spacing:-.025em;}
