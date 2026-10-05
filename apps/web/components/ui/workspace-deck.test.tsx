@@ -21,6 +21,13 @@ describe("shared workspace tray", () => {
     render(<WorkspaceDeck tools={MAINTENANCE_TOOLS} onOpen={vi.fn()} />);
     const folder = screen.getByRole("button", {name: "设置与追踪"});
     fireEvent.click(folder);
+    folder.focus();
+    fireEvent.keyDown(folder, {key: "Escape", isComposing: true});
+    expect(folder.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.keyDown(folder, {key: "Escape"});
+    expect(screen.queryByRole("region")).toBeNull();
+    expect(document.activeElement).toBe(folder);
+    fireEvent.click(folder);
     const tool = screen.getByRole("button", {name: /参数配置/});
     tool.focus();
     fireEvent.keyDown(tool, {key: "Escape"});
