@@ -222,28 +222,26 @@ export function ParamsTab() {
                       className="w-full rounded-md border border-zinc-200 bg-transparent px-2 py-1 font-mono text-[11px] outline-none dark:border-zinc-700"
                     />
                     <div className="flex gap-1.5">
-                      <button
+                      <button data-action="command"
                         disabled={busy}
                         onClick={() => void propose()}
-                        className="rounded-md bg-zinc-900 px-2 py-0.5 text-[11px] text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
                       >
                         提交变更单
                       </button>
-                      <button
+                      <button data-action="quiet"
                         onClick={() => setEditingKey(null)}
-                        className="rounded-md px-2 py-0.5 text-[11px] text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
                       >
                         取消
                       </button>
                     </div>
                   </div>
                 ) : (
-                  <button
+                  <button data-action="secondary"
                     onClick={() => {
                       setEditingKey(p.key);
                       setDraftText(p.current && p.current !== "--" ? String(p.current) : "");
                     }}
-                    className="mt-1.5 rounded-md border border-zinc-300 px-2 py-0.5 text-[11px] text-zinc-700 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                    className="mt-1.5"
                   >
                     发起变更
                   </button>
@@ -294,24 +292,23 @@ export function ParamsTab() {
                   )}
                   {c.status === "draft" && c.manual_apply_allowed === true && (
                     <div className="mt-1 flex gap-1.5">
-                      <button
+                      <button data-action="command"
                         disabled={busy}
                         onClick={() => void act(c.id, applyAgentParamChange)}
-                        className="rounded-md border border-emerald-500/40 px-2 py-0.5 text-[11px] text-emerald-700 hover:bg-emerald-500/10 disabled:opacity-50 dark:text-emerald-300"
                       >
                         确认生效
                       </button>
                     </div>
                   )}
                   {c.status === "applied" && rollbackFor !== c.id && (
-                    <button
+                    <button data-action="secondary"
                       disabled={busy}
                       onClick={() => {
                         setRollbackFor(c.id);
                         setReasonCode("manual");
                         setReasonNote("");
                       }}
-                      className="mt-1 rounded-md border border-zinc-300 px-2 py-0.5 text-[11px] text-zinc-600 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                      className="mt-1"
                     >
                       回滚
                     </button>
@@ -339,16 +336,14 @@ export function ParamsTab() {
                           placeholder="备注（可选）"
                           className="min-w-[140px] flex-1 rounded border border-zinc-300 bg-transparent px-1.5 py-0.5 text-[11px] dark:border-zinc-600"
                         />
-                        <button
+                        <button data-action="danger"
                           disabled={busy}
                           onClick={() => void doRollback(c.id)}
-                          className="rounded-md border border-red-500/40 px-2 py-0.5 text-[11px] text-red-700 hover:bg-red-500/10 disabled:opacity-50 dark:text-red-300"
                         >
                           确认回滚
                         </button>
-                        <button
+                        <button data-action="quiet"
                           onClick={() => setRollbackFor(null)}
-                          className="rounded-md px-2 py-0.5 text-[11px] text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
                         >
                           取消
                         </button>

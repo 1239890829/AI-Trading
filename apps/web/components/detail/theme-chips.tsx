@@ -88,9 +88,8 @@ export function ThemeChipsRow({ themes }: { themes: StockThemes | null }) {
         </Link>
       ))}
       {hidden > 0 && (
-        <button
+        <button data-action="quiet"
           onClick={() => setExpanded((v) => !v)}
-          className="rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-600 dark:text-zinc-400 hover:text-zinc-700 dark:border-zinc-700 dark:hover:text-zinc-200"
           title={expanded ? "收起，只显示涨跌幅最相关的题材" : "展开全部归属题材"}
         >
           {expanded ? "收起" : `＋${hidden} 个`}

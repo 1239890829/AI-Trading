@@ -114,10 +114,9 @@ export function EvolutionTab() {
                 {AGENDA_STATUS[agenda.status] ?? agenda.status}
               </span>
             )}
-            <button
+            <button data-action="command"
               disabled={busy}
               onClick={() => void runNow()}
-              className="rounded-md border border-zinc-300 px-2 py-0.5 text-[11px] text-zinc-700 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
             >
               {busy ? "运行中…" : "立即进化（降级兜底）"}
             </button>

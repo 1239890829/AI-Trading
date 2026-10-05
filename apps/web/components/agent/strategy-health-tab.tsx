@@ -107,10 +107,9 @@ export function StrategyHealthTab() {
           共 {counts?.total ?? items.length} 个策略键 · 可评估 {counts?.evaluable ?? "—"} ·
           需关注 {counts?.attention ?? "—"}
         </span>
-        <button
+        <button data-action="secondary"
           type="button"
           onClick={refresh}
-          className="rounded border border-zinc-200 px-1.5 py-0.5 text-[10px] hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
         >
           刷新
         </button>

@@ -186,10 +186,9 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
             aria-label="成交日期"
           />
           </label>
-          <button
+          <button data-action="primary"
             onClick={() => void submitTrade()}
             disabled={busy}
-            className="rounded bg-sky-700 px-2.5 py-0.5 text-xs font-medium text-white hover:bg-sky-800 disabled:opacity-50"
           >
             记账
           </button>
@@ -218,18 +217,17 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
                 {r.overridden && <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[10px] text-amber-800 dark:text-amber-300">已修正</span>}
               </div>
               <div className="shrink-0 text-[11px]">
-                <button
+                <button data-action="quiet"
                   onClick={() => {
                     setEditSymbol(editSymbol === r.symbol ? null : r.symbol);
                     setEditQty(String(r.quantity));
                     setEditCost(String(r.cost_total));
                   }}
-                  className="text-zinc-600 dark:text-zinc-400 hover:text-sky-400"
                   title="手动修正数量/总成本"
                 >
                   改
                 </button>
-                <button onClick={() => void removeRow(r)} className="ml-1.5 text-zinc-600 dark:text-zinc-400 hover:text-red-400" title="删除全部流水">
+                <button data-action="danger" onClick={() => void removeRow(r)} className="ml-1.5" title="删除全部流水">
                   删
                 </button>
               </div>
@@ -275,7 +273,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
                 <span className="text-[10px] text-zinc-600 dark:text-zinc-400">修正</span>
                 <input value={editQty} onChange={(e) => setEditQty(e.target.value)} className="w-14 rounded border border-zinc-200 bg-transparent px-1 py-0.5 font-mono dark:border-zinc-700" aria-label="修正数量" />
                 <input value={editCost} onChange={(e) => setEditCost(e.target.value)} className="w-20 rounded border border-zinc-200 bg-transparent px-1 py-0.5 font-mono dark:border-zinc-700" aria-label="修正总成本" />
-                <button onClick={() => void submitOverride(r)} disabled={busy} className="rounded bg-sky-700 px-1.5 text-white disabled:opacity-50">
+                <button data-action="primary" onClick={() => void submitOverride(r)} disabled={busy}>
                   保存
                 </button>
               </div>

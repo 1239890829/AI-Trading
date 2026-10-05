@@ -22,8 +22,12 @@ describe("maintenance command boundary", () => {
     fireEvent.click(screen.getByRole("button", {name: "执行一次节拍"}));
     expect(api.generatePicks).toHaveBeenCalledTimes(1);
     expect(api.runWatcherBeat).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", {name: "重新生成组合"}).getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByRole("button", {name: "执行一次节拍"}).getAttribute("aria-busy")).toBe("false");
+    expect(screen.queryByText(/已返回。原始回执/)).toBeNull();
     reject(new Error("响应丢失"));
     expect(await screen.findByText(/未确认完成：响应丢失/)).toBeTruthy();
+    expect(screen.getByRole("button", {name: "重新生成组合"}).getAttribute("aria-busy")).toBe("false");
     expect(api.generatePicks).toHaveBeenCalledTimes(1);
   });
 });

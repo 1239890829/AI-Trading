@@ -861,10 +861,9 @@ export function FloatingAssistant() {
             {messages.length > 0 && (
               <button
                 type="button"
-                aria-label="新建会话"
+                data-action="quiet" data-icon="true" aria-label="新建会话"
                 title="新建会话"
                 onClick={startNewSession}
-                className="rounded-md p-1.5 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                   <path d="M12 5v14M5 12h14" />
@@ -894,10 +893,9 @@ export function FloatingAssistant() {
             )}
             <button
               type="button"
-              aria-label="最小化"
+              data-action="quiet" data-icon="true" aria-label="最小化"
               title="最小化"
               onClick={minimize}
-              className="rounded-md p-1.5 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
                 <path d="M5 12h14" />
@@ -1098,9 +1096,8 @@ export function FloatingAssistant() {
                 <button
                   type="button"
                   onClick={stop}
-                  aria-label="停止生成"
+                  data-action="secondary" data-icon="true" aria-label="停止生成"
                   title="停止生成"
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-zinc-200 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
                 >
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
                     <rect x="5" y="5" width="14" height="14" rx="2" />
@@ -1111,9 +1108,8 @@ export function FloatingAssistant() {
                   type="button"
                   onClick={() => send(input)}
                   disabled={!input.trim()}
-                  aria-label="发送"
+                  data-action="primary" data-icon="true" aria-label="发送"
                   title="发送"
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-rose-600 text-white transition-colors hover:bg-rose-500 disabled:opacity-40"
                 >
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                     <path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z" />

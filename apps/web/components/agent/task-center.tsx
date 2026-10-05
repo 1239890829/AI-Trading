@@ -166,9 +166,8 @@ export function TaskCenter() {
       <div className="task-center-list flex min-h-0 min-w-0 shrink-0 flex-col gap-2">
         <div className="flex items-center justify-between">
           <span className="text-xs text-zinc-600 dark:text-zinc-400">任务列表</span>
-          <button
+          <button data-action="quiet"
             onClick={() => void load()}
-            className="rounded px-1.5 py-0.5 text-[11px] text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
           >
             刷新
           </button>
@@ -242,12 +241,11 @@ export function TaskCenter() {
           ) : (
             <div className="flex flex-wrap items-center gap-1.5">
               {types.map((t) => (
-                <button
+                <button data-action="command"
                   key={t.type}
                   disabled={creating !== null}
                   onClick={() => void submit(t.type)}
                   title={t.desc}
-                  className="rounded-md border border-zinc-300 px-2 py-1 text-[11px] text-zinc-700 transition-colors hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
                 >
                   {creating === t.type ? "提交中…" : t.label}
                   <span className="ml-1 font-mono text-[10px] text-zinc-600 dark:text-zinc-400">{t.risk}</span>
@@ -289,25 +287,23 @@ export function TaskCenter() {
                   )}
                 </div>
                 {!detail.read_only && (detail.status === "running" || detail.status === "queued") && (
-                  <button
+                  <button data-action="danger"
                     disabled={Boolean(detail.cancel_requested_at)}
                     onClick={() => void cancel(detail.id)}
-                    className="rounded-md border border-zinc-300 px-2 py-0.5 text-[11px] text-zinc-600 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    className="disabled:cursor-not-allowed"
                   >
                     {detail.cancel_requested_at ? "取消中…" : "取消任务"}
                   </button>
                 )}
                 {actionable && (
                   <div className="flex shrink-0 items-center gap-1.5">
-                    <button
+                    <button data-action="command"
                       onClick={() => void resolve(detail.id, "done")}
-                      className="rounded-md border border-emerald-300 px-2 py-0.5 text-[11px] text-emerald-700 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-900/30"
                     >
                       已处置
                     </button>
-                    <button
+                    <button data-action="quiet"
                       onClick={() => void resolve(detail.id, "dismissed")}
-                      className="rounded-md border border-zinc-300 px-2 py-0.5 text-[11px] text-zinc-600 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
                     >
                       忽略
                     </button>

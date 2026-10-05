@@ -27,7 +27,7 @@ export function AccountScopePanel({ account, date }: { account: string; date?: s
   const data = result.data;
   return <Panel title={account === "hunting" ? "机会影子（独立账户）" : account === "daily" ? "每日精选影子（独立账户）" : "手工模拟（main账户）"} className="max-h-56 shrink-0">
     <div className="space-y-2 p-3 text-xs">
-      {!!result.error && <p role="alert">读取失败，不能判断当前账户。{data ? "以下为上次读取结果。" : ""}<button onClick={result.refresh}>重试</button></p>}
+      {!!result.error && <p role="alert">读取失败，不能判断当前账户。{data ? "以下为上次读取结果。" : ""}<button data-action="secondary" onClick={result.refresh}>重试</button></p>}
       {result.pending && !data && <p role="status">读取账户结果…</p>}
       {data && (data.kind === "paper" ? <>
         <p>只计当前 main 账户；精选影子、手工记录不合并。</p>

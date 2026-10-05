@@ -272,9 +272,9 @@ function HuntingInner() {
           </span>
         )}
         <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
-          {isDiscovery && <button
+          {isDiscovery && <button data-action="secondary"
             onClick={() => void load()}
-            className="quiet-action rounded border border-zinc-300 px-2 py-0.5 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100 disabled:opacity-50"
+            className="quiet-action"
             title="立即重新拉取全部数据（通常无需手动点——页面已自动刷新）"
           >
             刷新数据
@@ -294,7 +294,7 @@ function HuntingInner() {
         <div><span className="rail-indicator" aria-hidden="true"/><strong>发现 → 核对 → 跟踪</strong><span className="rail-hint">先看机会，按需展开依据</span></div>
         <div className="flex flex-wrap items-center gap-1">
           {!isDiscovery && <Link className="quiet-action" href={patchWorkspaceUrl("/hunting", sp.toString(), {view: "discover", panel: null})}>返回当前机会</Link>}
-          <button className="accessory-trigger" aria-haspopup="dialog" onClick={event => { setOrigin(motionOrigin(event, "capsule")); router.push(patchWorkspaceUrl("/hunting", sp.toString(), {panel: "evidence", view: "discover"}), {scroll: false}); }}>展开证据台</button>
+          <button data-action="primary" className="accessory-trigger" aria-haspopup="dialog" onClick={event => { setOrigin(motionOrigin(event, "capsule")); router.push(patchWorkspaceUrl("/hunting", sp.toString(), {panel: "evidence", view: "discover"}), {scroll: false}); }}>展开证据台</button>
           <button className="accessory-trigger" aria-haspopup="dialog" onClick={event => { setOrigin(motionOrigin(event, "capsule")); router.push(patchWorkspaceUrl("/hunting", sp.toString(), {panel: "tracking", view: "discover"}), {scroll: false}); }}>参考跟踪</button>
           <Link className="quiet-action" href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "positions", account: "paper", view: null, panel: null, from: `/hunting?${sp.toString()}`})}>持仓与模拟</Link>
           <Link className="quiet-action" href={patchWorkspaceUrl("/agent", sp.toString(), {area: "research", tab: "review", view: null, panel: null, from: `/hunting?${sp.toString()}`})}>跨日复盘</Link>
