@@ -73,7 +73,7 @@ export function LimitUpTab() {
     <div className="flex h-full min-h-0 flex-col">
       <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2">
         <h2 className="text-base font-semibold">涨停池 · {tradeDate || "…"}</h2>
-        <div className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
+        <div className="query-date text-xs text-zinc-600 dark:text-zinc-400">
           <label htmlFor="zt-date">按日期查询：</label>
           <input
             id="zt-date"
@@ -149,7 +149,7 @@ export function LimitUpTab() {
             「{theme}」的梯队成员均不在 {tradeDate || "当日"} 的涨停池中
           </p>
         ) : (
-          <table className="w-full text-sm">
+          <table className="data-table w-full text-sm">
             <thead className="text-left text-xs text-zinc-600 dark:text-zinc-400">
               <tr className="border-b border-zinc-200 dark:border-zinc-800">
                 {["代码", "名称", "价格", "涨幅", "连板", "梯队", "涨停原因", "炸板", "封单额", "换手"].map((h) => (

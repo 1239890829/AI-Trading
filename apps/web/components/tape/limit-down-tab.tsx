@@ -65,7 +65,7 @@ export function LimitDownTab() {
     <div className="flex h-full min-h-0 flex-col">
       <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2">
         <h2 className="text-base font-semibold">跌停池 · {tradeDate || "…"}</h2>
-        <div className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
+        <div className="query-date text-xs text-zinc-600 dark:text-zinc-400">
           <label htmlFor="dt-date">按日期查询：</label>
           <input
             id="dt-date"
@@ -103,7 +103,7 @@ export function LimitDownTab() {
             <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">当日暂无跌停</p>
           )
         ) : (
-          <table className="w-full text-sm">
+          <table className="data-table w-full text-sm">
             <thead className="text-left text-xs text-zinc-600 dark:text-zinc-400">
               <tr className="border-b border-zinc-200 dark:border-zinc-800">
                 {["代码", "名称", "价格", "跌幅", "连续跌停", "开板", "封单额", "换手", "成交额", "行业"].map((h) => (
