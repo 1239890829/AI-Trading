@@ -1,15 +1,21 @@
 "use client";
 
-import { useExitPresence } from "@/hooks/use-exit-presence";
-import { useId, useRef, useState, type CSSProperties } from "react";
+import { gsap } from "gsap";
+import { useGSAP } from "@gsap/react";
+import { useReducedMotion, useExitPresence } from "@/hooks/use-exit-presence";
+import { useId, useRef, useState } from "react";
 import Link from "next/link";
 import { motionOrigin, type MotionOrigin } from "@/lib/surface-motion";
 import { ModalShell } from "@/components/ui/modal-shell";
 import { MARKET_LENSES, marketLensUrl, type WorkspaceTool } from "@/lib/workspace-tools";
 
+gsap.registerPlugin(useGSAP);
+
 /** A glass control dock reveals one bounded tray without changing tool identities. */
 export function WorkspaceDeck({tools, onOpen, compact = false, activeTool}: {tools: readonly WorkspaceTool[]; onOpen: (key: string, origin: MotionOrigin | null) => void; compact?: boolean; activeTool?: string | null}) {
   const id = useId();
+  const deck = useRef<HTMLDivElement>(null);
+  const reduced = useReducedMotion();
   const [expanded, setExpanded] = useState<string | null>(null);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -23,7 +29,20 @@ export function WorkspaceDeck({tools, onOpen, compact = false, activeTool}: {too
   const matches = term ? tools.filter(tool => `${tool.label} ${tool.description} ${tool.group}`.toLocaleLowerCase().includes(term)) : [];
   const groups = [...new Set(tools.map(tool => tool.group))];
   const visibleGroup = groups.includes(expanded ?? "") ? expanded : null;
-  return <div className={`workspace-deck ${compact ? "workspace-deck-compact" : ""}`} data-motion-keyboard={keyboardOpen || undefined}>
+  useGSAP(() => {
+    if (reduced || keyboardOpen || term || !visibleGroup) return;
+    const tray = deck.current?.querySelector<HTMLElement>(".tool-tray:not([hidden])");
+    if (!tray) return;
+    const timeline = gsap.timeline({defaults: {ease: "power3.out"}})
+      .fromTo(tray, {y: 5, opacity: 0.65}, {y: 0, opacity: 1, duration: 0.2})
+      .fromTo(tray.querySelectorAll(".tool-launcher"), {y: 8, opacity: 0}, {y: 0, opacity: 1, duration: 0.22, stagger: {amount: 0.06}}, 0.04);
+    const cancel = () => timeline.revert();
+    deck.current?.addEventListener("keydown", cancel);
+    window.addEventListener("resize", cancel);
+    const node = deck.current;
+    return () => { node?.removeEventListener("keydown", cancel); window.removeEventListener("resize", cancel); };
+  }, {scope: deck, dependencies: [visibleGroup, keyboardOpen, term, reduced], revertOnUpdate: true});
+  return <div ref={deck} className={`workspace-deck ${compact ? "workspace-deck-compact" : ""}`} data-motion-keyboard={keyboardOpen || undefined}>
     <div className="tool-dock">
       <span className="tool-shelf-title">工具收纳 <span className="shelf-total">{tools.length} 项</span></span>
     <div className="tool-folders" hidden={Boolean(term)}>
@@ -54,7 +73,7 @@ export function WorkspaceDeck({tools, onOpen, compact = false, activeTool}: {too
     {groups.map((group, index) => <div key={group} id={`${id}-tray-${index}`} hidden={Boolean(term) || visibleGroup !== group} role="region" aria-labelledby={`${id}-group-${index}`} className="tool-tray" onKeyDown={event => {
       if (event.key === "Escape") { event.preventDefault(); setExpanded(null); document.getElementById(`${id}-group-${index}`)?.focus(); }
     }}>
-      {visibleGroup === group && tools.filter(tool => tool.group === group).map((tool, toolIndex) => <button key={tool.key} style={{"--tool-order": toolIndex} as CSSProperties} className="tool-launcher" data-selected={activeTool === tool.key || undefined} onClick={event => onOpen(tool.key, motionOrigin(event))} aria-haspopup="dialog">
+      {visibleGroup === group && tools.filter(tool => tool.group === group).map(tool => <button key={tool.key} className="tool-launcher" data-selected={activeTool === tool.key || undefined} onClick={event => onOpen(tool.key, motionOrigin(event))} aria-haspopup="dialog">
         <span className="tool-launcher-mark" aria-hidden="true">↗</span><span className="min-w-0"><span className="tool-title">{tool.label}</span><span className="tool-description">{tool.description}</span></span>
         <svg className="tool-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10" /></svg>
       </button>)}

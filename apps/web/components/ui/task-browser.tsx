@@ -1,5 +1,6 @@
 "use client";
 
+import { ControlHint } from "@/components/ui/control-hint";
 import Link from "next/link";
 import { useState } from "react";
 import { useExitPresence } from "@/hooks/use-exit-presence";
@@ -20,7 +21,7 @@ export function TaskBrowser() {
   const current=GROUPS.find(item=>item.key===group)!;
   const presence = useExitPresence(open ? true : null);
   return <>
-    <button type="button" className="task-browser-trigger header-action" aria-label="浏览工作区" aria-haspopup="dialog" aria-expanded={open} onClick={event=>{setOrigin(motionOrigin(event,"capsule"));setOpen(true);}}><span className="morph-menu" data-open={open} aria-hidden="true"><i/><i/></span></button>
+    <ControlHint content="按用途浏览全部入口" inactive={open}><button type="button" className="task-browser-trigger header-action" aria-label="浏览工作区" aria-haspopup="dialog" aria-expanded={open} onClick={event=>{setOrigin(motionOrigin(event,"capsule"));setOpen(true);}}><span className="morph-menu" data-open={open} aria-hidden="true"><i/><i/></span></button></ControlHint>
     {presence.value && <ModalShell open={presence.active} label="浏览工作区" onClose={()=>setOpen(false)} size="md" motionOrigin={origin} header={<div><p className="workspace-kicker">所有入口，共用上下文</p><h2 className="text-lg font-semibold">浏览工作区</h2></div>} bodyClassName="overflow-y-auto p-0" footer="入口不会授予额外权限。选择工具后，回执与业务状态仍由原服务维护。">
       <div className="task-browser">
         <div className="browser-groups" role="group" aria-label="工作区分组">{GROUPS.map(item=><button key={item.key} type="button" aria-pressed={group===item.key} onClick={()=>setGroup(item.key)} onPointerEnter={event=>{if(event.pointerType==="mouse")setGroup(item.key);}}><strong>{item.label}</strong><span>{item.note}</span></button>)}</div>

@@ -89,3 +89,16 @@ it("leaves Escape to the input method during composition and can clear whitespac
   fireEvent.click(screen.getByRole("button", {name: "清空工具搜索"}));
   expect(search.value).toBe("");
 });
+
+
+it("keyboard input interrupts a pointer entrance so focused tools stay fully visible", () => {
+ const {container,unmount}=render(<WorkspaceDeck tools={MAINTENANCE_TOOLS} onOpen={vi.fn()}/>);
+ fireEvent.click(screen.getByRole("button",{name:"设置与追踪"}),{detail:1});
+ const tool=screen.getByRole("button",{name:/参数配置/});
+ tool.focus(); fireEvent.keyDown(tool,{key:"Tab"});
+ expect(document.activeElement).toBe(tool);
+ for(const row of container.querySelectorAll<HTMLElement>('.tool-launcher,.tool-tray')) {
+  expect(row.style.opacity).toBe(""); expect(row.style.transform).toBe("");
+ }
+ unmount(); fireEvent(window,new Event("resize"));
+});
