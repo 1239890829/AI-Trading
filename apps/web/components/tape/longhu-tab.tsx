@@ -123,7 +123,7 @@ export function LonghuTab() {
     <div className="flex h-full min-h-0 flex-col">
       <div className="mb-4 flex shrink-0 flex-wrap items-center justify-between gap-2">
         <h2 className="text-base font-semibold">龙虎榜 · {tradeDate || "…"}</h2>
-        <div className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
+        <div className="query-date text-xs text-zinc-600 dark:text-zinc-400">
           <label htmlFor="lh-date">按日期查询（T-1 盘后披露）：</label>
           <input
             id="lh-date"

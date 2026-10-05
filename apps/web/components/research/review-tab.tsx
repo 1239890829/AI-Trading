@@ -390,7 +390,7 @@ export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: str
                   onClick={() => toggle(r.trade_date)}
                   className="w-full px-4 py-2.5 text-left transition-colors hover:bg-zinc-100/60 dark:hover:bg-zinc-800/40"
                 >
-                  <div className="flex items-baseline gap-2 text-sm">
+                  <div className="review-record-heading text-sm">
                     <span className="font-mono text-xs text-zinc-600 dark:text-zinc-400">{r.trade_date}</span>
                     <span className="text-zinc-900 dark:text-zinc-100">{r.summary}</span>
                   </div>
@@ -420,7 +420,7 @@ export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: str
         {effect === null ? (
           <p className="px-4 py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">{effectiveness.error ? "处置统计读取失败，不能判断当前状态。" : effectiveness.pending ? "读取处置统计…" : "暂无处置统计。"}</p>
         ) : (
-          <table className="w-full text-sm">
+          <table className="data-table w-full text-sm">
             <thead>
               <tr className="border-b border-zinc-200 text-xs text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
                 <th className="px-4 py-2 text-left font-normal">类别</th>
