@@ -1,32 +1,33 @@
-# 当前交接：黑银冷青配色精修
+# 当前交接：黑银材质与空间交互精修
 
-> 总方案v9.13；累计U01–U55；设计证据product/ui-audit-20261003§29；任务状态只在W07；Jev入口ai/jev-integration.md。
+> 总方案v9.13；累计U01–U55；设计证据product/ui-audit-20261003§30；任务状态只在W07；Jev入口ai/jev-integration.md。
 
 ## 1. 现场、模式与范围
 
-用户认可深色和黑银，授权尝试新搭配。基线d70bc0063cd86963be372b05f3be82db9105ee01（PR #226），分支codex/black-silver-cyan。
+用户认可黑银并授权进一步材质与交互精修、全部采用对账。基线9ffde99ba06f36f342ac724e8d148bc47895c253（PR #227），分支codex/ui-material-depth。
 
 - **当前主门**：G2
-- **本轮主任务**：IMP-072
-- **主切片首选**：IMP-072
+- **本轮主任务**：IMP-073
+- **主切片首选**：IMP-073
 
 **U50 降级授权回执**：2026-09-24本机Codex DEGRADED_FULL_CONTROL未撤销。作者=发布操作者，不是独立Review；每个PR仍须exact-HEAD DegradedRelease、required CI与release_check。
 
-**当前门候选顺位**：本轮仅交付IMP-072；不自动领取第二任务。
+**当前门候选顺位**：本轮仅交付IMP-073；不自动领取第二任务。
 
 ## 2. U49 主动审计回执 / 作者Preflight与反证
 
-最新master已同步，工作区干净后建分支。IMP-071已完成，核唯一编号与G2依赖。选择中性炭黑/银灰阅读面、冷青交互和淡暖灰环境光；检查明暗真实对比度、半透明合成、选中与焦点、Canvas及金融颜色。当前布局、动效、数据writer与权限保持；仅呈现配置，无模型或远程语义消费者，不接TypeSafe判断。按项目Design & Taste做截图批评与修正，不重跑无关资源选型。全部验收使用隔离只读GET夹具，非生产行情。
+最新master、干净树及IMP-072依赖已核。全部既有要求按89效果/21技能组/15资源组复核实际消费者，不重复安装无用途的库。使用项目Design & Taste主规则、finesse需求/术语/视觉参考、交互/UX及用户蒸馏的消费者与退出原则；设计4/动效4/密度7，沿金融工作台而非营销展架。
+
+重点反证：工具叠层必须同轴且预留空间；玻璃阅读底面不能过透；触屏开始滚动、多指、pointercancel与窗口失焦须退出；键盘不延迟，减少动态无帧循环。GSAP复用真实工具时序；不增加全局滚动接管、WebGL、模型或后台权限。
 
 ## 3. 本轮实现与最近实测
 
-代码提交56437c64f1e0d594ed9cbfba4e95b0296eeb5c73；协调文档另提交，发布须绑定最终HEAD。
+代码8c0f708bf81639ed5da16e0bc413177a97ee8fdd；本轮后端4619 passed/83 skipped（141.22s），pyflakes通过；默认/UTC前端93文件各817（54.87s/62.32s），tsc/eslint/正式构建通过。Jev baseline后按真实入口Esc缺陷和触点生命周期改善并携previousEvaluation复评。
 
-- 修改globals.css与tailwind.config.ts，黑银阅读/冷青交互/淡暖光；原生选区从旧玫红改为同主题交互色。布局、输入、动效、金融颜色、规则与依赖保持。
-- 最终构建明暗各41入口共82次检查：暗色390、浅色1280当前可见文字0项不足，横向溢出0；4暗色主任务和命令/通知两套主题同样通过。市场390/1280同尺寸前后图，另真实Canvas宽554px=父宽。扫描不覆盖图片/渐变像素、隐藏分支或Canvas文字；实体设备性能与审美满意度未证。
-- 后端4619 passed/83 skipped（149.37s）、pyflakes通过；前端默认/UTC各93文件815 passed（64.45s/64.53s）、tsc/eslint/正式构建通过。纯呈现token/色阶配置，不是非简单逻辑切片，不调用Jev代码评分或伪装独立审核。
-- 4202最终正式预览接4204合成GET夹具，非生产；图册4208。完整日志与源码hash在本轮忽略批次。doc-health、hygiene、公共扫描通过；协调文档/selector相关守卫189 passed（2.74s）。准确HEAD发布回执继续收尾。
+82明暗入口、15边界宽度无页/按钮内容横溢，实际文字扫描0；320px真实分时286px等于容器。通知/命令/助手和工具Esc/焦点复核，叠层预留8px且柜体至下区20/24px；有缺源/部分加载帧单独标明。无实体手机GPU/FPS、OS字号或隐藏业务认证。4202接GET合成夹具4204；图册4209为本地忽略产物，均非生产行情。
+
+发布候选待精确HEAD DegradedRelease/三job CI/release_check，不把作者自检命名为独立Review。
 
 ## 4. 取舍、传播与恢复
 
-撤回本次呈现提交回到PR #226，保留现役恢复标签；恢复旧版仍须留意玻璃过透。配色不改模型、协作、架构、权限或后台owner，原制度继续。外部持续演进入口docs/ai/continuous-evolution.md保持。产物只进忽略的artifacts/runs/ui-black-silver-cyan-20261005。
+撤回本次呈现提交回PR #227，保留现役恢复标签，恢复旧版仍须留意玻璃过透。使用docs/ai/continuous-evolution.md既有准入与项目发布协议；所有临时产物只进artifacts/runs/ui-material-depth-20261005。
