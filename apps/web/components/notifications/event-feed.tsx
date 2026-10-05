@@ -46,9 +46,8 @@ const SORTS: { key: EventSort; label: string; title: string }[] = [
   { key: "time", label: "最新", title: "按发布时间倒序" },
 ];
 
-const CHIP = "rounded-full border px-2 py-0.5 text-[11px] transition-colors";
-const CHIP_ON =
-  "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900";
+const CHIP = "ui-filter rounded-full border px-2 py-0.5 text-[11px] transition-colors";
+const CHIP_ON = "ui-filter-selected";
 const CHIP_OFF =
   "border-zinc-200 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100";
 
@@ -196,6 +195,7 @@ export function EventFeed({ active, refreshToken = 0 }: { active: boolean; refre
           <button
             key={s.key}
             type="button"
+            aria-pressed={sort === s.key}
             onClick={() => setSort(s.key)}
             title={s.title}
             className={CHIP + " " + (sort === s.key ? CHIP_ON : CHIP_OFF)}

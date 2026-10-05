@@ -4,6 +4,7 @@ import { Children, useRef, useState, type MouseEvent, type ReactNode } from "rea
 import { gsap } from "gsap";
 import { Flip } from "gsap/Flip";
 import { useGSAP } from "@gsap/react";
+import { SelectionRail } from "./selection-rail";
 import { useReducedMotion } from "@/hooks/use-exit-presence";
 
 gsap.registerPlugin(Flip, useGSAP);
@@ -41,7 +42,7 @@ export function CandidateCollection({children}: {children: ReactNode}) {
   }
 
   return <div className="candidate-collection">
-    <div className="collection-toolbar"><span>按形成依据逐项核对</span><div role="group" aria-label="候选呈现方式"><button type="button" aria-pressed={view === "cards"} onClick={event => choose("cards", event)}>卡片</button><button type="button" aria-pressed={view === "list"} onClick={event => choose("list", event)}>列表</button></div></div>
+    <div className="collection-toolbar"><span>按形成依据逐项核对</span><SelectionRail activeKey={view} label="候选呈现方式"><button type="button" aria-pressed={view === "cards"} onClick={event => choose("cards", event)}>卡片</button><button type="button" aria-pressed={view === "list"} onClick={event => choose("list", event)}>列表</button></SelectionRail></div>
     <div ref={root} className="collection-items" data-view={view}>{Children.toArray(children).map(child => <div key={typeof child === "object" && child && "key" in child ? child.key : String(child)} data-collection-item={String(typeof child === "object" && child && "key" in child ? child.key : child)} style={{transformOrigin: "top left"}}>{child}</div>)}</div>
   </div>;
 }

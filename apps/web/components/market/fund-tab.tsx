@@ -528,10 +528,11 @@ export function FundTab() {
                   {turnHist.map((d) => (
                     <button
                       key={d.date}
+                      aria-pressed={selDay === d.date}
                       onClick={() => pickDay(d.date)}
-                      className={`rounded px-1.5 py-0.5 text-[10px] font-mono transition-colors ${
+                      className={`ui-filter rounded px-1.5 py-0.5 text-[10px] font-mono transition-colors ${
                         selDay === d.date
-                          ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                          ? "ui-filter-selected"
                           : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400"
                       }`}
                     >

@@ -440,3 +440,21 @@ describe("通知事实与浏览状态分离（BUG-016）", () => {
     expect(diagnosis.textContent).toContain("版本 未记录");
   });
 });
+
+it("switches notice types with arrow/home/end keys and leaves composition untouched", async () => {
+ payload=makePayload([]);render(<NotificationBell/>);await openDrawer();
+ const choices=screen.getAllByRole("tab");
+ expect(choices).toHaveLength(2);
+ choices[0].focus();
+ fireEvent.keyDown(choices[0],{key:"ArrowRight",isComposing:true});
+ expect(choices[0].getAttribute("aria-selected")).toBe("true");
+ fireEvent.keyDown(choices[0],{key:"ArrowRight"});
+ expect(choices[1].getAttribute("aria-selected")).toBe("true");
+ expect(document.activeElement).toBe(choices[1]);
+ expect(choices[1].tabIndex).toBe(0);expect(choices[0].tabIndex).toBe(-1);
+ fireEvent.keyDown(choices[1],{key:"Home"});
+ expect(choices[0].getAttribute("aria-selected")).toBe("true");
+ expect(document.activeElement).toBe(choices[0]);
+ fireEvent.keyDown(choices[0],{key:"End"});
+ expect(choices[1].getAttribute("aria-selected")).toBe("true");
+});
