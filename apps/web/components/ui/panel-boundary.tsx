@@ -97,7 +97,7 @@ export class PanelBoundary extends Component<PanelBoundaryProps, PanelBoundarySt
         <p className="w-full break-all text-[11px] leading-5 text-zinc-600 dark:text-zinc-400">
           {error.message || String(error)}
         </p>
-        <p className="text-[11px] leading-5 text-zinc-500 dark:text-zinc-500">
+        <p className="text-[11px] leading-5 text-zinc-600 dark:text-zinc-400">
           其余面板不受影响；若持续失败，多半是该接口响应结构异常（HTTP 200 但响应体不是预期格式）。
         </p>
         <button

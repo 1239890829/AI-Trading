@@ -46,7 +46,7 @@ function SectionLabel({ text, tone }: { text: string; tone: "sky" | "amber" | "t
 
 function RelayTable({ s }: { s: State<{ trade_date: string; items: RelayRankItem[] }> }) {
   if (s.status === "idle" || s.status === "loading") return <p className="py-2 text-xs text-zinc-600 dark:text-zinc-400">次日接力参考加载中…</p>;
-  if (s.status === "error") return <p className="py-2 text-xs text-amber-800 dark:text-amber-600">{s.msg}</p>;
+  if (s.status === "error") return <p className="py-2 text-xs text-amber-800 dark:text-amber-300">{s.msg}</p>;
   if (s.status === "ready" && s.data.items.length === 0)
     return <p className="py-2 text-xs text-zinc-600 dark:text-zinc-400">今日涨停池为空或暂无排序结果。</p>;
   const { trade_date, items } = s.data;
@@ -71,7 +71,7 @@ function RelayTable({ s }: { s: State<{ trade_date: string; items: RelayRankItem
 
 export function LurkTable({ s, date }: { s: State<LurkPoolPayload>; date: (ms: number) => string }) {
   if (s.status === "idle" || s.status === "loading") return <p className="py-2 text-xs text-zinc-600 dark:text-zinc-400">潜伏观察池加载中…</p>;
-  if (s.status === "error") return <p className="py-2 text-xs text-amber-800 dark:text-amber-600">{s.msg}</p>;
+  if (s.status === "error") return <p className="py-2 text-xs text-amber-800 dark:text-amber-300">{s.msg}</p>;
   const { items, as_of, stale_days, stale, stale_note } = s.data;
   return (
     <div>
