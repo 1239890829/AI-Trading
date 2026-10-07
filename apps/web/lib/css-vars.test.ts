@@ -95,6 +95,12 @@ function scan(): Scan {
     }
   }
 
+  // Radix injects these on the rendered content. Verify the installed producer,
+  // rather than treating every external-looking variable as defined.
+  const radix = readFileSync(path.join(WEB_ROOT, "node_modules/@radix-ui/react-dropdown-menu/dist/index.mjs"), "utf8");
+  for (const name of ["--radix-dropdown-menu-content-available-height", "--radix-dropdown-menu-content-transform-origin"]) {
+    if (radix.includes(`"${name}":`)) defs.add(name);
+  }
   return { files, refs: refs.sort(), refNames, defs };
 }
 

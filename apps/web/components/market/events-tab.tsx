@@ -1,5 +1,7 @@
 "use client";
 
+import { FilterMenu } from "@/components/ui/filter-menu";
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { NewsModal, type NewsModalItem } from "@/components/news-modal";
 import { useDetailModal } from "@/components/detail/detail-modal";
@@ -51,11 +53,7 @@ const SORTS: { key: EventSort; label: string; title: string }[] = [
 
 const TAGS = ["业绩", "公告", "异动", "资金", "行业"] as const;
 
-const CHIP =
-  "ui-filter rounded-full border px-2.5 py-0.5 text-xs transition-colors";
-const CHIP_ON = "ui-filter-selected";
-const CHIP_OFF =
-  "border-zinc-200 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:hover:text-zinc-100";
+
 
 export function EventsTab() {
   const [items, setItems] = useState<ImpactEvent[] | null>(null);
@@ -124,17 +122,7 @@ export function EventsTab() {
       <div className="flex h-full min-h-0 flex-col">
         {/* 第一行：排序 tag 切换 + 只看 L1 */}
         <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-zinc-100 px-3 py-2 dark:border-zinc-800/60">
-          {SORTS.map((s) => (
-            <button
-              key={s.key}
-              aria-pressed={sort === s.key}
-              onClick={() => setSort(s.key)}
-              title={s.title}
-              className={CHIP + " " + (sort === s.key ? CHIP_ON : CHIP_OFF)}
-            >
-              {s.label}
-            </button>
-          ))}
+          <FilterMenu label="排序" value={sort} options={SORTS} onChange={setSort} />
           <label className="ml-auto flex cursor-pointer items-center gap-1 text-xs text-zinc-600 dark:text-zinc-400">
             <input type="checkbox" checked={l1Only} onChange={(e) => setL1Only(e.target.checked)} />
             只看 L1
@@ -143,36 +131,8 @@ export function EventsTab() {
 
         {/* 第二行：四级分类 + 事件标签筛选 */}
         <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-zinc-100 px-3 py-2 dark:border-zinc-800/60">
-          {FOUR_FILTERS.map((f) => (
-            <button
-              key={f.key}
-              aria-pressed={four === f.key}
-              onClick={() => setFour(f.key)}
-              className={CHIP + " " + (four === f.key ? CHIP_ON : CHIP_OFF)}
-            >
-              {f.label}
-            </button>
-          ))}
-          <span className="mx-1 h-4 w-px bg-zinc-200 dark:bg-zinc-700" aria-hidden />
-          <button
-            aria-pressed={tag === "all"}
-            onClick={() => setTag("all")}
-            className={CHIP + " " + (tag === "all" ? CHIP_ON : CHIP_OFF)}
-          >
-            标签
-          </button>
-          {TAGS.map((t) => (
-            <button
-              key={t}
-              aria-pressed={tag === t}
-              onClick={() => setTag(tag === t ? "all" : t)}
-              title={`${t}类事件（规则派生）${tagCounts?.[t] != null ? ` · 当前 ${tagCounts[t]} 条` : ""}`}
-              className={CHIP + " " + (tag === t ? CHIP_ON : CHIP_OFF)}
-            >
-              {t}
-              {tagCounts?.[t] ? <span className="ml-1 opacity-60">{tagCounts[t]}</span> : null}
-            </button>
-          ))}
+          <FilterMenu label="分类" value={four} options={FOUR_FILTERS} onChange={setFour} />
+          <FilterMenu label="事件标签" value={tag} options={[{key: "all", label: "全部标签"}, ...TAGS.map(t => ({key:t, label:t, count: tagCounts?.[t], title: `${t}类事件（规则派生）`}))]} onChange={setTag} />
         </div>
 
         {error && (

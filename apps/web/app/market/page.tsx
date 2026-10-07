@@ -183,7 +183,7 @@ function MarketInner() {
                 </div>
                 <div className="mt-0.5 flex items-baseline justify-between gap-2">
                   <span className="font-mono text-base font-semibold">{q.price == null ? "未开盘" : fmt(q.price)}</span>
-                  <span className="shrink-0 font-mono text-[10px] text-zinc-600 dark:text-zinc-400" title="成交额">
+                  <span className="shrink-0 font-mono text-xs text-zinc-600 dark:text-zinc-400" title="成交额">
                     额 {fmtAmount(q.amount)}
                   </span>
                 </div>
@@ -234,7 +234,7 @@ function MarketInner() {
 
           {/* 情绪合并卡：左相位/温度/指标，右近 10 日序列柱状（紧凑高度）；未就绪时单行骨架 */}
           {sent ? (
-            <div className="ui-card flex shrink-0 flex-wrap items-center gap-x-5 gap-y-1.5 rounded-lg border border-zinc-200 px-3.5 py-1.5 dark:border-zinc-800">
+            <div className="market-sentiment-strip ui-card flex shrink-0 flex-wrap items-center gap-x-5 gap-y-1.5 rounded-lg border border-zinc-200 px-3.5 py-1.5 dark:border-zinc-800">
               <div className="flex min-w-0 flex-wrap items-center gap-x-3.5 gap-y-1">
                 <span className={`rounded-md border px-2 py-0.5 text-xs font-semibold ${PHASE_STYLE[sent.phase] ?? ""}`}>
                   {sent.phase}
@@ -246,12 +246,14 @@ function MarketInner() {
                 <span className="hidden text-xs text-zinc-600 dark:text-zinc-400 xl:inline">
                   {sent.indicators.slice(0, 6).map((i) => `${i.name} ${i.value ?? "--"}`).join(" · ")}
                 </span>
-                <span
-                  className="max-w-[260px] truncate text-xs text-zinc-600 dark:text-zinc-400"
-                  title={`${sent.reasons.join("；")}｜误判：${sent.misjudge_caveats.join("；")}｜切换：${sent.switch_conditions}`}
-                >
-                  判定依据：{sent.reasons[0]}…
-                </span>
+                <details className="sentiment-basis text-xs">
+                  <summary>判定依据与失效条件</summary>
+                  <div>
+                    <p><strong>依据</strong> {sent.reasons.join("；") || "未提供"}</p>
+                    <p><strong>误判风险</strong> {sent.misjudge_caveats.join("；") || "未提供"}</p>
+                    <p><strong>切换条件</strong> {sent.switch_conditions || "未提供"}</p>
+                  </div>
+                </details>
               </div>
               {sentHist && sentHist.items.length > 0 && (
                 <div
@@ -302,7 +304,7 @@ function MarketInner() {
                 >
                   {triAmount(totalAmount, amountFreshness?.state)}
                 </p>
-                <p className="mt-2 text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">
+                <p className="mt-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
                   沪深京两市合计（含北交所）。实时对比/全日估算/分钟资金流见「资金视角」。
                 </p>
               </div>
@@ -325,12 +327,12 @@ function MarketInner() {
                     {pool.map((r) => (
                       <tr
                         key={r.symbol}
-                        onClick={() => openSymbolDetail({ symbol: r.symbol })}
+                        onClick={event => { event.currentTarget.querySelector("button")?.focus(); openSymbolDetail({ symbol: r.symbol }); }}
                         title="查看个股详情"
                         className="cursor-pointer border-b border-zinc-100 last:border-0 transition-colors hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900/60"
                       >
                         <td className="px-3 py-1.5 font-mono text-xs text-zinc-600 dark:text-zinc-400">{r.symbol}</td>
-                        <td className="px-2 py-1.5">{r.name}</td>
+                        <td className="px-2 py-1.5"><button type="button" className="market-stock-open" aria-label={`查看 ${r.name ?? r.symbol} 详情`} onClick={event => { event.stopPropagation(); openSymbolDetail({symbol: r.symbol}); }}>{r.name ?? r.symbol}</button></td>
                         <td className="px-2 py-1.5 text-right font-mono">{fmt(r.price)}</td>
                         <td className={`px-2 py-1.5 text-right font-mono ${pctColor(r.change_pct)}`}>{pctText(r.change_pct)}</td>
                         <td className="px-3 py-1.5 text-right text-xs text-zinc-600 dark:text-zinc-400">{r.boards_stat ?? ""}</td>

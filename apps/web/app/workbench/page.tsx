@@ -1,5 +1,9 @@
 "use client";
 
+import { IconButton } from "@/components/ui/icon-button";
+import { HugeiconsIcon } from "@hugeicons/react";
+import Cancel01Icon from "@hugeicons/core-free-icons/Cancel01Icon";
+
 import Link from "next/link";
 import { AccountScopePanel } from "@/components/detail/account-scope-panel";
 import { patchWorkspaceUrl } from "@/lib/task-navigation";
@@ -466,7 +470,7 @@ function WorkbenchInner() {
           <button
             onClick={() => router.push("/market?tab=fund")}
             title="查看资金流向详情：实时对比 / 全日估算 / 分钟资金流 / 历史回看"
-            className="flex cursor-pointer items-center gap-1.5 rounded hover:text-zinc-900 dark:hover:text-zinc-100"
+            className="turnover-link flex cursor-pointer items-center gap-1.5 rounded hover:text-zinc-900 dark:hover:text-zinc-100"
           >
             两市成交额合计：<span title={amountFreshness?.reason ?? undefined} className="font-mono tabular-nums text-zinc-700 dark:text-zinc-200">{triAmount(totalAmount, amountFreshness?.state)}</span>
             {turnDiff != null && (
@@ -814,7 +818,7 @@ function WorkbenchInner() {
                         </button>
                       )}
                       {!pick && !top && (
-                        <button
+                        <IconButton
                           onClick={(e) => {
                             e.stopPropagation();
                             void remove(q.symbol);
@@ -823,10 +827,8 @@ function WorkbenchInner() {
                           title="移出自选"
                           aria-label={`移出自选 ${q.symbol}`}
                         >
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-                            <path d="M18 6 6 18M6 6l12 12" />
-                          </svg>
-                        </button>
+                          <HugeiconsIcon icon={Cancel01Icon} size={14} aria-hidden="true" />
+                        </IconButton>
                       )}
                     </td>
                   </tr>

@@ -1,5 +1,9 @@
 "use client";
 
+import { IconButton, CloseButton } from "@/components/ui/icon-button";
+import { HugeiconsIcon } from "@hugeicons/react";
+import Notification03Icon from "@hugeicons/core-free-icons/Notification03Icon";
+
 import { SelectionRail } from "@/components/ui/selection-rail";
 
 import { useExitPresence } from "@/hooks/use-exit-presence";
@@ -442,11 +446,11 @@ function NotificationRow({
           <span className="min-w-0 flex-1 truncate text-xs font-medium text-zinc-900 dark:text-zinc-50" title={item.title}>
             {item.title}
           </span>
-          <span className="shrink-0 font-mono text-[10px] text-zinc-600 dark:text-zinc-400">{timeText(item.ts)}</span>
+          <span className="shrink-0 font-mono text-xs text-zinc-600 dark:text-zinc-400">{timeText(item.ts)}</span>
         </div>
-        <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">{item.body}</p>
+        <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">{item.body}</p>
       </button>
-      <p className="mt-1 text-[10px] leading-relaxed text-zinc-500 dark:text-zinc-400" data-testid="notification-facts">
+      <p className="mt-1 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400" data-testid="notification-facts">
         来源：{item.source ?? "历史事件，来源未标注"} · 触发：{item.ts ?? "时间未知"} · {item.validity ?? "条件与时效未记录，须重新核验"}
         <br />站内记录可见；<ChannelStatus item={item} />。未读仅表示站内尚未点开。
       </p>
@@ -638,26 +642,23 @@ export function NotificationBell() {
 
   return (
     <>
-      <button
+      <IconButton
         onClick={() => setOpen(true)}
         aria-label={pollError ? `打开通知中心（上次读取的未读数 ${unread}）` : unread > 0 ? `打开通知中心（${unread} 条未读）` : "打开通知中心"}
         title={pollError ? "通知刷新失败：未读数依据上次读取结果" : "通知中心：个股机会、持仓风险与资讯浏览；未读仅指站内浏览状态"}
-        className="relative rounded-md border border-zinc-200 p-2 text-sm text-zinc-600 transition-colors hover:text-zinc-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
+        className="header-action notification-trigger"
       >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
-          <path d="M13.73 21a2 2 0 0 1-3.46 0" />
-        </svg>
+        <HugeiconsIcon icon={Notification03Icon} size={18} strokeWidth={1.6} aria-hidden="true" />
         {unread > 0 && (
           <span
             data-testid="notification-badge"
-            className="absolute -right-1.5 -top-1.5 min-w-[16px] overflow-hidden rounded-full bg-up-deep px-1 text-center text-[10px] font-semibold leading-4 text-white"
+            className="notification-badge"
             aria-label={`${unread} 条未读通知`}
           >
             <span key={Math.min(unread, 100)} className="notification-count" aria-hidden="true">{unread > 99 ? "99+" : unread}</span>
           </span>
         )}
-      </button>
+      </IconButton>
 
       {presence.value &&
         createPortal(
@@ -699,7 +700,7 @@ export function NotificationBell() {
                       </button>
                     </>
                   )}
-                  <button
+                  <IconButton
                     onClick={() => (mode === "opportunity" ? void load() : setEventsRefresh((n) => n + 1))}
                     className="rounded p-1 text-zinc-600 dark:text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
                     aria-label="刷新通知"
@@ -708,16 +709,8 @@ export function NotificationBell() {
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                       <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" />
                     </svg>
-                  </button>
-                  <button
-                    onClick={() => setOpen(false)}
-                    className="rounded p-1 text-zinc-600 dark:text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-                    data-overlay-autofocus aria-label="关闭"
-                  >
-                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                      <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-                    </svg>
-                  </button>
+                  </IconButton>
+                  <CloseButton onClose={() => setOpen(false)} />
                 </div>
               </div>
 

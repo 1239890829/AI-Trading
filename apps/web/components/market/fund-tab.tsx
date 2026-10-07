@@ -1,5 +1,7 @@
 "use client";
 
+import { FilterMenu } from "@/components/ui/filter-menu";
+
 import { useCallback, useMemo, useState } from "react";
 import { Panel } from "@/components/panel";
 import { Skeleton } from "@/components/ui/loading";
@@ -524,22 +526,7 @@ export function FundTab() {
           <div className="flex h-full min-h-0 flex-col px-4 py-2.5">
             {turnHist.length > 0 ? (
               <>
-                <div className="flex flex-wrap gap-1">
-                  {turnHist.map((d) => (
-                    <button
-                      key={d.date}
-                      aria-pressed={selDay === d.date}
-                      onClick={() => pickDay(d.date)}
-                      className={`ui-filter rounded px-1.5 py-0.5 text-[10px] font-mono transition-colors ${
-                        selDay === d.date
-                          ? "ui-filter-selected"
-                          : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400"
-                      }`}
-                    >
-                      {d.date.slice(5)}
-                    </button>
-                  ))}
-                </div>
+                <div className="history-date-filter"><FilterMenu label="对比日期" value={selDay ?? ""} options={turnHist.map(day => ({key: day.date, label: day.date}))} onChange={pickDay} /></div>
                 {selDay && !!dayResource.error && <p role="alert">{selDay} 成交额读取失败。<button onClick={dayResource.refresh}>重试</button></p>}
                 {selDay && dayResource.pending && <p role="status">正在读取 {selDay}…</p>}
                 {selDay && dayCompare ? (

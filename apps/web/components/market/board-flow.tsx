@@ -1,5 +1,7 @@
 "use client";
 
+import { FilterMenu } from "@/components/ui/filter-menu";
+
 import { useExitPresence } from "@/hooks/use-exit-presence";
 import { ModalShell } from "@/components/ui/modal-shell";
 import { useResource } from "@/hooks/use-polling-fetch";
@@ -329,21 +331,9 @@ export function BoardFlowPanel() {
         {!!resource.error && <p role="alert" className="text-xs text-amber-800 dark:text-amber-300">板块资金读取失败。{payload ? "以下为同范围上次结果。" : ""}<button onClick={resource.refresh}>重试读取</button></p>}
         {/* 控制行：维度 / 区间 / 排序 / 筛选 */}
         <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5">
-          <div className="flow-control-group">
-            {KIND_CHIPS.map((c) => (
-              <button key={c.key} aria-pressed={kind === c.key} onClick={() => setKind(c.key)} className={`${CHIP} ${kind === c.key ? CHIP_ON : CHIP_OFF}`}>{c.label}</button>
-            ))}
-          </div>
-          <div className="flow-control-group">
-            {RANGE_CHIPS.map((c) => (
-              <button key={c.key} aria-pressed={range === c.key} onClick={() => setRange(c.key)} className={`${CHIP} ${range === c.key ? CHIP_ON : CHIP_OFF}`}>{c.label}</button>
-            ))}
-          </div>
-          <div className="flow-control-group" title="点击切换排序维度（均为降序，判不出殿后）">
-            {SORT_CHIPS.map((c) => (
-              <button key={c.key} aria-pressed={sortKey === c.key} onClick={() => setSortKey(c.key)} title={c.title} className={`${CHIP} ${sortKey === c.key ? CHIP_ON : CHIP_OFF}`}>{c.label}</button>
-            ))}
-          </div>
+          <FilterMenu label="板块" value={kind} options={KIND_CHIPS} onChange={setKind} />
+          <FilterMenu label="区间" value={range} options={RANGE_CHIPS} onChange={setRange} />
+          <FilterMenu label="排序" value={sortKey} options={SORT_CHIPS} onChange={setSortKey} />
           <div className="flow-control-group" title="多选叠加筛选">
             <button aria-pressed={filters.has("inflow")} onClick={() => toggleFilter("inflow")} className={`${CHIP} ${filters.has("inflow") ? CHIP_ON : CHIP_OFF}`}>净流入&gt;0</button>
             <button aria-pressed={filters.has("ratio5")} onClick={() => toggleFilter("ratio5")} className={`${CHIP} ${filters.has("ratio5") ? CHIP_ON : CHIP_OFF}`}>主力占比&gt;5%</button>

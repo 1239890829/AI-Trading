@@ -363,3 +363,25 @@ it("折叠搜索就地展开并聚焦；收回后不接受迟到响应", async (
     expect(screen.queryByRole("textbox")).toBeNull();
   } finally { vi.useRealTimers(); }
 });
+
+it("方向键浏览多条搜索结果，打开详情前保留稳定回焦位置", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.mocked(searchSymbols).mockResolvedValue([item("600127", "金健米业"), item("600825", "新华传媒")]);
+    render(<SearchBox />);
+    const input = typeQuery("600");
+    input.focus();
+    await act(async () => { vi.advanceTimersByTime(250); });
+    fireEvent.keyDown(input, {key: "ArrowDown"});
+    const first = screen.getByRole("button", {name: /金健米业600127/});
+    const second = screen.getByRole("button", {name: /新华传媒600825/});
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(first, {key: "ArrowDown"});
+    expect(document.activeElement).toBe(second);
+    fireEvent.keyDown(second, {key: "ArrowUp"});
+    expect(document.activeElement).toBe(first);
+    fireEvent.click(second);
+    expect(document.activeElement).toBe(input);
+    expect(screen.queryByRole("region", {name: "证券搜索结果"})).toBeNull();
+  } finally { vi.useRealTimers(); }
+});

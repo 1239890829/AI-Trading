@@ -1,5 +1,10 @@
 "use client";
 
+import { HugeiconsIcon } from "@hugeicons/react";
+import Search01Icon from "@hugeicons/core-free-icons/Search01Icon";
+import Cancel01Icon from "@hugeicons/core-free-icons/Cancel01Icon";
+import { CloseButton } from "@/components/ui/icon-button";
+
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { ApiError, addToWatchlist, searchSymbols } from "@/lib/api";
 import { notifyWatchlistChanged } from "@/lib/watchlist-sync";
@@ -126,6 +131,8 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
   }, [dismiss]);
 
   function go(item: SymbolSearchItem) {
+    // The result disappears. Give the detail overlay a stable return target.
+    inputRef.current?.focus();
     setOpen(false);
     setQ("");
     resetTransient(); // 弹窗后清空，飞行中的旧请求若返回不得再弹开面板
@@ -164,6 +171,12 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (composingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) return; // IME 组合中：Enter=选字上屏、Escape=取消组合，不是搜索指令
+    if ((e.key === "ArrowDown" || e.key === "ArrowUp") && open && results.length) {
+      e.preventDefault();
+      const choices = boxRef.current?.querySelectorAll<HTMLButtonElement>(".search-result-open");
+      choices?.[e.key === "ArrowDown" ? 0 : choices.length - 1]?.focus();
+      return;
+    }
     if (e.key === "Enter") {
       if (results.length > 0) {
         go(results[0]);
@@ -199,7 +212,7 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
       {collapsible && <button ref={triggerRef} type="button" className="search-expand" aria-label={expanded ? "收起证券搜索" : "展开证券搜索"} aria-expanded={expanded} onClick={() => {
         if(expanded){dismiss();setExpanded(false);triggerRef.current?.focus();}
         else setExpanded(true);
-      }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">{expanded ? <path d="m7 7 10 10M17 7 7 17"/> : <><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></>}</svg><span>{expanded ? "收起" : "搜索证券"}</span></button>}
+      }}><HugeiconsIcon icon={expanded ? Cancel01Icon : Search01Icon} size={18} strokeWidth={1.6} aria-hidden="true" /><span>{expanded ? "收起" : "搜索证券"}</span>{!expanded && <span className="search-prompt">代码 / 名称</span>}</button>}
       <div className="search-input-wrap relative" hidden={!expanded}>
       <input
         ref={inputRef}
@@ -253,7 +266,7 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
         <section id={panelId} className="ui-glass-overlay search-popover" aria-label="证券搜索结果">
           <header className="search-popover-heading">
             <div><strong>证券搜索</strong><span>匹配代码或名称</span></div>
-            <button type="button" className="quiet-action" onClick={closeAndFocus} aria-label="关闭搜索结果">关闭</button>
+            <CloseButton onClose={closeAndFocus} label="关闭搜索结果" autoFocus={false} />
           </header>
         <ul className="search-result-list">
           {addNote && <li role="status" className="px-3 py-2 text-xs">{addNote}</li>}
@@ -276,7 +289,14 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
           {results.map((it) => (
             <li key={`${it.source}-${it.symbol}`}>
               <div className="search-result-row">
-                <button type="button" onClick={() => go(it)} className="search-result-open">
+                <button type="button" onClick={() => go(it)} className="search-result-open" onKeyDown={event => {
+                  if (event.nativeEvent.isComposing) return;
+                  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+                  event.preventDefault();
+                  const choices = [...(boxRef.current?.querySelectorAll<HTMLButtonElement>(".search-result-open") ?? [])];
+                  const next = choices.indexOf(event.currentTarget) + (event.key === "ArrowDown" ? 1 : -1);
+                  (choices[next] ?? inputRef.current)?.focus();
+                }}>
                   <span className="search-result-name">{it.name ?? it.symbol}</span>
                   <span className="search-result-code">{it.symbol}<span>{it.market}</span></span>
                 </button>

@@ -1,5 +1,9 @@
 "use client";
 
+import { IconButton } from "@/components/ui/icon-button";
+import { HugeiconsIcon } from "@hugeicons/react";
+import Sun03Icon from "@hugeicons/core-free-icons/Sun03Icon";
+import Moon02Icon from "@hugeicons/core-free-icons/Moon02Icon";
 import { ControlHint } from "@/components/ui/control-hint";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
@@ -23,8 +27,7 @@ function NavBarInner() {
       if (!marker.current) return;
       marker.current.style.opacity = selected ? "1" : "0";
       if (selected) {
-        marker.current.style.width = `${selected.offsetWidth}px`;
-        marker.current.style.transform = `translateX(${selected.offsetLeft}px)`;
+        marker.current.style.transform = `translateX(${selected.offsetLeft}px) scaleX(${selected.offsetWidth})`;
       }
     }
     measure();
@@ -70,50 +73,19 @@ function NavBarInner() {
             );
           })}
         </nav>
-        <div className="flex-1" />
+        <div className="header-spacer flex-1" />
         <SearchBox collapsible />
         <CommandPalette />
         <NotificationBell />
         <TaskBrowser />
-        <ControlHint content="切换浅色或深色主题"><button
+        <ControlHint content="切换浅色或深色主题"><IconButton
           onClick={toggleTheme}
           aria-label="切换主题"
           className="theme-switch rounded-md border border-zinc-200 px-2 py-1.5 text-sm text-zinc-600 hover:text-zinc-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
         >
-          <>
-            {/* 深色态（显示太阳=可切浅色） */}
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden
-              className="hidden dark:block"
-            >
-              <circle cx="12" cy="12" r="4" />
-              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
-            </svg>
-            {/* 浅色态（显示月亮=可切深色） */}
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden
-              className="block dark:hidden"
-            >
-              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-            </svg>
-          </>
-        </button></ControlHint>
+          <HugeiconsIcon icon={Sun03Icon} size={18} strokeWidth={1.6} className="hidden dark:block" aria-hidden="true" />
+          <HugeiconsIcon icon={Moon02Icon} size={18} strokeWidth={1.6} className="block dark:hidden" aria-hidden="true" />
+        </IconButton></ControlHint>
       </div>
     </header>
   );
