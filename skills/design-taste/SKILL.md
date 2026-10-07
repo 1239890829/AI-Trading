@@ -1,6 +1,6 @@
 ---
 name: design-taste
-description: Elite frontend design taste for building, reviewing, and polishing web interfaces. Use whenever the user wants to design, redesign, shape, critique, audit, polish, or improve any UI — landing pages, portfolios, dashboards, product UI, components, forms, onboarding, empty states — or asks to make something look better / premium / modern, fix the styling, add or fix animations, or make a design feel less generic ("AI slop"). Covers typography, color, spacing, layout, visual hierarchy, motion, micro-interactions, component states, accessibility, responsive behavior, UX copy, and anti-pattern detection. This is the single authoritative visual-design skill for this project — the incumbent `impeccable` and `taste-skill` sources are folded into it (see Provenance & boundaries).
+description: Elite frontend design taste for building, reviewing, and polishing web interfaces. Use whenever the user wants to design, redesign, shape, critique, audit, polish, or improve any UI — landing pages, portfolios, dashboards, product UI, components, forms, onboarding, empty states — or asks to make something look better / premium / modern, fix the styling, add or fix animations, or make a design feel less generic ("AI slop"). Covers typography, color, spacing, layout, visual hierarchy, motion, micro-interactions, component states, accessibility, responsive behavior, UX copy, and anti-pattern detection. This is the project craft adapter. Apply explicitly requested upstream design skills independently with their complete applicable workflows; do not substitute this synthesis for them.
 ---
 
 # Design & Taste
@@ -11,7 +11,7 @@ This skill is a synthesis of three design skills — Emil Kowalski's *design-eng
 
 ## Provenance & boundaries (read once, 2026-09-11 归并)
 
-**This is the only visual-design skill this project uses.** The three upstream sources were merged here because running them side by side produced overlapping, occasionally contradictory rules and wasted context on duplicate reading.
+**2026-10-07 correction:** this is the project craft adapter, not the only visual skill. The user explicitly requires each upstream skill's original responsibilities and applicable workflow to remain intact. Record its distinct inputs, outputs, checks and any justified inapplicability. Historical excerpts below do not prove full upstream coverage. See `docs/product/ui-skill-redesign-20261007.md` for this redesign's order and evidence contract.
 
 - **Source lineage** — Emil Kowalski *design-engineering* (motion/component craft → `reference/motion.md`, `reference/interaction-states.md`) · *impeccable* (design rules + anti-slop bans → core rules + `reference/anti-slop.md` Part 1) · *taste-skill* (brief reading, intensity dials, design systems → `reference/design-systems.md`, `reference/pre-flight.md` matrix).
 - **Project-local `skills/impeccable/` was an incomplete v4.1.2 copy** — it referenced 20+ `reference/*.md` files and a `scripts/` directory that were never checked in, so it could not actually run. Its only unique file (`reference-animate.md`) carried two things the synthesis lacked: the **motion thesis** method and the **300–800ms focal-entrance exception**. Those are now merged into `reference/motion.md` (§0 and §4), and the directory is archived to `skills/_archived/impeccable-v4.1.2-incomplete/`.
