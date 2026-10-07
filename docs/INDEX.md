@@ -346,4 +346,3 @@ IMP-050当前实现、B/C同任务比较及实屏边界见[产品闭环§11](pro
 IMP-054动效用途/静态弃权、反向退出、焦点/IO即时性、CSS+JS减弱和有限性能对照见[产品闭环§12](product/product-closure-design.md#12-imp-054-状态动效与空间连续性2026-09-30)，逐消费者见[细功能审计§19](product/feature-closure-audit.md#19-imp-054-动效消费者逐项验收2026-09-30)。状态与发布归[W07/IMP-054](stages/w07-simplification.md#imp-054)。
 
 2026-10-01 IMP-053当前工程合同：[猎场§9](product/hunting-decision-design.md#9-imp-053-首个执行场景与效果证据2026-10-01) → [产品§13](product/product-closure-design.md#13-imp-053-独立机会影子结果2026-10-01) / [细功能§20](product/feature-closure-audit.md#20-imp-053-逐动作与失败分母2026-10-01)。独立hunting_shadow、原策略买点与原子成交/拒绝/未成交/退出分母；默认关闭，工程状态只归W03。未绑定实验不制造策略晋级或RSH-031效果结论。
-
