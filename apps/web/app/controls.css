@@ -1,17 +1,17 @@
 /* Product register: graphite reading planes, compact visible faces, continuous selection.
    The 44px mobile hit area is independent of the 32px button face. */
 :root {
-  --key-face:#dbe5f0; --key-ink:#25384e; --key-border:#9baec3;
-  --key-subtle:#edf1f6; --command-border:#8a9daf;
+  --key-face:#e7dfd3; --key-ink:#382e23; --key-border:#b6a58d;
+  --key-subtle:#eae6df; --command-border:#9d907e;
   --danger-ink:#a3213b; --danger-face:#fff0f3;
   --action-inset:0px; --control-height:32px;
 }
 .dark {
-  --key-face:#36485b; --key-ink:#edf3fa; --key-border:#6c849e;
-  --key-subtle:#27313b; --command-border:#738497;
+  --key-face:#d8d0c2; --key-ink:#29261f; --key-border:#e3d8c6;
+  --key-subtle:#302e29; --command-border:#8c806d;
   --danger-ink:#ffb4c2; --danger-face:#39242c;
 }
-:root [data-action],:root .card-entry-action,:root .accessory-trigger,:root .search-expand,:root .drawer-mode {
+:root [data-action],:root .card-entry-action,:root .accessory-trigger,:root .drawer-mode {
   position:relative;isolation:isolate;display:inline-flex;align-items:center;justify-content:center;gap:6px;
   flex-shrink:0;max-width:100%;min-height:var(--control-height);padding:5px 10px;
   border:1px solid transparent;border-radius:7px;background:transparent;color:var(--ui-ink);box-shadow:none;
@@ -19,7 +19,7 @@
   --action-face:var(--key-subtle);--action-edge:var(--glass-border);
   transition:transform 160ms var(--ease-out),color 160ms ease-out;
 }
-:root [data-action]::after,:root .card-entry-action::after,:root .accessory-trigger::after,:root .search-expand::after,:root .drawer-mode::after {
+:root [data-action]::after,:root .card-entry-action::after,:root .accessory-trigger::after,:root .drawer-mode::after {
   content:"";position:absolute;inset:var(--action-inset) 0;z-index:-1;pointer-events:none;
   border:1px solid var(--action-edge);border-radius:7px;background:var(--action-face);
   background-image:linear-gradient(110deg,transparent 35%,var(--glass-highlight) 49%,transparent 62%);background-size:250% 100%;background-position:100% 0;
@@ -69,8 +69,6 @@
 :root .compact-segments>a[aria-current=page],:root .task-subnav a[aria-current=page] {background:transparent;box-shadow:none;border-bottom-color:var(--ui-accent);color:var(--ui-ink);}
 :root .navigation-marker {top:auto;bottom:0;height:2px;border:0;border-radius:0;background:var(--ui-accent);box-shadow:none;}
 :root .task-navigation a {min-height:38px;padding:7px 13px;border-radius:0;}
-:root .header-action,:root .theme-switch,:root .command-launch,:root .ui-close {border:0;border-radius:7px;}
-:root .ui-close {background:transparent;box-shadow:none;}
 :root .card-entry-dock {gap:6px;padding-top:14px;margin-top:20px;}
 :root .card-entry-action {gap:8px;padding-inline:10px;}
 :root .card-entry-action>svg {transition:transform 180ms var(--ease-out);}
@@ -108,8 +106,8 @@
 :root :is(input,select,textarea):not([type=checkbox]):not([type=radio]):not([type=range]) {box-shadow:none;border-color:var(--glass-border);}
 :root :is(input,select,textarea):focus-visible {border-color:var(--ui-accent);}
 @media(hover:hover) and (pointer:fine) {
- :root [data-action]:not(:disabled):hover,:root .card-entry-action:hover,:root .accessory-trigger:hover,:root .search-expand:hover,:root .drawer-mode:hover {--action-edge:var(--edge-light);--action-face:var(--ui-hover);color:var(--ui-ink);}
- :root [data-action]:not(:disabled):hover::after,:root .card-entry-action:hover::after,:root .accessory-trigger:hover::after,:root .search-expand:hover::after,:root .drawer-mode:hover::after {background-position:0 0;}
+ :root [data-action]:not(:disabled):hover,:root .card-entry-action:hover,:root .accessory-trigger:hover,:root .drawer-mode:hover {--action-edge:var(--edge-light);--action-face:var(--ui-hover);color:var(--ui-ink);}
+ :root [data-action]:not(:disabled):hover::after,:root .card-entry-action:hover::after,:root .accessory-trigger:hover::after,:root .drawer-mode:hover::after {background-position:0 0;}
  :root [data-action=primary]:not(:disabled):hover {--action-face:var(--key-face);--action-edge:var(--ui-accent);color:var(--key-ink);}
  :root [data-action=danger]:not(:disabled):hover {--action-face:var(--danger-face);color:var(--danger-ink);}
  :root [data-action=trade].bg-up-deep:not(:disabled):hover {--action-face:#be123c;color:#fff;}
@@ -119,7 +117,6 @@
  :root .tool-launcher:hover .tool-open {transform:translate(2px,-2px);opacity:1;}
  :root .selection-rail button:hover {background:transparent;color:var(--ui-accent);}
  :root .tool-stack:hover {background:transparent;color:var(--ui-accent);}
- :root .header-action:hover,:root .theme-switch:hover,:root .command-launch:hover {background:var(--ui-hover);}
 }
 @media(max-width:1023px) {
  :root .tool-dock {gap:10px;flex-wrap:wrap;}
@@ -128,15 +125,15 @@
 }
 @media(max-width:767px),(pointer:coarse) {
  :root {--control-height:44px;--action-inset:5px;}
- :root .watch-groups button[aria-pressed],:root .quiet-action,:root .lens-trigger,:root .evidence-mode,:root .selection-rail>button,:root .chart-modes>button,:root .compact-segments>a,:root .collection-toolbar button,:root .task-subnav a,:root .header-action,:root .theme-switch,:root .command-launch {min-height:44px;}
- :root [data-icon=true],:root .header-action,:root .theme-switch,:root .command-launch {min-width:44px;width:44px;}
+ :root .watch-groups button[aria-pressed],:root .quiet-action,:root .lens-trigger,:root .evidence-mode,:root .selection-rail>button,:root .chart-modes>button,:root .compact-segments>a,:root .collection-toolbar button,:root .task-subnav a {min-height:44px;}
+ :root [data-icon=true] {min-width:44px;width:44px;}
  :root .command-row {gap:10px;padding-block:16px;}
  :root .command-row [data-action=command] {min-width:0;padding-inline:10px;}
  :root .tool-folders {flex-direction:row;justify-content:space-between;gap:2px;}
  :root .tool-stack {min-height:44px;padding:6px 5px;gap:5px;font-size:11px;}
  :root .tool-stack-heading {gap:4px;}
  :root .folder-affordance {width:10px;height:10px;}
- :root .tool-shelf-search input,:root .search-field input {min-height:44px;height:44px;}
+ :root .tool-shelf-search input {min-height:44px;height:44px;}
  :root .chart-tools button,:root .kline-controls button,:root .replay-controls button {min-height:44px;min-width:44px;}
  :root .task-navigation a {min-height:44px;padding-inline:8px;}
  :root .workspace-deck {padding:10px 12px;}
@@ -148,12 +145,137 @@
 @media(prefers-reduced-motion:reduce) {
  .tool-tray[data-exiting=true] {animation:none;}
  .selection-line,:root .card-entry-action>svg,:root .tool-open,:root .folder-affordance {transition:none;}
- :root [data-action]::after,:root .card-entry-action::after,:root .accessory-trigger::after,:root .search-expand::after,:root .drawer-mode::after {transition:none;background-image:none;}
+ :root [data-action]::after,:root .card-entry-action::after,:root .accessory-trigger::after,:root .drawer-mode::after {transition:none;background-image:none;}
  :root [data-action][aria-busy=true]::before {animation:none;border-color:currentColor;}
  :root [data-action]:not(:disabled):active {transform:none;}
 }
 
 /* Filters describe a scope; they do not compete with primary commands. */
 :root .ui-filter {min-height:28px;padding:4px 8px;border:1px solid transparent;border-radius:5px;line-height:18px;white-space:nowrap;background:transparent;color:var(--ui-muted);box-shadow:none;transition:background-color 160ms ease-out,color 160ms ease-out,box-shadow 160ms ease-out;}
-:root .ui-filter-selected {background:var(--key-subtle);color:var(--ui-ink);border-color:transparent;box-shadow:inset 0 -1px 0 var(--ui-accent);}
+:root .ui-filter-selected {background:transparent;color:var(--ui-accent);border-color:var(--edge-light);box-shadow:none;}
 @media (max-width:767px),(pointer:coarse) { :root .ui-filter {min-height:44px;padding-block:10px;} }
+
+/* Header and icon controls have a single owner. No route-level size overrides. */
+.task-header {display:flex;align-items:center;gap:8px;min-height:68px;padding:10px 0;}
+.task-header .search-field {flex:0 1 250px;margin-left:auto;}
+.header-spacer {display:none;}
+:root .icon-button,:root .header-action,:root .command-launch,:root .theme-switch {
+ position:relative;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;
+ width:32px;height:32px;min-width:32px;min-height:32px;padding:0;border:0;border-radius:9px;
+ color:var(--ui-muted);background:transparent;line-height:1;box-shadow:none;
+}
+:root .icon-button-face {position:relative;display:flex;align-items:center;justify-content:center;gap:4px;flex:none;width:30px;height:30px;border:1px solid transparent;border-radius:9px;transition:background-color 160ms ease-out,border-color 160ms ease-out,transform 180ms var(--ease-out);}
+:root .ui-close .icon-button-face {width:28px;height:28px;border-radius:50%;background:var(--control-surface);border-color:var(--glass-border);box-shadow:inset 0 1px 0 var(--glass-highlight);}
+:root .ui-close {width:32px;height:32px;min-height:32px;min-width:32px;align-self:center;}
+:root .icon-button svg {flex:none;display:block;}
+:root .icon-button .hidden {display:none;}
+:root.dark .icon-button .dark\:block {display:block;}
+:root.dark .icon-button .dark\:hidden {display:none;}
+:root .command-launch {width:auto;padding-inline:8px;gap:6px;}
+.command-launch kbd {font-size:10px;font-family:inherit;padding:2px 4px;border:1px solid var(--ui-line);border-radius:4px;white-space:nowrap;}
+.notification-badge {position:absolute;top:-4px;right:-4px;display:grid;place-items:center;min-width:15px;height:15px;overflow:hidden;padding:0 3px;border-radius:10px;background:var(--key-face);color:var(--key-ink);font-size:9px;font-weight:600;line-height:15px;box-shadow:0 0 0 2px var(--workspace-surface);}
+:root .search-field[data-collapsible] {display:flex;align-items:center;gap:0;min-width:0;height:38px;border:1px solid var(--glass-border);border-radius:11px;background:var(--control-surface);box-shadow:inset 0 1px 3px #00000014;transition:border-color 180ms ease-out,box-shadow 180ms ease-out;}
+:root .search-field:focus-within {border-color:var(--edge-light);box-shadow:0 0 0 3px var(--glass-wash),inset 0 1px 0 var(--glass-highlight);}
+:root .search-expand {position:relative;display:flex;align-items:center;justify-content:flex-start;gap:8px;flex:1;min-width:0;min-height:36px;width:100%;padding:0 12px;border:0;border-radius:10px;background:transparent;color:var(--ui-muted);font-size:12px;white-space:nowrap;}
+.search-prompt {margin-left:auto;font-size:11px;color:var(--ui-muted);}
+:root .search-input-wrap {flex:1;min-width:0;}
+.search-input-wrap[hidden] {display:none;}
+:root .search-field[data-search-expanded] .search-expand {flex:none;width:36px;padding:0;justify-content:center;}
+:root .search-field[data-search-expanded] .search-expand>span {display:none;}
+:root .search-field input {height:36px;min-height:36px;padding:6px 30px 6px 0;border:0;background:transparent;box-shadow:none;caret-color:var(--ui-accent);}
+:root .search-field input:focus-visible {outline:none;}
+:root .search-popover.ui-glass-overlay {width:max(100%,340px);max-width:calc(100vw - 32px);transform-origin:top right;}
+.search-field[data-search-expanded] .search-input-wrap {animation:search-unfold 200ms var(--ease-out);}
+@keyframes search-unfold {from {opacity:.3;transform:translateX(-8px);} to {opacity:1;transform:translateX(0);}}
+
+/* Scope values disclose a checkable menu; only true content modes remain tabs. */
+:root .filter-trigger {display:inline-flex;align-items:center;justify-content:flex-start;gap:8px;min-width:0;max-width:100%;height:32px;min-height:32px;padding:0 10px;border:1px solid var(--glass-border);border-radius:8px;background:var(--workspace-surface);box-shadow:inset 0 1px 0 var(--glass-highlight);color:var(--ui-ink);font-size:12px;line-height:1.4;white-space:nowrap;}
+.filter-label {color:var(--ui-muted);font-size:11px;}
+.filter-value {min-width:0;overflow:hidden;text-overflow:ellipsis;font-weight:600;animation:filter-value-enter 150ms ease-out;}
+.filter-trigger>svg {flex:none;color:var(--ui-muted);transition:transform 200ms var(--ease-out);}
+.filter-trigger[data-state=open]>svg {transform:rotate(180deg);}
+.filter-trigger[data-state=open] {border-color:var(--edge-light);}
+.filter-menu {z-index:var(--z-tooltip);width:max-content;min-width:200px;max-width:min(320px,calc(100vw - 24px));max-height:var(--radix-dropdown-menu-content-available-height);overflow:auto;padding:6px;border:1px solid var(--glass-rim);border-radius:14px;background:var(--glass-sheen),var(--glass-overlay);backdrop-filter:blur(20px);box-shadow:inset 0 1px 0 var(--glass-highlight),0 12px 36px #00000030;color:var(--ui-ink);transform-origin:var(--radix-dropdown-menu-content-transform-origin);}
+.filter-menu[data-state=open] {animation:filter-reveal 220ms var(--ease-out);}
+.filter-menu[data-state=closed] {animation:filter-retract 120ms ease-out;}
+.filter-menu-label {padding:6px 9px 9px;font-size:11px;color:var(--ui-muted);}
+.filter-option {position:relative;display:flex;align-items:center;gap:12px;min-height:36px;padding:9px;border-radius:8px;outline:none;cursor:pointer;font-size:12px;}
+.filter-option[data-highlighted] {background:var(--ui-hover);box-shadow:inset 0 0 0 1px var(--glass-border);}
+.filter-option[data-state=checked] {color:var(--ui-accent);}
+.filter-option-title {display:block;font-weight:600;}
+.filter-description {display:block;max-width:28ch;margin-top:4px;font-size:11px;line-height:1.6;color:var(--ui-muted);}
+.filter-count {margin-left:auto;font-variant-numeric:tabular-nums;color:var(--ui-muted);}
+.filter-check {display:grid;place-items:center;flex:none;margin-left:auto;width:18px;min-height:18px;}
+@keyframes filter-reveal {from {opacity:0;transform:translateY(-6px) scale(.97);}to {opacity:1;transform:none;}}
+@keyframes filter-retract {to {opacity:0;transform:translateY(-3px) scale(.98);}}
+@keyframes filter-value-enter {from {opacity:.4;transform:translateY(3px);}to {opacity:1;transform:none;}}
+
+@media (hover:hover) and (pointer:fine) {
+ :root .icon-button:hover .icon-button-face,:root .header-action:hover,:root .command-launch:hover {color:var(--ui-ink);background:var(--ui-hover);border-color:var(--glass-border);}
+ :root .icon-button:active .icon-button-face {transform:scale(.94);}
+ :root .filter-trigger:hover {border-color:var(--edge-light);background:var(--key-subtle);}
+}
+@media(max-width:1199px) {
+ .task-header {flex-wrap:wrap;gap:6px;padding:8px 0;}
+ .task-navigation {order:10;flex-basis:100%;width:100%;justify-content:center;}
+ .task-header .search-field {flex:1;max-width:360px;}
+}
+@media(max-width:639px) {
+ .task-header {display:grid;grid-template-columns:minmax(0,1fr) repeat(4,44px);gap:2px;padding:4px 0 0;}
+ .task-header .brand-wordmark {display:flex;margin:0;font-size:16px;}
+ .task-header .search-field {grid-row:2;grid-column:1 / -1;max-width:none;width:100%;height:46px;margin:4px 0 5px;}
+ .task-header .task-navigation {grid-row:3;grid-column:1 / -1;margin-top:2px;}
+ :root .task-navigation a {min-width:0;flex:1;padding-inline:4px;font-size:12px;}
+ :root .search-expand {min-height:44px;padding-inline:12px;}
+ :root .search-field input {height:44px;min-height:44px;font-size:16px;}
+ :root .search-field[data-search-expanded] .search-expand {width:44px;}
+ :root .task-header .search-popover {left:0;right:0;top:calc(100% + 8px);width:100%;max-width:none;}
+ .command-launch kbd {display:none;}
+ .task-header .command-launch {width:44px;padding:0;}
+}
+@media(max-width:767px),(pointer:coarse) {
+ :root .icon-button,:root .ui-close,:root .header-action,:root .theme-switch,:root .command-launch {width:44px;height:44px;min-width:44px;min-height:44px;padding:0;}
+ :root .filter-trigger {height:44px;min-height:44px;background:linear-gradient(var(--workspace-surface),var(--workspace-surface)) center/100% 32px no-repeat;border-color:transparent;box-shadow:none;position:relative;}
+ :root .filter-trigger::before {content:"";position:absolute;inset:6px 0;border:1px solid var(--glass-border);border-radius:8px;pointer-events:none;}
+ .filter-option {min-height:44px;}
+}
+@media(prefers-reduced-motion:reduce) {
+ .search-field[data-search-expanded] .search-input-wrap,.filter-menu,.filter-value {animation:none!important;}
+ .filter-trigger>svg,:root .icon-button-face {transition:none;}
+}
+
+/* A market view is a reading choice, so its menu stays next to the trigger. */
+:root .lens-menu-trigger {min-height:36px;padding:6px 12px;gap:10px;border-radius:9px;background:var(--glass-sheen),var(--control-surface);}
+.lens-menu-trigger>svg {transition:transform 180ms var(--ease-out);}
+.lens-menu-trigger[data-state=open]>svg {transform:rotate(180deg);}
+.lens-menu {width:300px;}
+.lens-menu-group {padding:12px 9px 4px;font-size:11px;color:var(--ui-muted);}
+.lens-menu-option[aria-current=page] {color:var(--ui-accent);}
+:root .market-breadth-ribbon {gap:0;border:1px solid var(--glass-border);border-radius:12px;background:var(--workspace-surface);padding:4px;}
+:root .market-breadth-ribbon>.ui-card {border:0;border-radius:0;background:transparent;box-shadow:none;padding:8px 12px;border-inline-end:1px solid var(--ui-line);}
+:root .market-breadth-ribbon>.ui-card:last-child {border-inline-end:0;}
+:root .market-sentiment-strip {box-shadow:none;background:transparent;border:0;padding:4px 0;}
+@media(max-width:639px) {
+ :root .market-index-ribbon {grid-template-columns:repeat(3,minmax(0,1fr));gap:0;}
+ :root .market-index-ribbon>.ui-card {padding:8px;}
+ .market-index-ribbon>.ui-card>div:first-child>span:first-child {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+ .market-index-ribbon>.ui-card .text-xl {font-size:16px;}
+ .market-index-ribbon>.ui-card>div:last-child {flex-direction:column;align-items:flex-start;gap:4px;}
+ :root .market-breadth-ribbon>.ui-card {padding:8px 10px;}
+ :root .market-breadth-ribbon>.ui-card:nth-child(3) {border-inline-end:0;}
+ :root .lens-menu-trigger {min-height:44px;}
+}
+@media(prefers-reduced-motion:reduce) {.lens-menu-trigger>svg {transition:none;}}
+
+.sentiment-basis {position:relative;max-width:100%;color:var(--ui-muted);}
+.sentiment-basis summary {padding:8px 0;cursor:pointer;color:var(--ui-ink);}
+.sentiment-basis>div {max-width:60ch;padding:10px 12px;border-inline-start:1px solid var(--glass-border);background:var(--workspace-surface);line-height:1.8;}
+.sentiment-basis p+p {margin-top:6px;}
+.market-stock-open {text-align:left;min-height:32px;}
+.search-result-open:focus-visible {background:var(--ui-hover);outline-offset:-2px;}
+@media(max-width:767px),(pointer:coarse) {.market-stock-open,.sentiment-basis summary {min-height:44px;}}
+
+.navigation-marker {width:1px;transform-origin:left center;transition:transform 240ms var(--ease-out);}
+@media(prefers-reduced-motion:reduce) {.navigation-marker {transition:none;}}
+.index-disclosure,.turnover-link {min-height:28px;}
+@media(max-width:767px),(pointer:coarse) {.index-disclosure,.turnover-link {min-height:44px;}}

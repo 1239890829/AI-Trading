@@ -1,5 +1,7 @@
 "use client";
 
+import { HugeiconsIcon } from "@hugeicons/react";
+import CommandLineIcon from "@hugeicons/core-free-icons/CommandLineIcon";
 import { ControlHint } from "@/components/ui/control-hint";
 import Link from "next/link";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
@@ -46,7 +48,7 @@ export function CommandPalette() {
   },[]);
   useEffect(() => { list.current?.querySelector('[data-selected="true"]')?.scrollIntoView?.({block:"nearest"}); },[selected,query]);
   return <>
-    <ControlHint content="查找页面与工具 · Ctrl/⌘ K" inactive={open}><button type="button" className="command-launch" aria-label="打开命令面板" aria-haspopup="dialog" onClick={show}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="m8 9 3 3-3 3m5 0h3"/></svg><kbd>⌘ K</kbd></button></ControlHint>
+    <ControlHint content="查找页面与工具 · Ctrl/⌘ K" inactive={open}><button type="button" className="command-launch" aria-label="打开命令面板" aria-haspopup="dialog" onClick={show}><HugeiconsIcon icon={CommandLineIcon} size={18} strokeWidth={1.6} aria-hidden="true" /><kbd>⌘ K</kbd></button></ControlHint>
     {presence.value && <ModalShell open={presence.active} onClose={close} label="查找页面与工具" size="md" header={<div><p className="workspace-kicker">快速到达</p><h2 className="text-lg font-semibold">查找页面与工具</h2></div>} footer="↑ ↓ 选择 · Enter 打开 · Esc 关闭。证券搜索在顶栏，业务操作仍需原权限与确认。">
       <div className="command-palette">
         <input data-overlay-autofocus="primary" aria-label="查找页面与工具" role="combobox" aria-expanded="true" aria-controls={listId} aria-autocomplete="list" aria-activedescendant={results.length ? `${listId}-${selected}` : undefined} placeholder="输入任务、工具或关键词" value={query} onChange={event => {setQuery(event.target.value);setIndex(0);}} onKeyDown={event => {

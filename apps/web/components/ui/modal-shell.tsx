@@ -30,6 +30,7 @@
  * 各页面滚动容器都不是 portal 的 DOM 祖先 ⇒ 滚动链不会穿透到背景页，
  * 加锁只会是 no-op 死代码（同 `symbol-detail-modal` 的判断）。
  */
+import { CloseButton } from "./icon-button";
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { useOverlayFocus } from "@/hooks/use-overlay-focus";
 import { createPortal } from "react-dom";
@@ -171,23 +172,5 @@ export function ModalShell({
       </div>
     </div>,
     document.body,
-  );
-}
-
-/** 全站统一关闭按钮（× 图标 + `aria-label`）。 */
-function CloseButton({ onClose }: { onClose: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClose}
-      data-overlay-autofocus
-      aria-label="关闭"
-      title="关闭（Esc）"
-      className="ui-close shrink-0 rounded p-1 text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-    >
-      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
-        <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-      </svg>
-    </button>
   );
 }

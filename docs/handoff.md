@@ -1,33 +1,33 @@
-# 当前交接：紧凑控件与连续选择重设计
+# 当前交接：原版技能职责与控件重设计
 
-> 总方案v9.13；累计U01–U55；状态仅W07；Jev入口ai/jev-integration.md；UI证据product/ui-audit-20261003§32。
+> 总方案v9.13；U01–U55；状态仅W07；Jev入口 ai/jev-integration.md；证据入口 product/ui-skill-redesign-20261007。
 
 ## 1. 现场、模式与范围
 
-用户明确派工IMP-075；基线c8b51e8c2a40f8b0944bdb3bf613ee1c3526eba9（PR #229），分支codex/ui-compact-motion。
+用户明确派工 IMP-076，基线 f3116d98790a56ff042a25c0e6f8b1fedda5f293（PR #230），分支 codex/ui-skill-led-redesign。
 
 - **当前主门**：G2
-- **本轮主任务**：IMP-075
-- **主切片首选**：IMP-075
+- **本轮主任务**：IMP-076
+- **主切片首选**：IMP-076
 
-**U50 降级授权回执**：2026-09-24本机Codex DEGRADED_FULL_CONTROL未撤销。作者=发布操作者，不是独立Review；须准确HEAD DegradedRelease、完整门禁、required CI与release_check。
+**当前门候选顺位**：仅交付 IMP-076。
 
-**当前门候选顺位**：仅交付IMP-075。
+**U50 降级授权回执**：2026-09-24 Codex DEGRADED_FULL_CONTROL 未撤销；作者=发布操作者，不是独立 Review。仍须完整门禁、准确 HEAD DegradedRelease、required CI、release_check、合并后 CI。
 
-## 2. U49 主动审计回执 / 作者Preflight与反证
+## 2. U49 主动审计回执 / 作者 Preflight 与反证
 
-已同步master，干净树起步，IMP-074已交付。顺序为需求/数据边界→交互→来源比较→视觉→动效→状态/Canvas/响应式审查。Design & Taste为主，设计6/动效4/密度7；finesse产品域与现役治理合并，项目禁止应用私有目录优先。明确派工已授权实施，不重复等待设计确认。
+从同步的干净 master 起步。按需求/蒸馏治理→交互→原站设计量测→impeccable/taste/finesse设计→工艺与GSAP→独立设计/检测评估→响应式与状态→发布执行。原版技能逐一保留职责，项目适配不独占视觉。来源无法唯一确认或浏览器受限单列，不能伪称全部视觉核验。
 
-反证：44px点击目标不等于44px厚重底色；不同用途不得共用大亮底；工具折叠不藏必要反馈；导航位置稳定；真实业务身份/后台权限和金融红绿保留；快速切换、resize、IME、焦点、减弱动态必须正确。TypeSafe不新增运行期消费者，仅Jev代码复评。
+反证：关闭按钮与普通操作分开；小可见面不缩小触点；数据红绿与真实缺失语义保留；市场范围不是内容tab；搜索IME/慢请求、焦点恢复、键盘和快速开关需验证。另发现并修复搜索结果打开详情后丢焦、方向键缺失、情绪依据仅title、涨停行缺原生键盘入口。
 
-## 3. 本轮实现与实测
+## 3. 当前实现与验证
 
-紧凑32px可见键面/手机44px触点、连续细线选择、工具横向索引与单面板下展、研究正文全宽、深石墨/冷银阅读面完成。补修维护手机自然滚动、仓库手机纵向阅读、各筛选残留亮白、知识KB数对比、观察器生命周期与通知键盘。
+烟晶暖银双主题、宽行手机搜索、共享图标/关闭按钮、Hugeicons 按图标入口导入、Radix 下落筛选与市场视角已实现。实现提交 `6e790d4e`。本轮后端4619 passed/83 skipped，前端默认/UTC各825；tsc/eslint/pyflakes/npm ci/正式构建通过。41入口PC/手机82图、20断点检查、Canvas与弹层行为；Jev携baseline复评及fresh设计收尾ship。准确HEAD发布正在执行；不能复用 IMP-075 的发布结论。生产构建预览 4202 已启动并实屏核对菜单，后端仅指向 GET 合成夹具 4204，不是实盘服务；图册在4205。最终文档回归173通过；补正导航减少动态规则后再次生产构建通过。
 
-当前实测：后端4619 passed/83 skipped（151.51s），pyflakes；默认/UTC前端95文件各823 passed（58.05s/57.94s），tsc/eslint/正式构建通过。41入口三呈现共123图、五消费者五尺寸共25检查；真实分时10 Canvas等宽、工具关闭回焦、搜索自动聚焦、通知键盘回焦、证据日期/候选重排均留证。实色扫描修正KB数后重验；占位/隐藏分支/渐变和Canvas文字不作认证。收尾文档/账本测试189 passed；实色3613项检查、4950项排除，0不足。仓库/知识选择丢焦2项先红后绿，定向8 passed，最终实页保留原按钮焦点。Jev baseline复评测试5.6→7.0，作者自审不是独立Review；准确HEAD发布继续核PR回执、三CI、release_check及post-merge。预览仅GET合成夹具4204；不执行生产任务、模型、通知或交易操作。
+## 4. 恢复与传播
 
-## 4. 恢复
+依 docs/ai/continuous-evolution.md 核原始来源、反证与退出，候选不自动准入。
 
-依docs/ai/continuous-evolution.md核外部来源、适用性与退出；只提出有用途的采用，不扩大权限。
+当前活动恢复包 artifacts/recovery/ui-current-20261007/source.tar.gz 已验 SHA-256，远程标签 ui-current-saved-20261007。旧活动恢复包按 safe-trash 可恢复迁出，旧活动标签已删；普通 Git 历史保留。
 
-当前版source.tar.gz校验与恢复说明保存于忽略artifacts/recovery/ui-current-20261005，远程标签ui-current-saved-20261005。旧活动恢复包可恢复迁出，两旧标签已删除，普通Git历史保留。
+总方案、plan-registry、INDEX、产品闭环、细功能审计、W07、project design-taste 已同步。AGENTS/业务owner/模型准入不变。详细来源、测试与截图存忽略的 artifacts/runs/ui-skill-redesign-20261007。

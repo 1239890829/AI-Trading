@@ -7,7 +7,10 @@ import { useReducedMotion, useExitPresence } from "@/hooks/use-exit-presence";
 import { useId, useRef, useState } from "react";
 import Link from "next/link";
 import { motionOrigin, type MotionOrigin } from "@/lib/surface-motion";
-import { ModalShell } from "@/components/ui/modal-shell";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import { HugeiconsIcon } from "@hugeicons/react";
+import ArrowDown01Icon from "@hugeicons/core-free-icons/ArrowDown01Icon";
+import Tick02Icon from "@hugeicons/core-free-icons/Tick02Icon";
 import { MARKET_LENSES, marketLensUrl, type WorkspaceTool } from "@/lib/workspace-tools";
 
 gsap.registerPlugin(useGSAP);
@@ -87,14 +90,19 @@ export function WorkspaceDeck({tools, onOpen, compact = false, activeTool}: {too
 }
 
 export function MarketLensPicker({selected, search}: {selected: string; search: string}) {
-  const [open, setOpen] = useState(false);
-  const [origin, setOrigin] = useState<MotionOrigin | null>(null);
-  const presence = useExitPresence(open ? true : null);
   const current = MARKET_LENSES.find(lens => lens.key === selected) ?? MARKET_LENSES[0];
-  return <>
-    <button className="lens-trigger" aria-haspopup="dialog" aria-expanded={open} onClick={event => { setOrigin(motionOrigin(event, "capsule")); setOpen(true); }}><span className="lens-dot" aria-hidden="true" /><span><span className="lens-caption">市场观察</span><span className="lens-title">{current.label}</span></span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m8 10 4 4 4-4"/></svg></button>
-    {presence.value && <ModalShell open={presence.active} motionOrigin={origin} label="选择市场观察视角" size="md" onClose={() => setOpen(false)} header={<h2 className="text-lg font-semibold">换一个观察视角</h2>} footer="视角只改变呈现；日期、标的与返回位置继续保留。">
-      <div className="lens-library">{[...new Set(MARKET_LENSES.map(lens => lens.group))].map(group => <section key={group}><h3>{group}</h3>{MARKET_LENSES.filter(lens => lens.group === group).map(lens => <Link key={lens.key} href={marketLensUrl(lens.href, search)} aria-current={selected === lens.key ? "page" : undefined} className="lens-choice" onClick={() => setOpen(false)}><strong>{lens.label}</strong><span>{lens.description}</span><span className="lens-selection" aria-hidden="true">{selected === lens.key ? "✓" : "↗"}</span></Link>)}</section>)}</div>
-    </ModalShell>}
-  </>;
+  return <DropdownMenu.Root>
+    <DropdownMenu.Trigger className="lens-trigger lens-menu-trigger" aria-label={`市场视角：${current.label}`}>
+      <span className="lens-title">{current.label}</span><HugeiconsIcon icon={ArrowDown01Icon} size={16} strokeWidth={1.6} aria-hidden="true" />
+    </DropdownMenu.Trigger>
+    <DropdownMenu.Portal><DropdownMenu.Content className="filter-menu lens-menu" sideOffset={8} collisionPadding={12} align="end" aria-label="选择市场观察视角">
+      <DropdownMenu.Label className="filter-menu-label">市场观察视角</DropdownMenu.Label>
+      {[...new Set(MARKET_LENSES.map(lens => lens.group))].map(group => <DropdownMenu.Group key={group}>
+        <DropdownMenu.Label className="lens-menu-group">{group}</DropdownMenu.Label>
+        {MARKET_LENSES.filter(lens => lens.group === group).map(lens => <DropdownMenu.Item asChild key={lens.key} textValue={lens.label}>
+          <Link href={marketLensUrl(lens.href, search)} aria-current={selected === lens.key ? "page" : undefined} className="filter-option lens-menu-option"><span><span className="filter-option-title">{lens.label}</span><span className="filter-description">{lens.description}</span></span><span className="filter-check">{selected === lens.key && <HugeiconsIcon icon={Tick02Icon} size={15} aria-hidden="true" />}</span></Link>
+        </DropdownMenu.Item>)}
+      </DropdownMenu.Group>)}
+    </DropdownMenu.Content></DropdownMenu.Portal>
+  </DropdownMenu.Root>;
 }

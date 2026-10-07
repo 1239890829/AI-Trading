@@ -1,5 +1,7 @@
 "use client";
 
+import { FilterMenu } from "@/components/ui/filter-menu";
+
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { Panel } from "@/components/panel";
 import {
@@ -269,18 +271,7 @@ export function HeatmapTab() {
         resetKey={`${scope}:${focusGroup?.industry ?? ""}`}
         extra={
           <div className="flex items-center gap-2 text-xs">
-            <button
-              onClick={() => { setScope("all"); setFocusIndustry(null); }}
-              className={`rounded px-2 py-0.5 ${scope === "all" ? "bg-zinc-100 font-medium dark:bg-zinc-800" : "text-zinc-600 dark:text-zinc-400"}`}
-            >
-              全市场
-            </button>
-            <button
-              onClick={() => { setScope("watch"); setFocusIndustry(null); }}
-              className={`rounded px-2 py-0.5 ${scope === "watch" ? "bg-zinc-100 font-medium dark:bg-zinc-800" : "text-zinc-600 dark:text-zinc-400"}`}
-            >
-              自选
-            </button>
+            <FilterMenu label="范围" value={scope} options={[{key:"all",label:"全市场"},{key:"watch",label:"自选"}]} onChange={next => { setScope(next); setFocusIndustry(null); }} />
             {focusGroup && (
               <button onClick={() => setFocusIndustry(null)} className="rounded border border-zinc-300 px-2 py-0.5 text-zinc-600 dark:text-zinc-400 dark:border-zinc-600">
                 返回全部

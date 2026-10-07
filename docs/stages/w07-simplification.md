@@ -486,3 +486,22 @@
 - **恢复**：ui-current-saved-20261005（PR #229）；旧版活动恢复包与标签退出；不回滚业务数据。
 - **证据**：基线c8b51e8c2a40f8b0944bdb3bf613ee1c3526eba9；忽略批次ui-compact-motion-20261005；123入口图、25尺寸检查、真实Canvas/焦点/通知键盘/证据日期/候选重排；后端4619 passed/83 skipped，默认/UTC前端95文件各823，tsc/eslint/pyflakes/正式构建，Jev携baseline复评。详product/ui-audit-20261003§32与handoff；准确HEAD发布由PR回执/CI绑定。
 - **下一步**：实现与本地验收完成；按准确HEAD DegradedRelease、required CI与release_check发布并核合并后CI及分支清理。不领取第二业务任务；部署仍搁置。
+
+
+## IMP-076
+
+**技能完整职责恢复与全域交互重设计**
+
+- **状态**：已完成
+- **优先级**：P1
+- **阶段门**：G2
+- **门内序**：86
+- **门禁角色**：非阻断
+- **依赖**：IMP-075
+- **效果前置**：无
+- **方案依据**：用户明确要求完整原技能流程、全站同类缺陷排查、新参考逐项评估并重新设计。
+- **范围**：共享图标/关闭/搜索/筛选/通知、全域材质和交互组合；顶部导航与现役业务语义。
+- **验收**：恢复点校验、技能职责证据、原站对照、手机/PC/浮层/Canvas/状态截图、完整门禁、Jev复评和准确HEAD发布。
+- **恢复**：ui-current-saved-20261007（PR #230）；旧活动版本退出，普通历史保留。
+- **证据**：product/ui-skill-redesign-20261007.md §6；忽略批次ui-skill-redesign-20261007。41入口PC/手机82图、20断点实测、浮层/焦点/Canvas；后端4619 passed/83 skipped，前端默认/UTC各825，tsc/eslint/pyflakes/npm ci/生产构建通过；A/B评估与fresh finish复验、Jev携baseline复评。外站量测及实体设备边界见专题。
+- **下一步**：实现与本地验收完成；继续准确HEAD DegradedRelease、required CI、release_check与合并后CI及清理，不领取第二业务任务。
