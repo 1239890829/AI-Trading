@@ -161,7 +161,7 @@ GET 的冷热装配已撤去研究归档和台账写入；既有 `archive_intrad
 
 ## 6. 前台简洁，不以四类按钮限制后台
 
-以现有灰阶、亮暗、字号、CardShell与详情导航为A基线；U54/U55允许B/C任务导航、组件与视觉重设计，涨跌/风险语义、tabular-nums和真实数据契约保留。外部组件需同条件证据，不预定换框架。实现阶段唯一按 `skills/design-taste` 做 Design Read 与设计审查，并用 `ui-state-verify` 验真实渲染分支。当前建议保持高密度交易台方向：DESIGN_VARIANCE≈4/10、MOTION_INTENSITY≈5/10、VISUAL_DENSITY≈8/10，真实页面证据可在具体切片调整。
+以现有灰阶、亮暗、字号、CardShell与详情导航为A基线；U54/U55允许B/C任务导航、组件与视觉重设计，涨跌/风险语义、tabular-nums和真实数据契约保留。外部组件需同条件证据，不预定换框架。实现阶段按[原版重设计方案](ui-original-skills-plan-20261008.md)分开使用Impeccable Operate、Taste原版redesign与交互/状态验证。旧融合版退出；密集工作台不套Taste主技能营销版dials，实际密度与动效按任务和实屏证据决定。
 
 导航按**工作流职责**而不是战法枚举拆分，默认四个职责面：**机会**（当前 actionable + observing）、**跟踪**（first_seen/trigger 参考轨）、**影子**（IMP-053 实际 shadow submit/fill/no-fill/P&L）、**复盘**（结果、原因、失效、历史统计）。潜伏、首启、连板、趋势、断板转趋势、再启动及未来新情境只作为筛选/标签/证据维度，不再各占固定 Tab，避免后台开放分类被前台导航封死。
 

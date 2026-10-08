@@ -1,40 +1,39 @@
-# 当前交接：行情口径与免费备源补强
+# 当前交接：指定原版技能与UI方案重推
 
-> 总方案v9.13；U01–U55；状态仅W00/IMP-079；Jev入口 ai/jev-integration.md；数据证据入口data/data-source-comparison.md。
+> 总方案v9.13；U01–U55；状态仅W07/IMP-080；现役提案product/ui-original-skills-plan-20261008.md；Jev现役蓝图docs/ai/jev-integration.md。
 
-外部持续演进入口为 docs/ai/continuous-evolution.md，候选不自动准入。
+外部开放世界持续演进入口docs/ai/continuous-evolution.md，候选不自动准入。
 
 ## 1. 现场、模式与范围
 
-用户2026-10-08在数据源比较后明确“开始吧”，授权IMP-079及内部切片。master基线f821e7d3，独立分支codex/data-source-strengthening。
+用户2026-10-08要求旧impeccable/taste相关融合、摘录和错误入口删除，使用两个指定原仓重新推导方案。基线master/origin/master均为0377b8414be70710bd4fff67818974601d5910da，fetch成功；分支codex/original-design-skills-plan。
 
-- **当前主门**：G1
-- **本轮主任务**：IMP-079
-- **主切片首选**：IMP-079
+- **当前主门**：G2
+- **本轮主任务**：IMP-080
+- **主切片首选**：IMP-080
 
-**U50 降级授权回执**：2026-09-24 Codex DEGRADED_FULL_CONTROL未撤销；作者=发布操作者，非独立Review。完整本地门禁、required CI、exact-HEAD DegradedRelease和release_check继续强制。
+**U50 降级授权回执**：2026-09-24 Codex DEGRADED_FULL_CONTROL未撤销；作者=发布操作者，非独立Review。准确HEAD DegradedRelease、required三job和release_check仍适用。
 
-## 2. U49 主动审计回执 / 作者Preflight
+本轮只完成技能清理/原版安装及可审方案，不含UI或提醒业务实施。方案须用户确认；不能因用户要求使用原版而推定已批准新的业务代码。前轮数据源成果已在基线中，本轮不重启3000/8000、不改凭据或数据。
 
-当前master干净并同步。selector无其它活动候选；本轮为用户直接指定任务。核报价/分钟/盘口各自单位、复权/日期边界、HTTP身份和分页、最新尾部与全天遍历的预算差异、缓存跨日及缺包语义。已确认科创板分钟累计量也是股，盘口显示仍是手，不能对所有字段同样改乘数。当前TDX快路径保留，新HTTP后备不增加健康主路径开销。离线日线归档不写生产marketdb、不回填前向窗口。
+## 2. U49 主动审计回执 / 作者Preflight与有界反证
 
-## 3. 执行与验证
+已发现旧融合Skill仍有优先执行指令，错误taste入口实际为brandkit，旧摘录有缺引用风险，历史文档与现行入口冲突。四个全局入口和项目13旧文件可恢复退出；三个原版包64文件逐Git blob一致，三入口格式校验通过。
 
-代码初版d3e82fba、跨市场边界修复0d440412；PR #238。科创量归一化、北京日期、腾讯历史分段/同源备域、HTTP分笔第三路、TDX离线归档已交付实现；API与助手共用成交备链，页面标口径/日期/陈旧，新闻保持现役源。
+原版Taste主技能明确排除密集工作台/表格；不能为凑使用而套营销Hero。Impeccable Operate与Taste原版redesign分开负责。context未给target未自动识别嵌套web源码，不能据此称系统无UI；源码与入口继续作为证据。context/seed已实跑，原版选案/效果图/实现/收尾均未执行，不写全流程通过。
 
-- 后端：最终当前版本串行全量4654 passed/83 skipped，417.23秒（Python3.11.12）；跨市场相关84 passed。初版四worker4651通过；后续四worker一次有既有通知SQLite refresh异常（4653通过/1失败），该模块独立50通过、最终串行全量通过。根因未独立证明，不称通知修复；未改其代码/断言或放宽门禁。ZIP夹具墙钟metadata导致hash偶发变化已固定，随后相关26通过。
-- 前端：96文件/830用例默认时区与UTC各通过；tsc、eslint、pyflakes、生产构建通过（本机Node24.14.0；CI另核Node22）。doc-health、public scan、workspace hygiene通过；协调文档更新后再核。
-- Jev辅助复评对应0d440412已完成，最后无回退（仍非正确性证明）。部分低置信、无具体位置的建议经作者按真实失败路径核查；最后输入范围变动，标量分数不作为质量增量或独立Review证据。实际边界有日志、API detail、行质量与CLI manifest；不额外堆健康注册表。
-- 8000后端已正常重启，无reload；3000新生产构建已运行，后端凭据仅注入前端服务进程，不写浏览器/文件/日志。3000真实历史2024-01-02至05返回4条THS，688981最新50笔仍走TDX；工作台成交页已显示通达信3秒聚合及2026-10-08源日期。直抓HTTP最新50笔及两日日线包证明可运行，不证明长期SLA。
-- 当前发布步骤：PR #238合批更新，exact-HEAD DegradedRelease，required三job及release_check通过才合并；随后核master CI并清理功能分支。作者自审非独立审核，不能把正在等待的CI写成成功。
-- 保留脱敏紧凑日志、原始免费源核验与hash在artifacts/runs/data-source-strengthening-20261008；无新clone/worktree/依赖。已结束且可再生的本轮pytest沙箱收尾清理，在线业务库与UI恢复包保留。
+## 3. 产出、验收与限制
 
-## 3.1 作者有界反证
+原版方案重推职责、顺序、布局/材质/交互组合、提醒失败筛选/重复状态、滚动owner、宽弹层、MA按钮、回放UI退出及全域验收。旧方案活动目录退出；107需求、34资源、41入口身份保留至新方案矩阵，旧视觉选择不作权威。27项技能职责记录不等于27项全部运行。外站证据标为前轮来源，未冒充本轮全站重访。
 
-发布前追加跨交易所反证：北交所/指数HTTP能力缺失原会把合法空变502，三个用例先红；显式unsupported非故障状态修复后84项通过，最终完整后端4654通过/83跳过。首次PR CI已取消避免旧HEAD继续耗费，旧回执不能放行新HEAD。
+忽略批次artifacts/runs/ui-original-skills-20261008包含原始来源、安装、引擎、完整矩阵及本地方案图册。产品UI无修改、新截图和性能/兼容验收未发生；按installer说明原版技能将在下一轮可用，本轮按已安装原文读取。纯文档/技能退出不触发Jev代码评分；后续非简单代码仍须适用复评。
 
-核单位交叉污染、首日丢失、复权混合、空源冒充空市场、跨日/未来时间、分页尾部变化与预算、缓存副本、归档部分写/修改hash、后台测试触网、两处消费者时间丢失。发现的具体缺陷已修复并复验；HTTP聚合非L2、历史包非点时、TDX已有日期限制及旁路health治理边界保留说明。没有把当前免费端点可达性或Jev评分当成策略收益证据。
+本地相关回归194 passed（19.13秒）；初验发现新文档账本归集指针和handoff传播字段缺漏，已补原文，未改守卫/测试。发布证据绑定本轮PR准确HEAD；文档/卫生/公开扫描与三job CI分别记录，历史UI或数据任务绿色不冒充本轮验收。
 
-## 4. 传播与恢复
+## 4. 传播、恢复与下一步
 
-现有Provider/API体系不重建；单位与来源边界回填数据源说明、比较及能力备注。总方案/INDEX/AGENTS/Skills不新增规则；任务归原数据owner。原UI恢复包保持原状。
+总方案、plan-registry、产品/猎场/细功能、INDEX、W07、AGENTS、Jev旧视觉引用已更新；历史UI专题加失效说明，已发布事实保留。模型/数据/交易规则无变更。
+
+当前UI恢复标签ui-current-saved-20261008及source包保留，前轮已退旧UI活动副本；本轮技能恢复包另在artifacts/recovery/original-design-skills-20261008，不能混为UI恢复。旧融合仅可取证，恢复文件不自动恢复权威。唯一恢复证据保留，可再生安装暂存清理时须先核全局hash。
+
+下一步是用户审阅原版方案；确认后按原版选案和适用完整流程领取实施任务。不得直接从本轮规划跳进提醒/全域UI实现。
