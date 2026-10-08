@@ -328,22 +328,53 @@ def test_invalid_future_quote_cannot_replace_current_good_value(isolate_calendar
     assert hub.last_missing_symbols == ["600105"]
 
 
-def test_off_session_missing_price_cannot_erase_last_good_value(isolate_calendar, monkeypatch):
+@pytest.mark.parametrize("missing_price", [None, 0.0])
+def test_off_session_missing_price_cannot_erase_last_good_value(isolate_calendar, monkeypatch, missing_price):
     monkeypatch.setattr("app.market.trade_calendar.in_trading_window", lambda: False)
     current = make_q("600105", "甲", 10.0)
     b = make_q("600519", "乙", 100.0)
     hub, prov = _hub_with([current, b])
     asyncio.run(hub.refresh())
 
-    empty = make_q("600105", "甲", 10.0).model_copy(update={"price": None})
+    empty = make_q("600105", "甲", 10.0).model_copy(
+        update={"price": missing_price, "change": -10.0, "change_pct": -100.0}
+    )
     prov.quotes = [empty, b]
     asyncio.run(hub.refresh())
 
     kept = hub.quotes["600105"]
     assert kept.price == 10.0
+    assert kept.change == 0.0 and kept.change_pct == 0.0
     assert kept.quality == Quality.stale
     assert kept.quality_reasons == ["source_missing_price_ignored"]
     assert hub.last_missing_symbols == ["600105"]
+
+
+def test_off_session_zero_price_on_cold_start_remains_missing(isolate_calendar, monkeypatch):
+    monkeypatch.setattr("app.market.trade_calendar.in_trading_window", lambda: False)
+    zero = make_q("600105", "甲", 0.0).model_copy(update={"change_pct": -100.0})
+    hub, _ = _hub_with([zero, make_q("600519", "乙", 100.0)])
+    asyncio.run(hub.refresh())
+    assert hub.get_quotes(["600105"]) == []
+    assert hub.last_quote_rejections["600105"] == "source_missing_price_ignored"
+    assert hub.last_batch_coverage == pytest.approx(0.5)
+
+
+def test_off_session_zero_index_retains_last_good_value(isolate_calendar, monkeypatch):
+    monkeypatch.setattr("app.market.trade_calendar.in_trading_window", lambda: False)
+    hub, prov = _hub_with([])
+    index = make_q("000001", "上证指数", 3842.19)
+    hub.indices[index.symbol] = index
+
+    async def zero_indices():
+        return [index.model_copy(update={"price": 0.0, "change_pct": -100.0})]
+
+    monkeypatch.setattr(prov, "get_indices", zero_indices)
+    asyncio.run(hub.refresh())
+    kept = hub.get_quotes(["sh000001"])[0]
+    assert kept.price == 3842.19 and kept.change_pct == 0.0
+    assert kept.quality == Quality.stale
+    assert "source_missing_price_ignored" in kept.quality_reasons
 
 
 def test_missing_source_timestamp_cannot_overwrite_timestamped_current_value(isolate_calendar):

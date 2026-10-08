@@ -520,8 +520,6 @@ input::placeholder,textarea::placeholder{color:var(--ui-muted);opacity:1}
 /* User-requested compact actions use 36px plus spacing; drag grips retain 44px.
    Shared chart tools precede the grid so both content panels share a baseline. */
 .stock-workspace { row-gap:12px; }
-.detail-side-column .detail-lens label { width:100%; justify-content:space-between; white-space:nowrap; }
-.detail-side-column .detail-lens select { flex:1; min-width:0; max-width:160px; }
 .panel-meta button { min-height:30px; padding:4px 9px; }
 @media(max-width:1023px) {
   .detail-content-grid { flex:none; }
@@ -654,3 +652,15 @@ select {
 .notification-count { display:block; font-variant-numeric:tabular-nums; animation:count-arrive 160ms var(--ease-out); }
 @keyframes count-arrive { from { transform:translateY(35%); opacity:.6; } to { transform:none; opacity:1; } }
 @media(prefers-reduced-motion:reduce) { .notification-count { animation:none; } }
+
+/* Watchlist editing uses its own row; text and the native select arrow never compete. */
+.watchlist-group-editor { display:flex; align-items:center; gap:12px; font-size:12px; }
+.watchlist-group-editor > span { flex:none; color:var(--ui-muted); }
+.watchlist-group-editor > select { flex:1; min-width:0; min-height:32px; padding:6px 36px 6px 12px; border:1px solid var(--glass-border); font-size:12px; }
+.detail-perspective-tabs { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:2px 4px; flex:none; padding:6px 8px; border-bottom:1px solid var(--ui-line); }
+.detail-perspective-tabs > button { min-width:0; min-height:32px; padding:4px; white-space:nowrap; font-size:11px; color:var(--ui-muted); border-bottom:2px solid transparent; border-radius:4px 4px 0 0; }
+.detail-perspective-tabs > button[aria-pressed=true] { color:var(--ui-ink); border-bottom-color:var(--ui-accent); font-weight:600; }
+@media(hover:hover) and (pointer:fine) { .detail-perspective-tabs > button:hover { color:var(--ui-ink); background:var(--ui-hover); } }
+@media(max-width:767px), (pointer:coarse) { .watchlist-group-editor > select,.detail-perspective-tabs > button { min-height:44px; } }
+
+.detail-perspective-tabs[data-index=true] { grid-template-columns:repeat(2,minmax(0,1fr)); }
