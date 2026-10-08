@@ -249,10 +249,11 @@ async def kline(
     end: date | None = None,
     hub: QuoteHub = Depends(get_hub),
 ) -> dict:
-    from datetime import datetime, timezone as tz
+    from datetime import datetime
+    from app.core.bjtime import BJ_TZ
 
-    start_dt = datetime(start.year, start.month, start.day, tzinfo=tz.utc) if start else None
-    end_dt = datetime(end.year, end.month, end.day, 23, 59, tzinfo=tz.utc) if end else None
+    start_dt = datetime(start.year, start.month, start.day, tzinfo=BJ_TZ) if start else None
+    end_dt = datetime(end.year, end.month, end.day, 23, 59, 59, tzinfo=BJ_TZ) if end else None
     return await _kline_payload(hub, symbol, timeframe, limit, start_dt, end_dt)
 
 
@@ -288,6 +289,9 @@ async def trades(symbol: str, limit: int = Query(default=50, ge=1, le=200), hub:
     ⚠️ **口径**：TDX 给的是 **3 秒快照聚合**（非真实逐笔），东财是逐笔明细。
     实际来源由 `meta.trades_source` 与逐行 `Trade.source` 标注（tdx / eastmoney），
     前端据此显示口径——不要在 UI 上写死"逐笔"二字。
+
+    IMP-079：链与TDX均无结果后，可启用有界腾讯HTTP分笔聚合后备；非L2，
+    日期/陈旧状态来自源时间，第三路仍沿用上述故障与有效空集区分。
     """
     rows, source, detail = await fetch_trades_with_tdx_fallback(
         hub.provider.get_trades, symbol, limit=limit

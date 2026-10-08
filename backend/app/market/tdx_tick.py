@@ -337,15 +337,26 @@ async def fetch_trades_with_tdx_fallback(
         log.warning("chain trades failed for %s: %s", symbol, exc)
     if not settings.trades_tdx_fallback_enabled:
         detail.append("tdx: disabled")
-        return [], "none", "; ".join(detail)
-    try:
-        rows = await asyncio.to_thread(fetch_tdx_trades, symbol, limit=limit, timeout=timeout)
-        if rows:
-            return rows, TDX_SOURCE, ""
-        detail.append("tdx: empty")
-    except Exception as exc:  # noqa: BLE001
-        detail.append(f"tdx: {exc}")
-        log.warning("tdx trades failed for %s: %s", symbol, exc)
+    else:
+        try:
+            rows = await asyncio.to_thread(fetch_tdx_trades, symbol, limit=limit, timeout=timeout)
+            if rows:
+                return rows, TDX_SOURCE, ""
+            detail.append("tdx: empty")
+        except Exception as exc:  # noqa: BLE001
+            detail.append(f"tdx: {exc}")
+            log.warning("tdx trades failed for %s: %s", symbol, exc)
+    if settings.trades_tencent_http_fallback_enabled:
+        from app.market.tencent_tick import fetch_tencent_trades
+
+        try:
+            rows = await fetch_tencent_trades(symbol, limit)
+            if rows:
+                return rows, "tencent", ""
+            detail.append("tencent_http: empty")
+        except Exception as exc:  # noqa: BLE001
+            detail.append(f"tencent_http: {type(exc).__name__}: {exc}")
+            log.warning("tencent HTTP trades failed for %s: %s", symbol, detail[-1])
     return [], "none", "; ".join(detail)
 
 
@@ -356,7 +367,7 @@ async def fetch_trades_with_tdx_fallback(
 # 说成"数据源故障"（红线 3 同族：口径不许想当然）。判据与生产者放在一起、由两个消费方
 # （`api/routes/market_quotes.trades` 与 `assistant/tools/market._t_trades`）共用一份，
 # 避免各自复写后走样。
-_NON_FAILURE_SEGMENTS = frozenset({"chain: empty", "tdx: empty", "tdx: disabled"})
+_NON_FAILURE_SEGMENTS = frozenset({"chain: empty", "tdx: empty", "tdx: disabled", "tencent_http: empty"})
 
 
 def trades_failure_detail(detail: str) -> str:

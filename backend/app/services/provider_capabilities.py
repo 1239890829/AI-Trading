@@ -36,6 +36,7 @@ single_point_methods() 列出只有一个 SUPPORTED 源的方法——已知单�
 ⚠️ **逐笔（`get_trades`）已不再是单点**（2026-09-16 `IMP-038`）：eastmoney 仍是
 链上唯一 SUPPORTED 源（故仍会出现在 `single_point_methods()` 里），但路由层
 `/api/trades/{symbol}` 已有 **TDX 直连降级备源**（`app/market/tdx_tick.py`）。
+2026-10-08另增腾讯HTTP分笔第三路，仅在链和TDX无结果时调用。
 本表只描述**链内**能力，不含路由层直连旁路 —— 读单点清单时必须带上这一句，
 否则会把"已经有兜底"读成"挂了就没人管"。
 """
@@ -108,7 +109,7 @@ CAPABILITIES: dict[str, dict[str, dict]] = {
         "get_kline": _s("日线 + 分钟K（mkline 320 根上限、无翻页）——分钟K 唯一真源"),
         "get_raw_daily_kline": _n("fqkline 只提供 qfq/hfq，不冒充 raw"),
         "get_order_book": _s("五档盘口主源"),
-        "get_trades": _t("恒空：免费无稳定逐笔端点；逐笔走东财 details"),
+        "get_trades": _t("链内恒空；路由在TDX失败后有腾讯HTTP分笔后备（4秒/24请求，非L2）"),
         "get_limit_up_pool": _t("恒空占位：链上东财 push2ex 提供"),
         "get_limit_down_pool": _n("无实现：链上东财 push2ex 提供"),
         "get_limit_break_pool": _n("无实现：链上 ths/东财 push2ex 提供"),
@@ -142,7 +143,7 @@ CAPABILITIES: dict[str, dict[str, dict]] = {
         "get_kline": _s("push2his 本机被 WAF 拦（0.1s 快速失败）；家庭宽带通常可用——代码真，运行时看部署环境"),
         "get_raw_daily_kline": _s("push2his klt=101/fqt=0 不复权日K；结果标签 raw anchor 备源"),
         "get_order_book": _s("五档盘口备源"),
-        "get_trades": _s("逐笔成交唯一真源（details）；**降级备源=TDX 直连逐笔**（`app/market/tdx_tick.py`，路由层接管，2026-09-16 IMP-038。口径为 3 秒快照聚合，非逐笔明细；实测本机 push2his 被 WAF 拦 3/3 ⇒ 该备源是逐笔当前**唯一可用**路径）"),
+        "get_trades": _s("逐笔成交唯一真源（details）；**降级备源=TDX 直连逐笔**（`app/market/tdx_tick.py`，路由层接管，2026-09-16 IMP-038。口径为 3 秒快照聚合，非逐笔明细；实测本机 push2his 被 WAF 拦 3/3 ⇒ 此为2026-09-16历史结论；2026-10-08另增腾讯HTTP分笔后备）"),
         "get_limit_up_pool": _s("push2ex 涨停池备源（ths 挂时兜底）"),
         "get_limit_down_pool": _s("push2ex getTopicDTPool（唯一实现者单点；2026-09-04 实测 p×1000）"),
         "get_limit_break_pool": _s("push2ex getTopicZBPool（P0-4 消除炸板率单点）"),

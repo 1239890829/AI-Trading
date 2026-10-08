@@ -6,14 +6,17 @@
 - 分钟线:        ifzq.gtimg.cn/appstock/app/kline/mkline   (m1~m60)
 - 搜索:          smartbox.gtimg.cn/s3/?v=2&q=...&t=all     (GBK)
 
-快照字段（0 起）：1名称 3现价 4昨收 5今开 6量(手) 9-18买五档价量 19-28卖五档价量
-30时间(北京) 31涨跌 32涨跌% 33最高 34最低 36量(手) 37额(万) 38换手%
+快照字段（0 起）：1名称 3现价 4昨收 5今开 6量(科创股/其余手) 9-18买五档价量 19-28卖五档价量
+30时间(北京) 31涨跌 32涨跌% 33最高 34最低 36量(科创股/其余手) 37额(万) 38换手%
 """
 from __future__ import annotations
 
 import logging
+import asyncio
+import math
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from time import monotonic
 
 import httpx
 
@@ -24,6 +27,7 @@ from app.schemas.market import (
     OrderBook,
     OrderBookLevel,
     Quote,
+    Quality,
     SymbolSearchItem,
 )
 
@@ -40,6 +44,18 @@ _TIMEFRAME_PARAM = {
 }
 
 _ROW_RE = re.compile(r'v_(sh|sz|bj)(\d{6})="([^"]*)"')
+_KLINE_HOSTS = ("https://web.ifzq.gtimg.cn", "https://proxy.finance.qq.com/ifzqgtimg", "https://ifzq.gtimg.cn")
+
+
+def volume_to_shares(symbol: str, value: float | None) -> float | None:
+    """报价、K线和分时：科创板原值是股，其余支持证券原值是手。
+
+    五档盘口和HTTP分笔仍以手返回，不能套用此转换。
+    """
+    if value is None or not math.isfinite(value) or value < 0:
+        return None
+    code = to_tencent_symbol(symbol)
+    return value if code.startswith(("sh688", "sh689")) else value * 100
 
 
 def _num(v: str | None) -> float | None:
@@ -61,11 +77,11 @@ def _bj(v: str | None) -> datetime | None:
         return None
 
 
-def build_minute_points(rows: list, trade_date: str, fallback_date) -> list[dict]:
+def build_minute_points(rows: list, trade_date: str, fallback_date, symbol: str = "") -> list[dict]:
     """腾讯 minute 行数组 → 分时点列表（纯函数，可单测）。
 
     :param rows: 形如 ``["0930 1289.00 81 10440900.00", ...]``——
-        第 2 列是价格，**第 3 列是累计量（手）而非该分钟量**，第 4 列是累计额（元）。
+        第 2 列是价格，**第 3 列是累计量（科创板为股，其余为手）而非该分钟量**，第 4 列是累计额（元）。
         （2026-08-30 用茅台两行数据交叉验证确认：旧实现把累计量当分钟量，
         量能柱画成了"递增的累计柱"；均价线也因此算出荒谬值。）
     :param trade_date: 响应自带的真实交易日（YYYYMMDD）；缺失/非法时回退 fallback_date
@@ -89,7 +105,7 @@ def build_minute_points(rows: list, trade_date: str, fallback_date) -> list[dict
         if price is None or price <= 0:
             continue
         cum_hand = _num(parts[2])
-        cum_vol = cum_hand * 100 if cum_hand is not None else None  # 手→股
+        cum_vol = volume_to_shares(symbol, cum_hand)
         cum_amount = _num(parts[3])
         avg = None
         minute_vol = None
@@ -164,7 +180,7 @@ def parse_quote(prefix: str, fields: list[str]) -> Quote:
         change_pct=_num(fields[32] if len(fields) > 32 else None),
         high=_num(fields[33] if len(fields) > 33 else None),
         low=_num(fields[34] if len(fields) > 34 else None),
-        volume=volume_hands * 100 if volume_hands is not None else None,
+        volume=volume_to_shares(prefix + fields[2], volume_hands),
         amount=amount_wan * 1e4 if amount_wan is not None else None,
         turnover_rate=_num(fields[38] if len(fields) > 38 else None),
         pe_ttm=_num(fields[39] if len(fields) > 39 else None),
@@ -255,11 +271,15 @@ def parse_kline_payload(symbol: str, timeframe: str, payload: dict) -> list[Klin
                 close=_num(str(row[2])),
                 high=_num(str(row[3])),
                 low=_num(str(row[4])),
-                volume=vol_hand * 100 if vol_hand is not None else None,
+                volume=volume_to_shares(symbol, vol_hand),
                 source=SOURCE,
             )
         )
     bars.sort(key=lambda b: b.ts)
+    if not minute and not node.get(f"qfq{key}") and bars:
+        for bar in bars:
+            bar.quality = Quality.medium
+            bar.quality_reasons.append("腾讯未返回前复权序列，使用不复权价格")
     return bars
 
 
@@ -272,6 +292,7 @@ class TencentProvider:
     realtime_rank = 0
 
     def __init__(self, timeout: float = 5.0):
+        self._kline_down_until: dict[str, float] = {}
         self._client = httpx.AsyncClient(
             trust_env=False,  # 行情源均为国内站，直连，不走用户系统代理
             timeout=timeout,
@@ -349,27 +370,74 @@ class TencentProvider:
         spec = _TIMEFRAME_PARAM.get(timeframe)
         if spec is None:
             raise ProviderError(f"tencent unsupported timeframe: {timeframe}")
-        if isinstance(spec, tuple):  # day/week
-            param = f"{to_tencent_symbol(symbol)},{spec[0]},,,320,{spec[1]}"
-            url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
-        else:  # 分钟线 m1~m60
-            param = f"{to_tencent_symbol(symbol)},{spec},,320"
-            url = "https://ifzq.gtimg.cn/appstock/app/kline/mkline"
-        resp = await self._client.get(url, params={"param": param})
-        if resp.status_code != 200:
-            raise ProviderError(f"tencent kline HTTP {resp.status_code}")
-        bars = parse_kline_payload(symbol, timeframe, resp.json())
+        start, end = _as_aware(start), _as_aware(end)
+        if start and end and start > end:
+            raise ProviderError("tencent kline start exceeds end")
+        async with asyncio.timeout(10):  # 整段预算，不能每段重新获得10秒
+            if isinstance(spec, tuple):
+                first = start.astimezone(BJ_TZ).date() if start else None
+                last = end.astimezone(BJ_TZ).date() if end else beijing_now().date()
+                if first and (last - first).days > (700 if timeframe == "1d" else 3650) * 40:
+                    raise ProviderError("tencent kline requested range exceeds 40 segments")
+                bars_by_ts = {}
+                while True:
+                    stop = min(first + timedelta(days=699 if timeframe == "1d" else 3649), last) if first else last
+                    param = f"{to_tencent_symbol(symbol)},{spec[0]},{first.isoformat() if first else ''},{stop.isoformat() if end or first else ''},640,{spec[1]}"
+                    segment = await self._kline_segment(symbol, timeframe, param, "/appstock/app/fqkline/get")
+                    for bar in segment:
+                        # 日/周线ts为日期标签；只收本段，防上游忽略区间。
+                        if (not first or bar.ts.date() >= first) and bar.ts.date() <= stop:
+                            bars_by_ts[bar.ts] = bar
+                    if not first or stop >= last:
+                        break
+                    first = stop + timedelta(days=1)
+                bars = sorted(bars_by_ts.values(), key=lambda b: b.ts)
+                if len({tuple(b.quality_reasons) for b in bars}) > 1:
+                    raise ProviderError("tencent kline mixed adjustment basis across segments")
+            else:
+                bars = await self._kline_segment(symbol, timeframe, f"{to_tencent_symbol(symbol)},{spec},,320", "/appstock/app/kline/mkline")
         # 调用方习惯传 naive datetime，而 bar 时间戳是 UTC aware；不归一化的话
         # 比较会抛 TypeError，表现为"K 线取不到"而非类型错误，极难排查。
-        start = _as_aware(start)
-        end = _as_aware(end)
         if start is not None:
-            bars = [b for b in bars if b.ts >= start]
+            bars = [b for b in bars if (b.ts.date() >= start.astimezone(BJ_TZ).date() if isinstance(spec, tuple) else b.ts >= start)]
         if end is not None:
-            bars = [b for b in bars if b.ts <= end]
+            bars = [b for b in bars if (b.ts.date() <= end.astimezone(BJ_TZ).date() if isinstance(spec, tuple) else b.ts <= end)]
         if not bars:
             raise ProviderError(f"tencent kline empty for {symbol} {timeframe}")
         return bars
+
+    async def _kline_segment(self, symbol: str, timeframe: str, param: str, path: str) -> list[Kline]:
+        errors = []
+        for host in _KLINE_HOSTS:
+            if self._kline_down_until.get(host, 0) > monotonic():
+                continue
+            try:
+                resp = await self._client.get(host + path, params={"param": param})
+                if resp.status_code != 200:
+                    raise ProviderError(f"HTTP {resp.status_code}")
+                payload = resp.json()
+                if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict) or to_tencent_symbol(symbol) not in payload["data"]:
+                    raise ProviderError("missing requested symbol")
+                node = payload['data'][to_tencent_symbol(symbol)]
+                spec = _TIMEFRAME_PARAM[timeframe]
+                if not isinstance(node, dict):
+                    raise ProviderError('requested price node is not an object')
+                if isinstance(spec, tuple):
+                    series = node.get('qfq' + spec[0]) or node.get(spec[0])
+                else:
+                    series = node.get(spec)
+                if not isinstance(series, list) or not series:
+                    raise ProviderError("missing/empty requested price series")
+                bars = parse_kline_payload(symbol, timeframe, payload)
+                if len(bars) != len(series) or len({b.ts for b in bars}) != len(bars):
+                    raise ProviderError("malformed/duplicate price rows")
+                if any(any(v is None or not math.isfinite(v) or v <= 0 for v in (b.open, b.high, b.low, b.close)) for b in bars):
+                    raise ProviderError("invalid/nonpositive adjusted price")
+                return bars
+            except (httpx.HTTPError, ValueError, TypeError, ProviderError) as exc:
+                self._kline_down_until[host] = monotonic() + 120
+                errors.append(f"{host}: {exc}")
+        raise ProviderError("tencent kline hosts unavailable: " + "; ".join(errors))
 
     async def get_order_book(self, symbol: str) -> OrderBook | None:
         snap = await self._snapshot([symbol])
@@ -379,7 +447,7 @@ class TencentProvider:
         return parse_order_book(symbol, entry[1])
 
     async def get_trades(self, symbol: str) -> list:
-        return []  # 腾讯免费逐笔无稳定端点；逐笔走东财 details，分钟级分时走 get_minute_line
+        return []  # HTTP分笔在TDX之后接入路由备链，避免链前遍历影响健康快路径。
 
     async def get_minute_line(self, symbol: str) -> list[dict]:
         """当日 1 分钟分时：[{ts, price, volume(股), cum_amount(元), cum_volume(股), avg(元)}]。
@@ -401,7 +469,7 @@ class TencentProvider:
         node = payload.get("data") or {}
         rows = node.get("data") or []
         trade_date = str(node.get("date") or "")
-        points = build_minute_points(rows, trade_date, beijing_now().date())
+        points = build_minute_points(rows, trade_date, beijing_now().date(), symbol)
         if is_index_minute_symbol(symbol):
             # 指数无均价概念（点位≠成交额/成交量），avg 留空防分时 Y 轴被拉爆
             for p in points:

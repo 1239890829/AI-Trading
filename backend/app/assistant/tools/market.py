@@ -198,8 +198,16 @@ async def _t_trades(ctx: ToolContext, **kw) -> str:
         else:
             why = "两源均未给出数据（非取数故障）" + (f"：{detail}" if detail else "")
         return f"逐笔成交：{codes[0]} 取不到——{why}"
-    return _fmt_rows(f"逐笔成交 {codes[0]}（源 {source}）", rows[:30], [
+    caliber = "HTTP分笔聚合，非L2" if source == "tencent" else "3秒快照聚合，非L2" if source == "tdx" else "逐笔明细"
+    display = []
+    for row in rows[-30:]:
+        item = _rec(row)
+        item = {**item, "time": item.get("ts") or item.get("time")}
+        item["quality"] = getattr(item.get("quality"), "value", item.get("quality"))
+        display.append(item)
+    return _fmt_rows(f"逐笔成交 {codes[0]}（源 {source}；{caliber}；量：手）", display, [
         ("time", "时间"), ("price", "价格"), ("volume", "量"), ("side", "方向"),
+        ("quality", "质量"), ("quality_reasons", "说明"),
     ], total=len(rows))
 
 
