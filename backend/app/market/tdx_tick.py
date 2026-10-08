@@ -347,13 +347,15 @@ async def fetch_trades_with_tdx_fallback(
             detail.append(f"tdx: {exc}")
             log.warning("tdx trades failed for %s: %s", symbol, exc)
     if settings.trades_tencent_http_fallback_enabled:
-        from app.market.tencent_tick import fetch_tencent_trades
+        from app.market.tencent_tick import fetch_tencent_trades, UnsupportedTencentTick
 
         try:
             rows = await fetch_tencent_trades(symbol, limit)
             if rows:
                 return rows, "tencent", ""
             detail.append("tencent_http: empty")
+        except UnsupportedTencentTick:
+            detail.append("tencent_http: unsupported")
         except Exception as exc:  # noqa: BLE001
             detail.append(f"tencent_http: {type(exc).__name__}: {exc}")
             log.warning("tencent HTTP trades failed for %s: %s", symbol, detail[-1])
@@ -367,7 +369,7 @@ async def fetch_trades_with_tdx_fallback(
 # 说成"数据源故障"（红线 3 同族：口径不许想当然）。判据与生产者放在一起、由两个消费方
 # （`api/routes/market_quotes.trades` 与 `assistant/tools/market._t_trades`）共用一份，
 # 避免各自复写后走样。
-_NON_FAILURE_SEGMENTS = frozenset({"chain: empty", "tdx: empty", "tdx: disabled", "tencent_http: empty"})
+_NON_FAILURE_SEGMENTS = frozenset({"chain: empty", "tdx: empty", "tdx: disabled", "tencent_http: empty", "tencent_http: unsupported"})
 
 
 def trades_failure_detail(detail: str) -> str:

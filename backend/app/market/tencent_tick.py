@@ -24,6 +24,10 @@ _MAX_PAGE = 255  # 超范围直接失败，不返回旧尾部冒充最新
 _SIDE = {"B": "buy", "S": "sell", "M": "neutral"}
 
 
+class UnsupportedTencentTick(ProviderError):
+    """该HTTP接口无此证券能力；不能把能力缺失当源故障。"""
+
+
 def parse_tick_page(text: str, code: str, page: int) -> list[dict]:
     if not text.strip():
         return []
@@ -53,7 +57,7 @@ class TencentTickFallback:
     async def fetch(self, symbol: str, limit: int = 50) -> list[Trade]:
         code = to_tencent_symbol(symbol)
         if not re.fullmatch(r'(sh|sz)\d{6}', code) or code.startswith(('sh000', 'sz399')):
-            raise ProviderError("tencent ticks unsupported security")
+            raise UnsupportedTencentTick("tencent ticks unsupported security")
         if not 1 <= limit <= 200:
             raise ProviderError("tencent ticks limit must be 1..200")
         # UTC日+源日校验，缓存返回副本，保留原received_at；不刷新旧数据时间。

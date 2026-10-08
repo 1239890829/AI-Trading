@@ -73,6 +73,18 @@ def test_tdx_success_never_calls_http_fallback(monkeypatch):
     assert result[1]=='tdx'
 
 
+@pytest.mark.parametrize('symbol',['430047.BJ','000001.SH','399001.SZ'])
+def test_unsupported_http_does_not_turn_valid_empty_into_fault(monkeypatch,symbol):
+    monkeypatch.setattr(tdx_tick.settings,'trades_tdx_fallback_enabled',True)
+    monkeypatch.setattr(tdx_tick.settings,'trades_tencent_http_fallback_enabled',True)
+    monkeypatch.setattr(tdx_tick,'fetch_tdx_trades',lambda *a,**kw:[])
+    async def primary(symbol):return []
+    rows,source,detail=asyncio.run(tdx_tick.fetch_trades_with_tdx_fallback(primary,symbol))
+    assert rows==[] and source=='none'
+    assert 'tencent_http: unsupported' in detail
+    assert tdx_tick.trades_failure_detail(detail)==''
+
+
 def test_http_fallback_after_tdx_error_and_error_remains_visible(monkeypatch):
     monkeypatch.setattr(tdx_tick.settings,'trades_tdx_fallback_enabled',True)
     monkeypatch.setattr(tdx_tick.settings,'trades_tencent_http_fallback_enabled',True)
