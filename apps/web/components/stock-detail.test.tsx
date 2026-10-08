@@ -1,4 +1,4 @@
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { StockDetailPanel } from "@/components/stock-detail";
@@ -51,5 +51,28 @@ describe("StockDetailPanel · WS 订阅复用（P1-5）", () => {
     render(<StockDetailPanel symbol="600519" chartTab="flow" />);
     expect(calls.symbols.length).toBeGreaterThan(0);
     for (const s of calls.symbols) expect(s).toEqual(["600519"]);
+  });
+});
+
+
+describe("StockDetailPanel · 核对视角入口", () => {
+  it("点击和方向键切换复用受控视角回调", () => {
+    const onRightTabChange = vi.fn();
+    const view = render(<StockDetailPanel symbol="600519" chartTab="flow" onRightTabChange={onRightTabChange} />);
+    const controls = within(view.getByRole("group", { name: "核对视角" }));
+    fireEvent.click(controls.getByRole("button", { name: "资料" }));
+    expect(onRightTabChange).toHaveBeenLastCalledWith("profile");
+    fireEvent.keyDown(controls.getByRole("button", { name: "资料" }), { key: "Home" });
+    expect(onRightTabChange).toHaveBeenLastCalledWith("book");
+    fireEvent.keyDown(controls.getByRole("button", { name: "盘口" }), { key: "ArrowLeft" });
+    expect(onRightTabChange).toHaveBeenLastCalledWith("info");
+  });
+
+  it("指数只提供适用视角，不能从入口进入股票交易", () => {
+    const view = render(<StockDetailPanel symbol="sh000001" chartTab="flow" />);
+    const controls = within(view.getByRole("group", { name: "核对视角" }));
+    expect(controls.getAllByRole("button").map(button => button.textContent)).toEqual(["涨速", "板块"]);
+    expect(controls.queryByRole("button", { name: "模拟交易" })).toBeNull();
+    expect(controls.queryByRole("button", { name: "手工记账" })).toBeNull();
   });
 });

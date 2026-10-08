@@ -190,8 +190,15 @@ def test_off_session_zero_high_low_not_flagged():
 
 
 def test_off_session_price_zero_not_flagged():
-    q = validate_quote(make_quote(price=0), live=False)
+    q = validate_quote(make_quote(price=0, change=-10, change_pct=-100), live=False)
     assert q.quality is Quality.high
+    assert q.quality_reasons == ["off_session"]
+    assert q.price is None and q.change is None and q.change_pct is None
+
+
+def test_off_session_missing_price_has_no_derived_change():
+    q = validate_quote(make_quote(price=None, change=-10, change_pct=-100), live=False)
+    assert q.price is None and q.change is None and q.change_pct is None
 
 
 def test_off_session_change_pct_mismatch_not_flagged():

@@ -675,14 +675,18 @@ def test_data_health_marketdb_uses_content_date_not_mtime(sf, tmp_path, monkeypa
     10 天前，断言哨兵照样报 NG：判据必须落在数据上。
     """
     import duckdb
+    from app.market import marketdb_freshness as mdb_freshness
 
-
+    # 固定在普通交易周：长假里的“10 自然日”可能不足 4 个交易日，不能据此断言陈旧。
+    now = datetime(2026, 9, 22, 10, 0, tzinfo=BJ_TZ)
+    monkeypatch.setattr(evo, "beijing_now", lambda: now)
+    monkeypatch.setattr(mdb_freshness, "beijing_now", lambda: now)
     mdb_dir = tmp_path / "backend" / "data" / "marketdb"
     mdb_dir.mkdir(parents=True)
     db = mdb_dir / "market.duckdb"
     con = duckdb.connect(str(db))
     con.execute("CREATE TABLE daily_k_adj (thscode VARCHAR, date_ms BIGINT, close_adj DOUBLE)")
-    tail = beijing_now().date() - timedelta(days=10)
+    tail = now.date() - timedelta(days=10)
     ms = int(datetime(tail.year, tail.month, tail.day,
                       tzinfo=BJ_TZ).timestamp() * 1000)
     con.execute("INSERT INTO daily_k_adj VALUES ('600519.SH', ?, 10.0)", [ms])

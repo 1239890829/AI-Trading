@@ -7,7 +7,7 @@ import Cancel01Icon from "@hugeicons/core-free-icons/Cancel01Icon";
 import Link from "next/link";
 import { AccountScopePanel } from "@/components/detail/account-scope-panel";
 import { patchWorkspaceUrl } from "@/lib/task-navigation";
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Panel } from "@/components/panel";
 import { parseChartTab, parseRightTab } from "@/lib/detail-tabs";
@@ -15,7 +15,6 @@ import { IndexCards } from "@/components/index-cards";
 import { StockDetailPanel, type ChartTab, type RightTab } from "@/components/stock-detail";
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
-import { Sparkline, NO_CLOSES } from "@/components/sparkline";
 import { PickDetailModal, type PickDetailTarget } from "@/components/picks/pick-detail-modal";
 import { useQuoteStream, STREAM_STATUS_LABEL } from "@/hooks/use-quote-stream";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
@@ -32,7 +31,6 @@ import {
   getBoardFundBySymbols,
   getQuotes,
   getRiskState,
-  getSparklines,
   getTodayPicks,
   getTurnoverToday,
   getWatchlist,
@@ -45,12 +43,10 @@ import {
   type IntradayTopStock,
   type PaperPositionInfo,
   type RiskState,
-  type SparklinePayload,
   type SymbolBoardFund,
   getPositionLabels,
 } from "@/lib/api";
 import { fmt, pctColor, pctText, signedYi, triAmount, triText } from "@/lib/format";
-import { isTradingSession } from "@/lib/market-hours";
 import { subscribeWatchlist, notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import { LAST_SYMBOL_KEY, originLabel } from "@/lib/routing";
 import type { Quote } from "@/types/market";
@@ -137,7 +133,7 @@ function WorkbenchInner() {
   );
   const { quotes, status } = useQuoteStream(streamSymbols, { throttleMs: 3000 });
   const [extra, setExtra] = useState<Record<string, Quote>>({});
-  // WS 每 5s tick 全量替换 quotes：merged/列表/spark 查找都必须 memo 化，
+  // WS 每 5s tick 全量替换 quotes：merged/列表查找都必须 memo 化，
   // 否则每次 tick 触发整列表 O(n²) 重算（评审 F2）
   const merged: Record<string, Quote> = useMemo(() => ({ ...extra, ...quotes }), [extra, quotes]);
 
@@ -258,41 +254,19 @@ function WorkbenchInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [feedSymbols]);
 
-  // 迷你走势（retro #9）：2026-09-07 起为当日分时价格（period=minute，用户要求
-  // 列表迷你图展示当日分钟级走势，而非近 30 日日K 收盘）。盘中 60s 轮询（与
-  // 图表校准同节奏）；盘外分时是最近交易日终态——已有数据时跳过拉取（零外呼，
-  // 时段判定见 lib/market-hours.ts），首帧/自选集合变化仍无条件立即拉。
-  const [sparks, setSparks] = useState<SparklinePayload | null>(null);
-  const sparkKey = symbols.join(",");
-  // 自选清空 → 渲染期同步清 sparkline 缓存（防上一组残留，adjust-state 模式）
-  if (symbols.length === 0 && sparks !== null) {
-    setSparks(null);
-  }
-  // sparkKey 变化 → 立即拉取（.then 回调里 setState，不在 effect 同步路径）
-  useEffect(() => {
-    if (symbols.length === 0) return;
-    getSparklines(symbols, 30, "minute").then(setSparks).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sparkKey]);
-  // 盘中 60s 刷新（拉取失败保持旧序列；盘外已有数据时跳过——不重拉不变的数据）
-  usePollingFetch(async () => {
-    if (sparks && !isTradingSession()) return;
-    const s = await getSparklines(symbols, 30, "minute").catch(() => null);
-    if (s) setSparks(s);
-  }, 60_000);
-
   // 所属板块资金（P1-4，2026-09-10）：主板块 = 东财行业三级 L2（白酒Ⅱ/银行Ⅱ…），
   // 资金 = 东财 f62 主力净额 + 连续流入天数。**口径与个股资金流（新浪 L4）不同，不可相加**。
   // 60s 与自选行情同节奏；F10 归属在后端有 6h 缓存（所属板块低频变更），轮询实际只刷新资金值。
+  const symbolKey = symbols.join(",");
   const [boardFund, setBoardFund] = useState<Record<string, SymbolBoardFund>>({});
   if (symbols.length === 0 && Object.keys(boardFund).length > 0) {
-    setBoardFund({}); // 自选清空 → 渲染期同步清掉（防上一组残留，同 sparks 的 adjust-state 模式）
+    setBoardFund({}); // 自选清空 → 渲染期同步清掉（防上一组残留）
   }
   useEffect(() => {
     if (symbols.length === 0) return;
     getBoardFundBySymbols(symbols.slice(0, 50)).then(setBoardFund).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sparkKey]);
+  }, [symbolKey]);
   usePollingFetch(async () => {
     if (symbols.length === 0) return;
     const m = await getBoardFundBySymbols(symbols.slice(0, 50)).catch(() => null);
@@ -356,13 +330,6 @@ function WorkbenchInner() {
     : activeGroup === "猎场" ? huntingQuotes
     : watchQuotes;
   const isDynamicGroup = activeGroup === "猎场";
-  // spark 数据按 symbol 建索引，行内 O(1) 取（评审 F2：行内 find 是 O(n²)）
-  const sparkBySymbol = useMemo(() => {
-    const m = new Map<string, number[]>();
-    for (const item of sparks?.items ?? []) m.set(item.symbol, item.closes);
-    return m;
-  }, [sparks]);
-
   // 选股详情弹窗（2026-09-07 用户需求）：每日精选/盘中跟踪行的「详情」按钮
   const [detailTarget, setDetailTarget] = useState<PickDetailTarget>(null);
 
@@ -667,10 +634,7 @@ function WorkbenchInner() {
               )}
             </p>
           ) : (
-            /* 2026-09-07 文字挤压修复：table-fixed + 明确列宽。此前 auto 布局下
-               迷你图(72px)/价格/涨跌/徽标列占满 340px 左栏，名称列被压到 ~51px
-               内容区，4 字简称也换行（行高实测撑到 72px）。名称列 auto 吸收剩余
-               宽度（340px 下 ≈98px，容纳 5 字简称），超长名 truncate + title 兜底。 */
+            /* 名称吸收剩余宽度；分组编辑独立成行，避免挤占行情列。 */
             <table className="w-full table-fixed text-sm">
               <tbody>
                 {activeRows.map((q) => {
@@ -678,8 +642,8 @@ function WorkbenchInner() {
                   const top = activeGroup === "猎场" ? topInfoBySymbol.get(q.symbol) : undefined;
                   const bf = boardFund[q.symbol];
                   return (
+                  <Fragment key={q.symbol}>
                   <tr
-                    key={q.symbol}
                     onClick={() => switchSymbol(q.symbol)}
                     className={`cursor-pointer border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900 ${
                       activeSymbol === q.symbol ? "bg-zinc-50 dark:bg-zinc-900" : ""
@@ -735,12 +699,12 @@ function WorkbenchInner() {
                       <div className="min-w-0">
                         <div className="truncate" title={q.name ?? undefined}>{q.name ?? "--"}</div>
                         {/* 所属板块资金（P1-4，2026-09-10）：主板块（东财行业三级 L2）+
-                            该板块 f62 主力净额。**必须独立成行**——列宽仅 ~62px，与名称同行
+                            该板块 f62 主力净额。**必须独立成行**，与名称同行
                             会把名称挤到 0 宽（实测）。**金额 shrink-0 优先**、板块名 truncate：
                             金额（含红绿方向）是扫视主信号，不能先被截掉（首版实测被截成
                             「通信设备-4…」，金额反而丢了）；完整信息在 title。
                             判不出主板块的标的不渲染（三态）。连续流入天数只进 title
-                            （列宽放不下；0=今日转流出、null=未沉淀，本身也不显示）。 */}
+                            （不占用行情列；0=今日转流出、null=未沉淀，本身也不显示）。 */}
                         {bf && (
                           <div
                             className="flex min-w-0 items-baseline gap-1 text-[10px] font-normal leading-4"
@@ -761,36 +725,12 @@ function WorkbenchInner() {
                           </div>
                         )}
                       </div>
-                    </td>
-                    <td className="hidden w-[44px] px-1 py-2 sm:table-cell" title="当日分时（盘外展示最近交易日）">
-                      {pick != null || top != null ? (
-                        <span
-                          className="block truncate text-[10px] text-zinc-600 dark:text-zinc-400"
-                          title={pick != null ? (pick.echelon_role ?? "") : `确定性 ${triText(top?.certainty?.level)} · 辨识度 ${triText(top?.distinctiveness?.level)}`}
-                        >
-                          {pick != null
-                            ? pick.echelon_role ?? ""
-                            : `确定性 ${triText(top?.certainty?.level)} · 辨识度 ${triText(top?.distinctiveness?.level)}`}
-                        </span>
-                      ) : managing && activeGroup !== "持仓" ? (
-                        <select
-                          value={groupMap[q.symbol] ?? "默认"}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={(e) => void changeGroup(q.symbol, e.target.value)}
-                          className="w-full min-w-0 rounded border border-zinc-200 bg-transparent px-1 py-0.5 text-xs dark:border-zinc-700"
-                          aria-label={`修改 ${q.symbol} 分组`}
-                        >
-                          {allGroups.map((g) => (
-                            <option key={g} value={g}>{g}</option>
-                          ))}
-                        </select>
-                      ) : (
-                        <Sparkline
-                          closes={sparkBySymbol.get(q.symbol) ?? NO_CLOSES}
-                          up={q.change_pct == null ? undefined : q.change_pct >= 0}
-                          width={44}
-                        />
-                      )}
+                        {(pick != null || top != null) && (
+                          <div className="truncate text-[10px] text-zinc-600 dark:text-zinc-400"
+                            title={pick != null ? (pick.echelon_role ?? "") : `确定性 ${triText(top?.certainty?.level)} · 辨识度 ${triText(top?.distinctiveness?.level)}`}>
+                            {pick != null ? pick.echelon_role ?? "" : `确定性 ${triText(top?.certainty?.level)} · 辨识度 ${triText(top?.distinctiveness?.level)}`}
+                          </div>
+                        )}
                     </td>
                     <td className="w-[60px] px-1 py-2 text-right font-mono text-xs tabular-nums">
                       {q.price == null ? <span className="font-sans text-zinc-600 dark:text-zinc-400">未开盘</span> : <PriceFlash value={q.price}>{fmt(q.price)}</PriceFlash>}
@@ -829,6 +769,21 @@ function WorkbenchInner() {
                       )}
                     </td>
                   </tr>
+                  {managing && activeGroup !== "持仓" && !pick && !top && (
+                    <tr className="watchlist-group-row">
+                      <td colSpan={5} className="px-3 pb-3">
+                        <label className="watchlist-group-editor">
+                          <span>分组</span>
+                          <select value={groupMap[q.symbol] ?? "默认"}
+                            onChange={(e) => void changeGroup(q.symbol, e.target.value)}
+                            aria-label={`修改 ${q.symbol} 分组`}>
+                            {allGroups.map((g) => <option key={g} value={g}>{g}</option>)}
+                          </select>
+                        </label>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                   );
                 })}
               </tbody>

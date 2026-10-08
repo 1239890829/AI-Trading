@@ -920,15 +920,24 @@ export const StockDetailPanel = memo(function StockDetailPanel({
             </button>
           }
         >
-          <div className="detail-tabs detail-lens flex shrink-0 items-center justify-between gap-2 border-b border-zinc-100 px-3 py-2 dark:border-zinc-800/60">
-            <label className="flex min-w-0 items-center gap-2 text-xs">核对视角
-              <select aria-label="个股核对视角" value={rightTab} onChange={event => { const next = event.target.value as DetailRightTab; if (onRightTabChange) onRightTabChange(next); else setRightTab(next); }}>
-                {isIndex ? rightTabsFor(true).map(([key, label]) => <option key={key} value={key}>{label}</option>) : <>
-                  <optgroup label="行情与依据">{rightTabsFor(false).filter(([key]) => ["book", "trades", "profile", "info"].includes(key)).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</optgroup>
-                  <optgroup label="账户与记录">{rightTabsFor(false).filter(([key]) => ["trade", "real", "dt"].includes(key)).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</optgroup>
-                </>}
-              </select>
-            </label>
+          <div className="detail-perspective-tabs" data-index={isIndex} role="group" aria-label="核对视角"
+            onKeyDown={(event) => {
+              if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+              const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button"));
+              const current = buttons.indexOf(event.target as HTMLButtonElement);
+              if (current < 0) return;
+              event.preventDefault();
+              const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
+                : (current + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+              buttons[next].focus();
+              buttons[next].click();
+            }}>
+            {rightTabsFor(isIndex).map(([key, label]) => (
+              <button key={key} type="button" aria-pressed={rightTab === key}
+                onClick={() => { if (onRightTabChange) onRightTabChange(key); else setRightTab(key); }}>
+                {label}
+              </button>
+            ))}
           </div>
           {rightTab === "speed" && <SpeedPanel className="h-full" />}
           {rightTab === "boards" && <BoardRankPanel className="h-full" />}

@@ -50,6 +50,13 @@ def validate_quote(new: Quote, prev: Quote | None = None, *, live: bool | None =
     reasons: list[str] = []
     invalid: list[str] = []
 
+    # 盘前零价是源端“未建立”占位，不能按昨收推成 -100%，也不能覆盖最后可信值。
+    # 不用昨收伪造现价；置空后 Hub 沿既有 missing-price 接纳门保留并标 stale。
+    if not live and (new.price is None or new.price <= 0):
+        new.price = None
+        new.change = None
+        new.change_pct = None
+
     if len(new.symbol) != _INVALID_SYMBOL_DIGITS or not new.symbol.isdigit():
         _add(reasons, invalid, "invalid_symbol", True)
 
