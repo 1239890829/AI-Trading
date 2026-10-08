@@ -50,10 +50,10 @@ export function WatchLedgerPanel() {
   const st = data?.stats;
 
   return (
-    <section className="ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+    <section className="ui-card hunting-ledger rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-          跟踪台账
+          跟踪记录
           <span className="ml-2 text-[11px] font-normal text-zinc-600 dark:text-zinc-400">
             {data ? `${data.trade_date} · ${st?.total ?? 0} 只` : "加载中…"}
           </span>
@@ -79,8 +79,8 @@ export function WatchLedgerPanel() {
         </div>
       </div>
 
-      {error && <p className="mb-2 rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-800 dark:text-amber-300">台账加载失败：{error}</p>}
-      {orderNote && <p className="mb-2 rounded bg-sky-500/10 px-2 py-1 text-[11px] text-sky-700 dark:text-sky-300">{orderNote}</p>}
+      {error && <p role="alert" className="mb-2 rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-800 dark:text-amber-300">台账加载失败：{error}{data ? "。以下保留上次读取结果，当前状态待重试核实。" : "。请稍后重试，未读到记录不代表没有跟踪。"}</p>}
+      {orderNote && <p role="status" className="mb-2 rounded bg-sky-500/10 px-2 py-1 text-[11px] text-sky-700 dark:text-sky-300">{orderNote}</p>}
 
       {data && (data.rows?.length ?? 0) === 0 && (
         <p className="py-3 text-center text-[11px] text-zinc-600 dark:text-zinc-400">
@@ -89,7 +89,7 @@ export function WatchLedgerPanel() {
       )}
 
       {data && (data.rows?.length ?? 0) > 0 && (
-        <div className="overflow-x-auto">
+        <div className="hunting-table-scroll overflow-x-auto" tabIndex={0} role="region" aria-label="参考跟踪明细，可横向滚动">
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-zinc-200 text-left text-[10px] text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
@@ -166,7 +166,7 @@ export function WatchLedgerPanel() {
       )}
 
       {showHistory && (
-        <div className="mt-2 border-t border-zinc-100 pt-2 dark:border-zinc-800">
+        <div className="hunting-table-scroll mt-2 border-t border-zinc-100 pt-2 dark:border-zinc-800" tabIndex={0} role="region" aria-label="历史跟踪统计，可横向滚动">
           <table className="w-full text-[11px]">
             <thead>
               <tr className="text-left text-zinc-600 dark:text-zinc-400">
@@ -198,8 +198,8 @@ export function WatchLedgerPanel() {
         </div>
       )}
 
-      <p className="mt-2 text-[10px] leading-relaxed text-zinc-600 dark:text-zinc-400">
-        台账说明：入选即登记（当日唯一，盘中不移除）→ 收盘清算（入选价 vs 收盘价）→ 逐股判定与统计；判定口径 收盘 ≥ 入选 = 成功、亏 ≤2% = 持平、否则失败。历史记录收盘后可查。
+      <p className="mt-2 text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">
+        参考跟踪、非持仓：参考价不是成交价，收盘变化不代表模拟交易收益。手工模拟建仓仍须经后端撮合与风险校验。台账说明：入选即登记（当日唯一，盘中不移除）→ 收盘清算（入选价 vs 收盘价）→ 逐股判定与统计；判定口径 收盘 ≥ 入选 = 成功、亏 ≤2% = 持平、否则失败。历史记录收盘后可查。
       </p>
       <details className="mt-3" onToggle={e => setEvidenceOpen(e.currentTarget.open)}>
         <summary className="min-h-11 cursor-pointer py-2 text-xs focus-visible:outline-2 focus-visible:outline-sky-500">查看同版机会依据</summary>

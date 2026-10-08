@@ -14,7 +14,7 @@ describe("shared workspace tray", () => {
     fireEvent.click(screen.getByRole("button", {name: "运行与处置"}));
     expect(screen.queryByRole("button", {name: /参数配置/})).toBeNull();
     expect(screen.getAllByRole("region")).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", {name: /任务与回执/}));
+    fireEvent.click(screen.getByRole("button", {name: /后台任务/}));
     expect(onOpen.mock.calls[0][0]).toBe("tasks");
   });
   it("returns keyboard focus to the folder after Escape", () => {

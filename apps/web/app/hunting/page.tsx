@@ -1,5 +1,7 @@
 "use client";
 
+import "./hunting.css";
+
 import { patchWorkspaceUrl } from "@/lib/task-navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
@@ -62,41 +64,29 @@ import {
 } from "@/components/ui/loading";
 import { timeText } from "@/lib/format";
 import { OpportunityEvidencePanel } from "@/components/hunting/opportunity-evidence-panel";
+import { HuntingTaskRail } from "@/components/hunting/hunting-task-rail";
+import { LeaderResearchPanel } from "@/components/hunting/leader-research-panel";
 import { useExitPresence } from "@/hooks/use-exit-presence";
-import { motionOrigin, type MotionOrigin } from "@/lib/surface-motion";
 import { ModalShell } from "@/components/ui/modal-shell";
 import { WatchLedgerPanel } from "@/components/hunting/watch-ledger-panel";
 import { CandidateCollection } from "@/components/ui/candidate-collection";
 
 /**
- * 猎场（/hunting，2026-09-08 板块融合 docs/summary/review-governance.md §三）：
- * 合并原 /picks（每日精选）+ /intraday（盘中跟踪），回答「今天/现在值得盯哪些票」。
- *
- * 结构：统计条（双口径独立不混算）→ **两条瀑布流**（盘中跟踪在上 / 盘前选择在下，
- * 2026-09-10 用户要求分区）→ 异动手风琴（题材→个股瀑布流）→ 盘中节拍（简报/watcher/
- * 提醒，折叠可展开）→ 对照与复盘（对照表 / 近 30 日统计 / 精选逐日复盘，折叠可展开）。
- *
- * 语义差异保持（审查 §3.3-6）：精选是 date+symbol 持久组合，跟踪是当日实时动态名单
- * ——统计条分别标注口径。深链：?tag= / ?theme= / ?sec= / ?review=1 全部保留
- * （旧 /picks /intraday 路径经 next.config 302 兜底）。全页不构成买卖建议。
+ * Real selection consumers, organised by discover / observe / verify.
+ * Daily persisted combinations and dynamic intraday candidates stay separate.
+ * Existing view/panel/sec/theme/review links retain their consumer and return context.
  */
-
-// 布局沿革：09-09 取消 tab 分类改单容器混排 → 09-10 两卡合并为同一个 PickCard 后
-// **重新分区为两条瀑布流**（盘中在上）。原因：卡片字段已统一，但**来源节奏不同**
-// （盘中=当日实时动态名单，盘前=收盘定次日持久组合），混排会让两种节奏互相干扰。
-// 来源仍由卡片适配器写入 origin 并渲染右上角徽标（分区是对节奏的提示，徽标是对单条的确认）。
-//
-// 名额口径（09-10 用户要求「不要硬凑五个，也不要过多，按实际情况来选」）：
-// 两个分区的只数都是**筛选结果**而非固定值——盘中按「确定性×辨识度」档位筛（unknown/低
-// 不入选，上限 8），盘前按六维综合分入选门槛筛（<50 不入选，上限 5）。因此 0 只是合法结论。
-
 function HuntingInner() {
   const router = useRouter();
-  const [origin, setOrigin] = useState<MotionOrigin | null>(null);
   const sp = useSearchParams();
-  const isDiscovery = !["evidence", "tracking"].includes(sp.get("view") ?? "");
+  const requestedView = sp.get("view");
+  const view = requestedView === "evidence" || requestedView === "tracking" || requestedView === "research" || requestedView === "review"
+    ? requestedView : sp.get("sec") === "review" || sp.get("review") === "1" ? "review" : "discover";
+  // Evidence, reference and research own their reads. Do not mount the old feed behind them.
+  const isDiscovery = view === "discover" || view === "review";
 
-  const accessory = useExitPresence(sp.get("panel") === "evidence" || sp.get("panel") === "tracking" ? sp.get("panel") : null);
+  const panel = sp.get("panel");
+  const accessory = useExitPresence((panel === "evidence" || panel === "tracking") && panel !== view ? panel : null);
 
   // —— 精选组数据 ——
   const [data, setData] = useState<DailyPicksPayload | null>(null);
@@ -109,6 +99,7 @@ function HuntingInner() {
   const [health, setHealth] = useState<SignalHealthPayload | null>(null);
   const [picksLoaded, setPicksLoaded] = useState(false);
   const [picksFailed, setPicksFailed] = useState(false);
+  const [reviewReadFailures, setReviewReadFailures] = useState<string[]>([]);
 
   // —— 跟踪组数据 ——
   const [brief, setBrief] = useState<MorningBrief | null>(null);
@@ -119,13 +110,14 @@ function HuntingInner() {
   const [top, setTop] = useState<IntradayTopPayload | null>(null);
   const [intradayLoaded, setIntradayLoaded] = useState(false);
   const [intradayFailed, setIntradayFailed] = useState(false);
+  const [topReadFailed, setTopReadFailed] = useState(false);
 
 
   // —— URL 状态（深链为真相源）——
   // ?tag= 深链仍可解析（nav-targets 兼容）但不再分流视图——单一瀑布流（2026-09-09）
   const expandedTheme = sp.get("theme");
   const sec = sp.get("sec");
-  const secValid = /^(overview|opportunity|brief|watcher|reminders|review)$/.test(sec ?? "");
+  const secValid = /^(overview|candidates|daily|opportunity|postmarket|brief|watcher|reminders|review)$/.test(sec ?? "");
   // 折叠区开合：?sec= 深链自动展开对应组；?review=1 / 生成复盘成功展开复盘组
   const [beatsOpen, setBeatsOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(() => sp.get("review") === "1");
@@ -143,17 +135,6 @@ function HuntingInner() {
   // （旧后端 / 复核不可用时不至于整个横幅消失）。对照面始终传 stored。
   const gateView = data?.meta?.gate_live ?? data?.meta?.gate;
 
-  // ?sec= 滚动定位（展开已在上方渲染期完成，这里只负责滚动）
-  useEffect(() => {
-    if (!secValid) return;
-    const scroll = () => {
-      document.getElementById(`sec-${sec}`)?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" });
-    };
-    scroll();
-    const t = window.setTimeout(scroll, 400);
-    return () => window.clearTimeout(t);
-  }, [sec, secValid]);
-
   const toggleTheme = useCallback(
     (t: string) => {
       const next = expandedTheme === t ? null : t;
@@ -167,21 +148,22 @@ function HuntingInner() {
   );
 
   const load = useCallback(async () => {
-    // 精选组（任一失败不拖垮其他；全组失败置 picksFailed 可见警示）
+    // 精选主接口失败单独披露，不能因统计接口成功而伪装为有效空组合。
     {
       const [d, h, r, m, sh] = await Promise.all([
         getTodayPicks().catch(() => null),
-        getPicksHistory(10).catch(() => []),
-        getPickReviews().catch(() => [] as PickReviewRow[]),
+        getPicksHistory(10).catch(() => null),
+        getPickReviews().catch(() => null),
         getPicksMeta().catch(() => null),
         getSignalHealth().catch(() => null),
       ]);
       setData(d);
-      setHistory(h);
-      setReviews(r);
+      setHistory(h ?? []);
+      setReviews(r ?? []);
+      setReviewReadFailures([...(h === null ? ["历史组合"] : []), ...(r === null ? ["精选归因"] : []), ...(m === null ? ["角色统计"] : [])]);
       setMeta(m);
       setHealth(sh);
-      setPicksFailed(d === null && m === null && sh === null);
+      setPicksFailed(d === null);
       setPicksLoaded(true); // 成败都算"拉过"：失败有警示，不能永远停在骨架
     }
     // 跟踪组（原 /intraday 四端点 + intraday-top）
@@ -201,7 +183,8 @@ function HuntingInner() {
       setStats(s);
       setOpps(o);
       setTop(tp);
-      setIntradayFailed(b.failed || (b.data === null && w === null && s === null && o === null && tp === null));
+      setTopReadFailed(tp === null);
+      setIntradayFailed(b.failed || tp === null || o === null || (b.data === null && w === null && s === null));
       setIntradayLoaded(true);
     }
   }, []);
@@ -218,6 +201,19 @@ function HuntingInner() {
   const briefMissing = picksLoaded && intradayLoaded && brief === null && !briefReadFailed;
   const pending = !picksLoaded || !intradayLoaded;
 
+  // ?sec= 滚动定位（展开已在上方渲染期完成，这里只负责滚动）
+  useEffect(() => {
+    if (!secValid) return;
+    const scroll = () => {
+      document.getElementById(`sec-${sec}`)?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" });
+    };
+    scroll();
+    const t = window.setTimeout(scroll, 400);
+    return () => window.clearTimeout(t);
+  }, [sec, secValid, pending, view]);
+
+
+
   // 猎场两条瀑布流（2026-09-10 用户要求分区，取代 09-09 的单容器混排）：
   // 盘中跟踪在前（实时优先）、盘前选择在后；同股两者都在时只出现在盘中组（防重 key）。
   // 闭环「标签」：已模拟持仓/已真实持仓（持仓状态派生，60s 轮询）
@@ -226,7 +222,7 @@ function HuntingInner() {
   usePollingFetch(async () => {
     const m = await getPositionLabels().catch(() => null);
     if (m) setPosLabels(m);
-  }, 60_000, undefined, {enabled: isDiscovery});
+  }, 60_000, undefined, {enabled: view === "discover"});
 
   // 依赖取**状态对象** data/top（引用稳定），不取派生的 items/topItems：
   // `?? []` 每次渲染都会新建数组引用，放进依赖会让 memo 每轮失效
@@ -248,27 +244,23 @@ function HuntingInner() {
   // 不能硬编码：硬编码会在参数被调整后继续显示旧数（口径漂移）。
   const replaceThreshold = data?.meta?.replace_threshold;
   const maxSwaps = data?.meta?.max_swaps_per_day;
-  const feedEmpty = topItems.length === 0 && topRefItems.length === 0 && pickTotal === 0;
 
   return (
-    <main data-workspace="hunting" className="task-page mx-auto flex h-full w-full max-w-[1400px] flex-col gap-3 overflow-hidden px-4 py-3">
+    <main data-workspace="hunting" className="task-page hunting-workspace mx-auto flex h-full w-full max-w-[1440px] flex-col overflow-hidden">
       {/* 头部：标题 + 口径说明 + 刷新状态 + 操作 */}
-      <div className="workspace-masthead hunting-masthead">
-        <div><h1 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">机会发现</h1>
-        <span title="精选=盘后布下的猎物（date+symbol 持久组合）；跟踪=盘中正在追的猎物（当日实时动态名单）；题材异动=猎群">
-          精选 · 跟踪 · 猎群
-        </span></div>
+      <header className="workspace-masthead hunting-masthead">
+        <div><h1>选股</h1><p className="hunting-page-intro">先发现，再核对条件，持续跟踪变化。</p></div>
         <div className="workspace-context">
         {isDiscovery && (picksFailed || intradayFailed) ? (
           <span
             className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-800 dark:text-amber-300"
             title="部分数据端点失败（后端不可达或网络中断）。每 60s 自动重试，也可点「刷新数据」。"
           >
-            ⚠ 数据加载失败 · 自动重试中
+            数据加载失败 · 自动重试中
           </span>
         ) : (
-          <span className="text-[10px]" title="页面每 60s 自动拉取最新数据；切走再切回会立即刷新。">
-            每 60s 自动刷新
+          <span className="text-[10px]" title={view === "tracking" ? "跟踪记录每 30s 读取；切回会立即刷新。" : "当前视图每 60s 读取；切回会立即刷新。"}>
+            {view === "tracking" ? "记录每 30s 刷新" : "每 60s 自动刷新"}
           </span>
         )}
         <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
@@ -281,30 +273,30 @@ function HuntingInner() {
           </button>}
           <Link href="/agent?area=maintenance&tab=operations" className="quiet-action">生产状态与维护</Link>
         </div></div>
-      </div>
+      </header>
 
-      {data?.stale && (
+      {isDiscovery && data?.stale && (
         <div className="shrink-0 rounded-lg border border-zinc-300 px-3 py-1.5 text-xs text-zinc-600 dark:text-zinc-400 dark:border-zinc-700">
           当前展示 {data.date} 生成的组合——今日组合交易日 09:26 自动生成（这里只读取已保存组合，生产状态见系统维护）
         </div>
       )}
-      {data?.note && <div className="shrink-0 text-xs text-zinc-600 dark:text-zinc-400">{data.note}</div>}
+      {isDiscovery && data?.note && <div className="shrink-0 text-xs text-zinc-600 dark:text-zinc-400">{data.note}</div>}
 
-      <div className="opportunity-workrail" aria-label="机会工作流">
-        <div><span className="rail-indicator" aria-hidden="true"/><strong>发现 → 核对 → 跟踪</strong><span className="rail-hint">先看机会，按需展开依据</span></div>
-        <div className="flex flex-wrap items-center gap-1">
-          {!isDiscovery && <Link className="quiet-action" href={patchWorkspaceUrl("/hunting", sp.toString(), {view: "discover", panel: null})}>返回当前机会</Link>}
-          <button data-action="primary" className="accessory-trigger" aria-haspopup="dialog" onClick={event => { setOrigin(motionOrigin(event, "capsule")); router.push(patchWorkspaceUrl("/hunting", sp.toString(), {panel: "evidence", view: "discover"}), {scroll: false}); }}>展开证据台</button>
-          <button className="accessory-trigger" aria-haspopup="dialog" onClick={event => { setOrigin(motionOrigin(event, "capsule")); router.push(patchWorkspaceUrl("/hunting", sp.toString(), {panel: "tracking", view: "discover"}), {scroll: false}); }}>参考跟踪</button>
-          <Link className="quiet-action" href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "positions", account: "paper", view: null, panel: null, from: `/hunting?${sp.toString()}`})}>持仓与模拟</Link>
-          <Link className="quiet-action" href={patchWorkspaceUrl("/agent", sp.toString(), {area: "research", tab: "review", view: null, panel: null, from: `/hunting?${sp.toString()}`})}>跨日复盘</Link>
-        </div>
+      <HuntingTaskRail view={view} section={sec} search={sp.toString()} />
+      <div className="hunting-current-context">
+        <p>{view === "evidence" ? "核对同版依据、等待条件与反证；研究观察不取得交易资格。"
+          : view === "tracking" ? "参考跟踪记录与收盘对照；关注、参考价均不是持仓或成交。"
+          : view === "research" ? "研究强势形成过程；保留来源、缺项与后续观察，尚未验证的规律不进入交易排序。"
+          : view === "review" ? "比较原判断与实际结果；精选、参考轨和模拟执行分别统计。"
+          : "盘中候选实时变化；每日精选保留组合日期，两种名单分开核对。"}</p>
+        <Link className="quiet-action" href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "positions", account: "paper", view: null, panel: null, from: `/hunting?${sp.toString()}`})}>持仓与模拟</Link>
       </div>
-      {accessory.value && <ModalShell motionOrigin={origin} open={accessory.active} label={accessory.value === "evidence" ? "机会证据台" : "参考跟踪"} size="lg" presentation="drawer" expandable onClose={() => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {panel: null}), {scroll: false})} header={<div><p className="workspace-kicker">机会工作流</p><h2 className="text-lg font-semibold">{accessory.value === "evidence" ? "机会证据台" : "参考跟踪"}</h2></div>} footer="保留当前机会位置；参考价与观察记录不是成交，不构成买卖建议。">
+      {accessory.value && <ModalShell open={accessory.active} label={accessory.value === "evidence" ? "机会证据台" : "参考跟踪"} size="lg" presentation="drawer" expandable onClose={() => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {panel: null}), {scroll: false})} header={<div><h2 className="text-lg font-semibold">{accessory.value === "evidence" ? "机会证据台" : "参考跟踪"}</h2></div>} footer="保留当前机会位置；参考价与观察记录不是成交，不构成买卖建议。">
         {accessory.active && (accessory.value === "evidence" ? <OpportunityEvidencePanel date={sp.get("date") ?? undefined} onDateChange={date => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {date}), {scroll: false})} /> : <WatchLedgerPanel />)}
       </ModalShell>}
-      <div className="task-scroll min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
-        {sp.get("view") === "evidence" ? <OpportunityEvidencePanel date={sp.get("date") ?? undefined} onDateChange={date => { const p = new URLSearchParams(sp.toString()); p.set("date", date); router.replace(`/hunting?${p.toString()}`, {scroll:false}); }} /> : sp.get("view") === "tracking" ? <WatchLedgerPanel /> : <>
+      <div className="task-scroll hunting-content min-h-0 flex-1 overflow-y-auto" aria-label="选股内容">
+        {view === "evidence" ? <OpportunityEvidencePanel date={sp.get("date") ?? undefined} onDateChange={date => { const p = new URLSearchParams(sp.toString()); p.set("date", date); router.replace(`/hunting?${p.toString()}`, {scroll:false}); }} /> : view === "tracking" ? <WatchLedgerPanel /> : view === "research" ? <LeaderResearchPanel date={sp.get("date") ?? undefined} onDateChange={date => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {date: date ?? null}), {scroll: false})} /> : <>
+        {view === "discover" && <>
         {/* ── 空仓闸门横幅（风险提示置顶）──
             2026-09-16 动态化：以**读取时刻复核**（meta.gate_live）为准展示，
             生成时刻落库值（meta.gate）作对照。此前只显示落库值 ⇒ 开盘 3 分钟的
@@ -319,6 +311,49 @@ function HuntingInner() {
           />
         )}
 
+
+<div className="hunting-discovery-grid"><div className="hunting-candidate-flow">
+        <section id="sec-candidates" className="hunting-candidates space-y-3">
+          <div className="hunting-section-heading">
+            <div><h2 className="hunting-section-title">盘中候选</h2><p>当日动态名单 · 当前未封板，进入参与评估不保证成交</p></div>
+            {!pending && !topReadFailed && <span className="hunting-section-count">{topItems.length} 只</span>}
+          </div>
+          <p className="hunting-source-note" title="名单与参考区均按账户交易权限过滤">权限 {top?.tradable_boards ?? "沪市主板 / 深市主板"}</p>
+          {pending ? <CardListSkeleton count={2} /> : topReadFailed ? <div role="alert" className="hunting-empty">盘中候选读取失败。请刷新重试；当前无法判断是否有符合条件的标的。</div>
+            : topItems.length > 0 ? <CandidateCollection>{topItems.map(it => <PickCard key={it.symbol} item={fromIntradayStock(it)} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>
+            : <div className="hunting-empty">当前没有可参与候选。题材尚未集中或条件未满足时，名单可以为空；系统不会凑满名额。</div>}
+          {top?.criteria && <p className="hunting-source-note">{top.criteria}</p>}
+          {topRefItems.length > 0 && <details className="hunting-reference-fold">
+            <summary>涨停梯队 {topRefItems.length} 只<span>参考集合，当前状态逐股核对</span></summary>
+            <p className="hunting-source-note">{top?.reference_criteria ?? "保留今日曾封板身份；当前仍封、已开板或未判，以卡片对应时点为准。仅用于观察资金集中方向。"}</p>
+            <CandidateCollection>{topRefItems.map(it => <PickCard key={it.symbol} item={fromIntradayStock(it)} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>
+          </details>}
+        </section>
+        <section id="sec-daily" className="hunting-daily space-y-3">
+          <div className="hunting-section-heading"><div><h2 className="hunting-section-title">每日精选</h2><p>{data?.date ?? "组合日期待读取"} · 收盘定次日的持久组合</p></div>{!pending && !picksFailed && <span className="hunting-section-count">{pickTotal} 只</span>}</div>
+          {pending ? <CardListSkeleton count={2} /> : picksFailed ? <div role="alert" className="hunting-empty">每日精选读取失败。请刷新重试；读取失败不表示没有组合。</div>
+            : pickTotal === 0 ? <div className="hunting-empty">{data?.date == null
+              ? "尚未生成组合。此处仅读取已保存结果；请在系统维护核对调度与受控生成。"
+              : `${data.date}${data.stale ? "（最近一次生成，非今日）" : ""} 没有标的达到入选门槛${minPickScore != null ? `（综合分≥${minPickScore}）` : ""}。这是筛选结论，不是数据缺失。`}</div>
+            : pickItems.length > 0 ? <CandidateCollection>{pickItems.map(it => <PickCard key={it.symbol} item={fromDailyPick(it)} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>
+            : <div className="hunting-empty">{pickTotal} 只均已在盘中候选区展示。同一标的保留一张主卡，组合身份与来源仍可核对。</div>}
+          <p className="hunting-source-note">{minPickScore != null ? `综合分≥${minPickScore} · ` : ""}{replaceThreshold != null ? `换股门槛 ${replaceThreshold} 分` : "换股门槛未返回"} · {maxSwaps != null ? `每日换股上限 ${maxSwaps} 只` : "换股上限未返回"}；够格几只就保留几只。</p>
+        </section>
+
+        {/* ── 异动手风琴（题材 → 个股瀑布流）── */}
+        <div id="sec-opportunity" className="scroll-mt-2">
+          {opps ? (
+            <FadeIn>
+              <OpportunitySection opps={opps} expanded={expandedTheme} onToggle={toggleTheme} showLedger={false} />
+            </FadeIn>
+          ) : (
+            pending ? <CardListSkeleton count={3} /> : <p role="alert" className="hunting-empty">题材参与数据读取失败，请刷新重试。无法据此判断没有题材机会。</p>
+          )}
+        </div>
+
+        {/* ── 盘后增强（P1-5/6）：接力质量排序 + 潜伏观察池，默认收起 ── */}
+        <div id="sec-postmarket"><PostMarketEnhance initiallyOpen={sec === "postmarket"} /></div>
+        </div><aside className="hunting-context-column" aria-label="市场环境与判断口径">
         {/* ── 相位→风格路由（审查 §4.1）：当日风格 + 权重偏移，路由未生效时显式说明 ── */}
         {data?.meta?.style_routing && (
           <StyleRoutingChip sr={data.meta.style_routing} />
@@ -330,7 +365,7 @@ function HuntingInner() {
             <h2 className="text-xs font-medium text-zinc-600 dark:text-zinc-400">今日盘面</h2>
             {opps?.hot_available === false && (
               <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-800 dark:text-amber-300">
-                ⚠ 人气榜不可用：辨识度判定不完整
+                人气榜不可用：辨识度判定不完整
               </span>
             )}
           </div>
@@ -350,165 +385,12 @@ function HuntingInner() {
           )}
         </section>
 
-        {/* ── 猎场瀑布流：两个容器 / 两条瀑布流（2026-09-10 用户要求，推翻 09-09 的单容器混排）──
-            卡片已合并为同一个 PickCard（字段互补），但**来源节奏不同**：盘中是当日实时
-            动态名单、盘前是收盘定次日的持久组合。混排会让两种节奏互相干扰，故分区，
-            盘中在上（当下要看的东西优先）。 */}
-        <section className="space-y-3">
-          {/* 口径说明已内联到各分区标题行（避免同一句话在页头/分区/徽标重复三遍） */}
-          {picksFailed && intradayFailed ? (
-            <div className="rounded-lg border border-zinc-200 px-3 py-2.5 text-xs text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
-              精选与跟踪数据均不可用（后端不可达或端点失败）——每 60s 自动重试。
-            </div>
-          ) : pending ? (
-            <CardListSkeleton count={3} />
-          ) : feedEmpty ? (
-            <p className="py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">
-              暂无跟踪标的与精选组合——盘中候选成形后自动出现；生产状态与受控兜底见系统维护
-              <br />
-              （候选池 = 题材联动可参与股 ∪ 活跃事件标的池 ∪ 当日涨停池 ∪ 热股榜——开盘即涨停的个股不进候选，
-              只作题材集中度的参考信息；六维评分达到入选门槛者入选，最多 5
-              只、够格几只就是几只，全程可解释不构成买卖建议）。
-            </p>
-          ) : (
-            <>
-              {/* ① 盘中跟踪（在上）——2026-09-15 口径：上方是**可参与**候选，
-                  下方虚线框是涨停梯队（历史参考，当前封板/未判状态按快照显示）。两者刻意分区+标注，
-                  避免"名单看着很强但一只都买不进"（用户指令：所有加入猎场的个股
-                  必须是投资者实际可以参与的）。 */}
-              {(topItems.length > 0 || topRefItems.length > 0) && (
-                <FadeIn>
-                  <div className="space-y-2">
-                    <div className="flex flex-wrap items-baseline gap-2">
-                      <h2 className="text-xs font-medium text-zinc-600 dark:text-zinc-400">盘中跟踪</h2>
-                      <span className="text-[10px] text-zinc-600 dark:text-zinc-400">
-                        {topItems.length} 只可参与候选 · 当日实时动态名单（当前未封板、可进入参与评估）
-                      </span>
-                      <span
-                        className="rounded border border-zinc-300 px-1.5 py-0.5 text-[10px] text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
-                        title="账户交易权限口径：名单已按权限过滤——创业板/科创板/北交所/B 股不进候选与参考区"
-                      >
-                        权限 {top?.tradable_boards ?? "沪市主板 / 深市主板"}
-                      </span>
-                    </div>
-                    {topItems.length > 0 ? (
-                      <CandidateCollection>
-                        {topItems.map((it) => (
-                          <PickCard
-                            key={it.symbol}
-                            item={fromIntradayStock(it)}
-                            positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null}
-                          />
-                        ))}
-                      </CandidateCollection>
-                    ) : (
-                      <p className="text-[11px] text-zinc-600 dark:text-zinc-400">
-                        当前无可参与候选（题材未形成集中、或候选涨幅/成交额未达联动门槛）——
-                        0 只是合法结论，不硬凑。
-                      </p>
-                    )}
-                    {top?.criteria && <p className="text-[10px] text-zinc-600 dark:text-zinc-400">{top.criteria}</p>}
 
-                    {topRefItems.length > 0 && (
-                      <details className="rounded-lg border border-dashed border-amber-500/40 p-2">
-                        <summary className="cursor-pointer text-[11px] text-amber-800 dark:text-amber-300">
-                          涨停梯队 {topRefItems.length} 只 · 历史参考（当前状态见卡片判定）
-                        </summary>
-                        <p className="mt-1.5 text-[10px] text-zinc-600 dark:text-zinc-400">
-                          {top?.reference_criteria ??
-                            "这些个股记录的是今日曾封板身份；当前仍封、已开板或状态未判以卡片的时点判定为准。它们首先用于揭示资金集中方向。"}
-                        </p>
-                        <div className="mt-2">
-                          <CandidateCollection>
-                            {topRefItems.map((it) => (
-                              <PickCard
-                                key={it.symbol}
-                                item={fromIntradayStock(it)}
-                                positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null}
-                              />
-                            ))}
-                          </CandidateCollection>
-                        </div>
-                      </details>
-                    )}
-                  </div>
-                </FadeIn>
-              )}
-
-              {/* ② 盘前选择（在下）——名单长度由质量决定：达到入选门槛几只就是几只，
-                  0 只也是结论（弱市里硬凑满 5 只才是风险）。 */}
-              {pickTotal > 0 ? (
-                <FadeIn>
-                  <div className="space-y-2">
-                    <div className="flex flex-wrap items-baseline gap-2">
-                      <h2 className="text-xs font-medium text-zinc-600 dark:text-zinc-400">盘前选择</h2>
-                      <span className="text-[10px] text-zinc-600 dark:text-zinc-400">
-                        {pickTotal} 只 · 收盘定次日持久组合（
-                        {minPickScore != null ? `入选门槛 综合分≥${minPickScore}，不硬凑名额 · ` : ""}
-                        {replaceThreshold != null ? `换股门槛 ${replaceThreshold} 分` : "换股门槛 15 分"}
-                        {maxSwaps != null ? ` · 每日换股上限 ${maxSwaps} 只` : " · 每日换股上限 2 只"}）
-                      </span>
-                    </div>
-                    {pickItems.length > 0 ? (
-                      <CandidateCollection>
-                        {pickItems.map((it) => (
-                          <PickCard
-                            key={it.symbol}
-                            item={fromDailyPick(it)}
-                            positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null}
-                          />
-                        ))}
-                      </CandidateCollection>
-                    ) : (
-                      <p className="text-[10px] text-zinc-600 dark:text-zinc-400">
-                        {pickTotal} 只均已在盘中跟踪区展示（同一标的只出现一次，避免同一页重复卡片）。
-                      </p>
-                    )}
-                  </div>
-                </FadeIn>
-              ) : (
-                <FadeIn>
-                  <div className="space-y-2">
-                    <div className="flex flex-wrap items-baseline gap-2">
-                      <h2 className="text-xs font-medium text-zinc-600 dark:text-zinc-400">盘前选择</h2>
-                      <span className="text-[10px] text-zinc-600 dark:text-zinc-400">0 只 · 收盘定次日持久组合</span>
-                    </div>
-                    <p className="rounded-lg border border-zinc-200 px-3 py-2 text-[11px] text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
-                      {data?.date == null
-                        ? "尚未生成组合——这里只读取持久结果；请在系统维护核调度或执行受控生成。"
-                        : `${data.date}${data.stale ? "（非今日，最近一次生成）" : ""} 无标的达到入选门槛` +
-                          `${minPickScore != null ? `（综合分 ≥${minPickScore}）` : ""}` +
-                          "——弱市里名单本就该短，硬凑满名额才是风险；这是筛选结论，不是数据缺失。"}
-                    </p>
-                  </div>
-                </FadeIn>
-              )}
-            </>
-          )}
-          {(picksFailed || intradayFailed) && (
-            <p className="text-[10px] text-amber-800 dark:text-amber-500">
-              {picksFailed ? "盘前选择数据不可用（每 60s 自动重试）" : ""}
-              {intradayFailed ? "盘中跟踪数据不可用（每 60s 自动重试）" : ""}
-            </p>
-          )}
-        </section>
-
-        {/* ── 异动手风琴（题材 → 个股瀑布流）── */}
-        <div id="sec-opportunity" className="scroll-mt-2">
-          {opps ? (
-            <FadeIn>
-              <OpportunitySection opps={opps} expanded={expandedTheme} onToggle={toggleTheme} />
-            </FadeIn>
-          ) : (
-            pending && <CardListSkeleton count={3} />
-          )}
-        </div>
-
-        {/* ── 盘后增强（P1-5/6）：接力质量排序 + 潜伏观察池，默认收起 ── */}
-        <PostMarketEnhance />
+        <div className="hunting-reading-note"><h2>如何使用这份名单</h2><p>先看形成依据，再核对来源时间、参与条件和失效条件。强势、入选与可成交是不同事实。</p><p>需要持续留痕时进入“跟踪记录”；需要核验历史判断时进入“验证复盘”。</p></div>
+        </aside></div></>}
 
         {/* ── 盘中节拍（简报 / watcher / 提醒）：默认收起，深链或操作后展开 ── */}
-        <details
+        {view === "discover" && <details
           open={beatsOpen}
           onToggle={(e) => setBeatsOpen((e.target as HTMLDetailsElement).open)}
           className="opportunity-fold"
@@ -591,16 +473,16 @@ function HuntingInner() {
               </>
             )}
           </div>
-        </details>
+        </details>}
 
         {/* ── 对照与复盘（对照表 / 近 30 日统计 / 精选复盘区）：默认收起 ── */}
         <details
-          open={reviewOpen}
+          open={view === "review" || reviewOpen}
           onToggle={(e) => setReviewOpen((e.target as HTMLDetailsElement).open)}
-          className="opportunity-fold"
+          className="opportunity-fold hunting-journal"
         >
           <summary>
-            <span><strong>对照与复盘</strong><span className="fold-caption">盘前与实际 · 胜率统计 · 逐日归因</span></span>
+            <span><strong>当日对照与精选复盘</strong><span className="fold-caption">盘前与实际 · 胜率统计 · 逐日归因</span></span>
             {brief?.review && <span className="fold-meta">{timeText(brief.review.reviewed_at)} 复盘</span>}
             <span className="fold-chevron" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m7 10 5 5 5-5" /></svg></span>
           </summary>
@@ -608,11 +490,11 @@ function HuntingInner() {
             <section id="sec-review" className="space-y-2 scroll-mt-2">
               <h3 className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
                 今日盘前 vs 实际
-                {brief?.review ? "" : "（未复盘，15:35 自动运行）"}
+                {briefReadFailed ? "（读取失败）" : brief?.review ? "" : "（未复盘，计划 15:35 运行）"}
               </h3>
               {pending && reviewed.length === 0 ? (
                 <TableSkeleton rows={3} />
-              ) : reviewed.length === 0 ? (
+              ) : briefReadFailed ? <p role="alert" className="hunting-empty">盘前简报读取失败，当前无法核对原判断与复盘结果。请刷新重试。</p> : reviewed.length === 0 ? (
                 <div className="ui-card rounded-xl border border-zinc-200 p-4 text-xs text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
                   今日尚未对照。请在系统维护核对盘后调度（收盘后才有意义）。
                 </div>
@@ -631,12 +513,10 @@ function HuntingInner() {
                 </section>
               </FadeIn>
             ) : (
-              pending && (
-                <section className="space-y-2">
-                  <h3 className="text-xs font-medium text-zinc-600 dark:text-zinc-400">近 30 日胜率统计（跟踪）</h3>
-                  <StatsSkeleton />
-                </section>
-              )
+              <section className="space-y-2">
+                <h3 className="text-xs font-medium text-zinc-600 dark:text-zinc-400">近 30 日胜率统计（跟踪）</h3>
+                {pending ? <StatsSkeleton /> : <p className="hunting-empty">统计暂不可用。缺少统计不表示胜率为零，等待重试读取。</p>}
+              </section>
             )}
 
             {/* 精选复盘区（?review=1 / 生成复盘后展开；历史组合一致性可回溯） */}
@@ -650,7 +530,8 @@ function HuntingInner() {
               )}
               {reviews.length > 0 && <DailyReviews reviews={reviews} />}
               {history.length > 0 && <HistoryList history={history} />}
-              {reviews.length === 0 && history.length === 0 && (
+              {reviewReadFailures.length > 0 && <p role="alert" className="hunting-empty">{reviewReadFailures.join("、")}读取失败。请刷新重试；以下只展示成功读取的结果，不能据此认定没有记录。</p>}
+              {reviewReadFailures.length === 0 && reviews.length === 0 && history.length === 0 && (
                 <div className="ui-card rounded-xl border border-zinc-200 p-4 text-xs text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
                   暂无复盘记录。可在系统维护对已有组合生成归因。
                 </div>
@@ -661,15 +542,14 @@ function HuntingInner() {
         </>}
       </div>
 
-      <div className="shrink-0 text-[10px] text-zinc-600 dark:text-zinc-400">
+      <details className="hunting-method-note"><summary>判断口径与风险说明</summary><p>
         {data?.meta?.weights
           ? `精选权重（${data.meta.regime?.regime ?? "平衡"}${data.meta.style_routing?.routed ? ` · 风格「${data.meta.style_routing.label}」` : ""}）：${Object.entries(data.meta.weights)
               .map(([k, v]) => `${{ sentiment: "情绪", news: "消息", tech: "技术", fundamental: "基本", capital: "资金", echelon: "梯队" }[k] ?? k} ${Math.round(v * 100)}%`)
               .join(" / ")}`
-          : "精选五维权重：情绪 20% / 消息 25% / 技术 25% / 基本面 15% / 资金 15%"}
-        {" · 一票否决 ×0.4 · "}
-        盘中节拍阈值集中在 intraday_rules 常量表 · 全部输出为可解释依据与模拟跟踪，不构成买卖建议 · 数据有延迟
-      </div>
+          : "服务端未返回生效权重，不能据此判断当前规则。"}
+        {" · "}全部输出为可解释依据与模拟跟踪，不构成买卖建议。数据有延迟；参与条件及手工模拟动作须由服务端复核。
+      </p></details>
     </main>
   );
 }
@@ -713,7 +593,7 @@ function StyleRoutingChip({ sr }: { sr: StyleRouting }) {
 /** useSearchParams 需要 Suspense 边界（Next 16 约束，workbench 同款结构）。 */
 export default function HuntingPage() {
   return (
-    <Suspense fallback={<PageSkeletonFallback label="猎场加载中" />}>
+    <Suspense fallback={<PageSkeletonFallback label="选股加载中" />}>
       <HuntingInner />
     </Suspense>
   );

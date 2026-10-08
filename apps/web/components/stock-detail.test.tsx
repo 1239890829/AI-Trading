@@ -28,6 +28,10 @@ vi.mock("@/hooks/use-quote-stream", async (importOriginal) => {
   };
 });
 
+vi.mock("@/components/detail/book-trades-view", () => ({
+  BookTradesView: ({showBook}: {showBook: boolean}) => <div data-testid="market-prints">{showBook ? "盘口消费者" : "逐笔消费者"}</div>,
+}));
+
 afterEach(() => {
   cleanup();
   calls.symbols.length = 0;
@@ -56,23 +60,39 @@ describe("StockDetailPanel · WS 订阅复用（P1-5）", () => {
 
 
 describe("StockDetailPanel · 核对视角入口", () => {
+  it("only mounts market prints in their own perspective", () => {
+    const view = render(<StockDetailPanel symbol="600519" chartTab="flow" />);
+    expect(view.getByTestId("market-prints").textContent).toBe("盘口消费者");
+    fireEvent.click(view.getByRole("tab", {name:"逐笔"}));
+    expect(view.getByTestId("market-prints").textContent).toBe("逐笔消费者");
+    fireEvent.click(view.getByRole("tab", {name:"资料"}));
+    expect(view.queryByTestId("market-prints")).toBeNull();
+    fireEvent.click(view.getByRole("tab", {name:"资讯"}));
+    expect(view.queryByTestId("market-prints")).toBeNull();
+  });
+
   it("点击和方向键切换复用受控视角回调", () => {
     const onRightTabChange = vi.fn();
     const view = render(<StockDetailPanel symbol="600519" chartTab="flow" onRightTabChange={onRightTabChange} />);
-    const controls = within(view.getByRole("group", { name: "核对视角" }));
-    fireEvent.click(controls.getByRole("button", { name: "资料" }));
+    const controls = within(view.getByRole("tablist", { name: "核对视角" }));
+    fireEvent.click(controls.getByRole("tab", { name: "资料" }));
     expect(onRightTabChange).toHaveBeenLastCalledWith("profile");
-    fireEvent.keyDown(controls.getByRole("button", { name: "资料" }), { key: "Home" });
+    fireEvent.keyDown(controls.getByRole("tab", { name: "资料" }), { key: "Home" });
     expect(onRightTabChange).toHaveBeenLastCalledWith("book");
-    fireEvent.keyDown(controls.getByRole("button", { name: "盘口" }), { key: "ArrowLeft" });
+    fireEvent.keyDown(controls.getByRole("tab", { name: "盘口" }), { key: "ArrowLeft" });
     expect(onRightTabChange).toHaveBeenLastCalledWith("info");
+    expect(document.activeElement).toBe(controls.getByRole("tab", { name: "资讯" }));
+    expect(controls.getAllByRole("tab")).toHaveLength(7);
   });
 
   it("指数只提供适用视角，不能从入口进入股票交易", () => {
     const view = render(<StockDetailPanel symbol="sh000001" chartTab="flow" />);
-    const controls = within(view.getByRole("group", { name: "核对视角" }));
-    expect(controls.getAllByRole("button").map(button => button.textContent)).toEqual(["涨速", "板块"]);
-    expect(controls.queryByRole("button", { name: "模拟交易" })).toBeNull();
-    expect(controls.queryByRole("button", { name: "手工记账" })).toBeNull();
+    const controls = within(view.getByRole("tablist", { name: "核对视角" }));
+    expect(controls.getAllByRole("tab").map(button => button.textContent)).toEqual(["涨速", "板块"]);
+    expect(controls.queryByRole("tab", { name: "模拟交易" })).toBeNull();
+    expect(controls.queryByRole("tab", { name: "手工记账" })).toBeNull();
+    const active = controls.getByRole("tab", {selected: true});
+    expect(active.tabIndex).toBe(0);
+    expect(view.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe(active.id);
   });
 });

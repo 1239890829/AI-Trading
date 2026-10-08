@@ -1,5 +1,7 @@
 "use client";
 
+import "./workbench.css";
+import { FilterMenu } from "@/components/ui/filter-menu";
 import { IconButton } from "@/components/ui/icon-button";
 import { HugeiconsIcon } from "@hugeicons/react";
 import Cancel01Icon from "@hugeicons/core-free-icons/Cancel01Icon";
@@ -7,7 +9,7 @@ import Cancel01Icon from "@hugeicons/core-free-icons/Cancel01Icon";
 import Link from "next/link";
 import { AccountScopePanel } from "@/components/detail/account-scope-panel";
 import { patchWorkspaceUrl } from "@/lib/task-navigation";
-import { Fragment, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Panel } from "@/components/panel";
 import { parseChartTab, parseRightTab } from "@/lib/detail-tabs";
@@ -46,7 +48,7 @@ import {
   type SymbolBoardFund,
   getPositionLabels,
 } from "@/lib/api";
-import { fmt, pctColor, pctText, signedYi, triAmount, triText } from "@/lib/format";
+import { fmt, pctColor, pctText, signedYi, sourceLabel, timeText, triAmount, triText } from "@/lib/format";
 import { subscribeWatchlist, notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import { LAST_SYMBOL_KEY, originLabel } from "@/lib/routing";
 import type { Quote } from "@/types/market";
@@ -220,17 +222,20 @@ function WorkbenchInner() {
   // 失败保留旧数据（盘中行情仍在跳，下一次轮询补上），不闪空。
   // dynReady：各自首拉完成哨兵——空态文案（"今日尚无精选组合"）只在确认后渲染。
   const [dynReady, setDynReady] = useState({ picks: false, top: false });
+  const [dynErrors, setDynErrors] = useState({ picks: false, top: false });
   usePollingFetch(async () => {
     const p = await getTodayPicks().catch(() => null);
     if (p) {
       setPicksItems(p.items ?? []);
       setPicksDate(p.date ?? null);
     }
+    setDynErrors((s) => ({ ...s, picks: p === null }));
     setDynReady((s) => (s.picks ? s : { ...s, picks: true }));
   }, 60_000);
   usePollingFetch(async () => {
     const t = await getIntradayTop().catch(() => null);
     if (t) setTopItems(t.items ?? []);
+    setDynErrors((s) => ({ ...s, top: t === null }));
     setDynReady((s) => (s.top ? s : { ...s, top: true }));
   }, 60_000);
 
@@ -285,35 +290,12 @@ function WorkbenchInner() {
   );
   // 管理模式下分组下拉的可选项（含「默认」兜底）
   const allGroups = useMemo(() => Array.from(new Set(["默认", ...allGroupNames])), [allGroupNames]);
-  // 列表派生 memo 化（评审 F2）：WS tick → merged 变化 → 未 memo 时每 tick 重 filter+map
-  const watchQuotes: Quote[] = useMemo(
-    () =>
-      symbols
-        .filter((s) => activeGroup === "全部" || groupMap[s] === activeGroup)
-        .map((s) => merged[s])
-        .filter(Boolean),
-    [symbols, activeGroup, groupMap, merged]
-  );
-  // 「持仓」分类（Holdings Group）：独立于自选，直接列真实持仓标的
-  const holdingQuotes: Quote[] = useMemo(
-    () => realSymbols.map((s) => merged[s]).filter(Boolean),
-    [realSymbols, merged]
-  );
-  // ── 动态分组视图（2026-09-04）：标的来自系统推荐口径，行数据=行情(merged)×推荐信息 ──
-  // （2026-09-09 起两源合入「猎场」组——picksQuotes/topQuotes 独立视图已移除，见 huntingQuotes）
-  // 「猎场」合并视图（2026-09-09 用户指令）：每日精选+盘中跟踪合为一组，行内徽标区分来源——
-  // 盘中跟踪在前（实时优先），同股去重（跟踪优先）
-  const huntingQuotes: Quote[] = useMemo(() => {
-    const seen = new Set<string>();
-    const out: Quote[] = [];
-    for (const s of [...topSymbols, ...picksSymbols]) {
-      if (seen.has(s)) continue;
-      seen.add(s);
-      const q = merged[s];
-      if (q) out.push(q);
-    }
-    return out;
-  }, [topSymbols, picksSymbols, merged]);
+  // 对象身份来自真实列表；报价未到时仍保留该证券，不把缺报价解释成空集合。
+  const activeRowSymbols = useMemo(() => {
+    if (activeGroup === "持仓") return account === "manual" ? realSymbols : account === "paper" ? paperSymbols : [];
+    if (activeGroup === "猎场") return Array.from(new Set([...topSymbols, ...picksSymbols]));
+    return symbols.filter((symbol) => activeGroup === "全部" || (groupMap[symbol] ?? "默认") === activeGroup);
+  }, [activeGroup, account, realSymbols, paperSymbols, topSymbols, picksSymbols, symbols, groupMap]);
   // 闭环「标签」（2026-09-09）：已模拟持仓/已真实持仓（60s 轮询派生接口）
   // 2026-09-11（S2-5）：原为裸 setInterval，绕过统一入口 ⇒ 无可见性暂停、无盘外降频，已收编。
   const [posLabels, setPosLabels] = useState<Record<string, string>>({});
@@ -324,11 +306,6 @@ function WorkbenchInner() {
 
   const pickInfoBySymbol = useMemo(() => new Map(picksItems.map((i) => [i.symbol, i])), [picksItems]);
   const topInfoBySymbol = useMemo(() => new Map(topItems.map((i) => [i.symbol, i])), [topItems]);
-  // 当前激活视图的行数据（三个特殊视图各走各的数据源）
-  const activeRows: Quote[] =
-    activeGroup === "持仓" ? account === "manual" ? holdingQuotes : account === "paper" ? positions.map(p => merged[p.symbol]).filter(Boolean) : []
-    : activeGroup === "猎场" ? huntingQuotes
-    : watchQuotes;
   const isDynamicGroup = activeGroup === "猎场";
   // 选股详情弹窗（2026-09-07 用户需求）：每日精选/盘中跟踪行的「详情」按钮
   const [detailTarget, setDetailTarget] = useState<PickDetailTarget>(null);
@@ -347,21 +324,29 @@ function WorkbenchInner() {
   const [managing, setManaging] = useState(false);
   const [newSymbol, setNewSymbol] = useState("");
   const [addError, setAddError] = useState<string | null>(null);
+  const [addBusy, setAddBusy] = useState(false);
+  const [addResult, setAddResult] = useState("");
 
   async function addWatch() {
+    if (addBusy) return;
     const s = newSymbol.trim();
+    setAddResult("");
     if (!/^\d{6}$/.test(s)) {
       setAddError("请输入 6 位数字代码");
       return;
     }
+    setAddBusy(true);
     try {
       await addToWatchlist(s);
       setNewSymbol("");
       setAddError(null);
+      setAddResult(`已将 ${s} 加入自选`);
       setSymbols((prev) => (prev.includes(s) ? prev : [...prev, s]));
       notifyWatchlistChanged(); // 其他订阅方同步（本页 loadBase 已被订阅回调覆盖）
     } catch {
-      setAddError("添加失败，请确认后端已启动");
+      setAddError("添加失败，请确认后端已启动后重试；输入代码已保留。");
+    } finally {
+      setAddBusy(false);
     }
   }
 
@@ -373,449 +358,170 @@ function WorkbenchInner() {
     } catch (error) { setAddError(`修改分组失败：${error instanceof Error ? error.message : "请重试"}`); }
   }
 
-  // ── 分组管理（评审 A1：新建 / 重命名 / 删除）────────────────
-  // 保护规则在后端（「默认」不可动、重名 409），前端透出错误信息即可。
-  async function handleCreateGroup() {
-    const name = window.prompt("新建分组名称：");
-    if (!name || !name.trim()) return;
+  // 分组命令在关注带原位完成。写入只走原有后端，失败保留用户输入。
+  const [groupAction, setGroupAction] = useState<"create" | "rename" | "delete" | null>(null);
+  const [groupDraft, setGroupDraft] = useState("");
+  const [groupBusy, setGroupBusy] = useState(false);
+  const [groupError, setGroupError] = useState<string | null>(null);
+  const [groupResult, setGroupResult] = useState("");
+  const canEditGroup = activeGroup !== "全部" && activeGroup !== "默认" && activeGroup !== "持仓" && !isDynamicGroup;
+
+  function openGroupAction(action: "create" | "rename" | "delete") {
+    setGroupAction(action);
+    setGroupDraft(action === "create" ? "" : activeGroup);
+    setGroupError(null);
+    setGroupResult("");
+  }
+
+  async function saveGroup() {
+    if (!groupAction || groupBusy) return;
+    const name = groupDraft.trim();
+    if (groupAction !== "delete" && !name) {
+      setGroupError("请输入分组名称");
+      return;
+    }
+    setGroupBusy(true);
+    setGroupError(null);
     try {
-      await createWatchlistGroup(name.trim());
-      setActiveGroup(name.trim());
+      if (groupAction === "create") {
+        await createWatchlistGroup(name);
+        setActiveGroup(name);
+        setGroupResult(`已新建分组「${name}」`);
+      } else if (groupAction === "rename") {
+        await renameWatchlistGroup(activeGroup, name);
+        setActiveGroup(name);
+        setGroupResult(`已重命名为「${name}」`);
+      } else {
+        await deleteWatchlistGroup(activeGroup);
+        setActiveGroup("全部");
+        setGroupResult("已删除分组，成员已回到默认分组");
+      }
       await loadBase();
+      notifyWatchlistChanged();
+      setGroupAction(null);
     } catch (e) {
-      window.alert(`新建失败：${(e as Error).message}`);
+      setGroupError(`分组保存失败：${e instanceof Error ? e.message : "请重试"}`);
+    } finally {
+      setGroupBusy(false);
     }
   }
 
-  async function handleRenameGroup(oldName: string) {
-    const newName = window.prompt(`重命名分组「${oldName}」为：`, oldName);
-    if (!newName || !newName.trim() || newName.trim() === oldName) return;
-    try {
-      await renameWatchlistGroup(oldName, newName.trim());
-      if (activeGroup === oldName) setActiveGroup(newName.trim());
-      await loadBase();
-    } catch (e) {
-      window.alert(`重命名失败：${(e as Error).message}`);
-    }
-  }
-
-  async function handleDeleteGroup(name: string) {
-    if (!window.confirm(`删除分组「${name}」？组内成员将回到「默认」。`)) return;
-    try {
-      await deleteWatchlistGroup(name);
-      if (activeGroup === name) setActiveGroup("全部");
-      await loadBase();
-    } catch (e) {
-      window.alert(`删除失败：${(e as Error).message}`);
-    }
-  }
+  const groupOptions = [
+    { key: "全部", label: "全部自选", count: symbols.length },
+    { key: "默认", label: "默认分组" },
+    { key: "猎场", label: "系统候选", count: new Set([...topSymbols, ...picksSymbols]).size, title: "盘中跟踪与每日精选；只读系统结果" },
+    ...groups.map((group) => ({ key: group, label: group })),
+  ];
+  const sourcePending = !baseLoaded || (isDynamicGroup && (!dynReady.picks || !dynReady.top));
+  const sourceError = error || (isDynamicGroup && (dynErrors.picks || dynErrors.top));
 
   return (
-    <main data-workspace="workbench" className="task-page mx-auto flex h-full w-full max-w-[1600px] flex-col gap-3 px-4 py-3">
+    <main data-workspace="workbench" className="task-page bc-workbench">
       <h1 className="sr-only">工作台</h1>
-      {error && (
-        <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-800 dark:text-amber-300">{error}</div>
-      )}
+      <header className="bc-workbench-header">
+        <div className="bc-workbench-title">
+          {backLabel && backFrom && <button className="bc-back-button" onClick={() => router.push(backFrom)} title={`返回${backLabel}（跳转前状态已保留）`}>返回{backLabel}</button>}
+          <h2>关注与核对</h2>
+          <span className="bc-connection" title="WebSocket 连接异常时自动降级轮询"><span className={STATUS_LABEL[status].cls}>{STATUS_LABEL[status].text}</span></span>
+        </div>
+        <div className="bc-workbench-objects">
+          <nav aria-label="个人对象" className="bc-object-switch">
+            <Link href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "watch", rt: null})} aria-current={mode === "watch" ? "page" : undefined}>自选跟踪</Link>
+            <Link href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "positions", account: "manual", rt: null})} aria-current={mode === "positions" ? "page" : undefined}>持仓与模拟</Link>
+          </nav>
+          {mode === "positions" && <FilterMenu label="账户" value={account} options={[
+            {key: "manual", label: "手工记录", title: "用户记账，非券商验证"}, {key: "paper", label: "手工模拟", title: "main 模拟账户"},
+            {key: "daily", label: "每日精选影子", title: "独立账户，只读结果"}, {key: "hunting", label: "机会影子", title: "独立账户，只读结果"},
+          ]} onChange={value => router.push(patchWorkspaceUrl("/workbench", sp.toString(), {account: value, rt: null}), {scroll: false})} />}
+        </div>
+      </header>
+      {error && <div role="alert" className="bc-read-warning">{error}<button onClick={() => void loadBase()}>重试读取</button></div>}
 
-      <div className="workbench-status-bar flex shrink-0 flex-wrap items-center justify-between gap-2 text-xs text-zinc-600 dark:text-zinc-400">
-        <span className="flex items-center gap-2">
-          {backLabel && backFrom && (
-            <button
-              onClick={() => router.push(backFrom)}
-              className="rounded border border-zinc-300 px-2 py-0.5 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 hover:text-zinc-900 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-              title={`返回${backLabel}（跳转前状态已保留）`}
-            >
-              ← 返回{backLabel}
+      <div className="bc-workbench-scroll">
+        <div className="bc-market-context">
+          <div className="bc-index-strip"><IndexCards indices={indices} selected={activeSymbol} onSelect={switchSymbol} /></div>
+          <div className="bc-market-summary">
+            <button className="bc-turnover" onClick={() => router.push("/market?tab=fund")} title="查看实时对比、全日估算与资金流">
+              <span>两市成交额</span><strong title={amountFreshness?.reason ?? undefined}>{triAmount(totalAmount, amountFreshness?.state)}</strong>
+              {turnDiff != null && <span className={turnDiff >= 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}>{turnDiff >= 0 ? "+" : ""}{turnDiff.toLocaleString("zh-CN", {maximumFractionDigits: 0})}亿 <small>较昨日同时刻</small></span>}
             </button>
-          )}
-          <button
-            onClick={() => router.push("/market?tab=fund")}
-            title="查看资金流向详情：实时对比 / 全日估算 / 分钟资金流 / 历史回看"
-            className="turnover-link flex cursor-pointer items-center gap-1.5 rounded hover:text-zinc-900 dark:hover:text-zinc-100"
-          >
-            两市成交额合计：<span title={amountFreshness?.reason ?? undefined} className="font-mono tabular-nums text-zinc-700 dark:text-zinc-200">{triAmount(totalAmount, amountFreshness?.state)}</span>
-            {turnDiff != null && (
-              <span className={`font-mono text-[11px] tabular-nums ${turnDiff >= 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}`}>
-                {turnDiff >= 0 ? "+" : ""}
-                {turnDiff.toLocaleString("zh-CN", { maximumFractionDigits: 0 })}亿
-                <span className="ml-0.5 font-sans text-[10px] text-zinc-600 dark:text-zinc-400">vs 昨日同时刻</span>
-              </span>
-            )}
-            <span aria-hidden className="text-zinc-600 dark:text-zinc-400">↗</span>
-          </button>
-        </span>
-        <div className="workspace-status flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span>
-            行情状态：
-            {status === "live" && <span className="pulse-dot mx-1 align-middle" />}
-            <span className={STATUS_LABEL[status].cls}>{STATUS_LABEL[status].text}</span>
-          </span>
-          {risk && (
-            <span title={risk.reasons.join("；")} className="cursor-help">
-              市场状态：
-              <span className={`rounded px-1.5 py-0.5 ${
-                risk.state === "强势多头" ? "bg-up/10 text-up-ink dark:text-up" :
-                risk.state === "下跌趋势" || risk.state === "恐慌/极端波动" ? "bg-down/10 text-down-ink dark:text-down" :
-                // 中性档（震荡/结构性行情）此前漏了 dark 文本色：深色下 zinc-500 落在
-                // zinc-800 上仅 3.08:1（<4.5:1），而这是语义状态标签，必须可读。
-                "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
-              }`}>
-                {risk.state}
-              </span>
-            </span>
-          )}
-          <span>指数刷新 {updatedAt || "--"}</span>
-          <div className="workbench-objects">
-            <nav aria-label="个人对象" className="compact-segments"><Link href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "watch", rt: null})} aria-current={mode === "watch" ? "page" : undefined}>自选跟踪</Link><Link href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "positions", account: "manual", rt: null})} aria-current={mode === "positions" ? "page" : undefined}>持仓与模拟</Link></nav>
-            {mode === "positions" && <label className="scope-selector">账户范围<select aria-label="账户范围" value={account} onChange={event => router.push(patchWorkspaceUrl("/workbench", sp.toString(), {account: event.target.value, rt: null}), {scroll: false})}>{[["manual", "手工记录"], ["paper", "手工模拟"], ["daily", "每日精选影子"], ["hunting", "机会影子"]].map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>}
+            {risk && <span className="bc-market-state" title={risk.reasons.join("；")}>市场状态 <strong>{risk.state}</strong></span>}
+            <span className="bc-index-update">指数刷新 {updatedAt || "--"}</span>
           </div>
         </div>
-      </div>
 
-      <div className="task-scroll grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[340px,minmax(0,1fr)]">
-        <div className="workbench-list-column flex min-h-0 min-w-0 flex-col gap-1.5">
-        {mode === "positions" && <AccountScopePanel account={account} date={sp.get("date") ?? undefined} />}
-        {mode === "positions" && account === "manual" && realError && <p role="alert" className="text-xs text-amber-800 dark:text-amber-300">手工记录读取失败，保留结果仅供参考：{realError}</p>}
-        <IndexCards
-          indices={indices}
-          selected={activeSymbol}
-          onSelect={switchSymbol}
-        />
-        {/* 持仓组（retro #3 遗留）：仅有持仓时渲染，空仓零占用；行点击选中该股 */}
-        {mode === "positions" && account === "paper" && positions.length > 0 && (
-          <Panel title={`模拟持仓 (${positions.length})`} className="max-h-36 shrink-0 overflow-hidden">
-            <table className="w-full text-xs">
-              <tbody>
-                {positions.map((p) => {
-                  const pct = p.pnl_pct;
-                  return (
-                    <tr
-                      key={p.symbol}
-                      onClick={() => switchSymbol(p.symbol)}
-                      className="cursor-pointer border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900"
-                    >
-                      <td className="px-3 py-1.5">
-                        <span className="font-mono text-[10px] text-zinc-600 dark:text-zinc-400">{p.symbol}</span>
-                        <span className="ml-1.5">{merged[p.symbol]?.name ?? ""}</span>
-                      </td>
-                      <td className="px-2 py-1.5 text-right font-mono tabular-nums text-zinc-600 dark:text-zinc-400">{p.quantity}股</td>
-                      <td className={`px-3 py-1.5 text-right font-mono tabular-nums ${pct == null ? "text-zinc-600 dark:text-zinc-400" : pctColor(pct)}`}>
-                        {pct == null ? "--" : `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </Panel>
-        )}
-        <Panel
-          title={
-            activeGroup === "持仓" ? account === "manual" ? `手工记录持仓 (${holdingQuotes.length})` : "选中证券"
-            : activeGroup === "猎场" ? `猎场 · ${picksDate ?? "未生成"} (${huntingQuotes.length})`
-            : "自选股"
-          }
-          extra={
-            <div className="watch-actions flex flex-wrap items-center gap-1.5">
-              {managing && activeGroup !== "持仓" && (
-                <>
-                  <input
-                    value={newSymbol}
-                    onChange={(e) => setNewSymbol(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void addWatch();
-                    }}
-                    placeholder="代码添加"
-                    maxLength={6}
-                    aria-label="输入 6 位代码添加自选"
-                    className="w-20 rounded border border-zinc-200 bg-transparent px-1.5 py-0.5 font-mono outline-none focus:border-up/60 dark:border-zinc-700"
-                  />
-                  <button onClick={() => void addWatch()} className="text-up-ink dark:text-up transition-opacity hover:opacity-75">
-                    添加
-                  </button>
-                  {addError && <span className="text-red-700 dark:text-red-400">{addError}</span>}
-                </>
-              )}
-              <button
-                onClick={() => {
-                  setManaging((v) => !v);
-                  setAddError(null);
-                }}
-                aria-pressed={managing}
-                className="text-sky-700 dark:text-sky-400 transition-opacity hover:opacity-75"
-              >
-                {managing ? "完成" : "管理"}
-              </button>
+        {mode === "positions" && <div className="bc-account-results"><AccountScopePanel account={account} date={sp.get("date") ?? undefined} /></div>}
+        {mode === "positions" && account === "manual" && realError && <p role="alert" className="bc-read-warning">手工记录读取失败，保留结果仅供参考：{realError}</p>}
+        {mode === "positions" && account === "paper" && positions.length > 0 && <Panel title={`main 模拟持仓（${positions.length}）`} className="bc-paper-positions" bodyClassName="overflow-auto">
+          <table className="bc-position-table"><thead><tr><th>证券</th><th>数量</th><th>浮动盈亏</th></tr></thead><tbody>{positions.map(position => <tr key={position.symbol}>
+            <td><button onClick={() => switchSymbol(position.symbol)}>{merged[position.symbol]?.name ?? position.symbol}<small>{position.symbol}</small></button></td>
+            <td>{position.quantity} 股</td><td className={position.pnl_pct == null ? "" : pctColor(position.pnl_pct)}>{position.pnl_pct == null ? "--" : `${position.pnl_pct > 0 ? "+" : ""}${position.pnl_pct.toFixed(2)}%`}</td>
+          </tr>)}</tbody></table>
+        </Panel>}
+
+        <section className="bc-attention" aria-label={mode === "positions" ? "当前账户证券" : "关注与候选"}>
+          <div className="bc-attention-heading">
+            <div className="bc-attention-scope">
+              {mode === "watch" ? <FilterMenu label="列表" value={activeGroup} options={groupOptions} onChange={value => {setActiveGroup(value); setGroupAction(null); setGroupError(null);}} /> : <h3>{account === "manual" ? "手工记录持仓" : account === "paper" ? "main 模拟持仓" : "当前选中证券"}</h3>}
+              <span className="bc-list-count">{activeRowSymbols.length} 只</span>
+              {isDynamicGroup && <span className="bc-list-note">盘中跟踪 + 每日精选 {picksDate ?? "未生成"}</span>}
             </div>
-          }
-          className="workbench-watchlist min-h-0 flex-1 overflow-hidden"
-          // D-3：本 Panel 是**同一实例换视图**（activeGroup 决定 title 与列表内容）⇒ 必须给
-          // resetKey。注意 title 在「自选股」各分组间是**同一个字符串**，仅看 title 判断不出来。
-          // 判据与反例见 panel-boundary.test.tsx「Panel.resetKey（D-3）」。
-          resetKey={activeGroup}
-        >
-          {/* ── 视图切换 + 分组（M1/A1 2026-09-01）：chips 移入面板内部——
-              「全部」是自选股的默认视图而非页面级筛选；持仓与自选分组用
-              竖线区隔（持仓不是分组，是真实持仓账本视角）；管理模式下
-              提供 新建 / 重命名 / 删除 分组（保护规则在后端）。────── */}
-          <div className="watch-groups sticky top-0 z-10 flex flex-wrap items-center gap-1 border-b border-zinc-100 bg-white/95 px-3 py-1.5 dark:border-zinc-800/60 dark:bg-zinc-950/95">
-            {(mode === "positions" ? ["持仓"] : ["全部", "默认", ...groups]).map((g) => (
-              <span key={g} className="flex items-center gap-1">
-                {(g === "持仓" || g === "默认" || g === "猎场") && (
-                  <span className="mx-0.5 h-4 w-px bg-zinc-200 dark:bg-zinc-800" aria-hidden />
-                )}
-                <button
-                  onClick={() => setActiveGroup(g)}
-                  aria-pressed={activeGroup === g}
-                  className="border text-xs"
-                >
-                  {g}
-                  {g === "持仓" && realSymbols.length > 0 && <span className="ml-1 text-[10px] text-zinc-600 dark:text-zinc-400">{realSymbols.length}</span>}
-                  {g === "猎场" && huntingQuotes.length > 0 && <span className="ml-1 text-[10px] text-zinc-600 dark:text-zinc-400">{huntingQuotes.length}</span>}
-                </button>
-              </span>
-            ))}
-            {managing && (
-              <button
-                onClick={() => void handleCreateGroup()}
-                title="新建分组"
-                className="rounded-full border border-dashed border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 dark:text-zinc-400 hover:border-up/60 hover:text-up dark:border-zinc-700"
-              >
-                ＋ 组
-              </button>
-            )}
-            {managing && activeGroup !== "全部" && activeGroup !== "持仓" && activeGroup !== "默认" && !isDynamicGroup && (
-              <span className="flex items-center gap-1">
-                <span className="mx-0.5 h-4 w-px bg-zinc-200 dark:bg-zinc-800" aria-hidden />
-                <button
-                  onClick={() => void handleRenameGroup(activeGroup)}
-                  title={`重命名分组「${activeGroup}」`}
-                  className="rounded px-1 text-xs text-zinc-600 dark:text-zinc-400 hover:text-sky-400"
-                >
-                  ✎
-                </button>
-                <button
-                  onClick={() => void handleDeleteGroup(activeGroup)}
-                  title={`删除分组「${activeGroup}」`}
-                  className="rounded px-1 text-xs text-zinc-600 dark:text-zinc-400 hover:text-red-400"
-                >
-                  🗑
-                </button>
-              </span>
-            )}
+            <div className="bc-attention-actions">
+              <Link href="/hunting" className="bc-text-link">查看选股</Link>
+              {mode === "watch" && <button className="bc-compact-button" aria-expanded={managing} onClick={() => {setManaging(value => !value); setAddError(null); setGroupAction(null); setGroupError(null);}}>{managing ? "完成管理" : "管理自选"}</button>}
+            </div>
           </div>
-          {!baseLoaded || (activeGroup === "猎场" && (!dynReady.picks || !dynReady.top)) ? (
-            /* 首拉未完成 → 行骨架占位（同构 table 行高），空态文案不抢跑 */
-            <div className="space-y-2.5 px-3 py-3" aria-hidden>
-              {Array.from({ length: 5 }, (_, i) => (
-                <Skeleton key={i} className="h-9 w-full rounded-lg" />
-              ))}
-            </div>
-          ) : activeRows.length === 0 ? (
-            <p className="px-4 py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">
-              {error ? "当前列表读取有缺项，不能判断为空；请重试读取。" : activeGroup === "持仓" ? (
-                <>
-                  {account === "paper" ? "main 模拟账户暂无持仓。" : account === "manual" ? "暂无手工记录，可在右侧手工记账中记录成交。" : "此范围没有可展示的持仓列表。"}
-                  <br />
-                  {account === "manual" ? "（手工记录未经券商验证；不合并其它账户）。" : account === "paper" ? "只计 main 模拟账户，不合并其它账户。" : "成交与退出见上方独立影子回执，不合并其它账户。"}
-                </>
-              ) : activeGroup === "猎场" ? (
-                <>
-                  猎场暂无标的——盘中跟踪随盘面实时重算（候选成形自动出现，宁缺毋滥）；
-                  <br />
-                  盘前选择在收盘后生成次日名单（持久生产结果与维护状态见系统维护）。
-                </>
-              ) : (
-                <>
-                  自选为空或行情未就绪。
-                  <br />
-                  在顶部搜索框选择结果即可查看并加自选。
-                </>
-              )}
-            </p>
-          ) : (
-            /* 名称吸收剩余宽度；分组编辑独立成行，避免挤占行情列。 */
-            <table className="w-full table-fixed text-sm">
-              <tbody>
-                {activeRows.map((q) => {
-                  const pick = activeGroup === "猎场" ? pickInfoBySymbol.get(q.symbol) : undefined;
-                  const top = activeGroup === "猎场" ? topInfoBySymbol.get(q.symbol) : undefined;
-                  const bf = boardFund[q.symbol];
-                  return (
-                  <Fragment key={q.symbol}>
-                  <tr
-                    onClick={() => switchSymbol(q.symbol)}
-                    className={`cursor-pointer border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900 ${
-                      activeSymbol === q.symbol ? "bg-zinc-50 dark:bg-zinc-900" : ""
-                    }`}
-                  >
-                    <td className="min-w-0 px-3 py-2">
-                      <div className="truncate font-mono text-xs text-zinc-600 dark:text-zinc-400">
-                        {q.symbol}
-                        {/* 猎场合并视图：行内来源徽标（2026-09-09 用户指令，取代分组名区分）——
-                            同股两者都在时按「盘中跟踪」标（实时口径优先） */}
-                        {activeGroup === "猎场" && (
-                          <span
-                            className={`ml-1.5 rounded px-1 text-[10px] ${
-                              top != null
-                                ? "bg-sky-500/10 text-sky-700 dark:text-sky-300"
-                                : "bg-amber-500/10 text-amber-800 dark:text-amber-300"
-                            }`}
-                          >
-                            {top != null ? "盘中跟踪" : "盘前选择"}
-                          </span>
-                        )}
-                        {activeGroup === "猎场" && posLabels[q.symbol] && (
-                          <span
-                            className={`ml-1 rounded px-1 text-[10px] font-medium ${
-                              posLabels[q.symbol] === "real"
-                                ? "bg-rose-500/10 text-rose-700 dark:text-rose-500"
-                                : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-                            }`}
-                            title="持仓状态派生标签；卖出/删流水后自动消失"
-                          >
-                            {posLabels[q.symbol] === "real" ? "已真实持仓" : "已模拟持仓"}
-                          </span>
-                        )}
-                        {pick != null && (
-                          <span
-                            className="ml-1.5 rounded bg-up/10 px-1 text-[10px] text-up-ink dark:text-up"
-                            title={`六维综合评分 ${pick.score}；题材：${pick.themes?.join("、") || "--"}`}
-                          >
-                            {pick.score.toFixed(0)} 分
-                          </span>
-                        )}
-                        {top != null && (
-                          <span
-                            className={`ml-1.5 rounded px-1 text-[10px] ${
-                              top.tier <= 2 ? "bg-up/10 text-up-ink dark:text-up" : "bg-amber-500/10 text-amber-800 dark:text-amber-400"
-                            }`}
-                            title={`盘中跟踪 T${top.tier}：${top.pick_basis}；题材 ${top.theme ?? "--"}（${top.stage ?? "?"}）`}
-                          >
-                            T{top.tier} {top.theme ?? ""}
-                          </span>
-                        )}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="truncate" title={q.name ?? undefined}>{q.name ?? "--"}</div>
-                        {/* 所属板块资金（P1-4，2026-09-10）：主板块（东财行业三级 L2）+
-                            该板块 f62 主力净额。**必须独立成行**，与名称同行
-                            会把名称挤到 0 宽（实测）。**金额 shrink-0 优先**、板块名 truncate：
-                            金额（含红绿方向）是扫视主信号，不能先被截掉（首版实测被截成
-                            「通信设备-4…」，金额反而丢了）；完整信息在 title。
-                            判不出主板块的标的不渲染（三态）。连续流入天数只进 title
-                            （不占用行情列；0=今日转流出、null=未沉淀，本身也不显示）。 */}
-                        {bf && (
-                          <div
-                            className="flex min-w-0 items-baseline gap-1 text-[10px] font-normal leading-4"
-                            title={`${bf.board_name}（东财${
-                              bf.level === "industry" ? "行业" : "概念"
-                            }板块，f62 主力净额口径）${signedYi(bf.main_net_yi)}${
-                              bf.streak != null && bf.streak >= 1 ? `，连续 ${bf.streak} 日净流入` : ""
-                            }｜与个股资金流口径不同，不可相加；所属板块低频变更（6h 缓存）`}
-                          >
-                            <span
-                              className={`shrink-0 font-mono ${
-                                bf.main_net_yi == null ? "text-zinc-600 dark:text-zinc-400" : bf.main_net_yi >= 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"
-                              }`}
-                            >
-                              {signedYi(bf.main_net_yi)}
-                            </span>
-                            <span className="truncate text-zinc-600 dark:text-zinc-400">{bf.board_name}</span>
-                          </div>
-                        )}
-                      </div>
-                        {(pick != null || top != null) && (
-                          <div className="truncate text-[10px] text-zinc-600 dark:text-zinc-400"
-                            title={pick != null ? (pick.echelon_role ?? "") : `确定性 ${triText(top?.certainty?.level)} · 辨识度 ${triText(top?.distinctiveness?.level)}`}>
-                            {pick != null ? pick.echelon_role ?? "" : `确定性 ${triText(top?.certainty?.level)} · 辨识度 ${triText(top?.distinctiveness?.level)}`}
-                          </div>
-                        )}
-                    </td>
-                    <td className="w-[60px] px-1 py-2 text-right font-mono text-xs tabular-nums">
-                      {q.price == null ? <span className="font-sans text-zinc-600 dark:text-zinc-400">未开盘</span> : <PriceFlash value={q.price}>{fmt(q.price)}</PriceFlash>}
-                    </td>
-                    <td className={`w-[56px] px-1 py-2 text-right font-mono text-xs tabular-nums ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</td>
-                    <td className="w-[40px] px-0.5 py-2 text-right"><QualityBadge quality={q.quality} reasons={q.quality_reasons} /></td>
-                    <td className="workbench-row-actions w-[48px] px-0.5 text-center">
-                      {(pick || top) && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setDetailTarget(pick ? { kind: "pick", item: pick } : { kind: "top", item: top! });
-                          }}
-                          className="text-zinc-600 dark:text-zinc-400 transition-colors hover:bg-sky-500/10 hover:text-sky-700 dark:hover:text-sky-300"
-                          title={pick ? "查看选股原因（六维评分/依据/失效条件）" : "查看入选详情（T档/判定/理由）"}
-                          aria-label={`查看 ${q.symbol} 选股详情`}
-                        >
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-                            <circle cx="12" cy="12" r="10" />
-                            <path d="M12 16v-4M12 8h.01" />
-                          </svg>
-                        </button>
-                      )}
-                      {!pick && !top && (
-                        <IconButton
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void remove(q.symbol);
-                          }}
-                          className="text-zinc-600 dark:text-zinc-400 hover:text-red-400"
-                          title="移出自选"
-                          aria-label={`移出自选 ${q.symbol}`}
-                        >
-                          <HugeiconsIcon icon={Cancel01Icon} size={14} aria-hidden="true" />
-                        </IconButton>
-                      )}
-                    </td>
-                  </tr>
-                  {managing && activeGroup !== "持仓" && !pick && !top && (
-                    <tr className="watchlist-group-row">
-                      <td colSpan={5} className="px-3 pb-3">
-                        <label className="watchlist-group-editor">
-                          <span>分组</span>
-                          <select value={groupMap[q.symbol] ?? "默认"}
-                            onChange={(e) => void changeGroup(q.symbol, e.target.value)}
-                            aria-label={`修改 ${q.symbol} 分组`}>
-                            {allGroups.map((g) => <option key={g} value={g}>{g}</option>)}
-                          </select>
-                        </label>
-                      </td>
-                    </tr>
-                  )}
-                  </Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </Panel>
-        </div>
+          {isDynamicGroup && (dynErrors.picks || dynErrors.top) && <p role="alert" className="bc-read-warning">{dynErrors.top ? "盘中候选读取失败。" : ""}{dynErrors.picks ? "每日精选读取失败。" : ""}保留值仅为上次结果，不能判断当前为空。</p>}
+          {managing && mode === "watch" && <div className="bc-watch-management">
+            <form className="bc-add-symbol" onSubmit={event => {event.preventDefault(); void addWatch();}}>
+              <label htmlFor="workbench-add-symbol">加入自选</label><input id="workbench-add-symbol" value={newSymbol} onChange={event => setNewSymbol(event.target.value)} placeholder="6 位股票代码" maxLength={6} inputMode="numeric" autoComplete="off" disabled={addBusy} /><button className="bc-compact-button" type="submit" disabled={addBusy}>{addBusy ? "添加中…" : "添加"}</button>
+            </form>
+            <div className="bc-group-actions"><button className="bc-compact-button" onClick={() => openGroupAction("create")}>新建分组</button>{canEditGroup && <><button className="bc-compact-button" onClick={() => openGroupAction("rename")}>重命名分组</button><button className="bc-compact-button bc-danger-button" onClick={() => openGroupAction("delete")}>删除分组</button></>}</div>
+            {addError && <p role="alert" className="bc-management-error">{addError}</p>}
+            {addResult && <p role="status" className="bc-management-result">{addResult}</p>}
+            {groupResult && <p role="status" className="bc-management-result">{groupResult}</p>}
+            {groupAction && <form className="bc-group-form" onSubmit={event => {event.preventDefault(); void saveGroup();}}>
+              {groupAction === "delete" ? <p>删除「{activeGroup}」后，成员将回到默认分组。</p> : <label>{groupAction === "create" ? "新分组名称" : "修改分组名称"}<input value={groupDraft} onChange={event => setGroupDraft(event.target.value)} disabled={groupBusy} autoFocus /></label>}
+              <button className={`bc-compact-button ${groupAction === "delete" ? "bc-danger-button" : ""}`} type="submit" disabled={groupBusy}>{groupBusy ? "保存中…" : groupAction === "delete" ? "确认删除分组" : "保存分组"}</button>
+              <button className="bc-compact-button" type="button" disabled={groupBusy} onClick={() => setGroupAction(null)}>取消</button>
+              {groupError && <p role="alert" className="bc-management-error">{groupError}</p>}
+            </form>}
+          </div>}
+          <div className="bc-attention-track" tabIndex={0} aria-label="证券列表，可横向滚动">
+            {sourcePending ? <div className="bc-watch-skeleton" aria-label="正在读取证券列表">{Array.from({length: 4}, (_, index) => <Skeleton key={index} className="h-20 w-44 shrink-0 rounded-lg" />)}</div> : activeRowSymbols.length === 0 ? <div className="bc-watch-empty">
+              {sourceError ? "列表读取有缺项，暂不能判断为空。请重试读取。" : activeGroup === "持仓" ? account === "manual" ? "暂无手工记录。可在同证券的记账面板记录成交；记录未经券商验证。" : account === "paper" ? "main 模拟账户暂无持仓，不合并其他账户。" : "此影子范围的成交与退出见上方独立回执。" : isDynamicGroup ? "暂无系统候选。盘中跟踪随盘面重算；每日精选由后台生成，生成状态见系统维护。" : "自选为空。使用顶部搜索查看证券，再明确加入自选；也可在管理中输入代码。"}
+            </div> : activeRowSymbols.map(symbol => {
+              const quote = merged[symbol];
+              const pick = isDynamicGroup ? pickInfoBySymbol.get(symbol) : undefined;
+              const top = isDynamicGroup ? topInfoBySymbol.get(symbol) : undefined;
+              const fund = boardFund[symbol];
+              return <article key={symbol} className="bc-attention-item" data-selected={activeSymbol === symbol}>
+                <button className="bc-attention-select" onClick={() => switchSymbol(symbol)} aria-pressed={activeSymbol === symbol} aria-label={`查看 ${quote?.name ?? symbol} ${symbol}`}>
+                  <span className="bc-attention-identity"><strong title={quote?.name ?? symbol}>{quote?.name ?? symbol}</strong><span>{symbol}</span></span>
+                  <span className="bc-attention-price"><strong>{quote?.price == null ? "待报价" : <PriceFlash value={quote.price}>{fmt(quote.price)}</PriceFlash>}</strong><span className={pctColor(quote?.change_pct)}>{pctText(quote?.change_pct)}</span></span>
+                  {(pick || top) && <span className="bc-candidate-basis">
+                    {top && <span title={`盘中跟踪 T${top.tier}：${top.pick_basis}；题材 ${top.theme ?? "--"}（${top.stage ?? "?"}）`}>盘中跟踪 T{top.tier}{top.theme ? ` · ${top.theme}` : ""}</span>}
+                    {pick && <span title={`六维综合评分 ${pick.score}；题材 ${pick.themes?.join("、") || "--"}`}>每日精选 {pick.score.toFixed(0)} 分</span>}
+                    <span title={pick?.echelon_role ?? `确定性 ${triText(top?.certainty?.level)}；辨识度 ${triText(top?.distinctiveness?.level)}`}>{pick?.echelon_role ?? `确定性 ${triText(top?.certainty?.level)} · 辨识度 ${triText(top?.distinctiveness?.level)}`}</span>
+                    {posLabels[symbol] && <span title="持仓状态派生标签；删除记录或退出后自动消失">{posLabels[symbol] === "real" ? "手工已记录" : "模拟已持仓"}</span>}
+                  </span>}
+                  {fund && <span className="bc-attention-fund" title={`${fund.board_name}（东财${fund.level === "industry" ? "行业" : "概念"}）${signedYi(fund.main_net_yi)}${fund.streak != null && fund.streak >= 1 ? `，连续 ${fund.streak} 日净流入` : ""}；与个股资金流口径不同，不可相加`}><span className={fund.main_net_yi == null ? "" : fund.main_net_yi >= 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}>{signedYi(fund.main_net_yi)}</span><span>{fund.board_name}</span></span>}
+                </button>
+                <div className="bc-attention-meta"><span title={quote ? `来源：${sourceLabel(quote.source)}；数据时间：${timeText(quote.data_timestamp)}；接收时间：${timeText(quote.received_at)}` : "已在列表，报价尚未返回"}>{quote ? sourceLabel(quote.source) : "等待行情"}</span><QualityBadge quality={quote?.quality} reasons={quote?.quality_reasons} />
+                  {(pick || top) ? <span className="bc-candidate-details">{top && <button className="bc-item-detail" onClick={() => setDetailTarget({kind: "top", item: top})} aria-label={`查看 ${symbol} 盘中依据`}>{pick ? "盘中" : "依据"}</button>}{pick && <button className="bc-item-detail" onClick={() => setDetailTarget({kind: "pick", item: pick})} aria-label={`查看 ${symbol} 精选依据`}>{top ? "精选" : "依据"}</button>}</span> : mode === "watch" && <IconButton onClick={() => void remove(symbol)} className="bc-remove-watch" title="移出自选" aria-label={`移出自选 ${symbol}`}><HugeiconsIcon icon={Cancel01Icon} size={14} aria-hidden="true" /></IconButton>}
+                </div>
+                {managing && mode === "watch" && !isDynamicGroup && <div className="bc-group-assignment"><FilterMenu label={`${symbol} 分组`} value={groupMap[symbol] ?? "默认"} options={allGroups.map(group => ({key: group, label: group}))} onChange={group => void changeGroup(symbol, group)} /></div>}
+              </article>;
+            })}
+          </div>
+          {isDynamicGroup && <p className="bc-candidate-disclaimer">系统候选用于投研观察，分数不是胜率，不构成买卖建议。</p>}
+        </section>
 
-        {/* key 随代码变化：切股时整面板重挂载，所有内部状态归零——
-            否则 useQuoteStream 订阅切换的窗口期里会残留上一只股票的行情。
-
-            S2-6：key 挂在**边界**上（不是挂在 StockDetailPanel 上）。详情面板顶部
-            的行情头与图表区不在任何 Panel 内，抛错同样会掀掉整页；而错误边界一旦
-            进入错误态不会因为子元素变化自动恢复——key 挂在内层的话，切股重挂了
-            子元素、边界却还卡在错误卡上，把"局部降级"变成"这个位置永久不可用"。
-            挂在外层则切股 = 整块重挂载，边界随之归零，与原语义完全一致。
-
-            刻意**不传 className**：边界健康时 `render()` 直接返回 children，不产生
-            额外 DOM 节点 ⇒ 网格项仍是 StockDetailPanel 自己的 <section>，高度链
-            与改动前逐字一致（全高契约见 components/panel.tsx 头注）。 */}
+        {/* 边界跟随证券/scope重置，保留深链与共享真实详情的全部消费者。 */}
         <PanelBoundary key={`${activeSymbol}:${mode}:${account}`} label="个股详情">
-          <StockDetailPanel
-            symbol={activeSymbol}
-            chartTab={chartTab}
-            rightTab={rightTab} onRightTabChange={switchRightTab}
-            liveQuote={merged[activeSymbol]}
-            streamStatus={status}
-          />
+          <StockDetailPanel symbol={activeSymbol} chartTab={chartTab} rightTab={rightTab} onRightTabChange={switchRightTab} liveQuote={merged[activeSymbol]} streamStatus={status} />
         </PanelBoundary>
       </div>
-
-      {/* 选股详情弹窗（每日精选/盘中跟踪行「详情」按钮） */}
       <PickDetailModal target={detailTarget} onClose={() => setDetailTarget(null)} />
     </main>
   );

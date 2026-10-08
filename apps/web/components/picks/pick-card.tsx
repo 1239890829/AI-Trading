@@ -769,70 +769,52 @@ export function StandAsideBanner({
   const cmp = compareGates(gate, stored);
   const at = clockOf(generatedAt);
   const live = gateActive(gate);
-
-  // 已解除：中性提示（不是"风险警报"，也**不是**"可以买了"）
-  if (cmp.drift === "cleared") {
-    return (
-      <div
-        role="status"
-        data-testid="stand-aside-cleared"
-        className="shrink-0 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-800 dark:text-emerald-300"
-      >
-        <div className="font-medium">
-          ✓ 生成时{at ? `（${at}）` : ""}按「{cmp.storedPhase ?? "未知"}」判空仓观望，按当前盘面复核
-          <strong className="font-medium">已解除</strong>
-        </div>
-        <GateComparisonLines cmp={cmp} />
-        <div className="mt-1 font-medium text-amber-800 dark:text-amber-300">
-          ⚠ 生成时的撤除档决定已生效且<strong className="font-medium">不回溯</strong>：当日名单的买入区间已随之撤除，
-          下方标的仍为仅观察。本条只表示「当前盘面不再支持空仓观望的判断」，不改变当日已生成名单的形态，
-          也不构成买入建议。
-        </div>
-        {gate.disclaimer && <div className="mt-1 text-[10px] opacity-70">{gate.disclaimer}</div>}
-      </div>
-    );
-  }
-
-  // 生成时未触发、现在触发：往严的方向变（漏报比误报贵，必须显著）
   const newly = cmp.drift === "newly_triggered";
-  if (!live && !newly) return null;
+  const cleared = cmp.drift === "cleared";
+  const unavailable = gate.gate_source === "unavailable";
+  // An unknown current state must still expose its failed recheck, even without a stored active gate.
+  if (!live && !newly && !cleared && !unavailable) return null;
 
   const strong = gate.level === "strong";
   const stripped = gate.strip_buy_range;
   return (
     <div
-      role="alert"
-      data-testid="stand-aside-banner"
-      className={`shrink-0 rounded-lg border px-3 py-2 text-xs ${
-        strong
-          ? "border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-300"
-          : "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300"
+      role={cleared ? "status" : "alert"}
+      data-testid={cleared ? "stand-aside-cleared" : "stand-aside-banner"}
+      className={`gate-banner shrink-0 rounded-lg border px-3 py-2 text-xs ${
+        cleared
+          ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300"
+          : strong
+            ? "border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-300"
+            : "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300"
       }`}
     >
-      <div className="font-medium">⚠ {gate.advice}</div>
-      {newly && (
-        <div className="mt-0.5 font-medium">
-          生成时{at ? `（${at}）` : ""}未触发闸门，按当前盘面复核
-          <strong className="font-medium">已触发</strong>——盘中新增的风险信号。
+      <div className="gate-current-advice flex items-start gap-1.5 font-medium">
+        <svg aria-hidden="true" className="mt-0.5 shrink-0" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+          {cleared ? <path d="m5 12 4 4L19 6" /> : <><path d="m12 3 9 17H3L12 3Z" /><path d="M12 9v4m0 3v1" /></>}
+        </svg>
+        <span>{gate.advice || "风险复核不可用，当前状态待确认"}</span>
+      </div>
+      {newly && <p className="mt-1 font-medium">生成时{at ? `（${at}）` : ""}未触发闸门；当前复核<strong className="font-medium">已触发</strong>，新增风险须核对。</p>}
+      {cleared ? <>
+        <p className="mt-1 font-medium">生成时{at ? `（${at}）` : ""}按「{cmp.storedPhase ?? "未知"}」判空仓观望；当前<strong className="font-medium">已解除</strong>。</p>
+        <p className="mt-1 font-medium text-amber-800 dark:text-amber-300">生成时撤除决定<strong className="font-medium">不回溯</strong>：当日区间仍已撤除、标的仅观察。不构成买入建议。</p>
+      </> : stripped !== undefined && <p className="mt-1 font-medium">
+        {stripped ? "已撤除买入区间 · 下方标的仅观察" : "保留买入区间 · 提示档，非空仓信号"}
+      </p>}
+      {unavailable && <p className="gate-unavailable mt-1 font-medium">{gate.gate_note || "实时复核不可用，当前风险状态未知；请核对生成时刻结论。"}</p>}
+      <details className="gate-disclosure mt-1.5">
+        <summary className="cursor-pointer py-1 font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current">核对依据与时点对照</summary>
+        <div className="gate-detail-content mt-2 space-y-2 leading-relaxed">
+          {gate.reasons.length > 0 && <div><p className="font-medium">{unavailable ? "生成时刻触发依据（当前复核不可用）" : "当前触发依据"}</p><ul className="mt-1 space-y-0.5">{gate.reasons.map(r => <li key={r}>· {r}</li>)}</ul></div>}
+          {(cleared || newly || cmp.drift === "reasons_changed") && <GateComparisonLines cmp={cmp} />}
+          {stored && gate.gate_source === "live" && stored.reasons.length > 0 && <div><p className="font-medium">生成时刻原始依据</p><ul className="mt-1 space-y-0.5">{stored.reasons.map(r => <li key={r}>· {r}</li>)}</ul></div>}
+          {cleared ? <p>生成时的撤除档决定已生效：当日名单的买入区间已随之撤除，下方标的仍为仅观察。本条只表示「当前盘面不再支持空仓观望的判断」，不改变当日已生成名单的形态，也不构成买入建议。</p>
+            : stripped !== undefined && <p>{stripped ? "记录保留供复盘。" : "按「控制仓位、减少出手频率」酌情执行。"}</p>}
+          {newly && <p>按当前盘面复核触发的是盘中新增的风险信号，不回写生成时刻的判断。</p>}
+          {gate.disclaimer && <p>{gate.disclaimer}</p>}
         </div>
-      )}
-      <ul className="mt-1 space-y-0.5">
-        {gate.reasons.map((r) => (
-          <li key={r}>· {r}</li>
-        ))}
-      </ul>
-      {cmp.drift === "reasons_changed" && <GateComparisonLines cmp={cmp} />}
-      {stripped !== undefined && (
-        <div className="mt-1 font-medium">
-          {stripped
-            ? "→ 本次已撤除买入区间（下方标的仅观察，记录保留供复盘）"
-            : "→ 本次保留买入区间：按「控制仓位、减少出手频率」酌情执行，非空仓信号"}
-        </div>
-      )}
-      {gate.gate_source === "unavailable" && gate.gate_note && (
-        <div className="mt-1 text-[10px] opacity-80">ⓘ {gate.gate_note}</div>
-      )}
-      {gate.disclaimer && <div className="mt-1 text-[10px] opacity-70">{gate.disclaimer}</div>}
+      </details>
     </div>
   );
 }

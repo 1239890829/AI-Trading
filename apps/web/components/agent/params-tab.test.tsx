@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { getAgentParamChanges, applyAgentParamChange, type AgentParamChange } from "@/lib/api";
+import { getAgentParamChanges, getAgentRollbackReasons, applyAgentParamChange, rollbackAgentParamChange, type AgentParamChange } from "@/lib/api";
 import { ParamsTab } from "./params-tab";
 
 // 页面挂载即取数：把 api 层整体桩掉——本组测试只关心**容器与滚动的契约**，
@@ -27,7 +27,13 @@ vi.mock("@/lib/api", () => ({
   rollbackAgentParamChange: vi.fn(),
 }));
 
-afterEach(() => { cleanup(); vi.clearAllMocks(); vi.mocked(getAgentParamChanges).mockResolvedValue([]); });
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+  vi.mocked(getAgentParamChanges).mockResolvedValue([]);
+  vi.mocked(getAgentRollbackReasons).mockResolvedValue([]);
+  vi.mocked(rollbackAgentParamChange).mockReset();
+});
 
 describe("参数配置页 · 滚动契约（2026-09-10 用户报「向下滚动不了」）", () => {
   /**
@@ -112,4 +118,27 @@ it("IMP-025 · 历史回滚缺回执时保留未知，真实归档使用后端�
   expect(await screen.findByText("历史回滚结果待核实")).toBeTruthy();
   expect(screen.getByText("已归档，未恢复参数")).toBeTruthy();
   expect(screen.queryByText("已回滚")).toBeNull();
+});
+
+it("回滚原因菜单保留服务端代码，失败时保留归因草稿", async () => {
+  vi.mocked(getAgentParamChanges).mockResolvedValue([change("applied")]);
+  vi.mocked(getAgentRollbackReasons).mockResolvedValue([
+    { code: "manual", label: "人工判断" },
+    { code: "performance", label: "效果劣化" },
+  ]);
+  vi.mocked(rollbackAgentParamChange).mockRejectedValue(new Error("回滚失败：版本冲突"));
+  render(<ParamsTab />);
+  fireEvent.click(await screen.findByRole("button", { name: "回滚" }));
+  const trigger = screen.getByRole("button", { name: "回滚原因：人工判断" });
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("menuitemradio", { name: "效果劣化" }));
+  fireEvent.change(screen.getByPlaceholderText("备注（可选）"), { target: { value: "复核实验结果" } });
+  fireEvent.click(screen.getByRole("button", { name: "确认回滚" }));
+  expect(await screen.findByText("回滚失败：版本冲突")).toBeTruthy();
+  expect(rollbackAgentParamChange).toHaveBeenCalledExactlyOnceWith(12, {
+    reason_code: "performance", note: "复核实验结果",
+  });
+  expect(screen.getByRole("button", { name: "回滚原因：效果劣化" })).toBeTruthy();
+  expect((screen.getByPlaceholderText("备注（可选）") as HTMLInputElement).value).toBe("复核实验结果");
 });

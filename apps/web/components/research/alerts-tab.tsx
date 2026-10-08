@@ -1,7 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Panel } from "@/components/panel";
+import { FilterMenu } from "@/components/ui/filter-menu";
+import { HugeiconsIcon } from "@hugeicons/react";
+import Tick02Icon from "@hugeicons/core-free-icons/Tick02Icon";
 import { StockLink } from "@/components/stock-link";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import {
@@ -39,7 +42,7 @@ export function AlertsTab() {
   const [events, setEvents] = useState<AlertEvent[]>([]);
   const [channels, setChannels] = useState<string[]>([]);
   const [channelConfig, setChannelConfig] = useState<Record<string, boolean>>({});
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const didLoadRef = useRef(false);
@@ -90,9 +93,18 @@ export function AlertsTab() {
     enabled: true,
   });
   const [symbolInput, setSymbolInput] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [busyRule, setBusyRule] = useState<number | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AlertRule | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState("");
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (submitting) return;
+    setSubmitting(true);
+    setMutationError(null);
+    setFeedback("");
     try {
       await createAlertRule({
         ...form,
@@ -109,46 +121,67 @@ export function AlertsTab() {
         enabled: true,
       });
       setSymbolInput("");
+      setFeedback("规则已创建。实际触发与送达以后台记录为准。");
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "创建失败");
+      setMutationError(err instanceof Error ? err.message : "创建失败，请重试");
+    } finally {
+      setSubmitting(false);
     }
   }
 
   async function toggleEnabled(rule: AlertRule) {
+    if (busyRule !== null) return;
+    setBusyRule(rule.id);
+    setMutationError(null);
+    setFeedback("");
     try {
       await updateAlertRule(rule.id, { enabled: !rule.enabled });
+      setFeedback(`规则「${rule.name}」已${rule.enabled ? "停用" : "启用"}。`);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "更新失败");
+      setMutationError(err instanceof Error ? err.message : "更新失败，请重试");
+    } finally {
+      setBusyRule(null);
     }
   }
 
-  async function remove(id: number) {
-    if (!confirm("删除此规则？")) return;
+  async function remove() {
+    if (!deleteTarget || busyRule !== null) return;
+    const target = deleteTarget;
+    setBusyRule(target.id);
+    setMutationError(null);
+    setFeedback("");
     try {
-      await deleteAlertRule(id);
+      await deleteAlertRule(target.id);
+      setDeleteTarget(null);
+      setFeedback(`已删除规则「${target.name}」。已有触发记录继续保留。`);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "删除失败");
+      setMutationError(err instanceof Error ? err.message : "删除失败，请重试或取消");
+    } finally {
+      setBusyRule(null);
     }
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
+    <div className="alerts-management flex h-full min-h-0 min-w-0 flex-col gap-3">
       <div className="flex shrink-0 items-center justify-between">
-        <h2 className="text-base font-semibold">预警通知</h2>
-        <span className="text-xs text-zinc-600 dark:text-zinc-400">判读即终态 · 自动 10 秒刷新</span>
+        <h2 className="text-base font-medium">提醒规则与记录</h2>
+        <span className="text-xs text-zinc-600 dark:text-zinc-400">每 10 秒刷新</span>
       </div>
 
-      {error && <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-800 dark:text-amber-300">{error}</div>}
+      {error && <div role="alert" className="flex shrink-0 flex-wrap items-center gap-2 rounded-lg bg-[var(--control-surface)] px-3 py-2 text-xs text-[var(--ui-ink)]">读取失败，保留结果仅作上次记录：{error}<button className="quiet-action" onClick={() => void load()}>重试读取</button></div>}
+      {mutationError && <p role="alert" className="shrink-0 rounded-lg bg-[var(--control-surface)] px-3 py-2 text-xs text-[var(--ui-ink)]">操作未完成：{mutationError}</p>}
+      {feedback && <p role="status" className="shrink-0 text-xs text-[var(--ui-muted)]">{feedback}</p>}
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[360px,minmax(0,1fr)]">
-        <Panel title="新建规则" className="flex flex-col gap-3 overflow-auto">
-          <form onSubmit={submit} className="flex flex-col gap-3 text-sm">
+      <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 grid-rows-[minmax(0,0.9fr),minmax(0,1.1fr)] gap-3 lg:grid-cols-[300px,minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)]">
+        <Panel title="新建规则" className="min-h-0 h-full" bodyClassName="overflow-auto p-3">
+          <form onSubmit={submit} className="flex min-w-0 flex-col gap-3 text-sm">
+            <fieldset disabled={loading || submitting} className="flex min-w-0 flex-col gap-3 [&_.filter-trigger]:h-9 [&_.filter-trigger]:min-h-9 [&_.filter-trigger]:w-full">
             <div>
-              <label className="mb-1 block text-xs text-zinc-600 dark:text-zinc-400">名称</label>
-              <input
+              <label htmlFor="alert-rule-name" className="mb-1 block text-xs text-zinc-600 dark:text-zinc-400">名称</label>
+              <input id="alert-rule-name"
                 value={form.name}
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                 required
@@ -157,22 +190,12 @@ export function AlertsTab() {
               />
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="mb-1 block text-xs text-zinc-600 dark:text-zinc-400">条件</label>
-                <select
-                  value={form.condition_type}
-                  onChange={(e) => setForm((f) => ({ ...f, condition_type: e.target.value as AlertConditionType }))}
-                  className="h-9 w-full rounded-md border border-zinc-200 bg-transparent px-3 outline-none focus:border-up/60 dark:border-zinc-700"
-                >
-                  <option value="price_above">现价 ≥</option>
-                  <option value="price_below">现价 ≤</option>
-                  <option value="change_pct_above">涨跌幅 ≥</option>
-                  <option value="change_pct_below">涨跌幅 ≤</option>
-                </select>
+              <div className="flex flex-col justify-end">
+                <FilterMenu<AlertConditionType> label="条件" value={form.condition_type} options={Object.entries(CONDITION_LABEL).map(([key, label]) => ({key: key as AlertConditionType, label}))} onChange={condition => setForm(current => ({...current, condition_type: condition}))} />
               </div>
               <div>
-                <label className="mb-1 block text-xs text-zinc-600 dark:text-zinc-400">阈值</label>
-                <input
+                <label htmlFor="alert-threshold" className="mb-1 block text-xs text-zinc-600 dark:text-zinc-400">阈值</label>
+                <input id="alert-threshold"
                   type="number"
                   step="any"
                   value={form.threshold}
@@ -182,22 +205,13 @@ export function AlertsTab() {
                 />
               </div>
             </div>
-            <div>
-              <label className="mb-1 block text-xs text-zinc-600 dark:text-zinc-400">范围</label>
-              <select
-                value={form.scope}
-                onChange={(e) => setForm((f) => ({ ...f, scope: e.target.value as AlertScope }))}
-                className="h-9 w-full rounded-md border border-zinc-200 bg-transparent px-3 outline-none focus:border-up/60 dark:border-zinc-700"
-              >
-                <option value="watchlist">全部自选</option>
-                <option value="symbols">指定标的</option>
-                <option value="all">全市场</option>
-              </select>
-            </div>
+            <FilterMenu<AlertScope> label="范围" value={form.scope ?? "watchlist"} options={[
+              {key: "watchlist", label: "全部自选"}, {key: "symbols", label: "指定标的"}, {key: "all", label: "全市场", title: "仅检查已有行情，覆盖受数据源范围限制"},
+            ]} onChange={scope => setForm(current => ({...current, scope}))} />
             {form.scope === "symbols" && (
               <div>
-                <label className="mb-1 block text-xs text-zinc-600 dark:text-zinc-400">标的（逗号分隔）</label>
-                <input
+                <label htmlFor="alert-symbols" className="mb-1 block text-xs text-zinc-600 dark:text-zinc-400">标的（逗号分隔）</label>
+                <input id="alert-symbols"
                   value={symbolInput}
                   onChange={(e) => {
                     setSymbolInput(e.target.value);
@@ -212,8 +226,8 @@ export function AlertsTab() {
               </div>
             )}
             <div>
-              <label className="mb-1 block text-xs text-zinc-600 dark:text-zinc-400">冷却（秒）</label>
-              <input
+              <label htmlFor="alert-cooldown" className="mb-1 block text-xs text-zinc-600 dark:text-zinc-400">冷却（秒）</label>
+              <input id="alert-cooldown"
                 type="number"
                 min={0}
                 value={form.cooldown_seconds}
@@ -225,7 +239,7 @@ export function AlertsTab() {
               <label className="mb-1 block text-xs text-zinc-600 dark:text-zinc-400">通知通道</label>
               <div className="flex flex-wrap gap-2">
                 {channels.map((ch) => (
-                  <label key={ch} className="flex items-center gap-1 text-xs">
+                  <label key={ch} className="channel-option flex items-center gap-1 text-xs">
                     <input
                       type="checkbox"
                       checked={form.channels?.includes(ch)}
@@ -235,8 +249,9 @@ export function AlertsTab() {
                         else set.delete(ch);
                         setForm((f) => ({ ...f, channels: Array.from(set) }));
                       }}
-                      className="accent-up"
+                      className="sr-only"
                     />
+                    <span className="channel-check" aria-hidden="true"><HugeiconsIcon icon={Tick02Icon} size={12} strokeWidth={2} /></span>
                     {ch}
                     {channelConfig[ch] === false && (
                       <span
@@ -250,25 +265,28 @@ export function AlertsTab() {
                 ))}
               </div>
             </div>
-            {/* `bg-up-deep/90` 已去掉那 10% 透明度（2026-09-11 P2-24）：90% 叠在浅色卡片上被稀释成
-                rgb(228,51,90)，白字对比度从 4.70 掉到 4.28（< AA 4.5）；实心后与其余三处 up-deep
-                按钮一致，`hover:bg-up-deep` 也随之冗余（悬停反馈由全局 :active 按压 + transition 承担）。 */}
             <button
               type="submit"
-              disabled={loading}
-              className="mt-1 rounded-md bg-up-deep px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+              disabled={loading || submitting}
+              className="quiet-action mt-1 self-start bg-[var(--key-face)] px-3 text-xs font-medium text-[var(--key-ink)] disabled:opacity-50"
             >
-              创建规则
+              {submitting ? "创建中…" : "创建规则"}
             </button>
+            </fieldset>
           </form>
         </Panel>
 
-        <div className="flex min-h-0 flex-col gap-3">
-          <Panel title={`规则列表 (${rules.length})`} className="max-h-[45%] shrink-0 overflow-auto">
-            {rules.length === 0 ? (
-              <p className="px-4 py-6 text-center text-sm text-zinc-600 dark:text-zinc-400">暂无规则。</p>
+        <div className="flex min-h-0 min-w-0 flex-col gap-3">
+          <Panel title={`规则列表 (${rules.length})`} className="min-h-0 flex-1" bodyClassName="overflow-auto">
+            {deleteTarget && <form onSubmit={event => {event.preventDefault(); void remove();}} className="flex flex-wrap items-center gap-2 border-b border-[var(--ui-line)] bg-[var(--control-surface)] px-3 py-3 text-xs">
+              <p className="min-w-0 flex-1 basis-full leading-relaxed">删除规则「{deleteTarget.name}」？已有触发记录会继续保留。</p>
+              <button type="submit" disabled={busyRule !== null} className="quiet-action text-[var(--tick-up-from)]">{busyRule === deleteTarget.id ? "删除中…" : "确认删除"}</button>
+              <button type="button" disabled={busyRule !== null} onClick={() => {setDeleteTarget(null); setMutationError(null);}} className="quiet-action">取消删除</button>
+            </form>}
+            {loading ? <p role="status" className="px-4 py-6 text-xs text-[var(--ui-muted)]">正在读取规则…</p> : rules.length === 0 ? (
+              <p className="px-4 py-6 text-center text-sm text-zinc-600 dark:text-zinc-400">{error ? "规则读取失败，当前是否为空尚未确认。请重试读取。" : "暂无规则。"}</p>
             ) : (
-              <table className="w-full text-xs">
+              <table className="w-full min-w-[680px] text-xs [&_td]:align-top [&_th]:whitespace-nowrap">
                 <thead className="sticky top-0 bg-zinc-50 text-zinc-600 dark:text-zinc-400 dark:bg-zinc-900">
                   <tr>
                     <th className="px-3 py-2 text-left font-medium">名称</th>
@@ -293,13 +311,16 @@ export function AlertsTab() {
                       <td className="px-3 py-2">
                         <button
                           onClick={() => void toggleEnabled(r)}
-                          className={`rounded-full px-2 py-0.5 ${r.enabled ? "bg-up/10 text-up-ink dark:text-up" : "bg-zinc-100 text-zinc-600 dark:text-zinc-400 dark:bg-zinc-800"}`}
+                          disabled={busyRule !== null}
+                          aria-pressed={r.enabled}
+                          aria-label={`${r.enabled ? "停用" : "启用"}规则 ${r.name}`}
+                          className={`quiet-action rounded-md px-2 py-0.5 ${r.enabled ? "bg-up/10 text-up-ink dark:text-up" : "bg-zinc-100 text-zinc-600 dark:text-zinc-400 dark:bg-zinc-800"}`}
                         >
-                          {r.enabled ? "启用" : "停用"}
+                          {busyRule === r.id && deleteTarget?.id !== r.id ? "更新中…" : r.enabled ? "启用" : "停用"}
                         </button>
                       </td>
                       <td className="px-3 py-2">
-                        <button onClick={() => void remove(r.id)} className="text-zinc-600 dark:text-zinc-400 hover:text-red-400">
+                        <button disabled={busyRule !== null} onClick={() => {setDeleteTarget(r); setMutationError(null); setFeedback("");}} className="quiet-action text-zinc-600 dark:text-zinc-400 hover:text-red-400" aria-label={`删除规则 ${r.name}`}>
                           删除
                         </button>
                       </td>
@@ -310,11 +331,11 @@ export function AlertsTab() {
             )}
           </Panel>
 
-          <Panel title={`触发记录 (${events.length})`} className="min-h-0 flex-1 overflow-auto">
-            {events.length === 0 ? (
-              <p className="px-4 py-6 text-center text-sm text-zinc-600 dark:text-zinc-400">暂无触发。</p>
+          <Panel title={`最近触发记录 (${events.length})`} className="min-h-0 flex-1" bodyClassName="overflow-auto">
+            {loading ? <p role="status" className="px-4 py-6 text-xs text-[var(--ui-muted)]">正在读取触发记录…</p> : events.length === 0 ? (
+              <p className="px-4 py-6 text-center text-sm text-zinc-600 dark:text-zinc-400">{error ? "触发记录读取失败，不能判断当前没有触发。" : "暂无触发。"}</p>
             ) : (
-              <table className="w-full text-xs">
+              <table className="w-full min-w-[680px] text-xs [&_td]:align-top [&_th]:whitespace-nowrap">
                 <thead className="sticky top-0 bg-zinc-50 text-zinc-600 dark:text-zinc-400 dark:bg-zinc-900">
                   <tr>
                     <th className="px-3 py-2 text-left font-medium">时间</th>
@@ -333,9 +354,9 @@ export function AlertsTab() {
                         {new Date(e.triggered_at).toLocaleTimeString("zh-CN")}
                       </td>
                       <td className="px-3 py-2 font-mono">
-                        <StockLink symbol={e.symbol} title="查看行情详情">
+                        {e.symbol === "000000" ? <span>全局事件</span> : <StockLink symbol={e.symbol} title="查看行情详情">
                           {e.symbol}
-                        </StockLink>
+                        </StockLink>}
                       </td>
                       <td className="px-3 py-2">{rules.find((r) => r.id === e.rule_id)?.name ?? e.rule_id}</td>
                       <td className={`px-3 py-2 font-mono tabular-nums ${e.snapshot ? pctColor(e.snapshot.change_pct) : ""}`}>
@@ -346,7 +367,7 @@ export function AlertsTab() {
                       <td className="px-3 py-2">
                         {/* 2026-09-08 用户指令：触发记录状态不再需要确认——判读完成即自动置
                             acknowledged，此处只读展示终态，移除人工「确认」按钮 */}
-                        <span className="text-zinc-600 dark:text-zinc-400">已判读</span>
+                        <span className="text-zinc-600 dark:text-zinc-400">{e.triage?.model === "llm_fallback" ? "规则提醒 · AI不可用" : e.triage ? "已判读" : "规则触发 · 未取得AI判读"}</span>
                       </td>
                     </tr>
                   ))}
@@ -360,7 +381,7 @@ export function AlertsTab() {
             {blocked.length > 0 && (
               <details className="border-t border-zinc-100 dark:border-zinc-800/60">
                 <summary className="cursor-pointer select-none px-3 py-2 text-xs text-zinc-600 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300">
-                  今日已挡事件（{blocked.length}）· 展开查看已降噪告警
+                  本次读取中已挡事件（{blocked.length}）· 展开核对降噪依据
                 </summary>
                 <ul className="space-y-1 px-3 pb-3 text-[11px]">
                   {blocked.map((e) => (

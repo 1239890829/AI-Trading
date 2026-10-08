@@ -1,6 +1,7 @@
 "use client";
 
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import { FilterMenu } from "@/components/ui/filter-menu";
 import { useCallback, useEffect, useState } from "react";
 
 import {
@@ -319,17 +320,12 @@ export function ParamsTab() {
                         回滚前先归因（用于存活率下钻：是实验测到劣化，还是当初判断有误）
                       </p>
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <select
+                        <FilterMenu
+                          label="回滚原因"
                           value={reasonCode}
-                          onChange={(e) => setReasonCode(e.target.value)}
-                          className="rounded border border-zinc-300 bg-transparent px-1.5 py-0.5 text-[11px] dark:border-zinc-600"
-                        >
-                          {reasons.map((r) => (
-                            <option key={r.code} value={r.code}>
-                              {r.label}
-                            </option>
-                          ))}
-                        </select>
+                          options={reasons.map((reason) => ({ key: reason.code, label: reason.label }))}
+                          onChange={setReasonCode}
+                        />
                         <input
                           value={reasonNote}
                           onChange={(e) => setReasonNote(e.target.value)}

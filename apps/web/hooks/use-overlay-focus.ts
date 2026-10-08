@@ -57,6 +57,8 @@ export function useOverlayFocus(ref: RefObject<HTMLElement | null>, onClose: () 
     if (topLayer() === layer) focusFirst(layer);
     function key(event: KeyboardEvent) {
       if (topLayer() !== layer || event.isComposing || (!layer.modal() && !layer.root.contains(document.activeElement))) return;
+      // Radix owns a nested menu's Escape and Tab; the first Escape must not close its drawer.
+      if (event.target instanceof Element && event.target.closest('[role="menu"]') && layer.root.contains(event.target)) return;
       if (event.key === "Escape") {
         event.preventDefault(); event.stopImmediatePropagation(); layer.close();
       } else if (event.key === "Tab" && layer.modal()) {

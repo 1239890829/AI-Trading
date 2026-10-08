@@ -2,7 +2,7 @@
 
 import { SelectionRail } from "@/components/ui/selection-rail";
 
-import { useCallback, useEffect, memo, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, memo, useId, useMemo, useRef, useState } from "react";
 import { MinuteChart } from "@/components/minute-chart";
 import { KlineChartPro } from "@/components/kline-chart-pro";
 import { priceLimitPct } from "@/lib/price-limit";
@@ -57,7 +57,6 @@ import { ProfilePanel, type CompanyProfile, type FinRow, type BoardRows } from "
 import { InfoPanel, type InfoItem } from "@/components/detail/info-panel";
 import { BookTradesView } from "@/components/detail/book-trades-view";
 import { Skeleton } from "@/components/ui/loading";
-import { ReplayChart } from "@/components/replay-chart";
 import { FlowChart, type CapitalFlow } from "@/components/detail/flow-chart";
 import { SpeedPanel } from "@/components/detail/speed-panel";
 import { BoardRankPanel } from "@/components/detail/board-rank-panel";
@@ -177,8 +176,8 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       return !v;
     });
   };
-  // 历史回放（Phase 6 收官）：K 线页签内切换回放模式
-  const [replayMode, setReplayMode] = useState(false);
+  // 核对标签与内容面板共用稳定的可访问标识。
+  const perspectiveId = useId();
   // 技术评估条默认**折叠**（2026-09-02 评审 #5：K 线图被周边元素挤占）。
   // 折叠后只留一行多空结论，把垂直空间还给 K 线；要看信号明细再点开。
   // 采用保守方案：不改整体布局与右列宽度，随时可一键还原为常显。
@@ -642,12 +641,15 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       )}
 
       {/* ①½ 题材归属 chips（官方成分 / 涨停归因双源）→ 题材看板聚焦 */}
+      {!isIndex && <details className="detail-context-disclosure">
+        <summary>题材与事件线索<span aria-hidden="true">展开核对</span></summary>
       <ThemeChipsRow themes={stockThemes} />
 
       {/* ①¾ 相关事件（E2/L9）：方向题材命中归属 或 事件源自该股。
           指数不渲染——/api/events/symbol/{code} 只接受 6 位个股代码，指数段
           （sh000001 等）会返回 400，此前表现为常驻「加载失败 [重试]」（2026-09-11）。 */}
       <StockEventsRow symbol={symbol} isIndex={isIndex} />
+      </details>}
 
       {/* 共用工具行位于内容网格上方，图表与右侧核对面板保持同一顶线。 */}
       <div className="chart-toolbar flex shrink-0 flex-wrap items-center gap-2">
@@ -673,10 +675,10 @@ export const StockDetailPanel = memo(function StockDetailPanel({
         ))}
 
         </SelectionRail>
-        {/* 右侧工具组：技术评估 + 历史回放同行（2026-09-04 用户反馈：技术评估
+        {/* 右侧工具组：技术评估与依据同行（2026-09-04 用户反馈：技术评估
             浮层遮挡 K 线，改为工具栏内联，不再覆盖图表） */}
         <div className="chart-tools ml-auto flex flex-wrap items-center gap-2">
-          {chartTab === "kline" && !replayMode && tech && (
+          {chartTab === "kline" && tech && (
             <div className="chart-assessment flex flex-wrap items-center gap-1.5 rounded-lg border border-zinc-200 bg-white/85 px-2 py-1 text-[11px] shadow-sm dark:border-zinc-700 dark:bg-zinc-900/85">
               <span
                 className={`rounded px-1.5 py-0.5 font-medium ${
@@ -698,20 +700,11 @@ export const StockDetailPanel = memo(function StockDetailPanel({
               </button>
             </div>
           )}
-          {chartTab === "kline" && !replayMode && displayBars.length >= 60 && (
-            <button
-              onClick={() => setReplayMode(true)}
-              className="rounded border border-sky-500/50 px-2 py-0.5 text-xs text-sky-700 dark:text-sky-400 hover:bg-sky-500/10"
-              title="按日逐根推进 K 线，回放历史买卖点与成交（需要 ≥60 根日 K）"
-            >
-              ▶ 历史回放
-            </button>
-          )}
         </div>
       </div>
 
       {/* 依据明细：正常文档流展开（打开时图表下移让位，不遮挡任何元素） */}
-      {chartTab === "kline" && !replayMode && techOpen && tech && (
+      {chartTab === "kline" && techOpen && tech && (
         <div className="shrink-0 rounded-lg border border-zinc-200 bg-white/90 p-2 text-[11px] leading-relaxed shadow-sm dark:border-zinc-700 dark:bg-zinc-900/90">
           <ul className="space-y-0.5">
             {tech.signals.map((sg) => (
@@ -748,19 +741,15 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                （2026-09-02 用户要求） */
             <Panel bodyClassName="overflow-hidden" className="detail-chart-panel min-h-0 flex-1">
               {displayBars.length > 0 ? (
-                replayMode ? (
-                  <ReplayChart bars={bars} fills={fills} onExit={() => setReplayMode(false)} />
-                ) : (
                 <div className="flex h-full min-h-0 flex-col">
                   {/* 停牌提示条：日K 缺 bar 推导，判据随附（UI 缺陷 #1） */}
                   <SuspendedNotice status={tradingStatus} />
-                  {/* 技术评估条已移至图表工具栏（与历史回放同行，2026-09-04 用户
+                  {/* 技术评估条已移至图表工具栏（与依据同行，2026-09-04 用户
                       反馈浮层遮挡 K 线）：图区只留图表本身 */}
                   <div className="relative min-h-0 flex-1">
                     <KlineChartPro bars={displayBars} tradeMarks={fills} costPrice={costPrice} eventMarks={eventMarks} className="h-full" />
                   </div>
                 </div>
-                )
               ) : (
                 <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">等待 K 线数据…</p>
               )}
@@ -920,7 +909,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
             </button>
           }
         >
-          <div className="detail-perspective-tabs" data-index={isIndex} role="group" aria-label="核对视角"
+          <div className="detail-perspective-tabs" data-index={isIndex} role="tablist" aria-label="核对视角"
             onKeyDown={(event) => {
               if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
               const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button"));
@@ -933,12 +922,13 @@ export const StockDetailPanel = memo(function StockDetailPanel({
               buttons[next].click();
             }}>
             {rightTabsFor(isIndex).map(([key, label]) => (
-              <button key={key} type="button" aria-pressed={rightTab === key}
+              <button key={key} type="button" role="tab" id={`${perspectiveId}-${key}`} aria-controls={`${perspectiveId}-panel`} aria-selected={rightTab === key} tabIndex={rightTab === key ? 0 : -1}
                 onClick={() => { if (onRightTabChange) onRightTabChange(key); else setRightTab(key); }}>
                 {label}
               </button>
             ))}
           </div>
+          <div id={`${perspectiveId}-panel`} role="tabpanel" aria-labelledby={`${perspectiveId}-${rightTab}`} className="min-h-0 flex-1 overflow-auto">
           {rightTab === "speed" && <SpeedPanel className="h-full" />}
           {rightTab === "boards" && <BoardRankPanel className="h-full" />}
           {rightTab === "dt" && <MinuteDecisionPanel symbol={symbol} className="h-full" />}
@@ -968,7 +958,9 @@ export const StockDetailPanel = memo(function StockDetailPanel({
 
           {rightTab === "info" && <InfoPanel anns={anns} news={news} annError={annError} newsError={newsError} />}
 
-          <BookTradesView book={book} trades={trades} showBook={rightTab === "book"} />
+          {/* Only the two market-print perspectives own this consumer. */}
+          {(rightTab === "book" || rightTab === "trades") && <BookTradesView book={book} trades={trades} showBook={rightTab === "book"} />}
+          </div>
         </Panel>
         </div>
         )}

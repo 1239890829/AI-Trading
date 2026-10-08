@@ -104,10 +104,16 @@ export function LurkTable({ s, date }: { s: State<LurkPoolPayload>; date: (ms: n
   );
 }
 
-export function PostMarketEnhance() {
+export function PostMarketEnhance({ initiallyOpen = false }: { initiallyOpen?: boolean } = {}) {
   const [relay, setRelay] = useState<State<{ trade_date: string; items: RelayRankItem[] }>>({ status: "idle" });
   const [lurk, setLurk] = useState<State<LurkPoolPayload>>({ status: "idle" });
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initiallyOpen);
+
+  const [previousInitial, setPreviousInitial] = useState(initiallyOpen);
+  if (previousInitial !== initiallyOpen) {
+    setPreviousInitial(initiallyOpen);
+    if (initiallyOpen) setOpen(true);
+  }
 
   // 展开即回到「加载中」（渲染期 adjust-state；原为 effect 内同步 setState，P1-27）
   const [prevOpen, setPrevOpen] = useState(false);
@@ -145,7 +151,7 @@ export function PostMarketEnhance() {
       className="opportunity-fold"
     >
       <summary>
-        <span><strong>盘后增强</strong><span className="fold-caption">次日接力参考 · 潜伏观察池</span></span>
+        <span><strong>接力与潜伏</strong><span className="fold-caption">次日接力参考 · 潜伏观察池</span></span>
         <span className="fold-chevron" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m7 10 5 5 5-5" /></svg></span>
       </summary>
       <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2">

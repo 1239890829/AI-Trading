@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useState } from "react";
 import { MarketLensPicker } from "@/components/ui/workspace-deck";
 import { useSearchParams } from "next/navigation";
 import { Panel } from "@/components/panel";
@@ -12,7 +12,8 @@ import { EventsTab } from "@/components/market/events-tab";
 import { FundTab } from "@/components/market/fund-tab";
 import { indexDetailSymbol } from "@/lib/api";
 import { tapeUrl } from "@/lib/routing";
-import { symbolDetailClick, useSymbolDetail } from "@/components/detail/symbol-detail-context";
+import { marketLensUrl } from "@/lib/workspace-tools";
+import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import {
   getBreadth,
   getLimitUpPool,
@@ -24,20 +25,16 @@ import {
   type Sentiment,
   type SentimentHistoryPayload,
 } from "@/lib/api";
-import { fmt, fmtAmount, pctColor, pctText, triAmount } from "@/lib/format";
+import { fmt, fmtAmount, pctColor, pctText, sourceLabel, timeText, triAmount } from "@/lib/format";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { FadeSwap, PageSkeletonFallback, Skeleton } from "@/components/ui/loading";
 import type { LimitUpRecord, Quote } from "@/types/market";
+import "./market-bc.css";
 
 /**
- * 市场页（2026-09-01 系统重构）：总览（情绪/宽度/事件）+ 云图 两个视图。
- * 云图无独立数据源（复用市场快照，纯视图），故并入本页为 tab 而非一级导航
- * （docs/archive/architecture-redesign.md §一.1.2 减负原则 2）。
- *
- * 布局 v3（2026-09-01 用户要求）：**一屏完整展示，严禁页面级滚动**——
- * 顶部指标带全部紧凑化（指数卡 2 行、宽度卡 py-1、情绪卡降高、低价值说明行
- * 删除），中部成交额+涨停速览与事件驱动按 flex 比例吸收剩余高度（各带
- * min-h 保底），内容超长只在面板内部滚动。633px 小视口实测也无需页面滚动。
+ * Market owns its data polling; the lens only changes presentation and route.
+ * The B+C layout groups environment readings above the pool and event columns.
+ * At narrow/short viewports the route container scrolls; body never does.
  */
 
 const PHASE_STYLE: Record<string, string> = {
@@ -120,247 +117,102 @@ function MarketInner() {
   }, 60_000);
 
   const sh = indices.find((q) => q.market === "SH" && q.symbol === "000001");
-
+  const search = sp.toString();
+  // Summary shortcuts keep the same date/object/return identity as the lens picker.
+  const lensHref = (href: string) => marketLensUrl(href, search);
 
   return (
-    <main data-workspace="market" className="task-page mx-auto flex h-full w-full max-w-[1600px] flex-col gap-2 overflow-hidden px-4 py-3">
-      <div className="workspace-masthead">
-        <div><h1>市场全景</h1><p className="workspace-kicker">市场环境、资金与驱动线索</p></div>
+    <main data-workspace="market" className="task-page bc-market-page mx-auto flex h-full w-full max-w-[1600px] flex-col overflow-hidden">
+      <header className="workspace-masthead bc-market-masthead">
+        <div><h1>市场</h1><p className="workspace-kicker">先看环境，再核对资金、题材与事件</p></div>
         <div className="workspace-context">
-          {view === "overview" && <span>最近读取 {updatedAt || "--"}</span>}
-          <MarketLensPicker selected={view} search={sp.toString()} />
+          {view === "overview" && <span className="bc-market-read-time">最近读取 {updatedAt || "--"}</span>}
+          <MarketLensPicker selected={view} search={search} />
         </div>
-      </div>
+      </header>
 
-      {/* 视图切换统一 fade 过渡（2026-09-04）：h-full 保持各视图内部布局 */}
-      <FadeSwap swapKey={view} className="task-scroll min-h-0 flex-1">
-        {view === "heatmap" ? (
-          <div className="h-full">
-            <HeatmapTab />
-          </div>
-        ) : view === "events" ? (
-          <div className="h-full">
-            <EventsTab />
-          </div>
-        ) : view === "fund" ? (
-          <div className="h-full">
-            <FundTab />
-          </div>
-        ) : (
-          <div className="flex h-full min-h-0 flex-col gap-2">
-          {error && (
-            <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-800 dark:text-amber-300">
-              {error}
-            </div>
-          )}
+      <FadeSwap swapKey={view} className={`task-scroll bc-market-view min-h-0 flex-1 bc-market-view-${view}`}>
+        {view === "heatmap" ? <HeatmapTab /> : view === "events" ? <EventsTab /> : view === "fund" ? <FundTab /> : (
+          <div className="bc-market-overview">
+            {(error || contextError) && <div className="bc-market-notices">
+              {error && <p role="alert">{error}</p>}
+              {contextError && <p role="status">宽度或情绪来源未就绪，缺项不能解读为零或健康。</p>}
+            </div>}
 
-          {contextError && <p role="status" className="text-xs text-amber-800 dark:text-amber-300">宽度或情绪来源未就绪，缺项不能解读为零或健康。</p>}
-          {/* 指数带：紧凑 2 行（名称+质量+涨跌幅 / 价格+成交额）。
-              联动切片 F（L 指数入口）：点击 → **就地弹出指数详情**（带前缀规范形态，
-              与个股同一入口 `useSymbolDetail`，不裸拼 URL）。
-              2026-09-15 详情弹窗化：原先跳工作台，用户会丢掉当前 tab 与页面上下文。 */}
-          <div className="market-index-ribbon grid shrink-0">
-            {indices.length === 0 && pending
-              ? Array.from({ length: 6 }, (_, i) => (
-                  <div key={i} className="ui-card rounded-lg border border-zinc-200 px-2.5 py-1.5 dark:border-zinc-800">
-                    <Skeleton className="h-3 w-16" />
-                    <Skeleton className="mt-1.5 h-5 w-20" />
-                  </div>
-                ))
-              : indices.map((q) => (
-              <button
-                key={q.symbol}
-                onClick={() => openSymbolDetail({ symbol: indexDetailSymbol(q.symbol, q.market) })}
-                title={`查看 ${q.name ?? q.symbol} 指数详情${q.quality_reasons?.length ? "｜" + q.quality_reasons.join("；") : ""}`}
-                className="ui-card cursor-pointer rounded-lg border border-zinc-200 px-2.5 py-1.5 text-left transition-colors hover:bg-zinc-100/60 dark:border-zinc-800 dark:hover:bg-zinc-800/40"
-              >
-                <div className="flex items-center justify-between gap-1">
-                  <span className="truncate text-xs text-zinc-600 dark:text-zinc-400">{q.name ?? q.symbol}</span>
-                  <span className="flex items-center gap-1">
-                    <QualityBadge quality={q.quality} reasons={q.quality_reasons} />
-                    <span className={`shrink-0 font-mono text-xs ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</span>
-                  </span>
-                </div>
-                <div className="mt-0.5 flex items-baseline justify-between gap-2">
-                  <span className="font-mono text-base font-semibold">{q.price == null ? "未开盘" : fmt(q.price)}</span>
-                  <span className="shrink-0 font-mono text-xs text-zinc-600 dark:text-zinc-400" title="成交额">
-                    额 {fmtAmount(q.amount)}
-                  </span>
-                </div>
-              </button>
-            ))}
-          </div>
+            <section className="bc-market-indices" aria-label="主要指数">
+              {indices.length === 0 && pending ? Array.from({length: 6}, (_, index) => (
+                <div className="bc-index-skeleton" key={index}><Skeleton className="h-3 w-16" /><Skeleton className="mt-2 h-5 w-20" /></div>
+              )) : indices.length === 0 ? <p className="bc-market-empty">暂无可用指数。请核对数据源状态。</p> : indices.map(q => (
+                <button type="button" className="bc-index-quote" key={`${q.market}-${q.symbol}`}
+                  onClick={() => openSymbolDetail({symbol: indexDetailSymbol(q.symbol, q.market)})}
+                  title={`查看 ${q.name ?? q.symbol} 指数详情${q.quality_reasons?.length ? "｜" + q.quality_reasons.join("；") : ""}`}>
+                  <span className="bc-index-name"><span>{q.name ?? q.symbol}</span><QualityBadge quality={q.quality} reasons={q.quality_reasons} /></span>
+                  <span className="bc-index-value"><strong>{q.price == null ? "未开盘" : fmt(q.price)}</strong><span className={pctColor(q.change_pct)}>{pctText(q.change_pct)}</span></span>
+                  <span className="bc-index-amount">成交额 {fmtAmount(q.amount)}</span>
+                </button>
+              ))}
+            </section>
 
-          {/* 宽度带：未就绪时同构骨架占位（label 已知，只对数值位骨架）。
-              涨停/跌停两格可点击 → 盘面页对应 tab（2026-09-04 联动，tapeUrl 统一构造） */}
-          <div className="market-breadth-ribbon grid shrink-0 grid-cols-3 lg:grid-cols-6">
-            {([
-              ["上涨", breadth?.up, "text-up-ink dark:text-up", null],
-              ["下跌", breadth?.down, "text-down-ink dark:text-down", null],
-              ["涨停", breadth?.limit_up, "text-up-ink dark:text-up", tapeUrl("limitup")],
-              ["跌停", breadth?.limit_down, "text-down-ink dark:text-down", tapeUrl("limitdown")],
-              ["平盘/停牌", breadth ? `${breadth.flat}/${breadth.suspended}` : null, "", null],
-              ["沪深京总数", breadth?.total, "", null],
-            ] as [string, string | number | null | undefined, string, string | null][]).map(([label, value, cls, href]) =>
-              href ? (
-                <Link
-                  key={String(label)}
-                  href={href}
-                  title={`查看${label}池明细（盘面页 · ${label === "涨停" ? "涨停生态" : "跌停"} tab）`}
-                  className="ui-card cursor-pointer rounded-lg border border-zinc-200 px-2.5 py-1 transition-colors hover:bg-zinc-100/60 dark:border-zinc-800 dark:hover:bg-zinc-800/40"
-                >
-                  <span className="text-[11px] text-zinc-600 dark:text-zinc-400">{label}</span>
-                  {value == null && pending ? (
-                    <Skeleton className="mt-0.5 h-4 w-14" />
-                  ) : (
-                    <div className={`font-mono text-sm font-semibold ${cls}`}>
-                      {value ?? "--"}
-                      <span className="ml-1 text-[10px] font-normal text-zinc-600 dark:text-zinc-400">↗</span>
-                    </div>
-                  )}
-                </Link>
-              ) : (
-                <div key={String(label)} className="ui-card rounded-lg border border-zinc-200 px-2.5 py-1 dark:border-zinc-800">
-                  <span className="text-[11px] text-zinc-600 dark:text-zinc-400">{label}</span>
-                  {value == null && pending ? (
-                    <Skeleton className="mt-0.5 h-4 w-14" />
-                  ) : (
-                    <div className={`font-mono text-sm font-semibold ${cls}`}>{value ?? "--"}</div>
-                  )}
-                </div>
-              )
-            )}
-          </div>
+            <section className="bc-market-environment" aria-label="成交与市场宽度">
+              <div className="bc-market-turnover">
+                <div className="bc-market-turnover-head"><span>沪深京成交额</span><Link href={lensHref("/market?tab=fund")} className="bc-market-text-action">资金详情<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10" /></svg></Link></div>
+                <strong title={amountFreshness?.reason ?? undefined}>{triAmount(totalAmount, amountFreshness?.state)}</strong>
+                <span className="bc-market-turnover-source">{amountFreshness?.source ? sourceLabel(amountFreshness.source) : sh?.source ? sourceLabel(sh.source) : "来源未提供"}{amountFreshness?.as_of ? ` ${timeText(amountFreshness.as_of)}` : sh?.data_timestamp ? ` ${timeText(sh.data_timestamp)}` : ""}</span>
+              </div>
+              <dl className="bc-market-breadth">
+                {([
+                  ["上涨", breadth?.up, "text-up-ink dark:text-up", null],
+                  ["下跌", breadth?.down, "text-down-ink dark:text-down", null],
+                  ["涨停", breadth?.limit_up, "text-up-ink dark:text-up", tapeUrl("limitup")],
+                  ["跌停", breadth?.limit_down, "text-down-ink dark:text-down", tapeUrl("limitdown")],
+                  ["平盘 / 停牌", breadth ? `${breadth.flat} / ${breadth.suspended}` : null, "", null],
+                  ["沪深京总数", breadth?.total, "", null],
+                ] as [string, string | number | null | undefined, string, string | null][]).map(([label, value, cls, href]) => {
+                  const valueContent = value == null && pending ? <Skeleton className="h-4 w-12" /> : value ?? "--";
+                  return <div key={label}><dt>{label}</dt><dd className={cls}>{href ? <Link href={lensHref(href)} aria-label={`查看${label}池明细：${value ?? "未提供"}`} title={`查看${label}池明细`}>{valueContent}<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10" /></svg></Link> : valueContent}</dd></div>;
+                })}
+              </dl>
+            </section>
 
-          {/* 情绪合并卡：左相位/温度/指标，右近 10 日序列柱状（紧凑高度）；未就绪时单行骨架 */}
-          {sent ? (
-            <div className="market-sentiment-strip ui-card flex shrink-0 flex-wrap items-center gap-x-5 gap-y-1.5 rounded-lg border border-zinc-200 px-3.5 py-1.5 dark:border-zinc-800">
-              <div className="flex min-w-0 flex-wrap items-center gap-x-3.5 gap-y-1">
-                <span className={`rounded-md border px-2 py-0.5 text-xs font-semibold ${PHASE_STYLE[sent.phase] ?? ""}`}>
-                  {sent.phase}
-                </span>
-                <span className="text-xs text-zinc-600 dark:text-zinc-400">
-                  情绪温度 <span className="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100">{sent.temperature}</span>/100
-                </span>
-                <span className="text-xs text-zinc-600 dark:text-zinc-400">置信度 {sent.confidence}</span>
-                <span className="hidden text-xs text-zinc-600 dark:text-zinc-400 xl:inline">
-                  {sent.indicators.slice(0, 6).map((i) => `${i.name} ${i.value ?? "--"}`).join(" · ")}
-                </span>
-                <details className="sentiment-basis text-xs">
-                  <summary>判定依据与失效条件</summary>
-                  <div>
+            {sent ? (
+              <section className="bc-market-sentiment" aria-label="市场情绪与判定依据">
+                <div className="bc-market-sentiment-reading">
+                  <span className={`bc-market-phase ${PHASE_STYLE[sent.phase] ?? ""}`}>{sent.phase}</span>
+                  <span>情绪温度 <strong>{sent.temperature}</strong><small> / 100</small></span>
+                  <span className="bc-market-confidence">置信度 {sent.confidence}</span>
+                  <details className="sentiment-basis bc-market-basis"><summary>依据与失效条件</summary><div>
                     <p><strong>依据</strong> {sent.reasons.join("；") || "未提供"}</p>
                     <p><strong>误判风险</strong> {sent.misjudge_caveats.join("；") || "未提供"}</p>
                     <p><strong>切换条件</strong> {sent.switch_conditions || "未提供"}</p>
-                  </div>
-                </details>
-              </div>
-              {sentHist && sentHist.items.length > 0 && (
-                <div
-                  className="ml-auto flex items-end gap-1.5"
-                  title={(() => {
-                    const cy = sentHist.cycle;
-                    return cy.start_date
-                      ? `近 ${sentHist.items.length} 日情绪序列；本轮自 ${cy.start_date} 起（${cy.start_phase ?? ""}→${sentHist.items[sentHist.items.length - 1]?.phase}），已持续 ${cy.days} 日`
-                      : `近 ${sentHist.items.length} 日情绪序列`;
-                  })()}
-                >
-                  {sentHist.items.map((h) => {
-                    const t = h.temperature ?? 0;
-                    const height = 5 + Math.round((t / 100) * 22);
-                    const color =
-                      t >= 75 ? "bg-red-500/70" : t >= 60 ? "bg-amber-500/70" : t >= 45 ? "bg-zinc-500/60" : "bg-sky-500/70";
-                    return (
-                      <div
-                        key={h.trade_date}
-                        className="flex w-6 flex-col items-center gap-px"
-                        title={`${h.trade_date}｜${h.phase}｜温度 ${t ?? "--"}｜置信 ${h.confidence ?? "--"}｜${h.source === "review" ? "复盘" : "实时"}`}
-                      >
-                        <span className="text-[9px] tabular-nums text-zinc-600 dark:text-zinc-400">{t ? Math.round(t) : "--"}</span>
-                        <div className={`w-full rounded-t ${color}`} style={{ height }} />
-                      </div>
-                    );
-                  })}
+                    {sent.indicators.length > 0 && <p><strong>指标</strong> {sent.indicators.slice(0, 6).map(indicator => `${indicator.name} ${indicator.value ?? "--"}`).join("；")}</p>}
+                  </div></details>
                 </div>
-              )}
+                {sentHist && sentHist.items.length > 0 && <div className="bc-market-cycle" title={sentHist.cycle.start_date ? `本轮自 ${sentHist.cycle.start_date} 起（${sentHist.cycle.start_phase ?? ""}→${sentHist.items[sentHist.items.length - 1]?.phase}），已持续 ${sentHist.cycle.days} 日` : `近 ${sentHist.items.length} 日情绪序列`}>
+                  <span>近 {sentHist.items.length} 日</span><div className="bc-market-history">{sentHist.items.map(history => {
+                    const temperature = history.temperature;
+                    const height = temperature == null ? 3 : 5 + Math.round((temperature / 100) * 22);
+                    const color = temperature == null ? "bg-zinc-500/30" : temperature >= 75 ? "bg-red-500/70" : temperature >= 60 ? "bg-amber-500/70" : temperature >= 45 ? "bg-zinc-500/60" : "bg-sky-500/70";
+                    return <div key={history.trade_date} title={`${history.trade_date}｜${history.phase}｜温度 ${temperature ?? "--"}｜置信 ${history.confidence ?? "--"}｜${history.source === "review" ? "复盘" : "实时"}`}><span>{temperature == null ? "--" : Math.round(temperature)}</span><i className={color} style={{height}} /></div>;
+                  })}</div>
+                </div>}
+              </section>
+            ) : pending ? <div className="bc-market-sentiment"><Skeleton className="h-5 w-14" /><Skeleton className="h-4 w-40" /><Skeleton className="h-4 w-24" /></div> : null}
+
+            <div className="bc-market-reading">
+              <Panel title="涨停前列" source={pool[0]?.source} className="bc-market-pool" bodyClassName="bc-market-pool-scroll" extra={<Link href={lensHref(tapeUrl("limitup"))} className="bc-market-text-action">查看全池<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10" /></svg></Link>}>
+                {poolError && <p role="alert" className="bc-market-inline-warning">涨停速览读取失败。{pool.length ? "下面是上次读取结果。" : "不能据此判断没有涨停。"}</p>}
+                {pool.length > 0 ? <table className="bc-market-pool-table">
+                  <caption className="sr-only">今日涨停池连板前列，点击证券查看详情</caption>
+                  <thead><tr><th scope="col">证券</th><th scope="col">最新价</th><th scope="col">涨跌幅</th><th scope="col">连板记录</th></tr></thead>
+                  <tbody>{pool.map(record => <tr key={record.symbol} onClick={event => {event.currentTarget.querySelector("button")?.focus(); openSymbolDetail({symbol: record.symbol});}} title="查看个股详情">
+                    <td><button type="button" className="market-stock-open bc-market-stock" aria-label={`查看 ${record.name ?? record.symbol} 详情`} onClick={event => {event.stopPropagation(); openSymbolDetail({symbol: record.symbol});}}><span>{record.name ?? record.symbol}</span><small>{record.symbol}</small></button></td>
+                    <td>{fmt(record.price)}</td><td className={pctColor(record.change_pct)}>{pctText(record.change_pct)}</td><td>{record.boards_stat ?? "--"}</td>
+                  </tr>)}</tbody>
+                </table> : pending ? <div className="bc-market-pool-loading">{Array.from({length: 5}, (_, index) => <div key={index}><Skeleton className="h-4 w-20" /><Skeleton className="h-4 w-14" /><Skeleton className="h-4 w-14" /></div>)}</div> : poolError ? null : <p className="bc-market-empty">已读取，当前涨停池为空。日期与覆盖以来源为准。</p>}
+              </Panel>
+              <div className="bc-market-events"><EventPanel /></div>
             </div>
-          ) : pending ? (
-            <div className="flex shrink-0 items-center gap-4 rounded-lg border border-zinc-200 px-3.5 py-2 dark:border-zinc-800">
-              <Skeleton className="h-5 w-14 rounded-md" />
-              <Skeleton className="h-4 w-40" />
-              <Skeleton className="h-4 w-24" />
-              <Skeleton className="hidden h-4 w-72 xl:block" />
-            </div>
-          ) : null}
-
-          {/* 中部：成交额 1/3 + 涨停速览 2/3（flex-[5] 优先撑高；表格超高时面板内滚动） */}
-          <div className="market-reading-grid grid min-h-[168px] flex-[5] gap-4 lg:grid-cols-[minmax(280px,1.25fr)_1fr]">
-            <Panel title="两市成交额" className="min-h-0 overflow-hidden" source={sh?.source} dataTimestamp={sh?.data_timestamp}
-              extra={<Link href="/market?tab=fund" className="text-zinc-600 dark:text-zinc-400 transition-colors hover:text-zinc-900 dark:hover:text-zinc-100">资金详情 ↗</Link>}>
-              <div className="flex h-full flex-col justify-center px-4 py-3">
-                <p
-                  title={amountFreshness?.reason ?? undefined}
-                  className="font-mono text-3xl font-semibold tracking-tight"
-                >
-                  {triAmount(totalAmount, amountFreshness?.state)}
-                </p>
-                <p className="mt-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
-                  沪深京两市合计（含北交所）。实时对比/全日估算/分钟资金流见「资金视角」。
-                </p>
-              </div>
-            </Panel>
-
-            <Panel
-              title="涨停速览（今日连板前列）"
-              source={pool[0]?.source}
-              className="min-h-0 overflow-hidden"
-              extra={
-                <Link href={tapeUrl("limitup")} className="text-zinc-600 dark:text-zinc-400 transition-colors hover:text-zinc-900 dark:hover:text-zinc-100">
-                  全部 ↗
-                </Link>
-              }
-            >
-              {poolError && <p role="alert" className="p-3 text-xs text-amber-800 dark:text-amber-300">涨停速览读取失败。{pool.length ? "下面是上次读取结果。" : "不能据此判断没有涨停。"}</p>}
-              {pool.length > 0 ? (
-                <table className="w-full text-sm">
-                  <tbody>
-                    {pool.map((r) => (
-                      <tr
-                        key={r.symbol}
-                        onClick={event => { event.currentTarget.querySelector("button")?.focus(); openSymbolDetail({ symbol: r.symbol }); }}
-                        title="查看个股详情"
-                        className="cursor-pointer border-b border-zinc-100 last:border-0 transition-colors hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900/60"
-                      >
-                        <td className="px-3 py-1.5 font-mono text-xs text-zinc-600 dark:text-zinc-400">{r.symbol}</td>
-                        <td className="px-2 py-1.5"><button type="button" className="market-stock-open" aria-label={`查看 ${r.name ?? r.symbol} 详情`} onClick={event => { event.stopPropagation(); openSymbolDetail({symbol: r.symbol}); }}>{r.name ?? r.symbol}</button></td>
-                        <td className="px-2 py-1.5 text-right font-mono">{fmt(r.price)}</td>
-                        <td className={`px-2 py-1.5 text-right font-mono ${pctColor(r.change_pct)}`}>{pctText(r.change_pct)}</td>
-                        <td className="px-3 py-1.5 text-right text-xs text-zinc-600 dark:text-zinc-400">{r.boards_stat ?? ""}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : pending ? (
-                <div className="space-y-2.5 px-3 py-3">
-                  {Array.from({ length: 5 }, (_, i) => (
-                    <div key={i} className="flex items-center gap-3">
-                      <Skeleton className="h-3.5 w-14" />
-                      <Skeleton className="h-3.5 w-20" />
-                      <Skeleton className="ml-auto h-3.5 w-14" />
-                    </div>
-                  ))}
-                </div>
-              ) : poolError ? null : (
-                <p className="px-4 py-6 text-center text-sm text-zinc-600 dark:text-zinc-400">已读取，当前涨停池为空（日期与覆盖以来源为准）</p>
-              )}
-            </Panel>
           </div>
-
-          {/* 事件驱动（E1⑥/E2）：全宽 + flex-[4]；列表超长时面板内部滚动 */}
-          <div className="min-h-[148px] flex-[4] overflow-hidden">
-            <EventPanel />
-          </div>
-        </div>
         )}
       </FadeSwap>
     </main>

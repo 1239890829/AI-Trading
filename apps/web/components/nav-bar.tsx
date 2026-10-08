@@ -50,8 +50,8 @@ function NavBarInner() {
     <header className="workspace-header sticky top-0 z-40">
       <a className="skip-link" href="#workspace-content">跳到工作区</a>
       <div className="task-header mx-auto flex max-w-[1600px] flex-wrap items-center">
-        <Link href="/market" aria-label="AShare AI Trader" className="brand-wordmark shrink-0 whitespace-nowrap font-semibold">
-          <span className="brand-mark" aria-hidden="true"><i/><i/><i/></span><span>AShare<span className="hidden sm:inline font-normal text-zinc-600 dark:text-zinc-400"> 研判工作台</span></span>
+        <Link href="/workbench?mode=watch" aria-label="AShare AI Trader" className="brand-wordmark shrink-0 whitespace-nowrap font-semibold">
+          <span className="brand-mark" aria-hidden="true"><i/><i/><i/></span><span>AShare<span className="brand-descriptor"> 研判</span></span>
         </Link>
         <nav ref={nav} aria-label="主要任务" className="task-navigation order-last flex w-full items-center gap-1 overflow-x-auto lg:order-none lg:w-auto">
           <span ref={marker} className="navigation-marker" aria-hidden="true" />
@@ -75,6 +75,7 @@ function NavBarInner() {
         </nav>
         <div className="header-spacer flex-1" />
         <SearchBox collapsible />
+        <div className="header-tools" aria-label="全局工具">
         <CommandPalette />
         <NotificationBell />
         <TaskBrowser />
@@ -86,6 +87,7 @@ function NavBarInner() {
           <HugeiconsIcon icon={Sun03Icon} size={18} strokeWidth={1.6} className="hidden dark:block" aria-hidden="true" />
           <HugeiconsIcon icon={Moon02Icon} size={18} strokeWidth={1.6} className="block dark:hidden" aria-hidden="true" />
         </IconButton></ControlHint>
+        </div>
       </div>
     </header>
   );

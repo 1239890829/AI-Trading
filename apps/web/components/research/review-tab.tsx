@@ -234,7 +234,7 @@ function ReportDetail({
   onDisposed: () => void;
 }) {
   return (
-    <div className="space-y-3 px-4 py-3 text-sm">
+    <div className="review-report space-y-3 px-4 py-3 text-sm">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-600 dark:text-zinc-400">
         <span className="font-mono">{report.review_id}</span>
         <span>方法论 {report.methodology_version}</span>
@@ -246,7 +246,7 @@ function ReportDetail({
 
       <p><ReviewText text={report.summary} /></p>
       {report.meta_insights.length > 0 && <section aria-label="复盘观察与建议" className="space-y-2">
-        {report.meta_insights.map((insight, i) => <div key={i} className="border-l-2 border-zinc-300 pl-3 dark:border-zinc-600">
+        {report.meta_insights.map((insight, i) => <div key={i} className="border-b border-zinc-300 pb-3 last:border-0 dark:border-zinc-700">
           <p>{insight.dimension} · <ReviewText text={insight.observation} /></p>
           <p className="text-xs text-zinc-600 dark:text-zinc-400">依据：{insight.evidence} · 有效性：{insight.effectiveness}</p>
           <p className="text-xs">待核建议：{insight.suggestion}</p>
@@ -388,7 +388,7 @@ export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: str
               <div key={r.review_id}>
                 <button
                   onClick={() => toggle(r.trade_date)}
-                  className="w-full px-4 py-2.5 text-left transition-colors hover:bg-zinc-100/60 dark:hover:bg-zinc-800/40"
+                  className="review-record-trigger w-full px-4 py-2.5 text-left transition-colors hover:bg-zinc-100/60 dark:hover:bg-zinc-800/40"
                 >
                   <div className="review-record-heading text-sm">
                     <span className="font-mono text-xs text-zinc-600 dark:text-zinc-400">{r.trade_date}</span>

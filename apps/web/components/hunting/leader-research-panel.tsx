@@ -14,18 +14,19 @@ const HEALTH: Record<string, string> = {
 };
 
 /** A research consumer within the existing follow ledger, without order controls. */
-export function LeaderResearchPanel() {
-  const [date, setDate] = useState("");
+export function LeaderResearchPanel({date: requestedDate, onDateChange}: {date?: string; onDateChange?: (date: string | undefined) => void} = {}) {
+  const [localDate, setDate] = useState("");
+  const date = requestedDate?.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3") ?? localDate;
   const [limit, setLimit] = useState(10);
   const result = useResource(() => getLeaderResearch(date || undefined), { key: date, intervalMs: 60_000 });
   const error = result.error ? String(result.error) : undefined;
   const data = error ? undefined : result.data;
 
-  return <div className="ui-card mt-4 border border-zinc-200 p-4 text-xs text-zinc-700 dark:border-zinc-800 dark:text-zinc-300">
+  return <div className="ui-card hunting-research mt-4 border border-zinc-200 p-4 text-xs text-zinc-700 dark:border-zinc-800 dark:text-zinc-300">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <h4 className="font-semibold">强势候选持续研究</h4>
       <label className="flex items-center gap-2">查看日期
-        <input aria-label="研究日期" type="date" value={date} onChange={e => { setDate(e.target.value); setLimit(10); }}
+        <input aria-label="研究日期" type="date" value={date} onChange={e => { if (onDateChange) onDateChange(e.target.value || undefined); else setDate(e.target.value); setLimit(10); }}
           className="rounded border border-zinc-300 bg-transparent px-2 py-1 dark:border-zinc-600 focus-visible:outline-2 focus-visible:outline-sky-500" />
       </label>
     </div>

@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -339,6 +339,12 @@ describe("StandAsideBanner", () => {
       expect(screen.getByText(new RegExp(r.replace(/[（）<>%]/g, ".")))).toBeTruthy();
     }
     expect(screen.getByText(/不构成买卖建议/)).toBeTruthy();
+    const disclosure = screen.getByText("核对依据与时点对照").closest("details")!;
+    expect(disclosure.open).toBe(false);
+    expect(screen.getByText(gate.advice).closest("details")).toBeNull();
+    for (const reason of gate.reasons) expect(within(disclosure).getByText(`· ${reason}`)).toBeTruthy();
+    fireEvent.click(within(disclosure).getByText("核对依据与时点对照"));
+    expect(disclosure.open).toBe(true);
   });
 
   it("未触发时不渲染（不打扰）", () => {
@@ -358,7 +364,7 @@ describe("StandAsideBanner", () => {
       strip_buy_range: true,
     };
     render(<StandAsideBanner gate={gate} />);
-    expect(screen.getByText(/已撤除买入区间/)).toBeTruthy();
+    expect(screen.getByText(/已撤除买入区间/).closest("details")).toBeNull();
     expect(screen.queryByText(/保留买入区间/)).toBeNull();
   });
 
@@ -372,8 +378,16 @@ describe("StandAsideBanner", () => {
       strip_buy_range: false,
     };
     render(<StandAsideBanner gate={gate} />);
-    expect(screen.getByText(/保留买入区间/)).toBeTruthy();
+    expect(screen.getByText(/保留买入区间/).closest("details")).toBeNull();
     expect(screen.getByText(/非空仓信号/)).toBeTruthy();
+    expect(screen.queryByText(/已撤除买入区间/)).toBeNull();
+  });
+
+  it("复核不可用且未取得触发状态时，警示仍常驻而不是消失", () => {
+    render(<StandAsideBanner gate={{ stand_aside: false, level: "none", reasons: [], advice: "当前风险状态待核", gate_source: "unavailable", gate_note: "实时情绪源读取失败" }} />);
+    expect(screen.getByRole("alert")).toBeTruthy();
+    expect(screen.getByText("实时情绪源读取失败").closest("details")).toBeNull();
+    expect(screen.queryByTestId("stand-aside-cleared")).toBeNull();
     expect(screen.queryByText(/已撤除买入区间/)).toBeNull();
   });
 
@@ -444,6 +458,9 @@ describe("StandAsideBanner · 闸门动态对照", () => {
     // 撤区间是生成时已落库的动作 → 必须明说不可回溯，否则等于暗示"可以买了"
     expect(box.textContent).toContain("不回溯");
     expect(box.textContent).toContain("不构成买入建议");
+    expect(screen.getByText(liveCleared.advice).closest("details")).toBeNull();
+    expect(screen.getByText(/生成时撤除决定/).closest("details")).toBeNull();
+    expect(screen.getByTestId("stand-aside-comparison").closest("details")?.open).toBe(false);
     // 已解除不是警报：用 role=status 而非 role=alert（视觉与语义都要往下降）
     expect(screen.queryByRole("alert")).toBeNull();
   });
@@ -470,6 +487,7 @@ describe("StandAsideBanner · 闸门动态对照", () => {
     const box = screen.getByTestId("stand-aside-banner");
     expect(box.textContent).toContain("未触发闸门");
     expect(box.textContent).toContain("已触发");
+    expect(screen.getByText(/未触发闸门/).closest("details")).toBeNull();
     expect(screen.getByRole("alert")).toBeTruthy();
   });
 
@@ -482,6 +500,7 @@ describe("StandAsideBanner · 闸门动态对照", () => {
     render(<StandAsideBanner gate={degraded} stored={storedGate} />);
     const box = screen.getByTestId("stand-aside-banner");
     expect(box.textContent).toContain("全市场快照尚未就绪");
+    expect(screen.getByText(degraded.gate_note!).closest("details")).toBeNull();
     expect(screen.queryByTestId("stand-aside-cleared")).toBeNull();
     expect(box.textContent).not.toContain("未触发闸门");
     // 落库结论本身照常展示（降级不等于把风险提示也撤掉）
