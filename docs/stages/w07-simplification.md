@@ -505,3 +505,21 @@
 - **恢复**：ui-current-saved-20261007（PR #230）；旧活动版本退出，普通历史保留。
 - **证据**：product/ui-skill-redesign-20261007.md §6；忽略批次ui-skill-redesign-20261007。41入口PC/手机82图、20断点实测、浮层/焦点/Canvas；后端4619 passed/83 skipped，前端默认/UTC各825，tsc/eslint/pyflakes/npm ci/生产构建通过；A/B评估与fresh finish复验、Jev携baseline复评。外站量测及实体设备边界见专题。
 - **下一步**：实现与本地验收完成；继续准确HEAD DegradedRelease、required CI、release_check与合并后CI及清理，不领取第二业务任务。
+
+## IMP-077
+
+**工作台图表高度与对象入口收敛**
+
+- **状态**：已完成
+- **优先级**：P1
+- **阶段门**：G2
+- **门内序**：87
+- **门禁角色**：非阻断
+- **依赖**：IMP-076
+- **效果前置**：无
+- **方案依据**：用户2026-10-08明确纠偏：图表压缩、两个对象入口移至状态栏末端。
+- **范围**：仅工作台头部、报价摘要留白、图表高度链、容器内滚动与删除列位；保留主题、图表工具及账户语义。
+- **恢复**：Git基线3efb9d4e；不改活动恢复标签。
+- **验收**：实际Canvas与PC/手机/短屏、对象/账户切换、完整门禁、Jev复评和准确HEAD发布。
+- **证据**：product/ui-skill-redesign-20261007.md §7；忽略批次workbench-chart-layout-20261008。1280×720绘图surface由69px恢复277px；桌面根固定，50条自选内部滚动且删除触点不溢出；7种窗口及回放/依据展开验证。本轮后端4619 passed/83 skipped，前端默认/UTC各825，tsc/eslint/pyflakes及正式构建通过；文档回归180通过，Jev携baseline复评完成；发布证据绑定本轮PR准确HEAD回执及CI。
+- **下一步**：实现与本地验收完成；发布以本轮PR准确HEAD回执与合并后CI核实，不自动领取第二业务任务。

@@ -581,7 +581,7 @@ function WorkbenchInner() {
               </button>
             </div>
           }
-          className="min-h-0 flex-1 overflow-hidden"
+          className="workbench-watchlist min-h-0 flex-1 overflow-hidden"
           // D-3：本 Panel 是**同一实例换视图**（activeGroup 决定 title 与列表内容）⇒ 必须给
           // resetKey。注意 title 在「自选股」各分组间是**同一个字符串**，仅看 title 判断不出来。
           // 判据与反例见 panel-boundary.test.tsx「Panel.resetKey（D-3）」。
@@ -762,7 +762,7 @@ function WorkbenchInner() {
                         )}
                       </div>
                     </td>
-                    <td className="hidden w-[52px] px-1 py-2 sm:table-cell" title="当日分时（盘外展示最近交易日）">
+                    <td className="hidden w-[44px] px-1 py-2 sm:table-cell" title="当日分时（盘外展示最近交易日）">
                       {pick != null || top != null ? (
                         <span
                           className="block truncate text-[10px] text-zinc-600 dark:text-zinc-400"
@@ -792,12 +792,12 @@ function WorkbenchInner() {
                         />
                       )}
                     </td>
-                    <td className="w-[76px] px-1.5 py-2 text-right font-mono text-xs tabular-nums">
+                    <td className="w-[60px] px-1 py-2 text-right font-mono text-xs tabular-nums">
                       {q.price == null ? <span className="font-sans text-zinc-600 dark:text-zinc-400">未开盘</span> : <PriceFlash value={q.price}>{fmt(q.price)}</PriceFlash>}
                     </td>
-                    <td className={`w-[58px] px-1 py-2 text-right font-mono text-xs tabular-nums ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</td>
-                    <td className="w-[44px] px-0.5 py-2 text-right"><QualityBadge quality={q.quality} reasons={q.quality_reasons} /></td>
-                    <td className="w-[22px] pr-1.5 text-right">
+                    <td className={`w-[56px] px-1 py-2 text-right font-mono text-xs tabular-nums ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</td>
+                    <td className="w-[40px] px-0.5 py-2 text-right"><QualityBadge quality={q.quality} reasons={q.quality_reasons} /></td>
+                    <td className="workbench-row-actions w-[48px] px-0.5 text-center">
                       {(pick || top) && (
                         <button
                           onClick={(e) => {

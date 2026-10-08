@@ -481,28 +481,31 @@ input::placeholder,textarea::placeholder{color:var(--ui-muted);opacity:1}
 /* State accents stay on controls; reading surfaces retain the accepted palette. */
 .tool-launcher:focus-visible,.tool-stack:focus-visible,.tool-search-clear:focus-visible { outline:2px solid var(--ui-accent); outline-offset:3px; }
 @media(hover:hover) and (pointer:fine) { .tool-launcher:hover { border-color:var(--edge-light); }.tool-stack:hover .folder-affordance { color:var(--ui-accent); }.tool-search-clear:hover { background:var(--ui-selected); color:var(--ui-ink); }.task-navigation a:hover:not([aria-current=page]) { background:var(--ui-hover); } }
-/* Workbench charts own a reading-height floor. Short windows scroll instead of
-   compressing the price/volume panes after the quote and status rows. */
-.workspace-content:has([data-workspace="workbench"]) { overflow-y:auto; overscroll-behavior:contain; }
-[data-workspace="workbench"].task-page { height:auto; min-height:100%; gap:12px; padding:16px 24px; }
-[data-workspace="workbench"] > .task-scroll { flex:1 0 auto; }
-[data-workspace="workbench"] .detail-content-grid { --chart-reading-height:440px; min-height:var(--chart-reading-height); flex:1 0 var(--chart-reading-height); }
-/* The list follows the chart row; its scrollable rows must not set that row height. */
-@media(min-width:1024px) {
-  [data-workspace="workbench"] .workbench-list-column { height:0; min-height:100%; }
-  [data-workspace="workbench"] .detail-content-grid:has(.chart-legend[open]) { --chart-reading-height:560px; }
-  [data-workspace="workbench"] .detail-content-grid:has(.replay-controls) { --chart-reading-height:740px; }
-  [data-workspace="workbench"] .detail-content-grid:has(.replay-controls):has(.chart-legend[open]) { --chart-reading-height:860px; }
-}
+/* The desktop shell stays fixed; lists and the detail column own overflow. */
+.workspace-content:has([data-workspace="workbench"]) { overflow:hidden; }
+[data-workspace="workbench"].task-page { height:100%; min-height:0; gap:8px; padding:12px 20px; }
+[data-workspace="workbench"] > .task-scroll { flex:1 1 0%; min-height:0; }
+[data-workspace="workbench"] .workbench-list-column { min-height:0; }
+[data-workspace="workbench"] .stock-workspace { min-height:0; overflow:auto; row-gap:8px; scrollbar-gutter:stable; }
+[data-workspace="workbench"] .detail-content-grid { --chart-reading-height:300px; min-height:var(--chart-reading-height); flex:1 0 var(--chart-reading-height); }
+[data-workspace="workbench"] .detail-content-grid:has(.chart-legend[open]) { --chart-reading-height:420px; }
+[data-workspace="workbench"] .detail-content-grid:has(.replay-controls) { --chart-reading-height:600px; }
+[data-workspace="workbench"] .detail-content-grid:has(.replay-controls):has(.chart-legend[open]) { --chart-reading-height:720px; }
 /* The short-window/mobile 65vh limit belongs to lists, never to chart bodies. */
 [data-workspace="workbench"] .detail-chart-panel > .task-panel-body { max-height:none; }
-[data-workspace="workbench"] .quote-sheet { padding:12px 16px; margin-bottom:0; }
-[data-workspace="workbench"] .quote-sheet-metrics { margin-top:8px; padding-top:8px; gap:6px 18px; }
+[data-workspace="workbench"] .quote-sheet { padding:8px 12px; margin-bottom:0; }
+[data-workspace="workbench"] .quote-sheet-metrics { margin-top:4px; padding-top:4px; gap:4px 14px; }
 .workbench-status-bar .workspace-status { gap:8px 12px; }
 .workbench-objects { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
 .workbench-objects .compact-segments { flex:none; }
+.workbench-row-actions > button { display:inline-flex; vertical-align:middle; }
 @media(max-width:1023px) {
-  [data-workspace="workbench"].task-page { padding:16px; }
+  .workspace-content:has([data-workspace="workbench"]) { overflow-y:auto; }
+  [data-workspace="workbench"].task-page { height:auto; min-height:100%; padding:16px; }
+  [data-workspace="workbench"] > .task-scroll { flex:none; }
+  [data-workspace="workbench"] .stock-workspace { overflow:visible; scrollbar-gutter:auto; }
+  [data-workspace="workbench"] .workbench-watchlist { flex:none; height:320px; }
+  [data-workspace="workbench"] .workbench-watchlist > .task-panel-body { max-height:none; }
   [data-workspace="workbench"] .detail-content-grid { min-height:0; flex:none; }
   [data-workspace="workbench"] .detail-chart-panel:has(.chart-legend[open]) { min-height:640px; }
   [data-workspace="workbench"] .detail-chart-panel:has(.replay-controls):has(.chart-legend[open]) { min-height:900px; }
@@ -511,6 +514,7 @@ input::placeholder,textarea::placeholder{color:var(--ui-muted);opacity:1}
 }
 @media(max-width:767px) {
   [data-workspace="workbench"] .quote-sheet-metrics { gap:6px 12px; }
+  [data-workspace="workbench"] .workbench-watchlist { height:280px; }
   .workbench-objects { flex-basis:100%; margin-left:0; }
 }
 /* User-requested compact actions use 36px plus spacing; drag grips retain 44px.
