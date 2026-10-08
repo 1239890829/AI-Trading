@@ -74,6 +74,7 @@ os.environ["ASHARE_FEISHU_NOTIFY_OPEN_ID"] = ""
 # 不得随行情变 ⇒ 与调度器全家桶、`ASHARE_DATA_PROVIDER=mock` 同一纪律。
 # 要测降级链本身，直接注入假 `fetch_tdx_trades`（见 `tests/test_tdx_tick.py`）。
 os.environ["ASHARE_TRADES_TDX_FALLBACK_ENABLED"] = "false"
+os.environ["ASHARE_TRADES_TENCENT_HTTP_FALLBACK_ENABLED"] = "false"
 
 # 复盘报告的**落盘目录**也必须隔离。
 #

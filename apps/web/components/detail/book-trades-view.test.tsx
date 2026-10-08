@@ -60,6 +60,22 @@ describe("逐笔口径标注", () => {
     expect(caption.textContent).not.toContain("3 秒快照聚合");
   });
 
+  it("腾讯HTTP后备标注聚合与非L2口径", () => {
+    render(<BookTradesView book={null} trades={[trade({ source: "tencent" })]} showBook={false} />);
+    expect(screen.getByText(/口径/).textContent).toContain("HTTP 分笔聚合（非 L2）");
+  });
+
+  it("陈旧HTTP分笔显示源日期及陈旧提示", () => {
+    render(<BookTradesView book={null} trades={[trade({ source: "tencent", quality: "stale", ts: "2026-09-30T07:00:00Z" })]} showBook={false} />);
+    expect(screen.getByText(/口径/).textContent).toContain("2026-09-30");
+    expect(screen.getByText(/口径/).textContent).toContain("陈旧数据，仅供核对");
+  });
+
+  it("早期成交较旧但最新成交正常时，不把整个窗口称为陈旧", () => {
+    render(<BookTradesView book={null} trades={[trade({ source: "tencent", quality: "stale" }), trade({ source: "tencent", quality: "medium" })]} showBook={false} />);
+    expect(screen.getByText(/口径/).textContent).not.toContain("陈旧数据");
+  });
+
   it("方向标记：buy→B / sell→S / neutral→·", () => {
     render(
       <BookTradesView

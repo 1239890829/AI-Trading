@@ -15,8 +15,9 @@
 ```text
 行情/K线/盘口/搜索: 腾讯 → 东财（search suggest / K线）
 涨停池 / 龙虎榜:    东财 push2ex / datacenter（稳定，独立主机）
-逐笔成交:           链上东财 details（push2his，本机被 WAF 拦 ⇒ 恒 502）
-                    → 路由层降级 TDX 直连逐笔（app/market/tdx_tick.py，IMP-038）
+逐笔成交:           链上东财 details（push2his，2026-09-16本机实测WAF失败）
+                    → 路由层降级 TDX 直连分笔（app/market/tdx_tick.py，IMP-038）
+                    → 腾讯 HTTP 分笔后备（IMP-079；4秒/24请求；可单独关闭）
 默认链:             主源 ths + 备源 tencent, eastmoney, sina（core/config.py；
                     2026-09-07 修正——ths 官方 API 为主源，sina 已入 1Hz
                     实时对冲组 realtime_rank=1；「chain(tencent→eastmoney)」
@@ -31,13 +32,15 @@
 
 | 用途 | 端点 | 口径 |
 |---|---|---|
-| 实时快照/五档 | `qt.gtimg.cn/q=sh600519,...` (GBK, `~` 分隔) | 字段(0起): 1名 3现价 4昨收 5开 6量(手) **9-18买五档价量 19-28卖五档价量** 30时间(北京) 31涨跌 32涨跌% 33高 34低 36量(手) 37额(**万**) 38换手% |
-| 日/周 K 线 | `web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=sh600519,day,,,320,qfq` | `data.sh600519.qfqday` 行=`[日期,开,收,高,低,量(手)]`，qfq=前复权 |
+| 实时快照/五档 | `qt.gtimg.cn/q=sh600519,...` (GBK, `~` 分隔) | 字段(0起): 1名 3现价 4昨收 5开 6量(手) **9-18买五档价量 19-28卖五档价量** 30时间(北京) 31涨跌 32涨跌% 33高 34低 36量(科创股/其余手) 37额(**万**) 38换手% |
+| 日/周 K 线 | `web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=sh600519,day,,,320,qfq` | `data.sh600519.qfqday` 行=`[日期,开,收,高,低,量(科创股/其余手)]`，qfq=前复权 |
 | 分钟 K 线 | `ifzq.gtimg.cn/appstock/app/kline/mkline?param=sh600519,m5,,320` | `[YYYYMMDDHHMM,开,收,高,低,量]`，m1~m60 |
-| 当日分时 | `web.ifzq.gtimg.cn/appstock/app/minute/query?code=sh600519` | 行=`HHMM 价格 量(手) 累计额(元)`，1 分钟粒度 → `/api/minute-line/{symbol}` |
+| 当日分时 | `web.ifzq.gtimg.cn/appstock/app/minute/query?code=sh600519` | 行=`HHMM 价格 累计量(科创股/其余手) 累计额(元)`，1 分钟粒度 → `/api/minute-line/{symbol}` |
 | 搜索 | `smartbox.gtimg.cn/s3/?v=2&q=...&t=all` (GBK) | `^`分组 `~`字段：名称/代码(sh600519) |
 
-单位：成交量手（×100 转股），成交额万（×1e4 转元）——已用茅台盘后数据双重验证
+单位（2026-10-08更正）：科创板688/689的报价、日/分钟K线、分时累计量原值为股；
+其余现役股票/ETF对应字段为手（×100转股）。五档盘口仍为手（×100），HTTP分笔为手（不转换）。
+成交额万（×1e4转元）。不能把茅台的单位推广至科创板。原茅台盘后数据验证保留
 （16126 手×100 ≈ 20.86 亿÷1297.40 ✓；指数 9703.65 亿与东财 f6 一致 ✓）。
 时间戳为北京时间，Normalizer 统一转 UTC。
 
@@ -511,3 +514,13 @@ THS 的三个接入面仍有不同运行边界：Provider 的已接方法通过 
 [茅台 2026 半年报](https://static.cninfo.com.cn/finalpage/2026-08-15/1225475868.PDF)
 提供报告口径核查。这里只证明 2026-09-26 的只读样本与当前消费者契约；
 许可、长期可用率、盘中时效、跨全市场完整性与业务效果不由此样本证明。
+
+
+### 8.11 腾讯HTTP后备与通达信离线日线包（2026-10-08）
+
+- 报价/K线/分时科创量归一化由TencentProvider负责；分钟差分和均价使用股，盘口转换独立。现役单位证据见比较文档§14。
+- 日/周腾讯K线有界分段，每段最多640条；分钟仍最近320条。三域名同源、不算三家供应商；失败冷却120秒，整次10秒预算，身份/序列格式/重复/非正复权价失败可见。无前复权序列时原价标medium并说明，不混合不同复权基础跨段返回。API日期按北京交易日构造，保留已有时间戳形态。
+- HTTP分笔只在原Provider链及TDX未给出结果后执行，两处消费者（行情API、助手成交工具）共用备链；开关`ASHARE_TRADES_TENCENT_HTTP_FALLBACK_ENABLED`默认true，测试强制false。最新200笔内，定位尾页，不遍历全天；4秒/24请求/255尾页上限，3秒TTL单飞/64键，缓存保留原received_at且复制返回。身份、页码、序号、源日期跨日和价格量额校验失败，不返回旧尾或空市场冒充成功。有效空、接口不支持的证券与源故障仍按备链规则区分；北交所/指数不支持不把原有效空变成502，既有链/TDX真故障仍保留。失败写日志，逐行source/quality及前台口径明确HTTP聚合非L2；不声明全天完整。
+- 离线CLI：`backend/.venv/bin/python backend/scripts/archive_tdx_daily.py --date 2026-09-30`。可加`--package 本地.zip`离线输入；`--verify`核已存文件。默认根`data/parquet/archives/tdx_daily`，不写线上marketdb、不自动调度。仅按沪深北A股代码前缀取有价记录，排除ETF/指数/债券；不是经官方上市历史验证的全市场分母。
+- 归档原价不复权，股/元；zip原文、Parquet及manifest单目录原子发布，保留两文件SHA256、获取/归档时间和各市场筛选分母。本地旧文件输入的HTTP获取时间为unknown（null），不得把归档时间冒充当时可见时间；历史归档`point_in_time=false`。日期/块长度/身份/有限数/市场成员缺失拒绝，404表示未发布/休市/超保留期的未定缺包，不能声称空市场；同日期同hash可复用，修订hash冲突不静默覆盖。
+- 公告/新闻增源尚无同输入增量证据，沿用东财及既有官方全文核验，不创建无消费者接口。未来具体缺口在原owner重议；付费、模型、通知、策略与交易规则不变。

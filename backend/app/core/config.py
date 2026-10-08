@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     # ⇒ 单测变成"有网才过、结果随行情变"。故 conftest 显式置 false
     # （与 `ASHARE_DATA_PROVIDER=mock`、调度器全家桶关闭同一纪律：**测试不得触网**）。
     trades_tdx_fallback_enabled: bool = True
+    trades_tencent_http_fallback_enabled: bool = True
     ths_api_key: str = ""  # 同花顺 fuyao 官方 API Key（放 .env，勿提交）
     ths_base_url: str = "https://fuyao.aicubes.cn"
     # 题材官方成分视为有效的时长（architecture-design §1）；过期后懒同步。

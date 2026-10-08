@@ -3,7 +3,7 @@
  *  null/[] =拉过且确认无 → 空态文案。此前切股重挂载窗口期把"加载中"渲染成
  *  "盘口数据不可用（免费源仅盘中提供）"——把"还没拉到"说成"不可用"是误导。 */
 import type { OrderBook, Trade } from "@/types/market";
-import { fmt, sourceLabel, timeText } from "@/lib/format";
+import { bjDate, fmt, sourceLabel, timeText } from "@/lib/format";
 import { Skeleton } from "@/components/ui/loading";
 
 /** 逐笔**口径**表（2026-09-16 `IMP-038`）。
@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/loading";
 const TRADES_CALIBER: Record<string, string> = {
   tdx: "3 秒快照聚合",
   eastmoney: "逐笔明细",
+  tencent: "HTTP 分笔聚合（非 L2）",
 };
 
 function BookSkeleton() {
@@ -78,10 +79,13 @@ export function BookTradesView({ book, trades, showBook }: { book: OrderBook | n
     );
   }
   const src = trades[0]?.source;
+  const latest = trades.at(-1);
+  const sourceDay = bjDate(latest?.ts);
+  const isStale = latest?.quality === "stale" || latest?.quality === "invalid";
   return (
     <>
       <p className="border-b border-zinc-100 px-3 py-1.5 text-[10px] text-zinc-500 dark:border-zinc-800/60 dark:text-zinc-500">
-        口径：{sourceLabel(src)} {TRADES_CALIBER[src] ?? "明细"} · 共 {trades.length} 笔（时间升序，量：手）
+        口径：{sourceLabel(src)} {TRADES_CALIBER[src] ?? "明细"} · {sourceDay} · 共 {trades.length} 笔（时间升序，量：手）{isStale ? " · 陈旧数据，仅供核对" : ""}
       </p>
       <table className="w-full text-sm">
         <tbody>
