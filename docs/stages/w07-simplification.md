@@ -582,7 +582,7 @@
 
 ## IMP-082
 
-**已审产品定义与全新三案可操作视觉选案**
+**已审产品定义与B+C合并可操作试件**
 
 - **状态**：进行中
 - **优先级**：P1
@@ -591,10 +591,12 @@
 - **门禁角色**：非阻断
 - **依赖**：IMP-081
 - **效果前置**：无
-- **方案依据**：用户2026-10-08“开始吧”后，最新明确拒绝全部旧九稿，要求最多三套全新方案；product/ui-original-skills-plan-20261008.md §9。§8为历史撤回，§8.5旧九稿/comp流程被覆盖，不再当前权威。
-- **范围**：产品事实确认投影、独立技能定义与状态规格、原始来源逐项评估、从空白制作A/B/C三套可操作HTML，每套工作台/市场/提醒三个代表面及当前发现的修复复验。全库存为33技能/条件分支、30来源、40跨面要求、18细功能组、95原始效果+12整改，逐项给真实消费者与不采用理由，不全部强装；4待辨识名称不猜同名资源。不得读取旧九稿作新构图输入、融合或换皮。本阶段不改生产UI、提醒后端或运行权限。
-- **验收**：事实/未知/合成分开；frontend两遍、IxD、finesse各产品分支、Taste九组、Impeccable craft-floor独立产物；先holistic任务/结构判断、后detector；修后新字节有真实DOM/行为/Canvas与320/390/桌面及短屏证据；真实用户三选与对应定义可追溯。三代表面不关闭全域18组实施门；宿主适配和原生流程分开，未完成量测/overlay/性能不冒称通过。
+- **方案依据**：用户2026-10-08“开始吧”后拒绝全部旧九稿、要求最多三套全新方案，最新已明确选择“第二和第三套的结合”；product/ui-original-skills-plan-20261008.md §9.6。不再等待三选；§8为历史撤回，§8.5旧九稿/comp流程被覆盖，不再当前权威。
+- **范围**：保留产品事实确认投影、独立技能定义与状态规格、原始来源逐项评估及A/B/C比较基线；用户所选B主体+C关注带及石墨/淡硫风格的BC仍为隔离prototype，现已补选股入口及合成代表闭环，真实API/业务未迁入；一个自选管理和同一选中证券状态，顶部关注带替代B底部表。全库存为33技能/条件分支、30来源、40跨面要求、18细功能组、95原始效果+12整改，逐项给真实消费者与不采用理由，不全部强装；4待辨识名称不猜同名资源。不得读取旧九稿作新构图输入、融合或换皮。本轮原生产源码未改、未删除，3000/8000和运行权限不动，全生产迁移未完成。
+- **验收**：事实/未知/合成分开；frontend两遍、IxD、finesse各产品分支、Taste九组、Impeccable craft-floor按原版职责分别应用并留独立产物，不恢复退役融合skill权威；先holistic、后detector。用户方向选择已完成，bc-contract.md由product_workbench_spec生成。选股是真实生产核心，不能用市场过滤替代；不得把一级入口或合成候选当完整选股流程。bc-feature-parity.md须逐子项核覆盖/缺失/保留，缺失功能必须逐子项迁移验收后才能替换旧版。新增选股及最终字节需实际DOM/行为/Canvas、320/390/桌面/短屏及恢复状态证据；三代表面不关闭全域18组实施门，生产迁移另待确认并单独验收。
 - **恢复**：ui-current-saved-20261008（0377b8414be70710bd4fff67818974601d5910da）与artifacts/recovery/ui-current-20261008/source.tar.gz不变；工具状态/长证据/候选只进忽略artifacts，无凭据或真实账户数据；不改3000/8000、不部署。
-- **证据**：开工基点master/origin/master=d0972819775c7161daca1c54379dd13540c82b51，分支codex/ui-direction-selection；旧批次ui-direction-selection-20261008只留历史。当前artifacts/runs/ui-three-refined-20261008：A“从一个对象开始”、B“图表与核对记录”、C“观测室”，index.html三项直接比较、coverage.html来源/技能取舍、三份design、holistic-critique.md与detector-review.md及原始运行回执；本地入口http://127.0.0.1:51066/index.html。原版detect实际exit2，A26/B71/C69条原始warning，扫描期源码哈希稳定；不是clean、不能排名或直接当P0/P1。holistic A/B非作者源码审阅、C作者自审；detector A作者自查、B/C非作者源码检查，未冒称完整双隔离critique/finish。TasteLab远端浏览连续超时，本地IAB恢复，完整外站extract/Design Map仍partial。代表面必要修复已实际复验；7 Select/5 Checkbox为真实Radix，14次手机/桌面菜单展开均不覆盖触发器。旧手机span隐藏误伤新控件也已修。历史194 passed不代表当前文本或UI验收。
-- **最终验证**：本批final-acceptance.json绑定最终字节、24个表面/视口观察、14次菜单展开及截图；工作台320/390/1440/1024短屏、市场/提醒桌面/手机，搜索/切股/周期/MA/Tabs/通知/删除撤销/空态恢复/同源12点表有实际证据。适用文档守卫201 passed及最终文本复核见doc-validation-final.json；系统偏好、屏幕阅读器、全设备/性能、完整外站TasteLab和ultramotion WebGL仍未关闭，原版detect历史warning不作clean。用户三选尚缺，状态继续进行中。
-- **下一步**：完成本批必要修复和实际复验后，交用户从三案中选择，再形成对应具体定义与方向确认。本项继续进行中，不把候选代码、文档发布、历史暂选或warning计数扩成生产实施授权，不领取第二任务。
+- **证据**：合并前三案历史：开工基点master/origin/master=d0972819775c7161daca1c54379dd13540c82b51，分支codex/ui-direction-selection；旧批次ui-direction-selection-20261008只留历史。artifacts/runs/ui-three-refined-20261008：A“从一个对象开始”、B“图表与核对记录”、C“观测室”，原index.html三项直接比较、coverage.html来源/技能取舍、三份design、holistic-critique.md与detector-review.md及原始运行回执；本地入口http://127.0.0.1:51066/index.html。原版detect实际exit2，A26/B71/C69条原始warning，扫描期源码哈希稳定；不是clean、不能排名或直接当P0/P1。holistic A/B非作者源码审阅、C作者自审；detector A作者自查、B/C非作者源码检查，未冒称完整双隔离critique/finish。TasteLab远端浏览连续超时，本地IAB恢复，完整外站extract/Design Map仍partial。代表面必要修复已实际复验；当时7 Select/5 Checkbox为真实Radix，14次手机/桌面菜单展开均不覆盖触发器。旧手机span隐藏误伤新控件也已修。历史194 passed不代表当前文本或UI验收。
+- **当前进展**：bc.html/css/js、bc-contract.md、bc-design.md及功能核对已形成，最终哈希绑定bc-acceptance.json；入口以BC为主、原A/B/C折叠保留，10个原始来源绑定哈希不变。已补一级“选股”入口及合成候选→依据/等待/失效/质量→同股图表→明确加入本地关注代表闭环。bc-feature-parity.md核原生产子功能、动态猎场、深链、持仓模拟、复盘及后台，基线绑定整改前稿、§10根已回填当前增量，未接入项不作完整。复用codex/ui-direction-selection，PR #241为draft，回填基点HEAD=5f0f9b8b88d5aef86c764b28cac5ff5984d66dd6；再次fresh fetch成功，origin/master仍d0972819775c7161daca1c54379dd13540c82b51。http://192.168.110.169:51067/bc.html的LAN HTTP200/私有路径404见bc-http-verification.json，仅宿主访问，不记真实手机已验。
+- **选股实测与有限修复**：bc-hunting-browser-observations.json保留8条增量观测/3条菜单记录，含初批与修后确认；PC1440/390/320根无溢出，宏和603256进入同股图表/依据不加关注(count5)，返回后明确加入(count6)、防重复/回焦。10分组全可达，5组合成流程/5组显式生产未接入；盘中失效仅博云1条，每日精选失效合法空且恢复金安1条。当前4 Select/3 Checkbox，新增第四Select在PC/390触发器下约6px，修后手机再确认不覆盖；390/320图350×260、284×260，带返回入口的最终桌面939×439。状态4em挤字已修，390/320状态328/262px宽、约19.8px高一行；BC独立19字字体3×7304B、fonts=loaded，不改原共享，完整字形覆盖未独立量测。桌面截图1417×900与DOM1440×900余白截取差异已披露。
+- **最终验证**：bc-acceptance.json绑定最终HTML/CSS/JS、契约/设计/功能核对、BC字体及截图，限隔离选股入口和合成代表闭环。新单次bc-hunting-detector.json仍exit2/12 warning，不是clean；新兼容代理五部分bc-hunting-finish-review.md为ship，仅限本轮选股入口/合成闭环/未接入说明，非全功能、生产或原生完整流程。新bc.js Jev final correctness7.5(confidence0.37)/reliability7.5，documentation唯一improved、regressions空；CSS/字体修复后JS未改，不重复评分，不称独立产品验收。旧三案24观察/14菜单及201 passed、BC前稿8观察/6菜单/3 Select/3 Checkbox、前稿detector exit2/12 warning与Jev7.4只保留历史受检范围。本次文档门禁另记bc-doc-validation.json，绑定三文档运行前后哈希；不把文档门禁替代产品实测。真实手机/软键盘、系统偏好/读屏/全设备性能、完整外站TasteLab、完整ultramotion WebGL及全域闭包未关闭；不宣称全部技能或全部功能完成。IMP-082状态继续进行中。
+- **下一步**：交付已选B+C隔离原型及选股代表闭环、功能保真核对与有限验收，按用户反馈处理明确范围。完整真实API/业务、持久台账、持仓模拟、复盘及全生产功能仍未迁入，原业务代码未删，不能替代现用系统；生产迁移另待确认，缺失功能必须逐子项迁移验收后才能替换旧版。不重问三选，不把原型或文档发布扩成生产实施授权，不领取第二任务。
