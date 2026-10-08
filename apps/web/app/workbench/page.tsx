@@ -445,18 +445,12 @@ function WorkbenchInner() {
 
   return (
     <main data-workspace="workbench" className="task-page mx-auto flex h-full w-full max-w-[1600px] flex-col gap-3 px-4 py-3">
-      <div className="workspace-masthead">
-        <div><h1>工作台</h1><p className="workspace-kicker">从自选到持仓，围绕同一标的持续核对</p></div>
-        <div className="workspace-context">
-          <nav aria-label="个人对象" className="compact-segments"><Link href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "watch", rt: null})} aria-current={mode === "watch" ? "page" : undefined}>自选跟踪</Link><Link href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "positions", account: "manual", rt: null})} aria-current={mode === "positions" ? "page" : undefined}>持仓与模拟</Link></nav>
-          {mode === "positions" && <label className="scope-selector">账户范围<select aria-label="账户范围" value={account} onChange={event => router.push(patchWorkspaceUrl("/workbench", sp.toString(), {account: event.target.value, rt: null}), {scroll: false})}>{[["manual", "手工记录"], ["paper", "手工模拟"], ["daily", "每日精选影子"], ["hunting", "机会影子"]].map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>}
-        </div>
-      </div>
+      <h1 className="sr-only">工作台</h1>
       {error && (
         <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-800 dark:text-amber-300">{error}</div>
       )}
 
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 text-xs text-zinc-600 dark:text-zinc-400">
+      <div className="workbench-status-bar flex shrink-0 flex-wrap items-center justify-between gap-2 text-xs text-zinc-600 dark:text-zinc-400">
         <span className="flex items-center gap-2">
           {backLabel && backFrom && (
             <button
@@ -483,7 +477,7 @@ function WorkbenchInner() {
             <span aria-hidden className="text-zinc-600 dark:text-zinc-400">↗</span>
           </button>
         </span>
-        <span className="workspace-status flex flex-wrap items-center gap-x-3 gap-y-1">
+        <div className="workspace-status flex flex-wrap items-center gap-x-3 gap-y-1">
           <span>
             行情状态：
             {status === "live" && <span className="pulse-dot mx-1 align-middle" />}
@@ -504,12 +498,15 @@ function WorkbenchInner() {
             </span>
           )}
           <span>指数刷新 {updatedAt || "--"}</span>
-          <span className="hidden text-zinc-600 dark:text-zinc-400 lg:inline">数据仅供投研与模拟交易参考</span>
-        </span>
+          <div className="workbench-objects">
+            <nav aria-label="个人对象" className="compact-segments"><Link href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "watch", rt: null})} aria-current={mode === "watch" ? "page" : undefined}>自选跟踪</Link><Link href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "positions", account: "manual", rt: null})} aria-current={mode === "positions" ? "page" : undefined}>持仓与模拟</Link></nav>
+            {mode === "positions" && <label className="scope-selector">账户范围<select aria-label="账户范围" value={account} onChange={event => router.push(patchWorkspaceUrl("/workbench", sp.toString(), {account: event.target.value, rt: null}), {scroll: false})}>{[["manual", "手工记录"], ["paper", "手工模拟"], ["daily", "每日精选影子"], ["hunting", "机会影子"]].map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>}
+          </div>
+        </div>
       </div>
 
       <div className="task-scroll grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[340px,minmax(0,1fr)]">
-        <div className="flex min-h-0 min-w-0 flex-col gap-1.5">
+        <div className="workbench-list-column flex min-h-0 min-w-0 flex-col gap-1.5">
         {mode === "positions" && <AccountScopePanel account={account} date={sp.get("date") ?? undefined} />}
         {mode === "positions" && account === "manual" && realError && <p role="alert" className="text-xs text-amber-800 dark:text-amber-300">手工记录读取失败，保留结果仅供参考：{realError}</p>}
         <IndexCards
@@ -584,7 +581,7 @@ function WorkbenchInner() {
               </button>
             </div>
           }
-          className="min-h-0 flex-1 overflow-hidden"
+          className="workbench-watchlist min-h-0 flex-1 overflow-hidden"
           // D-3：本 Panel 是**同一实例换视图**（activeGroup 决定 title 与列表内容）⇒ 必须给
           // resetKey。注意 title 在「自选股」各分组间是**同一个字符串**，仅看 title 判断不出来。
           // 判据与反例见 panel-boundary.test.tsx「Panel.resetKey（D-3）」。
@@ -765,7 +762,7 @@ function WorkbenchInner() {
                         )}
                       </div>
                     </td>
-                    <td className="hidden w-[52px] px-1 py-2 sm:table-cell" title="当日分时（盘外展示最近交易日）">
+                    <td className="hidden w-[44px] px-1 py-2 sm:table-cell" title="当日分时（盘外展示最近交易日）">
                       {pick != null || top != null ? (
                         <span
                           className="block truncate text-[10px] text-zinc-600 dark:text-zinc-400"
@@ -795,12 +792,12 @@ function WorkbenchInner() {
                         />
                       )}
                     </td>
-                    <td className="w-[76px] px-1.5 py-2 text-right font-mono text-xs tabular-nums">
+                    <td className="w-[60px] px-1 py-2 text-right font-mono text-xs tabular-nums">
                       {q.price == null ? <span className="font-sans text-zinc-600 dark:text-zinc-400">未开盘</span> : <PriceFlash value={q.price}>{fmt(q.price)}</PriceFlash>}
                     </td>
-                    <td className={`w-[58px] px-1 py-2 text-right font-mono text-xs tabular-nums ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</td>
-                    <td className="w-[44px] px-0.5 py-2 text-right"><QualityBadge quality={q.quality} reasons={q.quality_reasons} /></td>
-                    <td className="w-[22px] pr-1.5 text-right">
+                    <td className={`w-[56px] px-1 py-2 text-right font-mono text-xs tabular-nums ${pctColor(q.change_pct)}`}>{pctText(q.change_pct)}</td>
+                    <td className="w-[40px] px-0.5 py-2 text-right"><QualityBadge quality={q.quality} reasons={q.quality_reasons} /></td>
+                    <td className="workbench-row-actions w-[48px] px-0.5 text-center">
                       {(pick || top) && (
                         <button
                           onClick={(e) => {
