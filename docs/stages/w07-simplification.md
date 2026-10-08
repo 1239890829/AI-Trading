@@ -579,3 +579,27 @@
 - **恢复**：Git保留前方案，现有UI恢复点不变；本项不改全局技能原文、产品代码、运行服务、业务事实或权限。
 - **证据**：现行方案product/ui-original-skills-plan-20261008.md已纳入33项技能/条件分支、24项Impeccable命令、30清晰来源、40跨切面要求、18细功能族及107项逐项裁定（55默认/28条件/24不采用）。三路审查和一次最终规划一致性复核见artifacts/runs/ui-plan-audit-20261008；纯文档回归194 passed，doc-health、workspace hygiene、public scan、同文HTML对账通过。首次检查暴露摘要/空章节问题已修正，未改测试或守卫。
 - **下一步**：本项仅交付方案审计；发布以本轮PR准确HEAD回执、三job和实际合并结果为准。后续呈用户审阅，确认后才进入原版选案及另行获准UI实施，不自动改产品。
+
+## IMP-082
+
+**B+C正式前端迁移与功能保真**
+
+- **状态**：已完成
+- **优先级**：P1
+- **阶段门**：G2
+- **门内序**：106
+- **门禁角色**：非阻断
+- **依赖**：IMP-081
+- **效果前置**：无
+- **方案依据**：用户2026-10-08明确选择“第二和第三套的结合”，随后“菜单名称可以再想想，然后就开工吧”已授权正式React前端迁移；依据product/ui-original-skills-plan-20261008.md §9.7。无需再选案或确认实施；§8九稿已撤回，§9.1–9.6试件仅作历史比较和迁移基线。
+- **证据**：正式源码提交c157f179cbf7710386025800c6384008e12baa7b；[PR #241](https://github.com/1239890829/AI-Trading/pull/241)。artifacts/runs/ui-bc-production-20261008的production-acceptance.json绑定源码/构建/截图；production-verdict.md限定F-01–05 resolved/ship；production-detector-release.json=[]；browser-release-observations.json含最终四主面与助手/滚动复验，gallery.html提供图集。已完成状态指工程实现与已披露范围验收，发布实际结果由同一PR记录，仍须本轮完成，不预写未来合并成功。
+- **恢复**：保留tag ui-current-saved-20261008→0377b8414be70710bd4fff67818974601d5910da及artifacts/recovery/ui-current-20261008/source.tar.gz，SHA-256=f1e89ee0244b128b884b9ab7ed6f2aaecb2450ab917ae8df87bcd62ffed93。只恢复呈现源码并保留业务数据、权限及原深链；恢复前核版本和服务，不复活退出技能，旧版玻璃过透问题随恢复说明保留。
+- **范围**：工作台、选股、市场/盘面、复盘/维护及共享导航、搜索、详情、菜单和浮层；主菜单工作台/选股/市场/复盘。自选/持仓归工作台，跟踪记录归选股，受控维护经工具进入。复用原真实API、原组件消费者、证券/日期/账户scope及深链；用户取消的历史回放UI退出，历史K线与研究保留。只改前端呈现、交互和失败反馈，不改变后端规则、数据源、策略阈值、模拟撮合或权限。
+- **验收**：逐子项核功能归属与原消费者，不因换UI丢选股、四账户scope、模拟/手工记录、复盘或后台能力；合法空、失败、过期/未知不得混写。原版Impeccable、Taste及其他适用技能按独立职责留下产物，先holistic后detector，不恢复融合入口；全库存33技能/条件分支、30明确来源、40跨面要求、18细功能组、95效果+12整改按真实消费者评估，4项未辨识来源不猜测。最终DOM/行为/Canvas、320/390/桌面/短屏、容器滚动、菜单位置、关闭全族、键盘/焦点与恢复绑定最终代码；完整本地门禁、准确HEAD发布回执/required CI及post-merge核验分别留证。工程完成不代表选股持续性、收益或RSH-031效果已验证。
+- **当前实现**：正式React前端已完成：工作台真实关注/候选带与完整图表/核对；选股三组组织原十项能力，保留API/参考跟踪/模拟；市场八视角与原消费者；复盘/维护分组、提醒宽抽屉及Radix选择。IBM Plex Sans Latin+完整中文fallback、石墨/淡硫、完整手机搜索、紧凑按钮和ARIA Tabs。提醒pending/错误/可取消确认、规则回退AI不可用、全局事件身份保留。仅改前端，不改变后端业务或权限。
+- **版本与证据**：分支codex/ui-direction-selection；正式源码c157f179cbf7710386025800c6384008e12baa7b，协调文档提交随后。发布前复核origin/master及当前PR准确HEAD；历史prototype/旧文档标题不代替生产代码。证据根artifacts/runs/ui-bc-production-20261008；测试、截图、兼容代理和Jev均各有范围，不冒称全域独立Review。
+- **主动反证**：修复非成交视角追加逐笔、提醒原生选择/确认遗漏、嵌套菜单Esc关闭父抽屉、移动长表与风险说明过长、复盘阅读轴和渠道控件。新增真实resize测试保证助手713→1440→390仍靠右且不改存储；实屏x691→1418→368。最后market隐藏caption越界由滚动容器建立包含块修复，root scrollHeight1124→844，读屏语义保留。兼容代理仅F-01–05 ship；共享Jev最终8.2/7.8/8.4、比较方向均unchanged、regressions空，非项目独立Review。
+- **验证进度**：后端完整4654 passed/83 skipped/1 warning，471.80s；pyflakes通过。前端默认/UTC各99文件856 passed，201.25s/250.24s；tsc/eslint/生产build通过。最后仅CSS caption定位修改重新build及实屏，JS/TS未再变化。早期鉴权与文档必填字段失败已修复并完整复验，未改.env/断言/阈值。最终协调文档相关守卫186 passed（10.95s）、doc-health通过，精确暂存后再核卫生/public scan；准确HEAD required CI和发布执行结果由PR #241记录。
+- **运行与恢复**：3000运行最终Next production start并读取原真实API，token仅注入服务进程内存；工作台、代理watchlist及局域网选股HTTP200。8000原后端未重启。休市和源时间/组合日期显式保留。恢复点见本项恢复字段，不覆盖业务数据或复活退出技能，保留旧版玻璃过透说明。
+- **剩余边界**：真实手机/软键盘、读屏、系统减弱偏好和全设备性能未完整实测；TasteLab完整外站截图/DOM量测及Design Map/Taste DNA仍partial；ultramotion原仓为视频动效模板，本轮不宣称完成WebGL光学折射集成。上述范围不能由截图数量或机械detect空结果替代。
+- **下一步**：工程实现与验收已收口；本轮交付仍须在PR #241执行最终协调文档门禁、准确HEAD DegradedRelease、三required CI/release_check、match-head合并、post-merge及分支清理，结果追加同一PR；未发生前不预写成功。沿用已有工程/发布分层，不为记录未来merge SHA再造第二PR。不自动领取第二业务任务，部署仍搁置。

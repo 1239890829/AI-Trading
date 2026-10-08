@@ -58,10 +58,13 @@ describe("SpeedPanel 涨速榜", () => {
     mockedCatalog.mockResolvedValue(catalog);
     mockedSpeed.mockResolvedValue(payload([]));
     render(<SpeedPanel />);
-    await waitFor(() => expect((screen.getByLabelText("选择题材") as HTMLSelectElement).value).toBe("881156.TI"));
+    const trigger = await screen.findByRole("button", { name: "选择题材：粮食概念" });
     expect(mockedSpeed).toHaveBeenCalledWith("881156.TI");
-    fireEvent.change(screen.getByLabelText("选择题材"), { target: { value: "885431.TI" } });
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "机器人概念" }));
     await waitFor(() => expect(mockedSpeed).toHaveBeenCalledWith("885431.TI"));
+    expect(screen.getByRole("button", { name: "选择题材：机器人概念" })).toBeTruthy();
   });
 
   it("后端 note（题材成分未同步）透传显示", async () => {

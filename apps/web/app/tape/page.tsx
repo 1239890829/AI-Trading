@@ -8,6 +8,7 @@ import { LimitUpTab } from "@/components/tape/limit-up-tab";
 import { LimitDownTab } from "@/components/tape/limit-down-tab";
 import { LonghuTab } from "@/components/tape/longhu-tab";
 import { FadeSwap, PageSkeletonFallback } from "@/components/ui/loading";
+import "../market/market-bc.css";
 
 /**
  * 盘面页（2026-09-01 系统重构，docs/archive/architecture-redesign.md §一.1.2）：
@@ -37,14 +38,14 @@ function TapeInner() {
 
 
   return (
-    <main data-workspace="market" className="task-page mx-auto flex h-full w-full max-w-[1600px] flex-col px-4 py-3">
-      <div className="workspace-masthead">
-        <div><h1>市场全景</h1><p className="workspace-kicker">梯队结构、涨停证据与资金关注</p></div>
+    <main data-workspace="market" className="task-page bc-market-page bc-tape-page mx-auto flex h-full w-full max-w-[1600px] flex-col overflow-hidden">
+      <header className="workspace-masthead bc-market-masthead">
+        <div><h1>涨跌与梯队</h1><p className="workspace-kicker">比较题材结构、封板质量与公开席位</p></div>
         <MarketLensPicker selected={tab} search={sp.toString()} />
-      </div>
+      </header>
 
       {/* tab 切换统一 fade 过渡（2026-09-04）：h-full 保持子 tab 内部 flex 布局 */}
-      <FadeSwap swapKey={tab} className="task-scroll min-h-0 flex-1">
+      <FadeSwap swapKey={tab} className={`task-scroll bc-market-view bc-tape-view bc-tape-view-${tab} min-h-0 flex-1`}>
         {tab === "themes" && <ThemesTab />}
         {tab === "limitup" && <LimitUpTab />}
         {tab === "limitdown" && <LimitDownTab />}

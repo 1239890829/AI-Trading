@@ -1,9 +1,9 @@
 /** Product navigation is a projection of existing routes, never an account or permission. */
 export const TASK_LINKS = [
-  { id: "market", href: "/market", label: "市场全景", paths: ["/market", "/tape"] },
-  { id: "opportunity", href: "/hunting", label: "机会发现", paths: ["/hunting"] },
   { id: "workspace", href: "/workbench?mode=watch", label: "工作台", paths: ["/workbench"] },
-  { id: "research", href: "/agent?area=research&tab=review", label: "复盘研究", paths: ["/agent"] },
+  { id: "opportunity", href: "/hunting", label: "选股", paths: ["/hunting"] },
+  { id: "market", href: "/market", label: "市场", paths: ["/market", "/tape"] },
+  { id: "research", href: "/agent?area=research&tab=review", label: "复盘", paths: ["/agent"] },
 ] as const;
 
 const MAINTENANCE_TABS = new Set(["operations", "evolution", "tasks", "alerts", "params", "repos"]);

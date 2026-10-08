@@ -1,0 +1,7 @@
+IBM Plex Sans variable Latin, normal weights 100-700.
+Source font project: https://github.com/IBM/plex
+Distribution: @fontsource-variable/ibm-plex-sans 5.2.8
+Archive: https://registry.npmjs.org/@fontsource-variable/ibm-plex-sans/-/ibm-plex-sans-5.2.8.tgz
+Licence: SIL Open Font License 1.1; included in OFL.txt.
+SHA-256: e2291e842cf5af167122a22881a740c7f2dda7716f1e8cd76680264f4a859470
+Chinese uses the complete system PingFang SC / Microsoft YaHei / sans-serif fallback.

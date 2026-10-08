@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { FilterMenu } from "@/components/ui/filter-menu";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import {
   getSpeedRank,
@@ -69,20 +70,17 @@ export function SpeedPanel({ className }: { className?: string }) {
 
   return (
     <div className={`flex min-h-0 flex-col ${className ?? ""}`}>
-      <div className="flex shrink-0 items-center gap-2 border-b border-zinc-100 px-2 py-1.5 text-xs dark:border-zinc-800/60">
-        <select
-          value={theme}
-          onChange={(e) => setTheme(e.target.value)}
-          className="max-w-[180px] rounded border border-zinc-200 bg-transparent px-1.5 py-0.5 text-xs dark:border-zinc-700"
-          aria-label="选择题材"
-        >
-          {themes.length === 0 && <option value="">题材加载中…</option>}
-          {themes.map((t) => (
-            <option key={t.code} value={t.code}>
-              {t.name}
-            </option>
-          ))}
-        </select>
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-zinc-100 px-2 py-1.5 text-xs dark:border-zinc-800/60">
+        {themes.length > 0 ? (
+          <FilterMenu
+            label="选择题材"
+            value={theme}
+            options={themes.map((item) => ({ key: item.code, label: item.name }))}
+            onChange={setTheme}
+          />
+        ) : (
+          <span className="text-zinc-600 dark:text-zinc-400">{error ? "题材目录未就绪" : "题材加载中…"}</span>
+        )}
         <span className="text-[10px] text-zinc-600 dark:text-zinc-400">
           涨速 = 最近 5 分钟涨跌幅 · {sampled}/{rows.length} 已采样
         </span>

@@ -225,10 +225,12 @@ export function OpportunitySection({
   opps,
   expanded,
   onToggle,
+  showLedger = true,
 }: {
   opps: IntradayOpportunities;
   expanded: string | null;
   onToggle: (theme: string) => void;
+  showLedger?: boolean;
 }) {
   // 板块权限挡下的容器成分只数：>0 时口径行要说明——「候选为什么这么少」
   // 与「没有候选」是两件事，页面必须能区分（三态纪律）
@@ -264,7 +266,7 @@ export function OpportunitySection({
         判定依据悬停可见、等级可回放。仅模拟跟踪，不构成买卖建议。
       </p>
       {/* 跟踪台账（猎场批次 A）：入选即登记、收盘清算、逐股判定与历史统计 */}
-      <WatchLedgerPanel />
+      {showLedger && <WatchLedgerPanel />}
     </section>
   );
 }

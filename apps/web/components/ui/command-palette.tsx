@@ -49,7 +49,7 @@ export function CommandPalette() {
   useEffect(() => { list.current?.querySelector('[data-selected="true"]')?.scrollIntoView?.({block:"nearest"}); },[selected,query]);
   return <>
     <ControlHint content="查找页面与工具 · Ctrl/⌘ K" inactive={open}><button type="button" className="command-launch" aria-label="打开命令面板" aria-haspopup="dialog" onClick={show}><HugeiconsIcon icon={CommandLineIcon} size={18} strokeWidth={1.6} aria-hidden="true" /><kbd>⌘ K</kbd></button></ControlHint>
-    {presence.value && <ModalShell open={presence.active} onClose={close} label="查找页面与工具" size="md" header={<div><p className="workspace-kicker">快速到达</p><h2 className="text-lg font-semibold">查找页面与工具</h2></div>} footer="↑ ↓ 选择 · Enter 打开 · Esc 关闭。证券搜索在顶栏，业务操作仍需原权限与确认。">
+    {presence.value && <ModalShell open={presence.active} onClose={close} label="查找页面与工具" size="md" header={<div><h2 className="text-lg font-semibold">查找页面与工具</h2></div>} footer="↑ ↓ 选择 · Enter 打开 · Esc 关闭。证券搜索在顶栏，业务操作仍需原权限与确认。">
       <div className="command-palette">
         <input data-overlay-autofocus="primary" aria-label="查找页面与工具" role="combobox" aria-expanded="true" aria-controls={listId} aria-autocomplete="list" aria-activedescendant={results.length ? `${listId}-${selected}` : undefined} placeholder="输入任务、工具或关键词" value={query} onChange={event => {setQuery(event.target.value);setIndex(0);}} onKeyDown={event => {
           if (event.nativeEvent.isComposing || event.keyCode===229) return;

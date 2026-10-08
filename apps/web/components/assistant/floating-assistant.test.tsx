@@ -58,6 +58,46 @@ function openPanel() {
   fireEvent.pointerUp(ball);
 }
 
+describe("FloatingAssistant 视口缩放", () => {
+  it("真实 resize 保留左右贴边，未贴边的位置仅做边界约束", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ data: [] }))));
+    const resize = (width: number) => {
+      act(() => {
+        vi.stubGlobal("innerWidth", width);
+        window.dispatchEvent(new Event("resize"));
+      });
+    };
+
+    for (const initial of [
+      { x: 649, y: 240, side: "right", wideLeft: "1418px", narrowLeft: "368px" },
+      { x: 16, y: 240, side: "left", wideLeft: "0px", narrowLeft: "0px" },
+      { x: 240, y: 240, side: null, wideLeft: "240px", narrowLeft: "240px" },
+    ]) {
+      vi.stubGlobal("innerWidth", 713);
+      const stored = JSON.stringify({ x: initial.x, y: initial.y });
+      localStorage.setItem("ashare.assistant.pos", stored);
+      const view = render(<FloatingAssistant />);
+      const ball = await screen.findByTestId("assistant-ball");
+      expect(ball.getAttribute("data-docked")).toBe(initial.side);
+
+      resize(1440);
+      expect(ball.getAttribute("data-docked")).toBe(initial.side);
+      expect(ball.style.left).toBe(initial.wideLeft);
+      resize(390);
+      expect(ball.getAttribute("data-docked")).toBe(initial.side);
+      expect(ball.style.left).toBe(initial.narrowLeft);
+      // 缩放不改既有持久化契约；只有拖动结束才保存位置。
+      expect(localStorage.getItem("ashare.assistant.pos")).toBe(stored);
+
+      if (initial.side === null) {
+        resize(200);
+        expect(ball.style.left).toBe("178px");
+      }
+      view.unmount();
+    }
+  });
+});
+
 async function send(text: string) {
   const input = screen.getByTestId("assistant-input");
   fireEvent.change(input, { target: { value: text } });

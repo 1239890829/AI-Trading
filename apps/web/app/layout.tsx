@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import "./controls.css";
+import "./system.css";
 import { NavBar } from "@/components/nav-bar";
 import { FloatingAssistant } from "@/components/assistant/floating-assistant";
 import { DetailModalProvider } from "@/components/detail/detail-modal";

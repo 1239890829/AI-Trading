@@ -52,8 +52,8 @@ const PAGE_TITLES: Record<string, string> = {
   "/workbench": "工作台",
   "/tape": "盘面",
   "/market": "市场",
-  "/hunting": "猎场",
-  "/agent": "交易智能体",
+  "/hunting": "选股",
+  "/agent": "复盘",
 };
 
 const SUGGESTIONS = [
@@ -160,7 +160,7 @@ export function FloatingAssistant() {
   const [model, setModel] = useState("");
   const [dict, setDict] = useState<EntityDict | null>(null);
   const [bubbles, setBubbles] = useState<AgentBubble[]>([]);
-  const [docked, setDocked] = useState<"left" | "right" | null>(null);
+  const [docked, setDocked] = useState<"left" | "right" | null>("right");
   const [orbHovered, setOrbHovered] = useState(false);
   const [sessions, setSessions] = useState<StoredSession[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
@@ -240,9 +240,22 @@ export function FloatingAssistant() {
     } finally {
       loadedRef.current = true;
     }
+    let viewportWidth = window.innerWidth;
     const onResize = () => {
-      setViewport({ w: window.innerWidth, h: window.innerHeight });
-      setPos((p) => (p ? clampPos(p) : p));
+      const previousWidth = viewportWidth;
+      const nextViewport = { w: window.innerWidth, h: window.innerHeight };
+      viewportWidth = nextViewport.w;
+      setViewport(nextViewport);
+      setPos((p) => {
+        if (!p) return p;
+        // 用缩放前的边界识别贴边侧，避免扩宽后把右侧误认成自由位置。
+        const x = p.x <= MARGIN + 2
+          ? MARGIN
+          : p.x >= previousWidth - BALL - MARGIN - 2
+            ? nextViewport.w - BALL - MARGIN
+            : p.x;
+        return clampPos({ ...p, x });
+      });
     };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
@@ -1009,7 +1022,7 @@ export function FloatingAssistant() {
                   <div
                     className={
                       m.status === "error"
-                        ? "rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-2 text-sm text-zinc-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-zinc-200"
+                        ? "rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-2 text-sm text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100"
                         : "text-sm text-zinc-800 dark:text-zinc-200"
                     }
                   >

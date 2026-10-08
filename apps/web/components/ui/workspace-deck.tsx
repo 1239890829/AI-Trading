@@ -92,15 +92,16 @@ export function WorkspaceDeck({tools, onOpen, compact = false, activeTool}: {too
 export function MarketLensPicker({selected, search}: {selected: string; search: string}) {
   const current = MARKET_LENSES.find(lens => lens.key === selected) ?? MARKET_LENSES[0];
   return <DropdownMenu.Root>
-    <DropdownMenu.Trigger className="lens-trigger lens-menu-trigger" aria-label={`市场视角：${current.label}`}>
-      <span className="lens-title">{current.label}</span><HugeiconsIcon icon={ArrowDown01Icon} size={16} strokeWidth={1.6} aria-hidden="true" />
+    <DropdownMenu.Trigger className="lens-trigger lens-menu-trigger bc-market-lens-trigger" aria-label={`市场视角：${current.label}`}>
+      <svg className="bc-market-lens-mark" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M4 5h16v14H4zM10 5v14M10 11h10" /></svg>
+      <span className="lens-title">{current.label}</span><HugeiconsIcon icon={ArrowDown01Icon} size={14} strokeWidth={1.6} aria-hidden="true" />
     </DropdownMenu.Trigger>
-    <DropdownMenu.Portal><DropdownMenu.Content className="filter-menu lens-menu" sideOffset={8} collisionPadding={12} align="end" aria-label="选择市场观察视角">
-      <DropdownMenu.Label className="filter-menu-label">市场观察视角</DropdownMenu.Label>
+    <DropdownMenu.Portal><DropdownMenu.Content className="filter-menu lens-menu bc-market-lens-menu" side="bottom" sideOffset={7} collisionPadding={12} align="end" aria-label="选择市场观察视角">
+      <DropdownMenu.Label className="filter-menu-label bc-market-lens-heading">切换观察视角</DropdownMenu.Label>
       {[...new Set(MARKET_LENSES.map(lens => lens.group))].map(group => <DropdownMenu.Group key={group}>
         <DropdownMenu.Label className="lens-menu-group">{group}</DropdownMenu.Label>
         {MARKET_LENSES.filter(lens => lens.group === group).map(lens => <DropdownMenu.Item asChild key={lens.key} textValue={lens.label}>
-          <Link href={marketLensUrl(lens.href, search)} aria-current={selected === lens.key ? "page" : undefined} className="filter-option lens-menu-option"><span><span className="filter-option-title">{lens.label}</span><span className="filter-description">{lens.description}</span></span><span className="filter-check">{selected === lens.key && <HugeiconsIcon icon={Tick02Icon} size={15} aria-hidden="true" />}</span></Link>
+          <Link href={marketLensUrl(lens.href, search)} aria-current={selected === lens.key ? "page" : undefined} className="filter-option lens-menu-option"><span><span className="filter-option-title">{lens.label}</span><span className="filter-description">{lens.description}</span></span><span className="filter-check">{selected === lens.key && <HugeiconsIcon icon={Tick02Icon} size={15} strokeWidth={1.6} aria-hidden="true" />}</span></Link>
         </DropdownMenu.Item>)}
       </DropdownMenu.Group>)}
     </DropdownMenu.Content></DropdownMenu.Portal>

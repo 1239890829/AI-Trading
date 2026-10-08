@@ -43,7 +43,7 @@ describe("折叠工具与原深链", () => {
   it("allows method evidence as read-only research without enabling disposal", () => {
     nav.search = "area=research&tab=strategies";
     render(<AgentPage />);
-    expect(screen.getByRole("dialog", {name: "方法核验"})).toBeTruthy();
+    expect(screen.getByRole("dialog", {name: "方法验证"})).toBeTruthy();
     expect(screen.getByText("核验内容")).toBeTruthy();
     expect(screen.queryByText("受控处置内容")).toBeNull();
   });
