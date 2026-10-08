@@ -582,21 +582,24 @@
 
 ## IMP-082
 
-**已审产品定义与B+C合并可操作试件**
+**B+C正式前端迁移与功能保真**
 
-- **状态**：进行中
+- **状态**：已完成
 - **优先级**：P1
 - **阶段门**：G2
 - **门内序**：106
 - **门禁角色**：非阻断
 - **依赖**：IMP-081
 - **效果前置**：无
-- **方案依据**：用户2026-10-08“开始吧”后拒绝全部旧九稿、要求最多三套全新方案，最新已明确选择“第二和第三套的结合”；product/ui-original-skills-plan-20261008.md §9.6。不再等待三选；§8为历史撤回，§8.5旧九稿/comp流程被覆盖，不再当前权威。
-- **范围**：保留产品事实确认投影、独立技能定义与状态规格、原始来源逐项评估及A/B/C比较基线；用户所选B主体+C关注带及石墨/淡硫风格的BC仍为隔离prototype，现已补选股入口及合成代表闭环，真实API/业务未迁入；一个自选管理和同一选中证券状态，顶部关注带替代B底部表。全库存为33技能/条件分支、30来源、40跨面要求、18细功能组、95原始效果+12整改，逐项给真实消费者与不采用理由，不全部强装；4待辨识名称不猜同名资源。不得读取旧九稿作新构图输入、融合或换皮。本轮原生产源码未改、未删除，3000/8000和运行权限不动，全生产迁移未完成。
-- **验收**：事实/未知/合成分开；frontend两遍、IxD、finesse各产品分支、Taste九组、Impeccable craft-floor按原版职责分别应用并留独立产物，不恢复退役融合skill权威；先holistic、后detector。用户方向选择已完成，bc-contract.md由product_workbench_spec生成。选股是真实生产核心，不能用市场过滤替代；不得把一级入口或合成候选当完整选股流程。bc-feature-parity.md须逐子项核覆盖/缺失/保留，缺失功能必须逐子项迁移验收后才能替换旧版。新增选股及最终字节需实际DOM/行为/Canvas、320/390/桌面/短屏及恢复状态证据；三代表面不关闭全域18组实施门，生产迁移另待确认并单独验收。
-- **恢复**：ui-current-saved-20261008（0377b8414be70710bd4fff67818974601d5910da）与artifacts/recovery/ui-current-20261008/source.tar.gz不变；工具状态/长证据/候选只进忽略artifacts，无凭据或真实账户数据；不改3000/8000、不部署。
-- **证据**：合并前三案历史：开工基点master/origin/master=d0972819775c7161daca1c54379dd13540c82b51，分支codex/ui-direction-selection；旧批次ui-direction-selection-20261008只留历史。artifacts/runs/ui-three-refined-20261008：A“从一个对象开始”、B“图表与核对记录”、C“观测室”，原index.html三项直接比较、coverage.html来源/技能取舍、三份design、holistic-critique.md与detector-review.md及原始运行回执；本地入口http://127.0.0.1:51066/index.html。原版detect实际exit2，A26/B71/C69条原始warning，扫描期源码哈希稳定；不是clean、不能排名或直接当P0/P1。holistic A/B非作者源码审阅、C作者自审；detector A作者自查、B/C非作者源码检查，未冒称完整双隔离critique/finish。TasteLab远端浏览连续超时，本地IAB恢复，完整外站extract/Design Map仍partial。代表面必要修复已实际复验；当时7 Select/5 Checkbox为真实Radix，14次手机/桌面菜单展开均不覆盖触发器。旧手机span隐藏误伤新控件也已修。历史194 passed不代表当前文本或UI验收。
-- **当前进展**：bc.html/css/js、bc-contract.md、bc-design.md及功能核对已形成，最终哈希绑定bc-acceptance.json；入口以BC为主、原A/B/C折叠保留，10个原始来源绑定哈希不变。已补一级“选股”入口及合成候选→依据/等待/失效/质量→同股图表→明确加入本地关注代表闭环。bc-feature-parity.md核原生产子功能、动态猎场、深链、持仓模拟、复盘及后台，基线绑定整改前稿、§10根已回填当前增量，未接入项不作完整。复用codex/ui-direction-selection，PR #241为draft，回填基点HEAD=5f0f9b8b88d5aef86c764b28cac5ff5984d66dd6；再次fresh fetch成功，origin/master仍d0972819775c7161daca1c54379dd13540c82b51。http://192.168.110.169:51067/bc.html的LAN HTTP200/私有路径404见bc-http-verification.json，仅宿主访问，不记真实手机已验。
-- **选股实测与有限修复**：bc-hunting-browser-observations.json保留8条增量观测/3条菜单记录，含初批与修后确认；PC1440/390/320根无溢出，宏和603256进入同股图表/依据不加关注(count5)，返回后明确加入(count6)、防重复/回焦。10分组全可达，5组合成流程/5组显式生产未接入；盘中失效仅博云1条，每日精选失效合法空且恢复金安1条。当前4 Select/3 Checkbox，新增第四Select在PC/390触发器下约6px，修后手机再确认不覆盖；390/320图350×260、284×260，带返回入口的最终桌面939×439。状态4em挤字已修，390/320状态328/262px宽、约19.8px高一行；BC独立19字字体3×7304B、fonts=loaded，不改原共享，完整字形覆盖未独立量测。桌面截图1417×900与DOM1440×900余白截取差异已披露。
-- **最终验证**：bc-acceptance.json绑定最终HTML/CSS/JS、契约/设计/功能核对、BC字体及截图，限隔离选股入口和合成代表闭环。新单次bc-hunting-detector.json仍exit2/12 warning，不是clean；新兼容代理五部分bc-hunting-finish-review.md为ship，仅限本轮选股入口/合成闭环/未接入说明，非全功能、生产或原生完整流程。新bc.js Jev final correctness7.5(confidence0.37)/reliability7.5，documentation唯一improved、regressions空；CSS/字体修复后JS未改，不重复评分，不称独立产品验收。旧三案24观察/14菜单及201 passed、BC前稿8观察/6菜单/3 Select/3 Checkbox、前稿detector exit2/12 warning与Jev7.4只保留历史受检范围。本次文档门禁另记bc-doc-validation.json，绑定三文档运行前后哈希；不把文档门禁替代产品实测。真实手机/软键盘、系统偏好/读屏/全设备性能、完整外站TasteLab、完整ultramotion WebGL及全域闭包未关闭；不宣称全部技能或全部功能完成。IMP-082状态继续进行中。
-- **下一步**：交付已选B+C隔离原型及选股代表闭环、功能保真核对与有限验收，按用户反馈处理明确范围。完整真实API/业务、持久台账、持仓模拟、复盘及全生产功能仍未迁入，原业务代码未删，不能替代现用系统；生产迁移另待确认，缺失功能必须逐子项迁移验收后才能替换旧版。不重问三选，不把原型或文档发布扩成生产实施授权，不领取第二任务。
+- **方案依据**：用户2026-10-08明确选择“第二和第三套的结合”，随后“菜单名称可以再想想，然后就开工吧”已授权正式React前端迁移；依据product/ui-original-skills-plan-20261008.md §9.7。无需再选案或确认实施；§8九稿已撤回，§9.1–9.6试件仅作历史比较和迁移基线。
+- **证据**：正式源码提交c157f179cbf7710386025800c6384008e12baa7b；[PR #241](https://github.com/1239890829/AI-Trading/pull/241)。artifacts/runs/ui-bc-production-20261008的production-acceptance.json绑定源码/构建/截图；production-verdict.md限定F-01–05 resolved/ship；production-detector-release.json=[]；browser-release-observations.json含最终四主面与助手/滚动复验，gallery.html提供图集。已完成状态指工程实现与已披露范围验收，发布实际结果由同一PR记录，仍须本轮完成，不预写未来合并成功。
+- **恢复**：保留tag ui-current-saved-20261008→0377b8414be70710bd4fff67818974601d5910da及artifacts/recovery/ui-current-20261008/source.tar.gz，SHA-256=f1e89ee0244b128b884b9ab7ed6f2aaecb2450ab917ae8df87bcd62ffed93。只恢复呈现源码并保留业务数据、权限及原深链；恢复前核版本和服务，不复活退出技能，旧版玻璃过透问题随恢复说明保留。
+- **范围**：工作台、选股、市场/盘面、复盘/维护及共享导航、搜索、详情、菜单和浮层；主菜单工作台/选股/市场/复盘。自选/持仓归工作台，跟踪记录归选股，受控维护经工具进入。复用原真实API、原组件消费者、证券/日期/账户scope及深链；用户取消的历史回放UI退出，历史K线与研究保留。只改前端呈现、交互和失败反馈，不改变后端规则、数据源、策略阈值、模拟撮合或权限。
+- **验收**：逐子项核功能归属与原消费者，不因换UI丢选股、四账户scope、模拟/手工记录、复盘或后台能力；合法空、失败、过期/未知不得混写。原版Impeccable、Taste及其他适用技能按独立职责留下产物，先holistic后detector，不恢复融合入口；全库存33技能/条件分支、30明确来源、40跨面要求、18细功能组、95效果+12整改按真实消费者评估，4项未辨识来源不猜测。最终DOM/行为/Canvas、320/390/桌面/短屏、容器滚动、菜单位置、关闭全族、键盘/焦点与恢复绑定最终代码；完整本地门禁、准确HEAD发布回执/required CI及post-merge核验分别留证。工程完成不代表选股持续性、收益或RSH-031效果已验证。
+- **当前实现**：正式React前端已完成：工作台真实关注/候选带与完整图表/核对；选股三组组织原十项能力，保留API/参考跟踪/模拟；市场八视角与原消费者；复盘/维护分组、提醒宽抽屉及Radix选择。IBM Plex Sans Latin+完整中文fallback、石墨/淡硫、完整手机搜索、紧凑按钮和ARIA Tabs。提醒pending/错误/可取消确认、规则回退AI不可用、全局事件身份保留。仅改前端，不改变后端业务或权限。
+- **版本与证据**：分支codex/ui-direction-selection；正式源码c157f179cbf7710386025800c6384008e12baa7b，协调文档提交随后。发布前复核origin/master及当前PR准确HEAD；历史prototype/旧文档标题不代替生产代码。证据根artifacts/runs/ui-bc-production-20261008；测试、截图、兼容代理和Jev均各有范围，不冒称全域独立Review。
+- **主动反证**：修复非成交视角追加逐笔、提醒原生选择/确认遗漏、嵌套菜单Esc关闭父抽屉、移动长表与风险说明过长、复盘阅读轴和渠道控件。新增真实resize测试保证助手713→1440→390仍靠右且不改存储；实屏x691→1418→368。最后market隐藏caption越界由滚动容器建立包含块修复，root scrollHeight1124→844，读屏语义保留。兼容代理仅F-01–05 ship；共享Jev最终8.2/7.8/8.4、比较方向均unchanged、regressions空，非项目独立Review。
+- **验证进度**：后端完整4654 passed/83 skipped/1 warning，471.80s；pyflakes通过。前端默认/UTC各99文件856 passed，201.25s/250.24s；tsc/eslint/生产build通过。最后仅CSS caption定位修改重新build及实屏，JS/TS未再变化。早期鉴权与文档必填字段失败已修复并完整复验，未改.env/断言/阈值。最终协调文档相关守卫186 passed（10.95s）、doc-health通过，精确暂存后再核卫生/public scan；准确HEAD required CI和发布执行结果由PR #241记录。
+- **运行与恢复**：3000运行最终Next production start并读取原真实API，token仅注入服务进程内存；工作台、代理watchlist及局域网选股HTTP200。8000原后端未重启。休市和源时间/组合日期显式保留。恢复点见本项恢复字段，不覆盖业务数据或复活退出技能，保留旧版玻璃过透说明。
+- **剩余边界**：真实手机/软键盘、读屏、系统减弱偏好和全设备性能未完整实测；TasteLab完整外站截图/DOM量测及Design Map/Taste DNA仍partial；ultramotion原仓为视频动效模板，本轮不宣称完成WebGL光学折射集成。上述范围不能由截图数量或机械detect空结果替代。
+- **下一步**：工程实现与验收已收口；本轮交付仍须在PR #241执行最终协调文档门禁、准确HEAD DegradedRelease、三required CI/release_check、match-head合并、post-merge及分支清理，结果追加同一PR；未发生前不预写成功。沿用已有工程/发布分层，不为记录未来merge SHA再造第二PR。不自动领取第二业务任务，部署仍搁置。

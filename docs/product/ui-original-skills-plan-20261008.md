@@ -329,6 +329,24 @@ TasteLab部分原站HTML/源码可读不等于视觉提炼完成。远端浏览�
 
 §9.4、§9.5的24个观察、14次菜单展开及201项文档守卫保留为合并前三案/文档字节历史。本轮最终回执为`bc-acceptance.json`，本次文档门禁另记`bc-doc-validation.json`并绑定三文档运行前后哈希；LAN HTTP200/私有路径404见`bc-http-verification.json`，仅本机访问证据。用户选择已完成，选股入口和合成代表闭环已补，IMP-082继续进行中；完整真实API/业务、持久台账、持仓模拟、复盘及全生产功能尚未迁入，原业务代码未删，不能替代现用系统。真实手机、系统偏好/屏幕阅读器/全设备性能、完整外站TasteLab、完整ultramotion WebGL及全域闭包仍未关闭。生产迁移另待确认并逐子项验收，不重问三选，不宣称全部技能或全部功能完成。
 
+### 9.7 B+C正式前端实施授权与迁移计划
+
+用户2026-10-08明确“菜单名称可以再想想，然后就开工吧”，覆盖§9.6的“生产迁移另待确认”。本轮继续IMP-082，复用codex/ui-direction-selection与PR #241，范围扩为正式React前端；不改变后端规则、策略阈值、撮合权限或数据源。主菜单收为工作台、选股、市场、复盘；自选/持仓为工作台内部，跟踪记录为选股内部，维护在全局工具入口，旧URL/key与上下文保留。
+
+实施顺序：①核原生产消费者与深链；②工作台顶部真实关注/候选带+图表/核对，选股三组工具架+原真实筛选，市场摘要/主表/事件独立迁移；③统一字体、密度、搜索、选中态、弹窗与复盘/维护入口；④逐子项对照功能，DOM/行为/真实Canvas及320/390/桌面/短屏实屏；⑤有界反证与原版各阶段审阅；⑥串行完整门禁、准确HEAD发布回执及CI。测试夹具只用于测试，不进入生产。已取消历史回放入口退出，历史K线和复盘研究保留。
+
+原版Impeccable按Operate与craft-floor、Taste按既有项目九组审计、Interaction Design按动作/恢复分别执行，不合并为摘要技能。原版context本轮只运行一次；因仓库禁止应用私有权威目录，产物投影到现有方案与忽略artifacts，明确宿主适配而非原生全流程完成。真实稠密数据表不采用营销页Hero/装饰3D。字体采用自托管IBM Plex Sans Latin，中文使用完整系统fallback，避免试件子集字体缺字；来源与OFL随字体保存。ultramotion原仓为视频动效模板，WebGL视频不能直接当实时金融组件已集成；高频图表保持原绘图引擎，空间来源/抽屉/状态反馈按实际用途采用。
+
+正式React已实现工作台、选股、市场/盘面、复盘/维护与共享界面；源码提交c157f179cbf7710386025800c6384008e12baa7b。选股保留原十项能力、真实API、风险先行、参考跟踪和模拟入口，原证券/日期/四账户scope与深链保留。仅改前端，测试夹具未迁入生产。最终3000以Next production start读取原真实API，8000未重启；保留休市/源时间/组合日期，不冒称实时。
+
+工程验收：默认/UTC各99文件856 passed（201.25s/250.24s），tsc/eslint/生产build通过；后端4654 passed/83 skipped/1 warning（471.80s），pyflakes通过。末次CSS-only隐藏caption定位修复重新构建并实屏，390px根滚动高度1124→844；JS/TS无后续变化。早期鉴权与文档必填字段失败修复后完整复验，未放宽断言/阈值。最终协调文档相关守卫186 passed（10.95s）、doc-health通过；精确暂存后再核卫生和公开仓扫描。
+
+artifacts/runs/ui-bc-production-20261008的production-acceptance.json绑定源码/构建/截图；browser-release-observations及gallery记录最终四主面1440/390、助手resize与caption复验，较早320/短屏/嵌套菜单等记录单独保留。兼容production-verdict仅F-01–05 resolved/ship；最终27文件detector=[]/exit0，历史warning不改写；共享Jev8.2/7.8/8.4，比较方向均unchanged、regressions空。机械扫描/分数/兼容代理均不冒充全域独立验收。
+
+IMP-082工程范围已完成，准确HEAD发布仍是本轮必做交付；最终required CI、DegradedRelease、merge/post-merge与清理事实单点追加[PR #241](https://github.com/1239890829/AI-Trading/pull/241)，不预写未来成功，也不为未来merge SHA另造第二PR。
+
+真实手机/软键盘、读屏、系统偏好和全设备性能未完整实测；TasteLab完整外站截图/DOM量测与Design Map/Taste DNA仍partial；ultramotion是视频动效模板，非可直接替换的实时光学组件，本轮不宣称完成WebGL折射集成。保留既定恢复点，不把界面工程通过写成RSH-031收益或选股效果已验证。
+
 ## 附录A：逐技能原文职责与完整适用流程
 
 本附录包含修订前20项问题的处置、33项技能及条件分支、24项Impeccable命令，以及原生路径与宿主适配的具体边界。A–G字母表示本附录的工作阶段，正文§6的“交付1–7”表示成果批次，两者不是任务编号。
