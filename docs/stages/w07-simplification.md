@@ -11,7 +11,7 @@
 ## IMP-088
 
 - **任务**：工作台、选股与全域原地查看的交互闭环
-- **状态**：进行中
+- **状态**：已完成
 - **优先级**：P1
 - **阶段门**：G2
 - **门内序**：112
@@ -24,10 +24,12 @@
 - **验收**：刷新/重生成不覆盖逐股首入选事实；历史缺字段保留未知，原价不是成交价。最高连板对象由完整同源池给出，并列不任意选一只；题材与断层弹层样本与卡片一致。原地查看不改宿主页日期/筛选/账户/滚动，修饰键/真实深链仍可用；关闭停止读取、Esc/回焦、手机短屏与内部滚动可达。两影子scope、配置与运行状态独立，GET不启用、不下单。局部加载不阻塞页面，不能用快速错误冒充性能改善。六项及全站每个消费者有KEEP/FIX与行为证据，不用模块级完成代替子功能。
 - **主动反证**：同日重生成/换日与乱序归档、缺价/缺源钟、已封板/并列最高/非主板空间板、top5题材与全市场口径不同、overlay污染URL/叠层关闭/后台轮询、历史通知原日原版、影子只读创建账户/配置与运行状态漂移、移动端溢出/嵌套滚动、动画挡焦点。
 - **恢复**：保留现役ui-current-saved-20261008及恢复包；仅按本项Git差异恢复呈现和新证据映射，不盲目恢复数据库或覆盖后续写入，不恢复退出技能。
-- **证据**：2026-10-09源码锁定批次：完整后端4918 passed、83 skipped、1 warning（Starlette TestClient/httpx弃用提示），401.49s；前端109文件973项默认/UTC分别通过，191.53s/164.87s。tsc/eslint/Next生产构建/pyflakes/doc-health/workspace-hygiene/公开仓库扫描已通过，证据根为`artifacts/runs/contextual-workspace-20261009`；文档事实回填后再核文档/卫生/公开扫描。定向244/122/18项为先前局部证据，不与全量相加。Jev baseline/final均HTTP451，无分数或有效previousEvaluation。浏览器已验1280×800/600、320×640与390×844的六项关键交互、Canvas与叶级滚动：根无X/Y溢出，嵌套Esc/回焦、通知保留、账户切换原页、同批题材/断层可达；见browser-acceptance.json及截图。使用明确隔离合成数据，不冒充实源/真实手机/39源码入口族全部实屏。首文档script原始字节1,377,532→1,047,658，约少23.9%；HTML44.65→53.17ms不证明变快，不宣称全系统SLO。CI/发布与新后端运行仍待实证。
-- **运行边界**：3000已加载本轮前端build `-OJIz0_LF5kBwlCOnqZe2`，8000仍为IMP-087旧后端，不宣称本轮后端已运行生效。每日影子原配置已启用、机会影子关闭，本轮不改开关；实际窗口读activation，配置不等于执行或成交。next-env构建生成变更已restore，不提交；旧首次加入缺失不回填，隔离夹具不冒充实源。
+- **证据**：2026-10-09源码锁定批次：完整后端4918 passed、83 skipped、1 warning（Starlette TestClient/httpx弃用提示），401.49s；前端109文件973项默认/UTC分别通过，191.53s/164.87s。tsc/eslint/Next生产构建/pyflakes/doc-health/workspace-hygiene/公开仓库扫描已通过，证据根为`artifacts/runs/contextual-workspace-20261009`；同任务事实回填的文档守卫204项（17.90s）与doc-health/卫生/公开扫描通过；文档PR仍执行完整required CI。定向244/122/18项为先前局部证据，不与全量相加。Jev baseline/final均HTTP451，无分数或有效previousEvaluation。浏览器已验1280×800/600、320×640与390×844的六项关键交互、Canvas与叶级滚动：根无X/Y溢出，嵌套Esc/回焦、通知保留、账户切换原页、同批题材/断层可达；见browser-acceptance.json及截图。使用明确隔离合成数据，不冒充实源/真实手机/39源码入口族全部实屏。首文档script原始字节1,377,532→1,047,658，约少23.9%；HTML44.65→53.17ms不证明变快，不宣称全系统SLO。主体实现已通过准确HEAD发布和合并后CI，实际新后端已运行，见本节发布与运行收口。
+- **运行边界**：3000前端PID8351加载本轮build `-OJIz0_LF5kBwlCOnqZe2`；8000后端PID20084正常TERM旧实例后从已发布源码无reload启动。71项业务/测试源哈希与验收构建无漂移。每日影子原配置已启用、机会影子关闭，本轮不改开关；实际窗口读activation，配置不等于执行或成交。next-env构建生成变更已restore，不提交；旧首次加入缺失不回填，隔离夹具不冒充实源。
 - **证据责任**：数据切片负责首次事实/全池身份/影子真实条件；组件切片负责显式scope与惰性宿主；入口切片负责逐消费者接线；协调负责覆盖矩阵、实屏、完整门禁、传播与发布。作者=发布操作者，DEGRADED_FULL_CONTROL与DegradedRelease明确非独立审核。
-- **下一步**：连续完成六项及其必要内部切片，最终证据和发布事实原位回填；长期策略效果与全系统SLO仍归原owner及IMP-019。
+- **下一步**：六项工程交互任务已发布；本轮同任务文档回填按自己的准确HEAD发布。新反例回原owner重开；长期策略效果与全系统SLO仍归原owner及IMP-019，不自动领取第二业务任务。
+
+- **发布与运行收口**：[PR #249](https://github.com/1239890829/AI-Trading/pull/249)准确HEAD `c6d09f2b6719d76ea6c4d980fa6a8fcac1cc332a`通过[DegradedRelease回执](https://github.com/1239890829/AI-Trading/pull/249#issuecomment-6081282168)、required CI37932915482、release_check并match-head合并为`92015f3f59ca79006bee4b496797bed3b0afc791`（2026-10-09T12:56:51Z）。post-merge运行37933414478三job均completed/success；本地实施分支已删，远端自动移除经ls-remote空结果确认。3000/8000及LAN工作台/选股/代理health HTTP200；真实health为degraded，东财板块源失败如实保留。daily activation configured/runner_loaded均true，09:26≤北京时间<09:45/60秒；hunting configured/runner_loaded均false，已有记录可读。每日当前没有持久候选，不强制生成或调用模型取得样本。首次生产字段覆盖仍随未来自然入选记录增长，旧缺失不倒填。只读重启前queued/running=0、outbox待派发/leased/未完成尝试=0、模型reserved/started未终态=0；7条needs_confirm及2条历史usage unknown保留。初始root-cwd鉴权探针未加载backend配置而401，修正到backend-cwd原凭据后三个读端点均200；未修改鉴权。实源工作台/账户旁览再核默认三指数、当前页复用与真实窗口，截图与runtime-release.json在忽略证据目录。隔离3001/8011正常停止、临时viewport reset与标签关闭；真实3000/8000、既有恢复包/tag保留。真实手机硬件、全系统SLO与未来收益不是本轮工程通过结论。
 
 ## IMP-050
 
