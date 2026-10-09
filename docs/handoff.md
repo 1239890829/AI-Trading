@@ -4,10 +4,10 @@
 
 ## 1. 现场、授权与版本
 
-- **当前主门**：G2
+- **当前主门**：无（G0–G4当前无可行动项）
 - **本轮主任务**：IMP-087
-- **主切片首选**：IMP-087
-- **基点与分支**：2026-10-09 已同步 `origin/master` 的 `b3bca78177b18fe0c3c5e210ede6d4db831a8b77`；当前 `codex/selection-evidence-closure`。主体代码提交 `51264720d6379cab6be9eb3104734045b64e526e`；最后消费者说明提交 `7731434555ac2bcdf47d2e1645734880837ab0a2`。协调文档 HEAD 另由 PR 精确回执绑定。
+- **主切片首选**：无
+- **基点与分支**：2026-10-09 已同步 `origin/master` 的 `b3bca78177b18fe0c3c5e210ede6d4db831a8b77`；实施分支 `codex/selection-evidence-closure` 已清理。本次同任务文档分支 `codex/selection-evidence-close` 从最新 `origin/master` 的 `f44e24b5868cd4bdb3dfbab112d6c0369a3cdd97` 创建。主体代码提交 `51264720d6379cab6be9eb3104734045b64e526e`；最后消费者说明提交 `7731434555ac2bcdf47d2e1645734880837ab0a2`。实施发布 HEAD `245db8c25e4ff3db643b9c8a78edb7b3e78d6d5e`，已通过精确回执与三项CI。现为同任务的发布事实文档收口，业务源码不再修改。
 - **已发布依赖**：IMP-086 的 [PR #246](https://github.com/1239890829/AI-Trading/pull/246) 合并为上述基点，post-merge CI `37906036497` 的 backend/frontend/docs 均成功，原分支已清理。
 - **U50 降级授权回执**：2026-09-24 Codex `DEGRADED_FULL_CONTROL` 长期授权未撤销；本轮用户在三模块现状核查后要求“开始吧”。作者等于发布操作者，非独立 Review。精确 HEAD 的 DegradedRelease、本地完整门禁、required CI、release_check 与 post-merge 核验保持。
 - **边界**：原选股评分权重、阈值、模型、资金、撮合与风控保持。复用原页面、复盘表、AlertEvent/Outbox；不增加推荐入口。趋势/独强战法准入、前向研究与全系统 SLO 仍由原研究 owner 和 IMP-019 维护。
@@ -32,11 +32,12 @@
 - 迁移现场：备份后正常停止旧服务；升级后表头版本和56条旧记录核对一致。未删除历史或改写旧 NULL 为可信结果。重启前 pending/leased Outbox、queued/running Agent 均为0；既有待人工确认记录保留。
 - 实际浏览器：隔离样本明确标“非真实行情”，用于320/390/1280px的证据、缺项、版本链接和布局；不写入生产。最终构建核原判读正文断行、资金缺项、同股一张卡、原版本复盘入口及两处更正文案。320px根宽320/scrollWidth320；正文270/270，390px正文340/340；1280px每日详情670/670。关闭36×36，资金缺项无meter。屏幕截图与完整日志只进忽略产物。
 - Jev 主体 baseline、主体复评与最终消费者修正复评均返回 HTTP 451、isError=true，无评分或有效 previousEvaluation。保留工具缺口，不宣称模型评分通过；确定性门禁、作者反证和精确发布流程不降低。
+- CI成本记录：实施PR与post-merge各一次attempt，无重跑；backend job 3m35s/3m31s（pytest169.54s/172.86s），frontend job均2m27s，docs14s/13s。安装/步骤详情留CI紧凑日志；账户可用Actions余额未知，未启用付费，不据两轮波动宣称节省。
 - 本轮工程不证明策略上涨概率、成交收益或全系统 SLO。未强制生成真实候选/模型/外发；历史未绑定复盘、缺源和 unknown 保留真实边界。
-- 文档守卫149项通过（11.67s），doc-health/workspace-hygiene/公共仓扫描通过；最终协调文档仍重验。PR/CI/精确回执/合并/post-merge/分支清理仍待本轮发布收尾，不复用依赖 PR 的绿灯。
+- 实施发布：[PR #247](https://github.com/1239890829/AI-Trading/pull/247) 的 DegradedRelease `6079004111`、PR CI `37917179673`三项completed/success、release_check与match-head合并已完成；合并SHA `f44e24b5868cd4bdb3dfbab112d6c0369a3cdd97`，post-merge CI `37917786755`三项completed/success。源分支已本地删除，远程由平台合并后自动删除且已核不存在。文档守卫149项通过（11.67s），doc-health/workspace-hygiene/公共仓扫描通过；本次同任务文档收口仍走独立准确HEAD回执与required CI，不复用实施PR的绿灯。
 
 ## 4. 传播与后续接续
 
 传播核对：实施方案、产品闭环、猎场设计、细功能审计§41、数据源契约、W02接口和 W03 已更新。任务状态只在 W03；W02不复制状态。无新文档、模型、权限或治理入口，INDEX/AGENTS/协作 Skills/Jev 蓝图不适用变更；既有入口保持。原设计技能权威不更改。
 
-本轮只收口 IMP-087。发布后下一轮按 [ledger-continue](../skills/ashare-ledger-continue/SKILL.md) 从最新 master 重算运行条件，领取唯一合法主任务；不因为本轮仍有未来观察条件而继续全仓循环。长期候选准入归 [持续演进](ai/continuous-evolution.md)。
+本轮只收口 IMP-087。实施发布后selector静态/运行结果均无G0–G4可行动项；待条件研究与全系统效果不被冒充完成。下一轮按 [ledger-continue](../skills/ashare-ledger-continue/SKILL.md) 从最新 master 重算运行条件，领取唯一合法主任务；不因为本轮仍有未来观察条件而继续全仓循环。长期候选准入归 [持续演进](ai/continuous-evolution.md)。已结束的34个本任务pytest临时目录清理约1.18GB，保留紧凑证据、迁移备份和原UI恢复包；运行服务与其他worktree未清理。
