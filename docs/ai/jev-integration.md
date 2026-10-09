@@ -203,7 +203,15 @@ Jev Choice：notify / ignore / escalate
 
 为什么适合：DeepSeek 在这里主要做三分类，一条告警一个自由生成调用，属于典型“小决策用大模型”。
 
-当前默认 = `shadow`，所以**用户可见提醒完全不变**。未来只有 RSH-030 用人工标签证明某置信区间安全，才允许开启 cascade。
+当前Jev默认 = `shadow`，**不以Jev结果改写用户可见baseline**。本轮获准的规则预筛与原生成模型预算拆分不代表Jev adoption。未来只有 RSH-030 用人工标签证明某置信区间安全，才允许开启 cascade。
+
+**2026-10-09 告警原生成模型的预筛与独立日次数授权**：用户明确“可以无限制使用，但是一定要筛选过后的，不要盲目使用”。仅原生成模型告警判读使用独立`alert_triage_llm`预算scope：`daily=None`表示不限制日调用次数，`0`停用，正数为有限日次数；其他`autonomy_llm`每日8次保持。持久receipt、原子预留/并发、输入输出上限、timeout/retry及unknown usage硬门仍有效；started后未知用量不能按0退款。此授权不切模型、不启用Jev cascade、不扩大外部通知或交易风控权限。
+
+确定性预筛先处理过期、完全重复与已知系统故障；需要判读的输入补齐持仓/自选关系、事件种类和实质变化，避免盲目重复调用。规则ignore不得延长静默窗口；持仓/自选关系或事件变化不能被旧重复键吞掉。原判读不可用时保留规则结果并记录可观测降级原因，历史fallback记录不倒填新具体原因。追加前只读观察模型探针ok、last_ok10:42；探针、预算和Jev shadow HTTP 451分别记录，不能将预算耗尽写成网关持续故障。追加后后端已重启，只读budget显示告警不限日次数且未耗尽、自主8/8保持；后台自身probe于12:10:40+08:00 ok/model=deepseek-v4-flash，根仅读取状态，未强制判读或ack。该通道状态不代替判读效果或Jev Review，运行证据归handoff。现役shadow发布时序仍见§29.7；本次不改变其baseline或效果准入。
+
+实现约束：无限日次数仍持久预留UUID/reserved→started→finish；有限次数计入当日旧null/legacy triage，不退还原自主slot。自主/告警scope任一started模型用量未知，双方继续预留/启动均阻断，Jev telemetry未知不误作该阻断；旧日未启动lease拒绝并释放。告警同一进程按(session_factory,event_id)共享singleflight结果，取消不重启同事件。CLI按实际120秒预留/120000ms回执（HTTP判读30秒），模型线程真实drain后终态；进化议程保留单次120秒/外层150秒deadline，晚到usage保留、超时输出不采用。降级原因区分预算、用量未知、跨日、配置、通道/额度/超时/格式与单次资源门，任务摘要分开显示自主与告警预算，历史缺字段不造值。当前全量、定向与待验收项归W07/IMP-084和handoff，本专题不维护第二套任务状态。追加后最终后端4767 passed/83 skipped、pyflakes通过，前端默认/UTC各100文件886 passed、tsc/eslint/build通过；最终代码Jev Review仍HTTP451，无baseline或分数。3000已以最终构建运行，390px实屏与后台budget/probe状态是不同证据；工程通过不表示Jev Review或效果准入通过。
+
+临板实际价格百分比及入选快照/距离报价身份分离是确定性金融展示，不调用Jev、不改变本节分类/准入；具体口径、反例与质量/时间硬门归[总方案§4](../implementation-plan.md#4-已知问题怎样进入方案)，本专题不复制金融字段公式。最终市场手机阅读面与情绪依据失败/恢复状态修复同属确定性UI职责，不涉及Jev消费者或效果准入；当前工程事实归W07/IMP-084与handoff。
 
 ### 5.3 pending 事件辅助
 
@@ -984,7 +992,8 @@ Jev 单价低，不代表每个判断都应该调用。真正需要控制的是*
 | jev-pref | 触及治理语义/生产 admission/交易红线时跑 | 普通格式/文案 diff 不值得 |
 | jev-context | 只有候选很多、baseline payload 显著时跑 | 本仓实测平均只省 5.28% |
 | jev-browser | 下一动作/目标元素不确定时跑 | 已知操作直接 Harness 更便宜 |
-| event/alert/assistant runtime | 继续 shadow，按 telemetry 决定是否 cascade | 需要目标域校准 |
+| Jev event/alert/assistant runtime | 继续 shadow，按 telemetry 决定是否 cascade | 需要目标域校准；原生成模型告警次数授权不扩大Jev调用范围 |
+| 原生成模型告警判读 | 独立alert_triage_llm；daily=None不限日次数、0停用、正数有限；先预筛并补关系/事件变化 | 2026-10-09用户明确授权；receipt/输入输出/timeout/并发/unknown usage硬门及其他autonomy_llm每日8次保留，详§5.2 |
 | 大规模历史挖掘 | batch/offline + 样本/token 上限 | 防止 MapReduce 变成无界账单 |
 
 ### 25.3 什么时候应该主动删掉一个 Jev 用法
