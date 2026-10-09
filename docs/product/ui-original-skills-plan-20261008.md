@@ -440,6 +440,41 @@ Chrome CUA实际核320×665 K线Canvas/切列表、390×844分时/指标展开/�
 
 **主PR发布事实**：[PR #243](https://github.com/1239890829/AI-Trading/pull/243)准确HEAD 5f0a7442189b44f4c832dd34c508382ceb7fc1cd已通过DegradedRelease、required CI和release_check，合并128b808fd95f1009e7b9f9b38487d3e653aa4858；post-merge运行37887148090三job completed/success，原分支已清理。准确回执见[PR评论](https://github.com/1239890829/AI-Trading/pull/243#issuecomment-6074602601)，任务状态仅归W07/IMP-084；文档回填版本以其对应PR准确HEAD回执及CI为准，不扩大实屏范围或金融效果结论。
 
+### 9.10 资金流板块卡片的空间分配整改
+
+用户2026-10-09指出市场→资金流向→板块资金流空白大而卡片挤，授权本轮局部整改。当前基点为master `2212b6278ce9890a5be4047e9b92c0e759a7d73c`，分支`codex/fund-flow-space`；唯一任务状态归W07/IMP-085。保留已认可B+C色盘、字体、材质和导航，沿已有资金流页面修补比例和卡片布局，不重开IMP-084或增加页面。本轮不改变业务语义、预算、数据、模型、风控、账户、鉴权或外部通知。
+
+**已复现的布局原因**
+
+本轮IAB 1280×720只读基线中，fund-columns宽1232px，左板块480.74px、右分析735.25px；板块卡片宽121.58px且内边距18px。板块复用的共享Masonry按整个视口≥1280px决定三列，实际左容器宽度没有参与列数选择；窄卡再叠较大内边距，造成卡内拥挤与页面空间分配不均。截图见`artifacts/runs/fund-space-20261009/screenshots/before-1280.png`。该记录仅证明整改前缺陷，不能当作整改后验收或发布证据。
+
+**本轮方向契约**
+
+| 实际消费者 | 局部实施 | 验收与边界 |
+|---|---|---|
+| fund-columns左右阅读面 | 桌面改为1.2fr:1fr，约55%板块/45%分析；按内容与真实尺寸复验。 | 默认1280×720与短屏量测比例、可见内容和根/父层scroll宽高，不把55%当所有视口固定阈值。 |
+| 板块资金卡片与列表 | 仅板块专属CSS columns使用248px列宽、auto列数、12px列间距；slot 2px、卡内14px。 | 列数由实际可用容器宽度决定；短数值/单位/标签完整，长名可读，卡片不被断列，增量末项可达；共享Masonry其它消费者保留。 |
+| 手机板块与资金分析阅读面 | 两个横向阅读面各按实际100%宽度，板块列表保持叶级Y滚动。 | 320/390px横向到达两面，列表真实滚到末项；页面根、大父容器无竖滚，不以裁切代替滚动。 |
+| 右侧资金分析与板块下钻 | 保留当前/历史/机构游资现有布局和全部读者；保留同刻成交对比/全天估算、五档净额/分钟曲线、历史日及下钻分钟/日度/成员排行。 | 全部入口连续核验，字段/图例/日期/来源时间/质量和动作可达；本项不追加右侧大容器Y或压图改造。 |
+
+**技能职责、反例与交付证据**
+
+沿§9.9原版分责：Impeccable Operate的layout/adapt与craft-floor负责实际容器、卡片密度和溢出，执行holistic→diagnose→fix→confirmation；Taste同仓redesign按Scan→Diagnose→Fix独立核主辅比例和卡片关系。UI/UX Pro Max核短字段与响应式，Interaction Design核筛选、增量、下钻关闭/Esc/回焦。原版分别保留产物，不恢复退役融合入口，也不为局部布局重新选皮肤。
+
+默认1280×720、320/390px、桌面/手机短屏已取得下述几何与实屏；大缩放与真实手机未取得。连续操作覆盖板块种类/区间/排序/叠加筛选、增量末项、下钻分钟/日度/成员排行、关闭后轮询停止及焦点恢复、右侧当前/历史/机构游资；loading/ready/合法空/error/stale/unknown与重试按真实组件验证。反例包括viewport与容器断点错位、共享样式误伤、双层padding、最小内容宽度、columns断列和手机阅读面宽度；不能靠缩字、隐藏字段、压图或扩大父层竖滚消除卡片拥挤。
+
+前端完整tsc/eslint、默认/UTC单worker Vitest和production build，文档/卫生/公开扫描、Jev baseline/复评或如实记录工具缺口继续执行。正常运行、工程通过、真实画面和金融效果分别记录；本批工程、整改后实屏/运行见下述记录，准确HEAD发布仍待取得，不复用IMP-084绿色。现役`DEGRADED_FULL_CONTROL`继续要求作者U49反证、准确PR/HEAD的`DegradedRelease`、required CI/release_check、合并后CI和分支清理；作者自检、原版复查与Jev评分不称独立Review。既有恢复tag与包保留，本轮呈现可按上述基点恢复。
+
+**本批取得的证据**
+
+代码提交`f982293f3af3e10f86adf0bc267de15c49c428bb`，协调文档另行提交；最终PR HEAD与发布事实以W07/IMP-085记录为准。
+
+本批最终源码的前端tsc/eslint、production build、doc-health/workspace-hygiene/public_repo_scan通过。完整Vitest默认与UTC均单worker、显式`--pool=threads`：100文件886 passed，344.48s/400.05s。此前fork池全量出现markdown corpus超时（另一次workspace超时），未改变用例、断言或超时；两次较早fork默认/UTC全量各886通过仅为补丁前基线，准确HEAD CI仍按仓库标准池核验。后端无代码变更，本地不重复其全量，required backend CI保留。Jev Review两次HTTP451，无baseline/复评分数，不能写通过。Impeccable最终检测结果为空；这是局部检测结果，不是全项目审计。
+
+最终实际组件合成夹具验收：1280×720板块663.27px/分析552.73px、卡305.63px；390×844卡326px；320×640卡260px、列表131px；1280×600列表313px。四种视口页面根没有X/Y溢出；320px短屏通过叶级滚动读取卡片完整字段，120项增量末项与口径说明均可达，不宣称同帧全见。筛选、Enter下钻、Esc关闭与回焦、当前/历史/机构游资入口已操作。生产3000东财板块源中途失败，保留不可用/重试，成交摘要仍有实源；卡片极端内容截图明确为3101隔离合成夹具，不冒充真实行情。图表算法和读者未修改；真实手机、软键盘、触摸拖动、大缩放与全部质量状态的独立实屏未取得。
+
+3000已加载最终production构建`uan4kQ7Mk6taV-q14tbiU`，前端PID40262、后端75041；三项修改源码SHA-256无漂移，市场页/代理health/后端health/LAN只读HTTP200。临时3101/3102夹具服务已正常停止并复查无监听，IAB临时视口已reset、临时标签为空。既有恢复包与tag保持。详见忽略产物`artifacts/runs/fund-space-20261009/`的browser-acceptance.json、runtime-release.json、final-source-manifest.json、screenshots及门禁日志。发布CI/准确HEAD回执/合并后核验尚待取得。
+
 ## 附录A：逐技能原文职责与完整适用流程
 
 本附录包含修订前20项问题的处置、33项技能及条件分支、24项Impeccable命令，以及原生路径与宿主适配的具体边界。A–G字母表示本附录的工作阶段，正文§6的“交付1–7”表示成果批次，两者不是任务编号。
