@@ -741,7 +741,7 @@ export function NotificationBell() {
                 {diagnosisError && <p className="mt-1 text-amber-700 dark:text-amber-300">原因记录读取失败，当前状态未知；请重试。</p>}
                 {diagnosis && <div className="mt-2 max-h-52 overflow-y-auto"><NotificationDiagnosis diag={diagnosis} /></div>}
               </div>
-              <p className="px-4 pt-2 text-xs text-zinc-600 dark:text-zinc-400">本次读取最近 {payload?.read_window?.limit ?? 50} 条消息{payload?.read_window?.has_more === true ? "，更早记录未包含" : payload?.read_window?.has_more === null ? "，更早记录是否存在尚未确认" : ""}；时段按原观察钟划分，已读按记录钟判断。</p>
+              <p className="px-4 pt-2 text-xs text-zinc-600 dark:text-zinc-400">本次读取最近 {payload?.read_window?.limit ?? 50} 条消息{payload?.read_window?.has_more === true ? "，更早记录未包含" : payload?.read_window?.has_more === null ? "，更早记录是否存在尚未确认" : ""}；入选消息按原观察钟分时段，其他消息沿事件记录钟；已读按记录钟判断。</p>
               {payload?.monitor && ["uncompleted", "unknown"].includes(payload.monitor.state) && <p role="status" data-testid="notification-monitor-state" className="mx-4 mt-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2 text-xs leading-relaxed text-amber-800 dark:text-amber-200">
                 持仓风险核对{payload.monitor.state === "unknown" ? "尚未完成" : "未完整完成"}{payload.monitor.uncompleted_symbols.length ? `（${payload.monitor.uncompleted_symbols.length} 只）` : ""}：{payload.monitor.reason || "源数据或成本依据待核对"}。不能据此确认风险已排除。
               </p>}
